@@ -37,6 +37,17 @@ class _Net(nn.Module):
         return self.l2(nn.relu(self.l1(x)))
 
 
+class _Buffered(nn.Module):
+    def __init__(self, scale=None, persistent=True):
+        super().__init__()
+        self.register_buffer("scale", jt.ones((8,)) if scale is None else scale,
+                             persistent=persistent)
+
+    def execute(self, x, cache=None):
+        result = x * self.scale
+        return result if cache is None else result * cache.scale
+
+
 class _Random(nn.Module):
     def execute(self, x):
         return x + jt.rand(x.shape)
@@ -224,6 +235,65 @@ class TestGraphReplay(unittest.TestCase):
                                    self._eager(self.feed[0]), rtol=1e-5, atol=1e-5)
         self.assertGreater(replay.stats["captured"], before)
 
+    def _replace_buffer(self, model, method):
+        holder, ptr = id(model.scale), model.scale.var_ptr
+        replacement = jt.full((8,), 3.0)
+        if method == "load_state_dict":
+            model.load_state_dict({"scale": replacement})
+        else:
+            getattr(model.scale, method)(replacement)
+        model.scale.sync(True, False)
+        self.assertEqual(id(model.scale), holder)
+        self.assertNotEqual(model.scale.var_ptr, ptr)
+
+    def test_a_replaced_registered_buffer_is_noticed(self):
+        # Frozen inference modules can hold all their weights as buffers.
+        # A load, update, or assign then changes no parameter at all.
+        for method in ("load_state_dict", "update", "assign"):
+            with self.subTest(method=method):
+                self.model = _Buffered(persistent=method == "load_state_dict")
+                self.assertEqual(list(self.model.parameters()), [])
+                replay = graph_replay(self.model, self.feed[0])
+                try:
+                    replay(self.feed[1]).numpy()
+                    before = replay.stats["captured"]
+                    self._replace_buffer(self.model, method)
+                    np.testing.assert_allclose(replay(self.feed[2]).numpy(),
+                                               self._eager(self.feed[2]),
+                                               rtol=1e-5, atol=1e-5)
+                    self.assertGreater(replay.stats["captured"], before)
+                finally:
+                    replay.invalidate()
+
+    def test_nested_shared_buffers_guard_each_distinct_holder(self):
+        class _SharedBuffers(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.weight = jt.ones((8,))
+                self.first = _Buffered(self.weight)
+                self.second = _Buffered(self.weight)
+                self.third = _Buffered()
+                # Same Var, separate holder: rebinding this buffer must not
+                # disappear when the shared parameter/buffers are deduplicated.
+                self.third.scale.update(self.weight)
+
+            def execute(self, x):
+                return self.first(x) + self.second(x) + self.third(x)
+
+        self.model = _SharedBuffers()
+        self.assertIsNot(self.model.weight, self.model.third.scale)
+        self.assertEqual(self.model.weight.var_ptr, self.model.third.scale.var_ptr)
+        replay = graph_replay(self.model, self.feed[0])
+        try:
+            self.assertEqual(len(replay._capture.params), 2)
+            before = replay.stats["captured"]
+            self._replace_buffer(self.model.third, "update")
+            np.testing.assert_allclose(replay(self.feed[1]).numpy(),
+                                       self._eager(self.feed[1]), rtol=1e-5, atol=1e-5)
+            self.assertGreater(replay.stats["captured"], before)
+        finally:
+            replay.invalidate()
+
     def test_a_stacked_result_follows_each_input(self):
         # `setitem_gopt` computes each stacked operand straight into its slice
         # of the result and makes the setitem a no-op. A replay that freed an
@@ -394,6 +464,61 @@ class TestGraphReplay(unittest.TestCase):
         if state is None:
             return []
         return [e.step for e in state.entries.values() if e.step is not None]
+
+    def test_the_automatic_policy_notices_a_replaced_registered_buffer(self):
+        for method in ("load_state_dict", "update", "assign"):
+            with self.subTest(method=method):
+                model, cache = _Buffered(), _KVCache()
+                with jt.flag_scope(auto_graph_replay=1), jt.no_grad():
+                    for i in range(6):
+                        x = self.feed[i % len(self.feed)]
+                        np.testing.assert_allclose(model(x, cache=cache).numpy(),
+                                                   x.numpy(), rtol=1e-5, atol=1e-5)
+                    steps = self._stateful_steps(model)
+                    self.assertEqual(len(steps), 1)
+                    step = steps[0]
+                    self.assertGreater(step.stats["replayed"], 0)
+                    before = step.stats["captured"]
+                    self._replace_buffer(model, method)
+                    got = model(self.feed[1], cache=cache).numpy()
+                with jt.flag_scope(auto_graph_replay=0), jt.no_grad():
+                    want = model(self.feed[1], cache=cache).numpy()
+                np.testing.assert_allclose(got, want, rtol=1e-5, atol=1e-5)
+                self.assertGreater(step.stats["captured"], before)
+                step.invalidate()
+
+    def test_a_registered_buffer_updated_by_the_step_keeps_replaying(self):
+        class _Accumulating(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.register_buffer("total", jt.zeros((8,)))
+
+            def execute(self, x, cache=None):
+                self.total.update(self.total + x.sum(0))
+                return (x + self.total * cache.scale).tanh()
+
+        def run(model, flag):
+            cache, results = _KVCache(), []
+            with jt.flag_scope(auto_graph_replay=flag), jt.no_grad():
+                for i in range(12):
+                    if i == 7:
+                        # Same-shaped external state is adopted before its
+                        # holder guard runs, as with a decode cache reset.
+                        model.total.assign(jt.full((8,), 0.25))
+                    x = self.feed[i % len(self.feed)]
+                    results.append(model(x, cache=cache).numpy().copy())
+            return np.stack(results), model.total.numpy().copy()
+
+        want, want_total = run(_Accumulating(), 0)
+        model = _Accumulating()
+        got, got_total = run(model, 1)
+        np.testing.assert_allclose(got, want, rtol=1e-5, atol=1e-5)
+        np.testing.assert_allclose(got_total, want_total, rtol=1e-5, atol=1e-5)
+        steps = self._stateful_steps(model)
+        self.assertEqual(len(steps), 1)
+        self.assertEqual(steps[0].stats["captured"], 1)
+        self.assertGreaterEqual(steps[0].stats["replayed"], 8)
+        steps[0].invalidate()
 
     def test_the_automatic_policy_replays_a_call_that_updates_its_cache_in_place(self):
         # Transformers' static-cache decode: the same cache object every step,

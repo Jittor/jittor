@@ -17,8 +17,8 @@ rather than used:
 
   - the arguments' shapes, dtypes and count,
   - whether the module is in training mode,
-  - whether any parameter has been rebound (an optimizer step, a load, a
-    device move) -- the graph reads the parameter Vars it captured, and an
+  - whether any parameter or registered buffer has been rebound (an optimizer
+    step, a load, a device move) -- the graph reads the Vars it captured, and an
     update replaces them, so it would otherwise quietly answer with the old
     weights,
   - whether the captured graph is still unfinished. This is the one that
@@ -352,6 +352,26 @@ def _training(module):
     return bool(getattr(module, "training", False))
 
 
+def _module_vars(module):
+    """Parameter and registered-buffer holders, including child modules.
+
+    A holder shared by the two views is guarded once. Distinct holders can
+    point at the same Var and later be rebound independently, so deduplicate
+    by holder identity rather than ``var_ptr``.
+    """
+    parameters = getattr(module, "parameters", None)
+    leaves = list(parameters()) if callable(parameters) else []
+    buffers = getattr(module, "named_buffers", None)
+    if callable(buffers):
+        leaves.extend(v for _, v in buffers(recurse=True))
+    seen, result = set(), []
+    for leaf in leaves:
+        if id(leaf) not in seen:
+            seen.add(id(leaf))
+            result.append(leaf)
+    return result
+
+
 def _sync_result(output):
     """Finish whatever a module returned, whatever its structure.
 
@@ -482,8 +502,7 @@ class GraphReplay:
 
     # -- capture -------------------------------------------------------
     def _params(self):
-        params = getattr(self._module, "parameters", None)
-        return list(params()) if callable(params) else []
+        return _module_vars(self._module)
 
     def _capture_now(self, args, kwargs=None):
         kwargs = kwargs or {}
@@ -603,7 +622,7 @@ class GraphReplay:
             return "the module changed training mode"
         for holder, ptr in cap.params:
             if holder.var_ptr != ptr:
-                return "a parameter was replaced since the graph was captured"
+                return "a parameter or buffer was replaced since the graph was captured"
         return None
 
     # -- is it actually faster? ----------------------------------------

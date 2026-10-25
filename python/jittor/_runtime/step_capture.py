@@ -62,7 +62,7 @@ import jittor as jt
 import jittor_core as _core
 
 from .graph_replay import (_RERECORD_LIMIT, _Unreplayable, _WorkingSet, _dense, _empty_like,
-                           _host_state, _native_dtype, _object_ids, _training,
+                           _host_state, _module_vars, _native_dtype, _object_ids, _training,
                            _graph_has_nondeterministic_op,
                            _input_vars, _map_inputs, _no_auto, _output_template,
                            _rebuild, _signature)
@@ -921,8 +921,9 @@ class _PolicyStep(StepCapture):
 
       - the host-side state of the objects the call was given (`_host_state`),
         which the capture run must also have left as it found it;
-      - which Var every parameter of the module, and every Var those objects
-        hold, is: a load or an assignment outside the call rebinds one, and
+      - which Var every parameter and registered buffer of the module, and
+        every Var those objects hold, is: a load or an assignment outside the
+        call rebinds one, and
         the graph would go on reading the old one. State the step updates is
         put back first (`_adopt`), so a cache reset between two `generate`
         calls is taken over rather than re-captured;
@@ -959,9 +960,7 @@ class _PolicyStep(StepCapture):
                 if not root.is_finished:
                     root._release_kept()
             return None, result
-        params = getattr(module, "parameters", None)
-        if callable(params):
-            leaves.extend(v for v in params() if isinstance(v, jt.Var))
+        leaves.extend(v for v in _module_vars(module) if isinstance(v, jt.Var))
         ref = self._module_ref
         cap.guards.append((lambda: _host_state(objects), after))
         cap.guards.append((lambda: [v.var_ptr for v in leaves], [v.var_ptr for v in leaves]))
