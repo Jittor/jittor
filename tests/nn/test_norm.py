@@ -531,6 +531,43 @@ class TestResidualActivationAcrossAnAutoFlush(unittest.TestCase):
         np.testing.assert_allclose(got, expected, rtol=1e-4, atol=1e-4)
 
 
+class TestResidualActivationThroughADependency(unittest.TestCase):
+    """The residual is the add's first two inputs, whatever follows them.
+
+    An in-place ``out += identity`` -- every torchvision block under the Torch
+    frontend -- leaves a dependency edge on the add after its two operands.
+    Asking for exactly two inputs turned every such block's activation into a
+    kernel of its own: the frontend's ResNet-50 training step went from 80.8
+    to 88.0 ms.
+    """
+
+    @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled,
+                         "the residual offer comes from the CUDA training batch norm")
+    def test_a_dependency_edge_does_not_stop_the_fusion(self):
+        from _helpers.common import kernel_launches
+        rng = np.random.RandomState(19)
+        x_np = rng.randn(4, 8, 6, 6).astype("float32")
+        r_np = rng.randn(4, 8, 6, 6).astype("float32")
+        with jt.flag_scope(use_cuda=1):
+            bn = nn.BatchNorm2d(8)
+            bn.train()
+            x, r, dep = jt.array(x_np), jt.array(r_np), jt.array(r_np)
+            x.sync(); r.sync(); dep.sync()
+
+            def block(with_dependency):
+                # The offer lives as long as the object it was made on.
+                y = bn(x)
+                s = y + r
+                if with_dependency:
+                    s._add_dependency([dep])
+                return nn.relu(s).numpy()
+
+            plain, expected = kernel_launches(lambda: block(False))
+            count, got = kernel_launches(lambda: block(True))
+        self.assertEqual(count, plain)
+        np.testing.assert_allclose(got, expected, rtol=1e-5, atol=1e-5)
+
+
 class TestBatchNormActivation(unittest.TestCase):
     """`relu(batch_norm(x))` in training runs the activation in the norm's pass.
 

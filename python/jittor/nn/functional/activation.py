@@ -85,11 +85,12 @@ def _fused_activation(x, act):
     # Both operands from one call. `add._input(0)` and then `add._input(1)`
     # are two graph entries, and leaving the first may run the auto-flushed
     # batch the add is in: a ResNet training step at batch 64 lost its add
-    # between the two reads and raised.
+    # between the two reads and raised. The operands are the first two
+    # inputs; an in-place `out += identity` adds a dependency edge after them.
     operands = add._inputs()
-    if len(operands) != 2:
+    if len(operands) < 2:
         return None
-    a, b = operands
+    a, b = operands[0], operands[1]
     for y, r in ((a, b), (b, a)):
         offer = _RESIDUAL_OFFERS.get(y.id)
         if offer is None or offer[1] != storage:
