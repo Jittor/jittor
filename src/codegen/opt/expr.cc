@@ -111,7 +111,7 @@ unique_ptr<Expr> make(const string& str, vector<unique_ptr<Expr>>&& children) {
 // parsing an expression it selected from the fused-kernel IR, not a raw
 // argument -- `jt.code` text is handled by op_compiler.cc's @-parser, and
 // parallel_pass.cc only parses index expressions that passed its own alphabet
-// filter. The KI-COMPILER-008 audit found no public argument path to these
+// filter. The parser-boundary audit found no public argument path to these
 // assertions.
 Expr::Expr(const string& src) : flags(0) {
     vector<pair<int,int>> values;

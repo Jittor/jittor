@@ -266,36 +266,6 @@ workaround.
   recurs, capture it under an allocator that reports a stack (ASAN) before
   changing code.
 
-## KI-COMPILER-008: user-reachable JIT source checks still report as internal errors
-
-- Severity: Medium (catchable, but the category and message are wrong: a user
-  mistake asks the user to report a framework bug)
-- Status: Narrowed; `ce24ae3cd` preserves the exception category across
-  `precompile` and migrates the @-parser, #-directive, brace,
-  @for/@strcmp/@alias and element-arity checks to `USER_CHECK` sentences. The
-  remaining listed files below are still unclassified.
-- Owner: core error handling / code generation
-- Symptom: before `ce24ae3cd`, a misspelt `@out(0)=@nosuchvar` in
-  `jt.code(..., cpu_src=...)` said "Something wrong... Could you please report
-  this issue?"; seven bad-`@`-syntax calls all raised a catchable
-  `RuntimeError` containing `Jit compiler error:` and an internal-invariant
-  note. The remaining files below may still do this for their own public
-  arguments.
-- Cause: `precompile` in `src/codegen/op_compiler.cc` wrapped its loop in
-  `catch (std::exception& e)` and rethrew through `LOGf`, so a `UserError`
-  raised inside arrived as a plain error; that catch now uses
-  `throw_same_kind`. `src/codegen/opt/kernel_ir.cc`, `src/utils/cache_compile.cc`
-  (mostly its `#ifdef TEST` self-test), `src/codegen/opt/expr.cc`,
-  `src/ops/op_register.cc` and `src/mem/swap.cc` have not been walked for
-  public-argument reachability.
-- Workaround: none needed; the exceptions are catchable.
-- Evidence: `docs/development/error-categories.md`;
-  `tests/structure/core/test_error_categories.py` (source-level gate);
-  `tests/codegen/test_jit_source_error_category.py` (runtime negative cases).
-- Exit condition: classify the remaining files (`kernel_ir.cc`,
-  `cache_compile.cc`, `expr.cc`, `op_register.cc`, `swap.cc`) and add a
-  negative test for each user-reachable check.
-
 ## KI-CODEGEN-001: fused elementwise kernels pay a division and a modulo per element for a broadcast operand
 
 - Severity: Medium (performance; results are correct)
