@@ -8,7 +8,7 @@
 # ***************************************************************
 """``copy_`` under ``no_grad`` leaves the destination a trainable leaf.
 
-KI-COMPAT-007: a leaf ``w`` with ``requires_grad=True`` that is filled by
+A leaf ``w`` with ``requires_grad=True`` that is filled by
 ``w.copy_(x)`` inside ``torch.no_grad()`` stayed a leaf in name only -- a later
 backward through ``w`` left ``w.grad`` as ``None`` when ``x`` required grad,
 while an ``x`` that did not require grad worked.  The failing shape is a source
@@ -54,7 +54,7 @@ class TestCopyNoGradAutograd:
         _copy_under_no_grad(device, False)
 
     def test_nonleaf_grad_source_does_not_rebind_the_leaf(self, device):
-        # The original KI-COMPAT-007 shape: ``x`` requires grad but is not a
+        # The failing shape: ``x`` requires grad but is not a
         # leaf.  Rebinding ``w`` onto x's graph made ``w`` a non-leaf, so the
         # backward consumed ``w`` as an intermediate and left ``w.grad`` None
         # while sending the gradient to x's source.

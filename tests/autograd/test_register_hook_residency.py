@@ -8,7 +8,7 @@
 # ***************************************************************
 """Registering a gradient hook must not change the tensor's residency.
 
-KI-AUTOGRAD-003: an older ``register_hook`` ended with
+An older ``register_hook`` ended with
 ``v.swap(hooker(v)[0])``, so the caller's Var carried the state of the hooker's
 not-yet-materialised output node and ``location()`` read ``"none"`` for a tensor
 that was already materialised on the host or the device.  The hook now attaches

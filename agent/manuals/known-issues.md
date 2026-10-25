@@ -1584,24 +1584,6 @@ workaround.
   same as one without it, and the residency contract covers all spellings
   including the reduction and element-read cases.
 
-## KI-AUTOGRAD-003: register_hook makes the receiver misreport its residency
-
-- Severity: Low
-- Status: Open; reproduced on CPU and CUDA
-- Owner: autograd maintainers
-- Symptom: after `a.register_hook(lambda g: g)` on a materialised Var,
-  `a.location()` reads `"none"` (the state of an unmaterialised Var) while `device`,
-  shape, dtype, the value and the hook itself are unchanged. Nothing is discarded
-  or recomputed (measured: memory unchanged, the next device op costs 0.9x).
-- Cause: `register_hook` in `python/jittor/_core/hooks.py` ends with
-  `v.swap(hooker(v)[0])`, so the caller's Var carries the state of the hooker's
-  not-yet-materialised output node, and `location()` answers for that node.
-- Workaround: do not read `location()` immediately after registering a hook.
-- Evidence: `tools/probes/side_effect_probe.py --device cpu` reports this as its
-  only undeclared mutation (`location cpu->none`).
-- Exit condition: `register_hook` leaves `location()` unchanged on CPU and real
-  CUDA, and the side-effect probe reports no mutation for it.
-
 ## KI-EXEC-002: a profile scope cannot measure work launched before it opened
 
 - Severity: Limitation
@@ -2015,19 +1997,6 @@ workaround.
   propagation agree with independent Torch on CPU and each claimed accelerator,
   including absence of unintended accumulator activation. Preserve the existing
   old/new graph snapshots and storage/gradient contracts when adding this support.
-
-## KI-COMPAT-007: `w.copy_(x)` under `no_grad` loses `w`'s gradient when `x` requires grad
-
-- Severity: Medium (silent: `w.grad` stays None after a backward)
-- Status: Open; found 2026-09-25
-- Owner: torch compatibility / autograd
-- Symptom: `w = torch.randn(4, 8, requires_grad=True)`; `with torch.no_grad():
-  w.copy_(x)` where `x` requires grad; a later backward through `w` leaves
-  `w.grad` None. With an `x` that does not require grad it works. PyTorch keeps
-  `w` a leaf that accumulates a gradient in both cases.
-- Workaround: `w = x.detach().clone().requires_grad_(True)`.
-- Evidence: the repro above.
-- Exit condition: `w.grad` is populated in both cases, with a regression test.
 
 ## KI-COMPAT-009: a float32 tensor divided by a Python float is computed in float64
 
