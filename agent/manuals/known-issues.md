@@ -1898,3 +1898,27 @@ PY
 - Evidence: the nodes above with a Torch frontend.
 - Exit condition: the portable save fills one value per tensor and the three
   nodes pass on CPU, with a regression pinned on the unfixed tree.
+
+## KI-COMPAT-019: bfloat16 autocast training diverges from float32 on CUDA
+
+- Severity: Medium (silent training-numerics divergence under autocast)
+- Status: Open; reproduced on `280d44854` and current `2.0-refactor` on a real
+  RTX 4090 (sm_89, CUDA 12.2). CPU forward results and the half dtype sweep
+  pass; this is the CUDA bf16 training trajectory.
+- Owner: autocast policy, CUDA reduction/convolution maintainers.
+- Symptom: `compat/tests/torch/test_torch_half_precision_numerics.py::TestAutocastTraining::test_bfloat16_autocast`
+  trains the same model in float32 and under bf16 autocast and compares the
+  final loss. float32 reaches `0.12238`; bf16 autocast reaches `0.21973`
+  (79.5% high, tolerance 25%). The forward dtypes are bf16 as expected, so the
+  divergence is numeric, not a dtype contract break.
+- Cause: not isolated. Suspect the accumulation dtype of the CUDA conv/matmul
+  path under autocast (bf16 accumulation instead of float32) or a reduction
+  whose half identity/rounding differs; the half dtype sweep passing means the
+  op dtypes themselves are preserved.
+- Workaround: use float16 autocast or run the model in float32 where the
+  bf16 trajectory matters.
+- Evidence: the node above with `JITTOR_TORCH_SHIM=1`, `JT_USE_CUDA=1` on a
+  CUDA build.
+- Exit condition: the bf16 autocast loss is within the test's tolerance of the
+  float32 control on real CUDA (or the test states a justified tolerance with
+  the measured accumulation policy), and the node passes.
