@@ -13,9 +13,12 @@ from jittor import compile_extern
 
 @_test_capability.library_required("cublas", backend=jt)
 class TestCublasTestOp(unittest.TestCase):
-    @unittest.expectedFailure
+    @jt.flag_scope(use_cuda=1)
     def test(self):
-        # KI-BACKEND-014: dispatched to the host, where no kernel is registered.
+        # The op module registers only the accelerator implementation
+        # (compile_extern builds every *_ops library with backend="accelerator"),
+        # and the op declares `_cuda` only, so it has to be constructed under
+        # the device flag the way TestCubTestOp is.
         # assertEqual, not a bare assert: pytest's assertion rewriting keeps the
         # failed op's output in a frame local, the kept traceback keeps it
         # alive, and TestCubTestOp's device flush then ran it again and failed.
@@ -27,10 +30,10 @@ class TestCublasTestOp(unittest.TestCase):
 
 @_test_capability.library_required("cudnn", backend=jt)
 class TestCudnnTestOp(unittest.TestCase):
-    @unittest.expectedFailure
+    @jt.flag_scope(use_cuda=1)
     def test(self):
-        # KI-BACKEND-014: dispatched to the host, where no kernel is registered.
-        # assertEqual for the reason given in TestCublasTestOp.
+        # See TestCublasTestOp for the device flag; assertEqual for the reason
+        # given there.
         from jittor.compile_extern import cudnn_ops
         self.assertEqual(cudnn_ops.cudnn_test("").data, 123)
         self.assertEqual(cudnn_ops.cudnn_test(

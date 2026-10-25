@@ -208,22 +208,37 @@ struct FP16OpType : OpByType {
             if (args[1] == "float32" && !both_map.count(args.at(0))) {
                 ret = lookup(common_op_type_cuda_map, args.at(0));
             }
-            if (args[1] == "float16" || 
-                args[1] == "bfloat16" || 
-                args[1] == "float32") 
-            {
-                for (int i=3; i<args.size(); i+=2) {
-                    if (args[i] != args[1]) {
-                        ret = replace(ret, "$"+S(i-1),
-                            args[1]+"($"+S(i-1)+")");
+            // A logical operation is defined on its operands' truth value, so
+            // neither the half conversion below nor a cast of the accumulator
+            // is needed: `&&`/`||`/`!=` already convert both sides to bool.
+            // Skipping this matters for a *bool* result (a floating-point
+            // logical reduction, KI-BACKEND-009): the loop below compares each
+            // argument dtype with the result dtype and, because bool is not a
+            // half type, would rewrite the bool accumulator as
+            // `float16(yp)` -- which then no longer matches the reduction
+            // pattern in the parallel pass.
+            const bool logical_result =
+                args[1] == "bool" && (args.at(0) == "logical_and" ||
+                                      args.at(0) == "logical_or" ||
+                                      args.at(0) == "logical_xor");
+            if (!logical_result) {
+                if (args[1] == "float16" ||
+                    args[1] == "bfloat16" ||
+                    args[1] == "float32")
+                {
+                    for (int i=3; i<args.size(); i+=2) {
+                        if (args[i] != args[1]) {
+                            ret = replace(ret, "$"+S(i-1),
+                                args[1]+"($"+S(i-1)+")");
+                        }
                     }
-                }
-            } else {
-                string target = found_bf16 ? "bfloat16" : "float16";
-                for (int i=3; i<args.size(); i+=2) {
-                    if (args[i] != target) {
-                        ret = replace(ret, "$"+S(i-1),
-                            target+"($"+S(i-1)+")");
+                } else {
+                    string target = found_bf16 ? "bfloat16" : "float16";
+                    for (int i=3; i<args.size(); i+=2) {
+                        if (args[i] != target) {
+                            ret = replace(ret, "$"+S(i-1),
+                                target+"($"+S(i-1)+")");
+                        }
                     }
                 }
             }
