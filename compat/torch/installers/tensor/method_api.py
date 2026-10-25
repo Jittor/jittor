@@ -1533,14 +1533,17 @@ def _promoting_binary(self, other, opname, reflected):
     # `_extend_tokens` list concatenation). Match torch: defer to the sequence.
     if isinstance(other, (list, tuple)):
         return NotImplemented
-    if isinstance(other, (bool, int, float)) and (
-            reflected or bool(getattr(self, "is_cuda", False)) or
-            bool(getattr(self, "is_cpu", False))):
-        # Jittor may materialize a Python scalar on CPU even for a regular
-        # CUDA operation (``cuda_tensor + 1``), while PyTorch keeps scalar
-        # promotion on the tensor's backend. Materialize it explicitly so
-        # native operators never receive a mixed-device graph.
-        scalar_dtype = _owner._dtype_to_str(g.result_type(self, other))
+    if reflected and isinstance(other, (bool, int, float)):
+        # For ``base ** tensor`` the Python base would be built on the host
+        # while the tensor may live on the accelerator; materialize it beside
+        # the tensor. Torch's weak-scalar rule then keeps a float/complex
+        # tensor's dtype (float16 ** 2 stays float16), while an integer tensor
+        # takes the promoted type (int32 * 1.5 is float32).
+        own = _own_dtype_name(self, native_api)
+        if own.startswith(("float", "bfloat", "complex")):
+            scalar_dtype = own
+        else:
+            scalar_dtype = _owner._dtype_to_str(g.result_type(self, other))
         scalar = _owner.jt.array(other, dtype=scalar_dtype)
         if bool(getattr(self, "is_cuda", False)):
             scalar = scalar.cuda()
