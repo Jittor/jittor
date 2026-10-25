@@ -96,32 +96,6 @@ workaround.
 - Exit condition: fix and independently verify each contract, remove its
   expected-failure marker, and delete the entry when the list is empty.
 
-## KI-TEST-002: the gate does not report a session that died mid-run
-
-- Severity: High
-- Status: Open; a detector exists but no gate runs it
-- Owner: test infrastructure maintainers
-- Symptom: a native crash ends the interpreter, so pytest writes no result line,
-  traceback or summary for the case that died and the tests after it never run.
-  The log simply stops, and a session that died reads like a session that ran
-  fewer tests. Any exclusion taken to work around such a crash silently narrows
-  what the gate covers.
-- Cause: `tools/run_test_suite.py` and the nox sessions read pytest's exit code
-  and summary only. `tests/_helpers/session_completion.py` (registered by the
-  pytest policy) prints a `JITTOR-SESSION-COMPLETE` marker and can write a
-  sentinel with the collected and executed counts, and
-  `tools/check_session_completed.py` turns a missing marker into a failure, but
-  neither gate calls the checker.
-- Workaround: run `python tools/check_session_completed.py --log <pytest.log>`
-  (optionally `--expect-collected N`) on any log a conclusion is drawn from, or
-  compare the executed count against the collected count.
-- Evidence: `tests/structure/test_session_completion.py` (the detector);
-  the last observed case was a CPU-only Torch selection that stopped at 48% with
-  exit 1 and no summary.
-- Exit condition: a session whose process ends before pytest finishes is
-  reported by the maintained gates as a failure naming the case that was running
-  and the number of tests that never executed.
-
 ## KI-TEST-003: the coverage wrapper is visible to the Torch identity contracts
 
 - Severity: Medium
@@ -144,23 +118,6 @@ workaround.
   hook keyed by code object observes the same calls), delete the exclusion list
   and re-take the Torch baseline.
 
-## KI-TEST-007: `test_fused_op_relay_matmul` fails after profiler or graph-replay tests in the same process
-
-- Severity: Low
-- Status: Open; reproduced on `1a6e203fc`
-- Owner: codegen and test infrastructure
-- Symptom: `tests/codegen/test_jit_tests.py::TestJitTests::test_fused_op_relay_matmul`
-  passes alone and with its own file, and fails with `[check failed: cm.size()>=2]`
-  when `tests/runtime/test_step_profile.py`, `tests/runtime/test_profiler.py` or
-  `tests/nn/test_graph_replay_multi_output.py` ran earlier in the same pytest
-  process.
-- Cause: not isolated; suspected process state (a flag or a JIT cache entry)
-  those files leave behind that `src/tests/test_op_relay.cc` depends on without
-  setting.
-- Workaround: run the file in its own process.
-- Evidence: `pytest tests/runtime/test_profiler.py tests/codegen/test_jit_tests.py::TestJitTests::test_fused_op_relay_matmul`.
-- Exit condition: the case passes after each of the three files in one process.
-
 ## KI-TEST-010: three `test_torch_compat_norm.py` LayerNorm fast-path cases fail
 
 - Severity: Low (values elsewhere in the file pass)
@@ -178,21 +135,6 @@ workaround.
 - Evidence: `JITTOR_TORCH_SHIM=1 python -m pytest -q compat/tests/torch/test_torch_compat_norm.py -k ln_no_grad_cuda`.
 - Exit condition: the three cases pass, or are rewritten to pin the path the
   frontend is meant to take.
-
-## KI-TEST-011: `test_shared_reduce.py` decodes generated source with the locale encoding
-
-- Severity: Low (a test reads its input wrongly; no product code affected)
-- Status: Open; reproduced on `1a6e203fc`
-- Owner: CUDA codegen tests
-- Symptom: `LC_ALL=C PYTHONCOERCECLOCALE=0 PYTHONUTF8=0 python -m pytest -q tests/backends/cuda/test_shared_reduce.py -k two_stage`
-  fails with `UnicodeDecodeError: 'ascii' codec can't decode byte 0xe2`; plain
-  `LC_ALL=C` passes only because of Python's locale coercion.
-- Cause: the test opens generated JIT source with a bare `open(...)`, and the
-  generated source contains non-ASCII (op keys are separated by U+00AB).
-- Workaround: run under a UTF-8 locale.
-- Evidence: the command above.
-- Exit condition: pass `encoding="utf-8"` there, sweep the tree for other
-  locale-dependent reads of generated source, and delete the entry.
 
 ## KI-TEST-012: the PR smoke tier takes about 390 s, not under five minutes
 
@@ -1407,29 +1349,6 @@ workaround.
   expected failure.
 - Exit condition: the CUDA class's strict expected failure XPASSes on a device
   (i.e. the CUDA rows answer from an infinity) and the marker is removed.
-
-## KI-OPS-014: a query row whose every key carries `finfo.min` gets float32 attention gradients as if each probability were 1
-
-- Severity: Low (the forward is right; no workload in the benchmark reaches it)
-- Status: Open; found 2026-10-01
-- Owner: CUDA fused attention maintainers
-- Symptom: with `finfo(float32).min` added to every key of a row, the float32
-  fused attention backward is off by the row length (2 x 3 x 64 x 64 case:
-  relative error 16, 6.6 and 1.8 for `dq`, `dk`, `dv` against float64). The
-  output is the uniform average it should be. PyTorch's efficient-attention
-  kernel is also wrong on these inputs (26% on output and `dq`). Transformers
-  does not produce such rows on its SDPA path (`_unmask_unattended`); a mask
-  built by hand can.
-- Cause: `backends/cuda/kernels/nn/fused_attention_f32_cuda.py` stores the
-  forward's log-sum-exp and the backward recomputes each probability as
-  `exp(score - lse)`. Every score in such a row *is* `finfo.min`, and so is
-  `lse = max + log(l)` (the `log(l)` is absorbed), so each probability comes back
-  as 1 instead of `1/l`.
-- Workaround: unmask fully masked rows before attention, as Transformers does.
-- Evidence: `test_a_dense_additive_mask` with `mask[1, :, 7] = finfo.min`.
-- Exit condition: store the row maximum and `1/l` separately (or `lse` relative
-  to the maximum) so the backward never subtracts two equal huge numbers, and
-  add the fully masked row to the test.
 
 ## KI-OPS-015: the CUDA backward of `scaled_dot_product_attention` misses the device-parity per-element budget
 
