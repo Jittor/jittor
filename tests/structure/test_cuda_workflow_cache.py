@@ -9,6 +9,7 @@ WORKFLOW = REPO_ROOT / ".github" / "workflows" / "cuda.yml"
 
 def test_cuda_jobs_restore_and_save_a_configuration_partitioned_jittor_cache():
     workflow = WORKFLOW.read_text(encoding="utf-8")
+    assert "../jittor-lab/_state/nox/cache" not in workflow
     jobs = yaml.safe_load(workflow)["jobs"]
     actions = {"actions/cache/restore@v4", "actions/cache/save@v4"}
     partition = (
