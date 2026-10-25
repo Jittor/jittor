@@ -233,6 +233,7 @@ passed/1 skipped，合计 **324 passed/45 skipped/1 xfailed**；`tests/structure
 | 18031 第二批语义 | `Tensor.type_as`、反射标量留在张量后端、TensorDataset 单次 gather、掩码写入梯度、expand 标量维、torchvision resize/pad/color/crop、Conv1d device/dtype、advanced-index/0-dim 设备对齐 | CPU 373 passed/16 skipped；CUDA 定向 14+2 passed |
 
 | 最终门禁（本轮修复合并后） | CPU core 与 structure | core：native 98 passed/44 skipped/1 xfailed + Torch 229 passed/1 skipped（组合 327 passed/45 skipped/1 xfailed，退出 0，session-completion 标记 143/143、230/230）；structure 1548 passed/6 skipped，退出 0 |
+| 设备组合门禁 | CUDA core（RTX 4090, sm_89） | native 131 passed/10 skipped/2 xfailed + Torch 230 passed = **361 passed/10 skipped/2 xfailed**，退出 0，session-completion 标记 230/230 |
 
 本表不把 partial 文件或单个用例的成功写成整库、整后端验收；NPU/ROCm/310P 与多机集合
 通信仍未验证。KI-COMPAT-012 的机制已修复（进程内 shim 发布 torch distribution 元数据，
