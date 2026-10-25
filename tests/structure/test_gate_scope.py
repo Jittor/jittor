@@ -16,6 +16,7 @@ import importlib
 import os
 from pathlib import Path
 import sys
+import unittest
 from types import SimpleNamespace
 
 import pytest
@@ -131,6 +132,24 @@ def test_xdist_controller_receives_worker_collection_before_session_policy():
         policy._SELECTED_FILES.update(selected_before)
         policy._COLLECTED_FILES.clear()
         policy._COLLECTED_FILES.update(collected_before)
+
+
+def test_unavailable_cuda_skip_retains_backend_identity_for_execution_policy():
+    from _helpers import capability
+
+    unavailable = SimpleNamespace(
+        kind="backend",
+        name="cuda",
+        state=SimpleNamespace(value="disabled"),
+        reason="registered backend reports 0 visible logical device(s)",
+    )
+    with pytest.raises(unittest.SkipTest, match="backend cuda is disabled") as skipped:
+        capability._skip(unavailable)
+
+    policy = importlib.import_module("_helpers.pytest_policy")
+    reason = str(skipped.value).lower()
+    assert policy.classify_skip_reason_bucket(reason) == "accelerator"
+    assert policy._environment_explains({reason})
 
 
 def test_the_gate_covers_almost_the_whole_tree():
