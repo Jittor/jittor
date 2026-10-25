@@ -2,7 +2,8 @@
 
 Select TestLog1pSoftplusNative.test_cpu or test_cuda in distinct native/candidate
 processes and distinct functional caches. JITTOR_SOFTPLUS_RUNTIME=oracle or
-candidate; no other backend claim. FP32/FP64 only. Log1p small inputs and
+candidate; no other backend claim. Real precision uses FP32/FP64;
+complex64 retains the prior native composition and full VJP. Log1p small inputs and
 softplus negative tails use zero absolute tolerance; all original arrays stay
 RAM-only and assertion messages never disclose raw arrays or bytes.
 """
@@ -188,6 +189,34 @@ class TestLog1pSoftplusNative(unittest.TestCase):
                                                 "integer promotion mutated original")
             finally:
                 torch.set_default_dtype(original_default)
+
+    def _check_complex(self, device):
+        torch = self.torch
+        values = np.array([0j, 1 + 2j, -.75 + .5j, .125 - .25j], dtype="complex64")
+        cotangent = np.array([1 + .5j, -.75 + 2j, 1.5 - .25j, -.5 - 1j], dtype="complex64")
+        expected = np.log1p(values)
+        expected_gradient = cotangent / np.conj(1 + values)
+        with self._scope(device):
+            for operation in (torch.log1p, lambda x: x.log1p(), torch.special.log1p):
+                x = torch.tensor(values.copy(), dtype=torch.complex64, device=device, requires_grad=True)
+                cot = torch.tensor(cotangent.copy(), dtype=torch.complex64, device=device)
+                y = operation(x)
+                # A real scalar objective avoids relying on the unrelated
+                # complex-output grad_outputs adapter contract.
+                loss = (y.conj() * cot).real.sum()
+                gradient, = torch.autograd.grad(loss, (x,))
+                self._resident(y, device)
+                self._resident(gradient, device)
+                self.assertEqual(y.dtype, torch.complex64)
+                self.assertEqual(gradient.dtype, torch.complex64)
+                np.testing.assert_allclose(self._snapshot(y, device), expected, rtol=2e-6, atol=2e-6)
+                np.testing.assert_allclose(self._snapshot(gradient, device), expected_gradient, rtol=2e-6, atol=2e-6)
+
+    def test_cpu_complex(self):
+        self._check_complex("cpu")
+
+    def test_cuda_complex(self):
+        self._check_complex("cuda")
 
     def test_cpu(self):
         self._check("cpu")

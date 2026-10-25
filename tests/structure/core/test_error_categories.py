@@ -189,8 +189,7 @@ MIGRATED_UNARY_OP_USER_BOUNDARIES = {
     # 2 since 2026-09-11: `bitwise_not` on a float now says so instead of
     # reaching `~x` in the generated kernel and letting g++ answer "wrong type
     # argument to bit-complement". See tests/ops/test_bitwise_dtype_guard.py.
-    # Native real log1p rejects complex caller inputs before code generation.
-    "src/ops/unary_op.cc": 3,
+    "src/ops/unary_op.cc": 2,
 }
 
 MIGRATED_CURAND_USER_BOUNDARIES = {
@@ -659,7 +658,6 @@ def test_py_caller_user_boundary_migration_is_explicit_and_bounded():
 
 def test_unary_op_user_boundary_migration_is_explicit_and_bounded():
     source = (ROOT / "src/ops/unary_op.cc").read_text()
-    assert "if (ns == ns_log1p)\n        USER_CHECK(!x->dtype().is_complex())" in source
     actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
     assert actual == MIGRATED_UNARY_OP_USER_BOUNDARIES[
         "src/ops/unary_op.cc"]

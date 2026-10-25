@@ -11,6 +11,7 @@
 #include "ops/layout_propagation.h"
 #include "ops/op_register.h"
 #include "ops/composite/array_op.h"
+#include "runtime/dispatch_context.h"
 
 namespace jittor {
 
@@ -949,9 +950,16 @@ UnaryOp::UnaryOp(Var* x, NanoString op) : x(x) {
     set_type(OpType::element);
     ns = op;
     USER_CHECK(ns.is_unary() | ns.is_dtype());
-    if (ns == ns_log1p)
-        USER_CHECK(!x->dtype().is_complex())
-            << "log1p: complex inputs are not supported by the native real kernel";
+    if (ns == ns_log1p) {
+        // Complex log and ACL already support this same-device graph. Keep
+        // that existing behavior where a precise log1p kernel is unavailable;
+        // CPU/CUDA real inputs retain the dedicated, cancellation-safe kernel.
+        const auto backend = query_dispatch_context({x}).backend;
+        if (x->dtype().is_complex() || backend == "acl" || backend == "acl_legacy") {
+            forward(make_unary(make_binary(make_number(1, x), x, ns_add), ns_log));
+            return;
+        }
+    }
     // `bitwise_not` has no meaning for a float, and without this the mistake is
     // only noticed by g++: the generated kernel reaches a raw `~x` and answers
     // "wrong type argument to bit-complement", quoting a line of the template
