@@ -2120,25 +2120,6 @@ workaround.
 - Evidence: `compat/tests/torch/test_torch_compat_unimplemented.py::TestAutocast::test_autocast_conv2d_module_keeps_the_compute_dtype_through_a_bias`.
 - Exit condition: the case XPASSes and loses its marker.
 
-## KI-COMPAT-014: `torch.complex128` is still a frontend placeholder although the core has complex128
-
-- Severity: Medium (the frontend refuses a dtype the core computes with)
-- Status: Open; reproduced 2026-10-12 on CPU and CUDA. The boundary case runs as
-  a strict expected failure.
-- Owner: torch compatibility / dtype maintainers
-- Symptom: `torch.empty((2,), dtype=torch.complex128)` and the other frontend
-  constructors raise `NotImplementedError` naming complex128, while
-  `jt.core.ops.empty((2,), "complex128")` builds a complex128 Var. The frontend
-  `dtype` registry lists complex128 among its unsupported placeholders.
-- Cause: complex128 became a native core dtype (`tests/core/test_complex128_native.py`),
-  and the frontend's supported set was not widened with it.
-- Workaround: build complex128 values natively (`jt.array(..., dtype="complex128")`)
-  and hand them to the frontend.
-- Evidence: `compat/tests/torch/test_dtype_object_boundaries.py::test_placeholder_dtypes_are_metadata_only_at_every_boundary`
-  (the two core-op spellings by name do not raise for complex128).
-- Exit condition: complex128 is a supported frontend dtype end to end (or the
-  core refuses it again by design), and the case XPASSes and loses its marker.
-
 ## KI-DIST-001: FSDP2 flat sharding peaks above the unsharded model
 
 - Severity: Limitation (memory; numerics are correct)

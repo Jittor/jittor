@@ -1,11 +1,11 @@
 """complex128 is a supported Torch frontend dtype end to end (CPU).
 
-KI-COMPAT-014: the core computes complex128 natively, but the frontend dtype
-registry still listed it as a metadata-only placeholder, so every constructor
-and cast refused it at the dtype gate. These tests pin the frontend surface the
-registry gates: the dtype object and its reporting, every factory spelling,
-casts through ``.to``/``.type``, and a small compute path. complex32 stays
-metadata-only; the placeholder boundary contract itself is covered by
+The core computes complex128 natively, but the frontend dtype registry used to
+list it as a metadata-only placeholder, so every constructor and cast refused
+it at the dtype gate. These tests pin the frontend surface the registry gates:
+the dtype object and its reporting, every factory spelling, casts through
+``.to``/``.type``, and a small compute path. complex32 stays metadata-only; the
+placeholder boundary contract itself is covered by
 ``test_dtype_object_boundaries.py``.
 """
 import numpy as np
