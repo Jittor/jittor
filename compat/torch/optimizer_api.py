@@ -744,3 +744,29 @@ _INITIALIZER_APIS = {
     'RMSprop': rmsprop_init,
     'Adan': adan_init,
 }
+
+
+def reconcile_optimizer_state(optimizer):
+    """Validate the public optimizer state view after external device movement.
+
+    This build keeps the public state view and the execution buffers in one
+    place: moment tensors live in ``param_groups`` and every public ``state``
+    write is applied through that same view. An optimizer helper that moves
+    tensors through the public dictionaries has therefore already rebound the
+    storage that ``step()`` reads, so there is no second copy to migrate.
+
+    The bridge only checks that the public layout is intact and returns
+    ``None``. It never replaces tensors, dictionaries, gradients, or scalar
+    steps, and it must be called outside optimizer execution.
+    """
+    groups = getattr(optimizer, "param_groups", None)
+    state = getattr(optimizer, "state", None)
+    if type(groups) is not list or not callable(getattr(state, "items", None)):
+        raise TypeError("reconciliation requires a public optimizer state view")
+    for group in groups:
+        if type(group) is not dict:
+            raise TypeError("optimizer parameter groups must remain real dicts")
+        params = group.get("params")
+        if type(params) not in (list, tuple):
+            raise ValueError("optimizer parameter topology changed before reconciliation")
+    return None
