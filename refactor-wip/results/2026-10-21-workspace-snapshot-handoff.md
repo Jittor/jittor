@@ -115,7 +115,7 @@ Day4–5 按发布规格做真实训练更新的 PT/JT 配对测量：代表尺�
 
 ## 2026-10-25 Day2–5续接
 
-本轮重新 fetch 后 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81；主树与两个验收 worktree 的 dirty/untracked 修改均保留，未整合 origin/2.0-refactor。根盘约余 113 GiB、/data6 约余 6.0 TiB，未清理任何 checkpoint、失败证据、日志、绑定 cache 或 worktree 修改。
+本轮重新 fetch 后 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81；主树 HEAD 为 95d0600ba7d4888082b3a0f71bac9f2df8acd5dc，两个验收 worktree HEAD 均为 9e0e187bb013e71d85111acfd668e46aeff9f9d2，dirty/untracked 修改均保留，未整合 origin/2.0-refactor。当前复核根盘约余 108 GiB、/data6 约余 6.0 TiB，未清理任何 checkpoint、失败证据、日志、绑定 cache 或 worktree 修改。
 
 Qwen r24 已在 GPU UUID GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068 串行完成 PT/JT reduction replay，双方 actual_device=cuda:0、fallback_count=0。冻结 r22 输入和 manifest 不变；pow2 exact，但 native mean、sum/N、CUDA scalar 除法及 epsilon 变体均保留 1046/3072 项差异，max abs 1.4901161193847656e-8。完整 BF16 logits 仍 FAIL，未启动 LoRA full/resume。
 
@@ -127,3 +127,50 @@ Vision r18 缺失合法 torch.__file__ 的失败、r19 getattr 修正及 r21/r22
 ### 2026-10-25 T5 r36完成
 
 r36 continuous 与 fresh-process resume 均完成 step51 capture，sample_ids=[14,136]、actual_device=cuda:0、fallback=0，97个冻结源未变。正式 comparator 仍 FAIL：新 pre-forward 参数签名与保留 r6 reference 不同；该 fail-closed 检查保留。独立 trace 对拍显示 continuous 顶层/encoder.block.0 为 eval、resume 为 train，最早配对张量差异在 encoder.block.0.layer.1.DenseReluDense.wi 输入，1449项、max abs 1.430511474609375e-06；此前 dropout/attention 事件 exact。该结果只定位 mode/trajectory 边界，不关闭历史 771/2088 strict FAIL，也未升级为发布通过。
+
+### 2026-10-25 Vision r25 smoke与续跑
+
+r25 重新冻结五个原始 Vision case，focused CPU/CUDA gate identity 与计划一致，并使用独立 JITTOR_HOME/cache。首个 cnn-fp32-821-smoke execution receipt 为 PASS（returncode 0），artifact audit 全部通过：实际 cuda:0、fallback_count=0、完成2次真实参数更新、62个可训练参数均变化、保存/重载 logits exact。该结果仅证明修正后的读取入口和 CUDA smoke 可执行；stage all 随后在同一 cohort 中完成。r25 wrapper 的 Jittor cache 独立，HOME/TMPDIR/XDG_CACHE_HOME 指向保留的 r19 warm-unit 目录；该边界已在完整 receipt/log 审计中确认并保留。
+
+随后 r25 stage all 已收口为 COMPLETED_WITH_FAILURES_RETAINED。五个 case 的 smoke/full/resume 与 artifact audit 均完成，实际 cuda:0、fallback_count=0；cnn-fp32-821 same-runtime exact PASS 但 cross-runtime strict FAIL 160 项，vit-fp32-821 same-runtime exact FAIL 100 项，cnn-bf16-821 same-runtime exact FAIL 245 项，vit-bf16-821 same-runtime exact FAIL 143 项，cnn-fp32-823 same-runtime exact PASS 但 cross-runtime strict FAIL 177 项。所有 receipt、comparison、checkpoint 和日志保留，Vision 仍 FAIL，不能把真实 CUDA 更新写成发布通过。
+
+### 2026-10-25 T5 r38 dynamic trace 增量
+
+r38 使用全新独立 cohort/cache，continuous 与 fresh-process resume 均完成 step51 capture，sample_ids='[14,136]'、actual_device='cuda:0'、fallback_count=0，97 个冻结源未变。两侧各有 404 个 trace 事件；hook 时 training/is_train/is_training 和 functional dropout training=true 均一致，事件顺序、kind、shape、device 一致；前 21 个归档张量（包括 encoder block 0 dropout 与 FFN wi 输入/输出）exact，首个归档张量差异为 event 21 的 encoder.block.1.layer.1.DenseReluDense.wi 输入，1377 项、max abs '3.5762786865234375e-07'。静态 543 模块表在 capture 后为 continuous=eval、resume=train，只能作为 capture 后状态记录，不能证明前向时 mode 不同。正式 comparator 仍因新 pre-forward 参数签名与保留 r6 reference 不同而 FAIL；历史严格恢复 FAIL 771/2088 保持。resume 日志的 tied-weight 缺失 key（encoder.embed_tokens.weight、decoder.embed_tokens.weight、lm_head.weight）如实保留。该诊断仅缩小了首个张量差异边界，不关闭 T5 或发布门槛。
+
+
+### 2026-10-25 r4 bounded wait
+
+A new /data6/cgq/jittor-lab/_state/release-day23/20261020-r4/day45-bert-release-r4/ was created without replacing r3. Its manifest and scripts bind repair worktree HEAD 9e0e187bb013e71d85111acfd668e46aeff9f9d2 and the independent performance cache. The waiter requires target GPU UUID GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5 to remain at utilization <=10 percent and free memory >=60000 MiB for five consecutive five-second samples. Current free memory is 70498 MiB, utilization 100 percent, streak 0, and no r4 measurement process has started.
+
+
+Latest r4 live poll: waiter PID 1746490 remains alive with no launch receipt; target GPU utilization is 100 percent, free memory 41199 MiB, and qualifying streak 0. Do not restart while this PID is live.
+
+
+### 2026-10-25 r4 wait terminal state
+
+The r4 waiter ended with `WAIT_TIMEOUT_NO_RELEASE_WINDOW` at 2026-10-24T21:56:34.266419+00:00 UTC after 1800 seconds. No launch receipt or measurement child was created; utilization stayed at 100 percent, and the source HEAD/dirty SHA remained unchanged. Day4-5 is still not a release pass.
+
+### 2026-10-25 Qwen r26 reduction diagnostic
+
+r26 reused frozen r22 input/manifest in a new output/cache. PT/JT both ran actual CUDA 0 with fallback_count=0 and unchanged candidate HEAD/status. Pow2 was exact; variants retained 1038–1046 mismatches, while four-chunk summation retained 662. The full no-hook BF16 logits gate remains FAIL; no LoRA full/resume was launched. Artifacts: `/data6/cgq/jittor-lab/_state/release-day23/20261020-r3/qwen-rmsnorm-reduction-r26/`.
+
+## 2026-10-26 Day2–5续接
+
+本轮重新核对主工作区与两个验收 worktree：主树 integrate/cgq-transformers-native-multicard-target@95d0600ba7d4888082b3a0f71bac9f2df8acd5dc，dirty/untracked 95 项；原验收树 release/torch-compat-day23-20261020@9e0e187bb013e71d85111acfd668e46aeff9f9d2，51 项；修复树 release/torch-compat-day23-fix-20261021@9e0e187bb013e71d85111acfd668e46aeff9f9d2，83 项。重新 fetch 的 origin/cgq_transformers 为 e5cffe1ae60c418f53c5bb1cdca9182577fd2b81；未 stash/reset/clean，未整合 origin/2.0-refactor。当前 / 可用约 101 GiB，/data6 可用约 6.0 TiB；未清理文件。
+
+Qwen r44 在 /data6/cgq/jittor-lab/_state/release-day23/20261026-r44/qwen-full-nohook-r1/ 完成 PT/JT 原始无 hook BF16 初始完整前向。两端输入、样本、权重和冻结 source manifest 对齐，PyTorch 2.6.0+cu124 与 Jittor shim 侧都为实际 cuda:0、fallback=0。execution receipt 为 FAIL_RETAINED，PT/JT worker returncode 均为 0，full_training_launched=false；比较器只在 logits 键失败。原始 atol=0.005, rtol=0.03 下 7,015,339/29,171,712 个 logits 超预算，max abs 2.25；有效位置 2,756,985/22,030,720 个超预算，max abs 0.3125。loss 差 0.0038883686 在冻结预算内。修复 worktree HEAD 与 77 个冻结 source 文件 hash 均与本次运行一致。完整无 hook logits 仍 FAIL，因此没有启动 LoRA full/resume。比较文件 SHA256 为 d604c30238a3a6c27d2adf5a283ed38af05d0396599088dd3019d46cf60eb770，执行 receipt SHA256 为 eadd2e696d142817bc357b8249319f7c109f5de39ee7224e947fd3f97a34deee。
+
+Qwen r46 在冻结 r22 输入 `[2,96,16,128]` 上继续定位 r23 mean 首差异。依据 PyTorch 2.6 `Reduce.cuh`/`MeanOps`，每个 lane 顺序累加 `lane+0/32/64/96`，再按 warp offset 1/2/4/8/16 合并并除以 128。PT 与 Jittor shim 在真实 CUDA `cuda:0` 上显式计算该树，均与 PT 原生 mean 3072/3072 exact；当前 Jittor 原生 mean 仍有 1046/3072 项差异、max abs `1.4901161193847656e-8`。两边 fallback_count=0，冻结 input SHA 为 `f2df7b930b0f2227dbea25b0a95bd3bd6bc2dfe811a328d0fe7389c0e089cd13`，candidate HEAD/status hash 为 `9e0e187bb013e71d85111acfd668e46aeff9f9d2` / `a061f1cd85aa91037f50720ce2a50a5211843f16feeed7809871ae724398c41e`。这是 reduction-only diagnostic，不是源码修复或全模型通过证据；r44 logits FAIL 仍保留，未启动 LoRA。结果与数组在 `/data6/cgq/jittor-lab/_state/release-day23/20261026-r46/qwen-reduction-tree-r1/`。
+
+Qwen r50 继续作为当前 unhooked full-logits release gate：原始 `atol=0.005, rtol=0.03` 下 6,690,070/29,171,712 项失败，最大绝对差 1.953125；未启动 LoRA。r54 在冻结候选 `9e0e187bb013e71d85111acfd668e46aeff9f9d2`、85 个 dirty source 文件 fingerprint `d8b57cb5da41cbbf1a59c1310cc1204d79a0b9394aa66b4f1774cdec0bd927dd` 上完成 PT/JT CUDA capture，reference input/logits exact、fallback=0。source-formula replay 的 `position_ids` exact，`inv_freq[37]` 一项差异（PyTorch `0.0003398208355065435`，Jittor `0.00033982080640271306`），随后 `freqs` 81/6144、`sin` 162/12288 项不同；`cos` exact。首个 public module 差异是 RoPE sin，162/12288 项、max abs `3.725290298461914e-9`；layer 2 `self_attn.o_proj` 有 59/196608 个 BF16 项不同、max abs `0.0009765625`。64 项独立 CUDA probe 中候选 `pow`/倒数与 host `math.pow` float32 rounding 均 exact，而独立 PyTorch 分别有 4/64 与 3/64 项差异；这是 backend 浮点差异证据，不等于修复或将 Jittor 判错。r54 comparator SHA256 `022b806e18f8bb0bbc9c70758b72ca228fd3eddfbb128a6e779281f328f08ff6`，产物在 `/data6/cgq/jittor-lab/_state/release-day23/20261026-r54/qwen-rope-replay-r1/`。r50 gate 仍 FAIL，源码未变、未启动 LoRA。
+
+Day2–3 其余状态未变：T5 r36/r38 只把 step51 差异缩小到 mode/FFN 轨迹边界，正式 comparator 与历史双 seed strict 恢复仍 FAIL 771/2088；不重复 full100。Vision 已从 r19 的 wrapper 入口修复推进到 r25 五格 full/resume；所有 real CUDA/fallback=0 与真实更新证据保留，但 same-runtime 或 cross-runtime comparison 仍有失败。BERT BF16 双 seed loss gap 15.425953905% 继续超过 15% 门槛。
+
+Day4–5 的 r3 代表尺寸三轮 JT/PT median ratio 为 1.409、1.510、1.341，near-capacity 格只有两轮（0.746、1.132）；实际 AdamW 更新、allocator/NVML peak、cuda:0 与 fallback=0 均有记录，但共享 GPU 负载使 summary 状态为 DIAGNOSTIC_SHARED_GPU，且 near-capacity 少于要求的三轮。r4 等待 1800 秒后以 WAIT_TIMEOUT_NO_RELEASE_WINDOW 结束，没有启动任何测量进程。r3 与 r4 均保留。
+
+新的 Day4–5 waiter 位于 /data6/cgq/jittor-lab/_state/release-day23/20261026-r45/day45-bert-release-r5/，复用验过 hash 的测量脚本，独立 perf-cache/ 与新输出目录。修复树绑定 HEAD 9e0e187bb013e71d85111acfd668e46aeff9f9d2、dirty source SHA 4f28ab7c26e2ede3239cbad0ae0336c92d492dcfcf87d792c342850314625cee、权重 SHA 86fa7113367fd0d231a76571ca1b73a1b24166af33558fee960636ce56337ed7。waiter PID 2616242 启动时间为 2026-10-26 02:09:02 +0800；设置 6 小时上限，要求同一 GPU 连续 5 个 5 秒样本满足 utilization ≤10%、free memory ≥60000 MiB。02:34 +0800 最近核对仍为 WAITING，state 有 120 个采样点，最后样本 free 50422 MiB、utilization 99%，没有 launch/completion receipt。队列中每格计划 10 个热态样本、预热 4 次、PT/JT 交替三轮，near-capacity 格也要求三轮；首次 JIT 串行。后续必须重新读取 `/proc`、receipt 与 GPU，不把当前 waiter PID 或 wait_state 当作永不过期凭据。
+
+当前没有 Day2–5 训练/验证进程；r44 与 r46 cache 的 `jittor.lock` 均无 holder。唯一本任务活动进程是 r5 waiter；不发信号给其他用户任务。共享负载下 r3 的速度差异只能作为退化调查线索，不能据此直接归因或声称已经修复常用路径。
+
+2026-10-26 04:35 +0800 复核：r54 capture/comparator 与 structure pytest 均已退出，r52 cache `jittor.lock` 无 holder；任务没有运行中的训练/测量进程。PID 2616242 仍是启动于 02:09:02 +0800 的 r5 `wait_and_launch.py`，状态 `WAITING`，最新样本 GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5 free 49,409 MiB、utilization 100%、连续合格样本 0；没有 launch/completion receipt。不要重启或向该 waiter 发信号；后续恢复仍需重新核对 live process、GPU、state 与 receipts。

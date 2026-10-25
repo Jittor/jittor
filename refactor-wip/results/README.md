@@ -1,5 +1,7 @@
 # 验证结果索引
 
+- [2026-10-26 Torch compatibility Day2–5续接](2026-10-26-torch-compat-release-day2-5.md)：r50 BF16 full-logits 仍 FAIL，r54 将 RoPE 首差异缩到 `inv_freq[37]` 的 1 ULP；Day4–5 r5 仍 WAITING，尚无稳定窗口测量。
+
 本目录只保存人工整理、可长期阅读的验证与性能报告。原始日志、JSONL、模型、
 图片、视频和编译缓存统一放在
 `$JITTOR_LAB_ROOT/_state/`，不纳入主仓库；环境未设置时遵循
