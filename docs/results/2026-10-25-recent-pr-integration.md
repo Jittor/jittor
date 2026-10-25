@@ -224,14 +224,19 @@ passed/1 skipped，合计 **324 passed/45 skipped/1 xfailed**；`tests/structure
 | KI-TEST-007 | `test_fused_op_relay_matmul` 在三个历史污染文件之后均通过 | 三种顺序各 2/4/5 passed |
 | KI-TEST-011 | 生成源码与缓存按 UTF-8 读取（全树同类读取一并修正） | C locale + 关闭 locale coercion/UTF-8 模式，CUDA 1 passed |
 | KI-OPS-014 | 全掩码 `finfo.min` 行已由 max 与 `1/l` 分离修复（基线已有） | dense-additive/key-padding CUDA 2 passed |
+| KI-OPS-015 | SDPA CUDA 反向已由 `4c722fee0` 修复；本轮记录其依据 | 两个 device-parity 用例在 RTX 4090 通过（2 passed，约 1e-6） |
+| KI-TEST-010 | LayerNorm 夹具显式放到设备上，融合路径真正被覆盖 | norm 文件 CPU+CUDA 28 passed |
+| KI-TEST-014 | resnet notebook 改断言性质（非单调）并移除已登记的预期失败 | manual smoke 3 passed（use_mkl=0） |
+| KI-COMPAT-013 | 模块前向在输入未放置时跟随模块自身已放置的参数 | autocast 套件 CPU+CUDA 12 passed |
 | KI-MEM-002 | host 读取返回副本，不迁移源存储 | CUDA 驻留契约 16 passed；CPU 6 passed |
 | KI-OPS-012 / KI-BACKEND-009 / KI-BACKEND-014 | 半精度 max/min 恒等值（基线已有）、逻辑/位归约的 16/64 位原子与 bool 结果、cublas/cudnn 自测算子设备化 | 归约矩阵+minmax 24 passed；三个库自测类 3 passed；均在 RTX 4090 |
 | 18031 第二批语义 | `Tensor.type_as`、反射标量留在张量后端、TensorDataset 单次 gather、掩码写入梯度、expand 标量维、torchvision resize/pad/color/crop、Conv1d device/dtype、advanced-index/0-dim 设备对齐 | CPU 373 passed/16 skipped；CUDA 定向 14+2 passed |
 
+| 最终门禁（本轮修复合并后） | CPU core 与 structure | core：native 98 passed/44 skipped/1 xfailed + Torch 229 passed/1 skipped（组合 327 passed/45 skipped/1 xfailed，退出 0，session-completion 标记 143/143、230/230）；structure 1548 passed/6 skipped，退出 0 |
+
 本表不把 partial 文件或单个用例的成功写成整库、整后端验收；NPU/ROCm/310P 与多机集合
 通信仍未验证。KI-COMPAT-012 的机制已修复（进程内 shim 发布 torch distribution 元数据，
 元数据回归通过），但下游 Transformers/Diffusers 用例仍需在装有这些包的环境验收。
-LayerNorm 快路径与 autocast Conv2d bias 两项仍在进行中。另：一次裸 pytest 宽扫描在
-验证 venv 中把 `tests._helpers` 解析到 `.pth` 里的 modelscope `tests` 包而报
-ModuleNotFoundError；那是验证环境遮蔽，不是产品缺陷，正式门禁走
+另：一次裸 pytest 宽扫描在验证 venv 中把 `tests._helpers` 解析到 `.pth` 里的 modelscope
+`tests` 包而报 ModuleNotFoundError；那是验证环境遮蔽，不是产品缺陷，正式门禁走
 `tools/run_test_suite.py` 不受影响。

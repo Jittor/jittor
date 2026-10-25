@@ -1,8 +1,8 @@
 # Jittor Project Context
 
 - Status: Current-state index, not a history log
-- Last reviewed: 2026-10-06
-- Baseline reviewed: `1a6e203fc`
+- Last reviewed: 2026-10-26
+- Baseline reviewed: `6cce1ea5d`
 - Owner: Jittor core maintainers
 - Freshness expires: 2027-01-06
 - Review when: the release line, a top-level goal or an indexed location changes
