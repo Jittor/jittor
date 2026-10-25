@@ -1134,6 +1134,13 @@ def core_build_stamp_path():
         core_output_path + ".build_stamp.json"
 
 
+# Process-level memo for the production (root=None) walk: src/ and backends/
+# do not change during a run (generators write to the cache dir, not here),
+# so the ~600-file walk runs once instead of on every JIT compile. Tests pass
+# an explicit root and are never memoized; the lookup goes through globals() so
+# an isolated exec of this function also keeps the uncached, always-fresh walk.
+_core_source_signature_cache = [None]
+
 def core_source_signature(root=None):
     """``{relative path: [mtime_ns, size]}`` for every core source file.
 
@@ -1155,6 +1162,9 @@ def core_source_signature(root=None):
     Costs about 3 ms for ~600 files, which is what makes it affordable on
     every import.
     """
+    cache = globals().get("_core_source_signature_cache")
+    if root is None and cache is not None and cache[0] is not None:
+        return cache[0]
     tree = jittor_path if root is None else root
     signature = {}
     roots = [("src", core_root(tree) if root is None else os.path.join(tree, "src"))]
@@ -1174,6 +1184,8 @@ def core_source_signature(root=None):
                     continue
                 signature[os.path.join(top, os.path.relpath(path, root_dir))] = \
                     [info.st_mtime_ns, info.st_size]
+    if root is None and cache is not None:
+        cache[0] = signature
     return signature
 
 
