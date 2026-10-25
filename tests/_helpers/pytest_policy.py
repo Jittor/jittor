@@ -650,9 +650,7 @@ def _publish_worker_collection(config):
 def pytest_testnodedown(node, error):
     """Merge each xdist worker's collected and deselected file set."""
     del error
-    _COLLECTED_FILES.update(
-        getattr(node, "workeroutput", {}).get("jittor_collected_files", ())
-    )
+    _COLLECTED_FILES.update(getattr(node, "workeroutput", {}).get("jittor_collected_files", ()))
 
 
 _SKIP_REASON_BUCKETS = Counter()

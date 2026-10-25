@@ -136,7 +136,8 @@ def _rel(a, b):
 @pytest.mark.parametrize("name", _CASES_NAMES)
 def test_first_and_second_order_match_finite_differences(device, name, kind):
     f, shape = _cases()[name]
-    rng = np.random.default_rng(abs(hash((name, kind))) % (2 ** 32))
+    case_seed = 2 * _CASES_NAMES.index(name) + int(kind == "complex")
+    rng = np.random.default_rng(case_seed)
     cplx = kind == "complex"
     x = rng.standard_normal(shape) + (1j * rng.standard_normal(shape) if cplx else 0)
     x = x + 2 * np.eye(*shape)          # well separated singular values / pivots
