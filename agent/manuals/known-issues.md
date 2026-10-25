@@ -2133,32 +2133,6 @@ workaround.
 - Exit condition: complex128 is a supported frontend dtype end to end (or the
   core refuses it again by design), and the case XPASSes and loses its marker.
 
-## KI-COMPAT-015: portable Torch SGD updates leave detached parameter aliases stale
-
-- Severity: High (silent stale values in retained parameter-storage aliases).
-- Status: Open; CPU reproduced 2026-10-16 on the SGD execution-option working tree.
-- Owner: native optimizers / Torch compatibility storage semantics.
-- Symptom: after `p = torch.tensor([1., 2.], requires_grad=True)` and
-  `alias = p.detach()`, backward through `(p * torch.tensor([.25, .5])).sum()`
-  followed by `torch.optim.SGD([p], lr=.125).step()` changes `p` to
-  `[.96875, 1.9375]` but leaves `alias` at `[1., 2.]`. The parameter's physical
-  allocation changes. Genuine Torch preserves the allocation and updates both.
-- Cause: the portable native update uses `_update_preserve_dtype`, which calls
-  `target.update(value)` and rebinds the holder instead of copying into its
-  existing allocation. This is separate from checkpoint loading and option parsing.
-- Workaround: avoid retaining parameter-storage aliases across portable SGD
-  updates; recreate detached aliases after each step.
-- Evidence: four CPU option combinations reproduce the stale alias; all four
-  corresponding independent Torch probes preserve it. Raw candidate/genuine
-  `*-alias-v2.json` and scripts are unversioned under
-  `$JITTOR_LAB_ROOT/_state/sgd-execution-options/20261016/`; see
-  [SGD execution options](../../docs/results/2026-10-16-sgd-execution-options.md).
-  CUDA portable updates and other optimizer algorithms are not yet verified.
-- Exit condition: a frontend-owned native storage write preserves actual
-  allocations and aliases across CPU/CUDA SGD updates, including plain,
-  momentum and Nesterov paths, with genuine Torch controls. Preserve legacy
-  native optimizer defaults and published gradients.
-
 ## KI-DIST-001: FSDP2 flat sharding peaks above the unsharded model
 
 - Severity: Limitation (memory; numerics are correct)
@@ -2252,3 +2226,106 @@ workaround.
 - Exit condition: extend `files` one package at a time with real fixes (no
   `# type: ignore`, no relaxed configuration); delete the entry when
   `python/jittor` and `backends/` are covered.
+
+## KI-TEST-015: storage-view fixtures do not yet provide a clean inplace gate
+
+- Severity: Medium
+- Status: Open; confirmed on `deb54e50d` and unchanged integration `1fa76c8cc` (2026-10-25).
+- Owner: Torch compatibility storage-view and test maintainers.
+- Symptom: three CPU cases in `test_tensor_inplace_storage.py` fail on both the preserved local-work baseline and the integration before the saved-output preservation fix. This prevents citing this file as an entirely passing storage-alias gate.
+- Cause: the two transpose cases assert a logical-view representation, but their current fixture selects the physical storage-view path. The temporary-base weak-reference lifetime assertion remains unresolved. These observations do not establish a production numerical or storage corruption defect; the tests currently mix representation/lifetime assumptions with behavior checks.
+- Workaround: report these exact failures separately from passing pointer, alias and saved-output checks; do not skip them or treat a partial run as a green file.
+- Evidence: `python/jittor/compat/tests/torch/test_tensor_inplace_storage.py::TestTensorInplaceStorageCPU::test_temporary_base_can_expire_without_losing_storage_alias`, `python/jittor/compat/tests/torch/test_tensor_inplace_storage.py::TestTensorInplaceStorageCPU::test_transpose_writeback_retains_logical_axis_order`, and `python/jittor/compat/tests/torch/test_tensor_inplace_storage.py::test_physical_provenance_distinguishes_pending_and_materialized_transpose`. With an isolated CPU cache, run `JITTOR_TORCH_SHIM=1 JITTOR_TEST_DEVICES=cpu JT_USE_CUDA=0 JT_BUILD_NVCC_PATH= PYTHONPATH=python python -m pytest -q python/jittor/compat/tests/torch/test_tensor_inplace_storage.py -k 'temporary_base_can_expire or transpose_writeback_retains or physical_provenance_distinguishes'`. Both controls report 3 failed / 11 deselected; this is not newly introduced by the PR integration.
+- Exit condition: establish the intended weak-reference ownership contract and make its regression pass; construct and verify explicitly selected logical and physical transpose cases against their intended public behavior; then rerun this file on CPU and relevant real accelerator devices with no hidden exclusions. Delete this entry only once those contracts and the complete gate agree.
+
+## KI-EXEC-015: warmed optimizer replay does not preserve pending external forward readers
+
+- Severity: High
+- Status: Open; CPU executor replay reproduced on unchanged integration `1fa76c8cc` (2026-10-25). CUDA and other accelerators not validated for this scenario.
+- Owner: GraphReplay / StepCapture and autograd storage maintainers.
+- Symptom: after a Torch compiled optimizer step has warmed up and entered replay, construct an unrelated differentiable forward from a parameter, leave it pending, replay another optimizer step, then backpropagate the old forward. Its gradient may use the parameter's new value instead of the forward-time value. Example: SGD `lr=.125`, constant gradient `.25`, seven replayed steps from zero, then `old=(p+1).exp().sum()`, another compiled step, `old.backward()`: CPU produced `exp(.75)` instead of `exp(.78125)`.
+- Cause: an already-kept graph's storage writes cannot acquire newly created external reader dependencies through the ordinary graph-build preservation path. The native imperative/fused saved-output preservation fix does not establish arbitrary interleaving support for outside graphs around warmed compiled replays.
+- Workaround: avoid interleaving pending external differentiable graphs with replayed writes to their parameter storage; complete that graph's backward before the next mutating replay, or run this pattern through the eager owner. This is an ordering restriction, not a verified promise that every explicit materialization strategy repairs all saved values.
+- Evidence: baseline CPU probe `replay-outsider.py` and `control/logs/replay-outsider.log` under the external lab state `pr-audit-storage`; promote the minimal sequence to a tracked regression when addressing the contract. It was reproduced before `881e9ece6`, and is distinct from its corrected noncompiled direct/transitive saved-output cases.
+- Exit condition: either preserve externally added saved readers before each replayed storage write or reject this interleaving explicitly; add warmed-replay tests for direct and transitive outside readers, aliases, and both eager/captured owners, and verify CPU plus the supported real accelerator paths. Do not cite passing optimizer-only replay tests as this guarantee.
+
+
+Reproduce from the selected source checkout with a configured compiler and an isolated lab `JITTOR_HOME`/`TMPDIR`; record `git rev-parse HEAD`. This CPU-only wrapper is syntax checked; the observed failure comes from the original equivalent probe.
+
+```bash
+JITTOR_TORCH_SHIM=1 JITTOR_TEST_DEVICES=cpu JT_BACKEND=cpu JT_USE_CUDA=0 JT_BUILD_NVCC_PATH= JT_USE_PARALLEL_OP_COMPILER=0 PYTHONPATH=compat/shim/resources:python python - <<'PY'
+import numpy as np
+import torch
+import jittor as jt
+from jittor._runtime.fallback import forbid_backend_fallbacks
+assert hasattr(torch, '_torch_compat_install_context'), 'Jittor Torch frontend required'
+assert torch.Tensor is not jt.Var
+with jt.runtime.scope(use_cuda=0, backend_fallback='error'), forbid_backend_fallbacks():
+    p = torch.nn.Parameter(torch.zeros((2, 2), device='cpu'))
+    opt = torch.optim.SGD([p], lr=.125, foreach=False, fused=False)
+    gradient = torch.full_like(p, .25)
+    def step(gradient):
+        opt.zero_grad(set_to_none=True)
+        loss = (p * gradient).sum()
+        loss.backward()
+        opt.step()
+        return loss
+    run = torch.compile(step, mode='reduce-overhead')
+    for _ in range(7):
+        run(gradient).sync()
+    assert p.device.type == 'cpu'
+    assert jt.core.dispatch_context([p]) == ('cpu', -1)
+    old = (p + 1).exp().sum()
+    run(gradient).sync()
+    opt.zero_grad()
+    old.backward()
+    assert p.grad is not None
+    assert jt.core.backend_fallback_count() == 0
+    np.testing.assert_allclose(p.grad.numpy(), np.exp(1 - 7 * .125 * .25),
+                               rtol=2e-6, atol=2e-7)
+PY
+```
+
+## KI-COMPAT-016: fused AdamW holder rebinding disconnects an old forward from its parameter
+
+- Severity: High
+- Status: Open; real CUDA failure confirmed 2026-10-25 on integration `1fa76c8cc` plus the initial native saved-reader preservation prototype, without the three local fused-Adam writeback changes. Exact `881e9ece6` CUDA acceptance is not established by that earlier log; its source retains the same fused Python holder-rebinding path.
+- Owner: Torch optimizer and native optimizer/storage maintainers.
+- Symptom: construct `old=p.exp().sum()` before `torch.optim.AdamW(..., foreach=False, fused=True).step()`. After `zero_grad(); old.backward()`, `p.grad` is `None`, although an independent saved exp output should retain the old parameter's gradient edge. The corresponding portable path is safe once native saved-output preservation is present.
+- Cause: the clean committed fused Adam path uses holder-rebinding `update` for parameter/state writes. Native saved-output preservation alone does not make those rebindings preserve the public parameter identity. The user's three-line local `_update_preserve_dtype` changes are deliberately not absorbed into that native commit; behavior in a dirty tree containing them must be reported separately from clean committed source.
+- Workaround: use `fused=False`. Complete clean-source saved-output tests after applying the native preservation fix; do not infer this specific workaround's acceptance on the earlier unfixed native baseline.
+- Evidence: `python/jittor/compat/tests/torch/test_optimizer_storage_identity.py::test_optimizer_retains_old_independent_forward_output[adamw_fused-cuda]`; the original test is preserved at snapshot `deb54e50d`. The real CUDA original-four run reported this single failure and seven passes (`pr-audit-storage/cuda/logs/original-four.log`, external raw log). The standalone sequence below is syntax checked; it is not additional hardware evidence beyond the original run.
+- Exit condition: fix fused writeback through the maintained storage-preserving owner, retain parameter/state dtype and alias identity, and pass the old-output full-gradient regression on clean committed CPU and actual CUDA source. Validate direct/transitive outputs, fused/portable paths and state/parameter aliases; separately rerun the complete local-WIP acceptance before representing the restored dirty worktree as passing.
+
+
+Reproduce from the selected source checkout with a configured compiler/toolkit and an isolated lab `JITTOR_HOME`/`TMPDIR`; record `git rev-parse HEAD`. The fused-Adam reproducer requires a clean `compat/torch/optimizer_adam.py`; `JITTOR_REPRO_FUSED=0` selects its portable control.
+
+```bash
+JITTOR_TORCH_SHIM=1 JITTOR_TEST_DEVICES=cuda JT_USE_CUDA=1 JT_USE_PARALLEL_OP_COMPILER=0 PYTHONPATH=compat/shim/resources:python python - <<'PY'
+import os
+import numpy as np
+import torch
+import jittor as jt
+from jittor._runtime.fallback import forbid_backend_fallbacks
+assert hasattr(torch, '_torch_compat_install_context')
+assert jt.compiler.has_cuda and jt.compiler.is_cuda
+assert not any(getattr(jt.compiler, k, False) for k in ('has_rocm', 'has_acl', 'has_corex'))
+assert torch.cuda.is_available()
+fused = os.environ.get('JITTOR_REPRO_FUSED', '1') == '1'
+with jt.runtime.scope(use_cuda=1, backend_fallback='error'), forbid_backend_fallbacks():
+    p = torch.nn.Parameter(torch.zeros((2, 2), device='cuda'))
+    p.sync(True, False)
+    backend, ordinal = jt.core.dispatch_context([p])
+    assert backend == 'cuda' and ordinal >= 0 and p.location() == 'device'
+    opt = torch.optim.AdamW([p], lr=.125, eps=.125, betas=(.5, .5),
+                            weight_decay=.25, foreach=False, fused=fused)
+    old = p.exp().sum()
+    (p * torch.tensor([[.25, .5], [.75, 1.]], device='cuda')).sum().backward()
+    opt.step()
+    opt.zero_grad()
+    old.backward()
+    assert jt.core.backend_fallback_count() == 0
+    assert p.grad is not None, 'fused AdamW rebound the holder; old forward no longer reaches p'
+    np.testing.assert_allclose(p.grad.detach().cpu().numpy(), np.ones((2, 2)), rtol=2e-6, atol=2e-7)
+PY
+```
