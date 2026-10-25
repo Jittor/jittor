@@ -20,15 +20,21 @@ ROOT = Path(__file__).resolve().parents[2]
 PYTHON_ROOT = ROOT / "python"
 GIB = 1024 ** 3
 HOST_MEMORY = 96 * GIB
-spec = importlib.util.spec_from_file_location("cgroup_under_test", PYTHON_ROOT / "jittor/build/utils/cgroup.py")
-cgroup = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(cgroup)
+
+
+def _load_cgroup_parser():
+    spec = importlib.util.spec_from_file_location(
+        "cgroup_under_test", PYTHON_ROOT / "jittor/build/utils/cgroup.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 @unittest.skipUnless(sys.platform.startswith("linux"), "Linux cgroup filesystem tests")
 class TestCompileCgroup(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        cls.cgroup = _load_cgroup_parser()
         cls.build = tempfile.TemporaryDirectory(prefix="jittor_cgroup_test_")
         cls.binary = Path(cls.build.name) / "probe"
         cls.compiler = shutil.which("g++") if sys.platform.startswith("linux") else None
@@ -109,7 +115,7 @@ int main(int argc, char** argv) {
         path.write_text(str(value))
 
     def check_limit(self, expected, cap=16, cpu_limit=128):
-        self.assertEqual(cgroup.limit_memory(HOST_MEMORY, self.groups, self.mountinfo), expected)
+        self.assertEqual(self.cgroup.limit_memory(HOST_MEMORY, self.groups, self.mountinfo), expected)
         if self.compiler:
             output = subprocess.check_output([str(self.binary), str(HOST_MEMORY),
                 str(self.groups), str(self.mountinfo), str(cap), str(cpu_limit)], text=True, timeout=5)
@@ -264,7 +270,7 @@ int main(int argc, char** argv) {
             def imap_unordered(self, func, args):
                 return map(func, args)
         module = ModuleType("compile_memory_probe.cgroup")
-        module.limit_memory = lambda memory: cgroup.limit_memory(memory, self.groups, self.mountinfo)
+        module.limit_memory = lambda memory: self.cgroup.limit_memory(memory, self.groups, self.mountinfo)
         namespace = dict(__package__="compile_memory_probe", Any=object,
             _main_module_not_reexecuted=contextlib.nullcontext, os=SimpleNamespace(name="posix",
             sysconf=lambda name: 4096 if name == "SC_PAGE_SIZE" else HOST_MEMORY // 4096, environ={}),
@@ -285,7 +291,7 @@ int main(int argc, char** argv) {
     @unittest.skipUnless(sys.platform.startswith("linux"), "Linux /proc probe")
     def test_live_python_and_cpp_agree(self):
         physical = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
-        limited = cgroup.limit_memory(physical)
+        limited = self.cgroup.limit_memory(physical)
         self.assertGreaterEqual(limited, 0)
         self.assertLessEqual(limited, physical)
         if self.compiler:
