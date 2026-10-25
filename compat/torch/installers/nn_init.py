@@ -102,6 +102,29 @@ def _uniform_values(tensor, a=0.0, b=1.0, generator=None):
     return value
 
 
+def _exponential_values(tensor, lambd=1.0, generator=None):
+    """Inverse-CDF exponential draw on the tensor's device.
+
+    Reuses the native device RNG and mathematical primitives. CPU uniform
+    draws can include 0 while cuRAND draws can include 1, so keep the inverse
+    CDF strictly inside its domain before narrowing to the target dtype.
+    """
+    rate = float(lambd)
+    if not rate > 0:
+        raise RuntimeError("exponential_ requires lambd > 0")
+    dtype, _ = _initialization_dtype(tensor)
+    draw_dtype = "float64" if dtype == "float64" else "float32"
+    target = get_install_context(jt).target_namespace
+    with jt.no_grad():
+        uniform = target.rand(tuple(tensor.shape), dtype=draw_dtype,
+                              device=tensor.device, generator=generator)
+    tiny = 2.0 ** (-1022 if draw_dtype == "float64" else -126)
+    upper = 1.0 - 2.0 ** (-53 if draw_dtype == "float64" else -24)
+    uniform = jt.ternary(uniform < tiny, tiny, uniform)
+    uniform = jt.ternary(uniform > upper, upper, uniform)
+    return (-jt.log(uniform) / rate).cast(dtype)
+
+
 def uniform_(tensor, a=0.0, b=1.0, generator=None, *, low=None, high=None):
     if low is not None:
         if a != 0.0 and a != low:

@@ -1801,6 +1801,11 @@ def _api_uniform(self, a=0.0, b=1.0, generator=None):
     return _random_inplace(self, _uniform_values, a, b, generator=generator)
 
 
+def _api_exponential(self, lambd=1.0, *, generator=None):
+    from ..nn_init import _exponential_values
+    return _random_inplace(self, _exponential_values, lambd, generator=generator)
+
+
 def _api_tolist(self):
     return self.item() if getattr(self, '_torch_0d', False) else self.numpy().tolist()
 
