@@ -76,13 +76,13 @@ ENVIRONMENT_SKIP_PATTERNS = (
     # names around it).
     "cuda", "cudnn", "cublas", "cutt", "cusparse", "cufft", "curand",
     "nvcc",
-    "gpu", "accelerator", "acl", "npu", "ascend", "cann", "rocm", "hip",
+    "gpu", "nvidia", "accelerator", "acl", "npu", "ascend", "cann", "rocm", "hip",
     "triton",
     # an independent PyTorch build, which only the oracle sessions have.
     # Withdrawn when JITTOR_REQUIRE_REAL_TORCH=1 -- see REAL_TORCH_PATTERNS.
     "torch",
     # multi-rank launchers
-    "mpi", "nccl", "world size",
+    "mpi", "nccl", "world size", "launcher-owned store subgroup",
     # opt-in assets and probes
     "download", "dataset", "network", "manual probe",
     # Optional third-party libraries the shim is validated against. Absence is a
