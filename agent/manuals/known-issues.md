@@ -177,30 +177,6 @@ workaround.
 - Exit condition: measure the nightly gate with a restored cache; if acceptable,
   delete the entry, otherwise reduce cold compilation.
 
-## KI-TEST-014: the `resnet_training` notebook asserts a training trajectory that no longer happens
-
-- Severity: Low (tutorial narrative; the training itself is correct)
-- Status: Open; reproduced 2026-10-13 with `use_mkl=0` (as the smoke runs it)
-  on AMD EPYC 9554 (Zen 4) and 7763 (Zen 3): identical numbers on both and
-  across runs, so neither the CPU nor nondeterminism. The smoke case is a
-  strict expected failure through `_SMOKE_KNOWN_ISSUES` in
-  `tests/integration/test_notebooks.py`, limited to a cell raising.
-- Owner: tutorial / examples maintainers
-- Symptom: `assert len(set(frozen)) == 1, "普通网络应当出现连续多个 epoch 停滞"` --
-  the plain network's validation accuracy over epochs 2-4 is 0.31, 0.56, 0.48,
-  not a constant 0.31. The table in the notebook (residual 0.80/0.72, plain
-  0.56/0.42) no longer matches either (0.84/0.73 and 0.59/0.48 now). The other
-  assertions -- residual beats chance and beats plain by more than 0.15 -- hold.
-- Cause: not isolated. The notebook pins an exact trajectory of a small
-  network, so any change in conv/BatchNorm/Adam numerics moves it; which change
-  did has not been bisected.
-- Workaround: none needed; the code is right, the narrative is stale.
-- Evidence: `tests/integration/test_notebooks.py::test_notebook_smokes_execute_offline_on_cpu[resnet_training]`
-  (`nox -s cpu`, the manual stage); `examples/notebooks/resnet_training.md`.
-- Exit condition: rewrite the notebook's stall claim and table for a
-  trajectory that is stable (or assert the property, not the exact numbers),
-  and drop the `_SMOKE_KNOWN_ISSUES` entry.
-
 ## KI-COMPILER-001: the op-level parallel compiler can corrupt process state
 
 - Severity: High
