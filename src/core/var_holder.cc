@@ -1578,17 +1578,54 @@ VarHolder* VarHolder::sync(bool device_sync, bool weak_sync) {
     return this;
 }
 
+#ifdef HAS_ACCELERATOR
+// Materialise a host copy of a Var's value without rebinding the Var itself.
+//
+// A read used to call `migrate_to_cpu`, which replaced the Var's storage with
+// a host block. The next device operation then had to copy it back -- measured
+// at 20x the cost of the same operation on a tensor that was never read, with
+// both copies live in between (KI-MEM-002). A read is a query: it hands the
+// caller bytes, it does not move the tensor. So copy into a buffer the
+// returned ArrayArgs owns and leave `var->mem_ptr` where it is.
+//
+// `save_mem` is the exception: there the point of a read is to let go of the
+// device allocation, so it keeps the migrating path. Managed memory is read
+// in place because the host can address it -- also what the old path did.
+static bool host_copy_without_migration(Var* var, ArrayArgs& result) {
+    if (save_mem || use_cuda_managed_allocator || !var->mem_ptr
+            || !var->allocator || !var->allocator->is_cuda())
+        return false;
+    // The full storage span: `ArrayArgs` carries `storage_strides`, and the
+    // converter indexes the buffer with them, so a view needs its gap bytes
+    // too. For a contiguous Var this is exactly its byte size.
+    auto bytes = var->storage_span_bytes();
+    result.buffer.reset(new char[bytes]);
+    if (bytes)
+        // A host destination is readable when backend_copy returns, so this
+        // is the same blocking device-to-host transfer migrate_to_cpu issued.
+        backend_copy(result.buffer.get(), allocation_device(cpu_allocator),
+                     var->mem_ptr, allocation_device(var->allocator), bytes);
+    result.ptr = result.buffer.get();
+    return true;
+}
+#endif
+
 ArrayArgs VarHolder::fetch_sync() {
     note_readback();
+    ArrayArgs result{nullptr, var->shape, var->dtype()};
+    result.storage_strides = var->storage_strides;
     if (!host_value_ready(var)) {
         ExecutorEntryScope entry;
         sync(readback_waits_for_devices());
         var->set_flag(VarFlags::_execution_failed, 0);
+        #ifdef HAS_ACCELERATOR
+        if (host_copy_without_migration(var, result))
+            return result;
+        #endif
         if (save_mem || _HAS_ACCELERATOR)
             migrate_to_cpu(var, runtime_executor().allocator);
     }
-    ArrayArgs result{var->mem_ptr, var->shape, var->dtype()};
-    result.storage_strides = var->storage_strides;
+    result.ptr = var->mem_ptr;
     return result;
 }
 
@@ -1704,12 +1741,17 @@ vector<ArrayArgs> fetch_sync(const vector<VarHolder*>& vh) {
     ExecutorEntryScope entry;
     sync(vh, readback_waits_for_devices());
     for (uint i=0; i<vh.size(); i++) {
+        Var* var = vh[i]->var;
+        ret[i].shape = var->shape;
+        ret[i].dtype = var->dtype();
+        ret[i].storage_strides = var->storage_strides;
+        #ifdef HAS_ACCELERATOR
+        if (host_copy_without_migration(var, ret[i]))
+            continue;
+        #endif
         if (save_mem || _HAS_ACCELERATOR)
-            migrate_to_cpu(vh[i]->var, runtime_executor().allocator);
-        ret[i].ptr = vh[i]->var->mem_ptr;
-        ret[i].shape = vh[i]->var->shape;
-        ret[i].dtype = vh[i]->var->dtype();
-        ret[i].storage_strides = vh[i]->var->storage_strides;
+            migrate_to_cpu(var, runtime_executor().allocator);
+        ret[i].ptr = var->mem_ptr;
     }
     return ret;
 }
