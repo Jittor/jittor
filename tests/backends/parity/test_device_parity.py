@@ -244,7 +244,8 @@ class TestDeviceParity(JittorTestCase):
     # One operator used to exceed GRAD_PE_TOL here and was a real kernel defect,
     # not reorder noise: the fused float32 CUDA backward rebuilt the softmax row
     # term as sum(dO * O) from the ROUNDED output, which loses the small Q/K
-    # gradient of a near-one-hot row (KI-OPS-015, max per-element rel 6.80e-3).
+    # gradient of a near-one-hot row (the max per-element rel was 6.80e-3
+    # before the backward reconstructed the row term from dP in float64).
     # Recomputing that term from dP in float64, and scaling Q once as the forward
     # does (4c722fee0), leaves the CUDA gradients ~1e-7 from a float64 oracle; the
     # remaining CPU-vs-CUDA per-element difference on these samples (7.5e-4

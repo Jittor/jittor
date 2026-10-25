@@ -1244,26 +1244,6 @@ workaround.
   **Name the input pattern when you measure**: monotone and random data differ by
   up to 4x on the same kernel.
 
-## KI-OPS-015: the CUDA backward of `scaled_dot_product_attention` misses the device-parity per-element budget
-
-- Severity: Medium (a parity gate case cannot pass; the gradients agree to
-  about 0.7% per element)
-- Status: Open; reproduced 2026-10-12 on RTX 4090 / CUDA 12.2 in every CUDA run
-  (`nox -s cuda` included). Both cases run as strict expected failures through
-  `_KNOWN_DEVICE_ISSUES` in `tests/backends/parity/test_device_parity.py`.
-- Owner: attention / CUDA kernel maintainers
-- Symptom: `scaled_dot_product_attention BACKWARD (input 0) per-element divergence
-  cpu vs cuda (max rel 6.80e-03)` against `GRAD_PE_TOL` 5e-3 (6.49e-03 for the
-  causal variant). The forward and the net-scaled backward error pass.
-- Cause: not isolated. Suspected a different accumulation order in the softmax
-  backward; whether 0.7% on a sub-peak coordinate is legitimate reordering or a
-  real defect has not been decided.
-- Workaround: none needed for typical training.
-- Evidence: `tests/backends/parity/test_device_parity.py::TestDeviceParity::test_scaled_dot_product_attention`
-  and `::test_scaled_dot_product_attention_causal` (torch mode, CUDA).
-- Exit condition: both cases pass (a fixed kernel, or a budget justified for
-  this operator) and the `_KNOWN_DEVICE_ISSUES` entry is removed.
-
 ## KI-SEMANTICS-003: floating-comparison NaN semantics not verified on every backend
 
 - Severity: Critical (until verified on the backend)
