@@ -1,6 +1,7 @@
 # 验证结果索引
 
-- [2026-10-26 Torch compatibility Day2–5续接](2026-10-26-torch-compat-release-day2-5.md)：r50 BF16 full-logits 仍 FAIL，r54 将 RoPE 首差异缩到 `inv_freq[37]` 的 1 ULP；Day4–5 r5 仍 WAITING，尚无稳定窗口测量。
+- [2026-10-26 Torch compatibility Day2–5续接](2026-10-26-torch-compat-release-day2-5.md)：Qwen r67–r69 局部 softmax 诊断已记录但 full-logits 仍 FAIL；T5 r66/r70 均在 `plan_reduce_thread_order` signal 11、无 step51 trace/checkpoint；Vision/BERT 保留 FAIL，Day4–5 r5 仍 WAITING，提交前结构门禁通过但发布验收未通过。
+- [2026-10-21 工作区快照与暂停交接](2026-10-21-workspace-snapshot-handoff.md)：远端独立快照、新机器入口及本机活跃进程。
 
 本目录只保存人工整理、可长期阅读的验证与性能报告。原始日志、JSONL、模型、
 图片、视频和编译缓存统一放在
@@ -12,6 +13,7 @@
 
 ## 兼容性与功能验证
 
+- [2026-10-20 兼容发布首日候选与常用接口验收](2026-10-20-torch-compat-release-day1.md)
 - [2026-10-13 HF stack 组合验证进展](2026-10-13-hf-stack-validation-progress.md)
 - [2026-10-12 原生 DDP 真实 ResNet 与 Transformer 训练对比](2026-10-12-native-ddp-real-training-comparison.md)
 - [2026-10-12 原生 DDP Transformer 分桶与训练性能核查](2026-10-12-native-ddp-transformer-performance.md)

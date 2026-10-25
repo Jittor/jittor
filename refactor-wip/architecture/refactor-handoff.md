@@ -1,5 +1,17 @@
 # 交接：`2.0-refactor` 的当前状态
 
+## 2026-10-26 Torch compatibility acceptance continuation
+
+继续在 `/home/cgq/jittor` 原工作区处理 Day2–5，不重新 clone。2026-10-26 06:47 +0800 复核主树为 `integrate/cgq-transformers-native-multicard-target@91b543c60e60fc3d19b2f7407c4a8f631385c47c`、96 个 dirty/untracked 项；原验收、修复和 Qwen 诊断 worktree 分别为 `release/torch-compat-day23-20261020@9e0e187bb013e71d85111acfd668e46aeff9f9d2`/51 项、`release/torch-compat-day23-fix-20261021@9e0e187bb013e71d85111acfd668e46aeff9f9d2`/83 项、`release/torch-compat-qwen-mean-tree-20261026@9e0e187bb013e71d85111acfd668e46aeff9f9d2`/85 项。`origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81` 已 fetch 且为上述 HEAD 的祖先；未 stash/reset/clean，也未整合 `origin/2.0-refactor`。整改状态只看[看板](refactor-board.md)，证据见[2026-10-26结果](../results/2026-10-26-torch-compat-release-day2-5.md)及[工作区快照交接](../results/2026-10-21-workspace-snapshot-handoff.md)。
+
+Qwen r50/r58 无 hook BF16 完整 logits 门槛仍 FAIL，未启动 LoRA full/resume；T5 不重复 full100，r66 与 r70 均在 `jittor::plan_reduce_thread_order` signal 11，只有 initial probe、无 step51 trace/checkpoint。r70 的独立 cache 与失败收据已保留；不要从不存在的 checkpoint 启动 resume，先调查该函数路径，不重复相同 capture。Vision r18 failure 保留，r25 comparison 失败；BERT BF16 双 seed 15.425953905% loss gap 仍超 15%。Day4–5 r3 共享 GPU 数据仅作诊断，r4 没有开始测量。r5 waiter PID 2616242 于 2026-10-26 02:09:02 +0800 启动，截至 07:09:34 +0800 仍 WAITING，目标 GPU UUID `GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5` 最近样本为 49,409 MiB free、100% utilization、连续合格样本 0/5；没有 launch/measurement/completion receipt。提交前 `check_repo_layout.sh` 通过；Torch-mode `tests/structure` 为 1396 passed、4 skipped（1400 collected、1398 executed）。续接时按 `/proc` command/start time 与 wait_state 重新确认，不根据 PID 或状态文件陈旧值直接操作。
+
+先用无训练的源码/堆栈分析定位 r66/r70 在 `plan_reduce_thread_order` 的共同崩溃路径；形成并验证最小复现及修复后，再评估是否值得创建新 T5 capture cohort。不得续跑 r66/r70 resume，不重跑 full100。r5 waiter 截止至 08:09:02 +0800，只有原窗口连续达标才可启动；若超时，不把它写成测量通过。Day2–3 复用已有 checkpoint audit，不启动 Qwen LoRA，不改阈值/seed/字段。共享负载下不据 r3 推导常用路径的代码根因；稳定测量若确认代表尺寸 >20% 退化，再定位具体热点、修复并复验受影响正确性与性能格。
+
+## 2026-10-21 当前 Torch 兼容工作区交接
+
+用户已要求暂停新增修改。当前源码快照分支、新机器起步文档、本机运行状态和防重复启动规则见[工作区快照交接](../results/2026-10-21-workspace-snapshot-handoff.md)。这次只推送独立开发快照，不融合主分支；下方 `2.0-refactor` 历史目标不覆盖本次分支与暂停指令。Day4–7继续留本机，新机器具体任务由用户另行指定。
+
 2026-09-09 更新。只按本节、[看板任务行](refactor-board.md)与当前代码继续；
 下方折叠的历史正文保留证据，其中旧任务数、旧路径和“工作树全部干净”不代表现在。
 
