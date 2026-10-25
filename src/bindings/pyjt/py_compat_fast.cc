@@ -463,6 +463,11 @@ PyObject* jt_setitem(PyObject* self, PyObject* index, PyObject* value) {
             VarPtr filled;
             if (!value_var) {
                 unique_ptr<VarHolder> number(jit_op_maker::array__(value));
+                // Torch casts the assigned scalar to the destination dtype;
+                // `ternary` would instead promote the whole tensor (int32 x
+                // with 0.25 became float32). The Python path performs that
+                // cast, so decline here and let it own the assignment.
+                if (number->var->dtype() != x->dtype()) return not_implemented();
                 filled = make_broadcast_to_op(number->var, x->shape, NanoVector());
             } else {
                 auto* v = GET_RAW_PTR(VarHolder, value);
