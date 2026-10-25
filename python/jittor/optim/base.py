@@ -68,7 +68,7 @@ def _param_requires_grad(p):
     return bool(p.requires_grad)
 
 #: Group-dict keys that are not per-parameter state buffers.
-_NON_STATE_KEYS = frozenset(("params", "grads"))
+_NON_STATE_KEYS = frozenset(("params", "grads", "_adagrad_steps"))
 
 
 def _state_buffer(param):
