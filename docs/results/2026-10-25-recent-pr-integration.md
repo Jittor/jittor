@@ -234,7 +234,7 @@ passed/1 skipped，合计 **324 passed/45 skipped/1 xfailed**；`tests/structure
 
 | 最终门禁（本轮修复合并后） | CPU core 与 structure | core：native 98 passed/44 skipped/1 xfailed + Torch 229 passed/1 skipped（组合 327 passed/45 skipped/1 xfailed，退出 0，session-completion 标记 143/143、230/230）；structure 1548 passed/6 skipped，退出 0 |
 | 设备组合门禁 | CUDA core（RTX 4090, sm_89） | native 131 passed/10 skipped/2 xfailed + Torch 230 passed = **361 passed/10 skipped/2 xfailed**，退出 0，session-completion 标记 230/230 |
-| PR smoke（CPU，冷缓存） | 本轮修复后的整树选择 | native 4084 passed/2014 skipped/18 failed/239 errors（45m44s）。18 个失败中 16 个是验证环境缺口（venv 无 scipy、无可用独立 PyTorch、`.pth` 里的 modelscope `tests` 遮蔽），2 个是本轮契约变化：op-compiler 旧内部消息断言、原生 full-mask 标量写入把 int32 提升成 float32；两者已修复并复验（7 passed；15 passed/15 skipped；setitem core 50 passed）。Torch 会话另行记录。 |
+| PR smoke（CPU，冷缓存） | 本轮修复后的整树选择 | native：4084 passed/2014 skipped/18 failed/239 errors（45m44s）；torch：4775 passed/1878 skipped/16 failed/2 errors。本轮引入 3 个契约回归已修复并复验（op-compiler 旧消息、原生 full-mask 标量 dtype、half 标量物化；7/15/50 与 half sweep+promotion+dtype 70 passed）。其余失败在 280d44854 基线上同样复现或属验证环境缺口（venv 无 scipy、safetensors 不完整、无可用独立 PyTorch、`.pth` 中 modelscope `tests` 遮蔽、真实 triton/vllm）。其中 serialization 批量 fetch（3 节点）与 compile replay SGD（1 节点）登记为 KI-COMPAT-018/017，bf16 autocast CUDA 发散（79.5%）登记为 KI-COMPAT-019 并另行修复。 |
 
 本表不把 partial 文件或单个用例的成功写成整库、整后端验收；NPU/ROCm/310P 与多机集合
 通信仍未验证。KI-COMPAT-012 的机制已修复（进程内 shim 发布 torch distribution 元数据，
