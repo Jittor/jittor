@@ -625,6 +625,7 @@ def _by_process_mode(targets):
 #: fast tier and fails in the full one because a dependency was only in the
 #: latter is a difference nobody can read off the failure.
 CPU_GATE_REQUIREMENTS = (
+    ASV,
     "astunparse==1.6.3",
     IPYKERNEL,
     JUPYTEXT,
