@@ -13,6 +13,68 @@ _SAMPLE_META_SNAPSHOT = '_jittor_sample_meta_snapshot'
 _H2D_SYNC_BATCH = local()
 
 
+class _PendingHostCopy:
+    """Receive one side-stream ``jt.fetch`` into an owned NumPy snapshot.
+
+    FetchOp releases its pinned staging allocation after the callback, so the
+    value must own its host bytes. ``sync`` publishes the fetch immediately;
+    the V2 path queues several copies and publishes them once.
+    """
+
+    def __init__(self, value, *, label, timeout=120.0, sync=False):
+        import jittor as jt
+        import numpy as np
+        from threading import Event
+
+        self._ready = Event()
+        self._array = None
+        self._error = None
+        self._label = label
+        self._timeout = timeout
+
+        def complete(array):
+            try:
+                self._array = np.array(array, copy=True)
+            except BaseException as error:
+                self._error = error
+            finally:
+                self._ready.set()
+
+        jt.fetch(value, complete)
+        if sync:
+            jt.sync_all(False)
+
+    def synchronize(self):
+        if not self._ready.wait(self._timeout):
+            raise TimeoutError('%s did not finish' % self._label)
+        if self._error is not None:
+            raise RuntimeError('%s failed' % self._label) from self._error
+
+    def query(self):
+        return self._ready.is_set()
+
+    def wait(self, stream=None):
+        self.synchronize()
+
+    def tolist(self):
+        self.synchronize()
+        return self._array.tolist()
+
+
+class _CompletedCopyEvent:
+    """A copy that was already waited for; vLLM only needs the Event shape."""
+
+    def synchronize(self):
+        return None
+
+    def query(self):
+        return True
+
+    def wait(self, stream=None):
+        return None
+
+
+
 def _accelerator_enabled(jt, name):
     """The core capability answer, or None when the namespace is a test double.
 
@@ -395,38 +457,12 @@ def patch_async_copy_to_np(module):
             raise NotImplementedError(
                 'experimental asynchronous vLLM token fetch is CUDA-only')
 
-    class AsyncFetchedNumpy:
+    class AsyncFetchedNumpy(_PendingHostCopy):
         """Receive Jittor's side-stream fetch on a Python callback."""
-        __slots__ = ('_ready', '_array', '_error')
 
         def __init__(self, value):
-            import jittor as jt
-            import numpy as np
-            from threading import Event
-
-            self._ready = Event()
-            self._array = None
-            self._error = None
-
-            def complete(array):
-                # FetchOp releases its pinned staging allocation after the
-                # callback, so the value must own its host bytes here.
-                try:
-                    self._array = np.array(array, copy=True)
-                except BaseException as error:
-                    self._error = error
-                finally:
-                    self._ready.set()
-
-            jt.fetch(value, complete)
-            jt.sync_all(False)
-
-        def tolist(self):
-            if not self._ready.wait(20):
-                raise TimeoutError('asynchronous Jittor token fetch did not finish')
-            if self._error is not None:
-                raise RuntimeError('asynchronous Jittor token fetch failed') from self._error
-            return self._array.tolist()
+            super().__init__(value, label='asynchronous Jittor token fetch',
+                             timeout=20.0, sync=True)
 
     @wraps(original)
     def async_copy_to_np(value):
@@ -438,9 +474,7 @@ def patch_async_copy_to_np(module):
         # performs the same required synchronous readback in one operation.
         return value.numpy() if direct_readback else original(value)
 
-    class CompletedCopyEvent:
-        def synchronize(self):
-            return None
+    CompletedCopyEvent = _CompletedCopyEvent
 
     @wraps(original_async_init)
     def async_output_init(self, model_runner_output, sampler_output,
@@ -901,30 +935,21 @@ def _acl_compute_slot_mappings(mirrors, counts, request_ids, starts,
 
 def _acl_compute_v1_slot_mapping(table, counts, starts, positions,
                                  block_size, max_tokens, pad_id):
-    """Compute vLLM V1's single-group slots from its CPU block-table mirror."""
+    """Compute vLLM V1's single-group slots from its CPU block-table mirror.
+
+    V1 has one KV group; delegate to the multi-group reference so the
+    physical-block formula and its bounds checks have one owner.
+    """
     import numpy as np
 
     table = np.asarray(table)
     counts = np.asarray(counts, dtype=np.int64)
-    starts = np.asarray(starts, dtype=np.int64)
-    positions = np.asarray(positions, dtype=np.int64)
     num_reqs = len(counts)
-    if (len(starts) != num_reqs + 1 or starts[0] != 0
-            or np.any(starts[1:] < starts[:-1])
-            or starts[-1] > len(positions) or starts[-1] > max_tokens):
-        raise ValueError('invalid V1 query start locations')
     if block_size <= 0 or table.shape[0] < num_reqs:
         raise ValueError('invalid V1 block table shape or block size')
-    slots = np.full(max_tokens, pad_id, dtype=np.int64)
-    for req in range(num_reqs):
-        count = int(counts[req])
-        for token in range(int(starts[req]), int(starts[req + 1])):
-            pos = int(positions[token])
-            block = pos // block_size
-            if pos < 0 or block >= count or block >= table.shape[1]:
-                raise IndexError('token position is outside allocated KV blocks')
-            slots[token] = int(table[req, block]) * block_size + pos % block_size
-    return slots
+    return _acl_compute_slot_mappings(
+        [table], counts.reshape(1, -1), np.arange(num_reqs),
+        starts, positions, [block_size], max_tokens, pad_id)[0]
 
 
 def patch_v1_block_table_metadata(module):
@@ -1362,15 +1387,7 @@ def patch_model_runner_targeted_output_sync(module):
         return False
     original_init = cls.__init__
 
-    class CompletedOutputCopyEvent:
-        def synchronize(self):
-            return None
-
-        def query(self):
-            return True
-
-        def wait(self, stream=None):
-            return None
+    CompletedOutputCopyEvent = _CompletedCopyEvent
 
     @wraps(original_init)
     def initialize(self, model_runner_output, sampled_token_ids,
@@ -1427,48 +1444,11 @@ def patch_model_runner_async_output_fetch(module):
         return False
     original_init = cls.__init__
 
-    class PendingTokenIds:
+    class PendingTokenIds(_PendingHostCopy):
         def __init__(self, value):
-            import jittor as jt
-            import numpy as np
-            from threading import Event
-
             self.shape = tuple(int(dim) for dim in value.shape)
-            self._source = value
-            self._ready = Event()
-            self._array = None
-            self._error = None
-
-            def complete(array):
-                try:
-                    # FetchOp releases its pinned staging bytes after the
-                    # callback; the scheduler needs its own immutable copy.
-                    self._array = np.array(array, copy=True)
-                except BaseException as error:
-                    self._error = error
-                finally:
-                    self._ready.set()
-
-            jt.fetch(value, complete)
-            # Publish cache writes and the fetch without waiting here. The
-            # per-thread CUDA stream orders earlier model side effects first.
-            jt.sync_all(False)
-
-        def synchronize(self):
-            if not self._ready.wait(120):
-                raise TimeoutError('Jittor sampled-token fetch did not finish')
-            if self._error is not None:
-                raise RuntimeError('Jittor sampled-token fetch failed') from self._error
-
-        def query(self):
-            return self._ready.is_set()
-
-        def wait(self, stream=None):
-            self.synchronize()
-
-        def tolist(self):
-            self.synchronize()
-            return self._array.tolist()
+            super().__init__(value, label='Jittor sampled-token fetch',
+                             timeout=120.0, sync=True)
 
     @wraps(original_init)
     def initialize(self, model_runner_output, sampled_token_ids,
@@ -1515,37 +1495,10 @@ def patch_v2_runner_async_output_fetch(module):
         return False
     original_init = cls.__init__
 
-    class PendingArray:
+    class PendingArray(_PendingHostCopy):
         def __init__(self, value):
-            import jittor as jt
-            import numpy as np
-            from threading import Event
-
-            self._source = value
-            self._ready = Event()
-            self._array = None
-            self._error = None
-
-            def complete(array):
-                try:
-                    # FetchOp's callback receives short-lived staging memory.
-                    self._array = np.array(array, copy=True)
-                except BaseException as error:
-                    self._error = error
-                finally:
-                    self._ready.set()
-
-            jt.fetch(value, complete)
-
-        def synchronize(self):
-            if not self._ready.wait(120):
-                raise TimeoutError('Jittor V2 output fetch did not finish')
-            if self._error is not None:
-                raise RuntimeError('Jittor V2 output fetch failed') from self._error
-
-        def tolist(self):
-            self.synchronize()
-            return self._array.tolist()
+            super().__init__(value, label='Jittor V2 output fetch',
+                             timeout=120.0, sync=False)
 
     class PendingCopies:
         def __init__(self, *arrays):
