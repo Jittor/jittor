@@ -6,12 +6,12 @@ the default is, and when they take effect under the lazy graph.
 
 ## Tiers
 
-A single tier simultaneously determines cuBLAS's compute type and cuDNN's math
-type:
+The same tiers apply to cuBLAS's compute type and to cuDNN's math type, each
+domain with its own switch (see below):
 
 | Tier | cuBLAS compute type | cuDNN math type | Meaning |
 | --- | --- | --- | --- |
-| `highest` (default) | `CUBLAS_COMPUTE_32F` | `CUDNN_FMA_MATH` | true float32 accumulation |
+| `highest` | `CUBLAS_COMPUTE_32F` | `CUDNN_FMA_MATH` | true float32 accumulation |
 | `high` | `CUBLAS_COMPUTE_32F_FAST_TF32` | `CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION` | tf32 |
 | `medium` | `CUBLAS_COMPUTE_32F_FAST_16BF` | `CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION` | bfloat16 |
 
@@ -27,10 +27,16 @@ separately.
 
 ## How to set it
 
-Native interface: the Runtime's `float32_matmul_precision` writes both the
-matmul and cuDNN layers.
+The native interface also has **two separate switches**:
+`float32_matmul_precision` only governs matmul, and `float32_cudnn_precision`
+only governs cuDNN (convolution and RNN).
 
-The Torch frontend has **two separate switches**, consistent with torch
+```python
+jt.flags.float32_matmul_precision = "high"     # matmul only
+jt.flags.float32_cudnn_precision = "highest"   # cuDNN only, back to strict float32
+```
+
+The Torch frontend likewise has two separate switches, consistent with torch
 semantics:
 
 ```python
@@ -39,9 +45,20 @@ torch.backends.cudnn.allow_tf32 = True       # 只影响 cuDNN（卷积与 RNN�
 torch.backends.cuda.matmul.allow_tf32 = True # matmul 的另一种拼写，同一个开关
 ```
 
-The defaults differ: in the **Torch frontend** matmul is `highest` and cuDNN is
-`high`; in the **native frontend** both are `highest`. The setters of the two
+Both frontends share torch's defaults: matmul is `highest` and cuDNN is `high`
+(that is, `torch.backends.cudnn.allow_tf32 = True`). On Ampere and later, a
+float32 convolution therefore runs in tf32 by default: each multiplication keeps
+only a 10-bit mantissa of its inputs while accumulation stays float32, which puts
+the relative error of a convolution's output around 1e-4 to 1e-3. Code that needs
+strict float32 convolution (parity checks, gradient checks) should set
+`float32_cudnn_precision = "highest"` explicitly. The setters of the two
 frontends do not affect each other's state.
+
+The native frontend's cuDNN default used to be `highest`, set together with
+`float32_matmul_precision`. That was stricter than both torch and Jittor 1.3.10 —
+1.3.10 does not set a math type and gets cuDNN's default, which allows tf32 on
+Ampere and later — and it cost ResNet-50 training (batch 64) 128 ms per step
+against 95 ms on 1.3.10, the whole gap in the convolution backward.
 
 The multiple spellings of one semantic (`allow_tf32`, `fp32_precision`,
 `get/set_float32_matmul_precision`) are all **views** of the same flag and do not
