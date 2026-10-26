@@ -259,27 +259,6 @@ workaround.
   `src/ops/reindex_reduce_op.cc` (`ystride`) the same contiguous-input gate the
   elementwise and reduce ops have.
 
-## KI-CODEGEN-002: the `split{i}` and `parallel` loop options cannot be combined
-
-- Severity: Limitation (a compile error, never a wrong result; blocks a tuner
-  candidate)
-- Status: Open; still true on `e3c369acb`
-- Owner: code generation (loop passes, reduce tuner)
-- Symptom: with both options set, `ParallelPass` fails `ASSERT(def)`
-  (`src/codegen/opt/pass/parallel_pass.cc`).
-- Cause: `SplitLoopPass` gives the inner loop the range
-  `::min(range{i}-id{i}, stride{i})`, defined inside the outer loop and varying
-  with it, which `ParallelPass` cannot evaluate where it sizes the thread grid.
-  CUDA always runs `ParallelPass`, so every `split{i}` candidate would break a
-  CUDA reduction; the reduce tuner offers none there.
-- Workaround: none needed; the tuner does not offer the combination.
-- Evidence: `tests/codegen/test_reduce_tuner.py::TestReduceTuner::test_a_split_candidate_would_not_compile_under_parallel`
-  (passes while the combination still fails); the guard and its rationale are
-  in `src/codegen/opt/tuner/reduce_tuner.cc`.
-- Exit condition: `ParallelPass` accepts a split inner range (or hoists it), the
-  test above fails, the CUDA guard in `reduce_tuner.cc` is revisited, and the
-  entry is deleted.
-
 ## KI-CODEGEN-003: CUDA code-generated reductions trail PyTorch on UNet shapes
 
 - Severity: Limitation (performance)

@@ -26,7 +26,6 @@
 | `KI-CODEGEN-001` | 真实输入的广播是跨步视图，融合逐元素 kernel 为此每元素付一次除法与取模 | 内存受限的广播加法约为稠密形态的 4.22x |
 | `KI-CODEGEN-003` | CUDA 代码生成的归约在 UNet 形状上落后 PyTorch | diffusers UNet2D 训练步 |
 | `KI-CODEGEN-004` | 一个 UNet2D 步的融合逐元素 kernel 慢约 10% | 同上 |
-| `KI-CODEGEN-002` | `split{i}` 与 `parallel` 两个循环选项不能同时用 | 编译错误，不会算错；挡住一类 tuner 配置 |
 | `KI-TUNER-001` | 手写元算子乘积形态下 matmul/conv relay 不触发，落到通用 kernel | 用户常走的路径已修；手写形态仍慢很多 |
 | `KI-OPS-006` | NaN 正确的 CPU max/min 归约只有一半速度 | 结果正确，吞吐减半（已改善一半） |
 | `KI-EXEC-004` | 流水执行多付 43% 峰值显存 | 已测量并接受的取舍，见[流水执行](../notes/pipelined-execution.md) |
