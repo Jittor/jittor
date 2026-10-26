@@ -230,11 +230,14 @@ passed/1 skipped，合计 **324 passed/45 skipped/1 xfailed**；`tests/structure
 | KI-COMPAT-013 | 模块前向在输入未放置时跟随模块自身已放置的参数 | autocast 套件 CPU+CUDA 12 passed |
 | KI-MEM-002 | host 读取返回副本，不迁移源存储 | CUDA 驻留契约 16 passed；CPU 6 passed |
 | KI-OPS-012 / KI-BACKEND-009 / KI-BACKEND-014 | 半精度 max/min 恒等值（基线已有）、逻辑/位归约的 16/64 位原子与 bool 结果、cublas/cudnn 自测算子设备化 | 归约矩阵+minmax 24 passed；三个库自测类 3 passed；均在 RTX 4090 |
+| KI-COMPAT-017 | 捕获步骤的状态提交在 `keep_graph=2` 下执行，回放保留可重跑的前向 | `test_torch_compile_replay.py` 11 passed |
+| KI-COMPAT-018 | portable 快照把非连续张量先 `contiguous()` 再批量 fetch | 两个 portable 节点 passed（safetensors dtype-bytes 节点是环境缺口） |
+| KI-COMPAT-019 | autocast 下 LayerNorm 主体按 ATen 策略在 float32 累加、结果一次收窄 | bf16 训练损失 0.128 vs float32 0.122（4.5% < 25%）；half 套件与 CUDA core 361 passed |
 | 18031 第二批语义 | `Tensor.type_as`、反射标量留在张量后端、TensorDataset 单次 gather、掩码写入梯度、expand 标量维、torchvision resize/pad/color/crop、Conv1d device/dtype、advanced-index/0-dim 设备对齐 | CPU 373 passed/16 skipped；CUDA 定向 14+2 passed |
 
 | 最终门禁（本轮修复合并后） | CPU core 与 structure | core：native 98 passed/44 skipped/1 xfailed + Torch 229 passed/1 skipped（组合 327 passed/45 skipped/1 xfailed，退出 0，session-completion 标记 143/143、230/230）；structure 1548 passed/6 skipped，退出 0 |
 | 设备组合门禁 | CUDA core（RTX 4090, sm_89） | native 131 passed/10 skipped/2 xfailed + Torch 230 passed = **361 passed/10 skipped/2 xfailed**，退出 0，session-completion 标记 230/230 |
-| PR smoke（CPU，冷缓存） | 本轮修复后的整树选择 | native：4084 passed/2014 skipped/18 failed/239 errors（45m44s）；torch：4775 passed/1878 skipped/16 failed/2 errors。本轮引入 3 个契约回归已修复并复验（op-compiler 旧消息、原生 full-mask 标量 dtype、half 标量物化；7/15/50 与 half sweep+promotion+dtype 70 passed）。其余失败在 280d44854 基线上同样复现或属验证环境缺口（venv 无 scipy、safetensors 不完整、无可用独立 PyTorch、`.pth` 中 modelscope `tests` 遮蔽、真实 triton/vllm）。其中 serialization 批量 fetch（3 节点）与 compile replay SGD（1 节点）登记为 KI-COMPAT-018/017，bf16 autocast CUDA 发散（79.5%）登记为 KI-COMPAT-019 并另行修复。 |
+| PR smoke（CPU，冷缓存） | 本轮修复后的整树选择 | native：4084 passed/2014 skipped/18 failed/239 errors（45m44s）；torch：4775 passed/1878 skipped/16 failed/2 errors。本轮引入 3 个契约回归已修复并复验（op-compiler 旧消息、原生 full-mask 标量 dtype、half 标量物化；7/15/50 与 half sweep+promotion+dtype 70 passed）。其余失败在 280d44854 基线上同样复现或属验证环境缺口（venv 无 scipy、safetensors 不完整、无可用独立 PyTorch、`.pth` 中 modelscope `tests` 遮蔽、真实 triton/vllm）。其中 serialization 批量 fetch 与 compile replay SGD 登记为 KI-COMPAT-018/017，bf16 autocast CUDA 发散（79.5%）登记为 KI-COMPAT-019；三者均已修复并关闭（见上表）。 |
 
 本表不把 partial 文件或单个用例的成功写成整库、整后端验收；NPU/ROCm/310P 与多机集合
 通信仍未验证。KI-COMPAT-012 的机制已修复（进程内 shim 发布 torch distribution 元数据，
