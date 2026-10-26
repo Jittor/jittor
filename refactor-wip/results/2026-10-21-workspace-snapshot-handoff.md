@@ -1,5 +1,15 @@
 # 2026-10-21 工作区快照与本机接续交接
 
+## 2026-10-26 20:08 +0800 当前继续入口
+
+Day2–5仍未完成，唯一状态源仍为[看板](../architecture/refactor-board.md)，完整数字与证据边界见[本日结果](2026-10-26-torch-compat-release-day2-5.md)。本次重新fetch目标e5cffe1a，所查相关树均含该历史，无需整合；main HEAD8eb88dbde、91项原dirty和全部历史FAIL保留，没有push或整合2.0-refactor。以下旧PID/“未运行”均是历史快照。
+
+T5 r2受影响原生CPU已15pass/0skip/rc0，actual CPU/core4d116d9d/source efe22515，receipt SHA e4dea024…21fe560与此前CUDA17pass/默认3局部32重复共同满足局部前置。当前实际运行的是 `20261026-t5-ordered-mean-r2-1854/step51-default3-prepared-r1/`：19:49:43启动，supervisor PID3475041/startticks162459728，worker3475053/startticks162459887；默认3、原seed821/GA2/BF16/名义100步schedule，每段3600秒，仅捕获step51，不是full100。20:07已实际至少21次训练更新，loss/grad_norm有限、LR按原schedule，initial probe在continuous-output/而非capture/，原路径检查已纠正；仍无step51/checkpoint50，不等于恢复通过。resume仅在连续rc0/passed/trace/合法checkpoint50后启动，无自动重试。**先重查实时process、execution、capture与cache，不再启动相同campaign，也不并行首编**；两侧成功才离线比较，并显式审查protocol/array/event/signature，comparator exit0不证明数值通过。仅观察既有campaign的finalizer已启动（PID3497250/startticks162559854，最晚13:52:43 UTC）；无框架/新模型/JIT/重试，双终态合法且组空才离线比较，权威终审将写campaign/root-final-audit.json，不能提前按该文件名假定完成。旧771/2088 strict FAIL保持，未合入main。
+
+GC r4已真实私有CPU17pass/0skip，positive/独立PT/9解析比较PASS，原r3与add/sum策略FAIL保留；source997d1acc/core63aac1cf。普通无remat线性图零二阶不变，小图释放6allocation/48B、1replay/3reads不是完整峰值节省。公共False/RNG/AMP/CUDA/defaultfusion/模型显存仍OPEN。Vision v4新core128db287/jitutils6064ff已bootstrap PASS，但repeat-a在模型JIT180s bound超时，181.116s/rc-15，无完整eval65或新数值结论；原累计2756.63591191615/4200s，余1443.3640880838502s不重置，所有自有组空/cache无holder。v5在`20261026-vision-eval-replay-v5/`已冻结离线准备、11checks/verify-only通过，无framework/JIT/模型/队列；manifest d49a88f4，复用同cache/core，不重做bootstrap，首repeat-a900s、repeat-b180s/profile180s及清理reserve均包含在原预算。当前partial cache只读归档实测收费0.745608919s，原累计现2757.381520835/4200s，余1442.618479165s，仍未执行，须先确认T5终态/无holder并独立审阅每阶段收据；原769字段FAIL1及五格FAIL不变。
+
+性能r6仍是共享1×8单轮机械pipeline PASS，正式三轮/代表/容量/稳定窗口未过。新增离线trace归因核验了optimizer.step的4728个4B scalar kernel（197×3×8，占kernel数59.14%），成为最小复现目标，尚无A/B因果或性能修复通过。证据 `20261026-root-resume-1155/R6_OFFLINE_ATTRIBUTION.json`，旧r6身份不重绑。BERT两update工具33离线checks及独立hook只读审查完成但无runtime；保留scheduler/group字段差异，原15.425953905% FAIL不变。本次文档提交使旧prepared-8eb88dbde完整source绑定失效，执行前须保留旧准备另建新绑定，不自动排队。Qwen既有独立候选范围见本日15:26节，公共GC仍OPEN。
+
 ## 2026-10-26 19:36 +0800 当前继续入口
 
 Day2–5尚未完成，唯一状态源仍为[看板](../architecture/refactor-board.md)，直接证据见[本日结果](2026-10-26-torch-compat-release-day2-5.md)。main HEAD30085673、91项原dirty保持；再次fetch目标e5cffe1a已为八相关树祖先，无需整合，未stash/reset/clean/整合2.0-refactor。以下旧窗口/PID均仅历史快照。
