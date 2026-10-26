@@ -1633,6 +1633,33 @@ workaround.
   Transformers/Diffusers installed (the metadata mechanism itself is covered by
   `compat/tests/torch/test_torch_shim_distribution_metadata.py`).
 
+## KI-COMPAT-020: CPU bf16 autocast training stays above the fp32 loss spread
+
+- Severity: Medium (numerical fidelity; per-op results are correct)
+- Status: Open; measured 2026-10-27 through the in-process shim on CPU.
+- Owner: amp/autocast maintainers
+- Symptom: `TestAutocastTraining::test_bfloat16_autocast` ends at 0.15820
+  against the float32 baseline's 0.12238 (29.3%), above the suite's 25% gate;
+  real torch 2.13 on the same task is +0.4%. The float32 baseline,
+  float16+GradScaler case and the per-op half suites pass.
+- Cause: the shim has one process-wide amp register, while ATen autocasts per
+  operator and keeps a float32 op list. One concrete lowering is fixed: the
+  generic contraction used to accumulate at the half width when a half
+  preference and `keep_reduce` were both set, so a K=256 bf16 matmul was 3.3%
+  from the bf16-input reference; stripping the half preference leaves
+  `keep_reduce` alone and brings it to 0.3%, pinned by
+  `tests/nn/test_matmul_half_accumulation.py`. The remaining one-step
+  first-layer weight-gradient error through Linear+ReLU is still 8-12%
+  against fp32, which is the coarse register rather than one wrong kernel.
+- Workaround: use float32, or insert explicit float32 casts around long bf16
+  CPU training, when the final loss has to match torch's bf16 spread.
+- Evidence: the nodeid above and the per-op suites in
+  `compat/tests/torch/test_torch_half_precision_numerics.py`; the matmul
+  regression names the fixed lowering.
+- Exit condition: bf16 autocast training lands inside the 25% gate (ideally
+  torch's sub-1% spread), with per-op float32 handling where ATen keeps an
+  operator in float32.
+
 ## KI-DIST-001: FSDP2 flat sharding peaks above the unsharded model
 
 - Severity: Limitation (memory; numerics are correct)
