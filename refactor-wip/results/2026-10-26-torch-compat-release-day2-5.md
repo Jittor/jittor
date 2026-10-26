@@ -11,7 +11,36 @@
 - Owner: cgq / Jittor Torch compatibility maintainers
 - Review when: candidate source, dependencies, fixtures, device, or acceptance protocol changes
 
-## 2026-10-26 15:26 +0800：当前证据与源码边界
+## 2026-10-26 17:52 +0800：公共优化器修复与最终设备回归
+
+18:08增量：本批完整 Torch-mode structure 已通过 **1398pass/2accelerator skip/exit0**，1400 collected，pytest230.24s、supervisor231.516s；完整内容身份 `14c7d22b1ba59bd7a3ca6ec45e22e1f744f00bf02081b201ecb5abd52bfd1f5f`、HEAD37021507，前后未变，终态收据在 `20261026-root-continuation-1713/gradscaler-fixture-fix/structure-cpu/receipt.json`。layout、MANIFEST、相对链接与diff检查通过。Vision独立CPU bootstrap及实际15测试/15格矩阵均PASS，CPU worker/core/source exact、fallback0；随后只释放CUDA bootstrap-model1，尚无新模型恢复结论。不同阶段仍绑定各自执行时身份；下面旧“尚未运行/未提交”只对应17:52快照。
+
+
+Day2–5 尚未完成。恢复现场后重新 fetch 的目标仍为 `origin/cgq_transformers@e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，已为 main/原验收/fix/Qwen/Vision/T5-mean 六树 HEAD 的祖先，无需整合；未 stash/reset/clean、未合入 2.0-refactor，全部本地工作与旧失败保留。主树 HEAD 仍为 `37021507860392f33565d59c4907b6acaae47a99`；本节最终 CPU 扩展回归的完整内容身份为 `f76fcc31181f0ce5130cc8cff8573f8092e8c7c22ab7955e3a0ca35edda63e51`，该身份取于本文更新前，不能重绑到稍后的文档或提交。
+
+性能工具发现的 `zero_grad(set_to_none=False)` 崩溃已在公共 AdamW 最小用例复现：第一次更新后，原生 zero_grad 对合法的缺失梯度调用 zeros_like(None)。修复仅在 `python/jittor/optim/base.py` 原循环跳过 None 两行；compat 的梯度槽位和未使用参数不补造零梯度，既有 tensor/holder/cache 规则不变。新增回归将 CPU/CUDA 分为真实方法，保留 False/True 连续清零、参数先后顺序、延后启用、状态步数、holder identity、独立 NumPy AdamW 轨迹与实际 device/fallback 检查。
+
+修复后独立 PyTorch 2.6 CPU/CUDA 各十条记录均通过：参数、梯度、loss exact；一阶矩最大差 `1.1920928955078125e-7`、二阶矩 `7.450580596923828e-9`，原 `atol=rtol=2e-6` 不变，实际 CUDA:0/fallback0。原生 focused 为34pass/1accelerator skip；CPU core 合计328pass/46skip/1xfail/0fail。最终CUDA公开回归 **8pass/0skip/exit0**，最低 accelerator executed>=1 规则保留；最终CPU扩展 **34pass/1CUDA环境skip/exit0**，完整源码前后相同，进程组为空。仓外权威入口为 `20261026-perf-1311/zero-grad-unused-fix/FINAL_RELEASE_AUDIT.json` 与 `20261026-root-continuation-1713/gradscaler-fixture-fix/focused-cpu/receipt.json`。本批尚未提交，不把这些结果写成模型或发布通过。
+
+原扩展测试中的 GradScaler fixture 在 scale 前 unscale，被当前独立 PyTorch 同样拒绝；修正仅显式 device 并初始化 scale，原数值、一次 item 及 inf 跳步断言不变，生产 GradScaler 未改。独立 PT 控制实测有限梯度 [8,-4]/[2]→[4,-2]/[1] 且更新一次，inf/NaN 跳步且参数不变。CUDA 首次 rc3、为保护归档 core 而在实际计算前停止的旧缓存编译，以及7断言PASS但设备计数0造成的 gate exit1 均保留；最终采用独立 correctness cache 与真实 CPU/CUDA 方法解决，不改最低门槛、不使用性能 cache。CPU core 的原 cache-list-equality 字段为 false，是新增两份 cfg core；另份 preservation audit 逐路径证明原四份及最终全部六份核心 SHA256 不变，原 receipt 未重写。
+
+Vision 后继工具 r2 仅纠正 r1 的CPU选择与身份核对：15项真实CPU测试必须零skip，加原15格广播矩阵；worker与bootstrap逐项核对 source/cache/core/shim/GPU，原模型、seed821、默认3、无hook、61→67/save64/fresh64→67、全部字段和七项全零阈值不变。新计划 SHA256 `39f14347de3342dd91cd1a147d05ddf0a028b9691f9f62c9bca078a3949bab7d`，78文件/11脚本，累计剩余3241.122788784094秒；串行窗口现仅释放CPU bootstrap，任何新结果以 `20261026-vision-model-recovery-r2/root-status.json` 与终态收据为准，原五格FAIL不变。T5 row-mean候选 verify-only通过、内容身份 `3290d4839ef3399f784a4e3ef479b1f06191b5a89c58e30a17ba4954cca104be`，尚无实际编译/修复证据。
+
+GC静态核对确认冻结 HF runner 明确传 use_reentrant=False。现有 no-grad Function 原型只给显式参数接梯度；补额外module slots仍不能充当原非重入门槛。非重入原图保存值释放/重算设计与最小原生候选另在隔离lab推进，尚未运行，也不把23项静态检查或现有CPU正例计作公共GC通过。CPU RNG/AMP/live-memory controls仍未运行，旧冻结工件不改。BERT原任务loss FAIL、Day4–5原三轮/十样本/真实容量门槛继续开放；旧r4 small绑定已因修复过期，不执行旧绑定或旧r5 waiter。
+
+## 2026-10-26 16:44 +0800：原生重复性收敛与新公共优化器失败
+
+Day2–5 仍未完成。主树已有本地提交 `37021507860392f33565d59c4907b6acaae47a99`（未 push），只提交已验证的 planner/短行 softmax 修复、对应测试、清单三行与本批文档；混合清单其余十二行和所有无关 dirty 工作均保留。下方 15:26 的执行回执继续绑定旧 HEAD，不重写到新提交。本节之后的原生候选和 GC 原型都在独立工作树或 lab 运行目录中，尚未合入主树。
+
+Vision 的 r2 首轮原生回归为 13pass/3fail，三个失败由 profiler 名称的子串误选引起：测试标签自身含有 `ordered_broadcast_grad`，因此误选了普通融合 kernel。保留 r2 失败及所有原件后，候选仅修正测试的完整 `choices` 键解析，并用锚定 `#define opN_name` 的声明列表检查单个 reduce；数值断言、种子、容差、重复数和循环 AST 未变。r3 计划 SHA256 为 `10d1d3b7f19a4a66c4a6e8a51458403a5ba08e924dbe55357df55365176ad7c3`；16 项原生测试全部执行，**16pass/0fail/0skip，420.07s**。随后两个新 Jittor 进程各对 cls_token、position_embeddings、conv_bias 三份冻结 cotangent 重复32次，进程内及跨进程 exact；同一 CUDA 的独立 PyTorch 对照最大绝对差依次为 `1.1920928955078125e-7`、`8.940696716308594e-8`、`2.384185791015625e-7`，原 `atol=1e-5/rtol=1e-3` 超限数均为零。实际 CUDA、fallback0，运行核心 SHA256 `7bf882ef91b705d143767624ac5627930bee0df4488379f1f99a0ad84393c1b8`，源码/输入绑定通过；16:15:54 自然结束，无遗留进程。仓外权威入口为 `20261026-vision-native-validation-r3/terminal-verification.json`。这些只关闭原语重复性局部诊断，原五格 Vision FAIL 不变；下一项为默认3、无 hook 的有界模型恢复及成本门禁。
+
+GC 已从静态设计推进到真实 CPU 可行性：`20261026-qwen-causality-1300/gc-feasibility/cpu-first-r3/` 的两探针于16:29:04自然完成，29项能力源码未变，原型所有观测均在CPU、fallback0。显式传入输入和参数的正例精确得到 \(g_x=[13,17]\)、\(g_w=[7,9]\)，调用时梯度模式为 `[1,0]`，即一次无梯度前向与一次反向重算。闭包负例按预期得到捕获参数梯度 `[0,0]`，数学所需为 `[2,3]`，证明该原型不能用于任意闭包或模块参数。终态核验 SHA256 为 `3fef5043a04935652b6c531177e9526b6979fcf20bd0af973c21f14d6b3aa1e0`，实际 CPU 核心 SHA256 `b3af6ee8bab6456ff34f6c1cc350d14ab1e716546cd8b9fcb4616e7535444819`。r1 原型误读 CPU 构建中不存在的 CUDA TF32 flag 的失败、r2 未执行稿及 r3 首次 import-only rc3 都保留；修正只按实际 device 查询相关 flag，未用默认值吞掉缺失项。RNG、AMP、真实 activation live-memory、CUDA 和公共 GC 集成仍未执行，GC 发布门禁继续 OPEN。
+
+Day4–5 新小规模工具在主树 HEAD `37021507`、完整内容身份 `c51928b12fa837e62a77e6f7b49768292d6287a1a3132c2a9ad38f672099caab` 下实际执行。r2 的 Jittor 入口在模型前无条件读取 Torch namespace 的 `__file__` 失败；新 r3 仅修 metadata 并保留全部计算/配置/fixture/更新阶段，manifest 为 `1262d25387b0fe715f3e57f30456acf0ca73e43ff8d5543b27987a4f0e173817`。独立 PT 的 b1/s8/FP32 小格完成真实更新、十个热态样本及分离 memory/CUPTI 阶段。Jittor 首个 update 后，在下一次 `optimizer.zero_grad(set_to_none=False)` 触发 `optim/base.py::zero_grad` 对 `None` 调用 `zeros_like`，16:41:26自然rc1退出，无热态样本或完整配对结果。该目标原本不使用两项 pooler 参数，其197项梯度覆盖条件保持不变；不得给 pooler 造零梯度、改目标或跳过 zero_grad 绕过失败。新公共路径问题已进入最小复现与核心/compat 边界定位，旧 r2/r3 失败和性能缓存独立保留。失败回执最终源码 guard 通过后，才解除主树完整冻结以修复；后续运行必须建立新源码身份。
+
+T5 的 level4 有界 step51 结果与历史默认配置 strict FAIL 保持原口径。新增原生 row-mean 候选仅在独立工作树准备，完整复制并核验固定修复树85项 overlay，尝试在 CUDA/连续单末轴/FP32或FP64/实际非空 fold/执行level3或4时隔离归约并使用既有 block ownership；没有改全局默认、模型 hook 或公开确定性承诺。八项 public CUDA 回归、原 r38 冻结边界32次回放及有界 launcher 只完成离线准备，入口为 `20261026-t5-ordered-mean-1554/DESIGN.md`；尚未编译、执行或形成修复证据，不启动 full100。
+
+## 2026-10-26 15:26 +0800：此前证据与源码边界
 
 本节取代下方较早现场快照作为本日结果入口；历史失败的原始收据、日志、checkpoint 和 cache 均保留。Day2–5 **未完成**，不以仓库门禁或单个候选的局部门禁代替发布验收。本逻辑任务开工已 fetch `origin/cgq_transformers@e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，它是相关 HEAD 的祖先，无需整合；未整合 `origin/2.0-refactor`。主树验证基线为 `395949d7239764baa0a614a3ac8b2f204d6e41bb`；四个原有工作树及其 dirty 工作保持独立，新建 Vision 候选只复制修复树完整 overlay 后再修改，没有覆盖原树。
 

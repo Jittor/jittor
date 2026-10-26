@@ -1,6 +1,16 @@
 # 交接：`2.0-refactor` 的当前状态
 
-## 2026-10-26 15:26 +0800 Torch compatibility acceptance continuation
+## 2026-10-26 17:52 +0800 公共优化器闭环与后继窗口
+
+Day2–5仍未完成；最新证据以[本日结果](../results/2026-10-26-torch-compat-release-day2-5.md)与唯一看板为准。主树HEAD37021507，目标远端再次fetch为e5cffe1a、六相关树均含其历史，无需merge，dirty/失败/cache全保留。zero_grad(None)原生两行修复已最小复现、独立PT CPU/CUDA对照及最终设备回归：core328pass/46skip/1xfail，CUDA8pass/0skip/exit0，CPU扩展34pass/1CUDA环境skip/exit0。GradScaler只改旧测试生命周期；新增测试是真实CPU/CUDA两个方法，计数门槛不变。六份既有core hash未变，所有自有优化器组退出；最终审计入口20261026-perf-1311/zero-grad-unused-fix/FINAL_RELEASE_AUDIT.json。旧7pass但gate exit1等失败保留。本批维护结果未提交，不替代模型验收。
+
+串行firstJIT窗口现交Vision r2 CPU bootstrap，78文件/11脚本计划39f14347…49bab7d，CPU15真实测试+15格矩阵、后继默认3无hook短程全字段exact；原五格FAIL，累计余3241.1228秒不扩。T5 row-mean候选仅离线绑定通过。Qwen原False GC需要非重入原图重算，原型不能别名凑过；公共GC、CPU RNG/AMP/live-memory及CUDA未闭环。BERT原15.425953905%仍FAIL；Day4–5新small准备须在main收口后重绑，不重启旧r4/r5。每次启动重读实际process/receipt/cache/source，首次JIT串行、失败停下保留；18:08本批structure1398pass/2accelerator skip/exit0、完整source guard通过，layout/MANIFEST/相对链接/diff检查通过；Vision CPU15测试/15格矩阵均PASS，现仅释放CUDA bootstrap-model1。下一步精确partial staging/本地中文提交，无push。
+
+## 2026-10-26 16:44 +0800 Torch compatibility acceptance continuation
+
+主树已有本地提交37021507，无push；此前core/structure/CUDA回执保留原执行HEAD。Vision r3真实CUDA原生16pass/0skip、两新进程32×3冻结cotangent与独立PT原预算全过，下一项默认3无hook模型有界恢复和成本门禁，原五格FAIL不变。GC外部原型已完成CPU显式参数解析梯度和闭包负例，RNG/AMP/live-memory/CUDA及公共API仍OPEN。性能small新r3已在首update后复现zero_grad(set_to_none=False)处理None失败，16:41:26自然结束并通过最终source guard，主树完整冻结随后解除供最小修复；不得改197梯度目标或造pooler零梯度绕过。T5隔离原生row-mean候选及八项回归仅准备，尚无默认配置修复证据，无full100。所有旧失败/原件和dirty保留，权威数字与工件入口见[本日结果](../results/2026-10-26-torch-compat-release-day2-5.md)。当前首次JIT窗口归性能代理的公共优化器CPU→CUDA最小复现，其他候选只离线准备；每次下一阶段启动前重新核验窗口、进程与源码绑定。
+
+## 2026-10-26 15:26 +0800 历史交接快照
 
 继续本机现有工作区的Day2–5任务，状态只以[看板](refactor-board.md)为准；本次原门槛、seed、失败证据、checkpoint、cache与全部原有dirty工作均保留。最新源码绑定、数值和可执行入口见[本日结果](../results/2026-10-26-torch-compat-release-day2-5.md)及[本机交接](../results/2026-10-21-workspace-snapshot-handoff.md)顶部，以下旧暂停与PID记录只是历史。
 

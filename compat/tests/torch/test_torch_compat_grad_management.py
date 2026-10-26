@@ -137,7 +137,9 @@ class TestGradientManagement(unittest.TestCase):
             finite = [jt.array(np.array([8.0, -4.0], dtype="float32")),
                       jt.array(np.array([2.0], dtype="float32"))]
             opt = _FakeOptimizer(finite)
-            scaler = _GradScaler(init_scale=2.0)
+            scaler = _GradScaler(device=dev, init_scale=2.0)
+            # These fake gradients are already scaled; initialize the public lifecycle.
+            scaler.scale(jt.ones(()))
             calls = []
             original = jt.Var.item
 
@@ -159,7 +161,9 @@ class TestGradientManagement(unittest.TestCase):
                 jt.array(np.array([2.0, np.inf], dtype="float32")),
                 jt.array(np.array([np.nan], dtype="float32")),
             ])
-            scaler = _GradScaler(init_scale=2.0)
+            scaler = _GradScaler(device=dev, init_scale=2.0)
+            # These fake gradients are already scaled; initialize the public lifecycle.
+            scaler.scale(jt.ones(()))
             scaler.unscale_(bad)
             self.assertTrue(scaler._found_inf)
             self.assertIsNone(scaler.step(bad))

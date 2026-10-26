@@ -1,6 +1,18 @@
 # 2026-10-21 工作区快照与本机接续交接
 
-## 2026-10-26 15:26 +0800 本机活跃工作入口
+## 2026-10-26 17:52 +0800 公共优化器闭环与后继窗口
+
+Day2–5仍未完成；最新证据以[本日结果](2026-10-26-torch-compat-release-day2-5.md)与唯一看板为准。主树HEAD37021507，目标远端再次fetch为e5cffe1a、六相关树均含其历史，无需merge，dirty/失败/cache全保留。zero_grad(None)原生两行修复已最小复现、独立PT CPU/CUDA对照及最终设备回归：core328pass/46skip/1xfail，CUDA8pass/0skip/exit0，CPU扩展34pass/1CUDA环境skip/exit0。GradScaler只改旧测试生命周期；新增测试是真实CPU/CUDA两个方法，计数门槛不变。六份既有core hash未变，所有自有优化器组退出；最终审计入口20261026-perf-1311/zero-grad-unused-fix/FINAL_RELEASE_AUDIT.json。旧7pass但gate exit1等失败保留。本批维护结果未提交，不替代模型验收。
+
+串行firstJIT窗口现交Vision r2 CPU bootstrap，78文件/11脚本计划39f14347…49bab7d，CPU15真实测试+15格矩阵、后继默认3无hook短程全字段exact；原五格FAIL，累计余3241.1228秒不扩。T5 row-mean候选仅离线绑定通过。Qwen原False GC需要非重入原图重算，原型不能别名凑过；公共GC、CPU RNG/AMP/live-memory及CUDA未闭环。BERT原15.425953905%仍FAIL；Day4–5新small准备须在main收口后重绑，不重启旧r4/r5。每次启动重读实际process/receipt/cache/source，首次JIT串行、失败停下保留；18:08本批structure1398pass/2accelerator skip/exit0、完整source guard通过，layout/MANIFEST/相对链接/diff检查通过；Vision CPU15测试/15格矩阵均PASS，现仅释放CUDA bootstrap-model1。下一步精确partial staging/本地中文提交，无push。
+
+## 2026-10-26 16:44 +0800 本机活跃工作入口
+
+Day2–5继续执行且尚未完成，以[看板](../architecture/refactor-board.md)为唯一状态源，完整证据与边界见[本日结果](2026-10-26-torch-compat-release-day2-5.md)。主树本地提交37021507已完成，无push；全部原有dirty和历史失败保留。Vision r3原生16pass/0skip及两新进程32×3冻结梯度/独立PT原预算通过，但尚未执行默认3无hook模型恢复与成本门禁，原五格FAIL不变。GC外部原型真实CPU解析梯度/一次重算正例和闭包反例已完成；公共模块GC、RNG/AMP/live-memory/CUDA未验，Qwen原候选门禁不转给主树。T5隔离row-mean候选仅准备，无新的默认配置通过或full100。BERT原双seed任务FAIL未变。
+
+性能small新r3的PT执行完成，JT在首update后zero_grad(set_to_none=False)因group grads包含None而崩溃，16:41:26自然退出/source guard通过；完整main freeze37021507/c51928…099caab只用于这批旧回执，已解除供公共语义最小复现和修复。性能代理现持串行CPU→CUDA复现窗口，禁止用改objective、造pooler梯度或从性能缓存跑正确性测试绕过。Vision后继模型与GC controls均仅离线准备，T5候选首次JIT尚未排入；下一阶段必须按实际source/process/receipt重新分配窗口，不依据旧PID重启。旧r2 metadata失败与GC r1 CPU flag失败均保留，所有候选采用新身份，未覆盖旧输出。
+
+## 2026-10-26 15:26 +0800 历史工作快照
 
 Day2–5继续执行，尚未验收完成；本节覆盖下方历史PID、WAITING和“未启动”快照。当前唯一状态源仍为[看板](../architecture/refactor-board.md)，完整数字、源码指纹和收据哈希见[本日结果](2026-10-26-torch-compat-release-day2-5.md)。本逻辑任务已同步目标远端e5cffe1a，为相关HEAD祖先，无需整合；未stash/reset/clean或整合2.0-refactor。主树本批验证绑定395949d7，原有dirty工作保留。
 

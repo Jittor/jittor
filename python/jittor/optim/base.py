@@ -351,6 +351,8 @@ class Optimizer(object):
             cache = self.__dict__.setdefault("_zero_grad_cache", {})
             for pg in self.param_groups:
                 for g in pg.get("grads", ()):
+                    if g is None:
+                        continue
                     key = id(g)
                     zero = cache.get(key)
                     if zero is None or zero.shape != g.shape or zero.dtype != g.dtype:
