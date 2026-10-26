@@ -61,7 +61,7 @@ changes: [2.0 migration notes](../../docs/releases/2.0.md).
 - **Torch frontend gaps.** torchmetrics on CUDA (KI-COMPAT-010), RNN off cuDNN
   (KI-COMPAT-011), in-process shim metadata (KI-COMPAT-012).
 - **Executor and liveness.** Threaded writers to one parameter (KI-EXEC-005,
-  KI-EXEC-007), liveness underflows (KI-EXEC-008, KI-EXEC-009), the op-level
+  KI-EXEC-007), liveness underflows (KI-EXEC-008), the op-level
   parallel compiler (KI-COMPILER-001).
 - **Performance gaps.** Broadcast operands in fused kernels (KI-CODEGEN-001), dead
   matmul/conv relays (KI-TUNER-001), UNet reductions and elementwise kernels

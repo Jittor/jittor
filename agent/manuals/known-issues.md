@@ -1362,8 +1362,7 @@ workaround.
 
 - Severity: Medium (a whole pytest process aborts, taking its summary with it)
 - Status: Open; found 2026-09-27, reproduced on `a57fb6af`
-- Owner: core node liveness (the same counters as KI-EXEC-009, its backward
-  counterpart)
+- Owner: core node liveness (the backward counterpart of this forward counter)
 - Symptom: `pytest tests/nn/test_*conv*.py tests/backends/cuda/test_cudnn_conv_a*.py tests/backends/cuda/test_cudnn_conv_p*.py`
   on CUDA aborts in about half the runs with `node.h: forward liveness release
   without a matching owner [check failed: value_ > 0]`, either at interpreter
@@ -1374,44 +1373,6 @@ workaround.
 - Workaround: run the files in separate processes.
 - Evidence: the command above.
 - Exit condition: the full selection passes repeatedly in one process.
-
-## KI-EXEC-009: a taped multi-output `Function` op can release its backward liveness once too often
-
-- Severity: Medium (an abort at interpreter exit, or two Vars leaked per
-  occurrence; no wrong value has been observed)
-- Status: Open, environment-dependent. Not reproduced on `e3c369acb` with Python
-  3.11 (`tests/backends/cuda/test_cudnn_rnn_parity.py`,
-  `tests/autograd/test_function.py` and
-  `compat/tests/torch/test_torch_numerical_fidelity.py -k split_with_sizes`
-  pass), but not fixed: `eaa50ed5f` bisected the disappearance to a docs-only
-  commit, so it depends on the order in which `var_holder.cc` tears holders down.
-- Owner: core node liveness (`src/core/node.cc`, `src/core/op.cc`); the forward
-  counterpart is KI-EXEC-008
-- Symptom: a multi-output op built through `Function` (a tape,
-  `src/ops/composite/tape_op.h`) with some but not all outputs `stop_grad()`,
-  executed as a batch, calls `LivenessCounter<backward>::release()` once too
-  often: `node.h` reports `backward liveness release without a matching owner`.
-  Where the teardown path catches it, exactly two Vars stay registered with
-  `f=0 b=1` (`test_function.py::TestFunctionWithEagerExecution::test_zmem_leak{,2,3}`
-  then fail with `2 != 0`); where it does not, the process aborts at exit (134).
-  Seen as cuDNN LSTM training with `jt.grad` on CUDA, and as
-  `torch.split_with_sizes` plus `Tensor.split` on CPU in Torch mode. Native
-  multi-output `jt.code` ops do not leak.
-- Cause: suspected, not confirmed: the needed-by-backward guard in `Op::init`
-  (`manual_set_vnbb`) special-cases only `_outputs.size()==1 && ... is_stop_grad()`,
-  and `Node::release_forward_liveness` enqueues one `release_backward_liveness`
-  on the op for every finished, non-stop-grad output while the op's backward
-  count may be one.
-- Workaround: none needed for values; keep a process that hits it out of a shared
-  pytest session.
-- Evidence: `tests/core/test_core_invariant_properties.py`
-  (`KNOWN_LEAKING_SHAPES`; `test_dropping_a_graph_leaks_nothing_new` fails on any
-  new leaking shape, `test_dropping_a_graph_leaks_nothing_at_all` is a non-strict
-  xfail, `test_the_leak_is_two_vars_per_occurrence` pins the count where it
-  reproduces).
-- Exit condition: fix the accounting (do not relax the `node.h` check), make
-  `test_dropping_a_graph_leaks_nothing_at_all` pass on an interpreter where
-  `KNOWN_LEAKING_SHAPES` reproduces, then empty `KNOWN_LEAKING_SHAPES`.
 
 ## KI-EXEC-010: backward graph construction does not take part in pipelined submission
 

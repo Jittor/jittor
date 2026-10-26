@@ -14,8 +14,8 @@
 // live (own_backward_liveness propagates one own on the 0 -> 1 crossing,
 // release_backward_liveness one release on the 1 -> 0 crossing).
 //
-// KI-EXEC-009 is what happens when the withdrawal is instead keyed on "this
-// output is finished and not stop_grad": an output whose backward already died
+// Keying the withdrawal on "this output is finished and not stop_grad" is
+// wrong: an output whose backward already died
 // has already withdrawn, and the op is released a second time against one
 // owner. In a whole process that shows up as `backward liveness release without
 // a matching owner` / two Vars left at `f=0 b=1`
