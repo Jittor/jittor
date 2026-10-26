@@ -233,6 +233,7 @@ passed/1 skipped，合计 **324 passed/45 skipped/1 xfailed**；`tests/structure
 | KI-COMPAT-017 | 捕获步骤的状态提交在 `keep_graph=2` 下执行，回放保留可重跑的前向 | `test_torch_compile_replay.py` 11 passed |
 | KI-COMPAT-018 | portable 快照把非连续张量先 `contiguous()` 再批量 fetch | 两个 portable 节点 passed（safetensors dtype-bytes 节点是环境缺口） |
 | KI-COMPAT-019 | autocast 下 LayerNorm 主体按 ATen 策略在 float32 累加、结果一次收窄 | bf16 训练损失 0.128 vs float32 0.122（4.5% < 25%）；half 套件与 CUDA core 361 passed |
+| KI-CODEGEN-005 / 006 | 2-D 与 mean/jt.sum 全和融合已修复并扩展门禁（005 关闭）；rank-1 在 reshape 之上的融合仍缺（006 打开） | CUDA full-reduce 12 passed；rank-1 仍分配 68,157,440 bytes |
 | 18031 第二批语义 | `Tensor.type_as`、反射标量留在张量后端、TensorDataset 单次 gather、掩码写入梯度、expand 标量维、torchvision resize/pad/color/crop、Conv1d device/dtype、advanced-index/0-dim 设备对齐 | CPU 373 passed/16 skipped；CUDA 定向 14+2 passed |
 
 | 最终门禁（本轮修复合并后） | CPU core 与 structure | core：native 98 passed/44 skipped/1 xfailed + Torch 229 passed/1 skipped（组合 327 passed/45 skipped/1 xfailed，退出 0，session-completion 标记 143/143、230/230）；structure 1548 passed/6 skipped，退出 0 |
