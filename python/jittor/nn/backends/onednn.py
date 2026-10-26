@@ -23,7 +23,13 @@ from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 from jittor._runtime.dispatch import optional_kernel
 from jittor._runtime.backend_libraries import get_library_ops
-from jittor.nn.functional._amp import prefers_half
+
+
+def _prefers_half():
+    # Imported at call time: a module-level `nn.functional` import from this
+    # backend closes the nn.backends -> nn.functional -> backends cycle.
+    from jittor.nn.functional._amp import prefers_half
+    return prefers_half()
 
 
 def _pair(value):
@@ -53,7 +59,7 @@ def _supports_conv2d(x, weight, bias, stride, padding, dilation, groups,
     """
     # The library always returns float32. A low-precision region must use
     # the portable contraction, whose inference honors the requested dtype.
-    if prefers_half():
+    if _prefers_half():
         return False
     if _jittor_dtype_name(x.dtype) != "float32":
         return False
@@ -94,7 +100,7 @@ def _supports_conv_transpose2d(x, weight, bias, stride, padding, output_padding,
                                dilation, groups):
     # The library always returns float32. A low-precision region must use
     # the portable contraction, whose inference honors the requested dtype.
-    if prefers_half():
+    if _prefers_half():
         return False
     if _jittor_dtype_name(x.dtype) != "float32":
         return False
