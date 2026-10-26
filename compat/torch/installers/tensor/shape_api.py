@@ -222,6 +222,22 @@ def _torch_var_sum(self, *a, **k):
         self = self.cast(_dtype_to_str(dt))
     elif _jittor_dtype_name(self.dtype) in ("uint8", "int8", "uint16"):
         self = self.int32()
+    if self.ndim == 0 and ("dim" in k or "dims" in k):
+        # Torch accepts dim 0/-1 on a scalar (it is the only axis); jittor's
+        # reduce rejects every dim on a 0-D Var. torchmetrics reduces 0-D
+        # statistics this way.
+        requested = k.get("dim", k.get("dims"))
+        dims = (requested if isinstance(requested, (tuple, list))
+                else (requested,))
+        if all(int(dim) in (0, -1) for dim in dims):
+            result = self.reshape((1,)) if k.get("keepdims") else self
+            if out is not None:
+                out.assign(result)
+                return out
+            return result
+        raise IndexError(
+            "Dimension out of range (expected to be in range of [-1, 0], "
+            "but got %d)" % int(dims[0]))
     result = _orig_var_sum(self, *a, **k)
     if out is not None:
         out.assign(result)
