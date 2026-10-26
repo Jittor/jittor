@@ -1294,7 +1294,9 @@ workaround.
 
 - Severity: High (a supported operation aborts; the pattern is a multi-threaded
   weight loader)
-- Status: Open and currently unverifiable: the probe dies in KI-EXEC-007 first
+- Status: Open (verification): the canonical four-thread probe now passes 35/35
+  on this tree; the earlier failure was hidden behind KI-EXEC-007. A
+  deterministic gate is still missing.
 - Owner: executor maintainers
 - Symptom: four Python threads, each `jt.array(chunk)`, then
   `param[tid*N:(tid+1)*N] = host`, then `param.sync()`, 30 rounds on one shared
@@ -1306,40 +1308,55 @@ workaround.
   released. The batch's own hold used to count towards the backward liveness
   the assert reads. Phase 7 now tolerates exactly the vars whose storage
   `free_var_mem` released while a batch was in flight (`batch_released_vars`,
-  `src/core/var.h`), but that change has not been measured against this failure.
+  `src/core/var.h`).
 - Workaround: serialise the threads that write the shared parameter.
-- Evidence: `agent/skills/jittor-allocator-flag-matrix/probe_shared_param_threads.py`
-  (the same pattern). No in-repo regression test: at 1-in-20 it would be a flaky
-  gate; `tests/core/test_executor_entry_lock.py` covers a different property.
-- Exit condition: close KI-EXEC-007, re-run the loader probe without failures,
-  and make the race deterministic enough to gate.
+- Evidence:
+  `agent/skills/jittor-allocator-flag-matrix/probe_shared_param_threads.py`
+  passes 35/35 at four threads and 6/6 at one on GPU 1 (2026-10-26). The
+  `.numpy()` variant of the same shape still fails under KI-EXEC-007. No
+  in-repo regression test: the race has not been made deterministic;
+  `tests/core/test_executor_entry_lock.py` covers a different property.
+- Exit condition: make the race deterministic enough to gate, then delete.
 
-## KI-EXEC-007: four threads writing one parameter free an allocation twice
+## KI-EXEC-007: a shared parameter's storage can be freed under a concurrent host read
 
-- Severity: High (a supported operation aborts reproducibly in the pattern a
-  multi-threaded weight loader uses)
-- Status: Open; found 2026-09-18
-- Owner: memory maintainers
-- Symptom: the KI-EXEC-005 pattern on CUDA fails with
-  `sfrl_allocator.cc: allocation not found: 3 [check failed: block != nullptr]`
-  (`op: array in: float32[16384,256,] out: float32[4096,256,]`): 0/5 runs with
-  one or two threads, 4/5 with four.
-- Cause: thread B's slice assignment makes the old parameter var garbage and
-  `free_var_mem` releases its storage while thread A's batch is between planning
-  and its migrate loop; `migrate_to_cpu` (and `migrate_to_gpu`) then reads the
-  stale `mem_ptr`/`allocation`/`allocator` and frees the block a second time
-  (backtrace `VarHolder::sync -> Executor::run_sync -> run_exec_plan ->
-  migrate_to_cpu -> SFRLAllocator::free`; the id was already reissued). The
-  batch's hold keeps the Var alive but not its storage. The missing invariant is
-  that storage the running batch will read is not released -- the in-flight
-  counterpart of `_needed_by_backward`. Reordering the migrate closes the window
-  after the copy but not before it, so it is not the fix.
-- Workaround: serialise the threads that write the shared parameter.
-- Evidence: `agent/skills/jittor-allocator-flag-matrix/probe_shared_param_threads.py`
-  (`KI007_TRACE=1` turns on the id-space event log and a backtrace at the
-  failing free).
-- Exit condition: the probe passes repeatedly at four threads on CUDA, and
-  KI-EXEC-005 can be measured.
+- Severity: High (a supported operation aborts in the pattern a multi-threaded
+  weight loader uses)
+- Status: Open; narrowed 2026-10-26. The recorded `.sync()` probe now passes
+  35/35 at four threads on this tree: `VarHolder::sync()` no longer migrates,
+  and the batch hold (`all_vars` + `op_outputs`, taken before the GIL release)
+  covers its migrate loop. The same ownership gap is still live on host reads.
+- Owner: memory and executor maintainers.
+- Symptom: `b.numpy()` on a shared parameter while another thread rebinds its
+  holder segfaults (3/3 at two and at four threads, 0/3 at one) after `sync()`
+  returns and the batch hold is dropped: the holder is rebound, the storage
+  returns to the allocator, and `VarHolder::fetch_sync`'s fallback enters
+  `migrate_to_cpu` with `ptr=(nil) allocator=(nil)`.
+- Cause: a host read does not own the exact Var it syncs and copies, so a
+  holder rebind can release it between the sync and the copy. The missing
+  invariant is that storage a read will copy stays alive until the copy
+  completes -- the read-side counterpart of `_needed_by_backward`. A `VarPtr`
+  owner for the read removes the crash, but the coherent form (syncing the
+  owned snapshot) intermittently deadlocks at four threads: `migrate_group`
+  holds `share_ring_mutex` across `backend_copy`'s GIL-releasing wait while
+  `~VarHolder -> release_both_liveness -> free_var -> share_group_unlink` holds
+  the GIL and waits for that mutex. Keeping the storage alive makes the
+  executor actually migrate the alias group and exposes this pre-existing
+  inversion; the holder-sync variant instead leaves a TOCTOU.
+- Workaround: serialise writers to a shared parameter, and do not read it with
+  `.numpy()`/`.item()` while another thread may rebind it.
+- Evidence: the canonical probe
+  `agent/skills/jittor-allocator-flag-matrix/probe_shared_param_threads.py` now
+  passes 35/35 at four threads and 6/6 at one on GPU 1. The read-path variant
+  and the gdb stacks are unversioned under
+  `$JITTOR_LAB_ROOT/_state/fix-exec007/` (`probe_shared_param_readback.py`,
+  `gdb_stacks.txt`).
+- Exit condition: host-read entries own the exact Var they sync and copy, and
+  `src/mem/allocator.cc::migrate_group` with
+  `src/core/var.cc::share_group_unlink` stop holding `share_ring_mutex` across
+  the GIL-releasing wait (group members owned across the copy, ring revalidated
+  afterwards). Both the read probe and the canonical probe then pass
+  repeatedly at four threads, with a deterministic gate.
 
 ## KI-EXEC-008: the CUDA convolution test files intermittently abort on a forward liveness underflow
 
