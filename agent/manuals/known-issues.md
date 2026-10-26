@@ -85,11 +85,10 @@ workaround.
   run as strict expected failures when their hardware or network prerequisites
   exist. Optimizer state-dict coverage is now a real passing test and is no
   longer part of this entry.
-- Workaround: do not cite these nodeids as passing evidence for reduction dtype
-  inference, NHWC cuDNN backward, tensor swapping, repeated dataset RingBuffer
-  use, or legacy CUDA pooling.
-- Evidence: `TestBF16.test_reduce_dtype_infer`,
-  `TestCudnnConvOp.test_backward_nhwc`, `TestCore.test_swap`,
+- Workaround: do not cite these nodeids as passing evidence for NHWC cuDNN
+  backward, tensor swapping, repeated dataset RingBuffer use, or legacy CUDA
+  pooling.
+- Evidence: `TestCudnnConvOp.test_backward_nhwc`, `TestCore.test_swap`,
   `TestCore.test_swap_cuda`, `TestRingBuffer.test_dataset`,
   `TestArgPoolOp.test_cuda_old_pool`
   (each carries a `KI-TEST-001` comment).
