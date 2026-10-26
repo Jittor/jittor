@@ -6,7 +6,7 @@ from ..._core.dtypes import dtype_name
 from ..._runtime.dispatch import dispatch_context, register_kernel, select_kernel
 
 from ..base import (
-    Optimizer, _grad_matches_param, _param_requires_grad,
+    Optimizer, _grad_matches_param, _normalize_param_group, _param_requires_grad,
     _state_buffer, _update_preserve_dtype,
 )
 
@@ -171,6 +171,7 @@ class SGD(Optimizer):
             pg[MOMENTUM_INITIALIZED] = [False] * len(pg["params"])
 
     def add_param_group(self, group):
+        _normalize_param_group(group)
         values = group["values"] = []
         for p in group["params"]:
             values.append(_momentum_buffer(p))
