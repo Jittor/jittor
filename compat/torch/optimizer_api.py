@@ -176,13 +176,14 @@ def _state_dict_torch(self):
                         and _momentum_initialized_flags(pg)[i]:
                     entry["momentum_buffer"] = pg["values"][i]
             else:
-                if kind == "adagrad":
-                    entry["step"] = steps[i]
-                else:
-                    entry["step"] = g.tensor(float(steps[i]), dtype=g.float32)
                 for native, torch_key in _NATIVE_TO_TORCH_STATE.get(kind, {}).items():
                     if native in pg and i < len(pg[native]):
                         entry[torch_key] = pg[native][i]
+                # A parameter with no native buffer keeps no state entry,
+                # exactly as the pre-table branches did.
+                if entry:
+                    entry["step"] = (steps[i] if kind == "adagrad" else
+                                     g.tensor(float(steps[i]), dtype=g.float32))
             if entry:
                 state[pid] = entry
     return {"state": state, "param_groups": param_groups}
