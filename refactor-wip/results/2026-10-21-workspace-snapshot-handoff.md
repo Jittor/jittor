@@ -1,5 +1,13 @@
 # 2026-10-21 工作区快照与本机接续交接
 
+## 2026-10-26 18:40 +0800 当前继续入口
+
+Day2–5 尚未完成，唯一状态源仍为[看板](../architecture/refactor-board.md)，数字、身份和证据边界见[本日结果](2026-10-26-torch-compat-release-day2-5.md)。主树已本地提交 `6f61c185`、未 push，91项 dirty 保留；再次 fetch 的目标仍 e5cffe1a，六相关树均已含其历史，无需 merge。Vision r2 默认3、无hook 连续61→67/save64及fresh64→67均执行成功、实际CUDA/fallback0/core exact，但原零容差769字段仍FAIL1项final/eval/logits，max_abs5.96e-8；最终40参数/40momentum及scheduler exact，history只有统计字段，没有raw-grad/每步参数证据。两artifact audit PASS，失败后无cost/重试，原五格FAIL不变。后继eval replay只离线准备，不能把短窗口写成完整模型通过。
+
+性能small/profile r5以完整main/source/tool冻结执行：独立PT一轮全部阶段rc0；JT越过zero_grad(None)且生成10个hot provisional，随后因独立memory阶段缺NVML observations在18:38:20 rc1退出，无final row/attribution/pair结论。原r5收据/source guard已完成，main冻结解除；旧失败与cache保留，性能代理只离线定位schema/采样合同，不自动重跑。串行firstJIT窗口现交T5 row-mean v6 bootstrap（900秒bound），候选source3290d483…104be、工具manifest e80bb722…6e514；v6补worker/core/GPU与跨进程数组守卫，不改生产五文件。后续须先真实17项CUDA测试零skip、两native32回放/独立PT比较、受影响CPU再到有界默认3 step51，不能根据这段快照重复启动。每次先读 `20261026-t5-ordered-mean-1554/runs/bootstrap/attempt-01/{process,receipt}.json` 与实际 `/proc`/cache。
+
+GC代理在新隔离r2树写真实私有CPU保存值/重算切片和正负回归，仍未获得功能执行结果，公共False/RNG/AMP/CUDA/默认fusion均OPEN；不得将旧边界VJP或语法编译代替原GC门槛。BERT15.425953905%原任务FAIL、正式性能三轮/容量/稳定窗口仍未闭环。主代理当前T5，Vision仅离线eval计划，性能仅离线NVML失败定位，GC仅编码/静态编译；首次JIT串行、各自cache隔离，无full100、无无限waiter。原17:52“未提交/待bootstrap”以下均为历史快照。
+
 ## 2026-10-26 17:52 +0800 公共优化器闭环与后继窗口
 
 Day2–5仍未完成；最新证据以[本日结果](2026-10-26-torch-compat-release-day2-5.md)与唯一看板为准。主树HEAD37021507，目标远端再次fetch为e5cffe1a、六相关树均含其历史，无需merge，dirty/失败/cache全保留。zero_grad(None)原生两行修复已最小复现、独立PT CPU/CUDA对照及最终设备回归：core328pass/46skip/1xfail，CUDA8pass/0skip/exit0，CPU扩展34pass/1CUDA环境skip/exit0。GradScaler只改旧测试生命周期；新增测试是真实CPU/CUDA两个方法，计数门槛不变。六份既有core hash未变，所有自有优化器组退出；最终审计入口20261026-perf-1311/zero-grad-unused-fix/FINAL_RELEASE_AUDIT.json。旧7pass但gate exit1等失败保留。本批维护结果未提交，不替代模型验收。

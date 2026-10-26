@@ -5,11 +5,25 @@
 **Not complete.** Day2–3 remains failed or incomplete at its original gates. Day4–5 has shared-GPU diagnostic data; r4 and r5 bounded waiters have both timed out without launching measurements. No release-valid stable-window result exists. Thresholds, seeds, comparison fields, failure evidence, checkpoints, caches, and worktree changes remain intact.
 
 - Date: 2026-10-26
-- Main validation baseline: integrate/cgq-transformers-native-multicard-target at 395949d7239764baa0a614a3ac8b2f204d6e41bb; earlier snapshots below retain their original baseline
+- Main continuation baseline: integrate/cgq-transformers-native-multicard-target at 6f61c185595242ba95dd711ee16c2ba53ba4ad2e; all execution receipts and earlier snapshots retain their original source identities
 - Candidate: release/torch-compat-day23-fix-20261021 at 9e0e187bb013e71d85111acfd668e46aeff9f9d2
 - Remote sync: origin/cgq_transformers fetched at e5cffe1ae60c418f53c5bb1cdca9182577fd2b81; origin/2.0-refactor not integrated
 - Owner: cgq / Jittor Torch compatibility maintainers
 - Review when: candidate source, dependencies, fixtures, device, or acceptance protocol changes
+
+## 2026-10-26 18:40 +0800：Vision 恢复残差与性能显存采样失败
+
+Day2–5 仍未完成。主树已有本地提交 `6f61c185595242ba95dd711ee16c2ba53ba4ad2e`（公共优化器清零缺失梯度与设备回归，未 push）；下方旧“未提交”只对应原快照。再次 fetch 的 `origin/cgq_transformers` 仍为 `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，是六个相关工作树 HEAD 的祖先，无需整合；main 91、原验收 51、fix 85、Qwen 87、Vision 95、T5 mean 90 个 dirty/untracked 路径均保留，没有 stash/reset/clean 或整合 2.0-refactor。性能 r5 两端运行期间完整主树冻结，最终源码守卫通过后才解除；旧收据继续绑定原执行身份。
+
+Vision r2 的实际 CUDA bootstrap、61→67/save64 连续段和新进程 64→67 恢复段均 rc0，耗时分别 399.642、425.654、13.014 秒；原默认 level3、无 module hook、seed821、配置及数据不变。新 checkpoint64 的 SHA256 为 `887b7f64fd74007ed61cdc5b4a030cce12477814940059a671e685a829190622`，model/40 个 momentum/scheduler/scaler/RNG/cursor/config/fixture 审核通过；两 worker 与 bootstrap 的 source/cache/core 精确相同，实际 GPU UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0`、CUDA:0、fallback0，核心 SHA256 `1dc6cefcd1527f5a830aa0e6b70a0a6262e12c7547c6fefbbe8d6ee5c54a64ad`。
+
+原七项零容差 comparator 仍 **FAIL：769 字段中 1 字段不一致**，为 `final/eval/logits`，max_abs `5.960464477539063e-8`。两个 batch32 中分别 263/320、264/320 个值有 bit 差，尾 batch1 的 10 个值 exact；最终 40 参数、40 momentum、9 scheduler 字段及 loss/accuracy 逐字节 exact，无 buffer 字段。history65–67 的 30 个统计字段 exact，但它们不含逐元素梯度或每步参数，不能外推这些值已对齐。原两个 artifact audit 均通过，compare rc1 后所有进程自然退出，没有重试、cost 或完整矩阵。权威入口为仓外 `20261026-vision-model-recovery-r2/root-status.json`、`same-runtime-exact.json` 和 `20261026-vision-eval-replay-r1/bitwise-audit.json`。这是新的有界恢复失败；原五格模型 FAIL 不变。下一项是相同最终参数/原 eval65 输入的两新进程各32次无 hook 回放，并另做一次 native profile 定位实际 kernel。ViT 实际为17 tokens；候选缺少 main 短行 FP32 softmax 修复，但 fused attention 可能绕过该路径，尚未认定残差根因，没有猜测性复制补丁。
+
+Day4–5 新 small/profile r5 绑定 main HEAD `6f61c185`、完整内容身份 `be0ebfed643527af36f44fc07a3cdda3a777cc8cc17e2a0a857d7526a2fd8967`、工具 manifest SHA256 `a4eb68daa513ae6eafdbcf48e621e423b8989259cf3a5945726f3afa1bf6657e`。原 r3 计算脚本字节未变，两端使用相同 GPU UUID 与新的独立 performance cache，199 FP32 master、2 buffer、197 梯度、两 pooler 排除项和 objective 均保留。独立 PT 一轮 rc0：首次真实 AdamW update、2 warmup、10 unprofiled hot、3 memory 和3 CUDA attribution update 完成；原生 trace 可解析，65,398 events、8,289 kernel events。JT 已越过旧 zero_grad(None) 失败并生成10个 hot provisional 样本，但独立 memory 阶段的 NVML observations 守卫失败，18:38:20 自然 rc1，无 final row 或 CUDA attribution，不运行 pair comparator。原始 completion 确认主树源码未变，组与 cache holder 已空。权威根为 `20261026-perf-1311/v3-small-post-zero-grad-r5-6f61c185/`；provisional 不替代完成收据，共享负载也不构成发布速度或显存结论。下一项先查明 profiler 当前 NVML schema/采样事实，保留失败，不删采样要求或原字段、不无变化重跑。
+
+T5 五文件 row-mean 候选仍绑定 `3290d4839ef3399f784a4e3ef479b1f06191b5a89c58e30a17ba4954cca104be`。独立静态复核未确认算子 bug，但查出测试 worker 核心身份与跨进程数组比较缺口；已在仓外工具 v6 补 bootstrap/source/cache/core、pytest worker/fallback/NVML UUID、两 native replay/core 精确核对和独立 A/B/PT 比较器，旧 v5 全部保留。v6 manifest SHA256 `e80bb72214d5b28a595c2e6fd7d0abf33ab23e64f70b4d898e9ef30755e6e514`，语法与干运行通过。性能退出后仅启动新的 T5 bootstrap（900 秒 bound）；尚不能把编译进度计作17项 CUDA 回归、32次回放或默认 step51 通过。后继仍需实际17测试零skip、两新进程与独立PT比较、受影响CPU回归及有界默认3 step51，禁止 full100 或从 r66/r70 启动 resume。
+
+GC 从旧 shortcut blocker 推进到隔离 `gc-native-s1-r2` 的真实私有 CPU 候选：原生 metadata/value lease、last-use eviction、saved-value reader 和按 backward invocation 重放，mul/tanh 使用原反向图，不嵌套 `jt.grad`、不开 no_grad/keep_graph、不清 finished；相关正负测试代码已写，尚未执行。语法编译仅验证翻译单元，不证明梯度、释放、重算或显存效果；冻结 HF `use_reentrant=False`、公共 GC/RNG/AMP/CUDA/默认融合门槛仍 OPEN，不能用 S1 私有能力代替。BERT 原 selected-best gap 15.425953905% >15% 继续 FAIL，Day4–5 原三轮、10样本、稳定窗口和真实容量边界继续开放。
 
 ## 2026-10-26 17:52 +0800：公共优化器修复与最终设备回归
 
