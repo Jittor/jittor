@@ -197,6 +197,9 @@ void BroadcastToOp::infer_shape() {
         set_type(OpType::broadcast);
     }
     z->set_flag(VarFlags::_is_scalar, x->flag(VarFlags::_is_scalar));
+    // Placement only: a broadcast of a constant is still a constant with no
+    // data anywhere. Promotion deliberately does not look at this bit.
+    z->set_flag(VarFlags::_is_constant, x->flag(VarFlags::_is_constant));
     LOGvvv << "Broadcast x(" >> x >> ") shape" << yshapes << "-> z(" >> z >> ")"; 
 }
 

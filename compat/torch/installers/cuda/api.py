@@ -562,6 +562,7 @@ _CUDA_TENSOR_TYPES = {
         "FloatTensor", "DoubleTensor", "HalfTensor", "BFloat16Tensor",
         "LongTensor", "IntTensor", "ShortTensor", "CharTensor",
         "ByteTensor", "BoolTensor",
+        "ComplexFloatTensor", "ComplexDoubleTensor",
     )
 }
 globals().update(_CUDA_TENSOR_TYPES)

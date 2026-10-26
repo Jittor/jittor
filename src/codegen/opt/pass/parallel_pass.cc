@@ -388,6 +388,14 @@ static void replace_with_atomic(KernelIR* ir, bool is_cuda, int parallel_depth, 
             try_atomic("a=bool(a&&b)", {"a", "b"}, "cpu_atomic_and(&@a,bool(@b))", "atomicAnd(&@a,bool(@b))") ||
             try_atomic("a=bool(a||b)", {"a", "b"}, "cpu_atomic_or(&@a,bool(@b))", "atomicOr(&@a,bool(@b))") ||
             try_atomic("a=((bool(a))!=(bool(b)))", {"a", "b"},
+                "cpu_atomic_xor(&@a,bool(@b))", "atomicXor(&@a,bool(@b))") ||
+            // The same XOR when the result dtype is bool: the tables wrap a
+            // bool output in a cast, so a float logical-xor reduction (which
+            // returns bool) arrives as
+            // `a=bool((bool(a))!=(bool(b)))` and the pattern above no longer
+            // matches. Without this the whole fused operator failed with
+            // "Expr not match" for float32/float64 on CUDA.
+            try_atomic("a=bool((bool(a))!=(bool(b)))", {"a", "b"},
                 "cpu_atomic_xor(&@a,bool(@b))", "atomicXor(&@a,bool(@b))"))
             return;
         LOGf << "Expr not match" << e;
@@ -466,6 +474,16 @@ void ParallelPass::run() {
             if (!loop->has_attr(kir::lvalue)) break;
             auto& lvalue = loop->attrs[kir::lvalue];
             auto& step_code = loop->inner[2]->attrs[kir::code];
+            string range = loop->attrs[kir::rvalue];
+            if (loop->has_attr(kir::split_id)) {
+                // SplitLoopPass bounds a split-off loop by
+                // `::min(range{i}-id{i}, stride{i})`, which is defined inside
+                // the outer loop and so is not visible where the grid is
+                // sized. `stride{i}` is its upper bound and is visible there;
+                // a thread handed an id past the live range fails the
+                // unchanged `id < range{j}` condition.
+                range = "stride" + loop->attrs[kir::split_id];
+            }
             if (step_code == lvalue + "++;") {
                 strides.push_back("1");
             } else {
@@ -474,7 +492,7 @@ void ParallelPass::run() {
                 if (step_code != lvalue + "+=" + stride + ";") break;
                 strides.push_back(stride);
             }
-            ranges.push_back(loop->attrs[kir::rvalue]);
+            ranges.push_back(range);
             loops.push_back(loop);
             LOGvvvv << "Parallel loop dep=" >> d << "range=" >> ranges.back()
                     << "stride=" >> strides.back() << "code:" << loop->inner;

@@ -119,6 +119,14 @@ struct VarFlags {
         // requires_grad setter activates that edge, even when the value is
         // already true. Kept separate from reversible freezing/stop_grad.
         _unrecorded_view,
+        // A pending value built only from constants -- a Python number, an
+        // ArrayOp source, and the broadcasts/casts/views of one. `_is_scalar`
+        // used to be the only marker a constant had, but a factory now clears
+        // it on its full-shape result so that `jt.ones(4)` promotes as the
+        // tensor it is. Placement still has to let the same
+        // unsynced constant follow its operand's device (op.cc
+        // `is_pending_scalar`), so that fact gets its own bit.
+        _is_constant,
         _end,
     };
 };

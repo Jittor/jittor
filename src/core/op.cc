@@ -240,11 +240,12 @@ Var* Op::create_output(NanoVector shape, NanoString dtype) {
     return output;
 }
 
-// A pending Var marked _is_scalar is torch's CPU scalar: it has no data
-// anywhere yet, and it is the `2` in `x * 2`, the `1` a gradient starts from,
-// or a broadcast/unary of one (array_op.cc sets the flag on a rank-zero
-// source; broadcast_to_op.cc and unary_op.cc carry it forward). Such a value
-// follows the operand it meets instead of forcing a device error.
+// A pending Var marked _is_scalar or _is_constant is torch's CPU scalar: it
+// has no data anywhere yet, and it is the `2` in `x * 2`, the `1` a gradient
+// starts from, or a broadcast/unary/device-copy of one. A rank-zero ArrayOp
+// sets both bits (array_op.cc); broadcast_to_op.cc, unary_op.cc and
+// device_copy_op.cc carry them forward. Such a value follows the operand it
+// meets instead of forcing a device error.
 //
 // Both halves of that test are load-bearing, and each has a test:
 // element count alone sweeps in a real one-element user tensor that already
@@ -252,14 +253,17 @@ Var* Op::create_output(NanoVector shape, NanoString dtype) {
 // caller deliberately built on cuda:0 and merely has not synced yet --
 // silently, where torch raises. See tests/backends/cuda/test_cuda_multi_device.py.
 //
-// One edge remains and is accepted: `jt.zeros(n)` is `unary(0).broadcast(n)`,
-// and _is_scalar comes through the broadcast, so an unsynced zeros/ones does
-// follow its operand. It is a constant with no data anywhere, produced
-// bit-identically on either card, so this is constant placement rather than
-// moving something the caller computed. device-placement.md §5 has the
-// reasoning and why a third condition would cost more than it buys.
+// One edge remains and is accepted: `jt.zeros(n)` is `unary(0).broadcast(n)`.
+// A factory result clears `_is_scalar` on the full-shape result so it promotes
+// as a tensor, but `_is_constant` still comes through the
+// broadcast, so an unsynced zeros/ones does follow its operand. It is a
+// constant with no data anywhere, produced bit-identically on either card, so
+// this is constant placement rather than moving something the caller computed.
+// device-placement.md section 5 has the reasoning and why a third condition
+// would cost more than it buys.
 static inline bool is_pending_scalar(Var* v) {
-    return !v->is_finished() && v->flag(VarFlags::_is_scalar)
+    return !v->is_finished()
+        && (v->flag(VarFlags::_is_scalar) || v->flag(VarFlags::_is_constant))
         && !v->flag(VarFlags::_placement_published);
 }
 
@@ -445,6 +449,41 @@ void Op::init() {
     }
 }
 
+vector<Var*> saved_storage_readers(const vector<Var*>& written, Op* writer) {
+    vector<Var*> pending(written), saved;
+    auto visit = [&](Var* value) {
+        if (std::find(pending.begin(), pending.end(), value) == pending.end())
+            pending.push_back(value);
+    };
+    for (size_t i=0; i<pending.size(); ++i) {
+        Var* value = pending[i];
+        if (value->share_next)
+            for (Var* member=value->share_next; member!=value; member=member->share_next)
+                visit(member);
+        for (Op* reader : value->outputs()) {
+            if (reader == writer) continue;
+            for (Var* out : reader->outputs()) {
+                // Kept graphs run only through their replay owner, including
+                // when an imperative write commits an already executed step.
+                if (out->flag(VarFlags::_kept)) continue;
+                if (out->share_src == value) {
+                    visit(out);
+                } else if (!out->mem_ptr && out->liveness.backward.active()) {
+                    if (out->flag(VarFlags::_needed_by_backward)) {
+                        if (std::find(saved.begin(), saved.end(), out) == saved.end())
+                            saved.push_back(out);
+                    } else {
+                        // A nonsaved intermediate such as x+1 still connects
+                        // the written allocation to a later saved exp result.
+                        visit(out);
+                    }
+                }
+            }
+        }
+    }
+    return saved;
+}
+
 void order_after_readers(Op* op, const vector<Var*>& written) {
     // A view of a written var reads it wherever its own readers do, so their
     // readers count too: an output still asking to share its storage
@@ -478,6 +517,9 @@ void order_after_readers(Op* op, const vector<Var*>& written) {
             }
         }
     }
+    for (Var* saved : saved_storage_readers(written, op))
+        if (std::find(after.begin(), after.end(), saved) == after.end())
+            after.push_back(saved);
     if (after.empty()) return;
     // A reader upstream of the op -- the forward a gradient is computed
     // from -- is ordered already by the data it feeds it, and an edge would

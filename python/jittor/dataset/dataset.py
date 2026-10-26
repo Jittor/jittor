@@ -456,6 +456,9 @@ class Dataset(object):
     
     def _worker_main(self, worker_id, buffer, status, error):
         import jittor_utils
+        import signal
+        # The parent handles Ctrl-C and terminates its initialized workers.
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
         jt.flags.use_cuda_host_allocator = 0
 
         jittor_utils.cc.init_subprocess()

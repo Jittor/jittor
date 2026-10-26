@@ -141,6 +141,9 @@ PyObject* fast_cat(PyObject* tensors, int64 dim) {
     NanoVector out_shape;
     for (int d = 0; d < ndim; d++) out_shape.push_back(d == dim ? total : shape[d]);
     VarPtr out = make_empty(out_shape, dtype);
+    // The scratch allocation is not a differentiable input to concatenation.
+    // Only the tensors copied into it may contribute gradient edges.
+    out->set_stop_grad();
     int64 offset = 0;
     for (auto* v : vars) {
         VarSlices slices(ndim);
@@ -460,6 +463,11 @@ PyObject* jt_setitem(PyObject* self, PyObject* index, PyObject* value) {
             VarPtr filled;
             if (!value_var) {
                 unique_ptr<VarHolder> number(jit_op_maker::array__(value));
+                // Torch casts the assigned scalar to the destination dtype;
+                // `ternary` would instead promote the whole tensor (int32 x
+                // with 0.25 became float32). The Python path performs that
+                // cast, so decline here and let it own the assignment.
+                if (number->var->dtype() != x->dtype()) return not_implemented();
                 filled = make_broadcast_to_op(number->var, x->shape, NanoVector());
             } else {
                 auto* v = GET_RAW_PTR(VarHolder, value);

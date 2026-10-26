@@ -11,6 +11,7 @@
 #include "ops/layout_propagation.h"
 #include "ops/op_register.h"
 #include "ops/composite/array_op.h"
+#include "runtime/dispatch_context.h"
 
 namespace jittor {
 
@@ -385,6 +386,9 @@ static unordered_set<string> unary_ops = {
         jt.Var([-3.5530574   0.26330233  0.47304606  0.13125724], dtype=float32)
      */
     "log",
+
+    /** Computes log(1+x) with native log1p accuracy for real inputs. */
+    "log1p",
 
     /**
      Returns the exponential of the input ``x``. 
@@ -946,6 +950,16 @@ UnaryOp::UnaryOp(Var* x, NanoString op) : x(x) {
     set_type(OpType::element);
     ns = op;
     USER_CHECK(ns.is_unary() | ns.is_dtype());
+    if (ns == ns_log1p) {
+        // Complex log and ACL already support this same-device graph. Keep
+        // that existing behavior where a precise log1p kernel is unavailable;
+        // CPU/CUDA real inputs retain the dedicated, cancellation-safe kernel.
+        const auto backend = query_dispatch_context({x}).backend;
+        if (x->dtype().is_complex() || backend == "acl" || backend == "acl_legacy") {
+            forward(make_unary(make_binary(make_number(1, x), x, ns_add), ns_log));
+            return;
+        }
+    }
     // `bitwise_not` has no meaning for a float, and without this the mistake is
     // only noticed by g++: the generated kernel reaches a raw `~x` and answers
     // "wrong type argument to bit-complement", quoting a line of the template
@@ -984,6 +998,7 @@ UnaryOp::UnaryOp(Var* x, NanoString op) : x(x) {
     }
     y = create_output(nullptr, dtype);
     y->set_flag(VarFlags::_is_scalar, x->flag(VarFlags::_is_scalar));
+    y->set_flag(VarFlags::_is_constant, x->flag(VarFlags::_is_constant));
     bool bin = ns.get(NanoString::_no_need_back_in);
     bool bout = ns.get(NanoString::_no_need_back_out);
     if (bin || bout) {
@@ -1064,6 +1079,11 @@ VarPtr UnaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     }
     if (ns == ns_log)
         return make_binary(dout, x, ns_divide);
+    if (ns == ns_log1p) {
+        auto one = make_number(1, x);
+        auto denominator = make_binary(x, one, ns_add);
+        return make_binary(dout, denominator, ns_divide);
+    }
     if (ns == ns_exp)
         return make_binary(dout, y, ns_multiply);
     if (ns == ns_sqrt){
@@ -1163,6 +1183,16 @@ VarPtr UnaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     }
     // dsigmoid(x) = sigmoid(x) - sigmoid(x)^2
     if (ns == ns_sigmoid) {
+        if (x->dtype() == ns_float32 || x->dtype() == ns_float64) {
+            // Preserve the rounded-output ATen order in strict kernels:
+            // dout * (1 - out) * out. Subtracting a rounded out*out from
+            // out loses relative precision near positive saturation.
+            auto one = make_number(1, out);
+            auto r = make_binary(one, out, ns_subtract);
+            r = make_binary(dout, r, ns_multiply);
+            return make_binary(r, out, ns_multiply);
+        }
+        // Lower-precision paths are left unchanged by this FP32/FP64 fix.
         auto r = make_binary(out, out, ns_multiply);
         r = make_binary(out, r, ns_subtract);
         return make_binary(dout, r, ns_multiply);

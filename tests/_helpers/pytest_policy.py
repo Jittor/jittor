@@ -650,11 +650,13 @@ _SKIP_BUCKET_ORDER = (
     "accelerator",
     "backend",
     "mpi",
+    # Before "torch": a declared limitation compares against Torch and names it
+    # in the reason, which must not read as "the oracle is not installed".
+    "declared",
     "torch",
     "network",
     "manual",
     "opt-in",
-    "declared",
     "environment",
     "other",
 )
@@ -727,6 +729,12 @@ _SKIP_BUCKET_PATTERNS = {
     # modules that read a setting under its unprefixed name and skips the
     # resolver files, which are exactly where those names are resolved.
     "declared": (
+        # A known semantic divergence or a suspected defect, stated in the skip
+        # reason itself. Both describe the Torch comparison, so without these
+        # entries they were classified as "torch" and a session that required
+        # an independent oracle reported them as a configuration error.
+        "semantic-diff",
+        "suspected-bug",
         "supports_gradgrad=false",
         "supports_autograd=false",
         "no numpy reference",
@@ -798,11 +806,12 @@ def pytest_runtest_logreport(report):
 
 
 def _blames_missing_torch(reason):
-    try:
-        from _helpers.gate_scope import REAL_TORCH_PATTERNS
-    except Exception:
-        return False
-    return any(pattern in reason for pattern in REAL_TORCH_PATTERNS)
+    # A reason can compare behavior with Torch without claiming that the
+    # independent oracle is absent. In particular, known semantic differences
+    # use unittest.skip and describe both sides in the reason. Classify the
+    # reason first so those declared limitations do not become a false
+    # "missing real Torch" configuration error.
+    return classify_skip_reason_bucket(reason) == "torch"
 
 
 def _skip_reason(report):
@@ -881,6 +890,8 @@ def _accepted_skip_patterns():
         required.add("deepspeed")
     if os.environ.get("JITTOR_REQUIRE_TRELLIS", "").strip().lower() in ("1", "true", "yes", "on"):
         required.add("trellis")
+    if os.environ.get("JITTOR_REQUIRE_DATATROVE", "").strip().lower() in ("1", "true", "yes", "on"):
+        required.add("datatrove")
     # The inversion: a session that declares it has real PyTorch cannot also
     # accept "no torch" as an explanation, or it reports success for the one
     # thing it exists to check.
@@ -929,6 +940,8 @@ def _snapshot_selected_files(config):
         # must not be reported as a file the session proved nothing about
         # either. Otherwise refusing it would only move its red from
         # "collection error" to "collected 0 tests".
+        # The native-only ownership split is also a collection refusal, not
+        # an unexplained empty file in this Torch-mode session.
         _SELECTED_FILES.update(
             path
             for path in selected_files(
@@ -940,6 +953,7 @@ def _snapshot_selected_files(config):
                 ],
             )
             if not _refuses_collection(REPO_ROOT / path)
+            and not (_torch_mode_is_active() and path in NATIVE_MODE_PATHS)
         )
     except Exception:
         pass

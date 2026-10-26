@@ -1,6 +1,6 @@
 """Decline optional Torch-private facilities, keeping DeepSpeed's real Engine.
 
-No optimizer, forward, backward, or checkpoint implementation is replaced.
+Pinned ZeRO utility methods are replaced only for verified Jittor CUDA paths.
 DeepCompile needs private Inductor/SymPy modules; elastic launch needs Torch's
 elastic agent; the optional CPU shared-memory extension requires binary Torch.
 The upstream public collective path remains responsible for communication.
@@ -14,10 +14,15 @@ import inspect
 from pathlib import Path
 import sys
 
+import jittor as jt
 from jittor.compat.transaction import (
     TransactionConflict, active_transaction, owned_runtime_hook, runtime_hook,
 )
-from .._common import UnsupportedAdapterVersion, replace, require_version
+from .._common import (
+    UnsupportedAdapterVersion, replace, replace_bound_aliases, require_version,
+)
+from ._finite import make_has_inf_or_nan
+from ._norm import make_global_norm
 
 SUPPORTED_VERSIONS = frozenset(("0.19.7",))
 UPSTREAM_COMMIT = "f5af15c2b4da10411e340850c00ba0cb5b14fd87"
@@ -71,6 +76,32 @@ def _count_used_parameters(parameters):
 def _has_participation_query():
     from jittor.compat.torch.gradient_task import participating_tensors
     return callable(participating_tensors)
+
+
+def _cuda_norm_allowed(capability):
+    cuda = capability.accelerator("cuda")
+    return bool(cuda.enabled and cuda.evidence.get("build_backend") == "cuda")
+
+
+def _install_finite_check(module):
+    original = module.has_inf_or_nan
+    replacement = make_has_inf_or_nan(
+        module, original, cuda_allowed=_cuda_norm_allowed(jt.capability))
+    replace(module, "has_inf_or_nan", replacement, original)
+    replace_bound_aliases(
+        "deepspeed", "has_inf_or_nan", original, replacement)
+
+
+def _install_global_norm(module):
+    original = module.get_global_norm_of_tensors
+    replacement = make_global_norm(
+        module, original, cuda_allowed=_cuda_norm_allowed(jt.capability))
+    replace(module, "get_global_norm_of_tensors", replacement, original)
+    # A circular import may already have bound an alias while utils executed.
+    # Later from-imports naturally see the replacement; do not eagerly import
+    # bf16_optimizer here. All existing aliases share transaction ownership.
+    replace_bound_aliases("deepspeed", "get_global_norm_of_tensors",
+                          original, replacement)
 
 
 def _source_version(root):
@@ -184,6 +215,8 @@ class _Loader(importlib.abc.Loader):
                                 module.count_used_parameters_in_backward)
                         replace(module, "check_internal_apis_for_count_used_parameters", _has_participation_query,
                                 module.check_internal_apis_for_count_used_parameters)
+                        _install_finite_check(module)
+                        _install_global_norm(module)
                         return
                     name, replacement = {
                         "deepspeed.comm.torch": ("build_shm_op", _unavailable_shm),

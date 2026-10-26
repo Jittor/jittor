@@ -42,6 +42,7 @@ struct FP16OpType : OpByType {
             {"abs", "::__habs($2)"},
             {"conj", "($2)"},   // conj(real) is identity (torch parity)
             {"log", "::hlog(($1)($2))"},
+            {"log1p", "(($1)::log1pf(float32($2)))"},
             {"exp", "::hexp(($1)($2))"},
             {"sqrt", "::hsqrt(($1)($2))"},
             // half-to-even, matching numpy/torch and the float32/float64
@@ -92,6 +93,7 @@ struct FP16OpType : OpByType {
             {"abs", "std::abs($2)"},
             {"conj", "($2)"},   // conj(real) is identity (torch parity)
             {"log", "std::log(($1)($2))"},
+            {"log1p", "(($1)std::log1p(float32($2)))"},
             {"exp", "std::exp(($1)($2))"},
             {"sqrt", "std::sqrt(($1)($2))"},
             {"round", "(($1)std::nearbyint(($2)))"},
@@ -132,7 +134,7 @@ struct FP16OpType : OpByType {
             {"mod", "$1(jittor::_floor_mod_float((float)($2), (float)($4)))"},
             {"fmod", "$1(jittor::_fmod_ieee((float)($2), (float)($4)))"},
             {"floor_divide", "$1(jittor::_floor_divide_float((float)($2), (float)($4)))"},
-            // KI-OPS-012: an infinity, not a finite literal. `-32768.0f` is
+            // An infinity, not a finite literal. `-32768.0f` is
             // *above* float16's lowest finite value (-65504), so `max` of a
             // tensor that is entirely -65504 -- an ordinary number, the edge of
             // the format -- answered -32768, a value that was not in its input.
@@ -206,22 +208,37 @@ struct FP16OpType : OpByType {
             if (args[1] == "float32" && !both_map.count(args.at(0))) {
                 ret = lookup(common_op_type_cuda_map, args.at(0));
             }
-            if (args[1] == "float16" || 
-                args[1] == "bfloat16" || 
-                args[1] == "float32") 
-            {
-                for (int i=3; i<args.size(); i+=2) {
-                    if (args[i] != args[1]) {
-                        ret = replace(ret, "$"+S(i-1),
-                            args[1]+"($"+S(i-1)+")");
+            // A logical operation is defined on its operands' truth value, so
+            // neither the half conversion below nor a cast of the accumulator
+            // is needed: `&&`/`||`/`!=` already convert both sides to bool.
+            // Skipping this matters for a *bool* result (a floating-point
+            // logical reduction): the loop below compares each
+            // argument dtype with the result dtype and, because bool is not a
+            // half type, would rewrite the bool accumulator as
+            // `float16(yp)` -- which then no longer matches the reduction
+            // pattern in the parallel pass.
+            const bool logical_result =
+                args[1] == "bool" && (args.at(0) == "logical_and" ||
+                                      args.at(0) == "logical_or" ||
+                                      args.at(0) == "logical_xor");
+            if (!logical_result) {
+                if (args[1] == "float16" ||
+                    args[1] == "bfloat16" ||
+                    args[1] == "float32")
+                {
+                    for (int i=3; i<args.size(); i+=2) {
+                        if (args[i] != args[1]) {
+                            ret = replace(ret, "$"+S(i-1),
+                                args[1]+"($"+S(i-1)+")");
+                        }
                     }
-                }
-            } else {
-                string target = found_bf16 ? "bfloat16" : "float16";
-                for (int i=3; i<args.size(); i+=2) {
-                    if (args[i] != target) {
-                        ret = replace(ret, "$"+S(i-1),
-                            target+"($"+S(i-1)+")");
+                } else {
+                    string target = found_bf16 ? "bfloat16" : "float16";
+                    for (int i=3; i<args.size(); i+=2) {
+                        if (args[i] != target) {
+                            ret = replace(ret, "$"+S(i-1),
+                                target+"($"+S(i-1)+")");
+                        }
                     }
                 }
             }

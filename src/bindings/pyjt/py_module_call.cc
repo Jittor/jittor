@@ -234,6 +234,23 @@ bool is_var(PyObject* value) {
     return PyObject_TypeCheck(value, &PyjtVarHolder.ht_type);
 }
 
+// The first Var this module owns that carries an explicit placement, or
+// nullptr. The placement reference for a forward whose first tensor argument
+// has none: the choice is open then, and the module's own parameters are the
+// operands that cannot follow the input.
+Var* first_placed_module_var(PyObject* module) {
+    PyObject** dictptr = _PyObject_GetDictPtr(module);
+    if (!dictptr || !*dictptr) return nullptr;
+    PyObject *key, *value;
+    Py_ssize_t pos = 0;
+    while (PyDict_Next(*dictptr, &pos, &key, &value)) {
+        if (!is_var(value)) continue;
+        Var* var = GET_RAW_PTR(VarHolder, value)->var;
+        if (var->placement.explicit_backend) return var;
+    }
+    return nullptr;
+}
+
 PyObject* interned(PyObject*& slot, const char* text) {
     if (!slot) slot = PyUnicode_InternFromString(text);
     return slot;
@@ -1004,14 +1021,21 @@ PyObject* module_call_native(PyObject* module, PyObject* args, PyObject* kwargs)
     if (!slow) throw std::runtime_error("the native module call is not bound");
     if (kwargs == Py_None || (kwargs && !PyDict_GET_SIZE(kwargs))) kwargs = nullptr;
     const TypeInfo& info = info_of(Py_TYPE(module));
-    // Placement follows the first tensor argument; without one that has an
-    // explicit placement, an active `with torch.device(...)` would decide,
-    // and that resolution stays in Python.
+    // Placement follows the first tensor argument. Without one that has an
+    // explicit placement, an active `with torch.device(...)` is resolved in
+    // Python; otherwise the module's own placed parameters decide -- see
+    // `first_placed_module_var`.
     PyObject* like = first_var(args, kwargs);
     Var* like_var = like ? GET_RAW_PTR(VarHolder, like)->var : nullptr;
     if (!like_var || !like_var->placement.explicit_backend) {
         PyObjHolder active(PyObject_CallObject(device_context, nullptr));
         if (active.obj != Py_None) return call_with(slow, module, args, kwargs);
+        // No input placement to follow: the module's own explicitly placed
+        // parameters decide, so the forward runs where its operands live.
+        // Leaving it to the runtime put a default-CPU module's intermediates
+        // on the accelerator, and the first two-operand op refused the mix
+        // (the portable convolution under autocast).
+        if (Var* placed = first_placed_module_var(module)) like_var = placed;
     }
     PyObject* type_token = set_tensor_frontend_type(info.tensor_type);
     PyObject* placement_token = nullptr;

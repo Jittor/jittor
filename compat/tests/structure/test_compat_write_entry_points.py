@@ -272,6 +272,10 @@ CLASSIFIED = {
     (C + "shim/runtime.py", "_activate_once", "sys.modules"): "ledger",
     (C + "torch/installers/core.py", "install_misc", "sys.modules"): "ledger",
     (C + "shim/runtime.py", "_publish_torch_module", "sys.modules"): "ledger",
+    # The in-process shim's process-local torch distribution: publish is
+    # recorded as the activation transaction's undo, which is release.
+    (C + "shim/torch_metadata.py", "publish", "sys.meta_path"): "ledger",
+    (C + "shim/torch_metadata.py", "release", "sys.meta_path"): "ledger",
 
     # ---- runtime requests, not installation steps --------------------------
     # torch.backends.cuda.matmul.allow_tf32 = True and friends.

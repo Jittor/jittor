@@ -276,3 +276,29 @@ def test_native_layout_forward_dependency_releases_its_owned_vars():
     gc.collect()
     jt.sync_all(True)
     assert (jt.introspection.counters.live_vars, jt.introspection.counters.live_ops) == before
+
+@pytest.mark.parametrize('derived', [False, True])
+@pytest.mark.parametrize('strided', [False, True])
+def test_native_store_preserves_unmaterialized_saved_output(derived, strided):
+    with policy_scope(EXPLICIT_REQUIRES_GRAD), jt.flag_scope(transpose_storage_view=1):
+        source = jt.array(np.zeros((2, 2), dtype='float32'))
+        if strided:
+            source = jt.detach(source.transpose())
+        source.requires_grad = True
+        value = source + 1 if derived else source
+        loss = value.exp().sum()
+        # A requested scalar can run without allocating the exp needed by AD.
+        loss.sync(False, False)
+        unrelated = jt.array(np.ones((2, 2), dtype='float32')).exp()
+        assert not unrelated._mem_ptr_now
+        rhs = jt.array(np.full((2, 2), .5, dtype='float32')).stop_grad()
+        with jt.no_grad():
+            source._copy_into(rhs)
+        # Preserve only readers of this allocation, not unrelated graph roots.
+        assert not unrelated._mem_ptr_now
+        gradient, = jt.core.grad_optional(loss, [source], True)
+        assert_device(source)
+        assert_device(gradient)
+        np.testing.assert_allclose(gradient.numpy(), np.full((2, 2), np.e if derived else 1),
+                                   rtol=2e-6, atol=2e-7)
+        np.testing.assert_array_equal(source.numpy(), np.full((2, 2), .5))

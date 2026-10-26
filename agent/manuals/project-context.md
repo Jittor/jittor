@@ -1,8 +1,8 @@
 # Jittor Project Context
 
 - Status: Current-state index, not a history log
-- Last reviewed: 2026-10-06
-- Baseline reviewed: `1a6e203fc`
+- Last reviewed: 2026-10-26
+- Baseline reviewed: `6cce1ea5d`
 - Owner: Jittor core maintainers
 - Freshness expires: 2027-01-06
 - Review when: the release line, a top-level goal or an indexed location changes
@@ -57,23 +57,17 @@ changes: [2.0 migration notes](../../docs/releases/2.0.md).
   device (KI-BACKEND-012), untested backend gradients (KI-BACKEND-013), and
   ROCm/NPU verification of shared semantics (KI-OPS-002, KI-SEMANTICS-003).
   Commands for hardware day are in [deferred-hardware.md](deferred-hardware.md).
-- **Silent numerics.** CUDA half max/min identity (KI-OPS-012), Python-float
-  narrowing against float64 (KI-DTYPE-003), factory tensors weak in promotion
-  (KI-DTYPE-004), cuDNN autotuning coupled to scheduling (KI-EXEC-003), SDPA CUDA
-  backward parity (KI-OPS-015).
+- **Silent numerics.** cuDNN autotuning coupled to scheduling (KI-EXEC-003).
 - **Torch frontend gaps.** torchmetrics on CUDA (KI-COMPAT-010), RNN off cuDNN
-  (KI-COMPAT-011), in-process shim metadata (KI-COMPAT-012), autocast Conv2d bias
-  (KI-COMPAT-013), complex128 placeholder (KI-COMPAT-014).
-- **Executor and liveness.** Threaded writers to one parameter (KI-EXEC-005,
-  KI-EXEC-007), liveness underflows (KI-EXEC-008, KI-EXEC-009), the op-level
+  (KI-COMPAT-011), in-process shim metadata (KI-COMPAT-012).
+- **Executor and liveness.** Threaded writers to one parameter (KI-EXEC-005),
+  liveness underflows (KI-EXEC-008), the op-level
   parallel compiler (KI-COMPILER-001).
 - **Performance gaps.** Broadcast operands in fused kernels (KI-CODEGEN-001), dead
   matmul/conv relays (KI-TUNER-001), UNet reductions and elementwise kernels
   (KI-CODEGEN-003, KI-CODEGEN-004, KI-COMPAT-009), pipelined memory and backward
   submission (KI-EXEC-004, KI-EXEC-010).
-- **Gate trust.** Dead sessions (KI-TEST-002), test-order failures (KI-TEST-007,
-  KI-TEST-010), gate cost (KI-TEST-012, KI-TEST-013), a stale notebook trajectory
-  (KI-TEST-014).
+- **Gate trust.** Gate cost (KI-TEST-012, KI-TEST-013).
 - **Research.** [Agent-operable optimization](../../docs/research/agentic-optimization.md)
   is a proposal only; no autonomous mutation path exists.
 

@@ -19,7 +19,7 @@ Integers are unaffected and must stay that way: ``lowest()`` *is* their
 identity, and there is no integer infinity to lose. The integer test below is
 the control for that half of the dispatch.
 
-The half-precision table (``fp16_op_type.cc``, KI-OPS-012) also used finite
+The half-precision table (``fp16_op_type.cc``) also used finite
 literals: ``-32768.0f`` on CPU and ``-65000.0f``/``-1e38`` on CUDA. Those
 sit above the respective dtype's lowest finite value, so reductions were
 wrong even on finite input. Both tables now fold from infinities.
@@ -84,7 +84,7 @@ class _IdentityContract:
                                  "%s: min() of an all +inf tensor" % dtype)
 
     def _check_half_identity(self):
-        """KI-OPS-012: the half tables fold from a finite literal.
+        """The half tables used to fold from a finite literal.
 
         Two failures per dtype, and the second is the worse one: the value at
         the edge of the format is an ordinary number, not a diagnostic. -32768
@@ -132,7 +132,7 @@ class TestMinMaxReductionIdentityCpu(_IdentityContract, unittest.TestCase):
         self._check_infinite_identity()
 
     def test_half_precision_reductions_use_the_right_identity(self):
-        # KI-OPS-012, CPU half: the table answered from `-32768.0f`, which is
+        # CPU half: the table answered from `-32768.0f`, which is
         # above float16's lowest finite value. It now answers from an infinity.
         self._check_half_identity()
 

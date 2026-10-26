@@ -473,6 +473,8 @@ include docs/results/2026-10-16-sgd-execution-options.md
 include docs/results/2026-10-16-transformers-main-source-training.md
 include docs/results/2026-10-16-transformers-maintained-cpu-nightly.md
 include docs/results/2026-10-16-verl-maintained-cpu-nightly.md
+include docs/results/2026-10-24-datatrove-cpu-compatibility.md
+include docs/results/2026-10-25-recent-pr-integration.md
 include docs/results/index.md
 include docs/tutorials/index.md
 include examples/README.md
@@ -884,6 +886,7 @@ include src/tests/test_op_register.cc
 include src/tests/test_op_relay.cc
 include src/tests/test_parallel_compiler.cc
 include src/tests/test_pass_manager.cc
+include src/tests/test_release_forward_liveness.cc
 include src/tests/test_setitem_op.cc
 include src/tests/test_sfrl_allocator.cc
 include src/tests/test_str_utils.cc
@@ -911,6 +914,7 @@ include src/type/pow_compute.h
 include src/type/stream_load.h
 include src/utils/cache_compile.cc
 include src/utils/cache_compile.h
+include src/utils/cgroup_memory.h
 include src/utils/cross_platform.h
 include src/utils/cstr.h
 include src/utils/deleter.h
@@ -968,6 +972,7 @@ include tools/release/README.md
 include tools/release/baselines/torch-shim-resources-stage7.txt
 include tools/release/baselines/wheel-additions-final.txt
 include tools/release/baselines/wheel-content-changes-final.txt
+include tools/release/baselines/wheel-contents-compat-final.txt
 include tools/release/baselines/wheel-contents-final.txt
 include tools/release/check_sdist_contents.py
 include tools/release/check_wheel_contents.py

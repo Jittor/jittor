@@ -59,11 +59,14 @@ accelerators or full-model support. Raw commands, failures, exact source hashes,
 independent goldens and loaded core snapshots are unversioned under
 `$JITTOR_LAB_ROOT/_state/sgd-execution-options/20261016/`.
 
-A separate CPU probe exposes **KI-COMPAT-015**: portable SGD rebinds the parameter
-allocation, leaving a retained detached alias stale. All four observed option
-combinations differ from genuine Torch in that storage contract. Option parsing,
-selection and numeric tests above pass, but storage-preserving portable updates
-remain open; CUDA aliases and other optimizers have not yet been checked.
+The separate CPU probe originally exposed **KI-COMPAT-015**: portable SGD
+rebound the parameter allocation and left retained detached aliases stale.
+The 2026-10-25 integration resolves that portable SGD storage boundary and
+verifies CPU/CUDA aliases; see the [dated integration report](2026-10-25-recent-pr-integration.md)
+for exact source, device and retained-local-work boundaries. The historical
+option-selection and numeric results above remain bound to their original source.
+Clean committed fused AdamW and pending outside graphs around warmed replay have
+separate limitations recorded as KI-COMPAT-016 and KI-EXEC-015.
 
 Adjacent native optimizer contracts pass CPU **41 / 9 CUDA skips** and
 CUDA-visible **50 / 0 skips**, including CPU controls. Core passes

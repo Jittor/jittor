@@ -11,6 +11,8 @@
 ```{toctree}
 :maxdepth: 1
 
+2026-10-25-recent-pr-integration
+2026-10-24-datatrove-cpu-compatibility
 2026-10-16-diffusers-maintained-cpu-nightly
 2026-10-16-h3-upstream-gradient-components
 2026-10-16-native-alias-lifecycle

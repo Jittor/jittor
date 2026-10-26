@@ -71,6 +71,7 @@ constexpr int ns_max_len = 16;
     m(logical_not) \
     m(bitwise_not) \
     m(log) \
+    m(log1p) \
     m(exp) \
     m(sqrt) \
     m(round) \
@@ -473,6 +474,21 @@ inline NanoString unary_dtype_infer(NanoString op, NanoString x) {
 }
 
 inline NanoString reduce_dtype_infer(NanoString op, NanoString x, bool preserve_type=false) {
+    // A logical reduction answers a truth value, not an element of its input.
+    // NumPy's logical_* reductions return bool for every input dtype, and so
+    // do torch's any/all. An integer input keeps its dtype here because the
+    // published `any_`/`all_` document an int32 result (the bool-input rule in
+    // `ReduceOp` does the same); a floating-point input has no such contract.
+    // It used to give the input's float dtype and a value of 0.0/1.0, and on
+    // CUDA it did not compile at all: the per-thread
+    // accumulator of the logical reduction is rewritten into `a & bool(b)`,
+    // which has no float meaning, and the flush has no float atomic. bool is
+    // the answer both NumPy and torch give, and it makes that accumulator
+    // boolean. The check sits before the float widening below so a
+    // reduced-precision policy cannot turn this back into a float.
+    if ((op == ns_logical_and || op == ns_logical_or || op == ns_logical_xor)
+            && x.is_float())
+        return ns_bool;
     // complex reductions stay complex (sum/mean/prod). Without this, mean -- which is in
     // float_ops -- forces a float output dtype, so the kernel tries to assign a complex64
     // accumulator into a double and fails to compile. (sum works already because 'add' is

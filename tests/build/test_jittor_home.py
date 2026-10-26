@@ -34,7 +34,7 @@ print("HOME_RESULT", jittor_utils.home())
 config = os.path.join({home!r}, ".cache", "jittor", "config.json")
 stored = {{}}
 if os.path.exists(config):
-    with open(config) as f:
+    with open(config, encoding="utf-8") as f:
         raw = f.read()
     try:
         stored = json.loads(raw)

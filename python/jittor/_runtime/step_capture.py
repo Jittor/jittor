@@ -61,8 +61,8 @@ import numpy as np
 import jittor as jt
 import jittor_core as _core
 
-from .graph_replay import (_RERECORD_LIMIT, _Unreplayable, _WorkingSet, _dense, _empty_like,
-                           _host_state, _native_dtype, _object_ids, _training,
+from .graph_replay import (_capture_barriers, _RERECORD_LIMIT, _Unreplayable, _WorkingSet, _dense, _empty_like,
+                           _host_state, _module_vars, _native_dtype, _object_ids, _training,
                            _graph_has_nondeterministic_op,
                            _input_vars, _map_inputs, _no_auto, _output_template,
                            _rebuild, _signature)
@@ -612,8 +612,11 @@ class StepCapture:
         records = []
         readbacks = _core._host_readback_count()
         try:
-            with _no_auto():
+            with _capture_barriers() as barriers, _no_auto():
                 result = self._fn(*private_args, **private_kwargs)
+                if barriers:
+                    cap.refused = cap.refused or (
+                        "the step contains an opaque operation: " + barriers[0])
         finally:
             records = _core._state_capture_end()
             jt.flags.auto_flush_ops = flush_before
@@ -686,7 +689,20 @@ class StepCapture:
         # Point every rebound holder back at its old Var, which the graph
         # reads, and give it the new value. The step has run once, so this is
         # its update; every replay repeats it.
-        state = _commit_captured_state(records)
+        #
+        # Committing is part of the capture, not a normal batch: `old` is a
+        # storage the backward saved, so the copy resolves those readers
+        # first (`VarHolder::copy_into`) -- which is the backward, and with it
+        # the forward whose activations it saved. Outside `keep_graph` that
+        # batch finishes those nodes, so the replay no longer has a forward to
+        # run and reuses the captured one for every later input: an SGD step
+        # replayed against a new batch returned the loss of the batch it was
+        # captured on, and its update used that step's gradients.
+        jt.flags.keep_graph = 2
+        try:
+            state = _commit_captured_state(records)
+        finally:
+            jt.flags.keep_graph = before
         with jt.no_grad():
             state = _write_back_in_graph(state, roots)
 
@@ -841,6 +857,9 @@ class StepCapture:
         return self._results(cap, cap.outputs)
 
     def __call__(self, *args, **kwargs):
+        if _core.graph_capture_active():
+            # Leave leaf synchronization and graph recording to the caller.
+            return self._eager(args, kwargs)
         if self._guard_external_backward and any(
                 v.requires_grad for v in _input_vars((args, kwargs), [])):
             # A private byte copy is not an autograd edge to the caller's input.
@@ -921,8 +940,9 @@ class _PolicyStep(StepCapture):
 
       - the host-side state of the objects the call was given (`_host_state`),
         which the capture run must also have left as it found it;
-      - which Var every parameter of the module, and every Var those objects
-        hold, is: a load or an assignment outside the call rebinds one, and
+      - which Var every parameter and registered buffer of the module, and
+        every Var those objects hold, is: a load or an assignment outside the
+        call rebinds one, and
         the graph would go on reading the old one. State the step updates is
         put back first (`_adopt`), so a cache reset between two `generate`
         calls is taken over rather than re-captured;
@@ -959,9 +979,7 @@ class _PolicyStep(StepCapture):
                 if not root.is_finished:
                     root._release_kept()
             return None, result
-        params = getattr(module, "parameters", None)
-        if callable(params):
-            leaves.extend(v for v in params() if isinstance(v, jt.Var))
+        leaves.extend(v for v in _module_vars(module) if isinstance(v, jt.Var))
         ref = self._module_ref
         cap.guards.append((lambda: _host_state(objects), after))
         cap.guards.append((lambda: [v.var_ptr for v in leaves], [v.var_ptr for v in leaves]))

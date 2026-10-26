@@ -92,7 +92,10 @@ ENVIRONMENT_SKIP_PATTERNS = (
     # covered by accident; these did not, so a CPU-only session reported the
     # files as unexplained and the whole selection exited non-zero with every
     # test passing.
-    "tensordict", "mmcv", "mmengine", "deepspeed", "trellis",
+    "tensordict", "mmcv", "mmengine", "deepspeed", "trellis", "datatrove",
+    # The vLLM adapter tests bind the installed package when it is present and
+    # skip when it is not; the harness-only cases run without it either way.
+    "vllm",
     # The safetensors format tests: the optional package is not installed.
     "safetensors",
     # Facts about the *runner* rather than the machine's hardware: a case that

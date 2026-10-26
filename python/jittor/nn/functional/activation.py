@@ -276,6 +276,12 @@ def gelu(x, approximate='none'):
         >>> nn.gelu(a)
         jt.Var([-0.134547   0.9882567  6.128115 ], dtype=float32)
     '''
+    # Training keeps the exact BF16 forward and backward in one CUDA kernel
+    # each. It has a separate dispatch name so its registration does not
+    # disable the native no-grad GELU route below for other dtypes.
+    fast = try_dispatch("nn.gelu.training", x, approximate=approximate)
+    if fast is not None:
+        return fast
     if approximate == 'none' and _FAST_GELU is not None:
         # The body below, built natively when the frontend's binary operators
         # are bound and no "nn.gelu" kernel is registered; None otherwise.
@@ -429,8 +435,23 @@ def get_init_var_rand(shape, dtype):
 
 
 def softplus(x, beta=1.0, threshold=20.0):
-    return 1 / beta * jt.log(1 + (beta * x).minimum(threshold).exp()) + \
-        (x - threshold / beta).maximum(0.0)
+    dtype = _jittor_dtype_name(x.dtype)
+    if dtype not in ("float16", "bfloat16", "float32", "float64"):
+        raise TypeError("softplus requires a real floating input")
+    fast = try_dispatch("nn.softplus", x, beta=beta, threshold=threshold)
+    if fast is not None:
+        return fast
+    # ATen uses float opmath for Half/BFloat16; acceptance requires
+    # independent backend regression, not this decomposition alone.
+    work = x.float32() if dtype in ("float16", "bfloat16") else x
+    scaled = beta * work
+    above = scaled > threshold
+    # Guard exp even in an eagerly materialized unselected branch.
+    # A strict select preserves the input derivative at exact T.
+    safe_scaled = jt.ternary(above, threshold, scaled)
+    nonlinear = jt.log1p(safe_scaled.exp()) / beta
+    output = jt.ternary(above, work, nonlinear)
+    return output.cast(dtype) if dtype in ("float16", "bfloat16") else output
 
 
 def hardtanh(x, min_val=-1, max_val=1):

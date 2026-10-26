@@ -1130,3 +1130,64 @@ def test_mpi_reduction_op_name_is_a_catchable_user_error():
         assert source.count("USER_CHECK(op == ns_add)") == 1, relative
         assert "ASSERT(op == ns_add)" not in source, relative
         assert "Not supported MPI op" in source, relative
+
+
+def test_jit_source_parser_user_boundaries_are_explicit():
+    """A custom op's ``jit_run`` body is caller text, not a framework invariant.
+
+    ``jt.compile_custom_op`` takes that text as a public argument, and the JIT
+    half of the source is not compiled by g++ until after the fused-kernel
+    parser and the compiler-command scanner have read it. A source-scanning
+    failure there is therefore ``USER_CHECK``/``USER_ERROR`` with a sentence
+    naming the construct. The parsers' own preconditions and IR-shape checks
+    stay ``ASSERT``; the filesystem/compiler failures and the ``TEST``-only
+    self-test are not caller input and stay internal.
+    """
+    kernel_ir = (ROOT / "src/codegen/opt/kernel_ir.cc").read_text()
+    for marker in (
+        'USER_ERROR << "unterminated C++ quoted literal',
+        "USER_CHECK(pos<end && src[pos]=='(')",
+        'USER_ERROR << "unmatched _Pragma parentheses',
+        'USER_CHECK(startswith(s, "0", i))',
+        'USER_CHECKop(count,==,7)',
+        'USER_CHECKop(vs.size(),==,3)',
+        'USER_CHECK(v.size()>1)',
+        'USER_CHECK(presum == -1)',
+        'USER_CHECK(l<s.size() && presum==0)',
+        'USER_CHECK(l != string::npos)',
+        'USER_CHECK(l>=0 && ll>=0 && rr>=0 && ll<rr && rr<l)',
+        'USER_CHECK(0<y && y<x && x<ll)',
+        'USER_CHECK(pending_pragmas.empty())',
+    ):
+        assert marker in kernel_ir, marker
+    assert kernel_ir.count('USER_CHECK(startswith(s, lvalue, i))') == 2
+    assert 'ASSERT(startswith(s, "for", i));' in kernel_ir
+    assert "ASSERT(l<r);" in kernel_ir
+    assert "ASSERT(s[k-1] == '}');" in kernel_ir
+    assert 'LOGf << "KernelIR parse error' not in kernel_ir
+
+    cache = (ROOT / "src/utils/cache_compile.cc").read_text()
+    for marker in (
+        "USER_CHECK(j<cmd.size())",
+        "USER_CHECK(j<k && output_name.size()==0)",
+        "USER_CHECK(j<k)",
+        "USER_CHECK(output_name.size() && input_names.size())",
+    ):
+        assert marker in cache, marker
+    assert cache.count("USER_CHECK(j<cmd.size())") == 3
+    assert 'CHECK(!dependency_required) << "Compiler produced no dependency file:"' in cache
+    assert 'CHECK(output) << "Could not open temporary file:"' in cache
+    assert "CHECKop(oname,==,output_name);" in cache
+
+    registry = (ROOT / "src/ops/op_register.cc").read_text()
+    for marker in (
+        "USER_CHECK(registration.valid())",
+        "USER_CHECK(entries.count(op_file_name))",
+        "USER_CHECK(iter != provider_bindings.end())",
+        "USER_CHECK(provider_iter != provider_bindings.end())",
+        "USER_CHECK(provider_iter->second.count(op_file_name))",
+    ):
+        assert marker in registry, marker
+    assert registry.count("USER_CHECK(false)") == 2
+    assert "ASSERT(id_iter != provider_ids.end());" in registry
+    assert "ASSERT(registration_iter != provider_registrations.end());" in registry

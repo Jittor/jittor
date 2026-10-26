@@ -1,4 +1,4 @@
-"""Real singleton collectives retain output storage and its Parameter aliases."""
+"""Collective writes retain output storage and its Parameter aliases."""
 import socket
 
 import numpy as np
@@ -33,6 +33,40 @@ class TestCollectiveBufferStorage:
                 assert value.dtype == dtype and value.device.type == device
                 np.testing.assert_array_equal(value.detach().float().cpu().numpy(), [1., 2., 3., 4.])
             assert parameter.requires_grad and parameter.is_leaf
+        finally:
+            torch.distributed.destroy_process_group()
+
+    def test_all_reduce_updates_leaf_buffer_without_changing_storage(self, device):
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            port = listener.getsockname()[1]
+        torch.distributed.init_process_group(
+            "nccl" if device == "cuda" else "gloo", rank=0, world_size=1,
+            init_method="tcp://127.0.0.1:%d" % port,
+        )
+        try:
+            buffer = torch.nn.Parameter(
+                torch.arange(1, 5, device=device, dtype=torch.float32))
+            pointer = buffer.data_ptr()
+
+            class ReductionGroup:
+                def size(self):
+                    return 1
+
+                def rank(self):
+                    return 0
+
+                def _all_reduce(self, value, operation):
+                    assert operation == "sum"
+                    return value + 1
+
+            # WORLD size one copies an unchanged value. A group result forces a
+            # nontrivial writeback through the same path as a multi-rank reduction.
+            assert torch.distributed.all_reduce(buffer, group=ReductionGroup()) is None
+            assert buffer.data_ptr() == pointer
+            assert buffer.requires_grad and buffer.is_leaf
+            np.testing.assert_array_equal(
+                buffer.detach().cpu().numpy(), [2., 3., 4., 5.])
         finally:
             torch.distributed.destroy_process_group()
 

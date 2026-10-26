@@ -2,6 +2,7 @@
 
 from __future__ import print_function
 
+import hashlib
 import json
 import math
 import os
@@ -9,7 +10,8 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
+import zipfile
 
 import nox
 
@@ -217,6 +219,16 @@ CPU_TORCH_ORACLE_TESTS = (
     "tests/nn/test_batchnorm.py",
     "tests/nn/test_loss.py",
     "tests/nn/test_relu.py",
+    # Weight conversion and archive round-trip only assert anything against a
+    # real PyTorch; in the native gate they skip for the oracle's absence.
+    "tests/nn/test_state_dict_dtypes.py::TestStateDictDtypes::"
+    "test_torch_conversion_keeps_every_dtype",
+    "tests/nn/test_state_dict_dtypes.py::TestStateDictDtypes::"
+    "test_values_survive_the_conversion",
+    "tests/nn/test_state_dict_dtypes.py::TestStateDictDtypes::"
+    "test_a_value_that_float32_cannot_hold",
+    "tests/serialization/test_native_serialization_ownership.py::"
+    "test_torch_archive_save_load_roundtrip",
     "tests/models/test_network_training_parity.py",
 )
 CUDA_TESTS = (
@@ -791,6 +803,53 @@ def _install_compat_source(session, env, runner=None):
     _COMPAT_SOURCE_INSTALLS.add(key)
 
 
+#: The completion detector, shared with ``tools/run_test_suite.py``. A native
+#: crash ends the interpreter, so pytest writes no result line and no summary;
+#: the log just stops. The plugin inside pytest records that the session
+#: reached its end, and this checker turns its absence into a failed gate.
+SESSION_CHECKER = REPO_ROOT / "tools" / "check_session_completed.py"
+
+
+def _check_completed_session(sentinel):
+    """Return ``(ok, message)`` from the completion checker."""
+    checked = subprocess.run(
+        [sys.executable, str(SESSION_CHECKER), "--sentinel", str(sentinel)],
+        cwd=str(REPO_ROOT),
+        capture_output=True,
+        text=True,
+    )
+    return checked.returncode == 0, (checked.stdout or "") + (checked.stderr or "")
+
+
+def _run_pytest_checked(session, argv, env, *, external=False):
+    """Run one pytest invocation and prove it reached ``pytest_sessionfinish``.
+
+    The sentinel path is per invocation and removed first: a path left by an
+    earlier group would make a dead session look finished, which is the one
+    failure this check exists to make impossible.
+    """
+    sentinel = Path(session.create_tmp()) / "session-complete.json"
+    sentinel.unlink(missing_ok=True)
+    env = env.copy()
+    env["JITTOR_SESSION_SENTINEL"] = str(sentinel)
+    try:
+        session.run(*argv, env=env, external=external)
+    except BaseException:
+        # pytest already failed, so re-raise unchanged. Say what the absence
+        # means here, though: a nonzero exit alone does not tell a reader that
+        # the tests after the crash never ran.
+        if not sentinel.exists():
+            session.log(
+                "pytest ended before writing its completion sentinel: the "
+                "interpreter stopped mid-run, so any tests after that point "
+                "never executed"
+            )
+        raise
+    ok, message = _check_completed_session(sentinel)
+    if not ok:
+        session.error(message)
+
+
 def _run_pytest_once(session, args, env, runner=None, timeout=900):
     """One pytest process for one whole set of paths.
 
@@ -801,14 +860,17 @@ def _run_pytest_once(session, args, env, runner=None, timeout=900):
     """
     python = runner or "python"
     _install_compat_source(session, env, runner)
-    session.run(
-        python,
-        "-m",
-        "pytest",
-        "-v",
-        "--timeout=%d" % timeout,
-        *args,
-        env=env,
+    _run_pytest_checked(
+        session,
+        (
+            python,
+            "-m",
+            "pytest",
+            "-v",
+            "--timeout=%d" % timeout,
+            *args,
+        ),
+        env,
         external=runner is not None,
     )
 
@@ -1181,18 +1243,16 @@ def structure(session):
     if not session.posargs:
         native_env = env.copy()
         native_env["JITTOR_TORCH_SHIM"] = "0"
-        session.run(
-            "python", "-m", "pytest", "-v", "--timeout=600", *NATIVE_MODE_PATHS, env=native_env
+        _run_pytest_checked(
+            session,
+            ("python", "-m", "pytest", "-v", "--timeout=600", *NATIVE_MODE_PATHS),
+            native_env,
         )
     env = _mode_env(env, test_paths)
-    session.run(
-        "python",
-        "-m",
-        "pytest",
-        "-v",
-        "--timeout=600",
-        *test_paths,
-        env=env,
+    _run_pytest_checked(
+        session,
+        ("python", "-m", "pytest", "-v", "--timeout=600", *test_paths),
+        env,
     )
 
 
@@ -1289,12 +1349,32 @@ def packaging(session):
         session.error("expected exactly one sdist-derived wheel, found %d" % len(sdist_wheels))
     wheel_args = tuple(session.posargs)
     for wheel in (wheels[0], sdist_wheels[0]):
+        record_args: Tuple[str, ...] = ()
+        if "--old-wheel" in wheel_args:
+            # dist-info/RECORD is derived from every wheel member and therefore
+            # changes whenever an explicitly approved source member changes.
+            # Approve the derived file itself; otherwise a reviewed change can
+            # never pass this audit.
+            with zipfile.ZipFile(str(wheel)) as archive:
+                records = [
+                    name for name in archive.namelist()
+                    if name.endswith(".dist-info/RECORD")
+                ]
+                if len(records) != 1:
+                    session.error(
+                        "expected exactly one wheel RECORD, found %d" % len(records))
+                record_args = (
+                    "--allow-content-change",
+                    hashlib.sha256(archive.read(records[0])).hexdigest(),
+                    records[0],
+                )
         session.run(
             "python",
             "tools/release/check_wheel_contents.py",
             "compare",
             str(wheel),
             *wheel_args,
+            *record_args,
             env=env,
         )
 
@@ -1455,6 +1535,20 @@ def _record_asv(
             env=env,
             external=external,
         )
+        if not external and default_machine == "jittor-ci-cpu":
+            # The first timed ASV case is matmul. A trivial tensor only warms
+            # jittor_core; matmul also builds oneDNN, which can exceed ASV's
+            # per-case timeout. Use the same cache, interpreter, and shape.
+            warm_env = dict(env)
+            warm_env["PYTHONPATH"] = str(REPO_ROOT / "python")
+            session.run(
+                "python",
+                "-c",
+                "import jittor as jt; "
+                "jt.matmul(jt.ones((8, 256, 256), dtype='float32'), "
+                "jt.ones((8, 256, 256), dtype='float32')).sync()",
+                env=warm_env,
+            )
         session.run(
             *(
                 tuple(asv_command)

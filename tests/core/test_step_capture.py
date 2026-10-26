@@ -52,6 +52,25 @@ def _make_step(w, b, lr, readback=False):
 @_test_preserve_policy(jt, "keep_graph", "auto_graph_replay")
 class TestStepCapture(unittest.TestCase):
 
+    def test_foreign_operation_refuses_step_replay(self):
+        def step(value):
+            jt.graph_replay_barrier("external step callback")
+            return value * 2
+        captured = jt.capture_step(step, record=False)
+        for start in (1., 2., 3., 4.):
+            np.testing.assert_array_equal(captured(jt.array([start])).numpy(), [start * 2])
+        self.assertIn("external step callback", captured.refused)
+        self.assertEqual(captured.stats["replayed"], 0)
+
+    def test_nested_device_capture_does_not_advance_step_policy(self):
+        from unittest.mock import patch
+        captured = jt.capture_step(lambda value: value * 2, record=False)
+        with patch.object(jt.core, "graph_capture_active", return_value=True):
+            np.testing.assert_array_equal(captured(jt.array([3.])).numpy(), [6.])
+        self.assertEqual(captured.stats["captured"], 0)
+        self.assertEqual(captured.stats["replayed"], 0)
+        self.assertIsNone(captured._seen)
+
     def setUp(self):
         jt.flags.keep_graph = 0
         jt.flags.auto_graph_replay = 0

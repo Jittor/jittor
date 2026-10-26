@@ -317,7 +317,9 @@ def setitem(x, slices, value):
     if isinstance(slices, jt.Var) and _jittor_dtype_name(slices.dtype) == "bool":
         if slices.shape == x.shape:
             if isinstance(value, (int, float)):
-                value = jt.array(value).broadcast(x.shape)
+                from .._core.var import placement_scope_like as _factory_scope_like
+                with _factory_scope_like(x):
+                    value = jt.array(value, dtype=x.dtype).broadcast(x.shape)
                 return x.assign(slices.ternary(value, x))
             if isinstance(value, jt.Var) and value.shape == [1]:
                 value = jt.broadcast(value, x.shape)

@@ -67,6 +67,7 @@ static unordered_set<string> unary_ops = {
     "logical_not",
     "bitwise_not",
     "log",
+    "log1p",
     "exp",
     "sqrt",
     "round",
@@ -99,6 +100,7 @@ static unordered_set<string> unary_ops = {
 
 static unordered_set<string> float_ops = {
     "log",
+    "log1p",
     "exp",
     "sqrt",
     "mean",
@@ -191,6 +193,7 @@ static unordered_set<string> no_need_back_in = {
 };
 
 static unordered_set<string> no_need_back_out = {
+    "log1p",
     "void",
     "cast",
     "negative",

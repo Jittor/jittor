@@ -8,6 +8,7 @@ from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import collections as _collections_data
 import concurrent.futures as _futures_data
 import itertools as _itertools_data
+import numbers as _numbers_data
 import threading as _threading_data
 
 import jittor as jt
@@ -71,6 +72,49 @@ class _TensorDataset(_TorchDataset):
         return tuple(t[i] for t in self.tensors)
     def __len__(self):
         return len(self.tensors[0]) if self.tensors else 0
+
+
+def _tensor_dataset_batch(loader, batch_indices):
+    """Gather a TensorDataset batch in one indexing op when that is exact.
+
+    Equivalent to stacking individual rows for repeated and negative indices,
+    including scatter-add gradients, without the per-row view/unsqueeze/setitem
+    graph that default collation builds.
+    """
+    dataset = loader.dataset
+    if not (type(dataset) is _TensorDataset
+            and loader.collate_fn is _default_collate
+            and isinstance(batch_indices, (list, tuple)) and batch_indices
+            and all(isinstance(index, _numbers_data.Integral)
+                    and not isinstance(index, bool) for index in batch_indices)):
+        return None
+    from ..tensor_state import compatibility_owner
+    g = compatibility_owner(jt)
+    tensor_types = (g.Tensor, g.nn.Parameter)
+    size = len(dataset)
+    if not all(type(tensor) in tensor_types and len(tensor) == size
+               and tensor.device.type != "meta"
+               and jt.core.dispatch_context([tensor])[0] in ("cpu", "cuda")
+               for tensor in dataset.tensors):
+        return None
+    if not all(-size <= index < size for index in batch_indices):
+        return None
+    from ..frontend import tensor_frontend
+    indices_by_device = {}
+    result = []
+    for tensor in dataset.tensors:
+        device = tensor.device
+        key = (device.type, device.index)
+        if key not in indices_by_device:
+            indices_by_device[key] = g.tensor(
+                batch_indices, dtype=g.int64, device=device)
+        index = indices_by_device[key]
+        if tensor._storage_is_contiguous():
+            with tensor_frontend(g.Var, like=tensor):
+                result.append(tensor.getitem(index))
+        else:
+            result.append(tensor[index])
+    return result
 
 
 class _ConcatDataset(_TorchDataset):
@@ -312,9 +356,13 @@ class _SingleProcessDataLoaderIter(_BaseDataLoaderIter):
 
     def __next__(self):
         batch_indices = next(self._batch_iter)
+        batch = _tensor_dataset_batch(self._loader, batch_indices)
+        if batch is not None:
+            return batch
         values = (batch_indices if self._loader._iterable_dataset else
                   [self._loader.dataset[i] for i in batch_indices])
-        return values[0] if self._loader.batch_size is None else self._loader.collate_fn(values)
+        return self._loader.collate_fn(
+            values[0] if self._loader.batch_size is None else values)
 
 
 class _WorkerInfo:
@@ -378,9 +426,12 @@ class _MultiProcessingDataLoaderIter(_BaseDataLoaderIter):
 
     def _fetch(self, batch_indices):
         loader = self._loader
+        batch = _tensor_dataset_batch(loader, batch_indices)
+        if batch is not None:
+            return batch
         values = (batch_indices if loader._iterable_dataset else
                   [loader.dataset[i] for i in batch_indices])
-        return values[0] if loader.batch_size is None else loader.collate_fn(values)
+        return loader.collate_fn(values[0] if loader.batch_size is None else values)
 
     def _fill(self):
         want = self._num_workers * self._prefetch
@@ -440,7 +491,8 @@ class _DataLoader:
                  worker_init_fn=None, generator=None, prefetch_factor=None,
                  persistent_workers=False, **kwargs):
         self.dataset = dataset
-        self._iterable_dataset = not hasattr(dataset, "__len__")
+        self._iterable_dataset = (isinstance(dataset, _IterableDataset)
+                                  or not hasattr(dataset, "__len__"))
         self.batch_size = batch_size
         self.drop_last = drop_last
         self.num_workers = num_workers
@@ -450,7 +502,8 @@ class _DataLoader:
         self.persistent_workers = persistent_workers
         self.multiprocessing_context = kwargs.get("multiprocessing_context", None)
         self.shuffle = shuffle
-        self.collate_fn = collate_fn if collate_fn is not None else _default_collate
+        self.collate_fn = (collate_fn if collate_fn is not None else
+                           (_default_convert if batch_size is None else _default_collate))
         self.worker_init_fn = worker_init_fn
         self.generator = generator
         if batch_sampler is not None:
