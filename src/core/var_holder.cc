@@ -181,7 +181,7 @@ void submit_pending(VarHolder* holder) {
 // sync or a blocking device-to-host copy (both release the GIL). A rebind
 // releases the holder's liveness reference; if that was the last one the old
 // Var is freed and its storage returned to the allocator, and the read then
-// copies from freed memory (KI-EXEC-007). `VarPtr` owns forward, backward and
+// copies from freed memory (the shared-parameter storage race). `VarPtr` owns forward, backward and
 // pending liveness, so the read's reference keeps the Var and its storage
 // alive until the copy is done, whatever the holder does. The snapshot is
 // taken while the GIL is held, so reading `var` cannot interleave with a
@@ -1846,7 +1846,7 @@ vector<ArrayArgs> fetch_sync(const vector<VarHolder*>& vh) {
     graph_check();
     {
         // Pin exactly the Vars this batch syncs and copies: a holder rebind
-        // during the GIL-releasing wait must not release them (KI-EXEC-007).
+        // during the GIL-releasing wait must not release them (the shared-parameter storage race).
         vector<VarPtr> owners;
         vector<Var*> vars;
         owners.reserve(vh.size());

@@ -4,10 +4,11 @@
 
 At HEAD (2026-10-26) this shape passes 35/35 at four threads and 6/6 at one:
 `VarHolder::sync()` no longer migrates, so the storage the batch reads is not
-released underneath it. The same ownership gap is still live on the host-read
-path (`.numpy()` while another thread rebinds the holder), where the unversioned
-`probe_shared_param_readback.py` still segfaults 3/3; see KI-EXEC-007. The
-phase-7 assert this probe used to reach first is KI-EXEC-005.
+released underneath it. The host-read variant (`.numpy()` while another thread
+rebinds the holder) is covered by the unversioned
+`probe_shared_param_readback.py`; after the read-path ownership and ring-lock
+fix both probes pass repeatedly at four threads. The phase-7 assert this probe
+used to reach first is KI-EXEC-005.
 
 This is the KI-EXEC-005 shape: thread B's slice assignment rebinds the holder,
 so the var thread A's batch requested becomes garbage while that batch runs and
