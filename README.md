@@ -1,5 +1,7 @@
 # Jittor：基于即时编译的深度学习框架 / 计图
 
+[English](README.en.md) | 中文
+
 ![Jittor Logo](https://cg.cs.tsinghua.edu.cn/jittor/favicon_package_v0/JittorLogo_Final1220.svg)
 
 [快速开始](#quickstart) | [安装](#install) |

@@ -249,3 +249,18 @@ passed/1 skipped，合计 **324 passed/45 skipped/1 xfailed**；`tests/structure
 另：一次裸 pytest 宽扫描在验证 venv 中把 `tests._helpers` 解析到 `.pth` 里的 modelscope
 `tests` 包而报 ModuleNotFoundError；那是验证环境遮蔽，不是产品缺陷，正式门禁走
 `tools/run_test_suite.py` 不受影响。
+
+## 2026-10-26 追加：Ascend 310P 与文档双语
+
+- PR #18043 的缺失部分已合入 `5f0a3b6fa`：310P SoC 能力表与缺核回退、
+  `acl_allow_hf32` 显式降精度开关、ACL 推理辅助（FrozenLinear / packed weight）、
+  `mapped_concat` / `mapped_packed_matmul` / `mapped_rms_norm` composite op，以及
+  对应 ACL 测试与指南。共同基点未分叉的 75 个文件直接取 PR 版本；原生 fast path、
+  module call、concat/getitem provider 与 RMSNorm selector 手工合并，保留现有
+  provider 选择与 placement 逻辑。DropoutACL 的梯度 manifest 行保留：CodeOp
+  `multi_grad_src` 仍被扫描器计为后端梯度。
+- 设备证据来自 PR 作者的 310P3 报告；本机无 NPU，ACL 设备用例只验证收集与跳过。
+  本机门禁：CPU core 327 passed / 45 skipped / 1 xfailed；structure 1569 passed /
+  6 skipped；CUDA core 361 passed / 10 skipped / 2 xfailed（RTX 4090，exit 0）。
+- 文档改为中英成对：`X.md` 中文默认 + `X.en.md` 英文，索引成对，根目录
+  `README.md` / `README.en.md`；`docs/` 下 187 对页面，链接与 toctree 门禁通过。

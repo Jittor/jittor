@@ -2,7 +2,7 @@
 
 - Status: Current-state index, not a history log
 - Last reviewed: 2026-10-26
-- Baseline reviewed: `6cce1ea5d`
+- Baseline reviewed: `65d52550a`
 - Owner: Jittor core maintainers
 - Freshness expires: 2027-01-06
 - Review when: the release line, a top-level goal or an indexed location changes
@@ -29,7 +29,11 @@ lives in GitHub issues and pull requests. The accepted layout is in
 Python 3.7-3.13; [`noxfile.py`](../../noxfile.py) and
 [`tools/run_test_suite.py`](../../tools/run_test_suite.py) are the maintained gate
 surface (tiers `core` / `smoke` / full, see `AGENTS.md`). User-facing breaking
-changes: [2.0 migration notes](../../docs/releases/2.0.md).
+changes: [2.0 migration notes](../../docs/releases/2.0.md). The Ascend 310P
+support from PR #18043 is integrated (SoC capability table, reduced-precision
+opt-in, ACL inference helpers and mapped composite ops), and user documentation
+is now paired: Chinese-default `X.md` plus English `X.en.md`, with
+`README.md` / `README.en.md` at the root.
 
 ## Where information lives
 

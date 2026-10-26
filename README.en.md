@@ -1,5 +1,7 @@
 # Jittor: a Just-in-time Deep Learning Framework
 
+[中文](README.md) | English
+
 ![Jittor Logo](https://cg.cs.tsinghua.edu.cn/jittor/favicon_package_v0/JittorLogo_Final1220.svg)
 
 [Quickstart](#quickstart) | [Install](#install) |

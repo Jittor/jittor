@@ -187,3 +187,23 @@ Environment: Python 3.11.16, g++ 11.5.0, CUDA 12.2.140 (conda nvcc), RTX 4090 (s
 | PR smoke (CPU, cold cache) | whole-tree selection after this round's fixes | native: 4084 passed/2014 skipped/18 failed/239 errors (45m44s); torch: 4775 passed/1878 skipped/16 failed/2 errors. Three contract regressions introduced this round were fixed and re-verified (op-compiler old message, native full-mask scalar dtype, half scalar materialization; 7/15/50 and half sweep+promotion+dtype 70 passed). The remaining failures reproduce identically on the 280d44854 baseline or are verification-environment gaps (venv lacks scipy, safetensors incomplete, no usable independent PyTorch, modelscope `tests` shadowing in `.pth`, real triton/vllm). Among them serialization batch fetch and compile replay SGD are registered as KI-COMPAT-018/017, and bf16 autocast CUDA divergence (79.5%) is registered as KI-COMPAT-019; all three are fixed and closed (see the table above). |
 
 This table does not write partial files or single-case success as whole-library, whole-backend acceptance; NPU/ROCm/310P and multi-machine collective communication still unverified. KI-COMPAT-012's mechanism is fixed (in-process shim publishes torch distribution metadata, metadata regression passes), but downstream Transformers/Diffusers cases still need acceptance in environments with these packages installed. Also: a bare pytest broad sweep in the verification venv resolved `tests._helpers` to the modelscope `tests` package in `.pth` and reported ModuleNotFoundError; that is validation environment shadowing, not a product defect, and the formal gate via `tools/run_test_suite.py` is unaffected.
+
+## 2026-10-26 follow-up: Ascend 310P and bilingual documentation
+
+- The missing parts of PR #18043 are integrated in `5f0a3b6fa`: the 310P SoC
+  capability table and kernel-gap fallbacks, the explicit `acl_allow_hf32`
+  reduced-precision switch, the ACL inference helpers (FrozenLinear / packed
+  weights), the `mapped_concat` / `mapped_packed_matmul` / `mapped_rms_norm`
+  composite ops, and the corresponding ACL tests and guides. The 75 files that
+  had not diverged from the common base were taken from the PR directly; the
+  native fast paths, module call, concat/getitem providers and RMSNorm selector
+  were merged by hand, preserving the existing provider-selection and placement
+  logic. The DropoutACL gradient manifest row is kept: its CodeOp
+  `multi_grad_src` is still counted as a backend gradient by the scanner.
+- Device evidence comes from the PR author's 310P3 report; this host has no NPU,
+  so ACL device cases were checked for collection and skipping only. Local
+  gates: CPU core 327 passed / 45 skipped / 1 xfailed; structure 1569 passed /
+  6 skipped; CUDA core 361 passed / 10 skipped / 2 xfailed (RTX 4090, exit 0).
+- Documentation is now paired: `X.md` Chinese default plus `X.en.md` English,
+  paired indexes, and `README.md` / `README.en.md` at the root. `docs/` holds
+  187 pairs, and the link and toctree gates pass.
