@@ -276,20 +276,26 @@ class TestOptimizerCheckpoint(unittest.TestCase):
                 expected_resume = [measured_update() for _ in range(2 if capture.enabled else 1)]
                 expected = snapshot(get_state_dict(accelerator.unwrap_model(model), optimizer))
                 expected_lr = scheduler.get_last_lr()
+                buffer_types = {
+                    (gi, key): [type(buffer) for buffer in group.get(key, [])]
+                    for gi, group in enumerate(optimizer.param_groups)
+                    for key in ("m", "values", "v", "d", "pre_grad")}
                 accelerator.load_state(path)
                 resumed_random = random_sample()
                 self.assertEqual(resumed_random, random_expected)
                 self.assert_tree(get_state_dict(accelerator.unwrap_model(model), optimizer), saved)
                 if self.jt is not None:
-                    # Loading through the Torch facade must not swap native
-                    # optimizer buffers for frontend Tensor subclasses: the
-                    # next native update would then take the frontend operator
-                    # path and drift in the last bits.
-                    for group in optimizer.param_groups:
+                    # Loading through the Torch facade must not swap buffer
+                    # classes: the next optimizer step would then take a
+                    # different operator path and drift in the last bits.
+                    for gi, group in enumerate(optimizer.param_groups):
                         for key in ("m", "values", "v", "d", "pre_grad"):
-                            for buffer in group.get(key, []):
+                            for index, buffer in enumerate(group.get(key, [])):
                                 if buffer is not None:
-                                    self.assertIs(type(buffer), self.jt.Var, key)
+                                    self.assertIs(
+                                        type(buffer),
+                                        buffer_types[(gi, key)][index],
+                                        (key, index))
                 restored = numbers(get_state_dict(accelerator.unwrap_model(model), optimizer))
                 actual_resume = [measured_update() for _ in range(2 if capture.enabled else 1)]
                 self.assertEqual(actual_resume, expected_resume)

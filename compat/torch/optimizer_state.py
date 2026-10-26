@@ -47,15 +47,19 @@ def _native_state_key(kind, torch):
     return _TORCH_TO_NATIVE_STATE.get(kind, {}).get(torch)
 
 
-def _native_optimizer_buffer(value):
-    """Keep optimizer buffers as native Vars, not frontend Tensor subclasses.
+def _native_optimizer_buffer(value, existing=None):
+    """Give a loaded buffer the same base type as the one it replaces.
 
     ``load_state_dict`` materialises state through the Torch facade, whose
-    Tensor is a ``jt.Var`` subclass with its own promotion rules. A buffer
-    that changes type there makes the next native AdamW/Adam step run through
-    the frontend operators and diverge in the last bits.
+    Tensor is a ``jt.Var`` subclass with its own promotion rules. Native
+    algorithms (Adam, AdamW, Adagrad) keep native Vars in ``param_groups``;
+    loading a frontend Tensor there makes the next update take the frontend
+    operator path and drift in the last bits. Algorithms whose buffers are
+    frontend Tensors (SGD's momentum) must keep that type, because the public
+    ``state`` view exposes the object and callers read ``.device`` from it.
     """
-    if isinstance(value, jt.Var) and type(value) is not jt.Var:
+    if (existing is not None and type(existing) is jt.Var
+            and isinstance(value, jt.Var) and type(value) is not jt.Var):
         return jt.Var(value)
     return value
 
