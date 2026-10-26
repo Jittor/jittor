@@ -2,7 +2,7 @@
 
 - Status: Current-state index, not a history log
 - Last reviewed: 2026-10-26
-- Baseline reviewed: `a51a8a829`
+- Baseline reviewed: `c69f8382f`
 - Owner: Jittor core maintainers
 - Freshness expires: 2027-01-06
 - Review when: the release line, a top-level goal or an indexed location changes
@@ -34,8 +34,9 @@ support from PR #18043 is integrated (SoC capability table, reduced-precision
 opt-in, ACL inference helpers and mapped composite ops), and user documentation
 is now paired: Chinese-default `X.md` plus English `X.en.md`, with
 `README.md` / `README.en.md` at the root. The duplicate-capability audit
-consolidated optimizer state-name translation, vLLM accelerator detection and
-the AMP half-preference test; forward-placement and jagged-axis have contract
+consolidated optimizer state-name translation, vLLM accelerator detection,
+slot mapping, async host copies and sampling-snapshot caches, and the AMP
+half-preference test; forward-placement and jagged-axis have contract
 tripwires.
 
 ## Where information lives
