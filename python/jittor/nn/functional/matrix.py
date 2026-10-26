@@ -29,23 +29,29 @@ from ._amp import prefers_half as _amp_retypes_output_to_half
 #:
 #: Dropping the bit costs a float32 buffer for the contracted operand. That is
 #: the already-slow fallback path; the accelerated relays never reach here.
-def _contraction_scope(fp32_output=False):
+def _contraction_scope(fp32_output=False, half_operands=False):
     """``flag_scope`` for the generic contraction. One spelling, three callers."""
     if fp32_output:
         # Keep the BF16 operands in the native Binary graph. Widening them
         # before multiplication also widens its backward and changes second
         # derivatives. prefer32 widens the accumulator's result instead.
         return jt.flag_scope(amp_reg=jt.amp_flags.prefer32)
-    # A half preference plus keep_reduce made the explicit float32 cast inside
-    # the reduce constructor come back as a half Var, so the contraction
-    # accumulated at the half width: at K=256 the error against the bf16-input
-    # reference grew to 3.3%, and an 80-step autocast training run ended 29%
-    # above its float32 answer. keep_reduce alone still hands back the input
-    # dtype (the reduce constructor rounds once at the end) while the cast and
-    # the accumulator stay float32.
-    amp_reg = jt.flags.amp_reg & ~(jt.amp_flags.prefer16
-                                   | jt.amp_flags.prefer_bfloat16)
+    amp_reg = jt.flags.amp_reg
+    if half_operands:
+        # A half preference plus keep_reduce made the explicit float32 cast
+        # inside the reduce constructor come back as a half Var, so the
+        # contraction accumulated at the half width: at K=256 the error against
+        # the bf16-input reference grew to 3.3%, and a CPU autocast training run
+        # drifted far beyond torch's bf16 spread. keep_reduce alone still hands
+        # back the input dtype (the reduce constructor rounds once at the end)
+        # while the cast and the accumulator stay float32.
+        amp_reg &= ~(jt.amp_flags.prefer16 | jt.amp_flags.prefer_bfloat16)
     return jt.flag_scope(amp_reg=amp_reg | jt.amp_flags.keep_reduce)
+
+
+def _both_half(a, b):
+    names = (_jittor_dtype_name(a.dtype), _jittor_dtype_name(b.dtype))
+    return names[0] in ("float16", "bfloat16") and names[1] in ("float16", "bfloat16")
 
 
 def _broadcast_batch_dims(a, b):
@@ -321,7 +327,7 @@ def matmul_transpose(a, b, *, _op="matmul_transpose", _names=("a", "b")):
 
 def _matmul_transpose_contraction(a, b, fp32_output=False):
     shape = list(a.shape)[:-1] + list(b.shape)
-    with _contraction_scope(fp32_output):
+    with _contraction_scope(fp32_output, _both_half(a, b)):
         a = a.broadcast(shape, [len(shape) - 2])
         b = b.broadcast(shape)
         return (a * b).sum(len(shape) - 1)
@@ -375,7 +381,7 @@ def bmm_transpose(a, b):
     # reduce in the generic path below to hand back the operands' dtype rather
     # than the float32 it accumulates in, so leaving it off here made the same
     # product depend on which of the three names the caller reached for.
-    with _contraction_scope():
+    with _contraction_scope(half_operands=_both_half(a, b)):
         kernel = select_kernel("batched_matmul", a, b, 0, 1)
         if kernel is not None:
             return kernel(a, b, 0, 1)
@@ -549,7 +555,7 @@ def matmul(a, b):
         assert c.shape == [8, 10, 3, 5]
     """
     _check_matmul_shapes(a, b)
-    with _contraction_scope():
+    with _contraction_scope(half_operands=_both_half(a, b)):
         len_a = len(a.shape)
         len_b = len(b.shape)
         if len_b == 1:
