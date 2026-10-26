@@ -75,6 +75,73 @@ class TestSharedReduce(unittest.TestCase):
         self.assertNotIn("shared_reduce<", source)
         self.assertIn("_wr_mask", source)
 
+    def test_thread_plan_handles_eliminated_ranges(self):
+        # A constant-one launch range has no rangeN token. The old planner
+        # indexed its empty dimension list and faulted before CUDA compilation.
+        import jittor_utils
+        probe = jittor_utils.compile_module(r'''
+#include "core/var_holder.h"
+#include "codegen/opt/kernel_ir.h"
+#include "ops/reduce_op.h"
+namespace jittor {
+std::tuple<int, vector<int>, map<int,vector<int>>> plan_reduce_thread_order(unique_ptr<KernelIR>& call, ReduceOp* rop);
+bool apply_reduce_thread_order(unique_ptr<KernelIR>& call, unique_ptr<KernelIR>& kernel, ReduceOp* rop, int block_width);
+// @pyjt(check_plan)
+vector<int> check_plan(VarHolder* holder, bool all_eliminated) {
+    auto* rop = dynamic_cast<ReduceOp*>(holder->var->input(0)->op());
+    CHECK(rop);
+    unique_ptr<KernelIR> call(new KernelIR());
+    call->push_back("int tn0=get_thread_range_log(thread_num_left, 1);");
+    call->push_back(all_eliminated
+        ? "int tn1=get_thread_range_log(thread_num_left, 1);"
+        : "int tn1=get_thread_range_log(thread_num_left, range1);");
+    auto result = plan_reduce_thread_order(call, rop);
+    if (all_eliminated) {
+        unique_ptr<KernelIR> kernel(new KernelIR());
+        auto before = call->to_string();
+        CHECK(!apply_reduce_thread_order(call, kernel, rop, 256));
+        CHECK(call->to_string() == before);
+    } else {
+        call->push_back("int thread_num=1024;");
+        call->push_back("thread_num=1<<tn0;");
+        call->push_back("int p1=1;");
+        call->push_back("int p2=256;");
+        unique_ptr<KernelIR> kernel(new KernelIR());
+        kernel->push_back("int tnum0=1;");
+        kernel->push_back("int tid0=0;");
+        kernel->push_back("int tnum1=1;");
+        kernel->push_back("int tid1=0;");
+        CHECK(apply_reduce_thread_order(call, kernel, rop, 256));
+        CHECK(call->find_define("p2")->get_attr(kir::rvalue) ==
+            "std::min(1 << ((tn1-0)), 256)");
+        CHECK(kernel->find_define("tid1")->get_attr(kir::rvalue) ==
+            "(thread_id>>(0)) & (tnum1-1)");
+    }
+    vector<int> out{std::get<0>(result)};
+    for (auto i : std::get<1>(result)) out.push_back(i);
+    return out;
+}
+}''', jt.compiler.cc_flags)
+        x = jt.array([[1., 2., 3.], [4., 5., 6.]])
+        y = x.sum(1)
+        self.assertEqual(probe.check_plan(y, False), [0, 1, 0])
+        self.assertEqual(probe.check_plan(y, True), [-1, 0, 1])
+
+    def test_level4_unit_dimensions(self):
+        with jt.runtime.scope(para_opt_level=4):
+            for i, (shape, dims) in enumerate((
+                ((1,), (0,)),
+                ((1, 17), (0,)),
+                ((3, 1, 5), (1,)),
+                ((2, 1, 7), (0, 1)),
+            )):
+                with self.subTest(shape=shape, dims=dims):
+                    value = np.random.RandomState(7100+i).randn(*shape).astype("float32")
+                    expected = value.sum(axis=dims)
+                    actual = jt.reduce(jt.array(value), "add", dims).numpy()
+                    np.testing.assert_allclose(actual.reshape(expected.shape), expected,
+                                               rtol=1e-5, atol=1e-6)
+
     def test_level_4_uses_one_block_write(self):
         from contextlib import ExitStack as _TestPolicyStack
         with _TestPolicyStack() as _test_policy_stack:

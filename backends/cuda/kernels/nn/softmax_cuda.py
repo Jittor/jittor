@@ -71,6 +71,89 @@ CHECK(0 == cudaGetLastError());
 ''')
 
 
+@lru_cache(maxsize=32)
+def _softmax_warp_fp32_cls(length):
+    """Keep a short FP32 row in one warp with a fixed reduction tree.
+
+    Accumulate strided columns per lane, then combine descending XOR partners.
+    Unlike a block-wide reduction, this retains the same rounded FP32 values
+    when the probabilities subsequently cross a low-precision cast boundary.
+    """
+    iterations = (length + 31) // 32
+
+    class WarpSoftmax(jt.Function):
+        def execute(self, x):
+            self.output = jt.code(x.shape, x.dtype, [x], cuda_src=f'''
+__global__ void kernel(const in0_type* x, out0_type* y, int rows) {{
+    int row = blockIdx.x * 4 + threadIdx.y;
+    if (row >= rows) return;
+    int lane = threadIdx.x;
+    float values[{iterations}], maximum = -INFINITY;
+    #pragma unroll
+    for (int i = 0; i < {iterations}; ++i) {{
+        int column = lane + i * 32;
+        values[i] = column < {length} ? x[row * {length} + column] : -INFINITY;
+        maximum = maximum < values[i] ? values[i] : maximum;
+    }}
+    #pragma unroll
+    for (int offset = 16; offset > 0; offset /= 2) {{
+        float other = __shfl_xor_sync(0xffffffff, maximum, offset);
+        maximum = maximum < other ? other : maximum;
+    }}
+    float total = 0.f;
+    #pragma unroll
+    for (int i = 0; i < {iterations}; ++i) {{
+        values[i] = expf(values[i] - maximum);
+        total += values[i];
+    }}
+    #pragma unroll
+    for (int offset = 16; offset > 0; offset /= 2)
+        total += __shfl_xor_sync(0xffffffff, total, offset);
+    #pragma unroll
+    for (int i = 0; i < {iterations}; ++i) {{
+        int column = lane + i * 32;
+        if (column < {length}) y[row * {length} + column] = values[i] / total;
+    }}
+}}
+int rows = in0->numel() / {length};
+kernel<<<(rows + 3) / 4, dim3(32, 4)>>>(in0_p, out0_p, rows);
+CHECK(0 == cudaGetLastError());
+''')
+            return self.output
+
+        def grad(self, grad_output):
+            output = self.output
+            return jt.code(output.shape, output.dtype, [output, grad_output], cuda_src=f'''
+__global__ void kernel(const in0_type* y, const in1_type* g, out0_type* dx, int rows) {{
+    int row = blockIdx.x * 4 + threadIdx.y;
+    if (row >= rows) return;
+    int lane = threadIdx.x;
+    float probabilities[{iterations}], gradients[{iterations}], total = 0.f;
+    #pragma unroll
+    for (int i = 0; i < {iterations}; ++i) {{
+        int column = lane + i * 32;
+        probabilities[i] = column < {length} ? y[row * {length} + column] : 0.f;
+        gradients[i] = column < {length} ? g[row * {length} + column] : 0.f;
+        total += probabilities[i] * gradients[i];
+    }}
+    #pragma unroll
+    for (int offset = 16; offset > 0; offset /= 2)
+        total += __shfl_xor_sync(0xffffffff, total, offset);
+    #pragma unroll
+    for (int i = 0; i < {iterations}; ++i) {{
+        int column = lane + i * 32;
+        if (column < {length})
+            dx[row * {length} + column] = probabilities[i] * (gradients[i] - total);
+    }}
+}}
+int rows = in0->numel() / {length};
+kernel<<<(rows + 3) / 4, dim3(32, 4)>>>(in0_p, in1_p, out0_p, rows);
+CHECK(0 == cudaGetLastError());
+''')
+
+    return WarpSoftmax
+
+
 @lru_cache(maxsize=256)
 def _softmax_v1_cls(length, log=False, zero_all_neg_inf=False):
     # The generated Function class and CUDA source depend only on the reduced
@@ -287,6 +370,9 @@ CHECK(0 == cudaGetLastError());
                  supports=_supports_softmax)
 def _softmax_v1(a, log=False, zero_all_neg_inf=False, dim=-1):
     length = int(a.shape[-1])
+    from jittor._core.dtypes import dtype_name
+    if length <= 1024 and not log and not zero_all_neg_inf and dtype_name(a.dtype) == "float32":
+        return _softmax_warp_fp32_cls(length)()(a)
     kind, threads = _softmax_schedule(length)
     cls = (_softmax_v1_cls(length, bool(log), bool(zero_all_neg_inf))
            if kind == "register" else

@@ -146,6 +146,9 @@ BACKEND_GRAD_COVERAGE = (
     ("backends/cuda/kernels/nn/softmax_cuda.py", "CodeSoftmaxStreaming",
      "tests/backends/cuda/test_softmax_cuda_grad.py::TestSoftmaxCudaGrad::test_every_schedule_matches_an_exact_float64_reference",
      "cuda_exact_and_cpu"),
+    ("backends/cuda/kernels/nn/softmax_cuda.py", "WarpSoftmax",
+     "tests/backends/cuda/test_softmax_cuda_grad.py::TestSoftmaxCudaGrad::test_short_fp32_rows_forward_and_backward",
+     "cuda_numpy"),
 
     # ---- CPU oneDNN. Runs everywhere. -------------------------------------
     ("backends/cpu/libraries/mkl/mkl_batched_matmul_op.cc",

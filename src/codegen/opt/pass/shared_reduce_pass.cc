@@ -130,8 +130,7 @@ typedef map<int, vector<int>> tn_range_map;
 //
 // Returns (position of the last reduced range in the new order, the new order,
 // the tn -> dims map). The position is -1 when no range is reduced, which the
-// caller does not currently handle; SharedReducePass only reaches here for a
-// kernel that contains a reduce op, so at least one range is reduced.
+// caller leaves the kernel unchanged when all reduced loops were eliminated.
 std::tuple<int, vector<int>, tn_range_map> plan_reduce_thread_order(unique_ptr<KernelIR>& call, ReduceOp* rop) {
     vector<int> tns;
     tn_range_map tn_ranges;
@@ -159,6 +158,13 @@ std::tuple<int, vector<int>, tn_range_map> plan_reduce_thread_order(unique_ptr<K
     for (uint i = 0; i < tns.size(); ++i) {
         auto is_reduce_dim = [&](int d) -> bool { return (1 << d) & reduce_mask; };
         int tn = tns[i];
+        // ParallelPass emits a constant 1 for an eliminated/unit loop. It
+        // consumes no dimension bits, so it is neutral rather than a reduced
+        // range. In particular, there is no dims[0] to inspect here.
+        if (tn_ranges[tn].empty()) {
+            other_tns.push_back(tn);
+            continue;
+        }
         // a thread range may not mix reduced and non-reduced dimensions
         for (uint j = 1; j < tn_ranges[tn].size(); ++j)
             ASSERT(is_reduce_dim(tn_ranges[tn][j]) == is_reduce_dim(tn_ranges[tn][0]));
@@ -177,11 +183,11 @@ std::tuple<int, vector<int>, tn_range_map> plan_reduce_thread_order(unique_ptr<K
 // width at one CUDA block. ParallelPass may insert balancing branches between
 // its tn definitions, so this pass must update named definitions rather than
 // assuming those nodes are contiguous.
-void apply_reduce_thread_order(unique_ptr<KernelIR>& call, unique_ptr<KernelIR>& kernel, ReduceOp* rop, int block_width) {
+bool apply_reduce_thread_order(unique_ptr<KernelIR>& call, unique_ptr<KernelIR>& kernel, ReduceOp* rop, int block_width) {
     auto plan = plan_reduce_thread_order(call, rop);
     int last_reduce = std::get<0>(plan);
     auto order = std::get<1>(plan);
-    ASSERT(last_reduce >= 0);
+    if (last_reduce < 0) return false;
     int ndim = order.size();
     for (int d = 0; d < ndim; ++d)
         ASSERT(std::find(order.begin(), order.end(), d) != order.end());
@@ -242,6 +248,7 @@ void apply_reduce_thread_order(unique_ptr<KernelIR>& call, unique_ptr<KernelIR>&
         "std::max(thread_num / std::min(1 << (" + reduce_bits + "), " + S(block_width) + "), 1)";
     call->find_define("p2")->attrs[kir::rvalue] =
         "std::min(1 << (" + reduce_bits + "), " + S(block_width) + ")";
+    return true;
 }
 
 extern int para_opt_level;
@@ -277,8 +284,8 @@ void SharedReducePass::run() {
         auto& kernel = ir->before[found.second];
         int reduce_op_id = find_reduce_op_id(kernel, op);
         if (reduce_op_id < 0) continue;
-        apply_reduce_thread_order(call, kernel, dynamic_cast<ReduceOp*>(op->ops[reduce_op_id]),
-                                  cuda_block_width(op));
+        if (!apply_reduce_thread_order(call, kernel, dynamic_cast<ReduceOp*>(op->ops[reduce_op_id]),
+                                       cuda_block_width(op))) continue;
         rewrite_atomics_to_shared_reduce(kernel);
     }
 }

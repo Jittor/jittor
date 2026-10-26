@@ -130,6 +130,40 @@ class TestSoftmaxCudaGrad(unittest.TestCase):
             grad = jt.grad((y * jt.array(cot_np)).sum(), x)
             return jt.fetch_sync([y, grad])
 
+    def test_short_fp32_rows_forward_and_backward(self):
+        # Include partial warps, strided per-lane accumulation, and both sides
+        # of the public short-row provider boundary. Odd row counts exercise
+        # the final partial block as well.
+        rng = np.random.RandomState(821)
+        for length in (1, 7, 31, 32, 33, 96, 127, 128, 129, 511, 1024, 1025):
+            x = rng.normal(size=(3, length)).astype("float32")
+            cotangent = rng.normal(size=x.shape).astype("float32")
+            expected, grad_expected = _exact(x, cotangent, False)
+            forward, gradient = self._cuda(x, cotangent, False)
+            np.testing.assert_allclose(forward, expected, atol=1e-7, rtol=2e-6)
+            np.testing.assert_allclose(gradient, grad_expected, atol=2e-7, rtol=3e-6)
+
+    def test_short_fp32_rows_match_independent_cuda_torch(self):
+        from _helpers.torch_runtime import import_torch_modules, modules_available
+        if not modules_available("torch"):
+            self.skipTest("No independent Torch found")
+        torch, = import_torch_modules("torch")
+        rng = np.random.RandomState(821)
+        for length in (7, 32, 33, 96, 128, 129, 511, 1024):
+            raw = rng.normal(size=(3, length)).astype("float32")
+            cotangent = rng.normal(size=raw.shape).astype("float32")
+            value = torch.tensor(raw, device="cuda:0", requires_grad=True)
+            expected = torch.softmax(value, dim=-1)
+            expected_gradient, = torch.autograd.grad(
+                (expected * torch.tensor(cotangent, device="cuda:0")).sum(), value)
+            # Exact oracle parity is the strict-math contract used by the
+            # BF16 model gate; default fast math remains a separate policy.
+            with jt.flag_scope(cuda_kernel_math="strict"):
+                forward, gradient = self._cuda(raw, cotangent, False)
+            np.testing.assert_array_equal(forward, expected.detach().cpu().numpy())
+            np.testing.assert_allclose(gradient, expected_gradient.cpu().numpy(),
+                                       atol=2e-7, rtol=3e-6)
+
     def test_every_schedule_matches_an_exact_float64_reference(self):
         rng = np.random.RandomState(20260907)
         for length, kind, route in CASES:
