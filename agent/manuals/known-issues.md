@@ -1873,3 +1873,28 @@ PY
 ```
 
 
+
+## KI-CODEGEN-006: a rank-1 full sum still materializes a pending reshaped producer
+
+- Severity: Medium (allocation and performance; values are correct)
+- Status: Open; reproduced 2026-10-26 on current `2.0-refactor` (real CUDA,
+  RTX 4090). The multi-dimensional spelling was fixed by `c56b4c2bc` and is
+  pinned by `tests/backends/cuda/test_full_reduce.py`.
+- Owner: CUDA reduction and codegen maintainers.
+- Symptom: `(jt.ones((1,)).expand(1 << 24) * 2).sum()` allocates 68,157,440
+  bytes cold because the two-stage CUB path materializes the multiply. The 2-D
+  `(4096,1).expand(4096,4096)` spelling allocates 1 MiB.
+- Cause: the rank-1 route needs a reshape/view above the pending producer;
+  `ReshapeOp` is `OpType::other` and `edge_fusable` refuses it, so the fused
+  route stops at that barrier. The only non-materializing alternative measured
+  is a single-block `use_shared_reduce=2` fold at ~3.8 GB/s versus ~757 GB/s
+  CUB (131 ms vs 0.66 ms at 512 MB); the atomic generated reduce is
+  nondeterministic (15 distinct values in 20 runs).
+- Workaround: reduce an explicit axis or materialize the producer when the
+  allocation matters.
+- Evidence: unversioned probe/logs under
+  `$JITTOR_LAB_ROOT/_state/fix-codegen5/`; the multi-dimensional allocation
+  gate is `tests/backends/cuda/test_full_reduce.py`.
+- Exit condition: codegen fuses through the reshape above a pending producer
+  deterministically and near CUB throughput, or a justified deterministic
+  strategy is selected; the rank-1 allocation gate passes.
