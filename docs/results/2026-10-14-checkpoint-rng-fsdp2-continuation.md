@@ -1,118 +1,94 @@
-# Native RNG restoration and FSDP2 FULL checkpoint continuation
+# Native RNG 恢复与 FSDP2 FULL checkpoint 续跑
 
-Status: CPU and CUDA single-process Accelerate RNG and numerical continuation
-verified; two-rank CUDA FSDP2 FULL model/optimizer continuation verified against
-independent PyTorch. Sharded distributed-checkpoint I/O and ACL remain unverified.
-This report supersedes the RNG and multi-rank limitations in the earlier
-[optimizer checkpoint report](2026-10-14-optimizer-checkpoint-continuation.md).
+Status: CPU 与 CUDA 单进程 Accelerate RNG 与数值续跑已验证；双 rank CUDA FSDP2 FULL
+模型/优化器续跑已对照独立 PyTorch 验证。分片分布式 checkpoint I/O 与 ACL 仍未验证。
+本报告取代此前[优化器 checkpoint 报告](2026-10-14-optimizer-checkpoint-continuation.md)
+中的 RNG 与多 rank 限制。
 
-Baseline: `7602f9040c1d63a61209bc50a575cb440c787d57`, integrating the first checkpoint
-implementation `1da40ecc0` and fetched `origin/2.0-refactor` commit `7ed9b3b52`.
-Implementation: the follow-up commit containing this report.
-Maintainer: Jittor compatibility maintainers.
-Review when: native RNG snapshot formats, Torch RNG owners, checkpoint FQN or
-rank-zero transforms, FSDP shard replacement, or downstream versions change.
+Baseline: `7602f9040c1d63a61209bc50a575cb440c787d57`，整合第一个 checkpoint 实现
+`1da40ecc0` 与拉取的 `origin/2.0-refactor` 提交 `7ed9b3b52`。
+实现：包含本报告的后续提交。维护者：Jittor 兼容性维护者。
+复查条件：native RNG 快照格式、Torch RNG owner、checkpoint FQN 或 rank-zero 变换、
+FSDP shard 替换或下游版本发生变化。
 
-## Verified failures and changes
+## 已验证的失败与修改
 
-A real `Accelerator.save_state`/`load_state` probe initially restored Python and
-NumPy streams but rewound the Torch CPU stream to its seed. The frontend now
-encodes the existing native CPU generator snapshot as a CPU `uint8` tensor and
-restores that complete snapshot through the native owner. This preserves the
-advanced stream position and does not reseed CUDA. Native CUDA already provides
-cuRAND seed/offset snapshots and required no change. Invalid byte payloads and
-legacy seed-only integer tensors fail explicitly; an invalid restore leaves the
-current stream position intact. Snapshot bytes are opaque and are not portable
-between native Jittor and PyTorch generators.
+一个真实的 `Accelerator.save_state`/`load_state` 探针最初恢复了 Python 与 NumPy
+流，却把 Torch CPU 流倒回其种子。前端现在把现有 native CPU generator 快照编码为
+CPU `uint8` tensor，并通过 native owner 恢复该完整快照。这保留了已推进的流位置，
+且不会重设 CUDA 种子。Native CUDA 已提供 cuRAND seed/offset 快照，无需修改。
+非法字节载荷与仅含种子的旧版整数 tensor 会明确失败；非法恢复会保持当前流位置不变。
+快照字节是不透明的，不能在 native Jittor 与 PyTorch generator 之间移植。
 
-The existing advanced-prefix `torch.random.fork_rng` regression now passes
-without an expected-failure marker. CPU RNG tests explicitly select the host
-backend even in a CUDA process. The actual Accelerate regression checks Python,
-NumPy, Torch CPU, and the selected device's next random values after restoration,
-then checks the resumed model, moments, steps, gradients, scheduler and loss.
-This is a fixed-input training case with separate stream-continuation assertions;
-it does not cover shuffled dataloader or arbitrary custom-object restoration.
+已有的 advanced-prefix `torch.random.fork_rng` 回归现在无需 expected-failure
+标记即可通过。CPU RNG 测试即使在 CUDA 进程中也会显式选择 host 后端。实际的
+Accelerate 回归在恢复后检查 Python、NumPy、Torch CPU 以及所选设备的下一批随机值，
+然后检查续跑后的模型、moment、step、梯度、scheduler 与 loss。这是固定输入的
+训练用例，带有独立的流续跑断言；它不覆盖打乱的 dataloader 或任意自定义对象恢复。
 
-The actual two-rank FULL save/load case exposed three additional boundaries:
+实际的双 rank FULL 保存/加载用例暴露了三个额外边界：
 
-1. Accelerate imports `checkpoint.default_planner` even for FULL files. Both
-   planner names are now importable, registered as `UNIMPLEMENTED`, and their
-   constructors unconditionally raise `NotImplementedError`. The FULL path uses
-   ordinary `torch.save`/`torch.load`; this does not implement sharded planning.
-2. A nonzero rank discarded lazy FULL gathers before rank-zero serialization,
-   while advancing to the optimizer metadata collective. Both ranks hung at
-   different NCCL operations. Host-offloaded tensors now materialize before any
-   rank discards its FULL result. The retained timeout traces identify rank zero
-   inside serialization's `sync_all` and rank one inside metadata all-gather.
-3. FULL model loading refreshes flat shard views. Optimizer loading now uses the
-   existing FSDP parameter-refresh owner before resolving FQNs, preserving live
-   optimizer ownership after shard replacement. No update mathematics changed.
+1. 即使对 FULL 文件，Accelerate 也会导入 `checkpoint.default_planner`。两个 planner
+   名字现在都可导入、注册为 `UNIMPLEMENTED`，且其构造函数无条件抛出
+   `NotImplementedError`。FULL 路径使用普通 `torch.save`/`torch.load`；这不实现分片规划。
+2. 一个非零 rank 在 rank-zero 序列化前丢弃了惰性 FULL gather，同时推进到 optimizer
+   元数据集合通信。两个 rank 在不同的 NCCL 操作处挂起。现在 host 卸载的 tensor 会在
+   任何 rank 丢弃其 FULL 结果之前物化。保留的超时 trace 识别出 rank zero 位于序列化的
+   `sync_all` 内，rank one 位于元数据 all-gather 内。
+3. FULL 模型加载会刷新 flat shard 视图。优化器加载现在在解析 FQN 之前使用现有的
+   FSDP 参数刷新 owner，在 shard 替换后保留活优化器所有权。没有更新数学变化。
 
-## Runtime and numerical evidence
+## 运行与数值证据
 
-Both runtimes used Accelerate 1.10.1, offline deterministic weights and inputs.
-The independent oracle was binary PyTorch 2.11.0+cu128, with shim identity absent
-and Jittor unloaded. Missing environment packages were supplied in external
-isolated overlays; shared environments were not modified. CPU and CUDA used
-separate caches, with initial native/NCCL compilation completed before two-rank
-execution. Checkpoint numerical acceptance cases forbade backend fallback and
-observed no count change.
+两个运行时都使用 Accelerate 1.10.1、离线确定性权重与输入。独立 oracle 为二进制
+PyTorch 2.11.0+cu128，shim 身份不存在且 Jittor 未加载。缺失的环境包在外置隔离
+overlay 中提供；共享环境未被修改。CPU 与 CUDA 使用独立缓存，初始 native/NCCL
+编译在双 rank 执行前完成。Checkpoint 数值验收用例禁止后端回退，未观察到计数变化。
 
-| Verification | Result |
+| 验证 | 结果 |
 | --- | --- |
-| Identical single-process checkpoint cases, CPU | PyTorch 7/7; shim 7/7 |
-| Identical single-process checkpoint cases, CUDA | PyTorch 7/7; shim 7/7 |
-| Combined CPU serialization/FSDP ownership/RNG/checkpoint regressions | 79 passed, 2 accelerator skips |
-| CUDA RNG/checkpoint/planner regressions | 24 passed, no skips |
-| Torch compatibility files from the `core` whitelist | 224 passed, 1 accelerator skip |
-| Two-rank FSDP2 FULL Accelerate save/load | Both runtimes, both ranks passed |
-| Maximum absolute single-process error, CPU / CUDA | 1.49e-8 / 3.73e-9 |
-| Maximum absolute FULL checkpoint error, either rank | 1.87e-9 |
+| 相同的单进程 checkpoint 用例，CPU | PyTorch 7/7；shim 7/7 |
+| 相同的单进程 checkpoint 用例，CUDA | PyTorch 7/7；shim 7/7 |
+| 合并的 CPU 序列化/FSDP 所有权/RNG/checkpoint 回归 | 79 passed，2 个加速器 skip |
+| CUDA RNG/checkpoint/planner 回归 | 24 passed，无 skip |
+| 来自 `core` 白名单的 Torch 兼容文件 | 224 passed，1 个加速器 skip |
+| 双 rank FSDP2 FULL Accelerate 保存/加载 | 两个运行时、两个 rank 均通过 |
+| 单进程最大绝对误差，CPU / CUDA | 1.49e-8 / 3.73e-9 |
+| FULL checkpoint 最大绝对误差，任一 rank | 1.87e-9 |
 
-Cross-runtime comparisons include every saved/restored/resumed model tensor,
-optimizer moment and step, learning rate and resumed loss. Single-process
-comparisons additionally include all parameter gradients and input gradients.
-Tolerance was `atol=2e-6, rtol=2e-5`. PyTorch's additional AdamW group field
-`decoupled_weight_decay=True` was verified explicitly and excluded from shared
-metadata equality; all remaining metadata keys were compared. Generator algorithms
-and opaque RNG bytes were not compared between frameworks: each runtime must
-exactly reproduce its own next values after restoring its own checkpoint.
+跨运行时比较包含每个保存/恢复/续跑的模型 tensor、优化器 moment 与 step、学习率与
+续跑 loss。单进程比较另包含所有参数梯度与输入梯度。容差为 `atol=2e-6, rtol=2e-5`。
+PyTorch 额外的 AdamW group 字段 `decoupled_weight_decay=True` 已显式验证并从共享
+元数据相等性中排除；其余所有元数据键均比较。Generator 算法与不透明 RNG 字节未在
+框架之间比较：每个运行时必须在恢复自己的 checkpoint 后精确复现自己的下一批值。
 
-The two-rank case wrote actual `pytorch_model_fsdp.bin`, `optimizer.bin`, and two
-per-rank `random_states_*.pkl` files. Reports confirm two NCCL ranks, real CUDA
-parameter devices, nonzero storage pointers and shim/oracle identity. The FSDP2
-case checks fixed-input numerical continuation; the detailed RNG assertions run
-in the single-process CPU and CUDA cases.
+双 rank 用例写入了实际的 `pytorch_model_fsdp.bin`、`optimizer.bin` 以及两个每 rank
+的 `random_states_*.pkl` 文件。报告确认两个 NCCL rank、真实 CUDA 参数设备、非零
+storage 指针以及 shim/oracle 身份。FSDP2 用例检查固定输入数值续跑；详细的 RNG 断言
+在单进程 CPU 与 CUDA 用例中运行。
 
-The required repository layout check passed. The full `tests/structure` run
-completed with 1,426 passed, four skipped and four failed: unavailable ASV in the
-isolated environment, the existing ACL Dropout gradient-manifest mismatch,
-unregistered report toctree entries, and the generated packaging manifest. The
-last two require the integration owner's shared index/manifest update; those
-files were explicitly outside this worktree's edit ownership. Raw output is
-`logs/followup-structure.log`. This is not an all-green structure claim.
+必需的仓库布局检查通过。完整 `tests/structure` 运行完成，1426 passed、4 skipped、
+4 failed：隔离环境中 ASV 不可用、既有 ACL Dropout 梯度清单不一致、未登记的报告
+toctree 条目，以及生成的打包 manifest。后两项需要集成 owner 更新共享 index/manifest；
+这些文件明确不在本工作树的编辑所有权内。原始输出为 `logs/followup-structure.log`。
+这不是全绿结构声明。
 
-## Reproduction and evidence boundaries
+## 复现与证据边界
 
-Integration recheck on 2026-10-15 started from synchronized main-tree baseline
-`ad47b58143f5c54e83114f923e23c0c69322130a`. The complete native-plus-Torch CPU
-`core` runner passed with 322 passed, 42 skipped and one existing expected failure.
-The combined real-CUDA AMP/RNG/checkpoint selection passed all 127 cases without
-skips. The complete structure selection passed with 1,432 passed, six skipped
-and no failures after updating the shared report index, packaging manifest and
-CodeOp-gradient inventory. Two structure skips concern distribution resolution
-in this source-only interpreter; the others are declared or accelerator
-capability skips. Repository layout and whitespace checks passed. This recheck
-supersedes the worktree structure failures above and does not add ACL or sharded
-checkpoint acceptance. Unversioned integration logs are under
-`$JITTOR_LAB_ROOT/_state/refactor-goal/distributed/logs/`, named
-`amp-rng-integration-core.log`, `amp-rng-integration-cuda.log` and
-`amp-rng-integration-structure.log`.
+2026-10-15 的整合复验从同步后的主树基线 `ad47b58143f5c54e83114f923e23c0c69322130a`
+开始。完整的 native 加 Torch CPU `core` runner 通过，322 passed、42 skipped 和一个
+既有预期失败。合并的真实 CUDA AMP/RNG/checkpoint 选择全部 127 个用例通过，无 skip。
+在更新共享报告索引、打包 manifest 与 CodeOp 梯度清单后，完整结构选择通过，
+1432 passed、6 skipped、无失败。两个结构 skip 涉及此仅源码解释器中的 distribution
+解析；其余为声明或加速器能力 skip。仓库布局与空白检查通过。本次复验取代上面的工作树
+结构失败，且不增加 ACL 或分片 checkpoint 验收。未版本化整合日志位于
+`$JITTOR_LAB_ROOT/_state/refactor-goal/distributed/logs/`，名为
+`amp-rng-integration-core.log`、`amp-rng-integration-cuda.log` 与
+`amp-rng-integration-structure.log`。
 
-Use independent, version-matched environments with the shim deployed only in its
-own interpreter. Run these selections on CPU, then CUDA, setting
-`CHECKPOINT_DEVICE` for the checkpoint test and explicitly selecting the matching
-native backend. Set `JITTOR_REQUIRE_ACCELERATE=1` to refuse a missing dependency:
+使用独立的、版本匹配的环境，shim 只部署在其自己的解释器中。先在 CPU、再在 CUDA 上
+运行这些选择，为 checkpoint 测试设置 `CHECKPOINT_DEVICE` 并显式选择匹配的 native
+后端。设置 `JITTOR_REQUIRE_ACCELERATE=1` 以拒绝缺失依赖：
 
 ```bash
 python compat/tests/torch/test_optimizer_checkpoint_state.py -v
@@ -123,10 +99,9 @@ JITTOR_TORCH_SHIM=1 python -m pytest -q --rootdir=. \
   compat/tests/torch/test_optimizer_checkpoint_state.py
 ```
 
-For two-rank shim execution, enable the installed NCCL backend and use the native
-launcher with two allocated devices. A first compilation must finish serially.
-Set `JITTOR_ACCELERATE_DISTRIBUTED_REQUIRED=1`, `ACCELERATE_USE_FSDP=true`, and
-`FSDP_VERSION=2`, then execute:
+双 rank shim 执行时，启用已安装的 NCCL 后端并使用分配两张卡的 native launcher。
+首次编译必须串行完成。设置 `JITTOR_ACCELERATE_DISTRIBUTED_REQUIRED=1`、
+`ACCELERATE_USE_FSDP=true`、`FSDP_VERSION=2`，然后执行：
 
 ```bash
 python python/jittor/distributed/launch.py -n 2 --backend nccl --standalone \
@@ -135,17 +110,13 @@ python python/jittor/distributed/launch.py -n 2 --backend nccl --standalone \
   compat/tests/torch/test_accelerate_distributed_integration.py::test_fsdp2_full_model_optimizer_checkpoint_resume
 ```
 
-Run that identical case with independent PyTorch's two-process launcher. The
-oracle run used a byte-identical external copy of the test, without repository
-conftest installation hooks, and asserted `torch_compat_active=False` and
-`jittor_loaded=False` in each report. This avoids converting the oracle into a
-shim through test collection.
+用独立 PyTorch 的双进程 launcher 运行同一用例。oracle 运行使用了测试的字节一致外置
+副本，不含仓库 conftest 安装钩子，并在每份报告中断言 `torch_compat_active=False` 与
+`jittor_loaded=False`。这避免了通过测试收集把 oracle 变成 shim。
 
-Raw logs, JSON reports, the failed pre-fix RNG probe, both-rank timeout traces,
-and strict numerical-comparison script remain outside the repository under
-`$JITTOR_LAB_ROOT/_state/checkpoint-optimizer/`. Relevant logs are
-`logs/rng-cpu-targeted.log`, `logs/rng-cuda-targeted.log`,
-`logs/followup-targeted.log`, `logs/core-torch.log`, `logs/fsdp-reference.log`,
-`logs/fsdp-shim-refresh.log`, `logs/numeric-comparison.log`, and the corresponding
-per-rank log directories. The `core` result is the Torch compatibility whitelist
-selection, rather than a claim that the complete native-plus-Torch runner ran.
+原始日志、JSON 报告、修复前失败的 RNG 探针、双 rank 超时 trace 以及严格数值比较脚本
+保留在仓库外的 `$JITTOR_LAB_ROOT/_state/checkpoint-optimizer/` 下。相关日志为
+`logs/rng-cpu-targeted.log`、`logs/rng-cuda-targeted.log`、`logs/followup-targeted.log`、
+`logs/core-torch.log`、`logs/fsdp-reference.log`、`logs/fsdp-shim-refresh.log`、
+`logs/numeric-comparison.log` 以及对应的每 rank 日志目录。`core` 结果是 Torch 兼容
+白名单选择，而非声称完整 native 加 Torch runner 已运行。

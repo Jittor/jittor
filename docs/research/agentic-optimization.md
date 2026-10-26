@@ -1,68 +1,54 @@
-# Agent-Operable Framework Optimization
+# Agent 可操作的框架优化
 
-- Status: Research proposal; not implemented
-- Last reviewed: 2026-10-05
-- Baseline: `e3c369acb`
-- Owner: compiler and performance maintainers
-- Review after: the first read-only prototype or any proposal to enable automatic
-  source/configuration changes
+- 状态：研究提案；尚未实现
+- 上次复查：2026-10-05
+- 基线：`e3c369acb`
+- Owner：编译器与性能维护者
+- 复查触发：第一个只读原型完成时，或出现任何允许自动修改源码/配置的提案时
 
-## Problem
+## 问题
 
-Jittor already compiles and tunes operations at runtime, but optimization work is
-difficult for an automated agent to perform safely. Relevant decisions are
-spread across logs, generated source, tuner state, cache directories, profiler
-output, and backend-specific flags. The information is mostly human-readable,
-not stable enough to compare across revisions, and often mixed with mutable
-runtime state.
+Jittor 已经在运行时编译并调优算子，但让自动化 Agent 安全地完成优化工作很困难。
+相关决策分散在日志、生成的源码、调优器状态、缓存目录、profiler 输出和后端专用
+flag 中。这些信息大多是供人阅读的，稳定不到可以跨修订比较的程度，而且常常与可变的
+运行时状态混在一起。
 
-The goal is to expose a narrow, versioned control and observation surface so an
-agent can form a hypothesis, run a bounded experiment, compare evidence, and
-produce a reviewable patch or tuning recommendation. The agent must not become
-an unrestricted runtime autotuner or silently change user execution.
+目标是暴露一个狭窄的、带版本的控制与观测面，让 Agent 能提出假设、运行有界实验、
+比较证据，并产出可评审的 patch 或调优建议。Agent 绝不能变成不受限制的运行时自动
+调优器，也不能静默改变用户执行。
 
-## Scope
+## 范围
 
-The proposal covers framework-internal optimization of operator fusion, generated
-kernel choices, launch configuration, memory planning, and reusable backend
-paths. It does not cover model architecture search, training-data decisions,
-unreviewed package installation, or production changes made without tests and a
-human-reviewed diff.
+本提案覆盖框架内部的优化：算子融合、生成内核的选择、发射配置、内存规划，以及可
+复用的后端路径。不覆盖模型架构搜索、训练数据决策、未经评审的软件包安装，以及没有
+测试和人工评审 diff 的生产变更。
 
-## Existing building blocks
+## 现有构件
 
-Parts of the observation side already exist as ordinary, supported APIs, and a
-prototype should build on them rather than add a parallel channel:
+观测面的一部分已经作为常规、受支持的 API 存在，原型应当建立在它们之上，而不是另建
+一条并行通道：
 
-- [`jt.introspection`](../notes/runtime-introspection.md) reports capabilities,
-  effective startup/runtime policy, executor and allocator counters, and launch
-  history without submitting work or mutating state;
-- the [profiling tools](../notes/profiling.md) attribute step time and memory to
-  host and device work.
+- [`jt.introspection`](../notes/runtime-introspection.md) 报告能力、生效的启动/运行时
+  策略、执行器与分配器计数器，以及发射历史，且不提交工作、不改变状态；
+- [性能分析工具](../notes/profiling.md) 把 step 时间与内存归因到主机和设备工作。
 
-Nothing below the observation layer -- the capture schema, the replay runner,
-the control manifest -- is implemented.
+观测层以下的东西——捕获 schema、重放 runner、控制 manifest——都还没有实现。
 
-## Design principles
+## 设计原则
 
-1. **Read-only first.** Observation and replay land before any mutation API.
-2. **Every claim is replayable.** An experiment identifies the source commit,
-   environment fingerprint, workload, cache state, commands, and metrics.
-3. **Bounded control.** A mutation declares the exact parameters or source region
-   it may change, with a timeout and resource budget.
-4. **Correctness dominates speed.** Candidate output, gradients, errors, and
-   backend placement pass before performance is compared.
-5. **No hidden fallback.** Reports state which implementation and device actually
-   executed.
-6. **Reviewable artifacts.** Source patches remain ordinary diffs; tuning data is
-   structured, small, and tied to a schema version.
-7. **Isolation by construction.** Baseline and candidate runs use separate state
-   and JIT caches.
+1. **只读优先。** 观测与重放在任何修改 API 之前落地。
+2. **每个结论都可重放。** 实验要标识源码提交、环境指纹、工作负载、缓存状态、命令和
+   指标。
+3. **有界控制。** 修改必须声明它可能改动的确切参数或源码区域，并带超时和资源预算。
+4. **正确性优先于速度。** 候选的输出、梯度、错误和后端落点先通过，再比较性能。
+5. **没有隐藏回退。** 报告说明实际执行的是哪个实现、哪个设备。
+6. **产物可评审。** 源码 patch 保持为普通 diff；调优数据是结构化的、小的，并绑定
+   schema 版本。
+7. **构造上隔离。** 基线与候选运行使用独立的状态和 JIT 缓存。
 
-## Observation surface
+## 观测面
 
-A read-only command should emit one JSON document per workload. The first schema
-should include:
+一个只读命令应当为每个工作负载输出一份 JSON 文档。第一版 schema 应包含：
 
 ```json
 {
@@ -95,104 +81,84 @@ should include:
 }
 ```
 
-Paths stored in the document are repository-relative or artifact-relative.
-Secrets, user home directories, host addresses, and raw environment dumps are
-excluded. Generated source may be stored as a content-addressed external
-artifact; the repository records only its hash and a small reviewed excerpt when
-needed.
+文档中保存的路径是相对仓库或相对产物的。密钥、用户主目录、主机地址和原始环境转储
+一律排除。生成的源码可以存为按内容寻址的外部产物；仓库只记录它的哈希，必要时附一
+小段经过评审的摘录。
 
-## Control surface
+## 控制面
 
-After the observation schema is stable, a local experiment manifest may permit a
-small allowlisted set of controls:
+观测 schema 稳定之后，一份本地实验 manifest 可以允许一小批白名单内的控制项：
 
-- compiler/tuner flags with declared type and valid range;
-- fusion on/off or one named fusion-policy candidate;
-- launch dimensions and tile sizes within backend limits;
-- selection among registered implementation variants;
-- one repository patch supplied as a normal diff.
+- 带声明类型和有效范围的编译器/调优器 flag；
+- 融合开/关，或一个具名的融合策略候选；
+- 后端限制内的发射维度和 tile 尺寸；
+- 在已注册的实现变体之间选择；
+- 一个以普通 diff 形式提供的仓库 patch。
 
-The runner rejects unknown keys, absolute output paths, commands outside an
-allowlist, shared baseline/candidate caches, network access, and workloads with
-no correctness oracle. It records the resolved controls rather than only the
-requested values.
+runner 会拒绝未知键、绝对输出路径、白名单之外的命令、基线与候选共享的缓存、网络
+访问，以及没有正确性 oracle 的工作负载。它记录解析后的控制项，而不只是请求的值。
 
-The control API must not expose arbitrary Python evaluation, shell fragments,
-or unrestricted compiler flags. Source-editing agents already produce reviewable
-Git patches; embedding another code execution channel in the optimizer would add
-risk without useful capability.
+控制 API 不得暴露任意 Python 求值、shell 片段或不受限制的编译器 flag。改源码的
+Agent 本来就产出可评审的 Git patch；在优化器里再嵌一条代码执行通道，只会增加风险，
+不会带来有用的能力。
 
-## Experiment loop
+## 实验循环
 
 ```text
 capture baseline -> propose one hypothesis -> validate candidate correctness
        -> warm up -> measure repeated samples -> compare -> retain or reject
 ```
 
-Each experiment changes one coherent factor. Baseline and candidate use the same
-inputs, precision policy, synchronization, compiler toolchain, device, and
-measurement method. Results include dispersion and sample count, not only the
-best run. A candidate is rejected when correctness fails, the requested path did
-not execute, compilation cost grows outside budget, or the improvement is below
-the predeclared noise threshold.
+每个实验只改变一个连贯的因素。基线与候选使用相同的输入、精度策略、同步方式、编译器
+工具链、设备和测量方法。结果包含离散度和样本数，而不只是最好的一次。正确性失败、
+请求的路径没有执行、编译成本超出预算，或提升低于预先声明的噪声阈值时，候选被拒绝。
 
-## Guardrails
+## 护栏
 
-- Run in a disposable worktree and isolated `$JITTOR_LAB_ROOT/_state/` subtree.
-- Require explicit CPU/accelerator parity and gradient checks for affected
-  differentiable operations.
-- Cap wall time, compilation count, disk use, and generated-source size.
-- Never reuse benchmark caches for unit tests.
-- Treat crashes, timeouts, NaNs, and missing metrics as failures, not zero values.
-- Require a human-reviewed patch before any source or default policy reaches the
-  main branch.
-- Retain a reliable fallback and a runtime identifier for the selected fast path.
+- 在一次性 worktree 和隔离的 `$JITTOR_LAB_ROOT/_state/` 子树中运行。
+- 对受影响的可微算子，要求显式的 CPU/加速器一致性与梯度检查。
+- 限制墙钟时间、编译次数、磁盘占用和生成源码的大小。
+- 绝不让单元测试复用 benchmark 缓存。
+- 把崩溃、超时、NaN 和缺失指标当作失败，而不是零值。
+- 任何源码或默认策略进入主分支之前，都需要人工评审过的 patch。
+- 保留可靠的 fallback，以及所选快路径的运行时标识。
 
-## Staged implementation
+## 分阶段实现
 
-### Phase 0: schema and capture
+### 阶段 0：schema 与捕获
 
-Define the JSON schema, stable workload identifiers, environment redaction, and
-a read-only capture command. Validate it on one CPU elementwise operation and one
-CUDA matrix operation without changing compilation decisions.
+定义 JSON schema、稳定的工作负载标识、环境脱敏，以及一个只读的捕获命令。在一个 CPU
+逐元素算子和一个 CUDA 矩阵算子上验证它，且不改变编译决策。
 
-### Phase 1: deterministic replay
+### 阶段 1：确定性重放
 
-Replay a captured workload in isolated cold and warm caches. Prove that operator
-signatures, implementation identifiers, and correctness results are stable
-enough to compare across two worktrees.
+在隔离的冷缓存和暖缓存中重放捕获的工作负载。证明算子签名、实现标识和正确性结果
+足够稳定，可以在两个 worktree 之间比较。
 
-### Phase 2: allowlisted parameter search
+### 阶段 2：白名单参数搜索
 
-Expose one existing tuner parameter family through a typed manifest. Compare a
-small fixed candidate set and produce a report without editing source or changing
-global defaults.
+通过带类型的 manifest 暴露一个现有的调优器参数族。比较一小组固定的候选，并产出一份
+报告，不修改源码、不改变全局默认值。
 
-### Phase 3: patch evaluation
+### 阶段 3：patch 评估
 
-Accept an ordinary Git diff generated outside the runner, build it in a fresh
-worktree, and apply the same correctness/performance gate. The output is a review
-bundle, never an automatic merge.
+接受 runner 之外生成的普通 Git diff，在全新的 worktree 中构建它，并施加同一套
+正确性/性能门禁。输出是评审包，绝不是自动合并。
 
-### Phase 4: policy integration
+### 阶段 4：策略集成
 
-Only after multiple reviewed studies may a winning choice enter a registered
-runtime policy. The policy includes device guards, a fallback, telemetry for path
-selection, and regression benchmarks.
+只有在多项经过评审的研究之后，胜出的选择才可以进入已注册的运行时策略。该策略包含
+设备守卫、fallback、路径选择的遥测，以及回归基准。
 
-## Initial acceptance criteria
+## 初始验收标准
 
-The first prototype is successful when it can, without modifying the source
-checkout:
+第一个原型在不修改源码 checkout 的前提下能做到以下各点时算成功：
 
-- capture a redacted, schema-valid CPU and CUDA workload;
-- replay each workload in isolated caches;
-- prove which implementation ran;
-- fail a deliberately wrong candidate through independent output or gradient
-  checks;
-- compare repeated latency and memory samples with a declared noise threshold;
-- emit a compact report that another maintainer can reproduce from the recorded
-  commit and manifest.
+- 捕获一份脱敏的、符合 schema 的 CPU 与 CUDA 工作负载；
+- 在隔离缓存中重放每个工作负载；
+- 证明实际运行的是哪个实现；
+- 通过独立的输出或梯度检查，让一个故意做错的候选失败；
+- 用预先声明的噪声阈值比较重复的延迟和内存样本；
+- 产出一份紧凑的报告，让另一位维护者能根据记录的提交和 manifest 复现。
 
-No autonomous mutation or merge capability is in scope until these criteria are
-met and the control surface receives a separate architecture review.
+在这些标准满足、且控制面另行通过架构评审之前，任何自主修改或合并能力都不在范围内。

@@ -1,168 +1,139 @@
-# Torch Compatibility Principles
+# Torch 兼容原则
 
-- Status: Accepted
-- Last reviewed: 2026-10-05 (baseline `e3c369acb`)
-- Owner: compatibility and core maintainers
-- Review when: a new compatibility layer, fallback policy, or downstream patch
-  mechanism is proposed
+- 状态：已接受
+- 上次复查：2026-10-05（基线 `e3c369acb`）
+- Owner：兼容与核心维护者
+- 复查触发：提出新的兼容层、回退策略或下游补丁机制
 
-Torch compatibility is a means to run useful workloads with Jittor semantics and
-Jittor devices. It is not permission to copy every Torch namespace into one
-module or to report success while computation has escaped to another runtime.
-How the frontend is built is described in [layered architecture](torch-architecture.md)
-and [Torch lowering](torch-lowering.md); this page is the acceptance rule that
-work is judged by.
+Torch 兼容是让有用的工作负载以 Jittor 语义和 Jittor 设备运行的手段。它不是把每个
+Torch 命名空间都复制进一个模块的许可，也不是在计算已经逃到另一个运行时的情况下报告
+成功的许可。前端如何构建见[分层架构](torch-architecture.md)与
+[Torch 调用下沉](torch-lowering.md)；本页是评判工作的验收规则。
 
-## Goals
+## 目标
 
-Compatibility work must satisfy five gates:
+兼容工作必须满足五道门：
 
-- **G1, semantic correctness:** outputs, dtypes, shapes, errors, gradients, and
-  state transitions match the documented contract for supported inputs.
-- **G2, device execution:** advertised CUDA, ROCm, or NPU operations execute on
-  that backend; host conversion is not an accelerator implementation.
-- **G3, composition:** the API works through the public import path used by real
-  applications, including registration and serialization boundaries.
-- **G4, maintainability:** capability has one owner, failures are observable, and
-  version-specific behavior is isolated.
-- **G5, evidence:** regression tests and, where performance is material,
-  reproducible benchmarks support the claim.
+- **G1，语义正确性：** 对受支持的输入，输出、dtype、形状、错误、梯度与状态转换都
+  与文档化契约一致。
+- **G2，设备执行：** 声称支持的 CUDA、ROCm 或 NPU 算子在该后端上执行；主机转换不算
+  加速器实现。
+- **G3，组合性：** API 通过真实应用使用的公开导入路径工作，包括注册与序列化边界。
+- **G4，可维护性：** 一项能力只有一个 owner，失败可观测，版本特定行为被隔离。
+- **G5，证据：** 回归测试以及（在性能要紧时）可复现的基准支撑结论。
 
-## Ownership decision
+## 归属决策
 
-Use the lowest reusable layer that correctly owns the behavior:
+使用能正确拥有该行为的最低可复用层：
 
-| Behavior | Owner |
+| 行为 | Owner |
 | --- | --- |
-| Tensor semantics, gradients, dtype/device rules | Jittor core or native domain |
-| General neural-network operation | `jittor.nn` |
-| Torch spelling or argument adaptation | `jittor.compat.torch` |
-| Reusable import/build/patch mechanism | `jittor.compat` |
-| Torch shim runtime/deploy and top-level `torch` surface | `jittor.compat.shim` |
-| Triton API bridge | `jittor.compat.triton` |
-| One project's model/version glue | an optional adapter package (`adapters/`) |
+| 张量语义、梯度、dtype/device 规则 | Jittor 核心或原生领域 |
+| 通用神经网络算子 | `jittor.nn` |
+| Torch 拼写或参数适配 | `jittor.compat.torch` |
+| 可复用的导入/构建/补丁机制 | `jittor.compat` |
+| Torch shim 运行时/部署与顶层 `torch` 表面 | `jittor.compat.shim` |
+| Triton API 桥 | `jittor.compat.triton` |
+| 单个项目的模型/版本粘合 | 可选适配器包（`adapters/`） |
 
-If several downstream projects need the same operation, promote the operation to
-the native domain. If they only need the same patching mechanism, promote the
-mechanism while leaving each patch outside core. The triage for a new downstream
-library is in `agent/skills/downstream-library-adaptation/SKILL.md`.
+如果多个下游项目需要同一个算子，就把算子提升到原生领域。如果它们只需要同一套补丁
+机制，就提升该机制，同时把每个补丁留在核心之外。新下游库的分流判据在
+`agent/skills/downstream-library-adaptation/SKILL.md`。
 
-## Activation boundary
+## 激活边界
 
-Plain `import jittor as jt` retains native Jittor contracts and does not publish
-Jittor as the top-level `torch` module. Torch compatibility is activated by an
-explicit `jittor.compat.shim.activate()` call, `JITTOR_TORCH_SHIM=1`, the
-deployed `torch` entry point, or the historical `jittor.torch_compat` import.
-Merely spelling a local alias as `import jittor as torch` does not activate the
-shim. Every activation entry publishes an independent Torch namespace with its
-own Tensor, Parameter, Module and NN types. The native Var/Op graph is shared;
-native Var methods remain unchanged. Use the returned `result["torch"]` or
-import `torch` after activation.
+普通 `import jittor as jt` 保留原生 Jittor 契约，不把 Jittor 发布为顶层 `torch`
+模块。Torch 兼容由显式的 `jittor.compat.shim.activate()` 调用、`JITTOR_TORCH_SHIM=1`、
+部署后的 `torch` 入口或历史路径 `jittor.torch_compat` 导入激活。仅仅把本地别名写成
+`import jittor as torch` 不会激活 shim。每个激活入口都发布独立的 Torch 命名空间，
+拥有自己的 Tensor、Parameter、Module 与 NN 类型。原生 Var/Op 图是共享的；原生 Var
+方法保持不变。使用返回的 `result["torch"]`，或在激活后 `import torch`。
 
-The native-as-Torch installation mode is removed. `activate(independent_namespace=False)`,
-`JITTOR_TORCH_INDEPENDENT=0` and direct `compat.torch.install(jittor)` calls fail
-explicitly; the retained keyword only produces a migration error. The
-independent frontend applies and restores its autograd policy per call; native
-Var behavior is unchanged.
+"原生即 Torch"的安装模式已移除。`activate(independent_namespace=False)`、
+`JITTOR_TORCH_INDEPENDENT=0` 与直接调用 `compat.torch.install(jittor)` 都会显式失败；
+保留下来的关键字只产生迁移错误。独立前端每次调用都会应用并恢复它的 autograd 策略；
+原生 Var 行为不变。
 
-Use `import torch` for Torch tests and applications, and import `jittor`
-separately for native flags, compiler diagnostics or synchronization tools.
-`torch.tensor(...)` replaces the removed `torch.array(...)`; dtype casts use
-`tensor.to(dtype=...)`, while native Jittor keeps `jt.float32(...)`. Redeploy an
-old generated Torch entry when updating an existing environment.
+Torch 测试与应用使用 `import torch`，并单独导入 `jittor` 以使用原生 flag、编译器
+诊断或同步工具。`torch.tensor(...)` 取代已移除的 `torch.array(...)`；dtype 转换用
+`tensor.to(dtype=...)`，而原生 Jittor 保持 `jt.float32(...)`。更新既有环境时要重新
+部署旧的生成式 Torch 入口。
 
-Native and compatibility tests therefore run in separate processes. A native
-test must not rely on a Torch wrapper installed by another collected test, and a
-Torch compatibility test must prove that its explicit entry point completed the
-required installer graph.
+因此原生测试与兼容测试在独立进程中运行。原生测试不得依赖其他被收集测试安装的 Torch
+包装；Torch 兼容测试必须证明其显式入口完成了所需的安装器图。
 
-## Correctness rules
+## 正确性规则
 
-- Compare against an independent oracle or written contract, not another alias
-  of the implementation under test.
-- Cover positional and keyword forms, dtype promotion, broadcasting, empty and
-  non-contiguous inputs, device selection, gradients, and stateful behavior when
-  relevant.
-- An unsupported contract raises a focused error. Returning a plausible but
-  wrong value is never an acceptable fallback.
-- A compatibility wrapper must not globally change unrelated native Jittor
-  semantics unless the native behavior is itself corrected and tested.
-- Import and installer steps are idempotent and report each failed component
-  independently.
+- 与独立 oracle 或书面契约比较，而不是与被测实现的另一个别名比较。
+- 在相关时覆盖位置参数与关键字参数形式、dtype 提升、广播、空输入与非连续输入、设备
+  选择、梯度与有状态行为。
+- 不支持的契约抛出聚焦的错误。返回看似合理但错误的值永远不是可接受的回退。
+- 兼容包装不得全局改变无关的原生 Jittor 语义，除非原生行为本身被修正并测试。
+- 导入与安装器步骤是幂等的，并独立报告每个失败组件。
 
-### Storage sharing
+### 存储共享
 
-Torch's aliases share storage; Jittor's Vars do not, and the difference is
-silent in the direction that matters -- a write that lands in a temporary
-instead of the tensor reports nothing, and surfaces much later as wrong numbers.
+Torch 的别名共享存储；Jittor 的 Var 不共享。这个差异在要紧的方向上是静默的——一次
+写入落到临时张量而不是目标张量时什么都不会报告，很久以后才以错误数值的形式浮现。
 
-- A basic-index slice is a view. `param[:rows] = w`, `param[:rows].copy_(w)`
-  and `param[:rows].data.copy_(w)` all have to reach `param`; a sharded weight
-  loader writes exactly that way, and losing the write leaves the parameter at
-  its initial value with nothing to report.
-- `Tensor.numpy()` shares storage in Torch and copies here. Do not emulate that
-  by handing out Jittor's own buffer (`Var.data`): the view detaches the moment
-  the graph re-materialises the Var, so the first write lands and every later
-  one vanishes -- worse than copying, because it looks like it works. The
-  faithful direction is a write-through array that mirrors each host write back
-  with a setitem the lazy graph can see.
+- 基础索引切片是视图。`param[:rows] = w`、`param[:rows].copy_(w)` 与
+  `param[:rows].data.copy_(w)` 都必须真正写到 `param` 上；分片权重加载器正是这样写的，
+  丢掉写入会让参数停留在初始值而没有任何报告。
+- `Tensor.numpy()` 在 Torch 里共享存储，在这里是拷贝。不要靠交出 Jittor 自己的缓冲区
+  （`Var.data`）来模拟共享：图一旦重新物化该 Var，视图就脱离，于是第一次写入生效、
+  之后每次写入都消失——比拷贝更糟，因为它看起来像是工作的。忠实的方向是写穿数组，
+  用延迟图能看到的 setitem 把每次主机写入镜像回去。
 
-## Device and fallback rules
+## 设备与回退规则
 
-Host-side NumPy may be used as a test oracle or an explicitly documented
-CPU-only implementation. It must not sit behind an API advertised as CUDA, ROCm,
-or NPU capable. A backend fallback is acceptable only when all of these hold:
+主机侧 NumPy 可以作为测试 oracle 或明确记录为 CPU-only 的实现。它不得藏在声称支持
+CUDA、ROCm 或 NPU 的 API 之后。只有以下条件全部成立时，后端回退才可接受：
 
-1. the public contract permits the fallback;
-2. device transfer is explicit and observable;
-3. gradients and dtype behavior remain correct;
-4. the performance impact is documented;
-5. a test distinguishes fallback from native execution.
+1. 公开契约允许该回退；
+2. 设备转移是显式且可观测的；
+3. 梯度与 dtype 行为保持正确；
+4. 性能影响有文档记录；
+5. 测试能区分回退与原生执行。
 
-Backend availability is probed by a small real operation. Environment failures
-and framework defects are recorded separately; neither becomes a blanket skip.
-Hardware acceptance uses the native fallback counter, not log matching (see the
-fallback policy in [source architecture](../development/source-architecture.md)).
+后端可用性通过一次小的真实操作探测。环境故障与框架缺陷分别记录；两者都不会变成笼统
+的 skip。硬件验收使用原生回退计数器，而不是日志匹配（见
+[源码架构](../development/source-architecture.md)中的回退策略）。
 
-## Performance rules
+## 性能规则
 
-Correctness is required before optimization. Performance claims use warmup,
-synchronization, fixed shapes/dtypes, isolated caches, and an exact revision.
-Compare equivalent execution modes and report both latency and memory when the
-change affects either. See [performance benchmarking](../performance/benchmarking.md).
+优化之前必须先保证正确性。性能结论使用预热、同步、固定形状/dtype、隔离缓存与精确
+修订号。比较等价的执行模式，当变更影响 latency 或内存时两者都报告。见
+[性能基准](../performance/benchmarking.md)。
 
-An optimization must retain a reliable fallback and a way to prove which path
-executed. It may not weaken error reporting or test coverage to improve a
-headline number.
+优化必须保留可靠的回退与证明实际执行路径的方法。它不得为了提升头条数字而削弱错误
+报告或测试覆盖。
 
-## Compatibility aliases
+## 兼容别名
 
-Aliases preserve imports; they do not preserve duplicate source trees. A legacy
-name must resolve to the canonical module or callable object whenever observable
-identity matters. Every new alias documents:
+别名保留导入；它们不保留重复的源码树。在可观测身份要紧时，遗留名字必须解析到规范
+模块或可调用对象。每个新别名都要记录：
 
-- the canonical path;
-- the compatibility promise it serves;
-- tests for identity and import order;
-- the condition under which it can be retired.
+- 规范路径；
+- 它服务的兼容承诺；
+- 身份与导入顺序的测试；
+- 可以退役的条件。
 
-In particular, `jittor.torch_shim` is a same-object legacy alias of the canonical
-`jittor.compat.shim` package. The deployed top-level `torch` surface delegates to
-that canonical runtime rather than owning a second implementation.
+特别是，`jittor.torch_shim` 是规范包 `jittor.compat.shim` 的同对象遗留别名。部署后的
+顶层 `torch` 表面委托给该规范运行时，而不是拥有第二份实现。
 
-## Minimum evidence
+## 最低证据
 
-A compatibility change should include the smallest applicable set:
+兼容变更应包含最小适用集合：
 
-- focused unit and error-contract tests;
-- CPU reference comparison;
-- gradient and second-order gradient checks when supported;
-- CPU-to-accelerator parity on each advertised backend;
-- import-order, identity, and repeated-install tests;
-- a real downstream smoke test for integration-facing work;
-- benchmark evidence for a claimed fast path.
+- 聚焦单元测试与错误契约测试；
+- CPU 参考对拍；
+- 在支持时做梯度与二阶梯度检查；
+- 在每个声称支持的后端上做 CPU 到加速器的对拍；
+- 导入顺序、身份与重复安装测试；
+- 面向集成的工作做真实下游 smoke 测试；
+- 声称的快路径给出基准证据。
 
-Record persistent limitations in the
-[known-issues ledger](https://github.com/Jittor/jittor/blob/master/agent/manuals/known-issues.md),
-with an owner and a test or reproduction that signals when the limitation is
-gone. Record a reproducible maintainer conclusion in [results](../results/index.md).
+持续存在的限制记录到
+[已知问题总账](https://github.com/Jittor/jittor/blob/master/agent/manuals/known-issues.md)，
+并附 owner 以及一个能指示限制何时消失的测试或复现。可复现的维护者结论记录到
+[结果](../results/index.md)。

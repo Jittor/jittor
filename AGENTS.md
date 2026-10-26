@@ -87,7 +87,11 @@ JITTOR_TORCH_SHIM=1 PYTHONPATH=python python -m pytest -q tests/structure
 
 ## Documentation Ownership
 
-- 根目录只保留一份双语 [`README.md`](README.md)。不要新增生成版或按语言复制的 README。
+- 根目录保留中文默认 [`README.md`](README.md) 与英文
+  [`README.en.md`](README.en.md)；两份内容保持同步，不新增其它语言或生成版本。
+- `docs/` 下每篇文档成对维护：`X.md` 是中文默认页，`X.en.md` 是同目录英文页；
+  索引页同样成对（`index.md` / `index.en.md`）。英文页的相对链接指向 `X.en.md`，
+  中文页指向 `X.md`。修改一侧时必须同步另一侧。
 - 长期机制说明放在 `docs/notes/`，仓库布局、源码架构、测试体系与已知问题放在
   `docs/development/`，研究提案放在 `docs/research/`。仓库不保留任务看板、计划或交接
   这类过程文档。

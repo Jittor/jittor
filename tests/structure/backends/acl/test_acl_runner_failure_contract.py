@@ -121,7 +121,7 @@ def test_ascend_guide_states_the_launcher_migration_is_closed():
     owners still drove the execute call, so what is and is not covered is
     pinned here rather than left to prose.
     """
-    guide = (REPO_ROOT / "docs/development/acl-backend-contracts.md").read_text(encoding="utf-8")
+    guide = (REPO_ROOT / "docs/development/acl-backend-contracts.en.md").read_text(encoding="utf-8")
     for required in (
         "Shared launcher migration is closed for the standard owners",
         "SWhere, Sigmoid backward, BatchNorm",

@@ -1,18 +1,13 @@
-# Accelerate maintained CPU fresh-process nightly
+# Accelerate 维护版 CPU 全新进程 nightly
 
-- Status: full local CPU nightly and strict L3 protocol accepted; hosted schedule unverified.
-- Reviewed: 2026-10-16.
-- Measured commit: `0dc8fdbd863c784dbe6564ebfeb9efb764b7b272`.
-- Owner: downstream verification maintainers.
-- Review when: upstream/wheel pins, installed-source proofs, Module/optimizer/RNG
-  recovery, phase launchers, platform capture, provisioning or source closure changes.
+- 状态：完整本地 CPU nightly 与严格 L3 协议已接受；托管调度未验证。
+- 复查日期：2026-10-16。
+- 测量提交：`0dc8fdbd863c784dbe6564ebfeb9efb764b7b272`。
+- 维护者：下游验证维护者。
+- 复查条件：上游/wheel 固定版本、installed-source 证明、Module/优化器/RNG
+  恢复、阶段 launcher、平台捕获、provisioning 或源码闭包变化。
 
-The new `accelerate` profile provisions three independent environments and runs
-`ecosystem_accelerate` with the complete original world-one FP32 fresh-process
-protocol. Both input seeds 0/7 retain identical initial weights; each producer
-performs three AdamW/StepLR updates, saves, computes two expected continuation
-updates and terminates. New consumer processes construct fresh objects, restore
-and perform the same two updates. No phase, field, gradient or budget was reduced.
+新的 `accelerate` profile 会 provision 三个独立环境，并以完整的原始 world-one FP32 全新进程协议运行 `ecosystem_accelerate`。两个输入种子 0/7 保持相同的初始权重；每个 producer 执行三次 AdamW/StepLR 更新、保存、计算两个预期续训更新然后终止。新的 consumer 进程构造全新对象、恢复并执行同样的两次更新。没有削减任何阶段、字段、梯度或预算。
 
 ```bash
 CUDA_VISIBLE_DEVICES='' JT_USE_CUDA=0 use_cuda=0 \
@@ -20,88 +15,45 @@ python tools/provision_ecosystem_nightly.py --library accelerate \
   --state-root "${JITTOR_LAB_ROOT:-../jittor-lab}/_state/accelerate-nightly/fresh-run" --run
 ```
 
-| Platform | Card / count | Precision / specification | Oracle | Actual flags |
+| 平台 | 卡 / 数量 | 精度 / 规格 | Oracle | 实际 flag |
 | --- | --- | --- | --- | --- |
-| Linux 6.1.188, AMD EPYC 9554, GCC 11.5 | CPU / zero visible cards | FP32 train, Linear(3,2), batch 4, two runtime threads | Official Torch 2.11.0+cpu, real binary checked | CUDA/ACL 0, eager, TF32/HF32 false |
+| Linux 6.1.188, AMD EPYC 9554, GCC 11.5 | CPU / 零张可见卡 | FP32 训练, Linear(3,2), batch 4, 两个运行时线程 | 官方 Torch 2.11.0+cpu, 已校验真实二进制 | CUDA/ACL 0, eager, TF32/HF32 false |
 
-CUDA/CANN/driver/nvcc are recorded as not applicable. Workers explicitly capture
-empty `CUDA_VISIBLE_DEVICES`; candidate CPU observations and native flags exclude
-accelerator execution. Both sides use offline inputs and HF offline mode. This is
-correctness evidence, without speed or peak-memory claims.
+CUDA/CANN/驱动/nvcc 记录为不适用。worker 显式捕获空的 `CUDA_VISIBLE_DEVICES`；candidate 的 CPU 观测与 native flag 排除加速器执行。两侧都使用离线输入与 HF 离线模式。这是正确性证据，不含速度或峰值内存主张。
 
-The official Accelerate 1.10.1 source remains
-`623cc0ba588d192c77758939a6e340adf07edd4f`; its official wheel SHA256 is
-`3621cff60b9a27ce798857ece05e2b9f56fcc71631cfb31ccf71f0359c311f11`.
-Normal pip resolves the complete runtime Requires-Dist closure separately into
-candidate/oracle prefixes; the nox controller has its own tool closure. All three
-pass `pip check`. Source editable installs reuse this resolved closure. No installed
-prefix or JIT cache was copied. Actual pip RECORD is retained, not replaced by
-archive RECORD; receipt capture alone does not claim byte equality of every
-transitive dependency's generated pyc.
+官方 Accelerate 1.10.1 源码仍为
+`623cc0ba588d192c77758939a6e340adf07edd4f`；其官方 wheel SHA256 为
+`3621cff60b9a27ce798857ece05e2b9f56fcc71631cfb31ccf71f0359c311f11`。
+正常 pip 会把完整的运行时 Requires-Dist 闭包分别解析进 candidate/oracle 前缀；nox controller 拥有自己的工具闭包。三者都通过 `pip check`。源码 editable 安装复用这个已解析闭包。没有复制任何安装前缀或 JIT 缓存。保留实际 pip RECORD，而不是用 archive RECORD 替换；仅凭 receipt 捕获并不主张每个传递依赖生成的 pyc 字节相等。
 
-Independent read-only audits compare each Torch installation against its official
-archive's 11,945 payload files, and each Accelerate installation against its 88
-payload files, excluding archive RECORD.
-Every actual hashed RECORD row matches: 11,949 per Torch installation and 96 per
-Accelerate installation. Torch's 11,781 package files are a narrower scope than
-its complete wheel. Installed Torch on the candidate supplies dependency metadata;
-actual numerical execution uses the asserted native shim. The oracle's real binary
-is separately hashed. All 2,934 framework Git blobs, executable modes and the
-symlink target text match the measured archive; all eight worker maps match their
-14 selected committed sources, including the Module loader and called controls.
+独立的只读审计把每个 Torch 安装与其官方归档的 11,945 个载荷文件比较，把每个 Accelerate 安装与其 88 个载荷文件比较，排除 archive RECORD。
+每个实际的带哈希 RECORD 行都匹配：每个 Torch 安装 11,949 行，每个 Accelerate 安装 96 行。Torch 的 11,781 个包文件范围窄于其完整 wheel。candidate 上安装的 Torch 提供依赖 metadata；实际数值执行使用已断言的 native shim。oracle 的真实二进制单独哈希。全部 2,934 个框架 Git blob、可执行模式与符号链接目标文本都与测量归档匹配；全部八个 worker 映射都与其 14 个选定的已提交源码匹配，包括 Module loader 与被调用的控制项。
 
-| Model family / method / exact spec | CPU① level | Device③ level | Speed ratio / agreement | Status / evidence |
+| 模型族 / 方法 / 精确规格 | CPU① 等级 | Device③ 等级 | 速度比 / 一致性 | 状态 / 证据 |
 | --- | --- | --- | --- | --- |
-| Protocol only: Linear(3,2), batch 4, AdamW/StepLR, 3+2 steps, fresh process | L3 | Not rerun; separate Module units only | Speed unmeasured; original numeric budget | 1 accepted / 0 blocked / 0 rejected; `arrays-v2.json` |
+| 仅协议：Linear(3,2)、batch 4、AdamW/StepLR、3+2 步、全新进程 | L3 | 未重跑；仅有独立 Module 单测 | 速度未测量；原数值预算 | 1 接受 / 0 阻塞 / 0 拒绝；`arrays-v2.json` |
 
-The maintained collector accepts exactly one L3 CPU record, zero blocked and zero
-rejected. Independent NumPy recomputation verifies all 438 array pairs, 28 complete
-parameter-gradient pairs and 14 input-gradient pairs, fixed full initial weights,
-input perturbation, 56 actual per-parameter updates across both sides/seeds/phases,
-and exact fresh-object model/optimizer/scheduler/RNG and next-random-draw recovery.
-Maximum cross-runtime absolute error is `5.960464477539063e-8`; the original
-`atol=2e-6, rtol=2e-5` elementwise budget is unchanged. Eight distinct worker PIDs
-are verified. The 16,616 recursive exact checks include RNG scalars and are not
-interchangeable with earlier reports' differently counted checks.
+维护 collector 恰好接受一条 L3 CPU 记录，零阻塞、零拒绝。独立 NumPy 复算验证了全部 438 对数组、28 对完整参数梯度与 14 对输入梯度、固定的完整初始权重、输入扰动、两侧/种子/阶段合计 56 次实际逐参数更新，以及精确的全新对象 model/optimizer/scheduler/RNG 与下一次随机抽样恢复。跨运行时最大绝对误差为 `5.960464477539063e-8`；原 `atol=2e-6, rtol=2e-5` 逐元素预算不变。已验证八个不同的 worker PID。16,616 项递归精确检查包含 RNG 标量，与早前报告计数方式不同的检查不可互换。
 
-An initial complete run at `7cba3f5462f0ba08f3c0c56053611640bdf8b588`
-preserved two actual candidate consumer failures: copying loaded values into
-trainable leaves ran outside no-grad. The existing contiguous copying path now
-performs the copy inside an internal native no-grad scope through the public
-`copy_` owner, preserving caller grad mode, allocations, aliases, leaf and frozen
-flags. The `assign=True` path is unchanged.
-It adds no optimizer or copying mathematics. Independent genuine/candidate CPU and
-CUDA each pass seven FP32/FP64 contracts, with actual CUDA pointers checked;
-existing candidate storage regressions pass three per device, including CUDA BF16.
-These units were measured at `23913169dde347754a8ee4d8817085196d0002da`.
+在 `7cba3f5462f0ba08f3c0c56053611640bdf8b588` 的一次初始完整运行保留了两个真实的 candidate consumer 失败：把加载的值复制进可训练 leaf 的操作跑在了 no-grad 之外。既有的连续复制路径现在通过公共 `copy_` 归属方，在内部原生 no-grad 作用域内执行复制，保留调用方的 grad 模式、分配、别名、leaf 与 frozen 标志。`assign=True` 路径未改动。
+它不增加任何优化器或复制数学。独立的真实/candidate CPU 与 CUDA 各通过七项 FP32/FP64 契约，并校验了实际 CUDA 指针；既有 candidate 存储回归在每个设备上通过三项，包括 CUDA BF16。这些单测在 `23913169dde347754a8ee4d8817085196d0002da` 上测量。
 
-A separate reproducible native autograd gap remains open: public `copy_` followed
-by backward through an older square consumer fails to reject stale saved inputs.
-The Module change does not close it or claim complete mutation/version ABI parity.
-An old constant-gradient multiplication consumer remains valid on both runtimes.
-The original before-fix diagnostics and failed full run are retained unchanged.
+另有一个可复现的原生 autograd 缺口仍未关闭：公共 `copy_` 之后经由更早的平方 consumer 反向，未能拒绝过期的已保存输入。Module 改动既不关闭它，也不主张完整的 mutation/version ABI 等价。一个旧的常量梯度乘法 consumer 在两个运行时上都仍然有效。修前的原始诊断与失败的完整运行保持不变。
 
-Complete CPU mode is explicit through `JITTOR_ACCELERATE_COMPLETE_CPU=1` and the
-collector's default-off `--require-complete-cpu`. Existing ordinary CPU/CUDA calls
-remain available. Persistent artifacts use `JITTOR_ACCELERATE_EVIDENCE_DIR`; unit
-and benchmark caches are separate. Baseline Git instrumentation declares captured
-control sources; missing/modified current sources fail. Historical c7's 48 source
-maps and four records retain their fields and replay to two accepted/two unpaired
-blocked/zero rejected. No registry denominator or old raw field is invented.
+完整 CPU 模式通过 `JITTOR_ACCELERATE_COMPLETE_CPU=1` 与 collector 默认关闭的 `--require-complete-cpu` 显式开启。既有的普通 CPU/CUDA 调用仍然可用。持久化产物使用 `JITTOR_ACCELERATE_EVIDENCE_DIR`；单测与 benchmark 缓存相互分离。基线 Git 仪器化声明捕获到的控制源码；缺失/被修改的当前源码会失败。历史 c7 的 48 个源码映射与四条记录保留其字段，并重放为两个接受/两个未配对阻塞/零拒绝。没有虚构注册表分母或旧的原始字段。
 
-Mandatory validation: core 322 passed / 42 skipped / 1 xfailed;
-`tests/structure` 1,516 passed / 4 skipped; host 147 passed. Canonical Ruff,
-layout, manifest and diff checks passed. Evidence is unversioned
-under `$JITTOR_LAB_ROOT/_state/accelerate-nightly/20261016/`: `fresh-v2`,
-`arrays-v2.json`, `git-v2.json`, `installations-v2.json` and their `independent_*`
-recheckers. `measurement-seal-v2.json` binds 590 regular files / 65,569,144 bytes plus
-one symlink target text (591 entries); SHA256
-`0958756b13f54b073c532d7ae0fa4b2d3bd104da392a3f1b8c45d6ca1bcc1c46`.
-The earlier failed run has a separate immutable seal; validation/delivery receipts
-are sealed separately without changing the measured commit.
+强制校验：core 322 passed / 42 skipped / 1 xfailed；
+`tests/structure` 1,516 passed / 4 skipped；host 147 passed。Canonical Ruff、
+布局、manifest 与 diff 检查通过。证据未版本化，
+位于 `$JITTOR_LAB_ROOT/_state/accelerate-nightly/20261016/`：`fresh-v2`、
+`arrays-v2.json`、`git-v2.json`、`installations-v2.json` 及其 `independent_*`
+复核器。`measurement-seal-v2.json` 绑定 590 个常规文件 / 65,569,144 字节，外加
+一个符号链接目标文本（591 条目）；SHA256
+`0958756b13f54b073c532d7ae0fa4b2d3bd104da392a3f1b8c45d6ca1bcc1c46`。
+更早的失败运行有单独的不可变封条；验证/交付 receipt
+另行封存，不改动测量提交。
 
-This local nightly does not grant CPU world-two FSDP2, substitute DDP, rerun the
-CUDA fresh protocol, prove multihost/sharded checkpointing or whole-library support.
-The [historical CPU/CUDA source-bound results](2026-10-16-accelerate-installed-source-protocols.md)
-retain their original commit and scope. Workflow wiring and local execution do not
-prove GitHub's hosted schedule ran.
+这个本地 nightly 不授予 CPU world-two FSDP2、不替代 DDP、不重跑
+CUDA 全新协议，也不证明多主机/分片 checkpoint 或整库支持。
+[历史 CPU/CUDA 源绑定结果](2026-10-16-accelerate-installed-source-protocols.md)
+保留其原始提交与范围。工作流接线与本地执行都不能证明 GitHub 的托管调度实际运行过。
