@@ -228,7 +228,10 @@ workaround.
 
 - Severity: Medium (performance; results are correct)
 - Status: Open; a documented trade-off. Both `test3` cases run as strict expected
-  failures with their original assertion (a `KI-CODEGEN-001` note on the case)
+  failures with their original assertion (a `KI-CODEGEN-001` note on the case).
+  A 2026-10-26 prototype on the unversioned `fix-codegen1` worktree reduced the
+  recorded broadcast/dense ratio from about 5.2x to 1.77x, but it did not pass
+  the original nested-loop contract and was not merged.
 - Owner: codegen maintainers
 - Symptom: on CPU, `x + y` where `y` is an expand of a real tensor runs about
   5.2x its dense counterpart (`64x64x64x64 + 1x64x1x1`: 636.5 us against
