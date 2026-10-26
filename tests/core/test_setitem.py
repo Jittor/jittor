@@ -9,6 +9,7 @@
 import unittest
 import jittor as jt
 import numpy as np
+import pytest
 skip_this_test = False
 
 @unittest.skipIf(skip_this_test, "No Torch found")
@@ -298,6 +299,7 @@ class TestSetitem(unittest.TestCase):
         np.testing.assert_allclose(d.data,
             np.concatenate([b.data,c.data]))
         
+    @pytest.mark.filterwarnings("ignore:jt.grad.*does not depend on the loss.*:UserWarning")
     def test_concat_random(self):
         def check(backward=False):
             n1, n2, n3 = 1000, 20, 10

@@ -129,6 +129,12 @@ class YourDataset5(Dataset):
 
 class TestDataset2(unittest.TestCase):
     def test_dataset_use_jittor(self):
+        # Compile the graph before forking. A cold four-worker run otherwise
+        # serialises on the shared JIT lock long enough for the parent's
+        # five-second liveness check to mistake healthy workers for dead ones.
+        warm_x, warm_y = YourDataset()[0]
+        warm_x.sync()
+        warm_y.sync()
         # Exercise every worker without making one batch exceed the dataset's
         # five-second liveness timeout on a four-CPU CI runner.
         dataset = YourDataset().set_attrs(

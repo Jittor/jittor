@@ -7,8 +7,10 @@
 import unittest
 import jittor as jt
 import time
+import pytest
 
 class TestNanoString(unittest.TestCase):
+    @pytest.mark.load_sensitive
     def test(self):
         dtype = jt.NanoString
 

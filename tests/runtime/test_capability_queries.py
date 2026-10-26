@@ -134,7 +134,8 @@ class TestThreeAnswersAreDistinguishable(unittest.TestCase):
 
     def test_built_but_no_visible_device_is_disabled_and_names_the_env_var(self):
         if not _machine_has_nvidia_nodes():
-            raise unittest.SkipTest("needs /dev/nvidia* nodes to be meaningful")
+            raise unittest.SkipTest(
+                "needs NVIDIA GPU device nodes (/dev/nvidia*) to be meaningful")
         capability = _capabilities(
             _FakeBuildConfig(backend="cuda", has_cuda=True, is_cuda=True,
                              nvcc_path="/usr/local/cuda/bin/nvcc"),
