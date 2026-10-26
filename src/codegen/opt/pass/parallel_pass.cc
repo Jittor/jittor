@@ -474,6 +474,16 @@ void ParallelPass::run() {
             if (!loop->has_attr(kir::lvalue)) break;
             auto& lvalue = loop->attrs[kir::lvalue];
             auto& step_code = loop->inner[2]->attrs[kir::code];
+            string range = loop->attrs[kir::rvalue];
+            if (loop->has_attr(kir::split_id)) {
+                // SplitLoopPass bounds a split-off loop by
+                // `::min(range{i}-id{i}, stride{i})`, which is defined inside
+                // the outer loop and so is not visible where the grid is
+                // sized. `stride{i}` is its upper bound and is visible there;
+                // a thread handed an id past the live range fails the
+                // unchanged `id < range{j}` condition.
+                range = "stride" + loop->attrs[kir::split_id];
+            }
             if (step_code == lvalue + "++;") {
                 strides.push_back("1");
             } else {
@@ -482,7 +492,7 @@ void ParallelPass::run() {
                 if (step_code != lvalue + "+=" + stride + ";") break;
                 strides.push_back(stride);
             }
-            ranges.push_back(loop->attrs[kir::rvalue]);
+            ranges.push_back(range);
             loops.push_back(loop);
             LOGvvvv << "Parallel loop dep=" >> d << "range=" >> ranges.back()
                     << "stride=" >> strides.back() << "code:" << loop->inner;
