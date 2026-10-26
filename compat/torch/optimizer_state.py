@@ -47,6 +47,19 @@ def _native_state_key(kind, torch):
     return _TORCH_TO_NATIVE_STATE.get(kind, {}).get(torch)
 
 
+def _native_optimizer_buffer(value):
+    """Keep optimizer buffers as native Vars, not frontend Tensor subclasses.
+
+    ``load_state_dict`` materialises state through the Torch facade, whose
+    Tensor is a ``jt.Var`` subclass with its own promotion rules. A buffer
+    that changes type there makes the next native AdamW/Adam step run through
+    the frontend operators and diverge in the last bits.
+    """
+    if isinstance(value, jt.Var) and type(value) is not jt.Var:
+        return jt.Var(value)
+    return value
+
+
 def _adagrad_step_tensor(value):
     """Create Torch's host step scalar through its placement-aware factory."""
     torch_owner = get_install_context(jt).target_namespace
@@ -147,6 +160,9 @@ class _OptState:
             _momentum_initialized_flags(pg)[i] = False
             return
         if isinstance(buffers, list) and i < len(buffers):
+            # A live `state[p][key] = value` keeps the caller's object: the
+            # Torch contract exposes that exact tensor. Only checkpoint
+            # loading has to restore the native base type.
             buffers[i] = value
             if kind == "sgd" and key == "momentum_buffer":
                 _momentum_initialized_flags(pg)[i] = True

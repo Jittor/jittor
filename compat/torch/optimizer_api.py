@@ -10,7 +10,7 @@ from typing import Any, Dict, List
 from .. import fsdp_hooks as _fsdp_hooks
 from .optimizer_state import (
     _OptState, _ParamState, _TORCH_TO_NATIVE_STATE, _NATIVE_TO_TORCH_STATE,
-    _adagrad_step_tensor, _torch_optimizer_kind,
+    _adagrad_step_tensor, _native_optimizer_buffer, _torch_optimizer_kind,
 )
 from jittor.optim.algorithms.sgd import (
     MOMENTUM_INITIALIZED as _MOMENTUM_INITIALIZED,
@@ -290,9 +290,10 @@ def _load_state_dict_torch(self, state_dict):
                 if i >= len(pg.get(native, ())):
                     continue
                 if kind == "adagrad":
-                    pg[native][i] = st[torch_key].clone().stop_grad()
+                    value = _native_optimizer_buffer(st[torch_key])
+                    pg[native][i] = value.clone().stop_grad()
                 else:
-                    pg[native][i] = st[torch_key]
+                    pg[native][i] = _native_optimizer_buffer(st[torch_key])
                     if kind == "sgd" and torch_key == "momentum_buffer":
                         _momentum_initialized_flags(pg)[i] = True
             if kind == "adagrad":
