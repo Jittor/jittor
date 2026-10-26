@@ -13,11 +13,28 @@ _SAMPLE_META_SNAPSHOT = '_jittor_sample_meta_snapshot'
 _H2D_SYNC_BATCH = local()
 
 
+def _accelerator_enabled(jt, name):
+    """The core capability answer, or None when the namespace is a test double.
+
+    ``jt.capability.accelerator(name).enabled`` is the single owner of "can
+    this build run this accelerator now". Adapter tests pass a minimal
+    ``flags``/``compiler`` namespace with no ``capability``; those keep the
+    historical flag test below rather than teaching every double the full
+    capability API.
+    """
+    capability = getattr(jt, 'capability', None)
+    if capability is None:
+        return None
+    return bool(capability.accelerator(name).enabled)
+
+
 def _acl_active(jt):
     """The Torch CUDA facade also names ACL, but CUDA kernels cannot run there."""
-    compiler = getattr(jt, 'compiler', None)
-    return bool(compiler is not None and getattr(compiler, 'has_acl', 0)
-                and getattr(jt.flags, 'use_acl', 0))
+    enabled = _accelerator_enabled(jt, 'acl')
+    if enabled is None:
+        compiler = getattr(jt, 'compiler', None)
+        enabled = bool(compiler is not None and getattr(compiler, 'has_acl', 0))
+    return bool(enabled and getattr(jt.flags, 'use_acl', 0))
 
 
 def patch_buffer_pool(module):
@@ -324,14 +341,11 @@ def _native_cuda_active(jt):
     checking that flag alone incorrectly sends CUDA source to the ACL JIT.
     Fail closed when the compiler capabilities are unavailable.
     """
-    compiler = getattr(jt, 'compiler', None)
-    return bool(
-        jt.flags.use_cuda
-        and compiler is not None
-        and getattr(compiler, 'has_cuda', 0)
-        and not (getattr(compiler, 'has_acl', 0)
-                 and getattr(jt.flags, 'use_acl', 0))
-    )
+    enabled = _accelerator_enabled(jt, 'cuda')
+    if enabled is None:
+        compiler = getattr(jt, 'compiler', None)
+        enabled = bool(compiler is not None and getattr(compiler, 'has_cuda', 0))
+    return bool(jt.flags.use_cuda and enabled and not _acl_active(jt))
 
 
 def _native_metadata_batch_eligible(num_reqs):

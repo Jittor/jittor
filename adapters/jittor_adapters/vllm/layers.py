@@ -20,6 +20,8 @@ import os
 import jittor as jt
 from jittor.compat.transaction import set_attr
 
+from .buffers import _acl_active, _native_cuda_active
+
 _PATCHED = "_jittor_fused_forward"
 
 
@@ -138,11 +140,7 @@ def patch_qwen3_attention(module):
             q_weight = getattr(getattr(self, "q_norm", None), "weight", None)
             k_weight = getattr(getattr(self, "k_norm", None), "weight", None)
             values = hidden_states, q_weight, k_weight
-            accelerator = (
-                (getattr(jt.compiler, "has_acl", 0)
-                 and getattr(jt.flags, "use_acl", 0))
-                or getattr(jt.compiler, "has_cuda", 0)
-            )
+            accelerator = _acl_active(jt) or _native_cuda_active(jt)
             if not (
                 accelerator and jt.flags.use_cuda
                 and getattr(jt.flags, "no_grad", 0)
@@ -156,10 +154,7 @@ def patch_qwen3_attention(module):
                 and hasattr(self, "kv_size")
             ):
                 return original(self, positions, hidden_states)
-            acl_active = (
-                getattr(jt.compiler, "has_acl", 0)
-                and getattr(jt.flags, "use_acl", 0)
-            )
+            acl_active = _acl_active(jt)
             tp_size = max(
                 1,
                 int(getattr(self, "total_num_heads", self.num_heads))
