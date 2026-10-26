@@ -13,6 +13,7 @@ performance-comparison
 distributed-mpi
 distributed-training
 ascend-910b
+ascend-310p
 corex
 cpp-console
 ```
@@ -27,5 +28,6 @@ cpp-console
 | [MPI 分布式](distributed-mpi.md) | 多进程、多卡训练 |
 | [原生多卡训练](distributed-training.md) | `jtrun` 启动的原生 NCCL 数据并行（不经 compat.torch） |
 | [昇腾 910B](ascend-910b.md) | 在华为昇腾 NPU 上运行 |
+| [昇腾 310P](ascend-310p.md) | 在昇腾推理卡上运行（能力边界与降精度开关） |
 | [天数 Corex](corex.md) | 在天数智芯 GPU 上运行 |
 | [C++ 控制台](cpp-console.md) | 直接调用 C++ 接口、嵌入部署 |

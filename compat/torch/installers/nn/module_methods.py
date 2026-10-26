@@ -1356,11 +1356,23 @@ def _install_module_methods(nn, registry=None):
     from jittor._core import arg_policy as _arg_policy
     from jittor.nn.modules.normalization import GroupNorm as _NativeGroupNorm
     from jittor.backends.cuda.kernels.nn import group_norm_cuda as _group_norm_cuda
+    from jittor._runtime import dispatch as _kernel_dispatch
+    if _kernel_dispatch._NATIVE_SELECT is None:
+        _kernel_dispatch._bind_native_select()
+    _rms_selector_state = None
+    if _kernel_dispatch._NATIVE_SELECT is jt.core._kernel_select:
+        _rms_selector_state = (
+            globals(), _acl_bfloat16_rms_norm, _backend_hooks,
+            _rms_norm_training_cuda, _rms_norm_cuda, vars(_kernel_dispatch),
+            _kernel_dispatch.select_kernel, _kernel_dispatch._NATIVE_DISPATCH_CONTEXT,
+            _kernel_dispatch._NATIVE_SELECT,
+        )
     # What `_dispatch_module_call` consults, so the native call can run it:
     # see `module_call_bind` in src/bindings/pyjt/py_module_call.h.
     _dispatch_parts = {
         "prefer_forward": _prefer_forward,
         "standard_rms_norm": _standard_rms_norm,
+        "rms_selector_state": _rms_selector_state,
         "linear_execute": _NativeLinear.execute,
         "matmul_kernel": _matrix._cublas_matmul,
         "rms_norm_inference": _rms_norm_cuda.__wrapped__,

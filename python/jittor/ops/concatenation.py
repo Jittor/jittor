@@ -255,7 +255,6 @@ _tracing = None
 
 
 def _concat(jt, arr, dim):
-    global _tracing
     if not isinstance(arr, Sequence):
         raise TypeError("concat arr needs to be a tuple or list")
     if len(arr) == 0:
@@ -302,6 +301,16 @@ def _concat(jt, arr, dim):
         result = kernel(inputs, dim)
         if result is not None:
             return result
+    return _concat_after_kernel(arr, dim, dtype)
+
+
+def _concat_after_kernel(arr, dim, dtype):
+    """Resume validated concat after kernel selection, without trying it twice.
+
+    The Python owner and the native Torch fast path both enter with normalized
+    dimensions, a resolved dtype, and the caller's AMP policy plus keep_reduce.
+    """
+    global _tracing
     # Only for a graph being captured to replay: the select costs more
     # to build than the slice copies it replaces, which an eager call pays
     # every time -- Qwen3 greedy decoding, host-bound, went 3.80 -> 4.22 s

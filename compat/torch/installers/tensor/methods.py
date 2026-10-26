@@ -149,9 +149,22 @@ def _bind_native_fast_paths(jt):
     """
     from jittor._runtime import dispatch
     from jittor._runtime.step_capture import tracing
+    from jittor.ops import concatenation, indexing
     if dispatch._NATIVE_SELECT is None:
         dispatch._bind_native_select()
-    jt.core._compat_fast_bind(tracing)
+    selector_state = None
+    getitem_selector_state = None
+    if dispatch._NATIVE_SELECT is jt.core._kernel_select:
+        selector_state = (
+            vars(concatenation), dispatch.select_kernel, vars(dispatch),
+            dispatch._NATIVE_DISPATCH_CONTEXT, dispatch._NATIVE_SELECT,
+        )
+        getitem_selector_state = (
+            vars(indexing), indexing.try_dispatch, vars(dispatch), dispatch.select_kernel,
+            dispatch._NATIVE_DISPATCH_CONTEXT, dispatch._NATIVE_SELECT,
+        )
+    jt.core._compat_fast_bind(tracing, concatenation._concat_after_kernel,
+                             selector_state, getitem_selector_state)
 
 
 def _install_expand_shape_adapter(Var):

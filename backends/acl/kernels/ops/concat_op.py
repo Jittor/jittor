@@ -1,4 +1,3 @@
-from ._code import code_with_attributes
 from ._attributes import attribute_program, code_program, runner_for_alias
 import os
 from jittor_utils import env_or_try_find
@@ -16,10 +15,8 @@ from collections.abc import Sequence, Iterable
 from ._code import acl_code as concat_cmd
 from ._code import acl_emit, acl_program
 
-#: Assembled concat programs by the split sizes and axis they are derived
-#: from. Reassembling one -- the forward attributes, the SplitWithSize
-#: gradient and a key for each -- cost several times the graph node it
-#: produces, and a decode step concatenates the same shapes on every layer.
+#: Training programs by their split sizes and axis. Inference uses the mapped
+#: native op above this cache lookup and never builds a SplitWithSize gradient.
 _CONCAT_PROGRAMS = {}
 _CONCAT_PROGRAM_LIMIT = 4096
 
@@ -52,6 +49,24 @@ def _build_concat_program(split_sizes, dim):
     )
 
 
+def _validate_concat_inputs(input_tensors, dim):
+    """Retain the provider's public errors outside the native success path."""
+    if not input_tensors:
+        raise ValueError("Concat expects at least one input tensor")
+    for tensor in input_tensors:
+        if not (-tensor.ndim <= dim < tensor.ndim):
+            raise ValueError("dim out of range")
+    if dim < 0:
+        dim += input_tensors[0].ndim
+    for tensor in input_tensors:
+        if tensor.dtype != input_tensors[0].dtype:
+            raise ValueError("All input tensors must have the same dtype")
+        if (tensor.shape[:dim] != input_tensors[0].shape[:dim]
+                or tensor.shape[dim + 1:] != input_tensors[0].shape[dim + 1:]):
+            raise ValueError("All input tensors must have the same shape")
+    return dim
+
+
 class ConcatACL:
     def __call__(self, input_tensors, dim=0):
         if not isinstance(input_tensors, (list, tuple)):
@@ -61,23 +76,18 @@ class ConcatACL:
         return self.execute(input_tensors, dim)
 
     def execute(self, input_tensors, dim=0):
-        for _ in input_tensors:
-            if not (-_.ndim <= dim < _.ndim):
-                raise ValueError("dim out of range")
-
-        if dim < 0:
-            dim += input_tensors[0].ndim
-
+        if jt.flags.no_grad:
+            try:
+                return jt.core.ops.mapped_concat(input_tensors, dim)
+            except RuntimeError:
+                # Native construction checks metadata once. Revisit Python
+                # validation only to retain ValueError for malformed requests;
+                # a backend/runtime error remains the original RuntimeError.
+                _validate_concat_inputs(input_tensors, dim)
+                raise
+        dim = _validate_concat_inputs(input_tensors, dim)
         self.input = input_tensors
         self.dim = dim
-        for i in range(len(input_tensors)):
-            if input_tensors[i].dtype != input_tensors[0].dtype:
-                raise ValueError("All input tensors must have the same dtype")
-            if (
-                input_tensors[i].shape[:dim] != input_tensors[0].shape[:dim]
-                or input_tensors[i].shape[dim + 1 :] != input_tensors[0].shape[dim + 1 :]
-            ):
-                raise ValueError("All input tensors must have the same shape")
         split_sizes = tuple(int(tensor.shape[dim]) for tensor in input_tensors)
         key = (split_sizes, dim)
         program = _CONCAT_PROGRAMS.get(key)

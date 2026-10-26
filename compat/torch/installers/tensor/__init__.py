@@ -708,7 +708,13 @@ def cat(tensors, dim=0, out=None, axis=None):
                         uniform = False
                         break
             if uniform:
-                return _cat_grad_result(_jt_concat(list(seq), dim), seq)
+                result = _jt_concat(list(seq), dim)
+                # torch.cat is dtype-preserving; autocast does not cast it.
+                # jittor.concat may compute in the reduced dtype under AMP,
+                # so restore the common input dtype the frontend promises.
+                if _jittor_dtype_name(result.dtype) != name0:
+                    result = result.cast(name0)
+                return _cat_grad_result(result, seq)
     g = compatibility_owner(jt)
     if axis is not None: dim = axis      # torch accepts axis= (mmrotate PSC head)
     # Honor the __torch_function__ protocol: tensordict (and other tensor-likes)

@@ -13,6 +13,7 @@ cases it must leave alone.
 import contextlib
 import math
 import unittest
+from unittest import mock
 
 import numpy as np
 import torch
@@ -62,13 +63,17 @@ class TestFastCat(unittest.TestCase):
     def test_values_dims_and_dtypes(self):
         device = _cuda()
         rng = np.random.RandomState(0)
-        for dtype in (torch.float32, torch.float16, torch.int64, torch.bool):
+        for dtype, numpy_dtype in ((torch.float32, np.float32), (torch.float16, np.float16),
+                                   (torch.int64, np.int64), (torch.bool, np.bool_)):
             for dim in (0, 1, -1):
                 with self.subTest(dtype=dtype, dim=dim):
                     a_np = rng.rand(2, 3, 4) > 0.5 if dtype is torch.bool else rng.rand(2, 3, 4) * 10
                     b_np = rng.rand(2, 3, 4) > 0.5 if dtype is torch.bool else rng.rand(2, 3, 4) * 10
-                    a = torch.tensor(a_np, device=device).to(dtype)
-                    b = torch.tensor(b_np, device=device).to(dtype)
+                    # Convert NumPy's default float64 on the host: Ascend310P
+                    # does not support a device float64-to-target cast.
+                    a_np, b_np = a_np.astype(numpy_dtype), b_np.astype(numpy_dtype)
+                    a = torch.tensor(a_np, dtype=dtype, device=device)
+                    b = torch.tensor(b_np, dtype=dtype, device=device)
                     c = torch.cat([a, b], dim=dim)
                     self.assertIsInstance(c, torch.Tensor)
                     self.assertEqual(c.dtype, dtype)
@@ -96,6 +101,201 @@ class TestFastCat(unittest.TestCase):
         (torch.cat([x, y]) * w).sum().backward()
         np.testing.assert_allclose(x.grad.numpy(), w.numpy()[:3])
         np.testing.assert_allclose(y.grad.numpy(), w.numpy()[3:])
+
+
+class TestFastCatRegisteredBackend(unittest.TestCase):
+    def setUp(self):
+        from jittor.ops import concatenation
+        from jittor._runtime import dispatch
+        from jittor.compat.torch.installers.tensor.methods import _bind_native_fast_paths
+        self.concat, self.dispatch = concatenation, dispatch
+        self.bind = _bind_native_fast_paths
+        self.flags = jt.flag_scope(use_cuda=0, amp_reg=0)
+        self.flags.__enter__()
+        self.addCleanup(self.flags.__exit__, None, None, None)
+        self.bind(jt)
+        self.a = torch.tensor([[1., 2., 3.], [4., 5., 6.]], device="cpu")
+        self.b = torch.tensor([[7., 8., 9.]], device="cpu")
+        self.expected = np.arange(1, 10, dtype="float32").reshape(3, 3)
+
+    def tearDown(self):
+        self.bind(jt)
+
+    def _continue(self, inputs, dim):
+        dtype = str(inputs[0].dtype)
+        if dtype.startswith("torch."):
+            dtype = dtype[6:]
+        return self.concat._concat_after_kernel(inputs, dim, dtype)
+
+    def test_selected_override_called_once_in_frontend_and_amp_scope(self):
+        seen = []
+
+        def supports(inputs, dim):
+            seen.append(("supports", type(inputs), dim, jt.flags.amp_reg))
+            return True
+
+        def provider(inputs, dim):
+            seen.append(("provider", type(inputs), dim, jt.flags.amp_reg))
+            return self._continue(inputs, dim)
+
+        original_amp = jt.amp_flags.prefer32 | jt.amp_flags.keep_white | jt.amp_flags.array_prefer
+        with jt.flag_scope(amp_reg=original_amp), self.dispatch.override_kernel(
+                "tensor.concat", "cpu", provider, supports=supports, dtypes=("float32",)):
+            with _refusing(self.concat, "_concat"):
+                result = torch.cat((self.a, self.b), dim=-2)
+            self.assertEqual(jt.flags.amp_reg, original_amp)
+        self.assertIsInstance(result, torch.Tensor)
+        np.testing.assert_array_equal(result.numpy(), self.expected)
+        scoped_amp = original_amp | jt.amp_flags.keep_reduce
+        self.assertEqual(seen, [("supports", list, 0, scoped_amp), ("provider", tuple, 0, scoped_amp)])
+
+    def test_declining_provider_resumes_once_and_keeps_gradients(self):
+        seen = []
+
+        def decline(inputs, dim):
+            seen.append((inputs, dim))
+            return None
+
+        self.a.requires_grad_(True)
+        self.b.requires_grad_(True)
+        with self.dispatch.override_kernel("tensor.concat", "cpu", decline):
+            with _refusing(self.concat, "_concat"):
+                result = torch.cat([self.a, self.b], dim=0)
+        self.assertEqual(len(seen), 1)
+        self.assertIsInstance(result, torch.Tensor)
+        np.testing.assert_array_equal(result.numpy(), self.expected)
+        result.sum().backward()
+        np.testing.assert_array_equal(self.a.grad.numpy(), np.ones((2, 3)))
+        np.testing.assert_array_equal(self.b.grad.numpy(), np.ones((1, 3)))
+
+    def test_ineligible_provider_predicate_is_not_repeated(self):
+        seen = []
+
+        def supports(inputs, dim):
+            seen.append(dim)
+            return False
+
+        def unexpected(*args):
+            raise AssertionError("ineligible provider executed")
+
+        with self.dispatch.override_kernel("tensor.concat", "cpu", unexpected, supports=supports):
+            with _refusing(self.concat, "_concat"):
+                result = torch.cat([self.a, self.b], dim=0)
+        self.assertEqual(seen, [0])
+        np.testing.assert_array_equal(result.numpy(), self.expected)
+
+    def test_decline_preserves_the_tracing_continuation(self):
+        seen = []
+
+        def decline(inputs, dim):
+            seen.append(dim)
+            return None
+
+        with self.dispatch.override_kernel("tensor.concat", "cpu", decline), mock.patch.object(
+                self.concat, "_tracing", return_value=True), mock.patch.object(
+                self.concat, "_concat_fused", wraps=self.concat._concat_fused) as fused:
+            with _refusing(self.concat, "_concat"):
+                result = torch.cat([self.a, self.b])
+            self.assertEqual(fused.call_count, 1)
+        self.assertEqual(seen, [0])
+        np.testing.assert_array_equal(result.numpy(), self.expected)
+
+    def test_provider_and_predicate_errors_restore_amp_and_placement(self):
+        class ProviderError(ValueError):
+            pass
+
+        original_amp = jt.amp_flags.prefer32 | jt.amp_flags.keep_white
+        for fail_in in ("provider", "predicate"):
+            seen = []
+
+            def failure(*args):
+                seen.append(jt.flags.amp_reg)
+                raise ProviderError("concat callback failed")
+
+            provider = failure if fail_in == "provider" else lambda *args: None
+            supports = failure if fail_in == "predicate" else None
+            with self.subTest(fail_in=fail_in), jt.flag_scope(amp_reg=original_amp):
+                placement = jt.core._current_tensor_placement()
+                with self.dispatch.override_kernel("tensor.concat", "cpu", provider, supports=supports):
+                    with self.assertRaisesRegex(ProviderError, "concat callback failed"):
+                        torch.cat([self.a, self.b])
+                self.assertEqual(jt.flags.amp_reg, original_amp)
+                self.assertEqual(jt.core._current_tensor_placement(), placement)
+                self.assertEqual(seen, [original_amp | jt.amp_flags.keep_reduce])
+
+    def test_amp_conversion_keeps_the_existing_python_route(self):
+        seen = []
+
+        def provider(inputs, dim):
+            seen.append([value.dtype for value in inputs])
+            return self._continue(inputs, dim)
+
+        with jt.flag_scope(amp_reg=jt.amp_flags.prefer16), self.dispatch.override_kernel(
+                "tensor.concat", "cpu", provider, dtypes=("float32",)):
+            self.assertIs(jt.core._fast_cat([self.a, self.b], 0), NotImplemented)
+            result = torch.cat([self.a, self.b])
+            self.assertEqual(jt.flags.amp_reg, jt.amp_flags.prefer16)
+        self.assertEqual(seen, [[torch.float16, torch.float16]])
+        self.assertEqual(result.dtype, torch.float32)
+        np.testing.assert_array_equal(result.numpy(), self.expected)
+
+    def test_provider_result_retains_torch_common_input_dtype(self):
+        calls = []
+
+        def provider(inputs, dim):
+            calls.append(dim)
+            return self._continue(inputs, dim).double()
+
+        with self.dispatch.override_kernel("tensor.concat", "cpu", provider):
+            with _refusing(self.concat, "_concat"):
+                result = torch.cat([self.a, self.b])
+        self.assertEqual(calls, [0])
+        self.assertEqual(result.dtype, torch.float32)
+        np.testing.assert_array_equal(result.numpy(), self.expected)
+
+    def test_python_selection_overrides_leave_the_fast_path(self):
+        calls = []
+
+        def provider(inputs, dim):
+            calls.append(dim)
+            return self._continue(inputs, dim)
+
+        with mock.patch.object(self.concat, "select_kernel", return_value=provider) as selector:
+            self.assertIs(jt.core._fast_cat([self.a, self.b], 0), NotImplemented)
+            result = torch.cat([self.a, self.b])
+            self.assertEqual(selector.call_count, 1)
+        self.assertEqual(calls, [0])
+        np.testing.assert_array_equal(result.numpy(), self.expected)
+        calls.clear()
+        original = self.dispatch.dispatch_context
+        with self.dispatch.override_kernel("tensor.concat", "cpu", provider), mock.patch.object(
+                self.dispatch, "dispatch_context", side_effect=original) as context:
+            self.assertIs(jt.core._fast_cat([self.a, self.b], 0), NotImplemented)
+            result = torch.cat([self.a, self.b])
+            # The continuation can also query placement for its setitem ops;
+            # only one query belongs to the concat input sequence.
+            self.assertEqual(sum(isinstance(call[0][0], list)
+                                 for call in context.call_args_list), 1)
+        self.assertEqual(calls, [0])
+        np.testing.assert_array_equal(result.numpy(), self.expected)
+
+    def test_legacy_binding_and_unbound_selector_use_the_python_path(self):
+        from jittor._runtime.step_capture import tracing
+        calls = []
+
+        def provider(inputs, dim):
+            calls.append(dim)
+            return self._continue(inputs, dim)
+
+        with self.dispatch.override_kernel("tensor.concat", "cpu", provider):
+            jt.core._compat_fast_bind(tracing)
+            self.assertIs(jt.core._fast_cat([self.a, self.b], 0), NotImplemented)
+            self.bind(jt)
+            with mock.patch.object(self.dispatch, "_NATIVE_SELECT", False):
+                self.assertIs(jt.core._fast_cat([self.a, self.b], 0), NotImplemented)
+                result = torch.cat([self.a, self.b])
+        self.assertEqual(calls, [0])
+        np.testing.assert_array_equal(result.numpy(), self.expected)
 
 
 class TestFastGetitem(unittest.TestCase):
@@ -134,6 +334,244 @@ class TestFastGetitem(unittest.TestCase):
         expected = np.zeros((3, 4), "float32")
         expected[1:, :2] = 1
         np.testing.assert_array_equal(x.grad.numpy(), expected)
+
+
+class TestFastGetitemRegisteredBackend(unittest.TestCase):
+    def setUp(self):
+        from jittor._runtime import dispatch
+        from jittor.ops import indexing
+        from jittor.compat.torch.frontend import tensor_frontend
+        from jittor.compat.torch.installers.tensor import method_api
+        from jittor.compat.torch.installers.tensor.methods import _bind_native_fast_paths
+        self.dispatch, self.indexing = dispatch, indexing
+        self.frontend, self.methods, self.bind = tensor_frontend, method_api, _bind_native_fast_paths
+        self.flags = jt.flag_scope(use_cuda=0, no_grad=1, amp_reg=0, auto_graph_replay=0)
+        self.flags.__enter__()
+        self.addCleanup(self.flags.__exit__, None, None, None)
+        self.bind(jt)
+        self.values = np.arange(24, dtype="float32").reshape(4, 6)
+        # No explicit CPU-residency hint: that hint deliberately retains the
+        # Python path, even when the provider itself supports CPU execution.
+        self.x = jt.array(self.values)
+        self.assertLess(self.x.placement_backend, 0)
+        self.index = (slice(1, 4, 2), slice(None, None, 2))
+
+    def tearDown(self):
+        self.bind(jt)
+
+    def _get(self, value, index, slow=False):
+        guard = (mock.patch.object(jt.core, "_fast_getitem", return_value=NotImplemented)
+                 if slow else _refusing(self.indexing, "_getitem_result"))
+        with guard, self.frontend(torch.Tensor, like=value, default_placement=False):
+            return self.methods._torch_getitem(value, index)
+
+    def test_selected_override_runs_once_with_normalized_index_and_frontend(self):
+        seen = []
+
+        def supports(value, index, return_x):
+            seen.append(("supports", index, index is self.index, return_x))
+            return True
+
+        def provider(value, index, return_x):
+            seen.append(("provider", index, index is self.index, return_x))
+            result = jt.core.ops.getitem(value, index)
+            self.assertIsInstance(result, torch.Tensor)
+            return result
+
+        with self.dispatch.override_kernel("tensor.getitem", "cpu", provider,
+                                           supports=supports, dtypes=("float32",)):
+            result = self._get(self.x, self.index)
+        self.assertEqual(seen, [("supports", self.index, False, None),
+                                ("provider", self.index, False, None)])
+        self.assertTrue(result._is_view())
+        np.testing.assert_array_equal(result.numpy(), self.values[self.index])
+
+    def test_decline_is_once_on_fast_and_slow_paths_and_views_write_to_root(self):
+        for slow in (False, True):
+            with self.subTest(slow=slow):
+                root = jt.array(self.values)
+                seen = []
+
+                def decline(*args):
+                    seen.append(args[1])
+                    return None
+
+                # Check native view flattening without a frontend scope: a
+                # Torch result on CPU acquires explicit CPU placement, which
+                # intentionally makes its next indexing call use Python.
+                getter = self.indexing.getitem if slow else jt.core._fast_getitem
+                with self.dispatch.override_kernel("tensor.getitem", "cpu", decline):
+                    view = getter(root, self.index)
+                    self.assertIsNot(view, NotImplemented)
+                    nested = getter(view, (slice(None), slice(1, 2)))
+                    self.assertIsNot(nested, NotImplemented)
+                self.assertEqual(len(seen), 2)
+                np.testing.assert_array_equal(view.numpy(), self.values[self.index])
+                self.assertEqual(nested._view_base_id(), view._view_base_id())
+                nested.assign(nested + 100)
+                expected = self.values.copy()
+                expected[1:4:2, 2:3] += 100
+                np.testing.assert_array_equal(root.numpy(), expected)
+
+    def test_provider_existing_alternate_view_and_plain_results_match_slow_path(self):
+        for slow in (False, True):
+            for recorded in (False, True):
+                with self.subTest(slow=slow, recorded=recorded):
+                    source = jt.array(self.values)
+                    alternate = jt.array(self.values + 100)
+                    provider_result = jt.core.ops.getitem(
+                        alternate if recorded else source, self.index)
+                    if recorded:
+                        provider_result._set_view_of(alternate, self.index)
+                    original_base = provider_result._view_base_id()
+                    calls = []
+
+                    def provider(*args):
+                        calls.append(args)
+                        return provider_result
+
+                    with self.dispatch.override_kernel("tensor.getitem", "cpu", provider):
+                        result = self._get(source, self.index, slow)
+                    self.assertIs(result, provider_result)
+                    self.assertEqual(len(calls), 1)
+                    self.assertTrue(result._is_view())
+                    if recorded:
+                        self.assertEqual(result._view_base_id(), original_base)
+                    result.assign(result + 7)
+                    expected_source, expected_alternate = self.values.copy(), self.values + 100
+                    (expected_alternate if recorded else expected_source)[self.index] += 7
+                    np.testing.assert_array_equal(source.numpy(), expected_source)
+                    np.testing.assert_array_equal(alternate.numpy(), expected_alternate)
+
+    def test_ineligible_provider_predicate_is_once_on_both_paths(self):
+        for slow in (False, True):
+            seen = []
+
+            def supports(*args):
+                seen.append(args[1])
+                return False
+
+            def unexpected(*args):
+                raise AssertionError("ineligible provider executed")
+
+            with self.subTest(slow=slow), self.dispatch.override_kernel(
+                    "tensor.getitem", "cpu", unexpected, supports=supports):
+                result = self._get(self.x, self.index, slow)
+            self.assertEqual(seen, [self.index])
+            np.testing.assert_array_equal(result.numpy(), self.values[self.index])
+
+    def test_provider_and_predicate_errors_propagate_and_restore_context(self):
+        class ProviderError(ValueError):
+            pass
+
+        for fail_in in ("provider", "predicate"):
+            calls = []
+
+            def fail(*args):
+                calls.append(args)
+                raise ProviderError("getitem callback failed")
+
+            provider = fail if fail_in == "provider" else lambda *args: None
+            supports = fail if fail_in == "predicate" else None
+            with self.subTest(fail_in=fail_in), self.dispatch.override_kernel(
+                    "tensor.getitem", "cpu", provider, supports=supports):
+                placement = jt.core._current_tensor_placement()
+                with self.assertRaisesRegex(ProviderError, "getitem callback failed"):
+                    self._get(self.x, self.index)
+                self.assertEqual(jt.core._current_tensor_placement(), placement)
+                self.assertEqual(jt.flags.amp_reg, 0)
+                self.assertEqual(len(calls), 1)
+
+    def test_python_dispatch_overrides_leave_native_shortcut(self):
+        calls = []
+
+        def provider(value, index, return_x):
+            calls.append(index)
+            return jt.core.ops.getitem(value, index)
+
+        overrides = (
+            (self.indexing, "try_dispatch", lambda _op, *args: provider(*args)),
+            (self.dispatch, "select_kernel", lambda *args, **kwargs: provider),
+            (self.dispatch, "dispatch_context", self.dispatch.dispatch_context),
+        )
+        for owner, name, replacement in overrides:
+            calls.clear()
+            with self.subTest(name=name), self.dispatch.override_kernel(
+                    "tensor.getitem", "cpu", provider), mock.patch.object(
+                    owner, name, side_effect=replacement) as callback:
+                self.assertIs(jt.core._fast_getitem(self.x, self.index), NotImplemented)
+                result = self._get(self.x, self.index, slow=True)
+                self.assertGreaterEqual(callback.call_count, 1)
+            self.assertEqual(calls, [self.index])
+            np.testing.assert_array_equal(result.numpy(), self.values[self.index])
+
+    def test_legacy_binding_and_disabled_native_selector_keep_python_route(self):
+        from jittor._runtime.step_capture import tracing
+        seen = []
+
+        def provider(value, index, return_x):
+            seen.append(index)
+            return jt.core.ops.getitem(value, index)
+
+        with self.dispatch.override_kernel("tensor.getitem", "cpu", provider):
+            jt.core._compat_fast_bind(tracing)
+            self.assertIs(jt.core._fast_getitem(self.x, self.index), NotImplemented)
+            self.bind(jt)
+            with mock.patch.object(self.dispatch, "_NATIVE_SELECT", False):
+                self.assertIs(jt.core._fast_getitem(self.x, self.index), NotImplemented)
+                result = self._get(self.x, self.index, slow=True)
+        self.assertEqual(seen, [self.index])
+        np.testing.assert_array_equal(result.numpy(), self.values[self.index])
+
+    def test_unsupported_spellings_training_and_owner_hints_keep_python_route(self):
+        class DynamicBound:
+            def __index__(self):
+                return 1
+
+        with self.dispatch.override_kernel("tensor.getitem", "cpu", lambda *args: None):
+            for index in (True, (True,), slice(None, None, -1), slice(None, None, 0),
+                          slice(DynamicBound(), None), slice(np.int64(1), None), [1, 2]):
+                with self.subTest(index=index):
+                    self.assertIs(jt.core._fast_getitem(self.x, index), NotImplemented)
+            with jt.flag_scope(no_grad=0):
+                self.assertIs(jt.core._fast_getitem(self.x, self.index), NotImplemented)
+            for attribute, value in (("_torch_data_owner", self.x),
+                                     ("_jittor_torch_force_cpu", True)):
+                hinted = jt.array(self.values)
+                setattr(hinted, attribute, value)
+                self.assertIs(jt.core._fast_getitem(hinted, self.index), NotImplemented)
+            explicit_cpu = torch.tensor(self.values, device="cpu")
+            self.assertIs(jt.core._fast_getitem(explicit_cpu, self.index), NotImplemented)
+            self.assertIs(jt.core._fast_getitem(explicit_cpu.data, self.index), NotImplemented)
+
+    def test_integer_cascade_keeps_native_producer_without_provider(self):
+        def unexpected(*args):
+            raise AssertionError("cascade integer selected a provider")
+
+        with self.dispatch.override_kernel("tensor.getitem", "cpu", unexpected):
+            for slow in (False, True):
+                for index in (1, (1,)):
+                    result = self._get(self.x, index, slow)
+                    self.assertTrue(result._is_view())
+                    np.testing.assert_array_equal(result.numpy(), self.values[1])
+
+    def test_training_uses_python_provider_and_retains_gradients(self):
+        calls = []
+
+        def provider(value, index, return_x):
+            calls.append(index)
+            return jt.core.ops.getitem(value, index)
+
+        with jt.flag_scope(no_grad=0), self.dispatch.override_kernel(
+                "tensor.getitem", "cpu", provider):
+            source = jt.array(self.values).start_grad()
+            self.assertIs(jt.core._fast_getitem(source, self.index), NotImplemented)
+            result = self._get(source, self.index, slow=True)
+            gradient = jt.grad(result.sum(), source)
+        expected = np.zeros_like(self.values)
+        expected[self.index] = 1
+        self.assertEqual(calls, [self.index])
+        np.testing.assert_array_equal(gradient.numpy(), expected)
 
 
 class TestFastDtype(unittest.TestCase):
@@ -273,10 +711,13 @@ class TestFastViews(unittest.TestCase):
         np.testing.assert_array_equal(heads.numpy(), n.transpose(0, 2, 1, 3))
         np.testing.assert_array_equal(a.permute((3, 0, 2, 1)).numpy(), n.transpose(3, 0, 2, 1))
         np.testing.assert_array_equal(a.permute([1, 0, 3, 2]).numpy(), n.transpose(1, 0, 3, 2))
-        # Composed with the transpose it is a view of, and no transpose at
-        # all when the two cancel.
+        # Composed with the transpose it is a view of. Since default
+        # transposes are real storage views, the inverse composition is still
+        # a transpose *node*; what must hold is that it lands on a's storage
+        # (no copy) rather than being materialised.
         back = heads.permute(0, 2, 1, 3)
-        self.assertNotEqual(back._producer_op(), "transpose")
+        self.assertTrue(back._producer_is_view())
+        self.assertIs(back._view_base_object(), a)
         np.testing.assert_array_equal(back.numpy(), n)
         np.testing.assert_array_equal(heads.permute(1, 0, 3, 2).numpy(),
                                       n.transpose(2, 0, 3, 1))
@@ -332,6 +773,173 @@ class _ToyRMSNorm(torch.nn.Module):
         variance = hidden.pow(2).mean(-1, keepdim=True)
         hidden = hidden * torch.rsqrt(variance + self.variance_epsilon)
         return self.weight * hidden.to(dtype)
+
+
+class TestRegisteredRmsInference(unittest.TestCase):
+    def setUp(self):
+        from jittor._runtime import dispatch
+        from jittor.compat.torch.installers.nn import module_methods
+        self.dispatch, self.methods = dispatch, module_methods
+        # Check one dispatch at a time. Automatic replay deliberately runs an
+        # eager warmup and a capture, then can execute without Python callbacks.
+        self.flags = jt.flag_scope(use_cuda=0, amp_reg=0, auto_graph_replay=0)
+        self.flags.__enter__()
+        self.addCleanup(self.flags.__exit__, None, None, None)
+        self.norm = _ToyRMSNorm(8).cpu().eval()
+        self.outer = torch.nn.Sequential(self.norm).eval()
+        self.values = np.arange(16, dtype="float32").reshape(2, 8) / 16 + 0.5
+        self.x = torch.tensor(self.values, dtype=torch.float32, device="cpu")
+        # Publish the nested module's parameters before exercising its shortcut.
+        with torch.no_grad():
+            self.outer(self.x).sync()
+
+    @staticmethod
+    def _inside_python_rms():
+        import sys
+        frame = sys._getframe(1)
+        while frame is not None:
+            if frame.f_code.co_name == "_standard_rms_norm":
+                return True
+            frame = frame.f_back
+        return False
+
+    def _reference(self):
+        return self.values / np.sqrt((self.values ** 2).mean(-1, keepdims=True)
+                                     + self.norm.variance_epsilon)
+
+    def test_registered_provider_runs_once_and_reads_current_weight_and_epsilon(self):
+        seen = []
+
+        def provider(value, weight, epsilon):
+            seen.append((epsilon, self._inside_python_rms()))
+            return value * 2 + weight
+
+        with torch.no_grad(), self.dispatch.override_kernel("nn.rms_norm.inference", "cpu", provider):
+            first = self.outer(self.x).numpy()
+            self.norm.weight.copy_(torch.full((8,), 0.25, device="cpu"))
+            self.norm.variance_epsilon = 0.125
+            second = self.outer(self.x).numpy()
+        self.assertEqual(seen, [(1e-6, False), (0.125, False)])
+        np.testing.assert_array_equal(first, self.values * 2 + 1)
+        np.testing.assert_array_equal(second, self.values * 2 + 0.25)
+
+    def test_training_provider_keeps_priority_even_under_no_grad(self):
+        seen = []
+
+        def training(value, weight, epsilon):
+            seen.append(("training", self._inside_python_rms()))
+            return value + 7
+
+        def unexpected(*args):
+            raise AssertionError("inference provider ran after an accepted training provider")
+
+        with torch.no_grad(), self.dispatch.override_kernel("nn.rms_norm.training", "cpu", training), \
+                self.dispatch.override_kernel("nn.rms_norm.inference", "cpu", unexpected):
+            actual = self.outer(self.x).numpy()
+        self.assertEqual(seen, [("training", False)])
+        np.testing.assert_array_equal(actual, self.values + 7)
+
+    def test_declining_providers_resume_original_forward_once(self):
+        seen = []
+
+        def training(*args):
+            seen.append(("training", self._inside_python_rms()))
+            return None
+
+        def inference(*args):
+            seen.append(("inference", self._inside_python_rms()))
+            return None
+
+        with torch.no_grad(), self.dispatch.override_kernel("nn.rms_norm.training", "cpu", training), \
+                self.dispatch.override_kernel("nn.rms_norm.inference", "cpu", inference):
+            actual = self.outer(self.x).numpy()
+        self.assertEqual(seen, [("training", False), ("inference", False)])
+        np.testing.assert_allclose(actual, self._reference(), rtol=1e-6, atol=1e-6)
+
+    def test_callback_errors_are_not_retried_and_restore_placement(self):
+        class RmsError(ValueError):
+            pass
+
+        for predicate in (False, True):
+            seen = []
+
+            def failure(*args):
+                seen.append(self._inside_python_rms())
+                raise RmsError("registered RMS failure")
+
+            with self.subTest(predicate=predicate), torch.no_grad():
+                placement = jt.core._current_tensor_placement()
+                provider = (lambda *args: None) if predicate else failure
+                with self.dispatch.override_kernel("nn.rms_norm.inference", "cpu", provider,
+                                                   supports=failure if predicate else None):
+                    with self.assertRaisesRegex(RmsError, "registered RMS failure"):
+                        self.outer(self.x)
+                self.assertEqual(seen, [False])
+                self.assertEqual(jt.core._current_tensor_placement(), placement)
+
+    def test_gradient_enabled_calls_keep_the_python_owner(self):
+        seen = []
+
+        def training(value, weight, epsilon):
+            seen.append(self._inside_python_rms())
+            return value * weight
+
+        self.x.requires_grad_(True)
+        with self.dispatch.override_kernel("nn.rms_norm.training", "cpu", training):
+            result = self.outer(self.x)
+            result.sum().backward()
+        self.assertEqual(seen, [True])
+        np.testing.assert_array_equal(result.detach().numpy(), self.values)
+        np.testing.assert_array_equal(self.x.grad.numpy(), np.ones_like(self.values))
+
+    def test_bfloat16_order_helper_and_module_hooks_stay_in_python(self):
+        x_bf16 = self.x.to(torch.bfloat16)
+        seen = []
+
+        def bf16_order(value, weight, epsilon):
+            seen.append(self._inside_python_rms())
+            return value
+
+        with torch.no_grad(), mock.patch.object(self.methods, "_acl_bfloat16_rms_norm", bf16_order):
+            result = self.outer(x_bf16)
+        self.assertEqual(seen, [True])
+        self.assertEqual(result.dtype, torch.bfloat16)
+        np.testing.assert_array_equal(result.float().numpy(), self.values)
+        seen.clear()
+
+        def provider(value, weight, epsilon):
+            seen.append(self._inside_python_rms())
+            return value * 2
+
+        hooked = []
+        handle = self.norm.register_forward_hook(lambda module, args, output: hooked.append(output))
+        try:
+            with torch.no_grad(), self.dispatch.override_kernel("nn.rms_norm.inference", "cpu", provider):
+                output = self.outer(self.x)
+            self.assertEqual(seen, [True])
+            self.assertEqual(len(hooked), 1)
+            np.testing.assert_array_equal(output.numpy(), self.values * 2)
+        finally:
+            handle.remove()
+
+    def test_instance_forward_and_python_placement_overrides_are_preserved(self):
+        seen = []
+
+        def provider(value, weight, epsilon):
+            seen.append(self._inside_python_rms())
+            return value * 2
+
+        with torch.no_grad(), self.dispatch.override_kernel("nn.rms_norm.inference", "cpu", provider):
+            self.norm.forward = lambda value: value + 11
+            result = self.outer(self.x)
+            self.assertEqual(seen, [])
+            np.testing.assert_array_equal(result.numpy(), self.values + 11)
+            del self.norm.forward
+            original = self.dispatch.dispatch_context
+            with mock.patch.object(self.dispatch, "dispatch_context", side_effect=original):
+                result = self.outer(self.x)
+            self.assertEqual(seen, [True])
+            np.testing.assert_array_equal(result.numpy(), self.values * 2)
 
 
 class TestNativeModuleDispatch(unittest.TestCase):

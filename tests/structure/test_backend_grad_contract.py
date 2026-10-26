@@ -254,6 +254,9 @@ BACKEND_GRAD_COVERAGE = (
     ("backends/acl/kernels/ops/cumsum_op.py", "CumsumACL",
      "tests/backends/acl/test_aclop.py::TestACL::test_cumsum_grad",
      "npu_hardware"),
+    # DropoutACL supplies its gradient as a CodeOp source, which the scanner
+    # counts like any other backend gradient; test_aclop.py::TestACL::
+    # test_dropout_grad still checks its math.
     ("backends/acl/kernels/ops/dropout_op.py", "DropoutACL",
      "tests/backends/acl/test_aclop.py::TestACL::test_dropout_grad",
      "npu_hardware"),
