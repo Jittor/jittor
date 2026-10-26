@@ -9,7 +9,8 @@ from ..diagnostics import EXPECTED, swallowed
 from typing import Any, Dict, List
 from .. import fsdp_hooks as _fsdp_hooks
 from .optimizer_state import (
-    _OptState, _ParamState, _adagrad_step_tensor, _torch_optimizer_kind,
+    _OptState, _ParamState, _TORCH_TO_NATIVE_STATE, _NATIVE_TO_TORCH_STATE,
+    _adagrad_step_tensor, _torch_optimizer_kind,
 )
 from jittor.optim.algorithms.sgd import (
     MOMENTUM_INITIALIZED as _MOMENTUM_INITIALIZED,
@@ -167,34 +168,22 @@ def _state_dict_torch(self):
             pid = param_ids.get(id(p))
             if pid is None or (kind != "adagrad" and int(steps[i]) <= 0):
                 continue
+            if kind not in _NATIVE_TO_TORCH_STATE:
+                continue
             entry = {}
-            if kind in ("adam", "adamw"):
-                if "m" in pg and i < len(pg["m"]):
-                    entry["exp_avg"] = pg["m"][i]
-                if "values" in pg and i < len(pg["values"]):
-                    entry["exp_avg_sq"] = pg["values"][i]
-            elif kind == "sgd":
+            if kind == "sgd":
                 if "values" in pg and i < len(pg["values"]) \
                         and _momentum_initialized_flags(pg)[i]:
                     entry["momentum_buffer"] = pg["values"][i]
-            elif kind == "rmsprop":
-                if "values" in pg and i < len(pg["values"]):
-                    entry["square_avg"] = pg["values"][i]
-            elif kind == "adagrad":
-                if "values" in pg and i < len(pg["values"]):
-                    entry["sum"] = pg["values"][i]
-            elif kind == "adan":
-                for source, target in (
-                        ("m", "exp_avg"), ("v", "exp_avg_sq"),
-                        ("d", "exp_avg_diff"),
-                        ("pre_grad", "pre_grad")):
-                    values = pg.get(source)
-                    if values is not None and i < len(values):
-                        entry[target] = values[i]
+            else:
+                if kind == "adagrad":
+                    entry["step"] = steps[i]
+                else:
+                    entry["step"] = g.tensor(float(steps[i]), dtype=g.float32)
+                for native, torch_key in _NATIVE_TO_TORCH_STATE.get(kind, {}).items():
+                    if native in pg and i < len(pg[native]):
+                        entry[torch_key] = pg[native][i]
             if entry:
-                if kind != "sgd":
-                    entry["step"] = (steps[i] if kind == "adagrad" else
-                                     g.tensor(float(steps[i]), dtype=g.float32))
                 state[pid] = entry
     return {"state": state, "param_groups": param_groups}
 
@@ -292,26 +281,19 @@ def _load_state_dict_torch(self, state_dict):
                 continue
             pg[k] = v
         for i, (st, step) in enumerate(slots):
-            if kind in ("adam", "adamw"):
-                if "m" in pg and i < len(pg["m"]) and "exp_avg" in st:
-                    pg["m"][i] = st["exp_avg"]
-                if "values" in pg and i < len(pg["values"]) \
-                        and "exp_avg_sq" in st:
-                    pg["values"][i] = st["exp_avg_sq"]
-            elif kind == "sgd" and st.get("momentum_buffer") is not None:
-                pg["values"][i] = st["momentum_buffer"]
-                _momentum_initialized_flags(pg)[i] = True
-            elif kind == "rmsprop" and "square_avg" in st:
-                pg["values"][i] = st["square_avg"]
-            elif kind == "adagrad":
-                pg["values"][i] = st["sum"].clone().stop_grad()
-            elif kind == "adan":
-                for source, target in (
-                        ("m", "exp_avg"), ("v", "exp_avg_sq"),
-                        ("d", "exp_avg_diff"),
-                        ("pre_grad", "pre_grad")):
-                    if target in st and source in pg and i < len(pg[source]):
-                        pg[source][i] = st[target]
+            for torch_key, native in _TORCH_TO_NATIVE_STATE.get(kind, {}).items():
+                if torch_key not in st:
+                    continue
+                if torch_key == "momentum_buffer" and st[torch_key] is None:
+                    continue
+                if i >= len(pg.get(native, ())):
+                    continue
+                if kind == "adagrad":
+                    pg[native][i] = st[torch_key].clone().stop_grad()
+                else:
+                    pg[native][i] = st[torch_key]
+                    if kind == "sgd" and torch_key == "momentum_buffer":
+                        _momentum_initialized_flags(pg)[i] = True
             if kind == "adagrad":
                 steps[i].update(_adagrad_step_tensor(step))
             else:

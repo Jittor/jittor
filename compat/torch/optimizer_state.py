@@ -18,6 +18,35 @@ def _param_steps(pg):
     return _torch_param_steps(pg)
 
 
+#: Torch state-dict key -> native optimizer buffer key, per optimizer kind.
+#: This table is the single owner of the name translation: `state_dict`,
+#: `load_state_dict` and the live `state` view all read it, so adding a state
+#: key means editing one place instead of three.
+_TORCH_TO_NATIVE_STATE = {
+    "adam": {"exp_avg": "m", "exp_avg_sq": "values"},
+    "adamw": {"exp_avg": "m", "exp_avg_sq": "values"},
+    "sgd": {"momentum_buffer": "values"},
+    "rmsprop": {"square_avg": "values"},
+    "adagrad": {"sum": "values"},
+    "adan": {"exp_avg": "m", "exp_avg_sq": "v",
+             "exp_avg_diff": "d", "pre_grad": "pre_grad"},
+}
+_NATIVE_TO_TORCH_STATE = {
+    kind: {native: torch for torch, native in names.items()}
+    for kind, names in _TORCH_TO_NATIVE_STATE.items()
+}
+
+
+def _torch_state_key(kind, native):
+    """The Torch spelling of a native buffer key, or None."""
+    return _NATIVE_TO_TORCH_STATE.get(kind, {}).get(native)
+
+
+def _native_state_key(kind, torch):
+    """The native buffer key for a Torch state key, or None."""
+    return _TORCH_TO_NATIVE_STATE.get(kind, {}).get(torch)
+
+
 def _adagrad_step_tensor(value):
     """Create Torch's host step scalar through its placement-aware factory."""
     torch_owner = get_install_context(jt).target_namespace
@@ -108,16 +137,7 @@ class _OptState:
                 steps[i] = int(value)
             self._sync_n_step()
             return
-        mappings = {
-            "adam": {"exp_avg": "m", "exp_avg_sq": "values"},
-            "adamw": {"exp_avg": "m", "exp_avg_sq": "values"},
-            "sgd": {"momentum_buffer": "values"},
-            "rmsprop": {"square_avg": "values"},
-            "adagrad": {"sum": "values"},
-            "adan": {"exp_avg": "m", "exp_avg_sq": "v",
-                     "exp_avg_diff": "d", "pre_grad": "pre_grad"},
-        }
-        target = mappings.get(kind, {}).get(key)
+        target = _native_state_key(kind, key)
         buffers = pg.get(target) if target is not None else None
         if kind == "sgd" and key == "momentum_buffer" and value is None:
             # torch's "no buffer yet": the next momentum update seeds it.
@@ -141,31 +161,27 @@ class _OptState:
                 "sum": pg["values"][i], "step": steps[i]})
         if int(steps[i]) <= 0:
             return default
+        names = _NATIVE_TO_TORCH_STATE.get(kind, {})
+
+        def present():
+            return {torch: pg[native][i] for native, torch in names.items()
+                    if native in pg and i < len(pg[native])}
+
         if kind in ("adam", "adamw") and "m" in pg and "values" in pg:
             return _ParamState(self, param, {
-                "exp_avg": pg["m"][i],
-                "exp_avg_sq": pg["values"][i],
-                "step": float(steps[i])})
+                **present(), "step": float(steps[i])})
         if kind == "sgd":
             # Present exactly while a buffer exists, like torch: independent
             # of the *current* momentum, so pausing momentum keeps it.
             if "values" in pg and _momentum_initialized_flags(pg)[i]:
-                return _ParamState(self, param, {
-                    "momentum_buffer": pg["values"][i]})
+                return _ParamState(self, param, present())
             return default
         if kind == "rmsprop" and "values" in pg:
             return _ParamState(self, param, {
-                "square_avg": pg["values"][i],
-                "step": float(steps[i])})
+                **present(), "step": float(steps[i])})
         if kind == "adan":
-            out = {"step": float(steps[i])}
-            for source, target in (
-                    ("m", "exp_avg"), ("v", "exp_avg_sq"),
-                    ("d", "exp_avg_diff"),
-                    ("pre_grad", "pre_grad")):
-                if source in pg and i < len(pg[source]):
-                    out[target] = pg[source][i]
-            return _ParamState(self, param, out)
+            return _ParamState(self, param, {
+                **present(), "step": float(steps[i])})
         return default
     def __getitem__(self, param):
         r = self.get(param, None)
