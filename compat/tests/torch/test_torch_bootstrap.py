@@ -627,8 +627,10 @@ class TestTorchBootstrap(unittest.TestCase):
         root._torch_compat_install_context = types.SimpleNamespace(
             registry=types.SimpleNamespace(_published={})
         )
-        with mock.patch.object(runtime, "torch_namespace_claimable", return_value=True), \
+        with tempfile.TemporaryDirectory(dir=str(_TEST_STATE_ROOT)) as directory, \
+                mock.patch.object(runtime, "torch_namespace_claimable", return_value=True), \
                 mock.patch.object(runtime, "configure_torch_math_flags"), \
+                mock.patch.object(runtime, "jittor_python_root", return_value=directory), \
                 mock.patch("jittor.compat.torch.install") as install, \
                 mock.patch.dict(sys.modules, {"jittor": root, "torch": root}, clear=False), \
                 mock.patch.dict(os.environ, {}, clear=False):
@@ -640,7 +642,8 @@ class TestTorchBootstrap(unittest.TestCase):
             install.side_effect = install_target
             result = runtime._activate_once(
                 _root_module=root,
-                _preflight_result=types.SimpleNamespace(active=True, runtime_root="/runtime"),
+                _preflight_result=types.SimpleNamespace(
+                    active=True, runtime_root=os.path.join(directory, "runtime")),
                 _composition=True,
             )
 
