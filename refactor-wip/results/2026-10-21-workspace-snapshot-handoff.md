@@ -1,5 +1,13 @@
 # 2026-10-21 工作区快照与本机接续交接
 
+## 2026-10-26 19:36 +0800 当前继续入口
+
+Day2–5尚未完成，唯一状态源仍为[看板](../architecture/refactor-board.md)，直接证据见[本日结果](2026-10-26-torch-compat-release-day2-5.md)。main HEAD30085673、91项原dirty保持；再次fetch目标e5cffe1a已为八相关树祖先，无需整合，未stash/reset/clean/整合2.0-refactor。以下旧窗口/PID均仅历史快照。
+
+T5 row-mean r2已bootstrap64s、真实CUDA17pass/0skip、两fresh native各32默认3冻结回放五阶段exact/finite和独立PT原局部预算PASS，source efe22515/core6dfe0645。原r1两失败保留，新隔离修正包括实测para0 launch宽度和profiler Count聚合；未带回main。原双seedstrict771/2088 FAIL不变，受影响CPU和新默认3 step51尚未执行成功。当前串行窗口已交`20261026-t5-r2-cpu-regression-r1/execute.py`一次900s/15原测试；每次先读其root-status/receipt和实际/proc，不重复启动。step51后继仅准备于`20261026-t5-ordered-mean-r2-1854/step51-default3-prepared-r1/`，硬前置包含CPU PASS，没有full100。
+
+性能r6 PT/JT各19update、原rawmemory/allocator/NVML/真实CUDA trace及原机械comparator均PASS；最终source/tool守卫和组空/holder核验19:35:14完成，main完整冻结已解除。原收据绑定HEAD30085673/source bdae0ec0，后续文档提交不得重绑旧结果。共享1×8单轮hot ratio1.356只为诊断，无正式三轮/代表尺寸/容量验收。GC r3私有CPU14+解析PASS，但新add/sum一阶策略负例FAIL；r4四文件静态修正/17回归已准备，排T5CPU后且仍不得直接公共接线。Vision bootstrap2在300s预算超时未eval，剩1734.724s；绝对cache路径导致重编/重链已证实，v4单次cold-aware900+3×180工具只准备。原Vision和BERT任务FAIL保持，BERT两update只离线准备，不重训。
+
 ## 2026-10-26 18:40 +0800 当前继续入口
 
 Day2–5 尚未完成，唯一状态源仍为[看板](../architecture/refactor-board.md)，数字、身份和证据边界见[本日结果](2026-10-26-torch-compat-release-day2-5.md)。主树已本地提交 `6f61c185`、未 push，91项 dirty 保留；再次 fetch 的目标仍 e5cffe1a，六相关树均已含其历史，无需 merge。Vision r2 默认3、无hook 连续61→67/save64及fresh64→67均执行成功、实际CUDA/fallback0/core exact，但原零容差769字段仍FAIL1项final/eval/logits，max_abs5.96e-8；最终40参数/40momentum及scheduler exact，history只有统计字段，没有raw-grad/每步参数证据。两artifact audit PASS，失败后无cost/重试，原五格FAIL不变。后继eval replay只离线准备，不能把短窗口写成完整模型通过。

@@ -5,11 +5,25 @@
 **Not complete.** Day2–3 remains failed or incomplete at its original gates. Day4–5 has shared-GPU diagnostic data; r4 and r5 bounded waiters have both timed out without launching measurements. No release-valid stable-window result exists. Thresholds, seeds, comparison fields, failure evidence, checkpoints, caches, and worktree changes remain intact.
 
 - Date: 2026-10-26
-- Main continuation baseline: integrate/cgq-transformers-native-multicard-target at 6f61c185595242ba95dd711ee16c2ba53ba4ad2e; all execution receipts and earlier snapshots retain their original source identities
+- Main continuation baseline: integrate/cgq-transformers-native-multicard-target at 30085673abb3cf3eb5d2fad6a5bb90aa13c16301; all execution receipts and earlier snapshots retain their original source identities
 - Candidate: release/torch-compat-day23-fix-20261021 at 9e0e187bb013e71d85111acfd668e46aeff9f9d2
 - Remote sync: origin/cgq_transformers fetched at e5cffe1ae60c418f53c5bb1cdca9182577fd2b81; origin/2.0-refactor not integrated
 - Owner: cgq / Jittor Torch compatibility maintainers
 - Review when: candidate source, dependencies, fixtures, device, or acceptance protocol changes
+
+## 2026-10-26 19:36 +0800：默认归约局部通过与显存采样闭环
+
+Day2–5仍未完成。再次fetch目标origin/cgq_transformers仍e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，八个相关工作树HEAD均已包含该历史，无需merge。main HEAD30085673abb3cf3eb5d2fad6a5bb90aa13c16301、91项dirty保留；未stash/reset/clean/整合origin/2.0-refactor。详细现场已保存在live-snapshot.json；PID与GPU只对应采样时刻。
+
+T5 row-mean原r1的17项真实CUDA结果为15pass/2fail，原source3290d483、core6187ed5a及全部原件保留。lazy para0失败由launch_bounds256与实际p2上限1024不一致触发；独立最小过程默认宽度失败、显式1024通过。新r2只在隔离复制树让level0 p1/p2使用同一cuda_thread_num；另一失败是profiler把两次调用聚合到Count2的一行，测试改为求Count而保留单reduce/数值所有权断言。17方法/32重复/FP64/原容差不变，新增128/512launch宽度子例。r2 source efe225153ddd2bb404f3dbef174fe22efe60319dd8057c4e5ae4a548b297765b、tool16f70a97f88cef00f3af1c72f5d0913c519ed401a37721b6d799f1b850c8aa26、实际core6dfe0645db0cdd9d4b30d38165a32a580896b19064557cb73056a96b62e24645；bootstrap63.970s、全部17CUDA tests221.190s且零skip，source/cache/core/GPU/fallback0守卫通过。两fresh native各32次冻结r38默认3回放，五阶段进程内/跨进程exact且finite；独立PT32回放满足原局部atol1e-5/rtol1e-4，output maxabs9.5367431640625e-7。权威为20261026-t5-ordered-mean-r2-1854/replay-comparison.json。这是局部重复性通过，CPU与新默认step51尚待直接执行，旧双seed771/2088 strict FAIL不变；未复制main/启动full100。
+
+GC隔离r3实际CPU bootstrap/14tests/positive/PT与9项解析比较通过，fallback0，source473f35d7/core9a210490身份一致；小图真实释放6allocation/48B、1次重放/3次saved read。48B不是净显存或峰值节省。新三项一阶策略探针rc1/4.407s：mul/tanh正确拒绝高阶，add/sum一阶exact但返回数学正确的零二阶而未按S1承诺拒绝；原FAIL保留。r4仅隔离准备四文件修正与原14+新增3项，source997d1acc，未运行；公共False、RNG/AMP/CUDA/defaultfusion/memory仍OPEN。证据根20261026-gc-native-s1-r3与20261026-gc-s1-next-design-r1。
+
+Vision eval回放v3已在原300sbootstrap2上限超时，300.946s/rc-15，source/fixture/seed退出守卫通过、组空，未执行eval/repeat/profile；剩余原累计预算1734.7242803839035s，不重置。缓存绝对路径改变使stamp/逐对象key/generated内容/RUNPATH变化，复制不等于warm cache，重链后也不能预设旧core字节hash。机制报告与单次cold-aware后继设计保存在20261026-vision-eval-replay-r1；原769字段FAIL1 final/eval/logits和五格FAIL均不变。
+
+性能r5采样失败的原error/sample未保存，无法补造其值；后继实测确认独立JT venv缺pynvml，固定增nvidia-ml-py12.560.30后纯NVML及公共native sampler通过。r6保留原采样/allocator守卫，增加验证前rawmemory落盘和sidecar绑定。新PT小格19update/27项终审PASS，JT亦rc0/28项终审PASS，原冻结comparator为MECHANICAL_SMALL_PAIR_PASS，最终source/tool守卫通过、两组与holder为空，19:35:14解除main冻结；两端仅原1×8/单轮诊断，不能替代代表尺寸/三轮/容量/稳定窗口。该轮main完整内容冻结bdae0ec0与HEAD30085673保留原执行身份，不重绑到后续文档提交。JT rawNVML error=null/samples14/peak3,238,002,688B，allocator live2,469,275,648/reserved2,731,540,480B；实际CUDA trace34,348events/7,995kernels。PT/JT hot median为0.111462s/0.151168s、观测ratio1.356，CV约0.226/0.152；不作正式速度或峰值显存结论。最初终审误把torch.Tensor要求为jt.Var同对象，已保留并只按已冻结frontend子类型契约修正审计谓词，计算脚本、守卫和比较器未变。权威20261026-perf-1311/v3-small-memory-evidence-r6-30085673/PAIR_FINAL_AUDIT.json。BERT原selected-best gap15.425953905%>15%继续FAIL；firstmicro train/dropout/GA2与旧eval probe不是同轨迹因果对照，未重训。
+
+当前串行首编窗口交T5受影响CPU单次900s原15项测试，入口20261026-t5-r2-cpu-regression-r1/root-status.json；须重查真实receipt和/proc，不能按此快照推断完成。GC r4排其后，Vision v4单次cold-aware工具已离线准备而未运行，承接原预算；T5默认3 step51工具仅准备，需CPU通过后再启。main没有合入这些隔离候选的新改动，没有重复full100或放宽门槛。
 
 ## 2026-10-26 18:40 +0800：Vision 恢复残差与性能显存采样失败
 
