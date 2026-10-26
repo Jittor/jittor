@@ -74,6 +74,22 @@ class _CompletedCopyEvent:
         return None
 
 
+def _host_snapshot_key(source, pool, device, n=None):
+    """What must be equal before a GPU snapshot may be reused.
+
+    ``tobytes`` owns its memory: a NumPy alias would miss the next in-place
+    update of a sampling metadata array.
+    """
+    return (n, source.dtype.str, source.shape, source.strides,
+            str(pool.dtype), device, source.tobytes())
+
+
+def _host_snapshot_hit(cached, buffer, pool, key):
+    """One cache-hit rule for UVA-backed and staged sampling snapshots."""
+    return (cached is not None and cached[0] is buffer and cached[1] is pool
+            and cached[2] == key and cached[3] is buffer.gpu)
+
+
 
 def _accelerator_enabled(jt, name):
     """The core capability answer, or None when the namespace is a test double.
@@ -258,19 +274,17 @@ def patch_buffer_pool(module):
 
             source = self.np[:n] if n is not None else self.np
             pool = self.pool
-            key = (n, source.dtype.str, source.shape, source.strides,
-                   str(pool.dtype), torch.cuda.current_device(),
-                   source.tobytes())
+            key = _host_snapshot_key(
+                source, pool, torch.cuda.current_device(), n)
             cached = getattr(self, _SAMPLE_META_SNAPSHOT, None)
-            if (cached is not None and cached[0] is pool
-                    and cached[1] == key and cached[2] is self.gpu):
+            if _host_snapshot_hit(cached, self, pool, key):
                 return self.gpu
 
             # A failed copy must be retried even if the host array is later
             # restored to its previous contents.
             setattr(self, _SAMPLE_META_SNAPSHOT, None)
             result = original_tensor_copy(self, n)
-            setattr(self, _SAMPLE_META_SNAPSHOT, (pool, key, result))
+            setattr(self, _SAMPLE_META_SNAPSHOT, (self, pool, key, result))
             return result
 
         set_attr(tensor_cls, 'copy_to_uva', copy_readonly_sample_meta)
@@ -372,12 +386,9 @@ def patch_sampling_states(module):
             source = buffer.np
             # bytes owns its memory: retaining a NumPy alias would miss the
             # next in-place update. Metadata changes also force publication.
-            key = (source.dtype.str, source.shape, source.strides,
-                   str(pool.dtype), device, source.tobytes())
+            key = _host_snapshot_key(source, pool, device)
             cached = previous.get(name)
-            if (cached is not None and cached[0] is buffer
-                    and cached[1] is pool and cached[2] == key
-                    and cached[3] is buffer.gpu):
+            if _host_snapshot_hit(cached, buffer, pool, key):
                 continue
             # A failed submission must be retried, even if the caller later
             # restores old host values. Never reuse or overwrite old storage.
