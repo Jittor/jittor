@@ -5,6 +5,7 @@ from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import jittor as jt
 from jittor._runtime.dispatch import native_rule, register_kernel, select_kernel
 from jittor._runtime.backend_libraries import get_library_ops
+from ._amp import prefers_half as _amp_retypes_output_to_half
 
 
 #: The AMP register the generic ``(a * b).sum(axis)`` contraction runs under.
@@ -124,25 +125,6 @@ def _cublas_matmul(a, b, trans_a=False, trans_b=False):
 def _cublas_batched_matmul(a, b, trans_a=False, trans_b=False):
     a, b = _broadcast_batch_dims(a, b)
     return get_library_ops("cublas").cublas_batched_matmul(a, b, trans_a, trans_b)
-
-
-def _amp_retypes_output_to_half():
-    """True when the AMP policy in force will give this product a half output.
-
-    Read off ``amp_reg``, which is the register dtype inference actually
-    consults, and not off ``auto_mixed_precision_level``, which is only one of
-    the two ways that register gets written. ``torch.autocast`` sets ``amp_reg``
-    directly -- ``compat/torch/grad.py::_refresh_amp_register`` -- and never
-    touches the level, so a guard on the level was blind to every autocast
-    region: a ``torch.autocast("cpu")`` training step died in the *backward*
-    with ``mkl_matmul_op.cc:30: support float32 only now``, which is precisely
-    the failure the comment in ``_supports_mkl`` predicts.
-
-    The float16 or bfloat16 preference, rather than any non-zero register. Level 3 sets
-    ``keep_reduce | keep_white``, which does not retype anything to a half, and
-    declining oneDNN there was a 99x slowdown bought for nothing.
-    """
-    return bool(int(jt.flags.amp_reg) & (jt.amp_flags.prefer16 | jt.amp_flags.prefer_bfloat16))
 
 
 def _supports_mkl(a, b, trans_a=False, trans_b=False):

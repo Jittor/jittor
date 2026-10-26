@@ -7,6 +7,7 @@ import jittor as jt
 from jittor._runtime.core_api import _output_requires_grad
 
 from ... import _arg_policy
+from ._amp import prefers_half as _amp_prefers_half
 from ..backends import hooks as _backend_hooks
 from jittor._runtime.dispatch import dispatch_context, select_kernel as _select_kernel
 from jittor.backends.cuda.kernels.nn.batch_norm_training_cuda import (
@@ -419,23 +420,6 @@ def _restore_half_dtype(result, x):
             str(result.dtype).replace("torch.", "") != name:
         return result.cast(name)
     return result
-
-
-def _amp_prefers_half():
-    """Whether an autocast/AMP region is asking float ops for a half dtype.
-
-    ``jittor`` has one process-wide register, so an autocast region lowers every
-    float operator it builds -- including the elementwise ones inside a
-    normalisation. ATen keeps ``layer_norm`` on its float32 list instead: the
-    statistics, the affine and their gradients run in float32 and round once at
-    the end. Left to the register, the deviation, its square and the affine
-    multiply all ran at bfloat16's eight mantissa bits; measured against the
-    float64 closed form that is ~4e-2 relative error in the statistics, and a
-    training trajectory that otherwise tracks float32 to 0.4% ended 79% off
-    (KI-COMPAT-019).
-    """
-    return bool(jt.flags.amp_reg
-                & (jt.amp_flags.prefer16 | jt.amp_flags.prefer_bfloat16))
 
 
 def layer_norm(

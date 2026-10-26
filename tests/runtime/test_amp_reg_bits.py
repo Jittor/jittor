@@ -330,5 +330,26 @@ class TestLayerNormAccumulatesInFloat32(unittest.TestCase):
         self._run("float16")
 
 
+class TestHalfPreferenceHasOneOwner(unittest.TestCase):
+    def test_the_two_spellings_share_the_helper(self):
+        from jittor.nn.functional import _amp
+        from jittor.nn.functional.matrix import _amp_retypes_output_to_half
+        from jittor.nn.functional.normalization import _amp_prefers_half
+        self.assertIs(_amp_prefers_half, _amp.prefers_half)
+        self.assertIs(_amp_retypes_output_to_half, _amp.prefers_half)
+
+    def test_only_the_half_bits_count(self):
+        from jittor.nn.functional._amp import prefers_half
+        with jt.flag_scope(amp_reg=0):
+            self.assertFalse(prefers_half())
+        with jt.flag_scope(amp_reg=jt.amp_flags.prefer16):
+            self.assertTrue(prefers_half())
+        with jt.flag_scope(amp_reg=jt.amp_flags.prefer_bfloat16):
+            self.assertTrue(prefers_half())
+        with jt.flag_scope(amp_reg=(jt.amp_flags.keep_reduce
+                                    | jt.amp_flags.keep_white)):
+            self.assertFalse(prefers_half())
+
+
 if __name__ == "__main__":
     unittest.main()
