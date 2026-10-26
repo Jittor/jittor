@@ -36,7 +36,16 @@ def _contraction_scope(fp32_output=False):
         # before multiplication also widens its backward and changes second
         # derivatives. prefer32 widens the accumulator's result instead.
         return jt.flag_scope(amp_reg=jt.amp_flags.prefer32)
-    return jt.flag_scope(amp_reg=jt.flags.amp_reg | jt.amp_flags.keep_reduce)
+    # A half preference plus keep_reduce made the explicit float32 cast inside
+    # the reduce constructor come back as a half Var, so the contraction
+    # accumulated at the half width: at K=256 the error against the bf16-input
+    # reference grew to 3.3%, and an 80-step autocast training run ended 29%
+    # above its float32 answer. keep_reduce alone still hands back the input
+    # dtype (the reduce constructor rounds once at the end) while the cast and
+    # the accumulator stay float32.
+    amp_reg = jt.flags.amp_reg & ~(jt.amp_flags.prefer16
+                                   | jt.amp_flags.prefer_bfloat16)
+    return jt.flag_scope(amp_reg=amp_reg | jt.amp_flags.keep_reduce)
 
 
 def _broadcast_batch_dims(a, b):
