@@ -260,8 +260,9 @@ def _blas_candidates():
 
 
 def find_blas():
-    """``(found, reasons)``: ``found`` is ``(path, cgemm, zgemm, ilp64,
-    threads)`` of the CBLAS to link, or ``None``; ``reasons`` says why each
+    """``(found, reasons)``: ``found`` is ``(path, gemms, ilp64, threads)`` of
+    the CBLAS to link -- ``gemms`` the ``sgemm, dgemm, cgemm, zgemm`` symbol
+    names -- or ``None``; ``reasons`` says why each
     candidate before it was declined. ``threads`` is the library's
     ``(set_num_threads, get_num_threads)`` pair when it is an OpenBLAS, which
     lets the relays run it on Jittor's own OpenMP team (``blas_runtime.cc``),
@@ -282,9 +283,8 @@ def find_blas():
             reasons.append(f"{path}: {error}")
             continue
         for prefix, suffix, ilp64 in _CBLAS_SPELLINGS:
-            cgemm = f"{prefix}cblas_cgemm{suffix}"
-            zgemm = f"{prefix}cblas_zgemm{suffix}"
-            if hasattr(library, cgemm) and hasattr(library, zgemm):
+            gemms = tuple(f"{prefix}cblas_{t}gemm{suffix}" for t in "sdcz")
+            if all(hasattr(library, gemm) for gemm in gemms):
                 if not suffix:
                     ilp64 = build_flag("blas_ilp64", False, os.environ)
                 threads = None
@@ -293,8 +293,8 @@ def find_blas():
                 getter = f"{stem}_get_num_threads{suffix}"
                 if hasattr(library, setter) and hasattr(library, getter):
                     threads = (setter, getter)
-                return (path, cgemm, zgemm, ilp64, threads), reasons
-        reasons.append(f"{path}: exports no cblas_cgemm/cblas_zgemm")
+                return (path, gemms, ilp64, threads), reasons
+        reasons.append(f"{path}: exports no cblas_sgemm/dgemm/cgemm/zgemm")
     return None, reasons
 
 
@@ -303,25 +303,26 @@ def _blas_library_enabled():
 
 
 def setup_blas():
-    """Compile the CPU complex GEMM relays against a CBLAS and register them.
+    """Compile the CPU GEMM relays against a CBLAS and register them.
 
-    Without one the complex products keep the generic broadcast-multiply-reduce
-    path, which is correct but two orders of magnitude slower; say so once.
+    Without one the complex and float64 products -- and float32 ones when
+    oneDNN is absent too -- keep the generic broadcast-multiply-reduce path,
+    which is correct but two orders of magnitude slower; say so once.
     """
     if not _blas_library_enabled():
         return
     found, reasons = find_blas()
     if found is None:
         detail = "; ".join(reasons) or "no candidate library"
-        LOG.w("use_blas is on, but no CBLAS with complex GEMM was found (" + detail + "). "
-              "CPU complex matmul uses Jittor's generic kernels. Set "
+        LOG.w("use_blas is on, but no CBLAS with s/d/c/z GEMM was found (" + detail + "). "
+              "CPU matmul uses Jittor's generic kernels. Set "
               "JT_BUILD_BLAS_LIB_PATH to an OpenBLAS or MKL library, or use_blas=0 "
               "to silence this warning.")
         return
-    path, cgemm, zgemm, ilp64, threads = found
+    path, gemms, ilp64, threads = found
     library_dir = os.path.dirname(path)
-    extra_flags = (f' -fopenmp -DJT_BLAS_CGEMM={cgemm} -DJT_BLAS_ZGEMM={zgemm} '
-                   f'-DJT_BLAS_INT={"int64_t" if ilp64 else "int"} '
+    extra_flags = (' -fopenmp ' + "".join(f'-DJT_BLAS_{t}GEMM={gemm} ' for t, gemm in zip("SDCZ", gemms))
+                   + f'-DJT_BLAS_INT={"int64_t" if ilp64 else "int"} '
                    f'"{path}" -Wl,-rpath,"{library_dir}" ')
     if threads is not None:
         extra_flags += f' -DJT_BLAS_SET_THREADS={threads[0]} -DJT_BLAS_GET_THREADS={threads[1]} '
@@ -331,7 +332,7 @@ def setup_blas():
                      if name.endswith((".cc", ".h"))]
     blas = compile_custom_ops(blas_op_files, extra_flags=extra_flags,
                               backend="cpu", return_module=True)
-    register_library_resources("blas", path=path, cgemm=cgemm, ilp64=ilp64,
+    register_library_resources("blas", path=path, cgemm=gemms[2], ilp64=ilp64,
                                shares_jittor_threads=threads is not None)
     register_library("blas", blas)
 
@@ -476,6 +477,10 @@ def cuda_library_search_dirs(component_dirs, cuda_bin, cuda_lib,
     ]
 
 
+#: The header a CUDA library is found by, where it is not ``<name>.h``.
+_CUDA_LIBRARY_HEADERS = {"cusolver": "cusolverDn.h"}
+
+
 def setup_cuda_lib(lib_name, link=True, extra_flags=""):
     arch_key = "x86_64"
     if platform.machine() not in ["x86_64", "AMD64"]:
@@ -502,7 +507,8 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
             component_include_dirs, cuda_include, extra_include_path)
         library_search_dirs = cuda_library_search_dirs(
             component_lib_dirs, cuda_bin, cuda_lib, extra_lib_path, arch_key)
-        cuda_include_name = search_file(include_search_dirs, lib_name+".h")
+        cuda_include_name = search_file(include_search_dirs,
+                                        _CUDA_LIBRARY_HEADERS.get(lib_name, lib_name + ".h"))
         extra_flags = f' -I"{os.path.dirname(cuda_include_name)}" ' + extra_flags
         # cuda11 prefer cudnn 8
         nvcc_version = get_int_version(nvcc_path)
@@ -1542,9 +1548,27 @@ def _load_cuda_library(name):
     setup_cuda_lib(name, extra_flags=link_flags)
 
 
+def setup_cusolver():
+    """The dense cuSOLVER ops behind CUDA ``linalg.solve``/``inv``/``qr``.
+
+    Loaded on first use, not with the libraries ``setup_cuda_extern`` loads:
+    only linear algebra needs it. Declined, not failed, where cuSOLVER is not
+    part of the toolchain: the NVIDIA wheel stack (``cuda_wheel``) does not
+    carry it, and Corex is not known to. The linalg frontend then keeps its
+    CuPy callbacks.
+    """
+    if not has_cuda or not is_cuda or has_corex:
+        return
+    if cuda_wheel_stack:
+        LOG.v("cuSOLVER is not part of the CUDA wheel stack; linalg keeps its CuPy path")
+        return
+    _load_cuda_library("cusolver")
+
+
 for _library_name in ("cublas", "cudnn", "curand", "cufft", "cusparse"):
     register_library_loader(
         _library_name, lambda name=_library_name: _load_cuda_library(name))
+register_library_loader("cusolver", lambda: setup_cusolver())
 register_library_loader("cub", lambda: setup_cub() if has_cuda and (is_cuda or has_corex) else None)
 register_library_loader("cutt", lambda: setup_cutt())
 register_library_loader("mkl", lambda: setup_mkl(), enabled=_mkl_library_enabled)

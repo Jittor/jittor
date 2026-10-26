@@ -97,6 +97,8 @@ constexpr int ns_max_len = 16;
     m(erfinv) \
     m(sigmoid) \
     m(relu) \
+    m(imag) \
+    m(as_imag) \
     \
     m(uniform) \
     m(normal) \
@@ -452,8 +454,10 @@ inline NanoString binary_dtype_infer(NanoString op, NanoString x, NanoString y, 
 
 inline NanoString unary_dtype_infer(NanoString op, NanoString x) {
     if (op.is_bool()) return ns_bool;
+    if (op == ns_as_imag) return x == ns_float64 ? ns_complex128 : ns_complex64;  // x -> x*i
     if (x.is_complex()) {
-        if (op == ns_abs) return x.dsize() == 16 ? ns_float64 : ns_float32;  // |z|->float
+        if (op == ns_abs || op == ns_imag)  // |z|, Im z -> float
+            return x.dsize() == 16 ? ns_float64 : ns_float32;
         return x;  // stays at its own complex width
     }
     int dsize_ = x.dsize_();

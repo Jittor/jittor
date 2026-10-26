@@ -699,7 +699,10 @@ def norm(x, p=2, dim=-1, keepdims=False, eps=1e-30, keepdim=False):
     if p==2:
         # |x|**2, not x*x: for a complex x the square is complex and has no
         # order to clamp with `maximum`. The norm is real either way.
-        sq = x.real.sqr() + x.imag.sqr() if x.dtype.is_complex() else x.sqr()
+        # Re(x * conj x), not |x|**2 through `abs`: abs's backward is z/|z|,
+        # NaN at an exact zero, which a state vector is mostly made of. Three
+        # native ops that fuse into one kernel.
+        sq = (x * x.conj()).real if x.dtype.is_complex() else x.sqr()
         return sq.sum(dim, keepdim).maximum(eps).sqrt()
 
 Var.norm = norm

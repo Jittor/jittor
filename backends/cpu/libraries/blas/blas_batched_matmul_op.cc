@@ -22,7 +22,7 @@ static auto make_unary = op_constructor<VarPtr, Var*, NanoString>("unary");
 BlasBatchedMatmulOp::BlasBatchedMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b)
     : a(a), b(b), trans_a(trans_a), trans_b(trans_b) {
     USER_CHECK(a->dtype() == b->dtype() && blas_gemm_dtype(a->dtype()))
-        << "blas batched matmul takes two operands of one complex dtype (complex64/complex128),"
+        << "blas batched matmul takes two operands of one dtype (float32/float64/complex64/complex128),"
            " but got a:" << a->dtype() << "b:" << b->dtype();
     c = create_output(nullptr, a->dtype());
     set_flag(OpFlags::_cpu, 1);
@@ -35,8 +35,11 @@ BlasBatchedMatmulOp::BlasBatchedMatmulOp(Var* a, Var* b, bool trans_a, bool tran
 VarPtr BlasBatchedMatmulOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     // As BlasMatmulOp::grad, per batch: the other operand enters conjugated.
     Var* other = v_index == 0 ? b : a;
-    VarPtr other_conj = make_unary(other, ns_conj);
-    other = other_conj.ptr;
+    VarPtr other_conj;
+    if (other->dtype().is_complex()) {
+        other_conj = make_unary(other, ns_conj);
+        other = other_conj.ptr;
+    }
     if (v_index == 0) {
         if (trans_a)
             return make_blas_batched_matmul(other, dout, trans_b, 1);

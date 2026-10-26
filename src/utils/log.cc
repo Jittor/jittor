@@ -929,6 +929,7 @@ template <class Error>
 void throw_same_kind(const std::exception& like, const string& message, bool executed) {
     // Most derived first.
     if (dynamic_cast<const UserIndexError*>(&like)) throw_kind<UserIndexError>(message, executed);
+    if (dynamic_cast<const UserLinAlgError*>(&like)) throw_kind<UserLinAlgError>(message, executed);
     if (dynamic_cast<const UserError*>(&like)) throw_kind<UserError>(message, executed);
     if (dynamic_cast<const InternalInvariantError*>(&like))
         throw_kind<InternalInvariantError>(message, executed);

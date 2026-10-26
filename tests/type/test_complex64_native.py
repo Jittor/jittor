@@ -362,6 +362,59 @@ class TestComplex64Native(unittest.TestCase):
                                           err_msg=f"imag-of-real {dev}")
         both_devices(body)
 
+    def test_real_imag_are_single_native_ops_with_torch_gradients(self):
+        # `.real` is the complex->float cast and `.imag` the internal `imag`
+        # unary; each is one op with its backward in C++ (dout + 0i and
+        # 0 + dout*i), not a jt.Function over view_as_real plus a getitem.
+        rng = np.random.RandomState(7)
+        for dtype, real in (("complex64", "float32"), ("complex128", "float64")):
+            a = (rng.randn(3, 4) + 1j * rng.randn(3, 4)).astype(dtype)
+            w = rng.randn(3, 4).astype(real)
+            v = rng.randn(3, 4).astype(real)
+            def body(dev):
+                z = jt.array(a)
+                re, im = z.real, z.imag
+                self.assertEqual(str(re.dtype), real, f"real dtype {dtype} {dev}")
+                self.assertEqual(str(im.dtype), real, f"imag dtype {dtype} {dev}")
+                np.testing.assert_array_equal(re.numpy(), a.real, err_msg=f"real {dtype} {dev}")
+                np.testing.assert_array_equal(im.numpy(), a.imag, err_msg=f"imag {dtype} {dev}")
+                loss = (re * jt.array(w, dtype=real)).sum() + (im * jt.array(v, dtype=real)).sum()
+                g = jt.grad(loss, z).numpy()
+                self.assertEqual(g.dtype.name, dtype, f"grad dtype {dtype} {dev}")
+                np.testing.assert_allclose(g, w + 1j * v, rtol=1e-6, atol=1e-6,
+                                           err_msg=f"real/imag grad {dtype} {dev}")
+                # the adjoint pair: as_imag(x) = x*i, whose gradient is Im(dout)
+                x = jt.array(w, dtype=real)
+                xi = jt.unary(x, "as_imag")
+                self.assertEqual(str(xi.dtype), dtype, f"as_imag dtype {dtype} {dev}")
+                np.testing.assert_array_equal(xi.numpy(), 1j * w, err_msg=f"as_imag {dtype} {dev}")
+                gx = jt.grad((xi * z).real.sum(), x).numpy()
+                np.testing.assert_allclose(gx, (1j * a).real, rtol=1e-6, atol=1e-6,
+                                           err_msg=f"as_imag grad {dtype} {dev}")
+            both_devices(body)
+        with self.assertRaisesRegex(RuntimeError, "takes a complex Var"):
+            jt.unary(jt.array(np.ones(2, "float32")), "imag").sync()
+        with self.assertRaisesRegex(RuntimeError, "takes a float32 or float64 Var"):
+            jt.unary(jt.array(np.ones(2, "int32")), "as_imag").sync()
+
+    def test_complex_abs_and_norm_gradients_are_finite_at_zero(self):
+        # torch: d|z| at z == 0 is 0. z/|z| there is 0/0, and a state vector
+        # is mostly exact zeros, so a NaN here poisons the whole gradient.
+        a = np.array([0, 1 + 1j, -3j, 0], dtype="complex64")
+        def body(dev):
+            z = jt.array(a)
+            g = jt.grad((z.abs() * jt.array([1., 2., 3., 4.])).sum(), z).numpy()
+            np.testing.assert_allclose(g, [0, 2 * (1 + 1j) / np.sqrt(2), -3j, 0], rtol=1e-6,
+                                       err_msg=f"abs grad {dev}")
+            z = jt.array(a)
+            n = jt.norm(z)
+            self.assertEqual(str(n.dtype), "float32", f"norm dtype {dev}")
+            np.testing.assert_allclose(n.numpy(), np.linalg.norm(a), rtol=1e-6, err_msg=f"norm {dev}")
+            g = jt.grad(n, z).numpy()
+            np.testing.assert_allclose(g, a / np.linalg.norm(a), rtol=1e-6, atol=1e-7,
+                                       err_msg=f"norm grad {dev}")
+        both_devices(body)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

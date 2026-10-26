@@ -223,9 +223,9 @@ class TestFindBlas(unittest.TestCase):
             os.environ.pop("JT_BUILD_BLAS_LIB_PATH", None)
             found, _ = compile_extern.find_blas()
         self.assertIsNotNone(found)
-        path, cgemm, zgemm, ilp64, threads = found
-        self.assertTrue(cgemm.endswith("cblas_cgemm" + ("64_" if ilp64 else "")), found)
-        self.assertTrue(zgemm.endswith("cblas_zgemm" + ("64_" if ilp64 else "")), found)
+        path, gemms, ilp64, threads = found
+        for kind, gemm in zip("sdcz", gemms):
+            self.assertTrue(gemm.endswith(f"cblas_{kind}gemm" + ("64_" if ilp64 else "")), found)
         # numpy's OpenBLAS has the thread controls the relays need to run it
         # on Jittor's OpenMP team instead of a second pool.
         self.assertIsNotNone(threads, found)
@@ -241,7 +241,7 @@ class TestFindBlas(unittest.TestCase):
             found, reasons = compile_extern.find_blas()
         self.assertIsNone(found)
         self.assertEqual(len(reasons), 1)
-        self.assertIn("exports no cblas_cgemm", reasons[0])
+        self.assertIn("exports no cblas_sgemm/dgemm/cgemm/zgemm", reasons[0])
 
 
 class TestComplexRelaysCPU(_ComplexRelays, unittest.TestCase):
@@ -255,6 +255,78 @@ class TestComplexRelaysCPU(_ComplexRelays, unittest.TestCase):
 
     def test_batched_gradients_are_torchs(self):
         super().test_batched_gradients_are_torchs()
+
+
+class TestRealBlasRelaysCPU(unittest.TestCase):
+    """float32/float64 on the same CBLAS. float64 had no CPU row at all, and
+    float32 only oneDNN's, which does not build without cmake: both fell to
+    the generic kernel, a float32 2048-cube product at 5.5 s against torch's
+    13 ms."""
+
+    _TOL = {"float32": dict(rtol=1e-4, atol=1e-4), "float64": dict(rtol=1e-10, atol=1e-10)}
+
+    def setUp(self):
+        self.rng = np.random.default_rng(20261026)
+        self.scope = jt.flag_scope(use_cuda=0, auto_mixed_precision_level=0)
+        self.scope.__enter__()
+        self.addCleanup(self.scope.__exit__, None, None, None)
+
+    def _no_onednn(self):
+        """The CPU rows as a machine without oneDNN has them: CBLAS alone."""
+        return (override_kernel("matmul", "cpu", matrix._blas_matmul,
+                                dtypes=matrix._BLAS_DTYPES, supports=matrix._supports_blas),
+                override_kernel("batched_matmul", "cpu", matrix._blas_batched_matmul,
+                                dtypes=matrix._BLAS_DTYPES,
+                                supports=matrix._supports_blas_batched))
+
+    def test_float64_takes_the_blas_row_and_float32_does_without_onednn(self):
+        a = jt.array(self.rng.standard_normal((4, 5)), dtype="float64")
+        b = jt.array(self.rng.standard_normal((5, 6)), dtype="float64")
+        self.assertIs(select_kernel("matmul", a, b, False, False), matrix._blas_matmul)
+        a, b = a.float32(), b.float32()
+        first, second = self._no_onednn()
+        with first, second:
+            self.assertIs(select_kernel("matmul", a, b, False, False), matrix._blas_matmul)
+            self.assertIs(select_kernel("batched_matmul", a.unsqueeze(0), b.unsqueeze(0),
+                                        False, False), matrix._blas_batched_matmul)
+
+    def test_forward_and_gradients_match_numpy(self):
+        cases = [((6, 5), (5, 7)), ((37, 301), (301, 129)), ((5, 8), (8, 3001)),
+                 ((3, 70, 50), (3, 50, 90)), ((500, 3, 4), (500, 4, 6))]
+        first, second = self._no_onednn()
+        with first, second:
+            for dtype in ("float32", "float64"):
+                tol = self._TOL[dtype]
+                for shape_a, shape_b in cases:
+                    for ta in (False, True):
+                        for tb in (False, True):
+                            with self.subTest(dtype=dtype, a=shape_a, b=shape_b, ta=ta, tb=tb):
+                                raw_a = self.rng.standard_normal(shape_a).astype(dtype)
+                                raw_b = self.rng.standard_normal(shape_b).astype(dtype)
+                                sa = np.ascontiguousarray(np.swapaxes(raw_a, -1, -2)) if ta else raw_a
+                                sb = np.ascontiguousarray(np.swapaxes(raw_b, -1, -2)) if tb else raw_b
+                                a, b = jt.array(sa, dtype=dtype), jt.array(sb, dtype=dtype)
+                                if ta:
+                                    a = a.transpose(*range(a.ndim - 2), a.ndim - 1, a.ndim - 2)
+                                if tb:
+                                    b = b.transpose(*range(b.ndim - 2), b.ndim - 1, b.ndim - 2)
+                                c = jt.matmul(a, b)
+                                self.assertEqual(c.numpy().dtype, np.dtype(dtype))
+                                np.testing.assert_allclose(c.numpy(), raw_a @ raw_b, **tol)
+                                raw_g = self.rng.standard_normal(c.shape).astype(dtype)
+                                ga, gb = jt.grad((c * jt.array(raw_g, dtype=dtype)).sum(), [a, b])
+                                np.testing.assert_allclose(
+                                    ga.numpy(), raw_g @ np.swapaxes(raw_b, -1, -2), **tol)
+                                np.testing.assert_allclose(
+                                    gb.numpy(), np.swapaxes(raw_a, -1, -2) @ raw_g, **tol)
+
+    def test_the_relay_is_what_runs(self):
+        a = jt.array(self.rng.standard_normal((64, 32)), dtype="float64")
+        b = jt.array(self.rng.standard_normal((32, 48)), dtype="float64")
+        jt.sync([a, b])
+        with jt.flag_scope(profiler_hide_relay=0), jt.profile_scope() as report:
+            jt.matmul(a, b).sync()
+        self.assertIn("blas_matmul", " ".join(row[0] for row in report[1:]))
 
 
 @_test_preserve_policy(jt, 'cuda_allow_tf32')

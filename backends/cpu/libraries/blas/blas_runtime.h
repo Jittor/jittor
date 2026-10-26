@@ -23,7 +23,8 @@ EXTERN_LIB void blas_gemm_execute(NanoString dtype, int64 batch, int64 n, int64 
 
 // The dtypes `blas_gemm_execute` takes.
 inline bool blas_gemm_dtype(NanoString dtype) {
-    return dtype == ns_complex64 || dtype == ns_complex128;
+    return dtype == ns_float32 || dtype == ns_float64 ||
+           dtype == ns_complex64 || dtype == ns_complex128;
 }
 
 } // jittor

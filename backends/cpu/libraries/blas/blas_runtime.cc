@@ -11,8 +11,9 @@
 #include "blas_runtime.h"
 #include "utils/log.h"
 
-#if !defined(JT_BLAS_CGEMM) || !defined(JT_BLAS_ZGEMM) || !defined(JT_BLAS_INT)
-#error "setup_blas passes JT_BLAS_CGEMM, JT_BLAS_ZGEMM and JT_BLAS_INT"
+#if !defined(JT_BLAS_SGEMM) || !defined(JT_BLAS_DGEMM) || !defined(JT_BLAS_CGEMM) || \
+    !defined(JT_BLAS_ZGEMM) || !defined(JT_BLAS_INT)
+#error "setup_blas passes JT_BLAS_{S,D,C,Z}GEMM and JT_BLAS_INT"
 #endif
 
 // The CBLAS prototypes, declared here rather than taken from a cblas.h: the
@@ -20,6 +21,12 @@
 // `cblas_cgemm64_`, with 64-bit integers), so there is no header to match it.
 // The enum arguments are C enums, i.e. ints.
 extern "C" {
+void JT_BLAS_SGEMM(int order, int trans_a, int trans_b, JT_BLAS_INT m, JT_BLAS_INT n,
+                   JT_BLAS_INT k, float alpha, const float* a, JT_BLAS_INT lda,
+                   const float* b, JT_BLAS_INT ldb, float beta, float* c, JT_BLAS_INT ldc);
+void JT_BLAS_DGEMM(int order, int trans_a, int trans_b, JT_BLAS_INT m, JT_BLAS_INT n,
+                   JT_BLAS_INT k, double alpha, const double* a, JT_BLAS_INT lda,
+                   const double* b, JT_BLAS_INT ldb, double beta, double* c, JT_BLAS_INT ldc);
 void JT_BLAS_CGEMM(int order, int trans_a, int trans_b, JT_BLAS_INT m, JT_BLAS_INT n,
                    JT_BLAS_INT k, const void* alpha, const void* a, JT_BLAS_INT lda,
                    const void* b, JT_BLAS_INT ldb, const void* beta, void* c, JT_BLAS_INT ldc);
@@ -37,7 +44,7 @@ namespace jittor {
 namespace {
 constexpr int kRowMajor = 101, kNoTrans = 111, kTrans = 112;
 
-// Below this many complex multiply-adds a product runs on the calling thread:
+// Below this many multiply-adds a product runs on the calling thread:
 // waking a team costs more than it saves.
 constexpr int64 kSerialWork = 1 << 15;
 // A panel narrower than this wastes the library's register blocking.
@@ -86,8 +93,31 @@ void direct(const Real* __restrict__ a, const Real* __restrict__ b, Real* __rest
     }
 }
 
+// The same for a real dtype.
+template <class Real>
+void direct_real(const Real* __restrict__ a, const Real* __restrict__ b, Real* __restrict__ c,
+                 int64 m, int64 lda, int64 ldb, int64 ldc,
+                 bool ta, bool tb, int64 r0, int64 r1, int64 c0, int64 c1) {
+    for (int64 i = r0; i < r1; i++) {
+        Real* __restrict__ crow = c + i * ldc;
+        #pragma omp simd
+        for (int64 j = c0; j < c1; j++) crow[j] = 0;
+        for (int64 p = 0; p < m; p++) {
+            const Real ap = a[ta ? p * lda + i : i * lda + p];
+            if (!tb) {
+                const Real* __restrict__ brow = b + p * ldb;
+                #pragma omp simd
+                for (int64 j = c0; j < c1; j++) crow[j] += ap * brow[j];
+            } else {
+                #pragma omp simd
+                for (int64 j = c0; j < c1; j++) crow[j] += ap * b[j * ldb + p];
+            }
+        }
+    }
+}
+
 struct Gemm {
-    bool is_double, ta, tb, use_direct;
+    bool is_double, is_complex, ta, tb, use_direct;
     int64 n, m, k;
     size_t elem;
     JT_BLAS_INT lda, ldb, ldc;
@@ -96,6 +126,10 @@ struct Gemm {
     // or columns of A when transposed; columns of op(B) likewise for B.
     void run(const char* a, const char* b, char* c, int64 r0, int64 r1, int64 c0, int64 c1) const {
         if (r1 <= r0 || c1 <= c0) return;
+        if (!is_complex) {
+            run_real(a, b, c, r0, r1, c0, c1);
+            return;
+        }
         if (use_direct) {
             if (is_double)
                 direct((const double*)a, (const double*)b, (double*)c, m, lda, ldb, ldc,
@@ -117,6 +151,28 @@ struct Gemm {
         else
             JT_BLAS_CGEMM(kRowMajor, opa, opb, r1 - r0, c1 - c0, m, onef, ap, lda, bp, ldb,
                           zerof, cp, ldc);
+    }
+
+    void run_real(const char* a, const char* b, char* c, int64 r0, int64 r1, int64 c0, int64 c1) const {
+        if (use_direct) {
+            if (is_double)
+                direct_real((const double*)a, (const double*)b, (double*)c, m, lda, ldb, ldc,
+                            ta, tb, r0, r1, c0, c1);
+            else
+                direct_real((const float*)a, (const float*)b, (float*)c, m, lda, ldb, ldc,
+                            ta, tb, r0, r1, c0, c1);
+            return;
+        }
+        const char* ap = a + size_t(ta ? r0 : r0 * lda) * elem;
+        const char* bp = b + size_t(tb ? c0 * ldb : c0) * elem;
+        char* cp = c + size_t(r0 * ldc + c0) * elem;
+        int opa = ta ? kTrans : kNoTrans, opb = tb ? kTrans : kNoTrans;
+        if (is_double)
+            JT_BLAS_DGEMM(kRowMajor, opa, opb, r1 - r0, c1 - c0, m, 1.0, (const double*)ap, lda,
+                          (const double*)bp, ldb, 0.0, (double*)cp, ldc);
+        else
+            JT_BLAS_SGEMM(kRowMajor, opa, opb, r1 - r0, c1 - c0, m, 1.0f, (const float*)ap, lda,
+                          (const float*)bp, ldb, 0.0f, (float*)cp, ldc);
     }
 };
 
@@ -187,7 +243,8 @@ void blas_gemm_execute(NanoString dtype, int64 batch, int64 n, int64 m, int64 k,
             << "the linked CBLAS takes 32-bit dimensions, but this product is"
             << n << "x" << m << "x" << k;
     Gemm g;
-    g.is_double = dtype == ns_complex128;
+    g.is_double = dtype == ns_complex128 || dtype == ns_float64;
+    g.is_complex = dtype.is_complex();
     g.ta = ta;
     g.tb = tb;
     g.n = n;

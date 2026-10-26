@@ -68,16 +68,19 @@ def tensordot(a, b, dims=2):
             raise RuntimeError("both dimension lists should have the same length")
         if input1.dtype != input2.dtype:
             raise RuntimeError("both inputs should have the same dtype")
+        # The plan is plain list arithmetic over the shapes read once: this
+        # runs for every contraction of a tensor network (929 per MPS sweep
+        # step), and it used to build two numpy bitmaps and re-read `.shape`
+        # per dimension, ~2/3 of a call that launches a single GEMM.
+        shape1 = input1.shape
+        shape2 = input2.shape
+        ndim1, ndim2 = len(shape1), len(shape2)
         t1 = input1
         t2 = input2
         csize = 1
-        input1_bitmap = np.zeros(len(input1.shape), dtype="bool")
-        input2_bitmap = np.zeros(len(input2.shape), dtype="bool")
         for i in range(len(dims1)):
-            s1 = input1.shape[dims1[i]]
-            s2 = input2.shape[dims2[i]]
-            input1_bitmap[dims1] = True
-            input2_bitmap[dims2] = True
+            s1 = shape1[dims1[i]]
+            s2 = shape2[dims2[i]]
             if s2 == 1:  # broadcasted dimensions can be summed right away
                 t1 = t1.sum(dims1[i], keepdims=True)
             elif s1 == 1:
@@ -90,26 +93,28 @@ def tensordot(a, b, dims=2):
                         )
                     )
                 csize *= s1
+        dims1 = [d + ndim1 if d < 0 else d for d in dims1]
+        dims2 = [d + ndim2 if d < 0 else d for d in dims2]
 
-        p1, p2 = [], []  # p1, p2: input permutations
-        rsizes = []
+        # p1, p2: input permutations; summing keeps every free dim's size
+        free1 = [i for i in range(ndim1) if i not in dims1]
+        free2 = [i for i in range(ndim2) if i not in dims2]
+        rsizes = [shape1[i] for i in free1] + [shape2[i] for i in free2]
         size1, size2 = 1, 1  #  number of non-contracted elements
-        for i in range(len(input1.shape)):
-            if not input1_bitmap[i]:
-                p1.append(i)
-                size1 *= t1.shape[i]
-                rsizes.append(t1.shape[i])
-        p1 += dims1
-        p2 += dims2
-        for i in range(len(input2.shape)):
-            if not input2_bitmap[i]:
-                p2.append(i)
-                size2 *= t2.shape[i]
-                rsizes.append(t2.shape[i])
+        for i in free1:
+            size1 *= shape1[i]
+        for i in free2:
+            size2 *= shape2[i]
+        p1 = free1 + dims1
+        p2 = dims2 + free2
 
         # permute and reshape for matrix multiplication
-        t1 = t1.permute(p1).reshape((size1, csize))
-        t2 = t2.permute(p2).reshape((csize, size2))
+        if p1 != list(range(ndim1)):
+            t1 = t1.permute(p1)
+        if p2 != list(range(ndim2)):
+            t2 = t2.permute(p2)
+        t1 = t1.reshape((size1, csize))
+        t2 = t2.reshape((csize, size2))
         # multiply and reshape to target size
         return jt.matmul(t1, t2).reshape(rsizes)
 

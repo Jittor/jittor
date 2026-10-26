@@ -32,6 +32,7 @@
 2026-09-25-profiling-tools
 2026-10-05-high-rank-and-downstream-core-gaps
 2026-10-09-downstream-p1-allocator-protocol-transpose
+2026-10-26-tensorcircuit-core-perf
 ```
 
 ## 按主题索引
@@ -55,3 +56,4 @@
 | [性能/显存分析工具：审计与重写](2026-09-25-profiling-tools.md) | 已实现，RTX 4090 上验证；未合入 | 2026-09-25 |
 | [张量维度上限 10 → 32 与下游评测的核心缺口](2026-10-05-high-rank-and-downstream-core-gaps.md) | 已修复，CPU 与 RTX 4090 验证 | 2026-10-05 |
 | [下游 P1：分配器并存上限、数值协议与 transpose 的运行时置换](2026-10-09-downstream-p1-allocator-protocol-transpose.md) | 已修复，CPU 验证，transpose/协议另在 RTX 4090 验证 | 2026-10-09 |
+| [TensorCircuit 报告的 Jittor 核心性能问题](2026-10-26-tensorcircuit-core-perf.md) | 部分修复，CPU 与 RTX 4090 实测；CUDA 二维 QR/solve 已改为原生 cuSOLVER，CPU solve 与 CUDA QR 反向仍落后（KI-OPS-016） | 2026-10-26 |

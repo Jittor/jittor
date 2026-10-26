@@ -12,11 +12,13 @@
 import numpy as np
 
 from ._helpers import (
+    _cuda_gesv, _cuda_trsm, _host_lapack, _host_trsm, _is_batched, _is_cupy,
     _batching_aware, _linalg_errors_raise,
     _cn_to_native, _is_native_complex, _matmul, _native_to_cn, _reconnect,
     _transpose,
 )
 from .results import INVEX
+from jittor._runtime.dispatch import select_kernel
 
 
 @_batching_aware("single")
@@ -35,9 +37,13 @@ def inv(x):
     # dtypes, and the backward below is written with conjugate transposes.
     # Bridging to the ComplexNumber callback chain instead left its backward
     # an opaque callback, so a second derivative raised.
+    @_host_lapack
     def forward_code(np, data):
         a = data["inputs"][0]
         m_a = data["outputs"][0]
+        if _is_cupy(np) and a.ndim == 2 and a.size and a.dtype == m_a.dtype:
+            _cuda_gesv(np, a, np.eye(a.shape[0], dtype=a.dtype), m_a)
+            return
         with _linalg_errors_raise(np):
             t_a = np.linalg.inv(a)
         np.copyto(m_a, t_a)
@@ -60,7 +66,11 @@ def inv(x):
         # reused for this) -- the standard trade-off for a recompute-based
         # higher-order-differentiable op.
         def execute(self, xt):
-            self.mx = jt.numpy_code([xt.shape], [xt.dtype], [xt], forward_code)[0]
+            kernel = select_kernel("linalg_inv", xt)
+            if kernel is not None:
+                self.mx = kernel(xt)
+            else:
+                self.mx = jt.numpy_code([xt.shape], [xt.dtype], [xt], forward_code)[0]
             return self.mx
 
         def grad(self, dout):
@@ -125,6 +135,7 @@ def pinv(x):
         # complex pseudo-inverse on the legacy ComplexNumber type. (The real
         # path below cannot take a ComplexNumber — previously this raised.)
         return complex_pinv(x)
+    @_host_lapack
     def forward_code(np, data):
         a = data["inputs"][0]
         m_a = data["outputs"][0]
@@ -213,6 +224,7 @@ def det(x):
     :return:|x| (...,1)
     """
     import jittor as jt
+    @_host_lapack
     def forward_code(np, data):
         a = data["inputs"][0]
         L = data["outputs"][0]
@@ -260,6 +272,7 @@ def slogdet(x):
     logdet in shape (...,1).
     """
     import jittor as jt
+    @_host_lapack
     def forward_code(np, data):
         a = data["inputs"][0]
         sign, m_a = data["outputs"]
@@ -347,9 +360,13 @@ def solve(a,b):
 def _solve_matrix(a, b):
     """solve() on (...,M,M) and (...,M,K) operands with identical batch dims."""
     import jittor as jt
+    @_host_lapack
     def forward_code(np, data):
         a, b = data["inputs"]
         L = data["outputs"][0]
+        if _is_cupy(np) and a.ndim == 2 and b.size and a.dtype == b.dtype == L.dtype:
+            _cuda_gesv(np, a, b, L)
+            return
         with _linalg_errors_raise(np):
             ans = np.linalg.solve(a, b)
         np.copyto(L, ans)
@@ -368,7 +385,11 @@ def _solve_matrix(a, b):
         # shapes. Both recursive calls close over the live `a`/`b`, so this
         # composes to any order.
         def execute(self, at, bt):
-            self.x = jt.numpy_code([bt.shape], [bt.dtype], [at, bt], forward_code)[0]
+            kernel = select_kernel("linalg_solve", at, bt)
+            if kernel is not None:
+                self.x = kernel(at, bt)
+            else:
+                self.x = jt.numpy_code([bt.shape], [bt.dtype], [at, bt], forward_code)[0]
             return self.x
 
         def grad(self, dout):
@@ -378,3 +399,53 @@ def _solve_matrix(a, b):
             return dA, db
 
     return _Solve()(a, b)
+
+
+def _solve_triangular(a, b, upper):
+    """``solve(a, b)`` for an ``a`` that is triangular -- ``upper`` or lower,
+    the other triangle zero -- as the backward of QR and Cholesky has it.
+
+    A 2-D solve is one ``trsm`` rather than an LU and two triangular solves:
+    QR's backward solves against R once per call, 1,368 times in one gradient
+    of a 40-site MPS, and on CUDA each of those went through a general solve
+    and its status reads. The gradient is ``_solve_matrix``'s, unprojected, so
+    every order of derivative is what a general solve gives. A batch, or a
+    host without a CBLAS ``trsm``, takes the general solve.
+    """
+    import jittor as jt
+    if _is_batched(a) or _is_batched(b) or a.ndim != 2 or b.ndim != 2:
+        return jt.linalg.solve(a, b)
+
+    @_host_lapack
+    def forward_code(np, data):
+        a, b = data["inputs"]
+        x = data["outputs"][0]
+        if _is_cupy(np):
+            if a.dtype == b.dtype == x.dtype:
+                _cuda_trsm(np, a, b, x, upper)
+                return
+        elif _host_trsm(a, b, x, upper):
+            return
+        with _linalg_errors_raise(np):
+            np.copyto(x, np.linalg.solve(a, b))
+
+    def _T(v):
+        return v.transpose(-1, -2).conj()
+
+    class _SolveTriangular(jt.Function):
+        # `_Solve`'s backward; A^H is triangular the other way up.
+        def execute(self, at, bt):
+            kernel = select_kernel("linalg_solve_triangular", at, bt, upper)
+            if kernel is not None:
+                self.x = kernel(at, bt, upper)
+            else:
+                self.x = jt.numpy_code([bt.shape], [bt.dtype], [at, bt], forward_code)[0]
+            return self.x
+
+        def grad(self, dout):
+            db = _solve_triangular(_T(a), dout, not upper)
+            x = _reconnect(self.x, _solve_triangular(a, b, upper))
+            dA = -jt.matmul(db, _T(x))
+            return dA, db
+
+    return _SolveTriangular()(a, b)

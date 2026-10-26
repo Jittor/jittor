@@ -189,7 +189,10 @@ MIGRATED_UNARY_OP_USER_BOUNDARIES = {
     # 2 since 2026-09-11: `bitwise_not` on a float now says so instead of
     # reaching `~x` in the generated kernel and letting g++ answer "wrong type
     # argument to bit-complement". See tests/ops/test_bitwise_dtype_guard.py.
-    "src/ops/unary_op.cc": 2,
+    # 4 since 2026-10-26: the internal `imag`/`as_imag` unaries behind
+    # `Var.imag` refuse a dtype they have no kernel for in the same way. See
+    # tests/type/test_complex64_native.py.
+    "src/ops/unary_op.cc": 4,
 }
 
 MIGRATED_CURAND_USER_BOUNDARIES = {

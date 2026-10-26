@@ -17,8 +17,8 @@ namespace {
 
 // A native stand-in for a `supports` predicate; see kernel_select_native_rule.
 struct NativeRule {
-    enum Kind { none, same_float, same_float_or_complex, rms_inference, rms_training, ln_inference, depthwise_conv2d,
-                group_norm } kind = none;
+    enum Kind { none, same_float, same_float_or_complex, same_blas, rms_inference, rms_training, ln_inference,
+                depthwise_conv2d, group_norm } kind = none;
     string op;
 };
 enum Verdict { declines = 0, accepts = 1, unknown = 2 };
@@ -196,6 +196,26 @@ Verdict evaluate(const NativeRule& rule, PyObject* args, PyObject* kwargs) {
         // Not registered may only mean not loaded yet; Python loads it.
         return has_op(rule.op) ? accepts : unknown;
     }
+    if (rule.kind == NativeRule::same_blas) {
+        // `_supports_blas`/`_supports_blas_batched`: one float32/float64/
+        // complex dtype, rank 2 for the 2-D relay. The Python predicate also
+        // re-reads the library's `enabled` policy from the environment, two
+        // `os.environ` lookups a product; once the relay is registered that
+        // answer is in, as for the cuBLAS rule above.
+        if (n < 2 || !is_var(PyTuple_GET_ITEM(args, 0)) || !is_var(PyTuple_GET_ITEM(args, 1)))
+            return unknown;
+        Var* a = GET_RAW_PTR(VarHolder, PyTuple_GET_ITEM(args, 0))->var;
+        Var* b = GET_RAW_PTR(VarHolder, PyTuple_GET_ITEM(args, 1))->var;
+        NanoString dtype = a->dtype();
+        if (dtype != b->dtype()) return declines;
+        if (dtype != ns_float32 && dtype != ns_float64 && dtype != ns_complex64 && dtype != ns_complex128)
+            return declines;
+        // AMP retyping a float32 product's output to a half is Python's call.
+        if (dtype == ns_float32 && (amp_reg & amp_prefer16)) return unknown;
+        if (rule.op == "blas_matmul" && (a->shape.size() != 2 || b->shape.size() != 2))
+            return declines;
+        return has_op(rule.op) ? accepts : unknown;
+    }
     if (rule.kind == NativeRule::rms_training)
         return no_grad ? declines : unknown;
     if (rule.kind == NativeRule::ln_inference) {
@@ -260,6 +280,9 @@ void kernel_select_native_rule(PyObject* fn, const string& rule) {
     } else if (rule.compare(0, 22, "same_float_or_complex:") == 0) {
         parsed.kind = NativeRule::same_float_or_complex;
         parsed.op = rule.substr(22);
+    } else if (rule.compare(0, 10, "same_blas:") == 0) {
+        parsed.kind = NativeRule::same_blas;
+        parsed.op = rule.substr(10);
     } else if (rule == "rms_norm_inference") {
         parsed.kind = NativeRule::rms_inference;
     } else if (rule == "rms_norm_training") {
