@@ -1,10 +1,10 @@
 # Jittor wheel contents baseline (SHA-256 and exact archive member paths)
 # source-wheel: jittor-2.0.0-py3-none-any.whl
-# source-wheel-sha256: 0ccf7de5fad0ea3483a0ebd17e0a88851494bd8515d50f05d34976ad12e5d166
+# source-wheel-sha256: 7f0455dcddefd71c0bcc1ea016e6e82319bc61507ca6f9689d361558815a1622
 # entries: 1139
 # Regenerate only after reviewing every path and content change.
 fb0d15cb73dc519400967b63b0091df66a8c4388e3cb7dd107b8fc40fcc5054f  jittor-2.0.0.dist-info/METADATA
-8f38454e87d4330ecaeb23ba3e9f6bee4151594efa382cb968d58d88587a1a9c  jittor-2.0.0.dist-info/RECORD
+841b345a43c45aababbd09b01db7b894e5efa4416688e52dc575240e78610da4  jittor-2.0.0.dist-info/RECORD
 2b6eb4118ce7cd7b09601406aa623c553c4476265836f0d9c16f5c061f7efcc0  jittor-2.0.0.dist-info/WHEEL
 435a22ada7651633d681246096725d6b8a5d15b729df61706c5637cbc58c39c7  jittor-2.0.0.dist-info/entry_points.txt
 8b18f18c9c43b17e6e2bcdefc8df9d423c12e6769d5d13cf6a46fed31e7e1666  jittor-2.0.0.dist-info/licenses/LICENSE.txt
@@ -460,7 +460,7 @@ bd5aa9cebb417d2bb74b7036c5f8e4f90abe6c2f1462fed3d66eca29ef883fc7  jittor/build/u
 dc2e23fd0a9421bf67291e1204d4eb49e3152fd1137c3bc03ac584e4e5a3ab3e  jittor/build/utils/install_msvc.py
 408174be4d6124f907912c192b85ec9f0edecadf591385165a2931f8a4499812  jittor/build/utils/load_pytorch.py
 4a81d465629ae178c125cbe70668447ebf6bc9b25b4aa3fdf1d86ac725d03dbe  jittor/build/utils/load_pytorch_old.py
-15539692101791dc8c0bbd48663afb0d32c9ef5b60ba5a5b47ddcbb8b2c2d311  jittor/build/utils/lock.py
+516d262896334538ce14af0323361e868a24bf479540a12167455c6ad189ebf2  jittor/build/utils/lock.py
 392c39e630e25a2c78440b314b169e9cbb3b0ad972f0ca2852327eaf7ee8cf2e  jittor/build/utils/manifest.py
 419648a38be4ba83d447730ece739b84a2b19e371d1e537d57e64d32144e25e4  jittor/build/utils/misc.py
 9e435847667052fb35a6aebbf2b676a1ae20a3bca7632914e59c52817e791f20  jittor/build/utils/preflight.py
@@ -1030,7 +1030,7 @@ ad1661ecab9af556bde9a2a5b5b289ac421d8b60fe751dad4f60bac65dc8c85c  jittor/src/run
 ab6867740ffc7a39199c455fdf06fc0bdae58414cf009832d7802cc49f9de892  jittor/src/runtime/jit_policy.h
 7a629576c59aff7994a99fa9711c1c297fee3b6673794ac9105cd9d6e68f4a14  jittor/src/runtime/launch_diagnostics.cc
 a4715eff9378121b3d3d8323008c8e334592a539f5491840835720670a0324a8  jittor/src/runtime/launch_diagnostics.h
-3c2a49c44bc65e13250cc8915bf746655a6310e827e8e32f28b00b32d7ee2c35  jittor/src/runtime/lock.cc
+4cb41ba9b77d073de2c555d1f35940fa9b685bc97de39fcb50878bf1df47d50b  jittor/src/runtime/lock.cc
 ff9a7e2c27b0de8a643cae7e3fa051a97cb83448a3059656a8678ee310b194ae  jittor/src/runtime/lock.h
 63214f68f48127eb18059818418522d681823a1dfc32a7ad646817889ec942b5  jittor/src/runtime/node_index.h
 acdc3e162a1cf765c758c91797e062c48d2704967a5b6dcebac1293aa0638dec  jittor/src/runtime/profiler/cache_info.cc
