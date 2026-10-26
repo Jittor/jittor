@@ -886,6 +886,7 @@ include src/tests/test_op_register.cc
 include src/tests/test_op_relay.cc
 include src/tests/test_parallel_compiler.cc
 include src/tests/test_pass_manager.cc
+include src/tests/test_release_forward_liveness.cc
 include src/tests/test_setitem_op.cc
 include src/tests/test_sfrl_allocator.cc
 include src/tests/test_str_utils.cc
