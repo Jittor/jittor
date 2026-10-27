@@ -1755,56 +1755,6 @@ workaround.
   `# type: ignore`, no relaxed configuration); delete the entry when
   `python/jittor` and `backends/` are covered.
 
-## KI-EXEC-015: warmed optimizer replay does not preserve pending external forward readers
-
-- Severity: High
-- Status: Open; CPU executor replay reproduced on unchanged integration `1fa76c8cc` (2026-10-25). CUDA and other accelerators not validated for this scenario.
-- Owner: GraphReplay / StepCapture and autograd storage maintainers.
-- Symptom: after a Torch compiled optimizer step has warmed up and entered replay, construct an unrelated differentiable forward from a parameter, leave it pending, replay another optimizer step, then backpropagate the old forward. Its gradient may use the parameter's new value instead of the forward-time value. Example: SGD `lr=.125`, constant gradient `.25`, seven replayed steps from zero, then `old=(p+1).exp().sum()`, another compiled step, `old.backward()`: CPU produced `exp(.75)` instead of `exp(.78125)`.
-- Cause: an already-kept graph's storage writes cannot acquire newly created external reader dependencies through the ordinary graph-build preservation path. The native imperative/fused saved-output preservation fix does not establish arbitrary interleaving support for outside graphs around warmed compiled replays.
-- Workaround: avoid interleaving pending external differentiable graphs with replayed writes to their parameter storage; complete that graph's backward before the next mutating replay, or run this pattern through the eager owner. This is an ordering restriction, not a verified promise that every explicit materialization strategy repairs all saved values.
-- Evidence: baseline CPU probe `replay-outsider.py` and `control/logs/replay-outsider.log` under the external lab state `pr-audit-storage`; promote the minimal sequence to a tracked regression when addressing the contract. It was reproduced before `881e9ece6`, and is distinct from its corrected noncompiled direct/transitive saved-output cases.
-- Exit condition: either preserve externally added saved readers before each replayed storage write or reject this interleaving explicitly; add warmed-replay tests for direct and transitive outside readers, aliases, and both eager/captured owners, and verify CPU plus the supported real accelerator paths. Do not cite passing optimizer-only replay tests as this guarantee.
-
-
-Reproduce from the selected source checkout with a configured compiler and an isolated lab `JITTOR_HOME`/`TMPDIR`; record `git rev-parse HEAD`. This CPU-only wrapper is syntax checked; the observed failure comes from the original equivalent probe.
-
-```bash
-JITTOR_TORCH_SHIM=1 JITTOR_TEST_DEVICES=cpu JT_BACKEND=cpu JT_USE_CUDA=0 JT_BUILD_NVCC_PATH= JT_USE_PARALLEL_OP_COMPILER=0 PYTHONPATH=compat/shim/resources:python python - <<'PY'
-import numpy as np
-import torch
-import jittor as jt
-from jittor._runtime.fallback import forbid_backend_fallbacks
-assert hasattr(torch, '_torch_compat_install_context'), 'Jittor Torch frontend required'
-assert torch.Tensor is not jt.Var
-with jt.runtime.scope(use_cuda=0, backend_fallback='error'), forbid_backend_fallbacks():
-    p = torch.nn.Parameter(torch.zeros((2, 2), device='cpu'))
-    opt = torch.optim.SGD([p], lr=.125, foreach=False, fused=False)
-    gradient = torch.full_like(p, .25)
-    def step(gradient):
-        opt.zero_grad(set_to_none=True)
-        loss = (p * gradient).sum()
-        loss.backward()
-        opt.step()
-        return loss
-    run = torch.compile(step, mode='reduce-overhead')
-    for _ in range(7):
-        run(gradient).sync()
-    assert p.device.type == 'cpu'
-    assert jt.core.dispatch_context([p]) == ('cpu', -1)
-    old = (p + 1).exp().sum()
-    run(gradient).sync()
-    opt.zero_grad()
-    old.backward()
-    assert p.grad is not None
-    assert jt.core.backend_fallback_count() == 0
-    np.testing.assert_allclose(p.grad.numpy(), np.exp(1 - 7 * .125 * .25),
-                               rtol=2e-6, atol=2e-7)
-PY
-```
-
-
-
 ## KI-CODEGEN-006: a rank-1 full sum still materializes a pending reshaped producer
 
 - Severity: Medium (allocation and performance; values are correct)

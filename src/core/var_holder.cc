@@ -467,6 +467,19 @@ static void validate_logical_copy_alias(VarHolder* target, VarHolder* source) {
         << "_copy_into source and destination have overlapping logical view storage";
 }
 
+int preserve_step_readers(const vector<VarHolder*>& storages) {
+    vector<Var*> written;
+    written.reserve(storages.size());
+    for (VarHolder* holder : storages)
+        if (holder && holder->var) written.push_back(holder->var);
+    if (written.empty()) return 0;
+    auto readers = saved_storage_readers(written);
+    if (readers.empty()) return 0;
+    ExecutorEntryScope entry;
+    runtime_executor().run_sync(readers, false, false);
+    return (int)readers.size();
+}
+
 void VarHolder::copy_into(VarHolder* src, bool sync_src) {
     check_inplace_autograd();
     ExecutorEntryScope entry;
