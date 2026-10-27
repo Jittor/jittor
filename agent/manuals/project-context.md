@@ -2,7 +2,7 @@
 
 - Status: Current-state index, not a history log
 - Last reviewed: 2026-10-26
-- Baseline reviewed: `91ff825fc`
+- Baseline reviewed: `a3a48640e`
 - Owner: Jittor core maintainers
 - Freshness expires: 2027-01-06
 - Review when: the release line, a top-level goal or an indexed location changes
@@ -41,7 +41,8 @@ tripwires. The continuous-test rounds also fixed checkpoint buffer-class
 preservation, half-contraction accumulation, 0-D setitem codegen, scalar
 `sum(dim=0)`, the CPU deterministic query, the mapped-ACL parity inventory,
 the StepCapture replay copy window (KI-EXEC-016 closed), and the
-Torch autocast layer_norm float32 result (KI-COMPAT-020 closed).
+Torch autocast layer_norm float32 result (KI-COMPAT-020 closed); exact-value
+cuDNN tests opt into the new strict float32 precision tier.
 
 ## Where information lives
 
