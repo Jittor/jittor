@@ -1,5 +1,9 @@
 # 整改看板
 
+## 2026-10-28 06:13 +0800 r8 CPU冷构建通过，pow数值回归待执行
+
+发布仍 **Not complete**。两轮独立PT/JT CPU/真实CUDA公共pow控制已实际完成，保存的inv_freq各自exact对应CPU链；第二轮以同一保存power重建float32 tensor后，两runtime倒数逐位一致，旧JT CPU原链与物化分支25项差异已确认是pow输出dtype边界的融合精度泄漏，CUDA此控制差0。root已在新隔离r8/source `f6751970…` 仅给CPU pow结果补声明dtype cast，并新增native/public各一回归，未采用main。r8 CPUcold在新600s上限内自然rc0、227TU，root17审计SHA `fefa46c1…`全通过；只有构建身份，没有数值通过。下一项是实际CPU core上的native/Torch独立core白名单与原mixed四项/新旧pow回归，执行包仍在离线绑定；CUDA900等待真实同源CPU前置，完整no-hook仍以r7的8,690,528/29,171,712 FAIL为准，LoRA不启动。其他FAIL/预算、原件缺口和Day4–5稳定三轮/容量/峰值门槛保持。精确source、两轮微控制、cold receipts与边界见[本日结果](../results/2026-10-26-torch-compat-release-day2-5.md)，操作入口见[本机交接](../results/2026-10-21-workspace-snapshot-handoff.md)。
+
 ## 2026-10-28 05:46 +0800 r7公共pow四侧控制完成，CPU初始化链可复现保存频率
 
 新最小包 `20261028-qwen-r7-public-pow-micro-r1-prepared/` manifest `388c709b978aea0ff81610f2c86832b6099c4bfdc897c5c68e9b7a4fcc9d7d41` 已由root依次单次执行CPU→真实CUDA；两device PT/JT均自然rc0，CPU各2.391/8.577s、CUDA各3.395/36.933s，均在各自新120/180s微预算内，未重置旧模型/T5/Vision预算。CPU receipt `d978831aa55b80ef7b6643d74bb87f35c4b44d8bfd29400145cdf9ab878e824d`，CUDA `2865c203c8ebd2eaa6d0e187c3f05202d3c10bd1e27e920dd2ef437eb11bb220`；双方真实cmdline/PID/start/私有组和worker自身身份均有交叉核对，实际device/fallback0、source/core/env/组锁有效。最新CPUcache808=780+28，CUDA1350=1326+24，旧文件无改删。

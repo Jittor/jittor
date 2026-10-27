@@ -1,5 +1,11 @@
 # 2026-10-21 工作区快照与本机接续交接
 
+## 2026-10-28 06:13 +0800 接续入口：r8 CPUcold已终审，先运行受影响CPU回归
+
+当前无本任务框架/JIT进程；r8 CPUcold的exec15130已自然退出，不能重跑cold。新隔离树为 `/data6/cgq/jittor-lab/worktrees/torch-compat-storage-silu-cat-grad-rmsnorm-pow-20261028-r8`，HEAD765f1791、source `f6751970c2da991ee09e23b7b08f50d8d777b9e916c21a76b2b895daea6879ef`；manifest位于 `20261028-qwen-pow-r8-source-r1/candidate-source-manifest.json`，SHA `7a08b93941b4466eea82267bce1dc1d045fdcc37f23a51ec9da6ab995edd2dd1`。相对r7只改CPU pow返回dtype cast和native/public两条回归，未改CUDA helper或主源。旧控制中CPU原链对物化分支25项差、同PT power公共输入两runtime逐位exact的证据已确认；完整模型因果与发布结论仍未闭环。
+
+CPUcold包为 `20261028-qwen-pow-r8-cpu-bootstrap-r1-prepared/`，manifest979785d3、正式receipt6f9e4639，实际227TU/core4944108e；独立root17终审 `20261028-root-pow-r8-continuation-r1/root-r8-cpu-cold-terminal-audit.json` SHA `fefa46c12d45bf81d4b5428b2f56a7fa95a5e5b220d8f789e58a3f0d06c6fa1c` 全真、组锁空。下一项先收取qwen_meta_repair的实际CPU core执行final并静态审阅，在同core/cache上分别单次native core与Torch core+原mixed四项+新旧pow，新增各600s cap；尚未执行。native必须SHIM0且移除PROJECT_ROOT/RUNTIME_ROOT等shim激活入口，按明确native合同记录环境，不能照搬Torch post-import。CUDA900仅离线HOLD，等真实同源CPU回归再绑定final，首次JIT由root串行放行。旧r7不变，CPUcache816/CUDA1358是r7保存终态，不能混作r8 cache。原r7完整no-hook仍FAIL8,690,528/29,171,712，LoRA不启动，发布 **Not complete**；其他原FAIL、T5/Vision余额及性能门槛见[本日结果](2026-10-26-torch-compat-release-day2-5.md)，不要重置或重跑旧阶段。
+
 ## 2026-10-28 05:46 +0800 r7公共pow四侧控制完成，CPU初始化链可复现保存频率
 
 新最小包 `20261028-qwen-r7-public-pow-micro-r1-prepared/` manifest `388c709b978aea0ff81610f2c86832b6099c4bfdc897c5c68e9b7a4fcc9d7d41` 已由root依次单次执行CPU→真实CUDA；两device PT/JT均自然rc0，CPU各2.391/8.577s、CUDA各3.395/36.933s，均在各自新120/180s微预算内，未重置旧模型/T5/Vision预算。CPU receipt `d978831aa55b80ef7b6643d74bb87f35c4b44d8bfd29400145cdf9ab878e824d`，CUDA `2865c203c8ebd2eaa6d0e187c3f05202d3c10bd1e27e920dd2ef437eb11bb220`；双方真实cmdline/PID/start/私有组和worker自身身份均有交叉核对，实际device/fallback0、source/core/env/组锁有效。最新CPUcache808=780+28，CUDA1350=1326+24，旧文件无改删。

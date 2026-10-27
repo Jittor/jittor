@@ -1,5 +1,19 @@
 # Torch Compatibility Release Acceptance: 2026-10-26 Day 2–5 Continuation
 
+## 2026-10-28 06:12 +0800 r8 CPU冷构建终态通过，数值回归尚未开始
+
+`20261028-qwen-pow-r8-cpu-bootstrap-r1-prepared/` 已在原600s单次上限内自然rc0，正式receipt SHA `6f9e4639b8859d1a5a03733ef1a1990222731cd98c10001ff60d81c52f52d786`，exec15130已收回。root独立17项终审 `20261028-root-pow-r8-continuation-r1/root-r8-cpu-cold-terminal-audit.json` SHA `fefa46c12d45bf81d4b5428b2f56a7fa95a5e5b220d8f789e58a3f0d06c6fa1c` 全真；实际227TU与新的core `4944108e3ee106d14eea1327c88af428d0bcf4f0dd101b2efcd11a0756e6cd99`、utils `a6c35acd96e61633b5e1d5b006436548ecd03b47d9247a7028dcea6f2b30828b`、stamp `a0cca8088b44cefc00c0814b2279ea1a197a35193f22885a1afbd8ed90ebe1b8` 一致。完整环境、实际CPU flags、source/compile order/ingredients、两次fresh审计与真实命令有效，当前组/精确锁空；无tensor、测试或模型，不能记成数值通过。
+
+下一项在此真实CPU core/cache上分native和Torch子进程串行执行core白名单；Torch另加原mixed四项、新pow边界回归与既有reflected-pow控制，native core已含新方法。两侧新单次600s上限，准备包正绑定实际产品，尚未执行；native必须关闭shim并移除会激活它的PROJECT_ROOT/RUNTIME_ROOT，不能只写SHIM=0，也不能硬套Torch导入环境。CUDA900仅离线HOLD，等待真实同源CPU原mixed回归等前置，不借旧core、不自动后继。原r7完整logits FAIL与LoRA阻断保持，其他FAIL/预算和Day4–5门槛不变，发布 **Not complete**。
+
+## 2026-10-28 05:58 +0800 CPU pow融合精度泄漏已复现，r8仅隔离源码修复
+
+第二个最小包 `20261028-qwen-r7-public-pow-barrier-micro-r1-prepared/` manifest `b72a77caf2988665000d26639bfe8e33dbbd16ff26ea8c0c35ccb2a37ac7056e` 已单次完成CPU→真实CUDA，四侧自然rc0（CPU PT/JT2.441/4.855s，CUDA4.554/14.928s）；CPU receipt `503fcf557520f7f3f6bedb2f50ab679ef79c76e2ab3a2d6faca21044dfba97f4`，CUDA `bc7d1c79a20e39a75f14d6e61941b7e2f83952b877cf2cf14386ef5b5cc47de2`。root两侧22项独立终审通过，CPU SHA `0a78a6fdc8020b4ac22fa7bcdd268395dac6aa72f791bd23d6802c1fe31a8cf8`、CUDA `4d4455fcbebf61da942d0430e707926880d0ef45d98a882aac3c1914f279b3d5`，新CPUcache816/CUDA1358均仅增8、无旧文件改删，自有组和精确锁为空；旧预算不重置。
+
+独立保存数组对照 `20261028-root-rmsnorm-r7-continuation-r1/root-r7-pow-barrier-saved-comparison.json` SHA `dbde72a52749183374f869afec6fcacef5c9f9ce1c94342e7505ef87d8e3ee36` 确认：JT CPU原整数theta连续链与保存power重建float32 tensor后的倒数相差25项；float(theta)或float32 tensor(theta)链均逐位exact该物化分支。PT CPU及两侧CUDA原链与物化分支均差0。对同一保存PT power，两runtime两device的倒数与reciprocal各64项全部exact。因此CPU问题在pow→融合宽类型consumer的声明dtype边界；保存的double pow再取倒数也能独立重现旧JT64项，但该重算本身不冒充device干预。修复这一边界后仍可能有原pow库的一项CPU数值差，不能承诺完整模型通过。
+
+root仅在新隔离树 `torch-compat-storage-silu-cat-grad-rmsnorm-pow-20261028-r8` 对CPU pow返回表达式显式cast到声明输出dtype，保持参数计算和CUDA `_signed_pow`；另在native BinaryOpCases/public TestBinaryOps各加一条宽类型consumer/reciprocal回归。r8 source `f6751970c2da991ee09e23b7b08f50d8d777b9e916c21a76b2b895daea6879ef`，`20261028-qwen-pow-r8-source-r1/candidate-source-manifest.json` SHA `7a08b93941b4466eea82267bce1dc1d045fdcc37f23a51ec9da6ab995edd2dd1`；source review `d6a2c0bab063612b7fd9309e55cb808736f7d08d34a85db9759a3552cbc38848`。相对r7仅3文件改变、无增删，2806 regular/2807 inventory，两个回归AST有效；r8 CPU600 cold final已由root审阅单次放行（manifest `979785d33186c7c7f5f733e2ce0b4f553de264f62f64d266685700a9335062b3`、launch review `fcba36097328b8440ec76d63d1e769f9f53f3a63672b04a335056bade181d0ef`，exec15130）；实际child663790/start174781968正在串行编译，当前没有构建终态或数值结果，禁止重复启动。真实命令/私有组补采保存在 `20261028-root-pow-r8-continuation-r1/root-r8-cpu-cold-live-identity.json`。CUDA900必须等实际同源CPU证据，不能借旧core/cache。主源/r7/旧失败全保留，尚未采用main或启动LoRA；原完整no-hook仍FAIL8,690,528/29,171,712，其他FAIL/原余额/Day4–5门槛保持，发布 **Not complete**。
+
 ## 2026-10-28 05:46 +0800 r7公共pow四侧控制完成，CPU初始化链可复现保存频率
 
 新最小包 `20261028-qwen-r7-public-pow-micro-r1-prepared/` manifest `388c709b978aea0ff81610f2c86832b6099c4bfdc897c5c68e9b7a4fcc9d7d41` 已由root依次单次执行CPU→真实CUDA；两device PT/JT均自然rc0，CPU各2.391/8.577s、CUDA各3.395/36.933s，均在各自新120/180s微预算内，未重置旧模型/T5/Vision预算。CPU receipt `d978831aa55b80ef7b6643d74bb87f35c4b44d8bfd29400145cdf9ab878e824d`，CUDA `2865c203c8ebd2eaa6d0e187c3f05202d3c10bd1e27e920dd2ef437eb11bb220`；双方真实cmdline/PID/start/私有组和worker自身身份均有交叉核对，实际device/fallback0、source/core/env/组锁有效。最新CPUcache808=780+28，CUDA1350=1326+24，旧文件无改删。
