@@ -2,7 +2,7 @@
 
 - Status: Current-state index, not a history log
 - Last reviewed: 2026-10-28
-- Baseline reviewed: `a274f804b`
+- Baseline reviewed: `27589a402`
 - Owner: Jittor core maintainers
 - Freshness expires: 2027-01-06
 - Review when: the release line, a top-level goal or an indexed location changes
