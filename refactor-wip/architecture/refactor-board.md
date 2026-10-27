@@ -1,5 +1,17 @@
 # 整改看板
 
+## 2026-10-28 05:16 +0800 r7 capture已终态，独立边界复算待验
+
+新r7原113边界capture的worker/comparator均自然rc0（64.618/7.088s），exec89591已收回；正式receipt `cdb04b21cf898066c72c9c81187a5b01e93fb4a049a813f749bbe69e7f980362` 为 `DIAGNOSTIC_CAPTURE_COMPLETE_GATE_UNCHANGED_FAIL`，comparison `8b25c1c290f6c44d140b97a0eb224c857b30dda46f7d12de7c4ab54a980a146b`。原capture/comparator确认五probe逐字复现本次r7 no-hook；尚待独立root38，暂不采纳新首差异解释。
+
+最新CUDAcache1306=1274+32、无改删或非法新增，cache-after SHA `e22439219f48fa12839a9624b764adce0d5d02c17d22cffd805ad8d97cc2f652`；自有组与精确锁均空，未重跑PT或修改候选。下一项只离线绑定真实终态的独立审计final，再由root单次复算117数组/113顺序及五probe、原dtype与float32存储区分。完整no-hook仍FAIL8,690,528/29,171,712，所有发布/LoRA前置门槛与其他FAIL/预算保持，Day2–5仍 **Not complete**。
+
+## 2026-10-28 05:15 +0800 r7原113边界capture单次运行中
+
+root19项启动审查全部通过，`20261028-root-rmsnorm-r7-continuation-r1/root-r7-capture-launch-review.json` SHA `38dd87687ca96c31e094f902f2a6977ebc1b833a57c9426f06a272cd944dcb52`。新包 `20261028-qwen-r7-layer-capture-r1-prepared/` manifest `c9689d9022ee8cdaa4fbb25aa1a3209b666b239a5e0f2b02aeb14020480578d2` 已单次启动（exec89591），原worker1800/comparator120、113边界/117数组/五probe exact合同保持；capture、comparator及controller逐字复用原root38模板，环境/source/products/support绑定实际r7，最新1274缓存exact、精确锁unheld。入场free51296MiB，真实CUDA导入及原worker正常，当前尚无终态，不重复启动。
+
+fresh fetch远端仍 `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，为五树HEAD祖先，无需整合；main519d0c的99项逐文件dirty字节全部保持。完整no-hook仍FAIL8,690,528/29,171,712，LoRA不启动、候选未采用main。完成后绑定真实终态执行独立root38，只能依据有效剩余边界继续定位；Day2–5仍 **Not complete**，其他FAIL、原预算与Day4–5门槛保持。
+
 ## 2026-10-28 05:07 +0800 r7完整no-hook仍FAIL，混合守卫并非完整修复
 
 r7原完整worker/comparator自然rc0（257.699/3.173s），controller自然exit1保留数值失败，正式receipt `e32c32336a20a48b4e9b77346d0aea5c4eae3962fbcf838233a941dbe13cc842` 为 `FULL_NOHOOK_NUMERICAL_FAILURE_RETAINED`。原全部29,171,712 logits超限8,690,528，max_abs3.9296875；active3,714,487/22,030,720、max.4375，padding4,976,041/7,140,992；输入exact、loss在原门槛内。root独立generic28终审 `20261028-root-rmsnorm-r7-continuation-r1/root-r7-nohook-terminal-audit.json` SHA `f8ae8cb66c4f9e5c7bbbf245d8ee2d742c0c527f0d7608869278b810e6b1e8e2` 全真，仅证明原结果与运行证据有效，numerical_gate_passed=false。真实CUDA/fallback0、完整环境/source/products/原caps/组锁有效，最新CUDAcache1274=1018+256仅合法新增，exec32616已收回，无活跃模型进程。
