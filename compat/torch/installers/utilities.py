@@ -1,10 +1,10 @@
 """Module-level utility APIs; installation only publishes their namespace."""
+import operator as _operator
 from collections import OrderedDict, defaultdict
 import json
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import jittor as jt
-import numpy as np
 
 from ..context import get_install_context, registry_for
 from ..fidelity import Fidelity, register_api_bindings, register_fidelity
@@ -680,25 +680,10 @@ def _api_python_dispatch__get_current_dispatch_mode(*args, **kwargs):
     return None
 
 
-#: What `set_num_threads` was last told, or None if nobody has said.
 _INTRA_OP_THREADS = None
 
 
 def _api_g_get_num_threads():
-    """torch's intra-op thread count, as torch would report it.
-
-    Was `os.cpu_count()` unconditionally, which is wrong twice: it ignored
-    `OMP_NUM_THREADS` (real torch honours it -- measured, `OMP_NUM_THREADS=1`
-    gives 1), and it ignored `set_num_threads` entirely, so
-    `set_num_threads(n); get_num_threads()` never gave back `n`. Code that
-    sizes a pool from this got the machine's logical core count no matter what
-    it or its operator asked for, and the ecosystem speed harness refused to
-    compare runtimes because the two sides disagreed (384 here against real
-    torch's 192).
-
-    Affinity, not `cpu_count`, is the fallback: inside a cpuset the process
-    cannot use the cores `cpu_count` counts.
-    """
     if _INTRA_OP_THREADS is not None:
         return _INTRA_OP_THREADS
     requested = os.environ.get("OMP_NUM_THREADS", "").strip()
@@ -709,16 +694,18 @@ def _api_g_get_num_threads():
     return os.cpu_count() or 1
 
 
-def _api_g_set_num_threads(threads=None, *args, **kwargs):
-    """Record the request so `get_num_threads` agrees with it.
-
-    This does not retune Jittor's OpenMP pool -- that needs a native call the
-    runtime does not expose -- so it buys reporting fidelity, not control. Said
-    plainly here rather than left to look like it takes effect.
-    """
+def _api_g_set_num_threads(threads):
     global _INTRA_OP_THREADS
-    if threads is not None:
-        _INTRA_OP_THREADS = max(1, int(threads))
+    if isinstance(threads, bool):
+        raise TypeError("set_num_threads expects an integer")
+    try:
+        threads = _operator.index(threads)
+    except TypeError:
+        raise TypeError("set_num_threads expects an integer")
+    if threads <= 0:
+        raise RuntimeError("set_num_threads expects a positive integer")
+    jt.core.set_num_threads(threads)
+    _INTRA_OP_THREADS = threads
     return None
 
 
