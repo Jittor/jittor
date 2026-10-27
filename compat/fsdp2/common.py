@@ -3,14 +3,14 @@
 import os
 from contextlib import nullcontext
 from functools import wraps
-import types
-
-import numpy as np
 
 import jittor as jt
-# The branch already has this under its own name (see ffaf65d0); the PR shipped
-# a second copy called _factory_scope_like, which would be a duplicate.
-from jittor._core.var import placement_scope_like as _factory_scope_like
+# Device-local factories and shape calculations are shared with native FSDP.
+from jittor.distributed.fsdp.common import (  # noqa: F401 -- internal reexports
+    StateRecord, _flatten_var, _ceil_div, _pad_flat, _zeros_like_shape,
+    _param_numel, _value_requires_grad, _primary_input_requires_grad,
+    _materialize_frozen_output, _tensor_values,
+)
 from ..diagnostics import EXPECTED, swallowed
 # Rank/world queries and the two collectives moved down to jittor/compat/
 # collectives.py: compat/torch/installers/distributed.py needs
@@ -28,20 +28,15 @@ from ..collectives import (          # noqa: F401
     _world_size,
 )
 
-
-class StateRecord(types.SimpleNamespace):
-    """Weak-referenceable FSDP metadata, owned by its module."""
-
-
-
-
 def _frontend_scope(state):
     tensor_type = getattr(state, "frontend_type", None)
     if tensor_type is None:
         return nullcontext()
     from ..torch.frontend import tensor_frontend
-    return tensor_frontend(tensor_type)
-
+    # FSDP lifecycle code manipulates already-placed parameters and collective
+    # buffers. It must let native operations follow their inputs; applying the
+    # Torch factory default (CPU) here makes a CUDA concat/setitem mix devices.
+    return tensor_frontend(tensor_type, default_placement=False)
 
 def _state_frontend(function):
     @wraps(function)
@@ -49,7 +44,6 @@ def _state_frontend(function):
         with _frontend_scope(state):
             return function(state, *args, **kwargs)
     return invoke
-
 
 def _all_gather_shards(value, group=None):
     if group is None or group.ranks is None:
@@ -65,7 +59,6 @@ def _all_gather_shards(value, group=None):
         raise RuntimeError("FSDP mesh has no all_gather backend communicator")
     return gather(value, group._backend_handle)
 
-
 def _reduce_scatter_padded(value, group=None):
     if group is None or group.ranks is None:
         return _world_reduce_scatter_padded(value)
@@ -79,7 +72,6 @@ def _reduce_scatter_padded(value, group=None):
     size = int(reduced.shape[0]) // group.size()
     return _slice_flat(reduced, group.rank() * size, size)
 
-
 def _prod(xs):
     out = 1
     for x in xs:
@@ -88,99 +80,6 @@ def _prod(xs):
         except EXPECTED as exc:
             swallowed("fsdp2/common.py _prod: out *= int(x)", exc)
     return out
-
-
-def _flatten_var(v):
-    return v.reshape((-1,))
-
-
-def _ceil_div(a, b):
-    return (int(a) + int(b) - 1) // int(b)
-
-
-def _pad_flat(flat, padded_numel):
-    n = int(flat.numel()) if callable(getattr(flat, "numel", None)) else int(np.prod(flat.shape))
-    if n == int(padded_numel):
-        return flat
-    pad = _zeros_like_shape(flat, (int(padded_numel) - n,))
-    return jt.concat([flat, pad], dim=0)
-
-
-def _zeros_like_shape(reference, shape, dtype=None):
-    with _factory_scope_like(reference):
-        return jt.zeros(shape, dtype=reference.dtype if dtype is None else dtype)
-
-
-def _param_numel(v):
-    return int(np.prod(tuple(int(x) for x in v.shape)))
-
-
-def _value_requires_grad(value):
-    if isinstance(value, jt.Var):
-        try:
-            return bool(value.requires_grad)
-        except (AttributeError, TypeError):
-            return not value.is_stop_grad()
-    if isinstance(value, dict):
-        return any(_value_requires_grad(item) for item in value.values())
-    if isinstance(value, (tuple, list)):
-        return any(_value_requires_grad(item) for item in value)
-    return False
-
-
-def _primary_input_requires_grad(args, kwargs):
-    """Whether a module must retain its forward graph for an input gradient."""
-    return (any(_value_requires_grad(value) for value in args)
-            or any(_value_requires_grad(value) for value in kwargs.values()))
-
-
-def _materialize_frozen_output(value):
-    """Sever a completed frozen forward graph while preserving its structure."""
-    if isinstance(value, jt.Var):
-        return jt.Var.copy(value).stop_grad()
-    if isinstance(value, tuple):
-        values = tuple(_materialize_frozen_output(item) for item in value)
-        if hasattr(value, "_fields"):
-            return type(value)(*values)
-        if type(value) is tuple:
-            return values
-        try:
-            return type(value)(values)
-        except TypeError:
-            return values
-    if isinstance(value, list):
-        values = [_materialize_frozen_output(item) for item in value]
-        if type(value) is list:
-            return values
-        try:
-            return type(value)(values)
-        except TypeError:
-            return values
-    if isinstance(value, dict):
-        values = {
-            key: _materialize_frozen_output(item)
-            for key, item in value.items()
-        }
-        if type(value) is dict:
-            return values
-        try:
-            return type(value)(values)
-        except TypeError:
-            return values
-    return value
-
-
-def _tensor_values(value):
-    if isinstance(value, jt.Var):
-        return [value]
-    if isinstance(value, dict):
-        return [
-            tensor for item in value.values() for tensor in _tensor_values(item)
-        ]
-    if isinstance(value, (tuple, list)):
-        return [tensor for item in value for tensor in _tensor_values(item)]
-    return []
-
 
 def _full_gradient_from_shard(gradient, state, entry):
     """Reconstruct one public DTensor gradient from its rank-local shard."""
@@ -216,7 +115,6 @@ def _full_gradient_from_shard(gradient, state, entry):
     gathered = _all_gather_shards(_flatten_var(gradient), group)
     return _slice_flat(gathered, 0, entry.numel).reshape(entry.shape)
 
-
 #: Where "auto" switches flat sharding off, and how to move it.
 #:
 #: Flat sharding removes several tiny NCCL launches and was consistently faster
@@ -230,7 +128,6 @@ def _full_gradient_from_shard(gradient, state, entry):
 _FLAT_MAX_WORLD_SIZE = 2
 _FLAT_MAX_NUMEL = 1_000_000
 
-
 def _flat_threshold(name, default):
     raw = os.environ.get(name, "").strip()
     if not raw:
@@ -242,7 +139,6 @@ def _flat_threshold(name, default):
             "{}={!r} is not an integer. It is the parameter count (or rank "
             "count) at which FSDP2 stops using flat sharding; leave it unset "
             "for {}.".format(name, raw, default))
-
 
 def _fsdp2_flat_enabled(world_size, total_numel):
     """Whether to shard this module flat, and why.
@@ -262,7 +158,6 @@ def _fsdp2_flat_enabled(world_size, total_numel):
     max_numel = _flat_threshold("JITTOR_FSDP2_FLAT_MAX_NUMEL",
                                 _FLAT_MAX_NUMEL)
     return int(world_size) <= max_world or int(total_numel) <= max_numel
-
 
 # WORLD helpers remain owned below FSDP; the wrappers above add explicit
 # process-group routing for mesh shards without changing those shared helpers.

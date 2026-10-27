@@ -114,6 +114,19 @@ struct VarFlags {
         // back through the executor (and fail again) instead of returning it.
         // Cleared by the next read that syncs without throwing.
         _execution_failed,
+        // A view created without recording may inherit requires_grad from its
+        // base without acquiring a gradient edge of its own. An explicit
+        // requires_grad setter activates that edge, even when the value is
+        // already true. Kept separate from reversible freezing/stop_grad.
+        _unrecorded_view,
+        // A pending value built only from constants -- a Python number, an
+        // ArrayOp source, and the broadcasts/casts/views of one. `_is_scalar`
+        // used to be the only marker a constant had, but a factory now clears
+        // it on its full-shape result so that `jt.ones(4)` promotes as the
+        // tensor it is. Placement still has to let the same
+        // unsynced constant follow its operand's device (op.cc
+        // `is_pending_scalar`), so that fact gets its own bit.
+        _is_constant,
         _end,
     };
 };
@@ -140,28 +153,30 @@ struct OpFlags {
         // Its outputs must remain pending until a later graph-wiring step adds
         // their control edges. TapeOp uses this while Tapes is assembled.
         _must_stay_pending,
-        // Six consecutive bits mirroring amp_reg; op.cc writes them and
-        // grad.cc reads them back as one field. Only the first three have
-        // names, but all six belong to amp -- hence the placeholders, which
-        // are what stops the next flag from landing inside the field.
+        // Seven consecutive bits mirroring amp_reg; op.cc writes them and
+        // grad.cc reads them back as one field. Reserved bits still belong
+        // to amp, so the next private flag must follow the complete field.
         _prefer_32,
         _prefer_16,
         _reduce_keep,
         _amp_reserved_3,
         _amp_reserved_4,
         _amp_reserved_5,
+        _prefer_bfloat16,
         _custom_flag,
         // Op meaning of the shared *name*: the op owns frozen edge snapshots
         // of its requires-grad-disabled inputs. Nothing to do with the Var bit
         // of the same name, which is why they are in different enums now.
         _requires_grad_disabled,
         _requires_grad_snapshot,
+        // Grouping/gradient-only inputs: forward needs neither their bytes,
+        // their extents nor execution of their providers (currently Tapes).
         _no_input_storage,
         _end,
     };
     static constexpr int _op_type_nbits = NodeBits::_node_order_nbits;
     // The width op.cc and grad.cc pass amp_reg through.
-    static constexpr int _amp_nbits = 6;
+    static constexpr int _amp_nbits = 7;
 };
 
 struct NodeFlags {
@@ -239,7 +254,7 @@ static_assert((int)VarFlags::_force_fuse == (int)NodeFlags::_n
     && (int)OpFlags::_cpu == (int)NodeFlags::_n,
     "the private layouts must both start where the shared range ends");
 static_assert((int)OpFlags::_custom_flag == (int)OpFlags::_prefer_32 + OpFlags::_amp_nbits,
-    "the six amp bits op.cc and grad.cc move as one field are no longer contiguous");
+    "the seven amp bits op.cc and grad.cc move as one field are no longer contiguous");
 static_assert((int)OpFlags::_op_type_high == (int)OpFlags::_op_type + 1,
     "OpType is read as two bits and they are no longer adjacent");
 static_assert((int)NodeFlags::_node_order_high == (int)NodeFlags::_node_order_low + 1,
@@ -287,17 +302,33 @@ public:
 
     // Return true exactly on the transition across zero; propagation belongs
     // at those boundaries, not at every additional owner.
-    bool own() {
-        ASSERT(value_ >= 0 && value_ < std::numeric_limits<int>::max())
-            << kind_name() << "liveness own overflow";
+    // Inlined: every liveness step moves a counter, and with the failure
+    // report written in place the steps were calls. The report -- the same
+    // assertion, condition and message -- runs out of line, only when the
+    // condition has already failed.
+    __attribute__((always_inline)) bool own() {
+        if (PREDICT_BRANCH_NOT_TAKEN(!(value_ >= 0 && value_ < std::numeric_limits<int>::max())))
+            report_own();
         return ++value_ == 1;
     }
 
-    bool release() {
-        ASSERT(value_ > 0) << kind_name()
-            << "liveness release without a matching owner";
+    __attribute__((always_inline)) bool release() {
+        if (PREDICT_BRANCH_NOT_TAKEN(!(value_ > 0))) report_release();
         return --value_ == 0;
     }
+
+private:
+    __attribute__((noinline, cold)) void report_own() const {
+        ASSERT(value_ >= 0 && value_ < std::numeric_limits<int>::max())
+            << kind_name() << "liveness own overflow";
+    }
+
+    __attribute__((noinline, cold)) void report_release() const {
+        ASSERT(value_ > 0) << kind_name()
+            << "liveness release without a matching owner";
+    }
+
+public:
 
     void assert_expected(int expected, const void* owner) const {
         ASSERTop(count(),==,expected) << kind_name()
@@ -477,7 +508,21 @@ struct Node {
     void release_inputs();
     void erase_input(uint index);
     void erase_output(uint index);
-    void set_inputs(list<Node*> nodes);
+    // Replaces this node's input edges with `nodes`, in order. The core takes
+    // a pointer range: the parameter used to be a std::list taken by value, so
+    // every op maker's `set_inputs({a, b})` -- and every output var's
+    // `set_inputs({op})` -- built and freed one heap node per input, on every
+    // operator constructed.
+    void set_inputs(Node* const* nodes, size_t count);
+    inline void set_inputs(std::initializer_list<Node*> nodes) {
+        set_inputs(nodes.begin(), nodes.size());
+    }
+    template <class Nodes>
+    inline void set_inputs(const Nodes& nodes) {
+        SmallVector<Node*, 4> flat;
+        for (Node* node : nodes) flat.emplace_back(node);
+        set_inputs(flat.begin(), flat.size());
+    }
     void add_inputs(const vector<Node*>& nodes);
     void add_inputs(const vector<Var*>& nodes);
     void release_forward_liveness();

@@ -5,6 +5,7 @@ from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import jittor as jt
 from jittor._runtime.dispatch import native_rule, register_kernel, select_kernel
 from jittor._runtime.backend_libraries import get_library_ops
+from ._amp import prefers_half as _amp_retypes_output_to_half
 
 
 #: The AMP register the generic ``(a * b).sum(axis)`` contraction runs under.
@@ -28,9 +29,29 @@ from jittor._runtime.backend_libraries import get_library_ops
 #:
 #: Dropping the bit costs a float32 buffer for the contracted operand. That is
 #: the already-slow fallback path; the accelerated relays never reach here.
-def _contraction_scope():
+def _contraction_scope(fp32_output=False, half_operands=False):
     """``flag_scope`` for the generic contraction. One spelling, three callers."""
-    return jt.flag_scope(amp_reg=jt.flags.amp_reg | jt.amp_flags.keep_reduce)
+    if fp32_output:
+        # Keep the BF16 operands in the native Binary graph. Widening them
+        # before multiplication also widens its backward and changes second
+        # derivatives. prefer32 widens the accumulator's result instead.
+        return jt.flag_scope(amp_reg=jt.amp_flags.prefer32)
+    amp_reg = jt.flags.amp_reg
+    if half_operands:
+        # A half preference plus keep_reduce made the explicit float32 cast
+        # inside the reduce constructor come back as a half Var, so the
+        # contraction accumulated at the half width: at K=256 the error against
+        # the bf16-input reference grew to 3.3%, and a CPU autocast training run
+        # drifted far beyond torch's bf16 spread. keep_reduce alone still hands
+        # back the input dtype (the reduce constructor rounds once at the end)
+        # while the cast and the accumulator stay float32.
+        amp_reg &= ~(jt.amp_flags.prefer16 | jt.amp_flags.prefer_bfloat16)
+    return jt.flag_scope(amp_reg=amp_reg | jt.amp_flags.keep_reduce)
+
+
+def _both_half(a, b):
+    names = (_jittor_dtype_name(a.dtype), _jittor_dtype_name(b.dtype))
+    return names[0] in ("float16", "bfloat16") and names[1] in ("float16", "bfloat16")
 
 
 def _broadcast_batch_dims(a, b):
@@ -147,25 +168,6 @@ def _cublas_matmul(a, b, trans_a=False, trans_b=False):
 def _cublas_batched_matmul(a, b, trans_a=False, trans_b=False):
     a, b = _broadcast_batch_dims(a, b)
     return get_library_ops("cublas").cublas_batched_matmul(a, b, trans_a, trans_b)
-
-
-def _amp_retypes_output_to_half():
-    """True when the AMP policy in force will give this product a half output.
-
-    Read off ``amp_reg``, which is the register dtype inference actually
-    consults, and not off ``auto_mixed_precision_level``, which is only one of
-    the two ways that register gets written. ``torch.autocast`` sets ``amp_reg``
-    directly -- ``compat/torch/grad.py::_refresh_amp_register`` -- and never
-    touches the level, so a guard on the level was blind to every autocast
-    region: a ``torch.autocast("cpu")`` training step died in the *backward*
-    with ``mkl_matmul_op.cc:30: support float32 only now``, which is precisely
-    the failure the comment in ``_supports_mkl`` predicts.
-
-    ``prefer16``, not "any non-zero register". Level 3 sets
-    ``keep_reduce | keep_white``, which does not retype anything to a half, and
-    declining oneDNN there was a 99x slowdown bought for nothing.
-    """
-    return bool(int(jt.flags.amp_reg) & jt.amp_flags.prefer16)
 
 
 def _supports_mkl(a, b, trans_a=False, trans_b=False):
@@ -388,12 +390,49 @@ def matmul_transpose(a, b, *, _op="matmul_transpose", _names=("a", "b")):
     if fast is not None:
         return fast if restore is None else fast.reshape(restore)
 
+    out = _matmul_transpose_contraction(a, b)
+    return out if restore is None else out.reshape(restore)
+
+
+def _matmul_transpose_contraction(a, b, fp32_output=False):
     shape = list(a.shape)[:-1] + list(b.shape)
-    with _contraction_scope():
+    with _contraction_scope(fp32_output, _both_half(a, b)):
         a = a.broadcast(shape, [len(shape) - 2])
         b = b.broadcast(shape)
-        out = (a * b).sum(len(shape) - 1)
-    return out if restore is None else out.reshape(restore)
+        return (a * b).sum(len(shape) - 1)
+
+
+class _BFloat16MatmulAccumulator(jt.Function):
+    """Keep the GEMM gradient's accumulation before its BF16 rounding."""
+
+    def _run_call(self, a, b):
+        # The default Function inputs are taped for first derivatives. Keep
+        # independent holders of the original graph for higher derivatives;
+        # caller assign must not change the values saved by this invocation.
+        self.a, self.b = (jt.ops.reshape(value, value.shape) for value in (a, b))
+        return super()._run_call(a, b)
+
+    def execute(self, a, b):
+        return _matmul_transpose_contraction(a, b, fp32_output=True)
+
+    def grad(self, g):
+        g = g.cast(self.a.dtype)
+        # A generic elementwise backward rounds each broadcast contribution
+        # before reducing it. A GEMM rounds its completed gradient instead.
+        # Reuse exactly the same contraction and retain this boundary at every
+        # derivative order, as the native GEMM providers do.
+        da = _BFloat16MatmulAccumulator.apply(g, self.b.transpose()).cast(self.a.dtype)
+        db = _BFloat16MatmulAccumulator.apply(g.transpose(), self.a.transpose()).cast(self.b.dtype)
+        return da, db
+
+
+def _bfloat16_matmul_accumulator(a, b):
+    """CPU BF16 operands with a FP32 result, before Linear's bias rounding."""
+    ops = get_library_ops("mkl", load=True)
+    if ops is not None:
+        return ops.mkl_matmul(a, b, False, True, True)
+    # use_mkl=0 is a real native opmath route, sharing the existing contraction.
+    return _BFloat16MatmulAccumulator.apply(a, b)
 
 
 def bmm_transpose(a, b):
@@ -411,7 +450,7 @@ def bmm_transpose(a, b):
     # reduce in the generic path below to hand back the operands' dtype rather
     # than the float32 it accumulates in, so leaving it off here made the same
     # product depend on which of the three names the caller reached for.
-    with _contraction_scope():
+    with _contraction_scope(half_operands=_both_half(a, b)):
         kernel = select_kernel("batched_matmul", a, b, 0, 1)
         if kernel is not None:
             return kernel(a, b, 0, 1)
@@ -476,8 +515,8 @@ def _mixed_float_compute_dtype(a, b):
     Which dtype to resolve to:
 
     * inside an autocast/AMP region, the precision that region asked for --
-      float16, or bfloat16 when an operand already is (that is what
-      ``amp_prefer16`` means in ``src/type/nano_string.h``). This reproduces
+      an explicit bfloat16 preference, or the legacy float16 preference
+      (which keeps bfloat16 operands). This reproduces
       torch: autocast casts a float32 activation to the autocast dtype before
       the product, so a float16 result is what the model expects to get back,
       and the H3 VAE's bit-exact residual kernel requires it;
@@ -494,10 +533,12 @@ def _mixed_float_compute_dtype(a, b):
         return None
     names = (_jittor_dtype_name(a.dtype), _jittor_dtype_name(b.dtype))
     amp_reg = int(jt.flags.amp_reg)
-    if amp_reg & jt.amp_flags.prefer16:
-        return "bfloat16" if "bfloat16" in names else "float16"
     if amp_reg & jt.amp_flags.prefer32:
         return "float32"
+    if amp_reg & jt.amp_flags.prefer_bfloat16:
+        return "bfloat16"
+    if amp_reg & jt.amp_flags.prefer16:
+        return "bfloat16" if "bfloat16" in names else "float16"
     for wider in ("float64", "float32"):
         if wider in names:
             return wider
@@ -583,7 +624,7 @@ def matmul(a, b):
         assert c.shape == [8, 10, 3, 5]
     """
     _check_matmul_shapes(a, b)
-    with _contraction_scope():
+    with _contraction_scope(half_operands=_both_half(a, b)):
         len_a = len(a.shape)
         len_b = len(b.shape)
         if len_b == 1:

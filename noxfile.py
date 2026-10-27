@@ -2,6 +2,7 @@
 
 from __future__ import print_function
 
+import hashlib
 import json
 import math
 import os
@@ -9,7 +10,8 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
-from typing import Dict, Optional
+from typing import Dict, List, Optional, Tuple
+import zipfile
 
 import nox
 
@@ -217,6 +219,16 @@ CPU_TORCH_ORACLE_TESTS = (
     "tests/nn/test_batchnorm.py",
     "tests/nn/test_loss.py",
     "tests/nn/test_relu.py",
+    # Weight conversion and archive round-trip only assert anything against a
+    # real PyTorch; in the native gate they skip for the oracle's absence.
+    "tests/nn/test_state_dict_dtypes.py::TestStateDictDtypes::"
+    "test_torch_conversion_keeps_every_dtype",
+    "tests/nn/test_state_dict_dtypes.py::TestStateDictDtypes::"
+    "test_values_survive_the_conversion",
+    "tests/nn/test_state_dict_dtypes.py::TestStateDictDtypes::"
+    "test_a_value_that_float32_cannot_hold",
+    "tests/serialization/test_native_serialization_ownership.py::"
+    "test_torch_archive_save_load_roundtrip",
     "tests/models/test_network_training_parity.py",
 )
 CUDA_TESTS = (
@@ -347,7 +359,10 @@ MPI_TESTS = (
     "tests/backends/comm/mpi/test_mpi_op.py",
     "tests/distributed/test_single_process_scope.py",
 )
-NCCL_TESTS = ("compat/tests/fsdp2/test_fsdp2_nccl.py",)
+NCCL_TESTS = (
+    "tests/backends/comm/nccl/test_native_collectives.py",
+    "compat/tests/fsdp2/test_fsdp2_nccl.py",
+)
 
 NOX_STATE_ROOT.mkdir(parents=True, exist_ok=True)
 nox.options.envdir = str(NOX_STATE_ROOT / "envs")
@@ -788,6 +803,53 @@ def _install_compat_source(session, env, runner=None):
     _COMPAT_SOURCE_INSTALLS.add(key)
 
 
+#: The completion detector, shared with ``tools/run_test_suite.py``. A native
+#: crash ends the interpreter, so pytest writes no result line and no summary;
+#: the log just stops. The plugin inside pytest records that the session
+#: reached its end, and this checker turns its absence into a failed gate.
+SESSION_CHECKER = REPO_ROOT / "tools" / "check_session_completed.py"
+
+
+def _check_completed_session(sentinel):
+    """Return ``(ok, message)`` from the completion checker."""
+    checked = subprocess.run(
+        [sys.executable, str(SESSION_CHECKER), "--sentinel", str(sentinel)],
+        cwd=str(REPO_ROOT),
+        capture_output=True,
+        text=True,
+    )
+    return checked.returncode == 0, (checked.stdout or "") + (checked.stderr or "")
+
+
+def _run_pytest_checked(session, argv, env, *, external=False):
+    """Run one pytest invocation and prove it reached ``pytest_sessionfinish``.
+
+    The sentinel path is per invocation and removed first: a path left by an
+    earlier group would make a dead session look finished, which is the one
+    failure this check exists to make impossible.
+    """
+    sentinel = Path(session.create_tmp()) / "session-complete.json"
+    sentinel.unlink(missing_ok=True)
+    env = env.copy()
+    env["JITTOR_SESSION_SENTINEL"] = str(sentinel)
+    try:
+        session.run(*argv, env=env, external=external)
+    except BaseException:
+        # pytest already failed, so re-raise unchanged. Say what the absence
+        # means here, though: a nonzero exit alone does not tell a reader that
+        # the tests after the crash never ran.
+        if not sentinel.exists():
+            session.log(
+                "pytest ended before writing its completion sentinel: the "
+                "interpreter stopped mid-run, so any tests after that point "
+                "never executed"
+            )
+        raise
+    ok, message = _check_completed_session(sentinel)
+    if not ok:
+        session.error(message)
+
+
 def _run_pytest_once(session, args, env, runner=None, timeout=900):
     """One pytest process for one whole set of paths.
 
@@ -798,14 +860,17 @@ def _run_pytest_once(session, args, env, runner=None, timeout=900):
     """
     python = runner or "python"
     _install_compat_source(session, env, runner)
-    session.run(
-        python,
-        "-m",
-        "pytest",
-        "-v",
-        "--timeout=%d" % timeout,
-        *args,
-        env=env,
+    _run_pytest_checked(
+        session,
+        (
+            python,
+            "-m",
+            "pytest",
+            "-v",
+            "--timeout=%d" % timeout,
+            *args,
+        ),
+        env,
         external=runner is not None,
     )
 
@@ -935,19 +1000,19 @@ def _asv_state_path(variable, fallback):
 
 
 def _write_asv_config(root, results_dir, html_dir):
-    config = json.loads((REPO_ROOT / "benchmarks" / "asv.conf.json").read_text(encoding="utf-8"))
+    config = json.loads(
+        (REPO_ROOT / "benchmarks" / "asv" / "asv.conf.json").read_text(encoding="utf-8")
+    )
     config.update(
         {
             "repo": str(REPO_ROOT),
             # The checkout being measured, whatever it is called. `asv run`
             # resolves every configured branch before it looks at
-            # --set-commit-hash, and benchmarks/asv.conf.json names the
-            # upstream branches -- which a fork's branch or a pull request's
-            # detached HEAD does not have ("Unknown branch 2.0-refactor in
-            # configuration"). `asv publish` then graphs HEAD's first-parent
-            # line, which is the history the comparison is against.
+            # --set-commit-hash. Keep the generated selection tied to HEAD
+            # even when the source config is customized with other branches.
+            # `asv publish` then graphs HEAD's first-parent line.
             "branches": ["HEAD"],
-            "benchmark_dir": str(REPO_ROOT / "benchmarks"),
+            "benchmark_dir": str(REPO_ROOT / "benchmarks" / "asv"),
             "env_dir": str(root / "asv-env"),
             "results_dir": str(results_dir),
             "html_dir": str(html_dir),
@@ -1159,8 +1224,10 @@ def structure(session):
         }
     )
     session.install(
+        ASV,
         PYTEST,
         PYTEST_TIMEOUT,
+        PYTEST_XDIST,
         SETUPTOOLS,
         "astunparse==1.6.3",
         JUPYTEXT,
@@ -1176,18 +1243,16 @@ def structure(session):
     if not session.posargs:
         native_env = env.copy()
         native_env["JITTOR_TORCH_SHIM"] = "0"
-        session.run(
-            "python", "-m", "pytest", "-v", "--timeout=600", *NATIVE_MODE_PATHS, env=native_env
+        _run_pytest_checked(
+            session,
+            ("python", "-m", "pytest", "-v", "--timeout=600", *NATIVE_MODE_PATHS),
+            native_env,
         )
     env = _mode_env(env, test_paths)
-    session.run(
-        "python",
-        "-m",
-        "pytest",
-        "-v",
-        "--timeout=600",
-        *test_paths,
-        env=env,
+    _run_pytest_checked(
+        session,
+        ("python", "-m", "pytest", "-v", "--timeout=600", *test_paths),
+        env,
     )
 
 
@@ -1284,12 +1349,32 @@ def packaging(session):
         session.error("expected exactly one sdist-derived wheel, found %d" % len(sdist_wheels))
     wheel_args = tuple(session.posargs)
     for wheel in (wheels[0], sdist_wheels[0]):
+        record_args: Tuple[str, ...] = ()
+        if "--old-wheel" in wheel_args:
+            # dist-info/RECORD is derived from every wheel member and therefore
+            # changes whenever an explicitly approved source member changes.
+            # Approve the derived file itself; otherwise a reviewed change can
+            # never pass this audit.
+            with zipfile.ZipFile(str(wheel)) as archive:
+                records = [
+                    name for name in archive.namelist()
+                    if name.endswith(".dist-info/RECORD")
+                ]
+                if len(records) != 1:
+                    session.error(
+                        "expected exactly one wheel RECORD, found %d" % len(records))
+                record_args = (
+                    "--allow-content-change",
+                    hashlib.sha256(archive.read(records[0])).hexdigest(),
+                    records[0],
+                )
         session.run(
             "python",
             "tools/release/check_wheel_contents.py",
             "compare",
             str(wheel),
             *wheel_args,
+            *record_args,
             env=env,
         )
 
@@ -1386,7 +1471,20 @@ def tutorials(session):
     _run_pytest(session, ("tests/integration/test_notebooks.py",), env)
 
 
-def _record_asv(session, root, env, asv_command, default_machine, external=False):
+def _asv_run_arguments(arguments, default_pattern=None):
+    arguments = tuple(arguments)
+    selected = any(
+        argument in ("--bench", "-b") or argument.startswith(("--bench=", "-b"))
+        for argument in arguments
+    )
+    if default_pattern is not None and not selected:
+        return ("--bench", default_pattern) + arguments
+    return arguments
+
+
+def _record_asv(
+    session, root, env, asv_command, default_machine, external=False, default_pattern=None
+):
     asv_home = root / "jittor-asv-home"
     asv_home.mkdir(parents=True, exist_ok=True)
     env["JITTOR_HOME"] = str(asv_home)
@@ -1412,8 +1510,7 @@ def _record_asv(session, root, env, asv_command, default_machine, external=False
     dirty = _git_output("status", "--porcelain", "--untracked-files=all")
     if dirty and os.environ.get("ASV_ALLOW_DIRTY") != "1":
         session.error(
-            "ASV refuses to label a dirty checkout as %s; commit or stash changes first"
-            % current_commit
+            "ASV refuses to label a dirty checkout as %s; commit changes first" % current_commit
         )
     compare_base = _asv_compare_base(results_dir, current_commit)
 
@@ -1438,6 +1535,20 @@ def _record_asv(session, root, env, asv_command, default_machine, external=False
             env=env,
             external=external,
         )
+        if not external and default_machine == "jittor-ci-cpu":
+            # The first timed ASV case is matmul. A trivial tensor only warms
+            # jittor_core; matmul also builds oneDNN, which can exceed ASV's
+            # per-case timeout. Use the same cache, interpreter, and shape.
+            warm_env = dict(env)
+            warm_env["PYTHONPATH"] = str(REPO_ROOT / "python")
+            session.run(
+                "python",
+                "-c",
+                "import jittor as jt; "
+                "jt.matmul(jt.ones((8, 256, 256), dtype='float32'), "
+                "jt.ones((8, 256, 256), dtype='float32')).sync()",
+                env=warm_env,
+            )
         session.run(
             *(
                 tuple(asv_command)
@@ -1454,7 +1565,7 @@ def _record_asv(session, root, env, asv_command, default_machine, external=False
                     "--show-stderr",
                     "--no-pull",
                 )
-                + tuple(session.posargs)
+                + _asv_run_arguments(session.posargs, default_pattern)
             ),
             env=env,
             external=external,
@@ -1527,7 +1638,7 @@ def benchmark(session):
 
 @nox.session(python=False)
 def benchmark_cuda(session):
-    """Record scheduled Tiny Llama and optimizer ASV results on real CUDA."""
+    """Record scheduled operator, model, training and transfer results on CUDA."""
     root, env = _session_env(session, "asv-cuda")
     python = _hardware_python()
     _set_hardware_python_config(session, python, env)
@@ -1551,6 +1662,53 @@ def benchmark_cuda(session):
         (python, "-m", "asv"),
         "jittor-ci-rtx4090-cuda12-2",
         external=True,
+    )
+
+
+@nox.session(python=False)
+def benchmark_accelerate(session):
+    """Opt-in Accelerate training, in its own Torch frontend and JIT cache."""
+    device = os.environ.get("ASV_ACCELERATE_DEVICE", "cpu")
+    if device not in ("cpu", "cuda"):
+        session.error("ASV_ACCELERATE_DEVICE must be cpu or cuda")
+    root, env = _session_env(session, "asv-accelerate-" + device)
+    python = _hardware_python()
+    _set_hardware_python_config(session, python, env)
+    env["cache_name"] = "asv-accelerate"
+    env["JITTOR_TORCH_SHIM"] = "1"
+    if device == "cuda":
+        nvcc = (
+            os.environ.get("JT_BUILD_NVCC_PATH")
+            or os.environ.get("nvcc_path")
+            or shutil.which("nvcc")
+        )
+        if not nvcc:
+            session.error("Accelerate CUDA benchmark requires nvcc")
+        env["nvcc_path"] = nvcc
+        env["JT_BUILD_NVCC_PATH"] = nvcc
+        session.run("nvidia-smi", external=True, env=env)
+    else:
+        env["nvcc_path"] = ""
+        env["JT_BUILD_NVCC_PATH"] = ""
+    session.run(
+        python,
+        "-c",
+        "from importlib.util import find_spec; "
+        "from importlib.metadata import version; "
+        "assert all(find_spec(name) is not None for name in ('asv', 'numpy', 'accelerate')), "
+        "'install ASV, NumPy and Accelerate in JITTOR_CI_PYTHON first'; "
+        "print('Accelerate benchmark dependencies:', version('accelerate'))",
+        external=True,
+        env=env,
+    )
+    _record_asv(
+        session,
+        root,
+        env,
+        (python, "-m", "asv"),
+        "jittor-accelerate-" + device,
+        external=True,
+        default_pattern=r"^accelerate_training\.",
     )
 
 
@@ -1758,6 +1916,18 @@ _CPU_PROBE = (
 def _cpu_gate_env(session):
     """The environment both CPU tiers run in, and what it refuses to inherit."""
     _root, env = _session_env(session, "cpu")
+    # safe.directory is multi-valued: adding this checkout through the
+    # environment does not replace an inherited global/system wildcard. Reset
+    # that list first, then trust only this checkout for CPU-gate subprocesses.
+    env.update(
+        {
+            "GIT_CONFIG_COUNT": "2",
+            "GIT_CONFIG_KEY_0": "safe.directory",
+            "GIT_CONFIG_VALUE_0": "",
+            "GIT_CONFIG_KEY_1": "safe.directory",
+            "GIT_CONFIG_VALUE_1": str(REPO_ROOT),
+        }
+    )
     # Nox overlays this mapping on the parent environment, so removing the key
     # would still leak a caller-provided real Torch into ordinary Jittor tests.
     env["REAL_TORCH_SITE"] = ""
@@ -1972,6 +2142,615 @@ def ecosystem(session):
         env=env,
     )
     _run_pytest_once(session, ECOSYSTEM_TESTS, env, timeout=3600)
+
+
+VERL_COMPONENT_TESTS = ("compat/tests/torch/test_ecosystem_verl.py",)
+
+
+@nox.session(python=False)
+def ecosystem_verl(session):
+    """Opt-in real VERL components with pre-provisioned NumPy 2 / Transformers 5.
+
+    Keep this dependency-incompatible environment separate from ``ecosystem``.
+    Run CPU first, then CUDA with an explicitly allocated visible device.
+    """
+    root, env = _session_env(session, "ecosystem-verl")
+    python = _hardware_python()
+    _set_hardware_python_config(session, python, env)
+    oracle = os.environ.get("REAL_TORCH_PYTHON", "").strip()
+    if not oracle or not Path(oracle).is_file():
+        session.error("REAL_TORCH_PYTHON must name an independent PyTorch interpreter")
+    device = os.environ.get("JITTOR_TEST_DEVICES", "cpu")
+    if device not in ("cpu", "cuda"):
+        session.error("ecosystem_verl needs exactly JITTOR_TEST_DEVICES=cpu or cuda")
+    env.update(
+        {
+            "REAL_TORCH_PYTHON": oracle,
+            "JITTOR_REQUIRE_REAL_TORCH": "1",
+            "JITTOR_REQUIRE_VERL": "1",
+            "JITTOR_TEST_REQUIRE_EXECUTION": "1",
+            "JITTOR_TEST_DEVICES": device,
+            "JITTOR_TORCH_SHIM": "1",
+            "JITTOR_ECOSYSTEM_SPEED_RATIO": "",
+            "HF_HUB_OFFLINE": "1",
+            "TRANSFORMERS_OFFLINE": "1",
+            "VERL_USE_EXTERNAL_PLUGINS": "none",
+            "JITTOR_HOME": str(root / "verl-jittor-cache"),
+            "JITTOR_TORCH_CACHE_ROOT": str(root / "verl-shim-cache"),
+            "cache_name": "nox_ecosystem_verl_" + device,
+            "DISABLE_MULTIPROCESSING": "1",
+            "JT_USE_PARALLEL_OP_COMPILER": "0",
+            "JT_BUILD_USE_MKL": "0",
+            "JT_BUILD_USE_NCCL": "0",
+            "JT_BUILD_USE_MPI": "0",
+            "JT_BUILD_USE_CUTT": "0",
+            "JT_USE_CUDA": "1" if device == "cuda" else "0",
+            "use_cuda": "1" if device == "cuda" else "0",
+        }
+    )
+    if device == "cpu":
+        env.update({"CUDA_VISIBLE_DEVICES": "", "nvcc_path": "", "JT_BUILD_NVCC_PATH": ""})
+    else:
+        nvcc = os.environ.get("nvcc_path") or shutil.which("nvcc")
+        if not nvcc or not os.environ.get("CUDA_VISIBLE_DEVICES", "").strip():
+            session.error("VERL CUDA needs nvcc_path and explicitly allocated CUDA_VISIBLE_DEVICES")
+        env.update({"nvcc_path": nvcc, "JT_BUILD_NVCC_PATH": nvcc})
+    for name in ("JITTOR_ECOSYSTEM_PACKAGE_SITE", "JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE"):
+        if os.environ.get(name):
+            env[name] = os.environ[name]
+    # Validate installed, real upstream dependencies instead of silently
+    # upgrading the ordinary ecosystem environment or downloading models.
+    versions = (
+        "import numpy, transformers, verl, ray, tensordict; "
+        "from packaging.version import Version; "
+        "assert Version(numpy.__version__) >= Version('2.0'); "
+        "v = Version(transformers.__version__); "
+        "assert Version('5.5.3') <= v < Version('5.13') and v != Version('5.6.0'); "
+        "print('VERL dependencies', verl.__version__, numpy.__version__, transformers.__version__)"
+    )
+    oracle_env = dict(env, PYTHONPATH="", JITTOR_TORCH_SHIM="0", REAL_TORCH_SITE="")
+    for name in ("JITTOR_SOURCE_ROOT", "JITTOR_HOME", "JITTOR_TORCH_CACHE_ROOT", "JT_BACKEND"):
+        oracle_env[name] = ""
+    oracle_check = (
+        "import torch; "
+        "assert hasattr(torch, '_C') and not hasattr(torch, '_torch_compat_install_context'); "
+        "assert torch.cuda.is_available(); "
+        if device == "cuda"
+        else "import torch; assert hasattr(torch, '_C') and not hasattr(torch, '_torch_compat_install_context'); "
+    )
+    session.run(oracle, "-c", oracle_check + versions, external=True, env=oracle_env)
+    _install_compat_source(session, env, python)
+    session.run(
+        python,
+        "-c",
+        "import jittor; import torch; "
+        "assert hasattr(torch, '_torch_compat_install_context'); " + versions,
+        external=True,
+        env=env,
+    )
+    _run_pytest_once(session, VERL_COMPONENT_TESTS, env, python, timeout=3600)
+
+
+OPENMMLAB_TRAINING_TESTS = (
+    "compat/tests/torch/test_ecosystem_openmmlab.py",
+    "compat/tests/torch/test_torch_compat_batchnorm_state.py",
+)
+
+
+@nox.session(python=False)
+def ecosystem_openmmlab(session):
+    """Opt-in real MMEngine/MMCV training owners in pre-provisioned interpreters."""
+    _root, env = _session_env(session, "ecosystem-openmmlab")
+    python = _hardware_python()
+    _set_hardware_python_config(session, python, env)
+    oracle = os.environ.get("REAL_TORCH_PYTHON", "").strip()
+    if not oracle or not Path(oracle).is_file():
+        session.error("REAL_TORCH_PYTHON must name an independent PyTorch interpreter")
+    device = os.environ.get("JITTOR_TEST_DEVICES", "cpu")
+    if device not in ("cpu", "cuda"):
+        session.error("ecosystem_openmmlab needs exactly JITTOR_TEST_DEVICES=cpu or cuda")
+    cache = NOX_STATE_ROOT / "cache" / "ecosystem-openmmlab" / device
+    env.update(
+        {
+            "REAL_TORCH_PYTHON": oracle,
+            "JITTOR_REQUIRE_REAL_TORCH": "1",
+            "JITTOR_REQUIRE_MMENGINE": "1",
+            "JITTOR_REQUIRE_MMCV": "1",
+            "JITTOR_TEST_REQUIRE_EXECUTION": "1",
+            "JITTOR_ECOSYSTEM_OPENMMLAB": "1",
+            "JITTOR_TEST_DEVICES": device,
+            "JITTOR_TORCH_SHIM": "1",
+            "JITTOR_ECOSYSTEM_SPEED_RATIO": "",
+            "HF_HUB_OFFLINE": "1",
+            "TRANSFORMERS_OFFLINE": "1",
+            "JITTOR_HOME": str(cache / "jittor"),
+            "JITTOR_TORCH_CACHE_ROOT": str(cache / "shim"),
+            "JITTOR_CUDA_WHEEL_DISABLE": "1",
+            "JT_CUDA_KERNEL_MATH": "strict",
+            "cache_name": "nox_ecosystem_openmmlab_" + device,
+            "DISABLE_MULTIPROCESSING": "1",
+            "JT_USE_PARALLEL_OP_COMPILER": "0",
+            "JT_BUILD_USE_MKL": "0",
+            "JT_BUILD_USE_NCCL": "0",
+            "JT_BUILD_USE_MPI": "0",
+            "JT_BUILD_USE_CUTT": "0",
+            "JT_USE_CUDA": "1" if device == "cuda" else "0",
+            "use_cuda": "1" if device == "cuda" else "0",
+        }
+    )
+    if device == "cpu":
+        env.update({"CUDA_VISIBLE_DEVICES": "", "nvcc_path": "", "JT_BUILD_NVCC_PATH": ""})
+    else:
+        nvcc = os.environ.get("nvcc_path") or shutil.which("nvcc")
+        if not nvcc or not os.environ.get("CUDA_VISIBLE_DEVICES", "").strip():
+            session.error(
+                "OpenMMLab CUDA needs nvcc_path and explicitly allocated CUDA_VISIBLE_DEVICES"
+            )
+        env.update({"nvcc_path": nvcc, "JT_BUILD_NVCC_PATH": nvcc})
+    for name in ("JITTOR_ECOSYSTEM_PACKAGE_SITE", "JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE"):
+        if os.environ.get(name):
+            env[name] = os.environ[name]
+    versions = (
+        "import numpy, mmengine, mmcv; "
+        "assert numpy.__version__.startswith('1.'); "
+        "assert mmengine.__version__ == '0.10.7'; "
+        "assert mmcv.__version__ == '2.2.0'; "
+        "print('OpenMMLab dependencies', mmengine.__version__, mmcv.__version__, numpy.__version__)"
+    )
+    oracle_env = dict(env, PYTHONPATH="", JITTOR_TORCH_SHIM="0", REAL_TORCH_SITE="")
+    for name in ("JITTOR_SOURCE_ROOT", "JITTOR_HOME", "JITTOR_TORCH_CACHE_ROOT", "JT_BACKEND"):
+        oracle_env[name] = ""
+    oracle_check = (
+        "import torch; assert hasattr(torch, '_C') and not hasattr(torch, '_torch_compat_install_context'); "
+        + ("assert torch.cuda.is_available(); " if device == "cuda" else "")
+    )
+    session.run(oracle, "-c", oracle_check + versions, external=True, env=oracle_env)
+    _install_compat_source(session, env, python)
+    session.run(
+        python,
+        "-c",
+        "import jittor; import torch; "
+        "assert hasattr(torch, '_torch_compat_install_context'); " + versions,
+        external=True,
+        env=env,
+    )
+    _run_pytest_once(session, OPENMMLAB_TRAINING_TESTS, env, python, timeout=3600)
+
+
+@nox.session(python=False)
+def ecosystem_deepspeed(session):
+    """Real pinned DeepSpeed Engine training and checkpoint/resume, CPU or CUDA."""
+    _ecosystem_deepspeed_session(session)
+
+
+@nox.session(python=False)
+def ecosystem_deepspeed_multirank(session):
+    """Two real CPU/MPI or CUDA ranks: BF16 ZeRO1/2 and strict fresh resume."""
+    _ecosystem_deepspeed_session(session, multirank=True)
+
+
+def _ecosystem_deepspeed_session(session, multirank=False):
+    label = "ecosystem-deepspeed-multirank" if multirank else "ecosystem-deepspeed"
+    _root, env = _session_env(session, label)
+    python = _hardware_python()
+    oracle = os.environ.get("REAL_TORCH_PYTHON", "").strip()
+    device = os.environ.get("JITTOR_TEST_DEVICES", "cpu").strip()
+    if not oracle or device not in ("cpu", "cuda"):
+        session.error("DeepSpeed needs REAL_TORCH_PYTHON and exactly cpu or cuda")
+    if multirank:
+        devices = [item.strip() for item in os.environ.get("CUDA_VISIBLE_DEVICES", "").split(",")]
+        artifacts = os.environ.get("JITTOR_DEEPSPEED_MULTIRANK_ROOT", "").strip()
+        if not artifacts or (
+            device == "cuda" and (len(devices) != 2 or not all(devices) or len(set(devices)) != 2)
+        ):
+            session.error(
+                "DeepSpeed multirank needs a new external JITTOR_DEEPSPEED_MULTIRANK_ROOT and two allocated devices for CUDA"
+            )
+        if device == "cpu":
+            mpirun = shutil.which(os.environ.get("JITTOR_MPIEXEC", "mpirun"))
+            if not mpirun or not shutil.which("mpicc"):
+                session.error("DeepSpeed CPU multirank needs real OpenMPI mpirun and mpicc")
+            env["JITTOR_MPIEXEC"] = mpirun
+        env.update(
+            JITTOR_REQUIRE_DEEPSPEED_MULTIRANK="1", JITTOR_DEEPSPEED_MULTIRANK_ROOT=artifacts
+        )
+        if os.environ.get("JITTOR_DEEPSPEED_MULTIRANK_CACHE_ROOT"):
+            env["JITTOR_DEEPSPEED_MULTIRANK_CACHE_ROOT"] = os.environ[
+                "JITTOR_DEEPSPEED_MULTIRANK_CACHE_ROOT"
+            ]
+    threads = os.environ.get("OMP_NUM_THREADS", "4")
+    env.update({name: threads for name in THREAD_POOL_ENV_NAMES})
+    env.update(
+        {
+            "REAL_TORCH_PYTHON": oracle,
+            "JITTOR_TEST_DEVICES": device,
+            "JITTOR_REQUIRE_REAL_TORCH": "1",
+            "JITTOR_REQUIRE_DEEPSPEED": "1",
+            "JITTOR_TEST_REQUIRE_EXECUTION": "1",
+            "JITTOR_TORCH_SHIM": "1",
+            "HF_HUB_OFFLINE": "1",
+            "TRANSFORMERS_OFFLINE": "1",
+            "DS_ACCELERATOR": device,
+            "DISABLE_MULTIPROCESSING": "1",
+            "JT_USE_PARALLEL_OP_COMPILER": "0",
+            "JT_BUILD_USE_MPI": "1" if multirank and device == "cpu" else "0",
+            "JT_BUILD_USE_CUTT": "0",
+            "JT_USE_CUDA": "1" if device == "cuda" else "0",
+            "cache_name": "nox_ecosystem_deepspeed_" + device,
+        }
+    )
+    cache_home = NOX_STATE_ROOT / "ecosystem-deepspeed" / device / "jittor-home"
+    cache_home.mkdir(parents=True, exist_ok=True)
+    env["JITTOR_HOME"] = str(cache_home)
+    if device == "cpu":
+        env.update({"CUDA_VISIBLE_DEVICES": "", "JT_BUILD_NVCC_PATH": "", "nvcc_path": ""})
+        if multirank:
+            env["JT_BUILD_USE_NCCL"] = "0"
+            session.run(env["JITTOR_MPIEXEC"], "--version", external=True, env=env)
+    else:
+        nvcc = (
+            os.environ.get("JT_BUILD_NVCC_PATH")
+            or os.environ.get("nvcc_path")
+            or shutil.which("nvcc")
+        )
+        if not nvcc or not os.environ.get("CUDA_VISIBLE_DEVICES", "").strip():
+            session.error("DeepSpeed CUDA needs nvcc and explicitly allocated CUDA_VISIBLE_DEVICES")
+        env.update({"JT_BUILD_NVCC_PATH": nvcc, "nvcc_path": nvcc})
+    for name in (
+        "JITTOR_ECOSYSTEM_PACKAGE_SITE",
+        "JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE",
+        "JT_BUILD_MKL_INCLUDE_PATH",
+        "JT_BUILD_MKL_LIB_PATH",
+        "JT_BUILD_NCCL_INCLUDE_PATH",
+        "JT_BUILD_NCCL_LIB_PATH",
+    ):
+        if os.environ.get(name):
+            env[name] = os.environ[name]
+    _set_hardware_python_config(session, python, env)
+    oracle_env = dict(
+        env, PYTHONPATH="", JITTOR_TORCH_SHIM="0", REAL_TORCH_SITE="", LD_LIBRARY_PATH=""
+    )
+    for name in ("JITTOR_SOURCE_ROOT", "JITTOR_HOME", "JITTOR_TORCH_CACHE_ROOT", "JT_BACKEND"):
+        oracle_env[name] = ""
+    session.run(
+        oracle,
+        "-c",
+        "import torch; "
+        "assert not hasattr(torch, '_torch_compat_install_context'); "
+        "assert torch._C.__file__.endswith(('.so', '.pyd')); "
+        + ("assert torch.cuda.is_available(); " if device == "cuda" else "")
+        + "print('DeepSpeed oracle', torch.__version__, torch._C.__file__)",
+        external=True,
+        env=oracle_env,
+    )
+    _install_compat_source(session, env, python)
+    session.run(
+        python,
+        "-m",
+        "pip",
+        "install",
+        "--no-deps",
+        "--no-build-isolation",
+        "-e",
+        str(REPO_ROOT / "adapters"),
+        external=True,
+        env=env,
+    )
+    test = "test_ecosystem_deepspeed_multirank.py" if multirank else "test_ecosystem_deepspeed.py"
+    _run_pytest_once(
+        session, ["compat/tests/torch/" + test], env, python, timeout=7200 if multirank else 3600
+    )
+
+
+@nox.session(python=False)
+def ecosystem_accelerate(session):
+    """Independent checkpoint correctness with terminated producers and new consumers."""
+    _root, env = _session_env(session, "ecosystem-accelerate")
+    # Keep explicit provider choices when crossing the isolated nox boundary.
+    for name in (
+        "JITTOR_CUDA_WHEEL_STRICT",
+        "JT_BUILD_NVCC_PATH",
+        "nvcc_path",
+        "JT_BUILD_NCCL_INCLUDE_PATH",
+        "JT_BUILD_NCCL_LIB_PATH",
+    ):
+        if name in os.environ:
+            env[name] = os.environ[name]
+    python = _hardware_python()
+    oracle = os.environ.get("REAL_TORCH_PYTHON", "").strip()
+    checkout = os.environ.get("JITTOR_ACCELERATE_CHECKOUT", "").strip()
+    device = os.environ.get("JITTOR_TEST_DEVICES", "cpu").strip()
+    if not oracle or not checkout or device not in ("cpu", "cuda"):
+        session.error(
+            "Accelerate needs REAL_TORCH_PYTHON, JITTOR_ACCELERATE_CHECKOUT and exactly cpu or cuda"
+        )
+    complete_cpu = os.environ.get("JITTOR_ACCELERATE_COMPLETE_CPU") == "1"
+    if complete_cpu and (device != "cpu" or session.posargs):
+        session.error("Complete CPU nightly protocol is mandatory; no device or protocol overrides")
+    output = NOX_STATE_ROOT / "ecosystem-accelerate" / device
+    evidence_dir = os.environ.get("JITTOR_ACCELERATE_EVIDENCE_DIR", "").strip()
+    if evidence_dir:
+        output = Path(evidence_dir)
+    arguments = [
+        "--fresh-process",
+        "--device",
+        device,
+        "--jittor-python",
+        python,
+        "--oracle-python",
+        oracle,
+        "--upstream",
+        checkout,
+        "--output",
+        str(output),
+    ]
+    if complete_cpu:
+        arguments += ["--cache-root", str(_root / "benchmark-cache")]
+    wheel = os.environ.get("JITTOR_ACCELERATE_WHEEL", "").strip()
+    if wheel:
+        arguments += ["--wheel", wheel]
+    if device == "cuda":
+        arguments += ["--devices", os.environ.get("CUDA_VISIBLE_DEVICES", "")]
+    _set_hardware_python_config(session, python, env)
+    if complete_cpu:
+        env.update(JITTOR_TORCH_SHIM="0", PYTHONPATH="")
+    session.run(
+        python, "tools/run_accelerate_gate.py", *arguments, *session.posargs, external=True, env=env
+    )
+    if complete_cpu:
+        baseline = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, text=True
+        ).strip()
+        session.run(
+            python,
+            "agent/skills/torch-compat-repo-runbook/scripts/collect_accelerate_scorecards.py",
+            "--run",
+            str(output),
+            "--upstream",
+            checkout,
+            "--baseline",
+            baseline,
+            "--report",
+            "docs/results/2026-10-16-accelerate-maintained-cpu-nightly.md",
+            "--command",
+            "nox -s ecosystem_accelerate (JITTOR_ACCELERATE_COMPLETE_CPU=1)",
+            "--output",
+            str(output / "scorecard"),
+            "--require-complete-cpu",
+            external=True,
+            env=env,
+        )
+
+
+@nox.session(python=False)
+def ecosystem_trellis(session):
+    """Real pinned TRELLIS models with independent CPU or CUDA training evidence."""
+    _root, env = _session_env(session, "ecosystem-trellis")
+    python = _hardware_python()
+    oracle = os.environ.get("REAL_TORCH_PYTHON", "").strip()
+    checkout = os.environ.get("JITTOR_TRELLIS_CHECKOUT", "").strip()
+    device = os.environ.get("JITTOR_TEST_DEVICES", "cpu").strip()
+    if not oracle or not checkout or not Path(checkout).is_dir() or device not in ("cpu", "cuda"):
+        session.error(
+            "TRELLIS needs REAL_TORCH_PYTHON, JITTOR_TRELLIS_CHECKOUT and exactly cpu or cuda"
+        )
+    threads = os.environ.get("OMP_NUM_THREADS", "2")
+    env.update({name: threads for name in THREAD_POOL_ENV_NAMES})
+    env.update(
+        {
+            "REAL_TORCH_PYTHON": oracle,
+            "JITTOR_TRELLIS_CHECKOUT": str(Path(checkout).resolve()),
+            "JITTOR_TEST_DEVICES": device,
+            "JITTOR_REQUIRE_REAL_TORCH": "1",
+            "JITTOR_REQUIRE_TRELLIS": "1",
+            "JITTOR_TEST_REQUIRE_EXECUTION": "1",
+            "JITTOR_TORCH_SHIM": "1",
+            "HF_HUB_OFFLINE": "1",
+            "TRANSFORMERS_OFFLINE": "1",
+            "DISABLE_MULTIPROCESSING": "1",
+            "JT_USE_PARALLEL_OP_COMPILER": "0",
+            "JT_BUILD_USE_MKL": "0",
+            "JT_BUILD_USE_NCCL": "0",
+            "JT_BUILD_USE_MPI": "0",
+            "JT_BUILD_USE_CUTT": "0",
+            "JT_CUDA_KERNEL_MATH": "strict",
+            "JT_USE_CUDA": "1" if device == "cuda" else "0",
+            "use_cuda": "1" if device == "cuda" else "0",
+            "cache_name": "nox_ecosystem_trellis_" + device,
+        }
+    )
+    cache_home = NOX_STATE_ROOT / "ecosystem-trellis" / device / "jittor-home"
+    cache_home.mkdir(parents=True, exist_ok=True)
+    env["JITTOR_HOME"] = str(cache_home)
+    if device == "cpu":
+        env.update({"CUDA_VISIBLE_DEVICES": "", "JT_BUILD_NVCC_PATH": "", "nvcc_path": ""})
+    else:
+        nvcc = (
+            os.environ.get("JT_BUILD_NVCC_PATH")
+            or os.environ.get("nvcc_path")
+            or shutil.which("nvcc")
+        )
+        if not nvcc or not os.environ.get("CUDA_VISIBLE_DEVICES", "").strip():
+            session.error("TRELLIS CUDA needs nvcc and explicitly allocated CUDA_VISIBLE_DEVICES")
+        env.update({"JT_BUILD_NVCC_PATH": nvcc, "nvcc_path": nvcc})
+    for name in (
+        "JITTOR_ECOSYSTEM_PACKAGE_SITE",
+        "JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE",
+        "JITTOR_TRELLIS_EVIDENCE_DIR",
+    ):
+        if os.environ.get(name):
+            env[name] = os.environ[name]
+    _set_hardware_python_config(session, python, env)
+    oracle_env = dict(
+        env, PYTHONPATH="", JITTOR_TORCH_SHIM="0", REAL_TORCH_SITE="", LD_LIBRARY_PATH=""
+    )
+    for name in ("JITTOR_SOURCE_ROOT", "JITTOR_HOME", "JITTOR_TORCH_CACHE_ROOT", "JT_BACKEND"):
+        oracle_env[name] = ""
+    session.run(
+        oracle,
+        "-c",
+        "import torch; "
+        "assert not hasattr(torch, '_torch_compat_install_context'); "
+        "assert torch._C.__file__.endswith(('.so', '.pyd')); "
+        + ("assert torch.cuda.is_available(); " if device == "cuda" else "")
+        + "print('TRELLIS oracle', torch.__version__, torch._C.__file__)",
+        external=True,
+        env=oracle_env,
+    )
+    _install_compat_source(session, env, python)
+    _run_pytest_once(
+        session, ["compat/tests/torch/test_ecosystem_trellis.py"], env, python, timeout=3600
+    )
+
+
+@nox.session(python=False)
+def ecosystem_flash_attention(session):
+    """Independent upstream CUDA training with complete gradients and input perturbations."""
+    import tempfile
+
+    _root, env = _session_env(session, "ecosystem-flash-attention")
+    python = _hardware_python()
+    oracle = os.environ.get("REAL_TORCH_PYTHON", "").strip()
+    names = (
+        "JITTOR_FLASH_ATTN_JITTOR_SRC",
+        "JITTOR_FLASH_ATTN_ORACLE_EXTENSION",
+        "JITTOR_FLASH_ATTN_ORACLE_CUDA_HOME",
+        "JITTOR_FLASH_ATTN_SOURCE_PROOF",
+    )
+    values = {name: os.environ.get(name, "").strip() for name in names}
+    if not oracle or any(not value or not Path(value).exists() for value in values.values()):
+        session.error(
+            "FlashAttention requires REAL_TORCH_PYTHON and existing source, oracle extension, CUDA_HOME and source proof"
+        )
+    if os.environ.get("JITTOR_TEST_DEVICES", "cuda").strip() != "cuda":
+        session.error("FlashAttention training requires exactly CUDA")
+    nvcc = (
+        os.environ.get("JT_BUILD_NVCC_PATH") or os.environ.get("nvcc_path") or shutil.which("nvcc")
+    )
+    if not nvcc or not os.environ.get("CUDA_VISIBLE_DEVICES", "").strip():
+        session.error("FlashAttention needs nvcc and explicitly allocated CUDA_VISIBLE_DEVICES")
+    env.update({name: os.environ.get("OMP_NUM_THREADS", "2") for name in THREAD_POOL_ENV_NAMES})
+    env.update(values)
+    for name in (
+        "CXX",
+        "LD_PRELOAD",
+        "JITTOR_CUDA_WHEEL_STRICT",
+        "JITTOR_CUDA_WHEEL_DISABLE",
+        "JITTOR_FLASH_ATTN_HEAD_DIMS",
+        "JITTOR_FLASH_ATTN_DTYPES",
+    ):
+        if name in os.environ:
+            env[name] = os.environ[name]
+    env.update(
+        {
+            "REAL_TORCH_PYTHON": oracle,
+            "JITTOR_TEST_DEVICES": "cuda",
+            "JITTOR_REQUIRE_FLASH_ATTENTION": "1",
+            "JITTOR_REQUIRE_REAL_TORCH": "1",
+            "JITTOR_TEST_REQUIRE_EXECUTION": "1",
+            "JITTOR_TORCH_SHIM": "1",
+            "JITTOR_FLASH_ATTN_JITTOR_REQUIRED": "1",
+            "JITTOR_FLASH_ATTN_MIN_SCORES": "0",
+            "JITTOR_FLASH_ATTN_TRAINING_MIN_SCORES": "0",
+            "HF_HUB_OFFLINE": "1",
+            "TRANSFORMERS_OFFLINE": "1",
+            "DISABLE_MULTIPROCESSING": "1",
+            "JT_USE_PARALLEL_OP_COMPILER": "0",
+            "JT_BUILD_USE_MKL": "0",
+            "JT_BUILD_USE_NCCL": "0",
+            "JT_BUILD_USE_MPI": "0",
+            "JT_BUILD_USE_CUTT": "0",
+            "JT_USE_CUDA": "1",
+            "use_cuda": "1",
+            "JT_BUILD_NVCC_PATH": nvcc,
+            "nvcc_path": nvcc,
+            "cache_name": "nox_ecosystem_flash_attention",
+        }
+    )
+    cache_home = NOX_STATE_ROOT / "ecosystem-flash-attention" / "jittor-home"
+    cache_home.mkdir(parents=True, exist_ok=True)
+    env["JITTOR_HOME"] = str(cache_home)
+    env["JITTOR_TORCH_CACHE_ROOT"] = str(cache_home.parent / "torch-cache")
+    proof_state = NOX_STATE_ROOT / "ecosystem-flash-attention-artifacts"
+    proof_state.mkdir(parents=True, exist_ok=True)
+    oracle_state = proof_state / "oracle"
+    oracle_state.mkdir(parents=True, exist_ok=True)
+    env["JITTOR_FLASH_ATTN_ORACLE_STATE"] = str(oracle_state)
+    requested = os.environ.get("JITTOR_FLASH_ATTN_EVIDENCE_DIR")
+    if requested and not Path(requested).is_absolute():
+        session.error("FlashAttention persistent evidence must be an absolute external path")
+    evidence = Path(requested or tempfile.mkdtemp(prefix="run-", dir=proof_state))
+    env["JITTOR_FLASH_ATTN_EVIDENCE_DIR"] = str(evidence)
+    for name in (
+        "JITTOR_ECOSYSTEM_PACKAGE_SITE",
+        "JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE",
+        "JITTOR_FLASH_ATTN_EVIDENCE_DIR",
+    ):
+        if os.environ.get(name):
+            env[name] = os.environ[name]
+    _set_hardware_python_config(session, python, env)
+    oracle_env = dict(
+        env,
+        PYTHONPATH="",
+        JITTOR_TORCH_SHIM="0",
+        REAL_TORCH_SITE="",
+        LD_LIBRARY_PATH="",
+        CUDA_HOME=values["JITTOR_FLASH_ATTN_ORACLE_CUDA_HOME"],
+    )
+    for name in ("JITTOR_SOURCE_ROOT", "JITTOR_HOME", "JITTOR_TORCH_CACHE_ROOT", "JT_BACKEND"):
+        oracle_env[name] = ""
+    session.run(
+        oracle,
+        "-c",
+        "import torch; assert torch.cuda.is_available(); "
+        "assert not hasattr(torch, '_torch_compat_install_context'); "
+        "assert torch._C.__file__.endswith(('.so', '.pyd')); print(torch.__version__)",
+        external=True,
+        env=oracle_env,
+    )
+    _install_compat_source(session, env, python)
+    facade_site = cache_home.parent / "facade-site"
+    session.run(
+        python,
+        "-m",
+        "jittor.compat.shim.deploy",
+        "--target",
+        str(facade_site),
+        external=True,
+        env=env,
+    )
+    session.run(
+        python,
+        "-m",
+        "jittor.compat.shim.deploy",
+        "--target",
+        str(facade_site),
+        "--check",
+        external=True,
+        env=env,
+    )
+    env["PYTHONPATH"] = os.pathsep.join((str(REPO_ROOT / "python"), str(facade_site)))
+    _run_pytest_once(
+        session, ["compat/tests/torch/test_ecosystem_flash_attention.py"], env, python, timeout=3600
+    )
+    session.run(
+        python,
+        str(REPO_ROOT / "agent/skills/flash-attention-torch-compat/scripts/collect_scorecard.py"),
+        "--root",
+        str(REPO_ROOT),
+        "--upstream",
+        values["JITTOR_FLASH_ATTN_JITTOR_SRC"],
+        "--source-proof",
+        values["JITTOR_FLASH_ATTN_SOURCE_PROOF"],
+        "--evidence-dir",
+        str(evidence),
+        "--output-dir",
+        str(evidence.parent / (evidence.name + "-scorecard")),
+        "--baseline",
+        _git_output("rev-parse", "HEAD"),
+        external=True,
+        env=env,
+    )
 
 
 @nox.session(python=False)
@@ -2262,6 +3041,10 @@ def nccl(session):
     probe = (
         "import jittor as jt; "
         "assert jt.compiler.has_cuda; "
+        # A one-rank warmup does not request distributed import bootstrap.
+        # Load NCCL explicitly before checking the operators it publishes.
+        "from jittor._runtime.backend_libraries import probe_library; "
+        "assert probe_library('nccl', load=True)[0] == 'available'; "
         "assert jt.compile_extern.nccl_ops is not None; "
         "jt.flags.use_cuda = 1; "
         "x = (jt.array([1.0, 2.0]) * 2).sum(); x.sync(); "
@@ -2269,6 +3052,7 @@ def nccl(session):
     )
     for rank, device in enumerate(selected_devices):
         warm_env = env.copy()
+        warm_env["JITTOR_TORCH_SHIM"] = "0"
         warm_env["CUDA_VISIBLE_DEVICES"] = device
         warm_env["cache_name"] = "nccl%d" % rank
         warm_rootinfo = root / ("warm-rank%d-rootinfo.bin" % rank)
@@ -2284,24 +3068,750 @@ def nccl(session):
 
     launch_env = env.copy()
     launch_env["CUDA_VISIBLE_DEVICES"] = ",".join(selected_devices)
-    launch_env["JITTOR_TORCH_SHIM"] = "1"
     targets = tuple(session.posargs) if session.posargs else NCCL_TESTS
+    groups = (targets,) if session.posargs else _by_process_mode(targets)
+    for group in groups:
+        if not group:
+            continue
+        mode_env = _mode_env(launch_env, group)
+        mode = "torch" if mode_env["JITTOR_TORCH_SHIM"] == "1" else "native"
+        session.run(
+            python,
+            str(REPO_ROOT / "python" / "jittor" / "distributed" / "launch.py"),
+            "-n",
+            str(world_size),
+            "--backend",
+            "nccl",
+            "--logdir",
+            str(root / ("logs-" + mode)),
+            "--",
+            python,
+            "-m",
+            "pytest",
+            "-v",
+            "--timeout=600",
+            *group,
+            env=mode_env,
+            external=True,
+        )
+
+
+@nox.session(python=False)
+def ecosystem_vllm(session):
+    """Real pinned vLLM native-path primitives; no engine or performance claim."""
+    _root, env = _session_env(session, "ecosystem-vllm")
+    python = _hardware_python()
+    if session.posargs:
+        session.error("vLLM always runs all original seeds and all four input gradients")
+    for kind in ("CHECKOUT", "WHEEL"):
+        name = "JITTOR_VLLM_" + kind
+        value = os.environ.get(name, "").strip()
+        if not value or not Path(value).exists():
+            session.error("vLLM needs " + name + " naming the pinned actual source or wheel")
+        env[name] = str(Path(value).resolve())
+    if os.environ.get("JITTOR_VLLM_EVIDENCE_DIR"):
+        env["JITTOR_VLLM_EVIDENCE_DIR"] = os.environ["JITTOR_VLLM_EVIDENCE_DIR"]
+    oracle = os.environ.get("REAL_TORCH_PYTHON", "").strip()
+    if not oracle or not Path(oracle).is_file():
+        session.error("vLLM needs REAL_TORCH_PYTHON naming an independent PyTorch interpreter")
+    device = os.environ.get("JITTOR_TEST_DEVICES", "cpu")
+    if device not in ("cpu", "cuda"):
+        session.error("vLLM needs exactly JITTOR_TEST_DEVICES=cpu or cuda")
+    nvcc = (
+        os.environ.get("JT_BUILD_NVCC_PATH") or os.environ.get("nvcc_path") or shutil.which("nvcc")
+    )
+    if device == "cuda" and (not nvcc or not os.environ.get("CUDA_VISIBLE_DEVICES", "").strip()):
+        session.error("vLLM CUDA needs nvcc and explicitly allocated CUDA_VISIBLE_DEVICES")
+    cache = NOX_STATE_ROOT / "cache" / "ecosystem-vllm" / device
+    env.update(
+        {
+            "REAL_TORCH_PYTHON": oracle,
+            "JITTOR_REQUIRE_REAL_TORCH": "1",
+            "JITTOR_REQUIRE_VLLM": "1",
+            "JITTOR_REQUIRE_TRANSFORMERS": "1",
+            "JITTOR_TEST_REQUIRE_EXECUTION": "1",
+            "JITTOR_ECOSYSTEM_VLLM": "1",
+            "JITTOR_TEST_DEVICES": device,
+            "JITTOR_TORCH_SHIM": "1",
+            "JITTOR_ECOSYSTEM_SPEED_RATIO": "",
+            "JITTOR_ECOSYSTEM_TF32": "0",
+            "PYTEST_ADDOPTS": "",
+            "JITTOR_ECOSYSTEM_CUDNN_BENCHMARK": "0",
+            "HF_HUB_OFFLINE": "1",
+            "TRANSFORMERS_OFFLINE": "1",
+            "JITTOR_HOME": str(cache / "jittor"),
+            "JITTOR_TORCH_CACHE_ROOT": str(cache / "shim"),
+            "cache_name": "nox_ecosystem_vllm_" + device,
+            "JITTOR_CUDA_WHEEL_DISABLE": os.environ.get("JITTOR_CUDA_WHEEL_DISABLE", "0"),
+            "JT_CUDA_KERNEL_MATH": "strict",
+            "JT_USE_CUDA": "1" if device == "cuda" else "0",
+            "use_cuda": "1" if device == "cuda" else "0",
+            "JT_BACKEND": device,
+            "DISABLE_MULTIPROCESSING": "1",
+            "JT_USE_PARALLEL_OP_COMPILER": "0",
+            "JT_BUILD_USE_MKL": "0",
+            "JT_BUILD_USE_NCCL": "0",
+            "JT_BUILD_USE_MPI": "0",
+            "JT_BUILD_USE_CUTT": "0",
+        }
+    )
+    env.update({name: "1" for name in THREAD_POOL_ENV_NAMES})
+    if device == "cpu":
+        env.update({"CUDA_VISIBLE_DEVICES": "", "nvcc_path": "", "JT_BUILD_NVCC_PATH": ""})
+    else:
+        env.update({"nvcc_path": nvcc, "JT_BUILD_NVCC_PATH": nvcc})
+    for name in ("JITTOR_ECOSYSTEM_PACKAGE_SITE", "JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE"):
+        if os.environ.get(name):
+            env[name] = os.environ[name]
+    versions = (
+        "import vllm, transformers; "
+        "assert vllm.__version__ == '0.29.0'; "
+        "assert transformers.__version__ == '5.13.0'; "
+        "print('vLLM dependencies', vllm.__version__, transformers.__version__)"
+    )
+    oracle_env = dict(env, PYTHONPATH="", JITTOR_TORCH_SHIM="0", REAL_TORCH_SITE="")
+    for name in ("JITTOR_SOURCE_ROOT", "JITTOR_HOME", "JITTOR_TORCH_CACHE_ROOT", "JT_BACKEND"):
+        oracle_env[name] = ""
+    oracle_check = (
+        "import torch; assert hasattr(torch, '_C') and not hasattr(torch, '_torch_compat_install_context'); "
+        "assert torch.__version__.split('+')[0] == '2.13.0'; "
+        + (
+            "assert torch.cuda.is_available(); "
+            if device == "cuda"
+            else "assert not torch.cuda.is_available(); "
+        )
+    )
+    session.run(oracle, "-c", oracle_check + versions, external=True, env=oracle_env)
+    _set_hardware_python_config(session, python, env)
+    _install_compat_source(session, env, python)
     session.run(
         python,
-        str(REPO_ROOT / "python" / "jittor" / "distributed" / "launch.py"),
-        "-n",
-        str(world_size),
-        "--backend",
-        "nccl",
-        "--logdir",
-        str(root / "logs"),
-        "--",
-        python,
         "-m",
-        "pytest",
-        "-v",
-        "--timeout=600",
-        *targets,
-        env=launch_env,
+        "pip",
+        "install",
+        "--no-deps",
+        "--no-build-isolation",
+        "-e",
+        str(REPO_ROOT / "adapters"),
         external=True,
+        env=env,
+    )
+    session.run(
+        python,
+        "-c",
+        "import jittor; import torch; "
+        "assert hasattr(torch, '_torch_compat_install_context'); " + versions,
+        external=True,
+        env=env,
+    )
+    _run_pytest_once(
+        session, ["compat/tests/torch/test_ecosystem_vllm.py"], env, python, timeout=3600
+    )
+
+
+@nox.session(python=False)
+def native_multinode(session):
+    """Run one explicitly configured host of the maintained native world-two protocol."""
+    if not session.posargs:
+        session.error("native_multinode requires explicit runner arguments; use -- --help")
+    session.run(
+        _hardware_python(),
+        str(REPO_ROOT / "agent/skills/jittor-distributed-verification/run_native_multinode.py"),
+        *session.posargs,
+        external=True,
+    )
+
+
+@nox.session(python=False)
+def ecosystem_peft(session):
+    """Run the full original PEFT LoRA L3 scope with independent installed-source proof."""
+    root, env = _session_env(session, "ecosystem-peft")
+    python = _hardware_python()
+    _set_hardware_python_config(session, python, env)
+    oracle = os.environ.get("REAL_TORCH_PYTHON", "").strip()
+    if not oracle or not Path(oracle).is_file():
+        session.error("REAL_TORCH_PYTHON must name an independent binary PyTorch interpreter")
+    device = os.environ.get("JITTOR_TEST_DEVICES", "cpu")
+    if device not in ("cpu", "cuda"):
+        session.error("ecosystem_peft requires exactly cpu or cuda")
+    if len(session.posargs) % 2 or any(
+        session.posargs[i] not in ("--output", "--cache-root")
+        for i in range(0, len(session.posargs), 2)
+    ):
+        session.error(
+            "ecosystem_peft allows only output/cache paths; all original L3 phases are required"
+        )
+    args: List[str] = []
+    for repo in ("peft", "transformers"):
+        for kind in ("checkout", "wheel"):
+            key = "JITTOR_" + repo.upper() + "_" + kind.upper()
+            value = os.environ.get(key, "").strip()
+            if not value or not Path(value).exists():
+                session.error(key + " must name the real pinned upstream " + kind)
+            args.extend(("--" + repo + "-" + kind, value))
+    for name in (
+        "CUDA_VISIBLE_DEVICES",
+        "CUDA_HOME",
+        "nvcc_path",
+        "JT_BUILD_NVCC_PATH",
+        "LD_PRELOAD",
+        "LD_LIBRARY_PATH",
+        "JITTOR_CUDA_WHEEL_STRICT",
+        "JITTOR_CUDA_WHEEL_DISABLE",
+    ):
+        if name in os.environ:
+            env[name] = os.environ[name]
+    env.update(
+        {
+            "REAL_TORCH_PYTHON": oracle,
+            "JITTOR_REQUIRE_REAL_TORCH": "1",
+            "JITTOR_REQUIRE_PEFT": "1",
+            "JITTOR_REQUIRE_TRANSFORMERS": "1",
+            "JITTOR_TEST_REQUIRE_EXECUTION": "1",
+            "HF_HUB_OFFLINE": "1",
+            "TRANSFORMERS_OFFLINE": "1",
+        }
+    )
+    session.run(
+        python,
+        str(REPO_ROOT / "tools/run_peft_gate.py"),
+        "--candidate-python",
+        python,
+        "--oracle-python",
+        oracle,
+        "--device",
+        device,
+        *args,
+        "--output",
+        str(root / "measurements"),
+        "--cache-root",
+        str(root / "benchmark-cache"),
+        *session.posargs,
+        external=True,
+        env=env,
+    )
+
+
+@nox.session(python=False)
+def ecosystem_swift(session):
+    """Opt-in real Swift SFT loader/template/Trainer with a pinned installed wheel."""
+    _root, env = _session_env(session, "ecosystem-swift")
+    python = _hardware_python()
+    oracle = os.environ.get("REAL_TORCH_PYTHON", "").strip()
+    if not oracle or not Path(oracle).is_file():
+        session.error("Swift needs REAL_TORCH_PYTHON naming an independent PyTorch interpreter")
+    for name in ("JITTOR_SWIFT_UPSTREAM", "JITTOR_SWIFT_WHEEL"):
+        path = os.environ.get(name, "").strip()
+        if not path or not Path(path).exists():
+            session.error(
+                name + " must identify the clean upstream checkout/actual installed wheel"
+            )
+        env[name] = str(Path(path).resolve())
+    device = os.environ.get("JITTOR_TEST_DEVICES", "cpu")
+    if device not in ("cpu", "cuda"):
+        session.error("Swift needs exactly JITTOR_TEST_DEVICES=cpu or cuda")
+    nvcc = (
+        os.environ.get("JT_BUILD_NVCC_PATH") or os.environ.get("nvcc_path") or shutil.which("nvcc")
+    )
+    if device == "cuda" and (not nvcc or not os.environ.get("CUDA_VISIBLE_DEVICES", "").strip()):
+        session.error("Swift CUDA needs nvcc and explicitly allocated CUDA_VISIBLE_DEVICES")
+    cache = NOX_STATE_ROOT / "cache" / "ecosystem-swift" / device
+    env.update(
+        {
+            "REAL_TORCH_PYTHON": oracle,
+            "JITTOR_REQUIRE_REAL_TORCH": "1",
+            "JITTOR_REQUIRE_SWIFT": "1",
+            "JITTOR_REQUIRE_TRANSFORMERS": "1",
+            "JITTOR_REQUIRE_PEFT": "1",
+            "JITTOR_REQUIRE_ACCELERATE": "1",
+            "JITTOR_TEST_REQUIRE_EXECUTION": "1",
+            "JITTOR_ECOSYSTEM_SWIFT": "1",
+            "JITTOR_TEST_DEVICES": device,
+            "JITTOR_TEST_DEVICE": device,
+            "JITTOR_TORCH_SHIM": "1",
+            "JITTOR_ECOSYSTEM_SPEED_RATIO": "",
+            "JITTOR_ECOSYSTEM_TF32": "0",
+            "JITTOR_ECOSYSTEM_CUDNN_BENCHMARK": "0",
+            "HF_HUB_OFFLINE": "1",
+            "TRANSFORMERS_OFFLINE": "1",
+            "JITTOR_HOME": str(cache / "jittor"),
+            "JITTOR_TORCH_CACHE_ROOT": str(cache / "shim"),
+            "cache_name": "nox_ecosystem_swift_" + device,
+            "JT_CUDA_KERNEL_MATH": "strict",
+            "JT_BACKEND": device,
+            "JT_USE_CUDA": "1" if device == "cuda" else "0",
+            "use_cuda": "1" if device == "cuda" else "0",
+            "DISABLE_MULTIPROCESSING": "1",
+            "JT_USE_PARALLEL_OP_COMPILER": "0",
+            "JT_BUILD_USE_MKL": "0",
+            "JT_BUILD_USE_NCCL": "0",
+            "JT_BUILD_USE_MPI": "0",
+            "JT_BUILD_USE_CUTT": "0",
+        }
+    )
+    env.update({name: "1" for name in THREAD_POOL_ENV_NAMES})
+    if device == "cpu":
+        env.update({"CUDA_VISIBLE_DEVICES": "", "nvcc_path": "", "JT_BUILD_NVCC_PATH": ""})
+    else:
+        env.update({"nvcc_path": nvcc, "JT_BUILD_NVCC_PATH": nvcc})
+    for name in ("JITTOR_ECOSYSTEM_PACKAGE_SITE", "JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE"):
+        if os.environ.get(name):
+            env[name] = os.environ[name]
+    versions = (
+        "import swift, transformers, peft, accelerate, numpy; "
+        "assert swift.__version__ == '4.5.2'; assert transformers.__version__ == '4.56.2'; "
+        "assert peft.__version__ == '0.17.1'; assert accelerate.__version__ == '1.10.1'; "
+        "assert numpy.__version__.startswith('1.'); "
+        "print('Swift dependencies', swift.__version__, transformers.__version__, peft.__version__)"
+    )
+    oracle_env = dict(env, PYTHONPATH="", JITTOR_TORCH_SHIM="0", REAL_TORCH_SITE="")
+    for name in ("JITTOR_SOURCE_ROOT", "JITTOR_HOME", "JITTOR_TORCH_CACHE_ROOT", "JT_BACKEND"):
+        oracle_env[name] = ""
+    oracle_check = (
+        "import torch; assert hasattr(torch, '_C') and not hasattr(torch, '_torch_compat_install_context'); "
+        + (
+            "assert torch.cuda.is_available(); "
+            if device == "cuda"
+            else "assert not torch.cuda.is_available(); "
+        )
+    )
+    session.run(oracle, "-c", oracle_check + versions, external=True, env=oracle_env)
+    _set_hardware_python_config(session, python, env)
+    _install_compat_source(session, env, python)
+    session.run(
+        python,
+        "-c",
+        "import jittor; import torch; "
+        "assert hasattr(torch, '_torch_compat_install_context'); " + versions,
+        external=True,
+        env=env,
+    )
+    _run_pytest_once(
+        session, ["compat/tests/torch/test_ecosystem_swift.py"], env, python, timeout=3600
+    )
+
+
+@nox.session(python=False)
+def ecosystem_verl_training(session):
+    """Opt-in complete source-bound VERL component parity and training."""
+    import tempfile
+
+    _root, env = _session_env(session, "ecosystem-verl-training")
+    python = _hardware_python()
+    _set_hardware_python_config(session, python, env)
+    oracle = os.environ.get("REAL_TORCH_PYTHON", "").strip()
+    if not oracle or not Path(oracle).is_file():
+        session.error("REAL_TORCH_PYTHON must name an independent PyTorch interpreter")
+    for name in ("JITTOR_VERL_UPSTREAM", "JITTOR_VERL_WHEEL"):
+        path = os.environ.get(name, "").strip()
+        if not path or not Path(path).exists():
+            session.error(name + " must name the clean pin or actual installed wheel")
+        env[name] = str(Path(path).resolve())
+    device = os.environ.get("JITTOR_TEST_DEVICES", "cpu")
+    if device not in ("cpu", "cuda"):
+        session.error("ecosystem_verl_training needs exactly JITTOR_TEST_DEVICES=cpu or cuda")
+    cache = NOX_STATE_ROOT / "cache" / "ecosystem-verl-training" / device
+    # Retain every actual NPZ and final per-side source binding. A new nox
+    # invocation receives a fresh directory rather than overwriting evidence.
+    evidence = os.environ.get("JITTOR_VERL_EVIDENCE_DIR", "").strip()
+    if not evidence:
+        evidence_root = NOX_STATE_ROOT / "ecosystem-verl-training" / "measurements"
+        evidence_root.mkdir(parents=True, exist_ok=True)
+        evidence = tempfile.mkdtemp(prefix=device + "-", dir=str(evidence_root))
+    env.update(
+        {
+            "REAL_TORCH_PYTHON": oracle,
+            "JITTOR_REQUIRE_REAL_TORCH": "1",
+            "JITTOR_REQUIRE_VERL": "1",
+            "JITTOR_ECOSYSTEM_VERL_TRAINING": "1",
+            "JITTOR_VERL_EVIDENCE_DIR": evidence,
+            "JITTOR_ECOSYSTEM_TF32": "1",
+            "JITTOR_ECOSYSTEM_CUDNN_BENCHMARK": "0",
+            "JT_CUDA_KERNEL_MATH": "strict",
+            "JITTOR_TEST_REQUIRE_EXECUTION": "1",
+            "JITTOR_TEST_DEVICES": device,
+            "JITTOR_TORCH_SHIM": "1",
+            "JITTOR_ECOSYSTEM_SPEED_RATIO": "",
+            "HF_HUB_OFFLINE": "1",
+            "TRANSFORMERS_OFFLINE": "1",
+            "VERL_USE_EXTERNAL_PLUGINS": "none",
+            "JITTOR_HOME": str(cache / "jittor"),
+            "JITTOR_TORCH_CACHE_ROOT": str(cache / "shim"),
+            "cache_name": "nox_ecosystem_verl_training_" + device,
+            "DISABLE_MULTIPROCESSING": "1",
+            "JT_USE_PARALLEL_OP_COMPILER": "0",
+            "JT_BUILD_USE_MKL": "0",
+            "JT_BUILD_USE_NCCL": "0",
+            "JT_BUILD_USE_MPI": "0",
+            "JT_BUILD_USE_CUTT": "0",
+            "JT_USE_CUDA": "1" if device == "cuda" else "0",
+            "use_cuda": "1" if device == "cuda" else "0",
+        }
+    )
+    env.update({name: "2" for name in THREAD_POOL_ENV_NAMES})
+    if device == "cpu":
+        env.update({"CUDA_VISIBLE_DEVICES": "", "nvcc_path": "", "JT_BUILD_NVCC_PATH": ""})
+    else:
+        nvcc = (
+            os.environ.get("JT_BUILD_NVCC_PATH")
+            or os.environ.get("nvcc_path")
+            or shutil.which("nvcc")
+        )
+        if not nvcc or not os.environ.get("CUDA_VISIBLE_DEVICES", "").strip():
+            session.error("VERL CUDA needs nvcc_path and explicitly allocated CUDA_VISIBLE_DEVICES")
+        env.update({"nvcc_path": nvcc, "JT_BUILD_NVCC_PATH": nvcc})
+    for name in ("JITTOR_ECOSYSTEM_PACKAGE_SITE", "JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE"):
+        if os.environ.get(name):
+            env[name] = os.environ[name]
+    # Validate installed, real upstream dependencies instead of silently
+    # upgrading the ordinary ecosystem environment or downloading models.
+    versions = (
+        "import numpy, transformers, verl, ray, tensordict; "
+        "from packaging.version import Version; "
+        "assert Version(numpy.__version__) >= Version('2.0'); "
+        "v = Version(transformers.__version__); "
+        "assert Version('5.5.3') <= v < Version('5.13') and v != Version('5.6.0'); "
+        "print('VERL dependencies', verl.__version__, numpy.__version__, transformers.__version__)"
+    )
+    oracle_env = dict(env, PYTHONPATH="", JITTOR_TORCH_SHIM="0", REAL_TORCH_SITE="")
+    for name in ("JITTOR_SOURCE_ROOT", "JITTOR_HOME", "JITTOR_TORCH_CACHE_ROOT", "JT_BACKEND"):
+        oracle_env[name] = ""
+    oracle_check = (
+        "import torch; "
+        "assert hasattr(torch, '_C') and not hasattr(torch, '_torch_compat_install_context'); "
+        "assert torch.cuda.is_available(); "
+        if device == "cuda"
+        else "import torch; assert hasattr(torch, '_C') and not hasattr(torch, '_torch_compat_install_context'); assert not torch.cuda.is_available(); "
+    )
+    session.run(oracle, "-c", oracle_check + versions, external=True, env=oracle_env)
+    _install_compat_source(session, env, python)
+    session.run(
+        python,
+        "-c",
+        "import jittor; import torch; "
+        "assert hasattr(torch, '_torch_compat_install_context'); " + versions,
+        external=True,
+        env=env,
+    )
+    _run_pytest_once(
+        session, ["compat/tests/torch/test_ecosystem_verl_training.py"], env, python, timeout=3600
+    )
+
+
+@nox.session(python=False)
+def ecosystem_transformers_source(session):
+    """Replay TF9 plus full 32K Longformer with automatic original L3 budgets."""
+    root, env = _session_env(session, "ecosystem-transformers-source")
+    python = _hardware_python()
+    _set_hardware_python_config(session, python, env)
+    oracle = os.environ.get("REAL_TORCH_PYTHON", "").strip()
+    device = os.environ.get("JITTOR_TEST_DEVICES", "cpu")
+    if not oracle or not Path(oracle).is_file() or device not in ("cpu", "cuda"):
+        session.error(
+            "Transformers source gate needs binary REAL_TORCH_PYTHON and exactly cpu or cuda"
+        )
+    if len(session.posargs) % 2 or any(
+        session.posargs[i] not in ("--output", "--cache-root")
+        for i in range(0, len(session.posargs), 2)
+    ):
+        session.error(
+            "All ten cases and four original phases are mandatory; only output/cache paths are configurable"
+        )
+    args = []
+    for kind in ("checkout", "wheel"):
+        value = os.environ.get("JITTOR_TRANSFORMERS_" + kind.upper(), "").strip()
+        if not value or not Path(value).exists():
+            session.error("Explicit real Transformers " + kind + " required")
+        args += ["--transformers-" + kind, value]
+    for name in (
+        "CUDA_VISIBLE_DEVICES",
+        "CUDA_HOME",
+        "nvcc_path",
+        "JT_BUILD_NVCC_PATH",
+        "LD_PRELOAD",
+        "LD_LIBRARY_PATH",
+        "JITTOR_CUDA_WHEEL_STRICT",
+        "JITTOR_CUDA_WHEEL_DISABLE",
+    ):
+        if name in os.environ:
+            env[name] = os.environ[name]
+    env.update(
+        {
+            "JITTOR_REQUIRE_TRANSFORMERS": "1",
+            "JITTOR_REQUIRE_REAL_TORCH": "1",
+            "JITTOR_TEST_REQUIRE_EXECUTION": "1",
+            "HF_HUB_OFFLINE": "1",
+            "TRANSFORMERS_OFFLINE": "1",
+        }
+    )
+    session.run(
+        python,
+        str(REPO_ROOT / "tools/run_transformers_gate.py"),
+        "--candidate-python",
+        python,
+        "--oracle-python",
+        oracle,
+        "--device",
+        device,
+        *args,
+        "--output",
+        str(root / "measurements"),
+        "--cache-root",
+        str(root / "benchmark-cache"),
+        *session.posargs,
+        external=True,
+        env=env,
+    )
+
+
+@nox.session(python=False)
+def ecosystem_diffusers_source(session):
+    """Run the original full UNet forward, gradients and three-step training."""
+    root, env = _session_env(session, "ecosystem-diffusers-source")
+    python = _hardware_python()
+    _set_hardware_python_config(session, python, env)
+    oracle = os.environ.get("REAL_TORCH_PYTHON", "").strip()
+    device = os.environ.get("JITTOR_TEST_DEVICES", "cpu")
+    if not oracle or not Path(oracle).is_file() or device not in ("cpu", "cuda"):
+        session.error(
+            "Diffusers source gate needs binary REAL_TORCH_PYTHON and exactly cpu or cuda"
+        )
+    if len(session.posargs) % 2 or any(
+        session.posargs[i] not in ("--output", "--cache-root")
+        for i in range(0, len(session.posargs), 2)
+    ):
+        session.error(
+            "All six workers and original training phases are mandatory; only output/cache paths are configurable"
+        )
+    args = []
+    for kind in ("checkout", "wheel"):
+        value = os.environ.get("JITTOR_DIFFUSERS_" + kind.upper(), "").strip()
+        if not value or not Path(value).exists():
+            session.error("Explicit real Diffusers " + kind + " required")
+        args += ["--" + kind, value]
+    for name in (
+        "CUDA_VISIBLE_DEVICES",
+        "CUDA_HOME",
+        "nvcc_path",
+        "JT_BUILD_NVCC_PATH",
+        "LD_PRELOAD",
+        "LD_LIBRARY_PATH",
+        "JITTOR_CUDA_WHEEL_STRICT",
+        "JITTOR_CUDA_WHEEL_DISABLE",
+    ):
+        if name in os.environ:
+            env[name] = os.environ[name]
+    env.update(
+        {
+            "JITTOR_REQUIRE_DIFFUSERS": "1",
+            "JITTOR_REQUIRE_REAL_TORCH": "1",
+            "JITTOR_TEST_REQUIRE_EXECUTION": "1",
+            "HF_HUB_OFFLINE": "1",
+            "TRANSFORMERS_OFFLINE": "1",
+        }
+    )
+    output = os.environ.get("JITTOR_DIFFUSERS_EVIDENCE_DIR", "").strip() or str(
+        root / "measurements"
+    )
+    session.run(
+        python,
+        str(REPO_ROOT / "tools/run_diffusers_gate.py"),
+        "--candidate-python",
+        python,
+        "--oracle-python",
+        oracle,
+        "--device",
+        device,
+        *args,
+        "--output",
+        output,
+        "--cache-root",
+        str(root / "benchmark-cache"),
+        *session.posargs,
+        external=True,
+        env=env,
+    )
+
+
+@nox.session(python=False)
+def ecosystem_metric_tensordict_source(session):
+    """Require both original component scopes, complete gradients and TD SGD."""
+    root, env = _session_env(session, "ecosystem-metric-tensordict-source")
+    python = _hardware_python()
+    _set_hardware_python_config(session, python, env)
+    oracle = os.environ.get("REAL_TORCH_PYTHON", "").strip()
+    device = os.environ.get("JITTOR_TEST_DEVICES", "cpu")
+    if not oracle or not Path(oracle).is_file() or device not in ("cpu", "cuda"):
+        session.error("Metrics/TensorDict needs binary REAL_TORCH_PYTHON and exactly cpu or cuda")
+    if len(session.posargs) % 2 or any(
+        session.posargs[i] not in ("--output", "--cache-root")
+        for i in range(0, len(session.posargs), 2)
+    ):
+        session.error(
+            "Both components and all ten workers are mandatory; only output/cache paths are configurable"
+        )
+    args = []
+    for repo in ("torchmetrics", "tensordict"):
+        for kind in ("checkout", "wheel"):
+            value = os.environ.get("JITTOR_" + repo.upper() + "_" + kind.upper(), "").strip()
+            if not value or not Path(value).exists():
+                session.error("Explicit real " + repo + " " + kind + " required")
+            args += ["--" + repo + "-" + kind, value]
+    for name in (
+        "CUDA_VISIBLE_DEVICES",
+        "CUDA_HOME",
+        "nvcc_path",
+        "JT_BUILD_NVCC_PATH",
+        "LD_PRELOAD",
+        "LD_LIBRARY_PATH",
+        "JITTOR_CUDA_WHEEL_STRICT",
+        "JITTOR_CUDA_WHEEL_DISABLE",
+    ):
+        if name in os.environ:
+            env[name] = os.environ[name]
+    # The control process only orchestrates workers. Each measured child sets
+    # its actual shim/native identity and private benchmark roots explicitly.
+    env.update(
+        {
+            "JITTOR_TORCH_SHIM": "0",
+            "PYTHONPATH": "",
+            "JITTOR_REQUIRE_TORCHMETRICS": "1",
+            "JITTOR_REQUIRE_TENSORDICT": "1",
+            "JITTOR_REQUIRE_REAL_TORCH": "1",
+            "JITTOR_TEST_REQUIRE_EXECUTION": "1",
+            "HF_HUB_OFFLINE": "1",
+            "TRANSFORMERS_OFFLINE": "1",
+        }
+    )
+    output = os.environ.get("JITTOR_METRIC_TD_EVIDENCE_DIR", "").strip() or str(
+        root / "measurements"
+    )
+    session.run(
+        python,
+        str(REPO_ROOT / "tools/run_metric_td_gate.py"),
+        "--candidate-python",
+        python,
+        "--oracle-python",
+        oracle,
+        "--device",
+        device,
+        *args,
+        "--output",
+        output,
+        "--cache-root",
+        str(root / "benchmark-cache"),
+        *session.posargs,
+        external=True,
+        env=env,
+    )
+
+
+@nox.session(python=False)
+def ecosystem_openmmlab_installed(session):
+    """Maintain original MM train_step scopes with actual installed-wheel proof."""
+    root, env = _session_env(session, "ecosystem-openmmlab-installed")
+    python = _hardware_python()
+    _set_hardware_python_config(session, python, env)
+    if session.posargs:
+        session.error(
+            "OpenMMLab installed gate always runs both complete original training protocols"
+        )
+    oracle = os.environ.get("REAL_TORCH_PYTHON", "").strip()
+    if not oracle or not Path(oracle).is_file():
+        session.error("REAL_TORCH_PYTHON must name an independent binary PyTorch interpreter")
+    for repo in ("MMENGINE", "MMCV"):
+        for kind in ("CHECKOUT", "WHEEL"):
+            name = "JITTOR_" + repo + "_" + kind
+            value = os.environ.get(name, "").strip()
+            if not value or not Path(value).exists():
+                session.error(name + " must name the actual clean pin or installed wheel")
+            env[name] = str(Path(value).resolve())
+    device = os.environ.get("JITTOR_TEST_DEVICES", "cpu")
+    if device not in ("cpu", "cuda"):
+        session.error("OpenMMLab installed gate needs exactly cpu or cuda")
+    cache = NOX_STATE_ROOT / "cache" / "ecosystem-openmmlab-installed" / device
+    env.update(
+        {
+            "REAL_TORCH_PYTHON": oracle,
+            "JITTOR_REQUIRE_REAL_TORCH": "1",
+            "PYTEST_ADDOPTS": "",
+            "JITTOR_REQUIRE_MMENGINE": "1",
+            "JITTOR_REQUIRE_MMCV": "1",
+            "JITTOR_ECOSYSTEM_OPENMMLAB_INSTALLED": "1",
+            "JITTOR_TEST_REQUIRE_EXECUTION": "1",
+            "JITTOR_TEST_DEVICES": device,
+            "JITTOR_TORCH_SHIM": "1",
+            "JITTOR_ECOSYSTEM_SPEED_RATIO": "",
+            "JITTOR_ECOSYSTEM_TF32": "1",
+            "JITTOR_ECOSYSTEM_CUDNN_BENCHMARK": "0",
+            "JT_CUDA_KERNEL_MATH": "strict",
+            "HF_HUB_OFFLINE": "1",
+            "TRANSFORMERS_OFFLINE": "1",
+            "JITTOR_HOME": str(cache / "jittor"),
+            "JITTOR_TORCH_CACHE_ROOT": str(cache / "shim"),
+            "cache_name": "nox_ecosystem_openmmlab_installed_" + device,
+            "DISABLE_MULTIPROCESSING": "1",
+            "JT_USE_PARALLEL_OP_COMPILER": "0",
+            "JT_BUILD_USE_MKL": "0",
+            "JT_BUILD_USE_NCCL": "0",
+            "JT_BUILD_USE_MPI": "0",
+            "JT_BUILD_USE_CUTT": "0",
+            "JT_USE_CUDA": "1" if device == "cuda" else "0",
+            "use_cuda": "1" if device == "cuda" else "0",
+        }
+    )
+    env.update({name: "2" for name in THREAD_POOL_ENV_NAMES})
+    if device == "cpu":
+        env.update({"CUDA_VISIBLE_DEVICES": "", "nvcc_path": "", "JT_BUILD_NVCC_PATH": ""})
+    else:
+        nvcc = (
+            os.environ.get("JT_BUILD_NVCC_PATH")
+            or os.environ.get("nvcc_path")
+            or shutil.which("nvcc")
+        )
+        if not nvcc or not os.environ.get("CUDA_VISIBLE_DEVICES", "").strip():
+            session.error(
+                "OpenMMLab CUDA needs real nvcc and explicitly allocated CUDA_VISIBLE_DEVICES"
+            )
+        env.update({"nvcc_path": nvcc, "JT_BUILD_NVCC_PATH": nvcc})
+    for name in (
+        "JITTOR_ECOSYSTEM_PACKAGE_SITE",
+        "JITTOR_ECOSYSTEM_REFERENCE_PACKAGE_SITE",
+        "JITTOR_OPENMMLAB_EVIDENCE_DIR",
+    ):
+        if os.environ.get(name):
+            env[name] = os.environ[name]
+    versions = (
+        "import numpy, mmengine, mmcv; "
+        "assert numpy.__version__.split('.')[0] == '1'; "
+        "assert mmengine.__version__ == '0.10.7' and mmcv.__version__ == '2.2.0'; "
+        "print('OpenMMLab actual dependencies', numpy.__version__, mmengine.__version__, mmcv.__version__)"
+    )
+    oracle_env = dict(env, PYTHONPATH="", JITTOR_TORCH_SHIM="0", REAL_TORCH_SITE="")
+    for name in ("JITTOR_SOURCE_ROOT", "JITTOR_HOME", "JITTOR_TORCH_CACHE_ROOT", "JT_BACKEND"):
+        oracle_env[name] = ""
+    oracle_check = (
+        "import torch; assert hasattr(torch, '_C') and not hasattr(torch, '_torch_compat_install_context'); "
+        + (
+            "assert torch.cuda.is_available(); "
+            if device == "cuda"
+            else "assert not torch.cuda.is_available(); "
+        )
+    )
+    session.run(oracle, "-c", oracle_check + versions, external=True, env=oracle_env)
+    _install_compat_source(session, env, python)
+    session.run(
+        python,
+        "-c",
+        "import jittor; import torch; "
+        "assert hasattr(torch, '_torch_compat_install_context'); " + versions,
+        external=True,
+        env=env,
+    )
+    _run_pytest_once(
+        session,
+        ["compat/tests/torch/test_ecosystem_openmmlab_installed.py"],
+        env,
+        python,
+        timeout=3600,
     )

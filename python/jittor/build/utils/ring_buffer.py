@@ -230,7 +230,7 @@ class RingBuffer:
             while location is None:
                 self.allocator.cv.wait()
                 location = self.allocator.alloc(data.nbytes)
-            window = np.ndarray(shape=data.shape, dtype=data.dtype,
+            window: np.ndarray = np.ndarray(shape=data.shape, dtype=data.dtype,
                                 buffer=self.buffer, offset=location)
             window[:] = data
             self.allocator.cv.notify()
@@ -244,7 +244,7 @@ class RingBuffer:
             while location is None:
                 self.allocator.cv.wait()
                 location = self.allocator.free(nbytes)
-            data = np.ndarray(shape=shape, dtype=dtype,
+            data: np.ndarray = np.ndarray(shape=shape, dtype=dtype,
                               buffer=self.buffer, offset=location).copy()
             self.allocator.cv.notify()
             assert data.nbytes == nbytes

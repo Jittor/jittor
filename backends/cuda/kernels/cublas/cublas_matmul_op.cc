@@ -19,10 +19,10 @@ namespace jittor {
 
 #ifndef JIT
 
-static auto make_cublas_matmul = op_constructor<VarPtr, Var*, Var*, bool, bool>("cublas_matmul");
+static auto make_cublas_matmul = op_constructor<VarPtr, Var*, Var*, bool, bool, bool>("cublas_matmul");
 static auto make_unary = op_constructor<VarPtr, Var*, NanoString>("unary");
 
-CublasMatmulOp::CublasMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b)
+CublasMatmulOp::CublasMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b, bool fp32_output)
     : a(a), b(b), trans_a(trans_a), trans_b(trans_b) {
     set_flag(OpFlags::_cuda, 1);
     set_flag(OpFlags::_cpu, 0);
@@ -47,14 +47,16 @@ CublasMatmulOp::CublasMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b)
     // dtype from the same inference every other op uses and cast the operands
     // to it, mirroring the cuDNN convolution ops.
     auto dtype = dtype_infer(a->ns, b->ns);
+    USER_CHECK(!fp32_output || dtype == ns_bfloat16)
+        << "FP32 accumulator output requires BF16 compute operands, got" << dtype;
     auto at = cast_operand_to_compute_dtype(a, dtype);
     auto bt = cast_operand_to_compute_dtype(b, dtype);
     if (at || bt) {
-        auto cp = make_cublas_matmul(at ? at.ptr : a, bt ? bt.ptr : b, trans_a, trans_b);
+        auto cp = make_cublas_matmul(at ? at.ptr : a, bt ? bt.ptr : b, trans_a, trans_b, fp32_output);
         forward(cp);
         return;
     }
-    c = create_output(nullptr, dtype);
+    c = create_output(nullptr, fp32_output ? ns_float32 : dtype);
 }
 
 VarPtr CublasMatmulOp::grad(Var* out, Var* dout, Var* v, int v_index) {
@@ -80,12 +82,12 @@ VarPtr CublasMatmulOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     }
     if (v_index == 0) {
         if (trans_a)
-            return make_cublas_matmul(other, dout, trans_b, 1);
-        return make_cublas_matmul(dout, other, 0, trans_b^1);
+            return make_cublas_matmul(other, dout, trans_b, 1, false);
+        return make_cublas_matmul(dout, other, 0, trans_b^1, false);
     }
     if (trans_b)
-        return make_cublas_matmul(dout, other, 1, trans_a);
-    return make_cublas_matmul(other, dout, trans_a^1, 0);
+        return make_cublas_matmul(dout, other, 1, trans_a, false);
+    return make_cublas_matmul(other, dout, trans_a^1, 0, false);
 }
 
 // An operand of rank > 2 is the same buffer as its rank-2 flattening: a dense
@@ -151,6 +153,7 @@ void CublasMatmulOp::infer_shape() {
 
 void CublasMatmulOp::jit_prepare(JK& jk) {
     jk << "«T:" << a->dtype();
+    if (c->dtype() != a->dtype()) jk << "«Tc:" << c->dtype();
     jk << "«Trans_a:" << (trans_a ? 'T' : 'N');
     jk << "«Trans_b:" << (trans_b ? 'T' : 'N');
     jk << "«op:" << (a->dtype().dsize() == 2? 'H' : (a->dtype().dsize() == 4 ? 'S' : 'D'));

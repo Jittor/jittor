@@ -36,14 +36,16 @@ jobs:
     # a cache miss, not just the tests.
     timeout-minutes: 45
     steps:
+      - name: Install native CPU toolchain
+        run: |
+          apt-get update
+          apt-get install --yes --no-install-recommends build-essential libomp-dev git ca-certificates
       - name: Check out source
         uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - name: Install native CPU toolchain
-        run: |
-          apt-get update
-          apt-get install --yes --no-install-recommends build-essential libomp-dev
+      - name: Set the Jittor state root
+        run: echo "JITTOR_LAB_ROOT=${RUNNER_TEMP}/jittor-lab" >> "$GITHUB_ENV"
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -55,8 +57,8 @@ jobs:
       - name: Restore the Jittor build cache
         uses: actions/cache/restore@v4
         with:
-          path: ${{ github.workspace }}/../jittor-lab/_state/nox/cache
-          key: jittor-build-${{ runner.os }}-${{ hashFiles('src/**', 'backends/**', 'python/jittor/build/**', 'requirements/dev-tools.txt') }}
+          path: ${{ runner.temp }}/jittor-lab/_state/nox/cache
+          key: jittor-build-${{ runner.os }}-${{ hashFiles('src/**', 'backends/**', 'python/jittor/build/**', 'requirements/dev-tools.txt') }}-${{ github.run_id }}
           restore-keys: |
             jittor-build-${{ runner.os }}-
       - name: Run the fast CPU tier
@@ -72,14 +74,16 @@ jobs:
     # the manual probes and the independent-PyTorch oracle.
     timeout-minutes: 240
     steps:
+      - name: Install native CPU toolchain
+        run: |
+          apt-get update
+          apt-get install --yes --no-install-recommends build-essential libomp-dev git ca-certificates
       - name: Check out source
         uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - name: Install native CPU toolchain
-        run: |
-          apt-get update
-          apt-get install --yes --no-install-recommends build-essential libomp-dev
+      - name: Set the Jittor state root
+        run: echo "JITTOR_LAB_ROOT=${RUNNER_TEMP}/jittor-lab" >> "$GITHUB_ENV"
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -97,8 +101,8 @@ jobs:
       - name: Restore the Jittor build cache
         uses: actions/cache/restore@v4
         with:
-          path: ${{ github.workspace }}/../jittor-lab/_state/nox/cache
-          key: jittor-build-${{ runner.os }}-${{ hashFiles('src/**', 'backends/**', 'python/jittor/build/**', 'requirements/dev-tools.txt') }}
+          path: ${{ runner.temp }}/jittor-lab/_state/nox/cache
+          key: jittor-build-${{ runner.os }}-${{ hashFiles('src/**', 'backends/**', 'python/jittor/build/**', 'requirements/dev-tools.txt') }}-${{ github.run_id }}
           restore-keys: |
             jittor-build-${{ runner.os }}-
       - name: Install independent CPU PyTorch oracle
@@ -113,8 +117,8 @@ jobs:
         if: always()
         uses: actions/cache/save@v4
         with:
-          path: ${{ github.workspace }}/../jittor-lab/_state/nox/cache
-          key: jittor-build-${{ runner.os }}-${{ hashFiles('src/**', 'backends/**', 'python/jittor/build/**', 'requirements/dev-tools.txt') }}
+          path: ${{ runner.temp }}/jittor-lab/_state/nox/cache
+          key: jittor-build-${{ runner.os }}-${{ hashFiles('src/**', 'backends/**', 'python/jittor/build/**', 'requirements/dev-tools.txt') }}-${{ github.run_id }}
 
   benchmark:
     needs: baseline
@@ -126,6 +130,8 @@ jobs:
     env:
       ASV_MACHINE: github-ubuntu-cpu
       ASV_COMPARE_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+      ASV_PR_BENCHMARKS: '^(operators|optimizer_step|convolution)\.'
+      ASV_SCHEDULED_BENCHMARKS: '^(operators|optimizer_step|convolution|reductions)\.'
     steps:
       # `runner` is not an allowed context in a job-level `env:` -- using it
       # there made GitHub reject the whole workflow file, so no job ran.
@@ -168,9 +174,15 @@ jobs:
           restore-keys: |
             asv-results-${{ runner.os }}-${{ runner.arch }}-
       - name: Record, compare, and publish ASV results
-        run: >-
-          python -m nox -s benchmark --
-          --bench '^(operators|optimizer_step)\.'
+        shell: bash
+        env:
+          BENCHMARK_EVENT: ${{ github.event_name }}
+        run: |
+          case "$BENCHMARK_EVENT" in
+            schedule|workflow_dispatch) benchmark_pattern="$ASV_SCHEDULED_BENCHMARKS" ;;
+            *) benchmark_pattern="$ASV_PR_BENCHMARKS" ;;
+          esac
+          python -m nox -s benchmark -- --bench "$benchmark_pattern"
       - name: Save ASV results for the next commit
         if: success()
         uses: actions/cache/save@v4

@@ -120,13 +120,16 @@ BACKEND_GRAD_COVERAGE = (
      "tests/nn/test_norm.py::TestBatchNorm::test_cuda_fast_path_forward_and_all_gradients",
      "cuda_cpu_jittor"),
     ("backends/cuda/kernels/nn/batch_norm_training_cuda.py", "BatchNormNHWC",
-     "tests/nn/test_channels_last.py::TestChannelsLast::test_a_training_step_matches_nchw",
+     "tests/nn/test_channels_last.py::TestChannelsLastCUDA::test_a_training_step_matches_nchw",
      "cuda_cpu_jittor"),
     ("backends/cuda/kernels/nn/batch_norm_training_cuda.py", "BatchNormEvalCUDA",
      "tests/nn/test_norm.py::TestBatchNorm::test_cuda_eval_fast_path_forward_and_all_gradients",
      "cuda_cpu_jittor"),
     ("backends/cuda/kernels/nn/cudnn_attention_cuda.py", "_CudnnAttention",
      "tests/backends/cuda/test_cudnn_fused_attention.py::TestCudnnFusedAttention::test_float16_unequal_lengths",
+     "cuda_numpy"),
+    ("backends/cuda/kernels/nn/cudnn_attention_cuda.py", "_CudnnRoundedAttention",
+     "compat/tests/torch/test_sdpa_bf16_backend_precision.py::TestBFloat16BackendPrecision::test_admitted_head_and_sequence_boundaries_reach_cudnn",
      "cuda_numpy"),
     ("backends/cuda/kernels/nn/fused_attention_f32_cuda.py", "_FusedAttentionF32",
      "tests/backends/cuda/test_fused_attention_f32.py::TestFusedAttentionF32::test_partial_tiles_and_unequal_lengths",
@@ -141,8 +144,11 @@ BACKEND_GRAD_COVERAGE = (
      "tests/nn/test_norm.py::TestGroupNorm::test_cuda_fast_path_forward_and_all_gradients",
      "cuda_cpu_jittor"),
     ("backends/cuda/kernels/nn/group_norm_cuda.py", "GroupNormNHWC",
-     "tests/nn/test_channels_last.py::TestChannelsLast::test_a_training_group_norm_over_channels_last_storage",
+     "tests/nn/test_channels_last.py::TestChannelsLastCUDA::test_a_training_group_norm_over_channels_last_storage",
      "cuda_cpu_jittor"),
+    ("backends/cuda/kernels/nn/gelu_training_cuda.py", "GeluTrainingCUDA",
+     "compat/tests/torch/test_native_fast_paths.py::TestNativeGelu::test_bfloat16_training_uses_one_kernel_with_matching_gradients",
+     "cuda_cpu_formula"),
     ("backends/cuda/kernels/nn/layer_norm_training_cuda.py", "LayerNormCUDA",
      "tests/nn/test_norm.py::TestLayerNorm::test_cuda_fast_path_forward_and_all_gradients",
      "cuda_cpu_jittor"),
@@ -155,6 +161,50 @@ BACKEND_GRAD_COVERAGE = (
     ("backends/cuda/kernels/nn/softmax_cuda.py", "CodeSoftmaxStreaming",
      "tests/backends/cuda/test_softmax_cuda_grad.py::TestSoftmaxCudaGrad::test_every_schedule_matches_an_exact_float64_reference",
      "cuda_exact_and_cpu"),
+
+    # ACL wrappers whose backward is owned by an inline CodeOp.
+    ("backends/acl/kernels/ops/concat_op.py", "ConcatACL",
+     "tests/backends/acl/test_aclop.py::TestACL::test_concat_grad",
+     "npu_hardware"),
+    ("backends/acl/kernels/ops/conv_op.py", "_ConvACLNoBias",
+     "tests/backends/acl/test_acl.py::TestACL::test_conv",
+     "npu_hardware"),
+    ("backends/acl/kernels/ops/conv_op.py", "ConvACL",
+     "tests/backends/acl/test_acl.py::TestACL::test_conv_with_bias_grad",
+     "npu_hardware"),
+    ("backends/acl/kernels/ops/cross_entropy_loss_op.py", "CrossEntropyLossACL",
+     "tests/backends/acl/test_acl_codeop_gradients.py::TestACLCodeOpGradients::test_cross_entropy_forward_and_gradient",
+     "npu_hardware"),
+    ("backends/acl/kernels/ops/flashattention_op.py", "FlashAttentionACL",
+     "tests/backends/acl/test_aclop.py::TestACL::test_flashattention_grad",
+     "npu_hardware"),
+    ("backends/acl/kernels/ops/gelu_op.py", "GeluACL",
+     "tests/backends/acl/test_acl_codeop_gradients.py::TestACLCodeOpGradients::test_gelu_forward_and_gradient",
+     "npu_hardware"),
+    ("backends/acl/kernels/ops/norms_op.py", "BatchNormACL",
+     "tests/backends/acl/test_acl_torch_compat.py::TestACLTorchCompat::test_batch_norm_eval_forward_backward_stays_on_acl",
+     "npu_hardware"),
+    ("backends/acl/kernels/ops/norms_op.py", "GroupNormACL",
+     "tests/backends/acl/test_acl_torch_compat.py::TestACLTorchCompat::test_group_norm_forward_backward_stays_on_acl",
+     "npu_hardware"),
+    ("backends/acl/kernels/ops/norms_op.py", "LayerNormACL",
+     "tests/backends/acl/test_acl_torch_compat.py::TestACLTorchCompat::test_layer_norm_forward_backward_stays_on_acl",
+     "npu_hardware"),
+    ("backends/acl/kernels/ops/relu_op.py", "LeakyReLUACL",
+     "tests/backends/acl/test_aclop.py::TestACL::test_leakyrelu_grad",
+     "npu_hardware"),
+    ("backends/acl/kernels/ops/relu_op.py", "ReLUACL",
+     "tests/backends/acl/test_aclop.py::TestACL::test_relu_grad",
+     "npu_hardware"),
+    ("backends/acl/kernels/ops/silu_op.py", "SiLUACL",
+     "tests/backends/acl/test_aclop.py::TestACL::test_silu_grad",
+     "npu_hardware"),
+    ("backends/acl/kernels/ops/silu_op.py", "SwishACL",
+     "tests/backends/acl/test_acl_codeop_gradients.py::TestACLCodeOpGradients::test_bfloat16_swish_forward_and_gradient",
+     "npu_hardware"),
+    ("backends/acl/kernels/ops/upsample_op.py", "UpsampleNearest2dACL",
+     "tests/backends/acl/test_acl_codeop_gradients.py::TestACLCodeOpGradients::test_nearest_upsample_forward_and_gradient",
+     "npu_hardware"),
 
     # ---- CPU oneDNN. Runs everywhere. -------------------------------------
     ("backends/cpu/libraries/mkl/mkl_batched_matmul_op.cc",
@@ -214,6 +264,9 @@ BACKEND_GRAD_COVERAGE = (
     ("backends/acl/kernels/ops/cumsum_op.py", "CumsumACL",
      "tests/backends/acl/test_aclop.py::TestACL::test_cumsum_grad",
      "npu_hardware"),
+    # DropoutACL supplies its gradient as a CodeOp source, which the scanner
+    # counts like any other backend gradient; test_aclop.py::TestACL::
+    # test_dropout_grad still checks its math.
     ("backends/acl/kernels/ops/dropout_op.py", "DropoutACL",
      "tests/backends/acl/test_aclop.py::TestACL::test_dropout_grad",
      "npu_hardware"),
@@ -365,16 +418,89 @@ def _grads_in_file(path):
     text = path.read_text(encoding="utf-8", errors="replace")
     if path.suffix in (".cc", ".cu"):
         return [match.group(1) for match in _CPP_GRAD.finditer(text)]
+    if path.suffix != ".py":
+        return []
     found = []
-    try:
-        tree = ast.parse(text, filename=str(path))
-    except SyntaxError:
-        return found
+    tree = ast.parse(text, filename=str(path))
+    constants = {target.id: node.value for node in tree.body
+                 if isinstance(node, ast.Assign) for target in node.targets
+                 if isinstance(target, ast.Name)}
+    helpers = {node.name: node for node in tree.body
+               if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    builders = {alias.asname or alias.name
+                for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)
+                and node.module and node.module.endswith("_code")
+                for alias in node.names if alias.name in ("acl_program", "acl_code")}
+
+    def builder(call):
+        return (isinstance(call.func, ast.Name) and call.func.id in builders
+                or isinstance(call.func, ast.Attribute) and call.func.attr == "code"
+                and isinstance(call.func.value, ast.Name)
+                and call.func.value.id in ("jt", "jittor"))
+
+    def literal(node, bindings, seen=None):
+        seen = set() if seen is None else seen
+        if isinstance(node, ast.Name) and node.id in bindings and node.id not in seen:
+            return literal(bindings[node.id], bindings, seen | {node.id})
+        if isinstance(node, ast.BoolOp) and isinstance(node.op, ast.Or):
+            for value in node.values:
+                result = literal(value, bindings, seen)
+                if result:
+                    return result
+            return None
+        return ast.literal_eval(node)
+
+    def has_sources(call, bindings):
+        for keyword in call.keywords:
+            if keyword.arg not in ("cpu_grad_src", "cuda_grad_src", "multi_grad_src"):
+                continue
+            try:
+                value = literal(keyword.value, bindings)
+            except (ValueError, TypeError):
+                return True
+            if value:
+                return True
+        return False
+
+    def reaches_builder(node, seen):
+        for call in (item for item in ast.walk(node) if isinstance(item, ast.Call)):
+            if builder(call):
+                return True
+            if (isinstance(call.func, ast.Name) and call.func.id in helpers
+                    and call.func.id not in seen
+                    and reaches_builder(helpers[call.func.id], seen | {call.func.id})):
+                return True
+        return False
+
+    def arguments(helper, call, bindings):
+        parameters = list(getattr(helper.args, "posonlyargs", ())) + helper.args.args
+        result = {parameter.arg: default for parameter, default in
+                  zip(parameters[-len(helper.args.defaults):], helper.args.defaults)}
+        for parameter, value in zip(parameters, call.args):
+            result[parameter.arg] = bindings.get(value.id, value) if isinstance(value, ast.Name) else value
+        for keyword in call.keywords:
+            if keyword.arg is not None:
+                value = keyword.value
+                result[keyword.arg] = bindings.get(value.id, value) if isinstance(value, ast.Name) else value
+        return result
+
+    def code_gradient(node, seen, bindings=None):
+        bindings = dict(constants, **({} if bindings is None else bindings))
+        for call in (item for item in ast.walk(node) if isinstance(item, ast.Call)):
+            helper = helpers.get(call.func.id) if isinstance(call.func, ast.Name) else None
+            if has_sources(call, bindings) and (builder(call) or helper is not None
+                                     and reaches_builder(helper, set())):
+                return True
+            if (helper is not None and helper.name not in seen
+                    and code_gradient(helper, seen | {helper.name}, arguments(helper, call, bindings))):
+                return True
+        return False
+
     for node in ast.walk(tree):
         if not isinstance(node, ast.ClassDef):
             continue
         if any(isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
-               and item.name == "grad" for item in node.body):
+               and item.name == "grad" for item in node.body) or code_gradient(node, set()):
             found.append(node.name)
     return found
 
@@ -586,6 +712,83 @@ def test_a_new_backend_gradient_without_a_manifest_row_is_caught(tmp_path):
     assert sorted(unlisted) == [("fake_op.cc", "FakeBackendOp"),
                                 ("fake_op.py", "FakeBackendACL")]
     assert stale, "the real manifest should not match a directory of fakes"
+
+
+
+def test_codeop_gradient_wrappers_keep_their_owner_and_require_a_route(tmp_path):
+    path = tmp_path / "codeop.py"
+    path.write_text(
+        "from ._code import acl_program as build\n"
+        "def program(grad=None):\n"
+        "    return build('Unary', 1, 1, cuda_grad_src=grad or [])\n"
+        "def indirect():\n"
+        "    return program(['actual backward'])\n"
+        "class InlineGradient:\n"
+        "    def __call__(self, x):\n"
+        "        return indirect()\n"
+        "class ForwardOnly:\n"
+        "    def __call__(self, x):\n"
+        "        return program(None)\n"
+        "class DefaultForwardOnly:\n"
+        "    def __call__(self, x):\n"
+        "        return program()\n", encoding="utf-8")
+    found = {(path.name, symbol) for symbol in _grads_in_file(path)}
+    assert found == {("codeop.py", "InlineGradient")}
+    assert compare((), found) == ([("codeop.py", "InlineGradient")], [])
+    # Moving the implementation into a helper must not turn the old row stale.
+    row = (("codeop.py", "InlineGradient", "unused route", "npu_hardware"),)
+    assert compare(row, found) == ([], [])
+
+
+def test_codeop_forward_and_unrelated_helpers_do_not_claim_gradients(tmp_path):
+    path = tmp_path / "forward.py"
+    path.write_text(
+        "from ._code import acl_program\n"
+        "EMPTY = []\n"
+        "def unused():\n"
+        "    return acl_program('Unary', 1, 1, multi_grad_src='backward')\n"
+        "def cycle_a():\n"
+        "    return cycle_b()\n"
+        "def cycle_b():\n"
+        "    return cycle_a()\n"
+        "def unrelated(**kwargs):\n"
+        "    return kwargs\n"
+        "class Forward:\n"
+        "    def __call__(self, x):\n"
+        "        cycle_a()\n"
+        "        unrelated(cuda_grad_src=['metadata'])\n"
+        "        return acl_program('Unary', 1, 1, multi_grad_src=EMPTY)\n",
+        encoding="utf-8")
+    assert _grads_in_file(path) == []
+
+
+
+def test_invalid_backend_source_cannot_hide_an_unlisted_gradient(tmp_path):
+    path = tmp_path / "broken.py"
+    path.write_text("class Broken:\n    def grad(self, dout)\n        return dout\n",
+                    encoding="utf-8")
+    try:
+        _grads_in_file(path)
+    except SyntaxError:
+        pass
+    else:
+        raise AssertionError("An invalid backend source must fail the inventory")
+
+
+def test_direct_codeop_gradient_removal_makes_a_manifest_row_stale(tmp_path):
+    path = tmp_path / "direct.py"
+    code = (
+        "import jittor as jt\n"
+        "class Direct:\n"
+        "    def __call__(self, x):\n"
+        "        return jt.code(x.shape, x.dtype, [x], cpu_src='forward', "
+        "cpu_grad_src=['backward'])\n")
+    path.write_text(code, encoding="utf-8")
+    assert _grads_in_file(path) == ["Direct"]
+    row = (("direct.py", "Direct", "unused route", "cpu_formula"),)
+    path.write_text(code.replace("['backward']", "[]"), encoding="utf-8")
+    found = {(path.name, symbol) for symbol in _grads_in_file(path)}
+    assert compare(row, found) == ([], [("direct.py", "Direct")])
 
 
 def test_a_manifest_row_whose_source_disappeared_is_caught():

@@ -353,13 +353,10 @@ def _warm_the_notebook_cache(attempts=3):
 
 
 #: Smokes that fail for a registered reason, as strict expected failures: the
-#: day one passes, the mark has to go with its ledger entry.
-_SMOKE_KNOWN_ISSUES = {
-    "resnet_training": (
-        "KI-TEST-014: the plain network no longer stalls for "
-        "three epochs, which the notebook asserts"
-    ),
-}
+#: day one passes, the mark has to go with its ledger entry. Empty today:
+#: the resnet notebook now asserts the property rather than an exact
+#: trajectory, so its smoke passes without a registered failure.
+_SMOKE_KNOWN_ISSUES = {}
 
 
 def _cell_failures():

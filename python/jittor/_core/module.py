@@ -1,6 +1,8 @@
 """Native Module ownership, parameter roles and module traversal."""
 from typing import List, Tuple
 from collections import OrderedDict
+from collections.abc import MutableMapping
+import weakref
 import itertools
 import numpy as np
 from builtins import int as ori_int
@@ -90,7 +92,7 @@ _VIEW_ROLES = {
 _WALK_CHILDREN = {}
 
 
-def _walk(module, recurse=True):
+def _walk(module, recurse=True, memo=None):
     """``(prefix, module)`` in ``dfs`` pre-order, produced as it goes.
 
     ``dfs`` fills a list through callbacks, so ``next(model.named_parameters())``
@@ -100,8 +102,18 @@ def _walk(module, recurse=True):
     generators. The root's own key never appears in a prefix.
     """
     todo = [("", module, recurse)]
+    ancestors = set()
     while todo:
         prefix, current, descend = todo.pop()
+        if descend is None:
+            ancestors.remove(id(current))
+            continue
+        if id(current) in ancestors:
+            continue
+        if memo is not None:
+            if current in memo:
+                continue
+            memo.add(current)
         children = _WALK_CHILDREN.get(type(current).dfs)
         if children is None:
             yield from _walk_by_dfs(current, prefix, descend)
@@ -109,6 +121,8 @@ def _walk(module, recurse=True):
         yield prefix, current
         if descend:
             dot = prefix + "." if prefix else ""
+            ancestors.add(id(current))
+            todo.append(("", current, None))
             for key, child in reversed(children(current)):
                 todo.append((dot + str(key), child, True))
 
@@ -125,9 +139,89 @@ def _walk_by_dfs(module, prefix, recurse):
     module.dfs([], None, callback, callback_leave, recurse)
     return visited
 
+class _ModuleChildren(MutableMapping):
+    """Live child registration view; attributes remain the sole value owner."""
+    def __init__(self, owner):
+        self._owner = weakref.ref(owner)
+
+    def _module(self):
+        owner = self._owner()
+        if owner is None:
+            raise ReferenceError("module registration view has lost its owner")
+        return owner
+
+    def __iter__(self):
+        attributes = vars(self._module())
+        placeholders = attributes.get("_module_none_names", ())
+        return iter(tuple(name for name, value in attributes.items()
+                          if isinstance(value, Module)
+                          or (value is None and name in placeholders)))
+
+    def __len__(self):
+        return sum(1 for _ in self)
+
+    def __getitem__(self, name):
+        owner = self._module()
+        attributes = vars(owner)
+        if name not in attributes:
+            raise KeyError(name)
+        value = attributes[name]
+        if isinstance(value, Module) or (value is None and name in
+                                        attributes.get("_module_none_names", ())):
+            return value
+        raise KeyError(name)
+
+    def __setitem__(self, name, value):
+        if not isinstance(name, str):
+            raise TypeError("module name must be a string")
+        if not name or "." in name:
+            raise KeyError("module name must be nonempty and cannot contain '.'")
+        if value is not None and not isinstance(value, Module):
+            raise TypeError("registered child must be a Module or None")
+        owner = self._module()
+        if value is None:
+            vars(owner).setdefault("_module_none_names", set()).add(name)
+        setattr(owner, name, value)
+
+    def __delitem__(self, name):
+        self[name]
+        owner = self._module()
+        delattr(owner, name)
+        vars(owner).get("_module_none_names", set()).discard(name)
+
+    def __reduce__(self):
+        # Detached serialization is a snapshot, not a weak view of a temporary
+        # unpickled owner. Module.__setstate__ creates its own live view.
+        return dict, (dict(self),)
+
+    def __copy__(self):
+        return dict(self)
+
+    def __deepcopy__(self, memo):
+        from copy import deepcopy
+        result = {}
+        memo[id(self)] = result
+        for name, value in self.items():
+            result[name] = deepcopy(value, memo)
+        return result
+
+
 class Module:
     def __init__(self, *args, **kw):
-        pass
+        # Some consumers access __dict__ directly after super().__init__.
+        self._modules
+
+    def __getstate__(self):
+        state = vars(self).copy()
+        if "_modules" in state:
+            state["_modules"] = None
+        return state
+
+    def __setstate__(self, state):
+        vars(self).update(state)
+        if "_modules" in state:
+            vars(self).pop("_modules", None)
+            self._modules
     def execute(self, *args, **kw):
         ''' Executes the module computation.
 
@@ -399,8 +493,39 @@ class Module:
             ps = {prefix + k: v for k, v in ps.items()}
         if destination is not None:
             destination.update(ps)
-            return destination
-        return ps
+            ps = destination
+        from .state_dict_hooks import apply_post
+        return apply_post(self, ps, prefix, recurse)
+
+    def _register_state_dict_hook(self, hook):
+        """Register an export post-hook that may return a replacement mapping."""
+        from .state_dict_hooks import register
+        return register(self, "_state_dict_hooks", hook, allow_return=True)
+
+    def register_state_dict_post_hook(self, hook):
+        """Register a child-before-parent export hook; it must return None."""
+        from .state_dict_hooks import register
+        return register(self, "_state_dict_hooks", hook, allow_return=False)
+
+    def _register_load_state_dict_pre_hook(self, hook, with_module=False):
+        """Register a load pre-hook, optionally passing the owning module."""
+        from .state_dict_hooks import register
+        return register(self, "_load_state_dict_pre_hooks", hook,
+                        with_module=with_module)
+
+    def register_load_state_dict_pre_hook(self, hook):
+        """Register a hook that edits copied checkpoint state before loading."""
+        return self._register_load_state_dict_pre_hook(hook, with_module=True)
+
+    @staticmethod
+    def _state_dict_hook_scope(enabled):
+        """Scope hook execution for internal namespace checks and native loads."""
+        from .state_dict_hooks import scope
+        return scope(enabled)
+
+    def _prepare_load_state_dict(self, state, strict=True):
+        from .state_dict_hooks import prepare_load
+        return prepare_load(self, state, strict)
 
     def named_parameters(self, recurse=True) -> List[Tuple[str, Var]]:
         ''' Returns a list of module parameters and their names.
@@ -431,6 +556,9 @@ class Module:
         '''
         Loads the module's parameters from a dictionary.
         '''
+        params, _, _, errors = self._prepare_load_state_dict(params)
+        if errors:
+            raise RuntimeError("\n".join(errors))
         self.load_parameters(params)
 
     def _load_from_state_dict(self, state, prefix="", *args, **kw):
@@ -506,9 +634,9 @@ class Module:
         '''
         return list(self._iter_named_modules())
 
-    def _iter_named_modules(self):
+    def _iter_named_modules(self, memo=None):
         ''' `named_modules` as a generator, for a caller that may stop early. '''
-        for name, module in _walk(self):
+        for name, module in _walk(self, memo=memo):
             if isinstance(module, Module):
                 yield name, module
 
@@ -516,9 +644,17 @@ class Module:
         setattr(self, name ,module)
         return self
 
+    def register_module(self, name, module):
+        """Torch's public spelling for adding or replacing a child module."""
+        return self.add_module(name, module)
+
     @property
     def _modules(self):
-        return { k:v for k,v in self.__dict__.items() if isinstance(v, Module) }
+        attributes = vars(self)
+        view = attributes.get("_modules")
+        if not isinstance(view, _ModuleChildren) or view._owner() is not self:
+            view = attributes["_modules"] = _ModuleChildren(self)
+        return view
 
     @property
     def _parameters(self):
@@ -832,9 +968,12 @@ Returns a handle that removes both halves.
     def children(self) -> List:
         ''' Returns an List of the children modules. '''
         cd = []
+        seen = set()
         def callback(parents, k, v, n):
             if len(parents) == 1 and isinstance(v, Module):
-                cd.append(v)
+                if id(v) not in seen:
+                    cd.append(v)
+                    seen.add(id(v))
                 return False
         self.dfs([], None, callback, None)
         return cd
@@ -1072,6 +1211,11 @@ Returns a handle that removes both halves.
             p.update(p.mpi_broadcast(root))
 
     def __setattr__(self, key, value):
+        attributes = self.__dict__
+        if value is None and isinstance(attributes.get(key), Module):
+            attributes.setdefault("_module_none_names", set()).add(key)
+        elif value is not None:
+            attributes.get("_module_none_names", set()).discard(key)
         if isinstance(value, Var) and not key.startswith("_"):
             attrs = self.__dict__
             buffers = attrs.get("_buffer_names", ())

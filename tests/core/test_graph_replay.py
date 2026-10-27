@@ -37,6 +37,17 @@ class _Net(nn.Module):
         return self.l2(nn.relu(self.l1(x)))
 
 
+class _Buffered(nn.Module):
+    def __init__(self, scale=None, persistent=True):
+        super().__init__()
+        self.register_buffer("scale", jt.ones((8,)) if scale is None else scale,
+                             persistent=persistent)
+
+    def execute(self, x, cache=None):
+        result = x * self.scale
+        return result if cache is None else result * cache.scale
+
+
 class _Random(nn.Module):
     def execute(self, x):
         return x + jt.rand(x.shape)
@@ -146,6 +157,74 @@ class _Strided(nn.Module):
 @_test_preserve_policy(jt, 'keep_graph', 'auto_graph_replay')
 class TestGraphReplay(unittest.TestCase):
 
+    def test_nested_device_capture_uses_eager_without_advancing_policy(self):
+        from unittest.mock import patch
+        from jittor._runtime.graph_replay import auto_replay_for
+        run = jt.graph_replay(self.model)
+        with patch.object(jt.core, "graph_capture_active", return_value=True):
+            np.testing.assert_allclose(run(self.feed[0]).numpy(),
+                                       self._eager(self.feed[0]), rtol=1e-5, atol=1e-5)
+            with jt.flag_scope(auto_graph_replay=1), jt.no_grad():
+                self.assertIsNone(auto_replay_for(self.model, (self.feed[0],), {}))
+        self.assertEqual(run.stats["captured"], 0)
+        self.assertEqual(run.stats["replayed"], 0)
+        self.assertNotIn("_auto_graph_replay", self.model.__dict__)
+
+    def test_explicit_barrier_refuses_nested_captures(self):
+        class Foreign(nn.Module):
+            def execute(self, value):
+                jt.graph_replay_barrier("external callback")
+                return value + 1
+
+        inner = jt.graph_replay(Foreign())
+
+        class Outer(nn.Module):
+            def execute(self, value):
+                return inner(value) * 2
+
+        outer = jt.graph_replay(Outer())
+        for start in (1., 2., 3.):
+            value = jt.array([start])
+            np.testing.assert_array_equal(outer(value).numpy(), [(start + 1) * 2])
+        self.assertIn("external callback", inner.refused)
+        self.assertIn("external callback", outer.refused)
+        self.assertEqual(outer.stats["replayed"], 0)
+
+    def test_capture_barrier_state_is_cleared_after_an_exception(self):
+        class Broken(nn.Module):
+            def execute(self, value):
+                if jt.flags.keep_graph:
+                    jt.graph_replay_barrier("failed external callback")
+                    raise RuntimeError("capture callback failed")
+                return value + 1
+
+        with self.assertRaisesRegex(RuntimeError, "capture callback failed"):
+            jt.graph_replay(Broken())(jt.array([1.]))
+        jt.graph_replay_barrier("outside capture")
+        pure = jt.graph_replay(self.model)
+        pure(self.feed[0])
+        pure(self.feed[1])
+        self.assertIsNone(pure.refused)
+        self.assertGreaterEqual(pure.stats["replayed"], 2)
+
+    def test_another_thread_cannot_mark_this_capture(self):
+        import threading
+
+        class Pure(nn.Module):
+            def execute(self, value):
+                worker = threading.Thread(
+                    target=jt.graph_replay_barrier,
+                    args=("unrelated thread's foreign operation",))
+                worker.start()
+                worker.join()
+                return value * 2
+
+        run = jt.graph_replay(Pure())
+        for start in (1., 2., 3.):
+            np.testing.assert_array_equal(run(jt.array([start])).numpy(), [start * 2])
+        self.assertIsNone(run.refused)
+        self.assertGreaterEqual(run.stats["replayed"], 2)
+
     def setUp(self):
         jt.flags.keep_graph = 0
         self.model = _Net()
@@ -223,6 +302,65 @@ class TestGraphReplay(unittest.TestCase):
         np.testing.assert_allclose(replay(self.feed[0]).numpy(),
                                    self._eager(self.feed[0]), rtol=1e-5, atol=1e-5)
         self.assertGreater(replay.stats["captured"], before)
+
+    def _replace_buffer(self, model, method):
+        holder, ptr = id(model.scale), model.scale.var_ptr
+        replacement = jt.full((8,), 3.0)
+        if method == "load_state_dict":
+            model.load_state_dict({"scale": replacement})
+        else:
+            getattr(model.scale, method)(replacement)
+        model.scale.sync(True, False)
+        self.assertEqual(id(model.scale), holder)
+        self.assertNotEqual(model.scale.var_ptr, ptr)
+
+    def test_a_replaced_registered_buffer_is_noticed(self):
+        # Frozen inference modules can hold all their weights as buffers.
+        # A load, update, or assign then changes no parameter at all.
+        for method in ("load_state_dict", "update", "assign"):
+            with self.subTest(method=method):
+                self.model = _Buffered(persistent=method == "load_state_dict")
+                self.assertEqual(list(self.model.parameters()), [])
+                replay = graph_replay(self.model, self.feed[0])
+                try:
+                    replay(self.feed[1]).numpy()
+                    before = replay.stats["captured"]
+                    self._replace_buffer(self.model, method)
+                    np.testing.assert_allclose(replay(self.feed[2]).numpy(),
+                                               self._eager(self.feed[2]),
+                                               rtol=1e-5, atol=1e-5)
+                    self.assertGreater(replay.stats["captured"], before)
+                finally:
+                    replay.invalidate()
+
+    def test_nested_shared_buffers_guard_each_distinct_holder(self):
+        class _SharedBuffers(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.weight = jt.ones((8,))
+                self.first = _Buffered(self.weight)
+                self.second = _Buffered(self.weight)
+                self.third = _Buffered()
+                # Same Var, separate holder: rebinding this buffer must not
+                # disappear when the shared parameter/buffers are deduplicated.
+                self.third.scale.update(self.weight)
+
+            def execute(self, x):
+                return self.first(x) + self.second(x) + self.third(x)
+
+        self.model = _SharedBuffers()
+        self.assertIsNot(self.model.weight, self.model.third.scale)
+        self.assertEqual(self.model.weight.var_ptr, self.model.third.scale.var_ptr)
+        replay = graph_replay(self.model, self.feed[0])
+        try:
+            self.assertEqual(len(replay._capture.params), 2)
+            before = replay.stats["captured"]
+            self._replace_buffer(self.model.third, "update")
+            np.testing.assert_allclose(replay(self.feed[1]).numpy(),
+                                       self._eager(self.feed[1]), rtol=1e-5, atol=1e-5)
+            self.assertGreater(replay.stats["captured"], before)
+        finally:
+            replay.invalidate()
 
     def test_a_stacked_result_follows_each_input(self):
         # `setitem_gopt` computes each stacked operand straight into its slice
@@ -394,6 +532,61 @@ class TestGraphReplay(unittest.TestCase):
         if state is None:
             return []
         return [e.step for e in state.entries.values() if e.step is not None]
+
+    def test_the_automatic_policy_notices_a_replaced_registered_buffer(self):
+        for method in ("load_state_dict", "update", "assign"):
+            with self.subTest(method=method):
+                model, cache = _Buffered(), _KVCache()
+                with jt.flag_scope(auto_graph_replay=1), jt.no_grad():
+                    for i in range(6):
+                        x = self.feed[i % len(self.feed)]
+                        np.testing.assert_allclose(model(x, cache=cache).numpy(),
+                                                   x.numpy(), rtol=1e-5, atol=1e-5)
+                    steps = self._stateful_steps(model)
+                    self.assertEqual(len(steps), 1)
+                    step = steps[0]
+                    self.assertGreater(step.stats["replayed"], 0)
+                    before = step.stats["captured"]
+                    self._replace_buffer(model, method)
+                    got = model(self.feed[1], cache=cache).numpy()
+                with jt.flag_scope(auto_graph_replay=0), jt.no_grad():
+                    want = model(self.feed[1], cache=cache).numpy()
+                np.testing.assert_allclose(got, want, rtol=1e-5, atol=1e-5)
+                self.assertGreater(step.stats["captured"], before)
+                step.invalidate()
+
+    def test_a_registered_buffer_updated_by_the_step_keeps_replaying(self):
+        class _Accumulating(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.register_buffer("total", jt.zeros((8,)))
+
+            def execute(self, x, cache=None):
+                self.total.update(self.total + x.sum(0))
+                return (x + self.total * cache.scale).tanh()
+
+        def run(model, flag):
+            cache, results = _KVCache(), []
+            with jt.flag_scope(auto_graph_replay=flag), jt.no_grad():
+                for i in range(12):
+                    if i == 7:
+                        # Same-shaped external state is adopted before its
+                        # holder guard runs, as with a decode cache reset.
+                        model.total.assign(jt.full((8,), 0.25))
+                    x = self.feed[i % len(self.feed)]
+                    results.append(model(x, cache=cache).numpy().copy())
+            return np.stack(results), model.total.numpy().copy()
+
+        want, want_total = run(_Accumulating(), 0)
+        model = _Accumulating()
+        got, got_total = run(model, 1)
+        np.testing.assert_allclose(got, want, rtol=1e-5, atol=1e-5)
+        np.testing.assert_allclose(got_total, want_total, rtol=1e-5, atol=1e-5)
+        steps = self._stateful_steps(model)
+        self.assertEqual(len(steps), 1)
+        self.assertEqual(steps[0].stats["captured"], 1)
+        self.assertGreaterEqual(steps[0].stats["replayed"], 8)
+        steps[0].invalidate()
 
     def test_the_automatic_policy_replays_a_call_that_updates_its_cache_in_place(self):
         # Transformers' static-cache decode: the same cache object every step,
@@ -584,6 +777,49 @@ class TestGraphReplay(unittest.TestCase):
                  "no usable CUDA in this build")
 @_test_preserve_policy(jt, 'keep_graph', 'auto_graph_replay')
 class TestGraphReplayCuda(TestGraphReplay):
+
+    def test_outer_cuda_capture_owns_explicit_and_automatic_replay_calls(self):
+        class Pure(nn.Module):
+            def execute(self, value):
+                return value * 2 + 1
+
+        for mode in ("explicit", "step", "automatic"):
+            with self.subTest(mode=mode), jt.no_grad(), jt.flag_scope(auto_graph_replay=1):
+                model = Pure()
+                # A mutable input must be a materialized leaf before recording;
+                # an unbuilt ones factory may be folded into the captured kernel.
+                value = jt.array(np.ones((8,), dtype="float32"))
+                value.sync(True, False)
+                with jt.flag_scope(auto_graph_replay=0):
+                    model(value).sync(True, False)  # Compile before recording.
+                run = (jt.graph_replay(model) if mode == "explicit" else
+                       jt.capture_step(model, record=False) if mode == "step" else model)
+                handle = 0
+                try:
+                    self.assertFalse(jt.core.graph_capture_active())
+                    self.assertTrue(jt.core.graph_capture_begin())
+                    try:
+                        self.assertTrue(jt.core.graph_capture_active())
+                        output = run(value)
+                        jt.sync([output], False, False)
+                    finally:
+                        handle = jt.core.graph_capture_end()
+                    self.assertFalse(jt.core.graph_capture_active())
+                    self.assertTrue(handle)
+                    jt.core.graph_bind_leaves(handle, [value, output])
+                    value._write_inplace(np.full((8,), 3., dtype="float32"))
+                    jt.core.graph_launch(handle)
+                    jt.core.graph_wait()
+                    # Inspect captured bytes without reexecuting output's producer.
+                    observed = jt.empty(output.shape, output.dtype)
+                    observed._copy_into(output, False)
+                    np.testing.assert_array_equal(observed.numpy(), np.full((8,), 7.))
+                    if mode != "automatic":
+                        self.assertEqual(run.stats["captured"], 0)
+                    self.assertNotIn("_auto_graph_replay", model.__dict__)
+                finally:
+                    if handle:
+                        jt.core.graph_release(handle)
 
     def setUp(self):
         self._use_cuda = jt.flags.use_cuda

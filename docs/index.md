@@ -36,6 +36,13 @@ community/index
 contributing
 ```
 
+```{toctree}
+:maxdepth: 1
+:caption: English
+
+index.en
+```
+
 ## 从哪里开始
 
 | 你想做的事 | 去哪里 |

@@ -10,6 +10,8 @@
 #include "ops/unary_op.h"
 #include "ops/layout_propagation.h"
 #include "ops/op_register.h"
+#include "ops/composite/array_op.h"
+#include "runtime/dispatch_context.h"
 
 namespace jittor {
 
@@ -384,6 +386,9 @@ static unordered_set<string> unary_ops = {
         jt.Var([-3.5530574   0.26330233  0.47304606  0.13125724], dtype=float32)
      */
     "log",
+
+    /** Computes log(1+x) with native log1p accuracy for real inputs. */
+    "log1p",
 
     /**
      Returns the exponential of the input ``x``. 
@@ -870,12 +875,91 @@ static unordered_set<string> unary_ops = {
     "conj",
 };
 
+namespace {
+static auto make_array = op_constructor<VarPtr, const void*, NanoVector, NanoString>("array");
+
+// A scalar of an integer or bool dtype, read exactly.
+bool read_integral(NanoString dtype, const void* p, long double& v) {
+    #define JT_READ(T, ns) if (dtype == ns) { v = (long double)*(const T*)p; return true; }
+    JT_READ(bool, ns_bool) JT_READ(int8, ns_int8) JT_READ(int16, ns_int16)
+    JT_READ(int32, ns_int32) JT_READ(int64, ns_int64) JT_READ(uint8, ns_uint8)
+    JT_READ(uint16, ns_uint16) JT_READ(uint32, ns_uint32) JT_READ(uint64, ns_uint64)
+    #undef JT_READ
+    return false;
+}
+
+// `v` as `dtype`, the value a cast kernel would produce, when that value is
+// `v` itself -- or is its truth value, for bool. False otherwise: nothing is
+// folded that the kernel could have rounded or wrapped.
+bool write_exact(NanoString dtype, long double v, void* out) {
+    if (dtype == ns_bool) { *(bool*)out = v != 0; return true; }
+    #define JT_WRITE(T, ns) if (dtype == ns) { \
+        T t = (T)v; if ((long double)t != v) return false; *(T*)out = t; return true; }
+    JT_WRITE(int8, ns_int8) JT_WRITE(int16, ns_int16) JT_WRITE(int32, ns_int32)
+    JT_WRITE(uint8, ns_uint8) JT_WRITE(uint16, ns_uint16) JT_WRITE(uint32, ns_uint32)
+    JT_WRITE(float32, ns_float32) JT_WRITE(float64, ns_float64)
+    #undef JT_WRITE
+    if (dtype == ns_int64) {
+        if (v < -9223372036854775808.0L || v >= 9223372036854775808.0L) return false;
+        *(int64*)out = (int64)v; return true;
+    }
+    if (dtype == ns_uint64) {
+        if (v < 0 || v >= 18446744073709551616.0L) return false;
+        *(uint64*)out = (uint64)v; return true;
+    }
+    return false;
+}
+
+// `cast(x)` of a Python number not yet run: the same constant, built in the
+// target dtype. A cast of a one-element array is a kernel of its own -- its
+// output, unlike an array's, may not fuse into the broadcast that reads it
+// (`count_fuse`) -- and so is the array behind it: an integer `clamp`
+// converts each bound to the tensor's dtype this way, and paid for four
+// launches a call that its maximum/minimum kernel now folds in as constants.
+// Only exact conversions of integer and bool values are folded, and only of a
+// Python number, which never requires a gradient.
+VarPtr fold_number_cast(Var* x, NanoString dtype) {
+    if (x->num != 1 || !x->flag(VarFlags::_python_number) || x->is_finished()) return VarPtr();
+    Op* producer = x->input();
+    if (!producer || !producer->is_op(op_ids::array())) return VarPtr();
+    auto* array = static_cast<ArrayOp*>(producer);
+    if (!array->host_value_known()) return VarPtr();
+    long double value;
+    if (!read_integral(x->dtype(), array->ptr<char>(), value)) return VarPtr();
+    alignas(8) char converted[8];
+    if (!write_exact(dtype, value, converted)) return VarPtr();
+    return make_array(converted, x->shape, dtype);
+}
+} // namespace
+
+VarPtr UnaryOp::forward_before_construct(Var* x, NanoString op) {
+    if (op.is_dtype() && op != x->dtype()) return fold_number_cast(x, op);
+    if (op != x->dtype()) return VarPtr();
+    // Counted as the op the constructor used to build and discard: automatic
+    // flushes and module-boundary cuts are placed by this count, and they have
+    // to fall where they fell. Without it every identity cast moved the later
+    // cuts by one -- a DDPM UNet training step batched differently and ran
+    // 3.6% slower at 32 MiB more peak memory.
+    Op::number_of_created_ops++;
+    return VarPtr(x);
+}
+
 UnaryOp::UnaryOp(Var* x, NanoString op) : x(x) {
     set_flag(OpFlags::_cpu);
     set_flag(OpFlags::_cuda);
     set_type(OpType::element);
     ns = op;
     USER_CHECK(ns.is_unary() | ns.is_dtype());
+    if (ns == ns_log1p) {
+        // Complex log and ACL already support this same-device graph. Keep
+        // that existing behavior where a precise log1p kernel is unavailable;
+        // CPU/CUDA real inputs retain the dedicated, cancellation-safe kernel.
+        const auto backend = query_dispatch_context({x}).backend;
+        if (x->dtype().is_complex() || backend == "acl" || backend == "acl_legacy") {
+            forward(make_unary(make_binary(make_number(1, x), x, ns_add), ns_log));
+            return;
+        }
+    }
     // `bitwise_not` has no meaning for a float, and without this the mistake is
     // only noticed by g++: the generated kernel reaches a raw `~x` and answers
     // "wrong type argument to bit-complement", quoting a line of the template
@@ -908,13 +992,20 @@ UnaryOp::UnaryOp(Var* x, NanoString op) : x(x) {
         NanoVector axes;
         vector<VarPtr> sources;
         if (storage_layout_operands({x}, axes, sources)) {
-            auto result = make_unary(sources[0], ns == ns_cast ? dtype : ns);
-            forward(storage_view_transpose(result, axes));
-            return;
+            if (!storage_layout_records_grad({x})) {
+                auto result = make_unary(sources[0], ns == ns_cast ? dtype : ns);
+                forward(storage_view_transpose(result, axes));
+                return;
+            }
+            StorageLayoutForwardScope scope;
+            layout_value = storage_view_transpose(
+                make_unary(sources[0], ns == ns_cast ? dtype : ns), axes);
+            set_type(OpType::other);
         }
     }
     y = create_output(nullptr, dtype);
     y->set_flag(VarFlags::_is_scalar, x->flag(VarFlags::_is_scalar));
+    y->set_flag(VarFlags::_is_constant, x->flag(VarFlags::_is_constant));
     bool bin = ns.get(NanoString::_no_need_back_in);
     bool bout = ns.get(NanoString::_no_need_back_out);
     if (bin || bout) {
@@ -929,6 +1020,7 @@ UnaryOp::UnaryOp(Var* x, NanoString op) : x(x) {
 }
 
 VarPtr UnaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
+    if (layout_value && v_index >= 1) return nullptr;
     if (x->dtype().is_complex()) {
         // Complex autograd (verified vs real torch 2.12): only the linear / conjugate
         // unaries are implemented. Others return nullptr (loud no-grad, never silent-wrong).
@@ -1000,6 +1092,11 @@ VarPtr UnaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     }
     if (ns == ns_log)
         return make_binary(dout, x, ns_divide);
+    if (ns == ns_log1p) {
+        auto one = make_number(1, x);
+        auto denominator = make_binary(x, one, ns_add);
+        return make_binary(dout, denominator, ns_divide);
+    }
     if (ns == ns_exp)
         return make_binary(dout, y, ns_multiply);
     if (ns == ns_sqrt){
@@ -1050,11 +1147,20 @@ VarPtr UnaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     // dcosh(x) = sinh(x)
     if (ns == ns_cosh)
         return make_binary(dout, make_unary(x, ns_sinh), ns_multiply);
-    // dtanh(x) = 1/cosh^2(x)
+    // Differentiate the saved, rounded output. Recomputing cosh(x) both
+    // changes the low-precision derivative and overflows for saturated FP16
+    // inputs. CPU low-precision kernels use FP32 opmath; CUDA follows the
+    // low-precision scalar arithmetic at each operation. The ordinary graph
+    // through out preserves higher-order derivatives on both backends.
     if (ns == ns_tanh) {
-        auto cosx = make_unary(x, ns_cosh);
-        auto cos2x = make_binary(cosx, cosx, ns_multiply);
-        return make_binary(dout, cos2x, ns_divide);
+        bool low_precision = x->dtype() == ns_float16 || x->dtype() == ns_bfloat16;
+        bool promote = low_precision && execution_backend() == BackendId::Cpu;
+        VarPtr value = promote ? make_unary(out, ns_float32) : VarPtr(out);
+        VarPtr incoming = promote ? make_unary(dout, ns_float32) : VarPtr(dout);
+        auto square = make_binary(value, value, ns_multiply);
+        auto factor = make_binary(make_number(1, value), square, ns_subtract);
+        auto result = make_binary(incoming, factor, ns_multiply);
+        return promote ? make_unary(result, x->dtype()) : result;
     }
 
     // dasinh(x) = 1/sqrt(x^2+1)
@@ -1090,6 +1196,16 @@ VarPtr UnaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     }
     // dsigmoid(x) = sigmoid(x) - sigmoid(x)^2
     if (ns == ns_sigmoid) {
+        if (x->dtype() == ns_float32 || x->dtype() == ns_float64) {
+            // Preserve the rounded-output ATen order in strict kernels:
+            // dout * (1 - out) * out. Subtracting a rounded out*out from
+            // out loses relative precision near positive saturation.
+            auto one = make_number(1, out);
+            auto r = make_binary(one, out, ns_subtract);
+            r = make_binary(dout, r, ns_multiply);
+            return make_binary(r, out, ns_multiply);
+        }
+        // Lower-precision paths are left unchanged by this FP32/FP64 fix.
         auto r = make_binary(out, out, ns_multiply);
         r = make_binary(out, r, ns_subtract);
         return make_binary(dout, r, ns_multiply);
@@ -1116,10 +1232,24 @@ VarPtr UnaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
 }
 
 void UnaryOp::infer_shape() {
+    if (layout_value) {
+        if (_inputs.size() == 1) add_inputs(vector<Var*>{layout_value.ptr});
+        y->set_shape(layout_value->shape);
+        y->storage_strides = layout_value->storage_strides;
+        ASSERT(y->dtype() == layout_value->dtype())
+            << "Layout propagation changed unary output dtype";
+        y->share_with(layout_value);
+        return;
+    }
     y->set_shape(x->shape);
 }
 
+void UnaryOp::run() {
+    ASSERT(layout_value && y->mem_ptr == layout_value->mem_ptr);
+}
+
 void UnaryOp::jit_prepare(JK& jk) {
+    if (layout_value) return;
     bool strided = !x->is_contiguous();
     jk << "«Tx:" << x->dtype()
         << "«Ty:" << y->dtype()

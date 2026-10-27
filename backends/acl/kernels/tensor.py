@@ -189,9 +189,50 @@ def floor_int_acl(x):
     return FloorIntACL()(x)
 
 
+#: The numpy integer scalar types that reach an index, resolved once. Asking
+#: `hasattr(np, "int128")` per call goes through numpy's module `__getattr__`
+#: and raises -- twice an index, 5710 times a Qwen3 decode step -- to learn
+#: something that is fixed for the process.
+_NUMPY_INTS = tuple(
+    getattr(np, name) for name in
+    ("int8", "int16", "int32", "int64", "int128", "int256")
+    if hasattr(np, name))
+
+
+def _static_basic_view_index(index):
+    """Indices the native storage view can resolve without tensor values."""
+    items = index if isinstance(index, tuple) else (index,)
+    for item in items:
+        if item is None or item is Ellipsis or type(item) is int:
+            continue
+        if not isinstance(item, slice):
+            return False
+        if any(part is not None and type(part) is not int
+               for part in (item.start, item.stop, item.step)):
+            return False
+        if item.step is not None and item.step <= 0:
+            return False
+    return True
+
+
 def getitem_acl(x, slices, return_x=None):
     if return_x is not None:
         return None
+    if jt.flags.no_grad and _static_basic_view_index(slices):
+        # GetitemOp already carries positive strides and the storage offset.
+        # The public indexing owner records writeback to the base afterwards.
+        # Inference needs neither a SliceV2 copy nor a generated gradient;
+        # training keeps the existing Concat gradient for last-axis slices.
+        return jt.core.ops.getitem(x, slices)
+    # A tuple of plain slices and ellipses -- `q[..., :64]` in a rotary
+    # embedding, `cache[:, :, :n]` in an attention -- is what the decode
+    # loop indexes with, and none of the shapes below apply to it.
+    if type(slices) is tuple and x.ndim > 1:
+        for item in slices:
+            if item is not Ellipsis and item.__class__ is not slice:
+                break
+        else:
+            return _getitem_without_none(x, slices)
     # ZeRO unflattens one dense 1-D parameter buffer with unit-stride slices.
     # The native getitem represents those slices as storage views, while the
     # ACL SliceV2 lowering materializes every result.  Materializing hundreds
@@ -209,16 +250,14 @@ def getitem_acl(x, slices, return_x=None):
         return GetItemACL()(x, slices, return_x)
     if isinstance(slices, list):
         return GetItemACL()(x, jt.array(slices), return_x)
-    if isinstance(slices, (np.int8, np.int16, np.int32, np.int64)):
-        slices = int(slices)
-    if hasattr(np, "int128") and isinstance(slices, np.int128):
-        slices = int(slices)
-    if hasattr(np, "int256") and isinstance(slices, np.int256):
+    if isinstance(slices, _NUMPY_INTS):
         slices = int(slices)
 
     if slices is not None and (not isinstance(slices, Iterable) or isinstance(slices, str)):
         return _getitem_without_none(x, slices)
-    if isinstance(slices, int) or isinstance(slices, slice):
+    # `x[None]` is a bare None, which is neither Iterable nor a tuple; without
+    # this it reached the TypeError below instead of adding an axis.
+    if slices is None or isinstance(slices, (int, slice)):
         slices = (slices,)
     if not isinstance(slices, tuple):
         raise TypeError("ACL getitem slices must be a tuple, integer, slice, or tensor")
@@ -267,7 +306,8 @@ def _roll_acl(x, shifts, dims=None):
     if not (
         isinstance(x, jt.Var)
         and _jittor_dtype_name(x.dtype)
-        in ("bfloat16", "float16", "float32", "int8", "uint8", "int32", "uint32", "bool")
+        in ("bfloat16", "float16", "float32", "int8", "uint8",
+            "int32", "int64", "uint32", "bool")
     ):
         return None
     if dims is None:
@@ -331,4 +371,3 @@ def _split_acl(x, split_size, dim=0):
     if sum(split_sizes) != int(x.shape[axis]):
         return None
     return SplitWithSizeACL()(x, split_sizes, axis)
-

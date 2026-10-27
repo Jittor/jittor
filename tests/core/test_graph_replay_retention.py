@@ -17,7 +17,9 @@ automatic policy does that only up to ``auto_graph_replay_retain_bytes``.
 
 from _helpers.runtime_policy import preserve_policy as _test_preserve_policy
 from _helpers import capability as _test_capability
+import gc
 import unittest
+import weakref
 
 import numpy as np
 
@@ -100,6 +102,112 @@ class TestReplayRetention(unittest.TestCase):
         jt.sync_all(True)
         jt.gc()
         return answers, _held_bytes() - base
+
+    def test_changing_the_budget_releases_and_recaptures_an_existing_graph(self):
+        model = _Small()
+        feeds = [self.x + step / 100 for step in range(16)]
+        for feed in feeds:
+            feed.sync()
+        with jt.no_grad(), jt.flag_scope(auto_graph_replay=0):
+            expected = [model(feed).numpy().copy() for feed in feeds]
+        with jt.no_grad():
+            for index, feed in enumerate(feeds[:8]):
+                np.testing.assert_allclose(model(feed).numpy(), expected[index],
+                                           atol=1e-6, rtol=1e-5)
+            old = model.__dict__["_auto_graph_replay"].replay
+            if jt.flags.use_cuda:
+                self.assertTrue(old._cuda_graph, old._graph_refused)
+            with jt.flag_scope(auto_graph_replay_retain_bytes=1):
+                for index in range(8, 12):
+                    np.testing.assert_allclose(model(feeds[index]).numpy(), expected[index],
+                                               atol=1e-6, rtol=1e-5)
+                lowered = model.__dict__["_auto_graph_replay"].replay
+                self.assertIsNot(lowered, old)
+                self.assertIsNone(old._capture)
+                self.assertEqual(old._cuda_graph, 0)
+                self.assertEqual(lowered._max_retained_bytes, 1)
+                self.assertEqual(lowered._cuda_graph, 0)
+                self.assertIn("recording would keep", lowered._graph_refused)
+            for index in range(12, 16):
+                np.testing.assert_allclose(model(feeds[index]).numpy(), expected[index],
+                                           atol=1e-6, rtol=1e-5)
+            restored = model.__dict__["_auto_graph_replay"].replay
+            self.assertIsNot(restored, lowered)
+            self.assertEqual(restored._max_retained_bytes, 16 << 20)
+            self.assertIsNone(lowered._capture)
+
+    def test_changing_the_budget_recaptures_state_without_repeating_updates(self):
+        class Cache:
+            def __init__(self):
+                self.value = jt.zeros((8, 8))
+
+        class Stateful(nn.Module):
+            def execute(self, x, cache=None):
+                cache.value.assign((cache.value + x).tanh())
+                return cache.value + 1
+
+        model, cache = Stateful(), Cache()
+        feeds = [jt.array(np.full((8, 8), step / 100, dtype=np.float32))
+                 for step in range(16)]
+        for feed in feeds + [cache.value]:
+            feed.sync()
+        expected = np.zeros((8, 8), dtype=np.float32)
+
+        def call(index):
+            nonlocal expected
+            expected = np.tanh(expected + index / 100)
+            np.testing.assert_allclose(model(feeds[index], cache=cache).numpy(),
+                                       expected + 1, atol=1e-6, rtol=1e-5)
+
+        def step():
+            entries = model.__dict__["_auto_graph_replay"].entries.values()
+            return next(entry.step for entry in entries if entry.step is not None)
+
+        with jt.no_grad():
+            for index in range(8):
+                call(index)
+            old = step()
+            with jt.flag_scope(auto_graph_replay_retain_bytes=1):
+                for index in range(8, 12):
+                    call(index)
+                lowered = step()
+                self.assertIsNot(lowered, old)
+                self.assertIsNone(old._capture)
+                self.assertEqual(lowered._max_retained_bytes, 1)
+                self.assertEqual(lowered._cuda_graph, 0)
+            for index in range(12, 16):
+                call(index)
+            self.assertEqual(step()._max_retained_bytes, 16 << 20)
+            self.assertIsNone(lowered._capture)
+
+    def test_no_grad_capture_does_not_replace_a_differentiable_call(self):
+        model = nn.Linear(8, 8)
+        with jt.no_grad():
+            for _ in range(8):
+                model(self.x).sync()
+        replay = model.__dict__["_auto_graph_replay"].replay
+        before = dict(replay.stats)
+        output = model(self.x)
+        self.assertTrue(output.requires_grad)
+        weight_grad, bias_grad = jt.grad(output.sum(), [model.weight, model.bias])
+        np.testing.assert_allclose(weight_grad.numpy(),
+                                   np.ones((8, 8), dtype=np.float32) @ self.x.numpy(),
+                                   atol=1e-6, rtol=1e-5)
+        np.testing.assert_allclose(bias_grad.numpy(), np.full(8, 8, dtype=np.float32))
+        self.assertEqual(replay.stats, before)
+
+    def test_captured_graph_dies_with_its_module(self):
+        model = _Small()
+        with jt.no_grad():
+            for _ in range(8):
+                model(self.x).sync()
+        model_ref = weakref.ref(model)
+        replay_ref = weakref.ref(model.__dict__["_auto_graph_replay"].replay)
+        del model
+        gc.collect()
+        jt.gc()
+        self.assertIsNone(model_ref())
+        self.assertIsNone(replay_ref())
 
     def test_a_large_graph_replays_without_keeping_its_intermediates(self):
         model = _Wide()

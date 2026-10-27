@@ -1,5 +1,22 @@
 import jittor as jt
-from ._code import acl_code
+from ._code import acl_code, acl_emit, acl_program
+
+
+_INDEX_COPY_PROGRAMS = {}
+
+
+class IndexCopyACL:
+    """Out-of-place single-axis assignment for the no-grad setitem path."""
+
+    def __call__(self, input, dim, index, source):
+        dim = int(dim)
+        program = _INDEX_COPY_PROGRAMS.get(dim)
+        if program is None:
+            program = acl_program("IndexCopy", 3, 1, attributes={"dim": dim})
+            _INDEX_COPY_PROGRAMS[dim] = program
+        return acl_emit(
+            program, [input, index, source], [input.dtype], [input.shape],
+        )[0]
 
 
 class GatherACL(jt.Function):

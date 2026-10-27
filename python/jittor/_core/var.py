@@ -12,7 +12,7 @@ from builtins import bool as ori_bool, complex as ori_complex, float as ori_floa
 import numpy as np
 import jittor_core as core
 from jittor_core import NanoString, NanoVector, Var, ops
-from jittor_core import _fast_permute, _fast_transpose, _fast_unsqueeze
+from jittor_core import _fast_permute, _fast_transpose, _fast_unsqueeze, _fast_view
 from .flags import flag_scope, flags as _runtime_flags
 from .._runtime.acl_clamp import dispatch_acl_clamp
 from .._runtime.backend_libraries import get_library as _get_library
@@ -100,6 +100,8 @@ class amp_flags:
     fails if they drift.
     """
 
+    #: disable every automatic mixed-precision preference in a scoped opmath path
+    disabled = 0
     #: force float32 for ops whose inputs are all non-scalar floats
     prefer32 = 1
     #: force float16 (bfloat16 if an input is bfloat16) for the same
@@ -114,6 +116,8 @@ class amp_flags:
     #: a float16 sum/mean does NOT use a float32 intermediate accumulator
     #: (read directly as ``amp_reg & 32`` in src/ops/reduce_op.cc)
     reduce16_no_fp32_acc = 32
+    #: force bfloat16 even when every input is float32
+    prefer_bfloat16 = 64
 
 def _amp_array_preference(ret):
     """Apply the array-like AMP preference to a freshly produced Var.
@@ -138,6 +142,8 @@ def _amp_array_preference(ret):
         return ret
     if amp_reg & amp_flags.prefer32:
         return ret if _jittor_dtype_name(ret.dtype) == "float32" else ret.float32()
+    if amp_reg & amp_flags.prefer_bfloat16:
+        return ret if _jittor_dtype_name(ret.dtype) == "bfloat16" else ret.bfloat16()
     if amp_reg & amp_flags.prefer16:
         return ret if _jittor_dtype_name(ret.dtype) == "float16" else ret.float16()
     return ret
@@ -289,6 +295,10 @@ Var.device = property(_device)
 
 def float_auto(x):
     import jittor as jt
+    if jt.flags.amp_reg & amp_flags.prefer32:
+        return x.float32()
+    if jt.flags.amp_reg & amp_flags.prefer_bfloat16:
+        return x.bfloat16()
     if jt.flags.amp_reg & amp_flags.prefer16:
         return x.float16()
     return x.float32()
@@ -368,6 +378,14 @@ def _constant_scalar(value, dtype):
 def _creation_shape(fn, shape, dtype):
     '''(shape, dtype) from the ``*shape`` arguments of ones/zeros/empty, which
     accept ``(2, 3)``, ``((2, 3),)`` and a trailing dtype.'''
+    for dim in shape:
+        if dim.__class__ is not ori_int:     # this module's `int` is int32
+            break
+    else:
+        # `ones(2, 3)`: nothing below applies to plain ints but the dtype check.
+        if dtype.__class__ is str and dtype not in _KNOWN_DTYPE_STRINGS:
+            _check_dtype_string(fn, dtype)
+        return shape, dtype
     # is_dtype accepts any str, so a lone string would become the dtype of a
     # 0-d result instead of being reported as a bad shape.
     if len(shape) == 1 and isinstance(shape[0], str):
@@ -418,7 +436,12 @@ def ones(*shape, dtype="float32"):
     for dim in shape:
         if dim < 0:
             raise RuntimeError(f"Trying to create tensor with negative dimension {dim}: {shape}")
-    return _constant_scalar(1, dtype).broadcast(shape)
+    # A factory result is a tensor, not the wrapped number it was built from:
+    # without `_as_tensor` the rank-zero constant's `_is_scalar` survives the
+    # broadcast and `jt.ones(4) * 0.1` promotes like the Python `1`.
+    # Placement still follows the operand's device because
+    # `_is_constant` carries through the broadcast.
+    return _constant_scalar(1, dtype).broadcast(shape)._as_tensor()
 
 @contextmanager
 def placement_scope_like(x):
@@ -528,7 +551,8 @@ def zeros(*shape, dtype="float32"):
     for dim in shape:
         if dim < 0:
             raise RuntimeError(f"Trying to create tensor with negative dimension {dim}: {shape}")
-    return _constant_scalar(0, dtype).broadcast(shape)
+    # See `ones`: the result is a tensor, not a wrapped number.
+    return _constant_scalar(0, dtype).broadcast(shape)._as_tensor()
 
 def new_zeros(x, size):
     with device_scope_like(x):
@@ -563,7 +587,8 @@ def full(shape,val,dtype="float32"):
     for dim in shape:
         if dim < 0:
             raise RuntimeError(f"Trying to create tensor with negative dimension {dim}: {shape}")
-    return _constant_scalar(val, dtype).broadcast(shape)
+    # See `ones`: the result is a tensor, not a wrapped number.
+    return _constant_scalar(val, dtype).broadcast(shape)._as_tensor()
 
 def new_full(x, size, val):
     with device_scope_like(x):
@@ -717,6 +742,15 @@ _pyint = (0).__class__
 
 
 def view(x, *shape):
+    # A contiguous plain Var to a shape of exact ints is built natively
+    # (`_fast_view`, src/bindings/pyjt/py_compat_fast.h): the reshape below and
+    # its storage-view record, without these frames. It answers None for
+    # anything else -- a strided Var, a coerced or empty shape -- which the
+    # code below handles.
+    if x.__class__ is Var:
+        out = _fast_view(x, shape)
+        if out is not None:
+            return out
     # `type(...) is tuple or list` before the abstract check: `Sequence` is an
     # ABC, and an `isinstance` against an ABC goes through `_abc_instancecheck`
     # -- an order of magnitude dearer than an identity test, on a path every
@@ -1035,10 +1069,28 @@ def squeeze(x, dim=None):
 
 Var.squeeze = squeeze
 
+_CLAMP_INT_DTYPES = frozenset(("int8", "int16", "int32", "int64",
+                               "uint8", "uint16", "uint32", "uint64"))
+
 def _clamp_cpu(x, min_v=None, max_v=None):
     import jittor as jt
     if x.numel() == 0:
         return x
+    # An integer tensor between two Python ints in order -- index clamping,
+    # the common call -- needs none of the promotion below. The bounds still
+    # go through `jt.unary` at x's dtype exactly as `prepare_bound` sends
+    # them, and for an integer there is no NaN to carry, so the two selects
+    # are maximum and minimum: the same values and dtype from two ops fewer
+    # per bound. Anything else -- a bool or float tensor, a Var or numpy
+    # bound, reversed bounds -- takes the general path.
+    if type(min_v) is ori_int and type(max_v) is ori_int and min_v <= max_v \
+            and _jittor_dtype_name(x.dtype) in _CLAMP_INT_DTYPES:
+        min_v = jt.unary(min_v, x.dtype).stop_grad()
+        max_v = jt.unary(max_v, x.dtype).stop_grad()
+        result = dispatch_acl_clamp(x, min_v, max_v)
+        if result is not None:
+            return result
+        return jt.minimum(jt.maximum(x, min_v), max_v)
     # Torch allows tensor bounds and reversed scalar bounds. Applying the lower
     # then upper bound also gives Torch's all-max result when min_v > max_v.
 
@@ -1093,6 +1145,15 @@ def _clamp_cpu(x, min_v=None, max_v=None):
 _register_kernel("clamp", "*", _clamp_cpu)
 
 def clamp(x, min_v=None, max_v=None):
+    # `_clamp_cpu`'s graph built natively, when nothing but `_clamp_cpu` could
+    # be dispatched to. The native path declines (NotImplemented) for any
+    # input it does not render exactly -- a Var or numpy bound, a bool, an
+    # empty Var -- and a replaced `_try_dispatch` has no shortcut to skip.
+    native = getattr(_try_dispatch, "_native_clamp", None)
+    if native is not None and _try_dispatch._sole_default("clamp", _clamp_cpu):
+        out = native(x, min_v, max_v)
+        if out is not NotImplemented:
+            return out
     return _try_dispatch("clamp", x, min_v, max_v)
 
 Var.clamp = clamp
@@ -1514,7 +1575,7 @@ def randn_like(x, dtype=None) -> Var:
     with device_scope_like(x):
         return jt.random(x.shape, dtype, "normal")
 
-def randint(low, high=None, shape=(1,), dtype="int32") -> Var:
+def randint(low, high=None, shape=(1,), dtype="int32", generator=None) -> Var:
     ''' samples random integers from a uniform distribution on the interval [low, high).
 
     :param low: lowest intergers to be drawn from the distribution, defaults to 0.
@@ -1545,7 +1606,7 @@ def randint(low, high=None, shape=(1,), dtype="int32") -> Var:
     for dim in shape:
         if dim < 0:
             raise RuntimeError(f"Trying to create tensor with negative dimension {dim}: {shape}")
-    v = (jt.random(shape) * (high - low) + low).clamp(low, high-0.5)
+    v = (jt.random(shape, generator=generator) * (high - low) + low).clamp(low, high-0.5)
     v = jt.floor_int(v)
     return v.astype(_jittor_dtype_name(dtype))
 
@@ -1575,7 +1636,7 @@ def randint_like(x, low, high=None) -> Var:
     with device_scope_like(x):
         return randint(low, high, x.shape, x.dtype)
 
-def normal(mean, std, size=None, dtype="float32") -> Var:
+def normal(mean, std, size=None, dtype="float32", generator=None) -> Var:
     ''' samples random values from a normal distribution.
 
     :param mean: means of the normal distributions.
@@ -1612,7 +1673,7 @@ def normal(mean, std, size=None, dtype="float32") -> Var:
         else:
             if isinstance(mean, Var): size = mean.shape
             if isinstance(std, Var): size = std.shape
-    return jt.init.gauss(size, dtype, mean, std)
+    return jt.init.gauss(size, dtype, mean, std, generator=generator)
 
 def attrs(var):
     return {

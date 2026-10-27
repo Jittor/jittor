@@ -1,13 +1,45 @@
 """Stable Tensor gradient APIs using the shared native Var/Op graph."""
 from importlib import import_module
 from ...context import get_install_context
-from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from jittor._runtime import step_capture as _step_capture
 _owner = import_module(__package__)
 _NativeVar = _owner.jt.Var
 
 def _register_leaf(v):
     _owner._torch_register_leaf(v)
+
+
+def _initial_leaf_gradient(parameter, gradient):
+    """Apply AccumulateGrad's dense layout contract without changing AD edges."""
+    sizes, strides = tuple(parameter.shape), parameter.stride()
+    extent = 1
+    dense = True
+    for axis in sorted(range(len(sizes)), key=lambda i: strides[i]):
+        if sizes[axis] > 1:
+            dense = dense and strides[axis] == extent
+            extent *= sizes[axis]
+    if not dense:
+        return gradient.contiguous()
+    grad_sizes, grad_strides = tuple(gradient.shape), gradient.stride()
+    # .data may have reduced the visible rank after this gradient's contract
+    # was recorded. Check only existing stride axes, never index beyond the
+    # current layout; the native graph separately validates recorded shape.
+    obeys = all(
+        (size == 1 and grad_strides[i] != 0)
+        or (size != 1 and (i >= len(strides) or grad_strides[i] == strides[i]))
+        for i, size in enumerate(grad_sizes)
+    )
+    if obeys:
+        return gradient
+    # Existing as_strided implements dense permutations as real native views.
+    # Avoid empty_strided's documented contiguous-only allocation restriction.
+    target = get_install_context(_owner.jt).target_namespace
+    result = target.empty(sizes, dtype=gradient.dtype, device=parameter.device)
+    with _owner.jt.flag_scope(transpose_storage_view=1):
+        if not parameter.is_contiguous():
+            result = result.reshape(-1).as_strided(sizes, strides)
+        result.copy_(gradient)
+    return result
 
 
 def _rg_get(self):
@@ -54,6 +86,39 @@ def requires_grad_(self, v=True):
     if v:
         _register_leaf(self)
     return self
+
+
+def _register_post_accumulate_grad_hook(self, hook):
+    if not self.requires_grad:
+        raise RuntimeError("cannot register a hook on a tensor that does not require gradient")
+    if not self.is_backward_leaf:
+        raise RuntimeError("post accumulate grad hooks cannot be registered on non-leaf tensors")
+    if not callable(hook):
+        raise TypeError("post accumulate grad hook must be callable")
+    from jittor._core.hooks import _RemovableHandle
+    hooks = self.__dict__.setdefault("_torch_post_accumulate_hooks", {})
+    key = self.__dict__.get("_torch_post_accumulate_next_id", 0)
+    self.__dict__["_torch_post_accumulate_next_id"] = key + 1
+    hooks[key] = hook
+    _register_leaf(self)
+    return _RemovableHandle(lambda: hooks.pop(key, None))
+
+
+def _run_post_accumulate_hooks(leaves, grad_by_id):
+    # Differentiate once with the native engine, then notify observers of the
+    # accumulated storage. Optimizer slots are already published, so a hook's
+    # p.grad mutation/clearing writes through the existing gradient owner.
+    from ...gradient_task import _participation_scope
+    with _owner.jt.no_grad(), _participation_scope(leaves, grad_by_id):
+        for parameter in leaves:
+            if id(parameter) not in grad_by_id:
+                continue
+            hooks = parameter.__dict__.get("_torch_post_accumulate_hooks")
+            if not hooks:
+                continue
+            for key, hook in tuple(hooks.items()):
+                if key in hooks and hook(parameter) is not None:
+                    raise RuntimeError("Tensor post accumulate grad hook must return None")
 
 
 def _fill_opt_grads(opt, grad_by_id, filled_param_ids=None):
@@ -116,6 +181,12 @@ def _optimizer_maybe_has_fsdp_params(opt):
 
 
 def _backward(self, gradient=None, retain_graph=None, create_graph=False, **kw):
+    from ...autograd import _backward_callbacks
+    with _backward_callbacks():
+        return _backward_impl(self, gradient, retain_graph, create_graph, **kw)
+
+
+def _backward_impl(self, gradient=None, retain_graph=None, create_graph=False, **kw):
     # torch's signature is (gradient=None, retain_graph=None,
     # create_graph=False, inputs=None) and retain_graph defaults to
     # create_graph. The default here was False, not None, so the line below
@@ -123,6 +194,8 @@ def _backward(self, gradient=None, retain_graph=None, create_graph=False, **kw):
     # graph anyway and the second-order backward it was asked for then
     # failed. In the common loss.backward() case both are false, so the
     # graph is still freed.
+    if self.requires_grad and not self._has_gradient_edge():
+        raise RuntimeError("Tensor does not require grad and does not have a grad_fn")
     retain_graph = bool(create_graph) if retain_graph is None else bool(retain_graph)
     # torch's `gradient` is the vector of the vector-Jacobian product:
     # y.backward(v) computes d(sum(y*v))/dx. It used to be accepted and
@@ -236,7 +309,9 @@ def _backward(self, gradient=None, retain_graph=None, create_graph=False, **kw):
     # torch leaves a disconnected target at grad=None. Keep jt.grad's
     # historical zero-materialization untouched and use the compatibility
     # core entry point that preserves missing gradients explicitly.
-    grads = _owner.jt.core.grad_optional(self, leaves, retain_graph)
+    from ...autograd import _create_graph_scope
+    with _create_graph_scope(create_graph):
+        grads = _owner.jt.core.grad_optional(self, leaves, retain_graph)
     grad_by_id = {}
     for p, gr in zip(leaves, grads):
         if gr is None:
@@ -251,6 +326,8 @@ def _backward(self, gradient=None, retain_graph=None, create_graph=False, **kw):
         # NaN on the next forward (test_torch_amp_training_loop.py).
         if gr.dtype != p.dtype:
             gr = gr.cast(p.dtype)
+        if not create_graph:
+            gr = gr.detach()
         grad_by_id[id(p)] = gr
         if id(p) not in opt_ids:
             # non-optimizer leaf (retain_grad screenspace etc.): accumulate
@@ -265,7 +342,7 @@ def _backward(self, gradient=None, retain_graph=None, create_graph=False, **kw):
             # is a memory regression against torch, not a rounding detail.
             prev = getattr(p, "_torch_grad", None)
             if prev is None:
-                object.__setattr__(p, "_torch_grad", gr)
+                object.__setattr__(p, "_torch_grad", _initial_leaf_gradient(p, gr))
             else:
                 prev.add_(gr)
     # fill each optimizer's pg["grads"] so its step(loss=None) consumes them
@@ -287,7 +364,10 @@ def _backward(self, gradient=None, retain_graph=None, create_graph=False, **kw):
     # step() consumes together. Still before backward() returns, which is
     # what torch's autograd hooks guarantee: clipping and norm logging in
     # between must see the synchronised gradient.
+    _run_post_accumulate_hooks(leaves, grad_by_id)
     _owner._ddp_all_reduce_grads(leaves)
+    _step_capture.publish_gradients(
+        parameter for parameter in leaves if id(parameter) in grad_by_id)
     # Independent retain_grad lasts as long as its weakly indexed holder.
     # Preserve bounded cleanup only for legacy non-weak-referenceable Vars.
     if retained:

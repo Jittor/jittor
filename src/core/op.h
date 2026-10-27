@@ -8,6 +8,7 @@
 #include <atomic>
 #include "core/common.h"
 #include "core/node.h"
+#include "core/var.h"  // VarPtr held inline by outputs_holder
 #include "codegen/jit_key.h"
 #include "utils/jit_cache_map.h"
 #include "ops/composite/op_dispatch.h"
@@ -43,6 +44,9 @@ struct HostExecutionScope {
 struct Op : Node {
     Float32PrecisionPolicy float32_precision;
     uint64 launch_origin = 0;
+    // Functional construction provenance; temporary fused wrappers never
+    // replace the ownership of their original member producers.
+    uint64 rematerialization_owner = 0;
     // Dense-only kernels receive explicit contiguous graph inputs at the
     // generated construction boundary, before storing their Var members.
     static constexpr bool accepts_storage_strides = false;
@@ -50,7 +54,9 @@ struct Op : Node {
     static constexpr bool accepts_cpu_scalar_operands = false;
     virtual bool is_storage_view() const { return false; }
     static constexpr uint32 backend_mask = OpBackendAny;
-    vector<VarPtr> outputs_holder;
+    // The outputs until the op maker takes them over. Inline: almost every op
+    // has exactly one, and a heap vector here was an allocation per operator.
+    SmallVector<VarPtr, 1> outputs_holder;
     // Atomic: the parallel compiler constructs and destroys ops on its
     // worker threads, and these are read from the main thread.
     static std::atomic<int64> number_of_lived_ops;
@@ -59,6 +65,15 @@ struct Op : Node {
     static std::atomic<int64> number_of_created_ops;
     mutable OpId registered_op_id = 0;
     mutable shared_ptr<const OpDef> registered_definition;
+    // The last `implementation()` answer and the backend it was for, packed in
+    // one word (the entry's address, whose low three bits are zero, or-ed with
+    // the backend id) so that the planner and the async worker -- both of
+    // which ask, and may ask for different backends -- can never read an
+    // address with another call's backend. Asked for an op's key, kernel and
+    // codegen, and for every sub-op of a fused op, each time it runs; the
+    // entry lives in the bound definition, which this op holds, and a
+    // definition's table is complete before it is published.
+    mutable std::atomic<uintptr_t> implementation_cache{0};
     
     inline Caster<Var*, Node::input_t> inputs() { CHECK_EXIST; return &_inputs; }
     inline Caster<Var*, Node::output_t> outputs() { CHECK_EXIST; return &_outputs; }
@@ -75,16 +90,27 @@ struct Op : Node {
     void bind_definition(bool required = true) const;
     const OpDef& definition() const;
     BackendId execution_backend() const;
+    // `execution_backend()` for a caller that already knows this op's
+    // `requested_backend()` -- every op of a fused segment shares it.
+    BackendId execution_backend_for(BackendId requested) const;
     virtual BackendId requested_backend() const;
     virtual TensorPlacement graph_placement() const;
     bool executes_on_accelerator() const { return execution_backend() != BackendId::Cpu; }
     const OpImplementation& implementation() const;
+    // The implementation for `backend`, which must be `execution_backend()`.
+    const OpImplementation& implementation_on(BackendId backend) const;
     const Codegen& codegen() const;
     void prepare_fragment(JK& key);
+    // `prepare_fragment` with `execution_backend()` already in hand.
+    void prepare_fragment_on(JK& key, BackendId backend);
     void optimize_generated_source(string& source);
     void prepare_codegen_key(JK& key);
     void prepare_execution(JK& key);
     void execute_prepared(JK& key);
+    // The two above for a caller that has `execution_backend()` in hand: the
+    // executor asks it once per operator and hands it down.
+    void prepare_execution_on(JK& key, BackendId backend);
+    void execute_prepared_on(JK& key, BackendId backend);
     void run_registered();
     inline bool is_op(OpId id) const { return type_id() == id; }
     
@@ -134,6 +160,9 @@ std::ostream& operator<<(std::ostream& os, const Op* var);
 // built before the update but not upstream of it -- a forward output the
 // gradients do not depend on -- could otherwise run after it and read the
 // new values.
+// The nearest unmaterialized saved values downstream of a storage write.
+// Independent allocations stop traversal; kept graphs retain their own owner.
+vector<Var*> saved_storage_readers(const vector<Var*>& written, Op* writer=nullptr);
 void order_after_readers(Op* op, const vector<Var*>& written);
 
 // The two process-wide kernel caches for non-fused ops: the compiled entry

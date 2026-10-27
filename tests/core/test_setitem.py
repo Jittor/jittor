@@ -461,5 +461,12 @@ class TestSetitem(unittest.TestCase):
         a[1][2][0][0] += 1
         assert a[1,2,0,0] == 2
 
+    def test_scalar_mask_with_var_value_compiles(self):
+        # A 0-D mask with a 0-D Var value reaches SetitemOp with IDIM=0; the
+        # generated stride declaration used to spell `istride-1` there.
+        value = jt.array(1.0)
+        value[jt.array(True)] = jt.array(2.0)
+        self.assertEqual(float(value.item()), 2.0)
+
 if __name__ == "__main__":
     unittest.main()

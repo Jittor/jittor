@@ -1,279 +1,196 @@
 ---
 name: flash-attention-torch-compat
-description: 在 jittor 的 `import torch` shim 上运行官方 flash-attention（含其在 SDPA 上的接线与 stub 假象），并说明在原生 PyTorch 上运行/对拍 flash-attn 需要什么、环境里常缺什么。用于验证 flash-attn 兼容层、判断当前注意力到底走没走 fused kernel、以及规划两解释器对拍时使用。
+description: 验证 FlashAttention 公开 API 在 Jittor Torch 前端上的真实融合执行、完整梯度与三步训练，用隔离的真实 PyTorch CUDA 对拍并检查源码、产物和平台证据。
 ---
 
-# flash-attention ⇄ jittor torch shim
+# FlashAttention 公开 API 验证
 
-## 用途
+先按 [`downstream-library-adaptation`](../downstream-library-adaptation/SKILL.md)
+分流。FlashAttention 的公开 facade、扩展桥接和类型边界属于 compat；随机状态和
+计算属于 native owner，不为这些问题新建 adapter。
 
-回答：flash-attn 在 shim 上怎么跑、怎么**证明当前注意力真的走了官方 fused 扩展而不是
-静默 composite**、在原生 torch 上跑/对拍需要什么、断点该修哪一层。
+## 源码与覆盖边界
 
-**不覆盖**：通用 SDPA 语义（见
-[`jittor-torch-diff`](../jittor-torch-diff/SKILL.md)）；vLLM 服务化；上游 flash-attention
-的训练脚本。也不覆盖 Diffusers/Transformers 侧的注意力性能（那是各自 skill 的事）。
+训练探针固定官方 FlashAttention **2.7.4.post1**，提交
+`5231d95fe13733fb534c01895f7ea88c6a6c7793`，来自
+`https://github.com/Dao-AILab/flash-attention.git`。官方参考实现和 Jittor facade/原生
+扩展桥接是两个不同实现，分别核验实际安装来源；不能把 facade 冒充官方 Python 包。
+两侧扩展引用固定官方 CUDA 源码；上游或 ABI 改变后重新构建和验证。
 
-## 两侧环境
+用 [registry_inventory.py](../torch-compat-repo-runbook/scripts/registry_inventory.py)
+重新枚举 `flash-attention` 的公开 `attention_api` 分母。该固定提交导出七项，
+训练探针接受其中六个 dense/packed/varlen 入口；`flash_attn_with_kvcache` 不在本探针
+范围内，不能从六项训练结果推断其覆盖。head dimension、dtype、causal、输入扰动是
+另列的场景轴，不用它们改变 API 分母。
 
-| | shim 侧 | 原生 torch 侧 |
-|---|---|---|
-| 解释器 | `<jittor-python>`（部署了 shim） | `<real-torch-python>`（独立真 PyTorch） |
-| 激活 | 本地、不入库的 env 脚本（设下面的 opt-in 变量与隔离缓存） | 同左，但不部署 shim |
-| `import flash_attn` 解析到 | venv 内**部署 stub** `<jittor-python> 的 site-packages/flash_attn/__init__.py`（实测） | oracle base 前缀 site-packages 里的**真上游** `flash_attn/__init__.py`，`__version__="2.8.1"`（实测） |
+[flash_training_probe.py](scripts/flash_training_probe.py) 实际调用公开函数，使用三个
+FP32 Q/K/V 参数和一个可微输入；输入转换为真实 fp16/bf16，执行三次真实
+`torch.optim.SGD` 更新。每步保留输出、loss、全部参数/输入梯度及更新后参数，共
+30 个数组，并检查 CUDA、dtype、有限值、参数更新及候选端零 fallback。
+默认 head dimension 32，也支持 64；可分别选择 causal 和输入扰动。输入来自固定
+NumPy seed，属于 tiny 组件训练，不是完整模型、生产尺寸或速度验收。
 
-shim 侧 env 脚本为 fused 路径设的 opt-in（实测读出）：
+该探针只执行真实 CUDA。上游 CUDA 扩展不能提供 CPU 对拍结果；CPU 核心和 facade
+类型契约单独验证，不能当作上游 FlashAttention CPU 数值证据。CUDA 候选端跑通也
+不是独立 oracle 一致性结论；需要下面的比较器验收实际两侧产物。
 
-```text
-JITTOR_FLASH_ATTN_JITTOR_SRC=$JITTOR_LAB_ROOT/flash-attention
-JITTOR_FLASH_ATTN_HEAD_DIMS=64,128
-JITTOR_FLASH_ATTN_DTYPES=bf16,fp16
-# JITTOR_FLASH_ATTN_JITTOR_REQUIRED 未设（形状/dtype 不覆盖时退回 composite，不 abort）
-# JITTOR_FLASH_ATTN_CAST_FLOAT32 未设（避免把 float32 注意力偷偷改走 bf16）
-```
+## 隔离环境
 
-源码 checkout：`$JITTOR_LAB_ROOT/flash-attention`，HEAD `5231d95fe13733fb534c01895f7ea88c6a6c7793`，
-remote `https://github.com/Dao-AILab/flash-attention.git`（实测）。
+- 候选端加载当前源码的 Jittor/Torch shim。部署的 `flash_attn` facade 必须逐 Python
+  文件匹配 `compat/shim/resources/stubs/flash_attn/`；探针会核验，避免测试旧副本。
+- 参考端是独立 binary PyTorch，不能导入 Jittor 或带 shim 标记。其 Python
+  `flash_attn` 必须来自固定上游源码构建的真实安装 wheel，`flash_attn_2_cuda` 必须是该
+  wheel 中的真实二进制扩展。完整 RECORD、安装 payload、源码与构建记录逐项核对。
+  本地源码构建 wheel 不称为 PyPI 发布的官方二进制。复用既有扩展时明确原构建身份，
+  不称为本轮重新编译。按该解释器的 Torch/CUDA ABI 构建扩展；先检查依赖 pin，
+  不让安装过程替换 oracle。
+- oracle 环境清除 Jittor 的 source/shim 路径和库路径污染，配置自己的 `CUDA_HOME`
+  与 `CXX`，让工具记录可核查的编译器版本。候选端记录实际 Jittor compiler 配置。
+- 候选 C++ 扩展需要真实 pybind11 头文件；在私有候选解释器安装构建依赖（本轮实际
+  `pybind11==2.13.6`），不要修改共享环境或拿参考端包目录补假安装元数据。
+  来源证明核实实际 `cpp_extension.cfg()` 的 Python/CUDA/pybind include 字节、真实
+  pybind distribution 的 METADATA/RECORD 和安装文件；缺头文件时立即报实际加载错误。
+- 每侧、每 device、单测与 benchmark 分别使用独立缓存；原始日志、NPZ、JSON、
+  编译缓存和工具链放在 `$JITTOR_LAB_ROOT` 外置状态目录。第一次编译串行。
+  编译无输出时检查子进程与锁；观察超时不代表进程终止。
 
-- **oracle 断言**（任何数字可信前必须过）：`assert not hasattr(torch,
-  '_torch_compat_install_context')`。实测原生侧 `False`（通过），shim 侧 `True`。
-- **实测环境的原生侧跑不了真 flash-attn**：`import flash_attn` 在 oracle venv 里失败——
-  `ImportError: .../flash_attn_2_cuda.cpython-312-x86_64-linux-gnu.so:
-  undefined symbol: _ZN3c104cuda29c10_cuda_check_implementationEiPKcS2_ib`，即该扩展按旧
-  ABI 编译，与 oracle 的 `torch 2.13.0+cu129` 不匹配。要用原生侧必须先按此 torch 重编/重装
-  匹配的 flash-attn；在那之前**任何"shim 对真 flash-attn"的对拍都不成立**。
-- 缓存隔离与 copy-deploy 规则同其它 skill：`JITTOR_HOME`/`XDG_CACHE_HOME` 隔离；改仓库
-  `python/jittor/` 或 `compat/` 不生效，必须拷进 deployed site-packages。
-
-## 在 shim 上跑
-
-```bash
-# shim 侧环境已激活，当前目录为仓库根
-
-# A. 维护门禁：`nox -s optional` 先在 math fallback 下跑 deployed adapter 契约
-#    （含 compat/tests/torch/test_flash_attn_compat.py），再用 native-required 阶段
-#    要求真扩展加载、不许回退 math（phase 之间互相不掩盖，见 noxfile.py）。
-export nvcc_path="$(command -v nvcc)"
-export JITTOR_FLASH_ATTN_JITTOR_SRC="$JITTOR_LAB_ROOT/flash-attention"
-python -m nox -s optional
-
-# B. 只读探针：当前 SDPA 到底走了什么（见"坑与假绿"）
-<jittor-python> - <<'PY'
-import torch, jittor as jt
-import torch.nn.functional as F
-from jittor.compat import diagnostics
-jt.flags.use_cuda = 1
-q = k = v = jt.randn((2, 512, 4, 64)).float16()
-with torch.no_grad():
-    F.scaled_dot_product_attention(q, k, v)
-    jt.sync_all(True)
-print(diagnostics.sdpa_flash_stats(jt))   # {"hits":..,"misses":{..},"casts":{..},"backend":..}
-PY
-```
-
-`compat/tests/torch/test_flash_attn_compat.py` 是本仓库对 flash-attn 兼容路径的**自身契约**
-（读它、按它验收）：dense/packed/varlen 前反向对独立 numpy SDPA 参考在 `atol=2e-5` 内一致、
-var-len 不跨段泄漏、`dropout_p=1.0` 返回全零；`TestPackedEntryDeviceGuard` 断言生成的每个
-packed 入口都绑定输入 tensor 的 device（旧 bug 是 `device_guard{0}`，让 TP2 rank 1 撞
-`cudaErrorIllegalAddress`）。
-
-在部署 venv 里直接 `python -m pytest compat/tests/torch/test_flash_attn_compat.py` 会撞上与
-[`diffusers-torch-compat`](../diffusers-torch-compat/SKILL.md) 相同的 `compat` 包 pytest 收集
-问题；所以这里走 `nox -s optional`，不要裸跑 pytest 当门禁。
-
-实测：上面的探针在 `(2,128,4,64)` fp16、CUDA、**训练态**下回报
-`hits=0, misses={'short_training_math': 1}`——路由确实进了
-`_try_flash_scaled_dot_product_attention`，但训练态的 `score_elements` 低于
-`JITTOR_FLASH_ATTN_TRAINING_MIN_SCORES`（默认 `1<<24`）而按设计退回 composite。
-`(2,512,4,64)` fp16 + `no_grad` 的 fused-hit 探针第一次在 150 s 内未出结果（期间有另一 JIT
-进程持锁）；fused hit 后来在 2026-09-19 观测到，见文末。
-
-## 在原生 torch 上跑
+候选端设置 `JITTOR_TORCH_SHIM=1`、源码 `PYTHONPATH`、实际 CUDA、私有 `JITTOR_HOME`
+与 `TMPDIR`，以及：
 
 ```bash
-# 原生侧环境；上游自带测试在 checkout 内（<flash-attention checkout>/tests/test_flash_attn.py 等）
-<real-torch-python> -c "import flash_attn; print(flash_attn.__version__)"
+export JITTOR_FLASH_ATTN_JITTOR_SRC=<pinned-upstream-checkout>
+export JITTOR_FLASH_ATTN_HEAD_DIMS=32,64
+export JITTOR_FLASH_ATTN_DTYPES=fp16,bf16
+export JITTOR_FLASH_ATTN_JITTOR_REQUIRED=1
+export JITTOR_FLASH_ATTN_TRAINING_MIN_SCORES=0
+export JITTOR_FLASH_ATTN_MIN_SCORES=0
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
 ```
 
-**实测这条就失败**（见上，ABI undefined symbol）。要跑通得先在与 oracle 同 ABI 的
-环境里从 `$JITTOR_LAB_ROOT/flash-attention` 源码构建/安装匹配的 flash-attn；在完成前，本
-skill 不声称跑过任何原生 flash-attn 用例。
+两侧均显式选择分配的 `CUDA_VISIBLE_DEVICES`。探针自动进入 `--jittor-root` 对应目录，
+使扩展缓存命名空间与所验证的项目一致。参数默认指向工具所在 checkout；候选端
+运行的 Jittor 必须来自这个源码目录。正式验收要求提交干净；`--allow-dirty` 只供诊断，
+比较器会拒绝这种产物。
 
-## 对拍
+维护的 `nox -s ecosystem_flash_attention` 还要求
+`JITTOR_FLASH_ATTN_SOURCE_PROOF=<external-source-configuration.json>`。该文件只给真实
+产物路径，不填写假造的安装元数据：
 
-- **没有注册的生态 case。** `_ecosystem_cases.py` 的 `CASES`（含合并后的 speed cases）里
-  没有 flash-attn 条目——所以**当前不存在可复用的 flash-attn 两解释器对拍**。要建，按
-  [`downstream-library-adaptation`](../downstream-library-adaptation/SKILL.md) 第 4 节把 case
-  注册进 `CASES`（同权重、同输入、两 interpreter），这是**计划项，尚未做**。
-- **数值**：仓库现在用另一种更弱但真实的外部参考——`test_flash_attn_compat.py` 在**同一个
-  shim 进程内**把 shim 的输出和独立 `numpy.einsum` softmax 参考比（`atol=2e-5`）。它证明了
-  数值正确，但**不是**与真 flash-attn/PyTorch 的对拍，不要混淆这两件事。
-- **速度**：重复、交替采样、报最小值；墙钟永不在 PR 门禁里断言。实测环境没有可用的原生 flash-attn
-  基线，故**无法给出任何对拍速度**。已知的 shim-侧代价引用：
-  `docs/results/2026-09-14-vllm-omni-h3-enablement.md` 与 `agent/manuals/environment.md` 记载的
-  MiniMax-H3 视频 VAE 解码 `(1,32,1797,64)` fp16 上，naming the source 把 decode 从
-  10.13 s 降到 8.30 s；那是该 workload 的结论，不是 flash-attn 通用性能。
-- **Device 规则**：两侧同 device；"CPU" 在 Jittor 侧必须显式关 CUDA，否则 `not_cuda` 会让你
-  误判 fused 路径不可用。
+```json
+{
+  "upstream": "<clean-pinned-official-checkout>",
+  "wheel": "<actual-locally-built-flash-attn-wheel>",
+  "oracle_build": "<original-native-build-manifest.json>",
+  "torch_wheel_proof": "<complete-binary-torch-wheel-proof.json>"
+}
+```
 
-## 断点与分流
+原生构建 manifest 必须包含原先实际成功构建的源码、二进制 SHA256 和固定上游提交。
+Torch wheel proof 包含实际 wheel 路径/哈希、实际安装前缀和完整 payload 哈希。
+该固定协议同时校验已验证的本地 Flash wheel 完整 artifact SHA256；它不是 PyPI 发布的
+Flash 二进制。同步重写 wheel、安装目录和 RECORD 也不能替换该 artifact；其他合法
+构建需要审查 pin 并重新采集来源绑定证据。
+当前固定 native 构建的独立参考 ABI 是 Linux CPython 3.11、官方 binary Torch
+`2.11.0+cu128`；完整 wheel 哈希与 RECORD 在每个进程重新核验。更换 ABI 或 wheel
+需要重新构建并验收，不能只更改配置中的版本字符串。
+这些文件及所有安装字节都由每个实际 tensor 进程重新核验，不能事后补写旧 raw。
+probe 的 `--source-proof` 与 collector 的同名选项使用该配置。候选端另核实真实
+`jittor-torch` carrier 的 METADATA/RECORD、递归 facade 文件、实际生成的 C++/CUDA
+桥接源码和二进制；API 兼容版本不替代 carrier 发行版本。
 
-| 东西 | 分流 | 依据 |
-|---|---|---|
-| 官方扩展的加载/构建/能力校验（`flashattn_jittor`、`load_backend_for`、capability miss） | `jittor.compat.shim.backends.flash_attention` | `compat/shim/backends/flash_attention/{__init__,official_build,official_codegen,adapter,packed}.py` |
-| SDPA 里 fused → composite 的路由与 `sdpa_flash_stats` | `jittor.compat.torch` | `compat/torch/installers/nn/attention.py:_try_flash_scaled_dot_product_attention` |
-| `import flash_attn` 的公开 API facade | 部署 stub（compat 资源），不是 adapter | `compat/shim/resources/stubs/flash_attn/` |
-| `torch.ops.aten._scaled_dot_product_flash_attention` / `_scaled_dot_product_efficient_attention` / `reshape(.default)` | vLLM adapter（注册这几个名字，两个注意力算子被调用时明确拒绝） | `adapters/jittor_adapters/vllm/aten_ops.py` |
-| 其余 aten 名字（`clone`、`copy_`、`view`、`permute`、`mm`、`_scaled_mm` 等）未注册 | jittor 核心/compat（未建通用 aten bridge） | `agent/manuals/known-issues.md` KI-COMPAT-002（Open） |
-| 生成入口的 CUDA device guard | compat（已修，有回归测试） | `test_flash_attn_compat.py::TestPackedEntryDeviceGuard` |
-| 原生 flash-attn 的 ABI 不匹配 | 环境问题，不是 jittor | 实测 undefined symbol |
+维护 session 自动执行全部十二格（六 API × fp16/bf16），每格 base/受控扰动各跑两个
+独立解释器，随后自动复算全部三步数值和共同 scorecard。新记录使用严格的
+`flash-attention-training` protocol，`axes=[]`，保留独立的完整七 API inventory。
+缺真实同规格 CPU 对拍时，独立 CUDA L3 可通过，但共同结论必须为 blocked，CUDA
+覆盖分子为零；不能修改普通 registry 安装证明规则来接纳这种不同实现。
+历史 checkout-only raw 不会因新工具出现而被重新授级。
+平台 NVIDIA 依赖另记实际首选 METADATA、真实已加载库路径/哈希及 CUDA runtime
+版本；RECORD 存在则绑定，不存在则明确记录缺席，不冒称完整 NVIDIA wheel 安装证明。
+这不放宽 Torch/FlashAttention 实现各自完整 RECORD 和 payload 的必需校验。
+session 用已有公开 `jittor.compat.shim.deploy --target` 和 `--check` 在私有持久目录部署
+候选 facade；只把该目录加入候选 Python 路径。它不写入共享解释器或参考端环境。
+部署产生的 FlashAttention METADATA 按仓内 owned compatibility resource 逐字节核验，
+明确标成兼容 API 元数据，不能当作安装了官方 wheel 的证据。
 
-**flash-attn 本身没有 `adapters/` 参与**：它走的是 shim 内置桥接（compat 与部署 stub），按三行判据
-不需要新建外置 adapter；上表的 aten 名字由 vLLM adapter 注册，是 vLLM 的事。
+`JITTOR_FLASH_ATTN_EVIDENCE_DIR` 可给绝对外置输出根；各 case 目录独占创建，已有目录
+显式拒绝，失败保留原始文件。未给定时 nox 在 scratch 之外创建持久输出，并在成功比较
+全部 JSON/NPZ 后运行 collector。临时 pytest 用例仍自动清理临时输出。
 
-## 坑与假绿
+## 执行和比较
 
-1. **`import flash_attn` 成功 ≠ 官方扩展在跑。** venv 里部署的是 Jittor 后端的 stub
-   （`__version__="2.7.4.post1"`，`_jittor_flash_attn_stub=True`，与仓库
-   `compat/shim/resources/stubs/flash_attn/` 内容一致）。它只是 API facade，默认分段落
-   composite，不是 fused kernel。
-2. **`flash_attn.flashattn_jittor_backend()` 返回 `"math"` 不是证据。** 这个字符串来自 stub
-   包，看的是顶层 `flash_attn` 能否找到 `flash_attn_jittor_cuda`，与 SDPA 实际路径是两回事。
-   唯一可信的是 `diagnostics.sdpa_flash_stats(jt)` 的 `hits/misses/backend`。
-3. **没设 `JITTOR_FLASH_ATTN_JITTOR_SRC` 时只有 `no_backend`。** 没有源 checkout 时扩展
-   从不加载，`misses={'no_backend': n}`，composite 静默接管且数值正确——最容易漏。
-   其它 miss 是真实守卫：`mask`、`heads`、`head_dim`（只支持 32/64/96/128/192/256）、`dtype`、
-   `no_training_backend`、`short_square_math`、`short_training_math`。
-4. **fused 分支拒绝任何 `attn_mask`；训练还要 `_flashattn_jittor_training`。** 训练态小形状
-   会按 `JITTOR_FLASH_ATTN_TRAINING_MIN_SCORES` 退回 composite（实测）。
-5. **扩展构建是串行的、且 digest 含 shim 头文件**：不要中途重启，也不要对同一 digest 目录起
-   第二个 builder；改 `c10/cuda/*.h` 之类后必须让 `|shim_hdrs=<sha256>` 进入 digest
-   （`compat/shim/backends/flash_attention/official_build.py`），否则陈旧 `.so` 会被继续
-   使用。官方扩展落盘在
-   `$XDG_CACHE_HOME/jittor/torch-shim/<tag>/torch_extensions/flashattn_jittor/official_flash_attn*`
-   ——实测这些 `.so` 存在。
-6. **不要把 oracle 侧 base 前缀的真 flash-attn 当成可用**：实测环境里它在 `import` 即失败；
-   shim venv 因自身 site-packages 优先而解析到 stub，两个"flash_attn"不是同一个东西。
-
-## 证据
-
-**实测**
-
-- shim 侧 env 脚本的三个 opt-in 变量取值，以及 `JITTOR_FLASH_ATTN_JITTOR_REQUIRED` /
-  `_CAST_FLOAT32` 未设。
-- shim 侧 `flash_attn` origin 在 `<jittor-python>` 的 site-packages，`__version__="2.7.4.post1"`、
-  `_jittor_flash_attn_stub=True`；与仓库 stub 一致。
-- oracle 侧 `flash_attn` origin 在 oracle base 前缀的 site-packages，`__version__="2.8.1"`，`import`
-  因 `undefined symbol` 失败。
-- 官方扩展构建产物 `.so` 存在于 XDG cache 的 `torch_extensions/flashattn_jittor/...`。
-- SDPA 探针在 CUDA 训练态回报 `hits=0, misses={'short_training_math': 1}`。
-- flash-attention checkout HEAD 与 remote。
-
-**未验证 / 仅计划**
-
-- 第一次探针**未观测到 fused hit**（150 s 超时）；2026-09-19 补测命中，见下节。
-- **没有**任何 shim-vs-原生 flash-attn 的两解释器数值或速度对拍；flash-attn 也不在
-  `_ecosystem_cases.py: CASES` 中。原生侧 flash-attn 在实测环境不可用。
-- 未跑 `nox -s optional`、未跑上游 checkout 的 `tests/test_flash_attn.py`。
-
-## 实测（2026-09-19）
-
-本次把上一节的"未观测到 fused hit"补上了：在单卡 CUDA 上首次观测到
-**fused hit**，`backend="flashattn_jittor_official:$JITTOR_LAB_ROOT/flash-attention"`（backend 字符串带的是源码 checkout 路径）。
-
-### 1) shim 解析到哪个 flash_attn —— 是 stub
-
-`import flash_attn` 在 shim 侧解析到 venv 内**部署 stub**：
+以下两条命令分别在各自配置好的独立环境中运行。替换 `float16`、API、head dimension，
+并增加 `--causal` 或 `--perturbation 0.125` 来执行其他场景；两侧参数必须一致。
 
 ```bash
-SP="$(<jittor-python> -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
-head -42 "$SP/flash_attn/__init__.py"
-# -> __version__ = "2.7.4.post1"
-# -> _jittor_flash_attn_stub = True
+<oracle-python> agent/skills/flash-attention-torch-compat/scripts/flash_training_probe.py \
+  --runtime torch --upstream <pinned-upstream-checkout> \
+  --api flash_attn_func --dtype float16 --head-dim 32 \
+  --output <external-state>/reference.npz
+<jittor-python> agent/skills/flash-attention-torch-compat/scripts/flash_training_probe.py \
+  --runtime jittor --upstream <pinned-upstream-checkout> \
+  --api flash_attn_func --dtype float16 --head-dim 32 \
+  --output <external-state>/candidate.npz
+python agent/skills/flash-attention-torch-compat/scripts/compare_training.py \
+  <external-state>/reference.npz <external-state>/candidate.npz \
+  --output <external-state>/comparison.json
 ```
 
-运行态确认（同一脚本同时打印）：`flash_attn.__file__` 是上述 `site-packages/flash_attn/__init__.py`，
-`__version__=2.7.4.post1`，`_jittor_flash_attn_stub=True` → **确为 stub**，不是官方扩展本身。
-但 stub 会把 `flash_attn_func` 等入口转发给 `jittor.compat.shim.backends.flash_attention`
-加载的**官方扩展**（见下，`backend()` 返回 `flashattn_jittor_official:...`，
-`is_flashattn_jittor_available()=True`，`last_error=None`）。
+比较器检查版本、源提交、执行脚本 hash、输入/精度协议、完整 30 数组、产物 hash、
+有限值和每次参数更新。参数本身很大时也不能隐藏缺失的小更新。误差按各 tensor 的
+参考最大绝对值归一化，floor 为 `1e-8`；fp16 前向 `3e-3`、梯度/更新 `6e-3`，
+bf16 均 `3e-2`。这些判据在首次两侧比较前固定，禁止看结果后放宽。初始参数要求
+精确相同。修改精度协议后重新采集；不拿不同协议的产物直接比较。
 
-### 2) 原生侧真扩展不可导入
+平台记录包含真实 GPU/driver 清单、可见卡、CPU、Torch/CUDA、编译器、NVIDIA wheel、
+源码与二进制 hash、关键 flag。`use_acl` 是 native `use_cuda` 的遗留别名，单独读它
+不能证明运行了 NPU；实际 CUDA dispatch 和张量设备另行断言。工具不输出 L4 速度结论。
+通过比较器后，再按[统一 scorecard 协议](../../../docs/development/downstream-scorecards.md)
+登记实测范围与覆盖分母；工具存在、单侧完成或合成验证器测试都不算库的已验分子。
+
+## 回归与证据
+
+- `compat/tests/torch/test_flash_attn_frontend.py` 检查公开入口保留 Torch Tensor 类型，
+  以及原生调用者和异常后的作用域恢复。
+- `compat/tests/torch/test_torch_compat_attention.py` 包含 native-required CUDA 融合、
+  Q/K/V 反向和 dropout 种子重放；`nox -s optional` 的 math/native 阶段各自验收。
+- `tests/tools/test_flash_training_comparison.py` 用合成产物验证缺失的小梯度/更新、
+  不同协议、脏源码、损坏产物和禁用断言不能假绿。
+- [CUDA 扩展 Philox 与融合训练回归](../../../docs/results/2026-10-15-cuda-extension-philox.md)
+  是已提交的 native CUDA 证据，明确没有将其等同于独立 PyTorch FlashAttention 对拍。
+- [公开训练 API 独立对拍](../../../docs/results/2026-10-15-flash-attention-training-oracles.md)
+  记录干净 `71c5be74e` 的六入口、48 条真实 CUDA 三步轨迹，保留原阈值、完整梯度和
+  单独更新检查；另记录 `06ed62ad7` 的 12 个正式 CUDA 门禁场景与固定 causality 输入扰动。
+
+## 维护门禁与统一 scorecard
+
+`compat/tests/torch/test_ecosystem_flash_attention.py` 对六入口和两种低精度运行 12 个
+场景。每个场景固定 head dimension 32、noncausal，分别在两个独立解释器执行原输入
+与单独扰动 noise 的三步训练；其他输入哈希必须不变，两侧输出都必须实际改变。
+要求 `JITTOR_TEST_DEVICES=cuda`、`JITTOR_REQUIRE_FLASH_ATTENTION=1`、
+`JITTOR_REQUIRE_REAL_TORCH=1`，并配置前述上游路径及 `REAL_TORCH_PYTHON`、
+`JITTOR_FLASH_ATTN_ORACLE_EXTENSION`、`JITTOR_FLASH_ATTN_ORACLE_CUDA_HOME`。
+`JITTOR_FLASH_ATTN_EVIDENCE_DIR` 指定全新仓外目录；已有场景目录会被拒绝。
+维护入口为 `nox -s ecosystem_flash_attention`；session 缺 CUDA、独立 oracle 或扩展路径
+时会在执行前失败，并隔离候选与参考端环境。
+
+[collect_scorecard.py](scripts/collect_scorecard.py) 重验原始比较、输入扰动、完整产物、
+真实平台和上游源文件身份，再调用共享 `audit_coverage.scorecard`，不另写准入判据：
 
 ```bash
-# 原生侧环境
-<real-torch-python> - <<'PY'
-import importlib.util
-print(importlib.util.find_spec("flash_attn").origin)
-try:
-    import flash_attn; print("OK", flash_attn.__version__)
-except Exception as e:
-    print("FAIL", type(e).__name__); print(str(e)[:300])
-PY
+<jittor-python> agent/skills/flash-attention-torch-compat/scripts/collect_scorecard.py \
+  --root "$PWD" --upstream <pinned-upstream-checkout> \
+  --evidence-dir <immutable-gate-evidence> --output-dir <fresh-scorecard-directory> \
+  --baseline <full-measured-jittor-sha>
 ```
 
-结果：origin 在 oracle base 前缀的 `site-packages/flash_attn/__init__.py`，
-`import` **失败**：`ImportError: .../flash_attn_2_cuda.cpython-312-x86_64-linux-gnu.so:
-undefined symbol: _ZN3c104cuda29c10_cuda_check_implementationEiPKcS2_ib`（旧 ABI 对不上 oracle
-的 `torch 2.13.0+cu129`）。结论同原文：**实测环境不存在可用的原生 flash-attn 基线**，因此没有
-任何 shim-vs-原生 的速度/数值对拍，也不得声称 fused 加速比。
+`06ed62ad7` 的 12 条 CUDA L3 记录通过统一 schema，实际执行六项公开 API。
+上游 FlashAttention 没有对应 CPU 执行，因此共享广度仍为 **0 / 7**；这与六项 CUDA
+API 的实测执行范围分开报告，不放宽 CPU 阶梯要求。KV cache、速度及其他形状仍未验。
 
-### 3) `F.scaled_dot_product_attention` 实际派发到哪
+[独立安装来源与完整训练复验](../../../docs/results/2026-10-16-flash-attention-installed-source-training.md)
+记录 `c33627faa` 的原十二格 / 48 worker，以及独立 host artifact guard
+`be4827ef3`；两份 source/manifest 分开，CPU 缺失仍 blocked、CUDA 广度不增加。
 
-```bash
-# 仓库根，shim 侧环境已激活
-export JITTOR_HOME="$JITTOR_LAB_ROOT/_state/verify-diff/<run>/jittor-home"
-export CUDA_VISIBLE_DEVICES=<gpu>
-<jittor-python> - <<'PY'
-import json, jittor as jt, torch
-import torch.nn.functional as F
-from jittor.compat import diagnostics
-jt.flags.use_cuda = 1
-R = {"hits": 0, "misses": {}, "casts": {}, "backend": None}
-def reset(): diagnostics.set_sdpa_flash_stats(dict(R, misses={}, casts={}), jt)
-# A 推理 fp16，(2,512,4,64)
-reset(); q = jt.randn((2,512,4,64)).float16()
-with torch.no_grad():
-    F.scaled_dot_product_attention(q, q, q); jt.sync_all(True)
-print("A", json.dumps(diagnostics.sdpa_flash_stats(jt)))
-# B 训练态小形状 fp16
-reset(); q2 = jt.randn((2,128,4,64)).float16()
-F.scaled_dot_product_attention(q2, q2, q2); jt.sync_all(True)
-print("B", json.dumps(diagnostics.sdpa_flash_stats(jt)))
-# C 推理 fp32
-reset(); q3 = jt.randn((2,512,4,64)).float32()
-with torch.no_grad():
-    F.scaled_dot_product_attention(q3, q3, q3); jt.sync_all(True)
-print("C", json.dumps(diagnostics.sdpa_flash_stats(jt)))
-PY
-```
-
-实测（计数器即 `compat/diagnostics.py` 的 `sdpa_flash_stats`，由
-`compat/torch/installers/nn/attention.py:_try_flash_scaled_dot_product_attention` 记录）：
-
-| 探针 | shape / dtype / 模式 | hits | misses | backend |
-|---|---|---|---|---|
-| A 推理 | (2,512,4,64) fp16, `no_grad` | **1** | `{}` | `flashattn_jittor_official:<flash-attention checkout>` |
-| B 训练 | (2,128,4,64) fp16 | 0 | `{"short_training_math":1}` | null |
-| C 推理 | (2,512,4,64) fp32 | 0 | `{"dtype":1}` | null |
-
-- **compat 层 flash 路径被命中了**（A）：`JITTOR_FLASH_ATTN_JITTOR_SRC` 生效，官方扩展
-  加载成功，`_try_flash_scaled_dot_product_attention` 返回 fused 结果。这直接推翻了原文
-  "尚未观测到 fused hit"，也使坑 1（"import 成功 ≠ 扩展在跑"）有了正面对照：本例中
-  扩展确实在跑，证据是 `backend` 字段不是 `None`。
-- B 属设计守卫：训练态 `score_elements` 低于 `JITTOR_FLASH_ATTN_TRAINING_MIN_SCORES`
-  （`1<<24`），按设计退回 composite。
-- C 属设计守卫：`JITTOR_FLASH_ATTN_CAST_FLOAT32` 未设，fp32 直接 `dtype` miss，不被偷偷
-  转 bf16/fp16。
-- 首次运行触发了官方扩展**从源码重建**（digest 变了），耗时约 30 min（多个 nvcc 进程并发，
-  同机另有其它 agent 编译），期间无输出，看起来像卡住；构建完成后探针秒级返回。这印证坑 5：
-  扩展构建是串行且 digest 相关，不要中途重启。
-
-### 四个轴 / 未运行
-
-- flash-attention **没有注册的生态 case**（`_ecosystem_cases.py` / `_ecosystem_speed.py`
-  里都没有），因此本次**没有** precision / peak-memory / speed 四轴表；`verify_repo.py
-  --repo flash-attention` 找不到 case，属预期。
-- 本次**未测量**任何 fused-kernel 加速比（原生基线不可用，见 2），不声称速度结论。
-- **未运行**：`nox -s optional`、`test_flash_attn_compat.py`（部署 venv 的 `compat` 包
-  pytest 收集问题，见原文）、上游 checkout 的 `tests/test_flash_attn.py`、任何两解释器对拍。
+Owner：native CUDA RNG/计算与 Torch 兼容维护者。上游版本、扩展 ABI、公开 facade、
+Tensor 类型/梯度边界、RNG owner 或验证协议变化时重新检查证据。

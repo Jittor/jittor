@@ -61,7 +61,9 @@
 
 对外文档只有 `docs/` 一棵树，面向使用者与贡献者：入口、教程、API 参考、使用指南、
 Torch 兼容、机制说明（`docs/notes/`）、性能、发布说明、社区，以及贡献者文档
-（`docs/development/`）。**源语言是中文。**
+（`docs/development/`）。**源语言是中文。** 每篇文档成对维护：`X.md` 是中文默认页，
+`X.en.md` 是同目录英文页；根目录的 `README.md` 与 `README.en.md` 同样成对。索引页
+（`index.md` / `index.en.md`）各自只链接本语言的页面。
 
 **仓库不保存任务看板、计划、交接或分工这类过程文档。** 任务、状态与交接记在 GitHub issue
 与 PR 中，验证证据写进 PR 描述；等待硬件验收的事项见
@@ -76,8 +78,10 @@ wheel 内容基线迁入 `tools/release/baselines/`。
 
 `agent/` 只包含 `manuals/` 与 `skills/`；仓库检查脚本一律在 `tools/`。工作流入口是
 [`agent/manuals/agent-index.md`](https://github.com/Jittor/jittor/blob/master/agent/manuals/agent-index.md)。社区项目列表在
-`docs/community/`；ASV 源配置在 `benchmarks/asv.conf.json`——nox 从该配置推导绝对的输入
+`docs/community/`；ASV 源配置在 `benchmarks/asv/asv.conf.json`——nox 从该配置推导绝对的输入
 与外部输出路径，不把基准运行状态搬进工作树。
+所有基准统一归属 [`benchmarks/`](https://github.com/Jittor/jittor/blob/2.0-refactor/benchmarks/README.md)：`asv/` 保存性能回归套件，
+`torch_compat/` 保存真实模型对照，`acl/` 保存昇腾测量、数值交叉验证与 CANN 探针。
 
 ## 工具与包资源归属
 
@@ -105,7 +109,7 @@ entry point。
 
 ```text
 .
-├── pyproject.toml  README.md  LICENSE.txt  AGENTS.md  CONTRIBUTING.md  noxfile.py
+├── pyproject.toml  README.md  README.en.md  LICENSE.txt  AGENTS.md  CONTRIBUTING.md  noxfile.py
 ├── src/                      # C++ 核心，与 Python 包并列，不是包数据
 │   ├── core/                 # node var op graph grad executor fused_op
 │   ├── type/  mem/  codegen/  ops/  runtime/  bindings/  third_party/  tests/

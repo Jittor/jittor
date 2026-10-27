@@ -5,6 +5,7 @@ changing the compatibility semantics.
 """
 from ...fidelity import Fidelity, register_api_bindings
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
+from jittor._core.dtypes import var_dtype_name as _var_dtype_name
 
 import builtins as _builtins
 
@@ -14,9 +15,10 @@ from jittor import nn
 
 import numbers
 
-import numpy as np
+import numpy as _numpy
 
 from ...functional import _diff, _torch_norm_impl, _torch_where_select, _trapz
+from ...generator import Generator
 
 from ...grad import _GradDecoratorCtx
 
@@ -41,6 +43,9 @@ from .... import fsdp_hooks as _fsdp_hooks
 from .... import collectives as _collectives
 
 from .reductions import corrcoef
+
+# Shared shape helpers import this module's NumPy binding.
+np = _numpy
 
 register_fidelity(
     "torch.corrcoef", corrcoef, Fidelity.APPROXIMATE,
@@ -105,7 +110,13 @@ _LOGADDEXP_FIDELITY_DETAIL = (
     "layout, dtype, and out keyword semantics are not implemented"
 )
 
-from .arithmetic import nan_to_num
+from .arithmetic import foreach_zero_, nan_to_num
+
+register_fidelity(
+    "torch._foreach_zero_", foreach_zero_, Fidelity.APPROXIMATE,
+    "Existing Tensor.zero_ clears contiguous detached or no-grad lists in place, including physical storage views. "
+    "Differentiable non-leaf, materialized logical views and non-contiguous lists are explicitly unsupported; fused batching is not provided.",
+)
 
 from .arithmetic import logaddexp
 
@@ -562,6 +573,9 @@ def tensor(data, dtype=None, device=None, requires_grad=False, **kw):
         elif _device_is_cuda(device):
             v = _make_cuda_resident(v, force=True, device=device)
             v = _move_to_cuda_index(v, g.device(device))
+        # torch.tensor always creates a leaf, including dtype conversion from
+        # the float32 host representation needed for bfloat16 construction.
+        v = v.detach()
         v.requires_grad_(bool(requires_grad))
         if requires_grad:
             v.requires_grad_(True)
@@ -627,87 +641,6 @@ def frombuffer(buffer, *, dtype, count=-1, offset=0, requires_grad=False):
         return v
 
 
-def _numpy_stream(seed):
-    """One independent numpy stream per generator, seeded deterministically."""
-    import numpy as _np
-    return _np.random.default_rng(int(seed))
-
-
-class Generator:
-    """A torch.Generator with its OWN stream.
-
-    A generator's draws must depend only on its seed and its own history -- in
-    torch, two `manual_seed(1234)` generators yield the same numbers, and a draw
-    does not care how much work the process has already queued. This used to keep
-    only a seed and leave drawing to jittor's *global* generator, so the value a
-    caller got depended on the process's prior ops. That is fatal for TP: the H3
-    pipeline makes the initial latents with a seeded CPU generator, the DiT shards
-    *weights* (so every rank must denoise the same latent), and two ranks whose
-    global streams have advanced differently drew different latents -- each
-    RowParallelLinear then added halves computed from different inputs, and the
-    TP2 picture came out as noise while TP1 (one rank) was fine.
-    """
-
-    def __init__(self, device=None):
-        self.device = globals()["device"](device or "cpu")
-        self._seed = 0
-        self._rng = None
-    def manual_seed(self, s):
-        self._seed = int(s)
-        # one stream per generator: deterministic, and independent of whatever
-        # the process's global generator has already produced.
-        self._rng = _numpy_stream(self._seed)
-        return self
-    def _stream(self):
-        """The generator's stream, built on first use so an unseeded one has one too."""
-        if self._rng is None:
-            self._rng = _numpy_stream(self._seed)
-        return self._rng
-    def get_state(self):
-        """The stream's position, not just its seed.
-
-        `set_state(get_state())` has to replay the *next* draws, which a seed
-        alone cannot do once the generator has been used -- and this used to
-        return `[seed]` against a `set_state` that did nothing at all, so a
-        caller checkpointing a generator got a value that looked like state and
-        restored nothing. Accelerate's `save_state`/`load_state` and
-        `RandomSampler`'s replay both rest on this round-tripping.
-
-        The bytes are the numpy bit generator's own state, pickled. They are
-        this shim's format, not torch's CUDA/CPU state bytes, and are not
-        interchangeable with them -- the same rule torch states for its own
-        opaque state: save it, hand it back, do not parse it.
-        """
-        import numpy as _np
-        import pickle as _pickle
-        blob = _pickle.dumps(self._stream().bit_generator.state, protocol=4)
-        return jt.array(_np.frombuffer(blob, dtype=_np.uint8).copy())
-    def set_state(self, s):
-        import numpy as _np
-        import pickle as _pickle
-        raw = s
-        if hasattr(raw, "numpy"):
-            raw = raw.numpy()
-        raw = _np.asarray(raw)
-        # The old format was a single int64 seed. Restoring one of those can
-        # only reseed, which is what it always meant.
-        if raw.dtype != _np.uint8:
-            self.manual_seed(int(raw.reshape(-1)[0]))
-            return self
-        try:
-            state = _pickle.loads(raw.tobytes())
-        except EXPECTED as exc:
-            swallowed("torch/installers/tensor Generator.set_state", exc)
-            raise ValueError("generator state is not one this generator produced")
-        stream = self._stream()
-        stream.bit_generator.state = state
-        return self
-    def seed(self):
-        return self._seed
-    def initial_seed(self):
-        return self._seed
-
-
 class layout:  # torch.layout placeholder
     pass
 
@@ -752,7 +685,36 @@ def cat(tensors, dim=0, out=None, axis=None):
     if out is None and axis is None and type(dim) is int:
         fast = (_FAST_CAT or _bind_fast_cat())(tensors, dim)
         if fast is not NotImplemented:
-            return fast
+            return _cat_grad_result(fast, tensors)
+        # The native fast path above declines whenever a backend registers its
+        # own concat kernel (ACL does), so on ACL every `cat` falls through the
+        # whole frontend below -- the `__torch_function__` scan, the `None`
+        # filter, the scalar-ndim squeeze and the uint8-restore setcomp -- only
+        # to reach that kernel. For plain Vars of one signed dtype and one rank,
+        # none empty, every one of those steps is a no-op and `jittor.concat`
+        # (which dispatches to the kernel) is exactly what the frontend ends up
+        # calling. A Qwen3 decode step pays this ~100 us a hundred times.
+        seq = tensors if tensors.__class__ in (list, tuple) else None
+        if seq is not None and len(seq) >= 2 and isinstance(seq[0], jt.Var):
+            ndim0 = seq[0].ndim
+            name0 = _var_dtype_name(seq[0])
+            # 'u' is every unsigned name (`uint8`..); jittor's concat downcasts a
+            # uniform uint8 input, which the slow path restores and this does not.
+            uniform = ndim0 >= 1 and name0[0] != 'u'
+            if uniform:
+                for t in seq:
+                    if (not isinstance(t, jt.Var) or t.ndim != ndim0
+                            or t.numel() <= 0 or _var_dtype_name(t) != name0):
+                        uniform = False
+                        break
+            if uniform:
+                result = _jt_concat(list(seq), dim)
+                # torch.cat is dtype-preserving; autocast does not cast it.
+                # jittor.concat may compute in the reduced dtype under AMP,
+                # so restore the common input dtype the frontend promises.
+                if _jittor_dtype_name(result.dtype) != name0:
+                    result = result.cast(name0)
+                return _cat_grad_result(result, seq)
     g = compatibility_owner(jt)
     if axis is not None: dim = axis      # torch accepts axis= (mmrotate PSC head)
     # Honor the __torch_function__ protocol: tensordict (and other tensor-likes)
@@ -816,7 +778,15 @@ def cat(tensors, dim=0, out=None, axis=None):
         d = in_dtypes.pop()
         if _jittor_dtype_name(out_var.dtype) != d:
             out_var = out_var.cast(d)
-    return _cat_result(out_var, out)
+    return _cat_result(_cat_grad_result(out_var, fixed), out)
+
+
+def _cat_grad_result(value, tensors):
+    # Native concat may mark a new destination trainable for frozen inputs.
+    if isinstance(value, jt.Var) and (jt.flags.no_grad or not any(
+            isinstance(t, jt.Var) and t.requires_grad for t in tensors)):
+        return value.detach()
+    return value
 
 
 def _cat_result(value, out):
@@ -876,6 +846,14 @@ class BoolTensor(metaclass=_TypedTensorMeta):
     _jdtype = 'bool'
 
 
+class ComplexFloatTensor(metaclass=_TypedTensorMeta):
+    _jdtype = 'complex64'
+
+
+class ComplexDoubleTensor(metaclass=_TypedTensorMeta):
+    _jdtype = 'complex128'
+
+
 _TYPED_TENSOR_CLASSES = {
     'FloatTensor': FloatTensor,
     'DoubleTensor': DoubleTensor,
@@ -887,6 +865,8 @@ _TYPED_TENSOR_CLASSES = {
     'CharTensor': CharTensor,
     'ByteTensor': ByteTensor,
     'BoolTensor': BoolTensor,
+    'ComplexFloatTensor': ComplexFloatTensor,
+    'ComplexDoubleTensor': ComplexDoubleTensor,
 }
 
 def _check_condition(condition, message, exception):
@@ -966,6 +946,8 @@ def install(ctx):
 
     g.tensor = tensor
 
+    g._foreach_zero_ = foreach_zero_
+
     g.as_tensor = as_tensor
 
     g.from_numpy = from_numpy
@@ -979,9 +961,7 @@ def install(ctx):
 
     g.corrcoef = corrcoef
 
-    # torch.Generator (RNG handle) -- jittor uses a global seed; provide a
-    # lightweight stand-in that supports manual_seed and is accepted where a
-    # generator is passed (it is otherwise ignored).
+    # Keep the Torch spelling over the native independent generator owner.
     g.Generator = Generator
 
     # numeric / misc top-level constants and small types
@@ -1087,6 +1067,11 @@ from .shape_api import (
     _looks_like_dtype,
     _norm_reduce_kw,
     _torch_reshape,
+    _torch_permute,
+    _torch_transpose,
+    _torch_t,
+    _torch_view,
+    _torch_view_base,
     _torch_size,
     _torch_sum,
     _torch_var_sum,
@@ -1103,6 +1088,10 @@ def install_methods(ctx):
     # which breaks torch idioms like `(n,) + data.size()[1:]` (mmdet's unmap()).
     _Size = getattr(g, "Size", tuple)
     Var.size = _torch_size
+    Var.permute = g.permute = _torch_permute
+    Var.transpose = g.transpose = _torch_transpose
+    Var.t = g.t = _torch_t
+    Var._base = property(_torch_view_base)
 
     # jittor's core reshape/view reject a torch.Size (a tuple SUBCLASS) -> normalize
     # a single Size/tuple-subclass arg to a plain tuple so `x.reshape(other.size())`
@@ -1111,13 +1100,17 @@ def install_methods(ctx):
     _orig_reshape = Var.reshape
     _np_view_of = None
     Var.reshape = _torch_reshape
-    Var.view = _torch_reshape
+    Var.view = _torch_view
     # The native view builds what jittor's own reshape does, so only while
     # that is what `_torch_reshape` would delegate to.
     from . import shape_api as _shape_api
     from jittor._core import var as _native_var
     _shape_api._FAST_VIEW = (getattr(jt.core, "_fast_view", None)
                              if _orig_reshape is _native_var.reshape else None)
+    if _orig_reshape is _native_var.reshape:
+        # Torch first tries a genuine strided view; the wrapper below copies
+        # only when the native view explicitly rejects this target shape.
+        _orig_reshape = _native_var.view
 
     # Keep the existing Torch-facing promotion for narrow integer sums
     # (yolox/rtmdet SimOTA assigners do mask.sum() on a uint8 match matrix).
@@ -1179,7 +1172,8 @@ def install_methods(ctx):
     if not hasattr(Var, "neg"):         Var.neg = _shape_neg
     if not hasattr(Var, "reciprocal"):  Var.reciprocal = _shape_reciprocal
     if not hasattr(Var, "expm1"):       Var.expm1 = _shape_expm1
-    if not hasattr(Var, "log1p"):       Var.log1p = _shape_log1p
+    # Keep Torch integer promotion on the frontend Tensor only.
+    Var.log1p = _shape_log1p
     if not hasattr(Var, "square"):      Var.square = _shape_square
     if not hasattr(Var, "square_"):     Var.square_ = _shape_square_
     if not hasattr(Var, "clamp_min"):   Var.clamp_min = _shape_clamp_min

@@ -93,6 +93,27 @@ class TestGrad(unittest.TestCase):
         test(30,100,4)
         test(50,100,6)
         
+    @jt.flag_scope(auto_convert_64_to_32=0)
+    def test_gradient_data_views_across_backward_and_independent_graphs(self):
+        if not jt.flags.use_cuda:
+            self.skipTest("requires active accelerator execution for storage migration")
+        saved = []
+        inputs = np.array([0.75, 1.25], dtype="float64")
+        for coefficient in (2.0, 3.0, 5.0):
+            x = jt.array(inputs)
+            loss = (x * x * x * coefficient).sum()
+            first = jt.grad(loss, x, retain_graph=True)
+            first_host = first.data
+            second = jt.grad(loss, x, retain_graph=True)
+            second_host = second.data
+            accumulated_host = (first + second).data
+            expected = 3 * coefficient * inputs ** 2
+            saved.extend(((first_host, expected), (second_host, expected),
+                          (accumulated_host, 2 * expected)))
+        # Later lazy gradient executions must not recycle any exported buffer.
+        for actual, expected in saved:
+            np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-12)
+
     def test_top_sort(self):
         x = jt.array(2.0)
         x.name('x')

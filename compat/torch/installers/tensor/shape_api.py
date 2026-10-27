@@ -3,6 +3,69 @@ from ...context import get_install_context
 from . import jt, np, dtype, _jittor_dtype_name, _dtype_to_str, _diff, _trapz, nn
 from .method_api import _ip
 
+
+def _torch_view_base(self):
+    return self._view_base_object()
+
+
+def _permutation_view(input, axes):
+    # This primitive asks for a physical view while constructing the native
+    # op under the GIL. No Python flag scope spans dispatch or lazy loading,
+    # and no intermediate AD target is removed by transpose composition.
+    result = input._storage_permute(jt.NanoVector(axes))
+    result._set_transpose_view_of(input, jt.NanoVector(axes))
+    return result
+
+
+def _torch_permute(input, *dims, **kwargs):
+    from jittor._core.var import _transpose_permutation
+    if kwargs:
+        if set(kwargs) != {'dims'} or dims:
+            raise TypeError('permute expects one dims sequence or positional dimensions')
+        dims = kwargs['dims']
+    elif len(dims) == 1 and isinstance(dims[0], (tuple, list, jt.NanoVector)):
+        dims = dims[0]
+    axes = _transpose_permutation(dims, input.ndim, input.shape)
+    return _permutation_view(input, axes)
+
+
+def _torch_transpose(input, *dims, **kwargs):
+    from jittor._core.var import _transpose_axis
+    if kwargs:
+        if set(kwargs) - {'dim0', 'dim1'} or len(dims) > 2:
+            raise TypeError('transpose expects dim0 and dim1')
+        values = dict(zip(('dim0', 'dim1'), dims))
+        if values.keys() & kwargs.keys():
+            raise TypeError('transpose received a dimension more than once')
+        values.update(kwargs)
+        if set(values) != {'dim0', 'dim1'}:
+            raise TypeError('transpose expects dim0 and dim1')
+        dims = (values['dim0'], values['dim1'])
+    # Native NN implementations also use the permutation spelling on Tensor
+    # inputs. Preserve that existing extension, through the same native view.
+    if not dims:
+        return _torch_permute(input, tuple(reversed(range(input.ndim))))
+    if len(dims) == 1 and isinstance(dims[0], (tuple, list, jt.NanoVector)):
+        return _torch_permute(input, dims[0])
+    if len(dims) > 2:
+        return _torch_permute(input, dims)
+    if len(dims) != 2:
+        raise TypeError('transpose expects dim0 and dim1')
+    ndim = input.ndim
+    first = _transpose_axis(dims[0], max(ndim, 1), 1)
+    second = _transpose_axis(dims[1], max(ndim, 1), 2)
+    axes = list(range(ndim))
+    if ndim:
+        axes[first], axes[second] = axes[second], axes[first]
+    return _permutation_view(input, axes)
+
+
+def _torch_t(input):
+    if input.ndim > 2:
+        raise RuntimeError('t() expects a tensor with <= 2 dimensions')
+    axes = (1, 0) if input.ndim == 2 else tuple(range(input.ndim))
+    return _permutation_view(input, axes)
+
 def _torch_size(self, dim=None):
     _context = get_install_context(jt)
     _native = _context.state["tensor_shape_api"]
@@ -53,6 +116,14 @@ _FAST_VIEW = None
 
 
 def _torch_reshape(self, *shape, **_kw):
+    return _reshape_or_view(self, shape, _kw, allow_copy=True)
+
+
+def _torch_view(self, *shape, **_kw):
+    return _reshape_or_view(self, shape, _kw, allow_copy=False)
+
+
+def _reshape_or_view(self, shape, _kw, *, allow_copy):
     if not _kw and _FAST_VIEW is not None:
         out = _FAST_VIEW(self, shape)
         if out is not None:
@@ -86,9 +157,16 @@ def _torch_reshape(self, *shape, **_kw):
         # native reshape implements only the view half, so a non-contiguous
         # input -- a permuted tensor, or the transposed layout `repeat` builds
         # -- has to be materialized before the view can be taken.
-        if "call contiguous() first" not in str(error):
+        if not allow_copy or "call contiguous() first" not in str(error):
             raise
-    return _orig_reshape(self.contiguous(), *shape)
+    # This allocation is a copy boundary, not a public view of a hidden
+    # Python temporary. Build the same native reshape producer directly;
+    # the graph owns the contiguous input and its real backward edge.
+    target = shape
+    if len(target) == 1 and isinstance(target[0], (tuple, list, jt.NanoVector)):
+        target = target[0]
+    target = tuple(int(s.item()) if isinstance(s, jt.Var) else int(s) for s in target)
+    return jt.ops.reshape(self.contiguous(), target)
 
 
 def _norm_reduce_kw(a, k):
@@ -144,6 +222,22 @@ def _torch_var_sum(self, *a, **k):
         self = self.cast(_dtype_to_str(dt))
     elif _jittor_dtype_name(self.dtype) in ("uint8", "int8", "uint16"):
         self = self.int32()
+    if self.ndim == 0 and ("dim" in k or "dims" in k):
+        # Torch accepts dim 0/-1 on a scalar (it is the only axis); jittor's
+        # reduce rejects every dim on a 0-D Var. torchmetrics reduces 0-D
+        # statistics this way.
+        requested = k.get("dim", k.get("dims"))
+        dims = (requested if isinstance(requested, (tuple, list))
+                else (requested,))
+        if all(int(dim) in (0, -1) for dim in dims):
+            result = self.reshape((1,)) if k.get("keepdims") else self
+            if out is not None:
+                out.assign(result)
+                return out
+            return result
+        raise IndexError(
+            "Dimension out of range (expected to be in range of [-1, 0], "
+            "but got %d)" % int(dims[0]))
     result = _orig_var_sum(self, *a, **k)
     if out is not None:
         out.assign(result)
@@ -328,7 +422,8 @@ def _shape_expm1(self):
 
 
 def _shape_log1p(self):
-    return jt.log(self + 1)
+    from ..numerical.elementwise import log1p
+    return log1p(self)
 
 
 def _shape_square(self):

@@ -58,6 +58,8 @@ jobs:
         uses: actions/checkout@v6
         with:
           persist-credentials: false
+      - name: Set the Jittor state root
+        run: echo "JITTOR_LAB_ROOT=${RUNNER_TEMP}/jittor-lab" >> "$GITHUB_ENV"
       - name: Describe CUDA build configuration
         id: cuda-config
         shell: bash
@@ -78,7 +80,7 @@ jobs:
       - name: Restore the CUDA Jittor build cache
         uses: actions/cache/restore@v4
         with:
-          path: ${{ github.workspace }}/../jittor-lab/_state/nox/cache
+          path: ${{ runner.temp }}/jittor-lab/_state/nox/cache
           key: jittor-build-cuda-${{ runner.os }}-${{ needs.baseline.outputs.cuda_version }}-cuda_archs-${{ steps.cuda-config.outputs.cuda_archs }}-nvcc_flags-${{ steps.cuda-config.outputs.nvcc_flags_hash }}-${{ hashFiles('src/**', 'backends/**', 'python/jittor/build/**', 'requirements/dev-tools.txt') }}
           restore-keys: |
             jittor-build-cuda-${{ runner.os }}-${{ needs.baseline.outputs.cuda_version }}-cuda_archs-${{ steps.cuda-config.outputs.cuda_archs }}-nvcc_flags-${{ steps.cuda-config.outputs.nvcc_flags_hash }}-
@@ -91,7 +93,7 @@ jobs:
         if: always()
         uses: actions/cache/save@v4
         with:
-          path: ${{ github.workspace }}/../jittor-lab/_state/nox/cache
+          path: ${{ runner.temp }}/jittor-lab/_state/nox/cache
           key: jittor-build-cuda-${{ runner.os }}-${{ needs.baseline.outputs.cuda_version }}-cuda_archs-${{ steps.cuda-config.outputs.cuda_archs }}-nvcc_flags-${{ steps.cuda-config.outputs.nvcc_flags_hash }}-${{ hashFiles('src/**', 'backends/**', 'python/jittor/build/**', 'requirements/dev-tools.txt') }}
 
   benchmark-cuda:
@@ -116,6 +118,8 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Set the Jittor state root
+        run: echo "JITTOR_LAB_ROOT=${RUNNER_TEMP}/jittor-lab" >> "$GITHUB_ENV"
       - name: Describe CUDA build configuration
         id: cuda-config
         shell: bash
@@ -142,7 +146,7 @@ jobs:
       - name: Restore the CUDA Jittor build cache
         uses: actions/cache/restore@v4
         with:
-          path: ${{ github.workspace }}/../jittor-lab/_state/nox/cache
+          path: ${{ runner.temp }}/jittor-lab/_state/nox/cache
           key: jittor-build-cuda-${{ runner.os }}-${{ needs.baseline.outputs.cuda_version }}-cuda_archs-${{ steps.cuda-config.outputs.cuda_archs }}-nvcc_flags-${{ steps.cuda-config.outputs.nvcc_flags_hash }}-${{ hashFiles('src/**', 'backends/**', 'python/jittor/build/**', 'requirements/dev-tools.txt') }}
           restore-keys: |
             jittor-build-cuda-${{ runner.os }}-${{ needs.baseline.outputs.cuda_version }}-cuda_archs-${{ steps.cuda-config.outputs.cuda_archs }}-nvcc_flags-${{ steps.cuda-config.outputs.nvcc_flags_hash }}-
@@ -153,16 +157,16 @@ jobs:
           key: asv-cuda-results-${{ github.sha }}
           restore-keys: |
             asv-cuda-results-
-      - name: Record Tiny Llama and optimizer CUDA results
+      - name: Record operator, model, training and transfer CUDA results
         shell: bash
         run: >-
           "${JITTOR_CI_PYTHON}" -m nox -s benchmark_cuda --
-          --bench '^(tiny_llama|optimizer_step)\.'
+          --bench '^(operators|optimizer_step|convolution|reductions|transfer|tiny_llama)\.'
       - name: Save the CUDA Jittor build cache
         if: always()
         uses: actions/cache/save@v4
         with:
-          path: ${{ github.workspace }}/../jittor-lab/_state/nox/cache
+          path: ${{ runner.temp }}/jittor-lab/_state/nox/cache
           key: jittor-build-cuda-${{ runner.os }}-${{ needs.baseline.outputs.cuda_version }}-cuda_archs-${{ steps.cuda-config.outputs.cuda_archs }}-nvcc_flags-${{ steps.cuda-config.outputs.nvcc_flags_hash }}-${{ hashFiles('src/**', 'backends/**', 'python/jittor/build/**', 'requirements/dev-tools.txt') }}
       - name: Save CUDA ASV results for the next commit
         if: success()

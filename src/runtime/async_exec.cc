@@ -21,8 +21,11 @@
 #include <Python.h>
 #include "core/node.h"
 #include "runtime/async_exec.h"
+#include "runtime/launch_diagnostics.h"
 
 namespace jittor {
+
+DEFINE_FLAG(int, async_min_caller_us, 150, "How long the calling thread must typically keep building, between handing a batch to the async-execution worker and needing its result, for the handover to be worth its cost (a condition variable's wake and two transfers of the graph lock). Averaged over recent batches, not judged per batch, with one in 64 declined batches let through so a step that grows heavier is picked up again. Only consulted on a backend whose policy sets `async_handover_must_pay`; 0 hands over regardless.");
 
 EXTERN_LIB void register_cleanup_callback(void (*cb)());
 
@@ -143,6 +146,41 @@ void wait_before_flag_set(const char* name) {
 
 std::atomic<bool> job_posted{false};
 
+// Does handing a batch over pay for itself here?
+//
+// The worker is worth its handover -- a condition variable's wake, two
+// transfers of the graph lock -- only while the calling thread has something
+// to do meanwhile. A Qwen3 decode step builds seconds of graph after each
+// flush and gains a third of its time; a batch-1 ResNet50 step is finished
+// building almost at once and then waits, so the same handover is pure cost.
+// Nothing static separates them: both carry a few hundred KB, both cross the
+// same operator counts. What separates them is measurable and already
+// happening -- how long the caller runs between submitting a batch and
+// needing it -- so that is what decides, over the recent average rather than
+// one batch, and with an occasional batch let through so a step that grows
+// heavier is noticed.
+std::chrono::steady_clock::time_point submitted_at;
+int64 caller_work_ns = -1;
+int declines_since_probe = 0;
+
+// Python objects the worker was the last owner of, waiting for the Python
+// thread to drop them (`async_exec_defer_python_release`).
+struct PythonReleases {
+    std::mutex mutex;
+    std::vector<std::function<void()>> queue;
+    std::atomic<bool> pending{false};
+};
+PythonReleases& python_releases_state() {
+    static PythonReleases state;
+    return state;
+}
+
+void note_caller_work() {
+    auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now() - submitted_at).count();
+    caller_work_ns = caller_work_ns < 0 ? ns : (caller_work_ns * 3 + ns) / 4;
+}
+
 // Up to ~100 us of polling before the caller falls back to blocking.
 template <class Ready>
 void spin_until(Ready ready) {
@@ -206,9 +244,22 @@ void wait_for_worker() {
     worker->done.wait(lock, [] { return !async_exec_inflight.load(std::memory_order_acquire); });
 }
 
+// Waiting for the batch while holding either the graph lock or the GIL
+// deadlocks: the worker takes the graph lock between its segments, and
+// compiling an operator calls back into Python. Let go of both, as
+// `async_exec_wait` does, and say nothing about an error -- a caller that
+// cannot throw (a fork handler) still has to wait.
+void wait_for_worker_unlocked() {
+    GraphLockSuspend suspend;
+    PyThreadState* state = Py_IsInitialized() && PyGILState_Check()
+        ? PyEval_SaveThread() : nullptr;
+    wait_for_worker();
+    if (state) PyEval_RestoreThread(state);
+}
+
 void stop_worker() {
     if (!worker->thread) return;
-    wait_for_worker();
+    wait_for_worker_unlocked();
     {
         std::lock_guard<std::mutex> lock(worker->mutex);
         worker->stopping = true;
@@ -223,7 +274,9 @@ void stop_worker() {
 #ifdef __linux__
 // A batch is not carried across a fork: the parent finishes it first, and
 // the child starts without a worker (threads do not survive a fork).
-void before_fork() { if (worker->thread) wait_for_worker(); }
+// `subprocess.Popen` forks with the GIL held, and from a thread that may hold
+// the graph lock, so this waits with neither.
+void before_fork() { if (worker->thread) wait_for_worker_unlocked(); }
 void in_child() {
     worker = new Worker();
     placement->pinned = -2;
@@ -273,6 +326,7 @@ bool async_exec_placed() {
 
 GraphEntryScope::GraphEntryScope(bool may_release_gil) : outer(top_scope), locked(false) {
     top_scope = this;
+    enter_launch_origin_entry(outer_origin_active, outer_origin);
     // The worker reaches a binding only from the compiler's Python callbacks,
     // in the middle of its own batch: not a second user.
     const void* me = binding_thread_token();
@@ -291,6 +345,7 @@ GraphEntryScope::GraphEntryScope(bool may_release_gil) : outer(top_scope), locke
 }
 
 GraphEntryScope::~GraphEntryScope() {
+    leave_launch_origin_entry(outer_origin_active, outer_origin);
     if (locked) graph_mutation_mutex().unlock();
     top_scope = outer;
 }
@@ -316,9 +371,47 @@ bool async_exec_single_thread() {
 
 int64 async_exec_batches() { return batches_run.load(std::memory_order_relaxed); }
 
+int64 async_exec_caller_work_ns() { return caller_work_ns; }
+
+bool async_exec_handover_pays() {
+    if (caller_work_ns < 0) return true;  // nothing handed over yet
+    if (caller_work_ns >= (int64)async_min_caller_us * 1000) {
+        declines_since_probe = 0;
+        return true;
+    }
+    if (++declines_since_probe >= 64) {
+        declines_since_probe = 0;
+        return true;
+    }
+    return false;
+}
+
 void async_exec_hold_active_bindings() { lock_resumed_bindings(); }
 
+bool async_exec_defer_python_release(std::function<void()>&& release) {
+    if (!is_worker) return false;
+    auto& state = python_releases_state();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    state.queue.push_back(std::move(release));
+    state.pending.store(true, std::memory_order_release);
+    return true;
+}
+
+void async_exec_run_python_releases() {
+    auto& state = python_releases_state();
+    if (is_worker || !state.pending.load(std::memory_order_acquire)) return;
+    if (!Py_IsInitialized() || !PyGILState_Check()) return;
+    std::vector<std::function<void()>> taken;
+    {
+        std::lock_guard<std::mutex> lock(state.mutex);
+        taken.swap(state.queue);
+        state.pending.store(false, std::memory_order_release);
+    }
+    for (auto& release : taken) release();
+}
+
 void async_exec_submit(std::function<void()>&& job) {
+    submitted_at = std::chrono::steady_clock::now();
     std::unique_lock<std::mutex> lock(worker->mutex);
     worker->pending = std::move(job);
     worker->ready = true;
@@ -330,14 +423,10 @@ void async_exec_submit(std::function<void()>&& job) {
 
 void async_exec_wait() {
     if (is_worker) return;
+    async_exec_run_python_releases();
     if (async_exec_inflight.load(std::memory_order_acquire)) {
-        // Without the graph lock and without the GIL: the batch may compile an
-        // operator, and the compiler calls back into Python.
-        GraphLockSuspend suspend;
-        PyThreadState* state = Py_IsInitialized() && PyGILState_Check()
-            ? PyEval_SaveThread() : nullptr;
-        wait_for_worker();
-        if (state) PyEval_RestoreThread(state);
+        note_caller_work();
+        wait_for_worker_unlocked();
     }
     if (!error_pending.load(std::memory_order_acquire)) return;
     std::exception_ptr error;

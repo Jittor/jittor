@@ -6,6 +6,7 @@
 #include <sstream>
 #include <chrono>
 #include "runtime/random_generator.h"
+#include "runtime/rng_state.h"
 
 namespace jittor {
 
@@ -38,6 +39,17 @@ string RandomGeneratorState::get_state() {
 }
 
 void RandomGeneratorState::set_state(const string& s) {
+    if (s.compare(0, 12, "JITTOR_RNG_1") == 0) {
+        USER_CHECK(device_id < 0)
+            << "Generator.set_state(): the state belongs to cpu but this generator is on cuda";
+        uint64 seed;
+        std::default_random_engine engine;
+        decode_cpu_rng_state(s, seed, engine);
+        seed_ = (int64)seed;
+        cuda_offset = 0;
+        cpu_engine = engine;
+        return;
+    }
     std::istringstream iss(s);
     int64 new_seed, new_offset;
     int new_device;
@@ -67,6 +79,8 @@ void RandomGeneratorState::set_state(const string& s) {
     USER_CHECK(!iss.fail() && new_offset >= 0)
         << "Generator.set_state(): malformed state string "
         "(expected the byte string previously returned by get_state()).";
+    iss >> std::ws;
+    USER_CHECK(iss.eof()) << "Generator.set_state(): unexpected trailing state bytes";
     USER_CHECK(new_device == device_id)
         << "Generator.set_state(): the state belongs to"
         << (new_device < 0 ? string("cpu") : "cuda:" + std::to_string(new_device))
@@ -121,6 +135,12 @@ int64 RandomGenerator::initial_seed() {
 
 string RandomGenerator::get_state() {
     return state->get_state();
+}
+
+string RandomGenerator::get_cpu_rng_state() {
+    USER_CHECK(state->device_id < 0 && state->cuda_offset == 0)
+        << "CPU RNG snapshot requires a CPU-only generator stream";
+    return encode_cpu_rng_state((uint64)state->seed_, state->cpu_engine);
 }
 
 RandomGenerator* RandomGenerator::set_state(const string& s) {

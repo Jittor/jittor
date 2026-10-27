@@ -1,13 +1,16 @@
 """FSDP2 parameter metadata, sharding, and forward lifecycle."""
-from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import types
+import sys
+
+from jittor.distributed.fsdp import storage as _storage
 import weakref
 
 import jittor as jt
 from jittor import nn
 
 from . import common, dtensor
+from ..torch.parameter_containers import ParameterDictAdapter, ParameterListAdapter
 from ..diagnostics import EXPECTED, swallowed
 
 
@@ -35,49 +38,38 @@ _EXPORTS = (
 
 
 def _materialize_initial_shard(shard):
-    """Own only a rank-local copy, not the sliced full parameter storage."""
-    shard = jt.Var.copy(shard).stop_grad()
-    shard.sync()
-    return shard
+    return _storage._materialize_initial_shard(shard)
 
 
 def _flat_local_overlap(state, entry):
-    rank_start = int(state.true_fsdp_rank) * int(state.true_fsdp_flat_shard_numel)
-    rank_end = rank_start + int(state.true_fsdp_flat_shard_numel)
-    param_start = int(entry.flat_offset)
-    param_end = param_start + int(entry.numel)
-    overlap_start = max(rank_start, param_start)
-    overlap_end = min(rank_end, param_end)
-    if overlap_end <= overlap_start:
-        return 0, 0
-    return overlap_start - rank_start, overlap_end - overlap_start
+    return _storage._flat_local_overlap(state, entry)
 
 
 def _flat_entry_slices(state, flat_var):
-    out = []
-    for entry in state.true_fsdp_params:
-        local_start, local_len = _flat_local_overlap(state, entry)
-        out.append(common._slice_flat(flat_var, local_start, local_len))
-    return out
+    return _storage._flat_entry_slices(state, flat_var, api=sys.modules[__name__])
 
 
 @common._state_frontend
 def _refresh_flat_entry_shards(state):
-    for entry, shard in zip(state.true_fsdp_params,
-                            _flat_entry_slices(
-                                state, state.true_fsdp_flat_shard)):
-        entry.shard = shard
-        entry.shard_numel = int(shard.shape[0]) if len(shard.shape) else int(entry.numel)
-        _mark_fsdp_param_var(shard, state, entry, "shard")
-        if getattr(entry, "requires_grad", True):
-            if shard.is_stop_grad():
-                shard.start_grad()
-        elif not shard.is_stop_grad():
-            shard.stop_grad()
+    result = _storage._refresh_flat_entry_shards(state, api=sys.modules[__name__])
+    _bind_parameter_aliases(state, "shard")
+    return result
+
+
+def _bind_entry_aliases(entry, value):
+    for owner, attr in getattr(entry, "aliases", ((entry.owner, entry.attr),)):
+        object.__setattr__(owner, attr, value)
+
+
+def _bind_parameter_aliases(state, role):
+    for entry in getattr(state, "true_fsdp_params", ()):
+        value = entry.full_param if role == "full" else entry.shard
+        _bind_entry_aliases(entry, value)
 
 
 class _ShardTensorMethod:
     """Resolve the current shard through weak metadata, never retain its Var."""
+
     def __init__(self, function, state, entry, role):
         self.function = function
         self.state = weakref.ref(state)
@@ -89,8 +81,8 @@ class _ShardTensorMethod:
             return state.true_fsdp_flat_shard
         if self.role == "grad_shard":
             for current, gradient in zip(
-                    state.true_fsdp_params,
-                    getattr(state, "true_fsdp_last_grads", ())):
+                state.true_fsdp_params, getattr(state, "true_fsdp_last_grads", ())
+            ):
                 if current is entry:
                     return gradient
             gradient = getattr(entry.shard, "_torch_grad", None)
@@ -110,12 +102,22 @@ class _ShardTensorMethod:
         return self.function(tensor, *args, **kwargs)
 
 
+def _fsdp_var_size(var, dim=None):
+    """A sharded parameter's Torch-facing size is its global parameter size."""
+    entry = getattr(var, "_jittor_fsdp2_entry", None)
+    shape = tuple(getattr(entry, "shape", tuple(var.shape)))
+    if dim is None:
+        return shape
+    dim = int(dim)
+    if dim < 0:
+        dim += len(shape)
+    if dim < 0 or dim >= len(shape):
+        raise IndexError("dimension out of range")
+    return shape[dim]
+
+
 def _parameter_requires_grad(param):
-    """Read torch-facing trainability without conflating it with graph stop."""
-    try:
-        return bool(param.requires_grad)
-    except (AttributeError, TypeError):
-        return not param.is_stop_grad()
+    return _storage._parameter_requires_grad(param)
 
 
 def _mark_fsdp_param_var(var, state, entry, role):
@@ -124,28 +126,43 @@ def _mark_fsdp_param_var(var, state, entry, role):
         object.__setattr__(var, "_jittor_fsdp2_entry", entry)
         object.__setattr__(var, "_jittor_fsdp2_module", getattr(state, "true_fsdp_module", None))
         object.__setattr__(var, "_jittor_fsdp2_role", role)
-        object.__setattr__(var, "_dtensor_device_mesh",
-                           getattr(state, "mesh", None) or dtensor.init_device_mesh("cuda", (common._world_size(),)))
+        object.__setattr__(
+            var, "size", _ShardTensorMethod(_fsdp_var_size, state, entry, role)
+        )
+        object.__setattr__(
+            var,
+            "_dtensor_device_mesh",
+            getattr(state, "mesh", None)
+            or dtensor.init_device_mesh("cuda", (common._world_size(),)),
+        )
         object.__setattr__(var, "_dtensor_placements", (dtensor.Shard(0),))
         object.__setattr__(var, "device_mesh", getattr(var, "_dtensor_device_mesh"))
         object.__setattr__(var, "placements", getattr(var, "_dtensor_placements"))
-        object.__setattr__(var, "_spec", types.SimpleNamespace(
-            mesh=getattr(var, "_dtensor_device_mesh"),
-            placements=getattr(var, "_dtensor_placements")))
+        object.__setattr__(
+            var,
+            "_spec",
+            types.SimpleNamespace(
+                mesh=getattr(var, "_dtensor_device_mesh"),
+                placements=getattr(var, "_dtensor_placements"),
+            ),
+        )
         # Resolve through weak metadata. Bound native methods retain each
         # temporary Var and leak every superseded all-gathered parameter.
         object.__setattr__(
-            var, "to_local", _ShardTensorMethod(
-                _fsdp_var_to_local, state, entry, role))
+            var, "to_local", _ShardTensorMethod(_fsdp_var_to_local, state, entry, role)
+        )
         object.__setattr__(
-            var, "full_tensor", _ShardTensorMethod(
-                _fsdp_var_full_tensor, state, entry, role))
+            var, "full_tensor", _ShardTensorMethod(_fsdp_var_full_tensor, state, entry, role)
+        )
         object.__setattr__(
-            var, "redistribute", _ShardTensorMethod(
-                _fsdp_var_redistribute, state, entry, role))
+            var, "redistribute", _ShardTensorMethod(_fsdp_var_redistribute, state, entry, role)
+        )
         getattr(var, "__dict__", {}).pop("_local_tensor", None)
     except EXPECTED as exc:
-        swallowed("fsdp2/shard.py _mark_fsdp_param_var: object.__setattr__(var, '_jittor_fsdp2_state', state)", exc)
+        swallowed(
+            "fsdp2/shard.py _mark_fsdp_param_var: object.__setattr__(var, '_jittor_fsdp2_state', state)",
+            exc,
+        )
     return var
 
 
@@ -176,23 +193,34 @@ def _fsdp_var_to_local(self, *args, **kwargs):
 def _fsdp_var_full_tensor(self, *args, **kwargs):
     raw_state = getattr(self, "_jittor_fsdp2_state", None)
     raw_entry = getattr(self, "_jittor_fsdp2_entry", None)
-    if (raw_state is not None and raw_entry is None
-            and getattr(raw_state, "true_fsdp_initialized", False)
-            and getattr(self, "_jittor_fsdp2_role", None) == "flat_shard"):
-        return common._all_gather_shards(
-            self, getattr(raw_state, "shard_group", None))
+    if (
+        raw_state is not None
+        and raw_entry is None
+        and getattr(raw_state, "true_fsdp_initialized", False)
+        and getattr(self, "_jittor_fsdp2_role", None) == "flat_shard"
+    ):
+        return common._all_gather_shards(self, getattr(raw_state, "shard_group", None))
     state, entry = _fsdp_param_entry(self)
     if state is None or entry is None:
         return self
     if getattr(self, "_jittor_fsdp2_role", None) == "grad_shard":
         return common._full_gradient_from_shard(self, state, entry)
-    if getattr(state, "true_fsdp_unsharded", False) and getattr(entry, "full_param", None) is not None:
+    if (
+        getattr(state, "true_fsdp_unsharded", False)
+        and getattr(entry, "full_param", None) is not None
+    ):
         return entry.full_param
     if getattr(state, "true_fsdp_flat", False):
-        full_flat = common._all_gather_shards(state.true_fsdp_flat_shard, getattr(state, "shard_group", None))
+        full_flat = common._all_gather_shards(
+            state.true_fsdp_flat_shard, getattr(state, "shard_group", None)
+        )
         return common._slice_flat(full_flat, entry.flat_offset, entry.numel).reshape(entry.shape)
     gathered = common._all_gather_shards(entry.shard, getattr(state, "shard_group", None))
-    full_flat = gathered if entry.padded_numel == entry.numel else common._slice_flat(gathered, 0, entry.numel)
+    full_flat = (
+        gathered
+        if entry.padded_numel == entry.numel
+        else common._slice_flat(gathered, 0, entry.numel)
+    )
     return full_flat.reshape(entry.shape)
 
 
@@ -204,9 +232,14 @@ def _fsdp_var_redistribute(self, device_mesh=None, placements=None, **kwargs):
         if placements is not None:
             object.__setattr__(self, "_dtensor_placements", tuple(placements))
             object.__setattr__(self, "placements", tuple(placements))
-        object.__setattr__(self, "_spec", types.SimpleNamespace(
-            mesh=getattr(self, "_dtensor_device_mesh", None),
-            placements=getattr(self, "_dtensor_placements", ())))
+        object.__setattr__(
+            self,
+            "_spec",
+            types.SimpleNamespace(
+                mesh=getattr(self, "_dtensor_device_mesh", None),
+                placements=getattr(self, "_dtensor_placements", ()),
+            ),
+        )
     except EXPECTED as exc:
         swallowed("fsdp2/shard.py _fsdp_var_redistribute: if device_mesh is not None:", exc)
     return self
@@ -234,24 +267,12 @@ def _named_parameters_with_owner(module, recurse=True):
         return []
 
     def visit(mod, prefix=""):
-        dc = getattr(mod, "__dict__", {})
-        try:
-            if isinstance(mod, nn.ParameterList):
-                dc = mod.params
-        except EXPECTED as exc:
-            swallowed("fsdp2/shard.py visit: if isinstance(mod, nn.ParameterList):", exc)
-        bufnames = getattr(mod, "__dict__", {}).get("_buffer_names", ())
-        for name, value in list(dc.items()):
-            if isinstance(name, str) and name.startswith("_"):
+        for name, value, role in mod._var_roles():
+            if role != "parameter" or id(value) in seen:
                 continue
-            if isinstance(value, jt.Var):
-                if id(value) in seen:
-                    continue
-                if getattr(value, "is_buffer", False) or not getattr(value, "persistent", True) or name in bufnames:
-                    continue
-                seen.add(id(value))
-                pname = f"{prefix}.{name}" if prefix else str(name)
-                out.append((pname, mod, name, value))
+            seen.add(id(value))
+            pname = f"{prefix}.{name}" if prefix else str(name)
+            out.append((pname, mod, name, value))
         if recurse:
             for name, value in child_items(mod):
                 if isinstance(value, nn.Module):
@@ -260,6 +281,38 @@ def _named_parameters_with_owner(module, recurse=True):
 
     visit(module)
     return out
+
+
+def _parameter_aliases(module, recurse=True):
+    aliases = {}
+    visited = set()
+
+    def visit(mod):
+        if id(mod) in visited:
+            return
+        visited.add(id(mod))
+        for name, value, role in mod._var_roles():
+            if role == "parameter":
+                aliases.setdefault(id(value), []).append((mod, name))
+        if recurse:
+            for _, child in child_items(mod):
+                if isinstance(child, nn.Module):
+                    visit(child)
+
+    def child_items(mod):
+        try:
+            items = mod.named_children()
+            if items is not None:
+                return list(items)
+        except EXPECTED as exc:
+            swallowed("fsdp2/shard.py _parameter_aliases: items = mod.named_children()", exc)
+        modules = getattr(mod, "_modules", None)
+        if callable(modules):
+            modules = modules()
+        return list(modules.items()) if isinstance(modules, dict) else []
+
+    visit(module)
+    return aliases
 
 
 def _iter_modules(module, recurse=True):
@@ -272,8 +325,7 @@ def _iter_modules(module, recurse=True):
 
 
 def _iter_fsdp_modules(module, recurse=True):
-    return [m for m in _iter_modules(module, recurse)
-            if getattr(m, "_is_fsdp_module", False)]
+    return [m for m in _iter_modules(module, recurse) if getattr(m, "_is_fsdp_module", False)]
 
 
 def _apply_fsdp_attr(module, name, value, recurse=True):
@@ -288,9 +340,11 @@ def _apply_fsdp_attr(module, name, value, recurse=True):
 
 
 def _init_true_fsdp_state(module, state):
-    tensor_types = {getattr(type(param), "_frontend_result_type", type(param))
-                    for param in module.parameters()
-                    if getattr(type(param), "_frontend_backend", None) is not None}
+    tensor_types = {
+        getattr(type(param), "_frontend_result_type", type(param))
+        for param in module.parameters()
+        if getattr(type(param), "_frontend_backend", None) is not None
+    }
     if len(tensor_types) > 1:
         raise TypeError("FSDP parameters must use one tensor frontend")
     state.frontend_type = next(iter(tensor_types), None)
@@ -308,95 +362,33 @@ def _init_true_fsdp_state_impl(module, state):
     group = getattr(state, "shard_group", None)
     ws = common._world_size() if group is None else group.size()
     rank = common._rank() if group is None else group.rank()
-    entries = []
+    ignored_ids = {id(param) for param in getattr(state, "ignored_params", ())}
     params = [
-        item for item in _named_parameters_with_owner(module, recurse=True)
-        if not is_fsdp_managed_param(item[3])
+        item
+        for item in _named_parameters_with_owner(module, recurse=True)
+        if not is_fsdp_managed_param(item[3]) and id(item[3]) not in ignored_ids
     ]
+    aliases = _parameter_aliases(module, recurse=True)
+    for _, owner, _, _ in params:
+        if isinstance(owner, (nn.ParameterList, ParameterListAdapter, ParameterDictAdapter)):
+            raise NotImplementedError(
+                "FSDP2 cannot shard ParameterList/ParameterDict: its parameter "
+                "storage needs container-aware replacement at every shard transition"
+            )
     total_numel = sum(common._param_numel(param) for _, _, _, param in params)
-    if common._fsdp2_flat_enabled(ws, total_numel) and params and len({_jittor_dtype_name(param.dtype) for _, _, _, param in params}) == 1:
-        flat_shard_numel = common._ceil_div(total_numel, ws)
-        flat_padded_numel = flat_shard_numel * ws
-        flat_full = common._pad_flat(jt.concat([common._flatten_var(param) for _, _, _, param in params], dim=0),
-                                     flat_padded_numel)
-        # A basic slice is a view: sync alone does not shrink its allocation
-        # or release the full parameter. Own only this rank's storage.
-        flat_shard = _materialize_initial_shard(
-            common._slice_flat(
-                flat_full, rank * flat_shard_numel, flat_shard_numel))
-        offset = 0
-        for name, owner, attr, param in params:
-            numel = common._param_numel(param)
-            entries.append(common.StateRecord(
-                name=name,
-                owner=owner,
-                attr=attr,
-                shape=tuple(int(x) for x in param.shape),
-                dtype=param.dtype,
-                numel=numel,
-                padded_numel=numel,
-                shard_numel=0,
-                shard=None,
-                full_param=None,
-                flat_offset=offset,
-                requires_grad=_parameter_requires_grad(param),
-            ))
-            offset += numel
-        state.true_fsdp_initialized = True
-        state.true_fsdp_rank = rank
-        state.true_fsdp_world_size = ws
-        state.true_fsdp_params = entries
-        state.true_fsdp_flat = True
-        state.true_fsdp_flat_total_numel = total_numel
-        state.true_fsdp_flat_padded_numel = flat_padded_numel
-        state.true_fsdp_flat_shard_numel = flat_shard_numel
-        state.true_fsdp_flat_shard = _mark_fsdp_param_var(
-            flat_shard, state, None, "flat_shard")
-        if any(entry.requires_grad for entry in entries):
-            if state.true_fsdp_flat_shard.is_stop_grad():
-                state.true_fsdp_flat_shard.start_grad()
-        elif not state.true_fsdp_flat_shard.is_stop_grad():
-            state.true_fsdp_flat_shard.stop_grad()
-        _refresh_flat_entry_shards(state)
-        for entry in entries:
-            object.__setattr__(entry.owner, entry.attr, entry.shard)
-        state.true_fsdp_unsharded = False
-        return state
-
-    state.true_fsdp_flat = False
-    for name, owner, attr, param in params:
-        numel = common._param_numel(param)
-        shard_numel = common._ceil_div(numel, ws)
-        padded_numel = shard_numel * ws
-        flat_full = common._pad_flat(common._flatten_var(param), padded_numel)
-        local = _materialize_initial_shard(
-            common._slice_flat(flat_full, rank * shard_numel, shard_numel))
-        entries.append(common.StateRecord(
-            name=name,
-            owner=owner,
-            attr=attr,
-            shape=tuple(int(x) for x in param.shape),
-            dtype=param.dtype,
-            numel=numel,
-            padded_numel=padded_numel,
-            shard_numel=shard_numel,
-            shard=local,
-            full_param=None,
-            requires_grad=_parameter_requires_grad(param),
-        ))
-        _mark_fsdp_param_var(local, state, entries[-1], "shard")
-        if entries[-1].requires_grad:
-            if local.is_stop_grad():
-                local.start_grad()
-        elif not local.is_stop_grad():
-            local.stop_grad()
-        object.__setattr__(owner, attr, local)
-    state.true_fsdp_initialized = True
-    state.true_fsdp_rank = rank
-    state.true_fsdp_world_size = ws
-    state.true_fsdp_params = entries
-    state.true_fsdp_unsharded = False
-    return state
+    initialized = _storage._init_true_fsdp_state_impl(
+        module,
+        state,
+        params,
+        world_size=ws,
+        rank=rank,
+        flat=common._fsdp2_flat_enabled(ws, total_numel),
+        api=sys.modules[__name__],
+    )
+    for entry, (_, owner, attr, param) in zip(state.true_fsdp_params, params):
+        entry.aliases = aliases.get(id(param), ((owner, attr),))
+    _bind_parameter_aliases(state, "shard")
+    return initialized
 
 
 def _unshard_module_params(module):
@@ -404,65 +396,28 @@ def _unshard_module_params(module):
         return _unshard_module_params_impl(module)
 
 
+def _compute_shard(state, master_shard):
+    return _storage._compute_shard(state, master_shard)
+
+
+def _cast_floating_tree(value, target):
+    return _storage._cast_floating_tree(value, target)
+
+
 def _unshard_module_params_impl(module):
+    result = _storage._unshard_module_params_impl(module, api=sys.modules[__name__])
     state = getattr(module, "_fsdp_state", None)
-    if state is None or not getattr(state, "true_fsdp_initialized", False):
-        return module
-    if getattr(state, "true_fsdp_unsharded", False):
-        return module
-    if getattr(state, "true_fsdp_flat", False):
-        full_flat = common._all_gather_shards(state.true_fsdp_flat_shard, getattr(state, "shard_group", None))
-        state.true_fsdp_flat_full_param = full_flat
-        for entry in state.true_fsdp_params:
-            full = common._slice_flat(full_flat, entry.flat_offset, entry.numel).reshape(entry.shape)
-            entry.full_param = full
-            _mark_fsdp_param_var(full, state, entry, "full")
-            if getattr(entry, "requires_grad", True):
-                if full.is_stop_grad():
-                    full.start_grad()
-            elif not full.is_stop_grad():
-                full.stop_grad()
-            object.__setattr__(entry.owner, entry.attr, full)
-    else:
-        for entry in state.true_fsdp_params:
-            gathered = common._all_gather_shards(entry.shard, getattr(state, "shard_group", None))
-            full_flat = gathered if entry.padded_numel == entry.numel else common._slice_flat(gathered, 0, entry.numel)
-            full = full_flat.reshape(entry.shape)
-            entry.full_param = full
-            _mark_fsdp_param_var(full, state, entry, "full")
-            if getattr(entry, "requires_grad", True):
-                if full.is_stop_grad():
-                    full.start_grad()
-            elif not full.is_stop_grad():
-                full.stop_grad()
-            object.__setattr__(entry.owner, entry.attr, full)
-    state.true_fsdp_unsharded = True
-    return module
+    if state is not None and getattr(state, "true_fsdp_unsharded", False):
+        _bind_parameter_aliases(state, "full")
+    return result
 
 
 def _reshard_module_params(module):
+    result = _storage._reshard_module_params(module)
     state = getattr(module, "_fsdp_state", None)
-    if state is None or not getattr(state, "true_fsdp_initialized", False):
-        return module
-    if not getattr(state, "true_fsdp_unsharded", False):
-        return module
-    for entry in state.true_fsdp_params:
-        object.__setattr__(entry.owner, entry.attr, entry.shard)
-        if not getattr(entry, "requires_grad", True):
-            # A frozen parameter is not a sync_sharded_grads() target. Drop the
-            # state's explicit full reference after forward so an entirely
-            # frozen prefix can release each all-gather before the next layer.
-            # If an upstream trainable input needs this weight for its gradient,
-            # Jittor's forward graph retains the Var independently.
-            entry.full_param = None
-    if (getattr(state, "true_fsdp_flat", False)
-            and not any(getattr(entry, "requires_grad", True)
-                        for entry in state.true_fsdp_params)):
-        state.true_fsdp_flat_full_param = None
-    # Trainable full Vars stay alive for sync_sharded_grads(loss): Jittor's
-    # autograd needs the exact objects that participated in the forward graph.
-    state.true_fsdp_unsharded = False
-    return module
+    if state is not None and not getattr(state, "true_fsdp_unsharded", False):
+        _bind_parameter_aliases(state, "shard")
+    return result
 
 
 #: Attribute on the FSDP state counting how deep we are inside this module's
@@ -471,104 +426,17 @@ _EXECUTE_DEPTH_ATTR = "true_fsdp_execute_depth"
 
 
 def _release_full_params(state):
-    """Drop the gathered full parameters once their gradients are sharded.
-
-    This is what makes FSDP save memory. Three things each held a full-size
-    copy after every step, and none of them was ever cleared:
-
-    * ``entry.full_param`` -- the gathered parameter. ``_reshard_module_params``
-      deliberately keeps it, because the backward needs the exact Var that took
-      part in the forward graph. That is true *until the gradients have been
-      reduce-scattered into the shards*; after that nobody needs it, and the
-      next forward gathers a fresh one.
-    * ``entry.full_public_grad`` -- a full-size gradient that
-      ``refresh_visible_full_grads`` re-materialises on every ``zero_grad()``
-      so that ``.grad`` on a full parameter reads correctly. With the full
-      parameter gone it has nothing to attach to, and stops being made.
-    * ``state.true_fsdp_flat_full_param`` -- the flat gathered buffer, written
-      in ``_unshard_module_params`` and cleared nowhere in the tree.
-
-    Measured on 2 ranks, 64 MB of parameters (``nn.Linear(2048, 2048)`` x4):
-    sharding correctly halved the resident parameters (base 129 -> 97 MB) and
-    then drove the steady state to 513 MB, against 209 MB for the same model
-    not sharded. FSDP was not merely failing to save memory, it cost 2.5x.
-
-    Not called while the parameters are legitimately still gathered:
-    ``reshard_after_forward=False`` asks for exactly that, and the module
-    attributes point at the full Vars.
-    """
-    if getattr(state, "true_fsdp_unsharded", False):
-        return state
-    for entry in getattr(state, "true_fsdp_params", ()):
-        entry.full_param = None
-        entry.full_public_grad = None
-    state.true_fsdp_flat_full_param = None
-    return state
+    return _storage._release_full_params(state)
 
 
 def _execute_with_true_fsdp(module, orig_execute, *args, **kwargs):
-    """Run one forward with this module's parameters unsharded.
-
-    Two hooks call this for the same forward, and they are both needed because
-    they cover different dispatch paths:
-
-    * ``Module.__call__`` (installed once, in ``compat/torch/installers/nn.py``)
-      is the only one that sees a torch-style ``forward`` override, a
-      per-instance ``self.forward``, or the fused RMSNorm shortcut -- none of
-      which reach ``execute``;
-    * the per-instance ``execute`` wrapper (installed by ``fully_shard`` in
-      :func:`_install_true_fsdp_execute`) is the only one that sees a direct
-      ``module.execute(...)`` call that bypasses ``__call__``.
-
-    On the ordinary jittor-style path both fire, nested. Unsharding and
-    resharding are individually idempotent, so the answer was never wrong, but
-    the inner hook resharded on the way out and the outer one then re-entered
-    the whole guard sequence for a second time on every single forward.
-
-    The depth counter makes the pair behave as one hook: whichever fires first
-    owns the unshard/reshard for that forward, and any nested call is a plain
-    pass-through. That also fixes the case the idempotence was quietly
-    covering: with ``reshard_after_forward`` true, the inner hook used to put
-    the shards back before the outer hook's ``finally`` had run, so the window
-    in which the module's parameters were unsharded ended in the middle of the
-    outer hook rather than at its end.
-    """
-    state = getattr(module, "_fsdp_state", None)
-    if state is None or not getattr(state, "true_fsdp_initialized", False):
-        return orig_execute(*args, **kwargs)
-    depth = getattr(state, _EXECUTE_DEPTH_ATTR, 0)
-    if depth:
-        return orig_execute(*args, **kwargs)
-    setattr(state, _EXECUTE_DEPTH_ATTR, depth + 1)
-    frozen_forward_synced = False
-    try:
-        _unshard_module_params(module)
-        try:
-            out = orig_execute(*args, **kwargs)
-            entries = getattr(state, "true_fsdp_params", ())
-            if (entries
-                    and not any(getattr(entry, "requires_grad", True)
-                                for entry in entries)
-                    and getattr(state, "reshard_after_forward", True)):
-                if not common._primary_input_requires_grad(args, kwargs):
-                    out = common._materialize_frozen_output(out)
-                roots = common._tensor_values(out)
-                if roots:
-                    jt.submit_pending(*roots, device_sync=True)
-                frozen_forward_synced = True
-            return out
-        finally:
-            if getattr(state, "reshard_after_forward", True):
-                _reshard_module_params(module)
-                if frozen_forward_synced:
-                    jt.gc()
-    finally:
-        setattr(state, _EXECUTE_DEPTH_ATTR, depth)
+    return _storage._execute_with_true_fsdp(
+        module, orig_execute, *args, api=sys.modules[__name__], **kwargs
+    )
 
 
 def _wrapped_execute(self, *args, **kwargs):
-    return _execute_with_true_fsdp(
-        self, self._fsdp_orig_execute, *args, **kwargs)
+    return _execute_with_true_fsdp(self, self._fsdp_orig_execute, *args, **kwargs)
 
 
 def _install_true_fsdp_execute(module):

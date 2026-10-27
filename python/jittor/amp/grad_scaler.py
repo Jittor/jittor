@@ -157,6 +157,7 @@ class GradScaler:
     #: float16's largest finite value. A scale above it cannot be applied to a
     #: float16 loss of magnitude 1 or more without overflowing.
     _FLOAT16_MAX = 65504.0
+    _clear_grads_on_skip = True
 
     def scale(self, outputs):
         """Multiply a Var, or every Var in a container, by the scale.
@@ -218,41 +219,52 @@ class GradScaler:
         jt = _jittor()
         if self._on_device():
             return self._unscale_on_device(optimizer)
-        inv = np.float32(1.0 / self._scale)
-        flattened = []
+        # Torch computes the reciprocal in double, then stores float32. In
+        # particular, scale=0 follows IEEE arithmetic rather than Python's
+        # ZeroDivisionError. Check the incoming gradients, before unscaling:
+        # a finite gradient may overflow during division and is still stepped.
+        with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+            inv = np.float32(np.float64(1.0) / np.float64(self._scale))
+        checks = []
         for g in self._grads(optimizer):
             if not g.numel():
                 continue
+            checks.append(self._gradient_isfinite(g))
             unscaled = g * inv
             if _jittor_dtype_name(unscaled.dtype) != _jittor_dtype_name(g.dtype):
                 unscaled = unscaled.cast(_jittor_dtype_name(g.dtype))
             g.update(unscaled)
-            flattened.append(unscaled.cast("float32").reshape((-1,)))
-        # The step has to be skipped or not, on the host, so this reduction has
-        # to come back to Python -- but once, over everything, rather than once
-        # per gradient. It reads the values actually assigned back to the
-        # gradients, so an overflow introduced by the unscale itself is caught
-        # along with one that arrived from the backward.
-        self._found_inf = (
-            not bool(jt.isfinite(jt.concat(flattened)).all().item())
-            if flattened else False
-        )
+        self._found_inf = not bool(jt.stack(checks).all().item()) if checks else False
         self._unscaled = True
+
+    def _gradient_isfinite(self, grad):
+        """AMP's check domain, before the reciprocal changes any values.
+
+        CPU preserves float64's exponent range. Torch's CUDA AMP kernel uses
+        a float-valued isfinite helper even for double inputs, so its check
+        narrows those to float32; preserve that device-specific behaviour.
+        """
+        jt = _jittor()
+        backend = int(grad.placement_backend)
+        cuda = backend == 1 or (backend < 0 and jt.flags.use_cuda
+                               and not getattr(jt.compiler, "has_acl", 0)
+                               and not getattr(jt.compiler, "has_rocm", 0))
+        checked = grad.float32() if cuda else grad
+        return jt.isfinite(checked).all()
 
     def _unscale_on_device(self, optimizer):
         """`unscale_` without reading anything back: found-inf stays a Var."""
         jt = _jittor()
         grads = [g for g in self._grads(optimizer) if g.numel()]
-        flattened = []
+        checks = []
         if grads:
-            inv = 1.0 / self._device_state(grads[0])[0]
+            scale = self._device_state(grads[0])[0]
+            inv = (1.0 / scale.float64()).float32()
             for g in grads:
+                checks.append(self._gradient_isfinite(g))
                 unscaled = g * inv.reshape(()).cast(g.dtype)
                 g.update(unscaled)
-                flattened.append(unscaled.cast("float32").reshape((-1,)))
-        self._found_inf_var = (
-            jt.logical_not(jt.isfinite(jt.concat(flattened)).all())
-            if flattened else None)
+        self._found_inf_var = jt.logical_not(jt.stack(checks).all()) if checks else None
         self._unscaled = True
 
     def step(self, optimizer, *args, **kwargs):
@@ -295,7 +307,7 @@ class GradScaler:
             # that implement exactly that. An optimizer without `zero_grad` is
             # one whose gradients the caller manages.
             zero_grad = getattr(optimizer, "zero_grad", None)
-            if callable(zero_grad):
+            if self._clear_grads_on_skip and callable(zero_grad):
                 zero_grad()
             return None
         return optimizer.step(*args, **kwargs)
@@ -316,14 +328,16 @@ class GradScaler:
             self._found_inf = False
             return
         if self._found_inf:
-            # Never below 1: a scale under 1 shrinks the gradients, which is
-            # the opposite of the point.
-            self._scale = max(1.0, self._scale * self._backoff_factor)
+            with np.errstate(over="ignore", invalid="ignore"):
+                self._scale = float(np.float32(self._scale * self._backoff_factor))
             self._growth_tracker = 0
         else:
             self._growth_tracker += 1
-            if self._growth_tracker >= self._growth_interval:
-                self._scale *= self._growth_factor
+            if self._growth_tracker == self._growth_interval:
+                with np.errstate(over="ignore", invalid="ignore"):
+                    grown = np.float32(self._scale * self._growth_factor)
+                if np.isfinite(grown):
+                    self._scale = float(grown)
                 self._growth_tracker = 0
         self._found_inf = False
 
@@ -336,10 +350,11 @@ class GradScaler:
         scale, tracker = self._device
         found = self._found_inf_var.float32().reshape((1,))
         grown = tracker + 1
-        grow = (grown >= float(self._growth_interval)).float32()
-        backed_off = jt.maximum(scale * self._backoff_factor, 1.0)
-        kept = grow * (scale * self._growth_factor) + (1 - grow) * scale
-        scale.update((found * backed_off + (1 - found) * kept).stop_grad())
+        grow = (grown == float(self._growth_interval)).float32()
+        backed_off = scale * self._backoff_factor
+        candidate = scale * self._growth_factor
+        kept = jt.where(grow.bool() & jt.isfinite(candidate), candidate, scale)
+        scale.update(jt.where(found.bool(), backed_off, kept).stop_grad())
         tracker.update(((1 - found) * (1 - grow) * grown).stop_grad())
         self._found_inf_var = None
         self._found_inf = False

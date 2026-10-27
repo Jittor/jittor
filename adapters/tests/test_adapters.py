@@ -10,12 +10,14 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "adapters"))
-from jittor_adapters import transformers, torchmetrics
+from jittor_adapters import transformers, transformers_qwen35, torchmetrics
 from jittor_adapters._common import UnsupportedAdapterVersion, require_version
 
 # Load the actual registration mechanism without importing the native runtime.
 native = types.ModuleType("jittor")
 native.__path__ = []
+torch_frontend = types.ModuleType("torch")
+torch_frontend.__torch_version__ = "2.11.0"
 compat = types.ModuleType("_adapter_tests_compat")
 compat.__path__ = [str(ROOT / "compat")]
 sys.modules[compat.__name__] = compat
@@ -27,6 +29,7 @@ class AdapterContracts(unittest.TestCase):
         self.modules = mock.patch.dict(sys.modules, {
             "jittor": native, "jittor.compat": compat,
             "jittor.compat.module_patcher": patcher,
+            "torch": torch_frontend,
         })
         self.modules.start()
         # These cases build *fake* `transformers`/`torchmetrics` packages, and a
@@ -61,12 +64,34 @@ class AdapterContracts(unittest.TestCase):
         package = Path(root) / "transformers"
         (package / "utils").mkdir(parents=True)
         (package / "__init__.py").write_text(
-            "__version__ = %r\nfrom .utils.import_utils import is_torch_npu_available\n"
-            "probe_result = is_torch_npu_available(check_device=True)\n" % version)
+            "__version__ = %r\n"
+            "from .utils.import_utils import (get_torch_version, is_torch_available, "
+            "is_torch_npu_available, is_torchvision_available, is_torchvision_v2_available)\n"
+            "probe_result = is_torch_npu_available(check_device=True)\n"
+            "torch_available = is_torch_available()\n"
+            "torch_version = get_torch_version()\n" % version)
         (package / "utils/__init__.py").write_text("")
         (package / "utils/import_utils.py").write_text(
+            "from functools import lru_cache\n"
+            "def _is_package_available(package, return_version=False):\n"
+            "    result = package == 'torch'\n"
+            "    return (result, '1.3.11.0' if result else 'N/A') if return_version "
+            "else result\n"
+            "@lru_cache()\n"
+            "def is_torch_available():\n"
+            "    found, version = _is_package_available('torch', return_version=True)\n"
+            "    major, minor = (int(part) for part in version.split('.')[:2])\n"
+            "    return found and (major, minor) >= (2, 4)\n"
+            "@lru_cache()\n"
+            "def get_torch_version():\n"
+            "    return _is_package_available('torch', return_version=True)[1]\n"
             "def is_torch_npu_available(check_device=False):\n"
-            "    raise RuntimeError('native torch_npu probe must not execute')\n")
+            "    raise RuntimeError('native torch_npu probe must not execute')\n"
+            "def is_torchvision_available():\n"
+            "    return False\n"
+            "def is_torchvision_v2_available():\n"
+            "    raise RuntimeError('unavailable torchvision version must not be parsed')\n"
+            "BACKENDS_MAPPING = {'torchvision': (is_torchvision_available, 'torchvision unavailable')}\n")
 
     #: The shape transformers 5.x ships: the version is assigned while the
     #: package executes, then the module is handed to a ``_LazyModule`` and the
@@ -142,6 +167,177 @@ del __version__
                 self.assertTrue(callable(guard.cache_clear))
             finally:
                 sys.path.remove(root)
+
+    def test_transformers_513_probe_contract(self):
+        transformers.register(patcher.register_module_patch)
+        patcher.install_module_patches(load_entry_points=False)
+        with tempfile.TemporaryDirectory() as root:
+            self.fake_transformers(root, "5.13.0")
+            sys.path.insert(0, root)
+            try:
+                module = importlib.import_module("transformers")
+                probes = sys.modules["transformers.utils.import_utils"]
+                self.assertFalse(module.is_torch_npu_available(check_device=True))
+                self.assertIs(module.is_torch_npu_available, probes.is_torch_npu_available)
+                self.assertIs(
+                    probes.BACKENDS_MAPPING["torchvision"][0],
+                    probes.is_torchvision_available,
+                )
+            finally:
+                sys.path.remove(root)
+
+    def test_transformers_recognizes_the_deployed_torchvision_facade(self):
+        transformers.register(patcher.register_module_patch)
+        patcher.install_module_patches(load_entry_points=False)
+        with tempfile.TemporaryDirectory() as root:
+            self.fake_transformers(root, "4.56.2")
+            facade = Path(root) / "torchvision"
+            facade.mkdir()
+            (facade / "__init__.py").write_text("__version__ = '2.11.0'\n")
+            sys.path.insert(0, root)
+            try:
+                module = importlib.import_module("transformers")
+                import_utils = sys.modules["transformers.utils.import_utils"]
+                self.assertTrue(module.is_torchvision_available())
+                self.assertTrue(module.is_torchvision_v2_available())
+                self.assertIs(module.is_torchvision_available, import_utils.is_torchvision_available)
+                self.assertIs(module.is_torchvision_v2_available, import_utils.is_torchvision_v2_available)
+                self.assertIs(
+                    import_utils.BACKENDS_MAPPING["torchvision"][0],
+                    import_utils.is_torchvision_available,
+                )
+                self.assertTrue(import_utils.BACKENDS_MAPPING["torchvision"][0]())
+            finally:
+                sys.path.remove(root)
+
+    def test_transformers_uses_the_emulated_torch_api_version(self):
+        transformers.register(patcher.register_module_patch)
+        patcher.install_module_patches(load_entry_points=False)
+        with tempfile.TemporaryDirectory() as root:
+            self.fake_transformers(root, "5.9.0")
+            sys.path.insert(0, root)
+            try:
+                module = importlib.import_module("transformers")
+                self.assertTrue(module.torch_available)
+                self.assertEqual(module.torch_version, "2.11.0")
+                probe = sys.modules["transformers.utils.import_utils"]._is_package_available
+                self.assertIs(probe("torch"), True)
+                self.assertEqual(probe("torch", return_version=True), (True, "2.11.0"))
+            finally:
+                sys.path.remove(root)
+
+    def test_qwen35_adapter_is_registered_and_version_locked(self):
+        registrations = []
+        transformers_qwen35.register(
+            lambda path, callback: registrations.append((path, callback)))
+        self.assertEqual(
+            registrations,
+            [("transformers.models.qwen3_5.modeling_qwen3_5",
+              transformers_qwen35.patch_qwen35)],
+        )
+
+        package = types.ModuleType("transformers")
+        package.__version__ = "5.8.0"
+        module = types.SimpleNamespace()
+        with mock.patch.dict(sys.modules, {"transformers": package}):
+            with self.assertRaisesRegex(UnsupportedAdapterVersion, "5.8.0"):
+                transformers_qwen35.patch_qwen35(module)
+
+    def test_qwen35_adapter_rejects_changed_upstream_source(self):
+        def changed_function():
+            return None
+
+        for name in transformers_qwen35.SOURCE_SHA256:
+            with self.subTest(function=name):
+                with self.assertRaisesRegex(UnsupportedAdapterVersion, "source changed"):
+                    transformers_qwen35._verify_source(changed_function, name)
+
+
+    def test_qwen35_partial_retirement_stub_identity_and_repeat(self):
+        """Stub-only install contract; no model/tensor/device is executed."""
+        def chunk():
+            raise AssertionError("stub chunk must not execute")
+
+        def recurrent():
+            raise AssertionError("stub recurrent must not execute")
+
+        def replacement():
+            raise AssertionError("stub replacement must not execute")
+
+        replacement._jittor_transformers_qwen35_functional = True
+        module = types.SimpleNamespace(
+            torch_chunk_gated_delta_rule=chunk,
+            torch_recurrent_gated_delta_rule=recurrent,
+        )
+        package = types.ModuleType("transformers")
+        package.__version__ = "5.9.0"
+
+        def replace_stub(owner, name, value, expected):
+            self.assertIs(owner, module)
+            self.assertIs(getattr(owner, name), expected)
+            setattr(owner, name, value)
+
+        with mock.patch.dict(sys.modules, {"transformers": package}):
+            with mock.patch.object(transformers_qwen35, "_verify_source") as verify:
+                with mock.patch.object(transformers_qwen35, "_functional_chunk") as chunk_factory:
+                    with mock.patch.object(transformers_qwen35, "_functional_recurrent", return_value=replacement) as recurrent_factory:
+                        with mock.patch.object(transformers_qwen35, "replace", side_effect=replace_stub) as replace_mock:
+                            self.assertIs(transformers_qwen35.patch_qwen35(module), True)
+                            self.assertIs(module.torch_chunk_gated_delta_rule, chunk)
+                            self.assertIs(module.torch_recurrent_gated_delta_rule, replacement)
+                            self.assertEqual(verify.call_args_list, [
+                                mock.call(chunk, "torch_chunk_gated_delta_rule"),
+                                mock.call(recurrent, "torch_recurrent_gated_delta_rule"),
+                            ])
+                            self.assertIs(transformers_qwen35.patch_qwen35(module), False)
+                            self.assertIs(module.torch_chunk_gated_delta_rule, chunk)
+                            self.assertIs(module.torch_recurrent_gated_delta_rule, replacement)
+                            self.assertEqual(verify.call_args_list, [
+                                mock.call(chunk, "torch_chunk_gated_delta_rule"),
+                                mock.call(recurrent, "torch_recurrent_gated_delta_rule"),
+                                mock.call(chunk, "torch_chunk_gated_delta_rule"),
+                            ])
+                            chunk_factory.assert_not_called()
+                            recurrent_factory.assert_called_once_with(module)
+                            replace_mock.assert_called_once_with(
+                                module, "torch_recurrent_gated_delta_rule", replacement, recurrent)
+
+    def test_qwen35_partial_retirement_stub_repeated_registration(self):
+        """Only the shared registry contract is exercised, not HF loading."""
+        for _ in range(2):
+            transformers_qwen35.register(patcher.register_module_patch)
+        self.assertEqual(
+            patcher.registered_module_patches(),
+            {"transformers.models.qwen3_5.modeling_qwen3_5": (
+                transformers_qwen35.patch_qwen35,)},
+        )
+
+    def test_qwen35_partial_retirement_stub_either_source_rejects_before_patch(self):
+        """A failed source gate must precede either factory or any mutation."""
+        for failed_name in transformers_qwen35.SOURCE_SHA256:
+            with self.subTest(function=failed_name):
+                originals = {name: (lambda: None) for name in transformers_qwen35.SOURCE_SHA256}
+                module = types.SimpleNamespace(**originals)
+                package = types.ModuleType("transformers")
+                package.__version__ = "5.9.0"
+
+                def verify_stub(function, name):
+                    self.assertIs(function, originals[name])
+                    if name == failed_name:
+                        raise UnsupportedAdapterVersion("changed source")
+
+                with mock.patch.dict(sys.modules, {"transformers": package}):
+                    with mock.patch.object(transformers_qwen35, "_verify_source", side_effect=verify_stub):
+                        with mock.patch.object(transformers_qwen35, "_functional_chunk") as chunk_factory:
+                            with mock.patch.object(transformers_qwen35, "_functional_recurrent") as recurrent_factory:
+                                with mock.patch.object(transformers_qwen35, "replace") as replace_mock:
+                                    with self.assertRaises(UnsupportedAdapterVersion):
+                                        transformers_qwen35.patch_qwen35(module)
+                                    chunk_factory.assert_not_called()
+                                    recurrent_factory.assert_not_called()
+                                    replace_mock.assert_not_called()
+                                    for name, original in originals.items():
+                                        self.assertIs(getattr(module, name), original)
 
     def test_unsupported_transformers_version_fails_real_import(self):
         transformers.register(patcher.register_module_patch)

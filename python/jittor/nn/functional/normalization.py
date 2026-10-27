@@ -7,8 +7,9 @@ import jittor as jt
 from jittor._runtime.core_api import _output_requires_grad
 
 from ... import _arg_policy
+from ._amp import prefers_half as _amp_prefers_half
 from ..backends import hooks as _backend_hooks
-from jittor._runtime.dispatch import select_kernel as _select_kernel
+from jittor._runtime.dispatch import dispatch_context, select_kernel as _select_kernel
 from jittor.backends.cuda.kernels.nn.batch_norm_training_cuda import (
     _batch_norm_cuda,
     _batch_norm_cuda_statistics,
@@ -244,8 +245,16 @@ def instance_norm(x,
     return _affine(xhat, weight, bias, x.shape[1], x.ndim)
 
 
+def _ln_statistics(x, dims, eps):
+    mean = jt.mean(x, dims=dims, keepdims=1)
+    deviation = x - mean
+    var = jt.mean(deviation * deviation, dims=dims, keepdims=1)
+    rstd = jt.rsqrt(var + eps)
+    return mean, rstd, deviation * rstd
+
+
 @lru_cache(maxsize=128)
-def _ln_function_cls(dims, eps):
+def _ln_function_cls(dims, eps, cpu_bf16_affine=False):
     # Normalize x -> (x-mean)/sqrt(var+eps) over `dims` with a numerically-STABLE
     # custom backward (the closed form torch's fused LN uses). The composite-autodiff
     # backward forms huge terms (x * d/dx[1/sqrt(var+eps)] ~ (var+eps)^-1.5) that must
@@ -254,7 +263,17 @@ def _ln_function_cls(dims, eps):
     # jt.Function: invoked via .apply(); tape_together makes grad() the backward
     # (overriding the composite path inside execute).
     class _LN(jt.Function):
-        def execute(self, x):
+        def _run_call(self, *inputs):
+            if cpu_bf16_affine:
+                # New holders retain the original graph for higher derivatives
+                # and survive caller assign/rebinding. Public reshape is a
+                # replayable view and a direct Python reference is mutable.
+                self.saved = tuple(jt.ops.reshape(value, value.shape)
+                                   if isinstance(value, jt.Var) else value
+                                   for value in inputs)
+            return super()._run_call(*inputs)
+
+        def execute(self, x, weight=1.0, bias=0.0):
             # float16/bfloat16 are computed in float32 and handed back in
             # float32; `_restore_half_dtype` at the caller narrows the result
             # after the affine, which is where torch rounds too. `jt.mean`
@@ -275,14 +294,40 @@ def _ln_function_cls(dims, eps):
             self.narrow_dtype = x.dtype if narrow else None
             if narrow:
                 x = x.float32()
-            mean = jt.mean(x, dims=dims, keepdims=1)
-            var = jt.mean((x - mean) * (x - mean), dims=dims, keepdims=1)
-            rstd = jt.rsqrt(var + eps)
-            xhat = (x - mean) * rstd
+            mean, rstd, xhat = _ln_statistics(x, dims, eps)
             self.xhat = xhat
             self.rstd = rstd
+            if cpu_bf16_affine:
+                return (xhat * weight + bias).cast(self.narrow_dtype)
             return xhat
         def grad(self, g):
+            if cpu_bf16_affine:
+                x, weight, bias = self.saved
+                x = x.float32()
+                mean, rstd, _ = _ln_statistics(x, dims, eps)
+                # CPU non-mixed BF16 LayerNorm stores statistics in BF16.
+                # Forward uses its unrounded FP32 statistics, while backward
+                # consumes the rounded saved values, including affine grads.
+                mean = mean.cast(self.narrow_dtype).float32()
+                rstd = rstd.cast(self.narrow_dtype).float32()
+                g = g.float32()
+                weighted = g * (weight.float32() if isinstance(weight, jt.Var) else weight)
+                average = jt.mean(weighted, dims=dims, keepdims=1)
+                cross = jt.mean(weighted * x, dims=dims, keepdims=1)
+                slope = (average * mean - cross) * rstd * rstd * rstd
+                intercept = -slope * mean - average * rstd
+                dx = (rstd * weighted + slope * x + intercept).cast(self.narrow_dtype)
+                outer = tuple(range(x.ndim - len(dims)))
+                dw = db = None
+                if isinstance(weight, jt.Var):
+                    # CPU's reduced-precision affine partials also live in
+                    # BF16. Keeping them wide until the final sum changes the
+                    # small weight gradients that feed optimizer moments.
+                    dw = (g * (rstd * x - rstd * mean)).cast(weight.dtype)
+                    dw = (dw.sum(outer) if outer else dw).cast(weight.dtype)
+                if isinstance(bias, jt.Var):
+                    db = (g.sum(outer) if outer else g).cast(bias.dtype)
+                return dx, dw, db
             # dL/dx = rstd*(g - mean(g) - xhat*mean(g*xhat)) over the normalized dims
             xhat, rstd = self.xhat, self.rstd
             # Same reason as the forward: the saved `xhat`/`rstd` are float32
@@ -396,6 +441,17 @@ def layer_norm(
             raise ValueError("layer_norm {} must match normalized_shape".format(name))
     weight = 1.0 if weight is None else weight
     bias = 0.0 if bias is None else bias
+    if (_amp_prefers_half()
+            and _jittor_dtype_name(x.dtype) in ("float16", "bfloat16")):
+        # Widen the whole body, not just the input: every float op built while
+        # the register is set is lowered again, so an fp32-spelled intermediate
+        # does not survive. The result is narrowed once, which keeps the
+        # published dtype contract (half in, half out); the next
+        # autocast-eligible op rounds at the same boundary anyway.
+        with jt.flag_scope(amp_reg=jt.amp_flags.disabled):
+            wide = layer_norm(x.float32(), normalized_shape, weight, bias,
+                              eps, elementwise_affine)
+        return wide.cast(_jittor_dtype_name(x.dtype))
     # The two relays are mutually exclusive by construction: the training one
     # requires `_output_requires_grad(x, weight, bias)` and the inference one
     # requires its negation. Trying both meant every layer_norm paid two full
@@ -421,5 +477,11 @@ def layer_norm(
             return _restore_half_dtype(fast, x)
         return fast
     dims = [-i for i in range(rank, 0, -1)]
+    if (dispatch_context(x, weight, bias).backend == "cpu"
+            and _jittor_dtype_name(x.dtype) == "bfloat16"
+            and all(not isinstance(value, jt.Var)
+                    or _jittor_dtype_name(value.dtype) == "bfloat16"
+                    for value in (weight, bias))):
+        return _ln_function_cls(tuple(dims), float(eps), True).apply(x, weight, bias)
     xhat = _ln_normalize(x, dims, eps)
     return _restore_half_dtype(xhat * weight + bias, x)

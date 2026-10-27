@@ -82,6 +82,11 @@ struct RandomGenerator {
     // @pyjt(get_state)
     string get_state();
 
+    // Torch CPU handles share the runtime's versioned engine snapshot. Keep
+    // native get_state's existing frame and CUDA counter behavior unchanged.
+    // @pyjt(_get_cpu_rng_state)
+    string get_cpu_rng_state();
+
     // @pyjt(set_state)
     // @attrs(return_self)
     RandomGenerator* set_state(const string& s);

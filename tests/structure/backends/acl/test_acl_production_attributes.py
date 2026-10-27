@@ -6,9 +6,10 @@ import os
 from pathlib import Path
 import subprocess
 import sys
-import types
 
 import pytest
+
+from _helpers.acl_recording_pipeline import build_pipeline
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -17,64 +18,7 @@ OPS = ROOT / "backends/acl/kernels/ops"
 
 @pytest.fixture
 def pipeline(monkeypatch):
-    class Tensor:
-        def __init__(self, shape, dtype="float32"):
-            self.shape, self.dtype = tuple(shape), dtype
-
-        @property
-        def ndim(self):
-            return len(self.shape)
-
-        def __len__(self):
-            return len(self.shape)
-
-        def numel(self):
-            import math
-
-            return math.prod(self.shape)
-
-    calls = []
-    jt = types.ModuleType("jittor")
-    jt.Function = object
-    jt.empty = jt.zeros = Tensor
-
-    def code(*args, **kwargs):
-        if args:
-            kwargs["inputs"] = args[2]
-        calls.append(kwargs)
-        return kwargs.get("outputs") or [
-            Tensor(shape, dtype) for shape, dtype in zip(args[0], args[1])
-        ]
-
-    jt.code = code
-    monkeypatch.setitem(sys.modules, "jittor", jt)
-    compiler = types.ModuleType("jittor.compiler")
-    jt.compiler = compiler
-    monkeypatch.setitem(sys.modules, compiler.__name__, compiler)
-    utils = types.ModuleType("jittor_utils")
-    utils.env_or_try_find = lambda *args, **kwargs: None
-    monkeypatch.setitem(sys.modules, "jittor_utils", utils)
-    dtypes = types.ModuleType("jittor._core.dtypes")
-    dtypes.dtype_name = str
-    monkeypatch.setitem(sys.modules, dtypes.__name__, dtypes)
-    package = types.ModuleType("acl_attribute_pipeline")
-    package.__path__ = [str(OPS)]
-    monkeypatch.setitem(sys.modules, package.__name__, package)
-
-    def load(name):
-        qualified = package.__name__ + "." + name
-        if qualified in sys.modules:
-            return sys.modules[qualified]
-        spec = importlib.util.spec_from_file_location(qualified, OPS / (name + ".py"))
-        module = importlib.util.module_from_spec(spec)
-        monkeypatch.setitem(sys.modules, qualified, module)
-        spec.loader.exec_module(module)
-        return module
-
-    # Register imports through monkeypatch so each test restores the full module table.
-    for name in ("acl_data", "_attributes", "_code"):
-        load(name)
-    return load, Tensor, calls
+    return build_pipeline(monkeypatch)
 
 
 def test_dimensions_are_runtime_data_and_backward_keeps_its_own_values(pipeline):
@@ -133,6 +77,71 @@ def test_swiglu_dimension_uses_typed_data_channel(pipeline):
     load("silu_op").SwiGluACL().execute(Tensor((2, 8), "float16"), -1)
     assert calls[-1]["data"] == data("SwiGlu", {"dim": 1})
     assert "op.dim =" not in calls[-1].get("cuda_src", "")
+
+
+def test_prompt_attention_uses_typed_attributes_and_explicit_mask(pipeline, monkeypatch):
+    load, Tensor, calls = pipeline
+    module = load("flashattention_op")
+    monkeypatch.setattr(module.jt.flags, "no_grad", 1)
+    query, key, value = [Tensor((1, 4, 128, 64), "float16") for _ in range(3)]
+    mask = Tensor((128, 128), "bool")
+    output = module.PromptFlashAttentionACL(4, 0.125)(query, key, value, mask)
+    assert output.shape == query.shape and output.dtype == query.dtype
+    assert calls[-1]["inputs"] == [query, key, value, mask]
+    assert calls[-1]["data"] == load("_attributes").attribute_data(
+        "PromptFlashAttention", {"headNum": 4, "scale": 0.125})
+    assert calls[-1]["backend"] == "acl"
+    assert "attr->" not in calls[-1]["cuda_src"]
+    monkeypatch.setattr(module.jt.flags, "no_grad", 0)
+    with pytest.raises(RuntimeError, match="no_grad"):
+        module.PromptFlashAttentionACL(4, 0.125)(query, key, value, mask)
+
+
+def test_prompt_attention_selection_keeps_other_soc_and_semantics_on_original_path(pipeline, monkeypatch):
+    load, _, _ = pipeline
+    module = load("flashattention_op")
+    monkeypatch.setattr(module, "soc_name", lambda: "Ascend310P3")
+    monkeypatch.setattr(module, "kernel_available", lambda name: True)
+    query, key = (1, 4, 502, 128), (1, 2, 502, 128)
+    supported = module._supports_prompt_prefill
+    assert supported(query, key, "float16", False, True, None)
+    assert not supported(query, key, "float16", True, True, None)
+    assert not supported(query, key, "float32", False, True, None)
+    assert not supported(query, key, "float16", False, False, None)
+    assert not supported(query, key, "float16", False, True, object())
+    assert not supported(query, (1, 2, 503, 128), "float16", False, True, None)
+    assert not supported((1, 4, 1, 128), (1, 2, 1, 128), "float16", False, True, None)
+    assert not supported((1, 4, 65535, 128), (1, 2, 65535, 128), "float16", False, True, None)
+    assert not supported((1, 4, 502, 8), (1, 2, 502, 8), "float16", False, True, None)
+    monkeypatch.setattr(module, "soc_name", lambda: "Ascend910B3")
+    assert not supported(query, key, "float16", False, True, None)
+    monkeypatch.setattr(module, "soc_name", lambda: "Ascend310P3")
+    monkeypatch.setattr(module, "kernel_available", lambda name: False)
+    assert not supported(query, key, "float16", False, True, None)
+
+
+def test_index_copy_emits_independent_output_and_typed_dimension(pipeline):
+    load, Tensor, calls = pipeline
+    data = load("_attributes").attribute_data
+    index_copy = load("gather_scatter_op").IndexCopyACL()
+    base, index = Tensor((2, 3, 4), "float16"), Tensor((1,), "int64")
+    source = Tensor((2, 1, 4), "float16")
+    first = index_copy(base, 1, index, source)
+    second_base = Tensor((2, 3, 4), "float16")
+    second = index_copy(second_base, 1, index, source)
+    index_copy(base, 2, index, Tensor((2, 3, 1), "float16"))
+
+    assert first is not base and second is not second_base
+    assert first.shape == second.shape == base.shape
+    assert first.dtype == second.dtype == base.dtype
+    assert calls[0]["inputs"] == [base, index, source]
+    assert calls[1]["inputs"] == [second_base, index, source]
+    assert calls[0]["data"] == calls[1]["data"] == data("IndexCopy", {"dim": 1})
+    assert calls[2]["data"] == data("IndexCopy", {"dim": 2})
+    assert calls[0]["cuda_src"] == calls[1]["cuda_src"] == calls[2]["cuda_src"]
+    assert all(call["backend"] == "acl" for call in calls)
+    assert all("outputs" not in call for call in calls)
+    assert all("attr->dim" not in call["cuda_src"] for call in calls)
 
 
 def test_concat_forward_uses_typed_data_channel(pipeline):
@@ -205,6 +214,12 @@ def test_encoded_values_reach_real_cpp_attribute_types(pipeline, tmp_path):
         ),
         ("Cumsum", {"dim": -2}, "dynamic_cast<GatherAttr*>(runner.op_attr.get())->dim == -2"),
         ("Gather", {"dim": 1}, "dynamic_cast<GatherAttr*>(runner.op_attr.get())->dim == 1"),
+        ("IndexCopy", {"dim": 2},
+         'dynamic_cast<GatherAttr*>(runner.op_attr.get())->dim == 2 && runner.jt_name == "indexcopy"'),
+        ("PromptFlashAttention", {"headNum": 16, "scale": 0.125},
+         'dynamic_cast<PromptFlashAttentionAttr*>(runner.op_attr.get())->headNum == 16 && '
+         'dynamic_cast<PromptFlashAttentionAttr*>(runner.op_attr.get())->scale == 0.125 && '
+         'runner.jt_name == "promptflashattention"'),
         (
             "Scatter",
             {"axis": -1, "reduction": 2},
@@ -498,10 +513,14 @@ def test_complete_forward_backward_payloads_are_disjoint(pipeline):
     load("upsample_op").UpsampleNearest2dACL()(Tensor((1, 2, 3, 4)), (6, 8))
     assert "UpsampleNearest2dBackward_op" in " ".join(calls[-1]["data"])
     dropout = load("dropout_op").DropoutACL()
-    dropout.execute(x, 0.25, True)
-    dropout.execute(x, 0.5, False)
+    dropout(x, 0.25, True)
+    dropout(x, 0.5, False)
+    # Same runner source either way; p/train (and the backward scale) differ.
     assert calls[-1]["cuda_src"] == calls[-2]["cuda_src"]
     assert calls[-1]["data"] != calls[-2]["data"]
+    assert calls[-1]["data"]["multi_grad"] == 1
+    assert 'apply_acl_code_attributes(op, data, "acl_grad_attr.", "DropoutBackward")' in (
+        calls[-1]["cuda_grad_src"][0])
 
 
 def test_flash_attention_backward_attributes_precede_single_launch(pipeline):
@@ -531,3 +550,45 @@ def test_flash_attention_backward_attributes_precede_single_launch(pipeline):
         "hasPaddingmask": False, "hasAttentmask": False,
     }, prefix="acl_grad_attr.")
     assert all(call["data"][key] == value for key, value in expected.items())
+
+
+def test_incremental_attention_programs_keep_optional_mask_input_separate(pipeline, monkeypatch):
+    load, Tensor, calls = pipeline
+    jt = sys.modules["jittor"]
+
+    def reshape(tensor, *shape):
+        if len(shape) == 1 and isinstance(shape[0], (tuple, list)):
+            shape = tuple(shape[0])
+        if -1 in shape:
+            known = 1
+            for size in shape:
+                if size != -1:
+                    known *= size
+            shape = tuple(tensor.numel() // known if size == -1 else size for size in shape)
+        return Tensor(shape, tensor.dtype)
+
+    monkeypatch.setattr(Tensor, "reshape", reshape, raising=False)
+    monkeypatch.setattr(Tensor, "cast", lambda tensor, dtype: Tensor(tensor.shape, dtype), raising=False)
+    monkeypatch.setattr(Tensor, "__mul__", lambda tensor, other: Tensor(tensor.shape, tensor.dtype), raising=False)
+    monkeypatch.setattr(jt, "Var", Tensor, raising=False)
+    monkeypatch.setattr(jt, "logical_not", lambda tensor: Tensor(tensor.shape, "bool"), raising=False)
+    monkeypatch.setattr(jt, "logical_and", lambda left, right: Tensor(left.shape, "bool"), raising=False)
+    monkeypatch.setattr(jt, "any", lambda tensor, dim, keepdims: Tensor(tensor.shape[:-1] + (1,), "bool"), raising=False)
+    attention = load("flashattention_op").IncreFlashAttentionACL(16, 8, 128 ** -0.5)
+    q, k, v = Tensor((1, 16, 1, 128), "float16"), Tensor((1, 8, 64, 128), "float16"), Tensor((1, 8, 64, 128), "float16")
+    attention.execute(q, k, v)
+    attention.execute(q, k, v, Tensor((1, 1, 1, 64), "bool"))
+    attention.execute(q, k, v)
+    k_long, v_long = Tensor((1, 8, 502, 128), "float16"), Tensor((1, 8, 502, 128), "float16")
+    attention.execute(q, k_long, v_long, Tensor((1, 502), "bool"))
+
+    assert [len(call["inputs"]) for call in calls] == [3, 4, 3, 4]
+    for call, masked in zip(calls, (False, True, False, True)):
+        assert ('op.add(in3, true);' in call["cuda_src"]) == masked
+        assert call["cuda_grad_src"] == []
+        if masked:
+            assert call["inputs"][3].dtype == "bool"
+    assert calls[0]["data"] is calls[2]["data"]
+    assert calls[1]["data"] is calls[3]["data"]
+    assert calls[1]["inputs"][3].shape == (1, 1, 1, 64)
+    assert calls[3]["inputs"][3].shape == (1, 502)

@@ -1,7 +1,64 @@
 """The paged KV cache layout the attention patch declares to vLLM."""
 
+import os
 import types
 import unittest
+from unittest.mock import patch
+
+import pytest
+
+
+@pytest.fixture(scope="module")
+def registered_ops():
+    import torch
+    from jittor_adapters.vllm import custom_ops
+
+    custom_ops.register(torch)
+    return torch.ops._C
+
+
+def test_get_cuda_view_from_cpu_tensor_is_a_real_device_copy(registered_ops):
+    import numpy as np
+    import jittor as jt
+    if not jt.has_cuda:
+        pytest.skip("requires CUDA accelerator")
+    source = jt.array(np.arange(7, dtype="float32"))
+    moved = registered_ops.get_cuda_view_from_cpu_tensor(source)
+    assert moved is not source
+    assert str(moved.device) == "cuda:0"
+    np.testing.assert_array_equal(moved.numpy(), np.arange(7, dtype="float32"))
+
+
+@pytest.mark.parametrize("name", [
+    "static_scaled_fp8_quant", "dynamic_scaled_fp8_quant",
+    "dynamic_per_token_scaled_fp8_quant", "per_token_group_fp8_quant",
+    "scaled_fp4_quant", "rms_norm_static_fp8_quant",
+    "rms_norm_dynamic_per_token_quant", "rms_norm_per_block_quant",
+    "fused_add_rms_norm_static_fp8_quant", "silu_and_mul_nvfp4_quant",
+    "silu_and_mul_per_block_quant", "silu_and_mul_quant",
+    "fused_qk_norm_rope", "cutlass_scaled_mm",
+])
+def test_unsupported_compute_ops_are_importable_but_refuse_execution(name, registered_ops):
+    import torch
+    if not torch.cuda.is_available():
+        pytest.skip("requires CUDA accelerator")
+    op = getattr(registered_ops, name).default
+    out = torch.zeros(4, device="cuda")
+    source = torch.ones(4, device="cuda")
+    scale = torch.ones(1, device="cuda")
+    with pytest.raises(NotImplementedError, match=name):
+        op(out, source, scale)
+
+
+def test_real_capability_probes_report_unavailable(registered_ops):
+    for name in (
+        "cutlass_scaled_mm_supports_fp8", "cutlass_scaled_mm_supports_fp4",
+        "cutlass_scaled_mm_supports_block_fp8", "cutlass_group_gemm_supported",
+        "cutlass_sparse_scaled_mm_supported",
+        "cutlass_blockwise_scaled_grouped_mm_supported", "cutlass_mla_supported",
+    ):
+        assert getattr(registered_ops, name)(89) is False
+
 
 from jittor_adapters.vllm import backend
 
@@ -116,6 +173,110 @@ class TestHeadSizeDeclaration(unittest.TestCase):
             module.FlashAttentionBackend.get_kv_cache_shape(3, 16, 5, 7),
             (3, 2, 16, 5, 7))
         module.FlashAttentionBackend.validate_head_size(16)
+
+
+class TestDirectAllReduce(unittest.TestCase):
+    @staticmethod
+    def _module(calls, group_size=2):
+        module = types.ModuleType(
+            "vllm.distributed.device_communicators.cuda_communicator")
+
+        class Value:
+            def __init__(self, name):
+                self.name = name
+
+            def clone(self):
+                calls.append((self.name, "clone-holder"))
+                return Value(self.name + "-holder")
+
+            def update(self, value):
+                calls.append((self.name, "update", value.name))
+                self.name = value.name
+
+            def out_hint(self):
+                calls.append((self.name, "out-hint"))
+                return self
+
+        class Group:
+            def _all_reduce(self, value, operation):
+                calls.append((value.name, operation))
+                return Value("native-result")
+
+            def size(self):
+                return group_size
+
+        class CudaCommunicator:
+            def __init__(self, pynccl=None):
+                self.pynccl_comm = pynccl
+                self.device_group = Group()
+
+            def all_reduce(self, value):
+                return ("fallback", value)
+
+        module.CudaCommunicator = CudaCommunicator
+        module.Value = Value
+        return module
+
+    def test_native_out_of_place_result_is_returned_without_a_copy(self):
+        calls = []
+        module = self._module(calls)
+        self.assertTrue(backend.patch_cuda_all_reduce(module))
+        source = module.Value("input")
+        result = module.CudaCommunicator().all_reduce(source)
+        self.assertIsNot(result, source)
+        self.assertEqual(result.name, "native-result")
+        self.assertEqual(calls, [
+            ("input", "sum"),
+            ("native-result", "out-hint"),
+        ])
+        self.assertFalse(backend.patch_cuda_all_reduce(module))
+
+    def test_larger_group_retains_holder_publication(self):
+        calls = []
+        module = self._module(calls, group_size=4)
+        with patch.dict(os.environ,
+                        {"JITTOR_VLLM_EMPTY_ALL_REDUCE_HOLDER": "0"}):
+            self.assertTrue(backend.patch_cuda_all_reduce(module))
+            source = module.Value("input")
+            result = module.CudaCommunicator().all_reduce(source)
+        self.assertEqual(result.name, "native-result")
+        self.assertEqual(calls, [
+            ("input", "sum"),
+            ("input", "clone-holder"),
+            ("input-holder", "update", "native-result"),
+        ])
+
+    def test_larger_group_uses_empty_holder_without_copying_input(self):
+        import jittor as jt
+
+        calls = []
+        module = self._module(calls, group_size=4)
+        source = module.Value("input")
+        source.shape = (2, 3)
+        source.dtype = "float16"
+        empty = module.Value("empty-holder")
+        with patch.dict(os.environ,
+                        {"JITTOR_VLLM_EMPTY_ALL_REDUCE_HOLDER": "1"}), \
+                patch.object(jt, "empty", return_value=empty) as make_empty:
+            self.assertTrue(backend.patch_cuda_all_reduce(module))
+            result = module.CudaCommunicator().all_reduce(source)
+        make_empty.assert_called_once_with((2, 3), dtype="float16")
+        self.assertEqual(result.name, "native-result")
+        self.assertEqual(calls, [
+            ("input", "sum"),
+            ("empty-holder", "update", "native-result"),
+        ])
+
+    def test_an_enabled_pynccl_backend_keeps_vllms_dispatch(self):
+        calls = []
+        module = self._module(calls)
+        backend.patch_cuda_all_reduce(module)
+        pynccl = types.SimpleNamespace(disabled=False)
+        source = module.Value("input")
+        result = module.CudaCommunicator(pynccl).all_reduce(source)
+        self.assertEqual(result, ("fallback", source))
+        self.assertEqual(calls, [])
+
 
 
 if __name__ == "__main__":

@@ -13,11 +13,17 @@ struct BinaryOp : Op {
     static constexpr bool accepts_storage_strides = true;
     static constexpr bool accepts_cpu_scalar_operands = true;
     Var* x, * y, * z;
+    // Own the optimized forward value without replacing this op's AD inputs.
+    VarPtr layout_value;
     BinaryOp(Var* x, Var* y, NanoString p);
+    // A broadcasting call forwards to the binary op of the broadcast operands;
+    // this builds that before any BinaryOp exists. Null otherwise.
+    static VarPtr forward_before_construct(Var* x, Var* y, NanoString op);
     
     const char* name() const override { return "binary"; }
     VarPtr grad(Var* out, Var* dout, Var* v, int v_index) override;
     void infer_shape() override;
+    void run() override;
     DECLARE_jit_run;
 };
 

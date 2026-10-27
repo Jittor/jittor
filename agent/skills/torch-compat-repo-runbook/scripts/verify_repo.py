@@ -37,6 +37,7 @@ Notes / honest limits:
 """
 import argparse
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -47,7 +48,7 @@ import time
 HERE = Path(__file__).resolve()
 REPO = HERE.parents[4]
 RUNNER = REPO / "compat" / "tests" / "torch" / "_ecosystem_runner.py"
-RESULT_RE = re.compile(r"^ECOSYSTEM_RESULT (\{.*\})$", re.M)
+RESULT_RE = re.compile(r"ECOSYSTEM_RESULT (\{[^\n]*\})")
 PEAK_RE = re.compile(r"^MEMORY_PEAK_BYTES (-?\d+)$", re.M)
 RESERVED_RE = re.compile(r"^MEMORY_RESERVED_BYTES (-?\d+)$", re.M)
 UNMEASURABLE_RE = re.compile(r"^MEMORY_UNMEASURABLE (.+)$", re.M)
@@ -208,6 +209,32 @@ def _cases_module():
     return _ecosystem_cases
 
 
+def _runtime_environment(env, runtime, device, directory):
+    run_env = dict(env)
+    if "LD_LIBRARY_PATH" not in run_env and "LD_LIBRARY_PATH" in os.environ:
+        run_env["LD_LIBRARY_PATH"] = os.environ["LD_LIBRARY_PATH"]
+    if runtime == "jittor":
+        cache_root = run_env.get("JITTOR_ECOSYSTEM_CACHE_ROOT", "").strip()
+        cache_directory = (Path(cache_root).expanduser().resolve() / device
+                           if cache_root else directory)
+        run_env["PYTHONPATH"] = str(REPO / "python")
+        run_env["JITTOR_HOME"] = str(cache_directory / "jittor-cache")
+        run_env["JITTOR_TORCH_CACHE_ROOT"] = str(cache_directory / "shim-cache")
+        run_env["cache_name"] = "downstream-verify-" + device
+        if device == "cpu":
+            run_env["nvcc_path"] = ""
+            run_env["JT_BUILD_NVCC_PATH"] = ""
+            run_env["use_cuda"] = "0"
+    else:
+        run_env["PYTHONPATH"] = ""
+        for name in ("JITTOR_SOURCE_ROOT", "JITTOR_HOME", "JITTOR_TORCH_SHIM",
+                     "JITTOR_ECOSYSTEM_CACHE_ROOT",
+                     "JITTOR_TORCH_CACHE_ROOT", "JT_BACKEND", "JT_USE_CUDA",
+                     "JT_BUILD_NVCC_PATH", "use_cuda", "nvcc_path"):
+            run_env.pop(name, None)
+    return run_env
+
+
 def _run_case(runner_python, case, out_npz, env, device, repeats, seed,
               weights=None):
     """Run one case in one runtime; return (result_dict, wall_s)."""
@@ -216,12 +243,14 @@ def _run_case(runner_python, case, out_npz, env, device, repeats, seed,
            "--device", device, "--repeats", str(repeats), "--seed", str(seed)]
     if weights:
         cmd += ["--weights", str(weights)]
+    run_env = _runtime_environment(env, "jittor" if weights else "torch", device, out_npz.parent)
     started = time.perf_counter()
-    proc = subprocess.run(cmd, env=env, stdout=subprocess.PIPE,
-                          stderr=subprocess.STDOUT, text=True)
+    proc = subprocess.run(cmd, env=run_env, stdout=subprocess.PIPE,
+                          stderr=subprocess.STDOUT, text=True, timeout=1800)
+    out_npz.with_suffix(".log").write_text(proc.stdout or "", encoding="utf-8")
     wall = time.perf_counter() - started
     match = RESULT_RE.search(proc.stdout or "")
-    if match is None:
+    if proc.returncode != 0 or match is None:
         tail = "\n".join((proc.stdout or "").splitlines()[-15:])
         raise SystemExit("[verify] %s failed (exit %s):\n%s"
                          % (case, proc.returncode, tail))
@@ -239,9 +268,13 @@ def _peak_memory_bytes(runner_python, runtime, case, env, device, seed, npz):
     cmd = [runner_python, "-c", _MEMORY_WRAPPER, str(RUNNER), case, str(npz),
            "--runtime", runtime, "--device", device, "--repeats", "1",
            "--seed", str(seed)]
-    run_env = dict(env, VERIFY_RUNTIME=runtime)
+    run_env = _runtime_environment(env, runtime, device, npz.parent)
+    run_env["VERIFY_RUNTIME"] = runtime
     proc = subprocess.run(cmd, env=run_env, stdout=subprocess.PIPE,
-                          stderr=subprocess.STDOUT, text=True)
+                          stderr=subprocess.STDOUT, text=True, timeout=1800)
+    npz.with_suffix(".log").write_text(proc.stdout or "", encoding="utf-8")
+    if proc.returncode:
+        raise SystemExit("memory probe failed with exit %d: %s" % (proc.returncode, case))
     text = proc.stdout or ""
     peak = PEAK_RE.search(text)
     reserved = RESERVED_RE.search(text)
@@ -274,8 +307,9 @@ def _compare(reference_path, candidate_path):
     for key in sorted(set(ref.files) & set(cand.files)):
         a, b = ref[key], cand[key]
         if a.shape != b.shape:
-            rows.append((key, "shape %s vs %s" % (a.shape, b.shape), float("nan")))
-            continue
+            raise SystemExit("tensor shape mismatch: %s: %s vs %s" % (key, a.shape, b.shape))
+        if not np.isfinite(a).all() or not np.isfinite(b).all():
+            raise SystemExit("non-finite tensor: " + key)
         diff = np.abs(a.astype("float64") - b.astype("float64"))
         abs_err = float(diff.max()) if diff.size else 0.0
         rel_err = abs_err / global_scale
@@ -300,6 +334,34 @@ def _case_list(cases_module, repo):
     return [(n, cases_module.CASES[n][1]) for n in sorted(names)]
 
 
+def _pair_problems(reference, candidate, device):
+    problems = []
+    if reference.get("device") != device or candidate.get("device") != device:
+        problems.append("requested/observed device mismatch")
+    if not reference.get("case") or reference.get("case") != candidate.get("case"):
+        problems.append("case mismatch")
+    for key in ("runtime_conditions", "dependencies", "tf32"):
+        a, b = reference.get(key), candidate.get(key)
+        if not isinstance(a, dict) or not isinstance(b, dict):
+            problems.append("missing " + key)
+        elif key == "runtime_conditions" and not all(field in a and field in b for field in ("affinity", "runtime_threads", "thread_env", "precision")):
+            problems.append("incomplete runtime_conditions")
+        elif key == "dependencies":
+            versions_a = {name: item.get("version") for name, item in a.items()}
+            versions_b = {name: item.get("version") for name, item in b.items()}
+            if versions_a != versions_b or any(version in (None, "", "unknown") for version in versions_a.values()):
+                problems.append("dependency version mismatch or unknown version")
+        elif a != b:
+            problems.append(key + " mismatch")
+    for report in (reference, candidate):
+        seconds = report.get("seconds")
+        if not isinstance(seconds, (int, float)) or not math.isfinite(seconds) or seconds <= 0:
+            problems.append("invalid timing sample")
+    if candidate.get("fallback_count") != 0 or candidate.get("fallback_policy") != "error":
+        problems.append("fallback guard absent or nonzero")
+    return problems
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo", required=True)
@@ -307,7 +369,9 @@ def main() -> int:
     parser.add_argument("--oracle-python",
                         default=os.environ.get("REAL_TORCH_PYTHON", ""))
     parser.add_argument("--shim-python", default=sys.executable)
-    parser.add_argument("--device", default="cuda")
+    parser.add_argument("--device", default="cuda", choices=("cpu", "cuda", "npu"))
+    parser.add_argument("--atol", type=float, default=2e-3)
+    parser.add_argument("--rtol", type=float, default=1e-2)
     parser.add_argument("--repeats", type=int, default=5)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--out", default="")
@@ -315,6 +379,8 @@ def main() -> int:
                         help="skip the separate peak-memory pass")
     parser.add_argument("--list-only", action="store_true")
     options = parser.parse_args()
+    if options.repeats < 1 or any(not math.isfinite(value) or value < 0 for value in (options.atol, options.rtol)):
+        parser.error("repeats must be positive and tolerances must be finite and nonnegative")
 
     cases_module = _cases_module()
     available = _case_list(cases_module, options.repo)
@@ -328,11 +394,16 @@ def main() -> int:
         raise SystemExit("--oracle-python or REAL_TORCH_PYTHON is required; "
                          "comparing the shim against itself proves nothing")
     wanted = [c for c in options.cases.split(",") if c]
+    unknown = set(wanted) - {name for name, _ in available}
+    if unknown:
+        raise SystemExit("unregistered requested cases: " + ", ".join(sorted(unknown)))
     chosen = [(n, d) for n, d in available if not wanted or n in wanted]
     if not chosen:
         raise SystemExit("no cases matched for %s" % options.repo)
 
     out_dir = Path(options.out).expanduser().resolve()
+    if out_dir == REPO or REPO in out_dir.parents:
+        raise SystemExit("--out must be outside the checkout")
     out_dir.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ)
     env.setdefault("HF_HUB_OFFLINE", "1")
@@ -340,7 +411,12 @@ def main() -> int:
     env["PYTHONDONTWRITEBYTECODE"] = "1"
 
     report = {"repo": options.repo, "device": options.device,
-              "repeats": options.repeats, "cases": []}
+              "baseline": subprocess.check_output(["git", "-C", str(REPO), "rev-parse", "HEAD"], text=True).strip(),
+              "seed": options.seed, "atol": options.atol, "rtol": options.rtol,
+              "repeats": options.repeats,
+              "scorecard_eligible": False,
+              "scorecard_note": "Single forward/backward probe; no fixed platform block, input perturbation, multi-step training or whole-process memory evidence. Not an L3/L4/L5 claim.",
+              "cases": []}
     for name, deps in chosen:
         entry = {"case": name, "requires": list(deps)}
         try:
@@ -355,6 +431,13 @@ def main() -> int:
                 options.repeats, options.seed, weights=weights)
             rows, worst_abs, worst_rel, worst_key, worst_abs_key, missing = (
                 _compare(ref_npz, cand_npz))
+            problems = _pair_problems(ref, cand, options.device)
+            if missing:
+                problems.append("missing tensors: " + ", ".join(missing))
+            if not rows:
+                problems.append("no tensors compared")
+            if any(abs_err > options.atol and rel_err > options.rtol for _, abs_err, rel_err in rows):
+                problems.append("numerical agreement exceeds tolerance")
             mem = {"live": -1, "reserved": -1, "note": None}
             ref_mem = cand_mem = mem
             if options.memory:
@@ -365,7 +448,10 @@ def main() -> int:
                     options.shim_python, "jittor", name, env, options.device,
                     options.seed, out_dir / ("%s.shim.mem.npz" % name))
             entry.update({
-                "status": "ran",
+                "status": "failed" if problems else "passed",
+                "problems": problems,
+                "oracle_result": ref,
+                "jittor_result": cand,
                 "tensors": len(rows),
                 "missing": missing,
                 "worst_abs_err": worst_abs,
@@ -375,7 +461,7 @@ def main() -> int:
                 "torch_seconds": ref.get("seconds"),
                 "jittor_seconds": cand.get("seconds"),
                 "speed_ratio": (cand.get("seconds") / ref["seconds"]
-                                if ref.get("seconds") else None),
+                                if not problems and ref.get("seconds") else None),
                 "torch_peak_bytes": ref_mem["live"],
                 "torch_reserved_bytes": ref_mem["reserved"],
                 "jittor_peak_bytes": cand_mem["live"],
@@ -384,7 +470,7 @@ def main() -> int:
                 "jittor_fallback_count": cand.get("fallback_count"),
                 "device_agreement": ref.get("device") == cand.get("device"),
             })
-        except SystemExit as exc:
+        except (SystemExit, subprocess.TimeoutExpired) as exc:
             entry.update({"status": "failed", "error": str(exc)})
         report["cases"].append(entry)
         print("[verify] " + json.dumps(entry, ensure_ascii=False), flush=True)
@@ -392,7 +478,7 @@ def main() -> int:
     (out_dir / "verify-report.json").write_text(
         json.dumps(report, indent=2, ensure_ascii=False) + "\n")
     print("[verify] wrote %s" % (out_dir / "verify-report.json"))
-    return 0
+    return int(any(entry["status"] != "passed" for entry in report["cases"]))
 
 
 if __name__ == "__main__":

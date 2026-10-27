@@ -15,8 +15,12 @@ Each patch keeps vLLM's guard conditions and defers to the original method when
 they do not hold, so a configuration these primitives do not cover still runs.
 """
 
+import os
+
 import jittor as jt
 from jittor.compat.transaction import set_attr
+
+from .buffers import _acl_active, _native_cuda_active
 
 _PATCHED = "_jittor_fused_forward"
 
@@ -35,7 +39,11 @@ def patch_rms_norm(module):
         if (self.variance_size_override is None
                 and getattr(self, "has_weight", True)
                 and getattr(self, "pass_weight", True)):
-            weight = self.weight.data
+            # The norm kernel only reads the parameter. ``.data`` in the
+            # torch shim is deliberately a detached tensor view, so touching
+            # it here creates a fresh Var on every decoder layer and token.
+            # Keep the registered parameter itself for the read-only kernel.
+            weight = self.weight
             if residual is None:
                 return jt.nn.rms_norm(x, weight, self.variance_epsilon)
             return jt.nn.fused_add_rms_norm(
@@ -76,6 +84,13 @@ def patch_rotary_embedding(module):
     return True
 
 
+def _silu_and_mul_forward_cuda(x):
+    # vLLM's private CUDA operator writes an inference output without an
+    # autograd formula. Keep its native forward's differentiable route intact.
+    with jt.no_grad():
+        return jt.nn.silu_and_mul(x)
+
+
 def patch_activations(module):
     """Route the gated activation through jt.nn, and the rest to plain torch.
 
@@ -88,8 +103,7 @@ def patch_activations(module):
     changed = False
     gated = getattr(module, "SiluAndMul", None)
     if gated is not None and not getattr(gated, _PATCHED, False):
-        set_attr(gated, "forward_native", staticmethod(jt.nn.silu_and_mul))
-        set_attr(gated, "forward_cuda", staticmethod(jt.nn.silu_and_mul))
+        set_attr(gated, "forward_cuda", staticmethod(_silu_and_mul_forward_cuda))
         set_attr(gated, _PATCHED, True)
         changed = True
     for activation in vars(module).values():
@@ -109,38 +123,84 @@ def patch_activations(module):
 
 
 def patch_qwen3_attention(module):
-    """Group Qwen3's paired Q/K RMSNorm calls on ACL inference."""
+    """Group Qwen3's paired Q/K RMSNorm calls on accelerator inference."""
 
     layer = getattr(module, "Qwen3Attention", None)
     if layer is None or getattr(layer, _PATCHED, False):
         return False
     original = layer.forward
+    static_cache_enabled = (
+        os.environ.get("JITTOR_VLLM_QK_STATIC_CACHE", "1") != "0"
+    )
 
     def forward(self, positions, hidden_states):
-        q_weight = getattr(getattr(self, "q_norm", None), "weight", None)
-        k_weight = getattr(getattr(self, "k_norm", None), "weight", None)
-        values = hidden_states, q_weight, k_weight
-        if not (
-            getattr(jt.compiler, "has_acl", 0)
-            and getattr(jt.flags, "use_acl", 0)
-            and jt.flags.use_cuda
-            and getattr(jt.flags, "no_grad", 0)
-            and all(isinstance(value, jt.Var) for value in values)
-            and all(str(value.dtype) in ("bfloat16", "torch.bfloat16") for value in values)
-            and hasattr(self, "head_dim")
-            and hasattr(self, "q_size")
-            and hasattr(self, "kv_size")
-        ):
-            return original(self, positions, hidden_states)
+        state = (self.__dict__.get("_jittor_qk_static_state")
+                 if static_cache_enabled else None)
+        if state is None:
+            q_weight = getattr(getattr(self, "q_norm", None), "weight", None)
+            k_weight = getattr(getattr(self, "k_norm", None), "weight", None)
+            values = hidden_states, q_weight, k_weight
+            accelerator = _acl_active(jt) or _native_cuda_active(jt)
+            if not (
+                accelerator and jt.flags.use_cuda
+                and getattr(jt.flags, "no_grad", 0)
+                and all(isinstance(value, jt.Var) for value in values)
+                and all(str(value.dtype) in (
+                    "float16", "torch.float16",
+                    "bfloat16", "torch.bfloat16",
+                    "float32", "torch.float32") for value in values)
+                and hasattr(self, "head_dim")
+                and hasattr(self, "q_size")
+                and hasattr(self, "kv_size")
+            ):
+                return original(self, positions, hidden_states)
+            acl_active = _acl_active(jt)
+            tp_size = max(
+                1,
+                int(getattr(self, "total_num_heads", self.num_heads))
+                // int(self.num_heads),
+            )
+            state = (
+                q_weight,
+                k_weight,
+                acl_active,
+                tp_size,
+                jt.nn.has_qk_rms_norm_rotary(),
+            )
+            if static_cache_enabled:
+                self.__dict__["_jittor_qk_static_state"] = state
+        else:
+            # CUDA/no-grad are dynamic process state; keep these two cheap
+            # guards even though the loaded parameters and model geometry are
+            # fixed for the lifetime of a vLLM model runner.
+            if not (jt.flags.use_cuda and getattr(jt.flags, "no_grad", 0)):
+                return original(self, positions, hidden_states)
+        q_weight, k_weight, acl_active, tp_size, grouped_available = state
 
         qkv, _ = self.qkv_proj(hidden_states)
         q, k, v = qkv.split(
             [self.q_size, self.kv_size, self.kv_size], dim=-1)
         grouped = None
-        if jt.nn.has_qk_rms_norm_rotary() and int(positions.numel()) == 1:
-            cache = self.rotary_emb._match_cos_sin_cache_dtype(q)
+        # The CUDA kernel covers batched decode and prefill, but TP>2 batch
+        # measurements regress from changed lazy-graph/collective scheduling;
+        # keep that case on the split path.  ACL also retains its established
+        # single-token contract until independently validated at larger sizes.
+        single_token = True
+        if acl_active or tp_size > 2:
+            single_token = int(positions.numel()) == 1
+        if (
+            grouped_available
+            and (not acl_active or single_token)
+            and (tp_size <= 2 or single_token)
+        ):
+            cache = (self.__dict__.get("_jittor_qk_rope_cache")
+                     if static_cache_enabled else None)
             if cache is None:
-                cache = self.rotary_emb.cos_sin_cache
+                cache = self.rotary_emb._match_cos_sin_cache_dtype(q)
+                if cache is None:
+                    cache = self.rotary_emb.cos_sin_cache
+                if static_cache_enabled:
+                    self.__dict__["_jittor_qk_rope_cache"] = cache
             grouped = jt.nn.qk_rms_norm_rotary(
                 positions,
                 q,
@@ -174,6 +234,7 @@ def patch_qwen3_attention(module):
 
     set_attr(layer, "forward", forward)
     set_attr(layer, _PATCHED, True)
+
     return True
 
 

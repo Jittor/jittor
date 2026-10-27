@@ -134,6 +134,22 @@ def test_accelerator_execution_counter_uses_cuda_nodeids(monkeypatch):
     assert policy._required_accelerator_executions() == 2
 
 
+def test_accelerator_execution_counter_recognizes_backend_markers():
+    from _helpers import pytest_policy as policy
+
+    cuda_report = SimpleNamespace(
+        nodeid="compat/tests/torch/test_fsdp_activation_checkpoint.py::TestFSDPActivationCheckpoint::test_roundtrip",
+        keywords={"cuda": True},
+    )
+    cpu_report = SimpleNamespace(
+        nodeid="tests/core/test_example.py::TestExample::test_value",
+        keywords={"cpu": True},
+    )
+
+    assert policy._is_accelerator_case(cuda_report)
+    assert not policy._is_accelerator_case(cpu_report)
+
+
 def _capability(state):
     return SimpleNamespace(enabled=state == "available", failed=state == "failed",
                            unprobed=state == "unprobed", state=SimpleNamespace(value=state),
@@ -162,6 +178,22 @@ def test_accelerator_execution_counter_recognizes_backend_parameters(
     report = SimpleNamespace(
         nodeid="tests/core/test_numeric.py::test_value[%s]" % parameter
     )
+    assert policy._is_accelerator_case(report) is expected
+
+
+@pytest.mark.parametrize("class_name,expected", [
+    ("TestCustomModuleStateCUDA", True),
+    ("EcosystemParityCUDA", True),
+    ("TestNumericROCM", True),
+    ("TestNumericNPU", True),
+    ("TestNumericCPU", False),
+    ("TestNumericCUDAConfig", False),
+    ("TestCudagraph", False),
+])
+def test_accelerator_counter_recognizes_generated_class_suffix(class_name, expected):
+    from _helpers import pytest_policy as policy
+
+    report = SimpleNamespace(nodeid="tests/core/test_numeric.py::%s::test_value" % class_name)
     assert policy._is_accelerator_case(report) is expected
 
 

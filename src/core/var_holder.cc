@@ -6,6 +6,7 @@
 // ***************************************************************
 #include <unordered_set>
 #include <unordered_map>
+#include <algorithm>
 #include <sstream>
 #include "core/var_holder.h"
 #include "ops/layout_propagation.h"
@@ -19,6 +20,8 @@
 #include "ops/op_register.h"
 #include "ops/composite/transpose_op.h"
 #include "ops/composite/fuse_transpose_op.h"
+#include "ops/composite/reshape_op.h"
+#include "ops/composite/clone_op.h"
 #include "type/fp16_compute.h"
 #include "mem/swap.h"
 #include "runtime/executor_entry.h"
@@ -31,6 +34,7 @@ namespace {
 struct VarDataOwner {
     PyObject* holder;
     Var* var;
+    Allocation allocation;
 };
 }
 
@@ -43,18 +47,59 @@ static void free_var_data_owner(PyObject* capsule) {
 }
 
 PyObject* new_var_data_owner(VarHolder* vh) {
-    auto owner = new VarDataOwner{GET_OBJ_FROM_RAW_PTR(vh), vh->var};
+    auto owner = std::unique_ptr<VarDataOwner>(
+        new VarDataOwner{GET_OBJ_FROM_RAW_PTR(vh), vh->var});
+    auto* var = owner->var;
+    // Keeping the Var alive is not enough: a later CUDA consumer can migrate
+    // it back to the device and release the host block exported by .data.
+    // Hold that exact allocation independently of the Var's current storage.
+    if (var->mem_ptr) {
+        CHECK(var->allocator->share_with(var->storage_span_bytes(),
+            var->allocation, var->storage_offset_bytes))
+            << "Cannot retain storage exported by Var.data";
+        owner->allocation.ptr = var->mem_ptr;
+        owner->allocation.allocation = var->allocation;
+        owner->allocation.size = var->storage_span_bytes();
+        owner->allocation.allocator = var->allocator;
+    }
     owner->var->own_both_liveness();
     Py_INCREF(owner->holder);
-    auto capsule = PyCapsule_New((void*)owner, "jittor.var_data",
+    auto capsule = PyCapsule_New((void*)owner.get(), "jittor.var_data",
         &free_var_data_owner);
     if (!capsule) {
         owner->var->release_both_liveness();
         Py_DECREF(owner->holder);
-        delete owner;
         return nullptr;
     }
+    owner.release();
     return capsule;
+}
+
+VarPtr ready_storage_alias(VarHolder* source) {
+    Var* original = source->var;
+    USER_CHECK(original->num >= 0 && !original->flag(VarFlags::_execution_failed)
+            && original->allocator && (original->mem_ptr || !original->size))
+        << "rematerialization needs successfully materialized output storage";
+
+    VarPtr ready(original->shape, original->dtype());
+    ready->storage_strides = original->storage_strides;
+    ready->device_id = original->device_id;
+    ready->placement = original->placement;
+    ready->set_flag(VarFlags::_host_resident, original->flag(VarFlags::_host_resident));
+    ready->set_stop_grad();
+    ready->share_with(original);
+    USER_CHECK(ready->alloc(original->allocator)
+            && ready->mem_ptr == original->mem_ptr
+            && (!original->size || ready->shares_allocation_with(original)))
+        << "allocator cannot share rematerialized output storage";
+
+    // Share mutation detection, not trainability or the source graph's owner.
+    ready->autograd_alias = std::make_shared<AutogradAliasState>();
+    ready->autograd_alias->version = source->ensure_autograd_alias()->version;
+    ready->autograd_alias->creation_version = *ready->autograd_alias->version;
+    // Complete only this new inputless leaf. Original nodes remain untouched.
+    ready->finish_pending_liveness();
+    return ready;
 }
 
 // Holders rebound while a step is being captured, with the Var each held
@@ -130,12 +175,49 @@ void submit_pending(VarHolder* holder) {
 // uses, and it is where the device-to-host transfer releases the GIL
 // (`DeviceWaitScope` in mem/allocator.cc) -- which it only does while this lock
 // is held, so holding it here is what makes that release reachable at all.
+//
+// A host read must also own the exact Var it syncs and copies. The holder's
+// `var` is a name another Python thread can rebind while this one is inside a
+// sync or a blocking device-to-host copy (both release the GIL). A rebind
+// releases the holder's liveness reference; if that was the last one the old
+// Var is freed and its storage returned to the allocator, and the read then
+// copies from freed memory (the shared-parameter storage race). `VarPtr` owns forward, backward and
+// pending liveness, so the read's reference keeps the Var and its storage
+// alive until the copy is done, whatever the holder does. The snapshot is
+// taken while the GIL is held, so reading `var` cannot interleave with a
+// Python rebind; the ownership is what covers the GIL-releasing wait that
+// follows.
+//
+// It is an owner the structural check in graph.cc does not model -- that check
+// derives expected counts from holders and graph edges only -- so `graph_check`
+// must run before the snapshot is taken and after it is released, never while
+// it is held.
+struct ReadSnapshot {
+    Var* var;
+    VarPtr owner;
+    explicit ReadSnapshot(Var* v) : var(v), owner(v) {}
+};
+
+// Sync Vars the caller has pinned with a ReadSnapshot. Same batch contract as
+// the holder-based `sync` below, but it cannot re-read a holder's `var` and
+// sync a different Var than the one the caller is about to copy. The read pin
+// is visible to graph_check, so the callers check around the pin themselves.
+static void sync_owned_vars(const vector<Var*>& vars, bool device_sync,
+                            bool weak_sync) {
+    runtime_executor().run_sync(vars, device_sync, weak_sync);
+}
+
 VarHolder* VarHolder::migrate_to_cpu_() {
     ExecutorEntryScope entry;
-    sync(true, false);
+    graph_check();
+    {
+        ReadSnapshot snapshot(var);
+        sync_owned_vars({snapshot.var}, true, false);
 #ifdef HAS_ACCELERATOR
-    migrate_to_cpu(var, runtime_executor().allocator);
+        migrate_to_cpu(snapshot.var, runtime_executor().allocator);
 #endif
+    }
+    graph_check();
     return this;
 }
 
@@ -201,25 +283,60 @@ static inline bool host_value_ready(Var* var) {
 
 DataView VarHolder::data() {
     note_readback();
-    if (!host_value_ready(var)) {
-        ExecutorEntryScope entry;
-        sync(readback_waits_for_devices(), false);
-        var->set_flag(VarFlags::_execution_failed, 0);
-#ifdef HAS_ACCELERATOR
-        migrate_to_cpu(var, runtime_executor().allocator);
-#endif
+    // A host-resident value is read in place: no sync, no GIL release, so the
+    // holder cannot change before the view is built.
+    if (host_value_ready(var)) {
+        Var* target = var;
+        return {this, target->mem_ptr, target->shape, target->dtype(),
+                target->storage_strides};
     }
-    return {this, var->mem_ptr, var->shape, var->dtype(), var->storage_strides};
+    // `new_var_data_owner`, which the conversion builds the view's Python base
+    // from, names the holder's current Var. That conversion runs with the GIL
+    // held, so it cannot see a rebind that happens after this returns; but one
+    // may happen during the GIL-releasing sync below. Then the bytes we synced
+    // are not the ones the holder's name refers to, so sync the Var it names
+    // now as well and return that one: a view and its base must describe the
+    // same storage.
+    for (;;) {
+        DataView view;
+        bool stable = false;
+        {
+            ExecutorEntryScope entry;
+            graph_check();
+            {
+                ReadSnapshot snapshot(var);
+                sync_owned_vars({snapshot.var}, readback_waits_for_devices(), false);
+                snapshot.var->set_flag(VarFlags::_execution_failed, 0);
+#ifdef HAS_ACCELERATOR
+                migrate_to_cpu(snapshot.var, runtime_executor().allocator);
+#endif
+                if (snapshot.var == var) {
+                    view = {this, snapshot.var->mem_ptr, snapshot.var->shape,
+                            snapshot.var->dtype(), snapshot.var->storage_strides};
+                    stable = true;
+                }
+            }
+            graph_check();
+        }
+        if (stable) return view;
+    }
 }
 
 uint64 VarHolder::raw_ptr() {
     note_readback();
     ExecutorEntryScope entry;
-    sync(true, false);
+    graph_check();
+    uint64 ptr;
+    {
+        ReadSnapshot snapshot(var);
+        sync_owned_vars({snapshot.var}, true, false);
 #ifdef HAS_ACCELERATOR
-    migrate_to_cpu(var, runtime_executor().allocator);
+        migrate_to_cpu(snapshot.var, runtime_executor().allocator);
 #endif
-    return (uint64)var->mem_ptr;
+        ptr = (uint64)snapshot.var->mem_ptr;
+    }
+    graph_check();
+    return ptr;
 }
 
 // Both Vars, described the same way, so the two entry points refuse the same
@@ -258,8 +375,105 @@ void VarHolder::write_inplace(ArrayArgs&& array) {
     backend_copy(var->mem_ptr, dst, array.ptr, {}, size, true);
 }
 
+enum class StorageCopy { Direct, Snapshot, NoOp };
+
+static StorageCopy validate_storage_copy(Var* var, Var* source) {
+    USER_CHECK(source->dtype() == var->dtype())
+        << "_copy_into dtype mismatch:" << source->dtype() << "into" << var->dtype();
+    USER_CHECK(source->size == var->size)
+        << "_copy_into size mismatch:" << source->size << "bytes into" << var->size;
+    if (var->size == 0) return StorageCopy::NoOp;
+    USER_CHECK(source->mem_ptr) << "_copy_into needs an allocated source";
+    USER_CHECK(var->mem_ptr) << "_copy_into needs an allocated tensor";
+    // Basic positive-stride slices and permutations have disjoint elements.
+    // Validate that before issuing any write; expanded/overlapping targets
+    // cannot be updated by scattering a dense source into their storage.
+    auto ordered_dimensions = [](Var* value) {
+        vector<std::pair<int64, int64>> dimensions;
+        for (uint d=0; d<value->shape.size(); ++d)
+            if (value->shape[d] > 1)
+                dimensions.emplace_back(value->storage_stride(d), value->shape[d]);
+        std::sort(dimensions.begin(), dimensions.end());
+        return dimensions;
+    };
+    int64 span = 1;
+    bool target_dense = true;
+    if (!var->is_contiguous())
+        for (auto dimension : ordered_dimensions(var)) {
+            USER_CHECK(dimension.first >= span)
+                << "_copy_into needs non-overlapping storage; got strides"
+                << var->storage_strides << "for shape" << var->shape;
+            target_dense = target_dense && dimension.first == span;
+            span += (dimension.second-1) * dimension.first;
+        }
+    bool overlap = false;
+    if (source->allocator == var->allocator
+            && source->allocation == var->allocation) {
+        bool same_layout = source->shape == var->shape;
+        if (same_layout)
+            for (uint d=0; d<var->shape.size(); ++d)
+                if (var->shape[d] > 1
+                        && source->storage_stride(d) != var->storage_stride(d))
+                    same_layout = false;
+        // Identical storage/layout is a no-op, including a strided self-copy.
+        if (source->mem_ptr == var->mem_ptr && (same_layout
+                || (source->is_contiguous() && var->is_contiguous()))) return StorageCopy::NoOp;
+        auto dst_address = reinterpret_cast<uintptr_t>(var->mem_ptr);
+        auto src_address = reinterpret_cast<uintptr_t>(source->mem_ptr);
+        overlap = dst_address < src_address + source->storage_span_bytes()
+            && src_address < dst_address + var->storage_span_bytes();
+        int64 source_span = 1;
+        bool source_dense = true;
+        if (!source->is_contiguous())
+            for (auto dimension : ordered_dimensions(source)) {
+                source_dense = source_dense && dimension.first == source_span;
+                source_span *= dimension.second;
+            }
+        USER_CHECK(!overlap || !target_dense || !source_dense)
+            << "_copy_into source and destination partially overlap";
+        if (overlap) {
+            // Two gapped views can have overlapping address spans while
+            // selecting disjoint elements (even/odd columns, for example).
+            // Different residues modulo every stride's common divisor prove
+            // disjointness without walking tensor data or allocating an
+            // element-address set. Refuse aliases this cannot prove safe.
+            int64 divisor = 0;
+            for (Var* value : {var, source})
+                for (uint d=0; d<value->shape.size(); ++d)
+                    if (value->shape[d] > 1) {
+                        int64 stride = value->storage_stride(d);
+                        while (stride) {
+                            int64 remainder = divisor % stride;
+                            divisor = stride;
+                            stride = remainder;
+                        }
+                    }
+            auto separation = dst_address >= src_address
+                ? dst_address-src_address : src_address-dst_address;
+            USER_CHECK(divisor && separation % (divisor * var->dsize()))
+                << "_copy_into source and destination overlap or cannot be proven disjoint";
+        }
+    }
+    return overlap ? StorageCopy::Snapshot : StorageCopy::Direct;
+}
+
+static void validate_logical_copy_alias(VarHolder* target, VarHolder* source) {
+    if (target->var == source->var) return;
+    auto* target_root = target->view && target->view->base ? target->view->base : target;
+    auto* source_root = source->view && source->view->base ? source->view->base : source;
+    if (target_root != source_root) return;
+    USER_CHECK((!target->view || target->storage_view_is_physical())
+            && (!source->view || source->storage_view_is_physical()))
+        << "_copy_into source and destination have overlapping logical view storage";
+}
+
 void VarHolder::copy_into(VarHolder* src, bool sync_src) {
+    check_inplace_autograd();
     ExecutorEntryScope entry;
+    // Preserve saved values before a physical write can invalidate their
+    // recomputation inputs. Holder sinks may have fused those values away.
+    auto readers = saved_storage_readers({var});
+    if (!readers.empty()) runtime_executor().run_sync(readers, false, false);
     // Neither sync waits on the device; both only resolve what the Var is
     // still pending on. The copy itself is stream-ordered against the work
     // already queued, which is what makes this usable once per step.
@@ -268,34 +482,75 @@ void VarHolder::copy_into(VarHolder* src, bool sync_src) {
     // that already has the bytes -- the caller of a replayed graph -- must be
     // able to say so instead of paying for the whole graph again.
     if (sync_src) src->sync(false, false);
-    USER_CHECK(src->var->mem_ptr)
+    USER_CHECK(src->var->mem_ptr || src->var->size == 0)
         << "_copy_into(sync_src=False) needs a source that already holds its "
            "bytes; this one has never been executed";
-    check_inplace_target(var, "_copy_into");
+    validate_logical_copy_alias(this, src);
+    auto plan = validate_storage_copy(var, src->var);
+    record_inplace_write();
+    if (plan == StorageCopy::NoOp) return;
     // A strided source -- a channels-last activation read as NCHW, a
     // transposed view -- is made dense first; the copy below moves raw bytes.
     unique_ptr<VarHolder> dense;
-    if (!src->var->is_contiguous()) {
+    if (plan == StorageCopy::Snapshot) {
+        // Proven disjoint gapped aliases may interleave within their spans.
+        // Snapshot via the existing device copy op before any destination
+        // write, rather than reading a source that earlier runs overwrite.
+        static auto make_copy = op_constructor<VarPtr, Var*>("copy");
+        dense.reset(new VarHolder(make_copy(src->var)));
+        dense->sync(false, false);
+        src = dense.get();
+    } else if (!src->var->is_contiguous()) {
         dense.reset(new VarHolder(contiguous_storage(src->var)));
         dense->sync(false, false);
         src = dense.get();
     }
     check_inplace_target(src->var, "_copy_into source");
-    USER_CHECK(src->var->dtype() == var->dtype())
-        << "_copy_into dtype mismatch:" << src->var->dtype() << "into" << var->dtype();
-    USER_CHECK(src->var->size == var->size)
-        << "_copy_into size mismatch:" << src->var->size << "bytes into" << var->size;
     // Already there: an in-place update wrote into this very buffer (a step
     // capture taking over its state, see `capture_owners`).
     if (src->var->mem_ptr == var->mem_ptr) return;
+    if (src->var->allocator == var->allocator
+            && src->var->allocation == var->allocation) {
+        auto dst_address = reinterpret_cast<uintptr_t>(var->mem_ptr);
+        auto src_address = reinterpret_cast<uintptr_t>(src->var->mem_ptr);
+        USER_CHECK(dst_address + var->size <= src_address
+                || src_address + src->var->size <= dst_address)
+            << "_copy_into source and destination partially overlap";
+    }
     auto device_of = [](Var* v) {
         Device d{};
         if (v->allocator && v->allocator->is_cuda())
             d = Device{accelerator_backend_id(), v->device_id < 0 ? 0 : v->device_id};
         return d;
     };
-    backend_copy(var->mem_ptr, device_of(var),
-                 src->var->mem_ptr, device_of(src->var), var->size, true);
+    auto destination_device = device_of(var);
+    auto source_device = device_of(src->var);
+    if (var->is_contiguous()) {
+        backend_copy(var->mem_ptr, destination_device,
+                     src->var->mem_ptr, source_device, var->size, true);
+        return;
+    }
+    // Coalesce the innermost contiguous dimensions. Each run uses the same
+    // backend/stream copy as the dense path, without rebinding either holder
+    // or reading accelerator data on the host.
+    int64 run = 1;
+    int leading = var->shape.size();
+    for (int d=int(var->shape.size())-1; d>=0; --d) {
+        if (var->shape[d] != 1 && var->storage_stride(d) != run) break;
+        run *= var->shape[d];
+        leading = d;
+    }
+    auto width = var->dsize();
+    for (int64 i=0; i<var->num; i+=run) {
+        int64 remainder = i/run, offset = 0;
+        for (int d=leading-1; d>=0; --d) {
+            offset += (remainder % var->shape[d]) * var->storage_stride(d);
+            remainder /= var->shape[d];
+        }
+        backend_copy(static_cast<char*>(var->mem_ptr)+offset*width, destination_device,
+                     static_cast<char*>(src->var->mem_ptr)+i*width, source_device,
+                     run*width, true);
+    }
 }
 
 void VarHolder::release_kept() {
@@ -403,13 +658,15 @@ static auto make_transpose_view = op_constructor<VarPtr, Var*, NanoVector>("tran
 
 static auto make_storage_reshape = op_constructor<VarPtr, Var*, NanoVector>("reshape");
 static auto make_storage_broadcast = op_constructor<VarPtr, Var*, NanoVector, NanoVector>("broadcast_to");
-static VarPtr apply_view_step(Var* value, const VarViewStep& step) {
+static VarPtr apply_view_step(Var* value, const VarViewStep& step,
+                             bool physical = false) {
     if (step.kind == VarViewStep::Expand)
         return make_storage_broadcast(value, NanoVector(step.axes), NanoVector());
     if (step.kind == VarViewStep::Reshape)
         return make_storage_reshape(value, NanoVector(step.axes));
     if (step.kind == VarViewStep::Transpose)
-        return make_transpose_view(value, NanoVector(step.axes));
+        return physical ? storage_view_transpose(value, NanoVector(step.axes))
+                        : make_transpose_view(value, NanoVector(step.axes));
     return make_getitem(value, VarSlices(step.slices));
 }
 
@@ -424,15 +681,122 @@ VarHolder::VarHolder(PyObject* obj, NanoString dtype) {
 }
 
 
-void VarHolder::drop_view() {
-    if (!view) return;
+static void unlink_view_owner(VarView* view) {
     if (auto* base = view->base) {
         if (view->prev) view->prev->next = view->next;
         else base->views = view->next;
         if (view->next) view->next->prev = view->prev;
     }
-    delete view;
+    view->base = nullptr;
+    view->prev = view->next = nullptr;
+}
+
+VarView::~VarView() { Py_XDECREF(base_owner); }
+
+void VarHolder::bind_python_owner(PyObject* owner, bool retain_view_base) {
+    python_owner = owner;
+    retain_view_base_owner = retain_view_base;
+    retain_python_view_base();
+}
+
+void VarHolder::retain_python_view_base() {
+    if (!retain_view_base_owner || !view || view->base_owner || !view->base)
+        return;
+    auto* root = view->base;
+    // A .data replacement can orphan a root's writeback while its public
+    // provenance still names the original root object.
+    PyObject* owner = root->view && root->view->base_owner
+        ? root->view->base_owner : root->python_owner;
+    if (!owner || owner == python_owner) return;
+    Py_INCREF(owner);
+    view->base_owner = owner;
+}
+
+PyObject* VarHolder::collectable_view_base() {
+    return view ? view->base_owner : nullptr;
+}
+
+void VarHolder::clear_collectable_view_base() {
+    if (view) Py_CLEAR(view->base_owner);
+}
+
+PyObject* VarHolder::view_base_object() {
+    PyObject* owner = collectable_view_base();
+    if (!owner && view && view->base) owner = view->base->python_owner;
+    if (!owner) owner = Py_None;
+    Py_INCREF(owner);
+    return owner;
+}
+
+void VarHolder::drop_view() {
+    if (!view) return;
+    auto* previous = view;
     view = nullptr;
+    unlink_view_owner(previous);
+    // Releasing a retained Python root can run user finalizers. They must
+    // observe the detached record, never a record currently being destroyed.
+    delete previous;
+}
+
+static bool shares_physical_storage(Var* value, Var* base) {
+    // A pending share_with link is positive evidence before allocation. Two
+    // null pointers are not; after execution allocation identity is decisive.
+    Var* slow = value;
+    Var* fast = value;
+    while (value) {
+        if (value == base) return true;
+        if (value->mem_ptr && base->mem_ptr && value->allocator
+                && value->allocator == base->allocator
+                && value->allocation == base->allocation)
+            return true;
+        value = value->share_src;
+        slow = slow ? slow->share_src : nullptr;
+        fast = fast && fast->share_src ? fast->share_src->share_src : nullptr;
+        // Malformed sharing cycles cannot establish a view relationship.
+        if (slow && slow == fast) return false;
+    }
+    return false;
+}
+
+bool VarHolder::storage_view_is_physical() {
+    if (!view || !view->physical_storage) return false;
+    return !view->base || shares_physical_storage(var, view->base->var);
+}
+
+bool VarHolder::view_base_is_trainable_leaf() {
+    if (!view) return false;
+    auto* owner = this;
+    while (owner->view && owner->view->base)
+        owner = owner->view->base;
+    Var* base = owner->var;
+    if (owner->view) {
+        // A Python owner may expire while the differentiable view still owns
+        // its native graph. Follow only actual view producers to recover the
+        // base; a clone/detach or an arithmetic producer is a real boundary.
+        while (Op* producer = base->input()) {
+            // Tensor(source) has a CloneOp producer but is a real view only
+            // when native view metadata records that provenance. Ordinary
+            // clone/detach must remain independent boundaries.
+            bool constructor_view = dynamic_cast<CloneOp*>(producer)
+                && base->autograd_alias && base->autograd_alias->source
+                && base->autograd_alias->recorded_view_history;
+            if (producer->is_stop_grad()
+                    || !(producer->is_op(op_ids::getitem())
+                        || dynamic_cast<ReshapeOp*>(producer)
+                        || producer->is_op(op_ids::transpose())
+                        || dynamic_cast<FuseTransposeOp*>(producer)
+                        || producer->is_op(op_ids::broadcast_to())
+                        || constructor_view)
+                    || producer->_inputs.empty())
+                break;
+            Var* next = producer->_inputs.front().node->var();
+            if (next == base) return false;
+            base = next;
+        }
+    }
+    return !base->is_stop_grad()
+        && !base->flag(VarFlags::_requires_grad_disabled)
+        && jittor::is_backward_leaf(base);
 }
 
 void VarHolder::orphan_views() {
@@ -440,6 +804,8 @@ void VarHolder::orphan_views() {
         auto* next = w->next;
         // The record belongs to the holder that is the view, not to us; all we
         // may do is tell it that its base is gone.
+        w->physical_storage = w->physical_storage
+            && shares_physical_storage(w->owner->var, var);
         w->base = nullptr;
         w->prev = w->next = nullptr;
         w = next;
@@ -447,13 +813,28 @@ void VarHolder::orphan_views() {
     views = nullptr;
 }
 
-VarHolder* VarHolder::set_view_of(VarHolder* base, VarSlices&& slices) {
+extern bool no_grad;
+VarHolder* VarHolder::set_view_of(VarHolder* base, VarSlices&& slices,
+                                bool inherit_requires_grad) {
     drop_view();
     if (!base) return this;
     for (int i=0; i<slices.n; i++)
         // An advanced index gathers, so its result is a copy -- and the Var*
         // it indexes with would outlive nothing in particular.
         if (slices.slices[i].is_var()) return this;
+    if (inherit_requires_grad) {
+        bool enabled = base->get_requires_grad();
+        // A view whose creation recorded no edge can inherit a later source
+        // activation. Its public flag must not create an accumulator or turn
+        // an already constructed consumer into a recorded edge.
+        bool unrecorded = no_grad || !enabled;
+        if (unrecorded && var->is_stop_grad()
+                && (var->dtype().is_float() || var->dtype().is_complex()))
+            start_grad();
+        set_requires_grad_impl(enabled);
+        if (unrecorded)
+            var->set_flag(VarFlags::_unrecorded_view);
+    }
     attach_view(base, VarViewStep(move(slices)));
     return this;
 }
@@ -461,6 +842,8 @@ VarHolder* VarHolder::set_view_of(VarHolder* base, VarSlices&& slices) {
 void VarHolder::attach_view(VarHolder* base, VarViewStep final_step) {
     // Flatten: a view of a view is recorded against the root, so that the
     // intermediates of `y[1][2]` are free to die with the expression.
+    bool physical = shares_physical_storage(var, base->var)
+        && (!base->view || base->view->physical_storage);
     VarHolder* root = base;
     vector<VarViewStep> steps;
     if (base->view && base->view->base) {
@@ -469,10 +852,36 @@ void VarHolder::attach_view(VarHolder* base, VarViewStep final_step) {
         for (auto& step : base->view->steps) steps.push_back(step);
     }
     if (root == this) return;
+    if (autograd_policy.stop_outputs_when_inputs_stopped) {
+        auto source = base->ensure_autograd_alias();
+        auto state = std::make_shared<AutogradAliasState>();
+        state->source = source;
+        state->version = source->version;
+        state->creation_version = *state->version;
+        state->created_without_grad = no_grad;
+        state->recorded_view_history = !no_grad && backward_grad_fn(var);
+        state->source_edge_enabled = base->get_requires_grad();
+        state->inherit_requires_grad = no_grad || !base->get_requires_grad();
+        state->own_requires_grad = !state->inherit_requires_grad && get_requires_grad();
+        var->autograd_alias = move(state);
+        if (var->autograd_alias->inherit_requires_grad) {
+            if (var->is_stop_grad()
+                    && (var->dtype().is_float() || var->dtype().is_complex())) {
+                auto state = var->autograd_alias;
+                bool own_requires_grad = state->own_requires_grad;
+                start_grad();
+                state->own_requires_grad = own_requires_grad;
+                var->autograd_alias = move(state);
+            }
+            var->set_flag(VarFlags::_unrecorded_view);
+            var->refresh_alias_requires_grad();
+        }
+    }
     steps.push_back(move(final_step));
-    view = new VarView{root, this, move(steps), nullptr, root->views};
+    view = new VarView{root, this, move(steps), nullptr, root->views, physical};
     if (root->views) root->views->prev = view;
     root->views = view;
+    retain_python_view_base();
 }
 
 VarHolder* VarHolder::set_transpose_view_of(VarHolder* base, NanoVector axes) {
@@ -514,7 +923,7 @@ VarHolder* VarHolder::set_storage_view_of(VarHolder* base, bool expand) {
 }
 
 VarHolder* VarHolder::storage_permute(NanoVector axes) {
-    return new VarHolder(storage_view_transpose(var, axes));
+    return new VarHolder(storage_view_transpose(grad_input(), axes));
 }
 
 VarHolder* VarHolder::transpose_view_base() {
@@ -559,7 +968,9 @@ VarHolder* VarHolder::transpose_view_source() {
     // whole-shape reshape away.
     if (steps.empty())
         steps.emplace_back(VarViewStep::Reshape, NanoVector(root->var->shape));
-    result->view = new VarView{root, result, move(steps), nullptr, root->views};
+    bool physical = shares_physical_storage(result->var, root->var)
+        && (!root->view || root->view->physical_storage);
+    result->view = new VarView{root, result, move(steps), nullptr, root->views, physical};
     if (root->views) root->views->prev = result->view;
     root->views = result->view;
     return result;
@@ -609,21 +1020,65 @@ static bool view_step_fits(Var* value, const VarViewStep& step) {
     return true;
 }
 
-void VarHolder::refresh_transpose_views() {
+void VarHolder::refresh_transpose_views(bool preserve_grad_policy, VarView* only) {
     for (auto* record = views; record; ) {
         // drop_view() below unlinks and frees `record`, so step off it first.
         auto* next = record->next;
+        if (only && record != only) {
+            record = next;
+            continue;
+        }
+        auto state = record->owner->var->autograd_alias;
+        bool rebase = state && !state->created_without_grad && state->source
+            && (state->recorded_view_history || state->source->requires_grad())
+            && state->creation_version != *state->version;
+        // Rebuilding a view after an unrecorded store is graph bookkeeping,
+        // not a new user operation under that store's no-grad scope. Views
+        // originally created with recording enabled keep a recorded producer.
+        struct RecordingScope {
+            bool previous;
+            Var* source;
+            bool disabled;
+            RecordingScope(bool record, Var* source, bool freeze_edge)
+                : previous(no_grad), source(source),
+                  disabled(source->flag(VarFlags::_requires_grad_disabled)) {
+                if (record) no_grad = false;
+                if (freeze_edge) source->set_flag(VarFlags::_requires_grad_disabled);
+            }
+            ~RecordingScope() {
+                source->set_flag(VarFlags::_requires_grad_disabled, disabled);
+                no_grad = previous;
+            }
+        } recording(rebase, var, rebase && state->recorded_view_history
+                    && !get_requires_grad());
         VarPtr value(var);
         bool fits = true;
+        bool physical = !view || view->physical_storage;
         for (const auto& step : record->steps) {
             if (!view_step_fits(value.ptr, step)) {
                 fits = false;
                 break;
             }
-            value = apply_view_step(value.ptr, step);
+            VarPtr next_value = apply_view_step(value.ptr, step,
+                                                record->physical_storage);
+            physical = physical && shares_physical_storage(next_value.ptr, value.ptr);
+            value = move(next_value);
         }
         if (fits) {
-            *record->owner = move(value);
+            if (state && !rebase
+                    && record->owner->var->flag(VarFlags::_unrecorded_view))
+                value = jittor::detach(value.ptr);
+            record->owner->rebind_view_result(move(value), preserve_grad_policy);
+            if (rebase) {
+                state->source_edge_enabled = get_requires_grad();
+                state->recorded_view_history = true;
+                state->inherit_requires_grad = false;
+                state->own_requires_grad = true;
+                auto* current = record->owner->var;
+                current->set_flag(VarFlags::_unrecorded_view, 0);
+                current->set_flag(VarFlags::_requires_grad_disabled, 0);
+            }
+            record->physical_storage = physical;
         } else if (record->owner) {
             // The view keeps the data it was taken from, which is what torch's
             // views do after `x.data = y` replaces the storage under them.
@@ -633,15 +1088,12 @@ void VarHolder::refresh_transpose_views() {
     }
 }
 
-bool VarHolder::write_through_view(Var* value) {
-    if (!view || !view->base) return false;
-    auto* base = view->base;
-    auto& steps = view->steps;
+static VarPtr view_assignment_value(Var* base, const vector<VarViewStep>& steps, Var* value) {
     const int n = steps.size();
     // What each step is applied to. The first is the base itself; the rest are
     // the intermediates, rebuilt rather than remembered.
     vector<VarPtr> targets(n);
-    Var* cur = base->var;
+    Var* cur = base;
     for (int i=0; i<n-1; i++) {
         targets[i] = apply_view_step(cur, steps[i]);
         cur = targets[i].ptr;
@@ -650,7 +1102,7 @@ bool VarHolder::write_through_view(Var* value) {
     // level's result is what the level above writes into its own slice.
     VarPtr updated;
     for (int i=n-1; i>=0; i--) {
-        Var* target = i ? targets[i-1].ptr : base->var;
+        Var* target = i ? targets[i-1].ptr : base;
         if (steps[i].kind == VarViewStep::Transpose) {
             const auto& axes = steps[i].axes;
             vector<int64> inverse_values(axes.size());
@@ -660,13 +1112,111 @@ bool VarHolder::write_through_view(Var* value) {
         } else if (steps[i].kind == VarViewStep::Expand || steps[i].kind == VarViewStep::Reshape) {
             USER_CHECK(value->num == target->num)
                 << "Cannot write to an expanded view with overlapping storage";
-            updated = make_storage_reshape(value, NanoVector(target->shape));
+            // Inverting a later transpose may leave logical values strided.
+            // A writeback reshape may copy; it is not a storage-view request.
+            auto dense = contiguous_storage(value);
+            updated = make_storage_reshape(dense.ptr, NanoVector(target->shape));
         } else {
             updated = make_setitem(target, VarSlices(steps[i].slices), value, ns_void);
         }
         value = updated.ptr;
     }
-    *base = move(updated);
+    return updated;
+}
+
+bool VarHolder::write_through_view(Var* value, bool preserve_grad_policy) {
+    if (!view || !view->base) return false;
+    auto updated = view_assignment_value(view->base->var, view->steps, value);
+    view->base->rebind_view_result(move(updated), preserve_grad_policy);
+    return true;
+}
+
+bool VarHolder::copy_view_into(VarHolder* src) {
+    check_inplace_autograd();
+    ExecutorEntryScope entry;
+    auto* base = view && view->base ? view->base : this;
+    bool materialized = false;
+    for (auto* record=base->views; record; record=record->next)
+        materialized = materialized || !record->owner->storage_view_is_physical();
+    if (!materialized) return false;
+    // Backend copies may release the GIL. Pin the original Python holders
+    // and copy the weak view records before any synchronization can do so.
+    PyObjHolder owners(PyList_New(0));
+    CHECKop(PyList_Append(owners.obj, GET_OBJ_FROM_RAW_PTR(base)), ==, 0);
+    vector<std::pair<VarHolder*, vector<VarViewStep>>> records;
+    for (auto* record=base->views; record; record=record->next) {
+        CHECKop(PyList_Append(owners.obj, GET_OBJ_FROM_RAW_PTR(record->owner)), ==, 0);
+        if (!record->owner->storage_view_is_physical())
+            records.emplace_back(record->owner, record->steps);
+    }
+    vector<VarViewStep> target_steps;
+    if (view && view->base) target_steps = view->steps;
+    // The caller has drained pending readers. Keep every existing holder and
+    // graph node, preparing the complete write on independent device storage.
+    sync(false, false);
+    src->sync(false, false);
+    validate_logical_copy_alias(this, src);
+    if (validate_storage_copy(var, src->var) == StorageCopy::NoOp) {
+        record_inplace_write();
+        return true;
+    }
+    static auto make_copy = op_constructor<VarPtr, Var*>("copy");
+    VarPtr staged;
+    if (!target_steps.empty()) {
+        auto snapshot = make_copy(base->var);
+        staged = view_assignment_value(snapshot.ptr, target_steps, src->var);
+    } else {
+        staged = make_copy(src->var);
+    }
+    unique_ptr<VarHolder> updated(new VarHolder(move(staged)));
+    updated->sync(false, false);
+    validate_storage_copy(base->var, updated->var);
+    vector<VarHolder*> destinations;
+    vector<unique_ptr<VarHolder>> unique_destinations;
+    vector<unique_ptr<VarHolder>> values;
+    for (auto& record : records) {
+        VarPtr value(updated->var);
+        for (const auto& step : record.second) {
+            USER_CHECK(view_step_fits(value.ptr, step))
+                << "_copy_view_into cannot refresh an incompatible retained view";
+            value = apply_view_step(value.ptr, step);
+        }
+        unique_ptr<VarHolder> prepared(new VarHolder(move(value)));
+        prepared->sync(false, false);
+        auto* destination = record.first;
+        // A read-only expanded sibling repeats the same backing elements;
+        // refreshing that backing storage is valid even though writing an
+        // arbitrary expanded destination above is refused. Select each
+        // repeated axis once, through the existing physical getitem owner.
+        VarSlices unique(destination->var->shape.size());
+        bool repeated = false;
+        for (int d=0; d<unique.n; ++d) {
+            if (destination->var->shape[d] > 1 && !destination->var->storage_stride(d)) {
+                unique.slices[d].set_int(0);
+                repeated = true;
+            } else {
+                unique.slices[d].slice = Slice{0, 0, 1, 3};
+            }
+        }
+        if (repeated) {
+            unique_ptr<VarHolder> backing(new VarHolder(
+                make_getitem(destination->var, VarSlices(unique))));
+            backing->sync(false, false);
+            USER_CHECK(shares_physical_storage(backing->var, destination->var))
+                << "_copy_view_into needs a physical expanded backing view";
+            prepared.reset(new VarHolder(make_getitem(prepared->var, move(unique))));
+            prepared->sync(false, false);
+            destination = backing.get();
+            unique_destinations.push_back(move(backing));
+        }
+        // Validate all destinations before changing the first original byte.
+        validate_storage_copy(destination->var, prepared->var);
+        destinations.push_back(destination);
+        values.push_back(move(prepared));
+    }
+    base->copy_into(updated.get());
+    for (size_t i=0; i<destinations.size(); ++i)
+        destinations[i]->copy_into(values[i].get());
     return true;
 }
 
@@ -695,22 +1245,40 @@ VarHolder::~VarHolder() {
 }
 
 // assign attributes of b to a
-static inline void assign_var(Var* a, Var* b) {
+static inline void assign_var(Var* a, Var* b, bool preserve_grad_policy = true) {
+    a->autograd_alias = b->autograd_alias;
+    if (!preserve_grad_policy && a->autograd_alias) {
+        // A real RHS edge can activate a formerly frozen destination. Keep
+        // the shared write version, but publish the replacement's actual
+        // policy before rebuilding its sibling views.
+        a->autograd_alias->own_requires_grad = !a->is_stop_grad()
+            && !a->flag(VarFlags::_requires_grad_disabled);
+        a->autograd_alias->inherit_requires_grad = false;
+    }
+    if (b->grad_hook) a->grad_hook = b->grad_hook;
     if (b->flag(VarFlags::_placement_published))
         a->set_flag(VarFlags::_placement_published);
     a->name = move(b->name);
-    if (b->is_stop_grad())
+    if (preserve_grad_policy && b->is_stop_grad())
         a->set_stop_grad();
     if (b->flag(VarFlags::_stop_fuse))
         a->set_flag(VarFlags::_stop_fuse);
-    if (b->flag(VarFlags::_explicit_requires_grad))
+    if (preserve_grad_policy && b->flag(VarFlags::_explicit_requires_grad))
         a->set_flag(VarFlags::_explicit_requires_grad);
-    a->set_flag(VarFlags::_requires_grad_disabled,
-        b->flag(VarFlags::_requires_grad_disabled));
+    if (preserve_grad_policy)
+        a->set_flag(VarFlags::_requires_grad_disabled,
+            b->flag(VarFlags::_requires_grad_disabled));
+    if (preserve_grad_policy)
+        a->set_flag(VarFlags::_unrecorded_view,
+            b->flag(VarFlags::_unrecorded_view));
 }
 
 void VarHolder::operator=(VarPtr&& v) {
-    if (autograd_policy.preserve_requires_grad_on_assignment) {
+    rebind_view_result(move(v), true);
+}
+
+void VarHolder::rebind_view_result(VarPtr&& v, bool preserve_grad_policy) {
+    if (preserve_grad_policy && autograd_policy.preserve_requires_grad_on_assignment) {
         if (var->is_stop_grad() != v->is_stop_grad())
             v.set_stop_grad(var->is_stop_grad());
         if (var->flag(VarFlags::_explicit_requires_grad))
@@ -718,17 +1286,42 @@ void VarHolder::operator=(VarPtr&& v) {
     }
     note_rebind(this);
     drop_capture_record(this);
-    assign_var(v.ptr, var);
+    assign_var(v.ptr, var, preserve_grad_policy);
     release_holder();
     var->release_both_liveness();
     var = v.ptr;
     own_holder();
     v.ptr = nullptr;
-    refresh_transpose_views();
+    refresh_transpose_views(preserve_grad_policy);
 }
 
 extern bool no_grad;
 void VarHolder::set_requires_grad(bool flag) {
+    if (autograd_policy.stop_outputs_when_inputs_stopped
+            && !flag && get_requires_grad()) {
+        var->check_alias_history();
+        USER_CHECK(jittor::is_backward_leaf(var))
+            << "you can only change requires_grad flags of leaf variables.";
+    }
+    set_requires_grad_impl(flag);
+}
+
+void VarHolder::set_requires_grad_impl(bool flag) {
+    auto state = var->autograd_alias;
+    if (state) {
+        state->own_requires_grad = flag;
+    }
+    // Explicit activation gives an unrecorded view its own gradient edge.
+    // This must precede the equal-value fast path: requires_grad_(True) is
+    // meaningful even when the inherited public flag is already true.
+    if (flag) var->set_flag(VarFlags::_unrecorded_view, 0);
+    // Turning off an inherited flag does not disable the source and does not
+    // give this otherwise unrecorded view an accumulator.
+    if (state && state->inherit_requires_grad) {
+        var->set_flag(VarFlags::_unrecorded_view, !flag);
+        var->refresh_alias_requires_grad();
+        return;
+    }
     if (flag == get_requires_grad()) return;
     if (flag) {
         if (var->is_stop_grad()) {
@@ -744,6 +1337,91 @@ void VarHolder::set_requires_grad(bool flag) {
         // stay alive, while newly initialized Ops snapshot disabled input edges.
         var->set_flag(VarFlags::_requires_grad_disabled);
     }
+}
+
+std::shared_ptr<AutogradAliasState> VarHolder::ensure_autograd_alias() {
+    if (!var->autograd_alias) {
+        var->autograd_alias = std::make_shared<AutogradAliasState>();
+        var->autograd_alias->own_requires_grad = get_requires_grad();
+    }
+    return var->autograd_alias;
+}
+
+VarHolder* VarHolder::check_inplace_autograd() {
+    if (no_grad || !autograd_policy.stop_outputs_when_inputs_stopped) return this;
+    if (get_requires_grad() && var->autograd_alias
+            && var->autograd_alias->created_without_grad
+            && var->autograd_alias->source
+            && var->autograd_alias->source->requires_grad()) {
+        USER_CHECK(false) << "A view was created in no_grad mode and is being "
+            "modified inplace with grad mode enabled.";
+    }
+    if (get_requires_grad()) {
+        USER_CHECK(!jittor::is_backward_leaf(var))
+            << "a leaf Variable that requires grad is being used in an in-place operation.";
+        USER_CHECK(!view_base_is_trainable_leaf())
+            << "a view of a leaf Variable that requires grad is being used in an in-place operation.";
+    }
+    return this;
+}
+
+void VarHolder::record_inplace_write() {
+    if (!var->autograd_alias) return;
+    ++*var->autograd_alias->version;
+
+}
+
+// Physical view writeback can run eagerly, but consuming autograd history is
+// observable: Torch rebases a view using the source policy at its first real
+// history query or grad-mode use, not at requires_grad_ or storage inspection.
+void VarHolder::observe_alias_history() {
+    var->refresh_alias_requires_grad();
+    var->check_alias_history();
+    auto state = var->autograd_alias;
+    if (!state || state->created_without_grad || !state->source
+            || state->creation_version == *state->version) return;
+    // A view that has never recorded a producer still has nothing to query
+    // while its source is frozen. Preserve the pending epoch: activating the
+    // source later can then rebase this actual write, unlike an untouched view.
+    if (!state->recorded_view_history && !state->source->requires_grad()) return;
+    if (view && view->base && view->physical_storage
+            && state->recorded_view_history
+            && state->source_edge_enabled == view->base->get_requires_grad()
+            && shares_physical_storage(var, view->base->var)) {
+        // An imperative store changed bytes and the shared version, not this
+        // physical view's allocation or recorded source policy. Keep its real
+        // producer and materialized buffer. Rebuilding it here would discard
+        // the original AD owner merely because somebody inspected is_leaf.
+        state->creation_version = *state->version;
+        return;
+    }
+    if (view && view->base
+            && (state->recorded_view_history || state->source->requires_grad()))
+        view->base->refresh_transpose_views(true, view);
+    state->creation_version = *state->version;
+}
+
+Var* VarHolder::grad_input() {
+    if (!no_grad) observe_alias_history();
+    return var;
+}
+
+VarHolder* VarHolder::storage_data_alias() {
+    auto* alias = new VarHolder(jittor::detach(var));
+    alias->stop_grad();
+    // Tensor.data shares bytes but has an independent version counter and
+    // trainability. Detach above shares the counter for its distinct contract.
+    alias->var->autograd_alias = std::make_shared<AutogradAliasState>();
+    return alias;
+}
+
+bool VarHolder::has_leaf_accumulator() {
+    if (!get_requires_grad() || var->flag(VarFlags::_unrecorded_view)) return false;
+    auto state = var->autograd_alias;
+    if (state && (state->stale_unrecorded_view()
+            || (state->recorded_view_history
+                && state->creation_version != *state->version))) return false;
+    return jittor::is_backward_leaf(var);
 }
 
 bool VarHolder::producer_is_view() {
@@ -793,8 +1471,14 @@ VarHolder* VarHolder::start_grad() {
     bool no_grad_bk = no_grad;
     AutogradPolicyOverride policy_guard({});
     no_grad = 0;
+    auto alias_state = var->autograd_alias;
     auto dvar = jittor::detach(var);
+    dvar->grad_hook = var->grad_hook;
     std::swap(dvar.ptr, var);
+    var->autograd_alias = move(alias_state);
+    if (var->autograd_alias) {
+        var->autograd_alias->own_requires_grad = true;
+    }
     no_grad = no_grad_bk;
     var->set_flag(VarFlags::_explicit_requires_grad);
     var->set_flag(VarFlags::_requires_grad_disabled, 0);
@@ -802,15 +1486,41 @@ VarHolder* VarHolder::start_grad() {
 }
 
 bool VarHolder::is_backward_leaf() {
+    observe_alias_history();
     return jittor::is_backward_leaf(var);
 }
 
+void VarHolder::set_grad_hook(GradCallback&& callback) {
+    var->grad_hook = std::make_shared<GradCallback>(move(callback));
+}
+
+void VarHolder::clear_grad_hook() {
+    var->grad_hook.reset();
+}
+
+PyObject* VarHolder::collectable_grad_hook() {
+    if (!var->_outputs.empty() ||
+        !var->grad_hook || var->grad_hook.use_count() != 1)
+        return nullptr;
+    // `Var::holder` is the most recently constructed holder and temporary
+    // aliases clear it on destruction. Check the actual ownership registry.
+    for (auto holder : runtime_holder_state().holders())
+        if (holder != this && holder->var == var) return nullptr;
+    return reinterpret_cast<PyObject*>(var->grad_hook->python_callable);
+}
+
+void VarHolder::clear_collectable_grad_hook() {
+    if (collectable_grad_hook()) var->grad_hook.reset();
+}
+
 int64 VarHolder::grad_fn_node_id() {
+    observe_alias_history();
     Op* op = backward_grad_fn(var);
     return op ? op->id : -1;
 }
 
 int64 VarHolder::grad_fn_op_id() {
+    observe_alias_history();
     Op* op = backward_grad_fn(var);
     if (!op) return -1;
     // Op::type_id() resolves through get_op_info, which raises for a name that
@@ -821,6 +1531,7 @@ int64 VarHolder::grad_fn_op_id() {
 }
 
 string VarHolder::grad_fn_name() {
+    observe_alias_history();
     Op* op = backward_grad_fn(var);
     return op ? op->name_ex() : string();
 }
@@ -830,22 +1541,39 @@ string VarHolder::to_string() {
 }
 
 VarHolder* VarHolder::assign(VarHolder* v) {
-    if (autograd_policy.preserve_requires_grad_on_assignment) {
-        v->set_requires_grad(get_requires_grad());
+    return assign_impl(v, true);
+}
+
+VarHolder* VarHolder::assign_impl(VarHolder* v, bool preserve_grad_policy) {
+    if (preserve_grad_policy && autograd_policy.preserve_requires_grad_on_assignment) {
+        v->set_requires_grad_impl(get_requires_grad());
     }
+    VarPtr replacement(v->var);
+    if (preserve_grad_policy && autograd_policy.preserve_requires_grad_on_assignment
+            && !var->is_stop_grad() && replacement->is_stop_grad()) {
+        // A reversibly frozen destination must not become permanently stopped
+        // because its replacement was computed under no-grad. Use the same
+        // native storage alias normalization as rebind_view_result; the old
+        // disabled flag below still snapshots the frozen input edge.
+        replacement.set_stop_grad(false);
+    }
+    record_inplace_write();
     // `assign` is the in-place primitive every `x.foo_()` funnels through, so
     // this is the one place that has to know that an in-place write to a view
     // is a write to the thing it is a view of.
-    write_through_view(v->var);
+    // Rebinding the base already refreshes this holder from the updated base.
+    // Keep that graph: replacing it again by the bare RHS would drop the old
+    // base's zero-gradient edge for a slice copy (Torch's CopySlices rule).
+    if (write_through_view(replacement.ptr, preserve_grad_policy)) return this;
     note_rebind(this);
     drop_capture_record(this);
-    assign_var(v->var, var);
+    assign_var(replacement.ptr, var, preserve_grad_policy);
     release_holder();
-    v->var->own_both_liveness();
+    replacement->own_both_liveness();
     var->release_both_liveness();
-    var = v->var;
+    var = replacement.ptr;
     own_holder();
-    refresh_transpose_views();
+    refresh_transpose_views(preserve_grad_policy);
     return this;
 }
 
@@ -854,10 +1582,54 @@ VarHolder* VarHolder::update(VarHolder* v) {
     return assign(v);
 }
 
-VarHolder* VarHolder::_update(VarHolder* v) {
+VarHolder* VarHolder::_update(VarHolder* v, bool logical_write) {
+    if (!logical_write) {
+        ExecutorEntryScope entry;
+        // Finish readers of the old storage before replacing it. The Var and
+        // its producer remain the same: recorded consumers and saved backward
+        // inputs still refer to this tensor, including on a nonleaf tensor.
+        // A detached storage owner also pins the RHS for self/overlap cases.
+        auto replacement = jittor::detach(v->var);
+        sync_all(false);
+        runtime_executor().run_sync({var, replacement.ptr}, false, false);
+        // Existing views retain their old allocation. Retain this tensor's
+        // view provenance for autograd guards, but detach its writeback owner.
+        if (view) unlink_view_owner(view);
+        orphan_views();
+        if (var->shape != replacement->shape && !var->recorded_gradient_shape) {
+            bool recorded = backward_grad_fn(var) != nullptr;
+            for (Op* consumer : var->outputs())
+                recorded = recorded || (!consumer->is_stop_grad()
+                    && !is_requires_grad_disabled_edge(var, consumer));
+            if (recorded)
+                var->recorded_gradient_shape = std::make_shared<const NanoVector>(var->shape);
+        }
+        if (var->allocator) free_var_mem(var);
+        var->dtype() = replacement->dtype();
+        var->set_shape(replacement->shape);
+        var->storage_strides = replacement->storage_strides;
+        var->device_id = replacement->device_id;
+        var->placement = replacement->placement;
+        var->share_with(replacement.ptr);
+        CHECK(var->alloc(replacement->allocator));
+        return this;
+    }
     // Python in-place wrappers call `_update` directly. A view must write the
     // replacement through its root instead of rebinding only the view holder.
-    if (is_view()) return assign(v);
+    if (is_view()) {
+        // A previously frozen destination can acquire an RHS autograd edge.
+        // Preserve that edge through both the base rebind and its view refresh
+        // instead of copying the destination's old stopped policy onto it.
+        if (autograd_policy.preserve_requires_grad_on_assignment
+                && !get_requires_grad() && v->get_requires_grad()) {
+            return assign_impl(v, false);
+        }
+        return assign(v);
+    }
+    check_inplace_autograd();
+    record_inplace_write();
+    v->var->autograd_alias = var->autograd_alias;
+    if (var->grad_hook) v->var->grad_hook = var->grad_hook;
     if (var->flag(VarFlags::_placement_published))
         v->var->set_flag(VarFlags::_placement_published);
     note_rebind(this);
@@ -878,17 +1650,76 @@ VarHolder* VarHolder::sync(bool device_sync, bool weak_sync) {
     return this;
 }
 
+#ifdef HAS_ACCELERATOR
+// Materialise a host copy of a Var's value without rebinding the Var itself.
+//
+// A read used to call `migrate_to_cpu`, which replaced the Var's storage with
+// a host block. The next device operation then had to copy it back -- measured
+// at 20x the cost of the same operation on a tensor that was never read, with
+// both copies live in between. A read is a query: it hands the
+// caller bytes, it does not move the tensor. So copy into a buffer the
+// returned ArrayArgs owns and leave `var->mem_ptr` where it is.
+//
+// `save_mem` is the exception: there the point of a read is to let go of the
+// device allocation, so it keeps the migrating path. Managed memory is read
+// in place because the host can address it -- also what the old path did.
+static bool host_copy_without_migration(Var* var, ArrayArgs& result) {
+    if (save_mem || use_cuda_managed_allocator || !var->mem_ptr
+            || !var->allocator || !var->allocator->is_cuda())
+        return false;
+    // The full storage span: `ArrayArgs` carries `storage_strides`, and the
+    // converter indexes the buffer with them, so a view needs its gap bytes
+    // too. For a contiguous Var this is exactly its byte size.
+    auto bytes = var->storage_span_bytes();
+    result.buffer.reset(new char[bytes]);
+    if (bytes)
+        // A host destination is readable when backend_copy returns, so this
+        // is the same blocking device-to-host transfer migrate_to_cpu issued.
+        backend_copy(result.buffer.get(), allocation_device(cpu_allocator),
+                     var->mem_ptr, allocation_device(var->allocator), bytes);
+    result.ptr = result.buffer.get();
+    return true;
+}
+#endif
+
 ArrayArgs VarHolder::fetch_sync() {
     note_readback();
-    if (!host_value_ready(var)) {
-        ExecutorEntryScope entry;
-        sync(readback_waits_for_devices());
-        var->set_flag(VarFlags::_execution_failed, 0);
-        if (save_mem || _HAS_ACCELERATOR)
-            migrate_to_cpu(var, runtime_executor().allocator);
+    ArrayArgs result;
+    // A host-resident value is read in place: no sync, no GIL release, so the
+    // holder cannot change before the bytes are copied.
+    if (host_value_ready(var)) {
+        Var* target = var;
+        result.shape = target->shape;
+        result.dtype = target->dtype();
+        result.storage_strides = target->storage_strides;
+        result.ptr = target->mem_ptr;
+        return result;
     }
-    ArrayArgs result{var->mem_ptr, var->shape, var->dtype()};
-    result.storage_strides = var->storage_strides;
+    // Read the holder only after the entry lock is held: the wait may release
+    // the GIL, and the Var pinned below is the one this read then copies.
+    ExecutorEntryScope entry;
+    graph_check();
+    {
+        ReadSnapshot snapshot(var);
+        Var* target = snapshot.var;
+        // Same batch policy `VarHolder::sync()` defaults to: a read may also
+        // flush the pending backlog it did not ask for.
+        const bool weak_sync = true;
+        result.shape = target->shape;
+        result.dtype = target->dtype();
+        result.storage_strides = target->storage_strides;
+        sync_owned_vars({target}, readback_waits_for_devices(), weak_sync);
+        target->set_flag(VarFlags::_execution_failed, 0);
+        #ifdef HAS_ACCELERATOR
+        if (!host_copy_without_migration(target, result))
+        #endif
+        {
+            if (save_mem || _HAS_ACCELERATOR)
+                migrate_to_cpu(target, runtime_executor().allocator);
+            result.ptr = target->mem_ptr;
+        }
+    }
+    graph_check();
     return result;
 }
 
@@ -926,31 +1757,49 @@ ItemData VarHolder::item() {
     // Keep the entry lock through the final scalar copy, including managed
     // allocations which migrate_to_cpu deliberately leaves on the device.
     ExecutorEntryScope entry;
-    USER_CHECK(var->num==1) << "item() needs a Var with exactly one element, but this one has"
-        << var->num << "(shape" << var->shape >> ")";
-    // Value-initialize: only dsize bytes are written below, and the converter
-    // may read all 8 (unsigned dtypes go through PyLong_FromUnsignedLongLong).
+    graph_check();
     ItemData data{};
-    data.dtype = var->dtype();
-    auto dsize = data.dtype.dsize();
-    if (!host_value_ready(var)) {
-        // A blocking backend host copy waits for its producer stream.
-        sync(false, false);
-        var->set_flag(VarFlags::_execution_failed, 0);
-        if (save_mem || _HAS_ACCELERATOR)
-            migrate_to_cpu(var, runtime_executor().allocator);
-    }
-    #ifdef HAS_ACCELERATOR
-    if (var->allocator->is_cuda()) {
-        backend_copy(&data.data, {BackendId::Cpu, 0}, var->mem_ptr,
-                     allocation_device(var->allocator), dsize);
-    } else
-    #endif
     {
-        std::memcpy(&data.data, var->mem_ptr, dsize);
+        ReadSnapshot snapshot(var);
+        // A local with the holder's field name: these checks and copies all
+        // act on the read-owned snapshot, and `graph_check` is scoped outside
+        // the pin so this extra owner is never visible to it (see ReadSnapshot).
+        Var* var = snapshot.var;
+        USER_CHECK(var->num==1) << "item() needs a Var with exactly one element, but this one has"
+            << var->num << "(shape" << var->shape >> ")";
+        // Value-initialize: only dsize bytes are written below, and the
+        // converter may read all 8 (unsigned dtypes go through
+        // PyLong_FromUnsignedLongLong).
+        data.dtype = var->dtype();
+        auto dsize = data.dtype.dsize();
+        if (!host_value_ready(var)) {
+            // A blocking backend host copy waits for its producer stream.
+            sync_owned_vars({var}, false, false);
+            var->set_flag(VarFlags::_execution_failed, 0);
+            // An element that shares its storage is read where it lies, below.
+            // Moving it to the host moves its whole storage group -- for a view
+            // `x[0:1]`, all of `x` -- and the next kernel to read `x` moved it
+            // back, with a blocking copy either way: 18.9 us an `x[0:1].item()`
+            // against 7.7 on 1.3, whose managed memory made the move a no-op.
+            // A var of its own still moves: that is the element alone, and every
+            // later read of it is then a host copy rather than a readback.
+            bool in_place = var->share_next && var->mem_ptr && var->allocator->is_cuda();
+            if (save_mem || (_HAS_ACCELERATOR && !in_place))
+                migrate_to_cpu(var, runtime_executor().allocator);
+        }
+        #ifdef HAS_ACCELERATOR
+        if (var->allocator->is_cuda()) {
+            backend_copy(&data.data, {BackendId::Cpu, 0}, var->mem_ptr,
+                         allocation_device(var->allocator), dsize);
+        } else
+        #endif
+        {
+            std::memcpy(&data.data, var->mem_ptr, dsize);
+        }
+        if (data.dtype == ns_float16 || data.dtype == ns_bfloat16)
+            cast_item_data(data);
     }
-    if (data.dtype == ns_float16 || data.dtype == ns_bfloat16)
-        cast_item_data(data);
+    graph_check();
     return data;
 }
 
@@ -994,15 +1843,34 @@ vector<ArrayArgs> fetch_sync(const vector<VarHolder*>& vh) {
     note_readback();
     vector<ArrayArgs> ret(vh.size());
     ExecutorEntryScope entry;
-    sync(vh, readback_waits_for_devices());
-    for (uint i=0; i<vh.size(); i++) {
-        if (save_mem || _HAS_ACCELERATOR)
-            migrate_to_cpu(vh[i]->var, runtime_executor().allocator);
-        ret[i].ptr = vh[i]->var->mem_ptr;
-        ret[i].shape = vh[i]->var->shape;
-        ret[i].dtype = vh[i]->var->dtype();
-        ret[i].storage_strides = vh[i]->var->storage_strides;
+    graph_check();
+    {
+        // Pin exactly the Vars this batch syncs and copies: a holder rebind
+        // during the GIL-releasing wait must not release them (the shared-parameter storage race).
+        vector<VarPtr> owners;
+        vector<Var*> vars;
+        owners.reserve(vh.size());
+        vars.reserve(vh.size());
+        for (auto* holder : vh) {
+            owners.emplace_back(holder->var);
+            vars.push_back(owners.back().ptr);
+        }
+        sync_owned_vars(vars, readback_waits_for_devices(), true);
+        for (uint i=0; i<vh.size(); i++) {
+            Var* var = vars[i];
+            ret[i].shape = var->shape;
+            ret[i].dtype = var->dtype();
+            ret[i].storage_strides = var->storage_strides;
+            #ifdef HAS_ACCELERATOR
+            if (host_copy_without_migration(var, ret[i]))
+                continue;
+            #endif
+            if (save_mem || _HAS_ACCELERATOR)
+                migrate_to_cpu(var, runtime_executor().allocator);
+            ret[i].ptr = var->mem_ptr;
+        }
     }
+    graph_check();
     return ret;
 }
 

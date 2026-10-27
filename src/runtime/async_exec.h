@@ -40,7 +40,14 @@ namespace jittor {
 // Python thread.
 //
 // Taken only for what is safe to hand over -- see `may_run_async` in
-// executor.cc -- and off with `async_execution=0`.
+// executor.cc -- and off with `async_execution=0`. A training forward is
+// handed over too where the backend's policy admits it
+// (`async_admits_grad`); its backward's construction window never is.
+//
+// The worker starts with no accelerator device of its own. It needs no
+// binding of its own either: a backend's `current_device` is asked by
+// everything that runs work and binds a thread that has none yet (see
+// `BackendOps::set_device`).
 
 // Whether a batch is running on the worker.
 EXTERN_LIB std::atomic<int> async_exec_inflight;
@@ -56,6 +63,10 @@ EXTERN_LIB std::atomic<int> async_exec_inflight;
 struct GraphEntryScope {
     GraphEntryScope* outer;
     bool locked;
+    // The enclosing entry's launch origin, restored on the way out; see
+    // enter_launch_origin_entry (runtime/launch_diagnostics.h).
+    bool outer_origin_active;
+    uint64 outer_origin;
     explicit GraphEntryScope(bool may_release_gil=true);
     ~GraphEntryScope();
 };
@@ -88,9 +99,34 @@ void async_exec_wait();
 // How many batches the worker has run, for tests and diagnostics.
 // @pyjt(async_exec_batches)
 int64 async_exec_batches();
+
+// Whether handing the next batch over looks worth its cost: how long the
+// calling thread has recently kept building between submitting a batch and
+// needing it, against `async_min_caller_us`. Consulted only where the
+// backend's policy says the handover has to pay for itself
+// (`async_handover_must_pay`). Not a pure query -- it counts the batches it
+// declines, so that one in 64 goes through and is measured again.
+bool async_exec_handover_pays();
+// The recent average of that, in nanoseconds; -1 before the first handover.
+// @pyjt(async_exec_caller_work_ns)
+int64 async_exec_caller_work_ns();
 // Lock the graph for every binding of the calling thread active since its
 // last suspension: called just before a batch is handed over from inside
 // them, so their remaining C++ runs under the lock.
 void async_exec_hold_active_bindings();
+
+// Drop a reference to a Python object the worker is the last owner of.
+//
+// A training forward hands the worker batches holding `Tapes` ops, and a
+// tape made from a `jt.Function` owns the Python callable its backward
+// calls. The worker has no GIL, so the `Py_DECREF` that ends the batch is a
+// segfault, not a refcount -- which is what confined the worker to
+// inference graphs before this existed. Returns true when it took the
+// release to run on the Python thread instead, false on that thread
+// already, where the caller should just do it.
+bool async_exec_defer_python_release(std::function<void()>&& release);
+// Run what the worker handed over. Called on the Python thread, with the
+// GIL, at every executor entry.
+void async_exec_run_python_releases();
 
 } // jittor

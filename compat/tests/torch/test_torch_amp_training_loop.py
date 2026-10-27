@@ -35,7 +35,7 @@ def _region(device):
 
 
 def _half_dtypes(device):
-    # CPU autocast is bfloat16 in torch; jittor's register approximates it.
+    # CPU autocast defaults to bfloat16; CUDA also supports float16.
     return [torch.bfloat16] if device == "cpu" else [torch.float16, torch.bfloat16]
 
 

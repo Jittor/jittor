@@ -130,7 +130,9 @@ class _PySafeOpen:
         # Tensors are read on demand, as safetensors' mmap reader does: holding
         # the whole payload doubled peak host memory while a checkpoint loaded.
         self._data_offset = 8 + n
-        self._meta = self._header.pop("__metadata__", {})
+        # Absence differs from an explicitly empty metadata dictionary.
+        # Accelerate uses None to recognize an archive without a format tag.
+        self._meta = self._header.pop("__metadata__", None)
 
     def keys(self):
         return list(self._header.keys())

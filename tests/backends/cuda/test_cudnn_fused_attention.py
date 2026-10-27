@@ -8,8 +8,7 @@
 The math path of ``scaled_dot_product_attention`` writes the whole score
 matrix and its softmax to device memory: 1 GiB and 2.9 ms per call at the
 SD1.5 UNet's 64x64 resolution, where this kernel takes 20 MiB and 0.5 ms.
-It serves float16 and bfloat16, forward and backward, causal masks, and --
-without a backward -- bool and float masks. The
+It serves float16 and bfloat16, forward and backward, causal masks, and constant bool/float masks. The
 reference is float64 numpy, with a row every key is masked out of giving 0 as
 the composite does.
 """
@@ -21,7 +20,8 @@ import unittest
 import numpy as np
 
 import jittor as jt
-from jittor.nn.functional.attention import scaled_dot_product_attention
+from jittor.nn.functional.attention import LAST_FUSED_KERNEL, scaled_dot_product_attention
+from jittor._runtime import forbid_backend_fallbacks
 
 
 def _usable():
@@ -193,10 +193,152 @@ class TestCudnnFusedAttention(unittest.TestCase):
     def test_a_two_dimensional_mask(self):
         self._check_mask((np.random.RandomState(4).randn(48, 64) * 0.5).astype("float32"))
 
-    def test_training_with_a_mask_keeps_the_other_path(self):
-        q = jt.random((1, 2, 16, 64)).float16()
-        mask = jt.ones((16, 16), dtype="bool")
-        self.assertIsNone(self.kernel._cudnn_fused_attention(q, q, q, attn_mask=mask))
+    def _check_mask_training(self, dtype, mask, causal=False, grouped=False, expect_fused=True):
+        rng = np.random.RandomState(41)
+        heads, key_heads = (4, 2) if grouped else (2, 2)
+        q = rng.randn(1, heads, 33, 64).astype("float32") * 0.5
+        k, v = (rng.randn(1, key_heads, 47, 64).astype("float32") * 0.5 for _ in range(2))
+        dout = rng.randn(*q.shape).astype("float32") * 0.5
+        with forbid_backend_fallbacks():
+            qkv = [jt.array(t).cast(dtype) for t in (q, k, v)]
+            upstream = jt.array(dout).cast(dtype).stop_grad()
+            # Compare independent float64 arithmetic on the actual quantized
+            # operand values. The oracle never calls another Jittor attention.
+            values = [t.float32().numpy() for t in qkv]
+            want = _reference(*values, mask, causal, upstream.float32().numpy())
+            LAST_FUSED_KERNEL[0] = None
+            function = (self.kernel._cudnn_fused_attention_gqa if grouped
+                        else scaled_dot_product_attention)
+            out = function(*qkv, attn_mask=jt.array(mask).stop_grad(), is_causal=causal)
+            self.assertIsNotNone(out)
+            route = function if grouped else LAST_FUSED_KERNEL[0]
+            grads = jt.grad((out.float32() * upstream.float32()).sum(), qkv)
+            tolerance = 3e-3 if dtype == "float16" else 2e-2
+            for label, got, expected in zip(("out", "dq", "dk", "dv"), [out] + list(grads), want):
+                got.sync()
+                self.assertEqual(got.location(), "device", label)
+                value = got.float32().numpy()
+                self.assertTrue(np.isfinite(value).all(), label)
+                np.testing.assert_allclose(value, expected, rtol=tolerance,
+                                           atol=tolerance * max(np.abs(expected).max(), 1e-8),
+                                           err_msg=label)
+            jt.sync_all(True)
+            if expect_fused:
+                self.assertIsNotNone(route)
+                self.assertEqual(route.__module__, self.kernel.__name__)
+            else:
+                self.assertIsNone(route)
+            self.assertEqual(str(out.dtype), dtype)
+        return out.float32().numpy(), grads[0].float32().numpy()
+
+    def test_masked_training_with_empty_rows_and_causal_intersections(self):
+        for dtype in ("float16", "bfloat16"):
+            for causal in (False, True):
+                for kind in ("bool", "additive"):
+                    with self.subTest(dtype=dtype, causal=causal, mask=kind):
+                        mask = np.random.RandomState(42).rand(1, 1, 33, 47) > 0.25
+                        mask[..., 5, :] = False
+                        mask[..., 0, 0] = False  # causal leaves this row no key
+                        mask[..., 0, 1:] = True
+                        if kind == "additive":
+                            bias = np.random.RandomState(43).normal(0, .2, mask.shape).astype("float32")
+                            mask = np.where(mask, bias, -np.inf).astype("float32")
+                        out, dq = self._check_mask_training(dtype, mask, causal)
+                        self.assertEqual(np.abs(out[..., 5, :]).max(), 0.)
+                        self.assertEqual(np.abs(dq[..., 5, :]).max(), 0.)
+                        if causal:
+                            self.assertEqual(np.abs(out[..., 0, :]).max(), 0.)
+                            self.assertEqual(np.abs(dq[..., 0, :]).max(), 0.)
+
+    def test_padding_masks_broadcast_during_training(self):
+        for dtype in ("float16", "bfloat16"):
+            for shape in ((47,), (1, 1, 1, 47)):
+                for kind in ("bool", "additive"):
+                    with self.subTest(dtype=dtype, shape=shape, mask=kind):
+                        mask = np.arange(47) < 31
+                        if kind == "additive":
+                            mask = np.where(mask, 0., -1e9).astype("float32")
+                        self._check_mask_training(dtype, mask.reshape(shape))
+
+    def test_large_finite_row_offsets_keep_the_explicit_softmax_backward(self):
+        for dtype in ("float16", "bfloat16"):
+            with self.subTest(dtype=dtype):
+                mask = np.zeros((33, 47), "float32")
+                mask[5, :] = np.finfo(np.float32).min
+                self._check_mask_training(dtype, mask, expect_fused=False)
+
+    def test_autocast_keeps_the_float32_bias_abi(self):
+        mask = np.where(np.arange(47) < 31, 0., -1e9).astype("float32")
+        for dtype, preference in (("float16", jt.amp_flags.prefer16),
+                                  ("bfloat16", jt.amp_flags.prefer_bfloat16)):
+            with self.subTest(dtype=dtype), jt.flag_scope(amp_reg=preference):
+                self._check_mask_training(dtype, mask.reshape(1, 1, 1, 47))
+                bias = self.kernel._MASK_TERMS[0][2]
+                self.assertEqual(str(bias.dtype), "float32")
+                bias.sync()
+                self.assertEqual(bias.location(), "device")
+
+    def test_grouped_heads_with_a_constant_mask(self):
+        mask = (np.arange(47) < 31).reshape(1, 1, 1, 47)
+        self._check_mask_training("float16", mask, grouped=True)
+
+    def test_a_learned_mask_is_not_served_without_its_gradient(self):
+        q = jt.random((1, 2, 33, 64)).float16()
+        k = jt.random((1, 2, 47, 64)).float16()
+        mask = jt.zeros((33, 47), dtype="float32").start_grad()
+        self.assertIsNone(self.kernel._cudnn_fused_attention(q, k, k, attn_mask=mask))
+
+    @unittest.expectedFailure
+    def test_masked_training_replays_with_changed_inputs(self):
+        # KI-EXEC-016: replay reuses a materialised attention node, so the
+        # query stays at its capture-time value. Strict xfail: removing the
+        # decorator is part of closing the issue.
+        def step(q, k, v, mask):
+            out = scaled_dot_product_attention(q, k, v, attn_mask=mask)
+            return (out,) + tuple(jt.grad(out.float32().sum(), [q, k, v]))
+        with forbid_backend_fallbacks():
+            for dtype in ("float16", "bfloat16"):
+                with self.subTest(dtype=dtype):
+                    run = jt.capture_step(step)
+                    tolerance = 3e-3 if dtype == "float16" else 2e-2
+                    for feed in range(4):
+                        rng = np.random.RandomState(50 + feed)
+                        arrays = [rng.normal(0, .5, shape).astype("float32") for shape in
+                                  ((1, 2, 33, 64), (1, 2, 47, 64), (1, 2, 47, 64))]
+                        mask = (np.arange(47) < 31 + feed).reshape(1, 1, 1, 47)
+                        tensors = [jt.array(t).cast(dtype) for t in arrays] + [jt.array(mask)]
+                        values = [t.float32().numpy() for t in tensors[:3]]
+                        for tensor in tensors:
+                            tensor.sync()
+                        want = _reference(*values, mask, False, np.ones_like(values[0]))
+                        result = run(*tensors)
+                        for label, got, expected in zip(("out", "dq", "dk", "dv"), result, want):
+                            got.sync()
+                            self.assertEqual(got.location(), "device", label)
+                            np.testing.assert_allclose(
+                                got.float32().numpy(), expected, rtol=tolerance,
+                                atol=tolerance * max(np.abs(expected).max(), 1e-8), err_msg=label)
+                    self.assertEqual(run.stats["captured"], 1)
+                    self.assertGreater(run.stats["replayed"], 0)
+            jt.sync_all(True)
+        # Mask admission reads a scalar only on the eager fused path;
+        # tracing retains the existing graph-only composite implementation.
+
+    def test_an_updated_mask_does_not_reuse_the_old_bias(self):
+        rng = np.random.RandomState(44)
+        arrays = [rng.randn(*shape).astype("float32") for shape in
+                  ((1, 2, 33, 64), (1, 2, 47, 64), (1, 2, 47, 64))]
+        with jt.no_grad(), forbid_backend_fallbacks():
+            qkv = [jt.array(t).float16() for t in arrays]
+            values = [t.float32().numpy() for t in qkv]
+            mask = jt.ones((1, 1, 1, 47), dtype="bool")
+            first = scaled_dot_product_attention(*qkv, attn_mask=mask).float32().numpy()
+            visible = (np.arange(47) < 23).reshape(1, 1, 1, 47)
+            mask.update(jt.array(visible))
+            second = scaled_dot_product_attention(*qkv, attn_mask=mask).float32().numpy()
+            want = _reference(*values, visible, False, np.zeros_like(values[0]))[0]
+            np.testing.assert_allclose(second, want, atol=3e-3, rtol=3e-3)
+            self.assertGreater(np.abs(first-second).max(), 0.01)
 
     def test_the_scores_are_never_built(self):
         heads, tokens, width = 8, 4096, 40

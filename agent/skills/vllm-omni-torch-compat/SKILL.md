@@ -15,7 +15,126 @@ description: 在 Jittor torch shim 与原生 PyTorch 上运行/验证 vLLM-Omni 
 画面噪声与「非注意力 device 侧 gap」仍是开放项，不要据此接受性能；不覆盖 vLLM-Omni 的
 训练（它是 inference runtime）。
 
+
+## 源码注册分母（2026-10-15）
+
+固定源码 `446c2b5474dabffccf9a0034836eeab77c62b4b8` 的有界分母为 92 个 Omni 自有模型、68 个扩散模型和 64 个流水线 model-type 键，分别来自 `_OMNI_MODELS`、`_DIFFUSION_MODELS`、`OMNI_PIPELINES`。继承的 `vllm::_VLLM_MODELS` 必须另绑其自身上游 SHA，不混入 Omni 自有模型分母。三个轴不可相加；裸 Diffusers VAE 的执行不建立 Omni pipeline 或 engine 覆盖。
+
+下列 host-only 工具不导入 Torch/Jittor，不编译、不下载；输出上游 commit、remote、逐源文件 SHA256、注册行和动态注册入口。运行时插件是开放集合，工具只给源码 built-in 声明的有界分母，不声称当前安装环境已激活全部注册，也不授予任何设备或深度等级。上游新增未知动态构造、重复声明或模块级修改时显式报错，不将其略掉后声称完整。
+
+```bash
+<host-python> agent/skills/torch-compat-repo-runbook/scripts/_vllm_registry.py \
+  --repo vllm-omni --checkout "$JITTOR_LAB_ROOT/vllm-omni" \
+  --output "$JITTOR_LAB_ROOT/_state/vllm-omni/registry.json"
+```
+
+官方 vLLM `0.29.0` release 另对应 `98dff2a81d747d1dba01a47f939f48c3526d4206`，
+同一工具得到 376 个模型和 40 个 CustomOp；不能沿用旧 SHA 的 353/39 分母。
+
+本页历史环境表中的 package version 不能替代 checkout SHA：历史 vLLM `51a99565c` 的 `git describe` 为 `v0.23.1rc0-522-g51a99565c`；当前 `98dff2a81` 是 exact tag `v0.29.0`，Omni SHA 为 `v0.29.0rc1-58-g446c2b54`。复跑须逐侧记录实际源码与已安装分发包，不能因旧表写 `0.29.0` 就将这两个源码版本视作一致。历史路径中的脚本需先核对存在性。
+
+## Full-gradient diagnosis (2026-10-15)
+
+[The pinned H3 autograd audit](../../../docs/results/2026-10-15-h3-autograd-boundary.md)
+uses clean diagnostic source `521314943b480517b6fb422c09359fc521081a8f`.
+Real Torch 2.13.0+cu130 and candidate each reject the complete gradient protocol
+in both eval and public `model.train(True)` modes: 32/36 parameter and all four
+requested input gradients are missing. Constructor flags are recorded separately
+(19 true, 17 false); the audit explicitly enables all 36 and four inputs.
+CPU setup failures remain visible. No full-model L2/L3, pipeline, or performance
+coverage is granted, and the earlier default-attention 0.2% failures remain intact.
+
+`custom_ops=['none']` is the **vLLM request**. Omni's independent CustomOp class
+still selects its real CUDA methods; it does not read that request. The probe
+now records actual `operation_routes`, constructor/requested trainability,
+global grad state, interpreter and genuine extension hash. `--model-mode train`
+changes the real Module flag, without replacing kernels or bypassing missing
+gradients. Its fourteen saved arrays only establish the stated partial observation
+and eval/train equivalence, not complete cross-runtime numerical agreement.
+The real CUDA RMS/SwiGLU outputs and bare Triton modulation calls lack the
+required autograd edges; do not substitute a CPU route, invent a backward,
+force a MATH oracle, or count head-only SGD as the requested whole-model training.
+
 ## 两侧环境
+
+### 固定 tiny H3 诊断（2026-10-15）
+
+维护入口 [`scripts/probe_h3.py`](scripts/probe_h3.py) 直接调用真实
+`MiniMaxH3DiTModel`：一层主干、一层 refiner、hidden=32、33268 个参数，固定权重
+seed=3、输入 seeds=7/19；不下载 checkpoint，不构造 engine，也不是训练准入工具。
+它要求本仓与两个上游 checkout 干净，核对完整运行时源码快照、实际导入包和原始
+wheel 的全部载荷，以及真实安装的 METADATA / RECORD。固定 Omni 构建的载荷必须
+恰好为完整源码清单加生成的 `_version.py`，不能用同步改写的 wheel 隐藏增删文件。
+本 recipe 还固定审核过的本地构建 wheel SHA256，防止同版本的替代构建改写生成文件；
+它不是 PyPI 二进制。新的合法构建须重新审核 artifact 并采集来源，不能只更新声明哈希。
+Omni 的 source@SHA 与
+实际 SCM 分发版本分别保存，不改版本号。模型导入前独占写出 `.installation.json`，
+因此 CPU 初始化失败也可核对安装来源；这个阶段不授予计算或数值通过。
+完整计算后再次验证安装和本仓源码，保存实际 device、精度、梯度与原始数组。
+原模型保留 BF16 参数与 FP32 参数/缓冲区的混合 dtype；逐张量记录名字、真实 dtype
+和物理设备，FP32 数组仅用于原诊断的序列化，不将整个模型强制转成 FP32。
+这些诊断记录仍须经统一 scorecard auditor 准入，不能直接计入覆盖。
+
+新运行还在 `.installation.json` 与最终 JSON 中调用公共 `_runtime_platform.py`
+采集 CPU/卡型号、实际 UUID 分配、driver/CUDA、可用编译器版本、NVIDIA 分发版本、
+精度与原生 graph/backend 标志。genuine CUDA 环境也须提供可用的 `g++` 和 `nvcc`
+供平台采集；CPU 不要求 nvcc。每个张量的物理 pointer 检查仍独立执行。
+历史诊断缺少该块时保留原样，不能回填为新格式或据此补授数值等级。
+
+使用独立解释器、匹配的实际 vLLM `0.29.0` 和 Omni SCM
+`0.29.0rc2.dev58+g446c2b547`。此固定 recipe 的真实 oracle 是 Torch
+`2.13.0+cu130`，与下面历史 `cu129` 环境分开；不能沿用历史数字或改 `__version__`。
+先以隐藏 GPU 的 `--device cpu` 请求真实 CPU 路径并保留实际平台错误，再跑 CUDA。
+CPU/CUDA、oracle/candidate 分别使用独立输出文件；candidate 编译缓存也按 device 隔离。
+
+```bash
+# 从仓库根目录，实际匹配包和 toolchain 由各自解释器的环境提供。
+export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
+export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+mkdir -p "$JITTOR_LAB_ROOT/_state/h3/run"/{oracle-home,oracle-tmp,candidate-home,candidate-tmp}
+env -u JITTOR_TORCH_SHIM CUDA_VISIBLE_DEVICES="<gpu>" \
+  HOME="$JITTOR_LAB_ROOT/_state/h3/run/oracle-home" \
+  TMPDIR="$JITTOR_LAB_ROOT/_state/h3/run/oracle-tmp" \
+  <real-torch-python> agent/skills/vllm-omni-torch-compat/scripts/probe_h3.py \
+  --runtime torch --device cuda \
+  --vllm-checkout "$JITTOR_LAB_ROOT/vllm-evidence/upstream/vllm029" \
+  --omni-checkout "$JITTOR_LAB_ROOT/vllm-evidence/upstream/vllm-omni" \
+  --vllm-wheel "<original-vllm-0.29.0-wheel>" \
+  --omni-wheel "<original-source-built-Omni-wheel>" \
+  --output "$JITTOR_LAB_ROOT/_state/h3/run/oracle.npz"
+
+JITTOR_TORCH_SHIM=1 CUDA_VISIBLE_DEVICES="<gpu>" JT_CUDA_KERNEL_MATH=strict \
+  HOME="$JITTOR_LAB_ROOT/_state/h3/run/candidate-home" \
+  TMPDIR="$JITTOR_LAB_ROOT/_state/h3/run/candidate-tmp" \
+  JITTOR_HOME="$JITTOR_LAB_ROOT/_state/h3/run/cuda-jittor" \
+  PYTHONPATH="$PWD/python:<verified-private-facade>:$PWD/adapters:<matched-package-sites>" \
+  <jittor-python> agent/skills/vllm-omni-torch-compat/scripts/probe_h3.py \
+  --runtime jittor --device cuda \
+  --vllm-checkout "$JITTOR_LAB_ROOT/vllm-evidence/upstream/vllm029" \
+  --omni-checkout "$JITTOR_LAB_ROOT/vllm-evidence/upstream/vllm-omni" \
+  --vllm-wheel "<original-vllm-0.29.0-wheel>" \
+  --omni-wheel "<original-source-built-Omni-wheel>" \
+  --output "$JITTOR_LAB_ROOT/_state/h3/run/candidate.npz"
+```
+
+候选端的 `<verified-private-facade>` 须先用本工作树的 `compat/shim/deploy.py`
+部署到独立目录并通过 `--check`；匹配包路径可能包含 genuine Torchvision 二进制，
+因此部署的 facade 路径必须排在这些路径之前。部署失败和原始导入失败均保留。
+
+两侧均显式设置 `OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1`，
+candidate 使用真实安装的 core / compat / vLLM adapter carrier；不复制 JIT 二进制。
+CLI 的 `--vllm-wheel` 是共享校验器的 wheel 输入，不继承父进程的另一份 recipe。
+`.installation.json` 只证明模型导入前的安装阶段；非零退出、缺梯度或超预算仍为失败。
+
+`--mode grad-audit` 将全部参数和四个浮点输入设为 trainable，保存实际可见梯度与缺失清单，
+任一缺失就非零退出。固定源码两端实际都只有四个末端 head 参数有梯度，32/36 参数和
+全部四个输入缺梯度，不能将只训练 head 当成整模型 L3。普通 `forward` 保持参数冻结、
+四输入可导，沿原测试路径执行，不冒充 `torch.no_grad()`。
+
+`--torch-math` 只允许 genuine Torch，作为独立算法归因；原默认路径和 MATH 原始文件
+必须分开。当前 candidate 六个最终数组与 genuine MATH 逐位一致，但原默认预算仍有
+4/6 项失败；不能切换 oracle 后宣布原门禁通过。该诊断不授模型、pipeline、engine、
+CPU 支持或性能等级；模型轴分子仍为零。输出拒绝覆盖既存证据或写入源码树。
 
 | 角色 | 解释器 / 入口 | 说明 |
 | --- | --- | --- |

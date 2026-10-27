@@ -68,7 +68,7 @@ class TestParallelPass(unittest.TestCase):
         assert len(rep) == 2
         assert (a.data+b.data==nc).all()
         fname = rep[1][1]
-        with open(fname) as f:
+        with open(fname, encoding="utf-8") as f:
             src = f.read()
             assert "thread_id" in src
         asm = SimpleAsmParser(_assembly_for(fname))
@@ -106,7 +106,7 @@ class TestParallelPass2(TestParallelPass):
         assert len(rep) == 2
         assert (a.data-b.data==nc).all()
         fname = rep[1][1]
-        with open(fname) as f:
+        with open(fname, encoding="utf-8") as f:
             src = f.read()
             assert "thread_id" in src
         asm = SimpleAsmParser(_assembly_for(fname))
@@ -128,7 +128,7 @@ class TestParallelPass3(unittest.TestCase):
             assert np.allclose(a.data*2, b)
             assert len(rep) == 2
             fname = rep[1][1]
-            with open(fname) as f:
+            with open(fname, encoding="utf-8") as f:
                 src = f.read()
                 for i in range(tdim):
                     assert f"tnum{i}" in src
@@ -191,7 +191,7 @@ class TestParallelPass3(unittest.TestCase):
                     compile_options=dict(options, parallel=1)) as rep:
                 b = (a + a).data
             np.testing.assert_allclose(b, a.data * 2)
-            with open(rep[1][1]) as f:
+            with open(rep[1][1], encoding="utf-8") as f:
                 return f.read()
         src = launch([64, 1024])
         self.assertRegex(src, r"int tn0 = std::min\(NanoVector::get_nbits\(")
@@ -224,7 +224,7 @@ class TestParallelPass3(unittest.TestCase):
                 with jt.profile_scope() as rep:
                     y = (x * sc + 1).maximum(0)
                     y.sync()
-                with open(rep[1][1]) as f:
+                with open(rep[1][1], encoding="utf-8") as f:
                     src = f.read()
                 self.assertIn("jt_vecs", src)
                 self.assertIn("for (int jt_k = 0; jt_k < %d; jt_k++)" % lanes, src)
@@ -283,7 +283,7 @@ class TestParallelPass3(unittest.TestCase):
             b = a.sum(rdim).data
         assert len(rep) == 2
         fname = rep[1][1]
-        with open(fname) as f:
+        with open(fname, encoding="utf-8") as f:
             src = f.read()
             for i in range(tdim):
                 assert f"tnum{i}" in src

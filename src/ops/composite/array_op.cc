@@ -31,8 +31,10 @@ ArrayOp::ArrayOp(ArrayArgs&& args) {
         output->set_flag(VarFlags::_force_fuse);
         set_type(OpType::element);
     }
-    if (shape.size() == 0)
+    if (shape.size() == 0) {
         output->set_flag(VarFlags::_is_scalar);
+        output->set_flag(VarFlags::_is_constant);
+    }
     #ifdef HAS_ACCELERATOR
     // Fused scalar values are emitted inside generated kernels on both backends.
     if (requested_backend() != BackendId::Cpu && output->flag(VarFlags::_force_fuse))
@@ -52,6 +54,7 @@ ArrayOp::ArrayOp(ArrayArgs&& args) {
         }
     }
     #endif
+    if (keep_inline(args.ptr, output->size)) return;
     // TODO: args.buffer too many copy
     new (&allocation) Allocation(get_array_host_allocator(), output->size);
     backend_copy(allocation.ptr, {}, args.ptr, {}, output->size);
@@ -106,6 +109,12 @@ void ArrayOp::jit_prepare(JK& jk) {
 }
 
 void ArrayOp::run() {
+    if (inline_pending && !allocation.ptr) {
+        // The output takes memory now: the allocation the constructor skipped.
+        new (&allocation) Allocation(get_array_host_allocator(), output->size);
+        std::memcpy(allocation.ptr, inline_value, output->size);
+        inline_pending = false;
+    }
     // Run again, by a kept graph (`keep_graph`): the first run already handed
     // the data to the output, which still holds it -- see
     // `release_kept_storage`, which leaves a constant's memory alone. Running
@@ -135,7 +144,7 @@ void ArrayOp::run() {
     // then overwrite the three fields -- so between the read and the free the
     // var still named an allocation this thread had already given back, and a
     // release on another thread freed the same id a second time. Pinned by the
-    // id-space event log (KI-EXEC-007): `set_occupied(16 MiB, thread A)`,
+    // id-space event log (the shared-parameter storage race): `set_occupied(16 MiB, thread A)`,
     // `erase_occupied(16 MiB, thread B)`, the id reissued to another block,
     // and then A's free of the same id reporting "allocation not found".
     // `free_var_mem` clears the three fields *before* it calls the allocator,

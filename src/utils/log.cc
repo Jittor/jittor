@@ -479,14 +479,6 @@ void segfault_sigaction(int signal, siginfo_t *si, void *arg) {
         }
         return;
     }
-    if (signal == SIGINT) {
-        // LOGe builds an ostringstream: a malloc, from a handler that may have
-        // interrupted malloc.
-        if (_pid == getpid())
-            sig_write("Caught SIGINT, quick exit\n");
-        exited = 1;
-        do_exit();
-    }
     if (exited) do_exit();
     sig_write("Caught segfault at address ");
     sig_write_ptr(si->si_addr);
@@ -559,7 +551,6 @@ int register_sigaction() {
     if (getenv("JT_NO_SIGNAL_HANDLER") != nullptr)
         return 0;
 #ifdef _WIN32
-    signal(SIGINT, handle_signal);
     signal(SIGTERM, handle_signal);
     // signal(SIGABRT, handle_signal);
     signal(SIGSEGV, handle_signal);
@@ -583,9 +574,8 @@ int register_sigaction() {
     sigaction(SIGKILL, &sa, NULL);
     sigaction(SIGSTOP, &sa, NULL);
     sigaction(SIGFPE, &sa, NULL);
-    // jupyter use sigint to interp
-    if (getenv("JPY_PARENT_PID") == nullptr)
-        sigaction(SIGINT, &sa, NULL);
+    // SIGINT stays with Python, so Ctrl-C raises KeyboardInterrupt and
+    // `finally` blocks run.
     // Under MPI (mpirun), the MPI runtime relies on SIGCHLD/SIGBUS/SIGILL for
     // its own process management and shared-memory transports. Hijacking them
     // makes a benign signal during MPI_Init look like a fatal fault and abort

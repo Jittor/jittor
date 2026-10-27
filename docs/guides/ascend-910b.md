@@ -389,7 +389,7 @@ CANN 的 `set_env.sh`）：
 
 ```bash
 source "$CANN_SET_ENV"
-python bench/torch_compat/run.py --device npu --gpu <分配到的设备> \
+python benchmarks/torch_compat/run.py --device npu --gpu <分配到的设备> \
   --torch-python /path/to/torch-npu-env/bin/python
 ```
 
@@ -397,7 +397,7 @@ python bench/torch_compat/run.py --device npu --gpu <分配到的设备> \
 的占用。默认禁止 CPU 回退，调查时才加 `--allow-fallback`。口径、读表方式与绕开 Jittor
 直接调 aclnn 的探针见
 [基准测试](../performance/benchmarking.md)与
-[`bench/README.md`](https://github.com/Jittor/jittor/blob/master/bench/README.md)。
+[`benchmarks/acl/README.md`](https://github.com/Jittor/jittor/blob/master/benchmarks/acl/README.md)。
 **测速要和单元测试用不同的编译缓存，也不要与别人共用同一块卡。**
 
 ## 排错

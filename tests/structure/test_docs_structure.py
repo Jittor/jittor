@@ -52,6 +52,8 @@ class TestDocsStructure(unittest.TestCase):
             "agent/scripts",
             "agent/README.md",
             "asv.conf.json",
+            "bench",
+            "benchmarks/asv.conf.json",
             "AWESOME-JITTOR-LIST.md",
             "AWESOME-JITTOR-LIST.cn.md",
             "README.src.md",
@@ -113,11 +115,12 @@ class TestDocsStructure(unittest.TestCase):
         self.assertNotIn("eval-rst", adapter)
 
     def test_asv_config_preserves_repository_and_external_run_paths(self):
-        config_path = self.repo_root / "benchmarks" / "asv.conf.json"
+        config_path = self.repo_root / "benchmarks" / "asv" / "asv.conf.json"
         config = json.loads(config_path.read_text(encoding="utf-8"))
         self.assertEqual((config_path.parent / config["repo"]).resolve(), self.repo_root)
         self.assertEqual(
-            (self.repo_root / config["benchmark_dir"]).resolve(), self.repo_root / "benchmarks"
+            (config_path.parent / config["benchmark_dir"]).resolve(),
+            self.repo_root / "benchmarks" / "asv",
         )
         tree = ast.parse((self.repo_root / "noxfile.py").read_text())
         writer = next(
@@ -132,7 +135,7 @@ class TestDocsStructure(unittest.TestCase):
             generated = namespace["_write_asv_config"](state, state / "results", state / "html")
             runtime = json.loads(generated.read_text())
         self.assertEqual(runtime["repo"], str(self.repo_root))
-        self.assertEqual(runtime["benchmark_dir"], str(self.repo_root / "benchmarks"))
+        self.assertEqual(runtime["benchmark_dir"], str(self.repo_root / "benchmarks" / "asv"))
         self.assertEqual(runtime["results_dir"], str(state / "results"))
         self.assertEqual(runtime["html_dir"], str(state / "html"))
         self.assertEqual(runtime["env_dir"], str(state / "asv-env"))
@@ -323,13 +326,13 @@ class TestDocsStructure(unittest.TestCase):
 
         A first import builds the C++ core, needs the network once, and leaves
         1-2 GB of cache. None of that was written down, so every one of those
-        arrived as a surprise -- and the surprise looks like a hang.
+        arrived as a surprise -- and the surprise looks like a hang. The
+        Chinese README is the default; the English one carries the same facts.
         """
         readme = (self.repo_root / "README.md").read_text(encoding="utf-8")
+        self.assertIn("首次运行", readme)
+        self.assertIn("离线安装", readme)
         for marker in (
-            "What the first run does",
-            "Offline install",
-            # The escape hatches a stuck user needs, by name.
             "python -m jittor_utils.preflight",
             "python -m jittor_utils.clean_cache",
             "JITTOR_OFFLINE_PATH",
@@ -338,6 +341,18 @@ class TestDocsStructure(unittest.TestCase):
             "cache_name",
         ):
             self.assertIn(marker, readme, marker)
+        english = (self.repo_root / "README.en.md").read_text(encoding="utf-8")
+        for marker in (
+            "What the first run does",
+            "Offline install",
+            "python -m jittor_utils.preflight",
+            "python -m jittor_utils.clean_cache",
+            "JITTOR_OFFLINE_PATH",
+            "JITTOR_HOME",
+            "nvcc_path",
+            "cache_name",
+        ):
+            self.assertIn(marker, english, marker)
 
     def test_readme_does_not_promise_an_automatic_cuda_download(self):
         """It did, for a while after the behaviour was removed.
@@ -349,7 +364,10 @@ class TestDocsStructure(unittest.TestCase):
         readme = (self.repo_root / "README.md").read_text(encoding="utf-8")
         self.assertNotIn("automatic JTCUDA", readme)
         self.assertNotIn("自动 JTCUDA", readme)
-        self.assertIn("does not download one", readme)
+        self.assertIn("不会自动下载", readme)
+        english = (self.repo_root / "README.en.md").read_text(encoding="utf-8")
+        self.assertNotIn("automatic JTCUDA", english)
+        self.assertIn("does not download one", english)
 
     def test_internal_markdown_links_pass(self):
         result = run_python_child(

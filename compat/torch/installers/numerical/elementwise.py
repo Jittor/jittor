@@ -5,7 +5,14 @@ def log1p(x):
     from . import (
         jt,
     )
-    return jt.log(1.0 + x)
+    from jittor._core.dtypes import dtype_name
+    from ...context import get_install_context
+    from ...types import _dtype_to_str
+    name = dtype_name(x.dtype)
+    if name == "bool" or name.startswith(("int", "uint")):
+        default = get_install_context(jt).target_namespace.get_default_dtype()
+        x = x.cast(_dtype_to_str(default))
+    return jt.ops.log1p(x)
 
 
 def reciprocal(x):

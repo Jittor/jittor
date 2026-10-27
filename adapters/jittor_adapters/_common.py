@@ -6,7 +6,7 @@ class UnsupportedAdapterVersion(ImportError):
     pass
 
 
-def require_version(package, supported):
+def require_version(package, supported, *, source_version=None):
     module = sys.modules.get(package)
     # `getattr`, not `vars(module).get(...)`. A lazily constructed module keeps
     # its attributes behind a module-level `__getattr__` and never puts them in
@@ -17,6 +17,10 @@ def require_version(package, supported):
     # "imported package reports None" for 5.5.3, a version this adapter lists as
     # supported. A real (non-lazy) module answers the same either way.
     version = getattr(module, "__version__", None) if module is not None else None
+    # Before an eager package body finishes, its verified source version can
+    # be supplied by a pre-import adapter. A loaded version always wins.
+    if version is None:
+        version = source_version
     # A source checkout's own version wins; never substitute unrelated installed
     # metadata and accidentally approve a different source tree.
     normalized = str(version).split("+", 1)[0]

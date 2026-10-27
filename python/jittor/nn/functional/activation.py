@@ -76,10 +76,21 @@ def _fused_activation(x, act):
     if x._producer_op() == "transpose" and channels_last_source(x) is not None:
         # An add kept channels-last hands out the NCHW view of a result it
         # computed on its operands' storage.
-        add, storage = x._input(0), True
+        sources = x._inputs()
+        if not sources:
+            return None
+        add, storage = sources[0], True
     if add._producer_op() != "binary.add":
         return None
-    a, b = add._input(0), add._input(1)
+    # Both operands from one call. `add._input(0)` and then `add._input(1)`
+    # are two graph entries, and leaving the first may run the auto-flushed
+    # batch the add is in: a ResNet training step at batch 64 lost its add
+    # between the two reads and raised. The operands are the first two
+    # inputs; an in-place `out += identity` adds a dependency edge after them.
+    operands = add._inputs()
+    if len(operands) < 2:
+        return None
+    a, b = operands[0], operands[1]
     for y, r in ((a, b), (b, a)):
         offer = _RESIDUAL_OFFERS.get(y.id)
         if offer is None or offer[1] != storage:
@@ -266,6 +277,12 @@ def gelu(x, approximate='none'):
         >>> nn.gelu(a)
         jt.Var([-0.134547   0.9882567  6.128115 ], dtype=float32)
     '''
+    # Training keeps the exact BF16 forward and backward in one CUDA kernel
+    # each. It has a separate dispatch name so its registration does not
+    # disable the native no-grad GELU route below for other dtypes.
+    fast = try_dispatch("nn.gelu.training", x, approximate=approximate)
+    if fast is not None:
+        return fast
     if approximate == 'none' and _FAST_GELU is not None:
         # The body below, built natively when the frontend's binary operators
         # are bound and no "nn.gelu" kernel is registered; None otherwise.
@@ -334,6 +351,14 @@ def silu(x, inplace=False):     # inplace: accepted for torch/mmcv compat, ignor
     fast = try_dispatch("nn.silu", x, inplace=inplace)
     if fast is not None:
         return fast
+    if _jittor_dtype_name(x.dtype) in ("float16", "bfloat16"):
+        # SiLU rounds once at its public boundary. A narrow sigmoid followed
+        # by a narrow multiply adds a rounding step absent from the opmath
+        # implementation. Keep native AD connected through the widening cast.
+        dtype = x.dtype
+        with jt.flag_scope(amp_reg=jt.amp_flags.disabled):
+            wide = x.float32()
+            return (wide * wide.sigmoid()).cast(dtype)
     return x * x.sigmoid()
 
 
@@ -411,8 +436,23 @@ def get_init_var_rand(shape, dtype):
 
 
 def softplus(x, beta=1.0, threshold=20.0):
-    return 1 / beta * jt.log(1 + (beta * x).minimum(threshold).exp()) + \
-        (x - threshold / beta).maximum(0.0)
+    dtype = _jittor_dtype_name(x.dtype)
+    if dtype not in ("float16", "bfloat16", "float32", "float64"):
+        raise TypeError("softplus requires a real floating input")
+    fast = try_dispatch("nn.softplus", x, beta=beta, threshold=threshold)
+    if fast is not None:
+        return fast
+    # ATen uses float opmath for Half/BFloat16; acceptance requires
+    # independent backend regression, not this decomposition alone.
+    work = x.float32() if dtype in ("float16", "bfloat16") else x
+    scaled = beta * work
+    above = scaled > threshold
+    # Guard exp even in an eagerly materialized unselected branch.
+    # A strict select preserves the input derivative at exact T.
+    safe_scaled = jt.ternary(above, threshold, scaled)
+    nonlinear = jt.log1p(safe_scaled.exp()) / beta
+    output = jt.ternary(above, work, nonlinear)
+    return output.cast(dtype) if dtype in ("float16", "bfloat16") else output
 
 
 def hardtanh(x, min_val=-1, max_val=1):

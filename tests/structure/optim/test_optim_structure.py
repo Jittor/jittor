@@ -10,7 +10,7 @@ import unittest
 import jittor as jt
 from jittor import nn, optim
 from jittor.optim import base, schedulers
-from jittor.optim.algorithms import adam, adan, rmsprop, sgd
+from jittor.optim.algorithms import adagrad, adam, adan, rmsprop, sgd
 
 
 _CLASSES = {
@@ -20,6 +20,7 @@ _CLASSES = {
     "Adam": adam.Adam,
     "AdamW": adam.AdamW,
     "Adan": adan.Adan,
+    "Adagrad": adagrad.Adagrad,
     "LRScheduler": schedulers.LRScheduler,
     "LambdaLR": schedulers.LambdaLR,
 }
@@ -41,13 +42,13 @@ class TestOptimStructure(unittest.TestCase):
         )
         self.assertEqual(
             {path.name for path in (self.package / "algorithms").glob("*.py")},
-            {"__init__.py", "sgd.py", "rmsprop.py", "adam.py", "adan.py"},
+            {"__init__.py", "sgd.py", "rmsprop.py", "adam.py", "adan.py", "adagrad.py"},
         )
 
     def test_facade_preserves_the_historical_public_surface(self):
         native = {
             "jt", "np", "deepcopy", "Optimizer", "opt_grad", "SGD",
-            "RMSprop", "Adam", "AdamW", "Adan", "LRScheduler", "LambdaLR",
+            "RMSprop", "Adam", "AdamW", "Adan", "Adagrad", "LRScheduler", "LambdaLR",
         }
         runtime = native | {"lr_scheduler"}
         self.assertEqual(set(optim._NATIVE_EXPORTS), native)
@@ -73,6 +74,7 @@ class TestOptimStructure(unittest.TestCase):
             "Adam": "jittor.optim.algorithms.adam",
             "AdamW": "jittor.optim.algorithms.adam",
             "Adan": "jittor.optim.algorithms.adan",
+            "Adagrad": "jittor.optim.algorithms.adagrad",
             "LRScheduler": "jittor.optim.schedulers",
             "LambdaLR": "jittor.optim.schedulers",
         }
@@ -89,14 +91,14 @@ class TestOptimStructure(unittest.TestCase):
                 )
                 self.assertIs(pickle.loads(legacy), implementation)
 
-    def test_core_signatures_are_unchanged(self):
+    def test_core_signatures_preserve_legacy_parameter_order(self):
         signatures = {
             "Optimizer": "(params, lr, param_sync_iter=10000)",
             "SGD": (
                 "(params, lr, momentum=0, weight_decay=0, dampening=0, "
-                "nesterov=False, fused=None)"
+                "nesterov=False, fused=None, torch_math=False)"
             ),
-            "RMSprop": "(params, lr=0.01, eps=1e-08, alpha=0.99)",
+            "RMSprop": "(params, lr=0.01, eps=1e-08, alpha=0.99, weight_decay=0)",
             "Adam": "(params, lr, eps=1e-08, betas=(0.9, 0.999), weight_decay=0)",
             "AdamW": "(params, lr, eps=1e-08, betas=(0.9, 0.999), weight_decay=0, fused=None)",
             "Adan": "(params, lr=0.001, betas=(0.98, 0.92, 0.99), eps=1e-08, weight_decay=0.0, max_grad_norm=0.0)",

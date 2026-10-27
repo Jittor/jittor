@@ -306,6 +306,28 @@ def dispatch_context(*args, **kwargs):
     return DispatchContext(*_dispatch_backend(args, kwargs))
 
 
+def _backend_of(value):
+    """``dispatch_context(value).backend`` for a single argument.
+
+    The backend is all some callers read (assignment asks it of every target),
+    and for one Var it is a single native query; the dtype names and the tuple
+    the full context builds around it are skipped. Published as an attribute of
+    the native ``dispatch_context`` only, so a stand-in that replaces it -- the
+    way a caller states the device -- is never bypassed.
+    """
+    var_type = _VAR_TYPE
+    if var_type is None:
+        _bind_core()
+        var_type = _VAR_TYPE
+    if not isinstance(value, var_type):
+        return dispatch_context(value).backend
+    backend = _DISPATCH_CONTEXT_NATIVE([value])[0]
+    return "acl" if backend == "acl_legacy" else backend
+
+
+dispatch_context._backend_of = _backend_of
+
+
 #: The function `select_kernel` reads placement through unless a caller has
 #: replaced the module attribute. Kept so the fast path can tell "nobody
 #: overrode this" from "a test states the device itself"; the override is a
@@ -415,8 +437,80 @@ def select_kernel(op, *args, **kwargs):
 
 
 def try_dispatch(op, *args, **kwargs):
+    # Fast path: nothing is registered under this op on any backend, so no
+    # argument walk or placement query can change the answer. This spares the
+    # `select_kernel` frame on the hot path of every wrapped operator
+    # (`where`, `getitem`, `arg_reduce`, ...) in a pure-jittor run.
+    if op not in _registered_ops:
+        return None
     implementation = select_kernel(op, *args, **kwargs)
     return None if implementation is None else implementation(*args, **kwargs)
+
+
+def _is_registered(op):
+    """Whether anything is registered under ``op`` on any backend."""
+    return op in _registered_ops
+
+
+# On the native `try_dispatch` only: a caller that replaces it -- to observe or
+# route calls -- has no shortcut to skip it with.
+try_dispatch._is_registered = _is_registered
+
+
+#: `_sole_default`'s answers, by operator, for the registry generation they were
+#: computed in.
+_sole_default_answers = {}
+
+
+def _sole_default(op, implementation):
+    """Whether ``implementation`` is the only kernel registered for ``op``.
+
+    Then `try_dispatch(op, ...)` can only ever call it, on any backend, and a
+    native rendering of that implementation may be called instead. Recomputed
+    after any registration change.
+    """
+    answer = _sole_default_answers.get(op)
+    if answer is not None and answer[0] == generation and answer[1] is implementation:
+        return answer[2]
+    with _lock:
+        entries = [entry for (name, _backend), current in _kernels.items()
+                   if name == op for entry in current]
+        result = len(entries) == 1 and entries[0].implementation is implementation \
+            and entries[0].supports is None and entries[0].dtypes is None \
+            and entries[0].runtime_modes is None
+        _sole_default_answers[op] = (generation, implementation, result)
+    return result
+
+
+def _bind_native_entries():
+    """Publish the native indexing and concatenation paths to the Python layer.
+
+    `src/bindings/pyjt/py_compat_fast.h` builds a basic-index getitem (with its
+    view record) and the direct concatenation natively; the Torch frontend has
+    used them since they were written. Jittor's own `getitem` and `concat` reach
+    them through these attributes -- on the native `try_dispatch` and
+    `select_kernel`, not module globals, so a stand-in for either (a test that
+    routes or observes calls) has no shortcut to bypass it with. Called once
+    the core is up; the paths need the native selector bound and the capture
+    query, which is what the frontend binds as well.
+    """
+    core = sys.modules["jittor"].core
+    if not hasattr(core, "_jt_basic_getitem") or not hasattr(core, "_jt_concat"):
+        return
+    if _NATIVE_SELECT is None:
+        _bind_native_select()
+    if not _NATIVE_SELECT:
+        return
+    from .step_capture import tracing
+    core._compat_fast_bind(tracing)
+    try_dispatch._native_basic_getitem = core._jt_basic_getitem
+    if hasattr(core, "_jt_setitem"):
+        try_dispatch._native_setitem = core._jt_setitem
+    if hasattr(core, "_fast_clamp"):
+        try_dispatch._native_clamp = core._fast_clamp
+        try_dispatch._sole_default = _sole_default
+    select_kernel._native_concat = core._jt_concat
+    select_kernel._is_registered = _is_registered
 
 
 def optional_kernel(op, backend, *, dtypes=None, supports=None, priority=0,

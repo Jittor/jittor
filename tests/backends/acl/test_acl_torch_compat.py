@@ -811,6 +811,62 @@ class TestACLTorchCompat(unittest.TestCase):
         np.testing.assert_array_equal(bf_values[1], expected_gradient_bf)
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_silu_float16_forward_backward_stays_on_acl(self):
+        from jittor._runtime.fallback import forbid_backend_fallbacks
+
+        # Half-precision inputs, including saturated sigmoid tails, zero,
+        # and SiLU's negative-slope region. The oracle evaluates the function
+        # and its derivative independently in NumPy, rounding only the result.
+        source_np = np.asarray(
+            [-12.0, -8.0, -4.0, -1.25, -0.125, 0.0,
+             0.125, 0.75, 3.5, 5.9375, 8.0, 12.0],
+            dtype=np.float16,
+        ).reshape(3, 4)
+        cotangent_np = np.asarray(
+            [0.25, -0.5, 1.5, 2.0, -1.0, 0.75,
+             -0.25, 1.25, 0.5, -1.5, 2.0, -0.75],
+            dtype=np.float16,
+        ).reshape(3, 4)
+        source_reference = source_np.astype(np.float32)
+        sigmoid = 1.0 / (1.0 + np.exp(-source_reference))
+        expected_output = (source_reference * sigmoid).astype(np.float16)
+        expected_gradient = (
+            cotangent_np.astype(np.float32)
+            * sigmoid * (1.0 + source_reference * (1.0 - sigmoid))
+        ).astype(np.float16)
+
+        acl_silu = registered_kernel("nn.silu", "acl")
+        self.assertIsNotNone(acl_silu)
+        dispatches = []
+
+        def record_silu(*args, **kwargs):
+            result = acl_silu(*args, **kwargs)
+            dispatches.append(result is not None)
+            return result
+
+        fallback_before = jt.core.backend_fallback_count()
+        with forbid_backend_fallbacks(), override_kernel("nn.silu", "acl", record_silu):
+            source = torch.tensor(
+                source_np, dtype=torch.float16, device="npu", requires_grad=True)
+            cotangent = torch.tensor(cotangent_np, dtype=torch.float16, device="npu")
+            with torch.no_grad():
+                inference = torch.nn.functional.silu(source)
+            output = torch.nn.functional.silu(source)
+            gradient = torch.autograd.grad((output * cotangent).sum(), source)[0]
+            for value in (inference, output, gradient):
+                self.assertIs(type(value), torch.Tensor)
+                self.assertEqual(value.dtype, torch.float16)
+                self.assertEqual(tuple(value.shape), source_np.shape)
+            candidate = _fetch_acl(self, [inference, output, gradient])
+        self.assertEqual(dispatches, [True, True])
+        self.assertEqual(jt.core.backend_fallback_count(), fallback_before)
+        for actual, expected in zip(
+            candidate, [expected_output, expected_output, expected_gradient]
+        ):
+            self.assertTrue(np.isfinite(actual).all())
+            np.testing.assert_allclose(actual, expected, rtol=2e-3, atol=2e-3)
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_sdpa_forward_backward_stays_on_acl(self):
         rng = np.random.RandomState(20260830)
         shape = (2, 1, 64, 32)
@@ -1053,3 +1109,158 @@ class TestACLTorchCompat(unittest.TestCase):
         np.testing.assert_array_equal(gradient, [[11.0, 12.0], [16.0, 17.0]])
 
         self.assertEqual(calls, [((0, 1), -100), ((1, 2, 2, 1), 3.5)])
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_npu_int64_roll_stays_on_acl(self):
+        from jittor._runtime.fallback import forbid_backend_fallbacks
+
+        before = jt.core.backend_fallback_count()
+        with jt.runtime.scope(backend_fallback="error"), forbid_backend_fallbacks():
+            labels = torch.tensor([[-100, 10, 11, 2], [-100, 12, 13, 2]],
+                                  dtype=torch.int64, device="npu:0")
+            rolled = torch.roll(labels, -1, 1)
+            _assert_acl_device(self, rolled)
+            np.testing.assert_array_equal(
+                rolled.detach().cpu().numpy(),
+                [[10, 11, 2, -100], [12, 13, 2, -100]],
+            )
+        self.assertEqual(jt.core.backend_fallback_count() - before, 0)
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_npu_bare_none_index_preserves_values_and_gradient(self):
+        from jittor._runtime.fallback import forbid_backend_fallbacks
+
+        before = jt.core.backend_fallback_count()
+        with jt.runtime.scope(backend_fallback="error"), forbid_backend_fallbacks():
+            for data in (np.array(3.0, dtype=np.float32),
+                         np.array([2.0, -3.0, 4.0], dtype=np.float32)):
+                with self.subTest(shape=data.shape):
+                    source = torch.tensor(data, device="npu", requires_grad=True)
+                    expanded = source[None]
+                    self.assertEqual(tuple(expanded.shape), (1,) + data.shape)
+                    _assert_acl_device(self, expanded)
+                    (expanded * 2.0).sum().backward()
+                    self.assertIsNotNone(source.grad)
+                    self.assertEqual(tuple(source.grad.shape), data.shape)
+                    _assert_acl_device(self, source)
+                    _assert_acl_device(self, source.grad)
+                    actual, gradient = _fetch_acl(
+                        self, [expanded.detach().clone(), source.grad.detach().clone()])
+                    np.testing.assert_array_equal(actual, data[None])
+                    np.testing.assert_array_equal(
+                        gradient, np.full(data.shape, 2.0, dtype=np.float32))
+        self.assertEqual(jt.core.backend_fallback_count(), before)
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_npu_bool_slice_assignment_uses_exact_device_payload(self):
+        """CANN bool slice writes lower via exact int8 payload, no host fallback."""
+        from jittor._runtime.fallback import forbid_backend_fallbacks
+
+        before = jt.core.backend_fallback_count()
+        with jt.runtime.scope(backend_fallback="error"), forbid_backend_fallbacks():
+            scalar = torch.zeros((1, 1), dtype=torch.bool, device="npu")
+            scalar[0, 0] = True
+            self.assertEqual(scalar.dtype, torch.bool)
+            np.testing.assert_array_equal(_fetch_acl(self, [scalar])[0], [[True]])
+
+            column = torch.tensor([[True, False, True], [False, True, False]],
+                                  dtype=torch.bool, device="npu")
+            column[:, 1] = torch.tensor([True, False], dtype=torch.bool, device="npu")
+            self.assertEqual(column.dtype, torch.bool)
+            np.testing.assert_array_equal(_fetch_acl(self, [column])[0],
+                                          [[True, True, True], [False, False, False]])
+
+            broadcast = torch.zeros((3, 3), dtype=torch.bool, device="npu")
+            broadcast[1:, :] = torch.tensor([True, False, True], dtype=torch.bool, device="npu")
+            np.testing.assert_array_equal(
+                _fetch_acl(self, [broadcast])[0],
+                [[False, False, False], [True, False, True], [True, False, True]])
+
+            stepped = torch.ones((2, 4), dtype=torch.bool, device="npu")
+            stepped[:, ::2] = False
+            np.testing.assert_array_equal(_fetch_acl(self, [stepped])[0],
+                                          [[False, True, False, True],
+                                           [False, True, False, True]])
+
+            # Casting to int8 before truth conversion would turn +/-256 into 0.
+            numeric = torch.zeros((1, 3), dtype=torch.bool, device="npu")
+            numeric[:, :] = torch.tensor([[-256, 0, 256]], dtype=torch.int32, device="npu")
+            self.assertEqual(numeric.dtype, torch.bool)
+            np.testing.assert_array_equal(_fetch_acl(self, [numeric])[0], [[True, False, True]])
+
+            narrow = torch.tensor([[-128, 0, 127]], dtype=torch.int8, device="npu")
+            narrow[:, 1:2] = torch.tensor([[-1]], dtype=torch.int8, device="npu")
+            self.assertEqual(narrow.dtype, torch.int8)
+            np.testing.assert_array_equal(_fetch_acl(self, [narrow])[0], [[-128, -1, 127]])
+        self.assertEqual(jt.core.backend_fallback_count() - before, 0)
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_npu_single_bool_index_with_full_slices(self):
+        """A boolean column index selects device coordinates, not host data."""
+        from jittor._runtime.fallback import forbid_backend_fallbacks
+
+        before = jt.core.backend_fallback_count()
+        with jt.runtime.scope(backend_fallback="error"), forbid_backend_fallbacks():
+            labels = torch.tensor([[-100, 11, -100, 13]], dtype=torch.int64, device="npu")
+            mask = (labels != -100)[0]
+            selected = labels[:, mask]
+            self.assertEqual(tuple(selected.shape), (1, 2))
+            self.assertEqual(selected.dtype, torch.int64)
+            np.testing.assert_array_equal(_fetch_acl(self, [selected])[0], [[11, 13]])
+
+            values = torch.tensor([[1., 2., 3., 4.], [5., 6., 7., 8.]],
+                                  device="npu", requires_grad=True)
+            gathered = values[..., mask]
+            gathered.sum().backward()
+            np.testing.assert_array_equal(_fetch_acl(self, [gathered])[0], [[2., 4.], [6., 8.]])
+            np.testing.assert_array_equal(_fetch_acl(self, [values.grad])[0],
+                                          [[0., 1., 0., 1.], [0., 1., 0., 1.]])
+
+            full = values[:, torch.ones(4, dtype=torch.bool, device="npu")]
+            np.testing.assert_array_equal(_fetch_acl(self, [full])[0],
+                                          [[1., 2., 3., 4.], [5., 6., 7., 8.]])
+
+            # An all-false mask leaves CANN's Nonzero nothing to write.
+            empty = values[:, torch.zeros(4, dtype=torch.bool, device="npu")]
+            self.assertEqual(tuple(empty.shape), (2, 0))
+            self.assertEqual(empty.dtype, values.dtype)
+            empty_gradient = torch.autograd.grad(empty.sum(), values)[0]
+            np.testing.assert_array_equal(_fetch_acl(self, [empty_gradient])[0],
+                                          [[0., 0., 0., 0.], [0., 0., 0., 0.]])
+
+            # More than one match: a bool sum would saturate at True and shape
+            # the output for a single row.
+            many = torch.arange(6, device="npu").reshape(2, 3)
+            rows, columns = torch.nonzero(many > 0, as_tuple=True)
+            np.testing.assert_array_equal(_fetch_acl(self, [rows])[0], [0, 0, 1, 1, 1])
+            np.testing.assert_array_equal(_fetch_acl(self, [columns])[0], [1, 2, 0, 1, 2])
+        self.assertEqual(jt.core.backend_fallback_count() - before, 0)
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_npu_deterministic_policy_toggles_backend_and_restores_state(self):
+        """The policy lives in the ACL runtime, not in a Python shadow flag."""
+        from jittor._runtime.fallback import forbid_backend_fallbacks
+
+        previous = torch.are_deterministic_algorithms_enabled()
+        before = jt.core.backend_fallback_count()
+        with jt.runtime.scope(backend_fallback="error"), forbid_backend_fallbacks():
+            try:
+                for enabled in (True, False, True):
+                    torch.use_deterministic_algorithms(enabled)
+                    self.assertEqual(torch.are_deterministic_algorithms_enabled(), enabled)
+                    self.assertEqual(
+                        bool(jt.core.backend_get_deterministic_algorithms()), enabled)
+                    value = torch.ones((4,), device="npu").sum()
+                    _assert_acl_device(self, value)
+                    self.assertEqual(value.item(), 4)
+                # Refused rather than silently ignored: a caller that asked to
+                # be warned instead of stopped would get neither.
+                with self.assertRaisesRegex(NotImplementedError, "warn_only"):
+                    torch.use_deterministic_algorithms(False, warn_only=True)
+                self.assertTrue(torch.are_deterministic_algorithms_enabled())
+                with self.assertRaises(TypeError):
+                    torch.use_deterministic_algorithms(1)
+            finally:
+                torch.use_deterministic_algorithms(previous)
+            self.assertEqual(torch.are_deterministic_algorithms_enabled(), previous)
+            self.assertEqual(jt.core.backend_fallback_count() - before, 0)

@@ -66,6 +66,7 @@ class TestAmpBitNames(unittest.TestCase):
         expected = {
             "amp_prefer32": jt.amp_flags.prefer32,
             "amp_prefer16": jt.amp_flags.prefer16,
+            "amp_prefer_bfloat16": jt.amp_flags.prefer_bfloat16,
             "amp_keep_reduce": jt.amp_flags.keep_reduce,
             "amp_keep_white": jt.amp_flags.keep_white,
             "amp_array_prefer": jt.amp_flags.array_prefer,
@@ -252,6 +253,102 @@ class TestArrayAndRandomAgree(unittest.TestCase):
         for level in (5, 6):
             with amp_level(level):
                 self.assertEqual(str(jt.array(np.ones(4, "int32")).dtype), "int32")
+
+
+class TestLayerNormAccumulatesInFloat32(unittest.TestCase):
+    """ATen keeps ``layer_norm`` in float32 under autocast; this register must not lower it.
+
+    The register biases the dtype of *every* float op, so the generic LN body
+    ran its deviation, its square, the reciprocal square root and the affine at
+    the input's half dtype.  Against the float64 closed form on the same
+    rounded input, with fp32 affine parameters, bfloat16 measured up to 1.5e-2
+    relative to the row scale before the fix where 2 ULP is 7.8e-3, and
+    float16 up to 1.8e-3 where 2 ULP is 9.8e-4.  Two row widths are checked
+    because the lowered statistics' error grows with the number of terms.
+    The dtype contract does not move: half in, half out.
+    """
+
+    #: 2 ULP of each format -- one rounding of the normalised result.
+    ULP = {"float16": 2.0 ** -11, "bfloat16": 2.0 ** -8}
+    BIT = {"float16": "prefer16", "bfloat16": "prefer_bfloat16"}
+    #: The 1024-wide case is the documented one; 4096 accumulates more terms.
+    WIDTHS = (1024, 4096)
+
+    def _devices(self):
+        yield "cpu", 0
+        if jt.has_cuda:
+            yield "cuda", 1
+
+    def _check(self, dtype, name, use_cuda):
+        for hidden in self.WIDTHS:
+            rng = np.random.RandomState(hidden)
+            data = (rng.randn(16, hidden) * 2 + 1).astype("float32")
+            w = rng.randn(hidden).astype("float32")
+            b = rng.randn(hidden).astype("float32")
+            with jt.flag_scope(use_cuda=use_cuda,
+                               amp_reg=getattr(jt.amp_flags, self.BIT[dtype])):
+                x = jt.array(data).cast(dtype)
+                jw, jb = jt.array(w), jt.array(b)
+                # The reference reads the *rounded* input back, so it measures
+                # the accumulation, not the conversion.
+                xr = x.float64().numpy()
+                mean = xr.mean(-1, keepdims=True)
+                truth = ((xr - mean)
+                         / np.sqrt(xr.var(-1, keepdims=True) + 1e-5)
+                         * w.astype(np.float64) + b.astype(np.float64))
+                # Keep the graph: the training path (no fast kernel for half)
+                # is the one the register used to lower, and it must stay
+                # float32 too.
+                for v in (x, jw, jb):
+                    v.start_grad()
+                out = jt.nn.layer_norm(x, (hidden,), jw, jb, 1e-5)
+                self.assertEqual(
+                    str(out.dtype), dtype,
+                    "%s layer_norm on %s changed the dtype contract"
+                    % (name, dtype))
+                # Normalise by each row's scale: an element that rounds through
+                # zero is a tiny absolute error, and a pointwise ratio would
+                # call it enormous. One rounding of the result is <= 1 ULP of
+                # the row.
+                scale = np.maximum(np.abs(truth).max(-1, keepdims=True), 1e-30)
+                err = float(np.max(np.abs(out.float64().numpy() - truth) / scale))
+                self.assertLessEqual(
+                    err, 2.0 * self.ULP[dtype],
+                    "layer_norm %s on %s, width %d, accumulated at the input "
+                    "width: %.3e against a 2 ULP bound of %.3e"
+                    % (dtype, name, hidden, err, 2.0 * self.ULP[dtype]))
+
+    def _run(self, dtype):
+        for name, use_cuda in self._devices():
+            with self.subTest(device=name):
+                self._check(dtype, name, use_cuda)
+
+    def test_bfloat16(self):
+        self._run("bfloat16")
+
+    def test_float16(self):
+        self._run("float16")
+
+
+class TestHalfPreferenceHasOneOwner(unittest.TestCase):
+    def test_the_two_spellings_share_the_helper(self):
+        from jittor.nn.functional import _amp
+        from jittor.nn.functional.matrix import _amp_retypes_output_to_half
+        from jittor.nn.functional.normalization import _amp_prefers_half
+        self.assertIs(_amp_prefers_half, _amp.prefers_half)
+        self.assertIs(_amp_retypes_output_to_half, _amp.prefers_half)
+
+    def test_only_the_half_bits_count(self):
+        from jittor.nn.functional._amp import prefers_half
+        with jt.flag_scope(amp_reg=0):
+            self.assertFalse(prefers_half())
+        with jt.flag_scope(amp_reg=jt.amp_flags.prefer16):
+            self.assertTrue(prefers_half())
+        with jt.flag_scope(amp_reg=jt.amp_flags.prefer_bfloat16):
+            self.assertTrue(prefers_half())
+        with jt.flag_scope(amp_reg=(jt.amp_flags.keep_reduce
+                                    | jt.amp_flags.keep_white)):
+            self.assertFalse(prefers_half())
 
 
 if __name__ == "__main__":

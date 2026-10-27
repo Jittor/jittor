@@ -45,6 +45,7 @@ inline acl_data::AclAttrSchema acl_code_attribute_schema(const string& name) {
     if (name == "Transpose") return {{"axes", required(Type::int64_vector)}};
     if (name == "Cumsum") return {{"dim", required(Type::int64)}};
     if (name == "Gather") return {{"dim", required(Type::int64)}};
+    if (name == "IndexCopy") return {{"dim", required(Type::int64)}};
     if (name == "Scatter") return {{"axis", required(Type::int64)}, {"reduction", required(Type::int64)}};
     if (name == "Conv2d") return {{"convStrides", required(Type::int64_vector)}, {"convPads", required(Type::int64_vector)}, {"convDilations", required(Type::int64_vector)}, {"group", required(Type::int64)}, {"convOutPads", required(Type::int64_vector)}, {"cube_math_type", required(Type::int64)}};
     if (name == "Conv2dBackward") return {{"convStrides", required(Type::int64_vector)}, {"convPads", required(Type::int64_vector)}, {"convDilations", required(Type::int64_vector)}, {"group", required(Type::int64)}, {"convOutPads", required(Type::int64_vector)}, {"cube_math_type", required(Type::int64)}};
@@ -78,6 +79,7 @@ inline acl_data::AclAttrSchema acl_code_attribute_schema(const string& name) {
     if (name == "NanToNum") return {{"nan", required(Type::float64)}, {"posinf", required(Type::float64)}, {"neginf", required(Type::float64)}};
     if (name == "FlashAttention") return {{"scale", required(Type::float64)}, {"keepProb", required(Type::float64)}, {"preToken", required(Type::int64)}, {"nextToken", required(Type::int64)}, {"headNum", required(Type::int64)}, {"inputLayout", required(Type::int64_vector)}, {"innerPrecise", required(Type::int64)}, {"sparseMode", required(Type::int64)}, {"psetype", required(Type::int64)}, {"prefix", required(Type::int64_vector)}, {"qStartIdx", required(Type::int64_vector)}, {"kvStartIdx", required(Type::int64_vector)}, {"hasRealshift", required(Type::boolean)}, {"hasDropmask", required(Type::boolean)}, {"hasPaddingmask", required(Type::boolean)}, {"hasAttentmask", required(Type::boolean)}};
     if (name == "FlashAttentionBackward") return {{"scale", required(Type::float64)}, {"keepProb", required(Type::float64)}, {"preToken", required(Type::int64)}, {"nextToken", required(Type::int64)}, {"headNum", required(Type::int64)}, {"inputLayout", required(Type::int64_vector)}, {"innerPrecise", required(Type::int64)}, {"sparseMode", required(Type::int64)}, {"psetype", required(Type::int64)}, {"prefix", required(Type::int64_vector)}, {"qStartIdx", required(Type::int64_vector)}, {"kvStartIdx", required(Type::int64_vector)}, {"hasRealshift", required(Type::boolean)}, {"hasDropmask", required(Type::boolean)}, {"hasPaddingmask", required(Type::boolean)}, {"hasAttentmask", required(Type::boolean)}};
+    if (name == "PromptFlashAttention") return {{"scale", required(Type::float64)}, {"headNum", required(Type::int64)}};
     if (name == "IncreFlashAttention") return {{"scale", required(Type::float64)}, {"headNum", required(Type::int64)}, {"keyValueHeadNum", required(Type::int64)}, {"inputLayout", required(Type::int64_vector)}, {"innerPrecise", required(Type::int64)}, {"blockSize", defaulted(acl_data::AclDataValue::int64_value(0))}, {"hasBlockTable", defaulted(acl_data::AclDataValue::bool_value_of(false))}, {"actualSeqLengths", defaulted(acl_data::AclDataValue::int64_vector({}))}};
     if (name == "KVCacheMemcpy") return {{"blockSize", required(Type::int64)}, {"slots", required(Type::int64_vector)}};
     if (name == "Roll") return {{"shifts", required(Type::int64_vector)}, {"dims", required(Type::int64_vector)}};
@@ -153,6 +155,13 @@ void assign_acl_code_attributes(Runner& op, const acl_data::AclDecodedData& deco
         attr->dim = fields.at("dim").int_value;
         op.op_attr=std::move(attr);
         op.jt_name="gather";
+        return;
+    }
+    if (name == "IndexCopy") {
+        auto attr=std::unique_ptr<GatherAttr>(new GatherAttr());
+        attr->dim = fields.at("dim").int_value;
+        op.op_attr=std::move(attr);
+        op.jt_name="indexcopy";
         return;
     }
     if (name == "Scatter") {
@@ -488,6 +497,14 @@ void assign_acl_code_attributes(Runner& op, const acl_data::AclDecodedData& deco
         attr->hasAttentmask = fields.at("hasAttentmask").bool_value;
         op.op_attr=std::move(attr);
         op.jt_name="flashattentionbackward";
+        return;
+    }
+    if (name == "PromptFlashAttention") {
+        auto attr=std::unique_ptr<PromptFlashAttentionAttr>(new PromptFlashAttentionAttr());
+        attr->scale = fields.at("scale").float_value;
+        attr->headNum = fields.at("headNum").int_value;
+        op.op_attr=std::move(attr);
+        op.jt_name="promptflashattention";
         return;
     }
     if (name == "IncreFlashAttention") {

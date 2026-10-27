@@ -12,11 +12,15 @@ same files as the gate.
 """
 
 import ast
+import importlib
 import os
 from pathlib import Path
 import sys
+import unittest
+from types import SimpleNamespace
 
 import pytest
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TEST_ROOT = REPO_ROOT / "tests"
@@ -86,6 +90,15 @@ def test_the_two_sessions_do_not_run_the_same_file_twice():
     assert sorted(native & torch) == []
 
 
+def test_public_fsdp2_compat_tests_do_not_enter_native_collection():
+    """Importing compat FSDP2 loads its Torch-facing helper modules."""
+    target = "compat/tests/fsdp2/test_fsdp2_flat_policy.py"
+    native = gate_scope.selected_files(REPO_ROOT, gate_scope.native_arguments())
+    torch = gate_scope.selected_files(REPO_ROOT, gate_scope.torch_arguments())
+    assert target not in native
+    assert target in torch
+
+
 def test_every_exclusion_states_a_reason_and_still_exists():
     problems = []
     for entry in gate_scope.EXCLUDED:
@@ -95,6 +108,48 @@ def test_every_exclusion_states_a_reason_and_still_exists():
         if not (REPO_ROOT / path).exists():
             problems.append("%s is excluded but no longer exists" % path)
     assert problems == [], "\n".join(problems)
+
+
+def test_xdist_controller_receives_worker_collection_before_session_policy():
+    """Parallel collection must preserve real empty-file detection."""
+    policy = importlib.import_module("_helpers.pytest_policy")
+    selected_before = set(policy._SELECTED_FILES)
+    collected_before = set(policy._COLLECTED_FILES)
+    try:
+        policy._SELECTED_FILES.clear()
+        policy._SELECTED_FILES.update({"tests/collected.py", "tests/empty.py"})
+        policy._COLLECTED_FILES.clear()
+
+        worker = SimpleNamespace(workerinput={"workerid": "gw0"}, workeroutput={})
+        policy._publish_xdist_collected_files(worker, {"tests/collected.py"})
+
+        controller = SimpleNamespace(workeroutput=worker.workeroutput)
+        policy.pytest_testnodedown(controller, None)
+
+        assert policy._files_that_collected_nothing() == ["tests/empty.py"]
+    finally:
+        policy._SELECTED_FILES.clear()
+        policy._SELECTED_FILES.update(selected_before)
+        policy._COLLECTED_FILES.clear()
+        policy._COLLECTED_FILES.update(collected_before)
+
+
+def test_unavailable_cuda_skip_retains_backend_identity_for_execution_policy():
+    from _helpers import capability
+
+    unavailable = SimpleNamespace(
+        kind="backend",
+        name="cuda",
+        state=SimpleNamespace(value="disabled"),
+        reason="registered backend reports 0 visible logical device(s)",
+    )
+    with pytest.raises(unittest.SkipTest, match="backend cuda is disabled") as skipped:
+        capability._skip(unavailable)
+
+    policy = importlib.import_module("_helpers.pytest_policy")
+    reason = str(skipped.value).lower()
+    assert policy.classify_skip_reason_bucket(reason) == "accelerator"
+    assert policy._environment_explains({reason})
 
 
 def test_the_gate_covers_almost_the_whole_tree():
@@ -262,6 +317,36 @@ def test_full_nox_session_is_the_periodic_complete_gate():
     assert "python -m nox -s full" in workflow
 
 
+def test_backend_workflow_caches_use_the_same_runner_temp_root_as_nox():
+    """Keep CPU and CUDA nox caches under the same Actions temp root (10.28)."""
+    expected_cache = "${{ runner.temp }}/jittor-lab/_state/nox/cache"
+    jobs = {
+        "cpu.yml": ("smoke", "cpu"),
+        "cuda.yml": ("cuda", "benchmark-cuda"),
+    }
+    for filename, job_names in jobs.items():
+        workflow = yaml.safe_load(
+            (REPO_ROOT / ".github" / "workflows" / filename).read_text(encoding="utf-8")
+        )
+        for job_name in job_names:
+            steps = workflow["jobs"][job_name]["steps"]
+            root_steps = [
+                step for step in steps if step.get("name") == "Set the Jittor state root"
+            ]
+            assert len(root_steps) == 1
+            assert 'JITTOR_LAB_ROOT=${RUNNER_TEMP}/jittor-lab' in root_steps[0]["run"]
+            assert '"$GITHUB_ENV"' in root_steps[0]["run"]
+            cache_steps = [
+                step
+                for step in steps
+                if step.get("uses", "").startswith("actions/cache/")
+                and step.get("with", {}).get("key", "").startswith("jittor-build")
+            ]
+            assert cache_steps
+            assert all(step["with"]["path"] == expected_cache for step in cache_steps)
+            assert all(".." not in step["with"]["path"] for step in cache_steps)
+
+
 def test_skip_reason_buckets_are_stable_and_other_is_counted(monkeypatch):
     """10.05: accepted environment reasons are separated from unexplained ones."""
     from _helpers import pytest_policy as policy
@@ -278,6 +363,19 @@ def test_skip_reason_buckets_are_stable_and_other_is_counted(monkeypatch):
         assert buckets["other"] == 1
         assert policy.classify_skip_reason_bucket("torch download") == "torch"
         assert policy.classify_skip_reason_bucket("manual backend") == "backend"
+        # A declared divergence names the Torch comparison; it is neither an
+        # unexplained skip nor a missing independent oracle.
+        semantic_diff = (
+            "SEMANTIC-DIFF: jittor .long() returns int32 whereas torch returns int64"
+        )
+        suspected_bug = (
+            "SUSPECTED-BUG: promotion differs from the torch result_type lattice"
+        )
+        assert policy.classify_skip_reason_bucket(semantic_diff) == "declared"
+        assert policy.classify_skip_reason_bucket(suspected_bug) == "declared"
+        assert not policy._blames_missing_torch(semantic_diff)
+        assert not policy._blames_missing_torch(suspected_bug)
+        assert policy._blames_missing_torch("independent torch is unavailable")
         # "wants more devices than this box has" is not "this box has no
         # accelerator": the reason names CUDA either way, so without its own
         # bucket the first reads as an environment fact and the lost coverage
@@ -289,6 +387,14 @@ def test_skip_reason_buckets_are_stable_and_other_is_counted(monkeypatch):
             "at least 2 devices are required") == "insufficient-devices"
         assert policy.classify_skip_reason_bucket("No CUDA found") == "accelerator"
         assert policy.classify_skip_reason_bucket("cuda is required") == "accelerator"
+        assert (
+            policy.classify_skip_reason_bucket("needs /dev/nvidia* nodes to be meaningful")
+            == "environment"
+        )
+        assert (
+            policy.classify_skip_reason_bucket("requires launcher-owned Store subgroup transport")
+            == "environment"
+        )
         assert policy._other_skip_count() == 1
     finally:
         policy._SKIP_REASON_BUCKETS.clear()

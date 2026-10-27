@@ -120,13 +120,13 @@ class TestTorchMetricsCompat(unittest.TestCase):
 
         import torchmetrics.utilities.data as tm_data
         tm_confmat = importlib.import_module("torchmetrics.functional.classification.confusion_matrix")
-        self.assertTrue(getattr(tm_data, "_jittor_fast_bincount", False))
+        self.assertIsNotNone(getattr(tm_data._bincount, "_jittor_orig_bincount", None))
         self.assertIs(tm_confmat._bincount, tm_data._bincount)
         self.assertEqual(tm_data._bincount(torch.tensor([0, 2, 2], dtype=torch.int64), minlength=4).numpy().tolist(),
                          [1, 0, 2, 0])
 
         tm_spearman = importlib.import_module("torchmetrics.regression.spearman")
-        self.assertTrue(getattr(tm_data, "_jittor_fast_dim_zero_cat", False))
+        self.assertIsNotNone(getattr(tm_data.dim_zero_cat, "_jittor_orig_dim_zero_cat", None))
         self.assertIs(tm_spearman.dim_zero_cat, tm_data.dim_zero_cat)
         cat_src = torch.tensor([1.0, 2.0])
         cat_out = tm_data.dim_zero_cat([cat_src])
@@ -138,7 +138,7 @@ class TestTorchMetricsCompat(unittest.TestCase):
 
         import torchmetrics.utilities.compute as tm_compute
         tm_accuracy = importlib.import_module("torchmetrics.functional.classification.accuracy")
-        self.assertTrue(getattr(tm_compute, "_jittor_fast_safe_divide", False))
+        self.assertIsNotNone(getattr(tm_compute._safe_divide, "_jittor_orig_safe_divide", None))
         self.assertIs(tm_accuracy._safe_divide, tm_compute._safe_divide)
         np.testing.assert_allclose(
             tm_compute._safe_divide(torch.tensor([1, 2, 3]), torch.tensor([1, 0, 2])).numpy(),

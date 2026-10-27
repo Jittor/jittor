@@ -10,7 +10,7 @@ directory before use; they preserve old workflows but are not recommended for
 new deployments.
 
 - `benchmarks/`: one-off phase timers; maintained benchmarks live in the root
-  `benchmarks/` ASV suite and the `bench/` Torch comparison.
+  `benchmarks/` tree (ASV regressions, Torch comparisons, and ACL measurements).
 - `build/`: explicit source and asset builders.
 - `distributed/`: operator-facing distributed helpers.
 - `docs/`: documentation builders, links and governance checks.

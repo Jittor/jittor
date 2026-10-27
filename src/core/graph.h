@@ -54,6 +54,7 @@ DumpGraphs dump_all_graphs();
 void clean_graph();
 
 bool lookup_requires_grad_disabled_edge(Node* source, Node* target);
+bool lookup_unrecorded_view_edge(Node* source, Node* target);
 
 inline bool is_requires_grad_disabled_edge(Node* source, Node* target) {
     // Only ops carry the Op meaning of this bit ("I own frozen edge

@@ -11,9 +11,10 @@ This path reduces in two stages instead: each block folds its slice with a CUB
 block reduction and writes one partial, then a single block folds the partials.
 No atomics, so the result is also reproducible run to run.
 
-The generator's pass is not modifiable from here, so the fast path is installed
-over ``Var.sum`` and ``Var.mean`` and declines -- returning ``None`` -- whenever
-its assumptions do not hold.
+For multidimensional CUDA inputs, a generated last-axis block fold first fuses
+the pending producer into row partials, avoiding a full-sized temporary at the
+opaque CUB boundary. The fast path is installed over ``Var.sum`` and
+``Var.mean`` and declines when its assumptions do not hold.
 """
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
@@ -21,7 +22,7 @@ from functools import lru_cache
 
 import jittor as jt
 from jittor._runtime.backend_libraries import library_resource
-from jittor._runtime.dispatch import optional_kernel
+from jittor._runtime.dispatch import dispatch_context, optional_kernel
 
 
 # One partial per block, folded by a single block in stage two, so the block
@@ -122,6 +123,20 @@ def _supports_full_reduce(x, divisor=None):
                  supports=_supports_full_reduce)
 def _full_reduce_cuda(x, divisor=None):
     """Fold ``x`` to a scalar; ``divisor`` turns the sum into a mean."""
+    # Keep the generated producer outside the opaque Function boundary. A
+    # last-axis block fold fuses expand/elementwise inputs and materializes
+    # only the row partials; CUB then folds those in a fixed order. A direct
+    # full-axis generated reduction would accumulate unordered global atomics.
+    options = dict(jt.flags.compile_options or {})
+    options.update(x.compile_options or {})
+    if (len(x.shape) >= 2 and dispatch_context(x).backend == "cuda"
+            and jt.flags.para_opt_level >= 3
+            and options.get("use_shared_reduce", 1) != 0):
+        partial = jt.reduce(x, "add", [len(x.shape) - 1])
+        options.update(partial.compile_options or {})
+        options["use_shared_reduce"] = 2
+        partial.compile_options = options
+        return _full_sum_cuda_cls(_jittor_dtype_name(x.dtype), divisor).apply(partial)
     return _full_sum_cuda_cls(_jittor_dtype_name(x.dtype), divisor).apply(x)
 
 

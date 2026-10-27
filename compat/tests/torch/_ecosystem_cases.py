@@ -11,6 +11,15 @@ runner takes care of seeding, weight transfer and serialization, so a case
 never has to know which runtime it is running under.
 """
 
+from _ecosystem_longformer_cases import longformer_32768
+from _ecosystem_vllm_cases import decoder_primitives as _vllm_decoder_primitives
+from _ecosystem_openmmlab_cases import mmengine_train_step, mmcv_convmodule_train_step
+from _ecosystem_transformers_cases import (
+    clip_multimodal, llama_rope_2048, mixtral_moe, with_pooler_output,
+)
+from _ecosystem_verl_cases import distillation_k3 as _verl_distillation_k3
+from _ecosystem_verl_cases import ppo_gae_vanilla as _verl_ppo_gae_vanilla
+
 
 def _tiny_gpt2(torch):
     from transformers import AutoConfig, AutoModelForCausalLM
@@ -66,7 +75,7 @@ def _tiny_bert(torch):
     )
     model = AutoModel.from_config(config)
     inputs = {"input_ids": ("int64", (2, 8), 128)}
-    return model, inputs
+    return with_pooler_output(torch, model), inputs
 
 
 def _tiny_vit(torch):
@@ -86,7 +95,7 @@ def _tiny_vit(torch):
     )
     model = AutoModel.from_config(config)
     inputs = {"pixel_values": ("float32", (2, 3, 32, 32), None)}
-    return model, inputs
+    return with_pooler_output(torch, model), inputs
 
 
 def _diffusers_unet(torch):
@@ -290,23 +299,74 @@ def _ms_swift_lora_llama(torch):
     return model, inputs
 
 
+def _torchmetrics_regression(torch):
+    """MSE/MAE batch outputs and both floating input gradients, no parameters."""
+    from torchmetrics import MeanAbsoluteError, MeanSquaredError
+
+    class Metrics(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.mse = MeanSquaredError()
+            self.mae = MeanAbsoluteError()
+
+        def forward(self, prediction, target):
+            return torch.stack([self.mse(prediction, target), self.mae(prediction, target)])
+
+    inputs = {"prediction": ("float32", (4, 8), None),
+              "target": ("float32", (4, 8), None)}
+    return Metrics(), inputs
+
+
+def _tensordict_index_and_stack(torch):
+    """TensorDict integer/bool/lazy indexing around a trainable Linear block."""
+    from tensordict import TensorDict, lazy_stack
+
+    class Nested(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.projection = torch.nn.Linear(4, 3)
+
+        def forward(self, sample):
+            data = TensorDict({"value": sample}, batch_size=[2, 3])
+            data["projected"] = self.projection(data["value"])
+            order = torch.tensor([1, 0], dtype=torch.int64, device=sample.device)
+            mask = torch.tensor([True, False], dtype=torch.bool, device=sample.device)
+            stacked = lazy_stack([data, data], dim=0)
+            indexed = data[order]["projected"]
+            masked = data[mask]["projected"]
+            return indexed + stacked[1]["projected"][order] + masked.expand(2, 3, 3)
+
+    return Nested(), {"sample": ("float32", (2, 3, 4), None)}
+
+
 #: name -> (builder, required top-level distributions)
 #:
 #: The realistic-size configurations used for wall-clock work live in
 #: ``_ecosystem_speed`` and are merged in below, so one runner serves both the
 #: parity gate and the speed measurement.
 CASES = {
+    "mmengine_train_step": (mmengine_train_step, ("mmengine",)),
+    "mmcv_convmodule_train_step": (mmcv_convmodule_train_step, ("mmcv", "mmengine")),
+    "verl_ppo_gae_vanilla": (_verl_ppo_gae_vanilla, ("verl", "numpy", "transformers", "ray", "tensordict")),
+    "verl_distillation_k3": (_verl_distillation_k3, ("verl", "numpy", "transformers", "ray", "tensordict")),
+    "vllm_decoder_primitives": (_vllm_decoder_primitives, ("vllm", "transformers")),
     "transformers_gpt2": (_tiny_gpt2, ("transformers",)),
     "transformers_llama": (_tiny_llama, ("transformers",)),
     "transformers_bert": (_tiny_bert, ("transformers",)),
     "transformers_vit": (_tiny_vit, ("transformers",)),
     "transformers_t5": (_transformers_t5, ("transformers",)),
     "transformers_whisper": (_transformers_whisper, ("transformers",)),
+    "transformers_clip_multimodal": (clip_multimodal, ("transformers",)),
+    "transformers_mixtral_moe": (mixtral_moe, ("transformers",)),
+    "transformers_llama_rope_2048": (llama_rope_2048, ("transformers",)),
+    "transformers_longformer_32768": (longformer_32768, ("transformers",)),
     "diffusers_unet2d": (_diffusers_unet, ("diffusers",)),
     "diffusers_dit": (_diffusers_transformer, ("diffusers",)),
     "peft_lora_llama": (_peft_lora_llama, ("transformers", "peft")),
     "mmcv_conv_module": (_mmcv_conv_module, ("mmcv", "mmengine")),
     "mmengine_base_module": (_mmengine_base_model, ("mmengine",)),
+    "torchmetrics_regression": (_torchmetrics_regression, ("torchmetrics",)),
+    "tensordict_index_and_stack": (_tensordict_index_and_stack, ("tensordict",)),
     "ms_swift_lora_llama": (_ms_swift_lora_llama, ("transformers", "peft", "swift")),
 }
 

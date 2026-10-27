@@ -500,7 +500,8 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
         extra_lib_path = os.path.abspath(os.path.join(cuda_lib, "..", f"targets/{arch_key}-linux/lib"))
         component_include_dirs = []
         component_lib_dirs = []
-        if cuda_wheel_stack:
+        component_wheel = cuda_wheel_stack and cuda_wheel_stack.component_dir(lib_name)
+        if component_wheel:
             component_include_dirs = cuda_wheel_stack.include_dirs(lib_name)
             component_lib_dirs = cuda_wheel_stack.lib_dirs(lib_name)
         include_search_dirs = cuda_include_search_dirs(
@@ -518,7 +519,7 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
         if nvcc_version[0] == 11:
             prefer_version = ("8",)
         culib_path = search_file(library_search_dirs, f"lib{lib_name}.so", prefer_version)
-        if cuda_wheel_stack:
+        if component_wheel:
             preload_cuda_library(lib_name, required=True)
 
         if lib_name == "cublas" and nvcc_version[0] >= 10:
@@ -543,13 +544,13 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
             # cuDNN wheels contain only versioned split libraries. Load them
             # before the public library so RNN and convolution symbols are
             # available without relying on LD_LIBRARY_PATH.
-            if nvcc_version >= (11,0,0) and not cuda_wheel_stack:
+            if nvcc_version >= (11,0,0) and not component_wheel:
                 prefer = (str(cudnn_major),) if cudnn_major else ()
                 for library in cudnn_split_libraries(cudnn_major):
                     ex_cudnn_path = search_file(library_search_dirs, library, prefer)
                     ctypes.CDLL(ex_cudnn_path, dlopen_flags)
 
-        if not cuda_wheel_stack:
+        if not component_wheel:
             ctypes.CDLL(culib_path, dlopen_flags)
         link_flags = cuda_library_link_flags(lib_name, culib_path)
         # print("link_flags", link_flags, culib_path)
@@ -834,6 +835,11 @@ def _init_nccl_from_store(nccl_module, store=None):
     description = "the provided Store"
     try:
         if store is None:
+            from jittor.distributed.store import external_launcher_store
+            store = external_launcher_store(timeout)
+            if store is not None:
+                description = 'the external launcher TCPStore'
+        if store is None:
             address = os.environ.get("MASTER_ADDR", "").strip()
             port = os.environ.get("MASTER_PORT", "").strip()
             rootinfo = os.environ.get("JT_NCCL_ROOTINFO_FILE", "").strip()
@@ -1006,19 +1012,21 @@ def setup_nccl(store=None):
     nccl_include_path = build_env("nccl_include_path", environ=os.environ)
     nccl_lib_path = build_env("nccl_lib_path", environ=os.environ)
     nccl_lib_name = None
+    nccl_from_wheel = False
 
     if nccl_lib_path is None or nccl_include_path is None:
-        if cuda_wheel_stack:
+        if cuda_wheel_stack and cuda_wheel_stack.component_dir("nccl"):
             nccl_include_path = cuda_wheel_stack.include_dirs("nccl")[0]
             nccl_lib_path = cuda_wheel_stack.lib_dirs("nccl")[0]
             nccl_lib_name = cuda_wheel_stack.find_library("nccl")
+            nccl_from_wheel = True
         else:
             found = find_system_nccl()
             if found:
                 nccl_include_path, nccl_lib_path, nccl_lib_name = found
                 LOG.v(f"using the system NCCL at {nccl_lib_name}")
     if nccl_lib_path is None or nccl_include_path is None:
-        if not cuda_wheel_stack:
+        if not (cuda_wheel_stack and cuda_wheel_stack.component_dir("nccl")):
             LOG.v("setup nccl...")
             # nccl_path decouple with cc_path
             nccl_path = os.path.join(jit_utils.home(), ".cache", "jittor", "nccl")
@@ -1046,8 +1054,9 @@ def setup_nccl(store=None):
     LOG.v(f"nccl_include_path: {nccl_include_path}")
     LOG.v(f"nccl_lib_path: {nccl_lib_path}")
     LOG.v(f"nccl_lib_name: {nccl_lib_name}")
-    # We do not link manualy, link in custom ops
-    if cuda_wheel_stack:
+    # Load the same NCCL selected for headers and linking. An installed
+    # wheel must not override an explicit include/lib pair at runtime.
+    if nccl_from_wheel:
         preload_cuda_library("nccl", required=True)
     else:
         ctypes.CDLL(nccl_lib_name, dlopen_flags)

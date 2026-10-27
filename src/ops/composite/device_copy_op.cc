@@ -36,6 +36,7 @@ DeviceCopyOp::DeviceCopyOp(Var* x, int device) : x(x), device(device) {
         << "Invalid CUDA device index" << device >> ", visible device count is" << count;
     y = create_output(nullptr, x->dtype());
     y->set_flag(VarFlags::_is_scalar, x->flag(VarFlags::_is_scalar));
+    y->set_flag(VarFlags::_is_constant, x->flag(VarFlags::_is_constant));
     // `_is_scalar` is carried for dtype promotion -- `x.cuda(1) * 2` must keep
     // promoting like `x * 2`. It must NOT also make the result a *movable*
     // pending scalar: `Op::propagate_device` retargets one of those, and the
@@ -150,13 +151,14 @@ VarPtr device_copy(Var* x, int device) {
     return make_device_copy(x, device);
 }
 
-void adapt_cpu_scalar_operands(const vector<Var**>& inputs, vector<VarPtr>& owners) {
+void adapt_cpu_scalar_operands(const PlacementInputs& inputs, vector<VarPtr>& owners) {
     TensorPlacement target;
     for (auto* slot : inputs) {
         auto* value = *slot;
         if (!value || !value->placement.explicit_backend) continue;
         if (!value->flag(VarFlags::_placement_published) && !value->is_finished()
-                && value->flag(VarFlags::_is_scalar)) continue;
+                && (value->flag(VarFlags::_is_scalar)
+                    || value->flag(VarFlags::_is_constant))) continue;
         if (value->placement.device.backend == BackendId::Cpu && value->shape.size() == 0) continue;
         USER_CHECK(!target.explicit_backend || target == value->placement)
             << "Expected all tensor inputs on the same backend and device";

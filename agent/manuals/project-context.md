@@ -1,8 +1,8 @@
 # Jittor Project Context
 
 - Status: Current-state index, not a history log
-- Last reviewed: 2026-10-06
-- Baseline reviewed: `1a6e203fc`
+- Last reviewed: 2026-10-26
+- Baseline reviewed: `2ca8e628a`
 - Owner: Jittor core maintainers
 - Freshness expires: 2027-01-06
 - Review when: the release line, a top-level goal or an indexed location changes
@@ -29,7 +29,15 @@ lives in GitHub issues and pull requests. The accepted layout is in
 Python 3.7-3.13; [`noxfile.py`](../../noxfile.py) and
 [`tools/run_test_suite.py`](../../tools/run_test_suite.py) are the maintained gate
 surface (tiers `core` / `smoke` / full, see `AGENTS.md`). User-facing breaking
-changes: [2.0 migration notes](../../docs/releases/2.0.md).
+changes: [2.0 migration notes](../../docs/releases/2.0.md). The Ascend 310P
+support from PR #18043 is integrated (SoC capability table, reduced-precision
+opt-in, ACL inference helpers and mapped composite ops), and user documentation
+is now paired: Chinese-default `X.md` plus English `X.en.md`, with
+`README.md` / `README.en.md` at the root. The duplicate-capability audit
+consolidated optimizer state-name translation, vLLM accelerator detection,
+slot mapping, async host copies and sampling-snapshot caches, and the AMP
+half-preference test; forward-placement and jagged-axis have contract
+tripwires.
 
 ## Where information lives
 
@@ -44,7 +52,7 @@ changes: [2.0 migration notes](../../docs/releases/2.0.md).
 | Test system and gate tiers | [test system](../../docs/development/test-system.md) |
 | Mechanism notes (numerics, placement, profiling) | [notes index](../../docs/notes/index.md) |
 | Torch compatibility | [compatibility index](../../docs/compatibility/index.md) |
-| Backend guides (Ascend, Corex, MPI) | [guides index](../../docs/guides/index.md) |
+| Backend guides (Ascend, Corex, jtrun; legacy MPI) | [guides index](../../docs/guides/index.md) |
 | Performance method | [benchmarking](../../docs/performance/benchmarking.md) |
 | Reproducible verification results | [results index](../../docs/results/index.md) |
 | Reusable verification tools | `agent/skills/` (listed in [agent-index.md](agent-index.md)) |
@@ -57,24 +65,17 @@ changes: [2.0 migration notes](../../docs/releases/2.0.md).
   device (KI-BACKEND-012), untested backend gradients (KI-BACKEND-013), and
   ROCm/NPU verification of shared semantics (KI-OPS-002, KI-SEMANTICS-003).
   Commands for hardware day are in [deferred-hardware.md](deferred-hardware.md).
-- **Silent numerics.** CUDA half max/min identity (KI-OPS-012), Python-float
-  narrowing against float64 (KI-DTYPE-003), factory tensors weak in promotion
-  (KI-DTYPE-004), cuDNN autotuning coupled to scheduling (KI-EXEC-003), shared
-  Vars after `load_state_dict` (KI-COMPAT-006), SDPA CUDA backward parity
-  (KI-OPS-015).
+- **Silent numerics.** cuDNN autotuning coupled to scheduling (KI-EXEC-003).
 - **Torch frontend gaps.** torchmetrics on CUDA (KI-COMPAT-010), RNN off cuDNN
-  (KI-COMPAT-011), in-process shim metadata (KI-COMPAT-012), autocast Conv2d bias
-  (KI-COMPAT-013), complex128 placeholder (KI-COMPAT-014).
-- **Executor and liveness.** Threaded writers to one parameter (KI-EXEC-005,
-  KI-EXEC-007), liveness underflows (KI-EXEC-008, KI-EXEC-009), the op-level
+  (KI-COMPAT-011), in-process shim metadata (KI-COMPAT-012).
+- **Executor and liveness.** Threaded writers to one parameter (KI-EXEC-005),
+  liveness underflows (KI-EXEC-008), the op-level
   parallel compiler (KI-COMPILER-001).
 - **Performance gaps.** Broadcast operands in fused kernels (KI-CODEGEN-001), dead
   matmul/conv relays (KI-TUNER-001), UNet reductions and elementwise kernels
   (KI-CODEGEN-003, KI-CODEGEN-004, KI-COMPAT-009), pipelined memory and backward
   submission (KI-EXEC-004, KI-EXEC-010).
-- **Gate trust.** Dead sessions (KI-TEST-002), test-order failures (KI-TEST-007,
-  KI-TEST-010), gate cost (KI-TEST-012, KI-TEST-013), a stale notebook trajectory
-  (KI-TEST-014).
+- **Gate trust.** Gate cost (KI-TEST-012, KI-TEST-013).
 - **Research.** [Agent-operable optimization](../../docs/research/agentic-optimization.md)
   is a proposal only; no autonomous mutation path exists.
 

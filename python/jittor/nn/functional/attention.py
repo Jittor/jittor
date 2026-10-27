@@ -2,6 +2,7 @@
 
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
+from contextlib import nullcontext
 import math
 
 import jittor as jt
@@ -62,6 +63,66 @@ def _softmax_precision(x):
     return x
 
 
+def _opmath_scope(query):
+    # Explicit FP32 operands must stay FP32 inside a caller's autocast region.
+    # Float32/64 attention keeps its existing policy and implementation.
+    return (
+        jt.flag_scope(amp_reg=jt.amp_flags.disabled)
+        if _jittor_dtype_name(query.dtype) in ("float16", "bfloat16")
+        else nullcontext()
+    )
+
+
+def _attention_probabilities(query, key, attn_mask, is_causal, scale):
+    """Softmax over keys, in float32 or wider."""
+    query, key = _softmax_precision(query), _softmax_precision(key)
+    scores = _product(query * scale, key, trans_b=True)
+    scores = _attention_bias(_softmax_precision(scores), attn_mask, is_causal)
+    top = scores.max([-1], keepdims=True)
+    top = jt.ternary(jt.isinf(top), jt.zeros_like(top), top)
+    weights = (scores - top).exp()
+    total = weights.sum([-1], keepdims=True)
+    # A fully masked row is all zeros here; dividing by 1 keeps it so.
+    return weights / jt.ternary(total > 0, total, jt.ones_like(total))
+
+
+def _attention_gradients(query, key, value, probabilities, grad_out, scale, *, rounded_output=None):
+    """Native attention backward, optionally preserving fused BF16 rounding.
+
+    Short fused BF16 attention forms the softmax row term from its rounded
+    output and rounds dS before the Q/K products. Scaling those FP32 products
+    afterwards preserves the unscaled dS quantization boundary. This option
+    belongs only to the explicitly admitted reduced-precision provider;
+    ordinary opmath and its higher derivatives keep their original formula.
+    """
+    wide_query, wide_key, wide_value = (
+        _softmax_precision(tensor) for tensor in (query, key, value)
+    )
+    if rounded_output is not None:
+        grad_out = grad_out.cast(query.dtype)
+    grad_out = grad_out.cast(wide_value.dtype)
+    if rounded_output is None:
+        grad_value = _product(probabilities, grad_out, trans_a=True)
+    else:
+        grad_value = _product(
+            _softmax_precision(probabilities.cast(query.dtype)), grad_out, trans_a=True
+        )
+    grad_prob = _product(grad_out, wide_value, trans_b=True)
+    if rounded_output is None:
+        row = (probabilities * grad_prob).sum([-1], keepdims=True)
+    else:
+        row = (grad_out * _softmax_precision(rounded_output)).sum([-1], keepdims=True)
+    grad_scores = probabilities * (grad_prob - row)
+    if rounded_output is None:
+        grad_query = _product(grad_scores, wide_key) * scale
+        grad_key = _product(grad_scores, wide_query * scale, trans_a=True)
+    else:
+        grad_scores = _softmax_precision(grad_scores.cast(query.dtype))
+        grad_query = _product(grad_scores, wide_key) * scale
+        grad_key = _product(grad_scores, wide_query, trans_a=True) * scale
+    return (grad_query.cast(query.dtype), grad_key.cast(key.dtype), grad_value.cast(value.dtype))
+
+
 class _MemoryEfficientAttention(jt.Function):
     """Attention whose backward recomputes the probabilities.
 
@@ -85,42 +146,34 @@ class _MemoryEfficientAttention(jt.Function):
     ``zero_all_neg_inf`` softmax does, and get zero gradient.
     """
 
+    def _run_call(self, query, key, value, *args, **kw):
+        # Function tapes its inputs for the custom first backward. Recompute
+        # from the original inputs so that this backward remains connected
+        # when the caller differentiates it a second time.
+        # Raw reshape makes a stable, differentiable holder without the
+        # public view's assignment-replay metadata. Rebinding the caller's
+        # holder must not change the inputs used to recompute this forward.
+        self.saved = tuple(jt.ops.reshape(tensor, tensor.shape) for tensor in (query, key, value))
+        return super()._run_call(query, key, value, *args, **kw)
+
     def execute(self, query, key, value, attn_mask, is_causal, scale):
         self.attn_mask, self.is_causal, self.scale = attn_mask, is_causal, scale
-        out = _product(self._probabilities(query, key).cast(value.dtype), value)
-        out = out.cast(query.dtype)
-        self.saved = (query, key, value, out)
-        return out
+        with _opmath_scope(query):
+            out = _product(self._probabilities(query, key), _softmax_precision(value))
+            return out.cast(query.dtype)
 
     def _probabilities(self, query, key):
-        """Softmax over keys, in float32 or wider."""
-        scores = _product(query * self.scale, key, trans_b=True)
-        scores = _attention_bias(_softmax_precision(scores), self.attn_mask, self.is_causal)
-        top = scores.max([-1], keepdims=True)
-        top = jt.ternary(jt.isinf(top), jt.zeros_like(top), top)
-        weights = (scores - top).exp()
-        total = weights.sum([-1], keepdims=True)
-        # A fully masked row is all zeros here; dividing by 1 keeps it so.
-        return weights / jt.ternary(total > 0, total, jt.ones_like(total))
+        return _attention_probabilities(query, key, self.attn_mask, self.is_causal, self.scale)
 
     def grad(self, grad_out):
-        query, key, value, out = self.saved
-        probabilities = self._probabilities(query, key)
-        grad_out = grad_out.cast(value.dtype)
-        grad_value = _product(probabilities.cast(value.dtype), grad_out, trans_a=True)
-        grad_prob = _softmax_precision(_product(grad_out, value, trans_b=True))
-        row = (_softmax_precision(grad_out) * _softmax_precision(out)).sum([-1], keepdims=True)
-        grad_scores = (probabilities * (grad_prob - row)).cast(query.dtype)
-        grad_query = _product(grad_scores, key) * self.scale
-        grad_key = _product(grad_scores, query * self.scale, trans_a=True)
-        return (
-            grad_query.cast(query.dtype),
-            grad_key.cast(key.dtype),
-            grad_value.cast(value.dtype),
-            None,
-            None,
-            None,
-        )
+        query, key, value = self.saved
+        with _opmath_scope(query):
+            probabilities = self._probabilities(query, key)
+            return _attention_gradients(query, key, value, probabilities, grad_out, self.scale) + (
+                None,
+                None,
+                None,
+            )
 
 
 def _expand_heads(query, tensor, name):
@@ -186,6 +239,8 @@ def scaled_dot_product_attention(
     is_causal=False,
     scale=None,
     enable_gqa=False,
+    *,
+    allow_reduced_precision=False,
 ):
     """Compute scaled dot-product attention with Torch-compatible masks.
 
@@ -194,7 +249,21 @@ def scaled_dot_product_attention(
     (``nn.fused_attention_gqa``) runs it as it is; otherwise the heads are
     repeated first -- a copy of every key and value head per query head, which
     the backward then keeps.
+
+    ``allow_reduced_precision`` permits a fused backend's low-precision
+    probability products on its admitted shapes. The default preserves the
+    stricter FP32-opmath policy for small BF16 heads. It does not change the
+    precision of the math fallback.
     """
+    if type(allow_reduced_precision) is not bool:
+        raise TypeError("allow_reduced_precision must be bool")
+    precision_options = (
+        {"allow_reduced_precision": True}
+        if allow_reduced_precision
+        and not enable_gqa
+        and _jittor_dtype_name(query.dtype) == "bfloat16"
+        else {}
+    )
     if not enable_gqa and len(query.shape) == 4:
         repeated_key, repeated_value = _repeated_heads(key), _repeated_heads(value)
         if (
@@ -211,6 +280,7 @@ def scaled_dot_product_attention(
                 dropout_p=float(dropout_p or 0.0),
                 is_causal=is_causal,
                 scale=scale,
+                **precision_options,
             )
             if fused is not None:
                 return fused
@@ -226,6 +296,7 @@ def scaled_dot_product_attention(
             dropout_p=float(dropout_p or 0.0),
             is_causal=is_causal,
             scale=scale,
+            **precision_options,
         )
         if fused is not None:
             return fused
@@ -276,6 +347,7 @@ def scaled_dot_product_attention(
         dropout_p=probability,
         is_causal=is_causal,
         scale=scale,
+        **precision_options,
     )
     fused = (
         None
@@ -288,6 +360,7 @@ def scaled_dot_product_attention(
             dropout_p=probability,
             is_causal=is_causal,
             scale=scale,
+            **precision_options,
         )
     )
     if fused is not None:
@@ -363,6 +436,18 @@ def _query_block(query, key, is_causal):
 
 def _composite(query, key, value, attn_mask, probability, is_causal, scale_factor, query_dtype):
     """Attention built from matmuls and a softmax, for calls without a backward."""
+    if _jittor_dtype_name(query.dtype) in ("float16", "bfloat16"):
+        with _opmath_scope(query):
+            return _composite(
+                _softmax_precision(query),
+                _softmax_precision(key),
+                _softmax_precision(value),
+                attn_mask,
+                probability,
+                is_causal,
+                scale_factor,
+                query_dtype,
+            )
     query_length = int(query.shape[-2])
     source_length = int(key.shape[-2])
     if scale_factor != 1.0:

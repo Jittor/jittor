@@ -22,7 +22,7 @@ from _helpers.retry import retry
 def check_cache_code(fname):
     check_code = True
     error_line_num = -1
-    with open(fname) as f:
+    with open(fname, encoding="utf-8") as f:
         lines = f.readlines()
         for i in range(len(lines)):
             if ('memory_checker->check_hit(' in lines[i]):

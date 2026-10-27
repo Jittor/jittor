@@ -169,7 +169,8 @@ def _install_optimizers(g, registry=None):
         AdamW.step = adamw_step
         AdamW._torch_adamw_step = True
         AdamW._skips_step_on_device = _adamw_skips_step_on_device
-    for _cls_name, _native_kind in (("SGD", "sgd"), ("RMSprop", "rmsprop"), ("Adan", "adan")):
+    for _cls_name, _native_kind in (("SGD", "sgd"), ("RMSprop", "rmsprop"),
+                                    ("Adan", "adan"), ("Adagrad", "adagrad")):
         _cls = getattr(_optim, _cls_name, None)
         if _cls is not None and not getattr(_cls, "_torch_closure_step", False):
             _native_steps[_native_kind] = _cls.step
@@ -225,13 +226,18 @@ def _install_optimizers(g, registry=None):
         Fidelity.APPROXIMATE,
         "State and gradient adapters over native parameter groups; only known "
         "optimizer state layouts and supported restore formats are handled")
-    for name in ("SGD", "Adam", "AdamW", "RMSprop", "Adan"):
+    for name in ("SGD", "Adam", "AdamW", "RMSprop", "Adan", "Adagrad"):
         algorithm = getattr(_optim, name, None)
         if algorithm is not None:
             register_api_bindings(algorithm, "torch.optim." + name,
                 ("__init__", "step"), Fidelity.APPROXIMATE,
                 "Stable native-update adapter preserving per-parameter steps, "
                 "gradient retention and the registered FSDP provider boundary")
+    register_api_bindings(_optim, "torch.optim", ("Adagrad",),
+        Fidelity.APPROXIMATE,
+        "Native dense FP32 Adagrad; eager sum/CPU step state and scalar group "
+        "options; sparse, complex, foreach, fused, differentiable and FSDP "
+        "updates explicitly unsupported")
     register_api_bindings(_optim.LBFGS, "torch.optim.LBFGS", ("step",),
         Fidelity.UNIMPLEMENTED, "LBFGS updates explicitly raise NotImplementedError")
 
@@ -245,6 +251,7 @@ def install_module_keys(ctx):
         ("adam", "Adam", None),
         ("adamw", "AdamW", "Adam"),
         ("rmsprop", "RMSprop", None),
+        ("adagrad", "Adagrad", None),
     ):
         optim_module = registry.ensure("torch.optim." + suffix)
         value = getattr(optim, class_name, None)

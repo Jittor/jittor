@@ -54,6 +54,7 @@ namespace jittor
         if (input_num == 3)
             bias = inputTensors[2];
 
+        acl_check_fp32_cube(cube_math_type, in_[0]->dtype(), "Conv2d");
         ret = aclnnConvolutionGetWorkspaceSize(inputTensors[0], inputTensors[1], bias, strides, pads, dilations, false, outPads, attr->group, outputTensors[0], cube_math_type, &workspaceSize, &executor);
 
         launch(ret, aclnnConvolution, true);
@@ -132,6 +133,7 @@ namespace jittor
         auto &biasShape = outputShapes.size() == 3
             ? outputShapes[2] : inputShapes[2];
         auto biasSizes = aclCreateIntArray(&biasShape[0], 1);
+        acl_check_fp32_cube(cube_math_type, in_[0]->dtype(), "Conv2dBackward");
         ret = aclnnConvolutionBackwardGetWorkspaceSize(inputTensors[0], inputTensors[1], inputTensors[2], biasSizes, strides, pads, dilations, false, outPads, attr->group, outMask, cube_math_type, outputTensors[0], outputTensors[1], outputTensors[2], &workspaceSize, &executor);
 
         launch(ret, aclnnConvolutionBackward, true);

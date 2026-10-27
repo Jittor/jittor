@@ -19,6 +19,7 @@
 #include "runtime/launch_diagnostics.h"
 #include "ops/op_register.h"
 #include "ops/composite/array_op.h"
+#include "ops/composite/fetch_op.h"
 #include "ops/composite/tape_op.h"
 #include "core/exec_runner.h"
 #include "core/executor.h"
@@ -32,6 +33,7 @@
 #include "debug/nan_checker.h"
 #include "utils/cache_compile.h"
 #include "core/var_holder.h"
+#include "runtime/rematerialization_scope.h"
 #include "mem/swap.h"
 #include "bindings/pybind/py_var_tracer.h"
 #include "mem/mem_info.h"
@@ -333,6 +335,7 @@ static Var* aliased_input(Var* v) {
 
 static bool may_release_kept(Var* v, const std::unordered_set<Var*>& pinned) {
     if (!v->flag(VarFlags::_kept) || v->is_finished() || !v->mem_ptr) return false;
+    if (!rematerialization_allows_release(v)) return false;
     if (v->flag(VarFlags::_host_resident)) return false;
     Op* producer = v->input();
     if (!producer) return false;
@@ -449,14 +452,14 @@ static bool releases_pending(Op* op, FusedOp& fused, const vector<Var*>& last_us
     memo[op] = 0;
     bool releases = true;
     for (Var* out : op->outputs()) {
-        auto index = fused.var_index.find(out);
-        if (index == fused.var_index.end()) { releases = false; break; }
-        int type = fused.vars[index->second].type;
+        int index = fused.var_index.get(out);
+        if (index < 0) { releases = false; break; }
+        int type = fused.vars[index].type;
         if (type == 2) continue;
         if (type != 1 || out->holder) { releases = false; break; }
         int edges = 0;
         for (Op* consumer : out->outputs()) {
-            if (!fused.op_index.count(consumer) || !releases_pending(consumer, fused, last_used, memo)) {
+            if (!fused.op_index.has(consumer) || !releases_pending(consumer, fused, last_used, memo)) {
                 releases = false;
                 break;
             }
@@ -505,7 +508,7 @@ static bool dies_after(Var* v, FusedOp& fused, const vector<Var*>& last_used,
 // store would see the new value, a read at another index another thread's.
 static bool reads_before_writing(Var* v, Var* out, FusedOp& fused) {
     Op* producer = out->input();
-    if (!producer || producer->type() != OpType::element || fused.op_index.count(producer) == 0)
+    if (!producer || producer->type() != OpType::element || !fused.op_index.has(producer))
         return false;
     unordered_set<Op*> feeds;
     vector<Op*> stack = {producer};
@@ -515,7 +518,7 @@ static bool reads_before_writing(Var* v, Var* out, FusedOp& fused) {
         if (!feeds.insert(op).second) continue;
         for (Var* in : op->inputs()) {
             Op* p = in->input();
-            if (p && fused.op_index.count(p)) stack.push_back(p);
+            if (p && fused.op_index.has(p)) stack.push_back(p);
         }
     }
     for (Op* op : fused.ops) {
@@ -875,14 +878,23 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         // and a host-side constant would otherwise go through the host path,
         // migration and all, which a device recording cannot contain.
         if (keep_graph && constants_already_placed(op, is_fused_op, fused_op)) {
-            for (Var* var : op->outputs())
-                var->set_flag(VarFlags::_kept);
+            for (Var* var : op->outputs()) rematerialization_mark_kept(var);
+            if (is_fused_op) {
+                vector<Var*> outputs;
+                for (Var* var : op->outputs()) outputs.push_back(var);
+                finish_fused_outputs(outputs);
+            } else finish_unfused(op, outputs_bk);
             continue;
         }
-        const auto requested_backend = op->requested_backend();
-        const auto execution_backend = op->execution_backend();
+        // `requested_backend()` and `execution_backend()`, from one read of
+        // the placement: each would walk it again, and so would every lookup
+        // of the implementation below.
+        const auto placement = op->graph_placement();
+        const auto requested_backend = placement.explicit_backend
+            ? placement.device.backend : execution_target_backend();
+        const auto execution_backend = op->execution_backend_for(requested_backend);
         ExecutionBackendScope operation_backend_scope(requested_backend);
-        TensorPlacementScope placement_scope(op->graph_placement());
+        TensorPlacementScope placement_scope(placement);
         Float32PrecisionScope precision_scope(op->float32_precision);
         LaunchOriginScope origin_scope(op->launch_origin);
         int execution_device = 0;
@@ -985,9 +997,9 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
             memory_profiler.check();
         trace_op.allocated();
         LOGvvv << "Run" << op << "inputs:" << op->inputs() << "outputs:" << op->outputs();
-        op->prepare_execution(jkl);
+        op->prepare_execution_on(jkl, execution_backend);
         prepared_jit_key.assign(jkl.to_cstring(), jkl.size);
-        bool is_cuda = op->executes_on_accelerator();
+        bool is_cuda = execution_backend != BackendId::Cpu;
         if (PREDICT_BRANCH_NOT_TAKEN(graph_capture_recording) && !is_cuda
                 && !graph_capture_launches_nothing(op))
             graph_capture_saw_host_work = true;
@@ -1012,6 +1024,7 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
                 sync_times++;
             }
             for (auto& edge : op->_inputs) {
+                if (op->flag(OpFlags::_no_input_storage)) break;
                 // A control edge orders two ops and carries no data: what it
                 // comes from may have no memory of its own (fused away).
                 if (edge.reverse().index < 0) continue;
@@ -1071,7 +1084,7 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         // _JT_SEH_START2;
         if (execution_backend != BackendId::Cpu)
             record_active_launch(backend_stream({execution_backend, execution_device}, BackendStreamKind::Compute));
-        op->execute_prepared(jkl);
+        op->execute_prepared_on(jkl, execution_backend);
         // _JT_SEH_END2;
         #ifdef HAS_ACCELERATOR
         // migrate to gpu
@@ -1110,10 +1123,8 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         }
         if (is_fused_op) {
             propergate_needed_flags(fused_op);
-            if (keep_graph) {
-                for (Var* var : op->outputs()) var->set_flag(VarFlags::_kept);
-                continue;
-            }
+            if (keep_graph)
+                for (Var* var : op->outputs()) rematerialization_mark_kept(var);
             vector<Var*> outputs;
             for (Var* var : op->outputs()) outputs.push_back(var);
             finish_fused_outputs(outputs);
@@ -1122,11 +1133,8 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         // Leave everything alive and re-runnable; see the `keep_graph` flag
         // and the `_kept` bit it sets, which is what makes a kept graph
         // survive a batch that runs without the flag.
-        if (keep_graph) {
-            for (Var* var : op->outputs())
-                var->set_flag(VarFlags::_kept);
-            continue;
-        }
+        if (keep_graph)
+            for (Var* var : op->outputs()) rematerialization_mark_kept(var);
         finish_unfused(op, outputs_bk);
         } catch (const std::exception& e) {
             // Never with red_color: that mode throws its own "memory is
@@ -1187,7 +1195,18 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
     if (device_sync && !runtime_use_cuda())
         backend_ops(BackendId::Cpu).synchronize(0);
     #ifdef HAS_ACCELERATOR
-    if (device_sync && (runtime_use_cuda() || touched_devices)) {
+    uint64 wait_devices = touched_devices;
+    if (device_sync) {
+        uint64 fetch_devices = pending_fetch_device_mask();
+        // Preserve the implicit current-device wait of an empty batch when
+        // adding fetch's copy device makes the mask nonempty. Compute handoff
+        // still records only devices this batch actually launched on.
+        if (fetch_devices && !wait_devices && runtime_use_cuda()
+                && entry_device >= 0 && entry_device < 64)
+            wait_devices |= 1ull << entry_device;
+        wait_devices |= fetch_devices;
+    }
+    if (device_sync && (runtime_use_cuda() || wait_devices)) {
         exe.last_is_cuda = false;
         sync_times++;
         try {
@@ -1198,7 +1217,7 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
             // entry lock (see run_sync) keeps every other thread out of the
             // executor for the duration.
             DeviceWaitScope wait;
-            sync_devices(touched_devices);
+            sync_devices(wait_devices);
         } catch (const std::exception& e) {
             // Not red_color, for the same reason as the op-level catch above.
             if (V_ON(1)) display_memory_info(__FILELINE__, false, false);

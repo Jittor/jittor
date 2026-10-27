@@ -18,6 +18,7 @@ from unittest import mock
 
 import jittor as jt
 from jittor.compat import fsdp2 as fsdp
+from jittor.distributed.fsdp import common as native_fsdp_common
 from jittor.compat.fsdp2 import api
 from jittor.compat.fsdp2 import common
 from jittor.compat.fsdp2 import compat_types
@@ -67,13 +68,13 @@ _OWNERSHIP = {
     # re-exports them for its own callers, but no longer owns them -- which is
     # what the `value.__module__ == module.__name__` check below is for.
     common: {
-        "_prod", "_flatten_var", "_ceil_div", "_pad_flat", "_param_numel",
-        "_fsdp2_flat_enabled",
+        "_flatten_var", "_ceil_div", "_pad_flat", "_param_numel",
+        "_primary_input_requires_grad", "_materialize_frozen_output", "_tensor_values",
+        "_prod", "_fsdp2_flat_enabled",
         # The frozen-forward and gradient-shape helpers `shard` calls around
         # `_execute_with_true_fsdp`, which arrived with PR 18031's memory and
         # lifecycle group.
-        "_primary_input_requires_grad", "_materialize_frozen_output",
-        "_tensor_values", "_full_gradient_from_shard",
+        "_full_gradient_from_shard",
     },
     dtensor: {
         "DeviceMesh", "init_device_mesh", "Placement", "Replicate", "Shard",
@@ -347,6 +348,12 @@ assert second is jittor.torch_fsdp2_compat
 
     def test_implementation_ownership_and_real_origins(self):
         reexports = {
+            common: {
+                name: (native_fsdp_common.__name__, name)
+                for name in ("_flatten_var", "_ceil_div", "_pad_flat", "_param_numel",
+                             "_primary_input_requires_grad", "_materialize_frozen_output",
+                             "_tensor_values")
+            },
             optimizer: {
                 "_optimizer_param_steps": (
                     "jittor.compat.torch.optimizer_api", "_torch_param_steps"),
@@ -408,13 +415,15 @@ assert second is jittor.torch_fsdp2_compat
         ).encode()
         self.assertEqual(len(public), 79)
         self.assertEqual(len(callables), 70)
-        # Moved once since it was taken: `optimizer_step` gained the
-        # keyword-only `native_kind` with the FSDP2 memory and lifecycle group
-        # from PR 18031. No other public signature, qualname or enum member
-        # differs from the snapshot this digest replaced.
+        # Moved again with PR 18031's FSDP2 state-dict fixes: the
+        # state-dict config family now carries explicit torch-faithful fields
+        # instead of a `**kwargs` placeholder -- optim configs default
+        # `offload_to_cpu=True` (plain configs stay `False`) and the sharded
+        # configs gained `_use_dtensor=False`. Only those dataclass signatures
+        # differ from the snapshot this digest replaced; counts are unchanged.
         self.assertEqual(
             hashlib.sha256(encoded).hexdigest(),
-            "81c63656a535ca38f252286de574ec8fed3e1808643b2775d795824c5f181bf7",
+            "c8153c4b9b9a37064883062117bb1d3acb14cd61322cf801235703dd8bc26e4d",
         )
 
     def test_protocol_2_legacy_pickle_fixtures_load_canonical_objects(self):

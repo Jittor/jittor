@@ -33,6 +33,7 @@ from ..types import (
     SymBool, SymFloat, SymInt,
 )
 from ..core_install_api import bind_core_install_api
+from ..generator import Generator as _Generator
 from ..fidelity import Fidelity, register_fidelity
 from ...diagnostics import EXPECTED, swallowed
 from ...transaction import set_flag
@@ -392,21 +393,38 @@ class _RandomModule(_types_random.ModuleType):
         raise TypeError("torch.random is not callable")
 
 
+def _normalize_seed(value, *, integer=False):
+    """Torch's signed-input/unsigned-state seed domain, before any mutation."""
+    if integer and (not isinstance(value, int) or isinstance(value, bool)):
+        if isinstance(value, (bool, float, str)):
+            raise RuntimeError("manual_seed expected a long, but got %s" % type(value).__name__)
+        raise TypeError("an integer is required")
+    value = int(value)
+    if value < -(1 << 63) or value >= (1 << 64):
+        raise ValueError("Overflow when unpacking long long")
+    return value & ((1 << 64) - 1)
+
+
 def _manual_seed(s):
     ctx = _misc_context()
-    g = ctx.jittor_module
-    s = int(s)
-    ctx.state["core_misc"]["seed"] = s
-    # torch.manual_seed sets the Torch RNG to the requested value in each
-    # process; it does not offset distributed ranks or reseed NumPy/Python.
-    jt.set_seed(s)
-    return g
+    value = _normalize_seed(s)
+    # One physical owner resets CPU, accelerator defaults and callbacks. This
+    # never calls the convenience API that also reseeds Python and NumPy.
+    jt.core._set_seed64(value)
+    ctx.state["core_misc"]["seed"] = value
+    return ctx.target_namespace.default_generator
+
+
+def _manual_seed_cpu(s):
+    value = _normalize_seed(s, integer=True)
+    jt.core.rng_manual_seed("cpu", value)
+    _misc_context().state["core_misc"]["seed"] = value
 
 
 def _torch_seed():
     import secrets
 
-    value = secrets.randbits(31)
+    value = secrets.randbits(64)
     _manual_seed(value)
     return value
 
@@ -424,23 +442,29 @@ def _seed(value=_seed_sentinel):
 
 
 def _get_rng_state():
-    return jt.array([initial_seed()], dtype="int64")
+    """A CPU ByteTensor holding the native host engine's complete state."""
+    g = _misc_context().target_namespace
+    payload = jt.core.rng_state("cpu").encode("ascii")
+    return g.tensor(_np.frombuffer(payload, dtype=_np.uint8).copy(),
+                    dtype=g.uint8, device="cpu")
 
 
 def _set_rng_state(state):
     ctx = _misc_context()
-    Var = ctx.state["Var"]
+    if not isinstance(state, jt.Var):
+        raise TypeError("RNG state must be a CPU ByteTensor")
+    if _jittor_dtype_name(state.dtype) != "uint8" or len(state.shape) != 1:
+        raise TypeError("RNG state must be a one-dimensional ByteTensor; legacy seed-only states cannot restore a stream")
+    if state.device.type != "cpu":
+        raise TypeError("RNG state must be a CPU ByteTensor")
     try:
-        if isinstance(state, Var):
-            state = int(state.reshape(-1)[0].item())
-        elif hasattr(state, "__len__"):
-            state = int(list(state)[0])
-        else:
-            state = int(state)
-    except EXPECTED as exc:
-        swallowed("torch/installers/core.py _set_rng_state: if isinstance(state, Var):", exc)
-        state = initial_seed()
-    _manual_seed(state)
+        payload = state.numpy().tobytes().decode("ascii")
+    except UnicodeDecodeError as error:
+        raise ValueError("RNG state is not a native CPU generator snapshot") from error
+    # Native validation is atomic and synchronizes pending random work before
+    # restoring the host engine. Reseeding here would reset CUDA streams too.
+    jt.core.set_rng_state("cpu", payload)
+    ctx.state["core_misc"]["seed"] = int(jt.core.rng_initial_seed("cpu"))
 
 
 class PyTorchFileReader:
@@ -908,7 +932,7 @@ def _result_type_info(x):
 
 
 def initial_seed():
-    return int(_misc_context().state["core_misc"].get("seed", 0))
+    return int(jt.core.rng_initial_seed("cpu"))
 
 
 def is_tensor(value):
@@ -948,11 +972,37 @@ def get_autocast_gpu_dtype(*args, **kwargs):
 
 
 def are_deterministic_algorithms_enabled():
-    return False
+    """Read the accelerator's own policy, not a flag kept here.
+
+    Torch's query is answered on every device; only the CPU backend has no
+    runtime knob here, so "not supported" means "not enabled" rather than an
+    error. Libraries such as torchmetrics ask this unconditionally.
+    """
+    try:
+        return bool(jt.core.backend_get_deterministic_algorithms())
+    except RuntimeError as error:
+        if "does not support deterministic algorithm policy" in str(error):
+            return False
+        raise
 
 
-def use_deterministic_algorithms(*args, **kwargs):
-    return None
+def use_deterministic_algorithms(mode, *, warn_only=False):
+    if type(mode) is not bool or type(warn_only) is not bool:
+        raise TypeError("mode and warn_only must be bool")
+    if warn_only:
+        raise NotImplementedError(
+            "Backend deterministic warn_only policy is not implemented")
+    # Work already built was planned under the old policy; run it before the
+    # option changes underneath it.
+    jt.sync_all(True)
+    try:
+        jt.core.backend_set_deterministic_algorithms(mode)
+    except RuntimeError as error:
+        # Disabling a policy that was never available is already the state the
+        # caller asked for. Enabling it must still fail loudly.
+        if not mode and "does not support deterministic algorithm policy" in str(error):
+            return
+        raise
 
 
 def is_floating_point(value):
@@ -1025,46 +1075,6 @@ _STORAGE_TYPES = (
     ByteStorage,
     BoolStorage,
 )
-class _DefaultGenerator:
-    """`torch.default_generator`: a handle on the *global* CPU generator.
-
-    Deliberately not a `Generator` instance. That class owns a private stream
-    so that two generators seeded alike agree whatever the process has already
-    done -- which is exactly what the default generator must *not* do, because
-    `torch.manual_seed(n)` seeds this one and `torch.get_rng_state()` is its
-    state. So this delegates and holds nothing; anything else would let the two
-    drift apart.
-
-    Missing entirely before, and the shim's namespace reports a missing name by
-    raising `AttributeError(name)`, so MiniMax-H3's reference path failed with
-    a bare `default_generator` and nothing to say where it came from.
-    """
-
-    @property
-    def device(self):
-        return _torch_device_misc("cpu")
-
-    def manual_seed(self, value):
-        manual_seed(value)
-        return self
-
-    def initial_seed(self):
-        return initial_seed()
-
-    def seed(self):
-        return seed()
-
-    def get_state(self):
-        return get_rng_state()
-
-    def set_state(self, state):
-        set_rng_state(state)
-        return self
-
-    def __repr__(self):
-        return "<torch.Generator object (default, device=cpu)>"
-
-
 def _torch_device_misc(spelling):
     """A device object, taken from the install context, not the module registry.
 
@@ -1158,7 +1168,7 @@ _MISC_BINDINGS = {
     "get_rng_state": get_rng_state,
     "set_rng_state": set_rng_state,
     "fork_rng": fork_rng,
-    "default_generator": _DefaultGenerator(),
+    "default_generator": _Generator._from_global_cpu(),
     "is_tensor": is_tensor,
     "numel": numel,
     "PyTorchFileReader": PyTorchFileReader,
@@ -1217,9 +1227,9 @@ _MISC_DETAILS = {
     "clear_autocast_cache": "jittor keeps no cached weight casts, so the postcondition already holds",
     "autocast_increment_nesting": "real thread-local nesting depth, as torch's counter",
     "autocast_decrement_nesting": "real thread-local nesting depth, as torch's counter",
-    "use_deterministic_algorithms": "no-op setter; deterministic algorithm policy is not implemented",
-    "get_rng_state": "seed-only state, not a full generator snapshot or exact stream restoration",
-    "set_rng_state": "restores the recorded seed, not an exact generator stream snapshot",
+    "use_deterministic_algorithms": "sets the accelerator runtime's own deterministic option; warn_only is refused",
+    "get_rng_state": "versioned native CPU generator snapshot in a CPU ByteTensor; bytes are not portable to PyTorch",
+    "set_rng_state": "restores the native CPU generator seed and exact stream position; foreign or legacy seed-only states are refused",
     "norm": "existing Torch norm adapter; out and extra keyword semantics are not implemented",
     "where": "existing one- or three-argument selection; out is not implemented",
     "bincount": "native scatter-add implementation; existing flatten/minlength behavior retained",
@@ -1227,7 +1237,7 @@ _MISC_DETAILS = {
     "finfo": "NumPy limits plus declared metadata-only low-precision specs; this does not enable their computation",
     "iinfo": "NumPy integer-limit metadata for supported dtype names",
     "is_autocast_available": "answers for the backends this build can run -- cpu and cuda always, npu when ACL is built -- so it is False for the xpu/mps/xla/ipu/mtia device types torch answers True for",
-    "are_deterministic_algorithms_enabled": "legacy False answer; deterministic algorithms are not configurable",
+    "are_deterministic_algorithms_enabled": "reads the accelerator runtime's own deterministic option",
     "as_strided": "gather-based view; reads are exact but the result does not alias the input storage",
     "empty_strided": "contiguous allocation; the requested strides are not honored",
 }

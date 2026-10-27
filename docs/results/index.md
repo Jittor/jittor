@@ -11,6 +11,37 @@
 ```{toctree}
 :maxdepth: 1
 
+2026-10-25-recent-pr-integration
+2026-10-24-datatrove-cpu-compatibility
+2026-10-16-diffusers-maintained-cpu-nightly
+2026-10-16-h3-upstream-gradient-components
+2026-10-16-native-alias-lifecycle
+2026-10-16-default-torch-storage-views
+2026-10-16-sgd-cuda-opmath
+2026-10-16-sgd-checkpoint-continuation
+2026-10-16-sgd-execution-options
+2026-10-16-module-load-independent-storage
+2026-10-16-h3-sdpa-gradient-rounding
+2026-10-16-h3-default-sdpa-forward
+2026-10-16-metrics-tensordict-maintained-cpu-nightly
+2026-10-16-openmmlab-maintained-cpu-nightly
+2026-10-16-transformers-maintained-cpu-nightly
+2026-10-16-diffusers-official-installation
+2026-10-16-metrics-tensordict-installed-source
+2026-10-16-verl-maintained-cpu-nightly
+2026-10-16-recorded-grad-fn-freeze
+2026-10-16-transformers-main-source-training
+2026-10-15-maintained-ecosystem-nightly
+2026-10-15-openmmlab-installed-source-training
+2026-10-15-transformers-installed-source-training
+2026-10-15-verl-installed-source-training
+2026-10-15-size-factory-leaves
+2026-10-15-tensor-rng-inplace
+2026-10-15-swift-trainer-installed-source
+2026-10-15-peft-installed-source-training
+2026-10-15-nn-init-trainability-copy
+2026-10-15-nn-init-generator
+2026-10-15-release-installed-source-proof
 2026-08-28-ascend-910b-validation
 2026-08-30-qwen3-ascend-training
 2026-08-31-vllm-ascend-jittor-bootstrap
@@ -27,12 +58,74 @@
 2026-09-19-torch-compat-runbook-verification
 2026-09-21-flowey-merge-verification
 2026-09-22-complex-svd-grad-and-complex128
+2026-09-22-qwen3-ascend310p-fp16
 2026-09-22-sgd-dampening-and-native-vmap-gaps
 2026-09-24-torch-compat-real-models
 2026-09-25-profiling-tools
 2026-10-05-high-rank-and-downstream-core-gaps
 2026-10-09-downstream-p1-allocator-protocol-transpose
-2026-10-26-tensorcircuit-core-perf
+2026-10-12-qwen3-ascend310p-performance
+2026-10-13-qwen3-8b-ascend310p-performance
+2026-10-14-benchmark-coverage
+2026-10-14-downstream-coverage-audit
+2026-10-14-optimizer-checkpoint-continuation
+2026-10-14-checkpoint-rng-fsdp2-continuation
+2026-10-14-amp-bfloat16-gradscaler
+2026-10-15-distribution-constraint-publication
+2026-10-15-training-registry-denominators
+2026-10-14-cuda-sdpa-mask-coverage
+2026-10-15-sdpa-opmath
+2026-10-15-like-factory-leaves
+2026-10-15-diffusers-component-scorecards
+2026-10-15-diffusers-installed-source
+2026-10-15-mpi-bfloat16-process-groups
+2026-10-15-cpu-bfloat16-accumulators
+2026-10-15-h3-silu-contracts
+2026-10-15-accelerate-protocol-scorecards
+2026-10-15-deepspeed-paired-protocol
+2026-10-14-graph-replay-retain-budget
+2026-10-14-downstream-oracle-scorecards
+2026-10-15-cuda13-toolchain-packaging
+2026-10-15-bf16-fsdp2-checkpoint-continuation
+2026-10-15-metric-state-and-tensordict-oracles
+2026-10-15-metrics-tensordict-scorecards
+2026-10-15-vllm-component-scorecards
+2026-10-15-checkpoint-state-options
+2026-10-15-integration-nccl-coverage
+2026-10-15-upstream-pr-disposition
+2026-10-15-verl-registered-component-oracles
+2026-10-15-transformers-model-family-matrix
+2026-10-15-native-sharded-checkpoint
+2026-10-15-native-multinode-control-plane
+2026-10-15-native-multihost-runner
+2026-10-15-accelerate-fresh-process
+2026-10-15-cuda-seed-without-devices
+2026-10-15-h3-autograd-boundary
+2026-10-16-omni-installed-source-diagnostics
+2026-10-15-longformer-32768-context-oracles
+2026-10-15-deepspeed-engine-prerequisites
+2026-10-15-deepspeed-zero-engine
+2026-10-15-native-zero-optimizer
+2026-10-15-native-tensor-parallel
+2026-10-15-native-fsdp
+2026-10-15-bfloat16-linear-bias-accumulation
+2026-10-15-native-tensor-parallel-adamw-bf16
+2026-10-15-fsdp-compat-lifecycle
+2026-10-15-openmmlab-training-oracles
+2026-10-15-tensor-detach-and-factory-leaf
+2026-10-15-cuda-extension-philox
+2026-10-15-flash-attention-training-oracles
+2026-10-16-flash-attention-installed-source-training
+2026-10-16-accelerate-installed-source-protocols
+2026-10-16-accelerate-maintained-cpu-nightly
+2026-10-15-deepspeed-bfloat16-multirank
+2026-10-15-deepspeed-maintained-gate
+2026-10-15-tanh-fsdp-bfloat16
+2026-10-15-trellis-model-validation
+2026-10-15-pytree-transformers-513
+2026-10-15-rng-native-generator-contract
+2026-10-15-default-generator-state-contract
+2026-10-15-rmsnorm-triton-alias
 ```
 
 ## 按主题索引
@@ -56,4 +149,58 @@
 | [性能/显存分析工具：审计与重写](2026-09-25-profiling-tools.md) | 已实现，RTX 4090 上验证；未合入 | 2026-09-25 |
 | [张量维度上限 10 → 32 与下游评测的核心缺口](2026-10-05-high-rank-and-downstream-core-gaps.md) | 已修复，CPU 与 RTX 4090 验证 | 2026-10-05 |
 | [下游 P1：分配器并存上限、数值协议与 transpose 的运行时置换](2026-10-09-downstream-p1-allocator-protocol-transpose.md) | 已修复，CPU 验证，transpose/协议另在 RTX 4090 验证 | 2026-10-09 |
-| [TensorCircuit 报告的 Jittor 核心性能问题](2026-10-26-tensorcircuit-core-perf.md) | 部分修复，CPU 与 RTX 4090 实测；CUDA 二维 QR/solve 已改为原生 cuSOLVER，CPU solve 与 CUDA QR 反向仍落后（KI-OPS-016） | 2026-10-26 |
+| [Qwen3-0.6B：310P3 FP16 推理性能](2026-10-12-qwen3-ascend310p-performance.md) | 相同权重预转换条件下，502/1998-token decode 比原生 torch_npu 快约 6%/26%；逐 token 一致、Jittor 零回退 | 2026-10-12 |
+| [Qwen3-8B：310P3 FP16 推理性能](2026-10-13-qwen3-8b-ascend310p-performance.md) | 502-token decode 接近持平，1998-token 比原生 torch_npu 快 20.1%；逐 token 一致、Jittor 零回退 | 2026-10-13 |
+| [Benchmark 覆盖与比较协议补齐](2026-10-14-benchmark-coverage.md) | 卷积 CPU/CUDA、Accelerate CPU、模型 CPU harness 已验；其余设备与场景缺口保留 | 2026-10-14 |
+| [下游注册表、门禁与覆盖审计](2026-10-14-downstream-coverage-audit.md) | 已审计 13 个 runbook 与五个上游注册表；未授予新的设备验证级别 | 2026-10-14 |
+| [优化器 FQN checkpoint 与确定性续训](2026-10-14-optimizer-checkpoint-continuation.md) | 单进程确定性数值续训已验；RNG/双卡验收见后续报告，ACL 待验 | 2026-10-14 |
+| [完整 RNG 与 FSDP2 FULL checkpoint 续训](2026-10-14-checkpoint-rng-fsdp2-continuation.md) | CPU/CUDA 随机流与双卡 FULL 续训已验；分片 I/O 与 ACL 待验 | 2026-10-14 |
+| [bf16 autocast 与 GradScaler 边界](2026-10-14-amp-bfloat16-gradscaler.md) | CPU/CUDA 实际 dtype 与边界对拍通过；fidelity 保持 APPROXIMATE | 2026-10-14 |
+| [分布约束命名空间发布](2026-10-15-distribution-constraint-publication.md) | 原生属性与工厂发布已修；CPU/CUDA 边界检查对拍通过 | 2026-10-15 |
+| [训练注册表分母补齐](2026-10-15-training-registry-denominators.md) | 补 ms-swift/verl 训练轴与 vLLM/Omni 分母、SCM wheel 源码身份校验；枚举不授予数值覆盖 | 2026-10-15 |
+| [CUDA SDPA 掩码覆盖](2026-10-14-cuda-sdpa-mask-coverage.md) | 180 个真实 CUDA 场景对拍；融合路径扩展，边界保持显式 | 2026-10-14 |
+| [图重放保留预算](2026-10-14-graph-replay-retain-budget.md) | 动态预算约束已缓存的 replay；默认预算保留，CPU/CUDA 实测 | 2026-10-14 |
+| [下游独立 oracle 与训练 scorecard](2026-10-14-downstream-oracle-scorecards.md) | 四库 CPU/CUDA 代表场景已验；LoRA/component 范围限定，未授予 L4/L5 | 2026-10-14 |
+| [CUDA 13 工具链与 uv 安装](2026-10-15-cuda13-toolchain-packaging.md) | Linux/SM89 工具链、CUB、矩阵乘与卷积实测；Cu122 回归通过 | 2026-10-15 |
+| [双卡 bf16 FSDP2 续训](2026-10-15-bf16-fsdp2-checkpoint-continuation.md) | bf16 真计算与 FULL/RNG 精确恢复已验；跨框架舍入差异保留 | 2026-10-15 |
+| [TorchMetrics state 与 TensorDict 对拍](2026-10-15-metric-state-and-tensordict-oracles.md) | 两库 CPU/CUDA 全梯度通过；TensorDict 三步训练通过，限定组件范围 | 2026-10-15 |
+| [vLLM 组件 CPU/CUDA 评分卡](2026-10-15-vllm-component-scorecards.md) | 三个参数无关组件 L2，各 3/40 CustomOp；模型 0/376，整引擎阻塞另列 | 2026-10-15 |
+| [TorchMetrics/TensorDict 统一 scorecard](2026-10-15-metrics-tensordict-scorecards.md) | 新 CPU/CUDA 原始证据接受 4 条；有界顶层 API 各 2/105 L2 与 2/60 L3 | 2026-10-15 |
+| [Checkpoint 选项与子模块契约](2026-10-15-checkpoint-state-options.md) | CPU/CUDA 单进程选项和实际 Torch checkpoint 互通已验；多 rank 选项与 ACL 待验 | 2026-10-15 |
+| [整合回归与 NCCL 缺陷收口](2026-10-15-integration-nccl-coverage.md) | NCCL 2.18.3 双卡退出条件通过，KI-DIST-002/003 收口；限定定向范围 | 2026-10-15 |
+| [上游 PR 处置与 NumPy ABI](2026-10-15-upstream-pr-disposition.md) | 十个 PR 已核对；NumPy 1/2 真正复制与 shape 回归通过，Windows 待真机 | 2026-10-15 |
+| [VERL 注册算法组件对拍](2026-10-15-verl-registered-component-oracles.md) | GAE/vanilla PPO 与 k3 组件 CPU/CUDA 全梯度及三步轨迹通过；不计 rollout/Ray/Hydra | 2026-10-15 |
+| [Transformers 模型族矩阵](2026-10-15-transformers-model-family-matrix.md) | 九项 CPU/CUDA L3 场景；8/374 模型族、2/46 任务，含 CLIP/Mixtral/2048 token RoPE | 2026-10-15 |
+| [DeepSpeed Engine 前置所有权与梯度契约](2026-10-15-deepspeed-engine-prerequisites.md) | 原生模块注册与反向回调验证；真实 Engine 后续验收见专用报告 | 2026-10-15 |
+| [DeepSpeed 单 rank FP32 训练与恢复](2026-10-15-deepspeed-zero-engine.md) | CPU、CUDA 各 12 配置通过；双 rank bf16 尚未验收 | 2026-10-15 |
+| [原生 ZeRO1 状态分片](2026-10-15-native-zero-optimizer.md) | CPU 与双卡 NCCL 训练恢复已验；限定 Stage 1，不含 FSDP/TP 或多机 | 2026-10-15 |
+| [OpenMMLab 真实训练对拍](2026-10-15-openmmlab-training-oracles.md) | MMEngine/MMCV 的 CPU、CUDA 四条 L3 证据；限定真实 train_step 场景 | 2026-10-15 |
+| [Tensor detach 与工厂梯度边界](2026-10-15-tensor-detach-and-factory-leaf.md) | CPU/CUDA 原地 detach、默认梯度发布和 bf16 新叶子契约通过；双卡 Engine 仍待验 | 2026-10-15 |
+| [CUDA 扩展 Philox 状态](2026-10-15-cuda-extension-philox.md) | 实际 CUDA RNG 重放与融合 FlashAttention 训练回归；独立 Torch 对拍仍待验 | 2026-10-15 |
+| [FlashAttention 公开训练 API 对拍](2026-10-15-flash-attention-training-oracles.md) | 六入口历史 48 轨迹及正式 12 CUDA 场景通过；统一 L3 记录已验，CPU 阶梯缺失使广度仍 0/7 | 2026-10-15 |
+| [DeepSpeed 双卡 BF16 训练与恢复](2026-10-15-deepspeed-bfloat16-multirank.md) | ZeRO1/2 的 AdamW 三步训练、完整梯度与严格续训已验；限定小模型与实际 CUDA 双卡 | 2026-10-15 |
+| [DeepSpeed 维护门禁与 CPU 状态舍入](2026-10-15-deepspeed-maintained-gate.md) | 双卡 BF16 四格及 CPU/CUDA 各 12 项训练续训通过；修复 CPU Adam 状态取值顺序差异 | 2026-10-15 |
+| [tanh 反向与原生 FSDP BF16 对拍](2026-10-15-tanh-fsdp-bfloat16.md) | 修复低精度保存输出求导；固定双卡 BF16 的 80 个参数梯度逐位对齐，续训 368 数组逐位一致 | 2026-10-15 |
+| [TRELLIS.2 真实模型训练对拍](2026-10-15-trellis-model-validation.md) | 三个真实模型的 CPU/CUDA 三步训练、全部梯度和独立扰动通过；统一 models 广度各 3/9 | 2026-10-15 |
+| [自定义 pytree 与 Transformers 5.13.0](2026-10-15-pytree-transformers-513.md) | 自定义节点与键路径修复；固定 GPT2 的 CPU/CUDA 三步、全部参数和输入梯度通过 | 2026-10-15 |
+| [原生 RNG 与完整位宽 seed](2026-10-15-rng-native-generator-contract.md) | CPU/CUDA 原生流、64 位 seed、显式生成器及双设备 checkpoint 恢复通过；不承诺跨框架样本逐位一致 | 2026-10-15 |
+| [RMSNorm 可选契约与 Triton 原地别名](2026-10-15-rmsnorm-triton-alias.md) | 保护模块原始归一化契约，修复真实 CUDA 原地写入被覆盖，并接入 vLLM 组件门禁审计 | 2026-10-15 |
+| [原生 TP 线性层训练与恢复](2026-10-15-native-tensor-parallel.md) | CPU 与双卡 NCCL 的 FP32 等分线性层、完整梯度和固定 world 续训已验；bf16 与多机待验 | 2026-10-15 |
+| [原生 FSDP 分片与新进程恢复](2026-10-15-native-fsdp.md) | 原生双卡训练与严格恢复已验；bf16 小梯度误差和旧兼容失败单列 | 2026-10-15 |
+| [CUDA BF16 Linear 偏置舍入](2026-10-15-bfloat16-linear-bias-accumulation.md) | 真实 BF16 GEMM 保留 FP32 累加到偏置之后；CPU 既有路径与二阶梯度回归已验 | 2026-10-15 |
+| [原生 TP AdamW 与 BF16 续训](2026-10-15-native-tensor-parallel-adamw-bf16.md) | 双卡 BF16 完整梯度、状态分片和新对象恢复通过固定误差预算；不含多机 | 2026-10-15 |
+| [FSDP 兼容层优化器生命周期](2026-10-15-fsdp-compat-lifecycle.md) | 优化器参数替换与原生模块 checkpoint 分派修复，CPU/CUDA 与双 rank 定向复验 | 2026-10-15 |
+| [jtrun 固定节点控制面](2026-10-15-native-multinode-control-plane.md) | 单机双 agent 的真实 CUDA 通信、FSDP 新进程续训与故障退出通过；真实多 host 待验 | 2026-10-15 |
+| [H3 上游 CUDA 梯度边界](2026-10-15-h3-autograd-boundary.md) | 真 Torch 与候选端 eval/train 均缺完整梯度；定位上游推理内核，无完整模型 L2/L3 授级 | 2026-10-15 |
+| [Omni 完整安装来源诊断](2026-10-16-omni-installed-source-diagnostics.md) | 真实 SCM wheel/完整安装绑定与生成文件替代拒绝；原前向四项超预算、两端完整梯度仍失败 | 2026-10-16 |
+| [默认生成器状态与设备隔离](2026-10-15-default-generator-state-contract.md) | CPU 状态互换、私有副本与实际 CUDA 流隔离通过；保留原生 frame 和旧快照读取 | 2026-10-15 |
+| [每主机 jtrun 验证入口](2026-10-15-native-multihost-runner.md) | 显式源码、解释器、设备和共享产物协议；单机双 agent 完整执行，真实多机仍待验 | 2026-10-15 |
+| [无可见 CUDA 设备的播种](2026-10-15-cuda-seed-without-devices.md) | CPU 训练可调用 CUDA 播种接口；保留参数转换与实际 CUDA 流回放 | 2026-10-15 |
+| [Accelerate 新进程续训](2026-10-15-accelerate-fresh-process.md) | CPU/CUDA 新进程恢复、全状态与实际 CUDA FSDP2 通过；CPU 双 rank 上游路径实际为 DDP，配对不授通过 | 2026-10-15 |
+| [Accelerate 完整安装来源与续训](2026-10-16-accelerate-installed-source-protocols.md) | 新 CPU/CUDA 2,516 对数组与完整新进程恢复通过；共同 2 接纳、2 配对阻塞，真实 METADATA/RECORD 与原 wheel 绑定 | 2026-10-16 |
+| [FlashAttention 完整安装来源训练](2026-10-16-flash-attention-installed-source-training.md) | 原 12 CUDA 场景、48 worker 与 936 数值检查通过；共同 12 条因缺 CPU 对应实现阻塞，固定本地构建 artifact 拒绝同步载荷篡改 | 2026-10-16 |
+
+| [PEFT / Swift 独立 CPU nightly](2026-10-15-maintained-ecosystem-nightly.md) | 完整依赖与来源校验、两维护门禁本地执行通过；未观测 GitHub scheduled run | 2026-10-15 |
+| [OpenMMLab 安装来源训练](2026-10-15-openmmlab-installed-source-training.md) | MMEngine/MMCV 四条限定 L3；462 数组、三种输入与三步真实 train_step，完整安装来源绑定 | 2026-10-15 |
+
+| [Transformers 主线来源复验](2026-10-16-transformers-main-source-training.md) | 独立09e9源码 CPU/CUDA 共160 worker、7854数组对，20条限定L3；原B4测量不重标 | 2026-10-16 |

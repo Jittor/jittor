@@ -70,6 +70,8 @@ import os
 import jittor as jt
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from jittor._runtime.core_api import _output_requires_grad
+from jittor._runtime.backend_libraries import get_library_ops
+from jittor._runtime.dispatch import register_kernel
 
 
 #: Heuristic candidates to time. Beyond this the returns are gone and the
@@ -181,6 +183,8 @@ def compute_dtype_name(x, weight):
     amp = jt.flags.amp_reg
     if amp & jt.amp_flags.prefer32:
         return "float32"
+    if amp & jt.amp_flags.prefer_bfloat16:
+        return "bfloat16"
     if amp & jt.amp_flags.prefer16:
         return _bfloat16_or(x, weight, "float16")
     dsize = max(_DSIZE[_jittor_dtype_name(x.dtype)],
@@ -196,6 +200,29 @@ def _bfloat16_or(x, weight, fallback):
     if ("bfloat16" in (_jittor_dtype_name(x.dtype), _jittor_dtype_name(weight.dtype))):
         return "bfloat16"
     return fallback
+
+
+def _supports_bias_accumulator(x, weight, bias):
+    return (bias is not None and compute_dtype_name(x, weight) == "bfloat16"
+            and (_jittor_dtype_name(bias.dtype) == "bfloat16" or jt.flags.amp_reg)
+            and get_library_ops("cublas") is not None)
+
+
+def _linear_bias_accumulator(x, weight, bias):
+    # Preserve BF16 operands and the native GEMM's differentiable backward;
+    # only the output accumulator is FP32 until the bias has been added.
+    with jt.flag_scope(amp_reg=0):
+        x, weight, bias = (value.cast("bfloat16") for value in (x, weight, bias))
+        shape = x.shape[:-1] + (weight.shape[0],)
+        matrix = x.contiguous() if x.ndim >= 2 else x.reshape((1, -1))
+        product = get_library_ops("cublas").cublas_matmul(
+            matrix, weight.contiguous(), False, True, True).reshape(shape)
+        return (product + bias.float32()).cast("bfloat16")
+
+
+register_kernel("linear_bias_accumulator", "cuda", _linear_bias_accumulator,
+                dtypes={"float16", "bfloat16", "float32", "float64"},
+                supports=_supports_bias_accumulator)
 
 
 #: cuBLASLt is CUDA's own. `use_cuda` is also set on ACL and ROCm builds, whose

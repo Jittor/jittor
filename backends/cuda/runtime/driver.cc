@@ -5,6 +5,7 @@
 #include <cuda_runtime.h>
 #include "helper_cuda.h"
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <exception>
 #include <vector>
@@ -486,6 +487,46 @@ void copy_async(void* dst, Device target, const void* src, Device source, size_t
                                        reinterpret_cast<cudaStream_t>(stream.handle)));
     });
 }
+// Pinned staging for small device-to-host readbacks; see `copy`. A few
+// slots, so that readbacks from several host threads need not wait for each
+// other -- one that finds them all taken copies straight into its destination,
+// as before. Allocated on first use as portable pinned memory (any device's
+// context may copy into it) and kept for the life of the process.
+struct ReadbackSlot {
+    static constexpr size_t capacity = 16u << 10;
+    static constexpr int count = 4;
+    char* data = nullptr;
+    explicit ReadbackSlot(size_t size) {
+        static std::atomic<char*> buffers[count];
+        static std::atomic<bool> taken[count];
+        // No capture check: a readback cannot be recorded, with a slot or without.
+        if (size > capacity) return;
+        for (int i = 0; i < count; i++) {
+            if (taken[i].exchange(true, std::memory_order_acquire)) continue;
+            char* buffer = buffers[i].load(std::memory_order_relaxed);
+            if (!buffer) {
+                void* pinned = nullptr;
+                if (cudaHostAlloc(&pinned, capacity, cudaHostAllocPortable) != cudaSuccess) {
+                    cudaGetLastError();
+                    taken[i].store(false, std::memory_order_release);
+                    return;
+                }
+                buffer = static_cast<char*>(pinned);
+                buffers[i].store(buffer, std::memory_order_relaxed);
+            }
+            data = buffer;
+            release_ = &taken[i];
+            return;
+        }
+    }
+    ~ReadbackSlot() { if (release_) release_->store(false, std::memory_order_release); }
+    explicit operator bool() const { return data != nullptr; }
+    ReadbackSlot(const ReadbackSlot&) = delete;
+    ReadbackSlot& operator=(const ReadbackSlot&) = delete;
+private:
+    std::atomic<bool>* release_ = nullptr;
+};
+
 void copy(void* dst, Device target, const void* src, Device source, size_t size, bool ordered) {
     if (!size) return;
     int device = target.backend == BackendId::Cpu ? source.index : target.index;
@@ -550,24 +591,37 @@ void copy(void* dst, Device target, const void* src, Device source, size_t size,
         } else if (target.backend == BackendId::Cpu && source.backend != BackendId::Cpu) {
             LaunchErrorScope error_scope(
                 source, true, reinterpret_cast<uintptr_t>(cudaStreamPerThread));
-            // Readback waits for its producer stream's event, not the device.
-            // This also serves data-dependent shape counts and scalar item().
-            cudaEvent_t done;
-            checkCudaErrors(cudaEventCreateWithFlags(&done, cudaEventDisableTiming));
-            try {
-                checkCudaErrors(cudaMemcpyAsync(dst, src, size, cudaMemcpyDeviceToHost,
+            // Readback waits for its producer stream, not the device. This
+            // also serves data-dependent shape counts and scalar item(), some
+            // seven thousand times per shape in a sort/unique-heavy loop.
+            //
+            // It used to record an event and wait for that, from when the copy
+            // went to the legacy stream 0: synchronizing stream 0 itself would
+            // also have waited for every other blocking stream. The per-thread
+            // stream has no such implicit wait, so synchronizing it waits for
+            // exactly what the event did -- the copy and everything queued
+            // before it -- without creating, recording and destroying an event
+            // on every readback.
+            //
+            // A small readback lands in a pinned slot and is copied out from
+            // there. Into pageable memory the driver stages the bytes itself
+            // and cudaMemcpyAsync returns only once they are there, so the
+            // stream wait after it waits for nothing -- and the pair costs a
+            // microsecond more than a pinned copy and its wait (4 bytes:
+            // 5.4 us against 4.9; 16 KB: 7.6 against 7.0; beyond 64 KB the
+            // extra host copy loses). Count readbacks for `nonzero`, `item()`
+            // and a Var's truth value are this size, thousands per second in
+            // a mask-driven loop.
+            if (ReadbackSlot slot{size}) {
+                checkCudaErrors(cudaMemcpyAsync(slot.data, src, size, cudaMemcpyDeviceToHost,
                                                 cudaStreamPerThread));
-                checkCudaErrors(cudaEventRecord(done, cudaStreamPerThread));
-                checkCudaErrors(cudaEventSynchronize(done));
-            } catch (...) {
-                // A sticky error fails the cleanup too, and the exception
-                // being rethrown already says the context is gone.
-                const auto cleanup = cudaEventDestroy(done);
-                if (cleanup != cudaSuccess && !cuda_error_is_sticky(cleanup))
-                    LOGe << "Readback event cleanup failed:" << cudaGetErrorString(cleanup);
-                throw;
+                checkCudaErrors(cudaStreamSynchronize(cudaStreamPerThread));
+                std::memcpy(dst, slot.data, size);
+                return;
             }
-            checkCudaErrors(cudaEventDestroy(done));
+            checkCudaErrors(cudaMemcpyAsync(dst, src, size, cudaMemcpyDeviceToHost,
+                                            cudaStreamPerThread));
+            checkCudaErrors(cudaStreamSynchronize(cudaStreamPerThread));
         } else if (capturing()) {
             // A blocking copy is impossible while the stream is being
             // recorded -- `cudaMemcpy` reports cudaErrorStreamCaptureImplicit

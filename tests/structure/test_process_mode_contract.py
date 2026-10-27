@@ -28,10 +28,12 @@ if str(TEST_ROOT) not in sys.path:
     sys.path.insert(0, str(TEST_ROOT))
 
 from _helpers.child_process import run_python_child  # noqa: E402
+from _helpers.process_modes import is_torch_mode_path  # noqa: E402
 
 #: A native file, and a Torch-mode file that is cheap to collect.
 _NATIVE_TARGET = "tests/runtime/test_flags.py"
 _TORCH_TARGET = "compat/tests/torch/test_torch_compiler_fidelity.py"
+_TORCH_TRITON_BACKEND_TARGET = "compat/tests/triton/test_triton_backend.py"
 
 
 #: ``compiler.JIT_UTILS_UPDATED_EXIT_CODE``. Duplicated rather than imported
@@ -81,6 +83,20 @@ def test_conftest_does_not_read_the_command_line_to_choose_a_mode():
     assert offenders == [], (
         "conftest.py reads sys.argv at line(s) %s; the process mode comes from "
         "JITTOR_TORCH_SHIM" % offenders)
+
+
+def test_process_mode_owns_both_compat_path_spellings():
+    """The gate's runnable symlink path must retain its canonical mode."""
+    assert is_torch_mode_path("compat/tests/fsdp2/test_fsdp2_flat_policy.py")
+    assert is_torch_mode_path(
+        "python/jittor/compat/tests/fsdp2/test_fsdp2_flat_policy.py")
+    assert not is_torch_mode_path("python/jittor/compat/tests/data/test_dataset.py")
+
+
+def test_triton_backend_compat_tests_are_torch_mode():
+    """Backend contract methods still import the Torch compatibility frontend."""
+    assert is_torch_mode_path(_TORCH_TRITON_BACKEND_TARGET)
+    assert not is_torch_mode_path(_NATIVE_TARGET)
 
 
 def test_naming_a_torch_path_alongside_a_native_one_does_not_change_its_meaning():
@@ -133,6 +149,50 @@ def test_manual_probes_are_opt_in_by_variable_not_by_selection_shape():
     assert marked < decided, (
         "the manual marker is attached after the decision that reads it; that "
         "ordering is why test_notebooks.py was never actually deselected")
+
+
+def test_execution_snapshot_obeys_native_only_collection_ownership(tmp_path, monkeypatch):
+    """Ignoring the other mode must not hide an uncollected file in this mode.
+
+    A whole-directory selection expands to every file under it. The native-only
+    paths are refused by ``pytest_ignore_collect`` in Torch mode, so they are
+    not selected files there either -- otherwise the execution snapshot would
+    report them as files that collected nothing and fail a run in which they
+    were deliberately kept out.
+    """
+    import importlib.util
+    from types import SimpleNamespace
+
+    spec = importlib.util.spec_from_file_location(
+        "_isolated_pytest_policy", TEST_ROOT / "_helpers/pytest_policy.py")
+    policy = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(policy)
+    monkeypatch.setattr(policy, "TEST_ROOT", tmp_path / "tests")
+    monkeypatch.setattr(policy, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(policy, "_PYTEST_ROOT", tmp_path)
+    native = policy.NATIVE_MODE_PATHS[0]
+    ordinary = "tests/structure/test_uncollected.py"
+    for relative in (native, ordinary):
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("def test_present(): pass\n", encoding="utf-8")
+    config = SimpleNamespace(
+        args=[str(tmp_path / "tests/structure")],
+        invocation_params=SimpleNamespace(dir=tmp_path),
+        option=SimpleNamespace(ignore=[]))
+    for torch_mode in (True, False):
+        monkeypatch.setattr(policy, "_torch_mode_is_active", lambda: torch_mode)
+        policy._SELECTED_FILES.clear()
+        policy._COLLECTED_FILES.clear()
+        policy._snapshot_selected_files(config)
+        expected = {ordinary} if torch_mode else {native, ordinary}
+        assert policy._SELECTED_FILES == expected
+        assert set(policy._files_that_collected_nothing()) == expected
+        assert policy.pytest_ignore_collect(tmp_path / native, config) is (
+            True if torch_mode else None)
+        policy._COLLECTED_FILES.add(ordinary)
+        assert set(policy._files_that_collected_nothing()) == (
+            set() if torch_mode else {native})
 
 
 if __name__ == "__main__":

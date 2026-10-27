@@ -46,6 +46,11 @@ import os as _os
 import sys as _sys
 import sysconfig as _sc
 
+# Child processes inherit the shim site through PYTHONPATH.  Keep bootstrap
+# diagnostics off stdout so programs that use stdout as a data channel (for
+# example logger level probes) see only their requested output.
+_os.environ.setdefault("JITTOR_TORCH_QUIET", "1")
+
 def _jt_drop_internal_package_paths():
     _bad = (
         _os.path.sep + "site-packages" + _os.path.sep + "tvm_ffi",

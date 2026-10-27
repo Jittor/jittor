@@ -14,6 +14,8 @@ fail() {
 # refactors belong to Git history and structure tests, not to this script.
 required_paths=(
   python/jittor/selftest.py tests examples tools docs/conf.py docs/index.md
+  benchmarks/README.md benchmarks/asv/asv.conf.json
+  benchmarks/torch_compat/run.py benchmarks/acl/bench_jittor.py benchmarks/acl/probes
   backends/comm/__init__.py backends/acl/include/aclops
   backends/acl/include/aclnn backends/acl/kernels/native backends/comm/hccl
   backends/corex/__init__.py backends/cuda/include
@@ -28,6 +30,9 @@ required_paths=(
 for path in "${required_paths[@]}"; do
   [[ -e "$REPO_ROOT/$path" ]] || fail "missing required repository path: $path"
 done
+
+[[ ! -e "$REPO_ROOT/bench" ]] || \
+  fail 'benchmark suites must live under benchmarks/, not the retired bench/ directory.'
 
 [[ ! -e "$REPO_ROOT/tests/__init__.py" ]] || \
   fail 'repository tests must not be an importable package: tests/__init__.py'

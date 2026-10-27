@@ -135,8 +135,8 @@ __global__ void fused_adamw_kernel(AdamwLaunch launch, const float* step, float 
         // In double, as the per-parameter path computes them on the host:
         // 1 - 0.999^t in float keeps about three digits for small t.
         const double n = *step;
-        shared_step_size = (float)(rate / (1.0 - pow((double)beta1, n)));
-        shared_correction = (float)sqrt(1.0 - pow((double)beta2, n));
+        shared_step_size = (float)(rate / (1.0 - ::pow((double)beta1, n)));
+        shared_correction = (float)sqrt(1.0 - ::pow((double)beta2, n));
         shared_decay = 1.f - rate * weight_decay;
     }
     __syncthreads();

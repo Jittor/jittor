@@ -152,20 +152,19 @@ def unique(
     # whenever either of the two is asked for.
     need_inverse = return_inverse or return_counts
 
+    # `diff[i]` says whether sorted row i+1 starts a new value. Row 0 always
+    # does, and both kernels below say so themselves instead of reading it.
+    #
+    # There used to be a prepended element for row 0. As `Var([False])` it was
+    # built on the ambient device, which broke every input living elsewhere;
+    # built as `not all(x[0:1] == x[0:1])` it carried the input's device but
+    # was True whenever that row held a NaN -- and the CUDA kernel's scan does
+    # read element 0, so every inverse index of such an input came back one too
+    # high and `return_counts` scattered past the end of `counts`, a sticky
+    # launch failure that took the CUDA context down. Not prepending anything
+    # needs no device and no value, and drops the five ops and the concat it
+    # cost on every call.
     diff = jt.logical_not(jt.all(input_sorted[1:] == input_sorted[: -1], 1))
-    # The prepended element's *value* is never read -- both kernels below
-    # short-circuit on `i == 0` -- but its *device* is: `Var([False])` is built
-    # on the ambient device, so this concat raised
-    #   dispatch_context.cc:52: Expected all tensor inputs on the same backend
-    #   and device ... first input backend=1 index=0 but another input has
-    #   backend=1 index=1
-    # for any `input` that does not live on the ambient device, which is every
-    # worker whose device is not the process default. Build the element out of
-    # `input_sorted` instead, so it carries that tensor's device by
-    # construction. (The shape follows `diff` too: an empty input yields an
-    # empty `diff`, not a one-element one.)
-    head = jt.logical_not(jt.all(input_sorted[0:1] == input_sorted[0:1], 1))
-    diff = jt.concat([head, diff], 0)
     diff = jt.array(diff, dtype = jt.int32)
 
     # `output` holds *positions* in input_sorted, so it is an index var --
@@ -192,7 +191,7 @@ def unique(
         '''
             int tot = -1;
             for (int i = 0; i < input_sorted_shape0; ++i) {
-                if (i == 0 || @diff(i)) {
+                if (i == 0 || @diff(i - 1)) {
                     ++tot; @output(tot) = i;
                 }
                 if (return_inverse)
