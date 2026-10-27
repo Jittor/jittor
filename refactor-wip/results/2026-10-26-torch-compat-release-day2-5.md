@@ -1,5 +1,15 @@
 # Torch Compatibility Release Acceptance: 2026-10-26 Day 2–5 Continuation
 
+## 2026-10-28 02:57 +0800 r6原CPU14及维护通过，后端验收仍开放
+
+r6 CPU cold包 `20261028-qwen-cat-grad-r6-cpu-bootstrap-r1-prepared/`在原600s上限内约342.730s自然rc0，正式receipt SHA `451435eeba1516c54c3ca245b804ba61253fca5977ca735ef3f5d4236cda4833`为`PASS_COLD_BUILD_IDENTITY_ONLY`。227TU、core `55ee206a…`、utils `2925281c…`、stamp `6805d809…`、完整环境与两次fresh审计有效；root独立17项终审 `20261028-root-cat-r6-continuation-r3/root-r6-cpu-cold-terminal-audit.json` SHA `f774a8b95c72c4f42a0e99661f907abc6e6dd41f9fa603de0b2fea8ecc641f95`通过，自有组和精确cache锁均空。
+
+随后root核验19个工具及真实新产品/NO_BUILD环境/732文件terminal cache，单次释放 `20261028-qwen-cat-grad-r6-cpu14-r2-prepared/` manifest `c5bd04b04d94ed407f1dbaea35dbe612a717d1215cbbfed702aa29f1250d2693`的CPU14（360s上限）。正式receipt `8355e7730a31d2944cd7a2980830e217a6937dd892f9c8d1a7041be67c101ab8`为`PASS_NEW_CAT_SIDE`，原14/14通过、零skip，含原cat/rotate值、dtype、输入梯度和二阶导数完整断言；同原独立PT nodeids/参数、真实CPU/native dispatch、fallback0。root16项终审 `20261028-root-cat-r6-continuation-r3/root-r6-cpu14-terminal-audit.json` SHA `2b795145fdab3228ce364ad4497a606887ff6f791d95a24eb1d6eda07d7c3b72`确认source/core/utils/stamp/完整环境不变、cache仅允许新增、自有组与精确锁空。独立PT旧通过原件及r5原10pass/4fail均保持，未重跑或改写。
+
+维护后继 `20261028-qwen-cat-grad-r6-cpu-maint-r3-prepared/` manifest `33ec687c56d80dda19e98727fb9aaebdb34da604119d468c18b140650fb2e965`显式绑定原CPU14 receipt/result/cache/root审计，没有复制attempt或重跑原14。root分次释放原CPU cat_stack1及既有graph/retain/detach/unused语义5（各180s），分别约7.098/9.691s自然rc0、零skip。receipt SHA分别`e6a8799d2fe891769d29d1a3828b6710ad781defd14cbc751baf2461e68b51c2`、`2664d86a20b544729ccdae62b74f9ed688c374ca6b3db434412c6f68df8de5ce`；root15项cat1终审`60c21c3d1ac0c1bb21511407a3aad80feda3943b1fe23159e3a8d04b470c14ff`、16项grad5终审`f28c771a74a74776a9e62df361905eadf2e6cff98c8e89d165e253c2411cd030`均通过，文件在上述root目录。CPU/native dispatch/fallback0，source/core/utils/stamp/完整环境exact，cache分别只新增16/32允许文件、无改删，最新924文件terminal exact，自有组及精确锁空。计数分别是原数值14与维护1/5，不合并成新的原数值矩阵。
+
+下一项仅离线准备并审查新r6 CUDA900s cold，再绑定真实CUDA产品和终态执行原14；尚未执行CUDA数值或原完整no-hook。候选未采用main，LoRA不启动，Day2–5仍 **Not complete**。fresh fetch仍为`origin/cgq_transformers@e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`且为六树HEAD祖先，无需整合；main起点`98fab0098…`的96项原dirty与空index保持，快照存于未版本化`20261028-root-cat-r6-continuation-r3/`。T5余51.29068389162421s且禁止重试、Vision余310.095694191s且无合法最终continuous、BERT原15.425953905%>15%及缺11份PT checkpoint不变；Day4–5容量入口仍仅离线实现，没有正式模型/速度/显存证据。
+
 ## 2026-10-28 02:34 +0800 r5原14项CPU未通过：混合dtype梯度仍错误
 
 r5 CPU产品绑定包`20261028-qwen-cat-new-r5-cpu-r3-prepared/` manifest `1d05d9e8…`在root核验18工具、真实新产品/完整环境/732 cold-cache后单次执行原14项，37.131s自然rc1、未超时。正式receipt `2420d5c92b1a1abdd3e8165b9de2b0a91f573f4acb5a206f9ecaef9a0f4a58a5`保持`NEW_CAT_FAILURE_RETAINED`；原测试10pass/4fail/0skip，失败分别为mixed+training FP16/BF16的line70梯度dtype与二阶FP16/BF16的line112导数dtype。四case均已通过先前cat值/dtype断言，但其中后续rotate或导数数值断言可能被短路，不能据此宣称全14或所有后续操作通过。Recorder实际CPU/native dispatch/fallback0，reduced leaf为FP16/BF16而gradient（及二阶case curvature）均FP32。

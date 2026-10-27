@@ -1,5 +1,9 @@
 # 整改看板
 
+## 2026-10-28 02:57 +0800 r6原CPU14及维护通过，CUDA待验
+
+Day2–5仍 **Not complete**。隔离r6/source `5f4107c5…`的CPU冷构建227TU自然rc0，receipt `451435ee…`、root17项终审 `f774a8b9…`确认新core/utils/stamp、完整环境和清理有效，仅为构建身份。继而真实产品绑定包 `20261028-qwen-cat-grad-r6-cpu14-r2-prepared/`（manifest `c5bd04b0…`）单次完成原CPU14/14 PASS、零skip；cat/rotate值与dtype、输入梯度及二阶导数原断言均完整执行，真实CPU/native dispatch、fallback0。正式receipt `8355e773…`和root16项终审 `2b795145…`通过。另继承原终态的维护包 `20261028-qwen-cat-grad-r6-cpu-maint-r3-prepared/`（manifest33ec687c）已分次完成原cat_stack1及grad语义5，各零skip；receipt e6a8799d/2664d86a、root15/16项终审60c21c3d/f28c771a全通过，source/products/env不变、cache只新增16/32允许文件、当前924文件terminal exact、自有组/精确锁空。r5原10pass/4fail不改写；r6未采用main。下一项只审新r6 CUDA900s cold，再绑定真实产品执行原14；原完整no-hook与LoRA尚未启动，其余FAIL、T5/Vision预算及Day4–5门槛保持。详见[本日结果](../results/2026-10-26-torch-compat-release-day2-5.md)。
+
 ## 2026-10-28 02:34 +0800 r5 CPU14保留4项梯度dtype失败
 
 Day2–5仍 **Not complete**。r5原CPU14已终态10pass/4fail/0skip，receipt2420d5c9…；mixed training在line70、二阶在line112：FP16/BF16 leaf收到FP32 gradient/curvature。cat前向断言先于这些失败通过，不代表被短路的后续rotate/梯度数值均完成。root14项终审630fa856…确认真实CPU/fallback0、source/build/env/current-cache/组/锁有效；维护CPU1、CUDA cold与原no-hook均未执行，禁止绕过失败进入模型或LoRA。下一项仅新r6移植公开autograd.grad的返回dtype转换独立9行，保留当前storage/version和create_graph；已在隔离r6仅autograd.py应用9行（source5f4107c5/manifest131c2edc），仅静态身份；CPU600 cold已单次启动（包bd67c774），尚无终态/数值证据，CUDA保持HOLD。main/r5冻结修改及原失败保持；其余FAIL/预算/Day4–5门槛不变。详见[本日结果](../results/2026-10-26-torch-compat-release-day2-5.md)。
