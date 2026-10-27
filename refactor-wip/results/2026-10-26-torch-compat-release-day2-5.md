@@ -1,5 +1,13 @@
 # Torch Compatibility Release Acceptance: 2026-10-26 Day 2–5 Continuation
 
+## 2026-10-28 05:38 +0800 r7首层attention同输入控制有效
+
+新微回放包 `20261028-qwen-r7-first-attention-replay-r1-prepared/` manifest `e739f1bade43ee3a7d6d814b3d98dbcb1476077fcb81dd1a2244352bb9fe849d` 已由root逐阶段单次执行。独立PT/JT均native原概率逐字exact、manual/public概率及pre-o exact、显式BF16 matmul与AMP exact；各在新300s微预算内自然rc0（10.672/33.255s），不是性能结果。正式PT receipt `33d2fd50b529812d14823a056f8954ae86fec32ad9f980a234d77aae3d6caa2a`、JT `ba9f058573a2cd2845fad5533318fcad3acaa2c0a6d1e14830b6a040f7c4f001`；独立saved比较receipt `1fb8dbcc82c8e2ec8b06074c4dba2e9d7ca1dd3580fbfc16954bcff38804c068`、result `d4c86356ba678e5adc619a493766a082cf5be13e39b354b867054af74794de6c` 已在原120s内自然完成。三个exec30264/59089/26655均收回。
+
+root独立26项saved终审 `20261028-root-rmsnorm-r7-continuation-r1/root-r7-first-attention-replay-terminal-audit.json` SHA `85290495d6cc4c3c0009062462af2d4c00aa7e27daf5ea19053fbeeee3df6b3c` 全真：固定同一cos/sin时，PT/JT全部32数组exact，包括mask、BF16 QK、scale、masked logits、概率和pre-o；只替换PT/JT cos/sin，两侧均产生40个Q/58个repeatedK BF16变化、61个masked-logit变化，并恰重现原1302个概率差（max0.004319220781326294）及466个pre-o差。它证明本首层固定QKV控制的cos/sin影响，不证明完整模型根因或发布通过，不能继续以旧cohort的RoPE无影响结论代替本次结果。
+
+实际CUDA/fallback0、完整JT环境/core231/order/ingredients/source和组锁通过；CUDAcache1326=1306+20、旧文件无改删，终态 SHA `1d7ea7b9d2100ff836cba12de4ca82bf4ff90b97510e05c2b3e7c074a9318c31`。两原launch identity的cmdline因Popen瞬时采样为空，parent Popen argv/PID/start_ticks/private组保留；JT由root存活期另采实际命令（`root-r7-attention-jt-live-identity.json`），PT退出前未补采，该身份观察界限已明列，未回填原件。下一项仅离线准备公共pow→reciprocal的CPU/真实CUDA四侧最小控制，对双方保存inv_freq逐值核对，不假定PT初始化device；静态CUDA double-only `_signed_pow`仅是待证假设，未修改源码或创建r8。原完整no-hook仍FAIL8,690,528/29,171,712；LoRA不启动、候选未采用main，其他FAIL/预算和Day4–5门槛保持，发布 **Not complete**。
+
 ## 2026-10-28 05:21 +0800 r7独立root38通过，原dtype差清零
 
 root单次独立复算117数组/113有序边界及五probe全部有效，`20261028-root-rmsnorm-r7-continuation-r1/root-r7-layer-capture-terminal-audit.json` SHA `9416389296587a6c103ba8669c22e6967495be834e4716188d9ad4978e73b8de`，38项全真、exec84321自然rc0。实际CUDA/fallback0、完整环境/source/core231/order/ingredients、1306终态cache与组锁有效；这仅允许采用诊断边界，full/nohook/causal/release仍全false。
