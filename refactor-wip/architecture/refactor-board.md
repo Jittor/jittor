@@ -1,5 +1,9 @@
 # 整改看板
 
+## 2026-10-28 02:19 +0800 cat旧缺陷真实复现，隔离r5待验证
+
+Day2–5仍 **Not complete**。独立PT CPU/CUDA原14各通过，旧JT CPU/真实CUDA各10fail/4pass；CUDA112.839s自然终态、fallback0/source/cache/env/清理有效。root终审r2 `b5331c68…`59项全真；原PT CUDA元数据wrapper失败与root r1审计误判保留，独立metadata审计接受原14结果，不重跑或改原件。隔离r5仅修dense cat autocast的原生AMP舍入，source `25708e7d…`/manifest `c6e4d2fa…`，未采用main，尚无r5数值证据。下一项新source绑定CPU600s cold→原14，再分别审核CUDA900s cold→原14；没有自动后继、完整模型/LoRA。fresh远端仍e5cffe1a为六树祖先，main94bc5e15的96dirty/空index保持；其余FAIL、预算与Day4–5门槛保持。详见[本日结果](../results/2026-10-26-torch-compat-release-day2-5.md)。
+
 ## 2026-10-28 01:57 +0800 SiLU后继原完整Qwen门禁仍FAIL
 
 Day2–5仍 **Not complete**。`20261028-qwen-silu-r4-nohook-successor-r2-prepared/attempt-01`的原worker/comparator自然rc0（250.166/3.117s），正式receipt `544f7f9d7d42549653e61da1b99aa05ccc73b5dd5c312e8126c3c64b14827949`为`FULL_NOHOOK_NUMERICAL_FAILURE_RETAINED`。原29,171,712全logits含padding仍超限10,119,974项、max_abs4.587890625；有效位置4,375,563/22,030,720超限、max_abs0.4375，输入exact且loss满足原门槛，不能据局部SiLU通过关闭模型门禁。原0.005+0.03阈值不变，comparison `2fc9e50c…`；root独立28项终审 `a0da4374…`复算同结论，实际CUDA/fallback0、source/core/stamp/env/顺序/ingredients exact，cache只新增248允许文件、无改删，组空/精确锁空。候选未采用main，LoRA不启动、不重试同cohort。下一项仅验证cat autocast单因子旧路径精度假说，先独立PT/旧JT CPU与真实CUDA原14case，未复现则停止，不能先叠加rsqrt/mean/RMSNorm或从静态建议启动模型。其余FAIL/预算及Day4–5门槛保持。详见[本日结果](../results/2026-10-26-torch-compat-release-day2-5.md)。

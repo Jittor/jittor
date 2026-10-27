@@ -1,5 +1,13 @@
 # Torch Compatibility Release Acceptance: 2026-10-26 Day 2–5 Continuation
 
+## 2026-10-28 02:19 +0800 cat旧路径CPU/CUDA复现与隔离r5
+
+发布仍 **Not complete**。旧cat控制现已取得独立PT CPU/CUDA各14项通过，以及旧JT CPU/真实CUDA各10fail/4pass的完整终态；JT失败集中在原cat值/混合dtype与二阶dtype断言，不能声称失败case已执行后续rotate/梯度。CUDA JT单次112.839s自然rc0，实际device与native dispatch一致、fallback0；source/core/stamp/env exact，cache只新增96个允许JIT文件、无改删，组空/精确锁空。PT CUDA原wrapper因公开CUDA_MODULE_LOADING=LAZY元数据守卫失败的原件保持，独立metadata审计f2a1098e仅接受该已完成14项结果，不回写PASS。root新终审r2 `b5331c68f80a68318d5e2a05143d335b17bc49fac168d1c5cddeaf47a3d9854b`的59检查全真；r1将该PT子进程rc1误当自然rc0的审计失败另保留。
+
+root按verify-then-fix新建隔离`torch-compat-storage-silu-cat-20261028-r5`，完整逐文件继承r4，仅dense compat cat调用原生concat前在公开autocast开启时暂挂amp_reg，另加入原14项测试原字节；未改rsqrt/mean/RMSNorm或采用main。source fingerprint `25708e7d45537a4090daa77e985bb93f61d01d6f003c445ec92e54cc2ba03bd6`，未版本化`20261028-qwen-cat-r5-source-r1/candidate-source-manifest.json` SHA `c6e4d2fa83d2fdf7acd2d8306365e7699d593eb8938a806a7834cc6ffbc79b12`；root source review `089fe00f…`确认只改一源/新增一测试、无删除。当前仅source身份，尚无r5运行时或修复数值证据。下一项单独审核新CPU600s fresh cold包，再CPU原14及最小邻近；CUDA900s cold与原14分别后继，均禁止自动retry/模型。只有原14通过后才审原完整no-hook，LoRA继续HOLD。
+
+fresh fetch目标远端`e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`仍为六相关HEAD祖先；main起点`94bc5e15208c584d0c176513d29e1a5cf82f2519`、原96dirty和空index保留，fetch前后六树逐dirty文件hash相同，未整合。现场原cat阶段已退出，未启动重复实验；根盘余约84GiB、数据盘余约6TiB。续接快照在未版本化`20261028-root-cat-continuation-r2/remote-sync.json`与`worktrees-before.json`。T5原余额51.29068389162421s/禁止重试、Vision余310.095694191s/无合法最终continuous、BERT原gap15.425953905%>15%/缺11份PT checkpoint，以及Day4–5正式稳定三轮/容量/峰值门槛保持；性能模板仅离线准备。
+
 ## 2026-10-28 01:57 +0800 SiLU后继原完整Qwen数值仍FAIL
 
 新包`20261028-qwen-silu-r4-nohook-successor-r2-prepared/` manifest `d93a36a0fdde79a46997aae0b3dce720bb730d56ca64724880b3f9fdfbc46490`经root核验22文件与CPU3/CUDA4/root前置、1150终态cache exact后单次执行。worker/comparator自然rc0、分别250.166/3.117s，未达1800/120s cap；正式receipt SHA `544f7f9d7d42549653e61da1b99aa05ccc73b5dd5c312e8126c3c64b14827949`终态`FULL_NOHOOK_NUMERICAL_FAILURE_RETAINED`，comparison SHA `2fc9e50c7399be0da4ba9d0983f80ec87a666e620bb6f6fb427d13a1aa404677`。原29,171,712全logits含padding有10,119,974项超0.005+0.03|PT|、max_abs4.587890625；有效22,030,720项有4,375,563超限、max_abs0.4375，padding7,140,992项有5,744,411超限。三输入exact，loss JT2.6934099197387695/PT2.6900217533111572、abs0.0033881664276123047满足原门槛；仅logits失败，不能删padding/改阈值。七数值文件保持原字节、独立PT oracle43a5c1e9保持，原失败不改。

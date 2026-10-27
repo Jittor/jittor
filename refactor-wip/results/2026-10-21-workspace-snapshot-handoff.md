@@ -1,5 +1,9 @@
 # 2026-10-21 工作区快照与本机接续交接
 
+## 2026-10-28 02:19 +0800 cat旧端终态与r5续接
+
+旧cat独立PT CPU/真实CUDA原14各通过，旧JT两device各10fail/4pass，root终审r2 b5331c68的59检查全真；不能把失败case中的未执行rotate/梯度写为已验。PT CUDA原工具元数据FAIL通过独立审计接受原数值，不改原件、不重跑。root新隔离cat-only r5 source25708e7d/manifest c6e4d2fa已逐文件核验，只改dense concat的autocast amp_reg范围并加入原14测试，main/r4保持。此刻r5仅source身份，无冷构建/数值证据。先核对新CPU600s bootstrap包，CPU原14成功后再分别审CUDA900s及原14；未通过则不运行原完整no-hook，不启动LoRA、不自动retry。全部旧FAIL、T5/Vision原预算与Day4–5正式三轮/容量/峰值保持，详细收据及fresh远端/六树快照见[本日结果](2026-10-26-torch-compat-release-day2-5.md)。
+
 ## 2026-10-28 01:57 +0800 原Qwen no-hook已终态FAIL，禁止重复启动
 
 r4原full no-hook receipt `544f7f9d…`、comparison `2fc9e50c…`仍FAIL：10,119,974/29,171,712超原阈值、max_abs4.587890625，有效位置亦FAIL；worker与comparison均自然rc0。root独立终审`a0da4374…`28项全真，source/env/core/cache合格、组/精确锁空，原数值失败有效。新CUDA终态cache只能取该attempt/cache-after；局部SiLU PASS不能替代模型。下一项cat autocast单因子旧端14case×独立PT/JT×CPU/CUDA仅离线准备，root审阅后才逐阶段执行；当前未修cat、未启动LoRA、未采用main、无重试。Day2–5未完成，其他门槛与原预算保持。详见[本日结果](2026-10-26-torch-compat-release-day2-5.md)。
