@@ -21,7 +21,9 @@ def native_only():
 
 
 def alias_of(source):
-    alias = jt.Var.clone(source)
+    # Var.clone() copies now; the native clone op is the view `detach` and the
+    # constructor-alias contracts are built on.
+    alias = jt.ops.clone(source)
     return alias._set_view_of(source, Ellipsis, True)
 
 
