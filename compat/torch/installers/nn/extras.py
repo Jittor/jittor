@@ -132,6 +132,10 @@ def _install_nn_extras(nn, registry=None):
                   GroupNorm=getattr(nn, "GroupNorm", None),
                   LayerNorm=getattr(nn, "LayerNorm", None),
                   LocalResponseNorm=getattr(nn, "LocalResponseNorm", None))
+    _mk_nn_submod(_modules, modules_pkg, "instancenorm",
+                  InstanceNorm1d=getattr(nn, "InstanceNorm1d", None),
+                  InstanceNorm2d=getattr(nn, "InstanceNorm2d", None),
+                  InstanceNorm3d=getattr(nn, "InstanceNorm3d", None))
     _mk_nn_submod(_modules, modules_pkg, "activation",
                   ReLU=getattr(nn, "ReLU", None), SiLU=getattr(nn, "SiLU", None),
                   Sigmoid=getattr(nn, "Sigmoid", None), Tanh=getattr(nn, "Tanh", None),
