@@ -1,5 +1,11 @@
 # 整改看板
 
+## 2026-10-28 Qwen维护22项真实CUDA通过，候选仍未采用main
+
+Day2–5仍为 **Not complete**。隔离storage r3/source`2dad903f…`继原48项CPU与维护22项CPU通过后，现已完成同维护文件的独立PT/JT真实CUDA22/侧，同nodeids、0skip/error/failure、JT fallback=0。新JT-only后继manifest `a045fc77…`、receipt `9f0ca4514d13a30a79af3f9eae0fdb2c47dbf4f5ddf1c406a245f1cf6f3f4f0a`，继承已通过PT22，不重跑48/CPU22/PT22、不重冷编。显式采用真实CUDA core`16a21ef1…`/utils`4eeb093b…`/stamp`93a33c63…`，两次import均实测has_cuda=true/use_cuda=1、环境use_cuda=0；66份返回时张量记录均为cuda:0/native CUDA0。source、实际compiler.files及构建身份exact，新增64个允许JIT产物、既有编译产物无改删；自有组空、精确锁文件无内核持有记录。
+
+此前metadata-r1在测试前因正常锁owner更新被工具误判，receipt`e6470b91…`保留；另r2在执行前被差异文件哈希不匹配拦住，无attempt。最终r3只对冻结的那个jittor.lock允许owner内容/mtime/size更新，依据已编源码write_holder，路径/device/inode/权限/属主保持严格校验，不放宽任何编译产物或数值断言。root独立终审`ccc38102…`通过。候选仍未采用main；下一项为两组最小lifecycle验证（多个无holder saved-root/stop-grad/释放，kept旁观图隔离/相关reader拒绝），其后才可考虑原完整no-hook gate；原main logits FAIL10,338,462/29,171,712及LoRA禁入不变。T5、Vision、BERT和Day4–5正式性能门槛仍未完成，不能以这些局部CPU/CUDA结果升级发布状态。详见[本日结果](../results/2026-10-26-torch-compat-release-day2-5.md)。
+
 ## 2026-10-28 CUDA22导入后守卫失败，维护测试尚未开始
 
 Day2–5仍为 **Not complete**。storage r3/source`2dad903f…`的CUDA22新包manifest`70d45275…`经root审阅后唯一串行执行；独立PT真实CUDA22/22 PASS，JT完成新CUDA core与扩展后在导入后flag守卫退出，尚未collection/数值测试，overall receipt `8540056b7993d6be89d78efd35c6048fede386fecf3d0499b3206d5e7dd73c5c`保留。旧child未记录实际has_cuda/use_cuda值，不回填。静态查明公开shim安装会自动启用CUDA，不能要求其完成后flag仍为0；工具还错误沿用CPU core/utils同目录假设。实际新core`16a21ef1…`为has_cuda=1，231编译单元/779源签名可核验，utils位于CUDA子目录的父级，符合冻结compiler路径规则；该事后证据不替代原失败收据或JT测试。source/tools exact，自有两组与精确cache lock记录空，无重试/重冷编。metadata-only后继正在离线准备，须显式采用本次新CUDA core、继承已通过PT22并记录真实flag后另审；CPU原48/维护22 PASS保持，lifecycle/full logits/LoRA与其余发布门槛仍OPEN。

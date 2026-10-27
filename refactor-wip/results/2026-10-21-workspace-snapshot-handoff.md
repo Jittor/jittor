@@ -1,5 +1,11 @@
 # 2026-10-21 工作区快照与本机接续交接
 
+## 2026-10-28 00:31 +0800 维护22项CPU/CUDA通过后的续接入口
+
+Day2–5仍未完成。隔离storage r3 source`2dad903f…`的原48 CPU与维护22 CPU有效，现同维护文件真实CUDA22/侧也已通过；新包`20261028-qwen-storage-version-r3-cuda22-lock-metadata-successor-r3-prepared/` manifest `a045fc77…`、正式receipt `9f0ca4514d13a30a79af3f9eae0fdb2c47dbf4f5ddf1c406a245f1cf6f3f4f0a`。新JT22继承已通过PT22，同nodeids、0skip/error/failure、66份native CUDA0张量证据、fallback0，不重跑任何已通过部分。采用本次CUDAcore`16a21ef1…`/utils`4eeb093b…`/stamp`93a33c63…`并禁重冷编；真实import快照has_cuda=true/use_cuda1、环境0，source/runtime compile_order/build通过，新增64个JIT产物且既有编译产物无改删，自有组和精确锁内核记录空。原flag工具失败、正常owner记录被误判的metadata-r1、执行前哈希不匹配r2全部保留；最终只区分绑定的单一锁运行元数据，inode/属主/权限仍严格校验。详见[本日结果](2026-10-26-torch-compat-release-day2-5.md)及root终审`ccc38102…`。
+
+下一项是两组最小lifecycle验证：多个无holder saved-root、stop-grad常量及重复图释放；compat eager-write下kept旁观图隔离、相关reader拒绝且目标不变。先独立PT/JT CPU，再真实CUDA；Jittor特有kept边界单列，不重跑48/22，不自动扩大矩阵。r3未采用main，完整no-hook logits与LoRA门槛仍未关闭；T5、Vision原预算/禁止重试边界、BERT及Day4–5正式性能门槛不变。main此前三文档提交`4a6988f40`之后runtime源码未变，原96项dirty/index继续保留，不将隔离candidate身份或旧性能source改绑到main新HEAD。
+
 ## 2026-10-28 CUDA22导入守卫失败后的续接入口
 
 Day2–5未完成。隔离storage r3 CUDA22新包`70d45275…`已由root唯一串行执行：PT真实CUDA22/22 PASS；JT完成新core/扩展后在安装shim后的flag0守卫失败，零collection/维护测试，receipt `8540056b7993d6be89d78efd35c6048fede386fecf3d0499b3206d5e7dd73c5c`保持。旧child未记录实际has_cuda/use_cuda，不能回填；公开shim安装自动启用CUDA与该工具假设冲突，core/utils合法CUDA父子目录也被旧工具误判。新core`16a21ef1…`的has_cuda1/779源签名/231单元已事后核验，边界见[本日结果](2026-10-26-torch-compat-release-day2-5.md)，不替代JT数值证据。组/精确cache lock记录空，无重试或重冷编。
