@@ -1,5 +1,13 @@
 # Torch Compatibility Release Acceptance: 2026-10-26 Day 2–5 Continuation
 
+## 2026-10-28 05:46 +0800 r7公共pow四侧控制完成，CPU初始化链可复现保存频率
+
+新最小包 `20261028-qwen-r7-public-pow-micro-r1-prepared/` manifest `388c709b978aea0ff81610f2c86832b6099c4bfdc897c5c68e9b7a4fcc9d7d41` 已由root依次单次执行CPU→真实CUDA；两device PT/JT均自然rc0，CPU各2.391/8.577s、CUDA各3.395/36.933s，均在各自新120/180s微预算内，未重置旧模型/T5/Vision预算。CPU receipt `d978831aa55b80ef7b6643d74bb87f35c4b44d8bfd29400145cdf9ab878e824d`，CUDA `2865c203c8ebd2eaa6d0e187c3f05202d3c10bd1e27e920dd2ef437eb11bb220`；双方真实cmdline/PID/start/私有组和worker自身身份均有交叉核对，实际device/fallback0、source/core/env/组锁有效。最新CPUcache808=780+28，CUDA1350=1326+24，旧文件无改删。
+
+root两侧独立22项保存数组审计全部通过：`20261028-root-rmsnorm-r7-continuation-r1/root-r7-pow-micro-cpu-terminal-audit.json` SHA `c032331d84ad17ae72ab3e206e5f14cffe7719ed5526e525d2caf5e070a443a6`，CUDA `root-r7-pow-micro-cuda0-terminal-audit.json` SHA `2d6ec391b19d858559b13dc498c5a8afe8fa32223e997ff800102133d0b00aee`。64项中独立PT CPU inv_freq逐位exact保存PT，JT CPU逐位exact保存JT；两CPU的power仅1项不同，但inv_freq及reciprocal均24项不同。新PT CUDA相对保存PT不同2项、JT CUDA相对保存PT不同1项；同device CUDA两侧power不同4项、inv_freq不同3项。故不能把保存PT频率当作CUDA初始化结果，或直接修改CUDA double-only `_signed_pow`来解释本次保存频率。四值既有reflected-pow数值控制及六项正负/整数/非整数NaN语义均通过；NaN payload位不同不等于有限数值差。
+
+新CPU生成源码可见整数theta与float32 exponent经 `std::pow(int,float)` 产生double的auto局部，后续融合double除法再castfloat32，虽然pow张量声明float32；这是待最小干预验证的中间精度假设。下一项仅离线准备int/float/f32 tensor基底和保存power重建tensor的断融合控制，尚未执行，未修改r7或创建r8。独立审计首次把CPU launch环境直接等同进程环境，因已知CPython增加LC_CTYPE而rc1；失败记录保留，改用冻结expected_process_start精确合同后只重跑NumPy审计，没有重跑四侧数值。fresh fetch仍e5cffe1a为五树祖先，原dirty字节保持；原完整no-hook仍FAIL8,690,528/29,171,712，LoRA禁跑、候选未采用main，其他FAIL/原预算与Day4–5门槛保持，发布 **Not complete**。
+
 ## 2026-10-28 05:38 +0800 r7首层attention同输入控制有效
 
 新微回放包 `20261028-qwen-r7-first-attention-replay-r1-prepared/` manifest `e739f1bade43ee3a7d6d814b3d98dbcb1476077fcb81dd1a2244352bb9fe849d` 已由root逐阶段单次执行。独立PT/JT均native原概率逐字exact、manual/public概率及pre-o exact、显式BF16 matmul与AMP exact；各在新300s微预算内自然rc0（10.672/33.255s），不是性能结果。正式PT receipt `33d2fd50b529812d14823a056f8954ae86fec32ad9f980a234d77aae3d6caa2a`、JT `ba9f058573a2cd2845fad5533318fcad3acaa2c0a6d1e14830b6a040f7c4f001`；独立saved比较receipt `1fb8dbcc82c8e2ec8b06074c4dba2e9d7ca1dd3580fbfc16954bcff38804c068`、result `d4c86356ba678e5adc619a493766a082cf5be13e39b354b867054af74794de6c` 已在原120s内自然完成。三个exec30264/59089/26655均收回。
