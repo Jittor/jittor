@@ -2,7 +2,7 @@
 
 本记录对应[综合计划](../testing/2026-10-21-ascend-integrated-compat-plan.md)，唯一活动状态源为[整改看板](../architecture/refactor-board.md)的 ASC 任务。前半部分保留 2026-10-21 的 MAIN-r28/123 历史验收；后续各 cohort 按各自冻结源码区分，不相互外推。R65 真实 Qwen3-0.6B BF16 LoRA 对拍与 R68 最终主树 FSDP2 双卡 Linear 对拍均绑定提交 `9390fa0e84de651e7e1b01de4d142e04d4333f8b`、3336 文件源清单 SHA256 `c00986fb31e15e18860acf60e2ee0059c7dc63afb90ef0a286131d9fc7eb0f9a`；旧 R64/R63 仍只对其原冻结源码有效。下文保留原始失败和未运行项。
 
-> **截至2026-10-26 R232：** 已有本地提交c3b1990bb修复同state tied参数身份。R232进一步确认公开full_tensor/to_local优先解析了本micro梯度而非optimizer累计buffer，只修发布引用；真实CPU原14P/新增4F到18P，扩大专项205P/31原accelerator skip、native48P、core341P。另2 NativeCPU+8 Jittor新进程的100共同完整数组逐字节一致，显式no_sync首grad发布范围差别保留。以上不是NPU/完整模型通过；最终新主树Qwen六阶段仍待。此前73083/3350源的Native真实Qwen71检查/57078指标strict0；R229 nested FP32数值30/30P、双rank输入梯度exact，两BF16各15/30P，整体FAIL。私有重计算、随机训练恢复及合格NPU性能继续保留未完成范围。
+> **截至2026-10-26 R250整合：** q008真实Qwen六NPU阶段及两侧各71项strict0恢复仍成立，跨runtime原比较仍FAIL124/272。其272条已保存policy记录均为True，不能沿用旧轮JT False标签。source006的CPU精度阶段61P/3S、Native core103P/45S/1xfail、Torch core238P/1S均实际完成；完整structure先有收集失败，再因监护取消，首F已定位outer subreaper持有未reap的own zombie，未授完整门禁资格。R249/source004原252数组仍44F。R248两类真实梯度反例已取得；R250现已把逐edge类型、非loss hook和单次sum-to修复及维护回归写入主树，但新core尚未编译，不能借8725/旧源通过。无新源NPU或性能通过结论。
 
 | 本轮验收 | 实际结论与源码范围 |
 | --- | --- |
@@ -13,8 +13,8 @@
 | 八模型及综合 Trainer | 各自 source65 等冻结证据上，八模型完整输出/271 参数+2输入全梯度；Trainer4updates/8micro、61跨runtime检查；连续与2+2恢复216完整状态及轨迹 exact，历史fixture为dropout0顺序；R51/R56另对dropout=0.15的tiny BERT LoRA做Native/Jittor各自fresh-process恢复 |
 | 共享真实权重推理 | 0.6B既有冻结源码BF16完整推理P；source121的1.7B与4B各3输入/15完整数组/58,343,424 logits bitexact、cached/uncached greedy8 exact、actual NPU/fallback0；不是123重跑 |
 | 最终主树 AMP | source123 no-loader baseline 10P/0skip；source ee0146… 上 R43 完成 BF16/FP16 × FP32/低精度输入 × Linear/LoRA × 2步共168阵列/5760元素 Native/Jittor 对拍：168/168 bit-exact、最大差0、预算未改。修正共同显式cast参考后，source manifest r2 正式单测 Jittor 10/10通过、Native 8通过/2项Jittor-only跳过 |
-| 真实0.6B BF16 LoRA | R65历史及R182单步保留原范围；R213补齐独立Native 112个LoRA参数的真实双卡4updates/2+2恢复，完整124轨迹strict0及资源验收通过。Jittor最终源码完整对应轨迹与全交叉仍待；旧R183/R185失败保留 |
-| FSDP2 | R130 Linear的三种dtype组合保留原冻结边界；R182真实模型单步数值通过，但Native rank1仍见于5/6两卡，严格映射待验。R185默认SHARDED保存失败；完整训练恢复、nested拓扑、重计算与性能未验收 |
+| 真实0.6B BF16 LoRA | q008绑定d193/3351，Native及JT各自4updates/2+2 fresh恢复六阶段实卡完成，各71检查strict0；跨runtime原比较仍FAIL124/272。R65/R182/R213及旧R183/R185保持各自历史源码和协议边界 |
+| FSDP2 | q008 d193/3351两runtime各自训练恢复通过、跨runtime仍FAIL；R229旧源nested FP32通过、两BF16失败。source004的CPU混合精度44P，252数组数值仍44F；R250逐edge/hook/sum-to修复已整合但新core和数学待验。最终主树双卡nested、公共状态布局及重计算未验收 |
 | 速度/显存 | NPU未验收。1.7B配对流程仅18交替calls后停止，generation steady/decode未完成、rc-2/acceptedfalse；4Bperf未运行，CPU控制器资格不能替代NPU性能 |
 
 尚未达到全部适配退出条件。R65在提交 `9390fa0e84de651e7e1b01de4d142e04d4333f8b` 的3336文件清单上完成真实Qwen3-0.6B BF16 LoRA Native/Jittor full、prefix与fresh-process恢复，跨runtime 2187项比较无失败/无超预算，两侧各自恢复状态933项exact、梯度分段各1136项全通过，Jittor fallback为0；该协议固定顺序且Native deterministic为true、Jittor策略为UNIMPLEMENTED_FALSE，不能宣称两侧随机流或确定性策略匹配。R68在相同旧提交和清单上通过双卡Linear FSDP2 fixture。R130则绑定当前提交 `f5af805ab30aced4aefc214df257a0b575ca36a2`、3336 tracked files 和 source manifest SHA256 `31a590acb78ffcedd4de62f9bd8f84e5f84870a5506c9c046445308b5db51d9e`，三种 compute/input dtype 共126项比较零 mismatch、最大绝对差1.49e-8，两个rank的Jittor fallback增量为0，物理NPU映射为3/6。R130只验证Linear FSDP2输入叶梯度、参数梯度和SGD更新，不能外推到真实Qwen3反向、nested拓扑或恢复。R67的初始化前路径断言失败仍保留且已在R68修复；R68不覆盖真实模型、复杂分片/视图拓扑、恢复或重计算。R169历史更新差异已在R182限定单步协议中通过复验；还需完成最终主树多步完整轨迹及恢复、复验R71 nested child+root HCCL，验证activation checkpoint真实重计算及随机sampler、多worker/generator fresh-process恢复，并处理deterministic策略不匹配；把常用Trainer、Accelerate、Tokenizers、PEFT、safetensors的数据处理、训练包装和保存重载组合映射到当前源码。只对正确性通过的对应工作负载测吞吐、延迟、峰值显存和稳定性。当前没有合格的NPU速度/显存结论。raw CPU core四文件另有46P/9S/1个原样test_concat_random的300秒超时，未删case、缩规模或放宽超时，不称全部core通过。模型与fixture、性能与功能、旧源与最终源均不混用。
@@ -1944,3 +1944,590 @@ source-before.json为190ba8bfc52deae86e65663a281d7d8b8cc09448e8d1f60a94a3e12e2d5
 门禁后仅ASC-01与本报告补记实际结果，其余3349源/测试不变；最终文档再查layout/links/diff。
 本轮CPU通过不替代新主树NPU：后续使用原R227完整六阶段入口、新q006 cohort、新源码清单与fresh资源；
 保留原比较器3f8d91a1898889788a0be45ad7457b0d1d589461b6763277ecaf2d3620f65bb8及全部固定预算。
+
+
+## q008与R240—R247：真实六阶段完成，跨runtime仍失败（2026-10-26）
+
+q008绑定MAIN d1934d7de97eee196133100822ee4bb1f1684ee5、3351 tracked文件，
+完整源清单SHA256为30842b7c351bb498386a8827b9de9fc170bd3883ba019ef9c21b8eb7599572e3。
+实际物理3/6，保留原4updates、8micro、累积2、step2中断及112个LoRA参数。
+Native continuous/interrupt/resume分别281.387/206.822/253.629秒；
+JT分别239.665/188.975/201.877秒。六阶段均qualified、自然rc0，
+gap/foreign/wrong-placement为0；JT实际NPU且fallback0。
+这些是功能运行耗时，不是交替至少10对的性能结果。
+
+原比较器3f8d91a1898889788a0be45ad7457b0d1d589461b6763277ecaf2d3620f65bb8未改。
+Native、JT各自71/71检查通过，恢复预算atol=rtol=0；
+跨runtime仅6条件检查P、124捕获检查F，global仍FAIL。
+8960份完整梯度比较记录全部在原预算内，并不代表bit-exact或tiny梯度同号；
+10304份更新记录中5312F，最大绝对差3.290420863777399e-5；
+64份forward记录中16F，最大差3.125。
+原shape/storage dtype、live optimizer step和raw param_groups字段差异也全部保留，
+不通过更改observer、归一化metadata或放宽预算取得通过。
+完整comparison SHA256为4d5ef65bcc7539a72d5da7e8416187fdd820c70a95ef4c0d2a3bbe08966ac64d，
+位于LAB r227-q008/qwen3-06b-fsdp2-trajectory-r186-dual56/，旧leaf名字不代表物理放置。
+只读诊断入口为_state/ascend-compat/real-model/q008-full-original-diagnostic-20261026-r1/。
+terminal审计0f10e8ca5cb50832509dbfa475aa3222984cbdea8990f077b56c2e037c3a6742
+确认34精确自有身份和组均退出，4662文件/264NPZ封存、源不变，原比较失败rc1保留。
+
+R240对92NPZ及92sidecar完整四步回放：各自postclip梯度到m/v/参数的AdamW
+最大参数残差不超过8.631e-9，复现原跨轨迹差异；不支持clip被覆盖或AdamW公式错误。
+step1两micro、两rank的完整输入、logits/loss和112梯度byte-exact；
+step1更新后112个FP32参数的显式BF16 RNE像全部相同。
+step2首micro输入和logits/loss仍exact，但111/112梯度数组已不再bit-exact，
+最大差2.44140625e-4，229个相反符号、395个一侧为零坐标。
+因此首次已观测偏离在第二次更新前的backward；尚不能仅凭RNE像排除微小FP32 master影响。
+交付_state/ascend-compat/real-model/q008-first-adam-clipping-diagnostic-r240/，
+delivery SHA256为032d78236c80cb7aab9d8f396d30a662da08834e7f41d9a5410adc4b6de63896。
+R241 source-only进一步确认末端BF16 grad cast存在、无bias LoRA GEMM走C++ VJP；
+更早edge/merge舍入与AMP回放仍待实测，不能把候选写成根因或修复通过。
+
+独立Native CPU stochastic reference使用tiny BERT LoRA、dropout0.2、随机sampler，
+在epoch中途step1保存，fresh恢复后完成原4updates。
+76轨迹文件/30523数组atol=rtol=0全部通过；完整样本顺序、RNG及next draw保留。
+入口_state/ascend-compat/checkpoint/random-training-resume-native-cpu-package-20261026-r1/，
+parent-closeout SHA256为15372b9880f78dd18b0f8809ab29ae4b16131a7d93a9c0e9478e9b011ab84d1d。
+此处仅Native CPU，JT随机恢复、NPU及多worker尚未取得相同验收。
+
+R238 actual004原数学worker在CPU helper调用公开拒绝的npu.is_initialized时退出。
+R243只修维护helper：已加载编译器和不可变BuildConfig均明确非ACL、
+已知backend、两执行flags明确0，才以non_acl_build证明无初始化NPU；
+Native保留真实query，ACL/未知/冲突在任何NPU调用前拒绝，公开npu API拒绝不变。
+新增维护回归host红绿3F到8P，R242独立34分支检查P；原缺flag误放行及修正证据保留。
+actual006真实导入cfg6af/core66cb后，helper通过，compiled has_acl/config.has_acl均false、
+config.backend=cpu、use_acl/use_cuda0、fallback0、无torch_npu。
+随后原worker在torch.use_deterministic_algorithms(False)处因native provider无callbacks退出，
+模型未开始，新数学数组0、整文件24tests NOT_RUN。
+handoff SHA256为7ced286f840564f753cca256e491a2f962485f8a0af40d20e65671cb4b609ac7；
+两轮均正常失败退出、监护actions空、所有自有身份/组退出、lease已释放。
+
+R247将修复落在原core runtime/backend owner：没有两callbacks时Jittor强制策略默认disabled，
+允许查询false及重复设置false；true和残缺provider仍拒绝，
+完整provider实际setter/getter/readback及异常传播保持。
+不声明已关闭外部库的独立选项，也不声明CPU强制确定性已实现。
+实际两C++函数提取后host编译，原8P/3F到11P；维护Native/provider及Torch回归已加入，
+但新core编译和真实回归仍待，旧core66cb不能用于证明C++修复生效。
+证据根_state/ascend-compat/distributed/backend-default-determinism-r247/及cpu-runtime-evidence-main-r243/。
+
+本轮server fresh HTTP1 fetch实际rc0，两tip仍305c2f086与ca56aa802且为HEAD祖先，
+没有重复合并、reset/stash或push。记录见LAB handoff/resume-r243-1792952681/。
+本节追加及ASC更新只更正证据状态，不授予尚未执行的CPU数学、新源NPU、公开重计算或性能资格。
+
+
+### R247独立新core：编译完成，生命周期阶段仍FAIL
+
+新私有空cache实际完成244/244编译并加载CPU core，
+SHA256为8725ba3d974ebc30ce6138bd1b0a52c5bc41681b5bd7fa3b2fd510efc0c5c9d7；
+canonical stamp为f84ea206e5ba13c4659361afb4c9bb8abac43e6f38479b795590831e2c2cca94，
+build_config为24844adcaf8691fabdd4ee767af2a93ef6e5b8f1c00b4bee3e3bacafc877fa34。
+实际CPU/nonACL、use_cuda/use_acl0、fallback0、无torch_npu，旧66cb未变。
+但ready时一个直属python child仍为S态，原supervisor拒绝seal并对本任务组SIGTERM，
+worker rc-15，整体FAIL；此artifact尚未授予数学运行资格，不能仅按二进制已生成算通过。
+原monitor1605采样/27168004字节及完整失败保留。
+
+child从jit_utils加载附近持续存在；最后compiler/linker已结束后才ready，
+所以不是仍在编译或zombie。其形态与tracer预fork服务一致，但原采样缺FD/maps/wchan，
+没有把推测补写成原阶段已确认角色。
+终态982精确身份全部退出、组及cache owner空、源码3352和site/tools末检P。
+入口_state/ascend-compat/distributed/fsdp2-pointwise-precision-r238/new-core-prepare-001/，
+handoff SHA256为6e6aa638b68cce9116ff8a0ac92da0bf0929dc0cf404f12402fc29dad1d8b963。
+下一步仅受控诊断该helper；原失败、旧/新core及stamp不改，不通过放宽未知child守卫放行。
+
+### R248独立Native CPU：反向edge舍入参考
+
+固定Torch2.7.1+cpu/e2d141dbde55c2a4370fac5165b0561b6af4798b，
+BF16/FP16的custom Function、普通mixed乘法、每支独立cast和共享一次cast，
+原16case/94检查/662完整数组全部通过。
+custom backward原始返回FP32且内部没有dtype cast；Native在各edge转换后再合并。
+BF16首坐标原1.00390625与-1分别成为1与-1，最终0；
+仅末端cast预测为0.00390625。FP16对应1.00048828125与-1，
+最终0而末端cast预测0.00048828125。共享一次cast再分支的对照则符合先合并再cast。
+这些只证明该版本Native CPU的实际graph合同，不证明JT/NPU或q008根因。
+
+原full observer在Node.register_hook捕获校验后edge；JT目前没有该公开Node hook。
+保留原662协议，另建无Node辅助observer的独立数学诊断，
+实际Native16case/62数学检查/500数组通过，
+全部500共同数组的dtype/shape/data/NPY bytes与原捕获exact，
+证明去该辅助观察对Native数值中性，未改数学/RNE/leaf或Tensor hook断言。
+不以新500分母冒称原662协议或Node hook支持通过。
+两次均正常worker/controller rc0、握手完整、全部身份/组/descendant退出，
+Native site22019与tools24完整末检P，无编译、JT、torch_npu或NPU。
+
+入口_state/ascend-compat/real-model/native-edge-gradient-rounding-r248/；
+原parent-closeout为b07352ce8966fc9a39342d94261311f1d9cc1c972a9a3f051cc9f5577bd5a076，
+新增math-only closeout为abb779f890f8b605ea1985925e4d3a6d438f5f37a4c234b73ee26e515801597f。
+两份shim候选仅源码准备，尚未运行；公开Node hook和新core准入边界保留。
+
+### R247后续生命周期准入与R249已复现pointwise修复
+
+原new-core-prepare冷构建的rc-15失败保持原样。另立helper-probe，仅零Tensor导入，
+实际确认直属服务child的jit_utils映射、双向pipe/read等待和CLOEXEC；
+canonical cleanup后精确child身份退出，未把该诊断算数学或自然退出通过。
+随后只在真实签名逐次吻合时识别idle trace服务，未知child/编译器仍拒绝，
+实际测试入口不调用cleanup，原PID generation、全部后代及组退出要求保持。
+该后续四阶段绑定3352文件源清单603f262146003b648d4d65b02439db60ae7258914df95853550ad0d8025c548f：
+Native runtime整文件6P、Torch backend整文件15P、生态runner整文件24P，均0失败/错误/跳过，
+worker自然rc0、seal/ACK完整、监护actions空。数学worker也完成6case/252数组后自然rc1，
+原report FAIL且无内部traceback。135个owned generations全退出，组/cache owner空，
+源码/site/tools及新8725/旧66cb二进制末检通过。
+
+实际数学red明确24处dtype错误：四个BF16样本的branch-add、tanh输入/输出、
+三种公开tanh均应FP32却成为BF16；child返回FP32、GEMM为BF16、master梯度FP32，
+公开autocast关闭且AMP还原正确。Tensor.mean、nn.SiLU、F.silu的dtype未错。
+原比较器因report FAIL原样拒绝；额外只读NumPy诊断沿原atol2e-6/rtol2e-5，
+252数组中75数值失败、108 byteexact，FP32两个rank共84数组全在预算内。
+BF16 rank0 lora_a GEMM在branch-add之前已有值漂移，SiLU dtype正确但值也漂移，
+所以没有把全部数值失败归因于pointwise，也没有修改参考或数值预算。
+
+R249只应用AMP内部FSDP词法标记、既有binary/native precision委托与Tensor.tanh委托，
+保持公开autocast关闭和GEMM原计算偏好，并保留FSDP外显式native AMP旧行为。
+原7文件源码候选中尚未复现的mean与NN SiLU修改不应用；
+现有mixed-precision维护文件新增12个真实公开singleton FSDP回归，覆盖嵌套两dtype、
+flat/nonflat、child/root异常和同实例重试。当前只有AST3.7/git diff检查通过，实际回归待验。
+
+证据根_state/ascend-compat/distributed/fsdp2-pointwise-precision-r238/：
+post-core-prepare-001/result.json SHA256 c1afb3571aec431c93d49ea456939ba3b19bd468126d113cd1b49464338d5a80，
+final-terminal-audit为cffd22ce1726bf41ee68a8422299c8ee3ac7748cc807f1b39b932e4e75c6e63a，
+数学report为df596211e00c6b0346b8086e0945fe010ed0623a39c8472b5764fe646534a8eb，
+完整NPZ为b2cdc6700a94b04031756e8d0c514b2aab00cfd944cc3457423ae88b1a692dfa；
+只读numeric-diagnostic-002/result.json为38fd36fc8b70e539ee5c6c7e3ddc5f13d80713fd48a72c2d9e1b18f4310cf7d7。
+修复及未应用原候选保存在fsdp2-pointwise-main-r249/与r246/，新运行必须新cohort。
+本次fresh HTTP1 fetch rc0，wip305c2f086和2.0-refactor ca56aa802仍为HEAD祖先；
+记录handoff/resume-r249-1792958748/，无重复合并、reset/stash或push。
+
+R249首轮7550源实际mixed-precision整文件43项为31P/12F、0E/0skip，
+12个失败全部是Tensor.add把FP32降成BF16/FP16；同轮先检查的operator_add和torch_add已通过。
+这不是监督故障：worker自然rc1、actions空、81个owned generations及全部组退出，
+源码3352/7550、site/tools与新旧core完整末检通过；原失败/JUnit完整保存，math和comparer未启动。
+入口pointwise-fixed-prepare-001/final-terminal-audit.json SHA256为
+e611d8defdb4e5377354510cf56be69887fcf2666018330604910941270c7114。
+其后只补Tensor.add到既有_add的薄委托，alpha保留关键字语义并登记fidelity；
+同12个公共case增加alpha=2和完整数组值检查，不改原6case/252数学worker或比较预算。
+这份补充尚待新cohort复验，不能把首轮失败写成通过。
+
+R249第二轮d557源实际整文件39P/4F、0E/0skip；余4项均为child/parent异常用例的
+Tensor.mean在outer keep_reduce保留时降精度，新增8个正常嵌套/flat用例已P。
+不是单凭首轮普通作用域mean dtype正确就外推全部作用域。该轮同样自然rc1、actions空，
+45个owned generations及全部组退出，3352源/15dirty、site/tools与新旧core完整末检通过，
+math/comparer仍NOT_RUN。pointwise-fixed-prepare-002/final-terminal-audit.json为
+6ded7d90a02907ad883f6e87135f383d54a1a38aaf1efb2e38e5def6806eb490；
+handoff-result为f72891a8f9945a475d9e6fa92d01e1710f2b28a6f686f01374d3ddbd34338ad1。
+据此才将原先未应用的mean owner纳入修复；只清低精度偏好而保留native keep_reduce，
+让FP32及低精度输入均保持各自dtype，FP32内部累积策略不改。
+公开Tensor.mean与torch.mean使用一致策略，同12case追加两种低精度输入的dtype/完整均值检查。
+这些新补充待第三个独立cohort实测，NN SiLU候选仍未应用，原预算/数学worker保持。
+
+R249第三轮00b07源整文件43/43P、0F/E/skip，原数学6case/252数组report PASS，
+原24dtype错误全部消失，两阶段均自然rc0。原bb2独立Oracle NumPy比较仍FAIL：
+99/252数组超原atol2e-6/rtol2e-5，四BF16组合分别23/26/24/26F，FP32两个rank各42全在预算内；
+两个updated/head.bias超预算，其余更新在预算内。comparer自然rc1、actions空，
+30个owned generations/全部组退出，3352/source00b07与16dirty、site/tools末检P，core新旧未变。
+入口pointwise-fixed-prepare-003/final-terminal-audit.json为
+64bfaf172c06527675d719535eac9a0d695b04261390d9b95e317b44d917befd，
+数学NPZ为24eaf43b27293e0986e0244187779b3688f916d21c552fcdea652eb643207df4，
+原比较为9581a20f37994bc5bb136b10c3e21fdcc1f5c853e3c6795c2f108163d861fa5f。
+
+只读完整数组三向诊断确认四BF16 base输入及36份初始参数均相同，
+旧base对Native逐字节一致，003却新增2/16或6/16坐标偏离，最大1.953125e-3；
+biasless LoRA输入/输出新旧逐字节相同，既有偏离仍在，head输入已改变不能直接归因。
+该证据及generic CPU日志与native内部prefer32被新binary guard清零的源码路径一致，
+但原捕获缺compute-weight/乘积中间值，不称唯一根因实测。
+对应LAB r238-marker-gemm-numpy-comparison-001/delivery.json为
+5fedde4cf10cee551fe332229aed423367e8d47b95bf6f4562000da4a4e2e970。
+据此将FSDP标记改为线程局部精度栈，仅保护其自身隐式compute偏好，
+Native kernel显式进入不同precision时保留其累积要求；公开autocast策略未改。
+新增公开singleton FSDP Linear舍入/完整梯度回归，整文件现在44项，尚待实测。
+独立Native Torch2.7.1 CPU已实际通过explicit BF16 cast及autocast两case/16完整数组：
+输出1.0234375、输入/权重梯度2.0625、bias梯度2.046875；
+linear-midpoint-native-cpu-001/完整NPZ为47517123791e3f3f1902f6c48e86db354a3b4177163cd70e3a65d5b1c36b9941。
+此前mean-native-cpu-001也实际通过4dtype×3autocast的12case/60数组，
+NPZ为45f2497e7262c23b7a899b4606e3b522db7bb4e4c54d32b75c58d4bbbce44b82。
+两份新增Native参考均不声明CPU FSDP或NPU通过；原失败与预算保持。
+
+R249第四轮d11c/source004实际整文件44P/0F/E/skip，含新增公开FSDP Linear中点及完整梯度回归；
+原a835数学6case/252类型合同P，原bb2仍44/252数组超预算（四BF16为13/8/14/9，FP32各42全P）。
+全部prediction、loss和updated参数数组均在原预算内，最大差分别7.45e-9、1.86e-9、6.11e-7；
+残留input-gradient两项、head.weight梯度两项、lora_b.weight梯度四项及中间/辅助数组失败。
+独立stdlib读取NPZ确认四个BF16 base output的完整NPY bytes恢复与Native一致，
+不是用最终输出通过掩盖中间差异。math NPZ为37e3db3987e2b295d8fb462a2eba15a6a745a3874187de87c4dabf402fdc5d14，
+原比较f8061c2bc5f436c5fc7b83006745d6313fdcedb5fb6f0aeb7494eea3b1183e5e。
+72个owned generations全退出，source3352/16dirty/site/tools末审P、core新旧未变、锁释放；
+pointwise-fixed-prepare-004/final-terminal-audit为e220c084c4343e93f5ce47ec7c5cfcc979a5343fd3a328b3ae8c20cf076e24e1。
+
+004的8个auxiliary失败全部为nn.SiLU/F.silu，输入base-return完整NPY bytes两侧相同，
+且各runtime的module/function输出互相byteexact；这些detach辅助输出可隔离到SiLU数值路径，
+不据此解释主训练图梯度。源码最小compat候选及完整双runtime低精度路由验证仅在LAB准备，未应用。
+入口R238/004-silu-offline-001/delivery-v2.json为c8015950098dad9c6c2f8793cf9e9777154b88d5c6cc2ca13a4c76e19d6340bb。
+
+随后提交门禁首阶段真实20项16P/1F/3skip、0E，唯一F为已有test_bfloat16_linear_rounding的
+普通FP32 master Linear公开CPU BF16 autocast用例：1.015625而非1.0234375，原差0.0078125；
+该断言之后的梯度尚未执行。三个原skip为oneDNN unavailable、CUDA unavailable和CUDA closure contract。
+worker自然rc1/actions空、333个owned generations及全部组退出、source004/sites/tools末审P；
+Native core/Torch core/完整structure按原门禁NOT_RUN，没有缩选择、改期望或重试。
+final-gates-prepare-001/final-terminal-audit为2d546003c1fa6e69bd045e199a5e5128bc64a2253710e0a5a97adff1621eca37。
+据此将公开autocast保护也限制在其自身当前隐式compute偏好，保留Native累积器显式FP32请求，
+复用既有effective-device/dtype/register owner，不复制Native数学；该补充待新cohort实测。
+
+### R248真实JT CPU反例：协议未完成，不能写成500数组通过
+
+专属单次运行绑定source004/core8725，第一bfloat16/custom/both_lr已计算并保存完整目标、
+两条raw FP32 VJP及BF16叶梯度。两raw VJP与Native全值一致，实际叶梯度八坐标全部等于
+merge-FP32-then-cast预测，并全部不同于Native each-edge预测；首坐标1.00390625+(-1)，
+JT为0.00390625/bits3b80，Native为0。它是实际数学反例，但不是Qwen唯一根因证明。
+原NPZ没有任何incoming hook key；不能从缺少low_bits推断hook收到FP32，原错误推断已纠正并保留审计失败。
+worker在读取incoming key时原样KeyError，协议completed_cases0、仅30数组、无report，
+没有补值、删hook、改变数学或凑到16case/500数组。原始NPZ为9b8560a5030f5836a9377d7291fa3c731490a73032c2fd1b018b68fd5cd72ca9，
+独立witness为7c9d7471b1a67c70a6f3fc5a609fa91cb70fc63f6a5bb190130e834b22a5269a。
+controller/worker自然rc1、actions空、15owned全gone/groups空、无unraisable，source004/sites/tools与core末检P；
+真实审计8b4679eea25105b43e01ba5078d9cf6f0f543cf7df9ef2c5c5cd0e2492870701。
+入口_state/ascend-compat/real-model/native-edge-gradient-rounding-r248/math-only-shim-parent-prepare-001/。
+
+源码核对发现上游已整合tip ca56aa802的grad.cc有非loss完整梯度hook执行段，而当前本分支缺失；
+per-edge dtype校验上游仍未补。两者分别准备候选，未写入主树、未建立新core或授数学通过。
+独立Native Torch2.7.1 CPU又实际完成4case/11数组hook参考，确认注册/移除、loss恰一次及
+requested nonleaf同时/单独请求的raw capture差别；NPZ为3e5161864c8f5fb851b1c0f959a85beea2df3c1b3edd55fc65a7e30fcae70e73。
+所有NPU模型、重计算、随机恢复和性能边界保持；新NPU prebuild0/1→prewarm0/1→full包仅源码准备。
+
+### 提交门禁的公开autocast修复与oneDNN分类阻断
+
+source005/06bcef的首阶段实际包含原3个precision文件及整44项mixed，
+64项为61P/0F/0E/3skip；公开autocast midpoint与FSDP中点/完整梯度都已执行通过。
+但pytest真实rc1：唯一other是原reason optional oneDNN library is unavailable，
+现有strict require-execution策略据other>0拒绝该run，所以仍记FAIL，后3stage均NOT_RUN。
+原skip/严格阈值/选择/900 timeout均未改变，1740累计closed身份及组退出，
+source3352/16dirty/sites/tools/core末检P；final-gates-prepare-002/final-terminal-audit为
+35f0ae1b3e55be51d5ae61912e82ad00330880702e89dbfb31e6224fc940c4ee。
+
+canonical gate_scope原名单已接受mkl及构建缺cmake等同类环境事实，却漏oneDNN名称；
+在同一名单补onednn，不改skip本体和pytest_policy严格other阈值。
+维护回归增加真实oneDNN reason应归environment及未知optional library仍归other的对照。
+stdlib执行实际classifier AST，原reason由other到environment，两个未知reason保持other；
+未导入框架，不把此host分类检查算完整pytest门禁通过。
+证据_state/ascend-compat/distributed/fsdp2-pointwise-main-r249/onednn-skip-classification-001/。
+
+
+### R249最终CPU门禁：三个通过阶段与两轮结构失败分开保存
+
+source006完整3352文件清单SHA256为95c10cbfa5a4e1579a2589f03164e18d99f1b7a5ea3861fa567626d2afe40330，
+HEAD为d1934d7d、当时18dirty，实际使用8725 CPU core。precision-neighbors为64项61P/3skip；
+Native模式core为149项103P/45skip/1xfail；Torch模式core为239项238P/1CUDA skip。
+三个阶段均自然rc0、seal/ACK及退出审计通过，oneDNN原因归类修复已实际生效。
+原四阶段003的structure则在benchmarks.asv收集时失败，1666已收集、0执行，不能称1666通过。
+003完整终态审计为6e87c4b0c033de208ca84bd08b9c297808a3853d8bb4ddc8b6f8ba7b9e83d1f2。
+
+标准tools/run_test_suite与python -m pytest在仓库cwd执行；本轮私有cwd启动器缺仓库根搜索路径。
+新structure-only入口仅恢复该路径，实际benchmarks来源和SHA确认是主树包，原收集阻断消失。
+完整选择实际开始执行后，原global compiler守卫触发，监督只终止本任务精确owned目标；
+worker rc-15、两次停止动作，无最终report/JUnit。触发foreign的PID在原异常前未落盘，
+不能事后推断其归属或将本轮改成通过。失败及fce9b00e7f90b737fd40a8a2d5478655bfcb9428de2a6afc7db6ae9205256c59终态审计保留。
+
+独立首失败诊断保留完整1676项收集，仅用-x取得原失败，实际执行74项73P/1F、0skip、rc1，
+不授完整structure资格。失败是test_child_process_contract.py::test_a_timeout_ends_the_grandchildren_too。
+同一grandchild的21次真实监护采样从S/原父进程转成Z/outer coordinator，并在失败前已是Z；
+outer subreaper只在结束时reap，测试的kill(pid,0)因此仍可查询该PID。
+这不证明活进程漏杀；原测试、2s超时和200次等待均未修改。
+监督末端对该已知owned Z的额外SIGTERM动作也保留，不冒称actions空。
+首F终态审计a9582d7c555cfe3ef27ddd431a07d4fd75346af93467d4af8c7e3fe298eb3e88；
+3159个累计精确代际全gone、组/缓存owner/编译器为空、原二进制字节未变。
+证据位于LAB _state/ascend-compat/distributed/fsdp2-pointwise-precision-r238/对应003、structure-only和first-failure-diagnostic各独立目录。
+
+### R248多轴真实反例与R250生产整合
+
+独立Native边界参考另实际完成12case/228数组，涵盖重复输入slot中的None、单Node双输出完整VJP、
+低dtype sum-to先于目标dtype转换；完整NPZ为3bae4729482727c1a41c520512245ff4269242cdb3aca6a6cfeb4a7a21c595e7。
+这是轻量Native CPU数学参考，不补造未捕获PID的完整连续生命周期资格。
+
+随后Native四例实测FP32叶形状(1,1)、低dtype raw VJP形状(2,2,1)，leading和singleton axes一次归约。
+BF16/FP16 half-ULP fixture的Native梯度分别为0.00390625和0.00048828125，
+分两次低dtype归约的事后控制均为0；两full-ULP控制分别为0.0078125和0.0009765625且两法一致。
+原backward直接返回raw，不做观察端归一化。Native4case/96数组NPZ为
+76e75505d8d0d7b08eb00d3edab0c677694f5bbb6441e22c5933fc06407e74d9。
+
+source006/core8725上的真实JT独立复现不用Tensor hook，完整4case/88公共数组保存。
+两个half-ULP叶梯度实际均为0，两个full-ULP控制与Native exact，且每case backward恰一次；
+所有incoming/raw和事后控制的公共数组严格字节相同。原总断言自然rc1，
+NPZ为87172db074513b20dd8f4961d886bef639fb4d58fc2e797c9185111c6b2f660e，
+report为2fc581bb754af250249a2f06114ee2e840667228766198e308b48dacd192789f。
+严格88比较共8数组F：4项是两个真实叶梯度的values/bits差异；
+另4项loss/bits的payload相同但Native为0维、JT为1维，values均0维且相同。
+两侧bits采集实现不同，原数据和严格FAIL保持，不通过reshape或豁免取得通过。
+该新协议不替代原R248 500/662，也不声明Node或Tensor hook已支持。
+终态审计18c12b6d5dcc1890c4a01525c631f43d6f009cf852159b0a30c606c140bb4cd9证明33owned全退出，
+完整源码/site/tool及新旧CPU二进制末检通过。
+
+据两类真实反例，R250现已修改grad.cc/h和compat autograd：
+Torch反向使用可嵌套恢复的TLS逐edge dtype策略，完整VJP先按记录形状归约再转换目标类型；
+同一普通op的多output先组成完整VJP，不把不同input slot的贡献混为一条edge；
+跨edge累积保护已归一类型，Native默认路径保留。非loss Tensor hook回补的是已整合上游tip已有十行实现。
+Python sum-to把leading/singleton axes合并为一次归约，原reshape保留。
+五个既有维护测试文件加入独立判别回归，原用例AST保持。没有冗余的raw dtype补cast，
+因为当前ReduceOp本就返回raw dtype；Python callback前后AMP作用域另待实测，未顺手修改数学。
+应用与精确八文件SHA见LAB _state/ascend-compat/real-model/autograd-edge-main-r250/main-integrate-001/result.json，
+SHA256为3e7a02c11a1e3f48295e026fab003260541f0b6b48e3e9344ec3c6bb00cad742。
+目前仅AST3.7、patch检查和git diff检查通过，新C++编译、新原始数学协议和NPU均NOT_RUN；
+旧8725或66cb不能用于证明新的C++行为，后续用新私有canonical core和新cohort验证。
+
+### 新增SiLU参考与q008确定性证据更正
+
+原SiLU worker/fixture在独立Native CPU parent下实际通过64records/256完整数组、0错误，
+覆盖四dtype、函数/模块、公开autocast和内部偏好数学参考；实际Torch2.7.1+cpu、
+-I/-B、私有HOME/TMP、BLAS2、原READY/seal/ACK和自然rc0，未导入JT/torch_npu。
+NPZ为4453ba5668f838a59448c7f081cb23c4823db73ceb4bf6626f15f5715759a42a，
+delivery为ae8b1203ab1a5146a2fbef48191461d211899043f32507b8971dd72585c12775。
+内部FSDP行只是Native禁用autocast数学参考，不是Native CPU FSDP或JT/NPU资格；
+SiLU生产候选尚未写入主树。
+
+重新读取q008两runtime/三phase/两rank全部272条policy记录：
+JT136条的Python及真实backend readback均True；Native136条Python True，backend字段null是未观测而非False。
+ACL source SHA与q008完整manifest相同，现有process set/get及core readback已经实现。
+旧R65等协议中的UNIMPLEMENTED_FALSE只保留其原源码范围，不能套到q008。
+固定torch_npu还会按算子懒同步context/compile/HCCL owner；
+这些owner及warm/asynchronous切换仍待真实小实测，不用Python flag推断。
+核验交付为LAB _state/ascend-compat/distributed/acl-determinism-owner-review-r233-001/delivery.json，
+SHA256 d2e486ce7322ee98cc5dd8089a492386336333a30674b4503762a6a0ba420a77。
+
+本轮服务器HTTP1 fetch35s超时原样保存，随后从用户本机对同一origin执行git ls-remote实际rc0，
+两目标最新tip分别为ca56aa802和305c2f086，与服务器已存在且已合入HEAD的tip一致，无需重复合并。
+记录LAB _state/ascend-compat/handoff/resume-r250-1792966232317484809/local-origin-verification.json，
+SHA256 c37e1de011db74c86a5432fbbe712d9db629f99a055ca90df344721a16ffb686。
+没有把服务器fetch超时改写成成功，没有reset/stash/push。
+
+
+### R251：新core与原500实际通过，168捕获暴露真实view/storage差异
+
+本节记录2026-10-26续跑。source2为3352文件、HEAD d1934d7d、26处dirty，
+完整manifest SHA256为4e4ef1f858b1a005d1b9e745882de579e61e9deae71b4d9fb91f943d5b370dc5。
+后续R251已修改C++与Python，因此以下source2 PASS不授予新源码、NPU或模型通过。
+source2全部tracked bytes、symlink及未提交patch已在LAB保全，
+入口_state/ascend-compat/real-model/tensor-view-main-r251/source002-preservation-001/；
+tar SHA256为b1921ddc78e7944ddd3410d36a50779913e68b5a02c9deabc5a8e3fba6a03a2d。
+没有reset、stash、覆盖旧失败或push。
+
+cold005在全新私有canonical CPU cache真实完成244/244编译，实际加载core
+408e0aa8478f967e87dc673cc0e7aaf5f66ebc081e138bd27734f0741efa164a，
+原stage自然rc0、actions空、seal/ACK完整，CPU/零回落及新per-edge符号通过。
+末审980个owned/controller代际全退出，source3352/tools240及实际四产品字节通过。
+入口_state/ascend-compat/distributed/autograd-edge-next-core-r239-005/，
+receipt为99e72d1b29909e41187fe410bdbe13aa86bdb8c6d30b73a0b7a341832655a37c，
+final-terminal-audit为6bab83d55fe694a13822530655b997c9197de6414ac361111f819d0b5e1f4a11。
+前面001/003/004的实际资源守卫误停保留。执行器改以本任务真实flock、私有0700目录和
+fresh普通外UID隔离，外部cmdline只作尽力记录，不要求独占共享服务器；
+同UID未归属编译器、root/能力异常、明确受保护路径引用仍拒绝。
+这是LAB调度修正，未修改数学或容差。
+
+随后source2/408e实际运行原16case/62check/500数组worker，
+worker7f09与原数学、Tensor hook及观察器保持原字节。
+原报告PASS，独立Native500严格dtype/shape/整NPY字节比较全部exact，
+missing/extra/mismatches均空；两个完整NPZ的SHA也同为
+722200955ba0afb08890bfdeaaadbb690ab43784862beee1bd51cbbcc821fc9b。
+原stage及parent自然rc0、actions空，48个owned/controller全退出，
+入口_state/ascend-compat/distributed/fsdp2-pointwise-precision-r238/new-core-math-prepare-001/，
+final-terminal-audit为96d507531295fb624bcf2a30a1fa7809ff628f40ee4d368c008ccaec3412b2ee。
+该math-only合同仍未包含Node.register_hook辅助协议，不宣称完整Node hook能力。
+
+同源随后实际完成原AMP12case/168成员/96metadata，所有12个内部数学检查均True，
+FP16 raw sum-to的FP32梯度为1.0009765625，BF16大值控制为65536，三个forward autocast模式都一致。
+但原严格验收仍FAIL：公开Tensor.view(torch.uint32)落入遗漏dtype的NumPy uint8 fallback，
+导致60个FP32 bits成员实际为uint8及扩大shape；另外12份forward/output和12份backward/incoming
+的真实stride为1，而Native为0。108个可解析原NPY全部byteexact，原168成员、206条比较错误、
+validator拒绝、worker -15及监督的一次own SIGTERM均原样保存，不把完整捕获或数学通过冒充总PASS。
+入口为上述目录amp168-prepare-001/；原NPZ为
+ebbfcb924091604e0a313fde0fabbceaf3794215cef9cf5d039eea8f6ca35d46，
+failure末审为1f7c204bb002bf7bb53bc7a3802abe9a4a7a5593fb65b88f9dc7fbcc2ff45cca。
+45个owned/controller全退出，累计closed4414；没有放宽UInt8解析、删metadata或转换观察值来过关。
+
+依据真实失败，R251将Torch dtype view委托已有native reinterpret_view，停止该公开view的梯度，
+移除静默uint8/CPU copy fallback，并按Native合同拒绝改宽且最后stride不为1的输入。
+C++广播在构造时捕获Torch前端/反向policy，选择已有真实零stride和share_with；
+隐式Python number仍保留融合，duplicate以三态准确保存原意图，Native默认scalar融合不变。
+同宽同形状reinterpret复制真实storage_strides，不能用contiguous/copy或虚报stride代替。
+补充维护用例覆盖UInt32/UInt64、0D/2D/1D、双向alias写回、无梯度、
+真实sum-VJP输入及contiguous但unit-axis stride0的边界。
+候选v3为728940255fa0f4026cd04dfe6b3855b4b8563cee37a16dbb5b47654da6a4750a；
+整合记录在LAB real-model/tensor-view-main-r251/。
+实际三份C++ syntax-only均rc0、Python AST3.7及git diff检查通过，
+新canonical core、原500/168、维护门禁和NPU均待当前源码实测，不能沿用408e。
+
+另有独立Native参考，不授Jittor通过：单卡910B3 False→True→False owner探针正常rc0，
+72完整数组/36tensor/13读数齐，64跨repeat/phase完整payload比较strict0。
+Python flag切换后，process/context在首个实际算子及同步前仍保留旧值，
+warm后分别为0、1、0；当前context与调用线程稳定。
+ACLOP deterministic全为ZERO_SIZE_NO_VALUE，不能写成False，JIT_COMPILE真实disable；
+没有process group，HCCL明确未测，亦不回填q008未观测字段。
+入口_state/ascend-compat/distributed/acl-determinism-owner-review-r233-001/native-owner-probe-run-002/；
+result为e11ba92fbbfa7a9a655bbb5f82c27e0044ef216163a32f143f18d4c210117a24，
+NPZ为0598818c4629bd1ee1ef08aded13fae2a5c492445da1345a34250a3b1a247a6d。
+24个已观察身份全部退出、相关组空、卡已归还。
+run001在数学前因深TMPDIR使CANN依赖SyncManager的Unix socket路径过长而rc1，
+数组/owner读数均0；原失败保留，run002只换LAB浅层私有TMP，并未改数学。
+
+Native CPU另外真实完成6case/120数组的ambient/custom_bwd合同：
+未装饰backward服从ambient，custom_bwd按forward保存状态重入并恢复，
+cast_inputs FP32保存关闭；raw低dtype sum及FP32目标梯度保持正确。
+入口_state/ascend-compat/real-model/r250-custom-bwd-native-cpu-reference-r233-001/cohorts/attempt-001/。
+UInt32/UInt64及zero-stride的Native参考见LAB r238/unsigned-bitcast-native-prepare-001/
+与cpp-stride-narrow-review-001/。这些证据不支持凭早期源码假设新增全局AMP guard；
+本次未修改AMP数学，原Qwen跨runtime124/272失败、source004数值44/252失败、
+最终双卡、公开重计算、Jittor随机恢复与NPU性能均保持待验收。
+
+
+### R251 后续：新 core 的公开视图实测与 copy/Tape 修复（2026-10-26）
+
+source3 的 cold006 已真实编译 244/244 并自然返回 0，stage 为 CPU_STAGE_PASS、actions 为空、terminal_sealed 为 true；实际新 core 为 68acf96f，独立缓存末审确认所有已观察进程代际退出、相关组和缓存 owner 为空、JIT 锁可实际取得。该结论只授予 source3 的 CPU 构建资格。
+
+随后在该实际 core 上完整执行两个公开 view/storage 文件：17 项全部执行，9 通过、8 失败、无 skip。unsigned dtype view 的 dtype/shape/完整位图/共享指针/stop-grad 断言已经通过；其中 7 个失败发生在标量索引后的 copy_ 写回，另 1 个发生在自定义 Function 返回视图的 stride。原完整 JUnit、stdout/stderr 和失败 report 保留于 LAB/_state/ascend-compat/distributed/fsdp2-pointwise-precision-r238/new-core-math-prepare-002/run-view-storage。stage 自然 rc1、actions 为空；worker 在必执行节点断言处抛错，因此没有 READY 或终态握手，不能将此协议结果误写成数学根因。末审没有实际 exit_integrity，只引用原 initial site 和真实 runtime_after，不宣称末态 site 全量相等。
+
+源码定位确认 copy_ 默认调用 _ip 时未请求保留物理存储，绕过已存在的原生存储写入；标量 getitem 本身已是实际共享 allocation。修复仅令 copy_ 请求 preserve_storage=True，继续由既有条件区分不可微存储写入与可微图更新，并保留真实 expanded-overlap 检查。TapeOp 还继承了 dense-only 输入转换且 infer_shape 未复制 storage_strides；现允许它消费真实 strided 输入并复制物理描述，保留原 contiguous replay fallback，不新增伪 stride 或 NumPy staging。
+
+新增 Native Function 两参数测试覆盖输入或输出 transpose 的真实 stride、指针、完整值和非均匀权重下的完整梯度；显式局部开启 Native transpose_storage_view，避免把 Native 默认物化行为误当输入视图。原 17 个公开测试、全部数学 observer 与预算未改变。新 Python AST 3.7 和实际 g++ syntax-only 检查通过；这些修复尚未获得运行通过结论，因涉及 Tape C++，source3 的 68acf core 不能作为新源的运行资格。新源码冻结入口为 LAB/_state/ascend-compat/real-model/tensor-view-main-r251/source-004.json，后继首先新建 core 再重跑完整公开视图、Function 和 copy 相关回归，以及原 500/168/252 检查；真实模型、最终双卡和性能仍未完成。
+
+
+### R252：恢复连接后的 source004 CPU 验证与历史 Qwen 对拍（2026-10-27）
+
+服务器 SSH 已恢复。实际 HEAD 为 d1934d7de97eee196133100822ee4bb1f1684ee5；源码
+source004 的 3353 文件 manifest SHA256 为
+57688b2ba2b186c5a9fd31d0ec1b2bd158473eb75f6d57c43457e663f42856f3。
+服务器 fetch 因超时仍失败，原记录在 LAB/_state/ascend-compat/handoff/resume-20261027-origin-check-001/；
+另从本机实际 ls-remote 确认 origin/wip/cgq-day23-fix-20261021 为
+305c2f0866f163b0549d47b2e4264c5d41a86385，与服务器已有远端跟踪引用一致且为 HEAD 祖先，
+不将本机远端查询写成服务器 fetch 成功。2.0-refactor 后来前进的提交仅做只读审查，
+没有再次合并。修改前源码、暂存及未暂存差异和 manifest 已保存在
+LAB/_state/ascend-compat/real-model/tensor-view-main-r251/source004-preservation-20261027-001/。
+
+source004 cold007 实际新 CPU core SHA256 为
+b26739374bc233a95d305fa3a26cc645f276f5852c5215f020104e08238312a1，244/244 编译、
+stage 自然 rc0、零回落，最终进程/缓存/锁审计见
+LAB/_state/ascend-compat/distributed/autograd-edge-next-core-r239-007/final-terminal-audit.json。
+同源公开 view/storage 两个完整文件 17/17P；随后两个邻接完整文件 9P/11F，无 error 或 skip，
+自然 rc1，原 JUnit 与全部输出保留于
+LAB/_state/ascend-compat/distributed/fsdp2-pointwise-precision-r238/new-core-math-prepare-003/run-storage-neighbors/。
+独立执行 Native Function 整文件 48/48P，包含真实非连续输入和输出的两个新增测试；
+实际进程、缓存与锁末审见同目录 native-function-only-prepare-001/final-terminal-audit.json。
+这些结果只针对 source004 CPU，不替代原 500/168/252、最终主树双卡或真实模型验收。
+
+历史单卡 Qwen3-0.6B BF16 LoRA 的 source123 Jittor 完整产物与 R251 原生 Torch/NPU 产物，
+以原始跨 runtime 比较器、原预算及完整数据实际比较 2187 项全部通过，包含 logits、
+112 个 LoRA 参数、优化器状态和 4 次更新边界的每个可训练梯度。
+结果位于 LAB/_state/ascend-compat/real-model/qwen3-historical-cross-r252-002/result.json，
+SHA256 94883915c693f8e8bad38316c7a4921e5802bc49037b5b64bbff87842074d3df。
+原执行尝试因 isolated Python 缺少比较器目录在数学前失败，stderr 已保留；
+第二次仅补充原脚本目录，没有更改预算。该历史 Jittor 的确定性开关不可用而 Native 为 True，
+不构成同策略结论，亦不能外推至当前 source004。另借用 FSDP CPU 点对点阈值做独立敏感性诊断，
+112 个最终参数数组中共有 34636/573440 元素超出该额外阈值，最大绝对差约 6.85e-5；
+该阈值不是单卡验收预算，不改变原 2187 项结果。
+
+进一步真实复现 no_grad 物理写入覆盖反向传播所需旧值：exp(x).sum() 删除中间 holder 后，
+原生梯度为 exp(旧 x)，Jittor 得到全 1，原始完整输入与梯度保存在
+LAB/_state/ascend-compat/distributed/zero-inplace-r252-r239-004/ 等 cohort。
+原生 saved-input、自定义 Function 与 detach 别名版本错误也仍未解决；
+上游 saved-storage 处理候选与 zero 候选必须在本分支重新运行验证。
+原生 copy 20 个别名/广播例及原位 zero 标量参考仅提供合同，不能授予 Jittor 通过。
+直接试用上游 zero 函数在本源的 CPU 实验仍有非叶或视图指针/别名失败，未将候选当作修复。
+具体数据与完整报告位于 LAB/_state/ascend-compat/distributed/storage-neighbors-owner-review-r233-002/
+及 zero-inplace-r252-r239-006/。三个旧视图断言改为真实 PyTorch 强 root 所有权和物理 stride
+合同，隔离原生 Torch CPU 实测 3/3P；新增 Native Jittor 物化视图覆盖仍待实测。
+当前工作树的标量常量、冻结视图 RHS 候选以及新测试均未得到运行通过资格。
+
+在确认上述实际 exp 反例后，已按当前上下文移植上游提交
+0dcd03a9b9e87b8666112e72af405a075c67221b 的四个 saved-output 生产改动，
+并新增上游四项 Native 及本次非零输入 copy_/zero_ 回归；详细来源与候选字节见
+LAB/_state/ascend-compat/distributed/fsdp2-pointwise-precision-r238/upstream-saved-output-review-001/。
+该改动只作为待验候选：需要新 core 和实际原始失败复验，不能将 saved input 版本检查、
+视图 zero_ 或捕获重放等能力视作已修复。
+
+R252 后继 source008（manifest a1b565fb3f0d610c2092e0261511318e390782e96ab4f756baa9276ed519b098）
+实际冷构建 244/244，CPU core 为
+60cfa22779be8f7162bd74f9d54e41345e6085f6cd93243532faefb8d92af10f；
+stage 自然 rc0，完整进程/缓存/锁末审见
+LAB/_state/ascend-compat/distributed/autograd-edge-next-core-r239-008/final-terminal-audit.json。
+该 C++ owner 在 Native 保存输出四组合 4/4P；在 Torch 非零 exp 实际反例中 copy_ 分支通过，
+但 zero_ 分支因 source.grad 为 None 仍失败。完整六文件共 91 项、83P/8F/0E/0skip：
+公开 view 17P，Native Function 48P，原位存储 9P/7F，梯度 view 5P/1F。
+标量除法原完整组合通过；失败及各文件 JUnit、完整输出、终态在
+LAB/_state/ascend-compat/distributed/r252-saved-output-gates-r239-001/。
+其中冻结叶张量原位修改仍会丢失 detach alias 的真实存储关系。新加的 Native 物化视图
+完整文件另 8/8P、自然 rc0、末审见 LAB/_state/ascend-compat/distributed/r252-view-owner-native-r239-001/。
+不将局部通过写成整体通过，也不将 CPU 结果外推到 ACL。
+
+按仓库要求执行 source008 的完整 tests/structure，实际 1676 项为 1669P/5F/2skip，
+stage 自然 rc1，两个 skip 为 CUDA 不可用。原失败在
+LAB/_state/ascend-compat/distributed/r252-structure-r239-001/run-structure/data/junit.xml；
+末审见同目录 final-terminal-audit.json。两个并行子 pytest 未显式加载已安装的 xdist；
+预算报告把配置 worker 数误写为 affinity 限制后的实际数；
+两处用户输入边界计数各因真实新增检查增加一项。
+针对这些证据已更新预算记录及相应测试、显式加载子进程 xdist 并逐项更新检查表；
+这些改动尚待新源码实际复验。原 source008 工作树、暂存和未暂存补丁已完整保存在
+LAB/_state/ascend-compat/real-model/tensor-view-main-r251/source008-preservation-20261027-001/。
+
+单卡完整逐 microbatch logits、累计梯度与每步参数/优化器状态观察器已建立独立 LAB 候选。
+原生 CPU 小模型真实比较带观察与不带观察的 2071 项严格相等，完整运行与 first+新进程
+resume 的 5858 项严格相等，缺字段与数值扰动负控均拒绝；实际数组和终态见
+LAB/_state/ascend-compat/real-model/qwen-single-observer-tiny-native-cpu-r238-003/。
+此前两个夹具/调度失败的完整输出未覆盖。观察器可能改变物化和同步，不用于性能判断；
+真实 Qwen、Jittor 和 NPU 的新观察流程仍待实际运行。
+
+
+### R252 后继：真实单卡逐批对拍、CE 根因收窄与 FSDP2 CPU 候选（2026-10-28）
+
+本节仅记录各冻结源码与实测范围，原始失败和完整数组保留在 LAB，不扩大验收。
+结构修正后的 source0fb（3353 文件，manifest SHA256
+0fb1c0a25856ba44948c42900ec05fcc4b1940c6619a461c4c46734049b81d21）
+完整 tests/structure 实际 1674P/0F/2 CUDA skip，真实退出及锁审计见
+LAB/_state/ascend-compat/distributed/r252-structure-r239-002/final-terminal-audit.json。
+原1669P/5F/2skip、xdist及worker配置失败、错误边界数量差均保留在
+r252-structure-r239-001/。source0fb 新私有 ACL 冷构建实际 core
+35ec3be599cd77b7b94027279bb4647228d6623b74f263d4fa1a976dd635b693，
+自然 rc0、设备正向见证与末审见
+LAB/_state/ascend-compat/handoff/qwen-single-jittor-observer-r238-006/final-terminal-audit-cold-006.json。
+同源码真实 NPU provider 2×2 输出与梯度完整严格相等、实际 ACL logical 0、fallback 绝对及增量为0；
+该小张量通过不构成完整模型通过。此前空设备掩码207004、资源/入口守卫失败及所有原日志仍保留。
+
+真实 Qwen3-0.6B BF16 LoRA：新 Native 与 source0fb JT 各自 full/first/新进程 resume
+均自然完成。JT 自身 state 933、完整原梯度 1136、补充逐批轨迹 5870 均 strict0；
+原跨 runtime 完整协议 2187/2187P。然而新增同一观察器的完整逐micro/逐step跨 runtime
+为4932P/5F，原 forward atol=.005/rtol=.03、gradient atol=.01/rtol=.05未更改。
+5F为step3/4的四份完整logits与step3 micro2一份LoRA梯度，前两步完整logits逐位相同。
+原结果、实际NPU归属、fallback及终态入口：
+LAB/_state/ascend-compat/real-model/qwen-single-jittor-observed-20261027-r7/；
+Native独立参考为 real-model/qwen-single-native-observed-20261027-r1/。
+Native torch_npu内部 fallback 计数不可用，原样保留为 null；不能冒称两端均已计数为0。
+完整逐数组定位在前者 analysis-first-divergence-002/。
+
+使用同样112个实际梯度、初始参数、0→3e-5学习率的两运行时四cell AdamW 重放，
+每套tape原预算933/933P，但不宣称严格逐位相等。固定任一优化器仅切换真实step1梯度tape，
+均重现约3.94e-5的step2参数差；step2全部112梯度两tape逐字节一致。
+原始NPZ与因果对照见 LAB/_state/ascend-compat/real-model/qwen-adamw-identical-tape-r239-002/。
+同源共享全部112参数与rotary buffer的初始/update2 × early/late八cell前向，
+四组完整logits共27956224值和1236实际BF16权重数组全部逐字节相同；
+JT加载Native update2后late输入与Native原训练对应输出严格相同。
+实验是干预定位，原默认训练4932P/5F仍未修复；见
+real-model/qwen-shared-fp32-2x2-r239-002/runtime-delivery.json。
+
+首两micro逐层追踪中，双方各自350数组观察中性和各自原轨迹236数组均strict0；
+实际BF16权重两批各309/309严格相同。loss seed均exact1.0，最早公开非exact在lm_head
+输出BF16 incoming gradient，分别141和445元素不同。实际num_items_in_batch数值均92，
+但JT int32、Native int64，沿模块传播的118项结构差异如实保留。详见
+LAB/_state/ascend-compat/real-model/qwen-initial-backward-trace-r239-001/runtime-delivery.json。
+后继真实NPU CE控制12场景/每端176成员完整运行，自然rc0、资源/零回落审计入口
+real-model/qwen-count-sum-ce-owner-r238-001/ce-npu-prepare-001/final-terminal-audit.json；
+已完成全数组host比较：原数值预算164P，额外raw BF16位图检查12F；
+CE上游loss_sum/逐rowloss incoming两端逐位一致，而FP32 logits gradient分别有1536538和
+1572601元素不同，转BF16后恰复现上述141/445个元素的原训练位差。两端各自count int32/64
+在该fixture中除计数dtype外其余数组逐位相同，因此不能声称计数dtype导致这一数值分叉。
+完整比较结果见 real-model/qwen-count-sum-ce-owner-r238-001/ce-analysis-001/result.json；
+实际cross entropy backward内核/归约语义仍需隔离与修复，不放宽预算。
+
+source0fb CPU原FSDP相关500/500和AMP168/168严格P（含完整metadata），
+原混合252为208P/44F，FP32 84/84P、两个BF16场景分别23/84F与21/84F，
+完整终态见 LAB/_state/ascend-compat/distributed/source0fb-math-replay-r233-001/。
+仅CPU无bias BF16线性层的隔离候选已真实冷构建，31维护实例/298数组严格P，
+原252改善至242P/10F（34旧F转P，0旧P退化）；剩余8项SiLU辅助输出和2项混合输入梯度F。
+该候选仅在隔离树，未进入MAIN，不能外推NPU/双卡；原失败完整保留于
+distributed/cpu-biasless-accumulator-isolated-r233-001/。
+独立SiLU候选与Native36参考、整数sum默认/out dtype候选与Native参考、no_grad/frozen zero窄候选
+均在LAB，尚未合MAIN或获得全部后端运行资格。zero隔离两完整文件由14P/8F改善为19P/3F，
+余copy广播/部分重叠及可微非叶zero失败；Tensor.sigmoid、capture alias、saved-input版本
+仍为独立待修边界。
+
+最终MAIN双卡FSDP2、随机恢复、公开激活重计算、完整主树模型5F修复及对应NPU性能/显存
+仍待完成；性能须在对应正确性通过后评估。此次暂停时没有推送，先前全部本地改动继续保留。
