@@ -1674,8 +1674,8 @@ def _api_c_mod__cuda_getCurrentRawStream(device_index):
     return 0x2
 
 
-def _api_c_mod__disabled_torch_function_impl(*a, **k):
-    return NotImplemented
+def _api_c_mod__disabled_torch_function_impl(func, types, args=(), kwargs=None):
+    return func(*args, **({} if kwargs is None else kwargs))
 
 
 def _api_functorch_c_get_unwrapped(x):
