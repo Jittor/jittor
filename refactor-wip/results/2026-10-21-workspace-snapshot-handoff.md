@@ -1,5 +1,11 @@
 # 2026-10-21 工作区快照与本机接续交接
 
+## 2026-10-28 00:45 +0800 lifecycle通过后的续接入口
+
+Day2–5仍未完成。storage r3/source`2dad903f…`在未版本化`20261028-qwen-storage-r3-lifecycle-r1/`完成独立PT/JT CPU及真实CUDA有界生命周期验证，正式receipt SHA `5319668de6bce14cfd9e45b02bf4c38295e06813d29d16c0930476945035915f`、manifest `a8ea56ca…`、root终审 `3e1fb752…`。每runtime/device独立/共享exp producer各重复三次，非求导可变常量、无中间holder、物化loss后写、先读梯度均通过原1e-12绝对/相对对拍；JT每device另通过kept旁观不重放及相关reader拒绝/目标不变，八次清理均回到live_vars=0。实际CPU/CUDA dispatch与fallback0，source/core/utils/stamp不变，CPU/CUDA各新增16个允许JIT产物、无改删，四自有组/两个精确锁内核记录空。未重复48/22，未重冷编；main原96项dirty哈希与空index保持。
+
+下一步绑定同source、原完整no-hook worker/独立PT参考/原comparator及已验证CUDA core后，再审阅有界原门禁；不重跑已通过lifecycle，不改padding/阈值，不先跑LoRA。候选仍未采用main，原main完整logits失败保留。T5禁止重试且原预算余51.29068389162421s，Vision无合法最终continuous且余310.095694191s，BERT gap/缺11份PT checkpoint与Day4–5正式稳定三轮/容量/峰值门槛均不变。main本段起点`ef09b6233`，目标远端fresh `e5cffe1a…`为相关HEAD祖先。详细证据见[本日结果](2026-10-26-torch-compat-release-day2-5.md)。
+
 ## 2026-10-28 00:31 +0800 维护22项CPU/CUDA通过后的续接入口
 
 Day2–5仍未完成。隔离storage r3 source`2dad903f…`的原48 CPU与维护22 CPU有效，现同维护文件真实CUDA22/侧也已通过；新包`20261028-qwen-storage-version-r3-cuda22-lock-metadata-successor-r3-prepared/` manifest `a045fc77…`、正式receipt `9f0ca4514d13a30a79af3f9eae0fdb2c47dbf4f5ddf1c406a245f1cf6f3f4f0a`。新JT22继承已通过PT22，同nodeids、0skip/error/failure、66份native CUDA0张量证据、fallback0，不重跑任何已通过部分。采用本次CUDAcore`16a21ef1…`/utils`4eeb093b…`/stamp`93a33c63…`并禁重冷编；真实import快照has_cuda=true/use_cuda1、环境0，source/runtime compile_order/build通过，新增64个JIT产物且既有编译产物无改删，自有组和精确锁内核记录空。原flag工具失败、正常owner记录被误判的metadata-r1、执行前哈希不匹配r2全部保留；最终只区分绑定的单一锁运行元数据，inode/属主/权限仍严格校验。详见[本日结果](2026-10-26-torch-compat-release-day2-5.md)及root终审`ccc38102…`。

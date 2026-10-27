@@ -1,5 +1,17 @@
 # Torch Compatibility Release Acceptance: 2026-10-26 Day 2–5 Continuation
 
+## 2026-10-28 00:45 +0800 有界lifecycle独立CPU与真实CUDA通过
+
+发布仍 **Not complete**。本轮fresh fetch记录`origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，为main及原验收/fix/Qwen/storage-r3各HEAD祖先，无需整合。main起点`ef09b62332521c3f226dc1b73870bafea61ce1c8`，原96项dirty（99个文件哈希）及空index保存于新包`root-continuation-workspace-before.json`，独立终审确认原文件均未变；runtime源码未改。原验收/fix/Qwen树分别51/85/87项dirty，storage-r3树109项，均未清理。根盘约余87GiB、data6约余6TiB，GPU按固定UUID/空闲显存准入，不按utilization；共享负载不能证明性能。
+
+新未版本化包`20261028-qwen-storage-r3-lifecycle-r1/`的manifest SHA `a8ea56ca354d83fb1f16264d16aa60f876b94b187477b4b6756ec57dd6ace3a3`，冻结source仍`2dad903f777e53c0c971d514e1bf1100be72d03b2203f9277ada3a9e817e4454`。root dry守卫通过后唯一串行执行PT CPU、JT CPU、PT真实CUDA、JT真实CUDA，cap分别120/180/120/360s，无超时/重试。正式`attempt-01/receipt.json` SHA `5319668de6bce14cfd9e45b02bf4c38295e06813d29d16c0930476945035915f`终态`PASS_BOUNDED_LIFECYCLE_CPU_AND_REAL_CUDA`，两device逐字段differences=[]。未重复原48或维护22，不自动扩为新的合并矩阵。
+
+每runtime/device两个数值case各重复三次。非求导常量c=[-0.25,0.5]、两个求导权重的loss分别使用独立exp(c)/exp(2c)，或共享z=exp(c)与z.square()并删除z；先loss.item()物化，再公开no_grad/c.add_(1)，旧loss保持，梯度先于source/中间值读回。两梯度仍为旧exp(c)/exp(2c)，source写后[0.75,1.5]，独立PT及解析值均通过1e-12+1e-12*abs(reference)。JT另有每device两个kept边界：无关共享存储旁观图不重放，已执行的相关kept reader以既有精确RuntimeError在写前拒绝且target仍[2,3]。观测不读取kept输出；清理明确沿用维护fixture的_release_kept接口，不声称公开API。六次数值及两个kept清理后live_vars均恢复进入前0；每JT/device35份张量记录全部为对应实际device/native dispatch，fallback0。
+
+沿用已验证CPU/CUDA core、utils、stamp及原cache/environment，JITTOR_NO_BUILD=1。实际CUDA import后has_cuda=true/use_cuda=1、环境use_cuda=0；不外推静态环境1启动。source、runtime compiler.files、core/utils/stamp守卫全通过，CPU/CUDA各仅新增16个约定后缀算子JIT文件，既有产物无改删；两个精确运行锁只允许owner记录更新，inode/权限/属主不变。四自有进程组终态均空，两个锁在/proc/locks无持有记录。root独立`root-terminal-audit.json` SHA `3e1fb7522a28bc52a5243d5046af761ac942da1c6a89cdab5f4522ab9cd852e4`重新核验完整结果/设备/liveness/cache/source及main原文件哈希。
+
+上述最小lifecycle缺口已关闭。候选仍未采用main；下一项只准备绑定同source/已验证CUDA core的原完整no-hook worker与comparator，不改变参考、阈值、padding或全部logits范围。当前没有新完整模型或LoRA证据。原main no-hook FAIL10,338,462/29,171,712、T5唯一单micro超时/余51.29068389162421s且禁止重试、Vision余310.095694191s且无合法最终continuous、BERT15.425953905%>15%及缺11份PT checkpoint、Day4–5正式稳定窗口/三轮/容量/峰值均保持原状态。
+
 ## 2026-10-28 00:31 +0800 维护22项真实CUDA终态通过
 
 发布仍 **Not complete**。隔离storage r3/source `2dad903f777e53c0c971d514e1bf1100be72d03b2203f9277ada3a9e817e4454`现已完成原48项CPU、维护22项CPU，以及同维护文件22项/device的真实CUDA验证；这是不同固定范围的证据，不把它们改称新的合并矩阵。新`20261028-qwen-storage-version-r3-cuda22-lock-metadata-successor-r3-prepared/` manifest SHA `a045fc77954a1aab6547e061c4cf51a7deee92ac1775b295558d02dee2bee9c2`；仅启动一个新JT进程，继承旧已通过独立PT CUDA22的原meta/JUnit/物理UUID/nodeids，不重跑PT或CPU部分。正式receipt SHA `9f0ca4514d13a30a79af3f9eae0fdb2c47dbf4f5ddf1c406a245f1cf6f3f4f0a`为`PASS_MAINTAINED22_REAL_CUDA_JT_WITH_INHERITED_PT`；JT meta SHA `d80ae430c0e110b2b1d6b414289d7f595f09871bc035b5e9b9fd5e8e549efb9b`、JUnit SHA `acc4f6cb9f2e0c8b6b0ae57f873c5487294d3694fd297c70f46acb79854d247b`。PT/JT各22 passed、22 CPU项deselected、0skip/error/failure，同选中nodeids；JT 66份test-return张量记录均为cuda:0、native dispatch=['cuda',0]、fallback_count=0。

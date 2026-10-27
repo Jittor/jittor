@@ -1,5 +1,11 @@
 # 整改看板
 
+## 2026-10-28 00:45 +0800 Qwen storage r3生命周期CPU与真实CUDA通过
+
+Day2–5仍为 **Not complete**。隔离source `2dad903f…`在新`20261028-qwen-storage-r3-lifecycle-r1/`完成严格串行PT CPU→JT CPU→PT CUDA→JT CUDA；manifest `a8ea56ca…`，正式receipt `5319668de6bce14cfd9e45b02bf4c38295e06813d29d16c0930476945035915f`为`PASS_BOUNDED_LIFECYCLE_CPU_AND_REAL_CUDA`。每侧/device两个数值case各重复三次：非求导可变常量、两个独立或共享exp saved-root、删除中间holder、先物化loss后公开add_，梯度先于source/intermediate读回；独立PT和解析值均满足原1e-12绝对/相对容差。JT每device另通过无关kept图不重放、相关kept reader写前拒绝且target不变；六次数值与两次kept清理后的live_vars均回到进入前0。实际CPU/CUDA dispatch、fallback0，source/core/utils/stamp exact；CPU/CUDA各新增16个允许算子JIT产物，既有文件无改删，自有组和两个精确锁内核记录空。root独立终审`3e1fb752…`通过。
+
+这关闭上述两组最小lifecycle缺口，未重复原48/维护22，也未采用main或启动LoRA。下一项是绑定同source及已验证CUDA core的原完整no-hook门禁，原阈值/参考/全部logits不变；原main FAIL10,338,462/29,171,712仍保留。fresh目标远端`e5cffe1a…`为全部相关HEAD祖先，main起点`ef09b6233`、原96项dirty/空index保持。T5单micro超时且禁止重试、Vision无合法最终continuous、BERT原gap/缺checkpoint、Day4–5稳定三轮/容量/峰值门槛不变。详细绑定见[本日结果](../results/2026-10-26-torch-compat-release-day2-5.md)。
+
 ## 2026-10-28 Qwen维护22项真实CUDA通过，候选仍未采用main
 
 Day2–5仍为 **Not complete**。隔离storage r3/source`2dad903f…`继原48项CPU与维护22项CPU通过后，现已完成同维护文件的独立PT/JT真实CUDA22/侧，同nodeids、0skip/error/failure、JT fallback=0。新JT-only后继manifest `a045fc77…`、receipt `9f0ca4514d13a30a79af3f9eae0fdb2c47dbf4f5ddf1c406a245f1cf6f3f4f0a`，继承已通过PT22，不重跑48/CPU22/PT22、不重冷编。显式采用真实CUDA core`16a21ef1…`/utils`4eeb093b…`/stamp`93a33c63…`，两次import均实测has_cuda=true/use_cuda=1、环境use_cuda=0；66份返回时张量记录均为cuda:0/native CUDA0。source、实际compiler.files及构建身份exact，新增64个允许JIT产物、既有编译产物无改删；自有组空、精确锁文件无内核持有记录。
