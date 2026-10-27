@@ -1,5 +1,25 @@
 # 整改看板
 
+## 2026-10-28 05:07 +0800 r7完整no-hook仍FAIL，混合守卫并非完整修复
+
+r7原完整worker/comparator自然rc0（257.699/3.173s），controller自然exit1保留数值失败，正式receipt `e32c32336a20a48b4e9b77346d0aea5c4eae3962fbcf838233a941dbe13cc842` 为 `FULL_NOHOOK_NUMERICAL_FAILURE_RETAINED`。原全部29,171,712 logits超限8,690,528，max_abs3.9296875；active3,714,487/22,030,720、max.4375，padding4,976,041/7,140,992；输入exact、loss在原门槛内。root独立generic28终审 `20261028-root-rmsnorm-r7-continuation-r1/root-r7-nohook-terminal-audit.json` SHA `f8ae8cb66c4f9e5c7bbbf245d8ee2d742c0c527f0d7608869278b810e6b1e8e2` 全真，仅证明原结果与运行证据有效，numerical_gate_passed=false。真实CUDA/fallback0、完整环境/source/products/原caps/组锁有效，最新CUDAcache1274=1018+256仅合法新增，exec32616已收回，无活跃模型进程。
+
+纯saved NPZ对比 `r6-r7-nohook-saved-difference.json` SHA `23517f625ea9d8ce288e2a84b8487af4ed06ab45f325eeae7521c73f47bf0e0a` 确认源码差仍仅mixed guard+原测试、3输入exact，25,811,571 logits改变；旧超限→新通过3,643,481，旧通过→新超限2,214,035，共同超限6,476,493，净少1,429,446但不是单调改善。sample0 position1旧34,144超限→新0，全部151,936项exact PT，仍不能据局部修复关闭模型门槛。下一项仅离线绑定r7原113边界capture及独立root38后继，要求五probe精确复现本次no-hook，不重跑已完成阶段、不改变源或阈值。发布 **Not complete**，未采用main、LoRA仍禁跑，其余FAIL/预算/Day4–5门槛保持。
+
+## 2026-10-28 05:01 +0800 r7原完整no-hook已单次启动
+
+原CPU4/CUDA2及单列mock unit1已通过并独立终审，root18项完整launch审阅 `root-r7-nohook-launch-review.json` SHA `a26fa337643e1d26415ed3dbb0635b1a2d605786ff68c6ddf3c4fce6384efda9` 全真。新final `20261028-qwen-rmsnorm-r7-nohook-final-r1-prepared/` manifest `e46ac379ec010b0f83182539d213d476e67c478c973edfd86d25556d93199a17` 已单次启动，当前receipt RUNNING，exec32616；原29,171,712含padding logits、atol.005/rtol.03、worker1800/comparator120、七数值文件/独立PT映射/原validator suffix均保持。入场free51296MiB，完整环境仅在实际CUDA2环境加原support前缀，最新1018 cache exact及精确锁、source/products/所有原dirty字节已核验。
+
+目前仅确认实际CUDA导入与原worker正常开始，尚无新完整模型数值终态，禁止重复启动。候选未采用main，不启动LoRA；发布 **Not complete**，其他FAIL及原预算/Day4–5门槛保持。完成后沿既有generic28做独立终审，不能把原局部回归或构建身份转写为完整模型通过。
+
+## 2026-10-28 04:53 +0800 r7原CPU4/CUDA2及邻近unit1通过，完整模型待验
+
+新 `20261028-qwen-rmsnorm-r7-cuda-bootstrap-final-r1-prepared/` manifest `b7a10651…` 已由root13项launch审阅单次放行，900s原上限内自然rc0，正式receipt SHA `1d2aa20b7f4607d2c0d6836dec22d3210b5419414a046d7ee2ae0629caa42df4` 为 `PASS_COLD_BUILD_IDENTITY_ONLY`。实际231TU=194 repository+37 generated，core9b4d1a11、utilsb2de88a1、stampccecf237；完整环境、两phase实际CUDA flags及两次fresh审计有效。root独立17项终审 `20261028-root-rmsnorm-r7-continuation-r1/root-r7-cuda-cold-terminal-audit.json` SHA `866ecddc21d5fc7140ea118a26d5601c1f4e4dfa269cb777652385979bbd50da` 全真；进程自然退出，自有组和精确锁均空。入场free51296MiB、不按util筛选，本次没有创建tensor或运行测试/模型。
+
+随后root单次执行实际新产品绑定的 `20261028-qwen-rmsnorm-r7-original-cuda2-r1-prepared/` manifest75ef462c，原numeric两例2 passed/2 deselected in58.59s，cap360内自然rc0；正式receipt `974dba80935337740d04dc1c4b9ab553d19f999bfe76d4f809d6f79c18e82de2`，result d86bc1fd。FP16/BF16原eval/train输出FP32、input_grad reduced、weight_grad FP32及module/direct-forward四张量exact断言均通过；fallback0，完整环境/source/products有效。root独立31项终审 `root-r7-cuda2-terminal-audit.json` SHA `4f56a3795bfc91d3b1967a16db30924f31353a4a384bbd8ffa7d78992137eb7a` 全真，16张量相对已保存独立PT decoded值也exact，仅诊断。新CUDAcache942→998只增56、无改删，组锁空。
+
+单列原同dtype unit1也已在 `20261028-qwen-rmsnorm-r7-adjacent-unit1-r1-prepared/` 单次通过，21.96s、自然rc0，receipt b1d46c1e/result efded387；root29项终审 `root-r7-unit1-terminal-audit.json` SHA `aecee948ab7af7c3eb752ead4c82fbf54dc823fa6c73bb91baa8f3972f86a659` 全真。原1节点、3个CUDA tensor与原fetch_sync一次原样返回、dtype/shape/native dispatch/值及完整环境/source/products/fallback0有效；明确仅mock routing，不作为独立RMSNorm数值。最新CUDAcache1018（+20，无改删），组锁空。下一项原完整no-hook新final正离线绑定，尚未执行；CPU cold/CPU4/CUDA2/PT/unit1不重跑。发布 **Not complete**，不采用main、不启动LoRA，其他FAIL/预算/性能门槛不变。
+
 ## 2026-10-28 04:34 +0800 r7 CPU冷构建及原mixed四例终审通过
 
 r7 CPU cold已自然rc0，正式receipt `df8a4750…` 为 `PASS_COLD_BUILD_IDENTITY_ONLY`，227TU=190 repository+37 generated；root17独立终审 `20261028-root-rmsnorm-r7-continuation-r1/root-r7-cpu-cold-terminal-audit.json` SHA `159c707c9c7dfa25b5c3254bedcd0b7db8138d72c27ee84b7119c954c186bc97` 全真。随后root单次执行实际新产品绑定的 `20261028-qwen-rmsnorm-r7-original-cpu4-r1-prepared/`（manifest `e1584946…`，cap360），原pytest四例=数值2+mock2全部通过，13.17s，fallback0，未重跑独立PT或另起数值child。原FP16/BF16的eval/train输出FP32、input_grad低精度、weight_grad FP32，module/direct-forward四张量exact；本次捕获与已保存独立PT的16张量decoded值也exact，仅作诊断。

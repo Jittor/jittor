@@ -1,5 +1,23 @@
 # 2026-10-21 工作区快照与本机接续交接
 
+## 2026-10-28 05:07 +0800 接续入口：r7原完整no-hook仍FAIL，下一项原边界capture
+
+exec32616已自然退出，禁止重复启动。r7原worker/comparator自然rc0、257.699/3.173s，正式receipt e32c3233为 `FULL_NOHOOK_NUMERICAL_FAILURE_RETAINED`；8,690,528/29,171,712 logits超限、max3.9296875，active3,714,487/max.4375、padding4,976,041；原输入exact/lossPASS。root28独立终审 `20261028-root-rmsnorm-r7-continuation-r1/root-r7-nohook-terminal-audit.json` SHA `f8ae8cb66c4f9e5c7bbbf245d8ee2d742c0c527f0d7608869278b810e6b1e8e2` 全真，但numerical_gate_passed=false。真实CUDA/fallback0/source/env/products/清理有效，最新cache1274仅增256，组锁空。CPU4/CUDA2/单列unit1的局部PASS保持，不重跑。
+
+纯保存数组对比SHA23517f62确认mixed guard使25,811,571 logits改变，修复旧超限3,643,481同时新增超限2,214,035，净少1,429,446但完整门槛仍FAIL。下一项r7原113边界capture和root38后继正离线准备，要求五probe exact复现本次no-hook、PT113复用、dtype与存盘float32分列；尚未执行。主源和旧失败保持，不采用main、不启动LoRA；发布 **Not complete**，其余FAIL、原预算和正式性能门槛均不变，详见本日结果。
+
+## 2026-10-28 05:01 +0800 接续入口：r7原完整no-hook正在运行，禁止重复启动
+
+原CPU4/CUDA2及单列mock unit1已通过并独立终审。root18项launch审阅 `20261028-root-rmsnorm-r7-continuation-r1/root-r7-nohook-launch-review.json` SHA `a26fa337643e1d26415ed3dbb0635b1a2d605786ff68c6ddf3c4fce6384efda9` 全真后，单次启动新final `20261028-qwen-rmsnorm-r7-nohook-final-r1-prepared/` manifest e46ac379；exec32616，`attempt-01/receipt.json` 当前RUNNING，实际CUDA及原worker已正常开始。不要重复启动或由旧PID推断状态；先查这次receipt和实际进程身份。原29,171,712含padding/.005/.03/1800+120、七数值文件/原validator suffix、实际CUDA2环境仅support前缀、最新1018 cache及组锁已核验，尚无新完整模型数值终态。
+
+完成后沿既有generic28独立复算并终审，再按真实结果决定下一项；不能把局部回归PASS替代本次完整门槛。不采用main、不启动LoRA，发布 **Not complete**；其余FAIL、原预算和Day4–5性能/容量门槛保持，详情见本日结果。
+
+## 2026-10-28 04:53 +0800 接续入口：双cold、原CPU4/CUDA2及unit1通过
+
+新r7 CUDAcold已自然rc0，正式receipt `1d2aa20b…`，231TU=194+37、新core9b4d1a11及完整环境/实际双phase CUDA flags有效；root17独立终审 `20261028-root-rmsnorm-r7-continuation-r1/root-r7-cuda-cold-terminal-audit.json` SHA `866ecddc21d5fc7140ea118a26d5601c1f4e4dfa269cb777652385979bbd50da` 全真，进程、私有组及精确锁均空。最终包 `20261028-qwen-rmsnorm-r7-cuda-bootstrap-final-r1-prepared/` manifest b7a10651，cap900，仅构建身份，不是数值通过；禁止重复cold/CPU4/PT。
+
+实际产品绑定的新CUDA2包 `20261028-qwen-rmsnorm-r7-original-cuda2-r1-prepared/` manifest75ef462c已单次原pytest两例全过，58.59s、自然rc0、fallback0；receipt974dba80/resultd86bc1fd。原FP16/BF16输出/梯度dtype与module/direct-forward exact均通过，root独立31项审计 `root-r7-cuda2-terminal-audit.json` SHA `4f56a3795bfc91d3b1967a16db30924f31353a4a384bbd8ffa7d78992137eb7a` 全真；16张量saved PT decoded exact只作诊断。单列同dtype原unit1也已单次通过（21.96s、自然rc0、fallback0），unit1包manifest353ec2ad、receiptb1d46c1e/resultefded387；root29项终审 `root-r7-unit1-terminal-audit.json` SHA `aecee948ab7af7c3eb752ead4c82fbf54dc823fa6c73bb91baa8f3972f86a659` 全真，明确mock routing only。最新CUDAcache1018只增20，无改删/holder；不重跑cold/CPU4/CUDA2/PT/unit1。下一项仅原完整no-hook新final，实际前置和最新baseline已交离线绑定，尚未执行。发布 **Not complete**，不采用main、不启动LoRA。CPU证据文档本地提交765e0368，无push；其他原dirty、失败、预算和性能门槛均保留，详情见本日结果。
+
 ## 2026-10-28 04:34 +0800 接续入口：r7 CPU四例已通过，下一项CUDA冷构建
 
 r7 CPU cold及root17已实际终态PASS（receipt `df8a4750…`，audit `159c707c…`，227TU），随后实际产品绑定的CPU4包 `20261028-qwen-rmsnorm-r7-original-cpu4-r1-prepared/` manifest `e1584946…` 单次原pytest数值2+mock2全通过，13.17s，fallback0，自然rc0；不要重复cold或CPU4。正式receipt `31e5f5ef…`、result `d5666a8f…`，root独立31项终审 `20261028-root-rmsnorm-r7-continuation-r1/root-r7-cpu4-terminal-audit.json` SHA `215b435e0f740426382176eab95ebcadf7cd8f333d6eb4e3a38adb747be3758a` 全真。原输出/梯度dtype、route exact和完整身份/环境/source/cache/组锁有效；新CPU cache780只增48，独立PT16张量decoded exact仅诊断。进程已退出，CUDA尚未执行。

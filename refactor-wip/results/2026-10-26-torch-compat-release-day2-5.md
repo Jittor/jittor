@@ -1,5 +1,35 @@
 # Torch Compatibility Release Acceptance: 2026-10-26 Day 2–5 Continuation
 
+## 2026-10-28 05:07 +0800 r7原完整no-hook数值仍FAIL及旧新对照
+
+exec32616已收回自然exit1；原worker和原comparator均自然rc0、分别257.699/3.173s，正式receipt SHA `e32c32336a20a48b4e9b77346d0aea5c4eae3962fbcf838233a941dbe13cc842` 为 `FULL_NOHOOK_NUMERICAL_FAILURE_RETAINED`，不是运行时或工具失败。原29,171,712含padding logits仍超限8,690,528项，max_abs3.9296875；active3,714,487/22,030,720超限、max_abs.4375，padding4,976,041/7,140,992。三输入exact，loss误差.0046465396881103516满足原门槛，全部有限；.005/.03不变。
+
+root复用既有generic28审计器单次独立复算，`20261028-root-rmsnorm-r7-continuation-r1/root-r7-nohook-terminal-audit.json` SHA `f8ae8cb66c4f9e5c7bbbf245d8ee2d742c0c527f0d7608869278b810e6b1e8e2` 的28检查全真，独立全量计数及max_abs一致，精确PT logits4,254,663项；numerical_gate_passed=false。真实CUDA/fallback0、原模型设置/无hook、完整环境/source15cafdfa/core231/order/ingredients、原caps/单次执行与清理均有效，新CUDAcache1018→1274仅增256，无改删、精确锁及私有组均空。没有重跑独立PT、完整模型、CPU4/CUDA2或unit1。
+
+随后仅离线读取原r6、本r7和同一PT oracle的保存NPZ，`r6-r7-nohook-saved-difference.json` SHA `23517f625ea9d8ce288e2a84b8487af4ed06ab45f325eeae7521c73f47bf0e0a` 独立确认两份原root28有效、source delta仅module_methods守卫+原测试、三输入exact。25,811,571 logits改变，旧超限→新通过3,643,481、旧通过→新超限2,214,035、共同超限6,476,493、共同通过16,837,703；净少1,429,446，不能写成全部改善或根因闭环。active的修复/新增超限分别2,140,760/1,479,684，padding分别1,502,721/734,351。首变化sample0 position1旧34,144超限→新0，全151,936项exact PT；该控制只说明本cohort有可观察前向作用，完整修复仍false。
+
+下一项只离线准备新r7原113边界capture及原root38独立终审后继，绑定本次no-hook/root28/最新1274 cache与实际产品/完整环境；五probe必须逐字节复现本次r7 no-hook，PT113复用，原tensor dtype与保存float32分列，不据最早RoPE微小差异直接推定模型根因。目前capture尚未执行；不修改r7/main、不重跑已通过阶段、不启动LoRA。Day2–5 **Not complete**，T5/Vision原余额与禁止重试、BERT gap/原checkpoint缺口、Day4–5正式稳定窗口/三轮/容量/峰值门槛保持。
+
+## 2026-10-28 05:01 +0800 r7原完整no-hook单次执行中
+
+新final `20261028-qwen-rmsnorm-r7-nohook-final-r1-prepared/` manifest SHA `e46ac379ec010b0f83182539d213d476e67c478c973edfd86d25556d93199a17` 的28工具已冻结，offline24项全真。root实际18项launch审阅 `20261028-root-rmsnorm-r7-continuation-r1/root-r7-nohook-launch-review.json` SHA `a26fa337643e1d26415ed3dbb0635b1a2d605786ff68c6ddf3c4fce6384efda9` 全真：双cold/root17、CPU4/CUDA2 root31及mock unit1/root29实际终态、source15cafdfa、真实CPU/CUDA products、最新1018 cache exact/精确锁空、原main99 dirty字节均有效。七数值文件及原controller/identity/helpers逐字不变，validator suffix仍0a0eb93d；完整模型环境仅在实际CUDA2 launch的PYTHONPATH前面加入该final support目录，原环境其余字典完全相同。
+
+05:01 +0800 root已单次启动exec32616，receipt `attempt-01/receipt.json` 当前RUNNING，worker身份由实际receipt保存；入场free51296MiB、不以util为条件。原全部29,171,712含padding/.005/.03、worker1800/comparator120、同权重/输入/初始化/依赖pin与独立PT oracle均不变。已见实际CUDA导入和原worker正常开始，尚无新完整数值或完成收据，不重复启动，不采用main或先启动LoRA。终态后复用既有 `20261028-root-cat-r6-continuation-r3/audit_nohook_terminal.py` 的generic28独立复算与终审；Day2–5仍 **Not complete**，其余FAIL、原预算及正式性能/容量门槛保持。
+
+## 2026-10-28 04:53 +0800 r7 CUDA原mixed两例及邻近unit1终审通过
+
+root13项launch审阅 `root-r7-cuda-cold-launch-review.json` SHA `b672ecd6156c8d9da67491198cc2c811798634bebda4552eb01fe4daea415e27` 通过后，单次运行新 `20261028-qwen-rmsnorm-r7-cuda-bootstrap-final-r1-prepared/` manifest `b7a106515c169c369a09ecdaed1bd9bf4b291d5e11db7d363cfce7da7b5cff7f`。实际入场GPU UUID沿最终绑定，free51296MiB，仅按足够显存，不以util为条件；cap仍cuda:0=900，CPU禁跑。正式receipt SHA `1d2aa20b7f4607d2c0d6836dec22d3210b5419414a046d7ee2ae0629caa42df4` 为 `PASS_COLD_BUILD_IDENTITY_ONLY`，自然rc0；未创建tensor、未启动测试/模型，也无自动后继。
+
+实际231TU=194 repository+37 generated，core SHA `9b4d1a11f5d6c8066c79f2d6c3e2dd6b4d71514786357beaec654fd78fcaccfc`，utils `b2de88a150f8f255f47a31010870b6c64dd4509c5401723a5386f19dd080cc5a`，stamp `ccecf2373ee29e9bc27856af96f3969644aa154b26eb06c0c98cbbbb79d58ba5`；全新私有cache、两次fresh审计、完整环境及实际两phase has_cuda/use_cuda=1有效，与launch环境use_cuda=0分别记录。root复用既有stdlib审计器单次独立终审，`20261028-root-rmsnorm-r7-continuation-r1/root-r7-cuda-cold-terminal-audit.json` SHA `866ecddc21d5fc7140ea118a26d5601c1f4e4dfa269cb777652385979bbd50da`，17检查全真。自有组与精确cache锁均空，exec14980已收回自然exit0。
+
+root13项数值launch审阅通过后，单次运行 `20261028-qwen-rmsnorm-r7-original-cuda2-r1-prepared/` manifest `75ef462c85f2bd40291723e21259a3f25668312d2ab9563ee8f89518e998af5a`，cap360沿旧mixed控制。唯一一次原pytest为2 passed/2 deselected in58.59s，未重跑CPU4、mock或独立PT；exec29364已收回自然exit0。正式receipt SHA `974dba80935337740d04dc1c4b9ab553d19f999bfe76d4f809d6f79c18e82de2`，result `d86bc1fd3c8b714af3ea4bc6c139766a959ee780149d3bb8045ad46360990ab1`，状态 `PASS_R7_ORIGINAL_CUDA2_CAPTURE`。FP16/BF16原eval与train输出FP32、input_grad低精度、weight_grad FP32，以及module/direct-forward四张量exact断言全部通过；旧r6 eval-only错误已在此fixture消除，不据此外推完整模型。
+
+root独立stdlib31项终审 `root-r7-cuda2-terminal-audit.json` SHA `4f56a3795bfc91d3b1967a16db30924f31353a4a384bbd8ffa7d78992137eb7a` 全真，独立复算16张量payload/hash/dtype/shape/native CUDA dispatch及全部route一致性；已保存独立PT CUDA decoded值对比全部exact，仅诊断，保留PT原LAZY元数据FAIL，无例外扩到JT。实际CUDA/fallback0、完整环境/source/core231/order/ingredients有效，新cache942→998仅增56、旧文件无改删，私有组与精确锁空。
+
+随后root单独放行 `20261028-qwen-rmsnorm-r7-adjacent-unit1-r1-prepared/` manifest `353ec2ad817ae29feb32b8b315114612b4b28cc12d1e4b2a2e4a15f37f1937a2`，只运行原 `TestRMSNormDispatch::test_standard_contract_routes_and_offset_variant_falls_back`，原norm整文件字节不变。1 passed in21.96s，cap360内自然rc0，exec83908已收回；receipt SHA `b1d46c1eadb4c48c02aac31df57199835f625c05fe4ca52e0a4ac83755b6b1c5`、result `efded387baa8659f8f0077b76c847cad69426382b1baea5b7e8415f938a70971`。root独立29项终审 `root-r7-unit1-terminal-audit.json` SHA `aecee948ab7af7c3eb752ead4c82fbf54dc823fa6c73bb91baa8f3972f86a659` 全真，独立复算原3个tensor的3/1/5 payload/hash、FP32 dtype/[2,4,8]/native CUDA以及原三相pytest、fetch_sync仅原调用一次/对象原样返回/原函数恢复。该测试明确仅mock routing，不作为独立RMSNorm数值。完整环境/source/products/fallback0有效，最新cache998→1018仅增20，组锁空；不重跑任何已通过阶段。
+
+下一项仅原完整no-hook新final，正离线绑定实际双cold/CPU4/CUDA2/unit1/root审计、完整环境和最新1018 terminal baseline，尚未执行。原七数值文件、support、validator后缀和29,171,712含padding/.005/.03/1800+120门槛保持。Day2–5 **Not complete**，不采用main、不启动LoRA，其他FAIL/预算/Day4–5门槛保持。CPU记录已精确提交为 `765e0368fdd985592dddfa2fabbf2681129f5daa`，无push，原dirty字节未变。
+
 ## 2026-10-28 04:34 +0800 r7 CPU冷构建及原mixed四例终态
 
 新r7 CPU600 cold已自然rc0，原包 `20261028-qwen-rmsnorm-r7-cpu-bootstrap-r1-prepared/` 正式receipt SHA `df8a4750b7399b55e24ff99a14d112e37520985322ec33b37bd95d328e476526`，状态 `PASS_COLD_BUILD_IDENTITY_ONLY`。实际227TU=190 repository+37 generated，新core `1f6945f6e816b1a45f26579caacd45891bcbc5a4726ba9103d04b549fabf170f`、utils `b2de88a150f8f255f47a31010870b6c64dd4509c5401723a5386f19dd080cc5a`、stamp `fb13fbc04a90e9c22205a4e7d0fc37b7b48f55877fbc386f33c6f72382e143cd`。两次fresh审计、完整环境/source/生成物/组锁有效，root独立17项终审 `20261028-root-rmsnorm-r7-continuation-r1/root-r7-cpu-cold-terminal-audit.json` SHA `159c707c9c7dfa25b5c3254bedcd0b7db8138d72c27ee84b7119c954c186bc97` 已实际通过；没有重跑cold。
