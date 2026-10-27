@@ -1,8 +1,15 @@
 # 整改看板
 
+## 2026-10-27 23:29 +0800 T5超时保留、Qwen双例CPU修复通过
+
+Day2–5仍未完成。fresh目标远端e5cffe1a仍为main及三个原验收树祖先，无需整合；main HEAD c9d963327、99项dirty和空index保留。T5唯一20261027-t5-step51-singlemicro-ordered3-r1在210s工作deadline仍编译CUDA内核，rc-15/FAILURE_RETAINED_NO_SUCCESSOR，receipt a6b3aef2…；只有preforward签名，无完整梯度/404trace/比较，不能声称模型恢复。收费212.9110761990305s，原1800s累计1748.7093161083758/余51.29068389162421，不重试或重置。root另验冻结bindings exact、自有组空/可见holder空；report集合序列化工具缺陷未动态触发。Qwen隔离storage r3 source2dad903f…/manifest3e7ebd44…在T5清理后唯一启动冷CPU双例（每runtime600s）；PT两例PASS；JT冷编完成但数值前build守卫误把仓内codegen源码当cache产物，RUNTIME_EXECUTION_FAILURE，receipt b5293d93…，零JT语义结果。原r2静默错梯度FAIL、原48/CUDA/no-hook/LoRA门槛不变。可读/proc拒读边界保留，不声称全机无holder。详情见本日结果最新增量。
+
+
+Qwen新metadata successor只修compile_order分类并显式采用本次r3 core，已PT/JT两例PASS_BOUNDED_CPU_ONLY，receipt da045adbf1cad6979e7cc99605d386c34052fe082d3c74a785d1408da8c0d84b；无holder与保留holder均返回原exp([2,3])梯度，source写后[3,4]、旧loss保持。真实CPU/fallback0，source/core/utils/stamp守卫通过；cache仅新增12、changed/removed0，自有组空。仅局部CPU修复证据，未采用main；原48＋维护22CPU正在离线准备，CUDA/no-hook/LoRA及发布FAIL不变。
+
 ## 2026-10-27 22:34 +0800 当前状态
 
-Day2–5仍未完成。main765f1791与全部dirty/index保留，fresh目标远端e5cffe1为祖先。T5已定位并在隔离source715081d6修复fetch全局初始化次序与ordered代码生成的KernelIR容器问题；CPU44及真实CUDA44、全部VJP/provider负例、两个32次归约各1hash、fresh41fetch/twice-cleanup全PASS，CUDAreceipt0fb79f7b…、coreb63e552b…、fallback0且组/holder空。这只关闭底层前置，旧模型771/2088FAIL不变。public norm32fresh flag3已rc0/PASS，96份y/dx/dgamma各1hash，receipt8c296ff7…；仍为synthetic upstream的确定性诊断，不是原模型因果/恢复通过。同源flag0控制已完成（receipt524b348c…），y1/dx32/dgamma32hash，flag3各1hash，192份数组和provider实物独立审计通过，公开norm局部干预成立；模型恢复仍未验证。原1800s家族累计1535.7982399093453/余264.2017600906547。Qwen storage r2无holder exp安全探针PT两casePASS，JT已冷编但工具读取torch.__file__在数值前失败，receipt757337b6…保留；元数据后继r1仍在数值前被合法HOME/TMPDIR导入派生的过严守卫挡住，receipt192697d3…，core/cache未变，新后继待源码审阅；原alias/no-hook仍FAIL。Vision无重试/余额310.095694191，BERT15.425953905%>15%，Day4–5仅离线successor、未完成最终identity绑定/三轮/容量/稳定窗口。详见[本日结果](../results/2026-10-26-torch-compat-release-day2-5.md)最新增量及原收据。
+Day2–5仍未完成。main765f1791与全部dirty/index保留，fresh目标远端e5cffe1为祖先。T5已定位并在隔离source715081d6修复fetch全局初始化次序与ordered代码生成的KernelIR容器问题；CPU44及真实CUDA44、全部VJP/provider负例、两个32次归约各1hash、fresh41fetch/twice-cleanup全PASS，CUDAreceipt0fb79f7b…、coreb63e552b…、fallback0且组/holder空。这只关闭底层前置，旧模型771/2088FAIL不变。public norm32fresh flag3已rc0/PASS，96份y/dx/dgamma各1hash，receipt8c296ff7…；仍为synthetic upstream的确定性诊断，不是原模型因果/恢复通过。同源flag0控制已完成（receipt524b348c…），y1/dx32/dgamma32hash，flag3各1hash，192份数组和provider实物独立审计通过，公开norm局部干预成立；模型恢复仍未验证。原1800s家族累计1535.7982399093453/余264.2017600906547。Qwen storage r2无holder exp安全探针PT两casePASS，JT已冷编但工具读取torch.__file__在数值前失败，receipt757337b6…保留；元数据r1工具失败保留；r2精确pre/post环境后完成原两例，receipt8d88976f…为SEMANTIC_FAILURE：无holder反向返回写后的[e^3,e^4]，保留holder对照及PT通过，真实CPU/fallback0/core/source未变，r2不得采用；新隔离r3只准备，原alias/no-hook仍FAIL。Vision无重试/余额310.095694191，BERT15.425953905%>15%，Day4–5 r2 NVML工具bootstrap失败保留；修正加载登记的新r3绑定c9d963327/完整08446013…/计算46a8，60s readiness终态超时（12样本/0合格，receipt0c320249…），源码工具exact，未启模型或performance cache；正式三轮/容量/稳定窗口仍未完成。详见[本日结果](../results/2026-10-26-torch-compat-release-day2-5.md)最新增量及原收据。
 
 ## 2026-10-27 20:50 +0800 当前状态
 
