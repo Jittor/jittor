@@ -301,7 +301,7 @@ class TestCudaGradientReproducibility(unittest.TestCase):
         x = rng.standard_normal((2, in_ch, 9, 10)).astype("float32")
         w = rng.standard_normal((out_ch, in_ch // groups, 3, 3)).astype("float32")
         runs = []
-        with jt.flag_scope(use_cuda=1):
+        with jt.flag_scope(use_cuda=1, float32_cudnn_precision="highest"):
             seed = None
             for _ in range(5):
                 xv, wv = jt.array(x), jt.array(w)
