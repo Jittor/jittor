@@ -1,5 +1,15 @@
 # 整改看板
 
+## 2026-10-28 CUDA22导入后守卫失败，维护测试尚未开始
+
+Day2–5仍为 **Not complete**。storage r3/source`2dad903f…`的CUDA22新包manifest`70d45275…`经root审阅后唯一串行执行；独立PT真实CUDA22/22 PASS，JT完成新CUDA core与扩展后在导入后flag守卫退出，尚未collection/数值测试，overall receipt `8540056b7993d6be89d78efd35c6048fede386fecf3d0499b3206d5e7dd73c5c`保留。旧child未记录实际has_cuda/use_cuda值，不回填。静态查明公开shim安装会自动启用CUDA，不能要求其完成后flag仍为0；工具还错误沿用CPU core/utils同目录假设。实际新core`16a21ef1…`为has_cuda=1，231编译单元/779源签名可核验，utils位于CUDA子目录的父级，符合冻结compiler路径规则；该事后证据不替代原失败收据或JT测试。source/tools exact，自有两组与精确cache lock记录空，无重试/重冷编。metadata-only后继正在离线准备，须显式采用本次新CUDA core、继承已通过PT22并记录真实flag后另审；CPU原48/维护22 PASS保持，lifecycle/full logits/LoRA与其余发布门槛仍OPEN。
+
+## 2026-10-27 Qwen原48与维护22项CPU已通过，CUDA待独立验证
+
+Day2–5仍为 **Not complete**。本轮fresh fetch的`origin/cgq_transformers@e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`仍为main、原验收、fix、Qwen诊断及storage r3树的祖先，无需整合；main起点`8a2e9b74e8c8d8c8cb7091eb829c500c53efe085`、96项原dirty与空index保留。隔离storage r3/source`2dad903f…`完成独立PT/JT原48项CPU逐字段对拍，pair receipt `83c8acf15651993820717e5949c9dff84da75821772e3c7634905a31d3b6b927`，48/侧、differences=[]。同批维护22项因pytest hook形参错误在注册阶段停止，零collection/测试；失败原件保留，不能算测试失败或通过。
+
+只修工具hook形参的新maintained22-only后继manifest `59fc1742…`已真实执行，receipt `17522991df431ab8003046c6ec74b95408ace1aef8d448bed0ecea06621088e5`：PT/JT各22 passed、22 CUDA项deselected、0 skip/error/failure，同nodeids、真实CPU、Jittor fallback=0；source/core/utils/stamp exact，cache仅新增20、无改删，自有组空，adopted home内精确jittor.lock无内核锁记录。未重跑已通过原48，计数是维护22/device，不是原48扩到50或52。候选未采用main，CUDA包仍只准备；lifecycle、原完整no-hook logits、LoRA及全部发布门槛不因CPU局部证据关闭。T5唯一单micro超时后未重试，余额51.29068389162421s；事后独立终审通过与正式receipt退出校验false分开保留。详细绑定见[本日结果](../results/2026-10-26-torch-compat-release-day2-5.md)。
+
 ## 2026-10-27 23:29 +0800 T5超时保留、Qwen双例CPU修复通过
 
 Day2–5仍未完成。fresh目标远端e5cffe1a仍为main及三个原验收树祖先，无需整合；main HEAD c9d963327、99项dirty和空index保留。T5唯一20261027-t5-step51-singlemicro-ordered3-r1在210s工作deadline仍编译CUDA内核，rc-15/FAILURE_RETAINED_NO_SUCCESSOR，receipt a6b3aef2…；只有preforward签名，无完整梯度/404trace/比较，不能声称模型恢复。收费212.9110761990305s，原1800s累计1748.7093161083758/余51.29068389162421，不重试或重置。root另验冻结bindings exact、自有组空/可见holder空；report集合序列化工具缺陷未动态触发。Qwen隔离storage r3 source2dad903f…/manifest3e7ebd44…在T5清理后唯一启动冷CPU双例（每runtime600s）；PT两例PASS；JT冷编完成但数值前build守卫误把仓内codegen源码当cache产物，RUNTIME_EXECUTION_FAILURE，receipt b5293d93…，零JT语义结果。原r2静默错梯度FAIL、原48/CUDA/no-hook/LoRA门槛不变。可读/proc拒读边界保留，不声称全机无holder。详情见本日结果最新增量。

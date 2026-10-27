@@ -1,5 +1,17 @@
 # 2026-10-21 工作区快照与本机接续交接
 
+## 2026-10-28 CUDA22导入守卫失败后的续接入口
+
+Day2–5未完成。隔离storage r3 CUDA22新包`70d45275…`已由root唯一串行执行：PT真实CUDA22/22 PASS；JT完成新core/扩展后在安装shim后的flag0守卫失败，零collection/维护测试，receipt `8540056b7993d6be89d78efd35c6048fede386fecf3d0499b3206d5e7dd73c5c`保持。旧child未记录实际has_cuda/use_cuda，不能回填；公开shim安装自动启用CUDA与该工具假设冲突，core/utils合法CUDA父子目录也被旧工具误判。新core`16a21ef1…`的has_cuda1/779源签名/231单元已事后核验，边界见[本日结果](2026-10-26-torch-compat-release-day2-5.md)，不替代JT数值证据。组/精确cache lock记录空，无重试或重冷编。
+
+下一步只审离线metadata-only后继：显式采用本次新CUDA core/cache、继承已通过PT22，记录两次import后的真实flag，再单独释放JT维护22。通过后仍须先补多个无holder saved-root/stop-grad/释放及kept隔离的最小lifecycle证据，不能自动采用main或启动完整Qwen/LoRA。CPU原48与维护22 PASS有效；T5单micro超时后不重试/余51.29068389162421s，Vision、BERT和正式性能门槛不变。现场仍以唯一看板及终态收据为准。
+
+## 2026-10-27 Qwen原48与维护22项CPU通过后的续接入口
+
+发布仍未完成。fresh目标远端`e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`为五相关树祖先，无需整合；main起点`8a2e9b74e8c8d8c8cb7091eb829c500c53efe085`、96项原dirty与空index保留。Qwen隔离storage r3 source`2dad903f…`已完成独立PT/JT原48项CPU逐字段对拍，pair receipt `83c8acf15651993820717e5949c9dff84da75821772e3c7634905a31d3b6b927`，48/侧、differences=[]；随后维护22在pytest hook注册失败，零测试，旧overall失败原件保留。只修hook的maintained22-only新后继已真实PASS，manifest`59fc1742…`、receipt `17522991df431ab8003046c6ec74b95408ace1aef8d448bed0ecea06621088e5`：PT/JT各22pass/22CUDA deselected/0skip，同nodeids，CPU/fallback0，source/core/utils/stamp exact，cache仅+20无改删、自有组空。原48不重跑，维护22/device不与原48相加成新矩阵。
+
+下一项是审查已准备的CUDA22包：须精确绑定本次CPU成功receipt、独立CUDA cache/新core、足够显存和root串行JIT释放；只准备不等于执行。采用has_cuda=1/use_cuda=0导入后公开CUDA scope，不叠加T5初始化patch。r3未采用main，lifecycle、原完整no-hook logits及LoRA门槛均OPEN；T5唯一单micro超时后未重试，余额51.29068389162421s，事后独立审计不改正式失败receipt。Vision、BERT与Day4–5正式性能FAIL/OPEN不变；精确绑定与审计路径见[本日结果](2026-10-26-torch-compat-release-day2-5.md)。
+
 ## 2026-10-27 23:29 +0800 T5终态与Qwen双例CPU修复通过
 
 fresh origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81仍为四相关树祖先；main HEAD c9d9633277ba0465bc9fa06f6ade798e16f34255、99项dirty/空index保留。T5唯一20261027-t5-step51-singlemicro-ordered3-r1已于210s工作deadline超时，receipt a6b3aef207994256dc44a5b977f7ae6820f556fcdbff42e390a6fb6f932901dd；仅preforward签名，无完整NPZ/trace/比较，report集合序列化缺陷未动态触发。收费212.9110761990305s，原1800s累计1748.7093161083758/余51.29068389162421，无重试；root验证冻结bindings exact、自有组与可见holder空，不声称全机holder绝对空。清理后唯一启动Qwen隔离r3的600s/runtime冷CPU双例，PT已PASS；JT冷编完成但数值前build守卫误分类仓内codegen源码，receipt b5293d93ece12a837c73468e14bfd1ef9f281a8820d3e18b40b4d84780106ae4，零JT语义结果；原r2静默错梯度FAIL、原48/CUDA/no-hook/LoRA及所有发布FAIL不变。详细source/manifest和边界见本日结果，不按历史PID发信号。

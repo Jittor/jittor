@@ -1,5 +1,23 @@
 # Torch Compatibility Release Acceptance: 2026-10-26 Day 2–5 Continuation
 
+## 2026-10-28 CUDA22冷构建完成，但导入后守卫先于测试失败
+
+root核验维护CPU22成功receipt后，审阅并唯一串行释放`20261027-qwen-storage-version-r3-maintained-cuda22-r1-prepared/`，manifest SHA `70d45275e312b711854abf5766bb6a421038e01ca0aceaba8ab7a6fa6b0e032f`，候选source仍`2dad903f…`。采用新独立CUDA cache、固定nvcc12.4、环境use_cuda=0导入、公开scope1的拟议测试协议；GPU按UUID及足够显存准入，不按利用率。PT真实CUDA22 passed/22 CPU deselected/0skip，meta SHA `437763d913c6a8f6deddcebee49930d9f5823d6f355735664912ea4f52333b4e`。JT完成真实CUDA core及扩展后，在`child.py:57`的`not has_cuda or use_cuda!=0`守卫处rc1，未collection/执行任何维护测试；overall SHA `8540056b7993d6be89d78efd35c6048fede386fecf3d0499b3206d5e7dd73c5c`、JT meta SHA `f2fa68294297b07692f5369e065c12dabe43db7b75bb455580a62794cf6dce36`。旧child没有分别记录实际两值，因此不能把它当CUDA数值FAIL、推断CPU core或回填具体动态flag。
+
+离线源码核验发现`compat/torch/installers/core.py:153–168`公开shim安装在CUDA可见时主动设置use_cuda=1；工具要求安装后仍0与既有规则冲突。另`compiler.py:371`先在jit_utils.cache_path生成utils，685才给core cache附CUDA子目录，旧`fresh_build.py`的同目录前置不适用于此CUDA布局。实际新core SHA `16a21ef12a2b75f15d99b54c03c388628a3940dd8f8bb67867d4b1ceb12aa632`、utils SHA `4eeb093bbabc70593da6138c67aef1d7b27562f6be9ec3e76b25b6f45dd46198`；utils虽与CPU helper内容相同，但来自本次新cache，不是采用CPU core。root纯stdlib事后检查得到779源签名、231编译单元（194仓内/37生成）和CUDA ingredients exact，旧guard仅报`core_utils_cache_mismatch`；审计SHA `f9c2d5902c5ea7693e30eb43bca71e99528e18cb2c9d0dc763155351ad9eef70`明确compile_order取自stamp，不能冒充未记录的runtime compiler.files观测。
+
+正式失败receipt/source/tools不改，自有PT/JT组空、精确JITTOR_HOME下jittor.lock无内核锁记录；未重试、未重冷编、未采用main。metadata-only新后继仅离线准备：显式采用本次CUDA core/cache，继承已通过PT22，记录post-jittor/post-torch真实has_cuda/use_cuda，使用公开scope1并另行审阅；不静默叠加T5初始化修复，也不声称覆盖静态use_cuda=1启动。离线lifecycle审阅还保留两组最小缺口：多个无holder saved-root含stop-grad常量及图释放、compat eager-write下kept bystander隔离/相关reader拒绝；现有22不能替代这些证据。原48/维护22 CPU PASS保持，完整Qwen/LoRA、T5、Vision、BERT与Day4–5发布门槛不变。
+
+## 2026-10-27 Qwen原48与维护22项CPU后继终态
+
+发布仍 **Not complete**。本轮fresh fetch `origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`为main、原验收、fix、Qwen诊断及storage r3树祖先，无需整合；main起点`8a2e9b74e8c8d8c8cb7091eb829c500c53efe085`、原96项dirty及空index保留，runtime源码未改。现场、launch审阅与终态独立核验写入未版本化`20261027-root-maintained22-continuation-r1/`，根盘约余90GiB、data6约余6TiB。GPU共享负载不阻止显存充足的正确性验证，但不满足正式性能结论。
+
+冻结storage r3 source `2dad903f777e53c0c971d514e1bf1100be72d03b2203f9277ada3a9e817e4454`的原48项CPU已在`20261027-qwen-storage-version-r3-original48-maintained-cpu-r1-prepared/`完成独立PT/JT逐字段对拍：每侧48项，differences=[]、真实CPU/fallback0；pair receipt SHA `83c8acf15651993820717e5949c9dff84da75821772e3c7634905a31d3b6b927`，PT raw `492877422e9d772235c35b7af02e155ab56d8a5c19f0527183abc9831a771abf`、JT raw `5cd46d3b8bf21a1a207561bdac339a2d292dc7c272893d52c56fc0d962f6fe3e`。随后维护22项在PT pytest注册`pytest_runtest_logreport(result)`时发生PluginValidationError，零collection/测试，JT维护阶段未启动；overall失败receipt `c7e50e5576df534a5fe54ea2a2f23fcfd1f48ca0d95deb89296b2b68ec7a28d1`保留。原48脚本/CSV未改、已通过部分不重跑，该CPU-only探针不能改use_cuda冒充CUDA。
+
+新`20261027-qwen-storage-version-r3-maintained22-cpu-hookfix-r1-prepared/`仅修实际hook形参及体引用`result→report`、控制器缩为维护22-only；manifest SHA `59fc174277c06260a5893559225c772743f0ad0dd385a6379ccd3cbf45f280ff`。两独立pytest环境实际hookspec注册smoke先通过，不collect、不导入框架；root审阅后唯一串行执行，正式receipt SHA `17522991df431ab8003046c6ec74b95408ace1aef8d448bed0ecea06621088e5`为`PASS_MAINTAINED22_CPU_ONLY`。PT/JT各22 passed、22 CUDA项deselected、0 skip/error/failure，同nodeids，每侧66份test-return tensor记录确认CPU，JT native dispatch=CPU/fallback0。JUnit SHA分别为`3674b462ef042b0e1e8d595d9bf8615e731906b4865fc6b1e93335e7d8637054`、`2c267161e371acc3b51f40b95ea3eb4577b5743652837d15c8d69e3dea90cf21`；core `b58f1709…`、utils `4eeb093b…`、stamp `d49c7d30…`与1225源码守卫均exact，缓存从794仅新增20、无改删，自有进程组空。精确adopted-home jittor.lock在内核锁表无持有记录，未据此声称全机所有不可读进程无holder。
+
+计数是既有维护文件22/device（原20+新2），并非原48扩到50或52。此时CUDA22包仅离线准备，须绑定CPU成功receipt、独立真实CUDA core与显存准入后另行释放；r3未叠加T5初始化修复，合法协议为has_cuda=1/use_cuda=0导入后公开scope(use_cuda=1,backend_fallback="error")，不证明静态use_cuda=1启动。候选未采用main，lifecycle覆盖、完整Qwen原no-hook logits、LoRA与所有发布FAIL保持。T5 `TERMINAL_INDEPENDENT_AUDIT.json` SHA `bb77e028dccef5667b44aa2c80dd401112f934f1f6f4691a7d283b13dca9aa5f`事后验证75 bindings与2817源文件/权限/软链接exact，不改正式receipt的退出校验false；唯一单micro超时、预算余额51.29068389162421s与禁止重试边界不变。
+
 ## 2026-10-27 23:29 +0800 T5单micro超时；Qwen原生修复双例CPU通过
 
 Day2–5仍未完成。重新fetch origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，main及三个原验收/诊断树均已包含，无需整合。main HEAD c9d9633277ba0465bc9fa06f6ade798e16f34255、99项dirty/空index保留；根盘余91GiB、data6余6TiB。只备份/更新本三文档，未改runtime源码。
