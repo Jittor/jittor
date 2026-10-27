@@ -1,5 +1,27 @@
 # 整改看板
 
+## 2026-10-28 01:57 +0800 SiLU后继原完整Qwen门禁仍FAIL
+
+Day2–5仍 **Not complete**。`20261028-qwen-silu-r4-nohook-successor-r2-prepared/attempt-01`的原worker/comparator自然rc0（250.166/3.117s），正式receipt `544f7f9d7d42549653e61da1b99aa05ccc73b5dd5c312e8126c3c64b14827949`为`FULL_NOHOOK_NUMERICAL_FAILURE_RETAINED`。原29,171,712全logits含padding仍超限10,119,974项、max_abs4.587890625；有效位置4,375,563/22,030,720超限、max_abs0.4375，输入exact且loss满足原门槛，不能据局部SiLU通过关闭模型门禁。原0.005+0.03阈值不变，comparison `2fc9e50c…`；root独立28项终审 `a0da4374…`复算同结论，实际CUDA/fallback0、source/core/stamp/env/顺序/ingredients exact，cache只新增248允许文件、无改删，组空/精确锁空。候选未采用main，LoRA不启动、不重试同cohort。下一项仅验证cat autocast单因子旧路径精度假说，先独立PT/旧JT CPU与真实CUDA原14case，未复现则停止，不能先叠加rsqrt/mean/RMSNorm或从静态建议启动模型。其余FAIL/预算及Day4–5门槛保持。详见[本日结果](../results/2026-10-26-torch-compat-release-day2-5.md)。
+
+## 2026-10-28 01:46 +0800 SiLU局部CPU/CUDA通过，原full no-hook待验
+
+Day2–5仍 **Not complete**。r4原SiLU四个23点unit/native-AMP行在CPU及真实CUDA的前向/输入梯度均对独立PT和量化数学exact，nonunit同样exact，FP32无退化；CPU原维护2+邻近1通过，CUDA原维护2+activation1+groupnorm2均通过，零skip/xfail、fallback0，source/products/environment/compile-order exact。CUDA numeric receipt5c0200ff、root39项终审870851c0；CPU终审a1fcde78。旧FAIL不改写、候选未采用main。下一项仅新source/core/terminal-cache绑定的原完整no-hook，当前尚未执行；LoRA不启动，其余FAIL/预算保持。详见[本日结果](../results/2026-10-26-torch-compat-release-day2-5.md)。
+
+## 2026-10-28 01:40 +0800 r4 CUDA新构建身份通过
+
+Day2–5仍 **Not complete**。CUDA-only冷构建约401.89s自然rc0，receipt a45491fa9d8bdc674b69df90bd9ee85b3e78b0f10fe3b3253295d6865d436aca为PASS_COLD_BUILD_IDENTITY_ONLY。231TU、40启动/51导入后环境、source/core/utils/stamp及两次fresh审计通过，真实has_cuda=true/use_cuda=1；root终审6b87523f确认组空/精确锁空。尚未执行CUDA数值或原full no-hook，CPU已通过部分不重跑；下项仅绑定本次新产物/NO_BUILD的CUDA原SiLU数值及原selected回归，非发布PASS。详见[本日结果](../results/2026-10-26-torch-compat-release-day2-5.md)。
+
+## 2026-10-28 01:33 +0800 r4 SiLU CPU通过，CUDA冷构建中
+
+Day2–5仍 **Not complete**。CPU metadata后继receipt9c5c57a5通过；原冷构建环境误判FAIL保留，NO_BUILD采用此次r4 CPU core，完整环境/227顺序/ingredients与732文件cache exact。新CPU数值manifest75abb723、receipt5620f81d证明四个原23点unit低精度/native-AMP行的前向和输入梯度对独立PT及原量化数学exact，BF16(4.59375)=4.5625；非unit/FP32无诊断退化。原维护2pass及FP32邻近1pass、零skip/xfail、fallback0/source/core/stamp不变，root28项终审a1fcde78。CUDA-only新cache bootstrap manifest40a9c54d已由root单次串行释放，900s上限、无重试；尚无CUDA数值或原完整no-hook结果，其余FAIL/预算不变。详见[本日结果](../results/2026-10-26-torch-compat-release-day2-5.md)。
+
+## 2026-10-28 01:24 +0800 r4 CPU构建完成，环境守卫失败保留
+
+Day2–5仍 **Not complete**。CPU227编译单元及两次fresh-build审计通过，约344s后自然rc1，未达600s上限、没有张量或测试执行。正式receipt SHA 485d77dfe06eac3b05254d7ded547e4c0bdec4ccf1e5c4887e666747b0aaa637仍为COLD_BOOTSTRAP_FAILURE；失败发生在工具将公开shim的HOME/TMPDIR重定向误判为环境漂移，不是编译或SiLU数值失败。新CPU core487a8fd8、utils24b09003、stamp2078dac1保留，root14项终审da27fee8确认产物/source exact、自有组空、精确锁无内核holder。
+
+fresh远端e5cffe1a为main及相关五树HEAD祖先，无需整合；main298bb8422原96项dirty/空index保留。下一步新metadata后继严格核对公开shim完整环境转换，采用本次CPU产物/NO_BUILD，不重冷编、不改旧FAIL；CPU后继成功后才单独审CUDA900s新cache构建。数值、维护回归和原full no-hook仍未执行，其余发布FAIL/预算保持。详见[本日结果](../results/2026-10-26-torch-compat-release-day2-5.md)。
+
 ## 2026-10-28 01:10 +0800 SiLU旧缺陷真实复现，隔离r4待验证
 
 Day2–5仍 **Not complete**。`20261028-qwen-silu-current-r3-r1-prepared/`在source `2dad903f…`独立PT/JT CPU与真实CUDA完成每侧/device10行有界捕获，manifest `c3fdde08…`、receipt `6f895f7b07c1cf02ece16a68b8be1961538103ab87dfceb119bf32ef72d510c7`终态`OLD_SILU_FAILURE_REPRODUCED_CPU_AND_REAL_CUDA`。每device四个原unit-cotangent低精度/native或AMP case均PT与原量化数学exact，JT前向和输入梯度均偏离；BF16(4.59375)在两device均JT4.53125/PT4.5625。非unit/FP32仅诊断，未新增容差。source/core/stamp不变、fallback0、CPU/CUDA各新增60个允许JIT产物且无改删，自有组与精确锁记录空；root独立终审 `8aaa4665…`复验成立。

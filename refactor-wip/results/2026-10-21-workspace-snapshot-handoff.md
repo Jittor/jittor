@@ -1,5 +1,25 @@
 # 2026-10-21 工作区快照与本机接续交接
 
+## 2026-10-28 01:57 +0800 原Qwen no-hook已终态FAIL，禁止重复启动
+
+r4原full no-hook receipt `544f7f9d…`、comparison `2fc9e50c…`仍FAIL：10,119,974/29,171,712超原阈值、max_abs4.587890625，有效位置亦FAIL；worker与comparison均自然rc0。root独立终审`a0da4374…`28项全真，source/env/core/cache合格、组/精确锁空，原数值失败有效。新CUDA终态cache只能取该attempt/cache-after；局部SiLU PASS不能替代模型。下一项cat autocast单因子旧端14case×独立PT/JT×CPU/CUDA仅离线准备，root审阅后才逐阶段执行；当前未修cat、未启动LoRA、未采用main、无重试。Day2–5未完成，其他门槛与原预算保持。详见[本日结果](2026-10-26-torch-compat-release-day2-5.md)。
+
+## 2026-10-28 01:46 +0800 SiLU局部CPU/CUDA通过，原full no-hook待验
+
+Day2–5仍 **Not complete**。r4原SiLU四个23点unit/native-AMP行在CPU及真实CUDA的前向/输入梯度均对独立PT和量化数学exact，nonunit同样exact，FP32无退化；CPU原维护2+邻近1通过，CUDA原维护2+activation1+groupnorm2均通过，零skip/xfail、fallback0，source/products/environment/compile-order exact。CUDA numeric receipt5c0200ff、root39项终审870851c0；CPU终审a1fcde78。旧FAIL不改写、候选未采用main。下一项仅新source/core/terminal-cache绑定的原完整no-hook，当前尚未执行；LoRA不启动，其余FAIL/预算保持。详见[本日结果](2026-10-26-torch-compat-release-day2-5.md)。
+
+## 2026-10-28 01:40 +0800 CUDA构建已终态，接数值门禁
+
+CUDA cold-stage已自然rc0，约401.89s、receipt a45491fa为PASS_COLD_BUILD_IDENTITY_ONLY；新core b1e8991a/utils24b09003/stamp2e157b0b、231TU/完整环境及source通过，root终审6b87523f、组空/精确锁空。不要重复cold-stage/CPU数值，下一项绑定本次产物和NO_BUILD的CUDA numeric、维护2/activation1/groupnorm2后继；目前仅构建身份通过，不能视为CUDA数值或full no-hook通过。Day2–5仍未完成，详见[本日结果](2026-10-26-torch-compat-release-day2-5.md)。
+
+## 2026-10-28 01:33 +0800 CPU数值已通过，接CUDA终态
+
+CPU metadata9c5c57a5、SiLU原4unit精确对拍5620f81d、维护2pass/邻近1pass已完成，root终审a1fcde78见20261028-root-silu-r4-continuation-r1/root-silu-cpu-terminal-audit.json。旧环境误判FAIL保持；CPU不必重跑。root唯一CUDA cold-stage现为20261028-qwen-silu-r4-cuda-bootstrap-successor-r1-prepared/attempt-01-cuda，manifest40a9c54d，900s单次，新cache且禁止自动后继。先核实其终态与产品，再绑定CUDA numeric/维护/邻近后继；当前无CUDA数值或原full no-hook证据，禁止据CPU PASS启动LoRA。Day2–5及其他FAIL/预算保持，详见[本日结果](2026-10-26-torch-compat-release-day2-5.md)。
+
+## 2026-10-28 01:24 +0800 CPU构建终态续接
+
+CPU227TU及两次fresh-build审计通过，约344s后工具将公开shim的HOME/TMPDIR重定向误判，receipt485d77df/child00500cf1保留FAIL/rc1；未超时、未执行张量或测试。root14项终审20261028-root-silu-r4-continuation-r1/root-cpu-cold-terminal-audit.json SHA da27fee8核对新core487a8fd8/utils24b09003/stamp2078dac1未漂移，自有组空、精确锁无kernel holder。先以新metadata后继严格验证完整环境转换，NO_BUILD采用该产物，禁止重冷编和改旧FAIL；CPU后继成功才单独审CUDA900s。修复数值/维护/full no-hook尚未执行。fresh远端e5cffe1a为六树祖先，main298bb8422原96dirty/空index保持；其余FAIL、预算及HOLD不变。详见[本日结果](2026-10-26-torch-compat-release-day2-5.md)。
+
 ## 2026-10-28 01:10 +0800 SiLU真实旧失败与隔离r4入口
 
 storage r3的lifecycle通过后，先按原审阅完成SiLU-only旧路径独立CPU/真实CUDA。新包`20261028-qwen-silu-current-r3-r1-prepared/` manifest `c3fdde08…`、receipt `6f895f7b…`、root终审 `8aaa4665…`：每device四个原23点unit低精度/native-AMP行PT/math exact，JT forward/input-grad均差；BF16样例4.53125对4.5625。source/core/stamp不变、fallback0/cache无改删/组空，旧失败有效，不是修复PASS。

@@ -1,5 +1,41 @@
 # Torch Compatibility Release Acceptance: 2026-10-26 Day 2–5 Continuation
 
+## 2026-10-28 01:57 +0800 SiLU后继原完整Qwen数值仍FAIL
+
+新包`20261028-qwen-silu-r4-nohook-successor-r2-prepared/` manifest `d93a36a0fdde79a46997aae0b3dce720bb730d56ca64724880b3f9fdfbc46490`经root核验22文件与CPU3/CUDA4/root前置、1150终态cache exact后单次执行。worker/comparator自然rc0、分别250.166/3.117s，未达1800/120s cap；正式receipt SHA `544f7f9d7d42549653e61da1b99aa05ccc73b5dd5c312e8126c3c64b14827949`终态`FULL_NOHOOK_NUMERICAL_FAILURE_RETAINED`，comparison SHA `2fc9e50c7399be0da4ba9d0983f80ec87a666e620bb6f6fb427d13a1aa404677`。原29,171,712全logits含padding有10,119,974项超0.005+0.03|PT|、max_abs4.587890625；有效22,030,720项有4,375,563超限、max_abs0.4375，padding7,140,992项有5,744,411超限。三输入exact，loss JT2.6934099197387695/PT2.6900217533111572、abs0.0033881664276123047满足原门槛；仅logits失败，不能删padding/改阈值。七数值文件保持原字节、独立PT oracle43a5c1e9保持，原失败不改。
+
+root独立终审`20261028-root-silu-r4-continuation-r1/root-nohook-terminal-audit.json` SHA `a0da43740e2e3692a8446badddbb530cb0d26ef128d83b860b8c04c79420f883`的28项检查全真，分块独立复算全部输入/logits/loss及3,393,527 exact logits，不依赖comparator PASS标志。实际CUDA0/fallback0、source b3c6c32a/core b1e8991a、完整环境、actual compile-order/ingredients及所有工具exact；NO_BUILD无core重编、仅新增248允许jit文件，无改删/非法新增，自有controller与两stage组空、精确锁无内核holder。原主树dirty文件除本三文档均未变，候选未采用main，没有LoRA/训练/自动retry。
+
+SiLU-only已修复其真实CPU/CUDA局部缺陷，但不足以关闭当前完整模型门禁；不可由FAIL计数小幅变化声称已证明模型因果修复。离线建议`20261028-qwen-r4-nohook-fail-next-control-offline-r1/review.md` SHA abb33230e931fd5547a39523f014440219de3e53400ac316484171a6eb5af0ea仅核验旧差异中的8个forward文件，下一假说为compat cat在autocast下的原生amp_reg泄漏。先原字节复用`test_cat_autocast_precision.py`的14case（12组合各cat/rotate，另2二阶）完成独立PT/旧JT CPU/真实CUDA旧端最小证据，未复现即停止；未开始cat修改或新模型。rsqrt/mean/RMSNorm/历史工具链仍未排除，不叠加。Day2–5、BERT/T5/Vision/GC及Day4–5门槛与原预算保持。
+
+## 2026-10-28 01:46 +0800 SiLU CPU与真实CUDA原精确门槛通过
+
+隔离r4 source b3c6c32a、core b1e8991a的新CUDA numeric、维护、FP32 activation、GroupNorm融合/残差回归均单次自然rc0。四个原23点unit低精度/native-AMP行的forward/input-gradient对独立PT及原量化数学exact，nonunit补充也全部exact；FP32保持原路径与差异，没有诊断退化。numeric receipt5c0200ff8754d6012bec314df0da1a3d3c114d7710a8a00d62f4851bb5e83e25；原selected维护2/activation1/groupnorm2为5pass/0skip/0xfail，receipts3cf44bfd/f4a8787d/b8497192。source/core/utils/stamp及完整环境/actual compile-order/ingredients exact，fallback0，四阶段仅新增允许jit文件60/8/4/136、无改删；自有组空、精确锁空。
+
+root39项终审20261028-root-silu-r4-continuation-r1/root-silu-cuda-terminal-audit.json SHA870851c0be1c09d1400267483f87534a7c3feccf3c30dda67362e6bc837dd6ff独立复算原unit数学，明确仅局部门槛通过；CPU28项终审a1fcde78及此前CPU2+1回归保持。终态CUDA cache基线来自groupnorm/cache-after，不能采用bootstrap或旧r3 baseline。下一项是绑定这些真实收据/产品/终态cache的新原full no-hook后继，保持七数值文件原字节、29,171,712全logits含padding及原0.005/0.03、worker1800/comparator120。此刻尚无新完整模型结果，候选未采用main、LoRA不启动。Day2–5仍未完成，其余FAIL/预算保持。
+
+## 2026-10-28 01:40 +0800 CUDA冷构建成功，只确认身份
+
+20261028-qwen-silu-r4-cuda-bootstrap-successor-r1-prepared/attempt-01-cuda在401.88535046577454s内自然rc0，正式receipt SHA a45491fa9d8bdc674b69df90bd9ee85b3e78b0f10fe3b3253295d6865d436aca，状态PASS_COLD_BUILD_IDENTITY_ONLY，未执行张量/测试/模型。两次fresh审计231TU（动态统计、不固定旧count）、完整40启动/51导入后环境字段、source及原生stamp通过。has_cuda两阶段true/use_cuda两阶段1，环境use_cuda0保留，符合公开shim自动enable；不外推静态环境1启动。
+
+新core SHA b1e8991ac775ed7c7e0fe897783d01440da7d09da783979f14e3f7c4cef6ac10、utils24b09003e71eca7fa94c451e62f2e120dc92d3896daeafc5da2a575c223bab15、stamp2e157b0b3964b471245705d2fd9544e6d5d66130b37bd9c3897ec685b16cf01c，均来自此次全新cache，不迁移旧core或写stamp。root终审root-cuda-bootstrap-terminal-audit.json SHA6b87523fec1cba3cbcf2d93bcacf5e5bca3631e38be296c14d2f17784e07f1d9复核产品SHA/mtime/size、source/env/audit/无tensor、自有两组空及精确锁无kernel holder。原CPU cold-stage FAIL保持，已通过CPU元数据及数值无需重跑。下一项是新CUDA-only数值后继，绑定上述实际产物/环境及NO_BUILD，继承原独立PT；numeric、维护2、activation1、GroupNorm邻近2分别单次放行。此刻无CUDA数值或原完整no-hook新结果，Day2–5及其他FAIL/预算不变。
+
+## 2026-10-28 01:33 +0800 r4 SiLU CPU精确对拍与回归通过
+
+新CPU metadata后继manifest f7d802ab、正式receipt 9c5c57a5e919acee38237f4eb07d10170b6bd635c171ba78f73127914e549bf0通过，NO_BUILD采用本次r4产物；完整导入前后环境/实际227顺序及ingredients exact，732文件cache无增删改，组空/锁空。原冷构建的环境误判FAIL保持原件。root14检查终审d60478ab记录此CPU元数据结论，不替代数值。
+
+独立CPU数值后继20261028-qwen-silu-r4-numeric-cpu-r1-prepared/ manifest75abb723以原PT和旧JT10行逐值对拍，新JT10行完整。四个原23点unit低精度/native-AMP行的前向与输入梯度对独立PT和原量化数学均exact；BF16(4.59375)已正确为4.5625。正式numeric receipt5620f81d3474544630351771f973804adbf94d8e9412729b83ed6a4d6ebf88ce；非unit/FP32诊断无新增退化。原维护CPU两项与FP32 activation邻近一项分别2pass、1pass、0skip/xfail，receipts df832cde/5a7e74b3。fallback0、source/core/stamp不变，仅新增允许jit产物60/0/18，无改删。root28项独立终审root-silu-cpu-terminal-audit.json SHA a1fcde78a838d3d842cee4b3a76c33c607ae465a8cfb1b201efb17d78592dea8复算原unit数学并核对所有执行绑定。
+
+CUDA新cold successor20261028-qwen-silu-r4-cuda-bootstrap-successor-r1-prepared/ manifest40a9c54d已由root唯一串行释放，CPU前置绑定实际PASS、新cache/不采用旧core、原900s上限。首次准入固定UUID空闲51296MiB，不按utilization。当前仅cold import/编译阶段，尚无CUDA数值或完整no-hook结果；不得把CPU精确对拍外推CUDA或模型。Day2–5仍未完成，其余FAIL与预算保持。
+
+## 2026-10-28 01:24 +0800 CPU冷构建终态与工具环境误判
+
+fresh fetch目标远端origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，已为main、原验收/fix/Qwen、storage-r3及SiLU-r4各HEAD祖先，无需整合。main起点298bb8422e24f50958c31e479ed867d2ed82909a，96项dirty及空index保存于未版本化20261028-root-silu-r4-continuation-r1/main-dirty-before.json。其余五树分别51/85/87/109/111项dirty，未清理或覆盖；根盘余约85GiB、data6余6TiB，共享GPU不作为正式性能证据。
+
+此前203目标文件的进度已终结：20261028-qwen-silu-r4-bootstrap-r1-prepared/attempt-01-cpu完成227TU（190仓内/37生成），两次fresh-build审计passed。新core SHA 487a8fd8b8a8a4e4c534e0f29fd35f70427fb9983c1f8c87cc3f907901db8aa4、utils24b09003e71eca7fa94c451e62f2e120dc92d3896daeafc5da2a575c223bab15、stamp2078dac10c822a3330577720f82b3968ad8d7723a86328035219e7421d5f4f96。正式receipt SHA 485d77dfe06eac3b05254d7ded547e4c0bdec4ccf1e5c4887e666747b0aaa637及child00500cf191d9eedf6e30d0a45eba5c64a59b659a82c7834d735db26a365c9938保留COLD_BOOTSTRAP_FAILURE/rc1；约344s、未超时、没有测试或张量执行。工具在shim_identity_import后要求原HOME/TMPDIR，而冻结公开compat/shim/preflight.py明确重定向它们，因此post环境守卫失败。两次core/utils/stamp、compile-order、源码审计均通过，旧FAIL不改为PASS。
+
+root纯stdlib14项终审root-cpu-cold-terminal-audit.json SHA da27fee8c2fdd2f69e59d11712b139ace1d21b2fcb0a5ee049ec32982804b061核对收据、产品SHA/mtime/size及source均exact，自有controller/child组空，精确锁inode32849971无kernel holder。下一项新metadata后继仅采用这次CPU产物/原cache并设置NO_BUILD，按公开shim精确推导完整环境，不重冷编、不泛放行变化。CUDA900s尚未启动，依赖有效CPU后继；之后独立SiLU数值、维护/邻近回归、原完整no-hook分别放行。numeric和nohook的r4准备包均缺产品/成功前置绑定、HOLD且无runtime。Day2–5未完成；T5/Vision原预算/禁止重试、BERT原gap/缺checkpoint、Day4–5稳定三轮/容量/峰值条件保持。
+
 ## 2026-10-28 01:10 +0800 SiLU前向/输入梯度独立CPU与真实CUDA旧失败
 
 遵循此前离线因果审阅的SiLU-only优先顺序，未在storage修复后直接重跑完整模型。新`20261028-qwen-silu-current-r3-r1-prepared/`沿用source `2dad903f…`与已通过cores/env，manifest SHA `c3fdde08e7b42c517413572f66aa4b7159d9c4800e4c5f0042e8ee3ea009af9b`。root在offline comparator正负控/dry通过后唯一串行执行PT CPU→JT CPU→PT真实CUDA→JT真实CUDA，cap120/180/120/360s、无超时或重试。每侧/device10行含4原23点unit-cotangent低精度fixture（BF16/FP16、native/AMP）、4非unit补充和2FP32诊断；原unit/math门槛仍exact，补充行不杜撰容差。正式receipt SHA `6f895f7b07c1cf02ece16a68b8be1961538103ab87dfceb119bf32ef72d510c7`为`OLD_SILU_FAILURE_REPRODUCED_CPU_AND_REAL_CUDA`，不是修复或发布PASS。
