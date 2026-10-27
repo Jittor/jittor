@@ -1,5 +1,13 @@
 # Torch Compatibility Release Acceptance: 2026-10-26 Day 2–5 Continuation
 
+## 2026-10-28 05:21 +0800 r7独立root38通过，原dtype差清零
+
+root单次独立复算117数组/113有序边界及五probe全部有效，`20261028-root-rmsnorm-r7-continuation-r1/root-r7-layer-capture-terminal-audit.json` SHA `9416389296587a6c103ba8669c22e6967495be834e4716188d9ad4978e73b8de`，38项全真、exec84321自然rc0。实际CUDA/fallback0、完整环境/source/core231/order/ingredients、1306终态cache与组锁有效；这仅允许采用诊断边界，full/nohook/causal/release仍全false。
+
+本次113边界原tensor dtype差异为0（旧r6为六处q/k norm），首层q_norm/k_norm输出、输入、weight及q/k/v投影均对PTexact；不能继续把旧mixed-dtype差写成r7剩余失败。首层attention概率仍不同1302/294912、max_abs0.004319220781326294，o_proj不同1515/196608、max0.001953125；更早RoPE order1仍有1284项微差/max7.539987564086914e-6，首层input_layernorm有FP32微差。新首差不是根因证明。下一项仅离线准备saved r6/r7逐边界对照和首层attention同输入算子回放，区分PT/JT cos-sin单因子及后续计算；两侧本地回放须先exact各自原概率，尚未执行，不先修改新源。旧r56/r58对其原cohort的无影响结论保留，不能未经验证推广至改变dtype后的r7。原完整logits仍FAIL8,690,528/29,171,712，LoRA不启动、候选未采用main，Day2–5仍 **Not complete**；其他FAIL、预算、Day4–5门槛保持。
+
+saved r6/r7/PT逐边界对照也已单次完成，未运行任何框架/模型；包 `20261028-qwen-r6-r7-pt-capture-diff-r2-prepared/` manifest `cb348b2ddf4aca9e7d4526856ce49acb41162778ba29403369bf07a529e45190`，正式receipt `b99d7ebcfabc577c7c730e4e1691462e4643ff538a3cd8bc9673d96f5a4588c2`、comparison `1edd164b6d955b33891f9b5e7b6c0d6c757eef99627bcd44aa4fb394e2ffc5bc`。113边界中六处原dtype改为PT匹配、零新增dtype差；两数组由不exact变全exact（首层q/k norm），零数组级exact退化，但元素级仍有2,594,086项旧exact→新不同，不能称单调改善。第二/三层q/k norm输入已与PT不同，不能以这些不同输入的输出误差孤立归因RMSNorm。sum113含重复底层激活，仅为保存边界exact诊断，不是完整logits容差统计。
+
 ## 2026-10-28 05:16 +0800 r7 capture已终态，独立边界复算待验
 
 新r7原113边界capture的worker/comparator均自然rc0（64.618/7.088s），exec89591已收回；正式receipt `cdb04b21cf898066c72c9c81187a5b01e93fb4a049a813f749bbe69e7f980362` 为 `DIAGNOSTIC_CAPTURE_COMPLETE_GATE_UNCHANGED_FAIL`，comparison `8b25c1c290f6c44d140b97a0eb224c857b30dda46f7d12de7c4ab54a980a146b`。原capture/comparator确认五probe逐字复现本次r7 no-hook；尚待独立root38，暂不采纳新首差异解释。
