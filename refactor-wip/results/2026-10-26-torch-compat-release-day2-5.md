@@ -1,5 +1,33 @@
 # Torch Compatibility Release Acceptance: 2026-10-26 Day 2–5 Continuation
 
+## 2026-10-28 mixed-dtype 旧CUDA契约复现与隔离r7源修复
+
+metadata-only后继 `20261028-qwen-r6-rmsnorm-old-control-r2-prepared/` manifest `2706331e2d8bae94191205123fec2c19981803c5cc6505ccd97524dd38ffc248` 只首次执行JT CUDA和单列mock unit，没有重跑已完成的PT CPU/JT CPU/PT CUDA。两阶段均自然rc0，原数值/断言失败有效：JT CUDA receipt `64c6d177889b73ac2805dc22d4c9ab642036aeed8f8650d8c6ca79547f2a7cd1`，unit receipt `f9fa12a4057dfdbb61d770ef9cd02c3b0cbef06afbb45151cbd50ed889a396d2`；summary SHA `5bdba40fea75d1f5d8657af80f039c8180eb142faf49499c984e86e4036f4388`。
+
+准确失败范围是eval module调用：FP16输出仍FP16而direct-forward FP32，11/16项不同、max_abs0.0006103515625；BF16输出仍BF16而direct-forward FP32，10/16项不同、max_abs0.0087890625。训练输出两路线均FP32，input_grad为输入低精度、weight_grad FP32，训练和全部梯度的module/direct-forward比较通过。mock两例原断言均因mixed路径进入ACL检查而FAIL，单列为compat unit。root独立24项终审r2 `20261028-root-cat-r6-continuation-r3/root-r6-rmsnorm-old-terminal-audit-r2.json` SHA `f74d35c18b902d1d9f93d8ad5320dae06be318d2eb177ba01da8f26c14500112` 实际全真：复算全部原断言和payload，CUDA231TU/CPU227TU、core/order/ingredients、完整JT环境、fallback0、缓存链、组锁均有效。root终审r1曾误要求training dtype也失败，原FAIL文件SHA `d181700b…`及脚本保留；r2仅接受实际eval-only失败列表，未重跑任何runtime。最新CPU984/CUDA1430，旧文件无改删。
+
+root随后从r6 manifest完整复制到新detached worktree `torch-compat-storage-silu-cat-grad-rmsnorm-20261028-r7`（HEAD765f1791f），相对r6唯一changed为 `compat/torch/installers/nn/module_methods.py`，唯一added为原76行 `compat/tests/torch/test_rmsnorm_mixed_dtype.py`，无removed。仅在Var类型检查后/epsilon前沿用历史5行混合dtype guard，返回None以执行公开forward，不更改native RMSNorm、reduction或工具链。source fingerprint `15cafdfafa0bafa854aa23b1e0cd4f6fdd477874f43a9eaf9de95fe0e6006e06`；源manifest `20261028-qwen-rmsnorm-r7-source-r1/candidate-source-manifest.json` SHA `5e2ce491c5b3742dbf5efff970ea19356803d69258e7e302e2f1b5184fd79346`，root source review SHA `1e21f04f7410ffddf61b1f9856e8df19291cd953a39b5c1d0a279f2c54ce6861`，2806 source/2807 candidate文件。main/r6、原dirty、失败和cache均保留。
+
+04:22 +0800 root已完成新CPU600 cold包的14项launch审阅，文件 `20261028-root-rmsnorm-r7-continuation-r1/root-r7-cpu-cold-launch-review.json` SHA `8573a351a3ade20c7cd1c40f6d7b9574d3a878717a3871b6cb2fffc1e37b2f01`；包 `20261028-qwen-rmsnorm-r7-cpu-bootstrap-r1-prepared/` manifest `8b38981b065c558c3de7df7406e95f5c281da00fd1c0233c4ed242f925527625` 已由root单次启动，当前仍编译。新私有cache、NO_BUILD移除、CPU无GPU UUID、r7完整环境纯字典重派生与4helpers原字节均已核对，尚无构建终态或数值PASS，不重复启动。原mixed数值/维护、CUDA-only900与完整no-hook后继均仅离线HOLD。先核验本次CPU终态/root17及原CPU4，再单独释放真实CUDA；继而仍须原完整no-hook门槛，不先启动LoRA或采用main。完整模型因果归因尚未关闭，Day2–5仍 **Not complete**，其他FAIL/预算/性能HOLD不变。
+
+## 2026-10-28 04:11 +0800 mixed-dtype 旧控制前三侧与PT环境失败
+
+root审阅原控制包 `20261028-qwen-r6-rmsnorm-old-control-r1-prepared/` manifest `88d1b625c91bda6b0e641334ded0c02e5cd600d5921fb8d1e135bc3d716032af`，独立逆转记录包装后确认原类、array、8维fixture/数值主体和unit AST一致；launch11审阅SHA `c5674447910f68869ae6146afb07126f26a11757734dce84ae242344550b44d1`。主四阶段单次命令已自然exit1：PT CPU receipt `5feb46c6…` 与JT CPU `dc6dc678…` 原FP16/BF16各2例及两route全部通过，输出/训练输出FP32、input_grad reduced、weight_grad FP32、同runtime module/direct-forward四张量exact。JT CPU仅加40个合法JIT文件至964，CUDA1354无变化，未重冷编。
+
+PT CUDA原两例/两route均完成且36/36公共断言通过，但最终完整环境检查发现唯一新增 `CUDA_MODULE_LOADING=LAZY`，触发test_child.py line135断言，原worker/receipt均保留FAIL与自然rc1，receipt SHA `c4327f07182ca455221516f4a146d293e50e2b7f8a827fbb770c1ba4266cd145`；不能改写为原rc0。root独立stdlib审计 `20261028-root-cat-r6-continuation-r3/root-r6-rmsnorm-old-prior-terminal-audit.json` SHA `ff30a5636cf1c62679247982d9dd9100467b15cad54cffb69f2bb19ca35962e2` 实际31/31通过：48数组的float32 payload hash、dtype/shape/device、全部fixture与原断言独立复算一致，独立PT身份/固定版本、JT227TU/order/ingredients/core、完整source、缓存链及自有组/精确锁有效。仅对独立PT CUDA这一个退出环境键接受已完成的原数值，不回填旧收据、不重跑前三侧、不给JT环境引入例外。此时JT CUDA从未启动，8维旧CUDA失败尚未证实。
+
+下一项为小型metadata-only后继，绑定该root31和CPU964/CUDA1354终态，只首次执行JT CUDA，再分列原mock2 unit；旧包/r6/main源码保持，不提前创建r7、不启动模型或LoRA。发布仍 **Not complete**，其他FAIL/预算/性能准入HOLD不变。
+
+## 2026-10-28 03:57 +0800 r6 capture 独立终审
+
+root 在确认 manifest `c8e98118bceba2d591fbd2278e07b1f5dd9bf056bf0f1a978a034b9abf5ef421` 及全部工具字节后，单次运行 `20261028-qwen-r6-layer-capture-terminal-audit-r1-prepared/audit_capture_terminal.py`，未重跑框架或模型。结果 `20261028-root-cat-r6-continuation-r3/root-r6-layer-capture-terminal-audit.json` SHA `9ef576c67018306a1123b6b1b3918ce4e0497b206cd6ac3421fcd6674de8f013`，状态 `PASS_ROOT_CAPTURE_TERMINAL_DIAGNOSTIC_AUDIT_GATE_UNCHANGED_FAIL`，38/38 检查通过。独立 NumPy 复算 117 数组与 113 有序记录一致，五 probe 对本次 r3、PT 五 probe 对原独立 oracle 的 dtype/shape/raw bytes 均 exact；source、工具、完整环境、真实 CUDA/fallback0、core231/order/ingredients/stamp、只增16至1354的终态 cache、自有组与精确锁均有效。
+
+最早数值差异为 RoPE cos order1：1284 项，max_abs `7.539987564086914e-6`，原 dtype 两侧均 float32。最早原 dtype 差异为 layer0 q_norm order13：PT float32/JT BF16，374342 项、max_abs0.1484375；layer0 k_norm 为191884项、max_abs2.25。前三层共六处 q/k norm 输出 dtype 不同。capture 将 BF16 转成 float32 后存盘，故原 dtype 与 NPZ dtype 分列，不能混用，也不能把 dtype-first 误称 numeric-first 或完整模型根因。终审的 `causal_attribution_allowed/full_logits_passed/nohook_gate_passed/numerical_gate_passed/release_acceptance` 仍全 false，原 no-hook 失败不变。
+
+开工 fresh fetch 仍为 `origin/cgq_transformers@e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，为本次五个复核树 HEAD 祖先，无需整合。main `48dcbd3dd`、99 项 dirty 与空 index 保持；原树51、修复树85、历史 Qwen 树87、冻结 r6树2813项状态只作身份记录，未清理或覆盖。开工未发现本任务框架进程，根盘约84GiB、数据盘约6TiB；10张卡当次最大 free66466MiB，不满足71680MiB容量入口，不代表稳定性能窗口。
+
+下一项只准备并审阅原 `test_rmsnorm_mixed_dtype.py` 的8维 MixedRMSNorm 旧路径控制：独立PT/旧r6 JT、CPU后真实CUDA，逐项记录eval/train输出FP32、input_grad reduced、weight_grad FP32与module/direct-forward exact；两条mock dispatch单列为兼容层unit。当前包尚未执行，不创建r7、不改r6/main runtime、不重复原capture或完整no-hook。Day2–5仍 **Not complete**；其余FAIL、预算与性能准入HOLD保持。
+
 ## 2026-10-28 03:33 +0800 r6 原完整 no-hook 数值仍 FAIL
 
 Day2–5仍 **Not complete**。r3 元数据修正后，原完整 Qwen BF16 worker/comparator 均自然 rc0（225.725/3.116s），正式receipt `1644a95cb3da74682d98712b61c874857a19a6891fec9e9b1d47f3c58abfb89d` 为 `FULL_NOHOOK_NUMERICAL_FAILURE_RETAINED`。原全部29,171,712含padding logits仍超限10,119,974项，max_abs4.587890625；有效位置4,375,563/22,030,720超限，max_abs0.4375。输入exact、loss满足原门槛，不改变0.005/0.03。root独立28项终审 `356cfd07ce83a178857aef66fc1c7f4c6d6e17fc2f713f7107869b80e9256415`确认实际CUDA/fallback0、source/products/完整环境/cache/清理有效并独立复算一致，但 **numerical_gate_passed=false**；证据有效不等于模型通过。
@@ -10,8 +38,10 @@ root28终审文件为仓外 `20261028-root-cat-r6-continuation-r3/root-r6-nohook
 
 本轮fresh fetch仍为 `origin/cgq_transformers@e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，为六树HEAD祖先，无需整合；main起点`f474b69250ac891336a57e1d2cd7e3b41139bd68`，原dirty工作及空index保留。根盘约84GiB、数据盘约6TiB；未清理证据或干扰共享GPU进程。
 
-候选未采用main，LoRA不启动，不重复本次cohort。下一项先对保留r4与本次r6完整NPZ作只读逐块比较，再审查既有逐层capture与独立PT中间数组能否复用；只有捕获logits与本次no-hook exact绑定后，才据实际首差异定位下一算子，不叠加rsqrt/mean/RMSNorm等未经验证假说。T5/Vision原余额与禁止重试边界、BERT原gap和缺11份PT checkpoint、Day4–5正式稳定三轮/容量/峰值门槛均保持。
+候选未采用main，LoRA不启动，不重复本次cohort。只读分块比较已确认r4/r6完整NPZ及全部五数组bitwise exact，29,171,712个logits全部相同、修复项与新失败项均0；analysis SHA `014567ebec376f2c01b021e587584c9eb3d25d343f22d7854b549faf77f2e76a`，仓外 `20261028-qwen-r4-r6-nohook-forward-diff-r1-analysis/analysis.json`。因此cat/grad局部修复在本次cohort无可观测前向作用，不能据此关闭模型门槛。r6逐层capture包 `20261028-qwen-r6-layer-capture-r1-prepared/`（manifest `ccbbd038…`）已单次完成，worker/comparator自然rc0、50.757/6.943s；正式receipt `aa3e373e23af600dbfb50173013bcd2d3a8211b7e879817377d36d3b9dd91968` 为 `DIAGNOSTIC_CAPTURE_COMPLETE_GATE_UNCHANGED_FAIL`，仍非模型通过。原r54数值主体不变，PT113边界复用、五probe数组对本次r3逐字exact，cache只加16至1354；独立终审尚待执行，禁止重复启动。观察到embedding及首层q/k/v投影、q/k norm输入和weight exact，但q/k norm输出原dtype为PTfloat32/JT BF16，q_norm374342项不同/max0.1484375、k_norm191884/max2.25；RoPE更早也有差异，不能据边界直接归因模型根因。下一项只准备原 `test_rmsnorm_mixed_dtype.py` 数值主体的独立PT/旧JT CPU→真实CUDA最小控制，先复现混合dtype标准RMSNorm dispatch；没有修改r6或提前采用历史mixed-dtype guard。T5/Vision原余额与禁止重试边界、BERT原gap、跨模型原checkpoint缺口及Day4–5正式稳定三轮/容量/峰值门槛均保持。
 
+
+原件和容量准入窄复核 `20261028-original11-stat-and-capacity-admission-review-r1/`（manifest `1722585fbabfc01fa021aa585b0da2519f4fcc0dd023265940703b8dc369870d`）按旧audit精确逐项stat：11个checkpoint目录存在，分布BERT5/Qwen LoRA3/T5 3，但22个model或adapter safetensors与optimizer.pt原文件仍全缺，零新增/零stat错误；这不是BERT独有的11份原件。一次GPU只读采样显示10张A800均未达71680MiB free，最大66466MiB、差5214MiB；单次采样不证明稳定性能窗口。未启动waiter/JIT/模型，source/adoption/Qwen-success HOLD独立保留。
 
 ## 2026-10-28 r6原cat CPU与真实CUDA数值闭环
 
