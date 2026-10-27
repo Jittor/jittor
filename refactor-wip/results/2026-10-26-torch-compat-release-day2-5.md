@@ -1,5 +1,13 @@
 # Torch Compatibility Release Acceptance: 2026-10-26 Day 2–5 Continuation
 
+## 2026-10-28 04:34 +0800 r7 CPU冷构建及原mixed四例终态
+
+新r7 CPU600 cold已自然rc0，原包 `20261028-qwen-rmsnorm-r7-cpu-bootstrap-r1-prepared/` 正式receipt SHA `df8a4750b7399b55e24ff99a14d112e37520985322ec33b37bd95d328e476526`，状态 `PASS_COLD_BUILD_IDENTITY_ONLY`。实际227TU=190 repository+37 generated，新core `1f6945f6e816b1a45f26579caacd45891bcbc5a4726ba9103d04b549fabf170f`、utils `b2de88a150f8f255f47a31010870b6c64dd4509c5401723a5386f19dd080cc5a`、stamp `fb13fbc04a90e9c22205a4e7d0fc37b7b48f55877fbc386f33c6f72382e143cd`。两次fresh审计、完整环境/source/生成物/组锁有效，root独立17项终审 `20261028-root-rmsnorm-r7-continuation-r1/root-r7-cpu-cold-terminal-audit.json` SHA `159c707c9c7dfa25b5c3254bedcd0b7db8138d72c27ee84b7119c954c186bc97` 已实际通过；没有重跑cold。
+
+root审阅实际cold产品绑定后，单次运行 `20261028-qwen-rmsnorm-r7-original-cpu4-r1-prepared/` manifest `e1584946bf1c842736effd3fbd04cb627c9aee2226ae8e294e88b99c88ea5ae3`，CPU cap360沿旧mixed控制，不占用T5/Vision余额。唯一一次原pytest得到4 passed in 13.17s（数值2+mock2），正式receipt SHA `31e5f5efd9abf0279c482ccbb1b3f527edeb5a3500bec4b2904633a14c74b6a6`，result SHA `d5666a8f9227ad2332be6c951897a39d49259ce9fde8371a0633c590c59415fe`，状态 `PASS_R7_ORIGINAL_CPU4_CAPTURE`，自然rc0。原测试和全部断言字节未变，array helper每次只调用一次且返回原数组，未另起shared数值child。FP16/BF16原两route均满足输出/训练输出FP32、input_grad低精度和weight_grad FP32；module/direct-forward四张量exact。与已归档独立PT CPU的16张量decoded对比均exact，仅诊断，不增加跨runtime门槛。
+
+root独立stdlib终审 `20261028-root-rmsnorm-r7-continuation-r1/root-r7-cpu4-terminal-audit.json` SHA `215b435e0f740426382176eab95ebcadf7cd8f333d6eb4e3a38adb747be3758a` 的31项检查全真，独立重算payload/hash、dtype/shape/device/native dispatch、route一致性和PT诊断。完整环境、同一source fingerprint15cafdfa、实际core/order/ingredients、fallback0及组锁有效；新cache732→780只增48个合法文件，旧文件无改删。进程已自然退出；CUDA产品仍null，CUDA-only900 final仅离线准备，尚无新CUDA数值或完整模型结果。fresh fetch `origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81` 仍为五个本次复核树HEAD祖先，无需整合。主树HEAD `ec12e67ab16b5f4da91821f3b4cf224141a67e63`，逐文件99项dirty（聚合目录视图96项）均保留，另存 `main-dirty-bytes-before-cpu4-continuation.json`。下一项新CUDA-only900 cold/root17→原CUDA numeric2→最小同dtype邻近unit→原完整no-hook，逐项单次root放行，不自动重试；Day2–5 **Not complete**，不采用main、不先启动LoRA，其余门槛/预算不变。
+
 ## 2026-10-28 mixed-dtype 旧CUDA契约复现与隔离r7源修复
 
 metadata-only后继 `20261028-qwen-r6-rmsnorm-old-control-r2-prepared/` manifest `2706331e2d8bae94191205123fec2c19981803c5cc6505ccd97524dd38ffc248` 只首次执行JT CUDA和单列mock unit，没有重跑已完成的PT CPU/JT CPU/PT CUDA。两阶段均自然rc0，原数值/断言失败有效：JT CUDA receipt `64c6d177889b73ac2805dc22d4c9ab642036aeed8f8650d8c6ca79547f2a7cd1`，unit receipt `f9fa12a4057dfdbb61d770ef9cd02c3b0cbef06afbb45151cbd50ed889a396d2`；summary SHA `5bdba40fea75d1f5d8657af80f039c8180eb142faf49499c984e86e4036f4388`。

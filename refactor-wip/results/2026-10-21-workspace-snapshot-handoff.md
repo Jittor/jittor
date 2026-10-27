@@ -1,5 +1,11 @@
 # 2026-10-21 工作区快照与本机接续交接
 
+## 2026-10-28 04:34 +0800 接续入口：r7 CPU四例已通过，下一项CUDA冷构建
+
+r7 CPU cold及root17已实际终态PASS（receipt `df8a4750…`，audit `159c707c…`，227TU），随后实际产品绑定的CPU4包 `20261028-qwen-rmsnorm-r7-original-cpu4-r1-prepared/` manifest `e1584946…` 单次原pytest数值2+mock2全通过，13.17s，fallback0，自然rc0；不要重复cold或CPU4。正式receipt `31e5f5ef…`、result `d5666a8f…`，root独立31项终审 `20261028-root-rmsnorm-r7-continuation-r1/root-r7-cpu4-terminal-audit.json` SHA `215b435e0f740426382176eab95ebcadf7cd8f333d6eb4e3a38adb747be3758a` 全真。原输出/梯度dtype、route exact和完整身份/环境/source/cache/组锁有效；新CPU cache780只增48，独立PT16张量decoded exact仅诊断。进程已退出，CUDA尚未执行。
+
+下一项仅审阅离线准备的新CUDA-only900 final，绑定上述实际CPUcold/CPU4/root审计，单次冷构建后root17，再原CUDA numeric2（不重复CPU/mock/PT）与单列同dtype邻近unit，最后按原完整no-hook门槛验证。原HOLD包不原地修改，不采用main、不启动LoRA。fresh远端仍e5cffe1a，为五树祖先；main ec12e67a及原99逐文件dirty（聚合视图96）保留。发布 **Not complete**，T5/Vision原余额、BERT gap及Day4–5性能门槛不变；完整绑定见本日结果。
+
 ## 2026-10-28 接续入口：旧mixed CUDA失败有效，r7源已隔离修复
 
 原8维旧控制已完成并由root24r2终审实际PASS，`20261028-root-cat-r6-continuation-r3/root-r6-rmsnorm-old-terminal-audit-r2.json` SHA `f74d35c18b902d1d9f93d8ad5320dae06be318d2eb177ba01da8f26c14500112`。独立PT两device/两dtype通过，旧JT CPU通过；旧JT CUDA两dtype只在eval module输出dtype/对应array_equal失败，training及两类grad断言和比较都通过。mock2 ACL失败单列。PT CUDA原LAZY元数据rc1、root终审r1错误预期training失败等原件均保留，不重跑旧控制。最新CPU984/CUDA1430，组/精确锁空。

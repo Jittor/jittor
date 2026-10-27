@@ -1,5 +1,11 @@
 # 整改看板
 
+## 2026-10-28 04:34 +0800 r7 CPU冷构建及原mixed四例终审通过
+
+r7 CPU cold已自然rc0，正式receipt `df8a4750…` 为 `PASS_COLD_BUILD_IDENTITY_ONLY`，227TU=190 repository+37 generated；root17独立终审 `20261028-root-rmsnorm-r7-continuation-r1/root-r7-cpu-cold-terminal-audit.json` SHA `159c707c9c7dfa25b5c3254bedcd0b7db8138d72c27ee84b7119c954c186bc97` 全真。随后root单次执行实际新产品绑定的 `20261028-qwen-rmsnorm-r7-original-cpu4-r1-prepared/`（manifest `e1584946…`，cap360），原pytest四例=数值2+mock2全部通过，13.17s，fallback0，未重跑独立PT或另起数值child。原FP16/BF16的eval/train输出FP32、input_grad低精度、weight_grad FP32，module/direct-forward四张量exact；本次捕获与已保存独立PT的16张量decoded值也exact，仅作诊断。
+
+正式CPU4 receipt `31e5f5ef…`，result `d5666a8f…`；root独立31项终审 `root-r7-cpu4-terminal-audit.json` SHA `215b435e0f740426382176eab95ebcadf7cd8f333d6eb4e3a38adb747be3758a` 全真，逐payload/dtype/device/native dispatch/hash/原断言及完整环境、source/products、cache和组锁有效。新r7 CPUcache732→780仅增48，旧文件无改删；CPU进程已自然退出，无holder。当前仅离线准备CUDA-only900新final，尚未执行CUDA；原mixed CUDA2、同dtype邻近unit及原完整no-hook仍待验。fresh fetch远端仍 `e5cffe1a…` 为本次五树祖先，无需整合；main `ec12e67a…` 的99项逐文件dirty（聚合目录视图96项）保持。Day2–5仍 **Not complete**，不采用main、不启动LoRA，其余FAIL、原预算与Day4–5门槛保持。
+
 ## 2026-10-28 mixed-dtype 旧CUDA失败确认，r7仅单因子源修复
 
 旧控制后继 `20261028-qwen-r6-rmsnorm-old-control-r2-prepared/` manifest `2706331e…` 已自然完成：JT CUDA两原dtype均FAIL，准确范围仅eval module输出仍为FP16/BF16、direct-forward输出FP32，分别11/16与10/16数值不同；训练输出FP32、input_grad reduced、weight_grad FP32及其余route比较全部通过。原mock2单列ACL拒绝断言FAIL，不能混入独立PT数值。root24项终审r2 `root-r6-rmsnorm-old-terminal-audit-r2.json` SHA `f74d35c18b902d1d9f93d8ad5320dae06be318d2eb177ba01da8f26c14500112` 通过，真实CUDA/fallback0、完整JT环境无PT例外、source/core/order/ingredients/cache/组锁有效；最新CPU984/CUDA1430。root终审r1错误预期training也失败而FAIL，原件保留，以实际eval-only范围的r2为准，不重跑数值。
