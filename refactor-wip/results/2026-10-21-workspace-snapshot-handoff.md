@@ -1,5 +1,125 @@
 # 2026-10-21 工作区快照与本机接续交接
 
+## 2026-10-27 22:00 +0800 当前续接入口
+
+Day2–5仍未完成。main765f1791与全部dirty/index保留，fresh目标远端e5cffe1为祖先。T5已定位并在隔离source715081d6修复fetch全局初始化次序与ordered代码生成的KernelIR容器问题；CPU44及真实CUDA44、全部VJP/provider负例、两个32次归约各1hash、fresh41fetch/twice-cleanup全PASS，CUDAreceipt0fb79f7b…、coreb63e552b…、fallback0且组/holder空。这只关闭底层前置，旧模型771/2088FAIL不变。public norm32fresh flag3已rc0/PASS，96份y/dx/dgamma各1hash，receipt8c296ff7…；仍为synthetic upstream的确定性诊断，不是原模型因果/恢复通过。同源flag0控制已完成（receipt524b348c…），y1/dx32/dgamma32hash，flag3各1hash，192份数组和provider实物独立审计通过，公开norm局部干预成立；模型恢复仍未验证。原1800s家族累计1535.7982399093453/余264.2017600906547。Qwen storage r2无holder exp安全探针PT两casePASS，JT已冷编但工具读取torch.__file__在数值前失败，receipt757337b6…保留；元数据后继r1仍在数值前被合法HOME/TMPDIR导入派生的过严守卫挡住，receipt192697d3…，core/cache未变，新后继待源码审阅；原alias/no-hook仍FAIL。Vision无重试/余额310.095694191，BERT15.425953905%>15%，Day4–5仅离线successor、未完成最终identity绑定/三轮/容量/稳定窗口。详见[本日结果](2026-10-26-torch-compat-release-day2-5.md)最新增量及原收据。
+
+## 2026-10-27 20:50 +0800 当前续接入口
+
+Day2–5发布仍未完成。主树 `765f1791f3b00f9129fb3ec6342dadf2c9dc2dbe` 与dirty/index原样保留；fresh fetch的 `origin/cgq_transformers@e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`是祖先，无需整合。主树source-files fingerprint `46a8fbb7f15786462a530bb9a2a855a983ced8e796afeae3fe6b80362ebe2a74`仅指1223纳入源清单的文件内容。
+
+T5 ordered-sum候选source `930732a5be98e897ff1dfbe49b184c97aa5130b110346e72b714ad44c9bc5e92`完成隔离真实CPU44例（前一有效source/build绑定）数值、VJP、provider和负例通过，receipt `11ff8c2c2b6bbc1c59cdadc8c36c438d0018a924f34b51ef8e93f693103e5b3a`；CUDA首编初始化在`CUDA enabled`后、调用`sync_all`的`init_use_cuda/setter_use_cuda`路径发生SIGSEGV，receipt `994d36b3d1c6b62cc9d90871399ef63046844dc3dded0086ea5af2783438ebee`，禁止自动重试。含之前CPU工具失败累计原1800s家族532.228476549s、余额1267.771523451s。下一项先离线符号/源码定位该初始化崩溃，再另行审查任何新cohort。
+
+Qwen assign storage alias仍FAIL：r2四类别名全错，r3为7pass/1fail，direct Parameter/detach r4仍未共享存储。assign/meta补丁已在main且未提交，失败保持；新的shared-version隔离patch尚未应用main。新native shared-version与lazy-reader物化方案仍未编译，先审完整覆盖和不支持范围。原完整Qwen no-hook gate在旧source上FAIL，不启动LoRA。
+
+Vision恢复runner timeout且改写一个在先阶段新生成的cublas JIT `.so/.d/.key`；trigger不可由保留原件判定。其continuous阶段无最终report/NPZ，余额310.0956941910554秒，不续跑。Vision BF16离线数组只能指出首个已归档norm标量差，非根因。Day4–5只完成旧source共享负载机械诊断及仓外successor准备；当前三轮、容量边界、稳定窗口与峰值仍无验收证据。BERT任务仍15.425953905%>15%。
+
+下一次续接先查T5真实CUDA初始化栈是否可在冻结源码/receipt内确认，再对Qwen隔离storage patch做静态审查；main最终只在候选确实匹配全dirty source后才可计划验证。Day4–5 successor需要最终全树identity绑定并审阅稳定性守卫，代表B8/S256三轮PT/JT交替；容量只做独立显存规划/单步标定决策，不因B224候选自行启动。所有旧失败、预算、阈值、seed及receipt保留。详细增量在[本日结果](2026-10-26-torch-compat-release-day2-5.md)和[唯一看板](../architecture/refactor-board.md)。
+
+## 2026-10-27 19:27 +0800 当前续接入口
+
+发布未完成，以[看板](../architecture/refactor-board.md)与[本日结果](2026-10-26-torch-compat-release-day2-5.md)最新增量为准。Qwen最终加载guard定向CPU7/CUDA7通过，原no-hook已终态：rc0执行但完整logits FAIL10,338,462/29,171,712、max abs3.8125，有效位置同样超限；无LoRA/训练/自动重试。先用SiLU-only小case证明真实CPU/CUDA值与梯度的旧/新差异，再决定后继。完整CPU仍33pass/4fail/1skip，oneDNN r7静态缺binding不能直接跑。Vision native Lt r2、T5 ordered-sum仅冻结准备，原失败与预算保留；不要从静态检查推导设备或恢复通过。main core独立维护检查运行中，首JIT由root占用；其日志及终态应读取20261027-main-maintenance-guard-r3/core-attempt-01，旧PID不可直接重用。目标远端e5cffe1a仍为main765f1791f祖先，原dirty/index与所有失败/cache/checkpoint保留。
+
+## 2026-10-27 18:42 +0800 当前续接入口
+
+发布未完成，现场以[看板](../architecture/refactor-board.md)与[本日结果](2026-10-26-torch-compat-release-day2-5.md)18:42增量为准。Qwen CPU/CUDA公开加载定向各7pass，完整CPU仍33pass/4fail/1skip；新known-key错误保护待最终source复验，原no-hook还没有新成功收据，LoRA不得据此启动。Vision单候选双fresh1024pair exact，原8候选同期双fresh1024pair均复现旧527差异；隔离native稳定选择修复正在准备，未关闭原五格，原预算余1289.681100598s。T5新primitive已终态STOP调度标签，独立审阅表明实际ownership相同且JT两布局32/8hash、PT各1；不改旧STOP、不重跑改标签，家族余1491.236827937s，无full100。BERT synthetic CUDA三组grad exact，不解释原任务gap；旧r10全201grad已在旧source完成，不重复或改绑。所有旧失败/cache/checkpoint/dirty保留；后继仍需核对新cohort身份、串行JIT和真实receipt。
+
+## 2026-10-27 18:10 +0800 当前续接入口
+
+Day2–5 未完成，唯一状态源仍为[看板](../architecture/refactor-board.md)；新增证据以[本日结果](2026-10-26-torch-compat-release-day2-5.md)18:10节为准。fresh fetch仍为`origin/cgq_transformers@e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，是main `765f1791f3b00f9129fb3ec6342dadf2c9dc2dbe`祖先；无整合或丢弃本地工作。原main no-hook Qwen cohort已在forward前失败，需先完成assign=True公开语义修复的CPU、真实CUDA及原no-hook gate，再考虑LoRA；不得把隔离候选历史结果转移给当前main。minimal-r2已实证旧语义缺陷，修复后r3仅局部改善，CPU regression-r4因工具链漂移在测试前停止，无pytest结论；r5命中原core后7项6PASS/1FAIL，meta设备分类前置FAIL，full未运行，不能启动CUDA/no-hook。
+
+BERT CUDA-r4前置manifest失败、r5误把显存变化当映射变更失败都已保留；r6仅修工具身份判据，已PT/JT真实CUDA rc0、三组gradient逐位相同、无update，CPU差异在本CUDA案例未重现；旧PID42853已经终态，后继依收据与身份核验，不可重启旧cohort。Vision原absolute-r2-cache replay-r4已终态rc0，同进程32次exact但对历史continuous/fresh仍不同；原4200s家族余1334.947563242s，Lt候选数控制目前只有离线准备，没有已通过干预。GC direct-only CUDA24/24数学比较通过，saved CUDA仍CPU-only拒绝；公开False/owner/RNG/AMP/峰值与原模型门槛均未关闭。详细路径、SHA和后继窗口都在本日结果；继续保持首次JIT串行、不自动失败重试、不复跑full100、不重启旧Day4–5 waiter。
+
+## 2026-10-27 01:40 +0800 当前续接入口
+
+Day2–5 仍未完成，整改状态以[看板](../architecture/refactor-board.md)为准。主树在本次复核为 `integrate/cgq-transformers-native-multicard-target@765f1791f3b00f9129fb3ec6342dadf2c9dc2dbe`，相对最新 fetch 的 `origin/cgq_transformers@e5cffe1ae60c418f53c5bb1cdca9182577fd2b81` 领先 17、远端为祖先；工作树有 98 条 dirty/untracked 状态记录，全部保留。本轮未整合其他分支、未 stash/reset/clean，也未启动新测试或 GPU/JIT 任务。终态进程复核未发现活动的 pytest、run_test_suite 或 Jittor compatibility 测试。
+
+刚完成的 `compat/tests/torch/test_torch_compat_module_hooks.py` 全模块回归位于未版本化 `/data6/cgq/jittor-lab/_state/release-day23/20261027-tied-parameter-lookup-full-r1/`：8 collected/executed、8 passed、0 failure/error/skip，JUnit 时间 0.056s、`returncode=0`、actual backend CPU、fallback 0。JUnit SHA256 `d4941b2bb83af82e29259b8f82ded44a95523d50672e3cb7892a80cf83a8c0c0`，raw log SHA256 `4c3e71b7f7537270bd7d27e5515baa3c005ca3645d994d0f42a6bb22a8e9769a`，receipt SHA256 `5774bfca86ce1e12039afd1db0d51ba8a77dca28183dc9d411e232327a9dba9b`。先行的 tied-alias 定向 r3 为 2/2 passed、0 failure/error/skip；JUnit SHA256 `74c2fc925e7ca25c08b3243704f4a62ba43d1b118659316ebfc95cbeba957ef0`。两份 receipt 只记录 CPU/fallback，未绑定 source-content fingerprint，所以这是定向兼容性回归证据，不是 Day2–5 发布门禁。
+
+GC combined-r2 的 CPU paired-math 对拍现已由 root-review 复核通过，细节与边界见[2026-10-26 Day2–5 结果](2026-10-26-torch-compat-release-day2-5.md)的 2026-10-27 00:18 增量；真实 CUDA、owner-safety、其他 Day2–3 FAIL 和 Day4–5 正式性能/显存门槛仍未闭环。后续工作启动前重新核对对应候选身份、进程、cache holder 和 GPU；不得从本次 CPU 模块测试推断设备或发布验收通过。
+
+## 2026-10-27 00:09 +0800 当前继续入口
+
+Day2–5 仍未完成，唯一整改状态源是[看板](../architecture/refactor-board.md)，GC r2 详细证据见[2026-10-26 Day2–5 结果](2026-10-26-torch-compat-release-day2-5.md)的 2026-10-27 增量。主树仍为 `765f1791f3b00f9129fb3ec6342dadf2c9dc2dbe`，原 94 项 dirty/untracked 保留；fresh `origin/cgq_transformers@e5cffe1ae60c418f53c5bb1cdca9182577fd2b81` 为祖先，未 stash/reset/clean/push 或整合 `origin/2.0-refactor`。
+
+GC combined-r2 frozen source `b6ca987cddb259e67756cdcf540d2a70e891e0be1bf2f988684ad34497389889` 已串行 bootstrap 并完成原 63 项、priorview 22 项和 swap 1 项 CPU 回归，全部无 skip/failure；四个 native saved/direct positive case 通过 worker 内比较。PyTorch 2.6 CPU oracle 已生成独立四场景结果，但 root 尚未运行原阈值 offline comparator。当前候选阶段状态不是发布验收或 owner-safety 通过；无真实 CUDA 数值结论。首项后继是审查该 comparator 收据，只有 paired CPU 比较通过后，另行释放独立 real-CUDA 回归窗口；不得自动追加 runtime。
+
+所有这些 stage receipts、JUnit 和 oracle 输出都绑定 r2 source/tool/core，保存在未版本化 `/data6/cgq/jittor-lab/_state/release-day23/20261026-gc-generic-saved-combined-r2-cpu-acceptance-r1/`。此前 combined-r1 的 priorview 失败及其他 Day2–5 原 FAIL 均保留；Qwen、Vision、T5 strict resume、BERT 15% 任务门槛仍未闭环，Day4–5 正式代表/容量格三轮同步配对、更新与峰值门槛也仍 OPEN。
+
+## 2026-10-26 23:20 +0800 当前继续入口
+
+Day2–5仍未完成；唯一状态源为[看板](../architecture/refactor-board.md)，本轮完整证据见[当日结果](2026-10-26-torch-compat-release-day2-5.md)。fresh fetch目标 `origin/cgq_transformers@e5cffe1ae60c418f53c5bb1cdca9182577fd2b81` 为六个核验树HEAD祖先；main `765f1791f3b00f9129fb3ec6342dadf2c9dc2dbe`、94条原dirty/untracked、空index及本轮三份文档更新均保留，未stash/reset/clean/push/整合`origin/2.0-refactor`。结构终态现场 `20261026-main-structure-2250/ROOT_TERMINAL_RECEIPT.json`；本轮live树状态在 `20261026-root-resume-134637/ROOT_REACQUIRE_1513.json`。
+
+主树structure以rc0结束，1396 passed/4 skipped/700.57s；两项skip是未安装Jittor、两项是未安装pytest-xdist，部分entry由日志说明未被本session证明。该门禁没有改变release状态。
+
+T5 public norm唯一诊断rc1/46.376770s，actual cuda:0/fallback0：y 32次exact；dx与dgamma各32种raw hash，离线JIT源码强绑定到竞争atomic reduction，但没有独立launch trace或干预，且dy为synthetic、原内部cotangent缺档。原1800s预算累计227.053411348/余1572.946588652，旧FAIL771/2088不变。数据与机制边界见结果23:20节及未版本化 `20261026-t5-public-norm-backward-r1/PROVIDER-REDUCTION-REVIEW.md`。
+
+BERT r7 CPU limited control已终态、组和cache锁空：source779b、actual mapped core7fee，11 arrays，forward/master/bias grad/weight grad在原限值内，input_grad 9150/61440超限（max abs0.375）。离线raw-array误差覆盖80行，median0.01709/p95 0.078125/RMSE0.03755；显式BF16-rounding FP64 dot与PT 61427/61440 exact并全过原阈值、JT仍9150项失败。只能收窄到BF16 input-gradient contraction/reduction，不能定 cast 或加法顺序根因。一个新的有界CPU中间量诊断仅待离线冻结与root审核；原双seed gap仍15.425953905%>15%，没有自动重试/运行。
+
+GC combined-r1冻结source05512469/tool01615801。bootstrap CPU core27b820b rc0、原63项PASS；priorview22为21pass/1fail，失败是swap调用remat mutation helper误增native saved version后导致saved-value replay拒绝。原失败收据保留且不重跑；combined-r2目前仅离线准备，须重绑新source/tools/artifacts后再单独释放runtime。正向场景、PT oracle、owner-safety、公开False/RNG/AMP/CUDA/峰值均OPEN。
+
+下一步先审combined-r2静态修复和完整冻结清单；若通过，仅新r2候选bootstrap一次，再分别审原63与22（失败停）；BERT input-grad离线分解，T5两个固定归约分开做新候选前置。Day2–3其他原门槛（Qwen、Vision、T5严格resume、BERT任务）仍有FAIL，Day4–5稳定窗口、代表/容量格至少三轮PT/JT同步配对、更新、峰值统计仍OPEN。首次JIT仍串行，不能用共享GPU诊断数字声称性能通过。
+
+## 2026-10-26 22:45 +0800 当前继续入口
+
+Day2–5仍未完成；唯一状态源为[看板](../architecture/refactor-board.md)，完整收据见[本日结果](2026-10-26-torch-compat-release-day2-5.md)。main `765f1791f3b00f9129fb3ec6342dadf2c9dc2dbe`、94项dirty与空index保留；fresh `origin/cgq_transformers@e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`为八树祖先，未stash/reset/clean/push或整合2.0-refactor。
+
+GC weak-frame r1 source651e1b69/core6adb8518，CPU bootstrap rc0；原63项**63pass/0fail/0skip**，四个positive场景、独立PyTorch 2.6 CPU oracle及48项原阈值paired comparison通过。真实CPU、fallback0、no_fuse0；source/core一致、组/cache holder/锁空。RUNTIME_FINAL_AUDIT `8831db7f`。这不代表prior-DataView adoption修复：该guard+22反例仍未运行；准备中的下一候选必须把r4增量应用到weak r1并重新绑定身份，再bootstrap后运行原63+22共85项。weak r1完整记录见结果22:45节；不据日志存活对象统计宣称释放或内存收益。
+
+T5 fresh-repeat r2确认前向/RNG exact、梯度存在SELF_REPEAT差异，原771/2088与预算1800未改变；新public norm synthetic-dy诊断已离线冻结但尚未运行，输入/档案、synthetic dy、120s含清理协议见结果报告。内部cotangent缺档，不能作原轨迹根因结论，不重训50/full100。
+
+BERT r6于14:27:47UTC因actual mapped core与seed哈希不同在数值前rc1，source779b、原PT oracle及r4/r5/r6失败均保留，无自动重试。归一化ELF/源依赖核查和r7新绑定仅离线进行；mapped-core守卫必须保留，任务gap15.425953905%>15%仍FAIL。Vision原FAIL及预算、Day4–5正式三轮/代表/容量/稳定窗口、Qwen full logits、公开False/RNG/AMP/CUDA/峰值仍OPEN。
+
+## 2026-10-26 22:31 +0800 当前继续入口
+
+Day2–5仍未完成，唯一状态源为[看板](../architecture/refactor-board.md)，收据与完整hash见[本日结果](2026-10-26-torch-compat-release-day2-5.md)顶部。fresh fetch e5cffe1a为八树祖先，无需整合，main765f1791f/94项dirty与空index保留；新现场ROOT_REACQUIRE_1429.json，根盘余71GiB/data6余6TiB，无清理/重置/自动stash/push。
+
+T5 fresh-repeat-r2已终审rc1/SELF_REPEAT_DIFFERS，所有组/cache空：两fresh的404前向/参数/inputs/RNG/context逐字节exact，loss/logits exact，但对continuous有63梯度/34,017元素差异、max5.96e-8，对旧baseline有77梯度/1,385,954元素差异、max7.72e-5。实际CUDA/BF16/fallback0/默认3，仅一micro零update/零新hook-retain；原1800家族累计180.676641110s、余1619.323358890s。权威20261026-t5-fresh-repeat-r2/RUNTIME_REVIEW.json(c7d52640)。先离线准备固定norm输入/synthetic dy的public backward重复诊断，不能因未归档cotangent而声称原轨迹因果；原capture不放行、771/2088与旧baseline FAIL保持，不重训50/full100。
+
+BERT r6已14:27:47UTC rc1、组空/锁空，重编译后actual-mapped-core与旧磁盘seed43f1不符，实际磁盘7fee20dd；仅started、零forward/backward/update，无数值结论。原工具错误文本不证明旧seed是成功primitive anchor。16/16失败终审7d7ea372、completion62acd20c，source779b/旧工具/22PT/r4cache exact，旧r4/r5/r6失败不改。下一方案只离线审构建依赖配置及新core绑定，不去掉mapped guard、不复制cache/自动重试。
+
+GC weak-only已实现且独立审阅，source651e1b69，只有slot.frame改weak和过期检查，原63/strong owner/lease/public False不动，未混priorview r4；18TU+binding语法通过，真实bootstrap/63tests须分别调度与审收据。r4 DataView-adoption guard另有22新CPU反例、sourceb9f2ea67，仍离线。GC原r3 62/63、fresh/no_fuse多1frame、priorview-v3隐藏owner环与两个缺口均保留。BERT任务15.425953905%>15%、Vision原FAIL与余1341.905s、正式性能三轮/真实容量/稳定窗口及公开GC/RNG/AMP/CUDA/峰值OPEN不变。当前先看agent/真实收据后释放唯一JIT窗口，不按任何历史PID或“准备”字段重复启动。
+
+## 2026-10-26 22:15 +0800 当前继续入口
+
+Day2–5仍未完成，精确收据/哈希见[本日结果](2026-10-26-torch-compat-release-day2-5.md)顶部。GC stride-only r3 source2c208246/coredae33a76已原63 tests真实CPU/defaultfusion/fallback0实跑62pass/1fail，rc1/93.221s/组空/source-tools exact；原20stride与4计数下降本轮未现，但lazy-leases最终多1frame。单独原fixture fresh0→1，no_fuse=1诊断也0→1，不能猜融合根因或放行positive。priorview-v3已rc0并实测隐藏owner环：direct释放，saved保留callable/ndarray与(1,1,0)，仅清prior_view即全释放；累计3.719155585/120s。r4只有离线DataView-adoption拒绝修复及21新反例，未runtime、未改原63或main；slot弱frame仍仅设计。
+
+BERT原独立PT CPU终审PASS，r4 JT因public torch.__file__工具假设rc1未模型，r5合法元数据修订后又import jit_utils重载rc3未模型/前向/backward。两失败与原cache保留，r5 source779b/tools a307/core和jit_utils字节exact、组空/锁空。r6仅准备相同r5绝对cache和未改worker的新输出一次重入，先看root调度与真实收据，不再次搬迁cache，不重跑原PT。
+
+T5 fresh-repeat-r1 manifest缺键在模型前rc1，无新数值，44.709051474s已加入原1800家族，累计102.071584954、余1697.928415046。r2 manifest85932450继承原26字段与worker/adapter原字节，root已单独释放一次180秒fresh-repeat；须重新读取live身份、receipt和外部ledger，不能按旧FROZEN快照重复启动。原capture不放行，原baseline77gradient差异及历史771/2088 FAIL保留。main765f1791f原91项和本任务三文档增量保留，未stash/reset/clean/push/整合2.0-refactor；布局通过，结构原证据未重跑。
+
+## 2026-10-26 21:46 +0800 当前继续入口
+
+Day2–5仍未完成，状态以[看板](../architecture/refactor-board.md)为准，直接证据见[本日结果](2026-10-26-torch-compat-release-day2-5.md)顶部。fresh fetch目标e5cffe1a为八树祖先，main765f1791f/原91项与本任务三文档增量均保留、index空，未stash/reset/clean/push或整合2.0-refactor。新现场位于未版本化20261026-root-resume-134637。
+
+GC r2的63 CPU tests已终态39pass/24fail/0skip，rc1/无timeout/组空/source-tools exact。20个stride-rank异常已定位replay把合法空contiguous sentinel交给显式stride setter；4个GC live基线下降暂不归因。独立r3仅改这一调用，source2c208246，原63tests不变，目前离线未runtime，不得把r2失败改写通过。priorview原工具native Var weakref失败、v2 direct-control在numpy物化前location断言失败，两次均未saved；累计2.202631391/120s，原失败保留，owner缺口OPEN。新工具只允许修物化/设备观察顺序，仍需独立终审，不能自动重试旧目录。
+
+BERT r4独立PT CPU已32/32终审PASS/组空；JT CPU control正独占首编，worker3565828/start163146791，原900s上限且无自动后继。先重验其进程与completion，不按快照重复启动。其他agent仅离线准备/只读；T5 singlemicro原rc1/77gradient差异、原57.36253348s计费和余1742.63746652s保持，Vision余1341.905232899s保持。main生产源码未变，未重复原结构门禁。
+
+## 2026-10-26 21:28 +0800 当前继续入口
+
+Day2–5仍未完成，唯一状态源为[看板](../architecture/refactor-board.md)，精确数值与哈希见[本日结果](2026-10-26-torch-compat-release-day2-5.md)顶部。main765f1791f、91原dirty及本任务三文档增量保留；fresh fetch e5cffe1a为相关树祖先，无需整合，未stash/reset/clean/push/整合2.0-refactor，main生产代码未变。
+
+optimizer shared-scalars隔离候选bb1a5fa2已五步63数组baseline bytes exact/PT原门槛PASS，三步scalar72→30；Torch19/native34均PASS/0skip，source/core/fallback0/组空，权威20261026-adamw-shared-scalars-r1/ROOT_FOCUSED_TERMINAL_AUDIT.json。未合main、无模型热态/峰值收益结论，正式三轮/代表/容量/稳定窗口仍OPEN。
+
+T5 singlemicro r2 manifest1fc8baf0、原404 wrapper/原Trainer/GA2/RNG已实跑，baseline21:25:28 rc1：原404动态forward exact、257params/inputs/RNG检查通过、仅一micro零update，但77个gradient字段不exact。source efe22515/core6dfe0645及退出守卫通过、组空，57.36253348s计费，同一1800余1742.63746652。**不运行capture、不重试baseline、不改参考/预算**；原工具、FAIL和旧771/2088保持，离线三方审计正在进行，不猜具体反向算子。
+
+BERT r2公共Linear CUDA复现同AMP64/no_grad FP32、grad-enabled BF16；原BERT只知non-BF16不可补造dtype。三文件779b修复及r3工具离线冻结；r4仅工具改为按device共享且顺序用独立correctness cache以减少重复core，CPU/CUDA/PT及原数值/零skip/设备守卫尚未实跑。原BERT15.425953905%任务FAIL和two-update零更新失败保留。
+
+GC r2已离线冻结source a380d0c6/tool648bc5a2，原40+新23tests未跑；先.data view再adopt的静态GC隐藏环仍阻断，独立复现准备好，不能以63PASS验owner安全。当前唯一JIT窗口只给20261026-gc-generic-saved-r2/bootstrap一次900s，worker3558549/start163047387；先查真实process/receipt/cache，不能按快照重复启动。bootstrap通过后root审core/source/组空再单独放行priorview120s，不自动tests/positive/PT/复现或rc3重试。公开False/RNG/AMP/CUDA/defaultfusion/峰值OPEN。Vision原FAIL及累计/余1341.905232899s保持，无新模型。
+
+## 2026-10-26 20:50 +0800 当前继续入口
+
+Day2–5仍未完成，唯一状态源为[看板](../architecture/refactor-board.md)，精确数字/哈希与边界见[本日结果](2026-10-26-torch-compat-release-day2-5.md)顶部。重新fetch目标e5cffe1a为四树祖先，main起始765f1791f/source062c8e11、91项原dirty/index空保留。本次BERT队列已失败终态并释放main冻结，不再按下面20:08旧快照重启任何进程。
+
+T5默认3两侧已完成，2803数组119个梯度不同、404动态事件exact，protocol/参数签名/源码守卫通过；旧771/2088 FAIL不变。仓外 `20261026-t5-backward-offline-r1/` 已核实checkpoint50全部257参数及完整inputs/RNG可直接准备单micro回放；先原Trainer baseline证明257梯度与两种loss exact，否则停止，真实收据root审阅后才捕获最小norm反向，不能手写loss缩放/重跑50步。新两阶段总1800秒、各900含清理，仅准备不运行。
+
+BERT新prepared-765f1791f的PT两更新rc0/17终审PASS；JT在20:30:51首次fixed-eval的layer0 query BF16 guard rc1，尚无backward/update/配对比较，实际core99959ad7/source守卫通过、组空、queue main_source_freeze_active=false。原dtype未保存不可补造；静态compute_dtype_name漏BF16位64，最小公开Linear CUDA两forward工具正在复核，无修复或重试。原15.425953905%任务FAIL和所有scheduler/group字段保留。
+
+Vision v5两fresh各32与1024cross全部exact，实际CUDA/fallback0/core128db287，旧fresh仍527元素不同、原769字段FAIL1和五格FAIL不变。独立profile模型rc0，但FileName附带shapes注释使sources=[]而postcheck FAIL；保留失败，不重跑。root离线解析59份源/421op，选中mea_fwd forward的batch32/1模板明确、forward无atomicAdd，同文件backward原子定义不是前向证据。最终预算2858.094767101/4200s、余1341.905232899s。权威新终审为 `20261026-root-resume-1231/VISION_V5_TERMINAL_AUDIT.json`，后继未分配。
+
+当前串行首编窗口仅给 `20261026-adamw-scalar-minimal-r1/` JT tiny baseline，supervisor3525845/startticks162776456，20:42:30启动、900s单次；先看completion/receipt及实际PID，勿复制启动。PT五步63数组已rc0；JT新cache冷编译尚无完整数值/8scalar-launch结论，正式性能/容量/三轮门槛不变。baseline-tree源码保持062c8e11，不随main文档提交改动。GC generic候选离线18TU及当前生成binding语法通过，source96e6cc55/toolbb31a005，40CPU tests和48数学对照未运行；public False/RNG/AMP/CUDA/默认fusion/显存仍OPEN。Qwen既有独立候选通过范围维持原adjudication，不外推main。
+
 ## 2026-10-26 20:08 +0800 当前继续入口
 
 Day2–5仍未完成，唯一状态源仍为[看板](../architecture/refactor-board.md)，完整数字与证据边界见[本日结果](2026-10-26-torch-compat-release-day2-5.md)。本次重新fetch目标e5cffe1a，所查相关树均含该历史，无需整合；main HEAD8eb88dbde、91项原dirty和全部历史FAIL保留，没有push或整合2.0-refactor。以下旧PID/“未运行”均是历史快照。
