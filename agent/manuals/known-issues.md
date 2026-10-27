@@ -3268,3 +3268,31 @@ about whether to take it.
   Any single file, any pair, and the five files before it together passed every
   time; only the full selection trips it, so it depends on collection timing.
 - Workaround: run the files in separate processes.
+
+## KI-TORCH-CAT-AMP-001: autocast concat changes preserved FP32 values
+
+- Status: Confirmed on isolated release candidate r4, reviewed 2026-10-28;
+  cat-only r5 CPU14 is 10 PASS / 4 FAIL; not adopted into main.
+- Owner: Torch compatibility tensor/AMP maintainers.
+- Evidence: original `test_cat_autocast_precision.py` has independent PyTorch
+  CPU/CUDA 14/14 PASS versus r4 Jittor CPU/CUDA 10 FAIL and 4 PASS per device,
+  actual device/native dispatch and fallback=0. The source-bound root terminal
+  review is unversioned `20261028-root-cat-control-r1/`
+  `root-old-cat-terminal-audit-r2.json`, SHA256 `b5331c68f80a68318d5e2a05143d335b17bc49fac168d1c5cddeaf47a3d9854b`.
+- Symptom: native AMP inference inside dense compat cat rounds FP32 inputs to
+  the reduced precision; a subsequent dtype cast cannot recover the values.
+  Mixed inputs also return the wrong dtype. Main has the identical cat source
+  file, but this receipt does not claim main runtime re-execution.
+- Workaround: no independently validated public workaround yet.
+- Exit: original 14 CPU and real-CUDA cases plus the affected CPU non-AMP
+  cat/stack neighbor pass on the bound candidate; adopt only after reviewing
+  source identity and affected model gates. Local precision success cannot
+  replace the original complete Qwen no-hook gate or release acceptance.
+
+The r5 source-bound CPU14 result retains mixed/reduced-input gradient dtype
+failures at original lines 70/112: the reduced leaf receives FP32 first and
+second derivatives. The complete root failure audit is unversioned
+`20261028-root-cat-continuation-r2/root-r5-cpu14-failure-audit.json`, SHA256
+`630fa8560b9393a05c8a576cc0e6a45908e0f495bee1cb9dfb4fcb50e21375f4`.
+A general public autograd.grad return-dtype repair remains unvalidated; do not
+advance CUDA or the model from this partial CPU result.

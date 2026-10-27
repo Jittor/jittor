@@ -1,8 +1,12 @@
 # 2026-10-21 工作区快照与本机接续交接
 
+## 2026-10-28 02:34 +0800 r5 CPU14保留4项梯度dtype失败
+
+Day2–5仍 **Not complete**。r5原CPU14已终态10pass/4fail/0skip，receipt2420d5c9…；mixed training在line70、二阶在line112：FP16/BF16 leaf收到FP32 gradient/curvature。cat前向断言先于这些失败通过，不代表被短路的后续rotate/梯度数值均完成。root14项终审630fa856…确认真实CPU/fallback0、source/build/env/current-cache/组/锁有效；维护CPU1、CUDA cold与原no-hook均未执行，禁止绕过失败进入模型或LoRA。下一项仅新r6移植公开autograd.grad的返回dtype转换独立9行，保留当前storage/version和create_graph；已在隔离r6仅autograd.py应用9行（source5f4107c5/manifest131c2edc），仅静态身份；CPU600 cold已单次启动（包bd67c774），尚无终态/数值证据，CUDA保持HOLD。main/r5冻结修改及原失败保持；其余FAIL/预算/Day4–5门槛不变。详见[本日结果](2026-10-26-torch-compat-release-day2-5.md)。
+
 ## 2026-10-28 02:19 +0800 cat旧端终态与r5续接
 
-旧cat独立PT CPU/真实CUDA原14各通过，旧JT两device各10fail/4pass，root终审r2 b5331c68的59检查全真；不能把失败case中的未执行rotate/梯度写为已验。PT CUDA原工具元数据FAIL通过独立审计接受原数值，不改原件、不重跑。root新隔离cat-only r5 source25708e7d/manifest c6e4d2fa已逐文件核验，只改dense concat的autocast amp_reg范围并加入原14测试，main/r4保持。此刻r5仅source身份，无冷构建/数值证据。先核对新CPU600s bootstrap包，CPU原14成功后再分别审CUDA900s及原14；未通过则不运行原完整no-hook，不启动LoRA、不自动retry。全部旧FAIL、T5/Vision原预算与Day4–5正式三轮/容量/峰值保持，详细收据及fresh远端/六树快照见[本日结果](2026-10-26-torch-compat-release-day2-5.md)。
+旧cat独立PT CPU/真实CUDA原14各通过，旧JT两device各10fail/4pass，root终审r2 b5331c68的59检查全真；不能把失败case中的未执行rotate/梯度写为已验。PT CUDA原工具元数据FAIL通过独立审计接受原数值，不改原件、不重跑。root新隔离cat-only r5 source25708e7d/manifest c6e4d2fa已逐文件核验，只改dense concat的autocast amp_reg范围并加入原14测试，main/r4保持。r5 CPU cold227TU已rc0，root17项终审a8bb58fa通过；仅构建身份，无修复数值证据。先核对新CPU600s bootstrap包，CPU原14成功后再分别审CUDA900s及原14；未通过则不运行原完整no-hook，不启动LoRA、不自动retry。全部旧FAIL、T5/Vision原预算与Day4–5正式三轮/容量/峰值保持，详细收据及fresh远端/六树快照见[本日结果](2026-10-26-torch-compat-release-day2-5.md)。
 
 ## 2026-10-28 01:57 +0800 原Qwen no-hook已终态FAIL，禁止重复启动
 
