@@ -1,5 +1,9 @@
 # 整改看板
 
+## 2026-10-28 06:40 +0800 本机Day2–5：r8 native core已执行，Torch/CUDA待验
+
+r8 native core实际103pass/45skip/1xfail、fallback0，在600s内完成；原worker/controller因canonical OPENBLAS环境键与12个标准产物漏列而rc1，receipt d2417388保留。root21保存终审20bee571采用实际core证据，7143终态cache无旧文件改删、组与两锁空，不重跑native。focused6仍采用root19且原rc1保留。新增native pow用例存在先物化测试盲点，下一项先做old-r7/new-r8 consumer-first最小控制，再绑定Torch core600s及CUDA900；尚无r8完整no-hook。发布 **Not complete**，原Qwen logits FAIL、LoRA阻断、T5/Vision余额、BERT及Day4–5门槛保持，候选未采用main。详细证据见[本日结果](../results/2026-10-26-torch-compat-release-day2-5.md)。
+
 ## 2026-10-28 06:13 +0800 r8 CPU冷构建通过，pow数值回归待执行
 
 发布仍 **Not complete**。两轮独立PT/JT CPU/真实CUDA公共pow控制已实际完成，保存的inv_freq各自exact对应CPU链；第二轮以同一保存power重建float32 tensor后，两runtime倒数逐位一致，旧JT CPU原链与物化分支25项差异已确认是pow输出dtype边界的融合精度泄漏，CUDA此控制差0。root已在新隔离r8/source `f6751970…` 仅给CPU pow结果补声明dtype cast，并新增native/public各一回归，未采用main。r8 CPUcold在新600s上限内自然rc0、227TU，root17审计SHA `fefa46c1…`全通过；只有构建身份，没有数值通过。下一项是实际CPU core上的native/Torch独立core白名单与原mixed四项/新旧pow回归，执行包仍在离线绑定；CUDA900等待真实同源CPU前置，完整no-hook仍以r7的8,690,528/29,171,712 FAIL为准，LoRA不启动。其他FAIL/预算、原件缺口和Day4–5稳定三轮/容量/峰值门槛保持。精确source、两轮微控制、cold receipts与边界见[本日结果](../results/2026-10-26-torch-compat-release-day2-5.md)，操作入口见[本机交接](../results/2026-10-21-workspace-snapshot-handoff.md)。

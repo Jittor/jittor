@@ -1,5 +1,21 @@
 # Torch Compatibility Release Acceptance: 2026-10-26 Day 2–5 Continuation
 
+## 2026-10-28 06:40 +0800 r8 native core实际完成并获独立采用，原工具rc1保留
+
+root审阅的native final manifest `d66e2e0e11fcd6072e14787e4660a60ddd72dff95b8ab4c6a23482024d362efd` 在新600s单次cap内走完维护的10个core文件、149节点，pytest实际 **103 passed、45 skipped、1 xfailed in388.46s**，零普通失败、fallback0，两个native pow节点确实执行；skip类别和既有xfail均保留。首次oneDNN构建也在本cap内完成。原worker/controller均rc1，receipt `d2417388abf66f67100779bea5a3e870628bed6970f7b8a2f73122d9e2054b43` 仍为 `FINAL_SOURCE_CACHE_LOCK_GROUP_FAILURE_RETAINED`：工具遗漏了 `tests/core/test_fused_op.py:10` 在收集期设置的唯一环境键OPENBLAS_NUM_THREADS=1，以及11个MKL编译 `.o.d` 和原save/load测试生成的sub.pkl，不能改写成原执行自然rc0。
+
+root21独立保存终审 `20261028-root-pow-r8-continuation-r1/root-r8-native-core-saved-adoption-audit.json` SHA `20bee571e0d35debc6f29a7972ef856e18699d351da2aaded7acf4672bbce575` 全真，核对全部环境键、声明的CPU/native模式、实际core/utils/stamp、前后source、选集/全部阶段报告及原预算/身份；每个未列编译依赖文件的target均匹配真实worker685527，source指向本r8的11个实际MKL源文件，sub.pkl来源原test_save_load_sub_module且该例PASS。缓存814→7143只增6329、无旧文件改删，所有新增均为既有窄合同或上述12个明确源码产物。实际终态 `20261028-qwen-pow-r8-cpu-core-r1-prepared/attempt-01-native-core/cache-after.json` SHA `8f357097f4ef50ae45f0dda5f70d75f7c9ba2f2d8db3d19160df6211755a22c5`；当前7143逐项一致、原JIT锁与新增oneDNN锁均未持有、自有组空，exec35759已收回，没有重跑native。
+
+本次另发现新增native pow回归先power.numpy()、后读取widened，弱同步可能先物化float32、掩盖旧融合错误；它的PASS只能作为实际测试结果，不证明防护能在旧源失败。公共测试的detach会建更晚clone，不能直接断言同样盲点，仍准备统一的consumer-first验证。下一项仅在旧r7/新r8实际CPU产品上分别新120s单次最小控制，先保存widened/倒数消费者，再读power，同时保留原native物化优先对照；不改冻结源码或重跑core。Torch core将在此控制的真实新基线上单独600s执行，CUDA900继续HOLD。原完整no-hook、LoRA阻断、其他FAIL/原预算/Day4–5门槛保持，发布 **Not complete**。
+
+## 2026-10-28 06:28 +0800 r8六项CPU数值证据已独立采用，原worker元数据失败保留
+
+r8 focused CPU单次cap180在17.32s内实际完成6 passed、0 skipped、fallback0：原mixed四项（数值2、mock2）、新公共pow宽类型/倒数边界和既有reflected scalar pow。原包 `20261028-qwen-pow-r8-focused-cpu-r1/` 的worker最终在pytest之后的环境assert处rc1，正式receipt仍为 `FOCUSED_CPU_FAILURE_RETAINED`（SHA `84d65718bcf9d77f8dec9112b378b126d90b3059092288a31a79f4c1fb687470`），result SHA `84bc725544bb713b0ffb7a52b0ecdd83828af7db8b83b0183c5cf4523e43bf57`；没有重跑、改写或补填原件。根因是工具把post-pytest环境错误比较为post-import环境：canonical `compat/tests/conftest.py` 只给PYTHONPATH追加pytest-site-packages一次，其余完整环境键exact；没有数值断言失败。
+
+root纯保存文件19项独立终审 `20261028-root-pow-r8-continuation-r1/root-r8-focused6-saved-adoption-audit.json` SHA `d73481745303577d2b7ba6e9ed8d576d63dc36ad2e736dc7bf699628e6bd8fba` 全通过，按源码filesystem-only `_plan`与`check_details`确认14项部署文件逐字一致，18条setup/call/teardown报告全部passed、6个nodeid精确匹配、fallback0，原worker/父controller身份与source、实际r8 core/utils/stamp保持。parent完成的source-after和当前源码guard有效；worker自己未到source-after的观察边界保留。缓存732→814，仅68个JIT和14个canonical部署文件新增，旧文件无改删，组/精确锁空；保存终态 `20261028-qwen-pow-r8-focused-cpu-r1/cache-after.json` SHA `d017b0938eb955358e34023f58e43f312a0dea11cdb8f6d8af40fbc96e8e43ec`。这允许采用六项CPU测试证据，不等于原执行包自然rc0或完整模型通过。
+
+本次再次fetch `origin/cgq_transformers@e5cffe1a` 为六树祖先，无需整合、未碰2.0-refactor；主树原99文件字节/大小/模式均保持（同步快照 `20261028-root-pow-r8-continuation-r1/root-resume-sync-0625.json`）。没有本任务框架/JIT进程。下一项绑定真实814基线，root串行单次native core、随后独立Torch core，各新600s；不再额外重跑focused6。CUDA900仍HOLD待CPU core真实终态，原完整no-hook与LoRA门槛、其他FAIL/原预算和Day4–5性能门槛不变，发布 **Not complete**。
+
 ## 2026-10-28 06:12 +0800 r8 CPU冷构建终态通过，数值回归尚未开始
 
 `20261028-qwen-pow-r8-cpu-bootstrap-r1-prepared/` 已在原600s单次上限内自然rc0，正式receipt SHA `6f9e4639b8859d1a5a03733ef1a1990222731cd98c10001ff60d81c52f52d786`，exec15130已收回。root独立17项终审 `20261028-root-pow-r8-continuation-r1/root-r8-cpu-cold-terminal-audit.json` SHA `fefa46c12d45bf81d4b5428b2f56a7fa95a5e5b220d8f789e58a3f0d06c6fa1c` 全真；实际227TU与新的core `4944108e3ee106d14eea1327c88af428d0bcf4f0dd101b2efcd11a0756e6cd99`、utils `a6c35acd96e61633b5e1d5b006436548ecd03b47d9247a7028dcea6f2b30828b`、stamp `a0cca8088b44cefc00c0814b2279ea1a197a35193f22885a1afbd8ed90ebe1b8` 一致。完整环境、实际CPU flags、source/compile order/ingredients、两次fresh审计与真实命令有效，当前组/精确锁空；无tensor、测试或模型，不能记成数值通过。

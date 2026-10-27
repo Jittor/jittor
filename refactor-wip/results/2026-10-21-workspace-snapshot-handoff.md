@@ -1,5 +1,9 @@
 # 2026-10-21 工作区快照与本机接续交接
 
+## 2026-10-28 06:40 +0800 接续入口：native core已走完，先做pow消费者优先控制
+
+当前无本任务框架/JIT进程。r8 native实际103pass/45skip/1xfail/fallback0，worker/controller均因metadata遗漏而rc1，receipt d2417388保留；root21保存审计20bee571已按源码确认唯一OPENBLAS键与12标准产物并采用实际执行，不重跑。7143基线为 `20261028-qwen-pow-r8-cpu-core-r1-prepared/attempt-01-native-core/cache-after.json` SHA8f357097；原文件无改删、组/JIT/oneDNN锁空。focused6沿root19采用且原失败保留。新native pow测试的物化顺序存在盲点，先root串行old-r7/new-r8 consumer-first CPU微控制，每侧新120s，不改源；然后用其实际终态绑定独立Torch core600s，再CUDA900及原完整no-hook。原FAIL/预算/LoRA阻断和发布 **Not complete** 保持，精确入口见[本日结果](2026-10-26-torch-compat-release-day2-5.md)。
+
 ## 2026-10-28 06:13 +0800 接续入口：r8 CPUcold已终审，先运行受影响CPU回归
 
 当前无本任务框架/JIT进程；r8 CPUcold的exec15130已自然退出，不能重跑cold。新隔离树为 `/data6/cgq/jittor-lab/worktrees/torch-compat-storage-silu-cat-grad-rmsnorm-pow-20261028-r8`，HEAD765f1791、source `f6751970c2da991ee09e23b7b08f50d8d777b9e916c21a76b2b895daea6879ef`；manifest位于 `20261028-qwen-pow-r8-source-r1/candidate-source-manifest.json`，SHA `7a08b93941b4466eea82267bce1dc1d045fdcc37f23a51ec9da6ab995edd2dd1`。相对r7只改CPU pow返回dtype cast和native/public两条回归，未改CUDA helper或主源。旧控制中CPU原链对物化分支25项差、同PT power公共输入两runtime逐位exact的证据已确认；完整模型因果与发布结论仍未闭环。
