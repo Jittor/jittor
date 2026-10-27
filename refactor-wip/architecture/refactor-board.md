@@ -1,6 +1,16 @@
 # 整改看板
 
+## 2026-10-28 03:33 +0800 r6 原完整 no-hook 数值仍 FAIL
+
+Day2–5仍 **Not complete**。r3 元数据修正后，原完整 Qwen BF16 worker/comparator 均自然 rc0（225.725/3.116s），正式receipt `1644a95cb3da74682d98712b61c874857a19a6891fec9e9b1d47f3c58abfb89d` 为 `FULL_NOHOOK_NUMERICAL_FAILURE_RETAINED`。原全部29,171,712含padding logits仍超限10,119,974项，max_abs4.587890625；有效位置4,375,563/22,030,720超限，max_abs0.4375。输入exact、loss满足原门槛，不改变0.005/0.03。root独立28项终审 `356cfd07ce83a178857aef66fc1c7f4c6d6e17fc2f713f7107869b80e9256415`确认实际CUDA/fallback0、source/products/完整环境/cache/清理有效并独立复算一致，但 **numerical_gate_passed=false**；证据有效不等于模型通过。
+
+候选未采用main，LoRA不启动，不重复本次cohort。下一项先对保留r4与本次r6完整NPZ作只读逐块比较，再审查既有逐层capture与独立PT中间数组能否复用；只有捕获logits与本次no-hook exact绑定后，才据实际首差异定位下一算子，不叠加rsqrt/mean/RMSNorm等未经验证假说。T5/Vision原余额与禁止重试边界、BERT原gap和缺11份PT checkpoint、Day4–5正式稳定三轮/容量/峰值门槛均保持。
+
+精确收据和核验范围见[本日结果](../results/2026-10-26-torch-compat-release-day2-5.md)。
+
 ## 2026-10-28 r6原cat数值CPU与真实CUDA闭环，完整模型待验
+
+原完整no-hook r2已终态工具失败：新final manifest96293015的worker在原probe/模型前，于worker.py line31因`_hf_trainer_e2e_runner`缺失退出；receipt a47f1674为RUNTIME_OR_CACHE_FAILURE_RETAINED，只有一个自然rc1 worker，无comparator/NPZ。root15项失败终审ce429068确认source/products/已记录导入环境有效、cache1090全delta0、组锁空；失败后child环境未记录，不回填。已静态证实新包遗漏原r4唯一PYTHONPATH support前缀；PathFinder增加该前缀即定位原字节模块。下一项只在新r3元数据后继恢复该唯一环境键和完整合同，绑定原FAIL/当前cache；不重冷编或原14、不修改七数值文件或validator。完整模型仍待验，LoRA阻断。
 
 Day2–5仍 **Not complete**。隔离r6/source5f4107c5已完成原CPU14及维护cat_stack1/grad语义5；继而CUDA-only cold900自然rc0、root17审计通过。新CUDA14产品绑定包 `20261028-qwen-cat-grad-r6-cuda14-r2-prepared/` manifestcab69124在360s上限内约149.042s自然rc0，原14/14 PASS、零skip；cat/rotate前向、dtype、输入梯度与二阶原断言全部执行，实际CUDA0/native dispatch/fallback0。receipt c2dcd738、root18项终审cbd67896全通过，source/products/完整env不变；CUDA只新增148允许cache文件（终态1090），CPU924不变，组锁空。旧JT10fail/4pass及r5 CPU10pass/4fail不改写，未重跑独立PT或CPU。候选未采用main，下一项仅按原29,171,712含padding logits及0.005/0.03门槛执行原完整无hook Qwen；其final尚在离线绑定，LoRA不启动。其他FAIL、T5/Vision原预算与Day4–5三轮/容量/峰值门槛保持。详见[本日结果](../results/2026-10-26-torch-compat-release-day2-5.md)。
 

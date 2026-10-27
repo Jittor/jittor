@@ -1,6 +1,16 @@
 # 2026-10-21 工作区快照与本机接续交接
 
+## 2026-10-28 03:33 +0800 r6 原完整 no-hook 数值仍 FAIL
+
+Day2–5仍 **Not complete**。r3 元数据修正后，原完整 Qwen BF16 worker/comparator 均自然 rc0（225.725/3.116s），正式receipt `1644a95cb3da74682d98712b61c874857a19a6891fec9e9b1d47f3c58abfb89d` 为 `FULL_NOHOOK_NUMERICAL_FAILURE_RETAINED`。原全部29,171,712含padding logits仍超限10,119,974项，max_abs4.587890625；有效位置4,375,563/22,030,720超限，max_abs0.4375。输入exact、loss满足原门槛，不改变0.005/0.03。root独立28项终审 `356cfd07ce83a178857aef66fc1c7f4c6d6e17fc2f713f7107869b80e9256415`确认实际CUDA/fallback0、source/products/完整环境/cache/清理有效并独立复算一致，但 **numerical_gate_passed=false**；证据有效不等于模型通过。
+
+候选未采用main，LoRA不启动，不重复本次cohort。下一项先对保留r4与本次r6完整NPZ作只读逐块比较，再审查既有逐层capture与独立PT中间数组能否复用；只有捕获logits与本次no-hook exact绑定后，才据实际首差异定位下一算子，不叠加rsqrt/mean/RMSNorm等未经验证假说。T5/Vision原余额与禁止重试边界、BERT原gap和缺11份PT checkpoint、Day4–5正式稳定三轮/容量/峰值门槛均保持。
+
+精确收据和核验范围见[本日结果](2026-10-26-torch-compat-release-day2-5.md)。
+
 ## 2026-10-28 r6原cat CPU/CUDA闭环后的续接
+
+原完整no-hook r2已自然rc1终态：receipt a47f1674/entry39848a23在模型前的worker.py line31缺`_hf_trainer_e2e_runner`；没有原probe/NPZ/comparator，不能声称logits结果。root15项失败审计ce429068确认source/products/记录的导入环境、cache1090全delta0和组锁有效，失败后child环境未记录。根因是新包漏原r4唯一PYTHONPATH support前缀，PathFinder反事实已定位原字节模块；下一项仅新r3 metadata后继恢复该键及完整合同并绑定r2正式FAIL/entry/terminal-cache，不重冷编/原14、不改七数值/原validator或门槛。原失败不改写，LoRA保持阻断。
 
 Day2–5仍 **Not complete**。r6/source5f4107c5已原CPU14、维护cat_stack1/grad5及CUDAcold231TU/root17通过；CUDA14新final `20261028-qwen-cat-grad-r6-cuda14-r2-prepared/` manifestcab69124现已149.042s自然rc0、原14/14 PASS/零skip，cat/rotate/梯度/二阶原断言完整执行，实际CUDA0/fallback0。receipt c2dcd738、root18终审cbd67896通过，source/products/env exact，CUDA只新增148允许文件至1090、CPU924不变、组锁空。旧失败和PT原件保持，候选未采用main。下一项只审新原完整no-hook final，必须绑定本次CUDA14真实终态cache/环境及全部分阶段root审计；原全29,171,712含padding/.005/.03/1800+120不变，当前尚无模型结果，不启动LoRA。T5/Vision原预算、BERT原gap/缺checkpoint及Day4–5正式三轮/容量/峰值保持；精确绑定见[本日结果](2026-10-26-torch-compat-release-day2-5.md)。
 

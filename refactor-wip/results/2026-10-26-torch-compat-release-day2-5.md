@@ -1,6 +1,23 @@
 # Torch Compatibility Release Acceptance: 2026-10-26 Day 2–5 Continuation
 
+## 2026-10-28 03:33 +0800 r6 原完整 no-hook 数值仍 FAIL
+
+Day2–5仍 **Not complete**。r3 元数据修正后，原完整 Qwen BF16 worker/comparator 均自然 rc0（225.725/3.116s），正式receipt `1644a95cb3da74682d98712b61c874857a19a6891fec9e9b1d47f3c58abfb89d` 为 `FULL_NOHOOK_NUMERICAL_FAILURE_RETAINED`。原全部29,171,712含padding logits仍超限10,119,974项，max_abs4.587890625；有效位置4,375,563/22,030,720超限，max_abs0.4375。输入exact、loss满足原门槛，不改变0.005/0.03。root独立28项终审 `356cfd07ce83a178857aef66fc1c7f4c6d6e17fc2f713f7107869b80e9256415`确认实际CUDA/fallback0、source/products/完整环境/cache/清理有效并独立复算一致，但 **numerical_gate_passed=false**；证据有效不等于模型通过。
+
+运行包 `20261028-qwen-cat-grad-r6-nohook-r3-prepared/` manifest `db03ec32dd5ccc312cd0989f3842242b340bb8744cdc94096d4ba8cb5437d311`，source fingerprint `5f4107c5…`。comparison SHA `6fc40028ffc504e05d069c38220c8b1f0ff7126c63f2dff1bff0a301455dbcc1`，新完整NPZ SHA `cd6b4fd21e3e8026822c3863744b1e34b1961be7cdbe5debcf73067791630eaf`。三个输入exact，loss JT2.6934099197387695/PT2.6900217533111572，abs0.0033881664276123047；padding7,140,992项中5,744,411超限，不删除padding来通过。全部数值与r4原报告相同尚不代替数组逐字核验。
+
+root28终审文件为仓外 `20261028-root-cat-r6-continuation-r3/root-r6-nohook-terminal-audit.json`。完整环境只比实际CUDA14增加本包support的PYTHONPATH前缀，七数值文件及原validator不变；保留r2模型前导入FAIL及其未记录的child退出环境，不回填。r3审阅r1误要求r6前置adapter整体等于旧r4 adapter而FAIL，原件保留；r2核验实际r6继承字节通过（SHA `9b34a607…`）。运行未重冷编/原14，cache仅新增248允许JIT文件、无改删/非法新增，最新1338文件终态SHA `912aa41af329f367bbb9161d9554f1c56b7e94dcc9e3111ead0a6c4e67d5f92e`，自有组与精确锁空。无训练/LoRA/自动重试；未改变main源码。
+
+本轮fresh fetch仍为 `origin/cgq_transformers@e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，为六树HEAD祖先，无需整合；main起点`f474b69250ac891336a57e1d2cd7e3b41139bd68`，原dirty工作及空index保留。根盘约84GiB、数据盘约6TiB；未清理证据或干扰共享GPU进程。
+
+候选未采用main，LoRA不启动，不重复本次cohort。下一项先对保留r4与本次r6完整NPZ作只读逐块比较，再审查既有逐层capture与独立PT中间数组能否复用；只有捕获logits与本次no-hook exact绑定后，才据实际首差异定位下一算子，不叠加rsqrt/mean/RMSNorm等未经验证假说。T5/Vision原余额与禁止重试边界、BERT原gap和缺11份PT checkpoint、Day4–5正式稳定三轮/容量/峰值门槛均保持。
+
+
 ## 2026-10-28 r6原cat CPU与真实CUDA数值闭环
+
+原完整no-hook启动增量：root完成新final `20261028-qwen-cat-grad-r6-nohook-r2-prepared/` manifest `962930153d5c5359fa25fbcef37b77aa12890926197239bae2975479ed28c8fb`的25工具与13项launch核验，审计SHA `5136148f8e3be6854e930b9a42c963f9f43f650d2a16155424a880bbc7b566e4`；七数值文件逐字与原r4一致，`validate_full_comparison`原后缀不变、完整环境直接等于实际CUDA14 NO_BUILD环境、最新1090文件cache exact。root随后单次串行释放worker1800s/comparator120s，当前尚无终态；全部29,171,712含padding/.005/.03原门槛保持，无训练/LoRA/重试或自动后继。不要从旧HOLD或当前RUNNING启动重复模型。
+
+r2终态纠正：正式receipt SHA `a47f1674b90768493d2a617bf572c59400c636f13576717f47f7c1268a970ee9`为`RUNTIME_OR_CACHE_FAILURE_RETAINED`，原entry SHA `39848a23dd1556645ee9fa9600b74107bab6a79efc32d0591fed87a4ff3a0bc9`在`unchanged_worker` phase记录`ModuleNotFoundError: No module named '_hf_trainer_e2e_runner'`，worker.py line31，先于原probe runpy/模型加载。只有一个自然rc1 worker，无原worker identity、模型输出/NPZ或comparator，不是logits数值FAIL/PASS。root独立15项保留失败审计`root-r6-nohook-support-path-failure-audit.json` SHA `ce429068b888605cc208b075d3b6f9ca5b90db4f55de5e8c5b2b5136ef1b7781`确认source/tools/新core及已记录导入环境有效、cache1090全delta0、组与精确锁空；失败后child最终环境未记录，不回填。原r4正式no-hook有唯一PYTHONPATH变更以加入本包support，新r2直接复用CUDA14环境漏此前缀。stdlib PathFinder对原PYTHONPATH无结果，只增加support即解析原字节模块；下一项仅新r3 metadata后继恢复此前缀和完整before/post合同，其他环境键不变，绑定原FAIL/entry/本次terminal-cache，不重冷编、不重跑原14、不改七数值或原validator/阈值。LoRA继续阻断。
 
 新CUDA14 final `20261028-qwen-cat-grad-r6-cuda14-r2-prepared/` manifest `cab691249dad72d39b8499d46d758bce7f3a2fd873d061c8620be7cb626958c0`显式继承原CPU14/cat1/grad5终态及各root审计，并绑定本次r6真实CUDA cold产品、完整NO_BUILD环境和942文件cache。root核验25工具、11项launch检查，独立逐文件重建缓存转换：仅移除941个等于root/relative-key的冗余path，把唯一operational_locks映为单项operational_lock，inode32909956及所有其他字段不变，重建对象与原cache严格相等；未泛放松cache/source/环境守卫。launch-review SHA `230c26cf770a439b048f64099f55d7ad80e9eebd08d9cd8d4e539dceb5aa6a1b`。
 
