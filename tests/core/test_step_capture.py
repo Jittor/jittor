@@ -197,6 +197,22 @@ class TestStepCapture(unittest.TestCase):
         self._replay_matches(step, [jt.array(rs.randn(64, 32).astype("float32"))
                                     for _ in range(5)])
 
+    def test_a_cast_then_scalar_multiply_reads_the_new_input(self):
+        # The copies into the captured leaves used to run outside the kept-
+        # graph window. The executor then treated them as an ordinary batch
+        # and released the captured intermediate behind them, so the replay
+        # answered with the value that intermediate held when it was captured:
+        # a half input cast to float32 and multiplied by a Python float kept
+        # returning the first feed's result. SDPA's scale fold is this shape.
+        rs = np.random.RandomState(4)
+
+        def step(x):
+            return [(x.float32() * 2.0).sum(1)]
+        self._replay_matches(
+            step,
+            [jt.array(rs.randn(64, 32).astype("float32")).float16()
+             for _ in range(5)])
+
     def test_random_draws_differ_on_every_replay(self):
         # A step that draws random numbers draws new ones every call, the
         # way it does when it runs as written.

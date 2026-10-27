@@ -828,33 +828,42 @@ class StepCapture:
             hook()
         if self._cuda_graph and cap.host_inputs:
             _core.graph_wait()
-        with jt.no_grad():
-            for captured, given in zip(cap.inputs, _input_vars((args, kwargs), [])):
-                captured._copy_into(given)
-        if self._cuda_graph and not _core.graph_leaves_moved(self._cuda_graph):
-            _core.graph_launch(self._cuda_graph)
-            self.stats["graph"] += 1
-            return self._results(cap, self._graph_out)
-        if self._cuda_graph:
-            # A leaf the recording reads has moved -- a parameter read back to
-            # the host migrates -- so its addresses are stale; this step goes
-            # through the executor and a later one records again.
-            _core.graph_release(self._cuda_graph)
-            self._cuda_graph = 0
-            self._graph_out = None
-            self._rerecords += 1
-            if self._rerecords >= _RERECORD_LIMIT:
-                self._graph_refused = "the leaves a recording reads kept moving"
-            else:
-                self._record_at = self.stats["replayed"] + 2
+        # The copies into the captured leaves are part of the kept graph's
+        # lifetime, not work the caller asked for. Outside `keep_graph` the
+        # executor treats them as an ordinary batch and frees what it thinks
+        # is dead behind them -- including the captured intermediate that the
+        # replay is about to read. A failed replay then returned the value
+        # that intermediate was captured with (a cast+scalar-multiply step
+        # kept answering with the first feed's query), while intermediates
+        # that happened to survive made the same step look correct. Retain
+        # the graph from the first copy through the replay and its outputs.
         before = jt.flags.keep_graph
         jt.flags.keep_graph = 2
         try:
+            with jt.no_grad():
+                for captured, given in zip(cap.inputs, _input_vars((args, kwargs), [])):
+                    captured._copy_into(given)
+            if self._cuda_graph and not _core.graph_leaves_moved(self._cuda_graph):
+                _core.graph_launch(self._cuda_graph)
+                self.stats["graph"] += 1
+                return self._results(cap, self._graph_out)
+            if self._cuda_graph:
+                # A leaf the recording reads has moved -- a parameter read back
+                # to the host migrates -- so its addresses are stale; this step
+                # goes through the executor and a later one records again.
+                _core.graph_release(self._cuda_graph)
+                self._cuda_graph = 0
+                self._graph_out = None
+                self._rerecords += 1
+                if self._rerecords >= _RERECORD_LIMIT:
+                    self._graph_refused = "the leaves a recording reads kept moving"
+                else:
+                    self._record_at = self.stats["replayed"] + 2
             jt.sync(cap.roots, False, False)
             self._write_back(cap)
+            return self._results(cap, cap.outputs)
         finally:
             jt.flags.keep_graph = before
-        return self._results(cap, cap.outputs)
 
     def __call__(self, *args, **kwargs):
         if _core.graph_capture_active():

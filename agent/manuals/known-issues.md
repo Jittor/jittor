@@ -1856,28 +1856,3 @@ PY
 - Exit condition: codegen fuses through the reshape above a pending producer
   deterministically and near CUB throughput, or a justified deterministic
   strategy is selected; the rank-1 allocation gate passes.
-
-## KI-EXEC-016: StepCapture replay leaves the query operand at its capture-time value
-
-- Severity: High (a replayed attention step returns the wrong output)
-- Status: Open; reproduced 2026-10-27 on RTX 4090 at baseline `fc7947ff7`
-  (before this round's changes).
-- Owner: StepCapture / replay and attention maintainers.
-- Symptom: `tests/backends/cuda/test_cudnn_fused_attention.py::TestCudnnFusedAttention::test_masked_training_replays_with_changed_inputs`
-  passes for the first two eager calls and fails from the first replay: the
-  output differs from the float64 reference by 0.124 (float16) at feed 2 and
-  by 0.140 at feed 3, with `stats={"captured":1,"replayed":2}`.
-- Cause: after `_replay` copies the new arguments into `cap.inputs`, the
-  captured query storage is updated (its sum matches the new feed), but the
-  replayed output equals the reference built from the **capture-time query**
-  and the **current** key/value/mask (max diff 6.1e-5). Generic
-  `capture_step` with a changing GPU bool mask, and the key/value/mask of this
-  step, all replay correctly; only the attention step's query operand is not
-  refreshed. The capture is not refused, so this is silent.
-- Workaround: do not use `jt.capture_step` on an SDPA training step whose
-  query changes between calls; run it eagerly until the replay owner is fixed.
-- Evidence: the nodeid above; the probe recorded under
-  `$JITTOR_LAB_ROOT/_state/attn-base` (baseline worktree) and the current
-  reproduction.
-- Exit condition: the replay returns the reference for every feed with the
-  fresh query, key, value and mask, and the test passes on CPU and CUDA.

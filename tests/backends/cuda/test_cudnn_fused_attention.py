@@ -288,11 +288,7 @@ class TestCudnnFusedAttention(unittest.TestCase):
         mask = jt.zeros((33, 47), dtype="float32").start_grad()
         self.assertIsNone(self.kernel._cudnn_fused_attention(q, k, k, attn_mask=mask))
 
-    @unittest.expectedFailure
     def test_masked_training_replays_with_changed_inputs(self):
-        # KI-EXEC-016: replay reuses a materialised attention node, so the
-        # query stays at its capture-time value. Strict xfail: removing the
-        # decorator is part of closing the issue.
         def step(q, k, v, mask):
             out = scaled_dot_product_attention(q, k, v, attn_mask=mask)
             return (out,) + tuple(jt.grad(out.float32().sum(), [q, k, v]))
