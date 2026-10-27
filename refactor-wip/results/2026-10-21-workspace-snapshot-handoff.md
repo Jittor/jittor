@@ -1,5 +1,11 @@
 # 2026-10-21 工作区快照与本机接续交接
 
+## 2026-10-28 01:10 +0800 SiLU真实旧失败与隔离r4入口
+
+storage r3的lifecycle通过后，先按原审阅完成SiLU-only旧路径独立CPU/真实CUDA。新包`20261028-qwen-silu-current-r3-r1-prepared/` manifest `c3fdde08…`、receipt `6f895f7b…`、root终审 `8aaa4665…`：每device四个原23点unit低精度/native-AMP行PT/math exact，JT forward/input-grad均差；BF16样例4.53125对4.5625。source/core/stamp不变、fallback0/cache无改删/组空，旧失败有效，不是修复PASS。
+
+root新建`torch-compat-storage-silu-20261028-r4`，完整r3复制仅activation.py8行SiLU精度修复和原维护回归新增；source `b3c6c32a…`、`20261028-qwen-silu-r4-source-r1/candidate-source-manifest.json` SHA `ea42f5e7…`。main/r3保持，原96项dirty与空index未变。新bootstrap包`20261028-qwen-silu-r4-bootstrap-r1-prepared/` manifest `c52ba629…`已由root唯一释放CPU600s冷构建，CUDA900s尚未释放；两cap继承原cold stage、无自动重试/后继，源和工具冻结。不得把构建身份PASS当数值支持。下一项先核验CPU终态后单独审CUDA，再采用新products/NO_BUILD完成独立PT继承对拍及维护/邻近测试，只有真正PASS才考虑一次原全部logits no-hook；旧HOLD包不原地修改。Day4–5新审阅确认无正式性能行，T5/Vision预算与BERT失败不变。完整证据见[本日结果](2026-10-26-torch-compat-release-day2-5.md)。
+
 ## 2026-10-28 00:45 +0800 lifecycle通过后的续接入口
 
 Day2–5仍未完成。storage r3/source`2dad903f…`在未版本化`20261028-qwen-storage-r3-lifecycle-r1/`完成独立PT/JT CPU及真实CUDA有界生命周期验证，正式receipt SHA `5319668de6bce14cfd9e45b02bf4c38295e06813d29d16c0930476945035915f`、manifest `a8ea56ca…`、root终审 `3e1fb752…`。每runtime/device独立/共享exp producer各重复三次，非求导可变常量、无中间holder、物化loss后写、先读梯度均通过原1e-12绝对/相对对拍；JT每device另通过kept旁观不重放及相关reader拒绝/目标不变，八次清理均回到live_vars=0。实际CPU/CUDA dispatch与fallback0，source/core/utils/stamp不变，CPU/CUDA各新增16个允许JIT产物、无改删，四自有组/两个精确锁内核记录空。未重复48/22，未重冷编；main原96项dirty哈希与空index保持。

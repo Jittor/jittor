@@ -1,5 +1,17 @@
 # Torch Compatibility Release Acceptance: 2026-10-26 Day 2–5 Continuation
 
+## 2026-10-28 01:10 +0800 SiLU前向/输入梯度独立CPU与真实CUDA旧失败
+
+遵循此前离线因果审阅的SiLU-only优先顺序，未在storage修复后直接重跑完整模型。新`20261028-qwen-silu-current-r3-r1-prepared/`沿用source `2dad903f…`与已通过cores/env，manifest SHA `c3fdde08e7b42c517413572f66aa4b7159d9c4800e4c5f0042e8ee3ea009af9b`。root在offline comparator正负控/dry通过后唯一串行执行PT CPU→JT CPU→PT真实CUDA→JT真实CUDA，cap120/180/120/360s、无超时或重试。每侧/device10行含4原23点unit-cotangent低精度fixture（BF16/FP16、native/AMP）、4非unit补充和2FP32诊断；原unit/math门槛仍exact，补充行不杜撰容差。正式receipt SHA `6f895f7b07c1cf02ece16a68b8be1961538103ab87dfceb119bf32ef72d510c7`为`OLD_SILU_FAILURE_REPRODUCED_CPU_AND_REAL_CUDA`，不是修复或发布PASS。
+
+CPU和真实CUDA各四个原unit行均独立PT与原量化数学的forward/input-gradient exact，JT两字段均有差异。BF16前向每mode3项差异、max_abs0.03125，4.59375点JT4.53125/PT4.5625；CPU BF16梯度每mode2项、CUDA6项。FP16前向每mode3项，CPU输入梯度9项、CUDA8项。每runtime实际device及native dispatch确认，JT fallback0；新源码或core无修改，CPU/CUDA各新增60个约定算子JIT产物、既有缓存无改删，四组空、精确锁无内核持有记录。root以标准库重新计算原unit量化解析值并核对独立PT，终审`root-terminal-audit.json` SHA `8aaa4665ca5d343ba8b001c9f31804adb1289d6ea113a87bd8928a23c4c211f9`，确认真实旧失败。
+
+root据此创建新隔离worktree `torch-compat-storage-silu-20261028-r4`，HEAD仍`765f1791f…`，完整复制2804项r3文件/链接并逐项核验；相对r3仅activation.py采用此前已保存的8行SiLU FP32中间计算/一次输出舍入补丁，另新增原维护test_silu_low_precision.py原件，无删除。新source fingerprint `b3c6c32a66bd5243d5a739ccd15f5b651160d4a6df5c5487dda4a76491bdada4`；`20261028-qwen-silu-r4-source-r1/candidate-source-manifest.json` SHA `ea42f5e734a262eef9bebc34b45c54c7538011cc22bb31e944789f186aac0a65`覆盖2804 regular/2805 candidate records及compat链接。main/r3与旧cohort均未改，不叠加rsqrt/mean/T5修复。新root禁止迁移旧core或重写stamp。
+
+`20261028-qwen-silu-r4-bootstrap-r1-prepared/` manifest SHA `c52ba6291fd214e379e42dc1d1d68c7afbbc7b0b7665804bddc8dc815783604a`在真实旧失败/root review/source全绑定后通过dry；CPU600、CUDA900秒分别继承原cold-stage manifest/plan，有明确路径/哈希/字段，不追加模型预算。逐device新cache，动态source/generator/compile_order/stamp检查；CPU包括合法indexing_schedule_codegen.cc，CUDA core/utils父子目录按既有compiler规则核验。本快照root正持有唯一CPU cold-stage，CUDA尚未释放；构建成功也只证明产物身份，修复后的独立PT/JT数值、维护/邻近回归及原完整no-hook均未验证。
+
+原`20261028-qwen-storage-r3-nohook-r1-prepared/`仅离线准备，manifest `e1ae4a7a…`、dry通过但execution_hold明确缺SiLU old/new CPU/CUDA证据，attempt不存在；原数值worker/probe/support/comparator字节不改。待r4数值前置真正通过，须另建绑定新source/core/cache的后继，不能清改旧HOLD包或自动启动LoRA。Day4–5新只读审阅`20261028-day45-current-tool-review-r1/` manifest `899f35820ae42a33a9d03dea97f2b718a2691ee7c6d8a54323c1309b975596df`确认formal-r3只完成60s readiness、12样本0合格，未产生正式PT/JT性能行；旧source/head不能重绑。当前仍缺三轮代表格、真实容量、峰值与常用路径归因；T5/Vision原预算、BERT失败及checkpoint缺失保持。
+
 ## 2026-10-28 00:45 +0800 有界lifecycle独立CPU与真实CUDA通过
 
 发布仍 **Not complete**。本轮fresh fetch记录`origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，为main及原验收/fix/Qwen/storage-r3各HEAD祖先，无需整合。main起点`ef09b62332521c3f226dc1b73870bafea61ce1c8`，原96项dirty（99个文件哈希）及空index保存于新包`root-continuation-workspace-before.json`，独立终审确认原文件均未变；runtime源码未改。原验收/fix/Qwen树分别51/85/87项dirty，storage-r3树109项，均未清理。根盘约余87GiB、data6约余6TiB，GPU按固定UUID/空闲显存准入，不按utilization；共享负载不能证明性能。

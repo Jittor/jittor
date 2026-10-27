@@ -1,5 +1,11 @@
 # 整改看板
 
+## 2026-10-28 01:10 +0800 SiLU旧缺陷真实复现，隔离r4待验证
+
+Day2–5仍 **Not complete**。`20261028-qwen-silu-current-r3-r1-prepared/`在source `2dad903f…`独立PT/JT CPU与真实CUDA完成每侧/device10行有界捕获，manifest `c3fdde08…`、receipt `6f895f7b07c1cf02ece16a68b8be1961538103ab87dfceb119bf32ef72d510c7`终态`OLD_SILU_FAILURE_REPRODUCED_CPU_AND_REAL_CUDA`。每device四个原unit-cotangent低精度/native或AMP case均PT与原量化数学exact，JT前向和输入梯度均偏离；BF16(4.59375)在两device均JT4.53125/PT4.5625。非unit/FP32仅诊断，未新增容差。source/core/stamp不变、fallback0、CPU/CUDA各新增60个允许JIT产物且无改删，自有组与精确锁记录空；root独立终审 `8aaa4665…`复验成立。
+
+root新建隔离`torch-compat-storage-silu-20261028-r4`，完整保留r3工作区，只改activation.py的低精度SiLU FP32中间计算/一次输出舍入并新增既有23点回归原件；source `b3c6c32a66bd5243d5a739ccd15f5b651160d4a6df5c5487dda4a76491bdada4`、manifest `ea42f5e7…`，未采用main。新cold-bootstrap包 `c52ba629…`只读原生stamp、显式新root/cache、CPU600/CUDA900继承原cold stage上限；本快照CPU已由root唯一串行释放，CUDA未释放，尚无修复数值结论。原full no-hook准备包有SiLU证据HOLD、无attempt，不启动LoRA。Day4–5只读审阅 `20261028-day45-current-tool-review-r1/`确认最新formal-r3仅60s readiness超时/12样本0合格，无正式性能行，旧绑定不适用当前source。其余发布门槛不变。详见[本日结果](../results/2026-10-26-torch-compat-release-day2-5.md)。
+
 ## 2026-10-28 00:45 +0800 Qwen storage r3生命周期CPU与真实CUDA通过
 
 Day2–5仍为 **Not complete**。隔离source `2dad903f…`在新`20261028-qwen-storage-r3-lifecycle-r1/`完成严格串行PT CPU→JT CPU→PT CUDA→JT CUDA；manifest `a8ea56ca…`，正式receipt `5319668de6bce14cfd9e45b02bf4c38295e06813d29d16c0930476945035915f`为`PASS_BOUNDED_LIFECYCLE_CPU_AND_REAL_CUDA`。每侧/device两个数值case各重复三次：非求导可变常量、两个独立或共享exp saved-root、删除中间holder、先物化loss后公开add_，梯度先于source/intermediate读回；独立PT和解析值均满足原1e-12绝对/相对容差。JT每device另通过无关kept图不重放、相关kept reader写前拒绝且target不变；六次数值与两次kept清理后的live_vars均回到进入前0。实际CPU/CUDA dispatch、fallback0，source/core/utils/stamp exact；CPU/CUDA各新增16个允许算子JIT产物，既有文件无改删，自有组和两个精确锁内核记录空。root独立终审`3e1fb752…`通过。
