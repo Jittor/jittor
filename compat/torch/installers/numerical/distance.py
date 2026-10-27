@@ -4,7 +4,37 @@ def _cdist_impl(x1, x2, p=2.0, compute_mode=None, **kwargs):
     from . import (
         jt,
     )
+    from ...types import _dtype_to_str
     diff = x1.unsqueeze(-2) - x2.unsqueeze(-3)
+    if p == 0 or p == float("inf"):
+        class BoundaryDistance(jt.Function):
+            def execute(self, delta):
+                self.delta = delta
+                self.zero_gradient = p == 0 or delta.shape[-1] == 0
+                if delta.shape[-1] == 0:
+                    # Empty feature vectors have distance zero for either order.
+                    return jt.sum(delta, dim=-1)
+                if p == 0:
+                    result = jt.sum((delta != 0).int32(), dim=-1).cast(
+                        _dtype_to_str(x1.dtype))
+                    if not delta.is_stop_grad():
+                        result.start_grad()
+                    return result
+                self.distance = jt.amax(jt.abs(delta), dim=-1)
+                return self.distance
+
+            def grad(self, grad_output):
+                if self.zero_gradient:
+                    # Keep p=0 attached to its inputs, with a defined zero VJP.
+                    return jt.zeros_like(self.delta)
+                # cdist gives every tied maximum its full derivative; amax
+                # instead divides the incoming gradient between tied entries.
+                selected = (jt.abs(self.delta) == self.distance.unsqueeze(-1))
+                dtype = _dtype_to_str(x1.dtype)
+                sign = (self.delta > 0).cast(dtype) - (self.delta < 0).cast(dtype)
+                return grad_output.unsqueeze(-1) * selected * sign
+
+        return BoundaryDistance.apply(diff)
     if p == 2:
         return jt.sqrt((diff * diff).sum(-1))
     if p == 1:
