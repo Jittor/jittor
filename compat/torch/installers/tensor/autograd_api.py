@@ -65,7 +65,13 @@ def _rg_set(self, v):
                      getattr(fsdp_entry, "full_param", None)):
             if not isinstance(peer, _NativeVar) or peer is self:
                 continue
-            _native_requires_grad.__set__(peer, v)
+            # A shard view is not a backward leaf, and the leaf rule the
+            # public setter enforces does not apply to a tensor that only
+            # mirrors its owner's policy.
+            if peer.is_backward_leaf:
+                _native_requires_grad.__set__(peer, v)
+            else:
+                peer._set_requires_grad_mirrored(v)
             if v:
                 _register_leaf(peer)
         if getattr(fsdp_state, "true_fsdp_flat", False):

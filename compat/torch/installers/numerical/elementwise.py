@@ -20,6 +20,17 @@ def reciprocal(x):
     return 1.0 / x
 
 
+def remainder(input, other):
+    """Floored remainder: the result takes the sign of ``other``.
+
+    ``torch.remainder`` floors the quotient, which is Jittor's ``%``; the
+    truncated spelling is ``torch.fmod``. Only the Tensor method existed, so
+    the functional form raised AttributeError -- PEFT's CPT prompt encoder
+    calls it while building its prompt mask.
+    """
+    return input % other
+
+
 def lerp(input, end, weight):
     """Linearly interpolate between ``input`` and ``end``."""
     return input + weight * (end - input)

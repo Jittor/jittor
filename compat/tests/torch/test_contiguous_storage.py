@@ -165,6 +165,77 @@ def test_contiguous_storage_and_gradient_cpu():
         _check_contiguous("cpu")
 
 
+def _check_repeat_is_a_dense_copy(device):
+    """``Tensor.repeat`` copies; it is not an expanded view of the source.
+
+    Jittor's native repeat is a broadcast view (stride 0 on the reproduced
+    axes), so a write through it was refused -- PEFT's OFT Cayley expansion
+    does ``torch.eye(b).repeat(n, 1, 1).add_(skew, alpha=2)`` -- and the
+    result did not follow, or detach from, the source's own storage.
+    """
+    source = torch.eye(3, device=device)
+    repeated = source.repeat(2, 1, 1)
+    assert tuple(repeated.shape) == (2, 3, 3)
+    assert repeated.is_contiguous()
+    assert repeated.data_ptr() != source.data_ptr()
+    repeated.add_(torch.full_like(repeated, 2.0))
+    expected = np.array([[3., 2., 2.],
+                         [2., 3., 2.],
+                         [2., 2., 3.]], dtype=np.float32)
+    np.testing.assert_array_equal(repeated.detach().cpu().numpy(),
+                                  np.stack([expected, expected]))
+    np.testing.assert_array_equal(source.detach().cpu().numpy(),
+                                  np.eye(3, dtype=np.float32))
+    # torch.tile is a copy too, and routes through repeat here.
+    tiled = source.tile(2, 1, 1)
+    assert tiled.is_contiguous()
+    tiled.add_(1.0)
+    np.testing.assert_array_equal(source.detach().cpu().numpy(),
+                                  np.eye(3, dtype=np.float32))
+    # repeat_interleave with an int count is expand + reshape natively; its
+    # reshape is a stride-0 view. PEFT's HRA adapter makes a trainable
+    # parameter out of it and trains in place.
+    column = torch.arange(3, dtype=torch.float32, device=device).reshape(3, 1)
+    interleaved = torch.repeat_interleave(column, 2, dim=1)
+    assert tuple(interleaved.shape) == (3, 2)
+    assert interleaved.is_contiguous()
+    interleaved.add_(1.0)
+    np.testing.assert_array_equal(column.detach().cpu().numpy(),
+                                  np.arange(3, dtype=np.float32).reshape(3, 1))
+    method_form = column.repeat_interleave(2, dim=1)
+    assert method_form.is_contiguous()
+    method_form.add_(1.0)
+    np.testing.assert_array_equal(column.detach().cpu().numpy(),
+                                  np.arange(3, dtype=np.float32).reshape(3, 1))
+
+
+def test_deepcopy_owns_independent_storage():
+    """`copy.deepcopy(p.data)` must not keep writing through `p`.
+
+    The copy is rebuilt from bytes, as torch makes an independent tensor, so
+    the `.data` owner/path bookkeeping of the original must not travel with
+    it. PEFT's SHiRA adapter does `weight = copy.deepcopy(base.weight.data);
+    weight += sparse_delta`; carrying the marker wrote the update into the
+    base parameter and dropped the delta's gradient edge.
+    """
+    import copy
+    parameter = torch.nn.Parameter(torch.ones(2, 2))
+    copied = copy.deepcopy(parameter.data)
+    assert copied.data_ptr() != parameter.data_ptr()
+    copied.add_(1.0)
+    np.testing.assert_array_equal(parameter.detach().cpu().numpy(),
+                                  np.ones((2, 2), dtype=np.float32))
+    np.testing.assert_array_equal(copied.detach().cpu().numpy(),
+                                  np.full((2, 2), 2.0, dtype=np.float32))
+
+
+@pytest.mark.parametrize(
+    "device",
+    ["cpu"] + (["cuda"] if capability.any_accelerator_enabled(backend=jt) else []))
+def test_repeat_is_a_dense_copy(device):
+    _check_repeat_is_a_dense_copy(device)
+
+
 @pytest.mark.npu
 def test_contiguous_storage_and_gradient_npu():
     if not capability.check_accelerator("acl", backend=jt).enabled:

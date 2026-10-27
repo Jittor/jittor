@@ -499,6 +499,17 @@ struct VarHolder {
     // @pyjt(__set__requires_grad)
     void set_requires_grad(bool flag);
     void set_requires_grad_impl(bool flag);
+
+    /**
+     * Reversible flag change for a tensor that only mirrors another's policy.
+     *
+     * The frontend keeps a frozen FSDP parameter's shard views in step with
+     * the parameter; a view is not a backward leaf, so the public setter,
+     * which enforces Torch's leaf rule, refuses it. The mirror is a policy
+     * change on the view, not a new gradient edge.
+     */
+    // @pyjt(_set_requires_grad_mirrored)
+    void set_requires_grad_mirrored(bool flag) { set_requires_grad_impl(flag); }
     std::shared_ptr<AutogradAliasState> ensure_autograd_alias();
     // @pyjt(_check_inplace_autograd)
     // @attrs(return_self)

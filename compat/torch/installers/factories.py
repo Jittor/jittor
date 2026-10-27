@@ -264,6 +264,13 @@ def _creates_fresh_leaf(name, args, kwargs):
     return False
 
 
+def _draw_inputs_require_grad(args, kwargs):
+    values = list(args) + [kwargs.get("mean"), kwargs.get("std"),
+                           kwargs.get("input")]
+    return any(isinstance(value, jt.Var) and bool(value.requires_grad)
+               for value in values)
+
+
 def _shape_dim(v):
     if isinstance(v, np.generic):
         return v.item()
@@ -639,9 +646,18 @@ def _draw_from_generator(name, generator, args, kwargs):
         t = t.detach()
     t._jittor_torch_ext_mutable = True
     requires_grad = bool(kwargs.get("requires_grad", False))
-    t.requires_grad_(requires_grad)
     if requires_grad:
+        if not bool(t.requires_grad):
+            t.requires_grad_(True)
         _torch_register_leaf(t)
+    elif bool(t.requires_grad) and not _draw_inputs_require_grad(args, kwargs):
+        # The native draw flags its result even when no input asks for a
+        # gradient; torch's factory result is a leaf that does not require
+        # one. A non-leaf refuses the flag change, so cut it outright.
+        if t.is_backward_leaf:
+            t.requires_grad_(False)
+        else:
+            t.stop_grad()
     return t
 
 

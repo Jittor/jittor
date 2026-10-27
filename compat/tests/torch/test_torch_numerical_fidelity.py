@@ -1758,6 +1758,26 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         self.assertIn("sparse", record.detail)
         self.assertIn("device", record.detail)
 
+    def test_dense_arithmetic_with_a_sparse_coo_value(self):
+        """Torch's sparse tensors take elementwise scalar/arithmetic operators.
+
+        PEFT's SHiRA adapter adds its sparse delta to a dense weight
+        (`weight += torch.sparse_coo_tensor(...)`); the storage here is dense,
+        so the answers are the dense ones.
+        """
+        indices = torch.tensor([[0, 1], [1, 0]])
+        values = torch.tensor([2.0, 3.0])
+        delta = torch.sparse_coo_tensor(indices, values, (2, 2))
+        weight = torch.zeros(2, 2)
+        weight += delta
+        np.testing.assert_array_equal(weight.numpy(), [[0., 2.], [3., 0.]])
+        np.testing.assert_array_equal((delta * 2).to_dense().numpy(),
+                                      [[0., 4.], [6., 0.]])
+        np.testing.assert_array_equal((delta + delta).numpy(),
+                                      [[0., 4.], [6., 0.]])
+        np.testing.assert_array_equal((weight - delta).numpy(),
+                                      np.zeros((2, 2), dtype=np.float32))
+
     def test_randint_like_is_a_stable_module_level_object(self):
         numerical = importlib.import_module(
             "jittor.compat.torch.installers.numerical")

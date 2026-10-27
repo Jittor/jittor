@@ -469,6 +469,12 @@ def _api_jit_attribute(value, type=None):
     return value
 
 
+def _api_jit_annotate(type, value):
+    # Same contract as `annotate`: a static type hint for the compiler, the
+    # value at runtime.
+    return value
+
+
 def _api_fx_wrap(f=None, *a, **k):
     return f if f is not None and callable(f) else _identity
 
@@ -713,7 +719,7 @@ def install(ctx):
     # static type hint for the compiler and must return the supplied value.
     # The shim does not emit TorchScript, but downstream code still calls this
     # public helper while defining eager-compatible functions.
-    _jit.annotate = lambda _type, value: value
+    _jit.annotate = _api_jit_annotate
     register_fidelity(
         "torch.compile", compile, Fidelity.APPROXIMATE,
         "Jittor executes eagerly and does not produce a single compiled graph.")
@@ -733,7 +739,7 @@ def install(ctx):
     # Eager ``script`` returns the original Python callable; expose the
     # callable type so libraries using ``isinstance(fn, torch.jit.ScriptFunction)``
     # retain their structural check without fabricating a compiled artifact.
-    _jit.ScriptFunction = type(lambda: None)
+    _jit.ScriptFunction = _types2.FunctionType
     _jit.interface = _api_jit_interface
     _jit.Attribute = _api_jit_attribute
     try:
