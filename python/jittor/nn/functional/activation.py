@@ -215,7 +215,19 @@ def elu(x: jt.Var, alpha: float = 1.0) -> jt.Var:
         >>> nn.elu(a)
         jt.Var([-0.31873488 -0.6782155   2.128115  ], dtype=float32)
     '''
-    return jt.ternary(x>0,x,alpha*(x.exp()-1))
+    negative_x = jt.ternary(x > 0, 0.0, x)
+    return jt.ternary(x > 0, x, alpha*_stable_expm1(negative_x))
+
+
+def _stable_expm1(x):
+    # Keep the leading sinh unhalved to retain even the smallest subnormal.
+    # The tail avoids cancellation between large negative sinh terms.
+    tail_x = jt.ternary(x < -1.0, x, -2.0)
+    near_x = jt.ternary(x < -1.0, -1.0, x)
+    half_sinh = jt.sinh(near_x * 0.5)
+    near = jt.sinh(near_x) + 2.0 * half_sinh * half_sinh
+    tail = jt.exp(tail_x) - 1.0
+    return jt.ternary(x < -1.0, tail, near)
 
 
 def sign(x: jt.Var) -> jt.Var:

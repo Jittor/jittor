@@ -19,7 +19,6 @@ from .... import fsdp_hooks as _fsdp_hooks
 from .... import collectives as _collectives
 from .rnn import _rnn_pad_sequence
 from jittor.nn.utils.weight_norm import (_ensure_reparam_hook, weight_norm as _native_weight_norm, remove_weight_norm as _native_remove_weight_norm)
-_SELU_S, _SELU_A = 1.0507009873554805, 1.6732632423543772
 
 def _ddp_world_size():
     return _collectives._world_size()
@@ -377,16 +376,21 @@ class Hardswish(nn.Module):
 
 class CELU(nn.Module):
     def __init__(self, alpha=1.0, inplace=False):
-        super().__init__(); self.alpha = alpha
+        super().__init__()
+        self.alpha = alpha
+        self.inplace = inplace
     def execute(self, x):
-        a = self.alpha
-        return _jt.maximum(x, 0.0) + _jt.minimum(0.0, a * (_jt.exp(x / a) - 1))
+        from .functional import _api_F_celu
+        return _api_F_celu(x, self.alpha, self.inplace)
 
 
 class SELU(nn.Module):
-    def __init__(self, inplace=False): super().__init__()
+    def __init__(self, inplace=False):
+        super().__init__()
+        self.inplace = inplace
     def execute(self, x):
-        return _SELU_S * (_jt.maximum(x, 0.0) + _jt.minimum(0.0, _SELU_A * (_jt.exp(x) - 1)))
+        from .functional import _selu
+        return _selu(x, self.inplace)
 
 
 class Softsign(nn.Module):
