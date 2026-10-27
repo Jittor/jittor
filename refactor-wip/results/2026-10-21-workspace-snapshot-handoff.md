@@ -1,6 +1,14 @@
 # 2026-10-21 工作区快照与本机接续交接
 
+## 2026-10-28 r6原cat CPU/CUDA闭环后的续接
+
+Day2–5仍 **Not complete**。r6/source5f4107c5已原CPU14、维护cat_stack1/grad5及CUDAcold231TU/root17通过；CUDA14新final `20261028-qwen-cat-grad-r6-cuda14-r2-prepared/` manifestcab69124现已149.042s自然rc0、原14/14 PASS/零skip，cat/rotate/梯度/二阶原断言完整执行，实际CUDA0/fallback0。receipt c2dcd738、root18终审cbd67896通过，source/products/env exact，CUDA只新增148允许文件至1090、CPU924不变、组锁空。旧失败和PT原件保持，候选未采用main。下一项只审新原完整no-hook final，必须绑定本次CUDA14真实终态cache/环境及全部分阶段root审计；原全29,171,712含padding/.005/.03/1800+120不变，当前尚无模型结果，不启动LoRA。T5/Vision原预算、BERT原gap/缺checkpoint及Day4–5正式三轮/容量/峰值保持；精确绑定见[本日结果](2026-10-26-torch-compat-release-day2-5.md)。
+
 ## 2026-10-28 02:57 +0800 r6原CPU14及维护通过后的续接
+
+CUDA cold终态补充：单次CUDA-only900已约423.131s自然rc0，receipt fd36f0bd、root17审计4ee9af94全真，231TU/新core036023be/stampe7d42d42/942文件cache/完整环境有效、组锁空。不要重启构建；下一项仅新产品绑定CUDA14，当前仍无CUDA数值或原完整no-hook结果，LoRA保持阻断。精确root审计为`20261028-root-cat-r6-continuation-r3/root-r6-cuda-cold-terminal-audit.json`。
+
+03:05 +0800现场增量：r6 CUDA-only fresh cold包 `20261028-qwen-cat-grad-r6-cuda-bootstrap-r1-prepared/` manifest9518cb60已root单次串行启动，900s上限、无自动后继，仍在编译。先核验该真实终态和root17，不重复启动；CUDA14/原no-hook模板仍严格HOLD。合法launch审阅为root目录`root-cuda-cold-launch-review-r2.json` SHA34e36129，r1错误要求CPU cap字段的FAIL保留。
 
 Day2–5仍 **Not complete**。r6/source `5f4107c5…` CPU cold227TU自然rc0（receipt451435ee/root17审计f774a8b9），真实产品绑定CPU14新包 `20261028-qwen-cat-grad-r6-cpu14-r2-prepared/` manifest c5bd04b0已14/14 PASS、零skip；原cat/rotate值、dtype、梯度与二阶导数均完整执行。receipt8355e773/root16终审2b795145确认CPU/native dispatch/fallback0、source/products/env/terminal-cache与组锁有效。继承原终态的维护包 `20261028-qwen-cat-grad-r6-cpu-maint-r3-prepared/` manifest33ec687c已原cat_stack1与grad语义5分次通过，receipt e6a8799d/2664d86a、root15/16项审计60c21c3d/f28c771a全真，当前924文件terminal-cache有效。原r5梯度dtype失败保持，r6未采用main。下一项只审新r6 CUDA900 cold→原14，之后才可考虑原完整no-hook。LoRA及其他模型不启动，T5/Vision原预算、BERT原gap与checkpoint缺口、Day4–5正式三轮/容量/峰值门槛保持。fresh远端仍e5cffe1a为六树祖先，原main96dirty/空index保留；精确绑定见[本日结果](2026-10-26-torch-compat-release-day2-5.md)。
 

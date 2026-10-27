@@ -1,6 +1,18 @@
 # Torch Compatibility Release Acceptance: 2026-10-26 Day 2–5 Continuation
 
+## 2026-10-28 r6原cat CPU与真实CUDA数值闭环
+
+新CUDA14 final `20261028-qwen-cat-grad-r6-cuda14-r2-prepared/` manifest `cab691249dad72d39b8499d46d758bce7f3a2fd873d061c8620be7cb626958c0`显式继承原CPU14/cat1/grad5终态及各root审计，并绑定本次r6真实CUDA cold产品、完整NO_BUILD环境和942文件cache。root核验25工具、11项launch检查，独立逐文件重建缓存转换：仅移除941个等于root/relative-key的冗余path，把唯一operational_locks映为单项operational_lock，inode32909956及所有其他字段不变，重建对象与原cache严格相等；未泛放松cache/source/环境守卫。launch-review SHA `230c26cf770a439b048f64099f55d7ad80e9eebd08d9cd8d4e539dceb5aa6a1b`。
+
+root单次串行执行原CUDA14，360s上限内约149.042s自然rc0、原14/14 PASS、零skip，原cat/rotate值与dtype、输入梯度和二阶导数全部断言完整执行，实际CUDA0/native dispatch、fallback0。receipt SHA `c2dcd7388e395a11dcbc817efaaaeb87921be9b8a281ffb4b96681d567541352`；原结果SHA `3c8921f4e0d22cddc95484669b061710d4fcf87b26249b251bbf7bd0431f594f`。root18项终审`20261028-root-cat-r6-continuation-r3/root-r6-cuda14-terminal-audit.json` SHA `cbd678960c02318b96732239190e2d18296abf3dfc45371d577daab1e63f7935`全真：原独立PT nodeids/参数相同，source/core/utils/stamp/完整环境不变、两份cache守卫通过；CUDA只新增148允许文件、无改删（终态1090），CPU924完全不变，自有controller/child组和精确锁空。原旧端JT10fail/4pass、r5 CPU10pass/4fail及PT原结果保持，没有重跑CPU/PT或旧cohort。
+
+这关闭r6的原cat CPU/CUDA14与CPU维护1/5局部链，不是完整模型或发布通过。候选未采用main；下一项只在新final绑定全部实际前置及最新CUDA14 terminal-cache/完整环境后，单独释放原完整无hook Qwen：七数值文件/独立PT映射/原comparator不变，全部29,171,712含padding logits、atol0.005/rtol0.03、worker1800s/comparator120s。当前尚未启动模型或LoRA；Day2–5仍 **Not complete**，其他FAIL及原预算/性能门槛保持。
+
 ## 2026-10-28 02:57 +0800 r6原CPU14及维护通过，后端验收仍开放
+
+CUDA cold终态补充：上述单次900s CUDA-only构建已约423.131s自然rc0，正式receipt `fd36f0bdccdd2a24bb4df97cc408b03ea1eae8224a87637debd735d536024dce`为`PASS_COLD_BUILD_IDENTITY_ONLY`。root17项终审`20261028-root-cat-r6-continuation-r3/root-r6-cuda-cold-terminal-audit.json` SHA `4ee9af9493880dcea6d0c48c01fc8b086dc4b58ce7232d82d17dd5a941e850a4`全通过；231TU=194仓内+37生成，新core `036023be7e02c88c9bc88a1e9b73f09cd08c6820d1d18b3a6c436cc21f497b5b`、utils2925281c、stamp `e7d42d42…`、942文件terminal cache、source与完整环境exact，两次import实际has_cuda=true/use_cuda=1。没有张量、测试或模型执行；自有组与精确锁均空。这关闭构建身份，不是CUDA数值证据；CUDA14仍待新产品绑定后继独立释放，原完整no-hook及LoRA未启动。
+
+03:05 +0800现场增量：root已单次启动 `20261028-qwen-cat-grad-r6-cuda-bootstrap-r1-prepared/` manifest `9518cb60a7f7a96eb354b194336195ceb66060f0987c127139cfd3b3da644f9d`，仅CUDA fresh cold900秒、首次JIT串行、无自动后继；仍在编译，没有终态/数值结果，不得重复启动。root首份launch审阅因错误要求CUDA-only config同时包含CPU cap而FAIL，保留于`root-cuda-cold-launch-review.json`；按实际CUDA-only900与disabled CPU范围修正的`root-cuda-cold-launch-review-r2.json` SHA `34e36129519931597b35cf292843faf1925da5c483d069089be0238a42f0f4d0`通过，14工具及四可信helper原字节/完整CPU前置/231TU schema/source精确。CUDA14与原no-hook只完成缺真实产品/终态的HOLD模板，不读取或绑定RUNNING收据，不作为数值通过证据。
 
 r6 CPU cold包 `20261028-qwen-cat-grad-r6-cpu-bootstrap-r1-prepared/`在原600s上限内约342.730s自然rc0，正式receipt SHA `451435eeba1516c54c3ca245b804ba61253fca5977ca735ef3f5d4236cda4833`为`PASS_COLD_BUILD_IDENTITY_ONLY`。227TU、core `55ee206a…`、utils `2925281c…`、stamp `6805d809…`、完整环境与两次fresh审计有效；root独立17项终审 `20261028-root-cat-r6-continuation-r3/root-r6-cpu-cold-terminal-audit.json` SHA `f774a8b95c72c4f42a0e99661f907abc6e6dd41f9fa603de0b2fea8ecc641f95`通过，自有组和精确cache锁均空。
 

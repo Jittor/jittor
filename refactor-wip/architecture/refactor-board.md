@@ -1,6 +1,14 @@
 # 整改看板
 
+## 2026-10-28 r6原cat数值CPU与真实CUDA闭环，完整模型待验
+
+Day2–5仍 **Not complete**。隔离r6/source5f4107c5已完成原CPU14及维护cat_stack1/grad语义5；继而CUDA-only cold900自然rc0、root17审计通过。新CUDA14产品绑定包 `20261028-qwen-cat-grad-r6-cuda14-r2-prepared/` manifestcab69124在360s上限内约149.042s自然rc0，原14/14 PASS、零skip；cat/rotate前向、dtype、输入梯度与二阶原断言全部执行，实际CUDA0/native dispatch/fallback0。receipt c2dcd738、root18项终审cbd67896全通过，source/products/完整env不变；CUDA只新增148允许cache文件（终态1090），CPU924不变，组锁空。旧JT10fail/4pass及r5 CPU10pass/4fail不改写，未重跑独立PT或CPU。候选未采用main，下一项仅按原29,171,712含padding logits及0.005/0.03门槛执行原完整无hook Qwen；其final尚在离线绑定，LoRA不启动。其他FAIL、T5/Vision原预算与Day4–5三轮/容量/峰值门槛保持。详见[本日结果](../results/2026-10-26-torch-compat-release-day2-5.md)。
+
 ## 2026-10-28 02:57 +0800 r6原CPU14及维护通过，CUDA待验
+
+CUDA cold终态补充：该单次构建约423.131s自然rc0，receipt fd36f0bd/root17终审4ee9af94全真，231TU（194仓内/37生成）、新core036023be/utils2925281c/stampe7d42d42、942文件cache及完整环境有效，两次import实测has_cuda=true/use_cuda=1，自有组与精确锁空。仅构建身份；CUDA14产品绑定后继正在离线准备，尚无CUDA数值或完整no-hook结果。
+
+03:05 +0800现场增量：r6 CUDA-only fresh cold包 `20261028-qwen-cat-grad-r6-cuda-bootstrap-r1-prepared/` manifest9518cb60已经root单次串行启动，900s上限、无自动后继；仍在编译，无终态或CUDA数值证据。不要重复启动；先核验真实终态及root17，再审CUDA14产品绑定后继。root launch-review r1因错误要求CUDA-only包具有CPU cap字段而FAIL，原件保留；r2按实际CUDA-only900范围审查通过34e36129，未改变包或预算。
 
 Day2–5仍 **Not complete**。隔离r6/source `5f4107c5…`的CPU冷构建227TU自然rc0，receipt `451435ee…`、root17项终审 `f774a8b9…`确认新core/utils/stamp、完整环境和清理有效，仅为构建身份。继而真实产品绑定包 `20261028-qwen-cat-grad-r6-cpu14-r2-prepared/`（manifest `c5bd04b0…`）单次完成原CPU14/14 PASS、零skip；cat/rotate值与dtype、输入梯度及二阶导数原断言均完整执行，真实CPU/native dispatch、fallback0。正式receipt `8355e773…`和root16项终审 `2b795145…`通过。另继承原终态的维护包 `20261028-qwen-cat-grad-r6-cpu-maint-r3-prepared/`（manifest33ec687c）已分次完成原cat_stack1及grad语义5，各零skip；receipt e6a8799d/2664d86a、root15/16项终审60c21c3d/f28c771a全通过，source/products/env不变、cache只新增16/32允许文件、当前924文件terminal exact、自有组/精确锁空。r5原10pass/4fail不改写；r6未采用main。下一项只审新r6 CUDA900s cold，再绑定真实产品执行原14；原完整no-hook与LoRA尚未启动，其余FAIL、T5/Vision预算及Day4–5门槛保持。详见[本日结果](../results/2026-10-26-torch-compat-release-day2-5.md)。
 
