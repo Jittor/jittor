@@ -5,6 +5,7 @@ from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import jittor as jt
 import numpy as np
+from tqdm import tqdm as _tqdm_hub
 
 from ..context import get_install_context, registry_for
 from ..fidelity import Fidelity, register_api_bindings, register_fidelity
@@ -606,10 +607,7 @@ def assert_close(actual, expected, rtol=1e-5, atol=1e-8, **kwargs):
     np.testing.assert_allclose(actual, expected, rtol=rtol, atol=atol)
 
 
-def load_url(*args, **kwargs):
-    raise NotImplementedError(
-        "torch.utils.model_zoo.load_url is not supported on the Jittor shim"
-    )
+load_url = _load_state_dict_from_url
 
 
 def _api_tutils__rebuild_tensor(data, *a, **k):
@@ -861,7 +859,7 @@ def install(ctx):
     hub.get_dir = _api_hub_get_dir
     import re as _re_hub
     hub.HASH_REGEX = _re_hub.compile(r"-([a-f0-9]*)\\.")
-    hub.tqdm = None
+    hub.tqdm = _tqdm_hub
     hub.urlparse = _urlparse_hub
     hub.urlopen = _urlreq_hub.urlopen
     hub.Request = _urlreq_hub.Request
@@ -1031,9 +1029,9 @@ def install_parity(ctx):
     g.testing = testing
 
     model_zoo = module("torch.utils.model_zoo")
-    if not hasattr(model_zoo, "load_url"):
-
-        model_zoo.load_url = load_url
+    hub = module("torch.hub")
+    model_zoo.load_url = hub.load_state_dict_from_url
+    model_zoo.tqdm = hub.tqdm
     g.utils.model_zoo = model_zoo
 
     python_dispatch = module("torch.utils._python_dispatch")
