@@ -2,7 +2,7 @@
 
 - Status: Current-state index, not a history log
 - Last reviewed: 2026-10-26
-- Baseline reviewed: `2ca8e628a`
+- Baseline reviewed: `0d18dccbd`
 - Owner: Jittor core maintainers
 - Freshness expires: 2027-01-06
 - Review when: the release line, a top-level goal or an indexed location changes
@@ -37,7 +37,10 @@ is now paired: Chinese-default `X.md` plus English `X.en.md`, with
 consolidated optimizer state-name translation, vLLM accelerator detection,
 slot mapping, async host copies and sampling-snapshot caches, and the AMP
 half-preference test; forward-placement and jagged-axis have contract
-tripwires.
+tripwires. The continuous-test rounds also fixed checkpoint buffer-class
+preservation, half-contraction accumulation, 0-D setitem codegen, scalar
+`sum(dim=0)`, the CPU deterministic query, the mapped-ACL parity inventory,
+and the StepCapture replay copy window (KI-EXEC-016 closed).
 
 ## Where information lives
 
