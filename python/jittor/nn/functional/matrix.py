@@ -82,13 +82,28 @@ def _broadcast_batch_dims(a, b):
 
 #: Every accelerated relay a matrix product can be sent to, and what it takes.
 #:
-#: | relay                     | device | dtypes                             |
-#: | ------------------------- | ------ | ---------------------------------- |
-#: | cublas_matmul (2-D)       | CUDA   | both operands the same float dtype |
-#: | cublas_batched_matmul     | CUDA   | both operands the same float dtype |
-#: | mkl_matmul (2-D)          | CPU    | both operands float32, both dense  |
-#: | mkl_batched_matmul        | CPU    | both operands float32              |
-#: | broadcast * mul + reduce  | any    | everything else, complex included  |
+#: | relay                     | device | dtypes                                  |
+#: | ------------------------- | ------ | --------------------------------------- |
+#: | cublas_matmul (2-D)       | CUDA   | both operands the same float or complex |
+#: | cublas_batched_matmul     | CUDA   | both operands the same float or complex |
+#: | cublas_matmul (2-D)       | ROCm*  | both operands the same float dtype      |
+#: | cublas_batched_matmul     | ROCm*  | both operands the same float dtype      |
+#: | mkl_matmul (2-D)          | CPU    | both operands float32, both dense       |
+#: | mkl_batched_matmul        | CPU    | both operands float32                   |
+#: | blas_matmul (2-D)         | CPU    | both the same float32/64 or complex     |
+#: | blas_batched_matmul       | CPU    | both the same float32/64 or complex     |
+#: | broadcast * mul + reduce  | any    | everything else                         |
+#:
+#: Complex on CUDA is ``cublasGemmEx`` with ``CUDA_C_32F``/``CUDA_C_64F``: the
+#: generic row it replaces ran a complex64 2048-cube product 43x slower than
+#: torch's cgemm. ``ROCm*`` is the ``rocm_legacy`` and ``corex_legacy`` rows,
+#: which keep float only until complex is verified on that hardware. Complex on
+#: CPU is CBLAS ``cgemm``/``zgemm`` -- numpy's bundled OpenBLAS unless
+#: ``JT_BUILD_BLAS_LIB_PATH`` names another (``setup_blas`` in
+#: ``build/compile_extern.py``); the generic row was 110x slower than torch.
+#: The same library's ``sgemm``/``dgemm`` take float64, which oneDNN never
+#: did, and float32 behind oneDNN: without cmake oneDNN does not build, and a
+#: float32 2048-cube product fell to the generic row at 5.5 s (torch 13 ms).
 #:
 #: Four call sites used to spell the cuBLAS row four different ways -- see
 #: ``_cublas_can_take``.
@@ -131,6 +146,19 @@ def _cublas_can_take(a, b):
 @native_rule("same_float:cublas_matmul")
 def _supports_cublas(a, b, trans_a=False, trans_b=False):
     return _same_floating_dtype(a, b) and get_library_ops("cublas") is not None
+
+
+def _same_gemm_dtype(a, b):
+    """Both operands carry one dtype that CUDA's cuBLAS relays take: a float
+    dtype, or complex64/complex128. Mixed pairs -- complex64 with float64 is
+    as wide as complex64 with complex64 -- are not, and the C++ relays assert
+    on them."""
+    return a.dtype == b.dtype and (a.dtype.is_float() or a.dtype.is_complex())
+
+
+@native_rule("same_float_or_complex:cublas_matmul")
+def _supports_cublas_complex(a, b, trans_a=False, trans_b=False):
+    return _same_gemm_dtype(a, b) and get_library_ops("cublas") is not None
 
 
 def _cublas_matmul(a, b, trans_a=False, trans_b=False):
@@ -207,6 +235,47 @@ def _supports_mkl_batched(a, b, trans_a=False, trans_b=False):
 def _mkl_batched_matmul(a, b, trans_a=False, trans_b=False):
     a, b = _broadcast_batch_dims(a, b)
     return get_library_ops("mkl").mkl_batched_matmul(a, b, trans_a, trans_b)
+
+
+_BLAS_DTYPES = {"float32", "float64", "complex64", "complex128"}
+
+
+def _same_blas_dtype(a, b):
+    """One dtype CBLAS has a GEMM for. A float32 pair is declined when AMP
+    would retype the output to a half, for the reason ``_supports_mkl`` gives:
+    the relay's backward would rebuild itself from a half cotangent."""
+    if a.dtype != b.dtype or _jittor_dtype_name(a.dtype) not in _BLAS_DTYPES:
+        return False
+    return a.dtype.is_complex() or not _amp_retypes_output_to_half()
+
+
+@native_rule("same_blas:blas_matmul")
+def _supports_blas(a, b, trans_a=False, trans_b=False):
+    """CBLAS's 2-D relay: one float32/float64/complex dtype, rank 2.
+
+    Rank is the relay's own requirement, as for oneDNN: ``BlasMatmulOp``
+    asserts rank 2, so a rank>2 operand is declined here and its caller takes
+    the reshape route back to a rank-2 product.
+    """
+    if not _same_blas_dtype(a, b) or len(a.shape) != 2 or len(b.shape) != 2:
+        return False
+    return get_library_ops("blas", load=True) is not None
+
+
+def _blas_matmul(a, b, trans_a=False, trans_b=False):
+    return get_library_ops("blas").blas_matmul(a, b, trans_a, trans_b)
+
+
+@native_rule("same_blas:blas_batched_matmul")
+def _supports_blas_batched(a, b, trans_a=False, trans_b=False):
+    if not _same_blas_dtype(a, b):
+        return False
+    return get_library_ops("blas", load=True) is not None
+
+
+def _blas_batched_matmul(a, b, trans_a=False, trans_b=False):
+    a, b = _broadcast_batch_dims(a, b)
+    return get_library_ops("blas").blas_batched_matmul(a, b, trans_a, trans_b)
 
 
 def _operand(name, x):
@@ -513,8 +582,8 @@ def _transpose_base_last2(x):
 def _mkl_batched_matmul_is_available(a, b):
     """The CPU row of the table above: oneDNN's batched relay is float32-only.
 
-    Anything else -- float64, float16, and the complex dtypes the native
-    reindex kernels do support -- keeps the generic path.
+    float64 and float16 keep the generic path; the complex dtypes have their
+    own CBLAS row (``_blas_batched_matmul``).
     """
     return select_kernel("batched_matmul", a, b, False, False) is _mkl_batched_matmul
 
@@ -654,22 +723,26 @@ def bilinear(in1, in2, weight, bias):
 
 
 _FLOAT_DTYPES = {"float16", "bfloat16", "float32", "float64"}
+_COMPLEX_DTYPES = {"complex64", "complex128"}
 for _backend in ("cuda", "rocm_legacy", "corex_legacy"):
+    _complex = _backend == "cuda"
+    _dtypes = _FLOAT_DTYPES | _COMPLEX_DTYPES if _complex else _FLOAT_DTYPES
+    _supports = _supports_cublas_complex if _complex else _supports_cublas
+    register_kernel("matmul", _backend, _cublas_matmul, dtypes=_dtypes, supports=_supports)
     register_kernel(
-        "matmul", _backend, _cublas_matmul, dtypes=_FLOAT_DTYPES, supports=_supports_cublas
-    )
-    register_kernel(
-        "batched_matmul",
-        _backend,
-        _cublas_batched_matmul,
-        dtypes=_FLOAT_DTYPES,
-        supports=_supports_cublas,
+        "batched_matmul", _backend, _cublas_batched_matmul, dtypes=_dtypes, supports=_supports
     )
 register_kernel("matmul", "cpu", _mkl_matmul, dtypes={"float32"}, supports=_supports_mkl)
 register_kernel(
     "batched_matmul", "cpu", _mkl_batched_matmul, dtypes={"float32"}, supports=_supports_mkl_batched
 )
-del _backend
+# After oneDNN: float32 takes it where it is built, CBLAS otherwise.
+register_kernel("matmul", "cpu", _blas_matmul, dtypes=_BLAS_DTYPES, supports=_supports_blas)
+register_kernel(
+    "batched_matmul", "cpu", _blas_batched_matmul, dtypes=_BLAS_DTYPES,
+    supports=_supports_blas_batched,
+)
+del _backend, _complex, _dtypes, _supports
 
 
 __all__ = [

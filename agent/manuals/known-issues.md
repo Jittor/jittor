@@ -433,7 +433,11 @@ workaround.
   bounded per-shape plan cache, 32 plans / 64 MiB scratch).
 - Owner: CPU backend (oneDNN)
 - Symptom: convolution and matmul through oneDNN accept float32 only; other
-  dtypes take the generic kernels (declared, not silent). The plan cache replaced
+  convolution dtypes take the generic kernels (declared, not silent). Matmul has
+  a CBLAS row behind it (`backends/cpu/libraries/blas`, numpy's bundled
+  OpenBLAS by default) that takes float64 and complex64/complex128, and float32
+  where oneDNN is not built (no cmake); float16/bfloat16 matmul stays generic.
+  The plan cache replaced
   the per-call engine/descriptor/primitive rebuild, but the lower per-call
   convolution overhead it was built for has never been measured against the old
   path. oneDNN no longer ships prebuilt v3 binaries, so verification needs a
@@ -445,7 +449,7 @@ workaround.
   `python/jittor/nn/backends/onednn.py` (`dtypes={"float32"}`);
   `backends/cpu/libraries/mkl/mkl_matmul_op.cc` ("support float32 only now").
 - Exit condition: measure per-call convolution overhead before/after on a fixed
-  shape set; widen matmul through `dnnl::matmul` if fp64/fp16/bf16 are wanted;
+  shape set; widen matmul through `dnnl::matmul` if fp16/bf16 are wanted;
   delete the entry when both are settled.
 
 ## KI-BACKEND-012: the ACL descriptor cache is not wired into any runner, and the ACL launcher and attribute migration never ran on an Ascend device
@@ -1156,6 +1160,30 @@ workaround.
   random data is within 10% of the `std::max` figure on the same benchmark.
   **Name the input pattern when you measure**: monotone and random data differ by
   up to 4x on the same kernel.
+
+## KI-OPS-016: small dense linear algebra trails torch on host LAPACK, and QR's backward on CUDA
+
+- Severity: Medium (performance; results are correct)
+- Status: Open; measured 2026-10-26 on RTX 4090 / 16 cores of an EPYC 7763
+  against torch 2.5.1 in the same Slurm job. The 2-D CUDA forwards are native
+  since then (`backends/cuda/kernels/cusolver`, `cublas_trsm`): solve 64x64
+  210 us (torch 147), QR 128x64 396 us (torch 370).
+- Owner: linalg maintainers
+- Symptom: complex64 `jt.linalg.solve` 64x64 takes 254 us on CPU (torch 97);
+  from n = 128 up numpy's OpenBLAS LAPACK is 3-5x behind torch's MKL for QR.
+  On CUDA, QR 128x64 forward plus backward takes 1.53 ms (torch 0.74). Batched
+  (rank > 2) CUDA solve/QR/SVD, and every CUDA linalg op on a NVIDIA-wheel
+  CUDA stack (which carries no cuSOLVER), still go through CuPy.
+- Cause: the host forwards are `numpy_code` callbacks into numpy's OpenBLAS,
+  whose LAPACK does not scale with threads at these sizes (`_host_lapack`
+  keeps it on one thread below 2^25 units of work, where its own pool lost to
+  Jittor's spinning OpenMP team). QR's backward recomputes QR live, for
+  higher-order derivatives (`_reconnect`), and is a dozen small ops.
+- Workaround: none.
+- Evidence: `tests/linalg/test_lapack_paths.py` pins the current paths.
+- Exit condition: CPU solve/QR through LAPACK from the library `setup_blas`
+  loads, and a QR backward that reuses the forward, bring the cases above
+  within 1.5x of torch.
 
 ## KI-SEMANTICS-003: floating-comparison NaN semantics not verified on every backend
 

@@ -71,7 +71,10 @@ def test_cuda_capability_dtypes_are_declared_and_wider_than_the_cpu_backend(cuda
                        "conv2d_backward_weight"):
         accelerator = set(jt.core.backend_capability_dtypes("cuda", capability))
         cpu = set(jt.core.backend_capability_dtypes("cpu", capability))
-        assert accelerator == wide, (capability, sorted(accelerator))
+        # cuBLAS also has the complex GEMMs (CUDA_C_32F/CUDA_C_64F); cuDNN's
+        # convolutions do not.
+        expected = wide | {"complex64", "complex128"} if capability == "matmul" else wide
+        assert accelerator == expected, (capability, sorted(accelerator))
         # The CPU row is empty only when oneDNN has not loaded in this
         # process; when it has, it must be a strict subset rather than equal,
         # because that gap is the thing being declared.

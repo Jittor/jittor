@@ -153,6 +153,12 @@ include backends/comm/nccl/ops/nccl_test_op.h
 include backends/comm/nccl/src/nccl_wrapper.cc
 include backends/corex/include/jittor_accelerator.h
 include backends/corex/runtime/corex_backend.cc
+include backends/cpu/libraries/blas/blas_batched_matmul_op.cc
+include backends/cpu/libraries/blas/blas_batched_matmul_op.h
+include backends/cpu/libraries/blas/blas_matmul_op.cc
+include backends/cpu/libraries/blas/blas_matmul_op.h
+include backends/cpu/libraries/blas/blas_runtime.cc
+include backends/cpu/libraries/blas/blas_runtime.h
 include backends/cpu/libraries/mkl/mkl_batched_matmul_op.cc
 include backends/cpu/libraries/mkl/mkl_batched_matmul_op.h
 include backends/cpu/libraries/mkl/mkl_capabilities.cc
@@ -209,6 +215,8 @@ include backends/cuda/kernels/cublas/cublas_matmul_op.cc
 include backends/cuda/kernels/cublas/cublas_matmul_op.h
 include backends/cuda/kernels/cublas/cublas_test_op.cc
 include backends/cuda/kernels/cublas/cublas_test_op.h
+include backends/cuda/kernels/cublas/cublas_trsm_op.cc
+include backends/cuda/kernels/cublas/cublas_trsm_op.h
 include backends/cuda/kernels/cudnn/cudnn_capabilities.cc
 include backends/cuda/kernels/cudnn/cudnn_conv3d_backward_w_op.cc
 include backends/cuda/kernels/cudnn/cudnn_conv3d_backward_w_op.h
@@ -233,6 +241,12 @@ include backends/cuda/kernels/cufft/cufft_fft_op.h
 include backends/cuda/kernels/curand/curand_capabilities.cc
 include backends/cuda/kernels/curand/curand_random_op.cc
 include backends/cuda/kernels/curand/curand_random_op.h
+include backends/cuda/kernels/cusolver/cusolver_inv_op.cc
+include backends/cuda/kernels/cusolver/cusolver_inv_op.h
+include backends/cuda/kernels/cusolver/cusolver_qr_op.cc
+include backends/cuda/kernels/cusolver/cusolver_qr_op.h
+include backends/cuda/kernels/cusolver/cusolver_solve_op.cc
+include backends/cuda/kernels/cusolver/cusolver_solve_op.h
 include backends/cuda/kernels/cusparse/cusparse_spmmcoo_op.cc
 include backends/cuda/kernels/cusparse/cusparse_spmmcoo_op.h
 include backends/cuda/kernels/cusparse/cusparse_spmmcsr_op.cc
@@ -268,6 +282,11 @@ include backends/cuda/libraries/cufft/src/helper_cufft.cc
 include backends/cuda/libraries/curand/include/curand_wrapper.h
 include backends/cuda/libraries/curand/src/curand_wrapper.cc
 include backends/cuda/libraries/curand/src/helper_curand.cc
+include backends/cuda/libraries/cusolver/include/cusolver_layout.h
+include backends/cuda/libraries/cusolver/include/cusolver_lu.h
+include backends/cuda/libraries/cusolver/include/cusolver_wrapper.h
+include backends/cuda/libraries/cusolver/src/cusolver_wrapper.cc
+include backends/cuda/libraries/cusolver/src/helper_cusolver.cc
 include backends/cuda/libraries/cusparse/include/cusparse_user_checks.h
 include backends/cuda/libraries/cusparse/include/cusparse_wrapper.h
 include backends/cuda/libraries/cusparse/src/cusparse_wrapper.cc

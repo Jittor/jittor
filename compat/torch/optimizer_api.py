@@ -189,6 +189,21 @@ def _state_dict_torch(self):
     return {"state": state, "param_groups": param_groups}
 
 
+def _owned_state(value):
+    """A loaded state tensor as a buffer of the optimizer's own, as torch's
+    ``load_state_dict`` deep-copies the dict it is given.
+
+    Adopting the Var itself shared it with whoever else holds it -- typically
+    the optimizer whose ``state_dict()`` it came from -- and the fused CUDA
+    kernels update their state buffers in place, so each optimizer's step
+    rewrote the other's momentum. ``clone()`` copies into storage of its own
+    and keeps the frontend Tensor type an SGD momentum buffer must have.
+    """
+    if isinstance(value, jt.Var):
+        return value.clone().stop_grad()
+    return value
+
+
 def _load_state_dict_torch(self, state_dict):
     _context = get_install_context(jt)
     g = _context.target_namespace
@@ -299,7 +314,7 @@ def _load_state_dict_torch(self, state_dict):
                 if kind == "adagrad":
                     pg[native][i] = value.clone().stop_grad()
                 else:
-                    pg[native][i] = value
+                    pg[native][i] = _owned_state(value)
                     if kind == "sgd" and torch_key == "momentum_buffer":
                         _momentum_initialized_flags(pg)[i] = True
             if kind == "adagrad":

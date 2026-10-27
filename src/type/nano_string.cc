@@ -93,6 +93,12 @@ static unordered_set<string> unary_ops = {
     "erf",
     "erfinv",
     "relu",
+    // Internal, reached as `unary(x, "imag")`: not in unary_op.cc's table, so
+    // no `jt.imag`/`jt.as_imag` is generated. `imag` reads the imaginary part
+    // of a complex Var; `as_imag` makes x*i of a real one. Each is the
+    // other's adjoint, which is what lets `Var.imag` differentiate in C++.
+    "imag",
+    "as_imag",
     "isnan",
     "isinf",
     "isfinite",

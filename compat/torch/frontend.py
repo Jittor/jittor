@@ -1,5 +1,6 @@
 """Python frontend types sharing the native VarHolder payload and graph."""
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
+from jittor_core import ops as _native_ops
 
 from functools import update_wrapper
 from types import MethodType
@@ -261,7 +262,9 @@ class _TensorMeta(type):
             elif isinstance(args[0], (backend.NanoVector, _TorchSize)):
                 result = backend.empty(tuple(args[0]), dtype=dtype)
             elif isinstance(args[0], backend.Var):
-                result = backend.Var.clone(args[0])
+                # torch.Tensor(t) aliases t: the native clone op is the view;
+                # `Var.clone()` copies, as torch.Tensor.clone does.
+                result = _native_ops.clone(args[0])
                 # The native view owner preserves both the storage and the
                 # creation-mode-dependent gradient edge. An inherited flag
                 # under no_grad does not explicitly activate an accumulator.

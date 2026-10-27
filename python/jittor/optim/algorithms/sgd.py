@@ -265,10 +265,14 @@ class SGD(Optimizer):
             # same update in PyTorch. `v` is then left at whatever it held;
             # turning momentum on later resumes from zeros, which is what this
             # optimizer has always started from.
+            # A parameter the loss never reached is skipped outright, as
+            # torch.optim.SGD skips a None .grad: no weight decay, and no
+            # momentum buffer seeded from a zero that was never a gradient.
+            absent = getattr(self, "_absent_grads", ())
             active_index = [
                 i
                 for i, (p, g) in enumerate(zip(pg["params"], pg["grads"]))
-                if _param_requires_grad(p) and _grad_matches_param(p, g)
+                if _param_requires_grad(p) and _grad_matches_param(p, g) and id(p) not in absent
             ]
             if not active_index:
                 continue

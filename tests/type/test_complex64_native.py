@@ -117,8 +117,9 @@ class TestComplex64Native(unittest.TestCase):
         both_devices(body)
 
     def test_matmul(self):
-        # complex matmul comes "for free": jt.matmul lowers to elementwise multiply +
-        # sum-reduce, both of which the native complex64 path implements. Lock it.
+        # Complex matmul runs on a GEMM library -- CBLAS on CPU, cuBLAS on CUDA
+        # (tests/ops/test_complex_matmul_relays.py) -- and falls back to multiply +
+        # sum-reduce without one. Lock the result on both devices.
         rng = np.random.RandomState(1)
         A = (rng.randn(3, 4) + 1j * rng.randn(3, 4)).astype("complex64")
         B = (rng.randn(4, 5) + 1j * rng.randn(4, 5)).astype("complex64")
@@ -128,12 +129,11 @@ class TestComplex64Native(unittest.TestCase):
         Bb = (rng.randn(2, 4, 5) + 1j * rng.randn(2, 4, 5)).astype("complex64")
         refb = Ab @ Bb
         def body(dev):
-            # 2-D matmul works on both devices (lowers to multiply + sum-reduce).
+            # 2-D matmul works on both devices.
             r = np.asarray(jt.matmul(jt.array(A), jt.array(B)).numpy())
             self.assertEqual(r.dtype.name, "complex64", f"matmul dtype {dev}")
             np.testing.assert_allclose(r, ref, atol=1e-4, rtol=1e-4, err_msg=f"matmul {dev}")
-            # Batched matmul (bmm) works on BOTH devices: complex64 routes around
-            # cublas_batched_matmul (float-only) to the reindex path (multiply + sum-reduce).
+            # Batched matmul (bmm) works on both devices.
             rb = np.asarray(jt.matmul(jt.array(Ab), jt.array(Bb)).numpy())
             np.testing.assert_allclose(rb, refb, atol=1e-4, rtol=1e-4, err_msg=f"bmm {dev}")
         both_devices(body)
@@ -360,6 +360,59 @@ class TestComplex64Native(unittest.TestCase):
             np.testing.assert_array_equal(np.asarray(x.real.numpy()), re, err_msg=f"real-of-real {dev}")
             np.testing.assert_array_equal(np.asarray(x.imag.numpy()), np.zeros_like(re),
                                           err_msg=f"imag-of-real {dev}")
+        both_devices(body)
+
+    def test_real_imag_are_single_native_ops_with_torch_gradients(self):
+        # `.real` is the complex->float cast and `.imag` the internal `imag`
+        # unary; each is one op with its backward in C++ (dout + 0i and
+        # 0 + dout*i), not a jt.Function over view_as_real plus a getitem.
+        rng = np.random.RandomState(7)
+        for dtype, real in (("complex64", "float32"), ("complex128", "float64")):
+            a = (rng.randn(3, 4) + 1j * rng.randn(3, 4)).astype(dtype)
+            w = rng.randn(3, 4).astype(real)
+            v = rng.randn(3, 4).astype(real)
+            def body(dev):
+                z = jt.array(a)
+                re, im = z.real, z.imag
+                self.assertEqual(str(re.dtype), real, f"real dtype {dtype} {dev}")
+                self.assertEqual(str(im.dtype), real, f"imag dtype {dtype} {dev}")
+                np.testing.assert_array_equal(re.numpy(), a.real, err_msg=f"real {dtype} {dev}")
+                np.testing.assert_array_equal(im.numpy(), a.imag, err_msg=f"imag {dtype} {dev}")
+                loss = (re * jt.array(w, dtype=real)).sum() + (im * jt.array(v, dtype=real)).sum()
+                g = jt.grad(loss, z).numpy()
+                self.assertEqual(g.dtype.name, dtype, f"grad dtype {dtype} {dev}")
+                np.testing.assert_allclose(g, w + 1j * v, rtol=1e-6, atol=1e-6,
+                                           err_msg=f"real/imag grad {dtype} {dev}")
+                # the adjoint pair: as_imag(x) = x*i, whose gradient is Im(dout)
+                x = jt.array(w, dtype=real)
+                xi = jt.unary(x, "as_imag")
+                self.assertEqual(str(xi.dtype), dtype, f"as_imag dtype {dtype} {dev}")
+                np.testing.assert_array_equal(xi.numpy(), 1j * w, err_msg=f"as_imag {dtype} {dev}")
+                gx = jt.grad((xi * z).real.sum(), x).numpy()
+                np.testing.assert_allclose(gx, (1j * a).real, rtol=1e-6, atol=1e-6,
+                                           err_msg=f"as_imag grad {dtype} {dev}")
+            both_devices(body)
+        with self.assertRaisesRegex(RuntimeError, "takes a complex Var"):
+            jt.unary(jt.array(np.ones(2, "float32")), "imag").sync()
+        with self.assertRaisesRegex(RuntimeError, "takes a float32 or float64 Var"):
+            jt.unary(jt.array(np.ones(2, "int32")), "as_imag").sync()
+
+    def test_complex_abs_and_norm_gradients_are_finite_at_zero(self):
+        # torch: d|z| at z == 0 is 0. z/|z| there is 0/0, and a state vector
+        # is mostly exact zeros, so a NaN here poisons the whole gradient.
+        a = np.array([0, 1 + 1j, -3j, 0], dtype="complex64")
+        def body(dev):
+            z = jt.array(a)
+            g = jt.grad((z.abs() * jt.array([1., 2., 3., 4.])).sum(), z).numpy()
+            np.testing.assert_allclose(g, [0, 2 * (1 + 1j) / np.sqrt(2), -3j, 0], rtol=1e-6,
+                                       err_msg=f"abs grad {dev}")
+            z = jt.array(a)
+            n = jt.norm(z)
+            self.assertEqual(str(n.dtype), "float32", f"norm dtype {dev}")
+            np.testing.assert_allclose(n.numpy(), np.linalg.norm(a), rtol=1e-6, err_msg=f"norm {dev}")
+            g = jt.grad(n, z).numpy()
+            np.testing.assert_allclose(g, a / np.linalg.norm(a), rtol=1e-6, atol=1e-7,
+                                       err_msg=f"norm grad {dev}")
         both_devices(body)
 
 

@@ -212,6 +212,8 @@ from .numerical import isposinf
 Var.isposinf = isposinf
 from .tensor_protocol import contiguous
 Var.contiguous = contiguous
+from .tensor_protocol import clone
+Var.clone = clone
 from .tensor_protocol import cpu
 Var.cpu = cpu
 from .tensor_protocol import _device_spec
@@ -274,6 +276,7 @@ __all__ = [
     "block_diag",
     "cartesian_prod",
     "chunk",
+    "clone",
     "contiguous",
     "cpu",
     "cross",

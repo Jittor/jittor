@@ -183,6 +183,13 @@ def _call_record_inputs(self, *args, **kw):
         if wrap_execute:
             ctx.__dict__.pop("execute", None)
         ctx.__dict__.pop("_torch_caller_inputs", None)
+    # jittor's Function swaps the saved taped inputs onto the caller's Vars
+    # after forward (so backward stays differentiable, see
+    # `Function._rebind_saved_inputs`); that is not an in-place edit.
+    rebinds = getattr(ctx, "_taped_input_rebinds", None)
+    versions = getattr(ctx, "_saved_versions", None)
+    if rebinds and versions:
+        ctx._saved_versions = tuple(rebinds.get(v, v) for v in versions)
     # Capture each forward OUTPUT's (shape, dtype) so the grad bridge can
     # materialize a zeros grad for outputs that don't reach the backward'd
     # scalar (torch's materialize_grads=True; see grad() below).

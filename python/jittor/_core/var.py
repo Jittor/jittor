@@ -67,7 +67,10 @@ def array(data, dtype=None):
         data = list(data)                       # NB: `int` is shadowed by the dtype here
     if isinstance(data, core.Var):
         if dtype is None:
-            ret = data.clone()
+            # A new Var over the same storage, as before `Var.clone()` started
+            # copying: `torch.as_tensor` in the compatibility layer aliases
+            # through here.
+            ret = ops.clone(data)
         else:
             ret = cast(data, dtype)
     elif dtype is not None:
@@ -721,7 +724,10 @@ def norm(x, p=2, dim=-1, keepdims=False, eps=1e-30, keepdim=False):
     if p==2:
         # |x|**2, not x*x: for a complex x the square is complex and has no
         # order to clamp with `maximum`. The norm is real either way.
-        sq = x.real.sqr() + x.imag.sqr() if x.dtype.is_complex() else x.sqr()
+        # Re(x * conj x), not |x|**2 through `abs`: abs's backward is z/|z|,
+        # NaN at an exact zero, which a state vector is mostly made of. Three
+        # native ops that fuse into one kernel.
+        sq = (x * x.conj()).real if x.dtype.is_complex() else x.sqr()
         return sq.sum(dim, keepdim).maximum(eps).sqrt()
 
 Var.norm = norm
@@ -1126,7 +1132,7 @@ def _clamp_cpu(x, min_v=None, max_v=None):
         keep = value >= bound if lower else value <= bound
         result = jt.ternary(keep, value, bound)
         if "float" in _jittor_dtype_name(value.dtype):
-            nan_value = value.clone().stop_grad()
+            nan_value = ops.clone(value).stop_grad()  # read-only: a view is enough
             result = jt.ternary(value != value, nan_value, result)
         return result
 
