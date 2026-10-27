@@ -74,6 +74,44 @@ def _mk_nn_submod(_modules, modules_pkg, _name, **_attrs):
     return _mod
 
 
+def _reverse_repeat_tuple(values, repeats):
+    result = []
+    for value in reversed(values):
+        result.extend([value] * repeats)
+    return tuple(result)
+
+
+def _list_with_default(values, defaults):
+    if isinstance(values, int):
+        return values
+    size = len(values)
+    if len(defaults) <= size:
+        raise ValueError("Input dimension should be at least %d" % (size + 1))
+    offset = len(defaults) - size
+    result = []
+    for index, value in enumerate(values):
+        result.append(defaults[offset + index] if value is None else value)
+    return result
+
+
+def _consume_prefix_in_state_dict_if_present(state_dict, prefix):
+    renamed_keys = []
+    for key in state_dict:
+        if key.startswith(prefix):
+            renamed_keys.append((key, key[len(prefix):]))
+    for key, renamed in renamed_keys:
+        state_dict[renamed] = state_dict.pop(key)
+    if hasattr(state_dict, "_metadata"):
+        metadata = state_dict._metadata
+        renamed_metadata = []
+        root_key = prefix.replace(".", "")
+        for key in metadata:
+            if key and (key == root_key or key.startswith(prefix)):
+                renamed_metadata.append((key, key[len(prefix):]))
+        for key, renamed in renamed_metadata:
+            metadata[renamed] = metadata.pop(key)
+
+
 def _install_nn_extras(nn, registry=None):
     # Activation modules torch has that jittor.nn may lack.
     active_registry = registry_for(jt, registry)
@@ -120,7 +158,11 @@ def _install_nn_extras(nn, registry=None):
 
 
     _mk_nn_submod(_modules, modules_pkg, "utils", _single=_single, _pair=_pair, _triple=_triple,
-                  _ntuple=_ntuple, _quadruple=_ntuple(4))
+                  _ntuple=_ntuple, _quadruple=_ntuple(4),
+                  _reverse_repeat_tuple=_reverse_repeat_tuple,
+                  _list_with_default=_list_with_default,
+                  consume_prefix_in_state_dict_if_present=(
+                      _consume_prefix_in_state_dict_if_present))
     _mk_nn_submod(_modules, modules_pkg, "batchnorm",
                   _BatchNorm=getattr(nn, "BatchNorm", None),
                   BatchNorm=getattr(nn, "BatchNorm", None),
