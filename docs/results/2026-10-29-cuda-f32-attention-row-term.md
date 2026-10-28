@@ -60,11 +60,15 @@
 | large_transformers_llama | 39.3 ms | 38.8 ms | 0.99x |
 | large_transformers_qwen3 | 48.1 ms | 38.5 ms | 0.80x |
 | large_transformers_vit | 23.8 ms | 30.4 ms | **1.28x**（修前 1.67x） |
+| large_diffusers_unet2d | 26.0 ms | 44.3 ms | **1.71x** |
 
 分步效果（BERT-large，4090）：一步 186 ms → 注意力修复后 50 ms → 合并
 `zero_grad` 后 41 ms；反向执行 148 ms → 12 ms；`zero_grad` 11.4 ms → 3.4 ms。
-ViT 的注意力同样走 float32 融合核，1.67x → 1.28x 来自同两处修改。`large_diffusers_unet2d`
-因对照站点缺 diffusers 未跑。
+ViT 的注意力同样走 float32 融合核，1.67x → 1.28x 来自同两处修改。
+`large_diffusers_unet2d` 用的是 `diffusers-installed-source/20261015` 的包站点；
+它的差距不是某一处内核：设备侧 20.9 ms 与 PyTorch 接近，1787 个算子里有 63%
+的墙钟花在主机侧构图与启动上（`cudnn_conv*` 51/50/51 次、GroupNorm 的 `code` 90 次
+都不是异常项）。
 
 ## 复现
 
@@ -95,6 +99,7 @@ CUDA 设备侧 profile 需要 CUPTI：`JITTOR_CUPTI_LIB=<...>/nvidia/cuda_cupti/
 
 ## 未结
 
-- diffusers UNet 的 CUDA 大模型用例尚未在对照站点补上 diffusers 后测量。
-- BERT/ViT 剩余的 1.26–1.28x 已由主机侧构图主导（每 op 约 5–7 µs，PyTorch 约
-  1–2 µs），不是某一处内核的问题。
+- diffusers UNet 的 1.71x 由主机侧构图主导，不是内核；要收窄得减少每步的算子数或
+  每个算子的 Python 开销。
+- BERT/ViT 剩余的 1.26–1.28x 同样由主机侧构图主导（每 op 约 5–7 µs，PyTorch 约
+  1–2 µs）。

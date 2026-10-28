@@ -70,12 +70,16 @@ parameters meant 199 full syncs that drained the device between writes.
 | large_transformers_llama | 39.3 ms | 38.8 ms | 0.99x |
 | large_transformers_qwen3 | 48.1 ms | 38.5 ms | 0.80x |
 | large_transformers_vit | 23.8 ms | 30.4 ms | **1.28x** (1.67x before) |
+| large_diffusers_unet2d | 26.0 ms | 44.3 ms | **1.71x** |
 
 Step by step (BERT-large, 4090): 186 ms -> 50 ms after the attention fix ->
 41 ms after batching `zero_grad`; backward execution 148 ms -> 12 ms;
 `zero_grad` 11.4 ms -> 3.4 ms. ViT's attention also takes the float32 fused
-kernel, so both changes moved it from 1.67x to 1.28x. `large_diffusers_unet2d`
-did not run because the comparison site has no diffusers.
+kernel, so both changes moved it from 1.67x to 1.28x. The diffusers case ran
+against the `diffusers-installed-source/20261015` package site; its gap is not
+one kernel -- the device side is 20.9 ms and close to PyTorch, while 63% of the
+wall clock of its 1787 kernels goes to host graph construction and launches
+(`cudnn_conv*` at 51/50/51 calls and GroupNorm's 90 `code` calls are ordinary).
 
 ## Reproduction
 
@@ -108,7 +112,7 @@ The device profile needs CUPTI:
 
 ## Open
 
-- The diffusers UNet CUDA case still needs a site that has diffusers before it
-  can be measured.
-- BERT/ViT's remaining 1.26-1.28x is host graph construction (about 5-7 us per
-  operator, against PyTorch's 1-2 us), not one kernel.
+- The diffusers UNet's 1.71x is host graph construction, not a kernel; closing
+  it means fewer operators per step or a cheaper host cost per operator.
+- BERT/ViT's remaining 1.26-1.28x is the same host cost (about 5-7 us per
+  operator, against PyTorch's 1-2 us).
