@@ -91,7 +91,14 @@ ArrayOp::ArrayOp(PyObject* obj) {
     // conversion that might run in between.
     tmp_data_t scalar;
     if (PyFloat_CheckExact(obj)) {
-        scalar.f32 = PyFloat_AS_DOUBLE(obj);
+        // Keep the exact double alongside the float32 staging copy: a Python
+        // float against a float64 operand is a weak double and must not lose
+        // 29 mantissa bits. binary_op.cc rebuilds the constant
+        // at float64 from `python_float` when promotion asks for one.
+        double value = PyFloat_AS_DOUBLE(obj);
+        python_float = value;
+        has_python_float = true;
+        scalar.f32 = value;
         args = {&scalar, {}, ns_float32};
     } else
     if (PyLong_CheckExact(obj)) {
@@ -184,8 +191,10 @@ ArrayOp::ArrayOp(PyObject* obj) {
         //
         set_type(OpType::element);
     }
-    if (shape.size() == 0)
+    if (shape.size() == 0) {
         output->set_flag(VarFlags::_is_scalar);
+        output->set_flag(VarFlags::_is_constant);
+    }
     void* host_ptr = nullptr;
     #ifdef HAS_ACCELERATOR
     // Fused scalar values are emitted inside generated kernels on both backends.

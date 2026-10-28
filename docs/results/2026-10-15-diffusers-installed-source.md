@@ -1,194 +1,155 @@
-# Fresh Diffusers UNet evidence with installed-source binding
+# 带已安装源码绑定的新 Diffusers UNet 证据
 
-- Status: Verified CPU/CUDA L3 for one bounded tiny UNet component; no pipeline claim.
-- Date: 2026-10-15.
-- Measurement source: clean `1a92aae04f4c70fa44e251f8fafdc7e2cd77beda`, based on synchronized origin `4ce19215c`.
-- Upstream: Diffusers 0.35.1, clean `0f252be0ed42006c125ef4429156cb13ae6c1d60`, official Hugging Face source.
-- Owner: Torch compatibility and downstream validation maintainers.
-- Review when: UNet builder, source/installation identity, precision, gradient/training protocol or scorecard rules change.
+- 状态：已验证一个有界 tiny UNet 组件的 CPU/CUDA L3；未声称 pipeline。
+- 日期：2026-10-15。
+- 测量源码：干净检出 `1a92aae04f4c70fa44e251f8fafdc7e2cd77beda`，基于同步后的 origin `4ce19215c`。
+- 上游：Diffusers 0.35.1，干净检出 `0f252be0ed42006c125ef4429156cb13ae6c1d60`，官方 Hugging Face 源码。
+- 维护者：Torch 兼容性与下游验证维护者。
+- 复查时机：UNet 构建器、源码/安装标识、精度、梯度/训练协议或 scorecard 规则发生变化时。
 
-This is a fresh numerical execution with instrumented package identity, separate
-from the [historical component migration](2026-10-15-diffusers-component-scorecards.md).
-That migration's framework `230ba7a0`, TF32 ON/high CUDA measurements and missing
-historical full installed hashes remain unchanged. No new installation hashes
-are attached to old raw records.
+这是一次带有插桩包标识的全新数值执行，与[历史组件迁移](2026-10-15-diffusers-component-scorecards.md)
+相互独立。该迁移的框架 `230ba7a0`、TF32 ON/high 的 CUDA 测量结果以及缺失的历史
+完整已安装哈希均保持不变。不会把新的安装哈希附加到旧原始记录上。
 
-## Installation and source identity
+## 安装与源码标识
 
-A wheel was built from an archive of the exact clean upstream commit and
-installed with `--no-deps` into a task-owned target. It neither replaced the
-independent Torch nor modified shared environments. The wheel is
-`diffusers-0.35.1-py3-none-any.whl`, SHA256
-`fe763b8bb4381794f64c7a33ffdd29b3e63266c0013194317521331b3a15bdeb`.
-All 695 package Python files match clean source, wheel and installation bytes.
-The complete non-bytecode package payload is 697 files: those Python sources,
-`py.typed`, and `utils/model_card_template.md`.
+用确切干净上游提交的归档构建了 wheel，并以 `--no-deps` 安装到任务自有的目标位置。
+它既没有替换独立的 Torch，也没有修改共享环境。该 wheel 为
+`diffusers-0.35.1-py3-none-any.whl`，SHA256 为
+`fe763b8bb4381794f64c7a33ffdd29b3e63266c0013194317521331b3a15bdeb`。
+全部 695 个包内 Python 文件在干净源码、wheel 与安装字节三者之间一致。
+完整的非字节码包载荷为 697 个文件：上述 Python 源码、`py.typed` 和
+`utils/model_card_template.md`。
 
-The existing `component_measure.py` now supports Diffusers and records the
-actual loaded package path/version, all 695 clean-source hashes and all 697
-installed payload hashes inside every base, perturbation and training process.
-The shared collector checks installed-file hashes against the upstream source
-mapping and requires identical complete package payloads between interpreters.
-Source attestation does not establish execution of every package API. It also
-does not claim full provenance for every transitive dependency or caches and
-installation metadata outside the package directory.
+现有的 `component_measure.py` 现在支持 Diffusers，并在每个基线、扰动和训练进程中
+记录实际加载的包路径/版本、全部 695 个干净源码哈希以及全部 697 个已安装载荷哈希。
+共享收集器会依据上游源码映射检查已安装文件哈希，并要求不同解释器之间具有完全一致的
+完整包载荷。源码存证不等于每个包 API 都被执行过。它也不声称覆盖每个传递依赖，
+或包目录之外的缓存与安装元数据。
 
-The oracle is an independent binary Torch `2.11.0+cu128`; candidate imports the
-requested worktree. Both use actual Diffusers `0.35.1`. CPU explicitly hides CUDA
-and reads back `use_cuda=false`; CUDA uses one explicitly allocated RTX 4090,
-NVCC 12.2.140 on candidate and Torch's CUDA 12.8 stack on oracle. TF32 and cuDNN
-benchmark are OFF, matmul precision is `highest`, threads are fixed to one, and
-candidate CUDA kernel math is strict. Actual candidate `auto_graph_replay=1`
-and retain budget 268435456 bytes are recorded; effective capture or replay
-performance is not separately established. Backend fallback is forbidden and zero.
-These actual conditions differ from historical ON/high and are not relabelled.
+oracle 是独立的二进制 Torch `2.11.0+cu128`；候选方导入指定的工作树。
+两者都使用真实的 Diffusers `0.35.1`。CPU 显式隐藏 CUDA 并回读 `use_cuda=false`；
+CUDA 使用一块显式分配的 RTX 4090，候选方 NVCC 12.2.140，oracle 使用 Torch 的
+CUDA 12.8 栈。TF32 和 cuDNN benchmark 为 OFF，matmul 精度为 `highest`，线程固定为
+一个，候选方 CUDA kernel 数学为 strict。记录了候选方实际的 `auto_graph_replay=1`
+和 268435456 字节的保留预算；实际捕获或重放性能未单独确立。后端后备被禁止，
+计数为零。这些实际条件与历史的 ON/high 不同，未做重新标注。
 
-## Numerical and training scope
+## 数值与训练范围
 
-The unchanged maintained `diffusers_unet2d` builder constructs a real
-`UNet2DModel`: sample size 16, channels 3, one layer per block, block channels
-16/32, Down/AttnDown and matching up blocks, eight norm groups, dropout zero.
-The FP32 sample is `[2,3,16,16]`; timestep is integer `[2]`. All 144 parameters
-are trainable and the sample input requires a gradient. No adapter is added.
+未改动的既有 `diffusers_unet2d` 构建器构造真实 `UNet2DModel`：样本尺寸 16、通道 3、
+每个 block 一层、block 通道 16/32、Down/AttnDown 及相匹配的 up blocks、八个 norm 组、
+dropout 为零。FP32 样本为 `[2,3,16,16]`；timestep 为整型 `[2]`。全部 144 个参数
+均可训练，样本输入需要梯度。未添加任何 adapter。
 
-Base seed 0 and perturbation seed 7 retain the same complete original weights.
-CPU and CUDA oracle initial states also match all 144 arrays bitwise. Both
-runtimes' actual outputs respond to the input perturbation. Each comparison
-checks output, 144 parameter gradients and one sample gradient: 146 fields.
-Three SGD steps at learning rate 0.001 retain complete output, loss, gradients
-and updated parameters: 873 fields. The collector derives parameter names from
-the complete measured snapshot and rejects a changed 144-parameter protocol.
+基线 seed 0 和扰动 seed 7 保留相同的完整原始权重。CPU 与 CUDA oracle 的初始状态
+也与全部 144 个数组逐位一致。两个运行时的实际输出都对输入扰动有响应。每次比较检查
+输出、144 个参数梯度和一个样本梯度：146 个字段。学习率 0.001 的三步 SGD 保留完整
+输出、loss、梯度和更新后的参数：873 个字段。收集器从完整被测快照中推导参数名，
+并拒绝被改动的 144 参数协议。
 
-The original criterion is unchanged: maximum absolute error <= 0.002 **or**
-maximum error divided by the largest reference magnitude across that phase's
-whole field <= 0.01, with floor 1e-12. Key sets, shapes, dtypes and finite values
-must match exactly; missing gradients cannot become zeros or skips.
+原始判据未变：最大绝对误差 <= 0.002 **或** 最大误差除以该阶段整个字段上参考值的
+最大幅值 <= 0.01，下限为 1e-12。键集合、形状、dtype 和有限值必须精确一致；
+缺失梯度不能变成零或被跳过。
 
-| Device | Base / perturb / training arrays | Largest absolute error | Largest scaled relative error |
+| 设备 | 基线 / 扰动 / 训练数组数 | 最大绝对误差 | 最大缩放相对误差 |
 | --- | --- | --- | --- |
 | CPU | 146 / 146 / 873 | 4.9591064453125e-5 | 9.408136315500259e-7 |
 | CUDA | 146 / 146 / 873 | 3.4332275390625e-5 | 6.740602497111345e-7 |
 
-All 1,165 field pairs per platform pass the original budget. Each of the twelve
-actual processes attests to the same 695 source and 697 installed payload hashes.
+每个平台的全部 1,165 个字段对都通过原始预算。十二个实际进程各自为相同的 695 个源码
+哈希和 697 个已安装载荷哈希作证。
 
-Actual update observations distinguish missing gradients from legitimate small
-updates. All requested gradients are present. Some attention key-bias gradients
-are near numerical zero and their SGD update rounds away in FP32 on both sides;
-this is not described as every parameter changing every step. Exactly 140/144
-parameter arrays change at each step on each runtime/device; four attention
-`to_k.bias` arrays remain unchanged. All 48 such rows independently equal the
-FP32-rounded SGD formula; their largest theoretical update/ULP ratio is
-0.000375000003259629. Per-parameter, per-step gradient/update norms are retained.
+实际更新观测把缺失梯度与合法的小幅更新区分开来。所有请求的梯度都存在。一些 attention
+key-bias 梯度接近数值零，其 SGD 更新在两侧的 FP32 中都被舍入掉；这并未被描述为
+每个参数每一步都发生变化。在每个运行时/设备上，每一步恰好有 140/144 个参数数组
+发生变化；四个 attention 的 `to_k.bias` 数组保持不变。全部 48 个此类行都独立等于
+FP32 舍入后的 SGD 公式；其最大理论更新/ULP 比值为 0.000375000003259629。
+保留了每个参数、每一步的梯度/更新范数。
 
-## Coverage and maintained gates
+## 覆盖率与既有门禁
 
-The shared schema-v2 auditor accepts the two fresh CPU/CUDA L3 records with
-zero rejections against the explicit clean measurement baseline. Each device
-counts `model_api 1/87`, solely `UNet2DModel`, with tiny shape and all 144
-trainable parameters retained in `verified_scenarios`. The four pipeline axes
-remain `0/79`, `0/249`, `0/37`, and `0/3`.
+共享 schema-v2 审计器针对显式的干净测量基线，接受两条新的 CPU/CUDA L3 记录，
+零拒绝。每个设备计为 `model_api 1/87`，仅为 `UNet2DModel`，tiny 形状与全部 144 个
+可训练参数保留在 `verified_scenarios` 中。四个 pipeline 维度仍为 `0/79`、`0/249`、
+`0/37` 和 `0/3`。
 
-The denominator is the unchanged complete `models._import_structure` public
-export axis, with optional branches, Flax APIs, helpers and mixins retained.
-It is not a model-family count. The four pipeline axes remain independent and
-zero; constructing and training UNet is not an Omni/generation pipeline,
-pretrained checkpoint, other dtype, NPU, performance, memory, L4 or L5 result.
-The same UNet member is not counted twice because historical and fresh records
-have different baselines.
+分母是未改动的完整 `models._import_structure` 公共导出维度，保留可选分支、Flax API、
+辅助函数和 mixin。它不是模型族计数。四个 pipeline 维度保持独立且为零；构造并训练
+UNet 不是 Omni/生成 pipeline、预训练 checkpoint、其他 dtype、NPU、性能、内存、L4
+或 L5 的结果。同一个 UNet 成员不会因历史记录与新记录的基线不同而被重复计数。
 
-Both maintained required parity nodes pass with zero skips:
+两个既有的必需对等节点均零跳过通过：
 `compat/tests/torch/test_ecosystem_parity.py::EcosystemParity::test_diffusers_unet2d`
-(CPU, 80.72 s) and `EcosystemParityCUDA::test_diffusers_unet2d`
-(CUDA, 350.58 s including first compilation). `JITTOR_REQUIRE_REAL_TORCH=1`,
-`JITTOR_REQUIRE_DIFFUSERS=1`, `JITTOR_TEST_REQUIRE_EXECUTION=1`, and both explicit
-device selectors are set. Unit caches are separate from measurement caches.
+（CPU，80.72 秒）与 `EcosystemParityCUDA::test_diffusers_unet2d`
+（CUDA，350.58 秒，含首次编译）。设置了 `JITTOR_REQUIRE_REAL_TORCH=1`、
+`JITTOR_REQUIRE_DIFFUSERS=1`、`JITTOR_TEST_REQUIRE_EXECUTION=1` 以及两个显式
+设备选择器。单元测试缓存与测量缓存相互分离。
 
-New and existing component/historical host tests pass 44 cases. The cleanup and
-pytest structure contracts pass 47 cases after removing a duplicate test loader;
-Ruff and repository layout pass. The first full structure run had 1504 passes,
-four skips and three failures: the duplicate loader was corrected; two remaining
-central report-index/MANIFEST registrations belong to integration, not numerical
-validation. The documentation contracts outside those two central registrations
-then pass 13 cases, with those two deliberately deselected. No core math or
-adapter changes are part of this tool-only batch.
+新增与既有的组件/历史宿主测试通过 44 个用例。在移除重复的测试加载器之后，
+清理与 pytest 结构契约通过 47 个用例；Ruff 与仓库布局通过。首次完整结构运行有
+1504 通过、四项跳过和三项失败：重复加载器已修正；剩余两处中央报告索引/MANIFEST
+登记属于集成工作，而非数值验证。随后，在这两处中央登记之外，文档契约通过 13 个用例，
+那两项被有意取消选择。本批次仅涉及工具，不含核心数学或 adapter 变更。
 
-Host contracts reject changed nested installed files, inconsistent complete
-installed/source hashes, incomplete parameter snapshots, invalid arrays and
-unrelated pipeline claims. Six additional mutations of copies/in-memory metadata
-from these actual CPU/CUDA runs reject missing source entries, inconsistent full
-installed-source hashes, and a removed real parameter-gradient array. Sealed
-originals are unchanged. Existing historical migration tests remain valid.
+宿主契约拒绝被改动的嵌套已安装文件、不一致的完整已安装/源码哈希、不完整的参数快照、
+非法数组以及无关的 pipeline 主张。针对这些真实 CPU/CUDA 运行的副本/内存元数据又做了
+六项变异，均拒绝缺失的源码条目、不一致的完整已安装源码哈希以及被删除的真实参数梯度
+数组。封存的原始文件保持不变。既有的历史迁移测试仍然有效。
 
-## Reproduction and evidence
+## 复现与证据
 
-Use the existing source-bound `component_measure.py` launchers around
-`verify_repo.py` and `training_probe.py`, followed by the shared
-`collect_component_scorecard.py`. Pass `--repo diffusers` to the measurement
-wrapper, clean `--checkout` at the full upstream SHA, and `--root` at the clean
-measurement commit. Select `diffusers_unet2d` only; use separate CPU/CUDA
-processes and unit/measurement caches, `JITTOR_ECOSYSTEM_TF32=0`, explicit
-`JITTOR_TEST_DEVICE` and `JITTOR_TEST_DEVICES`, offline inputs and an independent
-`REAL_TORCH_PYTHON`. No dependency upgrade is part of the measurement.
+使用围绕 `verify_repo.py` 和 `training_probe.py` 的既有源码绑定 `component_measure.py`
+启动器，随后运行共享的 `collect_component_scorecard.py`。向测量包装器传入
+`--repo diffusers`，`--checkout` 指向完整上游 SHA 处的干净检出，`--root` 指向干净
+测量提交。仅选择 `diffusers_unet2d`；使用独立的 CPU/CUDA 进程与单元/测量缓存，
+设置 `JITTOR_ECOSYSTEM_TF32=0`、显式 `JITTOR_TEST_DEVICE` 和 `JITTOR_TEST_DEVICES`、
+离线输入以及独立的 `REAL_TORCH_PYTHON`。测量不包含任何依赖升级。
 
-Unversioned raw files live under
-`$JITTOR_LAB_ROOT/_state/diffusers-installed-source/20261015/`. Exact argv and
-environment, interpreter/package/source metadata, original complete weights,
-all arrays, independent update/source audits and gate logs are retained there.
-The wheel and full-source proof are separate artifacts; they are not retroactive
-proof for the historical 230ba7a0 installation.
+未纳入版本控制的原始文件位于
+`$JITTOR_LAB_ROOT/_state/diffusers-installed-source/20261015/`。确切的 argv 与环境、
+解释器/包/源码元数据、原始完整权重、全部数组、独立的更新/源码审计以及门禁日志都保留
+在那里。wheel 与完整源码证明是独立产物；它们不是历史 230ba7a0 安装的回溯性证明。
 
-The immutable `sealed-numerical-manifest-v1.json` binds 95 raw files,
-45,307,571 bytes, SHA256
-`6d9446897a2aea5b75317edecc0a8945b1d0944db2496d3015742020acc7f394`.
-Its `component-records-final-v1.json` contains the shared evidence rows. The final
-scorecard is generated read-only from those existing rows, clean source inventory
-and original arrays, with `--baseline` set to the full measurement SHA; its
-separate auditor/documentation commit does not relabel the measured program.
+不可变的 `sealed-numerical-manifest-v1.json` 绑定 95 个原始文件，共
+45,307,571 字节，SHA256 为
+`6d9446897a2aea5b75317edecc0a8945b1d0944db2496d3015742020acc7f394`。
+其 `component-records-final-v1.json` 包含共享证据行。最终 scorecard 从这些既有行、
+干净源码清单和原始数组以只读方式生成，`--baseline` 设为完整测量 SHA；其独立的
+审计器/文档提交不会重新标注被测程序。
 
-The measured collector writes its derived `complete-comparison.json` on each
-collection. Each platform was collected once before sealing. Do not rerun that
-version on a sealed directory; use the auditor on existing records or a fresh
-copy. The integrator's subsequent overwrite protection has a separate baseline.
+在每次收集时，被测收集器都会写出其派生的 `complete-comparison.json`。
+封存之前，每个平台只收集一次。不要在已封存目录上重跑该版本；请对既有记录使用审计器，
+或使用一份全新副本。集成方随后加入的覆盖保护有独立的基线。
 
-## Integration and independent review
+## 集成与独立评审
 
-The integrator synchronized `2857a614b30d5315da74621c662a759e3f187ea4`, then
-replayed the two isolated source/report commits. An independent NumPy audit
-recomputed all 2,330 CPU/CUDA array pairs, including the complete gradient and
-three-step parameter trajectories. A separate comparison using the maintained
-harness's category floor and 0.002 forward/state versus 0.01 gradient budgets
-also passed; the largest category divergence was 1.3770578512896644e-5.
-All 144 initial CPU/CUDA parameter arrays match bitwise, and both runtimes'
-outputs change under the input perturbation on both devices.
+集成方同步了 `2857a614b30d5315da74621c662a759e3f187ea4`，然后重放了两个隔离的
+源码/报告提交。一项独立的 NumPy 审计重算了全部 2,330 组 CPU/CUDA 数组对，包括
+完整梯度和三步参数轨迹。另一项使用既有 harness 类别下限和 0.002 前向/状态对 0.01
+梯度预算的比较也通过；最大类别偏差为 1.3770578512896644e-5。
+全部 144 个初始 CPU/CUDA 参数数组逐位一致，两个运行时的输出在两个设备上都在输入
+扰动下发生变化。
 
-The review independently rehashed all 95 sealed raw files, checked all twelve
-actual package records against the wheel's 697 payload files and the 695 clean
-upstream sources, and checked the four measurement-source files against Git
-blobs at the original measurement SHA. It regenerated the common scorecard
-read-only, first with the historical report/auditor checkout and then with the
-integrated main tree. Both accept exactly two L3 component records; this adds
-no pipeline or whole-library claim.
+评审独立重新哈希了全部 95 个封存原始文件，对照 wheel 的 697 个载荷文件和 695 个
+干净上游源码检查了全部十二条实际包记录，并对照原始测量 SHA 处的 Git blob 检查了
+四个测量源码文件。它以只读方式重新生成公共 scorecard，先使用历史报告/审计器检出，
+再使用集成后的主树。两者都恰好接受两条 L3 组件记录；这不增加任何 pipeline 或
+整库主张。
 
-A reproduction using only a copy of actual CPU evidence confirmed that the
-measured collector overwrites an existing derived comparison. The integrated
-collector now creates that file exclusively, reuses identical bytes without
-changing its timestamp, and rejects a different existing comparison. The actual
-copy and a focused regression verify both outcomes. This audit-tool correction
-does not relabel or regenerate the original 1a92 measurements or sealed files.
+仅使用真实 CPU 证据副本的复现确认，被测收集器会覆盖已有的派生比较文件。集成后的
+收集器现在以独占方式创建该文件，在字节相同时复用而不改变其时间戳，并拒绝不同的
+既有比较文件。对实际副本和一项定向回归验证了这两种结果。这一审计工具修正不会重新
+标注或重新生成原始的 1a92 测量或封存文件。
 
-Unversioned integration logs and independent audits are retained under
-`$JITTOR_LAB_ROOT/_state/diffusers-integration-2857/`. The first host invocation
-named a nonexistent test file and collected no tests; the corrected selection
-passes 45. The first main CPU invocation failed before numerical execution
-because its interpreter needed the actual Conda libstdc++ for sqlite3; the
-unchanged test passed after selecting that library. Those failed invocations
-remain in the evidence directory and are not counted as numerical results.
+未纳入版本控制的集成日志与独立审计保留在
+`$JITTOR_LAB_ROOT/_state/diffusers-integration-2857/`。首次宿主调用指向了不存在的
+测试文件，因而未收集任何测试；修正后的选择通过 45 项。首次主树 CPU 调用在数值执行
+之前失败，因为其解释器需要实际的 Conda libstdc++ 才能使用 sqlite3；选择该库之后，
+未改动的测试通过。这些失败的调用保留在证据目录中，不计为数值结果。
 
-Main-tree required maintained nodes passed on actual CPU (1 passed, 70.04 s)
-and CUDA (1 passed, 295.63 s including first kernel compilation), with zero
-skips and independent binary Torch. Full Torch-mode structure gates passed
-1,506 cases with six declared skips. Ruff and repository layout checks passed.
-Unit caches remained separate from the original benchmark caches. No core math
-or adapter implementation changed in this batch; no performance claim follows
-from timings under concurrent external GPU use.
+主树要求的既有节点在真实 CPU（1 通过，70.04 秒）和 CUDA（1 通过，295.63 秒，含
+首次 kernel 编译）上通过，零跳过，使用独立二进制 Torch。完整的 Torch 模式结构门禁
+通过 1,506 个用例，含六项已声明跳过。Ruff 与仓库布局检查通过。
+单元缓存与原始 benchmark 缓存保持分离。本批次没有改动核心数学或 adapter 实现；
+外部 GPU 并发使用下的计时不构成任何性能主张。

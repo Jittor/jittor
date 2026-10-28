@@ -39,15 +39,18 @@ class _NestedTensor:
         for length in lengths:
             offs.append(offs[-1] + length)
         self._offsets = jt.array(np.asarray(offs, dtype=np.int64)).int64()
+        self._lengths = None
 
     @classmethod
     def from_tensors(cls, tensors, ragged_idx=None):
         return cls(list(tensors), ragged_idx=ragged_idx)
 
     @classmethod
-    def from_jagged(cls, values, offsets, ragged_idx=None):
+    def from_jagged(cls, values, offsets, ragged_idx=None, lengths=None):
         values = values if isinstance(values, jt.Var) else jt.array(values)
         offsets = offsets if isinstance(offsets, jt.Var) else jt.array(offsets)
+        lengths = None if lengths is None else (
+            lengths if isinstance(lengths, jt.Var) else jt.array(lengths))
         offs = [int(x) for x in np.asarray(offsets.numpy()).reshape(-1)]
         if ragged_idx is None:
             total = offs[-1] if offs else 0
@@ -56,12 +59,27 @@ class _NestedTensor:
         else:
             ragged_idx = int(ragged_idx)
         cat_dim = ragged_idx - 1
+        lens = None
+        if lengths is not None:
+            lens = [int(x) for x in np.asarray(lengths.numpy()).reshape(-1)]
+            if len(lens) != len(offs) - 1:
+                raise ValueError("lengths must contain one entry per nested sample")
         tensors = []
-        for start, end in zip(offs[:-1], offs[1:]):
+        for index, (start, end) in enumerate(zip(offs[:-1], offs[1:])):
+            if lens is not None:
+                end = start + lens[index]
+            if start < 0 or end < start or end > int(values.shape[cat_dim]):
+                raise ValueError("nested offsets/lengths exceed the values buffer")
             sl = [slice(None)] * values.ndim
             sl[cat_dim] = slice(start, end)
             tensors.append(values[tuple(sl)])
-        return cls(tensors, ragged_idx=ragged_idx)
+        # Preserve the supplied packed buffer and metadata verbatim: a rebuild
+        # from per-row slices would erase holes encoded by offsets/lengths.
+        result = cls.__new__(cls)
+        result._ragged_idx = ragged_idx
+        result._values, result._offsets, result._tensors = values, offsets, tensors
+        result._lengths = lengths
+        return result
 
     @property
     def shape(self):
@@ -98,6 +116,9 @@ class _NestedTensor:
 
     def offsets(self):
         return self._offsets
+
+    def lengths(self):
+        return self._lengths
 
     def is_contiguous(self, *args, **kwargs):
         return True
@@ -222,6 +243,28 @@ class _NestedTensor:
 def _rebuild_nested_tensor(encoded_tensors, ragged_idx):
     tensors = [_rebuild_var_from_numpy(arr, dtype_str) for arr, dtype_str in encoded_tensors]
     return _NestedTensor.from_tensors(tensors, ragged_idx=ragged_idx)
+
+
+def nested_tensor_type():
+    """Return the jagged type without allocating or changing Tensor identity."""
+    return _NestedTensor
+
+
+def nested_tensor_rebuild(template, values, offsets, *, lengths=None,
+                          preserve_ragged_identity=False):
+    """Rebuild packed jagged data through the compatibility nested owner.
+
+    Values are used as supplied; callers that need detached data must detach
+    them explicitly. ``preserve_ragged_identity`` is accepted for frontend
+    compatibility only: this implementation has no symbolic ragged-size
+    registry, so there is no identity to rebind.
+    """
+    if not isinstance(template, _NestedTensor):
+        raise TypeError("a compatible nested template is required")
+    if type(preserve_ragged_identity) is not bool:
+        raise TypeError("preserve_ragged_identity must be bool")
+    return _NestedTensor.from_jagged(
+        values, offsets, ragged_idx=template._ragged_idx, lengths=lengths)
 
 
 def _rebuild_var_from_numpy(np_arr, dtype_str=None):

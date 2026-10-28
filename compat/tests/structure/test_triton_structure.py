@@ -21,6 +21,21 @@ _CHILD_MODULES = ("backend", "deploy", "language", "launch")
 
 
 class TestTritonStructure(unittest.TestCase):
+    def test_benchmarker_install_does_not_initialize_lazy_driver(self):
+        canonical = importlib.import_module("jittor.compat.triton")
+        calls = []
+
+        class LazyDriver:
+            def __getattr__(self, name):
+                calls.append(name)
+                raise AssertionError("lazy CUDA driver initialized")
+
+        timer = object()
+        driver = LazyDriver()
+        canonical._install_benchmarker_without_driver_init(driver, timer)
+        self.assertIs(driver.get_benchmarker(), timer)
+        self.assertEqual(calls, [])
+
     def test_canonical_package_owns_the_physical_implementation(self):
         canonical = importlib.import_module("jittor.compat.triton")
         package_path = Path(canonical.__file__).resolve().parent

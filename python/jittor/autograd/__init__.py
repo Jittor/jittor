@@ -2,6 +2,7 @@
 
 from . import functional as functional
 from .functional import jvp, vjp
+from .checkpoint import checkpoint
 from .policy import (
     AutogradPolicy,
     EXPLICIT_REQUIRES_GRAD,
@@ -15,6 +16,7 @@ __all__ = [
     "AutogradPolicy",
     "EXPLICIT_REQUIRES_GRAD",
     "NATIVE",
+    "checkpoint",
     "functional",
     "get_policy",
     "jvp",

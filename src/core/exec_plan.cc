@@ -93,12 +93,16 @@ void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan) {
             if (i + 8 < (int)bfs_q.size()) __builtin_prefetch(bfs_q[i + 8]);
             auto node = bfs_q[i];
             op_num += !node->is_var();
-            for (auto i : node->_inputs)
-                if (!batch_epoch->marked(i.node) && !i.node->is_finished()) {
-                    batch_epoch->mark(i.node);
-                    need_opt += has_gopt(i.node);
-                    bfs_q.push_back(i.node);
-                }
+            // Tapes groups autograd edges; execute's returned tensor path
+            // supplies its forward data. These inputs must remain lazy until
+            // a real data reader (or backward) requests their providers.
+            if (node->is_var() || !node->op()->flag(OpFlags::_no_input_storage))
+                for (auto i : node->_inputs)
+                    if (!batch_epoch->marked(i.node) && !i.node->is_finished()) {
+                        batch_epoch->mark(i.node);
+                        need_opt += has_gopt(i.node);
+                        bfs_q.push_back(i.node);
+                    }
             // this var has been fetched
             if (weak_sync || node->flags.get(NodeFlags::_fetch)) {
                 for (auto& n : node->_outputs) {

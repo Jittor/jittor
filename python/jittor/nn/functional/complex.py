@@ -237,15 +237,22 @@ def view_as_real(x) -> jt.Var:
     return _complex_to_real2(x)
 
 
+# `real` and `imag` are single native unary ops, differentiated in C++: `real`
+# is the complex->float cast (backward: dout + 0i), `imag` the internal
+# `imag` op (backward: its adjoint `as_imag`, 0 + dout*i). They used to be
+# `view_as_real(z)[..., k]` -- a `jt.Function` and a Python `getitem` each --
+# at ~20 us to build against ~1 us for a plain unary op, which is what the
+# complex `norm` of an MPS sweep was paying 654 times per call.
 def _var_real(self):
-    if "complex" in _jittor_dtype_name(self.dtype):
-        return jt.nn.view_as_real(self)[..., 0]
+    real = _COMPLEX_REAL_DTYPE.get(_jittor_dtype_name(self.dtype))
+    if real is not None:
+        return jt.unary(self, real)
     return self
 
 
 def _var_imag(self):
-    if "complex" in _jittor_dtype_name(self.dtype):
-        return jt.nn.view_as_real(self)[..., 1]
+    if _jittor_dtype_name(self.dtype) in _COMPLEX_REAL_DTYPE:
+        return jt.unary(self, "imag")
     return jt.zeros_like(self)
 
 

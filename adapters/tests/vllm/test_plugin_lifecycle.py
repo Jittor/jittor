@@ -39,8 +39,17 @@ def isolated_hooks():
     # hook lost module". Releasing here restores what they replaced, which is
     # the clean slate this fixture strips down to anyway, and leaves teardown
     # releasing only what the test itself installed.
-    transaction.release_runtime_hooks("vllm.activation")
-    transaction.release_runtime_hooks("vllm.flash_attention")
+    try:
+        transaction.release_runtime_hooks("vllm.activation")
+        transaction.release_runtime_hooks("vllm.flash_attention")
+    except transaction.TransactionConflict as error:
+        # Another file replaced the permissive finder these hooks published
+        # and left it replaced; `release_runtime_hooks` has already forgotten
+        # the hooks, and this fixture replaces `sys.meta_path` wholesale below,
+        # so there is nothing of theirs left to restore. Any other conflict is
+        # a real rollback failure and stays fatal.
+        if "permissive finder moved or replaced externally" not in str(error):
+            raise
     existing = {k: v for k, v in sys.modules.items() if k == "vllm" or k.startswith("vllm.")}
     for key in existing:
         del sys.modules[key]

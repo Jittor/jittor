@@ -314,6 +314,44 @@ class _Training:
 class TestCompileTrainingCpu(_Training, unittest.TestCase):
     device = "cpu"
 
+    def test_each_replayed_step_runs_on_the_batch_it_was_given(self):
+        # The capture's last act is to commit the state writes, which first
+        # resolves the backward's saved readers -- the forward. Run outside
+        # `keep_graph`, that batch finishes the forward, and every replay then
+        # reuses the captured batch's activations: the loss and the gradients
+        # belong to the batch the capture saw. No schedule and no momentum are
+        # involved here, so a divergence can only be the batch itself.
+        def run(compiled):
+            torch.manual_seed(0)
+            model = nn.Sequential(nn.Linear(8, 32), nn.ReLU(), nn.Linear(32, 4))
+            opt = torch.optim.SGD(model.parameters(), lr=1e-2)
+            rng = np.random.RandomState(0)
+            data = [(torch.tensor(rng.randn(16, 8).astype("float32")),
+                     torch.tensor(rng.randn(16, 4).astype("float32")))
+                    for _ in range(4)]
+
+            def step(x, y):
+                opt.zero_grad(set_to_none=True)
+                loss = ((model(x) - y) ** 2).mean()
+                loss.backward()
+                opt.step()
+                return loss
+
+            f = torch.compile(step, mode="reduce-overhead") if compiled else step
+            losses = [float(f(x, y)) for x, y in data]
+            return losses, [p.detach().cpu().numpy() for p in model.parameters()], f
+
+        want_losses, want_params, _ = run(False)
+        got_losses, got_params, f = run(True)
+        np.testing.assert_allclose(got_losses, want_losses, rtol=1e-5, atol=1e-6)
+        for g, w in zip(got_params, want_params):
+            np.testing.assert_allclose(g, w, rtol=1e-5, atol=1e-6)
+        # One eager call establishes the signature, the next is captured, and
+        # both after that replay -- otherwise the comparison above proves
+        # nothing about replay.
+        self.assertEqual(f.stats["captured"], 1)
+        self.assertEqual(f.stats["replayed"], 2)
+
 
 @unittest.skipIf(not _test_capability.check_accelerator("cuda", backend=jt).enabled,
                  "no usable CUDA in this build")

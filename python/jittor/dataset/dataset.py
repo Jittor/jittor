@@ -7,6 +7,8 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
+import builtins
+import json
 import numpy as np
 from urllib import request
 import gzip
@@ -59,7 +61,9 @@ _PERSISTENT_WORKERS_UNSET = object()
 def _dataset_worker_seed(seed, epoch, rank, worker_id):
     sequence = np.random.SeedSequence(
         (int(seed), int(epoch), int(rank), int(worker_id)))
-    return int(sequence.generate_state(1, dtype=np.uint32)[0])
+    # set_global_seed eventually calls the Python binding for set_seed(int32).
+    # Keep the derived worker seed in that binding's nonnegative domain.
+    return int(sequence.generate_state(1, dtype=np.uint32)[0]) & 0x7fffffff
 
 dataset_root = os.path.join(jit_utils.home(), ".cache", "jittor", "dataset")
 # int() like the CHECK_MEMORY line below: os.environ.get returns a *string*,
@@ -142,6 +146,78 @@ if os.name == "nt":
 WORKER_ERROR_CAPACITY = 16 * 1024
 
 
+def _encode_worker_error(exception, traceback_text):
+    """Encode bounded exception metadata for reconstruction in the parent."""
+    record = {
+        "version": 1,
+        "module": type(exception).__module__[:256],
+        "name": type(exception).__qualname__[:256],
+        "message": str(exception),
+        "traceback": traceback_text,
+    }
+    limit = WORKER_ERROR_CAPACITY - 1
+    encoded = json.dumps(record, ensure_ascii=True).encode("ascii")
+    while len(encoded) > limit:
+        if record["traceback"]:
+            record["traceback"] = record["traceback"][len(record["traceback"]) // 2:]
+        elif record["message"]:
+            record["message"] = record["message"][:len(record["message"]) // 2]
+        else:
+            record = {
+                "version": 1,
+                "module": "",
+                "name": "Exception",
+                "message": "worker exception record exceeded capacity",
+                "traceback": "",
+            }
+        encoded = json.dumps(record, ensure_ascii=True).encode("ascii")
+    return encoded
+
+
+def _resolve_worker_exception_type(record):
+    """Resolve only an exception class already loaded in the parent."""
+    module_name = record.get("module")
+    qualname = record.get("name", "")
+    if not module_name or not qualname or "<locals>" in qualname:
+        return None
+    if module_name == builtins.__name__:
+        owner = builtins
+    else:
+        owner = sys.modules.get(module_name)
+    if owner is None:
+        return None
+    for name in qualname.split("."):
+        owner = getattr(owner, name, None)
+        if owner is None:
+            return None
+    if not isinstance(owner, type) or not issubclass(owner, Exception):
+        return None
+    return owner
+
+
+def _raise_worker_error(worker_id, record):
+    """Raise a reconstructed exception, retaining the remote traceback."""
+    if isinstance(record, str):
+        # Preserve compatibility with the original plain-traceback payload.
+        raise RuntimeError(
+            "exception in dataset worker %d:\n%s" % (worker_id, record))
+    name = record.get("name") or "Exception"
+    message = record.get("message") or ""
+    remote_traceback = record.get("traceback") or ""
+    detail = "exception in dataset worker %d (%s): %s" % (
+        worker_id, name, message)
+    if remote_traceback:
+        detail += "\nWorker traceback:\n" + remote_traceback
+    exception_type = _resolve_worker_exception_type(record)
+    if exception_type is None:
+        raise RuntimeError(detail)
+    try:
+        exception = exception_type(detail)
+    except Exception:
+        raise RuntimeError(detail)
+    raise exception
+
+
 class Worker:
     def __init__(self, target, args, buffer_size, keep_numpy_array=False):
         self.buffer = jt.RingBuffer(buffer_size)
@@ -157,9 +233,18 @@ class Worker:
         self.p.start()
 
     def take_error(self):
-        """The traceback this worker died with, or None."""
+        """The serialized exception this worker died with, or None."""
         raw = self.error.value
-        return raw.decode("utf-8", "replace") if raw else None
+        if not raw:
+            return None
+        text = raw.decode("utf-8", "replace")
+        try:
+            record = json.loads(text)
+        except (TypeError, ValueError):
+            return text
+        if isinstance(record, dict) and record.get("version") == 1:
+            return record
+        return text
 
 class Dataset(object):
     '''
@@ -371,20 +456,25 @@ class Dataset(object):
     
     def _worker_main(self, worker_id, buffer, status, error):
         import jittor_utils
+        import signal
+        # The parent handles Ctrl-C and terminates its initialized workers.
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
         jt.flags.use_cuda_host_allocator = 0
 
         jittor_utils.cc.init_subprocess()
         jt.jt_init_subprocess()
-        wseed = _dataset_worker_seed(
-            self.seed, self.epoch_id, getattr(self, "_worker_rank", 0), worker_id)
-        jt.set_global_seed(wseed)
-        # torch-compatible: run user worker init hook once per worker process,
-        # after seeding so users can re-seed deterministically if desired.
-        worker_init_fn = getattr(self, "worker_init_fn", None)
-        if worker_init_fn is not None:
-            worker_init_fn(worker_id)
         import time
         try:
+            wseed = _dataset_worker_seed(
+                self.seed, self.epoch_id, getattr(self, "_worker_rank", 0), worker_id)
+            # The rank is already part of _dataset_worker_seed; do not add it
+            # a second time in set_global_seed (which can exceed int32 again).
+            jt.set_global_seed(wseed, different_seed_for_mpi=False)
+            # torch-compatible: run user worker init hook once per worker
+            # process, after seeding so users can re-seed deterministically.
+            worker_init_fn = getattr(self, "worker_init_fn", None)
+            if worker_init_fn is not None:
+                worker_init_fn(worker_id)
             # Time PIL.Image.open in THIS process only. A worker is jittor's
             # own process and exists to load data, so the measurement it
             # reports back through status[4] is paid for here -- not in the
@@ -459,7 +549,7 @@ class Dataset(object):
                     other_time + data_time + send_time, \
                     img_open_hook.duration
                 img_open_hook.duration = 0.0
-        except Exception:
+        except Exception as exception:
             # Do NOT signal the parent: SIGINT is indistinguishable from the
             # user pressing Ctrl-C, and jittor's handler turns it into an
             # immediate process exit, so a plain bug in __getitem__ surfaced as
@@ -467,10 +557,8 @@ class Dataset(object):
             # catch. Hand the traceback to the parent and let it re-raise.
             import traceback
             line = traceback.format_exc()
-            print(line, file=sys.stderr, flush=True)
             try:
-                error.value = line.encode("utf-8", "replace")[
-                    :WORKER_ERROR_CAPACITY - 1]
+                error.value = _encode_worker_error(exception, line)
                 # Store first, wake second: whichever way the parent is
                 # waiting, it must find the message already there.
                 #
@@ -556,10 +644,9 @@ Example::
         if message is None:
             return
         self._abort_workers()
-        raise RuntimeError(
-            "exception in dataset worker %d:\n%s" % (worker_id, message))
+        _raise_worker_error(worker_id, message)
 
-    def _raise_worker_death(self, cause):
+    def _raise_worker_death(self, cause, *, live_worker_timeout_is_poll=False):
         """Explain a blocking read that came back stopped, and re-raise.
 
         A worker that fails stores its traceback and then stops its buffer, so
@@ -568,16 +655,17 @@ Example::
         exception. Every worker is examined rather than the one whose id was
         popped: the wake-up says "someone died", not who.
 
-        Always raises.
+        A native ring-buffer timeout may also mean that a live worker is still
+        compiling or loading its first batch. When the caller explicitly opts
+        into treating that timeout as a poll, return only if every worker is
+        alive and no worker has published an exception.
         """
         deaths = []
         for other_id, worker in enumerate(getattr(self, "workers", ())):
             message = worker.take_error()
             if message is not None:
                 self._abort_workers()
-                raise RuntimeError(
-                    "exception in dataset worker %d:\n%s"
-                    % (other_id, message))
+                _raise_worker_error(other_id, message)
             if worker.p.exitcode is not None:
                 deaths.append((other_id, worker.p.exitcode))
         if deaths:
@@ -588,6 +676,9 @@ Example::
                 "crashed in native code, so nothing ran to report it"
                 % ", ".join("%d (exit code %s)" % pair for pair in deaths)
             ) from cause
+        if (live_worker_timeout_is_poll and
+                "ring buffer pop timed out" in str(cause)):
+            return
         raise cause
 
     def _abort_workers(self):
@@ -841,10 +932,13 @@ Example::
                                 self.gidc.notify_all()
 
                     # get which worker has this batch
-                    try:
-                        worker_id = self.idqueue.pop_for(5000)
-                    except Exception as stopped:
-                        self._raise_worker_death(stopped)
+                    while True:
+                        try:
+                            worker_id = self.idqueue.pop_for(5000)
+                            break
+                        except Exception as stopped:
+                            self._raise_worker_death(
+                                stopped, live_worker_timeout_is_poll=True)
 
                     now = time.time()
                     self.wait_time = now - start

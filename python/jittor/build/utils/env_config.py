@@ -76,6 +76,8 @@ RUNTIME_PREFIX = "JT_"
 #: runtime policy because they decide whether an extern is compiled and linked
 #: at all, not what a compiled core does with it.
 PYTHON_BUILD_VARS = {
+    "blas_ilp64": "the CBLAS named by blas_lib_path takes 64-bit integers",
+    "blas_lib_path": "CBLAS library for CPU complex matmul instead of numpy's OpenBLAS",
     "cache_name": "sub-directory of the cache the products go in",
     "conv_opt": "compile the experimental cuDNN convolution path",
     "cuda_debug": "add -G to nvcc, i.e. device-side debug info",
@@ -91,6 +93,7 @@ PYTHON_BUILD_VARS = {
     "python_config_path": "python3-config to take include paths from",
     "tikcc_path": "Ascend tikcc compiler to build the NPU backend with",
     "use_auto_diff": "record every op for the auto-diff comparison tool",
+    "use_blas": "link a CBLAS for CPU complex matmul",
     "use_cutt": "build and link cuTT",
     "use_mkl": "build and link oneDNN",
     "use_mpi": "build and link MPI",

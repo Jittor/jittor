@@ -57,6 +57,7 @@ CHILD = textwrap.dedent('''
     import json, numpy as np, jittor as jt
     from jittor import nn
     jt.flags.use_cuda = 1
+    jt.flags.float32_cudnn_precision = "highest"
     jt.flags.auto_flush_ops = {flush}
     import jittor.compile_extern as ce
     ce.cudnn.set_benchmark({benchmark})

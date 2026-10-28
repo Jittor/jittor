@@ -57,6 +57,8 @@ struct ComplexOpType : OpByType {
             {"abs", "jittor::jt_cabs($2)"},  // |z| -> float (Tz inferred float32); qualified
                                              // name so codegen doesn't rename it op0_jt_cabs
             {"conj", "jittor::jt_conj($2)"}, // conj(a+bi) = a-bi; qualified for same reason
+            {"imag", "(($1)(($2).imag))"},   // Im z -> float of z's width
+            {"as_imag", "$1(0, ($2))"},      // real x -> 0 + x*i; `$1(..)`, not a cast of a comma
             {"exp", "jittor::jt_cexp($2)"},  // complex transcendentals (qualified names so
             {"log", "jittor::jt_clog($2)"},  // codegen keeps them; complex->complex)
             {"sin", "jittor::jt_csin($2)"},

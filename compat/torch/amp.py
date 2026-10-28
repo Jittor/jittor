@@ -17,6 +17,7 @@ import functools as _functools
 
 import numpy as np
 import jittor as jt
+from jittor._runtime import amp_context as _amp_context
 
 from .fidelity import Fidelity, register_fidelity
 from .grad_scaler import (          # noqa: F401
@@ -211,10 +212,12 @@ def _refresh_amp_register():
         if _autocast_state.baseline_reg is not None:
             jt.flags.amp_reg = _autocast_state.baseline_reg
             _autocast_state.baseline_reg = None
+        _amp_context.set_torch_autocast_active(False)
         return
     if _autocast_state.baseline_reg is None:
         _autocast_state.baseline_reg = int(getattr(jt.flags, "amp_reg", 0))
     jt.flags.amp_reg = _amp_register_for(autocast_configured_dtype(base))
+    _amp_context.set_torch_autocast_active(True)
 
 
 def set_autocast_enabled_state(device_type, enabled):

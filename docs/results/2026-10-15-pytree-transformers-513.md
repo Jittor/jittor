@@ -1,93 +1,92 @@
-# Custom pytree nodes and Transformers 5.13.0
+# 自定义 pytree 节点与 Transformers 5.13.0
 
-- Status: CPU/CUDA correctness verified for the bounded contracts below.
-- Date: 2026-10-15
-- Baseline commit: `c92ae5cecca90801804e677b7200b2ef3b30b27c` (clean source for the final GPT2 replay).
-- Owner: Torch compatibility maintainers.
-- Review when: pytree installation, custom-node traversal, adapter version guards,
-  the shared ecosystem/training runner, or Transformers output structures change.
+- 状态：以下限定契约的 CPU/CUDA 正确性已验证。
+- 日期：2026-10-15
+- 基线提交：`c92ae5cecca90801804e677b7200b2ef3b30b27c`（最终 GPT2 重放所用的干净源码）。
+- Owner：Torch 兼容维护者。
+- 复查条件：pytree 安装、自定义节点遍历、adapter 版本守卫、
+  共享 ecosystem/训练 runner 或 Transformers 输出结构变化。
 
-## Failure and ownership
+## 故障与归属
 
-The genuine Transformers 5.13.0 distribution initially stopped at the adapter's
-version guard. With provisional admission, importing its `ModelOutput` then
-failed because `torch.utils._pytree._dict_flatten_with_keys` was absent. A separate
-custom `dict` subclass also showed that the existing `register_pytree_node`
-returned without registering anything: flatten/unflatten reconstructed `dict`
-instead of the registered class. Independent PyTorch 2.13.0 reconstructed the
-custom class and supplied actual mapping/sequence key entries.
+真实的 Transformers 5.13.0 发行版最初停在 adapter 的
+版本守卫上。临时放行后，import 其 `ModelOutput` 因缺少
+`torch.utils._pytree._dict_flatten_with_keys` 而失败。另一个自定义 `dict` 子类
+还表明，既有 `register_pytree_node` 返回时没有注册任何东西：
+flatten/unflatten 重建的是 `dict`，而不是注册的类。独立的 PyTorch 2.13.0
+能重建该自定义类，并提供真实的 mapping/sequence key 条目。
 
-This is a shared Torch API contract. The fix belongs to
-`compat/torch/installers/utilities.py`: store registered callbacks; use them for
-flatten, unflatten, mapping and keyed traversal; preserve registered subclasses;
-reject duplicate registration, missing keyed callbacks and malformed leaf counts.
-Built-in `OrderedDict` and `defaultdict` keep their type and default factory.
-Both public and legacy registration use the same registry. TreeSpec JSON
-serialization is outside this verified scope.
+这是共享 Torch API 契约。修复位于
+`compat/torch/installers/utilities.py`：保存已注册回调；在
+flatten、unflatten、mapping 与带 key 遍历中使用它们；保留已注册子类；
+拒绝重复注册、缺失 keyed 回调与畸形的叶子计数。
+内建 `OrderedDict` 与 `defaultdict` 保持其类型与 default factory。
+公共与 legacy 注册使用同一 registry。TreeSpec JSON
+序列化不在本次验证范围内。
 
-The adapter now admits the exact version **5.13.0**, alongside previously admitted
-4.56.2 and 5.5.3. The host contracts still reject an unknown version; no broad 5.x
-range is enabled. There is no ModelOutput-specific patch.
+adapter 现在接受精确版本 **5.13.0**，与此前已接受的
+4.56.2 和 5.5.3 并列。host 契约仍拒绝未知版本；未启用宽泛的 5.x
+范围。没有针对 ModelOutput 的专用补丁。
 
-## Verification
+## 验证
 
-The oracle is genuine **PyTorch 2.13.0+cu130** in a separate interpreter. Candidate
-execution uses this checkout and the Jittor Torch frontend, whose reported Torch
-API version remains **2.11.0**. Neither framework version was rewritten. Both
-sides load the same genuine Transformers **5.13.0** files. Python is 3.11;
-NumPy is 1.26.4. Candidate CUDA uses the existing CUDA 12.2 toolchain; the oracle
-uses its genuine CUDA 13.0 wheel libraries. CPU runs explicitly hide CUDA and set
-Jittor's backend/use_cuda to CPU/zero.
+oracle 是独立解释器中真实的 **PyTorch 2.13.0+cu130**。候选
+执行使用本 checkout 与 Jittor Torch 前端，其报告的 Torch
+API 版本仍为 **2.11.0**。两个框架版本都未被改写。双方
+加载相同的真实 Transformers **5.13.0** 文件。Python 为 3.11；
+NumPy 为 1.26.4。候选 CUDA 使用既有 CUDA 12.2 工具链；oracle
+使用其真实的 CUDA 13.0 wheel 库。CPU 运行显式隐藏 CUDA，并把
+Jittor 的 backend/use_cuda 设为 CPU/zero。
 
-| Check | Result |
+| 检查 | 结果 |
 | --- | --- |
-| New custom-pytree tests, genuine PyTorch CPU / CUDA | 9 / 9 passed |
-| Candidate CPU custom-pytree plus existing tree-map/owner neighbors | 17 passed |
-| Candidate CUDA custom-pytree tests, including tensor input gradients | 9 passed, no skips |
-| Adapter host version/probe contracts | 7 passed |
-| CPU core suite | 322 passed, 42 skipped, 1 expected failure |
-| Full `tests/structure` in Torch mode | 1488 passed, 4 skipped, no failures |
-| Repository layout, new-test Ruff, no added implementation lint diagnostics, diff whitespace | Passed |
+| 新的 custom-pytree 测试，真实 PyTorch CPU / CUDA | 9 / 9 passed |
+| 候选 CPU custom-pytree 加既有 tree-map/owner 邻接 | 17 passed |
+| 候选 CUDA custom-pytree 测试，含张量输入梯度 | 9 passed，无 skip |
+| Adapter host 版本/probe 契约 | 7 passed |
+| CPU core 套件 | 322 passed，42 skipped，1 个预期失败 |
+| Torch 模式下完整 `tests/structure` | 1488 passed，4 skipped，无失败 |
+| 仓库布局、新测试 Ruff、未新增实现 lint 诊断、diff 空白 | 通过 |
 
-Pytree tests cover custom dict and non-dict nodes, nested key paths and `get`,
-registered roundtrip/map, real tensor input gradients, duplicate registration,
-missing path callbacks, too few/many leaves, unregistered subclass behavior,
-legacy registration, and the two built-in mapping subclasses. The same new test
-file runs against the independent PyTorch oracle.
+pytree 测试覆盖自定义 dict 与非 dict 节点、嵌套 key 路径与 `get`、
+注册往返/map、真实张量输入梯度、重复注册、
+缺失路径回调、叶子过少/过多、未注册子类行为、
+legacy 注册，以及两个内建 mapping 子类。同一个新测试
+文件也针对独立 PyTorch oracle 运行。
 
-The final GPT2 replay uses the existing tiny GPT2 builder (two layers, width 64,
-two heads, vocabulary 128, length 8, batch 2, dropout zero). A small wrapper uses
-the public `get_input_embeddings()` entry point plus `0.05 * embedding_noise`, so
-there is a floating input gradient as well as the complete 28-parameter gradient
-set. It saves outputs, loss, every parameter gradient, input gradient and updated
-parameters for each of three SGD steps (`lr=0.001`, seed 7). No parameter is
-frozen. Both devices/runtimes load the same initial-state artifact:
-`a82b8e3e9c20f57ed6da16920a87042ec0a2626f651a9913412ea44db96ea639`.
+最终 GPT2 重放使用既有的 tiny GPT2 builder（两层、宽度 64、
+两个 head、词表 128、长度 8、batch 2、dropout 0）。一个小 wrapper 使用
+公共 `get_input_embeddings()` 入口加 `0.05 * embedding_noise`，因此
+既有浮点输入梯度，也有完整的 28 参数梯度
+集合。它为三个 SGD 步（`lr=0.001`、seed 7）各保存输出、loss、
+每份参数梯度、输入梯度与更新后参数。没有参数被
+冻结。两个设备/runtime 加载同一份初始状态产物：
+`a82b8e3e9c20f57ed6da16920a87042ec0a2626f651a9913412ea44db96ea639`。
 
-Thresholds were frozen before the clean replay: maximum absolute error divided
-by `max(max(abs(reference)), 1e-8)`, limit 0.002 for outputs/loss/updated parameters
-and 0.01 for parameter/input gradients. CUDA retains these CPU limits. Each
-array also requires equal keys, exact shape and finite values. TF32 is off,
-matmul precision is `highest`, native CUDA kernel math is `strict`, and runtime
-thread counts are one. Candidate fallback policy is `error` and observed
-fallback count is zero on both devices.
+阈值在干净重放之前冻结：最大绝对误差除以
+`max(max(abs(reference)), 1e-8)`，输出/loss/更新后参数限值 0.002，
+参数/输入梯度限值 0.01。CUDA 沿用这些 CPU 限值。每个
+数组还要求键相等、精确 shape 与有限值。TF32 关闭，
+matmul 精度为 `highest`，原生 CUDA kernel 数学为 `strict`，runtime
+线程数为 1。候选 fallback 策略为 `error`，两个设备的观测
+fallback 计数均为零。
 
-| Clean-source replay | Arrays compared | Largest normalized error | Result |
+| 干净源码重放 | 比较的数组 | 最大归一化误差 | 结果 |
 | --- | ---: | ---: | --- |
-| CPU | 177 | 0.00000346416447 | All passed |
-| CUDA | 177 | 0.00090132669048 | All passed |
+| CPU | 177 | 0.00000346416447 | 全部通过 |
+| CUDA | 177 | 0.00090132669048 | 全部通过 |
 
-The CUDA maximum is step-zero loss (reference 0.00048499566037, absolute error
-0.00000043713953). The next largest normalized error is 0.00060066114 for
-step-two `c_attn.weight` gradient. These are the final replay measurements;
-earlier provisional dirty-source outputs remain separate and are not substituted
-for these numbers. This evidence supports the tested tiny GPT2/ModelOutput
-training path, not every Transformers model, vLLM engine, Omni model, or a speed
-claim. GPU sharing and the tiny workload preclude a performance conclusion.
+CUDA 最大值是第零步 loss（参考 0.00048499566037，绝对误差
+0.00000043713953）。次大的归一化误差是第二步 `c_attn.weight`
+梯度的 0.00060066114。这些是最终重放测量；
+更早的临时 dirty-source 输出单独保留，不用作这些数值的
+替代。该证据支持受测的 tiny GPT2/ModelOutput
+训练路径，不覆盖每个 Transformers 模型、vLLM engine、Omni 模型，也不构成速度
+结论。GPU 共享与小工作负载使性能结论不成立。
 
-## Reproduce and inspect
+## 复现与检查
 
-The committed API tests can be run unchanged against each interpreter:
+提交的 API 测试可原样针对各解释器运行：
 
 ```bash
 CUDA_VISIBLE_DEVICES='' JITTOR_TORCH_SHIM=1 PYTHONPATH=python \
@@ -102,31 +101,31 @@ env -u JITTOR_TORCH_SHIM -u PYTHONPATH CUDA_VISIBLE_DEVICES=<gpu> \
 # For the CPU oracle, hide CUDA and set JITTOR_TEST_DEVICE=cpu.
 ```
 
-The unversioned raw artifacts are under
-`$JITTOR_LAB_ROOT/_state/vllm-evidence/20261015/`:
+未版本化原始产物位于
+`$JITTOR_LAB_ROOT/_state/vllm-evidence/20261015/`：
 
-- `logs/pytree-*-before.log` preserves the original independent API failure.
-- `logs/pytree-*.log` and `logs/adapter-513-*.log` contain the directed/core/
-  structure/layout results.
-- `tf513_training_check.py` is the small public-embedding wrapper around the
-  versioned `training_probe.py`; `replay_tf513_clean.py` launches the four isolated
-  runs and checks the fixed thresholds. They are external experiment fixtures,
-  not new registered ecosystem coverage.
-- `tf513-clean-c92ae5cec/` contains both runtimes' CPU/CUDA NPZ, metadata and logs,
-  plus per-array comparison JSON and its manifest. Each metadata record binds
-  the clean source SHA, probe SHA, initial weights, dependency origin/version,
-  precision settings, actual backend and fallback count.
-- `pytree-final-manifest.json` binds **31 artifacts and six source files**, including
-  both external fixture scripts, their initial weights and every final output.
-  SHA256: `e48eb9d3e5bcb98427ec80ed535a229bd3fdbb1f002e1e8742ee4ac1222be4af`.
-- The inner clean-replay manifest SHA256 is
-  `1e706c2d679231ef2f96f27348ea29595a788562e848a89ef9a71faea74b4001`.
+- `logs/pytree-*-before.log` 保留原始独立 API 失败。
+- `logs/pytree-*.log` 与 `logs/adapter-513-*.log` 包含定向/core/
+  structure/布局结果。
+- `tf513_training_check.py` 是围绕版本化 `training_probe.py` 的
+  小型公共 embedding wrapper；`replay_tf513_clean.py` 启动四个隔离
+  运行并检查固定阈值。它们是外部实验 fixture，
+  不是新登记的 ecosystem 覆盖。
+- `tf513-clean-c92ae5cec/` 包含两个 runtime 的 CPU/CUDA NPZ、metadata 与日志，
+  以及逐数组比较 JSON 及其 manifest。每条 metadata 记录绑定
+  干净源码 SHA、probe SHA、初始权重、依赖来源/版本、
+  精度设置、实际后端与 fallback 计数。
+- `pytree-final-manifest.json` 绑定 **31 个产物与六个源码文件**，含
+  两个外部 fixture 脚本、其初始权重与全部最终输出。
+  SHA256：`e48eb9d3e5bcb98427ec80ed535a229bd3fdbb1f002e1e8742ee4ac1222be4af`。
+- 内层 clean-replay manifest 的 SHA256 为
+  `1e706c2d679231ef2f96f27348ea29595a788562e848a89ef9a71faea74b4001`。
 
-To reproduce the wrapper with the existing versioned runner, register an external
-case whose builder calls the registered `transformers_gpt2` builder from `CASES`
-with the supplied Torch namespace, wraps its model as
-above, adds input spec `embedding_noise=('float32', (2, 8, 64), None)`, and then
-calls `training_probe.main()`. Invoke the retained external wrapper with:
+要用既有版本化 runner 复现该 wrapper，请注册一个外部
+case：其 builder 用提供的 Torch 命名空间调用 `CASES` 中已注册的
+`transformers_gpt2` builder，按
+上文包裹其模型，加入输入规格 `embedding_noise=('float32', (2, 8, 64), None)`，然后
+调用 `training_probe.main()`。用以下命令调用保留的外部 wrapper：
 
 ```bash
 <python> <external-wrapper> --root <checkout> --case <external-case> \
@@ -134,16 +133,16 @@ calls `training_probe.main()`. Invoke the retained external wrapper with:
   --weights <same-initial-state.npz> --output <outside-checkout.npz>
 ```
 
-The retained wrapper and replay script provide the exact fixture and environment
-used for this report.
+保留的 wrapper 与 replay 脚本提供本报告所用的精确
+fixture 与环境。
 
-Integration onto `a5932248fdb06fb52293f5ddd8a357f4920195ff` independently
-rehashed all 31 artifacts and six matching source files and recomputed all 177
-array comparisons on each device. The measured replay baseline above is
-unchanged. The integrated tree passed CPU core (322 passed, 42 skipped, one
-existing xfail), CPU owner/adapter checks (24 passed), CUDA owner checks
-(17 passed, fallback delta zero), and combined structure/tools checks
-(1686 passed, six environment/capability skips). Existing implementation lint
-diagnostics were compared with the parent; no new diagnostics were introduced.
-Unversioned integration logs and independent numerical audit are under
-`$JITTOR_LAB_ROOT/_state/pytree-scm-integration/`.
+在 `a5932248fdb06fb52293f5ddd8a357f4920195ff` 上整合时，独立
+重哈希全部 31 个产物与六个匹配源码文件，并在每个设备上
+重算全部 177 个数组比较。上述测量重放基线
+不变。整合后的树通过 CPU core（322 passed，42 skipped，1 个
+既有 xfail）、CPU owner/adapter 检查（24 passed）、CUDA owner 检查
+（17 passed，fallback 增量零）以及合并的 structure/tools 检查
+（1686 passed，六个环境/能力 skip）。既有实现 lint
+诊断与父提交比较；未引入新诊断。
+未版本化整合日志与独立数值审计位于
+`$JITTOR_LAB_ROOT/_state/pytree-scm-integration/`。

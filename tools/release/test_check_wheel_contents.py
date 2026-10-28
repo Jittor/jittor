@@ -390,6 +390,21 @@ class TestWheelContents(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertIn("approved wheel removal is not present", stderr)
 
+    def test_cgroup_runtime_helper_is_not_a_build_artifact(self):
+        self.assertIsNone(checker._pollution_reason("jittor/build/utils/cgroup.py"))
+        self.assertIsNotNone(checker._pollution_reason("jittor/build/utils/cgroup.pyc"))
+        self.assertIsNotNone(checker._pollution_reason("jittor/build/utils/cgroup_extra.py"))
+
+    def test_cgroup_compiler_resources_are_required(self):
+        for resource in ("jittor/build/utils/cgroup.py", "jittor/src/utils/cgroup_memory.h"):
+            with self.subTest(resource=resource):
+                members = dict(self.base_members)
+                members.pop(resource, None)
+                candidate = self._wheel("missing-cgroup.whl", members)
+                status, _, errors = self._run(["audit", candidate])
+                self.assertEqual(status, 1)
+                self.assertIn("required wheel member is missing: " + resource, errors)
+
     def test_missing_required_member_fails(self):
         members = dict(self.base_members)
         del members[checker.REQUIRED_MEMBERS[0]]

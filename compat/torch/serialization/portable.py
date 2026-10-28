@@ -104,9 +104,23 @@ def _snapshot_tensors(obj):
     snapshot = _TensorSnapshots()
     snapshot.collect(obj)
     if snapshot.tensors:
+        # Saving an object must not execute unrelated live graphs. Materialize
+        # only its tensors before submitting the host copies; a global sync
+        # would also retry unrelated failed providers, even for metadata saves.
+        #
+        # `contiguous()` forwards a contiguous tensor unchanged and gives a
+        # non-contiguous one a copy this sync runs. Without it the fetch
+        # binding substitutes a *lazy* contiguous copy for a non-contiguous
+        # operand, and `submit_pending_fetches` only runs a fetch whose
+        # operands are already materialized -- a transposed view stayed queued
+        # until some later `sync_all`, leaving its capture slot empty.
+        operands = [tensor.contiguous() for tensor in snapshot.tensors]
+        jt.sync(operands, device_sync=False, weak_sync=False)
         # Fetch copies to host without moving the source sharing group.
-        jt.fetch(*snapshot.tensors, snapshot.capture)
-    jt.sync_all(True)
+        jt.fetch(*operands, snapshot.capture)
+        # Wait for pending fetch copies (including Copy0 for a nondefault GPU)
+        # without adding any other graph roots to the batch.
+        jt.sync([], device_sync=True, weak_sync=False)
     if len(snapshot.values) != len(snapshot.tensors):
         raise RuntimeError("checkpoint tensor fetch did not complete")
     return snapshot.values

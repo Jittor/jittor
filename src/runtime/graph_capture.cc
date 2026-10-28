@@ -66,6 +66,8 @@ bool graph_leaves_moved(int64 graph) {
 bool graph_capture_recording = false;
 bool graph_capture_saw_host_work = false;
 
+bool graph_capture_active() { return graph_capture_recording; }
+
 bool graph_capture_launches_nothing(Op* op) {
     return op->is_storage_view() || op->is_op(op_ids::array())
         || dynamic_cast<TapeOp*>(op) || dynamic_cast<Tapes*>(op);

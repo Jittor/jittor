@@ -35,6 +35,14 @@ SOURCE_SUFFIXES = (".cc", ".h", ".cu", ".cuh")
 CONDITIONAL = re.compile(r"^\s*#\s*(?:ifdef|ifndef|if)\b([^\r\n]*)", re.M)
 JT_MACRO = re.compile(r"\bJT_[A-Za-z0-9_]+\b")
 
+#: ``compile_extern`` injects these into the BLAS translation unit with the
+#: backend's function names (``JT_BLAS_SGEMM=cblas_sgemm``); they are not
+#: environment toggles whose value is 0/1, so they are outside this contract.
+BUILD_PROVIDED = frozenset((
+    "JT_BLAS_SGEMM", "JT_BLAS_DGEMM", "JT_BLAS_CGEMM", "JT_BLAS_ZGEMM",
+    "JT_BLAS_INT", "JT_BLAS_SET_THREADS", "JT_BLAS_GET_THREADS",
+))
+
 
 def _macros_used_in_sources():
     found = set()
@@ -52,7 +60,7 @@ def _macros_used_in_sources():
 
 class TestJtConfigMacros(unittest.TestCase):
     def test_the_declared_list_matches_the_sources(self):
-        used = _macros_used_in_sources()
+        used = _macros_used_in_sources() - BUILD_PROVIDED
         declared = set(compiler.JT_CONFIG_MACROS)
         self.assertEqual(
             used - declared, set(),

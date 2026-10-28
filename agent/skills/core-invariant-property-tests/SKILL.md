@@ -217,10 +217,10 @@ def test_dropping_a_graph_leaks_nothing_at_all(self):
   一句「待修」可靠，因为它不依赖谁记得。缺陷本身同时进问题总账，退出条件写成
   「这条 xfail 通过、`KNOWN_LEAKING_SHAPES` 清空」。
 - 例外只有一种：缺陷**依赖环境**（例如取决于解释器的 teardown 顺序）时，strict 会在
-  不复现的环境里把一次「没触发」误报成「修好了」。树上的实例就是这样：
+  不复现的环境里把一次「没触发」误报成「修好了」。树上的实例曾经就是这样：
   `tests/core/test_core_invariant_properties.py` 的 `test_dropping_a_graph_leaks_nothing_at_all`
-  是非 strict 的 xfail，泄漏记在 `KNOWN_LEAKING_SHAPES`，缺陷是问题总账的 KI-EXEC-009；
-  这时由第一条和下面那条「钉住机制」的用例守门。
+  曾是非 strict 的 xfail，泄漏记在 `KNOWN_LEAKING_SHAPES`；该缺陷修复后标记被删除、表被
+  清空并退出总账。环境相关的缺陷在修好前由第一条和下面那条「钉住机制」的用例守门。
 
 再加一条**钉住机制**的：泄漏量必须恰好是每次 2（一次未匹配的 backward release
 连带它已传播到的那一条出边）。这个数一动，说明机制不是原来那个，

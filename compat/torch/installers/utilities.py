@@ -99,6 +99,20 @@ def _utilities_context():
     return get_install_context(jt)
 
 
+def _has_triton_package():
+    """Whether the real Triton compiler is available to Jittor's bridge."""
+    from jittor.compat.triton.backend import real_triton
+
+    return real_triton() is not None
+
+
+def _has_triton():
+    """Whether that compiler can launch through Jittor on this CUDA host."""
+    from jittor.compat.triton.backend import is_available
+
+    return is_available()
+
+
 class _NodeDef:
     def __init__(self, flatten_fn, unflatten_fn, flatten_with_keys_fn=None):
         self.flatten_fn = flatten_fn
@@ -819,6 +833,15 @@ def install(ctx):
     g.utils.__path__ = []
     g.utils.__package__ = "torch"
     _modules["torch.utils"] = g.utils
+    # Optional libraries query this public Torch helper before choosing their
+    # Triton kernels. Ask the existing real compiler/launcher bridge lazily;
+    # merely importing torch.utils must not initialize a device or Triton.
+    if "torch.utils._triton" not in _modules:
+        _triton = _types2.ModuleType("torch.utils._triton")
+        _triton.has_triton_package = _has_triton_package
+        _triton.has_triton = _has_triton
+        _modules["torch.utils._triton"] = _triton
+    g.utils._triton = _modules["torch.utils._triton"]
     if "torch.utils.tensorboard" in _modules:
         g.utils.tensorboard = _modules["torch.utils.tensorboard"]
     if "torch.utils._pytree" not in _modules:

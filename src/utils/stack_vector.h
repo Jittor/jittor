@@ -25,7 +25,7 @@ struct StackVector {
     struct Iter {
         const StackVector<T,N>* self;
         int index;
-        inline T operator*() { return self->at(index); }
+        inline T operator*() { return (*self)[index]; }
         inline Iter& operator++() { index++; return *this; }
         inline Iter operator+(int i) { return {self, i+index}; }
         inline bool operator!=(Iter& other) { return index != other.index; }
@@ -34,6 +34,7 @@ struct StackVector {
     inline Iter begin() { return {this, 0}; }
     inline Iter end() { return {this, size()}; }
     inline T& operator[](int i) { return a[i]; }
+    inline const T& operator[](int i) const { return a[i]; }
 
     inline void pop_back() { n--; }
     inline void push_back(T v) { ASSERT(n<N) << n; a[n++] = v; }

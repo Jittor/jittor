@@ -164,7 +164,48 @@ can also be None)::
         # tape output and input together so
         # backward treat them as one operator
         tape_together(taped_inputs, taped_outputs, self._grad)
+        if taped_inputs:
+            self._rebind_saved_inputs(taped_inputs)
         return res if many else res[0]
+
+    def _rebind_saved_inputs(self, taped_inputs):
+        """Point the inputs this call saved back at the caller's Vars.
+
+        ``execute`` sees taped copies of its inputs, and ``tape_together``
+        stops their gradient: that is what keeps the forward's own graph out
+        of the backward, which goes through ``grad`` instead. But a saved
+        input is what ``grad`` computes with, so ``grad``'s result had no
+        path back to the input either, and differentiating it again -- a
+        Hessian, ``jacfwd(grad(f))`` -- gave 0 with only a misleading
+        "does not depend on the loss" warning. torch's saved inputs keep
+        their graph.
+
+        So each saved tape (an attribute of this call context, or an item of
+        a tuple or list there, which covers ``save_for_backward``) is swapped
+        onto the Var it tapes. Values are the same storage; what ``grad``
+        builds from them is now differentiable, while everything ``execute``
+        computed from the tapes stays as non-differentiable as before.
+        ``_taped_input_rebinds`` maps the old Var ids to the new ones for
+        anything that recorded them, such as a saved-tensor version check.
+        """
+        taped = {t.id for t in taped_inputs}
+        rebinds = {}
+
+        def rebind(value):
+            if (isinstance(value, Var) and value.id in taped
+                    and not value.is_finished):
+                old = value.id
+                value.swap(value._input(0))
+                rebinds[old] = value.id
+
+        for value in tuple(self.__dict__.values()):
+            if type(value) is tuple or type(value) is list:
+                for item in value:
+                    rebind(item)
+            else:
+                rebind(value)
+        if rebinds:
+            self._taped_input_rebinds = rebinds
 
     def _grad(self, *args):
         new_args = ( (args[i] if i>=0 else None) for i in self.output_mask )

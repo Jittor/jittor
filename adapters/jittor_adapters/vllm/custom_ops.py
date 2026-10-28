@@ -8,15 +8,17 @@ be populated before a model is built, not merely when one runs.
 
 The operators registered here are the ones an unquantised model reaches: a
 gated activation, RMS normalisation with and without a residual, and rotary
-embedding. Each forwards to the matching public Jittor primitive, so the values
-are the real thing rather than a placeholder. The quantised operators are
-deliberately absent -- the capability probes below all answer no, which is what
-sends vLLM down the unquantised path these cover.
+embedding, and repetition penalties. Each uses public Jittor primitives, so the
+values are the real thing rather than a placeholder. Capability probes answer
+no; unsupported computation symbols remain importable for eager fusion matcher
+discovery, but explicitly reject execution instead of fabricating a result.
 
 Everything here is expressed against public Jittor APIs only, so this package
 can move out of the repository as a plugin without following any private
 detail with it.
 """
+
+import os
 
 import jittor as jt
 
@@ -35,6 +37,12 @@ _OPERATORS = (
      "rotary_embedding(Tensor positions, Tensor! query, Tensor!? key, "
      "int head_size, Tensor cos_sin_cache, bool is_neox, "
      "int rope_dim_offset=0, bool inverse=False) -> ()"),
+    ("get_cuda_view_from_cpu_tensor",
+     "get_cuda_view_from_cpu_tensor(Tensor input) -> Tensor"),
+    ("apply_repetition_penalties_",
+     "apply_repetition_penalties_(Tensor! logits, Tensor prompt_mask, "
+     "Tensor output_mask, Tensor repetition_penalties) -> ()"),
+    ("weak_ref_tensor", "weak_ref_tensor(Tensor input) -> Tensor"),
 )
 
 # Asked once at start-up, before any quantised path is chosen. Stubbing the
@@ -49,6 +57,34 @@ _CAPABILITY_PROBES = (
     "cutlass_blockwise_scaled_grouped_mm_supported",
     "cutlass_mla_supported",
 )
+
+_UNSUPPORTED_COMPUTE_OPS = (
+    # Eager unquantized Qwen only imports these matcher symbols. FP8 execution
+    # is intentionally unsupported; registration keeps the fusion pass
+    # importable and its quantized path out of capability selection.
+    "static_scaled_fp8_quant",
+    "dynamic_scaled_fp8_quant",
+    "dynamic_per_token_scaled_fp8_quant",
+    "per_token_group_fp8_quant",
+    "scaled_fp4_quant",
+    "rms_norm_static_fp8_quant",
+    "rms_norm_dynamic_per_token_quant",
+    "rms_norm_per_block_quant",
+    "fused_add_rms_norm_static_fp8_quant",
+    "silu_and_mul_nvfp4_quant",
+    "silu_and_mul_per_block_quant",
+    "silu_and_mul_quant",
+    "fused_qk_norm_rope",
+    "cutlass_scaled_mm",
+)
+
+
+def _unsupported_compute(name):
+    def reject(*args, **kwargs):
+        raise NotImplementedError(
+            "vLLM operator _C.%s is not implemented on the Jittor backend; "
+            "the symbol is available for import only" % name)
+    return reject
 
 
 def _silu_and_mul(out, x):
@@ -103,6 +139,39 @@ def _rotary_embedding(positions, query, key, head_size, cos_sin_cache, is_neox,
         key.assign(rotated_key)
 
 
+def _get_cuda_view_from_cpu_tensor(x):
+    """Stage host metadata on CUDA; Jittor has no zero-copy UVA Var."""
+    return x.to_device(jt.current_device())
+
+
+def _apply_repetition_penalties_(logits, prompt_mask, output_mask,
+                                 repetition_penalties):
+    """Apply vLLM's per-request repetition factor once per seen token."""
+    if int(logits.shape[0]) == 0:
+        return
+    penalties = repetition_penalties.reshape((-1, 1))
+    seen = jt.logical_or(prompt_mask, output_mask)
+    # Match the compiled vLLM operator's division, not reciprocal-then-multiply.
+    # Presence and frequency penalties remain the caller's responsibility.
+    adjusted = jt.where(logits > 0, logits / penalties, logits * penalties)
+    logits.assign(jt.where(seen, adjusted, logits))
+
+
+def _weak_ref_tensor(tensor):
+    """Experimental strong alias for vLLM V2 CUDA Graph output lifetimes.
+
+    vLLM's C++ op returns a non-owning alias. Returning the same Jittor Var
+    keeps storage alive longer, so this is safe for contents but may increase
+    graph-pool memory. Do not enable outside a measured fixed-shape test.
+    """
+    if os.environ.get("JITTOR_VLLM_EXPERIMENTAL_STRONG_GRAPH_ALIAS") == "1":
+        return tensor
+    raise NotImplementedError(
+        "vLLM V2 CUDA Graph needs weak_ref_tensor; Jittor's strong-alias "
+        "experiment is opt-in because its lifetime differs")
+
+
+
 _IMPLEMENTATIONS = {
     "silu_and_mul": _silu_and_mul,
     "gelu_and_mul": _gelu_and_mul,
@@ -110,6 +179,9 @@ _IMPLEMENTATIONS = {
     "rms_norm": _rms_norm,
     "fused_add_rms_norm": _fused_add_rms_norm,
     "rotary_embedding": _rotary_embedding,
+    "get_cuda_view_from_cpu_tensor": _get_cuda_view_from_cpu_tensor,
+    "apply_repetition_penalties_": _apply_repetition_penalties_,
+    "weak_ref_tensor": _weak_ref_tensor,
 }
 
 
@@ -123,9 +195,20 @@ def register(torch_module):
     hook = current_runtime_hook()
     table = getattr(getattr(torch_module, "ops", None), "__dict__", {}).get("_namespaces")
     namespace_before_creation = table.get("_C") if isinstance(table, dict) else None
+    names = ([name for name, _ in _OPERATORS]
+             + list(_CAPABILITY_PROBES) + list(_UNSUPPORTED_COMPUTE_OPS))
+    if hook is None and namespace_before_creation is not None:
+        # Outside an install transaction there is no ledger to roll back, and
+        # production registration always runs under one (``install`` is an
+        # owned runtime hook). A hook-less call is therefore a repeat from a
+        # test or from a caller that already armed the adapter: the native
+        # operator library refuses to register the same slot twice, so report
+        # the declared names instead of redefining them.
+        owned = vars(namespace_before_creation).get("_ops", {})
+        if all(name in owned for name in names):
+            return tuple(names)
     if hook is not None and namespace_before_creation is not None:
         existing = vars(namespace_before_creation).get("_ops", {})
-        names = [name for name, _ in _OPERATORS] + list(_CAPABILITY_PROBES)
         if any(name in existing for name in names):
             raise TransactionConflict("vLLM cannot replace an existing _C operator")
     fragment = library.Library("_C", "FRAGMENT")
@@ -152,7 +235,8 @@ def register(torch_module):
                         raise TransactionConflict("vLLM operator namespace changed externally")
                     del namespaces["_C"]
                 hook.record_undo(undo_namespace)
-            names = [name for name, _ in _OPERATORS] + list(_CAPABILITY_PROBES)
+            names = ([name for name, _ in _OPERATORS]
+                 + list(_CAPABILITY_PROBES) + list(_UNSUPPORTED_COMPUTE_OPS))
             if any(name in owned_ops for name in names):
                 raise TransactionConflict("vLLM cannot replace an existing _C operator")
 
@@ -185,4 +269,9 @@ def register(torch_module):
         register_one(probe, "%s(int cuda_device_capability) -> bool" % probe,
                      lambda *args, **kwargs: False)
         registered.append(probe)
+    for name in _UNSUPPORTED_COMPUTE_OPS:
+        # No executable ABI is claimed for these import-only symbols. A
+        # variadic declaration reaches the explicit refusal for every call.
+        register_one(name, "%s(...) -> ()" % name, _unsupported_compute(name))
+        registered.append(name)
     return tuple(registered)

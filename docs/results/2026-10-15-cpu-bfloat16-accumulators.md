@@ -1,115 +1,97 @@
-# CPU BF16 accumulators and LayerNorm
+# CPU BF16 累加器与 LayerNorm
 
-Status: verified for the bounded operator and Engine checks below; the maintained
-CPU/CUDA two-rank protocol scorecard remains pending. Owner: Jittor maintainers.
-Reviewed: 2026-10-15. Recheck after changes to CPU contraction, oneDNN matmul,
-LayerNorm, autograd snapshots or the pinned downstream package.
+Status: 下文限定的算子与 Engine 检查已验证；维护中的 CPU/CUDA 双 rank 协议记分卡仍待
+完成。Owner: Jittor 维护者。Reviewed: 2026-10-15。CPU 收缩、oneDNN matmul、
+LayerNorm、autograd 快照或固定版本下游包变化后复查。
 
-Code: `a2ca1b364c79c853623c4f65bf58b9232d7f4171`. Clean post-sync measurement:
-`5f5ab7ecfee0a896c3565392cc9282559c9f8953`, incorporating remote
-`0751e425b0f197b8e7b388f218613378c71f701a`. Existing MPI prerequisites retain
-their independent [report and source baseline](2026-10-15-mpi-bfloat16-process-groups.md).
+Code: `a2ca1b364c79c853623c4f65bf58b9232d7f4171`。同步后的干净测量：
+`5f5ab7ecfee0a896c3565392cc9282559c9f8953`，已合入远端
+`0751e425b0f197b8e7b388f218613378c71f701a`。既有的 MPI 前置条件保留其独立的
+[报告与源码基线](2026-10-15-mpi-bfloat16-process-groups.md)。
 
-## Changes and references
+## 变更与参照
 
-CPU BF16 Linear previously rounded its matrix product before adding bias.
-For `1.0078125 * 1.0078125 + 0.00390625`, that produced `1.015625`; independent
-binary Torch produces `1.0234375`. The new path retains BF16 operands and adds
-bias to the FP32 accumulator before the single BF16 output conversion.
+CPU BF16 Linear 此前在加 bias 之前就对矩阵乘积做了舍入。
+对 `1.0078125 * 1.0078125 + 0.00390625`，该实现产生 `1.015625`；独立二进制
+Torch 产生 `1.0234375`。新路径保留 BF16 操作数，把 bias 加到 FP32 累加器上，
+然后再做唯一一次 BF16 输出转换。
 
-The existing oneDNN matmul owner now exposes an optional FP32 output for BF16
-operands. Its default output and FP32 route remain unchanged. Descriptor and
-JIT caches distinguish input/output storage widths, including empty contracted
-dimensions. Backward retains BF16 gradients and native higher derivatives.
-With `JT_BUILD_USE_MKL=0`, the same existing contraction uses native FP32 opmath.
-Its custom gradient reuses that contraction recursively, rounding the completed
-GEMM gradients rather than each broadcast contribution. Neither path substitutes
-FP16 or a GEMM with FP32 input tensors.
+既有的 oneDNN matmul owner 现在为 BF16 操作数提供可选的 FP32 输出。其默认输出
+与 FP32 路径保持不变。Descriptor 与 JIT 缓存区分输入/输出存储位宽，包括空的收缩
+维度。反向保留 BF16 梯度与 native 高阶导数。在 `JT_BUILD_USE_MKL=0` 下，同一既有
+收缩使用 native FP32 opmath。其自定义梯度递归复用该收缩，对完成的 GEMM 梯度做
+舍入，而不是对每个广播贡献分别舍入。两条路径都不以 FP16 或使用 FP32 输入张量的
+GEMM 作为替代。
 
-The generic Function saves independent raw-reshape holders of the original
-autograd graph before first-order taping. Actual input/weight holder rebinding,
-repeated calls through one Function instance and all three second derivatives
-match 28 independent Torch observations bitwise. The scalar second-derivative
-contract remains `4.0625`; an experimental implementation yielding `2.03125`
-was rejected and is not production code. This snapshot contract covers graph
-rebinding, not a deep copy against arbitrary physical storage writes.
+通用 Function 在一阶 tape 之前保存原始 autograd 图的独立 raw-reshape holder。
+实际的输入/权重 holder 重绑定、通过单个 Function 实例的重复调用以及全部三个二阶
+导数，都与 28 个独立 Torch 观测逐位一致。标量二阶导数契约仍为 `4.0625`；产生
+`2.03125` 的实验实现已被拒绝，不是生产代码。该快照契约覆盖图重绑定，而不是针对
+任意物理存储写入的深拷贝。
 
-For CPU non-mixed BF16 LayerNorm, backward now consumes BF16 saved mean/rstd
-and BF16 affine partials. Forward keeps unrounded FP32 statistics. Mixed FP32
-affine parameters and other dtype/device paths retain their existing behavior.
-This follows the separately observed statistics and accumulation boundaries in
-[Torch's CPU LayerNorm owner](https://github.com/pytorch/pytorch/blob/v2.11.0/aten/src/ATen/native/cpu/layer_norm_kernel.cpp).
-Selection uses native operand placement, not a global CUDA flag.
+对于 CPU 非 mixed BF16 LayerNorm，反向现在消费 BF16 保存的 mean/rstd 与 BF16
+affine 部分和。前向保留未舍入的 FP32 统计量。混合 FP32 affine 参数与其他
+dtype/设备路径保持既有行为。这遵循在
+[Torch 的 CPU LayerNorm owner](https://github.com/pytorch/pytorch/blob/v2.11.0/aten/src/ATen/native/cpu/layer_norm_kernel.cpp)
+中单独观察到的统计量与累加边界。选择依据是 native 操作数布局，而不是全局 CUDA 标志。
 
-## Real execution
+## 实际执行
 
-Platform: Linux x86_64, AMD EPYC 9554, GCC 11.5, four CPU threads per rank;
-oneDNN 3.9.1 with an observed `brg_matmul:avx512_core_bf16` BF16-to-FP32 primitive.
-The independent CPU reference is binary Torch `2.11.0+cu128`, with an actual `_C`
-extension and no shim marker. CUDA regressions execute on RTX4090/SM89 with
-NVIDIA driver 580.178.04 and genuine pip-cu122/nvcc 12.2.140, under a forbidden
-fallback policy. These checks make no timing or performance claim.
+平台：Linux x86_64、AMD EPYC 9554、GCC 11.5，每个 rank 四个 CPU 线程；
+oneDNN 3.9.1，观察到 `brg_matmul:avx512_core_bf16` 的 BF16-to-FP32 primitive。
+独立的 CPU 参考是二进制 Torch `2.11.0+cu128`，带有实际 `_C` 扩展且无 shim 标记。
+CUDA 回归在 RTX4090/SM89 上执行，NVIDIA 驱动 580.178.04，使用真实的 pip-cu122/nvcc
+12.2.140，并处于禁止 fallback 的策略下。这些检查不作计时或性能主张。
 
-On clean `5f5ab7ec`, CPU ZeRO1/2 × oneDNN/native-opmath executes real DeepSpeed
-`0.19.7+f5af15c`, two ranks, BF16 model parameters, AdamW, six microsteps and
-three updates. Every rank updates all 166 FP32 master-partition elements;
-fallback count is zero. Save/load into a new Engine and continued training are
-bitwise equal within each runtime: 64 strict fields per rank for ZeRO1 and 56
-for ZeRO2. Candidate process groups are actual MPI; reference groups are Gloo.
-This does not establish native Gloo support.
+在干净的 `5f5ab7ec` 上，CPU ZeRO1/2 × oneDNN/native-opmath 执行真实 DeepSpeed
+`0.19.7+f5af15c`，两个 rank，BF16 model 参数、AdamW、六个 microstep 与三次更新。
+每个 rank 都更新全部 166 个 FP32 主分区元素；fallback 计数为零。保存/加载到新
+Engine 并继续训练，在每个 runtime 内逐位相等：ZeRO1 每 rank 64 个严格字段，
+ZeRO2 为 56 个。候选进程组是实际 MPI；参考进程组是 Gloo。
+这不构成 native Gloo 支持。
 
-Across those four diagnostic cases, all 1,792 numerical fields satisfy the
-unchanged state/forward `0.002` and gradient `0.01` budgets. All 1,024 requested
-gradient fields are checked; 1,012 are bitwise equal. ZeRO1's gradients are all
-bitwise equal; maximum ZeRO2 gradient error is `1.2822511817226889e-4`.
-Maximum state error is `2.1931527140484152e-7`. Before the affine-partial repair,
-ZeRO2 had two moment fields at `0.0025165948`, exceeding the original budget;
-that failure remains in the evidence, without changing tolerances.
+在这四个诊断用例中，全部 1,792 个数值字段满足未变化的 state/forward `0.002` 与
+gradient `0.01` 预算。全部 1,024 个请求的梯度字段都被检查；其中 1,012 个逐位相等。
+ZeRO1 的梯度全部逐位相等；ZeRO2 的最大梯度误差为 `1.2822511817226889e-4`。
+最大状态误差为 `2.1931527140484152e-7`。在 affine 部分和修复之前，ZeRO2 有两个
+moment 字段为 `0.0025165948`，超出原预算；该失败保留在证据中，容差未变。
 
-These are API diagnostics, not maintained-gate admission. Their independent CPU
-reference retains its original `f945b223cd4316feaa733556ef1413344f98e11f`
-measurement identity. The full paired protocol still needs fresh, matching
-CPU/CUDA maintained measurements, source/installation bindings and both input
-offsets. No common scorecard numerator is granted here.
+这些是 API 诊断，不是维护 gate 的准入。其独立 CPU 参考保留原始的
+`f945b223cd4316feaa733556ef1413344f98e11f` 测量身份。完整配对协议仍需新的、匹配的
+CPU/CUDA 维护测量、源码/安装绑定以及两个输入偏移。这里不授予任何公共记分卡分子。
 
-Clean post-sync gates:
+同步后的干净门禁：
 
-| Check | Result |
+| 检查 | 结果 |
 | --- | --- |
-| CPU new accumulator/LayerNorm/public Linear contracts | 12 passed, zero skipped |
-| Actual CUDA Linear/LayerNorm contracts | 14 passed, 3 existing xfails, zero fallback |
-| Core, native and Torch modes | 322 passed, 42 skipped, 1 existing xfail |
-| Runtime device-selection structure contract | 7 passed |
-| Repository layout | passed |
+| CPU 新累加器/LayerNorm/公开 Linear 契约 | 12 passed，零跳过 |
+| 实际 CUDA Linear/LayerNorm 契约 | 14 passed，3 项既有 xfail，零 fallback |
+| Core，native 与 Torch 模式 | 322 passed, 42 skipped, 1 existing xfail |
+| runtime 设备选择结构契约 | 7 passed |
+| 仓库布局 | 通过 |
 
-Additional owner checks before the final synchronization passed native CUDA
-53 cases and compat CUDA 91 cases with zero fallback; the latter retains three
-existing xfails. Five independent CPU LayerNorm shapes have bitwise forward
-agreement; maximum per-field scaled gradient error is `0.00502513`. BF16 affine
-reductions depend on row/thread grouping and are not claimed bitwise for arbitrary
-shapes. The tested LayerNorm higher derivative retains a one-ULP difference
-within the existing gradient budget. No full-library DeepSpeed, ZeRO3, offload,
-other optimizer, hardware or performance coverage follows from these cases.
+最终同步前的其他 owner 检查通过 native CUDA 53 例与 compat CUDA 91 例，零 fallback；
+后者保留三项既有 xfail。五个独立 CPU LayerNorm shape 的前向逐位一致；逐字段缩放
+梯度的最大误差为 `0.00502513`。BF16 affine 归约依赖行/线程分组，对任意 shape 不作
+逐位主张。已测试的 LayerNorm 高阶导数保留一个 ULP 的差异，处于既有梯度预算内。
+这些用例不推出整库 DeepSpeed、ZeRO3、offload、其他 optimizer、硬件或性能覆盖。
 
-The earlier full structure run had 1,502 passes, six skips and three failures:
-MPI report index/manifest registration, plus the newly introduced direct device
-flag read. The latter is fixed and its full seven-case contract rerun passes;
-central documentation registration remains an integration responsibility.
+较早的完整结构运行有 1,502 通过、六项跳过与三项失败：MPI 报告索引/manifest 登记，
+以及新引入的直接设备标志读取。后者已修复并完整重跑其七例契约通过；中心文档登记
+仍属整合责任。
 
-## Evidence and reproduction
+## 证据与复现
 
-Unversioned evidence is under
-`$JITTOR_LAB_ROOT/_state/refactor-goal/deepspeed/cpu-bf16/`.
-`cpu-bfloat16-math-v1-evidence.json` binds 1,574 runtime-source hashes and 105
-raw/script/checkpoint hashes, including clean case directories, both independent
-reference packets, source manifests, the rejected numerical result and gate logs.
-Its SHA256 is
-`80aa5e3b0a77699f954dba1f75b749a025c94ae62e3b97ea80b3244b6f75f81a`.
-`seal-math-evidence-v1.py` recomputes every diagnostic comparison and strict/F0
-metadata check. It does not promote those diagnostics into protocol admission.
+未版本化证据位于
+`$JITTOR_LAB_ROOT/_state/refactor-goal/deepspeed/cpu-bf16/`。
+`cpu-bfloat16-math-v1-evidence.json` 绑定 1,574 个 runtime 源码哈希与 105 个
+原始/脚本/checkpoint 哈希，包括干净的用例目录、两个独立参考包、源码清单、被拒绝的
+数值结果与门禁日志。其 SHA256 为
+`80aa5e3b0a77699f954dba1f75b749a025c94ae62e3b97ea80b3244b6f75f81a`。
+`seal-math-evidence-v1.py` 重算每个诊断比较与严格/F0 元数据检查。它不会把这些诊断
+提升为协议准入。
 
-With separate native/reference interpreters and the explicit optional oneDNN
-paths configured, the reusable operator regressions are:
+在配置好独立的 native/参考解释器与显式可选 oneDNN 路径后，可复用的算子回归为：
 
 ```bash
 JITTOR_TORCH_SHIM=1 PYTHONPATH=python <jittor-python> -m pytest -q \
@@ -123,32 +105,25 @@ JITTOR_TEST_DEVICES=cuda CUDA_VISIBLE_DEVICES=<allocated-device> \
   compat/tests/torch/test_torch_compat_norm.py::TestLayerNorm
 ```
 
-Keep CPU/CUDA caches separate, serialize first builds and retain independent
-rank homes/temp directories. The archived `run-math-clean-proof-v1.py` captures
-the exact task-local launch environment and immutable source checks. Its machine
-paths are evidence, not repository defaults or a replacement for the maintained
-Engine launcher.
+保持 CPU/CUDA 缓存分离，串行化首次构建，并保留独立的 rank home/临时目录。归档的
+`run-math-clean-proof-v1.py` 捕获精确的任务本地启动环境与不可变源码检查。其机器
+路径是证据，不是仓库默认值，也不替代维护中的 Engine launcher。
 
-## Main-tree integration verification
+## 主树整合验证
 
-Integrated onto synchronized `01351fe6174a44b688bb17ad3f5f7f0fd1cf340d`.
-All ten code/test files match the reviewed `a2ca1b364` source byte for byte;
-the runtime source snapshot remained unchanged throughout verification.
-An independent integration audit rehashed the original 1,574 source and 105
-artifact bindings and recomputed all 1,792 numerical fields, including the
-1,024 gradients. Original tolerances, failed results and measurement identities
-remain intact.
+整合到同步后的 `01351fe6174a44b688bb17ad3f5f7f0fd1cf340d`。
+全部十个代码/测试文件与审查过的 `a2ca1b364` 源码逐字节一致；runtime 源码快照在
+整个验证过程中保持不变。一项独立整合审计重新哈希原始 1,574 个源码与 105 个产物
+绑定，并重算全部 1,792 个数值字段，包括 1,024 个梯度。原始容差、失败结果与测量
+身份保持完整。
 
-The integrated tree passes CPU operator contracts with actual oneDNN enabled
-(12 passed, zero skipped), the disabled-oneDNN Linear route (6 passed, zero
-skipped), actual CUDA Linear/LayerNorm regression (14 passed, three existing
-xfails), core (322 passed, 42 skipped, one existing xfail), and full structure
-(1,505 passed, six skipped). Ruff for all changed Python files and repository
-layout pass. The report and source manifest are registered centrally.
+整合后的树在实际启用 oneDNN 的 CPU 算子契约（12 passed，零跳过）、禁用 oneDNN 的
+Linear 路径（6 passed，零跳过）、实际 CUDA Linear/LayerNorm 回归（14 passed，三项
+既有 xfail）、core（322 passed，42 skipped，一项既有 xfail）以及完整结构
+（1,505 passed，六 skipped）上通过。全部改动 Python 文件的 Ruff 与仓库布局通过。
+报告与源码 manifest 已在中心登记。
 
-Integration logs and source checks are unversioned under
-`$JITTOR_LAB_ROOT/_state/cpu-bf16-math-integration-013/`; the independently
-recomputed diagnostic audit is under
-`$JITTOR_LAB_ROOT/_state/cpu-bf16-math-integration-075/independent-audit.json`.
-These results continue to establish operator correctness and the bounded Engine
-diagnostic, without granting maintained DeepSpeed protocol admission.
+整合日志与源码检查未版本化，位于
+`$JITTOR_LAB_ROOT/_state/cpu-bf16-math-integration-013/`；独立重算的诊断审计位于
+`$JITTOR_LAB_ROOT/_state/cpu-bf16-math-integration-075/independent-audit.json`。
+这些结果仍只确立算子正确性与有界的 Engine 诊断，不授予维护中的 DeepSpeed 协议准入。

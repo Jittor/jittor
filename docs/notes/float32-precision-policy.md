@@ -5,11 +5,12 @@
 
 ## 档位
 
-一个统一的档位同时决定 cuBLAS 的 compute type 和 cuDNN 的 math type：
+同一套档位分别作用于 cuBLAS 的 compute type 和 cuDNN 的 math type，两边各有一个
+开关（见下文）：
 
 | 档位 | cuBLAS compute type | cuDNN math type | 含义 |
 | --- | --- | --- | --- |
-| `highest`（默认） | `CUBLAS_COMPUTE_32F` | `CUDNN_FMA_MATH` | 真正的 float32 累加 |
+| `highest` | `CUBLAS_COMPUTE_32F` | `CUDNN_FMA_MATH` | 真正的 float32 累加 |
 | `high` | `CUBLAS_COMPUTE_32F_FAST_TF32` | `CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION` | tf32 |
 | `medium` | `CUBLAS_COMPUTE_32F_FAST_16BF` | `CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION` | bfloat16 |
 
@@ -23,9 +24,15 @@ cuBLAS 的算法提示跟随 compute type：请求了低精度 compute type 时�
 
 ## 怎么设置
 
-原生接口：Runtime 的 `float32_matmul_precision` 同时写 matmul 与 cuDNN 两层。
+原生接口也是**分开的两个开关**：`float32_matmul_precision` 只管 matmul，
+`float32_cudnn_precision` 只管 cuDNN（卷积与 RNN）。
 
-Torch 前端是**分开的两个开关**，与 torch 语义一致：
+```python
+jt.flags.float32_matmul_precision = "high"     # 只影响 matmul
+jt.flags.float32_cudnn_precision = "highest"   # 只影响 cuDNN，回到严格 float32
+```
+
+Torch 前端同样是分开的两个开关，与 torch 语义一致：
 
 ```python
 torch.set_float32_matmul_precision("high")   # 只影响 matmul
@@ -33,8 +40,16 @@ torch.backends.cudnn.allow_tf32 = True       # 只影响 cuDNN（卷积与 RNN�
 torch.backends.cuda.matmul.allow_tf32 = True # matmul 的另一种拼写，同一个开关
 ```
 
-默认值不同：**torch 前端** matmul 为 `highest`、cuDNN 为 `high`；**原生前端**两者
-都是 `highest`。两个前端的 setter 互不影响对方的状态。
+两个前端的默认值相同，都是 torch 的默认：matmul 为 `highest`，cuDNN 为 `high`
+（即 `torch.backends.cudnn.allow_tf32 = True`）。Ampere 及以后的卡上 float32 卷积
+因此默认走 tf32：每次乘法的输入只保留 10 位尾数，累加仍是 float32，卷积输出的相对
+误差约在 1e-4–1e-3。需要严格 float32 卷积的代码（对拍、梯度检查）应显式设
+`float32_cudnn_precision = "highest"`。两个前端的 setter 互不影响对方的状态。
+
+原生前端的 cuDNN 默认值曾经是 `highest`，并且由 `float32_matmul_precision` 一并
+设置。那比 torch 和 Jittor 1.3.10 都严格——1.3.10 不设置 math type，用的是 cuDNN 的
+默认值，在 Ampere 及以后允许 tf32——代价是 ResNet-50 训练（batch 64）每步 128 ms，
+1.3.10 为 95 ms，差距全部在卷积反向。
 
 同一个语义的多种拼写（`allow_tf32`、`fp32_precision`、
 `get/set_float32_matmul_precision`）都是同一个标志的**视图**，不各自存一份状态，

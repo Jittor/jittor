@@ -2,10 +2,13 @@
 
     NT=4 python probe_shared_param_threads.py
 
-Exits 1 and prints the first thread's error. KI-EXEC-007: this aborts in
-`SFRLAllocator::free` with "allocation not found" in 4 runs out of 5 at four
-threads, and never at one or two. KI-EXEC-005 is the phase-7 assert that the
-same shape used to hit, and that this one now reaches first.
+At HEAD (2026-10-26) this shape passes 35/35 at four threads and 6/6 at one:
+`VarHolder::sync()` no longer migrates, so the storage the batch reads is not
+released underneath it. The host-read variant (`.numpy()` while another thread
+rebinds the holder) is covered by the unversioned
+`probe_shared_param_readback.py`; after the read-path ownership and ring-lock
+fix both probes pass repeatedly at four threads. The phase-7 assert this probe
+used to reach first is KI-EXEC-005.
 
 This is the KI-EXEC-005 shape: thread B's slice assignment rebinds the holder,
 so the var thread A's batch requested becomes garbage while that batch runs and

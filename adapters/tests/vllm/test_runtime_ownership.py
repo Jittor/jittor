@@ -76,7 +76,7 @@ class RuntimeHookOwnership(unittest.TestCase):
                          __package__="jittor_adapters.vllm",
                          _OPERATORS=(("first", "first()"), ("second", "second()")),
                          _IMPLEMENTATIONS={"first": lambda: 1, "second": lambda: 2},
-                         _CAPABILITY_PROBES=())
+                         _CAPABILITY_PROBES=(), _UNSUPPORTED_COMPUTE_OPS=())
         register = self.source_function("custom_ops.py", "register", namespace)
         target = types.SimpleNamespace(ops=dispatcher, library=types.SimpleNamespace(Library=Library))
         with self.assertRaisesRegex(ValueError, "registration failed"):

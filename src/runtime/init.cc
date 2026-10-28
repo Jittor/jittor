@@ -30,10 +30,21 @@ DEFINE_FLAG(vector<int>, cuda_archs, {}, "Cuda arch");
 // runtime/float32_precision.h for the full mapping and for why the three flags
 // below are now overrides on top of it rather than four separate encodings.
 
+// Two policies, one per library, with torch's defaults: matmul at `highest`
+// (torch.backends.cuda.matmul.allow_tf32 = False) and cuDNN -- convolution and
+// RNN -- at `high` (torch.backends.cudnn.allow_tf32 = True).
+//
+// They used to be one flag that wrote both, defaulting to `highest`, so a
+// native float32 convolution ran at CUDNN_FMA_MATH where torch and Jittor
+// 1.3.10 both let cuDNN use tf32 on Ampere and later: a ResNet-50 training
+// step at batch 64 took 128 ms against 1.3.10's 95, all of it in the
+// convolution backward. Separate flags are also what lets each default stand:
+// a scope over one would otherwise restore both on exit and overwrite the
+// other's default.
 DEFINE_FLAG_WITH_SETTER(string, float32_matmul_precision, "highest",
-    "Accumulate precision for float32 matmul and convolution: "
-    "highest (float32), high (tf32), medium (bfloat16). "
-    "float16/bfloat16 inputs always accumulate in float32.");
+    "Accumulate precision for float32 matmul: highest (float32), "
+    "high (tf32), medium (bfloat16). float16/bfloat16 inputs always "
+    "accumulate in float32. Convolution has its own, float32_cudnn_precision.");
 
 void setter_float32_matmul_precision(const string& old_value, const string& value) {
     int tier = parse_float32_precision_tier(value);
@@ -42,9 +53,20 @@ void setter_float32_matmul_precision(const string& old_value, const string& valu
     if (tier < 0)
         LOGf << "float32_matmul_precision must be one of highest, high, medium; got"
             << '"' >> value >> '"';
-    // Native Jittor deliberately offers one convenience setter for both
-    // domains. Frontends may instead capture independent per-op values.
     runtime_jit_policy().float32_matmul_precision_tier = tier;
+}
+
+DEFINE_FLAG_WITH_SETTER(string, float32_cudnn_precision, "high",
+    "Accumulate precision for float32 cuDNN convolution and RNN: highest "
+    "(float32, CUDNN_FMA_MATH), high (tf32, the default, as torch's "
+    "cudnn.allow_tf32), medium (bfloat16). float16/bfloat16 inputs always "
+    "accumulate in float32.");
+
+void setter_float32_cudnn_precision(const string& old_value, const string& value) {
+    int tier = parse_float32_precision_tier(value);
+    if (tier < 0)
+        LOGf << "float32_cudnn_precision must be one of highest, high, medium; got"
+            << '"' >> value >> '"';
     runtime_jit_policy().float32_cudnn_precision_tier = tier;
 }
 
@@ -52,13 +74,14 @@ void setter_float32_matmul_precision(const string& old_value, const string& valu
 // are what `torch.backends.*` maps onto and what existing code sets; prefer
 // float32_matmul_precision, which covers both domains at once.
 DEFINE_FLAG(int, use_tensorcore, 0,
-    "Deprecated, use float32_matmul_precision. Raises the float32 accumulate "
-    "tier for matmul and convolution: 1=high(tf32), 2 and 3=medium(bfloat16).");
+    "Deprecated, use float32_matmul_precision and float32_cudnn_precision. "
+    "Raises the float32 accumulate tier for matmul and convolution: "
+    "1=high(tf32), 2 and 3=medium(bfloat16).");
 DEFINE_FLAG(int, cuda_allow_tf32, 0,
     "Deprecated, use float32_matmul_precision. Raises the float32 matmul "
     "accumulate tier to high (tf32).");
 DEFINE_FLAG(int, cuda_allow_cudnn_tf32, 0,
-    "Deprecated, use float32_matmul_precision. Raises the float32 cuDNN "
+    "Deprecated, use float32_cudnn_precision. Raises the float32 cuDNN "
     "convolution accumulate tier to high (tf32).");
 // Ascend ACL equivalent of torch.npu.matmul.allow_hf32: permits FP32
 // matmul/bmm/conv to run aclnn with ALLOW_FP32_DOWN_PRECISION (fp16 split

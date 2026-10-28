@@ -630,7 +630,9 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
         // Whether an op of this batch waits on the var through a control
         // edge (`order_after_readers`), whether one reads its data, and
         // whether anything outside the batch still will.
-        bool ordered_before = false, read_here = false, read_later = var->holder;
+        bool ordered_before = false, read_here = false, read_later = var->holder
+            || (var->flag(VarFlags::_needed_by_backward)
+                && var->liveness.backward.active());
         for (auto o : var->_outputs) {
             if (o.index < 0) {
                 if (o.node->op()->tflag == tt) ordered_before = true;

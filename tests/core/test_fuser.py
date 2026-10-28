@@ -197,7 +197,7 @@ class TestFuseIntoReduce(JittorTestCase):
         sources = []
         for record in rep[1:]:
             try:
-                with open(record[1]) as f:
+                with open(record[1], encoding="utf-8") as f:
                     sources.append(f.read())
             except (OSError, TypeError, IndexError):
                 continue

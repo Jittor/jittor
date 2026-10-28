@@ -12,6 +12,7 @@ import tempfile
 import unittest
 
 from _helpers.child_process import run_python_child
+from _helpers import vmap_state
 
 
 #: Modules preflight and the lazy shim may import: the standard library, and
@@ -120,6 +121,8 @@ class TestRuntimeCompositionStructure(unittest.TestCase):
                 self.assertIs(pickle.loads(legacy), implementation)
 
     def test_compat_composition_keeps_native_core_implementations_available(self):
+        if vmap_state.batching_patches_installed():
+            raise unittest.SkipTest(vmap_state.skip_reason())
         import jittor
         import torch
         from jittor._runtime import core_api

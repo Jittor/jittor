@@ -17,7 +17,8 @@ def _policies(cuda=False):
         inventory = jt.introspection.capabilities.devices("cuda")
         if not inventory.capability.enabled or not inventory.count:
             pytest.skip("accelerator prerequisite: real CUDA required")
-    options = dict(float32_matmul_precision="highest", use_tensorcore=0,
+    options = dict(float32_matmul_precision="highest",
+                   float32_cudnn_precision="highest", use_tensorcore=0,
                    auto_flush_ops=0)
     # A CPU-only core has no `cuda_allow_tf32`/`cuda_allow_cudnn_tf32` to write
     # (flag binding generation drops `cuda*` names without CUDA; see
@@ -38,7 +39,7 @@ def _policies(cuda=False):
             state.matmul_refinement = saved[2]
 
 
-def test_native_combined_setter_and_frontend_domains_restore_independently():
+def test_native_and_frontend_domains_restore_independently():
     import jittor as jt
     import torch
     from jittor.compat.torch.frontend import tensor_frontend
@@ -48,6 +49,9 @@ def test_native_combined_setter_and_frontend_domains_restore_independently():
         torch.backends.cudnn.allow_tf32 = False
         assert tuple(jt.core.float32_precision_state()) == ("highest", "highest")
         with jt.runtime.scope(float32_matmul_precision="high"):
+            # One native flag per domain: the matmul scope leaves cuDNN alone.
+            assert tuple(jt.core.float32_precision_state()) == ("high", "highest")
+        with jt.runtime.scope(float32_matmul_precision="high", float32_cudnn_precision="high"):
             assert tuple(jt.core.float32_precision_state()) == ("high", "high")
             assert torch.get_float32_matmul_precision() == "medium"
             assert not torch.backends.cudnn.allow_tf32
@@ -91,7 +95,7 @@ def test_pending_matmul_conv_keep_their_frontend_policy_after_switches():
         torch.set_float32_matmul_precision("medium")
         torch.backends.cudnn.allow_tf32 = True
         medium_mm = torch.matmul(torch.tensor(a, device="cuda"), torch.tensor(b, device="cuda"))
-        with jt.runtime.scope(float32_matmul_precision="high"):
+        with jt.runtime.scope(float32_matmul_precision="high", float32_cudnn_precision="high"):
             native_mm = jt.matmul(jt.array(a), jt.array(b))
             native_conv = jt.nn.conv2d(jt.array(x), jt.array(w))
             with jt.log_capture_scope(log_silent=1, log_v=0,

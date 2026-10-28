@@ -138,7 +138,7 @@ CachingBlockPool::Key CachingBlockPool::get_key(CachingBlock* block) {
     return Key((size_t)block->size, (size_t)block->origin_size, (size_t)block->id);
 }
 
-// TEMP DIAGNOSTIC (KI-EXEC-007): gate for the per-id event log below.
+// TEMP DIAGNOSTIC (the shared-parameter storage race): gate for the per-id event log below.
 static bool ki007_trace_on() {
     static const bool on = getenv("KI007_TRACE") != nullptr;
     return on;
@@ -208,7 +208,7 @@ CachingBlock* BlockIdSpace::get_occupied(size_t allocation) {
                 for (auto& e : it->second) extra << "\n    " << e;
             // Who is issuing *this* free. The ledger says who released the id
             // before; this says who is releasing it again, and the two
-            // together are what pinned KI-EXEC-007.
+            // together are what pinned the shared-parameter storage race.
             print_trace();
         } else {
             extra << ". Set KI007_TRACE=1 to record who released it.";

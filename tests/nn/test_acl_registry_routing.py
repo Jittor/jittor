@@ -203,6 +203,10 @@ def test_layer_norm_keeps_affine_parameters_and_validates_before_dispatch(routin
     # dispatch to learn that one of them could never match.
     requires_grad = {"value": True}
     ns["_output_requires_grad"] = lambda *args: requires_grad["value"]
+    # layer_norm asks the shared AMP half predicate (imported from
+    # nn/functional/_amp.py); the routing namespace carries the extracted
+    # definitions only, so bind the non-halving answer here.
+    ns["_amp_prefers_half"] = lambda: False
     _definitions("nn/functional/normalization.py",
                  ["_restore_half_dtype", "layer_norm"], ns)
     routing.jt.nn.layer_norm = ns["layer_norm"]
@@ -240,7 +244,7 @@ def test_matmul_bmm_and_transpose_reuse_existing_keys(routing):
              # module-level helper rather than three copies of the same
              # `flag_scope` call, so it has to be extracted alongside them or
              # every routing call below dies in `NameError`.
-             "_contraction_scope",
+             "_contraction_scope", "_both_half",
              "matmul", "matmul_transpose", "bmm", "bmm_transpose"]
     ns = _definitions("nn/functional/matrix.py", names, routing.namespace)
     routing.jt.nn.matmul = ns["matmul"]

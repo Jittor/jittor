@@ -65,6 +65,17 @@ class _FamilyChecks(object):
             self._check(tensor.remainder(divisor), np.mod(reference, divisor),
                         "remainder({0})".format(divisor))
 
+    def test_remainder_function_form_takes_the_sign_of_the_divisor(self):
+        # PEFT's CPT prompt encoder calls the functional spelling
+        # (`torch.remainder(tensor, 4)`), which the shim only published as a
+        # Tensor method.
+        tensor = self._tensor(_DIVIDENDS)
+        reference = _DIVIDENDS.astype("float64")
+        for divisor in _DIVISORS:
+            self._check(torch.remainder(tensor, divisor),
+                        np.mod(reference, divisor),
+                        "torch.remainder({0})".format(divisor))
+
     def test_fmod_and_remainder_disagree_on_mixed_signs(self):
         """The guard against implementing one as the other."""
         tensor = self._tensor(_DIVIDENDS)

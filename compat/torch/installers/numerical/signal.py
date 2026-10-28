@@ -11,8 +11,9 @@ def hann_window(window_length, periodic=True, *, dtype=None, device=None,
     from ...types import _dtype_to_str
     owner = compatibility_owner(jt)
     selected = _dtype_to_str(dtype if dtype is not None else owner.get_default_dtype())
-    if selected not in ("float16", "bfloat16", "float32", "float64"):
-        raise RuntimeError("hann_window requires a floating point dtype")
+    if selected not in ("float16", "bfloat16", "float32", "float64",
+                        "complex64", "complex128"):
+        raise RuntimeError("hann_window requires a floating point or complex dtype")
     length = int(window_length)
     if length <= 1:
         window = np.ones(max(length, 0), np.float64)
@@ -35,9 +36,12 @@ def kaiser_window(window_length, periodic=True, beta=12.0, *, dtype=None,
     from ...types import _dtype_to_str
     owner = compatibility_owner(jt)
     selected = _dtype_to_str(dtype if dtype is not None else owner.get_default_dtype())
-    if selected not in ("float16", "bfloat16", "float32", "float64"):
-        raise RuntimeError("kaiser_window requires a floating point dtype")
+    if selected not in ("float16", "bfloat16", "float32", "float64",
+                        "complex64", "complex128"):
+        raise RuntimeError("kaiser_window requires a floating point or complex dtype")
     length = int(window_length)
+    if length < 0:
+        raise RuntimeError("kaiser_window requires non-negative window_length, got %d" % length)
     if length <= 1:
         window = np.ones(max(length, 0), np.float64)
     else:

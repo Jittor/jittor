@@ -23,14 +23,17 @@ namespace jittor {
 #ifndef JIT
 
 static auto make_cublas_batched_matmul = op_constructor<VarPtr, Var*, Var*, bool, bool>("cublas_batched_matmul");
+static auto make_unary = op_constructor<VarPtr, Var*, NanoString>("unary");
 
 CublasBatchedMatmulOp::CublasBatchedMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b)
     : a(a), b(b), trans_a(trans_a), trans_b(trans_b) {
     // TODO: support int8 * int8
-    USER_CHECK(a->dtype().is_float() && b->dtype().is_float())
-        << "cublas batched matmul requires floating-point inputs (float16/float32/float64),"
-           " but got a:" << a->dtype() << "b:" << b->dtype()
-        << "(complex64 batched matmul routes through the reindex path in nn.matmul instead).";
+    bool complex_pair = a->dtype().is_complex() || b->dtype().is_complex();
+    USER_CHECK((a->dtype().is_float() && b->dtype().is_float())
+               || (complex_pair && a->dtype() == b->dtype()))
+        << "cublas batched matmul requires floating-point inputs (float16/float32/float64) or"
+           " two operands of one complex dtype (complex64/complex128), but got a:"
+        << a->dtype() << "b:" << b->dtype();
     // TODO: support diffrent input type
     USER_CHECK(a->dtype().dsize() == b->dtype().dsize())
         << "matmul inputs must have the same dtype, but got a:" << a->dtype() << "b:" << b->dtype();
@@ -61,18 +64,26 @@ VarPtr CublasBatchedMatmulOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     // cotangent for a half/bf16 product; match the saved operand's dtype.
     VarPtr dout_cast = cast_operand_to_compute_dtype(dout, (v_index == 0 ? b : a)->dtype());
     if (dout_cast) dout = dout_cast.ptr;
+    // Complex: the other operand enters conjugated (dA = dC op(B)^H,
+    // dB = op(A)^H dC), exactly as in CublasMatmulOp::grad.
+    Var* other = v_index == 0 ? b : a;
+    VarPtr other_conj;
+    if (other->dtype().is_complex()) {
+        other_conj = make_unary(other, ns_conj);
+        other = other_conj.ptr;
+    }
     if (v_index == 0) {
         if (trans_a)
-            return make_cublas_batched_matmul(b, dout, trans_b, 1);
+            return make_cublas_batched_matmul(other, dout, trans_b, 1);
         else
             // da = dc*b^T
-            return make_cublas_batched_matmul(dout, b, 0, trans_b^1);
+            return make_cublas_batched_matmul(dout, other, 0, trans_b^1);
     } else {
         if (trans_b)
-            return make_cublas_batched_matmul(dout, a, 1, trans_a);
+            return make_cublas_batched_matmul(dout, other, 1, trans_a);
         else
             // db = a^T*dc
-            return make_cublas_batched_matmul(a, dout, trans_a^1, 0);
+            return make_cublas_batched_matmul(other, dout, trans_a^1, 0);
     }
 }
 
@@ -153,9 +164,10 @@ void CublasBatchedMatmulOp::jit_run() {
     bool has_bf16 = a->dtype() == ns_bfloat16
         || b->dtype() == ns_bfloat16 || c->dtype() == ns_bfloat16;
     bool has_fp64 = a->dtype() == ns_float64
-        || b->dtype() == ns_float64 || c->dtype() == ns_float64;
+        || b->dtype() == ns_float64 || c->dtype() == ns_float64
+        || c->dtype() == ns_complex128;
     // a: [b,n,m], b: [b,m,k], c: [b,n,k]
-    CublasGemmMode mode = cublas_gemm_mode(has_fp16, has_bf16, has_fp64);
+    CublasGemmMode mode = cublas_gemm_mode(has_fp16, has_bf16, has_fp64, c->dtype().is_complex());
     auto computeType = mode.compute;
     auto algo = mode.algo;
     if (mode.typed_alpha) {

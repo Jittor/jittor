@@ -15,32 +15,26 @@ struct Slice {
     int64 start, stop, step, mask;
     inline void fill(int64 size) {
         if (step>0) {
-            if (mask&2) 
-                stop = size;
-            else if (stop<0)
-                stop += size;
-            else
-                stop = std::min(size, stop);
+            if (mask&1) start = 0;
+            else if (start<0) start = std::max((int64)0, start+size);
+            else start = std::min(start, size);
+            if (mask&2) stop = size;
+            else if (stop<0) stop = std::max((int64)0, stop+size);
+            else stop = std::min(stop, size);
         } else {
             if (mask&1) start = size-1;
+            else if (start<0) start = std::max((int64)-1, start+size);
+            else start = std::min(start, size-1);
             if (mask&2)
                 stop = -1;
             else if (stop<0)
-                stop = std::max((int64)0, stop+size);
-        }
-        if (start<0) {
-            start += size;
-            if (start<0) {
-                // over-negative start (e.g. start=-100 on size=8): the single
-                // start+=size above cannot make it non-negative. Clamp like
-                // numpy/torch: forward slices start at 0, reverse slices start
-                // "before the beginning" (-1) -> empty range.
-                start = step>0 ? 0 : -1;
-            }
+                stop = std::max((int64)-1, stop+size);
+            else stop = std::min(stop, size-1);
         }
         mask = 0;
-        ASSERT(start==stop || (start>=0 && stop>=-1 && start<size && stop<=size))
-            << "slice overflow:" << start << stop << step;
+        ASSERT(step>0 ? (start>=0 && start<=size && stop>=0 && stop<=size)
+                      : (start>=-1 && start<size && stop>=-1 && stop<size))
+            << "slice overflow:" << start << stop << step << "size:" << size;
     }
 };
 

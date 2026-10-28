@@ -67,7 +67,10 @@ def array(data, dtype=None):
         data = list(data)                       # NB: `int` is shadowed by the dtype here
     if isinstance(data, core.Var):
         if dtype is None:
-            ret = data.clone()
+            # A new Var over the same storage, as before `Var.clone()` started
+            # copying: `torch.as_tensor` in the compatibility layer aliases
+            # through here.
+            ret = ops.clone(data)
         else:
             ret = cast(data, dtype)
     elif dtype is not None:
@@ -97,6 +100,8 @@ class amp_flags:
     fails if they drift.
     """
 
+    #: disable every automatic mixed-precision preference in a scoped opmath path
+    disabled = 0
     #: force float32 for ops whose inputs are all non-scalar floats
     prefer32 = 1
     #: force float16 (bfloat16 if an input is bfloat16) for the same
@@ -431,7 +436,12 @@ def ones(*shape, dtype="float32"):
     for dim in shape:
         if dim < 0:
             raise RuntimeError(f"Trying to create tensor with negative dimension {dim}: {shape}")
-    return _constant_scalar(1, dtype).broadcast(shape)
+    # A factory result is a tensor, not the wrapped number it was built from:
+    # without `_as_tensor` the rank-zero constant's `_is_scalar` survives the
+    # broadcast and `jt.ones(4) * 0.1` promotes like the Python `1`.
+    # Placement still follows the operand's device because
+    # `_is_constant` carries through the broadcast.
+    return _constant_scalar(1, dtype).broadcast(shape)._as_tensor()
 
 @contextmanager
 def placement_scope_like(x):
@@ -541,7 +551,8 @@ def zeros(*shape, dtype="float32"):
     for dim in shape:
         if dim < 0:
             raise RuntimeError(f"Trying to create tensor with negative dimension {dim}: {shape}")
-    return _constant_scalar(0, dtype).broadcast(shape)
+    # See `ones`: the result is a tensor, not a wrapped number.
+    return _constant_scalar(0, dtype).broadcast(shape)._as_tensor()
 
 def new_zeros(x, size):
     with device_scope_like(x):
@@ -576,7 +587,8 @@ def full(shape,val,dtype="float32"):
     for dim in shape:
         if dim < 0:
             raise RuntimeError(f"Trying to create tensor with negative dimension {dim}: {shape}")
-    return _constant_scalar(val, dtype).broadcast(shape)
+    # See `ones`: the result is a tensor, not a wrapped number.
+    return _constant_scalar(val, dtype).broadcast(shape)._as_tensor()
 
 def new_full(x, size, val):
     with device_scope_like(x):
@@ -712,7 +724,10 @@ def norm(x, p=2, dim=-1, keepdims=False, eps=1e-30, keepdim=False):
     if p==2:
         # |x|**2, not x*x: for a complex x the square is complex and has no
         # order to clamp with `maximum`. The norm is real either way.
-        sq = x.real.sqr() + x.imag.sqr() if x.dtype.is_complex() else x.sqr()
+        # Re(x * conj x), not |x|**2 through `abs`: abs's backward is z/|z|,
+        # NaN at an exact zero, which a state vector is mostly made of. Three
+        # native ops that fuse into one kernel.
+        sq = (x * x.conj()).real if x.dtype.is_complex() else x.sqr()
         return sq.sum(dim, keepdim).maximum(eps).sqrt()
 
 Var.norm = norm
@@ -1117,7 +1132,7 @@ def _clamp_cpu(x, min_v=None, max_v=None):
         keep = value >= bound if lower else value <= bound
         result = jt.ternary(keep, value, bound)
         if "float" in _jittor_dtype_name(value.dtype):
-            nan_value = value.clone().stop_grad()
+            nan_value = ops.clone(value).stop_grad()  # read-only: a view is enough
             result = jt.ternary(value != value, nan_value, result)
         return result
 

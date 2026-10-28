@@ -1,11 +1,11 @@
 # 输入临时冻结不应抹掉已记录的 grad_fn
 
-- Status: verified for the stated CPU/CUDA contracts; KI-COMPAT-004 remains open.
-- Date: 2026-10-16
-- Production source: `819182d1b333b4f300f8c530ecb97c3a96287084`.
-- Baseline before fix: `dfe462aa10bb3abc6aedce30c11e54a5b42867e7`.
-- Owner: native autograd / Torch compatibility maintainers.
-- Review when: producer queries, edge snapshots, reversible requires-grad policy or alias creation changes.
+- 状态：已验证所述 CPU/CUDA 契约；KI-COMPAT-004 仍未关闭。
+- 日期：2026-10-16
+- 生产源码：`819182d1b333b4f300f8c530ecb97c3a96287084`.
+- 修复前基线：`dfe462aa10bb3abc6aedce30c11e54a5b42867e7`.
+- 维护者：原生 autograd / Torch 兼容性维护者。
+- 复查条件：生产者查询、边快照、可逆 requires-grad 策略或别名创建发生变化。
 
 ## 问题与修复
 
@@ -29,13 +29,13 @@
 | 原生 `test_backward_leaf_query.py`（含 C++ JIT tests） | 20 passed | 20 passed |
 | 独立 Torch 同六个新断言 | 6 passed，2.11.0+cpu | 6 passed，2.11.0+cu128 |
 
-CUDA 共享回归耗时152.79秒，原生查询4.65秒；这些是验证耗时，不授予性能结论。
+CUDA 共享回归耗时 152.79 秒，原生查询 4.65 秒；这些是验证耗时，不授予性能结论。
 候选的 shim 专属 fixture 使用 fallback=error 并同步实际张量；每个新梯度检查实际设备。
 单测缓存正常复用，未复制编译二进制；与下游 benchmark 的缓存分离。
 
 Canonical core：**322 passed / 42 skipped / 1 existing xfail**，两个模式退出均为零。
-完整 `tests/structure + compat/tests/structure`：**1622 passed / 6 skipped**，224.75秒。
-单测针对冻结的五文件工作区运行，其字节在提交前逐文件核实与819182d1b一致。
+完整 `tests/structure + compat/tests/structure`：**1622 passed / 6 skipped**，224.75 秒。
+单测针对冻结的五文件工作区运行，其字节在提交前逐文件核实与 819182d1b 一致。
 
 ## 复现与原始证据
 
@@ -59,10 +59,11 @@ JITTOR_TORCH_SHIM=0 <jittor-python> -m pytest -q tests/core/test_backward_leaf_q
 未版本化证据在 `$JITTOR_LAB_ROOT/_state/tensor-alias-guards-dfe/20261016/`：
 `directed-before.log`、`oracle-recorded-{cpu,cuda}-v1.log`、`shared-{cpu,cuda}-v1.log`、
 `native-{cpu,cuda}-v1.log`、`core-v1.log`、`structure-v1.log`、完整源指纹及原始诊断脚本。
-复查32个真实生命周期组合，候选差异由18个降为17个；修复的源冻结场景与独立 Torch 完全一致。
+复查 32 个真实生命周期组合，候选差异由 18 个降为 17 个；修复的源冻结场景与独立 Torch
+完全一致。
 
 ## 仍未关闭
 
 no-grad 别名在源或别名写入后的拒绝保护、从冻结源继承的动态解冻标志，以及非叶 requires-grad
-修改规则仍有差异，KI-COMPAT-004保持开放。本次不授全部view语义、完整C-extension ABI、
-其他加速后端或未执行下游消费者支持，也不代表R33的PR维护者处置已经完成。
+修改规则仍有差异，KI-COMPAT-004 保持开放。本次不授予全部 view 语义、完整 C-extension ABI、
+其他加速后端或未执行下游消费者支持，也不代表 R33 的 PR 维护者处置已经完成。

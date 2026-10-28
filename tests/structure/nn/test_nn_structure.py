@@ -29,6 +29,7 @@ import jittor
 import jittor.nn as nn
 
 from _helpers.child_process import run_python_child
+from _helpers import vmap_state
 
 
 NN_ROOT = Path(nn.__file__).resolve().parent
@@ -478,6 +479,8 @@ class TestPublicBindings(unittest.TestCase):
     """Contracts users write against directly, none of which name a file."""
 
     def test_tensor_method_bindings_stay_on_public_functions(self):
+        if vmap_state.batching_patches_installed():
+            raise unittest.SkipTest(vmap_state.skip_reason())
         for name in ("matmul", "prelu", "hardswish", "hardsigmoid", "rrelu", "log_sigmoid"):
             with self.subTest(name=name):
                 self.assertIs(getattr(jittor.Var, name), getattr(nn, name))

@@ -24,10 +24,12 @@
 //   high     tf32 accumulate              CUBLAS_COMPUTE_32F_FAST_TF32
 //   medium   bfloat16 accumulate          CUBLAS_COMPUTE_32F_FAST_16BF
 //
-// `float32_matmul_precision` is the policy. The three flags above are kept as
-// deprecated per-domain overrides: each can only *raise* the tier for the
-// domain it names, so every value they had keeps meaning what it meant, and
-// leaving them alone (the default) makes the policy the whole answer.
+// `float32_matmul_precision` (default `highest`) and `float32_cudnn_precision`
+// (default `high`) are the policy, one per library, with torch's defaults. The
+// three flags above are kept as deprecated per-domain overrides: each can only
+// *raise* the tier for the domain it names, so every value they had keeps
+// meaning what it meant, and leaving them alone (the default) makes the policy
+// the whole answer.
 //
 // The tier applies to float32 operands only. float16 and bfloat16 always
 // accumulate in float32 -- that was already the default for two of the three
@@ -46,6 +48,7 @@ enum Float32PrecisionTier {
 };
 
 DECLARE_FLAG(string, float32_matmul_precision);
+DECLARE_FLAG(string, float32_cudnn_precision);
 DECLARE_FLAG(int, use_tensorcore);
 DECLARE_FLAG(int, cuda_allow_tf32);
 DECLARE_FLAG(int, cuda_allow_cudnn_tf32);

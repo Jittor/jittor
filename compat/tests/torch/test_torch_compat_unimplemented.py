@@ -205,15 +205,33 @@ class TestAutocast(StubPolicyBase):
             out = torch.nn.functional.conv3d(x, weight, bias, padding=1)
         self.assertEqual(str(out.dtype), "float16")
 
-    @unittest.expectedFailure
     def test_autocast_conv2d_module_keeps_the_compute_dtype_through_a_bias(self):
-        # KI-COMPAT-013: under autocast a Conv2d module with a bias returns float32.
-        module = torch.nn.Conv2d(4, 8, 3, padding=1, bias=True)
-        x = jt.random((1, 4, 8, 8), dtype="float32")
-        with torch.autocast("cuda", dtype=torch.float16):
-            out = module(x)
-        # The module hands back a shim tensor, whose dtype prints torch-style.
-        self.assertEqual(str(out.dtype).replace("torch.", ""), "float16")
+        """A module's bias add follows the autocast dtype.
+
+        A torch module left at its default CPU placement, called with an
+        unplaced accelerator tensor, used to put the forward's intermediates
+        on the accelerator while its parameters stayed on the host; the
+        portable convolution then refused the mixed placement. The forward
+        follows the module's own placement now, so the contraction and the
+        bias add it performs run in the autocast dtype, as torch's does.
+        """
+        for use_cuda in (0, 1):
+            if use_cuda and not _test_capability.any_accelerator_enabled(backend=jt):
+                continue
+            with jt.flag_scope(use_cuda=use_cuda):
+                x = jt.random((1, 4, 8, 8), dtype="float32")
+                # The module at torch's default CPU placement.
+                module = torch.nn.Conv2d(4, 8, 3, padding=1, bias=True)
+                with torch.autocast("cuda", dtype=torch.float16):
+                    out = module(x)
+                # The module hands back a shim tensor, whose dtype prints torch-style.
+                self.assertEqual(str(out.dtype).replace("torch.", ""), "float16")
+                if use_cuda:
+                    # And on the accelerator, where cuDNN takes the convolution.
+                    module = torch.nn.Conv2d(4, 8, 3, padding=1, bias=True).cuda()
+                    with torch.autocast("cuda", dtype=torch.float16):
+                        out = module(x)
+                    self.assertEqual(str(out.dtype).replace("torch.", ""), "float16")
 
     def test_autocast_conv_is_not_changed_without_amp(self):
         """No register, no cast: the bias add stays float32."""

@@ -1,9 +1,8 @@
-# Native ZeRO stage-one optimizer
+# 原生 ZeRO 第一阶段优化器
 
-`jittor.distributed.ZeroRedundancyOptimizer` shards **optimizer state during
-training**. Each rank instantiates an existing native Adam, AdamW or SGD for
-only its owned parameters. Non-owned moments are never constructed. Model
-parameters and gradients remain replicated; this is ZeRO stage 1.
+`jittor.distributed.ZeroRedundancyOptimizer` 在**训练期间分片优化器状态**。每个 rank 只为
+自己拥有的参数实例化一个既有的原生 Adam、AdamW 或 SGD。不属于自己的动量矩从不构建。
+模型参数与梯度保持复制——这是 ZeRO 第一阶段。
 
 ```python
 import jittor as jt
@@ -27,62 +26,46 @@ resumed = ZeroRedundancyOptimizer(
 checkpoint.load_training_state(fresh, resumed, "checkpoint")
 ```
 
-Every rank executes these operations in the same order, and the checkpoint
-directory must be shared by all ranks. The public native launcher supplies
-the actual CUDA/NCCL workers. CPU and CUDA singleton use does not require a
-distributed Store; the current multi-rank implementation explicitly requires
-CUDA/NCCL WORLD and a native Store. Subgroups, HCCL/MPI multi-rank training and
-world-size migration are outside this implementation's validated contract.
+每个 rank 按相同顺序执行这些操作，checkpoint 目录必须由所有 rank 共享。公开的原生启动器
+提供真实的 CUDA/NCCL worker。CPU 与 CUDA 单进程使用不需要分布式 Store；当前的多 rank
+实现明确要求 CUDA/NCCL WORLD 与原生 Store。子组、HCCL/MPI 多 rank 训练以及 world-size
+迁移都在本实现已验证的契约之外。
 
-## Ownership and communication
+## 归属与通信
 
-Parameters are assigned whole, in descending element count, to the least
-loaded rank, with stable group/parameter-order ties. Small models may give a
-rank no parameters; that rank creates empty algorithm state lists and still
-participates in gradient synchronization and owner broadcasts. Whole-parameter
-assignment does not guarantee balanced per-rank state for one large parameter.
+参数按元素数降序整块分配给当前负载最轻的 rank，分组/参数顺序相同时结果稳定。小模型可能
+让某个 rank 分不到参数；该 rank 会建立空的算法状态列表，仍然参与梯度同步与所有者广播。
+整块分配不保证单个大参数在逐 rank 状态上均衡。
 
-The wrapper's full `param_groups` belong to the native base Optimizer, which
-owns backward, gradient accumulation, clipping and the existing DDP reducer.
-`local_optimizer` exposes the existing native algorithm's owned state for
-inspection. Updates call its `step()` with no loss: they perform no second
-backward or gradient reduction. Group overrides and current defaults are
-forwarded, including removal of an override. New parameter groups, changing
-parameter bindings/shapes/dtypes and repeated parameter aliases in optimizer
-groups are refused; pass the module's deduplicated parameters for tied weights.
-Rank agreement expects JSON-serializable host hyperparameters.
+包装器的完整 `param_groups` 属于原生基类 Optimizer，由它负责反向、梯度累加、裁剪以及
+既有的 DDP reducer。`local_optimizer` 暴露既有原生算法所拥有的状态供检查。更新时调用它
+的 `step()` 且不传 loss：因此不再做一次反向或梯度归约。分组覆盖与当前默认值会被转发，
+包括移除某项覆盖。新增参数分组、改变参数绑定/形状/dtype、以及优化器分组里重复的参数
+别名都会被拒绝；对 tied weights 请传入 module 去重后的参数。rank 间一致性要求超参数是
+可 JSON 序列化的主机侧值。
 
-Before asymmetric owner updates, all ranks finish the exact collective-gradient
-roots with `weak_sync=False`. Parameters are then broadcast in parameter order
-from their owners. Store agreement checks rank configuration and trainability;
-peers finish their last RPC with the native `arrive` contract before the
-server-hosting rank enters a collective. Rank zero cleans the temporary keys.
-These explicit boundaries favor correctness; no throughput claim is made.
+在做非对称的所有者更新之前，所有 rank 都以 `weak_sync=False` 完成精确的集合梯度根。
+随后参数按参数顺序从各自的所有者广播。Store 一致性检查校验 rank 配置与可训练性；peer
+在托管 server 的 rank 进入集合通信之前，以原生 `arrive` 契约完成它们最后一次 RPC。
+rank 零清理临时键。这些显式边界以正确性为先；这里不声称吞吐。
 
-DDP's existing `no_sync` contract is preserved: intermediate microbatches can
-accumulate locally, and a synchronized backward must precede the update.
-Native DDP fixes trainability when constructed. Construct a resumed DDP model
-with the saved trainability; standalone ZeRO supports late unfreezing while
-retaining the existing algorithm's per-parameter first-touch rules.
+DDP 既有的 `no_sync` 契约得到保留：中间的 micro batch 可以在本地累加，而更新之前必须有
+一次同步的反向。原生 DDP 在构造时固定可训练性。用保存下来的可训练性构造续跑用的 DDP
+模型；独立的 ZeRO 支持延迟解冻，同时保留既有算法逐参数的 first-touch 规则。
 
-## Checkpoints and precision
+## checkpoint 与精度
 
-The native training checkpoint saves full model state, ordered FQN bindings,
-trainability and RNG through their existing owners, and saves optimizer state
-as `RankLocal` owned tensors. Partition metadata records the algorithm, rank,
-world size, ownership and parameter shapes/dtypes. Loading validates this
-metadata and local state before mutating model parameters. An absent saved
-group override also removes any stale fresh-owner override. Pending gradient
-accumulation remains explicitly unsupported for training checkpoints.
+原生训练 checkpoint 通过各自既有的所有者保存完整模型状态、有序 FQN 绑定、可训练性与
+RNG，并把优化器状态保存为 `RankLocal` 拥有的张量。分片元数据记录算法、rank、world size、
+所有权以及参数形状/dtype。加载会在修改模型参数之前校验这些元数据与本地状态。保存时
+缺失的分组覆盖也会移除新所有者上任何陈旧的覆盖。训练 checkpoint 仍然明确不支持挂起的
+梯度累加。
 
-The initial verified scope is native FP32 Adam/AdamW/SGD on CPU singleton and
-single-host two-rank CUDA/NCCL, plus native BF16 parameter/momentum SGD with
-raw BF16 checkpoint preservation. This BF16 SGD check does not establish AMP
-with FP32 master parameters or BF16 Adam/AdamW support. Active calculations
-are observed on CUDA before NumPy I/O; untouched frozen zero state is checked
-separately after explicitly materializing its declared storage placement.
+最初验证的范围是 CPU 单进程与单主机两 rank CUDA/NCCL 上的原生 FP32 Adam/AdamW/SGD，
+外加原生 BF16 参数/动量 SGD 并保留原始 BF16 checkpoint。这次 BF16 SGD 检查不构成对
+FP32 master 参数的 AMP，或对 BF16 Adam/AdamW 支持的证明。活动的计算在 NumPy I/O 之前
+于 CUDA 上被观测；未被触碰的冻结零状态则在显式实体化其声明的存储放置之后单独检查。
 
-This API does not supply parameter/gradient sharding, native FSDP, TP, ZeRO
-stages 2/3, elastic resharding, or two-host rendezvous acceptance. The broader
-distributed capability request remains partially implemented. See the
-[verification report](../results/2026-10-15-native-zero-optimizer.md).
+这个 API 不提供参数/梯度分片、原生 FSDP、TP、ZeRO 第二/第三阶段、弹性重新分片，或多
+主机 rendezvous 验收。更广的分布式能力需求仍只是部分实现。见
+[验证报告](../results/2026-10-15-native-zero-optimizer.md)。

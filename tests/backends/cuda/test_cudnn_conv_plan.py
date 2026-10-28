@@ -31,7 +31,7 @@ def _reference(x, w, stride, padding, dilation, groups):
         return y.numpy(), gx.numpy(), gw.numpy(), r.numpy()
 
 
-@_test_preserve_policy(jt, 'use_cuda', 'cuda_allow_cudnn_tf32')
+@_test_preserve_policy(jt, 'use_cuda', 'cuda_allow_cudnn_tf32', 'float32_cudnn_precision')
 @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No cuda found")
 class TestCudnnConvPlan(unittest.TestCase):
     def setUp(self):
@@ -52,7 +52,9 @@ class TestCudnnConvPlan(unittest.TestCase):
             x = rng.randn(n, c, h, h).astype("float32")
             w = rng.randn(k, c // groups, r, r).astype("float32")
             y_ref, gx_ref, gw_ref, dout = _reference(x, w, stride, padding, dilation, groups)
-            _test_policy_stack.enter_context(jt.runtime.scope(cuda_allow_cudnn_tf32=int(tf32)))
+            _test_policy_stack.enter_context(jt.runtime.scope(
+                cuda_allow_cudnn_tf32=int(tf32),
+                float32_cudnn_precision="high" if tf32 else "highest"))
             xd = jt.array(x).cast(dtype); wd = jt.array(w).cast(dtype)
             if nhwc:
                 xd = xd.transpose(0, 2, 3, 1); wd = wd.transpose(0, 2, 3, 1)

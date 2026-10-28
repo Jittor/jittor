@@ -9,6 +9,13 @@
 
 namespace jittor {
 
+// KernelIR parses the fused-kernel source assembled from operators' `jit_run`
+// bodies. A custom operator's body is text its author passed to
+// `jt.compile_custom_op`, and the JIT half of that source is not compiled by
+// the C++ compiler until after this parser runs, so a source-scanning failure
+// below is the caller's construct and reports as USER_CHECK/USER_ERROR. The
+// checks that guard this parser's own containers, the IR node shape, or what a
+// pass may produce stay ASSERT: their input is Jittor's own code.
 static uint source_line_at(const string& src, uint pos) {
     uint line = 1;
     for (uint i=0; i<pos && i<src.size(); i++)
@@ -25,8 +32,9 @@ static uint quoted_literal_end(const string& src, uint pos, uint end) {
         }
         if (src[pos++] == quote) return pos;
     }
-    CHECK(0) << "KernelIR parse error at line" << source_line_at(src, pos)
-        << ": unterminated C++ quoted literal";
+    USER_ERROR << "unterminated C++ quoted literal in JIT source at line"
+        << source_line_at(src, pos)
+        << "; close the string or character literal";
     return end;
 }
 
@@ -40,9 +48,9 @@ static uint pragma_end(const string& src, uint pos, uint end) {
     uint start = pos;
     pos += 7;
     while (pos<end && (src[pos]==' ' || src[pos]=='\t')) pos++;
-    CHECK(pos<end && src[pos]=='(')
-        << "KernelIR parse error at line" << source_line_at(src, start)
-        << ": _Pragma must be followed by a parenthesized string";
+    USER_CHECK(pos<end && src[pos]=='(')
+        << "_Pragma in JIT source must be followed by a parenthesized string"
+        << " (line " << source_line_at(src, start) << ")";
     int depth = 0;
     while (pos<end) {
         if (src[pos]=='\'' || src[pos]=='\"') {
@@ -53,8 +61,8 @@ static uint pragma_end(const string& src, uint pos, uint end) {
         if (src[pos]==')' && --depth==0) return pos+1;
         pos++;
     }
-    CHECK(0) << "KernelIR parse error at line" << source_line_at(src, start)
-        << ": unmatched _Pragma parentheses";
+    USER_ERROR << "unmatched _Pragma parentheses in JIT source at line"
+        << source_line_at(src, start) << "; close the _Pragma call";
     return end;
 }
 
@@ -308,17 +316,28 @@ void KernelIR::parse_for_loop(const string& s, bool raw) {
             else if (count==2)
                 lvalue = s.substr(i,j-i);
             else if (count==3)
-                ASSERT(startswith(s, "0", i));
+                USER_CHECK(startswith(s, "0", i))
+                    << "Jittor's fused-kernel parser only supports "
+                    << "`for (type name=0; name<range; name++)`; this loop does "
+                    << "not start at 0: " << s;
             else if (count==4)
-                ASSERT(startswith(s, lvalue, i));
+                USER_CHECK(startswith(s, lvalue, i))
+                    << "Jittor's fused-kernel parser only supports "
+                    << "`for (type name=0; name<range; name++)`; this loop's "
+                    << "condition does not use `" << lvalue << "`: " << s;
             else if (count==5)
                 rvalue = s.substr(i,j-i);
             else if (count==6)
-                ASSERT(startswith(s, lvalue, i));
+                USER_CHECK(startswith(s, lvalue, i))
+                    << "Jittor's fused-kernel parser only supports "
+                    << "`for (type name=0; name<range; name++)`; this loop's "
+                    << "increment does not update `" << lvalue << "`: " << s;
             i = j;
             count++;
         }
-        ASSERTop(count,==,7) << "Parse for loop failed:" << s;
+        USER_CHECKop(count,==,7)
+            << "Jittor's fused-kernel parser only supports "
+            << "`for (type name=0; name<range; name++)`, not this loop: " << s;
         if (startswith(rvalue, "range"))
             attrs[kir::loop_id] = rvalue.substr(5);
     } else
@@ -330,7 +349,9 @@ void KernelIR::parse_for_loop(const string& s, bool raw) {
     while (r>=0 && s[r]!=')') r--;
     ASSERT(l<r);
     auto vs = split(s.substr(l+1, r-l-1), ";");
-    ASSERTop(vs.size(),==,3) << s;
+    USER_CHECKop(vs.size(),==,3)
+        << "the for header in JIT source must have two semicolons, as in "
+        << "`for (type name=0; name<range; name++)`: " << s;
     for (auto& s : vs)
         push_back(s+";", &inner);
 }
@@ -770,7 +791,8 @@ KernelIR::KernelIR(const string& src, bool raw) {
                 attrs[kir::code] = src;
                 type = KernelIRType::macro;
                 auto v = split(src, " ", 3);
-                ASSERT(v.size()>1);
+                USER_CHECK(v.size()>1)
+                    << "unsupported preprocessor line in JIT source: " << src;
                 attrs[kir::lvalue] = v.at(1);
                 attrs[kir::rvalue] = v.size()>2 ? v.at(2) : "";
                 return;
@@ -800,9 +822,9 @@ KernelIR::KernelIR(const string& src, bool raw) {
             }
             k++;
         }
-        ASSERT(presum == -1)
-            << "KernelIR parse error at line" << source_line_at(src, j)
-            << src << i << j << k << end;
+        USER_CHECK(presum == -1)
+            << "unbalanced parentheses or braces in JIT source at line"
+            << source_line_at(src, j) << ": " << src;
         string s = src.substr(j, k-j);
         if (k==end && i==start) {
             if (startswith(s, "for ") || startswith(s, "if ")) {
@@ -815,9 +837,9 @@ KernelIR::KernelIR(const string& src, bool raw) {
                     if (presum==0 && s[l] == ')') break;
                     l++;
                 }
-                ASSERT(l<s.size() && presum==0)
-                    << "KernelIR parse error at line" << source_line_at(src, j)
-                    << s;
+                USER_CHECK(l<s.size() && presum==0)
+                    << "the for/if header in JIT source has no closing "
+                    << "parenthesis (line " << source_line_at(src, j) << "): " << s;
                 if (startswith(s, "for "))
                     parse_for_loop(s.substr(0, l+1), raw);
                 else {
@@ -845,7 +867,9 @@ KernelIR::KernelIR(const string& src, bool raw) {
             // func define
             if (s.size()>=2 && s.back()=='}') {
                 int l = s.find("{");
-                ASSERT(l != string::npos);
+                USER_CHECK(l != string::npos)
+                    << "unexpected '}' without a matching '{' in JIT source "
+                    << "(line " << source_line_at(src, j) << "): " << s;
                 if (startswith(s, "namespace ")) {
                     // namespace xxx {...}
                     //               l
@@ -865,18 +889,23 @@ KernelIR::KernelIR(const string& src, bool raw) {
                     attrs[kir::code] = src + ";";
                     return;
                 }
-                ASSERT(l>=0 && ll>=0 && rr>=0 && ll<rr && rr<l)
-                    << "KernelIR parse error at line" << source_line_at(src, j)
-                    << src;
+                USER_CHECK(l>=0 && ll>=0 && rr>=0 && ll<rr && rr<l)
+                    << "Jittor's fused-kernel parser cannot read this "
+                    << "brace-delimited statement as a function definition "
+                    << "(line " << source_line_at(src, j) << "): " << s;
                 // dtype func_name(args...)  {  }
                 //     y x        ll      rr l  end
                 int x = ll;
                 while (x>0 && s[x-1]!=' ') x--;
                 int y = x-1;
                 while (y>0 && s[y]==' ') y--;
-                ASSERT(0<y && y<x && x<ll)
-                    << "KernelIR parse error at line" << source_line_at(src, j)
-                    << s << y << x << ll << rr << l;
+                USER_CHECK(0<y && y<x && x<ll)
+                    << "Jittor's fused-kernel parser cannot parse `"
+                    << (x>=0 && x<ll ? s.substr(x, ll-x) : string("?"))
+                    << "` as a function definition; only `for`/`if` loops and "
+                    << "function definitions are supported, so rewrite this "
+                    << "`while`/`switch` construct as a `for` loop (line "
+                    << source_line_at(src, j) << "): " << s;
                 attrs[kir::dtype] = s.substr(0, y+1);
                 attrs[kir::lvalue] = s.substr(x, ll-x);
                 if (ll+1<rr) {
@@ -900,8 +929,9 @@ KernelIR::KernelIR(const string& src, bool raw) {
             continue;
         }
     }
-    CHECK(pending_pragmas.empty())
-        << "KernelIR parse error: _Pragma has no following statement";
+    USER_CHECK(pending_pragmas.empty())
+        << "a _Pragma in JIT source must be followed by a statement; "
+        << "this one is last";
 }
 
 

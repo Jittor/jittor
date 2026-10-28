@@ -12,8 +12,9 @@
 
 ## 文档树的规矩
 
-`docs/` 下的中文 MyST Markdown 是 Sphinx 的唯一文档源。**不要新增按语言复制的第二棵
-文档树**；仓库根目录的 `README.md` 是唯一的双语文件。
+`docs/` 下的中文 MyST Markdown 是 Sphinx 的默认文档源；每篇文档另有同目录英文页
+`X.en.md`，索引为 `index.md` / `index.en.md`。根目录使用 `README.md`（中文）与
+`README.en.md`（英文）。修改一侧时必须同步另一侧；不要新增按语言复制的第二棵文档树。
 
 每一页只属于一个栏目：使用指南 [`guides/`](guides/index.md)、机制说明
 [`notes/`](notes/index.md)、Torch 兼容 [`compatibility/`](compatibility/index.md)、
@@ -65,6 +66,5 @@ HTML、doctree 和生成的 notebook 一律写在 `$JITTOR_LAB_ROOT/_state` 之�
 
 ## 关于翻译
 
-文档源已改为中文，此前的 gettext 翻译目录（`docs/locales/zh_CN`）随之退役——它们
-翻译的是不再存在的英文原文。如果之后要提供英文版，应新建 `docs/locales/en` 目录，
-把中文作为源语言重新抽取，历史中文译文可从 Git 历史中取回作为素材。
+文档的默认源语言是中文，英文页与中文页在同目录成对维护（`X.en.md`）。此前的 gettext
+翻译目录（`docs/locales/zh_CN`）已退役；不再用 `.po` 目录承载英文版。

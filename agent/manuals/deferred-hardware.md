@@ -272,3 +272,55 @@ launcher ABI 断言全过，反向对照见下）、以及不变量式静态合�
 
 一项真机验收通过后，在对应 PR 描述里给出命令、设备型号、软件版本与结论，再把它从表和正文里删掉；
 验收中暴露的缺陷记进[已知问题总账](known-issues.md)。
+
+## 近期选入的共享数值与存储语义：ROCm / ACL 仍待真卡验收
+
+Owner：算子、autograd/storage 与对应后端维护者。状态：CPU/CUDA 定向验证不能外推到 ROCm/ACL；相关后端本次未执行。复查条件：原生 provider、编译器或共享算子/写回/捕获 owner 改动，或设备可用。
+
+先完成本页已有 ROCm / Ascend 单卡准入，再执行共享语义用例。维护入口是 `JT_BACKEND=rocm` 加 `nox -s rocm`，以及 `JT_BACKEND=acl` 加 `CANN_SET_ENV` / `nox -s npu`；不是 `run_test_suite.py --backend rocm|npu`（该工具目前只接受 CPU/CUDA）。pytest 设备标签用 `rocm` / `npu`，原生 dispatch 回报应分别是 `rocm` / `acl`。
+
+```bash
+# AMD 真卡；每次运行独立 nox/cache，首次 JIT 串行。
+JT_BACKEND=rocm JITTOR_TEST_REQUIRE_ROCM=1 JITTOR_TEST_ACCELERATOR_MIN_EXECUTED=1 nox -s rocm
+
+# Ascend 真卡；CANN_SET_ENV 由该机器预置，必须指向真实 set_env.sh。
+JT_BACKEND=acl CANN_SET_ENV="$CANN_SET_ENV" nox -s npu
+```
+
+共享原生存储的最小定向门禁可在已预置的硬件 Python 环境中运行以下命令。设置 `JITTOR_PR_DEVICE=rocm JT_BACKEND=rocm` 或 `JITTOR_PR_DEVICE=npu JT_BACKEND=acl`；ACL 先 `source "$CANN_SET_ENV"`。`JITTOR_HOME` 和 `TMPDIR` 使用 lab `_state` 下的独立目录，不与 nox、benchmark 或另一进程共用。以下命令要求最终集成已包含 saved-output regression；缺失 nodeid 应报错，不得删除以求绿。
+
+```bash
+JITTOR_TORCH_SHIM=0 PYTHONPATH=python:tests JT_USE_PARALLEL_OP_COMPILER=0 python - <<'PY'
+import os
+import numpy as np
+import pytest
+import jittor as jt
+from jittor._runtime.fallback import forbid_backend_fallbacks
+label = os.environ['JITTOR_PR_DEVICE']
+assert label in ('rocm', 'npu')
+backend = 'rocm' if label == 'rocm' else 'acl'
+assert getattr(jt.compiler, 'has_' + backend, False)
+setattr(jt.flags, 'use_' + backend, 1)
+jt.flags.use_cuda = 1
+with jt.runtime.scope(backend_fallback='error'), forbid_backend_fallbacks():
+    probe = jt.array(np.array([1., 2.], dtype='float32')) * 2
+    probe.sync(True, False)
+    selected, ordinal = jt.core.dispatch_context([probe])
+    assert selected == backend and ordinal >= 0
+    assert probe.location() == 'device'
+    np.testing.assert_array_equal(probe.numpy(), [2., 4.])
+    assert jt.core.backend_fallback_count() == 0
+    result = pytest.main(['-q', 'tests/core/test_alias_autograd_state.py::test_native_store_preserves_unmaterialized_saved_output'])
+    jt.sync_all(True)
+    assert jt.core.backend_fallback_count() == 0
+    raise SystemExit(result)
+PY
+```
+
+该门禁覆盖 contiguous/strided、direct/transitive saved-output 的四个组合，要求实际设备驻留与完整梯度对照，且不执行无关图。还需补齐如下设备定向回归，才可关闭本条：
+
+- `log1p`、Softplus 与 sigmoid tail：全元素输出、完整 VJP、FP32/FP64 和该后端声明支持的低精度范围；域边界、负尾、标量 dtype/不意外建梯度图。ROCm 必须执行原生 HIP 路径；ACL 的 `log1p` **仍保留旧 `log(1+x)` composition**，验收其兼容行为，不宣称小量精度升级。ACL 若以后升级原生实现，需单独真实设备精度证据。
+- padding 负宽裁剪/补齐与完整输入梯度，index-fill dtype 和错误域；portable/fused optimizer 保存旧 forward、参数/状态 dtype、data/detach/strided 别名与指针，以及发布梯度身份；registered-buffer 替换/更新后 replay guards。捕获仅验收后端真实公开支持的能力，unsupported 必须明确拒绝，不能以 eager/CPU fallback 冒充 capture 成功。
+- 每组核对真实 backend/ordinal、device storage、fallback 计数零，并保留执行数量；不得仅依据 import、nox 退出零或全 skip 判通过。
+
+现有 `test_log1p_softplus_precision.py`、`test_sigmoid_negative_tail_precision.py`、`test_pad_widths.py` 与部分 dtype fixtures 明确只选 CPU/CUDA，须先按维护后的 `rocm` / `npu` 路径扩展设备参数及 residency 断言，**直接设置 JITTOR_TEST_DEVICES 不会使它们获得其他后端覆盖**。OpInfo 旧 `log(1+x)` case 和上述四个存储 case 也不能替代这份数值/optimizer/replay 完整矩阵。维护者将新增精确 nodeids、实际命令、提交 SHA、通过/跳过数量和设备信息写入结果报告后，再收窄或删除本条。

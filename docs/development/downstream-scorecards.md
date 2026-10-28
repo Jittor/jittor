@@ -45,7 +45,7 @@ python -S "$scripts/audit_coverage.py" scorecard \
 未传 `--evidence` 可生成**零已验分子**的完整清单，表示本次没有可接受的新证据，不能
 解释成“历史上从没跑通过”。各轴分别报告 `X / N @ upstream SHA`，不把模型数、任务数、
 方法数相加。core/broad/tail 的抽样规则按
-[适配流程](../../agent/skills/downstream-library-adaptation/SKILL.md) 执行；报告必须列每层
+[适配流程](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/downstream-library-adaptation/SKILL.md) 执行；报告必须列每层
 场景数及未验证格，core 矩阵至少 L3。
 
 审计中的 `gate_cases` 记录共享模型 CASES；`dedicated_gates` 单独记录 DeepSpeed Engine
@@ -238,7 +238,7 @@ SCM wheel 的逐阶段严格绑定继续保留。
 工具保留 upstream tuner 的 trainable/frozen 划分，输出每步 loss、参数/输入梯度与全部参数
 轨迹，冻结参数发生变化、缺请求梯度、非有限值、device 不一致都会直接失败。它对原始
 梯度与参数做 host 快照以固定 lazy update 的语义；没有性能结论。具体双解释器命令见
-[runbook](../../agent/skills/torch-compat-repo-runbook/SKILL.md#多步训练证据)。
+[runbook](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/torch-compat-repo-runbook/SKILL.md#多步训练证据)。
 
 ## Results 报告模板
 

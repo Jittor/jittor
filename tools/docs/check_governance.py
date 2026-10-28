@@ -144,8 +144,12 @@ def check_contract(documents):
             errors.append("missing required document: {0}".format(relative))
 
     root_readmes = sorted(path.name for path in REPO_ROOT.glob("README*.md"))
-    if root_readmes != ["README.md"]:
-        errors.append("root must contain only README.md; found {0}".format(root_readmes))
+    if root_readmes != ["README.en.md", "README.md"]:
+        errors.append(
+            "root must contain README.md (Chinese) and README.en.md; found {0}".format(
+                root_readmes
+            )
+        )
 
     if (REPO_ROOT / "agent" / "manuals" / "design").exists():
         errors.append("retired documentation path still exists: agent/manuals/design")
@@ -156,14 +160,25 @@ def check_contract(documents):
 
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     for token in (
-        "Quickstart / 快速开始",
-        "Install / 安装",
-        "Tutorials / 教程",
-        "Contributing / 贡献",
+        "快速开始",
+        "安装",
+        "教程",
+        "贡献",
         "python -m jittor.selftest",
     ):
         if token not in readme:
             errors.append("README.md is missing bilingual/current contract: {0}".format(token))
+
+    readme_en = (REPO_ROOT / "README.en.md").read_text(encoding="utf-8")
+    for token in (
+        "Quickstart",
+        "Install",
+        "Tutorials",
+        "Contributing",
+        "python -m jittor.selftest",
+    ):
+        if token not in readme_en:
+            errors.append("README.en.md is missing current contract: {0}".format(token))
 
     contributing = (REPO_ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
     for token in (

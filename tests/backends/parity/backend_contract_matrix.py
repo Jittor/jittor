@@ -504,6 +504,15 @@ UNPROBED_REASONS = {
     "mapped_matmul": "declared for the accelerator only "
                      "(`backend_mask = OpBackendAccelerator`) and executed by "
                      "the ACL backend's own op table; no ACL device here",
+    "mapped_concat": "declared for the accelerator only "
+                     "(`backend_mask = OpBackendAccelerator`) and executed by "
+                     "the ACL backend's own op table; no ACL device here",
+    "mapped_packed_matmul": "declared for the accelerator only "
+                            "(`backend_mask = OpBackendAccelerator`) and executed by "
+                            "the ACL backend's own op table; no ACL device here",
+    "mapped_rms_norm": "declared for the accelerator only "
+                       "(`backend_mask = OpBackendAccelerator`) and executed by "
+                       "the ACL backend's own op table; no ACL device here",
     # Library self-tests: these exist to prove a library links and are not
     # numerical contracts, so there is no cross-backend result to compare.
     "cub_test": "library link self-test, not a numerical contract",

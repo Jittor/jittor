@@ -146,6 +146,9 @@ BACKEND_GRAD_COVERAGE = (
     ("backends/cuda/kernels/nn/group_norm_cuda.py", "GroupNormNHWC",
      "tests/nn/test_channels_last.py::TestChannelsLastCUDA::test_a_training_group_norm_over_channels_last_storage",
      "cuda_cpu_jittor"),
+    ("backends/cuda/kernels/nn/gelu_training_cuda.py", "GeluTrainingCUDA",
+     "compat/tests/torch/test_native_fast_paths.py::TestNativeGelu::test_bfloat16_training_uses_one_kernel_with_matching_gradients",
+     "cuda_cpu_formula"),
     ("backends/cuda/kernels/nn/layer_norm_training_cuda.py", "LayerNormCUDA",
      "tests/nn/test_norm.py::TestLayerNorm::test_cuda_fast_path_forward_and_all_gradients",
      "cuda_cpu_jittor"),
@@ -171,9 +174,6 @@ BACKEND_GRAD_COVERAGE = (
      "npu_hardware"),
     ("backends/acl/kernels/ops/cross_entropy_loss_op.py", "CrossEntropyLossACL",
      "tests/backends/acl/test_acl_codeop_gradients.py::TestACLCodeOpGradients::test_cross_entropy_forward_and_gradient",
-     "npu_hardware"),
-    ("backends/acl/kernels/ops/dropout_op.py", "DropoutACL",
-     "tests/backends/acl/test_aclop.py::TestACL::test_dropout_grad",
      "npu_hardware"),
     ("backends/acl/kernels/ops/flashattention_op.py", "FlashAttentionACL",
      "tests/backends/acl/test_aclop.py::TestACL::test_flashattention_grad",
@@ -221,6 +221,16 @@ BACKEND_GRAD_COVERAGE = (
     ("backends/cpu/libraries/mkl/mkl_matmul_op.cc", "MklMatmulOp",
      "tests/ops/test_matmul_higher_rank.py::TestMatmulHigherRankCpu::test_both_gradients",
      "cpu_formula"),
+    # The CBLAS complex rows (`setup_blas`): checked against the numpy
+    # formula dA = G op(B)^H, dB = op(A)^H G and against the generic path.
+    ("backends/cpu/libraries/blas/blas_matmul_op.cc", "BlasMatmulOp",
+     "tests/ops/test_complex_matmul_relays.py::TestComplexRelaysCPU::"
+     "test_gradients_are_torchs_and_agree_with_the_generic_path",
+     "cpu_formula"),
+    ("backends/cpu/libraries/blas/blas_batched_matmul_op.cc", "BlasBatchedMatmulOp",
+     "tests/ops/test_complex_matmul_relays.py::TestComplexRelaysCPU::"
+     "test_batched_gradients_are_torchs",
+     "cpu_formula"),
     ("backends/cpu/libraries/mkl/mkl_conv_op.cc", "MklConvOp",
      "tests/nn/test_onednn_conv_row.py::test_the_cpu_row_agrees_with_the_generic_path_gradients_included",
      "cpu_jittor"),
@@ -253,6 +263,12 @@ BACKEND_GRAD_COVERAGE = (
      "npu_hardware"),
     ("backends/acl/kernels/ops/cumsum_op.py", "CumsumACL",
      "tests/backends/acl/test_aclop.py::TestACL::test_cumsum_grad",
+     "npu_hardware"),
+    # DropoutACL supplies its gradient as a CodeOp source, which the scanner
+    # counts like any other backend gradient; test_aclop.py::TestACL::
+    # test_dropout_grad still checks its math.
+    ("backends/acl/kernels/ops/dropout_op.py", "DropoutACL",
+     "tests/backends/acl/test_aclop.py::TestACL::test_dropout_grad",
      "npu_hardware"),
     ("backends/acl/kernels/ops/embedding_op.py", "EmbeddingACL",
      "tests/backends/acl/test_acl.py::TestACL::test_training_embedding",

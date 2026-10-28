@@ -35,6 +35,10 @@ bool graph_capture_supported();
 // @pyjt(graph_capture_begin)
 bool graph_capture_begin();
 
+/** Whether a native device graph capture is currently recording. */
+// @pyjt(graph_capture_active)
+bool graph_capture_active();
+
 /**
     Stop recording and hand back the executable graph as an opaque handle, or
     0 if the recording could not be turned into one (which is not an error:

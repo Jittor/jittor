@@ -1,328 +1,266 @@
-# SGD dampening (§3.3) and native vmap batching-rule gaps (§3.4)
+# SGD dampening（§3.3）与原生 vmap 批处理规则缺口（§3.4）
 
-- Status: §3.3 closed for CPU portable, CUDA fused, and FSDP2 (all verified
-  against an independent real-PyTorch process on real CUDA); ACL fixed from
-  code reasoning only — no Ascend hardware available this session, not
-  verified. §3.4: `cumsum` and `solve` given real batching rules with full
-  composition testing; `numpy_code` given a clean fail-fast; sparse already
-  fails cleanly (locked, not changed); the "lazy patch install" item was
-  investigated, a fix was implemented and then reverted after it broke a
-  stronger, explicitly-tested project invariant — see below.
-- Date: 2026-09-22
-- Owner: this session
-- Baseline: `refactor-2.0` at `f34817660f239487d327c189fd4503da5e1c1f5e`
-  (unchanged since the earlier P0 session today)
-- Review when: ACL/Ascend hardware becomes available (§3.3 needs real
-  verification there), or `python/jittor/linalg/solving.py`'s output-shape
-  handling changes (see the newly-discovered, out-of-scope `solve()` gap
-  below)
+- 状态：§3.3 在 CPU portable、CUDA fused 与 FSDP2 上均已关闭（全部对照真实
+  CUDA 上的独立真实 PyTorch 进程验证）；ACL 仅凭代码推理修复——本次会话没有
+  昇腾硬件，未验证。§3.4：`cumsum` 与 `solve` 获得真实批处理规则并做了完整组合
+  测试；`numpy_code` 获得清晰的快速失败；稀疏已能干净失败（已加锁，未改动）；
+  “惰性 patch 安装”一项做了调查，实现了修复，随后因它破坏了更强的、有显式测试
+  的项目不变量而回退——见下文。
+- 日期：2026-09-22
+- 负责人：本次会话
+- 基线：`refactor-2.0` 于 `f34817660f239487d327c189fd4503da5e1c1f5e`
+  （自今早更早的 P0 会话以来未变）
+- 复查条件：ACL/Ascend 硬件可用时（§3.3 需要在那边做真实验证），或
+  `python/jittor/linalg/solving.py` 的输出形状处理变化时（见下文新发现的、
+  超出范围的 `solve()` 缺口）
 
-## Environment
+## 环境
 
-Same `jittor-p0-dev` podman container as the earlier P0 session today
-(`Containerfile.cuda`, CUDA 11.8, 3x RTX 4090, `JITTOR_HOME=/root/.cache/
-jittor-p0dev`), plus the same `/opt/real-torch-venv` independent PyTorch
-2.14.0+cpu venv reused for the SGD oracle test. No Ascend/NPU hardware is
-available in this environment — the ACL-side SGD fix is implemented from
-code/coefficient-math reasoning only, explicitly not run on real hardware.
+与今早更早的 P0 会话相同的 `jittor-p0-dev` podman 容器（`Containerfile.cuda`，
+CUDA 11.8，3x RTX 4090，`JITTOR_HOME=/root/.cache/jittor-p0dev`），外加同一个
+`/opt/real-torch-venv` 独立 PyTorch 2.14.0+cpu venv，复用于 SGD oracle 测试。
+此环境无 Ascend/NPU 硬件——ACL 侧 SGD 修复仅据代码/系数数学推理实现，明确未在
+真实硬件上运行。
 
 ## §3.3 — SGD momentum/dampening
 
-### Root cause, confirmed by repro before editing
+### 根因，编辑前用复现确认
 
-`python/jittor/optim/algorithms/sgd.py:16` gated the no-momentum fast path
-on `momentum==0 and dampening==0`, so any other combination — including
-`momentum==0` with `dampening!=0` — ran `velocity = momentum*velocity +
-dp*(1-dampening)` against a buffer that is always zero-initialized at
-construction, with no "is this the first update" signal anywhere.
-Reproduced the doc's exact numbers before touching anything: `p=1`, fixed
-`g=2`, `lr=0.1`, `dampening=0.2`, 3 steps gave `[0.84, 0.68, 0.52]` at
-`momentum=0` and `[0.84, 0.552, 0.1616]` at `momentum=0.8` — both matching
-the doc's reported wrong values exactly.
+`python/jittor/optim/algorithms/sgd.py:16` 把无 momentum 快路径的门槛设为
+`momentum==0 and dampening==0`，因此任何其他组合——包括 `momentum==0` 且
+`dampening!=0`——都会对构造时始终零初始化的 buffer 执行
+`velocity = momentum*velocity + dp*(1-dampening)`，而任何地方都没有“这是否是
+第一次更新”的信号。动手前复现了文档中的精确数字：`p=1`、固定 `g=2`、`lr=0.1`、
+`dampening=0.2`，3 步在 `momentum=0` 下得到 `[0.84, 0.68, 0.52]`，在
+`momentum=0.8` 下得到 `[0.84, 0.552, 0.1616]`——两者都与文档报告的错值完全
+一致。
 
-### Fix
+### 修复
 
-Matches PyTorch's actual rule: the momentum buffer is seeded from the raw
-(undampened) gradient on its first touch, and the dampened recurrence only
-applies from the second update onward. Threaded a `step` (1-based) argument
-through every layer that previously only knew `(momentum, dampening,
-nesterov)`:
+与 PyTorch 的实际规则一致：momentum buffer 在首次触碰时由原始（未 dampen 的）
+梯度播种，dampened 递推只从第二次更新起适用。向此前只认识
+`(momentum, dampening, nesterov)` 的每一层传入 `step`（从 1 开始）参数：
 
-- `sgd_update(..., step=1)` (portable/CPU, also used directly by FSDP2):
-  fast path is now `momentum==0 and not nesterov` (dampening is irrelevant
-  without momentum — this was the bug, not a missing case); `step<=1` seeds
-  velocity from raw `dp`, otherwise the existing recurrence.
-- `SGD.step()`: calls `n = self._advance_step_count(pg)` once per param
-  group, reusing `Optimizer._advance_step_count` — the same mechanism
-  Adam/AdamW already use for bias correction (`python/jittor/optim/base.py:
-  143`), which persists through `state_dict`/`load_state_dict`, so a
-  resumed checkpoint does not get treated as step 1 again "for free."
-- `backends/cuda/kernels/optim/fused_sgd_cuda.py`: same `plain`-condition
-  fix, plus a `first_step`-conditioned velocity-update line in the
-  generated CUDA source (coefficients stay compile-time literals per the
-  file's existing design — costs one extra JIT compile at the step-1→
-  step-2 transition per parameter group, not a per-step recompile).
-- ACL: `FusedSgdAttr::isFirstStep` **already existed** as a field
-  (`backends/acl/include/acl_jittor.h:55`) but was hardcoded `false` at the
-  op-dispatch site (`backends/acl/src/acl_op_exec.cc:731`, with a comment
-  asserting the exact wrong assumption this bug depends on), and
-  `fused_sgd_op_acl.cc`'s coefficient computation never branched on it.
-  Fixed: threaded a real `first_step` bool from `SGD.step()`'s counter
-  through `FusedSgdOp`'s constructor to the ACL dispatch site, and split
-  the coefficient computation so only the velocity buffer's own recurrence
-  coefficient zeroes on the first step (the Nesterov correction's own
-  `-lr*momentum` term is unchanged — PyTorch always uses the real momentum
-  there, first step or not, since by that point the buffer already holds
-  the correct value).
-- `compat/fsdp2/optimizer.py::_sgd_update_for_param`: accepts `step`, passed
-  from the caller's existing `param_steps[i]` counter — the exact same
-  counter already passed to the parallel Adam path's `n_step`, so no new
-  state-tracking was needed.
+- `sgd_update(..., step=1)`（portable/CPU，FSDP2 也直接使用）：快路径现在是
+  `momentum==0 and not nesterov`（没有 momentum 时 dampening 无关——这正是
+  bug，而不是缺了某个分支）；`step<=1` 用原始 `dp` 播种 velocity，否则走既有
+  递推。
+- `SGD.step()`：每个 param group 调用一次 `n = self._advance_step_count(pg)`，
+  复用 `Optimizer._advance_step_count`——Adam/AdamW 已用于偏置校正的同一机制
+  （`python/jittor/optim/base.py:143`），它通过
+  `state_dict`/`load_state_dict` 持久化，因此恢复的 checkpoint 不会“免费”再次
+  被当作第 1 步。
+- `backends/cuda/kernels/optim/fused_sgd_cuda.py`：同样的 `plain` 条件修正，
+  另在生成的 CUDA 源码中加入一行以 `first_step` 为条件的 velocity 更新行
+  （系数仍按该文件既有设计保持编译期字面量——代价是每个参数组在 step-1→step-2
+  转换时多一次 JIT 编译，而不是每步重编译）。
+- ACL：`FusedSgdAttr::isFirstStep` **早已存在**为字段
+  （`backends/acl/include/acl_jittor.h:55`），但在 op 分派处被硬编码为 `false`
+  （`backends/acl/src/acl_op_exec.cc:731`，其注释恰好断言了这个 bug 所依赖的
+  错误假设），且 `fused_sgd_op_acl.cc` 的系数计算从不按它分支。修复：把来自
+  `SGD.step()` 计数器的真实 `first_step` bool 经 `FusedSgdOp` 构造函数传到
+  ACL 分派处，并拆分系数计算，使只有 velocity buffer 自身的递推系数在第一步
+  归零（Nesterov 校正自身的 `-lr*momentum` 项不变——PyTorch 在那里始终使用
+  真实 momentum，无论是否第一步，因为到那时 buffer 已持有正确值）。
+- `compat/fsdp2/optimizer.py::_sgd_update_for_param`：接受 `step`，由调用方
+  已有的 `param_steps[i]` 计数器传入——正是已经传给并行 Adam 路径 `n_step` 的
+  同一个计数器，无需新增状态跟踪。
 
-### Verification
+### 验证
 
-- Portable and CUDA fused paths: reproduced the doc's 3-step recipe
-  directly, now matching the doc's expected `[0.8, 0.6, 0.4]` /
-  `[0.8, 0.48, 0.064]` exactly on real CUDA.
-- New `tests/optim/test_sgd_dampening_pytorch_oracle.py`: the same 3-step
-  recipe cross-checked against a real, independent `torch.optim.SGD`
-  process (not this repo's own torch-compat shim, which is jittor's own
-  implementation under another name) — portable CPU, portable CUDA, and
-  CUDA fused all match to `atol=1e-5`.
-- `tests/optim/test_optim_core.py::TestSGDUpdate`: fixed the reference
-  formula (`_ref_sgd`) to take a `first_step` flag — it previously asserted
-  the wrong first-step dampened value; added `test_sgd_dampening_two_steps`
-  (dampening applies from step 2) and
-  `test_sgd_momentum_zero_ignores_dampening` (the doc's other named
-  symptom).
-- `compat/tests/fsdp2/test_fsdp_optimizer_math.py`: the existing
-  `test_sgd_momentum_and_nesterov` deliberately starts from a nonzero
-  velocity buffer (testing the recurrence path) — added an explicit
-  `step=2`; added `test_sgd_momentum_first_touch_seeds_from_raw_gradient`
-  for the companion first-touch case.
-- ACL: fixed from code reasoning (the coefficient math is derived and
-  documented in the diff itself); **not run on real Ascend hardware** —
-  no NPU available this session. This is a real, open verification gap,
-  not a silently-claimed pass.
-- Full `tests/optim/` + `compat/tests/fsdp2/test_fsdp_optimizer_math.py`:
-  67 passed (1 pre-existing failure deselected, see below; 8 errors are a
-  pre-existing "independent Torch was not preloaded" oracle-session-context
-  requirement these specific files need `tools/run_test_suite.py`'s own
-  invocation for, confirmed unrelated by reproducing the same error pattern
-  on unrelated files in the earlier P0 session).
+- portable 与 CUDA fused 路径：直接复现文档的 3 步配方，现在在真实 CUDA 上
+  精确匹配文档期望的 `[0.8, 0.6, 0.4]` / `[0.8, 0.48, 0.064]`。
+- 新增 `tests/optim/test_sgd_dampening_pytorch_oracle.py`：同一 3 步配方对照
+  真实、独立的 `torch.optim.SGD` 进程做交叉检查（不是本仓库自己的 torch-compat
+  shim，那只是 jittor 自己实现换了个名字）——portable CPU、portable CUDA 与
+  CUDA fused 全部在 `atol=1e-5` 内匹配。
+- `tests/optim/test_optim_core.py::TestSGDUpdate`：修正参考公式（`_ref_sgd`）
+  以接受 `first_step` 标志——它此前断言的正是错误的第一步 dampened 值；新增
+  `test_sgd_dampening_two_steps`（dampening 从第 2 步起生效）与
+  `test_sgd_momentum_zero_ignores_dampening`（文档提到的另一症状）。
+- `compat/tests/fsdp2/test_fsdp_optimizer_math.py`：现有的
+  `test_sgd_momentum_and_nesterov` 有意从非零 velocity buffer 出发（测试递推
+  路径）——显式加上 `step=2`；新增
+  `test_sgd_momentum_first_touch_seeds_from_raw_gradient` 覆盖配套的首次触碰
+  场景。
+- ACL：据代码推理修复（系数数学在 diff 本身中推导并记录）；**未在真实昇腾
+  硬件上运行**——本次会话无 NPU 可用。这是真实、开放的验证缺口，不是悄悄宣称
+  的通过。
+- 完整 `tests/optim/` + `compat/tests/fsdp2/test_fsdp_optimizer_math.py`：
+  67 passed（取消选择 1 个既有失败，见下文；8 个 error 是既有的“独立 Torch
+  未预加载” oracle 会话上下文要求，这些特定文件需要
+  `tools/run_test_suite.py` 自身的调用方式，已通过在更早 P0 会话中在无关联
+  文件上复现同一错误模式确认无关）。
 
-### Pre-existing, unrelated bug found and ruled out
+### 发现的既有、无关 bug，已排除
 
 `tests/optim/test_optim_core.py::TestOptimizerPlumbing::
-test_low_precision_parameter_and_state_dtypes_are_preserved` hit an internal
-Jittor executor invariant crash (`exec_plan.cc:271: queue.size()(14) ==
-roots.size()(16)`). Confirmed via `git stash` + full core rebuild that this
-reproduces identically on the true unmodified baseline — pre-existing,
-unrelated to this session, not chased further. Left deselected in the
-regression runs above; not touched.
+test_low_precision_parameter_and_state_dtypes_are_preserved` 触发了一个
+Jittor 执行器内部不变量崩溃（`exec_plan.cc:271: queue.size()(14) ==
+roots.size()(16)`）。通过 `git stash` + 完整 core 重建确认，它在真正未修改的
+基线上完全相同地复现——既有、与本次会话无关，未继续追查。上述回归运行中保持
+取消选择；未改动。
 
-## §3.4 — native vmap batching-rule gaps
+## §3.4 — 原生 vmap 批处理规则缺口
 
-### Architecture recap
+### 架构回顾
 
-`python/jittor/vmap.py`: a `BatchedVar(value, level)` wrapper plus a
-hand-maintained table of monkeypatched `jt`/`jt.Var`/`jt.linalg` entry
-points, installed by idempotent `install_batching_patches()`. Confirmed via
-direct exploration: `solve`, `cumsum`, sparse ops, and `numpy_code` had
-zero batching-rule coverage (each fails a different, mostly confusing way
-today); the compat `real`/`imag` aliases didn't recognize `BatchedVar`.
+`python/jittor/vmap.py`：一个 `BatchedVar(value, level)` 包装器，加一张手工
+维护的 monkeypatch `jt`/`jt.Var`/`jt.linalg` 入口表，由幂等的
+`install_batching_patches()` 安装。经直接探查确认：`solve`、`cumsum`、稀疏
+算子与 `numpy_code` 的批处理规则覆盖为零（各自目前以不同、大多令人困惑的方式
+失败）；compat 的 `real`/`imag` 别名不认识 `BatchedVar`。
 
-### Fixed
+### 已修复
 
-1. **`cumsum`** — new `_apply_cumsum`, the same axis-sensitive
-   single-input shape as the existing `_apply_reduce`/`_apply_transpose`
-   rules (resolve `dim=None` against the *logical* rank via the existing
-   `jt.misc._cumsum_dim`, shift by nesting depth, delegate). Registered as
-   free-function `jt.cumsum` and as a `BatchedVar.__getattr__` method case
-   (`.cumsum(dim)`).
-2. **`solve`** (two-input) — new `_apply_solve`, the same max-level dispatch
-   shape as `_apply_binary`, without `_align_logical_rank`'s rank-padding
-   (not needed: `np.linalg.solve`'s own leading-dim broadcast already
-   handles one operand being shared/unbatched, the same property
-   `_apply_linalg`'s single-input rules already lean on). Registered on
-   `jt.linalg.solve`.
-3. **`numpy_code`** — not a batching rule (an arbitrary opaque callback
-   can't be vmapped without invoking it once per batch element, which
-   defeats vmap's whole point) but a clean, explicit `NotImplementedError`
-   when a `BatchedVar` reaches it, instead of a confusing low-level pybind
-   type error.
-4. **Sparse ops** — already fail cleanly (`SparseVar.__init__`/`spmm`
-   hard-`isinstance(x, jt.Var)`-check and raise `TypeError` before any op
-   runs). No code change; added a locking test, since none existed.
-5. **`compat/torch/installers/numerical/complex.py`'s `real`/`imag`** — a
-   real silent-wrong-answer bug: `isinstance(input, (jt.nn.ComplexNumber,
-   jt.Var))` didn't recognize `BatchedVar`, so `torch.real(bv)` silently
-   returned `bv` unchanged (mislabeled "the real part") and `torch.imag(bv)`
-   silently returned all zeros even for a genuinely complex `bv`. Fixed by
-   adding `BatchedVar` to the check — native `BatchedVar.real`/`.imag`
-   already worked correctly, this was purely a recognition gap in the
-   compat alias.
+1. **`cumsum`** — 新增 `_apply_cumsum`，与现有
+   `_apply_reduce`/`_apply_transpose` 规则同为轴敏感的单输入形状（通过现有
+   `jt.misc._cumsum_dim` 按*逻辑* rank 解析 `dim=None`，按嵌套深度偏移，再
+   委托）。注册为自由函数 `jt.cumsum` 与 `BatchedVar.__getattr__` 方法用例
+   （`.cumsum(dim)`）。
+2. **`solve`**（双输入）— 新增 `_apply_solve`，与 `_apply_binary` 同为最大
+   level 分派形状，不带 `_align_logical_rank` 的 rank 填充（不需要：
+   `np.linalg.solve` 自身的前导维广播已能处理一个操作数共享/未批处理的情形，
+   `_apply_linalg` 的单输入规则同样依赖这一性质）。注册到 `jt.linalg.solve`。
+3. **`numpy_code`** — 不是批处理规则（任意不透明回调无法在不逐 batch 元素
+   调用的情况下被 vmap，这违背 vmap 的全部意义），而是当 `BatchedVar` 到达时
+   给出清晰、显式的 `NotImplementedError`，而非令人困惑的低层 pybind 类型
+   错误。
+4. **稀疏算子** — 已能干净失败（`SparseVar.__init__`/`spmm` 硬性
+   `isinstance(x, jt.Var)` 检查并在任何 op 运行前抛出 `TypeError`）。无代码
+   改动；新增一个锁定测试，因为此前没有。
+5. **`compat/torch/installers/numerical/complex.py` 的 `real`/`imag`** — 一个
+   真实的静默错答 bug：`isinstance(input, (jt.nn.ComplexNumber, jt.Var))` 不
+   认识 `BatchedVar`，因此 `torch.real(bv)` 静默原样返回 `bv`（被误标为“实
+   部”），`torch.imag(bv)` 即使对真正为复数的 `bv` 也静默返回全零。修复方式是
+   把 `BatchedVar` 加入检查——原生 `BatchedVar.real`/`.imag` 本就正确，这纯粹
+   是 compat 别名的识别缺口。
 
-### Investigated, fixed, then reverted: the lazy-patch-install "stale
-reference" gap
+### 调查、实现后又回退：惰性 patch 安装的“陈旧引用”缺口
 
-The doc's concern: `install_batching_patches()` only runs inside `vmap()`'s
-own body, so a function reference saved before a process's first `vmap()`
-call (`my_qr = jt.linalg.qr`) stays bound to the pre-patch function forever,
-even after `vmap()` patches `jt.linalg.qr` elsewhere.
+文档的担忧：`install_batching_patches()` 只在 `vmap()` 自身函数体内运行，因此
+在一个进程首次调用 `vmap()` 之前保存的函数引用（`my_qr = jt.linalg.qr`）会
+永远绑定到 patch 前的函数，即便 `vmap()` 后来在其他地方 patch 了
+`jt.linalg.qr`。
 
-Implemented the "obvious" fix — call `install_batching_patches()` once,
-unconditionally, at the end of `python/jittor/__init__.py` — and it
-**broke two structural contract tests**:
+实现了“显而易见”的修复——在 `python/jittor/__init__.py` 末尾无条件调用一次
+`install_batching_patches()`——结果它**破坏了两个结构契约测试**：
 `tests/structure/nn/test_nn_structure.py::TestPublicBindings::
-test_tensor_method_bindings_stay_on_public_functions` (asserts
-`jittor.Var.matmul is nn.matmul`) and
+test_tensor_method_bindings_stay_on_public_functions`（断言
+`jittor.Var.matmul is nn.matmul`）与
 `tests/structure/runtime/test_runtime_composition_structure.py::
-test_compat_composition_keeps_native_core_implementations_available`
-(asserts `jittor.grad is core_api.grad`). This project's own
-alias-composition system (`_runtime/composition.py`'s
-`make_inplace_alias`/`publish`) gives every one of these functions a
-*single shared object identity* across every entry point
-(`jittor.matmul`/`jittor.Var.matmul`/`nn.matmul`/`__matmul__`, etc.).
-Eager installation only patches *some* of those aliased locations (`jt.
-Var.matmul`, `jt.matmul`) and not others (`nn.matmul`), breaking that
-identity for **every** jittor import, not just vmap users — a bigger,
-explicitly-tested invariant a narrow patch-timing fix should not sacrifice.
-Patching every aliased location too would mean threading the fix through
-that whole composition system, which is well outside a vmap-scoped change.
+test_compat_composition_keeps_native_core_implementations_available`（断言
+`jittor.grad is core_api.grad`）。本项目自己的别名组合系统
+（`_runtime/composition.py` 的 `make_inplace_alias`/`publish`）让这些函数中的
+每一个在所有入口点（`jittor.matmul`/`jittor.Var.matmul`/`nn.matmul`/
+`__matmul__` 等）都拥有*单一共享的对象身份*。急切安装只会 patch 这些别名位置
+中的*一部分*（`jt.Var.matmul`、`jt.matmul`），而不 patch 另一些
+（`nn.matmul`），从而对**每一次** jittor 导入都破坏该身份，而不只是 vmap
+用户——一个更宏观、有显式测试的不变量，不应为一个狭窄的 patch 时机修复而
+牺牲。若也要 patch 每个别名位置，就意味着要把修复贯穿整个组合系统，这远超
+vmap 范围。
 
-**Reverted.** The residual risk stays exactly what `vmap()`'s own
-docstring already documents and works around (prefer `vmap(lambda x:
-jt.linalg.qr(x))` over a bare function reference) — this is now locked by
+**已回退。** 残余风险恰好就是 `vmap()` 自己的 docstring 已记录并绕开的内容
+（优先用 `vmap(lambda x: jt.linalg.qr(x))` 而非裸函数引用）——现在由
 `tests/core/test_vmap.py::TestVmapPatchTiming::
-test_reference_captured_before_first_vmap_call_stays_unpatched`, which
-asserts both the documented failure and the documented workaround, rather
-than asserting a fix that was tried and found to cost more than it closed.
-This item is **not closed** — recorded here as investigated and
-deliberately left as-is, not silently claimed fixed.
+test_reference_captured_before_first_vmap_call_stays_unpatched` 锁定，它同时
+断言已记录的失败与已记录的绕法，而不是断言一个试过、发现代价大于收益的修复。
+此项**未关闭**——在此记录为已调查并有意保持原样，而非悄悄宣称已修复。
 
-### A second, unrelated real bug found and fixed along the way
+### 途中发现的第二个无关真实 bug，已修复
 
-While testing the (later-reverted) eager-install change, two *other*,
-genuinely pre-existing, latent bugs in `vmap.py`'s own patch registration
-surfaced and were fixed independently of the eager-install revert (both are
-real regardless of install timing, just previously unreachable unless a
-process happened to call `jt.vmap()` before hitting the affected code):
+在测试（后来回退的）急切安装改动时，`vmap.py` 自身 patch 注册中另外两个真正
+既有、潜伏的 bug 浮现，并独立于急切安装回退被修复（无论安装时机如何它们都是
+真的，只是此前除非进程恰好在触及受影响代码前调用过 `jt.vmap()`，否则不可达）：
 
-- **`_apply_unary`'s original-function preference**: registered `orig =
-  getattr(jt.Var, name, None) or getattr(jt, name, None)` (Var-method
-  first) instead of the free-function-first order `_BINARY_NAMES`'
-  registration already uses (and already documents the reason for). A bare
-  Python float argument — e.g. `adam_update`'s `jt.sqrt(1 - b1**step)` bias
-  correction — fails against the Var-method descriptor form
-  (`TypeError: descriptor 'sqrt' ... doesn't apply to a 'float' object`).
-  Fixed to prefer the free function, matching the binary registration's
-  existing convention.
-- **`view`/`reshape` and `broadcast`/`broadcast_var` silently aliased to
-  one original**: `jt.Var.view is jt.Var.reshape` and `jt.Var.broadcast is
-  jt.Var.broadcast_var` are both `False` (confirmed), but the registration
-  installed the *same* wrapper closure (capturing only `jt.Var.reshape` /
-  `jt.Var.broadcast` as `_ORIG_RESHAPE`/`_ORIG_BROADCAST`) onto both names
-  in each pair — silently rerouting `.view()`/`.broadcast_var()` calls
-  through the *other* method's original implementation. Concretely broke
-  `expand().view()`'s storage-aliasing invariant
-  (`tests/core/test_storage_strides.py::
-  test_expanded_view_and_explicit_dense_library_boundary`, `expand()`
-  marks its result `_set_storage_view_of` the input, and only a genuine
-  `.view()` call — not `.reshape()` standing in for it — detects and
-  preserves that relationship). Found via the *same* full-`tests/core/`
-  regression sweep this session was already running; confirmed pre-existing
-  (reproduces on the true unmodified baseline via `git stash`) but latent
-  until `install_batching_patches()` ran unconditionally during the
-  (since-reverted) eager-install experiment. Fixed by giving `_apply_reshape`/
-  `_apply_broadcast` an explicit `orig` parameter and capturing/using
-  `_ORIG_VIEW`/`_ORIG_BROADCAST_VAR` separately. **This fix is kept** (it's
-  correct and needed regardless of install timing — any code path that
-  happens to call `.view()`/`.broadcast_var()` after any `vmap()` call
-  anywhere in the process was already exposed to it); confirmed all other
-  same-shaped multi-name registrations in this file (`transpose`/`permute`,
-  `matmul`/`__matmul__`, `jt.X`/`jt.Var.X` free-function pairs) are safe —
-  each pair really is the same underlying object.
+- **`_apply_unary` 的原始函数偏好**：注册的是 `orig =
+  getattr(jt.Var, name, None) or getattr(jt, name, None)`（Var 方法优先），
+  而不是 `_BINARY_NAMES` 注册已在用的自由函数优先顺序（且已记录其理由）。裸
+  Python float 参数——例如 `adam_update` 的 `jt.sqrt(1 - b1**step)` 偏置
+  校正——在 Var 方法描述符形式下失败（`TypeError: descriptor 'sqrt' ...
+  doesn't apply to a 'float' object`）。改为优先自由函数，与二进制注册的既有
+  约定一致。
+- **`view`/`reshape` 与 `broadcast`/`broadcast_var` 被静默别名到同一个原始
+  实现**：`jt.Var.view is jt.Var.reshape` 与 `jt.Var.broadcast is
+  jt.Var.broadcast_var` 均为 `False`（已确认），但注册把*同一个*包装闭包
+  （只捕获 `jt.Var.reshape` / `jt.Var.broadcast` 作为
+  `_ORIG_RESHAPE`/`_ORIG_BROADCAST`）安装到了每对中的两个名字上——静默把
+  `.view()`/`.broadcast_var()` 调用改走*另一个*方法的原始实现。具体破坏了
+  `expand().view()` 的存储别名不变量
+  （`tests/core/test_storage_strides.py::
+  test_expanded_view_and_explicit_dense_library_boundary`，`expand()` 把结果
+  标记为输入的 `_set_storage_view_of`，只有真正的 `.view()` 调用——而非顶替
+  它的 `.reshape()`——才能检测并保留该关系）。是在本次会话已在运行的同一个完整
+  `tests/core/` 回归扫荡中发现的；确认为既有（经 `git stash` 在真正未修改的
+  基线上复现），但直到 `install_batching_patches()` 在（后来回退的）急切安装
+  实验中无条件运行才变得可触发。修复方式是给
+  `_apply_reshape`/`_apply_broadcast` 显式 `orig` 参数，并分别捕获/使用
+  `_ORIG_VIEW`/`_ORIG_BROADCAST_VAR`。**保留此修复**（它正确且无论安装时机都
+  必需——任何在进程内任意 `vmap()` 调用之后恰好调用
+  `.view()`/`.broadcast_var()` 的代码路径本就已暴露）；确认本文件中所有其他
+  同形多名注册（`transpose`/`permute`、`matmul`/`__matmul__`、
+  `jt.X`/`jt.Var.X` 自由函数对）都是安全的——每对确实就是同一个底层对象。
 
-### Tests (`tests/core/test_vmap.py`)
+### 测试（`tests/core/test_vmap.py`）
 
-`test_cumsum_batching_rule`: vs `np.cumsum`, non-default and negative
-`dim`, 2-level nested vmap, grad composition. `test_solve_batching_rule`:
-both operands batched, shared/unbatched `a` + batched `b` (the doc's
-"shared parameter" concern), grad composition — using a proper `(...,M,K)`
-matrix RHS (see the newly-discovered `solve()` gap below for why not the
-bare `(...,M)` form). `test_numpy_code_raises_clear_error_under_vmap`,
-`test_sparse_raises_clear_error_under_vmap`. `test_unsupported_op_raises`
-switched from `cumsum` (now supported) to `cumprod` (same op family,
-genuinely still unsupported) to keep testing the fail-fast contract
-truthfully. New `python/jittor/compat/tests/torch/
-test_real_imag_under_vmap.py` (torch-mode) for the compat fix.
+`test_cumsum_batching_rule`：对照 `np.cumsum`，非默认与负 `dim`，2 层嵌套
+vmap，grad 组合。`test_solve_batching_rule`：两操作数均批处理、共享/未批处理
+`a` + 批处理 `b`（文档的“共享参数”担忧）、grad 组合——使用规范的
+`(...,M,K)` 矩阵 RHS（原因见下文新发现的 `solve()` 缺口，为何不用裸
+`(...,M)` 形式）。`test_numpy_code_raises_clear_error_under_vmap`、
+`test_sparse_raises_clear_error_under_vmap`。`test_unsupported_op_raises`
+从 `cumsum`（现已支持）改为 `cumprod`（同一算子家族，确实仍不支持），以如实
+继续测试快速失败契约。新增 `python/jittor/compat/tests/torch/
+test_real_imag_under_vmap.py`（torch 模式）用于 compat 修复。
 
-### A third, unrelated pre-existing bug found and explicitly NOT fixed (out
-of scope)
+### 第三个既有无关 bug，发现但明确不修（超出范围）
 
-While shaping the `solve` batching-rule tests, found that `jt.linalg.solve`
-itself — independent of vmap entirely, reproduced with a plain non-vmap
-call — does not correctly support: (a) a bare `(...,M)` vector-stack `b`
-against a batched `a` (this numpy version's `np.linalg.solve` gufunc only
-takes the "b is a vector" path when `b.ndim==1` exactly; a batched `(...,M)`
-is misparsed as a 2-D `(m,n)` core matrix, raising a core-dimension
-mismatch — `solve()`'s own docstring implies `(...,M)` is the supported
-vector form, but it isn't for a genuinely batched case with this numpy
-version); (b) unbatched `b` against a batched `a` — `numpy_code`'s output
-shape is declared as `bt.shape` verbatim
-(`python/jittor/linalg/solving.py:316`), not broadcast against `a`'s extra
-batch dims, so the correct, larger `np.linalg.solve` result fails to copy
-into the too-small declared output buffer
-(`ValueError: could not broadcast input array from shape (4,3,1) into
-shape (3,1)`). Both are real `solve()` correctness gaps, not vmap gaps —
-the vmap batching rule only has to (and does) correctly extend whatever
-`solve()` already handles correctly, which is both operands batched (or
-neither) with `b` shaped as a proper `(...,M,K)` matrix. Not fixed here —
-flagged for separate, dedicated attention to `solving.py`'s own
-broadcasting/shape-inference logic.
+在构造 `solve` 批处理规则测试时发现，`jt.linalg.solve` 本身——完全独立于
+vmap，用普通非 vmap 调用即可复现——不能正确支持：(a) 裸 `(...,M)` 向量栈
+`b` 对批处理 `a`（此 numpy 版本的 `np.linalg.solve` gufunc 只在
+`b.ndim==1` 恰好成立时才走“b 是向量”路径；批处理的 `(...,M)` 被误解析为 2-D
+`(m,n)` 核心矩阵，抛出核心维不匹配——`solve()` 自己的 docstring 暗示
+`(...,M)` 是受支持的向量形式，但对真正批处理的情形在此 numpy 版本下并非
+如此）；(b) 未批处理 `b` 对批处理 `a`——`numpy_code` 的输出形状按
+`bt.shape` 原样声明（`python/jittor/linalg/solving.py:316`），没有对 `a` 的
+额外 batch 维做广播，因此正确的、更大的 `np.linalg.solve` 结果无法拷入过小的
+声明输出缓冲（`ValueError: could not broadcast input array from shape
+(4,3,1) into shape (3,1)`）。两者都是真实的 `solve()` 正确性缺口，不是 vmap
+缺口——vmap 批处理规则只需（也确实）正确扩展 `solve()` 已正确处理的情形，即
+两个操作数都批处理（或都不）且 `b` 为规范的 `(...,M,K)` 矩阵。此处未修——
+标记为需要对 `solving.py` 自身的广播/形状推断逻辑单独专门处理。
 
-### Gate results
+### 门禁结果
 
-- `tools/run_test_suite.py --tier core`: native 98 passed/41 skipped/1
-  xfailed, torch 212 passed/3 skipped. 0 failures.
-- `tools/run_test_suite.py --tier smoke`: same order-of-magnitude
-  pre-existing environment noise as the earlier P0 session's smoke run
-  (MPI/ACL/DDP/TF32/RNN/pooling/einsum gaps in this minimal container, and
-  the same "independent Torch was not preloaded" oracle-session-context
-  errors) — a targeted search found nothing new specific to
-  SGD/vmap/cumsum/solve/numpy_code beyond the already-known oracle-context
-  pattern; `tests/codegen/test_broadcast_tuner.py`'s one failure is the
-  same one already seen (and left unfixed) in the P0 session's smoke run.
-- Full `tests/core/` + `tests/linalg/` (twice — once catching the view/
-  broadcast_var regression, once clean after fixing it): 463 passed, only
-  the 2 pre-existing `test_namespace_exports.py` failures remain (dlpack/
-  vmap/Generator stub declarations, separately tracked as this doc's own
-  §3.4/§3.5, not touched this session).
-- `tools/check_repo_layout.sh`: one finding, `local/problems-2026-9-22.md`
-  (the user's own external-report file, present before either session,
-  referencing a `development-plan.md` in a different repo/harness) — left
-  for the user to handle, same as the P0 session's report.
-- `JITTOR_TORCH_SHIM=1 PYTHONPATH=python python -m pytest tests/structure`:
-  1378 collected; fixed two real findings along the way (regenerated
-  `MANIFEST.in` for the new files this and the earlier P0 session added;
-  the two eager-install identity breaks, resolved by reverting eager
-  install rather than chasing the alias system) — down to the same 2
-  pre-existing failures as the P0 session
-  (`test_a_timeout_ends_the_grandchildren_too`,
-  `test_documentation_governance_checker`, the latter also the `local/`
-  finding above).
+- `tools/run_test_suite.py --tier core`：native 98 passed/41 skipped/1
+  xfailed，torch 212 passed/3 skipped。0 失败。
+- `tools/run_test_suite.py --tier smoke`：与更早 P0 会话的 smoke 运行同一
+  数量级的既有环境噪声（这个极简容器中的 MPI/ACL/DDP/TF32/RNN/pooling/
+  einsum 缺口，以及相同的“独立 Torch 未预加载” oracle 会话上下文错误）——
+  定向搜索除已知的 oracle 上下文模式外，没有发现
+  SGD/vmap/cumsum/solve/numpy_code 特有的新问题；
+  `tests/codegen/test_broadcast_tuner.py` 的一个失败是 P0 会话 smoke 运行中
+  已见（且未修）的同一个。
+- 完整 `tests/core/` + `tests/linalg/`（两次——一次捕获 view/broadcast_var
+  回归，修复后一次干净）：463 passed，只剩 2 个既有的
+  `test_namespace_exports.py` 失败（dlpack/vmap/Generator stub 声明，作为本文
+  档自身的 §3.4/§3.5 另行跟踪，本次会话未改动）。
+- `tools/check_repo_layout.sh`：一处发现，`local/problems-2026-9-22.md`
+  （用户自己的外部报告文件，两个会话之前就存在，引用了不同 repo/harness 中的
+  `development-plan.md`）——留给用户处理，与 P0 会话的报告相同。
+- `JITTOR_TORCH_SHIM=1 PYTHONPATH=python python -m pytest tests/structure`：
+  收集 1378；途中修复两处真实发现（为本次及更早 P0 会话新增文件重新生成
+  `MANIFEST.in`；两处急切安装身份破坏，通过回退急切安装而非追查别名系统
+  解决）——降到与 P0 会话相同的 2 个既有失败
+  （`test_a_timeout_ends_the_grandchildren_too`、
+  `test_documentation_governance_checker`，后者也是上面的 `local/` 发现）。
 
-## What's still open
+## 仍开放的内容
 
-Within §3.3: ACL not verified on real hardware (no NPU available this
-session). Within §3.4: the lazy-patch-install "stale reference" gap is
-investigated and deliberately not fixed (conflicts with a stronger existing
-invariant; documented workaround already exists and is now tested); the
-`jt.linalg.solve` broadcasting/output-shape gaps found along the way are a
-separate, real, unfixed issue. The remaining 5 items from the original
-9-item list (native vmap's own JVP/VJP/pytree/shared-parameter composition
-beyond what's tested here, DLPack, CUDA RNG checkpoint, higher-order
-complex AD, function-level compile/cache contract, sparse device-side
-coalesce) are not addressed this session, per the user's own scoping to
-§3.3/§3.4.
+§3.3 内：ACL 未在真实硬件上验证（本次会话无 NPU 可用）。§3.4 内：惰性 patch
+安装的“陈旧引用”缺口已调查且有意不修（与更强的既有不变量冲突；已记录的绕法
+已存在且现在有测试）；途中发现的 `jt.linalg.solve` 广播/输出形状缺口是另一个
+真实、未修的问题。原始 9 项列表中剩余的 5 项（原生 vmap 自身超出此处测试范围
+的 JVP/VJP/pytree/共享参数组合、DLPack、CUDA RNG checkpoint、高阶复数 AD、
+函数级编译/缓存契约、稀疏设备侧 coalesce）本次会话未处理，按用户自己对
+§3.3/§3.4 的限定。

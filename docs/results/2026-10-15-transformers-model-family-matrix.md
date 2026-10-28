@@ -74,7 +74,7 @@ CUDA 最少实际执行数要求为 9。独立训练和扰动进程均启用 fal
 
 ## 复现与证据
 
-使用 [统一 runbook](../../agent/skills/torch-compat-repo-runbook/SKILL.md) 的独立解释器、
+使用 [统一 runbook](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/torch-compat-repo-runbook/SKILL.md) 的独立解释器、
 同权重流程与 `training_probe.py` 三步训练命令。先串行预热，单测与 benchmark 使用
 独立缓存，CPU/CUDA 和并行任务也使用独立缓存。基础命令为：
 

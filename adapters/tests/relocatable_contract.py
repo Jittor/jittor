@@ -4,7 +4,7 @@ import ast
 PUBLIC_IMPORTS = {
     "jittor", "jittor.compat.module_patcher", "jittor.compat.permissive",
     "jittor.compat.transaction", "jittor.compat.diagnostics",
-    "jittor.compat.torch.gradient_task",
+    "jittor.compat.torch.gradient_task", "jittor.compat.torch",
 }
 
 

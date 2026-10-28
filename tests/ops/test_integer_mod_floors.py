@@ -93,6 +93,26 @@ class _ModContract:
                 a, b, A, B = self._pair((0, 1, 2, 7, 255), (2, 2, 3, 3, 4), dtype)
                 np.testing.assert_array_equal(jt.mod(A, B).numpy(), a % b)
 
+    def test_zero_and_overflowing_divisors_take_numpys_answers(self):
+        # x // 0, x % 0 and fmod(x, 0) killed a CPU process with SIGFPE and
+        # returned an all-ones value on CUDA; MIN // -1, the one overflowing
+        # quotient, traps on x86 too. NumPy's results are 0, 0, 0, MIN and 0.
+        with jt.flag_scope(use_cuda=self.device_flag):
+            for dtype in SIGNED + UNSIGNED + ("uint32",):
+                info = np.iinfo(dtype)
+                a = np.array([7, 0, info.max, info.min, info.max, 9], dtype=dtype)
+                b = np.array([0, 0, 0, 0, 2, 4], dtype=dtype)
+                if info.min < 0:
+                    b[3:5] = -1
+                A, B = jt.array(a, dtype=dtype), jt.array(b, dtype=dtype)
+                with np.errstate(all="ignore"):
+                    expect = {"floor_divide": np.floor_divide(a, b),
+                              "mod": np.mod(a, b), "fmod": np.fmod(a, b)}
+                for op, ref in expect.items():
+                    np.testing.assert_array_equal(
+                        getattr(jt, op)(A, B).numpy(), ref,
+                        err_msg="%s %s by 0 / -1" % (dtype, op))
+
     def test_floats_still_floor(self):
         with jt.flag_scope(use_cuda=self.device_flag):
             for dtype in ("float32", "float64"):

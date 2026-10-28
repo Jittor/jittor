@@ -11,6 +11,8 @@
 ```{toctree}
 :maxdepth: 1
 
+2026-10-25-recent-pr-integration
+2026-10-24-datatrove-cpu-compatibility
 2026-10-22-generative-vision-ascend310p-optimization
 2026-10-21-generative-vision-ascend310p-performance
 2026-10-16-diffusers-maintained-cpu-nightly

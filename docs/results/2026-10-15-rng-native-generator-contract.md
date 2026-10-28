@@ -1,57 +1,126 @@
-# Native RNG seed and explicit-generator contracts
+# 原生 RNG seed 与显式 generator 契约
 
-- Status: verified for the CPU and CUDA paths listed below; no cross-framework sample-bit identity claim.
-- Reviewed: 2026-10-15.
-- Owner: Jittor runtime and Torch compatibility maintainers.
-- Initial reproduction baseline: `4a4a480e628dae634a9d660f320c3aa957341e99`.
-- Final integration baseline: `b2aeec10874136c1b4b16c1598241252a5f92c87` plus this change. Intermediate CPU core and CUDA results at `a5932248fdb06fb52293f5ddd8a357f4920195ff` retain their original source seal. Synchronization preserved every owned file; final device and CPU checks ran again on the synchronized tree.
-- Recheck when: seed bindings, native generator engines, CUDA stream reservation, tensor factory placement, or checkpoint RNG ownership changes.
+- 状态：以下列出的 CPU 与 CUDA 路径已验证；不做跨框架样本逐位一致声明。
+- 复查日期：2026-10-15。
+- Owner：Jittor runtime 与 Torch 兼容维护者。
+- 初始复现基线：`4a4a480e628dae634a9d660f320c3aa957341e99`。
+- 最终整合基线：`b2aeec10874136c1b4b16c1598241252a5f92c87` 加本次改动。`a5932248fdb06fb52293f5ddd8a357f4920195ff` 上的中间 CPU core 与 CUDA 结果保留其原始源码封存。同步保留了每个 owned 文件；最终设备与 CPU 检查在同步后的树上重新运行。
+- 复查条件：seed 绑定、原生 generator engine、CUDA stream 预留、tensor factory placement 或 checkpoint RNG ownership 变化。
 
-## Confirmed failures and resulting behavior
+## 已确认的失败与最终行为
 
-Independent binary PyTorch 2.11.0+cu128 accepted the seed interval `[-2**63, 2**64-1]`, mapped negative seeds into unsigned 64-bit metadata, rejected both adjacent out-of-range values without mutation, and returned its default generator from `manual_seed`. The original Jittor frontend narrowed valid large values through a C++ `int` binding; `-1` could change its reported identity after a state restore. CUDA-only seeding additionally reseeded CPU/Python/NumPy through a convenience function. These were execution results, not conclusions inferred from the earlier PR audit.
+独立 binary PyTorch 2.11.0+cu128 接受 seed 区间 `[-2**63, 2**64-1]`，
+把负 seed 映射进无符号 64 位 metadata，在不改动状态的情况下
+拒绝相邻的两个越界值，并从 `manual_seed` 返回其默认 generator。
+原 Jittor 前端通过 C++ `int` 绑定收窄了合法的大值；
+`-1` 在状态恢复后可能改变其上报身份。仅 CUDA 的 seeding 还通过一个
+便利函数重新 seed CPU/Python/NumPy。这些是执行结果，
+不是从先前 PR 审计推断出的结论。
 
-An explicit shim generator previously drew from `numpy.random.Generator`, including when its final tensor was copied to CUDA. The old probe recorded actual NumPy calls. Its CUDA state tensor also lived on CUDA. An output pointer on a CUDA device did not establish a CUDA sampling provider.
+显式 shim generator 此前从 `numpy.random.Generator` 抽样，
+即使其最终张量被拷到 CUDA 时也是如此。旧探针记录了
+实际的 NumPy 调用。其 CUDA 状态张量也位于 CUDA 上。CUDA 设备上的输出指针
+并不能确立 CUDA 抽样 provider。
 
-The frontend now validates the Torch seed domain before mutation, delegates a full-width global seed to the existing native CPU owner and CUDA reset callback, and returns `torch.default_generator`. CUDA-only setters preserve CPU/Python/NumPy state. Native CUDA defaults retain one seed and cursor per device; legacy version-1 signed-seed CUDA checkpoints remain readable, and version 2 stores unsigned seed bits.
+前端现在在改动前校验 Torch seed 域，把全宽全局 seed
+委派给既有原生 CPU owner 与 CUDA 重置回调，并返回
+`torch.default_generator`。仅 CUDA 的 setter 保持 CPU/Python/NumPy 状态。
+原生 CUDA 默认值为每设备保留一个 seed 与 cursor；legacy version-1
+有符号 seed 的 CUDA checkpoint 仍可读，version 2 存储无符号 seed 位。
 
-Explicit generators wrap the existing native `jt.Generator`: the native CPU engine on CPU and the existing counter-based CUDA Philox kernel on CUDA. Supported factories pass the actual native handle through the random op; no second PRNG or NumPy sampling algorithm is added. Their opaque states are one-dimensional CPU ByteTensors. Pending CPU draws are completed before capture or reseeding. Foreign/corrupt states and mismatched devices fail before changing the owned stream. The existing native state parser now also refuses trailing bytes before committing a replacement engine.
+显式 generator 包裹既有原生 `jt.Generator`：CPU 上使用原生 CPU
+engine，CUDA 上使用既有的基于计数器的 CUDA Philox kernel。
+受支持的 factory 通过 random op 传递实际原生 handle；不增加
+第二套 PRNG 或 NumPy 抽样算法。其不透明状态是一维
+CPU ByteTensor。挂起的 CPU 抽样在捕获或重新 seed 前完成。
+外来/损坏状态与设备不匹配在改动 owned 流之前失败。
+既有原生状态解析器现在还会在提交替换 engine 前拒绝
+尾随字节。
 
-The CUDA factory regression additionally exposed `normal(Tensor mean, scalar std, generator=...)` choosing the default CPU placement. The factory now derives placement from a Tensor mean or std, including keyword arguments. Both forms execute on their requested native CUDA stream.
+CUDA factory 回归还暴露了 `normal(Tensor mean, scalar std, generator=...)`
+选择默认 CPU placement。factory 现在从 Tensor mean 或 std 推导
+placement，包括关键字参数。两种形式都在其请求的原生
+CUDA stream 上执行。
 
-A two-device checkpoint reproduction seeded devices with `2**64-1` and `2**63+17`. The native checkpoint consumer copied the current device's seed into both snapshot entries and restored the wrong second stream. It now queries the seed for each device. A second minimal reproduction confirmed that old native checkpoint tuples containing signed `-1` could no longer cross the unsigned restore binding. The consumer now validates the 64-bit interval and maps valid legacy signed bits without masking overflow. Legacy continuation and invalid boundary cases execute in the two-device test. Checkpoint layout and FSDP/optimizer mathematics are unchanged.
+一个双设备 checkpoint 复现用 `2**64-1` 与 `2**63+17` 为设备
+seed。原生 checkpoint 消费者把当前设备的 seed 拷进两个快照条目，
+恢复了错误的第二个流。它现在按设备查询 seed。
+第二个最小复现确认，包含有符号 `-1` 的旧原生 checkpoint tuple
+无法再通过无符号恢复绑定。消费者现在校验 64 位区间，
+并映射合法的 legacy 有符号位而不掩码溢出。legacy 续训与
+非法边界用例在双设备测试中执行。checkpoint layout 与
+FSDP/优化器数学不变。
 
-## Verification
+## 验证
 
-First JIT and extension compilation ran serially. CPU and CUDA had independent task-owned homes/caches, and the core runner separated native and Torch process caches. CUDA used the existing strict CUDA 12.2 wheel/toolchain fingerprint `pipcu122_a89fa4fed08c`, with backend fallbacks forbidden. Actual allocations were checked with the CUDA driver device-ordinal query before host reads.
+首次 JIT 与扩展编译串行执行。CPU 与 CUDA 有独立的
+任务自有 home/缓存，core runner 分开 native 与 Torch 进程
+缓存。CUDA 使用既有的严格 CUDA 12.2 wheel/工具链指纹
+`pipcu122_a89fa4fed08c`，禁止后端 fallback。
+实际分配在 host 读取前用 CUDA driver 设备 ordinal 查询检查。
 
-| Scope | Result | Evidence |
+| 范围 | 结果 | 证据 |
 | --- | --- | --- |
-| Torch seed/provider/state CUDA matrix, including two physical devices and native checkpoint consumer | 96 passed, 0 skipped | `logs/final-cuda-session-checked.log`, `final-cuda-session-checked.json` |
-| Native Generator and RandomOp CPU/CUDA, with independent Torch 2.13.0+cu130 statistical reference | 35 passed, 0 skipped | `logs/final-native-session.log`, `final-native-session.json` |
-| Independent Torch 2.11 / 2.13 and repaired shim CPU seed API comparison | 18 seed/state/error rows agree; 10 explicit native-handle primitive calls | `cpu-api-comparison.json`, `reference-cpu.json`, `reference213-cpu.json`, `candidate-cpu-after.json` |
-| Native checkpoint two-device counterexample and repaired restore | before: second seed incorrectly copied; after: both exact, fallbacks 0 | `checkpoint-per-device-{before,after}.json` |
-| Legacy native checkpoint negative seed | before: unsigned binding overflow; after: unsigned metadata and exact replay, fallbacks 0 | `checkpoint-legacy-{before,after}.json` |
-| CPU Torch RNG matrix | 53 passed, 28 accelerator skips; fallbacks 0 | `logs/final-cpu-session-retry.log`, `final-cpu-session.json` |
-| Native CPU checkpoint suite | 30 passed, 0 skipped; fallbacks 0 | `logs/final-checkpoint-cpu-session.log`, `final-checkpoint-cpu-session.json` |
-| Final compute/test source structure | 1486 passed, 6 skipped before adding this report | `logs/structure.log` |
-| CPU core at the intermediate baseline | 322 passed, 42 skipped, 1 xfailed | `logs/core.log` |
-| Layout and whitespace | passed | `logs/layout.log`; `git diff --check` |
-| Ruff against the original touched-source baseline | 0 new diagnostics; existing total 132 to 131 | `ruff-comparison.json` |
+| Torch seed/provider/state CUDA 矩阵，含两个物理设备与原生 checkpoint 消费者 | 96 passed，0 skipped | `logs/final-cuda-session-checked.log`, `final-cuda-session-checked.json` |
+| 原生 Generator 与 RandomOp CPU/CUDA，配独立 Torch 2.13.0+cu130 统计参考 | 35 passed，0 skipped | `logs/final-native-session.log`, `final-native-session.json` |
+| 独立 Torch 2.11 / 2.13 与修复后 shim 的 CPU seed API 比较 | 18 个 seed/state/error 行一致；10 个显式原生 handle 原语调用 | `cpu-api-comparison.json`, `reference-cpu.json`, `reference213-cpu.json`, `candidate-cpu-after.json` |
+| 原生 checkpoint 双设备反例与修复后恢复 | 之前：第二个 seed 被错误复制；之后：两者精确，fallback 0 | `checkpoint-per-device-{before,after}.json` |
+| Legacy 原生 checkpoint 负 seed | 之前：无符号绑定溢出；之后：无符号 metadata 与精确重放，fallback 0 | `checkpoint-legacy-{before,after}.json` |
+| CPU Torch RNG 矩阵 | 53 passed，28 个加速器 skip；fallback 0 | `logs/final-cpu-session-retry.log`, `final-cpu-session.json` |
+| 原生 CPU checkpoint 套件 | 30 passed，0 skipped；fallback 0 | `logs/final-checkpoint-cpu-session.log`, `final-checkpoint-cpu-session.json` |
+| 最终计算/测试源码 structure | 添加本报告前 1486 passed，6 skipped | `logs/structure.log` |
+| 中间基线下的 CPU core | 322 passed，42 skipped，1 xfailed | `logs/core.log` |
+| 布局与空白 | 通过 | `logs/layout.log`；`git diff --check` |
+| 针对原始受影响源码基线的 Ruff | 0 个新诊断；既有总数 132 到 131 | `ruff-comparison.json` |
 
-The CUDA matrix includes full-width positive and negative seeds, invalid-seed atomicity, default-generator identity, Python/NumPy/global-stream isolation, lazy draw capture, fresh-generator restore, pickling, corrupt state rejection, mismatched-device rejection, and actual native handles for twelve factory forms. `randint` is exercised on a small representable interval. Seven CUDA-extension rows cover mixed native/extension continuation, reservation rounding, invalid increments, unsigned full-width seed bits, and exact replay after restoration.
+CUDA 矩阵包含全宽正负 seed、非法 seed 原子性、default-generator
+身份、Python/NumPy/全局流隔离、延迟抽样捕获、新 generator
+恢复、pickling、损坏状态拒绝、设备不匹配拒绝，以及
+12 种 factory 形式的实际原生 handle。`randint` 在一个小的
+可表示区间上执行。七个 CUDA 扩展行覆盖混合原生/扩展续训、
+预留取整、非法增量、无符号全宽 seed 位与恢复后的精确重放。
 
-For two devices, the test checks distinct seed metadata, CPU ByteTensor snapshots, real allocation ordinals, unchanged state on the untargeted device, exact per-device continuation, all-device restoration, malformed multi-state refusal before mutation, independent explicit-generator state, and native checkpoint snapshot/restore. This is single-host device isolation, not a multi-host result.
+对两个设备，测试检查不同的 seed metadata、CPU ByteTensor
+快照、真实分配 ordinal、未目标设备上的状态不变、逐设备精确
+续训、全设备恢复、改动前拒绝畸形多状态、独立的显式
+generator 状态，以及原生 checkpoint 快照/恢复。这是单主机
+设备隔离，不是多主机结果。
 
-Earlier failed attempts are retained: private interpreter bootstrap/import ordering, an observer attached to the Python package rather than the actual core random primitive, an incorrect old expectation that `manual_seed` returns the Torch module, a bare-CUDA constructor's shadowed `max`, the Tensor-normal placement failure, and missing private pybind11 headers before extension compilation. No failure was converted into a permissive assertion. The old shared Torch-ref installation subsequently lacked its shared-memory helper; it was left untouched. A separately verified complete binary Torch 2.13 installation supplied the final RandomOp reference and repeated all eighteen CPU seed API rows with the same outcomes. Its binary identity is recorded independently. A later CPU cache-path switch produced the documented JIT-tool update exit code 3 before any test ran; that startup was retained and the same source was rerun after rebuilding.
+更早的失败尝试均保留：私有解释器 bootstrap/import 顺序、
+observer 挂在 Python 包而非实际核心 random 原语上、旧的错误预期
+（`manual_seed` 返回 Torch 模块）、bare-CUDA 构造器的 `max`
+被遮蔽、Tensor-normal placement 失败，以及扩展编译前缺少私有
+pybind11 头文件。没有任何失败被转成宽松断言。
+旧的共享 Torch-ref 安装随后缺少其共享内存 helper；未去改动它。
+一个另行验证的完整 binary Torch 2.13 安装提供了最终 RandomOp
+参考，并以相同结果重复了全部十八个 CPU seed API 行。
+其二进制身份独立记录。之后一次 CPU 缓存路径切换在任何测试
+运行前产生文档所述的 JIT 工具更新退出码 3；该次启动被保留，
+同一源码在重建后重跑。
 
-After this report was added, the focused documentation/packaging run passed 21 checks and failed the two central registration checks: the new page is absent from the results toctree and generated root manifest. The integration owner maintains those two shared files; this standalone change does not claim those checks passed. The preceding 1486/6 structure result applies to the unchanged compute/test source before adding this report.
+添加本报告后，定向文档/打包运行通过 21 项检查，
+失败于两项中央登记检查：新页面不在 results toctree 与生成的
+根 manifest 中。整合 owner 维护这两个共享文件；
+本次独立改动不声称这些检查通过。此前的 1486/6 structure
+结果适用于添加本报告之前未变的计算/测试源码。
 
-Integration onto `ab006244a34c550a5f7235b1f65ec7d4165bde9d` registered this page in the results index and generated manifest. All 120 sealed raw artifacts and all 17 committed file hashes were independently rechecked. The integrated structure/tool suite passed 1690 checks with six declared/environment skips; core passed 322 checks with 42 skips and one existing expected failure. A combined CPU RNG/pytree follow-up passed 62 checks with 36 accelerator skips. These integration logs are unversioned under `$JITTOR_LAB_ROOT/_state/rng-integration-ab006/`. The earlier standalone registration failures remain historical evidence.
+在 `ab006244a34c550a5f7235b1f65ec7d4165bde9d` 上整合后，
+本页在 results index 与生成的 manifest 中登记。全部 120 个封存
+原始产物与全部 17 个已提交文件哈希均独立复检。整合后的
+structure/tool 套件通过 1690 项检查，含六个声明/环境 skip；core 通过 322
+项检查，含 42 个 skip 与 1 个既有预期失败。合并的 CPU RNG/pytree
+后续通过 62 项检查，含 36 个加速器 skip。这些整合日志未版本化，
+位于 `$JITTOR_LAB_ROOT/_state/rng-integration-ab006/`。更早的独立登记
+失败保留为历史证据。
 
-## Reproduction
+## 复现
 
-Use a private Python environment with the repository's pytest/plugin pins, NumPy, pybind11 for the extension rows, and a complete independent binary PyTorch installation for native reference rows. Set `PYTHONPATH` to this checkout's `python`, isolate `HOME`, `JITTOR_HOME`, and `TMPDIR`, and select CPU/CUDA with the canonical `JT_BACKEND` / `JT_USE_CUDA` settings. With pytest autoload disabled, enable both `pytest_timeout` and `xdist.plugin`.
+使用私有 Python 环境，配仓库的 pytest/插件固定版本、NumPy、
+扩展行所需的 pybind11，以及原生参考行所需的完整独立
+binary PyTorch 安装。把 `PYTHONPATH` 设为本 checkout 的 `python`，
+隔离 `HOME`、`JITTOR_HOME` 与 `TMPDIR`，并用规范的 `JT_BACKEND` /
+`JT_USE_CUDA` 设置选择 CPU/CUDA。禁用 pytest 自动加载时，启用
+`pytest_timeout` 与 `xdist.plugin`。
 
 ```bash
 # Torch mode; CUDA build, two visible physical devices, strict fallback scope in tests.
@@ -75,10 +144,28 @@ bash tools/check_repo_layout.sh
 JITTOR_TORCH_SHIM=1 PYTHONPATH=python python -m pytest -q tests/structure
 ```
 
-Raw JSON, source hashes, independent runtime identity, exact environment scripts, failed runs and logs are unversioned under `$JITTOR_LAB_ROOT/_state/rng-generator-entry-contracts/20261015/`. `baseline-source.json`, the synchronization records, `final-compute-source.json` and `post-sync-compute-source.json` keep each baseline and owned-source snapshot separate; `SHA256SUMS.json` lists retained raw artifacts while explicitly excluding runtime caches and dependencies.
+原始 JSON、源码哈希、独立 runtime 身份、精确环境脚本、失败
+运行与日志未版本化，位于 `$JITTOR_LAB_ROOT/_state/rng-generator-entry-contracts/20261015/`。
+`baseline-source.json`、同步记录、`final-compute-source.json` 与
+`post-sync-compute-source.json` 各自分开保存每个基线与 owned 源码快照；
+`SHA256SUMS.json` 列出保留的原始产物，并显式排除
+runtime 缓存与依赖。
 
-## Boundaries
+## 边界
 
-Native CPU, native explicit CUDA Philox, CUDA default cuRAND, and PyTorch use different algorithms/state formats. The guarantee tested here is seed metadata, stream ownership, isolation, and exact within-runtime replay. PyTorch or former NumPy-backed shim state bytes cannot be replayed by these native owners and are refused. Cross-device explicit state migration is intentionally rejected.
+原生 CPU、原生显式 CUDA Philox、CUDA 默认 cuRAND 与
+PyTorch 使用不同的算法/状态格式。此处验证的保证是
+seed metadata、流 ownership、隔离与 runtime 内精确重放。
+PyTorch 或旧 NumPy 支撑的 shim 状态字节无法被这些原生 owner
+重放，会被拒绝。跨设备的显式状态迁移被有意拒绝。
 
-This does not upgrade every factory's fidelity: native integer sampling's existing float-based approximation, large integer intervals, stable tie handling, unsupported `out=`, and broader layout/memory-format semantics remain outside this result. The default-generator delegate was a separate Python class in this measurement. The [default-generator follow-up](2026-10-15-default-generator-state-contract.md) unifies the public Python class, CPU snapshot exchange and private-copy semantics; complete C-extension ABI parity remains outside these results. No ROCm/NPU/Corex hardware claim follows from shared source edits. The legacy callback ABI and legacy native `jt.set_seed(int)` entry remain unchanged; full-width behavior of other RNG consumers such as cuDNN RNN dropout was not executed here. No benchmark, speed, or memory-capacity conclusion is drawn from these small correctness tests.
+这并未提升每个 factory 的保真度：原生整数抽样的既有
+基于浮点的近似、大整数区间、稳定的 tie 处理、不支持的 `out=`
+以及更广的 layout/内存格式语义都不在本结果内。本次测量中
+default-generator 委派是一个单独的 Python 类。[default-generator 后续](2026-10-15-default-generator-state-contract.md)
+统一了公共 Python 类、CPU 快照交换与私有拷贝语义；
+完整的 C-extension ABI 一致仍不在这些结果内。共享源码改动
+不产生 ROCm/NPU/Corex 硬件结论。legacy 回调 ABI 与 legacy
+原生 `jt.set_seed(int)` 入口不变；其他 RNG 消费者（如
+cuDNN RNN dropout）的全宽行为未在此执行。这些小的正确性
+测试不引出 benchmark、速度或内存容量结论。

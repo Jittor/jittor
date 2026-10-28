@@ -52,15 +52,55 @@ def module_call(module, *args, **kwargs):
     return python_module_call(module, *args, **kwargs)
 
 
+def module_init(module, *args, **kwargs):
+    """The native ``Module`` initializer, republished on ``torch.nn.Module``.
+
+    Torch subclasses reach it with ``super(nn.Linear, self).__init__()``. A
+    ``super`` lookup reads only each class's own dict along the instance MRO,
+    so this entry has to exist here: without it the lookup walked past
+    ``torch.nn.Module`` down to the adapted class's native layer and demanded
+    that layer's arguments (PEFT's VERA and BoFT adapters call it this way).
+    """
+    type(module)._torch_native_module.__init__(module, *args, **kwargs)
+
+
 def python_module_call(module, *args, **kwargs):
     owner = type(module)._nn_frontend_owner
     # A forward follows its inputs' device; only constructors use the default.
-    # The first tensor argument is the reference, as `*_like` uses its source:
-    # with none (or one without an explicit placement) allocation is left to
-    # the ambient device, and never forced onto the default one.
-    with tensor_frontend(owner.tensor_type, like=_first_tensor(owner, args, kwargs),
+    # The first tensor argument is the reference, as `*_like` uses its source.
+    # When it has no explicit placement the module's own placement decides
+    # (`_placement_reference`), never the default one.
+    with tensor_frontend(owner.tensor_type,
+                         like=_placement_reference(owner, module, args, kwargs),
                          default_placement=False):
         return owner.native_module.__call__(module, *args, **kwargs)
+
+
+def _placement_reference(owner, module, args, kwargs):
+    """The tensor a forward's allocations follow.
+
+    The first tensor argument, when it carries an explicit placement: the
+    input decides, as before. An argument with none leaves the choice open,
+    and then the module's own explicitly placed parameters decide, because
+    they are the operands that cannot follow. A torch module left at its
+    default CPU placement and called with an unplaced accelerator tensor has
+    to run where its parameters live: letting the runtime decide put the
+    forward's intermediates on the accelerator while the parameters stayed on
+    the host, and the first two-operand op refused the mix. Under autocast in
+    particular the portable convolution builds that contraction itself, which
+    put the forward on the parameters' device.
+    """
+    backend = getattr(owner.tensor_type, "_frontend_backend", None)
+    reference = _first_tensor(owner, args, kwargs)
+    if backend is None:
+        return reference
+    var_type = backend.Var
+    if reference is not None and getattr(reference, "placement_backend", -1) >= 0:
+        return reference
+    for value in getattr(module, "__dict__", {}).values():
+        if isinstance(value, var_type) and getattr(value, "placement_backend", -1) >= 0:
+            return value
+    return reference
 
 
 def _first_tensor(owner, args, kwargs):
@@ -194,7 +234,9 @@ class NNFrontendOwner:
         self.Module = type("Module", (self.native_module,), {
             "__module__": "torch.nn", "__slots__": (),
             "_frontend_tensor_type": tensor_type, "_nn_frontend_owner": self,
+            "_torch_native_module": self.native_module,
             "__setattr__": module_setattr, "__call__": module_call,
+            "__init__": module_init,
         })
         self.adapters = {self.native_module: self.Module}
         self.modules = {}
@@ -224,7 +266,17 @@ class NNFrontendOwner:
             "__init__": LayerInitializer(self, native),
             "_torch_native_layer": native,
         }
-        adapted = type(native.__name__, (native, self.Module), namespace)
+        # `super(nn.Linear, self).__init__()` must reach `nn.Module.__init__`,
+        # as it does in torch, where Linear's next base is Module. PEFT's VERA
+        # and BoFT adapters write exactly that. The super lookup reads only
+        # each class's own dict, so this bridge -- transparent everywhere else
+        # -- puts the Module initializer next in line while keeping the native
+        # layer ahead of the frontend Module for every real method.
+        bridge = type(native.__name__, (native,), {
+            "__module__": "torch.nn", "__slots__": (),
+            "__init__": module_init,
+        })
+        adapted = type(native.__name__, (bridge, self.Module), namespace)
         self.adapters[native] = adapted
         return adapted
 

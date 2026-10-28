@@ -22,7 +22,7 @@ def test_operators_keep_the_line_that_built_them():
             return value * 7.0              # HELPER_LINE
 
         def line_of(marker):
-            source = open(__file__).read().splitlines()
+            source = open(__file__, encoding="utf-8").read().splitlines()
             return next(i + 1 for i, text in enumerate(source) if marker in text)
 
         with jt.runtime.scope(use_cuda=1, trace_py_var=0, auto_flush_ops=0):
