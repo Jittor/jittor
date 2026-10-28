@@ -109,6 +109,10 @@ The device profile needs CUPTI:
   `test_tensor_inplace_storage.py`, `test_torch_compat_optim.py`: 177 passed.
 - `tests/structure`: 1571 passed / 4 skipped; the only failure is
   `test_asv_entrypoints` because that interpreter has no `asv`, unrelated here.
+- Ecosystem parity (`test_ecosystem_parity.py -k EcosystemParityCUDA`):
+  10 passed / 6 skipped / 1 failed. The failure is a T5 decoder MLP gradient at
+  3.337e-02 against a 2e-2 band, identical at `008cae211`, so it is
+  pre-existing and recorded as KI-COMPAT-021.
 
 ## Open
 

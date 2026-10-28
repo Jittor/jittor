@@ -1,8 +1,8 @@
 # Known-Issues Ledger
 
 - Status: Maintained
-- Last reviewed: 2026-10-26
-- Baseline: `2fb04289c`
+- Last reviewed: 2026-10-29
+- Baseline: `1a750dbee`
 - Owner: Jittor core maintainers
 - Review when: an entry is fixed or narrowed, a strict expected failure
   XPASSes, a new defect is reproduced, or at quarterly maintenance
@@ -1665,6 +1665,30 @@ workaround.
 - Exit condition: the four evidence files' cases run on an environment with
   Transformers/Diffusers installed (the metadata mechanism itself is covered by
   `compat/tests/torch/test_torch_shim_distribution_metadata.py`).
+
+## KI-COMPAT-021: T5's decoder MLP gradient leaves the parity band on CUDA
+
+- Severity: Medium (a gradient is wrong by 1.7x the accepted error; the forward
+  and the rest of the gradients agree)
+- Status: Open. Reproduced 2026-10-29 at `008cae211` and `1a750dbee` with the
+  same value, so it predates the float32 attention row-term change.
+- Owner: torch compatibility maintainers
+- Symptom:
+  `compat/tests/torch/test_ecosystem_parity.py::EcosystemParityCUDA::test_transformers_t5`
+  fails on `grad::decoder.block.1.layer.2.DenseReluDense.wi.weight diverged:
+  3.337e-02` against the 2e-2 maximum-relative-error band. The reported value is
+  bit-identical on both commits and across runs.
+- Cause: not isolated. The parameter belongs to a ReLU MLP, so the divergence
+  enters through the decoder block upstream of it. Ruled out: the float32
+  attention backward row term (the number does not move across `b0dcb366d`) and
+  the reference side (the case completes; an older oracle failed in apex before
+  the model ran at all).
+- Workaround: none for T5 training parity on CUDA; the rest of the ecosystem
+  parity matrix passes on the same encoder-decoder shapes it exercises.
+- Evidence: the nodeid above, run with the command in
+  [`docs/results/2026-10-29-cuda-f32-attention-row-term.md`](../../docs/results/2026-10-29-cuda-f32-attention-row-term.md).
+- Exit condition: the case passes on CUDA inside the band, or the band for this
+  case is raised in a change that says why.
 
 ## KI-DIST-001: FSDP2 flat sharding peaks above the unsharded model
 

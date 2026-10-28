@@ -96,6 +96,10 @@ CUDA 设备侧 profile 需要 CUPTI：`JITTOR_CUPTI_LIB=<...>/nvidia/cuda_cupti/
   `test_torch_compat_optim.py`：177 passed。
 - `tests/structure`：1571 passed / 4 skipped；唯一失败是 `test_asv_entrypoints`
   所在解释器没有装 `asv`，与本改动无关。
+- 生态 parity（`test_ecosystem_parity.py -k EcosystemParityCUDA`）：10 passed /
+  6 skipped / 1 failed。唯一失败是 `transformers_t5` 的一个解码器 MLP 梯度
+  3.337e-02（带宽 2e-2），在 `008cae211` 上数值完全相同，属既有问题，记在
+  KI-COMPAT-021。
 
 ## 未结
 
