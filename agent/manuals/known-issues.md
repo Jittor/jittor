@@ -1480,40 +1480,6 @@ workaround.
   runs across cards that the single observation is treated as a one-off
   and this entry closed.
 
-## KI-EXEC-017: a failed batch's leftover error is rethrown inside the next flag scope
-
-- Severity: Medium (one failure poisons unrelated tests later in the same
-  process; the failing test itself already reports its own error)
-- Status: Open; reproduced on Ascend 910B3 with CANN 9.0.0 (2026-10-28,
-  `60e3febe4`). Fixed at `72cec78be` after a CPU reproduction; the 910B3
-  retest (`-k "not rfft"` plus the four-test probe) is pending.
-- Owner: executor error path and flag-scope maintainers
-- Symptom: in one process, after
-  `tests/backends/acl/test_acl_indexing.py::test_acl_rfft_keeps_lazy_dft_constants_alive`
-  fails with `unregistered fused operator variant: unary/imag`, six later
-  indexing cases fail with `code requires source for the selected backend
-  (code_op.cc:388)`. Each passes alone, and `-k "not rfft"` runs the file green
-  (70 passed). The later error names the op created in the rfft test, not the
-  test that receives it.
-- Cause: the operator that threw was marked `_execution_failed`, but the rest
-  of its plan never ran and stayed pending. The next `sync_all()` -- here the
-  flush `flag_scope.__exit__` runs while moving `use_cuda`/`use_acl` -- planned
-  and executed that leftover operator again and re-raised the batch's error.
-  Device flags were verified restored to 0 before the rethrow, so the flags
-  were not the carrier. A CPU reproduction (`jt.code` without a source next to
-  a second op in the same batch) shows the same re-raise; marking every
-  unfinished var of the failed plan and skipping failed roots in `sync_all`
-  stops it.
-- Workaround: run the file with `-k "not rfft"`, or isolate the rfft case in
-  its own process.
-- Evidence: the six nodeids in `tests/backends/acl/test_acl_indexing.py`;
-  910B3 logs under `$JITTOR_LAB_ROOT/_state/npu-accept/`; a four-test probe
-  (pass, rfft, pass, bool-slice) reproduced the cascade.
-- Exit condition: one failed batch reports its error once and the next scope
-  exit is unaffected; the full indexing file passes when the rfft failure is
-  caught by its own test, and a regression pins that a caught failure leaves
-  the flags and the next test's backend selection unchanged.
-
 ## KI-COMPAT-001: Torch namespaces publish native-only helpers and imported symbols
 
 - Severity: Medium
