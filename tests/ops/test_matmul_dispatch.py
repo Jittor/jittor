@@ -170,6 +170,25 @@ class TestCapabilityPredicate(unittest.TestCase):
                 v = self._var(dtype)
                 self.assertTrue(matrix._same_floating_dtype(v, v))
 
+    def test_the_float32_relay_declines_under_either_half_policy(self):
+        """The compiled selection rule must answer what `prefers_half` does.
+
+        It used to test only the float16 bit, so a bfloat16 region still
+        selected the CBLAS relay, which computes float32 throughout: ``x @ w``
+        under ``torch.autocast("cpu", bfloat16)`` returned float32 once an
+        earlier product had registered the relay.
+        """
+        a = jt.array(np.ones((2, 2), dtype="float32"))
+        b = jt.array(np.ones((2, 2), dtype="float32"))
+        with jt.flag_scope(amp_reg=0):
+            self.assertTrue(matrix._supports_blas(a, b))
+        for bit in (jt.amp_flags.prefer16, jt.amp_flags.prefer_bfloat16,
+                    jt.amp_flags.prefer16 | jt.amp_flags.prefer_bfloat16):
+            with self.subTest(amp_reg=bit), jt.flag_scope(amp_reg=bit):
+                self.assertFalse(matrix._supports_blas(a, b))
+                self.assertIsNot(matrix.select_kernel("matmul", a, b),
+                                 matrix._blas_matmul)
+
 
 class TestMixedFloatPair(unittest.TestCase):
     """A float32 activation against a float16 weight is a real product.

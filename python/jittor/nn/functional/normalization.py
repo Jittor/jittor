@@ -10,6 +10,7 @@ from ... import _arg_policy
 from ._amp import prefers_half as _amp_prefers_half
 from ..backends import hooks as _backend_hooks
 from jittor._runtime.dispatch import dispatch_context, select_kernel as _select_kernel
+from jittor._runtime.amp_context import torch_autocast_active as _torch_autocast_active
 from jittor.backends.cuda.kernels.nn.batch_norm_training_cuda import (
     _batch_norm_cuda,
     _batch_norm_cuda_statistics,
@@ -445,12 +446,20 @@ def layer_norm(
             and _jittor_dtype_name(x.dtype) in ("float16", "bfloat16")):
         # Widen the whole body, not just the input: every float op built while
         # the register is set is lowered again, so an fp32-spelled intermediate
-        # does not survive. The result is narrowed once, which keeps the
-        # published dtype contract (half in, half out); the next
-        # autocast-eligible op rounds at the same boundary anyway.
+        # does not survive. ATen keeps layer_norm on its float32 autocast list
+        # -- the inputs are cast, the op runs in float32, and the result stays
+        # float32 for the next op to cast -- so a Torch autocast region must
+        # not narrow it back here. Narrowing added one rounding in the middle
+        # of a network: CPU bf16 autocast training ended 29.3% from its
+        # float32 loss, above the 25% gate, and keeping the float32 result
+        # brings it inside (KI-COMPAT-020). Native AMP is a different policy:
+        # it describes itself only through the register, whose inferred result
+        # dtype for a half input is half, so that path keeps the narrowing.
         with jt.flag_scope(amp_reg=jt.amp_flags.disabled):
             wide = layer_norm(x.float32(), normalized_shape, weight, bias,
                               eps, elementwise_affine)
+        if _torch_autocast_active():
+            return wide
         return wide.cast(_jittor_dtype_name(x.dtype))
     # The two relays are mutually exclusive by construction: the training one
     # requires `_output_requires_grad(x, weight, bias)` and the inference one

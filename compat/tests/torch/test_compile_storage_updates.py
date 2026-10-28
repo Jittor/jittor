@@ -58,5 +58,37 @@ class TestCompileStorageUpdates:
     def test_refused_rmsprop_commits_each_step_once(self, device):
         _run(device, 'rmsprop')
 
+    def test_warmed_replay_preserves_a_pending_outside_forward(self, device):
+        # An unrelated forward built between two replayed steps leaves its
+        # backward pending; the next replay writes the parameter underneath
+        # it. The backward must see the value the parameter held when the
+        # forward was built, as eager does.
+        parameter = torch.nn.Parameter(torch.zeros((2, 2), device=device))
+        opt = torch.optim.SGD([parameter], lr=.125, foreach=False, fused=False)
+        gradient = torch.full_like(parameter, .25)
+
+        def step(gradient):
+            opt.zero_grad(set_to_none=True)
+            loss = (parameter * gradient).sum()
+            loss.backward()
+            opt.step()
+            return loss
+
+        run = torch.compile(step, mode='reduce-overhead')
+        for _ in range(7):
+            run(gradient).sync()
+        assert run.refused is None
+        assert run.stats['replayed'] > 0
+        # Read the value back now: a device clone is lazy, and reading it at
+        # assert time would see the parameter as the last replay left it.
+        forward_time = parameter.detach().cpu().numpy().copy()
+        outside = (parameter + 1).exp().sum()
+        run(gradient).sync()
+        opt.zero_grad(set_to_none=True)
+        outside.backward()
+        np.testing.assert_allclose(
+            parameter.grad.cpu().numpy(), np.exp(forward_time + 1),
+            rtol=1e-5, atol=1e-6)
+
 
 instantiate_device_type_tests(TestCompileStorageUpdates, globals(), only_for=('cuda',))

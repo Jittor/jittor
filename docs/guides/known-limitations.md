@@ -17,7 +17,6 @@
 | `KI-SEMANTICS-003` | 浮点比较的后端验证不完整 | CPU/CUDA 与 NPU float32 已验证，其余 NPU dtype 与 ROCm 未验证 |
 | `KI-OPS-002` | 整数 floor-division 的后端验证不完整 | CPU/CUDA/NPU 已验证，ROCm 待验证 |
 | `KI-COMPLEX-001` | 原生复数能力有缺口 | 部分线性代数与 FFT 走实部/虚部桥接，`complex128` 未支持，见[复数 dtype](../notes/complex-dtype.md) |
-| `KI-EXEC-015` | warmed optimizer replay 之间新建的待反向外部图可能使用更新后的参数值 | CPU 已复现；先完成该图的反向再 replay 写入，或使用 eager |
 
 ## 性能与显存
 

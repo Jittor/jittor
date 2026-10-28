@@ -145,7 +145,19 @@ def zeros_(tensor):
 
 def kaiming_uniform_(tensor, a=0, mode='fan_in',
                      nonlinearity='leaky_relu', generator=None):
-    return _kaiming_uniform_(tensor, uniform_, a, mode, nonlinearity, generator)
+    if generator is None:
+        return _kaiming_uniform_(tensor, uniform_, a, mode, nonlinearity)
+    # The native helper refuses an explicit generator: it cannot advance a
+    # per-generator stream. `uniform_` can -- it draws from the shim Generator
+    # through the factory RNG owner -- so the same Kaiming bound is computed
+    # here and the draw goes through that path. RandLoRA initialises its
+    # projections this way.
+    if _not_var(tensor):
+        return tensor
+    import math
+    from jittor.init._fan import calculate_std
+    bound = math.sqrt(3.0) * calculate_std(tensor, mode, nonlinearity, a)
+    return uniform_(tensor, -bound, bound, generator)
 
 
 def ones_(tensor):

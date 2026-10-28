@@ -80,16 +80,6 @@ def _rg_set(self, v):
                 tensor.start_grad()
         _native_requires_grad.__set__(tensor, enabled)
 
-    def set_fsdp_peer(tensor, enabled):
-        # Flat-FSDP shards are views into the flat parameter and therefore are
-        # not native leaves. They are parameter representations, not user
-        # activations; storage refresh already uses the same start/stop policy.
-        if enabled:
-            if tensor.is_stop_grad():
-                tensor.start_grad()
-        elif not tensor.is_stop_grad():
-            tensor.stop_grad()
-
     fsdp_entry = getattr(self, "_jittor_fsdp2_entry", None)
     fsdp_state = getattr(self, "_jittor_fsdp2_state", None)
     if fsdp_entry is not None and fsdp_state is not None:
@@ -98,7 +88,13 @@ def _rg_set(self, v):
                      getattr(fsdp_entry, "full_param", None)):
             if not isinstance(peer, _NativeVar) or peer is self:
                 continue
-            set_fsdp_peer(peer, v)
+            # A shard view is not a backward leaf, and the leaf rule the
+            # public setter enforces does not apply to a tensor that only
+            # mirrors its owner's policy.
+            if peer.is_backward_leaf:
+                _native_requires_grad.__set__(peer, v)
+            else:
+                peer._set_requires_grad_mirrored(v)
             if v:
                 _register_leaf(peer)
         if getattr(fsdp_state, "true_fsdp_flat", False):

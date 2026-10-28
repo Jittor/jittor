@@ -1661,33 +1661,6 @@ workaround.
   Transformers/Diffusers installed (the metadata mechanism itself is covered by
   `compat/tests/torch/test_torch_shim_distribution_metadata.py`).
 
-## KI-COMPAT-020: CPU bf16 autocast training stays above the fp32 loss spread
-
-- Severity: Medium (numerical fidelity; per-op results are correct)
-- Status: Open; measured 2026-10-27 through the in-process shim on CPU.
-- Owner: amp/autocast maintainers
-- Symptom: `TestAutocastTraining::test_bfloat16_autocast` ends at 0.15820
-  against the float32 baseline's 0.12238 (29.3%), above the suite's 25% gate;
-  real torch 2.13 on the same task is +0.4%. The float32 baseline,
-  float16+GradScaler case and the per-op half suites pass.
-- Cause: the shim has one process-wide amp register, while ATen autocasts per
-  operator and keeps a float32 op list. One concrete lowering is fixed: the
-  generic contraction used to accumulate at the half width when a half
-  preference and `keep_reduce` were both set, so a K=256 bf16 matmul was 3.3%
-  from the bf16-input reference; stripping the half preference leaves
-  `keep_reduce` alone and brings it to 0.3%, pinned by
-  `tests/nn/test_matmul_half_accumulation.py`. The remaining one-step
-  first-layer weight-gradient error through Linear+ReLU is still 8-12%
-  against fp32, which is the coarse register rather than one wrong kernel.
-- Workaround: use float32, or insert explicit float32 casts around long bf16
-  CPU training, when the final loss has to match torch's bf16 spread.
-- Evidence: the nodeid above and the per-op suites in
-  `compat/tests/torch/test_torch_half_precision_numerics.py`; the matmul
-  regression names the fixed lowering.
-- Exit condition: bf16 autocast training lands inside the 25% gate (ideally
-  torch's sub-1% spread), with per-op float32 handling where ATen keeps an
-  operator in float32.
-
 ## KI-DIST-001: FSDP2 flat sharding peaks above the unsharded model
 
 - Severity: Limitation (memory; numerics are correct)
@@ -1781,56 +1754,6 @@ workaround.
 - Exit condition: extend `files` one package at a time with real fixes (no
   `# type: ignore`, no relaxed configuration); delete the entry when
   `python/jittor` and `backends/` are covered.
-
-## KI-EXEC-015: warmed optimizer replay does not preserve pending external forward readers
-
-- Severity: High
-- Status: Open; CPU executor replay reproduced on unchanged integration `1fa76c8cc` (2026-10-25). CUDA and other accelerators not validated for this scenario.
-- Owner: GraphReplay / StepCapture and autograd storage maintainers.
-- Symptom: after a Torch compiled optimizer step has warmed up and entered replay, construct an unrelated differentiable forward from a parameter, leave it pending, replay another optimizer step, then backpropagate the old forward. Its gradient may use the parameter's new value instead of the forward-time value. Example: SGD `lr=.125`, constant gradient `.25`, seven replayed steps from zero, then `old=(p+1).exp().sum()`, another compiled step, `old.backward()`: CPU produced `exp(.75)` instead of `exp(.78125)`.
-- Cause: an already-kept graph's storage writes cannot acquire newly created external reader dependencies through the ordinary graph-build preservation path. The native imperative/fused saved-output preservation fix does not establish arbitrary interleaving support for outside graphs around warmed compiled replays.
-- Workaround: avoid interleaving pending external differentiable graphs with replayed writes to their parameter storage; complete that graph's backward before the next mutating replay, or run this pattern through the eager owner. This is an ordering restriction, not a verified promise that every explicit materialization strategy repairs all saved values.
-- Evidence: baseline CPU probe `replay-outsider.py` and `control/logs/replay-outsider.log` under the external lab state `pr-audit-storage`; promote the minimal sequence to a tracked regression when addressing the contract. It was reproduced before `881e9ece6`, and is distinct from its corrected noncompiled direct/transitive saved-output cases.
-- Exit condition: either preserve externally added saved readers before each replayed storage write or reject this interleaving explicitly; add warmed-replay tests for direct and transitive outside readers, aliases, and both eager/captured owners, and verify CPU plus the supported real accelerator paths. Do not cite passing optimizer-only replay tests as this guarantee.
-
-
-Reproduce from the selected source checkout with a configured compiler and an isolated lab `JITTOR_HOME`/`TMPDIR`; record `git rev-parse HEAD`. This CPU-only wrapper is syntax checked; the observed failure comes from the original equivalent probe.
-
-```bash
-JITTOR_TORCH_SHIM=1 JITTOR_TEST_DEVICES=cpu JT_BACKEND=cpu JT_USE_CUDA=0 JT_BUILD_NVCC_PATH= JT_USE_PARALLEL_OP_COMPILER=0 PYTHONPATH=compat/shim/resources:python python - <<'PY'
-import numpy as np
-import torch
-import jittor as jt
-from jittor._runtime.fallback import forbid_backend_fallbacks
-assert hasattr(torch, '_torch_compat_install_context'), 'Jittor Torch frontend required'
-assert torch.Tensor is not jt.Var
-with jt.runtime.scope(use_cuda=0, backend_fallback='error'), forbid_backend_fallbacks():
-    p = torch.nn.Parameter(torch.zeros((2, 2), device='cpu'))
-    opt = torch.optim.SGD([p], lr=.125, foreach=False, fused=False)
-    gradient = torch.full_like(p, .25)
-    def step(gradient):
-        opt.zero_grad(set_to_none=True)
-        loss = (p * gradient).sum()
-        loss.backward()
-        opt.step()
-        return loss
-    run = torch.compile(step, mode='reduce-overhead')
-    for _ in range(7):
-        run(gradient).sync()
-    assert p.device.type == 'cpu'
-    assert jt.core.dispatch_context([p]) == ('cpu', -1)
-    old = (p + 1).exp().sum()
-    run(gradient).sync()
-    opt.zero_grad()
-    old.backward()
-    assert p.grad is not None
-    assert jt.core.backend_fallback_count() == 0
-    np.testing.assert_allclose(p.grad.numpy(), np.exp(1 - 7 * .125 * .25),
-                               rtol=2e-6, atol=2e-7)
-PY
-```
-
-
 
 ## KI-CODEGEN-006: a rank-1 full sum still materializes a pending reshaped producer
 

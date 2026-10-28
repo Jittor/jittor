@@ -145,6 +145,36 @@ class TestStepCapture(unittest.TestCase):
         cap = self._check(eager, captured, _feeds(), between)
         self.assertEqual(cap.stats["captured"], 1)
 
+    def test_a_pending_outside_forward_reads_the_forward_time_state(self):
+        # A differentiable graph built between two replays -- an unrelated
+        # forward from a parameter, left pending -- saves activations whose
+        # inputs are the storages the next replay writes. Its backward must
+        # see the values those storages held when it was built: directly,
+        # through an unsaved intermediate, and through a view.
+        cases = (
+            ("direct", lambda w: (w + 1).exp().sum(),
+             lambda w: np.exp(w + 1)),
+            ("transitive", lambda w: (w * 2 + 1).exp().sum(),
+             lambda w: 2 * np.exp(2 * w + 1)),
+            ("alias", lambda w: (w.view(-1) + 1).exp().sum(),
+             lambda w: np.exp(w + 1)),
+        )
+        for name, outside_of, expected in cases:
+            with self.subTest(case=name):
+                w, b = _state()
+                captured = jt.capture_step(_make_step(w, b, lambda: 0.1))
+                feeds = _feeds(4)
+                for x, y in feeds[:3]:
+                    float(captured(x, y).numpy())
+                self.assertIsNone(captured.refused)
+                self.assertEqual(captured.stats["replayed"], 1)
+                before = w.numpy().copy()
+                outside = outside_of(w)
+                float(captured(*feeds[3]).numpy())
+                gradient, = jt.grad(outside, [w])
+                np.testing.assert_allclose(gradient.numpy(), expected(before),
+                                           rtol=1e-5, atol=1e-6)
+
     def test_invalidating_takes_no_step(self):
         eager, captured = self._twins()
         feeds = _feeds(6)

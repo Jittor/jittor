@@ -473,6 +473,12 @@ def _api_jit_attribute(value, type=None):
     return value
 
 
+def _api_jit_annotate(type, value):
+    # Same contract as `annotate`: a static type hint for the compiler, the
+    # value at runtime.
+    return value
+
+
 def _api_fx_wrap(f=None, *a, **k):
     return f if f is not None and callable(f) else _identity
 

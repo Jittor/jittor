@@ -86,7 +86,12 @@ def repeat_interleave(x,repeats,dim=None,output_size=None):
         tar_shape = list(x.shape)
         tar_shape[dim] = tar_shape[dim] * repeats
         broadcast_shape = [-1] * (dim + 1) + [repeats] + [-1] * (x.ndim - dim - 1)
-        return x.unsqueeze(dim + 1).expand(broadcast_shape).reshape(tar_shape)
+        # Torch's repeat_interleave is a copy. The reshape above can be a
+        # stride-0 view (a size-1 axis expanded then folded back in), which
+        # refused in-place writes and kept aliasing the source; `contiguous`
+        # makes the produced buffer its own without materializing eagerly.
+        return x.unsqueeze(dim + 1).expand(broadcast_shape).reshape(
+            tar_shape).contiguous()
 
     result = _repeat_interleave_dim0_cuda(x, repeats, dim, output_size, _repeat_interleave_cpu_source)
     if result is not None:

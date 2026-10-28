@@ -38,6 +38,20 @@ class TestRepeatOp(unittest.TestCase):
         assert np.allclose(np_b, jt_b.data)
 
 
+    def test_repeat_results_are_their_own_dense_storage(self):
+        # Both ops are copies in torch. Built as expand + reshape they were
+        # stride-0 views: an in-place write through the result was refused and
+        # the result kept the source's storage (PEFT's OFT expands an identity
+        # with repeat and then adds into it; HRA trains a repeat_interleave
+        # result in place).
+        source = jt.array(np.array([[1., 2.], [3., 4.]], dtype="float32"))
+        repeated = jt.repeat(source, 2, 2)
+        self.assertTrue(repeated._storage_is_contiguous())
+        self.assertEqual(list(repeated._storage_strides()), [4, 1])
+        interleaved = jt.repeat_interleave(source, 2, dim=0)
+        self.assertTrue(interleaved._storage_is_contiguous())
+        self.assertEqual(list(interleaved._storage_strides()), [2, 1])
+
     def test_highdim(self):
         np_a = np.arange(64).reshape(2, 2, 2, 2, 2, 2)
         jt_a = jt.array(np_a)

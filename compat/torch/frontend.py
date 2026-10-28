@@ -391,8 +391,34 @@ def rebuild_tensor(tensor_type, array, dtype, requires_grad, device=None):
 
 def deepcopy_tensor(value, memo):
     from copy import deepcopy
+    from .tensor_object_state import TensorObjectState, get_tensor_object_state
     result = rebuild_tensor(type(value), value.numpy(), _jittor_dtype_name(value.dtype),
                             value.requires_grad, str(value.device))
     memo[id(value)] = result
-    result.__dict__.update(deepcopy(_python_state(value), memo))
+    state = _python_state(value)
+    original_state = get_tensor_object_state(value)
+    object_state = state.pop("_torch_object_state", None)
+    result.__dict__.update(deepcopy(state, memo))
+    if original_state is None:
+        return result
+    # The copy owns new storage, as torch's does. A `.data` alias must not
+    # survive pointing at the *original* holder -- `weight = deepcopy(
+    # base.weight.data); weight += delta` then wrote through `base` and dropped
+    # delta's gradient edge, which is how PEFT's SHiRA adapter builds its
+    # dense weight -- while an alias that named this tensor itself follows into
+    # the copy, which is the state contract the frontend publishes.
+    copied = TensorObjectState()
+    self_owner = original_state.data_owner is value
+    copied.data_owner = result if self_owner else None
+    copied.data_path = (deepcopy(original_state.data_path, memo)
+                        if self_owner else ())
+    copied.grad = deepcopy(original_state.grad, memo)
+    copied.scalar_marker = original_state.scalar_marker
+    copied.force_cpu = original_state.force_cpu
+    copied.force_cuda = original_state.force_cuda
+    copied.retains_grad = original_state.retains_grad
+    copied.rms_norm_unit_weight = (
+        result if original_state.rms_norm_unit_weight is value
+        else deepcopy(original_state.rms_norm_unit_weight, memo))
+    result.__dict__["_torch_object_state"] = copied
     return result

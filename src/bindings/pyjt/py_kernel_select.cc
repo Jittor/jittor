@@ -211,7 +211,11 @@ Verdict evaluate(const NativeRule& rule, PyObject* args, PyObject* kwargs) {
         if (dtype != ns_float32 && dtype != ns_float64 && dtype != ns_complex64 && dtype != ns_complex128)
             return declines;
         // AMP retyping a float32 product's output to a half is Python's call.
-        if (dtype == ns_float32 && (amp_reg & amp_prefer16)) return unknown;
+        // Both half policies retype: `prefers_half` in the Python predicate
+        // tests the bfloat16 bit too, so this rule must defer for it or the
+        // two answers disagree and the relay returns float32.
+        if (dtype == ns_float32
+                && (amp_reg & (amp_prefer16 | amp_prefer_bfloat16))) return unknown;
         if (rule.op == "blas_matmul" && (a->shape.size() != 2 || b->shape.size() != 2))
             return declines;
         return has_op(rule.op) ? accepts : unknown;

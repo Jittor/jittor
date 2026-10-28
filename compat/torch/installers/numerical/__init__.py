@@ -300,6 +300,17 @@ _RECIPROCAL_FIDELITY_DETAIL = (
 
 from .elementwise import reciprocal
 
+from .elementwise import remainder
+
+register_fidelity(
+    "torch.remainder",
+    remainder,
+    Fidelity.APPROXIMATE,
+    "matches Torch floored-remainder values (sign of the divisor) for supported "
+    "real tensors but omits out, device, layout, and dtype keyword semantics; "
+    "Tensor.remainder is the same operation"
+)
+
 register_fidelity(
     "torch.reciprocal",
     reciprocal,
@@ -1256,6 +1267,7 @@ def install(ctx):
     _bind_missing(g, "diff", diff)
     _bind_missing(g, "trapz", trapz)
     _bind_missing(g, "trapezoid", trapezoid)
+    _bind_missing(g, "remainder", remainder)
     g.repeat_interleave = repeat_interleave
     _bind_missing(g, "autocast", autocast)
     # Real loop-based torch.vmap. The old no-op stub (`lambda fn,*a,**k: fn`)

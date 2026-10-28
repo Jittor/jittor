@@ -499,6 +499,17 @@ struct VarHolder {
     // @pyjt(__set__requires_grad)
     void set_requires_grad(bool flag);
     void set_requires_grad_impl(bool flag);
+
+    /**
+     * Reversible flag change for a tensor that only mirrors another's policy.
+     *
+     * The frontend keeps a frozen FSDP parameter's shard views in step with
+     * the parameter; a view is not a backward leaf, so the public setter,
+     * which enforces Torch's leaf rule, refuses it. The mirror is a policy
+     * change on the view, not a new gradient edge.
+     */
+    // @pyjt(_set_requires_grad_mirrored)
+    void set_requires_grad_mirrored(bool flag) { set_requires_grad_impl(flag); }
     std::shared_ptr<AutogradAliasState> ensure_autograd_alias();
     // @pyjt(_check_inplace_autograd)
     // @attrs(return_self)
@@ -1041,6 +1052,23 @@ int first_finished(const vector<VarHolder*>& vars);
  */
 // @pyjt(_first_rebound)
 int first_rebound(const vector<VarHolder*>& holders, const vector<VarHolder*>& olds);
+
+/**
+    Execute the backward-saved readers of `storages` before a replay writes
+    them.
+
+    A differentiable graph built while a capture is warm -- an unrelated
+    forward from a parameter, left pending -- saves activations whose inputs
+    are the very storages the captured step updates. Its write-back node
+    ordered itself when the graph was built, before those readers existed, and
+    a kept graph does not rebuild its edges, so a replay wrote the new
+    parameter value underneath them: the old forward's backward then used the
+    forward-time-plus-one value. Running the saved readers here commits them
+    against the forward-time bytes, the same way `copy_into` does for a write
+    it can see (`saved_storage_readers`).
+ */
+// @pyjt(_preserve_step_readers)
+int preserve_step_readers(const vector<VarHolder*>& storages);
 
 // Called after a complete VarHolder has crossed into a Python object.
 void schedule_pending_from_python(VarHolder* holder);

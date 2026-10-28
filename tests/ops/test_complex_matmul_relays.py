@@ -230,7 +230,7 @@ class TestFindBlas(unittest.TestCase):
         # on Jittor's OpenMP team instead of a second pool.
         self.assertIsNotNone(threads, found)
 
-    def test_a_library_without_cgemm_is_declined_with_a_reason(self):
+    def test_an_explicit_library_without_cgemm_is_declined_with_a_reason(self):
         from jittor.build import compile_extern
         # A shared library that certainly loads and neither exports nor
         # depends on a CBLAS (dependencies are searched too, which is what lets

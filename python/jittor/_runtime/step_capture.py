@@ -840,6 +840,24 @@ class StepCapture:
         before = jt.flags.keep_graph
         jt.flags.keep_graph = 2
         try:
+            # A graph built after the capture -- an unrelated forward from a
+            # parameter, left pending -- saves activations whose inputs are
+            # the storages this replay is about to write. Its readers did not
+            # exist when the captured write-back ordered itself, and a kept
+            # graph does not rebuild edges, so run them against the
+            # forward-time bytes first. This batch is not part of the kept
+            # graph: its finished values are what that backward will read, so
+            # their memory must be retained as an ordinary batch retains it
+            # (`keep_graph=2` would free it after the batch, and the backward
+            # would recompute the reader from the value the replay then wrote).
+            outer_keep = jt.flags.keep_graph
+            jt.flags.keep_graph = 0
+            try:
+                preserved = _core._preserve_step_readers(cap.state_lists[1])
+            finally:
+                jt.flags.keep_graph = outer_keep
+            if preserved:
+                self.stats["preserved"] = self.stats.get("preserved", 0) + 1
             with jt.no_grad():
                 for captured, given in zip(cap.inputs, _input_vars((args, kwargs), [])):
                     captured._copy_into(given)

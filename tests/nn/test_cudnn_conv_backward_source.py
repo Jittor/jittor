@@ -101,7 +101,7 @@ class TestCudnnConvMatchesTheCpuReference(unittest.TestCase):
         x = rng.randn(2, in_ch, 12, 13).astype("float32")
         w = rng.randn(out_ch, in_ch // groups, 3, 3).astype("float32")
         want = _reference_conv2d(x, w, stride, padding, dilation, groups)
-        with jt.flag_scope(use_cuda=1):
+        with jt.flag_scope(use_cuda=1, float32_cudnn_precision="highest"):
             xv = jt.array(x)
             wv = jt.array(w)
             got = _try_cudnn_conv2d(xv, wv, None, stride, padding,
@@ -130,7 +130,7 @@ class TestCudnnConvMatchesTheCpuReference(unittest.TestCase):
                 w = rng.randn(6, 4, 3, 3).astype("float32")
                 want = _reference_conv_transpose2d(
                     x, w, stride, padding, output_padding, 1, groups)
-                with jt.flag_scope(use_cuda=1):
+                with jt.flag_scope(use_cuda=1, float32_cudnn_precision="highest"):
                     xv = jt.array(x)
                     wv = jt.array(w)
                     got = _try_cudnn_conv_transpose2d(

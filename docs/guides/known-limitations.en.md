@@ -19,7 +19,6 @@ infrastructure, gate runtime, or static-check coverage are not listed here.
 | `KI-SEMANTICS-003` | backend verification for floating-point comparisons is incomplete | CPU/CUDA and NPU float32 verified; other NPU dtypes and ROCm unverified |
 | `KI-OPS-002` | backend verification for integer floor-division is incomplete | CPU/CUDA/NPU verified, ROCm pending |
 | `KI-COMPLEX-001` | native complex capabilities have gaps | some linear algebra and FFT go through a real/imaginary bridge, `complex128` unsupported; see [complex dtype](../notes/complex-dtype.en.md) |
-| `KI-EXEC-015` | an external graph created between warmed optimizer replays and awaiting backward may use updated parameter values | reproduced on CPU; complete backward for that graph before replay writes, or use eager |
 
 ## Performance and memory
 

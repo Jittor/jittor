@@ -1,8 +1,8 @@
 # Jittor Project Context
 
 - Status: Current-state index, not a history log
-- Last reviewed: 2026-10-26
-- Baseline reviewed: `b5b07e6ff`
+- Last reviewed: 2026-10-28
+- Baseline reviewed: `6f9caee1c`
 - Owner: Jittor core maintainers
 - Freshness expires: 2027-01-06
 - Review when: the release line, a top-level goal or an indexed location changes
@@ -40,7 +40,9 @@ half-preference test; forward-placement and jagged-axis have contract
 tripwires. The continuous-test rounds also fixed checkpoint buffer-class
 preservation, half-contraction accumulation, 0-D setitem codegen, scalar
 `sum(dim=0)`, the CPU deterministic query, the mapped-ACL parity inventory,
-and the StepCapture replay copy window (KI-EXEC-016 closed).
+the StepCapture replay copy window (KI-EXEC-016 closed), and the
+Torch autocast layer_norm float32 result (KI-COMPAT-020 closed); exact-value
+cuDNN tests opt into the new strict float32 precision tier.
 
 ## Where information lives
 
