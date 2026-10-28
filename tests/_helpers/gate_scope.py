@@ -33,7 +33,8 @@ from _helpers.process_modes import TORCH_MODE_PATHS, NATIVE_MODE_PATHS
 
 #: The root every gate starts from.
 TEST_ROOT = "tests"
-TEST_ROOTS = (TEST_ROOT, "compat/tests", "adapters/tests")
+TEST_ROOTS = (TEST_ROOT, "compat/tests", "adapters/tests",
+              "adapters/jittor_adapters")
 
 #: ``(path, reason)`` -- a path no CPU gate runs, and why it cannot.
 #:

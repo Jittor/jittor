@@ -13,6 +13,7 @@ from unittest import mock
 import pytest
 
 from jittor_adapters._common import UnsupportedAdapterVersion
+from _helpers.child_process import run_python_child
 from jittor_adapters.verl import fsdp2_resident_reference as adapter
 
 
@@ -402,8 +403,8 @@ def test_oracle_cuda_resident_registration_does_not_import_jittor(tmp_path, prel
     environment = {name: value for name, value in os.environ.items() if not name.startswith("JITTOR_")}
     environment.update(VERL_DEVICE="cuda", JITTOR_VERL_FSDP2_RESIDENT_REFERENCE="1",
                        JITTOR_VERL_HF_ASYNC_ROLLOUT=hf_async)
-    result = subprocess.run([sys.executable, "-B", "-S", "-c", program], env=environment,
-                            capture_output=True, text=True, timeout=15)
+    result = run_python_child(["-B", "-S", "-c", program], env=environment,
+                              inherit=False, timeout=15)
     assert result.returncode == 0, result.stderr
     assert "ORACLE_RESIDENT_HOST_CONTRACT_OK" in result.stdout
 
