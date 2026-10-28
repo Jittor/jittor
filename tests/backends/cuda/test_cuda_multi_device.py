@@ -490,5 +490,49 @@ class TestSecondDevice(_DeviceCase):
         self.assertEqual(y1.device_id, 1)
 
 
+class TestFetchDeviceSync(_DeviceCase):
+    min_devices = 2
+
+    def _check_finished_fetch(self, mixed):
+        before = int(jt.core.backend_fallback_count())
+        with jt.flag_scope(backend_fallback="error"):
+            jt.set_device(1)
+            expected = np.arange(1 << 22, dtype="float32")
+            value = jt.array(expected).cuda(1)
+            host = jt.array(np.array([7, 9], dtype="int64")).cpu()
+            values = [value, host]
+            expected_values = [expected, np.array([7, 9], dtype="int64")]
+            if mixed:
+                on_zero = jt.array(np.array([3., 5.], dtype="float32")).cuda(0)
+                values.append(on_zero)
+                expected_values.append(np.array([3., 5.], dtype="float32"))
+            for tensor in values:
+                tensor.sync()
+            jt.sync_all(True)
+            self.assertEqual(_pointer_device(value.device_raw_ptr), 1)
+            self.assertEqual(jt.current_device(), 1)
+            fetched = []
+            def capture(*arrays):
+                fetched.append([np.array(array, copy=True) for array in arrays])
+            # Finished sources let fetch submit before sync_all builds its
+            # next (possibly empty) plan. Its copy stream belongs to device 0.
+            jt.fetch(*values, capture)
+            jt.sync_all(True)
+            self.assertEqual(len(fetched), 1)
+            self.assertEqual(jt.current_device(), 1)
+            for actual, reference in zip(fetched[0], expected_values):
+                np.testing.assert_array_equal(actual, reference)
+            self.assertEqual(_pointer_device(value.device_raw_ptr), 1)
+            if mixed:
+                self.assertEqual(_pointer_device(on_zero.device_raw_ptr), 0)
+        self.assertEqual(int(jt.core.backend_fallback_count()), before)
+
+    def test_finished_nondefault_source_callback_completes_on_sync(self):
+        self._check_finished_fetch(False)
+
+    def test_mixed_device_sources_complete_in_one_callback(self):
+        self._check_finished_fetch(True)
+
+
 if __name__ == "__main__":
     unittest.main()

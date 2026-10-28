@@ -14,6 +14,7 @@ from typing import Union
 from collections.abc import Sequence, Iterable
 
 from ._code import acl_code as conv_cmd
+from .._soc import allow_reduced_precision
 
 
 def _ntuple(n):
@@ -43,7 +44,7 @@ def _conv_attr_code(stride, padding, dilation, groups, name):
                     "convDilations": [dilation[0], dilation[1]],
                     "group": groups,
                     "convOutPads": [0, 0],
-                    "cube_math_type": 1 if getattr(jt, "acl_allow_hf32", False) else 0,
+                    "cube_math_type": 1 if allow_reduced_precision() else 0,
                 },
                 variable="op",
             ),
@@ -114,7 +115,7 @@ class _ConvACLNoBias:
             tuple(padding),
             tuple(dilation),
             groups,
-            1 if getattr(jt, "acl_allow_hf32", False) else 0,
+            1 if allow_reduced_precision() else 0,
         )
         output_shape = _conv_output_shape(x, weight, stride, padding, dilation)
         return acl_emit(program, [x, weight], [x.dtype], [output_shape])[0]
@@ -137,6 +138,6 @@ class ConvACL:
             tuple(padding),
             tuple(dilation),
             groups,
-            1 if getattr(jt, "acl_allow_hf32", False) else 0,
+            1 if allow_reduced_precision() else 0,
         )
         return acl_emit(program, [x, weight, bias], [x.dtype], [output_shape])[0]

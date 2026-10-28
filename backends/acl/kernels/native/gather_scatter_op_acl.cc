@@ -27,6 +27,7 @@
 #include "codegen/opt/tuner_manager.h"
 #include "utils/str_utils.h"
 #include "aclnn/aclnn.h"
+#include <aclnnop/aclnn_index_copy.h>
 #include "gather_scatter_op_acl.h"
 
 namespace jittor
@@ -42,6 +43,25 @@ namespace jittor
 
         launch(ret, aclnnGather, true);
         return;
+    }
+
+    IndexCopyOpRunner::IndexCopyOpRunner() : BaseOpRunner("IndexCopy")
+    {
+    }
+
+    void IndexCopyOpRunner::executeOp(AclOpRegistry::const_iterator &it)
+    {
+        auto attr = dynamic_cast<GatherAttr *>(op_attr.get());
+        // Some CANN IndexCopy paths also update selfRef (observed for dim=0
+        // on 310P). Own the copy explicitly and only mutate the output.
+        CHECK(in_[0]->is_contiguous());
+        CHECK(in_[0]->size == out_[0]->size);
+        auto copied = aclrtMemcpyAsync(out_[0]->mem_ptr, out_[0]->size,
+            in_[0]->mem_ptr, in_[0]->size, ACL_MEMCPY_DEVICE_TO_DEVICE, aclstream);
+        CHECK(copied == ACL_SUCCESS) << "IndexCopy base copy failed: " << copied;
+        ret = aclnnInplaceIndexCopyGetWorkspaceSize(outputTensors[0], attr->dim,
+            inputTensors[1], inputTensors[2], &workspaceSize, &executor);
+        launch(ret, aclnnInplaceIndexCopy, true);
     }
 
     ScatterOpRunner::ScatterOpRunner() : BaseOpRunner("Scatter")

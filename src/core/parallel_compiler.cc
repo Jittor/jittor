@@ -18,6 +18,8 @@
 #ifdef __linux__
 #include <sched.h>
 #include <unistd.h>
+#include "mem/mem_info.h"
+#include "utils/cgroup_memory.h"
 #endif
 #include "core/parallel_compiler.h"
 #include "runtime/launch_diagnostics.h"
@@ -94,6 +96,14 @@ int parallel_compile_worker_count(int requested) {
     if (hardware) available = std::min(available, (int)hardware);
 #endif
     available = std::min(available, cgroup_cpu_limit());
+#ifdef __linux__
+    // Keep CPU affinity, quota and user caps, and apply the same three-GiB
+    // compilation budget as the Python compiler pool. Re-read limits for
+    // each batch: a process can move cgroups or receive a new limit.
+    auto memory = cgroup_memory::limit_memory(mem_info.total_cpu_ram);
+    auto memory_workers = std::max<uint64_t>(1, memory / (3ull*1024*1024*1024));
+    available = (int)std::min<uint64_t>(available, memory_workers);
+#endif
     return std::max(available, 1);
 }
 

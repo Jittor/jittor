@@ -14,6 +14,7 @@ import importlib
 import math
 import os
 import unittest
+from unittest import mock
 
 import numpy as np
 
@@ -132,9 +133,28 @@ class TestFSDP2Nccl(unittest.TestCase):
         for value in gathered:
             np.testing.assert_array_equal(value.numpy(), np.asarray([total]))
 
+        from jittor.compat.torch.installers import distributed as distributed_impl
+        lengths = np.asarray([2**31 + 17, 2**40 + 29], dtype=np.uint64)
+        words = np.concatenate([
+            distributed_impl._encode_object_length(int(length))
+            for length in lengths
+        ])
+        np.testing.assert_array_equal(
+            distributed_impl._decode_object_lengths(words, len(lengths)), lengths
+        )
         objects = [None] * world_size
-        dist.all_gather_object(objects, {"rank": int(jt.rank)})
-        expected_objects = [{"rank": rank} for rank in range(world_size)]
+        with mock.patch.object(
+                distributed_impl, "_OBJECT_COLLECTIVE_CHUNK_BYTES", 31):
+            payload = {
+                "rank": int(jt.rank),
+                "body": "rank-{}-".format(int(jt.rank))
+                        + "x" * (75 + 17 * int(jt.rank)),
+            }
+            dist.all_gather_object(objects, payload)
+        expected_objects = [
+            {"rank": rank, "body": "rank-{}-".format(rank) + "x" * (75 + 17 * rank)}
+            for rank in range(world_size)
+        ]
         self.assertEqual(objects, expected_objects)
 
         gathered_objects = [None] * world_size if int(jt.rank) == 0 else None

@@ -1159,6 +1159,8 @@ def run(jitfn, args, kwargs, grid):
     failed launch leaves the switch behind exactly like a successful one, hence
     the ``finally``.
     """
+    from jittor._runtime.graph_replay import graph_replay_barrier
+    graph_replay_barrier("Triton launch is not recorded in the native graph")
     rt = _ambient_runtime()
     before = _current_device(rt)
     try:

@@ -61,7 +61,9 @@
 
 对外文档只有 `docs/` 一棵树，面向使用者与贡献者：入口、教程、API 参考、使用指南、
 Torch 兼容、机制说明（`docs/notes/`）、性能、发布说明、社区，以及贡献者文档
-（`docs/development/`）。**源语言是中文。**
+（`docs/development/`）。**源语言是中文。** 每篇文档成对维护：`X.md` 是中文默认页，
+`X.en.md` 是同目录英文页；根目录的 `README.md` 与 `README.en.md` 同样成对。索引页
+（`index.md` / `index.en.md`）各自只链接本语言的页面。
 
 **仓库不保存任务看板、计划、交接或分工这类过程文档。** 任务、状态与交接记在 GitHub issue
 与 PR 中，验证证据写进 PR 描述；等待硬件验收的事项见
@@ -107,7 +109,7 @@ entry point。
 
 ```text
 .
-├── pyproject.toml  README.md  LICENSE.txt  AGENTS.md  CONTRIBUTING.md  noxfile.py
+├── pyproject.toml  README.md  README.en.md  LICENSE.txt  AGENTS.md  CONTRIBUTING.md  noxfile.py
 ├── src/                      # C++ 核心，与 Python 包并列，不是包数据
 │   ├── core/                 # node var op graph grad executor fused_op
 │   ├── type/  mem/  codegen/  ops/  runtime/  bindings/  third_party/  tests/

@@ -65,7 +65,7 @@ class TestSharedReduce(unittest.TestCase):
         expected = value.sum(axis=tuple(dims))
         scale = max(1.0, float(np.abs(expected).max()))
         error = float(np.abs(got.reshape(expected.shape) - expected).max()) / scale
-        source = open(rep[1][1]).read()
+        source = open(rep[1][1], encoding="utf-8").read()
         return source, error
 
     def test_off_at_the_default_level(self):
@@ -74,6 +74,15 @@ class TestSharedReduce(unittest.TestCase):
         self.assertLess(error, 1e-5)
         self.assertNotIn("shared_reduce<", source)
         self.assertIn("_wr_mask", source)
+
+    def test_explicit_block_fold_at_default_level(self):
+        self.assertEqual(jt.introspection.policy.runtime.para_opt_level, 3)
+        source, error = self._reduce((257, 257), (1,), 51, use_shared_reduce=2)
+        self.assertLess(error, 1e-5)
+        self.assertIn("shared_reduce<", source)
+        self.assertIn("if (threadIdx.x == 0)", source)
+        self.assertNotIn("_wr_mask", source)
+        self.assertEqual(jt.introspection.policy.runtime.para_opt_level, 3)
 
     def test_level_4_uses_one_block_write(self):
         from contextlib import ExitStack as _TestPolicyStack
@@ -93,7 +102,7 @@ class TestSharedReduce(unittest.TestCase):
         # rather than spelling a path, so the next move fails loudly instead.
         path = os.path.join(backend_root(jt.compiler.jittor_path, "cuda"),
                             "kernels", "core", "cuda_atomic.h")
-        source = open(path).read()
+        source = open(path, encoding="utf-8").read()
         self.assertIn("inline static T shared_reduce(T u)", source)
         body = source.split("inline static T shared_reduce(T u)", 1)[1]
         body = body.split("\n}\n", 1)[0]

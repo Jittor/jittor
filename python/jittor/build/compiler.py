@@ -435,9 +435,10 @@ def query_cuda_archs():
 
 
 def _read_cuda_archs():
+    query_script = os.path.join(os.path.dirname(__file__), "utils", "query_cuda_cc.py")
     try:
         child = sp.run(
-            [sys.executable, "-m", "jittor_utils.query_cuda_cc"],
+            [sys.executable, "-I", "-S", os.path.abspath(query_script)],
             stdout=sp.PIPE, stderr=sp.PIPE,
             env=env_config.child_env(log_v=0, log_silent=1))
     except OSError as error:

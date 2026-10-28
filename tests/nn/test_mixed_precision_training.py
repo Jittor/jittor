@@ -37,7 +37,8 @@ from jittor import nn
 
 
 _DEVICES = [("cpu", 0)] + (
-    [("cuda", 1)] if _test_capability.any_accelerator_enabled(backend=jt) else [])
+    [("cuda", 1)] if _test_capability.any_accelerator_enabled(backend=jt) else []
+)
 
 #: Steps and learning rate chosen so float32 drops ~140x -- far enough that a
 #: degraded run separates from a healthy one, short enough to stay cheap.
@@ -96,8 +97,7 @@ def _train(mode, use_cuda, scale=LOSS_SCALE):
         x_np, y_np = _task()
         model = _MLP()
         _seed_parameters(model)
-        cast = {"bf16": lambda v: v.bfloat16(),
-                "fp16": lambda v: v.float16()}.get(mode)
+        cast = {"bf16": lambda v: v.bfloat16(), "fp16": lambda v: v.float16()}.get(mode)
         if cast is not None:
             for p in model.parameters():
                 p.assign(cast(p))
@@ -155,8 +155,9 @@ class TestMixedPrecisionTraining(unittest.TestCase):
         for device, use_cuda in _DEVICES:
             with self.subTest(device=device):
                 losses = self._baseline(use_cuda)
-                self.assertLess(losses[-1], losses[0] / 50.0,
-                                "the float32 baseline itself did not train")
+                self.assertLess(
+                    losses[-1], losses[0] / 50.0, "the float32 baseline itself did not train"
+                )
 
     def test_bfloat16_matches_float32(self):
         for device, use_cuda in _DEVICES:
@@ -166,18 +167,36 @@ class TestMixedPrecisionTraining(unittest.TestCase):
                 self.assertTrue(finite, "a bfloat16 gradient was not finite")
                 # The optimiser must not quietly widen the parameters back.
                 self.assertEqual(dtypes, {"bfloat16"})
-                self.assertLess(losses[-1], losses[0] / 50.0,
-                                "bfloat16 did not converge: %.5f -> %.5f"
-                                % (losses[0], losses[-1]))
                 self.assertLess(
-                    abs(losses[-1] - base[-1]) / base[-1], self.TOLERANCE,
+                    losses[-1],
+                    losses[0] / 50.0,
+                    "bfloat16 did not converge: %.5f -> %.5f" % (losses[0], losses[-1]),
+                )
+                self.assertLess(
+                    abs(losses[-1] - base[-1]) / base[-1],
+                    self.TOLERANCE,
                     "bfloat16 final loss %.5f against float32's %.5f on %s; "
                     "real torch 2.13's own bfloat16/float32 spread on this task "
-                    "is 0.4%%" % (losses[-1], base[-1], device))
+                    "is 0.4%%" % (losses[-1], base[-1], device),
+                )
 
     def test_bfloat16_generic_cpu_matmul_matches_float32(self):
-        # Exercise the fallback even when oneDNN is installed on the runner.
-        with mock.patch("jittor.nn.functional.matrix.get_library_ops", return_value=None) as lookup:
+        # Exercise the fallback even after another test has registered BLAS.
+        from jittor._runtime.backend_libraries import get_library_ops
+        from jittor._runtime.dispatch import override_kernel
+        from jittor.nn.functional import matrix
+
+        get_library_ops("blas", load=True)
+        lookup_library = matrix.get_library_ops
+
+        def without_mkl(name, *, load=False):
+            return None if name == "mkl" else lookup_library(name, load=load)
+
+        with override_kernel("matmul", "cpu", None), override_kernel(
+            "batched_matmul", "cpu", None
+        ), mock.patch(
+            "jittor.nn.functional.matrix.get_library_ops", side_effect=without_mkl
+        ) as lookup:
             base = self._baseline(0)
             losses, finite, dtypes = _train("bf16", 0)
         lookup.assert_any_call("mkl", load=True)
@@ -204,17 +223,24 @@ class TestMixedPrecisionTraining(unittest.TestCase):
             with self.subTest(device=device):
                 base = self._baseline(use_cuda)
                 losses, finite, dtypes = _train("fp16", use_cuda)
-                self.assertTrue(finite, "a float16 gradient was not finite "
-                                        "even with the loss scaled by %g" % LOSS_SCALE)
+                self.assertTrue(
+                    finite,
+                    "a float16 gradient was not finite "
+                    "even with the loss scaled by %g" % LOSS_SCALE,
+                )
                 self.assertEqual(dtypes, {"float16"})
-                self.assertLess(losses[-1], losses[0] / 50.0,
-                                "float16 did not converge: %.5f -> %.5f"
-                                % (losses[0], losses[-1]))
                 self.assertLess(
-                    abs(losses[-1] - base[-1]) / base[-1], self.TOLERANCE,
+                    losses[-1],
+                    losses[0] / 50.0,
+                    "float16 did not converge: %.5f -> %.5f" % (losses[0], losses[-1]),
+                )
+                self.assertLess(
+                    abs(losses[-1] - base[-1]) / base[-1],
+                    self.TOLERANCE,
                     "float16 final loss %.5f against float32's %.5f on %s; "
                     "real torch 2.13's own float16/float32 spread on this task "
-                    "is 3.4%%" % (losses[-1], base[-1], device))
+                    "is 3.4%%" % (losses[-1], base[-1], device),
+                )
 
     def test_the_loss_scale_is_load_bearing_in_both_directions(self):
         """Measured, not assumed: the scale helps, and too much of it overflows.
@@ -236,15 +262,17 @@ class TestMixedPrecisionTraining(unittest.TestCase):
                 unscaled, unscaled_finite, _ = _train("fp16", use_cuda, scale=1.0)
                 self.assertTrue(unscaled_finite)
                 self.assertLessEqual(
-                    scaled[-1], unscaled[-1] * 1.02,
+                    scaled[-1],
+                    unscaled[-1] * 1.02,
                     "scaling by %g did not help on %s: %.5f scaled against "
-                    "%.5f unscaled" % (LOSS_SCALE, device, scaled[-1], unscaled[-1]))
+                    "%.5f unscaled" % (LOSS_SCALE, device, scaled[-1], unscaled[-1]),
+                )
                 over, over_finite, _ = _train("fp16", use_cuda, scale=65536.0)
                 self.assertFalse(
                     over_finite,
                     "a scale of 65536 did not overflow float16 on %s, so the "
-                    "non-finite-gradient check this relies on proves nothing"
-                    % device)
+                    "non-finite-gradient check this relies on proves nothing" % device,
+                )
                 self.assertFalse(np.isfinite(over[-1]))
 
 
@@ -298,17 +326,23 @@ class TestAmpLevelTraining(unittest.TestCase):
                 with self.subTest(device=device, level=level):
                     losses, dtypes = self._run(level, use_cuda)
                     self.assertEqual(
-                        dtypes, {"float16"},
+                        dtypes,
+                        {"float16"},
                         "auto_mixed_precision_level=%d left the forward in %s"
-                        % (level, sorted(dtypes)))
+                        % (level, sorted(dtypes)),
+                    )
                     self.assertTrue(np.isfinite(losses).all())
-                    self.assertLess(losses[-1], losses[0] / 50.0,
-                                    "level %d did not converge: %.5f -> %.5f"
-                                    % (level, losses[0], losses[-1]))
                     self.assertLess(
-                        abs(losses[-1] - base[-1]) / base[-1], 0.25,
+                        losses[-1],
+                        losses[0] / 50.0,
+                        "level %d did not converge: %.5f -> %.5f" % (level, losses[0], losses[-1]),
+                    )
+                    self.assertLess(
+                        abs(losses[-1] - base[-1]) / base[-1],
+                        0.25,
                         "level %d final loss %.5f against float32's %.5f on %s"
-                        % (level, losses[-1], base[-1], device))
+                        % (level, losses[-1], base[-1], device),
+                    )
 
 
 if __name__ == "__main__":

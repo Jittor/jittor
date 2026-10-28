@@ -44,6 +44,9 @@ struct HostExecutionScope {
 struct Op : Node {
     Float32PrecisionPolicy float32_precision;
     uint64 launch_origin = 0;
+    // Functional construction provenance; temporary fused wrappers never
+    // replace the ownership of their original member producers.
+    uint64 rematerialization_owner = 0;
     // Dense-only kernels receive explicit contiguous graph inputs at the
     // generated construction boundary, before storing their Var members.
     static constexpr bool accepts_storage_strides = false;
@@ -157,6 +160,9 @@ std::ostream& operator<<(std::ostream& os, const Op* var);
 // built before the update but not upstream of it -- a forward output the
 // gradients do not depend on -- could otherwise run after it and read the
 // new values.
+// The nearest unmaterialized saved values downstream of a storage write.
+// Independent allocations stop traversal; kept graphs retain their own owner.
+vector<Var*> saved_storage_readers(const vector<Var*>& written, Op* writer=nullptr);
 void order_after_readers(Op* op, const vector<Var*>& written);
 
 // The two process-wide kernel caches for non-fused ops: the compiled entry

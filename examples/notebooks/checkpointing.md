@@ -190,9 +190,9 @@ print("差了多少        :", ["%.4f" % (a - b) for a, b in
 所以检查点里要放的东西，除了模型和优化器，通常还包括：当前 epoch / step、学习率调度器的
 状态、随机数状态、以及你用来复现的实验配置。
 
-## 4. 静默失败：`load_state_dict` 不报错
+## 4. 部分参数缺失可能静默发生
 
-比"忘记存"更危险的是"以为读成功了"。`load_state_dict` 在参数对不上时**不会抛异常**：
+比"忘记存"更危险的是"以为读成功了"。`load_state_dict` 在缺少部分参数时**不会抛异常**：
 
 ```{code-cell} ipython3
 class TwoLayer(nn.Module):
@@ -221,17 +221,23 @@ print("没被覆盖的 head.weight 还是初始值:",
 注意 `load_state_dict` 的返回值是 `None`——它**不**像 PyTorch 那样回报 `missing_keys`。
 只载入了一部分，另一部分保持初始化时的随机值，没有任何异常，没有任何返回值可以检查。
 
-形状对不上也一样，只是往日志里写一行：
+但形状对不上会抛出 `RuntimeError`，指出不匹配的参数：
 
 ```{code-cell} ipython3
 wrong_shape = dict(full)
 wrong_shape["trunk.weight"] = jt.randn((5, 5))       # 形状是错的：应是 [4, 2]
 
 victim = TwoLayer()
-victim.load_state_dict(wrong_shape)
-print("形状不匹配也没有抛异常；上面那行 [e] 日志就是全部提示")
+before = victim.trunk.weight.numpy().copy()
+try:
+    victim.load_state_dict(wrong_shape)
+except RuntimeError as error:
+    assert "size mismatch for trunk.weight" in str(error)
+    print("形状不匹配被拒绝:", error)
+else:
+    raise AssertionError("形状不匹配应抛出 RuntimeError")
 print("trunk.weight 仍是初始值:",
-      not np.allclose(victim.trunk.weight.numpy(), reference.trunk.weight.numpy()))
+      np.allclose(victim.trunk.weight.numpy(), before))
 ```
 
 **所以"没报错"不能当作"载入成功"。** 要确认，就得自己比：
@@ -283,9 +289,9 @@ print("        不一致", mismatched)
 
 - 检查点里放了**优化器状态**吗？只放权重会让续训悄悄跑偏。
 - 还缺什么？epoch / step、学习率调度器、随机数状态、实验配置——凡是"重跑会对不上"的都要存。
-- 载入后核对过吗？`load_state_dict` 不报错、返回 `None`，形状不符只写日志。
+- 载入后核对过吗？缺少部分参数时 `load_state_dict` 不报错、返回 `None`；形状不符会抛异常。
   用上面 `check_loaded` 那样自己比一遍。
-- 存完改过模型定义吗？改了名字或形状，对应参数会被静默跳过。
+- 存完改过模型定义吗？改了名字可能被静默跳过，形状不符会报错。
 - 文件损坏能发现吗？`jt.save` 写了 sha1 校验和，`jt.load` 会校验；
   自己用 `pickle` 存的东西没有这层保护。
 

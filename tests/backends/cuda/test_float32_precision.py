@@ -22,10 +22,11 @@ encodings, and they disagreed with each other:
   its own backend-API fast path, which always accumulates in float32,
   disagreed with its legacy fallback.
 
-Now ``jt.flags.float32_matmul_precision`` names the policy on torch's scale
-and both backends read it. ``use_tensorcore``, ``cuda_allow_tf32`` and
-``cuda_allow_cudnn_tf32`` remain as deprecated overrides that can only raise
-the tier for the domain they name.
+Now ``jt.flags.float32_matmul_precision`` and ``float32_cudnn_precision``
+name the policy on torch's scale, one per library and with torch's defaults:
+matmul at ``highest``, cuDNN at ``high`` (tf32). ``use_tensorcore``,
+``cuda_allow_tf32`` and ``cuda_allow_cudnn_tf32`` remain as deprecated
+overrides that can only raise the tier for the domain they name.
 
 The selection is read back from the log line each op emits just before it
 calls the library, not inferred from numerics: on CUDA >= 11 the algorithm
@@ -77,7 +78,7 @@ def _capture(prefix, pattern, build):
     return found[-1]
 
 
-@_test_preserve_policy(jt, 'float32_matmul_precision')
+@_test_preserve_policy(jt, 'float32_matmul_precision', 'float32_cudnn_precision')
 class TestFloat32PrecisionFlag(unittest.TestCase):
     """The flag itself. Core, so this half needs no GPU."""
 
@@ -89,14 +90,36 @@ class TestFloat32PrecisionFlag(unittest.TestCase):
         with _TestPolicyStack() as _test_policy_stack:
             _test_policy_stack.enter_context(jt.runtime.scope(float32_matmul_precision=self._saved))
 
-    def test_default_is_highest(self):
-        """The default has to stay the exact numerics 1.3.x shipped.
+    def test_the_defaults_are_torchs(self):
+        """matmul at `highest`, cuDNN at `high`: torch's two allow_tf32 defaults.
 
-        `highest` is CUBLAS_COMPUTE_32F and CUDNN_FMA_MATH, which is what
-        ``use_tensorcore=0, cuda_allow_tf32=0, cuda_allow_cudnn_tf32=0``
-        selected before this flag existed.
+        The cuDNN default used to be `highest` too, which was stricter than
+        either torch or Jittor 1.3.10 -- 1.3.10 left cuDNN's own default math
+        type in place, and that allows tf32 on Ampere and later -- and cost a
+        ResNet-50 training step a third of its time in the convolution
+        backward.
         """
-        self.assertEqual(jt.introspection.policy.runtime.float32_matmul_precision, "highest")
+        policy = jt.introspection.policy.runtime
+        self.assertEqual(policy.float32_matmul_precision, "highest")
+        self.assertEqual(policy.float32_cudnn_precision, "high")
+
+    def test_one_domain_does_not_move_the_other(self):
+        """A scope over one flag restores only that flag.
+
+        When one flag wrote both tiers, leaving a scope over it put its old
+        value back into both -- overwriting the other domain's default.
+        """
+        from contextlib import ExitStack as _TestPolicyStack
+        policy = jt.introspection.policy.runtime
+        with _TestPolicyStack() as _test_policy_stack:
+            _test_policy_stack.enter_context(jt.runtime.scope(float32_matmul_precision="medium"))
+            self.assertEqual(policy.float32_cudnn_precision, "high")
+        self.assertEqual(policy.float32_cudnn_precision, "high")
+        with _TestPolicyStack() as _test_policy_stack:
+            _test_policy_stack.enter_context(jt.runtime.scope(float32_cudnn_precision="highest"))
+            self.assertEqual(policy.float32_matmul_precision, "highest")
+            self.assertEqual(policy.float32_cudnn_precision, "highest")
+        self.assertEqual(policy.float32_cudnn_precision, "high")
 
     def test_each_tier_round_trips(self):
         from contextlib import ExitStack as _TestPolicyStack
@@ -294,7 +317,7 @@ class TestCublasPrecision(unittest.TestCase):
                 np.testing.assert_allclose(got, want, atol=tol, rtol=tol)
 
 
-@_test_preserve_policy(jt, 'use_cuda', 'use_tensorcore', 'cuda_allow_tf32', 'cuda_allow_cudnn_tf32', 'float32_matmul_precision')
+@_test_preserve_policy(jt, 'use_cuda', 'use_tensorcore', 'cuda_allow_tf32', 'cuda_allow_cudnn_tf32', 'float32_matmul_precision', 'float32_cudnn_precision')
 @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
 class TestCudnnConvPrecision(unittest.TestCase):
     def setUp(self):
@@ -310,6 +333,7 @@ class TestCudnnConvPrecision(unittest.TestCase):
         _test_policy_stack.enter_context(jt.runtime.scope(cuda_allow_tf32=0))
         _test_policy_stack.enter_context(jt.runtime.scope(cuda_allow_cudnn_tf32=0))
         _test_policy_stack.enter_context(jt.runtime.scope(float32_matmul_precision="highest"))
+        _test_policy_stack.enter_context(jt.runtime.scope(float32_cudnn_precision="highest"))
 
     def tearDown(self):
         jt.sync_all()
@@ -337,7 +361,7 @@ class TestCudnnConvPrecision(unittest.TestCase):
             for tier, math in (("highest", FMA),
                                ("high", ALLOW_CONVERSION),
                                ("medium", ALLOW_CONVERSION)):
-                _test_policy_stack.enter_context(jt.runtime.scope(float32_matmul_precision=tier))
+                _test_policy_stack.enter_context(jt.runtime.scope(float32_cudnn_precision=tier))
                 got_tier, compute, got_math = self._selection("cudnn_conv", "float32")
                 self.assertEqual(got_tier, tier)
                 self.assertEqual(compute, "CUDNN_DATA_FLOAT")
@@ -357,6 +381,19 @@ class TestCudnnConvPrecision(unittest.TestCase):
             _, compute, math = self._selection(op, "float16", backward=True)
             self.assertEqual(compute, "CUDNN_DATA_FLOAT", op)
             self.assertEqual(math, ALLOW_CONVERSION, op)
+
+    def test_by_default_a_float32_conv_is_tf32_and_a_matmul_is_not(self):
+        from contextlib import ExitStack as _TestPolicyStack
+        with _TestPolicyStack() as _test_policy_stack:
+            _test_policy_stack.enter_context(jt.runtime.scope(float32_cudnn_precision="high"))
+            for op in ("cudnn_conv", "cudnn_conv_backward_x", "cudnn_conv_backward_w"):
+                tier, _, math = self._selection(op, "float32", backward=True)
+                self.assertEqual((tier, math), ("high", ALLOW_CONVERSION), op)
+            a = jt.random((32, 48))
+            b = jt.random((48, 64))
+            gemm_tier, gemm_compute, _ = _capture(
+                "cublas_matmul", _GEMM_RE, lambda: jt.matmul(a, b))
+            self.assertEqual((gemm_tier, gemm_compute), ("highest", "CUBLAS_COMPUTE_32F"))
 
     def test_cudnn_tf32_override_does_not_move_the_matmul(self):
         """torch's two allow_tf32 knobs stay independent.

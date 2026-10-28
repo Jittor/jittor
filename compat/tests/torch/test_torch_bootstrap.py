@@ -627,8 +627,10 @@ class TestTorchBootstrap(unittest.TestCase):
         root._torch_compat_install_context = types.SimpleNamespace(
             registry=types.SimpleNamespace(_published={})
         )
-        with mock.patch.object(runtime, "torch_namespace_claimable", return_value=True), \
+        with tempfile.TemporaryDirectory(dir=str(_TEST_STATE_ROOT)) as directory, \
+                mock.patch.object(runtime, "torch_namespace_claimable", return_value=True), \
                 mock.patch.object(runtime, "configure_torch_math_flags"), \
+                mock.patch.object(runtime, "jittor_python_root", return_value=directory), \
                 mock.patch("jittor.compat.torch.install") as install, \
                 mock.patch.dict(sys.modules, {"jittor": root, "torch": root}, clear=False), \
                 mock.patch.dict(os.environ, {}, clear=False):
@@ -640,7 +642,8 @@ class TestTorchBootstrap(unittest.TestCase):
             install.side_effect = install_target
             result = runtime._activate_once(
                 _root_module=root,
-                _preflight_result=types.SimpleNamespace(active=True, runtime_root="/runtime"),
+                _preflight_result=types.SimpleNamespace(
+                    active=True, runtime_root=os.path.join(directory, "runtime")),
                 _composition=True,
             )
 
@@ -840,6 +843,24 @@ class TestTorchBootstrap(unittest.TestCase):
         self.assertEqual(result.runtime_root, os.fspath(explicit_runtime.resolve()))
         self.assertEqual(environ["JITTOR_TORCH_PROJECT_ROOT"], result.project_root)
         self.assertEqual(environ["JITTOR_TORCH_RUNTIME_ROOT"], result.runtime_root)
+
+    @unittest.skipUnless(os.name == "posix", "AF_UNIX pathname budget is POSIX-specific")
+    def test_short_tmpdir_fallback_preserves_socket_headroom(self):
+        from jittor.compat.shim import preflight
+
+        preferred = pathlib.Path("/") / ("项目" * 40) / "runtime" / "tmp"
+        long_temp_root = pathlib.Path("/") / ("t" * 70)
+        with mock.patch.object(
+            preflight.tempfile, "gettempdir", return_value=os.fspath(long_temp_root)
+        ):
+            selected = preflight._short_enough_tmpdir(preferred)
+
+        digest = preflight.hashlib.sha1(os.fspath(preferred).encode("utf-8")).hexdigest()[:10]
+        self.assertEqual(selected, pathlib.Path("/tmp") / ("jt-%s" % digest))
+        self.assertLessEqual(
+            len(os.fsencode(os.fspath(selected))) + preflight._TMPDIR_SOCKET_HEADROOM,
+            preflight._SUN_PATH_MAX,
+        )
 
     def _preflight_env(self, directory, **extra):
         environ = {"HOME": directory, "JITTOR_TORCH_SHIM": "1",

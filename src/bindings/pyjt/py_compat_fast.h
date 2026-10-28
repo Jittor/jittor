@@ -15,23 +15,27 @@ namespace jittor {
 PyObject* frontend_dtype(PyObject* self);
 
 // What the fast paths below call back to decide: `tracing()`, whether a
-// step is being captured (`jittor._runtime.step_capture.tracing`).
+// step is being captured (`jittor._runtime.step_capture.tracing`). The optional
+// concat continuation resumes after provider selection; selector_state keeps
+// the Python selection owners so an override leaves the native short path.
 // @pyjt(_compat_fast_bind)
-void compat_fast_bind(PyObject* tracing);
+void compat_fast_bind(PyObject* tracing, PyObject* concat_fallback=nullptr,
+                      PyObject* selector_state=nullptr, PyObject* getitem_selector_state=nullptr);
 
 // `torch.cat(tensors, dim)` for the common case -- two to 64 non-empty Vars
-// of one dtype, same rank, on the current device, no concat kernel
-// registered, no step being captured -- built as `jittor.concat` builds it:
-// an `empty` of the result and one `setitem` per input. Anything else
-// answers NotImplemented and the Python `cat` takes the call.
+// of one dtype, same rank, on the current device -- calls the selected backend
+// provider once, or builds `empty` plus `setitem` when none is registered.
+// A declining provider resumes the Python concat after selection. Anything
+// outside this contract answers NotImplemented for the Python `cat`.
 // @pyjt(_fast_cat)
 PyObject* fast_cat(PyObject* tensors, int64 dim);
 
 // `tensor[index]` for a basic index -- ints, slices, None and Ellipsis,
 // alone or in a tuple -- on a frontend tensor that carries no CPU residency
-// hint and no `.data` ownership record, with no getitem kernel registered:
-// the native getitem op, recorded as a view of `self`, as the Python
-// `_torch_getitem` and `jittor.getitem` together do. NotImplemented otherwise.
+// hint and no `.data` ownership record. A registered provider is tried once
+// for no-grad, static positive-step indexing, then a decline continues with
+// native getitem. New views record `self`; an existing provider view retains
+// its recorded owner. Unsupported spellings use the Python path.
 // @pyjt(_fast_getitem)
 PyObject* fast_getitem(PyObject* self, PyObject* index);
 

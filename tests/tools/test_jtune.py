@@ -55,7 +55,7 @@ class TestJtune(unittest.TestCase):
     def test_cc_to_s(self):
         self.run_cmd("cc_to_s")
         sname = self.fname[:-2] + 's'
-        with open(sname) as f:
+        with open(sname, encoding="utf-8") as f:
             src = f.read()
         fma_ins = re.findall("fma.*", src)
         assert len(fma_ins)>=4, f"fma instructions should be used for matmul. {fma_ins}"

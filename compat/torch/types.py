@@ -39,8 +39,8 @@ class dtype:
         _is_fp: bool
     _registry: typing.ClassVar[typing.Dict[str, "dtype"]] = {}
     _supported = frozenset({
-        "bool", "uint8", "uint16", "uint32", "uint64", "int8", "int16",
-        "int32", "int64", "float16", "bfloat16", "float32", "float64", "complex64",
+        "bool", "uint8", "uint16", "uint32", "uint64", "int8", "int16", "int32",
+        "int64", "float16", "bfloat16", "float32", "float64", "complex64", "complex128",
     })
 
     def __new__(cls, name, is_floating_point=False):
@@ -137,7 +137,7 @@ def _make_dtypes(ns):
         ("int8", False), ("int16", False), ("int32", False), ("int64", False),
         ("uint8", False), ("uint16", False), ("uint32", False), ("uint64", False),
         ("bool", False),
-        # complex64 is native; complex32/complex128 remain metadata-only.
+        # complex64/complex128 are native; complex32 remains metadata-only.
         ("complex64", False), ("complex128", False), ("complex32", False),
         # quantized dtypes -- no compute support, but tensordict/torch index
         # dtype tables by them so the objects must exist + be distinct.

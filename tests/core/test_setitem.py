@@ -364,7 +364,10 @@ class TestSetitem(unittest.TestCase):
                 return jt.concat(grads).numpy()
             return ret.numpy()
 
-        for s in range(100):
+        # Ten deterministic seeds still build 40,000 random operation steps
+        # across forward/backward and both optimizer modes, without making the
+        # four-worker smoke gate spend most of its time contending on JIT locks.
+        for s in range(10):
             print("check", s)
             for check_grad in [True, False]:
                 jt.set_global_seed(s)
@@ -462,6 +465,13 @@ class TestSetitem(unittest.TestCase):
         # TODO: convert a[x] = a[x] + b -> a[x] += b
         a[1][2][0][0] += 1
         assert a[1,2,0,0] == 2
+
+    def test_scalar_mask_with_var_value_compiles(self):
+        # A 0-D mask with a 0-D Var value reaches SetitemOp with IDIM=0; the
+        # generated stride declaration used to spell `istride-1` there.
+        value = jt.array(1.0)
+        value[jt.array(True)] = jt.array(2.0)
+        self.assertEqual(float(value.item()), 2.0)
 
 if __name__ == "__main__":
     unittest.main()

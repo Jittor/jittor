@@ -22,7 +22,8 @@ def main():
         parser = argparse.ArgumentParser()
         parser.add_argument("--model", required=True, help="Local Qwen3 checkpoint directory")
         parser.add_argument(
-            "--dtype", choices=("float32", "bfloat16"), default="float32")
+            "--dtype", choices=("float32", "float16", "bfloat16"),
+            default="float32")
         parser.add_argument("--max-new-tokens", type=int, default=1)
         parser.add_argument("--runs", type=int, default=1)
         args = parser.parse_args()
@@ -42,7 +43,7 @@ def main():
         import transformers
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
-        if torch is not jt:
+        if not hasattr(torch, "_torch_compat_install_context"):
             raise RuntimeError("set JITTOR_TORCH_SHIM=1 before starting Python")
 
         tokenizer = AutoTokenizer.from_pretrained(args.model, local_files_only=True)
@@ -81,6 +82,10 @@ def main():
             encoded = tokenizer(prompt, return_tensors="np")
             input_ids = torch.from_numpy(encoded["input_ids"].astype(np.int64))
             attention_mask = torch.from_numpy(encoded["attention_mask"].astype(np.int64))
+            # Transformers warns but does NOT move generate() inputs; Jittor's
+            # dispatch requires all operands on the model's backend.
+            input_ids = input_ids.to(model.device)
+            attention_mask = attention_mask.to(model.device)
 
             generated_token_samples = []
             generate_samples = []

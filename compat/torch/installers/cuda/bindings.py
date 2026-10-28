@@ -23,6 +23,7 @@ from .api import (
     _api_accelerator_set_stream,
     _api_c_mod__accelerator_setAllocatorSettings,
     _api_c_mod__cuda_clearCublasWorkspaces,
+    _api_c_mod__cuda_getCurrentRawStream,
     _api_c_mod__cuda_setAllocatorSettings,
     _api_c_mod__disabled_torch_function_impl,
     _api_c_mod__get_tracing_state,
@@ -325,6 +326,7 @@ def _install_cuda(g, registry=None):
         c_mod._get_tracing_state = _api_c_mod__get_tracing_state
         c_mod._log_api_usage_once = _api_c_mod__log_api_usage_once
         c_mod._cuda_clearCublasWorkspaces = _api_c_mod__cuda_clearCublasWorkspaces
+        c_mod._cuda_getCurrentRawStream = _api_c_mod__cuda_getCurrentRawStream
         c_mod._disabled_torch_function_impl = _api_c_mod__disabled_torch_function_impl
         functorch_c = _types.ModuleType("torch._C._functorch")
         functorch_c.get_unwrapped = _api_functorch_c_get_unwrapped

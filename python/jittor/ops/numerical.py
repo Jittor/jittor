@@ -50,7 +50,7 @@ def any(x, dim=(), keepdims=False, keepdim=None):
 
 
 def _as_truth(x):
-    """``x != 0`` for a floating-point input, `x` itself otherwise.
+    """Convert numeric inputs to truth values before logical reduction.
 
     The logical reductions run on their input's dtype, and CUDA has no atomic
     OR or AND on a floating-point type: ``any``/``all`` of a float tensor did
@@ -60,6 +60,10 @@ def _as_truth(x):
     NaN counts as true, as in torch.
     """
     if isinstance(x, Var) and x.dtype.is_float():
+        return x != 0
+    # Preserve the existing numeric truth contract for non-floating inputs:
+    # logical all([2, 4, 8]) is true, independently of integer bit patterns.
+    if isinstance(x, Var) and _jittor_dtype_name(x.dtype) != "bool":
         return x != 0
     return x
 
@@ -219,10 +223,24 @@ def _simple_for(x, func):
 _SIMPLE_FOR_SOURCES = {}
 
 
+def _ieee_acl():
+    from jittor.backends.acl.kernels._soc import ieee_comparisons
+    return ieee_comparisons()
+
+
+def _inf_masks_acl(x):
+    # On SoCs without IEEE comparisons (Ascend310P) x==+inf matches {nan,+inf}
+    # and x==-inf matches {nan,-inf}; NaN is the only value in both masks.
+    return x == float("inf"), x == float("-inf")
+
+
 def _isnan_acl(x):
     import jittor as jt
     x = x if isinstance(x, Var) else jt.array(x)
     if not x.dtype.is_float(): return jt.zeros(x.shape, "bool")
+    if not _ieee_acl():
+        pos, neg = _inf_masks_acl(x)
+        return jt.logical_and(pos, neg)
     return jt.logical_not((x >= 0) | (x <= 0))
 
 
@@ -230,6 +248,9 @@ def _isinf_acl(x):
     import jittor as jt
     x = x if isinstance(x, Var) else jt.array(x)
     if not x.dtype.is_float(): return jt.zeros(x.shape, "bool")
+    if not _ieee_acl():
+        pos, neg = _inf_masks_acl(x)
+        return jt.logical_xor(pos, neg)
     return x.abs() == float("inf")
 
 
@@ -237,7 +258,26 @@ def _isfinite_acl(x):
     import jittor as jt
     x = x if isinstance(x, Var) else jt.array(x)
     if not x.dtype.is_float(): return jt.ones(x.shape, "bool")
+    if not _ieee_acl():
+        pos, neg = _inf_masks_acl(x)
+        return jt.logical_not(jt.logical_or(pos, neg))
     return x.abs() < float("inf")
+
+
+def _isposinf_acl(x):
+    import jittor as jt
+    if not _ieee_acl():
+        pos, neg = _inf_masks_acl(x)
+        return jt.logical_and(pos, jt.logical_not(neg))
+    return (x > 0) & _isinf_acl(x)
+
+
+def _isneginf_acl(x):
+    import jittor as jt
+    if not _ieee_acl():
+        pos, neg = _inf_masks_acl(x)
+        return jt.logical_and(neg, jt.logical_not(pos))
+    return (x < 0) & _isinf_acl(x)
 
 
 def _classify(x, predicate, acl_body, integral):
@@ -294,13 +334,13 @@ def isinf(x):
 def isneginf(x):
     import jittor as jt
     return jt.misc._classify(
-        x, "isneginf", lambda v: (v < 0) & jt.misc._isinf_acl(v), False)
+        x, "isneginf", jt.misc._isneginf_acl, False)
 
 
 def isposinf(x):
     import jittor as jt
     return jt.misc._classify(
-        x, "isposinf", lambda v: (v > 0) & jt.misc._isinf_acl(v), False)
+        x, "isposinf", jt.misc._isposinf_acl, False)
 
 
 def rsqrt(x):

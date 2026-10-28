@@ -33,6 +33,9 @@ namespace jittor {
 // `Linear.execute`) and "matmul_kernel" (the cuBLAS relay the dispatcher must
 // pick for it). Without the first two the shortcut calls
 // `dispatch_module_call` as before.
+// "rms_selector_state" optionally identifies the live Python dispatch owners
+// for registered FP16/FP32 inference providers. Overrides, BF16 operand order,
+// module hooks and gradient-enabled calls keep their Python-owned behavior.
 // @pyjt(_module_call_bind)
 void module_call_bind(PyObject* module_cls, PyObject* dispatch_call,
                       PyObject* dispatch_module_call, PyObject* published,

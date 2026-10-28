@@ -1,122 +1,122 @@
-# Real 32768-token Longformer on CPU and CUDA
+# CPU 与 CUDA 上真实的 32768 token Longformer
 
-- Status: Reproduced full-context encoder correctness and three-step full-parameter training; tiny width, no performance grade.
-- Measurement baseline: `cbe154c3b81b3f2cca65363e0bdc6bdcec60c191`, clean for every numerical and pytest child execution; includes the Longformer builder, explicit complete-gradient contract and opt-in test node.
-- Upstream: clean Transformers `cd74917ffc3e8f84e4a886052c5ab32b7ac623cc`, release `4.56.2`.
-- Maintainer: Jittor core / Torch compatibility maintainers.
-- Review when: Longformer attention/position implementation, model parameter registration, downstream dependencies, compatibility tensor semantics or precision policy changes.
+- 状态：复现了全上下文编码器正确性与三步全参数训练；tiny 宽度，无性能评级。
+- 测量基线：`cbe154c3b81b3f2cca65363e0bdc6bdcec60c191`，在所有数值与 pytest 子进程
+  执行中保持干净；包含 Longformer 构建器、显式完整梯度契约和需显式开启的测试节点。
+- 上游：干净检出 Transformers `cd74917ffc3e8f84e4a886052c5ab32b7ac623cc`，release `4.56.2`。
+- 维护者：Jittor 核心 / Torch 兼容性维护者。
+- 复查时机：Longformer attention/位置实现、模型参数注册、下游依赖、兼容张量语义
+  或精度策略发生变化时。
 
-## Exact model and attention scope
+## 确切的模型与 attention 范围
 
-The same builder executes the genuine upstream `LongformerModel` in independent binary PyTorch and
-Jittor interpreters. It has one layer, hidden size 32, four heads, intermediate size 64, vocabulary 64,
-batch 1, local attention window 256, maximum position embeddings 32770 and zero dropout. Inputs have
-**32768 positions**, all valid, and the first token has actual global attention. No sequence shortening,
-model download, adapter, copied attention algorithm, mock, no-op or downstream source patch is used.
+同一个构建器在独立的二进制 PyTorch 与 Jittor 解释器中执行真实的上游
+`LongformerModel`。它有一层、hidden size 32、四个 head、intermediate size 64、
+词表 64、batch 1、local attention 窗口 256、最大位置嵌入 32770、dropout 为零。
+输入有 **32768 个位置**，全部有效，且第一个 token 具有真实的全局 attention。
+未使用序列截短、模型下载、adapter、复制的 attention 算法、mock、no-op 或下游源码补丁。
 
-The public `get_input_embeddings()` computes word embeddings, then a float noise tensor scaled by
-0.01 is added and passed through the real `inputs_embeds` path. This preserves both word-embedding
-parameter gradients and a differentiable input. Independent oracle observation confirms actual
-position IDs 2 through 32769 and a `[1,1,32]` global-query input; read-only hooks preserve the upstream
-computation. Both the complete `[1,32768,32]` hidden state and the real `[1,32]` pooler participate in the loss;
-the returned flattened output contains 1048608 values. Local and global query/key/value parameters
-and pooler parameters are explicitly included in the complete gradient contract.
+公共 `get_input_embeddings()` 先计算词嵌入，然后加入一个按 0.01 缩放的浮点噪声张量，
+并通过真实的 `inputs_embeds` 路径传入。这同时保留了词嵌入参数梯度和一个可微输入。
+独立的 oracle 观测确认实际位置 ID 为 2 到 32769，以及一个 `[1,1,32]` 的全局 query 输入；
+只读钩子保持了上游计算不变。完整的 `[1,32768,32]` 隐藏状态与真实的 `[1,32]` pooler
+都参与 loss；返回的展平输出包含 1048608 个值。local 与 global 的 query/key/value 参数
+以及 pooler 参数被显式纳入完整梯度契约。
 
-Each comparison requires the output, **all 29 parameter gradients** and the `embedding_noise` input
-gradient: 31 exact-shaped finite arrays on both sides. There are 29 trainable parameters and none
-frozen. Model-width/layer sampling remains `shape_kind=tiny` despite the genuine 32768-token length.
-The established scope is this full-parameter encoder scenario, not dense 32K attention, generation,
-a production-sized pretrained checkpoint or every Longformer task head/API.
+每次比较要求输出、**全部 29 个参数梯度**和 `embedding_noise` 输入梯度：
+两侧各 31 个精确形状的有限数组。共有 29 个可训练参数，无冻结参数。
+尽管具有真实的 32768 token 长度，模型宽度/层数采样仍为 `shape_kind=tiny`。
+已确立的范围是该全参数编码器场景，而不是稠密 32K attention、生成、
+生产规模的预训练 checkpoint 或每一个 Longformer 任务 head/API。
 
-## Fixed platform and protocol
+## 固定平台与协议
 
-| Field | CPU | CUDA |
+| 字段 | CPU | CUDA |
 | --- | --- | --- |
-| Oracle | Genuine binary PyTorch 2.11.0+cu128 | same, CUDA 12.8 |
-| Candidate | Jittor 2.0.0 Torch compatibility layer | same, NVCC 12.2.140 |
-| Dependencies | NumPy 1.26.4; Transformers 4.56.2 from the pinned source | same |
-| Hardware | AMD EPYC 9554, accelerator visibility empty | one allocated NVIDIA RTX 4090, driver 580.178.04 |
-| Precision | TF32 matmul/cuDNN OFF, matmul highest | TF32 matmul/cuDNN ON, matmul high |
-| Other controls | float32, cuDNN benchmark OFF; two runtime threads | same; real CUDA dispatch, zero fallback |
+| Oracle | 真实二进制 PyTorch 2.11.0+cu128 | 相同，CUDA 12.8 |
+| 候选方 | Jittor 2.0.0 Torch 兼容层 | 相同，NVCC 12.2.140 |
+| 依赖 | NumPy 1.26.4；来自固定源码的 Transformers 4.56.2 | 相同 |
+| 硬件 | AMD EPYC 9554，加速器可见性为空 | 一块分配的 NVIDIA RTX 4090，驱动 580.178.04 |
+| 精度 | TF32 matmul/cuDNN OFF，matmul highest | TF32 matmul/cuDNN ON，matmul high |
+| 其他控制 | float32，cuDNN benchmark OFF；两个运行时线程 | 相同；真实 CUDA 分派，零后备 |
 
-Both interpreters load the identical pinned upstream checkout. Base seed 0 exports the complete
-reference weights. Independent input seeds 7 and 19 reuse that same weights hash on both runtimes;
-outputs must change and all gradient arrays must remain present. A separate public `training_probe.py`
-run uses fresh seed-0 reference weights, SGD learning rate 0.001 and three deterministic input seeds
-1, 2 and 3. Every step saves output, scalar loss, all gradients and every updated parameter: **183
-arrays** total. This compares an update trajectory, not convergence.
+两个解释器加载同一个固定的上游检出。基线 seed 0 导出完整的参考权重。
+独立的输入 seed 7 和 19 在两个运行时上复用同一权重哈希；
+输出必须变化，且所有梯度数组必须保持存在。另一次公共 `training_probe.py` 运行使用
+全新的 seed-0 参考权重、SGD 学习率 0.001 以及三个确定性输入 seed
+1、2、3。每一步保存输出、标量 loss、全部梯度以及每一个更新后的参数：
+共 **183 个数组**。这比较的是更新轨迹，而不是收敛。
 
-The existing ecosystem harness defines normalized divergence as `maximum_absolute_error /
-max(field_maximum_absolute_reference, 1e-3 * block_maximum_absolute_reference, 1e-6)`;
-the gradient block contains all requested gradients, and the output has its own reference field. The report keeps
-absolute errors as well as that exact normalized protocol. CPU limits are 2e-3 for outputs and 1e-2
-for gradients; CUDA limits are 5e-3 and 2e-2. Updated parameters/loss use the output limit with their
-own reference-array floor. These are the existing protocol thresholds, not post-hoc tuned tolerances.
+既有的生态 harness 把归一化偏差定义为
+`maximum_absolute_error / max(field_maximum_absolute_reference, 1e-3 * block_maximum_absolute_reference, 1e-6)`；
+梯度块包含全部请求的梯度，输出有其自己的参考字段。报告同时保留绝对误差和该确切的
+归一化协议。CPU 限值为输出 2e-3、梯度 1e-2；CUDA 限值为 5e-3 和 2e-2。
+更新后的参数/loss 使用输出限值及其自身的参考数组下限。这些是既有的协议阈值，
+不是事后调校的容差。
 
-## Results and evidence
+## 结果与证据
 
-| Device | Seed 0/7/19 arrays per seed | Max absolute / normalized error | Three-step arrays | Max absolute / normalized error |
+| 设备 | 每个 seed 的 seed 0/7/19 数组数 | 最大绝对 / 归一化误差 | 三步数组数 | 最大绝对 / 归一化误差 |
 | --- | --- | --- | --- | --- |
 | CPU | 31 | 0.0166015625 / 8.67267123e-06 | 183 | 9.53674316e-07 / 9.84836796e-06 |
 | CUDA | 31 | 0.078125 / 2.50184426e-05 | 183 | 1.43647194e-05 / 2.73647853e-05 |
 
-All comparisons are finite and exact-shaped, with matching key sets and complete requested gradients.
-Both reference and candidate update 28 parameters across three steps.
-`key_global.weight` retains the same float32 values in this protocol; its full gradient and every
-parameter snapshot remain checked. Mathematically near-zero attention-key bias gradients are also
-retained rather than removed from the contract. Reference scalar loss trajectories are CPU: -0.000152084525, -0.00200377125, -0.000821642869; CUDA: -0.000152087901, -0.00200377079, -0.00082164153. The complete candidate losses and per-array errors are stored in the raw comparison.
+全部比较均为有限值且形状精确，键集合一致，请求的梯度完整。
+参考方与候选方都在三步中更新了 28 个参数。
+`key_global.weight` 在该协议中保持相同的 float32 值；其完整梯度和每个参数快照仍被检查。
+数学上接近零的 attention-key bias 梯度也被保留，而不是从契约中移除。参考标量 loss
+轨迹为 CPU：-0.000152084525、-0.00200377125、-0.000821642869；CUDA：-0.000152087901、-0.00200377079、-0.00082164153。完整的候选 loss 与逐数组误差存储在原始比较中。
 
-- Actual opt-in gate: CPU **1 passed**, CUDA **1 passed**, zero skipped. CPU/CUDA JUnit node times are 297.888/454.044 seconds, including first compilation in distinct unit caches.
-- Public scorecard: **two accepted L3 records, zero rejected**; 84 SHA256 artifact bindings independently checked.
-- Host case / audit contracts: **37 passed**. CPU core: **322 passed, 42 skipped, 1 xfailed**.
-- Full structure before adding this report: **1451 passed, 6 skipped, zero failed**. Lint, diff and layout passed.
-- A false CUDA OFF/highest label is rejected with `Platform/measurement precision mismatch`; CPU remains accepted.
+- 实际需显式开启的门禁：CPU **1 通过**，CUDA **1 通过**，零跳过。CPU/CUDA 的 JUnit
+  节点时间为 297.888/454.044 秒，包含在不同单元缓存中的首次编译。
+- 公共 scorecard：**两条被接受的 L3 记录，零拒绝**；84 个 SHA256 产物绑定经独立检查。
+- 宿主用例/审计契约：**37 通过**。CPU core：**322 通过、42 跳过、1 xfailed**。
+- 加入本报告之前的完整结构：**1451 通过、6 跳过、零失败**。Lint、diff 和布局通过。
+- 伪造的 CUDA OFF/highest 标签会以 `Platform/measurement precision mismatch` 被拒绝；
+  CPU 仍被接受。
 
-Resource diagnostics came from the earlier identical full-context prototype and retain those original
-source baselines. Child-rusage maximum RSS values were about 1.93/2.22 GiB for Torch/Jittor CPU, and the
-CUDA root-process sampled GPU values were 1950/2334 MiB for Torch/Jittor. These are diagnostic samples
-and child rusage, not continuous whole-process GPU peaks. Formal CUDA allocation samples also show
-other processes. The single-repeat benchmark times are retained only in raw verification JSON; neither
-the sampling nor tiny-width timing establishes L4/L5 performance or resource acceptance.
+资源诊断来自更早的相同全上下文原型，并保留其原始源码基线。子进程 rusage 最大 RSS
+约为 Torch/Jittor CPU 的 1.93/2.22 GiB，CUDA 根进程采样到的 GPU 值为
+Torch/Jittor 的 1950/2334 MiB。这些是诊断采样和子进程 rusage，不是连续的整进程
+GPU 峰值。正式的 CUDA 分配采样还显示存在其他进程。单次重复的 benchmark 时间仅保留在
+原始验证 JSON 中；无论采样还是 tiny 宽度计时都不构成 L4/L5 性能或资源验收。
 
-The opt-in node is
-`compat/tests/torch/test_ecosystem_longformer.py::EcosystemLongformer::test_transformers_longformer_32768`.
-It requires actual execution, an independent Torch oracle, Transformers and a single explicit device.
-Selecting the node with missing dependencies/oracle or mixed CPU/CUDA configuration fails. A speed
-ratio request is rejected because this tiny-width case does not establish performance. Normal
-unselected runs skip this expensive case visibly. The formal runs use distinct unit-test caches;
-benchmark caches are reused only by benchmark/probe tools. Each real node is run directly under
-pytest; no nox wrapper or scheduled CI invocation is claimed.
+需显式开启的节点为
+`compat/tests/torch/test_ecosystem_longformer.py::EcosystemLongformer::test_transformers_longformer_32768`。
+它要求真实执行、独立的 Torch oracle、Transformers 以及单一的显式设备。
+在缺少依赖/oracle 或混用 CPU/CUDA 配置时选择该节点会失败。速度比请求会被拒绝，
+因为这一 tiny 宽度用例不能确立性能。常规的未选择运行会可见地跳过这一昂贵用例。
+正式运行使用独立的单元测试缓存；benchmark 缓存只由 benchmark/probe 工具复用。
+每个真实节点都直接在 pytest 下运行；不声称使用 nox 包装器或定时 CI 调用。
 
-## Automatic denominator and limits
+## 自动分母与限制
 
-The public inventory regenerates Transformers model-family and task registries from the clean pinned
-SHA. There are **374 model families** and **46 task registrations**. The scorecard accepts one named
-Longformer full-parameter scenario on CPU and its matching CUDA scenario at **L3**: separately
-**1/374** on the model-family axis; **0/46** on the task axis. Every verified row retains the concrete
-case, full registry refs, tiny shape and all trainable parameter names. No other library/family, NPU,
-ROCm, Corex, L4 speed or L5 resource result is established by this report.
+公共清单从干净固定的 SHA 重新生成 Transformers 模型族与任务注册表。
+共有 **374 个模型族**和 **46 个任务注册**。scorecard 在 **L3** 接受一个具名的
+Longformer 全参数 CPU 场景及其匹配的 CUDA 场景：在模型族维度上分别为 **1/374**；
+在任务维度上为 **0/46**。每一行已验证记录都保留具体用例、完整注册表引用、tiny 形状
+以及全部可训练参数名。本报告不确立任何其他库/模型族、NPU、ROCm、Corex、L4 速度或
+L5 资源结果。
 
-Raw evidence is external at
-`$JITTOR_LAB_ROOT/_state/downstream-evidence/real-runs/longformer-32768-20261015/formal-cbe154/`.
-Its schema-2 evidence document hashes every raw array, real platform declaration, comparison,
-training metadata, command, JUnit result, inventory and source identities. A negative audit copies the
-CUDA platform label, falsely changes actual TF32 ON/high to OFF/highest and recomputes that copied
-artifact hash. The CUDA record must be rejected while the untouched CPU record is accepted; original
-measurement metadata and tensors remain unchanged.
+原始证据位于外部路径
+`$JITTOR_LAB_ROOT/_state/downstream-evidence/real-runs/longformer-32768-20261015/formal-cbe154/`。
+其 schema-2 证据文档对每个原始数组、真实平台声明、比较、训练元数据、命令、JUnit 结果、
+清单和源码标识进行哈希。一项反例审计复制 CUDA 平台标签，把实际的 TF32 ON/high 伪造成
+OFF/highest，并重新计算该副本的产物哈希。CUDA 记录必须被拒绝，而未被改动的 CPU 记录
+被接受；原始测量元数据和张量保持不变。
 
-Key sealed artifact digests:
+关键的封存产物摘要：
 
-| External artifact | SHA256 |
+| 外部产物 | SHA256 |
 | --- | --- |
 | `scorecard-evidence.json` | `bd4f0a68f578be23bb6e2ce4016aa14b26b307ea7a07e035e1d06ea4c8406274` |
 | `scorecard.json` | `a8a77219533559a151efe6cbe62a3634dff6d32196f4402394dbd6f8622f131c` |
 | `transformers-inventory.json` | `f4efa7d5e6437ef219e69fa90287b88c4d1d7bee50228eff7df191251a5dc8da` |
 | `negative-precision-scorecard.json` | `eb3534f437fa85c1adcbe183216f5d8b19215e120535a3664c4bcf73b317777f` |
 
-## Reproduction
+## 复现
 
-With independent provisioned NumPy-1/Transformers-4 interpreters and separate state/cache roots:
+使用独立准备好的 NumPy-1/Transformers-4 解释器以及独立的 state/缓存根：
 
 ```bash
 CUDA_VISIBLE_DEVICES='' JT_USE_CUDA=0 \
@@ -126,12 +126,11 @@ python agent/skills/torch-compat-repo-runbook/scripts/verify_repo.py \
   --device cpu --seed 0 --repeats 1 --no-memory --out "$RESULT_ROOT/cpu"
 ```
 
-Repeat on allocated CUDA with `--device cuda`. CPU must explicitly mask accelerators and disable CUDA.
-The actual precision/version/import-origin blocks must match between runtimes. For perturbations,
-invoke public `_ecosystem_runner.py` at seeds 7 and 19 with the base `.ref.weights.npz` passed to both
-runtimes. Invoke public `training_probe.py` with `--steps 3 --learning-rate 0.001`, passing the fresh
-training reference weights to the candidate. Saved external command artifacts contain the complete
-actual invocations and flags.
+在已分配的 CUDA 上以 `--device cuda` 重复。CPU 必须显式屏蔽加速器并禁用 CUDA。
+两个运行时的实际精度/版本/导入来源块必须一致。对于扰动，在 seed 7 和 19 处调用公共
+`_ecosystem_runner.py`，并把基线 `.ref.weights.npz` 传给两个运行时。以
+`--steps 3 --learning-rate 0.001` 调用公共 `training_probe.py`，把全新的训练参考权重
+传给候选方。保存的外部命令产物包含完整的实际调用与参数。
 
 ```bash
 CUDA_VISIBLE_DEVICES='' JT_USE_CUDA=0 JITTOR_HOME="$UNIT_JITTOR_HOME" \
@@ -148,16 +147,15 @@ python agent/skills/torch-compat-repo-runbook/scripts/audit_coverage.py scorecar
   --output "$RESULT_ROOT/scorecard.json"
 ```
 
-For the CUDA node set the single allocated device and `JITTOR_TEST_DEVICES=cuda`; use the same real
-oracle, explicit required flags and an independent unit-test cache. The saved source hashes and
-full commit bind this report to its measured implementation.
+对 CUDA 节点，设置那一块已分配设备和 `JITTOR_TEST_DEVICES=cuda`；使用相同的真实
+oracle、显式必需标志和独立的单元测试缓存。保存的源码哈希与完整提交把本报告与其被测
+实现绑定。
 
-## Main-branch integration
+## 主分支集成
 
-Integrated on parent `23670917490c36f790e1bc24ec136cb1a5cb2230`, including the result
-index and generated manifest registrations. The numerical records retain their clean
-`cbe154c3` measurement baseline. Independent integration checks rehashed all 84 artifact
-bindings, passed 37 host coverage/admission tests, core 322 passed / 42 skipped / one
-existing xfail, and complete structure 1453 passed / 6 skipped / zero failed. The earlier
-two central documentation registration failures are resolved. Integration logs are
-unversioned under `$JITTOR_LAB_ROOT/_state/frozen-view-fix/longformer-*.log`.
+在父提交 `23670917490c36f790e1bc24ec136cb1a5cb2230` 上集成，包含结果索引和生成的
+清单登记。数值记录保留其干净的 `cbe154c3` 测量基线。独立集成检查重新哈希了全部
+84 个产物绑定，通过 37 项宿主覆盖/准入测试，core 322 通过 / 42 跳过 / 1 项既有
+xfail，完整结构 1453 通过 / 6 跳过 / 零失败。此前两处中央文档登记失败已解决。
+集成日志未纳入版本控制，位于
+`$JITTOR_LAB_ROOT/_state/frozen-view-fix/longformer-*.log`。

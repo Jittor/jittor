@@ -57,6 +57,52 @@ void CustomOp::jit_run() {
 } // jittor
 """
 
+class TestCustomOpErrorCategory(unittest.TestCase):
+    """A custom operator's ``jit_run`` body is caller input.
+
+    ``jt.compile_custom_op`` takes that text as a public argument, and the JIT
+    half of the source is not compiled by g++ until after Jittor's fused-kernel
+    parser has read it. A loop that parser cannot understand is therefore the
+    author's error and must be catchable with a sentence naming the construct,
+    not "internal Jittor invariant -- please report this issue".
+    """
+
+    def test_unsupported_jit_loop_is_a_catchable_user_error(self):
+        header = """
+struct JitLoopErrorOp : Op {
+    Var* output;
+    JitLoopErrorOp(NanoVector shape, NanoString dtype=ns_float32);
+    const char* name() const override { return "jit_loop_error"; }
+    DECLARE_jit_run;
+};
+"""
+        source = """
+#ifndef JIT
+JitLoopErrorOp::JitLoopErrorOp(NanoVector shape, NanoString dtype) {
+    set_type(OpType::element);
+    output = create_output(shape, dtype);
+}
+void JitLoopErrorOp::jit_prepare(JK& jk) {
+    add_jit_define(jk, "T", output->dtype());
+}
+#else // JIT
+void JitLoopErrorOp::jit_run() {
+    index_t num = output->num;
+    auto* __restrict__ xx = output->ptr<T>();
+    for (index_t i=0; i<num; i+=1) xx[i] = (T)i;
+}
+#endif // JIT
+"""
+        with self.assertRaises(Exception) as caught:
+            op = jt.compile_custom_op(header, source, "jit_loop_error")
+            (op([4], "float32") + 1.0).sync()
+        message = str(caught.exception)
+        self.assertNotIn("internal Jittor invariant", message)
+        self.assertNotIn("report this issue", message)
+        self.assertIn("fused-kernel parser", message)
+        self.assertIn("not this loop", message)
+
+
 class TestCustomOp(unittest.TestCase):
     def test_compile_custom_ops(self):
         tmp_path = jt.introspection.policy.startup.cache_path

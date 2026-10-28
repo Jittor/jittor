@@ -120,7 +120,7 @@ CUDA runner 在错误 fallback 策略下检查 count 为零，同时物化并检
 post-accumulate observers 在全部现有叶子/optimizer storage 发布之后运行，跨叶子的调度
 顺序不等同于 PyTorch worker engine，fidelity 为 approximate。公开参与集合不提供
 worker graph ID，也不通过 stale `.grad` 推断当前图。高级 reentrant/compiled autograd
-需单独验收。GradBucket/Adagrad 只允许导入，构造明确拒绝，不计作实现。
+需单独验收。GradBucket 只允许导入，构造明确拒绝，不计作实现；Adagrad 已有 native dense FP32 实现（sparse/complex/foreach/fused/differentiable/FSDP 明确拒绝），数值对拍与状态迁移见 `compat/tests/torch/test_torch_adagrad_compat.py`。
 
 原生叶子闭包与 removable handle 的生命周期有真实回归；捕获前向 graph 的 hook
 闭包循环在独立 PyTorch 中也能保留 graph，不承诺自动回收，应显式移除 handle。

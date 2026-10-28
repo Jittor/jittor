@@ -159,6 +159,17 @@ def child_env(extra=None, inherit=True, without_torch_mode=False,
     if extra:
         env.update({key: str(value) for key, value in extra.items()})
     if without_torch_mode:
+        # Composition deploys a child-importable torch package under this
+        # runtime. Clearing activation flags alone still lets that package
+        # claim torch, so discard only its explicitly owned path as well.
+        runtime_root = env.get("JITTOR_TORCH_RUNTIME_ROOT")
+        if runtime_root and "PYTHONPATH" in env:
+            shim_site = os.path.realpath(
+                os.path.join(runtime_root, "site-packages"))
+            parts = env.get("PYTHONPATH", "").split(os.pathsep)
+            env["PYTHONPATH"] = os.pathsep.join(
+                part for part in parts
+                if not part or os.path.realpath(part) != shim_site)
         for name in TORCH_MODE_VARIABLES:
             env.pop(name, None)
     if not repo_paths:
@@ -303,7 +314,8 @@ def _drop_pipes(process):
 
 
 def _run(command, env, timeout, cwd, text, check, input, merge_stderr,
-         shell=False, inherit=True, without_torch_mode=False, repo_paths=True):
+         shell=False, inherit=True, without_torch_mode=False, repo_paths=True,
+         retry_jit_utils=True):
     seconds = default_timeout(timeout)
     # Jittor's own logging is not ASCII (op keys are separated by U+00AB), so
     # decoding a child's output by the ambient locale fails outright under
@@ -352,6 +364,20 @@ def _run(command, env, timeout, cwd, text, check, input, merge_stderr,
         raise
     completed = subprocess.CompletedProcess(
         process.args, process.returncode, stdout, stderr)
+    # The compiler exits before running user code when it has just rebuilt
+    # jit_utils; the fresh extension can only be loaded by a new interpreter.
+    # Retry that one documented bootstrap status once, with the same command.
+    rebuild_message = "jit_utils was rebuilt and cannot be reloaded in this process."
+    if not text:
+        rebuild_message = rebuild_message.encode()
+    empty = "" if text else b""
+    if (retry_jit_utils and completed.returncode == 3
+            and (rebuild_message in (completed.stdout or empty)
+                 or rebuild_message in (completed.stderr or empty))):
+        return _run(command, env, timeout, cwd, text, check, input, merge_stderr,
+                    shell=shell, inherit=inherit,
+                    without_torch_mode=without_torch_mode, repo_paths=repo_paths,
+                    retry_jit_utils=False)
     if check:
         completed.check_returncode()
     return completed

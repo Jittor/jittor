@@ -972,8 +972,18 @@ def get_autocast_gpu_dtype(*args, **kwargs):
 
 
 def are_deterministic_algorithms_enabled():
-    """Read the accelerator's own policy, not a flag kept here."""
-    return bool(jt.core.backend_get_deterministic_algorithms())
+    """Read the accelerator's own policy, not a flag kept here.
+
+    Torch's query is answered on every device; only the CPU backend has no
+    runtime knob here, so "not supported" means "not enabled" rather than an
+    error. Libraries such as torchmetrics ask this unconditionally.
+    """
+    try:
+        return bool(jt.core.backend_get_deterministic_algorithms())
+    except RuntimeError as error:
+        if "does not support deterministic algorithm policy" in str(error):
+            return False
+        raise
 
 
 def use_deterministic_algorithms(mode, *, warn_only=False):
@@ -985,7 +995,14 @@ def use_deterministic_algorithms(mode, *, warn_only=False):
     # Work already built was planned under the old policy; run it before the
     # option changes underneath it.
     jt.sync_all(True)
-    jt.core.backend_set_deterministic_algorithms(mode)
+    try:
+        jt.core.backend_set_deterministic_algorithms(mode)
+    except RuntimeError as error:
+        # Disabling a policy that was never available is already the state the
+        # caller asked for. Enabling it must still fail loudly.
+        if not mode and "does not support deterministic algorithm policy" in str(error):
+            return
+        raise
 
 
 def is_floating_point(value):

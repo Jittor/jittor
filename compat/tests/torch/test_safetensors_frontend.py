@@ -45,3 +45,18 @@ def test_safetensors_frontend_dtype_device_and_numpy_owner(tmp_path):
     """), str(tmp_path)], without_torch_mode=True, merge_stderr=True)
     assert result.returncode == 0, result.stdout
     assert "SAFETENSORS_FRONTEND_OK" in result.stdout
+
+
+@pytest.mark.parametrize("metadata", [None, {}, {"format": "pt"}])
+def test_safe_open_preserves_absent_and_explicit_metadata(tmp_path, metadata):
+    import json
+    import struct
+    from jittor.compat.torch.serialization.safetensors import _PySafeOpen
+
+    header = {} if metadata is None else {"__metadata__": metadata}
+    encoded = json.dumps(header).encode("utf8")
+    path = tmp_path / "metadata.safetensors"
+    path.write_bytes(struct.pack("<Q", len(encoded)) + encoded)
+    with _PySafeOpen(path) as reader:
+        assert reader.metadata() == metadata
+        assert reader.keys() == []

@@ -85,11 +85,12 @@ def _fused_activation(x, act):
     # Both operands from one call. `add._input(0)` and then `add._input(1)`
     # are two graph entries, and leaving the first may run the auto-flushed
     # batch the add is in: a ResNet training step at batch 64 lost its add
-    # between the two reads and raised.
+    # between the two reads and raised. The operands are the first two
+    # inputs; an in-place `out += identity` adds a dependency edge after them.
     operands = add._inputs()
-    if len(operands) != 2:
+    if len(operands) < 2:
         return None
-    a, b = operands
+    a, b = operands[0], operands[1]
     for y, r in ((a, b), (b, a)):
         offer = _RESIDUAL_OFFERS.get(y.id)
         if offer is None or offer[1] != storage:
@@ -355,7 +356,7 @@ def silu(x, inplace=False):     # inplace: accepted for torch/mmcv compat, ignor
         # by a narrow multiply adds a rounding step absent from the opmath
         # implementation. Keep native AD connected through the widening cast.
         dtype = x.dtype
-        with jt.flag_scope(amp_reg=0):
+        with jt.flag_scope(amp_reg=jt.amp_flags.disabled):
             wide = x.float32()
             return (wide * wide.sigmoid()).cast(dtype)
     return x * x.sigmoid()
@@ -435,8 +436,23 @@ def get_init_var_rand(shape, dtype):
 
 
 def softplus(x, beta=1.0, threshold=20.0):
-    return 1 / beta * jt.log(1 + (beta * x).minimum(threshold).exp()) + \
-        (x - threshold / beta).maximum(0.0)
+    dtype = _jittor_dtype_name(x.dtype)
+    if dtype not in ("float16", "bfloat16", "float32", "float64"):
+        raise TypeError("softplus requires a real floating input")
+    fast = try_dispatch("nn.softplus", x, beta=beta, threshold=threshold)
+    if fast is not None:
+        return fast
+    # ATen uses float opmath for Half/BFloat16; acceptance requires
+    # independent backend regression, not this decomposition alone.
+    work = x.float32() if dtype in ("float16", "bfloat16") else x
+    scaled = beta * work
+    above = scaled > threshold
+    # Guard exp even in an eagerly materialized unselected branch.
+    # A strict select preserves the input derivative at exact T.
+    safe_scaled = jt.ternary(above, threshold, scaled)
+    nonlinear = jt.log1p(safe_scaled.exp()) / beta
+    output = jt.ternary(above, work, nonlinear)
+    return output.cast(dtype) if dtype in ("float16", "bfloat16") else output
 
 
 def hardtanh(x, min_val=-1, max_val=1):

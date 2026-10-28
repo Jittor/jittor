@@ -193,6 +193,8 @@ from .numerical import _simple_for
 from .numerical import _isnan_acl
 from .numerical import _isinf_acl
 from .numerical import _isfinite_acl
+from .numerical import _isposinf_acl
+from .numerical import _isneginf_acl
 from .numerical import _classify
 from .numerical import _classify_acl
 from .numerical import _classify_code
@@ -210,6 +212,8 @@ from .numerical import isposinf
 Var.isposinf = isposinf
 from .tensor_protocol import contiguous
 Var.contiguous = contiguous
+from .tensor_protocol import clone
+Var.clone = clone
 from .tensor_protocol import cpu
 Var.cpu = cpu
 from .tensor_protocol import _device_spec
@@ -272,6 +276,7 @@ __all__ = [
     "block_diag",
     "cartesian_prod",
     "chunk",
+    "clone",
     "contiguous",
     "cpu",
     "cross",

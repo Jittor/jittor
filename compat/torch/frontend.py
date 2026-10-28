@@ -1,5 +1,6 @@
 """Python frontend types sharing the native VarHolder payload and graph."""
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
+from jittor_core import ops as _native_ops
 
 from functools import update_wrapper
 from types import MethodType
@@ -226,6 +227,13 @@ class _TensorMeta(type):
     def __call__(cls, *args, **kwargs):
         backend = vars(cls).get("_frontend_backend")
         if backend is None:
+            # A Tensor subtype may be rebuilt from another holder's __dict__.
+            # Keep its public constructor metadata, but never pass our holder's
+            # private autograd/residency state into the new subtype constructor.
+            from .tensor_object_state import TensorObjectState
+            if isinstance(kwargs.get("_torch_object_state"), TensorObjectState):
+                kwargs = dict(kwargs)
+                kwargs.pop("_torch_object_state")
             return super().__call__(*args, **kwargs)
         # torch's Tensor constructor spells dtype/device/requires_grad/pin_memory
         # as keywords, and downstream code builds tensors that way -- `accelerate`
@@ -254,7 +262,9 @@ class _TensorMeta(type):
             elif isinstance(args[0], (backend.NanoVector, _TorchSize)):
                 result = backend.empty(tuple(args[0]), dtype=dtype)
             elif isinstance(args[0], backend.Var):
-                result = backend.Var.clone(args[0])
+                # torch.Tensor(t) aliases t: the native clone op is the view;
+                # `Var.clone()` copies, as torch.Tensor.clone does.
+                result = _native_ops.clone(args[0])
                 # The native view owner preserves both the storage and the
                 # creation-mode-dependent gradient edge. An inherited flag
                 # under no_grad does not explicitly activate an accumulator.
@@ -278,6 +288,7 @@ def make_tensor_type(backend):
         "_frontend_autograd_policy": 3,
         "_frontend_view_base_ownership": True,
         "_frontend_precision_policy": classmethod(_frontend_precision_policy),
+        "_make_subclass": staticmethod(tensor_make_subclass),
         "clone": clone,
         **tensor_object_properties(),
     })
@@ -303,6 +314,19 @@ def clone(input, *, memory_format=None):
         return backend.Var.copy(input, memory_format != "contiguous_format")
 
 
+def tensor_make_subclass(cls, data, requires_grad=False):
+    """Make an independent autograd leaf of ``cls`` over existing storage."""
+    backend = getattr(cls, "_frontend_backend", None)
+    if backend is None or not issubclass(cls, backend.Var):
+        raise TypeError("_make_subclass expects a Torch Tensor subclass")
+    if not isinstance(data, backend.Var):
+        raise TypeError("_make_subclass expects Tensor data")
+    with tensor_frontend(cls, like=data):
+        value = backend.Var.detach(data)
+    value.requires_grad = bool(requires_grad)
+    return value
+
+
 def parameter_new(cls, data=None, requires_grad=True):
     backend = cls._parameter_backend
     with tensor_frontend(cls, like=data):
@@ -315,9 +339,11 @@ def parameter_new(cls, data=None, requires_grad=True):
     return value
 
 
-def parameter_init(self, data=None, requires_grad=True):
+def parameter_init(self, *args, **kwargs):
     # The conversion boundary already initialized the native holder. Python
     # subclasses still receive their real __init__ through normal dispatch.
+    # A subtype may consume more __new__ keywords than Parameter itself; its
+    # inherited no-op initializer must accept those same constructor inputs.
     return None
 
 

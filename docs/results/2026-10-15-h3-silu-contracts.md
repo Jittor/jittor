@@ -1,134 +1,118 @@
-# SiLU precision and the MiniMaxH3 inference boundary
+# SiLU 精度与 MiniMaxH3 推理边界
 
-- Status: SiLU/SwiGLU contracts verified; Omni model admission blocked
-- Date: 2026-10-15
-- Baseline: public SiLU `3fe6a787a2a58ca8f7da4edd9a0fae0e91ea5be9`; final clean combined source `ac4d4cf28f7d2c68c0d4d7256fb1e6f5a3f92b1f`
-- Owner: Jittor core, CUDA and vLLM adapter maintainers
-- Review when: SiLU/SwiGLU precision, adapter dispatch, SDPA backend selection, H3 upstream source, or its autograd contract changes
+- 状态：SiLU/SwiGLU 契约已验证；Omni 模型准入被阻断
+- 日期：2026-10-15
+- 基线：公共 SiLU `3fe6a787a2a58ca8f7da4edd9a0fae0e91ea5be9`；最终干净合并源码 `ac4d4cf28f7d2c68c0d4d7256fb1e6f5a3f92b1f`
+- 维护者：Jittor 核心、CUDA 与 vLLM adapter 维护者
+- 复查时机：SiLU/SwiGLU 精度、adapter 分派、SDPA 后端选择、H3 上游源码或其 autograd 契约发生变化时
 
-The public low-precision SiLU path now evaluates its operands in FP32 and rounds
-its result to the requested dtype. CUDA inference SwiGLU preserves that SiLU
-rounding boundary before multiplying its second operand. The vLLM adapter keeps
-the upstream `forward_native` method and the private CUDA method's actual
-no-autograd contract. These repairs pass their public and real-library CPU/CUDA
-checks. They do **not** establish whole-model MiniMaxH3 correctness or training:
-the original default-attention comparison still fails, and both genuine Torch
-and candidate lack most model gradients.
+公共低精度 SiLU 路径现在以 FP32 计算其操作数，并把结果舍入到请求的 dtype。
+CUDA 推理 SwiGLU 在乘以第二个操作数之前保留了这一 SiLU 舍入边界。vLLM adapter
+保留了上游的 `forward_native` 方法以及私有 CUDA 方法实际的 no-autograd 契约。
+这些修复通过了各自的公共与真实库 CPU/CUDA 检查。它们**并不**确立整模型 MiniMaxH3
+的正确性或训练能力：原始默认 attention 比较仍然失败，真实 Torch 和候选方都缺少
+大部分模型梯度。
 
-## Fixed source and environment
+## 固定源码与环境
 
-The independent oracle uses genuine Torch `2.13.0+cu130` and its actual compiled
-vLLM extension, not the shim. Both sides execute vLLM `0.29.0`, exact source
-`98dff2a81d747d1dba01a47f939f48c3526d4206`, and Omni
-`446c2b5474dabffccf9a0034836eeab77c62b4b8`, installed SCM version
-`0.29.0rc2.dev58+g446c2b547`. The older runbook's cu129 environment and older
-source SHAs supply no numerical evidence for this pair. Candidate compilation
-uses CUDA 12.2.140; device processes use separate caches, one host thread, eager
-execution and strict CUDA kernel math. TF32 is disabled and Torch matmul
-precision is `highest`. Candidate snapshots assert actual physical device before
-host observation; backend fallback is forbidden and its counter remains zero.
-No performance, L4, multi-rank or engine result is reported.
+独立 oracle 使用真实的 Torch `2.13.0+cu130` 及其实际编译的 vLLM 扩展，而非 shim。
+两侧都执行 vLLM `0.29.0`，确切源码
+`98dff2a81d747d1dba01a47f939f48c3526d4206`，以及 Omni
+`446c2b5474dabffccf9a0034836eeab77c62b4b8`，安装的 SCM 版本为
+`0.29.0rc2.dev58+g446c2b547`。旧 runbook 的 cu129 环境和更早的源码 SHA 不为此组合
+提供任何数值证据。候选编译使用 CUDA 12.2.140；设备进程使用独立缓存、单宿主线程、
+即时执行和 strict CUDA kernel 数学。TF32 被禁用，Torch matmul 精度为
+`highest`。候选方快照在宿主观测之前断言实际物理设备；后端后备被禁止，其计数保持
+为零。不报告任何性能、L4、多 rank 或引擎结果。
 
-The H3 fixture is the real `MiniMaxH3DiTModel` with one main block, one token
-refiner, hidden=32, four heads, head dimension=8, FFN=64, and 33268 parameters.
-All 36 named parameters and one buffer are initialized identically from NumPy
-seed 3. Inputs use seeds 7 and 19: two packed text, two video and two audio
-tokens. This is a tiny model configuration, not a pretrained checkpoint or an
-Omni pipeline. The original forward protocol freezes parameters while its four
-floating inputs require gradients; it is not a `torch.no_grad()` measurement.
+H3 fixture 是真实的 `MiniMaxH3DiTModel`，包含一个 main block、一个 token refiner、
+hidden=32、四个 head、head 维度=8、FFN=64、33268 个参数。全部 36 个命名参数和一个
+buffer 由 NumPy seed 3 以相同方式初始化。输入使用 seed 7 和 19：两个 packed 文本、
+两个视频和两个音频 token。这是 tiny 模型配置，不是预训练 checkpoint，也不是 Omni
+pipeline。原始前向协议冻结参数，同时其四个浮点输入需要梯度；它不是
+`torch.no_grad()` 测量。
 
-## Verified repairs
+## 已验证的修复
 
-The saved H3 SiLU input first distinguished premature narrow sigmoid rounding
-from legitimate SDPA algorithm differences. Before the repair, BF16 public SiLU
-already differed in 74/256 output values. After the repair, FP16/BF16 public SiLU
-and SiLU-times-up outputs are bitwise equal to genuine Torch on the saved inputs
-on CPU and CUDA. First and second derivatives pass the frozen 1% scaled budget;
-they are not described as exact (maximum scaled error: CPU 0.719424%, CUDA
-0.675676%). FP32/FP64 behavior and analytic second derivatives remain covered.
+保存下来的 H3 SiLU 输入首先区分了过早的窄 sigmoid 舍入与合法的 SDPA 算法差异。
+修复之前，BF16 公共 SiLU 已有 74/256 个输出值不同。修复之后，在保存的输入上，
+FP16/BF16 公共 SiLU 以及 SiLU-times-up 输出在 CPU 和 CUDA 上都与真实 Torch 逐位
+一致。一阶和二阶导数通过冻结的 1% 缩放预算；它们并未被描述为精确值（最大缩放误差：
+CPU 0.719424%，CUDA 0.675676%）。FP32/FP64 行为和解析二阶导数仍被覆盖。
 
-The actual vLLM `SiluAndMul` matrix uses three dtypes and both input gradient
-states. `custom_ops=['none']` exercises the original upstream native method;
-default CUDA exercises the real compiled `_C` oracle. Low-precision native
-outputs and CUDA native input gradients match bitwise; CPU native gradients
-retain a maximum scaled error of 0.359712%. Default CUDA outputs match all six
-arrays bitwise and both sides expose no autograd connection, even when the input
-requires gradients. The adapter does not silently turn the native path into
-that inference-only method. CPU default `_C` on the installed CUDA wheel fails
-as an unavailable kernel, while the real native CPU path executes.
+真实的 vLLM `SiluAndMul` 矩阵使用三种 dtype 和两种输入梯度状态。
+`custom_ops=['none']` 走原始的上游 native 方法；默认 CUDA 走真实的编译 `_C` oracle。
+低精度 native 输出与 CUDA native 输入梯度逐位一致；CPU native 梯度保留最大缩放误差
+0.359712%。默认 CUDA 输出与全部六个数组逐位一致，且两侧都没有暴露 autograd 连接，
+即使输入需要梯度也是如此。adapter 不会静默地把 native 路径变成那个仅推理方法。
+在已安装的 CUDA wheel 上，CPU 默认 `_C` 因 kernel 不可用而失败，而真实的 native
+CPU 路径可以执行。
 
-| Check on the source-fix batch | Result |
+| 源码修复批次上的检查 | 结果 |
 | --- | --- |
-| Public SiLU tests on original owner batch | CPU 6 passed; the claimed CUDA six-node run selected CPU inside the tests, so it supplies no CUDA evidence |
-| Original CUDA-environment neighbor run | 15 passed; per-node device execution was not sufficiently recorded, so this count supplies no additional CUDA proof |
-| Combined adapter/kernel/public directed tests | CPU 12 passed; the original CUDA process reported 27 passes but its six public SiLU nodes executed on CPU and cannot be counted as CUDA |
-| Maintained `nox -s ecosystem_vllm` | CPU 1 / CUDA 1 passed, zero skips |
-| Native and Torch CPU core | 322 passed, 42 declared skips, 1 existing xfail |
-| Full structure after the kernel/adapter fix | 1507 passed, 4 declared skips, zero failures |
+| 原始所有者批次上的公共 SiLU 测试 | CPU 6 通过；声称的 CUDA 六节点运行在测试内部选中的是 CPU，故不提供 CUDA 证据 |
+| 原始 CUDA 环境的邻居运行 | 15 通过；每节点的设备执行记录不足，故该计数不提供额外 CUDA 证明 |
+| 合并的 adapter/kernel/公共定向测试 | CPU 12 通过；原 CUDA 进程报告 27 通过，但其六个公共 SiLU 节点在 CPU 上执行，不能计为 CUDA |
+| 既有 `nox -s ecosystem_vllm` | CPU 1 / CUDA 1 通过，零跳过 |
+| 原生与 Torch CPU core | 322 通过、42 项已声明跳过、1 项既有 xfail |
+| kernel/adapter 修复后的完整结构 | 1507 通过、4 项已声明跳过、零失败 |
 
-The existing component gate still covers the same three CustomOp members;
-adding precision configurations does not add model-family coverage. Related
-shared repairs retain their own source and evidence identities:
-[RMS/alias contracts](2026-10-15-rmsnorm-triton-alias.md),
-[like factories](2026-10-15-like-factory-leaves.md), and
-[SDPA opmath](2026-10-15-sdpa-opmath.md).
+既有的组件门禁仍覆盖同样的三个 CustomOp 成员；增加精度配置并不会增加模型族覆盖。
+相关的共享修复保留各自的源码与证据标识：
+[RMS/别名契约](2026-10-15-rmsnorm-triton-alias.md)、
+[like 工厂](2026-10-15-like-factory-leaves.md) 以及
+[SDPA opmath](2026-10-15-sdpa-opmath.md)。
 
-## Original H3 default comparison remains blocked
+## 原始 H3 默认比较仍被阻断
 
-All 37 initial state arrays match exactly. The original 0.2% forward budget is
-unchanged. Maximum scaled output error against genuine default attention is:
+全部 37 个初始状态数组精确一致。原始 0.2% 前向预算未变。相对真实默认 attention 的
+最大缩放输出误差为：
 
-| Input seed | Video | Audio | Loss |
+| 输入 seed | 视频 | 音频 | Loss |
 | --- | ---: | ---: | ---: |
 | 7 | 0.120073% | **0.583711%** | **1.701884%** |
 | 19 | 0.181590% | **0.449398%** | **0.265659%** |
 
-Four of six fields fail. A separate genuine-Torch MATH calibration, with actual
-math operators observed and fused alternatives absent, is bitwise equal to the
-candidate in all six final fields. Of 194 intermediate snapshots, 184 are
-bitwise equal; ten FP32 time-embedding/projection aliases differ by at most
-1.4901161e-8. Every observed BF16 intermediate is exact to that MATH calibration.
-This identifies the remaining difference on this fixture as also present in
-**genuine default versus genuine MATH**. It does not replace the original
-reference, alter its budget, or turn a failed default gate into a pass.
+六个字段中有四个失败。一项独立的真实 Torch MATH 校准（实际观察到使用数学算子，
+且融合替代路径不存在）在全部六个最终字段上与候选方逐位一致。在 194 个中间快照中，
+184 个逐位一致；十个 FP32 time-embedding/projection 别名最多相差
+1.4901161e-8。每一个被观测的 BF16 中间值相对于该 MATH 校准都是精确的。
+这说明该 fixture 上的剩余差异在**真实默认实现与真实 MATH 实现之间**同样存在。
+它不替换原始参考，不改变其预算，也不把失败的默认门禁变成通过。
 
-The all-gradient audit separately makes all 36 parameters and four floating
-inputs trainable. In both real Torch and candidate, on both seeds, only the
-four final video/audio head parameters have gradients. **32/36 parameter
-gradients and 4/4 input gradients are absent**. The diagnostic writes actual
-arrays and the missing-name ledger, then exits nonzero. No fabricated backward,
-zero-filled gradients or head-only SGD trajectory is accepted as full-model L3.
+全梯度审计另行让全部 36 个参数和四个浮点输入都可训练。在真实 Torch 和候选方中、
+在两个 seed 上，都只有四个最终的视频/音频 head 参数有梯度。
+**32/36 个参数梯度和 4/4 个输入梯度缺失**。诊断写出实际数组与缺失名称清单，
+然后以非零状态退出。任何编造的 backward、填零梯度或仅 head 的 SGD 轨迹都不被接受
+为完整模型 L3。
 
-## CPU and coverage boundary
+## CPU 与覆盖边界
 
-CPU was attempted first with GPUs hidden and candidate CUDA explicitly disabled.
-The installed genuine CUDA wheel's H3 constructor requests CUDA capability and
-fails; candidate rejects unavailable Gloo. Those wheel failures alone do not
-prove the absence of all CPU implementations. The pinned upstream separately
-supports CPU packaging, but its built-in Omni diffusion platform plugins are
-CUDA, ROCm, NPU, XPU and MUSA. `UnspecifiedOmniPlatform` declares device `cpu`
-without implementing the required diffusion-attention selector. No built-in H3
-CPU diffusion-attention runtime is declared by this source snapshot; external
-plugins and future CPU builds remain outside this source-bounded conclusion.
+最先尝试 CPU，隐藏 GPU 并显式禁用候选 CUDA。
+已安装的真实 CUDA wheel 的 H3 构造器请求 CUDA 能力并失败；候选方拒绝不可用的 Gloo。
+仅凭这些 wheel 失败不能证明所有 CPU 实现都不存在。固定版本的上游另行支持 CPU
+打包，但其内置 Omni diffusion 平台插件为 CUDA、ROCm、NPU、XPU 和 MUSA。
+`UnspecifiedOmniPlatform` 声明设备 `cpu`，但不实现所需的 diffusion-attention
+选择器。该源码快照没有声明任何内置的 H3 CPU diffusion-attention 运行时；
+外部插件与未来的 CPU 构建不在这一源码有界结论之内。
 
-The source-regenerated Omni scorecard contains **no admitted numerical record**:
-model families **0/92**, diffusion models **0/68**, pipeline model-type keys
-**0/64**, each bound to the full `446c2b...` SHA. These are separate axes, not
-additive coverage. The forward diagnostic is not an admission collector and is
-not registered as a passing shared ecosystem model case. R27/R28 remain open;
-there is no new Omni L2/L3, CPU runtime, engine or performance claim.
+源码重新生成的 Omni scorecard 中**没有任何被准入的数值记录**：
+模型族 **0/92**、diffusion 模型 **0/68**、pipeline 模型类型键 **0/64**，
+各自绑定完整的 `446c2b...` SHA。这些是相互独立的维度，不是可相加的覆盖率。
+前向诊断不是准入收集器，也没有被登记为通过的共享生态模型用例。R27/R28 仍然开启；
+没有新的 Omni L2/L3、CPU 运行时、引擎或性能主张。
 
-## Reproduction and raw evidence
+## 复现与原始证据
 
-The separate maintained-tool source `5216ac20da92d67fbf374fdd5c0898ff2ec84fbb`
-contains `agent/skills/vllm-omni-torch-compat/scripts/probe_h3.py`,
-with separate runtime/device, fixed clean upstream pins, overwrite protection,
-source identity, physical-device checks, and `--mode grad-audit` failure on any
-missing gradient. Genuine-only `--torch-math` creates a separate calibration.
-Use its commands and environment prerequisites in the
-[Omni skill](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/vllm-omni-torch-compat/SKILL.md).
+独立的既有工具源码 `5216ac20da92d67fbf374fdd5c0898ff2ec84fbb`
+包含 `agent/skills/vllm-omni-torch-compat/scripts/probe_h3.py`，
+支持独立的运行时/设备、固定的干净上游 pin、覆盖保护、源码标识、物理设备检查，
+以及在任何梯度缺失时以 `--mode grad-audit` 失败。仅针对真实实现的
+`--torch-math` 会生成独立的校准结果。请使用
+[Omni skill](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/vllm-omni-torch-compat/SKILL.md)
+中的命令与环境前置条件。
 
-Run public regressions with explicit device selection and the selected runtime:
+使用显式设备选择和所选运行时运行公共回归：
 
 ```bash
 JITTOR_TEST_DEVICE=cuda PYTHONPATH=python \
@@ -138,78 +122,62 @@ JITTOR_TORCH_SHIM=1 JITTOR_TEST_DEVICE=cuda PYTHONPATH=python:adapters \
   <jittor-python> -m pytest -q adapters/tests/vllm/test_layers.py
 ```
 
-Use separate CPU processes with GPUs hidden and `JT_USE_CUDA=0`; CUDA-only tests
-are checked on the target device, not counted as CPU execution. The maintained
-real-library gate requires independent `REAL_TORCH_PYTHON`, installed matching
-vLLM, `JITTOR_TEST_DEVICES=cpu` then `cuda`, and runs `nox -s ecosystem_vllm`.
+使用隐藏 GPU 且设置 `JT_USE_CUDA=0` 的独立 CPU 进程；仅 CUDA 的测试在目标设备上
+检查，不计为 CPU 执行。既有真实库门禁要求独立的 `REAL_TORCH_PYTHON`、已安装的匹配
+vLLM，先 `JITTOR_TEST_DEVICES=cpu` 再 `cuda`，并运行 `nox -s ecosystem_vllm`。
 
-Unversioned artifacts live at
-`$JITTOR_LAB_ROOT/_state/vllm-evidence/20261015/`. The final production evidence
-manifest `silu-h3-final-evidence-manifest-ac4-v1.json` binds 173 files, 4,403,832
-bytes, SHA256 `afcaf5b5b7c2225b7849f2e6ea5cbb7d1e691507ab93ebc3961114d26a8c965e`.
-It includes before/after arrays, actual library call routes, fixed-input H3 raw
-and missing-gradient ledgers, source snapshots and gate logs. Original metadata
-remains authoritative: earlier `86073` and `cea664` plus explicit owned-source
-hashes are not relabelled as clean `ac4`. Original CPU failures, default failures
-and the two earlier central-document registration failures are retained; the
-latter were cleared by the subsequent published central registration.
+未纳入版本控制的产物位于
+`$JITTOR_LAB_ROOT/_state/vllm-evidence/20261015/`。最终生产证据清单
+`silu-h3-final-evidence-manifest-ac4-v1.json` 绑定 173 个文件，4,403,832 字节，
+SHA256 为 `afcaf5b5b7c2225b7849f2e6ea5cbb7d1e691507ab93ebc3961114d26a8c965e`。
+它包含修复前/后的数组、实际库调用路径、固定输入 H3 的原始记录与缺失梯度清单、
+源码快照和门禁日志。原始元数据仍具权威性：更早的 `86073` 和 `cea664` 以及显式的
+自有源码哈希不会被重新标注为干净的 `ac4`。原始 CPU 失败、默认失败以及此前两处中央
+文档登记失败都予以保留；后者已由随后发布的中央登记清除。
 
 
-The tool was then run from clean `5216ac20da92d67fbf374fdd5c0898ff2ec84fbb`,
-which preserves the production fixes and integrates published CPU MPI source
-`01351fe61`. CPU was retried first and retained the real platform/Gloo errors.
-On CUDA, each runtime reproduced its original clean-ac4 six forward fields and
-37 initial states bitwise. Each runtime's separate gradient audit also reproduced
-all 14 available arrays and 37 states bitwise, recorded the same missing names,
-and exited nonzero. The two source identities remain separate.
+随后从干净检出 `5216ac20da92d67fbf374fdd5c0898ff2ec84fbb` 运行了该工具，
+它保留了生产修复并集成了已发布的 CPU MPI 源码 `01351fe61`。先重试 CPU，
+仍保留真实的平台/Gloo 错误。在 CUDA 上，每个运行时都逐位复现了其原有的干净 ac4
+六个前向字段和 37 个初始状态。每个运行时独立的梯度审计也逐位复现了全部 14 个可用
+数组和 37 个状态，记录了相同的缺失名称，并以非零状态退出。两个源码标识保持独立。
 
-The tool's eight host contracts pass. Full structure initially passed 1506 tests
-with four skips and rejected collection-time dynamic import in the new host
-test; moving that import into `setUpClass` fixed the test. All 42 affected pytest
-and child-process structure contracts then passed. No structure rule was
-relaxed. Layout and Ruff passed. These tool-only results do not supersede the
-production batch's core or real-library gates above.
+该工具的八项宿主契约通过。完整结构最初通过 1506 项测试、四项跳过，并拒绝新宿主
+测试中收集期的动态导入；把该导入移入 `setUpClass` 修复了该测试。随后全部 42 项受
+影响的 pytest 与子进程结构契约通过。没有放宽任何结构规则。布局与 Ruff 通过。
+这些仅涉及工具的结果不能取代上文生产批次的核心或真实库门禁。
 
-The additional `maintained-h3-tool-final-manifest-5216-v1.json` binds 25 raw
-files and the three tool/test/skill source hashes, SHA256
-`49d0d6a0688b17517514abb5685305c1cc15938e8658ba954774ad7f013db8d9`.
+额外的 `maintained-h3-tool-final-manifest-5216-v1.json` 绑定 25 个原始文件以及三个
+工具/测试/skill 源码哈希，SHA256 为
+`49d0d6a0688b17517514abb5685305c1cc15938e8658ba954774ad7f013db8d9`。
 
-## Main-tree integration and corrected device evidence
+## 主树集成与修正后的设备证据
 
-Integration starts from synchronized `4ce19215cba8fb15d7b347f53fda012ced9b4143`.
-The original runner set the process CUDA flag but omitted
-`JITTOR_TEST_DEVICE=cuda`; the public SiLU test's local scope therefore selected
-CPU. Its original six-node CUDA claim, and the insufficiently recorded neighbor
-claim, are withdrawn above. Original logs remain unchanged. The separate
-saved-input and real-library probes have explicit device arguments and physical
-residency assertions and retain their own bounded evidence.
+集成自同步后的 `4ce19215cba8fb15d7b347f53fda012ced9b4143` 开始。
+原始 runner 设置了进程 CUDA 标志，但漏掉了 `JITTOR_TEST_DEVICE=cuda`；
+因此公共 SiLU 测试的本地作用域选中了 CPU。其原始的六节点 CUDA 主张以及记录不足的
+邻居主张已在上文撤回。原始日志保持不变。独立的保存输入探针和真实库探针具有显式的
+设备参数和物理驻留断言，保留各自的有界证据。
 
-The first integration run with actual CUDA selection exposed float64 SiLU error
-of `1.55156931e-7`: the shared CUDA sigmoid expansion called `expf` even for
-double inputs. It now selects double `exp` for float64, retaining the existing
-float32 path. Public SiLU's original `2e-13` double tolerance is unchanged, and
-its test now checks sigmoid directly as well as forward, gradient and second
-derivative. This is an additional core repair beyond `ac4`, not a relabelling of
-the earlier source measurements.
+首次带真实 CUDA 选择的集成运行暴露了 float64 SiLU 误差
+`1.55156931e-7`：共享 CUDA sigmoid 展开对 double 输入也调用了 `expf`。
+它现在对 float64 选择 double `exp`，保留既有的 float32 路径。公共 SiLU 原有的
+`2e-13` double 容差未变，其测试现在还直接检查 sigmoid 以及前向、梯度和二阶导数。
+这是在 `ac4` 之外的额外核心修复，而不是对更早源码测量的重新标注。
 
-After that repair, actual CUDA public SiLU/SwiGLU/unary regressions pass all 29
-nodes, zero skipped; adapter contracts pass six nodes separately in Torch mode.
-CPU SiLU/unary regression passes 11 nodes with 15 declared CUDA skips, and the
-host probe/adapter contracts pass 14 nodes. An initial CPU erfinv reference check
-failed because the environment contained only a partial SciPy namespace;
-repeating with the existing genuine SciPy 1.13.1 installation passes. The
-initial mixed native/adapter command was rejected by the process-mode policy;
-the final runs use separate native and Torch processes.
+在该修复之后，真实 CUDA 上的公共 SiLU/SwiGLU/unary 回归通过全部 29 个节点，
+零跳过；adapter 契约在 Torch 模式下单独通过六个节点。
+CPU SiLU/unary 回归通过 11 个节点，另有 15 项已声明 CUDA 跳过，宿主
+probe/adapter 契约通过 14 个节点。一次初始的 CPU erfinv 参考检查失败，
+因为环境中只有部分 SciPy 命名空间；改用已安装的真实 SciPy 1.13.1 重试后通过。
+最初的混合原生/adapter 命令被进程模式策略拒绝；最终运行使用独立的原生与 Torch 进程。
 
-Core passes 322 nodes with 42 skips and one existing xfail; full structure
-passes 1,505 with six skips. An independent integration audit rehashes all 173
-production and 25 tool evidence files plus the three exact tool sources, and
-recomputes 144 saved-input/component array pairs within the original budgets.
-The six H3 outputs and 37 weights are independently rechecked: the original
-default reference still fails four fields, while all six MATH-calibration fields
-are byte-equal. No new full-model admission follows.
+Core 通过 322 个节点，42 项跳过和一项既有 xfail；完整结构通过 1,505 项，六项跳过。
+一项独立集成审计重新哈希全部 173 个生产证据文件、25 个工具证据文件以及三个确切的
+工具源码，并在原始预算内重算了 144 组保存输入/组件数组对。
+六个 H3 输出和 37 个权重被独立复核：原始默认参考仍然在四个字段上失败，
+而全部六个 MATH 校准字段字节一致。不产生任何新的完整模型准入。
 
-Unversioned integration evidence is under
-`$JITTOR_LAB_ROOT/_state/silu-integration-4ce/`; the independent H3 forward and
-production hash audit is under
-`$JITTOR_LAB_ROOT/_state/cpu-bf16-math-integration-013/next-silu-*.json`.
+未纳入版本控制的集成证据位于
+`$JITTOR_LAB_ROOT/_state/silu-integration-4ce/`；独立的 H3 前向与生产哈希审计位于
+`$JITTOR_LAB_ROOT/_state/cpu-bf16-math-integration-013/next-silu-*.json`。

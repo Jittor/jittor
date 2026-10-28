@@ -133,7 +133,7 @@ include-package-data = true
 "*" = ["**/__pycache__/**", "**/.pytest_cache/**", "**/*.py[cod]"]
 
 [tool.jittor.sdist]
-include = ["examples/**", "tools/**", "docs/**", "requirements/examples.txt", "requirements/docs.in", "requirements/docs.txt"]
+include = ["examples/**", "tools/**", "docs/**", "README.en.md", "requirements/examples.txt", "requirements/docs.in", "requirements/docs.txt"]
 exclude = ["compat/**", "adapters/**", "build/**", "dist/**", "docs/slides/**"]
 
 [tool.setuptools.dynamic]

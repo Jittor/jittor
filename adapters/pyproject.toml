@@ -13,6 +13,8 @@ dependencies = ["jittor-torch==2.0.0"]
 [project.entry-points."jittor.module_patches"]
 jittor_transformers = "jittor_adapters.transformers:register"
 jittor_torchmetrics = "jittor_adapters.torchmetrics:register"
+jittor_tensordict = "jittor_adapters.tensordict:register"
+jittor_verl = "jittor_adapters.verl:register"
 jittor_vllm = "jittor_adapters.vllm:register"
 jittor_deepspeed = "jittor_adapters.deepspeed:register"
 

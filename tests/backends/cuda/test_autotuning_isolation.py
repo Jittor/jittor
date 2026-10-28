@@ -23,7 +23,7 @@ What this file pins is the boundary, not the behaviour:
 * with the autotuner off, the gradient must not depend on the scheduling flag
   at all -- that is the assertion with teeth, and it is what would go red if
   something *other* than autotuning started moving the numbers;
-* the loss must be bit-identical either way, autotuner or not.
+* at highest FP32 precision, the loss must be bit-identical either way, autotuner or not.
 
 It deliberately does **not** assert that the gradients differ with the
 autotuner on. That divergence depends on the machine, the shapes and the
@@ -61,28 +61,31 @@ CHILD = textwrap.dedent('''
     import jittor.compile_extern as ce
     ce.cudnn.set_benchmark({benchmark})
 
-    jt.set_global_seed(0)
-    class BK(nn.Module):
-        def __init__(s, cin, mid, stride=1):
-            s.c1 = nn.Conv2d(cin, mid, 1, bias=False); s.b1 = nn.BatchNorm(mid)
-            s.c2 = nn.Conv2d(mid, mid, 3, stride, 1, bias=False); s.b2 = nn.BatchNorm(mid)
-            s.c3 = nn.Conv2d(mid, mid*4, 1, bias=False); s.b3 = nn.BatchNorm(mid*4)
-            s.ds = nn.Sequential(nn.Conv2d(cin, mid*4, 1, stride, bias=False),
-                                 nn.BatchNorm(mid*4)) if (stride != 1 or cin != mid*4) else None
-        def execute(s, x):
-            idt = s.ds(x) if s.ds is not None else x
-            y = nn.relu(s.b1(s.c1(x))); y = nn.relu(s.b2(s.c2(y))); y = s.b3(s.c3(y))
-            return nn.relu(y + idt)
+    # Hold the convolution math fixed while varying scheduling knobs.
+    # The default TF32 precision tier can change the forward rounding.
+    with jt.runtime.scope(float32_cudnn_precision="highest"):
+        jt.set_global_seed(0)
+        class BK(nn.Module):
+            def __init__(s, cin, mid, stride=1):
+                s.c1 = nn.Conv2d(cin, mid, 1, bias=False); s.b1 = nn.BatchNorm(mid)
+                s.c2 = nn.Conv2d(mid, mid, 3, stride, 1, bias=False); s.b2 = nn.BatchNorm(mid)
+                s.c3 = nn.Conv2d(mid, mid*4, 1, bias=False); s.b3 = nn.BatchNorm(mid*4)
+                s.ds = nn.Sequential(nn.Conv2d(cin, mid*4, 1, stride, bias=False),
+                                     nn.BatchNorm(mid*4)) if (stride != 1 or cin != mid*4) else None
+            def execute(s, x):
+                idt = s.ds(x) if s.ds is not None else x
+                y = nn.relu(s.b1(s.c1(x))); y = nn.relu(s.b2(s.c2(y))); y = s.b3(s.c3(y))
+                return nn.relu(y + idt)
 
-    model = nn.Sequential(*([BK(512, 256, stride=2)] + [BK(1024, 256) for _ in range(4)]))
-    x = jt.array(np.random.RandomState(7).randn(1, 512, 8, 8).astype("float32"))
-    loss = model(x).sum()
-    grads = jt.grad(loss, [p for p in model.parameters() if p.requires_grad])
-    flat = np.concatenate([np.asarray(g.numpy()).ravel() for g in grads])
-    print("RESULT " + json.dumps({{
-        "loss": float(loss.numpy()),
-        "grad_norm": float(np.linalg.norm(flat)),
-    }}))
+        model = nn.Sequential(*([BK(512, 256, stride=2)] + [BK(1024, 256) for _ in range(4)]))
+        x = jt.array(np.random.RandomState(7).randn(1, 512, 8, 8).astype("float32"))
+        loss = model(x).sum()
+        grads = jt.grad(loss, [p for p in model.parameters() if p.requires_grad])
+        flat = np.concatenate([np.asarray(g.numpy()).ravel() for g in grads])
+        print("RESULT " + json.dumps({{
+            "loss": float(loss.numpy()),
+            "grad_norm": float(np.linalg.norm(flat)),
+        }}))
 ''')
 
 

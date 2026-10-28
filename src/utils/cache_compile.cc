@@ -58,6 +58,12 @@ string join(string a, string b) {
     return a;
 }
 
+// `cache_compile(cmd, ...)` is a public build entry point, and the command
+// line it is given can carry user flags (`cc_flags`, `extra_flags`). A command
+// this scanner cannot read is therefore the caller's error and is reported as
+// USER_CHECK. Failures past scanning -- a compiler that produced no depfile, a
+// file that cannot be opened, written or renamed -- are environment or
+// framework state and stay CHECK/LOGf.
 void find_names(string cmd, vector<string>& input_names, string& output_name, map<string,vector<string>>& extra) {
     // find space not in str
     #define is_quate(x) ((x)=='\'' || (x)=='\"')
@@ -66,7 +72,8 @@ void find_names(string cmd, vector<string>& input_names, string& output_name, ma
             if (is_quate(cmd[j])) {
                 j++;
                 while (j<cmd.size() && !is_quate(cmd[j])) j++;
-                ASSERT(j<cmd.size());
+                USER_CHECK(j<cmd.size())
+                    << "unterminated quote in compiler command: " << cmd;
                 j++;
                 continue;
             }
@@ -97,10 +104,14 @@ void find_names(string cmd, vector<string>& input_names, string& output_name, ma
                 // -Fo: -Fe:
                 auto j=i+5;
                 while (j<cmd.size() && cmd[j] == ' ') j++;
-                CHECK(j<cmd.size());
+                USER_CHECK(j<cmd.size())
+                    << "compiler command ends after naming an output flag; "
+                    << "give it a file path: " << cmd;
                 auto k=j;
                 pass(k);
-                CHECK(j<k && output_name.size()==0);
+                USER_CHECK(j<k && output_name.size()==0)
+                    << "the compiler command must name exactly one output "
+                    << "file (`-o file` or `-Fo: file`): " << cmd;
                 // -Fo: xxx
                 // i    j  k
                 output_name = substr(j, k);
@@ -111,10 +122,14 @@ void find_names(string cmd, vector<string>& input_names, string& output_name, ma
             if (i+2<cmd.size() && cmd[i+1]=='o' && cmd[i+2]==' ') {
                 auto j=i+3;
                 while (j<cmd.size() && cmd[j] == ' ') j++;
-                CHECK(j<cmd.size());
+                USER_CHECK(j<cmd.size())
+                    << "compiler command ends after naming an output flag; "
+                    << "give it a file path: " << cmd;
                 auto k=j;
                 pass(k);
-                CHECK(j<k && output_name.size()==0);
+                USER_CHECK(j<k && output_name.size()==0)
+                    << "the compiler command must name exactly one output "
+                    << "file (`-o file` or `-Fo: file`): " << cmd;
                 // -o xxx
                 // i  j  k
                 output_name = substr(j, k);
@@ -126,7 +141,9 @@ void find_names(string cmd, vector<string>& input_names, string& output_name, ma
                 while (j<cmd.size() && cmd[j]==' ') j++;
                 size_t k=j;
                 pass(k);
-                CHECK(j<k);
+                USER_CHECK(j<k)
+                    << "compiler command has an include flag ('-I') with no "
+                    << "directory: " << cmd;
                 auto inc = substr(j, k);
                 // find include
                 i = k;
@@ -150,9 +167,9 @@ void find_names(string cmd, vector<string>& input_names, string& output_name, ma
         input_names.push_back(substr(i, j));
         i = j;
     }
-    CHECK(output_name.size() && input_names.size())
-        << "output_name: " << output_name
-        << " input_names: " << input_names << "\n" << cmd;
+    USER_CHECK(output_name.size() && input_names.size())
+        << "the compiler command must name at least one input file and an "
+        << "output file (`-o file`): " << cmd;
 }
 
 static vector<string> parse_make_dependencies(const string& source) {

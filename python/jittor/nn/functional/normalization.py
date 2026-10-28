@@ -7,6 +7,7 @@ import jittor as jt
 from jittor._runtime.core_api import _output_requires_grad
 
 from ... import _arg_policy
+from ._amp import prefers_half as _amp_prefers_half
 from ..backends import hooks as _backend_hooks
 from jittor._runtime.dispatch import dispatch_context, select_kernel as _select_kernel
 from jittor.backends.cuda.kernels.nn.batch_norm_training_cuda import (
@@ -440,6 +441,17 @@ def layer_norm(
             raise ValueError("layer_norm {} must match normalized_shape".format(name))
     weight = 1.0 if weight is None else weight
     bias = 0.0 if bias is None else bias
+    if (_amp_prefers_half()
+            and _jittor_dtype_name(x.dtype) in ("float16", "bfloat16")):
+        # Widen the whole body, not just the input: every float op built while
+        # the register is set is lowered again, so an fp32-spelled intermediate
+        # does not survive. The result is narrowed once, which keeps the
+        # published dtype contract (half in, half out); the next
+        # autocast-eligible op rounds at the same boundary anyway.
+        with jt.flag_scope(amp_reg=jt.amp_flags.disabled):
+            wide = layer_norm(x.float32(), normalized_shape, weight, bias,
+                              eps, elementwise_affine)
+        return wide.cast(_jittor_dtype_name(x.dtype))
     # The two relays are mutually exclusive by construction: the training one
     # requires `_output_requires_grad(x, weight, bias)` and the inference one
     # requires its negation. Trying both meant every layer_norm paid two full

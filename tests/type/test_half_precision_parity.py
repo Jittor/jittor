@@ -345,17 +345,16 @@ class TestHalfAccumulatesInFloat32(unittest.TestCase):
 class TestHalfPythonScalar(unittest.TestCase):
     """A Python float meeting a half tensor gives torch's answer exactly.
 
-    This is here as a *constraint*, not a discovery. KI-DTYPE-003 records that
-    `src/bindings/pyjt/py_array_op.cc` converts every Python float to a float32
-    constant, so `float64_var * 0.1` has seven good digits where torch, whose
-    Python float is a weak double, is exact. At float16 and bfloat16 the
-    narrowing is invisible -- float32 is wider than both, so the value survives
-    the intermediate and the only rounding is the one the output dtype forces --
-    and the four expressions below are bit-identical to real torch 2.13 on CPU
-    and CUDA today.
+    A Python float is a weak scalar: the result keeps the tensor's dtype, and
+    at float16 and bfloat16 the scalar's float32 staging value is wide enough
+    that the only rounding is the one the output dtype forces. The four
+    expressions below are bit-identical to real torch 2.13 on CPU and CUDA, and
+    they pin the weak-scalar model that also makes `float64_var * 0.1` exact
+    .
 
-    Whatever weak-scalar model eventually fixes the float64 case has to keep
-    that true, which is what this pins. The values are torch's, transcribed.
+    They were long a strict expected failure because `jt.ones(1)` was itself a
+    weak scalar: `jt.ones(1).float16() * 0.1` came back float32.
+    The values are torch's, transcribed.
     """
 
     EXPECT = {
@@ -365,9 +364,7 @@ class TestHalfPythonScalar(unittest.TestCase):
                      "twothirds": 0.66796875, "sqrt2": 1.4140625},
     }
 
-    @unittest.expectedFailure
     def test_matches_torch(self):
-        # KI-DTYPE-004: a jt.ones/zeros/full result is weak in promotion, so half * python float gives float32.
         for device, use_cuda in _DEVICES:
             for name in ("float16", "bfloat16"):
                 with self.subTest(device=device, dtype=name):
@@ -385,6 +382,33 @@ class TestHalfPythonScalar(unittest.TestCase):
                                 float(var.float32().numpy()[0]),
                                 self.EXPECT[name][key],
                                 "%s on %s in %s" % (key, device, name))
+
+    def test_the_other_direction_uses_the_factory_dtype(self):
+        """A float32 factory against a half tensor stays float32.
+
+        The other direction: `jt.zeros(3)` used to adopt the half
+        operand's width, because its rank-zero source's `_is_scalar` came
+        through the broadcast. A factory result is a tensor, and torch
+        promotes float32 with float16 to float32.
+        """
+        for device, use_cuda in _DEVICES:
+            with self.subTest(device=device):
+                with jt.flag_scope(use_cuda=use_cuda):
+                    half = jt.array(np.ones(3, "float16"))
+                    z = jt.zeros(3)
+                    self.assertEqual(str(z.dtype), "float32")
+                    self.assertEqual(str((z * half).dtype), "float32")
+                    self.assertEqual(str((half * z).dtype), "float32")
+
+    def test_full_is_a_tensor_in_promotion(self):
+        """`full` goes through the same factory path as `ones`/`zeros`."""
+        for device, use_cuda in _DEVICES:
+            with self.subTest(device=device):
+                with jt.flag_scope(use_cuda=use_cuda):
+                    v = jt.full((4,), 0.5, "float16")
+                    self.assertEqual(str(v.dtype), "float16")
+                    self.assertEqual(str((v * 0.1).dtype), "float16")
+                    self.assertEqual(str((v + 0.1).dtype), "float16")
 
 
 class TestHalfBackward(unittest.TestCase):

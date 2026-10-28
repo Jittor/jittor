@@ -285,6 +285,39 @@ class TestSavedTensorVersions(unittest.TestCase):
                                    np.full(3, 10.0), rtol=1e-5)
 
 
+class TestCustomFunctionDoubleBackward(unittest.TestCase):
+    """A backward written with differentiable ops differentiates again.
+
+    torch's saved inputs keep their graph, so with ``create_graph=True`` the
+    gradient of ``x ** 3`` through a custom Function differentiates to
+    ``6 x``. jittor's Function saved stop-grad tapes and gave 0.
+    """
+
+    class Cube(torch.autograd.Function):
+        @staticmethod
+        def forward(ctx, x):
+            ctx.save_for_backward(x)
+            return x ** 3
+
+        @staticmethod
+        def backward(ctx, grad):
+            (x,) = ctx.saved_tensors
+            return 3 * x * x * grad
+
+    def test_second_derivative_through_save_for_backward(self):
+        x = torch.tensor([2.0], requires_grad=True)
+        (first,) = torch.autograd.grad(self.Cube.apply(x).sum(), x,
+                                       create_graph=True)
+        (second,) = torch.autograd.grad(first.sum(), x)
+        np.testing.assert_allclose(first.numpy(), [12.0], rtol=1e-6)
+        np.testing.assert_allclose(second.numpy(), [12.0], rtol=1e-6)
+
+    def test_first_order_backward_is_unchanged(self):
+        x = torch.tensor([2.0], requires_grad=True)
+        self.Cube.apply(x).sum().backward()
+        np.testing.assert_allclose(x.grad.numpy(), [12.0], rtol=1e-6)
+
+
 class TestBackwardSignature(unittest.TestCase):
     def test_retain_graph_defaults_to_none_like_torch(self):
         # torch's ``backward`` is the torch frontend's method; the native Var

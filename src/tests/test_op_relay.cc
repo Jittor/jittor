@@ -56,10 +56,16 @@ static void fop_cannot_fuse(vector<int>& var_fused, int64 batch_stamp,
 
 JIT_TEST(fused_op_relay_matmul) {
     JK& jk = get_jk();
-    VarPtr a({10,10}, "float32");
-    VarPtr b({10,10}, "float32");
-    auto aa = make_broadcast_to_op(a, {10,10,10}, {2});
-    auto bb = make_broadcast_to_op(b, {10,10,10}, {0});
+    // One-element sources on purpose: an expand with a non-singleton source is
+    // a storage view now (`BroadcastToOp::expand_is_view`), and a view has no
+    // jit_run for a fused kernel to splice. A 10x10 source used to give this
+    // graph the computed broadcast it needs; that stopped being true when the
+    // view optimization landed, and the case then only passed while
+    // `mkl_matmul` happened to be unregistered (the early return below).
+    VarPtr a({1,1}, "float32");
+    VarPtr b({1,1}, "float32");
+    auto aa = make_broadcast_to_op(a, {1,1,1}, {2});
+    auto bb = make_broadcast_to_op(b, {1,1,1}, {0});
     auto c = make_binary_op(aa, bb, ns_add);
     auto d = make_reduce(c, ns_add, 1, false);
     vector<Node*> s({d->node()}), q;
@@ -93,9 +99,14 @@ JIT_TEST(fused_op_relay_matmul) {
     fop.update_ops();
     context.setup(&fop);
     if (!has_op("mkl_matmul")) return;
+    // The constructor gained a fifth argument (fp32_output) when CPU bf16
+    // accumulation landed; this test kept asking for the old four-argument
+    // signature. It passed only because `has_op` was false until some earlier
+    // file loaded the mkl backend library, which made the case return early --
+    // and after a file that did load it, the stale lookup threw instead.
     auto make_matmul = get_op_info("mkl_matmul")
-        .get_constructor<VarPtr, Var*, Var*, bool, bool>();
-    auto rvar = make_matmul(a, b, 0, 0);
+        .get_constructor<VarPtr, Var*, Var*, bool, bool, bool>();
+    auto rvar = make_matmul(a, b, 0, 0, false);
 
     fop.context->vrm.add_relay_group(&fop, {{rvar, d}});
     CHECKop(context.vrm.relay_groups[0].removed_input_vars.size(),==,2);
@@ -135,8 +146,10 @@ JIT_TEST(fused_op_relay_matmul) {
     for (uint i=0; i<a->num; i++)
         a->ptr<float>()[i] = b->ptr<float>()[i] = 1;
     entry(&fop);
+    // The relay replaces the broadcast/add/reduce graph with a[b, so the
+    // answer is 1 rather than the graph's own 2.
     for (uint i=0; i<a->num; i++)
-        CHECK(d->ptr<float>()[i]==10);
+        CHECK(d->ptr<float>()[i]==1);
 }
 
 } // jittor

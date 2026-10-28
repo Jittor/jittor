@@ -4,16 +4,14 @@ Split out of ``optimizer_api`` by size. Helpers that stay there are reached
 through a call-time import of that module: ``optimizer_api`` imports this one,
 and an import at module level here would put both on an import-time cycle.
 """
-from jittor._core.dtypes import var_dtype_name
 import jittor as jt
 from jittor.optim.algorithms.adam import adam_update
+from jittor.optim.base import _update_preserve_dtype
 from ..diagnostics import EXPECTED, swallowed
 
 
 def _update_in_target_dtype(target, value):
-    if var_dtype_name(value) != var_dtype_name(target):  # native, not `.dtype`
-        value = value.cast(var_dtype_name(target))
-    target.update(value)
+    _update_preserve_dtype(target, value)
 
 
 def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay):
@@ -55,12 +53,8 @@ def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay
         for pg in self.param_groups:
             _api._sync_adam_group_params(pg)
             pg["grads"] = [
-                # FSDP2 already applied this shard above. Its public .grad stays
-                # visible until zero_grad(), but must not feed the ordinary Adam
-                # phase of a mixed FSDP/plain group a second time.
-                None
-                if _fsdp2_step is not None
-                and _fsdp2_step.is_fsdp_managed_param(param)
+                None if (_fsdp2_step is not None
+                         and _fsdp2_step.is_fsdp_managed_param(param))
                 else getattr(param, "_torch_grad", None)
                 for param in pg.get("params", ())
             ]
@@ -134,9 +128,9 @@ def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay
                 active, lr_arg, b0, b1, weight_decay, eps)
             for (p, m, v, _, _), (new_p, new_m, new_v) in zip(
                     active, updates):  # fused_adamw keeps each input's dtype
-                p.update(new_p)
-                m.update(new_m)
-                v.update(new_v)
+                _update_preserve_dtype(p, new_p)
+                _update_preserve_dtype(m, new_m)
+                _update_preserve_dtype(v, new_v)
                 if p.is_stop_grad():
                     p.start_grad()
             continue

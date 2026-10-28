@@ -14,7 +14,7 @@ TORCH_INSTALL = ROOT / "compat/torch/__init__.py"
 def test_install_boundary_distinguishes_namespace_and_process_isolation():
     text = GUIDE.read_text(encoding="utf-8")
     for token in (
-        "torch*` namespace",
+        "`torch*` 命名空间",
         "jt.flags",
         "os.environ",
         "builtins.__import__",
@@ -22,10 +22,10 @@ def test_install_boundary_distinguishes_namespace_and_process_isolation():
         "module_patcher",
         "child_env()",
         "PYTHONPATH",
-        "reversible mutation ledger",
-        "hard-failure contract",
-        "must",
-        "not claim full install rollback",
+        "可逆的变更账本",
+        "硬失败契约",
+        "必须",
+        "不得为该表之外的状态主张完整的安装",
         "flags.__dict__",
         "JT_NCCL_WORLD_SIZE",
         "JT_NCCL_RANK",
@@ -33,7 +33,7 @@ def test_install_boundary_distinguishes_namespace_and_process_isolation():
         "JT_NCCL_ROOTINFO_FILE",
         "use_nccl",
         "use_mpi",
-        "explicit allowlist",
+        "显式白名单",
     ):
         assert token in text
 

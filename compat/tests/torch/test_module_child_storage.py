@@ -67,6 +67,28 @@ class TestModuleChildStorage:
         del storage["child"]
         assert not hasattr(root, "child") and not list(root.parameters())
 
+    def test_register_module_replaces_child_through_live_registry(self, device):
+        root = torch.nn.Module()
+        original = torch.nn.Linear(2, 1, bias=False).to(device)
+        root.add_module("layer", original)
+        storage = root._modules
+
+        class CheckpointWrapper(torch.nn.Module):
+            def __init__(self, module):
+                super().__init__()
+                self._checkpoint_wrapped_module = module
+
+            def execute(self, *args, **kwargs):
+                return self._checkpoint_wrapped_module(*args, **kwargs)
+
+        wrapped = CheckpointWrapper(original)
+
+        assert root.register_module("layer", wrapped) is root
+        assert root.layer is wrapped
+        assert storage["layer"] is wrapped
+        assert list(root.children()) == [wrapped]
+        assert list(wrapped.children()) == [original]
+
     def test_none_aliases_and_held_views(self, device):
         root = torch.nn.Module()
         storage = root.__dict__["_modules"]

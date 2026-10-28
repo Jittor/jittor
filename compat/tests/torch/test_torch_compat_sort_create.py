@@ -215,9 +215,16 @@ class TestCreation(Base):
         def body(dev):
             self.ac(torch.eye(4).numpy(), np.eye(4), msg=f"eye {dev}")
             x = np.random.RandomState(5).randn(4, 4).astype("float32")
-            self.ac(torch.triu(torch.tensor(x)).numpy(), np.triu(x), msg=f"triu {dev}")
+            untracked = torch.triu(torch.tensor(x, device=dev))
+            self.assertFalse(untracked.requires_grad, dev)
+            self.ac(untracked.numpy(), np.triu(x), msg=f"triu {dev}")
             self.ac(torch.tril(torch.tensor(x), -1).numpy(), np.tril(x, -1),
                     msg=f"tril diag {dev}")
+            tracked_input = torch.tensor(x, device=dev, requires_grad=True)
+            tracked = torch.triu(tracked_input)
+            self.assertTrue(tracked.requires_grad, dev)
+            tracked.sum().backward()
+            self.ac(tracked_input.grad.numpy(), np.triu(np.ones_like(x)), msg=f"triu grad {dev}")
             v = np.array([1., 2., 3.], dtype="float32")
             self.ac(torch.diag(torch.tensor(v)).numpy(), np.diag(v), msg=f"diag vec {dev}")
         both_devices(body)
@@ -241,6 +248,17 @@ class TestCreation(Base):
                     msg=f"ones_like {dev}")
             self.ac(torch.full((2, 3), 1.5).numpy(), np.full((2, 3), 1.5, "float32"),
                     msg=f"full {dev}")
+            # Tensor-valued shape dimensions work for both Torch spellings.
+            # The keyword path previously passed the device scalar directly to
+            # Jittor's shape parser instead of materializing metadata as int.
+            dynamic = torch.tensor([3], dtype=torch.int64).max()
+            for actual in (
+                    torch.full((2, dynamic), 4.0),
+                    torch.full(size=(2, dynamic), fill_value=4.0)):
+                self.ac(actual.numpy(), np.full((2, 3), 4.0, "float32"),
+                        msg=f"full dynamic size {dev}")
+                if dev == "cuda":
+                    self.assertTrue(actual.is_cuda)
         both_devices(body)
 
 

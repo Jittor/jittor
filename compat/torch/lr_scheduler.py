@@ -30,6 +30,7 @@ class LRScheduler:
 
     def __init__(self, optimizer, last_epoch=-1, verbose=False):
         self.optimizer = optimizer
+        self.verbose = verbose
         for index, group in enumerate(optimizer.param_groups):
             if last_epoch == -1:
                 initial_lr = group["lr"]
@@ -54,14 +55,15 @@ class LRScheduler:
         try:
             self.step()
         finally:
-            self._is_initial = False
+            del self._is_initial
 
     def get_lr(self):
         return list(self.base_lrs)
     def get_last_lr(self):
         return list(self._last_lr)
     def state_dict(self):
-        return {k: v for k, v in self.__dict__.items() if k != "optimizer"}
+        return {k: v for k, v in self.__dict__.items()
+                if k not in ("optimizer", "_is_initial")}
     def load_state_dict(self, sd):
         self.__dict__.update(sd)
     def step(self, epoch=None):
@@ -79,7 +81,7 @@ class LRScheduler:
 def _lambda_state_dict(scheduler):
     from types import FunctionType
     state = {k: v for k, v in scheduler.__dict__.items()
-             if k not in ("optimizer", "lr_lambdas")}
+             if k not in ("optimizer", "lr_lambdas", "_is_initial")}
     state["lr_lambdas"] = [
         None if isinstance(fn, FunctionType) else fn.__dict__.copy()
         for fn in scheduler.lr_lambdas
@@ -164,7 +166,18 @@ class StepLR(LRScheduler):
         self.base_lrs = _base_lrs(optimizer)
         super().__init__(optimizer, last_epoch, verbose)
     def get_lr(self):
-        return [b * self.gamma ** (max(self.last_epoch, 0) // self.step_size) for b in self.base_lrs]
+        if self.last_epoch == 0 or self.last_epoch % self.step_size:
+            return _base_lrs(self.optimizer)
+        return [lr * self.gamma for lr in _base_lrs(self.optimizer)]
+
+    def step(self, epoch=None):
+        if epoch is None:
+            return super().step()
+        self.last_epoch = epoch
+        self._step_count += 1
+        self._last_lr = [
+            lr * self.gamma ** (epoch // self.step_size) for lr in self.base_lrs]
+        _set_lrs(self.optimizer, self._last_lr)
 
 
 class MultiStepLR(LRScheduler):

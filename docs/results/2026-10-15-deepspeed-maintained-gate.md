@@ -1,52 +1,48 @@
-# DeepSpeed: maintained two-rank BF16 Engine gate
+# DeepSpeed：维护中的双 rank BF16 Engine 门禁
 
-- Status: bounded real Engine acceptance; whole-library coverage remains pending.
+- Status: 有界的真实 Engine 验收；整库覆盖仍待完成。
 - Date: 2026-10-15
-- Baseline: `f666c3f7190aeed39d7bb747dcf7f0753afaced8` (clean final matrix);
-  CPU arithmetic fix `a441034299beb141785bbbffe7afaf03c99638c2`.
-- Owner: Jittor core/compat maintainers.
-- Review when: native Adam state arithmetic, view/storage publication, autograd hooks,
-  optimizer loading, native collectives/Store, the runner/launcher, or the pinned
-  DeepSpeed adapter/source changes. Adapter-facing public contracts include
-  `gradient_task.participating_tensors`, `owned_runtime_hook`, `transaction` and
-  `module_patcher`; changes to these also require revalidation.
+- Baseline: `f666c3f7190aeed39d7bb747dcf7f0753afaced8`（干净最终矩阵）；
+  CPU 算术修正 `a441034299beb141785bbbffe7afaf03c99638c2`。
+- Owner: Jittor 核心/兼容维护者。
+- Review when: native Adam 状态算术、view/存储发布、autograd hook、
+  optimizer 加载、native 集合通信/Store、runner/launcher，或固定版本的
+  DeepSpeed adapter/源码变化。面向 adapter 的公开契约包括
+  `gradient_task.participating_tensors`、`owned_runtime_hook`、`transaction` 与
+  `module_patcher`；这些变化同样需要重新验证。
 
-## Scope and protocol
+## 范围与协议
 
-The maintained entry is `nox -s ecosystem_deepspeed_multirank`, calling
-`test_two_rank_bfloat16_engine_training_and_resume`. It runs ZeRO 1/2 × AdamW ×
-input perturbation 0/.125 on two actual CUDA ranks. Each rank has different inputs;
-actual FP32 master partitions contain 166 of the model's 332 parameters. This is
-DeepSpeedEngine.backward/step/save_checkpoint/load_checkpoint in a fresh Engine,
-with six microsteps, GAS 2, three updates, save after update two and two resumed
-microsteps. The tiny residual Linear/GELU/LayerNorm/Linear model is not a speed gate.
+维护入口是 `nox -s ecosystem_deepspeed_multirank`，调用
+`test_two_rank_bfloat16_engine_training_and_resume`。它在两个实际 CUDA rank 上运行
+ZeRO 1/2 × AdamW × 输入扰动 0/.125。每个 rank 的输入不同；
+实际的 FP32 主分区包含模型 332 个参数中的 166 个。这是在新 Engine 中执行
+DeepSpeedEngine.backward/step/save_checkpoint/load_checkpoint，
+六个 microstep、GAS 2、三次更新、在第二次更新后保存并续训两个 microstep。
+这个极小的残差 Linear/GELU/LayerNorm/Linear 模型不是速度门禁。
 
-Both runtimes use official DeepSpeed v0.19.7 at
-`f5af15c2b4da10411e340850c00ba0cb5b14fd87`; the independently built source wheel has
-SHA256 `467622416c9819162ad853ea517805b5eb28e59ba3d43a3641add97668286c48`.
-The oracle is binary Torch 2.11.0+cu128 with its actual `_C` extension and no shim
-marker. The adapter remains separately installed and pins upstream source hashes.
-No ordinary model runner or external SGD substitutes for the Engine.
+两个 runtime 都使用官方 DeepSpeed v0.19.7 于
+`f5af15c2b4da10411e340850c00ba0cb5b14fd87`；独立构建的源码 wheel 的
+SHA256 为 `467622416c9819162ad853ea517805b5eb28e59ba3d43a3641add97668286c48`。
+oracle 是二进制 Torch 2.11.0+cu128，带实际 `_C` 扩展且无 shim 标记。
+adapter 仍单独安装，并固定上游源码哈希。没有普通模型 runner 或外部 SGD 替代 Engine。
 
-Numeric comparison reuses the original shared harness: forward/state tolerance
-2e-3, all-gradient tolerance 1e-2, the existing category floor 1e-3 times the maximum
-reference magnitude, and the minimum scale 1e-6. These thresholds were unchanged.
-Every incoming parameter gradient, both input gradients and the publicly available
-full gradients are checked. Saved/restored and final/resumed optimizer states,
-master partitions and all resumed output/loss/gradient/parameter fields are checked
-bitwise within each runtime, independently of cross-runtime numeric tolerances.
+数值比较复用原有的共享 harness：forward/state 容差 2e-3、全梯度容差 1e-2、
+既有的类别下限 1e-3 乘以参考最大量级，以及最小缩放 1e-6。这些阈值未变。
+每个传入参数梯度、两个输入梯度与公开可用的完整梯度都被检查。保存/恢复与
+最终/续训的 optimizer 状态、主分区以及全部续训输出/loss/梯度/参数字段，
+在每个 runtime 内逐位检查，独立于跨 runtime 的数值容差。
 
-Observed dtype matters: ZeRO1 BF16_Optimizer can return an existing BF16 param.grad
-from safe_get_full_grad; ZeRO2's partition getter returns FP32 accumulation storage.
-Raw metadata records each observed gradient dtype; both runtimes and resumed
-fields must agree. Initial flags do not substitute for tensor residency checks.
-All requested tensors are materialized on CUDA and fallback is forbidden/count 0.
+观测到的 dtype 很重要：ZeRO1 的 BF16_Optimizer 可能从 safe_get_full_grad 返回既有
+的 BF16 param.grad；ZeRO2 的 partition getter 返回 FP32 累加存储。
+原始元数据记录每个观测梯度的 dtype；两个 runtime 与续训字段必须一致。初始标志
+不能替代张量驻留检查。所有请求的张量都在 CUDA 上物化，fallback 被禁止且计数为 0。
 
-## Reproduction and artifact safety
+## 复现与产物安全
 
-Install the verified source package and standalone adapter in the native environment;
-use a separate binary Torch interpreter. Follow the
-[runbook](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/deepspeed-torch-compat/SKILL.md) for dependency isolation.
+在 native 环境中安装经校验的源码包与独立 adapter；使用独立的二进制 Torch 解释器。
+依赖隔离遵循
+[runbook](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/deepspeed-torch-compat/SKILL.md)。
 
 ```bash
 export JITTOR_CI_PYTHON=<native-python>
@@ -57,151 +53,144 @@ export JITTOR_DEEPSPEED_MULTIRANK_ROOT="$JITTOR_LAB_ROOT/_state/deepspeed/<fresh
 python -m nox -s ecosystem_deepspeed_multirank
 ```
 
-Cases include stage/optimizer/precision/world size/perturbation in their paths.
-Pre-existing case directories, including empty ones, are rejected. Failed evidence
-is retained. Each runtime/rank has private HOME/JITTOR_HOME/TMPDIR/cache directories.
-The two native ranks share their case's communicator heartbeat/control directory;
-that directory must not be split with rank caches. Cold core/NCCL warmups run in
-sequence. A failed or timed-out rank terminates and reaps its live peer.
-Source hashes and the current commit are checked before and after each case;
-comparison.json binds NPZ/log/protocol/source hashes. No raw artifact is versioned.
+各用例在其路径中包含 stage/optimizer/精度/world size/扰动。预先存在的用例目录，
+包括空目录，都会被拒绝。失败的证据保留。每个 runtime/rank 拥有私有的
+HOME/JITTOR_HOME/TMPDIR/缓存目录。两个 native rank 共享其用例的通信器
+heartbeat/control 目录；该目录不得与 rank 缓存混用。冷 core/NCCL 预热按顺序运行。
+失败或超时的 rank 会终止并回收其活跃的对端。源码哈希与当前提交在每个用例前后检查；
+comparison.json 绑定 NPZ/日志/协议/源码哈希。任何原始产物都不版本化。
 
-## Validation
+## 验证
 
-| Check | Result |
+| 检查 | 结果 |
 | --- | --- |
-| Final maintained two-rank BF16 CUDA matrix, clean `f666c3f719` | 4 passed, 0 skipped |
-| Maintained world-one FP32 CPU Engine matrix after FileStore fix | 12 passed, 0 skipped |
-| Maintained world-one FP32 CUDA Engine matrix after FileStore fix | 12 passed, 0 skipped |
-| Native Adam state/fetch-order regressions | 8 passed |
-| Core, native and Torch modes | 322 passed, 42 skipped, 1 existing xfail |
-| Full structure plus DeepSpeed protocol/skip-policy tests | 1,507 passed, 6 skipped |
-| Focused launcher/nox host contracts | 23 passed |
-| Repository layout | passed |
+| 最终维护双 rank BF16 CUDA 矩阵，干净 `f666c3f719` | 4 passed，0 skipped |
+| FileStore 修复后的维护 world-one FP32 CPU Engine 矩阵 | 12 passed，0 skipped |
+| FileStore 修复后的维护 world-one FP32 CUDA Engine 矩阵 | 12 passed，0 skipped |
+| Native Adam 状态/获取顺序回归 | 8 passed |
+| Core，native 与 Torch 模式 | 322 passed, 42 skipped, 1 existing xfail |
+| 完整结构加 DeepSpeed 协议/跳过策略测试 | 1,507 passed，6 skipped |
+| 定向 launcher/nox host 契约 | 23 passed |
+| 仓库布局 | 通过 |
 
-The full CPU/CUDA world-one gates were rerun after the arithmetic and FileStore
-changes. Their source is the unchanged ancestor of clean `f666`; the subsequent
-remote merge adds metric/TensorDict gates, inventory and documentation, without
-changing the DeepSpeed runner or native Adam. The final four CUDA cells were run
-on clean `f666`. The hot-cache four-cell pytest run took 83.84 s; this is execution
-evidence only, with no comparative speed or throughput claim.
+完整的 CPU/CUDA world-one 门禁在算术与 FileStore 变更之后重跑。其源码是干净 `f666`
+未改动的祖先；随后的远端合并加入 metric/TensorDict 门禁、清单与文档，
+未改变 DeepSpeed runner 或 native Adam。最终四个 CUDA 单元在干净 `f666` 上运行。
+热缓存四单元 pytest 运行耗时 83.84 s；这只是执行证据，不作比较性的速度或吞吐主张。
 
-Read-only revalidation checks all 1,566 tracked runtime-source hashes and 1,792
-numeric arrays across four cases/two ranks. All 1,024 gradient arrays are bitwise
-identical to independent Torch. Maximum normalized forward/state error is
-1.7584651928227423e-7; gradient error is zero under the unchanged comparator.
-Every rank updates all 166 FP32 master-partition elements. Stage1 checks 64 strict
-resume fields per rank/runtime and Stage2 checks 56, including restored optimizer
-state and the continued training path. Both native ranks report fallback count 0.
+只读复验检查四个用例/两个 rank 上的全部 1,566 个受跟踪 runtime 源码哈希与 1,792 个
+数值数组。全部 1,024 个梯度数组与独立 Torch 逐位一致。最大归一化 forward/state
+误差为 1.7584651928227423e-7；在未变的比较器下梯度误差为零。每个 rank 都更新全部
+166 个 FP32 主分区元素。Stage1 每 rank/runtime 检查 64 个严格续训字段，Stage2 检查
+56 个，包括恢复的 optimizer 状态与继续训练路径。两个 native rank 报告的 fallback
+计数均为 0。
 
-Unversioned raw evidence is under
-`$JITTOR_LAB_ROOT/_state/refactor-goal/deepspeed/multirank/`:
+未版本化原始证据位于
+`$JITTOR_LAB_ROOT/_state/refactor-goal/deepspeed/multirank/`：
 
-- `maintained-formal-v3/`: exclusive original case directories, rank NPZ/logs,
-  checkpoints, FileStores, protocol/source manifests and comparisons.
-- `maintained-deepspeed-v3-evidence.json`: 1,566 source hashes and 128 evidence
-  hashes, including all 108 final raw case files; SHA256
-  `425e8b405647c7aef75b88c28742598b43a60b87e508a690e829d8101b0da9df`.
-- `maintained-nox-formal-v3.log`, `maintained-matrix-summary-v3.json` and
-  `maintained-matrix-audit-v3.log`: final execution and recomputed comparisons.
-- `maintained-filestore-nox-{cpu,cuda}-v1.log`,
-  `maintained-postsync-core-cpu-v1.log`, `maintained-filestore-structure-v1.log`,
-  `maintained-filestore-host-v1.log` and `maintained-filestore-layout-v1.log`:
-  adjacent gates. The six structure/environment skips do not establish tensor
-  execution; the actual Engine matrices have no skips.
-- `upstream-protocol-inventory-v2.json`: bounded upstream protocol declarations,
-  official source identity and four source-file hashes.
+- `maintained-formal-v3/`：独占的原始用例目录、rank NPZ/日志、
+  checkpoint、FileStore、协议/源码 manifest 与比较结果。
+- `maintained-deepspeed-v3-evidence.json`：1,566 个源码哈希与 128 个证据
+  哈希，包括全部 108 个最终原始用例文件；SHA256
+  `425e8b405647c7aef75b88c28742598b43a60b87e508a690e829d8101b0da9df`。
+- `maintained-nox-formal-v3.log`、`maintained-matrix-summary-v3.json` 与
+  `maintained-matrix-audit-v3.log`：最终执行与重算的比较。
+- `maintained-filestore-nox-{cpu,cuda}-v1.log`、
+  `maintained-postsync-core-cpu-v1.log`、`maintained-filestore-structure-v1.log`、
+  `maintained-filestore-host-v1.log` 与 `maintained-filestore-layout-v1.log`：
+  相邻门禁。六项结构/环境跳过不构成张量执行的证明；实际 Engine 矩阵没有跳过。
+- `upstream-protocol-inventory-v2.json`：有界的上游协议声明、
+  官方源码身份与四个源码文件哈希。
 
-The code dependency order is `f4c1a00b7794` (maintained gate), `5da8ee2410a5`
-(shared control-plane directory and observed dtypes), `a441034299be` (native CPU
-Adam boundaries), then `0f1bc0de239a` (exclusive FileStore bootstrap). The arithmetic
-fix is independently reviewable in its two-file commit. No source hash or baseline
-is relabeled to a later integration commit.
+代码依赖顺序为 `f4c1a00b7794`（维护门禁）、`5da8ee2410a5`
+（共享控制面目录与观测到的 dtype）、`a441034299be`（native CPU
+Adam 边界），然后是 `0f1bc0de239a`（独占 FileStore 引导）。算术
+修正在其两文件提交中可独立审查。没有源码哈希或基线
+被重标为后续的整合提交。
 
-Actual platform: Linux x86_64, RTX4090/SM89, NVIDIA driver 580.178.04,
-Jittor pip-cu122 with nvcc 12.2.140 and GCC 11.5; independent Torch uses its CUDA12.8
-binary distribution. Matmul/cuDNN TF32 are enabled, matmul precision high,
-cuDNN benchmark false, four CPU threads per process. This is not a TF32-off claim.
+实际平台：Linux x86_64、RTX4090/SM89、NVIDIA 驱动 580.178.04、
+Jittor pip-cu122 配 nvcc 12.2.140 与 GCC 11.5；独立 Torch 使用其 CUDA12.8
+二进制发行版。Matmul/cuDNN TF32 启用，matmul precision 为 high，
+cuDNN benchmark 为 false，每进程四个 CPU 线程。这不是 TF32 关闭的主张。
 
-## CPU state-rounding correction
+## CPU 状态舍入修正
 
-Integration onto `26be435076cfd24ff9d0611fbe55f3a04085c298`, including the native
-RNG repair, independently rehashed all 128 evidence files and 1,566 source hashes
-and recomputed the four original CUDA comparisons. On the combined worktree,
-the CPU and actual CUDA world-one Engine gates each passed all 12 cases with no
-skips; native Adam's eight directed regressions also passed. Core passed 322
-checks with 42 skips and one existing expected failure. Structure plus tools
-passed 1,707 checks with six declared/environment skips. Four formatting-only
-follow-ups preserve their source ASTs. Integration logs and reproduction
-environments are unversioned under
-`$JITTOR_LAB_ROOT/_state/deepspeed-integration-26be/`.
+整合到 `26be435076cfd24ff9d0611fbe55f3a04085c298`（包含 native
+RNG 修复）后，独立重新哈希全部 128 个证据文件与 1,566 个源码哈希，
+并重算四个原始 CUDA 比较。在合并后的 worktree 上，
+CPU 与实际 CUDA 的 world-one Engine 门禁各通过全部 12 个用例且无
+跳过；native Adam 的八项定向回归也通过。Core 通过 322
+项检查，42 项跳过与 1 项既有预期失败。结构与工具
+通过 1,707 项检查，含六项已声明/环境跳过。四个仅格式化的
+后续修改保留其源码 AST。整合日志与复现
+环境未版本化，位于
+`$JITTOR_LAB_ROOT/_state/deepspeed-integration-26be/`。
 
-The first integration CPU attempt failed in the independent oracle before
-training because its installed Ninja executable was absent from PATH. Adding the
-existing private dependency bin directory made a single strict-resume case and
-the full 12-case rerun pass. Original failure logs remain; no arithmetic or
-threshold change was made for that environment repair.
+第一次整合的 CPU 尝试在训练之前的独立 oracle 中失败，
+因为其已安装的 Ninja 可执行文件不在 PATH 中。加入
+既有的私有依赖 bin 目录后，单个严格续训用例与
+全套 12 用例重跑通过。原始失败日志保留；该环境修复
+没有改变任何算术或阈值。
 
-The unchanged pre-maintenance runner on independent clean `4a4a480e6` reproduced
-CPU ZeRO1 AdamW parameter fresh-resume divergence: 31/128 up.weight elements,
-max absolute 1.4901161e-8. Saved/restored master and moments, resumed forward/loss,
-and all incoming/full/input gradients were bitwise equal. Step-three Adam received
-identical parameter, gradient, first/second moments, scalar hyperparameters and
-step counts; final master and moments diverged by an ulp.
+未改动的维护前 runner 在独立的干净 `4a4a480e6` 上复现了
+CPU ZeRO1 AdamW 参数 fresh-resume 发散：31/128 个 up.weight 元素，
+最大绝对差 1.4901161e-8。保存/恢复的 master 与 moments、续训的前向/loss，
+以及全部传入/完整/输入梯度都逐位相等。第三步 Adam 收到了
+相同的参数、梯度、一阶/二阶 moments、标量超参数与
+step 计数；最终 master 与 moments 相差一个 ulp。
 
-A no-DeepSpeed deterministic regression makes this observable by fetching updated
-moments before the returned parameter versus fetching the parameter first.
-The clean baseline's final regression differs at 86/332 FP32 parameters, max
-2.9802322e-8. Intermediate outputs retained by state views/AD allow CPU contraction
-across different boundaries. Preserving only final moment outputs fixes the old
-parameter assertion but exposes moment differences under the new full-state strict
-check; that failed attempt is retained rather than presented as acceptance.
+一个不含 DeepSpeed 的确定性回归通过在返回参数之前获取更新后的
+moments（而不是先获取参数）使这一点可观测。
+干净基线的最终回归在 86/332 个 FP32 参数上不同，最大
+2.9802322e-8。由 state view/AD 保留的中间输出允许 CPU 收缩
+跨越不同的边界。只保留最终 moment 输出可修正旧有的
+参数断言，但在新的全状态严格
+检查下暴露 moment 差异；那次失败的尝试被保留，而不是作为验收呈现。
 
-Only CPU torch_math=True uses explicit lazy rounding boundaries for the optimizer
-gradient, each state summand and updated moments. The shared native Adam formula
-owns the change; default native math and CUDA's existing path keep their policy.
-There is no graph-wide sync, global compiler-policy change or adapter math.
-These boundaries may add CPU materializations; throughput was not measured.
-Eight regressions cover Adam/AdamW × true FP32/FP64 and state/gradient fetch order.
-Independent binary Torch checks actual same-dtype arithmetic on CPU and CUDA;
-cross-runtime arithmetic remains numerically close rather than bitwise identical.
-The true-FP64 supplementary oracle probe still observes up to about 2.19e-8
-normalized residual from the existing scalar-coefficient precision policy; these
-regressions assert same-runtime rounding stability, not full FP64 oracle fidelity.
+只有 CPU 的 torch_math=True 对 optimizer 梯度、每个状态
+加数与更新后的 moments 使用显式的惰性舍入边界。共享的 native Adam 公式
+拥有该变更；默认 native 数学与 CUDA 的既有路径保持其策略。
+没有全图同步、全局编译器策略变更或 adapter 数学。
+这些边界可能增加 CPU 物化；吞吐未测量。
+八项回归覆盖 Adam/AdamW × true FP32/FP64 与 state/梯度获取顺序。
+独立二进制 Torch 在 CPU 与 CUDA 上检查实际的同 dtype 算术；
+跨 runtime 算术保持数值接近而非逐位相同。
+true-FP64 补充 oracle 探针仍观察到至多约 2.19e-8 的
+归一化残差，来自既有的标量系数精度策略；这些
+回归断言同 runtime 舍入稳定性，而不是完整的 FP64 oracle 保真度。
 
-## Boundaries and retained failures
+## 边界与保留的失败
 
-The first maintained attempt failed honestly: two Stage1 oracle cells revealed a
-wrong all-full-grad-FP32 assertion; two Stage2 native cells used separate heartbeat
-rendezvous directories and the watchdog aborted. Dtype observations and shared
-control-plane setup fixed these issues; the watchdog was not disabled.
-A later single-rank CUDA attempt had 11 numeric passes and one independent Torch
-TCPStore EADDRINUSE before training; exclusive per-runtime FileStore bootstrap
-then passed both full 12-cell
-world-one matrices and the final four-cell world-two matrix. FileStore is control
-plane bootstrap; both CUDA ranks still perform real NCCL training collectives.
-All failed logs and earlier raw matrices remain separate from the final run.
+第一次维护尝试诚实地失败：两个 Stage1 oracle 单元暴露了
+错误的“全完整梯度为 FP32”断言；两个 Stage2 native 单元使用分开的 heartbeat
+rendezvous 目录，watchdog 中止。dtype 观测与共享
+控制面设置修复了这些问题；watchdog 没有被禁用。
+稍后的一次单 rank CUDA 尝试有 11 项数值通过，1 项独立 Torch
+TCPStore EADDRINUSE 发生在训练之前；随后按 runtime 独占的 FileStore 引导
+通过了两套完整的 12 单元 world-one 矩阵与最终的四单元 world-two 矩阵。
+FileStore 是控制面引导；两个 CUDA rank 仍执行真实的 NCCL
+训练集合通信。所有失败日志与较早的原始矩阵都与最终运行保持分离。
 
-The earlier native 58-node view run did not globally enable CUDA. Its unscoped
-allocation node ran on CPU. A fully CUDA-enabled run has the independently
-baseline-reproduced KI-CODEGEN-005 full-sum allocation failure; this gate does not
-change that threshold or claim the allocation check passed on CUDA.
+较早的 native 58 节点 view 运行没有全局启用 CUDA。其未设作用域的
+分配节点在 CPU 上运行。完全启用 CUDA 的运行存在独立
+基线复现的 KI-CODEGEN-005 全和分配失败；该门禁不
+改变该阈值，也不声称分配检查在 CUDA 上通过。
 
-The world-one FP32 CPU 12-cell Engine gate is separate evidence. It is not the
-world-two BF16 CPU ladder. A matching world-two BF16 CPU result has not yet been
-run; the current maintained
-launcher is CUDA-specific, which does not establish that the actual CPU API is
-impossible. A separate same-model/weights/spec CPU API probe is required. Common
-scorecard admission stays pending and this CUDA result grants no accelerator
-coverage numerator. The read-only upstream inventory records four unique ZeRO
-stages (max_stage is an alias), three offload device values and nine declared
-DeepSpeed optimizer names as separate bounded axes. Dynamic torch.optim lookup
-and user optimizer instances/callables prevent treating that nine-name declaration
-as the complete optimizer API denominator. The inventory binds the full upstream
-SHA and four source-file hashes; central scorecard wiring is separate work.
+world-one FP32 CPU 的 12 单元 Engine 门禁是独立证据。它不是
+world-two BF16 的 CPU 阶梯。匹配的 world-two BF16 CPU 结果尚未
+运行；当前维护中的
+launcher 是 CUDA 专用的，这并不表明实际的 CPU API 不可能。
+需要一项独立的同模型/权重/规格的 CPU API 探针。公共
+记分卡准入仍待完成，该 CUDA 结果不授予加速器
+覆盖分子。只读的上游清单把四个唯一 ZeRO
+阶段（max_stage 是别名）、三个 offload 设备值与九个已声明的
+DeepSpeed optimizer 名称记录为独立的有界轴。动态 torch.optim 查找
+与用户 optimizer 实例/可调用对象使这九个名称的声明不能
+被视为完整的 optimizer API 分母。该清单绑定完整的上游
+SHA 与四个源码文件哈希；中心记分卡接线是另一项工作。
 
-Not validated: ZeRO3, CPU/NVMe offload, other optimizer classes in world-two BF16,
-FP16 multi-rank, multi-node, pipeline/tensor/expert parallelism, DeepCompile,
-elastic launch, performance, Windows CUDA, ROCm or NPU. The existing pinned
-adapter still explicitly rejects unsupported compile/elastic paths. Four tiny
-CUDA cells do not establish whole-library support.
+未验证：ZeRO3、CPU/NVMe offload、world-two BF16 中的其他 optimizer 类、
+FP16 多 rank、多机、pipeline/tensor/expert 并行、DeepCompile、
+弹性启动、性能、Windows CUDA、ROCm 或 NPU。既有的固定版本
+adapter 仍显式拒绝不受支持的 compile/elastic 路径。四个极小的
+CUDA 单元不构成整库支持。

@@ -186,5 +186,13 @@ class RowParallelLinear(_ParallelLinear):
                     if self.input_is_parallel else self.in_features)
         local = value if self.input_is_parallel else _Scatter(self._group)(value)
         result = _Reduce(self._group)(linear(local, self.weight))
-        return (result + bias_for_compute_dtype(result, self.bias)
-                if self.bias is not None else result)
+        if self.bias is None:
+            return result
+        if (jt.flags.amp_reg & jt.amp_flags.prefer_bfloat16
+                and str(result.dtype) == "float32"):
+            # A warmed BLAS may retain the BF16 GEMM accumulator in FP32.
+            # Autocast still rounds the bias input before the final addition.
+            bias = self.bias.cast("bfloat16")
+        else:
+            bias = bias_for_compute_dtype(result, self.bias)
+        return result + bias

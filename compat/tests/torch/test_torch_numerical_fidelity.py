@@ -105,6 +105,12 @@ class TestTorchNumericalFidelity(unittest.TestCase):
                 self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
                 self.assertIn("CPU", record.detail)
 
+    def test_kaiser_window_rejects_negative_lengths(self):
+        for length in (-1, -3):
+            with self.subTest(length=length):
+                with self.assertRaisesRegex(RuntimeError, "non-negative window_length"):
+                    torch.kaiser_window(length)
+
     def test_hann_window_cpu_values_match_numpy(self):
         with _native_jittor.flag_scope(use_cuda=0):
             actual = torch.hann_window(5, periodic=False).numpy()
@@ -394,6 +400,12 @@ class TestTorchNumericalFidelity(unittest.TestCase):
                 self.assertIn("out", record.detail)
         self.assertIn(
             "clamp", fidelity.fidelity_of("torch.nan_to_num").detail)
+
+    def test_type_accepts_typed_tensor_class(self):
+        with _native_jittor.flag_scope(use_cuda=0):
+            value = torch.tensor([1.0]).type(torch.BoolTensor)
+            self.assertEqual(str(value.dtype), "torch.bool")
+            self.assertTrue(bool(value.item()))
 
     def test_nan_to_num_default_bounds_match_numpy(self):
         values = np.array(

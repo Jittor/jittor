@@ -19,6 +19,10 @@ from ._code import acl_code as setitem_cmd
 
 
 from ._code import acl_code as setitem_forward
+from .gather_scatter_op import IndexCopyACL
+
+
+from .._soc import kernel_available
 
 
 def caculate_shape(tensors):
@@ -73,6 +77,49 @@ def can_broadcast_and_shape(shape1, shape2):
             return False, None
 
     return True, tuple(broadcast_shape)
+
+
+def _single_axis_index_copy(x, slices, value):
+    """Select the exact-shape inference assignment, otherwise keep setitem.
+
+    One 1-D index and full slices on the remaining axes describe index_copy.
+    Building a coordinate tensor for every axis makes IndexPut materialize a
+    grid as large as the source. IndexCopy consumes the one index directly,
+    with the same independent output and without reading indices on the host.
+    """
+    if not (
+        getattr(jt.flags, "no_grad", 0)
+        and isinstance(value, jt.Var)
+        and _jittor_dtype_name(value.dtype) == _jittor_dtype_name(x.dtype)
+        and 0 < len(slices) <= x.ndim
+        and all(size > 0 for size in x.shape)
+    ):
+        return None
+    indexed_axis = None
+    for dim, item in enumerate(slices):
+        if isinstance(item, jt.Var):
+            if indexed_axis is not None:
+                return None
+            indexed_axis = dim
+        elif not (
+            isinstance(item, slice)
+            and item.start is None and item.stop is None and item.step is None
+        ):
+            return None
+    if indexed_axis is None:
+        return None
+    index = slices[indexed_axis]
+    if (index.ndim != 1 or int(index.shape[0]) == 0
+            or _jittor_dtype_name(index.dtype) not in ("int32", "int64")):
+        return None
+    shape = list(x.shape)
+    shape[indexed_axis] = int(index.shape[0])
+    if list(value.shape) != shape:
+        return None
+    # setitem accepts negative indices; IndexCopy requires their nonnegative
+    # counterparts. Keep normalization on the device and preserve int64.
+    index = index + (index < 0).cast(index.dtype) * int(x.shape[indexed_axis])
+    return IndexCopyACL()(x, indexed_axis, index, value)
 
 
 class SetItemACL(jt.Function):
@@ -143,6 +190,10 @@ class SetItemACL(jt.Function):
         slices = tuple(slices)
         slices_list = list(slices)
 
+        direct = _single_axis_index_copy(x, slices, value)
+        if direct is not None:
+            return direct
+
         # A Var index mixed with trivial full-range slices on the other axes
         # (e.g. ``cache[:, :, position] = key_states`` for a static KV cache)
         # is not a StridedSliceAssignV2 case: StridedSliceAssignV2 only takes
@@ -196,16 +247,19 @@ class SetItemACL(jt.Function):
                 value_shape = list(broadcast_shape) + list(x.shape[ndim_idx:])
                 if isinstance(value, (int, float)):
                     value = jt.full(value_shape, value, dtype=x.dtype)
+                    self.value_shape = tuple(value_shape)
                 else:
+                    self.value_shape = tuple(value.shape)
                     value = value.broadcast(value_shape)
                 self.indices = axis_indices
-                self.value_shape = value_shape
                 self.type_ = "index"
                 attr_code = """
                 op.jt_name = "indexputimpl";
                 """
-                inputs = [value] + axis_indices
-                outputs = [x.clone()]
+                # IndexPutImpl's base is a tracked input. Match the ordinary
+                # index branch so cache updates preserve all untouched slots.
+                inputs = [x.contiguous(), value] + axis_indices
+                outputs = [jt.empty(x.shape, x.dtype)]
                 result = setitem_cmd(
                     "IndexPutImpl", inputs=inputs, outputs=outputs, attr_code=attr_code
                 )[0]
@@ -236,7 +290,11 @@ class SetItemACL(jt.Function):
                 value_shape = [1]
             if isinstance(value, int) or isinstance(value, float):
                 value = jt.full(value_shape, value)
-            self.value_shape = value_shape
+                self.value_shape = value_shape
+            else:
+                # Pre-broadcast shape: grad reduces back to the caller's
+                # value shape, not the broadcast index shape.
+                self.value_shape = tuple(value.shape)
             for ii in slices:
                 indices.append(jt.Var(ii).int32())
             if (
@@ -250,8 +308,11 @@ class SetItemACL(jt.Function):
                 attr_code = f"""
                 op.jt_name = "indexputimpl";
                 """
-                inputs = [value] + indices
-                outputs = [x.clone()]
+                # base is a tracked input: the runner copies base -> out before
+                # the in-place index-put (a write-only x.clone() output aliases
+                # the base allocation and breaks view write-through).
+                inputs = [x.contiguous(), value] + indices
+                outputs = [jt.empty(x.shape, x.dtype)]
                 result = setitem_cmd(
                     "IndexPutImpl", inputs=inputs, outputs=outputs, attr_code=attr_code
                 )[0]
@@ -274,6 +335,8 @@ class SetItemACL(jt.Function):
         self.input_slice = slices
         if len(slices) < x_dim:
             slices += (slice(None, None, None),) * (x_dim - len(slices))
+        if not kernel_available("StridedSliceAssignV2"):
+            return self._setitem_slice_index_put(x, slices, value)
         sizes = []
         # 适配华为奇怪的要求，最后一个维度的step必须是1
         expand_dim = False
@@ -353,6 +416,68 @@ class SetItemACL(jt.Function):
         # result.sync()
         return result
 
+    def _setitem_slice_index_put(self, x, slices, value):
+        """Slice assignment through IndexPutImpl when the SoC's CANN opp lacks
+        a strided-slice-assign kernel (Ascend310P). The slice lattice becomes
+        broadcast integer index grids; trailing all-range dims stay implicit
+        so IndexPutImpl leaves them to the value broadcast."""
+        # Only dims before the last non-trivial one need index tensors.
+        last = -1
+        for dim, s in enumerate(slices):
+            if isinstance(s, int):
+                last = dim
+            else:
+                if not isinstance(s, slice):
+                    raise NotImplementedError(
+                        "ACL setitem does not support Var slice indices")
+                start, stop, step = s.indices(x.shape[dim])
+                if (start, stop, step) != (0, x.shape[dim], 1):
+                    last = dim
+        lattice = []
+        indices = []
+        for dim in range(last + 1):
+            s = slices[dim]
+            if isinstance(s, int):
+                arr = np.array([s], dtype=np.int32)
+            else:
+                start, stop, step = s.indices(x.shape[dim])
+                arr = np.arange(start, stop, step, dtype=np.int32)
+            lattice.append(arr.size)
+            shape = [1] * (last + 1)
+            shape[dim] = arr.size
+            indices.append(jt.array(arr.reshape(shape)))
+        value_shape = lattice + list(x.shape[last + 1:])
+        if isinstance(value, (int, float)):
+            value = jt.full(value_shape, value, dtype=x.dtype)
+            self.value_shape = tuple(value_shape)
+        else:
+            # Keep the pre-broadcast shape: grad must be reduced and reshaped
+            # back to the caller's value shape, not the index lattice.
+            self.value_shape = tuple(value.shape)
+            # Integer indices remove axes from the assignment's public shape.
+            # Broadcast there first, then restore the index lattice's singleton
+            # axes; [rows] -> [rows, 1] must not expand into [rows, rows].
+            logical_shape = tuple(size for dim, size in enumerate(value_shape)
+                                  if not isinstance(slices[dim], int))
+            value = value.broadcast(logical_shape).reshape(value_shape).contiguous()
+        self.type_ = "index"
+        self.indices = indices
+        if not indices:
+            # All-trivial selection (`x[:] = v`): a broadcast copy, no index
+            # tensors to hand to aclnnIndexPutImpl.
+            return value.contiguous()
+        attr_code = """
+        op.jt_name = "indexputimpl";
+        """
+        # Same contract as the index branch above: base first, then value,
+        # then one index tensor per constrained dim.
+        inputs = [x.contiguous(), value] + indices
+        outputs = [jt.empty(x.shape, x.dtype)]
+        result = setitem_cmd(
+            "IndexPutImpl", inputs=inputs, outputs=outputs, attr_code=attr_code
+        )[0]
+        return result
+
     def grad(self, grad_output):
         if self.type_ == "mask":
             mask = self.input_slice
@@ -368,7 +493,7 @@ class SetItemACL(jt.Function):
         value_grad = None
         if self.value_var:
             value_grad = grad_output[self.input_slice]
-            if self.type_ == "slicev2":
+            if self.type_ in ("slicev2", "index"):
                 padded = (1,) * (value_grad.ndim - len(self.value_shape)) + self.value_shape
                 axes = tuple(i for i, (actual, target) in enumerate(zip(value_grad.shape, padded))
                              if target == 1 and actual != 1)

@@ -463,7 +463,7 @@ class TestVmapPatchTiming(unittest.TestCase):
     # before the first vmap() call; other saved references keep the
     # limitation above.
     def test_linalg_reference_captured_before_first_vmap_call_dispatches(self):
-        from tests._helpers.child_process import run_child_script
+        from _helpers.child_process import run_child_script
         script = """
 import numpy as np
 import jittor as jt

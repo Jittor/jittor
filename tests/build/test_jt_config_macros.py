@@ -28,9 +28,12 @@ import jittor.compiler as compiler
 #: beside it; both moved out of the package in 4.15.
 def _source_roots():
     from jittor_utils.backend_resources import core_root
+
     jittor_path = os.path.dirname(os.path.dirname(compiler.__file__))
     core = core_root(jittor_path)
     return (core, os.path.join(os.path.dirname(core), "backends"))
+
+
 SOURCE_SUFFIXES = (".cc", ".h", ".cu", ".cuh")
 CONDITIONAL = re.compile(r"^\s*#\s*(?:ifdef|ifndef|if)\b([^\r\n]*)", re.M)
 JT_MACRO = re.compile(r"\bJT_[A-Za-z0-9_]+\b")
@@ -46,7 +49,13 @@ def _macros_used_in_sources():
                 path = os.path.join(current, name)
                 with open(path, encoding="utf-8", errors="replace") as handle:
                     for condition in CONDITIONAL.findall(handle.read()):
-                        found.update(JT_MACRO.findall(condition))
+                        # setup_blas supplies these for its detected CBLAS symbols,
+                        # independently of the environment-controlled macro list.
+                        found.update(
+                            name
+                            for name in JT_MACRO.findall(condition)
+                            if not name.startswith("JT_BLAS_")
+                        )
     return found
 
 
@@ -55,23 +64,24 @@ class TestJtConfigMacros(unittest.TestCase):
         used = _macros_used_in_sources()
         declared = set(compiler.JT_CONFIG_MACROS)
         self.assertEqual(
-            used - declared, set(),
+            used - declared,
+            set(),
             "a source tests one of these with #ifdef but compiler.py will "
             "never define it, so setting the environment variable does "
-            "nothing: add it to JT_CONFIG_MACROS")
+            "nothing: add it to JT_CONFIG_MACROS",
+        )
         self.assertEqual(
-            declared - used, set(),
-            "JT_CONFIG_MACROS names a macro no source tests any more; "
-            "remove it")
+            declared - used,
+            set(),
+            "JT_CONFIG_MACROS names a macro no source tests any more; remove it",
+        )
 
     def test_an_unset_macro_adds_no_flag(self):
         self.assertEqual(compiler.jt_config_macro_flags({}), "")
 
     def test_save_mem_off_spellings_match_the_cache_config(self):
         for value in ("", "0", "false", "off", "no"):
-            self.assertEqual(
-                compiler.jt_config_macro_flags({"JT_SAVE_MEM": value}), "",
-                value)
+            self.assertEqual(compiler.jt_config_macro_flags({"JT_SAVE_MEM": value}), "", value)
 
     def test_a_set_macro_becomes_a_define(self):
         flags = compiler.jt_config_macro_flags({"JT_SAVE_MEM": "1"})
@@ -85,10 +95,8 @@ class TestJtConfigMacros(unittest.TestCase):
     def test_the_order_does_not_depend_on_the_environment(self):
         """The flags land in the cache key, so two processes that set the same
         macros must produce the same command line."""
-        first = compiler.jt_config_macro_flags(
-            {"JT_SAVE_MEM": "1", "JT_HAS_HALF_SIMD": "1"})
-        second = compiler.jt_config_macro_flags(
-            {"JT_HAS_HALF_SIMD": "1", "JT_SAVE_MEM": "1"})
+        first = compiler.jt_config_macro_flags({"JT_SAVE_MEM": "1", "JT_HAS_HALF_SIMD": "1"})
+        second = compiler.jt_config_macro_flags({"JT_HAS_HALF_SIMD": "1", "JT_SAVE_MEM": "1"})
         self.assertEqual(first, second)
 
     def test_nothing_is_set_by_default(self):

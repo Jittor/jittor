@@ -10,6 +10,14 @@ from _helpers.child_process import run_child_script
 from jittor._runtime.fallback import forbid_backend_fallbacks
 
 
+def _acl_supports_bfloat16():
+    try:
+        from jittor.backends.acl.kernels._soc import supports_bfloat16
+        return supports_bfloat16()
+    except Exception:
+        return True
+
+
 @unittest.skipIf(
     not capability.check_accelerator("acl", backend=jt).enabled, "No ACL found")
 class TestACLNativeRandom(unittest.TestCase):
@@ -29,7 +37,11 @@ class TestACLNativeRandom(unittest.TestCase):
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_random_distributions_and_dtypes_without_fallback(self):
         jt.set_seed(20260910)
-        for dtype in ("float16", "bfloat16", "float32"):
+        dtypes = ("float16", "float32")
+        if _acl_supports_bfloat16():
+            # Ascend310P ships no DT_BFLOAT16 kernels.
+            dtypes = ("float16", "bfloat16", "float32")
+        for dtype in dtypes:
             for distribution in ("uniform", "normal"):
                 with self.subTest(dtype=dtype, distribution=distribution):
                     with forbid_backend_fallbacks():

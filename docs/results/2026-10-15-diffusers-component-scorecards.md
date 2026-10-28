@@ -1,120 +1,100 @@
-# Diffusers UNet component evidence in the shared scorecard
+# 共享 scorecard 中的 Diffusers UNet 组件证据
 
-- Status: Two historical CPU/CUDA UNet L3 component records migrated and accepted; no pipeline or new numerical execution claimed.
-- Date: 2026-10-15.
-- Measurement baseline: `230ba7a0305091fb64ec81a679f32dcaefcea518`, unchanged from the original independent oracle runs.
-- Migration tools and formal auditor: clean `f61555a818acbe9f61b4061b896ff5d59b341b6f`, based on synchronized origin `824cb354d5cced0743b3207d50d518111ba59e76`.
-- Upstream: Diffusers 0.35.1, clean `0f252be0ed42006c125ef4429156cb13ae6c1d60`, official Hugging Face repository.
-- Owner: Torch compatibility and downstream validation maintainers.
-- Review when: Upstream model exports, the UNet builder, training probe, dependency identity, original artifacts, numerical budgets or scorecard rules change.
+- 状态：两条历史 CPU/CUDA UNet L3 组件记录已迁移并被接受；未声称 pipeline 或新的数值执行。
+- 日期：2026-10-15。
+- 测量基线：`230ba7a0305091fb64ec81a679f32dcaefcea518`，与原始独立 oracle 运行相同，未改动。
+- 迁移工具与正式审计：干净检出 `f61555a818acbe9f61b4061b896ff5d59b341b6f`，基于同步后的 origin `824cb354d5cced0743b3207d50d518111ba59e76`。
+- 上游：Diffusers 0.35.1，干净检出 `0f252be0ed42006c125ef4429156cb13ae6c1d60`，官方 Hugging Face 仓库。
+- 维护者：Torch 兼容性与下游验证维护者。
+- 复查时机：上游模型导出、UNet 构建器、训练探针、依赖标识、原始产物、数值预算或 scorecard 规则发生变化时。
 
-The [original four-library report](2026-10-14-downstream-oracle-scorecards.md)
-established real `UNet2DModel` CPU/CUDA numerical and three-step training evidence.
-Its two component records had `level=null` and no registry references, because the
-then-existing Diffusers inventory described pipelines only. They were not accepted
-registry rows. This migration adds an honest independent component export axis;
-it does not turn UNet execution into pipeline execution.
+此前的[四库原始报告](2026-10-14-downstream-oracle-scorecards.md)
+确立了真实的 `UNet2DModel` CPU/CUDA 数值证据与三步训练证据。
+其中两条组件记录的 `level=null`，且没有注册表引用，因为当时已有的
+Diffusers 清单只描述 pipeline。它们不是被接受为注册表行的记录。本次迁移
+增加了一条诚实的独立组件导出维度；它不会把 UNet 执行变成 pipeline 执行。
 
-## Complete, independent public-export denominator
+## 完整、独立的公共导出分母
 
-The central inventory now also parses every `_import_structure` declaration in
-`src/diffusers/models/__init__.py`, without importing the package or evaluating
-dependency availability. At the pinned source there are 80 module declarations
-and **87 distinct public names**. Flax exports, helpers, mixins, enums and functions
-remain in this denominator. It is a bounded **model-package public API axis**,
-not 87 model families, all component APIs or a whole-library support fraction.
+中央清单现在还解析 `src/diffusers/models/__init__.py` 中的每一个
+`_import_structure` 声明，既不导入包，也不评估依赖可用性。在固定源码处共有
+80 条模块声明和 **87 个互不相同的公共名称**。Flax 导出、辅助函数、mixin、
+枚举和函数都保留在该分母中。它是一个有界的**模型包公共 API 维度**，
+而不是 87 个模型族、全部组件 API 或整个库的支持比例。
 
-Every conditional declaration retains its module, names, source line and guards.
-The same public name from the same owner in alternative branches counts once,
-with both declarations preserved. Duplicate exports or overwritten assignments
-in the same branch, conflicting module owners, aliases that permit untracked
-mutation, loops and unknown dynamic registration fail explicitly. Optional
-dependencies never shrink the denominator.
+每条条件声明都保留其模块、名称、源码行号和守卫条件。同一所有者、同一公共名称
+出现在不同分支时只计一次，且两份声明都保留。同一分支内重复导出或赋值被覆盖、
+模块所有者冲突、允许未追踪变更的别名、循环以及未知的动态注册都会显式失败。
+可选依赖永远不会缩小分母。
 
-| Axis | CPU L3 | CUDA L3 | Actual scope |
+| 维度 | CPU L3 | CUDA L3 | 实际范围 |
 | --- | --- | --- | --- |
-| `model_api` | 1 / 87 | 1 / 87 | `UNet2DModel`, the original tiny FP32 case |
-| pipeline module family (`model_family`) | 0 / 79 | 0 / 79 | No pipeline execution |
-| `pipeline_class` | 0 / 249 | 0 / 249 | No pipeline execution |
-| `auto_family` | 0 / 37 | 0 / 37 | No AutoPipeline execution |
-| `task` | 0 / 3 | 0 / 3 | No AutoPipeline execution |
+| `model_api` | 1 / 87 | 1 / 87 | `UNet2DModel`，即原有的 tiny FP32 用例 |
+| pipeline 模块族（`model_family`） | 0 / 79 | 0 / 79 | 无 pipeline 执行 |
+| `pipeline_class` | 0 / 249 | 0 / 249 | 无 pipeline 执行 |
+| `auto_family` | 0 / 37 | 0 / 37 | 无 AutoPipeline 执行 |
+| `task` | 0 / 3 | 0 / 3 | 无 AutoPipeline 执行 |
 
-The four pipeline denominators and their members are unchanged. All untested
-model exports remain in the new denominator; no smaller UNet-only list is used.
+四个 pipeline 分母及其成员保持不变。所有未测试的模型导出仍保留在新分母中；
+没有改用更小的仅含 UNet 的名单。
 
-## Preserved measurements and independent artifact recheck
+## 保留的测量结果与独立产物复核
 
-The reusable collector checks every original artifact's SHA256 before reading
-the measurements. It reads the original framework Git objects to verify that
-the measured case imported and constructed the public `UNet2DModel`, and that
-both training metadata records match the archived training program hash. It
-retains the original framework SHA, upstream identity, package versions/origins,
-platform, inputs, numerical budgets, commands, report and original artifacts.
-The derived fields are `level=3` and the single `model_api` reference; new
-migration comparisons, inventory and original evidence-file hashes are appended.
-No historical JSON or NPZ is rewritten.
+可复用的收集器在读取测量值之前，会校验每个原始产物的 SHA256。它读取原始
+框架的 Git 对象，以核实被测用例导入并构造了公共的 `UNet2DModel`，并且
+两条训练元数据记录都与归档的训练程序哈希一致。它保留原始框架 SHA、上游标识、
+包版本/来源、平台、输入、数值预算、命令、报告和原始产物。
+派生字段为 `level=3` 和唯一的 `model_api` 引用；新增的迁移比对、清单和原始证据
+文件哈希以追加方式写入。不重写任何历史 JSON 或 NPZ。
 
-The original configuration has sample size 16, three input/output channels,
-one layer per block, channels 16/32, DownBlock/AttnDownBlock and matching up
-blocks, eight normalization groups and zero dropout. Inputs are FP32
-`sample[2,3,16,16]` and integer `timestep[2]`. Each numerical comparison checks
-the output, all **144 parameter gradients** and the `sample` gradient: 146
-fields. Seed 7 changes only inputs while retaining the original seed-0 weights.
-Both independent runtimes' output perturbations are verified from their NPZs.
+原始配置使用样本尺寸 16、三输入/输出通道、每个 block 一层、通道 16/32、
+DownBlock/AttnDownBlock 及相匹配的 up blocks、八个归一化组、dropout 为零。
+输入为 FP32 `sample[2,3,16,16]` 和整型 `timestep[2]`。每次数值比较检查
+输出、全部 **144 个参数梯度**以及 `sample` 梯度：共 146 个字段。
+seed 7 只改变输入，同时保留原始 seed-0 权重。
+两个独立运行时的输出扰动都从其 NPZ 中得到验证。
 
-Each of three real SGD updates uses learning rate 0.001 and records output,
-loss, all parameter/input gradients and all updated parameters, **873 fields**.
-The complete initial snapshot has all 144 parameters; the archived baseline
-snapshot, perturbation weight source and both training weight bindings have
-the same original hash. Baseline transfer follows the archived shared harness;
-no missing per-process baseline weight field is backfilled. Both training trajectories contain actual
-parameter updates. Original trainable/frozen scope, exact key sets, shape,
-dtype and finite values are checked again.
+三次真实 SGD 更新每次使用学习率 0.001，并记录输出、loss、全部参数/输入梯度
+以及全部更新后的参数，共 **873 个字段**。完整初始快照包含全部 144 个参数；归档的
+基线快照、扰动权重来源以及两处训练权重绑定具有相同的原始哈希。基线传递遵循
+归档的共享 harness；不会回填任何缺失的每进程基线权重字段。两条训练轨迹都包含真实的
+参数更新。原始可训练/冻结范围、精确键集合、形状、dtype 和有限值再次被检查。
 
-| Device | Phase | Fields rechecked | Max absolute error | Max field-scaled relative error |
+| 设备 | 阶段 | 复核字段数 | 最大绝对误差 | 最大按字段缩放的相对误差 |
 | --- | --- | ---: | ---: | ---: |
-| CPU | Base | 146 | 4.673004e-5 | 8.865361e-7 |
-| CPU | Seed-7 perturbation | 146 | 4.196167e-5 | 8.466126e-7 |
-| CPU | Three-step training | 873 | 1.370907e-6 | 9.395992e-7 |
-| CUDA | Base | 146 | 1.252556e-2 | 2.376241e-4 |
-| CUDA | Seed-7 perturbation | 146 | 9.673119e-3 | 1.951558e-4 |
-| CUDA | Three-step training | 873 | 3.414154e-4 | 2.339958e-4 |
+| CPU | 基线 | 146 | 4.673004e-5 | 8.865361e-7 |
+| CPU | seed-7 扰动 | 146 | 4.196167e-5 | 8.466126e-7 |
+| CPU | 三步训练 | 873 | 1.370907e-6 | 9.395992e-7 |
+| CUDA | 基线 | 146 | 1.252556e-2 | 2.376241e-4 |
+| CUDA | seed-7 扰动 | 146 | 9.673119e-3 | 1.951558e-4 |
+| CUDA | 三步训练 | 873 | 3.414154e-4 | 2.339958e-4 |
 
-All 2,330 array pairs pass the original `absolute <= 0.002 OR relative <= 0.01`
-budget. Relative error uses the original verifier's maximum magnitude across
-the entire reference field, with floor `1e-12`; this is not elementwise
-`allclose`. The CUDA base absolute error exceeds 0.002 and passes the declared
-relative criterion. No threshold or model mathematics changed.
+全部 2,330 组数组对均通过原始预算 `绝对误差 <= 0.002 OR 相对误差 <= 0.01`。
+相对误差使用原验证器在整个参考字段上的最大幅值，下限为 `1e-12`；这不是逐元素
+`allclose`。CUDA 基线绝对误差超过 0.002，按声明的相对判据通过。任何阈值或模型
+数学都未改变。
 
-The platform remains the original measurement: Linux, AMD EPYC 9554, Python
-3.11.16, NumPy 1.26.4, GCC 11.5; independent binary Torch 2.11.0+cu128.
-CPU explicitly hid CUDA and read back `use_cuda=false,use_acl=false`.
-CUDA used one RTX 4090, driver 580.178.04, Jittor NVCC 12.2.140; actual
-matmul/cuDNN TF32 was **ON/high**, CPU OFF/highest. Actual candidate computation
-had fallback policy `error`, count zero, in every measured phase. Migration
-only runs NumPy/stdlib checks and does not allocate a CUDA device or repeat
-those numerical executions on the newer framework.
+平台仍为原始测量环境：Linux、AMD EPYC 9554、Python 3.11.16、NumPy 1.26.4、
+GCC 11.5；独立二进制 Torch 2.11.0+cu128。CPU 显式隐藏 CUDA，并回读
+`use_cuda=false,use_acl=false`。CUDA 使用一块 RTX 4090，驱动 580.178.04，
+Jittor NVCC 12.2.140；实际 matmul/cuDNN TF32 为 **ON/high**，CPU 为 OFF/highest。
+所有被测阶段中，候选方实际计算的后备策略均为 `error`，计数为零。迁移过程
+只运行 NumPy/stdlib 检查，不分配 CUDA 设备，也不在更新的框架上重复这些数值执行。
 
-Original measurements record the pinned dependency version and source origin,
-but **do not record complete per-process installed-package hashes**. This
-limitation is retained. The freshly regenerated registry identifies its current
-clean upstream; it is not a retroactive measurement of the old installation.
-The existing release-version schema accepts this bounded evidence. A stronger
-installed-source claim needs a new instrumented independent CPU/CUDA run;
-today's installation hashes cannot be appended to the old raw metadata.
+原始测量记录了固定的依赖版本和源码来源，但**没有记录完整的每进程已安装包哈希**。
+这一限制予以保留。新生成的注册表标识其当前的干净上游；它不是对旧安装的回溯性
+测量。现有的发布版本 schema 接受这一有界证据。更强的已安装源码主张需要一次
+新的插桩独立 CPU/CUDA 运行；今天的安装哈希不能追加到旧原始元数据中。
 
-## Reproduction and verification
+## 复现与验证
 
-Raw artifacts are unversioned. Original component evidence remains at
-`$JITTOR_LAB_ROOT/_state/downstream-evidence/real-runs/component-evidence-v2.json`.
-Migration outputs and logs are under
-`$JITTOR_LAB_ROOT/_state/diffusers-scorecard/20261015/`; the formal clean-tool
-output is `formal-f61555a81/scorecard.json`. It accepts **2 L3 records, 0 rejected**.
-All **33 unique artifact bindings** rehash unchanged. A separate preservation
-check confirms that only the declared derived fields and append-only artifacts
-change; original numerical, platform and source metadata remain identical.
-The unchanged original records still fail registry admission without migration;
-their manual evidence is preserved separately.
+原始产物不纳入版本控制。原始组件证据仍位于
+`$JITTOR_LAB_ROOT/_state/downstream-evidence/real-runs/component-evidence-v2.json`。
+迁移输出与日志位于 `$JITTOR_LAB_ROOT/_state/diffusers-scorecard/20261015/`；
+正式干净工具输出为 `formal-f61555a81/scorecard.json`。它接受 **2 条 L3 记录，0 条被拒**。
+全部 **33 个唯一产物绑定**重新哈希后保持不变。另一项保全检查确认只有声明的派生字段
+和追加型产物发生变化；原始数值、平台和来源元数据保持完全一致。
+未迁移的原始记录在未迁移时仍然无法通过注册表准入；它们的人工证据单独保留。
 
 ```bash
 <numpy-python> agent/skills/torch-compat-repo-runbook/scripts/collect_diffusers_scorecard.py \
@@ -124,42 +104,33 @@ their manual evidence is preserved separately.
   --output-dir "$JITTOR_LAB_ROOT/_state/diffusers-scorecard/<fresh-run>"
 ```
 
-The original measurement commit must be available as Git objects; a shallow
-checkout must obtain that exact history rather than substituting current source.
-Reproducing the original **model execution** additionally requires its original
-checkout and two independent environments described in the original report.
+原始测量提交必须能以 Git 对象形式获得；浅克隆必须取得那段确切历史，而不是
+用当前源码替代。复现原始**模型执行**还需要其原始检出以及原始报告中描述的两个
+独立环境。
 
-Targeted registry/collector/common scorecard contracts pass **91 tests**. Negative
-cases cover duplicate/ambiguous/dynamic exports, aliases and hidden mutations,
-stale framework/upstream, fake pipeline references, incomplete gradient scope,
-weakened budgets, one-step training, changed original files and mismatched
-archived training code. Shared array-contract tests reject missing/extra fields,
-wrong shapes, nonfinite values and numerical failures. Three actual-data negative
-checks also reject invented pipeline references, weakened budgets and a candidate
-NPZ with one gradient deleted **after its altered contents are honestly rehashed**.
-Ruff, repository layout and diff whitespace checks pass.
+定向的注册表/收集器/公共 scorecard 契约通过 **91 项测试**。反例覆盖
+重复/歧义/动态导出、别名与隐藏变更、过期的框架/上游、伪造的 pipeline 引用、
+不完整的梯度范围、被削弱的预算、单步训练、原始文件被篡改以及归档训练代码不匹配。
+共享数组契约测试拒绝缺失/多余字段、错误形状、非有限值和数值失败。三项使用真实数据的
+反例检查还拒绝了编造的 pipeline 引用、被削弱的预算，以及在**如实重新哈希其篡改内容
+之后**删除一个梯度的候选 NPZ。Ruff、仓库布局和 diff 空白检查通过。
 
-Full structure validation finished with **1,497 passed, 6 skipped, 2 failed** in
-494.26 seconds, including serial cold CPU feature configurations. Both failures
-are this new report's central toctree entry and generated MANIFEST, intentionally
-left to the integration owner. There are no other failures. The six skips are
-two accelerator-only, two declared, and two package-resolution checks because
-the private interpreter lacks installed Jittor distribution metadata; source
-paths are pinned to this worktree. Original logs remain in `structure.log`.
+完整结构验证以 **1,497 通过、6 跳过、2 失败**结束，耗时 494.26 秒，包含串行的
+冷启动 CPU 特性配置。两处失败分别是本报告在中央 toctree 中的条目和生成的 MANIFEST，
+按计划留给集成负责人处理。没有其他失败。六项跳过包括两项仅限加速器、两项已声明
+以及两项包解析检查，原因是私有解释器缺少已安装的 Jittor 分发元数据；源码路径固定到
+本工作树。原始日志保留在 `structure.log` 中。
 
-This result does not establish a full generation pipeline, production-scale
-training, other exported models, a current-framework numerical rerun, complete
-installation provenance, NPU/ROCm/Corex, speed, memory, L4 or L5.
+本结果不构成完整生成 pipeline、生产规模训练、其他导出模型、当前框架上的数值重跑、
+完整安装溯源、NPU/ROCm/Corex、速度、内存、L4 或 L5 的结论。
 
-## Main-tree integration
+## 主树集成
 
-Integration on `282783a3dfcd3521400869beadf56c6f0fe9a0f9` plus the two migration
-commits independently rehashed all 19 delivery files and all 33 unique evidence
-bindings. The integrated collector recomputed all 2,330 original array pairs and
-the full upstream denominator again: two accepted records, zero rejected;
-CPU/CUDA each retain `1/87` model API coverage and zero pipeline coverage.
-The central results toctree and source manifest now register this report.
-Integration outputs are unversioned under
-`$JITTOR_LAB_ROOT/_state/diffusers-integration-d87/`; the directory name identifies
-the start of the integration task, not a new numerical measurement baseline.
-The historical installed-package provenance limitation above remains unchanged.
+在 `282783a3dfcd3521400869beadf56c6f0fe9a0f9` 加上两个迁移提交之上进行集成，
+独立重新哈希了全部 19 个交付文件和全部 33 个唯一证据绑定。集成后的收集器再次
+重算了全部 2,330 组原始数组对以及完整的上游分母：两条记录被接受，零条被拒；
+CPU/CUDA 各自保持 `1/87` 的模型 API 覆盖率和零 pipeline 覆盖率。
+中央 results toctree 和源码清单现在登记了本报告。
+集成输出不纳入版本控制，位于 `$JITTOR_LAB_ROOT/_state/diffusers-integration-d87/`；
+该目录名标识集成任务的起点，而非新的数值测量基线。
+上述历史已安装包溯源限制保持不变。

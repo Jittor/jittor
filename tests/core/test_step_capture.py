@@ -52,6 +52,25 @@ def _make_step(w, b, lr, readback=False):
 @_test_preserve_policy(jt, "keep_graph", "auto_graph_replay")
 class TestStepCapture(unittest.TestCase):
 
+    def test_foreign_operation_refuses_step_replay(self):
+        def step(value):
+            jt.graph_replay_barrier("external step callback")
+            return value * 2
+        captured = jt.capture_step(step, record=False)
+        for start in (1., 2., 3., 4.):
+            np.testing.assert_array_equal(captured(jt.array([start])).numpy(), [start * 2])
+        self.assertIn("external step callback", captured.refused)
+        self.assertEqual(captured.stats["replayed"], 0)
+
+    def test_nested_device_capture_does_not_advance_step_policy(self):
+        from unittest.mock import patch
+        captured = jt.capture_step(lambda value: value * 2, record=False)
+        with patch.object(jt.core, "graph_capture_active", return_value=True):
+            np.testing.assert_array_equal(captured(jt.array([3.])).numpy(), [6.])
+        self.assertEqual(captured.stats["captured"], 0)
+        self.assertEqual(captured.stats["replayed"], 0)
+        self.assertIsNone(captured._seen)
+
     def setUp(self):
         jt.flags.keep_graph = 0
         jt.flags.auto_graph_replay = 0
@@ -177,6 +196,22 @@ class TestStepCapture(unittest.TestCase):
             return [(Double.apply(x * w) + Double.apply(x + w)).sum()]
         self._replay_matches(step, [jt.array(rs.randn(64, 32).astype("float32"))
                                     for _ in range(5)])
+
+    def test_a_cast_then_scalar_multiply_reads_the_new_input(self):
+        # The copies into the captured leaves used to run outside the kept-
+        # graph window. The executor then treated them as an ordinary batch
+        # and released the captured intermediate behind them, so the replay
+        # answered with the value that intermediate held when it was captured:
+        # a half input cast to float32 and multiplied by a Python float kept
+        # returning the first feed's result. SDPA's scale fold is this shape.
+        rs = np.random.RandomState(4)
+
+        def step(x):
+            return [(x.float32() * 2.0).sum(1)]
+        self._replay_matches(
+            step,
+            [jt.array(rs.randn(64, 32).astype("float32")).float16()
+             for _ in range(5)])
 
     def test_random_draws_differ_on_every_replay(self):
         # A step that draws random numbers draws new ones every call, the

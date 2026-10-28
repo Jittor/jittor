@@ -10,6 +10,7 @@
 #include "ops/layout_propagation.h"
 #include "ops/broadcast_to_op.h"
 #include "ops/op_register.h"
+#include "ops/composite/array_op.h"
 
 namespace jittor {
 
@@ -460,7 +461,41 @@ static VarPtr broadcast_binary(Var* x, Var* y, NanoString op) {
     return make_binary(xp, yp, op);
 }
 
+// `ArrayOp(PyObject*)` stages a Python float as float32, which
+// is what `jt.array(0.5)` and every float32/float16 operand should see. In
+// torch a Python float is a weak double, though: the result dtype is already
+// right (a scalar does not take part in promotion), so the defect is only in
+// the value -- against a float64 operand it carries 24 mantissa bits where 53
+// are available. Rebuild the constant from the exact double when promotion
+// asks for float64; `make_binary` re-enters with the wide scalar and the rest
+// of the constructor runs unchanged.
+static VarPtr widen_python_float_operand(Var* value, Var* other, NanoString op) {
+    if (!value->flag(VarFlags::_python_number) || value->dtype() != ns_float32
+            || value->shape.size() != 0)
+        return nullptr;
+    Op* producer = value->input();
+    if (!producer || !producer->is_op(op_ids::array())) return nullptr;
+    auto* array = static_cast<ArrayOp*>(producer);
+    if (!array->has_python_float) return nullptr;
+    bool xs = value->flag(VarFlags::_is_scalar);
+    bool ys = other->flag(VarFlags::_is_scalar);
+    // A comparison answers bool; ask add for the type its operands are
+    // compared at, the same way the complex path above does.
+    NanoString target = binary_dtype_infer(op, value->ns, other->ns, xs, ys);
+    if (target == ns_bool)
+        target = binary_dtype_infer(ns_add, value->ns, other->ns, xs, ys);
+    if (target != ns_float64) return nullptr;
+    double exact = array->python_float;
+    VarPtr rebuilt = make_array(&exact, {}, ns_float64);
+    rebuilt->set_flag(VarFlags::_python_number);
+    return rebuilt;
+}
+
 VarPtr BinaryOp::forward_before_construct(Var* x, Var* y, NanoString op) {
+    if (VarPtr wide = widen_python_float_operand(x, y, op))
+        return make_binary(wide, y, op);
+    if (VarPtr wide = widen_python_float_operand(y, x, op))
+        return make_binary(x, wide, op);
     // The constructor's shape walk, deciding only whether it broadcasts. A
     // mismatch is the constructor's to report, with its message.
     auto xdim = x->shape.size();

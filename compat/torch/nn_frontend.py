@@ -54,12 +54,40 @@ def module_call(module, *args, **kwargs):
 def python_module_call(module, *args, **kwargs):
     owner = type(module)._nn_frontend_owner
     # A forward follows its inputs' device; only constructors use the default.
-    # The first tensor argument is the reference, as `*_like` uses its source:
-    # with none (or one without an explicit placement) allocation is left to
-    # the ambient device, and never forced onto the default one.
-    with tensor_frontend(owner.tensor_type, like=_first_tensor(owner, args, kwargs),
+    # The first tensor argument is the reference, as `*_like` uses its source.
+    # When it has no explicit placement the module's own placement decides
+    # (`_placement_reference`), never the default one.
+    with tensor_frontend(owner.tensor_type,
+                         like=_placement_reference(owner, module, args, kwargs),
                          default_placement=False):
         return owner.native_module.__call__(module, *args, **kwargs)
+
+
+def _placement_reference(owner, module, args, kwargs):
+    """The tensor a forward's allocations follow.
+
+    The first tensor argument, when it carries an explicit placement: the
+    input decides, as before. An argument with none leaves the choice open,
+    and then the module's own explicitly placed parameters decide, because
+    they are the operands that cannot follow. A torch module left at its
+    default CPU placement and called with an unplaced accelerator tensor has
+    to run where its parameters live: letting the runtime decide put the
+    forward's intermediates on the accelerator while the parameters stayed on
+    the host, and the first two-operand op refused the mix. Under autocast in
+    particular the portable convolution builds that contraction itself, which
+    put the forward on the parameters' device.
+    """
+    backend = getattr(owner.tensor_type, "_frontend_backend", None)
+    reference = _first_tensor(owner, args, kwargs)
+    if backend is None:
+        return reference
+    var_type = backend.Var
+    if reference is not None and getattr(reference, "placement_backend", -1) >= 0:
+        return reference
+    for value in getattr(module, "__dict__", {}).values():
+        if isinstance(value, var_type) and getattr(value, "placement_backend", -1) >= 0:
+            return value
+    return reference
 
 
 def _first_tensor(owner, args, kwargs):

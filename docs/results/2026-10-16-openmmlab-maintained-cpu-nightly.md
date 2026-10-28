@@ -1,46 +1,87 @@
-# OpenMMLab: fresh maintained CPU nightly validation
+# OpenMMLab：全新的维护版 CPU nightly 验证
 
-- Status: complete local CPU profile, independently audited; no hosted-schedule claim.
-- Reviewed: 2026-10-16.
-- Owner: Torch compatibility and downstream verification maintainers.
-- Measurement source: `7bb144e984097b8cf14242818cb7fd4c9a58faa6`.
-- Review when: upstream pins, builds, installation identity, source capture, numerical budgets or training owners change.
+- 状态：完整的本地 CPU profile，经独立审计；不声明托管计划已执行。
+- 复查日期：2026-10-16。
+- 维护者：Torch 兼容性与下游验证维护者。
+- 测量源码：`7bb144e984097b8cf14242818cb7fd4c9a58faa6`。
+- 复查条件：上游固定版本、构建、安装身份、源码采集、数值预算或训练所有者发生变化。
 
-The complete `ecosystem_openmmlab_installed` CPU session passes both original nodes with zero skips in 163.15 seconds. The nox execution takes seven minutes including its first private JIT compilation. Every node runs seed 0, fixed-weight input perturbations at seeds 7 and 19, and three real MMEngine training steps. No preflight, case filter or smaller input replaces that session.
+完整的 `ecosystem_openmmlab_installed` CPU 会话在 163.15 秒内通过两个原始节点，零跳过。
+nox 执行包含其首次私有 JIT 编译，共耗时七分钟。每个节点都运行种子 0、种子 7 与 19 的
+固定权重输入扰动，以及三步真实的 MMEngine 训练。没有预检、用例过滤或更小的输入替代该
+会话。
 
-## Actual scope and result
+## 实际范围与结果
 
-| Original case | Input / parameters | Array pairs | Largest absolute error | Largest normalized error |
+| 原始用例 | 输入 / 参数 | 数组对 | 最大绝对误差 | 最大归一化误差 |
 | --- | --- | --- | --- | --- |
-| MMEngine BaseModel | FP32 sample `(4,6)`; six trainable parameters | 99 | 2.39e-7 | 5.22e-7 |
-| MMCV ConvModule | FP32 sample `(2,3,8,8)`; eight trainable parameters and three BatchNorm buffers | 132 | 2.39e-7 | 1.55e-6 |
+| MMEngine BaseModel | FP32 样本 `(4,6)`；六个可训练参数 | 99 | 2.39e-7 | 5.22e-7 |
+| MMCV ConvModule | FP32 样本 `(2,3,8,8)`；八个可训练参数和三个 BatchNorm 缓冲区 | 132 | 2.39e-7 | 1.55e-6 |
 
-Independent NumPy recomputation verifies all **231 array pairs**, exact field/shape/dtype sets, finite values, all requested parameter and sample gradients, changed outputs and gradients under both perturbations, and complete identical initial parameters/buffers across all phases. The unchanged per-field normalized budgets are forward .002 and backward .01, with the original gradient-block floor. Fixed inputs, targets and integer counters agree exactly.
+独立的 NumPy 重算验证了全部 **231 个数组对**、精确的字段/形状/dtype 集合、有限数值、
+所有请求的参数与样本梯度、两种扰动下输出与梯度的变化，以及所有阶段之间完全一致的初始
+参数/缓冲区。未改动的逐字段归一化预算为前向 .002、反向 .01，并保留原有的梯度块下限。
+固定输入、目标和整型计数完全一致。
 
-Training uses unmodified upstream `BaseModel.train_step`, `OPTIM_WRAPPERS.build` and `OptimWrapper`: SGD at learning rate .01, momentum .9 and gradient clipping at max norm 1. The saved gradient stage remains after clipping and before the optimizer step. The independent audit checks all 84 parameter updates and 84 momentum updates against each runtime's actual saved gradients and previous values, within four float32 ULPs of the update scale. All parameters change at every step. Training contains 75 MMEngine and 102 MMCV fields, with no missing gradient or shortened trajectory.
+训练使用未改动的上游 `BaseModel.train_step`、`OPTIM_WRAPPERS.build` 和 `OptimWrapper`：
+SGD，学习率 .01，动量 .9，梯度裁剪最大范数 1。保存的梯度阶段仍位于裁剪之后、优化器
+step 之前。独立审计针对每个运行时实际保存的梯度和前值，检查全部 84 次参数更新和 84 次
+动量更新，误差在更新尺度四个 float32 ULP 以内。每个步骤所有参数都发生变化。训练包含
+75 个 MMEngine 字段和 102 个 MMCV 字段，无缺失梯度或缩短的轨迹。
 
-All 16 actual worker PIDs are distinct, and all 478 snapshot observations are CPU-resident. Both runtimes use two runtime/OMP/MKL/OpenBLAS threads, FP32 computation, disabled TF32/cuDNN benchmark and highest matmul precision. The controller explicitly hides CUDA; candidate metadata records `use_cuda=False`, `use_acl=False`, fallback policy error and count zero. The oracle loads genuine Torch 2.11.0+cpu from its own prefix. The interpreters use independent installation prefixes. The session has an external HOME/temp/cache boundary and a private candidate JIT cache; it does not claim separately captured per-runtime HOME/temp paths. Benchmark and unit-test compilation caches remain separate, and first compilation is serialized. Individual MM worker packets do not provide the newer shared full platform header or a separate CUDA-availability readback; neither is backfilled.
+全部 16 个实际 worker PID 各不相同，全部 478 次快照观察都驻留在 CPU。两个运行时都使用
+两个 runtime/OMP/MKL/OpenBLAS 线程、FP32 计算、禁用 TF32/cuDNN benchmark 和最高 matmul
+精度。控制器显式隐藏 CUDA；候选元数据记录 `use_cuda=False`、`use_acl=False`、回退策略
+error 且计数为零。oracle 从其自己的前缀加载真实的 Torch 2.11.0+cpu。解释器使用独立的
+安装前缀。会话具有外部 HOME/临时/缓存边界和一个私有的候选 JIT 缓存；它不声明单独捕获
+了每个运行时的 HOME/临时路径。benchmark 与单测编译缓存保持分离，首次编译串行执行。
+单个 MM worker 数据包不提供较新的共享完整平台头部，也不提供单独的 CUDA 可用性回读；
+两者都没有被回填。
 
-## Actual source and installations
+## 实际源码与安装
 
-The pinned clean upstreams remain MMEngine 0.10.7 at `390ba2fbb272816adfd2883642326d0fd0ca6049` and MMCV 2.2.0 at `3a5fb4b96ab1b241e7379adf7c326ef6edef6515`. The provisioner builds actual wheels from these checkouts, using the compatible pinned runtime build tools and preserving upstream symlinks. MMCV is built as `mmcv-lite`, without compiled ops; no `mmcv.ops` support follows.
+固定的干净上游仍为 MMEngine 0.10.7，位于 `390ba2fbb272816adfd2883642326d0fd0ca6049`，
+以及 MMCV 2.2.0，位于 `3a5fb4b96ab1b241e7379adf7c326ef6edef6515`。provisioner 从这些
+检出构建实际 wheel，使用兼容的固定运行时构建工具，并保留上游符号链接。MMCV 构建为
+`mmcv-lite`，不含编译算子；因此不支持 `mmcv.ops`。
 
-| Built input | Full package files per prefix | Actual wheel SHA256 |
+| 构建输入 | 每个前缀的完整包文件数 | 实际 wheel SHA256 |
 | --- | --- | --- |
 | MMEngine | 157 | `d9691e3a6bc32141d9c6e13d9f8dce1234b4be3716024bf3f6b9dbdd32064da8` |
 | MMCV-lite | 531 | `0a9658f06bd79a10343621834cbfad7a4dbf57f7bd41d8e7e483468939ea09a8` |
 
-Both independently installed prefixes match every source-built wheel package byte and its original METADATA. Their actual pip RECORD hashes/sizes bind every package member; those receipts differ from the archive RECORD and were never replaced with it. The post-run four installation proofs exactly equal the premeasurement proofs. The official CPU Torch wheel SHA256 `8a56a8c95531ef0e454510ba8bbd9d11dc7a9000337265210b10f6bfeacdd485` separately binds all 11,945 original installed archive files except self-unhashed RECORD, including `functorch/`, `torchgen/` and dist-info payload. Its actual pip RECORD rows match every original file. All three private environments pass post-run `pip check`.
+两个独立安装的前缀都与每个源码构建 wheel 包逐字节一致，并匹配其原始 METADATA。它们
+实际的 pip RECORD 哈希/大小绑定了每个包成员；这些收据与归档 RECORD 不同，且从未被
+后者替换。运行后的四份安装证明与测量前的证明完全相等。官方 CPU Torch wheel SHA256
+`8a56a8c95531ef0e454510ba8bbd9d11dc7a9000337265210b10f6bfeacdd485` 另行绑定了除自
+未哈希 RECORD 之外的全部 11,945 个原始已安装归档文件，包括 `functorch/`、`torchgen/`
+和 dist-info 载荷。其实际 pip RECORD 行与每个原始文件匹配。三个私有环境都在运行后通过
+`pip check`。
 
-Provisioning originally ran on dirty `2f8895f1a` while the new profile was being prepared. Its manifest honestly records `source_clean=False` and provisioner SHA256 `bce3d824bd7c5cb82ce52baaf9441a70bda455198c4f15ea9d6adf0cdd57db55`; those bytes match the committed profile. The measured run instead uses the clean `7bb144e98` checkout. The controller's complete 2,905 tracked file hashes, current bytes and original Git blobs agree, including symlink target text. A complete source archive is retained. Each worker also binds its selected original case/runner/measurement files; this selected map is not an exhaustive import inventory.
+在准备新的 profile 期间，provisioning 最初在脏的 `2f8895f1a` 上运行。其 manifest 如实
+记录 `source_clean=False` 和 provisioner SHA256
+`bce3d824bd7c5cb82ce52baaf9441a70bda455198c4f15ea9d6adf0cdd57db55`；这些字节与已提交
+的 profile 一致。而被测运行使用的是干净的 `7bb144e98` 检出。控制器的完整 2,905 个受
+跟踪文件哈希、当前字节和原始 Git blob 一致，包括符号链接目标文本。完整的源码归档予以
+保留。每个 worker 还绑定其选定的原始用例/runner/测量文件；该选定映射不是完整的导入
+清单。
 
-## Reproduced failure and repair
+## 已复现的失败与修复
 
-The original clean `33e69e84b` run genuinely failed both nodes at the base comparison: two valid independent installations had different absolute `origin` and `package` paths, which the comparator incorrectly treated as unequal identities. Its raw outputs and failure logs remain unchanged. The fix first checks each real origin against that prefix's package initializer, current complete package hashes, version and original source/wheel proof. Only the two absolute location fields are excluded from cross-runtime identity comparison; every other declared field must agree. The legacy training helper receives verified dependency identities in copied reports, and original evidence packets remain unchanged. Origin, payload, resource, version, missing/extra identity and training integration negatives cover this behavior.
+原始的干净 `33e69e84b` 运行确实在两个节点上于基础比较处失败：两个合法的独立安装具有
+不同的绝对 `origin` 和 `package` 路径，而比较器错误地把它们当作不同的身份。其原始输出
+和失败日志保持不变。修复首先针对该前缀的包初始化器、当前完整包哈希、版本和原始源码/
+wheel 证明来检查每个真实 origin。只有那两个绝对位置字段被排除在跨运行时身份比较之外；
+其他所有已声明字段都必须一致。遗留的训练辅助函数在复制的报告中接收经验证的依赖身份，
+原始证据包保持不变。Origin、载荷、资源、版本、缺失/多余身份和训练整合的反例覆盖了该
+行为。
 
-The repair passes 54 focused host tests, CPU core 322 passed / 42 skipped / one existing xfail, expanded structure 1,628 passed / six skipped, layout, generated manifest, Ruff and diff checks. All 74 pre-existing nox function ASTs remain unchanged. Later Metrics/TensorDict shared-proof integration also reruns the MM host contracts within its 260 passing tests; original `7bb144e98` numerical measurements are not relabelled to that integration.
+该修复通过 54 项定向主机测试，CPU 核心 322 passed / 42 skipped / 一个既有 xfail，扩展
+结构 1,628 passed / 六个 skipped，布局、生成的 manifest、Ruff 和 diff 检查。全部 74 个
+既有的 nox 函数 AST 保持不变。后来的 Metrics/TensorDict 共享证明整合也在其 260 个通过
+测试中重跑 MM 主机契约；原始 `7bb144e98` 的数值测量未被改贴到该整合上。
 
-## Replay and retained evidence
+## 重放与保留的证据
 
 ```bash
 python tools/provision_ecosystem_nightly.py --library openmmlab \
@@ -48,8 +89,17 @@ python tools/provision_ecosystem_nightly.py --library openmmlab \
   --state-root "$JITTOR_LAB_ROOT/_state/openmmlab-nightly/<new-run>" --run
 ```
 
-The CPU workflow installs its Ubuntu/OpenCV runtime libraries. A local rootless-container preflight failed at user-namespace setup, before running the profile; no CI-container pass is claimed.
+CPU 工作流会安装其 Ubuntu/OpenCV 运行时库。一次本地无 root 容器的预检在用户命名空间
+设置处失败，此时尚未运行 profile；不声明 CI 容器通过。
 
-Unversioned evidence is under `$JITTOR_LAB_ROOT/_state/openmmlab-nightly/20261016/`: `formal-controller-v2.json`, `formal-terminal-v2.json`, `fresh-v3/logs/038.log`, both preserved `maintained-output` attempts, `complete-independent-audit-v2.json`, `complete-source-audit-v2.json`, actual installation receipts and complete Torch proof. The twice-rehashed `complete-evidence-seal-v2.json` binds **275 files / 412,397,540 bytes**, SHA256 `62a8d264feafcf836712b5c238ccd53d3e56d3857cf92a6a807d1b47f37d463c`; installed environments, upstream clones and compilation caches are excluded.
+未纳入版本控制的证据位于 `$JITTOR_LAB_ROOT/_state/openmmlab-nightly/20261016/`：
+`formal-controller-v2.json`、`formal-terminal-v2.json`、`fresh-v3/logs/038.log`、两个
+保留的 `maintained-output` 尝试、`complete-independent-audit-v2.json`、
+`complete-source-audit-v2.json`、实际安装收据和完整的 Torch 证明。经过两次重新哈希的
+`complete-evidence-seal-v2.json` 绑定 **275 个文件 / 412,397,540 字节**，SHA256
+`62a8d264feafcf836712b5c238ccd53d3e56d3857cf92a6a807d1b47f37d463c`；已安装环境、
+上游克隆和编译缓存不包括在内。
 
-These are fresh bounded CPU training results for the maintained profile. They do not add a new CUDA run or paired common scorecard, prove GitHub's schedule executed, establish performance or imply whole-library support. The [earlier CPU/CUDA source-bound measurements](2026-10-15-openmmlab-installed-source-training.md) retain their own source identities and scope.
+这些是维护版 profile 的全新有界 CPU 训练结果。它们不新增 CUDA 运行或成对的公共评分卡，
+不证明 GitHub 的计划已执行，不确立性能结论，也不暗示整库支持。[更早的 CPU/CUDA 源码
+绑定测量](2026-10-15-openmmlab-installed-source-training.md)保留其自身的源码身份与范围。

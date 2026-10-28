@@ -40,11 +40,16 @@ def test_broadcast_forward_and_gradients(batch1, batch2, transposed):
     import jittor as jt
     op = load_bmm(jt)(transposed)
     left, right = jt.array(a, dtype="float64"), jt.array(b, dtype="float64")
-    value = op.execute(left, right)
+    # The substitute below is a CPU leaf by contract; on an accelerator host
+    # (Ascend310P has no FP64/FP32-KEEP_DTYPE cube) the real matmul dispatch
+    # would not be exercising this test's shape graph anyway.
+    with jt.flag_scope(use_cuda=0):
+        value = op.execute(left, right)
+        weight = rng.randn(*value.shape)
+        gradients = jt.grad(
+            (value * jt.array(weight, dtype="float64")).sum(), [left, right])
     output = value.numpy()
     np.testing.assert_allclose(output, a @ (b.swapaxes(-1, -2) if transposed else b))
-    weight = rng.randn(*output.shape)
-    gradients = jt.grad((value * jt.array(weight, dtype="float64")).sum(), [left, right])
     # Finite differences independently check reductions across singleton and
     # missing batch dimensions, including the transposed-right backward path.
     for source, gradient in zip((a, b), gradients):

@@ -52,7 +52,11 @@ class TestCudnnConvPlan(unittest.TestCase):
             x = rng.randn(n, c, h, h).astype("float32")
             w = rng.randn(k, c // groups, r, r).astype("float32")
             y_ref, gx_ref, gw_ref, dout = _reference(x, w, stride, padding, dilation, groups)
-            _test_policy_stack.enter_context(jt.runtime.scope(cuda_allow_cudnn_tf32=int(tf32)))
+            # The cuDNN default is "high"; the legacy flag alone cannot force
+            # exact FP32 math when this newer precision tier is already set.
+            precision = "high" if tf32 else "highest"
+            _test_policy_stack.enter_context(jt.runtime.scope(
+                cuda_allow_cudnn_tf32=int(tf32), float32_cudnn_precision=precision))
             xd = jt.array(x).cast(dtype); wd = jt.array(w).cast(dtype)
             if nhwc:
                 xd = xd.transpose(0, 2, 3, 1); wd = wd.transpose(0, 2, 3, 1)

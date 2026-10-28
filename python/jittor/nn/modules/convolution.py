@@ -212,7 +212,20 @@ class Conv1d(jt.Module):
     >>> input = jt.randn(4, 24, 100)
     >>> output = conv(input)
     '''
-    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True, padding_mode='zeros'):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0,
+                 dilation=1, groups=1, bias=True, padding_mode='zeros',
+                 device=None, dtype=None):
+        # Conv1d stores its spatial axis as the height of an inner Conv2d.
+        # Normalize one-element sequences before adding that inner width axis.
+        values = []
+        for name, value in (("kernel_size", kernel_size), ("stride", stride),
+                            ("padding", padding), ("dilation", dilation)):
+            if isinstance(value, (list, tuple)):
+                if len(value) != 1:
+                    raise ValueError("Conv1d %s must be an int or one-element sequence" % name)
+                value = value[0]
+            values.append(value)
+        kernel_size, stride, padding, dilation = values
         assert in_channels > 0, 'in_channels must be positive'
         assert out_channels > 0, 'out_channels must be positive'
         _check_padding_options(padding, padding_mode, _pair(stride))
@@ -232,7 +245,11 @@ class Conv1d(jt.Module):
         assert in_channels % groups == 0, 'in_channels must be divisible by groups'
         assert out_channels % groups == 0, 'out_channels must be divisible by groups'
         # using list to escape module dfs
-        self._conv = [jt.nn.Conv(self.in_channels, self.out_channels, self.kernel_size, self.stride, self.padding, self.dilation, self.groups, self.bias, padding_mode=padding_mode)]
+        self._conv = [jt.nn.Conv(self.in_channels, self.out_channels,
+                                 self.kernel_size, self.stride, self.padding,
+                                 self.dilation, self.groups, self.bias,
+                                 padding_mode=padding_mode, device=device,
+                                 dtype=dtype)]
         self.weight = self._conv[0].weight.squeeze(-1)
         self.bias = self._conv[0].bias
 

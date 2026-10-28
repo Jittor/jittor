@@ -94,6 +94,13 @@ void share_group_link(Var* parent, Var* child) {
 }
 
 void share_group_unlink(Var* v) {
+    // Only short bookkeeping is under this lock: the one operation that can
+    // block for a long time -- the device copy in migrate_group -- runs
+    // outside it (see mem/allocator.cc), so a waiter here is not held up by a
+    // GIL-releasing transfer. The GIL must stay held: `Node::free` holds the
+    // graph mutation lock across free_var, and dropping the GIL here would let
+    // a Python thread that holds the GIL wait for that lock while this one
+    // waits for the GIL back -- the inversion the readback probe hit.
     std::lock_guard<std::mutex> guard(share_ring_mutex());
     share_group_unlink_locked(v);
 }

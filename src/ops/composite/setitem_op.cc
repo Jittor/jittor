@@ -347,9 +347,10 @@ void SetitemOp::jit_run() {
         @if(IV@i==-1,oshape@{IO@i},
         @if(IV@i==-2,1,in->shape[@i]));
     )
-    index_t istride@{IDIM-1} = 1;
-    @for(i, IDIM-2, -1, -1, index_t istride@i = istride@{i+1} * ishape@{i+1};)
-
+    @if(IDIM>0,
+        index_t istride@{IDIM-1} = 1;
+        @for(i, IDIM-2, -1, -1, index_t istride@i = istride@{i+1} * ishape@{i+1};)
+    )
     
     @for(i, 0, IDIM, 
         @if(IV@i>=0 && IO@i>=0, 

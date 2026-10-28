@@ -19,7 +19,7 @@ int cuda_block_width(FusedOp* op);
 
 struct ParallelPass : Pass {
     ParallelPass() : Pass("parallel") {
-        reads = {kir::rvalue, kir::code, kir::lvalue, kir::rvalue2, kir::loop_func, kir::loop_id, kir::dtype};
+        reads = {kir::rvalue, kir::code, kir::lvalue, kir::rvalue2, kir::loop_func, kir::loop_id, kir::dtype, kir::split_id};
         writes = {kir::rely, kir::dtype, kir::code, kir::rvalue};
     };
     void run() override;

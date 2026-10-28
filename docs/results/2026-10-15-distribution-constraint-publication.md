@@ -1,39 +1,36 @@
-# Distribution constraint namespace publication
+# Distribution constraint 命名空间发布
 
-- Status: fixed and verified for frontend publication and bounds checks; no
-  general TensorDict compatibility or complete constraint-validation claim.
-- Date: 2026-10-15.
-- Baseline: `be2ffcff831ca42639525e1c0508ba6ef04d0b77`; implementation is the
-  commit containing this report.
-- Scope: CPU and real RTX 4090 CUDA; ACL and ROCm unverified.
-- Owner: Torch compatibility maintainers.
-- Review when: distribution module cloning, native constraint owners, Torch
-  namespace publication or the reference version changes.
+- 状态：针对前端发布与边界检查已修复并验证；不声称通用 TensorDict 兼容性
+  或完整 constraint 校验能力。
+- 日期：2026-10-15。
+- 基线：`be2ffcff831ca42639525e1c0508ba6ef04d0b77`；实现为本报告所在提交。
+- 范围：CPU 与真实 RTX 4090 CUDA；ACL 与 ROCm 未验证。
+- 维护者：Torch 兼容性维护者。
+- 复查时机：distribution 模块克隆、原生 constraint 所有者、Torch 命名空间
+  发布方式或参考版本发生变化时。
 
-## Failure and fix
+## 故障与修复
 
-A pure Torch API distribution subclass failed at `constraints.real` before any
-TensorDict import. The native namespace already exposed `real`, `interval` and
-`dependent_property`, but its frontend clone exposed none of them. Native
-constraints are a `ModuleType` subclass with class attributes and static methods;
-the frontend copied only `dir(instance)`, which lists module instance attributes.
-The installer then saw an existing namespace and correctly avoided replacing it.
+一个纯 Torch API 的 distribution 子类在任何 TensorDict 导入之前就在
+`constraints.real` 处失败。原生命名空间已经暴露了 `real`、`interval` 和
+`dependent_property`，但其前端克隆没有暴露其中任何一个。原生 constraints 是
+带有类属性和静态方法的 `ModuleType` 子类；前端只复制了 `dir(instance)`，
+而它列出的只是模块实例属性。随后安装器看到一个已存在的命名空间，
+正确地避免了替换它。
 
-The clone now includes attributes from the module's type. This preserves native
-constraint and factory ownership, publishes the property decorator, and leaves
-the native package untouched. It adds no mathematical implementation and makes
-no stronger promise about the native permissive constraints, integer support or
-event dimensions. Existing distribution fidelity remains `APPROXIMATE`.
+克隆现在还会包含模块类型上的属性。这保住了原生 constraint 与工厂的所有权，
+发布了 property 装饰器，并保持原生包不变。它没有增加任何数学实现，也没有对
+原生宽松 constraint、整数支持或 event 维度作出更强的承诺。现有 distribution
+保真度仍为 `APPROXIMATE`。
 
-## Validation
+## 验证
 
-Regression cases define a distribution subclass with `arg_constraints` and a
-dependent `support` property without importing any downstream library. They
-check canonical module identity, inherited owner identity and an unchanged native
-namespace. Device cases execute interval, greater-than and less-than predicates,
-including a NaN, and require actual CPU/CUDA placement and zero backend fallback.
-An independent binary PyTorch 2.11.0+cu128 interpreter, with Jittor absent and no
-shim installed, produced exactly the same boolean results on both devices.
+回归用例在不导入任何下游库的情况下定义了一个带有 `arg_constraints` 和依赖型
+`support` property 的 distribution 子类。它们检查规范模块标识、继承的所有者标识
+以及未改动的原生命名空间。设备用例执行 interval、greater-than 和 less-than 谓词，
+其中包含一个 NaN，并要求真实的 CPU/CUDA 放置以及零后端后备。
+一个未安装 Jittor、也未安装 shim 的独立二进制 PyTorch 2.11.0+cu128 解释器
+在两个设备上产生了完全相同的布尔结果。
 
 ```bash
 JITTOR_TORCH_SHIM=1 PYTHONPATH=python JITTOR_TEST_DEVICES=cpu,cuda \
@@ -47,27 +44,24 @@ JITTOR_TORCH_SHIM=1 PYTHONPATH=python python -m pytest -q tests/structure
 bash tools/check_repo_layout.sh
 ```
 
-- CPU distribution selection: 34 passed, no skips.
-- CUDA-enabled distribution selection: 35 passed, no skips, including real
-  device bounds checks and the existing distribution regressions.
-- Complete CPU core runner: 322 passed, 42 skipped, one existing expected failure;
-  native and Torch subprocesses both returned zero.
-- Complete structure selection with explicit xdist/timeout plugins: 1,432 passed,
-  six skipped, no failures. Two skips concern distribution resolution in this
-  source-only interpreter; the others are declared or accelerator capability
-  skips. Layout and whitespace checks passed.
+- CPU distribution 选择集：34 通过，无跳过。
+- 启用 CUDA 的 distribution 选择集：35 通过，无跳过，包含真实设备边界检查
+  和既有 distribution 回归。
+- 完整 CPU core runner：322 通过、42 跳过、一项既有预期失败；
+  原生与 Torch 子进程均返回零。
+- 完整结构选择集（显式加载 xdist/timeout 插件）：1,432 通过、六项跳过、无失败。
+  两项跳过涉及该仅源码解释器中的 distribution 解析；其余为已声明或加速器能力跳过。
+  布局与空白检查通过。
 
-Python 3.11, GCC 11.5 and CUDA 12.2.140 were used with separate CPU/CUDA caches;
-initial compilation was serial. Unversioned logs are under
-`$JITTOR_LAB_ROOT/_state/refactor-goal/distributed/logs/`:
-`constraints-publication-cpu-recheck.log`, `constraints-publication-cuda.log`,
-`constraints-independent-torch.log` and `constraints-publication-core.log`.
-The first structure invocation omitted explicit xdist plugin loading while
-plugin autoload was disabled; its two subprocess bookkeeping failures do not
-establish a source regression. The corrected run is
-`constraints-publication-structure-recheck.log`; explicit
-`PYTEST_PLUGINS=xdist.plugin,pytest_timeout` supplied the installed plugins.
+使用 Python 3.11、GCC 11.5 和 CUDA 12.2.140，CPU/CUDA 缓存相互独立；首次编译为
+串行执行。未纳入版本控制的日志位于
+`$JITTOR_LAB_ROOT/_state/refactor-goal/distributed/logs/`：
+`constraints-publication-cpu-recheck.log`、`constraints-publication-cuda.log`、
+`constraints-independent-torch.log` 和 `constraints-publication-core.log`。
+首次结构调用在插件自动加载被禁用时漏掉了显式的 xdist 插件加载；其两项子进程记账失败
+不能证明源码回归。修正后的运行为
+`constraints-publication-structure-recheck.log`；显式的
+`PYTEST_PLUGINS=xdist.plugin,pytest_timeout` 提供了已安装的插件。
 
-TensorDict 0.10.0's `TruncatedNormal` class definition exposed this generic
-publication bug. End-to-end TensorDict indexing, stacking and training require
-their own independent numerical evidence and are outside this report's scope.
+TensorDict 0.10.0 的 `TruncatedNormal` 类定义暴露了这一通用发布缺陷。
+端到端 TensorDict 索引、堆叠与训练需要各自的独立数值证据，不在本报告范围内。

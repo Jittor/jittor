@@ -227,9 +227,7 @@ class TestGradScalerStep(unittest.TestCase):
                 self.assertTrue(moved, "the step after a skip did nothing")
                 self.assertGreater(scaler.get_scale(), 1.0)
 
-    @unittest.expectedFailure
     def test_scaling_a_float16_loss_directly_is_reported(self):
-        # KI-DTYPE-004: a jt.ones/zeros/full result is weak in promotion, so half * python float gives float32.
         """The default scale does not fit in float16, and the failure is silent.
 
         65536 > float16's 65504, so `scale(loss)` on a float16 loss is inf
