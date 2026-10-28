@@ -1828,6 +1828,12 @@ void sync_all(bool device_sync) {
         // `keep_graph` is what leaves it pending -- so sweeping it up here
         // only re-runs it, every time anyone asks for everything to complete.
         if (v->var->flag(VarFlags::_kept)) continue;
+        // A failed root belongs to the caller that asked for it: an explicit
+        // sync still retries and re-raises, but sweeping everything up must
+        // not re-run a batch that already reported its error. Without this,
+        // every `sync_all` after one failure re-raised it from an unrelated
+        // caller (a flag scope's exit flush, then every later test).
+        if (v->var->flag(VarFlags::_execution_failed)) continue;
         // Sinks only. Sweeping every holder and forcing weak_sync=false were
         // both tried against MiniMax-H3's uniform-random-byte video: ~70%
         // failure becomes ~17% and ~33% respectively, and ~17% with both. They

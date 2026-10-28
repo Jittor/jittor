@@ -59,6 +59,11 @@ static inline vector<T>& refill(vector<T>& v, size_t n, const T& x) {
     return v;
 }
 
+void mark_failed_batch(const ExecPlan& plan) {
+    for (Var* v : plan.all_vars)
+        if (!v->is_finished()) v->set_flag(VarFlags::_execution_failed);
+}
+
 void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan) {
     plan.clear();
     auto& scratch = plan.scratch;
