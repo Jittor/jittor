@@ -1818,6 +1818,40 @@ def _api_zero(self):
     return _ip(self, zeros, preserve_storage=True)
 
 
+def _api_zero_batch(tensors):
+    """``Tensor.zero_`` for a list, through one reader sync.
+
+    ``_copy_detached_storage`` resolves every pending reader of a tensor's
+    storage before it writes -- that is what keeps a detached alias correct --
+    and doing it once per tensor also drained the device between writes.
+    ``Module.zero_grad(set_to_none=False)`` paid that 199 times for BERT-large
+    and cost 12 ms against PyTorch's 1.5 ms. Nothing in this list reads a
+    parameter, so one sweep ahead of the writes covers all of them; anything
+    the single-tensor path must handle itself (a deferred capture, an unbuilt
+    tensor, a differentiable one) falls back to it.
+    """
+    if not tensors:
+        return
+    _owner.jt.sync_all()
+    cache = {}
+    for tensor in tensors:
+        if (getattr(tensor, "_mem_ptr_now", None) is None
+                or (tensor.requires_grad and not _owner.jt.flags.no_grad
+                    and not tensor.is_leaf)
+                or _fill_captured_state(tensor, 0)):
+            tensor.zero_()
+            continue
+        key = (tuple(tensor.shape), str(tensor.dtype))
+        zeros = cache.get(key)
+        if zeros is None:
+            with _new_scope(tensor, None), _owner.jt.no_grad():
+                zeros = _owner.jt.zeros(tensor.shape, tensor.dtype)
+            cache[key] = zeros
+        with _owner.jt.no_grad():
+            if not tensor._copy_view_into(zeros):
+                tensor._copy_into(zeros)
+
+
 def _api_add(self, o, alpha=1):
     return _ip(self, self + o * alpha, preserve_storage=True)
 
