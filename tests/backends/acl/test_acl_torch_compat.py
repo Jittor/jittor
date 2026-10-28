@@ -927,7 +927,7 @@ class TestACLTorchCompat(unittest.TestCase):
         keep = rng.rand(shape[-2], shape[-2]) > 0.15
         keep[~keep.any(-1), 0] = True
         per_batch = np.stack([keep, np.roll(keep, 1, axis=0)])
-        key_axis = np.ones(shape[-1], dtype=bool)
+        key_axis = np.ones(shape[-2], dtype=bool)
         key_axis[1:3] = False
         layouts = (
             keep[None, None],
