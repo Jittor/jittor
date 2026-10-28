@@ -9,9 +9,9 @@ import types
 import unittest
 from unittest import mock
 
-# Sibling tests in other adapters also use test_adapter.py. Load the host
-# support explicitly under a unique name; never depend on pytest's basename
-# import mode or whichever unrelated test_adapter was collected first.
+# Sibling adapter tests use their own names now, but load this host
+# support explicitly under a unique name rather than depending on pytest's
+# basename import mode and on collection order.
 def _load_sibling(name, filename):
     spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name(filename))
     module = importlib.util.module_from_spec(spec)
@@ -20,7 +20,7 @@ def _load_sibling(name, filename):
     return module
 
 
-support = _load_sibling('_td_rebuild_host_support', 'test_adapter.py')
+support = _load_sibling('_td_rebuild_host_support', 'test_tensordict_adapter.py')
 compat, patcher, transaction, Jagged = support.compat, support.patcher, support.transaction, support.Jagged
 source = _load_sibling('_td_rebuild_source_fixture', '_td_v010_rebuild_fixture.py')
 fixture, leaf_fixture = source._rebuild_njt_from_njt, source._is_leaf_nontensor

@@ -38,7 +38,7 @@ load/finalize phase. Production registration is routed by the parent adapter.
 Host contracts (no Jittor import or JIT):
 
 ```bash
-python adapters/jittor_adapters/transformers_loading/tests/test_adapter.py -v
+python adapters/jittor_adapters/transformers_loading/tests/test_transformers_loading_adapter.py -v
 ```
 
 These tests execute exact pinned HF excerpts with fake host leaves and the

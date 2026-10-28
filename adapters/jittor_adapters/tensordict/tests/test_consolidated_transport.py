@@ -18,7 +18,7 @@ def _load(name, filename):
     return module
 
 
-support = _load('_td_transport_host_support', 'test_adapter.py')
+support = _load('_td_transport_host_support', 'test_tensordict_adapter.py')
 compat, patcher, transaction = support.compat, support.patcher, support.transaction
 fixture = _load('_td_transport_source', '_td_v010_transport_fixture.py')._rebuild_tensordict_files_consolidated
 from jittor_adapters.tensordict import consolidated_transport as adapter

@@ -11,7 +11,7 @@ import types
 import unittest
 from unittest import mock
 
-import test_adapter as lifecycle
+import test_verl_adapter as lifecycle
 from jittor_adapters import verl
 from jittor_adapters.verl import native_npu as adapter
 from jittor_adapters.verl import device_probe, optimizer_offload

@@ -39,8 +39,8 @@ Run the light source tests without initializing Jittor:
 
 ```bash
 python adapters/tests/test_adapters.py -q
-python adapters/jittor_adapters/tensordict/tests/test_adapter.py -q
-python adapters/jittor_adapters/verl/tests/test_adapter.py -q
+python adapters/jittor_adapters/tensordict/tests/test_tensordict_adapter.py -q
+python adapters/jittor_adapters/verl/tests/test_verl_adapter.py -q
 ```
 
 They import controlled fake packages through the real finder, execute the NPU
