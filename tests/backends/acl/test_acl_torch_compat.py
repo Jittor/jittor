@@ -913,6 +913,86 @@ class TestACLTorchCompat(unittest.TestCase):
             np.testing.assert_allclose(actual, expected, rtol=3e-5, atol=3e-5)
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_sdpa_boolean_mask_layouts_stay_on_acl(self):
+        # aclnnFlashAttentionScoreV2 broadcasts a boolean attenMask over batch
+        # and heads itself, so the provider hands it the caller's mask instead
+        # of expanding it to [b, n, s, s] (64 MiB at 2048 tokens, plus two
+        # score-sized casts on the ACL backend). Every layout a caller may pass
+        # still has to select the same keys as the composite path.
+        rng = np.random.RandomState(20261029)
+        shape = (2, 2, 8, 32)
+        query_np, key_np, value_np, loss_weight_np = (
+            rng.randn(*shape).astype("float32") * 0.1 for _ in range(4)
+        )
+        keep = rng.rand(shape[-2], shape[-2]) > 0.15
+        keep[~keep.any(-1), 0] = True
+        per_batch = np.stack([keep, np.roll(keep, 1, axis=0)])
+        key_axis = np.ones(shape[-1], dtype=bool)
+        key_axis[1:3] = False
+        layouts = (
+            keep[None, None],
+            per_batch[:, None],
+            key_axis[None, None, None],
+        )
+        candidates = []
+        native_dispatches = []
+        acl_attention = registered_kernel("nn.scaled_dot_product_attention", "acl")
+        self.assertIsNotNone(acl_attention)
+
+        def record_attention(*args, **kwargs):
+            result = acl_attention(*args, **kwargs)
+            native_dispatches.append(result is not None)
+            return result
+
+        with override_kernel("nn.scaled_dot_product_attention", "acl", record_attention):
+            for mask_np in layouts:
+                inputs = [
+                    torch.tensor(value)
+                    for value in (query_np, key_np, value_np)
+                ]
+                for value in inputs:
+                    value.requires_grad_(True)
+                mask = torch.tensor(mask_np)
+                mask.requires_grad_(False)
+                output = torch.nn.functional.scaled_dot_product_attention(
+                    *inputs,
+                    attn_mask=mask,
+                    dropout_p=0.0,
+                    is_causal=False,
+                )
+                grads = torch.autograd.grad(
+                    (output * torch.tensor(loss_weight_np)).sum(), inputs
+                )
+                candidates.append(jt.fetch_sync([output] + list(grads)))
+
+        self.assertEqual(native_dispatches, [True] * len(layouts))
+        references = []
+        with jt.flag_scope(use_acl=0, use_cuda=0):
+            for mask_np in layouts:
+                inputs = [
+                    torch.tensor(value)
+                    for value in (query_np, key_np, value_np)
+                ]
+                for value in inputs:
+                    value.requires_grad_(True)
+                output = torch.nn.functional.scaled_dot_product_attention(
+                    *inputs,
+                    attn_mask=torch.tensor(mask_np),
+                    dropout_p=0.0,
+                    is_causal=False,
+                )
+                grads = torch.autograd.grad(
+                    (output * torch.tensor(loss_weight_np)).sum(), inputs
+                )
+                references.append(jt.fetch_sync([output] + list(grads)))
+
+        for candidate, reference in zip(candidates, references):
+            for actual, expected in zip(candidate, reference):
+                np.testing.assert_allclose(
+                    actual, expected, rtol=3e-5, atol=3e-5
+                )
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_sdpa_causal_and_additive_backward_stay_on_acl(self):
         rng = np.random.RandomState(20260831)
         shape = (2, 2, 8, 32)
