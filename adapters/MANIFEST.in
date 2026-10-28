@@ -8,8 +8,10 @@ include tests/_adapter_boundary.py
 include tests/conftest.py
 include tests/relocatable_contract.py
 include tests/test_adapters.py
+include tests/test_shared_jagged_contract.py
 include tests/test_verl_optimizer_offload.py
 include tests/vllm/conftest.py
+include tests/vllm/test_accelerator_capability.py
 include tests/vllm/test_acl_metadata.py
 include tests/vllm/test_arming_ownership.py
 include tests/vllm/test_async_fetch_output.py
