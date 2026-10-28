@@ -144,7 +144,11 @@ def cross_entropy_loss_acl(output, target, weight=None, ignore_index=None,
     valid = jt.logical_and(target >= 0, target < classes)
     if ignore_index is not None:
         valid = jt.logical_and(valid, target != ignore_index)
-    in_range = target * valid.cast(target.dtype)
+    # jittor's frontend accepts either label width, but aclnn's
+    # CrossEntropyLoss takes DT_INT64 only: CANN 9.0.0 rejects a DT_INT32
+    # target with AclNN_Parameter_Error. The mask is applied in the target's
+    # own width and the result is widened before it reaches the aclnn op.
+    in_range = (target * valid.cast(target.dtype)).cast("int64")
     target_weight = valid.float32()
     loss = CrossEntropyLossACL()(output, in_range) * target_weight
     if reduction == "sum":
