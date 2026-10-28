@@ -33,6 +33,8 @@ DEFAULT_CONTENT_CHANGE_ALLOWLIST = BASELINE_ROOT / "wheel-content-changes-final.
 
 REQUIRED_MEMBERS = (
     "jittor/src/core/common.h",
+    "jittor/src/utils/cgroup_memory.h",
+    "jittor/build/utils/cgroup.py",
     "jittor/src/bindings/pyjt/py_converter.h",
     "jittor/src/codegen/op_compiler.cc",
     "jittor/backends/cuda/__init__.py",
@@ -155,6 +157,7 @@ RUNTIME_BUILD_HELPERS = frozenset((
     "jittor/build/utils/backend_resources.py",
     "jittor/build/utils/bootstrap.py",
     "jittor/build/utils/build_config.py",
+    "jittor/build/utils/cgroup.py",
     "jittor/build/utils/clean_cache.py",
     "jittor/build/utils/compiler_flags.py",
     "jittor/build/utils/config.py",

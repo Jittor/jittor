@@ -5,6 +5,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #pragma once
+#include <cstring>
 #include "core/op.h"
 #include "mem/allocator.h"
 
@@ -23,6 +24,20 @@ struct ArrayArgs {
 struct ArrayOp : Op {
     Var* output;
     Allocation allocation;
+    // A one-element constant from host memory -- every Python number an
+    // operator meets -- is kept here rather than in a pool allocation, until
+    // `run` has to hand memory to the output. A constant read into a fused
+    // kernel (`ptr`, the jit key's value) never asks for any, and the pool
+    // allocation and release were most of what building one cost.
+    alignas(8) char inline_value[8];
+    bool inline_pending = false;
+    // The exact value of a Python float this op was built from. The staging
+    // union in py_array_op.cc narrows it to float32, which is what
+    // `jt.array(0.5)` and every float32/half operand must keep seeing; a
+    // binary op against a float64 operand rebuilds the constant from this
+    // instead of from the 24-bit narrowing.
+    double python_float = 0;
+    bool has_python_float = false;
     // @pybind(None)
     ArrayOp(const void* ptr, NanoVector shape, NanoString dtype=ns_float32);
 
@@ -33,7 +48,23 @@ struct ArrayOp : Op {
     // The data, wherever it is now: `run` hands the allocation to the output,
     // and a kept graph that runs again still has to read the constant.
     template<class T>
-    inline T* ptr() { return (T*)(allocation.ptr ? allocation.ptr : output->mem_ptr); }
+    inline T* ptr() {
+        return (T*)(allocation.ptr ? allocation.ptr
+            : inline_pending ? (void*)inline_value : output->mem_ptr);
+    }
+    // Whether `ptr()` is host memory a builder may read now.
+    inline bool host_value_known() const {
+        return inline_pending
+            || (allocation.ptr && allocation.allocator && !allocation.allocator->is_cuda());
+    }
+    // Keep a value of `size` bytes inline when it fits; see `inline_value`.
+    inline bool keep_inline(const void* data, int64 size) {
+        if (!data || size <= 0 || size > (int64)sizeof(inline_value) || output->num != 1)
+            return false;
+        std::memcpy(inline_value, data, size);
+        inline_pending = true;
+        return true;
+    }
     
     const char* name() const override { return "array"; }
     void run() override;

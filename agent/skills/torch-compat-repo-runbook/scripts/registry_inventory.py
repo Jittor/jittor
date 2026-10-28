@@ -14,7 +14,7 @@ import re
 import subprocess
 
 
-REPOS = ("transformers", "peft", "diffusers", "ms-swift", "verl")
+REPOS = ("transformers", "peft", "diffusers", "ms-swift", "verl", "mmengine", "mmcv", "flash-attention", "trellis", "vllm", "vllm-omni", "torchmetrics", "tensordict")
 ROOT = Path(__file__).resolve().parents[4]
 
 
@@ -87,8 +87,9 @@ class SourceRegistry:
         found = []
         for relative, tree in self.trees.items():
             for node in ast.walk(tree):
-                if isinstance(node, ast.Assign):
-                    for target in node.targets:
+                if isinstance(node, (ast.Assign, ast.AnnAssign)):
+                    targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                    for target in targets:
                         if isinstance(target, ast.Name) and re.fullmatch(pattern, target.id):
                             found.append((relative, target.id, node.value))
         return found
@@ -106,28 +107,40 @@ def inventory(repo, checkout):
     remote = git(checkout, "remote", "get-url", "origin")
     files = git(checkout, "ls-files", "--", "*.py").splitlines()
     prefix = {"transformers": "src/transformers/", "peft": "src/peft/",
-              "diffusers": "src/diffusers/", "ms-swift": "swift/", "verl": "verl/"}[repo]
+              "diffusers": "src/diffusers/", "ms-swift": "swift/", "verl": "verl/", "mmengine": "mmengine/", "mmcv": "mmcv/", "flash-attention": "flash_attn/", "trellis": "trellis2/", "vllm": "vllm/", "vllm-omni": "vllm_omni/", "torchmetrics": "src/torchmetrics/", "tensordict": "tensordict/"}[repo]
     files = [path for path in files if path.startswith(prefix)]
     if repo == "transformers":
         selected = [path for path in files if path.endswith("models/auto/modeling_auto.py")]
     elif repo == "peft":
         selected = [path for path in files if path.endswith("utils/peft_types.py")]
     elif repo == "diffusers":
-        selected = [path for path in files if path.endswith(("pipelines/auto_pipeline.py", "pipelines/__init__.py"))]
+        selected = [path for path in files if path.endswith(("pipelines/auto_pipeline.py", "pipelines/__init__.py"))
+                    or path == "src/diffusers/models/__init__.py"]
     elif repo == "ms-swift":
         selected = [path for path in files if "/model/" in path or "/tuners/" in path
-                    or path.endswith("model_type.py")]
+                    or path.endswith("model_type.py") or any(
+                        part in path for part in ("/cli/", "/arguments/", "/trainers/", "/pipelines/train/"))]
+    elif repo == "flash-attention":
+        selected = ["flash_attn/__init__.py", "flash_attn/flash_attn_interface.py"]
+    elif repo in ("torchmetrics", "tensordict"):
+        selected = [prefix + "__init__.py"]
+    elif repo in ("mmengine", "mmcv", "trellis", "vllm", "vllm-omni"):
+        selected = files
     else:
-        selected = [path for path in files if path.endswith("trainer/ppo/core_algos.py")
+        selected = [path for path in files if path.startswith("verl/trainer/")
                     or ("/models/" in path and "registry" in path)]
     source = SourceRegistry(checkout, selected)
     axes = []
     used = set()
+    declaration_details = None
 
     def add(axis, name, members, sources):
-        members = sorted(set(members))
+        if any(row["axis"] == axis for row in axes):
+            raise ValueError("Ambiguous registry axis %s for %s" % (axis, repo))
+        members = list(members)
         if not members or not all(isinstance(member, str) and member for member in members):
             raise ValueError("Empty or invalid %s registry %s" % (repo, name))
+        members = sorted(set(members))
         axes.append({"axis": axis, "registry": name, "count": len(members), "members": members,
                      "sources": sorted(set(sources))})
         used.update(sources)
@@ -153,6 +166,13 @@ def inventory(repo, checkout):
                         paths.append(path)
             add(axis, cls, values, paths)
     elif repo == "diffusers":
+        from _diffusers_registry import model_exports
+        model_path = "src/diffusers/models/__init__.py"
+        members, declarations = model_exports((checkout / model_path).read_text(encoding="utf-8"))
+        add("model_api", "models._import_structure public exports (all optional branches)", members, [model_path])
+        declaration_details = {"model_api": declarations,
+                               "scope": "All public names in models._import_structure, including helpers, mixins, "
+                                        "enums, functions and Flax; not model families, scheduler APIs or pipelines."}
         mappings = source.assignments(r"AUTO_.*PIPELINES_MAPPING")
         families, pipeline_classes, pipeline_paths = [], [], []
         for path, tree in source.trees.items():
@@ -202,7 +222,40 @@ def inventory(repo, checkout):
         mappings = source.assignments(r"SWIFT_MAPPING")
         add("method", "SWIFT_MAPPING", [member for _, _, node in mappings for member in source.mapping_keys(node)],
             [path for path, _, _ in mappings])
-    else:
+        for symbol, axis in (("TRAINER_MAPPING", "trainer"), ("trainer_mapping", "megatron_trainer"),
+                             ("ROUTE_MAPPING", "entrypoint")):
+            mappings = source.assignments(symbol)
+            if not mappings:
+                raise ValueError("Missing ms-swift training registry: " + symbol)
+            identities = [(path, name) for path, name, _ in mappings]
+            if len(set(identities)) != len(identities):
+                raise ValueError("Ambiguous ms-swift training registry: " + symbol)
+            for path, name, node in mappings:
+                qualified_axis = ("megatron_entrypoint" if symbol == "ROUTE_MAPPING"
+                                  and any(part in ("megatron", "_megatron") for part in Path(path).parts)
+                                  else axis)
+                add(qualified_axis, path + ":" + name, source.mapping_keys(node), [path])
+        for field, axis in (("task_type", "task"), ("rlhf_type", "rlhf_method")):
+            members, paths = [], []
+            for path, tree in source.trees.items():
+                if "/arguments/" not in path:
+                    continue
+                for node in ast.walk(tree):
+                    if not (isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
+                            and node.target.id == field):
+                        continue
+                    annotation = node.annotation
+                    if not (isinstance(annotation, ast.Subscript)
+                            and isinstance(annotation.value, ast.Name) and annotation.value.id == "Literal"):
+                        raise ValueError("Unsupported ms-swift Literal field %s in %s" % (field, path))
+                    values = annotation.slice
+                    if hasattr(ast, "Index") and isinstance(values, ast.Index):
+                        values = values.value
+                    values = values.elts if isinstance(values, ast.Tuple) else [values]
+                    members.extend(source.value(value) for value in values)
+                    paths.append(path)
+            add(axis, "arguments Literal " + field, members, paths)
+    elif repo == "verl":
         for function, axis in (("register_adv_est", "advantage_estimator"), ("register_policy_loss", "policy_loss")):
             members, paths = [], []
             for path, tree in source.trees.items():
@@ -214,9 +267,113 @@ def inventory(repo, checkout):
                                 members.append(source.value(decorator.args[0]))
                                 paths.append(path)
             add(axis, function, members, paths)
+        entrypoints, entry_paths, losses, loss_paths = [], [], [], []
+        for path, tree in source.trees.items():
+            if not path.startswith("verl/trainer/"):
+                continue
+            for node in ast.walk(tree):
+                if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                for decorator in node.decorator_list:
+                    if not isinstance(decorator, ast.Call):
+                        continue
+                    if (isinstance(decorator.func, ast.Attribute) and decorator.func.attr == "main"
+                            and isinstance(decorator.func.value, ast.Name) and decorator.func.value.id == "hydra"):
+                        names = [source.value(item.value) for item in decorator.keywords if item.arg == "config_name"]
+                        if len(names) != 1 or not isinstance(names[0], str) or not names[0]:
+                            raise ValueError("Unsupported verl Hydra config in " + path)
+                        entrypoints.append(path + ":" + node.name + ":" + names[0])
+                        entry_paths.append(path)
+                    elif isinstance(decorator.func, ast.Name) and decorator.func.id == "register_distillation_loss":
+                        if len(decorator.args) != 1 or not isinstance(decorator.args[0], ast.Call):
+                            raise ValueError("Unsupported verl distillation settings in " + path)
+                        names = [source.value(item.value) for item in decorator.args[0].keywords if item.arg == "names"]
+                        if len(names) != 1:
+                            raise ValueError("Missing verl distillation names in " + path)
+                        values = [names[0]] if isinstance(names[0], str) else names[0]
+                        if not isinstance(values, (list, tuple)) or not values:
+                            raise ValueError("Empty or invalid verl distillation names in " + path)
+                        losses.extend(values)
+                        loss_paths.append(path)
+        add("entrypoint", "Hydra trainer entrypoints", entrypoints, entry_paths)
+        add("distillation_loss", "register_distillation_loss settings.names", losses, loss_paths)
+    if repo == "flash-attention":
+        package = "flash_attn/__init__.py"
+        interface = "flash_attn/flash_attn_interface.py"
+        functions = {node.name for node in source.trees[interface].body
+                     if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
+        exports = []
+        for node in source.trees[package].body:
+            if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                continue
+            if isinstance(node, ast.Assign) and all(isinstance(t, ast.Name) and t.id == "__version__" for t in node.targets):
+                continue
+            if not isinstance(node, ast.ImportFrom) or node.level or node.module != "flash_attn.flash_attn_interface":
+                raise ValueError("Unresolved FlashAttention public export declaration")
+            for name in node.names:
+                if name.name not in functions or name.name.startswith("_"):
+                    raise ValueError("Unresolved FlashAttention public function: " + name.name)
+                exports.append(name.asname or name.name)
+        add("attention_api", "public package attention functions", exports, [package, interface])
+    if repo in ("mmengine", "mmcv"):
+        from _openmmlab_registry import AXES, declarations
+        declaration_details = declarations(checkout, repo, selected)
+        if declaration_details["unresolved"]:
+            raise ValueError("Unresolved bounded OpenMMLab registration: " +
+                             str(declaration_details["unresolved"][0]))
+        for registry, axis in AXES[repo].items():
+            rows = [row for row in declaration_details["declarations"] if row["registry"] == registry]
+            add(axis, registry + ".register_module (all source declarations)",
+                declaration_details["axes"][axis], [row["source"] for row in rows])
+        # Hash the full scanned package, including currently unselected/dynamic
+        # registries. Import conditions describe declarations, not availability.
+        used.update(selected)
+    if repo == "trellis":
+        from _trellis_registry import declarations
+        declaration_details = declarations(checkout, selected)
+        if declaration_details["unresolved"]:
+            raise ValueError("Unresolved TRELLIS declaration: " + str(declaration_details["unresolved"][0]))
+        for axis, members in declaration_details["axes"].items():
+            rows = [row for row in declaration_details["declarations"] if row["axis"] == axis]
+            add(axis, "TRELLIS source-declared " + axis, members, [row["source"] for row in rows])
+        used.update(declaration_details["sources"])
+    if repo in ("vllm", "vllm-omni"):
+        from _vllm_registry import declarations
+        declaration_details = declarations(checkout, selected, repo)
+        if declaration_details["unresolved"]:
+            raise ValueError("Unresolved vLLM declaration: " + str(declaration_details["unresolved"][0]))
+        for axis, members in declaration_details["axes"].items():
+            rows = [row for row in declaration_details["declarations"] if row["axis"] == axis]
+            add(axis, repo + " source-declared " + axis, members, [row["source"] for row in rows])
+        used.update(declaration_details["sources"])
+    if repo in ("torchmetrics", "tensordict"):
+        exports = source.assignments(r"__all__")
+        if len(exports) != 1:
+            raise ValueError("Expected exactly one top-level public export registry")
+        path, name, node = exports[0]
+        for item in ast.walk(source.trees[path]):
+            if ((isinstance(item, ast.AugAssign) and isinstance(item.target, ast.Name)
+                 and item.target.id == "__all__")
+                    or (isinstance(item, ast.Assign) and any(isinstance(target, ast.Subscript)
+                        and isinstance(target.value, ast.Name) and target.value.id == "__all__"
+                        for target in item.targets))
+                    or (isinstance(item, ast.Call) and isinstance(item.func, ast.Attribute)
+                        and isinstance(item.func.value, ast.Name) and item.func.value.id == "__all__")):
+                raise ValueError("Public export mutation needs an explicit extractor")
+            if (isinstance(item, ast.Assign) and isinstance(item.value, ast.Name)
+                    and item.value.id == "__all__"):
+                raise ValueError("Public export alias needs an explicit extractor")
+        members = source.value(node)
+        if not isinstance(members, (list, tuple)):
+            raise ValueError("Public exports must be a literal list or tuple")
+        add("public_api", "top-level package " + name, members, [path])
     version = None
     for relative in files:
-        if relative.endswith(("/__init__.py", "/version.py", "/_version.py")):
+        if repo in ("vllm", "vllm-omni", "torchmetrics", "tensordict") and relative not in (
+                prefix + "__init__.py", prefix + "version.py", prefix + "_version.py", prefix + "__about__.py"):
+            continue
+        if (relative.endswith(("/__init__.py", "/version.py", "/_version.py"))
+                or (repo == "torchmetrics" and relative == prefix + "__about__.py")):
             tree = ast.parse((checkout / relative).read_text(encoding="utf-8"))
             for node in tree.body:
                 if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "__version__" for t in node.targets):
@@ -233,9 +390,66 @@ def inventory(repo, checkout):
     if repo == "verl" and (checkout / "verl/version/version").is_file():
         version = (checkout / "verl/version/version").read_text(encoding="utf-8").strip()
         used.add("verl/version/version")
-    return {"schema_version": 1, "repo": repo, "upstream": {"commit": commit, "remote": remote, "version": version},
+    if repo == "trellis" and version is None:
+        version = "source@" + commit
+    version_source = None
+    if repo in ("vllm", "vllm-omni", "torchmetrics", "tensordict") and version is None:
+        # Generated wheel versions are often absent from a source checkout.
+        # Only an exact release tag may name a release; a nearby/dev tag cannot.
+        tags = git(checkout, "tag", "--points-at", commit).splitlines()
+        releases = {tag.lstrip("v") for tag in tags if re.fullmatch(r"v?\d+\.\d+\.\d+", tag)}
+        if len(releases) > 1:
+            raise ValueError("Ambiguous exact upstream release tags")
+        version = next(iter(releases)) if releases else "source@" + commit
+        version_source = {"kind": "exact-release-tag" if releases else "source-commit",
+                          "tags": sorted(tags), "commit": commit}
+    result = {"schema_version": 1, "repo": repo, "upstream": {"commit": commit, "remote": remote, "version": version},
             "scope": "Source-declared registry members; no member is verified by enumeration.", "axes": axes,
             "sources": [{"path": path, "sha256": digest(checkout / path)} for path in sorted(used)]}
+    if repo == "flash-attention":
+        result["scope"] = ("All public top-level attention functions explicitly exported by flash_attn.__init__; "
+                           "not all internal APIs, features, shapes or dtypes. Enumeration verifies no member.")
+    if repo == "diffusers":
+        result["declaration_details"] = declaration_details
+        result["scope"] = ("Pipeline declaration axes and the independent complete models public-export axis; "
+                           "all optional branches are retained. A model component is never a pipeline numerator. "
+                           "Model exports include helpers and Flax APIs, not only trainable model classes.")
+    if repo in ("mmengine", "mmcv") and declaration_details is not None:
+        result["declaration_details"] = declaration_details
+        result["scope"] = ("Bounded source-declared OpenMMLab registry axes; all branches and optional/compiled "
+                           "modules are retained. Other registries are listed separately and have no denominator. "
+                           "Not whole-library coverage or installed runtime availability.")
+    if repo == "trellis":
+        result["declaration_details"] = declaration_details
+        result["scope"] = (declaration_details["scope"] + " Missing upstream definitions remain in the denominator. "
+                           "A source@SHA version identifies source without a published package version; "
+                           "it is not a semantic release version.")
+    if repo in ("vllm", "vllm-omni"):
+        result["declaration_details"] = declaration_details
+        result["scope"] = declaration_details["scope"]
+    if repo in ("torchmetrics", "tensordict"):
+        result["scope"] = ("All names declared in the top-level package __all__; a bounded public-API export axis, "
+                           "not a model-family or complete library denominator. Submodule-only APIs, class methods, "
+                           "task variants and optional dependency availability are outside this axis. "
+                           "A verified member covers only its recorded component scenario.")
+    # Registry/target hashes alone do not identify an installed package:
+    # imports outside the bounded registry still affect its computation.
+    result["package_sources"] = [{"path": path, "sha256": digest(checkout / path)}
+                                 for path in sorted(files)]
+    package_files = git(checkout, "ls-files", "--", prefix).splitlines()
+    result["package_files"] = [{"path": path, "sha256": digest(checkout / path)}
+                               for path in sorted(package_files)]
+    if repo in ("mmengine", "mmcv"):
+        from _distribution_names import setup_distribution_names
+        if git(checkout, 'ls-files', '--', 'setup.py').splitlines() != ['setup.py']:
+            raise ValueError('Distribution-name declaration must be tracked in the pinned source')
+        declaration = setup_distribution_names(checkout)
+        result["distribution_names"] = declaration
+        result["sources"].append(declaration["source"])
+        result["sources"].sort(key=lambda row: row["path"])
+    if version_source is not None:
+        result["upstream"]["version_source"] = version_source
+    return result
 
 
 def main():

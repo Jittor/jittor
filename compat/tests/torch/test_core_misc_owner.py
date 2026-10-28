@@ -13,6 +13,7 @@ import numpy as np
 #: the owner's object rather than wrapping it, and "one owner" still holds --
 #: this map only says which module that owner is.
 _FOREIGN_OWNERS = {
+    "default_generator": "jittor.compat.torch.generator",
     "clear_autocast_cache": "jittor.compat.torch.amp",
     "autocast_increment_nesting": "jittor.compat.torch.amp",
     "autocast_decrement_nesting": "jittor.compat.torch.amp",
@@ -93,11 +94,14 @@ class TestCoreMiscOwner(unittest.TestCase):
         try:
             torch.set_default_dtype(torch.float64)
             self.assertIs(torch.get_default_dtype(), torch.float64)
-            self.assertIs(torch.manual_seed(1729), torch)
+            self.assertIs(torch.manual_seed(1729), torch.default_generator)
             self.assertEqual(torch.initial_seed(), 1729)
-            self.assertEqual(int(torch.get_rng_state().numpy()[0]), 1729)
-            torch.set_rng_state(torch.tensor([42], dtype=torch.int64))
-            self.assertEqual(torch.random.initial_seed(), 42)
+            saved = torch.get_rng_state()
+            self.assertEqual(saved.dtype, torch.uint8)
+            self.assertEqual(saved.device.type, "cpu")
+            torch.manual_seed(42)
+            torch.set_rng_state(saved)
+            self.assertEqual(torch.random.initial_seed(), 1729)
             # The default device follows the runtime policy, which is what
             # the factories follow too: under use_cuda the tensors really do
             # land on the accelerator, so reporting "cpu" there would be a

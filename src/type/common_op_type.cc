@@ -28,6 +28,7 @@ unordered_map<string,string> common_op_type_cuda_map = {
     {"abs", "@if(@strcmp($1,float32)==0,::fabsf(($2)),@if(@strcmp($1,float64)==0,::fabs(($2)),::abs(($2))))"},
     {"conj", "($2)"},   // conj(real) is identity (torch parity)
     {"log", "@if(@strcmp($1,float32)==0,::logf(($1)($2)),::log(($1)($2)))"},
+    {"log1p", "@if(@strcmp($1,float32)==0,(($1)::log1pf(($1)($2))),(($1)::log1p(($1)($2))))"},
     {"exp", "@if(@strcmp($1,float32)==0,::expf(($1)($2)),::exp(($1)($2)))"},
     {"sqrt", "@if(@strcmp($1,float32)==0,::sqrtf(($1)($2)),::sqrt(($1)($2)))"},
     // numpy and torch round halves to even (round(0.5)==0, round(2.5)==2);
@@ -55,7 +56,10 @@ unordered_map<string,string> common_op_type_cuda_map = {
     {"atan", "@if(@strcmp($1,float32)==0,(($1) ::atanf(($2))),(($1) ::atan(($2))))"},
     {"tanh", "@if(@strcmp($1,float32)==0,(($1) ::tanhf(($2))),(($1) ::tanh(($2))))"},
     {"atanh", "@if(@strcmp($1,float32)==0,(($1) ::atanhf(($2))),(($1) ::atanh(($2))))"},
-    {"sigmoid", "(($1) (1.0f/(1.0f+::expf((::min($1(-($2)), $1(@if(@strcmp($1,float32)==0,30,300))))))))"},
+    // Double inputs must reach double exp; expf silently narrows their
+    // forward values and every derivative that reuses the sigmoid output.
+    // Do not clamp the negative tail: valid small results must stay small.
+    {"sigmoid", "(($1) (1.0f/(1.0f+@if(@strcmp($1,float64)==0,::exp,::expf)(-($1)($2)))))"},
     {"relu", "((($1)($2)>($1)(0.0f))?($1)($2):($1)(0.0f))"},
     {"erf", "@if(@strcmp($1,float32)==0,(($1) ::erff(($2))),(($1) ::erf(($2))))"},
     {"erfinv", "@if(@strcmp($1,float32)==0,(($1) ::erfinvf(($1)($2))),(($1) ::erfinv(($1)($2))))"},
@@ -105,6 +109,7 @@ struct CommonOpType : OpByType {
             {"abs", "std::abs($2)"},
             {"conj", "($2)"},   // conj(real) is identity (torch parity)
             {"log", "std::log(($1)($2))"},
+            {"log1p", "(($1)std::log1p(($1)($2)))"},
             {"exp", "std::exp(($1)($2))"},
             {"sqrt", "std::sqrt(($1)($2))"},
             // half-to-even, matching numpy/torch -- see the CUDA table.
@@ -129,7 +134,7 @@ struct CommonOpType : OpByType {
             {"atan", "(($1) std::atan(($2)))"},
             {"tanh", "(($1) std::tanh(($2)))"},
             {"atanh", "(($1) std::atanh(($2)))"},
-            {"sigmoid", "(($1) (1.0f/(1.0f+std::exp(std::min($1(-($2)), $1(@if(@strcmp($1,float32)==0,30,300)))))))"},
+            {"sigmoid", "(($1)(($1)(1)/(($1)(1)+std::exp(-($1)($2)))))"},
             {"relu", "((($1)($2)>($1)(0.0f))?($1)($2):($1)(0.0f))"},
             {"erf", "(($1) std::erf(($2)))"},
             {"erfinv", "(jittor::_erfinv($2))"},
@@ -191,6 +196,10 @@ struct CommonOpType : OpByType {
             {"init_bitwise_or", "$1(0)"},
             {"init_bitwise_xor", "$1(0)"},
             {"init_mean", "$1(0)"},
+            // Bit tests, not float comparisons: see type/fp_class_compute.h.
+            {"isnan", "jittor::_fp_isnan($2)"},
+            {"isinf", "jittor::_fp_isinf($2)"},
+            {"isfinite", "jittor::_fp_isfinite($2)"},
         };
 
         // `find`, not `operator[]`: these are static lookup tables and a miss
@@ -238,6 +247,9 @@ struct CommonOpType : OpByType {
              src.find("jittor::_min") != string::npos) &&
             src.find("type/minmax_compute.h") == string::npos)
             includes += "#include \"type/minmax_compute.h\"\n";
+        if (src.find("jittor::_fp_is") != string::npos &&
+            src.find("type/fp_class_compute.h") == string::npos)
+            includes += "#include \"type/fp_class_compute.h\"\n";
         if (includes.empty()) return;
         int i = src.rfind("#include");
         if (i<0) i=0;

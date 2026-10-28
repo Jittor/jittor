@@ -118,7 +118,7 @@ def compare_parameters(m1, m2):
 
 class TestDepthwiseConv(unittest.TestCase):
     @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "Cuda not found")
-    @jt.flag_scope(use_cuda=1)
+    @jt.flag_scope(use_cuda=1, float32_cudnn_precision="highest")
     def test_data(self):
         test_img = np.random.random((64,3,224,224)).astype('float32')
         jittor_test_img = jt.array(test_img)

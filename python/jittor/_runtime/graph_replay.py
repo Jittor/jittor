@@ -17,8 +17,8 @@ rather than used:
 
   - the arguments' shapes, dtypes and count,
   - whether the module is in training mode,
-  - whether any parameter has been rebound (an optimizer step, a load, a
-    device move) -- the graph reads the parameter Vars it captured, and an
+  - whether any parameter or registered buffer has been rebound (an optimizer
+    step, a load, a device move) -- the graph reads the Vars it captured, and an
     update replaces them, so it would otherwise quietly answer with the old
     weights,
   - whether the captured graph is still unfinished. This is the one that
@@ -100,9 +100,10 @@ many fell back and why -- because a silent fallback that quietly costs the
 speedup is worse than none.
 """
 
-from contextlib import nullcontext as _nullcontext
+from contextlib import contextmanager, nullcontext as _nullcontext
 import copy as _copy
 import dataclasses as _dataclasses
+import threading
 import time
 import weakref
 
@@ -122,6 +123,27 @@ _RERECORD_LIMIT = 8
 #: replays the values it recorded, so a graph containing one of these is not
 #: re-runnable at all and capture refuses rather than repeating a draw.
 _NONDETERMINISTIC_OPS = ("random", "curand_random")
+
+
+_capture_state = threading.local()
+
+
+def graph_replay_barrier(reason):
+    """Refuse replay capture containing an opaque operation or foreign write."""
+    for reasons in getattr(_capture_state, "stack", ()):
+        if not reasons:
+            reasons.append(str(reason))
+
+
+@contextmanager
+def _capture_barriers():
+    previous = getattr(_capture_state, "stack", ())
+    reasons = []
+    _capture_state.stack = previous + (reasons,)
+    try:
+        yield reasons
+    finally:
+        _capture_state.stack = previous
 
 
 class _no_auto:
@@ -352,6 +374,26 @@ def _training(module):
     return bool(getattr(module, "training", False))
 
 
+def _module_vars(module):
+    """Parameter and registered-buffer holders, including child modules.
+
+    A holder shared by the two views is guarded once. Distinct holders can
+    point at the same Var and later be rebound independently, so deduplicate
+    by holder identity rather than ``var_ptr``.
+    """
+    parameters = getattr(module, "parameters", None)
+    leaves = list(parameters()) if callable(parameters) else []
+    buffers = getattr(module, "named_buffers", None)
+    if callable(buffers):
+        leaves.extend(v for _, v in buffers(recurse=True))
+    seen, result = set(), []
+    for leaf in leaves:
+        if id(leaf) not in seen:
+            seen.add(id(leaf))
+            result.append(leaf)
+    return result
+
+
 def _sync_result(output):
     """Finish whatever a module returned, whatever its structure.
 
@@ -482,8 +524,7 @@ class GraphReplay:
 
     # -- capture -------------------------------------------------------
     def _params(self):
-        params = getattr(self._module, "parameters", None)
-        return list(params()) if callable(params) else []
+        return _module_vars(self._module)
 
     def _capture_now(self, args, kwargs=None):
         kwargs = kwargs or {}
@@ -531,8 +572,11 @@ class GraphReplay:
         readbacks = _core._host_readback_count()
         _TRACING[0] += 1
         try:
-            with _no_auto(), jt.no_grad():
+            with _capture_barriers() as barriers, _no_auto(), jt.no_grad():
                 output = self._module(*private_args, **private_kwargs)
+                if barriers:
+                    self._refused = "the traced call contains an opaque operation: " + barriers[0]
+                    return None
                 if _core._host_readback_count() != readbacks:
                     self._refused = ("the traced call read a value back to the host, so its "
                                      "path depends on tensor values and cannot be replayed")
@@ -603,7 +647,7 @@ class GraphReplay:
             return "the module changed training mode"
         for holder, ptr in cap.params:
             if holder.var_ptr != ptr:
-                return "a parameter was replaced since the graph was captured"
+                return "a parameter or buffer was replaced since the graph was captured"
         return None
 
     # -- is it actually faster? ----------------------------------------
@@ -848,6 +892,9 @@ class GraphReplay:
             return self._module(*args, **kwargs)
 
     def __call__(self, *args, **kwargs):
+        # The outer device capture owns ordinary lazy operators for this call.
+        if _core.graph_capture_active():
+            return self._eager(args, kwargs)
         if self._refused is not None:
             return self._eager(args, kwargs)
 
@@ -1149,7 +1196,7 @@ _HOST_STATE_LIMIT = 4096
 
 class _AutoState:
     __slots__ = ("signature", "seen", "replay", "recaptures", "give_up",
-                 "entries", "unstable", "previous")
+                 "entries", "unstable", "previous", "retain_bytes")
 
     def __init__(self):
         self.signature = None
@@ -1162,6 +1209,7 @@ class _AutoState:
         self.unstable = 0
         # The signature of the last call that passed objects.
         self.previous = None
+        self.retain_bytes = None
 
 
 def _element_size(dtype):
@@ -1312,6 +1360,8 @@ _MISSING = object()
 def auto_replay_for(module, args, kw):
     """The GraphReplay to use for this call, or None to run normally."""
     flags = jt.flags
+    if _core.graph_capture_active():
+        return None
     if not flags.auto_graph_replay or not flags.no_grad:
         return None
     # PEFT switches LoRA layers on and off in-place for reference-model
@@ -1333,6 +1383,20 @@ def auto_replay_for(module, args, kw):
         state = module.__dict__["_auto_graph_replay"] = _AutoState()
     if state.give_up:
         return None
+    retain_bytes = flags.auto_graph_replay_retain_bytes
+    if state.retain_bytes != retain_bytes:
+        # A runtime scope must also constrain graphs captured before it.
+        # Release every signature's recording through its existing owner;
+        # replacing the budget on a wrapper would leave fixed buffers alive.
+        if state.replay is not None:
+            state.replay.invalidate()
+            state.replay = None
+        for entry in state.entries.values():
+            if entry.step is not None:
+                entry.step.invalidate()
+        state.entries.clear()
+        state.previous = None
+        state.retain_bytes = retain_bytes
     if nbytes > flags.auto_graph_replay_bytes:
         return None
     if objects:
@@ -1357,7 +1421,7 @@ def auto_replay_for(module, args, kw):
         # the shape of step where replay wins.
         state.replay = GraphReplay(
             module, measure=False, weak=True,
-            max_retained_bytes=flags.auto_graph_replay_retain_bytes)
+            max_retained_bytes=retain_bytes)
     if state.replay.refused is not None:
         state.give_up = True
         state.replay = None

@@ -15,7 +15,7 @@ namespace jittor {
 struct MklMatmulOp : Op {
     Var* a, * b, * c;
     bool trans_a, trans_b;
-    MklMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b);
+    MklMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b, bool fp32_output=false);
     
     const char* name() const override { return "mkl_matmul"; }
     VarPtr grad(Var* out, Var* dout, Var* v, int v_index) override;

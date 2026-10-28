@@ -71,6 +71,30 @@ class _ConvParity:
     def setUp(self):
         self.rng = np.random.default_rng(20260903)
 
+    def test_conv1d_spatial_sequences_match_numpy(self):
+        # Even kernels with dilation must retain asymmetric 'same' padding.
+        x = self.rng.standard_normal((2, 2, 11)).astype("float32")
+        for sequence in (tuple, list):
+            for padding in (sequence([2]), "same"):
+                with self.subTest(sequence=sequence, padding=padding):
+                    with jt.flag_scope(use_cuda=self.use_cuda):
+                        layer = jt.nn.Conv1d(2, 3, sequence([4]), stride=sequence([1]),
+                                             padding=padding, dilation=sequence([3]))
+                        actual = layer(jt.array(x)).numpy()
+                        weight, bias = layer.weight.numpy(), layer.bias.numpy()
+                    pads = _same_pads((4,), (3,)) if padding == "same" else [(2, 2)]
+                    expected = _numpy_conv(x, weight, bias, pads, "zeros", (3,), 1)
+                    np.testing.assert_allclose(actual, expected, atol=2e-5, rtol=2e-5)
+
+    def test_conv1d_rejects_non_singleton_spatial_sequences(self):
+        for name in ("kernel_size", "stride", "padding", "dilation"):
+            for value in ([], [1, 2], (), (1, 2)):
+                options = dict(kernel_size=3, stride=1, padding=0, dilation=1)
+                options[name] = value
+                with self.subTest(name=name, value=value):
+                    with self.assertRaisesRegex(ValueError, "one-element sequence"):
+                        jt.nn.Conv1d(2, 3, **options)
+
     def _layer_and_input(self, in_channels, out_channels, groups, **kwargs):
         with jt.flag_scope(use_cuda=self.use_cuda):
             layer = jt.nn.Conv2d(in_channels, out_channels, 3, groups=groups,
@@ -277,7 +301,7 @@ class TestCudaGradientReproducibility(unittest.TestCase):
         x = rng.standard_normal((2, in_ch, 9, 10)).astype("float32")
         w = rng.standard_normal((out_ch, in_ch // groups, 3, 3)).astype("float32")
         runs = []
-        with jt.flag_scope(use_cuda=1):
+        with jt.flag_scope(use_cuda=1, float32_cudnn_precision="highest"):
             seed = None
             for _ in range(5):
                 xv, wv = jt.array(x), jt.array(w)

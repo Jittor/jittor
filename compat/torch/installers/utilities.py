@@ -1,4 +1,5 @@
 """Module-level utility APIs; installation only publishes their namespace."""
+from collections import OrderedDict, defaultdict
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import jittor as jt
@@ -98,8 +99,25 @@ def _utilities_context():
     return get_install_context(jt)
 
 
+def _has_triton_package():
+    """Whether the real Triton compiler is available to Jittor's bridge."""
+    from jittor.compat.triton.backend import real_triton
+
+    return real_triton() is not None
+
+
+def _has_triton():
+    """Whether that compiler can launch through Jittor on this CUDA host."""
+    from jittor.compat.triton.backend import is_available
+
+    return is_available()
+
+
 class _NodeDef:
-    pass
+    def __init__(self, flatten_fn, unflatten_fn, flatten_with_keys_fn=None):
+        self.flatten_fn = flatten_fn
+        self.unflatten_fn = unflatten_fn
+        self.flatten_with_keys_fn = flatten_with_keys_fn
 
 
 class FakeTensor:
@@ -305,6 +323,8 @@ class MappingKey:
         return isinstance(other, MappingKey) and self.key == other.key
     def __repr__(self):
         return f"[{self.key!r}]"
+    def get(self, parent):
+        return parent[self.key]
 
 
 class SequenceKey:
@@ -316,6 +336,8 @@ class SequenceKey:
         return isinstance(other, SequenceKey) and self.idx == other.idx
     def __repr__(self):
         return f"[{self.idx}]"
+    def get(self, parent):
+        return parent[self.idx]
 
 
 class GetAttrKey:
@@ -327,6 +349,8 @@ class GetAttrKey:
         return isinstance(other, GetAttrKey) and self.name == other.name
     def __repr__(self):
         return "." + str(self.name)
+    def get(self, parent):
+        return getattr(parent, self.name)
 
 
 def _list_flatten(x):
@@ -338,7 +362,7 @@ def _list_unflatten(values, context):
 
 
 def _list_flatten_with_keys(x):
-    return [(i, v) for i, v in enumerate(x)], None
+    return [(SequenceKey(i), v) for i, v in enumerate(x)], None
 
 
 def _tuple_flatten(x):
@@ -350,12 +374,37 @@ def _dict_flatten(x):
     return [x[k] for k in keys], keys
 
 
+def _dict_flatten_with_keys(x):
+    return [(MappingKey(k), v) for k, v in x.items()], list(x)
+
+
 def _dict_unflatten(values, context):
-    return {k: v for k, v in zip(context, values)}
+    return dict(zip(context, values))
+
+
+def _tuple_unflatten(values, context):
+    return tuple(values)
+
+
+def _ordereddict_unflatten(values, context):
+    return OrderedDict(zip(context, values))
+
+
+def _defaultdict_flatten(x):
+    return list(x.values()), (x.default_factory, list(x))
+
+
+def _defaultdict_flatten_with_keys(x):
+    return [(MappingKey(k), v) for k, v in x.items()], (x.default_factory, list(x))
+
+
+def _defaultdict_unflatten(values, context):
+    factory, keys = context
+    return defaultdict(factory, zip(keys, values))
 
 
 def _get_node_type(x):
-    return dict if isinstance(x, dict) else type(x)
+    return type(x)
 
 
 def _tree_flatten(x):
@@ -372,17 +421,45 @@ def _tree_flatten(x):
 
 
 def _tree_unflatten(leaves, spec):
-    it = iter(leaves)
+    values = list(leaves)
+    position = 0
+    nodes = _utilities_context().state["pytree_nodes"]
+
     def rec(s):
+        nonlocal position
         if isinstance(s, LeafSpec):
-            return next(it)
+            if position == len(values):
+                raise ValueError("Too few leaves for the TreeSpec")
+            value = values[position]
+            position += 1
+            return value
         children = [rec(c) for c in s.children_specs]
-        if s.type is tuple:
-            return tuple(children)
-        if s.type is dict:
-            return {k: v for k, v in zip(s.context, children)}
-        return list(children)
-    return rec(spec)
+        return nodes[s.type].unflatten_fn(children, s.context)
+
+    result = rec(spec)
+    if position != len(values):
+        raise ValueError("Too many leaves for the TreeSpec")
+    return result
+
+
+def _tree_flatten_with_path(tree):
+    nodes = _utilities_context().state["pytree_nodes"]
+    leaves = []
+
+    def rec(value, path):
+        node_type = _get_node_type(value)
+        if node_type not in nodes:
+            leaves.append((path, value))
+            return LeafSpec()
+        node = nodes[node_type]
+        if node.flatten_with_keys_fn is None:
+            raise ValueError("No flatten_with_keys_fn registered for " + str(node_type))
+        children, context = node.flatten_with_keys_fn(value)
+        specs = [rec(child, path + (key,)) for key, child in children]
+        return TreeSpec(node_type, context, specs)
+
+    spec = rec(tree, ())
+    return leaves, spec
 
 
 def _tree_map(f, x, *rests):
@@ -506,12 +583,28 @@ def _api_pytree_tree_leaves(x):
     return _tree_flatten(x)[0]
 
 
-def _api_pytree_register_pytree_node(*a, **k):
-    return None
+def _api_pytree_register_pytree_node(
+        cls, flatten_fn, unflatten_fn, *, serialized_type_name=None,
+        to_dumpable_context=None, from_dumpable_context=None,
+        flatten_with_keys_fn=None):
+    nodes = _utilities_context().state["pytree_nodes"]
+    if cls in nodes:
+        raise ValueError(str(cls) + " is already registered as a pytree node")
+    if not callable(flatten_fn) or not callable(unflatten_fn):
+        raise TypeError("Pytree flatten and unflatten functions must be callable")
+    if (to_dumpable_context is None) != (from_dumpable_context is None):
+        raise ValueError("Both context serialization callbacks must be provided together")
+    node = _NodeDef(flatten_fn, unflatten_fn, flatten_with_keys_fn)
+    # Keep the declared serialization identity with the node. TreeSpec JSON
+    # serialization is a separate API and is not provided by this frontend.
+    node.serialized_type_name = serialized_type_name
+    node.to_dumpable_context = to_dumpable_context
+    node.from_dumpable_context = from_dumpable_context
+    nodes[cls] = node
 
 
-def _api_pytree__register_pytree_node(*a, **k):
-    return None
+def _api_pytree__register_pytree_node(*args, **kwargs):
+    return _api_pytree_register_pytree_node(*args, **kwargs)
 
 
 def _api_fake_tensor_unset_fake_temporarily():
@@ -574,7 +667,7 @@ def _api_g_set_num_interop_threads(*args, **kwargs):
 
 _UTILITY_PLACEHOLDERS = frozenset((
     FakeTensor, FakeTensorMode, FunctionalTensor, TorchDispatchMode,
-    FlopCounterMode, _api_pytree_register_pytree_node, _api_pytree__register_pytree_node,
+    FlopCounterMode,
     _api_fake_tensor_unset_fake_temporarily, _api_python_dispatch__get_current_dispatch_mode,
     _api_g_set_num_threads, _api_g_set_num_interop_threads,
     _dlpack_not_implemented, load_url,
@@ -740,18 +833,26 @@ def install(ctx):
     g.utils.__path__ = []
     g.utils.__package__ = "torch"
     _modules["torch.utils"] = g.utils
+    # Optional libraries query this public Torch helper before choosing their
+    # Triton kernels. Ask the existing real compiler/launcher bridge lazily;
+    # merely importing torch.utils must not initialize a device or Triton.
+    if "torch.utils._triton" not in _modules:
+        _triton = _types2.ModuleType("torch.utils._triton")
+        _triton.has_triton_package = _has_triton_package
+        _triton.has_triton = _has_triton
+        _modules["torch.utils._triton"] = _triton
+    g.utils._triton = _modules["torch.utils._triton"]
     if "torch.utils.tensorboard" in _modules:
         g.utils.tensorboard = _modules["torch.utils.tensorboard"]
     if "torch.utils._pytree" not in _modules:
         _pytree = _types2.ModuleType("torch.utils._pytree")
         SUPPORTED_NODES = {
-            list: _NodeDef(),
-            tuple: _NodeDef(),
-            dict: _NodeDef(),
+            list: _NodeDef(_list_flatten, _list_unflatten, _list_flatten_with_keys),
+            tuple: _NodeDef(_tuple_flatten, _tuple_unflatten, _list_flatten_with_keys),
+            dict: _NodeDef(_dict_flatten, _dict_unflatten, _dict_flatten_with_keys),
+            OrderedDict: _NodeDef(_dict_flatten, _ordereddict_unflatten, _dict_flatten_with_keys),
+            defaultdict: _NodeDef(_defaultdict_flatten, _defaultdict_unflatten, _defaultdict_flatten_with_keys),
         }
-        SUPPORTED_NODES[list].flatten_fn = _list_flatten
-        SUPPORTED_NODES[tuple].flatten_fn = _tuple_flatten
-        SUPPORTED_NODES[dict].flatten_fn = _dict_flatten
         ctx.state["pytree_nodes"] = SUPPORTED_NODES
         _pytree.SUPPORTED_NODES = SUPPORTED_NODES
         _pytree.LeafSpec = LeafSpec
@@ -769,8 +870,10 @@ def install(ctx):
         _pytree._list_unflatten = _list_unflatten
         _pytree._list_flatten_with_keys = _list_flatten_with_keys
         _pytree._dict_flatten = _dict_flatten
+        _pytree._dict_flatten_with_keys = _dict_flatten_with_keys
         _pytree._dict_unflatten = _dict_unflatten
         _pytree.tree_flatten = _tree_flatten
+        _pytree.tree_flatten_with_path = _tree_flatten_with_path
         _pytree.tree_unflatten = _tree_unflatten
 
 

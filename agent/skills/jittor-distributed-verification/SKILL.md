@@ -9,6 +9,50 @@ description: 在单机上验证 Jittor 分布式改动（MPI / NCCL 集合通信
 分布式验证全是多进程，每个 rank 各自 `import jittor`，PYTHONPATH 错了就是每个 rank 都在
 测主树。
 
+## 固定节点 launcher 控制面
+
+公开 `jtrun` / `python -m jittor.distributed.launch` 的固定节点参数与边界见
+[原生分布式指南](../../../docs/guides/distributed-training.md)。Linux/NCCL 多节点模式
+使用 launcher agent 持有的原生 TCPStore 交换 WORLD/subgroup unique id，并在节点间
+转发退出与心跳；root-info 心跳文件只属于本节点。各节点必须使用相同的节点数、本地进程数、
+job id 和 master endpoint。所有 WORLD rank 以相同顺序创建 subgroup。
+
+`tests/distributed/test_multinode_launch.py` 在 loopback 上实际启动多个公开 launcher，
+验证全局 rank、错误配置、worker/agent 退出、过期心跳及 Store 隔离；该 host 测试显式
+stub GPU discovery，不能证明任何 CUDA 或多主机执行。真实双卡通过相同入口运行
+`tests/backends/comm/nccl/test_launcher_store_groups.py` 和
+`tests/backends/comm/nccl/test_native_collectives.py`，多 agent 模式额外设置
+`JITTOR_REQUIRE_MULTINODE_CONTROL=1`。原有单 agent 路径运行同一数值节点，排除仅针对
+外部 Store 的 `test_group_order_mismatch_refuses_before_nccl_init`。先串行预热每个 rank 的
+独立 HOME/JITTOR_HOME/TMPDIR，再运行双 rank；单 rank import 不会自动加载 NCCL，
+须通过 `get_library('nccl', load=True)` 显式加载，并真正执行 `nccl_ops`，避免公共
+world-size-one 恒等捷径掩盖未加载的通信库。
+
+训练验收复用下文 Native FSDP 的独立 Torch oracle、固定预算与三次 fresh launcher，
+记录 producer/consumer 的实际 worker/agent PID、源码 SHA 和 rank 环境。两个 agent
+在同一主机上执行，仅证明协议与设备正确性；真实多主机的网络、故障、训练及恢复仍需另验。
+控制面不会传输 checkpoint 文件，也不改变其共享文件路径要求。
+
+[`recheck_native_fsdp.py`](recheck_native_fsdp.py) 只用 NumPy 重算原始证据：先验证完整
+raw 文件绑定及测量源码身份，再校验每步全部参数/input gradients/moments、原独立
+dense Torch 数值预算与 update 预算，以及新 worker 恢复后的两步完整数组（含四类 RNG
+后续抽样和 dropout）。它检查完整参数清单，拒绝漏梯度、错误 compute dtype、共用 rank
+缓存、同 PID 假恢复和未绑定的文件；不导入 Torch/Jittor，也不重新执行 GPU 计算。
+
+```bash
+RAW="$JITTOR_LAB_ROOT/_state/native-multihost/<run>"
+<numpy-python> agent/skills/jittor-distributed-verification/recheck_native_fsdp.py \
+  --bindings "$RAW/raw-bindings-<measurement>.json" \
+  --source-manifest "$RAW/source-<measurement>.json" \
+  --expected-source "<measured-full-SHA>" --source-root "$PWD" \
+  --results "$RAW/cuda-unit/fsdp-results" \
+  --oracle "$RAW/cuda-unit/oracle-results" \
+  --identities "$RAW/cuda-unit/worker-identities"
+```
+
+当前验证 checkout 的 fixture 必须与历史测量的源码哈希相同。保留历史 source SHA、原始
+文件与失败日志；不能用今天安装的依赖或代码为历史结果补写身份字段。
+
 ## 第 0 步：先确认能验证什么
 
 按顺序问三件事，别跳。
@@ -44,6 +88,41 @@ python -c "import jittor as jt; print('has_mpi', jt.compile_extern.has_mpi)"
 没有硬件时不要假装验证过。结论写「未验证」比写一个跑不到的测试诚实。
 
 ## MPI：多进程真跑（最有价值的一档）
+
+### 独立 Torch 的通信与 storage 对拍
+
+[`collective_oracle.py`](collective_oracle.py) 在两个真实 rank 上执行同一组公开
+Torch API：BF16 原始位 broadcast/gather、uint8/FP32/BF16 SUM/MAX/MIN/PRODUCT、
+BF16 舍入及可微 SUM，并检查 Parameter/data/detach/view 的原位写回关系。
+`--runtime jittor` 先导入 native，再启用 facade；`--runtime torch` 要求独立 binary
+Torch，拒绝 shim。CPU 候选使用真实 MPI，参考使用 Gloo；CUDA 两端均使用 NCCL。
+这些 transport 必须分别报告，MPI 对拍不能授予 native Gloo 能力。
+
+先按上述 worktree/cache 规则串行预热两个候选 rank，再由任务独占的 rank 环境包装器
+启动；包装器分别设置 HOME、JITTOR_HOME、TMPDIR，并固定本 worktree 的 PYTHONPATH。
+每个 runtime/device 使用新的仓外目录，同一组的两个 rank 共享该目录与 bootstrap
+控制面。脚本先独占创建每 rank claim 文件，失败记录也不能覆盖。CPU MPI 示例：
+
+```bash
+mpirun -n 2 <private-rank-environment> <jittor-python> \
+  agent/skills/jittor-distributed-verification/collective_oracle.py \
+  --runtime jittor --device cpu --root "$JITTOR_LAB_ROOT/_state/collectives/<new-mpi-run>"
+```
+
+参考环境通过真正的两 rank launcher 设置 RANK/WORLD_SIZE/LOCAL_RANK，执行同一脚本的
+`--runtime torch`；CUDA 用两张已分配设备及 `--device cuda`。每 rank 输出 NPZ
+及 JSON 身份记录；逐项比较全部数值字段，metadata 分开核对。真实 residency 与候选
+fallback 增量零必须通过。该脚本只证明列出的通信契约，不证明 DeepSpeed 训练数值。
+
+CUDA 候选的正式入口使用公开 `jtrun`（`python -m jittor.distributed.launch` 是同一
+owner 的等价入口）。任务的 rank 包装器只负责按 launcher 给出的 `RANK` 选择独立
+缓存，rank、设备和 rendezvous 由 `jtrun` 提供；预热缓存索引不得伪装成分布式 rank。
+当前 `jtrun` 仅支持 NCCL/HCCL，CPU 的 `mpirun` 结果只验证保留的 MPI 后端，不能
+写成 CPU `jtrun` 已验收。私有双进程 launcher 的旧记录也不得重标为 `jtrun` 运行。
+
+原生 MPI 的分组/梯度与 dtype 回归位于
+`tests/backends/comm/mpi/test_mpi_bfloat16_groups.py`，要求实际 CPU 两 rank，
+包括逆序 group root、独立 communicator、BF16 reduce/mean 及非 SUM 的 autograd 拒绝。
 
 仓库里已有的入口模式：测试文件里放两个类，一个 `@unittest.skipIf(not jt.in_mpi, ...)`
 装真正的断言，另一个调 `run_mpi_test(N, "<name>")` 负责用 mpirun 把自己再拉起来。
@@ -512,3 +591,121 @@ with scope: assertFalse(三份)                                                #
   想同时验证 MPI 和 NCCL，必须分两次跑，不能塞进同一个进程。
 - **`mpirun` 会重置环境**：验证用的所有变量都要通过 `mpirun` 之前的 env 传进去，
   确认每个 rank 日志里的 `cache_path:` 指向自己的 `JITTOR_HOME`。
+
+## Native FSDP: independent oracle and fresh-launch continuation
+
+### Two-host maintained entry
+
+[`run_native_multinode.py`](run_native_multinode.py) runs the existing protocol
+with **two nodes, exactly one allocated CUDA device per node**. It neither
+connects to hosts nor transfers files. Both hosts need the same clean Git SHA,
+native and independent binary Torch interpreters, and an actually shared output
+filesystem. Checkpoint transport and other world sizes are outside this entry.
+
+On each host, set its real local paths and device allocation. `NODE_RANK` is
+zero or one; `MASTER_ADDR` is the reachable node-zero address. `PRIVATE_STATE`
+is local cache storage, outside both the checkout and `SHARED_OUTPUT`. Identical
+local paths and device ordinal zero on different hosts are valid. Host identity
+is sampled by the worker, never supplied by a CLI flag.
+
+```bash
+<runner-python> agent/skills/jittor-distributed-verification/run_native_multinode.py \
+  --stage warm --source-root "$PWD" --source-sha "$SOURCE_SHA" \
+  --python "$NATIVE_PYTHON" --oracle-python "$REAL_TORCH_PYTHON" --nvcc "$NVCC" \
+  --node-rank "$NODE_RANK" --master-addr "$MASTER_ADDR" --master-port "$MASTER_PORT" \
+  --job-id "$JOB_ID" --device-id "$LOCAL_DEVICE" \
+  --state-root "$PRIVATE_STATE" --shared-output "$SHARED_OUTPUT"
+```
+
+Repeat this **same command on both hosts**, changing `--stage` in this order:
+`warm`, `collectives`, `parity`, `baseline`, `resume`. Before parity, node zero
+also runs `--stage oracle`; it generates all four unchanged dense references.
+Wait for both nodes to finish each distributed stage before starting the next.
+Warm uses public singleton jtrun with actual rank zero/world one, private local
+rendezvous, and the same cache as that node's later worker; serial JIT is not
+represented as distributed rank initialization. Do not overlap the two warm
+commands if the nodes are being simulated on one physical host.
+
+Each training stage creates a fresh public `python -m jittor.distributed.launch`
+agent and worker, invokes the maintained pytest node, requires actual execution,
+and retains the existing numerical budgets. Fresh resume requires new workers,
+models and optimizers. Failed/partial commands keep their claims and logs;
+rerunning into the same output is refused. Use new output for a new source
+commit or run. A node's private unit cache can persist with normal compiler
+fingerprints, but must never be used concurrently or shared with a benchmark.
+Neither existing results nor failures are overwritten.
+
+After all stages finish on both nodes, node zero runs `--stage seal` with the
+same arguments. It requires all actual node/oracle records, binds raw bytes,
+then invokes the independent NumPy rechecker. `verification.json` is written
+only after that recheck succeeds. Source snapshots include every tracked regular
+file and Git symlink target text. Environment records use a strict allowlist;
+they never dump the full inherited process environment.
+
+`--stage plan` is a real host preflight with no CUDA/connectivity claim and no
+artifact creation. `nox -s native_multinode -- <the same runner arguments>` is
+the thin maintained session. Loopback or two different hostnames alone cannot
+prove physical multi-host execution: retain external topology/network evidence
+and the actual per-host commands before claiming that separate acceptance.
+
+Native FSDP owns actual local parameters; its shared storage/reduce-scatter
+implementation also serves the Torch frontend. Its initial acceptance scope is
+CUDA/NCCL WORLD with fixed world size, FP32 master parameters and optional BF16
+forward computation with FP32 gradient reduction. This does not establish peak
+memory savings, throughput, another backend or world-size migration.
+
+Generate references with an independent binary Torch interpreter. The tool
+imports only the NumPy fixture before calling real Torch; it refuses the shim:
+
+```bash
+<real-torch-python> agent/skills/jittor-distributed-verification/native_fsdp_oracle.py \
+  --source-root "$PWD" --device cuda --kind sgd --dtype float32 \
+  --output-dir "$JITTOR_LAB_ROOT/_state/native-fsdp/oracle"
+```
+
+Generate both `sgd`/`adamw` and `float32`/`bfloat16` references. Run
+`tests/backends/comm/nccl/test_native_fsdp_nccl.py` through the native launcher
+on two actual GPUs, using separate prewarmed `JITTOR_HOME` values per rank.
+Set `JITTOR_REQUIRE_NATIVE_FSDP=1`, `JITTOR_NATIVE_FSDP_TEST_DIR` to a shared
+artifact directory, and `JITTOR_NATIVE_FSDP_ORACLE_DIR` to those references.
+Use three **separate launcher invocations**, with
+`JITTOR_NATIVE_FSDP_PHASE=parity`, then `baseline`, then `resume`. The baseline
+saves after step three and continues two steps with actual dropout; the fresh
+resume process must reproduce both subsequent steps and every rank's Python,
+NumPy, native CPU and CUDA RNG arrays exactly. All runs forbid backend fallback
+and prove device pointers and actual compute/collective dtypes. A host-resident
+collective input may be uploaded only if that same Var was explicitly read back
+by the trace beforehand; arithmetic and collective outputs must already reside
+on CUDA before any pointer request.
+
+The oracle protocol is fixed before measurement: exact shape and finite checks;
+elementwise FP32 `atol=2e-6, rtol=2e-5` or BF16 `atol=4e-4, rtol=3e-2`;
+per-parameter update L2 error at most `2e-6 + 2e-5 * oracle_norm` (FP32) or
+`1e-6 + 0.03 * oracle_norm` (BF16). Each update must exceed ten absolute
+floors to be informative. Every actual parameter/step also injects a zero
+gradient and zero update and requires rejection. Per-step norms, errors and
+budgets are saved beside the raw tensors. Elementwise absolute tolerance can
+permit a large relative error on a tiny gradient: report that error explicitly
+instead of calling a passing BF16 comparison exact gradient agreement. Effective
+native matmul/cuDNN precision must both be `highest`, and the independent Torch
+reference disables TF32 with `highest` precision.
+
+For a low-precision residual, independently calibrate the same fixture with
+real Torch FSDP2 before assigning the difference to distributed rounding:
+
+```bash
+<real-torch-python> -m torch.distributed.run --standalone --nproc_per_node=2 \
+  agent/skills/jittor-distributed-verification/native_fsdp_torch_calibration.py \
+  --source-root "$PWD" \
+  --output-dir "$JITTOR_LAB_ROOT/_state/native-fsdp/calibration"
+```
+
+This tool uses actual Torch FSDP2/DTensor with BF16 parameters, FP32 reduction
+and FP32 outputs and records both real ranks' five-step tensors and source
+hashes. Keep this calibration beside the dense oracle. Identify the first
+layer/output/gradient difference with fixed oracle weights; preserve the
+original thresholds and earlier raw tensors. Check first and second derivatives
+on each real device when repairing a core differentiation rule. CPU and CUDA
+low-precision kernels can have different rounding boundaries. The
+[saved-output tanh verification](../../../docs/results/2026-10-15-tanh-fsdp-bfloat16.md)
+records this method and the fixed-input BF16 FSDP repair.

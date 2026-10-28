@@ -16,6 +16,7 @@ import os
 import subprocess
 import sys
 import unittest
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -216,6 +217,22 @@ def run():
         opt.zero_grad(); loss.backward(); opt.step()
         yield
 """,
+    # `b` is not in the first loss: torch leaves its .grad None and skips it
+    # -- no weight decay, no buffer -- so its buffer starts at step 2 from
+    # the raw gradient. jittor used to seed it from a stand-in zero gradient.
+    "absent_from_first_loss": """
+a = torch.tensor([1.0], requires_grad=True)
+b = torch.tensor([1.0], requires_grad=True)
+params = [a, b]
+opt = torch.optim.SGD(params, lr=0.1, momentum=0.8, dampening=0.2, weight_decay=0.1)
+def run():
+    for i in range(3):
+        loss = (a * 2.0).sum()
+        if i >= 1:
+            loss = loss + (b * 2.0).sum()
+        opt.zero_grad(); loss.backward(); opt.step()
+        yield
+""",
 }
 
 
@@ -228,6 +245,22 @@ def _jittor_first_touch(case, fused):
         for mom in (0.0, 0.8, 0.8, 0.8):
             opt.param_groups[0]["momentum"] = mom
             opt.step((p * 2.0).sum())
+            rows.append(_jittor_row(params, opt))
+        return rows
+    if case == "absent_from_first_loss":
+        a, b = jt.array([1.0]), jt.array([1.0])
+        params = [a, b]
+        opt = jt.optim.SGD(params, lr=0.1, momentum=0.8, dampening=0.2,
+                           weight_decay=0.1, fused=fused)
+        rows = []
+        for i in range(3):
+            loss = (a * 2.0).sum()
+            if i >= 1:
+                loss = loss + (b * 2.0).sum()
+            with warnings.catch_warnings():
+                # The optimizer reports that `b` receives no gradient.
+                warnings.simplefilter("ignore")
+                opt.step(loss)
             rows.append(_jittor_row(params, opt))
         return rows
     a = jt.array([1.0, -1.0])

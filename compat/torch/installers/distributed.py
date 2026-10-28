@@ -15,6 +15,11 @@ import numpy as np
 import jittor as jt
 
 from ..context import registry_for
+from ..checkpoint_state import (
+    get_optimizer_state_dict, set_optimizer_state_dict,
+    get_model_state_dict, set_model_state_dict, get_state_dict, set_state_dict,
+)
+from ..ddp_comm_hooks import install_ddp_comm_hooks
 from ..fidelity import Fidelity, register_api_bindings
 from ...diagnostics import EXPECTED, swallowed
 from ...transaction import set_env, set_flag
@@ -235,12 +240,21 @@ def _require_supported_group(group, allow_subgroup=False):
 
 
 def _copy_tensor(dst, src):
-    if hasattr(dst, "update"):
-        dst.update(src)
-    elif hasattr(dst, "assign"):
-        dst.assign(src)
-    else:
-        dst[:] = src
+    # Collective output buffers are mutated, never rebound: Parameters and
+    # detached aliases may share their allocation (for example ZeRO's flat
+    # bf16 model buffer). Keep that allocation through the native copy owner.
+    # A reduction may write into a leaf gradient buffer, so the storage copy
+    # must not create an autograd in-place operation.
+    with jt.no_grad():
+        if isinstance(dst, jt.Var) and dst._storage_is_contiguous():
+            jt.sync_all()
+            dst._copy_into(src)
+        elif hasattr(dst, "update"):
+            dst.update(src)
+        elif hasattr(dst, "assign"):
+            dst.assign(src)
+        else:
+            dst[:] = src
 
 
 def _sync_collective(value):
@@ -299,8 +313,27 @@ def _reduce_name(op, reduce_op):
     )
 
 
-def _native_all_gather_flat(tensor):
-    return _collectives._all_gather_shards(tensor.reshape((-1,)))
+def _native_all_gather_flat(tensor, group=None):
+    flat = tensor.reshape((-1,))
+    if group is not None:
+        return _process_group.all_gather(flat, group=group)
+    return _collectives._all_gather_shards(flat)
+
+
+# Bound temporary Jittor buffers while object collectives carry large FULL
+# model state dictionaries. Payload lengths use int64, so the serialized size
+# itself is not limited by the int32 element buffers used for byte transport.
+_OBJECT_COLLECTIVE_CHUNK_BYTES = 64 * 1024 * 1024
+
+
+def _encode_object_length(length):
+    return np.asarray([length], dtype=np.uint64).view(np.int32)
+
+
+def _decode_object_lengths(words, size):
+    words = np.asarray(words, dtype=np.int32).reshape(size, 2).view(np.uint32)
+    return (words[:, 0].astype(np.uint64)
+            | (words[:, 1].astype(np.uint64) << np.uint64(32)))
 
 
 def _native_all_gather_object(object_list, obj, group=None):
@@ -313,20 +346,35 @@ def _native_all_gather_object(object_list, obj, group=None):
         return None
 
     payload = pickle.dumps(obj, protocol=pickle.HIGHEST_PROTOCOL)
-    local_length = jt.array(np.asarray([len(payload)], dtype=np.int32))
-    lengths = np.asarray(
-        _native_all_gather_flat(local_length).numpy(), dtype=np.int32
-    ).reshape(-1)
+    # Jittor's NCCL path can corrupt int64 values gathered as a tiny tensor
+    # (the 2.52 GB Swift checkpoint length arrived negative). Transport each
+    # uint64 length as two int32 words, whose byte patterns NCCL preserves.
+    local_words = _encode_object_length(len(payload))
+    lengths = _decode_object_lengths(
+        _native_all_gather_flat(jt.array(local_words), group=group).numpy(), size
+    )
     max_length = int(lengths.max()) if lengths.size else 0
-    encoded = np.zeros((max_length,), dtype=np.int32)
-    if payload:
-        encoded[:len(payload)] = np.frombuffer(payload, dtype=np.uint8).astype(np.int32)
-    gathered = np.asarray(
-        _native_all_gather_flat(jt.array(encoded)).numpy(), dtype=np.int32
-    ).reshape(size, max_length)
+    chunk_bytes = int(_OBJECT_COLLECTIVE_CHUNK_BYTES)
+    if chunk_bytes <= 0:
+        raise ValueError("object collective chunk size must be positive")
+    received = [bytearray(int(length)) for length in lengths]
+    for offset in range(0, max_length, chunk_bytes):
+        width = min(chunk_bytes, max_length - offset)
+        encoded = np.zeros((width,), dtype=np.int32)
+        chunk = payload[offset:offset + width]
+        if chunk:
+            encoded[:len(chunk)] = np.frombuffer(chunk, dtype=np.uint8).astype(np.int32)
+        gathered = np.asarray(
+            _native_all_gather_flat(jt.array(encoded), group=group).numpy(),
+            dtype=np.int32,
+        ).reshape(size, width)
+        for rank, length in enumerate(lengths):
+            count = min(width, max(0, int(length) - offset))
+            if count:
+                received[rank][offset:offset + count] = gathered[
+                    rank, :count].astype(np.uint8).tobytes()
     for rank, length in enumerate(lengths):
-        raw = gathered[rank, :int(length)].astype(np.uint8).tobytes()
-        object_list[rank] = pickle.loads(raw)
+        object_list[rank] = pickle.loads(received[rank])
     return None
 
 
@@ -436,6 +484,12 @@ def _get_world_size(group=None):
     return _group_size(group)
 
 
+def _current_graph_task_id():
+    # Jittor has no PyTorch reentrant graph-task identifier. DeepSpeed uses
+    # -1 to mean an ordinary forward, distinct from checkpoint recomputation.
+    return -1
+
+
 class _ReduceOp:
     SUM = 0
     MEAN = 1
@@ -485,7 +539,7 @@ def _all_gather(tensor_list, tensor, group=None, async_op=False):
     if size == 1:
         _copy_tensor(tensor_list[0], tensor)
     else:
-        gathered = _native_all_gather_flat(tensor)
+        gathered = _native_all_gather_flat(tensor, group=group)
         numel = int(np.prod(tuple(int(dim) for dim in tensor.shape)))
         for rank in range(size):
             part = gathered[rank * numel:(rank + 1) * numel].reshape(
@@ -499,17 +553,44 @@ def _all_gather_into_tensor(output_tensor, input_tensor, group=None,
     size = _require_supported_group(group)
     gathered = (
         input_tensor.reshape((-1,)) if size == 1
-        else _native_all_gather_flat(input_tensor)
+        else _native_all_gather_flat(input_tensor, group=group)
     )
     _copy_tensor(output_tensor, gathered.reshape(output_tensor.shape))
     return _collective_result(output_tensor, async_op, issued=size > 1)
 
 
+def _reduce_scatter_tensor(output, input, op=None, group=None, async_op=False):
+    size = _require_supported_group(group, allow_subgroup=True)
+    if _reduce_name(op, _ReduceOp) != "sum":
+        raise NotImplementedError("reduce_scatter supports SUM only")
+    if int(input.numel()) != int(output.numel()) * size:
+        raise ValueError("reduce_scatter input size must match the output and group")
+    world = get_install_context(jt).state["distributed_api"]["world_group"]
+    active_group = world if group is None else group
+    flat = input.reshape((-1,))
+    result = (flat if size == 1 else active_group.reduce_scatter(flat))
+    _copy_tensor(output, result.reshape(output.shape))
+    return _collective_result(output, async_op, issued=size > 1)
+
+
+def _reduce_scatter(output, input_list, op=None, group=None, async_op=False):
+    size = _require_supported_group(group, allow_subgroup=True)
+    if len(input_list) != size:
+        raise ValueError("reduce_scatter needs one input tensor per group rank")
+    if any(int(value.numel()) != int(output.numel()) for value in input_list):
+        raise ValueError("reduce_scatter input tensors must match the output size")
+    flattened = jt.concat([value.reshape((-1,)) for value in input_list], dim=0)
+    return _reduce_scatter_tensor(output, flattened, op, group, async_op)
+
+
 def _broadcast(tensor, src=0, group=None, async_op=False, group_src=None):
     size = _require_supported_group(group)
-    root = int(src if group_src is None else group_src)
+    root = int(src if group_src is None else
+               _api_dist_get_global_rank(group, group_src))
     if size > 1:
-        _copy_tensor(tensor, tensor.mpi_broadcast(root))
+        result = (_process_group.broadcast(tensor, src=root, group=group)
+                  if group is not None else tensor.mpi_broadcast(root))
+        _copy_tensor(tensor, result)
     return _collective_result(tensor, async_op, issued=size > 1)
 
 
@@ -765,22 +846,22 @@ class StateDictOptions:
         self.flatten_optimizer_state_dict = bool(flatten_optimizer_state_dict)
 
 
-def _get_model_state_dict(model, *a, options=None, **k):
-    return model.state_dict(*a, **k) if hasattr(model, "state_dict") else {}
+def _get_model_state_dict(model, submodules=None, *, options=None):
+    return get_model_state_dict(model, submodules=submodules, options=options)
 
 
 def _set_model_state_dict(model, state_dict, *a, options=None, **k):
-    # `_is_fsdp_module` is set only by fsdp2, so a model carrying it proves
-    # fsdp2 was imported and has registered -- see jittor/compat/
-    # fsdp_hooks.py for why this file must not import fsdp2 directly.
-    if getattr(model, "_is_fsdp_module", False):
-        _fsdp = _fsdp_hooks.provider()
-        if _fsdp is not None:
-            _fsdp._load_full_state_dict(model, state_dict)
-            return None
-    if hasattr(model, "load_state_dict"):
-        return model.load_state_dict(state_dict, strict=getattr(options, "strict", True))
-    return None
+    if a or k:
+        raise NotImplementedError("checkpoint model submodule selection is not supported")
+    return set_model_state_dict(model, state_dict, options=options)
+
+
+class GradBucket:
+    """Importable DDP bucket type; native bucket communication is not exposed."""
+
+    def __init__(self, *args, **kwargs):
+        _stub_unimplemented("torch.distributed.GradBucket",
+                            "invent a gradient bucket with no native storage or reduction")
 
 
 class ShardedTensor:
@@ -914,11 +995,12 @@ def _api_symmetric_memory_is_symm_mem_enabled_for_group(*a, **k):
 
 
 def _api_checkpoint_sd_get_state_dict(model, optimizers=None, *a, **k):
-    return (_get_model_state_dict(model, *a, **k), optimizers.state_dict() if hasattr(optimizers, 'state_dict') else {})
+    return get_state_dict(model, optimizers, *a, **k)
 
 
 def _api_checkpoint_sd_set_state_dict(model, optimizers=None, model_state_dict=None, optim_state_dict=None, *a, **k):
-    return _set_model_state_dict(model, model_state_dict or {}, *a, **k)
+    return set_state_dict(model, optimizers, *a, model_state_dict=model_state_dict or {},
+                          optim_state_dict=optim_state_dict or {}, **k)
 
 
 def _api_sharded_tensor_init_from_local_shards(shards, *a, **k):
@@ -964,6 +1046,22 @@ def _api_checkpoint_save(*args, **kwargs):
     return _stub_unimplemented('torch.distributed.checkpoint.save', _dcp_save_effect, _dcp_hint, stub_result=None)
 
 
+class DefaultSavePlanner:
+    """Import boundary for callers using FULL, rather than sharded, files."""
+
+    def __init__(self, *args, **kwargs):
+        raise NotImplementedError(
+            "torch.distributed.checkpoint.default_planner.DefaultSavePlanner: "
+            "sharded checkpoint planning is not implemented; use FULL state dicts and torch.save")
+
+
+class DefaultLoadPlanner:
+    def __init__(self, *args, **kwargs):
+        raise NotImplementedError(
+            "torch.distributed.checkpoint.default_planner.DefaultLoadPlanner: "
+            "sharded checkpoint planning is not implemented; use FULL state dicts and torch.load")
+
+
 def _api_checkpoint_fs_write_item(*args, **kwargs):
     return _stub_unimplemented('torch.distributed.checkpoint.filesystem._write_item', _dcp_save_effect, _dcp_hint, stub_result=None)
 
@@ -989,6 +1087,9 @@ def _install_distributed(g, registry=None):
     if dist is None:
         dist = _types.ModuleType("torch.distributed")
         _modules["torch.distributed"] = dist
+    # Executable leaves need a filesystem spec for ``python -m``; publishing
+    # a synthetic module in the registry alone cannot provide that entry point.
+    dist.__path__ = [os.path.join(os.path.dirname(__file__), "..", "distributed_cli")]
     state = {"initialized": _native_distributed_active(), "store": None}
     world_group = _JittorProcessGroup(name="world")
     pg_map = {world_group: (world_group._get_backend_name(),)}
@@ -1019,6 +1120,8 @@ def _install_distributed(g, registry=None):
     dist.all_reduce = _all_reduce
     dist.all_gather = _all_gather
     dist.all_gather_into_tensor = _all_gather_into_tensor
+    dist.reduce_scatter = _reduce_scatter
+    dist.reduce_scatter_tensor = _reduce_scatter_tensor
     dist.broadcast = _broadcast
     dist.all_gather_object = _native_all_gather_object
     dist.broadcast_object_list = _broadcast_object_list
@@ -1046,6 +1149,7 @@ def _install_distributed(g, registry=None):
         setattr(dist, sub, mod)
 
     dist.algorithms.__path__ = getattr(dist.algorithms, "__path__", [])
+    install_ddp_comm_hooks(_modules, dist.algorithms)
     const_mod = _modules.get("torch.distributed.constants")
     if const_mod is None:
         const_mod = _types.ModuleType("torch.distributed.constants")
@@ -1073,6 +1177,9 @@ def _install_distributed(g, registry=None):
     dist.DeviceMesh = getattr(dist, "DeviceMesh", _DeviceMesh)
     dist.init_device_mesh = getattr(dist, "init_device_mesh", _init_device_mesh)
     dist.ProcessGroup = _JittorProcessGroup
+    dist.GradBucket = GradBucket
+    _record_unimplemented("torch.distributed.GradBucket",
+                          "invent a gradient bucket with no native storage or reduction")
 
     c10d = _modules.get("torch.distributed.distributed_c10d")
     if c10d is None:
@@ -1167,8 +1274,16 @@ def _install_distributed(g, registry=None):
     checkpoint_sd.StateDictOptions = StateDictOptions
     checkpoint_sd.get_model_state_dict = _get_model_state_dict
     checkpoint_sd.set_model_state_dict = _set_model_state_dict
+    checkpoint_sd.get_optimizer_state_dict = get_optimizer_state_dict
+    checkpoint_sd.set_optimizer_state_dict = set_optimizer_state_dict
     checkpoint_sd.get_state_dict = _api_checkpoint_sd_get_state_dict
     checkpoint_sd.set_state_dict = _api_checkpoint_sd_set_state_dict
+    checkpoint_planner = _types.ModuleType("torch.distributed.checkpoint.default_planner")
+    checkpoint_planner.DefaultSavePlanner = DefaultSavePlanner
+    checkpoint_planner.DefaultLoadPlanner = DefaultLoadPlanner
+    for name in ("DefaultSavePlanner", "DefaultLoadPlanner"):
+        _record_unimplemented("torch.distributed.checkpoint.default_planner." + name,
+                              "plan no sharded checkpoint reads or writes", _dcp_hint)
     checkpoint_fs = _types.ModuleType("torch.distributed.checkpoint.filesystem")
     checkpoint_fs.FileSystemReader = FileSystemReader
     checkpoint_fs.FileSystemWriter = FileSystemWriter
@@ -1178,6 +1293,8 @@ def _install_distributed(g, registry=None):
     _modules["torch.distributed.checkpoint"] = checkpoint
     _modules["torch.distributed.checkpoint.state_dict"] = checkpoint_sd
     _modules["torch.distributed.checkpoint.filesystem"] = checkpoint_fs
+    _modules["torch.distributed.checkpoint.default_planner"] = checkpoint_planner
+    checkpoint.default_planner = checkpoint_planner
     checkpoint.state_dict = checkpoint_sd
     checkpoint.filesystem = checkpoint_fs
 
@@ -1228,6 +1345,7 @@ def _install_distributed(g, registry=None):
 
     if not hasattr(g, "_C"):
         g._C = _CNS()
+    g._C._current_graph_task_id = _current_graph_task_id
     _install_fsdp2_distributed(dist, g, registry=registry)
     g.distributed = dist
     register_api_bindings(dist, "torch.distributed",
@@ -1235,13 +1353,16 @@ def _install_distributed(g, registry=None):
          "is_mpi_available", "is_ucc_available", "is_initialized", "get_rank",
          "get_world_size", "init_process_group", "destroy_process_group", "get_backend",
          "Backend", "P2POp", "ReduceOp", "ProcessGroup", "barrier", "all_reduce",
-         "all_gather", "all_gather_into_tensor", "broadcast", "all_gather_object",
+         "all_gather", "all_gather_into_tensor", "reduce_scatter",
+         "reduce_scatter_tensor", "broadcast", "all_gather_object",
          "broadcast_object_list", "gather_object", "new_group",
          "new_subgroups_by_enumeration", "get_global_rank", "get_process_group_ranks",
          "Store", "TCPStore", "FileStore", "PrefixStore"),
         Fidelity.APPROXIMATE,
         "Reuses native ProcessGroup, store and collective owners; group, reduction "
         "and backend capability limits and existing Work semantics apply")
+    register_api_bindings(dist, "torch.distributed", ("GradBucket",),
+        Fidelity.UNIMPLEMENTED, "Importable type; construction refuses unavailable native DDP buckets")
     register_api_bindings(dist, "torch.distributed",
         ("send", "recv", "isend", "irecv", "batch_isend_irecv"),
         Fidelity.UNIMPLEMENTED, "Point-to-point communication explicitly rejects nonempty work")
@@ -1255,10 +1376,15 @@ def _install_distributed(g, registry=None):
     register_api_bindings(checkpoint, "torch.distributed.checkpoint",
         ("load_state_dict", "save_state_dict", "load", "save", "FileSystemReader", "FileSystemWriter"),
         Fidelity.UNIMPLEMENTED, "Checkpoint I/O follows the existing explicit unsupported policy")
+    register_api_bindings(checkpoint_planner, "torch.distributed.checkpoint.default_planner",
+        ("DefaultSavePlanner", "DefaultLoadPlanner"), Fidelity.UNIMPLEMENTED,
+        "Import-compatible names; construction refuses unavailable sharded checkpoint planning")
     register_api_bindings(checkpoint_sd, "torch.distributed.checkpoint.state_dict",
-        ("StateDictOptions", "get_model_state_dict", "set_model_state_dict", "get_state_dict", "set_state_dict"),
-        Fidelity.APPROXIMATE, "Local module state and registered FSDP load provider; "
-        "full distributed checkpoint/options semantics are not implemented")
+        ("StateDictOptions", "get_model_state_dict", "set_model_state_dict", "get_state_dict", "set_state_dict",
+         "get_optimizer_state_dict", "set_optimizer_state_dict"),
+        Fidelity.APPROXIMATE, "FQN optimizer state and parameter groups, FULL FSDP provider transforms, "
+        "CPU offload, flatten, rank-zero broadcast, strict optimizer loading and submodule selection; "
+        "FULL plus flatten loading is explicitly unsupported")
     register_api_bindings(rendezvous_mod, "torch.distributed.rendezvous", ("rendezvous",),
         Fidelity.APPROXIMATE, "Delegates supported URL, rank, world-size and timeout handling to native stores")
     register_api_bindings(c10d, "torch.distributed.distributed_c10d",

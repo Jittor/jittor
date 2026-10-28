@@ -117,27 +117,42 @@ def _group_norm_cuda_acl(x, num_groups, weight, bias, eps):
     return None
 
 
+def _rms_norm_acl_supported(x, gamma, epsilon, x_dtype):
+    """The existing subset, checked on a fallback or native rejection only."""
+    x_shape = tuple((int(size) for size in x.shape))
+    gamma_shape = tuple((int(size) for size in gamma.shape))
+    gamma_dtype = _jittor_dtype_name(gamma.dtype)
+    supported_gamma_dtypes = {
+        "float32": ("float32",),
+        "float16": ("float16", "float32"),
+        "bfloat16": ("bfloat16", "float32"),
+    }
+    return (
+        x_shape
+        and all((size > 0 for size in x_shape))
+        and (gamma_shape == (x_shape[-1],))
+        and (gamma_dtype in supported_gamma_dtypes.get(x_dtype, ()))
+        and (getattr(jt.flags, "no_grad", 0) or x_dtype in ("float32", "bfloat16"))
+        and math.isfinite(epsilon)
+        and (epsilon > 0)
+    )
+
+
 def _rms_norm_cuda_acl(x, gamma, epsilon=1e-06):
     if isinstance(x, jt.Var) and isinstance(gamma, jt.Var) and isinstance(epsilon, Real):
-        x_shape = tuple((int(size) for size in x.shape))
-        gamma_shape = tuple((int(size) for size in gamma.shape))
         x_dtype = _jittor_dtype_name(x.dtype)
-        gamma_dtype = _jittor_dtype_name(gamma.dtype)
         epsilon_value = float(epsilon)
-        supported_gamma_dtypes = {
-            "float32": ("float32",),
-            "float16": ("float16", "float32"),
-            "bfloat16": ("bfloat16", "float32"),
-        }
-        if (
-            x_shape
-            and all((size > 0 for size in x_shape))
-            and (gamma_shape == (x_shape[-1],))
-            and (gamma_dtype in supported_gamma_dtypes.get(x_dtype, ()))
-            and (getattr(jt.flags, "no_grad", 0) or _jittor_dtype_name(x_dtype) in ("float32", "bfloat16"))
-            and math.isfinite(epsilon_value)
-            and (epsilon_value > 0)
-        ):
+        if (jt.flags.no_grad and x_dtype == "float16"
+                and _jittor_dtype_name(gamma.dtype) == "float16"):
+            try:
+                return jt.core.ops.mapped_rms_norm(x, gamma, epsilon_value)
+            except RuntimeError:
+                # Inspect unsupported metadata only on failure. Valid inputs
+                # must expose native/backend failures rather than fall back.
+                if not _rms_norm_acl_supported(x, gamma, epsilon_value, x_dtype):
+                    return None
+                raise
+        if _rms_norm_acl_supported(x, gamma, epsilon_value, x_dtype):
             return RmsNormACL()(x, gamma, epsilon_value)
     return None
 

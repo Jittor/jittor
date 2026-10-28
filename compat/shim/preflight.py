@@ -213,10 +213,23 @@ def _short_enough_tmpdir(preferred):
     to the caller's real $TMPDIR, so the isolation survives.
     """
     preferred = pathlib.Path(preferred)
-    if len(os.fspath(preferred)) + _TMPDIR_SOCKET_HEADROOM <= _SUN_PATH_MAX:
+    if len(os.fsencode(os.fspath(preferred))) + _TMPDIR_SOCKET_HEADROOM <= _SUN_PATH_MAX:
         return preferred
     digest = hashlib.sha1(os.fspath(preferred).encode("utf-8")).hexdigest()[:10]
-    return pathlib.Path(tempfile.gettempdir()) / ("jt-%s" % digest)
+    fallback = pathlib.Path(tempfile.gettempdir()) / ("jt-%s" % digest)
+    if len(os.fsencode(os.fspath(fallback))) + _TMPDIR_SOCKET_HEADROOM <= _SUN_PATH_MAX:
+        return fallback
+    # tempfile.gettempdir() may itself be a long caller-provided TMPDIR. The
+    # hashed fallback adds another path component, so recheck the complete path
+    # before handing it to libraries that create AF_UNIX sockets beneath it.
+    if os.name == "posix":
+        fallback = pathlib.Path("/tmp") / ("jt-%s" % digest)
+        if len(os.fsencode(os.fspath(fallback))) + _TMPDIR_SOCKET_HEADROOM <= _SUN_PATH_MAX:
+            return fallback
+    raise RuntimeError(
+        "Jittor's Torch compatibility temporary directory cannot leave enough "
+        "pathname space for a Unix socket: %s" % fallback
+    )
 
 
 def _set_env_dir(environ, name, path, override=False):

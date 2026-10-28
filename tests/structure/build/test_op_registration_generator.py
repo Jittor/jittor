@@ -66,7 +66,7 @@ def test_custom_library_forwards_backend_into_registration_generator():
 
 
 @pytest.mark.parametrize("relative,expected", [
-    ("build/compile_extern.py", {"mkl": "cpu", "culib": "accelerator", "cutt": "accelerator",
+    ("build/compile_extern.py", {"mkl": "cpu", "blas": "cpu", "culib": "accelerator", "cutt": "accelerator",
                            "nccl": "accelerator", "hccl": "accelerator", "mpi": None}),
 ])
 def test_optional_libraries_declare_their_actual_backend_family(relative, expected):

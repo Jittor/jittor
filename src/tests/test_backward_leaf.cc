@@ -51,6 +51,13 @@ JIT_TEST(backward_leaf_query_rule) {
     CHECK(!is_backward_leaf(produced.ptr));
     CHECK(backward_grad_fn(produced.ptr) == (Op*)produced->input());
 
+    // Input trainability may change after this producer was recorded. Its
+    // identity is stable; an initially disabled edge is a separate case below.
+    source->set_flag(VarFlags::_requires_grad_disabled);
+    CHECK(!is_backward_leaf(produced.ptr));
+    CHECK(backward_grad_fn(produced.ptr) == (Op*)produced->input());
+    source->set_flag(VarFlags::_requires_grad_disabled, 0);
+
     // requires_grad is the first half of the question, and it has two
     // spellings. stop_grad is permanent...
     VarPtr stopped({4}, ns_float32);

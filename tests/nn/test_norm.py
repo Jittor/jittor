@@ -502,6 +502,72 @@ class TestActivationAfterInPlaceResidual(unittest.TestCase):
                                            rtol=1e-4, atol=1e-4)
 
 
+class TestResidualActivationAcrossAnAutoFlush(unittest.TestCase):
+    """``relu(bn(conv(x)) + identity)`` while the auto-flush is cutting the graph.
+
+    Finding the residual meant reading the add's two operands with two
+    ``_input`` calls. Each call is a graph entry, and leaving one may submit
+    the auto-flushed batch the add is in -- which executes it, so the second
+    read raised "_input requires an unexecuted tensor". A native ResNet
+    training step hit it at batch 64; ``auto_flush_bytes=0`` takes every
+    flush, which reaches it at a size a test can afford.
+    """
+
+    @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled,
+                         "the residual offer comes from the CUDA training batch norm")
+    def test_a_flushed_add_falls_back_to_a_plain_activation(self):
+        from jittor import models
+        rng = np.random.RandomState(17)
+        x_np = rng.rand(2, 3, 32, 32).astype("float32")
+        with jt.flag_scope(use_cuda=1):
+            net = models.resnet18()
+            net.train()
+            # Gradients tracked for the parameters is part of what reaches it.
+            nn.SGD(net.parameters(), lr=0.01)
+            with jt.flag_scope(auto_flush_bytes=0):
+                got = net(jt.array(x_np)).numpy()
+            with jt.flag_scope(auto_flush_ops=0):
+                expected = net(jt.array(x_np)).numpy()
+        np.testing.assert_allclose(got, expected, rtol=1e-4, atol=1e-4)
+
+
+class TestResidualActivationThroughADependency(unittest.TestCase):
+    """The residual is the add's first two inputs, whatever follows them.
+
+    An in-place ``out += identity`` -- every torchvision block under the Torch
+    frontend -- leaves a dependency edge on the add after its two operands.
+    Asking for exactly two inputs turned every such block's activation into a
+    kernel of its own: the frontend's ResNet-50 training step went from 80.8
+    to 88.0 ms.
+    """
+
+    @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled,
+                         "the residual offer comes from the CUDA training batch norm")
+    def test_a_dependency_edge_does_not_stop_the_fusion(self):
+        from _helpers.common import kernel_launches
+        rng = np.random.RandomState(19)
+        x_np = rng.randn(4, 8, 6, 6).astype("float32")
+        r_np = rng.randn(4, 8, 6, 6).astype("float32")
+        with jt.flag_scope(use_cuda=1):
+            bn = nn.BatchNorm2d(8)
+            bn.train()
+            x, r, dep = jt.array(x_np), jt.array(r_np), jt.array(r_np)
+            x.sync(); r.sync(); dep.sync()
+
+            def block(with_dependency):
+                # The offer lives as long as the object it was made on.
+                y = bn(x)
+                s = y + r
+                if with_dependency:
+                    s._add_dependency([dep])
+                return nn.relu(s).numpy()
+
+            plain, expected = kernel_launches(lambda: block(False))
+            count, got = kernel_launches(lambda: block(True))
+        self.assertEqual(count, plain)
+        np.testing.assert_allclose(got, expected, rtol=1e-5, atol=1e-5)
+
+
 class TestBatchNormActivation(unittest.TestCase):
     """`relu(batch_norm(x))` in training runs the activation in the norm's pass.
 
@@ -854,7 +920,9 @@ class TestConvBiasFuses(unittest.TestCase):
         e_np = rng.randn(2, 16, 1, 1).astype("float32")
 
         def run(use_cuda):
-            with jt.flag_scope(use_cuda=use_cuda):
+            # Compared with the CPU at 2e-3, so the convolution is true
+            # float32: cuDNN's default lets it use tf32, as torch's does.
+            with jt.flag_scope(use_cuda=use_cuda, float32_cudnn_precision="highest"):
                 x, w, b, e = (jt.array(t) for t in (x_np, w_np, b_np, e_np))
                 y = jt.nn.conv2d(x, w, b, padding=1) + e
                 grads = jt.grad((y * y).sum(), [x, w, b])

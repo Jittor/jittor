@@ -59,6 +59,16 @@ ncclUniqueId id;
 int nccl_device_id = 0;
 static vector<int> nccl_pending_unique_id;
 
+static void unpack_nccl_unique_id(const vector<int>& bytes, ncclUniqueId& target) {
+    if (bytes.size() != sizeof(target))
+        LOGf << "NCCL store returned" << bytes.size() << "unique-id bytes; expected" << sizeof(target);
+    for (int i=0; i<(int)bytes.size(); ++i) {
+        if (bytes[i] < 0 || bytes[i] > 255)
+            LOGf << "NCCL store unique-id byte" << i << "is outside unsigned byte range";
+        ((unsigned char*)&target)[i] = (unsigned char)bytes[i];
+    }
+}
+
 // ---------------------------------------------------------------- 8.02
 // Bucket scope state. All of it is per-process and only touched from the
 // executor thread and the Python calls that bracket a bucket, in that order.
@@ -378,7 +388,8 @@ static void nccl_watchdog_die(int world_rank, double grace, const string& why) {
 }
 
 static void nccl_watchdog_loop(double interval, double stale, double grace,
-                               int world_size, int world_rank, string rootinfo) {
+                               int world_size, int world_rank, string rootinfo,
+                               vector<int> monitored_ranks) {
     const bool beats = rootinfo.size();
     const string own = beats ? nccl_heartbeat_path(rootinfo, world_rank) : "";
     vector<nccl_peer_beat> peers(beats ? world_size : 0);
@@ -402,7 +413,7 @@ static void nccl_watchdog_loop(double interval, double stale, double grace,
 
         now = std::chrono::steady_clock::now();
         string dead;
-        for (int r = 0; r < world_size; r++) {
+        for (int r : monitored_ranks) {
             if (r == world_rank) continue;
             auto& p = peers[r];
             struct stat st;
@@ -443,10 +454,32 @@ static void nccl_watchdog_start(int world_size, int world_rank,
     double stale = nccl_env_seconds("JT_NCCL_WATCHDOG_STALE_S", 4 * interval);
     double grace = nccl_env_seconds("JT_NCCL_WATCHDOG_GRACE_S", 30.0);
     string rf = (rootinfo && rootinfo[0]) ? string(rootinfo) : string();
+    vector<int> monitored_ranks;
+    if (const char* peers = getenv("JT_NCCL_LOCAL_WORLD_RANKS")) {
+        // Multi-node agents supervise remote nodes through TCPStore. These
+        // files are local: never treat a missing remote file as a dead rank.
+        const char* cursor = peers;
+        unordered_set<int> seen;
+        while (*cursor) {
+            char* end = nullptr;
+            long rank = strtol(cursor, &end, 10);
+            if (end == cursor || rank < 0 || rank >= world_size ||
+                    !seen.insert((int)rank).second || (*end && *end != ','))
+                LOGf << "invalid JT_NCCL_LOCAL_WORLD_RANKS" << peers;
+            monitored_ranks.push_back((int)rank);
+            if (!*end) break;
+            cursor = end + 1;
+            if (!*cursor) LOGf << "invalid trailing comma in JT_NCCL_LOCAL_WORLD_RANKS";
+        }
+        if (!seen.count(world_rank))
+            LOGf << "JT_NCCL_LOCAL_WORLD_RANKS does not include this rank" << world_rank;
+    } else {
+        for (int rank=0; rank<world_size; ++rank) monitored_ranks.push_back(rank);
+    }
     if (rf.size()) nccl_watchdog_own_beat = nccl_heartbeat_path(rf, world_rank);
     nccl_watchdog_pid = getpid();
     nccl_watchdog_thread = std::thread(nccl_watchdog_loop, interval, stale,
-                                       grace, world_size, world_rank, rf);
+                                       grace, world_size, world_rank, rf, monitored_ranks);
     LOGv << "NCCL watchdog: every" << interval >> "s, peers stale after"
          << stale >> "s, heartbeats" << (rf.size() ? "on" : "off");
 }
@@ -509,7 +542,7 @@ static void register_nccl_world_group(ncclComm_t communicator,
     nccl_comm_created = true;
 }
 
-int nccl_create_process_group(vector<int> ranks) {
+static int create_nccl_process_group(vector<int> ranks, const vector<int>* supplied_id) {
     if (!nccl_comm_created || nccl_process_groups.empty())
         LOGf << "NCCL WORLD communicator must be initialized before creating"
                 " a process group";
@@ -530,6 +563,9 @@ int nccl_create_process_group(vector<int> ranks) {
     int group_id = (int)nccl_process_groups.size();
     ncclUniqueId group_unique_id;
     const int root = ranks[0];
+    if (supplied_id) {
+        unpack_nccl_unique_id(*supplied_id, group_unique_id);
+    } else {
 #ifdef JT_NCCL_NO_MPI
     const char* rootinfo = getenv("JT_NCCL_ROOTINFO_FILE");
     if (!rootinfo || !rootinfo[0])
@@ -556,6 +592,7 @@ int nccl_create_process_group(vector<int> ranks) {
     MPI_CHECK(MPI_Bcast((void*)&group_unique_id, sizeof(group_unique_id),
                         MPI_BYTE, root, MPI_COMM_WORLD));
 #endif
+    }
 
     NcclProcessGroupState group;
     group.ranks = ranks;
@@ -580,6 +617,14 @@ int nccl_create_process_group(vector<int> ranks) {
     return group_id;
 }
 
+int nccl_create_process_group(vector<int> ranks) {
+    return create_nccl_process_group(move(ranks), nullptr);
+}
+
+int nccl_create_process_group_with_unique_id(vector<int> ranks, vector<int> unique_id) {
+    return create_nccl_process_group(move(ranks), &unique_id);
+}
+
 // See nccl_wrapper.h for why this is a function called from Python rather than
 // the static constructor it used to be. nccl_comm_created (set by
 // init_nccl_comm, cleared by nccl_shutdown) is the "already done" flag, so
@@ -602,7 +647,10 @@ void nccl_init() {
         int local_rank = env_lr ? std::atoi(env_lr) : 0;
         mpi_world_size = world_size;
         mpi_world_rank = world_rank;
-        mpi_local_size = world_size;
+        const char* env_ls = getenv("LOCAL_WORLD_SIZE");
+        mpi_local_size = env_ls ? std::atoi(env_ls) : world_size;
+        if (mpi_local_size < 1 || mpi_local_size > world_size)
+            LOGf << "NCCL(env): invalid LOCAL_WORLD_SIZE" << mpi_local_size;
         mpi_local_rank = local_rank;
         inside_mpi = true;
         nccl_device_id = device_count ? (local_rank % device_count) : 0;
@@ -627,16 +675,7 @@ void nccl_init() {
         rendezvous_require_unlocked(world_size, "NCCL(env)");
         bool supplied_unique_id = !nccl_pending_unique_id.empty();
         if (supplied_unique_id) {
-            if (nccl_pending_unique_id.size() != sizeof(id))
-                LOGf << "NCCL store returned" << nccl_pending_unique_id.size()
-                     << "unique-id bytes; expected" << sizeof(id);
-            for (int i=0; i<(int)nccl_pending_unique_id.size(); ++i) {
-                int value = nccl_pending_unique_id[i];
-                if (value < 0 || value > 255)
-                    LOGf << "NCCL store unique-id byte" << i << "is" << value
-                         << "instead of an unsigned byte";
-                ((unsigned char*)&id)[i] = (unsigned char)value;
-            }
+            unpack_nccl_unique_id(nccl_pending_unique_id, id);
             nccl_pending_unique_id.clear();
         }
         if (!supplied_unique_id && world_size > 1 && (!rf || !rf[0]))

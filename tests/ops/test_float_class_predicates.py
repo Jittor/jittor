@@ -21,12 +21,13 @@ Why the kernel is not simply replaced by those comparisons: the optimisation
 level a fused kernel is built at is decided elsewhere, and under
 ``-ffinite-math-only`` -- implied by ``-ffast-math``, implied in turn by the
 ``-Ofast`` this project used to ship -- ``x != x`` and
-``x >= 0`` are free to be folded to a constant. CPU kernels build at ``-O3``
-now, so that licence is gone from the default build; ``_simple_for`` still
-pins this one kernel to ``-O2``, because a predicate that answers "is this a
-NaN" is exactly the code that must not depend on which flags a build settled
-on. The ACL path gets away with the comparisons because aclnn evaluates them,
-not a JIT kernel.
+``x >= 0`` are free to be folded to a constant. A predicate that answers "is
+this a NaN" is exactly the code that must not depend on which flags a build
+settled on. It used to escape them in a ``jt.code`` kernel pinned to ``-O2``;
+it is now a unary op that tests the bit pattern (``type/fp_class_compute.h``),
+which no flag can fold and which fuses like any other elementwise op. The ACL
+path gets away with the comparisons because aclnn evaluates them, not a JIT
+kernel.
 """
 
 from _helpers import capability as _test_capability
@@ -36,6 +37,7 @@ import unittest
 import numpy as np
 
 import jittor as jt
+from _helpers.common import kernel_launches
 
 
 _CASES = {
@@ -121,25 +123,72 @@ class _Predicates:
                         acl[ordinary], _numpy_expected(name, raw)[ordinary])
 
     def test_signed_infinity_predicates(self):
-        raw = _CASES["float64"]
+        for dtype in ("float64", "float32", "float16", "bfloat16"):
+            with self.subTest(dtype=dtype):
+                with jt.flag_scope(use_cuda=self.use_cuda):
+                    if dtype == "bfloat16":
+                        x = jt.array(_CASES["float32"]).cast(dtype)
+                    else:
+                        x = jt.array(_CASES[dtype], dtype=dtype)
+                    # The input's own values: bfloat16 rounds 3.4e38 up to inf.
+                    # Widening to float64 keeps every value's class.
+                    ref = x.float64().numpy()
+                    pos = jt.isposinf(x).numpy()
+                    neg = jt.isneginf(x).numpy()
+                np.testing.assert_array_equal(pos, np.isposinf(ref))
+                np.testing.assert_array_equal(neg, np.isneginf(ref))
+
+    def test_a_predicate_fuses_into_what_reads_it(self):
+        """``where(isfinite(x), x, -1)`` is one kernel, not a predicate kernel
+        writing bools for a second one to read back."""
+        raw = _CASES["float32"]
         with jt.flag_scope(use_cuda=self.use_cuda):
-            x = jt.array(raw, dtype="float64")
-            pos = jt.isposinf(x).numpy()
-            neg = jt.isneginf(x).numpy()
-        np.testing.assert_array_equal(pos, np.isposinf(raw))
-        np.testing.assert_array_equal(neg, np.isneginf(raw))
+            x = jt.array(raw)
+            x.sync()
+            for name in _PREDICATES:
+                with self.subTest(predicate=name):
+                    count, got = kernel_launches(
+                        lambda: jt.where(getattr(jt, name)(x * 2), x, -1.0).numpy())
+                    self.assertEqual(count, 1)
+                    np.testing.assert_array_equal(
+                        got, np.where(getattr(np, name)(raw * 2), raw, -1.0))
+
+    def test_fused_into_a_fast_math_kernel_it_still_answers(self):
+        """The bit test survives the flags the comparisons do not.
+
+        ``-Ofast`` tells the compiler no operand is NaN or infinite, and the
+        predicate is now fused into a kernel built with whatever flags that
+        kernel gets. The answer must not change: it is an integer test.
+        """
+        if self.use_cuda:
+            raise unittest.SkipTest("nvcc does not take -Ofast; CUDA kernels "
+                                    "already build with --use_fast_math")
+        flags = jt.flags
+        previous = flags.compile_options
+        options = dict(previous)
+        options["FLAGS: -Ofast "] = 1
+        flags.compile_options = options
+        try:
+            for dtype in ("float32", "float64", "float16"):
+                raw = _CASES[dtype]
+                x = jt.array(raw, dtype=dtype)
+                for name in _PREDICATES + ("isposinf", "isneginf"):
+                    with self.subTest(dtype=dtype, predicate=name):
+                        got = getattr(jt, name)(x * 1).numpy()
+                        np.testing.assert_array_equal(got, getattr(np, name)(raw * 1))
+        finally:
+            flags.compile_options = previous
 
     def test_a_zero_dim_input_compiles(self):
         """0-d is a rank the ``code`` op's stride templates got wrong.
 
-        ``_simple_for`` builds a ``jt.code`` op, whose PRECALC is
+        The predicates were a ``jt.code`` op, whose PRECALC is
         ``@for(j, in0_dim-2, -1, -1, ...)``. At rank 0 that is
         ``@for(j, -2, -1, -1, ...)``, and the expander used to stop only on
         equality, so the counter stepped away from ``-1`` until it hit the
-        1000-iteration cap and failed the compile. Every predicate here is
-        reached through that one template, so all of them are covered by the
-        same rank sweep -- and ranks 1 and 2 pin that the fix did not turn
-        working expansions into empty ones.
+        1000-iteration cap and failed the compile. They are unary ops now, and
+        the same rank sweep pins that every rank still compiles and answers --
+        ranks 1 and 2 as much as 0.
 
         This is the defect behind ``test_safe_clip`` in the fp16/bf16 suites:
         the dtype was incidental, the rank was the trigger.

@@ -270,7 +270,7 @@ def uniform_(var, low=0, high=1):
     return var.assign(uniform(var.shape, var.dtype, low, high))
 
 
-def gauss(shape, dtype="float32", mean=0.0, std=1.0):
+def gauss(shape, dtype="float32", mean=0.0, std=1.0, generator=None):
     ''' Return Jittor Var initialize by random gauss.
 
     Args:
@@ -292,7 +292,7 @@ def gauss(shape, dtype="float32", mean=0.0, std=1.0):
 
     '''
     import jittor as jt
-    return jt.random(jt.NanoVector(shape), dtype, "normal") * std + mean
+    return jt.random(jt.NanoVector(shape), dtype, "normal", generator=generator) * std + mean
 
 
 def gauss_(var, mean=0.0, std=1.0):

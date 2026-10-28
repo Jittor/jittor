@@ -41,7 +41,6 @@ GitHub issue 与 PR 中。原始日志、缓存和大体积产物放在 `$JITTOR
 - [jittor-core-cpp-edit-loop](../skills/jittor-core-cpp-edit-loop/SKILL.md)：改 `src/` 的编辑、重编、验证循环。
 - [jittor-build-change-verification](../skills/jittor-build-change-verification/SKILL.md)：构建系统改动的冷/热缓存、并发与切 flag 验证。
 - [jittor-build-time-capabilities](../skills/jittor-build-time-capabilities/SKILL.md)：同一源码为何编出能力不同的构建。
-- [cuda12-pip-stack-acceptance](../skills/cuda12-pip-stack-acceptance/SKILL.md)：系统 CUDA 作干扰项时验收 `jittor[cuda12]` 的干净环境安装。
 - [jittor-pyjt-bindings](../skills/jittor-pyjt-bindings/SKILL.md)：pyjt 绑定生成器与转换层的验证。
 - [jittor-single-kernel-cold-profile](../skills/jittor-single-kernel-cold-profile/SKILL.md)：单个生成 kernel 的冷编译分阶段计时。
 - [jit-compile-failure-attribution](../skills/jit-compile-failure-attribution/SKILL.md)：JIT 编译失败是否归因到闯祸的算子。
@@ -91,6 +90,7 @@ GitHub issue 与 PR 中。原始日志、缓存和大体积产物放在 `$JITTOR
 - [diffusers-torch-compat](../skills/diffusers-torch-compat/SKILL.md)：diffusers。
 - [peft-torch-compat](../skills/peft-torch-compat/SKILL.md)：PEFT（LoRA）。
 - [ms-swift-torch-compat](../skills/ms-swift-torch-compat/SKILL.md)：ms-swift 自带 LoRA tuner。
+- [deepspeed-torch-compat](../skills/deepspeed-torch-compat/SKILL.md)：固定上游版本的真实 Engine 训练与检查点门禁。
 - [mmcv-torch-compat](../skills/mmcv-torch-compat/SKILL.md)：mmcv（mmcv-lite 的 `mmcv.cnn`）。
 - [mmengine-torch-compat](../skills/mmengine-torch-compat/SKILL.md)：MMEngine 的模型基类。
 - [tensordict-torch-compat](../skills/tensordict-torch-compat/SKILL.md)：TensorDict。
@@ -99,5 +99,6 @@ GitHub issue 与 PR 中。原始日志、缓存和大体积产物放在 `$JITTOR
 - [vllm-torch-compat](../skills/vllm-torch-compat/SKILL.md)：vLLM。
 - [vllm-omni-torch-compat](../skills/vllm-omni-torch-compat/SKILL.md)：vLLM-Omni 的 MiniMax-H3 推理。
 - [verl-torch-compat](../skills/verl-torch-compat/SKILL.md)：verl（PPO、FSDP2、权重传输）。
+- [datatrove-torch-compat](../skills/datatrove-torch-compat/SKILL.md)：DataTrove CPU token dataset 与本地 JSONL 管线验证。
 - [trellis-torch-compat](../skills/trellis-torch-compat/SKILL.md)：TRELLIS.2 3D 生成 pipeline。
 - [torchquantum-readme-validation](../skills/torchquantum-readme-validation/SKILL.md)：TorchQuantum README 用法验证。

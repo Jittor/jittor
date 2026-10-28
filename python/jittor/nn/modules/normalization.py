@@ -86,9 +86,10 @@ class BatchNorm(Module):
         dims = [0] + list(range(2, x.ndim))
         if not self.is_train:
             return _batch_norm_eval(
-                x, dims, self.running_mean, self.running_var,
-                self.weight, self.bias, self.eps)
+                x, dims, self.running_mean, self.running_var, self.weight, self.bias, self.eps
+            )
         from jittor import distributed as dist
+
         sync = self.sync and dist.is_initialized()
         norm_x, xmean, xvar = _batch_norm_train(
             x, dims, self.weight, self.bias, self.eps, sync=sync

@@ -7,6 +7,8 @@
 - Owner：Torch 兼容层与下游生态维护者。
 - Review when：上游 registry/版本、共享生态测试、runbook、scorecard 协议或验证环境变化。
 
+后续真实执行见[四库 CPU/CUDA oracle 与三步训练](2026-10-14-downstream-oracle-scorecards.md)：固定 release 的八个 device 样例已通过，注册表 scorecard 接受其中六条 L3，Diffusers 两条组件证据不计 pipeline 分母。本页保留初次审计的原始基线与环境状态。
+
 ## 源码入口事实
 
 下表区分注册与执行。报告数仅统计 runbook 引用且当前仍存在的 `docs/results/` 文件；

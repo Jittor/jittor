@@ -61,3 +61,30 @@ class TestCublasMatmulAmpDtype(unittest.TestCase):
             c = jt.nn.bmm(a, b)
             c.sync()
         self.assertEqual(c.dtype, "float16")
+
+    def test_bfloat16_operands_can_expose_the_fp32_accumulator(self):
+        from jittor._runtime import forbid_backend_fallbacks
+        from jittor._runtime.backend_libraries import get_library_ops
+        ops = get_library_ops("cublas")
+        a = jt.array([[1.0078125]]).bfloat16()
+        b = jt.array([[1.0078125]]).bfloat16()
+        initial = jt.core.backend_fallback_count()
+        with forbid_backend_fallbacks():
+            out = ops.cublas_matmul(a, b, False, True, fp32_output=True)
+            out.sync()
+            self.assertEqual(out.dtype, "float32")
+            self.assertEqual(a.dtype, "bfloat16")
+            self.assertEqual(b.dtype, "bfloat16")
+            for value in (a, b, out):
+                self.assertEqual(value.location(), "device")
+            np.testing.assert_array_equal(out.numpy(), [[1.01568603515625]])
+        self.assertEqual(jt.core.backend_fallback_count(), initial)
+
+    def test_fp32_accumulator_option_rejects_other_compute_dtypes(self):
+        from jittor._runtime.backend_libraries import get_library_ops
+        ops = get_library_ops("cublas")
+        for dtype in ("float16", "float32", "float64"):
+            with self.subTest(dtype=dtype):
+                a = jt.ones((2, 2), dtype=dtype)
+                with self.assertRaisesRegex(RuntimeError, "requires BF16"):
+                    ops.cublas_matmul(a, a, False, False, fp32_output=True)

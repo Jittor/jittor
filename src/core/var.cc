@@ -20,6 +20,20 @@ namespace jittor {
 
 std::atomic<int64> Var::number_of_lived_vars{0};
 
+void Var::refresh_alias_requires_grad() {
+    if (autograd_alias && autograd_alias->inherit_requires_grad)
+        set_flag(VarFlags::_requires_grad_disabled,
+                 !autograd_alias->requires_grad());
+}
+
+void Var::check_alias_history() const {
+    USER_CHECK(!autograd_alias || !autograd_alias->stale_unrecorded_view())
+        << "A view was created in no_grad mode and its base or another view "
+           "of its base has been modified inplace. This use of the view is "
+           "ambiguous; create the view and perform the inplace operation "
+           "in the same grad mode.";
+}
+
 VarPtr contiguous_storage(Var* value) {
     if (value->is_contiguous()) return value;
     static auto make_contiguous = op_constructor<VarPtr, Var*>("contiguous");
@@ -43,7 +57,7 @@ DEFINE_FLAG(bool, no_fuse, 0,
     "No fusion optimization for all jittor Var creation");
 DEFINE_FLAG(uint8, node_order, 0, "id prior");
 // TODO: fuse multiple flags
-DEFINE_FLAG(int, amp_reg, 0, "Auto mixed-precision control registers, bit 0: prefer 32; bit 1: prefer 16; bit 2: keep reduce type; bit 3 keep white list type; bit 4: array like op prefer too; bit 5, reduce16 intermediate not use 32");
+DEFINE_FLAG(int, amp_reg, 0, "Auto mixed-precision control registers, bit 0: prefer 32; bit 1: prefer 16; bit 2: keep reduce type; bit 3 keep white list type; bit 4: array like op prefer too; bit 5, reduce16 intermediate not use 32; bit 6: prefer bfloat16");
 
 DEFINE_FLAG_WITH_SETTER(int, auto_mixed_precision_level, 0, "Auto mixed-precision optimization level, 0: not use fp16, 1-3: preserve level, not use fp16 for now; 4: perfer fp16, but some ops use fp32 e.g. sum,exp; 5: simular with 4, and array op will automatically convert to fp16; 6: all ops prefer fp16");
 
@@ -52,9 +66,25 @@ void (*_var_free_hook)(Var*);
 // A var joins its parent's ring the moment the allocator agrees to share, and
 // leaves it the moment it stops pointing into that allocation. A ring never
 // holds a single var: the last two leave together.
+// The rings are changed from two threads at once: the async worker allocates
+// a batch's outputs -- linking a child into its parent's ring -- without the
+// graph lock, while the Python thread frees vars, which unlinks them, under
+// it. A link and an unlink in one ring rewrite the same neighbours' pointers,
+// and the race left a dangling neighbour that a later unlink followed
+// (signal 11 in share_group_unlink, from DeferredGraphWork::apply on the
+// worker, about one pure-eager qwen3_decode_static run in three). Every ring
+// change and walk holds this lock. It is only taken for vars that share an
+// allocation, and is never held while taking another lock except the
+// allocator's, by migrate_group.
+std::mutex& share_ring_mutex() {
+    static std::mutex* mutex = new std::mutex();
+    return *mutex;
+}
+
 void share_group_link(Var* parent, Var* child) {
+    std::lock_guard<std::mutex> guard(share_ring_mutex());
     if (PREDICT_BRANCH_NOT_TAKEN(child->share_next != nullptr))
-        share_group_unlink(child);
+        share_group_unlink_locked(child);
     if (!parent->share_next)
         parent->share_next = parent->share_prev = parent;
     child->share_prev = parent;
@@ -64,6 +94,18 @@ void share_group_link(Var* parent, Var* child) {
 }
 
 void share_group_unlink(Var* v) {
+    // Only short bookkeeping is under this lock: the one operation that can
+    // block for a long time -- the device copy in migrate_group -- runs
+    // outside it (see mem/allocator.cc), so a waiter here is not held up by a
+    // GIL-releasing transfer. The GIL must stay held: `Node::free` holds the
+    // graph mutation lock across free_var, and dropping the GIL here would let
+    // a Python thread that holds the GIL wait for that lock while this one
+    // waits for the GIL back -- the inversion the readback probe hit.
+    std::lock_guard<std::mutex> guard(share_ring_mutex());
+    share_group_unlink_locked(v);
+}
+
+void share_group_unlink_locked(Var* v) {
     if (!v->share_next) return;
     Var* nxt = v->share_next;
     Var* prv = v->share_prev;

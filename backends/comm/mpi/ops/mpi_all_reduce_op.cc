@@ -19,16 +19,18 @@ namespace jittor {
 
 static auto make_array = op_constructor<VarPtr, const void*, NanoVector, NanoString>("array");
 static auto make_binary = op_constructor<VarPtr, Var*, Var*, NanoString>("binary");
-static auto make_mpi_all_reduce = op_constructor<VarPtr, Var*, NanoString>("mpi_all_reduce");
+static auto make_mpi_all_reduce = op_constructor<VarPtr, Var*, NanoString, int>("mpi_all_reduce");
 
-MpiAllReduceOp::MpiAllReduceOp(Var* x, NanoString op) : x(x), op(op) {
+MpiAllReduceOp::MpiAllReduceOp(Var* x, NanoString op, int group_id)
+    : x(x), op(op), group_id(group_id) {
     if (!mpi_enabled) {
         forward(x);
         return;
     }
     if (op == ns_mean) {
-        auto var = make_mpi_all_reduce(x, ns_add);
-        var = make_binary(var, make_array(&mpi_world_size, {}, ns_int32), ns_divide);
+        auto var = make_mpi_all_reduce(x, ns_add, group_id);
+        int size = mpi_process_group_size(group_id);
+        var = make_binary(var, make_array(&size, {}, ns_int32), ns_divide);
         forward(var);
         return;
     }
@@ -37,6 +39,7 @@ MpiAllReduceOp::MpiAllReduceOp(Var* x, NanoString op) : x(x), op(op) {
     #ifdef HAS_CUDA
 
     if (use_device_mpi && runtime_use_cuda()) {
+        USER_CHECK(group_id == 0) << "MPI subgroup CUDA collectives are unsupported";
         static auto nccl_all_reduce = has_op("nccl_all_reduce")
             ? get_op_info("nccl_all_reduce").get_constructor<VarPtr, Var*, int>()
             : nullptr;
@@ -63,8 +66,8 @@ void MpiAllReduceOp::infer_shape() {
 }
 
 VarPtr MpiAllReduceOp::grad(Var* out, Var* dout, Var* v, int v_index) {
-    static auto mpi_all_reduce = op_constructor<VarPtr, Var*,NanoString>("mpi_all_reduce");
-    return mpi_all_reduce(dout, ns_add);
+    static auto mpi_all_reduce = op_constructor<VarPtr, Var*, NanoString, int>("mpi_all_reduce");
+    return mpi_all_reduce(dout, ns_add, group_id);
 }
 
 void MpiAllReduceOp::jit_prepare(JK& jk) {
@@ -83,7 +86,7 @@ void MpiAllReduceOp::jit_run() {
     auto* __restrict__ yp = y->ptr<Tx>();
     index_t num = y->num;
     MPI_CHECK(MPI_Allreduce(xp, yp, num,
-        mpi_dtype(x->dtype()), mpi_add_op(x->dtype()), MPI_COMM_WORLD));
+        mpi_dtype(x->dtype()), mpi_add_op(x->dtype()), mpi_process_group_comm(group_id)));
 }
 #endif // JIT_cpu
 #endif // JIT

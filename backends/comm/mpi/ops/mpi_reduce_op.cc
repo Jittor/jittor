@@ -19,16 +19,18 @@ namespace jittor {
 
 static auto make_array = op_constructor<VarPtr, const void*, NanoVector, NanoString>("array");
 static auto make_binary = op_constructor<VarPtr, Var*, Var*, NanoString>("binary");
-static auto make_mpi_reduce = op_constructor<VarPtr, Var*, NanoString, int>("mpi_reduce");
+static auto make_mpi_reduce = op_constructor<VarPtr, Var*, NanoString, int, int>("mpi_reduce");
 
-MpiReduceOp::MpiReduceOp(Var* x, NanoString op, int root) : x(x), op(op), root(root) {
+MpiReduceOp::MpiReduceOp(Var* x, NanoString op, int root, int group_id)
+    : x(x), op(op), root(root), group_id(group_id) {
     if (!mpi_enabled) {
         forward(x);
         return;
     }
     if (op == ns_mean) {
-        auto var = make_mpi_reduce(x, ns_add, root);
-        var = make_binary(var, make_array(&mpi_world_size, {}, ns_int32), ns_divide);
+        auto var = make_mpi_reduce(x, ns_add, root, group_id);
+        int size = mpi_process_group_size(group_id);
+        var = make_binary(var, make_array(&size, {}, ns_int32), ns_divide);
         forward(var);
         return;
     }
@@ -37,6 +39,7 @@ MpiReduceOp::MpiReduceOp(Var* x, NanoString op, int root) : x(x), op(op), root(r
     USER_CHECK(op == ns_add) << "Not supported MPI op" << op;
     #ifdef HAS_CUDA
     if (use_device_mpi && runtime_use_cuda()) {
+        USER_CHECK(group_id == 0) << "MPI subgroup CUDA collectives are unsupported";
         static auto nccl_reduce = has_op("nccl_reduce")
             ? get_op_info("nccl_reduce").get_constructor<VarPtr, Var*, int, int>()
             : nullptr;
@@ -63,9 +66,8 @@ void MpiReduceOp::infer_shape() {
 }
 
 VarPtr MpiReduceOp::grad(Var* out, Var* dout, Var* v, int v_index) {
-    static VarPtr(*mpi_broadcast)(Var*, int) = 
-        get_op_info("mpi_broadcast").get_constructor<VarPtr, Var*, int>();
-    return mpi_broadcast(dout,root);
+    static auto mpi_broadcast = op_constructor<VarPtr, Var*, int, int>("mpi_broadcast");
+    return mpi_broadcast(dout, root, group_id);
 }
 
 void MpiReduceOp::jit_prepare(JK& jk) {
@@ -83,7 +85,7 @@ void MpiReduceOp::jit_run() {
     auto* __restrict__ yp = y->ptr<Tx>();
     index_t num = y->num;
     MPI_CHECK(MPI_Reduce(xp, yp, num,
-        mpi_dtype(x->dtype()), mpi_add_op(x->dtype()), root, MPI_COMM_WORLD));
+        mpi_dtype(x->dtype()), mpi_add_op(x->dtype()), root, mpi_process_group_comm(group_id)));
     // Only `root` receives the reduction; MPI ignores recvbuf everywhere else,
     // so on any other rank this output holds nothing. It is still allocated at
     // full size and filled deterministically, on purpose:
@@ -100,7 +102,7 @@ void MpiReduceOp::jit_run() {
     // Zero rather than left-over memory: reading it is a caller bug either
     // way, but a deterministic value makes that bug reproduce identically
     // instead of depending on what the allocator handed back.
-    if (root != mpi_world_rank)
+    if (root != mpi_process_group_rank(group_id))
         for (index_t i=0; i<num; i++) yp[i] = 0;
 }
 #endif // JIT_cpu

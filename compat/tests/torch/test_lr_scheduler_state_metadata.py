@@ -31,10 +31,11 @@ def test_callable_checkpoint_preserves_receiving_functions(name):
     opt.step()
     scheduler.step()
     saved = copy.deepcopy(scheduler.state_dict())
-    assert set(saved) == {"base_lrs", "last_epoch", "_step_count", "_is_initial",
-                          "_get_lr_called_within_step", "_last_lr", "lr_lambdas"}
+    assert set(saved) == {"base_lrs", "last_epoch", "_step_count", "verbose",
+                           "_get_lr_called_within_step", "_last_lr", "lr_lambdas"}
     assert saved["lr_lambdas"] == [None, {"factor": 0.25}]
-    assert saved["_is_initial"] is False
+    assert saved["verbose"] is False
+    assert "_is_initial" not in saved
     assert saved["_get_lr_called_within_step"] is False
     target_fn = lambda epoch: 0.5
     target_obj = Factor(0.75)
@@ -81,6 +82,15 @@ def test_initial_lr_resume_and_live_context_flags():
     opt.step(); scheduler.step()
     assert events[-1] == (False, True, 4)
     assert not scheduler._is_initial and not scheduler._get_lr_called_within_step
+
+
+def test_scheduler_state_dict_keeps_verbose_and_omits_transient_initial_flag():
+    scheduler = torch.optim.lr_scheduler.StepLR(
+        MetadataOptimizer(), step_size=2, gamma=0.5, verbose=True)
+    state = scheduler.state_dict()
+    assert state["verbose"] is True
+    assert "_is_initial" not in state
+    assert scheduler._is_initial is False
 
 
 def test_context_flags_reset_when_get_lr_raises():

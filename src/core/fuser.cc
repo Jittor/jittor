@@ -7,6 +7,7 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
+#include <memory>
 #include "core/fuser.h"
 #include "core/var.h"
 #include "core/op.h"
@@ -72,11 +73,21 @@ DEFINE_FLAG(int, fuse_into_reduce, 1,
 //                  fusable, 2 weakly shared, 3 strongly shared. The exact
 //                  meaning of 2 and 3 is owned by the caller (executor.cc may
 //                  still promote 2 to 3 or demote it to 1).
-void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vector<Var*>& vars, vector<int>& father, vector<int>& var_fused) {
+void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vector<Var*>& vars, vector<int>& father, vector<int>& var_fused, PlanScratch* scratch) {
+    // Built only for a caller without scratch of its own: the planner passes
+    // its own, and constructing and destroying the unused one cost every
+    // batch as much as the small ones spend on a pass below.
+    std::unique_ptr<PlanScratch> local;
+    if (!scratch) {
+        local.reset(new PlanScratch());
+        scratch = local.get();
+    }
+    PlanScratch& work = *scratch;
     // fuse_level[i]: how many un-fusable edges lie between op i and the sinks
     // of this batch, along the worst path. Two neighbouring ops may only fuse
     // when their levels are equal.
-    vector<int> fuse_level(ops.size(), -1);
+    vector<int>& fuse_level = work.fuse_level;
+    fuse_level.assign(ops.size(), -1);
 
     // union-find over op indices, with path compression
     auto find_father = [&](int i) -> int {
@@ -98,11 +109,32 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
     // `requested_backend()` walks an op's outputs for a placement, and the
     // passes below ask it of both ends of every edge they look at, several
     // times over. Asked once per op instead.
-    vector<BackendId> op_backend(ops.size());
+    vector<BackendId>& op_backend = work.op_backend;
+    op_backend.resize(ops.size());
+    // Whether every output of the op is one element; see edge_fusable.
+    vector<char>& op_scalar = work.op_scalar;
+    op_scalar.resize(ops.size());
     for (uint i = 0; i < ops.size(); i++) {
         if (i + 8 < ops.size()) __builtin_prefetch(ops[i + 8]);
         op_backend[i] = ops[i]->requested_backend();
+        char scalar = ops[i]->outputs().size() != 0;
+        for (Var* out : ops[i]->outputs())
+            if (out->num != 1) { scalar = 0; break; }
+        op_scalar[i] = scalar;
     }
+    // A Python number an operator was handed (`x.min() - r`), as it reaches
+    // `var`: the number itself, or the number broadcast to the operator's
+    // shape. Never a tensor anyone holds.
+    auto is_number_constant = [](Var* var) -> bool {
+        for (int depth = 0; depth < 2; depth++) {
+            if (var->flag(VarFlags::_python_number)) return true;
+            Op* producer = var->input();
+            if (!producer || producer->type() != OpType::broadcast
+                    || producer->inputs().size() != 1) return false;
+            var = producer->inputs().front();
+        }
+        return var->flag(VarFlags::_python_number);
+    };
     auto edge_fusable = [&](Var* var, Op* op, Op* other, int relation) -> bool {
         if (op->float32_precision != other->float32_precision) return false;
         if (op_backend[op->batch_index_at(tt)] != op_backend[other->batch_index_at(tt)]) return false;
@@ -112,8 +144,16 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
             // exist in memory and are never fused away
             if (var->batch_index_at(tt) < start_var_num) return false;
             if (op->type() == OpType::other || other->type() == OpType::other) return false;
-            // a single element only pays for a kernel if it feeds a broadcast
-            if (var->num <= 1 && op->type() != OpType::broadcast) return false;
+            // a single element only pays for a kernel if it feeds a broadcast.
+            // Except a Python number read by an op that is a single element
+            // too: that op reads it once, so fusing recomputes nothing, and
+            // `x.min() - r` stops running r as a kernel of its own that writes
+            // the constant out for the subtraction to read. Only a number:
+            // chaining scalar ops into one another would let `x += a[i]` in a
+            // loop grow one kernel per chain length.
+            if (var->num <= 1 && op->type() != OpType::broadcast
+                    && !(var->num == 1 && op_scalar[op->batch_index_at(tt)]
+                         && is_number_constant(var))) return false;
             if (var->flag(VarFlags::_force_fuse)) return true;
             // producer is a reduce: its output has to be written out
             if (other->type() == OpType::reduce) return false;
@@ -194,8 +234,10 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
 
     // Pass 1: number of consumers inside the batch, and the seeds of the
     // reverse topological walk (the ops nothing in this batch consumes).
-    vector<int> queue;
-    vector<int> unvisited_consumers;
+    vector<int>& queue = work.fuse_queue;
+    queue.clear();
+    vector<int>& unvisited_consumers = work.unvisited_consumers;
+    unvisited_consumers.clear();
     unvisited_consumers.reserve(ops.size());
     queue.reserve(ops.size());
     for (uint i = 0; i < ops.size(); i++) {
@@ -281,9 +323,12 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
     //         refusals: the limit, and any merge that would put a path through
     //         a third group between the two groups being merged.
     // Every other component keeps exactly the grouping it had before.
-    vector<int> group_size(ops.size(), 1);
-    vector<char> forced_material(vars.size(), 0);
-    vector<char> half_union(ops.size(), 0);
+    vector<int>& group_size = work.group_size;
+    group_size.assign(ops.size(), 1);
+    vector<char>& forced_material = work.forced_material;
+    forced_material.assign(vars.size(), 0);
+    vector<char>& half_union = work.half_union;
+    half_union.assign(ops.size(), 0);
     auto is_half = [](Var* var) {
         return var->dtype() == ns_float16 || var->dtype() == ns_bfloat16;
     };
@@ -308,7 +353,8 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
         });
     }
 
-    vector<char> bounded(ops.size(), 0);
+    vector<char>& bounded = work.bounded;
+    bounded.assign(ops.size(), 0);
     int any_bounded = 0;
     if (fuse_op_limit > 0) {
         for (uint i = 0; i < ops.size(); i++) {
@@ -584,7 +630,9 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
         // Whether an op of this batch waits on the var through a control
         // edge (`order_after_readers`), whether one reads its data, and
         // whether anything outside the batch still will.
-        bool ordered_before = false, read_here = false, read_later = var->holder;
+        bool ordered_before = false, read_here = false, read_later = var->holder
+            || (var->flag(VarFlags::_needed_by_backward)
+                && var->liveness.backward.active());
         for (auto o : var->_outputs) {
             if (o.index < 0) {
                 if (o.node->op()->tflag == tt) ordered_before = true;

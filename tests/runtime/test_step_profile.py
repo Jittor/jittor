@@ -167,7 +167,7 @@ class TestDeviceTime(unittest.TestCase):
                 step()
         path = os.path.join(tempfile.mkdtemp(), "step.json")
         prof.export_chrome_trace(path)
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             events = json.load(f)["traceEvents"]
         host = [e for e in events if e.get("ph") == "X" and e["pid"] == 1 and e["tid"] == 2]
         device = [e for e in events if e.get("ph") == "X" and e["pid"] == 2]

@@ -33,6 +33,11 @@ static inline cudaDataType get_dtype(NanoString dtype) {
     if (dtype == ns_float16) return CUDA_R_16F;
     #ifndef IS_ROCM
     if (dtype == ns_bfloat16) return CUDA_R_16BF;
+    // complex64/complex128 are (real, imag) pairs with the cuComplex /
+    // cuDoubleComplex layout (type/complex_compute.h). Only the CUDA rows of
+    // the matmul table send them here; see nn/functional/matrix.py.
+    if (dtype == ns_complex64) return CUDA_C_32F;
+    if (dtype == ns_complex128) return CUDA_C_64F;
     #endif
     LOGf << "not support type" << dtype;
     return CUDA_R_32F;

@@ -468,6 +468,13 @@ def _ensure_libcuda_linkable():
         swallowed("triton/__init__.py _ensure_libcuda_linkable: for d in ('/usr/lib/x86_64-linux-gnu', '/lib/x86_64-lin...", exc)
 
 
+def _install_benchmarker_without_driver_init(active, bench):
+    """Let Triton autotune use our timer without resolving a lazy CUDA driver."""
+    import inspect
+    if active is not None and inspect.getattr_static(active, "get_benchmarker", None) is None:
+        type(active).get_benchmarker = lambda self, *a, **k: bench
+
+
 def activate_bridge(real=None):
     """Patch a real triton's ``JITFunction.run`` to run on jittor Vars.
 
@@ -525,20 +532,13 @@ def activate_bridge(real=None):
             # backend's driver lacks get_benchmarker -> AttributeError at the
             # first @triton.autotune kernel (flaky: only when autotuning runs).
             # Provide it (returns our torch-free bench, which Triton calls as
-            # do_bench(kernel_call, quantiles=...)). Patch instance AND class so
-            # it survives driver.active re-resolution.
+            # do_bench(kernel_call, quantiles=...)). Inspect without invoking
+            # LazyProxy.__getattr__: hasattr would initialize Triton's CUDA
+            # driver and compile its extension just to import the shim.
             try:
                 from triton.runtime import driver as _drv
                 _active = getattr(_drv, "active", None)
-                if _active is not None and not hasattr(_active, "get_benchmarker"):
-                    try:
-                        _active.get_benchmarker = lambda *a, **k: bench
-                    except (AttributeError, TypeError) as exc:
-                        swallowed("triton/__init__.py activate_bridge: _active.get_benchmarker = lambda *a, **k: bench", exc)
-                    try:
-                        type(_active).get_benchmarker = lambda self, *a, **k: bench
-                    except EXPECTED as exc:
-                        swallowed("triton/__init__.py activate_bridge: type(_active).get_benchmarker = lambda self, *a, **k: b...", exc)
+                _install_benchmarker_without_driver_init(_active, bench)
             except EXPECTED as exc:
                 swallowed("triton/__init__.py activate_bridge: from triton.runtime import driver as _drv", exc)
         except EXPECTED as exc:

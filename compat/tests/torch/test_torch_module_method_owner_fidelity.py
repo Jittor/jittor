@@ -60,6 +60,7 @@ _UNCONDITIONAL_OWNERS = (
     ("parameters", "_parameters"),
     ("train", "_train"),
     ("eval", "_eval"),
+    ("_apply", "_module_apply"),
     ("to", "_module_to"),
     ("to_empty", "_module_to_empty"),
     ("cuda", "_module_cuda"),

@@ -44,6 +44,7 @@ static PyObject* jittor_internal_error = nullptr;
 static PyObject* jittor_index_error = nullptr;
 static PyObject* jittor_type_error = nullptr;
 static PyObject* jittor_shape_error = nullptr;
+static PyObject* jittor_linalg_error = nullptr;
 
 static PyObject* add_error_class(PyObject* m, const char* name, PyObject* bases,
                                  const char* doc) {
@@ -79,10 +80,26 @@ static void def_error_classes(PyObject* m) {
         "weight, too few dimensions.");
 }
 
+// Made on first use rather than with the others: it derives from numpy's
+// LinAlgError, and this module is imported before anything else of jittor.
+// Not published as a module attribute; callers catch np.linalg.LinAlgError.
+static PyObject* linalg_error_class() {
+    if (jittor_linalg_error) return jittor_linalg_error;
+    PyObjHolder linalg(PyImport_ImportModule("numpy.linalg"));
+    PyObjHolder base(PyObject_GetAttrString(linalg.obj, "LinAlgError"));
+    PyObjHolder bases(PyTuple_Pack(2, jittor_error, base.obj));
+    jittor_linalg_error = PyErr_NewExceptionWithDoc("jittor.JittorLinAlgError",
+        "A matrix the linear-algebra operator cannot handle (singular, not "
+        "positive definite). Also numpy.linalg.LinAlgError.", bases.obj, nullptr);
+    ASSERT(jittor_linalg_error) << "could not create JittorLinAlgError";
+    return jittor_linalg_error;
+}
+
 PyObject* python_error_class(const std::exception& e) {
     // Only before jit_utils_core has finished importing.
     if (!jittor_error) return PyExc_RuntimeError;
     if (dynamic_cast<const UserIndexError*>(&e)) return jittor_index_error;
+    if (dynamic_cast<const UserLinAlgError*>(&e)) return linalg_error_class();
     if (dynamic_cast<const InternalInvariantError*>(&e)) return jittor_internal_error;
     return jittor_error;
 }

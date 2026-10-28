@@ -248,6 +248,14 @@ struct UserIndexError : UserError {
     using UserError::UserError;
 };
 
+// A matrix a factorization or solve cannot handle -- singular, not positive
+// definite -- found while the op ran. Python sees an error that is also
+// `numpy.linalg.LinAlgError`, what numpy raises and the numpy_code linalg
+// callbacks raised before the native cuSOLVER ops.
+struct UserLinAlgError : UserError {
+    using UserError::UserError;
+};
+
 struct InternalInvariantError : JittorError {
     using JittorError::JittorError;
 };

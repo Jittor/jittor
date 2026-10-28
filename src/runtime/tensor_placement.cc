@@ -1,6 +1,8 @@
 #include "runtime/tensor_placement.h"
 
 namespace jittor {
+std::atomic<bool> explicit_tensor_placement_made{false};
+
 namespace {
 thread_local TensorPlacement construction_placement;
 }

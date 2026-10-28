@@ -15,6 +15,8 @@
 
 namespace jittor {
 
+DECLARE_FLAG(bool, no_grad);
+
 TapeOp::TapeOp(Var* x) {
     set_flag(OpFlags::_cpu);
     set_flag(OpFlags::_cuda);
@@ -84,7 +86,19 @@ Tapes::Tapes(
     set_flag(OpFlags::_grads);
     set_flag(OpFlags::_manual_set_vnbb);
     set_flag(OpFlags::_no_input_storage);
+    // This node groups a custom backward; its forward already performed any
+    // explicit device transfers. Grouping must not reject mixed-device inputs.
+    set_flag(OpFlags::_manual_device);
     callback = move(grad_callback);
+
+    vector<Var*> tin(taped_inputs.size());
+    for (int i=0; i<taped_inputs.size(); i++) {
+        tin[i] = taped_inputs[i]->var->input()->inputs().front();
+        tin[i]->refresh_alias_requires_grad();
+        // Check before connecting any external graph edges: a rejected view
+        // must not leave neighbours pointing at a partially constructed Tapes.
+        if (!no_grad) tin[i]->check_alias_history();
+    }
     
 
     /*
@@ -106,11 +120,11 @@ Tapes::Tapes(
         op->add_inputs(vector<Node*>{out.ptr});
     }
     // set tapes input 
-    vector<Var*> tin(taped_inputs.size());
-    for (int i=0; i<taped_inputs.size(); i++) {
-        tin[i] = taped_inputs[i]->var->input()->inputs().front();
-    }
     add_inputs(tin);
+    // Grouped custom backward uses the same construction-time eligibility
+    // as ordinary Ops. In particular a publicly trainable, unrecorded view
+    // must not acquire an input edge just because another taped input has one.
+    init();
     // stop grad for input and output
     for (int i=0; i<taped_inputs.size(); i++) {
         taped_inputs[i]->var->set_stop_grad();

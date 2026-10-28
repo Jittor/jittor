@@ -111,7 +111,7 @@ static inline cudnnDataType_t cudnn_conv_compute_type(
 #ifndef IS_ROCM
 /** Math mode for the convolution descriptor.
 
-    float32 operands follow `float32_matmul_precision` (see
+    float32 operands follow `float32_cudnn_precision` (see
     runtime/float32_precision.h): `highest` keeps true float32 FMA, `high` and
     `medium` allow the tensor-op path. Reduced-precision operands always take
     the tensor-op path -- for float16/bfloat16 data ALLOW_CONVERSION has

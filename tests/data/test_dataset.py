@@ -127,6 +127,22 @@ class YourDataset5(Dataset):
     def __getitem__(self, k):
         return { "a":np.array([1,2,3]) }
 
+
+def _delay_dataset_worker_init(worker_id):
+    # Keep the parent waiting longer than one native queue poll, without
+    # depending on model-sized JIT compilation to reproduce the delay.
+    import time
+    time.sleep(5.5)
+
+
+class DelayedWorkerDataset(Dataset):
+    def __init__(self):
+        super().__init__(worker_init_fn=_delay_dataset_worker_init)
+        self.set_attrs(total_len=2)
+
+    def __getitem__(self, k):
+        return np.asarray([k], dtype=np.int32)
+
 class TestDataset2(unittest.TestCase):
     def test_dataset_use_jittor(self):
         dataset = YourDataset().set_attrs(batch_size=256, shuffle=True, num_workers=4)
@@ -142,7 +158,35 @@ class TestDataset2(unittest.TestCase):
     def test_dataset_use_jittor_cuda(self):
         self.test_dataset_use_jittor()
 
+    def _assert_delayed_workers_deliver_batches(self):
+        dataset = DelayedWorkerDataset().set_attrs(
+            batch_size=1, shuffle=False, num_workers=2)
+        batches = [batch[0].numpy().copy() for batch in dataset]
+        np.testing.assert_array_equal(batches, [[0], [1]])
+
+    @jt.flag_scope(use_cuda=0)
+    def test_live_worker_can_exceed_queue_poll_interval(self):
+        self._assert_delayed_workers_deliver_batches()
+
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
+    @jt.flag_scope(use_cuda=1)
+    def test_live_worker_can_exceed_queue_poll_interval_cuda(self):
+        self._assert_delayed_workers_deliver_batches()
+
 class TestDatasetSeed(unittest.TestCase):
+    def test_derived_worker_seed_fits_jittor_seed_binding(self):
+        from jittor.dataset.dataset import _dataset_worker_seed
+
+        maximum = 0x7fffffff
+        seeds = [
+            _dataset_worker_seed(2**63 - 1, 3, 0, 0),
+            _dataset_worker_seed(2**63 - 1, 3, 7, 0),
+            _dataset_worker_seed(2**63 - 1, 3, 0, 1),
+        ]
+        assert all(0 <= seed <= maximum for seed in seeds)
+        assert seeds[0] != seeds[1]
+        assert seeds[0] != seeds[2]
+
     def test_np(self):
 
         dataset = YourDataset2().set_attrs(batch_size=1, shuffle=True, num_workers=4)
@@ -266,7 +310,8 @@ if __name__ == "__main__":
         s = r.stderr.decode()
         print(s)
         assert r.returncode != 0
-        assert "ring buffer pop timed out" in s
+        assert "dataset worker(s)" in s
+        assert "exit code" in s
 
 
     @_test_capability.library_required('mpi', backend=jt)
@@ -521,6 +566,7 @@ if __name__ == "__main__":
         print("HAS_MESSAGE=%s" % ("boom in worker" in str(e)))
         print("HAS_TRACEBACK=%s" % ("__getitem__" in str(e)))
         print("HAS_VALUEERROR=%s" % ("ValueError" in str(e)))
+        print("DETAIL=%s" % str(e))
     else:
         print("NO_EXCEPTION")
     print("STILL_ALIVE")
@@ -544,6 +590,27 @@ if __name__ == "__main__":
         assert "boom in worker" not in err, err[-2000:]
         # and nothing pretends the user pressed Ctrl-C
         assert "Caught SIGINT" not in err, err[-2000:]
+
+    def test_worker_init_exception_reaches_the_caller(self):
+        source = self.SRC.replace(
+            'class Boom(Dataset):',
+            'def fail_init(worker_id):\n'
+            '    raise ValueError("boom in worker init")\n'
+            'class Boom(Dataset):',
+        ).replace('if k == 7:', 'if k == 700:')
+        source = source.replace(
+            '        super().__init__()',
+            '        super().__init__(worker_init_fn=fail_init)',
+        )
+        r = run_child_script(source)
+        out = r.stdout.decode()
+        err = r.stderr.decode()
+        assert r.returncode == 0, out[-2000:] + err[-3000:]
+        assert "RAISED=ValueError" in out, out[-2000:]
+        assert "boom in worker init" in out, out[-2000:]
+        assert "Worker traceback" in out, out[-2000:]
+        assert "STILL_ALIVE" in out, out[-2000:]
+        assert "boom in worker init" not in err, err[-2000:]
 
 
 class TestWorkerDeathWakesTheParent(unittest.TestCase):

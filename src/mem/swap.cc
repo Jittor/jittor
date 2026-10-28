@@ -56,6 +56,10 @@ struct Swap {
 
 unordered_map<Allocator*, Swap> swaps;
 
+// Swap-out is allocator bookkeeping: the flags, alias links and sizes come
+// from the Var/Allocator, and the swap file path is built here. A failure is
+// environment or framework state, never a caller-supplied value, so these
+// checks stay ASSERT/CHECK.
 void swap_to_disk(Var* x, Swap& swap) {
     swap_total += x->storage_span_bytes();
     ASSERT(!x->flag(VarFlags::_is_swapped));

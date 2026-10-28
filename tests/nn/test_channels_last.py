@@ -53,7 +53,7 @@ class _ResidualNet(nn.Module):
 
 
 @unittest.skipIf(not HAS_CUDA, "needs CUDA")
-class TestChannelsLast(unittest.TestCase):
+class TestChannelsLastCUDA(unittest.TestCase):
     def setUp(self):
         self.scope = jt.flag_scope(use_cuda=1)
         self.scope.__enter__()

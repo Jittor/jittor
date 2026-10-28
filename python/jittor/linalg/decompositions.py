@@ -10,11 +10,14 @@
 # ***************************************************************
 """Real and native-complex matrix factorizations."""
 from ._helpers import (
+    _cuda_svd_reduced, _host_lapack, _is_cupy,
     _batching_aware, _conj_T, _diag_embed, _diag_of, _eye_like, _linalg_errors_raise,
     _cn_to_native, _is_native_complex, _matmul, _native_to_cn, _reconnect,
     _transpose,
 )
 from .results import SVD
+from jittor._runtime.dispatch import select_kernel
+from .solving import _solve_triangular
 
 
 def _svd_reduced(x):
@@ -28,11 +31,15 @@ def _svd_reduced(x):
     ``(u, s, v)`` tuple.
     '''
     import jittor as jt
+    @_host_lapack
     def forward_code(np, data):
         a = data["inputs"][0]
         u, s, v = data["outputs"]
         #TODO:remove copyto
-        tu, ts, tv = np.linalg.svd(a, full_matrices=0)
+        if _is_cupy(np) and a.ndim == 2 and a.size:
+            tu, ts, tv = _cuda_svd_reduced(np, a)
+        else:
+            tu, ts, tv = np.linalg.svd(a, full_matrices=0)
         np.copyto(u, tu)
         np.copyto(s, ts)
         np.copyto(v, tv)
@@ -117,6 +124,7 @@ def _svd_full(x):
     False`` (or :func:`svdvals`) when you need gradients.
     '''
     import jittor as jt
+    @_host_lapack
     def forward_code(np, data):
         a = data["inputs"][0]
         u, s, v = data["outputs"]
@@ -284,6 +292,8 @@ def eigh(x):
         return complex_eigh(x)
     complex_input = _is_native_complex(x)
 
+    @_host_lapack
+
     def forward_code(np, data):
         a = data["inputs"][0]
         w, v = data["outputs"]
@@ -379,6 +389,7 @@ def cholesky(x):
     :return: L (...,M,M).
     """
     import jittor as jt
+    @_host_lapack
     def forward_code(np, data):
         a = data["inputs"][0]
         L = data["outputs"][0]
@@ -404,8 +415,8 @@ def cholesky(x):
             LH = _conj_T(L)
             eye = _eye_like(L.real if _is_native_complex(L) else L, k)
             phi = jt.tril(jt.matmul(LH, gL)) * (1 - 0.5 * eye)
-            left = jt.linalg.solve(LH, phi)                          # L^-H phi
-            gA = _conj_T(jt.linalg.solve(LH, _conj_T(left)))         # ... L^-1
+            left = _solve_triangular(LH, phi, True)                  # L^-H phi
+            gA = _conj_T(_solve_triangular(LH, _conj_T(left), True)) # ... L^-1
             return (gA + _conj_T(gA)) * 0.5
 
     return _Cholesky()(x)
@@ -427,6 +438,7 @@ def qr(x):
     # Native complex takes the real path below with conjugate transposes:
     # its gradient then differentiates again, which the ComplexNumber callback
     # bridge's could not.
+    @_host_lapack
     def forward_code(np, data):
         a = data["inputs"][0]
         q, r = data["outputs"]
@@ -453,7 +465,7 @@ def qr(x):
         # further-differentiable op graph instead of an opaque numpy_code
         # callback -- see `inv`/`_Inv` in solving.py for the general pattern
         # this and det/solve/qr all share).
-        return _conj_T(jt.linalg.solve(r_, _conj_T(X)))
+        return _conj_T(_solve_triangular(r_, _conj_T(X), True))
 
     class _QR(jt.Function):
         # Reduced-QR backward. A=QR, Q:(...,m,k), R:(...,k,n), k=min(m,n).
@@ -490,7 +502,11 @@ def qr(x):
         # recursive call (rather than the taped/stop-grad'd `self.q`/
         # `self.r`) is what makes this work.
         def execute(self, xt):
-            self.q, self.r = jt.numpy_code([sq, sr], [xt.dtype, xt.dtype], [xt], forward_code)
+            kernel = select_kernel("linalg_qr", xt)
+            if kernel is not None:
+                self.q, self.r = kernel(xt)
+            else:
+                self.q, self.r = jt.numpy_code([sq, sr], [xt.dtype, xt.dtype], [xt], forward_code)
             return self.q, self.r
 
         def grad(self, gq, gr):

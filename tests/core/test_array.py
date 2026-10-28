@@ -373,5 +373,37 @@ class TestLikeConstructorsKeepTheDevice(unittest.TestCase):
         self._check("float32")
 
 
+class TestDataViewMigration(unittest.TestCase):
+    def setUp(self):
+        if not jt.flags.use_cuda:
+            self.skipTest("requires active accelerator execution for storage migration")
+
+    def test_exported_storage_survives_device_consumer_and_rebind(self):
+        value = (jt.arange(6).float32() + 1).reshape(2, 3)
+        host = value.data
+        host[0, 0] = 11
+        expected = host.copy()
+        # This consumer uploads value and releases its old host storage.
+        result = (value * 5).data
+        np.testing.assert_array_equal(result, expected * 5)
+        value.assign(jt.full((2, 3), -7.0))
+        np.testing.assert_array_equal(value.data, np.full((2, 3), -7.0))
+        np.testing.assert_array_equal(host, expected)
+
+    def test_exported_strided_and_empty_storage_survives_migration(self):
+        base = (jt.arange(12).float32() + 1).reshape(3, 4)
+        view = base.transpose(1, 0)
+        host = view.data
+        expected = host.copy()
+        np.testing.assert_array_equal((view * 3).data, expected * 3)
+        np.testing.assert_array_equal((base * 7).data, expected.T * 7)
+        np.testing.assert_array_equal(host, expected)
+        empty = jt.empty((0, 3))
+        empty_host = empty.data
+        empty.assign(jt.empty((0, 3)))
+        np.testing.assert_array_equal((empty + 1).data, empty_host)
+        self.assertEqual(empty_host.shape, (0, 3))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -19,6 +19,10 @@ mixed-precision
 complex-dtype
 pipelined-execution
 profiling
+native-sharded-checkpoint
+native-zero-optimizer
+native-tensor-parallel
+native-fsdp
 ```
 
 ## 按问题索引

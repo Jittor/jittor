@@ -8,8 +8,9 @@ description: 在 Jittor torch shim 与独立 PyTorch 两侧跑通并对比 Huggi
 ## 用途
 
 回答三件事：Transformers 怎么在 shim 上跑、怎么在原生 torch 上跑、两侧怎么对拍
-（数值与速度）。覆盖 `_ecosystem_cases.py` 的 6 个 tiny case（`transformers_gpt2`、
-`_llama`、`_bert`、`_vit`、`_t5`、`_whisper`）与 `_ecosystem_speed.py` 的 5 个真实尺寸
+（数值与速度）。覆盖 `_ecosystem_cases.py` 的 9 个 tiny case（`transformers_gpt2`、
+`_llama`、`_bert`、`_vit`、`_t5`、`_whisper`、`_clip_multimodal`、
+`_mixtral_moe`、`_llama_rope_2048`）与 `_ecosystem_speed.py` 的 5 个真实尺寸
 case（`large_transformers_llama`、`_gpt2`、`_qwen3`、`_bert`、`_vit`）。
 
 **不覆盖**：`transformers` 的完整训练/微调、真实 checkpoint 与数据集、generation 采样；
@@ -18,7 +19,53 @@ NPU 专项（条目存在但未跑）。深度性能分析（SDPA 后端、算�
 [`jittor-transformers-perf`](../jittor-transformers-perf/SKILL.md)；两边的解释器约定相同
 （`<jittor-python>` / `<real-torch-python>`），环境以本文件「两侧环境」为准。
 
-## 两侧环境
+## 当前验证基线
+
+2026-10-15 的 [模型族矩阵](../../../docs/results/2026-10-15-transformers-model-family-matrix.md)
+在提交 `8e388d108` 上验证九项 CPU/CUDA 场景，最高 L3（三步 SGD），每个设备覆盖
+8/374 模型族、2/46 任务。使用 Python 3.11.16、NumPy 1.26.4、Jittor 2.0.0、
+Transformers 4.56.2（上游 `cd74917ffc3e8f84e4a886052c5ab32b7ac623cc`）与独立
+PyTorch 2.11.0+cu128。实际设备、精度、版本差异、阈值和完整证据见该报告。
+
+新增 CLIP 双塔全参数与 pixel 梯度、Mixtral 每个专家/路由梯度、实际 2048 token
+RoPE Llama；BERT/ViT 包含 pooler。固定初始权重分别执行 seed 7/19 输入扰动，
+不以 import 成功作为覆盖。尚未证明完整训练、32K、generation 或 L4 性能。
+`JITTOR_ECOSYSTEM_CACHE_ROOT` 应指向当前任务独占缓存，首次编译串行，且与单测分离。
+
+独立 [32768-token Longformer 补证](../../../docs/results/2026-10-15-longformer-32768-context-oracles.md)
+绑定源码 `cbe154c3`，CPU/CUDA 均完成全参数/输入梯度、seed 7/19 扰动及三步训练。
+该项是 tiny-width encoder + pooler 的 L3，按独立基线计 1/374 模型族，不并入上述
+`8e388d108` 的分子。通过 `test_ecosystem_longformer.py` 单独运行，设置
+`JITTOR_ECOSYSTEM_LONGFORMER_32K=1`、单个 `JITTOR_TEST_DEVICES=cpu` 或 `cuda`、
+独立 `REAL_TORCH_PYTHON` 和空 `JITTOR_ECOSYSTEM_SPEED_RATIO`；缺 oracle/库或错误设备选择
+直接失败。该耗时门禁不加入默认快速生态矩阵。
+
+## 完整 CPU 维护门禁与 nightly
+
+`ecosystem_transformers_source` 保留全部十场景（原九模型场景及 32768-token
+Longformer）、base、seed 7/19 扰动和三步 SGD；禁止通过 preflight 或场景子集替代。
+固定 Transformers 4.56.2 的完整官方源码/wheel、实际安装 METADATA/RECORD，
+两侧完整梯度与原数值预算沿用
+[完整来源重测](../../../docs/results/2026-10-16-transformers-main-source-training.md)。
+
+生态 workflow 的 `maintained-cpu` 矩阵通过下列入口准备三个全新解释器，
+为候选与独立 oracle 安装完整依赖并分别执行 `pip check`，再调用该完整 nox session：
+
+```bash
+<healthy-python-3.11> tools/provision_ecosystem_nightly.py \
+  --library transformers --state-root "$JITTOR_LAB_ROOT/_state/transformers-nightly/run" --run
+```
+
+CPU 轨显式隐藏 CUDA、固定真实 Torch 2.11.0+cpu；安装包/编译缓存和原始阶段产物
+都在独立 state 下，单测不复用该编译缓存。保留 command、失败日志、完整安装锁及
+数值产物。本地运行和 workflow 配置不能证明 GitHub scheduled 作业已实际执行；
+不新增 CUDA、性能等级、完整 Trainer 或任意 checkpoint 的支持结论。
+
+## 历史 H3 两侧环境
+
+以下 Python 3.12 / Transformers 5.5.3 环境属于历史 H3 记录，不能用于解释上述
+4.56.2 矩阵的数值或覆盖度。重新验证时，两侧必须固定同一 Transformers 版本。
+
 
 | 角色 | 解释器 | 环境脚本 |
 | --- | --- | --- |

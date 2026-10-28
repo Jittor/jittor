@@ -650,11 +650,13 @@ _SKIP_BUCKET_ORDER = (
     "accelerator",
     "backend",
     "mpi",
+    # Before "torch": a declared limitation compares against Torch and names it
+    # in the reason, which must not read as "the oracle is not installed".
+    "declared",
     "torch",
     "network",
     "manual",
     "opt-in",
-    "declared",
     "environment",
     "other",
 )
@@ -727,6 +729,12 @@ _SKIP_BUCKET_PATTERNS = {
     # modules that read a setting under its unprefixed name and skips the
     # resolver files, which are exactly where those names are resolved.
     "declared": (
+        # A known semantic divergence or a suspected defect, stated in the skip
+        # reason itself. Both describe the Torch comparison, so without these
+        # entries they were classified as "torch" and a session that required
+        # an independent oracle reported them as a configuration error.
+        "semantic-diff",
+        "suspected-bug",
         "supports_gradgrad=false",
         "supports_autograd=false",
         "no numpy reference",
@@ -798,11 +806,12 @@ def pytest_runtest_logreport(report):
 
 
 def _blames_missing_torch(reason):
-    try:
-        from _helpers.gate_scope import REAL_TORCH_PATTERNS
-    except Exception:
-        return False
-    return any(pattern in reason for pattern in REAL_TORCH_PATTERNS)
+    # A reason can compare behavior with Torch without claiming that the
+    # independent oracle is absent. In particular, known semantic differences
+    # use unittest.skip and describe both sides in the reason. Classify the
+    # reason first so those declared limitations do not become a false
+    # "missing real Torch" configuration error.
+    return classify_skip_reason_bucket(reason) == "torch"
 
 
 def _skip_reason(report):
@@ -819,8 +828,20 @@ def _skip_reason(report):
 
 
 def _is_accelerator_case(report):
-    """Recognize a test whose nodeid names an accelerator path or backend."""
-    nodeid = str(getattr(report, "nodeid", "")).lower()
+    """Recognize tests named for a backend or explicitly marked for one."""
+    # TestReport.keywords preserves registered pytest markers. A CUDA-only
+    # test can have a neutral path and nodeid, so its explicit backend marker
+    # is the reliable signal for the execution counter.
+    keywords = getattr(report, "keywords", {})
+    if any(marker in keywords for marker in ("cuda", "rocm", "npu")):
+        return True
+    original = str(getattr(report, "nodeid", ""))
+    # instantiate_device_type_tests emits classes such as TestNumericCUDA,
+    # whose suffix has neither of the legacy "_cuda" / "cuda_" separators.
+    # Restrict this convention to class components, not arbitrary method text.
+    if any(part.endswith(("CUDA", "ROCM", "NPU")) for part in original.split("::")[1:-1]):
+        return True
+    nodeid = original.lower()
     # Backend-parametrized tests can live outside tests/backends/cuda and
     # carry IDs such as [cuda-float64] or [float64-cuda], not "_cuda".
     # Match whole parameter labels, not unrelated words containing "cuda".
@@ -864,14 +885,17 @@ def _accepted_skip_patterns():
         from _helpers.gate_scope import ENVIRONMENT_SKIP_PATTERNS, REAL_TORCH_PATTERNS
     except Exception:
         return ()
-    if not _real_torch_is_required():
-        return ENVIRONMENT_SKIP_PATTERNS
+    required = set(REAL_TORCH_PATTERNS if _real_torch_is_required() else ())
+    if os.environ.get("JITTOR_REQUIRE_DEEPSPEED", "").strip().lower() in ("1", "true", "yes", "on"):
+        required.add("deepspeed")
+    if os.environ.get("JITTOR_REQUIRE_TRELLIS", "").strip().lower() in ("1", "true", "yes", "on"):
+        required.add("trellis")
+    if os.environ.get("JITTOR_REQUIRE_DATATROVE", "").strip().lower() in ("1", "true", "yes", "on"):
+        required.add("datatrove")
     # The inversion: a session that declares it has real PyTorch cannot also
     # accept "no torch" as an explanation, or it reports success for the one
     # thing it exists to check.
-    return tuple(
-        pattern for pattern in ENVIRONMENT_SKIP_PATTERNS if pattern not in REAL_TORCH_PATTERNS
-    )
+    return tuple(pattern for pattern in ENVIRONMENT_SKIP_PATTERNS if pattern not in required)
 
 
 def _environment_explains(reasons):
@@ -916,6 +940,8 @@ def _snapshot_selected_files(config):
         # must not be reported as a file the session proved nothing about
         # either. Otherwise refusing it would only move its red from
         # "collection error" to "collected 0 tests".
+        # The native-only ownership split is also a collection refusal, not
+        # an unexplained empty file in this Torch-mode session.
         _SELECTED_FILES.update(
             path
             for path in selected_files(
@@ -927,6 +953,7 @@ def _snapshot_selected_files(config):
                 ],
             )
             if not _refuses_collection(REPO_ROOT / path)
+            and not (_torch_mode_is_active() and path in NATIVE_MODE_PATHS)
         )
     except Exception:
         pass
@@ -1155,6 +1182,7 @@ def pytest_sessionfinish(session, exitstatus):
     something or be listed in ``gate_scope.EXECUTES_NOTHING`` with a reason.
     """
     _flush_worker_state_leaks(session)
+    _publish_xdist_collected_files(session.config, _COLLECTED_FILES)
     required_accelerator = _required_accelerator_executions()
     if required_accelerator and _ACCELERATOR_EXECUTED < required_accelerator:
         session.exitstatus = 1
@@ -1188,6 +1216,32 @@ def pytest_sessionfinish(session, exitstatus):
     unexplained += [path for path in _files_that_collected_nothing() if path not in exemptions]
     if unexplained or _other_skip_count() > 0:
         session.exitstatus = 1
+
+
+_XDIST_COLLECTED_FILES_KEY = "jittor_collected_files"
+
+
+def _publish_xdist_collected_files(config, collected_files):
+    """Send worker-side collection facts to the xdist controller.
+
+    Collection hooks run in workers, but ``pytest_sessionfinish`` also runs in
+    the controller. Without this handoff the controller sees an empty
+    ``_COLLECTED_FILES`` and reports every selected file as uncollected, even
+    after it has received thousands of test reports from the workers.
+    """
+    if _xdist_worker_id(config) is None:
+        return
+    workeroutput = getattr(config, "workeroutput", None)
+    if workeroutput is not None:
+        workeroutput[_XDIST_COLLECTED_FILES_KEY] = sorted(collected_files)
+
+
+@pytest.hookimpl(optionalhook=True)
+def pytest_testnodedown(node, error):
+    """Merge collection facts before the controller evaluates session policy."""
+    workeroutput = getattr(node, "workeroutput", None) or {}
+    collected_files = workeroutput.get(_XDIST_COLLECTED_FILES_KEY, ())
+    _COLLECTED_FILES.update(collected_files)
 
 
 def _install_api_coverage(session):

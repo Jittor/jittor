@@ -7,6 +7,7 @@
 #include "ops/op_register.h"
 #include "ops/composite/code_op.h"
 #include <cmath>
+#include <cstring>
 #include "core/grad.h"
 #include "core/var_holder.h"
 #include "runtime/float32_precision.h"
@@ -37,11 +38,12 @@ PyObject* slow = nullptr;
 // What `_dispatch_module_call` consults, for the native version of it below.
 PyObject* prefer_forward_fn = nullptr;
 PyObject* standard_rms_norm = nullptr;
+PyObject* rms_selector_state = nullptr;
 PyObject* linear_execute = nullptr;
 PyObject* matmul_kernel = nullptr;
 PyObject* empty_kwargs = nullptr;
 PyObject* matmul_name = nullptr;
-auto make_cublas_matmul = op_constructor<VarPtr, Var*, Var*, bool, bool>("cublas_matmul");
+auto make_cublas_matmul = op_constructor<VarPtr, Var*, Var*, bool, bool, bool>("cublas_matmul");
 // The fused RMS norm `_standard_rms_norm` reaches on an inference call.
 PyObject* rms_inference_impl = nullptr;
 PyObject* rms_source_fn = nullptr;
@@ -233,6 +235,23 @@ bool is_var(PyObject* value) {
     return PyObject_TypeCheck(value, &PyjtVarHolder.ht_type);
 }
 
+// The first Var this module owns that carries an explicit placement, or
+// nullptr. The placement reference for a forward whose first tensor argument
+// has none: the choice is open then, and the module's own parameters are the
+// operands that cannot follow the input.
+Var* first_placed_module_var(PyObject* module) {
+    PyObject** dictptr = _PyObject_GetDictPtr(module);
+    if (!dictptr || !*dictptr) return nullptr;
+    PyObject *key, *value;
+    Py_ssize_t pos = 0;
+    while (PyDict_Next(*dictptr, &pos, &key, &value)) {
+        if (!is_var(value)) continue;
+        Var* var = GET_RAW_PTR(VarHolder, value)->var;
+        if (var->placement.explicit_backend) return var;
+    }
+    return nullptr;
+}
+
 PyObject* interned(PyObject*& slot, const char* text) {
     if (!slot) slot = PyUnicode_InternFromString(text);
     return slot;
@@ -273,7 +292,7 @@ PyObject* linear_without_bias(PyObject* module, PyObject* dict, PyObject* x) {
     PyObjHolder kernel(kernel_select(matmul_name, call_args.obj, nullptr));
     if (kernel.obj != matmul_kernel) return nullptr;
     PyTensorFrontendScope scope(x, nullptr, 0, false);
-    return to_py_object<VarHolder*>(new VarHolder(make_cublas_matmul(a, w, false, true)));
+    return to_py_object<VarHolder*>(new VarHolder(make_cublas_matmul(a, w, false, true, false)));
 }
 
 bool pair_of_ints(PyObject* value, int& a, int& b) {
@@ -703,12 +722,96 @@ PyObject* linear_with_bias_inference(PyObject* dict, PyObject* x) {
     return to_py_object<VarHolder*>(out.release());
 }
 
+// The Python owners remain authoritative. A registry override is handled by
+// kernel_select itself; replacing a Python selector/helper takes its old path.
+bool rms_selector_unchanged() {
+    if (!rms_selector_state) return false;
+    PyObject* owner = PyTuple_GET_ITEM(rms_selector_state, 0);
+    PyObject* dispatch = PyTuple_GET_ITEM(rms_selector_state, 5);
+    return PyDict_GetItemString(owner, "_standard_rms_norm") == standard_rms_norm
+        && PyDict_GetItemString(owner, "_acl_bfloat16_rms_norm") == PyTuple_GET_ITEM(rms_selector_state, 1)
+        && PyDict_GetItemString(owner, "_backend_hooks") == PyTuple_GET_ITEM(rms_selector_state, 2)
+        && PyDict_GetItemString(owner, "_rms_norm_training_cuda") == PyTuple_GET_ITEM(rms_selector_state, 3)
+        && PyDict_GetItemString(owner, "_rms_norm_cuda") == PyTuple_GET_ITEM(rms_selector_state, 4)
+        && PyDict_GetItemString(dispatch, "select_kernel") == PyTuple_GET_ITEM(rms_selector_state, 6)
+        && PyDict_GetItemString(dispatch, "dispatch_context") == PyTuple_GET_ITEM(rms_selector_state, 7)
+        && PyDict_GetItemString(dispatch, "_NATIVE_SELECT") == PyTuple_GET_ITEM(rms_selector_state, 8);
+}
+
+// A registered backend already owns RMSNorm's arithmetic and validation.
+// Avoid the Python module/hook wrappers around that same provider. None means
+// both providers declined and dispatch_native must continue to the module's
+// forward, without calling either provider a second time.
+PyObject* rms_norm_registered_inference(PyObject* module, PyObject* dict, PyObject* x) {
+    if ((!acl_possible && runtime_flag_use_cuda()) || !no_grad || !dict || !is_var(x)
+            || !rms_selector_unchanged()) return nullptr;
+    // A property can present a different weight/epsilon from the instance's
+    // stored values. Preserve Python attribute resolution for those modules.
+    PyObjHolder weight_name(PyUnicode_FromString("weight"));
+    PyObjHolder epsilon_name(PyUnicode_FromString("variance_epsilon"));
+    if (_PyType_Lookup(Py_TYPE(module), weight_name.obj)
+            || _PyType_Lookup(Py_TYPE(module), epsilon_name.obj)) return nullptr;
+    PyObject* weight = PyDict_GetItemString(dict, "weight");
+    PyObject* eps = PyDict_GetItemString(dict, "variance_epsilon");
+    if (!weight || !is_var(weight) || !eps || !(PyFloat_Check(eps) || PyLong_Check(eps)))
+        return nullptr;
+    NanoString input_dtype = GET_RAW_PTR(VarHolder, x)->var->dtype();
+    NanoString weight_dtype = GET_RAW_PTR(VarHolder, weight)->var->dtype();
+    // BF16 has a separately rounded, weight-after-normalization ACL path.
+    // Its Python owner stays in charge, as does every gradient-enabled call.
+    if ((input_dtype != ns_float16 && input_dtype != ns_float32)
+            || (weight_dtype != ns_float16 && weight_dtype != ns_float32)) return nullptr;
+    PyObjHolder call_args(PyTuple_Pack(3, x, weight, eps));
+    for (PyObject* name : {rms_training_name, rms_inference_name}) {
+        PyObject* selected = kernel_select(name, call_args.obj, nullptr);
+        if (!selected) return nullptr;
+        PyObjHolder kernel(selected);
+        if (selected == Py_None) continue;
+        PyObject* result;
+        {
+            GraphLockSuspend python_call;
+            result = PyObject_CallObject(selected, call_args.obj);
+        }
+        if (!result || result != Py_None) return result;
+        Py_DECREF(result);
+    }
+    Py_INCREF(Py_None);
+    return Py_None;
+}
+
 // `_standard_rms_norm` on an inference call, natively: no training kernel
 // takes it, the dispatcher picks `_rms_norm_cuda` for it, and that builds its
 // code operator from `_rms_norm_source`. nullptr for anything else.
-PyObject* rms_norm_inference(PyObject* dict, PyObject* x) {
+PyObject* rms_norm_inference(PyObject* module, PyObject* dict, PyObject* x) {
+    PyObject* registered = rms_norm_registered_inference(module, dict, x);
+    if (registered || PyErr_Occurred()) return registered;
     if (!rms_inference_impl || !rms_source_fn || acl_possible || !dict || !is_var(x))
         return nullptr;
+    // Match the public contract guard in `_standard_rms_norm` before
+    // kernel selection sees even an intentionally unused affine tensor.
+    // Resolve attributes normally so class options/descriptors also agree.
+    for (const char* name : {"has_weight", "pass_weight", "variance_size_override"}) {
+        PyObject* option_value = PyObject_GetAttrString(module, name);
+        if (!option_value) {
+            if (!PyErr_ExceptionMatches(PyExc_AttributeError)) return nullptr;
+            PyErr_Clear();
+            continue;
+        }
+        PyObjHolder option(option_value);
+        if (std::strcmp(name, "variance_size_override") == 0) {
+            if (option.obj != Py_None) return nullptr;
+        } else if (option.obj == Py_False) {
+            return nullptr;
+        }
+    }
+    PyObject* native_forward_value = PyObject_GetAttrString(module, "forward_native");
+    if (native_forward_value) {
+        PyObjHolder native_forward(native_forward_value);
+        if (PyCallable_Check(native_forward.obj)) return nullptr;
+    } else {
+        if (!PyErr_ExceptionMatches(PyExc_AttributeError)) return nullptr;
+        PyErr_Clear();
+    }
     PyObject* weight = PyDict_GetItemString(dict, "weight");
     PyObject* eps = PyDict_GetItemString(dict, "variance_epsilon");
     if (!weight || !is_var(weight) || !eps || !(PyFloat_Check(eps) || PyLong_Check(eps)))
@@ -813,14 +916,26 @@ PyObject* dispatch_native(PyObject* module, const TypeInfo& info, PyObject* args
         }
     }
     if (info.rms_named) {
+        bool providers_declined = false;
         if (!kwargs && PyTuple_GET_SIZE(args) == 1) {
-            PyObject* fast = rms_norm_inference(dict, PyTuple_GET_ITEM(args, 0));
-            if (fast || PyErr_Occurred()) return fast;
+            PyObject* fast = rms_norm_inference(module, dict, PyTuple_GET_ITEM(args, 0));
+            if (fast == Py_None) {
+                Py_DECREF(fast);
+                providers_declined = true;
+            } else if (fast || PyErr_Occurred()) return fast;
         }
-        PyObject* fused = PyObject_CallFunctionObjArgs(standard_rms_norm, module, args,
-                                                       kwargs ? kwargs : empty_kwargs, nullptr);
-        if (!fused || fused != Py_None) return fused;
-        Py_DECREF(fused);
+        if (!providers_declined) {
+            PyObject* standard = standard_rms_norm;
+            if (rms_selector_state) {
+                PyObject* current = PyDict_GetItemString(
+                    PyTuple_GET_ITEM(rms_selector_state, 0), "_standard_rms_norm");
+                if (current) standard = current;
+            }
+            PyObject* fused = PyObject_CallFunctionObjArgs(standard, module, args,
+                                                           kwargs ? kwargs : empty_kwargs, nullptr);
+            if (!fused || fused != Py_None) return fused;
+            Py_DECREF(fused);
+        }
     }
     PyTypeObject* type = Py_TYPE(module);
     if (info.prefer_forward) {
@@ -900,6 +1015,12 @@ void module_call_bind(PyObject* module_cls_, PyObject* dispatch_call_,
     };
     part(prefer_forward_fn, "prefer_forward");
     part(standard_rms_norm, "standard_rms_norm");
+    part(rms_selector_state, "rms_selector_state");
+    if (rms_selector_state && (!PyTuple_CheckExact(rms_selector_state)
+            || PyTuple_GET_SIZE(rms_selector_state) != 9
+            || !PyDict_Check(PyTuple_GET_ITEM(rms_selector_state, 0))
+            || !PyDict_Check(PyTuple_GET_ITEM(rms_selector_state, 5))))
+        throw std::invalid_argument("invalid RMSNorm selector state");
     part(linear_execute, "linear_execute");
     part(matmul_kernel, "matmul_kernel");
     part(rms_inference_impl, "rms_norm_inference");
@@ -978,14 +1099,21 @@ PyObject* module_call_native(PyObject* module, PyObject* args, PyObject* kwargs)
     if (!slow) throw std::runtime_error("the native module call is not bound");
     if (kwargs == Py_None || (kwargs && !PyDict_GET_SIZE(kwargs))) kwargs = nullptr;
     const TypeInfo& info = info_of(Py_TYPE(module));
-    // Placement follows the first tensor argument; without one that has an
-    // explicit placement, an active `with torch.device(...)` would decide,
-    // and that resolution stays in Python.
+    // Placement follows the first tensor argument. Without one that has an
+    // explicit placement, an active `with torch.device(...)` is resolved in
+    // Python; otherwise the module's own placed parameters decide -- see
+    // `first_placed_module_var`.
     PyObject* like = first_var(args, kwargs);
     Var* like_var = like ? GET_RAW_PTR(VarHolder, like)->var : nullptr;
     if (!like_var || !like_var->placement.explicit_backend) {
         PyObjHolder active(PyObject_CallObject(device_context, nullptr));
         if (active.obj != Py_None) return call_with(slow, module, args, kwargs);
+        // No input placement to follow: the module's own explicitly placed
+        // parameters decide, so the forward runs where its operands live.
+        // Leaving it to the runtime put a default-CPU module's intermediates
+        // on the accelerator, and the first two-operand op refused the mix
+        // (the portable convolution under autocast).
+        if (Var* placed = first_placed_module_var(module)) like_var = placed;
     }
     PyObject* type_token = set_tensor_frontend_type(info.tensor_type);
     PyObject* placement_token = nullptr;

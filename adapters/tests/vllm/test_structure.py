@@ -4,6 +4,7 @@ import ast
 import unittest
 from pathlib import Path
 import pytest
+from relocatable_contract import audit_adapter
 
 import jittor
 from jittor_adapters.vllm import bootstrap as vllm_compat
@@ -78,6 +79,7 @@ class TestVllmCompatIsRelocatable(unittest.TestCase):
         self.assertTrue(_sources())
 
     def test_it_imports_jittor_only_through_its_public_entry_points(self):
+        audit_adapter(_PACKAGE)
         for path in _sources():
             tree = ast.parse(path.read_text(encoding="utf-8"))
             for name, node in _imported_names(tree):

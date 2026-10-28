@@ -20,7 +20,8 @@ EXTERN_LIB OneDnnConvSpec onednn_conv_spec(int kind, Var* source, Var* weights, 
     int groups, const string& xformat, const string& wformat, const string& yformat);
 EXTERN_LIB void onednn_conv_execute(const OneDnnConvSpec&, void* source, void* weights, void* destination);
 EXTERN_LIB void onednn_matmul_execute(int64 batch, int64 n, int64 m, int64 k,
-                                    bool trans_a, bool trans_b, void* a, void* b, void* c);
+                                    bool trans_a, bool trans_b, void* a, void* b, void* c,
+                                    bool bf16_inputs=false, bool fp32_output=true);
 // @pyjt(onednn_cache_info)
 vector<int64> onednn_cache_info();
 // Explicit administrative clear, also used to compare rebuild versus reuse.

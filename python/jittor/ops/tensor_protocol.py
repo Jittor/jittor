@@ -49,6 +49,22 @@ def tolist(x):
 def contiguous(x): return _native_ops.contiguous(x)
 
 
+def clone(x):
+    """Return a copy of ``x`` with storage of its own, as ``torch.Tensor.clone``.
+
+    The native ``clone`` op is a storage view: ``detach`` and ``start_grad``
+    are built on it and must stay free. A view shares its source's memory, so
+    in-place kernels also rewrote "snapshots" taken with it -- the fused CUDA
+    SGD writes parameters and momentum buffers through raw pointers, and a
+    ``state_dict`` cloned for a checkpoint then restored the state of a later
+    step. Gradients flow through the copy unchanged.
+    """
+    if not x._storage_is_contiguous():
+        # `contiguous` already gathers the view into a new allocation.
+        return _native_ops.contiguous(x)
+    return _native_ops.copy(x)
+
+
 def cpu(x):
     """Return ``x`` in host memory without changing the source Var."""
     if x.location() == "cpu":
@@ -211,9 +227,35 @@ def _parse_to(args, kwargs):
         _dtype_spec(target_dtype) if dtype_given else None, copy
 
 
+#: `_parse_to`'s answer for a lone positional spelling, by the spelling: a
+#: string or a Jittor dtype function, both of which it answers from the value
+#: alone. `x.to("cuda")` and `x.to(jt.float32)` are the common calls, and
+#: parsing them was most of what `to` cost. Bounded; a spelling it rejects is
+#: never stored, so it raises again on every call.
+_TO_SPELLINGS = {}
+_BUILTIN_FUNCTION = type(len)
+_MODULE = type(np)
+
+
+def _cacheable_spelling(value):
+    # A builtin bound to an instance (`x.numpy`) would keep that instance alive
+    # in the table; the dtype functions are module-level builtins.
+    cls = value.__class__
+    return cls is str or (cls is _BUILTIN_FUNCTION
+                          and getattr(value, "__self__", None).__class__ is _MODULE)
+
+
 def to(x, *args, **kwargs):
     """Convert dtype and/or device using torch's order-independent signature."""
-    device, dtype, copy = _parse_to(args, kwargs)
+    if not kwargs and len(args) == 1 and _cacheable_spelling(args[0]):
+        parsed = _TO_SPELLINGS.get(args[0])
+        if parsed is None:
+            parsed = _parse_to(args, kwargs)
+            if len(_TO_SPELLINGS) < 256:
+                _TO_SPELLINGS[args[0]] = parsed
+        device, dtype, copy = parsed
+    else:
+        device, dtype, copy = _parse_to(args, kwargs)
     out = x
     if dtype is not None and _jittor_dtype_name(out.dtype) != str(getattr(dtype, "name", dtype)):
         out = out.cast(dtype)

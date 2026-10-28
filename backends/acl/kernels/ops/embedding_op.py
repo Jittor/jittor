@@ -14,6 +14,7 @@ from typing import Union
 from collections.abc import Sequence, Iterable
 
 from ._code import acl_code as embedding_cmd
+from .._soc import kernel_available
 
 
 class EmbeddingACL(jt.Function):
@@ -39,6 +40,8 @@ class EmbeddingACL(jt.Function):
         return result
 
     def grad(self, grad_output):
+        if not kernel_available("EmbeddingBackward"):
+            return None, self._grad_composite(grad_output)
         inputs = [grad_output, self.indices]
         outputs = [jt.empty(self.weight_shape, grad_output.dtype)]
         attr_code = code_program(
@@ -60,3 +63,28 @@ class EmbeddingACL(jt.Function):
             "EmbeddingBackward", inputs=inputs, outputs=outputs, attr_code=attr_code
         )[0]
         return None, grad_weight
+
+    def _grad_composite(self, grad_output):
+        """Embedding backward for SoCs whose CANN opp lacks the dense-grad
+        kernel (Ascend310P): accumulate grad rows into a zero table through
+        scatter_add, which the installed package does provide."""
+        num_embeddings = int(self.weight_shape[0])
+        flat_dim = 1
+        for size in self.weight_shape[1:]:
+            flat_dim *= int(size)
+        flat_idx = self.indices.reshape(-1)
+        rows = grad_output.reshape(-1, flat_dim)
+        col_idx = flat_idx.reshape(-1, 1).broadcast(rows.shape).contiguous()
+        grad_weight = jt.zeros(
+            (num_embeddings, flat_dim), dtype=grad_output.dtype
+        ).scatter_add(0, col_idx, rows)
+        if self.scale_grad_by_freq:
+            counts = jt.zeros(num_embeddings, dtype=grad_output.dtype).scatter_add(
+                0, flat_idx, jt.full(flat_idx.shape, 1.0, dtype=grad_output.dtype)
+            )
+            scale = jt.where(counts > 0, 1.0 / counts, jt.zeros_like(counts))
+            grad_weight = grad_weight * scale.reshape(-1, 1)
+        if self.padding_idx >= 0:
+            keep = jt.array(np.arange(num_embeddings, dtype=np.int64)) != self.padding_idx
+            grad_weight = grad_weight * keep.reshape(-1, 1)
+        return grad_weight.reshape(self.weight_shape)

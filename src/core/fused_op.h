@@ -8,6 +8,7 @@
 #include "core/op.h"
 #include "core/exec_plan.h"
 #include "codegen/opt/var_relay.h"
+#include "runtime/node_index.h"
 
 namespace jittor {
 
@@ -46,8 +47,11 @@ struct FusedOp final : Op {
     vector<Op*> ops;
     // Stable numbering owned by this fusion across load/update, relay and
     // code-generation stages. This replaces Node::custom_data bit-packing.
-    unordered_map<Op*, uint> op_index;
-    unordered_map<Var*, uint> var_index;
+    // A `NodeIndex` rather than an `unordered_map`: both are rebuilt for every
+    // segment of every batch, and the node-per-entry hash map was half of
+    // `update_ops`; this one is reset in O(1) and allocates only when it grows.
+    NodeIndex op_index;
+    NodeIndex var_index;
     // edges: [[i,j,k,l], ...] represents opi.output(j) == opk.input(l)
     vector<std::tuple<uint,uint,uint,uint>> edges;
     vector<VarInfo> vars;

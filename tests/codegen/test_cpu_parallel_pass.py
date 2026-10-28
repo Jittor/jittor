@@ -19,7 +19,7 @@ def kernel_source(build):
     with jt.profile_scope() as rep:
         out = build()
         out.sync()
-    with open(rep[1][1]) as f:
+    with open(rep[1][1], encoding="utf-8") as f:
         return f.read(), out
 
 
@@ -134,7 +134,7 @@ class TestCpuParallelPass(unittest.TestCase):
         }, enable_tuner=0) as rep:
             c = a.sum(1)
             c.sync()
-        with open(rep[1][1]) as f:
+        with open(rep[1][1], encoding="utf-8") as f:
             assert PRAGMA not in f.read()
         np.testing.assert_allclose(c.numpy(),
                                    a.numpy().astype("float64").sum(1),

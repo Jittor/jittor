@@ -199,6 +199,24 @@ class TestLtLinearTraining(unittest.TestCase):
     def setUp(self):
         self.rs = np.random.RandomState(1)
         self.calls = []
+        self.accumulator_calls = []
+        from jittor._runtime.backend_libraries import get_library_ops
+        ops = get_library_ops("cublas")
+        original_cublas = ops.cublas_matmul
+
+        def observed_cublas(a, b, *args, **kwargs):
+            fp32_output = args[2] if len(args) > 2 else kwargs.get("fp32_output", False)
+            if fp32_output:
+                self.assertEqual(str(a.dtype), "bfloat16")
+                self.assertEqual(str(b.dtype), "bfloat16")
+                for value in (a, b):
+                    value.sync()
+                    self.assertEqual(value.location(), "device")
+                self.accumulator_calls.append((tuple(a.shape), tuple(b.shape)))
+            return original_cublas(a, b, *args, **kwargs)
+
+        ops.cublas_matmul = observed_cublas
+        self.addCleanup(setattr, ops, "cublas_matmul", original_cublas)
         # Small problems keep the float64 CPU reference cheap; the size floor
         # the route applies is its own case below.
         for name, value in (("_MIN_ROWS", 1), ("_MIN_PRODUCT", 1)):
@@ -241,8 +259,20 @@ class TestLtLinearTraining(unittest.TestCase):
         dout = self.rs.randn(*shape, cout).astype("float32")
         want = self._step(0, x, w, b, dout, "float64", **kw)
         self.calls.clear()
-        got = self._step(1, x, w, b, dout, dtype, **kw)
-        self.assertEqual(self.calls, [1], "the training route should have served it")
+        self.accumulator_calls.clear()
+        from jittor._runtime import forbid_backend_fallbacks
+        initial = jt.core.backend_fallback_count()
+        with forbid_backend_fallbacks():
+            got = self._step(1, x, w, b, dout, dtype, **kw)
+        self.assertEqual(jt.core.backend_fallback_count(), initial)
+        # BF16 with a bias uses the native FP32 accumulator output so its bias
+        # is added before rounding. The timed Function rounds the product
+        # first and would also sever higher-order derivatives on this route.
+        expected_calls = [] if dtype == "bfloat16" and not kw.get("no_bias") else [1]
+        self.assertEqual(self.calls, expected_calls, "unexpected Linear backward provider")
+        expected_accumulators = [(tuple(x.shape), tuple(w.shape))] if not expected_calls else []
+        self.assertEqual(self.accumulator_calls, expected_accumulators,
+                         "BF16 Linear must use the native FP32 accumulator output")
         self.assertEqual(len(got), len(want))
         for i, (g, r) in enumerate(zip(got, want)):
             np.testing.assert_allclose(g, r, rtol=tol, atol=tol * np.abs(r).max(),

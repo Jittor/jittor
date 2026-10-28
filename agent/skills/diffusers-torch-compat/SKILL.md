@@ -5,6 +5,105 @@ description: 把 diffusers 分别跑在 jittor 的 `import torch` shim 与原生
 
 # diffusers ⇄ jittor torch shim
 
+## Official-wheel capture and maintained replay (2026-10-16)
+
+The current strict guard rejects both original `1a92` rows: their worker packets
+lack wheel SHA and actual METADATA/RECORD bindings. Keep their original numerical
+facts and earlier auditor outcomes; never reconstruct missing historical fields.
+[Current profile and validation status](../../../docs/results/2026-10-16-diffusers-official-installation.md)
+uses official Diffusers 0.35.1 at `0f252be0ed42006c125ef4429156cb13ae6c1d60`,
+wheel SHA256 `fe29ff10200970c7c5934c6488c213e2a77a03dad5e6fa00bbd8e1d04234cb0e`.
+This PyPI artifact differs from the old local source-built wheel. All 697 payload
+files match Git; only six explicit tracked README omissions are allowed. Every
+new worker binds its actual package, METADATA and real pip RECORD without
+restoring the archive receipt. Clean `b2127fd6a4a0c080ea19c45fbeae4b0b3251b74f`
+CPU/CUDA actual runs pass the original full protocol: six independent workers
+and 1,165 pairs per device, all 144 parameter gradients, sample input gradient
+and three SGD steps. The current shared scorecard accepts both L3 rows with zero
+rejected/blocked rows. Each device counts `UNet2DModel` on `model_api 1/87`; the
+other four full axes remain zero. Old `1a92` rows stay historically identified
+and currently refused, rather than receiving new installation fields.
+
+```bash
+python tools/run_diffusers_gate.py --candidate-python <private-shim-python> \
+  --oracle-python <private-binary-torch-python> --device cpu \
+  --checkout <clean-fixed-diffusers> --wheel <fixed-official-wheel> \
+  --output "$JITTOR_LAB_ROOT/_state/diffusers/<run>/cpu" \
+  --cache-root "$JITTOR_LAB_ROOT/_state/diffusers/<run>/benchmark-cpu"
+```
+
+The required full UNet protocol is 144 parameters plus the sample input gradient,
+seed 0/7 with the same complete weights, three SGD steps at lr .001, and all 873
+training fields. The gate reuses the maintained runner/training probe/collector,
+captures actual shared platform/device/pointer evidence, and checks six distinct
+worker PIDs and isolated runtime paths. Run CPU before CUDA, use separate unit
+and benchmark caches, serialize first JIT, and keep the same clean source frozen
+through both measurements. No pipeline, whole-library, performance or hosted
+nightly claim follows. Low-level `component_measure.py --repo diffusers` now
+requires `--wheel`; the common collector also requires `--wheel diffusers=WHEEL`.
+
+## Historical installed-source evidence (2026-10-15)
+
+[Fresh CPU/CUDA UNet L3 evidence](../../../docs/results/2026-10-15-diffusers-installed-source.md)
+uses clean framework `1a92aae04f4c70fa44e251f8fafdc7e2cd77beda`, Diffusers
+0.35.1 at `0f252be0ed42006c125ef4429156cb13ae6c1d60`, and a wheel built
+from that exact clean source. All twelve real processes bind all 695 package
+Python sources and 697 installed payload files. Both devices pass the maintained
+required UNet parity node, seed-7 input perturbation and three SGD steps with
+144 parameter gradients and the sample-input gradient. Actual TF32 is OFF/highest;
+this fresh execution does not relabel the historical ON/high records below.
+
+These rows keep the earlier report's original auditor outcome. Current strict
+admission requires the new official-wheel measurement protocol above. The old
+697-file hashes do not supply missing wheel/METADATA/RECORD fields. Do not run
+the old overwrite-capable collector on sealed directories.
+
+Each platform counts only `UNet2DModel` on `model_api 1/87`; all four pipeline
+axes remain zero. This is a tiny FP32 component, with no complete generation
+pipeline, other dtype, performance, memory or L4 claim. Earlier environments and
+numerical records below retain their original provenance and limits.
+
+## 历史验收入口（2026-10-14）
+
+[CPU/CUDA oracle 与三步训练 scorecard](../../../docs/results/2026-10-14-downstream-oracle-scorecards.md)
+记录 Diffusers 0.35.1 的 `UNet2DModel` 组件：独立二进制 Torch 对拍、输入扰动、
+全部请求梯度及三步更新。该证据不计入 pipeline 注册覆盖，不证明完整生成 pipeline、
+真实尺寸性能或 NPU。计算基线为 `230ba7a0305091fb64ec81a679f32dcaefcea518`；
+平台、上游 SHA、注册分母与复验条件以报告为准。三步训练是手动验收，
+下文其他版本、环境与性能记录均保留原基线，不与本次结果合并授级。
+
+## 组件 scorecard 的可复用迁移
+
+[组件迁移报告](../../../docs/results/2026-10-15-diffusers-component-scorecards.md)
+保留原 `230ba7a0` 数值基线，使用 clean `f61555a81` 工具复算并接受 CPU/CUDA 两条
+L3；`UNet2DModel` 在每个设备计 `model_api 1/87`，四个 pipeline 轴仍为零。
+这不是在新框架提交上重跑模型，原安装完整来源缺失也没有回填。
+
+中央 inventory 的独立 `model_api` 轴读取固定干净上游
+`src/diffusers/models/__init__.py` 中 `_import_structure` 的全部条件分支。
+不按当前依赖过滤，保留 Flax、helper、mixin、enum 和函数；它是公开导出分母，
+不是模型族或全库分母。pipeline 四轴保持独立，UNet 不获得 pipeline 分子。
+同名同 owner 的互斥条件分支保留两份声明、分母计一次；同分支重复/覆盖、
+跨 module 的歧义别名、动态或未知注册表达式显式拒绝。
+
+下面命令重新派生分母、先检查原始产物哈希，再独立复算完整基线、输入扰动及三步
+SGD 数组。它不运行模型，不修改历史 raw，不把今天的安装内容补成历史安装证明。
+Git 对象必须保留原测量提交及其 builder、training probe；缺少原对象时先恢复真实
+历史对象，不用当前源码代替。原版本/origin 证明与缺失的完整安装包哈希分别披露。
+
+```bash
+<numpy-python> agent/skills/torch-compat-repo-runbook/scripts/collect_diffusers_scorecard.py \
+  --root <jittor-checkout> --upstream <clean-pinned-diffusers-checkout> \
+  --evidence <original-component-evidence-v2.json> \
+  --baseline 230ba7a0305091fb64ec81a679f32dcaefcea518 \
+  --output-dir "$JITTOR_LAB_ROOT/_state/diffusers-scorecard/<fresh-migration>"
+```
+
+原 0.35.1 的 `UNet2DModel` 是 144 个参数梯度、`sample` 输入梯度、三步 873 个
+轨迹字段的 tiny FP32 场景。迁移只为实际执行的公开组件派生注册引用，不扩充完整
+pipeline、L4/L5、NPU 或任意版本结论。需要完整安装来源的新测量必须实际执行，
+不能修改旧 JSON 的版本号或来源字段来通过校验。
+
 ## 用途
 
 回答四件事：diffusers 怎么在 shim 上跑、怎么在原生 torch 上跑、怎么对拍（数值 + 速度）、

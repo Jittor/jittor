@@ -242,12 +242,14 @@ class TestRandomGeneratorCudaCheckpoint(unittest.TestCase):
     def test_old_cpu_state_still_restores(self):
         current = jt.Generator("cpu").manual_seed(5).get_state().split(" ")
         old_format = " ".join(current[:3] + current[4:])
-        g = jt.Generator("cpu")
-        g.set_state(old_format)
-        with jt.flag_scope(use_cuda=0):
-            np.testing.assert_array_equal(
-                jt.random((10,), generator=g).numpy(),
-                jt.random((10,), generator=jt.Generator("cpu").manual_seed(5)).numpy())
+        for old_format in (old_format, " ".join(current)):
+            with self.subTest(state=old_format):
+                g = jt.Generator("cpu")
+                g.set_state(old_format)
+                with jt.flag_scope(use_cuda=0):
+                    np.testing.assert_array_equal(
+                        jt.random((10,), generator=g).numpy(),
+                        jt.random((10,), generator=jt.Generator("cpu").manual_seed(5)).numpy())
 
 
 if __name__ == "__main__":

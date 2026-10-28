@@ -76,13 +76,13 @@ ENVIRONMENT_SKIP_PATTERNS = (
     # names around it).
     "cuda", "cudnn", "cublas", "cutt", "cusparse", "cufft", "curand",
     "nvcc",
-    "gpu", "accelerator", "acl", "npu", "ascend", "cann", "rocm", "hip",
+    "gpu", "nvidia", "accelerator", "acl", "npu", "ascend", "cann", "rocm", "hip",
     "triton",
     # an independent PyTorch build, which only the oracle sessions have.
     # Withdrawn when JITTOR_REQUIRE_REAL_TORCH=1 -- see REAL_TORCH_PATTERNS.
     "torch",
     # multi-rank launchers
-    "mpi", "nccl", "world size",
+    "mpi", "nccl", "world size", "launcher-owned store subgroup",
     # opt-in assets and probes
     "download", "dataset", "network", "manual probe",
     # Optional third-party libraries the shim is validated against. Absence is a
@@ -92,7 +92,10 @@ ENVIRONMENT_SKIP_PATTERNS = (
     # covered by accident; these did not, so a CPU-only session reported the
     # files as unexplained and the whole selection exited non-zero with every
     # test passing.
-    "tensordict", "mmcv", "mmengine",
+    "tensordict", "mmcv", "mmengine", "deepspeed", "trellis", "datatrove",
+    # The vLLM adapter tests bind the installed package when it is present and
+    # skip when it is not; the harness-only cases run without it either way.
+    "vllm",
     # The safetensors format tests: the optional package is not installed.
     "safetensors",
     # Facts about the *runner* rather than the machine's hardware: a case that

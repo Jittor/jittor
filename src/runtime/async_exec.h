@@ -63,6 +63,10 @@ EXTERN_LIB std::atomic<int> async_exec_inflight;
 struct GraphEntryScope {
     GraphEntryScope* outer;
     bool locked;
+    // The enclosing entry's launch origin, restored on the way out; see
+    // enter_launch_origin_entry (runtime/launch_diagnostics.h).
+    bool outer_origin_active;
+    uint64 outer_origin;
     explicit GraphEntryScope(bool may_release_gil=true);
     ~GraphEntryScope();
 };

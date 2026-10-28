@@ -41,7 +41,11 @@ def _silu_and_mul_cuda(x):
             float gate = static_cast<float>(x[input_base + dim]);
             float value = static_cast<float>(
                 x[input_base + %(gated_size)d + dim]);
-            y[index] = out0_type((gate / (1.0f + expf(-gate))) * value);
+            // Preserve the public SiLU dtype boundary before gating, as
+            // silu(x[..., :d]) * x[..., d:] does without this fusion.
+            float activated = static_cast<float>(
+                in0_type(gate / (1.0f + expf(-gate))));
+            y[index] = out0_type(activated * value);
         }
     }
     int64_t total = out0->num;

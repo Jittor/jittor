@@ -881,6 +881,41 @@ assert after == before + 1, (before, after)
         self.assertFalse(supported(256, ()))
         self.assertFalse(supported(256, ("unknown",)))
 
+    def test_flash_load_diagnostics_preserve_source_failure_and_reset(self):
+        from jittor.compat.shim.backends import flash_attention as backend
+
+        def fail_source(root):
+            backend._remember_error("official extension: undefined symbol: current_offset")
+
+        def fail_modules():
+            backend._remember_error("No module named flashattn_jittor")
+
+        with contextlib.ExitStack() as stack:
+            for name in ("_BACKEND", "_BACKEND_NAME", "_BACKEND_CONFIG_KEY",
+                         "_BACKEND_LOAD_GENERATION", "_BACKEND_PUBLICATION_TOKEN",
+                         "_LAST_ERROR", "_LOADING"):
+                stack.enter_context(mock.patch.object(backend, name, getattr(backend, name)))
+            stack.enter_context(mock.patch.object(backend, "enabled", return_value=True))
+            stack.enter_context(mock.patch.object(backend, "explicit_source_roots",
+                                                 return_value=["/flash/source"]))
+            stack.enter_context(mock.patch.object(backend, "candidate_source_roots",
+                                                 return_value=[]))
+            source = stack.enter_context(mock.patch.object(
+                backend, "_load_from_source_root", side_effect=fail_source, return_value=None))
+            stack.enter_context(mock.patch.object(
+                backend, "_import_from_known_modules", side_effect=fail_modules))
+            self.assertIsNone(backend.load_backend(force=True))
+            error = backend.last_error()
+            self.assertIn("undefined symbol: current_offset", error)
+            self.assertIn("No module named flashattn_jittor", error)
+
+            source.side_effect = None
+            self.assertIsNone(backend.load_backend(force=True))
+            self.assertNotIn("current_offset", backend.last_error())
+            source.return_value = ModuleType("recovered_flash_backend")
+            self.assertIs(backend.load_backend(force=True), source.return_value)
+            self.assertIsNone(backend.last_error())
+
     def test_flash_success_cache_invalidates_on_build_environment_change(self):
         from jittor.compat.shim.backends import flash_attention as flashattn_jittor
 

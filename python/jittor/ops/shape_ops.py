@@ -86,7 +86,12 @@ def repeat_interleave(x,repeats,dim=None,output_size=None):
         tar_shape = list(x.shape)
         tar_shape[dim] = tar_shape[dim] * repeats
         broadcast_shape = [-1] * (dim + 1) + [repeats] + [-1] * (x.ndim - dim - 1)
-        return x.unsqueeze(dim + 1).expand(broadcast_shape).reshape(tar_shape)
+        # Torch's repeat_interleave is a copy. The reshape above can be a
+        # stride-0 view (a size-1 axis expanded then folded back in), which
+        # refused in-place writes and kept aliasing the source; `contiguous`
+        # makes the produced buffer its own without materializing eagerly.
+        return x.unsqueeze(dim + 1).expand(broadcast_shape).reshape(
+            tar_shape).contiguous()
 
     result = _repeat_interleave_dim0_cuda(x, repeats, dim, output_size, _repeat_interleave_cpu_source)
     if result is not None:
@@ -156,7 +161,14 @@ def stack(x, dim=0):
         raise TypeError("stack: expected a sequence of tensors")
     if isinstance(x, tuple):
         x = list(x)
+    # Two or more inputs are copied into the result anyway, so a plain Var is
+    # taken as it is rather than cloned first: the clone was an op to build
+    # and run per input of every stack. A lone input keeps the jt.array call
+    # it always had, since the result is then just an unsqueeze of it, and so
+    # does a Var subclass, which may carry attributes the paths below read.
+    copy_plain = len(x) < 2
     for i,x_ in enumerate(x):
+        if copy_plain or x_.__class__ is not jt.Var:
             x[i] = jt.array(x_)
     if len(x) < 2:
         return x[0].unsqueeze(dim)

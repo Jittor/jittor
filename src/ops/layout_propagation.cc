@@ -21,6 +21,21 @@ DEFINE_FLAG(int, propagate_storage_layout, 1,
     "gradient on as a view (TransposeOp::grad). 0 disables it.");
 
 DECLARE_FLAG(int, transpose_storage_view);
+DECLARE_FLAG(bool, no_grad);
+
+bool storage_layout_records_grad(const vector<Var*>& inputs) {
+    if (no_grad) return false;
+    for (auto* value : inputs)
+        if (!value->is_stop_grad()
+                && !value->flag(VarFlags::_requires_grad_disabled))
+            return true;
+    return false;
+}
+
+StorageLayoutForwardScope::StorageLayoutForwardScope() : previous(no_grad) {
+    no_grad = true;
+}
+StorageLayoutForwardScope::~StorageLayoutForwardScope() { no_grad = previous; }
 
 static auto make_transpose = op_constructor<VarPtr, Var*, NanoVector>("transpose");
 static auto make_broadcast_to_shape =
@@ -37,6 +52,12 @@ VarPtr storage_view_transpose(Var* v, NanoVector axes) {
         throw;
     }
     transpose_storage_view = saved;
+    // This is an implementation alias of the same operand. In particular a
+    // broadcast scalar must stay weak in binary dtype promotion after its
+    // axes change; otherwise the layout kernel can produce float32 storage
+    // for a logical float16/bfloat16 result.
+    result->set_flag(VarFlags::_is_scalar, v->flag(VarFlags::_is_scalar));
+    result->set_flag(VarFlags::_is_constant, v->flag(VarFlags::_is_constant));
     return result;
 }
 
@@ -96,13 +117,16 @@ static bool permuted_source(Var* v, NanoVector& axes, VarPtr& source) {
     return true;
 }
 
-bool storage_layout_operands(const vector<Var*>& inputs, NanoVector& axes,
+bool storage_layout_operands(std::initializer_list<Var*> operands, NanoVector& axes,
                              vector<VarPtr>& sources) {
     if (!propagate_storage_layout) return false;
-    vector<VarPtr> found(inputs.size());
+    Var* const* inputs = operands.begin();
+    const uint count = operands.size();
+    SmallVector<VarPtr, 4> found;
+    for (uint i=0; i<count; i++) found.emplace_back();
     NanoVector shape;
     bool any = false;
-    for (uint i=0; i<inputs.size(); i++) {
+    for (uint i=0; i<count; i++) {
         NanoVector a;
         VarPtr s;
         if (!permuted_source(inputs[i], a, s)) continue;
@@ -114,7 +138,7 @@ bool storage_layout_operands(const vector<Var*>& inputs, NanoVector& axes,
     }
     if (!any) return false;
     NanoVector back = inverse(axes);
-    for (uint i=0; i<inputs.size(); i++) {
+    for (uint i=0; i<count; i++) {
         if (found[i]) continue;
         Var* v = inputs[i];
         Op* op = v->input();
@@ -138,7 +162,15 @@ bool storage_layout_operands(const vector<Var*>& inputs, NanoVector& axes,
             return false;
         }
     }
-    sources = move(found);
+    // A user-created transpose may have different scalar-promotion metadata
+    // from its dense producer. Replacing that operand would then change the
+    // arithmetic dtype. Keep the ordinary strided kernel for this case.
+    for (uint i=0; i<count; i++)
+        if (found[i]->flag(VarFlags::_is_scalar)
+                != inputs[i]->flag(VarFlags::_is_scalar))
+            return false;
+    sources.clear();
+    for (auto& source : found) sources.push_back(move(source));
     return true;
 }
 

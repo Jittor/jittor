@@ -25,6 +25,13 @@ from jittor._runtime.dispatch import optional_kernel
 from jittor._runtime.backend_libraries import get_library_ops
 
 
+def _prefers_half():
+    # Imported at call time: a module-level `nn.functional` import from this
+    # backend closes the nn.backends -> nn.functional -> backends cycle.
+    from jittor.nn.functional._amp import prefers_half
+    return prefers_half()
+
+
 def _pair(value):
     return value if isinstance(value, tuple) else (value, value)
 
@@ -50,6 +57,10 @@ def _supports_conv2d(x, weight, bias, stride, padding, dilation, groups,
     Density is required because the JIT body hands ``mem_ptr`` to oneDNN with
     the shape alone, so a strided view would be read as though it were dense.
     """
+    # The library always returns float32. A low-precision region must use
+    # the portable contraction, whose inference honors the requested dtype.
+    if _prefers_half():
+        return False
     if _jittor_dtype_name(x.dtype) != "float32":
         return False
     if x.dtype != weight.dtype:
@@ -87,6 +98,10 @@ def _try_onednn_conv2d(x, weight, bias, stride, padding, dilation, groups,
 
 def _supports_conv_transpose2d(x, weight, bias, stride, padding, output_padding,
                                dilation, groups):
+    # The library always returns float32. A low-precision region must use
+    # the portable contraction, whose inference honors the requested dtype.
+    if _prefers_half():
+        return False
     if _jittor_dtype_name(x.dtype) != "float32":
         return False
     if x.dtype != weight.dtype:

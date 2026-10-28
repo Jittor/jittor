@@ -36,6 +36,8 @@ public:
     LaunchHistory(const LaunchHistory&) = delete;
     LaunchHistory& operator=(const LaunchHistory&) = delete;
     uint64 intern_origin(const char* file, int line);
+    // `record(base)` with the device and stream the launch went to.
+    void record(const LaunchRecord& base, Device device, uintptr_t stream);
     // The location an `intern_origin` id stands for; false for 0 or an
     // unknown id. Used by the step tracer to name call sites.
     bool origin(uint64 id, LaunchOrigin& out);
@@ -47,6 +49,18 @@ EXTERN_LIB LaunchHistory& runtime_launch_history();
 using LaunchOriginCapture = uint64 (*)();
 EXTERN_LIB void set_launch_origin_capture(LaunchOriginCapture capture);
 EXTERN_LIB uint64 capture_launch_origin();
+// One native entry from Python -- a `GraphEntryScope` -- captures its origin
+// once. Inside an entry the Python stack the capture walks cannot change: a
+// callback into Python returns to the same frame, and an op built from inside
+// such a callback goes through a binding, and so an entry, of its own. So every
+// op an entry builds (`x * 2.0` alone is three) has the origin of the first,
+// and the walk -- GIL check, error save/restore, frame chain, two table
+// lookups -- ran once per op for the same answer. `enter` saves the enclosing
+// entry's state into the two values the scope keeps; `leave` restores it. Only
+// a real id is kept: 0 means the table was full, and asking again is what
+// counts the unrecorded capture.
+EXTERN_LIB void enter_launch_origin_entry(bool& outer_active, uint64& outer_origin);
+EXTERN_LIB void leave_launch_origin_entry(bool outer_active, uint64 outer_origin);
 struct LaunchOriginScope {
     uint64 previous;
     explicit LaunchOriginScope(uint64 origin);
@@ -55,10 +69,13 @@ struct LaunchOriginScope {
 
 // Stack-scoped launch ownership is copied before dispatch. A side-stream
 // operation can record the same owner against its actual stream.
+// The record is the caller's, which must outlive the scope: the executor
+// fills one per operator and launches inside it, and copying 176 bytes into
+// the scope -- and out again for every launch -- was a copy per operator for
+// nothing.
 struct LaunchOperationScope {
     const LaunchRecord* previous;
-    LaunchRecord record;
-    explicit LaunchOperationScope(LaunchRecord value);
+    explicit LaunchOperationScope(const LaunchRecord& record);
     ~LaunchOperationScope();
 };
 EXTERN_LIB void record_active_launch(BackendStream stream);

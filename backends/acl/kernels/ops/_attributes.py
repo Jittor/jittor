@@ -14,6 +14,7 @@ SCHEMAS = {
     "Transpose": {"axes": {"type": "int64[]"}},
     "Cumsum": {"dim": {"type": "int64"}},
     "Gather": {"dim": {"type": "int64"}},
+    "IndexCopy": {"dim": {"type": "int64"}},
     "Scatter": {"axis": {"type": "int64"}, "reduction": {"type": "int64"}},
     "Conv2d": {
         "convStrides": {"type": "int64[]"},
@@ -174,6 +175,7 @@ SCHEMAS = {
         "hasPaddingmask": {"type": "bool"},
         "hasAttentmask": {"type": "bool"},
     },
+    "PromptFlashAttention": {"scale": {"type": "float64"}, "headNum": {"type": "int64"}},
     "IncreFlashAttention": {
         "scale": {"type": "float64"},
         "headNum": {"type": "int64"},
@@ -403,6 +405,7 @@ _RUNNER_ALIASES = {
     "transpose": "Transpose",
     "cumsum": "Cumsum",
     "gather": "Gather",
+    "indexcopy": "IndexCopy",
     "scatter": "Scatter",
     "conv2d": "Conv2d",
     "conv2dbackward": "Conv2dBackward",
@@ -432,6 +435,7 @@ _RUNNER_ALIASES = {
     "NanToNum": "NanToNum",
     "flashattention": "FlashAttention",
     "flashattentionbackward": "FlashAttentionBackward",
+    "promptflashattention": "PromptFlashAttention",
     "increflashattention": "IncreFlashAttention",
     "kv_cache_memcpy": "KVCacheMemcpy",
     "roll": "Roll",

@@ -17,6 +17,28 @@ def _draw(n=4):
 
 
 class TestForkRng(unittest.TestCase):
+    def setUp(self):
+        self.cpu_scope = jt.flag_scope(use_cuda=0)
+        self.cpu_scope.__enter__()
+
+    def tearDown(self):
+        self.cpu_scope.__exit__(None, None, None)
+
+    def test_state_is_cpu_bytes_and_invalid_load_preserves_position(self):
+        torch.manual_seed(123)
+        _draw(5)
+        state = torch.get_rng_state()
+        self.assertEqual(state.device.type, "cpu")
+        self.assertEqual(state.dtype, torch.uint8)
+        expected = _draw(7)
+        torch.set_rng_state(state)
+        with self.assertRaises(TypeError):
+            torch.set_rng_state(torch.tensor([123], dtype=torch.int64))
+        damaged = torch.zeros_like(state)
+        with self.assertRaises((ValueError, RuntimeError)):
+            torch.set_rng_state(damaged)
+        np.testing.assert_array_equal(_draw(7), expected)
+
     def _baseline(self):
         torch.manual_seed(7)
         return _draw()
@@ -81,21 +103,8 @@ class TestForkRng(unittest.TestCase):
                 with torch.random.fork_rng(devices=devices):
                     jt.random((2,)).sync()
 
-    @unittest.expectedFailure
     def test_forking_away_from_a_fresh_seed(self):
-        """Known gap: the CPU RNG state is the seed, not the position.
-
-        `core.py::_get_rng_state` returns `[initial_seed()]` and
-        `_set_rng_state` just re-seeds, so a restore **rewinds** to the start of
-        the sequence instead of continuing from the fork point. When the fork
-        happens right after `manual_seed`, rewinding and continuing coincide --
-        which is why every other test in this file passes, and why this gap
-        survived: they all capture state immediately after seeding.
-
-        The CUDA side was given real position accounting (cuRAND offsets); the
-        CPU side never was. Expected-failure rather than deleted so the
-        limitation is visible and this flips the moment someone fixes it.
-        """
+        """Restore the stream position after an already-consumed prefix."""
         torch.manual_seed(7)
         jt.random((5,)).sync()          # advance away from the seed point
         expected = _draw()

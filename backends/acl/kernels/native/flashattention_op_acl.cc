@@ -27,6 +27,7 @@
 #include "codegen/opt/tuner_manager.h"
 #include "utils/str_utils.h"
 #include "aclnn/aclnn.h"
+#include <aclnnop/aclnn_prompt_flash_attention_v3.h>
 #include "flashattention_op_acl.h"
 
 namespace jittor
@@ -77,6 +78,33 @@ namespace jittor
         return;
     }
 
+    PromptFlashAttentionOpRunner::PromptFlashAttentionOpRunner() : BaseOpRunner("PromptFlashAttention")
+    {
+    }
+
+    void PromptFlashAttentionOpRunner::executeOp(AclOpRegistry::const_iterator &it)
+    {
+        auto attr = dynamic_cast<PromptFlashAttentionAttr *>(op_attr.get());
+        CHECK(attr != nullptr && in_.size() == 4 && out_.size() == 1);
+        CHECK(in_[0]->dtype() == ns_float16 && in_[1]->dtype() == ns_float16
+              && in_[2]->dtype() == ns_float16 && in_[3]->dtype() == ns_bool);
+        CHECK(inputShapes[0].size() == 4 && inputShapes[1] == inputShapes[0]
+              && inputShapes[2] == inputShapes[0] && outputShapes[0] == inputShapes[0]);
+        const int64 length = inputShapes[0][2];
+        CHECK(length > 0 && length % 128 == 0 && attr->headNum == inputShapes[0][1]);
+        CHECK(inputShapes[3] == std::vector<int64_t>({length, length}));
+        // The verified 310P subset uses full BNSD FP16 inputs, equal heads,
+        // and an explicit boolean drop-mask. Precision mode 0 preserves the
+        // high-precision path; unused quantization/sequence-length slots are null.
+        char layout[] = "BNSD";
+        ret = aclnnPromptFlashAttentionV3GetWorkspaceSize(
+            inputTensors[0], inputTensors[1], inputTensors[2], nullptr, inputTensors[3],
+            nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+            attr->headNum, attr->scale, 2147483647LL, 0LL, layout, 0LL, 0LL, 0LL,
+            outputTensors[0], &workspaceSize, &executor);
+        launch(ret, aclnnPromptFlashAttentionV3, true);
+    }
+
     IncreFlashAttentionOpRunner::IncreFlashAttentionOpRunner() : BaseOpRunner("IncreFlashAttention")
     {
     }
@@ -87,6 +115,7 @@ namespace jittor
         aclTensor *keyTensor = nullptr;
         aclTensor *valueTensor = nullptr;
         aclTensor *blockTable = nullptr;
+        aclTensor *attenMask = nullptr;
         aclTensor *keyView = nullptr;
         aclTensor *valueView = nullptr;
         if (attr->hasBlockTable)
@@ -117,8 +146,14 @@ namespace jittor
         }
         else
         {
+            CHECK(inputTensors.size() == 3 || inputTensors.size() == 4);
             keyTensor = inputTensors[1];
             valueTensor = inputTensors[2];
+            if (inputTensors.size() == 4)
+            {
+                CHECK(in_[3]->dtype() == ns_bool);
+                attenMask = inputTensors[3];
+            }
         }
         // The executor retains these lists through the execute call.
         auto key = aclCreateTensorList(&keyTensor, 1);
@@ -131,7 +166,7 @@ namespace jittor
         }
         char *layout = const_cast<char *>(attr->inputLayout.data());
         ret = aclnnIncreFlashAttentionV4GetWorkspaceSize(
-            inputTensors[0], key, value, nullptr, nullptr, actualSeqLengths,
+            inputTensors[0], key, value, nullptr, attenMask, actualSeqLengths,
             nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
             blockTable, nullptr, attr->headNum, attr->scale, layout,
             attr->keyValueHeadNum, attr->blockSize, attr->innerPrecise, outputTensors[0],

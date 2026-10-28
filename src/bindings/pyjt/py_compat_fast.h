@@ -15,23 +15,27 @@ namespace jittor {
 PyObject* frontend_dtype(PyObject* self);
 
 // What the fast paths below call back to decide: `tracing()`, whether a
-// step is being captured (`jittor._runtime.step_capture.tracing`).
+// step is being captured (`jittor._runtime.step_capture.tracing`). The optional
+// concat continuation resumes after provider selection; selector_state keeps
+// the Python selection owners so an override leaves the native short path.
 // @pyjt(_compat_fast_bind)
-void compat_fast_bind(PyObject* tracing);
+void compat_fast_bind(PyObject* tracing, PyObject* concat_fallback=nullptr,
+                      PyObject* selector_state=nullptr, PyObject* getitem_selector_state=nullptr);
 
 // `torch.cat(tensors, dim)` for the common case -- two to 64 non-empty Vars
-// of one dtype, same rank, on the current device, no concat kernel
-// registered, no step being captured -- built as `jittor.concat` builds it:
-// an `empty` of the result and one `setitem` per input. Anything else
-// answers NotImplemented and the Python `cat` takes the call.
+// of one dtype, same rank, on the current device -- calls the selected backend
+// provider once, or builds `empty` plus `setitem` when none is registered.
+// A declining provider resumes the Python concat after selection. Anything
+// outside this contract answers NotImplemented for the Python `cat`.
 // @pyjt(_fast_cat)
 PyObject* fast_cat(PyObject* tensors, int64 dim);
 
 // `tensor[index]` for a basic index -- ints, slices, None and Ellipsis,
 // alone or in a tuple -- on a frontend tensor that carries no CPU residency
-// hint and no `.data` ownership record, with no getitem kernel registered:
-// the native getitem op, recorded as a view of `self`, as the Python
-// `_torch_getitem` and `jittor.getitem` together do. NotImplemented otherwise.
+// hint and no `.data` ownership record. A registered provider is tried once
+// for no-grad, static positive-step indexing, then a decline continues with
+// native getitem. New views record `self`; an existing provider view retains
+// its recorded owner. Unsupported spellings use the Python path.
 // @pyjt(_fast_getitem)
 PyObject* fast_getitem(PyObject* self, PyObject* index);
 
@@ -84,5 +88,50 @@ PyObject* fast_transpose(PyObject* self, int64 dim0, int64 dim1);
 // None for anything else, and `jittor.transpose` reports it.
 // @pyjt(_fast_permute)
 PyObject* fast_permute(PyObject* self, PyObject* axes);
+
+// `jittor.Var.clamp(min_v, max_v)` for a plain Var of a float or integer
+// dtype between Python int/float bounds (either may be None, not both): the
+// graph `_clamp_cpu` builds, op for op -- each bound converted the way the
+// generated bindings convert a Python number, the integer path's maximum and
+// minimum, the general path's select and NaN keep -- built in one call
+// instead of sixteen. NotImplemented for anything else, and for an empty or
+// dynamically shaped Var, which `_clamp_cpu` answers itself.
+// @pyjt(_fast_clamp)
+PyObject* fast_clamp(PyObject* self, PyObject* min_v, PyObject* max_v);
+
+// `jittor.any(x, dims, keepdims)` (`all` when `is_and`) of a bool Var on CPU
+// or CUDA: the logical reduction with a bool result, where `any_`/`all_`
+// reduce a bool input into int32 and the caller then casts that back -- a
+// second kernel for every truth test. NotImplemented for any other dtype or
+// backend, for `dims` other than an int or a sequence of in-range ints,
+// and `any_(...).bool()` takes the call.
+// @pyjt(_logical_reduce)
+PyObject* logical_reduce(PyObject* self, PyObject* dims, bool keepdims, bool is_and);
+
+// `_fast_getitem` and `_fast_cat` as jittor's own `getitem` and `concat`
+// reach them: each Var operand is first read the way a generated binding
+// reads it (`VarHolder::grad_input`, which brings an aliased view up to date
+// with its source's in-place writes while gradients are recorded), so the
+// native path sees what the Python path it stands in for would have built on.
+//
+// `gather`: also answer the index forms holding index Vars -- a lone bool
+// mask, a lone index Var, a tuple with index Vars in it -- as jittor's
+// `_fast_getitem` answers them. The caller passes whether that path applies,
+// i.e. whether `Var.getitem` is still jittor's own.
+// @pyjt(_jt_basic_getitem)
+PyObject* jt_basic_getitem(PyObject* self, PyObject* index, bool gather=false);
+// @pyjt(_jt_concat)
+PyObject* jt_concat(PyObject* tensors, int64 dim);
+
+// `x[index] = value` as jittor's `setitem` and `var_setitem` together build
+// it, for a plain Var `x` (not complex64, not on ACL) and a Var or exact
+// Python int, float or bool `value`: an index of ints, slices, None,
+// Ellipsis and index Vars, or a lone bool mask -- the `ternary` a mask of
+// `x`'s own shape becomes under a scalar or one-element value, its `where()`
+// coordinates otherwise. Returns `x`, assigned. NotImplemented for anything
+// else, and the Python path takes the call. The caller has checked that no
+// setitem kernel is registered and that `Var.setitem` is still jittor's own.
+// @pyjt(_jt_setitem)
+PyObject* jt_setitem(PyObject* self, PyObject* index, PyObject* value);
 
 } // namespace jittor

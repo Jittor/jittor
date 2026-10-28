@@ -153,8 +153,8 @@ def merge_reports(reports):
     """One report from several, for a session that cannot run in one process.
 
     The design is one session, one report. Reality here is that two Torch cases
-    terminate the interpreter (KI-TEST-002), so the maintained selection has to
-    be run in parts, and a part that never ran would leave its entry points
+    terminate the interpreter, so the maintained selection has to be run in
+    parts, and a part that never ran would leave its entry points
     looking untested. Merging is a union of what was *called*: an entry point is
     uncovered only when no part called it.
 

@@ -21,9 +21,8 @@
 // transposes on the way in and one on the way out. Key/value may have fewer
 // heads than the query (grouped-query attention). An additive bias of shape
 // [bias_b, bias_h, seq_q, seq_kv] -- bias_b 1 or batch, bias_h 1 or heads, 0
-// for none -- carries an attention mask; the forward takes one, the backward
-// does not. Graphs are built once per shape and kept: building one costs
-// milliseconds.
+// for none -- carries a constant attention mask in both forward and backward.
+// Graphs are built once per shape and kept: building one costs milliseconds.
 #include <cudnn.h>
 #include <cudnn_frontend.h>
 
@@ -52,7 +51,7 @@ struct Forward {
 
 struct Backward {
     std::shared_ptr<fe::graph::Graph> graph;
-    std::shared_ptr<fe::graph::Tensor_attributes> q, k, v, o, dout, stats, dq, dk, dv;
+    std::shared_ptr<fe::graph::Tensor_attributes> q, k, v, bias, o, dout, stats, dq, dk, dv;
 };
 
 std::mutex cache_mutex;
@@ -125,7 +124,8 @@ std::shared_ptr<Forward> forward_graph(cudnnHandle_t handle, int dtype, int64_t 
     if (bias_b) {
         entry->bias = graph.tensor(fe::graph::Tensor_attributes()
             .set_name("bias").set_dim({bias_b, bias_h, sq, skv})
-            .set_stride({bias_h * sq * skv, sq * skv, skv, 1}));
+            .set_stride({bias_h * sq * skv, sq * skv, skv, 1})
+            .set_data_type(fe::DataType_t::FLOAT));
         options.set_bias(entry->bias);
     }
     auto outputs = graph.sdpa(entry->q, entry->k, entry->v, options);
@@ -146,8 +146,9 @@ std::shared_ptr<Forward> forward_graph(cudnnHandle_t handle, int dtype, int64_t 
 }
 
 std::shared_ptr<Backward> backward_graph(cudnnHandle_t handle, int dtype, int64_t b, int64_t h,
-        int64_t hk, int64_t sq, int64_t skv, int64_t d, float scale, int causal, int layout) {
-    Key key{1, dtype, b, h, hk, sq, skv, d, layout * 2 + causal, bits(scale), 0, 0, handle};
+        int64_t hk, int64_t sq, int64_t skv, int64_t d, float scale, int causal, int layout,
+        int64_t bias_b, int64_t bias_h) {
+    Key key{1, dtype, b, h, hk, sq, skv, d, layout * 2 + causal, bits(scale), bias_b, bias_h, handle};
     std::lock_guard<std::mutex> lock(cache_mutex);
     auto found = backward_cache.find(key);
     if (found != backward_cache.end()) return found->second;
@@ -169,6 +170,13 @@ std::shared_ptr<Backward> backward_graph(cudnnHandle_t handle, int dtype, int64_
     auto options = fe::graph::SDPA_backward_attributes().set_name("sdpa_backward")
         .set_attn_scale(scale);
     if (causal) options.set_causal_mask(true);
+    if (bias_b) {
+        entry->bias = graph.tensor(fe::graph::Tensor_attributes()
+            .set_name("bias").set_dim({bias_b, bias_h, sq, skv})
+            .set_stride({bias_h * sq * skv, sq * skv, skv, 1})
+            .set_data_type(fe::DataType_t::FLOAT));
+        options.set_bias(entry->bias);
+    }
     auto grads = graph.sdpa_backward(entry->q, entry->k, entry->v, entry->o, entry->dout,
                                      entry->stats, options);
     entry->dq = grads[0];
@@ -217,7 +225,7 @@ int jt_cudnn_sdpa_supported(cudnnHandle_t handle, int dtype, int64_t b, int64_t 
         int64_t size = forward->graph->get_workspace_size();
         if (training) {
             auto backward = backward_graph(handle, dtype, b, h, hk, sq, skv, d, scale, causal,
-                                           layout);
+                                           layout, bias_b, bias_h);
             if (!backward) return 0;
             size = std::max(size, backward->graph->get_workspace_size());
         }
@@ -257,22 +265,27 @@ int jt_cudnn_sdpa_forward(cudnnHandle_t handle, int dtype, int64_t b, int64_t h,
 }
 
 int64_t jt_cudnn_sdpa_backward_workspace(cudnnHandle_t handle, int dtype, int64_t b, int64_t h,
-        int64_t hk, int64_t sq, int64_t skv, int64_t d, float scale, int causal, int layout) {
-    auto backward = backward_graph(handle, dtype, b, h, hk, sq, skv, d, scale, causal, layout);
+        int64_t hk, int64_t sq, int64_t skv, int64_t d, float scale, int causal, int layout,
+        int64_t bias_b, int64_t bias_h) {
+    auto backward = backward_graph(handle, dtype, b, h, hk, sq, skv, d, scale, causal,
+                                   layout, bias_b, bias_h);
     return backward ? backward->graph->get_workspace_size() : -1;
 }
 
 int jt_cudnn_sdpa_backward(cudnnHandle_t handle, int dtype, int64_t b, int64_t h, int64_t hk,
         int64_t sq, int64_t skv, int64_t d, float scale, int causal, int layout,
-        void* q, void* k, void* v, void* o, void* dout, void* stats,
+        int64_t bias_b, int64_t bias_h, void* q, void* k, void* v, void* o, void* dout,
+        void* stats, void* bias,
         void* dq, void* dk, void* dv, void* workspace) {
     try {
-        auto backward = backward_graph(handle, dtype, b, h, hk, sq, skv, d, scale, causal, layout);
+        auto backward = backward_graph(handle, dtype, b, h, hk, sq, skv, d, scale, causal,
+                                   layout, bias_b, bias_h);
         if (!backward) return 1;
         std::unordered_map<std::shared_ptr<fe::graph::Tensor_attributes>, void*> pack = {
             {backward->q, q}, {backward->k, k}, {backward->v, v}, {backward->o, o},
             {backward->dout, dout}, {backward->stats, stats},
             {backward->dq, dq}, {backward->dk, dk}, {backward->dv, dv}};
+        if (bias_b) pack[backward->bias] = bias;
         return run(*backward->graph, handle, pack, workspace);
     } catch (const std::exception& e) {
         last_error = e.what();

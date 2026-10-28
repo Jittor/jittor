@@ -385,11 +385,10 @@ assert converted_cpu.dtype is torch.float64 and converted_cpu.is_cpu
 converted_cpu.sync()
 assert converted_cpu.location() == "cpu"
 assert alias is not original and alias.dtype is torch.float64
-# In torch ``Tensor(other)`` aliases the graph: the result requires grad and is
-# not a leaf. Here ``Tensor`` is a plain Var subclass with no constructor of
-# its own, so this builds a fresh Var from the data and the linkage is lost.
-# Asserted as it stands -- see KI-COMPAT-004 -- so closing it turns this red.
-assert not alias.requires_grad and alias.is_leaf
+# Tensor(other) keeps its storage alias and the graph back to the source.
+assert alias.requires_grad and not alias.is_leaf
+alias_gradient, = torch.autograd.grad(alias.sum(), original)
+np.testing.assert_array_equal(alias_gradient.numpy(), [1., 1.])
 assert alias.data_ptr() == original.data_ptr()
 if jt.introspection.policy.runtime.use_cuda:
     assert alias.location() == original.location() == "device"

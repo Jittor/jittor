@@ -20,7 +20,7 @@ GitHub issue 和 PR 描述里；本页不记进度，只记硬件到手那天要
 | `10.19` | 每个带 `grad()` 的后端算子都有对 CPU 参考的梯度测试：60 条里 36 条要硬件，7 条连测试都还没有 | 多卡 CUDA/MPI、Ascend、ROCm | 后端 `grad()` 的 CPU 参考对拍；HCCL |
 | `8.14` | Corex 探测只读、路径可配置：`discover()` 在真实安装上给出正确结论 | Corex / 天数卡 | Corex / 天数 |
 | `8.15` | 多机 rendezvous：真实两机 collective 对拍 | 两台机器 | 两台机器 |
-| `8.16` | 多机启动器：`torchrun --nnodes=2` 跑通 transformers 训练 | 两台机器 | 两台机器 |
+| `8.16` | 多机启动器：`jtrun --nnodes=2` 跑通 transformers 训练 | 两台机器 | 两台机器 |
 | `8.17` | 跨机网络与诊断：带宽微基准、掉线在超时内退出 | 两台机器 | 两台机器 |
 | `8.18` | 多机 checkpoint：2 机保存、4 机加载的续训 | 两台机器（加载需 4 机） | 两台机器 |
 | `10.22` | 两节点 DDP/FSDP 冒烟与掉线门禁进 nightly | 两台机器 | 两台机器 |
@@ -205,19 +205,30 @@ launcher ABI 断言全过，反向对照见下）、以及不变量式静态合�
 
 | | |
 | --- | --- |
-| 命令 | **尚无 nox session** ← 这本身就是 `10.22` 的内容 |
-| 现有材料 | 已合入 TCP/SQLite Store 与 NCCL WORLD bootstrap，可在单机多进程下验 rendezvous、超时与失败传播（`8.15` 的单机前置） |
+| 命令 | `nox -s native_multinode -- <逐节点参数>`；完整参数与阶段顺序见[两机维护入口](../skills/jittor-distributed-verification/SKILL.md#two-host-maintained-entry) |
+| 启动与范围 | runner 使用公开 `jtrun` 的模块入口 `python -m jittor.distributed.launch`，每节点一张 CUDA 卡，NCCL 通信；两端须为相同 clean SHA，并提供共享产物目录和各自私有缓存 |
+| 验收 | 两个真实 host 分别执行 warm、collectives、parity、baseline、resume；节点 0 另执行 oracle 和最终 seal。保留实际主机/网络拓扑证据，不能将本机两个 agent 当作两机验收 |
 
-等它的项：**`8.15`**（真实两机 collective 对拍）、**`8.16`**（`torchrun --nnodes=2` 跑通 transformers
+等它的项：**`8.15`**（真实两机 collective 对拍）、**`8.16`**（`jtrun --nnodes=2` 跑通 transformers
 训练、两机 loss 轨迹一致）、**`8.17`**（跨机带宽微基准、掉线在超时内退出）、**`8.18`**（2 机保存、
 4 机加载的续训）、**`10.22`**（两节点 smoke 进 nightly）。
 
+上述 runner 验证固定双节点的原生 FSDP 协议；Transformers 训练、跨机带宽/网络掉线、
+2 机保存后 4 机加载及 scheduled nightly 仍须分别验收，不能由该 runner 的单次成功推断。
+旧 MPI collective 梯度测试继续使用下表的 `mpi_hardware` 入口，独立于 `jtrun` 多机验收。
+
 ### 后端 `grad()` 的 CPU 参考对拍
 
-全树共 **60 个后端梯度实现**（C++ `::grad()` 28 个，Python `jt.Function.grad` 32 个），清单在
-`tests/structure/test_backend_grad_contract.py` 的 `BACKEND_GRAD_COVERAGE`，与源码树逐条相等，
-新增或删除任何一条都会报红。其中 **24 条在 CPU+CUDA 主机上能真跑**（CUDA 22 条 + oneDNN 1 条 + …），
-**36 条要等硬件**。清单里的 `kind` 字段就是下面这张表：
+后端梯度清单在 `tests/structure/test_backend_grad_contract.py` 的
+`BACKEND_GRAD_COVERAGE`，逐条匹配 C++ `::grad()`、Python `grad` 方法，以及
+类封装的 CodeOp 内联反向。扫描会沿同文件的 program helper 查找梯度源码，
+因此把 `jt.Function.grad` 迁移进 CodeOp 不会丢掉登记。
+
+新增的 GELU、bf16 Swish、cross entropy 和 nearest upsample 公式回归位于
+`tests/backends/acl/test_acl_codeop_gradients.py`；需要真实 ACL 设备执行。
+当前 CUDA 主机上未验收这些 NPU 数值，收集成功或跳过均不构成通过。
+其他 ACL CodeOp 的既有梯度用例也已逐个登记，仍需按 `nox -s npu` 上机验收。
+清单里的 `kind` 字段就是下面这张表：
 
 | kind | 含义 | 硬件到手那天跑什么 | 通过判据 |
 | --- | --- | --- | --- |
@@ -261,3 +272,55 @@ launcher ABI 断言全过，反向对照见下）、以及不变量式静态合�
 
 一项真机验收通过后，在对应 PR 描述里给出命令、设备型号、软件版本与结论，再把它从表和正文里删掉；
 验收中暴露的缺陷记进[已知问题总账](known-issues.md)。
+
+## 近期选入的共享数值与存储语义：ROCm / ACL 仍待真卡验收
+
+Owner：算子、autograd/storage 与对应后端维护者。状态：CPU/CUDA 定向验证不能外推到 ROCm/ACL；相关后端本次未执行。复查条件：原生 provider、编译器或共享算子/写回/捕获 owner 改动，或设备可用。
+
+先完成本页已有 ROCm / Ascend 单卡准入，再执行共享语义用例。维护入口是 `JT_BACKEND=rocm` 加 `nox -s rocm`，以及 `JT_BACKEND=acl` 加 `CANN_SET_ENV` / `nox -s npu`；不是 `run_test_suite.py --backend rocm|npu`（该工具目前只接受 CPU/CUDA）。pytest 设备标签用 `rocm` / `npu`，原生 dispatch 回报应分别是 `rocm` / `acl`。
+
+```bash
+# AMD 真卡；每次运行独立 nox/cache，首次 JIT 串行。
+JT_BACKEND=rocm JITTOR_TEST_REQUIRE_ROCM=1 JITTOR_TEST_ACCELERATOR_MIN_EXECUTED=1 nox -s rocm
+
+# Ascend 真卡；CANN_SET_ENV 由该机器预置，必须指向真实 set_env.sh。
+JT_BACKEND=acl CANN_SET_ENV="$CANN_SET_ENV" nox -s npu
+```
+
+共享原生存储的最小定向门禁可在已预置的硬件 Python 环境中运行以下命令。设置 `JITTOR_PR_DEVICE=rocm JT_BACKEND=rocm` 或 `JITTOR_PR_DEVICE=npu JT_BACKEND=acl`；ACL 先 `source "$CANN_SET_ENV"`。`JITTOR_HOME` 和 `TMPDIR` 使用 lab `_state` 下的独立目录，不与 nox、benchmark 或另一进程共用。以下命令要求最终集成已包含 saved-output regression；缺失 nodeid 应报错，不得删除以求绿。
+
+```bash
+JITTOR_TORCH_SHIM=0 PYTHONPATH=python:tests JT_USE_PARALLEL_OP_COMPILER=0 python - <<'PY'
+import os
+import numpy as np
+import pytest
+import jittor as jt
+from jittor._runtime.fallback import forbid_backend_fallbacks
+label = os.environ['JITTOR_PR_DEVICE']
+assert label in ('rocm', 'npu')
+backend = 'rocm' if label == 'rocm' else 'acl'
+assert getattr(jt.compiler, 'has_' + backend, False)
+setattr(jt.flags, 'use_' + backend, 1)
+jt.flags.use_cuda = 1
+with jt.runtime.scope(backend_fallback='error'), forbid_backend_fallbacks():
+    probe = jt.array(np.array([1., 2.], dtype='float32')) * 2
+    probe.sync(True, False)
+    selected, ordinal = jt.core.dispatch_context([probe])
+    assert selected == backend and ordinal >= 0
+    assert probe.location() == 'device'
+    np.testing.assert_array_equal(probe.numpy(), [2., 4.])
+    assert jt.core.backend_fallback_count() == 0
+    result = pytest.main(['-q', 'tests/core/test_alias_autograd_state.py::test_native_store_preserves_unmaterialized_saved_output'])
+    jt.sync_all(True)
+    assert jt.core.backend_fallback_count() == 0
+    raise SystemExit(result)
+PY
+```
+
+该门禁覆盖 contiguous/strided、direct/transitive saved-output 的四个组合，要求实际设备驻留与完整梯度对照，且不执行无关图。还需补齐如下设备定向回归，才可关闭本条：
+
+- `log1p`、Softplus 与 sigmoid tail：全元素输出、完整 VJP、FP32/FP64 和该后端声明支持的低精度范围；域边界、负尾、标量 dtype/不意外建梯度图。ROCm 必须执行原生 HIP 路径；ACL 的 `log1p` **仍保留旧 `log(1+x)` composition**，验收其兼容行为，不宣称小量精度升级。ACL 若以后升级原生实现，需单独真实设备精度证据。
+- padding 负宽裁剪/补齐与完整输入梯度，index-fill dtype 和错误域；portable/fused optimizer 保存旧 forward、参数/状态 dtype、data/detach/strided 别名与指针，以及发布梯度身份；registered-buffer 替换/更新后 replay guards。捕获仅验收后端真实公开支持的能力，unsupported 必须明确拒绝，不能以 eager/CPU fallback 冒充 capture 成功。
+- 每组核对真实 backend/ordinal、device storage、fallback 计数零，并保留执行数量；不得仅依据 import、nox 退出零或全 skip 判通过。
+
+现有 `test_log1p_softplus_precision.py`、`test_sigmoid_negative_tail_precision.py`、`test_pad_widths.py` 与部分 dtype fixtures 明确只选 CPU/CUDA，须先按维护后的 `rocm` / `npu` 路径扩展设备参数及 residency 断言，**直接设置 JITTOR_TEST_DEVICES 不会使它们获得其他后端覆盖**。OpInfo 旧 `log(1+x)` case 和上述四个存储 case 也不能替代这份数值/optimizer/replay 完整矩阵。维护者将新增精确 nodeids、实际命令、提交 SHA、通过/跳过数量和设备信息写入结果报告后，再收窄或删除本条。

@@ -6,6 +6,7 @@ from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
+from unittest import mock
 
 import numpy as np
 
@@ -129,7 +130,8 @@ class IndexingRouting(unittest.TestCase):
                 return (Var("row", dtype="int64"), Var("column", dtype="int64"))
 
         self.Var = Var
-        self.jt = SimpleNamespace(Var=Var, array=lambda value, dtype: Var("scalar", dtype=dtype))
+        self.jt = SimpleNamespace(Var=Var, array=lambda value, dtype: Var("scalar", dtype=dtype),
+                                  flags=SimpleNamespace(no_grad=False))
 
         def dispatch(operation, *args):
             self.calls.append((operation, args))
@@ -223,6 +225,32 @@ class IndexingRouting(unittest.TestCase):
             self.Var().getitem(slice(None))
         self.assertIs(caught.exception, error)
         self.assertEqual(self.native_calls, [])
+
+    def test_no_grad_static_basic_decline_resumes_native_once(self):
+        x = self.Var()
+        index = (slice(None, None, 2), slice(0, 1))
+        with mock.patch.object(self.jt.flags, "no_grad", True):
+            result = x[index]
+        self.assertEqual(self.calls, [("tensor.getitem", (x, index, None))])
+        self.assertEqual(len(self.native_calls), 1)
+        self.assertEqual(result.view, (x, index))
+
+    def test_provider_recorded_view_retains_its_original_base(self):
+        x, alternate = self.Var(), self.Var("alternate")
+        index = (slice(None), slice(0, 1))
+        result = self.Var("provider_view")
+        result._set_view_of(alternate, index)
+        self.provider_result = result
+        self.assertIs(x[index], result)
+        self.assertEqual(result.view, (alternate, index))
+        self.assertEqual(len(self.calls), 1)
+
+    def test_provider_plain_basic_result_gets_a_view_record(self):
+        x = self.Var()
+        index = slice(0, 1)
+        self.provider_result = self.Var("provider_result")
+        self.assertIs(x[index], self.provider_result)
+        self.assertEqual(self.provider_result.view, (x, index))
 
     def test_value_cast_is_limited_to_acl_plain_assignment(self):
         x, value = self.Var(dtype="float16"), self.Var(dtype="float32")
@@ -330,34 +358,33 @@ class DomainRouting(unittest.TestCase):
 
         calls = []
         result = object()
+        provider_result = result
+        native_calls = []
 
         def kernel(inputs, dim):
             calls.append((inputs, dim))
-            return result
+            return provider_result
 
         def select(key, inputs, dim):
             self.assertEqual(key, "tensor.concat")
             return kernel
 
+        def native_concat(inputs, dim, dtype):
+            native_calls.append((inputs, dim, dtype))
+            return result
+
         jt = SimpleNamespace(flag_scope=lambda **kwargs: nullcontext(),
                              flags=SimpleNamespace(amp_reg=0),
                              amp_flags=SimpleNamespace(keep_reduce=4),
                              binary_dtype_infer=lambda *args: "float32")
-        # `concat` resolves the module through `_jt()` -- `34976898` replaced the
-        # function-local `import jittor` with a cached accessor -- and the loader
-        # keeps only the FunctionDefs named here, so the accessor has to be
-        # injected the way `jt` itself is. Without it the first line of `concat`
-        # raised `NameError: name '_jt' is not defined`, which is the same
-        # defect class as the module-level *constants* `a1977f68` taught the
-        # loader to carry: a name the surviving function reads and the sandbox
-        # never provided.
-        # `concat` now validates and dispatches in `_concat` (it only scopes
-        # the AMP flag itself), which reads dtypes through the module's
-        # `_jittor_dtype_name` import -- the stand-in dtypes here are already
-        # names.
-        owner = definitions("ops/concatenation.py", {"concat", "_concat", "_merge_dtypes"},
+        # Keep the real validation/selection/decline continuation. Only the
+        # lazy runtime lookup, tracing state and native graph construction are
+        # supplied by this host fixture.
+        owner = definitions("ops/concatenation.py",
+                            {"concat", "_concat", "_merge_dtypes", "_concat_after_kernel"},
                             jt=jt, _jt=lambda: jt, Sequence=(list, tuple),
-                            select_kernel=select, _jittor_dtype_name=str)
+                            select_kernel=select, _tracing=lambda: False,
+                            _concat_bounded=native_concat, _jittor_dtype_name=str)
         inputs = (Var("int32"), Var("float32"))
         self.assertIs(owner.concat(inputs, -1), result)
         self.assertEqual([value.dtype for value in calls[0][0]], ["float32", "float32"])
@@ -366,6 +393,13 @@ class DomainRouting(unittest.TestCase):
         with self.assertRaises(IndexError):
             owner.concat(inputs, 3)
         self.assertEqual(len(calls), 1)
+        self.assertEqual(native_calls, [])
+
+        provider_result = None
+        self.assertIs(owner.concat(inputs, -1), result)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual([value.dtype for value in calls[1][0]], ["float32", "float32"])
+        self.assertEqual(native_calls, [(inputs, 1, "float32")])
 
 
 if __name__ == "__main__":

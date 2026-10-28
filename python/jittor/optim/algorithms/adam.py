@@ -2,7 +2,7 @@
 
 import jittor as jt
 from ..._core.dtypes import dtype_name
-from ..._runtime.dispatch import register_kernel, select_kernel
+from ..._runtime.dispatch import dispatch_context, register_kernel, select_kernel
 
 from ..base import (
     Optimizer, _grad_matches_param, _param_requires_grad,
@@ -53,8 +53,24 @@ def adam_update(param, grad, value, momentum, *, lr, eps, weight_decay,
         param = (param * (1 - lr * weight_decay)).cast(param.dtype)
     elif weight_decay != 0 or not torch_math and not decoupled_weight_decay:
         grad = grad + param * weight_decay
-    _update_preserve_dtype(momentum, b0 * momentum + (1 - b0) * grad)
-    _update_preserve_dtype(value, b1 * value + (1 - b1) * grad * grad)
+    stable_state = torch_math and dispatch_context(param).backend == "cpu"
+    if stable_state:
+        # Checkpointed states and a live state's views can give the CPU fuser
+        # different intermediate outputs. Prevent contraction across the state
+        # summands, so identical gradients/state round alike in both graphs.
+        # These are lazy materialization boundaries, not a graph-wide sync.
+        grad.stop_fuse()
+        old_m = (b0 * momentum).stop_fuse()
+        new_m = ((1 - b0) * grad).stop_fuse()
+        old_v = (b1 * value).stop_fuse()
+        new_v = ((1 - b1) * grad * grad).stop_fuse()
+        _update_preserve_dtype(momentum, old_m + new_m)
+        _update_preserve_dtype(value, old_v + new_v)
+        momentum.stop_fuse()
+        value.stop_fuse()
+    else:
+        _update_preserve_dtype(momentum, b0 * momentum + (1 - b0) * grad)
+        _update_preserve_dtype(value, b1 * value + (1 - b1) * grad * grad)
     if torch_math or decoupled_weight_decay:
         correction = (1 - b1 ** float(step)) ** 0.5
         scalar = (jt.array(correction, dtype="float32" if dtype_name(value.dtype) == "bfloat16"

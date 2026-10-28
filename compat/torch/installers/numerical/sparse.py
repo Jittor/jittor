@@ -12,6 +12,26 @@ class _SparseCOO:
     @property
     def dtype(self):
         return self._dense.dtype
+    # Torch's sparse tensors take the elementwise scalar/arithmetic operators
+    # dense tensors do; the storage here is dense already, so they are the
+    # dense answers. PEFT's SHiRA adapter adds its sparse delta to a dense
+    # weight (`weight += torch.sparse_coo_tensor(...)`), which is exactly
+    # dense += sparse.
+    def __mul__(self, other):
+        return _SparseCOO(self._dense * _as_dense(other))
+    __rmul__ = __mul__
+    def __add__(self, other):
+        return self._dense + _as_dense(other)
+    __radd__ = __add__
+    def __sub__(self, other):
+        return self._dense - _as_dense(other)
+    def __rsub__(self, other):
+        return _as_dense(other) - self._dense
+    def __neg__(self):
+        return _SparseCOO(-self._dense)
+    def __iadd__(self, other):
+        self._dense = self._dense + _as_dense(other)
+        return self
     def t(self):
         from . import (
             _SparseCOO,
@@ -22,6 +42,10 @@ class _SparseCOO:
             _SparseCOO,
         )
         return _SparseCOO(self._dense.sum(dim) if dim is not None else self._dense.sum())
+
+
+def _as_dense(value):
+    return value.to_dense() if isinstance(value, _SparseCOO) else value
 
 
 def sparse_coo_tensor(indices, values, size=None, dtype=None, device=None,

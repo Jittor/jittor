@@ -107,6 +107,22 @@ RTX 4090，外部进程轮询 `cudaMemGetInfo` 读整卡占用，两侧同一把
 上面是 batch 32 的单点。差距的绝对值会随 batch 和分辨率放大，比例未必；而且没有
 测到具体是哪些张量跨段存活，要定到那一层得开 `use_stat_allocator` 看生命周期。
 
+## 捕获中的外部调用
+
+`graph_replay` 和 `capture_step` 只能重放原生图中记录的操作。直接使用指针写入输出、
+启动外部内核或调用有副作用的回调时，调用方应在该操作前标记捕获边界：
+
+```python
+jt.graph_replay_barrier("external library launch")
+```
+
+捕获会报告拒绝原因，后续调用继续执行原函数。Torch `Tensor.data_ptr()` 和 Triton
+桥接启动器自动标记这一边界；其余外部调用仍需显式标记。标记只影响当前线程中正在
+构建的捕获，也会传递给嵌套捕获。在捕获外调用不会影响后续纯原生图。
+
+已有原生 CUDA graph 正在记录时，显式与自动重放都提交普通惰性操作，由外层记录
+拥有这些操作；不会在其中同步输入或再创建一层设备记录。
+
 ## 怎么测
 
 门禁是 `tests/compat/torch/test_ecosystem_speed.py`。要归因一个差距，用 nsys 抓

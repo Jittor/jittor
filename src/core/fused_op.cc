@@ -100,12 +100,18 @@ void FusedOp::update_ops() {
     _inputs.clear();
     _outputs.clear();
     vars.clear();
-    op_index.clear();
-    var_index.clear();
+    op_index.reset(ops.size());
     for (uint i=0; i<ops.size(); i++)
         op_index[ops[i]] = i;
+    // Every var indexed below is an edge of one of these ops, so the edge
+    // count bounds them.
+    size_t var_bound = 0;
     for (Op* op : ops) {
-        for (Var* o : snapshot_outputs(op)) {
+        auto ins = snapshot_inputs(op);
+        var_bound += ins.end() - ins.begin();
+        auto outs = snapshot_outputs(op);
+        var_bound += outs.end() - outs.begin();
+        for (Var* o : outs) {
             if (o->loop_options) {
                 if (loop_options_origin == nullptr)
                     loop_options_origin = &o->loop_options.data();
@@ -186,17 +192,18 @@ void FusedOp::update_ops() {
     ASSERT(outputs().size());
     LOGvvvv << "set fused output" << outputs();
     
+    var_index.reset(var_bound);
     for (Op* opi : ops) {
         for (auto& in : snapshot_inputs(opi)) {
             Var* i = in.first;
-            if (!var_index.count(i)) {
+            if (!var_index.has(i)) {
                 var_index[i] = vars.size();
                 vars.push_back({i, 0});
                 _inputs.emplace_back((Node*)i);
             }
         }
         for (Var* o : snapshot_outputs(opi)) {
-            if (!var_index.count(o)) {
+            if (!var_index.has(o)) {
                 var_index[o] = vars.size();
                 // intermediate(can fuse) or output
                 vars.push_back({o, var_stays_in_memory((Node*)o) ? 2 : 1});
@@ -264,16 +271,25 @@ void FusedOp::statistics(uint64_t& in, uint64_t& out, uint64_t& compute) {
 void FusedOp::prepare_fused_key(JK& jk) {
     JT_GBP_SCOPE(gbp_jit_key);
     jk.clear();
+    // While no tensor has an explicit placement, every op's requested backend
+    // is this thread's execution target -- `graph_placement` has nothing to
+    // say -- so it is asked once here, not three calls deep in the fragment of
+    // every member and again for the segment.
+    const bool uniform = !explicit_tensor_placement_made.load(std::memory_order_relaxed);
+    const BackendId requested = uniform ? execution_target_backend() : BackendId::Cpu;
     for (uint i=0; i<ops.size(); i++) {
         Op* op = ops[i];
         jk << "«opkey" << i << JK::val;
         jk << op->name();
-        op->prepare_fragment(jk);
+        if (uniform) op->prepare_fragment_on(jk, op->execution_backend_for(requested));
+        else op->prepare_fragment(jk);
         const auto& identity = op->definition().compile_identity;
         if (!identity.empty()) add_jit_define(jk, "op_definition", i, identity);
     }
     jk << "«JIT:1";
-    if (!executes_on_accelerator()) {
+    const bool on_accelerator = uniform
+        ? execution_backend_for(requested) != BackendId::Cpu : executes_on_accelerator();
+    if (!on_accelerator) {
         // only cpu
         jk << "«JIT_cpu:1";
     } else {

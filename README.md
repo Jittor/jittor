@@ -1,30 +1,25 @@
-# Jittor: a Just-in-time Deep Learning Framework / 计图
+# Jittor：基于即时编译的深度学习框架 / 计图
+
+[English](README.en.md) | 中文
 
 ![Jittor Logo](https://cg.cs.tsinghua.edu.cn/jittor/favicon_package_v0/JittorLogo_Final1220.svg)
 
-[Quickstart / 快速开始](#quickstart) | [Install / 安装](#install) |
-[Tutorials / 教程](#tutorials) | [Contributing / 贡献](#contributing)
-
-Jittor is a high-performance deep learning framework based on just-in-time
-compilation and meta-operators. Its Python frontend uses dynamic graph execution,
-while its C++ and CUDA backend compiles and tunes operators for each workload.
+[快速开始](#quickstart) | [安装](#install) |
+[教程](#tutorials) | [贡献](#contributing)
 
 计图（Jittor）是一个基于即时编译和元算子的高性能深度学习框架。前端使用 Python
 动态图接口，后端通过 C++ 和 CUDA 为实际工作负载编译、调优算子。
 
-- [Website / 官网](https://cg.cs.tsinghua.edu.cn/jittor/)
-- [Tutorials / 教程](https://cg.cs.tsinghua.edu.cn/jittor/tutorial/)
-- [Models / 模型库](https://cg.cs.tsinghua.edu.cn/jittor/resources/)
-- [API documentation / API 文档](https://cg.cs.tsinghua.edu.cn/jittor/assets/docs/index.html)
-- [Forum / 论坛](https://discuss.jittor.org/)
-- [Awesome Jittor (English)](docs/community/AWESOME-JITTOR-LIST.md) |
-  [Awesome Jittor (中文)](docs/community/AWESOME-JITTOR-LIST.cn.md)
+- [官网](https://cg.cs.tsinghua.edu.cn/jittor/)
+- [教程](https://cg.cs.tsinghua.edu.cn/jittor/tutorial/)
+- [模型库](https://cg.cs.tsinghua.edu.cn/jittor/resources/)
+- [API 文档](https://cg.cs.tsinghua.edu.cn/jittor/assets/docs/index.html)
+- [论坛](https://discuss.jittor.org/)
+- [Awesome Jittor（中文）](docs/community/AWESOME-JITTOR-LIST.md) |
+  [Awesome Jittor（English）](docs/community/AWESOME-JITTOR-LIST.en.md)
 
 <a id="quickstart"></a>
-## Quickstart / 快速开始
-
-The following example defines and trains a small two-layer network. It also
-shows the canonical tensor-construction API used by current Jittor releases.
+## 快速开始
 
 下面的示例定义并训练一个两层网络，同时展示当前版本推荐的张量构造方式。
 
@@ -61,9 +56,6 @@ for step, (x, y) in enumerate(get_data(1000, 50)):
     print("step {}, loss = {}".format(step, loss.item()))
 ```
 
-Jittor operations are available as both functions and `Var` methods. Accessing
-`.data`, `.numpy()`, or `.item()` synchronizes pending computation.
-
 Jittor 算子通常同时提供函数和 `Var` 方法；读取 `.data`、`.numpy()` 或 `.item()`
 会同步尚未完成的计算。
 
@@ -78,35 +70,25 @@ print(c.max(), jt.max(c))
 ```
 
 <a id="install"></a>
-## Install / 安装
-
-The package metadata in [`pyproject.toml`](pyproject.toml) is authoritative.
-Jittor supports Python 3.7 or newer. A C++ compiler and OpenMP runtime are
-required for local JIT compilation; accelerator support additionally requires
-the corresponding driver and toolchain.
+## 安装
 
 安装要求以 [`pyproject.toml`](pyproject.toml) 为准。Jittor 支持 Python 3.7
 及以上版本；本地即时编译需要 C++ 编译器和 OpenMP，使用加速设备时还需要对应驱动与工具链。
 
-| Platform / 平台 | Minimum development requirements / 最低开发要求 |
+| 平台 | 最低开发要求 |
 | --- | --- |
 | Linux | Python >= 3.7, g++ >= 5.4, OpenMP |
-| Windows 10/11 | Python >= 3.8; CUDA >= 10.2 for NVIDIA GPU |
+| Windows 10/11 | Python >= 3.8；NVIDIA GPU 需要 CUDA >= 10.2 |
 | macOS >= 10.14 | Python >= 3.7, clang >= 8.0, `libomp` |
 
-### Install from PyPI / 从 PyPI 安装
+### 从 PyPI 安装
 
 ```bash
 python -m pip install jittor
 python -m jittor.selftest
 ```
 
-### uv development environment / 使用 uv 配置开发环境
-
-The repository includes a `uv.lock` and a pinned `dev` dependency group for
-the maintained Python 3.11 test environment. `uv sync` installs this checkout
-in editable mode. Keep the virtual environment in the repository's external
-lab state directory.
+### 使用 uv 配置开发环境
 
 仓库包含 `uv.lock`，以及面向当前维护的 Python 3.11 测试环境的 `dev` 依赖组。
 `uv sync` 会以可编辑方式安装当前源码；虚拟环境应放在仓库外的 lab 状态目录中。
@@ -120,27 +102,16 @@ uv sync --locked --group dev
 uv run --locked python -m jittor.selftest
 ```
 
-Run the CPU and CUDA suites through the same fail-closed standalone runner used
-by the repository gates. The CUDA command needs a usable `nvcc`: on Linux
-x86_64, `jittor[cuda12]` provides one; otherwise use a pre-provisioned toolkit.
-An NVIDIA driver alone is not enough.
-
 使用仓库门禁使用的同一个 fail-closed 独立 runner 分别运行 CPU 和 CUDA 测试。
-CUDA 命令需要可用的 `nvcc`：Linux x86_64 可由 `jittor[cuda12]` 提供，
-其他情况使用预先安装的工具链；只有 NVIDIA 驱动还不够。
-The CUDA suite example below explicitly selects a system/JTCUDA toolkit.
-下面的 CUDA 套件示例显式选择 system/JTCUDA 工具链。
+CUDA 命令要求已安装 CUDA 工具链并能找到 `nvcc`，只有 NVIDIA 驱动还不够。
 
 ```bash
 uv run --locked python tools/run_test_suite.py --tier core --backend cpu
 
-export JT_BUILD_NVCC_PATH="$(command -v nvcc)"
+export nvcc_path="$(command -v nvcc)"
 CUDA_VISIBLE_DEVICES=0 uv run --locked \
   python tools/run_test_suite.py --tier core --backend cuda
 ```
-
-For a conda `targets/x86_64-linux` toolkit, point Jittor at a compatibility
-root that exposes `bin/nvcc`, `bin/g++`, `include/`, `lib64/`, and `nvvm/`:
 
 对于采用 conda `targets/x86_64-linux` 布局的工具链，请使用一个包含
 `bin/nvcc`、`bin/g++`、`include/`、`lib64/` 和 `nvvm/` 的兼容 CUDA 根目录：
@@ -148,15 +119,13 @@ root that exposes `bin/nvcc`, `bin/g++`, `include/`, `lib64/`, and `nvvm/`:
 ```bash
 export CUDA_COMPAT_ROOT=/path/to/cuda-compat
 export CUDA_VISIBLE_DEVICES=2
-export JT_BUILD_NVCC_PATH="$CUDA_COMPAT_ROOT/bin/nvcc"
-export JT_BUILD_CC_PATH="$CUDA_COMPAT_ROOT/bin/g++"
+export nvcc_path="$CUDA_COMPAT_ROOT/bin/nvcc"
+export cc_path="$CUDA_COMPAT_ROOT/bin/g++"
 export CUDA_HOME="$CUDA_COMPAT_ROOT"
 export PATH="$CUDA_COMPAT_ROOT/bin:$PATH"
 export LD_LIBRARY_PATH="$CUDA_COMPAT_ROOT/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 uv run --locked python tools/run_test_suite.py --tier core --backend cuda
 ```
-
-For the complete trees, omit `--tier core` after the short tier is green:
 
 短 tier 通过后，去掉 `--tier core` 即可运行完整测试树：
 
@@ -166,15 +135,11 @@ CUDA_VISIBLE_DEVICES=0 uv run --locked \
   python tools/run_test_suite.py --backend cuda
 ```
 
-On Debian or Ubuntu, install the compiler dependencies first:
-
 Debian 或 Ubuntu 需要先安装编译依赖：
 
 ```bash
 sudo apt install python3-dev libomp-dev g++ build-essential
 ```
-
-On macOS, install OpenMP with Homebrew before installing Jittor:
 
 macOS 请先通过 Homebrew 安装 OpenMP：
 
@@ -184,8 +149,6 @@ python -m pip install jittor
 python -m jittor.selftest
 ```
 
-On Windows, a conda environment may additionally need `pywin32`:
-
 Windows 的 conda 环境可能还需要 `pywin32`：
 
 ```bash
@@ -194,49 +157,25 @@ python -m pip install jittor
 python -m jittor.selftest
 ```
 
-### What the first run does / 首次运行会发生什么
-
-Jittor compiles at runtime, so `import jittor` is not only a library import: the
-first one builds the C++ core and then compiles each operator as your program
-reaches it. This is what to expect.
+### 首次运行会发生什么
 
 Jittor 是即时编译的，所以 `import jittor` 不只是导入一个库：第一次会编译 C++
 内核，之后每个算子在被用到时再编译。具体代价如下。
 
-- **Time / 耗时.** The first import compiles the core: minutes on a typical
-  machine, and longer on few-core ones. Later imports reuse the cache and take
-  a couple of seconds. 首次 import 要编译内核，通常几分钟，核心数少的机器更久；
+- **耗时。** 首次 import 要编译内核，通常几分钟，核心数少的机器更久；
   之后的 import 走缓存，约一两秒。
-- **Network / 联网.** Jittor downloads a small set of third-party archives once
-  (MKL/oneDNN, cub, cutt — tens of MB). See *Offline install* below if the
-  machine has no network. 首次会下载少量第三方归档（MKL/oneDNN、cub、cutt，
+- **联网。** 首次会下载少量第三方归档（MKL/oneDNN、cub、cutt，
   几十 MB）。无网络的机器见下面的「离线安装」。
-- **Disk / 磁盘.** The cache holds the compiled core and every operator built so
-  far, on the order of 1–2 GB. It lives under `~/.cache/jittor`; set
-  `JITTOR_HOME` to move it. 缓存放内核与已编译的算子，量级 1–2 GB，默认在
+- **磁盘。** 缓存放内核与已编译的算子，量级 1–2 GB，默认在
   `~/.cache/jittor`，可用 `JITTOR_HOME` 改位置。
-- **CUDA toolchain / CUDA 工具链.** The base `jittor` package does not install CUDA and
-  does not download one for you. On Linux x86_64, the optional
-  `jittor[cuda12]` extra supplies a pip compiler/runtime stack. Without that extra,
-  a missing `nvcc` is reported and
-  Jittor builds for CPU; install a toolkit, or set `JT_BUILD_NVCC_PATH=""` to select CPU.
-  基础版 `jittor` 不安装 CUDA；Linux x86_64 可用可选的 `jittor[cuda12]` extra
-  安装 pip 编译器与运行库。未安装 extra 且没有 `nvcc` 时会明确告知并按 CPU 构建；
-  请安装工具链，或设 `JT_BUILD_NVCC_PATH=""` 明确选择 CPU。
-- **The cache directory depends on your toolchain / 缓存目录取决于工具链.** Its
-  name includes the Jittor, compiler and Python versions, the platform, the CPU,
-  and the build configuration (`cc_flags`, `nvcc_flags`, `cuda_archs`,
-  `enable_lto`, `nvcc_path`). Changing any of them builds into a new directory
-  rather than overwriting the old one, and different checkouts get different
-  directories. Two runs that must not share a cache need different
-  `cache_name` values (or different `JITTOR_HOME`s). 目录名包含 Jittor / 编译器 /
-  Python 版本、平台、CPU 与构建配置；其中任何一项变化都会写进新目录而不是覆盖旧的，
+- **不会自动下载 CUDA。** Jittor **不会**自己下载
+  CUDA 工具链。有驱动但没有 `nvcc` 时它会明确告知并按 CPU 构建；请自行安装工具链，
+  或设 `nvcc_path=""` 明确选择 CPU。
+- **缓存目录取决于工具链。** 目录名包含 Jittor / 编译器 /
+  Python 版本、平台、CPU 与构建配置（`cc_flags`、`nvcc_flags`、`cuda_archs`、
+  `enable_lto`、`nvcc_path`）；其中任何一项变化都会写进新目录而不是覆盖旧的，
   不同的源码目录也各有各的目录。两个不能共用缓存的运行要设不同的 `cache_name`
   （或不同的 `JITTOR_HOME`）。
-
-Before reporting a build problem, run the preconditions check. It reports
-everything that is missing at once, and says for each item whether Jittor can
-resolve it or you have to:
 
 报构建问题之前先跑一次前置条件检查。它一次列出所有缺失项，并逐条说明是 Jittor
 能自己解决还是需要你动手：
@@ -244,8 +183,6 @@ resolve it or you have to:
 ```bash
 python -m jittor_utils.preflight
 ```
-
-To reclaim disk space, remove part or all of the cache:
 
 要回收磁盘空间，可以按组或整体清理缓存：
 
@@ -255,10 +192,7 @@ python -m jittor_utils.clean_cache core    # compiled products only / 只清编�
 python -m jittor_utils.clean_cache all     # everything / 全部
 ```
 
-### Offline install / 离线安装
-
-On a machine without a network, fetch the third-party archives elsewhere and
-point Jittor at them. On a connected machine with this repository checked out:
+### 离线安装
 
 无网络的机器上，先在别处把第三方归档准备好再指过去。在一台有网络、且已检出本仓库的
 机器上：
@@ -267,95 +201,36 @@ point Jittor at them. On a connected machine with this repository checked out:
 nox -s prefetch          # fills a mirror directory / 填充镜像目录
 ```
 
-Copy the directory it fills to the offline machine and set:
-
 把它填充的目录拷到离线机器，然后设置：
 
 ```bash
 export JITTOR_OFFLINE_PATH=/path/to/that/directory
 ```
 
-Jittor copies from there instead of downloading. `python -m
-jittor_utils.preflight` reports whether anything is still missing.
-
 Jittor 会从那里拷贝而不是下载。`python -m jittor_utils.preflight` 会告诉你还缺什么。
 
-### CUDA 12 component wheels / CUDA 12 组件包
+### CUDA 12 组件包
 
-On Linux x86_64, the `cuda12` extra installs CUDA 12 runtime wheels (12.2
-or later), cuDNN 8.9.7 through 9.x, and the CCCL 2 headers (CUB, Thrust) its
-kernels compile against, plus a pinned CUDA
-13.4 `nvcc` as a fallback compiler (the CUDA 12 compiler wheel has no `nvcc`
-driver). The host needs only the NVIDIA driver and the C++ compiler Jittor
-always needs; no system CUDA toolkit or cuDNN, and no `CUDA_HOME` or
-`LD_LIBRARY_PATH`.
-
-The CUDA 12 wheels are version ranges, not pins, so torch 2.5 or later can
-share the environment: Jittor uses whichever CUDA 12 versions torch
-installed. Older torch releases pin CUDA 12.1 or 11 and need a separate
-environment.
-
-Unless `JT_BUILD_NVCC_PATH` is set, Jittor first looks for a local `nvcc` (JTCUDA,
-`PATH`, `/usr/local/cuda/bin`, `/usr/bin`, `/opt/cuda/bin`) of version 12.2
-through 13.x that compiles a test kernel with Jittor's host compiler, and uses
-the first one that does; otherwise it uses the pip `nvcc`. A local CUDA 12
-compiler keeps support for GPUs older than SM 7.5, which CUDA 13 dropped; on
-new distributions it may be skipped (CUDA 12.4 rejects gcc 14, and CUDA 12.x
-math headers conflict with glibc 2.41). Whichever compiler is chosen, every
-CUDA library is loaded from the pip wheels, never from `/usr/local/cuda`, a
-distribution directory, or `LD_LIBRARY_PATH`; a missing or mismatched wheel
-fails the import and names the package.
-
-CUDA 12 wheels installed some other way (for example
-`cuda-toolkit[...]==12.2.2`) are used too, even without the CCCL 2 wheel: a
-local `nvcc` 12.x then compiles CUB and Thrust with its own CCCL. `nvcc` 13
-needs `nvidia-cuda-cccl-cu12`, because its own CCCL 3 does not build against
-CUDA 12 runtime headers.
-
-Linux x86_64 的 `cuda12` extra 安装 CUDA 12 运行时（12.2 及以上）、cuDNN
-8.9.7–9.x 和 kernel 编译所用的 CCCL 2 头文件（CUB、Thrust），并附带 CUDA 13.4 `nvcc` 作为备用编译器（CUDA 12 的编译器 wheel 里没有
-`nvcc`）。宿主机只需要 NVIDIA 驱动和 Jittor 本来就要的 C++ 编译器；不需要系统 CUDA
-或 cuDNN，也不需要设置 `CUDA_HOME` 或 `LD_LIBRARY_PATH`。
-
-这些 CUDA 12 包是版本范围而不是精确版本，因此 torch 2.5 及以上可以装在同一环境里，
-Jittor 直接使用 torch 装好的 CUDA 12 版本。更早的 torch 钉的是 CUDA 12.1 或 11，
-需要单独的环境。
-
-未设置 `JT_BUILD_NVCC_PATH` 时，Jittor 先在本机（JTCUDA、`PATH`、`/usr/local/cuda/bin`、
-`/usr/bin`、`/opt/cuda/bin`）找版本 12.2–13.x、且能用 Jittor 的 C++ 编译器编出测试
-kernel 的 `nvcc`，用第一个合格的；都不合格时用 pip 的 `nvcc`。本机 CUDA 12 编译器
-可以继续支持 CUDA 13 已放弃的 SM 7.5 以下 GPU；在新发行版上它可能被跳过（CUDA 12.4
-不接受 gcc 14，CUDA 12.x 的数学头文件与 glibc 2.41 冲突）。无论编译器来自哪里，
-CUDA 库一律从 pip 包加载，不会用 `/usr/local/cuda`、发行版目录或 `LD_LIBRARY_PATH`
-里的库；缺包或版本不符时 import 直接报错并指出是哪个包。
-
-用其他方式装好的 CUDA 12 包（例如 `cuda-toolkit[...]==12.2.2`）即使没有 CCCL 2 包
-也会被使用：此时由本机 `nvcc` 12.x 用自带的 CCCL 编译 CUB 和 Thrust。`nvcc` 13 需要
-`nvidia-cuda-cccl-cu12`，因为它自带的 CCCL 3 无法配合 CUDA 12 运行时头文件编译。
+Linux x86_64 可使用 `cuda12` extra 安装固定版本的 CUDA 12.2 运行时，cuDNN 取
+8.9.7 及以上（含 cuDNN 9，因此可与钉了自己那份 cuDNN 9 的现代 torch 共存）；
+JIT 编译仍需要 `nvcc`，且 Jittor 不会替你下载：请安装 CUDA 工具链并把
+`nvcc` 放进 PATH，或用 `nvcc_path` 指过去。
 
 ```bash
 python -m pip install "jittor[cuda12]"
-JT_USE_CUDA=1 python -m jittor.selftest
+use_cuda=1 python -m jittor.selftest
 ```
 
-The equivalent uv command for the same CUDA-enabled environment is:
-
-uv 环境对应的 CUDA 安装命令为：
+仅安装运行时依赖时，对应的 uv 命令为：
 
 ```bash
 uv sync --locked --no-default-groups --extra cuda12
 ```
 
-Set `JT_BUILD_NVCC_PATH` to force one compiler. Set `JITTOR_CUDA_WHEEL_DISABLE=1` to
-ignore the pip wheels and use only system/JTCUDA compiler and libraries. Without
-`jittor[cuda12]`, `JITTOR_CUDA_WHEEL_STRICT=1` rejects an incomplete or
-mismatched set of NVIDIA wheels instead of falling back to the system CUDA.
+设置 `JITTOR_CUDA_WHEEL_STRICT=1` 可拒绝不完整或不匹配的组件栈；设置
+`JITTOR_CUDA_WHEEL_DISABLE=1` 则只使用系统或 JTCUDA 提供的库。
 
-设 `JT_BUILD_NVCC_PATH` 可指定编译器。设 `JITTOR_CUDA_WHEEL_DISABLE=1` 忽略 pip 包，只用
-系统/JTCUDA 的编译器和库。未安装 `jittor[cuda12]` 时，`JITTOR_CUDA_WHEEL_STRICT=1`
-会拒绝不完整或版本不符的 NVIDIA 包，而不是回退到系统 CUDA。
-
-### Install from source / 从源码安装
+### 从源码安装
 
 ```bash
 git clone https://github.com/Jittor/jittor.git
@@ -363,14 +238,6 @@ cd jittor
 python -m pip install -e .
 python -m jittor.selftest
 ```
-
-The C++ and CUDA sources live beside the Python package, not inside it: the
-core is [`src/`](src/) and each backend is `backends/<name>/` (for example
-[`backends/cuda/`](backends/cuda/)). In a checkout Jittor finds them by looking
-next to `python/jittor/` -- `src/core/common.h` identifies the core, and a
-backend is the directory with its `__init__.py`; a wheel ships the same trees as
-`jittor/src/` and `jittor/backends/<name>/`. Editing any of those sources
-rebuilds it on its next use. To select CUDA explicitly:
 
 C++ 与 CUDA 源码与 Python 包并列，不在包内：内核是 [`src/`](src/)，每个后端是
 `backends/<名字>/`（例如 [`backends/cuda/`](backends/cuda/)）。源码 checkout 里
@@ -383,19 +250,12 @@ export JT_BUILD_NVCC_PATH=/usr/local/cuda/bin/nvcc
 JT_USE_CUDA=1 python -m jittor.selftest
 ```
 
-`JT_BUILD_*` variables decide what gets compiled, `JT_*` variables decide what
-the compiled core does; `python -m jittor_utils.env_manifest` lists every one of
-them. The older unprefixed names (`nvcc_path`, `use_cuda`, ...) still work and
-report themselves once at startup.
-
 `JT_BUILD_*` 决定编译产物，`JT_*` 决定运行行为；`python -m jittor_utils.env_manifest`
 列出全部变量。旧的无前缀名（`nvcc_path`、`use_cuda` 等）仍然生效，启动时会提示一次。
 
-Inside Python, enable CUDA with `jt.flags.use_cuda = 1` after importing Jittor.
+在 Python 中，导入 Jittor 后可通过 `jt.flags.use_cuda = 1` 启用 CUDA。
 
-### Docker / 容器
-
-The maintained CPU and CUDA images share one [`Dockerfile`](Dockerfile):
+### Docker 容器
 
 维护的 CPU 与 CUDA 镜像共用同一份 [`Dockerfile`](Dockerfile)：
 
@@ -409,26 +269,13 @@ docker run -it --network host --gpus all jittor/jittor-cuda
 ```
 
 <a id="tutorials"></a>
-## Tutorials / 教程
-
-The maintained notebook sources are versioned as MyST Markdown. Jupytext creates
-temporary `.ipynb` files for execution and validation; generated notebooks are
-not repository sources.
+## 教程
 
 维护的教程以 MyST Markdown 作为版本化源文件；执行和验证时由 Jupytext 临时生成
 `.ipynb`，生成的 notebook 不进入仓库。
 
-The ordered curriculum -- what to read, in what order, and what each tutorial
-needs -- is maintained in one place:
-**[examples/notebooks/README.md](examples/notebooks/README.md)**.
-
 按顺序编排的完整课程（读什么、什么顺序、每篇需要什么前置）维护在唯一一处：
 **[examples/notebooks/README.md](examples/notebooks/README.md)**。
-
-Beginners start with `getting_started`, which goes from installation to training on
-CPU alone. From there, pick one of two tracks: keep writing native Jittor, or use
-the PyTorch-compatible front end (`torch_compat`, then `torch_compat_migration`)
-so existing `torch` code runs unchanged.
 
 零基础从 `getting_started` 开始，它从安装一路讲到训练，全程 CPU 可跑完。之后按背景选
 一条主线：继续用原生 Jittor，或走 PyTorch 兼容线（`torch_compat`，再读
@@ -440,18 +287,13 @@ python -m nox -s tutorials
 ```
 
 <a id="contributing"></a>
-## Contributing / 贡献
-
-Bug reports, tests, documentation, operators, performance improvements, and
-model contributions are welcome. Read the [contributing guide](CONTRIBUTING.md),
-[code of conduct](CODE_OF_CONDUCT.md), and [governance document](GOVERNANCE.md)
-before opening a pull request.
+## 贡献
 
 欢迎提交缺陷报告、测试、文档、算子、性能改进和模型。发起合并请求前，请阅读
 [贡献指南](CONTRIBUTING.md)、[行为准则](CODE_OF_CONDUCT.md)和
 [治理文档](GOVERNANCE.md)。
 
-## Citation / 引用
+## 引用
 
 ```bibtex
 @article{hu2020jittor,
@@ -465,8 +307,6 @@ before opening a pull request.
 }
 ```
 
-## License / 许可证
-
-Jittor is licensed under Apache License 2.0. See [`LICENSE.txt`](LICENSE.txt).
+## 许可证
 
 Jittor 使用 Apache License 2.0，详见 [`LICENSE.txt`](LICENSE.txt)。

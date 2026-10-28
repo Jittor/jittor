@@ -9,10 +9,11 @@ Nothing here was measured, and two real defects lived in that gap:
   device memory failing exactly when that is what you need. Invisible to
   ``track_working_set_bytes``, which reads what is still allocated after the
   call, not the spike during it.
-* Reading a device tensor relocates it. ``numpy()``, ``repr()`` and an element
-  read each move the storage to the host; the next device operation migrates it
-  back, measured at 215x the cost of the same operation without the read
-  (KI-MEM-002). A benchmark that only times resident tensors never sees it.
+* Reading a device tensor used to relocate it. ``numpy()``, ``repr()`` and an
+  element read each moved the storage to the host; the next device operation
+  migrated it back, measured at 215x the cost of the same operation without the
+  read. The read now returns a host copy and leaves the storage in place, so
+  this benchmark doubles as the regression: the paired gap must stay small.
 
 So this measures the transfer itself, the peak it costs, and the read-then-use
 pattern -- with the reduction spelling alongside as the control, because
@@ -128,10 +129,10 @@ class TransferBenchmarks:
     def time_device_op_after_a_host_read(self, backend_name, device):
         """Read the tensor, then use it on the device again.
 
-        This is the shape of KI-MEM-002: the read moves the storage to the host
-        and the device operation has to bring it back. Paired with the control
-        below, which is the identical operation without the read -- the gap
-        between the two *is* the finding, and neither number means much alone.
+        This is the read-then-use regression: a read must leave the storage on
+        the device, so the operation after it costs what the control below --
+        the identical operation without the read -- costs. Neither number means
+        much alone.
         """
         tensor = backend_tensor(backend_name, self.backend, self.host, device)
         synchronize(backend_name, self.backend, device)

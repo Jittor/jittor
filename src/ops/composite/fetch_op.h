@@ -13,6 +13,9 @@
 
 namespace jittor {
 
+// Devices whose asynchronous fetch callbacks still need a device wait.
+uint64 pending_fetch_device_mask();
+
 struct FetchResult;
 
 struct FetchFunc {

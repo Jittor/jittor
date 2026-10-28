@@ -56,8 +56,8 @@ def _pair(rng, dtype, batched=True):
 class _Dispatch:
 
     use_cuda = 0
-    # float32 and float64 reach cuBLAS; int32 and complex64 must not, and used
-    # to through bmm_transpose
+    # float32, float64 and (on CUDA) complex64 reach cuBLAS; int32 must not,
+    # and used to through bmm_transpose
     dtypes = ("float32", "float64", "int32", "complex64")
 
     def setUp(self):
@@ -148,16 +148,46 @@ class TestCapabilityPredicate(unittest.TestCase):
 
     def test_non_float_dtypes_are_rejected_without_a_substring_test(self):
         for dtype in ("int32", "int64", "uint8", "bool", "complex64"):
-            with self.subTest(dtype=dtype):
+            with self.subTest(dtype=dtype), jt.flag_scope(use_cuda=0):
                 v = self._var(dtype)
                 self.assertFalse(matrix._same_floating_dtype(v, v))
                 self.assertFalse(matrix._cublas_can_take(v, v))
+
+    def test_cuda_rows_take_one_shared_complex_dtype_and_nothing_mixed(self):
+        """The CUDA rows have their own predicate: complex64/complex128 go to
+        cuBLAS's complex GEMM, the ROCm rows and every mixed pair do not."""
+        c64, c128, f64 = self._var("complex64"), self._var("complex128"), self._var("float64")
+        self.assertTrue(matrix._same_gemm_dtype(c64, c64))
+        self.assertTrue(matrix._same_gemm_dtype(c128, c128))
+        self.assertTrue(matrix._same_gemm_dtype(f64, f64))
+        self.assertFalse(matrix._same_gemm_dtype(c64, f64))
+        self.assertFalse(matrix._same_gemm_dtype(c64, c128))
+        self.assertFalse(matrix._same_gemm_dtype(self._var("int32"), self._var("int32")))
 
     def test_float_dtypes_are_accepted(self):
         for dtype in ("float16", "bfloat16", "float32", "float64"):
             with self.subTest(dtype=dtype):
                 v = self._var(dtype)
                 self.assertTrue(matrix._same_floating_dtype(v, v))
+
+    def test_the_float32_relay_declines_under_either_half_policy(self):
+        """The compiled selection rule must answer what `prefers_half` does.
+
+        It used to test only the float16 bit, so a bfloat16 region still
+        selected the CBLAS relay, which computes float32 throughout: ``x @ w``
+        under ``torch.autocast("cpu", bfloat16)`` returned float32 once an
+        earlier product had registered the relay.
+        """
+        a = jt.array(np.ones((2, 2), dtype="float32"))
+        b = jt.array(np.ones((2, 2), dtype="float32"))
+        with jt.flag_scope(amp_reg=0):
+            self.assertTrue(matrix._supports_blas(a, b))
+        for bit in (jt.amp_flags.prefer16, jt.amp_flags.prefer_bfloat16,
+                    jt.amp_flags.prefer16 | jt.amp_flags.prefer_bfloat16):
+            with self.subTest(amp_reg=bit), jt.flag_scope(amp_reg=bit):
+                self.assertFalse(matrix._supports_blas(a, b))
+                self.assertIsNot(matrix.select_kernel("matmul", a, b),
+                                 matrix._blas_matmul)
 
 
 class TestMixedFloatPair(unittest.TestCase):

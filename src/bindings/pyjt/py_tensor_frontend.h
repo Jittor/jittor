@@ -10,6 +10,10 @@ namespace jittor {
 // Returns a new reference; absent an explicit frontend, this is native Var.
 EXTERN_LIB PyObject* current_tensor_frontend_type();
 
+// Register an actual wrapper, including optional GC-visible view-root
+// ownership explicitly requested by its frontend type.
+EXTERN_LIB void bind_python_tensor_owner(PyObject* object);
+
 // @pyjt(_set_tensor_frontend_type)
 PyObject* set_tensor_frontend_type(PyObject* type);
 

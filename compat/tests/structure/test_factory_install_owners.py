@@ -51,26 +51,38 @@ class TestInstallationOwners(unittest.TestCase):
             snapshot["zeros"] = second
 
     def test_linspace_scalar_conversion_and_generator_delegate(self):
-        calls, seeds = [], []
-        class Result:
-            def cast(self, dtype):
-                calls.append(("cast", dtype))
-                return self
+        calls, seeds, draws = [], [], []
+        generator, drawn = object(), object()
+        def draw_from_generator(name, supplied, args, kwargs):
+            draws.append((name, supplied, args, kwargs))
+            return drawn
+        # The constructor returns its registered leaf holder. The outer
+        # adapter must pass dtype inward and return that same holder, without
+        # another cast after registration.
+        result = object()
         def native(*args, **kwargs):
             calls.append((args, kwargs))
-            return Result()
+            return result
         class Scalar:
             def item(self): return 2
             def __int__(self): return 2
             def __float__(self): return 2.0
         ns = {"jt": SimpleNamespace(set_global_seed=seeds.append), "EXPECTED": (ValueError,),
-              "swallowed": lambda *args: None, "_dtype_to_str": str}
-        definitions("installers/factories.py", ["_linspace_adapter", "_seed_from", "_random_adapter"], ns)
-        ns["_linspace_adapter"](native, Scalar(), Scalar(), Scalar(), dtype="float64")
-        self.assertEqual(calls, [((2.0, 2.0, 2), {}), ("cast", "float64")])
-        ns["_random_adapter"](native, 3, generator=SimpleNamespace(initial_seed=lambda: 17))
-        self.assertEqual(seeds, [17])
-        self.assertEqual(calls[-1], ((3,), {}))
+              "swallowed": lambda *args: None, "_dtype_to_str": str,
+              "_draw_from_generator": draw_from_generator}
+        definitions("installers/factories.py", ["_linspace_adapter", "_random_adapter"], ns)
+        self.assertIs(ns["_linspace_adapter"](native, Scalar(), Scalar(), Scalar(), dtype="float64"), result)
+        self.assertEqual(calls, [((2.0, 2.0, 2), {"dtype": "float64"})])
+        self.assertIs(ns["_random_adapter"](native, 3, generator=generator,
+                                           _name="rand", dtype="float64"), drawn)
+        self.assertEqual(draws, [("rand", generator, (3,), {"dtype": "float64"})])
+        self.assertEqual(len(calls), 1)  # Explicit draws never touch the default stream.
+        ns["_draw_from_generator"] = lambda *args: None
+        ns["_random_adapter"](native, 5, generator=generator, _name="rand")
+        self.assertEqual(calls[-1], ((5,), {}))
+        ns["_random_adapter"](native, 7)
+        self.assertEqual(calls[-1], ((7,), {}))
+        self.assertEqual(seeds, [])
 
     def test_removed_handle_cannot_remove_a_later_hook(self):
         ns = {"namedtuple": namedtuple}

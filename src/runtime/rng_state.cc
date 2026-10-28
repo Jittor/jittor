@@ -62,20 +62,32 @@ ParsedState parse_state(const string& payload, const string& backend, int device
     string version, saved_backend;
     int saved_device = -1;
     ParsedState result;
-    if (!(input >> version >> saved_backend >> saved_device >> result.seed >> result.offset)
-            || version != "JITTOR_RNG_1" || saved_backend != backend
-            || saved_device != device || result.offset < 0)
-        throw std::invalid_argument("RNG state version/backend/device/header mismatch");
-    if (backend == "cpu") {
-        uint64 minimum, maximum;
-        if (result.offset != 0 || !(input >> minimum >> maximum >> std::ws >> result.engine)
-                || minimum != std::default_random_engine::min()
-                || maximum != std::default_random_engine::max())
-            throw std::invalid_argument("RNG host engine state mismatch");
+    input >> version;
+    if (version == "JTCPU1") {
+        // Checkpoints before the runtime RNG API stored a signed 32-bit seed
+        // and this same complete host engine. Restore its position, not a
+        // freshly seeded engine; this format never described an ACL stream.
+        int32 legacy_seed;
+        if (backend != "cpu" || device != 0
+                || !(input >> legacy_seed >> std::ws >> result.engine))
+            throw std::invalid_argument("RNG legacy host engine state mismatch");
+        result.seed = static_cast<uint64>(static_cast<int64>(legacy_seed));
     } else {
-        string kind;
-        if (!(input >> kind) || kind != "ACL_COUNTER")
-            throw std::invalid_argument("RNG ACL counter state mismatch");
+        if (!(input >> saved_backend >> saved_device >> result.seed >> result.offset)
+                || version != "JITTOR_RNG_1" || saved_backend != backend
+                || saved_device != device || result.offset < 0)
+            throw std::invalid_argument("RNG state version/backend/device/header mismatch");
+        if (backend == "cpu") {
+            uint64 minimum, maximum;
+            if (result.offset != 0 || !(input >> minimum >> maximum >> std::ws >> result.engine)
+                    || minimum != std::default_random_engine::min()
+                    || maximum != std::default_random_engine::max())
+                throw std::invalid_argument("RNG host engine state mismatch");
+        } else {
+            string kind;
+            if (!(input >> kind) || kind != "ACL_COUNTER")
+                throw std::invalid_argument("RNG ACL counter state mismatch");
+        }
     }
     input >> std::ws;
     if (!input.eof()) throw std::invalid_argument("Unexpected trailing RNG state bytes");
@@ -84,16 +96,12 @@ ParsedState parse_state(const string& payload, const string& backend, int device
 
 string encode_state(const string& backend, int device) {
     auto& owner = runtime_rng_state();
+    if (backend == "cpu") return encode_cpu_rng_state(owner.host_seed, owner.host_engine);
     std::ostringstream output;
     output.imbue(std::locale::classic());
     output << "JITTOR_RNG_1 " << backend << ' ' << device << ' ';
-    if (backend == "cpu") {
-        output << owner.host_seed << " 0 " << std::default_random_engine::min()
-               << ' ' << std::default_random_engine::max() << ' ' << owner.host_engine;
-    } else {
-        const auto& stream = acl_stream(device);
-        output << stream.seed << ' ' << stream.offset << " ACL_COUNTER";
-    }
+    const auto& stream = acl_stream(device);
+    output << stream.seed << ' ' << stream.offset << " ACL_COUNTER";
     return output.str();
 }
 
@@ -122,6 +130,22 @@ void seed_stream(const string& backend, int device, uint64 seed) {
 }
 
 } // namespace
+
+string encode_cpu_rng_state(uint64 seed, const std::default_random_engine& engine) {
+    std::ostringstream output;
+    output.imbue(std::locale::classic());
+    output << "JITTOR_RNG_1 cpu 0 " << seed << " 0 "
+           << std::default_random_engine::min() << ' '
+           << std::default_random_engine::max() << ' ' << engine;
+    return output.str();
+}
+
+void decode_cpu_rng_state(const string& payload, uint64& seed,
+                          std::default_random_engine& engine) {
+    const auto parsed = parse_state(payload, "cpu", 0);
+    seed = parsed.seed;
+    engine = parsed.engine;
+}
 
 AclRngSpan reserve_acl_random(int device, int64 elements) {
     // Kernel launchers already own the executor. Compatibility generator

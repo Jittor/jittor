@@ -116,17 +116,16 @@ class TestBackwardLeafAndGradFn(unittest.TestCase):
     """The shim forwards leaf and producer identity to the core graph query."""
 
     def test_leaf_and_intermediate_report_torch_shape(self):
-        # A factory result is not a leaf here: ``jt.ones`` broadcasts a
-        # literal, that literal requires grad like every float Var, and
-        # ``backward_grad_fn`` calls a var a leaf only when no input of its
-        # producer does. Torch calls it a leaf. See KI-COMPAT-004 -- asserted
-        # as it stands so closing the gap turns this red.
-        x = torch.ones(3)
+        # Torch factories cut their internal creation graph before publishing
+        # the fresh leaf. Native scalar/JVP semantics remain independent.
+        device = "cuda" if jt.introspection.policy.runtime.use_cuda else "cpu"
+        x = torch.ones(3, device=device)
+        self.assertEqual(x.device.type, device)
         x.requires_grad = True
         y = x * 2
 
-        self.assertFalse(x.is_leaf)
-        self.assertIsNotNone(x.grad_fn)
+        self.assertTrue(x.is_leaf)
+        self.assertIsNone(x.grad_fn)
         # What the distinction is for still holds: an op output is not a leaf
         # and carries the producer identity.
         self.assertFalse(y.is_leaf)
@@ -135,6 +134,8 @@ class TestBackwardLeafAndGradFn(unittest.TestCase):
         self.assertEqual(y.grad_fn.op_id, y.grad_fn_op_id)
         self.assertEqual(y.grad_fn.name, y.grad_fn_name)
         self.assertEqual(y.grad_fn, y.grad_fn)
+        y.sum().backward()
+        np.testing.assert_array_equal(x.grad.detach().cpu().numpy(), [2., 2., 2.])
 
 
 class TestCreateGraphVersusRetainGraph(unittest.TestCase):
@@ -282,6 +283,39 @@ class TestSavedTensorVersions(unittest.TestCase):
                                    np.full(3, 4.0), rtol=1e-5)
         np.testing.assert_allclose(jt.grad(out_b.sum(), [b])[0].numpy(),
                                    np.full(3, 10.0), rtol=1e-5)
+
+
+class TestCustomFunctionDoubleBackward(unittest.TestCase):
+    """A backward written with differentiable ops differentiates again.
+
+    torch's saved inputs keep their graph, so with ``create_graph=True`` the
+    gradient of ``x ** 3`` through a custom Function differentiates to
+    ``6 x``. jittor's Function saved stop-grad tapes and gave 0.
+    """
+
+    class Cube(torch.autograd.Function):
+        @staticmethod
+        def forward(ctx, x):
+            ctx.save_for_backward(x)
+            return x ** 3
+
+        @staticmethod
+        def backward(ctx, grad):
+            (x,) = ctx.saved_tensors
+            return 3 * x * x * grad
+
+    def test_second_derivative_through_save_for_backward(self):
+        x = torch.tensor([2.0], requires_grad=True)
+        (first,) = torch.autograd.grad(self.Cube.apply(x).sum(), x,
+                                       create_graph=True)
+        (second,) = torch.autograd.grad(first.sum(), x)
+        np.testing.assert_allclose(first.numpy(), [12.0], rtol=1e-6)
+        np.testing.assert_allclose(second.numpy(), [12.0], rtol=1e-6)
+
+    def test_first_order_backward_is_unchanged(self):
+        x = torch.tensor([2.0], requires_grad=True)
+        self.Cube.apply(x).sum().backward()
+        np.testing.assert_allclose(x.grad.numpy(), [12.0], rtol=1e-6)
 
 
 class TestBackwardSignature(unittest.TestCase):

@@ -26,9 +26,10 @@ description: 给 Jittor 的 Python 层算子做数值对拍（correctness oracle
 > 但这条纪律不因此作废：**编译旗标是在别处决定的**，用户的 `cc_flags`/`kernel_flags`
 > 仍然可以把 `-Ofast` 带回来，而失效方式是静默的。所以——
 > **任何依赖「NaN 不等于自己」或 inf 比较行为的东西，仍然不要写成普通 Var 运算进融合体。**
-> 它应该进一个显式压低优化级别的 `jt.code`——`python/jittor/ops/numerical.py` 的
-> `_simple_for`（`flag_scope(compile_options={"FLAGS: -O2 ":1})`，经
-> `jt.misc._simple_for` 调用）就是干这个的，isnan/isinf/isfinite 全部走它。
+> 两条出路：改成对位模式的整数测试——isnan/isinf/isfinite 就是这样做的
+> （`src/type/fp_class_compute.h`，任何旗标都折叠不掉整数比较，而且还能融合）；
+> 或者进一个显式压低优化级别的 `jt.code`——`python/jittor/ops/numerical.py` 的
+> `_simple_for`（compile_options 加 `"FLAGS: -O2 "`，经 `jt.misc._simple_for` 调用）。
 >
 > 推论：**「用原始比较写一遍」不能当对拍基准**，它在 CUDA 上仍然不可信、在 CPU 上取决于
 > 这次构建用了什么旗标。这类东西能对拍的只有 dtype 策略和普通值上的答案，NaN/±Inf
@@ -494,10 +495,11 @@ for dtype in ("int8","int32","int64","float16","float32","float64"):
 | CUDA JIT | 仍带 `--use_fast_math`（`compiler.py` 的 `nvcc_flags`） | `jt.flags.cuda_kernel_math = "strict"` 可按进程去掉；`tests/backends/parity/test_subnormal_contract.py` 钉住默认档与 strict 的差别 |
 
 所以：
-- 任何 `isnan/isinf/isfinite/nan_to_num` 一类的语义**仍然应该**进一个显式压低优化级别的
-  `jt.code`。`python/jittor/ops/numerical.py` 的 `_simple_for` 就是干这个的
-  （`flag_scope(compile_options={"FLAGS: -O2 ":1})`，经 `jt.misc._simple_for` 调用）。
-  它在默认 CPU 构建上现在是冗余的，保留是因为旗标由别处决定、失效是静默的；
+- 任何 `isnan/isinf/isfinite/nan_to_num` 一类的语义**仍然不能**依赖浮点比较。
+  isnan/isinf/isfinite 现在是测指数位的 unary op（`src/type/fp_class_compute.h`），
+  可以融合；其余的进一个显式压低优化级别的 `jt.code`，`python/jittor/ops/numerical.py`
+  的 `_simple_for`（compile_options 加 `"FLAGS: -O2 "`，经 `jt.misc._simple_for`
+  调用）就是干这个的。它在默认 CPU 构建上是冗余的，保留是因为旗标由别处决定、失效是静默的；
 - 拿「用原始比较写一遍」当对拍基准也不行——CUDA 上不可信，CPU 上取决于这次构建的旗标。
   能对拍的只有 **dtype 策略**和**普通值上的答案**，把 NaN/±Inf 那几个元素排除掉，
   并在测试里写明排除的理由（这本身就是「两种写法必须分开」的证据）。

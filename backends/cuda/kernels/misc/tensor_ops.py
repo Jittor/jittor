@@ -111,7 +111,28 @@ def _stack_no_grad_cuda_fast(xs, dim, cpu_source=None):
         input_total *= int(size)
     if input_total == 0 or suffix == 0:
         return None
-    flat_inputs = [x.reshape([-1]) for x in xs]
+    # A 1-D input is already the flat view the kernel indexes; reshaping it
+    # only built one more op per input.
+    flat_inputs = list(xs) if len(base_shape) == 1 else [x.reshape([-1]) for x in xs]
+    key = (n, suffix, cpu_source)
+    sources = _STACK_SOURCES.get(key)
+    if sources is None:
+        if len(_STACK_SOURCES) >= 256:
+            _STACK_SOURCES.clear()
+        sources = _STACK_SOURCES[key] = _stack_sources(n, suffix, cpu_source)
+    cuda_src, cpu_src = sources
+    return _stop_grad_outputs(jt.code(
+        [input_total * n], base_dtype, flat_inputs,
+        cuda_src=cuda_src, cpu_src=cpu_src).reshape(out_shape))
+
+
+# (n, suffix, cpu_source) -> (cuda_src, cpu_src) of the stack kernel. Both are
+# fixed by the key, and building them was string work on every stack. `suffix`
+# follows the input shape, so the table is emptied when it grows large.
+_STACK_SOURCES = {}
+
+
+def _stack_sources(n, suffix, cpu_source):
     write_lines = "\n".join(
         f"            @out(base_out + {i} * suffix + rem) = @in{i}(iid);"
         for i in range(n)
@@ -135,9 +156,7 @@ def _stack_no_grad_cuda_fast(xs, dim, cpu_source=None):
     stack_kernel<<<grid, block>>>(@ARGS);
     """
     cpu_src = cpu_source(suffix, n, write_lines) if cpu_source is not None else ""
-    return _stop_grad_outputs(jt.code(
-        [input_total * n], base_dtype, flat_inputs,
-        cuda_src=cuda_src, cpu_src=cpu_src).reshape(out_shape))
+    return cuda_src, cpu_src
 
 
 @optional_kernel("misc.unbind_no_grad", _CUDA_CODE_BACKENDS)
@@ -322,6 +341,7 @@ def unique_compact_header():
             #include <thrust/sort.h>
 
             #include <thrust/scan.h>
+            #include <thrust/fill.h>
             #include <core/executor.h>
 
             @alias(input_sorted, in0)
@@ -348,8 +368,11 @@ def unique_compact_source(need_inverse):
                                         indice_ptr = thrust::device_pointer_cast(indice_p);
             thrust::device_ptr<input_sorted_type> input_ptr = thrust::device_pointer_cast(input_sorted_p);
 
-            if (return_inverse) {
-                thrust::inclusive_scan(diff_ptr, diff_ptr + dimlen, sum_ptr);
+            // diff has dimlen - 1 entries: diff[i] is whether row i + 1 starts
+            // a new value. Row 0 is value 0.
+            if (return_inverse && dimlen) {
+                thrust::fill_n(sum_ptr, 1, 0);
+                thrust::inclusive_scan(diff_ptr, diff_ptr + dimlen - 1, sum_ptr + 1);
                 thrust::scatter(sum_ptr, sum_ptr + dimlen, indice_ptr, inverse_ptr);
             }
 

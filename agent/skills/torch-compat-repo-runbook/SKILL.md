@@ -113,6 +113,31 @@ REAL_TORCH_PYTHON=<real-torch-python> <jittor-python> \
   整进程峰值时，保留 `scorecard_eligible=false`，不能从 `passed` 推出这些更高级别。
 - case 名用下划线而发行版用连字符（`ms-swift` → `ms_swift_lora_llama`），脚本已归一化。
 
+### 多步训练证据
+
+[`scripts/training_probe.py`](scripts/training_probe.py) 复用同一份已准入 ecosystem builder，
+在独立解释器中执行默认三步、固定学习率的 SGD；不是新模型清单。先运行 CPU①，再运行
+实际加速设备③。两侧用相同完整初始参数与 buffer，逐步保存输出、loss、全部请求的参数/
+输入梯度和更新后参数。它保留上游 tuner 的冻结状态，并逐步断言冻结参数未改动；LoRA
+训练不能因为单步数值探针打开了全部梯度而偷偷变成全参训练。
+
+```bash
+<oracle-python> agent/skills/torch-compat-repo-runbook/scripts/training_probe.py \
+  --case peft_lora_llama --runtime torch --device cpu \
+  --output "$JITTOR_LAB_ROOT/_state/<topic>/train/ref.npz"
+PYTHONPATH=python JITTOR_TORCH_SHIM=1 <jittor-python> \
+  agent/skills/torch-compat-repo-runbook/scripts/training_probe.py \
+  --case peft_lora_llama --runtime jittor --device cpu \
+  --weights "$JITTOR_LAB_ROOT/_state/<topic>/train/ref.weights.npz" \
+  --output "$JITTOR_LAB_ROOT/_state/<topic>/train/candidate.npz"
+```
+
+每个 `.npz` 附带 `.json`：实际 device、运行条件、依赖来源、训练/冻结参数清单、
+初始权重 SHA256、探针 SHA256、基线及零 fallback 计数。比较双方全部数组，不能只比最后
+一个 loss；固定权重的输入扰动还需另跑并核实输出确实改变。参数更新前会物化全部旧梯度，
+快照包含 host 传输，**不作为计时器**。这些训练产物连同独立 L2 数值证据可以支持精确
+规格的 L3；完整 scorecard 仍需平台块与注册项绑定，不能直接扩大到整库或 L4/L5。
+
 ## 五、验证环境没有该库时
 
 `pip` 可用的机器上，把下游依赖装到一个**独立目录**当包站，再让两侧都指过去
@@ -154,7 +179,30 @@ CPython minor 版本不同时默认拒绝共享包站，确实只走稳定 ABI �
   不进主仓库。
 - 加新 runbook 时，同时在该库 skill 的 `## 证据` 里写清"实测"还是"报告推导"。
 
+## MMEngine / MMCV 的下游训练 owner
+
+OpenMMLab 的三步证据使用
+[`openmmlab_training_probe.py`](scripts/openmmlab_training_probe.py)，保留真实
+`BaseModel.train_step → OPTIM_WRAPPERS.build(OptimWrapper) → torch.optim.SGD`
+调用链；通用 `training_probe.py` 的手工 SGD 不能代替它。`RecordingSGD` 仅在真实 step
+前记录裁剪后的梯度，随后执行真实父实现；逐步检查 loss forward/optimizer update 次数、
+scalar/list loss 解析、输入与参数梯度、参数/buffer/momentum state。
+
+`nox -s ecosystem_openmmlab` 是预装 MMEngine 0.10.7 / MMCV 2.2.0 / NumPy 1.x 的独立
+CPU/CUDA opt-in 门禁。它要求独立 oracle、逐库 REQUIRE 与实际执行；缺包、设备不符、
+任何 fallback 或省略必要 tensor 都失败。这里只验证 tiny 训练规格，不授速度级别。
+
+`registry_inventory.py` 支持两个库的有界源码声明轴。MMCV 整包条件/扩展注册仍进分母，
+MMEngine 的动态优化器枚举则明确不在该声明轴内；每条保留源码位置与条件，未解析的
+有界注册直接报错。不要把声明轴写成全库分母或已验证的 backend 能力。
+
 ## 八、统一覆盖审计与 scorecard
+
+连续验证不同提交时，可显式设置 `JITTOR_ECOSYSTEM_CACHE_ROOT` 为当前任务专属的
+benchmark 缓存根目录。`verify_repo.py` 在其下分开 CPU/CUDA/NPU 编译缓存，
+结果仍写到每次独立的 `--out` 目录，避免仅移动结果目录就重编整个核心。
+不设置时沿用结果目录内的缓存。不要与 unittest 或并行验证任务共用此根目录；
+首轮编译仍串行预热。
 
 先运行无框架依赖的事实审计：
 
@@ -178,3 +226,79 @@ CUDA/driver 或 CANN、nvcc/gcc、nvidia wheel、Jittor SHA/flags、独立 oracl
 丢失平台块、skip/xfail/全skip、缺CPU①、非零fallback、缺梯度、假gate节点、产物哈希不符、
 用tiny规格声称L4等均不计分，并使含被拒行的命令非零退出。旧 Markdown 报告需补齐并
 亲自复验后才能进入分子；没有新证据的格子写“未验证”，不能拿本库 CPU/device 自比补空。
+
+Release 版本的注册表 L2+ 也要求逐阶段、逐 runtime 的实际安装源码绑定，覆盖记录引用的
+每个库；绑定 wheel 时核对完整包内容而非仅 Python 文件。具体字段与历史记录处理遵循
+上述统一协议，不能用版本相同代替源码来源证据。
+
+## PEFT 完整 LoRA 训练门禁
+
+`nox -s ecosystem_peft` 调用 `tools/run_peft_gate.py`，复用现有完整 tiny Llama/LoRA
+case、runner 和三步训练 probe。它串行执行 base、seed 7 扰动及三步训练的双 runtime，
+自动独立检查全部 177 数组字段、冻结参数、实际设备与完整安装来源后才成功。
+`--preflight` 只验证 base，不授 L3；nox 不接受缩小阶段范围的参数。
+
+准备固定的 PEFT/Transformers clean checkout、官方 wheel、独立双解释器及私有状态目录；
+先显式 CPU，再执行真实 CUDA。完整环境变量、collector 命令及范围见
+[PEFT 来源与训练结果](../../../docs/results/2026-10-15-peft-installed-source-training.md)。
+普通 ecosystem pytest 的一步 parity 与这个完整 L3 gate 分开；nightly 未选择新 session
+时不能声称已有定期执行。历史 raw 缺来源字段时重新运行，不能反向补证。
+
+## Accelerate checkpoint 协议
+
+完整单 rank CPU nightly 可用 `python tools/provision_ecosystem_nightly.py --library accelerate --state-root <new-external-state> --run`。
+它完整配置三个独立环境并执行原 438 数组/8 阶段 worker 协议，要求原参数/输入梯度、三步保存前训练及两步新进程续训，
+各 prefix 完整依赖解析与 `pip check`、实际官方 wheel/METADATA/pip RECORD 和公共 L3 准入均为必需。
+`JITTOR_ACCELERATE_COMPLETE_CPU=1` 才启用 fixed CPU 模式，不改变普通 CPU/CUDA 调用。
+实际执行状态和边界见[专用报告](../../../docs/results/2026-10-16-accelerate-maintained-cpu-nightly.md)，
+不将本地执行或工作流接线称为 hosted schedule 已运行，不用 CPU world1 配对 CUDA world2。
+
+Accelerate 没有与模型族同义的注册表。`tools/run_accelerate_gate.py` 直接调用维护中的
+单进程 checkpoint 与两 rank FSDP2 FULL 测试，`nox -s ecosystem_accelerate` 是正确性入口；
+`benchmark_accelerate` 仍只负责性能。使用预装且版本相同的私有双解释器，设置
+`REAL_TORCH_PYTHON`、`JITTOR_ACCELERATE_CHECKOUT`、`JITTOR_TEST_DEVICES=cpu|cuda` 和
+`JITTOR_ACCELERATE_WHEEL`（官方 Accelerate 1.10.1 wheel）。CUDA 额外要求显式分配两张
+`CUDA_VISIBLE_DEVICES`。工具不安装或升级包，也不从版本字符串推断安装来源。
+
+```bash
+python tools/run_accelerate_gate.py --fresh-process --device cpu \
+  --jittor-python <jittor-python> --oracle-python <real-torch-python> \
+  --upstream "$JITTOR_LAB_ROOT/accelerate-validation/upstream" \
+  --wheel "$JITTOR_ACCELERATE_WHEEL" \
+  --cache-root "$JITTOR_LAB_ROOT/_state/accelerate-protocol/benchmark-cache" \
+  --output "$JITTOR_LAB_ROOT/_state/accelerate-protocol/cpu"
+python tools/run_accelerate_gate.py --fresh-process --device cuda --devices <gpu0>,<gpu1> \
+  --jittor-python <jittor-python> --oracle-python <real-torch-python> \
+  --upstream "$JITTOR_LAB_ROOT/accelerate-validation/upstream" \
+  --wheel "$JITTOR_ACCELERATE_WHEEL" \
+  --cache-root "$JITTOR_LAB_ROOT/_state/accelerate-protocol/benchmark-cache" \
+  --output "$JITTOR_LAB_ROOT/_state/accelerate-protocol/cuda"
+python agent/skills/torch-compat-repo-runbook/scripts/collect_accelerate_scorecards.py \
+  --run "$JITTOR_LAB_ROOT/_state/accelerate-protocol/cpu" \
+  --run "$JITTOR_LAB_ROOT/_state/accelerate-protocol/cuda" \
+  --upstream "$JITTOR_LAB_ROOT/accelerate-validation/upstream" \
+  --baseline <full-measured-source-SHA> --report docs/results/<dated-report>.md \
+  --command '<exact measurement commands>' \
+  --output "$JITTOR_LAB_ROOT/_state/accelerate-protocol/scorecard"
+```
+
+先冻结并提交工具源码，再采集。CPU 显式隐藏 CUDA；两 rank CUDA 每种精度/输入种子独立
+launcher，rank 缓存逐个预热，benchmark 与单测缓存隔离。实际进程绑定完整上游包源码、
+实际安装包所有文件、二进制 Torch 身份、平台、精度开关、所有输入/参数梯度、Adam moments、
+逐步轨迹和四路 RNG。采集不覆盖旧产物。
+
+每个真实 producer/consumer 绑定官方 wheel 的固定 SHA、完整安装包文件、同侧实际
+METADATA/RECORD 原始字节和导入根；auditor 重读并逐项核验。保留原 wheel 和私有安装
+前缀以便复核。旧 raw 缺少这些实际字段时重新测量，不能补写、仅添加同名字段或改版本
+字符串冒充新的安装来源证明。
+
+共享 schema 用 `record_kind=protocol`、显式 `axes=[]/registry_refs=[]`，单独展示协议及
+world/precision/rank，不产生注册表分子或分母。CPU world1 只匹配 CUDA world1；两 rank
+CUDA 缺 CPU world2 对应时保留独立数值结论，但进入 `blocked`，准入 `level=null`，
+不进入 `accepted`。own-runtime 精确恢复不能代替独立跨 runtime 数值
+一致；保留原 `atol=2e-6, rtol=2e-5`，失败行 `level=null`，不得靠放宽预算授级。
+
+多次采集使用不同 `--output`；可用 `--cache-root <external-benchmark-root>` 复用任务自己的
+设备/rank benchmark 缓存，不能指向单测缓存。协议 dispatcher 只允许明确的 repo/id；
+专用 validator 尚未存在或 scope 不匹配时拒绝。配对比较完整设备无关协议描述，不能将
+不同 world、precision、ZeRO stage 或训练规格配成一对；失败/阻塞不填 verified level。

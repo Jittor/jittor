@@ -589,6 +589,41 @@ class PrefixStore(Store):
         return self.store.num_keys()
 
 
+class _ExternalStore(PrefixStore):
+    """A namespaced connection owned by this worker, never the agent server."""
+
+    def close(self):
+        self.store.close()
+
+
+def launcher_store_prefix(run_id):
+    if (not isinstance(run_id, str) or not run_id or len(run_id) > 128
+            or any(not (c.isascii() and (c.isalnum() or c in '_.-')) for c in run_id)):
+        raise ValueError('launcher run id must contain 1..128 ASCII letters, digits, dots, underscores or hyphens')
+    return 'jittor/launcher/' + run_id + '/'
+
+
+def external_launcher_store(timeout=None):
+    """Connect to a launcher-owned server without taking worker ownership.
+
+    The server lives in an agent, whose Python threads can serve requests while
+    a GPU worker holds the GIL inside a collective. Connection counts include
+    agents and transient worker clients, so explicit namespaced arrival keys,
+    rather than TCPStore's raw connection count, establish the participant set.
+    """
+    marker = os.environ.get('JITTOR_LAUNCHER_EXTERNAL_STORE', '0')
+    if marker == '0':
+        return None
+    if marker != '1':
+        raise ValueError('invalid JITTOR_LAUNCHER_EXTERNAL_STORE')
+    prefix = launcher_store_prefix(os.environ.get('JITTOR_LAUNCHER_RUN_ID', ''))
+    host, port = os.environ.get('MASTER_ADDR'), os.environ.get('MASTER_PORT')
+    if not host or not port:
+        raise ValueError('external launcher store requires MASTER_ADDR and MASTER_PORT')
+    client = TCPStore(host, int(port), is_master=False, timeout=timeout, wait_for_workers=False)
+    return _ExternalStore(prefix + 'workers/', client)
+
+
 def _resolved_int(explicit, query, environment, default):
     if int(explicit) >= 0:
         return int(explicit)
@@ -616,7 +651,10 @@ def rendezvous(url, rank=-1, world_size=-1, timeout=None):
     if parsed.scheme == "env":
         host = os.environ.get("MASTER_ADDR")
         port = os.environ.get("MASTER_PORT")
-        if resolved_world == 1 and (not host or port is None):
+        store = external_launcher_store(timeout)
+        if store is not None:
+            pass
+        elif resolved_world == 1 and (not host or port is None):
             store = TCPStore(timeout=timeout)
         else:
             if not host or port is None:

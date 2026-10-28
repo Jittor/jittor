@@ -1,8 +1,8 @@
 # Known-Issues Ledger
 
 - Status: Maintained
-- Last reviewed: 2026-10-13
-- Baseline: `1a6e203fc`
+- Last reviewed: 2026-10-26
+- Baseline: `2fb04289c`
 - Owner: Jittor core maintainers
 - Review when: an entry is fixed or narrowed, a strict expected failure
   XPASSes, a new defect is reproduced, or at quarterly maintenance
@@ -48,7 +48,7 @@ may name one refuted attempt when repeating it is the likely mistake.
   deleted entries included:
   `git log -p -- agent/manuals/known-issues.md | grep -o "KI-EXEC-[0-9]*" | sort -u | tail -1`.
   An id is never reused. (`KI-BACKEND-006` was once reused by mistake; the
-  later entry was renumbered `KI-BACKEND-014`.)
+  later entry was given a fresh id.)
 - Code comments, test messages and documents cite the id. The change that
   deletes or renumbers an entry also rewords those citations
   (`git grep -n "KI-<AREA>-<NNN>"`); dated `docs/results/` reports may keep a
@@ -83,44 +83,17 @@ workaround.
 - Symptom: these tests used to be disabled with an initial `return` or
   `skipIf(True)`, so pytest reported success without executing them. They now
   run as strict expected failures when their hardware or network prerequisites
-  exist; optimizer state-dict coverage fails explicitly until it has an
-  implementation.
-- Workaround: do not cite these nodeids as passing evidence for reduction dtype
-  inference, NHWC cuDNN backward, tensor swapping, repeated dataset RingBuffer
-  use, optimizer state restoration, or legacy CUDA pooling.
-- Evidence: `TestBF16.test_reduce_dtype_infer`,
-  `TestCudnnConvOp.test_backward_nhwc`, `TestCore.test_swap`,
+  exist. Optimizer state-dict coverage is now a real passing test and is no
+  longer part of this entry.
+- Workaround: do not cite these nodeids as passing evidence for NHWC cuDNN
+  backward, tensor swapping, repeated dataset RingBuffer use, or legacy CUDA
+  pooling.
+- Evidence: `TestCudnnConvOp.test_backward_nhwc`, `TestCore.test_swap`,
   `TestCore.test_swap_cuda`, `TestRingBuffer.test_dataset`,
-  `TestOptStateDict.test_opt_state_dict`, `TestArgPoolOp.test_cuda_old_pool`
+  `TestArgPoolOp.test_cuda_old_pool`
   (each carries a `KI-TEST-001` comment).
 - Exit condition: fix and independently verify each contract, remove its
   expected-failure marker, and delete the entry when the list is empty.
-
-## KI-TEST-002: the gate does not report a session that died mid-run
-
-- Severity: High
-- Status: Open; a detector exists but no gate runs it
-- Owner: test infrastructure maintainers
-- Symptom: a native crash ends the interpreter, so pytest writes no result line,
-  traceback or summary for the case that died and the tests after it never run.
-  The log simply stops, and a session that died reads like a session that ran
-  fewer tests. Any exclusion taken to work around such a crash silently narrows
-  what the gate covers.
-- Cause: `tools/run_test_suite.py` and the nox sessions read pytest's exit code
-  and summary only. `tests/_helpers/session_completion.py` (registered by the
-  pytest policy) prints a `JITTOR-SESSION-COMPLETE` marker and can write a
-  sentinel with the collected and executed counts, and
-  `tools/check_session_completed.py` turns a missing marker into a failure, but
-  neither gate calls the checker.
-- Workaround: run `python tools/check_session_completed.py --log <pytest.log>`
-  (optionally `--expect-collected N`) on any log a conclusion is drawn from, or
-  compare the executed count against the collected count.
-- Evidence: `tests/structure/test_session_completion.py` (the detector);
-  the last observed case was a CPU-only Torch selection that stopped at 48% with
-  exit 1 and no summary.
-- Exit condition: a session whose process ends before pytest finishes is
-  reported by the maintained gates as a failure naming the case that was running
-  and the number of tests that never executed.
 
 ## KI-TEST-003: the coverage wrapper is visible to the Torch identity contracts
 
@@ -143,56 +116,6 @@ workaround.
 - Exit condition: record calls without replacing anything (a `sys.setprofile`
   hook keyed by code object observes the same calls), delete the exclusion list
   and re-take the Torch baseline.
-
-## KI-TEST-007: `test_fused_op_relay_matmul` fails after profiler or graph-replay tests in the same process
-
-- Severity: Low
-- Status: Open; reproduced on `1a6e203fc`
-- Owner: codegen and test infrastructure
-- Symptom: `tests/codegen/test_jit_tests.py::TestJitTests::test_fused_op_relay_matmul`
-  passes alone and with its own file, and fails with `[check failed: cm.size()>=2]`
-  when `tests/runtime/test_step_profile.py`, `tests/runtime/test_profiler.py` or
-  `tests/nn/test_graph_replay_multi_output.py` ran earlier in the same pytest
-  process.
-- Cause: not isolated; suspected process state (a flag or a JIT cache entry)
-  those files leave behind that `src/tests/test_op_relay.cc` depends on without
-  setting.
-- Workaround: run the file in its own process.
-- Evidence: `pytest tests/runtime/test_profiler.py tests/codegen/test_jit_tests.py::TestJitTests::test_fused_op_relay_matmul`.
-- Exit condition: the case passes after each of the three files in one process.
-
-## KI-TEST-010: three `test_torch_compat_norm.py` LayerNorm fast-path cases fail
-
-- Severity: Low (values elsewhere in the file pass)
-- Status: Open; reproduced on `1a6e203fc` (CUDA); the three cases run as strict
-  expected failures
-- Owner: torch compatibility / normalization kernels
-- Symptom: `compat/tests/torch/test_torch_compat_norm.py::TestLayerNorm::test_ln_no_grad_cuda_fast_path_float32_and_float16`
-  (`CUDA no-grad LayerNorm missed its fused path`),
-  `::test_ln_no_grad_cuda_dynamic_rows_share_source` (`0 != 2`) and
-  `::test_ln_no_grad_cuda_bfloat16_private_opt_in`
-  (`'NoneType' object has no attribute 'float32'`).
-- Cause: not isolated; suspected the fused LayerNorm kernel selection changed
-  under the Torch frontend without these tests following.
-- Workaround: none needed for results.
-- Evidence: `JITTOR_TORCH_SHIM=1 python -m pytest -q compat/tests/torch/test_torch_compat_norm.py -k ln_no_grad_cuda`.
-- Exit condition: the three cases pass, or are rewritten to pin the path the
-  frontend is meant to take.
-
-## KI-TEST-011: `test_shared_reduce.py` decodes generated source with the locale encoding
-
-- Severity: Low (a test reads its input wrongly; no product code affected)
-- Status: Open; reproduced on `1a6e203fc`
-- Owner: CUDA codegen tests
-- Symptom: `LC_ALL=C PYTHONCOERCECLOCALE=0 PYTHONUTF8=0 python -m pytest -q tests/backends/cuda/test_shared_reduce.py -k two_stage`
-  fails with `UnicodeDecodeError: 'ascii' codec can't decode byte 0xe2`; plain
-  `LC_ALL=C` passes only because of Python's locale coercion.
-- Cause: the test opens generated JIT source with a bare `open(...)`, and the
-  generated source contains non-ASCII (op keys are separated by U+00AB).
-- Workaround: run under a UTF-8 locale.
-- Evidence: the command above.
-- Exit condition: pass `encoding="utf-8"` there, sweep the tree for other
-  locale-dependent reads of generated source, and delete the entry.
 
 ## KI-TEST-012: the PR smoke tier takes about 390 s, not under five minutes
 
@@ -234,30 +157,6 @@ workaround.
   `.github/workflows/cuda.yml` restores and saves the JIT cache.
 - Exit condition: measure the nightly gate with a restored cache; if acceptable,
   delete the entry, otherwise reduce cold compilation.
-
-## KI-TEST-014: the `resnet_training` notebook asserts a training trajectory that no longer happens
-
-- Severity: Low (tutorial narrative; the training itself is correct)
-- Status: Open; reproduced 2026-10-13 with `use_mkl=0` (as the smoke runs it)
-  on AMD EPYC 9554 (Zen 4) and 7763 (Zen 3): identical numbers on both and
-  across runs, so neither the CPU nor nondeterminism. The smoke case is a
-  strict expected failure through `_SMOKE_KNOWN_ISSUES` in
-  `tests/integration/test_notebooks.py`, limited to a cell raising.
-- Owner: tutorial / examples maintainers
-- Symptom: `assert len(set(frozen)) == 1, "普通网络应当出现连续多个 epoch 停滞"` --
-  the plain network's validation accuracy over epochs 2-4 is 0.31, 0.56, 0.48,
-  not a constant 0.31. The table in the notebook (residual 0.80/0.72, plain
-  0.56/0.42) no longer matches either (0.84/0.73 and 0.59/0.48 now). The other
-  assertions -- residual beats chance and beats plain by more than 0.15 -- hold.
-- Cause: not isolated. The notebook pins an exact trajectory of a small
-  network, so any change in conv/BatchNorm/Adam numerics moves it; which change
-  did has not been bisected.
-- Workaround: none needed; the code is right, the narrative is stale.
-- Evidence: `tests/integration/test_notebooks.py::test_notebook_smokes_execute_offline_on_cpu[resnet_training]`
-  (`nox -s cpu`, the manual stage); `examples/notebooks/resnet_training.md`.
-- Exit condition: rewrite the notebook's stall claim and table for a
-  trajectory that is stable (or assert the property, not the exact numbers),
-  and drop the `_SMOKE_KNOWN_ISSUES` entry.
 
 ## KI-COMPILER-001: the op-level parallel compiler can corrupt process state
 
@@ -324,35 +223,14 @@ workaround.
   recurs, capture it under an allocator that reports a stack (ASAN) before
   changing code.
 
-## KI-COMPILER-008: user-reachable JIT source checks still report as internal errors
-
-- Severity: Medium (catchable, but the category and message are wrong: a user
-  mistake asks the user to report a framework bug)
-- Status: Open; unchanged on `e3c369acb`
-- Owner: core error handling / code generation
-- Symptom: a misspelt `@out(0)=@nosuchvar` in `jt.code(..., cpu_src=...)` says
-  "Something wrong... Could you please report this issue?". Seven bad-`@`-syntax
-  `jt.code` calls all raised a catchable `RuntimeError` containing
-  `Jit compiler error:`.
-- Cause: `precompile` in `src/codegen/op_compiler.cc` wraps its loop in
-  `catch (std::exception& e)` and rethrows through `LOGf`, so a `UserError`
-  raised inside arrives as a plain error; migrating its `ASSERT`s to
-  `USER_CHECK` would change nothing observable while the source-count gate turns
-  green. `src/codegen/opt/kernel_ir.cc`, `src/utils/cache_compile.cc` (mostly its
-  `#ifdef TEST` self-test), `src/codegen/opt/expr.cc`, `src/ops/op_register.cc`
-  and `src/mem/swap.cc` have not been walked for public-argument reachability.
-- Workaround: none needed; the exceptions are catchable.
-- Evidence: `docs/development/error-categories.md`;
-  `tests/structure/core/test_error_categories.py` (source-level gate).
-- Exit condition: `precompile`'s catch preserves the `UserError` category, the
-  user-reachable checks are migrated with a negative test each, and the listed
-  files are classified.
-
 ## KI-CODEGEN-001: fused elementwise kernels pay a division and a modulo per element for a broadcast operand
 
 - Severity: Medium (performance; results are correct)
 - Status: Open; a documented trade-off. Both `test3` cases run as strict expected
-  failures with their original assertion (a `KI-CODEGEN-001` note on the case)
+  failures with their original assertion (a `KI-CODEGEN-001` note on the case).
+  A 2026-10-26 prototype on the unversioned `fix-codegen1` worktree reduced the
+  recorded broadcast/dense ratio from about 5.2x to 1.77x, but it did not pass
+  the original nested-loop contract and was not merged.
 - Owner: codegen maintainers
 - Symptom: on CPU, `x + y` where `y` is an expand of a real tensor runs about
   5.2x its dense counterpart (`64x64x64x64 + 1x64x1x1`: 636.5 us against
@@ -382,27 +260,6 @@ workaround.
   `storage_stride` reads in `src/ops/reindex_op.cc` (`xstride`) and
   `src/ops/reindex_reduce_op.cc` (`ystride`) the same contiguous-input gate the
   elementwise and reduce ops have.
-
-## KI-CODEGEN-002: the `split{i}` and `parallel` loop options cannot be combined
-
-- Severity: Limitation (a compile error, never a wrong result; blocks a tuner
-  candidate)
-- Status: Open; still true on `e3c369acb`
-- Owner: code generation (loop passes, reduce tuner)
-- Symptom: with both options set, `ParallelPass` fails `ASSERT(def)`
-  (`src/codegen/opt/pass/parallel_pass.cc`).
-- Cause: `SplitLoopPass` gives the inner loop the range
-  `::min(range{i}-id{i}, stride{i})`, defined inside the outer loop and varying
-  with it, which `ParallelPass` cannot evaluate where it sizes the thread grid.
-  CUDA always runs `ParallelPass`, so every `split{i}` candidate would break a
-  CUDA reduction; the reduce tuner offers none there.
-- Workaround: none needed; the tuner does not offer the combination.
-- Evidence: `tests/codegen/test_reduce_tuner.py::TestReduceTuner::test_a_split_candidate_would_not_compile_under_parallel`
-  (passes while the combination still fails); the guard and its rationale are
-  in `src/codegen/opt/tuner/reduce_tuner.cc`.
-- Exit condition: `ParallelPass` accepts a split inner range (or hoists it), the
-  test above fails, the CUDA guard in `reduce_tuner.cc` is revisited, and the
-  entry is deleted.
 
 ## KI-CODEGEN-003: CUDA code-generated reductions trail PyTorch on UNet shapes
 
@@ -568,33 +425,6 @@ workaround.
   compute-bound cost measurement with a pinned fusion shape, and the contract
   test and the numerics page change with it.
 
-## KI-BACKEND-009: CUDA cannot compile a logical or narrow-integer reduction
-
-- Severity: High (a family of reductions is unusable on CUDA, and the error does
-  not name the dtype or the operation)
-- Status: Open; reproduced 2026-09-11 on CUDA
-- Owner: reduce operator and CUDA codegen maintainers
-- Symptom: `x.any_()`, `x.all_()` and the bitwise reductions are published API.
-  On CUDA they raise `parallel_compiler.cc: Error happened during compilation`
-  with an nvcc transcript for `logical_and`/`logical_or`/`logical_xor` over
-  `uint8`, `float32` and `float64`, and for `bitwise_and`/`bitwise_or`/
-  `bitwise_xor` over `uint8`. CPU answers all 66 operation-dtype combinations;
-  `bool`, `int32` and `int64` work on both devices, which is why the tests did
-  not notice.
-- Cause: not isolated in the CUDA reduction codegen. The float cases are also a
-  semantic question: CPU returns a float (`0.0`) for `logical_xor` over floats
-  where a bool is the defensible answer, so the CPU dtype should be decided with
-  the CUDA fix. The `uint8` cases are well defined and CPU performs them.
-- Workaround: cast to `int32` or `bool` before a logical or bitwise reduction on
-  CUDA.
-- Evidence: every published reduction crossed with six dtypes, one fresh
-  process each, with `location()` asserted so a CPU fallback cannot read as a
-  pass; [`test_bitwise_dtype_guard.py`](../../tests/ops/test_bitwise_dtype_guard.py)
-  already rejects the float rows of the bitwise family on both devices.
-- Exit condition: the 66-cell matrix agrees between the two devices in value and
-  dtype and a test holds it; the float rows may be resolved by rejecting them on
-  both devices with a clear message.
-
 ## KI-BACKEND-011: the oneDNN CPU path is float32-only and its per-call cost is unmeasured
 
 - Severity: Limitation (narrower dtype support; performance unverified)
@@ -603,7 +433,11 @@ workaround.
   bounded per-shape plan cache, 32 plans / 64 MiB scratch).
 - Owner: CPU backend (oneDNN)
 - Symptom: convolution and matmul through oneDNN accept float32 only; other
-  dtypes take the generic kernels (declared, not silent). The plan cache replaced
+  convolution dtypes take the generic kernels (declared, not silent). Matmul has
+  a CBLAS row behind it (`backends/cpu/libraries/blas`, numpy's bundled
+  OpenBLAS by default) that takes float64 and complex64/complex128, and float32
+  where oneDNN is not built (no cmake); float16/bfloat16 matmul stays generic.
+  The plan cache replaced
   the per-call engine/descriptor/primitive rebuild, but the lower per-call
   convolution overhead it was built for has never been measured against the old
   path. oneDNN no longer ships prebuilt v3 binaries, so verification needs a
@@ -615,7 +449,7 @@ workaround.
   `python/jittor/nn/backends/onednn.py` (`dtypes={"float32"}`);
   `backends/cpu/libraries/mkl/mkl_matmul_op.cc` ("support float32 only now").
 - Exit condition: measure per-call convolution overhead before/after on a fixed
-  shape set; widen matmul through `dnnl::matmul` if fp64/fp16/bf16 are wanted;
+  shape set; widen matmul through `dnnl::matmul` if fp16/bf16 are wanted;
   delete the entry when both are settled.
 
 ## KI-BACKEND-012: the ACL descriptor cache is not wired into any runner, and the ACL launcher and attribute migration never ran on an Ascend device
@@ -660,30 +494,6 @@ workaround.
 - Exit condition: add the gradient tests (and the HCCL implementation), change
   their `kind`, and run them on the hardware; the structure test then lets the
   manual's list shrink.
-
-## KI-BACKEND-014: cublas_test / cudnn_test are dispatched to the host and have no kernel there
-
-- Severity: Medium (two library self-test ops cannot run; the libraries
-  themselves are fine)
-- Status: Open; two repair attempts refuted. `TestCublasTestOp` and
-  `TestCudnnTestOp` run as strict expected failures. Renumbered from `KI-BACKEND-006`,
-  an id that had already been used.
-- Owner: CUDA backend maintainers
-- Symptom: `tests/backends/cuda/test_cublas_test_op.py` fails two of its three
-  classes with `op.cc: No kernel registered for cublas_test on cpu` (likewise
-  `cudnn_test`); `TestCubTestOp` passes.
-- Cause: `CubTestOp` declares `set_flag(OpFlags::_cpu, 0); set_flag(OpFlags::_cuda, 1);`
-  and guards its body with `#ifdef JIT_cuda`. `CublasTestOp` and `CudnnTestOp`
-  declare no backend and guard their bodies with `#ifdef JIT_cpu`, so they
-  default to the host, where `Op::implementation()` finds nothing. Adding only
-  the flags produces a CUDA library with no `jit_run`
-  (`undefined symbol: _ZN6jittor12CublasTestOp7jit_runEv`); adding the flags and
-  switching the guard to `JIT_cuda` also broke `TestCubTestOp` (3 failed instead
-  of 2), so the three ops are coupled through something outside their files.
-- Workaround: none needed; the libraries are exercised by the real ops.
-- Evidence: the test file above.
-- Exit condition: all three classes pass, with the coupling behind the second
-  attempt understood rather than worked around.
 
 ## KI-BACKEND-016: ACL 507035 in batched strided-conv backward (sd15_unet_train, resnet50_train)
 
@@ -1351,71 +1161,29 @@ workaround.
   **Name the input pattern when you measure**: monotone and random data differ by
   up to 4x on the same kernel.
 
-## KI-OPS-012: the CUDA half-precision max/min reduction folds from a finite literal
+## KI-OPS-016: small dense linear algebra trails torch on host LAPACK, and QR's backward on CUDA
 
-- Severity: Critical (silent wrong value on finite input as well as infinities,
-  half dtypes only)
-- Status: Open on CUDA; reproduced by inspection, unverified on a device. The CPU
-  half is fixed.
-- Owner: reduction operator maintainers
-- Symptom: the CUDA reduction identity for float16/bfloat16 is a finite literal,
-  so `max([-inf, -inf])` cannot answer `-inf`, and `max([-65504, -65504])`
-  (float16's lowest finite value) answers a value that is not in the input; `min`
-  mirrors it. Integer and float32/float64 reductions are unaffected.
-- Cause: the CUDA map in [`fp16_op_type.cc`](../../src/type/fp16_op_type.cc) sets
-  `init_maximum`/`init_minimum` to `-65000.0f`/`-1e38` (and the mirror). It
-  should use `-CUDART_INF_F`/`CUDART_INF_F` for both half types, which means
-  reaching `type/cuda_limits.h`; that header is pushed only by `parallel_pass`,
-  not by the half post-pass, so the change must bring the include with it.
-- Workaround: reduce half tensors in float32 on CUDA when the identity matters.
-- Evidence: [`test_minmax_reduction_identity.py`](../../tests/ops/test_minmax_reduction_identity.py):
-  the CPU class passes; the CUDA class carries the same body as a strict
-  expected failure.
-- Exit condition: the CUDA class's strict expected failure XPASSes on a device
-  (i.e. the CUDA rows answer from an infinity) and the marker is removed.
-
-## KI-OPS-014: a query row whose every key carries `finfo.min` gets float32 attention gradients as if each probability were 1
-
-- Severity: Low (the forward is right; no workload in the benchmark reaches it)
-- Status: Open; found 2026-10-01
-- Owner: CUDA fused attention maintainers
-- Symptom: with `finfo(float32).min` added to every key of a row, the float32
-  fused attention backward is off by the row length (2 x 3 x 64 x 64 case:
-  relative error 16, 6.6 and 1.8 for `dq`, `dk`, `dv` against float64). The
-  output is the uniform average it should be. PyTorch's efficient-attention
-  kernel is also wrong on these inputs (26% on output and `dq`). Transformers
-  does not produce such rows on its SDPA path (`_unmask_unattended`); a mask
-  built by hand can.
-- Cause: `backends/cuda/kernels/nn/fused_attention_f32_cuda.py` stores the
-  forward's log-sum-exp and the backward recomputes each probability as
-  `exp(score - lse)`. Every score in such a row *is* `finfo.min`, and so is
-  `lse = max + log(l)` (the `log(l)` is absorbed), so each probability comes back
-  as 1 instead of `1/l`.
-- Workaround: unmask fully masked rows before attention, as Transformers does.
-- Evidence: `test_a_dense_additive_mask` with `mask[1, :, 7] = finfo.min`.
-- Exit condition: store the row maximum and `1/l` separately (or `lse` relative
-  to the maximum) so the backward never subtracts two equal huge numbers, and
-  add the fully masked row to the test.
-
-## KI-OPS-015: the CUDA backward of `scaled_dot_product_attention` misses the device-parity per-element budget
-
-- Severity: Medium (a parity gate case cannot pass; the gradients agree to
-  about 0.7% per element)
-- Status: Open; reproduced 2026-10-12 on RTX 4090 / CUDA 12.2 in every CUDA run
-  (`nox -s cuda` included). Both cases run as strict expected failures through
-  `_KNOWN_DEVICE_ISSUES` in `tests/backends/parity/test_device_parity.py`.
-- Owner: attention / CUDA kernel maintainers
-- Symptom: `scaled_dot_product_attention BACKWARD (input 0) per-element divergence
-  cpu vs cuda (max rel 6.80e-03)` against `GRAD_PE_TOL` 5e-3 (6.49e-03 for the
-  causal variant). The forward and the net-scaled backward error pass.
-- Cause: not isolated. Suspected a different accumulation order in the softmax
-  backward; whether 0.7% on a sub-peak coordinate is legitimate reordering or a
-  real defect has not been decided.
-- Workaround: none needed for typical training.
-- Evidence: `tests/backends/parity/test_device_parity.py::TestDeviceParity::test_scaled_dot_product_attention`
-  and `::test_scaled_dot_product_attention_causal` (torch mode, CUDA).
-- Exit condition: both cases pass (a fixed kernel, or a budget justified for
-  this operator) and the `_KNOWN_DEVICE_ISSUES` entry is removed.
+- Severity: Medium (performance; results are correct)
+- Status: Open; measured 2026-10-26 on RTX 4090 / 16 cores of an EPYC 7763
+  against torch 2.5.1 in the same Slurm job. The 2-D CUDA forwards are native
+  since then (`backends/cuda/kernels/cusolver`, `cublas_trsm`): solve 64x64
+  210 us (torch 147), QR 128x64 396 us (torch 370).
+- Owner: linalg maintainers
+- Symptom: complex64 `jt.linalg.solve` 64x64 takes 254 us on CPU (torch 97);
+  from n = 128 up numpy's OpenBLAS LAPACK is 3-5x behind torch's MKL for QR.
+  On CUDA, QR 128x64 forward plus backward takes 1.53 ms (torch 0.74). Batched
+  (rank > 2) CUDA solve/QR/SVD, and every CUDA linalg op on a NVIDIA-wheel
+  CUDA stack (which carries no cuSOLVER), still go through CuPy.
+- Cause: the host forwards are `numpy_code` callbacks into numpy's OpenBLAS,
+  whose LAPACK does not scale with threads at these sizes (`_host_lapack`
+  keeps it on one thread below 2^25 units of work, where its own pool lost to
+  Jittor's spinning OpenMP team). QR's backward recomputes QR live, for
+  higher-order derivatives (`_reconnect`), and is a dozen small ops.
+- Workaround: none.
+- Evidence: `tests/linalg/test_lapack_paths.py` pins the current paths.
+- Exit condition: CPU solve/QR through LAPACK from the library `setup_blas`
+  loads, and a QR backward that reuses the forward, bring the cases above
+  within 1.5x of torch.
 
 ## KI-SEMANTICS-003: floating-comparison NaN semantics not verified on every backend
 
@@ -1449,67 +1217,6 @@ workaround.
 - Exit condition: a public dtype-default decision changes the default and its
   explicit-dtype assertion together.
 
-## KI-DTYPE-003: a Python float against a float64 tensor arrives as float32
-
-- Severity: High (silent loss of 29 mantissa bits in float64 arithmetic,
-  including in gradcheck)
-- Status: Open; found 2026-09-18. Unlike KI-DTYPE-002 there is no escape hatch,
-  because the scalar is written inline.
-- Owner: dtype and compatibility maintainers
-- Symptom: for `v = ones(1, float64)`, `v * 0.1` is `0.10000000149011611938`,
-  `v + 0.1` is `1.1000000014901161194`, `v * (2/3)` and `v * 2 ** 0.5` are
-  likewise correct to seven digits; `v / 3.0` is exact because 3.0 is exact in
-  float32. Real torch answers all five exactly (a Python float is a weak double
-  there). The result dtype is float64, which hides the defect.
-- Cause: `ArrayOp::ArrayOp(PyObject*)` in `src/bindings/pyjt/py_array_op.cc`
-  stores every Python float as `scalar.f32`. That conversion also serves
-  `jt.array(0.5)`, so widening it there would make `jt.array(0.5).dtype` float64,
-  a visible change to native Jittor's float32 default. The two call sites must be
-  told apart first (an argument on the conversion, or a weak-scalar model).
-  `auto_convert_64_to_32` is not the discriminator. Half precision is not
-  affected: float32 is wider than both half types.
-- Workaround: where precision matters, write the scalar as a float64 tensor:
-  `v * jt.array(0.1, dtype="float64")` is exact, while `v * np.float64(0.1)` and
-  `v * jt.array(np.array(0.1))` still narrow (checked on `1a6e203fc`, CPU).
-- Evidence: [`TestScalarPromotion.test_float64_tensor_with_an_inexact_python_float_keeps_its_value`](../../tests/type/test_dtype_promotion.py)
-  (an expected failure; its companion `..._with_an_exact_python_float_is_exact`
-  must keep passing); `TestHalfPythonScalar` in
-  `tests/type/test_half_precision_parity.py` pins the four half-precision
-  expressions bit-identical to torch (a strict expected failure until
-  KI-DTYPE-004 is fixed: its operand is built with `jt.ones`).
-- Exit condition: a Python float keeps its value against a float64 operand in
-  both modes, the expected failure XPASSes (strict) and its decorator is
-  dropped, and the half expressions stay bit-identical to torch.
-
-## KI-DTYPE-004: a `jt.ones`/`zeros`/`full` result is a weak scalar in dtype promotion
-
-- Severity: Medium (a promotion divergence from NumPy and PyTorch; the values
-  are what the chosen dtype holds)
-- Status: Open; reproduced 2026-10-12 on CPU and CUDA. Both evidence cases run
-  as strict expected failures.
-- Owner: dtype maintainers
-- Symptom: `jt.ones(4).float16() * 0.1` (also `* 2.0`, `+ 0.1`) is float32,
-  while `jt.array(np.ones(4, "float16")) * 0.1` and torch give float16.
-  The other direction too: `jt.zeros(3)` (float32) times a float16 tensor is
-  float16, where torch gives float32.
-- Cause: the factories build `array(<python number>).broadcast(shape)`
-  (`python/jittor/_core/var.py` `_constant_scalar`). The 0-d constant carries
-  `_is_scalar`, and `BroadcastToOp` and the cast in `UnaryOp` copy the flag to a
-  full-size result, so `binary_dtype_infer` treats that tensor as a Python
-  scalar: against a Python number both sides are "scalars" and the wider width
-  wins; against a tensor it adopts the tensor's width. The same flag lets an
-  unsynced constant follow its operand's device (`src/core/op.cc`
-  `is_pending_scalar`), so clearing it in the broadcast changes placement as
-  well as dtype.
-- Workaround: build half tensors from data (`jt.array(np.ones(..., "float16"))`)
-  or cast after the arithmetic.
-- Evidence: `tests/type/test_half_precision_parity.py::TestHalfPythonScalar::test_matches_torch`
-  (the constraint KI-DTYPE-003 names) and
-  `tests/nn/test_grad_scaler.py::TestGradScalerStep::test_scaling_a_float16_loss_directly_is_reported`.
-- Exit condition: a factory result promotes as the tensor it is, an unsynced
-  constant still follows its operand's device, and both cases XPASS and lose
-  their markers.
-
 ## KI-COMPLEX-001: native complex capability gaps
 
 - Severity: Research (High for individual operations)
@@ -1522,49 +1229,6 @@ workaround.
 - Evidence: [native complex dtype decision](../../docs/notes/complex-dtype.md).
 - Exit condition: remove each sub-item only with focused CPU and accelerator
   tests for its operation and derivative order.
-
-## KI-MEM-002: reading a device tensor relocates it to the host
-
-- Severity: High
-- Status: Open; reproduced on real CUDA on `1a6e203fc`
-- Owner: memory and executor maintainers
-- Symptom: `b.numpy()` moves a device tensor's storage to the host
-  (`location()` goes `device` -> `cpu`). The next device operation migrates it
-  back: 0.1214 s against 0.0006 s for the same operation on a resident 40 MiB
-  tensor (215x), and device memory goes from +40 MiB to +80 MiB because both
-  copies are live. `repr()` and `tolist()` take the same path, so printing a
-  tensor at a REPL relocates it, and `d[0].item()` moves all of `d`. A reduction
-  result is not affected: `u.sum().item()` leaves `u` on the device, so
-  `loss.item()` is fine. PyTorch refuses `.numpy()` on a CUDA tensor instead.
-- Workaround: read a computed copy, e.g. `(x + 0).numpy()`, which leaves `x` on
-  the device (checked on `1a6e203fc`); `x.clone().numpy()` does **not** help,
-  because the clone shares `x`'s storage and both move. Avoid `print(x)` and
-  element indexing on large device tensors in hot paths.
-- Evidence: `tests/core/test_var_residency_contract.py`;
-  `tools/probes/side_effect_probe.py` (found the `tolist()` spelling);
-  `benchmarks/asv/transfer.py`.
-- Exit condition: `numpy()`, `repr()` and element/slice reads leave the source
-  Var's `location()` unchanged on real CUDA, a device operation right after such
-  a read costs the same as one without it, and the residency contract covers all
-  spellings including the reduction case.
-
-## KI-AUTOGRAD-003: register_hook makes the receiver misreport its residency
-
-- Severity: Low
-- Status: Open; reproduced on CPU and CUDA
-- Owner: autograd maintainers
-- Symptom: after `a.register_hook(lambda g: g)` on a materialised Var,
-  `a.location()` reads `"none"` (the state of an unmaterialised Var) while `device`,
-  shape, dtype, the value and the hook itself are unchanged. Nothing is discarded
-  or recomputed (measured: memory unchanged, the next device op costs 0.9x).
-- Cause: `register_hook` in `python/jittor/_core/hooks.py` ends with
-  `v.swap(hooker(v)[0])`, so the caller's Var carries the state of the hooker's
-  not-yet-materialised output node, and `location()` answers for that node.
-- Workaround: do not read `location()` immediately after registering a hook.
-- Evidence: `tools/probes/side_effect_probe.py --device cpu` reports this as its
-  only undeclared mutation (`location cpu->none`).
-- Exit condition: `register_hook` leaves `location()` unchanged on CPU and real
-  CUDA, and the side-effect probe reports no mutation for it.
 
 ## KI-EXEC-002: a profile scope cannot measure work launched before it opened
 
@@ -1639,7 +1303,9 @@ workaround.
 
 - Severity: High (a supported operation aborts; the pattern is a multi-threaded
   weight loader)
-- Status: Open and currently unverifiable: the probe dies in KI-EXEC-007 first
+- Status: Open (verification): the canonical four-thread probe now passes 35/35
+  on this tree; the earlier failure was hidden behind the shared-parameter
+  storage race, now fixed. A deterministic gate is still missing.
 - Owner: executor maintainers
 - Symptom: four Python threads, each `jt.array(chunk)`, then
   `param[tid*N:(tid+1)*N] = host`, then `param.sync()`, 30 rounds on one shared
@@ -1651,47 +1317,22 @@ workaround.
   released. The batch's own hold used to count towards the backward liveness
   the assert reads. Phase 7 now tolerates exactly the vars whose storage
   `free_var_mem` released while a batch was in flight (`batch_released_vars`,
-  `src/core/var.h`), but that change has not been measured against this failure.
+  `src/core/var.h`).
 - Workaround: serialise the threads that write the shared parameter.
-- Evidence: `agent/skills/jittor-allocator-flag-matrix/probe_shared_param_threads.py`
-  (the same pattern). No in-repo regression test: at 1-in-20 it would be a flaky
-  gate; `tests/core/test_executor_entry_lock.py` covers a different property.
-- Exit condition: close KI-EXEC-007, re-run the loader probe without failures,
-  and make the race deterministic enough to gate.
-
-## KI-EXEC-007: four threads writing one parameter free an allocation twice
-
-- Severity: High (a supported operation aborts reproducibly in the pattern a
-  multi-threaded weight loader uses)
-- Status: Open; found 2026-09-18
-- Owner: memory maintainers
-- Symptom: the KI-EXEC-005 pattern on CUDA fails with
-  `sfrl_allocator.cc: allocation not found: 3 [check failed: block != nullptr]`
-  (`op: array in: float32[16384,256,] out: float32[4096,256,]`): 0/5 runs with
-  one or two threads, 4/5 with four.
-- Cause: thread B's slice assignment makes the old parameter var garbage and
-  `free_var_mem` releases its storage while thread A's batch is between planning
-  and its migrate loop; `migrate_to_cpu` (and `migrate_to_gpu`) then reads the
-  stale `mem_ptr`/`allocation`/`allocator` and frees the block a second time
-  (backtrace `VarHolder::sync -> Executor::run_sync -> run_exec_plan ->
-  migrate_to_cpu -> SFRLAllocator::free`; the id was already reissued). The
-  batch's hold keeps the Var alive but not its storage. The missing invariant is
-  that storage the running batch will read is not released -- the in-flight
-  counterpart of `_needed_by_backward`. Reordering the migrate closes the window
-  after the copy but not before it, so it is not the fix.
-- Workaround: serialise the threads that write the shared parameter.
-- Evidence: `agent/skills/jittor-allocator-flag-matrix/probe_shared_param_threads.py`
-  (`KI007_TRACE=1` turns on the id-space event log and a backtrace at the
-  failing free).
-- Exit condition: the probe passes repeatedly at four threads on CUDA, and
-  KI-EXEC-005 can be measured.
+- Evidence:
+  `agent/skills/jittor-allocator-flag-matrix/probe_shared_param_threads.py`
+  passes 35/35 at four threads and 6/6 at one on GPU 1 (2026-10-26). The
+  `.numpy()` variant of the same shape also passes after the read-path
+  ownership and ring-lock fix. No in-repo regression test: the race has not
+  been made deterministic;
+  `tests/core/test_executor_entry_lock.py` covers a different property.
+- Exit condition: make the race deterministic enough to gate, then delete.
 
 ## KI-EXEC-008: the CUDA convolution test files intermittently abort on a forward liveness underflow
 
 - Severity: Medium (a whole pytest process aborts, taking its summary with it)
 - Status: Open; found 2026-09-27, reproduced on `a57fb6af`
-- Owner: core node liveness (the same counters as KI-EXEC-009, its backward
-  counterpart)
+- Owner: core node liveness (the backward counterpart of this forward counter)
 - Symptom: `pytest tests/nn/test_*conv*.py tests/backends/cuda/test_cudnn_conv_a*.py tests/backends/cuda/test_cudnn_conv_p*.py`
   on CUDA aborts in about half the runs with `node.h: forward liveness release
   without a matching owner [check failed: value_ > 0]`, either at interpreter
@@ -1702,44 +1343,6 @@ workaround.
 - Workaround: run the files in separate processes.
 - Evidence: the command above.
 - Exit condition: the full selection passes repeatedly in one process.
-
-## KI-EXEC-009: a taped multi-output `Function` op can release its backward liveness once too often
-
-- Severity: Medium (an abort at interpreter exit, or two Vars leaked per
-  occurrence; no wrong value has been observed)
-- Status: Open, environment-dependent. Not reproduced on `e3c369acb` with Python
-  3.11 (`tests/backends/cuda/test_cudnn_rnn_parity.py`,
-  `tests/autograd/test_function.py` and
-  `compat/tests/torch/test_torch_numerical_fidelity.py -k split_with_sizes`
-  pass), but not fixed: `eaa50ed5f` bisected the disappearance to a docs-only
-  commit, so it depends on the order in which `var_holder.cc` tears holders down.
-- Owner: core node liveness (`src/core/node.cc`, `src/core/op.cc`); the forward
-  counterpart is KI-EXEC-008
-- Symptom: a multi-output op built through `Function` (a tape,
-  `src/ops/composite/tape_op.h`) with some but not all outputs `stop_grad()`,
-  executed as a batch, calls `LivenessCounter<backward>::release()` once too
-  often: `node.h` reports `backward liveness release without a matching owner`.
-  Where the teardown path catches it, exactly two Vars stay registered with
-  `f=0 b=1` (`test_function.py::TestFunctionWithEagerExecution::test_zmem_leak{,2,3}`
-  then fail with `2 != 0`); where it does not, the process aborts at exit (134).
-  Seen as cuDNN LSTM training with `jt.grad` on CUDA, and as
-  `torch.split_with_sizes` plus `Tensor.split` on CPU in Torch mode. Native
-  multi-output `jt.code` ops do not leak.
-- Cause: suspected, not confirmed: the needed-by-backward guard in `Op::init`
-  (`manual_set_vnbb`) special-cases only `_outputs.size()==1 && ... is_stop_grad()`,
-  and `Node::release_forward_liveness` enqueues one `release_backward_liveness`
-  on the op for every finished, non-stop-grad output while the op's backward
-  count may be one.
-- Workaround: none needed for values; keep a process that hits it out of a shared
-  pytest session.
-- Evidence: `tests/core/test_core_invariant_properties.py`
-  (`KNOWN_LEAKING_SHAPES`; `test_dropping_a_graph_leaks_nothing_new` fails on any
-  new leaking shape, `test_dropping_a_graph_leaks_nothing_at_all` is a non-strict
-  xfail, `test_the_leak_is_two_vars_per_occurrence` pins the count where it
-  reproduces).
-- Exit condition: fix the accounting (do not relax the `node.h` check), make
-  `test_dropping_a_graph_leaks_nothing_at_all` pass on an interpreter where
-  `KNOWN_LEAKING_SHAPES` reproduces, then empty `KNOWN_LEAKING_SHAPES`.
 
 ## KI-EXEC-010: backward graph construction does not take part in pipelined submission
 
@@ -1944,77 +1547,41 @@ workaround.
 - Exit condition: nested tensors are Tensors with jagged storage, and the test is
   updated to the torch answer.
 
-## KI-COMPAT-004: a factory result is not a backward leaf
+## KI-COMPAT-004: Tensor aliases lack mutation guards and dynamic source trainability
 
-- Severity: Low (`is_leaf` / `grad_fn` are introspection; gradients are correct)
-- Status: Open
-- Owner: torch compatibility / core autograd
-- Symptom: `torch.ones(3, requires_grad=True).is_leaf` is False here and True in
-  torch, and `grad_fn` names `broadcast_to`; code that branches on "is this a
-  leaf" (parameter collection, gradient clipping helpers, some checkpointing
-  wrappers) takes the wrong branch. From the other side, `torch.Tensor(other)`
-  aliases the graph in torch but builds a fresh Var here, so the linkage is lost.
-- Cause: `jt.ones` broadcasts a scalar literal (`_constant_scalar` in
-  `python/jittor/_core/var.py`). Every float Var requires grad by default, the
-  literal included, and `backward_grad_fn` (`src/core/grad.cc`) calls a Var a
-  leaf only when no input of its producer requires grad. Making the literal
-  `stop_grad()` gives the torch answer but breaks the double-backward `jvp`
-  (`tests/autograd/test_autograd_functional_seeds.py::TestAutogradGradSeedAlignment::test_jvp_multi_input_is_unchanged`
-  reads a tangent of 0.0 instead of 348.0), so it was reverted.
-- Workaround: none.
-- Evidence: `compat/tests/torch/test_torch_compat_autograd_semantics.py::TestBackwardLeafAndGradFn::test_leaf_and_intermediate_report_torch_shape`
-  and `compat/tests/torch/test_independent_frontend.py::test_independent_tensor_installation_preserves_native_type`
-  pin the gap.
-- Exit condition: factory results are leaves without breaking `jvp`, and the two
-  tests are updated to the torch answer.
-
-## KI-COMPAT-006: `load_state_dict` shares the source's Vars, and an in-place optimizer then moves both models
-
-- Severity: High on CUDA (silent: a second model -- an EMA copy, a reference
-  model -- trains along with the first)
-- Status: Open; found 2026-09-25
-- Owner: torch compatibility / optimizers
-- Symptom: after `b.load_state_dict(a.state_dict())` on CUDA, one
-  `torch.optim.AdamW(a.parameters()).step()` changes `b`'s weights too; on CPU it
-  does not. PyTorch copies in `load_state_dict`.
-- Cause: loading binds `b`'s parameters to the Vars `a` holds, which is harmless
-  while every update produces a new Var. The fused CUDA AdamW
-  (`src/ops/composite/fused_adamw_op.cc`) writes into the parameters' own storage
-  (`share_with`), so every holder sees the write.
-- Workaround: copy through the host, e.g.
-  `p.copy_(torch.tensor(src.cpu().numpy(), device=src.device))`.
-- Evidence: two `nn.Linear(2, 2, device="cuda")`, `b.load_state_dict(a.state_dict())`,
-  a backward and an AdamW step on `a`: `(a.weight == b.weight).all()` is True.
-- Exit condition: `load_state_dict` copies (or the fused optimizer stops writing
-  shared storage), with a CUDA regression test for the repro.
-
-## KI-COMPAT-007: `w.copy_(x)` under `no_grad` loses `w`'s gradient when `x` requires grad
-
-- Severity: Medium (silent: `w.grad` stays None after a backward)
-- Status: Open; found 2026-09-25
-- Owner: torch compatibility / autograd
-- Symptom: `w = torch.randn(4, 8, requires_grad=True)`; `with torch.no_grad():
-  w.copy_(x)` where `x` requires grad; a later backward through `w` leaves
-  `w.grad` None. With an `x` that does not require grad it works. PyTorch keeps
-  `w` a leaf that accumulates a gradient in both cases.
-- Workaround: `w = x.detach().clone().requires_grad_(True)`.
-- Evidence: the repro above.
-- Exit condition: `w.grad` is populated in both cases, with a regression test.
-
-## KI-COMPAT-008: `torch.optim.SGD` rejects `foreach=` and `fused=`
-
-- Severity: Low (an immediate `TypeError`, not a silent divergence)
-- Status: Open; found 2026-09-25
-- Owner: torch compatibility / optimizers
-- Symptom: `torch.optim.SGD(params, lr=..., foreach=False)` raises
-  `TypeError: initialize_sgd() got an unexpected keyword argument 'foreach'`, and
-  the same for `fused=`. Both are ordinary PyTorch arguments.
-- Cause: `initialize_sgd` in `compat/torch/optim_frontend.py` does not accept
-  them; the native SGD has a `fused` switch they could map onto.
-- Workaround: drop the two arguments.
-- Evidence: the call above.
-- Exit condition: both keywords are accepted (mapped or explicitly ignored with a
-  documented reason).
+- Severity: Medium (autograd view semantics differ from Torch)
+- Status: Open; factory leaves, grad-enabled constructor linkage and no-grad
+  accumulator eligibility resolved in their verified ranges; recorded producer
+  identity now survives a later source freeze (CPU/CUDA verified)
+- Owner: native autograd / torch compatibility Tensor constructors
+- Symptom: a no-grad-created `torch.Tensor(source)` alias remains usable for
+  grad-mode arithmetic after the alias or source is modified with `fill_` or
+  `copy_`. Genuine Torch rejects this use and `is_leaf`/`grad_fn` inspection.
+  Separately, enabling a previously frozen source does not dynamically update
+  its alias's visible `requires_grad`; genuine Torch updates the flag without
+  activating an accumulator, in either creation mode.
+- Cause: native alias storage and gradient-edge eligibility are represented,
+  but creation-mode mutation guards and dynamic source trainability are not.
+- Workaround: avoid reusing no-grad-created aliases after writes; create the
+  intended alias after setting the source's requires-grad state. Use explicit
+  detach/activation only when an independent trainable leaf is intended.
+- Evidence: the 41 CPU/CUDA contracts in
+  `compat/tests/torch/test_tensor_constructor_alias.py` cover construction,
+  source/alias gradients, activation timing, clone/detach/retain and invalid
+  roots. Separate genuine Torch and candidate CPU probes confirm 12 mutation
+  variants lack the expected rejection, and eight frozen-source/unfreeze
+  variants lack dynamic flag propagation. These are remaining failures, not
+  covered by the passing constructor matrix. Raw probes are unversioned under
+  `$JITTOR_LAB_ROOT/_state/tensor-alias-main-0fb/` and the independent
+  `tensor-alias-independent-review` / `tensor-alias-unfreeze-review` states;
+  see the [constructor follow-up](../../docs/results/2026-10-15-size-factory-leaves.md#tensor-source-constructor-follow-up).
+- Follow-up: [recorded producer identity](../../docs/results/2026-10-16-recorded-grad-fn-freeze.md)
+  fixes source-freeze grad_fn loss only; the independent lifecycle probe of 32 combinations
+  still finds 17 differing combinations. Mutation guards and inherited flags stay open.
+- Exit condition: native view creation/mutation metadata and source-state
+  propagation agree with independent Torch on CPU and each claimed accelerator,
+  including absence of unintended accumulator activation. Preserve the existing
+  old/new graph snapshots and storage/gradient contracts when adding this support.
 
 ## KI-COMPAT-009: a float32 tensor divided by a Python float is computed in float64
 
@@ -2073,9 +1640,10 @@ workaround.
 ## KI-COMPAT-012: in-process `JITTOR_TORCH_SHIM=1` publishes no `torch` distribution metadata
 
 - Severity: Medium (Transformers and Diffusers decide PyTorch is absent)
-- Status: Open; recorded on HEAD in the 2026-09-24 report, reproduced
-  2026-10-12 where those libraries are installed (the gates do not install them,
-  so the cases skip there)
+- Status: Open (verification pending: downstream install). `c6aef610a` makes
+  the in-process shim register a process-local torch distribution finder on
+  activation and remove it on release; the metadata-dependent library cases
+  still need Transformers/Diffusers installed on the acceptance machine.
 - Owner: torch compatibility maintainers
 - Symptom: `AutoModel ... requires the PyTorch library but it was not found in
   your environment` / `UNet2DModel requires the PyTorch library` from
@@ -2089,42 +1657,9 @@ workaround.
 - Workaround: deploy the shim (`jittor-torch-shim`, see
   `docs/compatibility/torch-shim.md`) rather than enabling it in-process.
 - Evidence: the four test files above on a machine with transformers/diffusers.
-- Exit condition: the in-process shim answers `importlib.metadata.version("torch")`
-  and those cases run.
-
-## KI-COMPAT-013: under `torch.autocast` a `Conv2d` module with a bias returns float32
-
-- Severity: Medium (an autocast divergence from PyTorch: downstream half
-  kernels receive a float32 activation)
-- Status: Open; recorded on HEAD in the 2026-09-24 report, reproduced
-  2026-10-12 on CPU and CUDA. The case runs as a strict expected failure.
-- Owner: torch compatibility / AMP maintainers
-- Symptom: `with torch.autocast("cuda", dtype=torch.float16): torch.nn.Conv2d(4, 8, 3, padding=1, bias=True)(x)`
-  gives float32 for a float32 input; PyTorch gives float16.
-- Cause: not isolated; suspected that the module path adds its float32 bias
-  after the autocast cast and promotes back.
-- Workaround: cast the output, or keep the bias in the compute dtype.
-- Evidence: `compat/tests/torch/test_torch_compat_unimplemented.py::TestAutocast::test_autocast_conv2d_module_keeps_the_compute_dtype_through_a_bias`.
-- Exit condition: the case XPASSes and loses its marker.
-
-## KI-COMPAT-014: `torch.complex128` is still a frontend placeholder although the core has complex128
-
-- Severity: Medium (the frontend refuses a dtype the core computes with)
-- Status: Open; reproduced 2026-10-12 on CPU and CUDA. The boundary case runs as
-  a strict expected failure.
-- Owner: torch compatibility / dtype maintainers
-- Symptom: `torch.empty((2,), dtype=torch.complex128)` and the other frontend
-  constructors raise `NotImplementedError` naming complex128, while
-  `jt.core.ops.empty((2,), "complex128")` builds a complex128 Var. The frontend
-  `dtype` registry lists complex128 among its unsupported placeholders.
-- Cause: complex128 became a native core dtype (`tests/core/test_complex128_native.py`),
-  and the frontend's supported set was not widened with it.
-- Workaround: build complex128 values natively (`jt.array(..., dtype="complex128")`)
-  and hand them to the frontend.
-- Evidence: `compat/tests/torch/test_dtype_object_boundaries.py::test_placeholder_dtypes_are_metadata_only_at_every_boundary`
-  (the two core-op spellings by name do not raise for complex128).
-- Exit condition: complex128 is a supported frontend dtype end to end (or the
-  core refuses it again by design), and the case XPASSes and loses its marker.
+- Exit condition: the four evidence files' cases run on an environment with
+  Transformers/Diffusers installed (the metadata mechanism itself is covered by
+  `compat/tests/torch/test_torch_shim_distribution_metadata.py`).
 
 ## KI-DIST-001: FSDP2 flat sharding peaks above the unsharded model
 
@@ -2151,62 +1686,6 @@ workaround.
   the second fails today.
 - Exit condition: the reference-peak run passes. NPU/HCCL and multi-node have no
   evidence yet (see [deferred-hardware.md](deferred-hardware.md)).
-
-## KI-DIST-002: the second native collective in a rapid sequence returns stale data on a non-zero rank
-
-- Severity: Medium (wrong collective result on non-zero ranks in one pattern;
-  DDP training itself is unaffected)
-- Status: Open; found 2026-10-13 on two CUDA ranks (NCCL 2.18.3).
-- Owner: distributed / native collectives
-- Symptom: in a rapid sequence of `jittor.distributed` collectives on NCCL, the
-  collective at sequence position 1 (the second one issued) reads back stale or
-  wrong data on a non-zero rank -- observed as a bf16 `all_reduce`, and as a
-  `broadcast` when that is the second collective -- while positions 0 and 2+ are
-  correct on both ranks. bf16 `all_reduce` is correct in isolation on both ranks,
-  so this is not a bf16 or an all_reduce correctness bug. The `DistributedDataParallel`
-  wrapper, optimizer gradient sync, `all_gather`, `broadcast` at position >=2 and
-  the full DDP training step all produce correct results on both ranks.
-- Cause: not isolated. A buffer-reuse / readback-ordering hazard in the native
-  collective output path or the executor on non-zero ranks is the suspect (cf.
-  KI-BACKEND-016's in-batch buffer reuse). A throwaway warmup collective plus
-  `jt.sync_all(True)` before the measured checks did not change it. A minimal
-  two-collective isolation (first + second) did NOT reproduce it, so the exact
-  trigger (sequence length or op mix) is not yet pinned.
-- Workaround: insert `jt.sync_all(True)` between back-to-back collectives when a
-  specific second-collective result must be read on a non-zero rank. DDP
-  training does not need this.
-- Evidence: `tests/distributed/native_nccl_smoke.py` in PR #18031, run on two
-  GPUs with `python -m jittor.distributed.launch -n 2 --backend nccl`: rank 1
-  fails exactly the position-1 check while rank 0 passes all, deterministically.
-- Exit condition: the second collective in a rapid sequence returns correct data
-  on all ranks and the native NCCL smoke passes on every rank.
-
-## KI-DIST-003: FSDP2 multi-rank with a reordered DeviceMesh and a torch-subclass optimizer runs an all_gather on the host
-
-- Severity: Medium (one multi-rank FSDP2 path; the common mesh/optimizer paths
-  are unaffected)
-- Status: Open; found 2026-10-13 on two CUDA ranks. Pre-existing on 2.0-refactor,
-  independent of PR #18031's FSDP2 fix-group import (the clean base fails it
-  identically).
-- Owner: distributed / fsdp2
-- Symptom: `compat/tests/fsdp2/test_fsdp2_nccl.py::TestFSDP2Nccl::`
-  `test_mesh_reordered_shards_custom_adam_and_lifetime` fails during
-  `loss.backward()`: `_globally_used_grads` issues `nccl_all_gather` on a
-  `float32[8]`->`[16]` input that is placed on the host, so
-  `JittorError: No kernel registered for nccl_all_gather on cpu`. The path is a
-  reversed-rank `DeviceMesh` combined with a `torch.optim.Adam` subclass; the
-  non-reordered mesh and the native optimizer paths gather on the device and pass.
-- Cause: not isolated. A Var in the FSDP2 shard / used-gradient path lands on the
-  host instead of the rank's CUDA device under the reordered-mesh + custom
-  (torch-subclass) optimizer combination, so a device-only collective is handed a
-  host input.
-- Workaround: use a non-reordered mesh, or the native optimizer step, until the
-  placement is fixed.
-- Evidence: 2 GPUs via `jtrun --nproc-per-node=2 --backend nccl` (or
-  `python -m jittor.distributed.launch -n 2`): the test fails deterministically on
-  both ranks, while the other eight `test_fsdp2_nccl` cases pass.
-- Exit condition: the collective input is placed on the rank's device and the test
-  passes on every rank.
 
 ## KI-BACKEND-020: the NPU work in #18036 and #18039 was only partly on this branch
 
@@ -2275,3 +1754,28 @@ workaround.
 - Exit condition: extend `files` one package at a time with real fixes (no
   `# type: ignore`, no relaxed configuration); delete the entry when
   `python/jittor` and `backends/` are covered.
+
+## KI-CODEGEN-006: a rank-1 full sum still materializes a pending reshaped producer
+
+- Severity: Medium (allocation and performance; values are correct)
+- Status: Open; reproduced 2026-10-26 on current `2.0-refactor` (real CUDA,
+  RTX 4090). The multi-dimensional spelling was fixed by `c56b4c2bc` and is
+  pinned by `tests/backends/cuda/test_full_reduce.py`.
+- Owner: CUDA reduction and codegen maintainers.
+- Symptom: `(jt.ones((1,)).expand(1 << 24) * 2).sum()` allocates 68,157,440
+  bytes cold because the two-stage CUB path materializes the multiply. The 2-D
+  `(4096,1).expand(4096,4096)` spelling allocates 1 MiB.
+- Cause: the rank-1 route needs a reshape/view above the pending producer;
+  `ReshapeOp` is `OpType::other` and `edge_fusable` refuses it, so the fused
+  route stops at that barrier. The only non-materializing alternative measured
+  is a single-block `use_shared_reduce=2` fold at ~3.8 GB/s versus ~757 GB/s
+  CUB (131 ms vs 0.66 ms at 512 MB); the atomic generated reduce is
+  nondeterministic (15 distinct values in 20 runs).
+- Workaround: reduce an explicit axis or materialize the producer when the
+  allocation matters.
+- Evidence: unversioned probe/logs under
+  `$JITTOR_LAB_ROOT/_state/fix-codegen5/`; the multi-dimensional allocation
+  gate is `tests/backends/cuda/test_full_reduce.py`.
+- Exit condition: codegen fuses through the reshape above a pending producer
+  deterministically and near CUB throughput, or a justified deterministic
+  strategy is selected; the rank-1 allocation gate passes.
