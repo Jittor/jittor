@@ -1,5 +1,13 @@
 # 整改看板
 
+## 2026-10-30 隔离 AdamW correction 候选 BERT 单步与严格差异
+
+隔离的双模块 Python overlay 在真实 CUDA 上分别执行 BERT base B8/S256 FP32、eager、nonfused 且 foreach=false 的基线和候选各一次更新；候选 helper 实际调用 197 次、命中 196 次，命中记录核对了 CUDA0 dispatch、FP32 frontend 及 AMP=0。两侧保存的 197 个梯度、199 个更新后参数和 197 组 moment 均有限；197 个参数实际变化，199 个更新后参数的 FP32 位模式全部相同。
+
+严格 comparator 仍为 FAIL：197 个梯度中 196 个及 197 组 moment 中 196 组位模式一致，唯一差异来自 `embeddings.token_type_embeddings.weight` 梯度及对应 m/v。梯度在 optimizer.step 之前已经不同：711/1536 个位模式不同，最大绝对差 `8.881784197001252e-16`、相对 L2 约 `3.8524e-7`；m 最大绝对差约 `9.0206e-17`，v 约 `8.3304e-28`。这是单步且更新后参数完全相同的直接证据；差异的具体机制与长期训练影响仍未知，不能因这一次而宣称长期一致或性能收益。该实验未执行新的 PyTorch 梯度/optimizer 状态对照，包含大量同步和读回，也不构成计时结果。独立逐数组审计 `/data6/cgq/jittor-lab/_state/release-day23/20261030-bert-scalar-r3-independent-numpy-audit-r1/audit.json`，SHA-256 `0ae999b3e8c480f896dc65fa95fc6c131821644aeac41b101ee8044a17cf3ca2`。
+
+此前 r2 在权重加载、forward 及 step 前因配置观察器直接比较内存字典与历史 JSON 字典而 FAIL；失败时保存的 JSON 配置与历史参考相同，本地源码及模拟表明 JSON 的整数键转字符串足以解释误判，但原进程内存类型未保存，不能认定当次唯一原因。r2 和 r3 两个原严格失败均保留，r3 使用全字段严格规范化及类型记录；候选尚未合入主树，未证明默认 fused/foreach 命中、完整训练或性能改善。
+
 ## 2026-10-30 隔离 AdamW correction 标量复用候选 CUDA 小型验证
 
 尚未合入主树的两个 Python 模块 overlay 在 df45 真实 CUDA core 上，使用单 GPU、五参数、FP32、nonfused 且 foreach=false 的合成 fixture；PyTorch、Jittor 基线和候选分别完成 full、checkpoint 新进程 resume 及无逐步显式同步的 async，共 9 个阶段。基线与候选按 FP32 位模式精确对照通过，与 PyTorch 的对照在 `atol=2e-6, rtol=2e-6` 下通过；候选 helper 在 full/resume/async 分别记录 18/10/18 次调用与 8/4/8 次实际复用命中。核验了真实目标 GPU UUID、参数和 moment 的 CUDA dispatch，Jittor fallback 为 0；恢复 step 核对的是数值，不能据此宣称 PyTorch step 标量本身位于 GPU。
