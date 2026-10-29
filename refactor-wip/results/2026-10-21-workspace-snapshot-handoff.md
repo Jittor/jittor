@@ -1,5 +1,28 @@
 # 2026-10-21 工作区快照与本机接续交接
 
+## 2026-10-30 跨 GPU scalar driver 读回校准失败
+
+在显式同步、driver context push/pop 和两次 DtoH 读回的单次正向校准中，逻辑 CUDA0 的 native scalar 在 clone 前后均为 FP32 位模式 `e286013d`，与 CPU PyTorch 参考一致；显式 `.to(cuda:1)` 后返回值经强同步，所观测指针为 CUDA DEVICE memory、ordinal 1，两次 driver 读取均为 `ffffffff`（NaN），未匹配参考。该次复制前后指针与属性、context 恢复端点检查通过，两张物理 GPU 的本进程归属均有记录。
+
+这是干预下的一次迁移后异常，不能单独证明 backend 哪一环出错或此前 CUDA 700 的根因；迁移后源 scalar 尚未复读，反向设备顺序及后续操作未执行。此前 mixed、分段及本次读回的严格失败原件均保留，没有自动重试。功能缓存无增删、锁文本变化，源码和 core 产品及两处保护缓存端点一致，unit 失败退出且 cgroup 已清空，三锁与可见 holder 空；`/proc` 权限拒读、离散观察及端点快照不能排除瞬态变化。独立终审 `/data6/cgq/jittor-lab/_state/release-day23/20261030-gpu-driver-readback-calibration-r1-independent-failure-audit-r1/audit.json`，SHA-256 `fb89b51dba181a90987f1fbc14935754c24f55b10f3a22582c0bdf0aca73b99f`。
+
+
+## 2026-10-30 双 CUDA 基线错误的分段定位
+
+在显式同步和指针物化的单次分段诊断中，control0 的 3 个有梯度参数完成首步，与已保存 PyTorch 首步对照最大绝对差为 0；21 个所观察指针均为 CUDA DEVICE memory、ordinal 0。control1 将全部参数置于逻辑 `cuda:1`、ambient dispatch 为 `cuda:0`；首个参数的参数、梯度及两个 moment 指针均为 DEVICE memory、ordinal 1，而采样的当前 CUDA context ordinal 为 0。随后首个 Adam 更新结果的 `sync(True, False)` 报 CUDA 700 `cudaErrorIllegalAddress`。
+
+这缩小了有同步干预的观察范围，但不能证明 context 差异导致错误，也不能根据有限近期 launch 记录认定肇事内核；显式同步与指针物化改变原始异步调度。失败 worker 未到终态 PID→UUID 查询，逻辑到物理映射仅有 `CUDA_VISIBLE_DEVICES` 与指针 ordinal 支持；mixed、初始快照和设备顺序反转的后续三个阶段未执行，未自动重试。此前 r4 因启动命令绑定路径占位符未替换而在 worker 前退出的操作者错误及原件同样保留。
+
+功能缓存新增 4 项、无删除，锁文本变化；源码、core 产品和两处保护缓存端点一致，unit 失败退出且 cgroup 已清空，三锁与可见 holder 空；`/proc` 权限拒读、离散观察与端点快照限制仍在。独立终审 `/data6/cgq/jittor-lab/_state/release-day23/20261030-adamw-two-gpu-segment-r6-cuda-replay-failure-audit-r1/audit.json`，SHA-256 `a6767e10196dfe5caf3eb594494d80ea31b5be41addee7607439279d6c329904`。
+
+
+## 2026-10-30 隔离 AdamW 候选 mixed-device 与双卡基线失败
+
+CPU 与单 CUDA 同组固定梯度 full 及各自从第 2 步 checkpoint 在新进程恢复的 PyTorch、Jittor 基线和隔离候选共六阶段通过；候选 full helper 为 14 次调用、4 次命中，resume 为 8 次调用、2 次命中。该覆盖限于小型 optimizer fixture 与实际设备状态，不代表完整模型训练或性能。
+
+PyTorch 双 CUDA 同组 full 阶段通过；Jittor 基线在双 CUDA 同组首个更新期间，于逻辑 device 1 同步时检测到 CUDA 700 `cudaErrorIllegalAddress`。前三个参数的更新调用有记录，但无完整步骤；双 CUDA 候选及后续阶段未运行。日志近期 launch 候选不能证明故障内核或原因，也不能归因于尚未运行的候选；严格失败原件保留，未自动重试。功能缓存新增 8 项、无删除，锁文本变化；源码、core 产品和两处保护缓存端点一致，unit 失败退出且 cgroup 清空，三锁及可见 holder 空，`/proc` 权限拒读和离散观察限制仍在。独立终审 `/data6/cgq/jittor-lab/_state/release-day23/20261030-adamw-cuda-fallback-mixed-r2-cuda-replay-failure-audit-r1/audit.json`，SHA-256 `55f9a20bb993d6d87a2a52ea730eebd91fe4fa3287eeeda83e748f585e5fca4d`。
+
+
 ## 2026-10-30 隔离 AdamW 候选单 GPU fallback 验证
 
 单 GPU 固定梯度实验以 PyTorch、Jittor 基线和隔离候选分别运行 AMP optimizer 上下文、FP16、BF16 和 capture 拒绝四类 fixture，各 4 步，共 12 阶段通过。AMP、FP16、BF16 候选 helper 均为 14 次调用、0 次缓存命中；capture 阶段活跃捕获的 3 次 helper 调用无缓存命中且发生预期拒绝，replay 为 0，非活跃调用另有 6 次命中。基线与候选的对应值、dtype 和设备精确对照；PyTorch 低精度 moment 使用参数 dtype，Jittor moment 为 FP32，跨框架按预先登记的对应 dtype 容差比较，不能称为位等。
