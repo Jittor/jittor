@@ -1,5 +1,12 @@
 # 整改看板
 
+## 2026-10-30 隔离 AdamW 候选单 GPU fallback 验证
+
+单 GPU 固定梯度实验以 PyTorch、Jittor 基线和隔离候选分别运行 AMP optimizer 上下文、FP16、BF16 和 capture 拒绝四类 fixture，各 4 步，共 12 阶段通过。AMP、FP16、BF16 候选 helper 均为 14 次调用、0 次缓存命中；capture 阶段活跃捕获的 3 次 helper 调用无缓存命中且发生预期拒绝，replay 为 0，非活跃调用另有 6 次命中。基线与候选的对应值、dtype 和设备精确对照；PyTorch 低精度 moment 使用参数 dtype，Jittor moment 为 FP32，跨框架按预先登记的对应 dtype 容差比较，不能称为位等。
+
+这是固定梯度下的 optimizer 局部检查，不覆盖完整 AMP 训练、GradScaler、capture replay、mixed device 或性能；候选尚未合入主树。功能缓存新增 44 项、无删除，锁文本变化；两个保护性能缓存端点一致，systemd unit 自然成功、cgroup 清空，三锁与可见任务进程/holder 为空。`/proc` 权限拒读和离散观察限制仍在。独立终审 `/data6/cgq/jittor-lab/_state/release-day23/20261030-adamw-cuda-fallback-single-r1-cuda-replay-terminal-r1/audit.json`，SHA-256 `02e047a7f874dda7c2279305edcfdb3aa4112949be20f0133f300e91c78bff61`。
+
+
 ## 2026-10-30 隔离 AdamW 候选 BERT 48 预热 A/B 严格失败
 
 基于此前 30 步池轨迹，新用途 A/B r2 在双方采用固定 48 次预热并保持原 1 MiB 热态稳定门槛。baseline0 完成；candidate0 预热末稳定，但第 6 个热样本 reserved 增长 90 MiB，超出门槛，allocated 恒定且热态 JIT 快照不变。基线在第 4 和第 30 次预热各扩张 90 MiB，候选在第 26 次预热扩张 90 MiB；其具体分配机制仍未知，不能认为延长预热可以保证下一个窗口稳定。
