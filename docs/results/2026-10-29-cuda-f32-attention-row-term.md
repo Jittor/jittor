@@ -75,9 +75,10 @@ ViT 的注意力同样走 float32 融合核，1.67x → 1.28x 来自同两处修
 `qwen3_prefill` 的 SDPA 收到的是 Transformers 构造的 `[1,1,2048,2048]` bool 因果
 掩码；带掩码时融合核只能把它当 score 尺寸的偏置处理，一步 88.4 ms（PyTorch 36.4，
 2.43x）。`jittor.nn.functional.scaled_dot_product_attention` 现在先逐元素比对掩码
-是否就是 `tril(ones)`，是则按 `is_causal=True` 调用（两者语义完全相同），同一用例
-**88.4 → 30.2 ms，比值 2.43x → 0.83x**。非因果掩码（padding 等）不受影响，仍走
-原路径。
+是否就是 `tril(ones)`，是则按 `is_causal=True` 调用（两者语义完全相同），两次
+测量为 **88.4 → 30.2 / 24.7 ms，比值 2.43x → 0.83x / 0.68x**。非因果掩码
+（padding 等）不受影响，仍走原路径。独立对拍里同一输入的两条路径在 2048 上输出
+逐位相同（max abs 0.0）。
 
 同一次排查还发现：若一个环境里 cuDNN 与 `nvidia-cudnn-frontend` 主版本不匹配
 （例如 cuDNN 8.9 配 frontend 1.30），融合核的支撑性探测对所有形状都返回否，注意力

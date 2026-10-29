@@ -88,8 +88,10 @@ Transformers; with a mask the fused kernel can only treat it as a score-sized
 bias, and the step measured 88.4 ms against PyTorch's 36.4 (2.43x).
 `jittor.nn.functional.scaled_dot_product_attention` now compares the mask
 element by element with `tril(ones)` and, when they are equal, calls with
-`is_causal=True` -- the same statement -- which brings the case to **30.2 ms,
-0.83x**. Masks that are not exactly causal (padding, say) keep the old path.
+`is_causal=True` -- the same statement -- which brings the case to **30.2 and
+24.7 ms in two runs, 0.83x and 0.68x**. Masks that are not exactly causal
+(padding, say) keep the old path, and a direct comparison of the two paths on
+the same 2048-token inputs gives bit-identical outputs (max abs 0.0).
 
 The same investigation found that a venv whose cuDNN and
 `nvidia-cudnn-frontend` are from different majors (cuDNN 8.9 with frontend
