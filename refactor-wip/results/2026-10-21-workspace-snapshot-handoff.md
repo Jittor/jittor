@@ -1,5 +1,12 @@
 # 2026-10-21 工作区快照与本机接续交接
 
+## 2026-10-30 隔离 AdamW 候选 BERT 双侧 allocator 轨迹诊断
+
+在已审真实 CUDA core、相同 BERT base B8/S256 FP32 配置下，隔离基线与候选各执行首步、16 次预热和 30 次带同步及观测的更新。基线预热后 reserved 为 `4266655744` bytes，第 14 个诊断更新升至 `4361027584`；候选预热后为 `4172283904`，第 10 个诊断更新升至 `4266655744`，各增长 90 MiB，之后到第 30 步未再增长。两侧 allocated 恒为 `2184966656` bytes，32 份 JIT 快照在各自进程内一致；候选首步 helper 调用 197 次、命中 196 次。
+
+这是单次有限的池聚合轨迹；逐步同步、扫描和记录会扰动执行，不能确认具体分配位置、长期稳定或性能收益。此前 A/B r3 的严格 FAIL 仍然保留，不能由此改判。unit 自然成功并清空 cgroup，源码与 core 产品、功能及封存 SDPA 缓存端点一致；独立性能缓存 1227 项前后无增删，两个探针文件仅 mtime 变化、锁文本变化，三锁及可见 holder 空。`/proc` 权限拒读、离散采样和端点快照限制仍在。独立终审 `/data6/cgq/jittor-lab/_state/release-day23/20261030-adamw-bert-allocator-trajectory-r3-cuda-replay-terminal-r1/audit.json`，SHA-256 `cd443b4bfc8116fb0b316356138dc62ae80636df22615ff6481ccf4039cb8a63`。
+
+
 ## 2026-10-30 隔离 AdamW 候选 BERT A/B 热态诊断失败
 
 新用途诊断 r3 保持每侧首步、固定 16 次预热及 10 次热更新的原严格稳定门槛，并在计时结束后逐样本保存 allocator 与 JIT 快照；新增扫描和写盘可能扰动后续样本。baseline0 完成，candidate0 首步 helper 197 次调用、196 次命中，预热末两次稳定、10 个热更新 loss 均有限，但热态 reserved allocator 前九次为 `4172283904` bytes、第十次为 `4266655744` bytes，范围 90 MiB，超出原 1 MiB 门槛；allocated 恒为 `2184966656` bytes，12 份热态 JIT 快照一致。baseline 的同一 90 MiB 扩张发生在预热第 4 次后并随后稳定；具体分配机制及长期行为未知。
