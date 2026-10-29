@@ -99,6 +99,18 @@ The same investigation found that a venv whose cuDNN and
 silently falls back to matmuls. `_library()` now self-checks one shape it must
 support when it first loads and warns once when that fails.
 
+## Alongside: the optimizer resolves readers once per parameter group
+
+Every in-place optimizer store first runs a `sync_all` to resolve the
+destination storage's readers; AdamW stores three times per parameter, so one
+Qwen3 step ran several hundred full syncs. A parameter's readers in an update
+are upstream of its new value, so the group now resolves them once and each
+store only materializes its own source. `qwen3_train` on a 4090 went
+212.2 -> **177.7 ms** (0.66x of PyTorch's 267.8); a collaborator's paired run
+on a 910B3 measured 412 -> **268 ms** with steady memory 26.9 -> 28.9 GB. A
+flat-buffer variant of the same path measured 264-270 ms for 6.1 GB more
+memory, so it is not being merged.
+
 ## Reproduction
 
 ```bash

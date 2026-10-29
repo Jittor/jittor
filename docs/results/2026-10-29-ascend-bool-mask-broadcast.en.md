@@ -112,4 +112,8 @@ where CUPTI is available.
   operators per token or cheaper host work per operator, not the device.
 - The `is_causal=True` fast path (45.9 us against 54.5 us) needs an "is this
   mask exactly causal" test with real semantic risk; not done.
-- `qwen3_train` (422.6 ms, host-bound, ratio 1.190) has not been itemised yet.
+- `qwen3_train` (422.6 ms, host-bound, ratio 1.190) no longer needs its own
+  itemisation: with the optimizer resolving readers once per parameter group,
+  a paired run measures 412 -> **268 ms** and steady memory 26.9 -> 28.9 GB
+  (about 0.75 of PyTorch's 355 ms). A flat-buffer variant measured 264-270 ms
+  for 6.1 GB more memory, so it is not being merged.
