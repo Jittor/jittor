@@ -109,16 +109,16 @@ Qwen3 step ran several hundred full syncs. A parameter's readers in an update
 are upstream of its new value, so the group now resolves them once and each
 store only materializes its own source. `qwen3_train` on a 4090 went
 212.2 -> **177.7 ms** (0.66x of PyTorch's 267.8); a collaborator's paired run
-on a 910B3 measured 412 -> **268 ms** with steady memory 26.9 -> 28.9 GB. A
-flat-buffer variant of the same path measured 264-270 ms for 6.1 GB more
-memory, so it is not being merged.
+on a 910B3 measured 412 -> **265 ms** (0.74 of torch's 357) with steady memory
+26.9 -> 28.92 GB. A flat-buffer variant of the same path measured 264-270 ms
+for 6.1 GB more memory, so it is not being merged.
 
 The same round replaced the linear membership scans in `order_after_readers`
 (`src/core/op.cc`) with hash sets; the vectors keep their insertion order and
 the control edges are unchanged. That one helps the per-parameter path too:
 `vit_b16_train` on a 4090 went 266.8 -> **141.5 ms** with the two fixes above
-(0.73x of PyTorch's 194.4, against 1.67x before), and a 910B3 ViT step
-177.1 -> 172.2 ms on its own.
+(0.73x of PyTorch's 194.4, against 1.67x before); on a 910B3 this tree's step
+is 174.2-174.7 ms.
 
 ## Reproduction
 

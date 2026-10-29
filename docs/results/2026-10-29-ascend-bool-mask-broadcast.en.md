@@ -114,6 +114,6 @@ where CUPTI is available.
   mask exactly causal" test with real semantic risk; not done.
 - `qwen3_train` (422.6 ms, host-bound, ratio 1.190) no longer needs its own
   itemisation: with the optimizer resolving readers once per parameter group,
-  a paired run measures 412 -> **268 ms** and steady memory 26.9 -> 28.9 GB
-  (about 0.75 of PyTorch's 355 ms). A flat-buffer variant measured 264-270 ms
+  a paired run measures 412 -> **265 ms** (about 0.74 of torch's 357) and
+  steady memory 26.9 -> 28.92 GB. A flat-buffer variant measured 264-270 ms
   for 6.1 GB more memory, so it is not being merged.
