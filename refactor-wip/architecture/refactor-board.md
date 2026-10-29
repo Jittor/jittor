@@ -1,5 +1,96 @@
 # 整改看板
 
+## 2026-10-30 主树 df45 core：临时 scope 的 Adam 单步对照
+
+在真实主树 df45 Python 源及其原主树 CUDA cold core 上，以独立进程对 ambient CUDA 0、参数位于 CUDA 1 的场景执行一次 Adam 更新。测试在调用期间临时包装 `adam_update`、`optimizer_state_scope` 和 `_optimizer_arithmetic` 并观察实际分派；p0、p1、p3 三个有梯度参数参与更新，p2 无梯度。与保存的 PyTorch 参考相比，梯度精确一致，参数和 m/v 在 `atol=rtol=2e-6` 下通过，step 已检查，fallback 为 0。实际 core 和 CUDA 库的映射身份以及目标参数的 DEVICE 指针、ordinal 1 均有记录。
+
+逐参数观测中，scope 前、内、后的 driver context 和 runtime device ordinal 均为 0，而 dispatch 为 `cuda:0 → cuda:1 → cuda:0`；实际分支记录为 `native_or_other`。测试未证明 driver context 切换到 1，也不能确定先前 CUDA 700 的根因。观察器的临时包装、指针物化及 scope 外强同步改变了执行条件；这只是受干预的单步对照，不是无干预多步训练或永久产品修复。此前隔离候选 suite 的 CUDA 700 原始失败继续保留。
+
+主功能 cache 的端点记录为 2981 → 2985 项、增加 4 项且无删除，既有项中仅锁文件文本变化；隔离 r4、性能和封存 SDPA 三个保护 cache 的端点快照一致。systemd unit 自然成功结束，已记录的任务进程退出；锁与进程审阅受可见性限制。独立终审：`/data6/cgq/jittor-lab/_state/release-day23/20261030-main-df45-adam-control1-scoped-r2-independent-terminal-r1/audit.json`，SHA-256 `4dfee9f053d4d13ddfb80cb686acff683cccdd694b8bfb754cadce11513a5d58`。
+
+## 2026-10-30 隔离 r4 Adam 环境与 placement scope 对照
+
+使用隔离 r4 冷编产品，两个独立进程分别执行 CUDA1 参数的单步 Adam 对照：ambient CUDA1，以及 ambient CUDA0 且仅在 Adam 调用中进入参数 placement scope。两项均完成 p0、p1、p3 三个有梯度参数的更新；梯度与保留的 PyTorch 参考精确一致，参数和 m／v 在预定 `atol=rtol=2e-6` 内一致，fallback 0。
+
+在 ambient0 scoped case 的三个参数上，依次采样的 driver context ordinal 和 runtime current device 均为 0，scope 前／内／后 ambient dispatch 为 CUDA0→CUDA1→CUDA0；记录的算术分支为 `native_or_other`。这些读数并不表示实际 CUDA context 已切到 CUDA1，也不证明唯一算术路径或先前 CUDA 700 的根因。scope、指针物化和强同步改变调度；这只是隔离候选上的单步小型对照，并非原主树或完整模型验证。此前 suite 的 CUDA1 Adam CUDA 700 和其他未执行项保留，候选异常恢复、非 primary context 和 capture 并发限制仍未解决。
+
+候选 cache 端点新增 4 项、无删且既有项仅锁文本变化，三份既有保护 cache 端点一致；unit 成功结束、任务 PID 不在现场，阶段间任务 cgroup 核验仅 controller；端点快照和 `/proc` 可见性受限。独立终审 `/data6/cgq/jittor-lab/_state/release-day23/20261030-r4-adam-control1-scoped-r2-independent-terminal-r1/audit.json`，SHA-256 `67c7a44f28cb9b4971cc74ce4b34650cb44e82a7b54b158eee228fbb6551d853`。
+
+## 2026-10-30 隔离 r4 staging 候选定向功能首错
+
+基于 r4 私有冷编产物的一次定向 suite 在首错停止前完成五项：FP32 scalar 的 CUDA0→1 和 CUDA1→0 原始字节复制，两方向各 257 元素的 producer→copy→consumer 链输出逐字节符合独立期望，以及 CUDA0 上四参数、三个有梯度更新的 Adam 单步与保留 PyTorch 参考在预定容差内一致。pending 链没有显式 Python 同步，但 staging 后端本身会同步，观测也会物化和同步；这五项实际 CUDA 设备和 core／utils／runtime／driver 运行时映射前后记录核符，fallback 0。
+
+第六项 CUDA1 Adam control 的首个参数更新结果 `sync(True, False)` 期间，设备查询 `cudaMemGetInfo` 报 CUDA 700／illegal address，worker 以 rc70 停止，首更新未完成；launch ring 仅提供候选调用，不能证明肇事 kernel 或先前 CUDA 700 的根因。该失败 worker 仅有映射前记录、没有终态设备 PID／UUID 记录。按首错停止，后续 16 项未执行，包括 8 MiB 边界、多 dtype 和 capture；不能将前五项外推为完整跨卡、模型或错误恢复通过。
+
+候选仍仅在隔离源和私有 cache，未知完成状态下的设备分配生命周期、非 primary context、capture 并发及异常恢复限制未解决，不能直接合入。候选 cache 端点增加 20 项、无删且既有项仅锁文本变化，三份既有保护 cache 端点一致；unit 按失败退出、任务 PID 不在现场，终态锁记录核验通过；端点快照和 `/proc` 可见性存在限制。原失败均保留，不自动重试。
+
+独立终审 `/data6/cgq/jittor-lab/_state/release-day23/20261030-staged-copy-candidate-functional-r2-independent-terminal-r2/audit.json`，SHA-256 `ff90f05d2cf42b31c9fec2b66a78e518dbe2e94d8e0cd1174175ac23217efbe9`。
+
+## 2026-10-30 隔离 r4 跨设备 host staging 候选 CUDA 冷编
+
+在独立源副本及专用 functional cache 中，ordered 跨不同 CUDA 设备的 pageable host staging r4 候选完成一次真实 CUDA 冷编：日志记录 core 228/228 与 CUDA backend 3/3，stamp 列出 231 个编译单元，controller 自然 rc0、约 393.38 秒。源副本与 df45 执行清单的区别仅为候选 driver，38 个忽略 pyc 按已审资源绑定；实际私有 core／utils／stamp 的磁盘路径、内容与身份已核。逻辑 CUDA0 对应 GPU UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0`，单卡基础算术 sentinel 得到 `[3, 5]`、fallback 0；没有单独执行 CPU sentinel。
+
+该冷编和单卡算术不验证跨卡 staging 功能、双卡模型或错误恢复，也不能作为可合入结论。未知完成状态下源／目标设备分配的生命周期、非 primary context 身份与恢复、capture 并发、失败资源累积及设备范围同步的影响仍待处理或验证；原 CUDA 700 和所有失败证据保留。构建进程运行时的实际共享库 maps 未采样，已记录 readelf 与当前库磁盘身份，不能据此冒称实测映射身份。三份既有缓存端点一致，候选及既有锁现场无记录且可见 holder 空，unit 成功结束、任务 PID 不在现场；1792 个 `/proc` FD 目录拒读，端点快照和采样存在可见性限制。
+
+独立终审 `/data6/cgq/jittor-lab/_state/release-day23/20261030-cuda-staging-r4-private-cold-independent-terminal-r1/audit.json`，SHA-256 `35a01578d7e70853a741521b2a9c2e45f6a92701b2e060b2ea1d91e20181ffea`。
+
+## 2026-10-30 启用 peer 后 driver 与 host 中转对照
+
+在单个独立进程中，显式 target 1→source 0 peer enable 返回 0 后，针对逻辑 CUDA0→CUDA1 的同一源／目标指针对固定依次执行 C→H，传输一个四字节 FP32 scalar。C 使用目标 context 下 driver `cuMemcpyPeer`，目标双读 `ffffffff`（NaN，MISMATCH）；H 实际从源做两次 driver DtoH，得到 `e286013d` 的 host buffer，再在目标 context 同步 HtoD，目标双读 `e286013d`（MATCH）。每步源前后为 `e286013d`，目标事先重置并双读 `a5a5a5a5`，设备、context、线程、地址、返回码及次序记录已核；进程 rc0 表示记录完成，不能将 C 的错误结果标为通过。
+
+这是先 C 后 H 的单次、单方向、四字节观察；host 中转、重新设置 sentinel、同步和双读均会改变执行，不能证明 H 对其他大小、方向或长期运行可用，也不是通用 fallback 或性能结论，不能单独确定此前 CUDA 700 的根因。实际 core／runtime 映射、两卡 PID／UUID 和 fallback 0 已记录；功能缓存无增删且仅锁文本变化，两份性能保护缓存端点一致，unit 成功结束、任务 PID 不在现场、终态三锁无内核锁记录；端点快照与 `/proc` 可见性受限，不能排除瞬态活动。此前失败与对照保留。
+
+独立终审 `/data6/cgq/jittor-lab/_state/release-day23/20261030-cudart-peer-enabled-host-stage-r1-independent-terminal-r1/audit.json`，SHA-256 `8e698bd03ce26eb08cd50f1f48f907eafe67142983cbb75c2eb6dd269b565a5d`。
+
+## 2026-10-30 异步复制显式 peer enable 前后对照
+
+在独立单进程、逻辑 CUDA0→CUDA1 的同一源／目标指针对上，使用同一个目标 nonblocking stream 和同一对 events 执行两次四字节 `cudaMemcpyAsync`：D0 目标双读为 `e286013d`（MATCH），随后显式 target 1→source 0 peer enable 返回 0；D1 目标双读为 `ffffffff`（NaN，MISMATCH）。两次复制及两设备同步均记录返回 0，每步源前后双读 `e286013d`、目标预写 sentinel 双读 `a5a5a5a5`；同一线程的指针、context、event／stream 次序与结束后资源清理已核验。进程 rc0 表示观测完成，不能当作复制功能通过。
+
+D0 前源码路径没有显式 peer enable，但资源创建或框架可能改变隐含状态，且固定先后顺序、sentinel 重置、事件、同步及读回均会干预；该单 scalar、单方向观察不能单独确定唯一原因或此前 CUDA 700 的根因。实际 core／runtime 映射、两卡 PID／UUID 与 fallback 0 已记录；功能缓存 2981 项无增删、仅锁文本变化，两份性能保护缓存端点一致，unit 成功结束、任务 PID 不在现场，终态三锁无记录；终态前现场检查的可见 holder 为空、约 1787 个 `/proc` FD 目录拒读，端点快照和采样仍有可见性限制。此前失败与对照保留。
+
+独立终审 `/data6/cgq/jittor-lab/_state/release-day23/20261030-cudart-async-peer-transition-r1-independent-terminal-r1/audit.json`，SHA-256 `ab2344668889cfd31c9a4a4f96b5bf30b50bd2e987b225637166366067c3cb0c`。
+
+## 2026-10-30 同指针对显式 peer enable 前后对照
+
+在单个独立进程中，逻辑 CUDA0→CUDA1 的同一保活源／目标指针对，第一次在目标 context 执行 driver `cuMemcpyPeer` 后目标双读为 `e286013d`（MATCH）；接着显式执行目标 1 到源 0 的 `cudaDeviceEnablePeerAccess`，返回 0 且清除状态返回 0；再以同一指针对执行第二次 `cuMemcpyPeer`，目标双读 `ffffffff`（NaN，MISMATCH）。两次复制 API 均返回 0，每步源前后双读 `e286013d`、目标 sentinel 事先双读 `a5a5a5a5`，两次复制的指针、设备、context 和线程顺序已核；进程 rc0 表示观测完成，不表示该复制行为通过。
+
+第一次复制之前，源码可见路径没有显式 peer enable，但原有隐含 peer 状态及第一次复制对状态的影响未知；sentinel 重置、同步、读回及固定先后顺序都会干预，不能单凭这次前后观察确定唯一原因或此前 CUDA 700 的根因，也不能推断其他方向、大小和配置的结果。实际 core／runtime 映射、两卡 PID／UUID 和 fallback 0 已记录；功能缓存无增删且仅锁文本变化，两份性能保护缓存端点一致，unit 成功结束、任务 PID 不在现场，三锁与可见 holder 空；约 1784 个 `/proc` FD 目录拒读，端点快照与采样仍有可见性限制。此前失败与对照保留。
+
+独立终审 `/data6/cgq/jittor-lab/_state/release-day23/20261030-cudart-peer-enable-transition-r1-independent-terminal-r1/audit.json`，SHA-256 `417b63b0e1f4e93b6690f5a83acba4ca36caa4bfdef92308a470a74b0fa0f073`。
+
+## 2026-10-30 同一指针对三种跨设备复制顺序对照
+
+两个独立进程分别按 C→D→P 和 P→D→C 执行逻辑 CUDA0→CUDA1 单 scalar 控制，其中 C 为目标 context 下 driver `cuMemcpyPeer`，D 为 runtime `cudaMemcpyAsync` 默认方向，P 为 runtime `cudaMemcpyPeerAsync`。每进程内三步使用同一已核验的源／目标指针对，且每步源双读 `e286013d`、目标预写 sentinel 双读 `a5a5a5a5`；三种操作之后目标均双读 `ffffffff`（NaN），源仍双读 `e286013d`，六个观察均为 MISMATCH。两个进程 rc0 表示记录完成，不能作为复制功能通过；两进程的实际分配地址彼此不同。
+
+两进程各自先启用目标到源 peer 访问，后续 D/P 均重新执行 runtime prepare／peer enable，记录返回依次为 0、704、704；D 两次均处于第二步。目标 sentinel 写入、同步、事件链和 driver 读回均会干预执行，顺序或已有状态可能影响结果，不能由这两种顺序推断完整排列或此前 CUDA 700 的根因，也不能将该结果泛化为所有复制。实际设备、context、线程、指针和 core／runtime 映射及 fallback 0 已记录；功能缓存无增删、仅锁文本变化，两个性能保护缓存端点一致，unit 成功退出且任务 PID 不在现场，三锁及可见 holder 为空；约 1775 个 `/proc` FD 目录拒读，端点快照和离散采样仍有可见性限制。此前失败与对照全部保留。
+
+独立终审 `/data6/cgq/jittor-lab/_state/release-day23/20261030-cudart-same-pair-sequence-r1-independent-terminal-r1/audit.json`，SHA-256 `b1b0c6bab4f4141bd6b9d38dbb2a061cd45cdcb54c735388d8ee797d011d9ab7`。
+
+## 2026-10-30 CUDA runtime 目标指针先读对照
+
+在独立单次 DS 控制中，目标 sentinel 事先双读为 `a5a5a5a5`，从逻辑 CUDA0 向 CUDA1 的四字节 `cudaMemcpyAsync`、事件链及两设备同步均记录返回 0。完成后，源码可见路径在显式目标 Var sync／地址 getter 之前，保活原目标并以已核验的 device/context/地址范围直接做两次 driver 读回，均为 `ffffffff`；随后执行目标 Var sync 和 getter，地址仍为 `0x78819f425600`，核验后再次双读仍为 `ffffffff`，源前后双读均为 `e286013d`，分类为 `BOTH_MISMATCH`。rc0 表示观测采集完成，不能当作复制正确。
+
+这排除了该次记录中“显式目标 Var sync／getter 之后才第一次出现错误值”的狭义解释；同步 DtoH、地址属性查询、事件和设备同步本身均可能干预，地址相同也不能证明没有同址写入，框架或 CUDA 内部隐含行为仍未知。该单 scalar／方向结果不能确定此前 CUDA 700 根因或代表所有复制。实际 core／runtime 映射、两卡 PID／UUID、fallback 0 已记录；功能缓存无增删、仅锁文本变化，两个性能保护缓存端点一致，任务 unit 成功退出，三锁及可见 holder 为空；约 1793 个 `/proc` FD 目录拒读，端点与采样存在可见性限制。此前六 case、driver、GDB 与原失败保留。
+
+独立终审 `/data6/cgq/jittor-lab/_state/release-day23/20261030-cudart-pointer-first-r1-independent-terminal-r1/audit.json`，SHA-256 `2927aff26f2e548897337c6e34828b1fe3e7366c83e877098ca29ccb035a4ae8`。
+
+## 2026-10-30 CUDA runtime 跨设备 scalar 六控制结果
+
+六个独立进程分别对逻辑 CUDA0→CUDA1 的同一已知 FP32 scalar 执行四字节 CUDA runtime 控制：`cudaMemcpyAsync` 默认方向推断与 `cudaMemcpyPeerAsync` 各测无事件链、显式事件链以及事件链加目标 sentinel 的变体。六个 case 的原始记录均为源迁移前后各两次 driver 读回 `e286013d`、目标迁移后两次 `ffffffff`（NaN）；两个 sentinel 变体在复制前已双读确认目标为 `a5a5a5a5`。每个 case 的复制调用和两设备同步返回 0，记录的指针、设备、context、单线程与事件／stream 顺序通过对应校验；六次进程 rc0 仅表示采集结束，六项观察均为 MISMATCH，并非复制功能通过。
+
+这些是同一方向、同一数值和特定构造／初始化条件下的有限实测；显式物化、同步、读回、事件链及 sentinel 都可能改变执行时序，runtime 与 driver 对照仍不能单独确定此前 CUDA 700 的根因，也不能推断所有跨设备复制的行为。六个独立 worker 的实际两卡 PID／UUID、core 与 CUDA runtime 映射和 fallback 0 已记录；功能缓存前后均为 2981 项、无增删且仅操作锁文本变化，两份性能保护缓存端点一致，任务 unit 成功结束、任务 PID 不在现场，三锁无记录且可见 holder 为空。约 1789 个 `/proc` FD 目录拒读，端点快照与离散采样不能排除不可见或瞬态活动。原 mixed、分段、driver 两 case 与 GDB 观察及失败均保留。
+
+独立终审 `/data6/cgq/jittor-lab/_state/release-day23/20261030-cudart-cross-device-control-r3-independent-terminal-r1/audit.json`，SHA-256 `1b41b0b4481e8af0e81d05e4150009d0f531887359f9af40fdf605b7ae09fb77`。
+
+## 2026-10-30 跨设备 scalar 控制与 GDB 调用记录
+
+在两个独立进程、同一已知 FP32 scalar、逻辑 CUDA0→CUDA1 的单次诊断中，driver host-staged 和 driver peer 控制各自记录源迁移前、目标迁移后、源迁移后均为 `e286013d`；另一个进程的 Jittor `.to` 记录源值前后仍为 `e286013d`，目标两次 driver 读回均为 `ffffffff`（NaN）。两个 case 进程 rc0 表示记录和分类完成，不代表 Jittor 跨设备迁移功能通过；不同方法使用各自构造的 scalar，不能称所有复制均有同样问题。
+
+另一个受控 GDB 单例中，实际同线程 `DeviceCopyOp` 与 `backend_copy` 记录 4 bytes、源 device 0 到目标 device 1、ordered；`cudaMemcpyAsync` 记录相同源／目标指针、4 bytes、kind 4 及目标 stream，入口对应返回 0。事件记录／stream wait 和目标设备同步的返回也记录为 0，但目标仍读为 NaN、源值保持 `e286013d`。异步 API 返回 0 不证明目标数据正确，也不能单独确定此前 CUDA 700 的机制；GDB 断点、强同步、设备初始化和读回均改变时序，该单 scalar、单方向结果不构成一般硬件或完整 optimizer 结论。
+
+两项诊断的源码、core 与保护缓存端点核符，功能缓存无增删、操作锁文本变化，任务 unit 自然完成且 cgroup 清空，三锁与可见 holder 空；`/proc` 权限拒读、离散采样和端点快照限制仍在。两 case 独立终审 `/data6/cgq/jittor-lab/_state/release-day23/20261030-cross-device-scalar-two-case-r1-independent-terminal-audit-r1/audit.json`，SHA-256 `2f10a6b93d0afa2ef21b0b9bb6f6c2cd2a6c7f7ebde5e6d06cfbc9cb835f0afc`；GDB 独立终审 `/data6/cgq/jittor-lab/_state/release-day23/20261030-device-copy-gdb-production-r2-independent-terminal-audit-r1/audit.json`，SHA-256 `5428b142a46c6459f8ff9c3f4595d543765d3ebc6cebdddf99ba0a046311998d`。
+
+
 ## 2026-10-30 跨 GPU scalar driver 读回校准失败
 
 在显式同步、driver context push/pop 和两次 DtoH 读回的单次正向校准中，逻辑 CUDA0 的 native scalar 在 clone 前后均为 FP32 位模式 `e286013d`，与 CPU PyTorch 参考一致；显式 `.to(cuda:1)` 后返回值经强同步，所观测指针为 CUDA DEVICE memory、ordinal 1，两次 driver 读取均为 `ffffffff`（NaN），未匹配参考。该次复制前后指针与属性、context 恢复端点检查通过，两张物理 GPU 的本进程归属均有记录。
