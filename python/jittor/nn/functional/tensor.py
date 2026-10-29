@@ -1,7 +1,5 @@
 """General tensor algebra operations exposed through :mod:`jittor.nn`."""
 
-import numpy as np
-
 import jittor as jt
 
 

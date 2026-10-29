@@ -29,7 +29,7 @@ ms-swift 真实依赖另含 ModelScope 1.33.0、Datasets 3.6.0、PyArrow 19.0.1 
 
 首先复用[共享 runner](../../compat/tests/torch/_ecosystem_runner.py)执行输出、全部请求的参数梯度及浮点输入梯度对拍。两侧从 oracle 保存的完整同名参数与 buffer 初始化。随后固定这份权重，仅将输入随机种子从 0 改为 7，验证输出确实随输入改变，并重新比较全梯度。整数 token 不请求输入梯度。
 
-训练使用[已提交的 training probe](../../agent/skills/torch-compat-repo-runbook/scripts/training_probe.py)，`model.train()`、3 步、固定 SGD 更新 `p -= 0.001 * grad`，每步输入种子为 1、2、3，固定随机 loss 权重并取 mean；逐步保存输出、loss、全部请求梯度及所有参数。先物化所有旧梯度再更新 lazy Var；保留上游原始冻结状态，每一步检查冻结参数不变，且训练后至少一个可训练参数发生变化。LoRA 的数值梯度测试刻意请求全部 29 个参数的梯度；真正训练则仅更新上游声明的 8 个 adapter 参数，21 个基座参数冻结。此 probe 不验证 Adam、Trainer、调度器或分布式训练。
+训练使用[已提交的 training probe](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/torch-compat-repo-runbook/scripts/training_probe.py)，`model.train()`、3 步、固定 SGD 更新 `p -= 0.001 * grad`，每步输入种子为 1、2、3，固定随机 loss 权重并取 mean；逐步保存输出、loss、全部请求梯度及所有参数。先物化所有旧梯度再更新 lazy Var；保留上游原始冻结状态，每一步检查冻结参数不变，且训练后至少一个可训练参数发生变化。LoRA 的数值梯度测试刻意请求全部 29 个参数的梯度；真正训练则仅更新上游声明的 8 个 adapter 参数，21 个基座参数冻结。此 probe 不验证 Adam、Trainer、调度器或分布式训练。
 
 | 样例 | 每次数值对拍张量数 | 参数梯度 / 输入梯度 | 训练可更新 / 冻结参数 | 三步轨迹数组数 | CPU / CUDA |
 | --- | ---: | ---: | ---: | ---: | --- |
@@ -55,7 +55,7 @@ CUDA 四例在基线、扰动和训练三个阶段，双方实际 device 都是 
 
 ## 注册分母、授级与门禁边界
 
-[scorecard 审计器](../../agent/skills/torch-compat-repo-runbook/scripts/audit_coverage.py)重新枚举上游完整注册表，逐条检查本次 Git SHA、上游 SHA/版本、平台、真实二进制 oracle、请求/实际 device、完整梯度、输入扰动、多步轨迹、原始产物哈希及现存具体 gate 节点。CPU 与 CUDA 各接受 GPT-2、PEFT LoRA、Swift LoRA 三条 **broad/L3** 记录，共六条；每个 CUDA 记录都有对应的独立 CPU 对拍。
+[scorecard 审计器](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/torch-compat-repo-runbook/scripts/audit_coverage.py)重新枚举上游完整注册表，逐条检查本次 Git SHA、上游 SHA/版本、平台、真实二进制 oracle、请求/实际 device、完整梯度、输入扰动、多步轨迹、原始产物哈希及现存具体 gate 节点。CPU 与 CUDA 各接受 GPT-2、PEFT LoRA、Swift LoRA 三条 **broad/L3** 记录，共六条；每个 CUDA 记录都有对应的独立 CPU 对拍。
 
 | 库 / 注册轴 | CPU 已验成员 / 完整分母 | CUDA 已验成员 / 完整分母 | 本次实际证据 |
 | --- | ---: | ---: | --- |

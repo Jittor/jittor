@@ -739,7 +739,10 @@ register_kernel(
 # After oneDNN: float32 takes it where it is built, CBLAS otherwise.
 register_kernel("matmul", "cpu", _blas_matmul, dtypes=_BLAS_DTYPES, supports=_supports_blas)
 register_kernel(
-    "batched_matmul", "cpu", _blas_batched_matmul, dtypes=_BLAS_DTYPES,
+    "batched_matmul",
+    "cpu",
+    _blas_batched_matmul,
+    dtypes=_BLAS_DTYPES,
     supports=_supports_blas_batched,
 )
 del _backend, _complex, _dtypes, _supports

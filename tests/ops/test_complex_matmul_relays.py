@@ -236,9 +236,18 @@ class TestFindBlas(unittest.TestCase):
         # depends on a CBLAS (dependencies are searched too, which is what lets
         # a wrapper such as conda's libcblas.so stand in for its backend).
         import _ctypes
-        not_blas = _ctypes.__file__
-        with mock.patch.dict(os.environ, {"JT_BUILD_BLAS_LIB_PATH": not_blas}):
-            found, reasons = compile_extern.find_blas()
+        not_blas = getattr(_ctypes, "__file__", None)
+        if not_blas is None:
+            # Statically linked Python builds have no _ctypes extension file.
+            # libm still exercises the symbol probe without assuming its path.
+            import ctypes.util
+            not_blas = ctypes.util.find_library("m")
+            self.assertIsNotNone(not_blas)
+            with mock.patch.object(compile_extern, "_blas_candidates", return_value=[not_blas]):
+                found, reasons = compile_extern.find_blas()
+        else:
+            with mock.patch.dict(os.environ, {"JT_BUILD_BLAS_LIB_PATH": not_blas}):
+                found, reasons = compile_extern.find_blas()
         self.assertIsNone(found)
         self.assertEqual(len(reasons), 1)
         self.assertIn("exports no cblas_sgemm/dgemm/cgemm/zgemm", reasons[0])

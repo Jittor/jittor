@@ -456,8 +456,16 @@ def _supports_layer_norm_training(x, normalized_shape, weight, bias, eps):
     return eps > 0.0 and math.isfinite(eps)
 
 
-@optional_kernel("nn.layer_norm.training", ("cuda", "rocm_legacy", "corex_legacy"),
+@optional_kernel("nn.layer_norm.training", ("rocm_legacy", "corex_legacy"),
                  dtypes=("float32",),
+                 supports=_supports_layer_norm_training)
+def _layer_norm_legacy(x, normalized_shape, weight, bias, eps):
+    cls = _layer_norm_cuda_cls(int(x.shape[-1]), float(eps))
+    return cls.apply(x, weight, bias)
+
+
+@optional_kernel("nn.layer_norm.training", "cuda",
+                 dtypes=("float32", "bfloat16"),
                  supports=_supports_layer_norm_training)
 def _layer_norm_cuda(x, normalized_shape, weight, bias, eps):
     cls = _layer_norm_cuda_cls(int(x.shape[-1]), float(eps))

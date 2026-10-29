@@ -170,6 +170,24 @@ def _child_process_module():
     return child_process
 
 
+def test_a_child_restarts_once_after_jit_utils_rebuild(tmp_path):
+    child_process = _child_process_module()
+    marker = tmp_path / "first-bootstrap"
+    script = (
+        "from pathlib import Path\n"
+        "marker = Path(%r)\n"
+        "if not marker.exists():\n"
+        "    marker.write_text('rebuilt')\n"
+        "    print('jit_utils was rebuilt and cannot be reloaded in this process.')\n"
+        "    raise SystemExit(3)\n"
+        "print('BOOTSTRAP_RETRIED')\n"
+    ) % str(marker)
+    result = child_process.run_python_child(["-c", script], text=True)
+    assert result.returncode == 0
+    assert "BOOTSTRAP_RETRIED" in result.stdout
+    assert marker.read_text() == "rebuilt"
+
+
 def test_the_helper_pins_this_tree_first():
     import os
 
@@ -303,6 +321,17 @@ time.sleep(300)
 
 
 def _still_running(pid):
+    # A killed grandchild can remain visible as a zombie until the container's
+    # init process reaps it. It no longer executes or holds the pipe, so
+    # kill(pid, 0) alone would turn successful tree cleanup into a false red.
+    if sys.platform.startswith("linux"):
+        try:
+            stat = (Path("/proc") / str(pid) / "stat").read_text()
+            _, separator, suffix = stat.rpartition(")")
+            if separator and suffix.split()[0] == "Z":
+                return False
+        except (OSError, IndexError):
+            pass
     try:
         os.kill(pid, 0)
     except (ProcessLookupError, PermissionError):

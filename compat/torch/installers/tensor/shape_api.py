@@ -10,8 +10,19 @@ def _torch_view_base(self):
 
 def _permutation_view(input, axes):
     # This primitive asks for a physical view while constructing the native
-    # op under the GIL. No Python flag scope spans dispatch or lazy loading,
-    # and no intermediate AD target is removed by transpose composition.
+    # op under the GIL. Compose only an edge-free view: a view carrying even a
+    # temporarily frozen/no-grad history must remain an explicit AD target.
+    if not input.requires_grad:
+        prior = input._transpose_view_axes()
+        source = input._transpose_view_source if prior else None
+        if not prior:
+            prior = input._producer_transpose_axes()
+            source = (lambda: input._input(0)) if prior else None
+        if source is not None and len(prior) == len(axes):
+            axes = tuple(prior[axis] for axis in axes)
+            input = source()
+            if axes == tuple(range(len(axes))):
+                return input
     result = input._storage_permute(jt.NanoVector(axes))
     result._set_transpose_view_of(input, jt.NanoVector(axes))
     return result
@@ -268,6 +279,12 @@ def _index_add_inplace(self, dim, index, source, *, alpha=1):
 def _plain_reduce(name, self, *a, **k):
     orig = get_install_context(jt).state["tensor_shape_api"]["reductions"][name]
     a, k = _norm_reduce_kw(a, k)
+    # CPU autocast leaves mean/sum in their input dtype. In particular, a
+    # float32 loss after an explicit .float() must stay float32.
+    if (name in ("mean", "sum") and jt.flags.amp_reg and not jt.flags.use_cuda
+            and str(self.dtype).replace("torch.", "") == "float32"):
+        with jt.flag_scope(amp_reg=0):
+            return orig(self, *a, **k)
     return orig(self, *a, **k)
 
 

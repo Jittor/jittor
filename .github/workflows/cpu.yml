@@ -23,6 +23,9 @@ jobs:
   smoke:
     needs: baseline
     name: nox / smoke
+    # Four xdist workers share a four-CPU container.
+    env:
+      use_parallel_op_compiler: "1"
     runs-on: ${{ needs.baseline.outputs.host_runner }}
     container:
       image: ${{ needs.baseline.outputs.cpu_ci_image }}
@@ -32,9 +35,9 @@ jobs:
     # tests/structure/test_gate_tiers.py, arithmetically, against measured
     # per-file costs; an assertion on elapsed wall clock would fail on a busy
     # runner for reasons that have nothing to do with the change. The number
-    # below is the runner's patience, and it has to cover the pip installs and
-    # a cache miss, not just the tests.
-    timeout-minutes: 45
+    # below must cover a cold JIT cache too: the first fork run reached only
+    # 73% of native tests in 45 minutes, before the Torch session started.
+    timeout-minutes: 150
     steps:
       - name: Install native CPU toolchain
         run: |
@@ -67,6 +70,8 @@ jobs:
   cpu:
     needs: baseline
     name: nox / cpu
+    env:
+      use_parallel_op_compiler: "1"
     runs-on: ${{ needs.baseline.outputs.host_runner }}
     container:
       image: ${{ needs.baseline.outputs.cpu_ci_image }}

@@ -4,6 +4,18 @@ import jittor as jt
 from jittor import nn
 from ...types import _dtype_to_str
 
+def _conv_transpose2d(input, weight, bias=None, stride=1, padding=0,
+                      output_padding=0, groups=1, dilation=1):
+    # CPU autocast selects BF16 for convolution inputs. The portable native
+    # contraction includes pointwise operations, which the Torch frontend
+    # correctly leaves at their input dtype; cast the eligible inputs here.
+    if jt.flags.amp_reg & jt.amp_flags.prefer_bfloat16 and not jt.flags.use_cuda:
+        input = input.cast("bfloat16")
+        weight = weight.cast("bfloat16")
+    return nn.conv_transpose2d(input, weight, bias, stride, padding,
+                               output_padding, groups, dilation)
+
+
 def _pixel_shuffle(input, upscale_factor):
     r = upscale_factor
     N, Cr2, H, W = input.shape
@@ -275,6 +287,8 @@ def _install_functional(ctx):
         _jt_log_softmax = nn.log_softmax
         F.log_softmax = _log_softmax
     if hasattr(nn, "linear"): F.linear = nn.linear
+    if hasattr(nn, "conv_transpose2d"):
+        F.conv_transpose2d = _conv_transpose2d
     if hasattr(nn, "interpolate"):
         # torch.nn.functional.interpolate defaults to mode='nearest', but
         # jittor.nn.interpolate defaults to 'bilinear'. Code that omits the

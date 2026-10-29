@@ -146,8 +146,9 @@ class TestTheRewrittenLiteralsAreTheSameNumbers(unittest.TestCase):
             return None
 
         def is_int(node):
+            # Zero clears the register; it is not a bit position to name.
             return isinstance(node, ast.Constant) and isinstance(node.value, int) \
-                and not isinstance(node.value, bool)
+                and not isinstance(node.value, bool) and node.value != 0
 
         for path in sorted(root.rglob("*.py")):
             if "__pycache__" in path.parts:

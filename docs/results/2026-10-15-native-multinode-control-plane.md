@@ -77,7 +77,7 @@ FP32 reduce-scatter 均由原 fixture 检查。每 rank 持有 35 个存储元�
 原始执行器为 `cuda-unit/run.py`，worker 环境入口为 `cuda-unit/rank_entry.py`；其当前
 文件哈希在原始绑定中，历史 warm 失败只保留诊断身份、不授予通过。
 
-维护入口 [独立重算工具](../../agent/skills/jittor-distributed-verification/recheck_native_fsdp.py)
+维护入口 [独立重算工具](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/jittor-distributed-verification/recheck_native_fsdp.py)
 使用 NumPy 校验所有绑定、完整参数清单与 metadata，再复算 680 组 oracle 数组、
 368 组 fresh-resume 数组、160 项 update 预算和 160 项 zero-gradient 拒绝。
 四类 RNG 是 Python/NumPy/native CPU/native CUDA 的后续实际抽样，恢复后与生产端逐位一致。

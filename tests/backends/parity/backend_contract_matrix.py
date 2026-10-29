@@ -387,6 +387,16 @@ def _probe_matmul(jt_):
     return jt_.matmul(a, b).numpy()
 
 
+def _probe_triangular_solve(jt_):
+    import numpy as np
+    from jittor.linalg.solving import _solve_triangular
+
+    a = np.triu(_fixed((6, 6), 1.0)).copy()
+    a[np.diag_indices(6)] += 8.0
+    b = _fixed((6, 3), 2.0)
+    return _solve_triangular(jt_.array(a), jt_.array(b), True).numpy()
+
+
 def _probe_batched_matmul(jt_):
     a = jt_.array(_fixed((3, 16, 24)))
     b = jt_.array(_fixed((3, 24, 12), 5.0))
@@ -434,6 +444,9 @@ PROBES = {
     "code": _probe_code,
     "copy": _probe_copy,
     "cub_cumsum": _probe_cumsum,
+    "blas_matmul": _probe_matmul,
+    "blas_batched_matmul": _probe_batched_matmul,
+    "cublas_trsm": _probe_triangular_solve,
     "cublas_matmul": _probe_matmul,
     "mkl_matmul": _probe_matmul,
     "cublas_batched_matmul": _probe_batched_matmul,

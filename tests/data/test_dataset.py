@@ -145,7 +145,16 @@ class DelayedWorkerDataset(Dataset):
 
 class TestDataset2(unittest.TestCase):
     def test_dataset_use_jittor(self):
-        dataset = YourDataset().set_attrs(batch_size=256, shuffle=True, num_workers=4)
+        # Compile the graph before forking. A cold four-worker run otherwise
+        # serialises on the shared JIT lock long enough for the parent's
+        # five-second liveness check to mistake healthy workers for dead ones.
+        warm_x, warm_y = YourDataset()[0]
+        warm_x.sync()
+        warm_y.sync()
+        # Exercise every worker without making one batch exceed the dataset's
+        # five-second liveness timeout on a four-CPU CI runner.
+        dataset = YourDataset().set_attrs(
+            total_len=512, batch_size=32, shuffle=True, num_workers=4)
         dataset.tmp = jt.array([1,2,3,4,5])
         dataset.tmp.sync()
         for x, y in dataset:
@@ -536,8 +545,8 @@ class TestDatasetDeepcopy(unittest.TestCase):
 
 
 class TestWorkerExceptionPropagation(unittest.TestCase):
-    """An exception raised inside a worker must come back to the caller as an
-    exception of the same class. It used to be delivered as SIGINT to the
+    """A built-in exception raised inside a worker must reach the caller with
+    the same class. It used to be delivered as SIGINT to the
     parent, which jittor's handler then turned into an immediate process exit
     -- indistinguishable from the user pressing Ctrl-C, and impossible to
     catch."""
@@ -581,7 +590,7 @@ if __name__ == "__main__":
             % (r.returncode, out[-2000:], err[-3000:]))
         assert "STILL_ALIVE" in out, out[-2000:] + err[-2000:]
         assert "NO_EXCEPTION" not in out, out[-2000:]
-        # The worker's own class, so `except ValueError` around the loop works.
+        # Preserve the built-in class, so `except ValueError` around the loop works.
         assert "RAISED=ValueError" in out, out[-2000:]
         assert "HAS_MESSAGE=True" in out, out[-2000:]
         assert "HAS_TRACEBACK=True" in out, out[-2000:]

@@ -26,7 +26,15 @@ import tempfile
 import time
 import unittest
 
+import pytest
+
 from _helpers.child_process import PYTHON, run_python_child
+
+
+# Each case starts a local multi-process rendezvous. Running several launchers
+# on different xdist workers creates an avoidable race for host port ownership.
+pytestmark = pytest.mark.xdist_group("distributed_launcher_process_state")
+
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _LAUNCH = _REPO_ROOT / "python" / "jittor" / "distributed" / "launch.py"
@@ -45,7 +53,8 @@ time.sleep(600)
 _PRINT_TORCH_ENV = """
 import os
 print("env=" + ",".join(os.environ.get(k, "-") for k in
-      ("RANK", "WORLD_SIZE", "LOCAL_RANK", "MASTER_ADDR", "MASTER_PORT")), flush=True)
+      ("RANK", "WORLD_SIZE", "LOCAL_RANK", "MASTER_ADDR", "MASTER_PORT",
+       "JITTOR_LAUNCHER_EXTERNAL_STORE")), flush=True)
 """
 
 # The store env:// rendezvous a Torch-style `init_process_group()` performs:
@@ -58,7 +67,7 @@ spec = importlib.util.spec_from_file_location("store", STORE_PATH)
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 store, rank, world = next(module.rendezvous("env://"))
-store.set("rank%d" % rank, str(rank))
+store.arrive("rank%d" % rank)
 store.wait(["rank%d" % r for r in range(world)])
 print("rendezvous %d/%d" % (rank, world), flush=True)
 """
@@ -86,6 +95,13 @@ def _launch(nproc, code, logdir, timeout):
         [os.fspath(_LAUNCH), "-n", str(nproc), "--backend", "nccl",
          "--logdir", logdir, "--", PYTHON, "-c", code],
         cwd=_REPO_ROOT, merge_stderr=True, timeout=timeout)
+    if done.returncode:
+        rank_logs = []
+        for path in sorted(Path(logdir).glob("rank*.log")):
+            text = path.read_text(errors="replace")
+            rank_logs.append("=== {} ===\n{}".format(path.name, text[-4000:]))
+        if rank_logs:
+            done.stdout += "\n" + "\n".join(rank_logs)
     return done, time.time() - start
 
 
@@ -179,8 +195,9 @@ class TestLaunchFailurePropagation(unittest.TestCase):
             values = text.strip().split("env=", 1)[1].split(",")
             self.assertEqual(values[:2], [str(rank), "2"], text)
             self.assertNotEqual(values[2], "-", text)
-            self.assertTrue(values[4].isdigit(), text)
-            masters.add(tuple(values[3:]))
+            self.assertTrue(values[4].isdigit() and int(values[4]) > 0, text)
+            self.assertEqual(values[5], "1", text)
+            masters.add(tuple(values[3:5]))
         self.assertEqual(len(masters), 1, masters)
 
     def test_env_rendezvous_reaches_every_rank(self):

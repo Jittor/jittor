@@ -413,3 +413,18 @@ def test_skip_reason_summary_and_threshold_are_wired():
     # and the sixth a placeholder reason string.
     assert "_OTHER_SKIP_REASONS[reason] += 1" in source
     assert "_OTHER_SKIP_REASONS.most_common(10)" in source
+
+
+@pytest.mark.parametrize("reason, bucket", [
+    ("optional dependency accelerate is not installed", "environment"),
+    ("Accelerate is not installed", "environment"),
+    ("optional oneDNN library is unavailable", "environment"),
+    ("opt-in real OpenMMLab training gate", "opt-in"),
+    ("opt-in source-bound VERL training gate", "opt-in"),
+    ("opt-in Longformer 32768-token gate", "opt-in"),
+    ("unexpected missing capability", "other"),
+])
+def test_full_gate_skip_reason_classification(reason, bucket):
+    policy = importlib.import_module("_helpers.pytest_policy")
+    assert policy.classify_skip_reason_bucket(reason) == bucket
+    assert policy._environment_explains({reason.lower()}) == (bucket != "other")

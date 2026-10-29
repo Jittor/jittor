@@ -38,7 +38,6 @@ napoleon_google_docstring = True
 napoleon_numpy_docstring = True
 intersphinx_mapping = {
     "python": ("https://docs.python.org/3", None),
-    "numpy": ("https://numpy.org/doc/stable/", None),
     "pytorch": ("https://pytorch.org/docs/stable/", None),
 }
 intersphinx_cache_limit = 7
@@ -58,6 +57,7 @@ nitpick_ignore = [
     ("py:class", "jittor.jittor_core.Var"),
     ("py:class", "keepdim"),
     ("py:class", "number"),
+    ("py:class", "numpy.ndarray"),
     ("py:class", "optional"),
     ("py:class", "string"),
     ("py:func", "matrix_norm"),

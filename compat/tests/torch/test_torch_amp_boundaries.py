@@ -87,7 +87,7 @@ class TestAmpBoundaries(cu.JittorTestCase):
                 fn = getattr(torch.nn.functional, operation)
                 with torch.autocast(_region(device), dtype=torch.bfloat16):
                     output = fn(x, weight, bias)
-                self.assertEqual(str(output.dtype), "torch.bfloat16")
+                self.assertEqual(str(output.dtype), "torch.bfloat16", msg=operation)
                 _resident(self, output, device)
                 np.testing.assert_array_equal(output.float().numpy(), np.full(shape, 99840.))
                 output.float().sum().backward()

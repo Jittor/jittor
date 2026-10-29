@@ -21,9 +21,24 @@ def foreach_zero_(tensors):
             if tensor.is_leaf:
                 raise RuntimeError("a leaf Variable that requires grad is being used in an in-place operation.")
             raise NotImplementedError("_foreach_zero_ differentiable tensor lists are unsupported")
+    from jittor._runtime import step_capture
+    if step_capture.active() or any(tensor._has_view_provenance() for tensor in tensors):
+        with owner.jt.no_grad():
+            for tensor in tensors:
+                tensor.zero_()
+        return tensors
+
+    from jittor._core.var import device_scope_like
     with owner.jt.no_grad():
+        zeros = []
         for tensor in tensors:
-            tensor.zero_()
+            with device_scope_like(tensor):
+                zeros.append(owner.jt.zeros(tensor.shape, tensor.dtype))
+        # All pending snapshots see the old bytes, and all zero sources are
+        # built together before any storage-preserving writes begin.
+        owner.jt.sync_all()
+        for tensor, value in zip(tensors, zeros):
+            tensor._copy_into(value, False)
     return tensors
 
 

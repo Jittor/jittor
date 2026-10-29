@@ -54,7 +54,7 @@ Jittor 一次完整运行 328.13 s，含全新 CPU 核心与算子编译；独�
 测试入口为
 [`test_datatrove_compat.py`](../../compat/tests/torch/test_datatrove_compat.py)，
 双解释器命令见
-[`datatrove-torch-compat`](../../agent/skills/datatrove-torch-compat/SKILL.md)。
+[`datatrove-torch-compat`](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/datatrove-torch-compat/SKILL.md)。
 原始日志、环境身份、安装源码校验和 Slurm 结果位于
 `$JITTOR_LAB_ROOT/_state/datatrove/publish-20261024/`，未版本化。
 

@@ -28,8 +28,11 @@ def _columns(report):
 class TestProfiler(unittest.TestCase):
     def test_profiler(self):
         warmup, rerun = 10, 100
-        a = jt.rand(1000,1000)
-        b = jt.rand(1000,1000)
+        # The report arithmetic is independent of matrix size. Keep this
+        # small enough for CPUs without an accelerated matmul library: the
+        # profiler repeats the operation up to 100 times.
+        a = jt.rand(128,128)
+        b = jt.rand(128,128)
         jt.sync_all()
         with jt.profile_scope(warmup, rerun, profiler_record_peek=1) as rep:
             jt.matmul(a, b).sync()

@@ -223,8 +223,7 @@ CPU_TORCH_ORACLE_TESTS = (
     # real PyTorch; in the native gate they skip for the oracle's absence.
     "tests/nn/test_state_dict_dtypes.py::TestStateDictDtypes::"
     "test_torch_conversion_keeps_every_dtype",
-    "tests/nn/test_state_dict_dtypes.py::TestStateDictDtypes::"
-    "test_values_survive_the_conversion",
+    "tests/nn/test_state_dict_dtypes.py::TestStateDictDtypes::test_values_survive_the_conversion",
     "tests/nn/test_state_dict_dtypes.py::TestStateDictDtypes::"
     "test_a_value_that_float32_cannot_hold",
     "tests/serialization/test_native_serialization_ownership.py::"
@@ -625,6 +624,7 @@ def _by_process_mode(targets):
 #: fast tier and fails in the full one because a dependency was only in the
 #: latter is a difference nobody can read off the failure.
 CPU_GATE_REQUIREMENTS = (
+    ASV,
     "astunparse==1.6.3",
     IPYKERNEL,
     JUPYTEXT,
@@ -1357,12 +1357,10 @@ def packaging(session):
             # never pass this audit.
             with zipfile.ZipFile(str(wheel)) as archive:
                 records = [
-                    name for name in archive.namelist()
-                    if name.endswith(".dist-info/RECORD")
+                    name for name in archive.namelist() if name.endswith(".dist-info/RECORD")
                 ]
                 if len(records) != 1:
-                    session.error(
-                        "expected exactly one wheel RECORD, found %d" % len(records))
+                    session.error("expected exactly one wheel RECORD, found %d" % len(records))
                 record_args = (
                     "--allow-content-change",
                     hashlib.sha256(archive.read(records[0])).hexdigest(),

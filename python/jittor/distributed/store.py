@@ -352,6 +352,11 @@ class TCPStore(Store):
             _TCPStoreServer(self.host, self.port, self._timeout)
             if is_master else None
         )
+        if self._server is not None:
+            # Port 0 asks the kernel to choose and reserve an endpoint in one
+            # atomic bind. Publish the selected port before our own client (or
+            # any launched worker) connects to it.
+            self.port = int(self._server.socket.getsockname()[1])
         self._client = _TCPStoreClient(self.host, self.port, self._timeout)
         if wait_for_workers:
             self._client.request({

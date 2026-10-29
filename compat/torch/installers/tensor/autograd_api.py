@@ -11,6 +11,13 @@ def _register_leaf(v):
 
 def _initial_leaf_gradient(parameter, gradient):
     """Apply AccumulateGrad's dense layout contract without changing AD edges."""
+    # ZeRO-3 releases the visible parameter storage after forward while its
+    # original shape remains in ds_shape. Its backward hook consumes the full
+    # gradient before the parameter is gathered again.
+    full_shape = getattr(parameter, "ds_shape", None)
+    if (tuple(parameter.shape) == (0,) and full_shape is not None
+            and tuple(full_shape) == tuple(gradient.shape)):
+        return gradient
     sizes, strides = tuple(parameter.shape), parameter.stride()
     extent = 1
     dense = True
@@ -57,6 +64,22 @@ def _rg_set(self, v):
     _native = _context.state["tensor_native_api"]
     _native_requires_grad = _native['_native_requires_grad']
     v = bool(v)
+
+    def set_registered_leaf(tensor, enabled):
+        # Optimizer updates rebind a declared Parameter holder to the update
+        # expression. Torch still treats that holder as a leaf; make its
+        # current value a native leaf before applying a reversible freeze.
+        if not enabled:
+            from ...tensor_state import get_tensor_state
+            parameter_type = _context.state.get("Parameter")
+            if (parameter_type is not None
+                    and isinstance(tensor, parameter_type)
+                    and id(tensor) in get_tensor_state(_owner.jt).leaf_params
+                    and bool(_native_requires_grad.__get__(tensor, _NativeVar))
+                    and not tensor.is_backward_leaf):
+                tensor.start_grad()
+        _native_requires_grad.__set__(tensor, enabled)
+
     fsdp_entry = getattr(self, "_jittor_fsdp2_entry", None)
     fsdp_state = getattr(self, "_jittor_fsdp2_state", None)
     if fsdp_entry is not None and fsdp_state is not None:
@@ -79,10 +102,10 @@ def _rg_set(self, v):
             any_trainable = any(getattr(entry, "requires_grad", True)
                                 for entry in fsdp_state.true_fsdp_params)
             if isinstance(flat, _NativeVar):
-                _native_requires_grad.__set__(flat, any_trainable)
+                set_registered_leaf(flat, any_trainable)
                 if any_trainable:
                     _register_leaf(flat)
-    _native_requires_grad.__set__(self, v)
+    set_registered_leaf(self, v)
     if v:
         _register_leaf(self)
 

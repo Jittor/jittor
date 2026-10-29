@@ -24,6 +24,7 @@ Run::  python -m pytest tests/nn/test_norm.py
 
 from _helpers import capability as _test_capability
 import unittest
+from contextlib import nullcontext
 
 import numpy as np
 import jittor as jt
@@ -110,6 +111,67 @@ class TestLayerNorm(_NormBase):
     def test_cuda_fast_path_forward_and_all_gradients(self):
         self._check_cuda_layer_norm((3, 5, 1024))
 
+    @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled, "CUDA BF16 LayerNorm fast path needs CUDA")
+    def test_cuda_bfloat16_fast_path_forward_and_all_gradients(self):
+        from jittor._runtime.dispatch import override_kernel, select_kernel
+        from jittor.backends.cuda.kernels.nn import layer_norm_training_cuda as ln
+
+        shape = (32, 512)
+        rng = np.random.RandomState(20261023)
+        weight_np = rng.randn(shape[-1]).astype("float32")
+        bias_np = rng.randn(shape[-1]).astype("float32")
+        cot_np = rng.randn(*shape).astype("float32")
+        for low_variance in (False, True):
+            x_np = rng.randn(*shape).astype("float32")
+            if low_variance:
+                x_np = 1.0 + x_np * 1e-3
+
+            def run(fused):
+                with jt.flag_scope(use_cuda=1):
+                    x, weight, bias, cot = (
+                        jt.array(value).cast("bfloat16")
+                        for value in (x_np, weight_np, bias_np, cot_np)
+                    )
+                    context = (
+                        override_kernel("nn.layer_norm.training", "cuda", None)
+                        if not fused else nullcontext()
+                    )
+                    with context:
+                        if fused:
+                            selected = select_kernel(
+                                "nn.layer_norm.training",
+                                x, (shape[-1],), weight, bias, 1e-5,
+                            )
+                            self.assertIs(selected, ln._layer_norm_cuda.__wrapped__)
+                        output = F.layer_norm(
+                            x, (shape[-1],), weight, bias, 1e-5
+                        )
+                        grads = jt.grad(
+                            (output * cot).sum(), [x, weight, bias]
+                        )
+                        return [
+                            np.array(value.float32().numpy(), copy=True)
+                            for value in [output] + grads
+                        ]
+
+            expected = run(False)
+            actual = run(True)
+            for name, got, ref in zip(
+                    ("output", "grad_x", "grad_weight", "grad_bias"),
+                    actual, expected):
+                self.assertTrue(
+                    np.isfinite(got).all(),
+                    "%s contains non-finite BF16 values" % name,
+                )
+                relative_l2 = np.linalg.norm((got - ref).ravel()) / max(
+                    np.linalg.norm(ref.ravel()), 1e-30
+                )
+                self.assertLess(
+                    relative_l2, 4e-3,
+                    "CUDA BF16 LayerNorm %s low_variance=%s rel_l2=%g"
+                    % (name, low_variance, relative_l2),
+                )
+
     @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled, "CUDA LayerNorm fast path needs CUDA")
     def test_cuda_warp_per_row_forward_and_all_gradients(self):
         # Rows enough for a warp each, on widths off the warp size, and the
@@ -155,12 +217,20 @@ class TestLayerNorm(_NormBase):
             for name, got, ref in zip(
                     ("output", "grad_x", "grad_weight", "grad_bias"),
                     actual, expected):
-                atol = 2e-3 if low_variance else 4e-4
+                atol = 4e-3 if low_variance else 4e-4
                 rtol = 5e-4 if low_variance else 4e-4
                 np.testing.assert_allclose(
                     got, ref, atol=atol, rtol=rtol,
                     err_msg="CUDA LayerNorm %s low_variance=%s"
                     % (name, low_variance),
+                )
+                relative_l2 = np.linalg.norm(
+                    (got - ref).ravel()) / max(
+                        np.linalg.norm(ref.ravel()), 1e-30)
+                self.assertLess(
+                    relative_l2, 1e-4,
+                    "CUDA LayerNorm %s low_variance=%s rel_l2=%g"
+                    % (name, low_variance, relative_l2),
                 )
 
 

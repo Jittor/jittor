@@ -42,6 +42,28 @@ static PyObject* pop_py_object_pickle(RingBuffer* rb, uint64& __restrict__ offse
 }
 
 
+static void push_array_metadata(
+        RingBuffer* rb, const ArrayArgs& args, uint64& __restrict__ offset) {
+    auto ndim = args.shape.size();
+    CHECK(ndim <= NanoVector::max_size) << "Array rank exceeds RingBuffer limit:" << ndim;
+    rb->push_t<uint8>(ndim, offset);
+    for (int i=0; i<ndim; ++i)
+        rb->push_t<int64>(args.shape[i], offset);
+    rb->push_t<NanoString::ns_t>(args.dtype.data, offset);
+}
+
+static void pop_array_metadata(
+        RingBuffer* rb, ArrayArgs& args, uint64& __restrict__ offset) {
+    auto ndim = rb->pop_t<uint8>(offset);
+    CHECK(ndim <= NanoVector::max_size) << "Invalid array rank in RingBuffer:" << (int)ndim;
+    NanoVector shape;
+    for (int i=0; i<ndim; ++i)
+        shape.push_back_check_overflow(rb->pop_t<int64>(offset));
+    args.shape = std::move(shape);
+    args.dtype.data = rb->pop_t<NanoString::ns_t>(offset);
+}
+
+
 static void push_py_object(RingBuffer* rb, PyObject* obj, uint64& __restrict__ offset) {
     if (PyLong_CheckExact(obj)) {
         int64 x = PyLong_AsLongLong(obj);
@@ -106,8 +128,7 @@ static void push_py_object(RingBuffer* rb, PyObject* obj, uint64& __restrict__ o
             args.dtype = get_type_str(arr);
             size = PyArray_Size(arr);
             if (!is_c_style(arr)) {
-                rb->push_t<NanoVector>(args.shape, offset);
-                rb->push_t<NanoString>(args.dtype, offset);
+                push_array_metadata(rb, args, offset);
                 rb->push(size, offset);
                 args.ptr = rb->get_ptr(size, offset);
 #if defined(__linux__) || defined(_WIN32)
@@ -134,8 +155,7 @@ static void push_py_object(RingBuffer* rb, PyObject* obj, uint64& __restrict__ o
                 args.ptr = arr->data;
             }
         }
-        rb->push_t<NanoVector>(args.shape, offset);
-        rb->push_t<NanoString>(args.dtype, offset);
+        push_array_metadata(rb, args, offset);
         rb->push(size, offset);
         std::memcpy(rb->get_ptr(size, offset), args.ptr, size);
         return;
@@ -184,8 +204,7 @@ static PyObject* pop_py_object(RingBuffer* rb, uint64& __restrict__ offset, bool
     }
     if (t==5 || t==7) {
         ArrayArgs args;
-        args.shape = rb->pop_t<NanoVector>(offset);
-        args.dtype = rb->pop_t<NanoString>(offset);
+        pop_array_metadata(rb, args, offset);
         int64 size = args.dtype.dsize();
         for (int i=0; i<args.shape.size(); i++)
             size *= args.shape[i];

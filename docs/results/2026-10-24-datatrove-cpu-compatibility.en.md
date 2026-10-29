@@ -35,7 +35,7 @@ This round's repository layout, Markdown link hygiene and release manifest check
 
 Full structure first round was 1513 passed, 6 skipped, 1 failed; the only failure is the verification environment lacking ASV. After completing the repository-pinned `asv==0.6.6`, the above 43 re-checks include all ASV entry, gate scope, private path and documentation structure checks. The first-round failure record is retained, not rewritten as a full pass.
 
-Test entry is [`test_datatrove_compat.py`](../../compat/tests/torch/test_datatrove_compat.py), dual-interpreter commands in [`datatrove-torch-compat`](../../agent/skills/datatrove-torch-compat/SKILL.md). Raw logs, environment identity, installed source verification and Slurm results are in `$JITTOR_LAB_ROOT/_state/datatrove/publish-20261024/`, unversioned.
+Test entry is [`test_datatrove_compat.py`](../../compat/tests/torch/test_datatrove_compat.py), dual-interpreter commands in [`datatrove-torch-compat`](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/datatrove-torch-compat/SKILL.md). Raw logs, environment identity, installed source verification and Slurm results are in `$JITTOR_LAB_ROOT/_state/datatrove/publish-20261024/`, unversioned.
 
 | Unversioned artifact | SHA256 |
 | --- | --- |

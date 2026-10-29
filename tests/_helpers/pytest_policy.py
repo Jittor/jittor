@@ -717,6 +717,9 @@ _SKIP_BUCKET_PATTERNS = {
         # A documented known-failing case with its own switch; see the
         # note on the same pattern in `gate_scope.ENVIRONMENT_SKIP_PATTERNS`.
         "jt_test_thread_race",
+        "opt-in real",
+        "opt-in source-bound",
+        "opt-in longformer",
     ),
     # The subject itself says the case does not apply: an OpInfo entry that
     # declares no second derivative, no numpy reference, or no differentiable

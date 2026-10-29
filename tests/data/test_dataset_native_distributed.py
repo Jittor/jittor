@@ -103,6 +103,10 @@ def test_dataset_set_epoch_rejects_invalid_epoch(epoch, error):
 
 def test_dataset_worker_seed_is_repeatable_and_rank_specific():
     seed = _dataset_worker_seed(17, 3, 0, 2)
+    assert all(
+        0 <= _dataset_worker_seed(17, 3, 0, worker_id) <= 0x7fffffff
+        for worker_id in range(8)
+    )
     assert seed == _dataset_worker_seed(17, 3, 0, 2)
     assert seed != _dataset_worker_seed(17, 3, 1, 2)
     assert seed != _dataset_worker_seed(17, 4, 0, 2)

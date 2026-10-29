@@ -102,8 +102,11 @@ class PublicAutomoduleBridge(RstDirectiveBridge):
         inventory_path = Path(self.env.srcdir) / "api" / "inventory.json"
         self.env.note_dependency(str(inventory_path))
         inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
+        docname = self.env.docname
+        if docname.endswith(".en"):
+            docname = docname[:-3]
         for page in inventory["pages"]:
-            if page["docname"] == self.env.docname:
+            if page["docname"] == docname:
                 return {name for name in page["objects"] if name.rsplit(".", 1)[0] == module_name}
         raise RuntimeError("API inventory has no page for {}".format(self.env.docname))
 
@@ -117,12 +120,18 @@ class PublicAutomoduleBridge(RstDirectiveBridge):
         missing = sorted(rich_objects - discovered)
         if missing:
             raise RuntimeError("stable API objects are not publicly exported: {}".format(missing))
-        lines = [".. py:module:: {}".format(module_name), ""]
+        english_mirror = self.env.docname.endswith(".en")
+        lines = [".. py:module:: {}".format(module_name)]
+        if english_mirror:
+            lines.append("   :no-index:")
+        lines.append("")
         for member, _value, directive in members:
             qualified = module_name + "." + member
             if qualified not in rich_objects:
                 continue
             lines.append(".. {}{}:: {}".format(_ALIAS_PREFIX, directive, qualified))
+            if english_mirror:
+                lines.append("   :no-index:")
             lines.append("")
         return "\n".join(lines) + "\n"
 

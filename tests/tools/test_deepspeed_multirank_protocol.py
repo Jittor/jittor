@@ -185,7 +185,9 @@ def test_jtrun_wrapper_preserves_public_launcher_identity_and_rejects_inconsiste
     environment = {"RANK": "1", "WORLD_SIZE": "2", "LOCAL_RANK": "0",
                    "JT_NCCL_RANK": "1", "JT_NCCL_WORLD_SIZE": "2", "JT_NCCL_LOCAL_RANK": "0",
                    "JT_NCCL_ROOTINFO_FILE": str(control / "nccl-rootinfo.bin"),
-                   "CUDA_VISIBLE_DEVICES": "GPU-example", "JITTOR_DIST_RENDEZVOUS_DIR": str(control)}
+                   "CUDA_VISIBLE_DEVICES": "GPU-example", "JITTOR_DIST_RENDEZVOUS_DIR": str(control),
+                   "MASTER_ADDR": "127.0.0.1", "MASTER_PORT": "29500",
+                   "JITTOR_LAUNCHER_RUN_ID": "test-run", "JITTOR_LAUNCHER_EXTERNAL_STORE": "1"}
     for key, value in environment.items():
         monkeypatch.setenv(key, value)
     observed = {}

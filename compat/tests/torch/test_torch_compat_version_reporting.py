@@ -15,6 +15,8 @@ import unittest
 import jittor as jt
 import torch
 
+from _helpers.child_process import run_python_child
+
 
 class TestTorchApiVersionReporting(unittest.TestCase):
     #: ``__jittor_version__`` is the name the *torch namespace* carries for
@@ -26,8 +28,15 @@ class TestTorchApiVersionReporting(unittest.TestCase):
         torch.__version__ = self._saved
 
     def test_by_default_version_is_jittors_own(self):
-        self.assertEqual(torch.__version__, jt.__version__)
-        self.assertNotEqual(torch.__version__, torch.__torch_version__)
+        # A prior test can temporarily request Torch's API version in this
+        # worker. Check the initial binding in a fresh process.
+        run_python_child(["-c", """\
+import jittor as jt
+import torch
+
+assert torch.__version__ == jt.__version__
+assert torch.__version__ != torch.__torch_version__
+"""], check=True)
 
     def test_the_torch_api_level_is_separately_available(self):
         self.assertEqual(torch.version.__version__, torch.__torch_version__)

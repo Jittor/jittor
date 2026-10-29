@@ -21,17 +21,17 @@ Indexed by symptom:
 
 | What you see | Which entry |
 | --- | --- |
-| `1/0` gives `nan`, and a fully masked attention row does not become `nan` | {ref}`IEEE special-value arithmetic <numerics-ieee>` |
-| A tiny positive number becomes 0 on CUDA, `log` gives `-inf`, `count_nonzero` is off by one | {ref}`CUDA subnormals <numerics-subnormal>` |
-| `x.max()` cannot see a NaN in the tensor; the sign of `maximum(-0.0, 0.0)` | {ref}`maximum/minimum vs max/min <numerics-minmax>` |
-| float64 `log`/`sin` only have float32 precision on CUDA | {ref}`float64 unary math <numerics-float64>` |
-| Only `auto_flush_ops` changed; the loss is bit-identical but the gradients differ | {ref}`convolution algorithm auto-selection <numerics-autotune>` |
-| `profile_scope` reports 0 rows; changing a flag changes the result | {ref}`consequences of auto_flush_ops <numerics-flush>` |
-| Summing sixteen million numbers on CPU is much worse than NumPy | {ref}`CPU reduction block accumulation <numerics-reduce>` |
+| `1/0` gives `nan`, and a fully masked attention row does not become `nan` | {ref}`IEEE special-value arithmetic <numerics-en-ieee>` |
+| A tiny positive number becomes 0 on CUDA, `log` gives `-inf`, `count_nonzero` is off by one | {ref}`CUDA subnormals <numerics-en-subnormal>` |
+| `x.max()` cannot see a NaN in the tensor; the sign of `maximum(-0.0, 0.0)` | {ref}`maximum/minimum vs max/min <numerics-en-minmax>` |
+| float64 `log`/`sin` only have float32 precision on CUDA | {ref}`float64 unary math <numerics-en-float64>` |
+| Only `auto_flush_ops` changed; the loss is bit-identical but the gradients differ | {ref}`convolution algorithm auto-selection <numerics-en-autotune>` |
+| `profile_scope` reports 0 rows; changing a flag changes the result | {ref}`consequences of auto_flush_ops <numerics-en-flush>` |
+| Summing sixteen million numbers on CPU is much worse than NumPy | {ref}`CPU reduction block accumulation <numerics-en-reduce>` |
 
-What does not hold yet is listed separately in the {ref}`last section <numerics-open>` — **every entry there currently computes the wrong answer**.
+What does not hold yet is listed separately in the {ref}`last section <numerics-en-open>` — **every entry there currently computes the wrong answer**.
 
-(numerics-ieee)=
+(numerics-en-ieee)=
 ## IEEE special-value arithmetic
 
 **What you see.** Arithmetic involving infinities and NaN gives well-defined
@@ -81,7 +81,7 @@ message about what changed, and separately asserts the optimization level is sti
 present — otherwise "delete the flag and put nothing in its place" would satisfy
 the first assertion while making things worse.
 
-(numerics-subnormal)=
+(numerics-en-subnormal)=
 ## CUDA subnormals are flushed to zero
 
 This is a **decision**, not a defect, but it was not written down anywhere, so
@@ -147,7 +147,7 @@ case what should change is this document and that test, not letting them keep
 describing a world that no longer holds. Its teeth are that the two tiers **must
 actually differ**: pointing the `strict` case at the default tier makes it red.
 
-(numerics-minmax)=
+(numerics-en-minmax)=
 ## maximum/minimum vs max/min: NaN and signed zero
 
 **What you see.** Elementwise `maximum`/`minimum` and the `max()`/`min()`
@@ -197,7 +197,7 @@ devices, compared with each other and with NumPy, so a future divergence cannot
 slip through because "each device looks reasonable on its own". On the unfixed
 tree, 16 of the 22 failed.
 
-(numerics-float64)=
+(numerics-en-float64)=
 ## float64 unary math is no longer narrowed on CUDA
 
 **What you see.** float64 `log`, `sqrt`, `sin`, `tan`, `tanh`, `arctan`, `arcsin`,
@@ -231,7 +231,7 @@ two devices. The inputs are chosen so the float32 answer is **qualitatively** wr
 several tolerance-style tests passed on the old build. It also pins both "these
 inputs really do collapse in float32" and "float32 did not change".
 
-(numerics-autotune)=
+(numerics-en-autotune)=
 ## Convolution algorithm auto-selection changes gradients
 
 This entry differs from the ones above: what it changes is not some operator's
@@ -303,7 +303,7 @@ three hundred times smaller than the algorithm effect, on the order of "the
 accumulation order changed". Not chased further; recorded here so it is not
 treated as zero. This is `KI-EXEC-003`, not closed.
 
-(numerics-flush)=
+(numerics-en-flush)=
 ## Consequences of auto_flush_ops
 
 `jt.flags.auto_flush_ops = N` flushes the pending graph early: once every `N`
@@ -319,7 +319,7 @@ Three things that have already happened:
 
 1. **It changes gradients** — not because it computes anything wrong itself, but
    because it changes memory residency, and cuDNN's algorithm auto-selection
-   depends on residency. See the {ref}`previous section <numerics-autotune>`. This
+   depends on residency. See the {ref}`previous section <numerics-en-autotune>`. This
    is **the only one still open**.
 
 2. **It once segfaulted a ResNet50-style backbone on CUDA.** Five bottleneck
@@ -362,7 +362,7 @@ gradients: a fix that "stops the crash but has backward read the wrong bytes"
 passes a "does it run" check and fails here. It disables cuDNN auto-tuning so the
 `3.8e-4` band cannot hide smaller effects.
 
-(numerics-reduce)=
+(numerics-en-reduce)=
 ## CPU reduction block accumulation
 
 **What you see.** On CPU, float32 `sum`/`mean` relative error **does not grow with
@@ -396,7 +396,7 @@ falls outside the premise that "the reduced dimension is the innermost one".
 
 `max`/`min` reductions are also out of scope: their fold is strictly associative,
 so reordering brings no accuracy gain. Their problems are different; see the
-{ref}`section above <numerics-minmax>` and the open items below.
+{ref}`section above <numerics-en-minmax>` and the open items below.
 
 **Tests**: [`tests/ops/test_reduce_accuracy.py`](https://github.com/Jittor/jittor/blob/master/tests/ops/test_reduce_accuracy.py),
 9 cases, both CPU and CUDA sets. It asserts the **growth shape**, not a threshold:
@@ -406,7 +406,7 @@ on the same input; there is also a three-dimensional nested shape specifically t
 catch fixes that "only changed the innermost loop". Fixed thresholds go red and
 green with the machine and compiler regardless of defects, so none were used.
 
-(numerics-open)=
+(numerics-en-open)=
 ## What does not hold yet
 
 Each of the following has been reproduced and none are fixed — not wrong answers,

@@ -13,7 +13,7 @@
 
 ## 上游分母
 
-入口是 [`registry_inventory.py`](../../agent/skills/torch-compat-repo-runbook/scripts/registry_inventory.py)，
+入口是 [`registry_inventory.py`](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/torch-compat-repo-runbook/scripts/registry_inventory.py)，
 只读 Git 跟踪的源文件，不导入 Torch 或下游库。必须是干净的 checkout，记录完整 SHA、
 remote、源码版本与注册源文件 SHA256；每次 scorecard 重新枚举，不接受手写分母。
 
@@ -228,12 +228,12 @@ SCM wheel 的逐阶段严格绑定继续保留。
 
 默认仍将证据绑定当前 HEAD。审计历史报告可显式传 `--baseline <完整40位Jittor SHA>`，该 SHA 必须是本地 Git 中的真实 commit；输出记录 `baseline_policy=explicit-historical`、测量 baseline 与当前 `auditor_commit`。这只重新审计旧提交的证据，不能证明当前代码也通过。不得将旧测量中的 SHA 改成当前 HEAD；当前树的新验收须重新执行计算。
 
-现有 [`verify_repo.py`](../../agent/skills/torch-compat-repo-runbook/scripts/verify_repo.py)
+现有 [`verify_repo.py`](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/torch-compat-repo-runbook/scripts/verify_repo.py)
 复用生态 runner，可快速生成双方原始元数据和数值诊断。它不执行输入扰动、多步优化器
 轨迹或完整平台/进程峰值采集，因此输出明确标 `scorecard_eligible=false`；不要把单 case
 的 `passed` 自动转换为完整 scorecard 行。
 
-多步补证可运行 [`training_probe.py`](../../agent/skills/torch-compat-repo-runbook/scripts/training_probe.py)：
+多步补证可运行 [`training_probe.py`](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/torch-compat-repo-runbook/scripts/training_probe.py)：
 同一个已注册 builder，独立 oracle 保存完整初始权重，candidate 加载后运行相同 SGD。
 工具保留 upstream tuner 的 trainable/frozen 划分，输出每步 loss、参数/输入梯度与全部参数
 轨迹，冻结参数发生变化、缺请求梯度、非有限值、device 不一致都会直接失败。它对原始

@@ -31,7 +31,8 @@ def test_deployed_torch_entry_defaults_to_independent_types(tmp_path):
         subprocess.run([sys.executable, "-c",
             "import jittor as jt; import torch; "
             "assert torch is not jt; assert torch.Tensor is not jt.Var"],
-            check=True, timeout=60)
+            # A concurrent cold JIT build can hold the shared cache lock.
+            check=True, timeout=300)
         print("DEPLOYED_INDEPENDENT_OK")
     """), str(site), str(tmp_path)], cwd=str(tmp_path),
         without_torch_mode=True, merge_stderr=True)

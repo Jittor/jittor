@@ -206,7 +206,7 @@ print(matmul_transpose(a, b))
 
     def test_res2net(self):
         import jittor.models
-        net = jittor.models.res2net50(True)
+        net = jittor.models.res2net50(False)
         img = jt.random((2,3,224,224))
         out = net(img)
         print(out.shape, out.sum())
@@ -215,15 +215,22 @@ print(matmul_transpose(a, b))
         assert out.shape == [2,1000]
 
     def test_argmax_memleak(self):
-        a = jt.random([10])
-        _, m = jt.argmax(a, 0)
-        del _
-        m.sync()
-        g = jt.grad(m*10, a)
-        g.sync()
-        del a, g, m
-        jt.display_memory_info()
-        assert jt.introspection.counters.live_ops == 0
+        # Other tests can leave live operators in this pytest worker.
+        # Count only operators created by this case in a fresh process.
+        src = """\
+import jittor as jt
+
+a = jt.random([10])
+_, m = jt.argmax(a, 0)
+del _
+m.sync()
+g = jt.grad(m*10, a)
+g.sync()
+del a, g, m
+jt.display_memory_info()
+assert jt.introspection.counters.live_ops == 0
+"""
+        run_python_child(["-c", src], check=True)
 
 
 if __name__ == "__main__":

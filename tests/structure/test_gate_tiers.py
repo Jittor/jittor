@@ -202,7 +202,8 @@ class TestFastTierIsStillWorthRunning(unittest.TestCase):
         the record of what has been measured to need it.
         """
         for relative in ("compat/tests/torch/test_torch_shim_aliases.py",
-                         "compat/tests/torch/test_torch_compat_fsdp2.py"):
+                         "compat/tests/torch/test_torch_compat_fsdp2.py",
+                         "tests/build/test_probe_cache.py"):
             source = (REPO_ROOT / relative).read_text(encoding="utf-8")
             self.assertIn(
                 "xdist_group", source,

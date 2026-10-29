@@ -91,7 +91,10 @@ else:
 
 
 def test_native_tp_cpu_bf16_bias_input_is_quantized():
+    from jittor._runtime.backend_libraries import get_library_ops
     from jittor._runtime.fallback import forbid_backend_fallbacks
+    # Loading BLAS before this case must not change the autocast bias boundary.
+    get_library_ops("blas", load=True)
     with forbid_backend_fallbacks():
         case.assert_row_bf16_bias()
 

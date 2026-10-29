@@ -59,6 +59,9 @@ jobs:
       JT_USE_PARALLEL_OP_COMPILER: '0'
       PYTHONPATH: ''
     steps:
+      - name: Set Jittor cache path
+        shell: pwsh
+        run: '"JITTOR_HOME=$env:RUNNER_TEMP/windows-msvc/home" >> $env:GITHUB_ENV'
       - uses: actions/checkout@v6
         with:
           persist-credentials: false

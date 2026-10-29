@@ -94,6 +94,9 @@ ENVIRONMENT_SKIP_PATTERNS = (
     # files as unexplained and the whole selection exited non-zero with every
     # test passing.
     "tensordict", "mmcv", "mmengine", "deepspeed", "trellis", "datatrove",
+    "accelerate", "onednn",
+    # Explicit optional ecosystem gates remain opt-in in the general full suite.
+    "opt-in real", "opt-in source-bound", "opt-in longformer",
     # The vLLM adapter tests bind the installed package when it is present and
     # skip when it is not; the harness-only cases run without it either way.
     "vllm",
