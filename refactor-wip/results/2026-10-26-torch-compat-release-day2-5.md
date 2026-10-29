@@ -1,5 +1,28 @@
 # Torch Compatibility Release Acceptance: 2026-10-26 Day 2–5 Continuation
 
+## 2026-10-30 df45 BERT 代表格三轮性能证据
+
+基于 df45 工作树及独立 CUDA 性能缓存，r18 完成 BERT base、B8/S256、FP32、固定合成 token/mask、实际 AdamW 的三轮交替配对；每端每轮固定 16 次 warmup、10 个同步热样本，另做独立的 3 次 memory 与 3 次 CUDA attribution 更新。六阶段均有 33 次更新后的有限 loss 记录；加载时逐项核对 199 个参数和 2 个 buffer，197 个梯度有限且位于实际 CUDA，fallback 为 0。该配置不是容量边界或真实下游任务质量实验。
+
+三轮共 30 个热样本的 pooled 中位耗时：PyTorch 118.458 ms，Jittor 155.516 ms，JT/PT 为 1.31283，超过原 1.10 的时延诊断阈值；逐轮中位数比为 1.4556、1.2137、1.2680。pooled p95 分别约 130.296/166.738 ms，标准差约 13.350/19.875 ms。分离测量的 allocator live 峰值为 PT 3,343,963,136 字节、JT 3,613,674,496 字节，比值 1.08066，低于 1.10 的该代表格诊断阈值；其为各框架所报告的 allocator 指标，不能当作总设备显存或整个发布验收。采样的进程 NVML 峰值分别为 3996/4544 MiB。
+
+这项新协议明确使用 eager、固定 math 设置和 16 次 warmup，memory/attribution 与热计时分离，与历史固定 4 次预热等协议并非同口径；加载和首步含观测开销，热样本间写记录可能影响采样。五次稳定入场与阶段 NVML 为离散观察，无法排除全部瞬态负载或权限不可见进程；未证明厂商 kernel 内部算术精度。原 Day4–5 全范围性能与 near-capacity 显存验收仍未完成。旧 r7、r11、r16 失败及其原因不确定性均保留，不回写成通过。
+
+六阶段及 controller 自然 rc0；独立 systemd 单元终态成功且 cgroup 消失。执行前后功能缓存与已封存 SDPA 缓存快照一致；私有性能缓存既有 math probe 两个文件仅 mtime 变化且内容、身份与大小经核验，操作锁文本变化，终态锁和可见任务进程、缓存 FD 均空；端点快照不证明期间没有瞬时写入。独立终审 `/data6/cgq/jittor-lab/_state/release-day23/20261030-main-df45-bert-performance-r18-independent-terminal-r1/terminal-audit.json`，SHA-256 `08d7958485ff53880819f91418125b44a6e503354c82c9dcd084bbb5c9fb18e8`。
+
+## 2026-10-30：df45 BERT 性能 r16 单对诊断及失败终态
+
+r16 的固定 B8/S256 FP32 配置仅完成一对 PyTorch/Jittor：10 个热样本中位数分别为 96.51/154.35 ms，JT/PT 为 1.599；独立三步 memory 阶段分别记录 PT allocator peak 3,343,963,136 B 和 JT pool peak 3,613,674,496 B，比值 1.081，两端分配器指标口径存在差异。两阶段各自 rc0，配对条件检查通过；该结果仅作单对诊断，未完成正式三轮验收，也不是近容量结果。逐步有限性、设备、fallback、采样和数学条件的具体证据及限制见独立审计。
+
+控制器终态为失败：性能缓存前后快照无新增或删除，两个既有探针 tmp 源文件内容哈希与大小不变、mtime 变化，既有锁文件内容与 mtime 变化，保护缓存端点快照不变；端点快照不能排除瞬态写入。控制器在 finally 中用缓存元数据失败覆盖先发异常，故未继续到第二对的直接原因未知，不能推断为特定负载或编译问题。锁及进程的陈述以各次实际审计为准，权限或采样不可见范围不外推。旧 r11 失败和本次失败均保留，未自动重试。独立审计：`/data6/cgq/jittor-lab/_state/release-day23/20261030-main-df45-bert-performance-r16-pair-independent-audit-r1/terminal-audit.json`，SHA-256 `ed6b0f377c9c9de05b62c518f3447fdc9a91dac003200d42a14b4b55bf0fb4db`。
+
+
+## 2026-10-30 df45 BERT B8/S256 配对性能 r11 失败保留
+
+在工作树源码指纹 df45a56585f68874e8f1c64a80c9fff276bfe795e80c4d079cd06a8e7e528fc3、执行时 HEAD e92681d291272db1f1b9d0e3fe18cf35775a4de2 下，r11 的 PT0 阶段完成并保存 10 个热态样本；JT0 的首次更新及 4 次 warmup 按控制流返回后，合并的 JIT 缓存或 allocator 稳定性断言失败。该次未保存 warmup 各次缓存差异与 allocator 值，无法判断是哪个条件触发，也不能声称已测出具体不稳定原因；JT 热态样本数为 0，没有完成 PT/JT 配对性能比值。失败保留，不自动重试。
+
+独立终审确认独立性能缓存端点新增 277 项、没有删除，既有项仅锁文件文本变化；受保护缓存和绑定产品前后未变。锁终态无内核记录及可见持有者，但进程/FD 权限拒读与离散采样仍是边界，缓存端点对比也不能证明期间没有瞬时改写或确定各 warmup 的 JIT 活动。该结果不覆盖近容量格、完整性能验收或其他版本。独立终审：/data6/cgq/jittor-lab/_state/release-day23/20261030-main-df45-bert-performance-r11-independent-failure-terminal-r1/terminal-audit.json，SHA-256 1f1541c3c850494b213acd9891c966e449fff823846547b87ff839e914284cba。
+
 ## 2026-10-30 df45 独立性能冷编与 BERT 代表格首阶段失败
 
 为隔离旧功能缓存和已封存的 SDPA 性能缓存，基于 df45 工作树执行源码指纹 `df45a56585f68874e8f1c64a80c9fff276bfe795e80c4d079cd06a8e7e528fc3` 在新私有缓存真实冷编 CUDA：231 个编译单元，约 400.13 秒，自然退出成功；CUDA sentinel 实测数值 `[3, 5]`，实际 dispatch 为 CUDA 设备 0，fallback 前后为 0。旧功能缓存与 SDPA 封存缓存的冷编前后快照一致，不能由端点快照推断期间不存在瞬时写入。独立冷编终审 `/data6/cgq/jittor-lab/_state/release-day23/20261030-main-df45-bert-performance-cold-independent-terminal-r1/terminal-audit.json`，SHA-256 `6fd06492e5eb57e7f07e48661c1e0c9f16d1ee8bf8041fda8bb78760d577224b`。该产物来自工作树，不等同于纯提交树产品。
