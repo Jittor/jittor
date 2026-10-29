@@ -1,5 +1,19 @@
 # 2026-10-21 工作区快照与本机接续交接
 
+## 2026-10-30 任务证据更新（历史记录按原身份保留）
+
+HEAD-only r12 两卡实际训练与恢复使用 **r10 原生 core 和 Python 根目录，加 r12 两个 scheduler Python 模块 overlay**，并非完整 r12 冷构建。FP32 tiny BERT LoRA Trainer 两 rank 完成 full 4 次更新、checkpoint 2 新进程续训至 4；两卡真实 CUDA、fallback 0，有限梯度及参数更新被检查。JT/PT 两侧各 rank 平均 microbatch loss 分别为 0.34503534/0.34503534、0.34377843/0.34377844；固定 16 样本短程证据不能推及长程质量、AMP 或多于两卡。独立终审 fc2fc52657c9e6a31ef5ae9d8c2be617833018ffdd4ee24e3579ca599436fc17。
+
+主树 df45 是另一源码身份：BERT seed821 配置 BF16 从头完成 full100，记录的参数和优化器状态为 FP32；训练前 initial evaluation 显式 autocast 下的 CUDA logits 为 BF16。projection dtype 和 autocast 状态按跨阶段集合记录，未标记训练时段，因此训练期间 BF16 覆盖未独立确认；历史 PT 报告同样未分阶段。训练结束后生命周期保存/重载对照使用 keep_fp32_wrapper=False 移除 forward 包装；两 epoch 平均 loss JT 0.354515→0.208091、独立历史 PT 0.354172→0.196566，固定验证 loss/accuracy JT 0.477709/0.787879、PT 0.483606/0.787879。新进程从同源 checkpoint 50 恢复至 100，恢复时 603 命名 CUDA 张量、RNG 和状态通过检查，后续 50 次更新有限、fallback 0；验证 0.478523/0.787879。最终 201 参数和各 201 一阶/二阶 moment 的严格哈希共 603 项不同，201 step 相同；相对全局 L2 分别约 4.46e-5、0.0505、0.00580，原因未定。原 strict 失败和原两 seed 15.425953905% 对 15% 门槛的失败均保留。
+
+补充的独立训练阶段诊断采用同源 df45 与历史 PT 结果：两侧各两个 training_step microbatch 的首层 attention query projection 均记录 CUDA autocast 开启、FP32 输入及权重、BF16 输出；JT 同时验证 native CUDA dispatch 和 fallback 0。两侧各 201 梯度有限且参数更新；首个 optimizer step 前的零学习率人工改为 6e-6 后执行一次更新。该诊断未覆盖原 full100 的每一步或其他 projection，未追踪内核内部算术与累积精度，也不能作为性能基准。终审 SHA-256 c5cc3bb5a5c84d555753e0ee22d9f1e564f526274a29cf0d35bc6b59ddb9d044，路径 /data6/cgq/jittor-lab/_state/release-day23/20261030-main-df45-bert-bf16-training-phase-jt-shim-successor-r1-hold/independent-terminal-audit.json。原 full100 跨阶段集合的观察边界不变。
+
+同源 checkpoint100 同批单步诊断比较联合状态差异：两侧都真实 CUDA、201 梯度有限及参数更新、fallback 0；重置 seed、将 checkpoint 的零学习率改为 3e-5 且不推进 scheduler，更新向量相对 L2 差约 0.0861、cosine 0.9963。参数、moments 与梯度起点均不同，不能归因单一 optimizer 或视作自然续训；其对长期训练影响未知。
+
+隔离性能 cache 的 SDPA 合成同形输入 A/B 正确性通过（输出及梯度对照、11 个边界节点），并非整模型性能。唯一 60 秒配对 readiness 全 13 次采样未达到空闲显存、利用率及无外来进程门槛，未启动计时；无加速或性能验收结论。Day4–5 性能/显存仍未完成。原性能预算与历史失败保留。
+
+本候选结构节点在 3068da63… tree 上实际 1 项通过、无跳过：原测试方法读取完整候选源码，使用桩处理无关框架导入；不是完整结构套件。后续候选只修改三份文档，代码 blob 相同，训练及测试仍按各自原混合或主树身份解释。旧 HEAD 802/800 结构失败、旧执行错误和用户已有 dirty 均保留。
+
 ## 2026-10-28 06:40 +0800 接续入口：native core已走完，先做pow消费者优先控制
 
 当前无本任务框架/JIT进程。r8 native实际103pass/45skip/1xfail/fallback0，worker/controller均因metadata遗漏而rc1，receipt d2417388保留；root21保存审计20bee571已按源码确认唯一OPENBLAS键与12标准产物并采用实际执行，不重跑。7143基线为 `20261028-qwen-pow-r8-cpu-core-r1-prepared/attempt-01-native-core/cache-after.json` SHA8f357097；原文件无改删、组/JIT/oneDNN锁空。focused6沿root19采用且原失败保留。新native pow测试的物化顺序存在盲点，先root串行old-r7/new-r8 consumer-first CPU微控制，每侧新120s，不改源；然后用其实际终态绑定独立Torch core600s，再CUDA900及原完整no-hook。原FAIL/预算/LoRA阻断和发布 **Not complete** 保持，精确入口见[本日结果](2026-10-26-torch-compat-release-day2-5.md)。
@@ -571,3 +585,15 @@ r5 waiter PID 2616242 经 `/proc` 与命令行确认仍为 02:09:02 +0800 启动
 r5 waiter PID 2616242 仍为 02:09:02 +0800 启动的原进程，06:49:08 +0800 最新状态 WAITING，目标卡 free 49,409 MiB、utilization 100%、qualifying streak 0/5，没有 wait/launch/measurement receipt。固定窗口门槛与 08:09:02 截止时间不变。此时无其他 task-related 训练或验证进程；`/` 余 98 GiB、`/data6` 余 6.0 TiB。Qwen full logits FAIL且未启动 LoRA；Vision r18失败保留、r25 FAIL；BERT gap 15.425953905% 仍超过15%；Day4–5没有发布有效测量。
 
 2026-10-26 07:09 +0800 验证增量：`bash tools/check_repo_layout.sh` 通过；Torch-mode `JITTOR_TORCH_SHIM=1` 下 `tests/structure` 为 1396 passed、4 skipped（1400 collected、1398 executed，650.77 秒）。第一次导入受 Anaconda `libstdc++` 缺少 `GLIBCXX_3.4.30` 影响，随后显式 preload 系统 `libstdc++` 并用独立 JIT/TMP 路径重跑成功。该结构门禁不改变 Torch compatibility 发布状态。当前 r5 waiter PID 2616242 仍 WAITING，07:09:34 +0800 最新样本为 free 49,409 MiB、utilization 100%、qualifying streak 0/5，无 receipt；它保持原截止时间 08:09:02 +0800。无其他 task pytest 进程。
+
+## 2026-10-29 task-scoped handoff
+
+The isolated r12 patch and its static source/index audit are retained under
+/data6/cgq/jittor-lab/_state/release-day23/20261029-headonly-r12-startup-regression-candidate-r1-hold/.
+The r12 startup test passed with r10 actual CUDA core and r12 test/helper
+overlay; a complete r12 cold build was not performed. Main df45 full100 and
+fresh-process 50-to-100 continuation are separate source-identity results:
+603 final model/moment tensors differ from continuous training, with cause
+unresolved. The Day2–5 report records metrics, exact identity and the retained
+original failure. Do not treat the short synthetic CPU run or the mixed-source
+node as a complete release, GPU-training or convergence gate.

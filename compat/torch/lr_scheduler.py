@@ -3,6 +3,7 @@
 import jittor as jt
 
 from .context import registry_for
+from ._lambda_scheduler_init import lambda_base_lrs
 from .fidelity import Fidelity, register_api_bindings
 from ..diagnostics import EXPECTED, swallowed
 
@@ -53,7 +54,7 @@ class LRScheduler:
 
 class LambdaLR(LRScheduler):
     def __init__(self, optimizer, lr_lambda, last_epoch=-1, verbose=False):
-        self.base_lrs = _base_lrs(optimizer)
+        self.base_lrs = lambda_base_lrs(optimizer, last_epoch)
         n = len(self.base_lrs)
         self.lr_lambdas = list(lr_lambda) if isinstance(lr_lambda, (list, tuple)) else [lr_lambda]*n
         super().__init__(optimizer, last_epoch, verbose)

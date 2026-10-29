@@ -77,6 +77,7 @@ from .method_api import (
     _grad_set,
     _invert,
     _ip,
+    _task_iadd,
     _is_basic_data_index,
     _is_basic_index,
     _is_cuda,
@@ -591,7 +592,8 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     for name, implementation in _BINARY_APIS.items():
         if _native_operators[name] is not None:
             setattr(Var, name, implementation)
+    Var.__iadd__ = _task_iadd
 
     register_api_bindings(Var, 'torch.Tensor',
-        ('T', '__deepcopy__', '__getitem__', '__hash__', '__invert__', '__ne__', '__reduce__', '__reduce_ex__', '__setitem__', 'add_', 'addmm', 'argwhere', 'as_strided', 'backward', 'baddbmm', 'clamp', 'clamp_', 'clip', 'clip_', 'contiguous', 'copy_', 'cpu', 'cuda', 'cumprod', 'cumsum', 'data', 'data_ptr', 'detach', 'device', 'div_', 'dtype', 'element_size', 'fill_', 'get_device', 'grad', 'grad_fn', 'is_complex', 'is_contiguous', 'is_cpu', 'is_cuda', 'is_floating_point', 'is_leaf', 'is_meta', 'is_mps', 'is_nested', 'is_pinned', 'is_signed', 'is_xpu', 'mT', 'mul_', 'narrow', 'ne', 'nelement', 'new_empty', 'new_full', 'new_ones', 'new_tensor', 'new_zeros', 'nonzero', 'norm', 'normal_', 'numpy', 'pin_memory', 'requires_grad', 'requires_grad_', 'retain_grad', 'retains_grad', 'set_', 'squeeze', 'storage', 'storage_offset', 'stride', 'sub_', 'tile', 'to', 'tolist', 'type', 'uniform_', 'untyped_storage', 'where', 'zero_') + tuple(_BINARY_APIS.keys() | _CAST_APIS.keys() | _UNARY_INPLACE_APIS.keys()),
+        ('T', '__iadd__', '__deepcopy__', '__getitem__', '__hash__', '__invert__', '__ne__', '__reduce__', '__reduce_ex__', '__setitem__', 'add_', 'addmm', 'argwhere', 'as_strided', 'backward', 'baddbmm', 'clamp', 'clamp_', 'clip', 'clip_', 'contiguous', 'copy_', 'cpu', 'cuda', 'cumprod', 'cumsum', 'data', 'data_ptr', 'detach', 'device', 'div_', 'dtype', 'element_size', 'fill_', 'get_device', 'grad', 'grad_fn', 'is_complex', 'is_contiguous', 'is_cpu', 'is_cuda', 'is_floating_point', 'is_leaf', 'is_meta', 'is_mps', 'is_nested', 'is_pinned', 'is_signed', 'is_xpu', 'mT', 'mul_', 'narrow', 'ne', 'nelement', 'new_empty', 'new_full', 'new_ones', 'new_tensor', 'new_zeros', 'nonzero', 'norm', 'normal_', 'numpy', 'pin_memory', 'requires_grad', 'requires_grad_', 'retain_grad', 'retains_grad', 'set_', 'squeeze', 'storage', 'storage_offset', 'stride', 'sub_', 'tile', 'to', 'tolist', 'type', 'uniform_', 'untyped_storage', 'where', 'zero_') + tuple(_BINARY_APIS.keys() | _CAST_APIS.keys() | _UNARY_INPLACE_APIS.keys()),
         Fidelity.APPROXIMATE, 'Tensor operations share the native Var/Op graph and explicit frontend state; unsupported layouts, device capabilities, and retained compatibility approximations remain restricted')

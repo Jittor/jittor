@@ -519,6 +519,10 @@ def _install_nn_extras(nn, registry=None):
         parallel_mod, "torch.nn.parallel", ("DataParallel", "DistributedDataParallel"),
         Fidelity.APPROXIMATE, "Native module wrapper and registered collectives; "
         "the complete Torch process-group and bucket interface is not supported")
+    register_api_bindings(
+        parallel_mod.DistributedDataParallel, "torch.nn.parallel.DistributedDataParallel",
+        ("register_comm_hook",), Fidelity.UNIMPLEMENTED,
+        "Custom DDP communication hooks are unsupported")
     for _path, _names in (
         ("torch.nn.attention.flex_attention", ("flex_attention", "create_block_mask",
          "and_masks", "or_masks", "noop_mask")),

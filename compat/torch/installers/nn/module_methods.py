@@ -140,6 +140,11 @@ def _standard_rms_norm(self, args, kwargs):
     weight = getattr(self, "weight", None)
     if not isinstance(value, jt.Var) or not isinstance(weight, jt.Var):
         return None
+    # A standard HF forward casts the normalized value back to input dtype
+    # before multiplying the weight. Mixed operands may therefore promote the
+    # output, while the native inference kernel returns the input dtype.
+    if _jittor_dtype_name(value.dtype) != _jittor_dtype_name(weight.dtype):
+        return None
     epsilon = self.__dict__["variance_epsilon"]
     pytorch_order = _acl_bfloat16_rms_norm(value, weight, epsilon)
     if pytorch_order is not None:

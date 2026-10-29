@@ -8,6 +8,7 @@
 #include <atomic>
 #include "core/common.h"
 #include "core/node.h"
+#include "core/storage_version.h"
 #include "codegen/jit_key.h"
 #include "utils/jit_cache_map.h"
 #include "ops/composite/op_dispatch.h"
@@ -39,6 +40,7 @@ struct Op : Node {
     virtual bool is_storage_view() const { return false; }
     static constexpr uint32 backend_mask = OpBackendAny;
     vector<VarPtr> outputs_holder;
+    vector<SavedStorageVersion> saved_storage_versions;
     // Atomic: the parallel compiler constructs and destroys ops on its
     // worker threads, and these are read from the main thread.
     static std::atomic<int64> number_of_lived_ops;

@@ -1046,6 +1046,8 @@ def _install_distributed(g, registry=None):
         setattr(dist, sub, mod)
 
     dist.algorithms.__path__ = getattr(dist.algorithms, "__path__", [])
+    from ..ddp_comm_hooks import install_ddp_comm_hooks
+    install_ddp_comm_hooks(_modules, dist.algorithms)
     const_mod = _modules.get("torch.distributed.constants")
     if const_mod is None:
         const_mod = _types.ModuleType("torch.distributed.constants")

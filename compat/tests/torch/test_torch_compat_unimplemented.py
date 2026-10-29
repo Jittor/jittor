@@ -914,7 +914,9 @@ class TestDistributedDataParallel(StubPolicyBase):
         orders = [getattr(p, "_jittor_ddp_order", None)
                   for p in model.parameters()]
         self.assertEqual(orders, list(range(len(orders))))
-        self.assertTrue(all(getattr(p, "_jittor_ddp_state", None) is not None
+        self.assertTrue(all(getattr(p, "_torch_ddp_state", None) is not None
+                            for p in model.parameters()))
+        self.assertTrue(all(getattr(p, "_jittor_ddp_state", None) is None
                             for p in model.parameters()))
 
     def test_no_sync_is_a_real_switch_not_a_nullcontext(self):

@@ -26,6 +26,7 @@
 #include "bindings/pyjt/py_converter.h"
 
 namespace jittor {
+DECLARE_FLAG(bool, no_grad);
 
 namespace {
 struct VarDataOwner {
@@ -182,6 +183,7 @@ static inline bool readback_waits_for_devices() {
 }
 
 DataView VarHolder::data() {
+    check_backward_storage_read(var);
     note_readback();
     if (!(var->mem_ptr && !var->allocator->is_cuda())) {
         ExecutorEntryScope entry;
@@ -236,6 +238,7 @@ void VarHolder::write_inplace(ArrayArgs&& array) {
     // Ordered, not blocking: the bytes have to land before the kernels that
     // read them, which is stream order, not a host-side wait. See the H2D
     // branch in the CUDA backend's copy() for why the difference is 1000x.
+    var->note_storage_mutation();
     backend_copy(var->mem_ptr, dst, array.ptr, {}, size, true);
 }
 
@@ -272,8 +275,84 @@ void VarHolder::copy_into(VarHolder* src, bool sync_src) {
             d = Device{accelerator_backend_id(), v->device_id < 0 ? 0 : v->device_id};
         return d;
     };
+    var->note_storage_mutation();
     backend_copy(var->mem_ptr, device_of(var),
                  src->var->mem_ptr, device_of(src->var), var->size, true);
+}
+
+void VarHolder::copy_into_preserving_aliases(VarHolder* src) {
+    ExecutorEntryScope entry;
+    USER_CHECK(no_grad) << "storage-preserving compatibility writes require no_grad";
+    USER_CHECK(!state_capture && !keep_graph)
+        << "storage-preserving compatibility writes do not support captured/kept graphs";
+    USER_CHECK(var->shape == src->var->shape && var->dtype() == src->var->dtype() &&
+            var->placement == src->var->placement && var->device_id == src->var->device_id &&
+            var->is_contiguous() && src->var->is_contiguous())
+        << "storage-preserving compatibility writes require identical dense shape, dtype and placement";
+    auto token = var->storage_version_token();
+    // An eager write must preserve values of older lazy expressions. This
+    // dependency walk follows execution boundaries: a completed independent
+    // value already has its own bytes and need not read the edited storage.
+    std::unordered_map<Node*, bool> depends;
+    auto reads = [&](Node* root) {
+        vector<pair<Node*, bool>> stack{{root, false}};
+        while (stack.size()) {
+            auto item = stack.back();
+            stack.pop_back();
+            auto* node = item.first;
+            if (depends.count(node)) continue;
+            if (node->is_var() && node->var()->peek_storage_version() == token) {
+                depends.emplace(node, true);
+            } else if (node->is_finished()) {
+                depends.emplace(node, false);
+            } else if (!item.second) {
+                stack.emplace_back(node, true);
+                for (Node* input : node->inputs())
+                    if (!depends.count(input)) stack.emplace_back(input, false);
+            } else {
+                bool result = false;
+                for (Node* input : node->inputs()) result |= depends.at(input);
+                depends.emplace(node, result);
+            }
+        }
+        return depends.at(root);
+    };
+    vector<VarPtr> owners;
+    vector<Var*> pending;
+    std::unordered_set<Var*> selected;
+    auto preserve = [&](Var* value) {
+        if (!value || value->is_finished() || !selected.insert(value).second || !reads(value)) return;
+        USER_CHECK(!value->flag(VarFlags::_kept))
+            << "storage-preserving compatibility writes do not support kept readers";
+        owners.emplace_back(value);
+        pending.push_back(value);
+    };
+    vector<Node*> graph;
+    std::unordered_set<Node*> seen;
+    for (auto* holder : runtime_holder_state().holders()) {
+        auto* value = holder->var;
+        preserve(value);
+        if (value && seen.insert(value).second) graph.push_back(value);
+    }
+    // Saved values can outlive their Python holders. In particular, a fused
+    // exp().sum() leaves a finished loss but an unbacked exp needed by
+    // backward. Discover that retained graph across finished nodes, just as
+    // native graph ownership does; stop-grad inputs may also save constants.
+    // Only affected saved values with native recomputation liveness become
+    // explicit execution roots, so normal fusion and unrelated work remain.
+    for (size_t i=0; i<graph.size(); ++i) {
+        auto* node = graph[i];
+        if (node->is_var()) {
+            auto* value = node->var();
+            if (!value->mem_ptr && value->flag(VarFlags::_needed_by_backward) &&
+                    value->liveness.backward.active())
+                preserve(value);
+        }
+        for (Node* input : node->inputs())
+            if (seen.insert(input).second) graph.push_back(input);
+    }
+    if (pending.size()) runtime_executor().run_sync(pending, false, false);
+    copy_into(src, true);
 }
 
 void VarHolder::release_kept() {
@@ -311,6 +390,7 @@ void VarHolder::set_data(ArrayArgs&& array) {
 #ifdef HAS_ACCELERATOR
     migrate_to_cpu(var, runtime_executor().allocator);
 #endif
+    var->note_storage_mutation();
     if (var->is_contiguous()) {
         std::memcpy(var->mem_ptr, array.ptr, size);
     } else {
@@ -837,11 +917,13 @@ VarHolder* VarHolder::_update(VarHolder* v) {
 
 
 VarHolder* VarHolder::sync(bool device_sync, bool weak_sync) {
+    check_backward_storage_read(var);
     jittor::sync({this}, device_sync, weak_sync);
     return this;
 }
 
 ArrayArgs VarHolder::fetch_sync() {
+    check_backward_storage_read(var);
     note_readback();
     if (!(var->mem_ptr && !var->allocator->is_cuda())) {
         ExecutorEntryScope entry;
@@ -915,7 +997,7 @@ ItemData VarHolder::item() {
 }
 
 // from fetch_op.cc
-EXTERN_LIB list<VarPtr> fetcher;
+EXTERN_LIB list<VarPtr>& fetcher();
 
 void sync_all(bool device_sync) {
     vector<Var*> vars;
@@ -934,7 +1016,7 @@ void sync_all(bool device_sync) {
         if (!v->var->_outputs.size())
             vars.push_back(v->var);
     }
-    for (auto& v :fetcher)
+    for (auto& v :fetcher())
         vars.push_back(v.ptr);
     graph_check();
     runtime_executor().run_sync(vars, device_sync); //need sync at last

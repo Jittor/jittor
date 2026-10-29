@@ -184,6 +184,18 @@ class BinaryOpCases:
         b = a**3
         b.sync()
 
+    def test_pow_rounds_before_widening(self):
+        # An int/float std::pow overload must not leak its double return into
+        # a fused cast when the pow tensor is declared float32.
+        with jt.runtime.scope(amp_reg=0):
+            exponent = jt.array(np.arange(0, 128, 2, dtype=np.float32) / 128)
+            power = jt.array([1000000], dtype="int32") ** exponent
+            widened = power.float64()
+            widened_values = widened.numpy().copy()
+            stored = power.numpy().copy()
+            self.assertEqual(stored.dtype, np.dtype("float32"))
+            np.testing.assert_array_equal(widened_values, stored.astype(np.float64))
+
     def test_binary_op_bool(self):
         a = np.array([0,1,0,1]).astype(bool)
         b = np.array([0,1,1,0]).astype(bool)

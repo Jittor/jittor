@@ -71,15 +71,15 @@ static uint64 cpu_initial_seed;
 static bool legacy_seed_valid = true;
 
 // fron fetch_op.cc
-EXTERN_LIB list<VarPtr> fetcher;
-EXTERN_LIB list<VarPtr> fetcher_to_free;
+EXTERN_LIB list<VarPtr>& fetcher();
+EXTERN_LIB list<VarPtr>& fetcher_to_free();
 EXTERN_LIB vector<void(*)()> take_cleanup_callbacks();
 EXTERN_LIB volatile sig_atomic_t exited;
 
 void cleanup() {
     exited = true;
-    fetcher_to_free.clear();
-    fetcher.clear();
+    fetcher_to_free().clear();
+    fetcher().clear();
     // Walk a private copy, taken under the registration lock, rather than the
     // live vector: a callback may register another one (`get_resources` does,
     // on whichever thread first touches a side stream), and `push_back` then

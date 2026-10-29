@@ -1,5 +1,26 @@
 # Torch Compatibility Release Acceptance: 2026-10-26 Day 2–5 Continuation
 
+## 2026-10-30 任务证据更新（历史记录按原身份保留）
+
+HEAD-only r12 两卡实际训练与恢复使用 **r10 原生 core 和 Python 根目录，加 r12 两个 scheduler Python 模块 overlay**，并非完整 r12 冷构建。FP32 tiny BERT LoRA Trainer 两 rank 完成 full 4 次更新、checkpoint 2 新进程续训至 4；两卡真实 CUDA、fallback 0，有限梯度及参数更新被检查。JT/PT 两侧各 rank 平均 microbatch loss 分别为 0.34503534/0.34503534、0.34377843/0.34377844；固定 16 样本短程证据不能推及长程质量、AMP 或多于两卡。独立终审 fc2fc52657c9e6a31ef5ae9d8c2be617833018ffdd4ee24e3579ca599436fc17。
+
+主树 df45 是另一源码身份：BERT seed821 配置 BF16 从头完成 full100，记录的参数和优化器状态为 FP32；训练前 initial evaluation 显式 autocast 下的 CUDA logits 为 BF16。projection dtype 和 autocast 状态按跨阶段集合记录，未标记训练时段，因此训练期间 BF16 覆盖未独立确认；历史 PT 报告同样未分阶段。训练结束后生命周期保存/重载对照使用 keep_fp32_wrapper=False 移除 forward 包装；两 epoch 平均 loss JT 0.354515→0.208091、独立历史 PT 0.354172→0.196566，固定验证 loss/accuracy JT 0.477709/0.787879、PT 0.483606/0.787879。新进程从同源 checkpoint 50 恢复至 100，恢复时 603 命名 CUDA 张量、RNG 和状态通过检查，后续 50 次更新有限、fallback 0；验证 0.478523/0.787879。最终 201 参数和各 201 一阶/二阶 moment 的严格哈希共 603 项不同，201 step 相同；相对全局 L2 分别约 4.46e-5、0.0505、0.00580，原因未定。原 strict 失败和原两 seed 15.425953905% 对 15% 门槛的失败均保留。
+
+补充的独立训练阶段诊断采用同源 df45 与历史 PT 结果：两侧各两个 training_step microbatch 的首层 attention query projection 均记录 CUDA autocast 开启、FP32 输入及权重、BF16 输出；JT 同时验证 native CUDA dispatch 和 fallback 0。两侧各 201 梯度有限且参数更新；首个 optimizer step 前的零学习率人工改为 6e-6 后执行一次更新。该诊断未覆盖原 full100 的每一步或其他 projection，未追踪内核内部算术与累积精度，也不能作为性能基准。终审 SHA-256 c5cc3bb5a5c84d555753e0ee22d9f1e564f526274a29cf0d35bc6b59ddb9d044，路径 /data6/cgq/jittor-lab/_state/release-day23/20261030-main-df45-bert-bf16-training-phase-jt-shim-successor-r1-hold/independent-terminal-audit.json。原 full100 跨阶段集合的观察边界不变。
+
+同源 checkpoint100 同批单步诊断比较联合状态差异：两侧都真实 CUDA、201 梯度有限及参数更新、fallback 0；重置 seed、将 checkpoint 的零学习率改为 3e-5 且不推进 scheduler，更新向量相对 L2 差约 0.0861、cosine 0.9963。参数、moments 与梯度起点均不同，不能归因单一 optimizer 或视作自然续训；其对长期训练影响未知。
+
+隔离性能 cache 的 SDPA 合成同形输入 A/B 正确性通过（输出及梯度对照、11 个边界节点），并非整模型性能。唯一 60 秒配对 readiness 全 13 次采样未达到空闲显存、利用率及无外来进程门槛，未启动计时；无加速或性能验收结论。Day4–5 性能/显存仍未完成。原性能预算与历史失败保留。
+
+本候选结构节点在 3068da63… tree 上实际 1 项通过、无跳过：原测试方法读取完整候选源码，使用桩处理无关框架导入；不是完整结构套件。后续候选只修改三份文档，代码 blob 相同，训练及测试仍按各自原混合或主树身份解释。旧 HEAD 802/800 结构失败、旧执行错误和用户已有 dirty 均保留。
+
+### 可复核终审
+
+- r12 两 rank 模型及恢复：/data6/cgq/jittor-lab/_state/release-day23/20261030-headonly-r12-bert-overlay-alias-successor-r1-hold/model-independent-terminal-audit.json，SHA-256 fc2fc52657c9e6a31ef5ae9d8c2be617833018ffdd4ee24e3579ca599436fc17。
+- 主树 df45 full100、50→100 续训、同批单步：分别为 20261029-main-df45-bert-bf16-learning-trend-plan-r1-hold/independent-terminal-audit.json（96f990e7895121b37db7e5b15b728c97839a88883517203e0f129bb1f4821265）、20261029-main-df45-bert-bf16-freshresume-plan-r1-hold/independent-terminal-audit.json（f3edc6ba4b820d0d163d70b7f99b37552188211fafaac64c6961e1cc32a2729f）、20261029-main-df45-bert-checkpoint100-matched-batch-update-plan-r1-hold/independent-terminal-audit.json（ed9df0163d615db6d084329cb1dc1033af9ff1dc7aa5a8918d6b83a29495a456）；相对路径均位于 /data6/cgq/jittor-lab/_state/release-day23/。
+- SDPA 正确性终审 20261029-sdpa-r6-shared-cache-correctness-terminal-audit-r1/terminal-audit.json（eecbd81183e3487871ee7e769813f03d8e4de46d7100b4cc0940f021ed40b5e1）；readiness timeout 终审 20261029-sdpa-r6-readiness-timeout-terminal-audit-r1/terminal-audit.json（2c64f1686c65d14dd72f2002b1d83da07a03ab4c4e7c85b30447fb0cff23ad3b）；同上级目录。
+- 单节点结构终审 20261030-headonly-r12-structure-whitespace-terminal-audit-r1/terminal-audit.json（43d7e58e63ac3eee1e8cbdaaa63d1a1160622a32ba465db79d11b0b6f0798108）；同上级目录。
+
 ## 2026-10-28 06:40 +0800 r8 native core实际完成并获独立采用，原工具rc1保留
 
 root审阅的native final manifest `d66e2e0e11fcd6072e14787e4660a60ddd72dff95b8ab4c6a23482024d362efd` 在新600s单次cap内走完维护的10个core文件、149节点，pytest实际 **103 passed、45 skipped、1 xfailed in388.46s**，零普通失败、fallback0，两个native pow节点确实执行；skip类别和既有xfail均保留。首次oneDNN构建也在本cap内完成。原worker/controller均rc1，receipt `d2417388abf66f67100779bea5a3e870628bed6970f7b8a2f73122d9e2054b43` 仍为 `FINAL_SOURCE_CACHE_LOCK_GROUP_FAILURE_RETAINED`：工具遗漏了 `tests/core/test_fused_op.py:10` 在收集期设置的唯一环境键OPENBLAS_NUM_THREADS=1，以及11个MKL编译 `.o.d` 和原save/load测试生成的sub.pkl，不能改写成原执行自然rc0。
@@ -717,3 +738,64 @@ T5 fixed-planner continuous capture started at 14:01:40 +0800 in `20261026-t5-st
 Main integration now includes the new WarpSoftmax backward reference row. Before correction, the AST inventory reproducibly found only that new gradient unlisted; after correction, six targeted inventory contracts pass. The route points to the real CUDA/FP64-NumPy short-row forward/backward regression. The main CPU/core and affected pytest checks are prepared, not executed; two isolated copies of the old 103MiB warm structure cache preserve the original bound cache. Main has a different HEAD and runtime implementation from the frozen Qwen candidate (including missing candidate-only rsqrt header/workflow runner); isolated Qwen evidence cannot be transferred to the entire main tree.
 
 The BERT r10 offline audit confirms both seeds' 198 microbatch sample cursors and 100 learning-rate values match. The original selected-best loss gap still fails at 15.425953905%; PT seed823 retained checkpoint50 after an accuracy tie while JT selected checkpoint100. Same-update loss comparisons are diagnostic only and do not replace the original fields. A frozen original-input real-CUDA forward/all-gradient probe is prepared but unexecuted. Vision now has an unapplied native broadcast-reduction design with source bindings; no production deterministic repair or original-model recovery pass is claimed.
+
+## 2026-10-29 task-scoped compatibility evidence
+
+The HEAD-only r12 candidate is based on 3dedae001372b6be106ae6700bcf10ebc7faebac.
+Its patch SHA-256 is
+250c43dffca948b5e027ea20f65b0e4141ecffc54b039f410398f6f6b69718c5;
+the r12 delta from r11 adds a persistent subprocess test for CUDA enabled
+before import. The main df45 CUDA run passed that node, and a separate run
+passed the same r12 test and helpers on the actual r10 CUDA core and runtime,
+with setup/call/teardown passed and no skips. The r10 native compile order has
+device.cc before fetch_op.cc. This is mixed-source evidence, not a complete r12
+cold build; the child asserts unchanged fallback, not a zero initial count.
+The r10 CUDA candidate separately passed its pre-import and GPU functional
+stages. These are distinct builds and results.
+
+The r11 CPU scheduler focused run passed 16 selected nodes using the actual
+r10 native core and r11 scheduler/helper overlay, with use_mkl=0. A separate
+CPU tiny BERT run used that same mixed identity: eight updates completed and a
+new process resumed updates 5–8 from step 4, with the final 25 parameters
+matching continuous training. This was a synthetic, dropout-free fixture, not
+a GPU or long-training result. Its fixed evaluation loss increased from
+0.696845 to 0.767809 and accuracy fell from 0.25 to 0.125; no convergence
+claim follows. Retained earlier failures and the original release thresholds
+are not replaced by these focused results.
+
+Main source df45, a separate identity from the HEAD-only candidate, completed
+a fresh single-seed 821 BERT CUDA two-epoch run configured for BF16 with 100 updates, 198
+microbatches, finite 201-parameter gradients and fallback 0. Its epoch mean
+microbatch losses were 0.354515 and 0.208091 (historical independent PyTorch
+0.354172 and 0.196566); fixed evaluation loss/accuracy were 0.477709/0.787879
+versus PyTorch 0.483606/0.787879. This single-seed result does not replace the
+original two-seed selected-best loss-gap failure of 15.425953905% versus 15%.
+
+A fresh process restored df45 checkpoint 50 including model, optimizer,
+scheduler and RNG state, verified 603 named CUDA tensors at restoration, and
+completed updates 51–100 with the same sample and learning-rate sequence,
+finite gradients and fallback 0. Its continuation mean loss was 0.207975
+versus 0.208091 for the continuous run; evaluation was 0.478523/0.787879
+versus 0.477709/0.787879. Strict final state equality failed: all 201 model,
+201 first-moment and 201 second-moment tensors had differing hashes, whereas
+all 201 step scalars matched. The offline numerical comparison reported global
+relative L2 differences of 4.46e-5, 0.0505 and 0.00580 respectively. No cause
+is established; numerical allclose is diagnostic rather than an acceptance
+threshold. These observed results demonstrate bounded functional continuation,
+not identical trajectories or a performance claim.
+
+Independent terminal audits and their SHA-256 values are retained at:
+- /data6/cgq/jittor-lab/_state/release-day23/20261029-main-unified-cuda-focused-r1-hold/independent-terminal-audit.json:
+  3585f23ab5330b3a39960dfe5590ecf7f02e55dc863218abaa1e79217b77276f;
+- /data6/cgq/jittor-lab/_state/release-day23/20261029-headonly-r10-fetch-queue-candidate-r1-hold/cuda-cold-hold/gpu-functional-independent-terminal-audit.json:
+  4b30b1babe55b273519b6d9f1f7e172e303788a8397a502db185627cd9f6d590;
+- /data6/cgq/jittor-lab/_state/release-day23/20261029-headonly-r11-lambda-cpu-focused-terminal-audit-r1/terminal-audit.json:
+  efea8cd356d3aa8d73a25bbd0a8fb34d1769d68cd6f30b9d07dc4a2cf72f3f2e;
+- /data6/cgq/jittor-lab/_state/release-day23/20261029-headonly-r11-tiny-bert-cpu-model-terminal-audit-r1/terminal-audit.json:
+  9118537ee24255fe75c3756e4f2070446f129a38cf843c633c6f66decb890239.
+- /data6/cgq/jittor-lab/_state/release-day23/20261029-headonly-r12-startup-cuda-node-terminal-audit-r1/terminal-audit.json:
+  c3cebb96e05632e97e05951a3d7a0ef13c14c24eea8b94c23ba0de7ad69ae3f1;
+- /data6/cgq/jittor-lab/_state/release-day23/20261029-main-df45-bert-bf16-learning-trend-plan-r1-hold/independent-terminal-audit.json:
+  96f990e7895121b37db7e5b15b728c97839a88883517203e0f129bb1f4821265;
+- /data6/cgq/jittor-lab/_state/release-day23/20261029-main-df45-bert-bf16-freshresume-plan-r1-hold/independent-terminal-audit.json:
+  f3edc6ba4b820d0d163d70b7f99b37552188211fafaac64c6961e1cc32a2729f.

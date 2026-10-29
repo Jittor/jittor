@@ -75,7 +75,7 @@ class _DistributedDataParallel(_DataParallel):
 
     The all-reduce itself lives in ``installers/tensor.py`` (the backward
     is there, and it sits *below* this file), reached through the
-    ``_jittor_ddp_state`` marker each parameter carries -- the same
+    ``_torch_ddp_state`` marker each parameter carries -- the same
     inversion FSDP2 uses. ``_jittor_ddp_order`` is assigned here, in
     ``module.parameters()`` order, so every rank issues its collectives in
     the same sequence: that order is identical across ranks, whereas the
@@ -89,6 +89,12 @@ class _DistributedDataParallel(_DataParallel):
         state = _types_nn_private.SimpleNamespace(
             sync_enabled=True, world_size=_ddp_world_size())
         object.__setattr__(self, "_jittor_ddp_state", state)
+        # Native DDP uses a separate reducer and optimizer-backward owner.
+        # Sharing parameters across both owners could reduce twice or skip a
+        # reduction; reject before either broadcast or parameter marking.
+        for parameter in self._jittor_ddp_named_parameters():
+            if isinstance(parameter, _jt.Var) and getattr(parameter, "_jittor_ddp_state", None) is not None:
+                raise ValueError("a parameter cannot belong to both Torch and native DDP")
         self._jittor_ddp_broadcast_parameters()
         self._jittor_ddp_mark_parameters()
 
@@ -124,7 +130,7 @@ class _DistributedDataParallel(_DataParallel):
             if not isinstance(p, _jt.Var):
                 continue
             try:
-                object.__setattr__(p, "_jittor_ddp_state", state)
+                object.__setattr__(p, "_torch_ddp_state", state)
                 object.__setattr__(p, "_jittor_ddp_order", index)
             except EXPECTED as exc:
                 swallowed(
@@ -132,6 +138,9 @@ class _DistributedDataParallel(_DataParallel):
                     "gradient all-reduce" % index, exc,
                     "that parameter's gradient will NOT be synchronised, "
                     "so this rank's copy of it will diverge")
+
+    def register_comm_hook(self, state, hook):
+        raise NotImplementedError("DDP communication hooks are not supported")
 
     def no_sync(self):
         """Skip the gradient all-reduce inside the block.

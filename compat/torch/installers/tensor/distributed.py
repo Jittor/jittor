@@ -3,7 +3,7 @@
 def _ddp_all_reduce_grads(leaves):
     """Average DDP-managed gradients across ranks, in a rank-stable order.
 
-    ``_jittor_ddp_state`` is set only by ``DistributedDataParallel`` (see
+    ``_torch_ddp_state`` is set only by the Torch ``DistributedDataParallel`` (see
     installers/nn.py), which sits *above* this file -- the marker carries the
     state so nothing here has to import it, the same inversion FSDP2 uses.
 
@@ -26,7 +26,7 @@ def _ddp_all_reduce_grads(leaves):
         return
     pending = []
     for leaf in leaves:
-        state = getattr(leaf, "_jittor_ddp_state", None)
+        state = getattr(leaf, "_torch_ddp_state", None)
         if state is None or not getattr(state, "sync_enabled", False):
             continue
         order = getattr(leaf, "_jittor_ddp_order", None)

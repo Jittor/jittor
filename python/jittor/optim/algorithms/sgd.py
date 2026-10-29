@@ -4,6 +4,8 @@ import jittor as jt
 
 from ..._runtime.dispatch import register_kernel, select_kernel
 
+from .._state_placement import optimizer_state_scope
+
 from ..base import (
     Optimizer, _grad_matches_param, _param_requires_grad,
     _state_buffer, _update_preserve_dtype, _optimizer_arithmetic,
@@ -38,7 +40,8 @@ def _momentum_buffer(param):
     is already on cuda:1 used to put its velocity on cuda:0 and fail in the
     fused kernel on the first step.
     """
-    return _state_buffer(param).contiguous().stop_grad()
+    with optimizer_state_scope(param):
+        return _state_buffer(param).contiguous().stop_grad()
 
 
 def _acl_fused_sgd_updates(entries, lr, momentum, weight_decay, dampening, nesterov):

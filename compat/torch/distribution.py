@@ -60,6 +60,9 @@ DISTRIBUTION_MODULES = (
     "torch.distributed._composable.fsdp._fsdp_api",
     "torch.distributed._functional_collectives",
     "torch.distributed.algorithms",
+    "torch.distributed.algorithms.ddp_comm_hooks",
+    "torch.distributed.algorithms.ddp_comm_hooks.default_hooks",
+    "torch.distributed.algorithms.ddp_comm_hooks.powerSGD_hook",
     "torch.distributed.algorithms._checkpoint",
     "torch.distributed.algorithms._checkpoint.checkpoint_wrapper",
 )

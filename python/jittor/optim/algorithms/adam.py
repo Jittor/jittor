@@ -3,11 +3,30 @@
 import jittor as jt
 from ..._core.dtypes import dtype_name
 from ..._runtime.dispatch import register_kernel, select_kernel
+from .._state_placement import optimizer_state_scope
 
 from ..base import (
     Optimizer, _grad_matches_param, _param_requires_grad,
     _state_buffer, _update_preserve_dtype, _optimizer_arithmetic,
 )
+
+
+def _adamw_state_buffer(param):
+    """New AdamW moments use FP32 for half-precision parameters."""
+    with optimizer_state_scope(param):
+        state = _state_buffer(param)
+        if dtype_name(param.dtype) in ("float16", "bfloat16"):
+            with jt.flag_scope(amp_reg=0):
+                state = state.float32().stop_grad()
+        return state
+
+
+def _supports_acl_adamw_updates(entries, *args, **kwargs):
+    # CANN's fused kernel requires matching parameter and state dtypes.
+    return bool(entries) and all(
+        all(dtype_name(t.dtype) == dtype_name(parameter.dtype)
+            for t in (moment, variance, gradient))
+        for parameter, moment, variance, gradient, _ in entries)
 
 
 def _acl_fused_adamw_updates(entries, lr, beta1, beta2, weight_decay, eps):
@@ -35,7 +54,8 @@ def _acl_fused_adamw_updates(entries, lr, beta1, beta2, weight_decay, eps):
     return results
 
 
-register_kernel("optim.adamw_fused", "acl", _acl_fused_adamw_updates)
+register_kernel("optim.adamw_fused", "acl", _acl_fused_adamw_updates,
+                supports=_supports_acl_adamw_updates)
 # Publishes the CUDA `optim.adamw_fused` kernel by import, as sgd.py does for
 # fused SGD.
 from jittor.backends.cuda.kernels.optim import fused_adamw_cuda as _fused_adamw_cuda  # noqa: E402,F401
@@ -145,15 +165,15 @@ class AdamW(Optimizer):
             values = pg["values"] = []
             m = pg["m"] = []
             for p in pg["params"]:
-                values.append(_state_buffer(p))
-                m.append(_state_buffer(p))
+                values.append(_adamw_state_buffer(p))
+                m.append(_adamw_state_buffer(p))
 
     def add_param_group(self, group):
         values = group["values"] = []
         m = group["m"] = []
         for p in group["params"]:
-            values.append(_state_buffer(p))
-            m.append(_state_buffer(p))
+            values.append(_adamw_state_buffer(p))
+            m.append(_adamw_state_buffer(p))
         super().add_param_group(group)
 
     def step(self, loss=None, retain_graph=False):

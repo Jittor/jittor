@@ -18,6 +18,7 @@ import numpy as np
 import operator
 from copy import deepcopy
 from functools import partial
+from ._state_placement import optimizer_state_scope
 
 
 _STANDARD_OPTIMIZER_ARITHMETIC = (
@@ -79,7 +80,8 @@ def _state_buffer(param):
     moment buffers on the wrong card from the start. ``zeros_like`` follows the
     parameter, which is what every other ``*_like`` in jittor does.
     """
-    return jt.zeros_like(param).stop_grad()
+    with optimizer_state_scope(param):
+        return jt.zeros_like(param).stop_grad()
 
 
 def _realign_state_buffers(param_groups):
@@ -411,6 +413,16 @@ class Optimizer(object):
         for p in self.__input_params:
             if _param_requires_grad(p):
                 params_has_grad.append(p)
+
+        # Torch DDP owns reduction in Tensor.backward(). Native optimizer
+        # backward would bypass that owner (or use legacy MPI independently),
+        # so refusing this mixed contract avoids unsynchronized/double updates.
+        if any(getattr(p, "_torch_ddp_state", None) is not None
+               for p in params + self.__input_params):
+            raise RuntimeError(
+                "native optimizer.backward(loss) cannot own Torch DDP parameters; "
+                "use loss.backward() followed by optimizer.step()"
+            )
 
         # sync prev params
         jt.sync(params_has_grad)

@@ -86,6 +86,21 @@ class _UnusedWeight(_OneWeight):
 
 
 class TestNativeDistributedDataParallel(unittest.TestCase):
+    def test_gradient_buckets_use_native_dtype_byte_width(self):
+        from importlib import import_module
+        ddp = import_module("jittor.nn.parallel.distributed_data_parallel")
+        specs = [("float16", 2), ("float16", 2), ("float16", 2),
+                 ("bfloat16", 2), ("bfloat16", 2), ("float32", 2),
+                 ("float32", 3), ("float32", 1), ("float64", 1)]
+        parameters = [(str(i), jt.zeros((count,), dtype=dtype).start_grad())
+                      for i, (dtype, count) in enumerate(specs)]
+        # Two half tensors fit exactly; a third crosses the boundary. BF16
+        # has the same width but remains a separate homogeneous bucket.
+        # An oversized float32 tensor is a bucket on its own.
+        with patch.object(ddp, "_BUCKET_BYTES", 8):
+            self.assertEqual(ddp._gradient_buckets(parameters),
+                             ((0, 1), (2,), (3, 4), (5,), (6,), (7,), (8,)))
+
     def test_world_one_is_identity_and_optimizer_stays_native(self):
         with _native_dist(1) as (_group, calls):
             model = DistributedDataParallel(_OneWeight())

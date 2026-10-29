@@ -112,21 +112,160 @@ class TestNeedsInputGrad(unittest.TestCase):
         self.assertIn("no keyword arguments", str(cm.exception))
 
 
+class TestInPlaceConstantWrites(unittest.TestCase):
+    def test_cpu_fill_and_zero_preserve_aliases_and_parameter_gradients(self):
+        with jt.flag_scope(use_cuda=0):
+            for kind in ("tensor", "linear_weight"):
+                for trainable in (False, True):
+                    for operation, constant in (("fill_", 2.0), ("zero_", 0.0)):
+                        with self.subTest(kind=kind, trainable=trainable, operation=operation):
+                            if kind == "linear_weight":
+                                module = torch.nn.Linear(2, 3, bias=False)
+                                target = module.weight
+                                target.requires_grad_(trainable)
+                            else:
+                                target = torch.ones(
+                                    (3, 2), dtype=torch.float32, device="cpu",
+                                    requires_grad=trainable)
+                            aliases = {
+                                "data": target.data,
+                                "detach": target.detach(),
+                                "view": target.view(6),
+                            }
+                            pointer = target.data_ptr()
+                            alias_pointers = {name: alias.data_ptr()
+                                              for name, alias in aliases.items()}
+                            alias_grad = {name: bool(alias.requires_grad)
+                                          for name, alias in aliases.items()}
+                            self.assertTrue(all(value == pointer
+                                                for value in alias_pointers.values()))
+                            self.assertEqual(target.placement_backend, 0)
+                            self.assertEqual(target.device_id, -1)
+                            with torch.no_grad():
+                                returned = (target.fill_(constant) if operation == "fill_"
+                                            else target.zero_())
+                            self.assertIs(returned, target)
+                            self.assertEqual(target.data_ptr(), pointer)
+                            self.assertEqual(target.placement_backend, 0)
+                            self.assertEqual(target.device_id, -1)
+                            self.assertEqual(target.device.type, "cpu")
+                            self.assertEqual(target.dtype, torch.float32)
+                            self.assertEqual(bool(target.requires_grad), trainable)
+                            np.testing.assert_array_equal(
+                                target.detach().numpy(), np.full((3, 2), constant))
+                            for name, alias in aliases.items():
+                                self.assertEqual(alias.data_ptr(), alias_pointers[name])
+                                self.assertEqual(bool(alias.requires_grad), alias_grad[name])
+                                np.testing.assert_array_equal(
+                                    alias.detach().numpy(),
+                                    np.full(tuple(alias.shape), constant))
+                            if kind == "linear_weight":
+                                inputs = torch.ones((1, 2), device="cpu", requires_grad=True)
+                                output = module(inputs)
+                                np.testing.assert_array_equal(
+                                    output.detach().numpy(), np.full((1, 3), 2 * constant))
+                                output.sum().backward()
+                                np.testing.assert_array_equal(
+                                    inputs.grad.numpy(), np.full((1, 2), 3 * constant))
+                                if trainable:
+                                    np.testing.assert_array_equal(
+                                        target.grad.numpy(), np.ones((3, 2)))
+                                else:
+                                    self.assertIsNone(target.grad)
+                            elif trainable:
+                                (target * 3).sum().backward()
+                                np.testing.assert_array_equal(
+                                    target.grad.numpy(), np.full((3, 2), 3.0))
+
+    def test_internal_constant_writes_preserve_follow_runtime_alias(self):
+        # Swap an internal native holder to construct FollowRuntime placement.
+        # Public Tensor(native) construction has separate placement semantics.
+        from jittor._runtime.fallback import forbid_backend_fallbacks
+        from jittor.compat.torch.installers.tensor.method_api import _api_fill, _api_zero
+        before_fallback = jt.core.backend_fallback_count()
+        with jt.runtime.scope(use_cuda=0, backend_fallback="error"), forbid_backend_fallbacks():
+            native = jt.ones((3, 2), dtype="float32").stop_grad()
+            alias = native.detach()
+            alias_requires_grad = bool(alias.requires_grad)
+            target = torch.ones((3, 2), device="cpu")
+            self.assertIs(target.swap(native), target)
+            self.assertIs(type(target), torch.Tensor)
+            self.assertEqual(target.placement_backend, -1)
+            self.assertFalse(target.requires_grad)
+            self.assertEqual(bool(alias.requires_grad), alias_requires_grad)
+            pointer = target._storage_address
+            self.assertEqual(alias._storage_address, pointer)
+            device_id = target.device_id
+            for operation, constant in (("fill", 2.0), ("zero", 0.0)):
+                with self.subTest(operation=operation), torch.no_grad():
+                    returned = (_api_fill(target, constant) if operation == "fill"
+                                else _api_zero(target))
+                    self.assertIs(returned, target)
+                    self.assertEqual(target.placement_backend, -1)
+                    self.assertFalse(target.requires_grad)
+                    self.assertEqual(bool(alias.requires_grad), alias_requires_grad)
+                    self.assertEqual(target.device_id, device_id)
+                    self.assertEqual(target._storage_address, pointer)
+                    self.assertEqual(alias._storage_address, pointer)
+                    self.assertEqual(tuple(jt.core.dispatch_context([target])), ("cpu", -1))
+                    np.testing.assert_array_equal(target.numpy(), np.full((3, 2), constant))
+                    np.testing.assert_array_equal(alias.numpy(), np.full((3, 2), constant))
+        self.assertEqual(jt.core.backend_fallback_count(), before_fallback)
+
+    def test_cuda_constant_writes_keep_explicit_cpu_and_cuda_storage(self):
+        from _helpers import capability
+        capability.require_accelerator("cuda")
+        if not jt.flags.use_cuda:
+            self.skipTest("accelerator prerequisite: dedicated CUDA test mode required")
+        from jittor._runtime.fallback import forbid_backend_fallbacks
+        with jt.runtime.scope(use_cuda=1, backend_fallback="error"), forbid_backend_fallbacks():
+            for device in ("cpu", "cuda:0"):
+                for kind in ("tensor", "parameter"):
+                    for trainable in (False, True):
+                        for operation, constant in (("fill_", 2.0), ("zero_", 0.0)):
+                            with self.subTest(device=device, kind=kind, trainable=trainable,
+                                              operation=operation):
+                                target = torch.ones(
+                                    (3, 2), dtype=torch.float32, device=device,
+                                    requires_grad=trainable)
+                                if kind == "parameter":
+                                    target = torch.nn.Parameter(target, requires_grad=trainable)
+                                aliases = (target.data, target.detach(), target.view(6))
+                                pointer = target.data_ptr()
+                                self.assertTrue(all(alias.data_ptr() == pointer for alias in aliases))
+                                alias_grad = tuple(bool(alias.requires_grad) for alias in aliases)
+                                backend = 0 if device == "cpu" else 1
+                                index = -1 if device == "cpu" else 0
+                                dispatch = ("cpu" if device == "cpu" else "cuda", index)
+                                with torch.device("cuda"), torch.no_grad():
+                                    returned = (target.fill_(constant) if operation == "fill_"
+                                                else target.zero_())
+                                self.assertIs(returned, target)
+                                self.assertEqual(bool(target.requires_grad), trainable)
+                                for value in (target,) + aliases:
+                                    self.assertEqual(value.data_ptr(), pointer)
+                                    self.assertEqual(value.placement_backend, backend)
+                                    self.assertEqual(value.device_id, index)
+                                    self.assertEqual(tuple(jt.core.dispatch_context([value])), dispatch)
+                                    np.testing.assert_array_equal(
+                                        value.detach().cpu().numpy(),
+                                        np.full(tuple(value.shape), constant))
+                                self.assertEqual(tuple(bool(alias.requires_grad) for alias in aliases),
+                                                 alias_grad)
+
+
 class TestBackwardLeafAndGradFn(unittest.TestCase):
     """The shim forwards leaf and producer identity to the core graph query."""
 
     def test_leaf_and_intermediate_report_torch_shape(self):
-        # A factory result is not a leaf here: ``jt.ones`` broadcasts a
-        # literal, that literal requires grad like every float Var, and
-        # ``backward_grad_fn`` calls a var a leaf only when no input of its
-        # producer does. Torch calls it a leaf. See KI-COMPAT-004 -- asserted
-        # as it stands so closing the gap turns this red.
+        # A Torch factory produces an independent leaf, while an operation
+        # on that leaf remains connected and reports its producer.
         x = torch.ones(3)
         x.requires_grad = True
         y = x * 2
 
-        self.assertFalse(x.is_leaf)
-        self.assertIsNotNone(x.grad_fn)
+        self.assertTrue(x.is_leaf)
+        self.assertIsNone(x.grad_fn)
         # What the distinction is for still holds: an op output is not a leaf
         # and carries the producer identity.
         self.assertFalse(y.is_leaf)

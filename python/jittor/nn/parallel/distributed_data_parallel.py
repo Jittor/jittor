@@ -5,6 +5,7 @@ import itertools
 
 import jittor as jt
 from jittor import Module
+from jittor._core.dtypes import var_dtype_name
 
 
 _DDP_SEQUENCE = itertools.count()
@@ -120,7 +121,7 @@ def _gradient_buckets(parameters):
         key = (str(parameter.dtype),
                str(getattr(parameter, "placement_backend", "unknown")),
                int(getattr(parameter, "device_id", 0)))
-        size = int(parameter.numel()) * int(parameter.dtype.dsize())
+        size = int(parameter.numel()) * int(jt.NanoString(var_dtype_name(parameter)).dsize())
         if current and (key != current_key or current_bytes + size > _BUCKET_BYTES
                         or len(current) >= _BUCKET_INPUTS):
             buckets.append(tuple(current))
@@ -233,6 +234,11 @@ class DistributedDataParallel(Module):
 
         parameters = list(module.named_parameters())
         buffers = list(module.named_buffers())
+        # Torch DDP owns synchronization at its public backward boundary.
+        # It cannot share parameters with this native optimizer reducer.
+        for _, parameter in parameters:
+            if getattr(parameter, "_torch_ddp_state", None) is not None:
+                raise ValueError("a parameter cannot belong to both Torch and native DDP")
         placement = _module_placements(parameters, buffers)
         metadata_reference = (
             _metadata_reference(parameters, buffers) if world_size > 1 else None

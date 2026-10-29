@@ -488,6 +488,17 @@ struct VarHolder {
     // @pyjt(__get__raw_ptr)
     uint64 raw_ptr();
 
+    // Native saved-tensor identity, with no materialization or host readback.
+    // @pyjt(_saved_storage_version)
+    inline vector<uint64> saved_storage_version() {
+        auto token = var->storage_version_token();
+        return {uint64(var->id), token->identity, token->value.load(std::memory_order_relaxed)};
+    }
+
+    // Explicit compatibility write; ordinary native assign/rebind is separate.
+    // @pyjt(_copy_into_preserving_aliases)
+    void copy_into_preserving_aliases(VarHolder* src);
+
     // @pyjt(__get___storage_address)
     inline uint64 storage_address() {
         // Materialize the tensor in its current placement without migrating

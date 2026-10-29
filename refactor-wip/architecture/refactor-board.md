@@ -1,5 +1,19 @@
 # 整改看板
 
+## 2026-10-30 任务证据更新（历史记录按原身份保留）
+
+HEAD-only r12 两卡实际训练与恢复使用 **r10 原生 core 和 Python 根目录，加 r12 两个 scheduler Python 模块 overlay**，并非完整 r12 冷构建。FP32 tiny BERT LoRA Trainer 两 rank 完成 full 4 次更新、checkpoint 2 新进程续训至 4；两卡真实 CUDA、fallback 0，有限梯度及参数更新被检查。JT/PT 两侧各 rank 平均 microbatch loss 分别为 0.34503534/0.34503534、0.34377843/0.34377844；固定 16 样本短程证据不能推及长程质量、AMP 或多于两卡。独立终审 fc2fc52657c9e6a31ef5ae9d8c2be617833018ffdd4ee24e3579ca599436fc17。
+
+主树 df45 是另一源码身份：BERT seed821 配置 BF16 从头完成 full100，记录的参数和优化器状态为 FP32；训练前 initial evaluation 显式 autocast 下的 CUDA logits 为 BF16。projection dtype 和 autocast 状态按跨阶段集合记录，未标记训练时段，因此训练期间 BF16 覆盖未独立确认；历史 PT 报告同样未分阶段。训练结束后生命周期保存/重载对照使用 keep_fp32_wrapper=False 移除 forward 包装；两 epoch 平均 loss JT 0.354515→0.208091、独立历史 PT 0.354172→0.196566，固定验证 loss/accuracy JT 0.477709/0.787879、PT 0.483606/0.787879。新进程从同源 checkpoint 50 恢复至 100，恢复时 603 命名 CUDA 张量、RNG 和状态通过检查，后续 50 次更新有限、fallback 0；验证 0.478523/0.787879。最终 201 参数和各 201 一阶/二阶 moment 的严格哈希共 603 项不同，201 step 相同；相对全局 L2 分别约 4.46e-5、0.0505、0.00580，原因未定。原 strict 失败和原两 seed 15.425953905% 对 15% 门槛的失败均保留。
+
+补充的独立训练阶段诊断采用同源 df45 与历史 PT 结果：两侧各两个 training_step microbatch 的首层 attention query projection 均记录 CUDA autocast 开启、FP32 输入及权重、BF16 输出；JT 同时验证 native CUDA dispatch 和 fallback 0。两侧各 201 梯度有限且参数更新；首个 optimizer step 前的零学习率人工改为 6e-6 后执行一次更新。该诊断未覆盖原 full100 的每一步或其他 projection，未追踪内核内部算术与累积精度，也不能作为性能基准。终审 SHA-256 c5cc3bb5a5c84d555753e0ee22d9f1e564f526274a29cf0d35bc6b59ddb9d044，路径 /data6/cgq/jittor-lab/_state/release-day23/20261030-main-df45-bert-bf16-training-phase-jt-shim-successor-r1-hold/independent-terminal-audit.json。原 full100 跨阶段集合的观察边界不变。
+
+同源 checkpoint100 同批单步诊断比较联合状态差异：两侧都真实 CUDA、201 梯度有限及参数更新、fallback 0；重置 seed、将 checkpoint 的零学习率改为 3e-5 且不推进 scheduler，更新向量相对 L2 差约 0.0861、cosine 0.9963。参数、moments 与梯度起点均不同，不能归因单一 optimizer 或视作自然续训；其对长期训练影响未知。
+
+隔离性能 cache 的 SDPA 合成同形输入 A/B 正确性通过（输出及梯度对照、11 个边界节点），并非整模型性能。唯一 60 秒配对 readiness 全 13 次采样未达到空闲显存、利用率及无外来进程门槛，未启动计时；无加速或性能验收结论。Day4–5 性能/显存仍未完成。原性能预算与历史失败保留。
+
+本候选结构节点在 3068da63… tree 上实际 1 项通过、无跳过：原测试方法读取完整候选源码，使用桩处理无关框架导入；不是完整结构套件。后续候选只修改三份文档，代码 blob 相同，训练及测试仍按各自原混合或主树身份解释。旧 HEAD 802/800 结构失败、旧执行错误和用户已有 dirty 均保留。
+
 ## 2026-10-28 06:40 +0800 本机Day2–5：r8 native core已执行，Torch/CUDA待验
 
 r8 native core实际103pass/45skip/1xfail、fallback0，在600s内完成；原worker/controller因canonical OPENBLAS环境键与12个标准产物漏列而rc1，receipt d2417388保留。root21保存终审20bee571采用实际core证据，7143终态cache无旧文件改删、组与两锁空，不重跑native。focused6仍采用root19且原rc1保留。新增native pow用例存在先物化测试盲点，下一项先做old-r7/new-r8 consumer-first最小控制，再绑定Torch core600s及CUDA900；尚无r8完整no-hook。发布 **Not complete**，原Qwen logits FAIL、LoRA阻断、T5/Vision余额、BERT及Day4–5门槛保持，候选未采用main。详细证据见[本日结果](../results/2026-10-26-torch-compat-release-day2-5.md)。
@@ -1462,3 +1476,13 @@ JITTOR_TORCH_SHIM=1 pytest tests/structure tests/compat/torch                  #
 2026-10-26 Qwen r46 mean-tree diagnostic: frozen r22 input `[2,96,16,128]`, PT 2.6 `Reduce.cuh`/`MeanOps` accumulation order, actual CUDA 0 on GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068, candidate HEAD `9e0e187bb013e71d85111acfd668e46aeff9f9d2`, candidate status hash `a061f1cd85aa91037f50720ce2a50a5211843f16feeed7809871ae724398c41e`. Each lane accumulated offsets `lane + {0,32,64,96}` in order; warp offsets 1/2/4/8/16 then divided by 128. PT and Jittor explicit trees matched native PT at 3072/3072 exact, fallback_count=0. Native Jittor mean remained 1046/3072 different, max abs `1.4901161193847656e-8`. This isolates the r23 earliest difference to reduction order but does not validate a source fix or full logits; r44 full logits remains FAIL and no LoRA launched. Reports and arrays: `/data6/cgq/jittor-lab/_state/release-day23/20261026-r46/qwen-reduction-tree-r1/`.
 
 2026-10-26 r5 live wait: PID 2616242, started 02:09:02 +0800, remains the matching `wait_and_launch.py`. At 02:34 +0800 it was WAITING with 120 samples recorded; the latest target GPU sample had 50,422 MiB free and 99% utilization, with no launch or completion receipt. Do not treat this snapshot or PID as permanent.
+
+### 2026-10-29 task-scoped compatibility follow-up
+
+The isolated HEAD-only r12 candidate includes the fetch queue startup fix,
+optimizer state placement, Torch DDP ownership/hook boundaries, and LambdaLR
+resume work. Its CUDA pre-import startup node passed with an r10 native core
+and r12 test overlay. Main df45 BERT full100 and fresh-process 50-to-100
+continuation completed, but 603 final state tensors differ from the continuous
+run. See the dated Day2–5 report for identities, metrics and limitations;
+this entry does not assert full release acceptance.

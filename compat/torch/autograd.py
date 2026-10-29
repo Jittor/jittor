@@ -25,17 +25,12 @@ def save_for_backward(self, *tensors):
     # Without that, an in-place edit between forward and backward is
     # used silently: the backward computes with the NEW values and
     # returns a gradient for a forward that never happened.
-    # jittor has no version counter, but Var.id is one in practice --
-    # it is stable across reads, sync and numpy(), and changes on
-    # update()/assign()/setitem/augmented assignment.
-    #
-    # Scope: jittor's Function.__call__ tapes its inputs, so what a
-    # forward saves is the taped Var, not the caller's object. This
-    # therefore catches an in-place edit of the tensor the forward
-    # actually saved (the usual case: an intermediate computed inside
-    # forward), not an edit of the caller's original made afterwards.
+    # The native identity includes the holder's Var id and a storage counter
+    # shared by pending and materialized detach/view aliases. A caller edit
+    # therefore invalidates a taped input too, without a Python alias map.
     self._saved_versions = tuple(
-        (t.id if isinstance(t, jt.Var) else None) for t in tensors)
+        (tuple(t._saved_storage_version()) if isinstance(t, jt.Var) else None)
+        for t in tensors)
 
 
 def _saved_tensors(self):
@@ -44,7 +39,7 @@ def _saved_tensors(self):
     if versions:
         for tensor, version in zip(saved, versions):
             if isinstance(tensor, jt.Var) and version is not None \
-                    and tensor.id != version:
+                    and tuple(tensor._saved_storage_version()) != version:
                 raise RuntimeError(
                     "one of the variables needed for gradient "
                     "computation has been modified by an inplace "
@@ -256,6 +251,15 @@ def grad(outputs, inputs, grad_outputs=None, retain_graph=None,
         raise RuntimeError(
             "One of the differentiated Tensors appears to not have been "
             "used in the graph. Set allow_unused=True if this is desired.")
+    # Torch returns each gradient in the dtype of its differentiated input.
+    # Native Jittor can propagate the promoted output dtype through structural
+    # ops such as cat, so a half input may otherwise receive a float32 grad.
+    # Keep the cast in the graph when create_graph=True.
+    for i, grad_value in enumerate(gs):
+        target = ins[i]
+        if (grad_value is not None and isinstance(target, jt.Var)
+                and grad_value.dtype != target.dtype):
+            gs[i] = grad_value.cast(target.dtype)
     if not create_graph:
         # detach() severs the graph edge but leaves jittor's requires_grad
         # flag set, and torch reports requires_grad=False here; clear it on

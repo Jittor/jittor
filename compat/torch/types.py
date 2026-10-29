@@ -30,7 +30,6 @@ class _CallableBool(int):
 
     __str__ = __repr__
 
-
 class dtype:
     """Immutable Torch dtype identity, independent of Python strings."""
     __slots__ = ("name", "_is_fp")
@@ -128,7 +127,6 @@ class dtype:
 
 def _restore_dtype(name, is_floating_point):
     return dtype(name, is_floating_point)
-
 
 def _make_dtypes(ns):
     specs = [

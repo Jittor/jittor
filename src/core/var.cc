@@ -20,6 +20,11 @@ namespace jittor {
 
 std::atomic<int64> Var::number_of_lived_vars{0};
 
+StorageMutationVersion::StorageMutationVersion() {
+    static std::atomic<uint64> next{1};
+    identity = next.fetch_add(1, std::memory_order_relaxed);
+}
+
 VarPtr contiguous_storage(Var* value) {
     if (value->is_contiguous()) return value;
     static auto make_contiguous = op_constructor<VarPtr, Var*>("contiguous");

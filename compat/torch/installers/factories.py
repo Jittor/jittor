@@ -295,6 +295,11 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
     out = orig(*args, **kwargs)
     if _cast_to is not None:
         out = out.cast(_cast_to)
+    # Torch constant factories create independent leaves. Native constants may
+    # be broadcasts of differentiable literals; cut only these fresh graphs,
+    # never transforms such as tril/triu that depend on an input.
+    if name in ("ones", "zeros", "full", "ones_like", "zeros_like", "full_like"):
+        out.stop_grad()
     out._jittor_torch_ext_mutable = True
     out.requires_grad_(_requires_grad)
     if _requires_grad:

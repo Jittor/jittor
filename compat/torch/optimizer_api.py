@@ -295,101 +295,9 @@ def _state_dict_torch(self):
 
 
 def _load_state_dict_torch(self, state_dict):
-    _context = get_install_context(jt)
-    _native_load_state_dict = _context.state["optimizer_native_api"]['_native_load_state_dict']
-    if not isinstance(state_dict, Mapping) or "param_groups" not in state_dict:
-        return _native_load_state_dict(self, state_dict)
-    saved_groups = state_dict.get("param_groups", [])
-    saved_state = state_dict.get("state", {})
-    kind = _torch_optimizer_kind(self)
-    if not isinstance(saved_groups, (list, tuple)):
-        raise TypeError("loaded optimizer param_groups must be a sequence")
-    if not isinstance(saved_state, Mapping):
-        raise TypeError("loaded optimizer state must be a mapping")
-    if len(saved_groups) != len(self.param_groups):
-        raise ValueError(
-            "loaded state dict has a different number of parameter groups")
-    load_plan = []
-    max_step = 0
-    for saved_pg, current_pg in zip(saved_groups, self.param_groups):
-        if not isinstance(saved_pg, Mapping):
-            raise TypeError("loaded optimizer parameter group must be a mapping")
-        saved_params = saved_pg.get("params", [])
-        if not isinstance(saved_params, (list, tuple)):
-            raise TypeError("loaded optimizer group params must be a sequence")
-        if len(saved_params) != len(current_pg.get("params", [])):
-            raise ValueError(
-                "loaded state dict contains a parameter group that "
-                "doesn't match the size of optimizer's group")
-        slots = []
-        for pid in saved_params:
-            missing = object()
-            try:
-                st = saved_state.get(pid, missing)
-                if st is missing:
-                    st = saved_state.get(str(pid), {})
-            except (TypeError, ValueError) as error:
-                raise TypeError("loaded optimizer state key is invalid") from error
-            if not isinstance(st, Mapping):
-                raise TypeError("loaded optimizer parameter state must be a mapping")
-            st = dict(st)
-            step = 1 if st else 0
-            if "step" in st:
-                value = st["step"]
-                if isinstance(value, jt.Var):
-                    value = value.item()
-                try:
-                    numeric = float(value)
-                except (TypeError, ValueError, OverflowError) as error:
-                    raise ValueError("loaded optimizer step must be numeric") from error
-                if not np.isfinite(numeric) or numeric < 0 or numeric != int(numeric):
-                    raise ValueError(
-                        "loaded optimizer step must be a non-negative integer")
-                step = int(numeric)
-            max_step = max(max_step, step)
-            slots.append((st, step))
-        load_plan.append((dict(saved_pg), slots))
-    # Apply only after the complete input has been validated. This keeps
-    # malformed loads atomic instead of leaving half-reset moments.
-    for pg in self.param_groups:
-        steps = _torch_param_steps(pg)
-        for i in range(len(steps)):
-            steps[i] = 0
-        for key in ("m", "values", "v", "d", "pre_grad"):
-            buffers = pg.get(key)
-            if not isinstance(buffers, list):
-                continue
-            for i, buffer in enumerate(buffers):
-                if isinstance(buffer, jt.Var):
-                    buffers[i] = jt.zeros_like(buffer).stop_grad()
-    for gi, (saved_pg, slots) in enumerate(load_plan):
-        pg = self.param_groups[gi]
-        steps = _torch_param_steps(pg)
-        for k, v in saved_pg.items():
-            if k == "params":
-                continue
-            pg[k] = v
-        for i, (st, step) in enumerate(slots):
-            if kind in ("adam", "adamw"):
-                if "m" in pg and i < len(pg["m"]) and "exp_avg" in st:
-                    pg["m"][i] = st["exp_avg"]
-                if "values" in pg and i < len(pg["values"]) \
-                        and "exp_avg_sq" in st:
-                    pg["values"][i] = st["exp_avg_sq"]
-            elif kind == "sgd" and "momentum_buffer" in st:
-                pg["values"][i] = st["momentum_buffer"]
-            elif kind == "rmsprop" and "square_avg" in st:
-                pg["values"][i] = st["square_avg"]
-            elif kind == "adan":
-                for source, target in (
-                        ("m", "exp_avg"), ("v", "exp_avg_sq"),
-                        ("d", "exp_avg_diff"),
-                        ("pre_grad", "pre_grad")):
-                    if target in st and source in pg and i < len(pg[source]):
-                        pg[source][i] = st[target]
-            steps[i] = step
-    self.n_step = max_step
-    return None
+    # Keep the public owner in optimizer_api while isolating checkpoint restore.
+    from .optimizer_restore import load_state_dict_torch
+    return load_state_dict_torch(self, state_dict, _torch_optimizer_kind, _torch_param_steps)
 
 
 def _zero_grad_compat(self, set_to_none=True):
@@ -572,6 +480,17 @@ def _step_with_closure(self, loss, retain_graph, closure, kwargs, native_kind):
             self, "_torch_backward_advanced_n_step", False)
         return loss if called_closure else None
     if not torch_style:
+        # A native loss-driven step would bypass the Torch DDP backward owner.
+        # Refuse before advancing per-parameter optimizer step counters.
+        if loss is not None and (
+                any(getattr(parameter, "_torch_ddp_state", None) is not None
+                    for group in self.param_groups for parameter in group["params"])
+                or any(getattr(parameter, "_torch_ddp_state", None) is not None
+                       for parameter in getattr(self, "_Optimizer__input_params", ()))):
+            raise RuntimeError(
+                "native optimizer.backward(loss) cannot own Torch DDP parameters; "
+                "use loss.backward() followed by optimizer.step()"
+            )
         if loss is None and not getattr(
                 self, "_torch_backward_advanced_n_step", False):
             self.n_step = int(getattr(self, "n_step", 0)) + 1

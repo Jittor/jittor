@@ -49,6 +49,7 @@ import unittest
 import jittor as jt
 
 from _helpers.child_process import run_child_script
+from _helpers.capability import require_accelerator
 
 
 def run_probe(source, extra_env=None, crash_isolated=False):
@@ -150,6 +151,43 @@ class TestFlagSetterOrder(unittest.TestCase):
             # what it assigned, and a case about a rollback is the last place
             # that should rely on the rollback working.
             jt.flags.log_vprefix = before
+
+
+class TestUseCudaAtProcessStartup(unittest.TestCase):
+    def test_cuda_enabled_before_jittor_import(self):
+        # The use_cuda flag setter can call sync_all during native static
+        # initialization, before another translation unit has initialized its
+        # fetch queue. Set both names in the *child environment*: changing a
+        # flag after this process imported Jittor misses that startup path.
+        require_accelerator("cuda")
+        source = """
+import os
+from pathlib import Path
+assert os.environ.get("use_cuda") == "1"
+assert os.environ.get("JT_USE_CUDA") == "1"
+import jittor as jt
+assert Path(jt.__file__).resolve() == Path(os.environ["JITTOR_TEST_EXPECTED_SOURCE"]).resolve()
+assert jt.compiler.has_cuda and jt.get_device_count() > 0
+assert int(jt.flags.use_cuda) == 1
+assert jt.introspection.capabilities.backend("cuda").enabled
+jt.sync_all(True)
+fallback_before = int(jt.core.backend_fallback_count())
+value = jt.array([1.0, 2.0]) + 1
+value.sync()
+dispatch = jt.core.dispatch_context([value])
+assert dispatch[0] == "cuda" and 0 <= dispatch[1] < jt.get_device_count(), dispatch
+assert list(value.numpy()) == [2.0, 3.0]
+assert int(jt.core.backend_fallback_count()) == fallback_before
+print("CUDA_PREIMPORT_STARTUP_OK", flush=True)
+"""
+        done = run_child_script(
+            source, env={"use_cuda": "1", "JT_USE_CUDA": "1",
+                         "JITTOR_TEST_EXPECTED_SOURCE": jt.__file__},
+            timeout=180, text=True, merge_stderr=True,
+            name="cuda_preimport_startup", crash_isolated=True)
+        self.assertEqual(done.returncode, 0, done.stdout[-6000:])
+        self.assertIn("CUDA_PREIMPORT_STARTUP_OK", done.stdout,
+                      done.stdout[-6000:])
 
 
 class TestUseCudaLowersOnlyAfterTheFlush(unittest.TestCase):

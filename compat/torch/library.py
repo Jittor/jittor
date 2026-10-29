@@ -119,14 +119,15 @@ class _AutogradContext:
 
     def __init__(self):
         self._saved_tensors: Tuple[Any, ...] = ()
-        self._saved_versions: Tuple[Optional[int], ...] = ()
+        self._saved_versions: Tuple[Optional[Tuple[int, ...]], ...] = ()
 
     def save_for_backward(self, *tensors):
         import jittor as jt
 
         self._saved_tensors = tuple(tensors)
-        self._saved_versions = cast(Tuple[Optional[int], ...], tuple(
-            (t.id if isinstance(t, jt.Var) else None) for t in tensors)
+        self._saved_versions = cast(Tuple[Optional[Tuple[int, ...]], ...], tuple(
+            (tuple(t._saved_storage_version()) if isinstance(t, jt.Var) else None)
+            for t in tensors)
         )
 
     @property
@@ -135,7 +136,7 @@ class _AutogradContext:
 
         for tensor, version in zip(self._saved_tensors, self._saved_versions):
             if isinstance(tensor, jt.Var) and version is not None \
-                    and tensor.id != version:
+                    and tuple(tensor._saved_storage_version()) != version:
                 raise RuntimeError(
                     "one of the variables needed for gradient computation has "
                     "been modified by an inplace operation")

@@ -550,6 +550,7 @@ include src/core/op.cc
 include src/core/op.h
 include src/core/parallel_compiler.cc
 include src/core/parallel_compiler.h
+include src/core/storage_version.h
 include src/core/types.h
 include src/core/var.cc
 include src/core/var.h

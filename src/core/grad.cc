@@ -85,7 +85,9 @@ VarPtr make_grad(Op* op, Var* out, Var* dout, Var* x, int x_index) {
     AmpGradGuard agg(op);
     Float32PrecisionScope precision_scope(op->float32_precision);
     LaunchOriginScope origin_scope(op->launch_origin);
+    BackwardStorageReadScope storage_reads(op);
     auto dx = op->grad(out, dout, x, x_index);
+    if (dx) check_backward_storage_read(dx.ptr);
     // A null dx is an ordinary path, not an error: floor/round/ceil, mod,
     // floor_divide, the bitwise ops and the default Op::grad all return one.
     // The guard used to test the input x and then dereference the result.
@@ -302,7 +304,10 @@ vector<VarPtr> grad(
                     AmpGradGuard agg(op);
                     Float32PrecisionScope precision_scope(op->float32_precision);
                     LaunchOriginScope origin_scope(op->launch_origin);
+                    BackwardStorageReadScope storage_reads(op);
                     op->grads(douts, dins);
+                    for (int j=0; j<n_i; ++j)
+                        if (dins[j]) check_backward_storage_read(dins[j].ptr);
                 }
                 for (int i=0; i<n_i; i++) {
                     int id = snapshot.input_grad_ids[i];

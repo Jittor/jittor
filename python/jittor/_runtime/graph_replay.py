@@ -101,6 +101,7 @@ speedup is worse than none.
 """
 
 from contextlib import nullcontext as _nullcontext
+from contextvars import ContextVar as _ContextVar
 import copy as _copy
 import dataclasses as _dataclasses
 import time
@@ -110,6 +111,18 @@ import jittor as jt
 import jittor_core as _core
 
 from .. import flags
+
+
+#: Active eager warmups that may decide whether a graph can be captured.
+#: A tuple supports nested replay warmups: an inner write marks every active
+#: caller, while ContextVar tokens restore the state even after an exception.
+_ALIAS_WRITE_WARMUPS = _ContextVar("jittor_graph_replay_alias_write_warmups", default=())
+
+
+def _note_alias_preserving_write():
+    """Mark only observed Torch alias-preserving writes, not all mutations."""
+    for observed in _ALIAS_WRITE_WARMUPS.get():
+        observed.append(True)
 
 
 #: Module calls being traced for a capture right now; see `tracing()`.
@@ -850,9 +863,23 @@ class GraphReplay:
             # buffer the module builds lazily, so the capture that follows has
             # nothing pending underneath it.
             allocated = _allocated_bytes()
-            with _no_auto(), jt.no_grad():
-                result = self._module(*args, **kwargs)
-                _sync_result(result)
+            observed_alias_writes = []
+            token = _ALIAS_WRITE_WARMUPS.set(
+                _ALIAS_WRITE_WARMUPS.get() + (observed_alias_writes,))
+            try:
+                with _no_auto(), jt.no_grad():
+                    result = self._module(*args, **kwargs)
+                    _sync_result(result)
+            finally:
+                _ALIAS_WRITE_WARMUPS.reset(token)
+            if observed_alias_writes:
+                # This write is an eager side effect, not a replayable graph
+                # node. Return the already-computed answer without tracing a
+                # second call; subsequent calls take the existing eager path.
+                self._refused = ("the eager warmup performed an alias-preserving "
+                                 "in-place write that graph replay cannot capture")
+                self.stats["rebuilt"] += 1
+                return result
             # What a device recording of this graph would hold: every buffer
             # the call allocates, since a recording re-issues fixed pointers.
             self._graph_bytes = _allocated_bytes() - allocated

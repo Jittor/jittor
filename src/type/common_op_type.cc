@@ -128,7 +128,10 @@ struct CommonOpType : OpByType {
             {"erf", "(($1) std::erf(($2)))"},
             {"erfinv", "(jittor::_erfinv($2))"},
             {"cast", "(($1)($2))"},
-            {"pow", "std::pow(($2),($4))"},
+            // pow(int, float) returns double in C++. Round to the declared
+            // output dtype before fusion can expose that extra precision to
+            // a wider consumer, just as storing the pow tensor would.
+            {"pow", "(($1)std::pow(($2),($4)))"},
             {"maximum", "jittor::_max($1($2), $1($4))"},
             {"minimum", "jittor::_min($1($2), $1($4))"},
             {"mod", "@if(@strcmp($1,float32)==0,(($2)-std::floor(($2)/($4))*($4)),@if(@strcmp(@Tx,float64)==0,(($2)-std::floor(($2)/($4))*($4)),jittor::_floor_mod($1($2), $1($4))))"},

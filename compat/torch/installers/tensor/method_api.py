@@ -1,5 +1,6 @@
 """Stable Torch Tensor method implementations; install only binds these objects."""
 from importlib import import_module
+from contextlib import nullcontext
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from ...context import get_install_context
 from ...types import _make_cpu_resident, _make_cuda_resident, _var_is_cpu_resident
@@ -221,6 +222,17 @@ def _ip(self, value):
     if _assign_data_owner(self, value):
         return self
     target = self
+    if (_owner.jt.flags.no_grad and isinstance(value, _NativeVar)
+            and not _api_is_meta(target) and not _api_is_meta(value)
+            and tuple(target.shape) == tuple(value.shape)
+            and target.dtype == value.dtype and target.device == value.device
+            and target._storage_is_contiguous() and value._storage_is_contiguous()):
+        # An eager GraphReplay warmup can safely perform this write, but its
+        # immediate storage copy cannot be represented by a kept graph.
+        from jittor._runtime.graph_replay import _note_alias_preserving_write
+        _note_alias_preserving_write()
+        target._copy_into_preserving_aliases(value)
+        return self
     was_trainable = not target.is_stop_grad()
     target.assign(value)
     if was_trainable and target.is_stop_grad():
@@ -1429,12 +1441,41 @@ _BINARY_APIS = {
 
 
 def _api_fill(self, val):
-    return _ip(self, _owner.jt.ones(self.shape, self.dtype) * val)
+    # In-place constants belong to the destination even when a caller has
+    # selected another construction placement. Leave native FollowRuntime
+    # aliases on their existing path rather than giving them a frontend default.
+    with (_new_scope(self, None) if self.placement_backend >= 0 else nullcontext()):
+        value = _owner.jt.ones(self.shape, self.dtype).stop_grad() * val
+        if not isinstance(val, _NativeVar):
+            value.stop_grad()
+    return _ip(self, value)
 
 
 def _api_zero(self):
-    return _ip(self, _owner.jt.zeros(self.shape, self.dtype))
+    with (_new_scope(self, None) if self.placement_backend >= 0 else nullcontext()):
+        value = _owner.jt.zeros(self.shape, self.dtype).stop_grad()
+    return _ip(self, value)
 
+
+
+def _task_iadd(self, other):
+    # Route augmented addition through the same alias-preserving task write.
+    # Validate before mutation so bad shapes, casts and leaf writes fail closed.
+    backend = type(self)._frontend_backend
+    if not backend.flags.no_grad and self.requires_grad and self.is_leaf:
+        raise RuntimeError("a leaf Variable that requires grad is being used in an in-place operation")
+    from ..numerical.sparse import _SparseCOO
+    if isinstance(other, _SparseCOO):
+        other = other.to_dense()
+    result = self + other
+    if tuple(result.shape) != tuple(self.shape):
+        raise RuntimeError("in-place result shape does not match destination shape")
+    namespace = get_install_context(backend).target_namespace
+    if not namespace.can_cast(result.dtype, self.dtype):
+        raise RuntimeError("in-place result type cannot be cast to destination type")
+    if result.dtype != self.dtype:
+        result = result.cast(_jittor_dtype_name(self.dtype))
+    return _ip(self, result)
 
 def _api_add(self, o, alpha=1):
     return _ip(self, self + o * alpha)

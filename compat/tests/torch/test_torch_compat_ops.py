@@ -239,6 +239,23 @@ class TestShapeOps(Base):
 
 
 class TestBinaryOps(Base):
+    def test_reflected_pow_rounds_before_widening_and_reciprocal(self):
+        def body(dev):
+            exponent = torch.arange(0, 128, 2, dtype=torch.float32, device=dev) / 128
+            power = 1000000 ** exponent
+            widened = power.to(torch.float64)
+            inverse = 1.0 / power
+            widened_values = widened.detach().cpu().numpy().copy()
+            inverse_values = inverse.detach().cpu().numpy().copy()
+            stored = power.detach().cpu().numpy().copy()
+            self.assertEqual(power.dtype, torch.float32)
+            self.ae(widened_values, stored.astype(np.float64),
+                    msg=f"pow float32 boundary before widening {dev}")
+            self.ae(inverse_values,
+                    (1.0 / stored.astype(np.float64)).astype(np.float32),
+                    msg=f"pow float32 boundary before reciprocal {dev}")
+        both_devices(body)
+
     def test_reflected_scalar_pow_keeps_tensor_device(self):
         def body(dev):
             exponent = torch.arange(0, 8, 2, dtype=torch.float32, device=dev) / 8

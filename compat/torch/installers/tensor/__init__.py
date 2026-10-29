@@ -758,7 +758,17 @@ def cat(tensors, dim=0, out=None, axis=None):
         while t.ndim > min_nd and t.shape[0] == 1:
             t = t.squeeze(0)
         fixed.append(t)
-    out_var = _jt_concat(fixed, dim)
+    # Native AMP changes concat's dtype inference even for two float32
+    # inputs. Casting its result back afterwards recovers the dtype but not
+    # the values (Qwen's float32 RoPE then contains BF16-rounded halves).
+    # Torch autocast leaves cat at the promoted input precision. Suspend the
+    # native register before inference and allocation, as for binary ops.
+    from ...amp import autocast_dtype
+    if autocast_dtype() is not None:
+        with jt.flag_scope(amp_reg=0):
+            out_var = _jt_concat(fixed, dim)
+    else:
+        out_var = _jt_concat(fixed, dim)
     # jittor's concat downcasts a uniform uint8 input to int8 (e.g. mask-rcnn-c4
     # builds a uint8 pos_inds mask via torch.cat of uint8 ones/zeros). torch keeps
     # the common input dtype; restore it so downstream byte-mask indexing works.
