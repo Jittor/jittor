@@ -46,8 +46,12 @@ cuda12 = [
     # A range, not a pin: every modern torch pins its own exact
     # nvidia-cudnn-cu12, and pip reads two different exact pins on one
     # distribution as a conflict. Pinning here made jittor[cuda12] and torch
-    # uninstallable together. Keep in sync with jittor_utils/cuda_wheel.py.
-    "nvidia-cudnn-cu12>=8.9.7,<10; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.8'",
+    # uninstallable together. The floor is 9, not the 8.9.7 the wheel stack
+    # accepts (jittor_utils/cuda_wheel.py): cuDNN's fused attention needs
+    # nvidia-cudnn-frontend 1.30, which builds no graph against 8.x -- every
+    # call declines silently and attention runs as matmuls, 2.4x slower on a
+    # Qwen3 prefill. Torch 2.5 and older pin cuDNN 8.9 and cannot co-install.
+    "nvidia-cudnn-cu12>=9,<10; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.8'",
     "nvidia-nccl-cu12==2.18.3; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.8'",
     # Headers for cuDNN's fused attention (backends/cuda/kernels/nn/
     # cudnn_attention_cuda.py). Without them that kernel declines and
