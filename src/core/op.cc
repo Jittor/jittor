@@ -490,12 +490,16 @@ void order_after_readers(Op* op, const vector<Var*>& written) {
     // (`share_src`) or one already in its share ring -- a broadcast's expand
     // that has run and left the graph, whose consumer has not.
     vector<Var*> aliases;
+    unordered_set<Var*> alias_members;
     auto alias = [&](Var* v) {
-        if (std::find(aliases.begin(), aliases.end(), v) == aliases.end())
-            aliases.push_back(v);
+        if (alias_members.insert(v).second) aliases.push_back(v);
     };
     for (Var* v : written) alias(v);
     vector<Node*> after;
+    unordered_set<Node*> after_members;
+    auto push_after = [&](Node* node) {
+        if (after_members.insert(node).second) after.push_back(node);
+    };
     for (size_t k = 0; k < aliases.size(); k++) {
         Var* v = aliases[k];
         if (v->share_next)
@@ -512,14 +516,12 @@ void order_after_readers(Op* op, const vector<Var*>& written) {
                 // A pending reader: its first unfinished output stands for it.
                 if (stands_for_reader || out->is_finished()) continue;
                 stands_for_reader = true;
-                if (std::find(after.begin(), after.end(), out) == after.end())
-                    after.push_back(out);
+                push_after(out);
             }
         }
     }
     for (Var* saved : saved_storage_readers(written, op))
-        if (std::find(after.begin(), after.end(), saved) == after.end())
-            after.push_back(saved);
+        push_after(saved);
     if (after.empty()) return;
     // A reader upstream of the op -- the forward a gradient is computed
     // from -- is ordered already by the data it feeds it, and an edge would
