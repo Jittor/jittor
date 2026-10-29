@@ -1,5 +1,11 @@
 # Torch Compatibility Release Acceptance: 2026-10-26 Day 2–5 Continuation
 
+## 2026-10-30 隔离 AdamW correction 标量复用候选 CUDA 小型验证
+
+尚未合入主树的两个 Python 模块 overlay 在 df45 真实 CUDA core 上，使用单 GPU、五参数、FP32、nonfused 且 foreach=false 的合成 fixture；PyTorch、Jittor 基线和候选分别完成 full、checkpoint 新进程 resume 及无逐步显式同步的 async，共 9 个阶段。基线与候选按 FP32 位模式精确对照通过，与 PyTorch 的对照在 `atol=2e-6, rtol=2e-6` 下通过；候选 helper 在 full/resume/async 分别记录 18/10/18 次调用与 8/4/8 次实际复用命中。核验了真实目标 GPU UUID、参数和 moment 的 CUDA dispatch，Jittor fallback 为 0；恢复 step 核对的是数值，不能据此宣称 PyTorch step 标量本身位于 GPU。
+
+async 脚本没有逐步显式同步或读回，在最终一次显式同步后检查四步 loss；底层是否发生内部同步及其完整异步生命周期未证明。该小型实验不覆盖 mixed device、AMP/BF16、图捕获、BERT 实际命中或性能收益。终态功能缓存新增 68 项、无删除、既有项仅操作锁文本变化，独立性能缓存与封存 SDPA 缓存端点不变，锁与可见本任务进程/缓存 FD 为空；权限拒读与端点观察限制仍在。独立终审 `/data6/cgq/jittor-lab/_state/release-day23/20261030-adamw-cuda-r2-independent-terminal-r1/terminal-audit.json`，SHA-256 `6c832ca93c7639c584371fc1e28f447b16db0cc68802df56a6e1d0b524ec640f`。
+
 ## 2026-10-30 隔离 AdamW bias correction 标量复用候选 CPU 证据
 
 隔离候选在当前 df45 工作树上以两个 Python 模块 overlay 验证，尚未合入主树。r4 小型 CPU fixture 分别运行真实 PyTorch、Jittor 基线和候选各 4 步，并从第 2 步 checkpoint 恢复后再执行 2 步；候选标量 correction 记录 28 次调用、12 次实际复用命中。独立复核中候选与基线的 FP32 位模式一致；与 PyTorch 的对照在 `atol=2e-6, rtol=2e-6` 下通过，观测最大绝对差为 `6.103515625e-5`，差值不能单独代替相对/绝对组合阈值判断。r4 的 comparison 进程自然 rc0 且结果文件 PASS，但控制器未在活体扫描中观测到短命进程身份，原整组终态仍为 FAIL 并保留，不能回写为通过。
