@@ -1,5 +1,12 @@
 # Torch Compatibility Release Acceptance: 2026-10-26 Day 2–5 Continuation
 
+## 2026-10-30 隔离 AdamW 候选 BERT A/B 热态诊断失败
+
+新用途诊断 r3 保持每侧首步、固定 16 次预热及 10 次热更新的原严格稳定门槛，并在计时结束后逐样本保存 allocator 与 JIT 快照；新增扫描和写盘可能扰动后续样本。baseline0 完成，candidate0 首步 helper 197 次调用、196 次命中，预热末两次稳定、10 个热更新 loss 均有限，但热态 reserved allocator 前九次为 `4172283904` bytes、第十次为 `4266655744` bytes，范围 90 MiB，超出原 1 MiB 门槛；allocated 恒为 `2184966656` bytes，12 份热态 JIT 快照一致。baseline 的同一 90 MiB 扩张发生在预热第 4 次后并随后稳定；具体分配机制及长期行为未知。
+
+该次严格 FAIL 保留，未产生正式配对速度比，也不能反推此前 r1 合并断言失败的原因。unit 失败退出且 cgroup 已清空；三处缓存锁无内核持锁记录，源码、产品和两处保护缓存端点一致，私有性能缓存无增删，仅探针 mtime 与锁文本变化。FD 权限拒读及离散采样限制现场结论，端点快照不排除瞬态活动；未自动重试。独立终审 `/data6/cgq/jittor-lab/_state/release-day23/20261030-adamw-bert-performance-ab-r3-independent-failure-audit-r1/audit.json`，SHA-256 `1673299b3f176a114d31e33248f7dcf20bb3b511f87b21ebcc36cff01061e9e4`。
+
+
 ## 2026-10-30 隔离 AdamW 候选 BERT 性能 A/B 单次失败
 
 在当前 df45 源码和已审独立性能 CUDA core 上，按 AB/BA/AB 计划运行 BERT base B8/S256 FP32、eager、nonfused 的基线与隔离候选性能对照。baseline0 完成首步、16 次预热、10 个热样本及各 3 次独立 memory/attribution 更新；candidate0 首步 helper 197 次调用、196 次命中，16 次预热末两次达到稳定门槛，10 次热更新的 loss 有限，但随后因合并断言 `hot JIT or allocator unstable` 失败。热样本时序、热态 JIT 变化及 allocator 明细未在异常前落盘，不能确定是哪一条件触发；candidate 结果与配对速度比均未产生，后续四阶段未运行，失败原件保留且没有自动重试。
