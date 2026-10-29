@@ -1,5 +1,6 @@
 """Stable Torch Tensor method implementations; install only binds these objects."""
 from importlib import import_module
+import contextlib
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from ...context import get_install_context
 from ...types import _PYTHON_SCALAR_DTYPES, _make_cpu_resident, _make_cuda_resident, _var_is_cpu_resident
@@ -254,6 +255,29 @@ def _torch_setitem(self, slices, value):
     return result
 
 
+#: Depth of `_optimizer_write_scope`: readers resolved for a whole group.
+_OPTIMIZER_WRITES = [0]
+
+
+@contextlib.contextmanager
+def _optimizer_write_scope():
+    """Resolve every reader once for a group of optimizer stores.
+
+    Each in-place store otherwise resolves the destination storage's readers
+    with a full `sync_all` -- three stores per parameter for AdamW, which on
+    an Ascend 910B3 was 1.19 s of a 4.7 s ten-step `qwen3_train`. In an
+    optimizer update a parameter's readers are upstream of its new value, so
+    one sweep before the group covers them; the stores then only materialize
+    their own source.
+    """
+    _owner.jt.sync_all()
+    _OPTIMIZER_WRITES[0] += 1
+    try:
+        yield
+    finally:
+        _OPTIMIZER_WRITES[0] -= 1
+
+
 def _copy_detached_storage(self, value):
     # Optimizer buckets retain detached aliases of dense slices. Rebinding a
     # holder would leave those aliases reading the old allocation. Only use
@@ -284,7 +308,13 @@ def _copy_detached_storage(self, value):
             return False
         # Resolve pending readers (including clone snapshots) before changing
         # bytes. _copy_into owns placement, stream ordering and dense copies.
-        _owner.jt.sync_all()
+        # An optimizer group resolves them once for every parameter instead
+        # (see `_optimizer_write_scope`), and here only materializes the value
+        # whose graph contains this tensor's readers.
+        if _OPTIMIZER_WRITES[0]:
+            value.sync()
+        else:
+            _owner.jt.sync_all()
         if not self._mem_ptr_now or not value._mem_ptr_now:
             # Still unbuilt after the sync: a call being captured for replay,
             # where the sync runs nothing. Such a tensor has no storage an
