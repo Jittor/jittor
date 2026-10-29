@@ -30,6 +30,45 @@ def _attention_bias(scores, attn_mask, is_causal):
     return scores
 
 
+#: The mask whose causal verdict `_exactly_causal` last computed: (key, verdict).
+_EXACT_CAUSAL = [None, False]
+
+
+def _exactly_causal(mask, query_length, source_length):
+    """Whether `mask` is literally the causal keep-mask.
+
+    Transformers builds a ``[1, 1, lq, lk]`` boolean causal mask and hands a
+    view of it to every layer. A fused kernel reads that as ``is_causal``;
+    handed the mask instead, cuDNN splits the work into gemms plus a bias. The
+    check is exact -- the mask has to equal ``tril(ones)`` -- so a padded or
+    differently laid out mask keeps the general path.
+    """
+    if _jittor_dtype_name(mask.dtype) != "bool":
+        return False
+    if len(mask.shape) != 4 or query_length != source_length or query_length < 2:
+        return False
+    if int(mask.shape[0]) != 1 or int(mask.shape[1]) != 1:
+        return False
+    if int(mask.shape[-2]) != query_length or int(mask.shape[-1]) != source_length:
+        return False
+    try:
+        base = mask._view_base_id() if mask._is_view() else -1
+        key = (base, mask.var_ptr if base < 0 else 0, tuple(mask.shape),
+               mask._storage_offset(), tuple(mask._storage_strides()))
+    except Exception:
+        key = None
+    if key is not None and _EXACT_CAUSAL[0] == key:
+        return _EXACT_CAUSAL[1]
+    with jt.no_grad():
+        expected = jt.tril(jt.ones((query_length, source_length), dtype="bool"))
+        verdict = bool(
+            (mask.reshape((query_length, source_length)) == expected).all().item()
+        )
+    if key is not None:
+        _EXACT_CAUSAL[0], _EXACT_CAUSAL[1] = key, verdict
+    return verdict
+
+
 def _product(a, b, trans_a=False, trans_b=False):
     """``a @ b`` reading either operand transposed in place.
 
@@ -257,6 +296,16 @@ def scaled_dot_product_attention(
     """
     if type(allow_reduced_precision) is not bool:
         raise TypeError("allow_reduced_precision must be bool")
+    if (
+        attn_mask is not None
+        and not is_causal
+        and len(query.shape) == 4
+        and len(key.shape) == 4
+        and _exactly_causal(attn_mask, int(query.shape[-2]), int(key.shape[-2]))
+    ):
+        # The mask says exactly what `is_causal` says, and a fused kernel runs
+        # the latter as one engine call where the former becomes a bias.
+        attn_mask, is_causal = None, True
     precision_options = (
         {"allow_reduced_precision": True}
         if allow_reduced_precision

@@ -81,6 +81,22 @@ one kernel -- the device side is 20.9 ms and close to PyTorch, while 63% of the
 wall clock of its 1787 kernels goes to host graph construction and launches
 (`cudnn_conv*` at 51/50/51 calls and GroupNorm's 90 `code` calls are ordinary).
 
+## Alongside: a bf16 masked prefill takes the causal path
+
+`qwen3_prefill` hands SDPA a `[1,1,2048,2048]` boolean causal mask built by
+Transformers; with a mask the fused kernel can only treat it as a score-sized
+bias, and the step measured 88.4 ms against PyTorch's 36.4 (2.43x).
+`jittor.nn.functional.scaled_dot_product_attention` now compares the mask
+element by element with `tril(ones)` and, when they are equal, calls with
+`is_causal=True` -- the same statement -- which brings the case to **30.2 ms,
+0.83x**. Masks that are not exactly causal (padding, say) keep the old path.
+
+The same investigation found that a venv whose cuDNN and
+`nvidia-cudnn-frontend` are from different majors (cuDNN 8.9 with frontend
+1.30, for instance) answers "unsupported" for every shape, so attention
+silently falls back to matmuls. `_library()` now self-checks one shape it must
+support when it first loads and warns once when that fails.
+
 ## Reproduction
 
 ```bash
