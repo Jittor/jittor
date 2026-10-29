@@ -153,8 +153,14 @@ def test_foreign_root_module_is_preserved_and_reported(fake_package):
 
 def test_relocatable_contract_and_its_negative_rules(tmp_path):
     audit_adapter(Path(bootstrap.__file__).resolve().parent)
+    # `jittor.compat.torch` itself is a published surface now: the tensordict
+    # and verl adapters import `nested_tensor_type`, `namespace_owner` and
+    # `reconcile_optimizer_state` from it. The boundary still rejects its
+    # private submodules, so the control below reaches into one of those
+    # (`api_delegates`) rather than naming a symbol that happens not to exist.
     for invalid in ("import jittor._core.module", "import jittor as engine\nengine.flag=1",
-                    "import torch\ngetattr(torch, '_private')", "from jittor.compat.torch import api",
+                    "import torch\ngetattr(torch, '_private')",
+                    "from jittor.compat.torch.api_delegates import bind_delegates",
                     "from jittor import _private", "from jittor.compat.transaction import _runtime_hooks"):
         with pytest.raises(AssertionError):
             check_source(invalid)

@@ -1143,6 +1143,9 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
             if (V_ON(1)) display_memory_info(__FILELINE__, false, false);
             for (Var* v : op->outputs())
                 v->set_flag(VarFlags::_execution_failed);
+            // The rest of the batch never ran; keep its pending liveness
+            // from outliving the failure (see `mark_failed_batch`).
+            mark_failed_batch(plan);
             // do_prepare may itself be the throwing operation. Preserve its
             // first exception and whatever key it produced instead of running
             // the failing, potentially stateful preparation a second time.

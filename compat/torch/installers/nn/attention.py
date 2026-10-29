@@ -4,6 +4,7 @@ import jittor as jt
 from jittor._runtime import dispatch as _dispatch_module
 from jittor.nn.backends import hooks as _backend_hooks
 from jittor.nn.functional.attention import (
+    _exactly_causal,
     scaled_dot_product_attention as _native_scaled_dot_product_attention,
     LAST_FUSED_KERNEL as _NATIVE_LAST_FUSED,
 )
@@ -347,6 +348,19 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None,
                                  dropout_p=0.0, is_causal=False,
                                  scale=None, enable_gqa=False, **kw):
     del kw
+    if (
+        attn_mask is not None
+        and not is_causal
+        and len(query.shape) == 4
+        and len(key.shape) == 4
+        and _exactly_causal(attn_mask, int(query.shape[-2]), int(key.shape[-2]))
+    ):
+        # The mask states exactly what `is_causal` states, and every backend
+        # runs the latter more cheaply: the ACL provider reads a compressed
+        # causal mask (356.7 -> 197.2 us a layer on a 910B3) and cuDNN runs one
+        # engine call instead of a score-sized bias. Decided here, before the
+        # flash hook and the native call, because either can answer first.
+        attn_mask, is_causal = None, True
     # Torch's default fused attention rounds probability products in BF16.
     # Ask the native owner for its admitted backend-precision path; its math
     # fallback and the native public default keep FP32 intermediates.

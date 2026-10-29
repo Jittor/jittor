@@ -16,7 +16,10 @@ backward
     A block owns a tile of keys. It walks the queries a tile at a time,
     rebuilds the probabilities from those row statistics, accumulates the key and
     value gradients in registers, and adds its share of each query gradient
-    into global memory.
+    into global memory. Its per-row softmax term, ``sum_k p_k * dP_k``, is the
+    same number as ``dO . O``; only on a row whose mass sits on one key does the
+    float32 rounding of ``O`` swallow the result, so only those rows pay for the
+    reconstruction.
 
 Supports head dimensions up to 128, causal (top-left aligned, as the
 composite path builds it) or not, with an optional boolean or additive float
@@ -35,6 +38,9 @@ from jittor._runtime.dispatch import register_kernel
 _MAX_HEAD_DIM = 128
 #: Below this many blocks a forward grid leaves SMs idle; see `_forward`.
 _SM_BLOCKS = 128
+#: A row recomputes its softmax term when ``1 / sum_k exp(score_k - max)``
+#: exceeds this, i.e. when the row's mass is spread over fewer than two keys.
+_RECOMPUTE_INV_ABOVE = 0.5
 
 _KERNELS = r"""
 #include <cfloat>
@@ -133,23 +139,32 @@ __device__ __forceinline__ void bias4(const Mask& mask, long long row_at, int co
     for (int c = 0; c < 4; c++) out[c] = col + c < lk ? p[c * mask.col_stride] : 0.f;
 }
 
-// Recompute the softmax row term from dP, rather than its rounded output.
-// When a row is nearly one-hot, dot(dO, float32(output)) can lose the entire
-// small Q/K gradient. Only one double per query is stored, never a score matrix.
+// The per-row softmax term of the query gradient: sum_k p_k * dP_k, which the
+// caller already has as dO . O. Recomputing it from dP only pays off where
+// that product loses precision -- a row nearly one-hot has p_1 ~ 1 and the
+// remaining mass rounds away inside the float32 output, taking the Q/K
+// gradient with it. Every other row takes the caller's value, so a training
+// step no longer walks the score matrix once per layer just to rebuild a
+// number it already computed; BERT-large's backward was 136 of its 172 ms
+// here. Only one double per query is stored, never a score matrix.
 template <int D, bool CAUSAL, int MASK, bool DROPOUT>
 __global__ void row_delta(const float* q, const float* k, const float* v,
-        const float* dout, const float* normalizer, double* delta,
-        int lq, int lk, float scale, Mask mask, Rows ql, Rows kl, Rows vl,
-        Dropout dropout) {
+        const float* dout, const float* normalizer, const double* approximate,
+        double* delta, int lq, int lk, float scale, float recompute_inv,
+        Mask mask, Rows ql, Rows kl, Rows vl, Dropout dropout) {
     const int row = blockIdx.x, bh = blockIdx.y, tid = threadIdx.x;
     const RowPtr<const float> qb(q, ql, bh), kb(k, kl, bh), vb(v, vl, bh),
         dob(dout, ql, bh);
     const size_t index = ((size_t)bh * lq + row) * 2;
     const float top = normalizer[index], inv = normalizer[index + 1];
+    if (!(inv > recompute_inv)) {
+        if (tid == 0) delta[(size_t)bh * lq + row] = approximate[(size_t)bh * lq + row];
+        return;
+    }
     const long long mask_base = MASK ? mask.base(bh) : 0;
     double weighted = 0., total = 0.;
     for (int col = tid; col < lk; col += blockDim.x) {
-        if ((CAUSAL && col > row) || inv == 0.f) continue;
+        if (CAUSAL && col > row) continue;
         float score = 0.f, dp = 0.f;
         #pragma unroll 4
         for (int d = 0; d < D; d++) {
@@ -800,21 +815,24 @@ def _forward(query, key, value, call):
         cuda_header=_KERNELS, cuda_src=src)
 
 
-def _row_delta(query, key, value, grad_out, normalizer, call):
+def _row_delta(query, key, value, grad_out, normalizer, approximate, call):
     b = int(query.shape[0])
     h = int(query.shape[2] if call.seq[0] else query.shape[1])
     lq = int(query.shape[1] if call.seq[0] else query.shape[2])
     d = int(query.shape[3])
     lq_expr, lk_expr = call.lengths()
+    # `approximate` is dO . O, `call.args(6)` because it is a sixth fixed input
+    # ahead of the mask and dropout the call appends.
     return jt.code(
         (b, h, lq), "float64",
-        [query, key, value, grad_out, normalizer] + call.extras(),
+        [query, key, value, grad_out, normalizer, approximate] + call.extras(),
         cuda_header=_KERNELS,
         cuda_src=_launch(
             f"mea::row_delta<{d}, {call.template()}>",
             f"{lq_expr}, in0->shape[0] * {call.heads_expr()}", 0,
-            f"in0_p, in1_p, in2_p, in3_p, in4_p, out0_p, "
-            f"{lq_expr}, {lk_expr}, {float(call.scale)!r}f, {call.args(5)}",
+            f"in0_p, in1_p, in2_p, in3_p, in4_p, in5_p, out0_p, "
+            f"{lq_expr}, {lk_expr}, {float(call.scale)!r}f, "
+            f"{_RECOMPUTE_INV_ABOVE!r}f, {call.args(6)}",
             threads="256"))
 
 
@@ -860,7 +878,14 @@ class _FusedAttentionF32(jt.Function):
     def grad(self, grad_out):
         query, key, value, out, normalizer = self.saved
         grad_out = grad_out.float32()
-        delta = _row_delta(query, key, value, grad_out, normalizer, self.call)
+        # dO . O is exactly the row term the kernel reconstructs; it is right
+        # wherever O's float32 rounding is small against the row sum, which
+        # `_row_delta` decides per row.
+        approximate = (grad_out * out).sum(-1)
+        if self.call.seq[0]:
+            approximate = approximate.transpose(0, 2, 1)
+        delta = _row_delta(query, key, value, grad_out, normalizer,
+                           approximate.float64().contiguous(), self.call)
         call = self.call
         grad_query, grad_key, grad_value = _backward(
             query, key, value, grad_out, normalizer, delta, call)

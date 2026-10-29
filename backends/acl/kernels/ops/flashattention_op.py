@@ -542,8 +542,6 @@ def scaled_dot_product_attention_acl(
         target_shape = (int(q_shape[0]), query_heads, query_length, source_length)
         if any(actual not in (1, expected) for actual, expected in zip(mask_shape, target_shape)):
             return None
-        if mask_shape != target_shape:
-            reshaped = reshaped.broadcast(target_shape)
         if mask_dtype == "bool":
             # Torch's SDPA boolean mask is True where attention is kept
             # ("the element should take part in attention"). CANN's
@@ -553,8 +551,23 @@ def scaled_dot_product_attention_acl(
             # caller-supplied bool mask lands in the same convention as
             # the causal mask this kernel already builds and passes
             # through the identical attenMask slot.
+            #
+            # The call does not need the mask at score size.
+            # aclnnFlashAttentionScoreV2 reads a [1, 1, s, s] boolean
+            # attenMask for every head and batch itself (checked on a 910B3
+            # against the composite reference), while broadcasting it to
+            # [b, n, s, s] first wrote 64 MiB at 2048 tokens and, on the ACL
+            # backend, cost two score-sized casts on top of the broadcast:
+            # 11.4 + 5.8 + 2.3 ms a step of qwen3-0.6B prefill, whose whole
+            # device step is 55 ms. A mask that still has to grow along the
+            # query or key axis is expanded here as before, and so is the
+            # float "pse" slot below -- aclnn promises neither there.
             bool_atten_mask = jt.logical_not(reshaped)
+            if tuple(mask_shape[-2:]) != target_shape[-2:]:
+                bool_atten_mask = bool_atten_mask.broadcast(target_shape)
         else:
+            if mask_shape != target_shape:
+                reshaped = reshaped.broadcast(target_shape)
             real_shift = reshaped
 
     causal_mask = bool_atten_mask

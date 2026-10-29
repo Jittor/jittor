@@ -33,7 +33,8 @@ from _helpers.process_modes import TORCH_MODE_PATHS, NATIVE_MODE_PATHS
 
 #: The root every gate starts from.
 TEST_ROOT = "tests"
-TEST_ROOTS = (TEST_ROOT, "compat/tests", "adapters/tests")
+TEST_ROOTS = (TEST_ROOT, "compat/tests", "adapters/tests",
+              "adapters/jittor_adapters")
 
 #: ``(path, reason)`` -- a path no CPU gate runs, and why it cannot.
 #:
@@ -229,8 +230,14 @@ def native_arguments():
                            if child.name != "__pycache__")
         else:
             ignored.append(path)
-    return tuple(runnable(path) for path in TEST_ROOTS) \
-        + _ignores(tuple(sorted(ignored)) + excluded_paths())
+    # A root that owns Torch mode is named by that session, not this one: the
+    # mode is a property of the process, and pytest's policy refuses a path
+    # argument it owns even when an --ignore for the same path follows. Naming
+    # `adapters/jittor_adapters` here plus ignoring it made every native gate
+    # exit before running a test.
+    roots = tuple(runnable(path) for path in TEST_ROOTS
+                  if path not in TORCH_MODE_PATHS)
+    return roots + _ignores(tuple(sorted(ignored)) + excluded_paths())
 
 
 def torch_arguments():

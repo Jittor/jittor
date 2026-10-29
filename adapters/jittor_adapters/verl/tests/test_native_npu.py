@@ -11,7 +11,7 @@ import types
 import unittest
 from unittest import mock
 
-import test_adapter as lifecycle
+from _verl_adapter_support import compat, patcher, transaction
 from jittor_adapters import verl
 from jittor_adapters.verl import native_npu as adapter
 from jittor_adapters.verl import device_probe, optimizer_offload
@@ -20,7 +20,6 @@ from jittor_adapters._common import UnsupportedAdapterVersion
 
 FIXTURE = Path(__file__).with_name("_npu_initializer_fixture.py")
 HF_FIXTURE = Path(__file__).with_name("_qwen3_source_fixture.py")
-patcher, transaction = lifecycle.patcher, lifecycle.transaction
 
 
 class Qwen3Config:
@@ -82,7 +81,7 @@ class TestVerlNativeNpuPolicy(unittest.TestCase):
             "verl": root, "transformers": hf_root, config.__name__: config,
             self.module.__name__: self.module, self.alias.__name__: self.alias,
             self.hf.__name__: self.hf, "torch": self.frontend,
-            "jittor": types.ModuleType("jittor"), "jittor.compat": lifecycle.compat,
+            "jittor": types.ModuleType("jittor"), "jittor.compat": compat,
             "jittor.compat.module_patcher": patcher, "jittor.compat.torch": public,
         }))
         self.saved_registry = dict(patcher._REGISTRY)

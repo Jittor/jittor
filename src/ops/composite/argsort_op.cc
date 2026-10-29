@@ -22,7 +22,7 @@ namespace jittor {
 static auto make_index = op_constructor<VarPtr, NanoVector, int64, NanoString>("index");
 static auto make_reindex_reduce = op_constructor<VarPtr, Var*, NanoString, NanoVector, vector<string>&&, vector<string>&&, vector<Var*>&&>("reindex_reduce");
 #ifdef IS_ACL
-static auto make_argsort = op_constructor<vector<VarPtr>, Var*, int, bool, NanoString>("argsort");
+static auto make_argsort = op_constructor<vector<VarPtr>, Var*, int, bool, NanoString, bool>("argsort");
 static auto make_unary = op_constructor<VarPtr, Var*, NanoString>("unary");
 #endif
 
@@ -46,7 +46,7 @@ ArgsortOp::ArgsortOp(Var* x, int dim, bool descending, NanoString dtype, bool st
         // CANN Sort returns int64 indices. Preserve the requested Jittor
         // index dtype through an accelerator Cast instead of a CPU copy.
         if (backend == BackendId::Acl && dtype != ns_int64) {
-            auto sorted = make_argsort(x, dim, descending, ns_int64);
+            auto sorted = make_argsort(x, dim, descending, ns_int64, false);
             forward(make_unary(sorted[0], dtype));
             forward(sorted[1]);
             return;

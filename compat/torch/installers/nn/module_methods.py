@@ -1120,6 +1120,7 @@ def _zero_grad(self, set_to_none=True):
         except EXPECTED as exc:
             swallowed("torch/installers/nn.py _zero_grad: opt.zero_grad()", exc)
     try:
+        pending = []
         for p in self.parameters():
             grad = getattr(p, "_torch_grad", None)
             if set_to_none:
@@ -1135,7 +1136,14 @@ def _zero_grad(self, set_to_none=True):
                 # the ``jt.zeros`` trap recorded here before: that built a native
                 # Var, whose dtype prints as "float32" where the parameter's
                 # prints as "torch.float32", and which loses every Tensor method.
-                grad.zero_()
+                #
+                # The whole list is zeroed after the loop: each ``zero_``
+                # resolves the storage's pending readers first, and doing that
+                # per parameter drained the device between 199 writes.
+                pending.append(grad)
+        if pending:
+            from ..tensor.method_api import _api_zero_batch
+            _api_zero_batch(pending)
     except EXPECTED as exc:
         swallowed("torch/installers/nn.py _zero_grad: for p in self.parameters():", exc)
     return None

@@ -11,6 +11,8 @@
 ```{toctree}
 :maxdepth: 1
 
+2026-10-29-ascend-bool-mask-broadcast
+2026-10-29-cuda-f32-attention-row-term
 2026-10-25-recent-pr-integration
 2026-10-24-datatrove-cpu-compatibility
 2026-10-16-diffusers-maintained-cpu-nightly

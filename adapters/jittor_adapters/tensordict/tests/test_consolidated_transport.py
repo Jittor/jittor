@@ -10,17 +10,10 @@ import unittest
 from unittest import mock
 
 
-def _load(name, filename):
-    spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name(filename))
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
+from _td_adapter_support import compat, patcher, transaction
+from _td_v010_transport_fixture import _rebuild_tensordict_files_consolidated
 
-
-support = _load('_td_transport_host_support', 'test_adapter.py')
-compat, patcher, transaction = support.compat, support.patcher, support.transaction
-fixture = _load('_td_transport_source', '_td_v010_transport_fixture.py')._rebuild_tensordict_files_consolidated
+fixture = _rebuild_tensordict_files_consolidated
 from jittor_adapters.tensordict import consolidated_transport as adapter
 from jittor_adapters._common import UnsupportedAdapterVersion
 

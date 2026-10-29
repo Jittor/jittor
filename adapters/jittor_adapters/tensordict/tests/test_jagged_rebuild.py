@@ -9,21 +9,10 @@ import types
 import unittest
 from unittest import mock
 
-# Sibling tests in other adapters also use test_adapter.py. Load the host
-# support explicitly under a unique name; never depend on pytest's basename
-# import mode or whichever unrelated test_adapter was collected first.
-def _load_sibling(name, filename):
-    spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name(filename))
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
+from _td_adapter_support import Jagged, compat, patcher, transaction
+from _td_v010_rebuild_fixture import _is_leaf_nontensor, _rebuild_njt_from_njt
 
-
-support = _load_sibling('_td_rebuild_host_support', 'test_adapter.py')
-compat, patcher, transaction, Jagged = support.compat, support.patcher, support.transaction, support.Jagged
-source = _load_sibling('_td_rebuild_source_fixture', '_td_v010_rebuild_fixture.py')
-fixture, leaf_fixture = source._rebuild_njt_from_njt, source._is_leaf_nontensor
+fixture, leaf_fixture = _rebuild_njt_from_njt, _is_leaf_nontensor
 from jittor_adapters.tensordict import jagged_rebuild as adapter
 from jittor_adapters._common import UnsupportedAdapterVersion
 

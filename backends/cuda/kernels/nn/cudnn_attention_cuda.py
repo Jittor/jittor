@@ -96,7 +96,33 @@ def _library():
                     _state["library"] = None
                 else:
                     _state["library"] = _build(frontend)
-        return _state["library"]
+        library = _state["library"]
+    if library is not None and not _state.get("checked"):
+        _state["checked"] = True
+        _warn_if_unusable()
+    return library
+
+
+def _warn_if_unusable():
+    """Say so when cuDNN answers no to a shape it always supports.
+
+    A frontend and a runtime from different majors -- 1.30 against cuDNN 8.9,
+    say -- build no graph at all. Every call then declines and attention
+    silently runs as matmuls, which measured 2.4x slower on Qwen3-0.6B prefill
+    (36.4 against 88.4 ms) with nothing in the log to connect cause and effect.
+    """
+    try:
+        with jt.no_grad():
+            query = jt.randn((1, 2, 16, 64)).bfloat16().cuda()
+            key = jt.randn((1, 2, 16, 64)).bfloat16().cuda()
+            usable = _supported(query, key, 0.125, False, False, None, 0)
+    except Exception:
+        return
+    if usable:
+        return
+    jt.LOG.w("cuDNN fused attention answered no to a shape it always supports; "
+             "the cuDNN runtime and nvidia-cudnn-frontend are probably from "
+             "different major versions. Attention runs as matmuls instead.")
 
 
 _HEADER = """

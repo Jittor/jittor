@@ -147,4 +147,10 @@ struct ExecPlan {
 // Leaves `plan.epoch` held; the caller releases it once the batch is compiled.
 void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan);
 
+// A batch that failed before running all of its ops leaves the rest pending.
+// Mark every unfinished var so the next sync does not plan and execute them
+// again and re-raise this batch's error from a caller that built none of
+// them. Outputs that already finished keep their bytes and are untouched.
+void mark_failed_batch(const ExecPlan& plan);
+
 } // jittor

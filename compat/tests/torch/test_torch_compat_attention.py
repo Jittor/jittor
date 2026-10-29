@@ -2479,5 +2479,44 @@ class TestMultiheadAttention(Base):
         both_devices(body)
 
 
+class TestCausalMaskDispatch(unittest.TestCase):
+    """An exact causal mask reaches the backends as ``is_causal``.
+
+    The decision has to be made in this wrapper: the flash hook and the ACL
+    provider answer before the native call, and the native check alone never
+    ran on the NPU, where the provider accepted the mask (a 910B3 measured
+    356.7 us a layer for the mask against 197.2 for the causal path).
+    """
+
+    def _seen(self, mask):
+        seen = []
+
+        def native(query, key, value, attn_mask=None, is_causal=False, **kwargs):
+            seen.append((attn_mask is None, bool(is_causal)))
+            return value
+
+        with mock.patch.object(
+            _attention_impl, "_native_scaled_dot_product_attention", native
+        ), mock.patch.object(
+            _attention_impl, "_try_flash_scaled_dot_product_attention",
+            lambda *args, **kwargs: None,
+        ):
+            query, key, value = (torch.randn(1, 2, 8, 4) for _ in range(3))
+            torch.nn.functional.scaled_dot_product_attention(
+                query, key, value, attn_mask=torch.tensor(mask)[None, None]
+            )
+        return seen
+
+    def test_an_exact_causal_mask_is_passed_as_is_causal(self):
+        self.assertEqual(
+            self._seen(np.tril(np.ones((8, 8), dtype=bool))), [(True, True)]
+        )
+
+    def test_a_mask_that_is_not_exactly_causal_is_passed_through(self):
+        mask = np.tril(np.ones((8, 8), dtype=bool))
+        mask[5, 2] = False
+        self.assertEqual(self._seen(mask), [(False, False)])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

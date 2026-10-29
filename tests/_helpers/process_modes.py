@@ -22,6 +22,9 @@ TORCH_MODE_PATHS = (
     "compat/tests/fsdp2",
     "compat/tests/structure",
     "adapters/tests/vllm",
+    # The adapter-internal suites arm the Torch adapters and assert their
+    # Torch-facing boundaries (`_adapter_boundary`, armed module patches).
+    "adapters/jittor_adapters",
     # The OpInfo runner exercises Torch-facing signatures for the shared
     # numerical surface. The rest of tests/ops asserts native Jittor behavior.
     "tests/ops/test_ops.py",
