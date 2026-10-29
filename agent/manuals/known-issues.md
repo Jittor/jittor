@@ -1846,19 +1846,27 @@ workaround.
   2026-09-24 record of the same case. The device profile shows, per layer, two
   `cublas_batched_matmul` at 454 us and one `fused(ternary)` at 729 us
   attributed to the SDPA call site.
-- Cause: not isolated. In the model,
-  `nn.functional.attention.try_dispatch("nn.scaled_dot_product_attention", ...)`
-  answers None for every masked layer (84 calls over three steps), so the math
-  fallback runs. Executing the same call in the same model with a sync after
-  each layer costs 0.45 ms instead of 1.9 ms, and handing it a contiguous mask
-  costs 0.24 ms, so the missing piece is not a kernel but how the 28-layer
-  graph runs it. Ruled out: the cuDNN frontend (`nvidia-cudnn-frontend` 1.30
-  installed; a standalone call is 0.2 ms), a view mask, transpose-view inputs,
-  and `is_causal` (forcing the causal path inside the model is slower).
-- Workaround: none a user can adopt; a per-layer `jt.sync` is a measurement,
-  not a fix.
+- Cause: two layers. (a) With the component stack this machine resolved --
+  cuDNN 8.9.7 plus `nvidia-cudnn-frontend` 1.30 -- `jt_cudnn_sdpa_supported`
+  returns 0 for every probe (dense, biased, causal, 512 and 2048), so
+  `_cudnn_fused_attention` declines every call and the math path runs; the two
+  are incompatible, and the decline is silent. (b) With cuDNN 9.19 installed
+  the probe answers 1 and the fused kernel is chosen, but the workload still
+  measures 81-92 ms: the cuDNN-frontend engine it picks for bf16 with a
+  `[1, 1, 2048, 2048]` boolean mask lowers to two SGEMMs, a bool-to-bias kernel
+  and a wrapper kernel per layer. PyTorch's 36 ms is its own flash kernel.
+  Ruled out: a view mask, transpose-view inputs, and `is_causal` (forcing the
+  causal path inside the model is slower).
+- Workaround: install `nvidia-cudnn-cu12` 9.x alongside
+  `nvidia-cudnn-frontend` (the same venv with 9.19 admits the fused path); it
+  does not close the gap, but the fallback is otherwise silent.
+  `_library()` now warns once when cuDNN answers no to a shape it always
+  supports (`_warn_if_unusable` in `cudnn_attention_cuda.py`), so a mismatched
+  pair says so instead of costing 2.4x in silence.
 - Evidence: probes under `$JITTOR_LAB_ROOT/_state/cuda-speed/prefill-20261029/`
-  (`prefill_dispatch.py` shows the all-None dispatch, `prefill_variants.py` the
-  per-layer costs) and the harness row above.
-- Exit condition: the workload is back inside 1.1x, or the masked call answers a
-  fused kernel inside a full model graph.
+  (`cudnn_sup2.py` shows the all-False support answers under 8.9.7 and the
+  all-True ones under 9.19; `prefill_dispatch.py` shows the all-None dispatch
+  on the shipped stack), and the harness row above.
+- Exit condition: the workload is back inside 1.1x, which needs a mask-aware
+  fused kernel (or the causal engine, with an exact-causal-mask check), not a
+  dispatch tweak.
