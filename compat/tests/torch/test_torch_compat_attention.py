@@ -15,6 +15,7 @@ import pathlib
 import sys
 import tempfile
 import threading
+import time
 from types import ModuleType
 from unittest import mock
 import numpy as np
@@ -723,6 +724,17 @@ class TestSDPA(Base):
             backend = ExternalBackend(spec)
             tree = root / "flash-attention"
             found = [os.fspath(tree)]
+            stamp = [time.time_ns()]
+
+            def touch(path):
+                # The memo witnesses a directory by its timestamps. Some
+                # filesystems stamp directories from a coarser clock than two
+                # writes in a row, which made this case pass or fail with the
+                # same file states; move the stamp forward explicitly so the
+                # memo has a changed signature to see.
+                stamp[0] += 1_000_000_000
+                os.utime(path, ns=(stamp[0], stamp[0]))
+
             with mock.patch.dict(os.environ, {env: os.fspath(root)}, clear=False):
                 self.assertEqual(backend.source_roots(), [])
                 # An unchanged tree must not walk at all. project_roots() only
@@ -735,17 +747,23 @@ class TestSDPA(Base):
                 # marker file lands one level deeper than the candidate, so only
                 # the candidate's own signature can notice it.
                 tree.mkdir()
+                touch(root)
                 self.assertEqual(backend.source_roots(), [])
                 (tree / "setup.py").write_text("", encoding="utf-8")
+                touch(tree)
                 self.assertEqual(backend.source_roots(), found)
 
                 # Same again for a marker inside a declared marker directory.
                 (tree / "setup.py").unlink()
+                touch(tree)
                 self.assertEqual(backend.source_roots(), [])
                 (tree / "csrc" / "flash_attn").mkdir(parents=True)
+                touch(tree)
+                touch(tree / "csrc")
                 self.assertEqual(backend.source_roots(), [])
                 (tree / "csrc" / "flash_attn" / "flash_api.cpp").write_text(
                     "", encoding="utf-8")
+                touch(tree / "csrc" / "flash_attn")
                 self.assertEqual(backend.source_roots(), found)
 
             # The unwatched nested relative directory still invalidates: the
@@ -753,6 +771,8 @@ class TestSDPA(Base):
             nested = root / "third_party" / "flash-attention"
             nested.mkdir(parents=True)
             (nested / "setup.py").write_text("", encoding="utf-8")
+            touch(root)
+            touch(nested)
             with mock.patch.dict(os.environ, {env: os.fspath(root)}, clear=False):
                 self.assertEqual(backend.source_roots(),
                                  [found[0], os.fspath(nested)])
