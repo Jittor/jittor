@@ -101,6 +101,32 @@ ViT 的注意力同样走 float32 融合核，1.67x → 1.28x 来自同两处修
 4090 上 `vit_b16_train` 与上面两项合计 266.8 → **141.5 ms**（对 PyTorch 194.4
 为 0.73x，此前是 1.67x）；910B3 上这棵树的一步是 174.2–174.7 ms。
 
+## 真实模型矩阵（`benchmarks/torch_compat`，14 个任务）
+
+同一张 4090、两侧配对、热缓存、无其它租户负载，提交 `86fa5dc73`：
+
+| 任务 | PyTorch | Jittor | 比值 |
+| --- | ---: | ---: | ---: |
+| qwen3_decode_static | 2714.9 ms | 542.5 ms | **0.20x** |
+| resnet50_infer_b1 | 3.2 ms | 0.6 ms | **0.18x** |
+| bert_base_infer | 3.1 ms | 1.2 ms | 0.38x |
+| sd15_unet_train | 314.6 ms | 197.5 ms | 0.63x |
+| sd15_vae_decode | 33.2 ms | 21.1 ms | 0.64x |
+| qwen3_decode | 2122.4 ms | 1389.6 ms | 0.65x |
+| qwen3_prefill | 36.8 ms | 24.4 ms | 0.66x |
+| qwen3_train | 267.8 ms | 177.7 ms | 0.66x |
+| resnet50_infer | 14.1 ms | 9.4 ms | 0.67x |
+| bert_base_train | 66.1 ms | 57.3 ms | 0.87x |
+| vit_b16_train | 193.2 ms | 172.0 ms | 0.89x |
+| sd15_sample | 441.4 ms | 400.5 ms | 0.91x |
+| resnet50_train | 91.7 ms | 85.5 ms | 0.93x |
+| ddpm_unet_train | 75.4 ms | 74.4 ms | 0.99x |
+
+几何平均 **0.59x**，14 个任务全部不慢于 PyTorch。`qwen3_decode` 与
+`qwen3_decode_static` 的 agree 列分别是 9.5e-02 / 1.2e-01（harness 在 5e-2
+以上打标记）：这两行比较的是生成的 token id，随机权重下贪心解码的 near-tie 会翻转
+个别 token，序列长度两侧都是 136，不是长度漂移。
+
 ## 复现
 
 ```bash

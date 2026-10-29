@@ -48,9 +48,11 @@ term from a per-layer score-matrix rebuild to `dO . O` except on rows whose
 mass sits on one key, resolved `zero_grad` and optimizer readers once per
 parameter list instead of once per tensor, and taught the Torch frontend to
 hand an exact causal mask to the backends as `is_causal` (off Ascend, where
-the verdict's host read defeats graph replay). The six large CUDA cases sit
-between 0.80x and 1.28x of PyTorch, BERT-large having been 6.55x, and
-`qwen3_prefill`/`qwen3_train` are 0.85x and 0.66x on top of the table
+the verdict's host read defeats graph replay). The 14-workload
+`benchmarks/torch_compat` matrix now compares at a geometric mean of 0.59x
+with no workload slower than PyTorch (BERT-large having been 6.55x on the
+earlier micro-suite), and the per-group optimizer write took `qwen3_train`
+from 412 to 265 ms on a 910B3
 ([results](../../docs/results/2026-10-29-cuda-f32-attention-row-term.md)). On
 Ascend, the boolean attention mask no longer expands to score size before the
 fused call: qwen3-0.6B prefill went from 54.99 to 35.69 ms a step on a 910B3,

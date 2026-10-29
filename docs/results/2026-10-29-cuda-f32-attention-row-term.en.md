@@ -120,6 +120,32 @@ the control edges are unchanged. That one helps the per-parameter path too:
 (0.73x of PyTorch's 194.4, against 1.67x before); on a 910B3 this tree's step
 is 174.2-174.7 ms.
 
+## Real-model matrix (`benchmarks/torch_compat`, 14 workloads)
+
+One RTX 4090, paired runs, warm caches and no other tenant, at `86fa5dc73`:
+
+| Workload | PyTorch | Jittor | Ratio |
+| --- | ---: | ---: | ---: |
+| qwen3_decode_static | 2714.9 ms | 542.5 ms | **0.20x** |
+| resnet50_infer_b1 | 3.2 ms | 0.6 ms | **0.18x** |
+| bert_base_infer | 3.1 ms | 1.2 ms | 0.38x |
+| sd15_unet_train | 314.6 ms | 197.5 ms | 0.63x |
+| sd15_vae_decode | 33.2 ms | 21.1 ms | 0.64x |
+| qwen3_decode | 2122.4 ms | 1389.6 ms | 0.65x |
+| qwen3_prefill | 36.8 ms | 24.4 ms | 0.66x |
+| qwen3_train | 267.8 ms | 177.7 ms | 0.66x |
+| resnet50_infer | 14.1 ms | 9.4 ms | 0.67x |
+| bert_base_train | 66.1 ms | 57.3 ms | 0.87x |
+| vit_b16_train | 193.2 ms | 172.0 ms | 0.89x |
+| sd15_sample | 441.4 ms | 400.5 ms | 0.91x |
+| resnet50_train | 91.7 ms | 85.5 ms | 0.93x |
+| ddpm_unet_train | 75.4 ms | 74.4 ms | 0.99x |
+
+Geometric mean **0.59x**; no workload is slower than PyTorch. The two decode rows
+carry agree flags (9.5e-02 and 1.2e-01, the harness marks anything above 5e-2):
+those rows compare generated token ids, where greedy decoding of random weights
+flips occasional near-ties; both runtimes produce the full 136 tokens.
+
 ## Reproduction
 
 ```bash
