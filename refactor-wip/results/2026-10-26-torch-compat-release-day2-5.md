@@ -1,5 +1,24 @@
 # Torch Compatibility Release Acceptance: 2026-10-26 Day 2–5 Continuation
 
+## 2026-10-30 历史T5 BF16续训功能证据复核
+
+历史候选两seed checkpoint50的model/optimizer/scheduler/scaler共2088项加载签名在新进程on_train_begin比对通过；续训50→100各50更新、0 skip、99 microbatch样本ID/shape与各自full后半一致、50组LR一致，梯度missing/nonfinite均0、参数cuda:0/fallback0。第二epoch记录loss均值 full/resume：821 `1.48445840/1.48436376`，823 `1.49720019/1.49706295`；固定eval loss full→resume分别 `3.06211638→3.06272078`、`3.05675101→3.05602074`，exact match均0。仅支持历史该配置的有界功能续训和验证loss接近，不能断言任务生成质量或当前main适用。
+
+两seed原strict各771/2088 FAIL，均为257模型+257一阶+257二阶moment；最终257 FP32模型tensor均可读有限，full/resume模型全局相对L2分别 `8.8914e-7/8.8376e-7`、max abs `0.00032434/0.00022142`，moment数值差幅未知。加载签名未包含RNG，原有RNG文件存在不等于四类实际恢复匹配，moment加载后的真实设备也未逐项核验。两seed的JT/PT full checkpoint50所需模型/optimizer/scheduler/RNG/签名文件此处实际存在，resume目录引用full的checkpoint不是缺失；历史其他22文件缺口本次未复核。只读终审 `_state/release-day23/20261030-t5-historical-resume-readonly-audit-r1/audit.json` SHA `2b46c2674051ee643897fd20000fba6ddeac12d0959d04f1792958428375164c`；原strict与预算 `51.29068389162421s` 均保留。
+
+
+## 2026-10-30 Vision r25 五格历史实用训练与恢复证据审阅
+
+五格历史r25实际训练均完成100更新、两epoch样本加权训练loss下降：CNN FP32 seed821 JT `2.312916→2.217066`、seed823 `2.322480→2.221158`，CNN BF16 821 `2.313635→2.218671`，ViT FP32 821 `2.299955→2.261349`，ViT BF16 821 `2.300069→2.261586`。固定65样本eval JT/PT loss与accuracy依次：CNN FP32-821 `2.190925/2.190382`, `9/65 vs 11/65`；CNN FP32-823 `2.184424/2.183609`, `7/65 vs 10/65`；CNN BF16-821 `2.189611/2.191783`, `7/65 vs 10/65`；ViT FP32 `2.211886/2.211886`, `21/65 vs 21/65`；ViT BF16 `2.211897/2.211983`, `21/65 vs 21/65`。小验证集CNN accuracy差异如实保留，不能由loss接近推断无差异或外推收敛。
+
+五格resume 62–100样本ID/输入摘要/LR与各自full均39/39匹配，PT/JT full样本/输入100/100一致、fallback0；代码加载optimizer/scheduler与四类RNG，但未有加载前后optimizer状态及RNG独立对拍，恢复功能范围因此有限。两格CNN FP32同运行时strict exact通过、PT严格仍分别FAIL160/177；ViT FP32/CNN BF16/ViT BF16同运行时exact分别FAIL100/245/143，后续跨框架strict未运行，不能称全部门禁通过。只读原报告/NPZ及hash审计 `_state/release-day23/20261030-vision-r25-five-cell-offline-audit-r1/five-cell-summary.json` SHA `16c3ec54fafae6b0e896c7743aad4220edd6ccfce7cd0c115c1f0ce9dc6813f3`；绑定历史r25 source `1be46e54…`，非当前工作树或提交树，原310.095694191秒诊断预算未动。
+
+
+## 2026-10-30 任务范围中文提交及保留的工作树
+
+已提交 `cf5be28b618b6d99c89af8856d67dab618a053f3`（修复 Torch 兼容训练与恢复），parent `3dedae001372b6be106ae6700bcf10ebc7faebac`，tree `657d6e1da328fd064aba6735be29a0e8f2eb76d0`；仅由独立审阅的59路径任务patch暂存，cached diff --check通过，未push。提交前备份全部144个dirty路径与原空index；提交后逐项验证除3文档有审定的可逆摘要插入外，其余文件内容/模式不变，index为空，保留的dirty相对新HEAD仍存在；后审 `_state/release-day23/20261030-task-only-commit-postcheck-r1/postcheck.json`。候选代码与此前r12仅两处空白、types.py两空行和文档变更，结构单节点已验证前一同代码tree；工作树与候选22条路径不同，旧dirty相关依赖重合已披露，不能将working tree的df45源码身份自动转成提交树训练结果。更改HEAD后旧执行fingerprint包含旧HEAD，未来执行必须新绑定，不能把原缓存/历史证据重新贴标签。性能测量未取得稳定窗口、BERT续训strict差异原因及影响仍未完全解释，原两seed strict FAIL、T5/Vision预算与历史失败均保留；发布验收未完成。
+
+
 ## 2026-10-30 任务证据更新（历史记录按原身份保留）
 
 HEAD-only r12 两卡实际训练与恢复使用 **r10 原生 core 和 Python 根目录，加 r12 两个 scheduler Python 模块 overlay**，并非完整 r12 冷构建。FP32 tiny BERT LoRA Trainer 两 rank 完成 full 4 次更新、checkpoint 2 新进程续训至 4；两卡真实 CUDA、fallback 0，有限梯度及参数更新被检查。JT/PT 两侧各 rank 平均 microbatch loss 分别为 0.34503534/0.34503534、0.34377843/0.34377844；固定 16 样本短程证据不能推及长程质量、AMP 或多于两卡。独立终审 fc2fc52657c9e6a31ef5ae9d8c2be617833018ffdd4ee24e3579ca599436fc17。
