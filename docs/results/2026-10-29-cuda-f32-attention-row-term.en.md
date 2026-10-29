@@ -75,7 +75,9 @@ parameters meant 199 full syncs that drained the device between writes.
 Step by step (BERT-large, 4090): 186 ms -> 50 ms after the attention fix ->
 41 ms after batching `zero_grad`; backward execution 148 ms -> 12 ms;
 `zero_grad` 11.4 ms -> 3.4 ms. ViT's attention also takes the float32 fused
-kernel, so both changes moved it from 1.67x to 1.28x. The diffusers case ran
+kernel, so both changes moved it from 1.67x to 1.28x. Those two rows predate
+the optimizer work; the optimizer and `order_after_readers` fixes at the end
+of this page take `vit_b16_train` to 0.73x and `qwen3_train` to 0.66x. The diffusers case ran
 against the `diffusers-installed-source/20261015` package site; its gap is not
 one kernel -- the device side is 20.9 ms and close to PyTorch, while 63% of the
 wall clock of its 1787 kernels goes to host graph construction and launches
@@ -110,6 +112,13 @@ store only materializes its own source. `qwen3_train` on a 4090 went
 on a 910B3 measured 412 -> **268 ms** with steady memory 26.9 -> 28.9 GB. A
 flat-buffer variant of the same path measured 264-270 ms for 6.1 GB more
 memory, so it is not being merged.
+
+The same round replaced the linear membership scans in `order_after_readers`
+(`src/core/op.cc`) with hash sets; the vectors keep their insertion order and
+the control edges are unchanged. That one helps the per-parameter path too:
+`vit_b16_train` on a 4090 went 266.8 -> **141.5 ms** with the two fixes above
+(0.73x of PyTorch's 194.4, against 1.67x before), and a 910B3 ViT step
+177.1 -> 172.2 ms on its own.
 
 ## Reproduction
 
