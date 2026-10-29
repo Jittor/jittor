@@ -1,5 +1,12 @@
 # 2026-10-21 工作区快照与本机接续交接
 
+## 2026-10-30 隔离 AdamW 候选 BERT 48 预热 A/B 严格失败
+
+基于此前 30 步池轨迹，新用途 A/B r2 在双方采用固定 48 次预热并保持原 1 MiB 热态稳定门槛。baseline0 完成；candidate0 预热末稳定，但第 6 个热样本 reserved 增长 90 MiB，超出门槛，allocated 恒定且热态 JIT 快照不变。基线在第 4 和第 30 次预热各扩张 90 MiB，候选在第 26 次预热扩张 90 MiB；其具体分配机制仍未知，不能认为延长预热可以保证下一个窗口稳定。
+
+严格 FAIL 原件保留，其余四阶段未运行、没有自动重试。单个不稳定候选／基线热样本中位比约 `0.9803` 仅供探索，不能作为正式配对速度比或收益结论；candidate 未生成最终 result，因此没有该阶段完整终态 fallback 和 source-after 证据。不再以单纯延长预热作为后继方案。unit 以失败退出且 cgroup 已清空，源码与 core 产品、两处保护缓存端点一致，私有性能缓存无增删，锁与可见 holder 空；`/proc` 权限拒读、离散采样和端点快照限制仍在。独立终审 `/data6/cgq/jittor-lab/_state/release-day23/20261030-adamw-bert-performance-ab-warm48-r2-cuda-replay-failure-audit-r1/audit.json`，SHA-256 `2a3add79ae0670e22f2a948329aa26322ffb18b6645c6689c99e3502111b3db2`。
+
+
 ## 2026-10-30 隔离 AdamW 候选 BERT 双侧 allocator 轨迹诊断
 
 在已审真实 CUDA core、相同 BERT base B8/S256 FP32 配置下，隔离基线与候选各执行首步、16 次预热和 30 次带同步及观测的更新。基线预热后 reserved 为 `4266655744` bytes，第 14 个诊断更新升至 `4361027584`；候选预热后为 `4172283904`，第 10 个诊断更新升至 `4266655744`，各增长 90 MiB，之后到第 30 步未再增长。两侧 allocated 恒为 `2184966656` bytes，32 份 JIT 快照在各自进程内一致；候选首步 helper 调用 197 次、命中 196 次。
