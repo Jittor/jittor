@@ -59,9 +59,9 @@ Kept out on purpose:
     source, so a training step takes `lt_linear_train_cuda` or the portable
     way. Silently losing a gradient would be the worst possible outcome of a
     speedup.
-  - Anything whose compute dtype is not float16 or float32 (bfloat16, float64),
-    or not dense, or that leaves a non-contiguous operand; those fall back to
-    the portable path.
+  - Anything whose compute dtype is not float16, bfloat16 or float32, or not
+    dense, or that leaves a non-contiguous operand; those fall back to the
+    portable path.
 """
 
 import functools
@@ -246,13 +246,15 @@ def _supports(x, weight, bias, *args, **kwargs):
     if not isinstance(bias, jt.Var):
         return False
     for v in (x, weight, bias):
-        if _jittor_dtype_name(v.dtype) not in ("float16", "float32"):
+        if _jittor_dtype_name(v.dtype) not in ("float16", "float32", "bfloat16"):
             return False
         if not v._storage_is_contiguous():
             return False
-    # bfloat16 and float64 would need their own descriptors and their own
-    # accumulate rule; the portable path already has both.
-    if compute_dtype_name(x, weight) not in ("float16", "float32"):
+    # float64 would need its own accumulate rule; the portable path has it.
+    # bfloat16 shares the float32 accumulator with half (CUBLAS_COMPUTE_32F),
+    # which is exactly the one-rounding order `linear_bias_accumulator` exists
+    # to preserve for a bias added after a bf16 product.
+    if compute_dtype_name(x, weight) not in ("float16", "float32", "bfloat16"):
         return False
     if len(weight.shape) != 2 or len(bias.shape) != 1:
         return False
@@ -273,8 +275,7 @@ def _source(rows, cin, cout, dtype):
     # The one place the element type enters the kernel. The accumulate is
     # float32 for both -- `cublas_gemm_mode`'s choice for float16 -- so alpha
     # and beta stay floats either way.
-    ct = "CUDA_R_16F" if dtype == "float16" else "CUDA_R_32F"
-    kt = "half" if dtype == "float16" else "float"
+    ct, kt = _LT_TYPES[dtype]
     return f"""
     const int rows = {rows}, cin = {cin}, cout = {cout};
     const float alpha = 1.0f, beta = 0.0f;

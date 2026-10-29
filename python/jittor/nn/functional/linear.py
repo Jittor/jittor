@@ -3,6 +3,7 @@
 import jittor as jt
 from jittor._runtime.dispatch import register_kernel, select_kernel
 from jittor.backends.cuda.kernels.cublas.lt_linear_cuda import (
+    lt_linear_cuda as _lt_linear_cuda,
     lt_linear_train_cuda as _lt_linear_train_cuda,
     compute_dtype_name,
 )
@@ -14,6 +15,16 @@ from .matrix import _bfloat16_matmul_accumulator, _check_matmul_shapes
 
 def linear(x, weight, bias=None):
     """Return ``x * weight.T`` with an optional bias."""
+    if bias is not None:
+        # cuBLASLt folds the bias into the GEMM's epilogue, which is the same
+        # one-rounding order the bf16 accumulator below exists to preserve:
+        # for a bf16 product that path is six operators (a cast of the bias, a
+        # matmul, an add and a cast back, plus contiguity), and this is one.
+        # Diffusers' own Linear reaches this function directly, so the module
+        # below is not where the fold has to live.
+        fast = _lt_linear_cuda(x, weight, bias)
+        if fast is not None:
+            return fast
     accumulator_kernel = (
         select_kernel("linear_bias_accumulator", x, weight, bias) if bias is not None else None
     )
