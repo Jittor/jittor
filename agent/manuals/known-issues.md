@@ -1809,29 +1809,28 @@ workaround.
   deterministically and near CUB throughput, or a justified deterministic
   strategy is selected; the rank-1 allocation gate passes.
 
-## KI-TEST-016: an ACL Torch-compat test file only passes when its directory runs first
+## KI-TEST-016: the ACL Torch-compat suite is red under the shim for placement reasons
 
-- Severity: Medium (a real regression in this file would hide behind fourteen
-  pre-existing failures)
-- Status: Open; reproduced 2026-10-29 on an Ascend 910B3 at `7bb0e03df`.
+- Severity: Medium (fourteen pre-existing failures in one file would hide a real
+  regression in the same file)
+- Status: Open; reproduced 2026-10-29 on an Ascend 910B3 at `1a750dbee` and
+  `d3ae2bbd6` with identical results.
 - Owner: test infrastructure maintainers
-- Symptom: `pytest tests/backends/acl/test_acl_torch_compat.py -k
-  sdpa_causal_and_additive` reports `[] != [True, True]` -- the `override_kernel`
-  recorder never fires -- and the file alone reports 14 failed / 15 passed,
-  including relu, silu, rms_norm, group_norm, pad, roll, batch_norm and
-  fused_adamw cases. Running `pytest tests/backends/acl` runs the same file's
-  cases green except the known rfft one.
-- Cause: not isolated. In the isolated run `torch.nn.functional.
-  scaled_dot_product_attention` never reaches the ACL provider: the hook the
-  shim consults (`jittor.nn.backends.hooks.acl_scaled_dot_product_attention`)
-  answers None. `import jittor` publishes the ACL kernels when
-  `compiler.has_acl` (`python/jittor/__init__.py`), so either that flag is still
-  false at that point, or the publication in a directory run comes from another
-  file's import. Not yet distinguished: print `jt.compiler.has_acl` and
-  `_is_registered("nn.scaled_dot_product_attention")` at module import in both
-  modes.
-- Workaround: run the directory rather than the file on a 910B3.
-- Evidence: the nodeids above on a 910B3; the file's own
-  `_assert_acl_device` placement checks pass in a directory run.
-- Exit condition: the file passes on its own on a 910B3, or every case that
-  needs the hooks installs them itself.
+- Symptom: in native mode `pytest tests/backends/acl` reports 1 failed (the
+  rfft case) / 441 passed / 11 skipped. Under `JITTOR_TORCH_SHIM=1` the same
+  directory reports 15 failed / 455 passed / 12 skipped, and 14 of the failures
+  are in `test_acl_torch_compat.py`: relu, silu, pad, roll, rms_norm,
+  group_norm, batch_norm and fused_adamw among them. Their assertions
+  (`_assert_acl_device`, `output.is_cuda is False`) see `'cpu' != 'device'`.
+- Cause: under the shim on this machine a tensor made by `torch.tensor(...)`
+  lands on the host, so the ACL provider is never asked and the recorders and
+  placement checks see nothing. Those cases rely on `jt.flag_scope(use_acl=1,
+  use_cuda=1)` making the accelerator the default device, which does not happen
+  in this mode on this machine. Not yet distinguished: the flag scope's default
+  device against the shim's device resolution.
+- Workaround: run the ACL gate in native mode, where the numbers above hold; a
+  case that needs shim placement states `device="npu"` itself, as
+  `test_sdpa_boolean_mask_layouts_stay_on_acl` now does.
+- Evidence: the two directory runs above on a 910B3.
+- Exit condition: the file passes under the shim on a 910B3, or every placement
+  case states its device explicitly.

@@ -939,13 +939,16 @@ class TestACLTorchCompat(unittest.TestCase):
         provider = attention.scaled_dot_product_attention_acl
         backends = []
         for mask_np in layouts:
+            # Place explicitly: under the shim the default device is the host
+            # unless a test says otherwise (KI-TEST-016), and this case is
+            # about where the provider runs, not about the default.
             inputs = [
-                torch.tensor(value)
+                torch.tensor(value, device="npu")
                 for value in (query_np, key_np, value_np)
             ]
             for value in inputs:
                 value.requires_grad_(True)
-            mask = torch.tensor(mask_np)
+            mask = torch.tensor(mask_np, device="npu")
             mask.requires_grad_(False)
             # Only the ACL provider writes `backend_name`; the default is the
             # same string, so start from a sentinel to tell "the provider
@@ -958,7 +961,7 @@ class TestACLTorchCompat(unittest.TestCase):
                 is_causal=False,
             )
             grads = torch.autograd.grad(
-                (output * torch.tensor(loss_weight_np)).sum(), inputs
+                (output * torch.tensor(loss_weight_np, device="npu")).sum(), inputs
             )
             backends.append(provider.backend_name)
             for value in [output] + list(grads):
