@@ -1808,3 +1808,30 @@ workaround.
 - Exit condition: codegen fuses through the reshape above a pending producer
   deterministically and near CUB throughput, or a justified deterministic
   strategy is selected; the rank-1 allocation gate passes.
+
+## KI-TEST-016: an ACL Torch-compat test file only passes when its directory runs first
+
+- Severity: Medium (a real regression in this file would hide behind fourteen
+  pre-existing failures)
+- Status: Open; reproduced 2026-10-29 on an Ascend 910B3 at `7bb0e03df`.
+- Owner: test infrastructure maintainers
+- Symptom: `pytest tests/backends/acl/test_acl_torch_compat.py -k
+  sdpa_causal_and_additive` reports `[] != [True, True]` -- the `override_kernel`
+  recorder never fires -- and the file alone reports 14 failed / 15 passed,
+  including relu, silu, rms_norm, group_norm, pad, roll, batch_norm and
+  fused_adamw cases. Running `pytest tests/backends/acl` runs the same file's
+  cases green except the known rfft one.
+- Cause: not isolated. In the isolated run `torch.nn.functional.
+  scaled_dot_product_attention` never reaches the ACL provider: the hook the
+  shim consults (`jittor.nn.backends.hooks.acl_scaled_dot_product_attention`)
+  answers None. `import jittor` publishes the ACL kernels when
+  `compiler.has_acl` (`python/jittor/__init__.py`), so either that flag is still
+  false at that point, or the publication in a directory run comes from another
+  file's import. Not yet distinguished: print `jt.compiler.has_acl` and
+  `_is_registered("nn.scaled_dot_product_attention")` at module import in both
+  modes.
+- Workaround: run the directory rather than the file on a 910B3.
+- Evidence: the nodeids above on a 910B3; the file's own
+  `_assert_acl_device` placement checks pass in a directory run.
+- Exit condition: the file passes on its own on a 910B3, or every case that
+  needs the hooks installs them itself.

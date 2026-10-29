@@ -935,37 +935,37 @@ class TestACLTorchCompat(unittest.TestCase):
             key_axis[None, None, None],
         )
         candidates = []
-        native_dispatches = []
-        acl_attention = registered_kernel("nn.scaled_dot_product_attention", "acl")
-        self.assertIsNotNone(acl_attention)
+        from jittor.backends.acl.kernels.ops import flashattention_op as attention
+        provider = attention.scaled_dot_product_attention_acl
+        backends = []
+        for mask_np in layouts:
+            inputs = [
+                torch.tensor(value)
+                for value in (query_np, key_np, value_np)
+            ]
+            for value in inputs:
+                value.requires_grad_(True)
+            mask = torch.tensor(mask_np)
+            mask.requires_grad_(False)
+            # Only the ACL provider writes `backend_name`; the default is the
+            # same string, so start from a sentinel to tell "the provider
+            # answered" from "something else ran".
+            provider.backend_name = "unset"
+            output = torch.nn.functional.scaled_dot_product_attention(
+                *inputs,
+                attn_mask=mask,
+                dropout_p=0.0,
+                is_causal=False,
+            )
+            grads = torch.autograd.grad(
+                (output * torch.tensor(loss_weight_np)).sum(), inputs
+            )
+            backends.append(provider.backend_name)
+            for value in [output] + list(grads):
+                _assert_acl_device(self, value)
+            candidates.append(jt.fetch_sync([output] + list(grads)))
 
-        def record_attention(*args, **kwargs):
-            result = acl_attention(*args, **kwargs)
-            native_dispatches.append(result is not None)
-            return result
-
-        with override_kernel("nn.scaled_dot_product_attention", "acl", record_attention):
-            for mask_np in layouts:
-                inputs = [
-                    torch.tensor(value)
-                    for value in (query_np, key_np, value_np)
-                ]
-                for value in inputs:
-                    value.requires_grad_(True)
-                mask = torch.tensor(mask_np)
-                mask.requires_grad_(False)
-                output = torch.nn.functional.scaled_dot_product_attention(
-                    *inputs,
-                    attn_mask=mask,
-                    dropout_p=0.0,
-                    is_causal=False,
-                )
-                grads = torch.autograd.grad(
-                    (output * torch.tensor(loss_weight_np)).sum(), inputs
-                )
-                candidates.append(jt.fetch_sync([output] + list(grads)))
-
-        self.assertEqual(native_dispatches, [True] * len(layouts))
+        self.assertEqual(backends, ["acl_flash_attention_score_v2"] * len(layouts))
         references = []
         with jt.flag_scope(use_acl=0, use_cuda=0):
             for mask_np in layouts:
