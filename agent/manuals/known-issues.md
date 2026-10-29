@@ -1834,3 +1834,31 @@ workaround.
 - Evidence: the two directory runs above on a 910B3.
 - Exit condition: the file passes under the shim on a 910B3, or every placement
   case states its device explicitly.
+
+## KI-OPS-017: bf16 prefill with a boolean mask runs attention through the math path on CUDA
+
+- Severity: Medium (performance only; the workload's own agreement check passes
+  at 1.7e-02, and other bf16 cases are unaffected)
+- Status: Open; reproduced 2026-10-29 on an RTX 4090 at `19444bff2`.
+- Owner: CUDA attention maintainers
+- Symptom: `benchmarks/torch_compat/run.py --workloads qwen3_prefill` measures
+  36.4 ms for PyTorch and 88.4 ms for Jittor (2.43x), against 40.4 ms in the
+  2026-09-24 record of the same case. The device profile shows, per layer, two
+  `cublas_batched_matmul` at 454 us and one `fused(ternary)` at 729 us
+  attributed to the SDPA call site.
+- Cause: not isolated. In the model,
+  `nn.functional.attention.try_dispatch("nn.scaled_dot_product_attention", ...)`
+  answers None for every masked layer (84 calls over three steps), so the math
+  fallback runs. Executing the same call in the same model with a sync after
+  each layer costs 0.45 ms instead of 1.9 ms, and handing it a contiguous mask
+  costs 0.24 ms, so the missing piece is not a kernel but how the 28-layer
+  graph runs it. Ruled out: the cuDNN frontend (`nvidia-cudnn-frontend` 1.30
+  installed; a standalone call is 0.2 ms), a view mask, transpose-view inputs,
+  and `is_causal` (forcing the causal path inside the model is slower).
+- Workaround: none a user can adopt; a per-layer `jt.sync` is a measurement,
+  not a fix.
+- Evidence: probes under `$JITTOR_LAB_ROOT/_state/cuda-speed/prefill-20261029/`
+  (`prefill_dispatch.py` shows the all-None dispatch, `prefill_variants.py` the
+  per-layer costs) and the harness row above.
+- Exit condition: the workload is back inside 1.1x, or the masked call answers a
+  fused kernel inside a full model graph.
