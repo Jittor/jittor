@@ -114,7 +114,23 @@ void CodeOp::configure_grad() {
 }
 
 
+// Marks an op built by CodeOp::grad(s): its source is a user's gradient, and
+// nothing says how to differentiate that again.
+static const char* code_backward_key = "code_backward";
+
+static void reject_second_derivative(const DataMap& data) {
+    USER_CHECK(!data.count(code_backward_key))
+        << "jt.code: cannot differentiate a jt.code gradient again. Its "
+           "backward is the cpu_grad_src/cuda_grad_src source, and no rule "
+           "says how that source changes with its inputs, so a second "
+           "derivative through it (a Hessian, a gradient penalty, "
+           "jacfwd(grad(f))) used to come back as 0. Write the op as a "
+           "jt.Function whose grad() uses differentiable jittor ops to "
+           "differentiate it twice.";
+}
+
 VarPtr CodeOp::grad(Var* out, Var* dout, Var* v, int v_index) {
+    reject_second_derivative(data);
     // Do not have grad to extras input
     string cpu_src = v_index < cpu_grad_src.size() ? cpu_grad_src[v_index] : "";
     string cuda_src = v_index < cuda_grad_src.size() ? cuda_grad_src[v_index] : "";
@@ -133,17 +149,20 @@ VarPtr CodeOp::grad(Var* out, Var* dout, Var* v, int v_index) {
         inputs.push_back(_outputs[i]);
     }
     auto alias = new_alias.str();
+    DataMap gradient_data(data);
+    gradient_data[code_backward_key] = 1;
     return make_code(
         _inputs[v_index]->shape,
         _inputs[v_index]->dtype(),
         move(inputs),
         move(cpu_src), {}, alias+cpu_header,
         move(cuda_src), {}, alias+cuda_header,
-        DataMap(data), string(backend)
+        move(gradient_data), string(backend)
     );
 }
 
 void CodeOp::grads(Var** douts, VarPtr* dins) {
+    reject_second_derivative(data);
     string cpu_src = cpu_grad_src.size() ? cpu_grad_src[0] : "";
     string cuda_src = cuda_grad_src.size() ? cuda_grad_src[0] : "";
     if (!cpu_src.size() && !cuda_src.size())
@@ -199,6 +218,7 @@ void CodeOp::grads(Var** douts, VarPtr* dins) {
     gradient_data.erase("multi_grad");
     gradient_data.erase("multi_grad_output");
     gradient_data.erase("multi_grad_input_count");
+    gradient_data[code_backward_key] = 1;
     auto outputs = make_code_multi(
         move(shapes), move(dtypes), move(inputs),
         move(cpu_src), {}, alias+cpu_header,

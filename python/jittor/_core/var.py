@@ -979,9 +979,11 @@ def transpose(x, *dim):
     # otherwise ran two copies to put the heads back where they started.
     # The view record keeps writes reaching the root; where it is gone with
     # the root's holder, the graph still says what the Var is a transpose of.
+    # Not when `x` tracks a gradient: the result would then no longer depend
+    # on `x`, and `jt.grad(loss, x)` came back zero.
     source = None
     view_axes = getattr(x, "_transpose_view_axes", None)
-    if view_axes is not None:
+    if view_axes is not None and (_runtime_flags.no_grad or x.is_stop_grad()):
         prior = view_axes()
         if prior:
             source = x._transpose_view_source

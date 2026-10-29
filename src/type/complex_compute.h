@@ -64,6 +64,30 @@ inline JT_CPLX_HD complex64 jt_csqrt(complex64 a) {             // principal sqr
     return complex64(re, a.imag < 0 ? -im : im);
 }
 
+// Principal power z^w, as numpy's npy_cpow and torch: w == 0 gives 1; a zero
+// base gives 0 for Re w > 0 and nan otherwise; a small integer exponent is
+// repeated multiplication (exact for Gaussian integers, unlike exp(w log z));
+// everything else is exp(w log z), with log's branch cut on the negative axis.
+inline JT_CPLX_HD complex64 jt_cpow(complex64 a, complex64 b) {
+    if (b.real == 0 && b.imag == 0) return complex64(1, 0);
+    if (a.real == 0 && a.imag == 0) {
+        if (b.real > 0) return complex64(0, 0);
+        return complex64(NAN, NAN);
+    }
+    if (b.imag == 0 && b.real == ::truncf(b.real) && ::fabsf(b.real) < 100) {
+        int n = (int)b.real;
+        int m = n < 0 ? -n : n;
+        complex64 r(1, 0), p = a;
+        while (m) {
+            if (m & 1) r = r * p;
+            m >>= 1;
+            if (m) p = p * p;
+        }
+        return n < 0 ? complex64(1, 0) / r : r;
+    }
+    return jt_cexp(b * jt_clog(a));
+}
+
 // complex sum/reduce on CUDA needs an atomicAdd overload: decompose into independent
 // real/imag float atomicAdds (sum is commutative per-component, so this is correct).
 #if defined(JIT_cuda) && !defined(IS_ACL)
@@ -120,6 +144,30 @@ inline JT_CPLX_HD complex128 jt_csqrt(complex128 a) {
     double re = ::sqrt(0.5*(r + a.real));
     double im = ::sqrt(0.5*(r - a.real));
     return complex128(re, a.imag < 0 ? -im : im);
+}
+
+// Principal power z^w, as numpy's npy_cpow and torch: w == 0 gives 1; a zero
+// base gives 0 for Re w > 0 and nan otherwise; a small integer exponent is
+// repeated multiplication (exact for Gaussian integers, unlike exp(w log z));
+// everything else is exp(w log z), with log's branch cut on the negative axis.
+inline JT_CPLX_HD complex128 jt_cpow(complex128 a, complex128 b) {
+    if (b.real == 0 && b.imag == 0) return complex128(1, 0);
+    if (a.real == 0 && a.imag == 0) {
+        if (b.real > 0) return complex128(0, 0);
+        return complex128(NAN, NAN);
+    }
+    if (b.imag == 0 && b.real == ::trunc(b.real) && ::fabs(b.real) < 100) {
+        int n = (int)b.real;
+        int m = n < 0 ? -n : n;
+        complex128 r(1, 0), p = a;
+        while (m) {
+            if (m & 1) r = r * p;
+            m >>= 1;
+            if (m) p = p * p;
+        }
+        return n < 0 ? complex128(1, 0) / r : r;
+    }
+    return jt_cexp(b * jt_clog(a));
 }
 
 // double atomicAdd needs compute capability >= 6.0, already assumed by this

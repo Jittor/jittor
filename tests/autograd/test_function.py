@@ -425,6 +425,68 @@ class TestFunctionHigherOrder(unittest.TestCase):
         haa, hab = jt.grad(ga.sum(), [a, b])
         np.testing.assert_allclose([haa.item(), hab.item()], [50.0, 60.0])
 
+    # Only direct attributes and one level of tuple/list used to be rebound,
+    # so an input saved in a dict or a nested container gave a second
+    # derivative of 0.
+    CONTAINERS = {
+        "dict": (lambda x: {"x": x}, lambda s: s["x"]),
+        "nested tuple": (lambda x: ((x,),), lambda s: s[0][0]),
+        "nested list": (lambda x: [[x]], lambda s: s[0][0]),
+        "nested dict": (lambda x: {"outer": {"x": x}}, lambda s: s["outer"]["x"]),
+        "mixed": (lambda x: {"a": [({"x": x},)]}, lambda s: s["a"][0][0]["x"]),
+    }
+
+    @staticmethod
+    def _cube_saving(save, load):
+        class Cube(Function):
+            def execute(self, x):
+                self.saved = save(x)
+                return x * x * x
+
+            def grad(self, g):
+                x = load(self.saved)
+                return 3 * x * x * g
+        return Cube
+
+    def test_inputs_saved_in_dicts_and_nested_containers(self):
+        for name, (save, load) in self.CONTAINERS.items():
+            cube = self._cube_saving(save, load)
+            with self.subTest(container=name, dtype="float32"):
+                x = jt.array([2.0, -1.5])
+                first = jt.grad(cube.apply(x).sum(), x)
+                with jt.flag_scope(missing_grad_error=1):
+                    second = jt.grad(first.sum(), x)
+                np.testing.assert_allclose(first.numpy(), [12.0, 6.75])
+                np.testing.assert_allclose(second.numpy(), [12.0, -9.0])
+            with self.subTest(container=name, dtype="complex64"):
+                # Conjugate VJP: d/dx Re sum(x^3) = conj(3x^2); its real part's
+                # gradient is conj(6x).
+                x = jt.array(np.array([2 + 1j, -1.5 + 0.5j], dtype="complex64"))
+                first = jt.grad(cube.apply(x).sum().real, x)
+                with jt.flag_scope(missing_grad_error=1):
+                    second = jt.grad(first.real.sum(), x)
+                np.testing.assert_allclose(second.numpy(), [12 - 6j, -9 - 3j], rtol=1e-6)
+
+    def test_one_input_saved_in_several_containers_stays_one_var(self):
+        class Saves(Function):
+            def execute(self, x):
+                self.direct = x
+                self.saved = {"a": x, "b": [x, (x,)]}
+                self.saved["self"] = self.saved   # a cycle is walked once
+                return x * x * x
+
+            def grad(self, g):
+                saved = self.saved
+                assert saved["a"] is self.direct and saved["b"][1][0] is self.direct
+                x = saved["b"][0]
+                return 3 * x * x * g
+
+        x = jt.array([2.0])
+        first = jt.grad(Saves.apply(x).sum(), x)
+        with jt.flag_scope(missing_grad_error=1):
+            second = jt.grad(first.sum(), x)
+        np.testing.assert_allclose(second.numpy(), [12.0])
+
 
 class TestFunctionWithEagerExecution(TestFunction):
     @classmethod

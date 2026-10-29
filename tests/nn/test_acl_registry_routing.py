@@ -238,7 +238,8 @@ def test_layer_norm_keeps_affine_parameters_and_validates_before_dispatch(routin
 
 
 def test_matmul_bmm_and_transpose_reuse_existing_keys(routing):
-    names = ["_operand", "_check_matmul_shapes", "_transpose_base_last2", "_matmul_2d_cublas",
+    names = ["_operand", "_check_matmul_shapes", "_transpose_base_last2", "_keep_operand_grads",
+             "_matmul_2d_cublas",
              "_mixed_float_compute_dtype", "_matmul_kernel_dispatch",
              # The AMP scope the three generic contractions share. It is a
              # module-level helper rather than three copies of the same

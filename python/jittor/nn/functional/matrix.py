@@ -579,6 +579,66 @@ def _transpose_base_last2(x):
     return None
 
 
+def _conj_last2(x):
+    axes = list(range(x.ndim))
+    axes[-1], axes[-2] = axes[-2], axes[-1]
+    return x.transpose(axes).conj()
+
+
+def _sum_to_shape(x, shape):
+    """Sum ``x`` over the leading and size-1 axes it was broadcast along."""
+    shape = list(shape)
+    lead = x.ndim - len(shape)
+    if lead > 0:
+        x = x.sum(list(range(lead)))
+    axes = [i for i, (have, want) in enumerate(zip(x.shape, shape)) if want == 1 and have != 1]
+    if axes:
+        x = x.sum(axes, keepdims=True)
+    return x
+
+
+class _ProductOfOperands(jt.Function):
+    """Hand the gradient of a GEMM to the operands the caller passed.
+
+    A transposed operand reaches the GEMM as its untransposed base and a
+    transpose flag, so the copy the transpose would make never runs. The
+    product then depends on the base and not on the transposed Var: a
+    gradient taken with respect to that Var -- ``jt.grad(loss, base.T)`` --
+    found no path and came back zero, with a missing-gradient warning, while
+    the base's own gradient was right.
+
+    The product is built outside, exactly as before, and returned from
+    ``execute``. Taping cuts its own graph and connects the caller's operands
+    instead; they stay lazy in the forward (a Tapes input is not executed for
+    its data), so the transpose copy is still skipped. ``grad`` is the GEMM
+    adjoint on the live operands, ``dA = G B^H`` and ``dB = A^H G``, summed
+    back over broadcast batch axes, so it differentiates again.
+    """
+
+    def __init__(self, a, b, product):
+        self.a, self.b, self.product = a, b, product
+
+    def execute(self, a, b):
+        return self.product
+
+    def grad(self, g):
+        a, b = self.a, self.b
+        g = g.cast(self.product.dtype)
+        da = _sum_to_shape(matmul(g, _conj_last2(b)), a.shape).cast(a.dtype)
+        db = _sum_to_shape(matmul(_conj_last2(a), g), b.shape).cast(b.dtype)
+        return da, db
+
+
+def _keep_operand_grads(a, b, aa, bb, product):
+    """``product`` (a GEMM of ``aa``/``bb``) with its gradient routed to
+    ``a``/``b`` when an operand was replaced by its transpose base."""
+    if product is None or (aa is a and bb is b) or jt.flags.no_grad:
+        return product
+    if ((aa is a or a.is_stop_grad()) and (bb is b or b.is_stop_grad())):
+        return product
+    return _ProductOfOperands(a, b, product)(a, b)
+
+
 def _mkl_batched_matmul_is_available(a, b):
     """The CPU row of the table above: oneDNN's batched relay is float32-only.
 
@@ -646,7 +706,7 @@ def matmul(a, b):
                 1 if b_base is not None else 0,
             )
             if fast is not None:
-                return fast
+                return _keep_operand_grads(a, b, aa, bb, fast)
         if len_a >= 3 and len_a == len_b:
             # bmm
             # a: [..., n, m], b: [..., m, k], c:[..., n, k]
@@ -657,7 +717,7 @@ def matmul(a, b):
             trans_a, trans_b = a_base is not None, b_base is not None
             fast = _matmul_kernel_dispatch("batched_matmul", aa, bb, trans_a, trans_b)
             if fast is not None:
-                return fast
+                return _keep_operand_grads(a, b, aa, bb, fast)
         shape = []
         len_c = max(len_a, len_b)
         (n, m), (m_, k) = a.shape[-2:], b.shape[-2:]
@@ -681,7 +741,7 @@ def matmul(a, b):
                 bb = b_base if b_base is not None else b
                 fast = _matmul_2d_cublas(a, bb, 0, 1 if b_base is not None else 0)
                 if fast is not None:
-                    return fast
+                    return _keep_operand_grads(a, b, a, bb, fast)
             # TODO:ugly implementation for tuner
             aa = a.reshape((-1, m))
             cc = jt.nn.matmul(aa, b)

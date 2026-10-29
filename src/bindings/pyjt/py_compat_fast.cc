@@ -1077,14 +1077,19 @@ PyObject* transpose_by(PyObject* self, VarHolder* holder, NanoVector axes) {
     if (kernel_op_registered("tensor.transpose")) return none();
     PyTensorFrontendScope scope(self, nullptr, 0, false);
     // A transpose of a transpose is one transpose of the source, and none at
-    // all when the two cancel; see `jittor.transpose`.
+    // all when the two cancel; see `jittor.transpose`. Not when the
+    // intermediate tracks a gradient: the result would no longer depend on
+    // it, and `jt.grad(loss, intermediate)` came back zero.
     unique_ptr<VarHolder> source;
-    NanoVector prior = holder->transpose_view_axes();
-    if (prior.size()) {
-        source.reset(holder->transpose_view_source());
-    } else {
-        prior = holder->producer_transpose_axes();
-        if (prior.size()) source.reset(new VarHolder(holder->var->input()->inputs().front()));
+    NanoVector prior;
+    if (no_grad || holder->var->is_stop_grad()) {
+        prior = holder->transpose_view_axes();
+        if (prior.size()) {
+            source.reset(holder->transpose_view_source());
+        } else {
+            prior = holder->producer_transpose_axes();
+            if (prior.size()) source.reset(new VarHolder(holder->var->input()->inputs().front()));
+        }
     }
     VarHolder* base = holder;
     if (source && (int)prior.size() == ndim) {
