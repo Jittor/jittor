@@ -1,5 +1,13 @@
 # Torch Compatibility Release Acceptance: 2026-10-26 Day 2–5 Continuation
 
+## 2026-10-30 Qwen 历史 checkpoint51 在 df45 工作树的单步续训核验
+
+历史 Qwen checkpoint 51 加载到 df45 工作树（执行源码指纹 df45a56585f68874e8f1c64a80c9fff276bfe795e80c4d079cd06a8e7e528fc3），仅执行一次更新至 step 52，不能称为完整训练或纯提交树运行。112 个 adapter 梯度在 CUDA 上有限、112 个 adapter 参数发生更新；两组学习率由 1.59375e-5 变为 1.5625e-5，fallback 前后均为 0。设备核验的 337 项仅包括 112 个 adapter 参数、224 个 Adam moment 和 1 个 buffer，不涵盖冻结的 base 模型。
+
+两个真实训练 microbatch 的首层 q_proj 输入及权重为 FP32、输出为 BF16，autocast 开启且记录实际 CUDA dispatch；未证明 kernel 内部算术精度。恢复时对照 Python、NumPy、Torch CPU 和 CUDA 四种 RNG，以及样本 ID、输入和标签形状；没有逐字节比较 token。严格恢复比较仍有两个新增 optimizer group initial_lr 字段，不能称为严格相等。两个 microbatch 的平均 loss 为 1.3973119258880615，与历史 Jittor 对照相同，历史 PyTorch 为 1.3938316106796265；该单步没有新固定评估、predict、完整训练或性能结果，观测同步及物化也不支持性能推断。历史原 strict 失败与 Qwen predict 限制继续保留。
+
+缓存端点快照记录新增 304 项、无删除、旧非锁项未变；操作性锁文件内容变化，锁 inode 保持且终态释放。端点快照不能证明期间没有瞬时写入，权限拒读的进程与 FD 仍属未知。第二独立终审纠正了第一版将操作性锁文本变化误算作普通缓存变动的 false 结论，原审计保留，未重跑。证据：独立终审 /data6/cgq/jittor-lab/_state/release-day23/20261030-main-df45-qwen-step52-independent-terminal-r1/terminal-audit.json（SHA-256 83600fd6dddb9b5693e0411bf20a00d65886510ac2beeb4afcfd41b7d5989e80）；第二独立终审 /data6/cgq/jittor-lab/_state/release-day23/20261030-main-df45-qwen-step52-independent-terminal-audit-r2/terminal-audit.json（SHA-256 b393b5448bb0dbe2d1319ac015cff824543a833a12a41ec6c2d56855f7142f15）；其前一版 /data6/cgq/jittor-lab/_state/release-day23/20261030-main-df45-qwen-step52-independent-terminal-audit-r1/terminal-audit.json（SHA-256 b08906628c4caf9e8567f7ae5ee9db54f0bbc674dd58059d2e6614fb6461e42c）；包内终审 /data6/cgq/jittor-lab/_state/release-day23/20261030-main-df45-qwen-step52-preparation-r1-hold/attempt-01/terminal-audit.json（SHA-256 f1c0a1ed23db4dd715681ed74e8258433fc30080b04bfe7be7009b1b3aecc6e2）。
+
 ## 2026-10-30 df45 源码范围与四卡 NCCL 默认传输复核
 
 只读内容检查确认：当前工作树的 df45 执行清单 2815 项均与原清单内容一致；当时 HEAD 05630e82 对应有 79 个已跟踪路径不同、24 个清单路径未跟踪。此检查未重新盘点完整工作树、未重新构建或验证当前运行，因此工作树训练证据不能称作纯提交树同源。审计 /data6/cgq/jittor-lab/_state/release-day23/20261030-postcommit-worktree-source-recheck-r1/audit.json，SHA-256 72650d4a2c3e0f1bfb3772748d41254474353c67eae72ac788ef75042dcedffc。
