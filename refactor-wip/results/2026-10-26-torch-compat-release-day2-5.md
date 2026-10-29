@@ -1,5 +1,11 @@
 # Torch Compatibility Release Acceptance: 2026-10-26 Day 2–5 Continuation
 
+## 2026-10-30 BERT B224/S512 近容量单步校准保护停止
+
+在实际 81920 MiB GPU 上，BERT base FP32、B224/S512、合成输入及 AdamW 的一次有界校准首先运行 PyTorch；单步期间 NVML 采样最低可用显存为 2326.75 MiB，目标进程采样峰值为 78700 MiB，低于自设的 6144 MiB 全局余量后控制器仅向本任务 worker 发送 SIGTERM，进程 rc -15，Jittor 阶段未启动。200 ms 离散采样及停止延迟不能保证余量始终不低于阈值，也不能将进程采样峰值当作 allocator live 高水位。原运行没有 result 或 allocator sidecar，不能确认更新完成、实际 allocator 峰值，也未记录 OOM 异常；不能称为 OOM 或宣称该尺寸的双端完整能力。
+
+自设 80% allocator live 与 6 GiB 余量属于本次单步校准，不是原正式门槛；完整 near-capacity 三轮性能和显存验收仍未完成。失败原件保留，不自动换尺寸或重试。systemd 单元 failed/exit-code 1，cgroup 消失；源码、原生产品、私有性能缓存与两受保护缓存端点快照不变，相关锁和可见任务进程/缓存 FD 为空，权限拒读进程的状态仍未知。独立终审 `/data6/cgq/jittor-lab/_state/release-day23/20261030-main-df45-bert-capacity-r4-independent-terminal-r1/terminal-audit.json`，SHA-256 `ef52b815d966addf6b30734a654ff287a5c928ceffe8fb710abc3bebd0ad1732`；另一独立审计 `/data6/cgq/jittor-lab/_state/release-day23/20261030-bert-capacity-r4-independent-failure-audit-r1/audit.json`，SHA-256 `81b8f566cb0a1199c13abf40f6136a97865f47082398ba03555d7e76b955f143`。
+
 ## 2026-10-30 df45 BERT 代表格三轮性能证据
 
 基于 df45 工作树及独立 CUDA 性能缓存，r18 完成 BERT base、B8/S256、FP32、固定合成 token/mask、实际 AdamW 的三轮交替配对；每端每轮固定 16 次 warmup、10 个同步热样本，另做独立的 3 次 memory 与 3 次 CUDA attribution 更新。六阶段均有 33 次更新后的有限 loss 记录；加载时逐项核对 199 个参数和 2 个 buffer，197 个梯度有限且位于实际 CUDA，fallback 为 0。该配置不是容量边界或真实下游任务质量实验。
