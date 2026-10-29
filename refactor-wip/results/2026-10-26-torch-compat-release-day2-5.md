@@ -1,5 +1,11 @@
 # Torch Compatibility Release Acceptance: 2026-10-26 Day 2–5 Continuation
 
+## 2026-10-30 隔离 AdamW bias correction 标量复用候选 CPU 证据
+
+隔离候选在当前 df45 工作树上以两个 Python 模块 overlay 验证，尚未合入主树。r4 小型 CPU fixture 分别运行真实 PyTorch、Jittor 基线和候选各 4 步，并从第 2 步 checkpoint 恢复后再执行 2 步；候选标量 correction 记录 28 次调用、12 次实际复用命中。独立复核中候选与基线的 FP32 位模式一致；与 PyTorch 的对照在 `atol=2e-6, rtol=2e-6` 下通过，观测最大绝对差为 `6.103515625e-5`，差值不能单独代替相对/绝对组合阈值判断。r4 的 comparison 进程自然 rc0 且结果文件 PASS，但控制器未在活体扫描中观测到短命进程身份，原整组终态仍为 FAIL 并保留，不能回写为通过。
+
+独立后继 r5 仅执行原本未开始的三个 CPU focused 节点：连续与 checkpoint 恢复对照、低精度不缓存、native 与 AMP 不缓存；三个节点的 setup/call/teardown 共 9 阶段全部通过、0 skip，systemd 单元自然完成。r4 已有轨迹未重跑。审计 `/data6/cgq/jittor-lab/_state/release-day23/20261030-adamw-r4-independent-partial-terminal-r1/audit.json`，SHA-256 `f174f60be5d79f1b31caf7b3d0eb05709ccd6c552b5f3b6a4c622fef049c3dab`；r5 独立终审 `/data6/cgq/jittor-lab/_state/release-day23/20261030-adamw-focused-r5-independent-terminal-r1/audit.json`，SHA-256 `910b7ec1ff9e71c9abe721e97db3c8a11e23fb77810a54e12879ee96619adb8c`。这是隔离小样本 CPU 证据；CUDA、多设备、异步图生命周期、真实 BERT 是否命中以及性能收益均未验证。
+
 ## 2026-10-30 BERT B224/S512 近容量单步校准保护停止
 
 在实际 81920 MiB GPU 上，BERT base FP32、B224/S512、合成输入及 AdamW 的一次有界校准首先运行 PyTorch；单步期间 NVML 采样最低可用显存为 2326.75 MiB，目标进程采样峰值为 78700 MiB，低于自设的 6144 MiB 全局余量后控制器仅向本任务 worker 发送 SIGTERM，进程 rc -15，Jittor 阶段未启动。200 ms 离散采样及停止延迟不能保证余量始终不低于阈值，也不能将进程采样峰值当作 allocator live 高水位。原运行没有 result 或 allocator sidecar，不能确认更新完成、实际 allocator 峰值，也未记录 OOM 异常；不能称为 OOM 或宣称该尺寸的双端完整能力。
