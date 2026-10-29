@@ -1,5 +1,12 @@
 # 2026-10-21 工作区快照与本机接续交接
 
+## 2026-10-30 df45 源码范围与四卡 NCCL 默认传输复核
+
+只读内容检查确认：当前工作树的 df45 执行清单 2815 项均与原清单内容一致；当时 HEAD 05630e82 对应有 79 个已跟踪路径不同、24 个清单路径未跟踪。此检查未重新盘点完整工作树、未重新构建或验证当前运行，因此工作树训练证据不能称作纯提交树同源。审计 /data6/cgq/jittor-lab/_state/release-day23/20261030-postcommit-worktree-source-recheck-r1/audit.json，SHA-256 72650d4a2c3e0f1bfb3772748d41254474353c67eae72ac788ef75042dcedffc。
+
+历史默认四卡 NCCL Trainer 在 PyTorch 阶段超时，Jittor 阶段未启动；独立 PyTorch 原生四 rank all_reduce 默认配置同样在 60 秒内未返回，另一次禁用 P2P 后四 rank 通过并观察到 SHM 通道。证据支持有界传输配置诊断，未定位根因或唯一故障链路；不能据此断言默认 P2P 可用或归因 Jittor。历史四 rank tiny BERT LoRA full/恢复通过绑定 NCCL_P2P_DISABLE=1 的特定配置，不能外推默认配置；历史源码身份及其他边界不变。审计 /data6/cgq/jittor-lab/_state/release-day23/20261030-four-rank-nccl-default-readonly-audit-r1/review.json，SHA-256 06060640e972e1bdc4c9cad3c7442a11513ded34e66156d9c6334524a6bb3736。
+
+
 ## 2026-10-30 历史T5 BF16续训功能证据复核
 
 历史候选两seed checkpoint50的model/optimizer/scheduler/scaler共2088项加载签名在新进程on_train_begin比对通过；续训50→100各50更新、0 skip、99 microbatch样本ID/shape与各自full后半一致、50组LR一致，梯度missing/nonfinite均0、参数cuda:0/fallback0。第二epoch记录loss均值 full/resume：821 `1.48445840/1.48436376`，823 `1.49720019/1.49706295`；固定eval loss full→resume分别 `3.06211638→3.06272078`、`3.05675101→3.05602074`，exact match均0。仅支持历史该配置的有界功能续训和验证loss接近，不能断言任务生成质量或当前main适用。
