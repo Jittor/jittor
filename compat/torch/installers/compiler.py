@@ -464,10 +464,6 @@ def _api_jit_interface(c):
     return c
 
 
-def _api_jit_annotate(_type, value):
-    return value
-
-
 def _api_jit_attribute(value, type=None):
     # TorchScript's attribute annotation; outside scripting it is the value.
     return value
