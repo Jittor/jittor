@@ -2,7 +2,7 @@
 
 - Status: Maintained
 - Last reviewed: 2026-10-29
-- Baseline: `8bf3ebf69` plus the pending 310P vision patch; per-entry scopes below
+- Baseline: `56ee4e59e3ed634af27fe328c9a19194b802847e`; per-entry scopes below
 - Owner: Jittor core maintainers
 - Review when: an entry is fixed or narrowed, a strict expected failure
   XPASSes, a new defect is reproduced, or at quarterly maintenance
@@ -1105,7 +1105,7 @@ workaround.
 - Severity: Medium
 - Status: Open (verification pending: original 910B3 gate and float64 cases).
   Constructor repair verified on Ascend310P3, 2026-10-29, against
-  `8bf3ebf69` plus the pending vision patch.
+  `56ee4e59e3ed634af27fe328c9a19194b802847e`.
 - Owner: ACL backend
 - Symptom: the original 910B3 gate had eight failures with
   `constructor argsort with requested signature not found`: the native
@@ -1120,7 +1120,8 @@ workaround.
   fails before and passes after the repair on a real 310P3. The original
   eight cases failed on clean `659e6a47f`; their original scope is retained.
   Before/after logs are unversioned under
-  `$JITTOR_LAB_ROOT/_state/generative-vision-310p/logs/oct29-argsort-{before,after}.log`.
+  `$JITTOR_LAB_ROOT/_state/generative-vision-310p/logs/oct29-argsort-{before,after}.log`;
+  see the [four-model vision report](../../docs/results/2026-10-29-stock-vision-ascend310p.md).
 - Exit condition: the original eight cases complete on real 910B3, including
   the declared float64 policy, with device residency and zero fallback;
   unsupported stable sorting stays explicitly rejected rather than silently ignored.
@@ -1892,7 +1893,7 @@ workaround.
 
 - Severity: Medium (missing bounds error returns invalid data)
 - Status: Limitation; reproduced on Ascend310P3 / CANN 9.1.0, 2026-10-29,
-  against `8bf3ebf69` plus the pending vision patch. Other SoCs unverified.
+  against `56ee4e59e3ed634af27fe328c9a19194b802847e`. Other SoCs unverified.
 - Owner: ACL indexing and Torch compatibility maintainers
 - Symptom: for a source with seven rows, a one-dimensional integer selector
   containing `7` or `-8` must raise `IndexError` as independent Torch CPU
@@ -1911,7 +1912,7 @@ workaround.
   `$JITTOR_LAB_ROOT/_state/generative-vision-310p/iteration-2026-10-27/index-select-oct29/`.
   `tests/backends/acl/test_acl_single_axis_gather.py` verifies legal indices
   and declined forms only; its passing count excludes the out-of-bounds
-  controls.
+  controls. See the [four-model vision report](../../docs/results/2026-10-29-stock-vision-ascend310p.md).
 - Exit condition: both public advanced Index and GatherV2 paths reject
   upper/lower out-of-bounds selectors, including mixed valid/invalid and
   strided inputs, on real ACL devices with zero fallback, while preserving
