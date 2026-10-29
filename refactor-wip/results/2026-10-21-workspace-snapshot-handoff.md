@@ -1,5 +1,12 @@
 # 2026-10-21 工作区快照与本机接续交接
 
+## 2026-10-30 隔离 AdamW 候选：固定 BERT 梯度单步对照
+
+在真实 CUDA0 上，将此前 BERT base B8/S256 FP32、nonfused 且 foreach=false 的 r3 基线保存的同一组 197 个梯度分别注入隔离基线和候选 overlay。逐名核实 199 个参数槽及 197 个梯度对象在 `adam_update` 入口被实际消费，另外两个 pooler 参数没有梯度；两端各执行一次 optimizer 更新。独立逐数组审计确认 197 个梯度、199 个更新后参数、197 组一阶／二阶 moment 的 FP32 位模式精确一致且有限，step 均为 1；197 个参数实际变化。候选 helper 调用 197 次、复用命中 196 次，实测 CUDA dispatch，fallback 为 0。
+
+此对照固定使用已有梯度，未执行 forward/backward、PyTorch optimizer 状态对照或性能测量，不能证明训练连续性、长期数值一致或收益；候选尚未合入主树，mixed device、AMP 等未覆盖范围不因本结果消除。此前 r3 单步严格 FAIL 原件保留，该实验不覆盖或改写其结论。独立审计 `/data6/cgq/jittor-lab/_state/release-day23/20261030-bert-injected-r2-independent-numpy-audit-r1/audit.json`，SHA-256 `1c1108aea2ca6591305a9859ded98d0231106b852c1ba75051aecb45050edc66`。
+
+
 ## 2026-10-30 隔离 AdamW correction 候选 BERT 单步与严格差异
 
 隔离的双模块 Python overlay 在真实 CUDA 上分别执行 BERT base B8/S256 FP32、eager、nonfused 且 foreach=false 的基线和候选各一次更新；候选 helper 实际调用 197 次、命中 196 次，命中记录核对了 CUDA0 dispatch、FP32 frontend 及 AMP=0。两侧保存的 197 个梯度、199 个更新后参数和 197 组 moment 均有限；197 个参数实际变化，199 个更新后参数的 FP32 位模式全部相同。
