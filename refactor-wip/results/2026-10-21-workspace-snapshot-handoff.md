@@ -1,5 +1,11 @@
 # 2026-10-21 工作区快照与本机接续交接
 
+## 2026-10-30 df45 独立性能冷编与 BERT 代表格首阶段失败
+
+为隔离旧功能缓存和已封存的 SDPA 性能缓存，基于 df45 工作树执行源码指纹 `df45a56585f68874e8f1c64a80c9fff276bfe795e80c4d079cd06a8e7e528fc3` 在新私有缓存真实冷编 CUDA：231 个编译单元，约 400.13 秒，自然退出成功；CUDA sentinel 实测数值 `[3, 5]`，实际 dispatch 为 CUDA 设备 0，fallback 前后为 0。旧功能缓存与 SDPA 封存缓存的冷编前后快照一致，不能由端点快照推断期间不存在瞬时写入。独立冷编终审 `/data6/cgq/jittor-lab/_state/release-day23/20261030-main-df45-bert-performance-cold-independent-terminal-r1/terminal-audit.json`，SHA-256 `6fd06492e5eb57e7f07e48661c1e0c9f16d1ee8bf8041fda8bb78760d577224b`。该产物来自工作树，不等同于纯提交树产品。
+
+BERT B8/S256 FP32 合成输入代表格 r7 的五次稳定采样 READY 后，首个 PyTorch 阶段在热态及 CUDA attribution 后因映射观察器遇到 deleted 映射而以 rc1 结束；未记录触发的映射路径，原失败原因的具体映射类型未知。代码独立查证显示观察器在筛选目标库之前对任何 deleted 路径报错，无关的 memfd 映射也可能触发；不能据此认定本次实际触发项属于该类。Jittor 阶段未启动，未产生可用双端配对比值，不构成 Day4–5 性能或显存验收通过；单次失败原件保留，不自动重试，现准备限定该观察缺陷的独立后继。失败终审 `/data6/cgq/jittor-lab/_state/release-day23/20261030-main-df45-bert-performance-r7-independent-failure-terminal-r1/terminal-audit.json`，SHA-256 `6ebcd8885b8ca30079b88def29c10a4162e3fecef5a235d866b78f2a77bacb7e`。NVML 是离散采样，受权限和采样间隙限制。
+
 ## 2026-10-30 Qwen 历史 checkpoint51 在 df45 工作树的单步续训核验
 
 历史 Qwen checkpoint 51 加载到 df45 工作树（执行源码指纹 df45a56585f68874e8f1c64a80c9fff276bfe795e80c4d079cd06a8e7e528fc3），仅执行一次更新至 step 52，不能称为完整训练或纯提交树运行。112 个 adapter 梯度在 CUDA 上有限、112 个 adapter 参数发生更新；两组学习率由 1.59375e-5 变为 1.5625e-5，fallback 前后均为 0。设备核验的 337 项仅包括 112 个 adapter 参数、224 个 Adam moment 和 1 个 buffer，不涵盖冻结的 base 模型。
