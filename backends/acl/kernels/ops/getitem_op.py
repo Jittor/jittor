@@ -17,11 +17,82 @@ from collections.abc import Sequence, Iterable
 
 
 from ._code import acl_code as getitem_cmd
-from .._soc import kernel_available
+from .._soc import kernel_available, soc_name
 from ._code import acl_emit, acl_program, canonical_dtype_name
 
 getitem_forward = getitem_cmd
 _slice_zero_cache = OrderedDict()
+_AXIS_GATHER_PROGRAMS = {}
+
+
+def _single_axis_gather_spec(x, slices):
+    """The verified 310P inference subset, before any new-axis removal."""
+    if (not jt.flags.no_grad or not soc_name().startswith("Ascend310P")
+            or canonical_dtype_name(x.dtype) not in ("float16", "float32")):
+        return None
+    items = list(slices) if isinstance(slices, tuple) else [slices]
+    ellipses = [axis for axis, item in enumerate(items) if item is Ellipsis]
+    if len(ellipses) > 1:
+        return None
+    if ellipses:
+        position = ellipses[0]
+        fill = x.ndim - len(items) + 1
+        if fill < 0:
+            return None
+        items[position:position + 1] = [slice(None)] * fill
+    items.extend([slice(None)] * (x.ndim - len(items)))
+    if len(items) != x.ndim:
+        return None
+    selected = None
+    for axis, item in enumerate(items):
+        if isinstance(item, jt.Var):
+            if (selected is not None or item.ndim != 1 or item.shape[0] <= 0
+                    or canonical_dtype_name(item.dtype) not in ("int32", "int64")):
+                return None
+            selected = (axis, item)
+        elif not (isinstance(item, slice) and item.start is None
+                  and item.stop is None and item.step is None):
+            return None
+    if selected is None or any(int(size) <= 0 for size in x.shape):
+        return None
+    # A mixed-device index keeps the existing path. Reading dispatch placement
+    # is metadata only; it does not materialize or inspect any index values.
+    from jittor._runtime.dispatch import dispatch_context
+    if dispatch_context(x).backend != "acl" or dispatch_context(selected[1]).backend != "acl":
+        return None
+    return selected
+
+
+class GatherV2ACL:
+    """Single-axis inference gather with a one-dimensional integer index.
+
+    GatherV2 preserves the existing 310P advanced-index SDK behavior, including
+    its known failure to raise CPU-style errors for out-of-range indices.
+    Numerical support is validated for legal indices; this adds no bounds
+    checking or new gradient contract.
+    """
+
+    def __call__(self, x, dim, index):
+        if not jt.flags.no_grad:
+            raise RuntimeError("ACL single-axis GatherV2 requires no_grad")
+        dim = int(dim) % x.ndim
+        # Adjust legal negative indices once, as the original Index path does.
+        # A modulo would also wrap invalid positive indices and change behavior.
+        index = jt.where(index < 0, index + x.shape[dim], index)
+        shape = list(x.shape)
+        shape[dim] = index.shape[0]
+        program = _AXIS_GATHER_PROGRAMS.get(dim)
+        if program is None:
+            program = acl_program("GatherV2", 2, 1, attributes={"dim": dim})
+            _AXIS_GATHER_PROGRAMS[dim] = program
+        return acl_emit(program, [x, index], [x.dtype], [tuple(shape)])[0]
+
+
+def single_axis_gather_acl(x, slices):
+    selected = _single_axis_gather_spec(x, slices)
+    if selected is None:
+        return None
+    return GatherV2ACL()(x, selected[0], selected[1])
 
 
 def _cached_slice_zero(shape, dtype):

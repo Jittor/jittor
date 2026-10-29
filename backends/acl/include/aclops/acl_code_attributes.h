@@ -46,9 +46,10 @@ inline acl_data::AclAttrSchema acl_code_attribute_schema(const string& name) {
     if (name == "Transpose") return {{"axes", required(Type::int64_vector)}};
     if (name == "Cumsum") return {{"dim", required(Type::int64)}};
     if (name == "Gather") return {{"dim", required(Type::int64)}};
+    if (name == "GatherV2") return {{"dim", required(Type::int64)}};
     if (name == "IndexCopy") return {{"dim", required(Type::int64)}};
     if (name == "Scatter") return {{"axis", required(Type::int64)}, {"reduction", required(Type::int64)}};
-    if (name == "Conv2d") return {{"convStrides", required(Type::int64_vector)}, {"convPads", required(Type::int64_vector)}, {"convDilations", required(Type::int64_vector)}, {"group", required(Type::int64)}, {"convOutPads", required(Type::int64_vector)}, {"cube_math_type", required(Type::int64)}};
+    if (name == "Conv2d") return {{"convStrides", required(Type::int64_vector)}, {"convPads", required(Type::int64_vector)}, {"convDilations", required(Type::int64_vector)}, {"group", required(Type::int64)}, {"convOutPads", required(Type::int64_vector)}, {"cube_math_type", required(Type::int64)}, {"is_transposed", defaulted(acl_data::AclDataValue::bool_value_of(false))}};
     if (name == "Conv2dBackward") return {{"convStrides", required(Type::int64_vector)}, {"convPads", required(Type::int64_vector)}, {"convDilations", required(Type::int64_vector)}, {"group", required(Type::int64)}, {"convOutPads", required(Type::int64_vector)}, {"cube_math_type", required(Type::int64)}};
     if (name == "BatchNorm") return {{"is_train", required(Type::boolean)}, {"momentum", required(Type::float64)}, {"eps", required(Type::float64)}};
     if (name == "BatchNormBackward") return {{"is_train", required(Type::boolean)}, {"momentum", required(Type::float64)}, {"eps", required(Type::float64)}};
@@ -65,6 +66,7 @@ inline acl_data::AclAttrSchema acl_code_attribute_schema(const string& name) {
     if (name == "AvgpoolBackward") return {{"kernel_size", required(Type::int64_vector)}, {"poolStrides", required(Type::int64_vector)}, {"poolPads", required(Type::int64_vector)}, {"poolDilations", required(Type::int64_vector)}, {"poolCeil", required(Type::boolean)}, {"countIncludePad", required(Type::boolean)}};
     if (name == "UpsampleNearest2d") return {{"outputSize", required(Type::int64_vector)}, {"inputSize", required(Type::int64_vector)}};
     if (name == "UpsampleBicubic2d") return {{"outputSize", required(Type::int64_vector)}, {"inputSize", required(Type::int64_vector)}};
+    if (name == "UpsampleBilinear2d") return {{"outputSize", required(Type::int64_vector)}, {"inputSize", required(Type::int64_vector)}, {"alignCorners", required(Type::boolean)}};
     if (name == "UpsampleNearest2dBackward") return {{"outputSize", required(Type::int64_vector)}, {"inputSize", required(Type::int64_vector)}};
     if (name == "Concat") return {{"tensorNum", required(Type::int64)}, {"dim", required(Type::int64)}};
     if (name == "Stack") return {{"tensorNum", required(Type::int64)}, {"dim", required(Type::int64)}};
@@ -169,6 +171,13 @@ void assign_acl_code_attributes(Runner& op, const acl_data::AclDecodedData& deco
         op.jt_name="gather";
         return;
     }
+    if (name == "GatherV2") {
+        auto attr=std::unique_ptr<GatherAttr>(new GatherAttr());
+        attr->dim = fields.at("dim").int_value;
+        op.op_attr=std::move(attr);
+        op.jt_name="gather_v2";
+        return;
+    }
     if (name == "IndexCopy") {
         auto attr=std::unique_ptr<GatherAttr>(new GatherAttr());
         attr->dim = fields.at("dim").int_value;
@@ -191,6 +200,7 @@ void assign_acl_code_attributes(Runner& op, const acl_data::AclDecodedData& deco
         attr->convDilations = fields.at("convDilations").int_values;
         attr->group = fields.at("group").int_value;
         attr->convOutPads = fields.at("convOutPads").int_values;
+        attr->is_transposed = fields.at("is_transposed").bool_value;
         acl_set_cube(op, fields.at("cube_math_type").int_value, 0);
         op.op_attr=std::move(attr);
         op.jt_name="conv2d";
@@ -348,6 +358,15 @@ void assign_acl_code_attributes(Runner& op, const acl_data::AclDecodedData& deco
         attr->inputSize = fields.at("inputSize").int_values;
         op.op_attr=std::move(attr);
         op.jt_name="upsample_bicubic2d";
+        return;
+    }
+    if (name == "UpsampleBilinear2d") {
+        auto attr=std::unique_ptr<UpsampleBilinear2dAttr>(new UpsampleBilinear2dAttr());
+        attr->outputSize = fields.at("outputSize").int_values;
+        attr->inputSize = fields.at("inputSize").int_values;
+        attr->alignCorners = fields.at("alignCorners").bool_value;
+        op.op_attr=std::move(attr);
+        op.jt_name="upsample_bilinear2d";
         return;
     }
     if (name == "UpsampleNearest2dBackward") {

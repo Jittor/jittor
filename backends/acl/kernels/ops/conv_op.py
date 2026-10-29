@@ -147,3 +147,47 @@ class ConvACL:
             1 if allow_reduced_precision() else 0,
         )
         return acl_emit(program, [x, weight, bias], [x.dtype], [output_shape])[0]
+
+
+_CONV_TRANSPOSE_PROGRAMS = {}
+
+
+def _conv_transpose_program(biased, stride, padding, output_padding, dilation,
+                            groups, cube_math_type):
+    key = (biased, stride, padding, output_padding, dilation, groups, cube_math_type)
+    program = _CONV_TRANSPOSE_PROGRAMS.get(key)
+    if program is None:
+        program = acl_program(
+            "Conv2d", 3 if biased else 2, 1,
+            attributes={
+                "convStrides": list(stride),
+                "convPads": list(padding),
+                "convDilations": list(dilation),
+                "group": groups,
+                "convOutPads": list(output_padding),
+                "cube_math_type": cube_math_type,
+                "is_transposed": True,
+            },
+        )
+        _CONV_TRANSPOSE_PROGRAMS[key] = program
+    return program
+
+
+class ConvTranspose2dACL:
+    """Inference-only transpose convolution; admission is owned by neural.py."""
+
+    def __call__(self, x, weight, bias, stride, padding, output_padding,
+                 dilation, groups):
+        if not jt.flags.no_grad:
+            raise RuntimeError("ACL ConvTranspose2d requires no_grad; gradients are not implemented")
+        output_shape = (x.shape[0], weight.shape[1] * groups) + tuple(
+            (size - 1) * step - 2 * pad + dil * (kernel - 1) + out_pad + 1
+            for size, kernel, step, pad, out_pad, dil in zip(
+                x.shape[2:], weight.shape[2:], stride, padding, output_padding, dilation)
+        )
+        program = _conv_transpose_program(
+            bias is not None, tuple(stride), tuple(padding), tuple(output_padding),
+            tuple(dilation), groups, 1 if allow_reduced_precision() else 0,
+        )
+        inputs = [x, weight] if bias is None else [x, weight, bias]
+        return acl_emit(program, inputs, [x.dtype], [output_shape])[0]

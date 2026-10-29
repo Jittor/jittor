@@ -60,7 +60,7 @@ aclnnStatus execute(void* workspace, uint64_t size, aclOpExecutor* exec, aclrtSt
 int main() {
     static_assert(sizeof(AclOpFunctions) <= 64, "registry entries must not regain per-op callable slots");
     assert(from_a() == from_b() && from_a() == &acl_op_registry());
-    assert(acl_op_registry().size() == 132); // 134 rows, two identical duplicate keys (Floor, Sigmoid).
+    assert(acl_op_registry().size() == 136); // 138 rows, two identical duplicate keys (Floor, Sigmoid).
     assert(acl_op_registry().at("AdaptiveAvgPool2d").launcher() == &aclnnAdaptiveAvgPool2d);
     assert(acl_op_registry().at("AdaptiveAvgPool2dBackward").launcher() == &aclnnAdaptiveAvgPool2dBackward);
     assert(acl_op_registry().at("Abs").launcher() == &aclnnAbs);
@@ -68,6 +68,10 @@ int main() {
     assert(acl_op_registry().at("Multinomial").launcher() == &aclnnMultinomial);
     assert(acl_op_registry().at("PromptFlashAttention").launcher() == &aclnnPromptFlashAttentionV3);
     assert(acl_op_registry().at("UpsampleBicubic2d").launcher() == &aclnnUpsampleBicubic2d);
+    assert(acl_op_registry().at("UpsampleBilinear2d").launcher() == &aclnnUpsampleBilinear2d);
+    assert(acl_op_registry().at("GatherV2").launcher() == &aclnnGatherV2);
+    assert(acl_op_registry().at("GridSampler2D").launcher() == &aclnnGridSampler2D);
+    assert(acl_op_registry().at("Topk").launcher() == &aclnnTopk);
     assert(acl_op_registry().at("Cast").supports(AclOpFunctions::QueryKind::Cast));
     assert(acl_op_registry().at("Add").supports(AclOpFunctions::QueryKind::Add));
     assert(acl_op_registry().at("Mul").supports(AclOpFunctions::QueryKind::Binary));

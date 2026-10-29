@@ -1,8 +1,8 @@
 # Known-Issues Ledger
 
 - Status: Maintained
-- Last reviewed: 2026-10-26
-- Baseline: `2fb04289c`
+- Last reviewed: 2026-10-29
+- Baseline: `8bf3ebf69` plus the pending 310P vision patch; per-entry scopes below
 - Owner: Jittor core maintainers
 - Review when: an entry is fixed or narrowed, a strict expected failure
   XPASSes, a new defect is reproduced, or at quarterly maintenance
@@ -1100,29 +1100,30 @@ workaround.
   reverted; the CodeOp rewrite stays so the class is not a footgun if it
   is ever reached again.
 
-## KI-BACKEND-019: `argsort` has no registered constructor on ACL
+## KI-BACKEND-019: ACL argsort constructor repair still needs the original 910B and dtype acceptance
 
-- Severity: Medium (a supported operation raises), Open
-- Status: Open, seen 2026-10-13 on a 910B3
+- Severity: Medium
+- Status: Open (verification pending: original 910B3 gate and float64 cases).
+  Constructor repair verified on Ascend310P3, 2026-10-29, against
+  `8bf3ebf69` plus the pending vision patch.
 - Owner: ACL backend
-- Symptom: eight NPU-gate cases fail with
-  `JittorError: op_register.h:64: constructor argsort with requested
-  signature not found`, raised from
-  `tests/opinfo/definitions/ordering_ops.py`:
-  `test_acl.py::TestACL::test_argsort_values_indices_stay_on_acl` and, in
-  `tests/ops/test_ops.py::TestCommonNPU`, `test_reference_argsort_float32`
-  and `_float64`, `test_reference_sort_float32` and `_float64`,
-  `test_reference_topk_float32`, `test_reference_median_float32`,
-  `test_reference_kthvalue_float32`.
-- Cause: not investigated here. Arrived with the upstream merge; the
-  NPU-gate torch group went from 83 to 90 failures and the native group
-  from 0 to 1 across that merge, and all eight are this one signature.
-- Evidence: the eight cases fail identically on `659e6a47f` with no local
-  commits applied -- a worktree at that commit alone, same card, same gate
-  script -- so they are not from the ACL async-worker work that was being
-  verified when they appeared.
-- Exit condition: `argsort`'s ACL constructor is registered with the
-  signature `ordering_ops.py` asks for, and the eight cases pass.
+- Symptom: the original 910B3 gate had eight failures with
+  `constructor argsort with requested signature not found`: the native
+  values/indices case and float32/float64 argsort and sort, float32 topk,
+  median and kthvalue. That full gate has not been rerun on 910B3.
+- Cause: the ACL constructor omitted the public `stable` argument.
+  The repair accepts it and preserves it through the int64 recursive call.
+  This fixes constructor wiring; ACL `stable=True` remains unsupported.
+- Workaround: use the verified non-stable 310P subset. Do not infer float64
+  or 910B acceptance from the single 310P constructor regression.
+- Evidence: `tests/backends/acl/test_acl.py::TestACL::test_argsort_values_indices_stay_on_acl`
+  fails before and passes after the repair on a real 310P3. The original
+  eight cases failed on clean `659e6a47f`; their original scope is retained.
+  Before/after logs are unversioned under
+  `$JITTOR_LAB_ROOT/_state/generative-vision-310p/logs/oct29-argsort-{before,after}.log`.
+- Exit condition: the original eight cases complete on real 910B3, including
+  the declared float64 policy, with device residency and zero fallback;
+  unsupported stable sorting stays explicitly rejected rather than silently ignored.
 
 ## KI-OPS-002: integer floor-division ROCm verification incomplete
 
@@ -1887,6 +1888,35 @@ workaround.
   fresh-process warm-up / timed generations under the default recording
   budget, with zero fallback and equivalent paired outputs, after a verified
   runtime or SDK fix. Recheck when CANN, the driver or recording policy changes.
+## KI-BACKEND-024: ACL advanced indexing does not reject out-of-bounds integer indices
+
+- Severity: Medium (missing bounds error returns invalid data)
+- Status: Limitation; reproduced on Ascend310P3 / CANN 9.1.0, 2026-10-29,
+  against `8bf3ebf69` plus the pending vision patch. Other SoCs unverified.
+- Owner: ACL indexing and Torch compatibility maintainers
+- Symptom: for a source with seven rows, a one-dimensional integer selector
+  containing `7` or `-8` must raise `IndexError` as independent Torch CPU
+  does. The existing ACL advanced Index route instead returns row zero or
+  row six. The new single-axis GatherV2 route preserves those same incorrect
+  returns; equality with the old route is not correctness for invalid inputs.
+- Cause: the measured device indexing paths do not enforce the CPU bounds
+  contract. The one-time legal-negative-index adjustment does not establish
+  bounds validation. No broader SDK behavior or memory-safety guarantee is
+  inferred from these two isolated controls.
+- Workaround: ensure each selector is in `[-axis_size, axis_size)` before
+  transfer, using validated input data. Invalid selectors are outside the
+  verified optimization domain and must not be treated as wrapping indices.
+- Evidence: unversioned CPU / native NPU / Jittor isolated controls and
+  `bounds-summary.json` under
+  `$JITTOR_LAB_ROOT/_state/generative-vision-310p/iteration-2026-10-27/index-select-oct29/`.
+  `tests/backends/acl/test_acl_single_axis_gather.py` verifies legal indices
+  and declined forms only; its passing count excludes the out-of-bounds
+  controls.
+- Exit condition: both public advanced Index and GatherV2 paths reject
+  upper/lower out-of-bounds selectors, including mixed valid/invalid and
+  strided inputs, on real ACL devices with zero fallback, while preserving
+  legal negative-index values and the supported fast path.
+
 ## KI-CODEGEN-006: a rank-1 full sum still materializes a pending reshaped producer
 
 - Severity: Medium (allocation and performance; values are correct)

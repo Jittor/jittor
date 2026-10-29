@@ -73,7 +73,7 @@ namespace jittor
 
         acl_check_fp32_cube(cube_math_type, in_[0]->dtype(),
                             in_[0]->shape.size() == 5 ? "Conv3d" : "Conv2d");
-        ret = aclnnConvolutionGetWorkspaceSize(inputTensors[0], inputTensors[1], bias, strides, pads, dilations, false, outPads, attr->group, outputTensors[0], cube_math_type, &workspaceSize, &executor);
+        ret = aclnnConvolutionGetWorkspaceSize(inputTensors[0], inputTensors[1], bias, strides, pads, dilations, attr->is_transposed, outPads, attr->group, outputTensors[0], cube_math_type, &workspaceSize, &executor);
 
         launch(ret, aclnnConvolution, true);
 

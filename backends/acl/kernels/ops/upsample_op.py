@@ -56,6 +56,25 @@ class UpsampleNearest2dACL:
 
 
 
+class UpsampleBilinear2dACL:
+    """Size-based bilinear inference with either corner alignment."""
+
+    def __call__(self, input, output_size, align_corners=False):
+        if not getattr(jt.flags, "no_grad", 0):
+            raise RuntimeError("ACL bilinear resize currently requires no_grad")
+        if input.ndim != 4:
+            raise ValueError("bilinear 2-D upsample expects a 4-D input")
+        output_size = tuple(int(size) for size in output_size)
+        if len(output_size) != 2 or any(size <= 0 for size in output_size):
+            raise ValueError("output_size must contain two positive dimensions")
+        attr_code = attribute_program("UpsampleBilinear2d", {
+            "outputSize": list(output_size), "inputSize": list(input.shape),
+            "alignCorners": bool(align_corners),
+        })
+        return _upsample_cmd("UpsampleBilinear2d", [input], input.dtype,
+                             tuple(input.shape[:2]) + output_size, attr_code)
+
+
 class UpsampleBicubic2dACL(UpsampleNearest2dACL):
     """Half-pixel bicubic resize for the explicitly admitted inference subset."""
 

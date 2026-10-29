@@ -11,7 +11,10 @@ from pathlib import Path
 import numpy as np
 
 
-CASES = ("wan", "sdxl", "siglip2", "dinov2", "sam2", "sam2_image")
+import _stock_vision_cases as stock_vision
+
+
+CASES = ("wan", "sdxl", "siglip2", "dinov2", "sam2", "sam2_image") + stock_vision.CASES
 
 
 def _case(case):
@@ -93,6 +96,11 @@ def create_model(torch, case, model_path=None, tiny=False, dtype=None, attn_impl
     there is no separate eager Wan processor in this pinned Diffusers release.
     """
     _case(case)
+    if case in stock_vision.CASES:
+        return stock_vision.create_model(
+            torch, case, model_path=model_path, tiny=tiny, dtype=dtype,
+            attn_implementation=attn_implementation,
+        )
     if attn_implementation not in ("eager", "sdpa"):
         raise ValueError("attn_implementation must be 'eager' or 'sdpa'")
     if not tiny and model_path is None:
@@ -241,6 +249,8 @@ def make_inputs(torch, case, model, rng, tiny=False, profile="default"):
     Other full cases use SDXL1024, SigLIP224, DINO518, and SAM1024.
     """
     _case(case)
+    if case in stock_vision.CASES:
+        return stock_vision.make_inputs(torch, case, model, rng, tiny=tiny, profile=profile)
     if profile not in ("default", "large"):
         raise ValueError("profile must be 'default' or 'large'")
     dtype = model.patch_embedding.weight.dtype if case == "wan" else next(model.parameters()).dtype
@@ -320,15 +330,29 @@ def make_inputs(torch, case, model, rng, tiny=False, profile="default"):
     return kwargs, spec
 
 
+def make_inputs_from_npz(torch, case, model, path):
+    """Load shared official-preprocessor inputs for the stock vision cases."""
+    return stock_vision.make_inputs_from_npz(torch, case, model, path)
+
+
+def preprocess_image(case, model_path, image_path, output_path):
+    """Prepare one real image with its pinned official slow processor."""
+    return stock_vision.preprocess_image(case, model_path, image_path, output_path)
+
+
 def invoke(case, model, kwargs):
     """Call the actual imported model without changing the runtime or inputs."""
     _case(case)
+    if case in stock_vision.CASES:
+        return stock_vision.invoke(case, model, kwargs)
     return model.get_image_embeddings(**kwargs) if case == "sam2_image" else model(**kwargs)
 
 
 def extract_output(case, output):
     """Keep all principal numerical outputs for independent NumPy comparison."""
     _case(case)
+    if case in stock_vision.CASES:
+        return stock_vision.extract_output(case, output)
     if case in ("wan", "sdxl"):
         return {"sample": output.sample}
     if case in ("siglip2", "dinov2"):

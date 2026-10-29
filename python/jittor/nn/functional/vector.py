@@ -70,7 +70,9 @@ def normalize(input, p=2, dim=1, eps=1e-12):
         norm = input.abs().max(dim, keepdims=True)
     else:
         norm = (input.abs() ** p).sum(dim, keepdims=True) ** (1.0 / p)
-    return input / norm.maximum(eps)
+    # A scalar clamp retains the norm's dtype, including on ACL where a
+    # mixed-dtype native maximum otherwise widens half + Python float to fp32.
+    return input / norm.clamp(min_v=eps)
 
 
 def cosine_similarity(x1, x2, dim=1, eps=1e-8):

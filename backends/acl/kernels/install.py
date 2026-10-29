@@ -11,6 +11,7 @@ KERNELS = (
     ("tensor.flip", tensor.flip_acl),
     ("tensor.concat", tensor.concat),
     ("tensor.gather", tensor.gather_acl),
+    ("tensor.topk", tensor.topk_acl),
     ("tensor.all", tensor.all_acl),
     ("tensor.any", tensor.any_acl),
     ("tensor.cumsum", tensor.cumsum_acl),
@@ -26,9 +27,11 @@ KERNELS = (
     ("tensor.split", tensor._split_acl),
     ("conv2d", neural.conv_acl),
     ("conv3d", neural.conv3d_acl),
+    ("conv_transpose2d", neural.conv_transpose2d_acl),
     ("matmul", neural.matmul_acl),
     ("batched_matmul", neural.bmm_acl),
     ("nn.resize", neural.resize_acl),
+    ("nn.grid_sample", neural.grid_sample_acl),
     ("nn.pool2d", neural.pool_acl),
     ("nn.adaptive_avg_pool2d", neural.adaptive_avg_pool2d_acl),
     ("nn.relu", neural.relu),
@@ -61,5 +64,11 @@ def install():
         register_kernel(
             operation, "acl", implementation,
             supports=(neural.softmax_supported
-                      if implementation is neural.softmax_acl else None),
+                      if implementation is neural.softmax_acl else
+                      neural.conv_transpose2d_supported
+                      if implementation is neural.conv_transpose2d_acl else
+                      neural.grid_sample_supported
+                      if implementation is neural.grid_sample_acl else
+                      tensor.topk_supported
+                      if implementation is tensor.topk_acl else None),
         )

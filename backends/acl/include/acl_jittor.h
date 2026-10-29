@@ -62,7 +62,7 @@ namespace jittor
         vector<int64_t> convOutPads;
         vector<int64_t> convDilations;
         bool convWithBias;
-        bool is_transposed;
+        bool is_transposed = false;
         int64_t group;
 
         // 析构函数
@@ -152,6 +152,11 @@ namespace jittor
             outputSize.clear();
             inputSize.clear();
         }
+    };
+
+    struct UpsampleBilinear2dAttr : UpsampleNearest2dAttr
+    {
+        bool alignCorners = false;
     };
 
     struct ConcatAttr : AclOpAttr

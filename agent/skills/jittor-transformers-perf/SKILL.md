@@ -339,7 +339,9 @@ Git 历史 `e3c369acb` 可查）；数值精度对拍仍使用
 
 `benchmark_generative_vision_ascend.py` 与 `_generative_vision_cases.py` 使用同一套
 离线 checkpoint 和 NumPy 输入，支持 Wan2.2 denoiser、SDXL UNet、SigLIP2 vision tower、
-DINOv2 及 SAM2 image model。先用 `--tiny --prepare --backend torch --device cpu`
+DINOv2、SAM2 image model，以及四个完整预测模型：ConvNeXtV2 分类、SwinV2 分类、
+Depth Anything V2 深度估计、RT-DETRv2 检测。后四者由 `_stock_vision_cases.py`
+提供官方模型定义，包含预测 head，不替换 forward 或安装 adapter。先用 `--tiny --prepare --backend torch --device cpu`
 保存 CPU fixture，再由 Jittor 加载同一目录并对拍；完整尺寸测速必须另传真实 `--model`。
 两侧独立进程、相同 Transformers/Diffusers 版本，NPU 首次编译串行，至少 3 次预热与
 5 次逐次同步样本。运行前加载 CANN、选择设备，并设置外部 `JITTOR_LAB_ROOT`。
@@ -372,3 +374,61 @@ PFA 的原始 Q/K 长度，包括矩形 cross-attention，无需构造 padding �
 有 mask / causal 路径保留各自验证范围；不能简单取消 SDK 对带 mask 矩形输入的
 限制。旧 causal padding 的只读零缓冲区按设备、dtype、shape 缓存并设内存上限，
 不省略实际输入复制、裁剪或因果语义。
+
+
+新增四个视觉 case 名为 `convnextv2`、`swinv2`、`depth_anything_v2`、`rtdetr_v2`。
+它们的完整随机输入尺寸依次为 224、256、518、640；随机输入只能验收数值与速度，
+不能说明语义效果。Transformers 4.56.2 的 ConvNeXtV2、SwinV2、RT-DETRv2 仅接受
+stock eager；Depth Anything 可用 `--attention sdpa` 选择其 DINOv2 backbone，深度 head
+保持 eager。本工具默认显式选择 eager，不代表上游库自动选择的默认后端。
+两侧选择已测较快且不同的 eager / SDPA 配置时，对拍须显式加
+`--allow-attention-difference`；比较器仅允许 attention 元数据差异，其他规格与全部
+输出仍检查。不能用较慢原生配置作唯一加速分母。Tiny RT-DETR 使用公开 `initializer_range=0.1`，避免小网络初始化时所有
+anchor 分数退化为相同 bias 而只测到未约定的 top-k tie 顺序；这不改变预训练配置。
+
+默认直接调用 stock 模型，后端的算子分派与自动重放不要求修改模型推理代码。
+`--pack` 是额外显式的 FP16 Linear 权重快照预处理，需单列配置、层数与转换时间，
+不能将其收益归为默认自动捕获。分别运行 raw 与 `--pack` 并核对同一 checkpoint 的
+全部输出；`--pack` 仅适用于 NPU，无适用层时转换数可能为零。脚本定义 case 不代表其所有 dtype / device
+已通过验收；每个模型仍须按 CPU fixture → 完整设备前向 → 真图像效果逐级记录。
+报告另存实际 HF32 / 重放策略、harness 与 case helper 的 SHA256；计时中的
+`no_grad` 状态从作用域内部读取，不将作用域退出后的状态当作计时条件。
+
+310P 的无梯度连续 FP16 / FP32 推理已接入转置卷积与双线性 resize；FP32 卷积仍需
+显式允许该卡的降精度 cube 策略。新 ACL 入口按 SoC 验证范围选择，不以 310P 对拍
+代替 910B 验收。`interpolate(antialias=True)` 当前明确拒绝，不能把参数被接受当作
+抗混叠数学已实现。
+
+310P 无梯度推理另有 GridSampler2D（bilinear / zeros / align_corners=False）、
+单轴一维整数 GatherV2，以及连续二维 FP16/FP32 最后轴的 largest / sorted TopK。
+这些由公共算子入口选择，不要求改模型 forward；不满足条件时保留原有路径。
+GatherV2 只验收合法索引，既有 ACL advanced indexing 未正确拒绝越界输入的限制见
+问题总账 KI-BACKEND-024。TopK 的算子提速不能作为检测整模数值通过的替代证据。
+
+真实图像先在独立原生 CPU 环境，通过 `_generative_vision_cases.preprocess_image`
+调用 checkpoint 的官方 slow image processor 一次，保存 NumPy 输入及处理器元数据；
+两侧以 `--input-npz "$SHARED_INPUT"` 读取同一个 lab archive。输入 archive 的 SHA256
+写入报告与规格，预处理不计入 forward。Depth Anything 保留长宽比，其实际尺寸可能
+不同于 518²。所有 principal 输出保存在报告旁的 `.json.npz`：分类 logits、未着色深度、
+以及未做阈值筛选的检测 logits / boxes。效果评估应在计时后使用同一个原生 CPU 官方
+postprocessor；深度可视化共用色标，检测阈值固定。单图对拍不等同于标注集准确率。
+
+```bash
+python agent/skills/jittor-transformers-perf/scripts/benchmark_generative_vision_ascend.py \
+  --backend jittor --device npu --case depth_anything_v2 --model "$DEPTH_CHECKPOINT" \
+  --input-npz "$SHARED_INPUT" --attention sdpa --warmups 5 --samples 7 \
+  --output "$JITTOR_LAB_ROOT/_state/model-bench/depth-jittor-raw.json"
+```
+
+用独立原生 CPU 环境运行 `compare_stock_vision_effects.py`，读取已保存输出，生成
+分类 top-5、共用色标的深度图或固定阈值检测对照，以及 JSON。检测匹配只表示两种
+实现的同类预测框一致程度，不是有标注数据集的 AP；完整 logits / boxes 的有序数值
+对拍仍须单独通过。效果比较要求两侧使用同一 attention 配置及共享预处理输入。
+
+```bash
+python agent/skills/jittor-transformers-perf/scripts/compare_stock_vision_effects.py \
+  --left "$TORCH_IMAGE_RESULT" --right "$JITTOR_IMAGE_RESULT" \
+  --image "$SOURCE_IMAGE" --input-metadata "$SHARED_INPUT_METADATA" \
+  --source-root "$JITTOR_SOURCE_ROOT" \
+  --output "$JITTOR_LAB_ROOT/_state/model-bench/image-agreement.json"
+```

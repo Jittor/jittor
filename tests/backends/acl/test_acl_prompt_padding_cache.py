@@ -139,11 +139,18 @@ def test_cache_entry_count_byte_budget_lru_and_oversize_decline(monkeypatch):
     assert_cache_unchanged_zero_and_bounded()
 
 
-def test_cached_host_read_is_restored_before_next_device_concat():
+@pytest.mark.parametrize("access", ["readback", "explicit_migration"])
+def test_cached_host_read_or_migration_is_safe_before_next_device_concat(access):
     query = jt.ones((1, 2, 5, 8), dtype="float16")
     query.sync(True, False)
     zero = attention._prompt_padding_zero(query, 3)
-    assert np.count_nonzero(zero.numpy()) == 0 and zero.location() == "cpu"
+    address = zero._storage_address
+    assert np.count_nonzero(zero.numpy()) == 0
+    # Upstream readback now copies without moving the source allocation.
+    assert zero.location() == "device" and zero._storage_address == address
+    if access == "explicit_migration":
+        zero.migrate_to_cpu()
+        assert zero.location() == "cpu"
     output = attention._prompt_pad_sequence(query, 3)
     output.sync(True)
     actual = output.numpy()

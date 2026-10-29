@@ -2,6 +2,7 @@
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 from collections.abc import Iterable
+from numbers import Integral
 from typing import Union
 import numpy as np
 import jittor as jt
@@ -18,9 +19,25 @@ from .ops.index_op import IndexACL
 from .ops.arg_reduce_op import ArgReduceACL
 from .ops.where_op import WhereACL, NonzeroACL
 from .ops.floor_op import FloorIntACL
-from .ops.getitem_op import GetItemACL, basic_slice_acl
+from .ops.getitem_op import GetItemACL, basic_slice_acl, single_axis_gather_acl
 from .ops.setitem_op import SetItemACL
 from .ops.roll_op import RollACL
+from .ops.topk_op import TopkACL
+from ._soc import soc_name
+
+
+def topk_supported(input, k, dim=-1, largest=True, sorted=True):
+    return (bool(jt.flags.no_grad) and soc_name().startswith("Ascend310P")
+            and input.ndim == 2 and all(int(size) > 0 for size in input.shape)
+            and dim in (-1, 1) and largest is True and sorted is True
+            and isinstance(k, Integral) and not isinstance(k, bool)
+            and 0 < k <= input.shape[-1]
+            and _jittor_dtype_name(input.dtype) in ("float16", "float32")
+            and input._storage_is_contiguous())
+
+
+def topk_acl(input, k, dim=-1, largest=True, sorted=True):
+    return TopkACL()(input, k)
 
 
 def _clamp_acl(input, min_value, max_value):
@@ -224,6 +241,9 @@ def getitem_acl(x, slices, return_x=None):
         # Inference needs neither a SliceV2 copy nor a generated gradient;
         # training keeps the existing Concat gradient for last-axis slices.
         return jt.core.ops.getitem(x, slices)
+    selected = single_axis_gather_acl(x, slices)
+    if selected is not None:
+        return selected
     # A tuple of plain slices and ellipses -- `q[..., :64]` in a rotary
     # embedding, `cache[:, :, :n]` in an attention -- is what the decode
     # loop indexes with, and none of the shapes below apply to it.

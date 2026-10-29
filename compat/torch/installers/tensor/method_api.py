@@ -1527,7 +1527,16 @@ def _promoting_binary(self, other, opname, reflected):
                 other = other.cuda() if self_cuda else other.cpu()
         da, db = _own_dtype_name(self, native_api), _own_dtype_name(other, native_api)
         if da == db and not da.startswith("uint"):
-            return _binary_native(opname, self, other, native_api)
+            out = _binary_native(opname, self, other, native_api)
+            if opname in ('__pow__', '__rpow__') and da in ('float16', 'bfloat16'):
+                # Native pow intentionally widens white-listed math. Torch's
+                # public same-dtype power keeps its inputs' dtype; the scalar
+                # base branch below reaches this path too. Repair only the
+                # frontend result, retaining native math and explicit AMP.
+                from ...amp import autocast_dtype
+                if autocast_dtype() is None and _own_dtype_name(out, native_api) != da:
+                    out = out.cast(da)
+            return out
         # `result_type`, not `_promote_pair`: a 0-dim operand promotes only
         # from a higher category, so half_tensor * tensor(2.0) stays half.
         res = _owner._dtype_to_str(g.result_type(self, other))

@@ -5,18 +5,19 @@ from numbers import Integral
 
 import jittor as jt
 from .ops._code import ACL_FLOAT_DTYPES
-from .ops.conv_op import ConvACL
+from .ops.conv_op import ConvACL, ConvTranspose2dACL
 from .ops.bmm_op import BmmACL
 from .ops.cross_entropy_loss_op import CrossEntropyLossACL
 from .ops.gelu_op import GeluACL
+from .ops.grid_sample_op import GridSampler2DACL
 from .ops.matmul_op import MatmulACL
-from .ops.upsample_op import UpsampleNearest2dACL, UpsampleBicubic2dACL
+from .ops.upsample_op import UpsampleNearest2dACL, UpsampleBicubic2dACL, UpsampleBilinear2dACL
 from .ops.relu_op import ReLUACL, LeakyReLUACL
 from .ops.silu_op import SiLUACL, SwishACL, SwiGluACL
 from .ops.softmax_op import SoftmaxACL
 from .ops.pool_op import PoolACL, AdaptiveAvgPool2dACL
 from .ops.rope_op import RotaryPositionEmbeddingACL
-from ._soc import soc_name
+from ._soc import soc_name, allow_reduced_precision
 
 
 #: Dtype sets the decline guards below test membership in. A Var's dtype is a
@@ -61,10 +62,60 @@ def conv3d_acl(x, weight, stride=1, padding=0, dilation=1, groups=1):
     return ConvACL()(x, weight, None, stride, padding, dilation, groups)
 
 
+def conv_transpose2d_supported(x, weight, bias, stride, padding, output_padding,
+                               dilation, groups):
+    # Validated on 310P only. A 910B keeps its existing path until its SDK
+    # transpose forward/precision contract has independent device evidence.
+    if (not soc_name().startswith("Ascend310P") or not jt.flags.no_grad
+            or x.ndim != 4 or weight.ndim != 4
+            or not _dtype_in(x, ("float16", "float32"))
+            or str(weight.dtype) != str(x.dtype)
+            or not x._storage_is_contiguous() or not weight._storage_is_contiguous()
+            or any(int(size) <= 0 for size in tuple(x.shape) + tuple(weight.shape))
+            or not isinstance(groups, Integral) or isinstance(groups, bool)
+            or groups <= 0 or x.shape[1] != weight.shape[0] or x.shape[1] % groups):
+        return False
+    if _dtype_in(x, ("float32",)) and not allow_reduced_precision():
+        return False
+    for values in (stride, padding, output_padding, dilation):
+        if (not isinstance(values, (tuple, list)) or len(values) != 2
+                or any(not isinstance(value, Integral) or isinstance(value, bool) for value in values)):
+            return False
+    for size, kernel, step, pad, out_pad, dil in zip(
+            x.shape[2:], weight.shape[2:], stride, padding, output_padding, dilation):
+        if (step <= 0 or dil <= 0 or pad < 0 or out_pad < 0
+                or out_pad >= max(step, dil)
+                or (size - 1) * step - 2 * pad + dil * (kernel - 1) + out_pad + 1 <= 0):
+            return False
+    return bias is None or (
+        bias.ndim == 1 and bias.shape[0] == weight.shape[1] * groups
+        and str(bias.dtype) == str(x.dtype) and bias._storage_is_contiguous())
+
+
+def conv_transpose2d_acl(x, weight, bias, stride, padding, output_padding,
+                         dilation, groups):
+    return ConvTranspose2dACL()(x, weight, bias, stride, padding,
+                                output_padding, dilation, groups)
+
+
 def bmm_acl(x1, x2, trans_a=False, trans_b=False):
     if trans_a:
         x1 = _transpose_last_two(x1)
     return BmmACL(trans_b)(x1, x2)
+
+
+def grid_sample_supported(input, grid, mode="bilinear", padding_mode="zeros", align_corners=False):
+    return (soc_name().startswith("Ascend310P") and bool(jt.flags.no_grad)
+            and mode == "bilinear" and padding_mode == "zeros" and align_corners is False
+            and input.ndim == 4 and grid.ndim == 4
+            and input.shape[0] == grid.shape[0] and grid.shape[-1] == 2
+            and _dtype_in(input, ("float16", "float32"))
+            and str(input.dtype) == str(grid.dtype)
+            and all(int(size) > 0 for size in tuple(input.shape) + tuple(grid.shape)))
+
+
+def grid_sample_acl(input, grid, mode="bilinear", padding_mode="zeros", align_corners=False):
+    return GridSampler2DACL()(input, grid)
 
 
 def matmul_acl(x1, x2, trans_a=False, trans_b=False):
@@ -93,6 +144,13 @@ def _transpose_last_two(x):
 
 
 def resize_acl(input, size, mode="nearest", align_corners=False, tf_mode=False):
+    if (mode == "bilinear" and soc_name().startswith("Ascend310P")
+            and input.ndim == 4 and _dtype_in(input, ("float16", "float32"))
+            and getattr(jt.flags, "no_grad", 0) and not tf_mode
+            and all(int(value) > 0 for value in input.shape)):
+        if isinstance(size, int):
+            size = (size, size)
+        return UpsampleBilinear2dACL()(input, size, align_corners)
     if mode == "nearest-exact":
         if (input.ndim != 4 or not getattr(jt.flags, "no_grad", 0)
                 or not _dtype_in(input, ("float16", "float32"))):

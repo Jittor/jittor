@@ -324,3 +324,26 @@ PY
 - 每组核对真实 backend/ordinal、device storage、fallback 计数零，并保留执行数量；不得仅依据 import、nox 退出零或全 skip 判通过。
 
 现有 `test_log1p_softplus_precision.py`、`test_sigmoid_negative_tail_precision.py`、`test_pad_widths.py` 与部分 dtype fixtures 明确只选 CPU/CUDA，须先按维护后的 `rocm` / `npu` 路径扩展设备参数及 residency 断言，**直接设置 JITTOR_TEST_DEVICES 不会使它们获得其他后端覆盖**。OpInfo 旧 `log(1+x)` case 和上述四个存储 case 也不能替代这份数值/optimizer/replay 完整矩阵。维护者将新增精确 nodeids、实际命令、提交 SHA、通过/跳过数量和设备信息写入结果报告后，再收窄或删除本条。
+
+## 2026-10-29 视觉推理修复：共享入口的 CUDA / 910B 回归待验
+
+Owner：ACL、CUDA 与 Torch 兼容层维护者。状态：本轮仅在 Ascend310P3 与独立 CPU
+环境验证；复查条件为对应设备可用或下列共享入口再次变化。新增转置卷积、双线性
+resize、GridSampler2D、单轴 GatherV2 和 TopK 的 ACL 快路由限定 310P 无梯度推理，不能
+以这些用例在其他 SoC 上跳过来证明 910B 回归通过，也不能据此扩大 SoC 准入范围。
+
+- canonical `nn.ConvTranspose.execute` 现在查询已有后端分派，CUDA 可因此进入既有
+  cuDNN handler。需要在真实 CUDA 上执行模块与 functional 两个入口，对照 CPU 的
+  output_padding、groups、bias、FP16/FP32 前向与输入/权重梯度，检查驻留和零回退。
+  `tests/nn/test_conv_transpose_module_dispatch.py` 的 CPU seam 检查不能替代此项。
+- `all/any` 参数、兼容层 exp/pow dtype、canonical normalize scalar clamp 与 ACL
+  argsort constructor 涉及共享入口。910B 应执行
+  `compat/tests/torch/test_logical_reduction_arguments.py`、
+  `compat/tests/torch/test_exp_pow_dtype.py` 及原始 ordering 门禁；float64 与
+  `stable=True` 按该后端明确声明的支持/拒绝策略验收，参见 KI-BACKEND-019。
+- `interpolate(antialias=True)` 当前明确拒绝。跨设备回归应确认拒绝行为与默认/False
+  路径，不能把异常检查记为抗混叠计算支持；对应
+  `compat/tests/torch/test_interpolate_antialias_rejection.py`。
+
+保留本页既有 910B 单卡准入命令，按后端独立缓存串行首次 JIT；记录真实设备、软件、
+执行/跳过数量与全部输出。未完成这些设备验证前，本轮结果不声明 CUDA 或 910B 通过。

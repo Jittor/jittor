@@ -15,6 +15,8 @@ def main():
     parser.add_argument('--max-relative-l2', type=float, default=0.02)
     parser.add_argument('--output', required=True)
     parser.add_argument('--source-root', help='Source checkout; defaults to this script checkout')
+    parser.add_argument('--allow-attention-difference', action='store_true',
+                        help='Allow explicit eager/SDPA metadata differences; all other settings and outputs are checked')
     args = parser.parse_args()
     try:
         source_root = resolve_source_root(args.source_root)
@@ -23,9 +25,16 @@ def main():
         parser.error(str(error))
     left_path, right_path = Path(args.left).resolve(), Path(args.right).resolve()
     left, right = [json.loads(path.read_text()) for path in (left_path, right_path)]
+    if not args.allow_attention_difference and left.get('attention') != right.get('attention'):
+        raise ValueError('different comparison condition: attention (use --allow-attention-difference explicitly)')
     for field in ('case', 'model', 'device', 'tiny', 'profile', 'dtype',
                   'parameters', 'transformers', 'diffusers', 'spec'):
-        if left[field] != right[field]:
+        settings=[report[field] for report in (left,right)]
+        if field=='spec' and args.allow_attention_difference:
+            settings=[dict(value) for value in settings]
+            for value in settings:
+                value.pop('attention',None)
+        if settings[0] != settings[1]:
             raise ValueError('different comparison condition: ' + field)
     for side, report in (('left', left), ('right', right)):
         if report.get('backend') == 'jittor' and report.get('fallback_count') != 0:
@@ -48,7 +57,9 @@ def main():
                                max_abs=maximum, cosine_similarity=cosine)
             passed = passed and finite and relative <= args.max_relative_l2
     result = dict(passed=passed, left=str(left_path), right=str(right_path),
-                  threshold=args.max_relative_l2, fields=fields)
+                  threshold=args.max_relative_l2, fields=fields,
+                  attention_difference_allowed=args.allow_attention_difference,
+                  attention_implementations=[report.get('attention') for report in (left,right)])
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(result, indent=2))
     print(json.dumps(result, indent=2))

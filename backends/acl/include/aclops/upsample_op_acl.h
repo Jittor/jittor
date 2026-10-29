@@ -22,6 +22,15 @@ namespace jittor
         UpsampleBicubic2dOpRunner();
     };
 
+    class UpsampleBilinear2dOpRunner : public BaseOpRunner
+    {
+    protected:
+        void executeOp(AclOpRegistry::const_iterator &it) override;
+
+    public:
+        UpsampleBilinear2dOpRunner();
+    };
+
     class UpsampleNearest2dBackwardOpRunner : public BaseOpRunner
     {
     protected:
