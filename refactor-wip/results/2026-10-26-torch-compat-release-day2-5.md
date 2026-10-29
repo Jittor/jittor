@@ -1,5 +1,12 @@
 # Torch Compatibility Release Acceptance: 2026-10-26 Day 2–5 Continuation
 
+## 2026-10-30 隔离 AdamW 候选 BERT 性能 A/B 单次失败
+
+在当前 df45 源码和已审独立性能 CUDA core 上，按 AB/BA/AB 计划运行 BERT base B8/S256 FP32、eager、nonfused 的基线与隔离候选性能对照。baseline0 完成首步、16 次预热、10 个热样本及各 3 次独立 memory/attribution 更新；candidate0 首步 helper 197 次调用、196 次命中，16 次预热末两次达到稳定门槛，10 次热更新的 loss 有限，但随后因合并断言 `hot JIT or allocator unstable` 失败。热样本时序、热态 JIT 变化及 allocator 明细未在异常前落盘，不能确定是哪一条件触发；candidate 结果与配对速度比均未产生，后续四阶段未运行，失败原件保留且没有自动重试。
+
+该实验不能证明候选性能收益或正式性能门槛通过。systemd unit 失败退出且 cgroup 已清空；私有性能缓存新增 4 个同一 JIT 算子相关文件、无删除，两个数学探针文件仅 mtime 变化、锁文件文本变化；源码及 core 产品和两处保护缓存端点保持一致，三锁无内核持锁记录。进程/FD 权限拒读和离散采样仍限制现场观察，端点快照不能排除瞬态活动。独立终审 `/data6/cgq/jittor-lab/_state/release-day23/20261030-adamw-bert-performance-ab-r1-independent-failure-terminal-r1/terminal-audit.json`，SHA-256 `a970ea0741db18b1c2d48793959a1fde389f98711030118cc4f0f5d5de28a8fa`。
+
+
 ## 2026-10-30 隔离 AdamW 候选：固定 BERT 梯度单步对照
 
 在真实 CUDA0 上，将此前 BERT base B8/S256 FP32、nonfused 且 foreach=false 的 r3 基线保存的同一组 197 个梯度分别注入隔离基线和候选 overlay。逐名核实 199 个参数槽及 197 个梯度对象在 `adam_update` 入口被实际消费，另外两个 pooler 参数没有梯度；两端各执行一次 optimizer 更新。独立逐数组审计确认 197 个梯度、199 个更新后参数、197 组一阶／二阶 moment 的 FP32 位模式精确一致且有限，step 均为 1；197 个参数实际变化。候选 helper 调用 197 次、复用命中 196 次，实测 CUDA dispatch，fallback 为 0。
