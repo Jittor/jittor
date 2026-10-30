@@ -144,8 +144,8 @@ def test_acl_install_publishes_real_owners_idempotently_without_facade_writes(pr
     # A literal count is the canary that a new registration was deliberate.
     # The duplicate check above catches a name registered twice, but not a
     # kernel that appears because an import side effect grew the table.
-    # 50: Adds the measured 310P Topk inference subset.
-    assert len(operations) == 50, "ACL kernel count changed; update deliberately"
+    # 51: Adds the measured 310P last-axis Euclidean inference subset.
+    assert len(operations) == 51, "ACL kernel count changed; update deliberately"
     assert len(first) == len(operations)
     assert providers.dispatch.registered_kernel("conv3d", "acl") is providers.neural.conv3d_acl
     assert providers.dispatch.registered_kernel("conv_transpose2d", "acl") is providers.neural.conv_transpose2d_acl

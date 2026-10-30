@@ -1,8 +1,8 @@
 # Known-Issues Ledger
 
 - Status: Maintained
-- Last reviewed: 2026-10-29
-- Baseline: `56ee4e59e3ed634af27fe328c9a19194b802847e`; per-entry scopes below
+- Last reviewed: 2026-10-30
+- Baseline: `f283ba92d` plus the scoped 310P norm/arg-reduction patch; per-entry scopes below
 - Owner: Jittor core maintainers
 - Review when: an entry is fixed or narrowed, a strict expected failure
   XPASSes, a new defect is reproduced, or at quarterly maintenance
@@ -1942,3 +1942,127 @@ workaround.
 - Exit condition: codegen fuses through the reshape above a pending producer
   deterministically and near CUB throughput, or a justified deterministic
   strategy is selected; the rank-1 allocation gate passes.
+
+## KI-BACKEND-025: ACL arg-reduction indices differ from CPU on multiple NaNs and mixed signed zeros
+
+- Severity: Medium (incorrect first-index semantics for affected inputs).
+- Status: Open; reproduced 2026-10-30 on Ascend310P3 / CANN 9.1.0 against
+  `f283ba92d` and the scoped ArgReduce correction (scoped 310P patch on this baseline).
+  Other SoCs unverified. Applies to observed FP16 public max/min and the
+  corresponding FP32 SDK comparison path; do not generalize to all dtypes.
+- Owner: ACL backend and Torch compatibility maintainers.
+- Symptom: for `[NaN,1,NaN,-1,+Inf,-Inf]`, SDK max/min chooses index2 while
+  independent Torch CPU chooses index0. For `[1,NaN,2,NaN,3,4]`, index3
+  versus CPU index1. For `[+0,-0,+0,-0,+0,+0]`, min chooses index1 rather
+  than CPU index0; for `[-0,+0,-0,+0,-0,+0]`, max chooses index1 rather than
+  CPU index0. Ordinary tested finite ties choose the first index correctly.
+- Cause: the observed SDK arg-reduction index policy differs from CPU
+  first-index semantics for these special-value ties. Exact internal SDK
+  implementation is not inferred. Values/signs/indices are unchanged before
+  and after the scoped FP16 FP32-index + original-value-Gather correction.
+  That correction fixes separately isolated finite MaxDim/MinDim row-boundary
+  errors, not this first-index limitation. Both SDK extrema are confirmed
+  affected, so the public max/min guard remains in scope.
+- Workaround: none verified that transparently preserves the complete public
+  contract. If these inputs are possible and first-index identity matters,
+  do not claim the device result is CPU-equivalent; validate the input domain
+  or use an explicit independent CPU reference. Any explicit CPU work and
+  transfer must be reported, not hidden as automatic fallback.
+- Evidence: unversioned `argreduce-cpu-oracle.json.npz`,
+  `argreduce-wide-candidate.json(.npz)`, `argreduce-gather-candidate.json(.npz)`
+  and `argreduce-public.json/.npz` under
+  `$JITTOR_LAB_ROOT/_state/generative-vision-310p/iteration-2026-10-30/rtdetr/`.
+  `argreduce-public` compares native/compat × max/min before/after and confirms
+  unchanged values, zero signs and indices. The report retains the limits
+  explicitly; passing finite-domain tests do not count these as accepted.
+- Exit condition: real ACL public native/compat max/min/argmax/argmin select
+  CPU-equivalent first indices for all tested NaN placements and mixed zero
+  signs, preserve selected values/signs and gradients, and retain finite
+  correctness with zero backend fallback. Recheck when CANN or dispatch changes.
+
+## KI-BACKEND-026: ACL integer arg-reduction returns INT32_MIN for an INT32_MAX selected value
+
+- Severity: High (silently wrong selected integer value).
+- Status: Open; reproduced 2026-10-30 on Ascend310P3 / CANN 9.1.0 against
+  the unchanged integer path at `f283ba92d` and scoped ArgReduce code
+  (scoped 310P patch on this baseline). Other SoCs unverified.
+- Owner: ACL dtype/conversion and arg-reduction maintainers.
+- Symptom: `tests/backends/acl/test_acl.py::TestACL::test_integer_arg_reduce_exact_values_stay_on_acl`
+  uses int32 input `[[2147483647,-2147483648,7,7],[-9,12,12,1]]`.
+  Max indices are `[0,1]`, but returned values are `[-2147483648,12]` instead
+  of `[2147483647,12]`.
+- Cause: the affected existing provider widens int32 to int64 for SDK
+  arg-reduction, then restores output values to int32. The end-to-end path is
+  independently reproduced as wrong; input cast, SDK value output and output
+  narrowing have not been isolated separately. Do not claim a particular
+  single Cast kernel is proven to be the cause.
+- Independence: the new 310P/FP16 guard does not run on integers. A fresh
+  process forcing the original half branch by mocking only `soc_name`
+  reproduces the same integer failure. This is a control on the real 310P,
+  not a 910B hardware test. The broader session's 40pass/1fail and fresh
+  control's 1fail must remain visible alongside passing FP16 targets.
+- Workaround: no exact end-to-end workaround has been verified. Avoid claiming
+  selected-value correctness near integer bounds; retain an explicit CPU
+  reference or validate a narrower application domain until isolated.
+- Evidence: `test-half-argreduce-npu.log` (original 40pass/1fail) and
+  `test-integer-original-branch.log` (fresh control, same failure), under the
+  same unversioned state root above. Exact input/expected arrays are in the
+  existing versioned test. The test remains enabled and was not relaxed.
+- Exit condition: independently isolate casts and SDK outputs, repair the
+  proper owner, then pass exact int32-boundary and int64-magnitude forward
+  value/index tests on real ACL with zero fallback, preserving dtype and
+  existing finite floating behavior. Recheck on SDK/dtype-policy changes.
+
+## KI-BACKEND-027: ACL norm and normalize special values are not CPU-equivalent
+
+- Severity: Medium (nonfinite masks, overflow values and normalization can be
+  silently wrong for affected inputs).
+- Status: Open; independently observed 2026-10-30 on Ascend310P3 / CANN 9.1.0
+  against the old path and the scoped canonical vector-norm route
+  (scoped 310P patch on this baseline). Other SoCs unverified. The new route is restricted to
+  no_grad/p=2/single final axis/real FP16 or FP32 and does not establish full
+  special-value support.
+- Owner: ACL norm/elementwise and Torch compatibility maintainers.
+- FP16 symptom: for NaN, ±Inf, or `[40000,40000,40000]` whose true norm exceeds
+  65504, independent CPU norm is NaN/Inf, while native NPU and the new SDK route
+  return 65504. Old Jittor returns 255.875 in these samples and was already wrong.
+  Native-NPU agreement therefore is not CPU mathematical acceptance.
+- Zero normalization: FP16 zero input with default eps 1e-12 gives CPU NaN,
+  native NPU and both old/new Jittor 65504. Explicit eps 1e-4 returns zero on all
+  measured sides; this is a verified zero-input workaround, not a general
+  nonfinite correction.
+- FP32 boundary: vector-norm NaN/Inf and default-eps zero normalization agree
+  with CPU. However normalize `[NaN,1,2]` gives old/new Jittor
+  `[NaN,1/eps,2/eps]`, while independent CPU/native NPU are all NaN.
+- Cause: observed end-to-end old/new behaviors only. The responsible
+  individual owner for FP32 partial NaN propagation was not isolated; do not
+  assert a definite scalar-clamp cause. No capability function or saturation
+  mode was changed; these observations do not prove hardware-wide inability
+  to represent or support Inf/NaN.
+- Regression boundary: among 80 captured fields (10 patterns × 2 dtypes × 4 public
+  APIs), no input whose old CPU NaN/Inf masks were correct acquired a new mask
+  mismatch. This is a bounded regression observation, not a claim that all
+  remaining values are CPU-correct. Normal finite supported-route tests pass.
+- Separate finite-range observation: unadopted multi-axis GRN norm probes show
+  old FP16 large100x/tiny1e-4x errors10.2035%/69.3944% against native NPU;
+  the SDK candidate matches native but was rejected for full-model regression.
+  The production final-axis route does not claim to fix this old multi-axis
+  fallback precision gap or establish CPU correctness for every norm domain.
+- Workaround: use a verified representable epsilon such as 1e-4 for zero-input
+  normalization if that matches the application contract. No transparent
+  workaround is verified for the other special-value differences; validate
+  the input domain or explicitly use an independent CPU reference where
+  mathematical nonfinite behavior is required. Do not hide CPU transfers as
+  automatic backend fallback.
+- Evidence: unversioned
+  `$JITTOR_LAB_ROOT/_state/generative-vision-310p/iteration-2026-10-30/vector-norm/special/comparison.json`
+  and arrays from independent CPU/nativeNPU/Jittor-before/Jittor-after, plus
+  `portable/` public-probe reports. Maintained reproduction:
+  `agent/skills/jittor-transformers-perf/scripts/probe_acl_vector_norm.py`;
+  independent CPU then NPU each save 80 fields. NPU reports
+  `reference_matched=false` honestly against CPU. `--require-match` turns the
+  discrepancy into a failing run. The normal diagnostic exit is not parity.
+- Exit condition: public vector_norm/norm/normalize preserve CPU NaN/Inf masks,
+  overflow behavior and appropriate epsilon semantics on real ACL devices,
+  while retaining finite values/dtypes, existing gradient fallbacks and zero
+  backend fallback. Recheck when CANN, conversion or norm dispatch changes.

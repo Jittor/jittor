@@ -63,7 +63,9 @@ def normalize(input, p=2, dim=1, eps=1e-12):
         >>> y = nn.normalize(x, dim=1)
     '''
     if p == 2:
-        norm = (input * input).sum(dim, keepdims=True).sqrt()
+        norm = jt.linalg._try_vector_norm(input, p, dim, True)
+        if norm is None:
+            norm = (input * input).sum(dim, keepdims=True).sqrt()
     elif p == 1:
         norm = input.abs().sum(dim, keepdims=True)
     elif p == float("inf"):

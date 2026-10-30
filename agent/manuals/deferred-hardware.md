@@ -347,3 +347,21 @@ resize、GridSampler2D、单轴 GatherV2 和 TopK 的 ACL 快路由限定 310P �
 
 保留本页既有 910B 单卡准入命令，按后端独立缓存串行首次 JIT；记录真实设备、软件、
 执行/跳过数量与全部输出。未完成这些设备验证前，本轮结果不声明 CUDA 或 910B 通过。
+
+## 2026-10-30 向量范数和极值索引：其他设备的分派回归待验
+
+Owner：ACL 与 linalg / Torch 兼容层维护者。新最后轴 L2 norm SDK 路径只准入
+310P / no_grad / FP16、FP32；半精度 arg-reduction 的 FP32 索引比较与原值 Gather
+也只在 310P 启用。CPU 定向与 310P 实机结果不能代替其他 SoC 或 CUDA 验收。
+
+在既有硬件准入命令后，对独立 CPU oracle 验证公共 vector_norm、Torch norm 和
+normalize 的最后轴、全量 flatten、keepdim、dtype 与梯度模式。其他后端的新查询应
+保留原算法，不以 mock 的 SoC decline 或全 skip 证明实机通过。共享入口的 CPU
+契约在 `compat/tests/torch/test_vector_norm_dispatch.py`；310P 专属数值与拒绝边界在
+`tests/backends/acl/test_acl_vector_norm.py`，该文件在其他 SoC 跳过不能计为覆盖。
+arg-reduce 的维度、原值、索引及梯度用
+`tests/backends/acl/test_acl_half_arg_reduce.py` 与独立设备 oracle 验证。
+
+NaN、混合正负零、整型边界与范数非有限值仍按 KI-BACKEND-025、026、027 保留限制；
+本轮没有修改设备 saturation mode，不能由观测结果推断所有硬件都不支持 Inf / NaN。
+复查条件：SDK / 驱动、范数或 arg-reduce 分派、共享 dtype / shape 语义变化。

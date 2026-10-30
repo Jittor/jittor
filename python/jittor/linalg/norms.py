@@ -151,6 +151,17 @@ def _matrix_singular_values(x, d0, d1):
     return s
 
 
+def _try_vector_norm(x, ord, dim, keepdim):
+    """Query a vector-norm implementation, leaving unsupported calls unchanged.
+
+    The native and Torch norm/normalize entry points share this boundary;
+    their different epsilon and argument conventions remain with each owner.
+    """
+    from jittor._runtime.dispatch import select_kernel
+    kernel = select_kernel("linalg.vector_norm", x, ord, dim, keepdim)
+    return None if kernel is None else kernel(x, ord, dim, keepdim)
+
+
 def vector_norm(x, ord=2, dim=None, keepdim=False):
     r"""
     Compute a vector norm, matching ``torch.linalg.vector_norm``.
@@ -189,6 +200,9 @@ def vector_norm(x, ord=2, dim=None, keepdim=False):
 def _vector_norm_reduce(x, ord, dims, keepdim=False):
     import jittor as jt
     import math
+    result = _try_vector_norm(x, ord, dims, keepdim)
+    if result is not None:
+        return result
     ax = dims
     absx = jt.abs(x)
     if ord == 2:

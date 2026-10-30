@@ -6,6 +6,7 @@ from .ops.flashattention_op import scaled_dot_product_attention_acl
 
 
 KERNELS = (
+    ("linalg.vector_norm", normalization.vector_norm_acl),
     ("clamp.scalar", tensor._clamp_acl),
     ("tensor.triu", tensor.triu_acl),
     ("tensor.flip", tensor.flip_acl),
@@ -69,6 +70,8 @@ def install():
                       if implementation is neural.conv_transpose2d_acl else
                       neural.grid_sample_supported
                       if implementation is neural.grid_sample_acl else
+                      normalization.vector_norm_supported
+                      if implementation is normalization.vector_norm_acl else
                       tensor.topk_supported
                       if implementation is tensor.topk_acl else None),
         )

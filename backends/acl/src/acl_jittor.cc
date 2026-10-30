@@ -15,6 +15,7 @@
 #include <aclnnop/level2/aclnn_multinomial.h>
 #include <aclnnop/aclnn_grid_sampler2d.h>
 #include <aclnnop/aclnn_topk.h>
+#include <aclnnop/aclnn_linalg_vector_norm.h>
 
 namespace jittor {
 const AclOpRegistry& acl_op_registry() {
@@ -160,6 +161,7 @@ const AclOpRegistry& acl_op_registry() {
         {"GatherV2", AclOpFunctions::direct(aclnnGatherV2)},
         {"GridSampler2D", AclOpFunctions::direct(aclnnGridSampler2D)},
         {"Topk", AclOpFunctions::direct(aclnnTopk)},
+        {"LinalgVectorNorm", AclOpFunctions::direct(aclnnLinalgVectorNorm)},
         {"UpsampleNearest2dBackward", AclOpFunctions::direct(aclnnUpsampleNearest2dBackward)},
     };
     return entries;

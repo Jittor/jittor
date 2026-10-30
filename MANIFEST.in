@@ -62,6 +62,7 @@ include backends/acl/include/aclops/truth_reduce_op_acl.h
 include backends/acl/include/aclops/unary_op_acl.h
 include backends/acl/include/aclops/upsample_op_acl.h
 include backends/acl/include/aclops/utils.h
+include backends/acl/include/aclops/vector_norm_op_acl.h
 include backends/acl/include/aclops/where_op_acl.h
 include backends/acl/kernels/native/adamw_op_acl.cc
 include backends/acl/kernels/native/arg_reduce_op_acl.cc
@@ -111,6 +112,7 @@ include backends/acl/kernels/native/truth_reduce_op_acl.cc
 include backends/acl/kernels/native/unary_op_acl.cc
 include backends/acl/kernels/native/upsample_op_acl.cc
 include backends/acl/kernels/native/utils.cc
+include backends/acl/kernels/native/vector_norm_op_acl.cc
 include backends/acl/kernels/native/where_op_acl.cc
 include backends/acl/src/acl_error_code.cc
 include backends/acl/src/acl_fused_ascendc.cc

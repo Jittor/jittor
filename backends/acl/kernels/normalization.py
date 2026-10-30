@@ -16,6 +16,28 @@ from .ops.norms_op import (
 from .ops.rope_op import ExpandRotaryCacheACL, GroupedQKRmsNormRotaryACL
 from .tensor import embedding_acl
 from ._soc import soc_name
+from .ops.vector_norm_op import VectorNormACL
+
+
+def vector_norm_supported(x, ord=2, dim=None, keepdim=False):
+    # Last-axis reductions improved stock Swin inference with the required
+    # contiguous copy included. Multi-axis GRN did not improve the full model.
+    from numbers import Integral
+    if isinstance(dim, (tuple, list)):
+        if len(dim) != 1:
+            return False
+        dim = dim[0]
+    return (bool(jt.flags.no_grad) and soc_name().startswith("Ascend310P")
+            and isinstance(x, jt.Var) and x.ndim > 0
+            and all(int(size) > 0 for size in x.shape)
+            and ord == 2 and isinstance(keepdim, bool)
+            and isinstance(dim, Integral) and not isinstance(dim, bool)
+            and dim in (-1, x.ndim - 1)
+            and _jittor_dtype_name(x.dtype) in ("float16", "float32"))
+
+
+def vector_norm_acl(x, ord=2, dim=None, keepdim=False):
+    return VectorNormACL()(x.contiguous(), keepdim)
 
 
 def layer_norm_acl(x, normalized_shape, weight, bias, eps, *, allow_bfloat16=False):

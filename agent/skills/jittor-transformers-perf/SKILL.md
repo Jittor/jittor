@@ -54,6 +54,8 @@ Jittor vs 真 PyTorch 数据，而不是把 JIT、H2D 或 lazy graph 漏执行�
 - Ascend Qwen3 两进程结果对拍：`compare_qwen3_ascend.py`
 - Ascend SDXL / Wan 完整生成与图像、视频对拍：`benchmark_diffusion_ascend.py`
 - Ascend SAM2 真实图像、点提示与掩码对拍：`benchmark_sam2_ascend.py`
+- Ascend arg-reduce 的 value / index 不变量：`probe_acl_arg_reduce.py`
+- norm / normalize 的 NaN、Inf、溢出与 epsilon 对拍：`probe_acl_vector_norm.py`
 
 ### 生成与视觉效果验收
 
@@ -432,3 +434,57 @@ python agent/skills/jittor-transformers-perf/scripts/compare_stock_vision_effect
   --source-root "$JITTOR_SOURCE_ROOT" \
   --output "$JITTOR_LAB_ROOT/_state/model-bench/image-agreement.json"
 ```
+
+### Arg-reduction 的 value / index 不变量
+
+`probe_acl_arg_reduce.py` 用无模型有限输入，检查极值是否正确、是否等于返回 index
+指向的原值，以及有限值并列时是否选首个位置。默认逐行偏移的 `[1,8400,80]`
+可复现 310P / CANN 9.1.0 的原始 FP16 `aclnnMaxDim` 行边界错误；重复相同行容易
+掩盖它。先独立 CPU，再串行执行原生 NPU、Jittor 公共路径和原始 SDK 路径：
+
+```bash
+<real-torch-cpu-python> agent/skills/jittor-transformers-perf/scripts/probe_acl_arg_reduce.py \
+  --backend torch --device cpu --require-exact \
+  --output "$JITTOR_LAB_ROOT/_state/arg-reduce/cpu.json"
+<real-torch-npu-python> agent/skills/jittor-transformers-perf/scripts/probe_acl_arg_reduce.py \
+  --backend torch --device npu --output "$JITTOR_LAB_ROOT/_state/arg-reduce/torch-npu.json"
+JITTOR_TORCH_SHIM=0 <jittor-python> agent/skills/jittor-transformers-perf/scripts/probe_acl_arg_reduce.py \
+  --backend jittor --device npu --route public --require-exact \
+  --output "$JITTOR_LAB_ROOT/_state/arg-reduce/jittor-public.json"
+JITTOR_TORCH_SHIM=0 <jittor-python> agent/skills/jittor-transformers-perf/scripts/probe_acl_arg_reduce.py \
+  --backend jittor --device npu --route sdk \
+  --output "$JITTOR_LAB_ROOT/_state/arg-reduce/jittor-sdk.json"
+```
+
+原始 SDK 的错误是诊断证据，不算公共行为通过：JSON 明确记录 `passed`，
+`--require-exact` 额外要求失败时非零退出。`--op min`、`--rows`、`--columns` 可收窄
+域；SDK route 只允许原生 Jittor NPU，输出必须在外部 lab。CPU Jittor 必须显式设置
+`JT_BACKEND=cpu`。分别保留每条命令的输入 / 输出 NPZ、JSON 和 fallback 增量。
+此探针不覆盖 NaN 或混合正负零的索引策略，不能由普通有限值通过推断这些边界支持。
+
+### Vector norm 的精度与特殊值
+
+310P 无梯度 FP16 / FP32 的最后单轴 L2 norm 可走标准 `LinalgVectorNorm` owner，
+native vector_norm、Torch norm 和 normalize 共享查询入口。strided 输入显式复制为
+连续输入，必须把复制时间计入。多轴 GRN 本轮未获稳定整模收益，保留旧路径；
+CPU、梯度及未准入轴也保留各自原有实现。canonical vector_norm 的 dim=None 会
+先展平再按最后轴查询，不能把 provider 直接拒绝 None 解释成所有公共 None 都拒绝。
+
+`probe_acl_vector_norm.py` 比较独立 CPU 与 NPU 的公开 norm / normalize，保存原始
+数组、非有限值 mask 和有限误差；专门包含半精度中间平方溢出、真范数溢出、NaN、
+Inf、零向量与 epsilon 临界值。已知 310P 特殊值限制可能使 `reference_matched=false`，
+不能把与原生 NPU 一致或诊断退出零当成 CPU 数学全部通过。
+
+```bash
+<real-torch-cpu-python> agent/skills/jittor-transformers-perf/scripts/probe_acl_vector_norm.py \
+  --backend torch --device cpu --output "$JITTOR_LAB_ROOT/_state/vector-norm/cpu.json"
+<real-torch-npu-python> agent/skills/jittor-transformers-perf/scripts/probe_acl_vector_norm.py \
+  --backend torch --device npu --reference "$JITTOR_LAB_ROOT/_state/vector-norm/cpu.json" \
+  --output "$JITTOR_LAB_ROOT/_state/vector-norm/torch-npu.json"
+JITTOR_TORCH_SHIM=1 <jittor-python> agent/skills/jittor-transformers-perf/scripts/probe_acl_vector_norm.py \
+  --backend jittor --device npu --reference "$JITTOR_LAB_ROOT/_state/vector-norm/cpu.json" \
+  --output "$JITTOR_LAB_ROOT/_state/vector-norm/jittor-npu.json"
+```
+
+`--require-match` 使参考 mask 或有限误差不匹配时非零退出。每个 dtype 和边界分别
+报告；常规有限输入、极值保留与梯度准入不能用一个宽松容差混成“支持”。

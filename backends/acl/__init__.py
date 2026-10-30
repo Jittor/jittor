@@ -66,6 +66,7 @@ CORE_SOURCES = (
     "kernels/native/stack_op_acl.cc",
     "kernels/native/ternary_op_acl.cc",
     "kernels/native/topk_op_acl.cc",
+    "kernels/native/vector_norm_op_acl.cc",
     "kernels/native/transpose_op_acl.cc",
     "kernels/native/triu_op_acl.cc",
     "kernels/native/truth_reduce_op_acl.cc",

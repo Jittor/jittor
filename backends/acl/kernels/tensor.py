@@ -184,6 +184,17 @@ def scatter_acl(input, dim, index, src, reduce="void"):
 
 def arg_reduce_acl(input, op, dim, keepdims=False):
     dtype = _jittor_dtype_name(input.dtype)
+    if dtype == "float16" and soc_name().startswith("Ascend310P"):
+        # CANN MaxDim half kernels can return values and indices from different
+        # rows. Use exact FP32 comparisons for both extrema on this SoC.
+        # Gather the original half values instead of narrowing the SDK result:
+        # the device Cast kernel saturates infinities when narrowing to half.
+        indices, _ = ArgReduceACL(jt.ops.arg_reduce)(input.float32(), op, dim, keepdims)
+        gather_shape = list(input.shape)
+        gather_shape[dim] = 1
+        gather_indices = indices.reshape(gather_shape)
+        values = jt.gather(input, dim, gather_indices)
+        return indices, values.reshape(indices.shape)
     if dtype == "int32":
         # aclnnMaxDim/MinDim on Ascend A2 does not accept int32 values.
         # int64 preserves every int32 value exactly across the reduction.

@@ -13,6 +13,7 @@
 #include <aclops/getitem_op_acl.h>
 #include <aclops/grid_sample_op_acl.h>
 #include <aclops/topk_op_acl.h>
+#include <aclops/vector_norm_op_acl.h>
 #include <aclops/setitem_op_acl.h>
 #include <aclops/matmul_op_acl.h>
 #include <aclops/random_op_acl.h>
