@@ -1,5 +1,37 @@
 # Torch Compatibility Release Acceptance: 2026-10-26 Day 2–5 Continuation
 
+## 2026-10-30 Adam 更新作用域代码提交
+
+任务代码已提交 `c1569515961a5c4b9739c8b4ab2916bb531d9f22`（`修复优化器更新的参数设备作用域`），该提交仅包含 `compat/torch/optimizer_api.py` 的 Adam／AdamW 非 fused 逐参数更新 scope 改动。真实主树工作树 f110 身份下的 CPU 与 CUDA 固定梯度四步对照已完成，独立审计 SHA-256 `e9c2ea3011d87abc7cda5a5bb7b9db951b0bb172706bb6083be80b625c38fa51`；完整工作树还包含既有 dirty 内容，不能把该工作树身份当成提交树身份。测试包含同步和读回，不证明完整模型、无同步运行或跨设备复制；原 Adam `foreach` 构造失败、历史 CUDA 700 及候选限制继续保留。
+
+## 2026-10-30 主树 f110 Adam／AdamW CPU 与 CUDA 固定梯度对照
+
+主树 f110 Python 源直接加载已集成 scope 的 optimizer，复用已审主树 df45 的原生 CPU／CUDA cold core：CPU 两个 Jittor 阶段使用已保存的 PyTorch Adam／AdamW 参考，CUDA 新生成两个 PyTorch 参考后运行两个对应 Jittor 阶段，六阶段均自然 rc0。每种算法各以四个 FP32 参数、固定梯度运行四步，逐字段的参数、梯度、m/v 和 step 与对应 PT 参考通过预注册容差；每个 Jittor 阶段记录 14 次逐参数更新，fallback 0。CUDA 参数在 logical cuda:1（UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0`），ambient 为 logical cuda:0；最终 CUDA 参数及状态的 driver DEVICE 指针和 ordinal 已核。
+
+主树 Adam 调用省略不支持的 `foreach`／`fused` 参数，AdamW 两侧显式设为 False；先前 Adam 对 `foreach=False` 的实际构造失败和相关 API 缺口仍保留，不能由此通过结果覆盖。每步均显式同步和读回，观测会干预调度；这是固定梯度小样本，不是完整模型训练、收敛、性能、无同步或跨设备 copy 验证。实际主树模块及 core／utils 和 CUDA runtime／driver 映射记录已核；PT 的原生库映射未采集，CPU 物理设备仅按公开分类。
+
+CPU cache 端点 1090 → 1098、CUDA cache 3029 → 3033，分别新增 8 和 4 项、无删除，已有项仅 lock 文本变化；各自保护 cache 端点一致，终态锁无内核记录。两个 unit 成功结束，记录的任务 PID 在终审时不在现场；端点快照和进程观察有可见性限制。独立终审 `/data6/cgq/jittor-lab/_state/release-day23/20261030-main-adam-scope-post-r4-independent-terminal-r1/audit.json`，SHA-256 `e9c2ea3011d87abc7cda5a5bb7b9db951b0bb172706bb6083be80b625c38fa51`。
+
+## 2026-10-30 主树 Adam scope 集成后 CPU 首错
+
+主树 f110 源码的直接 CPU 小样本对照中，独立 PyTorch Adam 与 AdamW 固定梯度参考各完成四步、进程 rc0；随后的主树 Jittor Adam 接受 `foreach=False, fused=False` 的构造调用在进入 `step` 前报 `TypeError: Adam.__init__() got an unexpected keyword argument 'foreach'`。堆栈显示 Torch frontend 将参数传至不接受 `foreach` 的 native Adam 构造器，这是该调用实测的 API 失败；尚未运行 Adam scope 更新，不能据此推断 scope 的更新正确性或失败原因。按首错停止，Jittor AdamW 和后续 CUDA 对照均未运行；保留原失败，不自动重试。
+
+失败进程已记录实际主树 optimizer 路径和 CPU core／utils 运行中映射，因构造失败没有产品映射后记录或 fallback 结果；PyTorch 新参考未采原生库映射。CPU cache 端点均为 1090 项、无增删且仅 lock 文本变化，四保护 cache 端点一致、终态锁无内核记录；unit 以 exit 1 失败结束、记录任务 PID 终审时不在现场，缓存快照和进程观察存在可见性限制。独立终审 `/data6/cgq/jittor-lab/_state/release-day23/20261030-main-adam-scope-post-cpu-r2-independent-terminal-r1/audit.json`，SHA-256 `a7850f486d736b5a514611b2a46602f811f0de9a326832d0dabad8d0472a4e41`。
+
+## 2026-10-30 隔离 Adam scope CPU 异常恢复单例
+
+在主树 df45 CPU core 和预导入的隔离 Python scope 候选下，通过真实 AdamW.step 在 `adam_update` 调用内注入异常。进入时观察到 Python placement 与 native TLS 均为 CPU；异常后恢复到事先设置的合成 CUDA1 外层标记，退出外层后恢复测试前初值。这个 CUDA1 只是 TLS 标记，没有真实 GPU 操作；step 在异常前已增至 1，测试不证明优化器状态事务回滚。frontend result-type token 和 runtime device／flags 没有单独验证，异步 GPU 错误和部分 moment 更新亦不在该单例范围。
+
+候选模块与主树 helper 的加载身份、CPU core／utils 活体映射、stamp 和 fallback 0 已核。CPU cache 端点均为 1090 项、无增删且仅 lock 文本变化，GPU 功能及另外三个保护 cache 端点一致；unit 成功结束，记录任务进程在终审时不在现场，终态锁检查通过，进程和端点快照存在可见性限制。独立终审 `/data6/cgq/jittor-lab/_state/release-day23/20261030-adam-scope-exception-cpu-r3-independent-terminal-r1/audit.json`，SHA-256 `4bbb0d9df5c43df6d085c88bbccdbef893ae1add396b99512017c4918d84d7cf`。
+
+## 2026-10-30 主树 core 与隔离 Adam scope Python 候选定向对照
+
+在 df45 主树 Python 和原主树 CUDA core 上，预导入加载仅 `optimizer_api.py` 的隔离 scope 候选，一次串行 suite 的 13 个独立阶段自然 rc0：1 个新 PyTorch 双卡分组固定梯度参考与 12 个 Jittor 候选阶段。CPU+CUDA、双 CUDA 同组、双 CUDA 分组各四步及其 checkpoint 第 2 步新进程恢复至第 4 步均通过预注册逐字段对照；恢复初态和后续结果也与各自 Jittor full 第 2 步和尾段对照。两设备的进程 UUID 以及 CUDA 端点参数、梯度、m/v 的 driver DEVICE 指针和 ordinal 有记录；CPU 端点的设备为公开分类，不是 driver 内存证明。实际 overlay、core、utils 和 CUDA runtime 映射前后身份及 fallback 0 已核。
+
+固定梯度场景还覆盖四步中间无显式逐步读回、手工梯度 AMP、FP16、BF16、capture 拒绝及 fused：fused 真实选择和调用各 4 次，逐参数 fallback 0；capture 拒绝不表示 replay 已验证。无逐步显式同步不证明底层无内部同步，其他阶段的观察和端点指针检查会同步并物化。各项按预注册的 dtype 对应容差比较；新双卡 PyTorch 参考未采原生库实际映射，历史 PT 参考按保存工件绑定，恢复并非 PT checkpoint 续训对照。这是四参数小样本功能实验，不覆盖真实模型训练、收敛、性能、完整 AMP／GradScaler 或所有设备路径，Python 候选尚未合入主树；历史 CUDA 700 和先前严格失败保留。
+
+主功能 cache 端点 2985 → 3029 项，新增 44、无删，旧项仅 lock 文本变化；隔离 r4、性能及封存 SDPA 三份保护 cache 的端点快照相同。unit 成功结束，记录的任务进程在终审时不在现场，终态锁无内核记录；缓存端点和进程观察存在可见性限制。独立终审 `/data6/cgq/jittor-lab/_state/release-day23/20261030-main-adam-scope-overlay-functional-r2-independent-terminal-r1/audit.json`，SHA-256 `958186907811568d5909d95fda64c8a653dafc6ac0eb1895c03372cb6fa6051c`。
+
 ## 2026-10-30 主树 df45 core：临时 scope 的 Adam 单步对照
 
 在真实主树 df45 Python 源及其原主树 CUDA cold core 上，以独立进程对 ambient CUDA 0、参数位于 CUDA 1 的场景执行一次 Adam 更新。测试在调用期间临时包装 `adam_update`、`optimizer_state_scope` 和 `_optimizer_arithmetic` 并观察实际分派；p0、p1、p3 三个有梯度参数参与更新，p2 无梯度。与保存的 PyTorch 参考相比，梯度精确一致，参数和 m/v 在 `atol=rtol=2e-6` 下通过，step 已检查，fallback 为 0。实际 core 和 CUDA 库的映射身份以及目标参数的 DEVICE 指针、ordinal 1 均有记录。
