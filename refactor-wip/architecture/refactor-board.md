@@ -1,5 +1,14 @@
 # 整改看板
 
+## 2026-10-30 主树 4ed94 BERT 非 fused 两步恢复诊断
+
+单 seed 821 的真实 BERT 在主树工作树 fingerprint `4ed94ce1a836ef782dc8d47199a9b0cb86e1eb73752b1de919c6c3cb2ffb35d3` 和实际主树 CUDA core 上加载历史 df45 checkpoint-50，完整状态签名严格一致，201 个 scalar step 与 trainer／scheduler 均为 50，201 参数及 402 个 moment 的设备记录为 cuda:0，Python／NumPy／CPU／CUDA 四组 RNG 恢复检查通过。随后有意把两个 optimizer 组的 `foreach`／`fused` 从 `None` 设为 `False`，这是改变原配置的诊断干预；保留原 100 步 scheduler，实际只续训第 51、52 两步，0 skip、fallback 0。每步 201 个梯度均有限 FP32 CUDA，201 个参数均发生变化；每步真实 Python 逐参数 AdamW 更新与 optimizer scope 各 201 次、step 分别为 51／52，记录的 scope 进前／内部／退出 dispatch 均为 cuda:0。该 Python 观察不证明 kernel 内部执行或其他设备上下文行为。
+
+四个 microbatch 的样本 ID／形状及两步 LR 与历史 PyTorch 报告匹配，未逐 token 比较；第 51／52 步 loss 分别为 `0.28930664`／`0.31713867`，历史 PT 分别为 `0.27783203`／`0.27587891`。PT 使用不同 checkpoint 且 optimizer 路径可能不同，差异仅为描述性对照，不证明同状态数值等价或收敛趋势。运行配置为 BF16，记录未建立全程及 kernel 内部精度；同步、逐参数检查和包装会干预执行。此次未做 eval、predict 或 lifecycle，也未生成新的 checkpoint-52；先前 full／resume checkpoint-100 严格状态差异与其他历史 FAIL 保留，不能用这两步取代。
+
+独立终审 `/data6/cgq/jittor-lab/_state/release-day23/20261030-main-4ed94-bert-nonfused-r2-independent-terminal-r1/audit.json` SHA256 `249fc6695b642cc297a6549b6c4687a66381218ee2c7d478cb93933d2ae3ff9f`。unit 自然成功退出；主 GPU 功能 cache 端点新增 8 项、无删除且旧项仅锁文件变化，三份保护 cache 不变，五锁内核记录为空；端点快照及进程／FD 可见性有限。r1 静审发现异常处理依赖缺失，r2 修复并完成模拟后才运行，原审计保留；本次不作性能验收。
+
+
 ## 2026-10-30 主树 4ed94 Qwen LoRA checkpoint 51→102 续训
 
 单 seed 821 新用途在主树工作树 fingerprint `4ed94ce1a836ef782dc8d47199a9b0cb86e1eb73752b1de919c6c3cb2ffb35d3` 和实际主树 CUDA core 上加载历史 r10 checkpoint-51，按原 102 步日程实际续训至 102：51 次更新、0 skip，每步记录 112 个有限 FP32 CUDA 梯度，首个续训更新中 112 个 adapter 参数均变化，fallback 0。恢复功能比较通过，112 个 optimizer scalar step 与 trainer／scheduler 均为 51，337 个已记录的 adapter／moment／buffer 设备为 cuda:0，Python／NumPy／CPU／CUDA 四组 RNG 恢复检查通过；337 不涵盖冻结底座全部参数。恢复严格 hash 比较仍为 FAIL：多出两个值为原始学习率的 `initial_lr` 字段，功能比较仅对该已限定差异作例外，不改写严格结果。历史 checkpoint 来自旧 r10，并非本工作树从头训练。
