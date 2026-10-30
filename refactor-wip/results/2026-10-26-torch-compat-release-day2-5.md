@@ -1,5 +1,16 @@
 # Torch Compatibility Release Acceptance: 2026-10-26 Day 2–5 Continuation
 
+## 2026-10-31 optimizer 空状态恢复回归通过；Accelerate DDP 读回仍阻塞
+
+提交前主树 HEAD `d28fd052dfa6219b20f62448e6226910bce9c801`，分支 `integrate/cgq-transformers-native-multicard-target`，origin/cgq_transformers `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81` 为祖先、ahead 80 / behind 0。工作区既有 103 个 dirty/untracked 路径保留；未执行 reset、stash、clean 或 push。
+
+本轮在 optimizer restore 中增加一个窄优化：Accelerate 初始化 wrapper 加载空 optimizer state 时，若是全新且所有相关参数/保存步数均为 0，复用 optimizer 初始零 slot，避免对无状态 moment 多做 `zeros_like`、同步和 GPU materialization。已成功 restore 后加载空 state 的语义仍需清零；专门回归以 step=0 的非零 AdamW moment 验证这一点。真实设备配置运行 `compat/tests/torch/test_optimizer_restore_devices.py` 的 10 个相关用例，CPU 与物理 GPU UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0`（进程内 `cuda:0`）均覆盖 AdamW/SGD；10 passed、18 deselected、0 skipped，9.30s，`backend_fallback=error`。日志为 `/data6/cgq/jittor-lab/_state/release-day23/20261031-main-accelerate-ddp-nosync-r2/optimizer-restore-fix-r2/pytest.log`，SHA256 `35479a476437e02d75d47acd159ae01277a3287c6475f4dfc13726ab02c747b8`。
+
+真实双 rank DDP no_sync 用例仍未通过。R5 栈采样显示 rank 0 已完成第一次 backward 和 all-gather，阻在 `torch.allclose` 导致的 `_var_item` 物化；rank 1 阻在读回初始参数的 `_var_numpy`。70 秒预算到期时无 report/更新/final fallback 证据。R2 启动失败是 NCCL build 配置未加载；R3 无进度标记、R4/R5 栈与进度产物均留存于 `/data6/cgq/jittor-lab/_state/release-day23/20261031-main-accelerate-ddp-nosync-r2/optimizer-restore-fix-r*/`。本轮功能改动只由定向 optimizer restore 测试支持，不宣称 DDP 闭环。
+
+本轮 GPU 2/4 约 33%/30% 利用率，空闲显存约 59,941/59,931 MiB，故 Day4–5 正式测量未开始。该验收还需源码匹配的隔离 cold core/cache、稳定窗口、至少 3 轮交替且每轮每侧 ≥10 个同步热样本，并报告模型加载、首步、热态的 median/p95/离散度、吞吐与 allocator allocated/reserved 及 NVML 峰值；容量/OOM 边界另测。更广 Day2–5 仍需按实际发布范围补足 T5/Qwen/Vision/BERT 等真实任务与恢复、CPU/CUDA API/边界矩阵、默认多卡 DDP、真实 activation recompute 的梯度和显存对照、预设阈值的共同 held-out JT/PT 质量比较，以及分开记录同框架恢复与跨框架序列化。overall release **Not complete**。
+
+
 ## 2026-10-31 当前主树普通 Accelerate DDP no_sync 双 rank 定向试验记录
 
 本轮从现有 `/home/cgq/jittor` 工作区继续，没有 clone、reset、stash 或 clean。测试绑定代码 HEAD `4a03ff2eecb616b03e59b3a88c2a0533c4359da8`、源码 fingerprint `674fc808ef91f0072b1d015fbfeee4f3a58e04940aaa43392bc894fcc27fb106`；文档提交前 HEAD `5ecd38739be63bb2738d989de0865640178dd1c0`，origin/cgq_transformers `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81` 为祖先（ahead 79 / behind 0）。分支初始存在既有 dirty 与 untracked 路径，index 为空；本轮没有修改源码或测试文件。

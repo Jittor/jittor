@@ -1,5 +1,16 @@
 # 2026-10-21 工作区快照与本机接续交接
 
+## 2026-10-31 最新接续：optimizer 空恢复窄回归通过，普通 DDP 读回未完成
+
+继续使用服务器已有 `/home/cgq/jittor`。提交前 HEAD `d28fd052dfa6219b20f62448e6226910bce9c801`，origin/cgq_transformers `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81` 为祖先（ahead 80 / behind 0）。全树已有 103 项 dirty/untracked 路径，均保留；本轮不 push。进程检查未见遗留 pytest/Jittor DDP 工作，GPU 2/4 仍约 33%/30% 利用率，不满足正式性能窗口。
+
+Accelerate 包装器的 fresh empty optimizer restore 现在对 step-zero AdamW/SGD 复用既有零 slot，避免无状态初始化时多余的零张量分配与同步；对已 restore 后再加载空状态仍维持清零。相关 CPU/实际 CUDA 用例 10 passed、18 deselected、0 skipped、fallback=0；测试日志及 SHA256 见 Day2–5 结果记录顶部。
+
+普通 Accelerate DDP no_sync 两 rank 测试仍未完成。R5 中 rank 0 在 all-gather 后的 `torch.allclose` 物化停住，rank 1 在初始参数 `_var_numpy` 读回停住；超出 70 秒预算后无测试终态或更新证据。原始尝试和栈采样在 `/data6/cgq/jittor-lab/_state/release-day23/20261031-main-accelerate-ddp-nosync-r2/optimizer-restore-fix-r*/`，后续应针对两个 rank 的读回/图执行顺序做窄定位后才决定是否有依据再运行多卡测试。
+
+Day4–5 仍要求匹配当前源码身份的私有 cold core/cache、连续稳定且无无关 PID 的 GPU 窗口、3 轮交替配对且每侧每轮至少 10 个热态样本、load/first/steady 的 median/p95/离散度和 allocator/NVML 峰值；显存容量/OOM 单独验收。广泛 Day2–5 仍需覆盖所声明模型的训练/恢复和任务指标、真实默认 DDP、activation checkpoint 实际重计算及梯度/显存证据、共同 held-out JT/PT 质量阈值、序列化互操作分类。整体 release 保持 **Not complete**。
+
+
 ## 2026-10-31 接续增量：普通 Accelerate DDP 首次同步路径未闭合
 
 继续使用服务器原工作区 `/home/cgq/jittor`。代码身份 HEAD `4a03ff2eecb616b03e59b3a88c2a0533c4359da8`、fingerprint `674fc808ef91f0072b1d015fbfeee4f3a58e04940aaa43392bc894fcc27fb106`；文档提交前 HEAD `5ecd38739be63bb2738d989de0865640178dd1c0`，origin/cgq_transformers `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81` 为祖先（ahead 79 / behind 0）。本轮只产生外置实验记录，没有源码或测试改动。

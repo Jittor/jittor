@@ -1,5 +1,16 @@
 # 整改看板
 
+## 2026-10-31 普通 Accelerate DDP 读回阻塞诊断与 optimizer 空恢复定向修正
+
+继续在现有 `/home/cgq/jittor` 工作区推进，提交前 HEAD 为 `d28fd052dfa6219b20f62448e6226910bce9c801`，分支 `integrate/cgq-transformers-native-multicard-target`，origin/cgq_transformers `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81` 为祖先（ahead 80 / behind 0）。全树 103 个既有 dirty/untracked 路径继续保留；本轮无清理、暂存其他文件或 push。
+
+为 Accelerate 包装器初始化时对 fresh optimizer 执行的空 state_dict 恢复，修改 `compat/torch/optimizer_restore.py`：仅当该 optimizer 尚无成功恢复记录、当前参数步数与保存步数均为 0 时，复用刚创建且原本为零的 slot，避免为每个未使用 moment 创建并强制 materialize 新零张量。后续已成功恢复过的 optimizer 再加载空状态时，仍会清零 slot。CPU 与真实 CUDA `cuda:0` 的 AdamW/SGD 定向回归共 10 passed、18 deselected、0 skipped（9.30s），含 step-zero 非零 AdamW moments 再加载空状态应清零；fallback 设为 error。pytest log SHA256 `35479a476437e02d75d47acd159ae01277a3287c6475f4dfc13726ab02c747b8`，位于 `/data6/cgq/jittor-lab/_state/release-day23/20261031-main-accelerate-ddp-nosync-r2/optimizer-restore-fix-r2/pytest.log`。
+
+随后用同一目标双 CUDA rank 定向复查默认 DDP no_sync 用例。R5 在 70 秒预算内未取得终态：rank 0 到达首个 no_sync backward 与梯度 all-gather 完成标记，随后在 `torch.allclose` 的标量读回 `_var_item` 路径停住；rank 1 尚未越过初始参数 `_values(...)` / `_var_numpy` 读回。无测试报告、optimizer 更新或最终 fallback 计数，因此 DDP 未通过，不能外推为新修正导致通过。R2 为缺失 NCCL 构建环境配置的启动失败；R3/R4/R5 的限时运行与栈采样、原始日志均保存在 `/data6/cgq/jittor-lab/_state/release-day23/20261031-main-accelerate-ddp-nosync-r2/optimizer-restore-fix-r*/`。下一步需针对 rank 不同张量读回路径定位延迟执行/collective 顺序问题，再完成梯度、更新、参数/rank 状态与清理闭环。
+
+Day4–5 本轮没有性能或显存测量。资源快照中 GPU 2/4 利用率约 33%/30%、空闲显存约 59,941/59,931 MiB，违反利用率 ≤10%、空闲显存 ≥60,000 MiB 的窗口门；根分区约余 33 GiB、`/data6` 约余 5.5 TiB。正式门仍要求同一源码/配置、独立审计的私有 cold core/cache、稳定合格 GPU 窗口、三轮交替且每轮每侧至少 10 个热态样本、load/first-step/steady 的 median/p95/离散度及 allocator/NVML 峰值；容量/OOM 边界独立测。更广 Day2–5 的模型范围、默认 DDP、真实 activation recompute 与显存对照、共同 held-out JT/PT 质量门及同框架/跨框架序列化边界继续逐项验收。overall release 继续 **Not complete**。
+
+
 ## 2026-10-31 普通 Accelerate DDP no_sync 双卡路径超时，发布门保持开放
 
 继续在现有服务器工作区推进，未重新 clone。当前代码 HEAD 为 `4a03ff2eecb616b03e59b3a88c2a0533c4359da8`，fingerprint `674fc808ef91f0072b1d015fbfeee4f3a58e04940aaa43392bc894fcc27fb106`；文档提交前 HEAD 为 `5ecd38739be63bb2738d989de0865640178dd1c0`，分支 `integrate/cgq-transformers-native-multicard-target`，origin `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81` 为祖先、ahead 79 / behind 0。初始工作区存在既有 dirty 与 untracked 路径，index 为空；本轮未改源码或测试。

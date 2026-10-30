@@ -6,6 +6,7 @@ from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from .context import get_install_context
 
 def load_state_dict_torch(self, state_dict, _torch_optimizer_kind, _torch_param_steps):
+    restore_seen = bool(getattr(self, "_torch_optimizer_restore_seen", False))
     _context = get_install_context(jt)
     _native_load_state_dict = _context.state["optimizer_native_api"]['_native_load_state_dict']
     if not isinstance(state_dict, Mapping) or "param_groups" not in state_dict:
@@ -43,6 +44,7 @@ def load_state_dict_torch(self, state_dict, _torch_optimizer_kind, _torch_param_
             raise ValueError(
                 "loaded state dict contains a parameter group that "
                 "doesn't match the size of optimizer's group")
+        current_steps = _torch_param_steps(current_pg)
         slots = []
         for i, (pid, param) in enumerate(zip(saved_params, current_pg["params"])):
             missing = object()
@@ -112,6 +114,15 @@ def load_state_dict_torch(self, state_dict, _torch_optimizer_kind, _torch_param_
             for i, buffer in enumerate(buffers):
                 replaced = i < len(slots) and any(field in slots[i][0] for field in fields)
                 if not replaced and isinstance(buffer, jt.Var):
+                    # A fresh, unstepped slot already contains its zero
+                    # initializer. Reuse it for an empty step-zero restore:
+                    # Accelerate wraps optimizers by loading their own initial
+                    # state_dict, and eagerly syncing replacement zeros here
+                    # needlessly materializes every unused moment on every rank.
+                    if (not restore_seen and i < len(current_steps)
+                            and i < len(slots) and current_steps[i] == 0
+                            and slots[i][1] == 0):
+                        continue
                     zero = jt.zeros_like(buffer).stop_grad()
                     # Leave other backends' legacy reset realization alone.
                     if i < len(current_pg["params"]):
@@ -154,4 +165,5 @@ def load_state_dict_torch(self, state_dict, _torch_optimizer_kind, _torch_param_
                         pg[source][i] = st[target]
             steps[i] = step
     self.n_step = max_step
+    self._torch_optimizer_restore_seen = True
     return None

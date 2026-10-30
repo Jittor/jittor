@@ -204,3 +204,61 @@ def test_adamw_fused_backends_decline_mixed_moment_dtypes():
     assert not _supports_acl_adamw_updates([(p, mixed, mixed, g, 0)])
     assert _supports([(p, same, same, g, 0)])
     assert not _supports([(p, mixed, mixed, g, 0)])
+
+
+@pytest.mark.parametrize("kind", ["adamw", "sgd"])
+def test_fresh_empty_restore_reuses_initial_zero_slots_without_materialization(
+        device, execution, kind, monkeypatch):
+    params = _make_params(device, torch.float32)
+    optimizer = _optimizer(kind, params)
+    empty = optimizer.state_dict()
+    assert not empty["state"]
+    slot_names = ("m", "values") if kind == "adamw" else ("values",)
+    before = [[list(group[name]) for name in slot_names]
+              for group in optimizer.param_groups]
+    for old_slots in before:
+        for buffers in old_slots:
+            for buffer in buffers:
+                values = _values(buffer)
+                np.testing.assert_array_equal(values, np.zeros_like(values))
+
+    def unexpected_zero_allocation(*args, **kwargs):
+        raise AssertionError("fresh step-zero restore must reuse zero slots")
+    monkeypatch.setattr(jt, "zeros_like", unexpected_zero_allocation)
+
+    optimizer.load_state_dict(empty)
+
+    for group, old_slots in zip(optimizer.param_groups, before):
+        for name, old_values in zip(slot_names, old_slots):
+            assert all(new is old for new, old in zip(group[name], old_values))
+    assert optimizer.n_step == 0
+    assert not optimizer.state_dict()["state"]
+
+
+def test_empty_restore_clears_loaded_step_zero_adamw_moments(device, execution):
+    params = _make_params(device, torch.float32)
+    optimizer = _optimizer("adamw", params)
+    empty = optimizer.state_dict()
+    param_id = empty["param_groups"][0]["params"][0]
+    step_zero = {
+        "param_groups": empty["param_groups"],
+        "state": {
+            param_id: {
+                "step": 0,
+                "exp_avg": torch.tensor([.25, -.5], dtype=torch.float32),
+                "exp_avg_sq": torch.tensor([.5, .75], dtype=torch.float32),
+            }
+        },
+    }
+
+    optimizer.load_state_dict(step_zero)
+    np.testing.assert_array_equal(
+        _values(optimizer.param_groups[0]["m"][0]), np.array([.25, -.5], np.float32))
+    np.testing.assert_array_equal(
+        _values(optimizer.param_groups[0]["values"][0]), np.array([.5, .75], np.float32))
+
+    optimizer.load_state_dict(empty)
+    np.testing.assert_array_equal(
+        _values(optimizer.param_groups[0]["m"][0]), np.zeros(2, np.float32))
+    np.testing.assert_array_equal(
+        _values(optimizer.param_groups[0]["values"][0]), np.zeros(2, np.float32))
