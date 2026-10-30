@@ -1,5 +1,18 @@
 # Torch Compatibility Release Acceptance: 2026-10-26 Day 2–5 Continuation
 
+## 2026-10-30 R14 Qwen held-out generation 指标补充（部分完成）
+
+本项使用 R14 已训练的 seed821 LoRA adapter，不重训、不做 preflight/resume，也不重跑 CUDA core 冷编。源码绑定 HEAD e4a3894065953efa50ea23a0e52b45511b835f59、fingerprint 89157afb357abbb882057230ecb0e86586deeef7fb010a7cc51b3577eea054a6；base 为 Qwen3-0.6B revision c1899de289a04d12100db370d81485cdf75e47ca。JT adapter SHA256 8669a5fb3f0b738573809ede36c77a0758eb26aa555a6cc5d29f75ee9329257b，PT adapter SHA256 d48da15c6e4574d91f8474e7e16a010a000f3c69542fb681ab43377f31ea2b36，两边 adapter config hash 相同 363e7f31496a81fcaa6ed24f15c906ae7bf3ec8dac14c5015d1673bc88cf2051。训练与生成评估分别使用相同的 train hash 3836597b696a3b79b81ac9f34bc79ce9a4d06cf6e8bf204aabf48dc5d924ecf0 和 eval hash d8318478c8991e75ba5cac474e1f3dfe95c0478da49ad8b2a8909c72fb72f84f；seed821、2 epochs、batch=1、gradient accumulation=2、BF16 训练、最大输入96。eval 17个 source ID 与训练选定的101个 ID 不交叉；来源仍是 Alpaca train split，不是独立 benchmark 测试集。R14 的 gradient-checkpointing shim 仍直接执行目标函数，未证明 activation recompute 或显存节省；这不影响本次关闭梯度后的生成协议，但训练差异须保留在解释边界内。
+
+生成协议是 prompt=instruction 加非空 input、newline 拼接、明确排除参考答案；tokenizer 原始编码、最大输入96、FP32 权重、无 autocast、greedy、num_beams=1、max_new_tokens=48、use_cache=true。每侧单卡单进程，目标 A800 UUID GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068，对外 logical cuda:0。分数为每例宏平均 exact match、regex-token precision/recall/F1 和 token ROUGE-L F1；这是小样本描述性指标，不设发布阈值，也没有人工判读。
+
+PyTorch attempt torch-02 自然 rc=0，17/17 预测非空，真实模型参数和输出 token 均在 cuda:0；PyTorch 2.6.0+cu124。宏平均 exact match=0、token precision=0.264501、recall=0.379311、F1=0.212716、ROUGE-L F1=0.164849，诊断耗时25.94秒。exact match 为零及较低 recall 受48-token输出上限和样本量影响；这既不是质量 PASS，也不单独说明训练退化。PyTorch 首次 attempt 因启动环境遗漏共享 runner 的 PYTHONPATH，在模型加载前 rc=1，原件保留。
+
+Jittor 侧 attempt-01 使用复制 cache 后触发 jit_utils reload guard（rc=3）；attempt-02 在复制后的不同 JITTOR_HOME 上由 JITTOR_NO_BUILD=1 正确拒绝缺失的 core build stamp（rc=1）。两者均未加载模型。attempt-03 改用 R14 原始 JITTOR_HOME、相同 cache/build flags，JITTOR_NO_BUILD=1 下成功复用原 core，确认其 SHA256 85de0553b81d8a1b0124704e95d0e8ed198f06b70be7ded7302063e8eaa2ecbe 与 build stamp SHA256 3db74ae63e5475eda46ff7011e7e59721c8ddec7ecd2bcc603a21a093fd1d4bf 未变。进程 PID 2854331 绑定前述 GPU UUID，观测到设备内存2756 MiB，并进入生成循环；300秒上限到达时没有 result.json，最终 fallback counter 未落盘，故 JT 分数及最终 fallback 状态均为证据不足。timeout 后进程、锁已退出。原始 cache 清单由2820项增至2895项，仅新增75项，没有已存在项改写或删除；前后清单 SHA256 分别 95fa8a73644191191987b4ad1d49b9ba1cc2614f8fb34c5a20e9e012ccb3c691 与 004dcc11da5c8f9179cb0265d0a2d5a513ba8cdabb018ba9b357dae29fa5a238。这次 Jittor 启动和长模型加载不作性能结论。
+
+执行包 /data6/cgq/jittor-lab/_state/release-day23/20261030-r14-qwen-heldout-gen-r1-prepared/：evaluator SHA256 99b427052ec229f570c031784518360043b6df72691a5331aba7113b2750a732，PyTorch result.json SHA256 9322562094de3c1a7aace74dc15e6325ca38ffa232886e43ebfc44ea8c7b7bed，终审 terminal.json SHA256 7e0ed47258f310320ec9092517efcb1a8766dee5e1aaed207e9a164d15b3d69b。结论为部分完成：补有 PT 小样本任务分数，但 Jittor 侧没有完整 generation quality 结果，因此不能宣称两侧生成质量接近。R14 原有训练/续训实用证据保持有效；整体 Day2–5 与 Day4–5 正式性能/显存验收仍未完成，release 继续 Not complete。
+
+
 ## 2026-10-30 R14 Qwen LoRA 实用训练与新进程续训通过
 
 本次验收绑定隔离快照 `/data6/cgq/jittor-lab/worktrees/torch-compat-practical-r14-main-snapshot-20261030`，HEAD `e4a3894065953efa50ea23a0e52b45511b835f59`，源码指纹 `89157afb357abbb882057230ecb0e86586deeef7fb010a7cc51b3577eea054a6`；执行前后指纹一致。实际 CUDA 冷编产物为 core `85de0553b81d8a1b0124704e95d0e8ed198f06b70be7ded7302063e8eaa2ecbe`、utils `d8a93374c62de296dcc55bdc7e4f4419330ce0f468a4ddaf01178dbd99a8179f`、stamp `3db74ae63e5475eda46ff7011e7e59721c8ddec7ecd2bcc603a21a093fd1d4bf`，CUDA key `cu12.4.99_sm_80`。CPU 冷构建 227 TU，CPU focused 30 passed/6 CUDA-fixture skipped，维护 core10 为 227 passed/3 skipped；CUDA focused 为 47 passed、无 skip/fail，均未见 fallback。该候选是在隔离快照中执行，不能误称为已合并或已提交的干净源码版本。

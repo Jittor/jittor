@@ -1,5 +1,14 @@
 # 2026-10-21 工作区快照与本机接续交接
 
+## 2026-10-30 R14 Qwen held-out generation 补充状态
+
+R14 Qwen LoRA 的两 epoch 训练与新进程续训仍按其冻结源码身份通过；本轮仅对已训练 seed821 的 JT/PT adapter 做了17条 prompt 的 greedy generation quality 补充。eval ID 与101条训练子集无交叉，但来源是 Alpaca train split。FP32、无 autocast、输入上限96、生成上限48。PyTorch 在真实 CUDA cuda:0 完成，token-F1 0.212716、ROUGE-L F1 0.164849、exact match 0/17；小样本和截断指标没有人工审评，不判质量通过。
+
+Jittor 第三次 attempt 复用 R14 原 JITTOR_HOME、JITTOR_NO_BUILD=1，未重编 core；真实进程在目标 GPU UUID 上进入生成，300秒预算到达后未落盘完整结果及最终 fallback 计数。旧启动失败、timeout 和所有 cache 产物均保留。原 cache 仅新增75个 JIT 文件，无删除或既有文件改写；core/build stamp 哈希不变。完整证据 /data6/cgq/jittor-lab/_state/release-day23/20261030-r14-qwen-heldout-gen-r1-prepared/，终审 SHA256 7e0ed47258f310320ec9092517efcb1a8766dee5e1aaed207e9a164d15b3d69b。
+
+此结果只补出 PT 侧生成指标，JT/PT 生成质量比较仍未完成；不影响原 R14 实用训练/续训结论、strict FAIL、性能/显存门或整体 release Not complete。继续时不要重跑 R14 full/preflight/resume 或 core 冷编；如要取得 JT 质量分数，应为模型载入与生成另设有界预算并按样本流式落盘，不能从这次未完成运行推断 JT 分数。
+
+
 ## 2026-10-30 R14 Qwen 实用训练与 resume 终态交接
 
 当前主任务取得一组绑定 R14 冻结快照的实用训练证据：seed821 Qwen LoRA full102 与新进程 checkpoint51→102 resume 均在指定真实 CUDA UUID、`cuda:0` 上运行，fallback=0；full 102 次更新零跳步，epoch 微批次均值从 1.205469 降至 1.153617，固定验证 eval loss 2.455552，匹配 PyTorch 为 2.456644（约 −0.045%）。resume 恢复模型、optimizer、scheduler、四类 RNG 和第二 epoch 样本顺序，完成 51 次更新，112/112 LoRA 参数相对 checkpoint-51 改变，最终 eval loss 与 full run 相同。

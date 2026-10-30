@@ -1,5 +1,16 @@
 # 整改看板
 
+## 2026-10-30 R14 Qwen held-out 生成质量补充（部分完成）
+
+在 R14 冻结源码 e4a3894065953efa50ea23a0e52b45511b835f59、fingerprint 89157afb357abbb882057230ecb0e86586deeef7fb010a7cc51b3577eea054a6 上，补做已训练 seed821 adapter 的生成指标。PyTorch 与 Jittor adapter 使用相同 Qwen3-0.6B 基础模型 revision c1899de289a04d12100db370d81485cdf75e47ca、相同 adapter 配置（SHA256 363e7f31496a81fcaa6ed24f15c906ae7bf3ec8dac14c5015d1673bc88cf2051）、101 条训练子集与相同哈希的17条 eval 文件；17个 eval ID 与这101条训练 ID 无重叠。不过这些样本来自 Alpaca 的 train split，只能称为 held-out-from-training-subset，不是外部 benchmark test split。
+
+评估对每条指令使用 instruction 加 input 作 prompt（不含 target），输入最多96 token，FP32 无 autocast，greedy、单 beam、最多生成48 token。PyTorch 侧17/17条在真实 CUDA cuda:0 完成；宏平均 exact match 为0、regex-token F1 为0.212716、ROUGE-L F1 为0.164849（precision 0.264501、recall 0.379311）。输出上限会截断长 target；该小样本自动重合指标没有人工评价或通过阈值，只是补充任务观察，不能据此判断生成质量达标。
+
+Jittor 侧尝试在同一物理 GPU UUID GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068 上执行，第三次使用 R14 原始 JITTOR_HOME 与 JITTOR_NO_BUILD=1，core/build stamp 未重编；进程映射到该卡并分配约2756 MiB，进入生成循环后达到300秒预算，未写出汇总或最终 fallback 计数。因此没有可用的 Jittor 生成分数，不能得出 JT/PT 生成质量比较结论。前两次启动失败、PyTorch 首次缺少 runner PYTHONPATH、所有日志和独立缓存副本均保留；原始 R14 Jittor cache 本轮新增75个生成相关 JIT 文件，已有2820项无改写或删除，core SHA256 仍为 85de0553b81d8a1b0124704e95d0e8ed198f06b70be7ded7302063e8eaa2ecbe。
+
+完整执行包 /data6/cgq/jittor-lab/_state/release-day23/20261030-r14-qwen-heldout-gen-r1-prepared/；PyTorch 结果 SHA256 9322562094de3c1a7aace74dc15e6325ca38ffa232886e43ebfc44ea8c7b7bed，终审 terminal.json SHA256 7e0ed47258f310320ec9092517efcb1a8766dee5e1aaed207e9a164d15b3d69b。R14 的两 epoch 训练、实际 CUDA 更新与 Jittor 新进程续训证据仍按原身份有效；本补充既不改变严格对齐 FAIL，也不替代 Day4–5 性能/显存或更广泛发布门，overall release 仍 Not complete。
+
+
 ## 2026-10-30 R14 Qwen LoRA 实用训练与续训验收
 
 在隔离主树快照 `e4a3894065953efa50ea23a0e52b45511b835f59`、源码指纹 `89157afb357abbb882057230ecb0e86586deeef7fb010a7cc51b3577eea054a6` 上，seed821 Qwen LoRA 两个 epoch 完成 102 次 optimizer 更新、0 次跳步；梯度与 loss 有限，112 个 LoRA 参数均发生更新，真实设备为 CUDA `cuda:0`、fallback=0。按 epoch 汇总的微批次 loss 从 1.205469 降至 1.153617；同种子 PyTorch 为 1.205680→1.154064。总训练 loss 为 JT 2.335958、PT 2.336609，固定验证集 eval loss 为 JT 2.455552、PT 2.456644，JT 低约 0.045%。
