@@ -1,5 +1,14 @@
 # 整改看板
 
+## 2026-10-30 BERT checkpoint100 新进程加载与评估
+
+在上文 step50→100 的真实续训之后，独立新进程实际通过 Trainer 加载该 checkpoint100 的模型、优化器、调度器、TrainerState 与 RNG：12 项 checkpoint 文件身份核符，模型/优化器/调度器/scaler 状态签名与已保存值严格一致，201 个 optimizer scalar step 均为100，603 项参数及moment设备为CUDA0，四组RNG恢复一致。此为新进程加载和评估，未执行后续 optimizer 更新、训练或数据游标续接，不把此前50步续训误作此次加载后的训练。
+
+固定评估向指标函数实际交付33条预测和标签，loss 0.4756673276、accuracy 0.7878787879；此前训练末 loss 0.4761481881、accuracy 0.7878787879，loss绝对差 0.0004808605，原因未知，不宣称位一致或将其归因于checkpoint错误。评估前后模型/优化器/调度器/scaler签名一致；TrainerState原102条日志前缀保留、仅追加一条step100评估日志，global_step不变，其他TrainerState字段未全部比较。四组RNG评估后相同；no_grad、禁止 optimizer.step 与 model.train(True) 是该runner的执行约束，并非全局backward探针。
+
+两份独立终审 /data6/cgq/jittor-lab/_state/release-day23/20261030-bert821-checkpoint100-load-eval-r4-cuda-replay-independent-terminal-r1/audit.json SHA256 764e6cb139669be45c90ede38c294dee4ddbc97db541a7ed449267553092f9fd；/data6/cgq/jittor-lab/_state/release-day23/20261030-bert-checkpoint100-load-eval-r4-resume-next-terminal-r1/audit.json SHA256 bf8312ccb89a45943a8f5db65bd3149ff8523834b5874ee5b9ff1ffd4ebc8a33；原 receipt SHA256 4a5ef00d93ce7885a9fe4c5eead196ae6e91cc005f5a754d4289453676d8e37e。实际e7 Python与已审df45原位CUDA core为混合身份，非e7原生冷编；三份保护cache不变、功能cache未新增，五锁内核记录和可见FD holder为空，unit自然成功/cgroup空，但FD拒读和端点可见性限制保留。结果只证明该单次加载与固定评估，不覆盖新进程后续更新、逐样本ID验证、predict、长期训练或性能。
+
+
 ## 2026-10-30 恢复后 BERT checkpoint50→100 实用续训
 
 任务已恢复 active。下方 peer-enabled host staging 直接 CUDA 双向同步/异步中转的四进程八阶段结果仍有效，旧 no-auto-peer 显式 peer 复制失败与未执行项继续保留。当前主树 Python 源指纹 e7d1711ffcb67363b63a0ffb0743ec152eed418edbb0150bbfab52e754ab8c90、HEAD 9724b453，复用原位已审 df45 CUDA core/utils（混合身份，并非 e7 原生冷编），从历史 df45 checkpoint50 单次完成 seed821 BERT 的 step51–100，显式将两组 AdamW 设为 nonfused/foreach=False。恢复模型/优化器/调度器签名严格一致，201 个 scalar step=50、603 个参数与 moment 的实际 CUDA placement、Python/NumPy/CPU/CUDA 四组 RNG 核验通过。
