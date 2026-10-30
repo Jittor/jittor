@@ -518,8 +518,17 @@ def _barrier(group=None, async_op=False, device_ids=None):
     marker = None
     if size > 1:
         marker = jt.array(np.asarray([_distributed_rank()], dtype=np.int32))
+        backend = _process_group.get_backend(group)
+        device_id = device_ids[0] if device_ids else None
+        if backend == "nccl":
+            marker = marker.cuda(device_id) if device_id is not None else marker.cuda()
+        elif backend == "hccl":
+            marker = marker.npu(device_id) if device_id is not None else marker.npu()
         marker = marker.mpi_all_reduce("sum")
-        marker.sync(device_sync=True)
+        # Var.sync() can return after the local lazy graph is submitted, before
+        # the peer has completed this collective. Materializing the scalar on
+        # host preserves the synchronous barrier contract.
+        marker.numpy()
     return _collective_result(marker, async_op)
 
 

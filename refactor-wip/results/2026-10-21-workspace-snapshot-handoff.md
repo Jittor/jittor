@@ -1,5 +1,20 @@
 # 2026-10-21 工作区快照与本机接续交接
 
+## 2026-10-31 最新交接：NCCL barrier 与 DDP no_sync 窄路径已验证
+
+继续在 /home/cgq/jittor 原工作区；实验提交前 HEAD e17f90e1e5622c6f98d9c7f95534befc10a1967e，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81 是祖先（ahead 82 / behind 0）。不 clone、不 reset/stash/clean、不 push；103 项原有 dirty/untracked 保留，本任务新增 distributed.py barrier 补丁单独记录。
+
+R16/R17 将 NCCL barrier hang 收敛到 P2P transport 与 host materialization；在该主机需设置 NCCL_P2P_DISABLE=1。R18 barrier 改为 backend 对应 device marker，并用 host NumPy 物化等待。公开 barrier 测试在真实双 rank CUDA 上通过。R19 Accelerate no_sync→closing backward 目标测试体在两个 rank 均通过，首个 no_sync 梯度分离、closing 梯度一致、AdamW 更新一步，最终参数/optimizer 状态跨 rank 一致；设备、源码 SHA、逐 rank JSON 和外层 gate 计数失败均在下方 campaign 路径留有原件：
+/data6/cgq/jittor-lab/_state/release-day23/20261031-main-accelerate-ddp-nosync-r2/accelerate-ddp-no-sync-p2poff-r19/
+
+attempt-01 pytest-timeout 参数错误与 attempt-02 缺少 nccl0 cache_name 都发生在测试收集前；attempt-03 的 pytest body 为 1 passed/rank，但 session sentinel 报 0 accelerator cases 并让总 launcher exit 1。按功能结果记录，不为改退出码重复该测试。core SHA 保持不变，R19 新增 JIT kernel 文件，运行后无 holder；未作 cache 清理。GPU 利用率过高，不能开始正式 perf/memory run。
+
+后续优先顺序：
+1. 等目标 GPU 连续满足利用率 ≤10%、空闲显存 ≥60,000 MiB 且无无关 PID，再为明确冻结源码/配置的 JT/PT 代表负载执行至少 3 轮交替配对；每轮两侧至少 10 个同步热样本，报告 load/first-step/steady 的 median、p95、离散度及 allocator allocated/reserved、NVML 峰值。容量与 OOM 边界另做，旧共享负载数字只作诊断。
+2. 按目标支持范围逐项完成 Day2–5 模型和 API/device/dtype/autograd 矩阵，记录真实设备与 fallback、有限梯度/参数/loss、真实更新、验证任务指标，以及需要的新进程 checkpoint/optimizer/scheduler/RNG/data-order 恢复。现有 R14 只代表固定源码/seed/config。
+3. 处理真实 activation checkpoint recompute/显存收益证据及 held-out Qwen generation 指标；将 Jittor 同框架续训和 stock PyTorch 读取 JT portable-pickle 失败分类记录，若跨框架读取属于发布声明再单独修复。
+4. 保留严格数值对齐历史 FAIL，不把其改成 PASS，也不让无训练影响的末位差异替代实际训练目标。overall release 保持 Not complete。
+
 ## 2026-10-31 最新交接：NCCL barrier 双 rank host 同步未闭合
 
 当前仍在 /home/cgq/jittor，HEAD e8dfc66b9d7e346d748f895e01e9c011ffe49966，origin e5cffe1ae60c418f53c5bb1cdca9182577fd2b81 为祖先（ahead 81 / behind 0）。保留 103 项既有 dirty/untracked 路径；失败候选已撤回，未 push。

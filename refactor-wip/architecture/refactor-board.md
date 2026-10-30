@@ -1,5 +1,21 @@
 # 整改看板
 
+## 2026-10-31 R16–R19 NCCL barrier 与 Accelerate DDP no_sync 定向验收
+
+继续使用服务器现有工作区 /home/cgq/jittor。实验绑定提交前 HEAD e17f90e1e5622c6f98d9c7f95534befc10a1967e，分支 integrate/cgq-transformers-native-multicard-target；重新 fetch 后 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81 仍为祖先（ahead 82 / behind 0）。开工时保留 103 项既有 dirty/untracked；任务源码改动后共 104 项，index 为空。未 clone、reset、stash、clean 或 push。
+
+R16 直接双 rank NCCL int32 all-reduce 在未设置 NCCL_P2P_DISABLE 时，两边 Var.sync() 很快返回，但 host NumPy 物化均超过 45 秒仍未完成。R17 仅增加 NCCL_P2P_DISABLE=1 后，延迟 3 秒提交的 rank 0 与 rank 1 都读到 [10, 10]；rank 1 的 host materialization 等 root 提交后约 3.27 秒返回。这说明该主机需 NCCL shared-memory transport，问题在 collective 完成/host wait 路径。R16 cache 文件计数 1077→1073，未手工清理且原因未归因；R17 计数稳定为 1073。两次相关 core 与 int32 all-reduce kernel 哈希一致，原件保留于 /data6/cgq/jittor-lab/_state/release-day23/20261031-main-accelerate-ddp-nosync-r2/nccl-allreduce-*/。
+
+R18 将 compat/torch/installers/distributed.py 的 barrier marker 按 NCCL/HCCL backend 放到对应 device，并以 marker.numpy() 物化确保 host 等待 collective。真实双 rank CUDA 时序探针的显式 device_ids 和默认设备 barrier 均通过；维护的 compat/tests/torch/test_torch_distributed_barrier.py 两个 rank 各为 1 passed、0 skipped，fallback guard 无错误。候选文件 SHA256 3a374332a539cd862bea1ac9a34e0febe6bc4392ffb2aecf4683d823aea276e6，补丁 SHA256 e562cbe973d68a8b8125ce0c05ecf702cceacf4efa2aedf0d2d5114299d2cb8a。
+
+R19 在同一源码上执行真实双 rank Accelerate DDP 用例 test_real_ddp_no_sync_then_closing_backward。最终 attempt-03 的两个 rank pytest body 各为 1 passed、0 skipped，分别耗时 29.81/29.88 秒；rank 0/1 实际绑定物理 GPU UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 与 GPU-8bf405a2-a3dd-e203-8dd9-691e9f7b3530，各进程逻辑设备 cuda:0、NCCL、Torch shim active。首个 no_sync microbatch 的 rank-local weight 梯度不同；closing backward 后两 rank 的 weight 梯度相同；AdamW step=1，参数确有变化，最终参数与 optimizer state 两 rank 相同。backend_fallback=error 与 forbid_backend_fallbacks scope 均启用并顺利退出。测试源码 SHA256 c2a2073ef50be99bdd578b81be3c2e524f02178a66302ec76e8234a37af444dc。
+
+attempt-01 因测试环境没有 pytest-timeout 插件，pytest 在收集前以 --timeout=90 参数错误退出；attempt-02 漏设 cache_name=nccl0，JITTOR_NO_BUILD=1 正确拒绝未编译的 default core，仍未收集测试。两个失败原件均保留。attempt-03 的测试体通过，但 rank pytest 之后的 CUDA session sentinel 报 “0 accelerator cases” 并令 launcher 总退出码为 1；因此这是目标用例通过、维护 gate 汇总未全绿，不为改出口码而重跑。全 campaign 记录位于 /data6/cgq/jittor-lab/_state/release-day23/20261031-main-accelerate-ddp-nosync-r2/accelerate-ddp-no-sync-p2poff-r19/，campaign-summary.txt SHA256 fb267715259f03a26ff9b27daf13443c1cbaf0161d874adf89d760cc94b9d7f1。
+
+R19 使用既有 nccl0 cache，JITTOR_NO_BUILD=1 禁止 core rebuild；该两 rank 功能路径新增 32 个 cache 文件（31 个 JIT op 文件和 1 个 jittor.lock），包括 fused AdamW 与 float32 NCCL all-reduce kernels，cache inventory 1272→1304。Jittor core SHA256 3b646629cb5d3a3d5804ba0aefe066617c90364e4038438a936e87b301d6ffce、既有 int32 NCCL all-reduce kernel SHA256 133266d720742dd393ca0f7a4dd42d8127a718e8a2cc1480489104f468895a8e 均未变化；无清理，运行后无本任务进程或 cache holder。GPU 2/4 利用率约 32%/36%、空闲显存约 59,941/59,931 MiB，仅适合该正确性验证，不满足 Day4–5 正式测量窗口。
+
+当前结论只关闭真实 CUDA NCCL barrier 与 Accelerate no_sync→closing-backward→一次 optimizer update 这两个窄路径，不代表多模型/多精度/长期 DDP 全部通过。overall release 继续 Not complete。仍需合格 GPU 窗口下匹配源码的三轮交替性能/显存验收及独立 OOM 容量边界；按声明范围闭合 CPU/CUDA API、dtype/autograd、训练/验证指标、新进程恢复与序列化矩阵；证明 gradient checkpointing 真实 activation recompute 与显存收益；为 Qwen 补 held-out generation 指标。跨框架 PyTorch 读取 Jittor portable-pickle optimizer 失败继续与 Jittor 同框架 resume 证据分开记录。
+
 ## 2026-10-31 NCCL barrier 设备放置与双 rank 同步复查未通过
 
 继续使用 /home/cgq/jittor。HEAD e8dfc66b9d7e346d748f895e01e9c011ffe49966；刚 fetch 的 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81 为祖先（ahead 81 / behind 0）。原有 103 个 dirty/untracked 路径保留；没有清理、暂存或 push。

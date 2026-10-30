@@ -1,5 +1,19 @@
 # Torch Compatibility Release Acceptance: 2026-10-26 Day 2–5 Continuation
 
+## 2026-10-31 NCCL barrier host wait 修复与 Accelerate DDP closing-backward 通过
+
+本增量绑定主树实验 HEAD e17f90e1e5622c6f98d9c7f95534befc10a1967e 和工作树内 compat/torch/installers/distributed.py SHA256 3a374332a539cd862bea1ac9a34e0febe6bc4392ffb2aecf4683d823aea276e6；测试文件 SHA256 c2a2073ef50be99bdd578b81be3c2e524f02178a66302ec76e8234a37af444dc。origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81 为祖先，当前分支 ahead 82 / behind 0。
+
+R16 中 NCCL all-reduce 的 Var.sync() 不是 peer completion 的 host wait；两 rank 在 NumPy 物化处卡住。R17 加 NCCL_P2P_DISABLE=1 后相同双 rank all-reduce 完成，root 延迟提交的场景也按共享内存 transport 正确等待。R18 barrier marker 现在位于 NCCL CUDA/HCCL NPU 设备，host 通过 marker.numpy() 等待 collective。双 rank 直接时序探针的显式/默认 barrier 均通过；公开 torch.distributed.barrier 回归在物理 CUDA 2/4 上每 rank 1 passed、0 skipped、fallback guard 无错误。R16/R17/R18 执行文件与日志保存在 20261031-main-accelerate-ddp-nosync-r2 对应子目录。
+
+R19 attempt-03 运行维护用例 compat/tests/torch/test_accelerate_distributed_integration.py::test_real_ddp_no_sync_then_closing_backward。每 rank 的 pytest test body 均 1 passed、0 skipped，用时分别 29.81/29.88 秒。报告显示 rank-local 首个 no_sync weight gradient 不同，closing backward 后 weight gradient 相同；AdamW 完成 step 1 且参数变化，两 rank 最终参数和 optimizer state 相同。物理设备 UUID 为 GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 与 GPU-8bf405a2-a3dd-e203-8dd9-691e9f7b3530，NCCL rank 分别可见 CUDA ordinal 2/4、各自逻辑 cuda:0。Torch shim active，backend_fallback=error 且 forbid_backend_fallbacks 检查通过。
+
+attempt-01/02 失败在 pytest 收集前：前者传入缺少的 pytest-timeout --timeout 参数，后者因漏设 cache_name=nccl0 而触发 JITTOR_NO_BUILD 对 default core 的拒绝；日志原样保留。attempt-03 的两个 pytest body 均通过，但测试后 session 级 accelerator-case 计数器误报 0 cases，导致外层 launcher exit code 1。报告因此记录为“目标用例通过、外层维护门未全绿”，没有为改变状态而重跑。campaign summary SHA256 fb267715259f03a26ff9b27daf13443c1cbaf0161d874adf89d760cc94b9d7f1；完整产物在 /data6/cgq/jittor-lab/_state/release-day23/20261031-main-accelerate-ddp-nosync-r2/accelerate-ddp-no-sync-p2poff-r19/。
+
+功能测试复用现有 nccl0 core，JITTOR_NO_BUILD=1 未触发 core rebuild；DDP 路径新增 32 个 cache 文件（31 个 JIT op 文件和 1 个 jittor.lock），cache inventory 1272→1304。core 与原 int32 NCCL kernel 哈希保持不变，cache 无 holder，全部记录保留。测试运行时 GPU 2/4 利用率约 32%/36%，故不含任何性能/显存结论。
+
+Day4–5 正式结论仍需同源码/同配置、合格稳定窗口、至少三轮交替，每轮每侧至少 10 个同步热态样本，并报告加载、首步、热态 median/p95/离散度以及 allocator/NVML 峰值；最大容量/OOM 单独测。更广 Day2–5 尚需声明模型和 CPU/CUDA/dtype/API 的实际训练、任务指标、梯度/更新、恢复和互操作证据；gradient checkpointing 仍须证明 activation recompute 与显存收益；Qwen 还缺 held-out generation 质量指标。整体 release 继续 Not complete。
+
 ## 2026-10-31 Torch barrier NCCL 设备与 host 同步探针未通过
 
 测试绑定 HEAD e8dfc66b9d7e346d748f895e01e9c011ffe49966；origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81 为祖先（ahead 81 / behind 0）。工作区既有 103 项 dirty/untracked 路径保持原样，本轮候选没有进入提交。
