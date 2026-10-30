@@ -1,5 +1,15 @@
 # 整改看板
 
+## 2026-10-31 NCCL barrier 设备放置与双 rank 同步复查未通过
+
+继续使用 /home/cgq/jittor。HEAD e8dfc66b9d7e346d748f895e01e9c011ffe49966；刚 fetch 的 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81 为祖先（ahead 81 / behind 0）。原有 103 个 dirty/untracked 路径保留；没有清理、暂存或 push。
+
+R12 已复现 Torch barrier 用 CPU marker 调用 NCCL all-reduce 时立即报 nccl_all_reduce on cpu。R15 窄验证使用真实 CUDA 双 rank、物理 GPU 2/4、CUDA 12.4、Jittor 1.3.11、backend_fallback=error、复用 nccl0 cache、JITTOR_NO_BUILD=1，launcher deadline 120 秒。候选将 marker 放到 backend 对应 CUDA/NPU，并使用 _collective_result(..., issued=True)；候选文件 SHA256 ad99593d0e338162e4b67b1f4e09f6c4c5ad0dd7ae42d4f155c1d2a9bca9871c，补丁 SHA256 6751891f7df6dde936dde68be969fcb78ea2bc0faeb04681cc83a7e26ce79403。
+
+attempt-05 两 rank 均停在 sync(device_sync=True)。attempt-06 改用普通 Var.sync() 后，显式设备及默认 barrier 都返回，但 rank 1 在第二次 barrier 返回时，rank 0 尚未写共享主机 marker，时序断言失败。故没有证明 barrier 的跨 rank host 同步语义，不能记 PASS。pytest harness 环境错误、错误 import、两种同步尝试的日志与脚本保存在 /data6/cgq/jittor-lab/_state/release-day23/20261031-main-accelerate-ddp-nosync-r2/barrier-device-fix-r15/，manifest SHA256 e29ac2504de003b769bc8067d4258286394f2dfbcc30fa50a680498c6aafe5c7。候选已撤回，当前源码文件 SHA256 8bfb068bf7f6e8c99b146deeac5b83163ad4607d63125168f081d52cbcc42f74，与 HEAD 一致。
+
+下一步先用不经过 Torch pytest conftest 的最小核心探针拆分 NCCL all-reduce enqueue、rank 参与、输出物化与 host wait，再决定修复点；不要把 attempt-06 的返回写成 barrier 通过。Accelerate no_sync 梯度、closing backward、optimizer 更新和 rank 状态一致性仍未验收。GPU 2/4 当前约 33%/29%、空闲 59,941/59,931 MiB，Day4–5 窗口不合格；更广 API/device 矩阵、模型训练/恢复、默认 DDP、activation recompute 与 held-out JT/PT 质量门仍开放，overall release **Not complete**。
+
 ## 2026-10-31 普通 Accelerate DDP 读回阻塞诊断与 optimizer 空恢复定向修正
 
 继续在现有 `/home/cgq/jittor` 工作区推进，提交前 HEAD 为 `d28fd052dfa6219b20f62448e6226910bce9c801`，分支 `integrate/cgq-transformers-native-multicard-target`，origin/cgq_transformers `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81` 为祖先（ahead 80 / behind 0）。全树 103 个既有 dirty/untracked 路径继续保留；本轮无清理、暂存其他文件或 push。

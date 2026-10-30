@@ -1,5 +1,15 @@
 # Torch Compatibility Release Acceptance: 2026-10-26 Day 2–5 Continuation
 
+## 2026-10-31 Torch barrier NCCL 设备与 host 同步探针未通过
+
+测试绑定 HEAD e8dfc66b9d7e346d748f895e01e9c011ffe49966；origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81 为祖先（ahead 81 / behind 0）。工作区既有 103 项 dirty/untracked 路径保持原样，本轮候选没有进入提交。
+
+R12 的 CPU marker 在实际 NCCL barrier 中触发 nccl_all_reduce on cpu。R15 直接双 rank 探针使用物理 GPU 2/4、CUDA 12.4/Jittor 1.3.11、严格 fallback error，复用 nccl0 cache 并禁用 JIT 构建，launcher 预算 120 秒。候选 source file SHA256 ad99593d0e338162e4b67b1f4e09f6c4c5ad0dd7ae42d4f155c1d2a9bca9871c，补丁 SHA256 6751891f7df6dde936dde68be969fcb78ea2bc0faeb04681cc83a7e26ce79403。
+
+01 在 ranks 启动前遇到 Conda libstdc++ 缺少 GLIBCXX_3.4.30；02/03 的 pytest harness 加载 libcusparse 时遇到 __nvJitLinkComplete_12_4；04 探针导入错误的顶层 compat 包。失败原件均保留。05 两个 rank 停在 device_sync=True 同步点；06 普通 Var.sync() 让显式 device barrier 与默认 barrier 都返回，但 rank 1 在 rank 0 写主机 marker 前返回，时序断言失败。因此 barrier 未通过，候选已撤回，不推断 Torch DDP 闭环。所有脚本、rank 日志、失败与补丁在 /data6/cgq/jittor-lab/_state/release-day23/20261031-main-accelerate-ddp-nosync-r2/barrier-device-fix-r15/，manifest SHA256 e29ac2504de003b769bc8067d4258286394f2dfbcc30fa50a680498c6aafe5c7；当前生产文件恢复为 HEAD，SHA256 8bfb068bf7f6e8c99b146deeac5b83163ad4607d63125168f081d52cbcc42f74。
+
+后续先拆解 ncclAllReduce enqueue、rank 对齐、输出 materialization 与 host wait，再重跑 no_sync → closing backward → optimizer update → rank state equality。Day4–5 仍需匹配源码私有 cold core/cache、合格稳定设备窗口、至少 3 轮交替且每轮每侧至少 10 个热样本、load/first/steady median/p95/离散度及 allocator/NVML 峰值，OOM 边界另测。Day2–5 还需 API/device/edge/fallback/autograd 矩阵、声明模型范围训练与任务质量、真实 checkpoint recompute/梯度/显存对照、共同 held-out JT/PT 阈值，以及区分同框架 restore 和跨框架序列化。R14 Qwen 单配置训练/续训不外推其他网络，overall release **Not complete**。
+
 ## 2026-10-31 optimizer 空状态恢复回归通过；Accelerate DDP 读回仍阻塞
 
 提交前主树 HEAD `d28fd052dfa6219b20f62448e6226910bce9c801`，分支 `integrate/cgq-transformers-native-multicard-target`，origin/cgq_transformers `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81` 为祖先、ahead 80 / behind 0。工作区既有 103 个 dirty/untracked 路径保留；未执行 reset、stash、clean 或 push。

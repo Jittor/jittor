@@ -1,5 +1,13 @@
 # 2026-10-21 工作区快照与本机接续交接
 
+## 2026-10-31 最新交接：NCCL barrier 双 rank host 同步未闭合
+
+当前仍在 /home/cgq/jittor，HEAD e8dfc66b9d7e346d748f895e01e9c011ffe49966，origin e5cffe1ae60c418f53c5bb1cdca9182577fd2b81 为祖先（ahead 81 / behind 0）。保留 103 项既有 dirty/untracked 路径；失败候选已撤回，未 push。
+
+R15 真双 rank CUDA 2/4 探针显示：CPU marker 报 NCCL device 错误；CUDA marker 配合 device_sync=True 停住；普通 Var.sync() 虽使 barrier 返回，却让 rank 1 在 rank 0 写入主机 marker 前返回，故同步契约仍未满足。候选文件/补丁哈希、每次启动日志与脚本在 /data6/cgq/jittor-lab/_state/release-day23/20261031-main-accelerate-ddp-nosync-r2/barrier-device-fix-r15/，manifest SHA256 e29ac2504de003b769bc8067d4258286394f2dfbcc30fa50a680498c6aafe5c7。生产文件已恢复到 HEAD，SHA256 8bfb068bf7f6e8c99b146deeac5b83163ad4607d63125168f081d52cbcc42f74。
+
+下一步先用最小核心探针区分 NCCL all-reduce enqueue、双方参与、输出物化与 host wait，再决定 barrier/DDP 修复；之后才重跑 no_sync/closing backward/optimizer 更新与 rank 状态一致性。不要重复 R14 full/preflight/resume。Day4–5 等利用率 ≤10%、空闲显存 ≥60,000 MiB 的稳定窗口后，做至少三轮交替、每轮每侧至少十个热态样本，报告 load/first/steady 分布和 allocator/NVML 峰值，容量边界另测。held-out 质量、API/device 矩阵、真实 checkpoint recompute、更多模型与序列化范围仍未关闭；overall release 继续 **Not complete**。
+
 ## 2026-10-31 最新接续：optimizer 空恢复窄回归通过，普通 DDP 读回未完成
 
 继续使用服务器已有 `/home/cgq/jittor`。提交前 HEAD `d28fd052dfa6219b20f62448e6226910bce9c801`，origin/cgq_transformers `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81` 为祖先（ahead 80 / behind 0）。全树已有 103 项 dirty/untracked 路径，均保留；本轮不 push。进程检查未见遗留 pytest/Jittor DDP 工作，GPU 2/4 仍约 33%/30% 利用率，不满足正式性能窗口。
