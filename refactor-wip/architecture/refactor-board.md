@@ -1,5 +1,12 @@
 # 整改看板
 
+## 2026-10-30 no-auto-peer 隔离候选跨卡八案例：四项通过、第五项失败
+
+在已审私有冷编候选上，五个独立进程实际调用 Torch Tensor.to。未由测试脚本显式启用 peer 的双向直接复制及 producer→copy→consumer 四项，四元素连续 FP32 源、目标及 pending 中间值按位匹配，实际 CUDA 指针 ordinal/dispatch 和两个物理 UUID 均核对，四项 fallback 0；此项不证明 peer 实际处于关闭状态。第五项在目标 cuda:1 对源 cuda:0 显式启用 peer 返回 0 后，0→1 直接复制的目标两次读回均为 16 字节 ff，源前后保持原值；记录数值不符并首错停止，后续三个显式启用案例未运行。失败案例未执行最终 fallback 和映射复核，原 FAIL 保留。
+
+独立终审 /data6/cgq/jittor-lab/_state/release-day23/20261030-no-auto-peer-eight-case-r3-resume-next-terminal-r1/audit.json SHA256 dca45d7f0525d5b4737a7f7fc76eb9470543f6ed70682417767d43275b479ef4，原 receipt SHA256 fd5cca369841a9779b426d29d963a320abd0f1563bc17e80b99687aaf87bc625。五份受保护 cache 前后与终审快照一致，候选 cache 新增 8 项且旧项未变；六锁内核记录为空，unit 以失败状态结束、cgroup 空，已记录进程退出。进程和 FD 的权限限制及快照之间的瞬态变化无法完全排除。每案为新进程，未显式启用不等于 peer 关闭；pending 构造期间无 Python 显式同步不证明内部未同步，读回及强同步会干预执行。此结果仅覆盖该隔离候选、两方向和四个连续 FP32 元素，不证明原 CUDA 700 根因，未覆盖 capture、反向或性能，不是主树修复验收。
+
+
 ## 2026-10-30 no-auto-peer 私有 CUDA 冷编及 CPU sentinel
 
 有序跨 CUDA copy 路径移除主动 `accelerator_peer` 调用的单行隔离候选，在独立 JITTOR_HOME 实际完成 CUDA-enabled 原生冷编，unit 自然 rc0，约 381.3 秒；它基于当时主树工作树 `e7d1711ffcb67363b63a0ffb0743ec152eed418edbb0150bbfab52e754ab8c90`，不是主树生产补丁。日志记录 core 编译进度 `228/228`；stamp 列 231 个编译文件，独立审计区分 228 个 core 文件与 3 个 CUDA backend 文件，并核对 817 项 stamp 源输入。实际 private core／utils 的进程映射、路径、hash 与 stamp 核符，CPU sentinel 得到 `[3.0, 5.0]`、fallback 0。首次独立审计有一条将绝对路径误判为不合条件的审计断言失败，已保留；修正审计未重编。
