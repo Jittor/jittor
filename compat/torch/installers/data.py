@@ -876,15 +876,31 @@ def _generate_state(base_seed, worker_id):
     return [rng.randrange(0, 2**32) for _ in range(4)]
 
 
-def _checkpoint(fn, *args, use_reentrant=None, **kwargs):
-    """Run fn directly: correct values, but no activation recompute.
+_checkpoint_default_context = object()
 
-    jittor has no gradient-checkpointing primitive, so the activation
-    memory this API exists to save is NOT saved and `use_reentrant`
-    has no meaning here. The result is numerically identical, which is
-    why this stays a pass-through rather than an error -- but the
-    memory guarantee the caller asked for is absent.
+
+def _checkpoint(fn, *args, use_reentrant=None,
+                context_fn=_checkpoint_default_context,
+                determinism_check="default", debug=False, **kwargs):
+    """Direct-call approximation: consume checkpoint controls, not activations.
+
+    This does not recompute activations or implement either Torch checkpoint
+    algorithm. Only default controls are accepted, except use_reentrant is
+    retained for existing callers with the advertised degraded behavior.
     """
+    preserve_rng_state = kwargs.pop("preserve_rng_state", True)
+    if use_reentrant is not None and type(use_reentrant) is not bool:
+        raise TypeError("checkpoint use_reentrant must be bool or None")
+    if preserve_rng_state is not True:
+        raise NotImplementedError("checkpoint preserve_rng_state=False is not implemented")
+    if context_fn is not _checkpoint_default_context:
+        raise NotImplementedError("checkpoint context_fn is not implemented")
+    if determinism_check != "default":
+        raise NotImplementedError("checkpoint determinism_check is not implemented")
+    if debug is not False:
+        raise NotImplementedError("checkpoint debug is not implemented")
+    if use_reentrant is not False and kwargs:
+        raise ValueError("Unexpected keyword arguments: " + ",".join(kwargs))
     _stub_policy_data.degraded(
         "torch.utils.checkpoint.checkpoint",
         "the wrapped function is run directly, so activations are kept "
