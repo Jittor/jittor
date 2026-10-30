@@ -1,5 +1,15 @@
 # 2026-10-21 工作区快照与本机接续交接
 
+## 2026-10-31 接续增量：普通 Accelerate DDP 首次同步路径未闭合
+
+继续使用服务器原工作区 `/home/cgq/jittor`。代码身份 HEAD `4a03ff2eecb616b03e59b3a88c2a0533c4359da8`、fingerprint `674fc808ef91f0072b1d015fbfeee4f3a58e04940aaa43392bc894fcc27fb106`；文档提交前 HEAD `5ecd38739be63bb2738d989de0865640178dd1c0`，origin/cgq_transformers `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81` 为祖先（ahead 79 / behind 0）。本轮只产生外置实验记录，没有源码或测试改动。
+
+普通 Accelerate DDP 的真实双 rank no_sync/closing-backward 用例未取得可验收终态。独立双 rank Accelerator 初始化探针已证明进程组包装和两个 CUDA rank 可启动；pytest `-s` 用例中 rank 0 到达第一微批次 backward 与 gather 完成，rank 1 未显示第一微批次开始，随后两边均未推进。600 秒 pytest timeout 没有终止 native 路径；进程约 10:49 后由本轮父进程 SIGTERM 停止。保留路径及哈希见 Day2–5 结果记录最上方新增项和 `/data6/cgq/jittor-lab/_state/release-day23/20261031-main-accelerate-ddp-nosync-r2/`。第一轮默认 pytest capture 造成“没有阶段输出”的解释已更正，不能把第一轮当作失败定位。
+
+后续应从 gather 后阶段作最小诊断，给 rank-local 梯度比较、CPU 转换/记录以及进入第二微批次分别加有界标记或栈采样；先定位两 rank 的不同步点，再按真实 CUDA 设备、fallback、no_sync 梯度差异、closing backward 梯度一致、optimizer 更新及参数变化形成报告。不要从目前已执行的第一微批次推断 optimizer 更新成功。CPU MPI DDP 曾因构建无 MPI 而全跳过，仍无证据。
+
+本轮测试期间目标 GPU 共享 VLLM 负载且利用率达到 100%，空闲显存低于正式门槛；Day4–5 性能/显存验收没有启动。待该门仍需匹配源码私有 cold build、连续稳定且无无关 PID 的设备窗口、至少三轮交替/每轮每侧十个热态样本、load/first/steady 统计与 allocator/NVML 峰值，容量另测。R14 的 Qwen 实用训练/resume 保持原有单配置证据；更广模型、activation recompute、共同 held-out JT/PT 质量和跨框架序列化范围继续未关闭。整体 release **Not complete**；唯一状态入口继续为看板。
+
 ## 2026-10-31 最新接续：R11g owner-aware alias 写回 CPU/CUDA 定向通过
 
 继续在原服务器工作区 /home/cgq/jittor 推进，没有 clone/reset/stash/clean。主树 HEAD 4a03ff2eecb616b03e59b3a88c2a0533c4359da8，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81 为祖先（ahead 78 / behind 0）。最终源码 fingerprint 674fc808ef91f0072b1d015fbfeee4f3a58e04940aaa43392bc894fcc27fb106；2,815 项清单核验只有五条代码/测试路径变化，source manifest SHA256 c77f67cfcd3272fd4e94bbce63809cffb645db153916e3b3c395f87413544dda。

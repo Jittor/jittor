@@ -1,5 +1,13 @@
 # 整改看板
 
+## 2026-10-31 普通 Accelerate DDP no_sync 双卡路径超时，发布门保持开放
+
+继续在现有服务器工作区推进，未重新 clone。当前代码 HEAD 为 `4a03ff2eecb616b03e59b3a88c2a0533c4359da8`，fingerprint `674fc808ef91f0072b1d015fbfeee4f3a58e04940aaa43392bc894fcc27fb106`；文档提交前 HEAD 为 `5ecd38739be63bb2738d989de0865640178dd1c0`，分支 `integrate/cgq-transformers-native-multicard-target`，origin `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81` 为祖先、ahead 79 / behind 0。初始工作区存在既有 dirty 与 untracked 路径，index 为空；本轮未改源码或测试。
+
+实际推进普通 Accelerate DDP 的 `test_real_ddp_no_sync_then_closing_backward`。Torch shim、Accelerate 导入和双 rank `Accelerator()` 初始化探针都通过；rank 0/1 均识别为 world size 2、`cuda:0`。正式定向用例以 `pytest -s` 运行后，rank 0 到达首个 no_sync microbatch 的 backward 与 NCCL `all_gather` 完成标记；rank 1 只到 DDP prepare 标记。随后 10 分 49 秒没有阶段推进，pytest 的 600 秒 timeout 未中断运行，由父进程 SIGTERM 停止。无 pytest 终态、梯度对照/optimizer 更新报告或最终 fallback 计数，故这不是 PASS，也没有足够信息记作断言 FAIL。前一轮默认 capture 下的 5 分钟中断也不能用“没有打印阶段标记”证明测试主体未运行；更正与原始日志均保留。
+
+执行时两张目标 A800 受共享负载影响，观察到 GPU 利用率 100%、空闲显存约 59,240 / 59,230 MiB；该时段不具备性能/显存入场条件，也没有采集正式计时。后续先为 gather 之后到下一微批次之间补充逐操作诊断，再按真实设备/fallback/梯度/参数更新/optimizer 状态闭环普通 DDP。Day4–5 仍需源码匹配的私有 cold core、合格空闲窗口、三轮交替且每侧每轮至少十个热样本、load/first/steady 分布及 allocator/NVML 峰值；其他模型、activation recompute、held-out JT/PT 质量和序列化边界也未关闭。overall release 继续 **Not complete**。
+
 ## 2026-10-31 R11g 主树 FollowRuntime alias CPU/CUDA 定向通过
 
 本节覆盖此前“R11g 尚未移植”及“仅 CPU 回归”的最新状态。继续使用现有工作区 /home/cgq/jittor，没有 clone、reset、stash 或 clean。主树 HEAD 4a03ff2eecb616b03e59b3a88c2a0533c4359da8，分支 integrate/cgq-transformers-native-multicard-target；origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81 为祖先（ahead 78 / behind 0）。当前代码身份 fingerprint 为 674fc808ef91f0072b1d015fbfeee4f3a58e04940aaa43392bc894fcc27fb106；基于同一 2,815 项清单核验，只有五个源码/测试路径相对冻结基线变化：compat/torch/frontend.py、compat/torch/installers/tensor/method_api.py、src/bindings/pyjt/py_tensor_frontend.cc、src/bindings/pyjt/py_tensor_frontend.h、compat/tests/torch/test_torch_compat_autograd_semantics.py。manifest SHA256 c77f67cfcd3272fd4e94bbce63809cffb645db153916e3b3c395f87413544dda，逐项 source verification SHA256 e2a91443c815c7b2d5628b54752cd106ca8ae559d9889566374ba26e9b4b76be。

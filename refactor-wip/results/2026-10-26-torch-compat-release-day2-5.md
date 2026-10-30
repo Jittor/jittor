@@ -1,5 +1,23 @@
 # Torch Compatibility Release Acceptance: 2026-10-26 Day 2–5 Continuation
 
+## 2026-10-31 当前主树普通 Accelerate DDP no_sync 双 rank 定向试验记录
+
+本轮从现有 `/home/cgq/jittor` 工作区继续，没有 clone、reset、stash 或 clean。测试绑定代码 HEAD `4a03ff2eecb616b03e59b3a88c2a0533c4359da8`、源码 fingerprint `674fc808ef91f0072b1d015fbfeee4f3a58e04940aaa43392bc894fcc27fb106`；文档提交前 HEAD `5ecd38739be63bb2738d989de0865640178dd1c0`，origin/cgq_transformers `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81` 为祖先（ahead 79 / behind 0）。分支初始存在既有 dirty 与 untracked 路径，index 为空；本轮没有修改源码或测试文件。
+
+### 实验目标与路径
+
+针对更广 Day2–5 中尚未关闭的普通 Torch DDP 多 rank 梯度同步与更新门，执行 `compat/tests/torch/test_accelerate_distributed_integration.py::test_real_ddp_no_sync_then_closing_backward`，通过维护的 `jittor.distributed.launch.py -n 2 --backend nccl` 启动两个真实 CUDA rank。环境使用 CUDA 12.4、Jittor 1.3.11、Python 3.11.3、`use_cuda=1/use_nccl=1/use_mpi=0`、`backend_fallback=error`、Torch strict shim；NCCL core 复用本任务已完成且身份匹配的私有 cache，新的日志、报告和 test-state 另存。绑定物理 GPU UUID 为 `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 与 `GPU-8bf405a2-a3dd-e203-8dd9-691e9f7b3530`。
+
+### 结果与限制
+
+双 rank 单独初始化探针自然退出码 0，两个 rank 都构造出 `Accelerator`，报告 process index 0/1、world size 2、逻辑设备 `cuda:0`。单独的 Accelerate import 探针用时约 1.394 秒。第一次 pytest 尝试使用默认 capture，5 分钟后被停止；后续确认 pytest 捕获输出，因此当时没有阶段标记不能说明 test body 未启动。原文件未覆盖。
+
+第二次为同一目标用例启用 `-s`。rank 0 打印 `prepare_ddp_no_sync`、`no_sync_micro_0_begin`、`no_sync_micro_0_backward_done` 与 `no_sync_micro_0_gather_done`；rank 1 只打印 `prepare_ddp_no_sync`。两个测试进程持续接近一个 CPU 核，约 10 分 49 秒未再推进；期间无新 JIT cache 文件、编译器进程、报告 JSON、pytest 汇总、异常栈或最终 fallback 计数。命令行 `--timeout=600` 未触发中断；核对 PID 后对父 `timeout` 进程发送 SIGTERM，launcher 确认 ranks 已停止。不能据此审计第二次同步梯度、optimizer.step、参数变化或 rank 间相等，故结果记为 **timeout / inconclusive**，不计 PASS，也没有完整断言失败可记。
+
+第一次尝试的误判更正、第二次逐 rank 阶段、结束方式和范围限制见 `/data6/cgq/jittor-lab/_state/release-day23/20261031-main-accelerate-ddp-nosync-r2/diagnostic-followup.txt`（SHA256 `958a22adec23f509d165964306cbd900ecf3c4bb98d3e99cd8a96f793054b69c`）。运行协议为同目录 `protocol.txt`（SHA256 `848fa96e4a316c5a90e5f0909818fe7906ec701a15c3b9f2470df1fc9b73142c`）；R2 launcher log SHA256 `696067f53be61b9740c60d175c829082debd005a153def1c6da2dca65f68d05e`，rank0 log `5e5418ca7b99a7caebdacece6678ab0e7a262b3339bc589a6b3d7daf5e93e3ac`，rank1 log `0aefc536452848d06a39d4132ffdc4e9e8ad67aa60b7a4a58d2acc554c2af3ad`。完整输入文件哈希清单 `evidence.sha256` SHA256 为 `bc74d7061a1f743ae94ce7c475f390da830e8f88617ab440f6f94a67fac30b1b`。R1、R2 以及初始化探针分目录保留，没有删除产物。
+
+执行期间两卡共享负载约 100% GPU 利用率、空闲显存约 59,240 / 59,230 MiB；本试验只补功能诊断，不构成任何性能或显存结论。停止后确认测试进程退出、私有 cache lock 无 holder。下一步应在测试副本或独立诊断脚本内，把 `gather_done` 后的比较、记录和下一微批次逐步打点，确认两 rank 的首个分歧；再进行一次有界修正验证。Day4–5 正式性能/显存协议与其余 Day2–5 发布门仍按上文验收条件执行，overall release 仍为 **Not complete**。
+
 ## 2026-10-31 R11g 主树 alias 写回修复、CUDA 定向证据与 Day2–5 发布门
 
 本节是最新状态，覆盖较早记录中的“R11g 尚未移植”及“只有 CPU 证据”。执行继续使用现有 /home/cgq/jittor，没有重新 clone，也没有清理共享工作区。测试绑定 HEAD 4a03ff2eecb616b03e59b3a88c2a0533c4359da8、分支 integrate/cgq-transformers-native-multicard-target；origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81 为祖先（ahead 78 / behind 0）。
