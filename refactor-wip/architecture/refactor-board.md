@@ -8,7 +8,7 @@ R9 native CPU 原始用例确为 2 passed、0 skipped、fallback=0、rc=0，save
 
 当前主树 CPU autograd 文件在独立 cache 上 26 passed、2 accelerator skip、fallback=0；当前主树真实 CUDA torch.Tensor(native) FollowRuntime alias 窄回归也通过：1 passed、0 skipped，逻辑 cuda:0 映射 GPU4 / UUID GPU-8bf405a2-a3dd-e203-8dd9-691e9f7b3530，fill_/zero_ 后 storage 指针、placement 与值核对通过，fallback 计数未增加。完整日志及 cache 前后清单见 Day2–5 结果记录和 /data6/cgq/jittor-lab/_state/release-day23/20261101-main-follow-runtime-cuda-r1/。R21 CUDA core、jit-utils 和 build stamp 哈希均保持原值；cache 有 10 个文件内容变化、无增删，不能将其当作 R21 原训练 cache 的字节级原样快照。
 
-下一步仍按实际发布范围补齐 Day2–5 功能矩阵：模型/API、设备/dtype、edge cases、fallback/autograd；声明模型的真实训练/验证、梯度/更新/loss 与 held-out 任务质量；新进程 checkpoint 的 optimizer/scheduler/RNG/数据顺序；真实 activation recompute 和显存对照；普通 DDP 最终 gate；以及 JT portable-pickle 与 stock PyTorch 的互操作边界。现有 R14 训练/resume 只支持固定源码/seed/config；checkpointing shim 直接调用目标函数仍未证明重算或省显存，stock PyTorch 读取 JT optimizer 文件的失败仍单独保留。
+下一步仍按实际发布范围补齐 Day2–5 功能矩阵：模型/API、设备/dtype、edge cases、fallback/autograd；声明模型的真实训练/验证、梯度/更新/loss 与 held-out 任务质量；新进程 checkpoint 的 optimizer/scheduler/RNG/数据顺序；真实 activation recompute 和显存对照；普通 DDP 最终 gate；以及 JT portable-pickle 与 stock PyTorch 的互操作边界。现有 R14 训练/resume 只支持固定源码/seed/config；checkpointing shim 直接调用目标函数仍未证明重算或省显存；现有 HF forward-equivalence 用例只在 no_grad 下比较输出，没有 backward、recompute 计数或显存断言，stock PyTorch 读取 JT optimizer 文件的失败仍单独保留。
 
 Day4–5 正式性能/显存验收需冻结匹配的源码、权重、数据和配置，并等 GPU 连续稳定达到利用率 ≤10%、空闲显存 ≥60,000 MiB 且没有无关计算 PID；至少 3 轮 JT/PT 交替配对，每轮每侧至少 10 个热态样本；报告加载、首步和热态 latency/throughput 的 median、p95、离散度，以及 allocator allocated/reserved 和 NVML 峰值；最大 batch/sequence 与 OOM 容量边界另行测量。当前共享 GPU 下的计时只能作诊断。Overall release 继续 **Not complete**。
 

@@ -6,7 +6,7 @@
 
 R9 native saved-artifact audit 为 PASS（原生测试 2 passed），但更广 terminal audit 因 cache drift/lock 条件为 FAIL；R9 旧 Torch focused 仍保留 2 个功能失败。当前源码 CPU autograd 全文件通过（26 passed、2 accelerator skip、fallback=0）；随后真实 CUDA FollowRuntime alias 定向用例在 GPU4/cuda:0 通过（1 passed、无 skip、fallback 未增加）。CUDA core/stamp/util 未变，借用 cache 的 10 个文件内容有变化；测试未改源码，也没有留下进程。详见 Day2–5 结果记录与 /data6/cgq/jittor-lab/_state/release-day23/20261101-main-follow-runtime-cuda-r1/。
 
-优先继续完成实际支持范围的功能发布门：扩展 API/device/dtype/autograd/fallback 覆盖，明确声明模型的训练/任务质量和新进程 checkpoint 恢复，完成真实 activation recompute 与梯度/峰值显存对照，并闭合默认 DDP 最终 gate。Qwen 需共同 held-out generation 质量判据；JT 同框架恢复和 stock PyTorch 对 JT portable-pickle 的读取失败分开管理。
+优先继续完成实际支持范围的功能发布门：扩展 API/device/dtype/autograd/fallback 覆盖，明确声明模型的训练/任务质量和新进程 checkpoint 恢复，完成真实 activation recompute 与梯度/峰值显存对照，并闭合默认 DDP 最终 gate。当前 HF forward-equivalence 用例只比较 no_grad 输出，缺少 backward、recompute 计数与显存断言。Qwen 需共同 held-out generation 质量判据；JT 同框架恢复和 stock PyTorch 对 JT portable-pickle 的读取失败分开管理。
 
 Day4–5 性能/显存验收另等稳定 GPU 窗口（利用率 ≤10%、空闲 ≥60,000 MiB、无无关计算进程），冻结匹配的源码和 workload，做至少三轮 JT/PT 交替配对、每轮每侧 ≥10 热样本，报告 load/首步/热态 median/p95/离散度、allocator allocated/reserved、NVML 峰值及独立容量/OOM 边界。当前 GPU 共享 VLLM 负载，只能用于功能测试；overall release 仍为 **Not complete**。
 

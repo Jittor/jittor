@@ -26,7 +26,7 @@ R9 Torch final focused 位于 /data6/cgq/jittor-lab/_state/release-day23/2026102
 
 Day4–5：冻结并匹配源码、模型权重、数据、dtype/precision、batch/sequence、loader 与训练/推理配置；等待目标 GPU 连续处于利用率 ≤10%、空闲显存 ≥60,000 MiB 且无无关计算 PID；执行至少 3 轮 JT/PT 交替配对，每轮每侧至少 10 个热态样本；逐侧报告 load、首步、热态 latency/throughput 的 median、p95、离散度，以及 allocator allocated/reserved 与 NVML 峰值；另做最大 batch/sequence 和 OOM 容量边界。共享负载下的旧数值只作诊断，功能测试不能替代性能/显存验收。
 
-更广发布门：按声明支持范围完成 API/device/dtype/layout/edge/autograd/fallback 矩阵；为声明支持的模型绑定实际设备、权重/数据/配置，记录梯度、真实 optimizer 更新、loss、held-out 任务指标及所需的新进程 checkpoint optimizer/scheduler/Python/NumPy/CPU/CUDA RNG/data-order 恢复；验证默认分布式路径和 gate；证明 gradient checkpointing 真的触发 activation recompute，并与无 checkpoint 对照梯度和峰值显存；为 Qwen 生成补共同 held-out prompts 与 JT/PT 质量分数及预先定义的验收阈值。现有 shim 直接调用目标函数，没有重算或显存节省证据。Jittor 新进程恢复成功与 stock PyTorch 无法读取 JT portable-pickle optimizer 是不同互操作结论，须各自记录；若发布声称跨框架读取，再独立修复并验证。R14/Qwen 结果仅支持固定源码/seed/config；overall release 仍为 **Not complete**。
+更广发布门：按声明支持范围完成 API/device/dtype/layout/edge/autograd/fallback 矩阵；为声明支持的模型绑定实际设备、权重/数据/配置，记录梯度、真实 optimizer 更新、loss、held-out 任务指标及所需的新进程 checkpoint optimizer/scheduler/Python/NumPy/CPU/CUDA RNG/data-order 恢复；验证默认分布式路径和 gate；证明 gradient checkpointing 真的触发 activation recompute，并与无 checkpoint 对照梯度和峰值显存；为 Qwen 生成补共同 held-out prompts 与 JT/PT 质量分数及预先定义的验收阈值。现有 shim 直接调用目标函数，没有重算或显存节省证据。现有 HF forward-equivalence 用例只在 no_grad 下比较输出，没有 backward、recompute 计数或显存断言，不能作为 activation recompute 验收。Jittor 新进程恢复成功与 stock PyTorch 无法读取 JT portable-pickle optimizer 是不同互操作结论，须各自记录；若发布声称跨框架读取，再独立修复并验证。R14/Qwen 结果仅支持固定源码/seed/config；overall release 仍为 **Not complete**。
 
 
 ## 2026-10-31 当前主树 Qwen 训练与 checkpoint-51 恢复补证
