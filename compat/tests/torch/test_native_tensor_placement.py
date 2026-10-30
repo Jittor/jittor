@@ -102,6 +102,46 @@ def test_explicit_copy_roundtrip_and_gradient_keep_source_placement():
             np.testing.assert_array_equal(copied_grad.numpy(), [4., 6.])
 
 
+@pytest.mark.parametrize(
+    ("source_ordinal", "target_ordinal"),
+    ((0, 1), (1, 0)),
+)
+def test_explicit_copy_between_cuda_ordinals_preserves_values_and_gradient(
+    source_ordinal, target_ordinal
+):
+    import jittor as jt
+    import torch
+
+    with _cuda_runtime():
+        if jt.core.get_device_count() < 2:
+            pytest.skip("two CUDA devices required")
+        fallback_before = int(jt.core.backend_fallback_count())
+        source = torch.tensor(
+            [2.0, 3.0],
+            device=f"cuda:{source_ordinal}",
+            requires_grad=True,
+        )
+        target = source.to(f"cuda:{target_ordinal}")
+        loss = (target * target).sum()
+        source_grad, = torch.autograd.grad(loss, source)
+        roundtrip = target.cpu()
+        jt.sync_all(True)
+
+        for value, ordinal in (
+            (source, source_ordinal),
+            (target, target_ordinal),
+            (source_grad, source_ordinal),
+        ):
+            assert value.placement_backend == 1
+            assert value.device_id == ordinal
+            assert value.device.type == "cuda"
+            assert value.location() == "device"
+        _cpu(roundtrip)
+        np.testing.assert_array_equal(roundtrip.numpy(), [2.0, 3.0])
+        np.testing.assert_array_equal(source_grad.cpu().numpy(), [4.0, 6.0])
+        assert int(jt.core.backend_fallback_count()) == fallback_before
+
+
 def test_a_device_var_parked_on_the_host_is_moved_back_by_to_device():
     """Asking for the device must not accept host storage for a device Var.
 
