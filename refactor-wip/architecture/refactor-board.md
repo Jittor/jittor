@@ -1,5 +1,18 @@
 # 整改看板
 
+## 2026-10-31 R22 R9 证据审计与当前主树 CUDA alias 回归
+
+继续使用 /home/cgq/jittor 原工作区，不 clone、不清理。测试时 HEAD a5e5b99be0ce074df70e10670cf179ab71d81f34，分支 integrate/cgq-transformers-native-multicard-target；fetch 后 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 85/0。开工时 103 项既有 dirty/untracked、index 为空。当前 CPU/CUDA 定向证据绑定测试时源码 fingerprint c6722fd90cacb8265eee69f313a7f9d0486e3a7f1beab7fd8ff78b59ea94bf01；这次提交只更新状态文档，不要把证据重标成文档提交后的 HEAD。
+
+R9 native CPU 原始用例确为 2 passed、0 skipped、fallback=0、rc=0，saved-artifact audit PASS；更广的历史 terminal audit 是 FAIL，因为审计时 cache 快照从 740 增至 6594 且 lock inode/kernel-clear 条件失败。两者分别记录，不重跑或覆盖。R9 原 Torch focused 仍是 7 passed、2 failed、1 accelerator skip、fallback=0：失败分别为 fill_/zero_ 后参数梯度丢失，以及 torch.Tensor(native) FollowRuntime placement 误落到 backend 0。
+
+当前主树 CPU autograd 文件在独立 cache 上 26 passed、2 accelerator skip、fallback=0；当前主树真实 CUDA torch.Tensor(native) FollowRuntime alias 窄回归也通过：1 passed、0 skipped，逻辑 cuda:0 映射 GPU4 / UUID GPU-8bf405a2-a3dd-e203-8dd9-691e9f7b3530，fill_/zero_ 后 storage 指针、placement 与值核对通过，fallback 计数未增加。完整日志及 cache 前后清单见 Day2–5 结果记录和 /data6/cgq/jittor-lab/_state/release-day23/20261101-main-follow-runtime-cuda-r1/。R21 CUDA core、jit-utils 和 build stamp 哈希均保持原值；cache 有 10 个文件内容变化、无增删，不能将其当作 R21 原训练 cache 的字节级原样快照。
+
+下一步仍按实际发布范围补齐 Day2–5 功能矩阵：模型/API、设备/dtype、edge cases、fallback/autograd；声明模型的真实训练/验证、梯度/更新/loss 与 held-out 任务质量；新进程 checkpoint 的 optimizer/scheduler/RNG/数据顺序；真实 activation recompute 和显存对照；普通 DDP 最终 gate；以及 JT portable-pickle 与 stock PyTorch 的互操作边界。现有 R14 训练/resume 只支持固定源码/seed/config；checkpointing shim 直接调用目标函数仍未证明重算或省显存，stock PyTorch 读取 JT optimizer 文件的失败仍单独保留。
+
+Day4–5 正式性能/显存验收需冻结匹配的源码、权重、数据和配置，并等 GPU 连续稳定达到利用率 ≤10%、空闲显存 ≥60,000 MiB 且没有无关计算 PID；至少 3 轮 JT/PT 交替配对，每轮每侧至少 10 个热态样本；报告加载、首步和热态 latency/throughput 的 median、p95、离散度，以及 allocator allocated/reserved 和 NVML 峰值；最大 batch/sequence 与 OOM 容量边界另行测量。当前共享 GPU 下的计时只能作诊断。Overall release 继续 **Not complete**。
+
+
 ## 2026-10-31 R21 当前主树 Qwen 实用训练与新进程恢复
 
 继续在 /home/cgq/jittor 既有工作区；当前 HEAD 为 57189bde41a01d657b870e1a2c47ac955a175ec5，分支 integrate/cgq-transformers-native-multicard-target；fetch 后 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead 84 / behind 0。开工时保留 103 项既有 dirty/untracked，index 为空；本增量仅编辑规定的三份状态文档。当前源码指纹 ae2cb7e24fcd6e58d555d829ecf0e33411c17ab475174ab7500a336d7b71fbfc，运行前后相同；没有改源码或碰其他既有文件。

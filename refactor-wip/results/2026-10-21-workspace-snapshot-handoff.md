@@ -1,5 +1,16 @@
 # 2026-10-21 工作区快照与本机接续交接
 
+## 2026-10-31 R22 当前状态接续
+
+继续服务器 /home/cgq/jittor 原工作区；测试时 HEAD a5e5b99be0ce074df70e10670cf179ab71d81f34，fetch 后 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 85/0。保留 103 项既有 dirty/untracked，index 为空；本轮实际功能验证通过后只会提交三份规定的状态文档，不 push。测试身份 c6722fd90cacb8265eee69f313a7f9d0486e3a7f1beab7fd8ff78b59ea94bf01 绑定文档提交前的代码树。
+
+R9 native saved-artifact audit 为 PASS（原生测试 2 passed），但更广 terminal audit 因 cache drift/lock 条件为 FAIL；R9 旧 Torch focused 仍保留 2 个功能失败。当前源码 CPU autograd 全文件通过（26 passed、2 accelerator skip、fallback=0）；随后真实 CUDA FollowRuntime alias 定向用例在 GPU4/cuda:0 通过（1 passed、无 skip、fallback 未增加）。CUDA core/stamp/util 未变，借用 cache 的 10 个文件内容有变化；测试未改源码，也没有留下进程。详见 Day2–5 结果记录与 /data6/cgq/jittor-lab/_state/release-day23/20261101-main-follow-runtime-cuda-r1/。
+
+优先继续完成实际支持范围的功能发布门：扩展 API/device/dtype/autograd/fallback 覆盖，明确声明模型的训练/任务质量和新进程 checkpoint 恢复，完成真实 activation recompute 与梯度/峰值显存对照，并闭合默认 DDP 最终 gate。Qwen 需共同 held-out generation 质量判据；JT 同框架恢复和 stock PyTorch 对 JT portable-pickle 的读取失败分开管理。
+
+Day4–5 性能/显存验收另等稳定 GPU 窗口（利用率 ≤10%、空闲 ≥60,000 MiB、无无关计算进程），冻结匹配的源码和 workload，做至少三轮 JT/PT 交替配对、每轮每侧 ≥10 热样本，报告 load/首步/热态 median/p95/离散度、allocator allocated/reserved、NVML 峰值及独立容量/OOM 边界。当前 GPU 共享 VLLM 负载，只能用于功能测试；overall release 仍为 **Not complete**。
+
+
 ## 2026-10-31 当前主树 Qwen 实训与续训接续
 
 继续使用服务器 /home/cgq/jittor 原工作区，未 clone。当前 HEAD 57189bde41a01d657b870e1a2c47ac955a175ec5；fetch 后 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead 84 / behind 0。开工时 103 项既有 dirty/untracked 保留，index 为空；本次只改本交接、整改看板和 Day2–5 结果文档，不 push。当前源码指纹 ae2cb7e24fcd6e58d555d829ecf0e33411c17ab475174ab7500a336d7b71fbfc，训练前后一致。

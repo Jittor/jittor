@@ -1,5 +1,34 @@
 # Torch Compatibility Release Acceptance: 2026-10-26 Day 2–5 Continuation
 
+## 2026-10-31 R22 当前源码 autograd CPU/CUDA 回归与 R9 native 审计分类
+
+继续使用 /home/cgq/jittor 原工作区。测试时 HEAD a5e5b99be0ce074df70e10670cf179ab71d81f34，分支 integrate/cgq-transformers-native-multicard-target；本轮 git fetch origin cgq_transformers 后远端为 e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，HEAD ahead/behind 85/0。开工时保留 103 项既有 dirty/untracked，index 为空。没有 clone/reset/stash/clean/push；实验与输出均放在 /data6/cgq/jittor-lab/_state/release-day23/ 外置目录。本轮只更新指定的三份状态文档。
+
+### R9 native CPU 与 Torch focused 历史结果
+
+R9 native CPU 原始 attempt 保持 2 passed / 0 skipped / fallback=0 / rc=0。独立 saved-artifact audit /data6/cgq/jittor-lab/_state/release-day23/20261030-r9-torch-focused-independent-audit-r1/audit.json 判定 PASS，证明保留的成功产物与源码/产品/cache 链接一致。较广的 root-native-terminal-audit.json 判定 FAIL：审计时 cache 从 740 增至 6594，且当前 lock inode/kernel-clear 操作条件不满足。因此只能写成“历史 native 测试通过、saved-artifact audit 通过；当前 terminal audit 因 cache drift/lock 条件失败”，不能把 terminal audit 改写成通过，也没有重跑 native。
+
+保留凭证：receipt SHA256 da8ece3048fad10c74056b3bd79e0cc6db558b9d9936a02ea710fcb94f1d1b55；result SHA256 b3612b3e1f627c52ffa2240d7db55c0354ada6099ca26e0a6312a1f95d41407d；cache before/after/delta SHA256 分别为 2fb9144a41db512688ddb55ea3b1b89e095b48d78ba8b0c714569f2cdb825387、13ee1d9a7afe2eff3ff0899948f1337df82064a44625558294b795933955da2d、d445654603949a5c1367ea65bf9b6ab9f7d100f59c7992c5fc006fed1f307398。delta 是两组 int32 broadcast/binary pow JIT 文件增加，共 8 个文件，无变化/删除；冷 CPU 产品 core/jit-utils/stamp SHA256 分别为 1562721b0867b0218f564ce23a2faaabe3faf7d98b7b874efdbea54b437df4a6、083f5111924a69c5d8b81019851ea14b8462d2531f57af015d57ca544accad2b、e6d41524e27df9978820bbf2d512459fe2bec4b62d0d0af2af4cd2b6c93594dc。
+
+R9 Torch final focused 位于 /data6/cgq/jittor-lab/_state/release-day23/20261028-qwen-fill-zero-r9-focused-cpu-torch-final-r1-prepared/attempt-01-torch-focused/，10 项中 7 passed、2 failed、1 accelerator skip、fallback=0、rc=1。两项失败是 fill_/zero_ 后参数梯度未保留，以及 torch.Tensor(native) 违反 FollowRuntime alias placement 预期（期望 -1，实际 0）。该结果作为旧源码失败证据保留。
+
+### 当前主树 CPU autograd 全文件
+
+当前主树测试前 HEAD a5e5b99be0ce074df70e10670cf179ab71d81f34，测试源码指纹 c6722fd90cacb8265eee69f313a7f9d0486e3a7f1beab7fd8ff78b59ea94bf01，2820 条源码清单，测试前后源码与 HEAD 相同。CPU 证据根目录 /data6/cgq/jittor-lab/_state/release-day23/20261101-main-current-autograd-cpu-r1/：attempt-01 因启动目录错误在 pytest collection 前退出（4，no tests ran）并保留；attempt-02 使用独立 CPU cache 完成 compat/tests/torch/test_torch_compat_autograd_semantics.py，28 collected/executed，26 passed、2 accelerator skip，33.66 秒、rc=0。backend_fallback=error 与 fallback 禁止 guard 生效，fallback=0。CPU core/stamp/jit-utils SHA256 为 6a21f70f357d767f12c136a81f9449fb3420245db8b18c99990f31f5fbf1ce05、552660e53977150023cf3a4d60676518b12efd2d1fbf54d4a45db75f6b5ad59c、d83b331385c81f3ffa8b70ba2665acee73fe6ba7e5c300089af43170f80eebaf。结果覆盖当前修复的 CPU fill_/zero_ 梯度与 alias 语义，但不代替 CUDA 矩阵。
+
+### 当前主树 CUDA FollowRuntime alias 定向回归
+
+实验目录 /data6/cgq/jittor-lab/_state/release-day23/20261101-main-follow-runtime-cuda-r1/；原始执行脚本、日志、cache 前后 hash 清单、差异摘要与完整 SHA256 manifest 均留存。测试 selector 为 compat/tests/torch/test_torch_compat_autograd_semantics.py::TestInPlaceConstantWrites::test_cuda_public_tensor_constructor_preserves_follow_runtime_alias；1 passed in 14.21s，Jittor session sentinel collected=1 executed=1，0 skipped，rc=0。CUDA_VISIBLE_DEVICES 绑定 GPU4 UUID GPU-8bf405a2-a3dd-e203-8dd9-691e9f7b3530，故测试逻辑 cuda:0 指向该物理 GPU。测试内 strict runtime scope、backend_fallback="error"、forbid_backend_fallbacks() 和前后 fallback 计数检查均通过；构造器结果与 native var 的 storage/data pointer、FollowRuntime placement -1、device id 和 CUDA dispatch context 一致，随后 fill_/zero_ 写入值及 alias 均通过。
+
+此 run 使用已有 R21 CUDA warm core/cache 并设 JITTOR_NO_BUILD=1，没有触发 core 重建。core SHA256 de49627f5026320061a76f355b0186fe2807c6936ac769a76e0375a4b71406b7、jit-utils SHA256 d83b331385c81f3ffa8b70ba2665acee73fe6ba7e5c300089af43170f80eebaf、build stamp SHA256 b92800a041223df20e994a13148d266d75f567d4ac1ccf0c7ffc8eaa65f589a5 测试前后相同。cache manifest 对比为 4089→4089 文件，0 新增、0 删除、10 个现有文件内容变化（lock 与涉及 array/broadcast/setitem 的 JIT products）；详见 evidence/cache-delta-summary.json，不能声称 cache 完全未改。GPU 当时有外部 VLLM PID 2861632，占用约 21086 MiB，利用率 27–28%、空闲 59931 MiB；本 run 仅用于功能正确性，不作为性能/显存数据。源码测试前后 fingerprint 未变。
+
+### 仍需完成的 Day2–5 门
+
+Day4–5：冻结并匹配源码、模型权重、数据、dtype/precision、batch/sequence、loader 与训练/推理配置；等待目标 GPU 连续处于利用率 ≤10%、空闲显存 ≥60,000 MiB 且无无关计算 PID；执行至少 3 轮 JT/PT 交替配对，每轮每侧至少 10 个热态样本；逐侧报告 load、首步、热态 latency/throughput 的 median、p95、离散度，以及 allocator allocated/reserved 与 NVML 峰值；另做最大 batch/sequence 和 OOM 容量边界。共享负载下的旧数值只作诊断，功能测试不能替代性能/显存验收。
+
+更广发布门：按声明支持范围完成 API/device/dtype/layout/edge/autograd/fallback 矩阵；为声明支持的模型绑定实际设备、权重/数据/配置，记录梯度、真实 optimizer 更新、loss、held-out 任务指标及所需的新进程 checkpoint optimizer/scheduler/Python/NumPy/CPU/CUDA RNG/data-order 恢复；验证默认分布式路径和 gate；证明 gradient checkpointing 真的触发 activation recompute，并与无 checkpoint 对照梯度和峰值显存；为 Qwen 生成补共同 held-out prompts 与 JT/PT 质量分数及预先定义的验收阈值。现有 shim 直接调用目标函数，没有重算或显存节省证据。Jittor 新进程恢复成功与 stock PyTorch 无法读取 JT portable-pickle optimizer 是不同互操作结论，须各自记录；若发布声称跨框架读取，再独立修复并验证。R14/Qwen 结果仅支持固定源码/seed/config；overall release 仍为 **Not complete**。
+
+
 ## 2026-10-31 当前主树 Qwen 训练与 checkpoint-51 恢复补证
 
 本增量绑定 /home/cgq/jittor HEAD 57189bde41a01d657b870e1a2c47ac955a175ec5，源码指纹 ae2cb7e24fcd6e58d555d829ecf0e33411c17ab475174ab7500a336d7b71fbfc；origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81 为祖先（ahead 84 / behind 0）。在隔离 cache 上，对当前主树实际执行 Qwen3-0.6B LoRA seed821，两 epoch、102 次 CUDA 更新；GPU4 物理 UUID GPU-8bf405a2-a3dd-e203-8dd9-691e9f7b3530，在进程内为 cuda:0。0 次跳步、0 fallback，epoch 加权微批 loss 1.205469→1.153617，验证 eval loss 2.455552。attempt-03 core SHA256 de49627f5026320061a76f355b0186fe2807c6936ac769a76e0375a4b71406b7；实验和执行原件位于 /data6/cgq/jittor-lab/_state/release-day23/20261031-main-qwen-practical-current-source-r1/。attempt-01/02 均未执行训练，失败原件保留。
