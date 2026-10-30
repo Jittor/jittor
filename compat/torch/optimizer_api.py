@@ -13,6 +13,7 @@ from .. import optimizer_kinds as _optimizer_kinds
 from .tensor_state import get_tensor_state
 from .installers.tensor.autograd_api import _optimizer_maybe_has_fsdp_params
 from jittor.optim.algorithms.adam import adam_update
+from .optim_frontend import _validate_adam_groups
 
 def _init(self, *a, **k):
     _context = get_install_context(jt)
@@ -230,7 +231,7 @@ def _state_dict_torch(self):
                 "weight_decay", getattr(self, "weight_decay", 0)))
             group.setdefault("amsgrad", False)
             group.setdefault("maximize", False)
-            group.setdefault("foreach", None)
+            group.setdefault("foreach", getattr(self, "foreach", None) if kind == "adam" else None)
             group.setdefault("capturable", False)
             group.setdefault("differentiable", False)
             group.setdefault("fused", getattr(self, "fused", None))
@@ -530,6 +531,8 @@ def _update_in_target_dtype(target, value):
 
 
 def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay):
+    if not decoupled_weight_decay:
+        _validate_adam_groups(self)
     native_fsdp_loss = None
     if closure is None and callable(loss):
         closure = loss

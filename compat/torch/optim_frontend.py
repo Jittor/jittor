@@ -32,8 +32,32 @@ def initialize_sgd(self, params, lr, momentum=0, weight_decay=0, dampening=0, ne
         (params, lr, momentum, weight_decay, dampening, nesterov), {})
 
 
+def _validate_adam_options(options):
+    for name in ("foreach", "fused"):
+        value = options.get(name)
+        if value is not None and not isinstance(value, bool):
+            raise TypeError("Adam %s must be bool or None" % name)
+        if value is True:
+            raise NotImplementedError(
+                "torch.optim.Adam(%s=True) is unsupported; use False or None" % name)
+
+
+def _validate_adam_groups(self):
+    defaults = {name: getattr(self, name, None) for name in ("foreach", "fused")}
+    for group in self.param_groups:
+        _validate_adam_options(dict(defaults, **group))
+
+
 def initialize_adam(self, *args, **kwargs):
-    return _initialize_algorithm("Adam", self, args, kwargs)
+    options = {name: kwargs.pop(name, None) for name in ("foreach", "fused")}
+    _validate_adam_options(options)
+    result = _initialize_algorithm("Adam", self, args, kwargs)
+    self.foreach, self.fused = options["foreach"], options["fused"]
+    for group in self.param_groups:
+        for name, value in options.items():
+            group.setdefault(name, value)
+    _validate_adam_groups(self)
+    return result
 
 
 def initialize_adamw(self, *args, **kwargs):
