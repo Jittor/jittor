@@ -1,5 +1,15 @@
 # 2026-10-21 工作区快照与本机接续交接
 
+## 2026-10-30 R14 Qwen 实用训练与 resume 终态交接
+
+当前主任务取得一组绑定 R14 冻结快照的实用训练证据：seed821 Qwen LoRA full102 与新进程 checkpoint51→102 resume 均在指定真实 CUDA UUID、`cuda:0` 上运行，fallback=0；full 102 次更新零跳步，epoch 微批次均值从 1.205469 降至 1.153617，固定验证 eval loss 2.455552，匹配 PyTorch 为 2.456644（约 −0.045%）。resume 恢复模型、optimizer、scheduler、四类 RNG 和第二 epoch 样本顺序，完成 51 次更新，112/112 LoRA 参数相对 checkpoint-51 改变，最终 eval loss 与 full run 相同。
+
+R14 源快照 HEAD `e4a3894065953efa50ea23a0e52b45511b835f59`、fingerprint `89157afb357abbb882057230ecb0e86586deeef7fb010a7cc51b3577eea054a6`。
+
+执行证据位于 `/data6/cgq/jittor-lab/_state/release-day23/20261030-r14-qwen-practical-final-r1-prepared/`：full review SHA256 `f8521274bcfdf78a3728ca3457af5b52b99239b70eab0b739b463f950fc4d382`，首次 resume 的比较器阻断原件与终审 SHA256 `2e740cf0a3c3a7b1c3469545003e7e013e5533c672b853ecc3629a904b0421b7`，修正规则后的 attempt-02 功能 resume 终审 SHA256 `eebcda6a2f97dae4de8f6da7fb3f3864e0c9c15bdb89fe0518865737d0ae349c`。首次失败是设备映射审计把 112 个 scalar step 误列为 tensor placement；值仍逐项精确校验，新尝试使用独立目录，原始失败和收据保留。状态审计放宽的只是设备映射覆盖范围，step 计数、模型与 optimizer tensor 值/设备检查均保留。
+
+保存恢复功能通过不等于跨框架序列化兼容：stock PyTorch 无法 `torch.load` Jittor portable-pickle optimizer 文件，原失败保留；同一 Jittor 新进程续训已经通过。没有 held-out generation 质量分数，gradient checkpointing shim 不执行激活重计算，正式性能/显存及更广泛 Day2–5 发布门仍待完成。后续按唯一看板继续性能/显存和剩余范围；保持 strict 数值 FAIL 历史、不从该短程结果推断通用长训或显存节省。
+
 ## 2026-10-30 跨卡 Tensor.to 修复与接续状态
 
 跨设备 `Tensor.to` 的窄修复已在 `compat/torch/types.py` 中落地：对已经位于CUDA且目标ordinal不同的Var，改走可微分host staging；其他已有迁移路径不变。此前环境内跨卡读回NaN（API返回成功）是触发证据，不外推为所有设备/驱动的共同根因。
@@ -505,9 +515,649 @@ HEAD-only r12 两卡实际训练与恢复使用 **r10 原生 core 和 Python 根
 
 本候选结构节点在 3068da63… tree 上实际 1 项通过、无跳过：原测试方法读取完整候选源码，使用桩处理无关框架导入；不是完整结构套件。后续候选只修改三份文档，代码 blob 相同，训练及测试仍按各自原混合或主树身份解释。旧 HEAD 802/800 结构失败、旧执行错误和用户已有 dirty 均保留。
 
-## 2026-10-28 06:40 +0800 接续入口：native core已走完，先做pow消费者优先控制
 
-当前无本任务框架/JIT进程。r8 native实际103pass/45skip/1xfail/fallback0，worker/controller均因metadata遗漏而rc1，receipt d2417388保留；root21保存审计20bee571已按源码确认唯一OPENBLAS键与12标准产物并采用实际执行，不重跑。7143基线为 `20261028-qwen-pow-r8-cpu-core-r1-prepared/attempt-01-native-core/cache-after.json` SHA8f357097；原文件无改删、组/JIT/oneDNN锁空。focused6沿root19采用且原失败保留。新native pow测试的物化顺序存在盲点，先root串行old-r7/new-r8 consumer-first CPU微控制，每侧新120s，不改源；然后用其实际终态绑定独立Torch core600s，再CUDA900及原完整no-hook。原FAIL/预算/LoRA阻断和发布 **Not complete** 保持，精确入口见[本日结果](2026-10-26-torch-compat-release-day2-5.md)。
+## 2026-10-30 df45 BERT真实训练阶段BF16补充验证
+
+针对完整full100历史observer跨阶段混合set的问题，另做相同配置、真实Trainer训练阶段标记的两microbatch单步：PT/JT首层query projection两次输入及weight均FP32、输出BF16，CUDA autocast=true；JT三类张量native dispatch均cuda:0，指定物理GPU、fallback0。两侧样本及输入/标签hash相同，201梯度有限及201参数实际变化；两侧均将原首步零LR人工设 `6e-6`，观察sync与RNG历史差异明确保留。PT scaled losses `[0.4248046875,0.3701171875]`、JT `[0.427276611328125,0.34375]`，跨框架随机流未证明一致，不能声称loss逐步对齐。独立终审 `_state/release-day23/20261030-main-df45-bert-bf16-training-phase-jt-shim-successor-r1-hold/independent-terminal-audit.json` SHA `c5cc3bb5a5c84d555753e0ee22d9f1e564f526274a29cf0d35bc6b59ddb9d044`；首个observer读取shim不存在的 `torch.__file__` 造成输出未保存的失败原件保留。只证明两个训练microbatch首层投影的输出精度，不能外推原full100每步/每层或kernel内部计算及累积精度；以下对full100跨阶段observer的范围更正继续有效。
+
+
+## 2026-10-30 df45 BERT训练精度记录范围更正
+
+上文df45从头full100与同源续训均使用 `mixed_precision=bf16` 配置，真实CUDA、FP32 master参数/optimizer状态和有限梯度及记录loss/验证指标证据成立；但投影dtype/autocast观察器在训练前initial eval注册，只保存贯穿训练、评估与lifecycle的集合而无阶段标记。initial eval明确在accelerator.autocast内、CUDA logits为BF16；该汇总不足以证明训练阶段BF16覆盖，亦不能断言训练全程FP32。Accelerate源码有native_amp forward包装路径，但该运行未按训练阶段独立证实。`keep_fp32_wrapper=False` 移除forward包装仅发生训练结束后的lifecycle保存/重载对照，不应写成训练期已移除。历史PT报告的投影汇总亦不区分阶段，因此先前数值比较为同训练配置下的描述性对照，不能凭现有集合声称训练期两端混合精度覆盖相同。已准备补充阶段标记的有界单步验证；原产物、loss、严格失败和验收边界均不改写。
+
+
+## 2026-10-29 SDPA隔离A/B正确性通过，稳定窗口未取得
+
+本次新用途使用df45源码真实独立performance JITTOR_HOME冷编core，与功能cache隔离；CPU／CUDA原冷编路径及初始两次controller/驱动入场失败均保留，成功cold `_state/release-day23/20261029-sdpa-r5-independent-cold-terminal-audit-r1/terminal-audit.json` SHA `522b1bb2502073af1fae872d44cd0972dae655f25e3926ebbc8eae81a32862e0`。原A/B尝试因导入后修改sealed cache_path而失败，改为共享同一独立performance JIT cache后真实验证A原模块/B独立shuffle模块：物理seq-major合成输入，float64 output/dQ/dK/dV参考及三次重复通过，A/B max差 `0/1.19e-7/0/0`，B侧11节点无skip，实际源码/so/key不同且marker相符，双方CUDA/fallback0；终审 `_state/release-day23/20261029-sdpa-r6-shared-cache-correctness-terminal-audit-r1/terminal-audit.json` SHA `eecbd81183e3487871ee7e769813f03d8e4de46d7100b4cc0940f021ed40b5e1`。driver cache环境由controller设置但worker未独立记录，不能称实际路径已观测。
+
+60秒13采样单次readiness因目标GPU利用率92–100%、每次有3个外来PID而未达稳定窗口，计时未启动、无速度结论、不再自动排队；终审 `_state/release-day23/20261029-sdpa-r6-readiness-timeout-terminal-audit-r1/terminal-audit.json` SHA `2c64f1686c65d14dd72f2002b1d83da07a03ab4c4e7c85b30447fb0cff23ad3b`。历史BERT性能ratio1.735仍是既有测量及其共享负载边界，不能由本合成正确性测试证明优化收益或根因；旧诊断预算未重置。
+
+
+## 2026-10-29 df45 full与resume最终状态同批单步实际诊断
+
+针对checkpoint100 603项strict hash差异，离线静态bias-corrected m/(sqrt(v)+eps)方向续训相对full整体L2差10.096%、cos0.994923；保存lr实际为0，因此该方向不是下一步真实更新。一阶moment相对L2差5.052%、二阶0.5799%及模型4.4625e-5继续保留。
+
+独立同批压力诊断分别在新进程加载两份同源checkpoint100，固定原训练两个microbatch `[14,136]`/`[171,66]`、BF16/GA2/clip1，人工将两组lr设为3e-5并重设seed821，分别真实AdamW step101；这是额外干预，非原自然schedule。两侧checkpoint恢复签名/603 CUDA状态、201有限FP32 CUDA梯度及201实际变化参数核验、fallback0；两microbatch scaled loss均 `0.076171875/0.150146484375`，裁剪前梯度相对L2差 `1.943%`，裁剪后 `1.838%`，实际参数delta相对L2差 `8.6095%`、cos `0.996302`；更新后模型相对norm差由 `4.4625e-5` 增至 `5.0940e-5`，一阶moment相对差由 `5.052%` 至 `4.461%`。两侧起点模型、moment和梯度都不同，此为联合效应，不能单归因或认定长期无影响。独立终审 `_state/release-day23/20261029-main-df45-bert-checkpoint100-matched-batch-update-plan-r1-hold/independent-terminal-audit.json` SHA `ed9df0163d615db6d084329cb1dc1033af9ff1dc7aa5a8918d6b83a29495a456`。原strict 603项差异、原两次离线解析失败及双seed strict FAIL均保留；实际full/resume固定验证均26/33且loss接近，分别作为独立功能/任务表现证据。
+
+
+## 2026-10-29 统一main df45 BERT BF16同源checkpoint续训
+
+主树 `df45a565…` 从本源码full50的真实checkpoint新进程续训至100：checkpoint50加载签名、603 CUDA模型/moment状态、201 step及Python/NumPy/CPU/CUDA四类RNG一致；50续训更新0 skip、每步201 FP32 CUDA梯度有限、首个续训更新201参数变化、fallback0。99个microbatch样本/形状及50步LR与同源full和历史PT一致；第二epoch更新窗口等权均值resume `0.20797455`、full `0.20809052`、PT `0.19656555`，固定验证loss依次 `0.47852302`、`0.47770923`、`0.48360559`，准确率均26/33；功能恢复在此配置通过。独立终审 `_state/release-day23/20261029-main-df45-bert-bf16-freshresume-plan-r1-hold/independent-terminal-audit.json` SHA `f3edc6ba4b820d0d163d70b7f99b37552188211fafaac64c6961e1cc32a2729f`。
+
+最终checkpoint100严格状态603项hash不同（201模型、201一阶、201二阶moment，无缺失/新增，201 step相同）；离线可信本地产物数值分析确认dtype/shape相同且有限，其整体相对L2分别 `4.46e-5`、`5.052%`、`0.5799%`，full/resume单步loss最大差 `0.00354004`，差异原因与实际影响未定，不能以验证接近自动称无害或最终状态严格一致。数值后继 `_state/release-day23/20261029-main-df45-bert-bf16-freshresume-plan-r1-hold/checkpoint100-numeric-comparison-successor-r2.json` SHA `f14388795d5fe399d1880306709190225ea54922775d466eaccb8ce9f92fbd5a`；前两次离线比较因weights_only opcode和portable包装误解析失败均保留。此为单seed、sync/物化诊断干预，原双seed strict FAIL、非性能结论及EventQueue未直接观测保留。
+
+
+## 2026-10-29 统一main df45 BERT BF16从头两epoch学习趋势
+
+`df45a565…` 在真实CUDA单卡以固定seed821、197训练/33验证、B2/GA2从头完成两epoch/100次更新、0 skip；每步201个FP32梯度有限且实际CUDA，step2非零LR后201参数均变化，1/50/100步603模型与moment状态CUDA，fallback0。198 microbatch样本ID/形状及100步LR与已审历史独立PT一致；按每epoch 50更新窗口等权的mean_microbatch_loss口径，JT `0.35451462→0.20809052`、PT `0.35417236→0.19656555`；最终固定验证JT loss `0.47770923`、PT `0.48360559`，双方accuracy `26/33`，JT选checkpoint100。另一按99 microbatch数加权的epoch1记录均值约0.347694，两种口径不得混用。LambdaLR helper last_epoch=-1实际调用1次、step101次，serialization调用 jt.fetch 4次并返回；native EventQueue未直接观测。checkpoint50/100模型/optimizer/scheduler/RNG文件与签名已核，但未独立解码或新进程续训；梯度/参数检查有sync与物化干预。独立终审 `_state/release-day23/20261029-main-df45-bert-bf16-learning-trend-plan-r1-hold/independent-terminal-audit.json` SHA `96f990e7895121b37db7e5b15b728c97839a88883517203e0f129bb1f4821265`。单seed实际学习趋势与任务表现支持此配置的实用训练，但不覆盖新源码optimizer-only重建分支的模型验证、新进程续训、其他网络或原双seed 15.42595%>15% strict FAIL，后者保留；共享负载及诊断干预下不作性能结论。
+
+
+## 2026-10-29 统一main df45 BERT BF16两epoch实训运行中
+
+固定seed821、197训练/33验证、B2/GA2、两epoch 100更新的全新单卡BERT BF16训练用于验证统一main真实学习趋势及新scheduler/fetch路径；对应历史PT权重/数据/超参及23项引用已核。controller PID 2031669、child PID/PGID 2031672/start_ticks 189609483，单次cap3000秒，运行目录 `_state/release-day23/20261029-main-df45-bert-bf16-learning-trend-plan-r1-hold/`，绑定 SHA `7225df80…`。逐步梯度设备/有限性、参数签名和关键步optimizer状态会同步/物化，属于明确诊断干预；Python wrapper记录LambdaLR/helper/jt.fetch调用，native EventQueue未直接观测。启动时GPU UUID `GPU-2be51…` 空闲约51292 MiB，外来负载/利用率100%，仅正确性/学习趋势，不作性能结论。尚无当前训练或验证结果，接续须核PID/start/receipt、锁和实际状态，不重复；历史双seed strict FAIL保留。
+
+HEAD-only r12从r11仅加入持久CUDA启动回归测试，完整HEAD patch SHA `250c43dffca948b5e027ea20f65b0e4141ecffc54b039f410398f6f6b69718c5`，fingerprint `2394be191ac3fbe00a8dc304c623f65c97c25339cadf2f66785c3d58c50c8349`，隔离index对2796文件/链接blob/mode核对，主index不变；静态审计 `_state/release-day23/20261029-headonly-r12-startup-regression-candidate-r1-hold/candidate-audit.json` SHA `8f7453bac4006ff97e3db73346b4c0a076bf9b174f3e0dbcdefbec976f3b8594`。原会话前相关dirty片段重合按r9审计披露；r12未单独实测，候选未暂存或提交。
+
+
+## 2026-10-29 r11候选CPU调度器及tiny BERT训练/恢复
+
+HEAD-only r11相对r10仅LambdaLR实现/helper/测试三文件，r10真实CPU core + 两个r11 scheduler overlay及r10其余任务模块：八个PT oracle场景、16个调度器/Accelerate节点通过、fallback0，独立终审 `_state/release-day23/20261029-headonly-r11-lambda-cpu-focused-terminal-audit-r1/terminal-audit.json` SHA `efea8cd356d3aa8d73a25bbd0a8fb34d1769d68cd6f30b9d07dc4a2cf72f3f2e`。其后合成tiny BERT CPU、dropout0、八步：25参数每步实际变化、梯度有限、参数/50优化器状态CPU、fallback0；step4保存并新进程恢复到step8，连续与恢复最终25参数最大差0，PT/JT训练loss最大差 `5.96e-8`。固定验证集两端趋势同向变差：JT loss `0.696845→0.767809`、accuracy `0.25→0.125`，不能称收敛或任务表现改善。终审 `_state/release-day23/20261029-headonly-r11-tiny-bert-cpu-model-terminal-audit-r1/terminal-audit.json` SHA `9118537ee24255fe75c3756e4f2070446f129a38cf843c633c6f66decb890239`。仅短程CPU混合身份，未证明GPU、长训或RNG恢复。统一main df45 100步BERT BF16从头学习曲线实验已独立准备，正在入场审阅，未运行；r11候选与main不可混同。
+
+
+## 2026-10-29 统一main df45 CUDA冷编及功能专项通过
+
+主树 `df45a565…` 同源CUDA真实冷编231 TU、38既有资源、全部产品/锁终审 `_state/release-day23/20261029-main-unified-fetch-lambda-cuda-r1-hold/independent-terminal-audit.json` SHA `783aeffb80ca67ea63e2534e4653a1c1dd94638b7005412f2172871b7e756add`。main core ELF init fetch 88/device 198，故本次pre-import通过不能独立证明device-first；该危险顺序在r10候选已实测。真实CUDA功能六阶段均通过、无skip：preimport `use_cuda=1/use_nccl=1`；持久startup、原fetch/GIL/EventQueue 4/4；32回调/cleanup/异常退出；placement 61/61；CUDA restore 11/11；LambdaLR GPU探针含两次实际参数更新、moment CUDA/有限、optimizer-only重建和缺字段。全阶段CUDA dispatch/fallback 0→0，终审 `_state/release-day23/20261029-main-unified-cuda-focused-r1-hold/independent-terminal-audit.json` SHA `3585f23ab5330b3a39960dfe5590ecf7f02e55dc863218abaa1e79217b77276f`。GPU Lambda中间数字仅断言未单独保存；本次不含NCCL collective/多GPU/超过20同时排队。d900的两rank模型与checkpoint证据及旧CPU BF16 strict失败均保留各自身份，不能转写为df45模型通过；任务候选r11本身与main不等同，待独立回归及模型学习曲线。
+
+
+## 2026-10-29 统一main df45 CPU构建、调度器及fetch通过
+
+统一主树 `df45a56585f68874e8f1c64a80c9fff276bfe795e80c4d079cd06a8e7e528fc3` 独立CPU cold自然rc0，227 TU、38既有pyc资源、源码/产品/stamp与锁终审 `_state/release-day23/20261029-main-unified-fetch-lambda-cpu-r1-hold/independent-terminal-audit.json` SHA `99244535aa8a4b46785dd63c1f1becbfc50395d812e7083fba1a8c200d2ba860`。随后当前main真实LambdaLR新增6和原scheduler/Accelerate 10节点共16/16、optimizer-only重建8案例与已审PT oracle一致、fallback0；终审 `_state/release-day23/20261029-main-df45-lambda-cpu-focused-plan-r1-hold/independent-terminal-audit.json` SHA `fd32291e46de58ea99b1c0a06db29498ed443c113090405479ce68400d944470`。原d900数值缺陷、CPU BF16 strict失败未覆盖；重建是内存state_dict、非新进程模型恢复。
+
+同源码CPU fetch后继3/3无skip：原fetch、32提交回调值、正常cleanup及预期异常退出子进程，CPU dispatch/fallback0；终审 `_state/release-day23/20261029-main-unified-cpu-fetch-successor-r1-hold/independent-terminal-audit.json` SHA `845fbf58e45b45f42639b8c05cf0decb2e02fe8de438367bb62284843bd598b6`。32提交不证明排队长度>20。正在以三份同源CPU审计为前置准备统一main独立CUDA cold及startup/EventQueue/fetch、optimizer placement/restore、LambdaLR GPU测试；没有当前main CUDA结论。
+
+
+## 2026-10-29 LambdaLR与fetch队列修复已移入主树，统一验证待运行
+
+经先前隔离CPU/PT八案例和原10回归通过后，LambdaLR修复已最小移入main：保留/设置各组initial_lr并在last_epoch恢复构造时按字段建base、缺字段按PT报错，其他scheduler不改；新增覆盖多组、tensor、optimizer重建和文件checkpoint的测试尚未运行。整合前目标lr_scheduler干净、旧dirty和index均已保存，`_state/release-day23/20261029-main-lambda-integration-r1/integration-review.json` SHA `8259d6fced9bc17730e3b4b1ea2a6e2f23b22d52f186d111a180af0783be5d30`。隔离overlay终审 SHA `6d4e2f342e6b610fc3a947b5618b1549683ce1de928db3e9a64d2a635aa657d3`，原d900学习率错误未覆盖。
+
+随后已审r10 fetch惰性队列四文件最小补丁移入main：目标与候选字节一致，原 `var_holder.cc` 82行既有dirty及主index保留；整合审计 `_state/release-day23/20261029-main-r10-fetch-queue-integration-r1/integration-review.json` SHA `b15cfde8c384c7523ac45596a14a6db270d104cd4d72de3ac90d6fa2c3079842`。仓库新增持久子进程回归 `tests/runtime/test_flag_env_and_setter.py::TestUseCudaAtProcessStartup::test_cuda_enabled_before_jittor_import`，明确导入前设置CUDA、实测dispatch与fallback；CPU-only依据capability skip，实际测试尚未执行。新统一执行源码 `df45a56585f68874e8f1c64a80c9fff276bfe795e80c4d079cd06a8e7e528fc3`，manifest SHA `46243b6f25ecf6e897a4e5e05a306cc5d6f71b207fcd249bf8660eebb6cf443d`。候选r10 CPU/GPU功能与LambdaLR overlay证据不可自动转成统一main通过，正在准备新身份原生产物及定向验证；原r10 CPU strict SKIP失败、初始化signal11和BF16 strict差异均保留。
+
+
+## 2026-10-29 fetch初始化崩溃隔离候选GPU专项通过
+
+r10 HEAD-only独立候选以惰性fetch队列修复原pre-import `use_cuda=1` signal11；真实CUDA cold 231 TU，实际ELF仍维持原危险顺序device静态初始化索引100、fetch索引145。原环境 `use_cuda=1/use_nccl=1` 进程启动、真实CUDA core加载和 `sync_all` 成功，dispatch CUDA/fallback0；原CUDA fetch、callback GIL和CPU跳过的原EventQueue节点均实际通过无skip，32回调、正常cleanup与异常退出子进程通过。GPU独立终审 `_state/release-day23/20261029-headonly-r10-fetch-queue-candidate-r1-hold/cuda-cold-hold/gpu-functional-independent-terminal-audit.json` SHA `4b30b1babe55b273519b6d9f1f7e172e303788a8397a502db185627cd9f6d590`；CUDA cold后继终审 SHA `318adf9184b61dd2ee4fc5df47e2d7efbccb0562ea901fcd52f871ceba9a6cbb`，先前审计对CPU/CUDA符号可见性相同的错误及原signal11均保留。NCCL环境已启用但未执行collective；32提交未证明队列并发长度曾>20，外部ABI及析构边界仍如实记录。修复尚未移入主树，正在准备与dirty基线兼容的最小移植；调度器独立候选先运行。
+
+
+## 2026-10-29 LambdaLR重建实测缺陷与fetch崩溃候选构建
+
+主树 `d90073…` 的独立PT/JT CPU实测确认：只恢复optimizer、按 `last_epoch=2` 重建 `LambdaLR`，PT base/LR为 `0.003/0.00075`，JT为 `0.0015/0.000375`；自定义 `initial_lr=0.012` 时PT为 `0.012/0.003`，JT仍为 `0.0015/0.000375`；缺 `initial_lr` 时PT报KeyError、JT成功。完整optimizer+scheduler恢复两端step3均为0.00075，因此不能误称已验证的Trainer恢复失败。内存state_dict独立终审 `_state/release-day23/20261029-main-d900-cpu-scheduler-reconstruction-jt-successor-r1/independent-terminal-audit.json` SHA `66a08bca04c6dd8a53254c6b167bc2a595cbaeff7988d6558f8ad397cf52ff53`，fallback0；初次JT遗漏已审隔离stamp导致导入失败的原件保留。其他scheduler部分使用链式公式，正在针对LambdaLR隔离设计修复，不外推所有类。
+
+r10独立候选将fetch两个队列改为惰性构造以处理 `use_cuda=1` 静态初始化崩溃，主树未改；独立CPU cold 227 TU真实通过 `_state/release-day23/20261029-headonly-r10-fetch-queue-candidate-r1-hold/cpu-cold-hold/independent-terminal-audit.json` SHA `90f6da11c0575ca518c7c7aafb2cbcd137a9b08717a0ff4ca37a1693c3f59930`。CPU fetch严格阶段3 PASS/1 CUDA-only SKIP、原门槛FAIL保留，派生审计仅判三个适用项通过、GPU必须执行原跳过项；`cpu-applicable-successor-audit.json` SHA `5af589cfaf7a023276a087a4e7b2c11eff9e850fa32509cfe0b24a3ac3bbc96d`。旧Linux core队列变量为本地符号、275缓存扩展无未定义引用，未知外部/Windows仍有ABI及无cleanup时队列不析构的生命周期边界。r10独立CUDA cold controller PID 1987842/start_ticks 189307494、worker 1987844/start_ticks 189307558、cap900，目录 `_state/release-day23/20261029-headonly-r10-fetch-queue-candidate-r1-hold/cuda-cold-hold/attempt-01-cuda`；正在编译，恢复先核实际PID/receipt/锁，不重复。原pre-import signal11及GPU功能尚未验证修复。
+
+
+## 2026-10-29 候选r9两rank模型与恢复后继通过
+
+HEAD-only候选的真实运行身份为r2 native/root + 覆盖9个r9生产Python差异：两rank、16样本tiny BERT LoRA FP32，full4/stop2/新进程resume4以及已审PT对照均rc0；六个rank进程不同、真实GPU/core/NCCL匹配、fallback前后0，每rank六个参数实际更新，候选scope/Torch AdamW step/CUDA fused更新真实调用已记录。每rank step2参数/optimizer/scheduler共40字段恢复最大差0，四类RNG与样本衔接；full/resume最终参数差诊断0。PT共同数值字段allclose（梯度max `1.49e-8`、参数 `1.041e-7`、optimizer `3.73e-9`），resume的四个仅PT状态字段保留；8/9 overlay在训练中实际加载，distribution未用，不能声称完整r9根目录或冷编。sync与Python profile是诊断干预。独立终审 `_state/release-day23/20261029-headonly-r9-bert-wrapper-successor-r1/independent-terminal-audit.json` SHA `791be9292968706fb1e7974c96df289218feeacf962c651b28c77bca0beeb585`。
+
+原full4在首步后观察器把Accelerate包装器误判为候选类型而失败，日志未保存当次包装器类型；分析还发现fused路径不会调用per-param adam_update，不能以此断言未更新。该失败 `_state/release-day23/20261029-headonly-r9-bert-model-successor-r1/independent-failure-terminal-audit.json` SHA `7b431099b185723493dddded63b4822043ce39343d99fa5d7f2cb0a76ffda75c` 保留；后继实际观察包装链及真实fused更新。原use_cuda=1 core初始化signal11仍为未修复问题：只读静态分析显示候选ELF device静态初始化先于fetch_op全局list，崩溃指令读该list且fault地址0x10，与未构造容器相符；需进一步验证、审查另一fetcher_to_free的生命周期，不能将相关假设当成修复通过。
+
+
+## 2026-10-29 候选r9模型后继运行中
+
+候选safe-init成功导入后原finder绝对第0 guard失败（未到NCCL），原件 `_state/release-day23/20261029-headonly-r9-nccl-safe-init-diagnostic-r1/independent-terminal-audit.json` SHA `b9a6dcff223dccff57f0d8d49cce7c22711ed3632096cebc6b5460d870e9f03f`。独立新诊断验证finder唯一、前置11钩子对9候选模块共99次不抢占，8/9实际加载并核hash（另1未观察）；单进程NCCL实际warm成功/fallback0，审计 `_state/release-day23/20261029-headonly-r9-nccl-finder-diagnostic-r1/independent-terminal-audit.json` SHA `ebba681d9ededee2c4d31b42efb65380a7295ecbea4774a9bf5868695f264fed`。首次core signal11与finder失败都保留，不能以成功后继抹去。
+
+混合r2 native/root + r9九生产Python overlay的独立两rank BERT LoRA full4→stop2→fresh resume4模型后继已启动，controller PID 1955525、full launcher 1955530、rank 1955532/1955533，目录 `_state/release-day23/20261029-headonly-r9-bert-model-successor-r1`；full launcher cap1200秒，失败即停不自动重试。实际两rank已在真实launcher导入时初始化NCCL，首步前各6参数/12状态槽检查完成；当前算子编译、尚无更新和训练结论。检查有显式sync与Python调用profile干预；接续先核PID/start、receipt、实际JIT/锁/资源和source/product，勿从本状态外推完整r9冷编。性能A/B保持HOLD、不得与任务JIT并发。
+
+
+## 2026-10-29 提交候选r9 NCCL warm在core初始化崩溃
+
+任务候选需独立模型与恢复证据，因其与d900主树有45个生产文件差异；候选模型真实身份为r2原生/根目录加覆盖全部9个生产差异的r9 Python overlay，不能称完整r9根目录冷编。首个单进程NCCL warm在r2 CUDA core动态加载、NCCL setup前signal11，模型未运行，原失败独立审计 `_state/release-day23/20261029-headonly-r9-bert-runtime-r1-hold/warm-failure-terminal-audit.json` SHA `6f0f552673a51ea2ec18ffa3edf34d5e62eeed1bbfdd1e1fc48f06b5474f5b3a`；core/utils/stamp及双源仍匹配，无可见任务进程或锁holder。失败前环境导入前强设 `use_cuda=1/use_nccl=1`，已通过151节点的focused按 `use_cuda=0/use_nccl=0` 导入，栈符号指向 `init_use_cuda → setter_use_cuda → sync_all`；环境仍有其他差异，不能认定唯一根因，signal11实际失败不能抹去。独立safe-init warm诊断正在准备；成功也不能自动证明两rank launcher可用。
+
+SDPA backward独立A/B方案仅静态准备、未运行：`_state/release-day23/20261029-sdpa-f32-backward-shuffle-ab-r1-hold/` manifest SHA `784f6f85f23776f462663268d660868275fb00eca55784f09525caafdd951443`，不重置旧性能预算。候选训练与诊断优先、JIT串行，性能收益与缓存隔离均未实证。
+
+
+## 2026-10-29 d900两rank BERT LoRA保存及新进程恢复通过
+
+主树 `d90073…` 真实CUDA/NCCL与固定16样本tiny BERT LoRA FP32，已有full4基线后新做stop2与不同PID的fresh resume4；两阶段两rank fallback均前后0、6个可训练参数实际更新。每rank checkpoint step2共40个参数/optimizer/scheduler字段恢复最大差0、Python/NumPy/CPU/CUDA四类RNG匹配，样本游标衔接；同源码full与resume最终参数最大差0。共同梯度/参数/优化器/调度数值字段与此前审定PT对照allclose；resume轨迹PT另有两个 `param_groups.initial_lr`、`scheduler._get_lr_called_within_step`、`scheduler.verbose` 四字段，不能声称state_dict字段完全一致。首步前与stop首步后state显式sync属于诊断干预。独立终审 `_state/release-day23/20261029-main-d900-bert-resume-successor-r1-hold/independent-terminal-audit.json` SHA `9154144a522dfd39914f59e2a8cc089d1f7787cfa6657b8e630c1f2d97abbab1`。旧CPU BF16 strict FAIL与首次full4超时保留；不外推17样本尾批、AMP、四rank或性能。
+
+
+## 2026-10-29 d900 CPU优化器专项
+
+主树 `d90073…` 绑定已审CPU core、按源码真实mtime隔离派生的stamp并显式 `use_mkl=0`：scope/异常2/2通过，restore 10/11，唯一失败为原BF16 AdamW恢复后下一步moment strict比对，最大绝对差 `6.676465e-05`、最大相对差 `0.00093548`；旧阈值与FAIL未修改。两个阶段fallback0，实际锁及可见holder空；审计 `_state/release-day23/20261029-main-d900-cpu-optimizer-focused-r1-hold/independent-terminal-audit.json` SHA `e9b7f0394c0b41eb17e9f97a24bff4e11b7154e7365c8dda815e23bec82024f9`。该数值差异长期训练影响仍未知，不能仅因数值小认定无害；旧GPU恢复11/11和新两rank full4功能证据单列。
+
+
+## 2026-10-29 主树新fresh optimizer真实两rank训练通过
+
+主树 `d90073…`、真实新CUDA core/NCCL、两rank tiny BERT LoRA FP32、16样本的full4后继自然rc0，每rank 4更新/8 microbatch，全部6个可训练参数实际变化；两rank UUID、样本序列、有限梯度及fallback前后0核实。每rank首步前及首步后的12个AdamW状态经显式sync物化为对应CUDA上的FP32 Torch Tensor，scope恢复一致；与已审旧PyTorch full4固定对照的梯度/参数/优化器状态最大绝差分别 `1.49e-8`/`1.041e-7`/`3.73e-9`，均在诊断容差内，loss最大差 `2.98e-8`。独立终审 `_state/release-day23/20261029-main-d900-fresh-optimizer-bert-successor-r1/independent-terminal-audit.json` SHA `615b1453353082158e74fd6e23741031e9c65391b69ef7c5f68fd6a83f79fefb`。原首个full4冷算子JIT 270秒超时已单独保留，新用途独立预算后继利用已产生缓存，约48.6秒完成；本次状态sync是诊断干预，四步短程不能证明epoch学习曲线、d900续训/尾批/四rank/AMP/性能。旧源码BERT/Qwen/T5历史曲线和对应保存恢复证据保留其身份，不能重标。
+
+
+## 2026-10-29 主树fresh AdamW真实BERT首步前检查通过，训练超时
+
+主树 `d90073…` 新冷编CUDA缓存先单进程NCCL warm rc0；后继两rank 16样本tiny BERT LoRA FP32 full4运行，按270秒launcher上限在首步算子JIT阶段rc124，首步、梯度、参数更新及PT对照均未完成，不能据此判断训练可用或失败。两rank均实际初始化NCCL，各自6可训练参数与12状态槽在首步前经显式sync检查为Torch Tensor/FP32和正确CUDA设备、构造前后scope一致；fallback仅训练前0，sync为诊断干预。相对较早双卡后继前快照新增78个jit .so，其mtime晚于本模型启动（该旧基线亦早于后续warm，归因按时间界定）。进程组结束、锁与可见holder空，部分外部FD不可读。超时独立终审 `_state/release-day23/20261029-main-d900-fresh-optimizer-bert-plan-r1-hold/terminal-timeout-audit.json` SHA `13447e7a50e6d3c09ac2e7ba8f82dd1f3133b08d3371c0c9d45bfdd6181b2847`；正在评估以明确新用途和预算完成实际更新，原超时不覆盖。
+
+
+## 2026-10-29 主树optimizer设备专项通过，模型验证待执行
+
+主树 `d90073…` 绑定同源码真实CUDA冷编产品，单卡placement 61/61、原18例AdamW/SGD混合设备冲突矩阵state无错放、原FP16/BF16失败节点2/2、主树restore 11/11；双卡后继2/2，driver核对cuda:0 `GPU-2be51…`、cuda:1 `GPU-b6f598…`，功能阶段均fallback0。首次双卡被控制器残留单卡数量断言在收集前阻断，原失败保留；后继仅运行尚未收集的双卡节点。独立终审 `_state/release-day23/20261029-main-d900-cuda-placement-dual-successor-r1-hold/independent-terminal-audit.json` SHA `b2affb58a8d89a65a925fbd7f67a658688090c9f7e88277ea5eab35a9d4171ec`；初始四阶段审计 SHA `9f23352e9240079bc19115740e80d9eb3ddb31e4af8c2014874e9939d081e6c7`。旧d08 CPU 2/2不能标作新源码CPU通过；旧BF16 strict差异保留。显式参数状态创建的前端类型改变可能切换算术路径，实际模型训练及更新效果尚待验证。
+
+已准备两rank tiny BERT LoRA FP32、fresh AdamW实际状态位置和训练更新的有界方案 `_state/release-day23/20261029-main-d900-fresh-optimizer-bert-plan-r1-hold/plan.json` SHA `b5b75f81c9e5f738a0ceecd451e632bb7e376825b137e2f4107a363b4579cf84`；逐参数显式同步状态属于诊断干预，不能冒称无干预曲线。现准备新产品/NCCL绑定和必要预热，尚无该身份训练结果。
+
+
+## 2026-10-29 主树新CUDA冷编与候选打包通过
+
+主树 `d90073…` 在新独立缓存单次真实CUDA cold自然rc0；独立审计确认231 TU（194源码/37生成）、817源码签名、core/utils/stamp与libcuda_extern实际产品及新缓存RUNPATH、导入后 `use_cuda=1`，锁与可见holder终态空；无张量功能测试。审计 `_state/release-day23/20261029-optimizer-state-cuda-cold-release-r5/independent-terminal-audit.json` SHA `7f9081857286dd547819a29f2dcd4cda6d8ed054ebe1a4992bd690cc16c157d7`。后续须绑定该实际产品运行设备矩阵、双卡及恢复，不能以构建通过替代。
+
+候选r9隔离源码副本的root/compat两套wheel及sdist均实际构建rc0；新增state placement helper、storage header、optimizer restore和DDP hooks逐字节在包内，wheel全部RECORD路径、hash、大小通过。终审 `_state/release-day23/20261029-headonly-r9-packaging-isolated-r1/terminal-audit.json` SHA `a67ae633c3c22673c7b450739fdbb968f26236118486040c7c161ca70f5cd371`；未测安装、模型及从sdist重建wheel。任务候选中与暂停前相关dirty重合的三处stop_grad及九行iadd逻辑已单独记录，原始字节不齐的路径不能声称已穷尽证明没有旧dirty；审阅 `_state/release-day23/20261029-headonly-r9-commit-readonly-audit-r1/review.json` SHA `b5b3dbf0ee88d4aea22011917bd6237e466ce8d0ba8f310e29ba0342df614a97`，尚未提交或暂存。
+
+
+## 2026-10-29 候选r9定向通过、主树真实CUDA冷编运行中
+
+HEAD-only候选r9真实身份为r2 CUDA core + r9九个Python生产模块/测试overlay；单次九阶段151/151通过：placement单卡61、双卡2、optimizer restore14、alias22、write1、cat14、RMS2、pow1、factory34。逐阶段真实UUID/dispatch/fallback0、源码产品、锁和cache已审，factory绑定原PyTorch oracle；终审 `_state/release-day23/20261029-headonly-r9-cuda-targeted-overlay-terminal-audit-r1/terminal-audit.json` SHA `c65204378ab7d8f18dbbd71da754f38ccc0de74bdb7fea184ab9e7e69cd494d3`。修正测试辅助代码后的CPU frontend恢复2/2亦通过，原r8 3pass/2fail及历史BF16 strict FAIL保留；混合overlay不是完整r9冷编或真实模型训练。候选helper与主树 `d90073…` 逐字节相同，其他身份不同，不能直接转移主树结论。
+
+主树独立真实CUDA cold已单次启动，controller PID 1916153、child PID/PGID 1916169/start_ticks 188769085，cap900、无自动重试；新缓存及产物路径 `_state/release-day23/20261029-optimizer-state-cuda-cold-release-r5/attempt-01-cuda/`。入场审阅 `_state/release-day23/20261029-optimizer-state-cuda-cold-release-r5/release-admission-review.json` SHA `2c46cc5b93652beeca2ea7e0f40921adcc55a1db45a183faaf6191042fa1c4e6`。接续时先核PID/start、receipt、锁、产品与源码；尚无主树新构建或设备回归通过结论，其他用户不可读FD不作绝对断言。
+
+
+## 2026-10-29 optimizer add_group实际错设备及后继修复待验
+
+HEAD-only r7 的 r2 CUDA core + r7九Python模块实际回归：原optimizer restore 14/14通过（含此前FP16/BF16两失败）；后续55节点24通过/31失败，双卡及后续6阶段未启动。独立终审 `_state/release-day23/20261029-headonly-r7-cuda-targeted-overlay-terminal-audit-r1/terminal-audit.json` SHA `c75ee23fff9874ee2a0fa7c7c6a423a2b6a1a4df165b46c8368e38b2c2727467`。其中26项源于测试工厂只设置Python ContextVar、原生参数实际为FollowRuntime；独立探针在真实CUDA下确认其余五种Torch optimizer的新增CPU参数组，其CPU参数实际CPU、而新增state实际CUDA（native Var backend=-1、dispatch CUDA、sync后location=device），非仅显示差异。探针 `_state/release-day23/20261029-r7-cuda-add-group-location-probe-r1/` receipt SHA `45e14b2b91f22217cf6832d2700b02fdc3e221346a27631e23378f422255aad3`；两层placement token嵌套异常恢复经探针验证。显式CPU native Var的 `.device` 可能显示runtime CUDA，需按backend/dispatch/实际location判断，Torch state另测公开device与类型。
+
+主树新源码 `d900732c0398909488f9525be5a11d29371d538c7af8f9bed3dd9fe8dd72857f` 将显式参数的Python placement、native TLS、frontend result type同时覆盖并逆序恢复，FollowRuntime保留原路径，修正原生测试工厂并增加类型/公开state/异常测试。相应HEAD-only r8 candidate fingerprint `4067dead1617683710defaf44b8e9901e5859f4548a5f98d76bbc0a36cc99f9d`，helper与主树逐字节一致；两者实际回归尚未运行，frontend类型变化的数值影响待验证。主树独立CUDA冷编包 `_state/release-day23/20261029-optimizer-state-both-placement-genuine-cuda-cold-r4-hold/` 仍HOLD，待r8终态和串行资源释放后放行；旧stamp、旧错误和历史构建全部保留。
+
+
+## 2026-10-29 optimizer placement CPU通过、CUDA扩展stamp阻断
+
+主树 `d08f9e…` 使用独立派生core stamp、`use_mkl=0` 完成CPU scope/异常恢复2/2；派生仅更新两个内容已按SHA核实不变的C++文件的真实mtime，核心及完整ingredients运行时检查通过，非新冷编。pytest部署14个shim文件被保守缓存检查拦停，逐项比对均与受审源码一致，无JIT源码或二进制变化；CPU终审 `_state/release-day23/20261029-main-optimizer-placement-fix-regression-r3-hold/independent-terminal-audit.json` SHA `27af5f3e263392eb9abfc33343d3bbd8fc56d87e6e0a734d2cf53b3be6cd6a89`。后续GPU尚未收集测试，独立 `libcuda_extern` stamp含相同mtime差异、无core那样的隔离路径覆盖，原产品和stamp与冷编快照哈希一致但当前完整运行时ingredients未验证；终审 `_state/release-day23/20261029-main-optimizer-placement-fix-regression-r4-gpu-hold/independent-terminal-audit.json` SHA `a2e0564a4599e3acabfed57252313a497975410fe734636600372645e47f0db5`。原签名和各次失败均保留，正在评估可审计的独立缓存，不可将GPU回归写成通过。
+
+FollowRuntime混用原生参数和torch optimizer存在ambient placement冲突的代码路径，但目前无实际故障复现；直接固定设备会改变动态语义，不能以此假设修复。只读审计 `_state/release-day23/20261029-d08-followruntime-optimizer-readonly-review-r1/audit.json` SHA `663a7daff5a5b7c4351089ee24374a2d9abcf1936472e406251d8537ca6a00af`。
+
+
+## 2026-10-29 optimizer placement回归受stamp检查阻断
+
+主树 `d08f9e…` 单次串行回归在CPU测试收集前退出，CUDA/18例矩阵/双卡均未启动，不能记为通过。`JITTOR_NO_BUILD=1` 检测到core stamp过期；只读比对显示CPU和CUDA原stamp均仅有恢复后的 `py_tensor_frontend.h/.cc` 两个源码mtime差异，其大小和SHA与原冷编及当前清单一致。原生文件和已审产品未改，失败进程已终止、缓存锁与可见holder为空，其他用户不可读FD不作全机断言。独立失败审计 `_state/release-day23/20261029-main-optimizer-placement-fix-regression-r1-hold/independent-terminal-audit.json` SHA `a03d25bbc2050eb55087748c36cae2b97c5e3a7d4e386c43d0a4d1ebf0e75b2a`。后续仅在核实完整编译输入、生成器、工具链及产物等价后，评估独立派生stamp；原stamp及失败记录不覆盖，尚无测试通过结论。
+
+
+## 2026-10-29 optimizer显式参数state placement修复待验
+
+矩阵证实constructor ambient放置错误后，主树引入optimizer私有scope，针对已有显式placement的每参数临时覆盖上下文并finally恢复，覆盖zeros/adaptive FP32 cast及SGD contiguous；FollowRuntime参数直接走原路径，ambient冲突仍未解决。新指纹 `d08f9ec25b8669fc9d171c1e41274d4061f605e9e79c8a354090d412b64f80ff`，相对旧版仅4 Python/测试路径，曾尝试的native clear API已撤去且两个C++文件与事前备份逐字节一致；现有native产品能否复用需重审。静态review `_state/release-day23/20261029-optimizer-per-parameter-placement-fix-r1/static-review.json` SHA `03fa7cb604c82dc7202a7cae5c99728ea435039d52c363e218d2c39a554589c4`；新增CPU/CUDA混组、显式冲突、异常嵌套和公共factory语义测试，尚未运行，原30个state错设备证据保留。
+
+## 2026-10-29 当前主树optimizer初始state实际设备缺陷
+
+主树 `cbfa19…` 真实CUDA测试 FP16/BF16 AdamW新建moment公开device为CPU（原测试在native dispatch前失败），独立机制探针进一步证实同步后真实CPU location；手工zero/cast在CUDA，helper trace定位constructor期间 `tensor_frontend` 默认CPU placement覆盖了CUDA参数的 `zeros_like`，add_param_group上下文不同。18例AdamW/SGD×FP32/FP16/BF16×默认/显式CPU/显式CUDA，含CPU/CUDA混组，共30个初始参数state与参数设备不一致；新增组均匹配、数值有限、fallback0，异常路径未测。矩阵独立终审 `_state/release-day23/20261029-main-cbfa-optimizer-placement-matrix-r1-hold/independent-terminal-audit.json` SHA `1283b8d70c9baceac2f2df47e495f810c7b0094207d397604d7f4f6ac88e2259`；辅助helper trace SHA `09cd32f8a55e0169a999edb9a7c8f6e32ae106679531f8644c0c4d639fbaf953`。这是功能设备缺陷，非仅显示错误或末位数值差；正在设计每参数内部状态独立scope，同时保留公开工厂显式device与FollowRuntime语义，尚未修复。
+
+## 2026-10-29 候选CUDA发现moment设备显示差异
+
+HEAD-only候选实际 r2 CUDA core + 6个r6生产Python模块/测试：replay 6/6通过，optimizer 12/14，新增FP16与BF16 moment初始状态公开 `device=cpu`、测试期望cuda:0；断言发生在native dispatch检查前，不能断言物理存储在CPU。独立终审 `_state/release-day23/20261029-headonly-r6-cuda-targeted-overlay-terminal-audit-r1/terminal-audit.json` SHA `fd98594a1d069e3565cb4e180db9a17d2b6e7d038afc0dbb37729cbaff732f7b`，fallback0，余alias/write/cat/RMS/pow/factory未执行。原CPU BF16严格moment数值失败保留。当前main有相似半精度状态构造，正准备独立真实CUDA专项同时测公开device、dispatch/placement，不能预判是否受影响。
+
+## 2026-10-29 HEAD-only候选CUDA cold通过，定向回归运行中
+
+候选r2独立CUDA cold自然rc0、真实UUID及231编译单元核验，194源码/8生成器与r6逐项相同；独立审计 `_state/release-day23/20261029-headonly-r2-cuda-cold-independent-audit-r1/terminal-audit.json` SHA `010575095d68c3ec8638655c0856bc554ece59c98c0f716f3694fe10a4ff0579`。后继实际为r2 CUDA core+六个r6 Python模块/测试，单次八阶段replay/optimizer/alias/write/cat/RMS/pow/factory；controller PID/PGID 1868906/start_ticks 188472844、首worker PID/PGID 1868907/start_ticks 188472935，路径 `_state/release-day23/20261029-headonly-r6-cuda-targeted-overlay-r1-hold/`；锁/缓存/资源已核，GPU有外部负载，非性能测量。恢复先核PID/start/receipt/锁，失败停止不重试；目前无GPU测试/训练通过结论，原CPU BF16严格失败及结构基线问题保留。
+
+## 2026-10-29 HEAD-only候选独立CUDA cold运行中
+
+候选r6需要真实CUDA而非沿用main产品；以已审r2 native源码与CPU cold前置、r6 native 190编译源/777文件/8生成器逐项等价，建立独立CUDA cache，r6仅后续Python/测试overlay。单次cap900，controller PID/PGID 1863596/start_ticks 188427923，worker PID/PGID 1863659/start_ticks 188427981，GPU UUID `GPU-2be51dc7-d99a-7307-869b-30ed5888e701`，入场约76827MiB空闲且外部利用率59%，只作正确性；目录 `_state/release-day23/20261029-headonly-r2-cuda-cold-r6-overlay-r1-hold/`。恢复先核PID/start/receipt/锁，不重复；cold与后续定向测试尚无结论，不能把main GPU训练转移到候选。
+
+## 2026-10-29 HEAD-only r6事务与DDP CPU overlay通过
+
+任务独立提交候选r6完整patch SHA `6e7be1ab21e98642fd19e9a0b0f096169787ec77ded4afe019c96afd8be2c6a7`，将主树hook事务修复最小移植，HEAD transaction/context/fidelity依赖字节一致；r5及其故障原件保留。单次CPU测试真实身份为r2 framework/native core + r6六个Python生产模块/测试、use_mkl=0，事务8/8、hook16/16、owner20/20、原隔离故障注入2/2通过，CPU dispatch/fallback0；独立审计 `_state/release-day23/20261029-headonly-r6-hook-transaction-cpu-overlay-terminal-audit-r1/terminal-audit.json` SHA `16de455dd8df575f7fa76566b0b618c47a759c5a11e26323f426d4e0c8703fbc`。此为混合身份、不证明r6 native cold或完整shim安装故障，r4 BF16 moment严格数值失败、原HEAD types.py 802行结构失败、候选CUDA/多rank/训练未验证均保留；真实index未改，候选未提交。
+
+## 2026-10-29 BERT热步间NVML间隔诊断（共享负载）
+
+新主树 `cbfa19…` 的单次PT/JT各12步QNNQ交错诊断、每端6 query前置/6无query，模型/权重/config一致、实际197非空梯度和199参数有限、fallback0、loss最大差2.38e-7。PT两组更新median 87.33/85.33ms，JT 235.82/209.18ms；JT组内差+23.30/+44.73/-4.70ms波动显著，查询本身约105–110ms不计入更新。两阶段目标卡持续有外来PID 1849785、只有5/7离散负载采样且无等长sleep对照，不能区分查询、闲置间隔或共享负载的影响，不作为新source正式性能。独立终审 `_state/release-day23/20261029-main-bert-b8s256-nvml-gap-cbfa-r1/terminal-independent-audit.json` SHA `33aa1b06961b2d764d7ec773cc5ebfaf604483e42435d53fc4a85c041ac803fd`；原 `31857f…` 正式B8/S256 1.735倍结论及原负载监测限制继续保留。
+
+## 2026-10-29 最新主树两rank Trainer full4通过
+
+事务修复后 `cbfa19af2cc2d358d9d0777b03f186c188aa8d684c704ba8af04332155a575a7` 的单次两rank HF Trainer tiny BERT LoRA FP32 full4自然rc0，两个指定GPU真实source/core/NCCL、fallback0，均8 microbatch/4更新、16样本，副本参数一致；复用旧独立PT full，gradient/parameter/optimizer最大差1.49e-8/1.04e-7/3.73e-9，loss最大差2.98e-8（诊断）。独立终审 `_state/release-day23/20261029-hf-trainer-ddp-epoch16-full-transaction-r2/terminal-independent-audit.json` SHA `82d04f818d1283ea5a9bf6a7635bb2207fd158096d87a9d79c69fac28e1ed616`。首次启动因旧helper hash在任何attempt/模型前被拦截，原失败保留；此次不含新source的resume或四rank，旧 `31857f…` 两/四rank续训结果按其身份保留。
+
+## 2026-10-29 hook事务修复CPU回归通过
+
+新主树 `cbfa19af2cc2d358d9d0777b03f186c188aa8d684c704ba8af04332155a575a7` 的五阶段单次回归：新增rollback故障注入8/8、hook16/16、Torch owner20/20、既有事务/边界27/27、结构24/24均自然rc0，CPU dispatch和fallback0；源码/产品与四份冻结文档一致、进程组及可见锁/holder空。独立终审 `_state/release-day23/20261029-main-ddp-comm-hook-transaction-cpu-focused-r1-hold/independent-terminal-audit.json` SHA `c3e238a4d1b35fbc6a852460894de5f9e15f659dd458e389b05ce50a9f90408c`。覆盖新建/预存namespace三个故障点及重复安装；原r5隔离事务2失败保留，CPU mock不等于真实多rank，之前2/4rank Trainer与性能结果继续按 `31857f…` 身份报告。
+
+## 2026-10-29 hook事务故障注入失败与主树修复
+
+HEAD-only r5 混合CPU测试 hook16/16、owner20/20通过；原HEAD `types.py` 802行超过800的结构失败与两项受控故障注入失败均保留。注入在已有hook模块上证明InstallTransaction.rollback后属性未恢复，限独立registry而非完整shim安装；独立终审 `_state/release-day23/20261029-headonly-r5-hook-cpu-overlay-terminal-audit-r1/terminal-audit.json` SHA `a335a7965fabbae23fa985874b56a4240c634a1d25b81674c32fe9071f10790b`。主树同一helper已改用事务属性和模块发布账本，新增新建/预存及多故障点回归，旧文件备份 `_state/release-day23/20261029-ddp-comm-hook-transaction-fix-r1/`；新指纹 `cbfa19af2cc2d358d9d0777b03f186c188aa8d684c704ba8af04332155a575a7`，相对 `31857f…` 仅helper及新测试变动、native源码不变。尚未运行真实回归，旧训练/性能结果保留各自身份；不要预报修复通过。
+
+## 2026-10-29 BERT B8/S256性能归因诊断
+
+在相同main `31857f…`、权重、B8/S256默认attention/optimizer配置及独立性能cache上，PT/JT各3步profiler自然rc0、JT fallback0；两端实际均为BertSdpaSelfAttention/sdpa。PT memory-efficient attention前/反各36次事件总3.90/8.01ms，JT mea前/反各36次总9.44/21.05ms，约6.20ms/步事件差提示attention值得查，但不足以证明无profiler正式64.12ms/步差的根因。JT三步host wall310.10ms/device busy240.71ms/device wait176.83ms、2043 kernel；PT kernel区间并集238.15ms/2994 kernel，两个profiler捕获口径不同，不得直接相加或作benchmark。JT trace未截断，PT无独立截断指标；各侧只有5个离散负载样本、无可见外来PID。独立审计 `_state/release-day23/20261029-main-bert-b8s256-attribution-r1/terminal-independent-audit-v2.json` SHA `eaccfb0460905b5ca4e9bcea0f0aa2864ce4a54515ca5bb2b3868b24f4f34529`，原正式1.735倍结果及采样限制保留。
+
+## 2026-10-29 主树BERT B8/S256 FP32性能三轮完成
+
+当前主树 `31857f…` 的独立性能cache、60秒readiness 13/13合格后，PT/JT交替三轮各10次同步热更新自然rc0；PT轮median 87.36/86.98/87.47 ms，JT 152.45/154.24/146.11 ms，合并median 87.30 vs 151.42 ms、JT/PT=1.735，热loss最大差2.98e-7、JT fallback0。独立3步内存测量allocator peak allocated PT/JT约3.041/3.033 GB、reserved约3.282/3.329 GB，逐热步NVML采样峰3638/3650 MiB；不构成近容量证据。独立终审 `_state/release-day23/20261029-main-bert-b8s256-performance-r1-hold/terminal-independent-audit.json` SHA `9ac32552295e89f445465fe37f10341d48f547376071054a7872028e932ad940`。cold编译期间253次负载采样一次nvidia-smi超时，其余有记录采样未见目标卡外来PID，离散采样不能排除间隙干扰；该单格稳定偏慢是需处理的性能差距，完整Day4–5及near-capacity仍未验收，历史r3诊断与readiness失败保留。
+
+## 2026-10-29 主树BERT B8/S256配对性能实验运行中
+
+目标GPU空闲状态相对前次60秒失败明显变化后，新用途一次60秒readiness的13/13点连续合格，单次放行当前主树 `31857f…` 的独立性能缓存实验：FP32 BERT B8/S256，PT/JT交替三轮，每轮实际首更新、4次预热、10次同步热样本及独立allocator/NVML采样，非近容量验收。controller PID/PGID 1831102，独立JT cache `_state/release-day23/20261029-main-bert-b8s256-performance-r1-hold/performance-cohort/runtime/jittor/jittor-home`，日志在同目录。首次JIT串行，阶段失败即停不重试；恢复先核PID/start/receipt及锁。当前无性能结论，历史r3共享负载诊断与前次readiness失败保留。
+
+## 2026-10-29 四rank HF Trainer禁P2P恢复通过
+
+当前主树 `31857f…`，tiny BERT+LoRA FP32、16样本、4rank、batch2/G2，在PT与JT均明确 `NCCL_P2P_DISABLE=1` 下，full4/stop2/fresh-resume4六阶段及PT连续性/最终分析自然rc0；24个rank执行设备/实际产品与fallback0已核，六阶段NCCL各14条channel均SHM、0 P2P。checkpoint2位于epoch2，四rank RNG齐全，各端各rank自身40项checkpoint状态恢复max_abs0、full/resume最终参数max_abs0。跨框架共有字段最大差梯度2.98e-8、参数1.0966e-7、optimizer 2.794e-9、loss 2.98e-8仅作诊断；resume轨迹PT多两项initial_lr与scheduler `_get_lr_called_within_step`/`verbose`，不声称跨框架全部状态一致。独立终审 `_state/release-day23/20261029-hf-trainer-ddp-epoch16-4rank-no-p2p-r1/terminal-independent-audit.json` SHA `40d432deb41cacc0178f8243c5f828c6dea382b9f7ab5cc9ae4cde3df6678b88`，进程/可见锁/FD终态清楚、拒读PID未知；终审两次只读脚本因字段差异/字符串finite中止已记录，原运行未重做。此限禁P2P/SHM，默认P2P PT full和微诊断超时、17样本尾批恢复、AMP/长期质量/性能尚未通过。
+
+## 2026-10-29 四rank禁P2P Trainer后继运行中
+
+同四卡微型NCCL禁P2P诊断通过后，新用途对PT与JT均明确 `NCCL_P2P_DISABLE=1`，其余16样本/epoch边界checkpoint协议不变；PT full/stop/fresh-resume及连续性先过才进JT。controller PID/PGID 1823071，binding SHA `2fafe9325667d2f6a81fc2f40c0528349dac48de1ce96bd9f27d91b7cb3fea73`，目录 `_state/release-day23/20261029-hf-trainer-ddp-epoch16-4rank-no-p2p-r1/`；单次有界、失败停止不自动重试，恢复先核PID/start/receipt/锁。该适配配置不能称默认P2P通过；原默认PT full超时及17样本尾批恢复失败均保留，目前无四rank训练结论。
+
+## 2026-10-29 四rank NCCL默认与禁P2P环境诊断
+
+同四卡、同PT NCCL 2.21.5库，默认配置的单次简单all_reduce 60秒超时，四rank均记录进入collective前、无数值结果，日志混合P2P/CUMEM与SHM；独立 `NCCL_P2P_DISABLE=1` 单次自然rc0，四rank均得10.0，日志通道均为SHM。独立终审 `_state/release-day23/20261029-pt-4rank-nccl-diagnostic-r1/terminal-audit.json` SHA `fa9a71c2ce3033c3134722189bb4cf9ed47ab6f8241b5cc232dc30f41e6d18f2`。此支持传输路径相关环境问题，但不确定具体根因/故障链路；不能将禁P2P诊断称默认P2P或Trainer通过。正在准备独立、明确禁P2P的四rank PT/JT Trainer后继，原默认full超时保留。
+
+## 2026-10-29 四rank HF实验PT full超时
+
+四rank新用途的初始权重与NCCL四rank初始化完成，PT full单次300秒超时停止；日志显示部分通道P2P/CUMEM、部分SHM/direct/direct，卡住根因未知，不能归因Jittor。PT stop/resume及JT所有阶段均未启动，无重试；controller/launcher/rank进程组退出，锁及可见FD空，拒读PID未知。独立终审 `_state/release-day23/20261029-hf-trainer-ddp-epoch16-4rank-r1-hold/terminal-failure-audit.json` SHA `297674242dc9ae2ba6b25eaababce195d09b21205dc37098c54326f9e299143d`；控制器TWO_RANK标签瑕疵保留，实际证据四rank。四rank公开Trainer与性能/显存仍未验收，两rank16样本续训通过及17样本尾批恢复失败分别保留。
+
+## 2026-10-29 四rank HF Trainer epoch边界实验运行中
+
+当前主树 `31857f…` 新用途：tiny BERT+LoRA FP32、16样本、四rank/batch2/累积2，每epoch1次更新，checkpoint2要求epoch2.0；PT full/stop/fresh-resume及连续性先过才运行JT对应三阶段，每阶段cap300、整体cap1800，失败即停不自动重试。四UUID依序 `GPU-2be51dc7-d99a-7307-869b-30ed5888e701`、`GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0`、`GPU-a49e1cb8-b822-0e7c-f399-7ed6c935cc3d`、`GPU-b6f59824-d1a3-cd6f-8100-9149728fc8eb`；余量约81/72/73/76 GiB，外来负载与不可读PID保留。controller PID/PGID 1817682，binding SHA `de3bf82b539cf4ec70e24c312e72d39a235c558a28fd2133336dcc1376e4cf19`，路径 `_state/release-day23/20261029-hf-trainer-ddp-epoch16-4rank-r1-hold/`。控制器成功状态字符串沿用TWO_RANK属于标签瑕疵，必须以实际四进程与设备证据为准；当前尚无四rank结果，恢复先核PID/start/receipt/锁，不重复。旧17样本尾批恢复仍未通过。
+
+## 2026-10-29 noneditable compat wheel混合布局入口通过
+
+旧 `2dd2b3…` 身份compat wheel安装到隔离target后，184 RECORD记录及optimizer_api/optimizer_restore实际路径/哈希核对通过，wheel入口spec明确，动态torch namespace无 `__file__` 记null；使用当前 `31857f…` 主树CPU core及显式扩展的 `jittor.__path__`，公开Optimizer.load_state_dict的零参数零状态调用实际进入wheel恢复实现，将lr 0.1恢复为0.2，fallback相关张量未涉及。独立终审 `_state/release-day23/20261029-compat-wheel-noneditable-import-check-r3/attempt-01/independent-terminal-audit.json` SHA `5ad909581b409c6adaf2a0dfa38943d4f2a05f9a14da31401b27a9a3cb1bbe23`。早前RECORD相对脚本路径和namespace `__file__` 两次观察器失败均保留，lock内容变化单列；此混合布局不证明最新wheel或完整core+compat干净安装，也不证明张量状态恢复。
+
+## 2026-10-29 HEAD-only候选 leaf/factory/numerics 后继通过
+
+候选r2→r3仅更正旧 `torch.ones` 非leaf断言：独立PT 2.6实测为leaf、grad_fn None，运算输出非leaf；旧失败/误选CUDA skip保留。后继实际身份为r2生产源码与CPU core + r3测试文件、显式use_mkl=0，leaf 1/1、factory17/17、numerics18/18通过、fallback0；独立审计 `_state/release-day23/20261029-headonly-r3-cpu-test-overlay-terminal-audit-r1/terminal-audit.json` SHA `ec8a7c874d59052cfb3c6bf393d02de1b36707ba90237eb94557a61db4998407`。先前候选BF16 AdamW moment dtype失败、默认oneDNN缺产品与CUDA/multirank未验证继续保留；不能仅据这些CPU结果提交或转移主树训练证据。
+
+## 2026-10-29 主树两rank HF Trainer epoch边界续训通过
+
+新源码 `31857f377169f420ebe6a707c67d8b841850602a6dfb3530bd4b8a0d0bb25716` 的tiny BERT+LoRA FP32、16样本、两rank、G=2：Jittor full4/stop2/fresh-resume4与复用的独立PT对照均完成，checkpoint2 epoch1的40项模型/optimizer/scheduler状态与Python/NumPy/CPU/CUDA RNG匹配，16样本ID及顺序符合full控制；两rank实际CUDA UUID/参数/梯度ordinal正确、fallback0、6可训练tensor实际更新。JT full/resume最终参数max_abs0且副本一致；对已核PT最终参数max_abs 1.04075e-7、梯度max_abs 1.49e-8、scaled microbatch loss最大差2.98e-8（诊断）。NCCL实际SHM/direct/direct，进程组/可见锁及FD空，拒读PID未知。独立终审 `_state/release-day23/20261029-hf-trainer-ddp-epoch16-jt-hook-r1-hold/terminal-independent-audit.json` SHA `78e0bef8c0931f33a88dc58e174579fcaf12fff8006ff52063bda4206c645ed2`。这不覆盖旧17样本尾批恢复、4rank/AMP、性能或长期任务质量；原缺hook失败及17样本PT恢复/观测失败均保留。
+
+## 2026-10-29 HF Trainer 16样本修复后JT两rank运行中
+
+新主树 `31857f377169f420ebe6a707c67d8b841850602a6dfb3530bd4b8a0d0bb25716` 经hook/native/Torch/structure CPU四阶段89项通过；同一16样本PT full/stop/resume及41项权重/报告/checkpoint资产已重新只读核实，不重跑PT。JT-only单次full/stop/fresh-resume后继已启动：controller PID/PGID 1808060、full launcher PID/PGID 1808065、rank0 PID/PGID 1808067、rank1 PID/PGID 1808068，两rank框架/锁/NCCL身份前置通过；binding SHA `850d2b7cee25ec1fbf822c9c21994969fc5e67051d1c57b584005b1c1086fb23`，目录以 `_state/release-day23/20261029-hf-trainer-ddp-epoch16` 后继记录为准。恢复先核PID/start/receipt/锁，失败停止不自动重试；原JT缺模块与17样本失败保留，当前无JT训练结果。
+
+## 2026-10-29 默认DDP comm-hook导入修复CPU回归通过
+
+针对HF两rank默认NO hook导入失败，新源码 `31857f377169f420ebe6a707c67d8b841850602a6dfb3530bd4b8a0d0bb25716` 提供Accelerate无条件读取的hook模块和符号，实际自定义/压缩/PowerSGD hook或wrapper执行明确抛NotImplementedError并标注UNIMPLEMENTED，默认NO不注册；Accelerate对NO hook+非NO wrapper的既有静默忽略不宣称支持。CPU单次四阶段 hook16/16、native DDP29/29、Torch owner20/20、完整结构24/24通过，fallback0，冻结文档一致；独立审计 `_state/release-day23/20261029-main-ddp-comm-hook-cpu-focused-r1-hold/independent-terminal-audit.json` SHA `df976f0ee009ab3966615d07d0d2c31bc8d11b396b646a52ddbbcf0ee009b73e`。旧16样本Jittor导入失败保留；CPU mock不代表真实多rank。新模块和既有dirty备份 `_state/release-day23/20261029-ddp-comm-hook-surface-fix-r1/`。
+
+## 2026-10-29 HF两rank 16样本对照通过、Jittor缺comm-hook导入
+
+16样本epoch边界协议PT两rank full4/stop2/fresh-resume4及连续性均通过：两rank 40项checkpoint状态、四类RNG、样本顺序、最终参数匹配。PT resume rank1实际有额外GPU context，但当前ordinal/参数与目标UUID一致；不能反推原17样本失败的未记录列表。Jittor两rank在HF Trainer→Accelerate.prepare_model的默认DDP kwargs导入 `torch.distributed.algorithms.ddp_comm_hooks` 时均ModuleNotFoundError，未开始更新；fallback仅前值0，异常后未记录。独立审计 `_state/release-day23/20261029-hf-trainer-ddp-epoch16-r1-hold/terminal-independent-audit.json` SHA `c116512c2b88c9703c2b959d64bd016eb5235d521decc33d757a51e300d49547`；旧17样本失败不覆盖。准备默认NO hook的导入兼容，实际压缩或PowerSGD hook必须显式不支持；16样本并不覆盖尾批恢复。
+
+## 2026-10-29 HF两rank 16样本epoch边界新实验运行中
+
+另建16样本、G=2、checkpoint2位于epoch边界的独立协议；PT/JT各full4、stop2、fresh-resume4，先核PT自身样本/状态/RNG连续性才放行JT。原17样本尾批fresh-resume失败保留，16样本不声称尾批恢复覆盖。main `a2a524d5…`、既有CUDA/NCCL产品及锁/资源已核；release SHA `cdcd1a436156ac790035e3d23bfcb52e858b1df745f3bbffc14690e502857b91`、binding SHA `0484a11c1d6891dfd8508ed345b0230af14fa390cc62e51db79d149791658793`。controller PID/PGID 1799310，PT full launcher 1799317自然rc0；当前PT stop launcher PID 1799402、rank 1799410/1799411，目录 `_state/release-day23/20261029-hf-trainer-ddp-epoch16-r1-hold/`。恢复先核PID/start/receipt/锁，不重复；当前无PT完整恢复或JT通过结论。
+
+## 2026-10-29 两rank HF Trainer原17样本实验失败终审
+
+独立PT full4/stop2完成；fresh resume 的rank1因设备观察器仅允许单个NVML UUID而退出，异常未记录完整UUID列表和恢复后参数ordinal，NCCL cudaDev1/nvmlDev2/busId53000与目标PCI一致但不能复原现场或断言原因。rank0 checkpoint step2模型/optimizer/scheduler 40/40及四组RNG匹配；同时full只有7 microbatch，stop4+resume5为9，样本与sync序列不一致，原因未知。原独立终审 `_state/release-day23/20261029-hf-trainer-ddp-resume-r1-hold/original-failure-terminal-audit.json` SHA `16208f0c09037f7197b5cf70cca02938622a62fa31f789443ceac561461992cd`；所有进程组和可见锁/FD空，拒读PID未知。Jittor阶段未启动，不能声称尾批恢复通过；准备单独16样本整除累积、epoch边界checkpoint的新协议，保留原失败且明确不覆盖尾批恢复。
+
+## 2026-10-29 主树两rank HF Trainer新进程恢复实验运行中
+
+以新主树 `a2a524d5…` 为Jittor身份，使用独立两卡及匹配PyTorch、固定tiny BERT+LoRA、G=2的单次新用途：两端各full4、stop2、fresh-resume4，逐rank报告/真实设备/恢复与同步，单阶段cap300、总cap1800；按实际失败停止，不自动重试。release review SHA `d7693adf334c45a0b1c025c4a0bfb8b0256dec03628f66ae197d0dede01efe0c`、binding SHA `c10e4eca0e0e2f3bd2603ca1db4fb69c59c1a8d3482529386b7a5dc961598796`；controller PID/PGID 1793439，PT初始化权重PID 1793445 rc0（weights SHA `4e595646d39667958e2e88efb0bf6950e9baf2d82b8ece57b31e709431391cf3`），PT full launcher PID/PGID 1793464、rank0 1793584、rank1 1793585。目录 `_state/release-day23/20261029-hf-trainer-ddp-resume-r1-hold/`；恢复先核PID/start/receipt/锁，不重复；当前任何训练、恢复或对照尚未终态。
+
+## 2026-10-29 HEAD-only候选CPU阶段结果
+
+独立HEAD候选首次focused的native3 3/3、native DDP 17/17通过；Torch DDP因未预装oneDNN导致11节点失败，原rc1与审计 `dd0bb57238eaf912443429f04894ac51aa75d7263ffcd52b3d4e6d954b627059` 保留。明确 `use_mkl=0` 的新后继中 Torch DDP 20/20、replay 6/6通过，optimizer 10/11；BF16参数的exp_avg实际BF16而非测试要求FP32，属于候选状态dtype差异，与主树先前FP32 moment下一步数值末位差异并非同一失败。独立终审 `_state/release-day23/20261029-headonly-r2-cpu-no-mkl-focused-terminal-audit-r1/terminal-audit.json` SHA `3f63936d2eddfa21575365b071adcd87612363eaa27e555a245f1a5d6c71a255`；alias/factory/numerics因失败即停尚未执行。目标候选未达到提交验证，不把主树训练或默认oneDNN结果转移到候选。
+
+## 2026-10-29 HEAD-only提交候选CPU cold通过，定向回归运行中
+
+候选独立CPU cold自然rc0，227单元、native/core/utils/stamp及全快照校验通过，独立审计 `_state/release-day23/20261029-headonly-r2-cpu-cold-independent-audit-r1/terminal-audit.json` SHA `d4fe42c9446f7bf4746ac468f5a026fabba9763b6713d2cc2f8886281b00a036`；仅编译和导入身份，无张量或训练结论。候选CPU focused已单次启动，controller PID/PGID 1788240/start_ticks 187872989，首worker PID/PGID 1788242/start_ticks 187873025；首worker identity.command启动时为空，receipt单独存实际命令，不补造。路径 `_state/release-day23/20261029-headonly-r2-cpu-cold-focused-r1-hold/focused-attempt-01/`；失败即停不自动重试，恢复先核PID/receipt/锁。候选与main的既有dirty依赖不同，main实训不能转移；用户dirty与真实index未改。
+
+## 2026-10-29 任务独立提交候选CPU cold运行中
+
+为不夹带既有dirty，在非Git HEAD快照上构造任务补丁 `_state/release-day23/20261029-task-only-head-candidate-ddp-r2/candidate.patch` SHA `b536de4a831202a0ce45b135c7ce7210cf8a3e45ca960660afe800bdce3cf7bb`；主进程用隔离临时index将补丁应用HEAD并逐一核对2789文件/符号链接与快照一致，真实index未改，代码适配与既有dirty依赖仍须测试。候选完整清单指纹 `d55d62807b579f420260c457ecef71552054a009c6a1640f5b994b8c20609a9b`，CPU cold单次cap600：controller PID/PGID 1781640/start_ticks 187834786、worker PID/PGID 1781642/start_ticks 187834826，目录 `_state/release-day23/20261029-headonly-r2-cpu-cold-focused-r1-hold/`。恢复先核PID/start/receipt与锁，不重跑；cold仅构建身份，候选测试/训练尚无结论，不能转移主树证据或提前提交。
+
+## 2026-10-29 当前主树性能窗口单次检查未就绪
+
+`a2a524d5…` 主树完成真实两rank终审后，对GPU `GPU-2be51dc7-d99a-7307-869b-30ed5888e701` 新用途单次60秒离散readiness检查：13点全部不合格，free恒59939 MiB（原准入≥60000）、利用率28–31%（原准入≤10%），外来PID 1461480全程可见，最终连续合格0；自然 `WAIT_TIMEOUT_NO_RELEASE_WINDOW`，无benchmark/JIT或自动重试。独立终审 `_state/release-day23/20261029-main-day45-readiness-a2a-r1/terminal-audit.json` SHA `210310c0c4a40e0e19198b6eff3be99f86b69e89ba8e509bcb590f04694419e2`；采样离散且GPU/PID查询非原子，不能推断间隙状态。这是无正式窗口而非benchmark失败；历史r3倍率仅诊断，near-capacity未证明，Day4–5性能/显存仍待验收，不重置旧T5/Vision预算。
+
+## 2026-10-29 主树真实两rank Accelerate DDP尾批通过
+
+新源码 `a2a524d5e9b416de511bb679e71944bba68b9ef381e638b25582661a12865465` 的两rank tiny FP32 Accelerate DDP后继自然rc0：两物理GPU UUID实际匹配，NCCL日志记录SHM/direct/direct，fallback0，17个样本ID全覆盖，累积sync标记false/true/true，参数实际更新且两rank最终参数max_abs=0；各rank对历史PT的254数值项、39精确项通过，最大绝对差1.4901161193847656e-8。独立终审 `_state/release-day23/20261029-ddp-owner-successor-r1-hold/rank-terminal-independent-audit.json` SHA `200495b3dbc2d6d2ffb3a001fdd995caa8dce25c88452ecf012973cd8317fcbc`，进程组和可见锁/FD已退出，拒读PID未知；旧主树两rank TypeError及CPU首轮失败保留。历史PT报告未记录fixture脚本hash及确切版本，匹配依据和限制保留；此结果不覆盖4rank、HF Trainer、DDP checkpoint新进程恢复、AMP或性能。
+
+## 2026-10-29 DDP修复后两rank后继运行中
+
+新源码 `a2a524d5e9b416de511bb679e71944bba68b9ef381e638b25582661a12865465` 已有native 29/29、Torch 20/20 CPU终审；经旧NCCL产品、当前源码、共同锁及两卡资源复核，单次真实两rank后继已启动：controller PID 1770885、launcher PID/PGID 1770886、rank0 PID/PGID 1770888、rank1 PID/PGID 1770889；最终binding SHA `7334c1e6d7c2bc3bf753506e82b24d6d1a2e4742ea09df089fa8ec31433fd2c5`，目录 `_state/release-day23/20261029-ddp-owner-successor-r1-hold/`。原launcher LOCAL_RANK保持，旧两rank TypeError和CPU首轮失败保留；恢复先核PID/start/receipt/锁，不重复启动。新测试结果尚未终态。
+
+## 2026-10-29 DDP owner及dtype修复CPU定向通过
+
+native DDP计算梯度桶大小改为从native Var读取dtype，保留现有分组；新增native/Torch多dtype与桶边界测试。新源码指纹 `a2a524d5e9b416de511bb679e71944bba68b9ef381e638b25582661a12865465`；CPU独立终审 native 29/29、Torch 20/20，覆盖先前失败的双owner用例和新增dtype节点，fallback0；审计 `_state/release-day23/20261029-main-ddp-owner-bucket-cpu-terminal-audit-r1/terminal-audit.json` SHA `7a9007d7dc95425305bde32abdb35a59d046e831ca96ea90c77960202ebdc1bb`。原先28/28与18/19失败、原两rank TypeError均保留；CPU mock collective不等于真实多卡，下一步重绑后单次测试真实两rank。
+
+## 2026-10-29 DDP修复首轮CPU回归与打包检查
+
+DDP源码 `5466a63e…` 下 native原测试28/28通过；Torch owner相关18/19通过，唯一失败是在构造native DDP包装Torch Linear时 `parameter.dtype` 为torch.dtype，无 `dsize()`；该失败发生在预期双owner拒绝前。两阶段fallback0，独立审计 `_state/release-day23/20261029-main-ddp-owner-cpu-focused-terminal-audit-r1/terminal-audit.json` SHA `427d53c55c13fa443c277df7a337682e3c02e80ca812c08fa2360da7e4bcc5bb`，原失败保留；准备使用native dtype描述符修复并复测。真实两rank仍未通过。
+
+新optimizer_restore模块的隔离sdist/wheel已实际构建rc0，两归档模块字节、wheel RECORD及显式required-member审计通过，审计 `_state/release-day23/20261029-main-compat-optimizer-restore-package-audit-r1/terminal-audit.json` SHA `f9bc8a67727c5bb55fccf3b89e226793a6be99039e1ec970492b41f51903d4ae`；未安装wheel或证明非editable运行，新文件仍为Git未跟踪，主树旧egg-info尚未刷新。
+
+## 2026-10-29 DDP owner隔离修复及CPU回归运行中
+
+针对原两rank SimpleNamespace冲突，Torch参数使用独立 `_torch_ddp_state`，native保留自身marker，双owner包装在通信前拒绝，native loss驱动路径对Torch参数/输入列表提前拒绝并保持状态；标准Torch backward/step、no_sync和closure需回归验证。原dirty备份 `_state/release-day23/20261029-torch-native-ddp-owner-fix-r1/`，新执行指纹 `5466a63e9f2e83d585fcf6deaffa977cb191f32aa6c237ba74b847e669577a7d`，native编译输入不变。CPU native DDP全文件与Torch owner/closure两个阶段串行执行：首worker PID/PGID 1765387、start_ticks 187738264，目录以实际controller记录为准；恢复前核进程/receipt/锁，不重复。旧两rank失败保留，CPU与新真实两rank结果尚无结论。
+
+## 2026-10-29 主树两rank Accelerate DDP真实功能失败
+
+新源码 `2dd2b3b5…` 两rank单次测试均完成preimport guard、真实不同GPU UUID及NCCL初始化，fallback各0→0；目标测试call均在optimizer step失败，native `_assert_ddp_step_ready` 把public Torch DDP 的不可hash `SimpleNamespace` 当字典键。该state也缺native后续所需属性，不能只改hash；无更新/对照通过证据。独立终审 `_state/release-day23/20261029-ddp-preimport-guard-rebind-r1-hold/rank-terminal-failure-independent-audit.json` SHA `2e98c575f56a2b5511af592aef56f4a6ea4759019227aa450fafe67d686ed5a9`，全部进程组和可见锁/FD已释放，拒读PID未知。原失败保留，正在审查隔离Torch与native DDP状态和避免重复allreduce的最小修复；新源码需重绑，不能复用旧binding或自动重试。
+
+## 2026-10-29 主树两rank Accelerate DDP 尾批测试运行中
+
+新源码 `2dd2b3b5…` 的单进程NCCL custom-op预热自然rc0、真实库/NCCL初始化和fallback0，独立终审 SHA `422a2969e01914da46141219ac96d7c17b19575c49ec632c2b7bd9f36d160a6f`。受限Jittor路径共同锁审阅 SHA `b80d307b71ac33c2b52c7660aa451b7087c46485bbf47ab25ffb94bbbc4f9106`，第三方/vendor未观测行为作为边界。实际两rank已单次启动：controller PID 1757090、launcher PID/PGID 1757092、rank0 PID/PGID 1757094、rank1 PID/PGID 1757095；绑定 SHA `7a14dc0f26194d493da642b3604b629ae42911fac7f08d215b2aba2596ece712`，目录 `_state/release-day23/20261029-ddp-preimport-guard-rebind-r1-hold/`。GPU UUID为 `GPU-2be51dc7-d99a-7307-869b-30ed5888e701` 与 `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0`。保持原launcher LOCAL_RANK，恢复先核PID/start/receipt及锁，不重复启动，运行结果未终态。
+
+## 2026-10-29 主树两卡DDP的单进程 NCCL 预热运行中
+
+新主树指纹 `2dd2b3b5278d2e431eab63118d82ecd61f541063d313c6d6354724b74bad80b3` 的BERT单步及CUDA optimizer已终审，受限调用链及可见进程/共同锁核验后，单次NCCL预热worker PID 1755063、启动epoch 1793267445.751、cap300，GPU UUID `GPU-2be51dc7-d99a-7307-869b-30ed5888e701`；目录 `_state/release-day23/20261029-ddp-preimport-guard-rebind-r1-hold/warm-attempt-v2-01/`。另候选第二卡 `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0`，只要求足够显存，外来负载和拒读PID未知保持记录。恢复前先核PID/receipt/锁，不重复；当前预热及两rank均未通过，NCCL产品须实际绑定。
+
+## 2026-10-29 新 optimizer拆分身份BERT单步实证
+
+新指纹 `2dd2b3b5278d2e431eab63118d82ecd61f541063d313c6d6354724b74bad80b3` 下BERT seed821 BF16由旧checkpoint50真实恢复并单步更新至51：新restore模块实际载入201组状态并返回，603模型/moment CUDA、四组RNG一致、201梯度FP32 CUDA finite、201参数变化，样本/shape/LR与旧full及PT一致，fallback0；模型child自然rc0。原包审计器错误只检空状态call000而忽视checkpoint call001，控制器审计rc1保留；独立审计 `_state/release-day23/20261029-bert821-main-restore-split-step51-independent-audit-r1/terminal-audit.json` SHA `8be210b7258def3e6aec6d6e14c5d95009f7f1a6d09f505c2fe4a409af73a741`。旧与新step51前态201签名全同、后态200/201相同，token_type_embeddings后态只有hash不同比较，值差未知；本步loss JT 0.3322448730、PT 0.2778320313，逐步值仅观察。此单步不是完整曲线/固定eval，拆分前主树BERT/Qwen续训结果继续按旧指纹报告。
+
+## 2026-10-29 新 optimizer结构拆分身份的BERT单步运行中
+
+新执行指纹 `2dd2b3b5278d2e431eab63118d82ecd61f541063d313c6d6354724b74bad80b3` 基于旧BERT checkpoint50实际恢复并仅执行第51步，验证拆分后optimizer恢复调用、CUDA状态、RNG、梯度、参数变化及相同样本/LR；不声称完整训练或eval。单次cap1200，worker PID/PGID 1750026、start_ticks 187639585；binding SHA `3aacccfb90e4c116e9a9f8c9a5118a48bdba4c561020ca89a4801f012b33d0a1`，目录 `_state/release-day23/20261029-bert821-main-restore-split-step51-r1-hold/`。恢复先核PID/start/receipt及锁，不重复启动；拆分前BERT/Qwen实训继续按其旧身份记录。
+
+## 2026-10-29 optimizer结构拆分后定向复测
+
+主树执行指纹 `2dd2b3b5278d2e431eab63118d82ecd61f541063d313c6d6354724b74bad80b3` 相对Qwen/BERT实训身份只有optimizer_api.py和新增optimizer_restore.py两项Python变化，native编译输入未变；旧入口保留，恢复函数体AST相同。原结构失败节点现通过（705行，原800上限未改）；CPU optimizer 10/11，既有BF16 next-step moment差异依原阈值仍失败、fallback0；CUDA optimizer 11/11、fallback0。独立终审 `_state/release-day23/20261029-main-optimizer-structure-split-focused-terminal-audit-r1/terminal-audit.json` SHA `ce9c37344587d8022c0551baeb832b873ba24dd9c3b7e193711acb9c93c30e63`；原十文件总体失败、这次三阶段总体rc1均保留，不能称十文件全套复跑通过。旧身份两网络训练与新身份定向回归分别记录。
+
+## 2026-10-29 主树 Torch CPU 十文件核心集结构门槛失败
+
+230项实际执行，226通过、3原规则skip、1失败：`optimizer_api.py` 为852行，超过原800行结构上限。独立终审 `_state/release-day23/20261029-main-torch-cpu-core-ten-terminal-audit-r1/terminal-audit.json` SHA `35fb18dbf425dcaa4e138c6a66a75c400919ad1ee48e7609eb169db5d4fc2778`；四份文档测试窗口冻结一致，终态fallback未记录，进程组和可见锁/FD空，拒读PID未知。原结果保留，不调整阈值；准备拆出optimizer恢复实现并绑定新源码身份、按受影响范围复测。之前Qwen/BERT训练均属于拆分前源码 `6c3decf3…`，不会自动转移为新身份。
+
+## 2026-10-29 主树 oneDNN 显式 provider 及三个CPU节点通过
+
+默认启用、显式指定已核库的oneDNN sentinel真实CPU matmul及数值通过；新后继复用该custom-op和主树CPU core，原先受阻三个节点的setup/call/teardown全部通过，父进程fallback 0→0。两个frontend子进程均rc0且日志分别记录1、6条真实oneDNN matmul，子进程fallback未独立测量。锁及可见FD无holder，拒读PID未知。独立审计 `_state/release-day23/20261029-main-r12-onednn-cpu-successor-terminal-audit-r1/terminal-audit.json` SHA `96fa0652da767dc61c4ccf7cbc712b200cc56e0d18cc86f733053e7fc7c09d22`。原recorder参数错误rc1、原no-build oneDNN缺失失败、CPU BF16 optimizer差异及CPU cold rc1均保留；此结果不证明默认库自动发现或完整CPU套件。
+
+## 2026-10-29 oneDNN 实际 sentinel 通过，补测脚本失败保留
+
+主树默认启用并显式指定现有oneDNN库的单次sentinel自然rc0，实际加载所指定libdnnl、选中 `_mkl_matmul` 且数值检查通过。后续pytest recorder把hook参数写作 `r` 而非hookspec要求的 `report`，三个节点收集之前失败，控制器rc1；原结果完整保留在 `_state/release-day23/20261029-main-r12-onednn-cpu-supplement-r1-hold/attempt-01/`，不得写为三项通过。正在独立修正测试记录器并准备只对未执行的三个节点作新后继，复用已经构建的custom-op，不重复冷编；自动发现及frontend子进程fallback仍未证明。
+
+## 2026-10-29 主树 oneDNN 显式库 CPU补测运行中
+
+Qwen/BERT续训独立终审后，实际源码、CPU产品、provider库及头文件和可见进程/锁已核对；仅可见范围无FD holder，拒读PID未知。oneDNN单次补测controller PID 1723686、sentinel PID/PGID 1723687、start_ticks 187515046，sentinel cap420；目录 `_state/release-day23/20261029-main-r12-onednn-cpu-supplement-r1-hold/`。先核实际载库和matmul，成功后再跑三个旧受阻节点；恢复先核PID/receipt/锁，不重复启动。此为默认启用但显式指定库的配置，不预报默认自动发现或frontend子进程fallback通过。
+
+## 2026-10-29 主树 BERT 50→100 续训独立终审通过
+
+主树seed821 BF16从旧候选 checkpoint50 续训50次、0 skip，50×201梯度实际CUDA0/FP32且有限，首步201参数均变化；603模型及moment真实CUDA、fallback0。99个microbatch的样本/shape及50个学习率与旧Jittor full及PT一致；固定33样本主树eval loss 0.4661458433、accuracy 26/33，历史独立PT full loss 0.4836055934、accuracy 26/33。实际checkpoint100模型、moments、step与签名相符，scheduler epoch100；原checkpoint50严格恢复及Python/NumPy/CPU/CUDA RNG检查通过。进程自然rc0、未超时、可见终态锁和FD无持有者，拒读PID未知；独立审计 `_state/release-day23/20261029-main-bert-resume-terminal-independent-r1/terminal-audit.json` SHA `7dae1c2561ec5b7eeeb4fb3055e9d0744e2cbb5d828b1696c844c23cb90403d8`。前50步属于旧候选，PT为独立full任务参照，不声称主树从头训练或抹去旧双seed strict失败。
+
+## 2026-10-29 主树 BERT 50→100 自然完成，待独立终审
+
+主树seed821 BF16 BERT续训单次自然rc0、未超时；包内终审14/14报告50次更新、0 skip，逐次201个FP32 CUDA梯度有限，99 microbatch样本游标及50学习率与旧full一致；step51 201参数变化，step100 201模型/402 moment真实CUDA、fallback0，checkpoint100核心文件存在。固定33样本eval loss 0.4661458433、accuracy 26/33；同协议历史独立PT full为0.4836055934、26/33，属于任务级参照而非同一续训来源。receipt SHA `36c649d749d139ac4f0a2974d4a7d3d18bfb5e89e6584c6339395f17eb83e0c3`、包审计 SHA `3601fe446a3d570e82ca79ebb6049b201b7198a46b1bba91d257bdaa2120e4cc`，独立终审待完成。前50步为旧候选，不称主树从头训练；旧BERT两seed strict FAIL保留。
+
+## 2026-10-29 主树 BERT 首次续训更新通过
+
+主树BERT seed821 BF16第51步非零学习率实际更新，201/201模型参数发生变化，更新后201模型与402 Adam moment真实CUDA0、fallback0；已记录step51–59每步201梯度设备，进程 PID 1710979/start_ticks 187428056 继续至100。checkpoint50的逐名状态及四组RNG此前已实际恢复，前50步来自旧候选；训练全程有限值、固定验证和终态仍待报告，不预报结果。
+
+## 2026-10-29 主树 BERT checkpoint50 加载通过，续训进行中
+
+实际主树seed821 BF16 BERT checkpoint50 的model/optimizer/scheduler/scaler具名签名strict与functional均通过；201模型参数及402 Adam moment实际public/native cuda:0，201 optimizer step、trainer及scheduler为50，Trainer真实加载边界Python/NumPy/CPU/CUDA四组RNG一致。worker PID/PGID 1710979、start_ticks 187428056仍运行，进入更新；报告路径 `_state/release-day23/20261029-bert821-main-resume-executable-r1-hold/runs/bert-821-resume/`。当前只是加载通过，不预报训练与固定验证终态，前50步来源旧候选。
+
+## 2026-10-29 主树 BERT checkpoint50 续训运行中
+
+seed821 BF16单次主树BERT 50→100续训已启动，worker PID/PGID 1710979、start_ticks 187428056，cap1800；release review SHA `7a1a74e902ea377a611a092d9a051b792e30d4a66e269d57932a7769703bf8ae`，binding SHA `b428f7e81d13c865b83342952c1951c7fa543208e1859e44e22dd0a21f989da7`，目录 `_state/release-day23/20261029-bert821-main-resume-executable-r1-hold/`。旧checkpoint50已离线逐名核对201模型tensor、201 optimizer state及scheduler，RNG文件记录各组但旧raw hash不可得；实际主树设备、恢复、更新、数据及验证仍需实测。前50步来源旧候选而非主树从头训练。恢复前核PID/start、receipt、锁，不重复启动。oneDNN与其他JIT保持等待。
+
+## 2026-10-29 主树 Qwen 实用续训及 lifecycle 终态通过
+
+主树seed821 BF16从旧r10 checkpoint51续训至102，实际51次更新、0跳步；每步112梯度均FP32、真实CUDA且有限，101个样本ID与旧full及PT后半程一致，112 LoRA参数均变化并与旧full最终参数一致。固定验证loss主树2.4555516243、PT 2.4566440582；新checkpoint原始portable内容和sidecar严格一致。predict返回loss 2.4555516243，adapter重载/生成及merge完成，merge logits最大绝对差0.000289917在原0.001预算内，fallback0；进程自然rc0、未超时。独立终审 `_state/release-day23/20261029-main-qwen-resume-terminal-independent-r1/terminal-audit.json` SHA `2960455d2342bb592ed7a1e83756fb430984c4d3eac738131429d103e94308d8`。此为主树后51步续训，前半程与完整full来自旧r10；eager evaluation为限定workaround，当前checkpoint直接由原生PyTorch torch.load optimizer仍因portable格式失败，旧strict/CPU BF16和oneDNN失败保留。GC实际重计算及正式性能/显存不在通过范围。
+
+## 2026-10-29 主树 Qwen 续训已达102步，lifecycle运行中
+
+主树seed821 BF16从旧r10 checkpoint51续训报告写出：51→102共51次optimizer更新、0跳步；51组梯度无缺失/非有限，dtype FP32；101个续训microbatch的step与sample ID同旧full后半程逐项一致。checkpoint 337实际CUDA张量、112 step、scheduler和四组RNG恢复已核验，冻结基座不变、fallback0；两次eager evaluate返回，固定验证loss 2.4555516243。报告和记录位于 `_state/release-day23/20261029-main-qwen-checkpoint51-resume-eager-r2-hold/runs/qwen-821-resume/output/`。前51步与对照full为旧r10源码，主树不是从头训练。进程PID 1674876/start_ticks 187236743仍运行，strict lifecycle/predict尚未终态，不预报最终通过；恢复前核PID、receipt与锁。
+
+## 2026-10-29 主树 Qwen checkpoint 加载通过，续训进行中
+
+主树Qwen训练进程 PID 1674876/start_ticks 187236743 仍运行；checkpoint51 同进程状态比较strict hash及functional通过：337个张量（112模型参数、224 optimizer张量、1 buffer）实际public及native cuda:0，112个scalar step均为51，trainer step及scheduler epoch均51，Python/NumPy/CPU/CUDA RNG恢复检查通过。报告在 `_state/release-day23/20261029-main-qwen-checkpoint51-resume-eager-r2-hold/runs/qwen-821-resume/output/`。仅证明加载，不预报后续更新、样本、验证或终态；恢复先核实际PID/receipt及锁，不重复启动。
+
+## 2026-10-29 16:39 +0800 主树 Qwen 实际续训运行中
+
+主树checkpoint51续训已单次启动，controller PID 1674865，训练进程PID/PGID 1674876、start_ticks 187236743，GPU UUID `GPU-2be51dc7-d99a-7307-869b-30ed5888e701`；同进程身份文件确认导入主树及CUDA core SHA `bbd4a209b3f0e780bc19cac53dde4d1b7f7ea98d305fae55d70c012800084839`。路径 `_state/release-day23/20261029-main-qwen-checkpoint51-resume-eager-r2-hold/`；恢复先核PID/start、receipt、锁与实际记录，不重复启动。尚无训练/续训终态结果。oneDNN补测及多卡补测仍HOLD，不与首次JIT并行。
+
+## 2026-10-29 主树 CUDA 定向回归通过；Qwen 续训放行
+
+主树CUDA 8阶段91/91节点、各节点setup/call/teardown通过，replay 6、optimizer 11、alias 22、writes 1、cat 14、RMSNorm 2、pow 1、factory 34，全部自然rc0、fallback0；writes与pow含CPU子分支，代表性alias/pow探针确认CUDA，不能推断每节点独立dispatch遥测。独立终审 `_state/release-day23/20261029-main-r12-cuda-targeted-plan-r1-hold/attempt-01/terminal-audit.json` SHA `2203487021fbfe15d226a72a39bf9cea36d4afb3f20669bac9437df2689f0c98`；目标锁和进程组空、终态cache 1576项。factory 使用与旧PyTorch独立对照完全相同的测试文件，本次不是重新运行PyTorch。
+
+主树Qwen从旧r10 checkpoint51继续至102，固定seed821、BF16、eager evaluation、无Python overlay；审核实际产品、CUDA阶段、数据/checkpoint和GPU后放行，release review SHA `c79c7396686ca97befea50aba544dbb1378dc5a79e149ccae03550f1260067b2`。前51步及完整两epoch训练曲线来源仍是旧r10，主树只验证后半续训，不预报结果；CPU BF16数值失败、旧oneDNN失败及旧Qwen失败均保留。性能独立未验收。
+
+## 2026-10-29 主树 CUDA 定向回归进展
+
+实际主树源码及CUDA产品下，replay 6/6、optimizer 11/11、storage alias 22/22、显式写入1/1（含CPU/CUDA子分支）、autocast cat 14/14、mixed RMSNorm 2/2、pow 1/1（含CPU/CUDA子分支）依次自然rc0、fallback0；代表性alias/pow设备探针为真实CUDA，不推断每个节点均有独立dispatch遥测。factory 第八阶段正在运行，PID/PGID 1671783、start_ticks 187221014；恢复先检查进程与 `_state/release-day23/20261029-main-r12-cuda-targeted-plan-r1-hold/attempt-01/serial-receipt.json`，不要重复。结果未终审，不能推断训练通过。主树Qwen续训待所有阶段终态和审查。
+
+## 2026-10-29 主树 CUDA 定向回归已启动
+
+串行8阶段计划基于已核验主树CUDA cold产品与指纹 `6c3decf371a2cb7d14b7c224f2f3effaa77817a3cbe5b93d0193891cc93818d2`，首先运行 replay；worker PID 1656851、PGID 1656851、start_ticks 187179714，GPU UUID `GPU-2be51dc7-d99a-7307-869b-30ed5888e701`，入场可用显存58054 MiB。记录位于 `_state/release-day23/20261029-main-r12-cuda-targeted-plan-r1-hold/attempt-01/serial-receipt.json`；各阶段单次cap900，失败即停，不自动重试。恢复时先核进程和receipt，不预报测试结果；完成后才释放主树Qwen checkpoint51实际续训。
+
+## 2026-10-29 主树 CUDA 冷构建身份核验通过
+
+主树执行指纹 `6c3decf371a2cb7d14b7c224f2f3effaa77817a3cbe5b93d0193891cc93818d2` 的 CUDA cold 自然 rc0，耗时393.37秒、231个编译单元；实际设备 GPU UUID `GPU-2be51dc7-d99a-7307-869b-30ed5888e701`，Jittor及Torch导入均为 has_cuda/use_cuda=1。receipt SHA `0ae76fd99a6f28033d7a76a3fdae80df8e1ade9ef454353fa3c62ae096cb2aec`；独立终审 SHA `ec4847e591ce955d0e89f68bae0d56b7dd3112610a9428704b8a081386051332` 核对源码、38个补充pyc、core/utils/stamp、编译输入及缓存终态，可见锁与holder为空，拒读PID仍未知。仅证明冷构建和shim身份，不证明tensor数值、训练或性能。原CPU cold rc1及限定native审计继续保留。主树CUDA定向回归准备串行执行，主树实际Qwen checkpoint续训尚待；历史mixed身份结果不直接转写为主树通过。
+
+## 2026-10-29 16:19 +0800 主树 CPU 补测通过，CUDA cold 运行中
+
+主树CPU补测：修正后的 FollowRuntime 内部分支在默认配置1/1通过，3个原oneDNN缺失节点在明确 `use_mkl=0` 的CPU配置3/3通过，两个测试worker sentinel native CPU、fallback0；独立终审 SHA `67f92e338d0c2fa81a143cb713b70000877032b958e4754b89a22094654ed18b`。原四项失败保留，`use_mkl=0` 不证明默认oneDNN路径；frontend自建子进程的fallback未单独记录。原主树optimizer BF16严格moment差异10/11保留；别名、factory、replay及library已分别按前节记录。
+
+测试断言修正后主树执行指纹 `6c3decf371a2cb7d14b7c224f2f3effaa77817a3cbe5b93d0193891cc93818d2`；与已审CPU native core对应清单只有该测试文件变化，生产和编译源码未变。主树独立CUDA cold 单次cap900已启动：目录 `_state/release-day23/20261029-main-r12-cuda-cold-resources-testfix-r2-hold/`，worker PID 1648007/start_ticks 187120314，GPU UUID `GPU-2be51dc7-d99a-7307-869b-30ed5888e701`，根审阅 SHA `364fe9f057b84dea7666d8396214ea2970374bd3415c191f74dea8da99c03800`。38个gitignored pyc及对应源码单独绑定，不删除或重写；恢复时先核 PID/start/receipt/lock，禁止重复。CUDA构建与后续main设备、optimizer、replay测试尚无结论，性能验收独立。
+
+
+## 2026-10-29 16:16 +0800 主树 CPU 定向结果与补测
+
+独立审阅采用实际主树 native core 后，native JVP/pow三项全部通过、fallback0，终审 SHA `43ba3c2e9e2e1fdf4a1feb11f12a92b0939c6dc1400137467495d7590736ec6a`；最初 pytest hook 参数错误的0执行失败与 cold rc1均保留。主树 Torch CPU：replay 6/6，optimizer 10/11（已知BF16下一步moment差异），storage alias 22/22、factory 17/17、library/owner 17/17通过，fallback0。autograd semantics 23 passed/2 failed/1 CUDA-only skip，independent frontend 0/2 failed：其中 CPU fill/zero 和两个frontend均被默认启用oneDNN但 `JITTOR_NO_BUILD=1` 且无本缓存匹配oneDNN产物拦住，不是测试通过；将单独在明确 `use_mkl=0` 的配置补测，并保留默认oneDNN路径未验证。
+
+另一失败为内部 FollowRuntime 测试错误地要求 native `detach()` alias 的 requires_grad=False；历史实际诊断显示该 native alias 创建时为True且写入前后不变，frontend target为False。主树仅修该测试：记录并检查 native alias原值不变，保留 frontend标志、共享地址、数值和dispatch/fallback断言；修改前备份 `_state/release-day23/20261029-main-followruntime-test-fix-r1/`，原失败保留。生产源码/已产main CPU core未改；新测试身份需重绑，不能将后继补测回写为原通过。
+
+
+## 2026-10-29 16:03 +0800 主树 CPU cold 产物已生成，原终审因 ignored pyc 失败
+
+独立限定审计 SHA `a244fb856a7f467ac2d2b2fa05c17b8e5481c108cde5aafe3d39f9a30d5050de` 确认实际主树CPU core、utils、stamp、227单元及8个生成器可作为 native 后继验证产品；38项pyc都不属于实际编译单元或生成器，header与对应冻结源码及递归编译语义一致，静态对比不能确定哪些曾被加载。原 child rc1、Torch shim 未导入的边界保留，后继须实际 warm import 和运行，不重跑冷编。cache-after SHA `504f145f17e7c15503c8cc709498a2a52d7d07ec6d479898e61e44c883565c97`，可见锁/holder空、拒读未知。
+
+主树独立 CPU cold 实际编译227个单元（190仓库、37生成），core/utils/stamp已生成；child 自然 rc1、非超时，原 receipt SHA `1a832710782011869fc03a488c6796bb4788cd052ed70426a41c9c1c152dadc5` 保持失败。fresh-build 检查38项报错均为 `backends/cuda/**/__pycache__/*.pyc` 不在 tracked+非ignored source清单；尚不能将产物直接写成已通过。已核实38个pyc均是既有被忽略文件、对应冻结 `.py` SHA一致、Python magic/时间戳/大小匹配，按同解释器递归比较编译语义码38/38一致；是否可在限定身份内采用产品仍在独立终审，不重复冷编、不删除字节码。终态组/可见锁空；实际 native/Torch测试仍待运行。
+
+
+## 2026-10-29 15:57 +0800 Qwen 实用续训通过；主树 CPU 冷构建运行中
+
+r10 native/base + r12 三个 Python overlay 的 seed821 BF16 实用续训已独立终审通过：checkpoint51 实际加载337 tensor均真实 CUDA0、状态值严格一致，112 scalar step与scheduler一致、Python/NumPy/CPU/CUDA RNG恢复；后续51次更新及101个样本 ID/shape与full后半程一致，51×112 gradients finite/FP32/真实CUDA、fallback0，112个LoRA tensor实际变化，checkpoint102全部928数组与连续full相同；验证与predict loss均2.4555516243。此前崩溃的 predict 此次返回，adapter保存/重载、生成及merge在原协议内完成；进程自然rc0、未超时。独立终审 SHA `19d01e4bf02a2595a4522587727c2356d1224d62d32ba352a50800b2da5e9f70`，旧 r10 full/predict 和 resume rc1均保留。该结论只覆盖本配置、mixed源码身份、eager evaluation；CPU BF16 optimizer 10/11差异和通用图内写回未解决，性能/显存未验收。
+
+主树代码已整合相应补丁，自己的执行源码指纹 `647717bf832a74e555e6d3b12f8a9b77f1c530a49ff04322391af99e440ab0d6`；独立 CPU cold 单次cap600正在运行，目录 `_state/release-day23/20261029-main-r12-cpu-cold-docmutable-r1-prepared/`，controller PID 1630556、worker PID 1630567/start_ticks 186981816，根源码审阅 SHA `e5e21fa657fb1861ba004f9df08cba88e5dcf6614827d463594aa6a15c675501`。恢复先查PID/start与receipt，严禁重复；该构建不是测试通过，主树 native/Torch/真实CUDA回归与模型验证待后续单独执行。状态文档例外只用于此构建/指定native，不用于读取看板的结构门禁。
+
+
+## 2026-10-29 15:41 +0800 r12 混合 CUDA optimizer 回归通过，Qwen 续训已启动
+
+独立实用续训审计 SHA `4d4d6529efe3be362d2a92f452a1ed97812008b31292ddf0a0b149309b9da7e9`：continuous full 与 resume 的 checkpoint102 sidecar各928键、无缺失或数值差，112个 LoRA tensor 自51→102均变化。程序已越过原 `trainer.predict` 崩溃点并创建后续 lifecycle 保存目录；预测数值及 lifecycle/进程终态仍待实际报告。该审计范围仅本次 r10 native + r12 Python mixed、seed821 BF16、真实 CUDA/eager评估，不能推及其他任务。
+
+真实 mixed Qwen 新进程续训报告已保存：从51到102共51次 optimizer更新、0跳步，后半程101个 sample ID/shape与原 full 逐项一致，记录 loss 均值均1.153616764167748；每步112个postclip梯度均存在、finite、FP32、native cuda:0，fallback0，冻结基座未变，固定验证loss与full同为2.4555516242980957。checkpoint模型/optimizer/scheduler数值、337 tensor CUDA设备、112 scalar step和四组RNG此前已实测恢复；practical-report SHA `fbdd09311192df7dd56795d5afd801c83771fc5b1d2c258e825b11ac3216332a`。该直接证据支持此次 mixed 身份的实用续训，预测/lifecycle 与进程仍未终态，不把整个流程预报为成功。
+
+新进程 checkpoint51 实际加载通过：strict hash与functional比较均true，928项值无失败，337个模型/optimizer tensor 均真实 cuda:0/native CUDA0，112个 live scalar step 均51且与 checkpoint/trainer/scheduler 一致；Python、NumPy、CPU、CUDA 四项 RNG 恢复检查通过。后续样本游标、51次更新及终态验证仍在运行，不能提前认定续训通过。
+
+主树已按完整前置字节核对带入 r12 optimizer 设备恢复修复与测试，移植前后哈希及原文件备份位于 `_state/release-day23/20261029-main-optimizer-restore-integration-r1/`。r11 replay 缓解主树备份在 `20261029-main-replay-integration-r1/`。main-specific 构建和运行验证均待执行；CPU BF16 10/11、ACL未验等范围仍保留，不能直接转为主树通过。
+
+r10 native/base 加冻结 r12 三个 Python overlay 的真实 CUDA 定向回归11项、33阶段通过，覆盖 CPU+CUDA 两组 AdamW FP32、BF16参数/FP32 moment、SGD momentum、CPU map_location后迁回每个参数的真实 device、下一步更新与异常原子性；fallback0，独立终审 SHA `f14b9e3616f5f8350c2f8b76cca887b4950aa1558b0a43fc30ef2346e78ec677`。范围为 mixed 产品，不是 r12 native冷编或其他NPU/多GPU的证明。CPU 同源11项为10 passed/1 BF16下一步 moment比较FAIL，原 receipt `3c90b5b760fd42e7f729e82117a0e9f81c95cf3c165c34cda8789091e5ff9767` 保留。独立诊断四场景记录到两侧第二步前参数、梯度、FP32 moment一致，第二步参数一致，moment最大差6.676465e-5/约0.093548%；与一次BF16中间舍入相符为数值推断，尚非已验证根因或长期无影响证明。
+
+基于同源已审核的 r10 full checkpoint51，r10 native + r12 Python mixed 新进程 resume821 已启动，单次 cap1800s，worker PID 1619262/start_ticks 186889301，根审阅 SHA `b8ab39769dc547649b454edd513f8313da0560d2c1b05595207e7107b7fb7fb2`，新状态目录 `/data6/cgq/jittor-lab/_state/release-day23/20261029-r12-mixed-qwen-resume821-eager-r1-hold/`。其目标是实测模型和 optimizer state 的设备/值、step/scheduler、RNG、样本游标及后51次更新；启动不等于恢复通过。旧 r10 resume224个moment落CPU失败以及full后predict失败保持。需要恢复时先检查 PID/start、receipt、锁，勿重复运行。
+
+主树已按单独备份移入 r11 已观测 alias写入时预先拒绝捕获的缓解及测试；main源码身份尚未独立构建/测试，不能转移 mixed 结果。optimizer r12 已按本节增量带入 main，主树验证待执行。
+
+
+## 2026-10-29 15:36 +0800 r11 真实 CUDA 六项通过，r12 CPU 选择器待修
+
+r11 混合验证使用已审 r10 native 产物及 r11 两个实际加载的 Python 模块，真实指定 GPU、cuda:0 native dispatch、fallback0，六个目标测试与18个 setup/call/teardown 阶段全通过，pytest/worker rc0，实际 item.path 均为冻结 r11 测试；独立终审 SHA `af8f53df14a0feb0c4c496db1f4584141efca0b5deff68a2bc1e92a6a52936ab`。包括已观察 alias 写入时拒绝捕获、别名与旧值、多次不同输入、异常恢复、无写模型仍回放和仅捕获阶段写入的 guard；不是 r11 原路径冷编，也不能宣称通用图内原位写回。原前置 use_cuda 断言失败及文件级 accounting 警告保留。
+
+r12 optimizer CPU 首次混合尝试在收集结束前失败、0测试实际调用：`-k cpu` 同时命中了函数名并选入 CUDA 参数，recorder 因22项非预期中断；原 receipt SHA `9e4388c7c775e701c742285b91e974aed757690dfef436dbd7f8cb9d8de9a0cd` 保留。尚无 r12 optimizer CPU/CUDA 结果，正在按真实参数 device 精确筛选后继续。真实 Qwen checkpoint resume 与 predict 问题仍待解决，性能验收仍独立未完成。
+
+
+## 2026-10-29 15:32 +0800 恢复：r11 CUDA 启动断言失败，r12 待功能验证
+
+已重新检查现场并 fetch `origin/cgq_transformers`：SHA `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，仍为 main/r10/r11/r12 HEAD 的祖先，不需整合；所有树的既有 dirty 状态保留。上次 r11 混合 CUDA 尝试在收集前 rc1、0测试：worker 在 `import torch` 后错误断言 `jt.flags.use_cuda==0`，而同源真实 preflight 已记录导入后 use_cuda=1；该测试基础设施失败原 receipt SHA `b76b9e01426199dcecf5bd01cf91720284e0bc4abbf0e09c6a94ab7c400872d4` 保留，未证明 CUDA 功能失败，也未证明通过。当前可见范围无本任务活跃训练或构建；不可见进程/锁持有者仍按权限范围核查。
+
+r12 已冻结为 `torch-compat-replay-optimizer-restore-20261028-r12`，fingerprint `3b98d6922e55309fc10342220d1cf5cf7fd7964fc6621fa2132ca8fc306b0206`：r11 基础上按参数 native dispatch 迁移 optimizer moments并保留 dtype，新增 optimizer 恢复测试；尚未实际运行。当前推进修正 CUDA 启动断言的 r11 定向后继及 r12 CPU/CUDA 状态恢复测试，保持首次 JIT 串行。原 Qwen 新进程 resume 的224个CPU moments是真缺陷、112个 scalar step设备检查为检查器误判；完整训练/eager eval 已有证据但恢复仍未通过。
+
+
+## 2026-10-28 17:07 +0800 r11 replay 写入缓解：混合 CPU 六项实际通过
+
+r10 native/core + r11 两个 byte-verified Python 模块及 r11 测试的明确混合 CPU 运行，6节点、18阶段实际通过、pytest/worker rc0、fallback0，覆盖已观察写入时 alias、旧reader、自动/显式replay拒绝、异常恢复、无写入正常replay，以及捕获时才发生写入的 guard 反例。controller 原 receipt `3812b428bf9983900064d81a5e95c563b841b7bf76a44cedfbab9df64c458743` 保持 `FINAL_GUARD_FAILURE_RETAINED`：14个现有 shim 文件只有mtime改变、SHA/size与canonical source均相同，另新增24个 CPU JIT 文件、无删除；完整保存证据独立终审 SHA `4714dbf888fd3317b1119b2b76623025d2b9073ec145c83a4a5f5932f6ad8a3d`。pytest六个call确有记录但 nodeid文件部分为空，JITTOR 文件级统计报0 executed，保留此统计界限。此结果不是 r11 native冷构建、CUDA验证或任意图内写入重放支持。
+
+optimizer moment CUDA恢复缺陷正在 r12 新候选修复；新进程恢复审阅器单独修正 Python step 标量误判，15项无GPU假对象检查通过，仍未绑定实际新源码或证明恢复。
+
+
+## 2026-10-28 17:04 +0800 r10 checkpoint51 恢复被真实 optimizer 设备缺陷阻断
+
+seed821 新进程 resume 自然 rc1、非超时，严格模型/optimizer/scheduler 状态 hash 全一致，928项数值检查通过；模型参数/缓冲 113 项仍为 cuda:0，但 112组 Adam 的 `exp_avg`/`exp_avg_sq` 共224个保存时为 CUDA、加载后实测为 CPU。单卡 Trainer 用 `map_location=cpu` 加载 checkpoint，`compat/torch/optimizer_api.py::_load_state_dict_torch` 直接引用这些 tensor 而未迁到对应参数 device，属于实际设备恢复缺陷，首个续训更新、RNG及样本游标尚未执行，不能判恢复通过。另有112个 optimizer step 是 live Python标量，检查器错误地要求它们具备设备元数据，须与真实 moment 缺陷分开修正。
+
+原失败及对照证据保留；独立终审 SHA `07d935cac14d5b1bd29b6ad9de65925f81711b0378a541049c6d4fda4bd1f4a2`。下一步在新候选修复参数对应 device 的状态加载及检查器标量处理，先做CPU与真实CUDA聚焦测试，再从原完整 checkpoint 新进程验证；不抹去已完成的 full/eager eval，也不重置旧T5/Vision预算。r11 graph-replay 缓解测试与 optimizer 恢复为独立功能项，首次 JIT 仍串行。
+
+
+## 2026-10-28 17:02 +0800 r10 Qwen checkpoint51 新进程续训进行中
+
+基于新 full 实际 checkpoint51，不采用旧缺失文件或 best模型/末优化器拼装状态，seed821 resume 新进程已启动，单次 cap1800s，续训51→102，评估仍显式 eager；worker PID 1214963/start_ticks 178729759、argv 已核对，目录 `/data6/cgq/jittor-lab/_state/release-day23/20261028-r10-qwen-practical-resume821-eager-final-r1-hold/`。根启动审阅 SHA `875a368721158b8b33d794b6871e100b40bf0b6cdf156506ec64a64b81502ba8`，preflight→full 缓存新增1220、无改删的转换审阅 SHA `35c076a5fefc9fdeb3d2e7383547f96ba39c2c1eadcea3cd0eed11fdc58d47b8`；启动前 GPU 空闲39214 MiB，可读锁/holder空，1658个拒读PID未知。恢复时先核 PID/start、原 cache/receipt，禁止重复。
+
+checkpoint portable CPU 文件与112组状态已验证，但真实 GPU 加载、RNG、数据推进与续训训练行为尚无结果。原 full 的102更新/验证证据有效，随后 predict rc1 仍保留。r11 针对自动捕获写入的缓解与主树回归仍待在所有首次 JIT 串行条件下实测。
+
+
+## 2026-10-28 16:59 +0800 r10 Qwen eager full 已完成训练，predict 仍失败
+
+独立终审 SHA `7a74ecef613a8a2056198b65017e6467b58e137e4ad8578be16afdd9013473f5`：202条 microbatch 的样本 ID/shape 与匹配PT一致，epoch1 JT/PT 1.20546931/1.20568009，epoch2 1.15361676/1.15406398；每步112个 postclip 梯度均 finite/FP32/真实 CUDA0，checkpoint51→102的112个可训练 tensor 均变化，固定验证 loss JT/PT 2.45555162/2.45664406。新进程续训尚未运行；predict 的 rc1 仍是未修功能缺陷。
+
+新 seed821 BF16 run 真实 CUDA 完成 102/102 更新、202 microbatch、0跳步，fallback0、冻结基座未变化；按每 epoch 101 条 microbatch 同口径计算训练 loss 为 1.205469→1.153617，匹配 PyTorch seed821 约1.20568→1.15406。固定17样本验证 loss JT 2.4555516243、PT 2.4566440582，单seed观察接近；三个 Trainer eager evaluation 均返回，step51/102 checkpoint 已保存。`practical-report.json` 在后续阶段之前保存，当前训练+eager验证已有直接证据，仍待独立终审和新进程续训；模型/optimizer的各文件必须审阅，best模型与训练末optimizer不是同一原子快照。
+
+完整进程自然 rc1、非超时：训练和验证后 `trainer.predict` 未处于 eager 作用域，再次触发 r10 graph replay / alias-preserving write 捕获错误；不能写成整个工作流或预测通过。原严格结果、失败 traceback、两次 checkpoint 和报告均保留。r11 只针对 warmup观察到的写入，尚未运行；checkpoint51 portable CPU 对照通过不等于新进程恢复。正式性能/显存验收仍未完成，不能从训练耗时推断性能。
+
+
+## 2026-10-28 16:50 +0800 Qwen eager 评估新 full 已启动；r11 定向缓解待测
+
+checkpoint51 的9个文件已确认稳定并用独立 PyTorch CPU 与可信 portable pickle 显式映射核验：112组 optimizer state 的 step 均51、scheduler step51、四项 RNG 均存在，926条 sidecar 数值严格一致；保存 LR 与 scheduler/6步warmup线性计划吻合。CPU audit SHA `7480abd38074fd7ac74ab05a3ae6c815c84ffbefa64022b98f10d78cfa6fe232`。原 `torch.load` 直接读取 optimizer.pt 因该兼容层使用 portable pickle 格式失败，属于跨框架读取限制，保留原失败，不称文件损坏；一次日志/保存LR时序误判也保留并以实际计划复核。此为CPU文件审计，不证明Jittor新进程设备、数据游标或续训行为。
+
+新 full 已走过原崩溃点：首次 Trainer eager evaluation 自然返回，inside `auto_graph_replay=0`、`keep_graph=0`，423个参数/缓冲 native cuda:0、fallback0，退出后 replay 恢复1；epoch1 eval loss 2.468442678451538，terminal SHA `7b781e179925ec8f91dcf96be5b0a48f8be897e4b47c576dec1f2ad15a367724`。checkpoint51 的 adapter、optimizer、scheduler、RNG、trainer_state和 sidecar 已出现，保存和完整训练仍进行；文件存在不是已核验恢复，不声称训练/恢复或 graph replay 通过。首两步实际CUDA梯度/更新门禁也通过。
+
+针对 r10 自动 graph capture 验证崩溃，新的 seed821 BF16 full 以相同权重、数据、102更新预算单次3600s启动，仅在整个 `Trainer.evaluate` 作用域设 `auto_graph_replay=0` 并记录真实设备、keep_graph、fallback与标志恢复；这是实用训练的 eager 验证路径，不是 graph replay 修复。状态目录 `/data6/cgq/jittor-lab/_state/release-day23/20261028-r10-qwen-practical-full821-eager-eval-final-r1-hold/`；worker PID 1200873/start_ticks 178667264、argv 已核对，恢复时先查原进程身份和 receipt，禁止重复。根启动审阅 SHA `3c5efd89b500c1c8e74038b6fe2c6eb5762d6c321b4db09badb0b97163cf43d1`；原失败前后 cache 无旧文件改删，新增1200项，与当前 baseline 逐项核对，转换审阅 SHA `82e1b4e13accfb63c17c2a2c3142907dfca368c39612823cef83eb5d8ce57390`。启动前 GPU 空闲33290 MiB，1624个拒读PID未知；实验/正确性 cache 串行，不用于性能。尚无新训练、评估、checkpoint或续训结论。
+
+新候选 `torch-compat-graph-replay-inplace-20261028-r11` 另行实现只针对 eager warmup 实际观察到的 alias-preserving 写入：完成该次结果后拒绝 capture 并返回结果，后续走 eager；保留 native capture guard，不能认定任意状态变化、非连续路径或图内原位写均得到支持。CPU/CUDA定向回归尚未执行；r10原崩溃和日志原样保留。
+
+
+## 2026-10-28 16:20 +0800 r10 Qwen 首 epoch 后验证崩溃，修复中
+
+seed821 full 自然 rc1、非超时；前51次更新日志 loss/grad_norm/LR 均有限，同口径51日志平均 loss JT 2.387310、PT 2.387724，首 epoch 局部变化受样本顺序影响，不能据此断言两 epoch 下降。验证阶段 graph_replay 捕获执行 Qwen causal mask 的 `kv_arange += kv_offset`，进入 `_copy_into_preserving_aliases` 时因 `state_capture || keep_graph` 被显式拒绝而崩溃；这是当前统一候选真实功能缺陷。Trainer 在保存前先验证，故无 checkpoint51、无固定验证结果和续训证据，不可从该运行续训或声称实用训练通过。首两步真实 CUDA、finite 梯度和实际更新证据仍有效。
+
+原 receipt SHA `c53039bfdc0845d0bbabad842c8c2ec39491d60d4e20e6a8615143f3908867d6`，worker.log SHA `6346ee30ef7cc212e7bd5ebbcf2db1f251b238ea56ffc90413955c8289a6e5fe`，终态 cache SHA `76cee5443414f3a41cb9604c223c0637bdbedfcc6da5a5638de2e5ce8f42a3d3`；可见所属进程/锁清理，1601个拒读PID仍为未知。已开始检查保留别名语义的 capture 拒绝/安全降级或图内写入机制；未经具体测试不能简单改回 assign 或宣称修复。原失败不覆盖，旧T5/Vision预算不动。主树已整合的 r10 代码受同一缺陷影响，CPU cold HOLD 只适合验证该旧身份，修复后须形成新身份。
+
+
+## 2026-10-28 15:53 +0800 r10 Qwen seed821 full 实际运行中
+
+更新：第2步即首个非零 optimizer LR（约5e-6）完成，112个参数的梯度及 Adam moments 真实 CUDA、FP32且 finite，fallback0，56个 LoRA B 全部实际更新，全部112参数数值变化；56个 A 此刻梯度为零，其变化可能来自 weight decay，不能把变化当成 A 的非零梯度证据。`first-nonzero-update-evidence.json` SHA `efb7194c2b27a48138d6870e57e8806994b86b0a9fd7a5972891a1e326066033`。证明实际前后向与一次非零更新；完整训练、固定验证和恢复仍无结论。
+
+更新：真实 Qwen 第1个 optimizer step 已通过有限值和设备门禁，两个 batch1 CUDA 输入、112个梯度及两组 Adam moment 逐参数均 finite/FP32/真实 CUDA，optimizer 覆盖无遗漏重复，fallback0。warmup 实际 optimizer 前 LR 为0，112参数保持不变符合预期；两条累积口径 loss 0.913073/1.469827。首步证据 `first-update-evidence.json` SHA `d1a106e68094e3fcb27800ce2a1722b07a44d74b2eb2124e09604c63026ffa96`，仅证明首步前反向和零LR状态；首个非零更新、学习曲线与恢复仍待实际结果。
+
+新增 `test_library_saved_alias_version.py` 检查注册的 library backward 保存输入后经 detached alias 修改必须拒绝反向；同字节测试副本在独立 PyTorch CPU 实际1 passed，Jittor 主树尚未执行。FollowRuntime 新测试补充写入前后 stopped-gradient 断言；这些均未替代真实主树构建与回归。
+
+主树进一步按依赖整组带入 shared storage version、反向实际读取校验、no-grad 保别名 copy、fill/zero 目标 placement 及存储回归；既有 dirty 内容前后副本与哈希保存在 `_state/release-day23/20261028-main-storage-integration-r1/`。FollowRuntime 内部回归改用已独立诊断的 native holder swap 构造，其旧错误前提的 r10 FAIL 原件仍保留。15个受影响 Python 文件已做 AST 语法检查，主树冷编译、真实运行、CPU/CUDA 和新回归均待执行，实用训练尚无主树结论。
+
+主树另外逐项带入 SiLU 低精度中间值、autocast cat、梯度 dtype、混合 dtype RMSNorm 和 pow 舍入修复及对应回归，修改前副本、前后 SHA 保存在 `_state/release-day23/20261028-main-numerics-integration-r1/`；autograd 只移植梯度 dtype，存储版本 hunks 尚未混入。主树重新编译和相关 CPU/CUDA 验证均待执行，不能把候选测试当作主树通过。
+
+主树已单独带入常量工厂叶节点修复和17项回归测试：只在 `compat/torch/installers/factories.py` 插入六个常量工厂的 stop_grad，保留原有 dirty 修改，插入前文件与哈希保存在 `_state/release-day23/20261028-main-factory-leaf-integration-r1/`；测试为 `compat/tests/torch/test_factory_leaf_training.py`。此为新的主树源码身份，尚未在主树运行回归，不把 r10 通过结论转移给主树；正在运行的 r10 训练源码未改。其余存储/alias、SiLU、cat、gradient dtype、RMSNorm、pow、fill/zero 改动仍需依赖审阅后整合。
+
+新用途为同源 r10 的 Qwen LoRA BF16 实用训练，单次上限3600秒、102步、2 epoch，checkpoint51 留待新进程恢复；不动旧 T5/Vision 诊断预算。实际 final 在 `/data6/cgq/jittor-lab/_state/release-day23/20261028-r10-qwen-practical-full821-final-r1-prepared/`，source fingerprint `2b8fa30420b413fc2736f8c29b509bc37ce09387ddca1f37db71f064636f4c22`，launch review SHA `70b4b906596dd40e6583d4a70db7cca2c04c59e25e38853e04b07fd899a650e8`。controller PID 1144682，worker PID 1144693 / start_ticks 178318133，argv 指向真实模型、BF16和 CUDA；进程现正在执行，恢复时先核查 PID/start、receipt 和 cache，禁止盲目重复。启动前GPU UUID `GPU-2be51dc7-d99a-7307-869b-30ed5888e701` 空闲33108 MiB，正确性不以利用率为条件；可见cache holder和锁为空，1625个拒读PID仍是未知范围。
+
+首步 warmup 学习率为0，记录逐参数梯度和 Adam 状态，下一非零学习率步骤检查实际更新；个别非零梯度参数不变保留数组待审，不自动中止。尚无完整学习曲线、固定验证指标或真实恢复，不能提前判定通过。完整 logits 原严格诊断与 CPU focused 原23/24失败仍保留，性能和显存验收独立。
+
+
+## 2026-10-28 15:48 +0800 Qwen r10 no-training CUDA preflight 终审通过
+
+preflight-only final 20261028-r10-qwen-practical-preflight-final-r2-prepared 单次自然 rc0；同一 PID/start 在物理 GPU UUID GPU-2be51dc7-d99a-7307-869b-30ed5888e701 上实际导入 r10 source与 CUDA core，完整231 compile order和ingredients与已审计产品一致。小张量输入/输出 cuda:0、native dispatch cuda/device0、值[3,5]、fallback初值/增量均0。receipt 24fca00c9d88fdcaefa0fa892d5a7d51ec975d7e82b99fb6714eece711efe97e，result c2b9b9a1e5ad04e2faf532ead4f15424b08fc58a219fa883190d55d43e7a29fd，root terminal audit 3440e3b2b965e387f9317ace71ff430ef0a8846bb4f9cb1efc783dc883852ad7。实际cache常规文件1137→1141仅新增4项JIT、无删改，after SHA 0b3ea7f0062e117bb0a3917d24928234d9d6617ec5c118a70759ebe3dce6bf9d；锁及可见holder空，1624个拒读PID的FD仍为未知，不扩展为全机无holder。此仅小张量身份前置，未加载Qwen或训练。
+
+训练final仍待冻结审阅：首step实际学习率为0，必须记录optimizer之前的LR，零LR时参数应保持且检查梯度/Adam状态，首个非零LR步骤再检查实际变化；batch积累、逐梯度设备/dtype、optimizer组和moment逐项验证，失败先留证。新模型full/resume与任务指标、CUDA dtype补充和Day4–5性能均未执行，CPU focused原23/24 FAIL保持。
+
+
+## 2026-10-28 15:42 +0800 Vision 原始结果已逐格复核
+
+旧 r25 Vision 五格真实训练、验证及恢复的实际指标、严格比较和样本限制见 [Day2–5 报告](2026-10-26-torch-compat-release-day2-5.md)，不要将其转移到r10；唯一状态源为 [看板](../architecture/refactor-board.md)。
+
+
+## 2026-10-28 15:37 +0800 r10 真实 CUDA 35 项定向通过
+
+r10 source 2b8fa30420b413fc2736f8c29b509bc37ce09387ddca1f37db71f064636f4c22、真实 A800 UUID GPU-2be51dc7-d99a-7307-869b-30ed5888e701 的 Jittor focused 35/35 pass、0 skip/xfail、fallback0，105 个 setup/call/teardown 全通过，322.43s / 600s 自然 rc0。相同 34 项 PyTorch 同 GPU oracle 先通过；Jittor 多测原 CUDA fill/zero 对显式 CPU/CUDA目标的 alias 和 storage 语义。覆盖 FP32/BF16 六工厂叶节点、前后构造梯度、_like图/存储独立、输入和参数梯度、SGD及二阶，sentinel 实测 cuda:0/backend1/device0/dispatch(cuda,0)。receipt d4d483fcf7e67655472c255f90b9d669dd35ef9dbfc9a02e1cca3812dfab03d3、result 2a66f1fc21ae4e3eb44ff675ff970489b1e0e8d88c04fcce98747ed04751c31f、root terminal audit 6a9a4b56d034ec8e2b3f5bbcc04d7cb21575cf33740617e6d99915259f454530；源码/实际产品/完整编译顺序与环境一致，cache 942→1138仅新增196、无删改，终态 SHA 16257e96394bb034a016392f28028644c841e973f44d655367b604328fd3feaa，组和锁空。CPU focused 23/24 原FAIL仍保留，内部 FollowRuntime补充独立结果见下节。
+
+这只证明有界算子与更新功能，不是 Qwen/BERT/T5 的 r10 实用训练通过，也不证明长期训练或性能。Qwen 新 r7 按此真实产品与缓存准备无训练 preflight，训练与日志另置 state、同功能 cache 串行、性能 cache 独立；preflight、模型加载、LoRA full/resume 及任务指标均尚未执行。真实checkpoint映射、scheduler/RNG/数据游标仍须新进程验证，旧严格结果不改。
+
+
+## 2026-10-28 15:30 +0800 r10 CUDA 35项定向运行中
+
+独立 PyTorch CUDA 34项对照与终审见下节。r10 Jittor 同源 CUDA focused final 20261028-r10-cuda-factory-focused-final-r3-prepared manifest 3c4101d313d6840cd5c3880bedbdd19acb1f0d67efae54a59c5e6033da84297c 已绑定实际 CUDA cold/core/942缓存和 oracle，root launch review ea2c43f47bf7c6d5d86581da33c47d0c359bcf29e707d6c4fefc0f0cf32e4d5d。单次 cap600、controller PID1120719、worker1120721、同UUID已启动，实际进程身份已记录，正在编译算子；恢复时先查 receipt/PID/start/锁，禁止重复。34项工厂/输入梯度/优化器/二阶/断图和原 CUDA fill-zero alias共35节点，尚无终态，不预填计数，不声称训练/性能通过。资源部署只允许14个精确路径和内容哈希，外部测试包不自动加载仓库 conftest，实际环境漂移仍记录失败。
+
+
+## 2026-10-28 15:25 +0800 独立 PyTorch CUDA 对照 34 项通过
+
+原 oracle 首次因 pytest recorder hook 参数名错误在收集前失败，0项执行；receipt 0e38282b48d942669bdb86812e1ab90a55990839fb4595b86f70586b57c31b71 和独立失败审计 4e8ffeaca525de3e2fe02b92d7cb2266036a01a1f9eebf68ada38cf319a2a626 保留。新 hookfix successor 使用完全相同测试字节 d2b99208885b39070a20ac986f6e1f09f40fb91e45919b241172d5719e9c3175，在独立 PyTorch 2.6.0+cu124 和指定物理 A800 UUID 上 34 pass/0 skip、102阶段完整，前后 CUDA 同步，28.22s自然 rc0；receipt 38b6ee43cd60dd34b0f1ae115261f899038e8b8c68a5fd2579b02600237284fb、result 0d7ed1c362c8187e66ef5c24df8cb8fdb16aec0a13d346b614ad5d1dcf0d4406、root terminal audit 75a03b0b1f3e17413f3531b6c4c5d8e244459061b03d07870a70262552e07d59。此仅是独立 oracle 通过，不是 Jittor CUDA、实训或性能通过。
+
+下一步把该 oracle 终审和真实 r10 CUDA cold 产品/942缓存绑定到新 Jittor 35项定向包，核对真实 CUDA dispatch、梯度、SGD、二阶、alias及 fallback0，再逐项审计；尚未启动。Qwen r5 仍 HOLD，SIGTERM、恢复有界功能对比和身份均只有无 GPU dummy 验证，真实 checkpoint、新进程数据游标、训练产品与模型仍待实测。
+
+
+## 2026-10-28 15:19 +0800 r10 CUDA cold 终审通过，数值待验
+
+r10 source 2b8fa30420b413fc2736f8c29b509bc37ce09387ddca1f37db71f064636f4c22 在物理 GPU UUID GPU-2be51dc7-d99a-7307-869b-30ed5888e701 上的新 CUDA cold 自然 rc0、524.12s / 900s，231编译单元（194仓内、37生成），Jittor 与 Torch 导入后均 has_cuda=true/use_cuda=1；未创建 tensor，不能当成真实 CUDA 数值或训练通过。receipt 49bc5fa678b9e5716fc8cd50a89ea3927990d721a28c933aba8af34197559f97，child a1767d8d3a08e83aff3aabfa3a4b3e04af0495dbaad4eefd23cbfe6a5bd77c17，实际 942 cache c58b6866cb55ce273d487f84306fcb656a18c756a7a80699e46f1b2409f10d21；root terminal audit a3d5c1c1c9c862bf232495a4af014d78a53363e320b8a384c9863e20ba8b7340。初始 child 命令采样为空，存活期独立身份证据 2d8ae797e4a894ffe645b93ded82fe4c139fb7e044b6d7488076ff614cfb742b 核对相同 PID/start/组/实际命令，原收据不回填。
+
+下一步在同物理 GPU 对 CUDA 常量工厂/输入梯度/SGD/二阶/断图的34项执行独立 PyTorch oracle，再绑定实际 CUDA core与终态执行 Jittor 34项+原 CUDA fill/zero alias节点。实训先决条件和性能验收均未完成。CPU core 的历史 dtype skip 不直接表示当前失败：同源 Torch promotion 测试实际覆盖旧16个 dtype 对中15对和两顺序，int8+int32仍需直接补测；.long()小值/负数在 CPU 正向测试通过，大数和真实 CUDA仍待验。
+
+
+## 2026-10-28 15:11 +0800 r10 CUDA 冷构建进行中
+
+实际 CPU core 终审已通过（见下节）；r10 同源 GPU UUID GPU-2be51dc7-d99a-7307-869b-30ed5888e701 的新独立 CUDA cold final manifest 9a8fe2efc96f9787fae831c77dcb0fc4a762ecc1792e700a7c6ba1cc4c7dfd36 已单次启动，cap900；root launch review SHA 60a23df1d39eb6bbf3b34a7ba880b6f100813a628e9ac45b850ec76d15fbaca5，入场可用显存54024MiB，未以利用率设门槛。controller PID1096115、child1096119，原 receipt 初采 child command为空，存活期独立 identity 20261028-r10-factory-leaf-cuda-bootstrap-final-r1-prepared/root-cuda-cold-live-identity.json SHA 2d8ae797e4a894ffe645b93ded82fe4c139fb7e044b6d7488076ff614cfb742b 已核对 PID/start/命令/私有组。当前正在编译；不得重启，恢复先查 receipt、PID/start、子进程及锁。冷构建成功只证明产品身份，真实 CUDA 34项工厂/梯度/二阶及原 alias 定向、实训均未执行。
+
+Qwen runner r4 的无 GPU dummy 覆盖 normal/timeout/异常/SIGINT/另 session后代和训练证据先保存，但独立审查仍发现 SIGTERM 清理和 exact signature 误阻断实用续训问题，正在新 r5 准备，不能运行训练或以 dummy 代替实训。
+
+
+## 2026-10-28 15:08 +0800 r10 十文件 CPU core 终审通过，准备 CUDA
+
+r10 source 2b8fa30420b413fc2736f8c29b509bc37ce09387ddca1f37db71f064636f4c22 的原维护 Torch core 已一次自然完成：230 collected/called、227 pass、3 skip、fallback0，450.22s / 600s；十文件实际全部执行，新工厂和 autograd_semantics 定向方法不在此计数。三 skip 分别为 CPU 无 CUDA、历史 .long() dtype 和混合类型提升标记，后两项是跳过声明，不自动当作 r10 已复现。receipt e5b751e11bdee16dfaae0c446ceaebafa249f61eb8571311d8cf892195ab0163，result dd98aa4a4875c4a92e09816d59895180ee94428361bdcfc684473c7f9063dd4f，root 独立终审 a5e2b3f1b71906e9e79c3c02b404cac9ae0a6f5d813de1556ae3107c7d6e0941；源码2807文件、core/utils/stamp、环境、进程身份与实际7314 cache核对，6590→7314新增724、无删除或内容改变，14个shim部署文件仅mtime变化。原 focused 23/24 FAIL和独立 FollowRuntime补充诊断分别保留。
+
+恢复后再次 fetch origin/cgq_transformers 为 e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，main、验收/修复树、r9、r10均包含该提交，无需整合，已有 dirty 保留。共享 GPU 有足够显存但负载繁忙，正确性可在显存足够时进行；不能作为正式性能窗口。下一项审阅绑定同源 CPU 证据的新 CUDA cold final，单次900s并串行启动；CUDA前反向、factory/别名/梯度和实训尚未通过。Qwen 新 runner 和控制器仍 HOLD，dummy 验证中的元数据问题要保留并先修，严格生命周期结果单列，实训数据先保存。
+
+
+## 2026-10-28 14:10 +0800 FollowRuntime 内部 CPU 补充诊断通过
+
+r10 的原 23/24 Torch focused 收据仍为 FAIL；唯一失败在写入前的对象构造断言，不回填。后续单次 120s 新诊断以内部 swap 构造真实 Torch frontend、placement=-1 的停梯度 holder，且与 native alias 同址；_api_fill(2)/_api_zero() 均保持返回自身、placement、共享地址与 alias 值，真实 CPU dispatch、fallback0。常规 frontend array/empty/ones 均实际发布 CPU placement0。该补充仅证明内部 swap 路径的 CPU 停梯度写入，不证明公开构造、CUDA 或模型训练。receipt 19ebd9cdc92d0f4500311f551fe0993558a1a6370d8b8aeebb08749f53d79b4b、result 5b4a4008a509ba762ae01e616bd9c830643b373f156076a20d3d3b4dfce9d6f3，独立审计 dd32272e6257e81f313d63da2f14ef02f675369c51ff547cdb7a2af0eb38117c；cache 6590 无增删改、终态 SHA 17752785201408dd9b8706831cd87c1eda77b9f7ef25142c498fd5df8424034a。下一步依据 23 项实测与此补充审计绑定原十文件 Torch core；原失败与不在 CORE_FILES 的新增测试单列。CPU core、真实 CUDA、实训和性能仍未验收。
+
+
+## 2026-10-28 14:07 +0800 r10 Torch CPU 23/24，内部 FollowRuntime 前提失败
+
+修正 selector 的单次 Torch focused 自然完成 331.76s：23 pass、1 fail、0 skip、fallback0。17 项独立常量工厂测试（构造时/后启用梯度、_like 图与存储独立、SGD、二阶梯度）及原 CPU fill/zero 的别名/值/输入和参数梯度回归通过，旧 leaf 回归、独立前端和相关构造器通过。唯一失败是内部 FollowRuntime 测试在调用写入之前，构造的前端张量 placement_backend 为 0 而测试要求 -1；该结果不证明写入失败，也不证明该内部路径通过。原 receipt b0284aa30c8f83e6692cbc360e2152fb2258bc2d27bc9db827e15cd9aa77fab3 保持 CPU_FOCUSED_FAILURE_RETAINED，result 5c290baaff40c21243aaec3c91ac493cd096393e2dafc06cba86759c9a3b30f3。独立保存证据审计 90498970762652b007f87766bcabcb1d2d1a015bb9d0c43ba78f46bd37770bb4，仅采用原真实 23 项与失败边界；actual cache 6590、SHA cf16c05b253a3c632371d8a453863b61b4210e127ff3c3c40fb83679459f4fe9、锁及身份有效。
+
+下项只准备有界真实 holder 构造诊断，区分不可构造与内部写入缺陷；不改原 FAIL 或反复整组。r10 未采用 main，CPU 原十文件 core、真实 CUDA、实训和正式性能仍未完成。Qwen 后继保持 HOLD，需先持久化实际训练/验证证据，再将严格生命周期检查单列，并补异常退出进程清理与 checkpoint51 状态审计。
+
+
+## 2026-10-28 14:01 +0800 r10 Torch focused：修正 selector 后运行中
+
+首次 Torch final 因旧内部测试名称在收集阶段失败：pytest rc4、0 collected/0 executed，原 receipt dfc5812f94416a45ea05b60c2f56665df07ea310738ddde15ec681769eee667d 保留，不能解释为源码通过或失败。独立审计 2afb9dae163acd7a58305338ab5644b688891c89927462af4542a0eebf7889a1 确认实际 778 cache 及唯一失配名称；源码/产品未变。新 selector successor manifest ffb6e2e8d995949b29851687eeec6a211efbf9a47eb8b55dc89a8b7850e1e272 只修正测试名并绑定该真实终态，单次 cap600 已启动。当前 17 项新工厂测试全部通过，后续 fill/zero 回归在编译 oneDNN，整组仍无终态；不要重启或提前声称通过。进程 controller 1023968、worker 1023974，恢复时仍需核对身份/receipt 和实际锁。CUDA、模型实训与正式性能未验收。
+
+
+## 2026-10-28 13:58 +0800 r10 原生 JVP 通过，Torch CPU 定向进行中
+
+r10 source 2b8fa30420b413fc2736f8c29b509bc37ce09387ddca1f37db71f064636f4c22 的 CPU cold 385.86s 自然 rc0，227TU、732 cache；receipt 656c802ff699fb0b3224962d417964544a04735e6d11ef492ba212cdc11bb32d，独立 terminal audit 990f9c3f59c856dfcf0367cfc04797fc5cde1aba206631262a8fd15e6f3a3b3e。仅构建身份。继而原 native 多输入 JVP 旧反例 1 pass、0 skip、fallback0，13.71s；receipt 2462b27c692b1714c736c92a8ad27a58cde23906a177d8f3a7e10de2338b87f5，独立审计 6e0c4f7f6b535444a58169cccc0ea6455a90807ef34f61f33ea61503c57e3962，终态 cache 764。此结果仅 native CPU，不外推 Torch 或 CUDA。
+
+已绑定真实 native 终态启动一次 Torch CPU focused（cap600，final manifest b4ad82cc3b617ebc3b2d35212d34d1cb8c4fbc76a5fb7dfaa0d8a728f5395ceb），涵盖 17 新工厂测试和 7 项别名/leaf/前端/构造回归，仍在执行；先核验真实进程与 receipt，勿重启。Qwen 训练后继 20261028-r10-qwen-practical-training-r2-hold 有控制器静态实现但仍 HOLD，尚无 CUDA 产品/功能绑定及动态审计。实用训练和性能显存仍未验收。
+
+
+## 2026-10-28 13:54 +0800 r10 CPU 冷构建进行中
+
+r10 仅常量工厂叶节点修复、相关回归和内部 FollowRuntime 检查，独立源码指纹 2b8fa30420b413fc2736f8c29b509bc37ce09387ddca1f37db71f064636f4c22；source manifest 20261028-r10-factory-leaf-source-r4/candidate-source-manifest.json SHA 9e059ac7691e39121d432c7fb68e51851d9243c59d32ca53226c84fb1b02514a，root 静态审计 SHA 7c05f2f9607bd442e2fe696d04e10b9005d299dd5d344270557c3e04cbc3aeab。新增 17 项测试在独立 PyTorch 2.6 全通过（oracle-r2.log SHA 41c3aee667fd6fd4d97f0094c8388df337b2aa54bc6c58df49c00c10289a7a65）；Jittor 尚未验证。CPU 单次冷构建包 20261028-r10-factory-leaf-cpu-bootstrap-r4-prepared manifest d45f0c3c4c19c78264aa3622bc7370f11958858d8adf299ec309cce117cd3d10，cap600，controller PID 1009630、child 1009635，仍在实际编译；勿重启，先核验进程身份和 receipt 终态。完成后先独立审计再绑定 native JVP 与 Torch focused，CUDA 和训练未启动。后继 Qwen 草案 20261028-r10-qwen-practical-training-r1-draft 为 HOLD，不具可运行训练控制器；原 strict 失败及 r9 不改。
+
+
+## 2026-10-28 13:42 +0800 r9 工厂叶节点梯度缺失已复现
+
+新 21 个独立 CPU 进程诊断自然完成（113.36s / 600s，fallback0），receipt SHA 0eb5633396f1683e392dbad25321718997c076152a59826ad593c892d8db44ec，未版本化目录 20261028-r9-fill-zero-grad-diagnostic-r1-prepared/attempt-01/。18 个 torch.ones(..., requires_grad=True) 案例包含无写入/fill/zero 与六种 alias/物化状态，全部 grad=None；无写入时创建即 is_backward_leaf=false、未登记。fill/zero 后可变为 leaf，但仍未登记。3 个 Linear Parameter/SGD 对照的参数梯度全 1、lr0.1 参数逐项减 0.1；相同案例中的 ones 输入梯度均缺失。这是 KI-COMPAT-004 的实际功能缺陷，不能继续描述为仅信息查询；也不能据此推断所有参数漏更新。已有结果仅 CPU，不能外推 CUDA 或模型训练。
+
+源、产品、进程身份、零 fallback、6594 文件终态及锁已独立只读核查；cache-after SHA f1364c252582bdc80f5737717a373ca1427547a17480936cb90b597405856bc7，6586→6594 仅新增 8。新 r10 隔离工作树正在从 r9 构造，拟仅修 Torch 常量工厂输出叶节点并验证真假 leaf、grad、SGD、原 JVP 和真实 CUDA；尚无修复结果，不修改 r9 或覆盖原失败。
+
+
+## 2026-10-28 13:35 +0800 恢复交接
+
+用户恢复授权，优先真实设备训练、有限梯度和更新、学习曲线、验证指标及功能续训；原 strict FAIL 和预算保留，性能显存独立验收。fresh fetch e5cffe1ae60c418f53c5bb1cdca9182577fd2b81 为各相关 HEAD 祖先，dirty 保留。r9 source 8afd3ed550f5cf113c67c0b4f7c159334781047bfda7e11232c9ab3184e7089d 保存 native 两节点独立终审 2 pass、0 skip、fallback0；2806 源文件、实际产品、740 cache 和精确锁核对。审计未版本化路径 20261028-root-r9-resume-audit-r1/root-native-terminal-audit.json，SHA fb26aee6e3cb6498d57962c6b564f06d6315939ce4318ab15bc1814783a90950。Torch focused final manifest 440072a5b064cbd3b3f5b55fb4114be8b19708a8d369e728068f5f639ecfce21 单次运行约 313.7s 终态：2 fail、7 pass、1 CPU capability skip、fallback0。普通可训练 tensor 写入后 target.grad 为 None，需无写入/写入及别名对照；FollowRuntime 测试在写入前因 torch.Tensor(native) 被构造为 CPU placement 而失败，其测试前提须核对。独立 frontend、RMSNorm4 和 public pow2 通过。原 receipt 5908db0e91b8d8e44c5f01dfbe0b7e0461d3069ab999d9fba0f421206aa60d8a 保持失败；11 条 MKL .o.d 目标为实际观察到的独立 frontend 子进程 PID 982482，合同预期 worker 982201，原 metadata 错误保留。源码/产品及 740→6586 cache 和锁的独立证据审计为 20261028-root-r9-torch-focused-audit-r1/root-torch-focused-evidence-audit.json SHA ad786152422b2c5465380fbccbeeee4dfd9979667953a36d30ad8c401fb4e5a4；仅允许将实际终态作为后续诊断基线，不将测试或原 metadata 改为通过。r9 实用训练和 Day4–5 性能尚未验收，发布 Not complete。
+
+历史实训见 [Day2–5 报告](2026-10-26-torch-compat-release-day2-5.md)，唯一状态源为 [看板](../architecture/refactor-board.md)。
+
+
+## 2026-10-28 13:10 +0800 用户要求暂停：恢复先审保存native终态
+
+用户明确要求暂时暂停并汇报，线程goal已设 **paused**，发布仍 **Not complete**。未发现可见同UID本任务进程或JIT锁FD，r9精确锁inode无内核记录；4个拒读PID不作全机无进程证明。无活跃子agent，没有测试/构建/模型/性能队列需要续追，也未启动自动后继。原工作树、checkpoint、cache、日志及失败均保留。暂停快照与三文档更新前备份位于未版本化 `20261028-user-pause-1310/`；PAUSE_SNAPSHOT.json SHA `b564c8439e623e300f5e3e9d37def655593bae1b5eb7b37d8a00b0905ae0312b`。
+
+最新候选仍为 `torch-compat-storage-silu-cat-grad-rmsnorm-pow-fill-zero-20261028-r9`，HEAD765f1791/source8afd3ed5，未采用main。CPU cold已通过且不重跑；07:19之后native consumer-first pow两节点也已实际 **2 passed、0 skipped、fallback0**、单次120s内自然rc0，正式receipt `20261028-qwen-fill-zero-r9-focused-cpu-native-r1-prepared/attempt-01-native-focused/receipt.json` SHA `da8ece3048fad10c74056b3bd79e0cc6db558b9d9936a02ea710fcb94f1d1b55`，result b3612b3e、cache-after13ee1d9a（740项，+8无改删）。独立root终态审计未写，Torch前置仍HOLD；不要重跑native、改写执行包或把它当fill_/zero_已通过。
+
+恢复顺序：按原规则重核进程/源码/真实缓存与远端→对上述保存native证据完成独立root审计→复制到新的Torch final，绑定真实740终态及审计→Torch focused600s→原10文件Torch core600s→同源r9 CUDA冷构建及真实定向回归→原完整无hook gate。新增三方法不在core白名单，不能预填233。尚未决定的MKL元数据审阅合同不可默认为通过。完整Qwen仍8,690,528/29,171,712 FAIL，LoRA不启动；局部SiLU/cat/RMSNorm等历史PASS只属于各自source。
+
+T5双seed strict各FAIL771/2088、singlemicro超时且原家族仅余51.29068389162421s；Vision五格FAIL、无合法最终continuous，最新余额310.095694191s，旧1289.681100597838s只是早期快照；BERT任务gap15.425953905%>15%。跨三任务11个原checkpoint目录存在但22个原model/adapter与optimizer文件仍缺。Day4–5没有正式稳定三轮/真实容量边界/峰值验收；r4/r5及后继readiness已超时，不能从旧RUNNING/WAITING文件重启。暂停后的完整目标与所有原门槛不变，详细成果和剩余表见[本日结果](2026-10-26-torch-compat-release-day2-5.md)，状态只维护[唯一看板](../architecture/refactor-board.md)。
+
+## 2026-10-28 07:19 +0800 接续入口：r9 CPUcold已终态，下一项定向回归
+
+r8 fill/zero四失败已复现并保留；新r9 explicit-target-only scope修复与consumer-first pow回归顺序已冻结，HEAD765f1791/source8afd3ed5、manifest67e71aa4，main/r8不改。CPU cold600 `20261028-qwen-fill-zero-r9-cpu-bootstrap-r1-prepared/` 在337.6935s自然rc0，227TU/core1562721b、732cache终态，root13审计a1d1645e全真、组锁空；exec43630已收回，不重跑cold。下一项绑定真实产品的native pow两节点120s→Torch focused10节点600s→维护原10文件Torch core600s；focused原独立前端用例不改，新增CUDA方法在CPU明确skip，不能预填core233或以focused代core。尚无r9数值/梯度或CUDA通过。原r8 core226pass3skip1fail与缓存事件保留，原完整Qwen/LoRA阻断、其他FAIL/预算/缺件与Day4–5门槛不变，发布 **Not complete**。精确路径、SHA与边界见[本日结果](2026-10-26-torch-compat-release-day2-5.md)。
+
+## 2026-10-28 07:02 +0800 接续入口：Torch core失败已确认，修复临时值placement
+
+r8 Torch core终态226pass/3skip/1fail，唯一独立前端Linear weight fill_失败；不得再按旧“下一项Torch core”重复执行。原失败审计、7919缓存终态及MKL四文件重写证据保留。新 `20261028-r8-fill-zero-placement-cpu-r1/` 四项公开CPU fill_/zero_全部复现：目标raw backend0，独立RHS mirror backend-1，device_id均-1，公开cpu/dispatch相同；fallback0、source/core/env有效、缓存无变、组锁空，receipt bb10a303、保存审计b6c84dff。新r9隔离候选正在离线准备显式target-only scope修复与consumer-first测试修订，尚未执行，main/r8不改。下一项审阅r9真实源码身份后串行冷编译和定向CPU别名/梯度/原独立子进程回归，再按同源前置准备CUDA；旧CUDA HOLD包不启动。发布 **Not complete**，原完整Qwen/LoRA阻断、其他FAIL与预算、Day4–5门槛不变。详细路径与边界见[本日结果](2026-10-26-torch-compat-release-day2-5.md)。
+
+## 2026-10-28 06:47 +0800 接续入口：pow old-fail/new-pass已完成，先运行Torch core
+
+当前无本任务框架/JIT进程。old-r7/new-r8 consumer-first控制已自然rc0，62/62/25→0，原native测试顺序的盲点已直接证实；root15×2＋paired4通过。r8最新7155基线为 `20261028-qwen-pow-r7-r8-consumer-first-cpu-r1-prepared/attempt-01-r8/cache-after.json` SHA3ca6a79f，组锁空，不重跑原阶段。native core103pass/45skip/1xfail与focused6经独立保存审计采用，原metadata rc1均保留；consumer-first测试patch仅proposal、未改r8。下一项独立Torch core600s final正在按7155绑定，之后才CUDA900与原完整no-hook；发布 **Not complete**，原FAIL/预算/LoRA阻断保持，具体收据/审计入口见[本日结果](2026-10-26-torch-compat-release-day2-5.md)。
 
 ## 2026-10-28 06:13 +0800 接续入口：r8 CPUcold已终审，先运行受影响CPU回归
 
@@ -1088,3 +1738,15 @@ fresh-process 50-to-100 continuation are separate source-identity results:
 unresolved. The Day2–5 report records metrics, exact identity and the retained
 original failure. Do not treat the short synthetic CPU run or the mixed-source
 node as a complete release, GPU-training or convergence gate.
+
+## 2026-10-30 Handoff: bidirectional cross-CUDA `Tensor.to`
+
+The main-tree test now covers cuda:0→cuda:1 and cuda:1→cuda:0. Both cases passed with real ownership of two CUDA UUIDs, finite expected values/gradient, correct placement, and fallback count 0. Source HEAD is `387a096ef85f44dd9d097bfaf78d5a36176abff5`; source fingerprint is `95eb54ba17b771ece4ed585c2036f19565075b66c858e599972fbee011f76558`. Full details and audit hashes are recorded in `refactor-wip/results/2026-10-26-torch-compat-release-day2-5.md`. Run package: `/data6/cgq/jittor-lab/_state/release-day23/20261030-torch-cross-cuda-bidirectional-r2-hold`.
+
+The r1 isolated worktree preflight failure is preserved: the worktree omitted the main tree's dirty source overlays and pytest did not start. The r2 main-tree-bound run and independent terminal audit passed. The historical no-auto-peer fifth-case failure and three cases not run stay as mechanism evidence for the older direct-copy candidate; the current production host-staging `Tensor.to` path has passed both ordinal directions, without establishing the old failure's root cause. Continue with remaining functional Day2–5 gaps; defer Day4–5 timing comparisons until a stable paired GPU window is available. Keep existing failures and dirty state intact.
+
+## 2026-10-30 Live window and cache incident
+
+A read-only CUDA API introspection through the shim-enabled environment unexpectedly invoked Jittor startup JIT. Process group 2707825 and its compiler children were verified against the exact command and dedicated session, then terminated; no files were removed. Preserve `/home/cgq/.cache/jittor/torch-shim/cgq-92dab87ea3805bdf/jittor_cache` as a potentially partial, unverified build artifact. It is not a validated core, test result, or performance result.
+
+A five-sample read-only window probe from 11:21:28 to 11:21:49 UTC found the Day4–5 target UUID `GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5` at 100% utilization throughout and 17,993–18,711 MiB free. No measurement workload started. The existing performance gate remains open.
