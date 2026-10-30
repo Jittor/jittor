@@ -643,12 +643,15 @@ def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay
             if not was_trainable or not isinstance(g, jt.Var) or list(g.shape) != list(p.shape):
                 continue
             param_steps[i] = int(param_steps[i]) + 1
-            _update_in_target_dtype(p, adam_update(
-                p, g, v, m, lr=lr, eps=eps, weight_decay=weight_decay,
-                betas=(b0, b1), step=param_steps[i],
-                decoupled_weight_decay=decoupled_weight_decay,
-                torch_math=True,
-            ))
+            from jittor.optim._state_placement import optimizer_state_scope
+            with optimizer_state_scope(p):
+                updated = adam_update(
+                    p, g, v, m, lr=lr, eps=eps, weight_decay=weight_decay,
+                    betas=(b0, b1), step=param_steps[i],
+                    decoupled_weight_decay=decoupled_weight_decay,
+                    torch_math=True,
+                )
+            _update_in_target_dtype(p, updated)
             try:
                 if was_trainable and p.is_stop_grad():
                     p.start_grad()
