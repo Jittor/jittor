@@ -1,5 +1,14 @@
 # 整改看板
 
+## 2026-10-30 恢复后 BERT checkpoint50→100 实用续训
+
+任务已恢复 active。下方 peer-enabled host staging 直接 CUDA 双向同步/异步中转的四进程八阶段结果仍有效，旧 no-auto-peer 显式 peer 复制失败与未执行项继续保留。当前主树 Python 源指纹 e7d1711ffcb67363b63a0ffb0743ec152eed418edbb0150bbfab52e754ab8c90、HEAD 9724b453，复用原位已审 df45 CUDA core/utils（混合身份，并非 e7 原生冷编），从历史 df45 checkpoint50 单次完成 seed821 BERT 的 step51–100，显式将两组 AdamW 设为 nonfused/foreach=False。恢复模型/优化器/调度器签名严格一致，201 个 scalar step=50、603 个参数与 moment 的实际 CUDA placement、Python/NumPy/CPU/CUDA 四组 RNG 核验通过。
+
+50 次续训更新均有 201 个有限 CUDA FP32 梯度，201 个参数每步实际变化；99 个 microbatch 的 sample ID/形状与历史同种子 PT 报告一致，未比较逐 token 字节。两条不同训练 microbatch 的 query projection 观察到 CUDA BF16 输出和 autocast，不代表全程或内核内部精度。续训 50 次更新的平均 loss 为 0.2081167603，历史 PT 为 0.1965655518；单步有正常非单调波动，例如 step51/52 为 0.28931/0.31714、step99/100 为 0.55750/0.08252，不能据此声称逐步单调下降。PT 使用不同 checkpoint 与优化器路径，比较仅为描述性单种子结果。
+
+固定 heldout 的实际预测/标签各 33 条，loss 0.4761481881、accuracy 0.7878787879；PT 对照 loss 0.4836055934、accuracy 0.7878787879。checkpoint100 六个主要文件已保存并重新核 hash，终态模型为 step100、best metadata 为该 checkpoint；尚未新进程反序列化或验证再次恢复。无 predict、native EventQueue、性能或多种子结论。两份独立终审 /data6/cgq/jittor-lab/_state/release-day23/20261030-main-e7d171-bert821-resume51to100-r2-cuda-replay-independent-terminal-r1/audit.json SHA256 0981a708aac6b497e5ecd15bc0812819da096807e80a109e046f2b0da820cd60；/data6/cgq/jittor-lab/_state/release-day23/20261030-bert-e7-resume50to100-resume-next-terminal-r1/audit.json SHA256 39a3dde39b3d1128a541b12fc14ab427203ea85594152c5b6f8f381dad31a0ff。保护 cache 不变，功能 cache 新增4项且旧项内容不变；五锁内核记录和可见FD holder为空、unit自然成功，FD拒读与端点快照限制保留。下一步若要验证持续恢复，应独立设计 checkpoint100 的新进程加载与状态核验；跨卡生产修复仍需独立验证。
+
+
 ## 2026-10-30 任务恢复与 peer-enabled host staging 验证
 
 任务已从下方历史暂停状态恢复。peer-enabled host staging r1 单次实际运行四个独立进程，覆盖两张 GPU 的双向传输及同步→异步、异步→同步两种次序，共八阶段；每次目标对源启用 peer 返回 0。实际 CUDA 指针和设备 ordinal、两张 GPU 的进程 UUID、portable pinned host、源流与事件及目标流顺序均已核验。源、host 和目标四个 FP32 值均为 [1.5, -2, 5, 7.5]，consumer 为 [2.5, -8, 13, 20.5]，原始字节匹配且设备读回两次一致。各进程分别编译 PTX 并执行 GPU driver JIT，driver/runtime 活体映射前后相同。
