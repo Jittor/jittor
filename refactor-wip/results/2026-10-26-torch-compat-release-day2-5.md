@@ -1,5 +1,16 @@
 # Torch Compatibility Release Acceptance: 2026-10-26 Day 2–5 Continuation
 
+## 2026-10-31 当前主树 Qwen 训练与 checkpoint-51 恢复补证
+
+本增量绑定 /home/cgq/jittor HEAD 57189bde41a01d657b870e1a2c47ac955a175ec5，源码指纹 ae2cb7e24fcd6e58d555d829ecf0e33411c17ab475174ab7500a336d7b71fbfc；origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81 为祖先（ahead 84 / behind 0）。在隔离 cache 上，对当前主树实际执行 Qwen3-0.6B LoRA seed821，两 epoch、102 次 CUDA 更新；GPU4 物理 UUID GPU-8bf405a2-a3dd-e203-8dd9-691e9f7b3530，在进程内为 cuda:0。0 次跳步、0 fallback，epoch 加权微批 loss 1.205469→1.153617，验证 eval loss 2.455552。attempt-03 core SHA256 de49627f5026320061a76f355b0186fe2807c6936ac769a76e0375a4b71406b7；实验和执行原件位于 /data6/cgq/jittor-lab/_state/release-day23/20261031-main-qwen-practical-current-source-r1/。attempt-01/02 均未执行训练，失败原件保留。
+
+从 step51 checkpoint 在新进程恢复到 step102，实际执行 51 次更新，恢复状态与 RNG 加载检查通过；0 次跳步、0 fallback，固定 eval loss 仍为 2.455552。一次 full-versus-resume 对比以 atol=rtol=0 通过，协议、样本游标、更新次数和更新契约全匹配。该结果补足当前源码功能恢复证据；与 R14 老快照结果分开绑定，不代表其他模型或配置。merge/reload 的短 smoke 通过但不是 held-out generation 质量评估。
+
+Day4–5 性能/显存门仍未通过。当前功能实验在共享 GPU4 上执行，观察利用率约 29%、空闲显存 59,931 MiB，不能用其 wall-time/吞吐作正式结论。正式验收需冻结同一源码、模型权重、数据、训练/推理配置、精度与 cache 身份；等待设备连续稳定达到利用率 ≤10%、空闲显存 ≥60,000 MiB 且没有无关计算进程；至少 3 轮交替 JT/PT 配对，每轮每侧至少 10 个同步热态样本。JT/PT 分别报告模型加载、首步、热态延迟与吞吐的 median、p95、离散度，另报 Jittor allocator allocated/reserved 和 NVML 峰值。最大 batch/sequence 与 OOM 容量边界应另做匹配配置测试；旧共享负载结果只作诊断。
+
+更广 Day2–5 发布门按声明范围完成：Torch API、CPU/CUDA、dtype、边界/fallback 和 autograd 前后向矩阵；各目标模型的真实权重/数据/设备训练，有限梯度、参数变化、loss 曲线和 held-out 任务指标；checkpoint 新进程恢复的 optimizer、scheduler、Python/NumPy/CPU/CUDA RNG 与样本顺序；真实 gradient checkpoint activation recompute 和相同配置的峰值显存/梯度对照；共同 held-out prompts 的 JT/PT generation 质量指标及预先设定判据；序列化跨框架读写的明确支持范围。已知 checkpoint shim 目前直接执行函数、不重算 activations、不省显存；Qwen 仅有固定验证 loss 和短 smoke，没有 held-out generation 分数；stock PyTorch 无法读取 JT portable-pickle optimizer 与同 Jittor resume 成功分开登记。R19 双 rank body 通过但外层 sentinel 失败也须保留此 gate 状态。整体 release 仍为 Not complete。
+
+
 ## 2026-10-31 Accelerate CUDA 执行计数分类修正
 
 基于主树提交 9f049b3e6472cc80ee246b4ac05932dfe1af1b73；fetch 后 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81 为祖先（ahead 83 / behind 0）。本任务改动 tests/_helpers/pytest_policy.py 与 tests/structure/test_hardware_gate_matrix.py：前者识别专用 test_accelerate_distributed_integration nodeid，后者为 R19 的 test_real_ddp_no_sync_then_closing_backward 增加 accelerator 计数回归断言。修改后 SHA256 见整改看板最新增量。

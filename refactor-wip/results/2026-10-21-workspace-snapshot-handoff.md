@@ -1,5 +1,14 @@
 # 2026-10-21 工作区快照与本机接续交接
 
+## 2026-10-31 当前主树 Qwen 实训与续训接续
+
+继续使用服务器 /home/cgq/jittor 原工作区，未 clone。当前 HEAD 57189bde41a01d657b870e1a2c47ac955a175ec5；fetch 后 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead 84 / behind 0。开工时 103 项既有 dirty/untracked 保留，index 为空；本次只改本交接、整改看板和 Day2–5 结果文档，不 push。当前源码指纹 ae2cb7e24fcd6e58d555d829ecf0e33411c17ab475174ab7500a336d7b71fbfc，训练前后一致。
+
+当前源码 Qwen3-0.6B LoRA seed821 实训在真实 GPU4/cuda:0 完成 2 epoch、102 updates、0 skip、0 fallback；epoch 加权微批 loss 1.205469→1.153617、eval loss 2.455552。新进程从 checkpoint-51 恢复到 102，执行 51 次更新，状态/RNG 核验和 atol=rtol=0 的 full-versus-resume 协议/样本顺序/更新比较均通过。完整证据位于 /data6/cgq/jittor-lab/_state/release-day23/20261031-main-qwen-practical-current-source-r1/，full 和 resume 产物未写入主仓库。R14 旧快照、当前主树训练与恢复分别记录；当前结果不外推其他配置。
+
+接续优先做真正影响功能和显存的 checkpointing 路径：定位当前直接调用 shim 与 Hugging Face/模型检查点路径的关系，完成 activation recompute、前后向数值/梯度和峰值显存对照；然后继续补齐声明模型/API/device/dtype/autograd 和 generation/恢复矩阵。跨框架 portable-pickle 边界、R19 sentinel 外层失败保持原状态。Day4–5 等合格设备窗口后再做正式配对：GPU 利用率 ≤10%、空闲显存 ≥60,000 MiB、无无关进程，至少 3 轮交替 JT/PT、每轮每侧 ≥10 个热态样本，并报告 load/首步/热态 median/p95/离散度、allocator/NVML 峰值及独立容量/OOM 边界。当前 GPU4 约 29% 利用率、59,931 MiB 空闲，本次训练计时只能作诊断。Overall release 仍为 Not complete。
+
+
 ## 2026-10-31 最新接续：修正 DDP gate 的 CUDA 计数器
 
 继续在服务器原工作区 /home/cgq/jittor。当前提交为 9f049b3e6472cc80ee246b4ac05932dfe1af1b73，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81 为祖先（ahead 83 / behind 0）。保留所有既有 dirty/untracked；本任务只改计数器、对应结构断言和本交接要求的三份状态文档，不 push。独立结构断言通过：1 passed / 0.02s。它证明 R19 所用 Accelerate CUDA 集成 nodeid 会被 gate 计数器识别；R19 两 rank 测试体和旧外层退出码仍按各自原始记录陈述，没有为正常化 sentinel 而重跑。

@@ -1,5 +1,18 @@
 # 整改看板
 
+## 2026-10-31 R21 当前主树 Qwen 实用训练与新进程恢复
+
+继续在 /home/cgq/jittor 既有工作区；当前 HEAD 为 57189bde41a01d657b870e1a2c47ac955a175ec5，分支 integrate/cgq-transformers-native-multicard-target；fetch 后 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead 84 / behind 0。开工时保留 103 项既有 dirty/untracked，index 为空；本增量仅编辑规定的三份状态文档。当前源码指纹 ae2cb7e24fcd6e58d555d829ecf0e33411c17ab475174ab7500a336d7b71fbfc，运行前后相同；没有改源码或碰其他既有文件。
+
+在隔离实验目录 /data6/cgq/jittor-lab/_state/release-day23/20261031-main-qwen-practical-current-source-r1/ 绑定当前主树完成 attempt-03：Qwen3-0.6B LoRA、seed 821、同 R14 数据/初始化与训练配置、真实 CUDA GPU4（UUID GPU-8bf405a2-a3dd-e203-8dd9-691e9f7b3530，逻辑 cuda:0）、CUDA 12.4 / sm80。隔离 Jittor cache 编译出的 core SHA256 为 de49627f5026320061a76f355b0186fe2807c6936ac769a76e0375a4b71406b7。2 epoch、102 次 optimizer update，0 跳步、0 fallback，梯度/状态有限；按 epoch 微批次加权 loss 为 1.205469 → 1.153617，固定验证集 eval loss 2.455552。严格生命周期的 merge/reload 与短 greedy generation smoke 通过；logits 最大绝对差 0.000289917，未测 held-out generation 质量。结果只绑定这份源码、seed、权重、数据和配置，不外推普遍收敛或任务质量。
+
+随后从该当前源码 full run 的 checkpoint-51 在新进程恢复到 step 102，新增 51 次更新，0 跳步、0 fallback；start_step=51，恢复状态和 RNG 加载核验通过，实际设备 cuda:0。full-versus-resume 比较使用 atol=rtol=0 并通过：协议、样本顺序、更新计数和更新契约一致，差异列表为空；最终比较文件位于 evidence/resume-attempt01/full-vs-resume.json，SHA256 9547f2e53695400f736bcd06ad2891c3ea24306b7d2704800181cbd588f189e9。主运行与 resume 的 practical-report SHA256 分别为 2f12c905810e69e7b2dadbf0b6fedce14963fcfcedb8defce43ee727bdf58bc2 与 c83e5c26b09723e094d8ccd71b50f1fdc1ade2f79a4b893fc5b4a83612c9d980。attempt-01 的 JIT-utils 重启在用户训练前退出、attempt-02 被 JITTOR_NO_BUILD 正确拒绝未盖章旧 core；二者原件均保留，只有 attempt-03 产生训练结果。完整日志、配置、checkpoint、状态档案及源码快照在上述实验目录。
+
+该训练与恢复不是性能验收：运行时 GPU4 共享负载约 29%，空闲显存 59,931 MiB，未达到稳定窗口条件；full 与 resume 的 wall-time 只作诊断。Day4–5 正式测量仍需冻结源码、权重、数据、配置和 cache 身份；GPU 连续稳定达到利用率 ≤10%、空闲显存 ≥60,000 MiB 且无无关计算进程；至少 3 轮交替 JT/PT，每轮每侧 ≥10 个热态样本；分别报告 load、首步、热态耗时/吞吐的 median、p95、离散度，以及 allocator allocated/reserved 与 NVML 峰值。最大 batch/sequence 和 OOM 容量边界须匹配配置独立测试，共享负载数字只作诊断。
+
+更广 Day2–5 仍需按实际发布声明闭合 API/设备/dtype/边界/fallback/autograd 矩阵，声明模型的真实训练、梯度/更新/loss/任务验证和新进程 optimizer/scheduler/RNG/样本序恢复，真实 activation recompute 与显存收益，Qwen 共同 held-out generation 质量判据，及 Jittor portable-pickle 与 stock PyTorch 的互操作范围。现有 checkpointing shim 明确直接调用目标函数、保留 activation、没有显存节省；R19 两 rank 测试体虽通过，外层 sentinel 仍失败；stock PyTorch 读取 JT optimizer 文件仍失败，和同框架 resume 分开记录。Overall release 继续 Not complete。
+
+
 ## 2026-10-31 R20 修复 Accelerate CUDA 执行计数漏项
 
 继续使用 /home/cgq/jittor 原工作区。基于提交 9f049b3e6472cc80ee246b4ac05932dfe1af1b73，fetch 后 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81 仍为祖先（ahead 83 / behind 0）。开工时 103 项既有 dirty/untracked 保留；代码/测试改动仅涉及 pytest_policy.py 与 test_hardware_gate_matrix.py；另仅更新规定的三份状态文档，未暂存或改动其他既有文件。
