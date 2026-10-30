@@ -1,5 +1,18 @@
 # 整改看板
 
+
+## 2026-10-31 当前源码冻结与 Day4–5 准入
+
+为推进 Day4–5 正式性能/显存验收，对 /home/cgq/jittor 当前候选做了只读源码身份冻结，没有重新 clone、改动源码或启动编译/计时负载。冻结 HEAD 为 b2cf6bad4ce647294cb4c5663117145743bb02dc，代码指纹为 95eb54ba17b771ece4ed585c2036f19565075b66c858e599972fbee011f76558；清单包含 2,815 个源码/测试文件、1 个符号链接、4 份允许后续更新的状态文档，缺失路径为 0。两次独立扫描一致，随后逐文件哈希、符号链接目标、文档快照、工作区状态、HEAD 和 origin 关系复核通过；origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81 是当前 HEAD 祖先。冻结证据包为 /data6/cgq/jittor-lab/_state/release-day23/20261031-main-current-source-r3/，源码清单 SHA256 2253605eceb1e301a6adaf476dd64200ae10b13f33c6537bc7e4a9009877c4ab，身份复核 SHA256 f0ec621b9a4b378282e59a792f86ce14849fc4046c948f74b4c5de94745eb27c，证据汇总 SHA256 162cf21584d1662c7761f885501b551553b011e4c196757aca75be57b0ef2dd0。这只确认源码身份，不代表私有冷编、CUDA 产品或性能/显存通过。该 HEAD 是源码身份冻结基准；随后本任务只把这三份既有状态文档纳入中文提交，提交后 HEAD 是其文档专用子提交，代码指纹保持不变。
+
+旧 BERT R17 配对性能包的指纹为 df45a56585f68874e8f1c64a80c9fff276bfe795e80c4d079cd06a8e7e528fc3，其计划 HEAD 是 e92681d291272db1f1b9d0e3fe18cf35775a4de2、冷编 HEAD 是 cd438e17c0fc8d2b97dea4129f6c2e9c32ff9c9d；均不匹配当前候选，因此该包与其旧冷编产品不能作为当前源码验收。R17 source guard 在计时/编译启动前拒绝，原始失败保留；旧性能结果仍只作诊断。
+
+本轮资源快照中，原计划 GPU UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 利用率为 100%、空闲显存 32,634 MiB；正式窗口门要求利用率不高于 10%、空闲显存至少 60,000 MiB、连续采样稳定且无其他 GPU PID。当前可见其他共享 GPU 工作负载，因此没有启动冷编或正式计时。根文件系统仅余约 34 GiB 且已报 100% 使用，/data6 余约 5.5 TiB；运行时和新产物继续放在 /data6，先核对缓存锁与资源。该轮只完成身份冻结与准入审查，没有性能、显存或容量数据。
+
+正式 BERT 代表测量仍需独立绑定当前源码的私有 cold core/cache，并在合格窗口完成三轮交替配对、每侧每轮至少 10 个热态样本；报告模型加载、首步、热态耗时的 median/p95/离散度，以及 allocator 与 NVML 峰值。容量门需另行按匹配配置评估，B224/S512 单更新校准不能计作容量通过。更广泛 Day2–5 的功能、DDP 默认路径、checkpoint activation recompute/显存证据和 JT/PT 生成质量比较仍按各自范围验收；整体 release 继续 Not complete。
+
+
+
 ## 2026-10-30 R14 Qwen held-out 生成质量补充（部分完成）
 
 在 R14 冻结源码 e4a3894065953efa50ea23a0e52b45511b835f59、fingerprint 89157afb357abbb882057230ecb0e86586deeef7fb010a7cc51b3577eea054a6 上，补做已训练 seed821 adapter 的生成指标。PyTorch 与 Jittor adapter 使用相同 Qwen3-0.6B 基础模型 revision c1899de289a04d12100db370d81485cdf75e47ca、相同 adapter 配置（SHA256 363e7f31496a81fcaa6ed24f15c906ae7bf3ec8dac14c5015d1673bc88cf2051）、101 条训练子集与相同哈希的17条 eval 文件；17个 eval ID 与这101条训练 ID 无重叠。不过这些样本来自 Alpaca 的 train split，只能称为 held-out-from-training-subset，不是外部 benchmark test split。

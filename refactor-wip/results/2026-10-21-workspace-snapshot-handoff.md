@@ -1,5 +1,15 @@
 # 2026-10-21 工作区快照与本机接续交接
 
+
+## 2026-10-31 当前源码候选冻结与后续执行边界
+
+继续使用现有 /home/cgq/jittor，本轮未 clone、reset、stash、clean，也未改源码。主树 HEAD b2cf6bad4ce647294cb4c5663117145743bb02dc、origin e5cffe1ae60c418f53c5bb1cdca9182577fd2b81 祖先关系通过；2,815 个非文档代码/测试文件的指纹为 95eb54ba17b771ece4ed585c2036f19565075b66c858e599972fbee011f76558。独立复核核对文件 inventory/bytes、符号链接、可变状态文档和工作区状态均通过。证据包 /data6/cgq/jittor-lab/_state/release-day23/20261031-main-current-source-r3/；源码清单 SHA256 2253605eceb1e301a6adaf476dd64200ae10b13f33c6537bc7e4a9009877c4ab，source verification SHA256 f0ec621b9a4b378282e59a792f86ce14849fc4046c948f74b4c5de94745eb27c，bundle SHA256 162cf21584d1662c7761f885501b551553b011e4c196757aca75be57b0ef2dd0。该 HEAD 是源码身份冻结基准；随后本任务只把这三份既有状态文档纳入中文提交，提交后 HEAD 是其文档专用子提交，代码指纹保持不变。首轮清单器因目录符号链接而失败，失败日志 SHA256 3cf35d96c62ff802566d85d1ca0a4081c4ae6314b9742865aaf7720ed4bb08ef 已保留；重做后两次扫描及独立复核通过。
+
+当前 R17 BERT 性能包 df45…/e92681… 与当前 95eb…/b2cf… 身份不符，不能复用旧 cold core、也不能将旧测量作为本候选结果。其 source-guard 拒绝发生在 GPU/JIT 启动前，日志留在 evidence-map 包内（SHA256 511eb4b192cb08507533e36848411bcdf398b7487ed4bbd3b4201ef44631bc5e）。
+
+资源快照显示目标 GPU UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 为 100% 利用、32,634 MiB 空闲；正式门要求 ≤10%、≥60,000 MiB、连续稳定采样并无其他 GPU PID。共享负载持续，故尚未做当前候选私有冷编或性能计时。根文件系统约 34 GiB 可用、已报 100%；/data6 约 5.5 TiB 可用。后续先用 /data6 新建当前指纹的私有产品并独立审核，再等候合格测量窗口；每侧三轮交替、每轮至少十个热态样本，同时报告加载/首步/热态和 allocator/NVML。容量验收独立设计。当前冻结也不补齐 Day2–5 的 activation recompute、默认四卡 P2P、JT/PT 生成质量等未完成范围；overall release 仍 Not complete。
+
+
 ## 2026-10-30 R14 Qwen held-out generation 补充状态
 
 R14 Qwen LoRA 的两 epoch 训练与新进程续训仍按其冻结源码身份通过；本轮仅对已训练 seed821 的 JT/PT adapter 做了17条 prompt 的 greedy generation quality 补充。eval ID 与101条训练子集无交叉，但来源是 Alpaca train split。FP32、无 autocast、输入上限96、生成上限48。PyTorch 在真实 CUDA cuda:0 完成，token-F1 0.212716、ROUGE-L F1 0.164849、exact match 0/17；小样本和截断指标没有人工审评，不判质量通过。

@@ -1,5 +1,15 @@
 # Torch Compatibility Release Acceptance: 2026-10-26 Day 2–5 Continuation
 
+
+## 2026-10-31 当前源码冻结与 Day4–5 准入
+
+当前 /home/cgq/jittor 源码候选已只读冻结：HEAD b2cf6bad4ce647294cb4c5663117145743bb02dc，代码指纹 95eb54ba17b771ece4ed585c2036f19565075b66c858e599972fbee011f76558，2,815 个源码/测试文件、1 个符号链接、4 份可变状态文档；两次清点及逐文件复核一致，origin e5cffe1ae60c418f53c5bb1cdca9182577fd2b81 为祖先。证据包 /data6/cgq/jittor-lab/_state/release-day23/20261031-main-current-source-r3/：manifest SHA256 2253605eceb1e301a6adaf476dd64200ae10b13f33c6537bc7e4a9009877c4ab，verification SHA256 f0ec621b9a4b378282e59a792f86ce14849fc4046c948f74b4c5de94745eb27c。这只通过源码身份门，不代表 cold core、正式性能或显存验收。该 HEAD 是源码身份冻结基准；随后本任务只把这三份既有状态文档纳入中文提交，提交后 HEAD 是其文档专用子提交，代码指纹保持不变。
+
+原 BERT R17 配对包仍绑定 fingerprint df45a56585f68874e8f1c64a80c9fff276bfe795e80c4d079cd06a8e7e528fc3 / HEAD e92681d291272db1f1b9d0e3fe18cf35775a4de2，冷编 HEAD cd438e17c0fc8d2b97dea4129f6c2e9c32ff9c9d；当前为 95eb54ba… / b2cf6bad…，故不能复用其 core 或把其结果记到当前候选。本轮原计划 GPU GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 采样为 100% 利用率、32,634 MiB 空闲，低于正式准入所需的 ≤10% 利用率及 ≥60,000 MiB 空闲；另有共享 GPU 任务，未启动冷编或计时。根分区约 34 GiB 可用且已报 100% 使用，/data6 约 5.5 TiB 可用。
+
+下一步需为指纹 95eb54ba… 建立全新私有冷编/cache 与独立审计，再等待合格窗口，按三轮交替配对、每侧每轮 ≥10 热态样本，报告加载/首步/热态的 median/p95/离散度及 allocator/NVML 峰值。容量测试与性能测试分开。Day4–5 与更广泛 Day2–5 发布门仍未完成，overall release 保持 Not complete。
+
+
 ## 2026-10-30 R14 Qwen held-out generation 指标补充（部分完成）
 
 本项使用 R14 已训练的 seed821 LoRA adapter，不重训、不做 preflight/resume，也不重跑 CUDA core 冷编。源码绑定 HEAD e4a3894065953efa50ea23a0e52b45511b835f59、fingerprint 89157afb357abbb882057230ecb0e86586deeef7fb010a7cc51b3577eea054a6；base 为 Qwen3-0.6B revision c1899de289a04d12100db370d81485cdf75e47ca。JT adapter SHA256 8669a5fb3f0b738573809ede36c77a0758eb26aa555a6cc5d29f75ee9329257b，PT adapter SHA256 d48da15c6e4574d91f8474e7e16a010a000f3c69542fb681ab43377f31ea2b36，两边 adapter config hash 相同 363e7f31496a81fcaa6ed24f15c906ae7bf3ec8dac14c5015d1673bc88cf2051。训练与生成评估分别使用相同的 train hash 3836597b696a3b79b81ac9f34bc79ce9a4d06cf6e8bf204aabf48dc5d924ecf0 和 eval hash d8318478c8991e75ba5cac474e1f3dfe95c0478da49ad8b2a8909c72fb72f84f；seed821、2 epochs、batch=1、gradient accumulation=2、BF16 训练、最大输入96。eval 17个 source ID 与训练选定的101个 ID 不交叉；来源仍是 Alpaca train split，不是独立 benchmark 测试集。R14 的 gradient-checkpointing shim 仍直接执行目标函数，未证明 activation recompute 或显存节省；这不影响本次关闭梯度后的生成协议，但训练差异须保留在解释边界内。
