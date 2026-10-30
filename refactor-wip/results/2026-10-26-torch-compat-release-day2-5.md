@@ -1,5 +1,34 @@
 # Torch Compatibility Release Acceptance: 2026-10-26 Day 2–5 Continuation
 
+## 2026-10-31 Day4–5 性能/显存与更广发布门：验收清单及 R10 复测
+
+### Day4–5 正式性能与容量验收
+
+正式测量必须绑定当前冻结源码身份：快照 HEAD `b2cf6bad4ce647294cb4c5663117145743bb02dc`、fingerprint `95eb54ba17b771ece4ed585c2036f19565075b66c858e599972fbee011f76558`。先为该指纹建立全新私有 cold core/cache，并独立核对 source、core、runtime、cache 和进程身份；旧 R17/df45 测量与当前身份不匹配，不能借用旧 core 或将旧结果回填为 PASS。
+
+性能比较需预先固定同一模型/权重、输入和数据顺序、dtype、batch 与 sequence length、optimizer、更新数、编译/同步设置和设备 UUID；PyTorch/Jittor 三轮交替配对，每侧每轮至少 10 个同步热态样本。分别报告加载时间、首步时间、热态样本分布的 median、p95 与离散度，注明吞吐/时延口径、预热和同步方式，并报告 allocator 与 NVML 观测的显存峰值。性能样本只有在目标 GPU 利用率 ≤10%、空闲显存 ≥60,000 MiB、连续稳定采样且无无关 GPU PID 时才可进入正式门；计划窗口最多等待 1800 秒，超时保留准入失败，不在共享负载下强行计时。
+
+显存容量是独立验收：对匹配配置记录峰值 allocated/reserved、NVML 进程/设备峰值、最大成功配置和 OOM 边界，声明安全余量；不把 allocator 指标冒充总设备显存，也不把单步校准或性能运行中的峰值直接当容量通过。旧共享 GPU 结果只保留诊断用途。
+
+本次复核 GPU UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 为 29% 利用、59,939 MiB 空闲，未满足 ≤10% 与 ≥60,000 MiB 两项；其余可见卡同样未同时达标，故未启动 cold build 或正式计时。`/` 仅余约 33 GiB 且报告 100% 使用，新增产品应继续放 `/data6`（约 5.5 TiB 可用）。主树 HEAD 为 `d03df9e0a81fbcbc40d0ce68cafd73d0d0c88836`，fetch 后 `origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81` 是其祖先；工作区原有 101 项 dirty、index 为空，本轮只改本记录允许的三份状态文档。
+
+### 更广 Day2–5 发布门
+
+| 门 | 需要提交的证据 | 当前状态 |
+|---|---|---|
+| Day2 API/autograd | CPU、Torch 前端和实际 CUDA 的重点算子、放置、alias、in-place、梯度/高阶梯度、dtype 与 fallback 回归；按声明支持范围跑完整相关矩阵 | R9/R10 两个 CPU Torch 节点仍失败：常量写后输入梯度缺失，FollowRuntime native alias 被转为 CPU placement；CUDA 常量写仍无证据 |
+| Day3 模型功能与恢复 | T5、Qwen、Vision、BERT 按发布声明完成真实任务的训练/验证、梯度/参数更新、设备/fallback、固定任务指标；checkpoint 新进程加载并续训时核对 optimizer/scheduler/RNG 与数据推进 | R14 Qwen 单 seed 两 epoch 和同框架 resume 已通过；不能代表四类模型或一般收敛，其他模型仍按各自缺口验收 |
+| DDP 默认路径 | 默认非特化 DDP 在真实多卡进程中核对梯度归并、参数更新、rank 状态和退出清理；fused/special-only 结果不足 | 未关闭 |
+| Activation checkpointing | 运行时证明目标层被重新计算，梯度与不重算基线对齐，并在相同配置测出可复现的峰值显存收益；否则不能将直接调用函数的 shim 作为功能/节省证据 | 当前 shim 不执行 activation recompute，未通过 |
+| JT/PT 任务质量 | 固定且共同的 held-out 集、权重/adapter/tokenizer、解码策略和任务指标；定义阈值并同时给 JT/PT 完整结果，必要时加入人工审查 | R14 只有 PT 在 Alpaca train split 的 17 条描述性分数；JT 生成超时，无可比得分，也无通过阈值 |
+| 保存与互操作 | 分别记录同框架新进程恢复和跨框架读取；对已声明互操作格式做完整测试，并保留任何失败边界 | R14 Jittor 新进程 resume 通过；stock PyTorch `torch.load` JT portable-pickle `optimizer.pt` 失败，需继续注明限制 |
+| Day4–5 性能/显存 | 当前身份私有冷编、合格无干扰窗口、三轮交替、每侧每轮 ≥10 热样本，完整时间分布和 allocator/NVML 峰值；容量单独验收 | GPU 准入不满足，正式测量未开始 |
+
+R9 原始 CPU focused 为 2 failed/7 passed/1 skipped/fallback=0；证据包独立审计 `/data6/cgq/jittor-lab/_state/release-day23/20261030-r9-torch-focused-independent-audit-r1/audit.json` SHA256 `8312a7144d79143799701d01d6c2bc3f1ce4b18ac422d7b9bd3b2ec49464b0c2` 只确认失败证据可审计。隔离 R10 在 R9 上仅改 `compat/torch/frontend.py` 与 `compat/torch/installers/tensor/method_api.py`；manifest SHA256 `adb67ff8a0b9f1e185f347ebc7770e1da850654d62806cd982fbbb82dbd69d4c`、fingerprint `aff54e8c7cd4a3cd8d28500c787441daf92075f44bfd4550925f16c3a275eb2c`。两个失败节点重测仍 2 failed/20.47s，同一行为未修复；pytest 日志 SHA256 `7959365cf89793258e5efd9be1a09b41dc8886ed5d2b026ea09d004232b7034b`、attempt receipt SHA256 `08b4b6c783b6e590b67af247b22e463890a03c0652286569571240bed989f5ad`。pytest 完成后 runner 的 git-root 路径写错而没有 worker-result；原始 pytest summary 足以确认两项测试都执行且失败，不能把 controller 错误解释为未执行或通过。该候选与主树冻结源不同，未合入。
+
+结论：Day4–5 仍需私有冷编与合格窗口；更广发布门还包含实际多模型功能、默认 DDP、激活重计算、held-out JT/PT 质量及保存互操作边界。R14 实用训练通过不等于 release 验收完成；整体状态保持 **Not complete**。
+
+
 
 ## 2026-10-31 当前源码冻结与 Day4–5 准入
 

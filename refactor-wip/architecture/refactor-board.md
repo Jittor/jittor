@@ -1,5 +1,16 @@
 # 整改看板
 
+## 2026-10-31 R9/R10 Torch 定向复测与 Day2–5 剩余门
+
+R9 的 CPU Torch focused 结果为 2 failed、7 passed、1 skipped、fallback=0；失败集中在 constant `fill_/zero_` 后梯度路径和 `torch.Tensor(native_var)` 的 FollowRuntime 放置。独立保存产物审计 `/data6/cgq/jittor-lab/_state/release-day23/20261030-r9-torch-focused-independent-audit-r1/audit.json` SHA256 `8312a7144d79143799701d01d6c2bc3f1ce4b18ac422d7b9bd3b2ec49464b0c2` 通过的是证据审计，不会把原 pytest 失败改记为通过。
+
+R10 在 R9 隔离快照上只改 `compat/torch/frontend.py` 与 `compat/torch/installers/tensor/method_api.py`，source manifest SHA256 `adb67ff8a0b9f1e185f347ebc7770e1da850654d62806cd982fbbb82dbd69d4c`、fingerprint `aff54e8c7cd4a3cd8d28500c787441daf92075f44bfd4550925f16c3a275eb2c`。R10 CPU attempt 只执行上述两个失败节点，仍为 2 failed/20.47s：输入梯度仍为 `None`，FollowRuntime alias 仍变为 placement backend 0。pytest 已执行并在 raw log 留下逐项失败；其后 runner 错把 `/data6/cgq/jittor-lab/_state` 当 Git 根目录，故 worker-result 未写出、controller receipt 为 FAILED。raw log SHA256 `7959365cf89793258e5efd9be1a09b41dc8886ed5d2b026ea09d004232b7034b`，receipt SHA256 `08b4b6c783b6e590b67af247b22e463890a03c0652286569571240bed989f5ad`。R9/R10 均为隔离诊断，不是当前冻结候选，不覆盖、不回写主树；R10 未验证 CUDA 常量写入，也没有 CUDA 节点可记 PASS。
+
+Day4–5 的正式性能/显存门仍按以下顺序执行：绑定当前冻结候选 `b2cf6bad4ce647294cb4c5663117145743bb02dc` / fingerprint `95eb54ba17b771ece4ed585c2036f19565075b66c858e599972fbee011f76558`，在 `/data6` 建立其私有 cold core/cache 并独立审计；PyTorch/Jittor 使用同一模型权重、输入、dtype、batch/sequence、优化器、更新数、运行设置及实际设备，按三轮交替配对，每侧每轮至少 10 个同步热态样本；分别报告加载、首步、热态耗时的 median、p95、离散度及 allocator/NVML 峰值。正式入场要求目标 GPU 利用率 ≤10%、空闲显存 ≥60,000 MiB、连续稳定采样且没有无关 GPU PID；容量/最大可运行配置单独测，不能用单步校准或速度样本替代。旧 df45/R17 包与本候选身份不匹配，旧共享负载数字只作诊断。
+
+更广 Day2–5 还需关闭：CPU/Torch/CUDA 重点 API 与 autograd/alias/placement 回归（R10 两失败未修）；T5、Qwen、Vision、BERT 的目标模型功能与训练/恢复范围；普通默认 DDP 路径的真实多卡同步和更新；声明支持的 checkpoint 路径确实发生 activation recompute 并测得梯度等价及显存收益；共同 held-out 数据上的 JT/PT 生成分数和预先定义的任务阈值；保存、跨进程加载和跨框架序列化边界有独立结论。R14 Qwen 实用训练/同框架 resume 是一项配置的正面证据，不能代替以上矩阵；stock PyTorch 读取 JT optimizer portable-pickle 的失败继续单独保留。当前候选仍未满足 GPU 入场门，整体 release 保持 Not complete。
+
+
 
 ## 2026-10-31 当前源码冻结与 Day4–5 准入
 

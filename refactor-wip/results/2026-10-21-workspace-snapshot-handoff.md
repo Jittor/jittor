@@ -1,6 +1,16 @@
 # 2026-10-21 工作区快照与本机接续交接
 
 
+## 2026-10-31 最新接续状态：Day4–5 门槛与 R9/R10 功能失败
+
+当前服务器仍使用 `/home/cgq/jittor` 原工作区。复核前 HEAD `d03df9e0a81fbcbc40d0ce68cafd73d0d0c88836`，origin 为 `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81` 且是祖先，HEAD ahead/behind 为 76/0；原有 101 项 dirty、index 为空，没有清理、暂存或改写它们。三份状态文档此前均干净。源码性能候选身份继续绑定隔离冻结快照 HEAD `b2cf6bad4ce647294cb4c5663117145743bb02dc` / fingerprint `95eb54ba17b771ece4ed585c2036f19565075b66c858e599972fbee011f76558`，不要将 R10 隔离补丁或旧 R17/df45 产品混入此身份。
+
+R10 对 R9 暴露的两个 CPU Torch 节点各复测一次，仍未修复：`fill_/zero_` 后线性输入梯度为 None；`torch.Tensor(native_var)` 的 FollowRuntime placement 仍从 -1 转成显式 CPU 0。pytest 是 2 failed/20.47s，证据和源指纹详见本文件上方发布门增量及看板；runner 后续写回路径错误，worker-result 缺失，但 raw log 与 receipt 已保留。下一项功能工作应围绕这两个实际语义失败找最小因果修正并使用新隔离身份；必须先修好并重审运行器写回路径，不能仅凭 R10 patch 成立。
+
+正式性能/显存门暂不可入场：计划 GPU UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 当前 29% 利用、59,939 MiB 空闲，不满足利用 ≤10%、空闲 ≥60,000 MiB；其余 GPU 也未同时满足门槛。当前无本任务进程或该私有 cache lock holder；根分区约 33 GiB 且 100% 使用，`/data6` 约 5.5 TiB 可用。后续 Day4–5 要先为冻结候选建立并独立审计私有 cold cache，再在合格窗口完成三轮交替、每侧每轮 ≥10 个同步热样本，报告加载/首步/热态耗时 median/p95/离散度和 allocator/NVML 峰值；容量另测。更广 Day2–5 的 T5/Qwen/Vision/BERT、默认 DDP、真实 activation recompute/显存收益与共同 held-out JT/PT 质量门均仍未关闭；整体 release **Not complete**。
+
+
+
 ## 2026-10-31 当前源码候选冻结与后续执行边界
 
 继续使用现有 /home/cgq/jittor，本轮未 clone、reset、stash、clean，也未改源码。主树 HEAD b2cf6bad4ce647294cb4c5663117145743bb02dc、origin e5cffe1ae60c418f53c5bb1cdca9182577fd2b81 祖先关系通过；2,815 个非文档代码/测试文件的指纹为 95eb54ba17b771ece4ed585c2036f19565075b66c858e599972fbee011f76558。独立复核核对文件 inventory/bytes、符号链接、可变状态文档和工作区状态均通过。证据包 /data6/cgq/jittor-lab/_state/release-day23/20261031-main-current-source-r3/；源码清单 SHA256 2253605eceb1e301a6adaf476dd64200ae10b13f33c6537bc7e4a9009877c4ab，source verification SHA256 f0ec621b9a4b378282e59a792f86ce14849fc4046c948f74b4c5de94745eb27c，bundle SHA256 162cf21584d1662c7761f885501b551553b011e4c196757aca75be57b0ef2dd0。该 HEAD 是源码身份冻结基准；随后本任务只把这三份既有状态文档纳入中文提交，提交后 HEAD 是其文档专用子提交，代码指纹保持不变。首轮清单器因目录符号链接而失败，失败日志 SHA256 3cf35d96c62ff802566d85d1ca0a4081c4ae6314b9742865aaf7720ed4bb08ef 已保留；重做后两次扫描及独立复核通过。
