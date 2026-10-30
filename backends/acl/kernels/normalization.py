@@ -20,8 +20,9 @@ from .ops.vector_norm_op import VectorNormACL
 
 
 def vector_norm_supported(x, ord=2, dim=None, keepdim=False):
-    # Last-axis reductions improved stock Swin inference with the required
-    # contiguous copy included. Multi-axis GRN did not improve the full model.
+    # The SDK avoids half intermediate square overflow/underflow. Keep the
+    # measured last-axis scope; production timing did not establish a speedup,
+    # and the multi-axis GRN candidate slowed the full model.
     from numbers import Integral
     if isinstance(dim, (tuple, list)):
         if len(dim) != 1:

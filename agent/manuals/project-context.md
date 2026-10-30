@@ -31,8 +31,9 @@ Python 3.7-3.13; [`noxfile.py`](../../noxfile.py) and
 surface (tiers `core` / `smoke` / full, see `AGENTS.md`). User-facing breaking
 changes: [2.0 migration notes](../../docs/releases/2.0.md). The Ascend 310P
 support from PR #18043 is integrated (SoC capability table, reduced-precision
-opt-in, ACL inference helpers and mapped composite ops); the latest model scope is in the
-[four-model 310P vision verification](../../docs/results/2026-10-29-stock-vision-ascend310p.md). User documentation
+opt-in, ACL inference helpers and mapped composite ops); the latest follow-up is in
+[310P vision remeasurement and FP16 corrections](../../docs/results/2026-10-30-vision-ascend310p-optimization.md),
+with the broader model scope in the [four-model verification](../../docs/results/2026-10-29-stock-vision-ascend310p.md). User documentation
 is now paired: Chinese-default `X.md` plus English `X.en.md`, with
 `README.md` / `README.en.md` at the root. The duplicate-capability audit
 consolidated optimizer state-name translation, vLLM accelerator detection,

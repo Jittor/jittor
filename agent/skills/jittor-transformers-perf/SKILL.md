@@ -469,6 +469,8 @@ native vector_norm、Torch norm 和 normalize 共享查询入口。strided 输�
 连续输入，必须把复制时间计入。多轴 GRN 本轮未获稳定整模收益，保留旧路径；
 CPU、梯度及未准入轴也保留各自原有实现。canonical vector_norm 的 dim=None 会
 先展平再按最后轴查询，不能把 provider 直接拒绝 None 解释成所有公共 None 都拒绝。
+标准生产开 / 关对照没有确认稳定提速。保留该路径的收益是修正真范数仍可表示时
+FP16 中间平方的溢出 / 下溢；不得将 LAB 原型约 2.2% 的收益当作生产速度结论。
 
 `probe_acl_vector_norm.py` 比较独立 CPU 与 NPU 的公开 norm / normalize，保存原始
 数组、非有限值 mask 和有限误差；专门包含半精度中间平方溢出、真范数溢出、NaN、

@@ -185,7 +185,7 @@ def scatter_acl(input, dim, index, src, reduce="void"):
 def arg_reduce_acl(input, op, dim, keepdims=False):
     dtype = _jittor_dtype_name(input.dtype)
     if dtype == "float16" and soc_name().startswith("Ascend310P"):
-        # CANN MaxDim half kernels can return values and indices from different
+        # CANN half extrema kernels can return values and indices from different
         # rows. Use exact FP32 comparisons for both extrema on this SoC.
         # Gather the original half values instead of narrowing the SDK result:
         # the device Cast kernel saturates infinities when narrowing to half.

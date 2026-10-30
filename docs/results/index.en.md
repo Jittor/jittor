@@ -15,6 +15,7 @@ history.
 ```{toctree}
 :maxdepth: 1
 
+2026-10-30-vision-ascend310p-optimization.en
 2026-10-29-stock-vision-ascend310p.en
 2026-10-25-recent-pr-integration.en
 2026-10-24-datatrove-cpu-compatibility.en
@@ -137,6 +138,7 @@ history.
 
 | Result | Status | Date |
 | --- | --- | --- |
+| [Ascend 310P: vision remeasurement and FP16 corrections](2026-10-30-vision-ascend310p-optimization.en.md) | No stable production speed gain; extrema and single-axis norm corrected; Conv/Swin slower, RT original order unaccepted | 2026-10-30 |
 | [Ascend 310P: four complete vision models](2026-10-29-stock-vision-ascend310p.en.md) | Classification / depth pairs pass; measured Depth configuration 1.65× faster; Swin still slower; RT-DETR ordered failure excluded | 2026-10-29 |
 | [Ascend 910B3: cold-cache startup, ACL execution and NPU gate](2026-08-28-ascend-910b-validation.en.md) | NPU gate 397 passed / 9 skipped; the capability boundaries behind the skips remain open | 2026-08-28, reviewed 2026-09-01 |
 | [Qwen3-0.6B training on Ascend 910B3](2026-08-30-qwen3-ascend-training.en.md) | FP32 training and BF16 single-step alignment accepted; the exact BF16 path is about 6% slower and the training trajectory is not yet accepted | 2026-08-30, 2026-09-02 |

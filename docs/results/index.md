@@ -11,6 +11,7 @@
 ```{toctree}
 :maxdepth: 1
 
+2026-10-30-vision-ascend310p-optimization
 2026-10-29-stock-vision-ascend310p
 2026-10-25-recent-pr-integration
 2026-10-24-datatrove-cpu-compatibility
@@ -135,6 +136,7 @@
 
 | 结论 | 状态 | 日期 |
 | --- | --- | --- |
+| [昇腾 310P：视觉复测与 FP16 数值修复](2026-10-30-vision-ascend310p-optimization.md) | 未确认生产提速；修复极值与单轴范数精度，Conv/Swin仍慢，RT原序未验收 | 2026-10-30 |
 | [昇腾 310P：四个完整视觉模型](2026-10-29-stock-vision-ascend310p.md) | 完整分类 / 深度对拍通过，Depth 已测配置快1.65×；Swin优化后仍慢，RT-DETR ordered失败不计排名 | 2026-10-29 |
 | [Ascend 910B3：冷缓存启动、ACL 执行与 NPU 门禁](2026-08-28-ascend-910b-validation.md) | NPU 门禁 397 passed / 9 skipped；skip 对应的能力边界仍开放 | 2026-08-28，2026-09-01 复查 |
 | [Qwen3-0.6B 在 Ascend 910B3 上训练](2026-08-30-qwen3-ascend-training.md) | FP32 训练与 BF16 单步对齐接受；BF16 精确路径慢约 6%、训练轨迹未验收 | 2026-08-30，2026-09-02 |

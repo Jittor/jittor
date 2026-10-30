@@ -2,7 +2,7 @@
 
 - Status: Maintained
 - Last reviewed: 2026-10-30
-- Baseline: `f283ba92d` plus the scoped 310P norm/arg-reduction patch; per-entry scopes below
+- Baseline: `02b021cba3c22f7907ae283610d82fe6dd6fb4de`; per-entry verification scopes below
 - Owner: Jittor core maintainers
 - Review when: an entry is fixed or narrowed, a strict expected failure
   XPASSes, a new defect is reproduced, or at quarterly maintenance
@@ -1947,7 +1947,7 @@ workaround.
 
 - Severity: Medium (incorrect first-index semantics for affected inputs).
 - Status: Open; reproduced 2026-10-30 on Ascend310P3 / CANN 9.1.0 against
-  `f283ba92d` and the scoped ArgReduce correction (scoped 310P patch on this baseline).
+  `f283ba92d` and the ArgReduce correction at `02b021cba3c22f7907ae283610d82fe6dd6fb4de`.
   Other SoCs unverified. Applies to observed FP16 public max/min and the
   corresponding FP32 SDK comparison path; do not generalize to all dtypes.
 - Owner: ACL backend and Torch compatibility maintainers.
@@ -1955,7 +1955,7 @@ workaround.
   independent Torch CPU chooses index0. For `[1,NaN,2,NaN,3,4]`, index3
   versus CPU index1. For `[+0,-0,+0,-0,+0,+0]`, min chooses index1 rather
   than CPU index0; for `[-0,+0,-0,+0,-0,+0]`, max chooses index1 rather than
-  CPU index0. Ordinary tested finite ties choose the first index correctly.
+  CPU index0. Tested equal nonzero finite ties choose the first index correctly.
 - Cause: the observed SDK arg-reduction index policy differs from CPU
   first-index semantics for these special-value ties. Exact internal SDK
   implementation is not inferred. Values/signs/indices are unchanged before
@@ -1973,8 +1973,10 @@ workaround.
   and `argreduce-public.json/.npz` under
   `$JITTOR_LAB_ROOT/_state/generative-vision-310p/iteration-2026-10-30/rtdetr/`.
   `argreduce-public` compares native/compat × max/min before/after and confirms
-  unchanged values, zero signs and indices. The report retains the limits
-  explicitly; passing finite-domain tests do not count these as accepted.
+  unchanged values, zero signs and indices. See the
+  [310P vision follow-up](../../docs/results/2026-10-30-vision-ascend310p-optimization.en.md)
+  for the finite MaxDim/MinDim correction and remaining first-index limits;
+  passing finite-domain tests do not count special-value cases as accepted.
 - Exit condition: real ACL public native/compat max/min/argmax/argmin select
   CPU-equivalent first indices for all tested NaN placements and mixed zero
   signs, preserve selected values/signs and gradients, and retain finite
@@ -1984,8 +1986,8 @@ workaround.
 
 - Severity: High (silently wrong selected integer value).
 - Status: Open; reproduced 2026-10-30 on Ascend310P3 / CANN 9.1.0 against
-  the unchanged integer path at `f283ba92d` and scoped ArgReduce code
-  (scoped 310P patch on this baseline). Other SoCs unverified.
+  the unchanged integer path at `f283ba92d` and the same scoped path at
+  `02b021cba3c22f7907ae283610d82fe6dd6fb4de`. Other SoCs unverified.
 - Owner: ACL dtype/conversion and arg-reduction maintainers.
 - Symptom: `tests/backends/acl/test_acl.py::TestACL::test_integer_arg_reduce_exact_values_stay_on_acl`
   uses int32 input `[[2147483647,-2147483648,7,7],[-9,12,12,1]]`.
@@ -2000,14 +2002,18 @@ workaround.
   process forcing the original half branch by mocking only `soc_name`
   reproduces the same integer failure. This is a control on the real 310P,
   not a 910B hardware test. The broader session's 40pass/1fail and fresh
-  control's 1fail must remain visible alongside passing FP16 targets.
+  control's 1 fail remains separate from passing FP16 targets; the integer test
+  is outside the final explicitly selected 501-test native/CPU session.
 - Workaround: no exact end-to-end workaround has been verified. Avoid claiming
   selected-value correctness near integer bounds; retain an explicit CPU
   reference or validate a narrower application domain until isolated.
 - Evidence: `test-half-argreduce-npu.log` (original 40pass/1fail) and
   `test-integer-original-branch.log` (fresh control, same failure), under the
-  same unversioned state root above. Exact input/expected arrays are in the
-  existing versioned test. The test remains enabled and was not relaxed.
+  unversioned state root
+  `$JITTOR_LAB_ROOT/_state/generative-vision-310p/iteration-2026-10-30/rtdetr/`.
+  Exact input/expected arrays remain in the unchanged versioned test. See the
+  [310P vision follow-up](../../docs/results/2026-10-30-vision-ascend310p-optimization.en.md)
+  for the independent failure and its boundary; the test was not relaxed.
 - Exit condition: independently isolate casts and SDK outputs, repair the
   proper owner, then pass exact int32-boundary and int64-magnitude forward
   value/index tests on real ACL with zero fallback, preserving dtype and
@@ -2018,8 +2024,8 @@ workaround.
 - Severity: Medium (nonfinite masks, overflow values and normalization can be
   silently wrong for affected inputs).
 - Status: Open; independently observed 2026-10-30 on Ascend310P3 / CANN 9.1.0
-  against the old path and the scoped canonical vector-norm route
-  (scoped 310P patch on this baseline). Other SoCs unverified. The new route is restricted to
+  against the old path and canonical vector-norm route at
+  `02b021cba3c22f7907ae283610d82fe6dd6fb4de`. Other SoCs unverified. The new route is restricted to
   no_grad/p=2/single final axis/real FP16 or FP32 and does not establish full
   special-value support.
 - Owner: ACL norm/elementwise and Torch compatibility maintainers.
@@ -2044,10 +2050,11 @@ workaround.
   mismatch. This is a bounded regression observation, not a claim that all
   remaining values are CPU-correct. Normal finite supported-route tests pass.
 - Separate finite-range observation: unadopted multi-axis GRN norm probes show
-  old FP16 large100x/tiny1e-4x errors10.2035%/69.3944% against native NPU;
+  old FP16 large 100x/tiny 1e-4x errors 10.2035%/69.3944% against native NPU;
   the SDK candidate matches native but was rejected for full-model regression.
-  The production final-axis route does not claim to fix this old multi-axis
-  fallback precision gap or establish CPU correctness for every norm domain.
+  The production final-axis route corrects representable finite results
+  such as norm([1000,1000,1000]) and tiny inputs, but does not fix this old
+  multi-axis fallback precision gap or establish all-domain CPU correctness.
 - Workaround: use a verified representable epsilon such as 1e-4 for zero-input
   normalization if that matches the application contract. No transparent
   workaround is verified for the other special-value differences; validate
@@ -2062,6 +2069,9 @@ workaround.
   independent CPU then NPU each save 80 fields. NPU reports
   `reference_matched=false` honestly against CPU. `--require-match` turns the
   discrepancy into a failing run. The normal diagnostic exit is not parity.
+  See the [310P vision follow-up](../../docs/results/2026-10-30-vision-ascend310p-optimization.en.md)
+  for finite accuracy corrections, the non-improving production A/B and
+  preserved nonfinite/epsilon limits.
 - Exit condition: public vector_norm/norm/normalize preserve CPU NaN/Inf masks,
   overflow behavior and appropriate epsilon semantics on real ACL devices,
   while retaining finite values/dtypes, existing gradient fallbacks and zero
