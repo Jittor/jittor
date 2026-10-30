@@ -1,5 +1,23 @@
 # 整改看板
 
+## 2026-10-30 graph capture owner／close CPU fake 原型
+
+独立 Python 状态模型及 12 项标准库测试通过，覆盖 unsupported backend、先分配失败、确定／未知 begin、空图／非空图关闭、设备切换及恢复、嵌套与跨线程 owner 拒绝、未知 end 时保留 hold 并拒绝再次 capture、select／restore 失败及首错保留、已关闭 graph 在恢复失败时保留，以及 fake caller 对 poison 的传播。测试中的两次 `checked_caller` 调用是同一个 fake 函数的重复，不是两个真实调用点的集成验证。原始 10 项测试记录和扩展至 12 项的结果都保留。
+
+真实源码只读 AST 核对显示 `step_capture.py:597` 和 `graph_replay.py:757` 的 capture 调用路径捕获宽泛 `Exception` 后返回、不重新抛出；这说明若未来 native unknown-close 以普通异常传播，必须另外设计调用侧 fail-closed，当前没有运行真实调用路径验证。现有 BackendOps ABI 3 表要求版本和结构尺寸精确匹配，真实 end 的 null 不能区分失败和已关闭空图，fake 的明确状态并非现有接口；模型中的锁、owner token、poison 和 held list 也不能证明真实 allocator 全局状态、线程生命周期、CUDA custom context、外部 backend 或非空图 launch／release 的正确性。unknown 不代表进程仍可安全执行其他 GPU 操作。
+
+这只是 CPU 行为原型与静态源码审阅，没有生产补丁、Jittor 集成、真实 backend 修复或 GPU／JIT 测试；历史 capture 906 与原两次干预观察保留。独立审阅 `/data6/cgq/jittor-lab/_state/release-day23/20261030-capture-fake-prototype-independent-review-r1/audit.json` SHA256 `ae72c4673e9f5f90fe7757ff124fd540b20a7a4cc18c53ce20c88be50026c679`；原型 manifest SHA256 `c27b6bcc746ee465c01f6da846848a39e76cfc9fb1c460b2f769e532c32b1fe4`。
+
+
+## 2026-10-30 手工 host 中转双卡一阶梯度诊断
+
+主树工作树 fingerprint `4ed94ce1a836ef782dc8d47199a9b0cb86e1eb73752b1de919c6c3cb2ffb35d3` 使用实际 CUDA core，在两个独立进程分别测试 logical GPU 0→1 和 1→0：显式启用目标到源的 peer（两次返回 0，之前隐藏状态未知），对四个连续 FP32 元素手工执行 `x._copy_to_cpu().to_device(target)`，而非改变生产实现。两方向的源前后、host 中间值和目标值均为 `[0.25, -1.5, 2.0, 3.25]`，backward 得到源端梯度 `[2.0, -0.5, 1.0, 0.25]`、loss `4.0625`，与独立 CPU PyTorch 数学参考一致。host 的 public device／placement／location／dispatch 分别为 CPU／0／CPU／`cpu:-1`；源、目标和梯度的实际 DEVICE 指针与对应设备 ordinal、两个物理 GPU UUID、实际 core／utils／runtime／driver 映射及 fallback 0 已核。CPU PT 的原生库映射未采集。
+
+另以独立 tensor 双向分别变更源和目标，并读回两端，观察到两次变更实际发生且另一端值保持，支持该特定样本的复制隔离。该实验含 peer 启用、显式同步和多次读回，范围仅限该四元素连续 FP32、一阶梯度及单线程；不覆盖直接跨卡 `.to()`、非连续布局、其他 dtype、非阻塞、capture／replay、性能或生产修复，也不能推翻历史直接跨卡错误及 CUDA 700／906 严格失败。
+
+独立终审 `/data6/cgq/jittor-lab/_state/release-day23/20261030-manual-host-autograd-r2-independent-terminal-r1/audit.json` SHA256 `9ae248862e156f253a8a5c5915884c19a3fb6cb7342a3ad41f6f8f26c468e4c3`。unit 自然成功退出；主 GPU 功能 cache 端点新增 12 项、无删除且旧项仅锁文件变化，三份保护 cache 不变，五锁内核记录为空；快照和进程／FD 观察存在可见性限制。r1 未运行，静审发现错误的 CPU dispatch 索引断言，r2 修正并独立审阅后执行，原审计保留。
+
+
 ## 2026-10-30 主树 4ed94 BERT 非 fused 两步恢复诊断
 
 单 seed 821 的真实 BERT 在主树工作树 fingerprint `4ed94ce1a836ef782dc8d47199a9b0cb86e1eb73752b1de919c6c3cb2ffb35d3` 和实际主树 CUDA core 上加载历史 df45 checkpoint-50，完整状态签名严格一致，201 个 scalar step 与 trainer／scheduler 均为 50，201 参数及 402 个 moment 的设备记录为 cuda:0，Python／NumPy／CPU／CUDA 四组 RNG 恢复检查通过。随后有意把两个 optimizer 组的 `foreach`／`fused` 从 `None` 设为 `False`，这是改变原配置的诊断干预；保留原 100 步 scheduler，实际只续训第 51、52 两步，0 skip、fallback 0。每步 201 个梯度均有限 FP32 CUDA，201 个参数均发生变化；每步真实 Python 逐参数 AdamW 更新与 optimizer scope 各 201 次、step 分别为 51／52，记录的 scope 进前／内部／退出 dispatch 均为 cuda:0。该 Python 观察不证明 kernel 内部执行或其他设备上下文行为。
