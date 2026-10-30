@@ -1,11 +1,21 @@
 # 2026-10-21 工作区快照与本机接续交接
 
+## 2026-10-31 R11g 最新接续：隔离候选定向回归通过
 
-## 2026-10-31 最新接续状态：Day4–5 门槛与 R9/R10 功能失败
+本轮继续使用服务器现有 `/home/cgq/jittor`，没有 clone 或清理。当前 HEAD `dcc7f66ca412d3b2496478ddf27499dd21698bca`，远端 `origin/cgq_transformers` 最新提交 `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81` 是祖先（ahead/behind 77/0）；80 个 tracked 文件和 21 个 untracked 文件仍 dirty，index 为空，全部保留。文档里较早的 `b2cf6bad...` / fingerprint `95eb54ba...` 是历史冻结身份，不与当前 HEAD 或 R11g 混用。
+
+R9/R10 的 fill_/zero_ 后梯度缺失及 `torch.Tensor(native_var)` FollowRuntime 放置错误，在隔离 worktree `/data6/cgq/jittor-lab/worktrees/torch-compat-fill-zero-runtime-grad-r11-20261031` 推进到 R11g；HEAD `765f1791f3b00f9129fb3ec6342dadf2c9dc2dbe`，fingerprint `18500d23a6b25c2f5388aa7a8c3af4b057aff98ace9caa0be139ae9c02ab47d4`。attempt-14 三项 Torch focused、attempt-15 native JVP（shim 关闭）、attempt-16 单前端 CPU（`use_cuda=0`、隐藏 CUDA）共 5 passed、fallback=0。attempt-16 不是 CUDA 证据。manifest、日志、receipt、worker 哈希及失败迭代详见 Day2–5 结果记录。
+
+R11g 尚未移植或合并到当前主树，接下来须先审查并移植到当前源码身份，再复测对应 CPU 语义及适用 CUDA 路径。性能/显存本轮未测：CPU cache 无 holder、无本任务残留进程、`/data6` 约 5.5 TiB 可用，但可见 GPU 利用率约 27%–100%。正式门须使用同源码私有 cold core/cache、至少三轮交替且每轮每侧至少十个热样本，报告加载/首步/热态 median、p95、离散度及 allocator/NVML 峰值，容量另测。其他模型、默认 DDP、真实 activation recompute、held-out JT/PT 质量与跨框架互操作仍未关闭；整体 release 保持 **Not complete**。
+
+
+
+
+## 2026-10-31 历史接续记录：Day4–5 门槛与 R9/R10 功能失败
 
 当前服务器仍使用 `/home/cgq/jittor` 原工作区。复核前 HEAD `d03df9e0a81fbcbc40d0ce68cafd73d0d0c88836`，origin 为 `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81` 且是祖先，HEAD ahead/behind 为 76/0；原有 101 项 dirty、index 为空，没有清理、暂存或改写它们。三份状态文档此前均干净。源码性能候选身份继续绑定隔离冻结快照 HEAD `b2cf6bad4ce647294cb4c5663117145743bb02dc` / fingerprint `95eb54ba17b771ece4ed585c2036f19565075b66c858e599972fbee011f76558`，不要将 R10 隔离补丁或旧 R17/df45 产品混入此身份。
 
-R10 对 R9 暴露的两个 CPU Torch 节点各复测一次，仍未修复：`fill_/zero_` 后线性输入梯度为 None；`torch.Tensor(native_var)` 的 FollowRuntime placement 仍从 -1 转成显式 CPU 0。pytest 是 2 failed/20.47s，证据和源指纹详见本文件上方发布门增量及看板；runner 后续写回路径错误，worker-result 缺失，但 raw log 与 receipt 已保留。下一项功能工作应围绕这两个实际语义失败找最小因果修正并使用新隔离身份；必须先修好并重审运行器写回路径，不能仅凭 R10 patch 成立。
+R10 对 R9 暴露的两个 CPU Torch 节点各复测一次，仍未修复：`fill_/zero_` 后线性输入梯度为 None；`torch.Tensor(native_var)` 的 FollowRuntime placement 仍从 -1 转成显式 CPU 0。pytest 是 2 failed/20.47s，证据和源指纹详见本文件上方发布门增量及看板；runner 后续写回路径错误，worker-result 缺失，但 raw log 与 receipt 已保留。这是 R10 终态与其 runner 写回错误的历史记录；R11g 后续结果及当前待办见本文档最上方最新接续状态。
 
 正式性能/显存门暂不可入场：计划 GPU UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 当前 29% 利用、59,939 MiB 空闲，不满足利用 ≤10%、空闲 ≥60,000 MiB；其余 GPU 也未同时满足门槛。当前无本任务进程或该私有 cache lock holder；根分区约 33 GiB 且 100% 使用，`/data6` 约 5.5 TiB 可用。后续 Day4–5 要先为冻结候选建立并独立审计私有 cold cache，再在合格窗口完成三轮交替、每侧每轮 ≥10 个同步热样本，报告加载/首步/热态耗时 median/p95/离散度和 allocator/NVML 峰值；容量另测。更广 Day2–5 的 T5/Qwen/Vision/BERT、默认 DDP、真实 activation recompute/显存收益与共同 held-out JT/PT 质量门均仍未关闭；整体 release **Not complete**。
 

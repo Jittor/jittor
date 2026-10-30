@@ -1,5 +1,17 @@
 # 整改看板
 
+## 2026-10-31 R11g 隔离候选推进与 Day4–5 资源状态
+
+针对 R9/R10 两项实际 Torch 语义失败，继续在隔离 worktree `/data6/cgq/jittor-lab/worktrees/torch-compat-fill-zero-runtime-grad-r11-20261031` 推进到 R11g。候选 HEAD `765f1791f3b00f9129fb3ec6342dadf2c9dc2dbe`，fingerprint `18500d23a6b25c2f5388aa7a8c3af4b057aff98ace9caa0be139ae9c02ab47d4`，manifest SHA256 `014dfd561f4352113e7f7c44704aaed144810226b968b51b16ba1443c9b465c5`。修正覆盖 factory requires-grad 张量的 leaf/梯度登记，以及将 `like` 候选随 Torch 前端上下文传到 C++ scope，使 FollowRuntime 放置在 clone 输出创建前可见。
+
+attempt-14 三项 Torch focused 回归 3 passed、fallback=0；attempt-15 关闭 shim 的 native JVP 回归 1 passed、fallback=0；attempt-16 `use_cuda=0` 且隐藏 CUDA 的单前端 CPU 回归 1 passed、fallback=0。三次共五项通过；attempt-16 不构成 CUDA 证据。中间失败及修正尝试均原样保留，最终日志、receipt 与 worker-result 哈希见 Day2–5 结果记录。
+
+R11g 是隔离候选，尚未移植到 `/home/cgq/jittor`。当前主树 HEAD `dcc7f66ca412d3b2496478ddf27499dd21698bca`，origin/cgq_transformers 最新提交 `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81` 为祖先（ahead/behind 77/0）；80 个 tracked 文件、21 个 untracked 文件仍 dirty，index 为空，全部保留。需要在当前源码身份移植并复测，之后才能更新主树 Day2 状态。
+
+本轮无性能/显存测量：CPU cache 无 holder、无遗留 pytest/Jittor 进程、`/data6` 可用约 5.5 TiB；可见 GPU 利用率约 27%–100%，不满足正式窗口。Day4–5 仍需同源码私有 cold core/cache、至少三轮交替且每轮每侧至少十个热样本，报告加载/首步/热态 median、p95、离散度与 allocator/NVML 峰值；容量单独测。整体 release 仍 **Not complete**。
+
+
+
 ## 2026-10-31 R9/R10 Torch 定向复测与 Day2–5 剩余门
 
 R9 的 CPU Torch focused 结果为 2 failed、7 passed、1 skipped、fallback=0；失败集中在 constant `fill_/zero_` 后梯度路径和 `torch.Tensor(native_var)` 的 FollowRuntime 放置。独立保存产物审计 `/data6/cgq/jittor-lab/_state/release-day23/20261030-r9-torch-focused-independent-audit-r1/audit.json` SHA256 `8312a7144d79143799701d01d6c2bc3f1ce4b18ac422d7b9bd3b2ec49464b0c2` 通过的是证据审计，不会把原 pytest 失败改记为通过。
@@ -8,7 +20,7 @@ R10 在 R9 隔离快照上只改 `compat/torch/frontend.py` 与 `compat/torch/in
 
 Day4–5 的正式性能/显存门仍按以下顺序执行：绑定当前冻结候选 `b2cf6bad4ce647294cb4c5663117145743bb02dc` / fingerprint `95eb54ba17b771ece4ed585c2036f19565075b66c858e599972fbee011f76558`，在 `/data6` 建立其私有 cold core/cache 并独立审计；PyTorch/Jittor 使用同一模型权重、输入、dtype、batch/sequence、优化器、更新数、运行设置及实际设备，按三轮交替配对，每侧每轮至少 10 个同步热态样本；分别报告加载、首步、热态耗时的 median、p95、离散度及 allocator/NVML 峰值。正式入场要求目标 GPU 利用率 ≤10%、空闲显存 ≥60,000 MiB、连续稳定采样且没有无关 GPU PID；容量/最大可运行配置单独测，不能用单步校准或速度样本替代。旧 df45/R17 包与本候选身份不匹配，旧共享负载数字只作诊断。
 
-更广 Day2–5 还需关闭：CPU/Torch/CUDA 重点 API 与 autograd/alias/placement 回归（R10 两失败未修）；T5、Qwen、Vision、BERT 的目标模型功能与训练/恢复范围；普通默认 DDP 路径的真实多卡同步和更新；声明支持的 checkpoint 路径确实发生 activation recompute 并测得梯度等价及显存收益；共同 held-out 数据上的 JT/PT 生成分数和预先定义的任务阈值；保存、跨进程加载和跨框架序列化边界有独立结论。R14 Qwen 实用训练/同框架 resume 是一项配置的正面证据，不能代替以上矩阵；stock PyTorch 读取 JT optimizer portable-pickle 的失败继续单独保留。当前候选仍未满足 GPU 入场门，整体 release 保持 Not complete。
+更广 Day2–5 还需关闭：CPU/Torch/CUDA 重点 API 与 autograd/alias/placement 回归（R11g 隔离候选已修正但尚未移植；完整矩阵仍未关闭）；T5、Qwen、Vision、BERT 的目标模型功能与训练/恢复范围；普通默认 DDP 路径的真实多卡同步和更新；声明支持的 checkpoint 路径确实发生 activation recompute 并测得梯度等价及显存收益；共同 held-out 数据上的 JT/PT 生成分数和预先定义的任务阈值；保存、跨进程加载和跨框架序列化边界有独立结论。R14 Qwen 实用训练/同框架 resume 是一项配置的正面证据，不能代替以上矩阵；stock PyTorch 读取 JT optimizer portable-pickle 的失败继续单独保留。当前候选仍未满足 GPU 入场门，整体 release 保持 Not complete。
 
 
 

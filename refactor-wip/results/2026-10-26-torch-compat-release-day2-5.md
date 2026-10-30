@@ -1,5 +1,35 @@
 # Torch Compatibility Release Acceptance: 2026-10-26 Day 2–5 Continuation
 
+## 2026-10-31 R11g 定向功能修正及当前验收边界
+
+在隔离候选 `/data6/cgq/jittor-lab/worktrees/torch-compat-fill-zero-runtime-grad-r11-20261031` 上形成 R11g，HEAD `765f1791f3b00f9129fb3ec6342dadf2c9dc2dbe`，fingerprint `18500d23a6b25c2f5388aa7a8c3af4b057aff98ace9caa0be139ae9c02ab47d4`，source manifest SHA256 `014dfd561f4352113e7f7c44704aaed144810226b968b51b16ba1443c9b465c5`。候选修正 factory requires-grad 张量的 leaf/梯度登记，并把 Torch Tensor 前端的 `like` 候选传入 C++ scope，让 FollowRuntime 在 clone 输出创建前选择放置。早期 R11 失败和中间尝试都保留，没有被最终结果覆盖。
+
+attempt-14 三项 Torch focused 为 3 passed/0 skipped/fallback=0；raw log SHA256 `8dbaacb031cb48da66363f0761d7fe72b5b56e3c1729ce5f565eb406cefb8ccd`，receipt SHA256 `3dd720cd336bb80bc5b3f024754d5631d3355b9b70e6dc55b457a8850eb3f1c3`，worker-result SHA256 `db7e0efaffe55cde93d837c3ff5acd64d48cb1bce3b7e08eccfd3a01951d9ce4`。attempt-15 关闭 `JITTOR_TORCH_SHIM` 的 native JVP 回归 1 passed/fallback=0，raw/receipt/worker SHA256 为 `c04f616e4b26bc55994c8850259ed07941100f8d2dfd67c7ea40984c3c303143`、`6fd5d5398412277ad1ea030f92c12aee49f2c29ae01eed9cda1dff72cb356db9`、`2dbe01d028dce9b81020bd49b1084fbd973d8060dcdafe9fdb258758e5b8c1c9`。attempt-16 在 shim 开启、`use_cuda=0` 且隐藏 CUDA 下的单前端 CPU 回归 1 passed/fallback=0，raw/receipt/worker SHA256 为 `981089ecc5df743aa78f20a41ef7e89f1f5356249c5f2afd6deb6656836f9f28`、`99077177511669dbc319c5dedaca5affa4f7477a7e9dc45c6561503f6c40900a`、`0df0ed86e8175f75d5c86fd71bb740165debebad84262a93f019e24bdb7b3fb9`。三次共五项通过；attempt-16 只证明 CPU 路径。
+
+R11g 尚未合入当前 `/home/cgq/jittor`，不能替代当前源码的验收。当前主树 HEAD `dcc7f66ca412d3b2496478ddf27499dd21698bca`；远端 `origin/cgq_transformers` 最新提交 `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81` 为祖先，ahead/behind 77/0；工作区有 80 个 tracked dirty 项和 21 个 untracked 项，index 为空。先审查/移植到当前源码身份并执行更广 CPU/Torch/CUDA 回归，再改变主线门状态。
+
+### Day4–5 资源快照与测量准入
+
+attempt-14 至 attempt-16 均为 CPU-only。终态没有本任务 pytest/Jittor 进程，复用 CPU cache 无 holder，`/data6` 约有 5.5 TiB 可用。资源采样时可见 GPU 利用率约 27%–100%，共享卡没有同时满足利用率 ≤10%、空闲显存 ≥60,000 MiB、稳定且无无关 PID 的窗口条件；因此没有启动 GPU cold build、正式计时或显存容量实验。
+
+正式性能门须固定同源码、配置、权重、输入顺序、设备与同步方式；同一模型配置至少三轮交替，每轮每侧至少十个同步热样本；报告加载、首步、热态 median/p95/离散度，以及 allocator allocated/reserved 和 NVML 峰值。容量/OOM 边界独立验收。共享负载旧数值只作诊断。
+
+### Day2–5 发布门进度
+
+| 门 | 当前证据与后续 |
+|---|---|
+| API/autograd 与设备语义 | R9/R10 两项 CPU Torch 失败在隔离 R11g 定向修正后通过；尚未移植到主树。当前源码完整 CPU/Torch/CUDA 矩阵未关闭，CUDA 常量写仍无实际设备证据。 |
+| 模型训练与恢复 | R14 seed821 Qwen 实用训练与同框架新进程续训通过；按发布声明还需 T5、Vision、BERT 等任务指标与恢复范围。 |
+| 默认 DDP | 需真实多卡默认路径的梯度归并、参数更新、rank 状态及退出清理证据。 |
+| Activation checkpointing | 需证明实际 activation recompute、梯度与基线匹配及同配置峰值显存收益；直接调用函数的 shim 不满足。 |
+| JT/PT 任务质量 | 需共同 held-out 集、相同权重/tokenizer/解码协议、预设阈值及双方分数；R14 PT 小样本与 JT 超时不能形成质量结论。 |
+| 保存与序列化互操作 | 分别报告同框架新进程恢复和跨框架读取；stock PyTorch 读取 JT portable-pickle optimizer 失败继续单独记录。 |
+| Day4–5 性能/显存 | 尚无正式样本；按上面的私有构建、合格窗口、交替样本和容量独立测量规则完成。 |
+
+结论：R11g 给出两项局部语义问题的隔离修正和五项窄回归通过，不代表主树或整体 Day2–5 release 通过。整体状态保持 **Not complete**。
+
+
+
 ## 2026-10-31 Day4–5 性能/显存与更广发布门：验收清单及 R10 复测
 
 ### Day4–5 正式性能与容量验收
@@ -16,7 +46,7 @@
 
 | 门 | 需要提交的证据 | 当前状态 |
 |---|---|---|
-| Day2 API/autograd | CPU、Torch 前端和实际 CUDA 的重点算子、放置、alias、in-place、梯度/高阶梯度、dtype 与 fallback 回归；按声明支持范围跑完整相关矩阵 | R9/R10 两个 CPU Torch 节点仍失败：常量写后输入梯度缺失，FollowRuntime native alias 被转为 CPU placement；CUDA 常量写仍无证据 |
+| Day2 API/autograd | CPU、Torch 前端和实际 CUDA 的重点算子、放置、alias、in-place、梯度/高阶梯度、dtype 与 fallback 回归；按声明支持范围跑完整相关矩阵 | R9/R10 两项失败在 R11g 隔离候选中修正，attempt-14 三项 Torch focused 通过、fallback=0；R11g 的 native JVP 与单前端 CPU 回归也各 1 passed。R11g 尚未移植到当前 /home 工作区；当前源的完整 CPU/CUDA 矩阵未关闭，CUDA 常量写仍缺实际设备证据 |
 | Day3 模型功能与恢复 | T5、Qwen、Vision、BERT 按发布声明完成真实任务的训练/验证、梯度/参数更新、设备/fallback、固定任务指标；checkpoint 新进程加载并续训时核对 optimizer/scheduler/RNG 与数据推进 | R14 Qwen 单 seed 两 epoch 和同框架 resume 已通过；不能代表四类模型或一般收敛，其他模型仍按各自缺口验收 |
 | DDP 默认路径 | 默认非特化 DDP 在真实多卡进程中核对梯度归并、参数更新、rank 状态和退出清理；fused/special-only 结果不足 | 未关闭 |
 | Activation checkpointing | 运行时证明目标层被重新计算，梯度与不重算基线对齐，并在相同配置测出可复现的峰值显存收益；否则不能将直接调用函数的 shim 作为功能/节省证据 | 当前 shim 不执行 activation recompute，未通过 |
