@@ -1,5 +1,13 @@
 # 2026-10-21 工作区快照与本机接续交接
 
+## 2026-10-30 e7d171 Qwen checkpoint51→102 实用续训完成
+
+当前e7源码下seed821 Qwen3-0.6B LoRA从既有checkpoint51续训完成51次更新、101微批次；step102固定17行验证集两次eager评估成功。112项CUDA0 FP32梯度每步finite且无缺失，零跳步/零fallback；首次更新112个LoRA参数均变化。JT per-step平均loss 1.1684248，PT full/resume 1.1688748；mean-abs差0.00219484、max 0.00686032。固定集loss JT 2.4555516、PT 2.4566441，训练曲线非单调。PT checkpoint不同，ID/shape相同不代表token字节相同。
+
+checkpoint51功能恢复含模型、optimizer、scheduler和四类RNG通过；strict hash仍因两个额外initial_lr项失败。checkpoint102共18文件已核hash，保存global/scalar step=102；没有fresh reload或predict。当前身份为e7 Python + 原位df45 CUDA core/utils混合产品，不是e7冷编。两份独立终态审计SHA为6341d8ca21ab5d342afdb4f90036c329a0cd541af27131ed730c1540b8334a27和e60b5a26a411361b4229acd583f87b0e9d295db8a0dacfb96d6aa0955bac2e9c；保护cache未变，candidate cache零新增，unit自然rc0。/proc扫描1883次拒读，终态可见性有限。
+
+任务仍未完成：下一步优先核验实际跨卡生产Tensor传输及其copy/capture失败；随后完成剩余Day2–5 CPU/Torch/CUDA受影响范围和Day4–5性能/显存正式验收。手工host staging是诊断，不是生产修复。性能、predict、checkpoint102 fresh reload和通用长周期收敛仍无结论，旧strict FAIL保持原样。
+
 ## 2026-10-30 BERT checkpoint100 新进程加载与评估
 
 在上文 step50→100 的真实续训之后，独立新进程实际通过 Trainer 加载该 checkpoint100 的模型、优化器、调度器、TrainerState 与 RNG：12 项 checkpoint 文件身份核符，模型/优化器/调度器/scaler 状态签名与已保存值严格一致，201 个 optimizer scalar step 均为100，603 项参数及moment设备为CUDA0，四组RNG恢复一致。此为新进程加载和评估，未执行后续 optimizer 更新、训练或数据游标续接，不把此前50步续训误作此次加载后的训练。

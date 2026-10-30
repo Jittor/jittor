@@ -1,5 +1,17 @@
 # Torch Compatibility Release Acceptance: 2026-10-26 Day 2–5 Continuation
 
+## 2026-10-30 e7d171 Qwen LoRA checkpoint51→102 实用训练验收
+
+本次绑定主树HEAD 9ffd0884ebc79f1e3674f091cc569de672b22219、源码指纹e7d1711ffcb67363b63a0ffb0743ec152eed418edbb0150bbfab52e754ab8c90。实际使用当前Python shim与原位DF45 CUDA core/utils，core SHA256 8774718332e0b0bddd2f3f72a26c448ac60484266a3e200207032d20d23a3020、utils SHA256 d83b331385c81f3ffa8b70ba2665acee73fe6ba7e5c300089af43170f80eebaf；属混合身份，不是e7原生冷编。实际GPU UUID GPU-2be51dc7-d99a-7307-869b-30ed5888e701，fallback=0。Qwen3-0.6B LoRA，seed821、BF16、gradient accumulation=2、每设备batch=1、eager eval；本次只覆盖既有checkpoint51之后的step52–102。
+
+恢复时global/scheduler step及112个optimizer scalar step均为51；337个模型及optimizer状态张量实际CUDA0，Python/NumPy/CPU/CUDA四类RNG通过。功能恢复通过，strict hash仍因两个额外initial_lr元数据项FAIL，旧FAIL保持。之后完成51次更新、101个微批次、51次AdamW返回及对应更新分支；每步112项unscaled FP32梯度均finite且无缺失，optimizer skips=0。首次续训step52有112/112个LoRA参数变化；后续不声称逐参数逐步均变。BF16/autocast仅在前两个微批次观察。checkpoint shim实际被调用但直接运行目标函数，不证明activation recomputation或节省显存。
+
+51个更新step等权loss JT 1.1684247986，PT full/resume均1.1688747537；逐步mean-abs差0.0021948391，max差0.0068603158。JT 101个微批次等权loss 1.1536167642。分段loss有起伏，step102为epoch尾部单微批次。固定17行验证集两次eager评估，最终JT eval loss 2.4555516243，PT为2.4566440582，差−0.0010924339（约−0.044%）。PT使用不同checkpoint；sample ID及shape匹配不证明token/label字节相同。结果支持此配置下的实用训练和固定集loss接近，不支持严格对齐或普遍收敛。
+
+checkpoint102共18文件、约30.47MB。adapter、optimizer、scheduler、RNG、TrainerState及release-state签名/值/设备文件hash已核；112个保存optimizer scalar step及Trainer global_step均102。没有新进程重载step102，未运行predict，没有accuracy或性能验收。工件目录为 /data6/cgq/jittor-lab/_state/release-day23/20261030-main-e7d171-qwen821-resume51to102-executor-r4-hold/attempt-01/qwen_resume/；practical-report.json SHA256 04e24040e445a35434da85b4edb58275c608d18998283210fb2e5fede277e022，comparison.json SHA256 9de9f20b1074e1edb9ad0c762f1d6dfa18b28aaa245f6860fdec9e98ea0ac552，controller receipt SHA256 56b76651012724d2ceb2cf8c92bc1e0508bc3eaa859eaa64400304beb978c767，worker result SHA256 605b0a01f847f23e57b3e60a4018000713742235cb2b3909debd32bc93fe7f27。两份执行包静审SHA：1f475ec4e62d30c0b877a8735c39c2ce6064f8b445fd4abdff67fa1bb2fe10be、2b22ab01aeea1e8e28121221a68075e40262960996c405b559822814132d2018；终态审计SHA：6341d8ca21ab5d342afdb4f90036c329a0cd541af27131ed730c1540b8334a27（运行/产品/缓存）、e60b5a26a411361b4229acd583f87b0e9d295db8a0dacfb96d6aa0955bac2e9c（训练/恢复/评估）。unit自然成功、worker rc0，保护cache一致、candidate cache旧内容无改删且新增0、五锁无内核持有记录。/proc有1883次权限拒绝，外部进程与FD可见性有限。
+
+实用训练判断：本次e7d171 Qwen续训通过；strict initial_lr哈希失败继续保留。性能/显存独立未验收；predict、step102 fresh reload、通用长训均未由此证明。
+
 ## 2026-10-30 BERT checkpoint100 新进程加载与评估
 
 在上文 step50→100 的真实续训之后，独立新进程实际通过 Trainer 加载该 checkpoint100 的模型、优化器、调度器、TrainerState 与 RNG：12 项 checkpoint 文件身份核符，模型/优化器/调度器/scaler 状态签名与已保存值严格一致，201 个 optimizer scalar step 均为100，603 项参数及moment设备为CUDA0，四组RNG恢复一致。此为新进程加载和评估，未执行后续 optimizer 更新、训练或数据游标续接，不把此前50步续训误作此次加载后的训练。

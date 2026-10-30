@@ -1,5 +1,17 @@
 # 整改看板
 
+## 2026-10-30 e7d171 Qwen checkpoint51→102 实用续训
+
+主树HEAD 9ffd0884ebc79f1e3674f091cc569de672b22219、源码指纹e7d1711ffcb67363b63a0ffb0743ec152eed418edbb0150bbfab52e754ab8c90。本次续训使用当前Python与已审df45 CUDA core/utils原位产品，属于混合身份、不是e7原生冷编。从既有seed821 Qwen3-0.6B LoRA checkpoint51继续至102，完成51次optimizer更新、101个微批次；112项LoRA梯度每步均为有限CUDA0 FP32，无缺失、跳步或fallback。首次续训更新112个LoRA参数均变化。BF16投影/autocast仅在前两个微批次观察到。
+
+step等权训练loss JT为1.1684248，PT full/resume均为1.1688748；逐步绝对差均值0.00219484、最大0.00686032。更新级loss有起伏，不是单调下降；step102为epoch尾部单微批次。固定17行验证集两次eager评估：JT loss 2.4555516，PT 2.4566441，差约−0.044%。PT checkpoint不同；sample ID/shape匹配不证明token字节相同。因此只支持本配置本seed的实用训练接近证据，不等于严格数值对齐或普遍收敛。
+
+checkpoint51的模型、optimizer、scheduler、337个状态张量CUDA放置及Python/NumPy/CPU/CUDA四组RNG功能恢复通过；strict hash仍因两个额外initial_lr元数据项FAIL，原FAIL保留。checkpoint102共18文件已核hash，保存的112个optimizer scalar step和Trainer global_step均102；未fresh reload。未运行predict，不证明后50步每个参数每步都变化，不作性能结论。
+
+执行包manifest SHA256 5c4a7596325e69295b160288dded20baad84b4c19e149b4045d543aca3202051；现场binding SHA 63eae504033a75f2a072ba1c68b2d24a7e4b2635465b7d89dd906993d4626f6a。执行包静审SHA 1f475ec4e62d30c0b877a8735c39c2ce6064f8b445fd4abdff67fa1bb2fe10be、2b22ab01aeea1e8e28121221a68075e40262960996c405b559822814132d2018。worker自然rc0、结果SHA 605b0a01f847f23e57b3e60a4018000713742235cb2b3909debd32bc93fe7f27、controller receipt SHA 56b76651012724d2ceb2cf8c92bc1e0508bc3eaa859eaa64400304beb978c767；终态审计SHA 6341d8ca21ab5d342afdb4f90036c329a0cd541af27131ed730c1540b8334a27，训练审计SHA e60b5a26a411361b4229acd583f87b0e9d295db8a0dacfb96d6aa0955bac2e9c。保护cache相同，candidate cache旧内容未改删且新增0，五锁终态无内核持有记录；/proc存在1883次权限拒绝，不能外推全机可见。profile callback自身捕获CUDA700可能延迟到worker错误处理才终止，本次未发生；native setter及第三方清理未实测。
+
+判断：当前e7源码下这次Qwen实用续训通过；strict恢复hash仍FAIL，性能、predict、step102 fresh reload和通用长周期收敛仍未验收。下一步继续跨卡生产路径与Day4–5工作，手工host staging不构成生产修复。
+
 ## 2026-10-30 BERT checkpoint100 新进程加载与评估
 
 在上文 step50→100 的真实续训之后，独立新进程实际通过 Trainer 加载该 checkpoint100 的模型、优化器、调度器、TrainerState 与 RNG：12 项 checkpoint 文件身份核符，模型/优化器/调度器/scaler 状态签名与已保存值严格一致，201 个 optimizer scalar step 均为100，603 项参数及moment设备为CUDA0，四组RNG恢复一致。此为新进程加载和评估，未执行后续 optimizer 更新、训练或数据游标续接，不把此前50步续训误作此次加载后的训练。
