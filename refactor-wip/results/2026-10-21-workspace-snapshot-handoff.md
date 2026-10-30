@@ -1,5 +1,14 @@
 # 2026-10-21 工作区快照与本机接续交接
 
+## 2026-10-30 跨卡 Tensor.to 修复与接续状态
+
+跨设备 `Tensor.to` 的窄修复已在 `compat/torch/types.py` 中落地：对已经位于CUDA且目标ordinal不同的Var，改走可微分host staging；其他已有迁移路径不变。此前环境内跨卡读回NaN（API返回成功）是触发证据，不外推为所有设备/驱动的共同根因。
+
+唯一有效的双卡用例 `test_explicit_copy_roundtrip_and_gradient_keep_source_placement` 通过，pytest 1 passed / 11.45s；实际检查 cuda:1→cuda:0→CPU 的 `[2,3]` 和反向梯度 `[4,6]`，两张绑定GPU均由进程使用，fallback=0。独立终审SHA256 `6ba61de0e06aa0962cf1a254ba01205f6d92cc42ac82e9df89c1af186b56597f`；执行包位于 `/data6/cgq/jittor-lab/_state/release-day23/20261030-torch-cross-cuda-stage-r7-test-hold/`。R1–R6启动/收集问题与R2未知结果均留档，没有覆盖或计为有效测试。
+
+后续继续Day2–5剩余CPU/Torch/CUDA验收以及Day4–5独立性能/显存测试。此次不提供性能、graph capture、通用长训或其他API结论；既有strict FAIL继续保留。
+
+
 ## 2026-10-30 e7d171 Qwen checkpoint51→102 实用续训完成
 
 当前e7源码下seed821 Qwen3-0.6B LoRA从既有checkpoint51续训完成51次更新、101微批次；step102固定17行验证集两次eager评估成功。112项CUDA0 FP32梯度每步finite且无缺失，零跳步/零fallback；首次更新112个LoRA参数均变化。JT per-step平均loss 1.1684248，PT full/resume 1.1688748；mean-abs差0.00219484、max 0.00686032。固定集loss JT 2.4555516、PT 2.4566441，训练曲线非单调。PT checkpoint不同，ID/shape相同不代表token字节相同。

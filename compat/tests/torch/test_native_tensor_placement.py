@@ -98,6 +98,7 @@ def test_explicit_copy_roundtrip_and_gradient_keep_source_placement():
             assert first_gpu.device_id == 0 and first_gpu.location() == "device"
             _cpu(roundtrip)
             _cpu(copied_grad)
+            np.testing.assert_array_equal(roundtrip.numpy(), [2., 3.])
             np.testing.assert_array_equal(copied_grad.numpy(), [4., 6.])
 
 

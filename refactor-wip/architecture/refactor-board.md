@@ -1,5 +1,16 @@
 # 整改看板
 
+## 2026-10-30 跨 CUDA 设备 Tensor.to 生产路径修复
+
+此前双卡现场中，生产 `Tensor.to` 跨 CUDA ordinal 迁移读回过 NaN，调用本身返回成功；独立 host staging 标量往返正常。该证据只定位到这条运行环境中的跨设备复制风险，不能据此断言所有驱动或设备组合都有相同根因。`compat/torch/types.py` 现仅在 Var 已位于 CUDA 且目标 ordinal 不同时，先经可微分的 CPU residency 再迁到目标卡；同设备、CPU→CUDA及未放置 Var 沿用原生路径。
+
+隔离双卡冷编候选上的唯一目标回归用例通过：`test_explicit_copy_roundtrip_and_gradient_keep_source_placement`，1 passed / 11.45s。测试核对 cuda:1→cuda:0→CPU 的 `[2, 3]` 数值、反向梯度 `[4, 6]` 和源/目标 placement；两个绑定 GPU UUID 均由执行进程实际持有，fallback 前后均为0。执行源指纹 `29e687e3d100f3e35fcac4ef13c1465c2bcabf94a7f27d07fb79aa2eb577c47b`，双卡冷编 core SHA256 `e65333a9c7cf11d9865bc8ae8ba415afab130014b47e3592b2c9c14edf735b3c`。终态审计 `/data6/cgq/jittor-lab/_state/release-day23/20261030-torch-cross-cuda-stage-r7-test-hold/terminal-audit.json` SHA256 `6ba61de0e06aa0962cf1a254ba01205f6d92cc42ac82e9df89c1af186b56597f`；结果 `result.json` SHA256 `90c7d30cffea95d18c5f42974abf5e341c1aeea3c5381dcbf58267658e0bcbe8`。
+
+启动记录保留在同一 `_state/release-day23/` 下的 R1–R7 hold 包：R1/R3 在测试前因运行时重载或缺少双卡 core 停止；R2 结果写回器失败，pytest 结果未知；R4 双卡冷构建通过；R5 cache_name 配置不匹配、pytest未启动；R6 pytest调用但节点路径未解析，0项收集、测试体未运行；只有R7是有效收集并执行的回归。R5/R6生成的候选缓存变化已保留并纳入R7基线；R7新增JIT算子和torch shim缓存，未删除文件，既有文件仅 `jittor.lock` 内容变化。独立终审确认3323项受保护缓存未变，源指纹、core/utils/stamp与CUDA runtime一致，服务及锁均退出。
+
+此项仅完成一条跨卡功能路径验收，不覆盖性能、CUDA graph capture或其他跨设备API；Day2–5其余CPU/Torch/CUDA范围与Day4–5性能显存验收仍未完成，既有strict FAIL保持原判。
+
+
 ## 2026-10-30 e7d171 Qwen checkpoint51→102 实用续训
 
 主树HEAD 9ffd0884ebc79f1e3674f091cc569de672b22219、源码指纹e7d1711ffcb67363b63a0ffb0743ec152eed418edbb0150bbfab52e754ab8c90。本次续训使用当前Python与已审df45 CUDA core/utils原位产品，属于混合身份、不是e7原生冷编。从既有seed821 Qwen3-0.6B LoRA checkpoint51继续至102，完成51次optimizer更新、101个微批次；112项LoRA梯度每步均为有限CUDA0 FP32，无缺失、跳步或fallback。首次续训更新112个LoRA参数均变化。BF16投影/autocast仅在前两个微批次观察到。

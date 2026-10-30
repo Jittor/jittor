@@ -711,7 +711,14 @@ def _make_cuda_resident(v, force=False, inplace=False, device=None):
         # for the device must still move such a Var (see _var_is_host_parked).
         if v.placement_backend == backend and v.device_id == index and not _var_is_host_parked(v):
             return v
-        moved = v.to_device(index)
+        if v.placement_backend == backend and v.device_id >= 0 and v.device_id != index:
+            # The CUDA peer-copy path has returned success while producing
+            # corrupt bytes on inter-device transfers in the supported
+            # runtime. Keep this move differentiable but route its two legs
+            # through the independently working D2H and H2D paths.
+            moved = _make_cpu_resident(v).to_device(index)
+        else:
+            moved = v.to_device(index)
         if inplace:
             trainable = bool(v.requires_grad)
             v.assign(moved.detach())

@@ -1,5 +1,18 @@
 # Torch Compatibility Release Acceptance: 2026-10-26 Day 2–5 Continuation
 
+## 2026-10-30 跨 CUDA 设备 Tensor.to 功能回归验收
+
+此前双卡环境的生产 `Tensor.to` 跨 ordinal 传输曾出现读回 NaN，而调用返回成功；独立 host staging 标量往返正确。这里是环境相关的失效证据，不足以确定所有系统上的唯一根因。修复限于 `compat/torch/types.py::_make_cuda_resident`：当输入 Var 已位于 CUDA、且源目标 ordinal 不同时，使用 `_make_cpu_resident(v).to_device(index)` 完成可微分的 D2H/H2D 两段迁移；同卡、CPU→CUDA和未放置Var仍用现有路径。
+
+R7绑定执行 HEAD `54fd59269bc9f0dba7651947fff111e71897f031`、工作源码指纹 `29e687e3d100f3e35fcac4ef13c1465c2bcabf94a7f27d07fb79aa2eb577c47b`（2815个源码文件）；双卡冷编 CUDA core SHA256 `e65333a9c7cf11d9865bc8ae8ba415afab130014b47e3592b2c9c14edf735b3c`。受限 systemd worker 在 GPU UUID `GPU-2be51dc7-d99a-7307-869b-30ed5888e701` 与 `GPU-b6f59824-d1a3-cd6f-8100-9149728fc8eb` 上运行单一节点 `/home/cgq/jittor/compat/tests/torch/test_native_tensor_placement.py::test_explicit_copy_roundtrip_and_gradient_keep_source_placement`，pytest `1 passed in 11.45s`。cuda:1→cuda:0→CPU 结果精确为 `[2., 3.]`，反传到源张量的梯度精确为 `[4., 6.]`，placement断言通过；worker记录两个GPU均由该进程持有、设备可见数2、fallback计数前后均0。
+
+终态审计 `/data6/cgq/jittor-lab/_state/release-day23/20261030-torch-cross-cuda-stage-r7-test-hold/terminal-audit.json` SHA256 `6ba61de0e06aa0962cf1a254ba01205f6d92cc42ac82e9df89c1af186b56597f`，`result.json` SHA256 `90c7d30cffea95d18c5f42974abf5e341c1aeea3c5381dcbf58267658e0bcbe8`，pretest audit SHA256 `b4f4f5f6a8f5e72b702addf998560709f1e183efda01e5ee5f0f9bd706b1c345`。独立核验通过：2815文件源身份不变，core/utils/stamp及libcudart映射与hash一致，3323个受保护缓存未变；candidate cache无删除或已有内容改写，仅锁文件变化并新增该用例的JIT/torch-shim缓存。R7服务自然退出，cgroup为空，Jittor锁不再持有。
+
+执行历史按次保留于 `_state/release-day23/20261030-torch-cross-cuda-stage-r{1..7}-*`：R1运行时工具模块需新进程重启，未进pytest；R2原子结果写入错误，测试结果未知；R3双卡配置缺少对应core，pytest未启动；R4隔离双卡冷构建成功；R5测试环境误带旧cache_name，在pytest前停止；R6 pytest因相对节点路径未解析，报告`no tests ran`且测试体未运行；R7修正cache_name、仓库cwd和绝对节点路径后完成唯一有效测试。R1/R2/R3/R5/R6均不计作测试通过或测试失败；R2结果明确未知。
+
+本结果只证明这一输入、两张卡和反向梯度路径的功能性，不构成性能、capture、通用驱动兼容或长周期训练证据。Day2–5整体继续未完成，Day4–5性能/显存门仍待正式验收，之前的strict FAIL不变。
+
+
 ## 2026-10-30 e7d171 Qwen LoRA checkpoint51→102 实用训练验收
 
 本次绑定主树HEAD 9ffd0884ebc79f1e3674f091cc569de672b22219、源码指纹e7d1711ffcb67363b63a0ffb0743ec152eed418edbb0150bbfab52e754ab8c90。实际使用当前Python shim与原位DF45 CUDA core/utils，core SHA256 8774718332e0b0bddd2f3f72a26c448ac60484266a3e200207032d20d23a3020、utils SHA256 d83b331385c81f3ffa8b70ba2665acee73fe6ba7e5c300089af43170f80eebaf；属混合身份，不是e7原生冷编。实际GPU UUID GPU-2be51dc7-d99a-7307-869b-30ed5888e701，fallback=0。Qwen3-0.6B LoRA，seed821、BF16、gradient accumulation=2、每设备batch=1、eager eval；本次只覆盖既有checkpoint51之后的step52–102。
