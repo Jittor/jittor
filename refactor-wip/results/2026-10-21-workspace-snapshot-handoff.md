@@ -1,5 +1,25 @@
 # 2026-10-21 工作区快照与本机接续交接
 
+## 2026-10-30 no-auto-peer 私有 CUDA 冷编及 CPU sentinel
+
+有序跨 CUDA copy 路径移除主动 `accelerator_peer` 调用的单行隔离候选，在独立 JITTOR_HOME 实际完成 CUDA-enabled 原生冷编，unit 自然 rc0，约 381.3 秒；它基于当时主树工作树 `e7d1711ffcb67363b63a0ffb0743ec152eed418edbb0150bbfab52e754ab8c90`，不是主树生产补丁。日志记录 core 编译进度 `228/228`；stamp 列 231 个编译文件，独立审计区分 228 个 core 文件与 3 个 CUDA backend 文件，并核对 817 项 stamp 源输入。实际 private core／utils 的进程映射、路径、hash 与 stamp 核符，CPU sentinel 得到 `[3.0, 5.0]`、fallback 0。首次独立审计有一条将绝对路径误判为不合条件的审计断言失败，已保留；修正审计未重编。
+
+两份独立终审分别为 `/data6/cgq/jittor-lab/_state/release-day23/20261030-main-no-peer-cold-r2-independent-terminal-r1/audit.json` SHA256 `07e9ed58b4cdb4acf46c348ad149eb0d52286c3860b06e14b3a0d34ff124c6eb`，以及 `/data6/cgq/jittor-lab/_state/release-day23/20261030-main-no-peer-private-cold-r2-independent-terminal-r1/audit.json` SHA256 `396b39d6cb0178afb87de5881f67bb75d3d72fbc574132c38b34a1b35bf7aaac`。五份受保护 cache 前后相同，含私有 cache 的六锁终审无内核记录，unit 成功退出、cgroup 空；快照和进程／FD 观察有可见性限制。
+
+此次只运行 CPU sentinel，尚未执行 GPU tensor、跨卡复制或后续因果测试，不能证明复制正确、原故障根因或性能／capture 行为。移除该路径的主动启用不会撤销已启用的 peer，其他路径也可能启用；旧直接复制及 capture 失败和预算账目保留。
+
+
+## 2026-10-30 接续状态与跨卡 peer 因果候选
+
+以下为冷编前的历史准备记录；实际冷编状态见上文。
+
+Checkpoint 控制参数任务代码已提交 `0d1030f8cc802e0ef1bbb27a8849aa39c23c2a7d`，三文档测试记录已提交 `7fd69c59bd2134787608486868f09f19d97939a4`：主树 CPU 代表五节点通过；隔离候选 13 节点实测通过后控制器节点过滤导致 unit 严格 FAIL、旧 smoke skip 和历史 PT 全套终态未知均保留。实现仍直接调用目标函数，不重计算 activation、不提供 checkpoint 内存节省，未实现的非默认控制显式拒绝。
+
+此前实际完成的 Qwen checkpoint 51→102、BERT 非 fused 两步、双向手工 host 中转及其各自独立审计见下文：它们使用记录时的源码／checkpoint 身份和干预，不能自动外推到当前提交树、完整模型或其他配置。Qwen 恢复严格 hash 的 `initial_lr` 额外项、BERT 历史 checkpoint-100 严格差异、原跨卡直接复制与 capture 失败均保留；手工中转不构成生产修复。
+
+针对 peer enable 前后同指针跨卡复制结果变化，正在独立准备一个有序跨 CUDA copy 的因果候选：只在隔离源码中移除该路径主动调用 `accelerator_peer` 的一行，保留原 copy／stream 流程；候选补丁 `/data6/cgq/jittor-lab/_state/release-day23/20261030-main-no-peer-copy-private-cold-r1-hold/candidate.patch` SHA256 `cff08b726e5b4c1bb995318fcc84e8b591072acfdedae506a798a346b98eaa19`。此为尚在准备的假设检验，当前未构建或运行、未应用主树，也不证明原故障根因或复制正确。该改动不会撤销已经启用的 peer，也不保证其他路径不会启用 peer；跨设备性能、其他环境及 capture／replay 语义未知。后续需冻结源码与资源、独立冷编并按实际条件验证，旧实验和预算不重置。
+
+
 ## 2026-10-30 checkpoint 控制参数任务代码提交
 
 任务代码已提交 `0d1030f8cc802e0ef1bbb27a8849aa39c23c2a7d`（`修复checkpoint控制参数转发`），提交仅修改 `compat/torch/installers/data.py` 的 checkpoint 控制参数处理：默认控制不会误传目标函数，非 reentrant 目标 kwargs 可按约定转发，不支持的非默认控制明确拒绝。它仍是直接调用近似，不提供 activation 重计算或内存节省；已记录的主树 CPU 五节点及隔离候选 13 节点实测各有各自源码／执行范围，不能外推完整 PyTorch、GPU、模型或内存验收。先前隔离运行 pytest 成功后 worker／unit 严格 FAIL、旧 smoke skip 和 PT 全套终态未知继续保留。
