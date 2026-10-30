@@ -108,7 +108,10 @@ MIGRATED_BROADCAST_SHAPE_BOUNDARIES = {
 # boundaries on the same caller-supplied `(x, shape, dtype)` triple, not
 # internal invariants.
 MIGRATED_REINTERPRET_VIEW_BOUNDARIES = {
-    "src/ops/composite/reinterpret_view_op.cc": 10,
+    # Replace the blanket contiguous-only rejection with three precise guards:
+    # last stride 1 for itemsize changes, byte-stride divisibility, and refusal
+    # to reinterpret an arbitrary non-contiguous reshape (net two boundaries).
+    "src/ops/composite/reinterpret_view_op.cc": 12,
 }
 
 # 2026-09-11: 1 -> 3. Besides the shape check this entry was named for,
