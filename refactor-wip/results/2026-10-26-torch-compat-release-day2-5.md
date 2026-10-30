@@ -1,5 +1,15 @@
 # Torch Compatibility Release Acceptance: 2026-10-26 Day 2–5 Continuation
 
+## 2026-10-31 Accelerate CUDA 执行计数分类修正
+
+基于主树提交 9f049b3e6472cc80ee246b4ac05932dfe1af1b73；fetch 后 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81 为祖先（ahead 83 / behind 0）。本任务改动 tests/_helpers/pytest_policy.py 与 tests/structure/test_hardware_gate_matrix.py：前者识别专用 test_accelerate_distributed_integration nodeid，后者为 R19 的 test_real_ddp_no_sync_then_closing_backward 增加 accelerator 计数回归断言。修改后 SHA256 见整改看板最新增量。
+
+验证命令为 PYTHONPATH=tests:python /home/cgq/anaconda3/bin/python -m pytest --noconftest -q tests/structure/test_hardware_gate_matrix.py::test_accelerator_execution_counter_recognizes_accelerator_paths，结果 1 passed、0.02 秒。该路径直接验证 gate 分类逻辑，不触碰 CUDA。未重新运行真实双 rank DDP：R19 attempt-03 的各 rank test body 已通过，session sentinel 误报 0 cases 的原因现已由代码和回归断言定位；原始外层 exit code 1 与 campaign 记录继续保留，不能将此次分类回归冒充为完整 NCCL launcher 通过。
+
+有一次先尝试常规 pytest 时，mode guard 拒绝了未声明 JITTOR_TORCH_SHIM 的调用；改为 shim 模式后，测试进程意外在隔离 cache 首次编译 Jittor core。为避免无关冷编译继续占用资源，已中断该进程组并保留其 cache 目录 /home/cgq/.cache/jittor/torch-shim/jittor-1a29170444cbf9f2（约 244 MiB），未清理；未得到该次 pytest 结果。最终结构断言通过 --noconftest 方式运行，没有触发 Jittor 导入或 CUDA kernel。
+
+此次 gate 计数修正不关闭更广 Day2–5 或 Day4–5。GPU 2/4 快照为 31%/31% 利用率、59,941/59,931 MiB 空闲，且外部 VLLM PID 仍占用，当前不能测性能。完整 Day4–5 仍需对冻结源码和匹配配置做至少三轮交替 JT/PT 配对，每轮每侧至少十个同步热样本；报告加载、首步、热态的 median/p95/离散度、吞吐和 allocator allocated/reserved 与 NVML 峰值，并独立测最大容量/OOM 边界。更广 Day2–5 尚需按发布声明完成 API/device/dtype/autograd 矩阵、每个目标模型的实际训练/验证任务指标和新进程 checkpoint/optimizer/scheduler/RNG/data-order 恢复、真实 activation checkpoint 重算及显存对照、共同 held-out JT/PT 生成质量阈值，以及 JT portable-pickle 与 stock PyTorch 的跨框架互操作分类。原 R14 Qwen 训练/续训结论仍仅代表固定源码/seed/config；整体 release 继续 Not complete。
+
 ## 2026-10-31 NCCL barrier host wait 修复与 Accelerate DDP closing-backward 通过
 
 本增量绑定主树实验 HEAD e17f90e1e5622c6f98d9c7f95534befc10a1967e 和工作树内 compat/torch/installers/distributed.py SHA256 3a374332a539cd862bea1ac9a34e0febe6bc4392ffb2aecf4683d823aea276e6；测试文件 SHA256 c2a2073ef50be99bdd578b81be3c2e524f02178a66302ec76e8234a37af444dc。origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81 为祖先，当前分支 ahead 82 / behind 0。

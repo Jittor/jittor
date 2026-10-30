@@ -1,5 +1,15 @@
 # 整改看板
 
+## 2026-10-31 R20 修复 Accelerate CUDA 执行计数漏项
+
+继续使用 /home/cgq/jittor 原工作区。基于提交 9f049b3e6472cc80ee246b4ac05932dfe1af1b73，fetch 后 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81 仍为祖先（ahead 83 / behind 0）。开工时 103 项既有 dirty/untracked 保留；代码/测试改动仅涉及 pytest_policy.py 与 test_hardware_gate_matrix.py；另仅更新规定的三份状态文档，未暂存或改动其他既有文件。
+
+R19 两 rank 的真实 CUDA DDP 测试体都通过，但外层 sentinel 报 0 accelerator cases。根因是计数器只检查 nodeid 中 CUDA/backend 名称，而该专用 CUDA 集成文件名为 test_accelerate_distributed_integration.py。现在加入此精确集成路径 token，并增加 nodeid 回归断言。pytest --noconftest 下该断言 1 passed / 0.02s；两个修改文件 SHA256 分别为 8069dcd198521829263f4cdf21acc7a63359993e789c9cf390bf84a044f63aa0 和 90e9209ca1ef0f5801eb400fed05b84f8c8dcef823231d12802180f2b410587a。
+
+R19 原运行的测试体通过、外层维护门退出码为 1 仍按原始证据保留；本次分类器回归通过不追溯改写该次 gate 结果，也不为改出口码重跑真实双 rank 用例。一次误用 shim 的验证启动在隔离 cache 开始 Jittor 编译后被中断，cache 目录 /home/cgq/.cache/jittor/torch-shim/jittor-1a29170444cbf9f2 保留（约 244 MiB），未清理；没有该任务残留进程或 cache holder。结构断言最终以 --noconftest 运行，未初始化 Jittor。
+
+GPU 2/4 当前约 31%/31%，空闲显存 59,941/59,931 MiB；对应仍有外部 VLLM PID 2914621/2861632 占用。根分区余 33 GiB、/data6 余 5.5 TiB，Day4–5 正式测量仍不满足准入。发布门下一步仍包括合格设备窗口下三轮交替 JT/PT 性能/显存测量、容量边界、完整 API/device/dtype/autograd 覆盖、声明模型训练与任务质量/恢复、真实 activation recompute 及显存收益、Qwen held-out JT/PT generation 分数和序列化互操作范围。overall release 保持 Not complete。
+
 ## 2026-10-31 R16–R19 NCCL barrier 与 Accelerate DDP no_sync 定向验收
 
 继续使用服务器现有工作区 /home/cgq/jittor。实验绑定提交前 HEAD e17f90e1e5622c6f98d9c7f95534befc10a1967e，分支 integrate/cgq-transformers-native-multicard-target；重新 fetch 后 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81 仍为祖先（ahead 82 / behind 0）。开工时保留 103 项既有 dirty/untracked；任务源码改动后共 104 项，index 为空。未 clone、reset、stash、clean 或 push。

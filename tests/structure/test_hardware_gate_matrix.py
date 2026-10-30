@@ -114,7 +114,7 @@ def test_nccl_session_rejects_an_all_skipped_communication_gate():
     assert '"nccl", "hccl"' in policy
 
 
-def test_accelerator_execution_counter_uses_cuda_nodeids(monkeypatch):
+def test_accelerator_execution_counter_recognizes_accelerator_paths(monkeypatch):
     from _helpers import pytest_policy as policy
 
     class Report:
@@ -130,6 +130,14 @@ def test_accelerator_execution_counter_uses_cuda_nodeids(monkeypatch):
         nodeid = "tests/backends/comm/nccl/test_nccl_comm_stream.py::test_all_reduce"
 
     assert policy._is_accelerator_case(NcclReport())
+
+    class AccelerateIntegrationReport:
+        nodeid = (
+            "compat/tests/torch/test_accelerate_distributed_integration.py::"
+            "test_real_ddp_no_sync_then_closing_backward"
+        )
+
+    assert policy._is_accelerator_case(AccelerateIntegrationReport())
     monkeypatch.setenv("JITTOR_TEST_ACCELERATOR_MIN_EXECUTED", "2")
     assert policy._required_accelerator_executions() == 2
 

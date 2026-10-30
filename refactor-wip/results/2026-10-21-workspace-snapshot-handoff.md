@@ -1,5 +1,15 @@
 # 2026-10-21 工作区快照与本机接续交接
 
+## 2026-10-31 最新接续：修正 DDP gate 的 CUDA 计数器
+
+继续在服务器原工作区 /home/cgq/jittor。当前提交为 9f049b3e6472cc80ee246b4ac05932dfe1af1b73，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81 为祖先（ahead 83 / behind 0）。保留所有既有 dirty/untracked；本任务只改计数器、对应结构断言和本交接要求的三份状态文档，不 push。独立结构断言通过：1 passed / 0.02s。它证明 R19 所用 Accelerate CUDA 集成 nodeid 会被 gate 计数器识别；R19 两 rank 测试体和旧外层退出码仍按各自原始记录陈述，没有为正常化 sentinel 而重跑。
+
+一次误启动 shim pytest 在隔离 Jittor cache 开始冷编译后已被中断，cache /home/cgq/.cache/jittor/torch-shim/jittor-1a29170444cbf9f2（约 244 MiB）保留，没有清理或复用声明，也没有残留的 pytest/compiler/cache-holder 进程。正式性能快照仍不合格：GPU 2/4 利用率约 31%/31%，空闲显存 59,941/59,931 MiB，并有外部 VLLM 进程。根分区可用 33 GiB，/data6 可用 5.5 TiB。
+
+完成 Day4–5 性能/显存门还需冻结并核对同一源码、模型权重和训练/推理配置；先满足 GPU 利用率 ≤10%、空闲显存 ≥60,000 MiB 且无无关计算 PID 的稳定窗口；在同一窗口完成至少三轮 JT/PT 交替配对，每轮每侧至少十个同步热态样本；每侧分别报告加载、首步和热态 latency/throughput 的 median、p95、离散度，以及 allocator allocated/reserved 和 NVML 峰值。独立给出最大可运行 batch/sequence 或相应 OOM 边界，不能把共享负载下的诊断数值作为验收结果。
+
+更广 Day2–5 发布门还须按最终公开范围完成 Torch API、设备、dtype、edge case、fallback 和 autograd 对照；对声明支持的模型绑定真实设备/数据/权重/训练配置，给出梯度、参数更新、loss 轨迹、验证任务指标与 checkpoint；对需要 resume 的路径在新进程验证 optimizer、scheduler、Python/NumPy/CPU/CUDA RNG 和数据顺序；证明 gradient checkpointing 有实际 activation recompute，并比较梯度和显存；在共同 held-out prompts 上给 Qwen JT/PT generation 任务指标和预设判据；明确 JT 同框架恢复与 stock PyTorch 无法读取 JT portable-pickle optimizer 的跨框架互操作边界。当前只有 R14 单配置训练/resume 和 R19 窄 DDP 路径证据，不能替代上述发布范围，overall release 仍为 Not complete。
+
 ## 2026-10-31 最新交接：NCCL barrier 与 DDP no_sync 窄路径已验证
 
 继续在 /home/cgq/jittor 原工作区；实验提交前 HEAD e17f90e1e5622c6f98d9c7f95534befc10a1967e，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81 是祖先（ahead 82 / behind 0）。不 clone、不 reset/stash/clean、不 push；103 项原有 dirty/untracked 保留，本任务新增 distributed.py barrier 补丁单独记录。

@@ -788,13 +788,14 @@ def _skip_reason(report):
 
 
 def _is_accelerator_case(report):
-    """Recognize a test whose nodeid names an accelerator path or backend."""
+    """Recognize accelerator paths, backends, and explicit CUDA integration suites."""
     nodeid = str(getattr(report, "nodeid", "")).lower()
     return any(
         token in nodeid
         for token in (
             "/cuda/",
             "_cuda",
+            "accelerate_distributed_integration",
             "cuda_",
             "cudnn",
             "cublas",
