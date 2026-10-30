@@ -1,5 +1,69 @@
 # Torch Compatibility Release Acceptance: 2026-10-26 Day 2–5 Continuation
 
+## 2026-10-30 Adam 选项任务代码提交
+
+任务补丁已提交 `672d1fcf47726c6b5a7b546f14aaa5c61b6c4244`（`支持Adam显式关闭批量与融合选项`），只修改 Adam 的前端选项、参数组选项保存和非 fused step 前校验：接受 `foreach`／`fused` 的 `False` 或 `None`，对 `True` 明确拒绝，其他错误类型拒绝；不声称实现 foreach 或 fused。此前主树工作树 fingerprint `4ed94ce1…` 的直接 CPU 七节点及三个新进程序列化恢复通过，隔离候选的 CPU／CUDA 固定梯度四步 PyTorch 对照也通过；这些各自带同步／读回的证据范围与工作树 dirty 身份保留，不等同于该提交树的完整模型、GPU 恢复或性能验收。原控制器入口错误、观察器错误、同进程状态共享及续步严格失败均不改写。
+
+
+## 2026-10-30 主树 Adam 选项直接 CPU 恢复验证
+
+使用当时工作树源码 fingerprint `4ed94ce1a836ef782dc8d47199a9b0cb86e1eb73752b1de919c6c3cb2ffb35d3` 与主树真实 CPU core、直接导入主树 Adam 模块（无 overlay），七个节点的 21 个 setup/call/teardown 均通过、无跳过。三个不同 `foreach` 组设置（缺省、`None`、`False`）各自保存 checkpoint 并由新进程加载，再进行一步更新；恢复前后两个参数的参数值、m、v、step 与同次父进程记录逐值一致，step 从 1 到 2，`None` 与 `False` 实测各自保留。另测 `foreach=True`／`fused=True` 显式拒绝、组修改和 closure 前置检查、加载后不支持组的拒绝及 AdamW 小样本回归。父子进程实际 core／utils 映射和模块身份已核，fallback 均为 0。
+
+独立终审 `/data6/cgq/jittor-lab/_state/release-day23/20261030-main-adam-options-direct-cpu-independent-terminal-r1/audit.json` SHA256 `aa5b6c34182fd8f168e9e38ff2ed79338b6f843c8b01d6e7356c6d16ce4c1ab8`；原 receipt SHA256 `ea5ffdbe1f0ab1ea8cdfa9c96b1c8f938e2985e80ce0858abaafda7a997684fc`。CPU 缓存端点仅锁文件变化，四个受保护 GPU 缓存端点不变；锁内核记录为空、unit 自然成功且终态无活动 cgroup，现场进程与文件描述符可见性有限。此前启动错误、观察器错误与同进程直接状态共享的记录均保留。本次为带同步／读回的小样本 CPU 恢复测试，没有独立 PyTorch 数值对照，也不代表 GPU、模型训练或性能验证。
+
+
+## 2026-10-30 隔离 Adam 选项候选 CPU／CUDA PyTorch 对照
+
+使用主树原生 CPU／CUDA core 和隔离的两份 Adam 选项候选 Python 模块，两端显式 `foreach=False, fused=False` 构造 Adam；各以四参数固定梯度运行四步，与已保存的对应 PyTorch 参考逐字段比较通过。两端参数和梯度最大绝对差均为 0；m 的最大绝对差 CPU `7.4506e-9`、CUDA `2.9803e-8`，v 两端均 `1.8626e-9`，参数 step 和 14 次逐参数更新已核。CUDA 参数实际在 logical cuda:1、ambient dispatch 为 cuda:0，端点 DEVICE ordinal 与两端 core／utils、CUDA runtime／driver 映射已核，fallback 0。
+
+每端对 `foreach=True` 和 `fused=True` 的顶层与参数组构造以及 step 均观察到显式拒绝；step 拒绝前 closure 未调用，所观测参数与 step 未变。这不代表 True 路径已实现。测试使用同步和读回，范围是固定小样本而非完整模型、性能或无同步训练；PyTorch 原生库映射未采集，候选尚未合入主树。同进程直接状态共享和先前失败均保留。
+
+CPU cache 与 CUDA cache 端点分别保持 1146 和 3033 项、无增删，保护 cache 端点一致，终态锁无内核记录；两个 unit 成功结束，记录 PID 在终审时不在现场。CUDA 运行期间三份按该协议可变的状态文档因补写 capture 记录发生变化，执行源码 fingerprint `f110…` 保持，不能称完整工作树前后字节不变；缓存快照和进程观察亦有可见性限制。独立终审 `/data6/cgq/jittor-lab/_state/release-day23/20261030-adam-options-oracle-cpu-cuda-r1-independent-terminal-r1/audit.json`，SHA-256 `10f736c562abca446a55d876b4e14554e7d0fed224a246d1fcf58eea27dabe3b`。
+
+## 2026-10-30 隔离 r4 capture 906 的 GDB 双分支观察
+
+两个独立进程均使用隔离 r4 core 与主树 optimizer overlay，先做 CUDA0→1 的 257 元素 warm copy，再观察 capture 拒绝。两分支实际 begin 均返回 0；拒绝后当前线程 runtime／driver device 从 0 变为 1，该线程的 PTDS capture status 为 0。A 沿当时设备结束：end 前 device 1、status 0，GDB 关联实际 end 返回 401，之后源 driver DtoH 返回 906，源后字节未能验证。B 在 end 前显式恢复 device 0：该线程 status 为 1，实际 end 返回 0，之后源双读与原始期望字节一致。两次都记录预期的跨设备 staging 在 graph recording 中拒绝信息。
+
+进程 rc0 表示诊断记录完成，A 的读回仍失败，不能把两分支标作 capture 功能或 replay 通过。GDB 断点、当前线程查询、同步、读回和 B 的设备恢复均有干预；两个分支是不同进程，结果不能单独证明所有线程／流、生产安全或此前 CUDA700／906 的唯一根因。实际 begin/end 的线程、时间窗口、PTDS stream、返回码及 runtime/core 映射已核；原 remaining16 capture 严格失败保留。隔离 r4 cache 端点均为 982 项、无增删且仅 lock 文本变化，三保护 cache 端点一致，锁无内核记录；unit 成功结束、任务 PID 终审时不在现场，快照和进程观察存在可见性限制。独立终审 `/data6/cgq/jittor-lab/_state/release-day23/20261030-r4-capture906-gdb-compare-r2-independent-terminal-r1/audit.json`，SHA-256 `e90092e8f7a8216593ba5d74e9a9cc65710ac64a5f1c81df292ec1724ba56d3f`。
+
+## 2026-10-30 Adam 选项候选 CPU 序列化新进程恢复
+
+隔离两文件 Adam 选项候选的 CPU checkpoint r3 实际完成 8 个节点及 24 个 setup／call／teardown 阶段。新增组 `foreach` 缺省、显式 None 和 False 三种情况下，分别真实 `torch.save` checkpoint 并在三个独立新进程加载、恢复和续步；文件 SHA、进程身份、CPU core／utils 活体映射及 fallback 0 已核，恢复前后两参数的值、m/v 和 step 与原进程对应状态按 `atol=rtol=2e-6` 一致。其余节点覆盖不支持 True／类型的显式拒绝及 closure 前检查、加载不支持组选项的下一步拒绝，以及 AdamW／native Adam 单步回归。
+
+这是 CPU 固定小样本、隔离候选的序列化测试，没有独立 PyTorch 数值、GPU 或模型训练对照；磁盘序列化新进程通过不证明同进程直接 state_dict 加载的状态独立。此前直接加载时 moment 对象共享观察、续步严格失败及观察器失败均保留。CPU cache 端点 1122 → 1146、新增 24 项无删且旧项仅 lock 文本变化，四份保护 cache 端点一致、终态锁检查通过；unit 成功结束，记录 PID 终审时不在现场，快照和进程观察存在可见性限制。独立终审 `/data6/cgq/jittor-lab/_state/release-day23/20261030-adam-options-cpu-checkpoint-r3-independent-terminal-r1/audit.json`，SHA-256 `81f6dd171843ed4d230c2582c08b7d93cbe70d900e260e8939aa5650c485cb94`。
+
+## 2026-10-30 Adam 直接状态共享观察与序列化观察器首错
+
+隔离候选 CPU checkpoint r2 的首个节点实际观察到，同进程将 `state_dict()` 直接加载到另一优化器后，源与恢复优化器的 m 和 v 分别具有相同 Python 对象 id；源优化器单步后，两侧 m/v 数值同步改变，m 的 dispatch 均为 CPU。这支持该特定直接加载工况的状态共享，但不单独证明此前续步比较差异的唯一原因，也不代表序列化或新进程恢复行为。
+
+第二节点已写出 `checkpoint-missing.pt`，随后观察器假定 step 支持 `.item()`，实际取到 float 而报 AttributeError；新进程未创建，checkpoint 未加载或续训，其后 7 个节点未执行。unit 按严格失败退出，原 r1 入口错误及此前续步失败保留；失败 worker 未记录终态映射或 fallback。CPU cache 端点 1110 → 1122、新增 12 项无删且旧项仅 lock 文本变化，四保护 cache 端点一致，终态锁检查通过，记录 PID 不在现场；快照和进程观察存在可见性限制。独立终审 `/data6/cgq/jittor-lab/_state/release-day23/20261030-adam-options-cpu-checkpoint-r2-independent-terminal-r1/audit.json`，SHA-256 `0f5b69678978119a408a1cbc1e3bb390c14160c5f5385e3a42d580b64e9f1a8b`。
+
+## 2026-10-30 Adam checkpoint 后继控制器入口失败
+
+用于观察直接状态别名及序列化新进程恢复的 CPU checkpoint r1 控制器在入口调用 `predecessor.verify()` 时，因未导入 `predecessor` 报 NameError，unit 以 exit 1 失败。错误发生在 attempt 创建和 worker 启动之前，计划中的 9 个 pytest 节点与 checkpoint 子进程均未运行；不能将该结果称为框架验证或推断先前续步差异原因。原 journal 和绑定保留，不自动重试；此前静审未识别该未定义名称。
+
+终审时 CPU、主 GPU 功能、隔离 r4、性能与封存 SDPA 五份 cache 快照与入场审阅相同；五锁无内核记录或可见 FD holder，控制器 PID 不在现场。1755 个 `/proc` FD 目录拒读，端点快照不能排除瞬态活动。独立终审 `/data6/cgq/jittor-lab/_state/release-day23/20261030-adam-options-cpu-checkpoint-r1-independent-terminal-r1/audit.json`，SHA-256 `22b2b5fc78c055ea268d489a57a7957a0755827af948ddc5aeafc308deb2c878`。
+
+## 2026-10-30 隔离 Adam 选项 CPU framework 恢复续步首错
+
+隔离两文件 Adam 选项候选的 CPU framework r2 收集 12 节点：四种顶层 None／False 构造和参数组保存组合通过；第 5 项在新增组缺省选项的 state_dict 保存和加载选项断言通过后，同进程依次对原优化器和恢复优化器续步，参数比较失败：原为 `[0.9812166, 2.0200136]`，恢复为 `[0.9801547, 2.0216746]`。按首错停止，余下 7 节点未执行；这不是候选整体通过，也没有独立 PyTorch 或 GPU 对照。原 r1 控制器入口错误及此次失败均保留。
+
+源码显示 state_dict 直接引用 moment Var，恢复时 `_to(copy=False)` 对已在 CPU 的 Var 可能原样返回并安装，因而存在两个优化器共享 moment 的可能；本次没有保存对象身份或各阶段 moment，不能确定它就是失败原因。失败 worker 未保存终态映射或 fallback；CPU cache 端点 1098 → 1110、新增 12 项无删且旧项仅 lock 文本变化，四份保护 cache 端点一致，终态锁检查通过；unit 以 exit 1 失败、记录 PID 终审时不在现场，快照和进程观察存在可见性限制。独立终审 `/data6/cgq/jittor-lab/_state/release-day23/20261030-adam-options-cpu-framework-r2-independent-terminal-r1/audit.json`，SHA-256 `19b0f157598fbe1cdb1d8df5ef69d4e4e3b4422a316f1f0caef5b7844c107c11`。
+
+## 2026-10-30 Adam 选项候选 CPU 控制器入口失败
+
+隔离 Adam `foreach`／`fused` 选项候选的 CPU framework r1 控制器在入口引用不存在的 `source_guard.COLD` 时抛出 AttributeError；实际模块导出的是 `GUARD_COLD`。unit 以 exit 1 失败结束，错误发生在 attempt 目录创建和 worker 启动前，12 个 pytest 节点均未执行；这是控制器准备错误，不能判定候选框架行为或将其标为测试通过。原 journal 和绑定保留，不自动重试。此前静审未识别此属性不匹配。
+
+终审时 CPU、主功能 GPU、隔离 r4、性能及封存 SDPA 五份 cache 快照与入场审阅一致，五锁无内核记录或可见 FD holder，控制器 PID 不在现场；1751 个 `/proc` FD 目录拒读，端点快照不能排除瞬态活动。独立终审 `/data6/cgq/jittor-lab/_state/release-day23/20261030-adam-options-cpu-framework-r1-independent-terminal-r1/audit.json`，SHA-256 `d750b4f3abaf50872de641d2d88dadfcca78a866945451c2ad237e8b98785d38`。
+
+## 2026-10-30 隔离 r4 剩余跨卡复制与 capture 首错
+
+基于隔离 r4 host-staging 原生 core／Python 源及显式加载主树 optimizer 模块的一次有界后继中，原 suite 未执行的前 14 个复制节点完成：两方向各四种 dtype 的 17 元素，以及 FP32 两方向在 8 MiB 前、恰好和后各一个元素的边界。每项的源前、目标、源后三份原始字节和 driver 双读均与独立重建的确定性期望一致，实际两卡 DEVICE ordinal、UUID、映射和 fallback 0 已核。同步、指针物化和读回均为干预，不能外推到所有大小、模型或原主树跨卡实现。
+
+第 15 项 CUDA0→1 capture 的 warm copy 字节符合期望，并记录跨设备 host staging 在 Jittor graph recording 期间不支持的拒绝信息；随后 source-after 的 driver DtoH 报 CUDA 906，进程 rc1，未完成源后数值验证、终态 fallback 与映射检查。因此该节点严格失败，不能称 capture 通过或 replay 已验证；第 16 项反方向 capture 未执行。原 CUDA700、隔离候选异常／资源生命周期及 context 等限制仍保留，不能由这些结果确定原故障根因。
+
+隔离 r4 cache 端点 970 → 982、增加 12 项且无删除，旧项仅 lock 文本变化；三份保护 cache 端点一致，终态锁无内核记录。unit 以 exit 1 失败结束、已记录任务 PID 在终审时不在现场；缓存快照和进程观察有可见性限制。独立终审 `/data6/cgq/jittor-lab/_state/release-day23/20261030-r4-devicecopy-remaining16-r2-independent-terminal-r1/audit.json`，SHA-256 `b033b8be360c91828331f2a361014a14c5fd95c013a4338c38977380d1cd6ce0`。
+
 ## 2026-10-30 Adam 更新作用域代码提交
 
 任务代码已提交 `c1569515961a5c4b9739c8b4ab2916bb531d9f22`（`修复优化器更新的参数设备作用域`），该提交仅包含 `compat/torch/optimizer_api.py` 的 Adam／AdamW 非 fused 逐参数更新 scope 改动。真实主树工作树 f110 身份下的 CPU 与 CUDA 固定梯度四步对照已完成，独立审计 SHA-256 `e9c2ea3011d87abc7cda5a5bb7b9db951b0bb172706bb6083be80b625c38fa51`；完整工作树还包含既有 dirty 内容，不能把该工作树身份当成提交树身份。测试包含同步和读回，不证明完整模型、无同步运行或跨设备复制；原 Adam `foreach` 构造失败、历史 CUDA 700 及候选限制继续保留。
