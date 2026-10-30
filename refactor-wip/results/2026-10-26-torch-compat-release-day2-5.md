@@ -1,5 +1,45 @@
 # Torch Compatibility Release Acceptance: 2026-10-26 Day 2–5 Continuation
 
+## 2026-10-31 R11g 主树 alias 写回修复、CUDA 定向证据与 Day2–5 发布门
+
+本节是最新状态，覆盖较早记录中的“R11g 尚未移植”及“只有 CPU 证据”。执行继续使用现有 /home/cgq/jittor，没有重新 clone，也没有清理共享工作区。测试绑定 HEAD 4a03ff2eecb616b03e59b3a88c2a0533c4359da8、分支 integrate/cgq-transformers-native-multicard-target；origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81 为祖先（ahead 78 / behind 0）。
+
+### 源码身份与本轮功能修正
+
+最终源码 fingerprint 为 674fc808ef91f0072b1d015fbfeee4f3a58e04940aaa43392bc894fcc27fb106。基于冻结基线 fingerprint 95eb54ba17b771ece4ed585c2036f19565075b66c858e599972fbee011f76558 的 2,815 项清单核对，变化路径精确为五项：compat/torch/frontend.py、compat/torch/installers/tensor/method_api.py、src/bindings/pyjt/py_tensor_frontend.cc、src/bindings/pyjt/py_tensor_frontend.h、compat/tests/torch/test_torch_compat_autograd_semantics.py。新鲜 source manifest 位于 /data6/cgq/jittor-lab/_state/release-day23/20261031-r11-current-main-root-verify-r1/attempt-18-r11-view-aware-write-fix/source-identity-r3/integrated-source-manifest.json，SHA256 c77f67cfcd3272fd4e94bbce63809cffb645db153916e3b3c395f87413544dda；2,815 项核对结果 SHA256 e2a91443c815c7b2d5628b54752cd106ca8ae559d9889566374ba26e9b4b76be，全部匹配且仅上述五项变化。
+
+本轮关闭了一个真实 CUDA alias 功能失败：no_grad 的 fill_/zero_ 快速路径直接写 view storage，导致 public torch.Tensor(native) 在 GPU 上不再跟随原 owner。最终修正在隐式设备构造时保留原始 owner，并针对完整形状、相同 dtype/device、连续 storage 的无梯度写入更新 owner 的既有 storage；显式 device 构造不登记 owner，仍由既有 placement policy 处理。首次改用一般 view 写回虽能更新值，但会重新分配 storage、改变 data_ptr，因此未采用；该失败原件仍保留。
+
+### 最终回归证据
+
+- 最终源码 CPU 全文件：compat/tests/torch/test_torch_compat_autograd_semantics.py，26 passed、2 个 accelerator 用例跳过、fallback=0。raw log SHA256 697a092d19211040c43b0f4b5bae16c817ec1f9e0059660c58d56ae5b14f9fa2；worker result SHA256 efeb754cc59446b40af9129bcb03dddd8272dc13877a334b3ab457d3076b0253。
+- 最终源码真实 CUDA 定向 alias 用例：1 passed、0 skipped、fallback=0；覆盖 FollowRuntime placement、device_id、dispatch、owner 数值与原 data_ptr。执行进程 PID 2942090 映射至物理 GPU UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0（逻辑 cuda:0），用量 428 MiB。raw log SHA256 19af1b77f4f64d00d1b75e953f831c6e8a0afaf995a1163cffec88882d3840e5；worker result SHA256 eb7a3aeac7c080b6a8350756bb0a5076ce6830ce89fc857f71ba38fe2344929b。
+- 该 CUDA 回归只证明新构造器的两类常量写入，不等于整个 CUDA/Torch API 矩阵通过，也不构成计时或显存基线。
+
+所有执行与失败记录保存在 /data6/cgq/jittor-lab/_state/release-day23/20261031-r11-current-main-root-verify-r1/。attempt-16 的失败 raw log SHA256 为 3c98a7b44070fb1ec43fd0404f1e45476ccb8fedc98c08f1a62abacf129b0c80；attempt-17 的逐步 CUDA alias 诊断 raw log SHA256 为 6e636841133b90149d36373e708b2187de13bddc554e5913bf01f18994ff4159；attempt-18/cpu-retry-01 的 pointer 改变失败 raw log SHA256 为 3b1f2a70a9d6a21240585aa8def1635d98d0320ea9e67c72698d701edf2d317b；attempt-18/cuda-retry-01 的早期冷编中断日志 SHA256 为 7695aa45a06488193e39d6f3a5fda90752ec6d28e6bf92a0f8c438811f2a99fb。没有覆盖这些原件。最终成功使用已完成且源码兼容的 attempt-04 cache 做功能回归；这不替代针对最终 fingerprint 的正式私有 cold build 与独立产品审计。
+
+### Day4–5 性能/显存正式验收需要完成
+
+1. **绑定候选并冷构建。** 以本节 fingerprint 674fc808… 为正式测量身份；在独立目录新建私有 cold core/cache，记录源码、工具链、编译开关、设备架构、core/utils/stamp 哈希，由独立审计验证绑定关系。功能回归重用的 attempt-04 cache 不作为正式性能产品。
+2. **等待合格设备窗口。** 入场需连续采样满足目标 GPU 利用率 ≤10%、空闲显存 ≥60,000 MiB、负载稳定且没有无关 GPU PID。当前 GPU 2 为约 33% / 59,941 MiB，GPU 4 为约 28% / 59,931 MiB，均不满足；其他卡也未同时达标。因此当前不得把共享负载速度或显存数字写成正式结论。
+3. **固定匹配配置并交替。** PyTorch 与 Jittor 固定相同模型与权重 revision、tokenizer、输入数据和顺序、dtype/autocast、batch/sequence、优化器、更新数、随机种子、设备、同步策略和预热定义。至少三轮交替配对；每轮每侧至少十个同步热态样本。
+4. **报告完整计时分布。** 分别列加载、首步、热态 median、p95、离散度和原始样本，并给吞吐；保留同步点和采样方法，使结果可复算。
+5. **独立报告容量和内存。** 逐轮记录框架 allocator allocated/reserved 峰值、NVML 峰值及采样间隔。显存容量/OOM 边界用匹配配置另测，报告最大可运行配置和结束状态；不能拿性能小样本或单步校准替代容量门。
+
+### 更广 Day2–5 发布门
+
+| 发布门 | 完成条件 | 当前状态与缺口 |
+|---|---|---|
+| CPU/Torch/CUDA API、autograd、alias、placement | 覆盖 tensor/Parameter、CPU 与真实设备、no_grad、in-place、梯度、别名、错误路径和 fallback；失败修复后在目标设备重测 | 本轮完整 autograd 文件 CPU 通过，新增 FollowRuntime alias CUDA 用例通过；其余 CUDA/Torch API 矩阵仍未闭合 |
+| 目标模型训练与恢复 | 按发布声明覆盖 T5、Qwen、Vision、BERT 的任务指标、梯度/更新、loss、checkpoint；新进程恢复模型、optimizer、scheduler、RNG 与数据推进 | R14 seed821 Qwen 两 epoch 和同框架 checkpoint resume 是单配置正面证据，不覆盖其余模型或普遍收敛 |
+| 默认 DDP | 普通默认启动路径真实多 rank 梯度归并、参数同步/更新、异常退出及清理 | 仍缺完整默认多卡证据 |
+| Activation checkpointing | 证明实际 activation recompute 发生；同配置对比梯度并测得峰值显存变化 | 现有 shim 直接调用目标函数，没有证明重计算或显存节省 |
+| JT/PT held-out 任务质量 | 共用 held-out 数据、权重/tokenizer/解码协议，预先锁定任务指标及阈值，双方都提供结果 | R14 仅有小样本 PT 分数；JT generation 超时，缺共同分数和质量通过判断 |
+| 保存与序列化互操作 | 分别验收同框架新进程恢复与跨框架读取，列出明确支持边界 | Jittor 新进程 resume 有通过证据；stock PyTorch 读取 JT optimizer portable-pickle 仍失败，需单列或修复 |
+| Day4–5 性能/显存 | 按上方私有 cold build、合格窗口、匹配配置、三轮交替样本与容量协议完成 | 本轮没有正式性能、显存或容量数据 |
+
+R14 实用训练和本轮一条 CUDA alias 功能回归都不等于整个 release 验收完成。overall release 继续 **Not complete**。
+
 ## 2026-10-31 R11g 定向功能修正及当前验收边界
 
 在隔离候选 `/data6/cgq/jittor-lab/worktrees/torch-compat-fill-zero-runtime-grad-r11-20261031` 上形成 R11g，HEAD `765f1791f3b00f9129fb3ec6342dadf2c9dc2dbe`，fingerprint `18500d23a6b25c2f5388aa7a8c3af4b057aff98ace9caa0be139ae9c02ab47d4`，source manifest SHA256 `014dfd561f4352113e7f7c44704aaed144810226b968b51b16ba1443c9b465c5`。候选修正 factory requires-grad 张量的 leaf/梯度登记，并把 Torch Tensor 前端的 `like` 候选传入 C++ scope，让 FollowRuntime 在 clone 输出创建前选择放置。早期 R11 失败和中间尝试都保留，没有被最终结果覆盖。

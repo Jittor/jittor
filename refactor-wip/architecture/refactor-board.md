@@ -1,5 +1,19 @@
 # 整改看板
 
+## 2026-10-31 R11g 主树 FollowRuntime alias CPU/CUDA 定向通过
+
+本节覆盖此前“R11g 尚未移植”及“仅 CPU 回归”的最新状态。继续使用现有工作区 /home/cgq/jittor，没有 clone、reset、stash 或 clean。主树 HEAD 4a03ff2eecb616b03e59b3a88c2a0533c4359da8，分支 integrate/cgq-transformers-native-multicard-target；origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81 为祖先（ahead 78 / behind 0）。当前代码身份 fingerprint 为 674fc808ef91f0072b1d015fbfeee4f3a58e04940aaa43392bc894fcc27fb106；基于同一 2,815 项清单核验，只有五个源码/测试路径相对冻结基线变化：compat/torch/frontend.py、compat/torch/installers/tensor/method_api.py、src/bindings/pyjt/py_tensor_frontend.cc、src/bindings/pyjt/py_tensor_frontend.h、compat/tests/torch/test_torch_compat_autograd_semantics.py。manifest SHA256 c77f67cfcd3272fd4e94bbce63809cffb645db153916e3b3c395f87413544dda，逐项 source verification SHA256 e2a91443c815c7b2d5628b54752cd106ca8ae559d9889566374ba26e9b4b76be。
+
+本轮修复 public torch.Tensor(native) 在 FollowRuntime 下的无梯度常量写入：隐式设备构造器登记原始 owner，整张连续张量在 no_grad 下用 owner 现有 storage 写入；显式 device 构造路径不登记该 owner。CPU 与 CUDA 都验证 fill_、zero_ 后原生 owner 值正确、data_ptr 稳定、placement 与 device 保持且 fallback=0。完整 autograd 语义文件在最终 fingerprint 上为 26 passed、2 个 accelerator 用例在 CPU 模式跳过；实际 CUDA 定向用例为 1 passed、0 skipped。CUDA 进程 PID 2942090 经 nvidia-smi 核实位于 GPU UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0（逻辑 cuda:0），用量 428 MiB。以上是该 alias 路径的功能证据，不是 CUDA 全面 API 覆盖或性能数据。
+
+最终 CPU raw log SHA256 697a092d19211040c43b0f4b5bae16c817ec1f9e0059660c58d56ae5b14f9fa2；worker result SHA256 efeb754cc59446b40af9129bcb03dddd8272dc13877a334b3ab457d3076b0253。最终 CUDA raw log SHA256 19af1b77f4f64d00d1b75e953f831c6e8a0afaf995a1163cffec88882d3840e5；worker result SHA256 eb7a3aeac7c080b6a8350756bb0a5076ce6830ce89fc857f71ba38fe2344929b。证据位于 /data6/cgq/jittor-lab/_state/release-day23/20261031-r11-current-main-root-verify-r1/attempt-18-r11-view-aware-write-fix/。
+
+失败与中断记录仍保留：attempt-16/17 在原始直接写路径上重现 CUDA alias 断裂；attempt-18 的首次 view 写回绕行虽更新 owner 值，但 data_ptr 改变，未通过。之后修正为 owner 的原位存储写入并在最终源码身份复测通过。attempt-18 初次启动曾误触发 CUDA JIT 编译，相关日志保留；cuda-retry-01 在冷缓存判定后于核心编译早期停止，随后改用已完成的兼容 core cache 做功能回归。这些启动/中间失败不计入最终通过数，也不构成 Day4–5 冷编或性能验收。
+
+资源快照仍不满足正式性能准入：GPU 2 利用率约 33%、空闲 59,941 MiB；GPU 4 约 28%、空闲 59,931 MiB；其他卡显存不足或负载更高。根分区约余 33 GiB，/data6 约余 5.5 TiB。本轮没有性能计时或容量结论。
+
+下一步仍需为最终 fingerprint 建立并独立审计正式私有 cold core/cache；等待目标 GPU 连续稳定满足利用率 ≤10%、空闲显存 ≥60,000 MiB 且无无关 PID 后，使用严格匹配配置做至少三轮交替配对、每轮每侧至少十个同步热样本；报告 load、first-step、steady median/p95/离散度、吞吐及 allocator allocated/reserved 与 NVML 峰值，容量/OOM 边界独立测。更广 Day2–5 还需完整 CUDA/Torch API、T5/Qwen/Vision/BERT 任务范围、默认多卡 DDP、真实 activation recompute 与梯度/显存对照、共同 held-out JT/PT 质量阈值，以及同框架新进程和跨框架序列化结论。overall release 继续 **Not complete**。
+
 ## 2026-10-31 R11g 隔离候选推进与 Day4–5 资源状态
 
 针对 R9/R10 两项实际 Torch 语义失败，继续在隔离 worktree `/data6/cgq/jittor-lab/worktrees/torch-compat-fill-zero-runtime-grad-r11-20261031` 推进到 R11g。候选 HEAD `765f1791f3b00f9129fb3ec6342dadf2c9dc2dbe`，fingerprint `18500d23a6b25c2f5388aa7a8c3af4b057aff98ace9caa0be139ae9c02ab47d4`，manifest SHA256 `014dfd561f4352113e7f7c44704aaed144810226b968b51b16ba1443c9b465c5`。修正覆盖 factory requires-grad 张量的 leaf/梯度登记，以及将 `like` 候选随 Torch 前端上下文传到 C++ scope，使 FollowRuntime 放置在 clone 输出创建前可见。

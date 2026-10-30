@@ -1,5 +1,15 @@
 # 2026-10-21 工作区快照与本机接续交接
 
+## 2026-10-31 最新接续：R11g owner-aware alias 写回 CPU/CUDA 定向通过
+
+继续在原服务器工作区 /home/cgq/jittor 推进，没有 clone/reset/stash/clean。主树 HEAD 4a03ff2eecb616b03e59b3a88c2a0533c4359da8，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81 为祖先（ahead 78 / behind 0）。最终源码 fingerprint 674fc808ef91f0072b1d015fbfeee4f3a58e04940aaa43392bc894fcc27fb106；2,815 项清单核验只有五条代码/测试路径变化，source manifest SHA256 c77f67cfcd3272fd4e94bbce63809cffb645db153916e3b3c395f87413544dda。
+
+最终源码 CPU autograd 全文件 26 passed、2 个 accelerator 用例跳过、fallback=0；实际 CUDA FollowRuntime Tensor(native) fill_/zero_ alias 回归 1 passed、0 skipped、fallback=0，进程 PID 2942090 映射到 GPU UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0，逻辑 cuda:0，用量 428 MiB。owner 值、原 data_ptr、placement 和 device 检查通过。完整日志、worker result 和中间失败均保存在 /data6/cgq/jittor-lab/_state/release-day23/20261031-r11-current-main-root-verify-r1/attempt-18-r11-view-aware-write-fix/；详细 hash 和失败 attempt 说明见 2026-10-26 Day2–5 结果记录。
+
+这些测试只关闭这条 constructor alias 功能问题，不覆盖完整 CUDA API，也不提供性能或显存结论。最新 GPU 快照中 GPU 2 为 33% / 59,941 MiB、GPU 4 为 28% / 59,931 MiB，没有卡达到正式测量要求。下一步要在最终 fingerprint 上单独建并审计私有 cold cache，等目标 GPU 连续稳定满足利用率 ≤10%、空闲显存 ≥60,000 MiB 且无无关 PID，再按三轮交替、每轮每侧至少十个同步热样本完成 load/first/steady timing、分布统计、allocator/NVML 峰值及独立容量测试。更广 Day2–5 的 T5/Qwen/Vision/BERT、默认 DDP、真实 activation recompute、共同 held-out JT/PT 质量阈值和序列化边界仍未关闭；整体 release 为 **Not complete**。
+
+本任务的 R11 源码与测试修改保留在工作区 dirty 状态；本轮中文提交仅包含指定的三份状态文档，其他已有改动不暂存、不提交，也不 push。
+
 ## 2026-10-31 R11g 最新接续：隔离候选定向回归通过
 
 本轮继续使用服务器现有 `/home/cgq/jittor`，没有 clone 或清理。当前 HEAD `dcc7f66ca412d3b2496478ddf27499dd21698bca`，远端 `origin/cgq_transformers` 最新提交 `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81` 是祖先（ahead/behind 77/0）；80 个 tracked 文件和 21 个 untracked 文件仍 dirty，index 为空，全部保留。文档里较早的 `b2cf6bad...` / fingerprint `95eb54ba...` 是历史冻结身份，不与当前 HEAD 或 R11g 混用。
