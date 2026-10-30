@@ -1,5 +1,28 @@
 # Torch Compatibility Release Acceptance: 2026-10-26 Day 2–5 Continuation
 
+## 2026-10-30 checkpoint 控制参数任务代码提交
+
+任务代码已提交 `0d1030f8cc802e0ef1bbb27a8849aa39c23c2a7d`（`修复checkpoint控制参数转发`），提交仅修改 `compat/torch/installers/data.py` 的 checkpoint 控制参数处理：默认控制不会误传目标函数，非 reentrant 目标 kwargs 可按约定转发，不支持的非默认控制明确拒绝。它仍是直接调用近似，不提供 activation 重计算或内存节省；已记录的主树 CPU 五节点及隔离候选 13 节点实测各有各自源码／执行范围，不能外推完整 PyTorch、GPU、模型或内存验收。先前隔离运行 pytest 成功后 worker／unit 严格 FAIL、旧 smoke skip 和 PT 全套终态未知继续保留。
+
+
+## 2026-10-30 主树 checkpoint 控制选项 CPU 代表测试
+
+候选改动已应用到主树工作树，执行源码 fingerprint `e7d1711ffcb67363b63a0ffb0743ec152eed418edbb0150bbfab52e754ab8c90`；直接导入实际主树 `torch.utils.checkpoint.checkpoint`，五个代表节点的 15 个 setup／call／teardown 阶段均通过，测试前后主树函数身份、实际 CPU core／utils 映射与 fallback 0 均已记录。覆盖 `use_reentrant=False` 下默认 RNG 控制与函数 kwargs 转发、`preserve_rng_state=False` 和自定义 context 的显式拒绝及警告只发一次；这是五节点 CPU 小样本，不等于已实现完整 PyTorch checkpoint 语义。该实现仍直接调用目标函数、不重计算 activation、不节省相应内存，其他不支持的非默认控制按实现显式拒绝。
+
+先前隔离候选运行实际 pytest 13 节点／39 阶段通过，但旧 smoke 实际 skip，worker 节点前缀误判导致原 unit 严格 FAIL；原失败及映射／fallback 未落盘限制均保留。此次直接主树五节点通过不能抹去该失败或把旧 smoke 标为执行通过；先前 PyTorch 全套 pytest 的终态仍未知。没有重跑 PT 全套、GPU、模型或 checkpoint 内存测试。
+
+独立终审 `/data6/cgq/jittor-lab/_state/release-day23/20261030-main-checkpoint-controls-direct-cpu-independent-terminal-r1/audit.json` SHA256 `a989c48f0feeab9cf5dcb11dd162b958fac29ffc64cd35558045b6a5ed6ac0fc`。unit 自然成功退出；CPU cache 端点无增删且仅锁文件变化，四份保护 GPU cache 不变，五锁内核记录为空；缓存快照和进程／FD 观察存在可见性限制。
+
+
+## 2026-10-30 checkpoint 选项隔离候选 CPU 实测与控制器失败
+
+CPU 单次 pytest 对隔离 `data.py` 候选实际收集 13 个新节点，保存的 setup／call／teardown 共 39 阶段均为 passed，pytest 汇总 `13 passed, 1 skipped`、返回 0；覆盖控制参数消费、reentrant 目标 kwargs 拒绝、非 reentrant kwargs 转发、反向梯度、警告及不支持选项的显式拒绝。旧仓库 checkpoint smoke 节点在 setup 实际 skip，pytest 保存的理由为 `needs deployed torch-shim + nvcc`，因此旧节点未执行，不能算通过。另有测试插件对该外部测试文件显示 0 executed 的路径记账差异；上述 13 项范围由逐节点阶段记录独立重算。
+
+pytest 返回后，worker 按 `test_checkpoint_options.py::` 前缀过滤，但实际新节点 ID 以 `::test_...` 开头，导致误判收集不匹配并以 rc1 退出，控制器和 unit 亦严格 FAIL；原 receipt／日志保留，不以独立重算改写为整包 PASS。按执行源码控制流，到达 pytest 前的 overlay 路径／hash、公开 checkpoint callable 和 CPU core／utils 活体映射检查未抛错，但失败路径没有持久化当时映射详情，也没有记录终态 fallback，不能声称独立取得它们。先前 PT 全套 pytest 的终态未知；该候选仍是直接调用近似，没有 activation 重计算或节省内存，未覆盖 GPU 或模型。
+
+独立重算审计 `/data6/cgq/jittor-lab/_state/release-day23/20261030-checkpoint-controls-cpu-r2-independent-terminal-r1/audit.json` SHA256 `642969eb0efb7abf4ef5b94789f20547764a0421d75d6b1e12501a747867cf52`。CPU cache 端点新增 36 项、无删除，14 个原 shim 文件仅 mtime 变化且内容 hash／大小不变，另锁文件变化；四份保护 GPU cache 不变，五锁内核记录为空，unit 以 exit 1 失败结束且 cgroup 已空。端点快照和进程／FD 可见性有限。
+
+
 ## 2026-10-30 graph capture owner／close CPU fake 原型
 
 独立 Python 状态模型及 12 项标准库测试通过，覆盖 unsupported backend、先分配失败、确定／未知 begin、空图／非空图关闭、设备切换及恢复、嵌套与跨线程 owner 拒绝、未知 end 时保留 hold 并拒绝再次 capture、select／restore 失败及首错保留、已关闭 graph 在恢复失败时保留，以及 fake caller 对 poison 的传播。测试中的两次 `checked_caller` 调用是同一个 fake 函数的重复，不是两个真实调用点的集成验证。原始 10 项测试记录和扩展至 12 项的结果都保留。
