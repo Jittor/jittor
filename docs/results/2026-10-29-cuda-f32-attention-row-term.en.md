@@ -141,8 +141,13 @@ One RTX 4090, paired runs, warm caches and no other tenant, at `86fa5dc73`:
 | resnet50_train | 91.7 ms | 85.5 ms | 0.93x |
 | ddpm_unet_train | 75.4 ms | 74.4 ms | 0.99x |
 
-Geometric mean **0.59x**; no workload is slower than PyTorch. The two decode rows
-carry agree flags (9.5e-02 and 1.2e-01, the harness marks anything above 5e-2):
+Geometric mean **0.59x** (a second full run of the same commit on the same card
+read 0.62x; the Jittor side is reproducible across the two, while PyTorch
+drifted between 159 and 193 ms on the closest cases, so a single row is judged
+by a paired run). Only `ddpm_unet_train` read above parity in the second run,
+at 1.03x; `vit_b16_train` / `bert_base_train` / `ddpm_unet_train` re-measured
+paired on an idle card at 0.88x / 0.86x / 1.03x. The two decode rows carry
+agree flags (9.5e-02 and 1.2e-01, the harness marks anything above 5e-2):
 those rows compare generated token ids, where greedy decoding of random weights
 flips occasional near-ties; both runtimes produce the full 136 tokens.
 

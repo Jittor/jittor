@@ -122,10 +122,14 @@ ViT 的注意力同样走 float32 融合核，1.67x → 1.28x 来自同两处修
 | resnet50_train | 91.7 ms | 85.5 ms | 0.93x |
 | ddpm_unet_train | 75.4 ms | 74.4 ms | 0.99x |
 
-几何平均 **0.59x**，14 个任务全部不慢于 PyTorch。`qwen3_decode` 与
-`qwen3_decode_static` 的 agree 列分别是 9.5e-02 / 1.2e-01（harness 在 5e-2
-以上打标记）：这两行比较的是生成的 token id，随机权重下贪心解码的 near-tie 会翻转
-个别 token，序列长度两侧都是 136，不是长度漂移。
+几何平均 **0.59x**（同一提交、同一张卡的第二次全量跑为 0.62x；Jittor 侧的绝对值两次
+一致，PyTorch 侧在 159–193 ms 之间漂移约 20%，所以单行比值以同一次配对为准）。
+14 个任务里只有 `ddpm_unet_train` 在第二次跑中读到 1.03x，其余均不慢于 PyTorch；
+`vit_b16_train`/`bert_base_train`/`ddpm_unet_train` 在空闲卡上重新配对为 0.88x /
+0.86x / 1.03x。`qwen3_decode` 与 `qwen3_decode_static` 的 agree 列分别是
+9.5e-02 / 1.2e-01（harness 在 5e-2 以上打标记）：这两行比较的是生成的 token id，
+随机权重下贪心解码的 near-tie 会翻转个别 token，序列长度两侧都是 136，不是长度
+漂移。
 
 ## 复现
 
