@@ -1,5 +1,29 @@
 # 整改看板
 
+## 2026-10-30 主树 4ed94 Qwen LoRA checkpoint 51→102 续训
+
+单 seed 821 新用途在主树工作树 fingerprint `4ed94ce1a836ef782dc8d47199a9b0cb86e1eb73752b1de919c6c3cb2ffb35d3` 和实际主树 CUDA core 上加载历史 r10 checkpoint-51，按原 102 步日程实际续训至 102：51 次更新、0 skip，每步记录 112 个有限 FP32 CUDA 梯度，首个续训更新中 112 个 adapter 参数均变化，fallback 0。恢复功能比较通过，112 个 optimizer scalar step 与 trainer／scheduler 均为 51，337 个已记录的 adapter／moment／buffer 设备为 cuda:0，Python／NumPy／CPU／CUDA 四组 RNG 恢复检查通过；337 不涵盖冻结底座全部参数。恢复严格 hash 比较仍为 FAIL：多出两个值为原始学习率的 `initial_lr` 字段，功能比较仅对该已限定差异作例外，不改写严格结果。历史 checkpoint 来自旧 r10，并非本工作树从头训练。
+
+101 个续训 microbatch 的 sample ID／形状和 51 步 LR 与历史 PyTorch full／resume 报告匹配；未逐 token 比较。续训更新窗口等权平均 loss `1.16842480`，两个 PT 参考逐步 loss 平均／最大绝对差分别 `0.00219484`／`0.00686032`；固定 17 样本 eager eval loss `2.45555162`，PT 两个参考均 `2.45664406`。新 checkpoint-102 的 112 个 adapter 均与两个 PT checkpoint 不同，最大绝对差 `0.000506258`、整体差值 L2 `0.0237648`（PT 参考 L2 `8.6498742`）；这只是 adapter 数值诊断，没有 PT optimizer 状态一致性或长期收敛结论。checkpoint 文件和旧 checkpoint 原件身份均已核；另存 `final-state.npz` 的最佳模型与末态 optimizer 组合未证明为同一原子 checkpoint。
+
+训练首个续训更新的两个 microbatch 各观察到首层 q_proj 输入／权重 FP32、输出 BF16、autocast 开启及 CUDA dispatch；不证明全程或内核内部精度。51 次更新均观察到 fused AdamW Python 分支调用，逐参数 `adam_update` 调用为 0，故本次不覆盖非 fused 参数 scope 路径；Python 计数不证明 kernel 内部执行。公开 `jt.fetch` 包装观察到两次调用并返回，但未直接观察 EventQueue。predict／lifecycle 明确未运行，旧严格失败及评估限制保留；同步、读回与包装均有干预，不作性能结论。
+
+独立终审 `/data6/cgq/jittor-lab/_state/release-day23/20261030-main-4ed94-qwen-resume-r2-independent-terminal-r1/audit.json` SHA256 `1a1451fe83152e01f8702716961b6c68be4a1cf4503b28a0b82142361b91543f`。本次独立 3000 秒预算内 unit 自然成功并退出；主 GPU 功能 cache 端点增加 428 项、无删除，旧项仅锁文件变化，三份保护 cache 不变，五锁内核记录为空。缓存为端点快照，现场进程／FD 可见性有限；历史预算和原失败不重置。
+
+
+## 2026-10-30 Qwen checkpoint 51→102 新用途准备
+
+以下为运行前计划的历史记录，实际运行与终审结果见上文。
+
+正在准备在主树当前工作树上进行 Qwen LoRA checkpoint 51→102 的独立续训新用途，预算单列为 3000 秒；这是拟议运行，不是已完成的训练或通过结果。原有训练、续训和严格失败以及原预算账目保持不变，不因新用途而重置。runner 尚未冻结，实际源码与产品、PyTorch 对照、checkpoint／数据身份和现场资源仍须在可执行方案中绑定并审阅；尚未以本计划运行 GPU、JIT 或模型，不能据此推断新工作树的训练或恢复成功。
+
+## 2026-10-30 graph capture backend 契约只读审阅
+
+隔离 r4 的历史观察显示：在设备 0 的 per-thread stream 开始 capture 后，跨设备操作拒绝时当前设备变为 1；沿当前设备结束时 end 返回 401、后续读取返回 906，而另一独立进程显式恢复设备 0 后 end 返回 0、源字节匹配。GDB、同步及设备恢复均为干预，结果不能认定原 CUDA 700 的唯一根因，也不是通用 capture／replay 通过。
+
+只读审阅发现现有 backend 表 ABI 为版本 3 并要求结构尺寸精确一致；新增字段会影响旧表兼容，原回调改签名同样改变二进制调用契约，外部 backend 与消费者未穷尽。当前 end 返回 null 既可能是结束失败，也可能是确认关闭后的空图或不可实例化图，不能据此证明 recording 已关闭；持有分配的 owner、起始设备与线程及非空图 launch／release 的设备归属都需要明确验证。发生关闭状态未知时，是否保留 held allocations、阻止继续 capture 并把致命条件穿过现有 Python 宽泛异常处理，仍是待设计和验证的问题；custom context、并发与错误恢复亦未解决，CoreX 和外部 backend 不可直接外推 NVIDIA 实验。审计仅提出受限方向与后续 CPU fake-backend／真实 CUDA 验证要求，没有补丁、冷编、GPU 实验或合入。审计 `/data6/cgq/jittor-lab/_state/release-day23/20261030-capture-backend-contract-readonly-handoff-r1/audit.json` SHA256 `e56b922245228e975e46347cb71981c8ce0008f657b029c3fc134ed4e2da75db`；原 906 严格失败和两次干预观察均保留。
+
+
 ## 2026-10-30 Adam 选项任务代码提交
 
 任务补丁已提交 `672d1fcf47726c6b5a7b546f14aaa5c61b6c4244`（`支持Adam显式关闭批量与融合选项`），只修改 Adam 的前端选项、参数组选项保存和非 fused step 前校验：接受 `foreach`／`fused` 的 `False` 或 `None`，对 `True` 明确拒绝，其他错误类型拒绝；不声称实现 foreach 或 fused。此前主树工作树 fingerprint `4ed94ce1…` 的直接 CPU 七节点及三个新进程序列化恢复通过，隔离候选的 CPU／CUDA 固定梯度四步 PyTorch 对照也通过；这些各自带同步／读回的证据范围与工作树 dirty 身份保留，不等同于该提交树的完整模型、GPU 恢复或性能验收。原控制器入口错误、观察器错误、同进程状态共享及续步严格失败均不改写。
