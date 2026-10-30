@@ -1,5 +1,19 @@
 # 整改看板
 
+## 2026-10-30 任务恢复与 peer-enabled host staging 验证
+
+任务已从下方历史暂停状态恢复。peer-enabled host staging r1 单次实际运行四个独立进程，覆盖两张 GPU 的双向传输及同步→异步、异步→同步两种次序，共八阶段；每次目标对源启用 peer 返回 0。实际 CUDA 指针和设备 ordinal、两张 GPU 的进程 UUID、portable pinned host、源流与事件及目标流顺序均已核验。源、host 和目标四个 FP32 值均为 [1.5, -2, 5, 7.5]，consumer 为 [2.5, -8, 13, 20.5]，原始字节匹配且设备读回两次一致。各进程分别编译 PTX 并执行 GPU driver JIT，driver/runtime 活体映射前后相同。
+
+独立终审 /data6/cgq/jittor-lab/_state/release-day23/20261030-peer-host-async-resume-next-terminal-r1/audit.json SHA256 4c7f11e128f12ce6f812f686fe069530b1cf4a6a7c5de0145c448f56575ea97c，原 receipt SHA256 d7d7ebdb6c474fb34d71ab1b30b318fb3eccffb1f4bcc139a0ed0b4319d0d7e9。六份缓存的前后及终审快照一致，六锁无内核持有记录，unit 自然成功、cgroup 空及本任务进程退出；进程和 FD 可见性、端点快照之间的瞬态变化仍有限制。本实验是四个连续 FP32 元素的直接 CUDA 中转；记录和同步读回会干预执行，异步提交顺序不证明实际重叠，也不覆盖 Jittor Tensor.to、capture、反向、通用布局或性能。此前 no-auto-peer 八案例的显式 peer 复制 FAIL 和未运行项仍保留。
+
+
+## 2026-10-30 按额度条件暂停
+
+用户设定的 Codex 周额度暂停条件已触发（剩余 19%），任务暂停；现场可见范围内无正在运行的本任务 unit、主 PID 或 cgroup 进程，历史 active/exited 与 failed unit 保留。六份缓存锁无内核持有记录、可见 FD 无 holder；进程和 FD 有权限可见性限制，结论为当前时点快照。HEAD 为 7c078c39056c872316235421d53b0ac89e97babd，原 dirty 和历史产物保留。
+
+peer-enabled 双向同步/异步 host staging 诊断包 /data6/cgq/jittor-lab/_state/release-day23/20261030-peer-enabled-host-async-sequence-runner-r1-hold 的 manifest SHA256 e7617bf62086d5021d2fc8eb3716db43ae738bc226dee9ff806faf36f4e99d77 已经两份静审，尚无现场 binding、未创建 attempt，也未运行该包 GPU 或 JIT；恢复后应重新核现场资源、源码及锁并生成新鲜绑定。该包是直接 CUDA 实验，不是 Jittor 修复或 capture 验收；八案例原 FAIL 和未运行项继续保留。暂停快照 /data6/cgq/jittor-lab/_state/release-day23/20261030-peer-staging-pause-handoff-r1/pause-snapshot.json SHA256 1bdcd3defb4de0c0148c1bdadfc2b02cd7e700439c2d66286f4699bda13d0597。
+
+
 ## 2026-10-30 no-auto-peer 隔离候选跨卡八案例：四项通过、第五项失败
 
 在已审私有冷编候选上，五个独立进程实际调用 Torch Tensor.to。未由测试脚本显式启用 peer 的双向直接复制及 producer→copy→consumer 四项，四元素连续 FP32 源、目标及 pending 中间值按位匹配，实际 CUDA 指针 ordinal/dispatch 和两个物理 UUID 均核对，四项 fallback 0；此项不证明 peer 实际处于关闭状态。第五项在目标 cuda:1 对源 cuda:0 显式启用 peer 返回 0 后，0→1 直接复制的目标两次读回均为 16 字节 ff，源前后保持原值；记录数值不符并首错停止，后续三个显式启用案例未运行。失败案例未执行最终 fallback 和映射复核，原 FAIL 保留。
