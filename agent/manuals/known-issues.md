@@ -1235,6 +1235,29 @@ workaround.
 - Exit condition: remove each sub-item only with focused CPU and accelerator
   tests for its operation and derivative order.
 
+## KI-AUTOGRAD-005: a `numpy_code` or `jt.code` gradient cannot be differentiated again
+
+- Severity: Limitation
+- Status: Limitation, confirmed 2026-10-29 on `4543b0f2b` plus the change that
+  made the `jt.code` case raise (it returned 0 before).
+- Owner: autograd maintainers
+- Symptom: a second derivative through an op whose backward is a numpy
+  callback or a `cpu_grad_src`/`cuda_grad_src` source raises "cannot
+  differentiate a ... gradient again". That includes max/min pooling, which
+  runs as a `jt.code` op by default, so a gradient penalty through
+  `jt.nn.max_pool2d` raises; `complex_pinv` and `complex_eig` have no
+  backward at all.
+- Cause: the backward is opaque user code; nothing says how its result
+  changes with its inputs (`torch.autograd.function.once_differentiable` is
+  the same contract).
+- Workaround: write the op as a `jt.Function` whose `grad` uses
+  differentiable jittor ops. For pooling, `jittor.pool.pool_use_code_op =
+  False` selects the reindex implementation, which differentiates twice.
+- Evidence: `tests/ops/test_code_op.py::TestCodeOp::test_second_derivative_through_a_code_gradient_raises`,
+  `tests/ops/test_numpy_code_op.py::TestCodeOp::test_second_derivative_through_a_numpy_code_gradient_raises`.
+- Exit condition: pooling's default path differentiates twice, and the
+  remaining callback ops either do or are documented as first-order only.
+
 ## KI-EXEC-002: a profile scope cannot measure work launched before it opened
 
 - Severity: Limitation

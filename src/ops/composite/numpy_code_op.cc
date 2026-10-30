@@ -95,6 +95,14 @@ NumpyCodeOp::NumpyCodeOp(NanoVector shape, NanoString dtype, vector<Var*>&& inpu
 }
 
 VarPtr NumpyCodeOp::grad(Var* out, Var* dout, Var* v, int v_index) {
+    // An op built below runs a user's backward callback; nothing says how to
+    // differentiate that again.
+    USER_CHECK(!_results.ints.count(dout_input_index_key))
+        << "numpy_code: cannot differentiate a numpy_code gradient again. Its "
+           "backward is a numpy callback, and no rule says how the callback's "
+           "result changes with its inputs (a Hessian, a gradient penalty, "
+           "jacfwd(grad(f))). Write the op as a jt.Function whose grad() uses "
+           "differentiable jittor ops to differentiate it twice.";
     USER_CHECK(v_index >= 0 && v_index < (int)backward.size())
         << "numpy_code has no backward callback for input" << v_index;
     NumpyResult result;

@@ -245,6 +245,20 @@ class TestCodeOp(unittest.TestCase):
         assert_rss_growth_bounded(
             exercise, iterations=128, max_growth_bytes=8 << 20,
             cleanup=jt.clean)
+    def test_second_derivative_through_a_numpy_code_gradient_raises(self):
+        def forward(np, data):
+            np.copyto(data["outputs"][0], data["inputs"][0] ** 3)
+
+        def backward(np, data):
+            np.copyto(data["outputs"][0], data["dout"] * 3 * data["inputs"][0] ** 2)
+
+        x = jt.array(numpy.array([2.0, -1.5], dtype="float32"))
+        y = jt.numpy_code(x.shape, x.dtype, [x], forward, [backward])
+        first = jt.grad(y.sum(), x)
+        numpy.testing.assert_allclose(first.numpy(), [12.0, 6.75])
+        with self.assertRaisesRegex(RuntimeError, "cannot differentiate a numpy_code gradient again"):
+            jt.grad(first.sum(), x)
+
 
 if __name__ == "__main__":
     unittest.main()

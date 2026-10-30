@@ -64,6 +64,7 @@ struct ComplexOpType : OpByType {
             {"sin", "jittor::jt_csin($2)"},
             {"cos", "jittor::jt_ccos($2)"},
             {"sqrt", "jittor::jt_csqrt($2)"},
+            {"pow", "jittor::jt_cpow($2, $4)"},
             {"cast", "(($1)($2))"},
             {"equal", "(($2)==($4))"},
             {"not_equal", "(($2)!=($4))"},

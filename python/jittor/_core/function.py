@@ -187,23 +187,35 @@ can also be None)::
         computed from the tapes stays as non-differentiable as before.
         ``_taped_input_rebinds`` maps the old Var ids to the new ones for
         anything that recorded them, such as a saved-tensor version check.
+
+        Tuples, lists and dicts are searched to any depth (dict values, not
+        keys), so ``self.saved = {"outer": {"x": x}}`` keeps its second
+        derivative too; it used to be 0. The swap happens on the Var object
+        itself, so the containers keep their structure and an input saved in
+        several places stays one object.
         """
         taped = {t.id for t in taped_inputs}
         rebinds = {}
+        # Containers already walked, by id: a container saved twice, or one
+        # that holds itself, is walked once.
+        seen = set()
 
-        def rebind(value):
-            if (isinstance(value, Var) and value.id in taped
+        def visit(value):
+            kind = type(value)
+            if kind is tuple or kind is list or kind is dict:
+                if id(value) in seen:
+                    return
+                seen.add(id(value))
+                for item in (value.values() if kind is dict else value):
+                    visit(item)
+            elif (isinstance(value, Var) and value.id in taped
                     and not value.is_finished):
                 old = value.id
                 value.swap(value._input(0))
                 rebinds[old] = value.id
 
         for value in tuple(self.__dict__.values()):
-            if type(value) is tuple or type(value) is list:
-                for item in value:
-                    rebind(item)
-            else:
-                rebind(value)
+            visit(value)
         if rebinds:
             self._taped_input_rebinds = rebinds
 
