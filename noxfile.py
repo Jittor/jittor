@@ -2255,9 +2255,12 @@ def nccl(session):
     session.run("nvidia-smi", external=True, env=env)
     session.run(nvcc, "--version", external=True, env=env)
     session.run(python, "-m", "pytest", "--version", external=True, env=env)
+    # Singleton warmup does not trigger the import-time multi-rank NCCL path.
+    # Initialize it explicitly before asserting the compiled ops are ready.
     probe = (
         "import jittor as jt; "
         "assert jt.compiler.has_cuda; "
+        "jt.compile_extern.setup_nccl(); "
         "assert jt.compile_extern.nccl_ops is not None; "
         "jt.flags.use_cuda = 1; "
         "x = (jt.array([1.0, 2.0]) * 2).sum(); x.sync(); "

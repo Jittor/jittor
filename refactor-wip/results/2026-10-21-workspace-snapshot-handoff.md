@@ -1,5 +1,16 @@
 # 2026-10-21 工作区快照与本机接续交接
 
+## 2026-10-31 最新接续：当前源码 Accelerate DDP 定向门通过；Day4–5 仍未开始正式验收
+
+继续使用 /home/cgq/jittor 原工作区。验证 HEAD fda5675c892fed75f206bf36d65c45628e4d55ed；origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 95/0。测试前 103 项 dirty/untracked 保留，本轮 noxfile.py 修正增加一项；没有 clone/reset/stash/clean/push。全部运行与失败原件在 /data6/cgq/jittor-lab/_state/release-day23/20261031-main-accelerate-ddp-nosync-r20-current-source-r1/。
+
+NCCL warmup 的 singleton 路径现显式调用 setup_nccl()。launcher 现将单卡屏蔽后的 backend_local_rank 用作标准 LOCAL_RANK，避免 Accelerate rank 1 把不可见 device id 1 传给 barrier。最终 attempt-03 双 rank 通过：GPU2/GPU4 各进程 cuda:0、local_rank=0；每 rank 1 passed、0 skipped，sentinel 1/1，launcher exit 0；梯度归约、optimizer.step、收尾 barrier 和 fallback 守卫通过。nox 不可用，pytest 实际为 7.3.1，本结果不是完整 nox session 通过；当前尝试未生成参数/optimizer-state JSON。
+
+Day4–5 准入不合格：GPU2/4 利用率约 31%/29%、空闲 59,941/59,931 MiB，且有外部 VLLM PID。正式验收要等利用率 ≤10%、空闲 ≥60,000 MiB 且无无关计算进程，再冻结匹配 JT/PT workload，做至少三轮交替、每轮每侧十个以上热样本，报告 load/首步/热态分布、allocator allocated/reserved、NVML 峰值及独立容量/OOM 边界。
+
+更广发布门包括声明范围 API/device/dtype/layout/edge/autograd/fallback，目标模型训练与 held-out 阈值，模型级 checkpoint 重算/显存对照，其他分布式范围，安装打包和跨框架序列化边界。Qwen 训练/恢复和 17 条 generation 对照、Llama 单层 recompute 各有窄证据，不能代替这些门。Overall release 仍为 Not complete。
+
+
 ## 2026-10-31 最新续接：当前主树 NCCL barrier 主机同步窄验证通过
 
 当前工作区 /home/cgq/jittor，HEAD db4618b7f73e7dd77d1822a3d3d614366d44508a；评测前后 source fingerprint b5779f89d464541ecb464632e407d5fc5b9e361c7cff8dd6ddbd7b8e19bf3e97 不变。两个独立 rank 从本树导入 Jittor，在真实 GPU2/GPU4、NCCL、cuda:0 上验证显式与默认 barrier；rank 1 在 rank 0 延迟写入 host marker 后返回默认 barrier，marker 已可见、等待约 0.509 秒，fallback 两端均为 0。当前 barrier 源 SHA 3a374332a539cd862bea1ac9a34e0febe6bc4392ffb2aecf4683d823aea276e6，复用 nccl0 core SHA 3b646629cb5d3a3d5804ba0aefe066617c90364e4038438a936e87b301d6ffce。结果与限制见 /data6/cgq/jittor-lab/_state/release-day23/20261031-main-nccl-barrier-sync-probe-r1/，result.json SHA256 b5c9ec3d906e4c86d1927cfc2c381ca10173d3057d013e9d69d4ce7eaa9b7a06。

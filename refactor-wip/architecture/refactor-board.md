@@ -1,5 +1,16 @@
 # 整改看板
 
+## 2026-10-31 当前源码 Accelerate DDP no_sync 定向门通过；Day4–5 与整体发布仍开放
+
+继续在 /home/cgq/jittor 原工作区。测试 HEAD fda5675c892fed75f206bf36d65c45628e4d55ed；origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 95/0。测试前 103 项既有 dirty/untracked 保留；本轮 noxfile.py 修正增加一项，index 在文档收尾前为空。测试时 tracked diff、porcelain-v2、untracked manifest SHA256 分别为 26cd96d9fe06816c477697ab4ada9b40b44eba786865ca82f7790df7eb766623、58a12399900ce9e1dcd866a7a961cd1f5a543e04afc32331631d78150eca6e43、7a6fa6d040d05b01f7d874ab05cd1f0c2d60f0196dbcaa46d6d37be941ddaab6。完整证据位于 /data6/cgq/jittor-lab/_state/release-day23/20261031-main-accelerate-ddp-nosync-r20-current-source-r1/。
+
+修正两处阻塞：NCCL singleton warmup 原先在 world size=1 时断言延迟加载的 nccl_ops；noxfile.py 现显式调用 setup_nccl() 再检查。launcher 每个子进程只看到一张 GPU，却把标准 LOCAL_RANK 设为全局 rank；Accelerate rank 1 最终 barrier 因 device_ids=[1] 访问不到其逻辑 cuda:0。python/jittor/distributed/launch.py 现以 backend_local_rank 设置 LOCAL_RANK。noxfile.py SHA256 1dad2463a854f9fedc110779d8493c66766e3d8ce0f0b7902c7e61e819302718；launch.py SHA256 9329739e5d924a8abbab9c9f1448415fa8521cbf0e5357979e3b2fd2ed455057。
+
+最终 attempt-03 在真实 GPU2/GPU4 NCCL 双 rank 通过，每进程逻辑 cuda:0、local_rank=0；rank pytest 各 1 passed、0 skipped，Jittor sentinel 各 collected=1 executed=1，launcher exit 0。no_sync 首个微批的 rank-local 梯度不同，closing backward 后梯度相等；AdamW step、同步 barrier 和 fallback 守卫均通过。rank0/rank1 日志 SHA256 为 1f89bfe2845018966b8f38c755704c16ea2d9af3fd0ab78fda99a33045e5912d 与 643fe4e89611900f273f60e18d6bae13f7ea3741743250be151b185f45fe3f7c；父日志 SHA256 7472bfa7847857e107524e84e6a01926cb6cc5a59c9229c0fcf865c70f8b670c。未设置 JITTOR_ACCELERATE_INTEGRATION_OUTPUT，因此本轮没有参数差值/optimizer state JSON；只关闭当前 no_sync/barrier/sentinel 窄路径。nox 未安装，直接运行维护 launcher 和目标用例，pytest 7.3.1；不声称完整 nox session 通过。attempt-01/02 与 warmup 失败均原样保留。
+
+当前 GPU2/4 约 31%/29% 利用率、空闲 59,941/59,931 MiB，有外部 VLLM PID 2914621/2861632；根分区余 33 GiB、/data6 余 5.5 TiB。只做功能验收，未测性能/显存。Day4–5 和更广发布门继续开放，overall release 仍 Not complete。
+
+
 ## 2026-10-31 当前主树 NCCL barrier 主机同步窄验收通过
 
 在当前 /home/cgq/jittor 源码上，直接双 rank CUDA/NCCL 探针验证了现有 ProcessGroup barrier 的主机同步路径。源码 HEAD db4618b7f73e7dd77d1822a3d3d614366d44508a，完整 tree fingerprint b5779f89d464541ecb464632e407d5fc5b9e361c7cff8dd6ddbd7b8e19bf3e97；评测前后 fingerprint 与 git status hash 相同。distributed.py SHA256 3a374332a539cd862bea1ac9a34e0febe6bc4392ffb2aecf4683d823aea276e6；实际复用已热的 nccl0 core SHA256 3b646629cb5d3a3d5804ba0aefe066617c90364e4038438a936e87b301d6ffce，JITTOR_NO_BUILD=1，没有冷编译或改源码。

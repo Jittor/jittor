@@ -1,5 +1,30 @@
 # Torch Compatibility Release Acceptance: 2026-10-26 Day 2–5 Continuation
 
+## 2026-10-31 当前源码 Accelerate DDP no_sync 定向终验与 Day2–5 未闭合门
+
+测试源码 HEAD fda5675c892fed75f206bf36d65c45628e4d55ed；origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 95/0。测试前保留 103 项既有 dirty/untracked，本轮 noxfile.py 增量后为 104 项；未清理其他修改。证据根目录 /data6/cgq/jittor-lab/_state/release-day23/20261031-main-accelerate-ddp-nosync-r20-current-source-r1/。
+
+最终 attempt-03 在物理 GPU2/GPU4、CUDA/NCCL、backend_fallback=error 下通过；每 rank 1 passed、0 skipped，sentinel collected=1 executed=1，launcher rc=0。两个进程各自逻辑设备 cuda:0、LOCAL_RANK=0。no_sync 的 rank-local 首个梯度不同，closing backward 后梯度归约一致；AdamW step、最终同步 barrier、fallback 禁止和计数检查均完成。launcher 修正了单卡可见时 LOCAL_RANK 仍取全局 rank 的映射；noxfile 修正了 singleton warmup 未显式初始化 NCCL 的断言顺序。失败 attempt 原件保留。
+
+### Day4–5 正式性能/显存门还需完成
+
+- 冻结相同源码、模型/权重、数据、dtype/precision、batch/sequence、loader、训练或推理设置及 cache 身份，保证 JT/PT 可比。
+- 等目标卡连续达到 GPU 利用率 ≤10%、空闲显存 ≥60,000 MiB 且无无关计算 PID。当前 GPU2/4 约 31%/29%、空闲 59,941/59,931 MiB，并有共享 VLLM PID，不能进入正式窗口。
+- 至少做 3 轮 JT/PT 交替配对，每轮每侧至少 10 个同步热态样本；分别报告 load、首步、热态 latency/throughput 的 median、p95、离散度。
+- 同时记录 Jittor allocator allocated/reserved 与 NVML 峰值；独立测匹配配置下最大 batch/sequence 与 OOM 容量边界。旧共享负载结果只作诊断。
+
+### 更广 Day2–5 发布门还需完成
+
+1. 按发布声明闭合 Torch API、CPU/CUDA device、dtype、layout、边界、autograd 前后向及 fallback 矩阵，并列明 unsupported 范围。
+2. 对每个声明模型记录真实设备、权重/数据/配置、梯度、参数更新、loss 和固定验证/held-out 指标。当前 seed821 Qwen 两 epoch实训/新进程续训已通过，17 条共同 held-out generation 有 JT/PT 分数，但仍是有界样本且没有预设 release 质量阈值。
+3. 当前 CUDA LlamaDecoderLayer 有单层真实 activation recompute 与梯度对照；还需模型级开关对照、梯度、allocator/NVML 峰值与可运行容量，不能把单层重算等同于显存收益。
+4. 当前双卡 Accelerate no_sync→closing backward→barrier 窄路径通过；其他声明中的 collective、精度、模型、长周期及 FSDP/恢复仍需覆盖。此次未设置 JITTOR_ACCELERATE_INTEGRATION_OUTPUT，没有新的参数差值和 optimizer state 结构化报告。
+5. 将同 Jittor 新进程恢复与 stock PyTorch 无法读取 JT portable-pickle optimizer 分开定界；若支持跨框架读写，需用明确交换格式单独验收。
+6. 对声明安装方式完成干净环境安装、导入和最小训练/保存/加载 smoke。
+
+以上适用门未闭合前，Day4–5 和整体 release 保持 Not complete。
+
+
 ## 2026-10-31 当前主树 NCCL barrier 主机同步双 rank 窄验证
 
 ### 身份与运行协议

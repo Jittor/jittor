@@ -237,7 +237,7 @@ def _rank_environment(args, rank, backend, devices, rootinfo, master_addr, maste
 
     env.update({
         "RANK": str(rank),
-        "LOCAL_RANK": str(rank),
+        "LOCAL_RANK": str(backend_local_rank),
         "WORLD_SIZE": str(args.nproc),
         "LOCAL_WORLD_SIZE": str(args.nproc),
         "MASTER_ADDR": master_addr,
@@ -325,7 +325,7 @@ def main(argv=None):
                 print(
                     "[jtrun] backend={} rank={}/{} local_rank={} device={} "
                     "backend_local_rank={} master={}:{} command={} log={}".format(
-                        backend, rank, args.nproc, rank, device, backend_local_rank,
+                        backend, rank, args.nproc, backend_local_rank, device, backend_local_rank,
                         master_addr, master_port, " ".join(args.cmd), log_path),
                     flush=True,
                 )
