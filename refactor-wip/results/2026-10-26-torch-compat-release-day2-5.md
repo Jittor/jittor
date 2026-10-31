@@ -1,3 +1,24 @@
+## 2026-11-01 06:51 +0800 CPU 功能复验完成；GPU2 仍共享
+
+### 工作区与执行身份
+
+继续使用 /home/cgq/jittor 现有工作区，branch integrate/cgq-transformers-native-multicard-target，HEAD 202199ac920528f4e848e13ff897ab38a969ae9a，origin e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 140/0。执行前后 102 项既有 dirty/untracked porcelain SHA256 均为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211；测试未改源码或测试文件。运行绑定 runtime source fingerprint ae682fe34dec0cf62e74f5dd3546c8c77dd7d97f23f03f7a4d4b7d11558f2499，测试文件 SHA256 已写入证据 plan.json。
+
+### 失败原件与复验
+
+首轮 /data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-training-feature-cpu-r1-prepared/ 因所选 JITTOR_HOME 缺少当前环境 build key，意外触发新的 CPU jittor_core 配置 cfg1d275ac1，完整编译 227 个单元；约 313.93 秒时输出 7 个 pytest 进度点仍无最终汇总。为避免继续无边界编译，精确终止本任务 pytest 子树；wrapper 记录退出码 -15，原日志 SHA256 ab005ff2a1afa55d64ea7001a4cb4628f37b00106ee76341d29ed0dcd3d7338e。这次不计为测试通过。新建的核心缓存和失败原件均保留，未删除。
+
+随后在同一隔离 JITTOR_HOME 复用该 build key 进行有界复验，没有再次编译核心：
+
+- compat/tests/torch/test_generator_streams.py、test_torch_amp_training_loop.py、test_graph_replay_alias_warmup.py：14 passed、6 skipped，28.07 秒；跳过项为 accelerator-only。日志 SHA256 874252a9c3b2a35bdd0eb01a99c9c2ed4fb64b490ccc42a20ba39e59669cd8d5。
+- tests/core/test_step_capture.py：9 passed、18 skipped，7.17 秒；跳过项为 accelerator-only。日志 SHA256 4bb468b6ea9c1b7e17d38ccd1546d84ed04129374f0578b44f90fb10492f603f。
+
+复验使用 Python 3.11.3 / pytest 7.4.4、CUDA_VISIBLE_DEVICES 为空和 JITTOR_TEST_DEVICES=cpu。证据计划及摘要在 /data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-training-feature-cpu-r2-prepared/，plan.json SHA256 561d6f1af74add3bb12f4feec300d886eca1bb9235090b18f29eff379b1307f3，summary.json SHA256 64d4f951aaf6078528a2483fabe03c4550578932fe3d17e7d5ad563312922e24。这些 CPU 结果补充生成器流、AMP 训练循环、graph replay alias warmup 与原生 step capture 功能证据，不覆盖 accelerator 路径、速度或显存结论。
+
+### GPU2 与下一步
+
+06:50 +0800 最新设备快照中，GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 为 Default，yqa PID 3590512 使用 8640 MiB，利用率约 81%；GPU1 UUID GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068 当时无 compute app。没有启动占卡程序或本任务 CUDA 测试。普通 burner 无法阻止其他进程创建 CUDA context；GPU2 需管理员/调度器按 UUID/GRES 与设备 cgroup 提供独占租约。Day4–5 正式性能/显存仍未运行，需取得稳定独占窗口后执行至少三轮 PT/JT 交替、每轮每侧至少十个热样本，报告 load/首步/热态 median、p95、离散度、吞吐、allocator/NVML/RSS 峰值，并补近容量/OOM 恢复和真实 activation recompute checkpoint on/off 测量。整体 Day2–5 release 仍 Not complete。
+
 ## 2026-11-01 06:37 +0800 wheel 基线源码重建与迁移差异审阅
 
 ### 工作区与复核范围

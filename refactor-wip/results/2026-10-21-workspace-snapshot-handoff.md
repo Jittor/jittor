@@ -1,3 +1,15 @@
+## 2026-11-01 06:51 +0800 handoff：CPU 功能复验已补；GPU2 需系统独占
+
+继续在 /home/cgq/jittor，branch integrate/cgq-transformers-native-multicard-target，HEAD 202199ac920528f4e848e13ff897ab38a969ae9a，origin ahead/behind 140/0。102 项既有 dirty/untracked 状态哈希 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211 未变，测试期间未修改仓库源码或测试。
+
+当前源码指纹下完成 CPU 功能复验：generator stream independence、AMP training loop、graph replay alias warmup 14 passed、6 accelerator-only skipped；tests/core/test_step_capture.py 9 passed、18 accelerator-only skipped。首轮误触发新 CPU core 编译后按进程树停止，退出码 -15、无最终 pytest 汇总，不计通过；失败日志与复验日志均保留，证据位于 /data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-training-feature-cpu-r1-prepared/ 和 /data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-training-feature-cpu-r2-prepared/。CPU 结果不证明 CUDA 路径或性能/显存。
+
+GPU2 仍为共享 Default：yqa PID 3590512 使用 8640 MiB、约 81% util。占卡 burner 不能提供系统级独占，且无法排除其他 CUDA client；取得管理员/调度器 UUID/GRES 和设备 cgroup 租约前不运行 GPU2 性能测量。Day4–5 正式测量仍需至少三轮 PT/JT 交替、每轮每侧十个热样本、加载/首步/热态延迟分位数与离散度、吞吐、allocator/NVML/RSS 峰值，以及近容量/OOM 恢复和真实 activation recompute checkpoint on/off。整体 Day2–5 release 保持 Not complete。
+
+### 下一步
+
+继续审阅固定 wheel 基线的 69 additions 与 301 项源码成员内容变化并关联已有功能测试；不改 allowlist 直到每项有分类依据。并行推进未完成的多 rank DDP、held-out 任务指标和 clean CUDA 安装门。正式 Day4–5 需等待整卡独占租约。
+
 ## 2026-11-01 06:37 +0800 handoff：wheel 基线源码已恢复；逐项迁移审阅继续
 
 工作区 /home/cgq/jittor，branch integrate/cgq-transformers-native-multicard-target，HEAD 72a08b2237ff4164fe5f5786a28cb70fb5d2cf6e；origin e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 139/0。编辑前 102 项既有 dirty/untracked porcelain SHA256 为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，index 为空。

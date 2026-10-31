@@ -1,3 +1,9 @@
+## 2026-11-01 06:51 +0800 CPU 功能复验通过；Day4–5 受 GPU2 共享阻塞
+
+当前主树 HEAD 202199ac920528f4e848e13ff897ab38a969ae9a，原有 102 项 dirty/untracked 状态 SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211 保持不变。CPU 复验通过：Torch generator/AMP/graph replay 三组 14 passed、6 accelerator-only skipped；native step capture 9 passed、18 accelerator-only skipped。首轮意外 cold core build 后被中止的日志和复验身份、SHA256 见 refactor-wip/results/2026-10-26-torch-compat-release-day2-5.md 顶部及 /data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-training-feature-cpu-r2-prepared/。这些 CPU 结果不涵盖 CUDA 性能或显存。
+
+GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 仍由 yqa PID 3590512 使用 8640 MiB，为共享 Default，约 81% util；未运行 burner。Day4–5 需管理员/调度器独占租约后，执行三轮交替 PT/JT 热态性能/显存、容量/OOM 与真实 activation recompute 验收。整体 Day2–5 release 仍 Not complete。
+
 ## 2026-11-01 06:37 +0800 恢复 wheel 基线源码；Day4–5 仍待独占 GPU
 
 当前工作区 /home/cgq/jittor，分支 integrate/cgq-transformers-native-multicard-target，HEAD 72a08b2237ff4164fe5f5786a28cb70fb5d2cf6e；fetch 后 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 139/0。文档编辑前保留的 102 项既有 dirty/untracked 状态 SHA256 为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，index 为空。06:21 条目记录的是当时提交前的 HEAD；本条给出后续实际状态。
