@@ -50,6 +50,10 @@ class TestPackagingStructure(unittest.TestCase):
 
         with self.pyproject_path.open("rb") as stream:
             config = tomllib.load(stream)
+        self.assertIn(
+            "python/jittor/compat/**",
+            config["tool"]["jittor"]["sdist"]["exclude"],
+        )
         package_dirs = config["tool"]["setuptools"]["package-dir"]
         self.assertEqual(package_dirs[""], "python")
         for backend in ("cuda", "acl", "comm"):
@@ -90,6 +94,10 @@ class TestPackagingStructure(unittest.TestCase):
         self.assertEqual(resources["src/core/common.h"], "jittor/src/core/common.h")
         self.assertEqual(resources["backends/cuda/include/helper_cuda.h"],
                          "jittor/backends/cuda/include/helper_cuda.h")
+        self.assertEqual(
+            resources["backends/cuda/kernels/cublas/lt_linear_cuda.py"],
+            "jittor/backends/cuda/kernels/cublas/lt_linear_cuda.py",
+        )
         self.assertIn("python/jittor/contrib/math_util/src/igamma.h", resources)
         self.assertFalse(any(path.startswith("compat/") for path in resources))
         compat_resources = generator.runtime_resources(self.repo_root / "compat")
@@ -152,6 +160,7 @@ class TestPackagingStructure(unittest.TestCase):
             "compat/shim/resources/torch/__init__.py",
             "backends/cuda/kernels/nn/softmax_cuda.py",
             "backends/cuda/kernels/nn/group_norm_cuda.py",
+            "backends/cuda/kernels/cublas/lt_linear_cuda.py",
             "backends/cuda/include/helper_cuda.h",
             "backends/cuda/libraries/cutt/include/cutt_wrapper.h",
             "python/jittor/tools/tracer.py",

@@ -85,6 +85,10 @@ class TestWheelContents(unittest.TestCase):
         self.assertIn("torch/__init__.py", errors)
 
     def test_repository_default_policy_is_the_clean_final_baseline(self):
+        self.assertEqual(
+            checker.BASELINE_ROOT,
+            Path(__file__).resolve().parents[2] / "refactor-wip" / "results" / "baselines",
+        )
         self.assertEqual(checker.DEFAULT_BASELINE.name, "wheel-contents-final.txt")
         self.assertEqual(
             checker.DEFAULT_ADDITION_ALLOWLIST.name,

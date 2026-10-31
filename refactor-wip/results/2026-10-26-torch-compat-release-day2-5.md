@@ -1,3 +1,27 @@
+## 2026-10-31 增量：主 wheel CUDA 安装与 compat 前反向/更新通过
+
+本次修复和验证的源码输入为 /home/cgq/jittor HEAD 62208754d65007c5e0ae7a21a85ae73563353a9d，加上开工时 109 项既有 dirty/untracked（porcelain SHA256 a1448a696968aa28fd29d60e28223958afcb3b9012fa7cb9fdcf3556605c0fb8）；origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 111/0。R3 构建使用当前工作树隔离副本，没有重新 clone；R4 冒烟期间该工作区状态哈希前后不变。
+
+### 打包修复与构建
+
+修复主 wheel 缺少 jittor.backends.cuda.kernels.cublas.lt_linear_cuda、主 sdist 把 python/jittor/compat 开发 symlink 收入核心包，以及 release wheel checker 指向不存在 docs/results/baselines 的问题；移除 sdist checker 中当前源树不存在的 zh_CN index.po 必需路径。添加针对 symlink 排除、baseline 根目录和 CUDA Python 资源路径的回归。MANIFEST.in 由 generator 重建，包含 CUDA 模块和 compat symlink prune；generate_manifest.py --check 通过。现有未跟踪 docs/development/2.0-refactor-onboarding.md 的清单行也由生成器带入，但该文档没有加入本任务提交。
+
+R3 产物位于 /data6/cgq/jittor-lab/_state/release-day23/20261031-main-package-current-r3-prepared/。sdist 1,455 成员，SHA256 fc56ebb847fa0b47e289f7f6ac19ba95d46977dc2dee46819c0584a7b83fc8e3；直接主 wheel SHA256 2e8f1a4418e3e9aee770843a6fd7d5471e3de12aaad75a8e8e78deee24baa3d9；sdist 派生主 wheel SHA256 3e6af554f3ee2ebd0243a2edff52b29aeb59d89558be2f3f08e2a5b7bb063b14；compat wheel SHA256 fd7e84f639dba09f9d8293b9d255df09aa7190b890093e614c340cc47a7a7d5a。直接与派生 wheel 各 1,100 路径，成员名称、字节内容完全相同，两个 core audit 均通过；compat audit 182 路径通过。默认历史 wheel baseline compare 仍是失败：69 新增、2 删除、302 内容改变，参照 wheel-contents-final.txt 的 1,033 条清单。该差异覆盖既有源码迁移，当前没有逐项审批，未更新 allowlist/baseline，不能把该子门写成通过。
+
+隔离 target 非 editable CPU 主 wheel selftest 通过，导入 13 个关键模块，Conv/BN/SGD 三步 loss=0.2799521089、0.1432570368、0.0708326250，最大参数变化 0.0665；组合安装后的准确 Nox 合约通过（torch is not jittor，tensor 反向导数为 4.0）。首次 smoke 读 torch.__file__ 失败，因为 shim 不承诺该属性；保留原失败日志，再按 Nox 合约验证通过。R2 源码副本准备曾因 rsync 忽略嵌套 tools/build/ 而在构建前中止，保留 /data6/cgq/jittor-lab/_state/release-day23/20261031-main-package-current-r2-prepared/attempt-adjudication.json；没有覆盖旧产物。
+
+聚焦测试为 37 passed、68 subtests passed。第一次运行有 1 个新增断言因局部变量范围写错而失败；同时调用漏设私有 JITTOR_HOME，使用了已有 torch-shim cache，JIT 编译自然结束且未观察到并发 JIT。修正断言后复跑通过，但复用了该已热缓存，因此此结果不声称全新 cache 隔离。
+
+### 非 editable 安装产品的 CUDA smoke
+
+R4 位于 /data6/cgq/jittor-lab/_state/release-day23/20261031-main-package-current-r4-cuda-installed-smoke-r1-prepared/；把 R3 主 wheel 与 compat wheel 一起安装到干净 target，不从源码树导入。目标 GPU 为实际 A800 GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0，进场三次相隔约 2 秒采样均为 0% utilization、81,038 MiB 空闲、无 compute PID。使用单独 JITTOR_HOME、CUDA 12.4、A800 sm_80 和 Python 3.10.20 构建 wheel 自带的 runtime core。一次运行限时 900 秒，183.928 秒结束，退出码 0；进程期间 77 个 GPU 样本，free 最低 80,597 MiB，utilization 最高 0%，本任务进程显存峰值 432 MiB；未见外部 PID，工作区 status SHA 前后仍为 a1448a696968aa28fd29d60e28223958afcb3b9012fa7cb9fdcf3556605c0fb8。core SHA256 d55c10b6f8b3eebc0c257894816a62b184379cb62b4331c58a515fa4f0603b31。
+
+主 wheel 的 selftest 在声明的 cuda 路径成功：前向 [1,4,9]、反向 [2,4,6]，导入 13 个关键模块，Conv/BN/SGD 三个真实更新的 loss 为 0.4497570395→0.2829495072→0.1266371012，参数最大变化 0.1386243，fallback delta=0。随后同安装中的 compat torch 前端完成 CUDA tensor 梯度 [2,4]、loss 5.0 和 SGD 更新 [1,2]→[0.8,1.6]；torch 与 jittor namespace 不同，单可见设备为 cuda:0，placement_backend=1，compat fallback delta=0。测试在 NumPy readback 前检查 tensor 为 device placement；readback 后保存的最终 location() 为 cpu，device/placement 元数据仍记录 cuda:0/backend 1，故证据不扩展到 host readback 后仍驻留 GPU。summary runtime/run.json SHA256 bed6853ab86c15f79a2d9e602af4b6931fb1a6164feca76d2dbb8ec449d9387c，完整输出 selftest/installed-cuda-smoke.log SHA256 2e408b9fcdfaa70a5676bc8d294a4862d56d460af4ef7cbf999325665d596c42。
+
+### 解释与后续
+
+这关闭的是当前 main/compat wheel 的非 editable CPU+CUDA 小型安装 smoke 阻断，证明该确切 wheel 能在当前 CUDA runtime 导入、前反向并执行更新；不等同于代表模型性能、广泛支持矩阵或 release 完成。旧 R18 的 BERT 正式协议绑旧源码指纹/旧冷产物，不能挪用于该 wheel。Day4–5 仍要为当前候选建独立 performance cache/环境绑定，匹配 PT/JT 配置进行至少三轮交替、每轮每边十个热态样本，给出 load、首步、热态 latency/throughput median/p95/离散度、allocator allocated/reserved 与 NVML 峰值；另需容量/OOM 边界实测。更广 Day2–5 的下一批依赖包括 current candidate support matrix、held-out 任务质量和新进程恢复、DDP Trainer 多 rank 训练/恢复、activation checkpoint 显存/速度 on-off 对照、JT optimizer 序列化与 stock PyTorch 的互操作契约、默认 wheel baseline additions/removals/changes 的逐项审批。原有 R14/Qwen 实用训练、resume 证据绑定其旧快照，不转移为当前 wheel 全面验收。Overall release **Not complete**。
+
 ## 2026-10-31 补充：R18 旧指纹代表格结果与当前 GPU readiness
 
 R18 已有可复核的三轮 BERT 代表格数据，不能笼统说此前从未完成三轮：独立终审 `/data6/cgq/jittor-lab/_state/release-day23/20261030-main-df45-bert-performance-r18-independent-terminal-r1/terminal-audit.json` 的状态为 `REPRESENTATIVE_THREE_PAIRS_EVIDENCE_VERIFIED`，SHA256 `08d7958485ff53880819f91418125b44a6e503354c82c9dcd084bbb5c9fb18e8`。配置为 BERT base 合成 B8/S256 FP32、固定权重/输入、实际 AdamW；PT/JT 三轮交替，每轮每侧 16 warmup、10 热样本，另外各做 3 次 allocator memory 与 3 次 CUDA attribution 更新；梯度有限且 CUDA placement/fallback 检查通过。它绑定旧源码指纹 `df45a56585f68874e8f1c64a80c9fff276bfe795e80c4d079cd06a8e7e528fc3`、HEAD `e92681d291272db1f1b9d0e3fe18cf35775a4de2`，不是本轮当前 source candidate。

@@ -17,7 +17,6 @@ REQUIRED_SOURCE_PATHS = (
     "src/codegen/op_compiler.cc",
     "docs/conf.py",
     "docs/index.md",
-    "docs/locales/zh_CN/LC_MESSAGES/index.po",
     "examples/README.md",
     "examples/gan/simple_cgan.py",
     "examples/notebooks/basics.md",
@@ -32,6 +31,9 @@ REQUIRED_SOURCE_PATHS = (
     "backends/cuda/kernels/debug/nan_checker.cu",
     "backends/acl/kernels/kv_cache.py",
 )
+
+# Development link to the independently built jittor-torch project.
+SDIST_OMITTED_SOURCE_PATHS = frozenset(("python/jittor/compat",))
 
 FORBIDDEN_DIRECTORY_NAMES = frozenset(
     (
@@ -137,6 +139,7 @@ def _expected_source_paths(repo_root):
         item
         for item in result.stdout.decode("utf-8").split("\0")
         if item
+        and item not in SDIST_OMITTED_SOURCE_PATHS
         and ((repo_root / item).exists() or (repo_root / item).is_symlink())
         and _generated_cache_reason(item) is None
         and not _is_egg_info_path(item)

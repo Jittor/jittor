@@ -111,7 +111,7 @@ include-package-data = true
 "jittor_utils" = ["__init__.pyi"]
 "jittor.src" = ["**/*.cc", "**/*.h"]
 "jittor.backends.cpu" = ["**/*.cc", "**/*.h", "**/*.cpp", "**/*.cu", "**/*.cuh"]
-"jittor.backends.cuda" = ["**/*.cc", "**/*.h", "**/*.cpp", "**/*.cu", "**/*.cuh"]
+"jittor.backends.cuda" = ["**/*.cc", "**/*.h", "**/*.cpp", "**/*.cu", "**/*.cuh", "kernels/cublas/*.py"]
 "jittor.backends.acl" = ["**/*.cc", "**/*.h", "**/*.cpp", "**/*.cu", "**/*.cuh"]
 "jittor.backends.rocm" = ["**/*.cc", "**/*.h", "**/*.cpp", "**/*.cu", "**/*.cuh"]
 "jittor.backends.corex" = ["**/*.cc", "**/*.h", "**/*.cpp", "**/*.cu", "**/*.cuh"]
@@ -122,7 +122,7 @@ include-package-data = true
 
 [tool.jittor.sdist]
 include = ["examples/**", "tools/**", "docs/**", "requirements/examples.txt", "requirements/docs.in", "requirements/docs.txt"]
-exclude = ["compat/**", "adapters/**", "build/**", "dist/**"]
+exclude = ["compat/**", "python/jittor/compat/**", "adapters/**", "build/**", "dist/**"]
 
 [tool.setuptools.dynamic]
 version = { attr = "jittor.__version__" }

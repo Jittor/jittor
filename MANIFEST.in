@@ -205,6 +205,7 @@ include backends/cuda/kernels/cublas/cublas_matmul_op.cc
 include backends/cuda/kernels/cublas/cublas_matmul_op.h
 include backends/cuda/kernels/cublas/cublas_test_op.cc
 include backends/cuda/kernels/cublas/cublas_test_op.h
+include backends/cuda/kernels/cublas/lt_linear_cuda.py
 include backends/cuda/kernels/cudnn/cudnn_capabilities.cc
 include backends/cuda/kernels/cudnn/cudnn_conv3d_backward_w_op.cc
 include backends/cuda/kernels/cudnn/cudnn_conv3d_backward_w_op.h
@@ -312,6 +313,7 @@ include docs/compatibility/torch.md
 include docs/conf.py
 include docs/content-manifest.json
 include docs/contributing.md
+include docs/development/2.0-refactor-onboarding.md
 include docs/development/async-error-diagnostics.md
 include docs/development/error-categories.md
 include docs/development/index.md
@@ -853,6 +855,7 @@ include tools/run_test_suite.py
 include tools/semantic_divergence_probe.py
 include tools/side_effect_probe.py
 prune compat
+prune python/jittor/compat
 prune adapters
 prune build
 prune dist

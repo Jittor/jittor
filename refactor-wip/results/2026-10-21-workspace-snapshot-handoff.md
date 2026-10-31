@@ -1,3 +1,13 @@
+## 2026-10-31 接续交接：主 wheel CUDA smoke 通过；Day4–5 正式测量待当前候选绑定
+
+在 /home/cgq/jittor 现有工作区继续，没有 clone。输入 HEAD 62208754d65007c5e0ae7a21a85ae73563353a9d、origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（ahead/behind 111/0）。开工 109 项既有 dirty/untracked、porcelain SHA256 a1448a696968aa28fd29d60e28223958afcb3b9012fa7cb9fdcf3556605c0fb8；R4 smoke 前后同值。其余既有源码与实验产物保留。
+
+本轮关闭了一项实际发布阻断：主 wheel 新增缺失的 CUDA linear Python 资源，主 sdist 排除核心包下的 compat 开发 symlink；修正 manifest/checker 路径。R3 的 sdist/wheel 内容检查通过，直接与 sdist 派生主 wheel 的 1,100 个成员逐字节一致；主包 CPU selftest、准确的组合 wheel CPU 合约通过。随后 R4 对主 wheel+compat wheel 做非 editable 安装，在 A800 GPU2、独立 JITTOR_HOME 上运行实际 CUDA 前向/反向、13 个模块导入、三步 Conv/BN/SGD 更新，以及 compat torch namespace 的 CUDA 梯度与 SGD 更新；两段 fallback delta 均为 0。loss、参数更新、SHA 和 77 次设备采样均写入 R4 artifact。测试只说明该确切构建的窄 smoke 能力。
+
+R4 产物目录：/data6/cgq/jittor-lab/_state/release-day23/20261031-main-package-current-r4-cuda-installed-smoke-r1-prepared/。主 wheel SHA256 2e8f1a4418e3e9aee770843a6fd7d5471e3de12aaad75a8e8e78deee24baa3d9，compat wheel SHA256 fd7e84f639dba09f9d8293b9d255df09aa7190b890093e614c340cc47a7a7d5a，run.json SHA256 bed6853ab86c15f79a2d9e602af4b6931fb1a6164feca76d2dbb8ec449d9387c，日志 SHA256 2e408b9fcdfaa70a5676bc8d294a4862d56d460af4ef7cbf999325665d596c42。默认历史 wheel baseline compare 仍有 69 additions、2 removals、302 content changes 未审批，未重写 baseline。两个失败/非合约尝试（R2 排除嵌套 tools/build，首个 smoke 查询 shim torch.__file__）均留存。
+
+后续按此顺序继续：先针对该确切 wheel/source state 建独立正式性能候选与当前源码 guard，不能复用锁定旧 source fingerprint 的 R18 release review；在稳定设备窗口跑 3 轮 PT/JT 交替 BERT 代表格，每轮每侧 ≥10 热样本并收集首次/热态与 allocator/NVML 数据；再独立完成容量/OOM 边界和 activation checkpoint on/off 显存/速度对照。随后对统一候选补齐 support matrix、held-out 任务指标与新进程恢复、DDP Trainer 多 rank、序列化互操作与 wheel baseline 迁移审查。R14 Qwen 实用训练和当前 wheel CUDA smoke 各自只支持其绑定的源码及配置。Overall release 保持 **Not complete**。
+
 ## 2026-10-31 补充交接：R18 BERT 三轮已审计但绑定旧源码；GPU2 readiness 需刷新
 
 旧候选 `df45a565...` / HEAD `e92681d...` 的 BERT B8/S256 FP32 R18 已完成三轮 JT/PT 配对并经独立终审验证（SHA256 `08d7958485ff53880819f91418125b44a6e503354c82c9dcd084bbb5c9fb18e8`）；JT/PT median ratio 为 1.31283、allocator live peak ratio 为 1.08066。它不是当前源码，也不含容量边界。新主包安装门发现实际 wheel 阻断，先处理后再以最终候选做匹配测量。

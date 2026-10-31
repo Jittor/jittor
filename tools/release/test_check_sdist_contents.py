@@ -81,6 +81,26 @@ class TestSourceDistributionContents(unittest.TestCase):
         self.assertNotIn("python/jittor/__pycache__/runtime_source.cpython-311.pyc", paths)
         self.assertNotIn("python/jittor.egg-info/PKG-INFO", paths)
 
+    def test_development_compat_symlink_is_omitted_from_core_sdist_inventory(self):
+        tracked = set(checker.REQUIRED_SOURCE_PATHS)
+        tracked.add("python/jittor/compat")
+        for relative in checker.REQUIRED_SOURCE_PATHS:
+            path = self.root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"tracked\n")
+        (self.root / "compat").mkdir()
+        compat_link = self.root / "python/jittor/compat"
+        compat_link.parent.mkdir(parents=True, exist_ok=True)
+        compat_link.symlink_to("../../compat")
+        result = mock.Mock(
+            returncode=0,
+            stdout=("\0".join(sorted(tracked)) + "\0").encode("utf-8"),
+            stderr=b"",
+        )
+        with mock.patch.object(checker.subprocess, "run", return_value=result):
+            paths = checker._expected_source_paths(self.root)
+        self.assertNotIn("python/jittor/compat", paths)
+
     def test_canonical_generated_egg_info_members_pass(self):
         members = dict(self.members)
         members.update(

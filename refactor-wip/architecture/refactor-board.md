@@ -1,3 +1,27 @@
+## 2026-10-31 接续：主包发布边界修复；当前 wheel 的 CUDA 安装 smoke 通过
+
+在 /home/cgq/jittor 既有工作区继续。包构建/安装输入绑定 HEAD 62208754d65007c5e0ae7a21a85ae73563353a9d、origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（ahead/behind 111/0）。实验前 109 项 dirty/untracked、porcelain SHA256 a1448a696968aa28fd29d60e28223958afcb3b9012fa7cb9fdcf3556605c0fb8；index 当时为空。R3/R4 实验写入 /data6；CUDA smoke 前后源码状态哈希一致，没有修改或清理其他既有工作。
+
+### 当前包门
+
+已补齐主包遗漏的 CUDA 线性模块资源、主 sdist 的 compat 开发 symlink 排除，以及 release wheel checker 的 baseline 根路径；sdist checker 移除了 checkout 中不存在的 zh_CN index.po 必需项，并明确忽略 python/jittor/compat 开发 symlink。回归覆盖这些边界。重新生成 MANIFEST.in 后 generator --check 通过；生成结果还带入工作区现有未跟踪 docs/development/2.0-refactor-onboarding.md 的清单行，该文档本身保持未暂存。
+
+聚焦测试最终为 37 passed、68 个 subtests passed。首次调用有一条新断言引用范围错误，且遗漏私有 JITTOR_HOME，导致首次 CUDA-capable JIT 编译落入既有 torch-shim cache；修正断言后通过。该复跑复用了刚生成的 cache，没有声称是全新隔离 cache，也未因状态标签重跑整套。
+
+R3 主包 artifact：/data6/cgq/jittor-lab/_state/release-day23/20261031-main-package-current-r3-prepared/。sdist 含 1,455 个成员；直接主 wheel SHA256 2e8f1a4418e3e9aee770843a6fd7d5471e3de12aaad75a8e8e78deee24baa3d9；sdist 派生 wheel SHA256 3e6af554f3ee2ebd0243a2edff52b29aeb59d89558be2f3f08e2a5b7bb063b14。两 wheel 各 1,100 路径、逐成员完全相同；core wheel audit 通过，compat wheel 182 路径 audit 通过。组合安装后的原 Nox 合约 smoke 通过（独立 torch 命名空间、反向梯度 4.0）。主 wheel CPU selftest 也通过：13 个模块导入，Conv/BN/SGD 三步 loss 0.279952→0.143257→0.070833，最大参数变化 0.0665。首次组合 smoke 查询 shim 的 torch.__file__ 时失败；该属性不属于本合约，原失败保留，后续使用准确的 Nox 合约通过。默认历史 wheel baseline compare 仍失败：69 additions、2 removals、302 changed hashes，相对现有 1,033 路径 baseline；未自动批准或重写 baseline，需逐项做迁移审查。
+
+### 已安装 wheel 的真实 CUDA 冒烟
+
+R4 artifact：/data6/cgq/jittor-lab/_state/release-day23/20261031-main-package-current-r4-cuda-installed-smoke-r1-prepared/。非 editable 安装 R3 主 wheel 与 compat wheel，绑定主 wheel SHA256 2e8f1a4418e3e9aee770843a6fd7d5471e3de12aaad75a8e8e78deee24baa3d9、compat wheel SHA256 fd7e84f639dba09f9d8293b9d255df09aa7190b890093e614c340cc47a7a7d5a。A800 GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0；入口三次采样均无 compute PID、81,038 MiB free。用独立 JITTOR_HOME 完成一次 CUDA core build 和 smoke，历时 183.928 秒；期间 77 次 GPU 采样，最低 free 80,597 MiB、utilization 最高 0%、本任务峰值 432 MiB，无外部 GPU PID。实际 core SHA256 d55c10b6f8b3eebc0c257894816a62b184379cb62b4331c58a515fa4f0603b31。
+
+安装主 wheel selftest 报 backend=cuda、前向 [1,4,9]、梯度 [2,4,6]、13 个关键模块导入、三步 Conv/BN/SGD loss 0.449757→0.282950→0.126637，最大参数变化 0.138624，native fallback delta=0。安装 compat wheel 后 torch is not jittor；torch.cuda 看到单卡，tensor 元数据 cuda:0、placement_backend=1；反向梯度 [2,4]、loss=5，SGD 参数 [1,2]→[0.8,1.6]，compat fallback delta=0。测试在 NumPy readback 前验证位置为 device；readback 后最终 location 字段为 cpu，日志同时保留 placement/device 元数据。R4 run.json SHA256 bed6853ab86c15f79a2d9e602af4b6931fb1a6164feca76d2dbb8ec449d9387c，smoke log SHA256 2e408b9fcdfaa70a5676bc8d294a4862d56d460af4ef7cbf999325665d596c42。
+
+### 仍开放的发布门
+
+上述是当前打包产品的代表 CUDA 安装 smoke，不是性能验收，也不替代完整 API/设备/dtype/layout/autograd/fallback 矩阵。旧 R18 BERT harness 锁定 source fingerprint df45a565…、HEAD e92681d… 与其专用冷产物；不匹配当前候选，不能直接复用。Day4–5 仍需当前候选独立绑定、至少 3 轮 PT/JT 交替、每轮每侧至少 10 个热态样本，报告 load/首步/热态 median、p95、离散度、吞吐、allocator live/reserved 峰值与 NVML 峰值，并另做容量/OOM 边界。当前 GPU smoke 的稳定窗口不是这些测量。
+
+更广 Day2–5 还需在统一锁定候选完成声明范围矩阵、模型训练/新进程续训与 held-out 指标、DDP Trainer 多 rank 训练保存恢复、activation checkpoint on/off 的显存及速度收益、JT 与 stock PyTorch 的序列化契约审查，以及旧 wheel baseline 的受控迁移审查。保留 JT portable-pickle optimizer.pt 不能被 stock PyTorch torch.load 读取的互操作失败记录。Overall release **Not complete**。
+
 ## 2026-10-31 补充：旧指纹 BERT R18 已审计；GPU2 只记录到短 readiness 窗口
 
 既有 R18 BERT B8/S256 FP32 三轮配对并非空白：独立终审 `20261030-main-df45-bert-performance-r18-independent-terminal-r1/terminal-audit.json` 判定 `REPRESENTATIVE_THREE_PAIRS_EVIDENCE_VERIFIED`，SHA256 `08d7958485ff53880819f91418125b44a6e503354c82c9dcd084bbb5c9fb18e8`。但它绑定旧源码指纹 `df45a565...` / HEAD `e92681d...`，不匹配当前候选；JT/PT pooled median ratio `1.31283` 未达 1.10 时延诊断线，allocator live peak ratio `1.08066` 达到该代表格阈值；不含 near-capacity/OOM，也不是任务质量结果。当前源码候选仍需候选身份匹配的性能/显存证据，不能把 R18 外推为 release PASS。
