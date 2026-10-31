@@ -1,3 +1,49 @@
+## 2026-10-31 续验：R25 zero_grad 敏感性与 R26 默认调用端到端代表格
+
+### R25 分段敏感性
+
+R25 用 BERT B8/S256 FP32 eager fixture、固定权重/输入、AdamW foreach/fused=None、R19/R21 wheel/core，在 GPU2/cuda:0 对 PT/JT 调用 zero_grad(set_to_none=True)，三轮交替、每阶段 16 warmup + 10 hot。六阶段均为真实 cuda:0、fallback=0、197 个有限梯度且参数更新发生；201 项初值/输入匹配，各轮逐 hot loss 最大绝对差为 2.38e-7、2.38e-7、2.98e-7。独立审计 PASS_DIAGNOSTIC_EVIDENCE_ONLY，SHA256 3eceb2ea1214a622d3782bcb704afdff476079e28fa6928690e0491d380efdda；summary SHA256 a35832f1a5e28894d4f35a78dd75252826d79425efc3b0074703f44cfd31fa48。
+
+| 分段组件 | PT median / p95 / std（ms） | JT median / p95 / std（ms） |
+| --- | ---: | ---: |
+| zero_grad | 1.434 / 1.667 / 0.400 | 4.546 / 5.978 / 1.674 |
+| forward | 30.432 / 31.898 / 1.082 | 77.795 / 89.665 / 16.780 |
+| backward | 52.273 / 52.483 / 0.262 | 59.570 / 62.602 / 1.553 |
+| optimizer | 9.827 / 12.255 / 1.699 | 5.301 / 7.385 / 0.891 |
+| 分段合计 | 94.061 / 97.189 / 3.136 | 146.721 / 160.488 / 18.099 |
+
+相对 R24 set_to_none=False，PT/JT zero_grad median 从 4.819/22.216 ms 降至 1.434/4.546 ms；JT forward 仍约 77.8 ms。分段同步增加测量开销且 forward 有轮间波动，R25 不替代正式总步时延。attempt-01 因 bwrap 指向不存在的 private-cache 路径，在模型样本启动前失败；attempt-02 在新 cache/runtime 下完成，原失败保留。clone 只有 jittor.lock 记录变化，PID 已退出；R21 source cache 未变。初版独立审计误把 clone lock 变化判失败的文件也保留，修正规则后的终审通过。Artifact：/data6/cgq/jittor-lab/_state/release-day23/20261031-bert-zero-grad-default-r25-r1-prepared/。
+
+### R26 默认调用端到端配对
+
+读取 compat shim 确认 _zero_grad_compat(self, set_to_none=True)，因此 R26 的 PT/JT 都无参数调用 optimizer.zero_grad()。配置为 BERT B8/S256 FP32 eager attention、固定权重 SHA256 86fa7113367fd0d231a76571ca1b73a1b24166af33558fee960636ce56337ed7、AdamW 默认参数；三轮 PT/JT 交替，每阶段 16 warmup、10 hot，GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0（逻辑 cuda:0）。六阶段通过每阶段三点空闲准入、热态 memory/cache 稳定性、真实设备、无 fallback、有限梯度、参数更新与 201 项初值/输入配对检查；各轮首 loss 相同，逐热步 loss 最大绝对差 2.38e-7、2.98e-7、2.38e-7。
+
+| 测量项 | PyTorch | Jittor |
+| --- | ---: | ---: |
+| model-ready median / p95 / std（s） | 3.619 / 3.717 / 0.072 | 4.868 / 5.166 / 0.147 |
+| 首步 median / p95 / std（s） | 0.465 / 0.472 / 0.011 | 2.651 / 2.656 / 0.008 |
+| model construct median（s） | 1.232 | 2.924 |
+| weight validation median（s） | 1.670 | 1.743 |
+| 热态 median / p95 / std（ms，30 samples） | 89.492 / 93.274 / 1.913 | 142.746 / 145.052 / 17.597 |
+| allocator peak allocated（GB） | 2.904 | 3.178 |
+| allocator peak reserved（GB） | 3.236 | 3.440 |
+| NVML 进程峰值（MiB） | 3594 | 3756 |
+
+热态 median ratio 1.59508、p95 ratio 1.55511，未达 1.10；每轮 median ratio 1.55/1.61/1.49。allocated/reserved/NVML 峰值 ratio 分别 1.09454/1.06319/1.04508，仅描述此代表 batch，不是 OOM 结论。JT 热态标准差偏大，结论保留该离散度。model-ready 包含数学探针和精确 master/input readback，不等同纯权重 load；模型构造与权重验证已另列。
+
+R26 终审 PASS_FORMAL_COHORT_EVIDENCE_TIME_GATE_FAIL，SHA256 7d4838769bdc913601615f3dcea507d907783c948b65312d22f22ba8b314a9dd；summary SHA256 7fccaf9ba85eda068c15198b872619d2fde7f65ab924d600a1c8632e34b9b7de。测量绑定 HEAD 27d01a6f40d9e7697bbb2558ba1303839eee93a0、source fingerprint 0382368b8754bf7a90e42382fd66b603ed2d3f323b5e8cda4820425871c7aa50、主/compat wheel SHA256 2e8f1a4418e3e9aee770843a6fd7d5471e3de12aaad75a8e8e78deee24baa3d9 / fd7e84f639dba09f9d8293b9d255df09aa7190b890093e614c340cc47a7a7d5a、core SHA256 050c612d6b29bb952c4debccc7eb791f1704e3c8a2040723cb352cbda789f986。独立审计确认 R21 source cache 与工作区未变；R26 clone 仅 jittor.lock 元数据由已退出 PID 更新。初版 audit 因 final run-status 不保存 plan hash 字段而判 REVIEW_REQUIRED，原件保留；plan/runner/artifact 绑定复核后通过。Artifact：/data6/cgq/jittor-lab/_state/release-day23/20261031-current-wheel-bert-performance-r26-default-zero-grad-r1-prepared/。
+
+### Day2–5 尚需完成的发布清单
+
+1. 优化并复测 R26 默认调用热态时延；新候选 wheel 绑定新身份，在稳定窗口做至少 3 轮交替、每轮每侧不少于 10 个热样本，报告 load/首步/热态 median、p95、离散度、吞吐及 allocator/NVML 峰值。
+2. 做 PT/JT 匹配的近容量/OOM 边界测试，覆盖 batch/sequence/dtype、最大可运行配置、allocator allocated/reserved、NVML 峰值及 OOM 后恢复。
+3. 证明 gradient checkpointing 确实进行 activation recompute；on/off 配对报告重算证据、每步速度和峰值显存。当前 shim 直接执行目标函数，尚无重算/节省证据。
+4. 在冻结候选补 API/operator × device × dtype × layout × autograd/alias/storage × fallback 支持矩阵，并记录 clean package 安装结果。
+5. 将实际训练、held-out 任务指标、checkpoint 新进程恢复、DDP Trainer 多 rank 训练和 optimizer/scheduler/data 状态恢复绑定同一候选。R14 Qwen 结果仍只支持其源码/配置；当前无 held-out generation 分数。
+6. 明确 JT portable-pickle optimizer.pt 与 stock PyTorch torch.load 的互操作契约，完成 wheel/sdist clean install 和旧 wheel baseline migration review。
+7. 汇总候选身份、结果、已知限制及失败原件后再作 release 决定。Day4–5 和 overall release 均 **Not complete**。
+
+---
 ## 2026-10-31 增量：R24 BERT 分段时延诊断完成；待做根因消融与正式复验
 
 ### 实验身份与协议

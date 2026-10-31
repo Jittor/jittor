@@ -1,3 +1,19 @@
+## 2026-10-31 最新交接：R26 默认 zero_grad 端到端 cohort 完成；时延仍失败
+
+在既有 /home/cgq/jittor 继续，无 clone、源码改动或 wheel 重建。实验时 HEAD 27d01a6f40d9e7697bbb2558ba1303839eee93a0，origin/cgq_transformers 与远端均为 e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 118/0；102 项既有 dirty/untracked 哈希 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211 未变。R19/R21 原 cache 未改，测量后无本任务 worker 残留。
+
+R25 分段诊断发现 set_to_none=True 下 JT zero_grad median 从 R24 的 22.216 ms 降到 4.546 ms，PT 从 4.819 ms 降到 1.434 ms。R19/R21 harness 显式传 False，而公开 compat shim 与 PyTorch 无参数默认均为 True，因此完成 R26 默认调用端到端 cohort。R26 使用 BERT B8/S256 FP32、三轮交替、16 warmup + 10 hot/阶段，GPU2/cuda:0。每阶段设备、fallback、梯度、更新、输入/初值配对和稳定性检查通过；每侧 30 hot。
+
+R26 JT/PT median 142.746/89.492 ms，p95 145.052/93.274 ms，标准差 17.597/1.913 ms，ratio 1.59508，仍未达 1.10；三轮 ratio 1.55/1.61/1.49。allocator allocated/reserved 与 NVML 进程峰值 ratio 为 1.09454/1.06319/1.04508，仅代表该 batch。R26 summary SHA256 7fccaf9ba85eda068c15198b872619d2fde7f65ab924d600a1c8632e34b9b7de，独立终审 PASS_FORMAL_COHORT_EVIDENCE_TIME_GATE_FAIL SHA256 7d4838769bdc913601615f3dcea507d907783c948b65312d22f22ba8b314a9dd。R25 summary SHA256 a35832f1a5e28894d4f35a78dd75252826d79425efc3b0074703f44cfd31fa48，终审 PASS_DIAGNOSTIC_EVIDENCE_ONLY SHA256 3eceb2ea1214a622d3782bcb704afdff476079e28fa6928690e0491d380efdda。R25 bwrap cache-path 启动失败和 R26 初版 audit schema 误判均保留；各自后续 attempt 的最终独立审计通过。实验 cache clone 只变更已退出 worker 的 jittor.lock 元数据，R21 source cache 指纹 fc698085cb9dd8f4feb58d0e3ed38b62d2b5f8eb565a45dfe42aec42fe96aa35 未变。
+
+### 当前继续清单
+
+- Day4–5：优化 R26 默认调用下的端到端时延并为新 wheel 候选复测；补匹配配置近容量/OOM 边界；以可审计证据证明 activation checkpoint on/off 的真实重算、峰值显存和速度收益。
+- 更广 Day2–5：冻结统一候选，补 API/operator/device/dtype/layout/autograd/alias/storage/fallback 矩阵、held-out 任务指标、真实训练和新进程恢复、DDP Trainer 多 rank 保存/续训、clean wheel/sdist 安装与 baseline migration review。
+- 明确 JT portable-pickle optimizer checkpoint 无法由 stock PyTorch torch.load 读取时的互操作支持契约；保留该失败，不否定 Jittor 同框架恢复证据。
+- 整体 release 继续 **Not complete**。R14 实用训练结果只绑定自身源码/配置；Day4–5 与更广验收仍开放。
+
+---
 ## 2026-10-31 最新交接：R24 分段诊断完成，zero_grad/forward 成为优先优化候选
 
 R24 使用 R19/R21 相同源码指纹、wheel/core、BERT B8/S256 FP32 权重/输入与 AdamW default 配置，在 GPU2/cuda:0 对 PT/JT 分别测 zero_grad、forward、backward、optimizer。每侧 30 个热样本，三轮交替，16 warmup/阶段；初始参数和输入配对一致，197 个梯度有限，更新发生，fallback=0。JT median：zero_grad 22.216 ms、forward 77.459 ms、backward 58.732 ms、optimizer 5.143 ms；PT 对照为 4.819、30.461、53.433、9.862 ms。诊断含分段同步边界，不是正式时延门。installed wheel 与工作区 _zero_grad_compat(set_to_none=False) 源哈希相同，其逐梯度 update/zeros_like 与高 zero_grad 计时相符，但尚无消融证明因果。forward 还需拆 attention/GEMM 与执行调度。

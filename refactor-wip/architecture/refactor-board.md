@@ -1,3 +1,20 @@
+## 2026-10-31 续验：R25/R26 默认零梯度语义已核对；正式时延门仍未达
+
+R25 分段敏感性测试显示 set_to_none=True 会明显缩短 zero_grad：PT median 从 R24 的 4.819 ms 降到 1.434 ms，JT 从 22.216 ms 降到 4.546 ms；分段同步有诊断开销，不能当正式端到端成绩。compat API 默认值为 True，而 R19/R21 harness 显式传 False，因此另做 R26 无参数 optimizer.zero_grad() 的端到端配对。
+
+R26 在同一 BERT B8/S256 FP32、权重/输入、wheel/core 与 GPU2/cuda:0 上三轮交替，每阶段 16 warmup + 10 hot。六阶段真实 CUDA、fallback=0、197 个有限梯度、实际参数更新、201 项初始状态匹配及热态内存稳定检查均通过。模型准备 median/p95/std：PT 3.619/3.717/0.072 s，JT 4.868/5.166/0.147 s；首步 PT 0.465/0.472/0.011 s，JT 2.651/2.656/0.008 s。热态 JT/PT median 142.746/89.492 ms，p95 145.052/93.274 ms，标准差 17.597/1.913 ms，ratio 1.595；三轮 ratio 1.55/1.61/1.49，仍未达 1.10 时延线。allocator allocated/reserved 峰值 ratio 1.095/1.063，NVML 进程峰值 ratio 1.045；仅代表当前 batch，不能关闭 OOM 门。
+
+R26 绑定测量时 HEAD 27d01a6f40d9e7697bbb2558ba1303839eee93a0、source fingerprint 0382368b8754bf7a90e42382fd66b603ed2d3f323b5e8cda4820425871c7aa50、R19/R21 同一 wheel/core；未改源码或 wheel。R21 受保护 cache 未变，实验 clone 仅 jittor.lock 元数据被已退出 worker 更新；工作区 102 项 dirty/untracked 哈希 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211 未变。R26 独立审计通过，但时间门失败。完整证据与待完成清单见 Day2–5 结果报告。整体 release 仍 **Not complete**。
+
+### 尚需完成
+
+- Day4–5 性能：优化默认调用下的端到端差距；新候选 wheel 绑定新身份后，在稳定窗口做至少三轮交替、每轮每侧至少十个热样本，报告 load/首步/热态 median、p95、离散度及 allocator/NVML 峰值。
+- Day4–5 显存：匹配 PT/JT 精度与输入，测近容量及 OOM 边界、最大可运行配置和 OOM 后恢复；单一代表格显存比不是容量结论。
+- Checkpoint：当前 shim 直接执行目标函数；需证明 activation recompute，并配对报告峰值显存和速度。
+- 更广 Day2–5：冻结候选完成 API/operator、device、dtype、layout、autograd、alias/storage、fallback 矩阵；held-out 任务指标、真实训练/新进程恢复、DDP Trainer 多 rank checkpoint；clean wheel/sdist 安装及 baseline migration review。
+- 明确 JT portable-pickle optimizer.pt 无法被 stock PyTorch torch.load 读取时的支持契约。R14 Qwen 结果仅绑定其源码/配置，当前没有 held-out generation 分数。
+
+---
 ## 2026-10-31 续验：R24 BERT 分段计时完成；时延差集中在 zero_grad/forward
 
 R24 在 BERT B8/S256 FP32、eager attention、同一权重/输入及 AdamW user-default 配置上，对 PT/JT 的 zero_grad、forward、backward、optimizer 分段计时。绑定 HEAD 6537bdc89127dc8b2425578bcad8a6463277574f、source fingerprint 0382368b8754bf7a90e42382fd66b603ed2d3f323b5e8cda4820425871c7aa50、R19/R21 同一 wheel/core 与 GPU2/cuda:0；没有改源码或 wheel。三轮交替，每阶段 16 warmup、10 hot，共每侧 30 个热样本。每阶段实际设备正确、fallback=0、197 个梯度有限、201 个初始参数/缓冲逐值映射相同，三轮输入/optimizer 配置一致；首 loss 相同，逐步 hot loss 最大差小于 3.0e-7。
