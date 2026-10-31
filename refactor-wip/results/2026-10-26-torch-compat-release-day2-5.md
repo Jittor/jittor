@@ -1,3 +1,49 @@
+## 2026-11-01 00:10 +0800 R11h GPU4 R5–R11：CUDA 单用例通过，启动/别名诊断未结
+
+本轮继续使用现有 `/home/cgq/jittor`，没有 clone 或改主源码。编辑前主仓库 HEAD `eac64eba9727df20355d62aad90f1b7bb622fa5b`，分支 `integrate/cgq-transformers-native-multicard-target`；fetch 后 origin/cgq_transformers=`e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind 130/0。102 项既有 dirty/untracked 的 porcelain SHA256 仍为 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`，index 原先为空；只改本报告、看板和交接文档。
+
+候选身份保持 R11h：`/data6/cgq/jittor-lab/worktrees/torch-compat-fill-zero-runtime-grad-r11-20261031`，HEAD `765f1791f3b00f9129fb3ec6342dadf2c9dc2dbe`，fingerprint `1530199e462b27b9b32ce93b000555bff0b03c28af2f90ab6548c8c37307c770`，2807 项 source manifest SHA256 `0de2c5c034676bfb29b446054d04a7da70a59bf07bda20497eeab97e0d95f844`。所有本轮执行限于隔离候选和 `_state/release-day23` 证据目录；R1–R4 与 R5–R11 均原样保留。
+
+### 缓存复用和启动尝试
+
+R5 原始缓存路径检查器把 build stamp 中字符串类型的 `cc_flags` 当作列表，产生 `BLOCKED_CACHE_PATH_IDENTITY`，没有启动 worker；preflight SHA256 `051eaeccddf45e0f16561afa1dd467a93a43d76887e4b41c5badf942c159dedd`。修正检查器后，R6 在 R2 原绝对 `JITTOR_HOME` 上核对 779 个 core source signatures 全部匹配，core、stamp 和 `jit_utils_core` 产物存在且无 holder。R6 随后实际加载了 CUDA core，但在 `CUDA enabled` 后、进入 Python selector 前段错误。stack trace 解码为：
+
+```
+_GLOBAL__sub_I_device.cc
+  -> jittor::init_use_cuda
+  -> jittor::setter_use_cuda
+  -> jittor::sync_all(bool)
+  -> std::vector<jittor::Var*>::_M_realloc_insert
+```
+
+这表明当前 R11h 在进程静态初始化阶段直接以环境变量 `use_cuda=1` 启动会崩溃。R6 raw SHA256 `3f35b0c3593e74c6e003e5d48390df3804b2d1a4b06e44a7d744f84503747137`，receipt SHA256 `e9a07efc319f621913ab9e9e6a8a81bfc1e8456869a97d8c3c62adbec293cfbe`；物理 GPU PID 未观察到，R2 相关 core/cache 文件哈希前后不变。
+
+R7 用环境 `use_cuda=0` 启动绕过该静态初始化路径，导入阶段日志显示 CUDA backend 可用且 runtime flag 已为 1、Torch CUDA 可用、实际 GPU PID 被观察到、fallback=0；但 R7 runner 错误要求导入后 flag 必须仍为 0，因此没有运行 selector。该次首次触发多组 CUDA custom-op JIT 编译；core、build stamp、jit_utils 二进制及 key 哈希不变。R7 worker SHA256 `1a9337901676a8f42bc12d95838f2d29e5a1c8ac52f99b4b2a6ee6b60a47b8ef`，raw SHA256 `2a1d9e4dbe74885f8ecc5abfe221cd33cc27d18dcf5de1ab60eeaf05fe69d1ec`，receipt SHA256 `0a37a02506181ded0c2963e0f3d2b214a4b18e966b3ff6cceee11568a48b6676`。
+
+R8 修正 runner 检查后，以下 CUDA selector 在 GPU4（UUID `GPU-8bf405a2-a3dd-e203-8dd9-691e9f7b3530` 映射至逻辑 `cuda:0`）**1 passed in 14.70s**，fallback=0、GPU PID 被观察到。pytest 之后的附加探针却用 NumPy 读回前保存的旧地址，在 `zero_` 之后继续要求地址不变，因此 R8 worker/receipt 的总体状态仍为 FAIL。R8 raw SHA256 `4c4fd914f96c1f6b0f6b183d21afbe64200d8ea287b5562c00d8c9a0e2a5d7e8`，worker SHA256 `f9dfe3c2956a61da44baaddb8a697dac86b537d6acf88bad3bcff5ec40da5ed4`，receipt SHA256 `cdb11c7ecd4876a0971e4912a79e284c62016dc66da1cff134e5c505dd2bb28f`。结论只授予这一个 selector，不外推整个 CUDA 矩阵。
+
+### FollowRuntime 别名与读回行为诊断
+
+R9 把附加探针的失败定位到 `zero__pointer_stability`，raw SHA256 `51dfa4cba88e4f70bf46d6403d24447755d06c69640bab823a0a1802afc30544`，worker SHA256 `af6e0c69d21b97c26549934704ba2d00515395abce8f65287d4b358ef3fb0f9f`。R10 用指针快照证实：新建变量时 native 与包装指针相同；fresh `zero_` 执行并同步后、读回之前指针保持相同；`native.numpy()` 读回后两侧指针会一起改变。R10 raw SHA256 `465e98820992eeaceed61ad7d8b81794b5f6262e8d3ed2accf495ca1fcdd60e6`，worker SHA256 `722998ebbba77c5cd58dd7eb408f7c9cc907d54d3c0df87c951fe951a8ab631c`，receipt SHA256 `e3e0d6e95c51ee67062662e3a0f7738fce1642d70cae390ee88bcf3c0899ebca`，状态为 `PASS_CUDA_ALIAS_POINTER_DIAGNOSTIC`（诊断脚本完成，不是整体兼容性通过）。
+
+为区分数值更新与存储地址，R11 记录读回前后的指针和值：读回之后再调用包装对象 `zero_`，native/torch 指针分别为 `131600268548096` / `131600268547584`；双方读取到的值均为 0。随后通过包装对象写入 7、通过 native 对象写入 9，双方各自读回的值均一致为 7、9，但部分读回阶段指针仍不相同。R11 raw SHA256 `55f6d0a674da1d5a07aeef896b164c765c0e36eaec9695cfe8faf381e2258de2`，worker SHA256 `80d9b3267bfbd2a432602f64f7862195f352517adf4f7d478ad06f77039585af`，receipt SHA256 `d99193bdb670b5722ca5c8d286dd4c5e495df4d1139ff0e288c172d2f4c748ce`，状态为 `PASS_CUDA_ALIAS_MUTATION_DIAGNOSTIC`。R9–R11 均为有界诊断，没有重跑 pytest；尚未判定 `torch.Tensor(existing Jittor Var)` 的预期拷贝/别名语义，也没有修复源码。
+
+上述尝试目录分别为：
+
+- `/data6/cgq/jittor-lab/_state/release-day23/20261031-r11h-cuda-directed-gpu4-r5-original-cache-prepared/`
+- `/data6/cgq/jittor-lab/_state/release-day23/20261031-r11h-cuda-directed-gpu4-r6-original-cache-pathguard-prepared/`
+- `/data6/cgq/jittor-lab/_state/release-day23/20261031-r11h-cuda-directed-gpu4-r7-runtime-enable-after-import-prepared/`
+- `/data6/cgq/jittor-lab/_state/release-day23/20261031-r11h-cuda-directed-gpu4-r8-runtime-identity-fixed-prepared/`
+- `/data6/cgq/jittor-lab/_state/release-day23/20261031-r11h-cuda-directed-gpu4-r9-alias-probe-diagnostic-prepared/`
+- `/data6/cgq/jittor-lab/_state/release-day23/20261031-r11h-cuda-directed-gpu4-r10-pointer-transition-prepared/`
+- `/data6/cgq/jittor-lab/_state/release-day23/20261031-r11h-cuda-directed-gpu4-r11-readback-alias-diagnostic-prepared/`
+
+### GPU 现场与发布门
+
+本轮执行均绑定 GPU4 UUID，上述功能证据在共享负载下采集，不作性能或显存结论。2026-11-01 00:10 +0800 快照：GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 为 Default，yqa PID 3590512 使用 8,640 MiB；GPU4 为 Default，yqa PID 3591114 使用 8,640 MiB、zzy PID 3664315 使用约 2,150 MiB，GPU 利用率约 99%。当前账户设置 `EXCLUSIVE_PROCESS` 权限不足；没有运行 burner，也没有管理员独占租约。根盘约 99% 使用、可用约 74 GiB；`/data6` 可用约 5.5 TiB。
+
+Day4–5 正式验收仍要求冻结匹配配置、独占 GPU、至少三轮 JT/PT 交替且每轮每侧至少十个热样本，报告 load/首步/热态时延与吞吐的 median/p95/离散度、allocator/NVML 峰值，以及容量/OOM/恢复和 checkpoint on/off 配对结果。本轮全部不满足正式性能窗口条件。更广 Day2–5 仍需最终支持矩阵、held-out 任务质量、最终候选训练与新进程恢复、DDP 多 rank checkpoint、序列化互操作契约、clean wheel/sdist 安装和 baseline migration review。Overall **Not complete**。
+
 ## 2026-10-31 续验：R11h CUDA 定向回归尚未执行；Day4–5 与广泛发布门仍开放
 
 ### 工作区、候选与设备身份

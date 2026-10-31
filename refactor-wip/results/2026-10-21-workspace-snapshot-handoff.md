@@ -1,3 +1,19 @@
+## 2026-11-01 00:10 +0800 handoff：R11h GPU4 有一项 CUDA selector 通过；发布门仍未关闭
+
+主工作区文档编辑前 HEAD `eac64eba9727df20355d62aad90f1b7bb622fa5b`，origin/cgq_transformers `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind 130/0。102 项原有 dirty/untracked 保持其 porcelain SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`；主源码未改。本轮执行与文档变化仅涉及 R11h 隔离候选、其 _state 证据目录及三份状态文档。
+
+R11h 的真实 GPU4 结果需分项解释：R6 证明环境 `use_cuda=1` 在静态初始化期间进入 `sync_all` 会崩溃；R8 的 CUDA fill/zero selector 本身 1 passed、fallback=0，但 runner 的后置 FollowRuntime alias 断言失败，因此总体 receipt 仍 FAIL。R11 诊断中，读回后再 `zero_` 会让 native/torch 指针分开，双方值和后续写入值仍一致；需先确定 `torch.Tensor(existing Jittor Var)` 的构造语义和指针保证，再决定是否修源代码。没有修改 R11h 或主仓库源码。
+
+下一步按以下顺序继续：
+
+1. 审查 `setter_use_cuda → sync_all` 的 C++ 全局初始化路径，设计并实现安全的 CUDA 环境启动修复；用新的源码指纹和隔离缓存验证，保留当前 R6 失败和 R8 单 selector 通过原件。
+2. 对照 Torch 兼容层文档/既有测试，明确 `torch.Tensor(existing Jittor Var)` 是复制还是 alias contract；将 R10/R11 的读回后写入序列补成有明确预期的测试，再作最小修复或把地址变化限定为 readback 生命周期语义。值一致不能代替地址合同审查。
+3. GPU2 当前仍被 yqa PID 3590512 使用且为 Default；管理员尚未提供 UUID/GRES/device-cgroup 独占租约。不要运行 burner 或以共享 GPU 结果做性能结论。
+4. 独占窗口到位后再执行 Day4–5 三轮交替 PT/JT、每侧每轮至少十个热样本、时延/吞吐分布与 allocator/NVML 峰值、容量/OOM/恢复和 checkpoint on/off 对照。
+5. 继续关闭整体 Day2–5：最终 API/operator × device × dtype × layout × autograd/alias/storage/fallback 矩阵、held-out 任务质量、最终候选训练/续训、DDP 多 rank checkpoint、序列化互操作、clean wheel/sdist 安装和 baseline migration review。
+
+所有 R5–R11 日志、receipt、worker 与 plan 保存在 Day2–5 报告所列 `/data6/cgq/jittor-lab/_state/release-day23/20261031-r11h-cuda-directed-gpu4-r*-prepared/` 目录；R1–R4 及更早失败原件不覆盖。Day4–5 性能/显存和 broader release 继续 **Not complete**；不 push。
+
 ## 2026-10-31 handoff：R11h CUDA runner/cache 初始化未通过；保留 CPU 结果和失败原件
 
 主工作区 /home/cgq/jittor 本轮编辑前 HEAD 7a8552494fc80c63f9db926c15fbcc5cf96159a4，分支 integrate/cgq-transformers-native-multicard-target；fetch 后 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 129/0。102 项既有 dirty/untracked porcelain SHA256 仍为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，index 为空。主源码未修改；只更新三份既有状态文档，不 push。

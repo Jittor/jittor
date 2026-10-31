@@ -1,3 +1,13 @@
+## 2026-11-01 00:10 +0800 续验：R11h GPU4 定向 CUDA 用例单项通过；启动与存储合同仍开放
+
+主工作区文档编辑前 HEAD 为 `eac64eba9727df20355d62aad90f1b7bb622fa5b`，origin/cgq_transformers 为 `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind 130/0。102 项既有 dirty/untracked 的 porcelain SHA256 仍为 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`；主源码未改。
+
+R11h 隔离候选（HEAD `765f1791f3b00f9129fb3ec6342dadf2c9dc2dbe`，fingerprint `1530199e462b27b9b32ce93b000555bff0b03c28af2f90ab6548c8c37307c770`，source manifest SHA256 `0de2c5c034676bfb29b446054d04a7da70a59bf07bda20497eeab97e0d95f844`）新增一条真实 GPU4 证据：R8 的 CUDA selector `test_cuda_constant_writes_keep_explicit_cpu_and_cuda_storage` 为 **1 passed**、fallback=0、物理 GPU PID 被观察到；它后面的额外 alias probe 失败，因此 R8 整体 receipt 仍是 FAIL，不能把它写成整组 CUDA 通过。R6 复现了 `use_cuda=1` 环境变量启动时的 CUDA 静态初始化崩溃，栈落在 `init_use_cuda → setter_use_cuda → sync_all`。R7/R8 使用启动阶段 `use_cuda=0` 的诊断流程才到达 CUDA 运行态。
+
+R9–R11 只做 FollowRuntime 存储指针/值诊断：全新 CUDA Var 上，`zero_` 执行后、NumPy 读回前 native 与 Torch 包装指针稳定一致；读回后再 `zero_` 会使观测到的指针分开，但两边的值仍相同，后续写入值也相同。此结果尚需审定 `torch.Tensor(existing Jittor Var)` 的构造/存储合同，当前不据此宣告源码缺陷已修复。证据目录、失败原件与摘要见 Day2–5 结果报告新增的 R11h R5–R11 小节。
+
+GPU2 仍为 Default，yqa PID 3590512 使用 8,640 MiB；GPU4 仍有 yqa PID 3591114 与 zzy PID 3664315 的共享任务，当前快照利用率 99%。没有性能/显存验收，也没有运行占卡程序。Day4–5 仍需管理员提供 GPU2 UUID/GRES/cgroup 独占租约；更广 Day2–5 发布门未完成，Overall **Not complete**。
+
 ## 2026-10-31 续验：R11h GPU4 CUDA 启动未到目标测试；Day4–5 仍开放
 
 主工作区 /home/cgq/jittor 本轮文档编辑前 HEAD 7a8552494fc80c63f9db926c15fbcc5cf96159a4；origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 129/0。102 项既有 dirty/untracked 的 porcelain SHA256 仍为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，index 为空；主源码未改，本轮仅更新三份状态文档。
