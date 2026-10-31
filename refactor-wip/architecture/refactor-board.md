@@ -1,3 +1,11 @@
+## 2026-11-01 07:16 +0800 GPU1 CUDA RNG 与 optimizer restore 定向回归通过
+
+当前主树 HEAD fcb7c4c991c64a061069ed47829c37b96a63e7bc，fetch 后 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 143/0。原有 102 项 dirty/untracked porcelain SHA256 仍为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，暂存区为空；本轮未改源码或测试。
+
+在 runtime fingerprint ae682fe34dec0cf62e74f5dd3546c8c77dd7d97f23f03f7a4d4b7d11558f2499 的冻结快照上，物理 GPU1（GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068，逻辑 cuda:0）native CUDA RNG 测试为 5 passed、1 skipped；唯一跳过项需要两张可见 CUDA 卡。Torch optimizer restore 的 CUDA 参数化测试为 14 passed、14 deselected、0 skipped；fallback 被禁止且计数前后不变，包含 BF16 AdamW 混合 CPU/CUDA 参数组。两者均为功能证据，不构成 Day4–5 性能或显存结论。
+
+CPU-only 复验的 BF16 AdamW restore 后 exp_avg 差异和单 rank gloo backend 状态失败仍保留为待处理缺口；CUDA restore 结果只说明该路径未复现 BF16 CPU 用例差异。GPU2 仍由 yqa PID 2279286 持有约 8651 MiB，Default 共享；Slurm X12DPG-OA6 down、cgq 无 association。正式性能/显存、真实多 rank DDP、有效 held-out generation、clean CUDA 安装和 wheel migration 审阅仍未完成，整体 release 保持 Not complete。
+
 ## 2026-11-01 07:06 +0800 optimizer/DDP CPU 门出现失败；CUDA 测试受 cache build 阻断
 
 同一 runtime fingerprint 上新增五文件 CPU 复验：62 passed、75 accelerator-only skipped、2 failed。BF16 AdamW state 恢复后第二步的 exp_avg 与连续参考有差异；Torch distributed 单 rank backend=gloo 未在 API state 中保存，具体日志和实现检查见 Day2–5 报告顶部。未修改源码/测试。

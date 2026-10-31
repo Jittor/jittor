@@ -1,3 +1,25 @@
+## 2026-11-01 07:16 +0800 当前源码 native CUDA RNG 与 optimizer restore 回归
+
+### 执行身份与 cache 修正
+
+本轮使用 /home/cgq/jittor 对应的冻结快照 /data6/cgq/jittor-lab/_state/release-day23/20261101-qwen-main-r3-practical-r1-prepared/source，快照 HEAD e46586b26c16c646465b766d8c31dc159aecd00b，runtime source fingerprint ae682fe34dec0cf62e74f5dd3546c8c77dd7d97f23f03f7a4d4b7d11558f2499。两个测试文件 SHA256 均与快照一致。物理 GPU1 UUID GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068 映射为逻辑 cuda:0；测试前 1 MiB、无 compute app。没有使用 GPU2，也没有性能或显存测量结论。
+
+RNG r1/r2 在 pytest 收集前触发 native core 编译，原因是启动环境没有复用 Qwen 训练的冻结源码 PYTHONPATH 与 cache_name，误走 f338…/default cache。原尝试及部分 cache 均保留。r3 改用既有 runtime-environment.sh，日志确认命中 61ab724692e5/qwen_main_r3_practical_r1/cfg08ac6be4/cu12.4.99_sm_80，native core 无需重建。
+
+### Native CUDA RNG
+
+执行 tests/backends/cuda/test_cuda_rng_state.py，5 passed、1 skipped、0 failed，约 9.38 秒、rc=0。唯一 skip 为 insufficient-devices，测试需要两张可见 CUDA 卡。测试文件 SHA256 b04d20a673203dd5d04cc49a8e12fe1ec1c4ad34a53ab3ee79686a7b72a45640；pytest.log SHA256 adb5851a5d6cd45f22f2df20ae7c6cc1e6f8dc42484f6ecff8e5859fa32891dd；plan SHA256 ed89de51f19c9c7c48516490c3652c05071947a20f9f4f1899f3a67ed56b18bd；result SHA256 32cc87fab86fb23b8b72131895402a29373be106f4bda072af91ebebec05aa1d。记录位于 /data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-cuda-rng-gpu1-r3-prepared/。
+
+### CUDA optimizer restore
+
+在同一冻结快照、cache 和物理 GPU1 上执行 compat/tests/torch/test_optimizer_restore_devices.py -k cuda，结果 14 passed、14 deselected、0 skipped、0 failed，79.33 秒、rc=0。测试内 forbid_backend_fallbacks 与 fallback 计数不变断言通过；覆盖 CUDA 参数的 AdamW/SGD、非法后续 slot 原子性、CPU-mapped state 放回参数设备和恢复后的下一步更新，包括 BF16 AdamW 混合 CPU/CUDA 参数组。运行按需编译 BF16 cast JIT kernel，没有重新编译 native core。
+
+测试文件 SHA256 c9ff7be24a6dd0e4b5e0300f262d1f6addde39f0f2da0205d3171d50bef0cbfd；pytest.log SHA256 47c102401b5d28d812606b5ff795ca10a8b1516e247d5b39ffc6df45fac6c853；plan SHA256 23c9d802d83cd71050ed769cb3867c2edc7cacb4c719eaa3bf37d79c11f64d07；result SHA256 1711e374afe4e3f89fe66cf9e31ae1261cc9070fd8d53629eb16ecf58b2f8ea1。记录位于 /data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-optim-restore-cuda-gpu1-r1-prepared/。
+
+### 解释与边界
+
+此前 CPU suite 的 BF16 CPU 参数 restore 后 exp_avg 下一步差异（max_abs 6.676465e-05、max_rel 9.3548e-04）在对应 CUDA 参数路径未复现，但 CPU 结果仍需审查，不覆盖原 FAIL。Torch distributed 单 rank backend=gloo 未进入 API state 的失败也未改变。本轮只补真实 CUDA RNG 与 optimizer restore 功能证据，不能替代多 rank DDP、held-out 任务质量、clean CUDA 安装或 Day4–5 正式性能/显存验收。
+
 ## 2026-11-01 07:06 +0800 optimizer/DDP CPU 覆盖发现两项失败；CUDA build cache 未匹配
 
 ### CPU optimizer 与 distributed API 复验

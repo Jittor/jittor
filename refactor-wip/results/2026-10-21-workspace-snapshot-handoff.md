@@ -1,3 +1,11 @@
+## 2026-11-01 07:16 +0800 handoff：GPU1 CUDA RNG 与 optimizer restore smoke 通过
+
+当前主树 HEAD fcb7c4c99，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 143/0。执行后原有 102 项 dirty/untracked porcelain SHA256 仍为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，暂存区为空；未改源码/测试。
+
+同一 runtime fingerprint ae682fe34dec0cf62e74f5dd3546c8c77dd7d97f23f03f7a4d4b7d11558f2499 的冻结快照、真实 GPU1 上 native CUDA RNG 为 5 passed / 1 skip（需双卡），Torch optimizer restore CUDA 参数用例为 14 passed / 14 deselected / 0 skip，fallback 禁用检查通过。证据、运行计划与 SHA256 见 Day2–5 报告 07:16 条目及 _state/release-day23/ 下两个 current-main GPU1 实验目录。CPU BF16 exp_avg 差异与 distributed backend=gloo state 缺口仍开放。
+
+GPU1 测试后回到 1 MiB、无进程。GPU2 仍为 Default 共享，yqa PID 2279286 保持约 8651 MiB；未启动 burner 或 Day4–5 测试。A800 Slurm 节点仍 down，cgq 无 association。继续审查 CPU optimizer 根因、真实多 rank DDP、有效 held-out 质量和 wheel migration；取得 GPU2 系统级独占租约后再做 Day4–5 三轮交替性能/显存、near-capacity/OOM 恢复及真实 activation recompute 对照。整体 release Not complete。
+
 ## 2026-11-01 07:06 +0800 handoff：CPU 优化器/DDP 契约缺口已定位；GPU2 租约不可用
 
 当前主树 HEAD b562866b9，origin ahead/behind 142/0；102 项既有 dirty/untracked porcelain SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211 未变。五个 CPU 文件复验为 62 passed、75 accelerator-only skipped、2 failed；BF16 AdamW 恢复后 state 轨迹和 distributed API backend state 需要修正/契约确认。失败详细值、日志哈希和只读实现定位见 Day2–5 报告顶部，测试计划与完整日志在 data6 的 optim-ddp-cpu-r1-prepared 目录。
