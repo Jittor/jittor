@@ -1,3 +1,11 @@
+## 2026-10-31 续验：R33 前向归因完成；R34 生成分数受长度上限限制
+
+R33 在当前 main/compat wheel 与 core、BERT B8/S256 FP32 eager fixture、GPU2/cuda:0 上完成 3 轮交替。每阶段 2 次 warmup + 3 次同步观测，覆盖 12 个 encoder layer 和 layer-5 的 16 个 parent/inner module。六阶段均为实际 CUDA、fallback=0、输出有限、参数未变。嵌套 hook whole-forward median JT/PT 为 47.241/30.002 ms，p95 为 157.364/30.403 ms，std 为 51.726/0.215 ms；每阶段 Jittor 首个观测约 156 ms。Q/K/V ratio 约 1.54–1.59，attention-output dense 1.529，intermediate dense 1.185，output dense 1.036。dropout、LayerNorm、activation 和 parent-minus-child 差值均受同步/hook 开销影响，不能据此认定源码瓶颈。R26 正式 cohort 的 1.595 时延比仍未达 1.10。
+
+R34 对 R14 seed821 merged checkpoint 做 17 条 fixture-held-out 贪心生成，训练/评估按 instruction/input 核对无重叠。r3 使用 Qwen3 双 EOS、256 token 上限；base 的 token-F1/ROUGE-L-F1 为 0.1429/0.0873，merged 为 0.1616/0.1043，exact match 均为 0。两侧 17/17 都达上限，因此只是固定长度前缀分数，不是完整回答质量通过。推理使用 stock PyTorch CUDA，不验证 Jittor 推理，也不代表统一发布候选。r1 的 EOS 配置错误、r2 的 128-token cap、r3 的完整原件均保留；r3 经独立复算。
+
+Day4–5 正式性能/显存、统一候选任务质量、支持矩阵、DDP、多格式互操作与 clean install/baseline migration 仍开放；overall release **Not complete**。证据详见 [Day2–5 结果报告](../results/2026-10-26-torch-compat-release-day2-5.md)。
+
 ## 2026-10-31 续验：当前 wheel CUDA 别名回归未形成结论
 
 当前 wheel 的公共 Tensor CUDA 跟随 runtime 别名用例绑定主/compat wheel SHA256 `2e8f1a4418e3e9aee770843a6fd7d5471e3de12aaad75a8e8e78deee24baa3d9` / `fd7e84f639dba09f9d8293b9d255df09aa7190b890093e614c340cc47a7a7d5a`，GPU4 UUID `GPU-8bf405a2-a3dd-e203-8dd9-691e9f7b3530`。显式 Torch 模式修正后，独立尝试在 300 秒上限内编译到 `jittor_core 92/228` 后结束，断言未执行；677 项只新增于实验私有 cache。完整材料在 `/data6/cgq/jittor-lab/_state/release-day23/20261031-current-main-wheel-public-tensor-follow-runtime-cuda-r3-prepared/`，状态为 incomplete，不计为通过。GPU4 同期有外部进程且利用率约 73–84%，不构成稳定性能窗口；Day4–5 正式性能/显存与更广发布门保持开放。

@@ -1,3 +1,16 @@
+## 2026-10-31 handoff 增量：R33 归因与 R14 固定长度生成评分完成，发布门仍开放
+
+本轮继续使用 `ssh campus-linux` 的现有 `/home/cgq/jittor`，没有 clone/reset/stash/clean，没有改源码或 wheel。记录起始 HEAD `e5c73b092024e2063ffe0eb01608d2b72f8a9b1c`，origin/cgq_transformers 与远端 ref 为 `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind 为 122/0。开始和结束时 102 项既有 dirty/untracked porcelain SHA256 均为 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`，index 为空；本轮仅更新 handoff、release-day2-5 报告和 refactor-board，提交也只含三文档，不 push。/data6 可用空间 5.5 TiB。
+
+R33 r3 attempt-01 绑定上述 HEAD/source fingerprint、当前 main/compat wheel/core、GPU2 和固定 BERT fixture；3 轮六阶段均通过真实 CUDA/fallback=0/输出有限/权重不变检查。summary SHA256 `ff49769e6021887fefd450eea7cba6c20b700921da7d1c37727de35614ebbc81`，posthoc SHA256 `3062d63e36a95a733c05eb6f50b2459f5075b7c87b11592c12a343074af6b11b`。嵌套 hook 同步使绝对时间与离群点不适用于正式性能验收；Q/K/V median ratio 约 1.54–1.59、attention-output dense 1.529、intermediate dense 1.185、output dense 1.036，当前不足以宣布可修源码瓶颈。r1 GPU 前因 cache lock 审计不符拒绝，r2 因 JITTOR_HOME 挂载位置在 JT0 测量前失败；原件保留。r3 预启动 private clone/保护 cache 快照 SHA256 同为 `fc698085cb9dd8f4feb58d0e3ed38b62d2b5f8eb565a45dfe42aec42fe96aa35`；after 快照比较只有 `jittor.lock` 不同。
+
+R34 绑定已终审 R14 Qwen seed821 checkpoint-102/merged 权重，不重跑 full、preflight 或 resume。训练集 101 条、fixture eval 17 条，instruction/input 交集为 0；eval 原始来源仍标 `train`，因此只称 fixture-held-out。R34-r3 用 offline stock PyTorch 在物理 GPU2/cuda:0 对 base 与 merged 各生成 17 条，greedy、双 EOS、256-token cap。Base token-F1/ROUGE-L-F1 为 0.142914/0.087317，merged 为 0.161602/0.104252；两边 17/17 全触顶，是固定长度前缀分数，不是完整生成质量验收。R34 不提供 Jittor 推理/fallback 结论，推理无梯度、无更新。独立审计复算指标、行数、checkpoint/data 绑定通过，SHA256 `f3ca413ce61457533f4df798ee2dcd88e3ed6656dc3ad1fd0b1e0c7858597d9a`。r1 错误 EOS、r2 的 128-token cap 均保留并标记 superseded；不无限重跑。
+
+R34 证据目录：`/data6/cgq/jittor-lab/_state/release-day23/20261031-r14-qwen-heldout-generation-r34-r3-prepared/`；R33 目录：`/data6/cgq/jittor-lab/_state/release-day23/20261031-bert-inner-op-forward-attribution-r33-r3-prepared/`。收尾采样 GPU2 利用率 0%、空闲显存 81,038 MiB、无本任务 GPU 进程；R34 子进程已退出。
+
+R26 正式 BERT cohort 的 JT/PT median ratio 仍为 1.595，性能/显存正式门没有关闭。接续工作应优先处理可验证的功能/发布缺口与有证据支持的优化，再对冻结候选执行稳定窗口性能、容量/OOM 和 checkpoint CUDA 配对验收。API/operator 支持矩阵、当前统一候选的可信任务质量、候选绑定训练与新进程恢复、DDP Trainer 多 rank checkpoint、JT portable-pickle 与 stock PyTorch 互操作契约、clean wheel/sdist 和 baseline migration review 也未完成。Overall release 继续 **Not complete**。
+
+
 ## 2026-10-31 handoff 增量：当前 wheel CUDA 别名尝试在冷编阶段超时
 
 当前主/compat wheel（SHA256 `2e8f1a4418e3e9aee770843a6fd7d5471e3de12aaad75a8e8e78deee24baa3d9` / `fd7e84f639dba09f9d8293b9d255df09aa7190b890093e614c340cc47a7a7d5a`）的公共 Tensor CUDA 跟随 runtime 别名检查未得到测试结论：两次 runner 缺少 `JITTOR_TORCH_SHIM=1`，在收集前退出；第三次修正环境后冷编到 `jittor_core 92/228`，于 300 秒上限结束，断言未执行。实验私有 cache 新增 677 项，未改源码或既有保护缓存。GPU4 当时由外部进程占用且利用率约 73–84%，该尝试不计功能通过或性能/显存证据；原件分别保留在 `/data6/cgq/jittor-lab/_state/release-day23/20261031-current-main-wheel-public-tensor-follow-runtime-cuda-r1-prepared/`、`...-r2-prepared/`、`...-r3-prepared/`，不自动重跑。

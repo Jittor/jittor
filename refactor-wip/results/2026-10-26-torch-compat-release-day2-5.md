@@ -1,3 +1,39 @@
+## 2026-10-31 R33/R34：前向内部归因与 R14 固定长度生成评分
+
+### R33：nested-hook BERT 前向归因（诊断通过，不是正式性能验收）
+
+R33 绑定仓库 HEAD `e5c73b092024e2063ffe0eb01608d2b72f8a9b1c`、source fingerprint `0382368b8754bf7a90e42382fd66b603ed2d3f323b5e8cda4820425871c7aa50`、main/compat wheel SHA256 `2e8f1a4418e3e9aee770843a6fd7d5471e3de12aaad75a8e8e78deee24baa3d9` / `fd7e84f639dba09f9d8293b9d255df09aa7190b890093e614c340cc47a7a7d5a`、core SHA256 `050c612d6b29bb952c4debccc7eb791f1704e3c8a2040723cb352cbda789f986`、GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0`，以及 BERT B8/S256 FP32 eager 权重 SHA256 `86fa7113367fd0d231a76571ca1b73a1b24166af33558fee960636ce56337ed7`。3 轮 `torch0,jittor0,torch1,jittor1,torch2,jittor2` 全部完成；每阶段 2 次 warmup 与 3 次 timed forward，覆盖 12 层及 layer-5 的 16 个父/子模块。六阶段均检查实际 `cuda:0`、fallback=0、输出有限、参数未变。
+
+| Nested-hook 整次前向 | median（ms） | p95（ms） | std（ms） |
+| --- | ---: | ---: | ---: |
+| Jittor | 47.241 | 157.364 | 51.726 |
+| PyTorch | 30.002 | 30.403 | 0.215 |
+
+每个 Jittor 阶段的首个整次观测约 156–157 ms，其余约 47 ms；这些绝对时间不适用于正式热态性能结论。内部 median JT/PT ratio：query/key/value 为 1.586/1.576/1.543，attention.output.dense 为 1.529，intermediate.dense 为 1.185，output.dense 为 1.036。LayerNorm/dropout 绝对时间小；activation 有约 59 ms 离群观测。四个 parent-minus-child median ratio 为 attention.output 2.527、attention.self 1.993、intermediate 2.755、output 2.574；差值包含残差/剩余数学、Python 调度、框架调用和嵌套同步差异，不是单独残差算子计时。没有据此认定源码优化候选。
+
+阶段结果：`/data6/cgq/jittor-lab/_state/release-day23/20261031-bert-inner-op-forward-attribution-r33-r3-prepared/attempt-01/summary.json`，SHA256 `ff49769e6021887fefd450eea7cba6c20b700921da7d1c37727de35614ebbc81`；posthoc SHA256 `3062d63e36a95a733c05eb6f50b2459f5075b7c87b11592c12a343074af6b11b`。独立证据审计确认六阶段状态、绑定和 posthoc 对应关系。r1 因 GPU 前 cache lock 审计不符而拒绝；r2 因 bwrap 的 JITTOR_HOME 挂载路径差异，在 JT0 模型测量前失败；两份原件均保留。r3 预启动私有 clone 与保护 cache 快照相同（SHA256 `fc698085cb9dd8f4feb58d0e3ed38b62d2b5f8eb565a45dfe42aec42fe96aa35`），结束后的 clone/source 快照仅 `jittor.lock` 一项不同。
+
+### R34：R14 fixture-held-out 生成分数（探索性固定前缀，不是 release 质量通过）
+
+候选绑定 R14 Qwen3-0.6B seed821 两 epoch、102 次 optimizer update merged checkpoint；源码 HEAD/fingerprint 为 `e4a3894065953efa50ea23a0e52b45511b835f59` / `89157afb357abbb882057230ecb0e86586deeef7fb010a7cc51b3577eea054a6`。merged `model.safetensors` SHA256 `f095b2a370e865976df3e028fdde8d354ff04afdc28746b770ac34755bb98a6d`，checkpoint-102 manifest SHA256 `12c1e228f76af70c61306041d0675024f751b673e506b783d81fcdc6aa05b5a0`，R14 resume 终审 SHA256 `eebcda6a2f97dae4de8f6da7fb3f3864e0c9c15bdb89fe0518865737d0ae349c`。训练 JSONL 101 行 SHA256 `3836597b696a3b79b81ac9f34bc79ce9a4d06cf6e8bf204aabf48dc5d924ecf0`；eval JSONL 17 行 SHA256 `d8318478c8991e75ba5cac474e1f3dfe95c0478da49ad8b2a8909c72fb72f84f`；按 instruction/input 交集为 0。eval 原始 `source_split=train` 标签仍保留，所以称 fixture-held-out，不称官方验证集。
+
+R34-r3 在真实 GPU2/cuda:0（NVIDIA A800 80GB PCIe）、offline stock PyTorch 2.6.0+cu124 / Transformers 4.56.2 上，对 base 与 merged 各生成 17 条，greedy、`max_new_tokens=256`，沿用 Qwen3 EOS 列表 `[151645,151643]`。指标为逐条 lowercase Unicode word token 的 F1、LCS ROUGE-L F1 及空白归一化 exact match 宏平均：
+
+| 模型 | Token-F1 | ROUGE-L-F1 | Exact match | 达 256 token 上限 |
+| --- | ---: | ---: | ---: | ---: |
+| Base | 0.142914 | 0.087317 | 0/17 | 17/17 |
+| R14 merged | 0.161602 | 0.104252 | 0/17 | 17/17 |
+| Merged − base | +0.018689 | +0.016935 | 0 | — |
+
+每条输出均撞上 256 token cap，以上只是固定预算前缀分数，不证明完整回答质量或普遍提升。两模型参数均在 `cuda:0`；推理只读，参数梯度 None、optimizer update=0；兼容 fallback 对 stock PyTorch 不适用。R14 既有 fixed eval loss 为 JT 2.455552、PT 2.456644。R34 不验证 Jittor 兼容推理，也未绑定当前统一 release candidate。
+
+r1 错把 tokenizer 的单一 EOS 当停止 token，遗漏模型 EOS 151645；r2 保留双 EOS 但 128 token 全部触顶；r3 将 cap 扩到 256 后 34/34 仍触顶。各原件保留，r1/2 事后审阅也保留，不再因 cap 无限重跑。R34-r3 summary SHA256 `9f4b04fb183e5fc011fcddd05f488fe2493e115b39bbb4803399753c7049a740`，独立证据/指标复算 SHA256 `f3ca413ce61457533f4df798ee2dcd88e3ed6656dc3ad1fd0b1e0c7858597d9a`。完整材料位于 `/data6/cgq/jittor-lab/_state/release-day23/20261031-r14-qwen-heldout-generation-r34-r3-prepared/`。
+
+### 当前验收结论
+
+R33 没有形成可直接实现的低风险性能候选，R34 只补出受 256 token cap 限制的 fixture 分数。Day4–5 正式性能仍需冻结同一候选，在稳定窗口至少 3 轮交替、每轮每侧至少 10 个热样本，并报告 load/首步/热态 median、p95、离散度、吞吐、allocator/NVML 峰值；近容量、最大可运行配置、OOM/恢复、真实 CUDA checkpoint on/off 成本仍需独立验收。更广 Day2–5 的统一支持矩阵、可信 held-out 质量、候选绑定训练/恢复、DDP 多 rank checkpoint、序列化互操作契约、clean wheel/sdist 与 baseline migration review 仍开放。Overall release **Not complete**。
+
+
 ## 2026-10-31 续验：当前 wheel CUDA 别名回归未形成测试结论
 
 针对当前 wheel 的 `test_cuda_public_tensor_constructor_preserves_follow_runtime_alias` 做了一次有界 CUDA 正确性尝试，绑定主/compat wheel SHA256 `2e8f1a4418e3e9aee770843a6fd7d5471e3de12aaad75a8e8e78deee24baa3d9` / `fd7e84f639dba09f9d8293b9d255df09aa7190b890093e614c340cc47a7a7d5a`、当前测试文件 SHA256 `d079146c5e54aadde4bfd5015b29db60d3ca93be7eab9676edbaa265c8c4a092` 与 GPU4 UUID `GPU-8bf405a2-a3dd-e203-8dd9-691e9f7b3530`。前两次启动因 runner 未设置仓库要求的 `JITTOR_TORCH_SHIM=1`，在 pytest 收集前停止；第三次明确注入后进入编译，但 300 秒预算到时停在 `jittor_core 92/228`，没有运行测试断言，也没有正确性 pass/fail 结果。677 个新增文件都在隔离实验 cache；源仓库 HEAD `28425b64b35ab2e1b49ac4693c31f46d7dd0e5e2`、102 项既有 dirty/untracked 状态及其 porcelain SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211` 未变。GPU4 同期由外部进程占用，利用率约 73–84%；本次只作为不完整的正确性尝试，绝非性能或显存证据。完整启动、receipt、日志与 cache 差异保存在 `/data6/cgq/jittor-lab/_state/release-day23/20261031-current-main-wheel-public-tensor-follow-runtime-cuda-r1-prepared/`、`...-r2-prepared/` 和 `/data6/cgq/jittor-lab/_state/release-day23/20261031-current-main-wheel-public-tensor-follow-runtime-cuda-r3-prepared/`；未重复启动。
