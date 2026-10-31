@@ -1,3 +1,15 @@
+## 2026-10-31 续接：保存/续训 CPU 复核发现 BF16 AdamW 状态差异；正式性能窗口仍不合格
+
+在 /home/cgq/jittor 当前工作区继续，验证时 HEAD 1a6afb04bfac79078d887dbe9c3ff9849d4a8cfb，fetch 后 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 103/0。复核前后其他 103 项既有 dirty/untracked 状态的 SHA256 为 2307d0e94eb9b3bc7fba2ede6944fa17e077934dd2beedfee42190737f7ea25c；本轮未改源码或测试文件，新增实验记录只写入 /data6/cgq/jittor-lab/_state/。
+
+CPU 保存/续训定向门在 JITTOR_NO_BUILD=1、use_cuda=0、实际 CPU Jittor core 51845b1462d8f3beaf5f9c2034bd96363a2925b90ff1dcec2bbcf02f9aeb5818 上收集 39 项，执行 25 项：23 passed、15 skipped（全为 accelerator 条件）、1 failed，用时 34.84 秒。test_serialization_api_owners.py 所执行用例通过，覆盖 Jittor portable round-trip、weights-only 安全拒绝、Torch zip storage 解析及 safetensors reader；这不表示 stock PyTorch 可以读取 JT portable-pickle 的 optimizer 文件，既有互操作失败仍单独保留。日志和 preflight 位于 /data6/cgq/jittor-lab/_state/test-suite/torch/20261031-main-serialization-restore-cpu-r2-prepared/，manifest SHA256 004869af2e46160d63fec0b9d83b772ee3b132226c3c73d066315a9b334be936。
+
+唯一失败为 test_map_cpu_restore_to_per_parameter_device_and_next_step[cpu-adamw-dtype1]（CPU BF16 AdamW）。checkpoint load 后的参数组 lr、step=1、optimizer state 张量与原实例逐项相同；继续做第二步时参数对照通过，但一个 optimizer state 张量对照失败，观测值 [0.03147815, 0.0714361] 对 [0.03147624, 0.07136934]，max_abs 6.676465e-05、max_rel 9.3548e-04。这是续训状态数值差异，尚未由更长模型级训练证明会造成任务指标退化，也不能直接忽略为无影响；应保留为未关闭的 optimizer-state 行为问题，并结合后续实际训练证据决定优先级。该失败不推翻绑定特定 CUDA 源码/配置的 R14 Qwen seed821 full 与新进程 resume 结果。
+
+初次 CPU attempt 因 nvcc_path 选中了不存在的 CUDA 配置且 JITTOR_NO_BUILD=1，在 pytest collection 前 fail-closed，未运行测试；旧原件保存在 /data6/cgq/jittor-lab/_state/test-suite/torch/20261031-main-serialization-restore-cpu-r1-prepared/，manifest SHA256 2245a83001a0374f30a74e478b437638009fc9241fde966d7f99d62837435e3f。对照既有 CPU runner 显式设 JT_BUILD_NVCC_PATH='' 后复用 cfg1d275ac1 core 才进入用例。另一个临时字段追踪 runner 自身语法错误，目标用例未执行，原件保留在 /data6/cgq/jittor-lab/_state/test-suite/torch/20261031-main-bf16-adamw-restore-diagnostic-r1-prepared/，不作为测试结果。两次不完整尝试和后续实测均未改动五个目标源码/测试文件；status SHA 与 core SHA 前后一致。
+
+Day4–5 正式 GPU 测量仍不具备准入条件：快照中十张 A800 利用率为 22–100%，没有卡达到 ≤10%；GPU2（UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0）为 80%、空闲 72,387 MiB，有外部 PID 3160291 使用约 8,640 MiB。/ 仅余 33 GiB，/data6 余 5.5 TiB；因此实验临时产物写在 /data6，本轮不做性能/显存验收。正式门仍须等待低负载、无关 PID 清空的窗口，做至少三轮匹配配置 JT/PT 交替，每轮每侧至少十个热态样本，并报告 load/首步/热态、median/p95/离散度、allocator/NVML 峰值和容量/OOM 边界。overall release 继续 Not complete。
+
 ## 2026-10-31 更正：当前主树 dtype 功能全模块 34/34 通过；两个 skip 标记过时
 
 在当前工作树 HEAD fead5cd02be5fdb333ecc99e30e472e832e743e9、origin/cgq_transformers e5cffe1ae60c418f53c5bb1cdca9182577fd2b81 上，用 pytest collection hook 在单个进程内只解开 test_long_returns_int64_like_torch 与 test_promotion_full_torch_lattice 两个 unittest.skip 包装器，再运行原完整 compat/tests/torch/test_torch_compat_dtype.py：34 collected、34 passed、0 skipped、0 failed，2.406 秒。目标实际设备 A800 GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0、逻辑 cuda:0，Jittor 1.3.11.0、Pytest 7.4.4、Torch shim/CUDA 可用，fallback 0→0，core SHA256 83d5c1a0ac0481afbdbd250e295807f5b7e9005504fae055a0c77bc5a37d8aff，JITTOR_NO_BUILD=1。
