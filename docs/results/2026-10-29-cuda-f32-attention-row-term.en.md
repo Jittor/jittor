@@ -197,3 +197,13 @@ The device profile needs CUPTI:
   it means fewer operators per step or a cheaper host cost per operator.
 - BERT/ViT's remaining 1.26-1.28x is the same host cost (about 5-7 us per
   operator, against PyTorch's 1-2 us).
+- `sd15_unet_train` measured at `e10e7b968` (idle card, batch 2, `--size full`):
+  a 210 ms step, of which 173 ms is graph construction before `step()` returns
+  and 37 ms the device time after the sync; PyTorch is 177 ms of dispatch plus
+  142 ms of device. cProfile's largest single entry is
+  `jittor_core.grad_optional` (backward construction) at **88 ms**, then the
+  optimizer's `_copy_detached_storage` (2058 calls, 25 ms cumulative), module
+  dispatch `_module_call` (665 calls, 64 ms cumulative, which includes each
+  module's whole forward), flag scopes (4118, 7 ms) and `dtype_name` (5979,
+  5 ms). The remaining gap on this row is backward graph construction, not
+  forward dispatch.

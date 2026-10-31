@@ -173,3 +173,10 @@ CUDA 设备侧 profile 需要 CUPTI：`JITTOR_CUPTI_LIB=<...>/nvidia/cuda_cupti/
   每个算子的 Python 开销。
 - BERT/ViT 剩余的 1.26–1.28x 同样由主机侧构图主导（每 op 约 5–7 µs，PyTorch 约
   1–2 µs）。
+- `sd15_unet_train` 在 `e10e7b968` 上的实测（空闲卡，batch 2，`--size full`）：一步
+  210 ms，其中 173 ms 是 `step()` 返回前的构图时间、37 ms 是随后 sync 的设备时间；
+  作为对照 PyTorch 是 177 ms 调度 + 142 ms 设备。cProfile 里最大的单项是
+  `jittor_core.grad_optional`（反向构图）**88 ms**，其后是优化器写回的
+  `_copy_detached_storage` 2058 次共 25 ms、模块派发 `_module_call` 665 次共 64 ms
+  （含各模块整个前向）、flag 作用域 4118 次 7 ms、`dtype_name` 5979 次 5 ms。所以
+  这条的剩余差距在**反向图构建**，不在前向派发。
