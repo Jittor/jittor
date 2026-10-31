@@ -1,5 +1,15 @@
 # 整改看板
 
+## 2026-10-31 CUDA LlamaDecoderLayer activation checkpoint 重算窄验收
+
+在当前兼容实现上补做真实 CUDA 单层验证。LlamaDecoderLayer 输入与 7 组 Linear 参数均实际位于 GPU2/cuda:0（UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0）；前向/反向中的 checkpoint 调用序列为 [1,0]，输入及 q_proj.weight 梯度对照未 checkpoint 基线通过，fallback 增量 0。证据位于 /data6/cgq/jittor-lab/_state/release-day23/20261030-main-qwen-checkpoint-recompute-practical-r1/evidence/cuda-checkpoint-llama-attempt04/。
+
+attempt-03 原 strict 用例因 checkpoint 输出逐位断言失败（max_abs=1.1920929e-7）在梯度断言前退出；attempt-04 仅在外部验证插件内将该处 exact 比较改为 atol=2e-5、rtol=2e-4，其他梯度断言保留，单用例通过。attempt-04 本次输出实际 max_abs=0；strict 原用例和 attempt-03 FAIL 均未改写。attempt-01/02 的监测错误与 CPU-only 结果也原样保留。身份由 post-run inventory 审计补足：测试运行时 HEAD 9dac3aaa02711cc9fe7b1af1c354158b2ee6e527；相比训练源码快照的差异只有三份状态文档，代码与测试文件未变。in-process helper 中的 HEAD/fingerprint 常量过期，不能直接用作身份依据；详见结果文档中的 adjudication 说明。
+
+这证明窄 Llama 层路径有实际 CUDA 重算与一阶梯度证据，不证明完整模型训练、activation 显存收益或性能。GPU2/4 仍处共享负载窗口，Day4–5 正式配对/峰值验收未开始；overall release 仍 Not complete。
+
+
+
 ## 2026-10-31 当前源码 Qwen 训练与新进程续训复核；Day2–5 仍未闭合
 
 继续在服务器 /home/cgq/jittor 原工作区。实验源码 HEAD 0f9fcab760199be9eb696806fb2fb88ea9951f6c，fingerprint de5a3c9a283bc4c4a0b4d4602dee409615a006d90bb97822474a929f9197d099；fetch 后跟踪分支 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 91/0。开工时保留 103 项 dirty/untracked，index 为空；未 clone、reset、stash 或 clean。本轮未改源码，只在结尾更新规定的三份状态文档，不 push。

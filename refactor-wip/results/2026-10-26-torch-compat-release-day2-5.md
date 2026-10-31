@@ -20,6 +20,18 @@ strict lifecycle `STRICT_LIFECYCLE_COMPLETED`：reload logits max abs=0、genera
 
 resume 关键 SHA256：worker.log `c930be9984e4dc1f2d6f1d7dad2da7731f23d6c9e20dcc0eb5d51288eca72c23`；strict-lifecycle.json `1068011e91fd51ef9f3eb6fa4246625d529c292dd769d2373edd32f0d1c6ea8a`；practical-report.json `adb962bfb2a245a8a9d17464758270acc246ecbcbc4a5471cd962f0f2f580744`；training-observations.json `5485a4049772b09401e5aa7c573d9bc52356d0ddbdd78e0db9f0004cf746de6f`。训练过程报告 SHA256：full worker.log `0fe95ede7d4a3ed8c7ad8f000f3b96d8c890926039eb6ffc84db7e821956156c`，full strict-lifecycle.json `c369b25788cbf5af2a0899cdfdcb221a6c9d21691a934d6203df0dee797dc7e3`，full practical-report.json `9709afef7911db9110cda756d193181e1ae8ca680e0fbf1fa82fe7950365e08c`。实验源码和产物全在 `/data6`，未写入仓库。
 
+### CUDA LlamaDecoderLayer checkpoint 重算与梯度证据
+
+继续在相同 dirty 源码上做一次有界 CUDA 单层验证。测试运行时 HEAD 为 `9dac3aaa02711cc9fe7b1af1c354158b2ee6e527`；当前完整 inventory fingerprint 为 `320adb7e75257a3b6902828925b77958627f4fcf82e511d61d64b4993dc50e56`。与 Qwen 实训前的 fingerprint `de5a3c9a283bc4c4a0b4d4602dee409615a006d90bb97822474a929f9197d099` 比较，2821 个 inventory entry 中只有本任务提交的三份状态文档不同；`compat/torch/installers/data.py` SHA256 `0a4d1c151a9de5e3d57da60117f156e8641b26febd7c63a4727914fef04c33c8` 与 checkpoint 测试 SHA256 `95c8bb71d46c6c8dd0a2a12ae22627eeb1f3dddc7b2e6c9401ebe08034f3f359` 对应的实现/用例未变。实验沿用当前源码构建 core `635033df1696f32f5e0ca6529102a5724bf2cd0c92c4d398e6fe351802714622` 和 jit_utils `d83b331385c81f3ffa8b70ba2665acee73fe6ba7e5c300089af43170f80eebaf`。
+
+CUDA 绑定 GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0`，实际输入和 7 组 Linear 参数均报告 `cuda:0`。LlamaDecoderLayer tiny config（hidden=8、intermediate=16、sequence=2）通过 checkpoint 路径执行，测试断言重算调用 `[1,0]`，输出一致且输入/q_proj.weight 梯度与直接前向基线在 `rtol=2e-4, atol=2e-5` 下匹配；fallback 0。attempt-04 为 1 passed / 0 skipped / 13.75s。它只证明该 CUDA 窄路径有 activation recompute 与一阶梯度，不是完整模型训练或显存收益证据。
+
+尝试记录按原样保留：attempt-01 的插件错误发生在 collection，0 tests；attempt-02 测试体虽 1 passed，但监测发现输入仍在 CPU，不能算 CUDA；attempt-03 输入与参数已在 CUDA、fallback 0，原 test 的 `rtol=atol=0` 输出断言遇到 `max_abs=1.1920928955e-7` 而失败，未走到梯度断言；attempt-04 没有改仓库测试，只在外置 plugin 中对这一 exact 输出比较临时使用 `rtol=2e-4, atol=2e-5`，其余原有断言（包含梯度对照）照常执行，实际被比较的输出 max_abs 为 0。故 supplement 的实际梯度功能结论可记通过，原 strict attempt-03 仍为 FAIL，不能互相改写。
+
+身份审计 caveat：attempt-04 `worker.log` 的启动 JSON 复用了旧脚本内的 HEAD/fingerprint 常量；该行的 HEAD/fingerprint 不是实时值。post-run `source-after.json` 与 Qwen run 前 inventory 比较后仅有三份状态文档变化，确认可执行代码和测试文件一致；此结论是事后 inventory adjudication。审计和文件清单在 `evidence/cuda-checkpoint-llama-attempt04/identity-adjudication.json` 与 `SHA256SUMS`。该目录保留 CUDA 前后设备状态、进程清单、原始日志及 fallback/device 报告。
+
+本次不做性能或显存比较。GPU2 约 33% 利用率、空闲 59,941 MiB；GPU4 约 27%、空闲 59,931 MiB，均有共享计算负载。正式 Day4–5 测量仍需稳定且无无关 PID 的准入窗口、至少 3 轮 JT/PT 交替配对、每侧每轮 ≥10 个热样本，并报告 load/首步/热态分布、allocator 与 NVML 峰值和容量/OOM 边界。
+
 ### 尚需完成的 Day4–5 与 Day2–5 门
 
 | 门 | 完成标准 | 当前状态 |

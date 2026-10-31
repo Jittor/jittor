@@ -1,5 +1,15 @@
 # 2026-10-21 工作区快照与本机接续交接
 
+## 2026-10-31 最新续接：CUDA LlamaDecoderLayer checkpoint 重算与梯度通过窄验收
+
+在当前 Jittor CUDA 构建上，LlamaDecoderLayer 的 tiny config 单层测试将输入及 7 组 Linear 参数实际放在 GPU2/cuda:0（UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0`），checkpoint 前向与 backward 重算调用 `[1,0]`，输入/q_proj.weight 梯度对照未 checkpoint 基线通过，fallback=0。attempt-04 为 1 passed/0 skipped；外置 wrapper 只放宽 exact 输出比较，实际 max_abs=0，梯度容差断言仍使用原值。attempt-03 原 strict 断言以 max_abs `1.1920929e-7` 失败并保留，attempt-01/02 也保留；不改写 strict FAIL。
+
+实验在状态文档提交 HEAD `9dac3aaa02711cc9fe7b1af1c354158b2ee6e527` 运行。worker 启动行硬编码了前一快照身份；post-run inventory audit 显示与原训练快照相比仅三份状态文档变化，代码和测试一致。以 `identity-adjudication.json` 记录此事后身份审计，不把失真的启动行当作实时 HEAD 证据。详情、哈希和剩余门见 Day2–5 结果报告。
+
+此项证明 CUDA 单层 checkpoint 重算和一阶梯度，不证明显存节省或完整模型训练。Day4–5 正式性能/显存窗口仍因共享负载不合格；整体 Day2–5 和 release 均未完成。
+
+
+
 ## 2026-10-31 最新接续：当前源码 Qwen 两 epoch 与 checkpoint-51 新进程恢复通过
 
 继续使用 /home/cgq/jittor 原工作区。实验源码身份 HEAD 0f9fcab760199be9eb696806fb2fb88ea9951f6c，fingerprint de5a3c9a283bc4c4a0b4d4602dee409615a006d90bb97822474a929f9197d099；fetch 后 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 91/0。开工时 103 项已有 dirty/untracked 保留、index 为空；本轮未改源码/测试，只在收尾更新指定三份状态文档；无 clone/reset/stash/clean/push。
