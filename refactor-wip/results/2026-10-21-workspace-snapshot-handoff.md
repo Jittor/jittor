@@ -1,3 +1,15 @@
+## 2026-10-31 接续：R31 停在共享 GPU 准入，R32 确认 wheel 中 checkpoint 真正重算
+
+继续在原 /home/cgq/jittor，未 clone 或修改源码。测量前后 HEAD 3cf20912727973bb645428f3d3c3750d920c3a45，FETCH_HEAD/origin cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 120/0；102 项其他 dirty/untracked 状态 SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211 未变，index 为空。R31/R32 脚本、日志、cache 和审计均保存在 /data6/cgq/jittor-lab/_state/release-day23/，未放入仓库。
+
+R31 只完成一个 current-wheel BERT GPU pair，旁路 227 次模块调用中的嵌套前端上下文后，median 没有改善，且梯度-map hash 不同但幅度未存，故不应形成优化候选。随后 GPU2 在下一阶段准入以 51% utilization 拒绝，完整 R31 保留 FAILURE；不在相同共享窗口重跑。
+
+R32 对照 wheel archive member 和工作区 compat/torch/installers/data.py，确认 SHA256 同为 0a4d1c151a9de5e3d57da60117f156e8641b26febd7c63a4727914fef04c33c8；当前 wheel 已含 _CheckpointRecompute，不再是直接调用 shim。三次 attempt 中前两次分别在导入期 build guard 和 torch.__file__ 记录器处失败，均保留；attempt-03 在 CPU 上运行现有测试 6/6、无 skip，并经独立终审通过。此结果关闭“目标函数是否重算”的 CPU 功能问题，但不关闭 CUDA 显存/速度门。
+
+2026-10-31 10:50 UTC 的 GPU2 采样为 100% 利用、70,559 MiB 已用、10,479 MiB 空闲。下一步待新鲜准入后测最终 wheel checkpoint on/off 的三轮交替 cohort（每侧每轮至少十个 hot sample），并收集 allocator live/allocated/reserved、NVML 峰值及 load/首步/稳态耗时；之后独立测近容量/OOM 与恢复。R26 时间 ratio 1.595 仍失败，R31 partial 不能替代正式时延线。
+
+更广发布门仍包括 support matrix、统一候选 held-out 指标、真实训练与新进程恢复、DDP Trainer 多 rank checkpoint、跨框架 optimizer 格式契约、clean wheel/sdist install 与 baseline migration review。overall release **Not complete**；不要重跑 R14 full/preflight/resume 或已通过的 cold build，不覆盖 R31/R32 失败原件。
+
 ## 2026-10-31 最新交接：R27–R29 已定位前向差距线索，Day4–5 与发布门仍开放
 
 在 /home/cgq/jittor 现有工作区继续，无 clone。R29 测量绑定 HEAD 02be05fcaab344735272a8526485330602f32ec0、source fingerprint 0382368b8754bf7a90e42382fd66b603ed2d3f323b5e8cda4820425871c7aa50、102 项既有 dirty/untracked porcelain SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，无源码/wheel 改动。origin/cgq_transformers 当前 ref 与 git ls-remote 均为 e5cffe1ae60c418f53c5bb1cdca9182577fd2b81；HEAD 比该 ref 多 119 个提交，origin 无独有提交。最终 GPU2 空闲 0%、81,038 MiB free；/data6 余 5.5 TiB，/ 显示 33 GiB 可用；R29 进程已退出。

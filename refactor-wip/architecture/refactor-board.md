@@ -1,3 +1,20 @@
+## 2026-10-31 续验：R31 仅有一轮前端上下文配对；R32 在当前 wheel 上确认真实 checkpoint 重算
+
+R31 在当前 wheel/core、BERT B8/S256 FP32 eager fixture 和真实 GPU2/cuda:0 上完成一对各 10 个热前向的运行时敏感性比较。普通路径每次前向 227 次模块调用、251 次 tensor_frontend(default_placement=False) 进入；旁路模块上下文后仍为 227 次调用、24 次进入。两侧 median 为 44.457 / 44.499 ms，旁路反而慢约 0.095%；output 哈希与 loss 相同，但梯度映射哈希不同，未保存逐张量差值，无法判断差异大小。下一阶段准入采样见 GPU 利用率 51%，因此只完成一个 pair，不能形成三轮归因或正式性能结论。该路径当前不构成源码优化候选。R31 的完整 FAILURE、GPU 准入拒绝、私有 cache 和 partial review 均保留；partial review SHA256 c9f2084a8a0fc636c4306395189b9a6c53ac16ffb3d1a68ffb6ba979279a7347，partial audit SHA256 e17b4a20b5ac14b8f65a031b2450ea206b7b8fa8de092d9a9b411db6a406318d。
+
+R32 源码与当前 compat wheel 的 compat/torch/installers/data.py SHA256 同为 0a4d1c151a9de5e3d57da60117f156e8641b26febd7c63a4727914fef04c33c8；该实现含 _CheckpointRecompute，前向在 no_grad 下运行，反向重算，并在默认配置下保存/恢复 RNG。现有 compat/tests/torch/test_torch_checkpoint_recompute.py 在非 editable 当前 wheel、CPU、真实兼容 torch namespace 上 6/6 通过、0 skip；覆盖 no-grad 前向与 backward 重算、嵌套输出、闭包/模块参数梯度、CPU RNG 恢复、Transformers Llama decoder 与 checkpoint layer 协议。R32 结果为 PASS_CPU_CHECKPOINT_RECOMPUTE_FUNCTIONAL_ONLY，独立审计 PASS_R32_INDEPENDENT_CPU_FUNCTIONAL_AUDIT。这修正了旧增量中“当前 shim 直接执行函数”的描述；该说法对本次绑定 wheel 已经过时。
+
+Checkpoint API 仍标记为 approximate fidelity；非默认 context_fn、非默认 determinism_check 和 debug=True 明确拒绝。R32 是 CPU 功能证据，不证明 CUDA activation memory 节省或速度成本。R32 attempt-01 因 JITTOR_NO_BUILD=1 缺少私有 cache 中的 CUB 外部 JIT 产品，在导入期停止；attempt-02 的记录器假设 shim 有 torch.__file__，在测试开始前停止；两份失败原件均保留，attempt-03 在独立 cache 副本通过。
+
+### 当前仍未关闭的 Day2–5 门
+
+1. Day4–5 正式性能：R26 当前代表格热态 JT/PT median ratio 仍为 1.595，时间线未达。最终 wheel 必须按至少三轮交替、每轮每侧至少十个热样本报告 load、首步、热态 median/p95/离散度、吞吐和 allocator/NVML 峰值。
+2. Day4–5 容量/显存：仍需匹配配置的近容量/OOM 边界、最大可运行配置与 OOM 后恢复；另需当前 wheel 的 checkpoint on/off CUDA 速度及 allocator live/allocated/reserved、NVML 峰值对照。R32 不替代此门。
+3. 更广 Day2–5：声明范围 API/operator × device × dtype × layout × autograd/alias/storage × fallback 矩阵；统一候选的 held-out 任务分数、实际训练与新进程恢复、DDP Trainer 多 rank checkpoint；JT portable-pickle optimizer 与 stock PyTorch 的互操作契约；clean wheel/sdist 安装与 baseline migration review。
+4. GPU2 在 2026-10-31 10:50 UTC 的现场采样为 100% 利用、约 10.5 GiB 空闲，本轮没有启动新的 CUDA cohort。Overall release 仍为 **Not complete**。
+
+完整 R31/R32 证据路径、哈希和失败边界见 [Day2–5 结果报告](../results/2026-10-26-torch-compat-release-day2-5.md) 与 [workspace handoff](../results/2026-10-21-workspace-snapshot-handoff.md)。
+
 ## 2026-10-31 续验：R27–R29 收窄了 BERT 前向差距位置；发布门仍开放
 
 R27 对 R26 trace 的独立复核确认：JT 每份 trace 有 2,760 个 kernel event，PT 有 2,319 个；但 JT 汇总 kernel 时间 237.16 ms、SGEMM 205.42 ms，低于 PT 的 250.99 / 209.88 ms。三轮 hot median ratio 为 1.488–1.608。trace event 不能直接归因 wall time，增加的 kernel 数只是调度开销候选。

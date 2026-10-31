@@ -1,3 +1,34 @@
+## 2026-10-31 R31–R32：上下文旁路未显示时延收益；当前 wheel 的 checkpoint 重算功能通过 CPU 验证
+
+### R31：单 pair 的模块前端上下文敏感性诊断（未完成）
+
+R31 绑定 HEAD 3cf20912727973bb645428f3d3c3750d920c3a45、source fingerprint 0382368b8754bf7a90e42382fd66b603ed2d3f323b5e8cda4820425871c7aa50、当前主/compat wheel SHA256 2e8f1a4418e3e9aee770843a6fd7d5471e3de12aaad75a8e8e78deee24baa3d9 / fd7e84f639dba09f9d8293b9d255df09aa7190b890093e614c340cc47a7a7d5a、core SHA256 050c612d6b29bb952c4debccc7eb791f1704e3c8a2040723cb352cbda789f986，GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0，BERT B8/S256 FP32 eager。同一 frozen weight/input、同一私有 cache 的第一 pair 成功运行；baseline 与 runtime-only skip-module-context 各 10 个热前向，另做一次反向梯度校验。
+
+| 模式 | median / p95 / std（ms） | module 调用/前向 | default_placement=False 前端上下文/前向 |
+| --- | ---: | ---: | ---: |
+| baseline | 44.457 / 102.092 / 17.184 | 227 | 251 |
+| skip module context | 44.499 / 89.820 / 13.642 | 227 | 24 |
+
+该 pair 的旁路 median ratio 为 1.000947，即慢约 0.095%；不能据单 pair 的波动 p95 认定有收益。两边输出 SHA256 均为 835f6b02bb02d41299b555ca076ab71758de6b05dbef73b1d50935b61cc51e21、loss 均为 1.0，参数/缓冲未变；两侧 197 个梯度均有限，但 gradient-map SHA256 不同（baseline 786db6d0bc7436cf7c628d5a991bb768d58a9842c98c3239845e760ff51be4f4，bypass 1f2a083036ded9f65e40a8a0b8827565c429ee6af08aecde6a846b62dbf28129），没有逐张量差值可用于判断量级。baseline1 准入观察到 GPU 利用率 51%，按协议停止；未跑剩余两轮。完整 R31 状态保留为 FAILURE，不做 source optimization 或正式性能推断。partial review / audit 分别 SHA256 c9f2084a8a0fc636c4306395189b9a6c53ac16ffb3d1a68ffb6ba979279a7347 / e17b4a20b5ac14b8f65a031b2450ea206b7b8fa8de092d9a9b411db6a406318d。
+
+### R32：当前产品中的 checkpoint 真实重算功能通过 CPU 回归
+
+审查发现当前 compat wheel 的 jittor/compat/torch/installers/data.py 与工作区源码同 SHA256 0a4d1c151a9de5e3d57da60117f156e8641b26febd7c63a4727914fef04c33c8。torch.utils.checkpoint.checkpoint 绑定到 _CheckpointRecompute：前向目标函数在 no-grad 下运行，反向再执行并对用户输入及闭包捕获参数求梯度；默认保留 RNG 时会保存和恢复 CPU/CUDA RNG。此前记录“当前 shim 直接调用目标函数”的陈述对这个 wheel 已经过时。
+
+R32 在非 editable 当前 wheel、compat torch namespace、CPU（use_cuda=0、空 CUDA_VISIBLE_DEVICES）、绑定 core SHA256 050c612d6b29bb952c4debccc7eb791f1704e3c8a2040723cb352cbda789f986 下，运行既有 compat/tests/torch/test_torch_checkpoint_recompute.py：6 tests、6 passed、0 skipped，耗时 72.33 s。测试覆盖 no-grad 前向/backward 重算、嵌套输出、module/closure 参数梯度、RNG 恢复、Transformers Llama decoder 和 GradientCheckpointingLayer 路径。执行终态 PASS；独立检查 wheel member、import 来源、core、cache 和工作区身份后得到 PASS_R32_INDEPENDENT_CPU_FUNCTIONAL_AUDIT。
+
+证据在 /data6/cgq/jittor-lab/_state/release-day23/20261031-checkpoint-recompute-cpu-functional-r32-r1-prepared/。最终 summary SHA256 45ee0aa270e585463ee6cee236d5c2eac82b7cd62d6151a26a4d1a717fc59798，独立终审 SHA256 69920a4a69371a3056356c5a31c8d9f24db333ad292a01f46fc1fa7a3899d0c7。attempt-01 的 JITTOR_NO_BUILD=1 缺 CUB JIT 产品失败、attempt-02 的 shim __file__ 记录器失败均保留；attempt-03 在独立副本完成。
+
+R32 仅证明当前 wheel 在 CPU 上真实重算并保持所测功能，不提供 CUDA 峰值或速度差。API fidelity 仍为 approximate：非默认 context_fn、非默认 determinism_check 和 debug=True 不支持。
+
+### 下一步与 Day4–5 发布边界
+
+- 等 GPU2 满足新鲜准入后，在最终 wheel 上做三轮交替的 checkpoint on/off 配对，每轮每配置至少十个热态样本；记录 load、首步、稳态时间、median/p95/标准差、throughput、allocator live/allocated/reserved 与 NVML peak。
+- 另做匹配 PT/JT 的 near-capacity/OOM、最大可运行配置和 OOM 后恢复。R26 BERT 正式 cohort 的时间比仍为 1.595，未达 1.10；R31 partial 不是性能门结果。
+- 完成统一候选 support matrix、held-out 任务分数、训练/恢复、DDP Trainer 多 rank checkpoint、序列化互操作契约、clean install 与 baseline migration review。
+
+Overall release 仍为 **Not complete**。
+
 ## 2026-10-31 R27–R29：R26 trace、BERT 分层与子模块诊断
 
 本轮在现有服务器工作区 /home/cgq/jittor 继续，没有重新 clone、改源码或重建 wheel。R27/R28/R29 均绑定 source fingerprint 0382368b8754bf7a90e42382fd66b603ed2d3f323b5e8cda4820425871c7aa50、主/compat wheel SHA256 2e8f1a4418e3e9aee770843a6fd7d5471e3de12aaad75a8e8e78deee24baa3d9 / fd7e84f639dba09f9d8293b9d255df09aa7190b890093e614c340cc47a7a7d5a、private core 050c612d6b29bb952c4debccc7eb791f1704e3c8a2040723cb352cbda789f986。R28/R29 测量时 HEAD 02be05fcaab344735272a8526485330602f32ec0，102 项既有 dirty/untracked 的 porcelain SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211。本轮只写了 /data6 证据和下列三份状态文档。
