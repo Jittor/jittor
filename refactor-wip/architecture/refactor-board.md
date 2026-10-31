@@ -1,3 +1,15 @@
+## 2026-10-31 续验：R21 默认 AdamW 测量终审通过，热态时延线仍未达
+
+在现有 /home/cgq/jittor 工作区测量 R21 当前 wheel BERT B8/S256 FP32；绑定 HEAD 62aa8ca7f8c075d22f036d18759c686f70483a00、source fingerprint 0382368b8754bf7a90e42382fd66b603ed2d3f323b5e8cda4820425871c7aa50、R19/R20 同一主/compat wheel 与 private core。PT/JT AdamW 都省略 foreach/fused 参数，记录默认值 None/None；这只测用户默认调用敏感性，不推断实际 kernel 派发，也不替换 R19 显式 unfused 基线。
+
+GPU2 logical cuda:0 三轮交替、每阶段 16 warmup/10 hot samples。六阶段 dispatch 均为 cuda:0、fallback=0、197 梯度有限、201 参数/缓冲初值一致且确实更新。独立审计 14/14 通过。JT/PT 热态 pooled median 148.923/94.494 ms，p95 153.841/97.706 ms，标准差 19.953/3.203 ms，ratio 1.57601，不满足 1.10 时延线；allocated/reserved/NVML 峰值 ratio 为 1.08066/1.09147/1.07114。它是代表格显存比较，不是 OOM 边界。
+
+artifact /data6/cgq/jittor-lab/_state/release-day23/20261031-current-wheel-bert-performance-r21-default-adamw-r1-prepared/；receipt cfb894e1866932b024cfc3ff985197f1dec44a01dce23cc7f4d71659c7a4076a，summary adad51aaa394bb613ae0a5bbc64fecb7815b0661573ed9e1665dbb34dbc0b079，终审 attempt-03 6e55d62f378b6d94ad8b74d99c7b2864658b974071cfa2cd2c28f46cb0b5b804。私有 mount namespace 中使用 R21 cache 副本；原 R19/R20 cache 逐项匹配 R20 post-run snapshot，1235 项全未变。直接复制路径、wrapper、误启动 PT-only stage 与审计路径错误等失败原件均保留，没有重建 core、没有改源码/wheel。
+
+下一项仍是围绕现有 trace 做有界时延诊断/优化，并另测近容量/OOM 与真实 checkpoint recompute on/off 资源差异。更广 Day2–5 继续开放支持矩阵、当前候选 held-out 质量、DDP Trainer 保存恢复、序列化互操作契约、clean package/install 和 baseline 迁移审查。R14/R19/R20/R21 各自绑定源码及配置，不重复已通过的 full/resume/preflight。Overall release **Not complete**。
+
+---
+
 ## 2026-10-31 续验：R20 fused AdamW 敏感性测量已审计；时延线未达
 
 在现有 /home/cgq/jittor 工作区完成一组 R20 fused AdamW 敏感性测量，没有重新 clone、改源码、重建 core 或重做 R14。测量绑定 HEAD f95ea4cf4a7e1798f02c47b4bffab9dd38380c7f、source fingerprint 0382368b8754bf7a90e42382fd66b603ed2d3f323b5e8cda4820425871c7aa50、相同的 R19 主/compat wheel 与 private core。R20 仅将匹配的 PT/JT optimizer 设为 foreach=False,fused=True，用于敏感性诊断。

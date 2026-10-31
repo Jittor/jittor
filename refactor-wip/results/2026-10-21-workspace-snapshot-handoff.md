@@ -1,3 +1,15 @@
+## 2026-10-31 最新交接：R21 默认 AdamW 代表格已审计；时延门未过
+
+R21 在 /home/cgq/jittor 现有工作区完成，绑定测量时 HEAD 62aa8ca7f8c075d22f036d18759c686f70483a00、origin/cgq_transformers e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（ahead/behind 114/0）、source fingerprint 0382368b8754bf7a90e42382fd66b603ed2d3f323b5e8cda4820425871c7aa50。 当时 102 项既有 dirty/untracked、状态 SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，index 为空；相同 R19/R20 主/compat wheel 和 private core，无源码或 wheel 修改。
+
+BERT B8/S256 FP32 上 PT/JT 均以不传 foreach/fused 的 AdamW 用户默认调用执行，三轮交替、每阶段 16 warmup+10 hot；真实 GPU2/cuda:0、fallback=0、197 个有限梯度、201 个初值映射、参数更新和六阶段 load audit 均通过。独立终审 attempt-03 14/14 checks pass，状态 R21_DEFAULT_ADAMW_AUDIT_PASS_TIME_GATE_FAIL。JT/PT pooled median 148.923/94.494 ms、p95 153.841/97.706 ms、标准差 19.953/3.203 ms，时延 ratio 1.57601 未达 1.10。allocator allocated/reserved 与 NVML 峰值 ratio 1.08066/1.09147/1.07114，只有代表格显存数据，不含容量/OOM。
+
+artifact /data6/cgq/jittor-lab/_state/release-day23/20261031-current-wheel-bert-performance-r21-default-adamw-r1-prepared/；receipt SHA256 cfb894e1866932b024cfc3ff985197f1dec44a01dce23cc7f4d71659c7a4076a，summary adad51aaa394bb613ae0a5bbc64fecb7815b0661573ed9e1665dbb34dbc0b079，终审 6e55d62f378b6d94ad8b74d99c7b2864658b974071cfa2cd2c28f46cb0b5b804。R21 cache 是私有副本，以 bwrap namespace 保留 stamp 绑定路径；R19/R20 原 cache 对照 R20 post-run snapshot 的 1,235 项均完全未变。准备阶段 no-build 复制失败、namespace wrapper/审计脚本误判及误启动 PT-only 中断记录都保留；最终 R3 cohort 自然结束，无 worker 残留。
+
+后续优先级：对已有 trace 做有界性能诊断/优化；补近容量/OOM 边界及 activation checkpoint 实际 recompute on/off 显存/速度对照；在冻结候选上补声明范围 API/device/dtype/layout/autograd/fallback 矩阵、held-out 任务门、DDP Trainer 多 rank 保存和新进程恢复、JT/stock PyTorch 序列化契约、clean wheel/sdist 安装与 baseline 迁移审查。R14 practical train/resume、R19 unfused、R20 fused 与 R21 defaults 各自仅支持绑定的源码和配置，不合并成全局 PASS。Overall release 继续 **Not complete**。
+
+---
+
 ## 2026-10-31 最新交接：R20 fused AdamW 敏感性审计完成；Day4–5 时延线仍未达
 
 本轮在 /home/cgq/jittor 既有工作区，HEAD f95ea4cf4a7e1798f02c47b4bffab9dd38380c7f、source fingerprint 0382368b8754bf7a90e42382fd66b603ed2d3f323b5e8cda4820425871c7aa50 上，用 R19 同一主/compat wheels 与 private core 做 R20。实验前 102 项既有 dirty/untracked 与 status SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211、空 index 均保持；origin/cgq_transformers e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 113/0。只改变 PT/JT 的匹配 optimizer 配置为 foreach=False,fused=True，目的为敏感性诊断；未改源码或重建 core。

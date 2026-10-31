@@ -1,3 +1,41 @@
+## 2026-10-31 增量：R21 默认 AdamW 三轮测量终审通过；时延诊断线未达
+
+### 源码身份与测量范围
+
+在 /home/cgq/jittor 现有工作区继续，R21 绑定测量时 HEAD 62aa8ca7f8c075d22f036d18759c686f70483a00、origin/cgq_transformers e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（ahead/behind 114/0）、source fingerprint 0382368b8754bf7a90e42382fd66b603ed2d3f323b5e8cda4820425871c7aa50，以及 102 项既有 dirty/untracked 状态 SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211；当时 index 为空。使用 R19/R20 相同主 wheel SHA256 2e8f1a4418e3e9aee770843a6fd7d5471e3de12aaad75a8e8e78deee24baa3d9、compat wheel SHA256 fd7e84f639dba09f9d8293b9d255df09aa7190b890093e614c340cc47a7a7d5a 与原私有 core SHA256 050c612d6b29bb952c4debccc7eb791f1704e3c8a2040723cb352cbda789f986，没有重建 core。BERT B8/S256 FP32、权重和输入固定；PT/JT 均调用 AdamW 默认构造，不传 foreach 或 fused。两侧记录的参数组值均为 foreach=None、fused=None。此 cohort 是默认调用配置敏感性测量，不替代 R19 显式 unfused 基线，也不单凭 None 推断实际 CUDA optimizer kernel 派发。
+
+A800 GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 映射为进程内逻辑 cuda:0。按 torch0,jittor0,torch1,jittor1,torch2,jittor2 顺序完成三轮；每阶段 16 次 warmup、10 个热态样本、3 个 allocator profile update 和 3 个 CUDA attribution update。六阶段实际 dispatch 均为 cuda:0、fallback delta 均为 0，197 个梯度有限、201 个初始参数/缓冲值配对、参数更新通过；NVML 分阶段负载审计通过。
+
+### 热态时延
+
+| runtime | median | p95 | 标准差 | 每轮 median（ms） |
+| --- | ---: | ---: | ---: | --- |
+| PyTorch | 94.494 ms | 97.706 ms | 3.203 ms | 94.651 / 94.386 / 95.077 |
+| Jittor | 148.923 ms | 153.841 ms | 19.953 ms | 149.108 / 142.832 / 150.541 |
+
+三轮 JT/PT median ratio 为 1.57534 / 1.51327 / 1.58336，pooled median ratio 1.57601，未达沿用的 1.10 时延诊断线。由 batch=8 与 median 推导的吞吐约 PT 84.66、JT 53.72 序列/秒。启动分项（轮次顺序如上）：PT pre-model setup 4.071/3.936/3.860 s、model ready 4.588/3.954/4.176 s、first update 0.491/0.485/0.513 s；JT 分别为 2.827/2.843/2.934 s、5.277/5.183/5.201 s、2.756/2.712/2.766 s。model ready 包含 math probe、模型构建及 201 项 master/readback，不是纯加载耗时。
+
+### 显存
+
+| runtime | allocator allocated 峰值 | allocator reserved 峰值 | NVML 进程峰值 |
+| --- | ---: | ---: | ---: |
+| PyTorch | 3,343,963,136 B | 3,565,158,400 B | 3,908 MiB |
+| Jittor | 3,613,674,496 B | 3,891,265,536 B | 4,186 MiB |
+
+JT/PT ratio 分别为 allocated 1.08066、reserved 1.09147、NVML 1.07114，均低于当前 1.10 代表格诊断线。这不是容量或 OOM 边界证据，也不能外推到其他模型和配置。
+
+### 审计、cache 与保留记录
+
+artifact 位于 /data6/cgq/jittor-lab/_state/release-day23/20261031-current-wheel-bert-performance-r21-default-adamw-r1-prepared/。R3 六阶段 receipt SHA256 cfb894e1866932b024cfc3ff985197f1dec44a01dce23cc7f4d71659c7a4076a；summary SHA256 adad51aaa394bb613ae0a5bbc64fecb7815b0661573ed9e1665dbb34dbc0b079；独立终审 attempt-03 SHA256 6e55d62f378b6d94ad8b74d99c7b2864658b974071cfa2cd2c28f46cb0b5b804，14/14 检查通过，状态 R21_DEFAULT_ADAMW_AUDIT_PASS_TIME_GATE_FAIL。
+
+Jittor cache 使用 R21 私有副本，通过 bwrap mount namespace 暴露在 build stamp 绑定的原绝对路径，写入与 R19/R20 cache 隔离。R21 cache 前后各 1,235 项，没有新增 JIT 产品；原 R19/R20 cache 与 R20 post-run snapshot 的 1,235 项逐项完全一致，零增删、零 hash 变化。测量结束没有 R21 worker 或 GPU2 compute PID，GPU2 恢复为 0% utilization、81,038 MiB free。没有源码或 wheel 变化。
+
+初始直接复制 cache 的 no-build rebinding 失败、私有 mount namespace 之前的 wrapper/review 错误、一次误在 namespace 外启动且只运行 PT torch0 的中断阶段，以及 attempt-02 独立审计路径错误均保留在 R21 artifact；它们没有覆盖 R3 原件或触碰原 cache。最终六阶段与独立终审均使用 R3 独立目录。
+
+R21 说明默认 AdamW 调用没有改善当前 BERT 的相对热态时延。它不改变 R19 正式 unfused 基线的时延失败结论，也未关闭 Day4–5：还需有界性能诊断/优化、近容量与 OOM 边界、activation checkpoint recompute on/off 的实际显存和速度对照。更广 Day2–5 仍需最终候选 API/op × device/dtype/layout/autograd/fallback 支持矩阵与 unsupported 边界、held-out 实际任务阈值、DDP Trainer 多 rank 训练/保存/新进程恢复、JT/stock PyTorch 序列化互操作契约、clean sdist/wheel 非 editable 安装及 baseline 迁移审查。Overall release **Not complete**。
+
+---
+
 ## 2026-10-31 增量：R20 fused AdamW 敏感性测量通过证据审计；时延诊断线失败
 
 ### 身份与范围
