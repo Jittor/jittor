@@ -1,3 +1,19 @@
+## 2026-10-31 续验：R35 checkpoint CUDA 预检未通过启动绑定；Day4–5 与更广发布门仍开放
+
+R35-r1 的导入探针误用了默认 JITTOR_HOME 和全局 cache，因 libstdc++ ABI 不符在模型启动前失败；原件保留，生成的 48 MiB 全局 cache 未删除或复用。R35-r2 改用 R21 已审计的 bwrap 隔离方式，把 64 MiB R21 私有 cache 复制到新目录并绑定到原绝对 JITTOR_HOME。R21、R19 与 R35 副本中的 CUDA 12.4 core SHA256 均为 `050c612d6b29bb952c4debccc7eb791f1704e3c8a2040723cb352cbda789f986`。但启动器漏传 R21 的 `cache_name` 和 `use_cuda` 配置，Jittor 因而解析到 `default/cfgd436a523`，与绑定的 `jittor_torch_r19_current_wheel_20261031/cfgecf1a63a` 不同；`JITTOR_NO_BUILD=1` 正确阻止了重编，尚未完成 import。没有模型、前向、GPU kernel 或 benchmark。
+
+R35-r2 完整失败原件位于 `/data6/cgq/jittor-lab/_state/release-day23/20261031-checkpoint-cuda-resource-r35-r2-preflight/attempt-01/`，`preflight-failure.json` SHA256 `8460bb3235cc1ed856ca06b1e0eb56a04e8da29c1c78b06275565cc51ec66723`；导入日志 SHA256 `75b6cad4bbfadaede764c6cc907d572a34f093fc6d4b2743fb07c6cf0044ba1e`。仅隔离副本新增默认配置 cache 项并更新锁；R21/R19 core 与 R35-r1 全局 core 的 SHA 均复核未变，预检进程已退出。HEAD 保持 `c442c0de6cec01b47c9a7ffc22d72c4bd3b3f6d1`，本轮前后既有 102 项 dirty/untracked 状态未改。末次 GPU2 为 0% 利用率、81,038 MiB 空闲且无计算进程，但其他设备有共享任务；未启动测量。R35-r1 与 r2 均保留，当前失败不是功能或性能结论。
+
+### 尚未关闭的内容
+
+1. **正式时延门：** R26 当前代表格 JT/PT 热态 median ratio 为 1.595，高于 1.10 目标；R33 hook/分段归因只能诊断。需先有依据地优化并冻结最终源码、wheel、core、模型/权重、数据、精度、shape、优化器和设备，再在稳定窗口（利用率 ≤10%、空闲显存 ≥60,000 MiB、无无关计算进程）完成至少 3 轮 PT/JT 交替，每轮每侧 ≥10 个热样本。报告加载/准备、首步、热态 latency 与吞吐的 median、p95、离散度，并保留逐样本值、设备/fallback、梯度/更新/loss、allocator 与 NVML 峰值。
+2. **容量与显存：** 以匹配配置单独测近容量、最大可运行 batch/sequence、OOM 行为和 OOM 后恢复；单一代表格的 allocator/NVML 峰值不等于容量通过。
+3. **Checkpoint 资源收益：** 现有 CPU 与窄 CUDA decoder 证据已证明部分路径发生 activation recompute 并产生梯度；仍需同模型、同输入的 CUDA on/off 配对，核验输出/梯度/更新与 fallback，并报告 allocated/reserved 峰值、NVML 峰值和速度成本。功能重算通过不等于省显存通过。
+4. **更广 Day2–5 发布门：** 在一个冻结候选上完成声明范围的 API/operator × device × dtype × layout × autograd/alias/storage × fallback 矩阵；补当前候选的训练、held-out 任务阈值与新进程恢复；完成 DDP Trainer 多 rank 保存/续训、JT portable-pickle 与 stock PyTorch 的互操作契约、clean wheel/sdist 安装及 baseline migration review。R14 训练/resume 与 R34 受 token cap 限制的 stock PyTorch 前缀分数均不能替代这些门。
+5. **预检续接：** R35 后续新目录必须完整带入 R21 的 `cache_name`、`use_cuda` 和其余绑定环境，先静态核对预期 cache path，再决定是否允许一次 import-only preflight；本目录不重试。
+
+Overall release 继续 **Not complete**。
+
 ## 2026-10-31 续验：R33 前向归因完成；R34 生成分数受长度上限限制
 
 R33 在当前 main/compat wheel 与 core、BERT B8/S256 FP32 eager fixture、GPU2/cuda:0 上完成 3 轮交替。每阶段 2 次 warmup + 3 次同步观测，覆盖 12 个 encoder layer 和 layer-5 的 16 个 parent/inner module。六阶段均为实际 CUDA、fallback=0、输出有限、参数未变。嵌套 hook whole-forward median JT/PT 为 47.241/30.002 ms，p95 为 157.364/30.403 ms，std 为 51.726/0.215 ms；每阶段 Jittor 首个观测约 156 ms。Q/K/V ratio 约 1.54–1.59，attention-output dense 1.529，intermediate dense 1.185，output dense 1.036。dropout、LayerNorm、activation 和 parent-minus-child 差值均受同步/hook 开销影响，不能据此认定源码瓶颈。R26 正式 cohort 的 1.595 时延比仍未达 1.10。
