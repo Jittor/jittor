@@ -1,3 +1,11 @@
+## 2026-10-31 接续：R9 两个失败路径在当前主树的 CPU 定向复核通过
+
+在服务器 /home/cgq/jittor 既有工作区验证，HEAD 2e02c1e17ce8ff99d515b297c882125fa8b1dbec，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（ahead/behind 99/0）。103 项既有 dirty/untracked 保留；测试前后源码与 status hash 不变。三个既有 CPU nodeid（fill/zero alias 与梯度、内部 FollowRuntime 写入、public Tensor(native) alias）3 passed、0 skipped、0 failed，使用 JITTOR_NO_BUILD=1 和已热 CPU core。证据目录 /data6/cgq/jittor-lab/_state/test-suite/torch/20261031-r9-focused-cpu-main-042414-r3/，preflight/raw/result SHA256 与文件身份见整改看板及 Day2–5 结果记录顶部。
+
+该结果只支持当前主树的三个 CPU 分支；R9 隔离候选 7 passed、1 skipped、2 failed 的原始结果保持不变，不记为 R9 全组通过。下一步仍需围绕最终支持范围完成 API/device/dtype/layout/autograd/fallback 矩阵、模型训练/恢复和预设 held-out 质量门、真实模型 checkpoint 重算与显存收益、DDP 与干净安装/打包、明确 JT/PT 序列化互操作契约。
+
+Day4–5 性能/显存需另等合格设备窗口：利用率 ≤10%、空闲显存 ≥60,000 MiB、无无关 PID；冻结匹配 workload，至少 3 轮 JT/PT 交替、每轮每侧 ≥10 个热态样本；报告 load/首步/热态 latency 与 throughput 的 median/p95/离散度、allocator allocated/reserved 与 NVML 峰值，并单独测容量/OOM 边界。当前共享 GPU 快照不合格，不能作为验收测量。Overall release 仍为 **Not complete**。
+
 ## 2026-10-31 当前接续：Torch storage alias CPU 门通过；CUDA 与 Day2–5 release 继续开放
 
 继续使用服务器 `/home/cgq/jittor` 原工作区。当前 HEAD `ef21322dc9b38c89c2cbb07854ba65e8c442c025`，origin `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，分支 ahead/behind `98/0`。既有 103 项 dirty/untracked 保留；仅本任务源码增量与三份状态文档纳入此次整理，不 push。

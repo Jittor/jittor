@@ -1,3 +1,22 @@
+## 2026-10-31 当前主树 R9 两个失败路径 CPU 定向复核通过；发布门未关闭
+
+测试在服务器 /home/cgq/jittor 现有工作区，HEAD 2e02c1e17ce8ff99d515b297c882125fa8b1dbec，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 99/0。保留 103 项原有 dirty/untracked；测试前后工作树 status SHA256 均为 83cebe9ab499bf7eac33eaf704f20dd58441ca5b7ee5bc662b560e6cd827fa2f，三个测试绑定源码/测试 SHA 见看板顶部记录。
+
+为判断当前主树是否覆盖 R9 Torch focused 失败，在维护 Torch CPU session 环境中对三个既有 nodeid 作定向运行：CPU fill/zero alias 与 parameter gradients、内部 FollowRuntime fill/zero alias、公开 torch.Tensor(native) FollowRuntime alias。结果 3 passed、0 skipped、0 failed，2.88 s；Jittor sentinel collected=3 executed=3。运行使用 Python /home/cgq/anaconda3/bin/python3.11、CPU-only（CUDA_VISIBLE_DEVICES 为空、use_cuda=0）、JITTOR_NO_BUILD=1、JITTOR_TEST_REQUIRE_EXECUTION=1 和已热 Jittor core（SHA256 51845b1462d8f3beaf5f9c2034bd96363a2925b90ff1dcec2bbcf02f9aeb5818），没有冷编译或代码变化。内部与公开 alias 用例启用 fallback 守卫，fallback 计数未增加。证据目录 /data6/cgq/jittor-lab/_state/test-suite/torch/20261031-r9-focused-cpu-main-042414-r3/；preflight/raw/result SHA256 分别为 16c43c05d97d927696b33e9121a15c567293761860185e619549a020a89f0bc2、e74b8a13b7aaf1ad705c14c34b13f28279fe7e2f972478d9e12dfa93e56c331d、430feb004d096a89001dcdf52f7732094da2f507e555c1e2c79d9df4ad12c5e6。
+
+R9 隔离候选的既有 Torch focused 仍是 10 collected/executed、7 passed、1 accelerator skip、2 failed；失败分别为 fill_/zero_ 后 factory/parameter gradient 缺失，以及 public Tensor(native) 未保留 FollowRuntime placement。原始失败及日志保留在 /data6/cgq/jittor-lab/_state/release-day23/20261028-qwen-fill-zero-r9-focused-cpu-torch-final-r1-prepared/attempt-01-torch-focused/，不覆盖、不重跑该候选。当前主树 3 个窄 CPU 用例通过只验证这些分支，不将 R9 旧源码结果改成通过，也不等同于全套 10-file Torch focused、当前 core 新鲜全量复测或 CUDA 门通过。
+
+### 仍需完成的验收
+
+1. **Day4–5 性能与显存**：待目标设备连续满足 GPU 利用率 ≤10%、空闲显存 ≥60,000 MiB、无无关计算 PID 后，冻结一致的源码、模型/权重、数据顺序、batch/sequence、dtype/precision、优化器、checkpoint 与 cache/warm-up 配置。做至少三轮 JT/PT 交替配对，每轮每侧至少 10 个热态样本；分别报告加载、首步、热态 latency/throughput 的 median、p95、离散度，Jittor allocator allocated/reserved 峰值与 NVML 峰值。独立测试最大 batch/sequence 与 OOM 边界，保存原始样本、环境/源码/workload manifest 和失败窗口。共享负载结果只作诊断。
+2. **声明支持范围**：冻结 Torch API 与版本承诺，形成 CPU/CUDA × dtype/layout/device × shape/index/broadcast/in-place/edge/error 矩阵，逐项记录数值容差、梯度、明确 fallback 和不支持行为；禁止静默 fallback。覆盖声明范围内 leaf/view/alias、retain_graph、二阶梯度、RNG/context、AMP、优化器/调度器状态与设备映射。
+3. **代表模型与恢复**：对每个声明支持的代表模型绑定实际设备、fallback、权重/数据/训练配置，记录有限梯度、参数变化、更新数、loss 轨迹、验证任务指标和 checkpoint。需要支持续训的模型须在新进程恢复 model、optimizer、scheduler、Python/NumPy/CPU/CUDA RNG 及样本顺序，并比较恢复后的更新和状态。已有 Qwen 两 epoch/resume 属于固定源码、seed 与配置证据。
+4. **质量与 checkpoint**：为共同 held-out generation 任务先定数据隔离、指标、阈值/容差和样本范围；已有 17 条 JT/PT 输出对照无预设发布阈值，不能单独判质量 PASS。验证模型路径确实执行 activation recompute，以未 checkpoint 基线比较前向、梯度、更新和峰值显存；当前 shim 直接执行目标函数或单层重算证据不足以宣称模型级显存收益。
+5. **分布式与发布工程**：按公开支持范围完成默认 DDP/no_sync、collective、设备映射、rank 状态与错误传播验收，区分已过窄路径和未测能力；完成干净环境安装、wheel/package、依赖/入口和最小运行检查。
+6. **序列化契约**：保留并分别描述 Jittor 新进程从本身 checkpoint 成功恢复，与 stock PyTorch torch.load 无法读 JT portable-pickle optimizer.pt 的互操作失败。明确发布支持哪种格式/方向；若承诺跨框架读取，再单独修复并验收，不能由同框架 resume 推断互通。
+
+因此目前新增的是当前主树三个 CPU 回归分支的有限正向证据；Day4–5 与其余更广发布项仍未完成，overall release 保持 **Not complete**。
+
 ## 2026-10-31 `Tensor(existing)` storage alias 修复与 CPU core 复测
 
 本轮继续使用 `/home/cgq/jittor` 原工作区。测试时 HEAD 为 `ef21322dc9b38c89c2cbb07854ba65e8c442c025`，`origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，当前分支相对 origin ahead/behind `98/0`。仓库共有 103 项既有 dirty/untracked，index 起始为空；没有 clone、reset、stash、clean 或 push。CPU 测试绑定文件 SHA256：`compat/torch/frontend.py=d684c73e7f847f2b94b96502b06d47902dd585a7a70ffca927e83bc6b1e29e81`，`compat/tests/torch/test_independent_frontend.py=bcadc625554d15360da08fc657197d436df47cd7319d2d6271d65dd9d0f5106a`。

@@ -1,3 +1,11 @@
+## 2026-10-31 当前主树 R9 失败路径 CPU 定向复核通过；Day2–5 仍开放
+
+继续在 /home/cgq/jittor 既有工作区。测试绑定 HEAD 2e02c1e17ce8ff99d515b297c882125fa8b1dbec、origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（ahead/behind 99/0）。运行前后保留 103 项 dirty/untracked，status SHA256 83cebe9ab499bf7eac33eaf704f20dd58441ca5b7ee5bc662b560e6cd827fa2f；测试前后代码身份与工作树状态不变。
+
+针对 R9 Torch focused 的两个失败路径，在当前主树仅运行 3 个既有 CPU 节点：fill_/zero_ storage alias 与参数梯度、内部 FollowRuntime 常量写入、torch.Tensor(native) FollowRuntime alias。结果 3 passed、0 skipped、0 failed，2.88 s；JITTOR_NO_BUILD=1、CUDA 隐藏、use_cuda=0、复用已热 CPU core（SHA256 51845b1462d8f3beaf5f9c2034bd96363a2925b90ff1dcec2bbcf02f9aeb5818）。内部与公开 constructor 用例中的 fallback 守卫/计数未观察到 fallback。绑定 SHA256：frontend.py=d684c73e7f847f2b94b96502b06d47902dd585a7a70ffca927e83bc6b1e29e81，factories.py=e507eaf469942f1b4bb97621293eee98777d9879ba8adc8f3f372af4c7f8e2a6，autograd 测试=d079146c5e54aadde4bfd5015b29db60d3ca93be7eab9676edbaa265c8c4a092。原始证据在 /data6/cgq/jittor-lab/_state/test-suite/torch/20261031-r9-focused-cpu-main-042414-r3/；raw log SHA256 e74b8a13b7aaf1ad705c14c34b13f28279fe7e2f972478d9e12dfa93e56c331d，result JSON SHA256 430feb004d096a89001dcdf52f7732094da2f507e555c1e2c79d9df4ad12c5e6。
+
+这是当前主树的 3 项定向 CPU 证据；R9 隔离候选原 focused 仍记录 7 passed、1 skipped、2 failed（参数梯度为 None、FollowRuntime constructor placement 不符），不改写该结果，也不视为 R9 全组或全 core 通过。当前 CUDA 各卡没有同时达到正式窗口条件；GPU2/4 为 97%/95% 利用率、51,296/51,286 MiB 空闲，不能作性能/显存结论。Day4–5 仍需稳定窗口（≤10% 利用率、≥60,000 MiB 空闲、无无关计算 PID）、冻结匹配 workload 后至少 3 轮 JT/PT 交替且每轮每侧 ≥10 个热态样本；报告 load/首步/热态 latency 与 throughput 的 median/p95/离散度、allocator allocated/reserved、NVML 峰值和独立容量/OOM 边界。更广 Day2–5 仍需声明范围 API/device/dtype/layout/autograd/fallback、代表模型训练与新进程恢复、held-out 质量判据、模型级 checkpoint 重算和显存收益、DDP 范围、干净安装/打包与序列化互操作契约。Overall release 保持 **Not complete**。
+
 ## 2026-10-31 Torch `Tensor(existing)` storage alias 修复，CPU core 门通过；Day2–5 仍开放
 
 在服务器 `/home/cgq/jittor` 现有工作区继续，HEAD `ef21322dc9b38c89c2cbb07854ba65e8c442c025`，`origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，分支相对 origin ahead/behind `98/0`。工作区原有 103 项 dirty/untracked 保留；源码增量仅改兼容前端的一处构造分支和测试说明，状态只更新三份指定文档；未 clone、reset、stash、clean 或 push。
