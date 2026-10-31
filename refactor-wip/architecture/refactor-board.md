@@ -1,5 +1,14 @@
 # 整改看板
 
+## 2026-10-31 修正 HF checkpoint 反向梯度路径并续接 Day2–5 门禁
+
+继续在服务器既有 /home/cgq/jittor 工作区，HEAD bbb0e45f015a5bceb86886b26445e197709be659，fetch 后 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 89/0。既有 103 项 dirty/untracked 保留；当前新增的两项任务改动限于 checkpoint 实现与测试，任务前 index 为空；未 clone、reset、stash、clean 或 push。
+
+定位并修复 checkpoint backward 的一条真实梯度重复路径：重算目标原先直接乘上游 grad_output，令它仍沿原 checkpoint 输出保持可微，反向又穿回同一 tape。现在先 detach 上游梯度。attempt-43 的 LlamaDecoderLayer 诊断失败原件保留；修正后的 attempt-44 单层测试通过，attempt-45 checkpoint 专项文件 6 passed / 0 skipped。测试均为 CPU strict Torch shim、CUDA 隐藏、JITTOR_NO_BUILD=1；实际重算调用为 [1,0]，Llama 层输入与 q_proj.weight 梯度匹配未 checkpoint 基线。源码 fingerprint d0528c457f3185f8b07c83ffba76b8b94013e281a8edeea69df30dbe29055166，Jittor core SHA256 前后均为 6a21f70f357d767f12c136a81f9449fb3420245db8b18c99990f31f5fbf1ce05。
+
+最新设备快照 GPU2/4 利用率约 32%/32%，空闲 59,941/59,931 MiB；/ 可用 34 GiB，/data6 可用 5.5 TiB。没有本任务残留进程或 cache holder。Day4–5 正式性能/显存门仍不满足设备准入，本次没有计时或显存结论。checkpoint 层梯度通过也不等于完整 Llama 训练或显存收益验收；下一步需等待正式 GPU 窗口，继续闭合 API/device/dtype/autograd/fallback 矩阵、held-out 任务质量、新进程恢复、默认 DDP、序列化互操作及安装/打包发布门。Overall release 保持 Not complete。
+
+
 ## 2026-10-31 HF checkpoint 梯度路径验证与 Day2–5 门禁续接
 
 继续在服务器现有 /home/cgq/jittor 工作区，没有 clone、reset、stash 或 clean。当前 HEAD 为 f81f994266147c25c87135c7e00623dd2265a444；fetch origin/cgq_transformers 后远端为 e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 为 88/0。开始时的 103 项既有 dirty/untracked 均保留；本增量只涉及 checkpoint 兼容实现/测试及规定的三份状态文档。更新前 index 为空。代码回退并移除不稳定 Llama 层用例后，当前源码 fingerprint 为 a9fe576216918991e1d62eff0a981eff576c433ce077e619899de682096264e9；本任务文件 SHA256：data.py ce4660a1858d3c233a4aec40a7a9b18f0a2c540bfad92cf1d3b3128fe78a134b，checkpoint 测试 73a9f6548ecc4f0f1096c5be5271dab6fbaffab45902ea509248914cff58d767。

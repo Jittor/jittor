@@ -1,5 +1,16 @@
 # 2026-10-21 工作区快照与本机接续交接
 
+## 2026-10-31 最新接续：修复 checkpoint 反向重复路径，尚未完成显存与发布验收
+
+继续使用服务器现有 /home/cgq/jittor。当前基线 HEAD bbb0e45f015a5bceb86886b26445e197709be659；origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81 是祖先（ahead/behind 89/0）。不得重新 clone、stash、reset、clean 或 push。既有 103 项 dirty/untracked 必须保留；本任务只改 checkpoint 实现、对应回归测试和本交接指定的三份状态文档。
+
+最新功能增量为 compat/torch/installers/data.py 中将 checkpoint 上游 grad_output detach 后再构造重算目标，避免平方 loss 的上游梯度沿 checkpoint 原输出形成二阶回流。attempt-44 LlamaDecoderLayer 单层对照 1 passed；attempt-45 checkpoint 专项文件 6 passed、0 skipped，CPU strict shim、CUDA 隐藏、JITTOR_NO_BUILD=1。测试时源码 fingerprint d0528c457f3185f8b07c83ffba76b8b94013e281a8edeea69df30dbe29055166，Jittor core SHA256 前后均为 6a21f70f357d767f12c136a81f9449fb3420245db8b18c99990f31f5fbf1ce05。完整证据位于 /data6/cgq/jittor-lab/_state/release-day23/20261101-main-checkpoint-recompute-r1/attempt-44/ 与 attempt-45/；attempt-39 至 43 的失败与诊断日志继续保留。该结果只证明一层重算和一阶梯度，没有完整 Llama 训练、CUDA RNG 或显存收益测量。
+
+当前 GPU2/4 利用率约 32%/32%，空闲 59,941/59,931 MiB，未达到正式性能门槛；/ 剩余约 34 GiB，/data6 剩余约 5.5 TiB；测试结束后未发现本任务进程或 cache holder。正式 Day4–5 仍需同源码/权重/数据/配置、连续稳定 GPU 利用率 ≤10%、空闲 ≥60,000 MiB、无无关计算 PID、至少 3 轮交替 JT/PT 且每轮每侧 ≥10 个热样本，报告 load/首步/热态分布及 allocator/NVML 峰值，另测最大 batch/sequence 与 OOM 边界。
+
+后续发布门依次补齐声明范围 API/device/dtype/layout/edge/autograd/fallback，代表模型训练、梯度/更新/loss 与 held-out 质量，新进程 optimizer/scheduler/RNG/data-order 恢复，真实模型 checkpoint 梯度和显存对照，默认 DDP 最终 sentinel，JT/PT 共同 generation 判据、portable-pickle 互操作范围，以及安装/打包检查。Overall release 保持 Not complete。
+
+
 ## 2026-10-31 checkpoint 重算续接与剩余验收门
 
 当前服务器工作区仍为 /home/cgq/jittor，未重新 clone。HEAD f81f994266147c25c87135c7e00623dd2265a444；fetch 后 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 88/0。原有 103 项 dirty/untracked 必须保留；本任务当前仅有 compat/torch/installers/data.py、compat/tests/torch/test_torch_checkpoint_recompute.py 两项实现/测试修改，状态文档仅允许更新 architecture board、Day2–5 results、workspace handoff。不要 stash/reset/clean 或 push。

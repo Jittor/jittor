@@ -1126,7 +1126,7 @@ class _CheckpointRecompute(jt.Function):
                         "structure, shape, or dtype"
                     )
                 terms = [
-                    (output * grad_output).sum()
+                    (output * grad_output.detach()).sum()
                     for output, grad_output in zip(recomputed, grad_outputs)
                     if isinstance(output, jt.Var) and grad_output is not None
                 ]

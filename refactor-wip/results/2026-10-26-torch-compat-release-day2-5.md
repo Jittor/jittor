@@ -1,5 +1,18 @@
 # Torch Compatibility Release Acceptance: 2026-10-26 Day 2–5 Continuation
 
+## 2026-10-31 checkpoint 上游梯度依赖修复：LlamaDecoderLayer 与专项回归通过
+
+本轮继续在 /home/cgq/jittor 的现有工作区；测试绑定 HEAD bbb0e45f015a5bceb86886b26445e197709be659、分支 integrate/cgq-transformers-native-multicard-target，fetch 后 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（ahead/behind 89/0）。103 项原有 dirty/untracked 全部保留；本任务增加 data.py 和 checkpoint 测试两项修改，未碰其他既有文件。源码 fingerprint 测试前后为 d0528c457f3185f8b07c83ffba76b8b94013e281a8edeea69df30dbe29055166；文件 SHA256：compat/torch/installers/data.py 0a4d1c151a9de5e3d57da60117f156e8641b26febd7c63a4727914fef04c33c8，compat/tests/torch/test_torch_checkpoint_recompute.py 95c8bb71d46c6c8dd0a2a12ae22627eeb1f3dddc7b2e6c9401ebe08034f3f359。
+
+attempt-39/40/42/43 的 LlamaDecoderLayer 小型 CPU 对照显示：前向重算输出逐位一致，输入梯度一致，但 q_proj.weight 梯度达到基线 3 倍；attempt-43 确认同一 checkpoint context、函数和完全相同的 grad_output 回调了两次。根因是自定义 backward 构造重算标量目标时把上游 grad_output 保留为可微变量；对于平方 loss，它本身依赖 checkpoint 输出，于是产生回流路径。compat/torch/installers/data.py 现在用 grad_output.detach() 构造目标，保留其他反向梯度路径。
+
+修正后的 attempt-44 对单个 LlamaDecoderLayer 执行 strict Torch shim CPU 回归：1 passed / 0 skipped / 3.96s，no-grad 初始前向和反向重算各一次，输出逐位相同，输入与 q_proj.weight 梯度均与直接 forward 基线满足 rtol=2e-4、atol=2e-5。attempt-45 对整个 compat/tests/torch/test_torch_checkpoint_recompute.py 执行 6 passed / 0 skipped / 3.24s。两次均为 CUDA_VISIBLE_DEVICES=""、JITTOR_NO_BUILD=1；core SHA256 测试前后不变，为 6a21f70f357d767f12c136a81f9449fb3420245db8b18c99990f31f5fbf1ce05。attempt-44、45 的完整脚本、日志、源码清单、cache 清单与退出码保存在 /data6/cgq/jittor-lab/_state/release-day23/20261101-main-checkpoint-recompute-r1/attempt-44/ 和 attempt-45/；pytest.log SHA256 分别为 4decc1e8861e41baeba8600adac583493f1f21d1fc844e752ce10c6511785396、9f95054e3b81bbd0f7ed94314d3553dcce82772f7d5f0640f150e257bca91e87。attempt-39 至 43 的失败/诊断记录保留，不覆盖或改写。
+
+这证明当前 shim 在一个真实 HF Llama decoder layer 上进行一次 activation 重算并给出正确的一阶输入/权重梯度；没有验证完整 Llama 模型训练、CUDA RNG 路径、allocator/NVML 峰值或真实显存节省。Day4–5 正式门仍需冻结匹配的 JT/PT 源码、权重、数据和配置；等目标卡连续满足利用率 ≤10%、空闲显存 ≥60,000 MiB 且无无关 PID；完成至少 3 轮交替配对、每轮每侧 ≥10 个热态样本，报告 load/首步/热态 median、p95、离散度、allocator allocated/reserved 与 NVML 峰值，并单独测容量/OOM 边界。结束时 GPU2/4 利用率约 32%/32%，空闲 59,941/59,931 MiB，故没有启动性能测量。
+
+更广 Day2–5 尚需完成声明支持范围内 API/device/dtype/layout/edge/autograd/fallback 矩阵，模型真实训练/参数更新/loss 和 held-out 任务分数，新进程 optimizer/scheduler/RNG/样本顺序恢复，真实模型 checkpoint 梯度与显存对照，默认 DDP 最终 gate，共同 held-out JT/PT generation 判据，JT portable-pickle 与 stock PyTorch 的互操作边界，以及安装、打包和发布检查。R14 Qwen 训练/resume 与本次单层 checkpoint 通过不能替代其余门；overall release 仍 Not complete。
+
+
 ## 2026-10-31 checkpoint 重算 HF 梯度路径增量与未通过尝试
 
 代码在 compat/torch/installers/data.py 对 checkpoint no-grad 前向返回的 Torch 前端 jt.Var 调用 start_grad()，修复输出在外层 Torch Tensor 协议下未要求梯度的问题；内部重算仍使用默认 jt.grad 保留行为。compat/tests/torch/test_torch_checkpoint_recompute.py 当前保留四项通用回归和一项 Transformers GradientCheckpointingLayer 协议用例。当前代码/测试 SHA256 分别为 ce4660a1858d3c233a4aec40a7a9b18f0a2c540bfad92cf1d3b3128fe78a134b 与 73a9f6548ecc4f0f1096c5be5271dab6fbaffab45902ea509248914cff58d767；修改前源码 fingerprint a9fe576216918991e1d62eff0a981eff576c433ce077e619899de682096264e9。
