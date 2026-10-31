@@ -1,6 +1,14 @@
+## 2026-10-31 更正：当前主树 dtype 行为全模块 34/34 通过；旧 skip 说明已过时
+
+在当前 dirty 工作树 HEAD fead5cd02be5fdb333ecc99e30e472e832e743e9 上，完整运行 dtype 模块时通过 pytest collection hook 仅在内存中解开两个旧 unittest.skip 包装器；34 passed、0 skipped、0 failed，实际 A800 GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 / cuda:0，fallback 0→0，Jittor core SHA256 83d5c1a0ac0481afbdbd250e295807f5b7e9005504fae055a0c77bc5a37d8aff。包含 Var.long() 的 int64 cast 与 16 组 Torch dtype promotion 对，两个用例都经过 CPU/CUDA 分支。当前 installer 已覆盖这些语义；之前 skip 文案描述的是旧 native Var 行为，不代表当前 Torch shim 行为。
+
+原始未修改文件的 pytest 结果仍是 32 passed、2 skipped；本轮没有改测试/源码字节，只运行临时内存 hook 并保留日志。103 项既有 dirty/untracked 状态与 status SHA256 2307d0e94eb9b3bc7fba2ede6944fa17e077934dd2beedfee42190737f7ea25c 均未变化。证据 /data6/cgq/jittor-lab/_state/test-suite/torch-cuda/20261101-main-dtype-inmemory-unskip-cuda-r1/，adjudication SHA256 109ce722245f63f28631e4cff7177fd038c14db8078751c59d09a9e2010bdc20，manifest SHA256 ca598ffdc33920682f5f0b0394eaac2abd04880ca6bbc7f978204c75b5a238ea。两个磁盘 skip 标记仍待在后续源码/测试维护中清理，普通 suite 结果保持原样，不重写成未修改 suite 的 PASS。
+
+该结果关闭当前候选上的两个 dtype 行为疑点，但不是整个 Torch API 的 dtype/layout/autograd 兼容证明。接下来继续高影响未关闭项：模型级 activation recompute 与显存对照、任务质量标准、跨框架序列化契约、干净安装/发布 runner。Day4–5 正式性能/显存仍须合格稳定 GPU 窗口；overall release 仍 Not complete。
+
 ## 2026-10-31 接续：当前主树 CUDA dtype 定向门通过；seed823 生成未配对；Day2–5 仍开放
 
-继续在 /home/cgq/jittor 原工作区，HEAD 5d73e0fb9abdeccc46d9acdc21a93125ddb76f6d，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（ahead/behind 101/0）。保留 103 项既有 dirty/untracked；本轮功能验证前后工作树 status SHA256 2307d0e94eb9b3bc7fba2fede6944fa17e077934dd2beedfee42190737f7ea25c 不变；源码未改。收尾只更新三份状态文档。
+继续在 /home/cgq/jittor 原工作区，HEAD 5d73e0fb9abdeccc46d9acdc21a93125ddb76f6d，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（ahead/behind 101/0）。保留 103 项既有 dirty/untracked；本轮功能验证前后工作树 status SHA256 2307d0e94eb9b3bc7fba2ede6944fa17e077934dd2beedfee42190737f7ea25c 不变；源码未改。收尾只更新三份状态文档。
 
 当前主树 test_torch_compat_dtype.py 在真实 A800 GPU2（UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0，进程逻辑 cuda:0）34 项收集，32 passed、2 skipped、0 failed，fallback 0→0；jittor_core SHA256 83d5c1a0ac0481afbdbd250e295807f5b7e9005504fae055a0c77bc5a37d8aff，JITTOR_NO_BUILD=1，约 48.9 秒。两个已声明 skip 暴露 Var.long() 仍给 int32、混合 dtype 二元提升不符合 Torch lattice；其余 dtype object、工厂、转换、NumPy、数值范围和支持的提升子集通过。证据 /data6/cgq/jittor-lab/_state/test-suite/torch-cuda/20261101-main-dtype-cuda-current-head-r1/，adjudication SHA256 2f4101f357bf2fa419e5c4691962d817a22c1483fbe5a05f1883a467037583e3。
 

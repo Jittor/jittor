@@ -1,6 +1,14 @@
+## 2026-10-31 dtype skip 更正：当前 dirty 主树原测试体全模块 34/34 通过
+
+当前 HEAD fead5cd02be5fdb333ecc99e30e472e832e743e9、origin e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，工作树 103 项 dirty/untracked 与 status SHA256 2307d0e94eb9b3bc7fba2ede6944fa17e077934dd2beedfee42190737f7ea25c 保持不变。本轮没有修改源码或测试文件。
+
+在真实 A800 GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 的 cuda:0 上运行完整 dtype module，临时只在 pytest 收集时解开两个陈旧 skip：34 passed、0 skipped、0 failed，fallback 0→0，core SHA256 83d5c1a0ac0481afbdbd250e295807f5b7e9005504fae055a0c77bc5a37d8aff。被跳过的 .long() int64 cast 与 16 组 Torch promotion 矩阵均通过 CPU/CUDA 分支。普通未修改 suite 仍记录 32/2，因为源文件里的 skip 标记没有改；内存 hook 结果不能代替正式磁盘测试更新。
+
+证据 /data6/cgq/jittor-lab/_state/test-suite/torch-cuda/20261101-main-dtype-inmemory-unskip-cuda-r1/，adjudication SHA256 109ce722245f63f28631e4cff7177fd038c14db8078751c59d09a9e2010bdc20。Day4–5 正式性能/显存、activation recompute 实际收益、任务质量门、序列化互操作和干净安装/发布 runner 仍开放；目标继续 active，整体 release Not complete。
+
 ## 2026-10-31 接续：当前主树 dtype CUDA 窄门通过；seed823 generation 未形成配对结果
 
-工作区继续为服务器 /home/cgq/jittor，HEAD 5d73e0fb9abdeccc46d9acdc21a93125ddb76f6d，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（ahead/behind 101/0）。保留 103 项既有 dirty/untracked；功能验证前后 status SHA256 2307d0e94eb9b3bc7fba2fede6944fa17e077934dd2beedfee42190737f7ea25c 一致。本轮未改源码、未 push，仅更新三份状态入口。
+工作区继续为服务器 /home/cgq/jittor，HEAD 5d73e0fb9abdeccc46d9acdc21a93125ddb76f6d，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（ahead/behind 101/0）。保留 103 项既有 dirty/untracked；功能验证前后 status SHA256 2307d0e94eb9b3bc7fba2ede6944fa17e077934dd2beedfee42190737f7ea25c 一致。本轮未改源码、未 push，仅更新三份状态入口。
 
 新增当前主树真实 CUDA dtype module 证据：34 项收集，32 passed、2 skipped、0 failed，fallback 0→0；GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0、逻辑 cuda:0，core SHA256 83d5c1a0ac0481afbdbd250e295807f5b7e9005504fae055a0c77bc5a37d8aff。两个未关闭差异为 .long() 输出 int32 与混合 dtype binary promotion 未遵循 Torch lattice。证据 /data6/cgq/jittor-lab/_state/test-suite/torch-cuda/20261101-main-dtype-cuda-current-head-r1/。
 

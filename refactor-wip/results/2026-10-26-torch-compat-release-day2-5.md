@@ -1,6 +1,16 @@
+## 2026-10-31 更正：当前主树 dtype 功能全模块 34/34 通过；两个 skip 标记过时
+
+在当前工作树 HEAD fead5cd02be5fdb333ecc99e30e472e832e743e9、origin/cgq_transformers e5cffe1ae60c418f53c5bb1cdca9182577fd2b81 上，用 pytest collection hook 在单个进程内只解开 test_long_returns_int64_like_torch 与 test_promotion_full_torch_lattice 两个 unittest.skip 包装器，再运行原完整 compat/tests/torch/test_torch_compat_dtype.py：34 collected、34 passed、0 skipped、0 failed，2.406 秒。目标实际设备 A800 GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0、逻辑 cuda:0，Jittor 1.3.11.0、Pytest 7.4.4、Torch shim/CUDA 可用，fallback 0→0，core SHA256 83d5c1a0ac0481afbdbd250e295807f5b7e9005504fae055a0c77bc5a37d8aff，JITTOR_NO_BUILD=1。
+
+全模块包含两条旧 skip 的原测试体：Var.long() 返回 int64 的断言通过；16 组配置的 Torch binary promotion 矩阵在 CPU 与 CUDA 两分支全部通过。当前 compat installer 已有 cast 与 binary-promotion 包装；旧 skip reason 针对 Jittor 原生 Var.long/原生 mixed-op 行为，不能据此描述当前 Torch shim 行为。普通未修改 pytest 仍会因磁盘 skip 标记报告 32 passed、2 skipped；本轮没有改文件，也不把内存解 skip 的结果冒充成磁盘测试已更新。源文件哈希、HEAD、103 项 dirty/untracked 与 status SHA256 2307d0e94eb9b3bc7fba2ede6944fa17e077934dd2beedfee42190737f7ea25c 均保持基线。
+
+原始直接调用两个 skip body 的证据保留在 /data6/cgq/jittor-lab/_state/test-suite/torch-cuda/20261101-main-dtype-skipped-body-cuda-probe-r1/；更强的完整模块内存解 skip 证据位于 /data6/cgq/jittor-lab/_state/test-suite/torch-cuda/20261101-main-dtype-inmemory-unskip-cuda-r1/。后者 adjudication SHA256 109ce722245f63f28631e4cff7177fd038c14db8078751c59d09a9e2010bdc20，manifest SHA256 ca598ffdc33920682f5f0b0394eaac2abd04880ca6bbc7f978204c75b5a238ea。
+
+当前候选 dtype.cast 与所测 16 组 mixed promotion 行为得到实际 CUDA 证据；剩余工作不是把这两个 stale skip 当成运行时缺陷，而是在允许改源码/测试时清理 skip 元数据并让普通 suite 如实报告。更广 Day2–5 仍需对 activation checkpoint 确认目标函数真实重算及显存收益、定义/验证任务 held-out 质量门、明确 JT portable-pickle 与 stock PyTorch 的互操作承诺、通过干净安装和正式 runner。Day4–5 仍要在匹配配置及合格 GPU 窗口做至少三轮 JT/PT 交替、每轮每侧至少十个热态样本，并报告 load/首步/热态、median/p95/离散度、allocator/NVML 峰值和 OOM 边界。overall release 仍 **Not complete**。
+
 ## 2026-10-31 接续：seed823 generation 有界尝试未配对；当前主树 CUDA dtype 32/34 通过
 
-继续在 /home/cgq/jittor 原工作区，HEAD 5d73e0fb9abdeccc46d9acdc21a93125ddb76f6d，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（ahead/behind 101/0）。本轮测试前后保留 103 项既有 dirty/untracked，status SHA256 2307d0e94eb9b3bc7fba2fede6944fa17e077934dd2beedfee42190737f7ea25c 不变，源码未变；仅更新三份既有状态文档。
+继续在 /home/cgq/jittor 原工作区，HEAD 5d73e0fb9abdeccc46d9acdc21a93125ddb76f6d，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（ahead/behind 101/0）。本轮测试前后保留 103 项既有 dirty/untracked，status SHA256 2307d0e94eb9b3bc7fba2ede6944fa17e077934dd2beedfee42190737f7ea25c 不变，源码未变；仅更新三份既有状态文档。
 
 ### 新增当前主树 dtype 功能证据
 
