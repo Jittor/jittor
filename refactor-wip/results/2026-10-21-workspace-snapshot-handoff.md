@@ -1,3 +1,14 @@
+## 2026-11-01 06:37 +0800 handoff：wheel 基线源码已恢复；逐项迁移审阅继续
+
+工作区 /home/cgq/jittor，branch integrate/cgq-transformers-native-multicard-target，HEAD 72a08b2237ff4164fe5f5786a28cb70fb5d2cf6e；origin e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 139/0。编辑前 102 项既有 dirty/untracked porcelain SHA256 为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，index 为空。
+
+本轮没有运行 GPU 测试或性能任务。R3 wheel 候选的 1095 个源码成员与当前工作树一致；固定 wheel 基线的 1028 个源码成员与 Git 提交 f66e2458a748a5814f28ca4705753ec29b330311 一致。离线重建 wheel 1033 个成员，和固定基线仅 WHEEL、RECORD 生成哈希不同。迁移差异仍为 69 additions、302 fixed-baseline content changes、2 removals；对比重建 wheel 则为 69 additions、301 项成员内容变化（含包元数据）和 2 removals，差一项来自原 wheel 的 WHEEL 生成器元数据。Nox 仍 rc=1，baseline allowlist 没有更改。证据根目录：/data6/cgq/jittor-lab/_state/release-day23/20261101-wheel-baseline-rebuild-r5-prepared/。
+
+两项 ACL 脚本删除在 e7bf82046 有 native Sigmoid、SigmoidBackward 与 Transpose 替代注册，并保留前向/梯度测试；ACL 未构建，因此只记为静态迁移复核。后续先逐域审阅 CUDA RNG/graph/step capture、AMP/optimizer/DDP、profiling/memory、ACL 和核心 C++ 内容变化，并把每项绑定现有测试或明确列为待测；再决定是否更新迁移 allowlist。不要以当前源映射结果替代功能验收。
+
+GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 仍由 yqa PID 3590512 占用约 8640 MiB，计算模式 Default，最新采样 util 约 87%。普通占卡进程无法排除其他用户，未启动 burner。待管理员/调度器分配 UUID/GRES 与设备 cgroup 独占租约后，再执行 Day4–5 正式 PT/JT 对照、近容量/OOM 恢复和真实 activation recompute checkpoint on/off。多 rank DDP、held-out generation、clean CUDA 安装等门仍开放，整体 release Not complete。
+
+
 ## 2026-11-01 06:21 +0800 handoff：声明支持矩阵与 dtype 复验通过；GPU2 仍共享
 
 继续工作目录 `/home/cgq/jittor`，分支 `integrate/cgq-transformers-native-multicard-target`，基线 HEAD `09c4989e90c5cb7bc97c551cba98ad9c0891869d`；origin `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `138/0`。本轮在 runtime source fingerprint `ae682fe34dec0cf62e74f5dd3546c8c77dd7d97f23f03f7a4d4b7d11558f2499` 上修改两个测试文件、更新本 handoff 与唯一看板/Day2–5 报告；更新前 index 为空，原有 dirty/untracked 文件均保留。

@@ -1,3 +1,32 @@
+## 2026-11-01 06:37 +0800 wheel 基线源码重建与迁移差异审阅
+
+### 工作区与复核范围
+
+当前 /home/cgq/jittor 分支为 integrate/cgq-transformers-native-multicard-target，HEAD 72a08b2237ff4164fe5f5786a28cb70fb5d2cf6e；刚 fetch 的 origin 为 e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 139/0。文档修改前 102 项既有 dirty/untracked porcelain SHA256 仍为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，暂存区为空。当前没有本任务测试、编译或 benchmark 进程。
+
+### wheel 基线内容恢复
+
+R3 原候选 wheel 来自 /data6/cgq/jittor-lab/_state/release-day23/20261101-package-gates-current-main-r3-prepared/，SHA256 b781df9ffa346a03f272dd88cc3f665956546a751f58b3fd468529e9c80a4c02；构建身份仍为 HEAD e46586b26c16c646465b766d8c31dc159aecd00b 加当时 102 项 dirty/untracked 状态 SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211。
+
+固定基线清单 wheel-contents-final.txt 的 1033 个成员中，1028 个源码/资源文件哈希与 Git 提交 f66e2458a748a5814f28ca4705753ec29b330311 的对应树文件逐项一致；余下 5 个是生成的 dist-info 元数据。用现有 packaging venv（Python 3.11.3、setuptools 83.0.0、wheel 0.45.1）从该 Git 快照离线重建出的 wheel SHA256 为 6f6a1bb8c90d179a1437ef5a49dd0125ab94eed77bcdf89c6d57fce5658552dc，路径数为 1033。对照固定基线得到 0 additions、0 removals、2 个内容哈希差异，仅 WHEEL 与 RECORD；故源码基线已恢复，原始 wheel archive SHA 09aa1156c2d41fc63d45c0a5281d4fbd4630891da4d785e729c93c2548215848 本身仍未找回，构建元数据差异保留为已知边界。
+
+候选 wheel 的 1095 个源码/资源成员全部与当前 /home/cgq/jittor 工作树一致，0 个源码哈希差异、0 个来源文件缺失；另外 5 个成员为构建生成的 dist-info。修正 ACL 父包 jittor/backends/__init__.py 的路径映射后完成此核验。
+
+原 Nox R3 使用 pin 住的基线比较候选，仍为 69 additions、302 content changes、2 removals，0 项获批准，rc=1。以恢复的 f66e wheel 与候选直接比较为 69 additions、301 content changes、2 removals，rc=1；两种差异计数相差的一项是原固定基线的 WHEEL 生成元数据哈希，候选与重建 wheel 的 WHEEL 字节一致。当前完整清单在 /data6/cgq/jittor-lab/_state/release-day23/20261101-wheel-baseline-rebuild-r5-prepared/rebuilt-baseline-to-current.tsv，SHA256 223a8e7c9e59ce06b0fb379cd88a56e094b3b2a0a84c949b745dbe4df9285108；旧基线重建比较日志 SHA256 5645519dc377023142bc021d541181b5646693b8ecf58892b24e6cbe036fc856，当前候选比较日志 SHA256 1a0a8adff47d9ee19f44bdc4691f8f947ea5d38cc75ff8e43561401d7dc1dada。源映射摘要和两版比较产物分别保存在 20261101-wheel-baseline-source-reconstruction-r4-prepared/ 与 20261101-wheel-baseline-rebuild-r5-prepared/。
+
+官方 PyPI sdist SHA256 7555e2cf624febed57722aa308c8846384ec3ede9659c93e4605dfd115d6890c 不是这份 wheel 基线的源码版本，因此未用于重建。pip cache 中 SHA256 3e6af554f3ee2ebd0243a2edff52b29aeb59d89558be2f3f08e2a5b7bb063b14 的 wheel 有 1100 个成员，与 R3 候选只差 var_holder.cc 和 RECORD 两项，属于候选侧内容，也不是旧基线。
+
+### 两项 ACL 移除的静态复核
+
+固定基线中移除的 jittor/backends/acl/kernels/ops/sigmoid_op.py 与 transpose_op.py 是提交 e7bf82046 将剩余 CodeOp 提升为原生算子的迁移。当前 backends/acl/kernels/native/sigmoid_op_acl.cc 提供 Sigmoid / SigmoidBackward runner，transpose_op_acl.cc 提供 Transpose runner，均列在 backends/acl/__init__.py 的 CORE_SOURCES。tests/backends/acl/test_aclop.py 保留 sigmoid、sigmoid-grad、transpose、transpose-grad 用例。当前 ACL 后端未构建，这些调用路径本轮没有硬件运行；静态核查说明迁移意图与接线，不能替代 ACL 功能验收。
+
+本轮没有修改 wheel-additions-final.txt、wheel-content-changes-final.txt 或删除 allowlist。69 个新增和 301 项成员内容变化（含 dist-info 包元数据）仍需按功能域审阅，并绑定已有覆盖证据；迁移 gate 保持 open。
+
+### 本轮资源与 Day4–5 状态
+
+06:35 +0800 preflight 中 GPU2 仍为 Default，yqa PID 3590512 使用 8640 MiB，利用率约 87%；未启动占卡进程或性能任务。root 分区可用 69 GiB，/data6 可用 5.5 TiB。进程检查没有本任务的 pytest/nox/Jittor 编译任务。当前 GPU2 不可作为稳定独占窗口；正式性能/显存验收仍需管理员或调度器提供 UUID/GRES 与设备 cgroup 租约，并由 PT/JT 测试本身在整个窗口内持有设备。其余 Day2–5 与 Day4–5 发布门维持未完成。
+
+
 ## 2026-11-01 06:21 +0800 主树声明支持矩阵与 dtype 覆盖复验；GPU2 独占不可用
 
 本轮在 `/home/cgq/jittor` 当前主树 HEAD `09c4989e90c5cb7bc97c551cba98ad9c0891869d` 上继续推进 Day2 支持矩阵。运行绑定 runtime source fingerprint `ae682fe34dec0cf62e74f5dd3546c8c77dd7d97f23f03f7a4d4b7d11558f2499`，测试文件变更及哈希列于下。测试使用隔离 `JITTOR_HOME`、TMP/HOME/XDG/CUDA cache，CUDA_VISIBLE_DEVICES 指向物理 GPU1 UUID `GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068`，进程内逻辑 `cuda:0`；不是 GPU2 性能测量。

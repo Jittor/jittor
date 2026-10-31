@@ -1,3 +1,16 @@
+## 2026-11-01 06:37 +0800 恢复 wheel 基线源码；Day4–5 仍待独占 GPU
+
+当前工作区 /home/cgq/jittor，分支 integrate/cgq-transformers-native-multicard-target，HEAD 72a08b2237ff4164fe5f5786a28cb70fb5d2cf6e；fetch 后 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 139/0。文档编辑前保留的 102 项既有 dirty/untracked 状态 SHA256 为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，index 为空。06:21 条目记录的是当时提交前的 HEAD；本条给出后续实际状态。
+
+本轮把 wheel 基线成员与 Git 历史源码对齐：现行 1033 项基线中，1028 个源码/资源成员的 SHA256 全部匹配提交 f66e2458a748a5814f28ca4705753ec29b330311；从该提交离线构建的 wheel 有 1033 项，和基线仅 WHEEL、RECORD 两个生成元数据哈希不同。候选 R3 wheel SHA256 b781df9ffa346a03f272dd88cc3f665956546a751f58b3fd468529e9c80a4c02，1095 个源码/资源成员逐项匹配当前工作树，5 个 dist-info 成员由构建生成。候选相对固定基线仍有 69 additions、302 content changes、2 removals；Nox 迁移门仍失败。
+
+两项移除 sigmoid_op.py 与 transpose_op.py 来自 ACL CodeOp 到 native runner 的提交 e7bf82046，分别有 sigmoid_op_acl.cc、transpose_op_acl.cc 实现并由 ACL CORE_SOURCES 注册；现有 ACL 测试含前向与梯度用例，但当前候选环境未构建 ACL，因此只完成静态替代核查，不记设备验证或 release approval。未改 baseline allowlist。
+
+GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 仍为 Default，yqa PID 3590512 占用 8640 MiB，06:35 左右采样利用率 87%。没有启动占卡 burner。root 分区可用 69 GiB，/data6 可用 5.5 TiB；未发现本任务 pytest/nox/Jittor 编译进程。
+
+下一步按功能域审阅 69 个新增与 301 项成员内容变化（含 dist-info 包元数据），优先 CUDA RNG/graph/step capture、AMP/optimizer/DDP、profiling/memory 和 ACL native 接线，并逐项关联现有测试或补缺口，再决定 allowlist。多 rank DDP、held-out 任务质量、clean CUDA 安装、近容量/OOM、真实 activation recompute 与正式性能/显存门仍未关闭。整体 Day2–5 release 保持 Not complete。
+
+
 ## 2026-11-01 06:21 +0800 当前声明支持矩阵与 dtype 门通过；GPU2 无独占
 
 当前工作树 `/home/cgq/jittor`，分支 `integrate/cgq-transformers-native-multicard-target`，HEAD `09c4989e90c5cb7bc97c551cba98ad9c0891869d`；`origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `138/0`。文档更新前 porcelain 为 104 项（原有 dirty/untracked 加本任务两个测试文件），SHA256 `5defff99a3dead581f87850dda3a6ec7443d0d15e621115ea8ddcc2e3fc7a2a3`，暂存区为空。只改动本任务的两个支持矩阵测试和本看板、Day2–5 报告、handoff 三份既有状态文档；不 push。
