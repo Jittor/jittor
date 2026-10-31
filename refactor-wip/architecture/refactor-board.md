@@ -1,3 +1,17 @@
+## 2026-10-31 续验：R36 证明当前 wheel CUDA checkpoint 重算；共享负载拒绝后仅完成 on 单侧
+
+在既有 /home/cgq/jittor 工作区继续，无 clone 或源码改动。R36 绑定 HEAD 487a82e8d8025c0a7458186e464acc0f76e0ac10、源码指纹 0382368b8754bf7a90e42382fd66b603ed2d3f323b5e8cda4820425871c7aa50，预实验时 102 项既有 dirty/untracked 状态 SHA256 为 be3ed51168de9922dd80cebe3e134b11967ae95bb5ec4aee986d97f6fa4f071c。R35-r3 的导入审计已由事后审计确认：shim、Transformers、Jittor 与当前 wheel core 绑定正确，CUDA runtime enabled；runner 仅因 compatibility torch namespace 不提供 torch.__file__ 而在写报告时失败，没有加载模型、前向或启动 kernel。R35-r3 不重试。
+
+R36 使用当前 wheel/core、Transformers 4.56.2 LlamaForCausalLM 六层 FP32 随机初始化模型（seed 821，hidden 384，intermediate 1024），固定合成 batch 4 × sequence 512 与 AdamW lr=1e-4，在物理 A800 GPU2（UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0，逻辑 cuda:0）开启 Transformers gradient_checkpointing_enable()。单侧阶段实际观测到六层均为 [no_grad forward, backward recompute]，fallback=0，首个 loss 6.312356、梯度 L2 2.274081、更新 L2 0.331624，随后完成 10 个训练热步。热步 median/p95/std 为 46.529/47.177/0.536 ms；allocator 峰值 allocated 增量 1,403,671,552 bytes、reserved 增量 6,291,456 bytes，NVML 进程峰值 2,160,066,560 bytes。首步 227.745 s 含首次 JIT 编译，不能与热步混读。随机 workload 只支持 CUDA 重算/更新功能证据，不代表任务质量。
+
+round-01-off 启动前复查 GPU2 利用率为 28%（门槛 ≤10%），空闲 81,038 MiB、无可见 compute PID，控制器拒绝启动并停止整个单次 campaign；未重跑。R36 状态为 INCOMPLETE_ADMISSION_REJECTED_AFTER_STAGE1，只有 on 单侧，不构成 checkpoint 显存节省或 on/off 速度结论。证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261031-checkpoint-cuda-resource-r36-llama-pair-prepared/attempt-01/；posthoc audit SHA256 788e4aba7a625fba97ea0b3e1d096f5f086d44ab4352432747980d04fde72c91，on worker result SHA256 f872e43cc84d8433d91112050aa6f5014064c022ddc6c4f58bb38b1ca2e69f33，evidence manifest SHA256 84fbb1f0b49752f83e979897e46e512f18c8016ddd3bff52e5231585d43d64c5。R36 私有 cache 新增 264 项并只改变 lock 元数据；R35 私有保护 cache 前后 manifest SHA256 同为 134fb35833b7400d3a8a0b8acddaaff4278bf8c42a8b66c657f3709861e7e5fc。工作区源文件未改，既有 dirty 状态在实验后仍与上述预实验 SHA 一致。
+
+共享 GPU2 目前没有可由当前账户申请的 Slurm 独占租约：调度器将当前主机 X12DPG-OA6 的 A800 节点标为 down；空闲的 A100 节点 cn2 是另一台机器。没有启动显存占用或持续 kernel 的 burner；它不能阻止非协作任务，且会挤压共享作业。后续性能阶段只能在 GPU2 满足准入时运行，或由集群管理员提供该节点的正式独占 reservation。
+
+Day4–5 仍需匹配配置的 JT/PT 三轮交替正式时延/显存 cohort、近容量与 OOM/恢复，以及至少 checkpoint on/off 三轮配对；更广 Day2–5 仍需支持矩阵、统一候选 held-out 指标与训练恢复、DDP Trainer 多 rank checkpoint、序列化互操作契约、clean wheel/sdist 安装和 baseline migration review。Overall release 继续 **Not complete**。
+
+---
+
 ## 2026-10-31 续验：R35 checkpoint CUDA 预检未通过启动绑定；Day4–5 与更广发布门仍开放
 
 R35-r1 的导入探针误用了默认 JITTOR_HOME 和全局 cache，因 libstdc++ ABI 不符在模型启动前失败；原件保留，生成的 48 MiB 全局 cache 未删除或复用。R35-r2 改用 R21 已审计的 bwrap 隔离方式，把 64 MiB R21 私有 cache 复制到新目录并绑定到原绝对 JITTOR_HOME。R21、R19 与 R35 副本中的 CUDA 12.4 core SHA256 均为 `050c612d6b29bb952c4debccc7eb791f1704e3c8a2040723cb352cbda789f986`。但启动器漏传 R21 的 `cache_name` 和 `use_cuda` 配置，Jittor 因而解析到 `default/cfgd436a523`，与绑定的 `jittor_torch_r19_current_wheel_20261031/cfgecf1a63a` 不同；`JITTOR_NO_BUILD=1` 正确阻止了重编，尚未完成 import。没有模型、前向、GPU kernel 或 benchmark。
