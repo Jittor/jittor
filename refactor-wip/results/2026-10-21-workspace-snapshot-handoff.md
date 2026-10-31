@@ -1,3 +1,9 @@
+## 2026-11-01 07:29 +0800 handoff：gloo public backend 查询差异已实证；GPU2 等待系统级独占
+
+单进程 CPU public API 探针请求 gloo 后，`get_backend()` 实际返回 mpi；init/destroy 状态正常、fallback=0。backend 状态缺口已由真实 API 路径确认，不只是 fake group 单测观察。计划、JSON、日志、源文件哈希与 runner 行尾问题见 Day2–5 报告 07:29 和 `/data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-dist-single-gloo-r1-prepared/`。
+
+GPU2 当前仍是 `Default`，由 yqa PID 2279286 使用约 8640 MiB；承载该卡的 `X12DPG-OA6` 在 Slurm 中为 `DOWN`。普通占卡进程无法保证其他用户不能运行，本轮未启动 burner。Day4–5 需管理员恢复节点并提供 GPU UUID/GRES 与设备隔离的独占租约后再测。整体 release 仍 **Not complete**。
+
 ## 2026-11-01 07:24 +0800 handoff：CPU BF16 moment 差异未改变本例 50 步参数/loss
 
 CPU-only trace r2 确认 restore 后参数和两个 moment 初值、下一步梯度相同；下一步后 BF16 参数相同，但 exp_avg_sq 有 6.6765e-05 差异。追加 50 个合成 CPU BF16 AdamW 更新后，两条参数轨迹每步完全一致，平方和 loss 同为 17.62965→5.39487，fallback=0；FP32 moment 仍有不超过 4.4489e-04 差异。原 pytest FAIL 留存，按当前目标作为局部低优先级状态数值差异，不外推为广泛无害。完整摘要与哈希见 Day2–5 报告 07:24 和 /data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-cpu-bf16-optim-restore-trace-r2-prepared/、...optim-restore-continuation-r1-prepared/。

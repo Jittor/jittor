@@ -1,3 +1,13 @@
+## 2026-11-01 07:29 +0800 单进程 gloo 后端查询复现；GPU2 无法由用户态独占
+
+证据采集时主树 HEAD `577595f83d5868f07561f85a0f0521ac93a2c645`，`origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `145/0`；原有 102 项 dirty/untracked porcelain SHA256 仍为 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`，暂存区为空。本轮没有改运行时代码或测试，只新增 CPU API 诊断并更新状态文档。
+
+单 rank CPU public API 探针请求 `backend="gloo"`，经 `torch.distributed.init_process_group(rank=0, world_size=1, store=FileStore)` 初始化后，`torch.distributed.get_backend()` 和默认 world group 都报告 `mpi`；内部 API state 只有 `initialized`、`store`，没有保存请求的 backend。fallback 增量为 0，初始化状态按 false→true→false 完成。该结果直接确认单进程 gloo backend 查询契约失败，保留为 Day2 功能缺口。
+
+GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 在 07:26 +0800 由 `yqa` PID `2279286` 占用约 8640 MiB，compute mode 为 `Default`；`X12DPG-OA6` 在 Slurm 中为 `DOWN`（unexpected reboot），cgq 无法在此节点取得 GRES 独占分配。普通占卡程序不能阻止其他 CUDA client，也无法安全赶走当前进程，因此本轮未创建或启动 burner，未调整设备模式。要保证测试期间独占，需管理员恢复节点并提供按 UUID/GRES 的独占分配及设备隔离；这也是正式 Day4–5 的前置条件。
+
+下一步仍需完成 backend state 修复与 public API 回归、真实多 rank DDP、held-out 任务质量、wheel migration 审阅，以及取得系统级 GPU 独占后进行 Day4–5 正式性能/显存验收。整体 release 仍为 **Not complete**。
+
 ## 2026-11-01 07:24 +0800 CPU BF16 optimizer restore 差异已作功能影响分层
 
 主树 HEAD 为 5845f10ebb1f7ea424adb57c4c4a94c21bdd2e70，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 144/0。原有 102 项 dirty/untracked porcelain SHA256 仍是 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，暂存区为空；本轮没有改源码或测试。

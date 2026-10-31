@@ -1,3 +1,21 @@
+## 2026-11-01 07:29 +0800 public 单 rank gloo 查询返回 mpi；GPU2 独占请求受节点状态阻断
+
+### 执行身份与 CPU public API 结果
+
+证据采集时工作树 `/home/cgq/jittor`，branch `integrate/cgq-transformers-native-multicard-target`，HEAD `577595f83d5868f07561f85a0f0521ac93a2c645`，`origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `145/0`。原有 102 项 dirty/untracked porcelain SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211` 未变；index 为空。未改源码/测试。
+
+新增一次有界 public API 探针，runtime 为 Jittor/Torch shim `1.3.11.0`，CPU only，`CUDA_VISIBLE_DEVICES=""`，`JITTOR_TEST_DEVICES=cpu`，`JITTOR_TORCH_SHIM=1`，rank 0/world size 1，使用 `FileStore`，120 秒上限、零重试。执行 `init_process_group(backend="gloo", rank=0, world_size=1, store=...)` 后初始化成功，但 `torch.distributed.get_backend()` 返回 `mpi`，默认 world group backend 也是 `mpi`，与请求 `gloo` 不符；installer state keys 仅 `initialized` 与 `store`，backend 为 null/未保存。销毁后 `is_initialized()` 为 false，backend fallback 计数前后均为 0。CPU suite 既有 state assertion failure 与此次真实 public API 观察一致，确认这是单 rank backend 状态契约缺口，不能记为通过。
+
+探针计划 SHA256 `93482adf5cded0ad83ce1dd3765ea826c8638478ad961e46c45b96e130f2a008`；探针脚本 SHA256 `546ae44105b1a8db5f52ecd1aa13312c2032518050727c0415e11787937b5e8c`；public API installer 文件 SHA256 `3a374332a539cd862bea1ac9a34e0febe6bc4392ffb2aecf4683d823aea276e6`；相关既有测试文件 SHA256 `9ebe628f3109ec220c231d115dd718788d3a4046cfdfc51b674852ad70394eca`。`result.json` SHA256 `2ec5007a3eaa6cde1ae8a4e06048226c3d55f3ecc15b918127da5bdb8f3249f3`，`stdout.log` SHA256 `4e0e7bd52893bc4304789f80803fd6b28398a7da3e7fb59a85a5ede3727f44da`；SHA256 清单逐项校验通过。原件目录：`/data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-dist-single-gloo-r1-prepared/`。
+
+探针自身在 `exit_code.txt` 记录为 0，JSON 状态为 `completed`。外层 runner 因 Windows 上传的 CRLF 行尾在最后 `exit "$code"` 报 shell 参数错误并返回 1；结果、日志和各自产物均已写完并校验，故未重复运行探针。该 wrapper 格式问题与 API 观察分开记录，不掩盖探针结果。
+
+### GPU2 排他条件核查
+
+07:26 +0800 采样中 GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 是 NVIDIA A800 80GB，compute mode `Default`，`yqa` 的 PID `2279286` 占用 8640 MiB；同一节点其他 GPU 也存在多个用户进程。Slurm 显示 `X12DPG-OA6` 状态 `DOWN`、原因 `Node unexpectedly rebooted`，分区 `a800/all`，当前没有可在该节点申请的作业。账户侧无法用普通 CUDA holder 禁止他人创建 context，也不能用 burner 踢走现有进程；本轮未启动占卡程序、未杀进程、未改 compute mode。若要在 PT/JT 测试期间保证无其他进程，需管理员恢复节点并用 GPU UUID/GRES 与设备 cgroup 进行独占预留，测试本身在该租约内运行。
+
+此前 R14 训练证据、GPU1 功能回归、CPU BF16 差异分层均不替代此门。Day4–5 仍需匹配配置下至少三轮交替、每侧每轮至少十个热态样本，报告 median/p95/离散度、加载/首步/热态时间、吞吐及 allocator/NVML/RSS 峰值，并完成近容量/OOM 恢复和真实 activation recompute 对照。正式性能/显存门及整体 Day2–5 release 继续 **Not complete**。
+
 ## 2026-11-01 07:24 +0800 CPU BF16 AdamW restore 差异分阶段诊断
 
 ### 执行身份与启动修正
