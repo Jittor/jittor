@@ -1,3 +1,25 @@
+## 2026-10-31 继续：optimizer CUDA 模块门通过；checkpoint recompute 与生成证据补录
+
+本轮验证开始时工作区为 /home/cgq/jittor，HEAD 91e11f8a3dfbcc18dd182a07327fc995c4c482c2，fetch 后 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 107/0。文档写入前 105 项 dirty/untracked 与前序用户工作原样保留，index 为空。结果与门禁更改已作中文提交，提交后 ahead/behind 为 108/0；没有 reset/stash/clean 或 push。
+
+### CUDA optimizer 模块门
+
+之前 r5 的两条动态 CPU/CUDA 用例虽通过，但因 pytest accelerator 计数器只看 nodeid 而返回 rc=1。本轮扩展 tests/_helpers/pytest_policy.py::_is_accelerator_case，识别显式 accelerator markers，并在 tests/structure/test_hardware_gate_matrix.py 覆盖 marked/unmarked 动态设备扫描。CPU policy 单测 1 passed。为两条实际遍历 CUDA 的 optimizer 用例加上 cuda marker；在物理 GPU2（A800 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0，本进程 cuda:0）、JITTOR_NO_BUILD=1、CUDA core SHA256 83d5c1a0ac0481afbdbd250e295807f5b7e9005504fae055a0c77bc5a37d8aff 上完整运行 compat/tests/torch/test_torch_compat_optim.py，结果 27 passed、0 skipped、89.02 秒、rc=0。CUDA 设备循环前后 fallback counter guard 均未触发。测试时该文件 SHA256 4952a3179dbbbb8cab7da0a73c07f44c728fd7310634836c3068cf7b8358a876；它还包含本轮开始前已有的 dirty optimizer 修改，本次没有把整个文件当作本任务改动暂存。
+
+CPU policy 回归产物 /data6/cgq/jittor-lab/_state/test-suite/torch/20261031-accelerator-marker-policy-cpu-r1-prepared/；完整 optimizer CUDA 产物 /data6/cgq/jittor-lab/_state/test-suite/torch-cuda/20261031-optim-placement-full-cuda-r1-prepared/，result SHA256 13ca33e33f0d3ce99515315b48d192a653fbe5a9112cc74bf769d01c9731a8ce，manifest SHA256 3048570b2cac1cb5488a112a3c5f2051de2a7fdfb09e4970e0e48c77c093763。之前 r5 的 gate 失败原件及启动失败尝试都保留，没有覆盖。
+
+### activation checkpoint 与 held-out generation
+
+复核发现当前 compat/torch/installers/data.py 的 _CheckpointRecompute 会在原 forward 的 no-grad 范围执行函数，并在 grad 中重算，然后对输入和捕获的模块参数求梯度；文件 SHA256 0a4d1c151a9de5e3d57da60117f156e8641b26febd7c63a4727914fef04c33c8。此前记录“shim 直接执行目标函数、没有证明 recompute”已被实际 CUDA 功能证据 supersede：保存的 LlamaDecoderLayer 用例在 A800 GPU2 上 1 passed，观测 tensor 与线性层参数全在 cuda:0，调用序列为 forward no-grad 后 backward recompute，重算输出 max_abs=0，输入/权重梯度有限并满足 rtol=2e-4、atol=2e-5，fallback 0→0。probe 时 source identity 经 post-hoc 审计，确认当时变化仅涉及三份状态文档，executable source/test inventory 未改变；实现文件与测试文件当前 SHA 分别为 0a4d1c151a9de5e3d57da60117f156e8641b26febd7c63a4727914fef04c33c8、95c8bb71d46c6c8dd0a2a12ae22627eeb1f3dddc7b2e6c9401ebe08034f3f359。证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261030-main-qwen-checkpoint-recompute-practical-r1/evidence/cuda-checkpoint-llama-attempt04/，其中清单 SHA256 43c3b6f1c9dc74ca7543c47efd51e57a8bd90b77c3eef0c113b1d5176511d4ce。同目录 Qwen seed821 full 训练报告记录 gradient_checkpointing=true。这证明了代表 decoder 层的 recompute 与梯度功能，但没有 on/off 受控峰值显存对照，不能得出显存节省或速度代价结论。
+
+已有的 Qwen seed821 held-out 生成配对证据位于 /data6/cgq/jittor-lab/_state/release-day23/20261030-main-qwen-checkpoint-recompute-practical-r1/evidence/heldout-generation-r1/。绑定 source HEAD fcebf8748b1e7a8667f96313a0b42bd226cfd9ab、source fingerprint 9ebffa322d64e4bbad6a4eb6959c3756410a5cccfcaee6bf661571c1a074b27f、Qwen3-0.6B base revision c1899de289a04d12100db370d81485cdf75e47ca、eval SHA256 d8318478c8991e75ba5cac474e1f3dfe95c0478da49ad8b2a8909c72fb72f84f、train SHA256 3836597b696a3b79b81ac9f34bc79ce9a4d06cf6e8bf204aabf48dc5d924ecf0 及 GPU2 cuda:0。17 条 greedy 生成（总长上限 96，FP32）中，JT/PT exact match 均为 0；JT/PT token-F1 为 0.2045338135/0.2087182159，ROUGE-L 为 0.1483792414/0.1493412350，raw prediction 完全相同 14/17，JT fallback 0。配对汇总 SHA256 9f00c790528e5455c6d59a51fc7c97944a33b69ae3bd6d11fec8a3c457d9fcdb。该评估为 Alpaca train split 中与所选训练 ID 不相交的 17 条小样本观察，无预设发布阈值，也没有 latency/memory 含义；绑定历史 source，不能自动转移为当前 HEAD 或 R14 隔离快照的质量通过。seed823 旧候选 generation timeout 仍按原失败保留，不与 seed821 混合。
+
+### 未完成项与资源快照
+
+本轮复核时服务器时间 2026-10-31 06:08 UTC，十张 A800 全部 GPU 利用率高于 10%；GPU2 利用率 85%、空闲 72,387 MiB，外部 PID 3160291 使用 8,651 MiB。因正式测量要求稳定低负载且无无关计算进程，没有启动新的性能/容量测量。根分区剩余 33 GiB，/data6 剩余约 5.5 TiB；本轮没有活跃的本任务测试进程。
+
+Day4–5 仍需匹配配置的 JT/PT 三轮以上交替、每轮每侧至少十个热态样本，报告 load/首步/热态延迟及吞吐的 median/p95/离散度、Jittor allocator allocated/reserved 与 NVML 峰值，并单独测容量/OOM 边界。Day2–5 其余发布门还包括最终候选兼容矩阵、checkpoint on/off 显存与速度、DDP 同步/no_sync/barrier/state 路径、stock PyTorch 对 JT portable optimizer 文件的互操作契约、干净环境安装/打包/import/selftest。Overall release 继续 **Not complete**。
+
 ## 2026-10-31 接续：optimizer 双设备定向用例通过；CUDA 计数门仍开放
 
 当前工作区 HEAD `e1a3cdb00109c1605f20d5347dbd1b6f1b7a7e4c`，`origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`（ahead/behind 106/0）。定向验证前后 103 项既有 dirty/untracked 状态、SHA256 `ad24d0fe82a758525cec03ee1e79373524c55422c274ac6a3b7e6c89a88b4402` 和空 index 均未变化；没有改动或暂存源文件。

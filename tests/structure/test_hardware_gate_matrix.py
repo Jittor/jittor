@@ -138,6 +138,17 @@ def test_accelerator_execution_counter_recognizes_accelerator_paths(monkeypatch)
         )
 
     assert policy._is_accelerator_case(AccelerateIntegrationReport())
+
+    class MarkedDynamicDeviceSweepReport:
+        nodeid = "compat/tests/torch/test_torch_compat_optim.py::test_device_sweep"
+        keywords = {"cuda": True}
+
+    class UnmarkedDynamicDeviceSweepReport:
+        nodeid = "compat/tests/torch/test_torch_compat_optim.py::test_device_sweep"
+        keywords = {}
+
+    assert policy._is_accelerator_case(MarkedDynamicDeviceSweepReport())
+    assert not policy._is_accelerator_case(UnmarkedDynamicDeviceSweepReport())
     monkeypatch.setenv("JITTOR_TEST_ACCELERATOR_MIN_EXECUTED", "2")
     assert policy._required_accelerator_executions() == 2
 

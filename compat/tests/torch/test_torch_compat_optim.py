@@ -8,6 +8,7 @@ Run:  python -m pytest compat/tests/torch/test_torch_compat_optim.py
 
 from _helpers import capability as _test_capability
 import unittest
+import pytest
 import numpy as np
 import torch
 import jittor as jt
@@ -126,6 +127,7 @@ class TestSGD(Base):
 
         both_devices(body)
 
+    @pytest.mark.cuda
     def test_native_backward_does_not_double_advance_step(self):
         def body(dev):
             for optimizer_type in (torch.optim.SGD, torch.optim.RMSprop,
@@ -243,6 +245,7 @@ class TestAdam(Base):
             self.assertEqual(opt.n_step, 2, f"step counter advances {dev}")
         both_devices(body)
 
+    @pytest.mark.cuda
     def test_bound_initializers_inside_no_grad_keep_parameter_trainable(self):
         def body(dev):
             def assert_stays_on_device(value, label):

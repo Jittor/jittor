@@ -1,3 +1,13 @@
+## 2026-10-31 接续：optimizer CUDA 模块门通过；checkpoint 与 held-out 证据已复核
+
+本轮验证开始时 HEAD 91e11f8a3dfbcc18dd182a07327fc995c4c482c2，刚 fetch 的 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 107/0；验证前既有 dirty/untracked 项为 105，index 为空。本轮结果已随中文提交写入本看板；提交后 ahead/behind 为 108/0，未整合 origin 或 push。当前十张 A800 均超过 10% GPU 利用率，正式 Day4–5 计时/显存窗口仍不合格。
+
+- optimizer CUDA 门：修复 accelerator 执行计数对显式 cuda/rocm/npu/acl/ascend/cann pytest marker 的识别，并补动态设备扫描回归。CPU policy 回归 1 passed；真实 GPU2（逻辑 cuda:0）完整 optimizer 模块 27 passed、0 skipped，CUDA 分支 fallback 计数均未增长。证据 /data6/cgq/jittor-lab/_state/test-suite/torch-cuda/20261031-optim-placement-full-cuda-r1-prepared/，manifest SHA256 3048570b2cac1cb5488a112a3c5f2051de2a7fdfb09e4970e0e48c77c093763。
+- activation checkpoint：现有 Jittor Torch checkpoint 实现在 CUDA Llama decoder 用例观察到无梯度前向及 backward 重算；输出完全一致，输入与权重梯度在声明容差内，fallback delta=0，1 passed。Qwen seed821 full 训练记录 gradient_checkpointing=true。因此早先“仅直通目标函数、未证明 recompute”的状态被此功能证据 supersede；受控峰值显存收益和速度代价仍未测。
+- held-out 生成：已有另一份 seed821、17 条固定样本 JT/PT 配对生成；JT token-F1 0.204534、ROUGE-L 0.148379，PT 分别为 0.208718、0.149341；双方 exact match 均 0，原始预测 14/17 相同。它是小型探索性结果，绑定其记录的历史 source fingerprint，不代表当前 HEAD 或独立人工评测集的质量门。
+
+下一步仍需：等待合格 GPU 窗口完成至少三轮交替 JT/PT 性能与显存测量；测出 checkpoint on/off 的 allocator/NVML 峰值差和速度成本；在锁定发布候选上完成支持矩阵、DDP、序列化互操作契约及干净安装/打包检查。Overall release **Not complete**。
+
 ## 2026-10-31 接续：optimizer 双设备用例通过；CUDA gate 计数未闭合
 
 当前工作区 `e1a3cdb00109c1605f20d5347dbd1b6f1b7a7e4c`，origin `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `106/0`。测试前后既有 103 项 dirty/untracked、status SHA256 `ad24d0fe82a758525cec03ee1e79373524c55422c274ac6a3b7e6c89a88b4402`、空 index 均一致；仅下列实验产物写入 `/data6`。

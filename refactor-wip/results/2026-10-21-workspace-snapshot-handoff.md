@@ -1,3 +1,17 @@
+## 2026-10-31 继续工作交接：optimizer CUDA 门通过；性能显存仍等稳定窗口
+
+本轮验证开始时工作区为服务器既有目录 /home/cgq/jittor，HEAD 91e11f8a3dfbcc18dd182a07327fc995c4c482c2，fetch 后 origin e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 107/0。本文档修改前 105 项 dirty/untracked 原样保留；六文件任务变更已作中文提交，提交后仍有 103 项既有 dirty/untracked，其中 optimizer 测试的混合修改继续留在工作树。未 stash/reset/clean/push。测试期间未改动其他 dirty 文件。新增的 CUDA marker 识别与 policy 回归通过；optimizer 全模块 27 passed、0 skipped。相关 source hunks 属于本任务，其中 optimizer 测试文件混有原有 dirty 修改，只能按 hunk 暂存，不能整文件暂存。
+
+交接时十张 GPU 利用率均超过 10%，GPU2 空闲 72,387 MiB 但外部进程仍使用 8,651 MiB；这足以做过小型正确性验证，但不满足 Day4–5 正式窗口。没有本任务测试进程存活。根分区余 33 GiB，/data6 余 5.5 TiB。origin fetch 后无需要整合的远端提交；未 push。
+
+新增可复用证据：
+- optimizer module full CUDA: /data6/cgq/jittor-lab/_state/test-suite/torch-cuda/20261031-optim-placement-full-cuda-r1-prepared/，manifest SHA256 3048570b2cac1cb5488a112a3c5f2051de2a7fdfb09e4970e0e48c77c093763。
+- checkpoint actual CUDA recompute: /data6/cgq/jittor-lab/_state/release-day23/20261030-main-qwen-checkpoint-recompute-practical-r1/evidence/cuda-checkpoint-llama-attempt04/，功能与 fallback 通过，但无 on/off memory 结论。
+- seed821 held-out generation pair: /data6/cgq/jittor-lab/_state/release-day23/20261030-main-qwen-checkpoint-recompute-practical-r1/evidence/heldout-generation-r1/，仅 17 行探索分数，绑定历史 source fingerprint。
+- 历史 optimizer CUDA gate r5 失败及 seed823 generation 超时均保留；不重复 optimizer full、R14 full/resume 或冷编译。
+
+恢复后的优先顺序：先抓取满足低占用/显存阈值且无外部计算的 GPU 窗口，执行已规定的配对性能/显存和容量协议；窗口未到时继续做不占 GPU 的最终候选兼容矩阵、DDP 状态/训练路径及 clean install/package/import/selftest 核验。checkpoint recompute 功能有 CUDA Llama 证据，但必须补受控显存收益/速度对照。保持 stock PyTorch 对 JT portable optimizer 文件的读取失败与 Jittor 原生新进程 resume 通过分别记录。只更新三个既有状态文档，不改写历史失败，不 push；Overall release 保持 Not complete。
+
 ## 2026-10-31 接续：optimizer CUDA 定向结果与发布门状态
 
 当前远端工作区 HEAD `e1a3cdb00109c1605f20d5347dbd1b6f1b7a7e4c`，origin ahead/behind `106/0`；103 项原有 dirty/untracked 与测试前状态 SHA256 `ad24d0fe82a758525cec03ee1e79373524c55422c274ac6a3b7e6c89a88b4402` 一致，index 为空。GPU2 的两个 optimizer 设备放置测试已在其现存 CUDA core（SHA256 `83d5c1a0ac0481afbdbd250e295807f5b7e9005504fae055a0c77bc5a37d8aff`）上执行：2 passed；通用 CUDA gate 因动态 CPU/CUDA 循环未被 accelerator 计数器识别而 rc=1，fallback 未采集，故仍是窄诊断，不关闭 `KI-TEST-009`。产物及启动失败记录见 `/data6/cgq/jittor-lab/_state/test-suite/torch-cuda/20261030-main-optim-placement-focused-cuda-r5-prepared/`，manifest SHA256 `57db0c231684fee57efb4fed7a24b44d3b41f93c25adaac6ae38f03ce6abda4e`。

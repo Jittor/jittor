@@ -788,7 +788,10 @@ def _skip_reason(report):
 
 
 def _is_accelerator_case(report):
-    """Recognize accelerator paths, backends, and explicit CUDA integration suites."""
+    """Recognize accelerator paths, explicit backend marks, and integration suites."""
+    keywords = getattr(report, "keywords", {})
+    if any(marker in keywords for marker in ("cuda", "rocm", "npu", "acl", "ascend", "cann")):
+        return True
     nodeid = str(getattr(report, "nodeid", "")).lower()
     return any(
         token in nodeid
