@@ -1,3 +1,9 @@
+## 2026-11-01 07:24 +0800 handoff：CPU BF16 moment 差异未改变本例 50 步参数/loss
+
+CPU-only trace r2 确认 restore 后参数和两个 moment 初值、下一步梯度相同；下一步后 BF16 参数相同，但 exp_avg_sq 有 6.6765e-05 差异。追加 50 个合成 CPU BF16 AdamW 更新后，两条参数轨迹每步完全一致，平方和 loss 同为 17.62965→5.39487，fallback=0；FP32 moment 仍有不超过 4.4489e-04 差异。原 pytest FAIL 留存，按当前目标作为局部低优先级状态数值差异，不外推为广泛无害。完整摘要与哈希见 Day2–5 报告 07:24 和 /data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-cpu-bf16-optim-restore-trace-r2-prepared/、...optim-restore-continuation-r1-prepared/。
+
+当前仍有单 rank gloo backend state 缺口；真实 multi-rank DDP、held-out 质量、wheel migration 及 Day4–5 正式性能/显存未完成。GPU2 共享、无系统级独占租约，整体 release Not complete。
+
 ## 2026-11-01 07:16 +0800 handoff：GPU1 CUDA RNG 与 optimizer restore smoke 通过
 
 当前主树 HEAD fcb7c4c99，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 143/0。执行后原有 102 项 dirty/untracked porcelain SHA256 仍为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，暂存区为空；未改源码/测试。

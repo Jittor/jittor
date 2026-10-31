@@ -1,3 +1,23 @@
+## 2026-11-01 07:24 +0800 CPU BF16 AdamW restore 差异分阶段诊断
+
+### 执行身份与启动修正
+
+当前 HEAD 5845f10ebb1f7ea424adb57c4c4a94c21bdd2e70；runtime source fingerprint ae682fe34dec0cf62e74f5dd3546c8c77dd7d97f23f03f7a4d4b7d11558f2499，原工作树 dirty/untracked 102 项哈希仍为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211。诊断使用失败 CPU suite 的已完成 cfg1d275ac1 cache、CPU-only 环境、同一 optimizer test SHA256 c9ff7be24a6dd0e4b5e0300f262d1f6addde39f0f2da0205d3171d50bef0cbfd，没有改仓库源码或测试。
+
+trace r1 因脚本在 Jittor shim 初始化前直接 import torch，报 ModuleNotFoundError 并在 Jittor 初始化/优化器运算前退出；它不是测试失败，完整原件保存在 /data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-cpu-bf16-optim-restore-trace-r1-prepared/，exit code 1，log SHA256 46ea5b978dac0cfbd91f8811de858df22a50f4da3cd0d60a764a028a7b034dab。修正为先 import jittor 使 JITTOR_TORCH_SHIM 发布 namespace 后，trace r2 完成。
+
+### 单步阶段比较
+
+复用原用例的参数、AdamW 分组和平方和 backward/step 序列，使用 portable save/load 与 meta ambient context。load 后、第二步前，两个参数组的参数与 FP32 exp_avg/exp_avg_sq 均逐值相同；显式计算的两组梯度也逐值相同。下一步后参数仍逐值相同，但 BF16 参数组 exp_avg 最大差为 1.1921e-07、exp_avg_sq 最大差为 6.6765e-05；CPU scope 内 fallback 计数仍为 0。r2 trace.json SHA256 79fb9379f97dbc4d899e286d2be6eb60d25875e853e0e001dc6c01fea28463af，trace log SHA256 e90b4ac8d958b6d538180692bcf8197cd6d821961c9de163b7a671dc783032e2，result SHA256 d131099f8fd8aceb64a86039f57b348ca7c5f85f290cdcc80f7743bec554e23e，plan SHA256 d0069b0e83c5237704a34e919e85e9c9cea2ad71cb6c765104f7774761ac5fad。原件目录为 /data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-cpu-bf16-optim-restore-trace-r2-prepared/。
+
+### 50 步功能影响对照
+
+从 step 1 的连续与恢复 AdamW 状态各自继续 50 步，共比较到 step 51。每步 BF16 参数值完全相同；平方和 loss 两侧完全一致，从 step 2 前 17.62965298 降至 step 51 后 5.39487147，全部梯度/参数/state 检查为有限值，fallback 增量为 0。FP32 moment 数值仍有差异：全程 exp_avg 最大差 9.5367e-07、exp_avg_sq 最大差 4.4489e-04。它说明这个双参数合成 CPU 例子中 moment 差异没有改变 50 步 BF16 参数轨迹或 loss；不能据此证明实际网络、其他形状或长程 CPU BF16 训练普遍无影响。
+
+50 步 continuation.json SHA256 b885db52388def10634ec12ed5b440c67898dcae3fadb4cdbde478ff4eafad5c，日志 SHA256 4d81c395bb44f42a813354e326fae991902b057e6cf8fadc94eb99bf0153d84d，result SHA256 f9d771fd7b33a8fc0319c2e4b66645fcb307c84c3b1699a61a530c6a7823fd34，plan SHA256 ba869531d17ff6a93cb4bd6c953f81e30f4dda09b57863959b180272a9799c13。原件位于 /data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-cpu-bf16-optim-restore-continuation-r1-prepared/。
+
+解释仍按目标优先级保守分层：原 pytest CPU strict failure 保留，不回写 PASS；已确认 state load 和恢复前参数/梯度没有丢失，现有数值差异出现在恢复后计算 moment 的 CPU BF16 更新路径。基于这一小型 50 步对照，它暂列低优先级数值诊断，不为逐位相同继续无界投入。CUDA optimizer restore 的 14 个真实 GPU1 参数化用例仍已通过；此前 single-rank gloo backend state 缺口仍需处理或明确 API 契约。此诊断不证明任务训练、质量、CUDA、多 rank、性能或显存。
+
 ## 2026-11-01 07:16 +0800 当前源码 native CUDA RNG 与 optimizer restore 回归
 
 ### 执行身份与 cache 修正

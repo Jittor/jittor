@@ -1,3 +1,11 @@
+## 2026-11-01 07:24 +0800 CPU BF16 optimizer restore 差异已作功能影响分层
+
+主树 HEAD 为 5845f10ebb1f7ea424adb57c4c4a94c21bdd2e70，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 144/0。原有 102 项 dirty/untracked porcelain SHA256 仍是 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，暂存区为空；本轮没有改源码或测试。
+
+对原 CPU BF16 AdamW restore failure 做分阶段诊断：恢复后的参数、exp_avg、exp_avg_sq 和下一步梯度均完全相同；下一步后 BF16 CPU 参数仍完全相同，但 FP32 exp_avg_sq 最大差 6.6765e-05。50 次额外合成更新中，连续与恢复参数每步相同，平方和 loss 均从 17.62965 降至 5.39487；exp_avg_sq 最大差扩大至 4.4489e-04，状态仍有限，fallback 增量为 0。故保留原 strict FAIL，将其分层为这个小型 CPU BF16 场景下未显示参数/loss 影响的更新后状态数值差异；不外推到真实网络，也不标记该用例 PASS。
+
+Torch distributed 单 rank backend=gloo 未保存/返回请求 backend 的问题仍是未解决 API state 契约缺口；多 rank、held-out 任务质量、wheel migration 和 Day4–5 性能/显存仍开放。GPU2 仍是共享 Default，整体 release 保持 Not complete。
+
 ## 2026-11-01 07:16 +0800 GPU1 CUDA RNG 与 optimizer restore 定向回归通过
 
 当前主树 HEAD fcb7c4c991c64a061069ed47829c37b96a63e7bc，fetch 后 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 143/0。原有 102 项 dirty/untracked porcelain SHA256 仍为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，暂存区为空；本轮未改源码或测试。
