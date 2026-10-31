@@ -1,3 +1,36 @@
+## 2026-10-31 增量：R22 AdamW 更新路径隔离诊断通过；发布时延门仍开放
+
+### 身份与范围
+
+R22 在 /home/cgq/jittor 现有工作区运行，绑定 R21 source-lock 中的主 wheel SHA256 2e8f1a4418e3e9aee770843a6fd7d5471e3de12aaad75a8e8e78deee24baa3d9、compat wheel SHA256 fd7e84f639dba09f9d8293b9d255df09aa7190b890093e614c340cc47a7a7d5a、core SHA256 050c612d6b29bb952c4debccc7eb791f1704e3c8a2040723cb352cbda789f986 和 source fingerprint 0382368b8754bf7a90e42382fd66b603ed2d3f323b5e8cda4820425871c7aa50。执行时仓库 HEAD 为 20d573a143f5a585ffa1131832471e070a55091f；R21 之后仅有文档提交，102 项既有 dirty/untracked 状态 SHA256 仍为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211。GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0，在进程内映射为 cuda:0。
+
+本实验只隔离 Jittor AdamW 更新：从同一固定权重加载 199 个 BERT 参数，197 个参数使用固定 all-ones 合成梯度，另 2 个梯度为 None；不做 forward/backward。比较不传 foreach/fused 参数的 user-default（组值 None/None）与显式 unfused（False/False）。三轮交替，每阶段 5 次 warmup、10 个热样本；每种模式各 30 个计时样本，之后每阶段另做一次 profile 路由核验。所有 2,376 个被检查参数/梯度 tensor 均在 native cuda:0。
+
+### 时延与数值对照
+
+| Jittor AdamW 路径 | pooled median | p95 | 标准差 | 每轮 median（ms） | profile kernel 数 |
+| --- | ---: | ---: | ---: | --- | ---: |
+| 显式 unfused | 33.596 ms | 39.951 ms | 3.587 ms | 31.312 / 39.578 / 33.137 | 197 |
+| 默认 None/None | 4.212 ms | 4.406 ms | 0.090 ms | 4.379 / 4.200 / 4.184 | 7 |
+
+此隔离微基准中，unfused/default 的 optimizer-step median ratio 为 7.9769。两路从相同初值和状态执行 15 次更新后，最大绝对参数差为 8.15e-10，并满足 rtol=1e-5、atol=1e-6。profile trace 显示默认阶段实际包含 fused_adamw 事件，unfused 阶段没有 fused_adamw 并走逐参数更新；这也是独立审计实际路由的依据。
+
+### 失败保留、审计与限制
+
+R22 artifact 位于 /data6/cgq/jittor-lab/_state/release-day23/20261031-adamw-update-isolation-r22-r1-prepared/。attempt-01 的六个 profile 阶段已执行，但汇总器在写报告时因从错误层级读取 source_fingerprint 而退出，未持久化计时样本；失败脚本、worker log、returncode、六份 trace 和 cache 差异均保留。attempt-02 修正字段并在每阶段后追加、fsync phase-rows.jsonl，使用从 R21 private cache 新复制的隔离缓存完成，没有覆盖 attempt-01。
+
+attempt-02 独立审计为 PASS_DIAGNOSTIC_EVIDENCE，errors 为空，audit SHA256 9f871f492d6e58be59a744e7c7d96c32779f08f5a29cef57f4e5cd343c3b486d；result SHA256 85513eaf6d1ff458b8006a4a15e48348caa84ed01ae996747ba5f3ad4fdabfc4。缓存从 1,235 项增至 1,279 项，新增 44 个 JIT 产品、无删除，变化项只有 Jittor lock；core、jit_utils_core 和 build stamp 哈希均未改变。新增 JIT 产品只写入 attempt-02 private cache 副本，没有改源码或 wheel。
+
+结果中的 selected_fused_impl 预先探针记为 no_fused_dispatch，但该探针运行在 kernel 注册加载之前，不能用于判定真实路由；保留此原始字段及其限制，独立审计通过每阶段 profile trace 证实默认路径调用 fused_adamw。此实验使用合成梯度、不含前向/反向，也没有 PyTorch 阶段；它只证明当前 Jittor 优化器实现路径之间的更新开销与数值关系，不能替代正式性能对照或端到端门。
+
+### 对发布门的影响
+
+R22 显示默认 fused AdamW 更新路径本身明显快于逐参数 unfused 路径，但 R19/R21 的端到端 BERT 时延结论仍未达：R19 ratio 1.39597，R21 ratio 1.57601。下一步应基于已有 trace 隔离前向、反向、attention/GEMM 和主机调度的耗时来源；R22 不触发重跑已通过的 R19/R21 cohort，也不关闭近容量/OOM、checkpoint recompute on/off 或更广 Day2–5 发布门。Overall release **Not complete**。
+
+---
+
+---
+
 ## 2026-10-31 增量：R21 默认 AdamW 三轮测量终审通过；时延诊断线未达
 
 ### 源码身份与测量范围

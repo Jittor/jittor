@@ -1,3 +1,11 @@
+## 2026-10-31 最新交接：R22 隔离优化器诊断通过；下一步定位端到端模型计算
+
+仓库在测量时 HEAD 20d573a143f5a585ffa1131832471e070a55091f，origin/cgq_transformers 为 e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（ahead/behind 115/0）；102 项既有 dirty/untracked 状态 SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211 未变。R22 绑定 R19/R21 相同 wheel、core、权重和 199 个参数形状，在 GPU2/cuda:0 对 Jittor 默认与显式 unfused AdamW 做 3 轮 × 每阶段 10 个热样本。只测 optimizer step：默认 median 4.212 ms，unfused 33.596 ms，profile kernel 数 7 对 197；15 步后 max absolute difference 8.15e-10，allclose 通过。attempt-02 独立 audit 通过，attempt-01 汇总器失败的六阶段原件保留。
+
+此结果只说明固定合成梯度下的 Jittor 更新路径，不测 forward/backward，不是 PT 对照，也不关闭 R19 ratio 1.39597 或 R21 ratio 1.57601 的端到端时延失败。优先从已有 trace 区分 BERT 前向、反向、attention/GEMM 与 Python/Executor 调度开销，再选择有依据的优化；之后仍需近容量/OOM、真实 checkpoint recompute 资源对照及广泛 Day2–5 支持矩阵、held-out 质量、DDP 新进程恢复、序列化契约、clean install 和 baseline 迁移审查。R22 artifact: /data6/cgq/jittor-lab/_state/release-day23/20261031-adamw-update-isolation-r22-r1-prepared/。Overall release 继续 **Not complete**。
+
+---
+
 ## 2026-10-31 最新交接：R21 默认 AdamW 代表格已审计；时延门未过
 
 R21 在 /home/cgq/jittor 现有工作区完成，绑定测量时 HEAD 62aa8ca7f8c075d22f036d18759c686f70483a00、origin/cgq_transformers e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（ahead/behind 114/0）、source fingerprint 0382368b8754bf7a90e42382fd66b603ed2d3f323b5e8cda4820425871c7aa50。 当时 102 项既有 dirty/untracked、状态 SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，index 为空；相同 R19/R20 主/compat wheel 和 private core，无源码或 wheel 修改。

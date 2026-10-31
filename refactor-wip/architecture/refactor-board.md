@@ -1,3 +1,11 @@
+## 2026-10-31 续验：R22 分离 AdamW 更新路径诊断通过；端到端门仍未达
+
+R22 使用 R19/R21 同一主/compat wheel、private core 和 BERT 参数形状，对 Jittor 默认 AdamW 与显式 unfused 做三轮交替、每阶段 5 次预热和 10 个热样本。仅优化器更新、固定合成梯度下，默认路径 median 4.212 ms，unfused 33.596 ms，profile device kernel 数为 7 对 197；15 步后最大绝对差 8.15e-10，allclose 通过。默认 trace 实际包含 fused_adamw；预先 selector 探针字段未能识别该路径，独立审计以运行 trace 为准。
+
+R22 不含模型前向/反向，也不是 PyTorch 对照或端到端发布门。R19 unfused 和 R21 默认配置的端到端时延线仍分别为 1.39597 和 1.57601；下一步从已有 trace 继续定位模型前向/反向、注意力/GEMM 与主机执行开销，再决定是否需要源码优化。R22 artifact 与 attempt-01 失败原件均保存在 /data6/cgq/jittor-lab/_state/release-day23/20261031-adamw-update-isolation-r22-r1-prepared/。Overall release **Not complete**。
+
+---
+
 ## 2026-10-31 续验：R21 默认 AdamW 测量终审通过，热态时延线仍未达
 
 在现有 /home/cgq/jittor 工作区测量 R21 当前 wheel BERT B8/S256 FP32；绑定 HEAD 62aa8ca7f8c075d22f036d18759c686f70483a00、source fingerprint 0382368b8754bf7a90e42382fd66b603ed2d3f323b5e8cda4820425871c7aa50、R19/R20 同一主/compat wheel 与 private core。PT/JT AdamW 都省略 foreach/fused 参数，记录默认值 None/None；这只测用户默认调用敏感性，不推断实际 kernel 派发，也不替换 R19 显式 unfused 基线。
