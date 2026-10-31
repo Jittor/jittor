@@ -1,5 +1,20 @@
 # Torch Compatibility Release Acceptance: 2026-10-26 Day 2–5 Continuation
 
+## 2026-10-31 Torch 工厂 leaf 梯度与 optimizer 更新核验
+
+本轮在服务器 /home/cgq/jittor 原工作区继续，测试绑定 HEAD 15a6bc19832bd5af55d17104fe1ec2a6d78591a9、分支 integrate/cgq-transformers-native-multicard-target；fetch 后 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 90/0。核验开始时保留 103 项 dirty/untracked，index 为空；无 clone/reset/stash/clean/push。factory/autograd 源码和测试改动在本轮开始前已经存在于 dirty 工作树；本轮没有修改源码或测试，只增加本状态记录。
+
+attempt-01 在 strict Torch shim、CPU、CUDA_VISIBLE_DEVICES=""、JITTOR_NO_BUILD=1 下运行 compat/tests/torch/test_torch_compat_autograd_semantics.py 及 tests/autograd/test_autograd_functional_seeds.py::TestAutogradGradSeedAlignment::test_jvp_multi_input_is_unchanged，27 passed / 2 skipped（仅 accelerator）/ 3.08s，fallback=0。覆盖常量 factory 创建后再 requires_grad_ 的 leaf/is_leaf/grad_fn、fill_/zero_ 梯度和既有 JVP 高阶导。pytest.log SHA256 528711e45887964f60071ba92b6ea684c590ba902f2e55d6ed06c1150208d7b8。attempt-01 测试前后整树源码 fingerprint 均为 28d72558a504c48341c8dcec054a04717467f68e63964cd888845047091efdfb；Jittor core SHA256 前后均为 6a21f70f357d767f12c136a81f9449fb3420245db8b18c99990f31f5fbf1ce05。
+
+独立 optimizer 探针确认两类工厂 leaf 均参与参数组：torch.ones(3, requires_grad=True) 收到 [2,2,2] 梯度，torch.ones(3) 后调用 requires_grad_(True) 收到 [3,3,3]；一次 SGD(lr=0.1) 更新后立即经 .numpy() 读取分别为 [0.8,0.8,0.8] 和 [0.7,0.7,0.7]，step counter 为 [1,1]，fallback=0。attempt-06 单参数和 attempt-07 双参数先同步后读回均通过；attempt-08 明确在没有显式 jt.sync_all() 时立即读回也通过。attempt-08 源码 fingerprint 前后相同，为 f587ed43111599ebece48574c83db9eb28ce1f2bbd5a8fc4de199589c7a5a74f，core SHA 不变。与 attempt-01 fingerprint 的唯一整树差异是 attempt-02 的错误命令在仓库根目录生成了空文件 timeout；该文件 attempt-01 前不存在，现已移除。factory/autograd 相关源文件在两轮间保持相同：factories.py e507eaf469942f1b4bb97621293eee98777d9879ba8adc8f3f372af4c7f8e2a6，autograd semantics 测试 d079146c5e54aadde4bfd5015b29db60d3ca93be7eab9676edbaa265c8c4a092，method_api.py b4b4f4afa5373884a46eb1a0ddeb155eef92ae69316938c5de13dd4b39e42e6b，autograd_api.py 7b2ab8899fffea41454b1c1ca1816fd7954e5759c63bbe097a03b7f4264661c7。
+
+失败与环境错误均保留在 /data6/cgq/jittor-lab/_state/release-day23/20261101-main-torch-autograd-leaf-r1/：attempt-02 因 PowerShell 展开变量生成错误 run.sh，未运行 probe；attempt-03 指向错误 probe 路径，exit 2；attempt-04 在 optimizer.step() 后首次参数读回仍为 1，断言失败（日志 SHA256 e197ae210b03769874df895514b2714d663a6f520a3cc9fc105f70da7cd4afb8）；后续 attempt-06/07/08 没有复现该值未更新现象。attempt-08 probe 日志 SHA256 209356cfb59c03b0b0630a9ea57f2ba4269a444a075a3cec8784abf4e3eee313；attempt-06、07 日志 SHA256 分别为 877a9bbfb8d083320c01a6b9648e9645fcb52f032d4941c7c3b87c86b7168ae0 和 7a72373f924c54ba16ac6ce4bd08a63a411a426ae3cab2d9b2427522090567d2。失败原件未覆盖。
+
+结束复核时工作区仍有 103 项 dirty/untracked，index 为空；本任务只更新三份既有状态文档。没有本任务 pytest/leaf probe 进程，也没有该 Jittor cache lock holder。GPU2 利用率 30%、空闲 59,941 MiB；GPU4 利用率 26%、空闲 59,931 MiB；两卡均有共享计算进程，未达到 ≤10% 利用率、≥60,000 MiB 空闲且无无关 PID 的正式测量准入。/ 剩余约 34 GiB（显示 100% 使用），/data6 剩余约 5.5 TiB。因此本轮不提供性能、吞吐或显存结论。
+
+该证据仅证明当前 dirty 源码树的 CPU factory leaf 属性、梯度和一次 SGD 更新路径，并保留了原先读回失败但未复现的结果；不证明 CUDA leaf/训练、完整 API 支持矩阵或模型级任务质量。Day4–5 正式门仍需匹配冻结源码/权重/数据/配置，稳定 GPU 上至少 3 轮 JT/PT 交替配对、每轮每侧至少 10 个热样本，报告 load/首步/热态 median、p95、离散度、allocator allocated/reserved 与 NVML 峰值，另测最大 batch/sequence 和 OOM 边界。更广 Day2–5 仍需闭合声明范围 API/device/dtype/layout/edge/autograd/fallback、代表模型训练与 held-out 分数、新进程恢复状态、真实 checkpoint 模型梯度/显存、默认 DDP 最终 gate、共同 held-out JT/PT generation、portable-pickle 互操作边界及安装打包检查。Overall release 保持 Not complete。
+
+
 ## 2026-10-31 checkpoint 上游梯度依赖修复：LlamaDecoderLayer 与专项回归通过
 
 本轮继续在 /home/cgq/jittor 的现有工作区；测试绑定 HEAD bbb0e45f015a5bceb86886b26445e197709be659、分支 integrate/cgq-transformers-native-multicard-target，fetch 后 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（ahead/behind 89/0）。103 项原有 dirty/untracked 全部保留；本任务增加 data.py 和 checkpoint 测试两项修改，未碰其他既有文件。源码 fingerprint 测试前后为 d0528c457f3185f8b07c83ffba76b8b94013e281a8edeea69df30dbe29055166；文件 SHA256：compat/torch/installers/data.py 0a4d1c151a9de5e3d57da60117f156e8641b26febd7c63a4727914fef04c33c8，compat/tests/torch/test_torch_checkpoint_recompute.py 95c8bb71d46c6c8dd0a2a12ae22627eeb1f3dddc7b2e6c9401ebe08034f3f359。

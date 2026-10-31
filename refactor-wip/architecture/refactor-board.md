@@ -1,5 +1,14 @@
 # 整改看板
 
+## 2026-10-31 Torch 工厂叶子张量的梯度与 optimizer 功能核验
+
+继续在服务器 /home/cgq/jittor 既有工作区；HEAD 15a6bc19832bd5af55d17104fe1ec2a6d78591a9，fetch 后 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 90/0。本轮前保留 103 项 dirty/untracked，index 为空；没有 clone、reset、stash、clean 或 push。当前工作树已有未提交 factory/autograd 实现，本轮只核验并记录，没有改源码。
+
+strict Torch shim CPU 回归覆盖 Torch 常量 factory 的 leaf/grad_fn 语义、fill_/zero_ 梯度及既有 JVP 高阶导：27 passed、2 个 accelerator 用例按环境 skip，fallback=0；两个工厂 leaf 经 SGD 实际更新到 0.8/0.7。attempt-04 的初始读回失败与 attempt-02/03 harness 错误均保留；attempt-06/07/08 复核通过，attempt-08 在不显式 sync_all 的情况下立即 numpy() 读回也看到更新。证据、差异和限制详见 Day2–5 结果文档及 /data6/cgq/jittor-lab/_state/release-day23/20261101-main-torch-autograd-leaf-r1/。
+
+GPU2/4 当前利用率约 30%/26%，空闲 59,941/59,931 MiB，且有共享计算进程；/ 可用 34 GiB，/data6 可用 5.5 TiB。无本任务 probe/pytest 或 cache-lock holder。Day4–5 正式性能/显存准入仍不满足，未进行计时。当前结果只支持这份源码树上的 CPU 工厂 leaf 与 SGD 路径；API/device/dtype/fallback 全矩阵、模型级任务质量、DDP、互操作和发布检查仍待完成。Overall release 保持 Not complete。
+
+
 ## 2026-10-31 修正 HF checkpoint 反向梯度路径并续接 Day2–5 门禁
 
 继续在服务器既有 /home/cgq/jittor 工作区，HEAD bbb0e45f015a5bceb86886b26445e197709be659，fetch 后 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 89/0。既有 103 项 dirty/untracked 保留；当前新增的两项任务改动限于 checkpoint 实现与测试，任务前 index 为空；未 clone、reset、stash、clean 或 push。

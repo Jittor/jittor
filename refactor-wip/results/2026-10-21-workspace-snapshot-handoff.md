@@ -1,5 +1,14 @@
 # 2026-10-21 工作区快照与本机接续交接
 
+## 2026-10-31 最新接续：Torch factory leaf 训练路径通过，Day2–5 仍未闭合
+
+继续使用服务器现有 /home/cgq/jittor。HEAD 15a6bc19832bd5af55d17104fe1ec2a6d78591a9；origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 90/0。保留工作区 103 项 dirty/untracked；无 clone/reset/stash/clean/push。本轮前 index 为空，只更新本交接、整改看板和 Day2–5 结果记录。
+
+当前 dirty factory/autograd 实现已通过 strict shim CPU 回归：autograd 语义文件加 JVP 高阶导用例 27 passed、2 accelerator skip、fallback=0；常量 factory leaf 收到预期梯度，并经 SGD 更新到 0.8/0.7。attempt-04 曾报告第一次读回仍为 1；attempt-08 无显式 sync 后立即读取通过，因此暂未复现为稳定功能故障。attempt-02/03 的命令与路径错误、attempt-04 断言失败及后续复核日志均保存在 /data6/cgq/jittor-lab/_state/release-day23/20261101-main-torch-autograd-leaf-r1/；测试源码身份和文件哈希见 Day2–5 结果记录。
+
+GPU2/4 利用率 30%/26%、空闲 59,941/59,931 MiB，存在共享 GPU 进程；正式 Day4–5 性能/显存窗口不合格，未做测量。后续发布门仍包括稳定窗口 JT/PT 配对性能和容量/OOM、声明范围 API/device/dtype/fallback、模型级训练与 held-out 质量、新进程 optimizer/scheduler/RNG/data-order 恢复、真实 checkpoint 模型重算/梯度/显存、默认 DDP 最终 sentinel、共同 generation 判据、跨框架序列化边界及安装打包检查。Overall release 保持 Not complete。
+
+
 ## 2026-10-31 最新接续：修复 checkpoint 反向重复路径，尚未完成显存与发布验收
 
 继续使用服务器现有 /home/cgq/jittor。当前基线 HEAD bbb0e45f015a5bceb86886b26445e197709be659；origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81 是祖先（ahead/behind 89/0）。不得重新 clone、stash、reset、clean 或 push。既有 103 项 dirty/untracked 必须保留；本任务只改 checkpoint 实现、对应回归测试和本交接指定的三份状态文档。
