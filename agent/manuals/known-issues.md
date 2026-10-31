@@ -1931,7 +1931,11 @@ workaround.
   one architecture at a time shows `convnext` hits the same invariant; it was
   invisible in the test because the aborted `convbert` Var stays in the graph
   and every later `sync` reports that first failure. The other 31 `CFG`
-  architectures pass.
+  architectures pass. `convnext` carries a second defect behind this one -- its
+  channel-last linears raised `code requires source for the selected backend`
+  when the CUDA route was admitted for a host-placed tensor -- which is fixed
+  separately in `docs/results/2026-10-31-cuda-linear-host-placement.md`; with
+  the optimizer off (`jt.flags.enable_tuner = 0`) ConvNeXt now runs.
 - Smallest reproduction (CUDA device, under the shim; the shim enables
   `enable_tuner`, which is what makes the relay fire):
 

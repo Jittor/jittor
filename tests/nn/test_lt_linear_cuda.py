@@ -198,6 +198,28 @@ class TestLtLinearCuda(unittest.TestCase):
         finally:
             jt.flags.use_cuda = 1
 
+    def test_a_host_placed_operand_declines_even_when_use_cuda_is_on(self):
+        # `use_cuda` says where a new tensor would go, not where these live.
+        # The Torch frontend keeps a `torch.tensor(...)` on the host -- with an
+        # explicit placement of its own -- while the flag the shim sets for the
+        # process says CUDA; this op carries no cpu_src, and serving that call
+        # failed in codegen ("code requires source for the selected backend")
+        # instead of falling back. An explicit placement is what the gate reads,
+        # so stamping one on the operands reproduces it without the shim.
+        xn, wn, bn = self._arrays((2048, 512), 512, 1536)
+        token = jt.core._set_construction_placement(0, 0)   # BackendId::Cpu
+        try:
+            x, w, b = jt.array(xn), jt.array(wn), jt.array(bn)
+        finally:
+            jt.core._restore_construction_placement(token)
+        self.assertEqual([int(v.placement_backend) for v in (x, w, b)], [0, 0, 0])
+        with jt.no_grad():
+            self.assertIsNone(lt_linear_cuda(x, w, b))
+            # The portable path still answers the same call.
+            np.testing.assert_allclose(
+                jt.nn.linear(x, w, b).numpy(), _reference(xn, wn, bn),
+                rtol=2e-5, atol=2e-5)
+
     def test_the_module_agrees_with_the_portable_module(self):
         jt.set_global_seed(7)
         model = nn.Linear(512, 256)

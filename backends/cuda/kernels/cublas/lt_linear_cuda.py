@@ -231,6 +231,30 @@ register_kernel("linear_bias_accumulator", "cuda", _linear_bias_accumulator,
 _CUDA_BUILD = bool(getattr(jt.compiler, "is_cuda", False))
 
 
+def _on_the_device(*values):
+    """Whether every operand is placed on the CUDA device.
+
+    `jt.flags.use_cuda` says where a *new* tensor would go, not where these
+    live. The Torch frontend keeps a `torch.tensor(...)` on the host -- with an
+    explicit placement of its own -- until the caller moves it, while the flag
+    the shim sets for the process says CUDA. This op carries no `cpu_src`, so
+    built for such an operand it failed in codegen ("code requires source for
+    the selected backend") instead of declining: ConvNeXt's channel-last
+    linears, under `test_torch_hf_models`.
+
+    The placement is read the way `ops/concatenation.py` reads it: 1 is
+    `BackendId::Cuda` and -1 means "no explicit placement", where the ambient
+    one -- CUDA, since `use_cuda` is on -- decides. Reading it costs 0.04 us an
+    operand; asking `dispatch_context` instead materialized a tuple and three
+    backend names, 3 us a layer.
+    """
+    for value in values:
+        placement = int(value.placement_backend)
+        if placement >= 0 and placement != 1:
+            return False
+    return True
+
+
 def _supports(x, weight, bias, *args, **kwargs):
     # Only cuda_src is provided, so this op is CUDA-only; under use_cuda=0 the
     # portable path is the only correct one.
@@ -244,6 +268,8 @@ def _supports(x, weight, bias, *args, **kwargs):
     if not isinstance(x, jt.Var) or not isinstance(weight, jt.Var):
         return False
     if not isinstance(bias, jt.Var):
+        return False
+    if not _on_the_device(x, weight, bias):
         return False
     for v in (x, weight, bias):
         if _jittor_dtype_name(v.dtype) not in ("float16", "float32", "bfloat16"):
@@ -621,6 +647,8 @@ def _supports_training(x, weight, bias):
     if not (isinstance(x, jt.Var) and isinstance(weight, jt.Var)):
         return False
     if bias is not None and not isinstance(bias, jt.Var):
+        return False
+    if not _on_the_device(*(x, weight) if bias is None else (x, weight, bias)):
         return False
     # A frozen weight leaves only the input gradient, which the portable path
     # serves as well; an autocast register casts inside the portable path,
