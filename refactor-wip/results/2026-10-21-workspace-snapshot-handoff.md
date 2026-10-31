@@ -1,5 +1,14 @@
 # 2026-10-21 工作区快照与本机接续交接
 
+## 2026-10-31 checkpoint 重算工作区接续
+
+继续 /home/cgq/jittor 原工作区。提交前 HEAD 77b3ced2be7cae286f02f63839f822b704d56a0e；origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 87/0。所有既有 dirty/untracked 保留，未 push。任务新增 compat/torch/installers/data.py checkpoint 重算路径及四项定向测试；工作区整树 fingerprint 9b5fc3e218c41acd26ccf112597af96c761790f57c9c42c7ee757c811872a65，证据只绑定本次测试时源码身份，不等同于文档提交后的 HEAD。
+
+attempt-29 在 CUDA_VISIBLE_DEVICES=""、CPU strict shim、JITTOR_NO_BUILD=1 下 4 passed / 0 skipped / 0.50s：覆盖闭包/模块参数梯度、嵌套输出、CPU RNG 重放与 caller RNG 恢复、no-grad 直通及 partial(super().__call__) 的 Jittor 模块形态。core 测试前后 SHA256 都是 6a21f70f357d767f12c136a81f9449fb3420245db8b18c99990f31f5fbf1ce05；cache 文件清单无增删，仅 jittor.lock 内容变化，详见 attempt-29/evidence/cache-delta.diff。证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261101-main-checkpoint-recompute-r1/。HF GradientCheckpointingLayer protocol 的失败日志见 attempt-25/27/28：没有 backward 重算，梯度为零；不得记为 HF/模型级通过。CUDA RNG 和峰值显存收益也未验证。
+
+Day4–5 下一步等 GPU 连续稳定满足利用率 ≤10%、空闲 ≥60,000 MiB、无无关 PID；冻结匹配源码/权重/数据/精度/batch/sequence 后做至少三轮交替 JT/PT、每轮每侧至少十个热态样本，报告 load/首步/热态 median、p95、离散度、allocator allocated/reserved 与 NVML 峰值及独立容量/OOM 边界。最新快照 GPU 2/4 为 31%/29%、空闲 59,941/59,931 MiB，因此本轮不做性能/显存计时。继续发布门还包括修复 HF checkpoint 集成并测梯度/显存、声明支持范围的 API/device/dtype/autograd/fallback、默认 DDP 最终 sentinel、真实模型 held-out 质量、新进程恢复与跨框架互操作边界；R14 与 R19 既有状态不重跑、不改写。整体 release 仍为 Not complete。
+
+
 ## 2026-10-31 R22 当前状态接续
 
 继续服务器 /home/cgq/jittor 原工作区；测试时 HEAD a5e5b99be0ce074df70e10670cf179ab71d81f34，fetch 后 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 85/0。保留 103 项既有 dirty/untracked，index 为空；本轮实际功能验证通过后只会提交三份规定的状态文档，不 push。测试身份 c6722fd90cacb8265eee69f313a7f9d0486e3a7f1beab7fd8ff78b59ea94bf01 绑定文档提交前的代码树。

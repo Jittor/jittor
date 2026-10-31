@@ -1,5 +1,35 @@
 # Torch Compatibility Release Acceptance: 2026-10-26 Day 2–5 Continuation
 
+## 2026-10-31 checkpoint 重算进展与剩余发布验收内容
+
+本增量继续在 /home/cgq/jittor 原工作区完成，未 clone/reset/stash/clean。提交前 HEAD 77b3ced2be7cae286f02f63839f822b704d56a0e，分支 integrate/cgq-transformers-native-multicard-target；git fetch origin 后 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 87/0。保留全部既有 dirty/untracked；任务触及 compat/torch/installers/data.py 和新加的 compat/tests/torch/test_torch_checkpoint_recompute.py，其他源码/实验文件未纳入本任务。测试时整树 fingerprint 9b5fc3e218c41acd26ccf112597af96c761790f57c9c42c7ee757c811872a65，HEAD 与代码 fingerprint 分开标识。
+
+### checkpoint 实现及边界
+
+torch.utils.checkpoint.checkpoint 现在用 jt.Function 丢弃普通前向 activation，并在 backward 用边界输入重算；递归识别函数闭包/default/global、functools.partial、bound method/模块参数作为 hidden differentiable inputs；支持 tuple/list/dict 输出结构并在重算时校验结构、shape、dtype；默认保留 Jittor CPU RNG，CUDA runtime 下也快照/恢复 CUDA RNG；恢复调用者 RNG，ambient no-grad 直通。不接受自定义 context_fn、非默认 determinism_check 或 debug=True。目前 use_reentrant=True/False/None 都走同一实现，没有提供 PyTorch 两算法的完整语义差异。
+
+attempt-29 使用现有 CPU cache 与 JITTOR_NO_BUILD=1，CUDA 隐藏，strict shim：compat/tests/torch/test_torch_checkpoint_recompute.py 为 4 passed / 0 skipped / 0.50s，JITTOR-SESSION-COMPLETE collected=4 executed=4。覆盖随机数一致且 backward 后 caller RNG 状态不变、嵌套输出与闭包参数梯度、no-grad 不重算、绑定 jt.Module 参数梯度及 partial(super().__call__) 的 jt.Module 调用形态。core SHA256 测试前后相同：6a21f70f357d767f12c136a81f9449fb3420245db8b18c99990f31f5fbf1ce05；cache 文件清单无增删，仅 jittor.lock 内容变化，详见 attempt-29/evidence/cache-delta.diff。原始执行目录 /data6/cgq/jittor-lab/_state/release-day23/20261101-main-checkpoint-recompute-r1/attempt-29/ 保存 run.sh、pytest 日志、源码前后清单、cache 清单与退出码。
+
+失败范围也单独保留：attempt-25 直接测试 Transformers GradientCheckpointingLayer 的 partial-super 调用；attempt-27/28 保留相同失败路径。观察为第一次函数调用发生在 no-grad，jt.grad 未触发第二次重算，输入与层权重得到零梯度。此前的 Llama 真实模型路径也没有取得模型级重算/梯度证据。因此，本次通过仅支持上述 Jittor shim 形态，不能声称 HF layer/model gradient checkpointing 通过，更不能声称 activation memory 已下降。CUDA RNG、实际模型路径和 GPU 峰值显存对照仍待补齐。
+
+### Day4–5 性能/显存正式门
+
+开始采样前先冻结并校验同一源码、模型/权重、数据切分、精度、batch size、sequence length、loader、优化器/推理参数及运行环境；同轮 JT/PT 的 workload 必须匹配。只有目标 GPU 连续稳定满足利用率 ≤10%、空闲显存 ≥60,000 MiB，并确认无无关计算 PID 后才入场。正式方案至少 3 轮 JT/PT 交替配对，每轮每侧至少 10 个热态样本；JT/PT 分开报告模型/数据加载、首步、热态 latency 和 throughput 的 median、p95、离散度。显存报告须含 Jittor allocator allocated/reserved 峰值与 NVML 峰值；另以同配置测最大 batch/sequence、OOM 边界/容量。GPU 共享负载旧计时仅作诊断，功能训练不能替代这一验收。
+
+当前快照 GPU 2 与 4 分别约 31%、29% 利用率，空闲 59,941、59,931 MiB，仍不合格；根分区约 33 GiB 可用、/data6 约 5.5 TiB 可用。CPU checkpoint 回归不占 GPU；查无本任务 pytest/Jittor 编译进程或 CPU core holder。
+
+### 更广 Day2–5 发布门清单
+
+1. **支持范围矩阵**：列明声明支持的 Torch API、CPU/CUDA 设备、dtype/layout、边界输入、前后向与 fallback 行为；对高影响缺口用真实测试/训练覆盖，并记设备、fallback 数和失败路径。
+2. **声明模型的实际功能**：对每个发布声明包含的模型绑定源码、权重、数据和配置，提供有限梯度、非零真实参数更新、loss 轨迹、验证/held-out 任务指标，以及对应 checkpoint 文件与加载状态。R14 Qwen 两 epoch/102 update 和同 Jittor 新进程 resume 仅代表那个 seed/config，不替代更多声明范围；Qwen 还需相同 held-out prompts 的 JT/PT generation 指标和预先定义的通过阈值。
+3. **恢复与互操作**：新进程核对模型、optimizer、scheduler、Python/NumPy/CPU/CUDA RNG 和数据顺序。把同 Jittor 可 resume 与 stock PyTorch 无法读取 JT portable-pickle optimizer 分开管理；只有当发布声称跨框架读取时，才以独立格式/权重/optimizer 读写验收关闭该项。
+4. **分布式门**：验证默认 DDP/Accelerate 生命周期、rank 同步、梯度归约、optimizer step、最终状态和外层 sentinel。R19 两 rank 测试体通过但 sentinel 失败仍未闭合最终 gate。
+5. **gradient checkpointing**：先修复并取得真实 HF 层/声明模型中 forward-no-grad + backward recompute 计数、输入/参数梯度对照、RNG 状态证据，再用相同模型/输入/配置对比开关前后的 allocator/NVML 峰值和最大可运行容量。当前四项 CPU 单测不是模型集成或显存验收。
+6. **可追溯边界**：所有结论绑定源码 fingerprint、配置、数据/权重、设备、环境和完整成功/失败原件；unsupported API 与跨框架格式限制写入支持范围，overall release 只能在所有适用门通过后标 complete。
+
+上述 Day4–5 与更广功能门均未完成。没有重做 R14 full/preflight/resume；overall release 继续 Not complete。
+
+
 ## 2026-10-31 R22 当前源码 autograd CPU/CUDA 回归与 R9 native 审计分类
 
 继续使用 /home/cgq/jittor 原工作区。测试时 HEAD a5e5b99be0ce074df70e10670cf179ab71d81f34，分支 integrate/cgq-transformers-native-multicard-target；本轮 git fetch origin cgq_transformers 后远端为 e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，HEAD ahead/behind 85/0。开工时保留 103 项既有 dirty/untracked，index 为空。没有 clone/reset/stash/clean/push；实验与输出均放在 /data6/cgq/jittor-lab/_state/release-day23/ 外置目录。本轮只更新指定的三份状态文档。

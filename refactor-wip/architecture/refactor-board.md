@@ -1,5 +1,18 @@
 # 整改看板
 
+## 2026-10-31 checkpoint 重算实现推进与 Day2–5 发布门
+
+继续在 /home/cgq/jittor 原工作区，未 clone、reset、stash 或 clean。提交前 HEAD 77b3ced2be7cae286f02f63839f822b704d56a0e，分支 integrate/cgq-transformers-native-multicard-target；fetch 后 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 87/0。初始既有 dirty/untracked 全部保留，index 为空。本轮测试时源码 fingerprint 9b5fc3e218c41acd26ccf112597af96c761790f57c9c42c7ee757c811872a65。
+
+本轮把 torch.utils.checkpoint.checkpoint 从直接调用改为基于 jt.Function 的前向 no-grad、反向重算路径；覆盖嵌套输入/输出、闭包或绑定 Jittor 模块参数、CPU RNG 重放及调用者 RNG 恢复，并支持默认 context_fn、默认 determinism、debug=False。use_reentrant 参数仍未分成两套 PyTorch 语义；自定义 context、debug 与非默认 determinism 明确报不支持。CUDA RNG 分支尚未在 CUDA 实测，且未测真实显存收益。
+
+证据 /data6/cgq/jittor-lab/_state/release-day23/20261101-main-checkpoint-recompute-r1/attempt-29/：strict Torch shim、CPU、CUDA_VISIBLE_DEVICES=""、JITTOR_NO_BUILD=1，四项测试 4 passed / 0 skipped / 0.50s；包含闭包参数及梯度、嵌套输出、RNG replay/no-grad 直通、绑定 Jittor 模块与 partial(super().__call__)。复用 CPU core 的 SHA256 测试前后均为 6a21f70f357d767f12c136a81f9449fb3420245db8b18c99990f31f5fbf1ce05；cache 文件清单无增删，只有 jittor.lock 内容变化，证据见 /data6/cgq/jittor-lab/_state/release-day23/20261101-main-checkpoint-recompute-r1/attempt-29/evidence/cache-delta.diff。HF GradientCheckpointingLayer 协议用例仍失败：只观察到 no-grad 前向，没有反向重算，输入和参数梯度为零；attempt-25、27、28 的失败日志均保留，不将其记作 Transformers 集成通过。attempt-29 是撤下该失败探索用例后的四项回归，不掩盖上述失败证据。
+
+当前资源快照 GPU 2/4 利用率 31%/29%，空闲显存 59,941/59,931 MiB，未满足正式性能准入；无本任务 pytest/Jittor 编译进程或该 CPU core holder。Day4–5 正式性能/显存测量需同一源码、模型权重、数据、精度、batch/sequence、loader 与配置；目标 GPU 连续稳定利用率 ≤10%、空闲 ≥60,000 MiB 且无无关计算 PID；至少 3 轮 JT/PT 交替配对、每轮每侧至少 10 个热态样本；逐侧报告 load、首步、热态 latency/throughput 的 median、p95、离散度，allocator allocated/reserved 峰值和 NVML 峰值，并单独测最大 batch/sequence 与 OOM 容量边界。共享 GPU 结果只作诊断。
+
+更广 Day2–5 发布门还需按声明支持范围闭合 API/device/dtype/layout/edge/autograd/fallback 矩阵，真实模型训练/更新/loss/held-out 任务分数，默认 DDP 的最终 gate，新进程 optimizer/scheduler/RNG/data-order 恢复，HF/模型级 checkpoint 重算及梯度/显存对照，共同 held-out JT/PT generation 判据，并明确 JT portable-pickle 与 stock PyTorch 的互操作边界。R14 单配置训练/resume、当前窄 checkpoint 单测及功能通过均不代替这些门；overall release 继续 Not complete。
+
+
 ## 2026-10-31 R22 R9 证据审计与当前主树 CUDA alias 回归
 
 继续使用 /home/cgq/jittor 原工作区，不 clone、不清理。测试时 HEAD a5e5b99be0ce074df70e10670cf179ab71d81f34，分支 integrate/cgq-transformers-native-multicard-target；fetch 后 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 85/0。开工时 103 项既有 dirty/untracked、index 为空。当前 CPU/CUDA 定向证据绑定测试时源码 fingerprint c6722fd90cacb8265eee69f313a7f9d0486e3a7f1beab7fd8ff78b59ea94bf01；这次提交只更新状态文档，不要把证据重标成文档提交后的 HEAD。

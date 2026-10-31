@@ -8,9 +8,11 @@ from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import collections as _collections_data
 import concurrent.futures as _futures_data
 import copy as _copy_data
+import functools as _functools_checkpoint
 import itertools as _itertools_data
 import operator as _operator_data
 import threading as _threading_data
+import types as _types_checkpoint
 
 import jittor as jt
 
@@ -879,35 +881,329 @@ def _generate_state(base_seed, worker_id):
 _checkpoint_default_context = object()
 
 
+class _CheckpointRef:
+    __slots__ = ("index",)
+
+    def __init__(self, index):
+        self.index = index
+
+
+class _CheckpointTree:
+    __slots__ = ("kind", "container_type", "items")
+
+    def __init__(self, kind, container_type, items):
+        self.kind = kind
+        self.container_type = container_type
+        self.items = tuple(items)
+
+
+def _checkpoint_tree_map(value, leaf_fn):
+    if isinstance(value, dict):
+        return _CheckpointTree(
+            "dict", type(value),
+            ((key, _checkpoint_tree_map(child, leaf_fn))
+             for key, child in value.items()),
+        )
+    if isinstance(value, list):
+        return _CheckpointTree(
+            "list", type(value),
+            (_checkpoint_tree_map(child, leaf_fn) for child in value),
+        )
+    if isinstance(value, tuple):
+        return _CheckpointTree(
+            "tuple", type(value),
+            (_checkpoint_tree_map(child, leaf_fn) for child in value),
+        )
+    return leaf_fn(value)
+
+
+def _checkpoint_rebuild_container(kind, container_type, items):
+    if kind == "dict":
+        if container_type is dict:
+            return dict(items)
+        try:
+            return container_type(items)
+        except TypeError:
+            return dict(items)
+    if kind == "list":
+        if container_type is list:
+            return list(items)
+        try:
+            return container_type(items)
+        except TypeError:
+            return list(items)
+    if container_type is tuple:
+        return tuple(items)
+    if hasattr(container_type, "_fields"):
+        return container_type(*items)
+    try:
+        return container_type(items)
+    except TypeError:
+        return tuple(items)
+
+
+def _checkpoint_tree_unmap(spec, leaves):
+    if isinstance(spec, _CheckpointRef):
+        return leaves[spec.index]
+    if not isinstance(spec, _CheckpointTree):
+        return spec
+    if spec.kind == "dict":
+        items = ((key, _checkpoint_tree_unmap(child, leaves))
+                 for key, child in spec.items)
+    else:
+        items = (_checkpoint_tree_unmap(child, leaves)
+                 for child in spec.items)
+    return _checkpoint_rebuild_container(
+        spec.kind, spec.container_type, items)
+
+
+def _checkpoint_flatten(value, leaves):
+    def store(leaf):
+        index = len(leaves)
+        leaves.append(leaf)
+        return _CheckpointRef(index)
+    return _checkpoint_tree_map(value, store)
+
+
+def _checkpoint_signature(spec, leaves):
+    if isinstance(spec, _CheckpointRef):
+        value = leaves[spec.index]
+        if isinstance(value, jt.Var):
+            return ("var", tuple(value.shape), str(value.dtype))
+        return ("value", type(value))
+    if not isinstance(spec, _CheckpointTree):
+        return ("value", type(spec))
+    if spec.kind == "dict":
+        children = tuple(
+            (key, _checkpoint_signature(child, leaves))
+            for key, child in spec.items
+        )
+    else:
+        children = tuple(
+            _checkpoint_signature(child, leaves) for child in spec.items
+        )
+    return (spec.kind, spec.container_type, children)
+
+
+def _checkpoint_collect_hidden(value, variables, index_by_id,
+                              hidden_indices, seen_objects):
+    if isinstance(value, jt.Var):
+        if value.is_stop_grad():
+            return
+        index = index_by_id.get(id(value))
+        if index is None:
+            index = len(variables)
+            index_by_id[id(value)] = index
+            variables.append(value)
+        if index not in hidden_indices:
+            hidden_indices.append(index)
+        return
+    object_id = id(value)
+    if object_id in seen_objects:
+        return
+    seen_objects.add(object_id)
+
+    parameters = getattr(value, "parameters", None)
+    if not isinstance(value, type) and callable(parameters):
+        for parameter in parameters():
+            _checkpoint_collect_hidden(
+                parameter, variables, index_by_id,
+                hidden_indices, seen_objects)
+    if isinstance(value, type):
+        return
+
+    if isinstance(value, _functools_checkpoint.partial):
+        children = (value.func, value.args, value.keywords or {})
+    elif isinstance(value, super):
+        children = (value.__self__,)
+    elif isinstance(value, _types_checkpoint.MethodType):
+        children = (value.__self__, value.__func__)
+    elif isinstance(value, _types_checkpoint.FunctionType):
+        closure = []
+        for cell in value.__closure__ or ():
+            try:
+                closure.append(cell.cell_contents)
+            except ValueError:
+                pass
+        globals_used = (
+            value.__globals__[name] for name in value.__code__.co_names
+            if name in value.__globals__
+        )
+        children = (
+            tuple(closure), value.__defaults__ or (),
+            value.__kwdefaults__ or {}, tuple(globals_used),
+        )
+    elif callable(value) and getattr(value, "__self__", None) is not None:
+        children = (value.__self__, getattr(value, "__func__", None))
+    elif isinstance(value, dict):
+        children = tuple(value.values())
+    elif isinstance(value, (tuple, list)):
+        children = value
+    else:
+        children = ()
+    for child in children:
+        _checkpoint_collect_hidden(
+            child, variables, index_by_id, hidden_indices, seen_objects)
+
+
+def _checkpoint_rng_snapshot():
+    cpu_state = jt.get_cpu_rng_state()
+    cuda_states = None
+    if int(jt.flags.use_cuda) and getattr(jt, "has_cuda", False):
+        cuda_states = jt.get_cuda_rng_state_all()
+    return cpu_state, cuda_states
+
+
+def _checkpoint_rng_restore(state):
+    cpu_state, cuda_states = state
+    if cuda_states is not None:
+        jt.set_cuda_rng_state_all(cuda_states)
+    jt.set_cpu_rng_state(cpu_state)
+
+
+class _CheckpointRecompute(jt.Function):
+    def __init__(self, fn, args_template, kwargs_template,
+                 original_variables, user_indices, hidden_indices,
+                 preserve_rng_state):
+        super().__init__()
+        self.fn = fn
+        self.args_template = args_template
+        self.kwargs_template = kwargs_template
+        self.original_variables = original_variables
+        self.user_indices = tuple(user_indices)
+        self.hidden_indices = tuple(hidden_indices)
+        self.preserve_rng_state = preserve_rng_state
+
+    def _call_and_flatten(self, inputs):
+        args = _checkpoint_tree_unmap(self.args_template, inputs)
+        kwargs = _checkpoint_tree_unmap(self.kwargs_template, inputs)
+        leaves = []
+        spec = _checkpoint_flatten(self.fn(*args, **kwargs), leaves)
+        return tuple(leaves), spec
+
+    def execute(self, *inputs):
+        if jt.flags.no_grad:
+            leaves, self.output_spec = self._call_and_flatten(inputs)
+            self.output_signature = _checkpoint_signature(self.output_spec, leaves)
+            return leaves
+
+        with jt.flag_scope(no_grad=0):
+            self.boundary_inputs = {
+                index: inputs[index].detach().start_grad()
+                for index in self.user_indices
+            }
+            self.forward_rng_state = (
+                _checkpoint_rng_snapshot() if self.preserve_rng_state else None
+            )
+        with jt.no_grad():
+            leaves, self.output_spec = self._call_and_flatten(inputs)
+        jt.sync_all()
+        self.output_signature = _checkpoint_signature(self.output_spec, leaves)
+        return leaves
+
+    def grad(self, *grad_outputs):
+        caller_rng_state = (
+            _checkpoint_rng_snapshot() if self.preserve_rng_state else None
+        )
+        try:
+            if self.preserve_rng_state:
+                _checkpoint_rng_restore(self.forward_rng_state)
+            with jt.flag_scope(no_grad=0):
+                recompute_inputs = tuple(
+                    self.boundary_inputs.get(index, original)
+                    for index, original in enumerate(self.original_variables)
+                )
+                recomputed, output_spec = self._call_and_flatten(recompute_inputs)
+                signature = _checkpoint_signature(output_spec, recomputed)
+                if signature != self.output_signature:
+                    raise RuntimeError(
+                        "torch.utils.checkpoint recomputation changed output "
+                        "structure, shape, or dtype"
+                    )
+                terms = [
+                    (output * grad_output).sum()
+                    for output, grad_output in zip(recomputed, grad_outputs)
+                    if isinstance(output, jt.Var) and grad_output is not None
+                ]
+                if not terms:
+                    return (None,) * len(self.original_variables)
+                objective = terms[0]
+                for term in terms[1:]:
+                    objective = objective + term
+
+                target_refs = []
+                target_indices = []
+                for index in self.user_indices:
+                    target_refs.append(self.boundary_inputs[index])
+                    target_indices.append(index)
+                for index in self.hidden_indices:
+                    target_refs.append(self.original_variables[index])
+                    target_indices.append(index)
+                if not target_refs:
+                    return (None,) * len(self.original_variables)
+                target_grads = jt.grad(objective, target_refs)
+                jt.sync_all()
+                input_grads = [None] * len(self.original_variables)
+                for index, grad in zip(target_indices, target_grads):
+                    if grad is not None:
+                        input_grads[index] = (
+                            grad if input_grads[index] is None
+                            else input_grads[index] + grad
+                        )
+                return tuple(input_grads)
+        finally:
+            if caller_rng_state is not None:
+                _checkpoint_rng_restore(caller_rng_state)
+
+
 def _checkpoint(fn, *args, use_reentrant=None,
                 context_fn=_checkpoint_default_context,
                 determinism_check="default", debug=False, **kwargs):
-    """Direct-call approximation: consume checkpoint controls, not activations.
-
-    This does not recompute activations or implement either Torch checkpoint
-    algorithm. Only default controls are accepted, except use_reentrant is
-    retained for existing callers with the advertised degraded behavior.
-    """
+    """Drop forward activations and recompute the wrapped function in backward."""
     preserve_rng_state = kwargs.pop("preserve_rng_state", True)
     if use_reentrant is not None and type(use_reentrant) is not bool:
         raise TypeError("checkpoint use_reentrant must be bool or None")
-    if preserve_rng_state is not True:
-        raise NotImplementedError("checkpoint preserve_rng_state=False is not implemented")
+    if type(preserve_rng_state) is not bool:
+        raise TypeError("checkpoint preserve_rng_state must be bool")
     if context_fn is not _checkpoint_default_context:
         raise NotImplementedError("checkpoint context_fn is not implemented")
     if determinism_check != "default":
         raise NotImplementedError("checkpoint determinism_check is not implemented")
     if debug is not False:
         raise NotImplementedError("checkpoint debug is not implemented")
-    if use_reentrant is not False and kwargs:
-        raise ValueError("Unexpected keyword arguments: " + ",".join(kwargs))
-    _stub_policy_data.degraded(
-        "torch.utils.checkpoint.checkpoint",
-        "the wrapped function is run directly, so activations are kept "
-        "and no memory is saved",
-        "use_reentrant has no effect on jittor.")
-    return fn(*args, **kwargs)
+    if jt.flags.no_grad:
+        return fn(*args, **kwargs)
 
+    variables = []
+    index_by_id = {}
+
+    def add_user_variable(value):
+        if not isinstance(value, jt.Var) or value.is_stop_grad():
+            return value
+        index = index_by_id.get(id(value))
+        if index is None:
+            index = len(variables)
+            index_by_id[id(value)] = index
+            variables.append(value)
+        return _CheckpointRef(index)
+
+    args_template = _checkpoint_tree_map(args, add_user_variable)
+    kwargs_template = _checkpoint_tree_map(kwargs, add_user_variable)
+    user_indices = tuple(range(len(variables)))
+    hidden_indices = []
+    _checkpoint_collect_hidden(
+        fn, variables, index_by_id, hidden_indices, set())
+    if not variables:
+        return fn(*args, **kwargs)
+
+    context = _CheckpointRecompute(
+        fn, args_template, kwargs_template, tuple(variables),
+        user_indices, hidden_indices, preserve_rng_state,
+    )._new_call_context()
+    leaves = context._run_call(*variables)
+    if not isinstance(leaves, (tuple, list)):
+        leaves = (leaves,)
+    return _checkpoint_tree_unmap(context.output_spec, leaves)
 
 def _default_convert(value):
     return value
@@ -982,7 +1278,8 @@ for _name, _implementation in _DATA_APIS.items():
     )
 register_fidelity(
     "torch.utils.checkpoint.checkpoint", _checkpoint, Fidelity.APPROXIMATE,
-    "evaluates the function directly; no activation recomputation or memory saving",
+    "recomputes activations in backward and preserves Jittor CPU/CUDA RNG; "
+    "custom context_fn, debug, and non-default determinism checks are unsupported",
 )
 register_fidelity(
     "torchdata.stateful_dataloader.StatefulDataLoader", StatefulDataLoader,
