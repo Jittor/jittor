@@ -1,3 +1,21 @@
+## 2026-10-31 最新交接：R20 fused AdamW 敏感性审计完成；Day4–5 时延线仍未达
+
+本轮在 /home/cgq/jittor 既有工作区，HEAD f95ea4cf4a7e1798f02c47b4bffab9dd38380c7f、source fingerprint 0382368b8754bf7a90e42382fd66b603ed2d3f323b5e8cda4820425871c7aa50 上，用 R19 同一主/compat wheels 与 private core 做 R20。实验前 102 项既有 dirty/untracked 与 status SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211、空 index 均保持；origin/cgq_transformers e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 113/0。只改变 PT/JT 的匹配 optimizer 配置为 foreach=False,fused=True，目的为敏感性诊断；未改源码或重建 core。
+
+三轮交替、每侧每阶段 16 warmup + 10 热样本完成，GPU2 logical CUDA 0，fallback 0；梯度、master 初值、实际更新和 NVML stage audits 均通过。独立审计 attempt-02 通过（SHA256 0084bf97bf1a1ebfb6b956458ad8e06a174115bba19b151c26cb595e577f3d4d），但 fused cohort JT/PT median ratio 1.68174，时延诊断线失败；allocator allocated/reserved 与 NVML 峰值 ratio 分别 1.08062/1.06150/1.04545。该测量不能替换 R19 官方 unfused 时延失败 1.39597。
+
+Artifact /data6/cgq/jittor-lab/_state/release-day23/20261031-current-wheel-bert-performance-r20-fused-adamw-sensitivity-r1-prepared/。R20 在复用的 private JIT cache 新增 12 个 fused 运行产生的 JIT 产品；终审核对其他既有 cache 项保持、lock 最后 PID 已退出。R20 attempt-01 独立 audit 的 schema 误判原件保留，attempt-02 对同一产物通过，无重跑 cohort。
+
+继续顺序：
+
+1. 用已有 R19 trace 做有界时延诊断/优化。R19 三轮 unfused 测量不重跑；任何候选源码/wheel/支持模式变化后，才以新身份复做规定的 3 轮交替 × 每轮每侧至少 10 个热样本。
+2. 另做容量/OOM 边界，以及最终候选上的 checkpoint recompute on/off allocator/NVML 峰值和速度对照。
+3. 在统一锁定候选补 API/op 支持矩阵、held-out 任务阈值、DDP Trainer 多 rank 保存与新进程恢复、JT/PyTorch 序列化契约、clean install/wheel smoke 和 baseline 迁移审查。
+
+R14 full/resume、R19 三轮和 R20 sensitivity 绑定各自证据身份；勿重复已经通过的 full、preflight、resume 或 cold core build。当前 GPU2 已回到 0% 使用、81,038 MiB free；其他 GPU 仍有高负载，磁盘 / 可用约 33 GiB、/data6 约 5.5 TiB。三份状态文档已作中文提交；提交后 HEAD 指向该提交，origin/cgq_transformers 仍为 e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（ahead/behind 114/0，远端 ls-remote 一致），index 为空，其余 102 项 dirty/untracked 状态 SHA256 仍为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211；未 push。Overall release 继续 **Not complete**。
+
+---
+
 ## 2026-10-31 最新交接：R19 当前 wheel 配对性能证据已采集，热态时延线未达
 
 R19 在当前 `/home/cgq/jittor` HEAD `4258239260f2b94c901714cf23d116e9b514b820`、source fingerprint `0382368b8754bf7a90e42382fd66b603ed2d3f323b5e8cda4820425871c7aa50` 上完成当前主/compat wheel 的非 editable BERT B8/S256 FP32 测量。origin/cgq_transformers 为 `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `112/0`。测量时保留 102 项既有 dirty/untracked（状态 SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`）；当时 index 为空，未改源码，未 push。

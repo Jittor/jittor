@@ -1,3 +1,61 @@
+## 2026-10-31 增量：R20 fused AdamW 敏感性测量通过证据审计；时延诊断线失败
+
+### 身份与范围
+
+在服务器 /home/cgq/jittor 既有工作区继续。R20 绑定 HEAD f95ea4cf4a7e1798f02c47b4bffab9dd38380c7f、origin/cgq_transformers e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（ahead/behind 113/0）、source fingerprint 0382368b8754bf7a90e42382fd66b603ed2d3f323b5e8cda4820425871c7aa50，以及实验前 102 项既有 dirty/untracked 状态 SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211；index 为空。R20 在 R19 后的 docs-only HEAD 上执行，没有改动源码、测试或 R14 证据。
+
+使用 R19 已安装主 wheel SHA256 2e8f1a4418e3e9aee770843a6fd7d5471e3de12aaad75a8e8e78deee24baa3d9、compat wheel SHA256 fd7e84f639dba09f9d8293b9d255df09aa7190b890093e614c340cc47a7a7d5a、source fingerprint 相同的 private core SHA256 050c612d6b29bb952c4debccc7eb791f1704e3c8a2040723cb352cbda789f986，没有重新构建 core。模型、权重 SHA256 86fa7113367fd0d231a76571ca1b73a1b24166af33558fee960636ce56337ed7、BERT B8/S256 FP32、固定输入 seed 20261416、AdamW 超参数与 R19 相同；唯一测量变量是两侧均配置 foreach=False,fused=True。此 cohort 明确仅为敏感性诊断，不能和 R19 unfused 结果合并，也不能证明生产调用必定派发至特定 fused CUDA kernel；结果记录了有效配置，Jittor cache 出现对应 fused_adamw JIT 产品。
+
+A800 GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 通过五次 admission，环境将该 UUID 映射到逻辑 CUDA 设备 0（result 的 actual_device 字段为字符串 "0"）。按 torch0,jittor0,torch1,jittor1,torch2,jittor2 顺序进行 3 轮交替，六阶段每侧各 16 warmup、10 热态样本，独立做 3 次 allocator profile 与 3 次 CUDA attribution。六阶段自然退出、无 retry，fallback 均为 0；每阶段检查 197 个梯度、201 个参数/缓冲初始映射、有限 loss 与实际参数更新，配对输入和初始状态一致；逐阶段 NVML load audit 通过。
+
+### 配对性能
+
+| runtime | 热态 pooled median | pooled p95 | pooled 标准差 | 三轮 median（ms） | 三轮 p95（ms） | 三轮标准差（ms） |
+| --- | ---: | ---: | ---: | --- | --- | --- |
+| PyTorch | 88.407 ms | 90.793 ms | 2.252 ms | 88.322 / 88.170 / 88.979 | 90.065 / 90.272 / 93.391 | 2.022 / 1.602 / 2.635 |
+| Jittor | 148.677 ms | 151.720 ms | 15.474 ms | 148.217 / 149.001 / 148.811 | 149.534 / 150.877 / 152.647 | 15.171 / 15.291 / 15.734 |
+
+三轮 JT/PT median ratio 为 1.67814 / 1.68993 / 1.67243，pooled median ratio 1.68174，不满足沿用的 1.10 诊断线。Jittor 每轮前两个热样本约 98–100 ms 与 135–137 ms，其余大多约 148–153 ms，所以逐轮和 pooled 标准差较高；本报告保留全部样本的离散度，不能只看稳定段 median。
+
+启动与首步（按轮次）：
+
+- PyTorch：pre-model setup 3.665 / 3.661 / 3.536 s；model ready 3.516 / 3.387 / 3.506 s；first update 0.483 / 0.453 / 0.505 s。
+- Jittor：pre-model setup 2.783 / 2.773 / 2.773 s；model ready 5.337 / 5.189 / 5.403 s；first update 5.107 / 2.778 / 2.759 s。
+
+model ready 包含 math probe、模型构建及 201 项 master/input readback，不是纯加载耗时；各阶段值和 timing breakdown 均在 result.json。
+
+### 显存与缓存副作用
+
+| runtime | allocator allocated 峰值 | allocator reserved 峰值 | NVML 进程峰值 |
+| --- | ---: | ---: | ---: |
+| PyTorch | 3,344,064,000 B | 3,665,821,696 B | 4,004 MiB |
+| Jittor | 3,613,674,496 B | 3,891,265,536 B | 4,186 MiB |
+
+相应 JT/PT ratio 为 allocated 1.08062、reserved 1.06150、NVML 1.04545。这是 B8/S256 代表格数据，不是显存容量或 OOM 边界结论。
+
+R20 复用 R19 的 private Jittor cache。before/after 快照显示新增 12 个 JIT 产品文件，恰为 3 个操作各自的 .cc/.so/.so.d/.so.key，其中一个是 fused_adamw，另外两个为 array 运算；没有删除缓存条目，原有条目均未变化，指定 math probe 文件只发生允许的 mtime 变化。Jittor lock 文件最终记录指向 jittor2 PID 3372550，终审核实 /proc/3372550 已不存在且文件 hash 匹配 after 快照。上述是 fused 敏感性运行产生的 JIT 缓存写入，不是 cold core rebuild，也不表示缓存保持字节不变。
+
+### 审计、artifact 与结论
+
+完整 artifact：/data6/cgq/jittor-lab/_state/release-day23/20261031-current-wheel-bert-performance-r20-fused-adamw-sensitivity-r1-prepared/
+
+- receipt SHA256 ef4007c5f9eb275fc552bfd0c8e44fd6403bcfe7a1da01009e2c35f78a86ed09
+- summary SHA256 c6a579d3a8d737190bc09fdb27ade0e28b4992b6d41b58398ce37aaab167dbb7
+- post-run independent audit attempt-02 SHA256 0084bf97bf1a1ebfb6b956458ad8e06a174115bba19b151c26cb595e577f3d4d，状态 R20_FUSED_ADAMW_SENSITIVITY_AUDIT_PASS_TIME_GATE_FAIL
+- attempt-01 audit SHA256 93cd4fd81d46f13c708578abb11e5ce1e2d2981e2d00c79b63d22d28c3161afc 保留。它按 R19 的 audit schema 错将 "0" 判为非法设备描述，并把 fused 运行预期新增的 JIT 产品/终态 lock 记录当成缓存不一致；修正为验证 logical CUDA 0、限定新增产品和检查最后 worker 已退出的 attempt-02 重新审计既有产物，没有重跑测量。
+
+R20 中 Jittor median 148.677 ms 接近 R19 unfused 150.630 ms，PyTorch fused median 88.407 ms 低于 R19 unfused 107.903 ms，相对 ratio 因而从 R19 的 1.39597 变为 1.68174。R20 不关闭也不改变 R19 官方 unfused 测量的时延诊断失败；它只表明此次 matched fused 参数设置没有消除差距。此结果仅支持本 wheel/core、模型、设备和配置。
+
+### Day4–5 与更广发布门待办
+
+Day4–5 仍需以正式支持配置和最终候选 wheel 通过热态时延门；R19 unfused 三轮证据已采集并审计，不能为了改状态重跑。下一步应基于现有 trace 做有界诊断/优化；若源码、wheel 或支持的 optimizer mode 改变，再以新身份按至少三轮 PT/JT 交替、每轮每侧至少 10 热态样本重测，并报告 setup/load、首步、热态 median/p95/离散度、吞吐和 allocator/NVML 峰值。仍需单独的 batch/sequence 容量扩展及 OOM/边界恢复证据，以及同一候选、同一任务的 checkpoint recompute on/off 速度与峰值显存比较；功能层 recompute 证据不能替代资源收益测量。
+
+更广 Day2–5 仍需要：最终候选声明范围内的 API/op × device/dtype/layout/autograd/fallback 覆盖矩阵和明确 unsupported 边界；当前候选的 held-out 真实任务指标及通过阈值；DDP 多 rank 真实训练、梯度同步、Trainer 保存及新进程完整恢复；JT portable save/load 与 stock PyTorch 读取 optimizer 文件的序列化契约决策和证据（已知 stock torch.load 不能读取 JT portable-pickle optimizer.pt，需继续保留该互操作失败）；干净 sdist/wheel 非 editable 安装、组合包 selftest/smoke 和相对受支持 wheel baseline 的逐项迁移审查。R14 Qwen seed821 full 与 resume 是绑定旧源码/配置的窄功能证据，不需重跑，也不自动关闭当前候选的这些门。
+
+Overall release **Not complete**。
+
+---
+
 ## 2026-10-31 增量：R19 当前 wheel BERT 三轮性能/显存测量完成；时延诊断线未达
 
 ### 源码身份与执行范围

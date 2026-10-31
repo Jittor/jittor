@@ -1,3 +1,17 @@
+## 2026-10-31 续验：R20 fused AdamW 敏感性测量已审计；时延线未达
+
+在现有 /home/cgq/jittor 工作区完成一组 R20 fused AdamW 敏感性测量，没有重新 clone、改源码、重建 core 或重做 R14。测量绑定 HEAD f95ea4cf4a7e1798f02c47b4bffab9dd38380c7f、source fingerprint 0382368b8754bf7a90e42382fd66b603ed2d3f323b5e8cda4820425871c7aa50、相同的 R19 主/compat wheel 与 private core。R20 仅将匹配的 PT/JT optimizer 设为 foreach=False,fused=True，用于敏感性诊断。
+
+GPU2（A800 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0，进程逻辑 CUDA 设备 0）执行三轮交替，每侧每阶段 16 warmup、10 热态样本。六阶段均通过：fallback 0、197 个梯度、201 个初始参数/缓冲映射和真实更新均核实。独立终审 attempt-02 通过，SHA256 0084bf97bf1a1ebfb6b956458ad8e06a174115bba19b151c26cb595e577f3d4d；其状态同时判定热态时延线失败。
+
+R20 热态 median 为 PT/JT 88.407/148.677 ms，p95 90.793/151.720 ms，标准差 2.252/15.474 ms，JT/PT median ratio 1.68174；每轮 ratio 1.67814/1.68993/1.67243。allocator allocated 峰值 ratio 1.08062，reserved ratio 1.06150，NVML 峰值 ratio 1.04545。此 fused 配置没有改善 Jittor 的相对时延，且不是 R19 的 unfused 正式配置，不能代替其 1.39597 时延失败结论。代表格仍未覆盖容量/OOM。
+
+R20 artifact 位于 /data6/cgq/jittor-lab/_state/release-day23/20261031-current-wheel-bert-performance-r20-fused-adamw-sensitivity-r1-prepared/。完整结果、阶段 hashes、缓存变化、限制和审计 attempt-01/02 见[Day2–5 结果报告](../results/2026-10-26-torch-compat-release-day2-5.md)。R20 在复用的 private JIT cache 中新增 12 个 fused 运行生成的 JIT 文件（3 组 .cc/.so/.so.d/.so.key，包括 fused_adamw 及两个 array op）；已有项未变，除 math probe 指定路径的 mtime 和已退出最后 worker 的 Jittor lock 记录。未重建 Jittor core。测量结束后无 R20 阶段进程残留。
+
+Day4–5 仍未通过整体验收：R19 官方 unfused 代表格时延线未达；需要围绕该正式配置做有界诊断/优化，并在确切发布 wheel 上按相同协议重测；仍需容量/OOM 边界，以及真实 checkpoint recompute 开关配对的显存收益/速度成本。更广 Day2–5 的支持矩阵、当前候选 held-out 质量、DDP Trainer 多 rank 保存恢复、序列化互操作契约与 clean install/wheel baseline 审查也仍开放。已有 R14 full/resume、R19 测量及本次 R20 均按各自源码和配置绑定，不重复跑已通过的 full/preflight/resume。Overall release **Not complete**。
+
+---
+
 ## 2026-10-31 续验：R19 当前 wheel BERT 三轮测量完成；时延诊断线未达
 
 本轮在既有 `/home/cgq/jittor` 工作区完成当前 wheel 的 Day4–5 BERT 代表格测量，没有重新 clone、改源码或重做 R14 训练。测量绑定 HEAD `4258239260f2b94c901714cf23d116e9b514b820`、source fingerprint `0382368b8754bf7a90e42382fd66b603ed2d3f323b5e8cda4820425871c7aa50`、主/compat wheel SHA256 `2e8f1a…baa3d9` / `fd7e84…7a7d5a`；当时 102 项既有 dirty/untracked、porcelain SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`，index 为空。origin `cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `112/0`。
