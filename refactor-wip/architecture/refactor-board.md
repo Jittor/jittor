@@ -1,3 +1,20 @@
+## 2026-11-01 01:28 +0800 续验：R13g 序列化回归通过；发布门继续开放
+
+本次文档更新前，主仓库 `/home/cgq/jittor` 位于分支 `integrate/cgq-transformers-native-multicard-target`，HEAD `8597b7de66e465a62a1ac65f40cbaad78a93bd2f`；fetch 后 `origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind 为 131/0。原有 102 项 dirty/untracked porcelain SHA256 仍是 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`，暂存区为空；主源码没有改动。
+
+隔离候选 R13e/R13f/R13g 绑定 worktree `/data6/cgq/jittor-lab/worktrees/torch-compat-fill-zero-runtime-grad-r12-cuda-init-20261101`，HEAD `765f1791f3b00f9129fb3ec6342dadf2c9dc2dbe`，source fingerprint `1167ac8ccc2e731fed7b16842c9643b16a60106b97a3fda27224e597971421ce`。R13e source manifest SHA256 为 `45fa417682359bcaec12d904c2569eb04651e055a5aa2b64a87ea63ff4b41121`；对候选清单 2,807 项重新逐项核对，0 项差异。该候选未合并到主工作区。
+
+R13g 在 R13e 源码上运行 serialization API-owner 与 Torch compatibility serialization 两个完整测试文件：**50 passed、0 skipped、fallback=0**，耗时 3.88 秒。进程绑定 GPU4 UUID `GPU-8bf405a2-a3dd-e203-8dd9-691e9f7b3530`，CUDA_VISIBLE_DEVICES 仅暴露该设备；Jittor use_cuda=1，PyTorch 检测到一个 A800 80GB 设备。它覆盖此前 R13c 的三个失败测试及其余 47 项；原 R13c FAIL 原件仍保留，不回写。R13g 属功能回归，不是性能或显存测量。worker result SHA256 `bba02c9875cec87a3542089f0f46133a1699e095d1c07d6fa4fb96b22999935c`，worker log SHA256 `27a8a3f431b07c4698654a01c478fb250bdb8ee9a1e5328a7b71df6c2158e7bf`；完整产物位于 `/data6/cgq/jittor-lab/_state/release-day23/20261101-r13g-serialize-full-r13e-prepared/`。
+
+R13e 修正了三处已复现的实际语义问题：`untyped_storage().data_ptr()` 使用分配基址；从 NumPy state_dict 加载时先按目标模块放置创建张量；`assign=True` 测试先检查 alias/device/location，再执行可能触发 Jittor 主机读回迁移的 `.numpy()`。这三项定向 CUDA 回归先以 3/3 通过；R13g 又在同一候选上完成两文件全量回归。
+
+R13f 使用真实 R14 seed821 的 checkpoint-51 `optimizer.pt`（旧 JT portable-pickle，SHA256 `93bb7c198431bbda175b653d16e81d5c38006737b52c2f8abd929350fcbba905`，4,611,114 bytes）：Jittor shim 以 `weights_only=True,map_location=cpu` 读取，再写出一个新的标准 PyTorch ZIP；stock PyTorch 2.6.0+cu124 以 `weights_only=True` 读取成功，并对完整树核对 336 个张量、136 个标量、121 个容器，摘要完全匹配。新 ZIP SHA256 `2c406042d3439bd9d5eba0d6829aa2b602c9b23f14e08b02412663122c3047a4`，摘要 SHA256 `c110ebabd5e450d101e8c0a5cb928ef796c2d478b89f3695693a80b65091839d`。原 checkpoint 未覆盖。它证明“JT 可读旧文件并转换为 stock PT 可读的新 ZIP”，不证明 stock PT 能直接读取旧 JT portable-pickle；旧格式的直接跨框架失败仍单独保留。R13f attempt-01 在载入 checkpoint 前因误选冷缓存、core 编译到 28/228 后以 143 退出；attempt-02 复用暖缓存并通过，两个原件都保留。
+
+本轮设备快照仍不具备正式性能窗口：GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 为 Default，外部 yqa PID 3590512 占约 8,640 MiB；GPU4 同为 Default，yqa PID 3591114 与 cgq 的 V2M4 任务 PID 3751582 合计占约 16,488 MiB。GPU2/GPU4 都没有管理员独占租约。根盘可用约 73 GiB，`/data6` 可用约 5.5 TiB。
+
+Day4–5 正式性能/显存验收仍需管理员或调度系统按 UUID/GRES/cgroup 给出独占窗口，固定匹配配置，至少三轮交替且每轮每侧至少十个热样本，并报告 load/首步/热态的 median、p95、离散度、吞吐及 allocator/NVML 峰值、容量/OOM 恢复和 checkpoint on/off。更广 Day2–5 仍开放：声明范围支持矩阵、held-out 任务指标、最终候选训练和新进程恢复、DDP 多 rank checkpoint、序列化方向/格式契约、clean wheel/sdist 安装及旧 baseline migration review。R14 Qwen 实用训练结论仍只支持原绑定源码、seed 和配置；R13g 不扩展训练质量结论。Overall release **Not complete**。
+
+继续顺序：先补序列化方向/格式合同和 DDP/安装迁移等不依赖独占 GPU 的发布门；获得 GPU2 管理员独占窗口后再做正式 Day4–5。不要运行 burner，不重做 R14 full、preflight 或已通过续训。
 ## 2026-11-01 00:10 +0800 续验：R11h GPU4 定向 CUDA 用例单项通过；启动与存储合同仍开放
 
 主工作区文档编辑前 HEAD 为 `eac64eba9727df20355d62aad90f1b7bb622fa5b`，origin/cgq_transformers 为 `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind 130/0。102 项既有 dirty/untracked 的 porcelain SHA256 仍为 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`；主源码未改。

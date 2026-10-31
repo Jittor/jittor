@@ -1,3 +1,19 @@
+## 2026-11-01 01:28 +0800 handoff：R13g 序列化全量回归通过；R14 optimizer 转换通过
+
+主仓库 `/home/cgq/jittor` HEAD `8597b7de66e465a62a1ac65f40cbaad78a93bd2f`，分支 `integrate/cgq-transformers-native-multicard-target`；fetch 后 origin SHA `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind 131/0。文档编辑前 102 项既有 dirty/untracked porcelain SHA256 仍为 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`，index 为空；本轮只更新唯一看板、本结果报告和本 handoff，不改主源码，不 push。
+
+R13e/R13f/R13g 绑定隔离候选 `/data6/cgq/jittor-lab/worktrees/torch-compat-fill-zero-runtime-grad-r12-cuda-init-20261101`，HEAD `765f1791f3b00f9129fb3ec6342dadf2c9dc2dbe`，fingerprint `1167ac8ccc2e731fed7b16842c9643b16a60106b97a3fda27224e597971421ce`。R13g 两个序列化测试文件 50 passed、0 skipped、fallback=0，使用 CUDA-enabled Jittor 与 GPU4 UUID `GPU-8bf405a2-a3dd-e203-8dd9-691e9f7b3530`；完整结果与哈希在 Day2–5 报告本节和 `/data6/cgq/jittor-lab/_state/release-day23/20261101-r13g-serialize-full-r13e-prepared/`。
+
+R13f 从 R14 checkpoint-51 旧 JT optimizer 文件读取 336 tensors/136 scalars/121 containers，经 shim 保存为标准 ZIP 后由 stock PyTorch 2.6 读取并完整摘要匹配。它不改变原 checkpoint，也不证明 stock PyTorch 能直接读旧 portable-pickle。失败的 R13c、R13d 和 R13f attempt-01 均保留，详见结果报告。
+
+本轮状态点：GPU2 与 GPU4 都是 Default 且处于共享使用，GPU2 尚无管理员独占租约；根盘可用约 73 GiB，/data6 约 5.5 TiB。R13g 是功能回归，不纳入 Day4–5 性能/显存成绩。Day4–5 仍须至少三轮交替、每轮每侧十个热样本、完整时延/吞吐/内存统计及容量/OOM/checkpoint 配对。更广 Day2–5 的支持矩阵、held-out 指标、最终候选训练/新进程恢复、DDP 多 rank checkpoint、序列化契约与 clean wheel/sdist/migration review 仍开放；overall **Not complete**。
+
+### 下一步
+
+1. 在不触碰旧 R14 原件的前提下，扩展并锁定序列化方向、格式、dtype、device 和 optimizer/model 状态合同；区分旧 JT portable-pickle 的直接 stock-load 限制与 shim 转存后的 ZIP 互操作。
+2. 推进不依赖 GPU 独占的 Day2–5 发布门：DDP 多 rank checkpoint、完整支持矩阵、clean wheel/sdist 安装及旧 baseline migration review；held-out 任务指标和统一候选训练/续训需绑定同一候选。
+3. Day4–5 需管理员/调度系统按 GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 提供独占窗口；不运行 burner，不把共享 GPU 结果当正式性能结论。
+
 ## 2026-11-01 00:10 +0800 handoff：R11h GPU4 有一项 CUDA selector 通过；发布门仍未关闭
 
 主工作区文档编辑前 HEAD `eac64eba9727df20355d62aad90f1b7bb622fa5b`，origin/cgq_transformers `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind 130/0。102 项原有 dirty/untracked 保持其 porcelain SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`；主源码未改。本轮执行与文档变化仅涉及 R11h 隔离候选、其 _state 证据目录及三份状态文档。
