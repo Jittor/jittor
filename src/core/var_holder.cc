@@ -285,10 +285,13 @@ void VarHolder::copy_into_preserving_aliases(VarHolder* src) {
     USER_CHECK(no_grad) << "storage-preserving compatibility writes require no_grad";
     USER_CHECK(!state_capture && !keep_graph)
         << "storage-preserving compatibility writes do not support captured/kept graphs";
+    // Requested placement can differ even when copy_ has a valid source and
+    // destination allocation. copy_into() dispatches by actual
+    // allocators, so alias preservation only requires matching dense shape
+    // and dtype here.
     USER_CHECK(var->shape == src->var->shape && var->dtype() == src->var->dtype() &&
-            var->placement == src->var->placement && var->device_id == src->var->device_id &&
             var->is_contiguous() && src->var->is_contiguous())
-        << "storage-preserving compatibility writes require identical dense shape, dtype and placement";
+        << "storage-preserving compatibility writes require identical dense shape and dtype";
     auto token = var->storage_version_token();
     // An eager write must preserve values of older lazy expressions. This
     // dependency walk follows execution boundaries: a completed independent

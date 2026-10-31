@@ -1,3 +1,12 @@
+## 2026-11-01 03:14 +0800 续验：R3 copy_ placement 修复进入主工作区；GPU2 独占不可用
+
+本轮基线 /home/cgq/jittor HEAD b588c421d59f4d8cf3b4183a15af8c00559ce2c6，分支 integrate/cgq-transformers-native-multicard-target；最近 fetch 的 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 134/0。原有 102 项 dirty/untracked 状态仍以 SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211 匹配；新增的仅本任务 src/core/var_holder.cc 与定向测试文件。当前主工作区只完成 CPU 功能验证，不包含 GPU 性能/显存验证。
+
+R3 修复已从隔离候选移入主树：storage-preserving copy_ 不再要求 source/destination 的抽象 placement 和 device id 元数据一致；仍检查 no-grad、非 capture/kept-graph、dense shape、dtype、contiguous，底层按实际 allocator/device 执行 copy。新增 compat/tests/torch/test_copy_preserving_alias_placement.py。主树定向 CPU 用例 1 passed、0 skipped；检查 FollowRuntime target 对 explicit-CPU source 的 copy_ 原位写入、目标 storage pointer/backend 保持、source/target 值隔离，fallback guard 未触发。主树完整 Trainer 集成未重跑；此前候选 fresh-process Trainer 集成 6 passed 的边界仍仅绑定候选与 tiny-BERT CPU fixture。
+
+GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 在 03:13:54 +0800 为 Default，显存 8,651 MiB used / 72,387 MiB free、利用率 81%；compute-app 查询只列出 yqa PID 3590512（8,640 MiB）。普通占卡进程无法阻止共享模式下的其他进程创建 CUDA context，因此没有编写或启动 burner。Slurm 21.08.8 虽安装，但 X12DPG-OA6 为 down / Node unexpectedly rebooted，sacctmgr 没有 cgq account association，srun --test-only 返回 Invalid account or account/partition combination specified；配置为 TaskPlugin=task/affinity、ProctrackType=proctrack/cgroup，没有 task/cgroup 设备访问约束。因此当前没有可用的 GPU2 独占租约。
+
+正式 Day4–5 需由管理员恢复节点、提供有效 Slurm association，并按物理 UUID/GRES 及设备 cgroup 建立独占租约；随后再按三轮以上交替、每轮每侧至少十个热样本，报告 load/首步/热态 latency 的 median/p95/离散度、吞吐与 allocator/NVML 峰值，并验证近容量/OOM 恢复和 checkpoint on/off。GPU 独占未就绪前不把共享测量当验收证据。Overall release **Not complete**。
 ## 2026-11-01 02:54 +0800 续验：R3 placement 候选 Trainer resume 通过；GPU2 仍共享
 
 继续使用 /home/cgq/jittor，HEAD 751b274adbe0158784a7e3bcb3babdf63be14455，分支 integrate/cgq-transformers-native-multicard-target，origin ahead/behind 133/0。主源码 fingerprint 仍为 1fbdc0fa223b9fb3e016a9aca72f7b95cc6c93f3e10076f3b743d6035e15c343；102 项既有 dirty/untracked 的 porcelain SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211 未变。本轮没有改主源码。

@@ -1,3 +1,14 @@
+## 2026-11-01 03:14 +0800 handoff：主树 R3 CPU copy_ 回归通过；GPU2 需要管理员独占
+
+工作基线 /home/cgq/jittor HEAD b588c421d59f4d8cf3b4183a15af8c00559ce2c6；本轮只改 src/core/var_holder.cc 和新增的 compat/tests/torch/test_copy_preserving_alias_placement.py，主树 CPU 定向回归 1 passed、0 skipped、fallback=0。主树完整 Trainer 集成及 CUDA copy 尚未验证；候选上的 6 项 CPU Trainer 集成证据仍保留候选身份，不外推。
+
+GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 在 03:13:54 +0800 为 Default，共享利用率 81%、显存用量 8,651 MiB，yqa PID 3590512 占 8,640 MiB。Slurm 的 X12DPG-OA6 节点目前 down，cgq 无 Slurm account association，配置没有 task/cgroup 设备限制；srun --test-only 因账号/分区 association 错误失败。没有写或运行占卡 burner，也没有可靠手段让普通进程阻止其他用户使用该卡。
+
+### 下一步
+
+1. 请管理员恢复 a800 节点、给 cgq 建立有效 association，并提供按 GPU2 UUID/GRES 和设备 cgroup 约束的独占租约；收到前保持 GPU2 不动，不将共享测量当性能验收。
+2. 在主树 CPU 路径继续验证 R3 对 Trainer 的集成，再推进 DDP 多 rank checkpoint、支持矩阵、held-out 任务指标与 wheel baseline migration review。
+3. 独占租约就绪后，再执行三轮以上交替、每轮每侧至少十个热态样本的性能/显存协议，并补近容量/OOM 恢复、checkpoint on/off。Day2–5 overall release **Not complete**。
 ## 2026-11-01 02:54 +0800 handoff：隔离 R3 Trainer 候选通过；GPU2 无独占租约
 
 主仓库 /home/cgq/jittor HEAD 751b274adbe0158784a7e3bcb3babdf63be14455，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 133/0；102 项既有 dirty/untracked 状态 SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211 未变，index 原先为空。主源码未动。

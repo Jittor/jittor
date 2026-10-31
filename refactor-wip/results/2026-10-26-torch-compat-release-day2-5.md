@@ -1,3 +1,22 @@
+## 2026-11-01 03:14 +0800 R3 主工作区 copy_ 修复与 GPU2 独占条件复核
+
+### 主工作区修复
+
+本轮从隔离候选 R3 移入 /home/cgq/jittor 的修复只改 src/core/var_holder.cc 与新增定向回归文件 compat/tests/torch/test_copy_preserving_alias_placement.py。storage-preserving copy_ 仍要求 no-grad、禁止 state capture/keep-graph、shape/dtype 相同且 source/destination 均 contiguous；移除抽象 placement 与 device id 元数据相等检查。后续 copy_into 根据实际 allocator/device 做拷贝，避免 CPU 上公开 device 相同但 FollowRuntime 与 explicit-CPU 元数据不同而拒绝 Trainer 初始权重。回归检查目标 placement/backend 与 storage pointer 未变、值已复制且 source 后续修改不影响 target，并在 forbid_backend_fallbacks() 内执行。
+
+主工作区 CPU 验证使用 /home/cgq/jittor-lab/transformers_compat/envs/jittor/bin/python、独立 /data6/.../main-integration-r2/jittor-home、CUDA_VISIBLE_DEVICES 为空、JITTOR_CUDA=0、JT_BUILD_USE_CUDA=0 与 strict shim bootstrap。Jittor core 227/227 个编译单元完成，用时 315.386 秒；定向用例 **1 passed、0 skipped**，pytest 用时 0.92 秒，fallback guard 未触发，进程没有建立 GPU context。日志 SHA256 0cae27ce688de00f9726684f37b1163e9583434ab217bffb07665f11184e3b16，runner SHA256 b41adb0d42b31b04755210fc75bdac1aa6c192ec0bf436fbc75ac17a64cc3871。测试运行时 core 源文件 SHA256 d37890f40a2673d8ed110a4de12b1cc25923a68cc188dc7b8ed0b7f6c041cb7d；之后只把误写的注释 “below” 改成准确的 “copy_into() dispatches”，当前 src/core/var_holder.cc SHA256 53f73df53bd42465aed6ff5f51aa4bfe7569a9b0263576848f10e7dc48ab40a8，没有改逻辑。新增测试 SHA256 9f0acb0193626b46b8ee5fa7cb68b64d40b17b2300c0dfeeaa2246d0b4340d4b；功能 patch SHA256 d638fa66ff76a071ecdfe19376feaaaa37757f8c6f4902c57578b165d71412e0，注释复核 patch SHA256 24df001c2fb3d3a7a852cbd0e43146963c715a5f3b78eb208f6c0e78e74773a8。完整本轮文件留在 /data6/cgq/jittor-lab/_state/release-day23/20261101-trainer-copy-placement-r3-prepared/main-integration-r2/。
+
+R3 候选自身此前已有 focused CPU 1 passed、Trainer fresh-process 集成 6 passed、0 failed、0 skipped、JT fallback=0 的证据；PT/JT 连续与 checkpoint resume 各 272 项轨迹一致。它仍只绑定候选与合成 tiny-BERT CPU fixture。本轮主树只跑了新的单项回归，没有在主树重跑完整 Trainer 集成，也没有 CUDA/multi-GPU 验证；因此不能据此声称普遍跨设备 copy、Qwen 任务质量、Day4–5 性能/显存验收通过。
+
+### GPU2 reservation 可行性
+
+在 2026-11-01T03:13:54+08:00，GPU index 2 映射 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0，compute mode Default，8,651 MiB used、72,387 MiB free、GPU utilization 81%；compute-app 列出 yqa PID 3590512（8,640 MiB）。因此 GPU2 不是独占空卡，本轮没有启动 CUDA 测试或 burner。
+
+只读检查发现 Slurm 21.08.8 已安装，但 a800 节点 X12DPG-OA6 状态为 down (Node unexpectedly rebooted)；sacctmgr show assoc where user=cgq 无 association，srun --test-only -p a800 -w X12DPG-OA6 --gres=gpu:1 --time=00:10:00 /bin/true 因 Invalid account or account/partition combination specified 失败。Slurm 配置 TaskPlugin=task/affinity，ProctrackType=proctrack/cgroup，没有 task/cgroup GPU device constraint。普通用户态占卡进程不能阻止其他用户建立 context，显存 burner 也不构成排他。需要管理员先恢复节点、建立账户 association，再提供精确 GPU UUID/GRES allocation 和设备 cgroup 约束（或管理员级设备独占租约）；期间不杀、不影响现有用户进程。
+
+### 发布门
+
+本轮只推进了一个主树 CPU 功能缺陷及其回归。Day4–5 正式性能/显存验收仍完全开放；共享负载下的测量只作诊断，之后仍要做至少三轮交替、每轮至少十个热样本、median/p95/离散度/吞吐/allocator 与 NVML 峰值、near-capacity/OOM recovery 和 checkpoint on/off。DDP 多 rank checkpoint、完整支持矩阵、held-out 任务指标及 clean wheel/sdist/core baseline migration review 仍未完成。R14 训练结论仍绑定原源码与配置；overall Day2–5 release **Not complete**。
 ## 2026-11-01 02:54 +0800 R3 copy_ placement 候选 Trainer resume 通过；主树未改
 
 ### 主工作区和候选身份
