@@ -1,5 +1,17 @@
 # Torch Compatibility Release Acceptance: 2026-10-26 Day 2–5 Continuation
 
+## 2026-10-31 checkpoint 重算 HF 梯度路径增量与未通过尝试
+
+代码在 compat/torch/installers/data.py 对 checkpoint no-grad 前向返回的 Torch 前端 jt.Var 调用 start_grad()，修复输出在外层 Torch Tensor 协议下未要求梯度的问题；内部重算仍使用默认 jt.grad 保留行为。compat/tests/torch/test_torch_checkpoint_recompute.py 当前保留四项通用回归和一项 Transformers GradientCheckpointingLayer 协议用例。当前代码/测试 SHA256 分别为 ce4660a1858d3c233a4aec40a7a9b18f0a2c540bfad92cf1d3b3128fe78a134b 与 73a9f6548ecc4f0f1096c5be5271dab6fbaffab45902ea509248914cff58d767；修改前源码 fingerprint a9fe576216918991e1d62eff0a981eff576c433ce077e619899de682096264e9。
+
+attempt-30 在 strict Torch shim、CPU、CUDA_VISIBLE_DEVICES=""、JITTOR_NO_BUILD=1 下执行整个测试文件，5 passed / 0 skipped / 1.49s。HF 协议观察到 no-grad 前向和梯度重算各一次，输入/参数梯度分别为 [3,3] 和 [6]。该轮源码 fingerprint 24192b56fc12e06c59e6e7fec50ede3256b7b539599f077e60e2794de76f890a，日志、source-before/after、cache 清单和 core 哈希保存在 /data6/cgq/jittor-lab/_state/release-day23/20261101-main-checkpoint-recompute-r1/attempt-30/。这是 CPU 功能证据，没有 allocator/NVML 或峰值显存测量。
+
+真实 Llama 探索未形成通过证据。attempt-31 的小型 LlamaForCausalLM 测试 300 秒 timeout、exit 124；测试前后 cache 文件清单由 1,246 增至 2,093，core SHA 不变。attempt-37 的 LlamaDecoderLayer 窄测试观察 calls=[1,0,0]，断言要求 [1,0] 而失败，运行 27.42s；状态 sentinel 另报告 number_of_hold_vars 与 number_of_lived_vars 均从 0 变为 9。attempt-38 为释放重算图将 jt.grad 改成 retain_graph=False，随后 native jt.grad 发生 segmentation fault、exit 139；core SHA 前后均为 6a21f70f357d767f12c136a81f9449fb3420245db8b18c99990f31f5fbf1ce05，cache 清单仍为 2,205 项，仅 jittor.lock 内容变化。已撤销 retain_graph=False，不保留会导致 native 崩溃的实现；当前 LlamaDecoderLayer 测试也已移除，避免把未完成探索留作回归门。
+
+中间失败均保留：attempt-32 的错误重定向原件保存在 evidence/malformed-test-file-from-redirection.txt；attempt-33 为该损坏文件导致的 collection error；attempt-34 的 cos/sin 形状不符、attempt-35 的 attention implementation 未初始化属于测试准备失败；attempt-36 是 shell 引号造成的 Python 语法错误。重建后的当前测试文件恢复为 attempt-30 通过的五项范围。attempt-25/27/28 的旧 HF 输出梯度失败及 attempt-29 四项通用回归仍按既有记录保留。
+
+本轮结束前资源快照：GPU2 约 30% / 空闲 59,941 MiB，GPU4 约 33% / 空闲 59,931 MiB；共享 VLLM PID 2914621、2861632 在运行，其他 GPU 也有高负载。无本任务 pytest/Jittor 残留进程或 cache holder。/ 根分区剩余 34 GiB（显示 100% 使用），/data6 剩余 5.5 TiB。正式 Day4–5 门不满足准入条件，因此本轮没有生成 JT/PT 性能或显存结论。
+
 ## 2026-10-31 checkpoint 重算进展与剩余发布验收内容
 
 本增量继续在 /home/cgq/jittor 原工作区完成，未 clone/reset/stash/clean。提交前 HEAD 77b3ced2be7cae286f02f63839f822b704d56a0e，分支 integrate/cgq-transformers-native-multicard-target；git fetch origin 后 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 87/0。保留全部既有 dirty/untracked；任务触及 compat/torch/installers/data.py 和新加的 compat/tests/torch/test_torch_checkpoint_recompute.py，其他源码/实验文件未纳入本任务。测试时整树 fingerprint 9b5fc3e218c41acd26ccf112597af96c761790f57c9c42c7ee757c811872a65，HEAD 与代码 fingerprint 分开标识。

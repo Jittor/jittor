@@ -1098,6 +1098,11 @@ class _CheckpointRecompute(jt.Function):
         with jt.no_grad():
             leaves, self.output_spec = self._call_and_flatten(inputs)
         jt.sync_all()
+        for output in leaves:
+            if (isinstance(output, jt.Var)
+                    and getattr(type(output), "_frontend_backend", None)
+                    is not None and output.is_stop_grad()):
+                output.start_grad()
         self.output_signature = _checkpoint_signature(self.output_spec, leaves)
         return leaves
 

@@ -1,5 +1,17 @@
 # 整改看板
 
+## 2026-10-31 HF checkpoint 梯度路径验证与 Day2–5 门禁续接
+
+继续在服务器现有 /home/cgq/jittor 工作区，没有 clone、reset、stash 或 clean。当前 HEAD 为 f81f994266147c25c87135c7e00623dd2265a444；fetch origin/cgq_transformers 后远端为 e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 为 88/0。开始时的 103 项既有 dirty/untracked 均保留；本增量只涉及 checkpoint 兼容实现/测试及规定的三份状态文档。更新前 index 为空。代码回退并移除不稳定 Llama 层用例后，当前源码 fingerprint 为 a9fe576216918991e1d62eff0a981eff576c433ce077e619899de682096264e9；本任务文件 SHA256：data.py ce4660a1858d3c233a4aec40a7a9b18f0a2c540bfad92cf1d3b3128fe78a134b，checkpoint 测试 73a9f6548ecc4f0f1096c5be5271dab6fbaffab45902ea509248914cff58d767。
+
+本轮将 HF 前端输出在 checkpoint no-grad 前向后显式恢复为可求导状态；strict Torch shim 的 CPU 协议回归 attempt-30 为 5 passed、0 skipped、1.49s，覆盖四个通用重算/梯度/RNG 测试及 Transformers GradientCheckpointingLayer：前向与反向重算调用为 [1, 0]，输入梯度 [3, 3]、参数梯度 [6]，输出 requires_grad 为真。证据位于 /data6/cgq/jittor-lab/_state/release-day23/20261101-main-checkpoint-recompute-r1/attempt-30/，当次源码 fingerprint 24192b56fc12e06c59e6e7fec50ede3256b7b539599f077e60e2794de76f890a，HEAD f81f994266147c25c87135c7e00623dd2265a444。此项证明 Transformers 通用 checkpoint 层协议可重算并传梯度，不等于真实 Llama 模型级验收，也没有显存收益数据。
+
+真实 Llama 路径仍未通过：attempt-31 小型 LlamaForCausalLM 集成用例运行 300 秒后 timeout，exit 124；attempt-37 LlamaDecoderLayer CPU 梯度用例观察到 [1,0,0]，严格调用次数断言失败，且 Jittor 进程状态报告 hold/live vars 各增加 9。attempt-38 尝试把内部 jt.grad 改为 retain_graph=False 后在 native jt.grad 栈中段错误，exit 139；该改动已撤回为默认 retain_graph 行为，Llama 层用例已从当前测试文件移除。attempt-32/33 的 shell 重定向误操作、attempt-34/35 的输入形状/attention 配置准备失败、attempt-36 的命令引号语法错误均留在对应 evidence；损坏测试文件已从 HEAD 重建，误写原件另存于 attempt-32/evidence/malformed-test-file-from-redirection.txt。不得将这些失败归类为模型集成通过，也不重复当前 full 模型超时尝试。
+
+资源复核时 GPU2 利用率约 30%、空闲 59,941 MiB，GPU4 约 33%、空闲 59,931 MiB；另有共享 GPU 计算进程，包括 VLLM PID 2914621、2861632。没有本任务 pytest/Jittor 进程或 cache lock holder。根分区可用 34 GiB（挂载使用率显示 100%），/data6 可用 5.5 TiB。本轮不启动性能/显存验收：目标卡未满足利用率 ≤10%、空闲显存 ≥60,000 MiB、无无关 PID 的稳定窗口。
+
+Day4–5 正式门仍需匹配冻结的 JT/PT 源码、权重、数据、精度、batch/sequence、loader 与配置；稳定设备窗口下至少 3 轮交替配对、每轮每侧至少 10 个热态样本；分别报告 load、首步、热态 latency/throughput 的 median、p95、离散度，allocator allocated/reserved 峰值及 NVML 峰值，并独立测最大 batch/sequence 与 OOM 容量边界。共享负载历史测量只作诊断。更广 Day2–5 仍需闭合声明范围内 API/device/dtype/layout/edge/autograd/fallback 矩阵、实际模型训练与 held-out 任务质量、新进程 optimizer/scheduler/RNG/样本顺序恢复、真实模型 activation recompute 与显存对照、默认 DDP 最终 gate、共同 held-out JT/PT generation 判据及 JT portable-pickle 与 stock PyTorch 的互操作边界。R14 训练/resume 和本次窄 checkpoint 协议均不替代这些门；overall release 保持 Not complete。
+
 ## 2026-10-31 checkpoint 重算实现推进与 Day2–5 发布门
 
 继续在 /home/cgq/jittor 原工作区，未 clone、reset、stash 或 clean。提交前 HEAD 77b3ced2be7cae286f02f63839f822b704d56a0e，分支 integrate/cgq-transformers-native-multicard-target；fetch 后 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 87/0。初始既有 dirty/untracked 全部保留，index 为空。本轮测试时源码 fingerprint 9b5fc3e218c41acd26ccf112597af96c761790f57c9c42c7ee757c811872a65。

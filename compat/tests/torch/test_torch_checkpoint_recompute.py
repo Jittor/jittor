@@ -104,5 +104,39 @@ class TestCheckpointRecompute(unittest.TestCase):
         np.testing.assert_allclose(grad_value.numpy(), [3.0, 3.0], atol=1e-6)
         np.testing.assert_allclose(grad_weight.numpy(), [6.0], atol=1e-6)
 
+    def test_transformers_gradient_checkpointing_layer_protocol(self):
+        try:
+            from transformers.modeling_layers import GradientCheckpointingLayer
+        except Exception as exc:
+            self.skipTest("local Transformers checkpoint layer unavailable: %s" % exc)
+
+        calls = []
+
+        class Layer(GradientCheckpointingLayer):
+            def __init__(self):
+                super().__init__()
+                self.weight = torch.nn.Parameter(
+                    torch.tensor([3.0], dtype=torch.float32))
+
+            def forward(self, value):
+                calls.append(int(jt.flags.no_grad))
+                return value * self.weight
+
+        layer = Layer()
+        layer.train()
+        layer.gradient_checkpointing = True
+        object.__setattr__(
+            layer, "_gradient_checkpointing_func",
+            _functools.partial(checkpoint, use_reentrant=False))
+        value = torch.tensor([2.0, 4.0], requires_grad=True)
+        output = layer(value)
+        grad_value, grad_weight = jt.grad(
+            output.sum(), [value, layer.weight])
+
+        self.assertTrue(output.requires_grad)
+        self.assertEqual(calls, [1, 0])
+        np.testing.assert_allclose(grad_value.numpy(), [3.0, 3.0], atol=1e-6)
+        np.testing.assert_allclose(grad_weight.numpy(), [6.0], atol=1e-6)
+
 if __name__ == "__main__":
     unittest.main()

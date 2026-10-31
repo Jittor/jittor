@@ -1,5 +1,13 @@
 # 2026-10-21 工作区快照与本机接续交接
 
+## 2026-10-31 checkpoint 重算续接与剩余验收门
+
+当前服务器工作区仍为 /home/cgq/jittor，未重新 clone。HEAD f81f994266147c25c87135c7e00623dd2265a444；fetch 后 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 88/0。原有 103 项 dirty/untracked 必须保留；本任务当前仅有 compat/torch/installers/data.py、compat/tests/torch/test_torch_checkpoint_recompute.py 两项实现/测试修改，状态文档仅允许更新 architecture board、Day2–5 results、workspace handoff。不要 stash/reset/clean 或 push。
+
+当前 checkpoint 改动让 Transformers GradientCheckpointingLayer 的 CPU 小协议用例通过，attempt-30 全文件 5 passed / 0 skipped / 1.49s；真实 LlamaForCausalLM attempt-31 超时，DecoderLayer attempt-37 断言失败并报告 9 个 hold/live vars 增量。attempt-38 的 retain_graph=False 引发 native segmentation fault，该参数已经撤回。上述日志都留在 /data6/cgq/jittor-lab/_state/release-day23/20261101-main-checkpoint-recompute-r1/，不要重跑 R14 full/preflight/resume 或已超时的 Llama 全模型探索。checkpoint 现在有实际函数级重算和梯度证据，但还没有真实模型通过，也没有节省激活显存的实测。
+
+当前 GPU2/4 约 30%/33%，空闲显存 59,941/59,931 MiB，存在共享 VLLM 进程；/ 剩余 34 GiB、/data6 剩余 5.5 TiB。待 GPU 稳定达到 ≤10% 利用率、≥60,000 MiB 空闲且无无关计算 PID 后，才运行冻结配置的正式配对测量：3 轮交替 JT/PT，每轮每侧 ≥10 个热态样本，报告 load/first/hot 的 median、p95、离散度、allocator allocated/reserved 与 NVML 峰值，另测最大容量和 OOM 边界。更广 Day2–5 仍要完成支持矩阵、声明模型训练/held-out 质量、恢复状态、默认 DDP、真实 checkpoint 模型/显存证据、共同 generation 判据及跨框架序列化范围。整体 release 仍 Not complete。
+
 ## 2026-10-31 checkpoint 重算工作区接续
 
 继续 /home/cgq/jittor 原工作区。提交前 HEAD 77b3ced2be7cae286f02f63839f822b704d56a0e；origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 87/0。所有既有 dirty/untracked 保留，未 push。任务新增 compat/torch/installers/data.py checkpoint 重算路径及四项定向测试；工作区整树 fingerprint 9b5fc3e218c41acd26ccf112597af96c761790f57c9c42c7ee757c811872a65，证据只绑定本次测试时源码身份，不等同于文档提交后的 HEAD。
