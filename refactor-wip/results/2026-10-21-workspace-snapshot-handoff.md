@@ -1,3 +1,15 @@
+## 2026-10-31 接续：R5 当前源码实用训练/续训完成；GPU2 独占仍受权限阻塞
+
+R5 在现有 `/home/cgq/jittor` 工作区完成，无 clone 或源码改动。HEAD `d26c31246613c9e6a34da2ee7b6853612c9049a3`，origin `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind 127/0；实验前 102 项其他 dirty/untracked 状态 SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`。证据目录 `/data6/cgq/jittor-lab/_state/release-day23/20261031-qwen-current-source-practical-r5-prepared/`，快照 manifest SHA256 `af6a7c4e140163820ca26703621974ceec29c5e2850df55335119004f56fe8ff`。
+
+Qwen3-0.6B LoRA seed821 在 GPU4（逻辑 `cuda:0`）完成 102/102 更新、0 skip、fallback=0；epoch loss 1.205599/1.153534，eval loss 2.456431。checkpoint-51 新进程续至 102，完成 51 更新；RNG 检查通过，930 项状态值和设备映射通过（112 个 scalar optimizer step 不参加 tensor 设备映射比较）。该证据没有性能/显存结论或 held-out 生成质量分数。
+
+GPU2 包装器 `/data6/cgq/jittor-lab/_state/release-day23/gpu2-exclusive-run.sh`（SHA256 `5e4da7f88793c6e38e204919a45b7d9463aa21ae2c260330953eb19904902d02`）因当前账户无权设置 `EXCLUSIVE_PROCESS` 未激活。14:43 UTC CIFAR100 进程 PID 3590512 使用 GPU2 8640 MiB；resume 阶段亦有 GPU2/GPU4 共享负载。正式测量需管理员提供 UUID/GRES/device-cgroup 独占租约。
+
+下一步：取得正式独占窗口后执行冻结配置下三轮交替 PT/JT 性能/显存、近容量/OOM 恢复和 checkpoint on/off 配对；同时关闭支持矩阵、held-out 质量、当前候选训练/恢复、DDP 多 rank checkpoint、序列化互操作和 baseline migration review。Overall release **Not complete**。本轮只提交这三份状态文档，不 push；其他既有 dirty/untracked 文件保持原样。
+
+---
+
 ## 2026-10-31 接续：R4 clean packaging 结果与 GPU2 独占限制
 
 在现有 `/home/cgq/jittor` 工作区继续，无 clone/reset/stash/clean。HEAD `fa7fae39ad06d05cfbc5545e705c9d64562c2f58`，远端 `origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind 126/0。其他既有 dirty/untracked 状态在本轮前为 porcelain SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`；`/data6` 可用 5.5 TiB，根分区可用约 32 GiB。主工作区源码不变，只更新既有状态文档。

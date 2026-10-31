@@ -1,3 +1,21 @@
+## 2026-10-31 续验：R5 当前源码 Qwen 实用训练与续训通过；Day4–5 验收仍开放
+
+在 `/home/cgq/jittor` 既有工作区继续，未 clone 或改源码。R5 绑定 HEAD `d26c31246613c9e6a34da2ee7b6853612c9049a3`；实验前 102 项 dirty/untracked SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`；origin ref `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind 127/0。源码快照 manifest SHA256 `af6a7c4e140163820ca26703621974ceec29c5e2850df55335119004f56fe8ff`。证据目录：`/data6/cgq/jittor-lab/_state/release-day23/20261031-qwen-current-source-practical-r5-prepared/`。
+
+R5 为 Qwen3-0.6B LoRA seed821，两 epoch、101 samples/epoch、batch 1、eval batch 2、gradient accumulation 2、bf16、gradient checkpointing、AdamW lr=3e-5。实际运行于物理 A800 GPU4 UUID `GPU-8bf405a2-a3dd-e203-8dd9-691e9f7b3530`（进程内 `cuda:0`）。102/102 更新成功、0 skip、fallback=0；首个非零更新的有限完整梯度/动量、LoRA-B 改变、bf16 autocast 和 optimizer 未跳步检查通过；adapter 保存/重载、merge/reload、缓存生成一致性通过。每 epoch 101 微批次加权 loss 为 1.2055992702/1.1535344227；17 条固定 eval loss 为 2.4564309120。R14 PT 对照为 1.205680/1.154064/2.456644，差异约 -0.0067%/-0.0459%/-0.0087%。这是限于本源码/seed/fixture/config 的功能证据；trainer runtime 不用于性能验收，固定 eval loss 不是 held-out 生成质量分数。
+
+fresh-process resume 从 checkpoint-51 恢复到 step 102，完成 51 更新，0 skip、fallback=0；Python/NumPy/CPU/CUDA RNG、严格状态与功能检查通过，930/930 状态值一致且 tensor device maps 匹配；112 个 scalar optimizer `step` 不要求 tensor 设备映射。resume eval loss 为 2.4564309120，生命周期为 `STRICT_LIFECYCLE_COMPLETED`。resume 阶段 CIFAR100 进程曾同时占用 GPU2/GPU4（约 8640 MiB/卡），故不将其耗时、吞吐或显存作为性能证据。短采样有 Transformers 提示 `temperature/top_p/top_k` 可能被忽略，不作质量结论。
+
+R5 完整训练/resume 日志 SHA256：`221c6d402d80e4ca95fbba6416b2fd12203fc9a4067633a991889b637d73e489` / `134f8a40c459c4a987a91a8197e3a7fa43958cde6236f1305b440a228b89af7e`；状态比较 SHA256 `f3b37544924624cd5fba3e47d614a4827ca62380514dcec8bba2d6b252279283`。30 项证据 manifest SHA256 `d971d798c111d38acc04eef1a6fddb920f4b8308a37c523405680302ec1a2b78`；216 项审计 harness manifest SHA256 `75f2dedfc6b771e9d307b403a0620bd807c8b5bd7aab03c4a22bde2a791419e7`。共享负载记录：`logs/shared-load-during-resume.json`。
+
+### GPU2 占用请求与正式测量准入
+
+已写 fail-closed 包装器 `/data6/cgq/jittor-lab/_state/release-day23/gpu2-exclusive-run.sh`（SHA256 `5e4da7f88793c6e38e204919a45b7d9463aa21ae2c260330953eb19904902d02`）。它检查设备、尝试设置 `EXCLUSIVE_PROCESS` 并将该 UUID 映射为任务的 `cuda:0`；当前账户权限不足，包装器未激活、GPU2 未被本任务占住，也没有运行持续 kernel/memory burner。2026-10-31 14:43:12 UTC GPU2 为 Default；PID 3590512（`/home/yqa/envs/sgn-keras3/bin/python`，CIFAR100）使用 8640 MiB、利用率约 84%。不能由普通用户脚本阻止别的账号或终止其作业。正式测量需管理员恢复调度节点并提供 UUID/GRES/device-cgroup 独占租约。
+
+Day4–5 仍须冻结匹配的 PT/JT 候选并在稳定窗口至少 3 轮交替、每轮每侧至少 10 个热样本；报告 load/首步/热态时延与吞吐的 median、p95、离散度及 allocator/NVML 峰值。另需近容量、最大可运行配置、OOM 后恢复与 checkpoint on/off 配对。更广 Day2–5 的 API/operator 支持矩阵、预设阈值 held-out 质量、冻结候选训练/恢复、DDP 多 rank checkpoint、序列化互操作契约和 baseline migration review 仍未关闭。Overall release **Not complete**。
+
+---
+
 ## 2026-10-31 续验：R4 clean packaging 修复通过；Day4–5 与更广发布门仍开放
 
 本轮继续使用 `/home/cgq/jittor` 现有工作区。HEAD 为 `fa7fae39ad06d05cfbc5545e705c9d64562c2f58`，`origin/cgq_transformers` 当前远端 ref 为 `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，HEAD ahead/behind 为 126/0。实验前既有 dirty/untracked porcelain SHA256 为 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`；主工作区源码未改。R4 证据目录：`/data6/cgq/jittor-lab/_state/release-day23/20261031-main-package-current-r4-prepared/`，预检绑定同一 HEAD 和状态哈希；R4 隔离补丁不能视为已迁入主工作区。

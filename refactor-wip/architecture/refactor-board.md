@@ -1,3 +1,11 @@
+## 2026-10-31 续验：R5 当前源码 Qwen 实用训练/续训通过；GPU2 无法独占
+
+R5 绑定 HEAD `d26c31246613c9e6a34da2ee7b6853612c9049a3`、实验前 102 项 dirty/untracked SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211` 和快照 manifest `af6a7c4e140163820ca26703621974ceec29c5e2850df55335119004f56fe8ff`。Qwen3-0.6B LoRA seed821 两 epoch 在物理 GPU4（逻辑 `cuda:0`）完成 102 更新，0 skip、0 fallback；生命周期检查通过。epoch 加权 loss 为 1.205599/1.153534，eval loss 2.456431，接近 R14 PyTorch 对照 1.205680/1.154064/2.456644。checkpoint-51 新进程续至 102，930/930 状态值及 RNG/设备映射检查通过。
+
+GPU2 启动包装器 `/data6/cgq/jittor-lab/_state/release-day23/gpu2-exclusive-run.sh`（SHA256 `5e4da7f88793c6e38e204919a45b7d9463aa21ae2c260330953eb19904902d02`）因当前账户无权设置 `EXCLUSIVE_PROCESS` 未激活，也未启动 burner。2026-10-31 14:43 UTC 检查到另一 CIFAR100 进程 PID 3590512 使用 GPU2 8640 MiB；R5 resume 期间也有共享负载，相关耗时/显存不作性能证据。Day4–5 与更广 Day2–5 发布门未完成，overall **Not complete**。
+
+---
+
 ## 2026-10-31 续验：R4 clean packaging 局部通过；GPU2 独占仍受权限阻塞
 
 R4 隔离候选修正了 torch shim 部署提示中的 `torch.__file__` 访问，改用 `vars(torch).get("__file__")`，并增加回归断言。主 wheel + R4 compat wheel 的干净安装、部署命令、版本验证及 compat wheel 内容审计通过；补丁尚未迁入主工作区，baseline migration review 仍待完成。R4 不改变 release 总状态。
