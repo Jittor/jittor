@@ -1,5 +1,16 @@
 # 整改看板
 
+## 2026-10-31 当前源码 Qwen 训练与新进程续训复核；Day2–5 仍未闭合
+
+继续在服务器 /home/cgq/jittor 原工作区。实验源码 HEAD 0f9fcab760199be9eb696806fb2fb88ea9951f6c，fingerprint de5a3c9a283bc4c4a0b4d4602dee409615a006d90bb97822474a929f9197d099；fetch 后跟踪分支 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 91/0。开工时保留 103 项 dirty/untracked，index 为空；未 clone、reset、stash 或 clean。本轮未改源码，只在结尾更新规定的三份状态文档，不 push。
+
+在隔离证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261030-main-qwen-checkpoint-recompute-practical-r1/ 为当前源码私有构建 CUDA core 并完成 Qwen3-0.6B LoRA seed821 两 epoch 实训：GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0，进程内 cuda:0，BF16、batch=1、累积=2、max_length=96、102 次 optimizer update，0 跳步、0 fallback。按 epoch 微批 loss 均值 1.205599→1.153534，固定 eval loss 2.469817→2.456431。checkpoint-51 新进程恢复至 step102，完成 51 次更新；Python/NumPy/CPU/CUDA RNG 检查通过。full/resume 以 atol=rtol=0 对照通过：930 个状态张量、样本游标、更新协议与最终状态一致，0 差异。reload/merge 短生命周期检查通过。该结果只支持当前源码和固定 seed/config，不构成 held-out generation 质量或泛化结论。
+
+GPU2 约 35% 利用率、59,941 MiB 空闲；GPU4 约 26%、59,931 MiB 空闲，并有共享计算进程。/ 可用约 33 GiB，/data6 约 5.5 TiB。训练和终审后无本任务 runner、Jittor cache holder；未进行性能/显存计时。Day4–5 仍需合格设备窗口、匹配冻结的 JT/PT workload、至少三轮交替配对且每侧每轮至少十个热态样本，分别报告 load/首步/热态 median、p95、离散度、allocator allocated/reserved 与 NVML 峰值，并独立给出容量/OOM 边界。
+
+更广发布门仍需闭合声明范围 API/device/dtype/layout/edge/autograd/fallback 矩阵、默认 DDP 终审、共同 held-out JT/PT generation 判据、模型级 CUDA checkpoint recompute 与峰值显存对照、安装/打包检查及序列化互操作边界。现有 CPU LlamaDecoderLayer checkpoint 重算/一阶梯度窄证据不代表 CUDA 显存收益；JT 新进程恢复与 stock PyTorch 无法读取 JT portable-pickle optimizer 分开记录。Overall release 保持 Not complete。
+
+
 ## 2026-10-31 Torch 工厂叶子张量的梯度与 optimizer 功能核验
 
 继续在服务器 /home/cgq/jittor 既有工作区；HEAD 15a6bc19832bd5af55d17104fe1ec2a6d78591a9，fetch 后 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 90/0。本轮前保留 103 项 dirty/untracked，index 为空；没有 clone、reset、stash、clean 或 push。当前工作树已有未提交 factory/autograd 实现，本轮只核验并记录，没有改源码。

@@ -1,5 +1,39 @@
 # Torch Compatibility Release Acceptance: 2026-10-26 Day 2–5 Continuation
 
+## 2026-10-31 当前源码 Qwen 全量训练与新进程续训终审
+
+本轮继续使用服务器 /home/cgq/jittor 原工作区，没有 clone、reset、stash 或 clean。实验开始时 HEAD 为 0f9fcab760199be9eb696806fb2fb88ea9951f6c，分支 integrate/cgq-transformers-native-multicard-target；fetch 后 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 91/0。开始时 103 项既有 dirty/untracked 保留、index 为空。本轮没有改源码/测试；仅在收尾更新本状态记录规定的三份文档，未 push。当前源码 fingerprint 前后均为 de5a3c9a283bc4c4a0b4d4602dee409615a006d90bb97822474a929f9197d099。
+
+### 当前源码实训证据
+
+实验证据在 `/data6/cgq/jittor-lab/_state/release-day23/20261030-main-qwen-checkpoint-recompute-practical-r1/`。此前两次 bootstrap 在任何训练更新之前失败，原日志分别保留在 `evidence/attempt-01-bootstrap/` 与 `evidence/attempt-02-bootstrap/`；随后为当前 C++ 源码建立独立 cache，不复用旧 core。构建退出码 0，耗时 379.3 秒；core SHA256 `635033df1696f32f5e0ca6529102a5724bf2cd0c92c4d398e6fe351802714622`，jit_utils SHA256 `d83b331385c81f3ffa8b70ba2665acee73fe6ba7e5c300089af43170f80eebaf`。核心 build log SHA256 `fdcd1aa616b56f8995e89e8d3aff21a7816241f229ff684fe6ae1b3b1eecc633`。
+
+全量 run 绑定 HEAD/fingerprint 如上，Qwen3-0.6B LoRA、seed 821、BF16、两 epoch、batch 1、梯度累积 2、max_length 96、max_target_length 48、学习率 3e-5；使用既有训练/评估 fixture 与初始化权重。fixture SHA256：train `3836597b696a3b79b81ac9f34bc79ce9a4d06cf6e8bf204aabf48dc5d924ecf0`，eval `d8318478c8991e75ba5cac474e1f3dfe95c0478da49ad8b2a8909c72fb72f84f`；base model `f47f71177f32bcd101b7573ec9171e6a57f4f4d31148d38e382306f42996874b`，初始 adapter `8b0637a69aeaf5c25b027a9abd6eefce36e33462bd791b80bdfd56ea0eb9b4bb`。实际设备为 GPU2 / UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` / 逻辑 `cuda:0`。102 次 optimizer update 全部成功、0 跳步、fallback=0，冻结 base 未变；运行约 1392.95 秒。每 epoch 101 个微批的 loss 均值为 1.2055992702 → 1.1535344227，中位数 1.0830422640 → 1.0453352928；固定 eval loss 为 2.4698171616 → 2.4564309120。该训练耗时是在共享 GPU 上的诊断值，不能用于 Day4–5 性能/显存结论。
+
+strict lifecycle `STRICT_LIFECYCLE_COMPLETED`：reload logits max abs=0、generation exact；merge logits max abs `0.0002660751`（预算 `0.001` 内）、merged reload generation exact。未计算 held-out generation 任务质量分数。
+
+### 新进程 checkpoint-51 恢复与连续轨迹对照
+
+新进程从全量 run 的 checkpoint-51 续训至 step102，进程内新增 51 次更新；start_step=51、global_step=102，0 跳步、fallback=0、实际参数设备 `cuda:0`。报告 `resume_loaded_state_exact=true`、`resume_rng_loaded=true`；同进程 RNG restore audit 的 Python、NumPy、CPU、CUDA 四项均通过。续训固定 eval loss 为 `2.4564309120`。续训 strict lifecycle 也为 `STRICT_LIFECYCLE_COMPLETED`，reload logits max abs=0、merged generation exact。
+
+使用 runner 的 `compare` 独立对照 full 与 resumed final state，并检查 full prefix 与恢复后轨迹：报告 `evidence/resume-attempt01/continuous-vs-resume-compare.json`，SHA256 `07566b1b724648903517b8a2b0651c44a6b95a212c9112ca853a04825bc1e0c5`；`atol=rtol=0`、930 个状态张量、failure_count=0、sample_cursor_exact=true、update_count_exact=true、protocol_exact=true。`resume-state-comparison.json` 另记录 optimizer/model 状态、设备映射与状态值核验通过。报告中的 `state_archive_semantics.same_checkpoint_verified=false` 是 runner 的归档语义字段，不覆盖上述独立 full/resume 比较结果。
+
+resume 关键 SHA256：worker.log `c930be9984e4dc1f2d6f1d7dad2da7731f23d6c9e20dcc0eb5d51288eca72c23`；strict-lifecycle.json `1068011e91fd51ef9f3eb6fa4246625d529c292dd769d2373edd32f0d1c6ea8a`；practical-report.json `adb962bfb2a245a8a9d17464758270acc246ecbcbc4a5471cd962f0f2f580744`；training-observations.json `5485a4049772b09401e5aa7c573d9bc52356d0ddbdd78e0db9f0004cf746de6f`。训练过程报告 SHA256：full worker.log `0fe95ede7d4a3ed8c7ad8f000f3b96d8c890926039eb6ffc84db7e821956156c`，full strict-lifecycle.json `c369b25788cbf5af2a0899cdfdcb221a6c9d21691a934d6203df0dee797dc7e3`，full practical-report.json `9709afef7911db9110cda756d193181e1ae8ca680e0fbf1fa82fe7950365e08c`。实验源码和产物全在 `/data6`，未写入仓库。
+
+### 尚需完成的 Day4–5 与 Day2–5 门
+
+| 门 | 完成标准 | 当前状态 |
+|---|---|---|
+| Day4–5 性能/显存 | 冻结同一 JT/PT 源码、构建/cache、模型权重、数据、精度、batch/sequence、loader、optimizer/config 与设备；全程 GPU 利用率 ≤10%、空闲显存 ≥60,000 MiB 且无无关 compute PID；至少 3 轮交替配对，每轮每侧 ≥10 个热样本。分别报告 load、首步、热态 latency/throughput 的 median、p95、离散度，allocator allocated/reserved 峰值和 NVML 峰值；独立测最大 batch/sequence 与 OOM 边界。 | 未开始正式计时。终审快照 GPU2 约 35% / 空闲 59,941 MiB，GPU4 约 26% / 空闲 59,931 MiB，且有共享负载。不能把本轮训练时长作为性能结果。 |
+| 公开 API 功能面 | 明确 release 支持范围，并按 API × device × dtype/layout × edge/autograd/fallback 覆盖；不支持行为明示，真实 fallback 计数纳入断言。 | 多项窄功能证据已有，范围矩阵尚未闭合。 |
+| 真实模型与任务质量 | 对每个声明支持的代表模型冻结 weights/data/config/device，记录真实设备、fallback、有限梯度、参数更新、loss、验证指标、checkpoint；JT/PT 在共同 held-out prompts 上按预先约定的生成/任务指标和阈值评分。 | 本轮 Qwen 训练/resume 支持固定配置的功能证据；只有固定 eval loss 与短生命周期生成一致性，没有 held-out generation 分数。 |
+| checkpoint 与 activation recompute | 新进程恢复 model/optimizer/scheduler、Python/NumPy/CPU/CUDA RNG、样本顺序，并与连续轨迹对照；activation checkpoint 需证明真实重算、梯度相符及 allocator/NVML 峰值内存对照。 | 本轮 Qwen checkpoint-51 新进程状态与轨迹对照通过。已有 CPU LlamaDecoderLayer 窄用例证明一次重算与一阶梯度；尚无 CUDA 模型级显存收益证据。 |
+| 默认 DDP | 覆盖普通初始参数同步、no_sync/收尾 backward、optimizer 更新、梯度与跨 rank 参数/状态一致，并由外层 gate/sentinel 正确汇总。 | 有窄路径测试体通过记录；默认首同步及完整外层终审仍未闭合。 |
+| 序列化/发布 | 分开验证 JT 同框架保存/恢复与 stock PyTorch 互操作；对不支持的格式写清边界；完成干净环境安装、包内容/依赖、核心 API smoke 与发布说明审查。 | 同框架 resume 已通过；stock PyTorch `torch.load` 读取 JT portable-pickle `optimizer.pt` 的失败仍单独保留，安装/打包 release gate 未闭合。 |
+
+总体 release 状态仍为 **Not complete**。R14/R21 已通过 run、已通过 resume、预检与历史失败件均保留，不覆盖、不删除、不为改变状态标签重复运行。
+
+
 ## 2026-10-31 Torch 工厂 leaf 梯度与 optimizer 更新核验
 
 本轮在服务器 /home/cgq/jittor 原工作区继续，测试绑定 HEAD 15a6bc19832bd5af55d17104fe1ec2a6d78591a9、分支 integrate/cgq-transformers-native-multicard-target；fetch 后 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 90/0。核验开始时保留 103 项 dirty/untracked，index 为空；无 clone/reset/stash/clean/push。factory/autograd 源码和测试改动在本轮开始前已经存在于 dirty 工作树；本轮没有修改源码或测试，只增加本状态记录。
