@@ -1,3 +1,13 @@
+## 2026-10-31 续验：R37 seed821 CUDA 生成对照完成；GPU2 无法由当前账户独占
+
+R37 在既有工作区完成一次 PT/JT 配对的 17 条 greedy generation 探索。实验绑定 HEAD `2b7dac919764b7b815cf32fff5a42d9e35896c59`、源码指纹 `0382368b8754bf7a90e42382fd66b603ed2d3f323b5e8cda4820425871c7aa50`、Qwen3-0.6B revision `c1899de…`、固定 train/eval fixture 与 seed821 checkpoint。两侧实际均在 A800 GPU4/cuda:0 运行；JT fallback 计数 0→0。17/17 样本 ID、target、prompt 长度和生成预算对齐，14/17 预测文本完全一致。PT/JT mean token F1 为 0.208718/0.204534，ROUGE-L 为 0.149341/0.148379，normalized exact match 均为 0；JT 平均生成 token 数与 PT 同为 79.824。
+
+该 17 条 fixture 虽与已记录的训练 fixture ID 不重叠，但来源为 Alpaca train split，未经人工复核，也没有预设阈值。JT adapter（SHA256 `8669a5fb…`）训练于旧源码指纹 `ae2cb7…`，推理使用当前 wheel/core，故此结果仅作探索，不关闭 held-out 质量发布门，也不构成性能或显存证据。PT adapter SHA256 `d48da15c…`。完整证据目录 `/data6/cgq/jittor-lab/_state/release-day23/20261031-main-qwen-seed821-heldout-generation-r1-prepared/`，evidence manifest SHA256 `241d4649ee29f1a4df264321c88dd3935fbf3690ae5f7ca401d76ecbef4b3fb2`，逐样本终审 `final-review.json` SHA256 `00c45d4b0e8bf9cddcfd34bea0b9ef834e40ddacbc07b03ca84ddae4ea5037f3`。
+
+GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 在检查时空闲，但 compute mode 为 Default；当前账户无 sudo，Slurm 中主机 `X12DPG-OA6` 为 down。显存占用或持续 kernel 的 burner 不能排除非协作进程，也会污染正式测量，因此没有启动。R21 正式代表格 median ratio 1.576、R26 为 1.595，现行 1.10 时延门仍未通过；R36 只有 checkpoint-on 单侧。Day4–5 仍需稳定窗口的三轮 JT/PT 配对热态测量、近容量/OOM/恢复与 checkpoint on/off 资源对照；更广 Day2–5 支持矩阵、可信任务质量、DDP Trainer 多 rank 恢复、序列化契约、clean packaging 和 migration review 仍开放。GPU2 正式测试需管理员恢复节点并提供按 GPU UUID 绑定的 Slurm/GRES/cgroup 独占租约。Overall release 继续 **Not complete**。
+
+---
+
 ## 2026-10-31 续验：R36 证明当前 wheel CUDA checkpoint 重算；共享负载拒绝后仅完成 on 单侧
 
 在既有 /home/cgq/jittor 工作区继续，无 clone 或源码改动。R36 绑定 HEAD 487a82e8d8025c0a7458186e464acc0f76e0ac10、源码指纹 0382368b8754bf7a90e42382fd66b603ed2d3f323b5e8cda4820425871c7aa50，预实验时 102 项既有 dirty/untracked 状态 SHA256 为 be3ed51168de9922dd80cebe3e134b11967ae95bb5ec4aee986d97f6fa4f071c。R35-r3 的导入审计已由事后审计确认：shim、Transformers、Jittor 与当前 wheel core 绑定正确，CUDA runtime enabled；runner 仅因 compatibility torch namespace 不提供 torch.__file__ 而在写报告时失败，没有加载模型、前向或启动 kernel。R35-r3 不重试。

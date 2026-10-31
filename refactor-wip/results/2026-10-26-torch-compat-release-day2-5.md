@@ -1,3 +1,29 @@
+## 2026-10-31 续验：R37 seed821 CUDA 生成配对完成；Day4–5 与广泛发布门仍未关闭
+
+R37 为一次 PT/JT 探索性配对推理，不是正式性能或质量验收。运行绑定仓库 HEAD `2b7dac919764b7b815cf32fff5a42d9e35896c59`、源码指纹 `0382368b8754bf7a90e42382fd66b603ed2d3f323b5e8cda4820425871c7aa50`、Qwen3-0.6B revision `c1899de…`、R14 seed821 step-102 adapters 与 train/eval fixture SHA。PT 使用 PyTorch 2.6.0+cu124，JT 使用 current-wheel Jittor Torch shim 1.3.11.0、Transformers 4.56.2、PEFT 0.17.1；两侧在物理 A800 GPU4 UUID `GPU-8bf405a2-a3dd-e203-8dd9-691e9f7b3530` 上实际映射为 `cuda:0`，JT fallback 前后均为 0。每侧只运行一次，17 个样本全完成。
+
+| 指标 | PyTorch | Jittor | JT−PT |
+| --- | ---: | ---: | ---: |
+| normalized exact match | 0.000000 | 0.000000 | 0 |
+| word token F1 | 0.208718 | 0.204534 | -0.004184 |
+| ROUGE-L | 0.149341 | 0.148379 | -0.000962 |
+| 平均生成 token 数 | 79.823529 | 79.823529 | 0 |
+
+配对审计确认 IDs、targets、prompt token 数和生成预算全部一致，14/17 预测文本一致；评估 ID 与记录的训练 fixture ID 无交集。但该数据来自 Alpaca train split、没有人工复核，且没有预设通过阈值。JT adapter SHA256 `8669a5fb3f0b738573809ede36c77a0758eb26aa555a6cc5d29f75ee9329257b` 训练于旧源码指纹 `ae2cb7…`，推理 wheel 指纹为 `0382368b…`；故 R37 不能作为当前候选生成质量通过证据。PT adapter SHA256 `d48da15c6e4574d91f8474e7e16a010a000f3c69542fb681ab43377f31ea2b36`。证据包 `/data6/cgq/jittor-lab/_state/release-day23/20261031-main-qwen-seed821-heldout-generation-r1-prepared/`，manifest SHA256 `241d4649ee29f1a4df264321c88dd3935fbf3690ae5f7ca401d76ecbef4b3fb2`；逐样本审计 `final-review.json` SHA256 `00c45d4b0e8bf9cddcfd34bea0b9ef834e40ddacbc07b03ca84ddae4ea5037f3`。预检 attempt-01 的脚本变量错误、attempt-02 的构建配置路径不匹配均保留；attempt-03 复用已编译 core SHA256 `050c612d…` 后通过，正式 JT 生成仅执行一次且自然完成。
+
+GPU2 当前未被本轮使用，检查时 0%/1 MiB；这不代表独占。其 compute mode 为 Default、当前账户无 sudo，且 Slurm 主机 `X12DPG-OA6` 状态为 down。普通占卡进程不能阻止其他用户创建 CUDA context，不启动此类 burner。正式 GPU2 cohort 需集群管理员恢复节点并通过 UUID/GRES 与 device cgroup 提供独占租约。
+
+### 尚未关闭的发布门
+
+1. **Day4–5 时延：** R21 median ratio 1.576、R26 为 1.595，均未过 1.10 门槛。仍需冻结源码/wheel/core、模型与权重、精度、shape、优化器、数据和设备后，在稳定窗口完成至少三轮 PT/JT 交替，每轮每侧不少于十个热样本；报告 load/首步/热态耗时与吞吐的 median、p95、离散度，并绑定 fallback、数值更新、allocator 与 NVML 峰值。R37 不含性能数据。
+2. **显存与容量：** 近容量配置、最大可运行 batch/sequence、OOM 触发行为和 OOM 后恢复仍未验收。R21/R26 单代表格峰值不能代替容量结论。
+3. **Checkpoint 资源收益：** R36 只有随机 Llama CUDA checkpoint-on 单侧；还需相同候选、输入和配置的 on/off 配对，验证真实重算、梯度/更新与 fallback，并报告峰值显存和速度成本。
+4. **更广 Day2–5：** 冻结候选的 API/operator × device × dtype × layout × autograd/alias/storage/fallback 矩阵；有明确来源划分和阈值的 held-out 任务质量；当前候选真实训练和新进程恢复；DDP Trainer 多 rank checkpoint/续训；JT portable-pickle 与 stock PyTorch 的互操作支持契约；clean wheel/sdist 安装和 baseline migration review。
+
+实用训练 R14 与 R37 探索分数都不代表 release 完成。Overall release 继续 **Not complete**。
+
+---
+
 ## 2026-10-31 续验：R36 证明当前 wheel CUDA checkpoint 重算；共享负载拒绝后仅完成 on 单侧
 
 在既有 /home/cgq/jittor 工作区继续，无 clone 或源码改动。R36 绑定 HEAD 487a82e8d8025c0a7458186e464acc0f76e0ac10、源码指纹 0382368b8754bf7a90e42382fd66b603ed2d3f323b5e8cda4820425871c7aa50，预实验时 102 项既有 dirty/untracked 状态 SHA256 为 be3ed51168de9922dd80cebe3e134b11967ae95bb5ec4aee986d97f6fa4f071c。R35-r3 的导入审计已由事后审计确认：shim、Transformers、Jittor 与当前 wheel core 绑定正确，CUDA runtime enabled；runner 仅因 compatibility torch namespace 不提供 torch.__file__ 而在写报告时失败，没有加载模型、前向或启动 kernel。R35-r3 不重试。

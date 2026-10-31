@@ -1,3 +1,17 @@
+## 2026-10-31 handoff 增量：R37 配对生成已存档；GPU2 独占受集群配置阻塞
+
+继续使用服务器 `ssh campus-linux` 的既有 `/home/cgq/jittor`，未 clone/reset/stash/clean，也未修改源码或 wheel。R37 运行时 HEAD 为 `2b7dac919764b7b815cf32fff5a42d9e35896c59`，分支 `integrate/cgq-transformers-native-multicard-target`；origin/cgq_transformers 为 `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind 125/0。文档修改前 102 项既有 dirty/untracked porcelain SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`，index 为空；本轮只应提交三份状态文档，不 push。源指纹 `0382368b8754bf7a90e42382fd66b603ed2d3f323b5e8cda4820425871c7aa50`。
+
+R37 evidence 位于 `/data6/cgq/jittor-lab/_state/release-day23/20261031-main-qwen-seed821-heldout-generation-r1-prepared/`，manifest SHA256 `241d4649ee29f1a4df264321c88dd3935fbf3690ae5f7ca401d76ecbef4b3fb2`。seed821 PT/JT adapters 分别绑定 SHA256 `d48da15c…` / `8669a5fb…`；17 条 greedy CUDA 生成在物理 GPU4、逻辑 `cuda:0` 上都完成，样本对齐通过、14/17 文本相同，JT fallback=0。PT/JT token F1 为 0.208718/0.204534，ROUGE-L 为 0.149341/0.148379，exact match 都为 0。17 条来自 Alpaca train split，未人工复核；JT adapter 训练源码早于当前推理 wheel，故只作探索分数，禁止用来关闭 held-out 质量门。逐样本审计在 `final-review.json`，SHA256 `00c45d4b0e8bf9cddcfd34bea0b9ef834e40ddacbc07b03ca84ddae4ea5037f3`。
+
+GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 检查时空闲，但 compute mode 为 Default；`X12DPG-OA6` 在 Slurm 中 down，当前账户 sudo 需密码，因此不能通过普通占卡进程保证别的用户无法启动 CUDA context。未启动 burner；正式 GPU2 测量要等管理员恢复节点并分配按 UUID/GRES 与 cgroup 隔离的 lease。最终采样 GPU2、GPU4 均 0%/1 MiB，本轮任务已退出；这不是持续独占保证。
+
+记录的准备期意外：一次未在 bubblewrap 内的 Jittor 环境 import 因缺少 `GLIBCXX_3.4.30` 失败，在用户 cache 下观察到一个带该时间戳的 `jittor.lock`，未删除；两次预检启动失败均保留，第三次用 R19 install-target 复用已编译 core 后通过。详见 `preparation-incidents.json`（SHA256 `bc79333f9b7be7cee2d2665de51c851544b4f687d95631322652718b5c4d8f6b`）。
+
+继续目标：不要重跑 seed821 生成、R14 full/preflight/resume 或冷编译。Day4–5 正式时延仍需 ≥3 轮交替且每轮每侧 ≥10 热样本；R21 ratio 1.576、R26 ratio 1.595 未达 1.10。近容量/OOM/恢复与 CUDA checkpoint on/off 仍未通过。更广支持矩阵、可信 held-out 质量、当前候选训练恢复、DDP Trainer 多 rank checkpoint、序列化互操作契约、clean wheel/sdist 与 baseline migration review 仍待完成。整体 release 保持 **Not complete**。
+
+---
+
 ## 2026-10-31 续验：R36 证明当前 wheel CUDA checkpoint 重算；共享负载拒绝后仅完成 on 单侧
 
 在既有 /home/cgq/jittor 工作区继续，无 clone 或源码改动。R36 绑定 HEAD 487a82e8d8025c0a7458186e464acc0f76e0ac10、源码指纹 0382368b8754bf7a90e42382fd66b603ed2d3f323b5e8cda4820425871c7aa50，预实验时 102 项既有 dirty/untracked 状态 SHA256 为 be3ed51168de9922dd80cebe3e134b11967ae95bb5ec4aee986d97f6fa4f071c。R35-r3 的导入审计已由事后审计确认：shim、Transformers、Jittor 与当前 wheel core 绑定正确，CUDA runtime enabled；runner 仅因 compatibility torch namespace 不提供 torch.__file__ 而在写报告时失败，没有加载模型、前向或启动 kernel。R35-r3 不重试。
