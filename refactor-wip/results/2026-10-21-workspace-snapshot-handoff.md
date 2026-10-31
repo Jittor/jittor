@@ -1,3 +1,11 @@
+## 2026-10-31 续验交接：当前 DDP owner CPU 门通过；双卡同步路径仍需扩展
+
+在服务器 `/home/cgq/jittor` 现有工作区继续，HEAD `5fcc3f049f0c724c17db29acf77e10f5c1c777ff`，origin `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `108/0`。工作区 103 项原有 dirty/untracked 与 CPU DDP 用例前后 status SHA256 `ad24d0fe82a758525cec03ee1e79373524c55422c274ac6a3b7e6c89a88b4402` 一致；测试 index 为空，CPU core SHA256 `51845b1462d8f3beaf5f9c2034bd96363a2925b90ff1dcec2bbcf02f9aeb5818`。`compat/tests/torch/test_ddp_owner_separation.py` 当前全模块 15/15 通过，产物 `/data6/cgq/jittor-lab/_state/test-suite/torch/20261031-main-ddp-owner-cpu-current-r1-prepared/`。
+
+保留的双卡 NCCL no_sync 用例曾在历史 HEAD `fda5675c892fed75f206bf36d65c45628e4d55ed` 的 GPU2/GPU4 上两 rank 各 1 passed；能证明那一候选上的梯度累积收尾、归约、AdamW 更新和 barrier 窄路径，不能直接提升为当前 release candidate 的完整 DDP 通过。记录见 `/data6/cgq/jittor-lab/_state/release-day23/20261031-main-accelerate-ddp-nosync-r20-current-source-r1/`。尚需冻结候选的多 rank 结构化参数/optimizer-state 对照、Trainer 训练及新进程 checkpoint 恢复、完整 DDP session 门；no sync 局部结果不能替代这些门。
+
+当前 GPU2/4 利用率分别为 83%/78%，GPU1 空闲 19,385 MiB；没有合格 Day4–5 性能/显存窗口。任务进程与 cache holder 均已退出，根分区余 33 GiB、`/data6` 余约 5.5 TiB。后续继续按低负载和显存准入条件等待配对测量；只更新既有三份状态文档，不改动其余 dirty 文件，不 push。Overall release 仍 **Not complete**。
+
 ## 2026-10-31 继续工作交接：optimizer CUDA 门通过；性能显存仍等稳定窗口
 
 本轮验证开始时工作区为服务器既有目录 /home/cgq/jittor，HEAD 91e11f8a3dfbcc18dd182a07327fc995c4c482c2，fetch 后 origin e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 107/0。本文档修改前 105 项 dirty/untracked 原样保留；六文件任务变更已作中文提交，提交后仍有 103 项既有 dirty/untracked，其中 optimizer 测试的混合修改继续留在工作树。未 stash/reset/clean/push。测试期间未改动其他 dirty 文件。新增的 CUDA marker 识别与 policy 回归通过；optimizer 全模块 27 passed、0 skipped。相关 source hunks 属于本任务，其中 optimizer 测试文件混有原有 dirty 修改，只能按 hunk 暂存，不能整文件暂存。

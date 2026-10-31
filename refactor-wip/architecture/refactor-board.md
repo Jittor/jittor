@@ -1,3 +1,11 @@
+## 2026-10-31 接续：DDP owner CPU 模块通过；双卡 no_sync 有窄证据
+
+当前工作区 HEAD `5fcc3f049f0c724c17db29acf77e10f5c1c777ff`，origin/cgq_transformers=`e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `108/0`。当前 CPU DDP owner 模块 15 passed、0 skipped，使用 core SHA256 `51845b1462d8f3beaf5f9c2034bd96363a2925b90ff1dcec2bbcf02f9aeb5818`；103 项既有 dirty/untracked 测试前后状态 SHA256 均为 `ad24d0fe82a758525cec03ee1e79373524c55422c274ac6a3b7e6c89a88b4402`，index 为空。该结果关闭当前树 owner/bucket CPU 定向门。
+
+已有双卡 NCCL no_sync 用例各 rank 1 passed，覆盖 rank-local 梯度差异、closing backward 后梯度归约、AdamW 更新及最终 barrier，fallback guard 未触发；其物理 GPU2/GPU4 成功记录绑定历史 HEAD `fda5675c892fed75f206bf36d65c45628e4d55ed`，不是当前候选的完整 DDP 验收，也没有结构化参数/optimizer-state 报告或 Trainer DDP 训练续训证据。当前 DDP 发布门仍开放。
+
+本次完成时 GPU2 利用率 83%、GPU4 78%；GPU1 虽为 0% 但空闲 19,385 MiB，仍无卡同时满足正式窗口条件。无本任务进程或 CPU cache lock holder；根分区余 33 GiB、/data6 余 5.5 TiB。继续保留 Day4–5 性能/显存测量为未验收，并保持 overall release **Not complete**。
+
 ## 2026-10-31 接续：optimizer CUDA 模块门通过；checkpoint 与 held-out 证据已复核
 
 本轮验证开始时 HEAD 91e11f8a3dfbcc18dd182a07327fc995c4c482c2，刚 fetch 的 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 107/0；验证前既有 dirty/untracked 项为 105，index 为空。本轮结果已随中文提交写入本看板；提交后 ahead/behind 为 108/0，未整合 origin 或 push。当前十张 A800 均超过 10% GPU 利用率，正式 Day4–5 计时/显存窗口仍不合格。
