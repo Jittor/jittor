@@ -1,3 +1,22 @@
+## 2026-10-31 续验：R27–R29 收窄了 BERT 前向差距位置；发布门仍开放
+
+R27 对 R26 trace 的独立复核确认：JT 每份 trace 有 2,760 个 kernel event，PT 有 2,319 个；但 JT 汇总 kernel 时间 237.16 ms、SGEMM 205.42 ms，低于 PT 的 250.99 / 209.88 ms。三轮 hot median ratio 为 1.488–1.608。trace event 不能直接归因 wall time，增加的 kernel 数只是调度开销候选。
+
+R28 在同一 BERT B8/S256 FP32 权重、输入和 wheel/core 上逐层同步测量，12 层的 JT/PT median ratio 为 1.499–1.549；同步整次 forward median 为 29.489 / 45.969 ms。独立审计发现原 summary 的每层绝对毫秒值多乘了 1000；比值仍正确，修正值见审计文件，整次 forward 的绝对时间无此问题。早先两次失败与第三次通过的 attempt 均保留。
+
+R29 仅为第 5 层加嵌套 hook；六阶段原始运行均以真实 GPU2/cuda:0、fallback=0、匹配权重/输入与参数指纹成功。attention.output 的 JT/PT median ratio 为 2.106，attention.self 为 1.689，MLP intermediate/output 为 1.350/1.256。一个 JT intermediate 样本约 61 ms，导致同步整次 forward JT p95 109.08 ms、std 28.49 ms。该诊断不足以宣布根因或性能通过。runner 因 plan 缺少 zero_grad_call 字段，在六阶段结束后的 summary 序列化失败；原 failure 保留，posthoc 数据经独立审计，未重跑 GPU 阶段。
+
+### 接下来仍要闭合
+
+1. 在 dense、dropout、残差与 LayerNorm 子算子层面做一次有界归因，再决定是否有具体 shim/core 优化；若有变更，绑定新源码和 wheel，用稳定窗口完成至少三轮交替、每轮每侧至少十个热样本，报告 load/首步/热态 median、p95、离散度、吞吐和 allocator/NVML 峰值。R26 默认调用 ratio 1.595，仍未达现行 1.10 时延线。
+2. 用匹配配置测量近容量/OOM 边界、最大可运行配置及 OOM 后恢复；代表 batch 的显存 ratio 不代替容量结论。
+3. 证明 gradient checkpointing 实际执行 activation recompute，并配对报告速度与峰值显存；当前 shim 直接执行目标函数。
+4. 在冻结候选完成声明范围 API/operator × device × dtype × layout × autograd/alias/storage × fallback 矩阵。
+5. 补同一候选的 held-out 任务指标、训练/新进程完整恢复、DDP Trainer 多 rank checkpoint；明确 JT portable-pickle optimizer.pt 无法被 stock PyTorch torch.load 读取的互操作契约。
+6. 完成最终候选 clean wheel/sdist 安装及旧 wheel baseline migration review。
+
+R14 Qwen 实用训练/续训仍仅支持其绑定源码、seed 与配置。Day4–5 性能/显存和更广 Day2–5 发布门未完成；overall release **Not complete**。
+
 ## 2026-10-31 续验：R25/R26 默认零梯度语义已核对；正式时延门仍未达
 
 R25 分段敏感性测试显示 set_to_none=True 会明显缩短 zero_grad：PT median 从 R24 的 4.819 ms 降到 1.434 ms，JT 从 22.216 ms 降到 4.546 ms；分段同步有诊断开销，不能当正式端到端成绩。compat API 默认值为 True，而 R19/R21 harness 显式传 False，因此另做 R26 无参数 optimizer.zero_grad() 的端到端配对。

@@ -1,3 +1,11 @@
+## 2026-10-31 最新交接：R27–R29 已定位前向差距线索，Day4–5 与发布门仍开放
+
+在 /home/cgq/jittor 现有工作区继续，无 clone。R29 测量绑定 HEAD 02be05fcaab344735272a8526485330602f32ec0、source fingerprint 0382368b8754bf7a90e42382fd66b603ed2d3f323b5e8cda4820425871c7aa50、102 项既有 dirty/untracked porcelain SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，无源码/wheel 改动。origin/cgq_transformers 当前 ref 与 git ls-remote 均为 e5cffe1ae60c418f53c5bb1cdca9182577fd2b81；HEAD 比该 ref 多 119 个提交，origin 无独有提交。最终 GPU2 空闲 0%、81,038 MiB free；/data6 余 5.5 TiB，/ 显示 33 GiB 可用；R29 进程已退出。
+
+R26 正式 cohort 的真实训练更新/fallback/状态检查通过，但 JT/PT hot median ratio 1.595，未过现行 1.10 时延门；代表 batch 显存 ratio 不是 OOM 容量证据。R27 聚合 trace 没有证明 SGEMM 较慢；R28 12 层 ratio 为 1.499–1.549；R29 第 5 层 attention.output ratio 2.106，attention.self 1.689。R29 runner 在六个 raw phase 全 rc0 后，因 summary 缺少 zero_grad_call 报錯，原 failure 保留；posthoc 数据经独立审计。R28 独立审计另发现原 summary 的每层绝对时间多乘 1000，只有 ratio 和整次同步 forward 时间可直接引用；修正值在 artifact 的独立 audit 中。
+
+下一项先拆 attention.output 内部 dense/dropout/residual/LayerNorm，再决定是否有明确可修的 shim/core 开销；正式性能须绑定新 wheel 和源码，用稳定窗口完成 ≥3 轮交替、每轮每侧 ≥10 热样本，并含 load、首步、热态分布及 allocator/NVML 峰值。随后补近容量/OOM 与 OOM 恢复，以及 activation checkpoint 真实 recompute 的速度/峰值配对。更广 Day2–5 还需同一候选的支持矩阵、held-out 任务分数、DDP Trainer 多 rank checkpoint 恢复、JT/stock PyTorch optimizer 序列化契约、clean wheel/sdist 安装及 baseline migration review。R14 实用 Qwen 证据不替代这些门。Overall release **Not complete**。
+
 ## 2026-10-31 最新交接：R26 默认 zero_grad 端到端 cohort 完成；时延仍失败
 
 在既有 /home/cgq/jittor 继续，无 clone、源码改动或 wheel 重建。实验时 HEAD 27d01a6f40d9e7697bbb2558ba1303839eee93a0，origin/cgq_transformers 与远端均为 e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 118/0；102 项既有 dirty/untracked 哈希 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211 未变。R19/R21 原 cache 未改，测量后无本任务 worker 残留。

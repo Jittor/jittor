@@ -1,3 +1,45 @@
+## 2026-10-31 R27–R29：R26 trace、BERT 分层与子模块诊断
+
+本轮在现有服务器工作区 /home/cgq/jittor 继续，没有重新 clone、改源码或重建 wheel。R27/R28/R29 均绑定 source fingerprint 0382368b8754bf7a90e42382fd66b603ed2d3f323b5e8cda4820425871c7aa50、主/compat wheel SHA256 2e8f1a4418e3e9aee770843a6fd7d5471e3de12aaad75a8e8e78deee24baa3d9 / fd7e84f639dba09f9d8293b9d255df09aa7190b890093e614c340cc47a7a7d5a、private core 050c612d6b29bb952c4debccc7eb791f1704e3c8a2040723cb352cbda789f986。R28/R29 测量时 HEAD 02be05fcaab344735272a8526485330602f32ec0，102 项既有 dirty/untracked 的 porcelain SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211。本轮只写了 /data6 证据和下列三份状态文档。
+
+### R27：只读重算 R26 attribution trace
+
+R27 不启动 workload/Jittor、不访问写入 cache。三份匹配 trace 的 PT kernel event 数均为 2,319，JT 均为 2,760；三轮平均 kernel duration 累计 250.995 ms 对 237.157 ms，SGEMM 累计 209.882 ms 对 205.420 ms。每轮 JT/PT kernel 时间 ratio 0.943–0.947，SGEMM ratio 0.977–0.981；同期 R26 非 profiling hot median ratio 1.488–1.608。它不支持“Jittor 聚合 GEMM 时间更慢”作为全部差距解释；更多 kernel event 只是可能的 host/launch 开销线索，profile event 不能作为 wall-clock 因果分解。
+
+R27 summary SHA256 8df2f566198125c3f9088f7f8b52653683cf8636f040953c58753341edba45ac，原只读审计 1e12f5fed9ceecf18293b51f8780ff222ef510db8b1a8e0147cdba4dd1eeb236，独立重算审计 b4b3f0efc206e5d0341ff38cc74c84ae83d7f292bcaf04276c605115bfe25c51。证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261031-r26-trace-paired-kernel-analysis-r27-r1-prepared/。
+
+### R28：12 个 BertLayer 的同步前向计时
+
+相同 BERT B8/S256 FP32 eager fixture、固定权重/输入与同一 wheel/core；三轮交替，每阶段两次 warmup、每层三次同步观测，六阶段真实 cuda:0、fallback=0，201 个 master map 和输入签名匹配。修正绝对单位后，12 层 JT/PT median ratio 为 1.499–1.549，没有单层异常。带逐层同步 hook 的整次 forward：PT median/p95/std 29.489/29.889/0.247 ms，JT 45.969/46.738/0.579 ms。这些时间含 hook/synchronize 诊断开销，不能代替正式时延。
+
+独立审计发现 R28 原 summary.json 对每层秒数先乘 1000、再由 stats 乘 1000，导致所存 layer median/p95/std 绝对值大 1000 倍；层 ratio 不变。勿引用该 summary 中未经修正的每层绝对值。independent-audit.json 用六阶段原始秒数重算并保留每层正确毫秒统计，状态 PASS_INDEPENDENT_R28_PHASE_AUDIT_WITH_SUMMARY_SCALE_DEFECT。原 attempt-01 validator 漏 input_shape、attempt-02 Jittor hook 未支持 kwargs 的失败记录保留，attempt-03 完成。summary SHA256 bf9b808c52cb469013fb6d21367e9cae75da99b943e6a48954b8c88613510561；独立审计 SHA256 296fd3e876b6e822c99700f477ef0fe74de7e06ec18d419ecd36369f7fa67ea9。目录 /data6/cgq/jittor-lab/_state/release-day23/20261031-bert-layerwise-forward-diagnostic-r28-r1-prepared/。
+
+### R29：第 5 层 attention/MLP 子模块
+
+只在 encoder.layer.5 的 attention.self、attention.output、intermediate、output 增加嵌套同步 hook，保留 12 层 hook；三轮 PT/JT 交替，每阶段两次 warmup、三个测量点。目标 GPU admission、cuda:0、fallback=0、有限输出、无权重改变、201 参数映射和输入 hash 均核验通过；它是前向归因，没有 optimizer 更新或内存结论。九个观测点汇总如下（含显式同步和 hook 开销）：
+
+| 第 5 层组件 | PT median / p95 / std（ms） | JT median / p95 / std（ms） | JT/PT median |
+| --- | ---: | ---: | ---: |
+| attention.self | 0.867 / 0.879 / 0.006 | 1.465 / 1.598 / 0.046 | 1.689 |
+| attention.output | 0.236 / 0.240 / 0.003 | 0.497 / 0.622 / 0.046 | 2.106 |
+| intermediate | 0.668 / 0.670 / 0.003 | 0.902 / 61.273 / 27.973 | 1.350 |
+| output | 0.708 / 0.712 / 0.003 | 0.890 / 1.154 / 0.106 | 1.256 |
+
+attention.output 三轮 ratio 均约 2.09–2.13；但 Jittor intermediate 有一个约 61 ms 的离群观测，使同步整次 forward JT 的九点 p95/std 达 109.080/28.487 ms（PT 为 30.366/0.323 ms）。该异常说明短诊断的波动，不能当稳定性能结论。Transformers 中此 block 执行 dense → dropout → residual add → LayerNorm；当前数据还没拆开这些内部算子，不能据此断定根因。
+
+R29 所有六个执行阶段均 rc=0 且单阶段结果通过。runner 随后因 plan.json 漏 zero_grad_call 字段，在汇总阶段抛 KeyError('zero_grad_call')；因此原 run-status.json 保持 FAILURE_RETAINED。没有改写原件或重跑 GPU；六个结果通过 posthoc 汇总及独立原始审计。plan SHA256 13b2cc08aeeb005449001adf011eaaa659b650b8d204ca2d8e29ae34dd5459c8；posthoc summary 51422ce4c214a792b47c52c8eeb201771eabca3ab27b7985228c9cd373950c22；posthoc validation fa0d7fef6452275b0d4061bde675c3342f560c254c79c56b45d8edbc0bd3f3ed；独立 audit 3410145e93df0675aa42809f1d983d51f2734fe0eca7a58b63f66c96d99c230e，状态 PASS_INDEPENDENT_R29_AUDIT。目录 /data6/cgq/jittor-lab/_state/release-day23/20261031-bert-forward-submodule-diagnostic-r29-r1-prepared/。
+
+### Day2–5 仍需完成
+
+1. 进一步拆出 BERT attention.output 的 dense/dropout/residual/LayerNorm 等内部路径，确认可避免的开销再选源码优化候选；新 wheel 必须重新绑定源码，并在稳定窗口完成至少三轮 PT/JT 交替、每轮每侧 ≥10 个热态样本，报告 load/首步/热态 median、p95、离散度、吞吐、allocator allocated/reserved 与 NVML 峰值。R26 默认调用端到端 ratio 1.595，未达现行 1.10 时延线；R27–R29 都是诊断，不可替代正式 cohort。
+2. 以匹配配置测近容量/OOM、最大可运行配置与 OOM 后恢复。
+3. 证明 checkpoint shim 的真实 activation recompute，成对报告速度和峰值显存。
+4. 在冻结发布候选完成 API/operator、device、dtype、layout、autograd、alias/storage 和 fallback 支持矩阵。
+5. 将 held-out 任务指标、实际训练与新进程 checkpoint/optimizer/scheduler/data 恢复、DDP Trainer 多 rank 训练保存恢复绑到同一候选。
+6. 确认 JT portable-pickle optimizer 文件与 stock PyTorch torch.load 的支持契约；完成最终 wheel/sdist clean install 和旧 wheel baseline migration review。
+
+R14 Qwen seed821 的训练/resume 已有证据，但只绑定相应源码/config，固定 eval loss 不是 held-out generation 质量分数。Day4–5 和更广 Day2–5 发布门仍开放，overall release **Not complete**。
+
 ## 2026-10-31 续验：R25 zero_grad 敏感性与 R26 默认调用端到端代表格
 
 ### R25 分段敏感性
