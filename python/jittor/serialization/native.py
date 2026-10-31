@@ -41,7 +41,9 @@ def _load_pkl(s, path):
         if "trunc" in msg:
             msg += "\nThis file maybe corrupted, please consider remove it" \
                  " and re-download."
-        raise RuntimeError(msg)
+        # Chained, so what pickle actually raised -- an EOFError for a cut-off
+        # file, an AttributeError for a class that moved -- stays visible.
+        raise RuntimeError(msg) from e
 
 def _upload(path, url, jk, tdir=""):
     from jittor._core.flags import flags

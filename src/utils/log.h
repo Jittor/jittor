@@ -692,4 +692,12 @@ bool check_vlog(const char* fileline, int verbose);
 
 void system_with_check(const char* cmd, const char* cwd=nullptr);
 
+// Set once an error that leaves the accelerator context unusable (CUDA's
+// sticky errors, see cuda_error_is_sticky) has been raised. Every later call
+// on that device fails with it, so teardown's handle destroys fail too, and
+// reporting each of those after the real error was raised only buries it
+// under lines that name cuDNN or cuBLAS instead.
+EXTERN_LIB void note_device_context_lost();
+EXTERN_LIB bool device_context_lost();
+
 } // jittor

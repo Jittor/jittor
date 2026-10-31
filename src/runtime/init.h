@@ -44,6 +44,17 @@ std::default_random_engine* get_random_engine();
 // @pyjt(cleanup)
 void cleanup();
 
+/**
+    Wait for the queued batch and for the accelerator to finish everything
+    launched so far, raising the first error either hit. `Var.sync()` and
+    `jt.sync_all()` only hand the work to the device, so a kernel that faults
+    after the last read would otherwise go unreported and the process would
+    exit 0. Nothing is waited for on a process that never used an
+    accelerator. Called once, at exit.
+ */
+// @pyjt(_wait_for_devices)
+void wait_for_devices();
+
 // @pyjt(jt_init_subprocess)
 void jt_init_subprocess();
 

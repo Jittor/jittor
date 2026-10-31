@@ -7,6 +7,9 @@
 #include "bindings/pyjt/py_arg_printer.h"
 #include "bindings/pyjt/py_obj_holder.h"
 #include "bindings/pyjt/py_converter.h"
+#include "type/nano_string.h"
+#include <cctype>
+#include <cstring>
 
 namespace jittor {
 
@@ -64,6 +67,42 @@ std::ostream& operator<<(std::ostream& os, const PyKwArgPrinter& args) {
         os << ", ";
     }
     return os << "},\n";
+}
+
+// A short identifier-like string: the shape of a name, not of source code or
+// a path, which other `str` parameters of the same function may carry.
+static bool looks_like_a_name(PyObject* obj, const char*& text) {
+    if (!obj || !PyUnicode_Check(obj)) return false;
+    text = PyUnicode_AsUTF8(obj);
+    if (!text) { PyErr_Clear(); return false; }
+    size_t length = strlen(text);
+    if (!length || length > 24) return false;
+    if (!(isalpha((unsigned char)text[0]) || text[0] == '_')) return false;
+    for (size_t i = 0; i < length; i++)
+        if (!(isalnum((unsigned char)text[i]) || text[i] == '_' || text[i] == '.'))
+            return false;
+    return true;
+}
+
+std::ostream& operator<<(std::ostream& os, const PyUnknownNameHint& args) {
+    vector<PyObject*> values;
+    for (int64 i = 0; args.fast && i < args.n + (args.kwnames ? Py_SIZE(args.kwnames) : 0); i++)
+        values.push_back(args.fast[i]);
+    if (args.tuple && PyTuple_Check(args.tuple))
+        for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(args.tuple); i++)
+            values.push_back(PyTuple_GET_ITEM(args.tuple, i));
+    if (args.dict && PyDict_Check(args.dict)) {
+        PyObject *key, *value;
+        Py_ssize_t pos = 0;
+        while (PyDict_Next(args.dict, &pos, &key, &value)) values.push_back(value);
+    }
+    for (auto value : values) {
+        const char* text = nullptr;
+        if (looks_like_a_name(value, text) && !ns_valid_name(text))
+            return os << "\n'" << text << "' is not a dtype or operator name jittor "
+                "knows; dtypes are spelled like 'float32', 'int64' or 'bool'.";
+    }
+    return os;
 }
 
 std::ostream& operator<<(std::ostream& os, const PyFastCallArgPrinter& args) {

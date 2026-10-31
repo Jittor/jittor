@@ -83,6 +83,23 @@ def _batch_statistics(x, dims, sync):
     return xmean, xvar
 
 
+def _check_batch_norm_input(x, num_features, name):
+    """Name the channel mismatch before the per-channel reshape trips on it.
+
+    Left to ``_affine`` it surfaced as "shape [1,4,1,1,] is invalid for input
+    of shape [3,]", a reshape the caller never wrote.
+    """
+    if x.ndim < 2:
+        raise jt.JittorShapeError(
+            "%s expected an input of at least 2 dims (N, C, ...), but got a "
+            "%d-D input of shape %s." % (name, x.ndim, list(x.shape)))
+    if num_features is not None and x.shape[1] != num_features:
+        raise jt.JittorShapeError(
+            "%s expected input with %d channels (num_features), but got %d "
+            "channels; input shape %s." % (name, num_features, x.shape[1],
+                                           list(x.shape)))
+
+
 def _affine(xhat, weight, bias, num_features, ndim):
     """Per-channel scale and shift, skipped entirely when it is the identity."""
     weight_is_var = isinstance(weight, jt.Var)
@@ -193,6 +210,9 @@ def batch_norm(x, running_mean, running_var, weight=1, bias=0, training=False,
     were separate transcriptions and this one never reached the fused CUDA
     kernel in training mode.
     """
+    num_features = next((int(v.shape[0]) for v in (running_mean, weight)
+                         if isinstance(v, jt.Var)), None)
+    _check_batch_norm_input(x, num_features, "batch_norm")
     dims = [0] + list(range(2, x.ndim))
     tracking = isinstance(running_mean, jt.Var) and isinstance(running_var, jt.Var)
     if training:

@@ -1185,6 +1185,27 @@ workaround.
   loads, and a QR backward that reuses the forward, bring the cases above
   within 1.5x of torch.
 
+## KI-SEMANTICS-004: native cross_entropy_loss ignores out-of-range targets instead of raising
+
+- Severity: Medium (silent: a mislabelled sample drops out of the loss)
+- Status: Limitation, kept for compatibility; confirmed on `39ec18d19`
+- Owner: nn / loss semantics
+- Symptom: `jt.nn.cross_entropy_loss(x, jt.array([1, 20]))` with 10 classes,
+  or with a target of `-3`, returns a loss computed over the remaining rows;
+  nothing is raised. `jt.nn.nll_loss` raises `JittorIndexError` for the same
+  target. Under `import torch` (`F.cross_entropy`) an out-of-range target now
+  raises `IndexError` as torch does.
+- Cause: `nn/functional/loss.py` weights every target outside `[0, C)` by 0.
+  Native code relies on this to mark ignored pixels (255, -1) without passing
+  `ignore_index`, so raising would break it.
+- Workaround: pass `ignore_index=` for the label meant to be ignored; validate
+  labels against the class count before the loss.
+- Evidence: `compat/tests/torch/test_torch_compat_loss.py::TestCrossEntropy::test_an_out_of_range_target_raises`
+  (Torch mode); the native call above.
+- Exit condition: a decision to raise in native mode too (with a deprecation
+  period for the implicit ignore), or to document the implicit ignore in the
+  `cross_entropy_loss` docstring as the native contract.
+
 ## KI-SEMANTICS-003: floating-comparison NaN semantics not verified on every backend
 
 - Severity: Critical (until verified on the backend)

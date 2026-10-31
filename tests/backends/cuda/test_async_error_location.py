@@ -108,3 +108,77 @@ def test_asynchronous_fault_reports_creation_line(boundary):
     assert result.returncode == 0, result.stdout + result.stderr
     assert "ISSUED-WITHOUT-WAIT" in result.stdout
     assert "ASYNC-ORIGIN-PASS" in result.stdout
+
+
+def test_a_device_index_fault_leads_with_the_index_and_is_an_index_error():
+    """The sentence naming the index came second, under `helper_cuda.h:NNN:
+    CUDA error at ...`, and the error was a bare JittorError although the
+    same index on the CPU is a JittorIndexError."""
+    _require_cuda()
+    result = run_child_script(textwrap.dedent('''
+        import jittor as jt
+        with jt.runtime.scope(use_cuda=1):
+            x = jt.array([1.0, 2.0, 3.0])
+            try:
+                x[jt.array([10])].numpy()
+            except IndexError as error:
+                first = str(error).splitlines()[0]
+                assert first.startswith("index 10 is out of bounds for dimension 0 with size 3"), first
+                assert isinstance(error, jt.JittorError), type(error).__mro__
+                assert "CUDA error at" in str(error), str(error)
+                print("INDEX-FIRST-PASS", flush=True)
+    '''), env={"JT_SYNC": "0"}, text=True, timeout=180,
+        crash_isolated=True, name="device_index_first")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "INDEX-FIRST-PASS" in result.stdout, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("wait", ["y.sync()", "jt.sync_all()"])
+def test_a_fault_no_read_reported_fails_the_exit(wait):
+    """`sync()` and `sync_all()` do not wait for the device. A kernel that
+    faulted after the last read went unreported, and the process exited 0
+    with only a misleading cuDNN teardown error on stderr."""
+    _require_cuda()
+    result = run_child_script(textwrap.dedent('''
+        import jittor as jt
+        jt.flags.use_cuda = 1
+        x = jt.ones((5, 3))
+        y = x[jt.array([7])]
+        WAIT
+        print("LAST-LINE", flush=True)
+    ''').replace("WAIT", wait), env={"JT_SYNC": "0"}, text=True, timeout=180,
+        crash_isolated=True, name="device_fault_at_exit")
+    assert "LAST-LINE" in result.stdout, result.stdout + result.stderr
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "a device error was still pending" in result.stderr, result.stderr
+    assert "index 7 is out of bounds for dimension 0 with size 5" in result.stderr, result.stderr
+    assert "teardown error" not in result.stderr, result.stderr
+
+
+def test_a_fault_the_program_caught_is_not_reported_again_at_exit():
+    _require_cuda()
+    result = run_child_script(textwrap.dedent('''
+        import jittor as jt
+        jt.flags.use_cuda = 1
+        try:
+            jt.ones((5, 3))[jt.array([7])].numpy()
+        except IndexError:
+            print("CAUGHT", flush=True)
+    '''), env={"JT_SYNC": "0"}, text=True, timeout=180,
+        crash_isolated=True, name="device_fault_caught")
+    assert "CAUGHT" in result.stdout, result.stdout + result.stderr
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "still pending" not in result.stderr, result.stderr
+    assert "teardown error" not in result.stderr, result.stderr
+
+
+def test_a_clean_cuda_program_exits_zero_and_quietly():
+    _require_cuda()
+    result = run_child_script(textwrap.dedent('''
+        import jittor as jt
+        jt.flags.use_cuda = 1
+        (jt.ones((5, 3)) * 2).sync()
+        print("DONE", flush=True)
+    '''), env={"JT_SYNC": "0"}, text=True, timeout=180, name="device_clean_exit")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "still pending" not in result.stderr, result.stderr

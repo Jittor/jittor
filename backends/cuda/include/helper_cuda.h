@@ -83,10 +83,15 @@ inline const char *cuda_error_note(cudaError_t error) {
           : "";
   }
 }
+inline void note_if_sticky(cudaError_t error) {
+  if (cuda_error_is_sticky(error)) jittor::note_device_context_lost();
+}
 #endif
 // The other libraries' status codes carry no such note.
 template <typename T>
 inline const char *cuda_error_note(T) { return ""; }
+template <typename T>
+inline void note_if_sticky(T) {}
 
 // CUDA Driver API errors
 #ifdef CUDA_DRIVER_API
@@ -175,9 +180,21 @@ void check(T result, char const *const func, const char *const file,
            int const line) {
   if (result) {
     // DEVICE_RESET
+    note_if_sticky(result);
+    std::string index_fault = jittor::take_device_index_fault();
+    if (index_fault.size()) {
+      // An indexing kernel named the bad index: that sentence leads, and the
+      // error is the IndexError the same index raises on the CPU. The CUDA
+      // error it caused follows as the detail it is.
+      jittor::LogErrorVoidify<jittor::UserIndexError>() &&
+        jittor::Log(__FILELINE__, 'f', 0) << index_fault.substr(1)
+          >> "\nCUDA error at" << file >> ":" >> line << " code="
+          >> static_cast<unsigned int>(result) >> "(" << _cudaGetErrorEnum(result) << ")"
+          << func >> cuda_error_note(result) << jittor::cuda_launch_error_context();
+    }
     LOGf << "CUDA error at" << file >> ":" >> line << " code="
       >> static_cast<unsigned int>(result) >> "(" << _cudaGetErrorEnum(result) << ")"
-      << func >> jittor::take_device_index_fault() >> cuda_error_note(result)
+      << func >> cuda_error_note(result)
       << jittor::cuda_launch_error_context();
   }
 }
@@ -194,6 +211,7 @@ template <typename T>
 void peek_always(T result, char const *const func, const char *const file,
                  int const line) {
   if (result) {
+    if (jittor::device_context_lost()) return;
     LOGe << "CUDA teardown error at" << file >> ":" >> line << " code="
       >> static_cast<unsigned int>(result) >> "(" << _cudaGetErrorEnum(result) << ")"
       << func;

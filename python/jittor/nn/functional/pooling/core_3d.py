@@ -2,6 +2,7 @@
 
 import math
 import jittor as jt
+from ._checks import expect_rank
 from jittor.backends.cuda.kernels.pooling.pool3d import pool3d_cuda_options
 from .average import avg_pool3d, _pool_output_size
 from . import _state
@@ -54,6 +55,7 @@ def _pool3d(x, *, ceil_mode, count_include_pad, kernel_size, op, padding, return
         return avg_pool3d(
             x, kernel_size, stride, padding,
             ceil_mode, count_include_pad)
+    expect_rank(x, 5, "max_pool3d" if op == "maximum" else "min_pool3d")
     N,C,D,H,W = x.shape
     if D <= kernel_size[0] or H <= kernel_size[1] or W <= kernel_size[2]:
         raise RuntimeError(f"size of var should be larger than kernel_size")

@@ -456,7 +456,10 @@ def test_public_dimension_boundary_migration_is_explicit_and_bounded():
         if relative == "src/ops/broadcast_to_op.cc":
             actual = source.count('USER_CHECK(dim>=0 && dim<ydim)')
         else:
-            actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
+            # USER_INDEX_CHECK is the same migration, typed as IndexError
+            # (reduce_op.cc's out-of-range dim).
+            actual = (source.count("USER_CHECK(") + source.count("USER_CHECKop(")
+                      + source.count("USER_INDEX_CHECK("))
         if relative == "src/ops/composite/argsort_op.cc":
             # Stable-sort backend support is not a dimension boundary. Pin
             # that guard separately instead of enlarging the dimension ledger.

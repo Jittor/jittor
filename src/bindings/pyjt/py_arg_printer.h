@@ -34,4 +34,18 @@ struct PyFastCallArgPrinter {
 };
 std::ostream& operator<<(std::ostream& os, const PyFastCallArgPrinter& args);
 
+// Names, among the string arguments of a call that matched no signature, the
+// first that looks like a dtype or operator name but is not one. Generated
+// only for functions taking a NanoString, where a misspelt dtype such as
+// 'float99' otherwise leaves only the full signature listing to go on.
+// `fast`/`n`/`kwnames` describe a vectorcall; `tuple`/`dict` the other forms.
+struct PyUnknownNameHint {
+    PyObject** fast;
+    int64 n;
+    PyObject* kwnames;
+    PyObject* tuple;
+    PyObject* dict;
+};
+std::ostream& operator<<(std::ostream& os, const PyUnknownNameHint& args);
+
 }

@@ -129,6 +129,13 @@ def cross_entropy_loss(output, target, weight=None, ignore_index=None,reduction=
         output = output.reshape((-1, c_dim))
 
     target = target.reshape((-1, ))
+    if target.shape[0] != output.shape[0]:
+        # Otherwise it surfaces as a broadcasting failure of an internal
+        # multiply, naming neither the loss nor the batch sizes.
+        raise jt.JittorShapeError(
+            "cross_entropy_loss: expected one target per input row, but the "
+            "input has %d rows and the target %d elements (target shape %s)."
+            % (output.shape[0], target.shape[0], list(target_shape)))
     target_weight = ((target >= 0) & (target < output.shape[1])).float32()
     if weight is not None:
         target_weight = target_weight * weight[target]

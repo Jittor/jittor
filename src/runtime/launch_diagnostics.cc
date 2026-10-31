@@ -232,7 +232,12 @@ LaunchOperationScope::LaunchOperationScope(const LaunchRecord& record) : previou
     active_launch = &record;
 }
 LaunchOperationScope::~LaunchOperationScope() { active_launch = previous; }
+static std::atomic<bool> accelerator_launched{false};
+bool accelerator_work_launched() { return accelerator_launched.load(std::memory_order_relaxed); }
 void record_active_launch(BackendStream stream) {
+    if (stream.device.backend != BackendId::Cpu
+        && !accelerator_launched.load(std::memory_order_relaxed))
+        accelerator_launched.store(true, std::memory_order_relaxed);
     if (!active_launch) return;
     runtime_launch_history().record(*active_launch, stream.device,
                                     reinterpret_cast<uintptr_t>(stream.handle));

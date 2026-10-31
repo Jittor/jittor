@@ -93,6 +93,12 @@ def _pool2d(x, *, ceil_mode, count_include_pad, kernel_size, op, padding, return
         return avg_pool2d(
             x, kernel_size, stride, padding,
             ceil_mode, count_include_pad)
+    # Spelled out rather than `_checks.expect_rank`: the ACL routing test runs
+    # this function's source alone, without the module's imports.
+    if len(x.shape) != 4:
+        raise jt.JittorShapeError(
+            "%s expected a 4-D input (N, C, H, W), but got a %d-D input of shape %s."
+            % ("max_pool2d" if op == "maximum" else "min_pool2d", len(x.shape), list(x.shape)))
     N,C,H,W = x.shape
     # torch only requires the *padded* input to be at least the kernel size
     # (so the output has size >= 1). The original guard ignored padding, which

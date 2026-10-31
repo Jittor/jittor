@@ -203,6 +203,29 @@ def python_variable_rows():
             in sorted(env_config.resolved().items())]
 
 
+_JITTOR_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) + os.sep
+
+
+def _caller_stacklevel():
+    """`stacklevel` for `report()`'s warnings that names the program's line.
+
+    `report` runs inside `import jittor`, so `stacklevel=2` named jittor's own
+    `__init__.py`. Counted the way `warnings` counts: importlib's bootstrap
+    frames are skipped there, so they are not counted here either.
+    """
+    import sys
+    frame, level = sys._getframe(2), 2
+    while frame is not None:
+        name = frame.f_code.co_filename
+        internal = "importlib" in name and "_bootstrap" in name
+        if not internal and not os.path.abspath(name).startswith(_JITTOR_ROOT):
+            return level
+        frame = frame.f_back
+        if not internal:
+            level += 1
+    return 2
+
+
 def report(core, log, environ=None):
     """Emit the startup summary and the deprecation warnings, once."""
     rows = [tuple(row) for row in core.env_flag_sources()]
@@ -212,10 +235,10 @@ def report(core, log, environ=None):
         log.i(summary)
     legacy = format_legacy_warning(rows, build_rows)
     if legacy:
-        warnings.warn(legacy, DeprecationWarning, stacklevel=2)
+        warnings.warn(legacy, DeprecationWarning, stacklevel=_caller_stacklevel())
     ignored = format_ignored_warning(env_config.ignored_bare_names(environ))
     if ignored:
-        warnings.warn(ignored, DeprecationWarning, stacklevel=2)
+        warnings.warn(ignored, DeprecationWarning, stacklevel=_caller_stacklevel())
     flag_names = [name for name in dir(core.Flags) if not name.startswith("_")]
     unread = format_unread_warning(
         unread_variables(known_variables(flag_names), environ))
@@ -223,7 +246,7 @@ def report(core, log, environ=None):
         # UserWarning, not DeprecationWarning: the default filters hide the
         # latter unless it is attributed to __main__, and a setting that
         # silently does nothing is exactly what has to be seen.
-        warnings.warn(unread, UserWarning, stacklevel=2)
+        warnings.warn(unread, UserWarning, stacklevel=_caller_stacklevel())
     return summary
 
 

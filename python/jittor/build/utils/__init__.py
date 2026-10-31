@@ -289,14 +289,33 @@ class DelayProgress:
         self.n = n
         self.time = time.time()
 
+    # Without a terminal to redraw in, every `\r` update is kept: a log or CI
+    # transcript of one core build carried 242 of them. There it is a line at
+    # most this often, and one at the end.
+    _PIPE_INTERVAL = 10.0
+
     def update(self, i):
         if LOG.log_silent:
             return
         used = time.time() - self.time
         if used > 2:
             eta = used / (i+1) * (self.n-i-1)
-            print(f"{self.msg}({i+1}/{self.n}) used: {used:.3f}s eta: {eta:.3f}s", end='\r')
-            if i==self.n-1: print()
+            line = f"{self.msg}({i+1}/{self.n}) used: {used:.3f}s eta: {eta:.3f}s"
+            last = i == self.n-1
+            if _redraws_in_place():
+                print(line, end='\r')
+                if last: print()
+            elif last or used - getattr(self, "_printed", 0.0) >= self._PIPE_INTERVAL:
+                self._printed = used
+                print(line)
+
+
+def _redraws_in_place():
+    """Whether stdout shows a `\r` progress line as one line redrawn."""
+    try:
+        return sys.stdout.isatty() or in_ipynb()
+    except (AttributeError, ValueError):
+        return False
 
 # check is in jupyter notebook
 def in_ipynb():

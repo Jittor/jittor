@@ -110,6 +110,26 @@ def _interpolate(input=None, size=None, scale_factor=None,
                            align_corners=ac)
 
 
+def _checked_target(target, classes, ignore_index):
+    """`target`, made to fail where an entry is neither a class nor ignored.
+
+    jittor's own loss weights every target outside ``[0, C)`` by 0, so a label
+    of 20 among 10 classes, or a -1 that was meant as ``ignore_index``, was
+    silently left out of the loss. torch raises "Target 20 is out of bounds".
+    Routing the targets through a bounds-checked index gives the same
+    IndexError, lazily, when the loss is computed, without a sync; valid ones
+    pass through unchanged. Negative ones are sent past the end first, since
+    an index wraps them.
+    """
+    probe = jt.ternary(target < 0, jt.full_like(target, classes), target)
+    keep = None
+    if ignore_index is not None:
+        keep = target == ignore_index
+        probe = jt.ternary(keep, jt.zeros_like(target), probe)
+    checked = jt.arange(classes, dtype=target.dtype)[probe]
+    return checked if keep is None else jt.ternary(keep, target, checked)
+
+
 def _cross_entropy(input, target, weight=None, size_average=None,
                    ignore_index=-100, reduce=None, reduction="mean",
                    label_smoothing=0.0):
@@ -138,11 +158,12 @@ def _cross_entropy(input, target, weight=None, size_average=None,
         if reduction == "none":
             return wloss
         return wloss.mean()        # torch divides the soft-target loss by N
+    C = int(input.shape[1]) if input.ndim >= 2 else int(input.shape[-1])
+    target = _checked_target(target, C, ignore_index)
     if not label_smoothing:
         ii = -100 if ignore_index is None else ignore_index
         return _jt_ce(input, target, weight=weight, ignore_index=ii,
                       reduction=reduction)
-    C = int(input.shape[1]) if input.ndim >= 2 else int(input.shape[-1])
     if input.ndim > 2:                  # (N,C,d...) -> (M,C)
         perm = [0] + list(range(2, input.ndim)) + [1]
         x = input.transpose(perm).reshape((-1, C))

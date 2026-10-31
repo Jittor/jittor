@@ -11,6 +11,7 @@
 #include <csignal>
 #include "runtime/init.h"
 #include "runtime/async_exec.h"
+#include "runtime/launch_diagnostics.h"
 #include "runtime/rng_state.h"
 #include "runtime/executor_entry.h"
 #include "ops/op_register.h"
@@ -114,6 +115,16 @@ void cleanup() {
     // round of stream destruction.
     for (auto cb : take_cleanup_callbacks())
         cb();
+}
+
+void wait_for_devices() {
+    async_exec_wait();
+#ifdef HAS_ACCELERATOR
+    // Already raised to the program, which then chose to carry on; waiting
+    // would only raise the same lost context again as if it were news.
+    if (!accelerator_work_launched() || device_context_lost()) return;
+    backend_synchronize({accelerator_backend_id(), current_device()});
+#endif
 }
 
 static void init_device_architectures() {
