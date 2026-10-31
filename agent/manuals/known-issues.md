@@ -2,7 +2,7 @@
 
 - Status: Maintained
 - Last reviewed: 2026-10-31
-- Baseline: `cccbb1430`
+- Baseline: `0e3d53696`
 - Owner: Jittor core maintainers
 - Review when: an entry is fixed or narrowed, a strict expected failure
   XPASSes, a new defect is reproduced, or at quarterly maintenance
@@ -1858,30 +1858,3 @@ workaround.
 - Exit condition: the file passes under the shim on a 910B3, or every placement
   case states its device explicitly.
 
-
-## KI-TEST-017: `test_parallel_compile_attribution` pins a defect the tree no longer has
-
-- Severity: Low for users, Medium for the gate (two red cases in the PR smoke
-  tier hide a real regression in the same file)
-- Status: Open; reproduced 2026-10-30 at `30d9f4998` and, with `src/` and
-  `python/jittor/` checked out at `f37761c40`, identically -- so it predates
-  `81d0bdf2e`.
-- Owner: test infrastructure maintainers
-- Symptom:
-  `tests/codegen/test_parallel_compile_attribution.py::TestCompileFailureAttribution::{test_a_live_failed_var_makes_the_next_sync_report_the_same_failure,test_a_traceback_keeps_the_failed_var_alive_until_frames_are_cleared}`
-  fail. The child prints `first RAISED cause_named=True` and then `second
-  CLEAN`, where the test asserts the second `sync_all(True)` re-raises the
-  first compile error.
-- Cause: unknown. The module's docstring says a Var whose op failed to compile
-  stays in the graph and every later `sync_all(True)` re-raises; the tree now
-  reports the failure once and stays clean. Either error attribution was
-  changed deliberately without updating this file, or a Var carrying the
-  failure is no longer reachable from the graph.
-- Workaround: none needed for users; the case documents a defect class rather
-  than guarding an implemented contract.
-- Evidence: the file on its own, one process, on this machine:
-  `JITTOR_HOME=<native home> PYTHONPATH=python python -m pytest -q
-  tests/codegen/test_parallel_compile_attribution.py` -> 2 failed, 4 passed.
-- Exit condition: decide which behavior is correct, then fix the code or the
-  two assertions (and the module docstring) together; a green file that still
-  asserts the old behavior is not a resolution.
