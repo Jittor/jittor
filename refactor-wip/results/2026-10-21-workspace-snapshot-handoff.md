@@ -1,3 +1,15 @@
+## 2026-10-31 接续：R4 clean packaging 结果与 GPU2 独占限制
+
+在现有 `/home/cgq/jittor` 工作区继续，无 clone/reset/stash/clean。HEAD `fa7fae39ad06d05cfbc5545e705c9d64562c2f58`，远端 `origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind 126/0。其他既有 dirty/untracked 状态在本轮前为 porcelain SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`；`/data6` 可用 5.5 TiB，根分区可用约 32 GiB。主工作区源码不变，只更新既有状态文档。
+
+R4 isolated package candidate 位于 `/data6/cgq/jittor-lab/_state/release-day23/20261031-main-package-current-r4-prepared/`。它修复 shim deploy 提示访问 `torch.__file__` 的问题；干净 combined-wheel 安装、部署、精确版本 verify、182-path compat wheel audit、manifest check 与针对性 unittest 1/1 均通过。patched compat wheel SHA256 `9f5ee249b52912a391bf4953210fb9a58fb8aee2a41b1e710fa0ed84c74fedb1`。修复仅存在 R4 隔离候选，未迁入主树。R3 direct-wheel/sdist 对照通过，但 direct-wheel baseline comparison 仍要求 review（69 added/302 changed/2 removed，无 allowlist）；release packaging gate 未关闭。R3 初次 verify 失败和 R4 错 cwd smoke 失败均保留，后续修正重跑通过，没有改动 `/home/cgq/Motion324`。
+
+GPU2 A800 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 显示 Default/1 MiB/0%，查询无该 UUID 的 compute PID，但设备节点存在其他作业打开句柄。开启 `EXCLUSIVE_PROCESS` 权限不足，sudo 需要密码，Slurm 节点 `X12DPG-OA6` 为 down。没有运行 burner，因为不能阻止其他进程且会污染基准。性能测试需要管理员提供 UUID/GRES/cgroup 的正式独占租约。
+
+接续优先项：保留 R4 证据并进行 baseline migration review；在获得 GPU2 独占租约及稳定窗口后，完成 Day4–5 三轮交替 PT/JT 时延（每轮每侧 ≥10 热样本）、容量/OOM/恢复和 checkpoint on/off CUDA 资源对照；继续关闭冻结候选支持矩阵、可信 held-out 质量、训练与新进程恢复、DDP 多 rank checkpoint 和序列化互操作契约。当前性能/显存验收及整体 Day2–5 release 均保持未完成。详见 `2026-10-26-torch-compat-release-day2-5.md` 的本轮增量。
+
+---
+
 ## 2026-10-31 handoff 增量：R37 配对生成已存档；GPU2 独占受集群配置阻塞
 
 继续使用服务器 `ssh campus-linux` 的既有 `/home/cgq/jittor`，未 clone/reset/stash/clean，也未修改源码或 wheel。R37 运行时 HEAD 为 `2b7dac919764b7b815cf32fff5a42d9e35896c59`，分支 `integrate/cgq-transformers-native-multicard-target`；origin/cgq_transformers 为 `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind 125/0。文档修改前 102 项既有 dirty/untracked porcelain SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`，index 为空；本轮只应提交三份状态文档，不 push。源指纹 `0382368b8754bf7a90e42382fd66b603ed2d3f323b5e8cda4820425871c7aa50`。

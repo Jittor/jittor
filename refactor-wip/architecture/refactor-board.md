@@ -1,3 +1,13 @@
+## 2026-10-31 续验：R4 clean packaging 局部通过；GPU2 独占仍受权限阻塞
+
+R4 隔离候选修正了 torch shim 部署提示中的 `torch.__file__` 访问，改用 `vars(torch).get("__file__")`，并增加回归断言。主 wheel + R4 compat wheel 的干净安装、部署命令、版本验证及 compat wheel 内容审计通过；补丁尚未迁入主工作区，baseline migration review 仍待完成。R4 不改变 release 总状态。
+
+GPU2 A800 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 目前显示 Default/1 MiB/0%，目标 UUID 无 `nvidia-smi` compute PID；但当前账户设置 `EXCLUSIVE_PROCESS` 返回权限不足、无免密 sudo，Slurm 上 `X12DPG-OA6` 为 down。普通 burner 不能防止其他进程创建 CUDA context，因此没有启动。正式测量需管理员提供按 UUID 的 Slurm/GRES/device-cgroup 独占租约。
+
+R26 时延 ratio 1.595 仍高于 1.10。Day4–5 正式性能、容量/OOM/恢复、checkpoint on/off CUDA 资源对照，以及更广 Day2–5 支持矩阵、统一候选任务质量/训练恢复、DDP、多格式序列化契约和 migration review 均未关闭；overall release **Not complete**。
+
+---
+
 ## 2026-10-31 续验：R37 seed821 CUDA 生成对照完成；GPU2 无法由当前账户独占
 
 R37 在既有工作区完成一次 PT/JT 配对的 17 条 greedy generation 探索。实验绑定 HEAD `2b7dac919764b7b815cf32fff5a42d9e35896c59`、源码指纹 `0382368b8754bf7a90e42382fd66b603ed2d3f323b5e8cda4820425871c7aa50`、Qwen3-0.6B revision `c1899de…`、固定 train/eval fixture 与 seed821 checkpoint。两侧实际均在 A800 GPU4/cuda:0 运行；JT fallback 计数 0→0。17/17 样本 ID、target、prompt 长度和生成预算对齐，14/17 预测文本完全一致。PT/JT mean token F1 为 0.208718/0.204534，ROUGE-L 为 0.149341/0.148379，normalized exact match 均为 0；JT 平均生成 token 数与 PT 同为 79.824。

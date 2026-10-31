@@ -1,3 +1,21 @@
+## 2026-10-31 续验：R4 clean packaging 修复通过；Day4–5 与更广发布门仍开放
+
+本轮继续使用 `/home/cgq/jittor` 现有工作区。HEAD 为 `fa7fae39ad06d05cfbc5545e705c9d64562c2f58`，`origin/cgq_transformers` 当前远端 ref 为 `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，HEAD ahead/behind 为 126/0。实验前既有 dirty/untracked porcelain SHA256 为 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`；主工作区源码未改。R4 证据目录：`/data6/cgq/jittor-lab/_state/release-day23/20261031-main-package-current-r4-prepared/`，预检绑定同一 HEAD 和状态哈希；R4 隔离补丁不能视为已迁入主工作区。
+
+R3 clean package evidence 中，主 wheel/sdist 构建、主 wheel selftest、manifest、sdist、direct-vs-sdist wheel 内容比较、core/compat wheel audit 与 combined install 均通过。R3 smoke 的版本提示因 shim 没有 `torch.__file__` 而失败，故 R4 在隔离源码将提示改成 `vars(torch).get("__file__")`，并加回归测试。R4 compat wheel SHA256 `9f5ee249b52912a391bf4953210fb9a58fb8aee2a41b1e710fa0ed84c74fedb1`；与 R3 主 wheel 装入新 target 后，部署命令及输出的精确 verify 命令均成功，版本输出为 `None 2.11.0 2.11.0`。针对性 unittest 1/1 通过，compat wheel audit 为 182 paths，manifest check 通过。部署日志、verify 日志、单测日志与 wheel audit 日志 SHA256 分别为 `c02db4554500e6651803078020131f5c04486019563efcb4d4c745494b4fa2e7`、`11f2f52d2c16ae260639ae3edb114a9182529ba54a14cd6b1ae6672935ba0cdf`、`a41e08b8782ccff561fc04da1c4aa92b79d00989913c15ae6639e0c2e9b7e03c`、`6e0764ad4fd6b927a2e234111b34066ccb48205ff99b2f102896851cd3d9a7d6`。
+
+R3 direct-wheel-baseline comparison 返回 1，原因是候选相对旧基线有 69 个新增、302 个内容变化和 2 个移除路径，且尚无 allowlist；这是需要逐项审查/批准的 migration review，不是 wheel 内容审计失败，发布门仍未关闭。第一次 R4 smoke 从错误 cwd 触发了既有 `/home/cgq/Motion324` 构建并失败；复核未见该目录近期文件变化，随后在 R4 source cwd 正确重跑成功。失败记录和全部产物保留，未覆盖 R1–R3。
+
+### GPU2 独占与正式测量准入
+
+GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 检查值为 Default compute mode、1 MiB 显存、0% 利用率，`nvidia-smi` 目标 UUID 查询无 compute PID；设备节点仍可见其他作业的打开句柄，因此空闲读数不构成排他保证。`nvidia-smi -i 2 -c EXCLUSIVE_PROCESS` 返回 `Insufficient Permissions`，`sudo -n -l` 需要密码；Slurm 显示主机 `X12DPG-OA6` 的 A800 节点为 down。没有启动 burner：它不能隔离非协作 CUDA context，且会污染性能测试。正式 GPU2 阶段需要管理员恢复节点，并提供 UUID/GRES 与 device-cgroup 独占租约。
+
+Day4–5 正式时延门仍需绑定冻结源码/wheel/core、模型权重、数据、精度、shape、优化器和设备，在稳定窗口（utilization ≤10%、free memory ≥60,000 MiB、无无关计算进程）完成至少 3 轮 PT/JT 交替、每轮每侧至少 10 个热样本；逐样本报告 load/首步/热态延迟与吞吐的 median、p95、离散度，另报告 allocator 和 NVML 峰值、设备/fallback、梯度/更新/loss。R26 ratio 1.595 未达到 1.10 门槛。还需单独测近容量、最大可运行配置、OOM 与 OOM 后恢复，以及同模型/输入 checkpoint on/off 的输出/梯度/更新、速度、allocator/NVML 峰值。
+
+更广 Day2–5 仍需冻结候选的 API/operator × device × dtype × layout × autograd/alias/storage × fallback 支持矩阵、带预设阈值的可信 held-out 任务质量、该候选的训练与新进程恢复、DDP Trainer 多 rank 保存/续训、JT portable-pickle 与 stock PyTorch optimizer 的明确互操作契约、clean wheel/sdist 安装与 baseline migration review。R14 实用 Qwen 训练/resume、R34/R37 train-split fixture 分数以及 R36 checkpoint-on 单侧结果均不能替代这些门。Overall release **Not complete**。
+
+---
+
 ## 2026-10-31 续验：R37 seed821 CUDA 生成配对完成；Day4–5 与广泛发布门仍未关闭
 
 R37 为一次 PT/JT 探索性配对推理，不是正式性能或质量验收。运行绑定仓库 HEAD `2b7dac919764b7b815cf32fff5a42d9e35896c59`、源码指纹 `0382368b8754bf7a90e42382fd66b603ed2d3f323b5e8cda4820425871c7aa50`、Qwen3-0.6B revision `c1899de…`、R14 seed821 step-102 adapters 与 train/eval fixture SHA。PT 使用 PyTorch 2.6.0+cu124，JT 使用 current-wheel Jittor Torch shim 1.3.11.0、Transformers 4.56.2、PEFT 0.17.1；两侧在物理 A800 GPU4 UUID `GPU-8bf405a2-a3dd-e203-8dd9-691e9f7b3530` 上实际映射为 `cuda:0`，JT fallback 前后均为 0。每侧只运行一次，17 个样本全完成。
