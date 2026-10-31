@@ -1,3 +1,26 @@
+## 2026-10-31 当前主树 daily-state CPU 与 CUDA alias/device 通过；Day2–5 发布门仍开放
+
+继续在服务器 `/home/cgq/jittor` 的既有工作区验证，未 clone。测试绑定 HEAD `59c775df3b833ce9d1a008478949610ea4b8d78b`、origin/cgq_transformers=`e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`（ahead/behind `100/0`）。测试前保留的 103 项 dirty/untracked 未变化；status SHA256 为 `83cebe9ab499bf7eac33eaf704f20dd58441ca5b7ee5bc662b560e6cd827fa2f`，tracked diff SHA256 `121e855f6c70c312639ceb8aeaee200abc7086e1bf82fdc5b88cabb3e131c1b8`，untracked manifest SHA256 `4cdf9abab0c9fe1dbc7e65e83513dc416da98a419c26f9c09d70e11ce6cf9483`。本轮只验证既有代码/用例，收尾仅修改三份状态文档。
+
+### 当前主树状态契约与 alias/device 证据
+
+- CPU `compat/tests/torch/test_daily_state_contracts.py`：24 passed、0 skipped、0 failed；17.69 s，`JITTOR_NO_BUILD=1`，复用 CPU core。测试文件 SHA256 `5223ed0839c023eef061219d816ef01f9e570726e25bf11ce4f578893b0bec1f`。产物在 `/data6/cgq/jittor-lab/_state/test-suite/torch/20261031-main-daily-state-contracts-cpu-20261031T042808Z/`。
+- R9 原 focused 的两个失败路径用 3 个既有 CPU node 定向复核：fill_/zero_ alias 与参数梯度、内部 FollowRuntime 常量写入、公开 `torch.Tensor(native)` FollowRuntime alias；3 passed、0 skipped、0 failed，2.88 s。该证据 preflight HEAD=`2e02c1e17ce8ff99d515b297c882125fa8b1dbec`；之后 `59c775d` 仅更新三份状态文档，代码工作树身份未变。该结果不改写 R9 隔离候选原来的 7 passed、1 skipped、2 failed。产物 `/data6/cgq/jittor-lab/_state/test-suite/torch/20261031-r9-focused-cpu-main-042414-r3/`；autograd 测试 SHA256 `d079146c5e54aadde4bfd5015b29db60d3ca93be7eab9676edbaa265c8c4a092`。
+- CUDA 定向验证绑定上述 HEAD 与工作树身份，CUDA_VISIBLE_DEVICES=2，对应实际 GPU UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0`。显式 bootstrap 成功报告 `has_cuda=1`；5.003 s readiness probe 通过；随后 `test_cuda_public_tensor_constructor_preserves_follow_runtime_alias` 与 `test_cuda_constant_writes_keep_explicit_cpu_and_cuda_storage` 为 2 passed、0 skipped，13.66 s。pytest PID `3217540` 的 45 次 GPU 进程采样全部映射至该 UUID，观测显存 24–428 MiB；测试断言覆盖 alias/device 与 fallback guard。`jittor_core` SHA256 前后相同：`83d5c1a0ac0481afbdbd250e295807f5b7e9005504fae055a0c77bc5a37d8aff`，`source_identity_unchanged=true`。
+- CUDA 产物根目录 `/data6/cgq/jittor-lab/_state/test-suite/torch-cuda/20261031-main-tensor-alias-cuda-20261031T043048Z/`。最终 attempt `attempt-03-libcuda-extern-bootstrap/` 的 `result.json` SHA256 `06b9b6c9e077dffe422812a4260d44beeca91e69e1fd3b583472348344d0b08e`，raw log SHA256 `4b733426b9751d9d7ebfacd97d0b372e80e374fae58a123fa21a0f4583bfa52e`，warmup result SHA256 `13a74e7b7f19d4be66639845ca6126ab022685a35f1e07ae9ed61b8f5357eb35`，preflight SHA256 `55bc1b5b81ff7fd1c3662dd511be633ace137e174bcbae2d79ed0967971d3a4b`。
+
+### 保留的失败尝试和结论边界
+
+首次 CUDA core 编译成功，用时 296.165 s，core SHA256 为上述值，但首个 readiness import 被 conda `libstdc++` 缺少 `GLIBCXX_3.4.30` 阻断；root `result.json` SHA256 `6eaf791f49d1de00be783fb0224323544ee4cddffdefc139c71a6e854bdbc455`。attempt-02 预加载系统 libstdc++ 后确认 core 可加载，但 `JITTOR_NO_BUILD=1` 因缺少 `libcuda_extern` 在测试前 fail-closed。attempt-03 用官方 bootstrap 补齐该扩展（61.515 s），再 no-build readiness 与上述两项 CUDA 用例通过；原失败文件全部保留，没有覆盖或删除。
+
+这轮只证明当前主树选定状态契约 CPU 路径与两项 alias/device CUDA 路径，不是 R9 全组、Torch core 全组或全 API 覆盖。测试后没有遗留本任务 pytest/bootstrap/compiler 进程。
+
+### Day4–5 与更广发布门状态
+
+正式性能/显存门没有开始：资源复核时 GPU1 为 0% 利用率但仅 19,385 MiB 空闲且外部进程占用约 61,644 MiB；GPU2 空闲 72,387 MiB但利用率 83%，另有外部 CUDA 进程。没有卡同时满足利用率 ≤10%、空闲显存 ≥60,000 MiB、无无关计算 PID。共享负载测量不记为验收。正式窗口仍须冻结匹配源码、模型/权重、数据顺序、batch/sequence、精度、优化器和 warmup/cache；至少 3 轮 JT/PT 交替，每轮每侧 ≥10 个热态样本；报告 load/首步/热态 latency 与 throughput 的 median、p95、离散度、Jittor allocator allocated/reserved 峰值及 NVML 峰值，并另测容量/OOM 边界。
+
+更广 Day2–5 仍须关闭：声明范围 API/device/dtype/layout/edge/autograd/fallback 矩阵；代表模型训练与新进程恢复门及预设 held-out 质量阈值；真实模型 activation recompute、梯度/更新与显存收益对照；按声明范围完成 DDP/collective；干净安装、打包和最小运行；明确 JT portable-pickle 与 stock PyTorch 的序列化互操作承诺。已有 R14 训练/恢复、generation 小样本及单层 checkpoint 证据均为配置绑定或窄路径，不替代这些门。Overall release **Not complete**。
+
 ## 2026-10-31 当前主树 R9 两个失败路径 CPU 定向复核通过；发布门未关闭
 
 测试在服务器 /home/cgq/jittor 现有工作区，HEAD 2e02c1e17ce8ff99d515b297c882125fa8b1dbec，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 99/0。保留 103 项原有 dirty/untracked；测试前后工作树 status SHA256 均为 83cebe9ab499bf7eac33eaf704f20dd58441ca5b7ee5bc662b560e6cd827fa2f，三个测试绑定源码/测试 SHA 见看板顶部记录。

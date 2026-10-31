@@ -1,3 +1,9 @@
+## 2026-10-31 当前主树 daily-state CPU 与 CUDA alias 定向通过；Day2–5 仍开放
+
+在 `/home/cgq/jittor` 继续，验证 HEAD `59c775df3b833ce9d1a008478949610ea4b8d78b`，origin/cgq_transformers=`e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`（ahead/behind 100/0）。沿用并保留 103 项原有 dirty/untracked；测试前后 status SHA256 `83cebe9ab499bf7eac33eaf704f20dd58441ca5b7ee5bc662b560e6cd827fa2f` 不变。CPU `test_daily_state_contracts.py` 为 24 passed（其 preflight HEAD=`59c775df3b833ce9d1a008478949610ea4b8d78b`）；R9 两个 CPU 失败路径窄复核为 3 passed（preflight HEAD=`2e02c1e17ce8ff99d515b297c882125fa8b1dbec`，之后 `59c775d` 仅提交状态文档，代码身份未变）。CUDA readiness 后，在目标 A800 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 运行 public Tensor(existing) FollowRuntime alias 与显式 CPU/CUDA storage 两项，2 passed、0 skipped；45 次 PID 采样均把 pytest PID `3217540` 映射到该 UUID，测试期间显存 24–428 MiB，源码身份和 `jittor_core` SHA 未变。证据目录 `/data6/cgq/jittor-lab/_state/test-suite/torch-cuda/20261031-main-tensor-alias-cuda-20261031T043048Z/`。
+
+正式 Day4–5 仍未测：当前 GPU 快照没有同时满足低利用率、≥60,000 MiB 空闲和无外部计算进程的卡；GPU1 为 0% 但仅 19,385 MiB 空闲且外部 PID 使用约 61,644 MiB，GPU2 为 83%。保留 CUDA 初次 GLIBCXX 与缺少 `libcuda_extern` 的失败记录，最终 bootstrap/warmup 和 2 项功能测试通过。overall release 仍 **Not complete**。
+
 ## 2026-10-31 当前主树 R9 失败路径 CPU 定向复核通过；Day2–5 仍开放
 
 继续在 /home/cgq/jittor 既有工作区。测试绑定 HEAD 2e02c1e17ce8ff99d515b297c882125fa8b1dbec、origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（ahead/behind 99/0）。运行前后保留 103 项 dirty/untracked，status SHA256 83cebe9ab499bf7eac33eaf704f20dd58441ca5b7ee5bc662b560e6cd827fa2f；测试前后代码身份与工作树状态不变。

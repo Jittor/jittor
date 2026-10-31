@@ -1,3 +1,11 @@
+## 2026-10-31 接续：当前主树状态契约 CPU 与 CUDA alias 窄验证通过
+
+继续使用 `/home/cgq/jittor`，HEAD `59c775df3b833ce9d1a008478949610ea4b8d78b`，origin `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `100/0`。原有 103 项 dirty/untracked 保留，测试前后 status SHA256 `83cebe9ab499bf7eac33eaf704f20dd58441ca5b7ee5bc662b560e6cd827fa2f` 不变；未重新 clone 或清理工作区。
+
+新增当前主树证据：CPU daily-state 契约 24/24（preflight HEAD=`59c775d`）通过，R9 失败路径 3/3 CPU 定向用例（preflight HEAD=`2e02c1e`；随后仅有文档提交，代码身份相同）通过；真实 CUDA readiness 后 alias/device 两项 2/2 通过，进程采样映射到 GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0`。完整记录及失败尝试见 `/data6/cgq/jittor-lab/_state/test-suite/torch-cuda/20261031-main-tensor-alias-cuda-20261031T043048Z/`。
+
+这是窄功能证据，不构成性能/显存结论。当前没有满足低负载、空闲显存和无外部进程条件的 GPU；Day4–5 及支持范围矩阵、发布安装/序列化契约等更广门继续开放，overall release **Not complete**。
+
 ## 2026-10-31 接续：R9 两个失败路径在当前主树的 CPU 定向复核通过
 
 在服务器 /home/cgq/jittor 既有工作区验证，HEAD 2e02c1e17ce8ff99d515b297c882125fa8b1dbec，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（ahead/behind 99/0）。103 项既有 dirty/untracked 保留；测试前后源码与 status hash 不变。三个既有 CPU nodeid（fill/zero alias 与梯度、内部 FollowRuntime 写入、public Tensor(native) alias）3 passed、0 skipped、0 failed，使用 JITTOR_NO_BUILD=1 和已热 CPU core。证据目录 /data6/cgq/jittor-lab/_state/test-suite/torch/20261031-r9-focused-cpu-main-042414-r3/，preflight/raw/result SHA256 与文件身份见整改看板及 Day2–5 结果记录顶部。
