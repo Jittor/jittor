@@ -1,3 +1,10 @@
+## 2026-11-01 03:25 +0800 续验：主树 Trainer fresh-process CPU 集成 6 passed
+
+基线 /home/cgq/jittor HEAD 262bed6a79cb8c54800a583612e9cbb71686a5dd，含已提交的 R3 placement 修复。仅修改 Trainer 集成 test harness 来选择复用已编译 JITTOR_HOME/cache key，随后主树完整 fresh-process 集成自然 rc0：**6 passed、0 skipped、292.26s**。PT/JT 各自连续跑 4 步与 step-2 checkpoint 新进程恢复到 step 4 的 272 项轨迹都以 atol=rtol=0 比较通过，0 mismatch；JT 参数实际为 CPU、global_step=4、stateful_restored_step=2、fallback=0，6 个可训练参数张量和梯度检查均覆盖。结果绑定 synthetic tiny-BERT/LoRA、CPU 和该主树源码；不证明 held-out 任务指标、真实 CUDA 训练或性能/显存通过。
+
+唯一 test harness 差异为 JITTOR_TRAINER_JITTOR_HOME 和 JITTOR_TRAINER_CACHE_NAME 两项可选 override，避免本轮再次冷编译；其改动 SHA256 393e8c1f99cdcf02bd4fa076d89519d2961d88a1e7f08d9a2c90b6465877b4d7，完整日志与数据见 main-integration-r3 证据目录。此前 102 项既有 dirty/untracked porcelain 仍以 SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211 匹配；当前额外一项仅此任务的 harness 修改。
+
+GPU2 于 03:25 +0800 仍是 Default 共享模式，8,651 MiB used、72,387 MiB free、利用率 80%；可见 compute-app 为 yqa PID 3590512。CPU 集成没有创建 GPU context。Slurm 节点 X12DPG-OA6 仍 down，cgq account association 为空；无可靠 GPU2 独占租约，未启动 burner。Day4–5 性能/显存验收和 overall release 继续保持 **Not complete**。
 ## 2026-11-01 03:14 +0800 续验：R3 copy_ placement 修复进入主工作区；GPU2 独占不可用
 
 本轮基线 /home/cgq/jittor HEAD b588c421d59f4d8cf3b4183a15af8c00559ce2c6，分支 integrate/cgq-transformers-native-multicard-target；最近 fetch 的 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 134/0。原有 102 项 dirty/untracked 状态仍以 SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211 匹配；新增的仅本任务 src/core/var_holder.cc 与定向测试文件。当前主工作区只完成 CPU 功能验证，不包含 GPU 性能/显存验证。

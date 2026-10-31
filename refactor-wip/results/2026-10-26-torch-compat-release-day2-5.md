@@ -1,3 +1,24 @@
+## 2026-11-01 03:25 +0800 主树 Trainer fresh-process CPU 集成通过
+
+### 主树身份、harness 与运行条件
+
+以 /home/cgq/jittor HEAD 262bed6a79cb8c54800a583612e9cbb71686a5dd 为主树源码，已包含 R3 的 VarHolder::copy_into_preserving_aliases placement guard 修复。为复用相同 JITTOR_HOME 与 cache key，向 adapters/tests/test_trainer_stateful_integration.py 增加两个可选环境变量：JITTOR_TRAINER_JITTOR_HOME 只覆盖 Jittor runtime 的 JITTOR_HOME，JITTOR_TRAINER_CACHE_NAME 选择现有 cache name。默认隔离路径与行为保持不变；变更 SHA256 393e8c1f99cdcf02bd4fa076d89519d2961d88a1e7f08d9a2c90b6465877b4d7。本轮复用 /data6/cgq/jittor-lab/_state/release-day23/20261101-trainer-copy-placement-r3-prepared/main-integration-r2/jittor-home，没有重做 227 单元 core 冷编译。
+
+运行入口 /data6/cgq/jittor-lab/_state/release-day23/20261101-trainer-copy-placement-r3-prepared/main-integration-r3/run-main-trainer-integration.sh，测试环境 JITTOR_REQUIRE_TRAINER_STATEFUL=1、HF/Transformers offline、CUDA_VISIBLE_DEVICES=、Jittor JITTOR_CUDA=0。测试套件依赖版本：PyTorch oracle 2.6.0+cu124；Transformers 4.56.2、Accelerate 1.10.1、PEFT 0.17.1、Tokenizers 0.22.1、NumPy 1.26.4、torchdata 0.11.0；Jittor shim runtime 使用独立环境。不存在网络下载或 CUDA fallback。
+
+### 覆盖与结果
+
+测试使用 32 个合成样本、随机 sampler、dropout 0.1、2 个 DataLoader worker、worker 内 Python/NumPy 随机变换、显式 sampler/dataloader generator、batch size 2、gradient accumulation 2、4 optimizer steps。运行连续 4 步；另一个 fresh-process 分支训练到 step 2、保存 stateful checkpoint，再由新进程恢复到 step 4。主树执行结果 **6 passed、0 failed、0 skipped，292.26 秒，rc=0**；其中包括主 fresh-process 门和 5 个 harness 环境/命令/路径合同测试。
+
+PyTorch 与 Jittor 分别比较自身连续 4 步轨迹和 2+2 checkpoint-resume 合并轨迹：两侧均 272 项、atol=rtol=0、failure_count=0。轨迹涵盖 sample/worker 随机变换、微批次梯度、可训练参数、optimizer state 和 scheduler state。Jittor report 确认连续 global_step 4、microbatches 8；第一段 global_step 2；新进程 stateful_restored_step=2 并到达 global_step 4，实际参数设备为 CPU、6 个可训练参数张量、fallback_count=0。此结果证明本主树 synthetic CPU fixture 的 Trainer checkpoint 恢复合同工作；它不提供真实任务 held-out loss/accuracy、生成质量、真实 CUDA copy/训练或 GPU memory/performance 证据。train_loss 是单次 synthetic run 汇总值，不能按此比较认定学习趋势。
+
+主测试日志 SHA256 9e59c53c7dfa9155a0cd6801e93ae013a5032f4c5b281986b9e639c1b9220ef3；聚合 summary SHA256 53879e1069b5cdd7c7da7e51a9581e5e672ca401d8615c08a920a2c9cf036e36；PT/JT compare log SHA256 分别为 fb6bf99db3f663dabcf6af79f219909a3269c80f3385e0dca44c8c4bb1f325e5 和 5ebc331e63a673c37856435f49a3ab56603ad92cde1bdf360c3691d1d83d094c。报告与逐文件哈希位于 /data6/cgq/jittor-lab/_state/release-day23/20261101-trainer-copy-placement-r3-prepared/main-integration-r3/outcome-sha256.txt；实际运行根目录 /data6/cgq/jittor-lab/_state/trainer-resume/cpu-jwe57ymu/。
+
+### GPU2 与剩余发布门
+
+03:25 +0800 GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 为 Default，共享显存 8,651 MiB used / 72,387 MiB free，utilization 80%；compute-app 查询列 yqa PID 3590512（8,640 MiB）。主集成明确 CPU-only，没有 GPU 进程。Slurm 21.08.8 的 a800 节点 X12DPG-OA6 仍 down (Node unexpectedly rebooted)，cgq association 仍为空，配置仍为 TaskPlugin=task/affinity 与 ProctrackType=proctrack/cgroup，不能对该 GPU 提供 device cgroup 独占。此前 srun --test-only 仍因 invalid account/partition association 失败。没有创建 burner，也没有碰触现有用户进程。
+
+Day4–5 正式性能/显存门仍需管理员恢复节点、建立有效 account association 和 GPU2 UUID/GRES + 设备 cgroup 独占租约，再完成至少三轮交替、每轮每侧至少十个热态样本、load/首步/热态 median/p95/离散度、吞吐、allocator/NVML 峰值、近容量/OOM 恢复及 checkpoint on/off 对照。整体 Day2–5 还需完成真实设备上的统一候选实用训练/任务指标、DDP Trainer 多 rank checkpoint、声明支持矩阵，以及 core wheel baseline migration review。整体 release **Not complete**。
 ## 2026-11-01 03:14 +0800 R3 主工作区 copy_ 修复与 GPU2 独占条件复核
 
 ### 主工作区修复

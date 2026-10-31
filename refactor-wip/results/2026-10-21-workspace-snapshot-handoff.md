@@ -1,3 +1,16 @@
+## 2026-11-01 03:25 +0800 handoff：主树 Trainer CPU 新进程恢复通过
+
+主树基线 HEAD 262bed6a79cb8c54800a583612e9cbb71686a5dd 已包含 R3 copy_ placement 修复。当前修改了集成 test harness 的可选 cache override，以复用已验证 JITTOR_HOME，未改训练产品代码。完整 stateful Trainer CPU 集成 6 passed、0 skipped；PT/JT 各自连续 4 步与 2+2 新进程恢复的 272 项轨迹严格一致，0 mismatch；JT 恢复 step 2 到 step 4、fallback=0。它是合成 tiny-BERT/LoRA 的 CPU 恢复证据，不代表 held-out 指标、CUDA 或性能/显存验收。
+
+完整产物：/data6/cgq/jittor-lab/_state/release-day23/20261101-trainer-copy-placement-r3-prepared/main-integration-r3/；训练轨迹与报告：/data6/cgq/jittor-lab/_state/trainer-resume/cpu-jwe57ymu/。
+
+GPU2 于 03:25 +0800 仍为共享 Default，utilization 80%，yqa PID 3590512 使用约 8.6 GiB。Slurm 节点仍 down、cgq association 缺失、设备 cgroup 限制未启用；不启动 burner，不把共享卡测量用于 Day4–5。
+
+### 下一步
+
+1. 继续完成声明支持矩阵与 core wheel baseline migration 审阅，并审视 Trainer 多 rank checkpoint 的明确支持边界。
+2. 为当前主树/source 身份补真实设备的训练/任务指标证据；保持 GPU2 不动，直到管理员恢复 a800 节点、配置有效 Slurm association 与按 UUID/GRES 的设备独占租约。
+3. 独占租约到位后执行 Day4–5 配对性能/显存、近容量/OOM 恢复及 checkpoint on/off 验收。整体 Day2–5 release **Not complete**。
 ## 2026-11-01 03:14 +0800 handoff：主树 R3 CPU copy_ 回归通过；GPU2 需要管理员独占
 
 工作基线 /home/cgq/jittor HEAD b588c421d59f4d8cf3b4183a15af8c00559ce2c6；本轮只改 src/core/var_holder.cc 和新增的 compat/tests/torch/test_copy_preserving_alias_placement.py，主树 CPU 定向回归 1 passed、0 skipped、fallback=0。主树完整 Trainer 集成及 CUDA copy 尚未验证；候选上的 6 项 CPU Trainer 集成证据仍保留候选身份，不外推。

@@ -78,7 +78,11 @@ def _runtime_environment(runtime, run_root, inherited):
         "CUDA_CACHE_PATH": "cuda-cache", "HF_HOME": "hf-home",
         "JITTOR_TORCH_RUNTIME_ROOT": "torch-shim",
     }
+    supplied_jittor_home = inherited.get("JITTOR_TRAINER_JITTOR_HOME", "").strip()
     for variable, child in locations.items():
+        if variable == "JITTOR_HOME" and runtime == "jittor" and supplied_jittor_home:
+            env[variable] = supplied_jittor_home
+            continue
         path = state / child
         path.mkdir(parents=True, exist_ok=True)
         env[variable] = str(path)
@@ -92,7 +96,8 @@ def _runtime_environment(runtime, run_root, inherited):
         "OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1",
         "JT_BUILD_USE_MPI": "0", "JT_BUILD_USE_NCCL": "0",
         "JT_BUILD_NVCC_PATH": "", "nvcc_path": "", "JITTOR_CUDA": "0", "JT_BUILD_USE_CUTT": "0",
-        "cache_name": "trainer_stateful_%s_%s" % (run_root.name, runtime),
+        "cache_name": inherited.get("JITTOR_TRAINER_CACHE_NAME") or
+                      "trainer_stateful_%s_%s" % (run_root.name, runtime),
     })
     env.pop("use_cuda", None)
     env["PYTHONPATH"] = os.pathsep.join(
