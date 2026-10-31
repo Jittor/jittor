@@ -160,6 +160,57 @@ def test_portable_snapshot_fills_one_value_per_operand_including_views():
     assert (view.data_ptr(), tuple(view.stride())) == before
 
 
+def test_portable_snapshot_waits_for_fetch_callback(monkeypatch):
+    torch = compatibility_owner(jt)
+    value = torch.tensor(np.array([1.25, -2.5], dtype=np.float32))
+    queued = {}
+    event_instances = []
+    sync_calls = []
+    submit_calls = []
+    from jittor._core.var import core
+    fetch_node = object()
+
+    class DeferredEvent:
+        def __init__(self):
+            self.completed = False
+            self.waited = False
+            event_instances.append(self)
+
+        def set(self):
+            self.completed = True
+
+        def wait(self):
+            self.waited = True
+            queued["callback"](np.array([1.25, -2.5], dtype=np.float32))
+            assert self.completed
+            return True
+
+    def queue_fetch(*args):
+        queued["variables"], queued["callback"] = args
+        return fetch_node
+
+    def record_sync(variables, *, device_sync=False, weak_sync=True):
+        sync_calls.append((variables, device_sync, weak_sync))
+
+    monkeypatch.setattr(portable, "_Event", DeferredEvent)
+    monkeypatch.setattr(core.ops, "fetch", queue_fetch)
+    monkeypatch.setattr(core, "submit_pending_fetches", lambda: submit_calls.append(True))
+    monkeypatch.setattr(portable.jt, "sync", record_sync)
+
+    values = portable._snapshot_tensors(value)
+
+    assert len(queued["variables"]) == 1
+    assert queued["variables"][0] is sync_calls[0][0][0]
+    assert submit_calls == [True]
+    assert len(sync_calls) == 2
+    assert len(sync_calls[0][0]) == 1 and sync_calls[0][0][0] is value
+    assert sync_calls[0][1:] == (False, False)
+    assert len(sync_calls[1][0]) == 1 and sync_calls[1][0][0] is fetch_node
+    assert sync_calls[1][1:] == (True, False)
+    assert len(event_instances) == 1 and event_instances[0].waited
+    np.testing.assert_array_equal(values[id(value)], [1.25, -2.5])
+
+
 @pytest.mark.parametrize("extension", (".pt", ".pkl"))
 def test_weights_only_format_probe_never_executes_payload(tmp_path, extension):
     torch = compatibility_owner(jt)

@@ -1,6 +1,7 @@
 """Public Torch save/load and portable tensor payload conversion."""
 import os as _os_pickle
 import pickle as _pickle
+from threading import Event as _Event
 import numpy as np
 import jittor as jt
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
@@ -117,10 +118,29 @@ def _snapshot_tensors(obj):
         operands = [tensor.contiguous() for tensor in snapshot.tensors]
         jt.sync(operands, device_sync=False, weak_sync=False)
         # Fetch copies to host without moving the source sharing group.
-        jt.fetch(*operands, snapshot.capture)
-        # Wait for pending fetch copies (including Copy0 for a nondefault GPU)
-        # without adding any other graph roots to the batch.
-        jt.sync([], device_sync=True, weak_sync=False)
+        callback_done = _Event()
+        callback_errors = []
+
+        def capture(*arrays):
+            try:
+                snapshot.capture(*arrays)
+            except BaseException as error:
+                callback_errors.append(error)
+            finally:
+                callback_done.set()
+
+        # Keep the fetch output as a sync root: an empty sync can return
+        # before this fetch runs, even after its operands are materialized.
+        from jittor._core.var import core as _core
+        fetch_op = _core.ops.fetch(operands, capture)
+        _core.submit_pending_fetches()
+        # This root also waits for Copy0 when fetching another GPU's tensors.
+        jt.sync([fetch_op], device_sync=True, weak_sync=False)
+        # Device synchronization can finish before the Python callback has
+        # published its host arrays.
+        callback_done.wait()
+        if callback_errors:
+            raise callback_errors[0]
     if len(snapshot.values) != len(snapshot.tensors):
         raise RuntimeError("checkpoint tensor fetch did not complete")
     return snapshot.values
