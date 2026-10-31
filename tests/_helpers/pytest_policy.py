@@ -62,6 +62,55 @@ def _torch_mode_is_active():
     return value not in ("", "0", "false", "no", "off")
 
 
+class _NativeShimImportGuard:
+    """Refuse to load Jittor's Torch shim into a native test process.
+
+    The shim stays in ``sys.modules`` for the rest of the process, and xdist
+    shares a worker between files: one native file importing ``torch`` (which
+    on a machine with the deployed shim *is* the shim) made
+    ``tests/ops/test_storage_layout_dtype.py`` report 46 setup errors from its
+    "no shim in this process" fixture, while the file that caused it passed and
+    the tracing pointed at the victim (KI-TEST-018). Raising here fails the
+    offending import at its own line, with what to do instead, and leaves every
+    later file in the worker untouched. An independent PyTorch stays
+    importable: ``_spec_is_deployed_torch_shim`` tells the two apart, and
+    ``_helpers.torch_runtime.import_torch_modules`` routes to ``REAL_TORCH_SITE``.
+    """
+
+    def __init__(self):
+        self._answers = {}
+
+    def find_spec(self, name, path=None, target=None):
+        if name != "torch" or "torch" in sys.modules:
+            return None
+        try:
+            from _helpers import torch_runtime
+            spec = importlib.machinery.PathFinder.find_spec("torch", path)
+        except (ImportError, ValueError):
+            return None
+        if spec is None:
+            return None
+        origin = getattr(spec, "origin", None)
+        answer = self._answers.get(origin)
+        if answer is None:
+            answer = torch_runtime._spec_is_deployed_torch_shim(spec)
+            self._answers[origin] = answer
+        if not answer:
+            return None
+        raise ImportError(
+            "import torch would load Jittor's Torch shim into a native test "
+            "process, where it stays for every later file in this xdist worker "
+            "(KI-TEST-018). Compare against an independent PyTorch through "
+            "_helpers.torch_runtime.import_torch_modules() and skip when it is "
+            "not installed, or mark the test Torch-mode."
+        )
+
+
+def _refuse_the_shim_in_native_mode():
+    if not any(isinstance(finder, _NativeShimImportGuard) for finder in sys.meta_path):
+        sys.meta_path.insert(0, _NativeShimImportGuard())
+
+
 def _preload_real_torch():
     """Claim the Torch namespace before Jittor composition in oracle sessions."""
     raw_site = os.environ.get("REAL_TORCH_SITE", "").strip()
@@ -178,6 +227,8 @@ def pytest_configure(config):
         sys.modules.get("torch"), "_torch_compat_install_context"
     ):
         importlib.import_module("jittor")
+    if not _torch_mode_is_active():
+        _refuse_the_shim_in_native_mode()
     # Registered rather than reimplemented here: its hooks have to run even when
     # this module's own sessionfinish raises, because the thing it records is
     # whether the session reached its end at all. A native crash takes the

@@ -1885,29 +1885,3 @@ workaround.
 - Exit condition: decide which behavior is correct, then fix the code or the
   two assertions (and the module docstring) together; a green file that still
   asserts the old behavior is not a resolution.
-
-## KI-TEST-018: a Torch-mode import inside a native worker turns a whole file red
-
-- Severity: Low for users, Medium for the gate (46 errors from one cause)
-- Status: Open; reproduced 2026-10-30 at `30d9f4998` and 2026-10-31 at
-  `b677f2358` with `tools/run_test_suite.py --tier smoke` (native session,
-  `-n 4`), not reproducible running the file alone.
-- Owner: test infrastructure maintainers
-- Symptom: in the smoke tier `tests/ops/test_storage_layout_dtype.py` reports 46
-  setup errors, all `AssertionError: assert 'torch' not in sys.modules` from its
-  autouse `native_device_only` fixture; the same file alone reports 56 passed /
-  6 skipped.
-- Cause: the fixture asserts a clean native process, but xdist shares a worker
-  across files, so any earlier test in that worker that imports `torch`
-  in-process (the shim, or a comparison case) poisons every later file that
-  asserts the invariant. Nothing distinguishes "this file imported torch" from
-  "an earlier file in this worker did".
-- Workaround: run that file alone, or with `-p no:randomly`; `--tier core` does
-  not hit it.
-- Evidence: the smoke runs above (46 errors in that one file out of 22 failures
-  and 47 errors overall at `b677f2358`, every other failure matching a triaged
-  entry) and the isolated run of the same file.
-- Exit condition: the invariant is asserted per worker at the point a
-  Torch-mode test is collected (or native files that touch `torch` are isolated
-  by `--dist loadfile`), so a file's result no longer depends on what ran
-  before it in the same worker.

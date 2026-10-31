@@ -15,6 +15,7 @@ from jittor._runtime.fallback import forbid_backend_fallbacks
 import numpy as np
 import pytest
 from _helpers import native_tp as case
+from _helpers import torch_runtime
 
 
 pytestmark = pytest.mark.skipif(not jt.compiler.has_cuda or dist.get_world_size() != 2,
@@ -28,7 +29,7 @@ def _world():
         dist.init_process_group('nccl', init_method='env://',
                                 timeout=datetime.timedelta(seconds=60))
     assert dist.get_world_size() == 2 and dist.get_backend() == 'nccl'
-    assert 'torch' not in sys.modules
+    assert not torch_runtime.torch_shim_loaded()
 
 
 def _device(value, dtype="float32"):
