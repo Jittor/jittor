@@ -1,3 +1,29 @@
+## 2026-10-31 接续：seed823 generation 有界尝试未配对；当前主树 CUDA dtype 32/34 通过
+
+继续在 /home/cgq/jittor 原工作区，HEAD 5d73e0fb9abdeccc46d9acdc21a93125ddb76f6d，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（ahead/behind 101/0）。本轮测试前后保留 103 项既有 dirty/untracked，status SHA256 2307d0e94eb9b3bc7fba2fede6944fa17e077934dd2beedfee42190737f7ea25c 不变，源码未变；仅更新三份既有状态文档。
+
+### 新增当前主树 dtype 功能证据
+
+在真实 A800 GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 上运行当前 compat/tests/torch/test_torch_compat_dtype.py，逻辑 cuda:0，34 collected，32 passed、2 skipped、0 failed，约 48.881 秒。Jittor 1.3.11.0、专用 transformers_compat Jittor Python/Pytest 7.4.4，strict Torch shim、CUDA enabled、JITTOR_NO_BUILD=1、fallback 0→0。复用 core SHA256 83d5c1a0ac0481afbdbd250e295807f5b7e9005504fae055a0c77bc5a37d8aff，测试文件 SHA256 acc1253dc5d3c1a169caf402989b1de1622a1deaa5b1958494cc0582ba714cea。该模块覆盖 dtype objects、constructor、cast、NumPy 转换、数值信息及类型提升；含设备 helper 的用例在 CPU/CUDA 分支运行。
+
+两项 skip 是文件明确记录的语义差异：Var.long() 返回 int32 而 Torch .long() 应为 int64；混合 dtype 二元运算未遵循 Torch result_type 提升规则（例如 int32+int64 仍可能保留较窄类型）。因此这批结果是窄功能通过，不能宣称 dtype 兼容面完整。完整日志、nodeid、fallback 与资源身份见 /data6/cgq/jittor-lab/_state/test-suite/torch-cuda/20261101-main-dtype-cuda-current-head-r1/；adjudication SHA256 2f4101f357bf2fa419e5c4691962d817a22c1483fbe5a05f1883a467037583e3，证据 manifest SHA256 f387c280d6efb1108c76db84a2f041d8d29465169d2196425dfc37dab0aa97da。
+
+### seed823 固定集 generation 补充结果
+
+使用同一 Qwen3-0.6B base、共同 17 条固定 eval fixture、FP32/eager/greedy/96-token 上限，PT adapter 与 JT adapter 均绑定 seed823/global step 102 和相同 adapter config；JT adapter 的训练来源是较早冻结候选 fingerprint 441ddd71f35d22da9826fdfcdb699110e3087eae8b621562411a1049e3a5c342，不得与 seed821 当前源码训练结果合并。测试集 ID 与选定训练 fixture 不相交，但来源是 Alpaca train split，不是独立人工标注 benchmark，没有预设 release 质量阈值。
+
+PT 在真实 GPU2 完成 17/17：normalized EM 0.0、token-F1 0.2071414362、ROUGE-L 0.1500429584，平均生成 79.824 tokens。Jittor 使用既有当前源码 CUDA core alias cache，readiness 确认 shim/CUDA/cuda:0，core SHA 未变；唯一 generation attempt 达到 300 秒预算时仍在首次 JIT operator 编译，exit 124、零完整样本、无 report，fallback 计数不可得。故这不是 JT/PT 配对质量结论，也不记质量 pass/fail；不对同一 seed823 attempt 重试。PT、JT 未完成日志及所有早期 readiness/setup 失败均保留在 /data6/cgq/jittor-lab/_state/release-day23/20261101-main-qwen-seed823-heldout-generation-r1/；adjudication SHA256 0d201a507b92a85cd304bc25ee8849d35a16fd5e2ca0c43b3c7e603cc3feaa8e，manifest SHA256 4df55bf837d3afcd7db53d6efd1e32b63d93ce57b2b080441f03b753dbc6249c。该 artifact 内 source-before.json.status_entries=1 的 NUL 计数错误由独立 source-count-correction.json 更正为 103；原始文件保持不覆盖，status SHA 与本轮开始/结束一致。
+
+### 关闭 Day4–5 与更广 Day2–5 发布门所需内容
+
+- **正式性能/显存验收：** 等到合格稳定窗口（GPU 利用率 ≤10%、空闲显存 ≥60,000 MiB、无无关计算进程）；冻结源码/权重/数据顺序/batch/sequence/精度/优化器与 warmup/cache；JT/PT 至少 3 轮交替，每轮每侧至少 10 个热态样本。报告加载、首步、热态 latency/吞吐的 median、p95、离散度，allocator allocated/reserved 与 NVML 峰值，单独做最大容量/OOM 边界。共享 GPU 本轮观测只作诊断，不作门槛证据。
+- **明确支持范围：** 把 API、device、dtype、layout/view/storage alias、autograd/梯度、优化器/scheduler、RNG/sampler、fallback 列成矩阵，逐项映射到已有测试/差异/不支持声明。当前 dtype 两个 skip 是应修复或明确排除的具体例子。
+- **代表任务与恢复：** 在一致的权重、数据、源码和配置下覆盖前后向、有限梯度、真实参数更新、学习趋势、预先定义的 held-out 指标和阈值；跨新进程验证模型/optimizer/scheduler/RNG/采样顺序恢复，并覆盖不止一个 seed/配置。R14 seed821 训练和 resume 是强窄证据，但不等于跨配置 release gate。
+- **模型级 activation checkpoint：** 证明目标函数实际 recompute（调用/反向重算次数或图证据），与不启用时匹配数值/梯度/更新，并用受控峰值显存对照；当前 shim 直接执行函数，不能记重算或节省显存通过。
+- **分布式及发布封装：** 明确 DDP/collective 的支持矩阵，覆盖同步、no_sync、barrier 与状态同步；验证干净环境安装、最小运行和依赖边界。把 JT portable-pickle 的 optimizer.pt 无法由 stock PyTorch torch.load 读取作为单独互操作缺口记录，不与同一 Jittor 新进程 resume 通过混为一谈。服务器未安装 nox，完整发布 session 仍需在受支持的 runner 环境执行或正式声明替代入口。
+
+seed823 PT 单侧指标与 CUDA dtype 窄模块均不构成 overall release complete。Day4–5 设备窗口和以上更广门仍开放。
+
 ## 2026-10-31 当前主树 daily-state CPU 与 CUDA alias/device 通过；Day2–5 发布门仍开放
 
 继续在服务器 `/home/cgq/jittor` 的既有工作区验证，未 clone。测试绑定 HEAD `59c775df3b833ce9d1a008478949610ea4b8d78b`、origin/cgq_transformers=`e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`（ahead/behind `100/0`）。测试前保留的 103 项 dirty/untracked 未变化；status SHA256 为 `83cebe9ab499bf7eac33eaf704f20dd58441ca5b7ee5bc662b560e6cd827fa2f`，tracked diff SHA256 `121e855f6c70c312639ceb8aeaee200abc7086e1bf82fdc5b88cabb3e131c1b8`，untracked manifest SHA256 `4cdf9abab0c9fe1dbc7e65e83513dc416da98a419c26f9c09d70e11ce6cf9483`。本轮只验证既有代码/用例，收尾仅修改三份状态文档。

@@ -1,3 +1,13 @@
+## 2026-10-31 接续：当前主树 dtype CUDA 窄门通过；seed823 generation 未形成配对结果
+
+工作区继续为服务器 /home/cgq/jittor，HEAD 5d73e0fb9abdeccc46d9acdc21a93125ddb76f6d，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（ahead/behind 101/0）。保留 103 项既有 dirty/untracked；功能验证前后 status SHA256 2307d0e94eb9b3bc7fba2fede6944fa17e077934dd2beedfee42190737f7ea25c 一致。本轮未改源码、未 push，仅更新三份状态入口。
+
+新增当前主树真实 CUDA dtype module 证据：34 项收集，32 passed、2 skipped、0 failed，fallback 0→0；GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0、逻辑 cuda:0，core SHA256 83d5c1a0ac0481afbdbd250e295807f5b7e9005504fae055a0c77bc5a37d8aff。两个未关闭差异为 .long() 输出 int32 与混合 dtype binary promotion 未遵循 Torch lattice。证据 /data6/cgq/jittor-lab/_state/test-suite/torch-cuda/20261101-main-dtype-cuda-current-head-r1/。
+
+seed823 17 条固定 generation 补充只得到 PT 17/17（EM 0、token-F1 0.207141、ROUGE-L 0.150043）；对应 Jittor attempt 在 300 秒内未完成第一条，处于首次 JIT 算子编译，exit 124，不提供 fallback 或质量结论。seed823 Jittor adapter 来自旧冻结 candidate，与 seed821 当前源码证据分开。保留完整记录 /data6/cgq/jittor-lab/_state/release-day23/20261101-main-qwen-seed823-heldout-generation-r1/；其中 status 计数误写的原 protocol 未改写，另有更正文件。
+
+Day4–5 正式性能/显存仍需合格稳定窗口；本次目标卡有共享负载，不能作性能验收。下一步优先处理或明确限制 .long() 与混合 dtype promotion 支持范围，并继续关闭真实 activation recompute/显存、模型质量阈值、跨框架序列化、干净安装等 Day2–5 门；等 GPU 利用率 ≤10%、空闲 ≥60,000 MiB 且无无关计算 PID 后，再按三轮交替/每轮每侧十个热态样本启动正式性能验收。整体 release 仍 **Not complete**。
+
 ## 2026-10-31 接续：当前主树状态契约 CPU 与 CUDA alias 窄验证通过
 
 继续使用 `/home/cgq/jittor`，HEAD `59c775df3b833ce9d1a008478949610ea4b8d78b`，origin `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `100/0`。原有 103 项 dirty/untracked 保留，测试前后 status SHA256 `83cebe9ab499bf7eac33eaf704f20dd58441ca5b7ee5bc662b560e6cd827fa2f` 不变；未重新 clone 或清理工作区。
