@@ -1,3 +1,17 @@
+## 2026-11-01 05:34 +0800 最终门禁复验
+
+本轮文档更新后布局门禁通过；结构门禁复跑仍为 1391 passed、6 skipped、4 failed，157.73s，rc=1，日志 SHA256 5525c8586ec63067fdddcf6514267bbe0ab5756e07fb13c4ca83df625030ba12。失败分类见 Day2–5 报告。当前工作树是原有 102 项 dirty/untracked 加三份状态文档，index 空；只提交本任务三份文档，不 push。
+
+## 2026-11-01 05:30 +0800 handoff：当前主树 package CPU smoke 通过；结构门仍失败
+
+主仓库 /home/cgq/jittor，branch integrate/cgq-transformers-native-multicard-target，HEAD e46586b26c16c646465b766d8c31dc159aecd00b；origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 136/0。开始本轮文档更新前 102 项既有 dirty/untracked SHA256 为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，暂存区为空；没有 push。
+
+当前源码指纹 ae682fe34dec0cf62e74f5dd3546c8c77dd7d97f23f03f7a4d4b7d11558f2499 的 Qwen3-0.6B LoRA seed821 两 epoch CUDA 实训完成 102 次更新，0 skip、0 fallback、梯度有限，epoch loss 1.205599→1.153534；checkpoint-51 新进程恢复到 102，51 次恢复更新，930 状态检查和 337 项 tensor device map 通过。17 条生成只是 train-split 48-token capped diagnostic，不能作为 held-out 质量通过。证据根目录 /data6/cgq/jittor-lab/_state/release-day23/20261101-qwen-main-r3-practical-r1-prepared/。
+
+当前主树 R3 wheel + sdist 构建、两 wheel 内容审计、独立 CPU 安装 selftest 和 Torch shim CPU backward smoke 均通过；wheel baseline compare 仍有 69 adds、302 changes、2 removals 未批准。仓库布局检查通过；structure gate 1391 passed、6 skipped、4 failed：重复测试定义 device 未审阅、benchmarks.operators 缺失、optim package whitelist 未包含 _state_placement.py，以及外部 Motion324 缺 omegaconf。最终 log SHA256 23dd1cf3860297ebd03973672f334d1d020dbffae7dc959fee831bf509449cf2。
+
+GPU2 仍由 yqa PID 3590512 共享使用约 8.65 GiB，util 约 82%；GPU4/GPU9 也有其他任务。Slurm A800 节点 down，无独占租约；两 rank DDP harness 已修正 fingerprint 但未启动，Day4–5 正式性能/显存 protocol 未执行。下一步先复核结构失败与支持矩阵、推进 DDP 与 wheel baseline 审阅；获取独占 GPU2 后再做稳定配对性能/显存、容量恢复及 checkpoint on/off。整体 Day2–5 release **Not complete**。
+
 ## 2026-11-01 03:25 +0800 handoff：主树 Trainer CPU 新进程恢复通过
 
 主树基线 HEAD 262bed6a79cb8c54800a583612e9cbb71686a5dd 已包含 R3 copy_ placement 修复。当前修改了集成 test harness 的可选 cache override，以复用已验证 JITTOR_HOME，未改训练产品代码。完整 stateful Trainer CPU 集成 6 passed、0 skipped；PT/JT 各自连续 4 步与 2+2 新进程恢复的 272 项轨迹严格一致，0 mismatch；JT 恢复 step 2 到 step 4、fallback=0。它是合成 tiny-BERT/LoRA 的 CPU 恢复证据，不代表 held-out 指标、CUDA 或性能/显存验收。

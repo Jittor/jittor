@@ -1,3 +1,21 @@
+## 2026-11-01 05:34 +0800 提交前复验：布局通过；结构门仍有四项失败
+
+文档更新后重跑 bash tools/check_repo_layout.sh，246 active Markdown，exit=0。复用现有 Jittor cache 重跑 tests/structure：1391 passed、6 skipped、4 failed，157.73s、rc=1；失败集合与首次全量一致，最终日志 SHA256 5525c8586ec63067fdddcf6514267bbe0ab5756e07fb13c4ca83df625030ba12。最终失败原因见下方 Day2–5 详细记录。当前 status 为原有 102 项加本任务三份文档共 105 项；新 porcelain SHA256 6edb9a1ac9ff6539471befa3e41b75a637d1f1ef4f740602950b193fae5e517d，index 仍为空。本轮仅暂存三份状态文档后提交，不 push；overall release 仍 **Not complete**。
+
+## 2026-11-01 05:30 +0800 续验：当前源码 wheel CPU smoke 通过；结构门禁和发布仍未收口
+
+当前工作树 /home/cgq/jittor，分支 integrate/cgq-transformers-native-multicard-target，HEAD e46586b26c16c646465b766d8c31dc159aecd00b；origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 136/0。原有 102 项 dirty/untracked porcelain SHA256 仍为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211；开始文档更新前 index 为空。本轮只更新本看板、Day2–5 结果和 handoff；不 push。
+
+当前源码快照指纹 ae682fe34dec0cf62e74f5dd3546c8c77dd7d97f23f03f7a4d4b7d11558f2499 的 Qwen3-0.6B LoRA seed821 BF16 实训在物理 GPU4 / UUID GPU-8bf405a2-a3dd-e203-8dd9-691e9f7b3530 / cuda:0 完成 2 epoch、202 microbatch、102/102 optimizer update；0 skip、0 fallback、无缺失或非有限梯度，冻结基座不变。每 epoch 101 条微批次均值 loss 为 1.2055992702→1.1535344227，固定 17 样本 eval loss 为 2.4564309120；相对既有 PyTorch seed821 参照 1.205680→1.154064、eval 2.456644 大体接近。checkpoint-51 新进程恢复至 102 并完成 51 次更新，RNG audit、930 项状态值和 337 项张量设备映射核验通过。full 报告仍标记模型权重与 optimizer/scheduler 归档未证明为同一快照；不可将其扩大解释为统一原子 checkpoint 保证。
+
+17 条生成诊断来自 train split，且全部达到 48 token 上限；JT/PT 输出相同、ROUGE-L macro 0.171004、EM 0。score.json 中的 PASS_HELDOUT_GENERATION_SCORE 与 sample 元数据矛盾，因此不计作 held-out 质量通过。
+
+当前源码 package R3 的 direct wheel、sdist 和 sdist-derived wheel 均构建；两个 wheel 各 1100 路径，结构审计通过，direct/sdist 内容一致。干净安装后的 CPU selftest 227/227 编译并通过，Torch shim CPU 反向 smoke 通过。Nox package job 最终因 baseline migration 尚无批准条目而退出 1：69 additions、302 content changes、2 removals 均未批准；clean packaging release gate 仍开放。
+
+仓库布局门禁通过（246 active Markdown）。按 AGENTS 执行的结构门禁最终 1391 passed、6 skipped、4 failed、625.10s、rc=1：测试树重复定义 device 未列入 review 记录；Stage2 用例导入不到 benchmarks.operators；optim 结构白名单未含 _state_placement.py；runtime-composition 用例扫描到外部 /home/cgq/Motion324 并因缺少 omegaconf 失败。详见 Day2–5 报告的失败分类与原始日志；整体结构门未通过。
+
+GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 仍是共享 Default，yqa PID 3590512 使用约 8.65 GiB、利用率约 82%；GPU4 和 GPU9 也有其他作业且负载高，Slurm A800 节点 X12DPG-OA6 为 down，无可靠独占租约。未运行占卡 burner 或 DDP。Day4–5 正式性能/显存、两卡 DDP checkpoint、wheel baseline 审批、结构失败处理及真正 held-out generation 质量门仍未完成；overall Day2–5 release **Not complete**。
+
 ## 2026-11-01 03:25 +0800 续验：主树 Trainer fresh-process CPU 集成 6 passed
 
 基线 /home/cgq/jittor HEAD 262bed6a79cb8c54800a583612e9cbb71686a5dd，含已提交的 R3 placement 修复。仅修改 Trainer 集成 test harness 来选择复用已编译 JITTOR_HOME/cache key，随后主树完整 fresh-process 集成自然 rc0：**6 passed、0 skipped、292.26s**。PT/JT 各自连续跑 4 步与 step-2 checkpoint 新进程恢复到 step 4 的 272 项轨迹都以 atol=rtol=0 比较通过，0 mismatch；JT 参数实际为 CPU、global_step=4、stateful_restored_step=2、fallback=0，6 个可训练参数张量和梯度检查均覆盖。结果绑定 synthetic tiny-BERT/LoRA、CPU 和该主树源码；不证明 held-out 任务指标、真实 CUDA 训练或性能/显存通过。

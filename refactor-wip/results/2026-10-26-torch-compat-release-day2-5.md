@@ -1,3 +1,55 @@
+## 2026-11-01 05:34 +0800 提交前结构门禁复跑
+
+完成本轮三文档增量后，重新执行 bash tools/check_repo_layout.sh，documentation governance 与 repository layout 均通过，246 active Markdown。随后按同一 JITTOR_TORCH_SHIM/PYTHONPATH/CPU runtime、系统 libstdc++ preload 与已建好的 structure-r1 JITTOR_HOME/cache 重跑 tests/structure。结果与 structure-r3 完全相同：**1391 passed、6 skipped、4 failed，157.73s，rc=1**；最终 r4 日志 SHA256 为 5525c8586ec63067fdddcf6514267bbe0ab5756e07fb13c4ca83df625030ba12，产物在 /data6/cgq/jittor-lab/_state/release-day23/20261101-package-gates-current-main-r3-prepared/structure-r4/。四项失败仍是 device 测试定义重复未审阅、benchmarks.operators 缺失、optim package 结构白名单未含 _state_placement.py、外部 Motion324 因缺 omegaconf 导致 shim runtime 用例失败。未修改相关 dirty 源码或测试。三份文档的 git diff --check 无输出；暂存区仍空。
+
+## 2026-11-01 05:30 +0800 当前主树 R3：Qwen 实训续训通过；wheel smoke 通过；结构与发布门仍开放
+
+### 工作树与证据身份
+
+远端工作目录 /home/cgq/jittor，分支 integrate/cgq-transformers-native-multicard-target，HEAD e46586b26c16c646465b766d8c31dc159aecd00b；origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 136/0。文档编辑前 102 项既有 dirty/untracked porcelain SHA256 为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，暂存区为空。本节仅追加状态，不覆盖任何旧失败或产物。
+
+本轮新增证据根目录为 /data6/cgq/jittor-lab/_state/release-day23/20261101-package-gates-current-main-r3-prepared/；Qwen 与 DDP 准备记录位于 /data6/cgq/jittor-lab/_state/release-day23/20261101-qwen-main-r3-practical-r1-prepared/。Qwen source fingerprint 为 ae682fe34dec0cf62e74f5dd3546c8c77dd7d97f23f03f7a4d4b7d11558f2499；其来源与当前主树代码快照绑定，不转移为其他源码指纹的通过。
+
+### 当前源码 Qwen 实训与恢复
+
+Qwen3-0.6B LoRA seed821，BF16、2 epoch、101 个训练样本、batch=1、gradient accumulation=2、max_length=96、max_target_length=48、lr=3e-5。完整训练实际设备是物理 GPU4 UUID GPU-8bf405a2-a3dd-e203-8dd9-691e9f7b3530，进程内 cuda:0。报告记录 202 个 microbatch、102 次成功 optimizer update、0 skip、fallback=0、missing/nonfinite gradient=0、frozen base unchanged；每 epoch 101 条 microbatch 平均 loss 为 1.2055992702→1.1535344227，固定 17 样本 eval loss=2.4564309120。参照已保存 PyTorch seed821 数值为 epoch loss 1.205680→1.154064、eval loss 2.456644；这是短程、单 seed、固定 fixture 结果，训练 runtime 明确标记为非性能证据。
+
+checkpoint-51 新进程恢复分支从 step 51 继续到 102，实际完成 51 次更新，resume_loaded_state_exact=true、resume_rng_loaded=true、fallback=0。resume-state-comparison.json 中 practical.functional_passed=true、930/930 状态值检查通过、337/337 张量设备键一致；Python/NumPy/CPU/CUDA RNG audit 和第二 epoch 样本推进核验通过。full 训练报告的 state_archive_semantics.same_checkpoint_verified=false，模型权重选择与 optimizer/scheduler end state 未证明是同一原子快照；本证据只支持 checkpoint-51 的实际恢复路径，不扩展成所有保存生命周期保证。
+
+Qwen 训练原始报告为 runs/qwen-main-full/output/report.json，恢复报告为 runs/qwen-main-resume-r2/output/report.json；完整 harness、配置和失败原件均保存在上述 evidence root。历史 PT 对照继续按已有身份引用。
+
+### Generation 诊断边界
+
+generation-jittor-final-r1 与 generation-pytorch-final-r1 各 17 条输出完全相同，ROUGE-L macro=0.1710040681，EM=0；每条实际生成 48 token，预算也为 48。逐条 sample 元数据的 source_split 都是 train，而非 held-out split。虽然 score.json 的 status 字段写作 PASS_HELDOUT_GENERATION_SCORE，本轮按真实 sample metadata 和 token cap 将其记录为 train-split capped diagnostic，不作为 held-out generation quality pass；缺少不触顶的 held-out generation 质量验收。
+
+### 当前源码 wheel / sdist package gate
+
+R3 package artifact root：/data6/cgq/jittor-lab/_state/release-day23/20261101-package-gates-current-main-r3-prepared/。source snapshot 绑定 HEAD e46586b26c16c646465b766d8c31dc159aecd00b 与文档编辑前工作树哈希 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211。
+
+- Direct wheel：jittor-1.3.11.0-py3-none-any.whl，SHA256 b781df9ffa346a03f272dd88cc3f665956546a751f58b3fd468529e9c80a4c02。
+- sdist：jittor-1.3.11.0.tar.gz，SHA256 14e93ea0c27db64d9256e4bec3d185bed36551e1d27190a5a7dce8c160490a9a。
+- sdist-derived wheel SHA256 adf05ba671306e34972b0f57d8264d93422cfa5c8547e22db5eb3c886f9681a0。
+- sdist member check 1455 项通过；两个 wheel 各 1100 member，wheel structural audit 通过，direct wheel 与 sdist-derived wheel 内容逐项一致。wheel 中 src/core/var_holder.cc 与当前源码快照字节一致。
+- 独立安装 current wheel 后 CPU Jittor selftest exit=0，227/227 核心编译单元成功；combined Torch shim CPU smoke exit=0，确认 torch namespace 指向 Jittor shim、基本反向传播梯度为 4。该证据不覆盖 CUDA package runtime。
+
+Nox R3 完整 packaging job 的最终 rc=1 发生在 baseline compare，而非 wheel build 或 sdist 结构校验。候选对 1033-path final baseline 有 69 additions、302 内容变化、2 removals，批准数均为 0；迁移审阅未获批准，release gate 保持 open。Nox R2 因隔离 venv 路径过长且无 uv/Python 下载器而在建环境前失败，原件保留。combined smoke 首次从 /home/cgq 启动时扫描到 /home/cgq/Motion324，因缺 omegaconf 失败；r4 改为空工作目录后通过。相关日志与退出码在 artifact root 的 logs/，失败文件没有覆盖。
+
+### 仓库结构门禁
+
+按根 AGENTS 提交前命令运行 bash tools/check_repo_layout.sh，输出 documentation governance OK（246 active Markdown）及 repository layout OK，exit=0。
+
+随后以 JITTOR_TORCH_SHIM=1、PYTHONPATH=/home/cgq/jittor/python、CUDA_VISIBLE_DEVICES 为空、use_cuda=0 runtime、独立 JITTOR_HOME/cache 和系统 libstdc++ 预加载运行 tests/structure。最终结构门禁 rc=1，1391 passed、6 skipped、4 failed，625.10s。最终原始日志 SHA256 23dd1cf3860297ebd03973672f334d1d020dbffae7dc959fee831bf509449cf2，路径为 structure-r3/logs/pytest.log；exit-code=1。
+
+四项失败分别是：test_cleanup_structure 检出跨测试文件重复定义名称 device 且 review 名单未登记；test_stage2_delivery 导入 benchmarks.operators 失败（模块缺失）；test_optim_structure 的物理包白名单未预期 _state_placement.py；test_runtime_composition_structure 间接导入 shim 时发现 /home/cgq/Motion324/setup.py，构建失败原因是环境缺少 omegaconf。前三项需要维护者审阅当前代码树/测试期望；最后一项是外部下游 checkout 环境污染。本轮不改动其他 dirty 源码或测试来消除此结果。
+
+结构门禁第一次启动在收集前因 Conda libstdc++ 缺少 GLIBCXX_3.4.30 失败；system libstdc++ 预加载后的 import smoke 通过。中间的 structure-r2 attempt 因新 HOME 自动选择 CUDA 12.4、将建立重复 cache 而中断，进程组已核验并停止；其 attempt 文件保留。最终 r3 复用 CUDA 12.2 cache 完整运行。CPU 构建期间没有创建本任务的 GPU context。
+
+### 当前尚未关闭的 Day2–5 项
+
+GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 仍处 Default 共享状态，约 8651 MiB 被 yqa PID 3590512 使用，当前 util 约 82%；GPU4 和 GPU9 同样是共享高负载，Slurm X12DPG-OA6 为 down，没有 cgq 独占 GPU2 租约。本轮没有运行占卡 burner。纠正 fingerprint 后的 DDP harness test_ddp_trainer_checkpoint_r3.py SHA256 1fbae52d3e9d95a867acd0a420dc3b0a29a2e655341ce41b02c93110e43ec7d5，source-manifest 检查通过；它要求两 rank CUDA/NCCL，未在共享卡上启动。
+
+后续顺序：先审阅四项结构门失败及当前支持边界；取得管理员/调度器提供的 GPU2 UUID/GRES/device-cgroup 独占窗口；再完成两 rank Trainer checkpoint/full-resume；审阅并明确批准或拒绝 wheel baseline 迁移；补真正 held-out、不过 generation cap 的质量分数；最后在匹配配置下完成至少三轮 PT/JT 交替、每轮每侧十个热样本的 latency/memory、allocator/NVML 峰值、near-capacity/OOM recovery 与 checkpoint on/off 验收。实用训练证据不能替代 Day4–5；overall release 继续 **Not complete**。
+
 ## 2026-11-01 03:25 +0800 主树 Trainer fresh-process CPU 集成通过
 
 ### 主树身份、harness 与运行条件
