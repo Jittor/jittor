@@ -1,3 +1,11 @@
+## 2026-10-31 最新续接：主包 clean install selftest 暴露 wheel 缺模块；Day4–5 未验收
+
+本轮在既有 `/home/cgq/jittor` 继续，主包包门绑定 HEAD `a067d2dedb44cf6d039bb54fed2a3f5af94b7864`、origin `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`（109/0）。构建前 103 项既有 dirty/untracked 的 status SHA256 `ad24d0fe82a758525cec03ee1e79373524c55422c274ac6a3b7e6c89a88b4402`；源码和既有实验文件未改。本轮仅有隔离 `/data6` 包 artifact：`/data6/cgq/jittor-lab/_state/release-day23/20261031-main-package-current-r1-prepared/`，adjudication SHA256 `b432ec86ea1bd6098789d393b5b02fb952d60327a5095f08d47f0fcf597096dc`。
+
+主 Jittor wheel/sdist 构建成功，直接 wheel 与 sdist 派生 wheel 的 1,184 个成员逐项相同；但 manifest check 失败，core wheel 包进 `jittor/compat/...`，安装后 selftest 又因 wheel 漏 `jittor.backends.cuda.kernels.cublas.lt_linear_cuda` 而在 import 阶段失败。兼容层 wheel 单独的 CPU 20 步更新通过，但它借用源码树 runtime，不能证明主 wheel 或组合安装可用。全量日志、哈希和 checker 限制写在 Day2–5 结果顶部；不要覆盖主包失败原件或重跑已完成的构建/兼容训练 smoke。
+
+后续先修包内容/manifest 边界，在隔离干净环境通过主包 selftest 和主包+compat 组合 smoke；继续关闭当前候选声明范围、DDP Trainer 保存恢复、held-out 任务指标、JT/PT checkpoint 显存和速度配对、JT portable-pickle 与 stock PyTorch 的互操作契约。Day4–5 需等稳定低负载且无无关 GPU PID，再按至少三轮 JT/PT 交替、每轮每侧至少十个热态样本记录 load/首步/热态 median/p95/离散度、allocator/NVML 峰值和容量/OOM 边界。当前共享 GPU 不满足正式窗口。Overall release **Not complete**。
+
 ## 2026-10-31 续验交接：当前 DDP owner CPU 门通过；双卡同步路径仍需扩展
 
 在服务器 `/home/cgq/jittor` 现有工作区继续，HEAD `5fcc3f049f0c724c17db29acf77e10f5c1c777ff`，origin `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `108/0`。工作区 103 项原有 dirty/untracked 与 CPU DDP 用例前后 status SHA256 `ad24d0fe82a758525cec03ee1e79373524c55422c274ac6a3b7e6c89a88b4402` 一致；测试 index 为空，CPU core SHA256 `51845b1462d8f3beaf5f9c2034bd96363a2925b90ff1dcec2bbcf02f9aeb5818`。`compat/tests/torch/test_ddp_owner_separation.py` 当前全模块 15/15 通过，产物 `/data6/cgq/jittor-lab/_state/test-suite/torch/20261031-main-ddp-owner-cpu-current-r1-prepared/`。

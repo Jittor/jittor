@@ -1,3 +1,13 @@
+## 2026-10-31 接续：主包 wheel 安装自测失败；Day4–5 与广泛发布门仍开放
+
+在 `/home/cgq/jittor` 既有工作区继续；主包构建绑定 HEAD `a067d2dedb44cf6d039bb54fed2a3f5af94b7864`、origin/cgq_transformers=`e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`（ahead/behind `109/0`）。构建前工作区原有 103 项 dirty/untracked、porcelain SHA256 `ad24d0fe82a758525cec03ee1e79373524c55422c274ac6a3b7e6c89a88b4402`；本轮未改源码、测试或既有实验文件。
+
+当前主包 sdist/wheel 均构建成功，且 sdist 派生 wheel 与直接 wheel 的 1,184 个成员名称和逐文件字节完全相同；`storage_version.h` 两边均存在。但安装门未通过：`generate_manifest.py --check` 因当前 `MANIFEST.in` 不是生成态而失败；core wheel 审计发现主包包含按发布边界应由兼容包提供的 `jittor/compat/...`；非 editable 安装后的 `python -m jittor.selftest` 在导入 `jittor.nn.modules.linear` 时找不到 wheel 缺失的 `jittor.backends.cuda.kernels.cublas.lt_linear_cuda`，前向/反向/optimizer smoke 均未执行。该 Python 文件存在于源码根 `backends/cuda/kernels/cublas/lt_linear_cuda.py`，但不在主 wheel/sdist 派生 wheel。隔离 sdist checker 还受无 `.git` 源副本和当前 checkout 缺少 `docs/locales/zh_CN/LC_MESSAGES/index.po` 影响；wheel compare 脚本预设 baseline 路径不存在，故这两项不能写成通过。
+
+兼容层 wheel 自身已有 CPU 非 editable 安装 smoke：20 次 SGD 更新，loss `0.0474137 → 0.00592029`，fallback `0→0`；但该 smoke 的 Jittor runtime 来自源码树，不是已安装主 wheel，因此不关闭组合安装门。完整结论与产物哈希见 Day2–5 结果报告顶部，artifact `/data6/cgq/jittor-lab/_state/release-day23/20261031-main-package-current-r1-prepared/`；本次 adjudication SHA256 `b432ec86ea1bd6098789d393b5b02fb952d60327a5095f08d47f0fcf597096dc`。
+
+接下来发布前需要：修复 stale manifest、core/compat wheel 边界和缺失模块并在干净非 editable 环境重跑主包 selftest 与组合 wheel smoke；在锁定候选上补足声明范围 API/device/dtype/layout/autograd/fallback 矩阵、模型训练/新进程续训及 held-out 指标阈值、DDP Trainer 训练保存恢复与多 rank 状态、真实 activation checkpoint 的显存/速度对照、JT 与 stock PyTorch 的序列化契约。Day4–5 仍独立需要至少 3 轮匹配配置 JT/PT 交替测量、每轮每侧至少 10 个热态样本，并报告 load/首步/热态 latency 与吞吐的 median/p95/离散度、allocator allocated/reserved 和 NVML 峰值，以及容量/OOM 边界。当前 GPU 仍是共享高负载，不构成正式窗口。Overall release **Not complete**。
+
 ## 2026-10-31 接续：DDP owner CPU 模块通过；双卡 no_sync 有窄证据
 
 当前工作区 HEAD `5fcc3f049f0c724c17db29acf77e10f5c1c777ff`，origin/cgq_transformers=`e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `108/0`。当前 CPU DDP owner 模块 15 passed、0 skipped，使用 core SHA256 `51845b1462d8f3beaf5f9c2034bd96363a2925b90ff1dcec2bbcf02f9aeb5818`；103 项既有 dirty/untracked 测试前后状态 SHA256 均为 `ad24d0fe82a758525cec03ee1e79373524c55422c274ac6a3b7e6c89a88b4402`，index 为空。该结果关闭当前树 owner/bucket CPU 定向门。

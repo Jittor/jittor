@@ -1,3 +1,34 @@
+## 2026-10-31 续验：主包 wheel clean-install/selftest 失败；Day4–5 与广泛发布门未闭合
+
+本轮包门绑定 `/home/cgq/jittor` 的 HEAD `a067d2dedb44cf6d039bb54fed2a3f5af94b7864`，origin/cgq_transformers=`e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `109/0`。开工时既有 103 项 dirty/untracked 与状态 SHA256 `ad24d0fe82a758525cec03ee1e79373524c55422c274ac6a3b7e6c89a88b4402` 保留，index 为空；未改源码/测试、未动已有 cache 或 GPU 实验产物。当前 package artifact `/data6/cgq/jittor-lab/_state/release-day23/20261031-main-package-current-r1-prepared/`，adjudication JSON SHA256 `b432ec86ea1bd6098789d393b5b02fb952d60327a5095f08d47f0fcf597096dc`。
+
+### 主包打包与安装结果
+
+隔离源码副本含 2,839 个文件，manifest SHA256 `c46dd5d4eb8c8e3a84e723627f0ef2588cbe64cb05065b42f244a33fc82a6e10`。直接构建 Jittor 1.3.11.0 sdist/wheel exit 0：wheel SHA256 `dedf4ed3e4ee62b19175bc66b669c4be1d12f564fe733994e0ebdfa971b18347`，sdist SHA256 `e885b92d96d86862c135458d45c78bbb017e1f0a3066cbea806dcb0dac3b683e`。sdist 派生 wheel 构建 exit 0，SHA256 `a8f42affeddb75e324a09074f9dd12fded705b6481aab513bb3be9aff2bb0633`；直接与派生 wheel 均为 1,184 个成员，名称集合相同且交集全部逐文件相同；`jittor/src/core/storage_version.h` 均存在。
+
+安装与政策检查暴露三项实质阻断：
+
+- `tools/build/generate_manifest.py --check` exit 1：隔离副本的 `MANIFEST.in` 为 stale generated manifest（日志 SHA256 `ca5f4ec204096aae32d1cd37eac26b1a472a306e3295332f45b0a23e284f43fa`）。
+- core wheel 内容审计 exit 1：wheel 收录 `jittor/compat/torch/...` 与 `jittor/compat/triton/...`，违反 core/compat 发布包边界策略（日志 SHA256 `50af27cf2df5aa4e87b3810c16e2af854266b8967de9dafcfc148811ba530ca6`）。
+- wheel 非 editable `pip install --target` 成功（日志 SHA256 `15062275747800a4870d6c040cd88608dce9247ea3f38dee48465eac53502319`），但 `python -m jittor.selftest` exit 1：`jittor.__init__` 导入 `jittor.nn` 时，`linear.py` 无条件导入的 `jittor.backends.cuda.kernels.cublas.lt_linear_cuda` 不存在于安装后的主 wheel。源码根存在 `backends/cuda/kernels/cublas/lt_linear_cuda.py`，但直接 wheel 和 sdist 派生 wheel 都未打入。故此失败发生在 selftest 的前向、反向、13 个子包导入及三步训练之前，是实际产品包安装阻断，不是模型训练数值差异。日志 SHA256 `a658babd1702b117956c6502ec0752deb6af80e4ad1a4487bbed83a6b286f0a1`。
+
+selftest 执行时 `CUDA_VISIBLE_DEVICES=''` 仍未阻止 Jittor 发现系统 nvcc 并编译 CUDA backend；因此该次 attempt 不是 CPU-only 证据。它使用 artifact 私有 `JITTOR_HOME`，不触碰 `/home/cgq/.cache/jittor`；失败后私有 cache 约 54 MiB 保留。前向/反向/更新未执行，fallback delta 未取得，不能把此运行计作任何 backend selftest 通过。
+
+检查工具本身还有未完成审计：隔离源码副本没有 `.git`，sdist inventory checker exit 2；对真实 checkout 的 checker exit 2，因为当前 checkout 缺 `docs/locales/zh_CN/LC_MESSAGES/index.po`；wheel compare checker exit 2，因为它硬编码查找 `docs/results/baselines/wheel-contents-final.txt`，而该路径不存在。这些分别保留在 `sdist-audit.log/.exit`、`sdist-audit-current-root.log/.exit`、`direct-wheel-compare.log/.exit`，不伪记为 archive audit 通过。直接 wheel 与 sdist 派生 wheel 的逐成员相同是独立已完成检查。
+
+### 已完成的兼容 wheel 窄证据与边界
+
+相邻 artifact `/data6/cgq/jittor-lab/_state/release-day23/20261031-main-compat-package-current-r2-prepared/` 中，compat wheel/sdist 构建与 sdist 派生 wheel 成员审核通过；直接 wheel SHA256 `b58d9108c11599f2c83c71d7728e2df747e5b4b076181b44e725748cfb0d96bb`，sdist SHA256 `6c0429be6681e882fae735262875a731e80ef898a19dde4c74262a1802e3b3d9`，派生 wheel SHA256 `28291dc8f7d90c480f7ec20680bb110c0fc039a2eb8d040dc4e199c0a7da8faa`。在 CPU、fallback 0→0 下从安装目标导入 compat 层并对固定四样本 `Linear(2,1)` 做 20 次 SGD，loss `0.0474137291→0.00592028536`、梯度/loss 有限且参数改变；结果 SHA256 `f46caf80a578af687bac94e3632755d806ed114092e37cdc4397f73955f8db01`。该 smoke 的 Jittor native runtime 是 `/home/cgq/jittor/python` 源码树，CPU core SHA256 `51845b1462d8f3beaf5f9c2034bd96363a2925b90ff1dcec2bbcf02f9aeb5818`；它只关闭 compat wheel 的 CPU 更新窄路径，不能证明安装主 wheel 可用或两 wheel 共同安装。既有 stock PyTorch `torch.load` 读取 JT portable-pickle optimizer 失败仍单独记录，不与同 Jittor 新进程续训通过混为一谈。
+
+### 完成 Day4–5 与更广 Day2–5 发布门还需要
+
+1. **Day4–5 性能/显存正式协议：** 冻结相同源码、模型/权重、数据、dtype、batch/sequence、optimizer 和编译状态；选择共享负载稳定且空闲显存充足、无无关计算进程的设备；JT/PT 至少三轮交替，每轮每方至少 10 个热态样本。分别保留加载、首步和热态延迟/吞吐原始样本，汇总 median、p95、离散度；同步记录 Jittor allocator allocated/reserved 峰值、NVML 峰值，并单独验证 near-capacity/OOM 边界。历史共享 GPU 短测只作诊断。最近快照 10 卡利用率有 0–100%，GPU2/4 约 80%，没有满足已有低负载准入的卡，因此本轮没有正式测量或性能结论。
+2. **支持范围与实际功能矩阵：** 在锁定候选上明确支持的 API/device/dtype/layout/alias/in-place/autograd/edge/fallback 组合，对尚未关闭的范围用 CPU/CUDA 定向回归和真实 backend 计数覆盖；已有 DDP owner CPU 15/15 及旧 HEAD NCCL no_sync 两 rank 窄证据保留，但仍需当前候选多 rank 梯度/参数/optimizer-state、Trainer 训练以及新进程保存/恢复 gate。
+3. **模型训练、恢复及质量：** 复用既有 R14 Qwen seed821 102 更新和 checkpoint-51 resume 证据，不重做 full/preflight/resume；发布候选有源码变化时只重验受影响路径。质量门需以共同权重/数据/config/预算和固定、独立的 held-out 集定义 loss/任务指标差距，并和 PyTorch seed 波动比较。现有 17 条 seed821 Qwen 生成仅探索性且双方 EM=0，不能作广泛质量 PASS。
+4. **checkpoint 显存与成本：** CUDA LlamaDecoderLayer 已有实际 forward/recompute/梯度窄证据；还需固定代表模型和 batch，checkpoint on/off 配对测量峰值 allocated/reserved/NVML 及速度成本，确认训练输出/梯度和 fallback。
+5. **序列化、安装与发布：** 明确 JT portable-pickle 在 Jittor 恢复与 stock PyTorch 互操作的支持契约；修复 stale manifest、wheel 中遗漏 `lt_linear_cuda.py` 和 core/compat 成员边界，补齐/修正 sdist inventory 输入及 compare baseline 路径，然后在隔离干净环境分别安装主包、compat 包和组合包，执行 selftest、shim autograd/update smoke 与所声明 API 的最小用户流程。
+6. **发布结论：** 将功能训练、续训正确性、严格数值对齐诊断、held-out 任务质量、性能/显存、安装/打包分别标注；当前实用训练已有 R14 窄通过，但本轮主包安装失败、Day4–5 未测、较广发布门未齐，overall release 仍 **Not complete**。
+
 ## 2026-10-31 续验：当前 DDP owner CPU 门通过；双卡 no_sync 证据仍属窄路径
 
 在 `/home/cgq/jittor` 现有工作区继续，当前 HEAD `5fcc3f049f0c724c17db29acf77e10f5c1c777ff`，origin/cgq_transformers=`e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `108/0`。当前 DDP owner CPU 全模块在 `CUDA_VISIBLE_DEVICES=""`、`use_cuda=0`、`JITTOR_NO_BUILD=1` 下收集并执行 15 项，15 passed、0 skipped、0 failed、11.93 秒；Jittor CPU core SHA256 `51845b1462d8f3beaf5f9c2034bd96363a2925b90ff1dcec2bbcf02f9aeb5818`。`distributed_data_parallel.py` SHA256 `66b44ab55dcd6eea22aa2019e7542aec9fa605a1cfe592c24692c994f93a59b3`，owner 测试 SHA256 `45aa0bee9e5bc0eb8a1a6b11bcfe113476e5f0eb25286ef4d15dabb71804b0e1`；其余相关 installer/type/frontend/dtype 源码身份见产物内 `relevant-source-before.sha256`。测试前后 103 项既有 dirty/untracked 完全一致，status SHA256 均为 `ad24d0fe82a758525cec03ee1e79373524c55422c274ac6a3b7e6c89a88b4402`，未修改源码。原始证据 `/data6/cgq/jittor-lab/_state/test-suite/torch/20261031-main-ddp-owner-cpu-current-r1-prepared/`；pytest log SHA256 `d1b070188c44ce2a3e8aaceaecdfccffa393546e5ab8329e30bb8702a99cd234`，source manifest SHA256 `06b73a706958af15dfa1844386828371b15e9fefd5b553d5524721346d38772d`。
