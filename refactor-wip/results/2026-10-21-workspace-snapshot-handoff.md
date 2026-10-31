@@ -1,3 +1,15 @@
+## 2026-11-01 02:24 +0800 handoff：当前 wheel CPU smoke 通过；Trainer stateful resume 在权重 copy_ 前失败
+
+主仓库 `/home/cgq/jittor` HEAD `ffa41a6e68837dd09f9d781d5b21c7b37a901857`，分支 `integrate/cgq-transformers-native-multicard-target`；`origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind 132/0。102 项折叠 porcelain 哈希 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211` 未变，暂存区为空；`-uall` 展开计数为 105。仅更新三份状态文档，不改其他 dirty/untracked 文件，不 push。
+
+当前源码 fingerprint `1fbdc0fa223b9fb3e016a9aca72f7b95cc6c93f3e10076f3b743d6035e15c343`。CPU-only wheel install smoke 与 37 项 packaging tests 通过，sdist/core/compat/adapter wheel 结构审计完成；clean wheel/sdist 发布门仍因 core wheel 相对 final baseline 的 70 additions、302 内容变更、3 removals 且没有批准 allowlist 而保持开放。细节与包哈希见 Day2–5 结果报告的新章节。
+
+当前源码 Trainer integration 在 PT 侧证明 4 步连续和 2+2 步 fresh-process resume 的 272 项轨迹逐位一致，0 mismatch、fallback=0；整个测试集为 5 passed/1 failed。Jittor 侧在 Trainer 启动训练前加载 LoRA 初始权重时，发现 source explicit CPU placement 与目标 FollowRuntime placement 不同，触发 `Tensor.copy_` placement guard；0 training update。review 收据 SHA256 `04be93c1bbc75cc1e95491184340501fbd535e4f80afbcd346e2357a6b07d0d5`，目录 `/data6/cgq/jittor-lab/_state/release-day23/20261101-trainer-resume-current-main-r2-prepared/`。下一步在隔离候选中修复并加回归，再重跑该功能门；DDP Trainer 多 rank checkpoint 仍未验证。
+
+GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 在 2026-10-31 18:23 UTC 为 Default、100% 利用、18,081 MiB used；yqa PID 3590512 与另一项 V2M4 PID 3812018 共用此卡。没有管理员独占租约，未运行占卡程序。正式性能需要取得 GPU2 UUID/GRES/cgroup 独占时段，随后完成至少三轮 PT/JT 交替、每侧每轮十个热样本的 latency/throughput/memory 统计，并做近容量/OOM 恢复及 checkpoint on/off 对照。已有 R26 median ratio 1.595 仍未过 1.10 时延门。
+
+后续继续补支持矩阵、held-out 任务指标、统一候选训练与新进程恢复、DDP 多 rank checkpoint、序列化互操作契约、clean 安装与 baseline migration review。R14 训练结果仍绑定历史源码与配置；整体 Day2–5 与 Day4–5 release 保持 **Not complete**。完整新证据与失败原件哈希见 [Day2–5 结果报告](2026-10-26-torch-compat-release-day2-5.md)。
+
 ## 2026-11-01 01:28 +0800 handoff：R13g 序列化全量回归通过；R14 optimizer 转换通过
 
 主仓库 `/home/cgq/jittor` HEAD `8597b7de66e465a62a1ac65f40cbaad78a93bd2f`，分支 `integrate/cgq-transformers-native-multicard-target`；fetch 后 origin SHA `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind 131/0。文档编辑前 102 项既有 dirty/untracked porcelain SHA256 仍为 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`，index 为空；本轮只更新唯一看板、本结果报告和本 handoff，不改主源码，不 push。

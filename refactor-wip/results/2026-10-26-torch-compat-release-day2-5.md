@@ -1,3 +1,42 @@
+## 2026-11-01 02:24 +0800 续验：CPU wheel smoke 通过；Trainer resume 在当前主树发现 copy_ placement 缺陷
+
+### 源码身份与工作区保护
+
+继续使用现有主工作区 `/home/cgq/jittor`，未重新 clone。分支 `integrate/cgq-transformers-native-multicard-target`，HEAD `ffa41a6e68837dd09f9d781d5b21c7b37a901857`；`origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind 132/0。开始本轮续验前折叠 porcelain 为 102 项，SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`；当前仍一致，暂存区为空。使用 `git status --porcelain=v1 -uall` 会把一个已有未跟踪技能目录展开为四个文件，因此显示 105 条，不能据此误判新增工作区变更。本轮实验未修改源码。当前源码 fingerprint `1fbdc0fa223b9fb3e016a9aca72f7b95cc6c93f3e10076f3b743d6035e15c343`，2,816 项；source manifest SHA256 `9570dcf7e128a7da79e14ad96bcc02aa5f51c6c011186eb89f3bc7ecc44665f9`。
+
+### 当前源码 wheel / sdist 安装门
+
+证据目录：`/data6/cgq/jittor-lab/_state/release-day23/20261101-package-gates-current-main-r1-prepared/`。
+
+CPU-only、隔离安装目标的 smoke 通过：从安装目标导入 Jittor、Torch compatibility namespace 与 `jittor_adapters`；Torch namespace 版本 1.3.11.0、Jittor core 为当前构建；环境未暴露 CUDA/nvcc，scoped `use_cuda=0`，无 fallback。Gradient 得到 `[2, 4]`，Linear 参数经 optimizer 更新；fallback 计数前后均为 0。smoke log SHA256 `8aaedc2c9e99bb3e1cecfbc317d9d0e0a69f811b45acf31b91ef63be60aeec2f`。当前尝试的 37 项 packaging unit tests 通过；sdist 结构审计 1,455 项、core wheel 1,100 路径、compat wheel 182 路径均完成；adapter wheel 有 18 个文件，依赖为 `jittor-torch==1.3.11.0`，并含 torchmetrics/transformers/vllm entry points。该结果只证明 CPU 安装与基础导入/更新路径，不证明 CUDA wheel、广泛下游兼容或发布门全部通过。
+
+Core wheel 与既有 `wheel-contents-final.txt` baseline 比较仍失败：候选 1,100 路径、baseline 1,033 路径，70 additions、302 内容变更、3 removals；最终 allowlist 为空。差异完整收据 `wheel-migration-review-r1.json` SHA256 `5e1bfee68ad9ae93d36742e05a6acbff6aa7583bd2bbbf15e6da3685568d72d4`。适用于另一阶段的 `wheel-contents-final-modernization.txt` 不可作为此迁移门 baseline；没有强行加 allowlist 或重置 baseline。原 baseline wheel SHA `09aa1156c2d41fc63d45c0a5281d4fbd4630891da4d785e729c93c2548215848` 未在本地找到；PyPI 下载尝试无匹配发行版，记录保存在包目录。保留该迁移审阅为开放项。核心 wheel SHA256 `f9eda7dda0ddd36a46c6b8f93bdc8d6e9b6b8b0b6c5685090052d364961982cb`；compat `57068db014b040421bb7109381e17d6eceb624f6d5eee41bcb70c806c6c47a2d`；adapter `ad29a6349933ac0b8c936d32dd5c358d1f0b9a4394c06ebc9fb2fa1568fe25dc`；sdist `12ebf721428f56118e1717ad98e43e3594eae903a0c1cda4cd56138c73acb846`。
+
+### 当前源码 Trainer stateful resume 集成
+
+证据目录：`/data6/cgq/jittor-lab/_state/release-day23/20261101-trainer-resume-current-main-r2-prepared/`；完整审阅收据 `trainer-resume-current-main-review-r1.json` SHA256 `04be93c1bbc75cc1e95491184340501fbd535e4f80afbcd346e2357a6b07d0d5`。
+
+使用固定本地合成 BERT + LoRA fixture、4 步训练、32 个重复 fixture 样本和两个 DataLoader worker；CPU-only，无模型下载。PT 环境为 torch 2.6.0+cu124；两侧 Transformers 4.56.2、Accelerate 1.10.1、PEFT 0.17.1、tokenizers 0.22.1、numpy 1.26.4、torchdata 0.11.0；Jittor shim distribution 2.11.0。完整集成结果 **5 passed、1 failed、0 skipped，362.29 秒**。PyTorch 对照连续跑 4 步与先跑 2 步、保存 checkpoint、在 fresh process 恢复到 4 步的 272 项状态/轨迹值严格相同（atol=rtol=0、0 mismatch），恢复 global step 2，结束 step 4，fallback=0；sampler generator SHA256 `0bd0a4cd0f8ab36341814a1b0a3974a8cfb550465ce9523f8d1c9d76a9979a68`。比较日志 SHA256 `dd7273c1e2d49b0b6c3c30c3aac5c7993f08a41eb00fbb573c5f77594778aa83`。
+
+Jittor 侧在加载初始 PT 权重至 PEFT 模型时失败，位置为 `compat/tests/torch/_hf_trainer_e2e_runner.py::_load_initial`，早于 `Trainer.train`，因此训练更新数为 0，不能算续训通过。失败张量为 `base_model.model.bert.encoder.layer.0.attention.self.query.lora_A.default.weight`，双方公开 shape `[2,32]`、dtype float32、device CPU、device id -1、contiguous 均相同；但目标 `placement_backend=-1`（FollowRuntime），来源 `placement_backend=0`（explicit CPU）。`Tensor.copy_` 调入 storage-preserving alias 写入路径，C++ guard 要求 TensorPlacement 完全相同，故拒绝复制。这是当前主树的真实功能缺陷，源码未在此轮修改。测试摘要 SHA256 `f2ccea192e29c04769632646b2d443000ad77f592b1508e0f4b9414e966439ad`；Jittor 执行日志 SHA256 `ee689b4535c78f583839e355d41a1c6ef31764b92346ff56ad58041d93a2372e`；placement 诊断 SHA256 `095636d6194330081a427a6bae24aaaac94e8ca11b7022c519e7d003eebe93b1`；copy 诊断 SHA256 `d846845364d7d4c84045398a1ee62f787fdfb8cfd8cc79a67e33aa8978ab2c13`。第一轮因过长 `JITTOR_LAB_ROOT` 导致 AF_UNIX socket path too long，在重复错误后停止专用测试进程；原始尝试保留，log SHA256 `07d044adbc98654dac58494c8e34a673d5d28a496622aaaa3ba6ee718382d3ea`。无 GPU 测试、无本任务 worker 残留。
+
+当前 `adapters/jittor_adapters/trainer_stateful.py` 明确只支持单进程/单设备并拒绝多进程；已有 native DDP 与 Accelerate 测试不能代替 HuggingFace Trainer 多 rank checkpoint/fresh-process resume。因此这一更广功能门仍开放。
+
+### Day4–5 性能/显存与共享卡状态
+
+2026-10-31 18:23:46 UTC 现场采样：GPU2 index 2、UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 为 Default，18,081 MiB 已用、62,958 MiB 空闲、利用率 100%。可见 yqa PID 3590512 使用 8,640 MiB，以及另一项 V2M4 任务 PID 3812018 使用 9,424 MiB；GPU4 也为 Default 且共享。未启动 GPU burner；占卡进程不能替代管理员/调度器独占租约，也会争用共享资源。根盘余约 73 GiB，`/data6` 约 5.5 TiB。
+
+Day4–5 正式性能/显存验收没有新增结果。已有代表 cohort R26 JT/PT hot median ratio 为 1.595，仍未达到 1.10 时延目标。下一次正式测量须绑定相同源码/wheel、权重、数据、精度、shape/batch、优化器和设备，并取得按 GPU UUID/GRES/cgroup 的独占窗口；至少三轮 PT/JT 交替，每轮每侧至少十个热态样本，报告 load、首步、热态 median/p95/离散度、吞吐、allocator allocated/reserved/live 与 NVML 峰值。另需近容量、最大可运行配置、OOM 与恢复，以及 checkpoint on/off 的真实重算、速度成本和 CUDA 峰值显存对照。共享负载下旧数据仅作诊断；CPU checkpoint 功能证据不能替代显存证据。
+
+### 后续优先级与发布状态
+
+1. 在隔离候选中修复 placement 规范化与 `copy_` 合同，增加 LoRA/PEFT 初始权重加载回归，再重跑当前失败的 Trainer stateful fresh-process resume；失败产物保留不覆盖。
+2. 审核并关闭 core wheel baseline migration 差异；不得以无证据 allowlist 或重置 baseline 关闭门。
+3. 完成声明范围内 API/operator × device × dtype × layout × autograd/alias/storage/fallback 矩阵；把 held-out 任务指标、候选实际训练与 fresh-process 恢复、DDP Trainer 多 rank checkpoint、JT portable-pickle 与 stock PyTorch 互操作契约、clean wheel/sdist 安装纳入同一最终候选验收。
+4. 获得管理员/调度器 GPU2 独占租约后再做正式 Day4–5 cohort 与容量/OOM/checkpoint 对照。
+
+R14 Qwen 两 epoch 训练及 checkpoint-51 恢复仍只绑定其历史源码 fingerprint `89157afb357abbb882057230ecb0e86586deeef7fb010a7cc51b3577eea054a6`、seed 和配置，不扩展为当前主树的 Trainer 功能或普遍质量结论。整体 Day2–5 release 与 Day4–5 性能/显存均保持 **Not complete**。
+
 ## 2026-11-01 01:28 +0800 续验：R13g 序列化两文件全量通过；R14 optimizer 已完成一次实际格式转换
 
 ### 工作区、来源和执行边界

@@ -1,3 +1,13 @@
+## 2026-11-01 02:24 +0800 续验：CPU wheel smoke 通过；Trainer 集成暴露当前主树 copy_ placement 缺陷
+
+当前主工作区仍为 `/home/cgq/jittor`，分支 `integrate/cgq-transformers-native-multicard-target`，HEAD `ffa41a6e68837dd09f9d781d5b21c7b37a901857`；`origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind 132/0。主工作区原有 102 项折叠 porcelain 状态哈希仍为 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`，暂存区为空；用 `-uall` 展开未跟踪技能目录时显示 105 条，主源码与既有 dirty/untracked 文件未改。本轮只追加状态文档。
+
+当前源码 fingerprint `1fbdc0fa223b9fb3e016a9aca72f7b95cc6c93f3e10076f3b743d6035e15c343`（2,816 项；manifest SHA256 `9570dcf7e128a7da79e14ad96bcc02aa5f51c6c011186eb89f3bc7ecc44665f9`）。CPU-only 安装 wheel smoke、37 项 packaging tests、sdist 与三种 wheel 结构审计通过；但现行 core wheel baseline migration 仍有 70 additions、302 content changes、3 removals，且 allowlist 为空，故迁移门没有通过。独立 Trainer stateful resume 集成共 5 passed、1 failed、0 skipped；PyTorch 连续 4 步与 checkpoint-2 新进程恢复到 4 步完全相同，而 Jittor 在任何训练更新前因 LoRA 权重 `Tensor.copy_` 的显式 CPU / FollowRuntime placement 不一致失败。这是当前主树的实际功能缺口，不能记为 Trainer 通过。
+
+GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 当前仍是 Default 共享模式；采样时 18,081 MiB 已用、62,958 MiB 空闲、利用率 100%，yqa PID 3590512 与另一项 V2M4 作业 PID 3812018 同时占用。没有管理员/调度器独占租约；未运行占卡程序。正式 Day4–5 不得以共享测量代替独占性能证据。根盘可用约 73 GiB，`/data6` 约 5.5 TiB。
+
+下一步先在隔离候选中修正并回归 `copy_` 的 placement 规范化，再对绑定该候选的 Trainer fresh-process resume 重验；并继续完成 wheel baseline migration 审核。DDP Trainer 多 rank checkpoint、统一候选 held-out 任务指标和完整支持矩阵仍开放。Day4–5 需调度器/管理员提供 GPU2 独占窗口后，按至少三轮交替、每轮每侧至少十个热样本测量 load/首步/热态 median、p95、离散度、吞吐及 allocator/NVML 峰值，再完成近容量/OOM 恢复与 checkpoint on/off 对照。R14 训练仍仅支持其原绑定源码与配置。Overall release **Not complete**。
+
 ## 2026-11-01 01:28 +0800 续验：R13g 序列化回归通过；发布门继续开放
 
 本次文档更新前，主仓库 `/home/cgq/jittor` 位于分支 `integrate/cgq-transformers-native-multicard-target`，HEAD `8597b7de66e465a62a1ac65f40cbaad78a93bd2f`；fetch 后 `origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind 为 131/0。原有 102 项 dirty/untracked porcelain SHA256 仍是 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`，暂存区为空；主源码没有改动。
