@@ -1,8 +1,6 @@
-## 2026-11-01 06:51 +0800 CPU 功能复验通过；Day4–5 受 GPU2 共享阻塞
+## 2026-11-01 06:55 +0800 wheel migration 功能域归类开始；release 门仍开放
 
-当前主树 HEAD 202199ac920528f4e848e13ff897ab38a969ae9a，原有 102 项 dirty/untracked 状态 SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211 保持不变。CPU 复验通过：Torch generator/AMP/graph replay 三组 14 passed、6 accelerator-only skipped；native step capture 9 passed、18 accelerator-only skipped。首轮意外 cold core build 后被中止的日志和复验身份、SHA256 见 refactor-wip/results/2026-10-26-torch-compat-release-day2-5.md 顶部及 /data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-training-feature-cpu-r2-prepared/。这些 CPU 结果不涵盖 CUDA 性能或显存。
-
-GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 仍由 yqa PID 3590512 使用 8640 MiB，为共享 Default，约 81% util；未运行 burner。Day4–5 需管理员/调度器独占租约后，执行三轮交替 PT/JT 热态性能/显存、容量/OOM 与真实 activation recompute 验收。整体 Day2–5 release 仍 Not complete。
+重建的 wheel 基线对当前候选为 69 additions、301 content changes、2 removals；301 中含 3 项 dist-info 元数据。差异主要集中在 jittor/src（24 add / 123 change）与 jittor/backends（27 add / 90 change / 2 remove），CUDA RNG/graph/step capture、AMP/optimizer、DDP、profiling/memory 与 ACL 仍需逐文件关联测试。CPU runtime 用例通过，但 accelerator 项被跳过；ACL 未构建，DDP 两 rank checkpoint harness 未跑，性能/显存旧共享 GPU 数据仅诊断。Nox migration gate 仍 rc=1，本轮未批准或修改 allowlist。详细分类和功能证据边界见 refactor-wip/results/2026-10-26-torch-compat-release-day2-5.md 顶部。overall Day2–5 release 仍 Not complete。
 
 ## 2026-11-01 06:37 +0800 恢复 wheel 基线源码；Day4–5 仍待独占 GPU
 

@@ -1,23 +1,35 @@
-## 2026-11-01 06:51 +0800 CPU 功能复验完成；GPU2 仍共享
+## 2026-11-01 06:55 +0800 wheel 差异按功能域归类；迁移批准仍开放
 
-### 工作区与执行身份
+### 基线差异分布
 
-继续使用 /home/cgq/jittor 现有工作区，branch integrate/cgq-transformers-native-multicard-target，HEAD 202199ac920528f4e848e13ff897ab38a969ae9a，origin e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 140/0。执行前后 102 项既有 dirty/untracked porcelain SHA256 均为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211；测试未改源码或测试文件。运行绑定 runtime source fingerprint ae682fe34dec0cf62e74f5dd3546c8c77dd7d97f23f03f7a4d4b7d11558f2499，测试文件 SHA256 已写入证据 plan.json。
+以 Git 历史快照 f66e2458a748a5814f28ca4705753ec29b330311 重建 wheel，并与当前候选内容逐项比较，结果为 69 additions、301 content changes、2 removals；301 项中含 3 项 dist-info 生成元数据变化。原固定 wheel 的直接比较为 302 changes，差额来自生成的 WHEEL 元数据哈希。当前 Nox migration gate 仍 rc=1、0 项批准，本轮不改 allowlist。
 
-### 失败原件与复验
+按 wheel 成员路径分布：
 
-首轮 /data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-training-feature-cpu-r1-prepared/ 因所选 JITTOR_HOME 缺少当前环境 build key，意外触发新的 CPU jittor_core 配置 cfg1d275ac1，完整编译 227 个单元；约 313.93 秒时输出 7 个 pytest 进度点仍无最终汇总。为避免继续无边界编译，精确终止本任务 pytest 子树；wrapper 记录退出码 -15，原日志 SHA256 ab005ff2a1afa55d64ea7001a4cb4628f37b00106ee76341d29ed0dcd3d7338e。这次不计为测试通过。新建的核心缓存和失败原件均保留，未删除。
+| 区域 | 新增 | 内容变化 | 删除 | 审阅含义 |
+| --- | ---: | ---: | ---: | --- |
+| jittor/src | 24 | 123 | 0 | C++ core、runtime、allocator、算子和编译路径，变化面最大 |
+| jittor/backends | 27 | 90 | 2 | CUDA 与 ACL kernel/runtime；ACL 仍未构建 |
+| jittor/nn | 5 | 34 | 0 | NN/parallel 与 AMP 连接点 |
+| jittor/profiling | 6 | 0 | 0 | 新 profiling/memory API |
+| jittor/build | 0 | 10 | 0 | build/configuration 路径 |
+| jittor/_core 与 _runtime | 4 | 12 | 0 | Generator、CUDA RNG、graph replay、step capture |
+| jittor/amp 与 jittor/optim | 3 | 5 | 0 | GradScaler、新 state placement 与 optimizer 改动 |
+| jittor/distributed | 0 | 5 | 0 | process group/store/launch/bucket |
+| jittor/ops、dataset、distributions、contrib、init、顶层 API 与 dist-info | 0 | 22 | 0 | API/元数据与其余运行时变更 |
 
-随后在同一隔离 JITTOR_HOME 复用该 build key 进行有界复验，没有再次编译核心：
+上表是成员路径分类，不等于逐项行为审阅或迁移批准。两个删除文件是 ACL 的 sigmoid_op.py 与 transpose_op.py；已静态找到 ACL native runner 和现有前向/梯度测试，但候选 ACL 后端未构建，不能记作设备通过。
 
-- compat/tests/torch/test_generator_streams.py、test_torch_amp_training_loop.py、test_graph_replay_alias_warmup.py：14 passed、6 skipped，28.07 秒；跳过项为 accelerator-only。日志 SHA256 874252a9c3b2a35bdd0eb01a99c9c2ed4fb64b490ccc42a20ba39e59669cd8d5。
-- tests/core/test_step_capture.py：9 passed、18 skipped，7.17 秒；跳过项为 accelerator-only。日志 SHA256 4bb468b6ea9c1b7e17d38ccd1546d84ed04129374f0578b44f90fb10492f603f。
+### 与功能证据的对应关系
 
-复验使用 Python 3.11.3 / pytest 7.4.4、CUDA_VISIBLE_DEVICES 为空和 JITTOR_TEST_DEVICES=cpu。证据计划及摘要在 /data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-training-feature-cpu-r2-prepared/，plan.json SHA256 561d6f1af74add3bb12f4feec300d886eca1bb9235090b18f29eff379b1307f3，summary.json SHA256 64d4f951aaf6078528a2483fabe03c4550578932fe3d17e7d5ad563312922e24。这些 CPU 结果补充生成器流、AMP 训练循环、graph replay alias warmup 与原生 step capture 功能证据，不覆盖 accelerator 路径、速度或显存结论。
+- Generator/RNG、graph replay、step capture：CPU 复验新增证据为 14 passed、6 accelerator-only skipped，以及 9 passed、18 accelerator-only skipped；均未验证 CUDA capture/replay/RNG 路径。之前声明矩阵报告为 54 passed，并有 28 个 no-probe/no-dependency 等未验证覆盖单元，不能对整个 C++/CUDA 差异面作归纳通过。
+- AMP/optimizer：CPU AMP loop 包含在 14 passed 中；Qwen 实际 CUDA 训练证明特定模型/配置可更新，不覆盖所有 AMP、optimizer state placement 或 fused kernel。需把每个公开 API 与匹配测试、设备/精度边界连起来。
+- DDP：实现与 bucket 的路径有多项改动，现有测试文件包括 native DDP、launch、bucket 和 Torch DDP sync；两 rank checkpoint/resume harness 仍未启动，当前没有该 gate 的新通过证据。
+- Profiling/memory：新增 profiling API 有测试文件与诊断样本，但共享 GPU 的旧性能数据不满足发布门，不能作为 latency 或 peak-memory 结论。
+- CUDA NN 与 kernel 改动：现有 CUDA contract/dtype/attention 测试覆盖一部分算子；现有通过矩阵不能证明 90 个 backend 内容变化都经过独立验证。
+- ACL/native：这两项 ACL 文件删除仅完成静态替代核查；设备、构建和数值验证仍缺。
 
-### GPU2 与下一步
-
-06:50 +0800 最新设备快照中，GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 为 Default，yqa PID 3590512 使用 8640 MiB，利用率约 81%；GPU1 UUID GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068 当时无 compute app。没有启动占卡程序或本任务 CUDA 测试。普通 burner 无法阻止其他进程创建 CUDA context；GPU2 需管理员/调度器按 UUID/GRES 与设备 cgroup 提供独占租约。Day4–5 正式性能/显存仍未运行，需取得稳定独占窗口后执行至少三轮 PT/JT 交替、每轮每侧至少十个热样本，报告 load/首步/热态 median、p95、离散度、吞吐、allocator/NVML/RSS 峰值，并补近容量/OOM 恢复和真实 activation recompute checkpoint on/off 测量。整体 Day2–5 release 仍 Not complete。
+下一步逐项处理新增与内容变化清单：为每个功能文件关联可复现测试、标注已验证设备与未支持边界；先审阅 generator/RNG/graph/step、AMP/optimizer/DDP、profiling/memory，再审阅 CUDA/ACL 和 123 项 native src 变化。只有完成逐项判断后才更新 migration allowlist。GPU2 仍被其他用户占用，Day4–5 独占性能/显存验收继续等待系统级租约。整体 Day2–5 release 仍 Not complete。
 
 ## 2026-11-01 06:37 +0800 wheel 基线源码重建与迁移差异审阅
 
