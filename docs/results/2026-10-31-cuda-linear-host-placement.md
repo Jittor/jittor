@@ -21,9 +21,9 @@ op: code
   out: float32[1,8,8,128,]
 ```
 
-同一条用例原先更早地死在另一个缺陷上（`var_relay` 的内部不变量，记在
-KI-COMPAT-022），那个失败留下的 Var 会毒化后续每个 `sync`，所以这个错误一直没被
-看见；把模型按架构逐个前向才暴露出来。
+同一条用例原先更早地死在另一个缺陷上（`var_relay` 的内部不变量，见
+`2026-10-31-cuda-var-relay-decline.md`），那个失败留下的 Var 会毒化后续每个
+`sync`，所以这个错误一直没被看见；把模型按架构逐个前向才暴露出来。
 
 ## 根因
 
@@ -53,11 +53,23 @@ def _on_the_device(*values):
 `dispatch_context` 实现是 3 µs/层（每次都要构造元组和 backend 名字），在这个模块
 专门省主机时间的语境下不可接受，因此换成了直接读属性。
 
+**同一个算子还有一条原生快路径。** `nn.Linear` 带 bias 的推理调用除了 Python 的
+`lt_linear_cuda`，还会走 `src/bindings/pyjt/py_module_call.cc` 的
+`linear_with_bias_inference`：它在 C++ 里直接建同一个 `code` 算子，省掉 8.6 µs 的
+Python 构图。它的准入条件同样只看 `use_cuda` 和 `accelerator_backend_id()`，因此
+第一版修复只治好了 Python 那条路——ConvNeXt 第一次前向通过，第二次前向仍在这个
+原生算子上报同一个错（错误是由第一次留下的 Var 在下一次 `sync` 才抛出的）。这条
+路径也加上了同样的 placement 判断（`placement.explicit_backend` 且
+`device.backend != Cuda` 时放弃）。
+
 ## 结果
 
-- ConvNeXt 前向（同配置，`torch.no_grad()`）不再报错，输出 `(1, 64, 4, 4)`。
-  注意：ConvNeXt 在 shim 下**仍**跑不通，因为它的 depthwise 卷积还会撞上
-  KI-COMPAT-022 的 `var_relay` 不变量；本页修的是它后面的第二个缺陷。
+- ConvNeXt（batch 4，`torch.no_grad()`）连续五次前向全部通过，输出均为
+  `(1, 64, 4, 4)`。第一次修复只让第一次前向通过，第二次仍失败；两条路径都改完之后
+  不再复现。
+- `compat/tests/torch/test_torch_hf_models.py::TestTorchHFModels::test_forward_and_eval_determinism`
+  （33 个架构、每个前向两次）在这个修复加上 `var_relay` 的拒绝路径
+  （`2026-10-31-cuda-var-relay-decline.md`）之后 **1 passed**，用时 97 s。
 - `tests/nn/test_lt_linear_cuda.py`：17 passed，含新增
   `test_a_host_placed_operand_declines_even_when_use_cuda_is_on`（用
   `_set_construction_placement(0, 0)` 给操作数打上显式 CPU placement，断言快路径
@@ -68,3 +80,4 @@ def _on_the_device(*values):
 - 配对基准（同一张 4090，`benchmarks/torch_compat`，TF32 两侧都开）：`vit_b16_train`
   191.5 / 169.4 ms（0.89x）、`qwen3_train` 300.0 / 177.6 ms（0.59x），与本改动之前
   的配对结果一致，没有可测的主机开销。
+

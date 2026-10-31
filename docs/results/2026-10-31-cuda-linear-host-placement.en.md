@@ -26,9 +26,9 @@ op: code
 ```
 
 That same case used to die earlier on a different defect (the `var_relay`
-invariant, KI-COMPAT-022), and the Var it left behind poisons every later
-`sync`, so this one stayed invisible until each `CFG` architecture was run on
-its own.
+invariant, see `2026-10-31-cuda-var-relay-decline.md`), and the Var it left
+behind poisons every later `sync`, so this one stayed invisible until each
+`CFG` architecture was run on its own.
 
 ## Root cause
 
@@ -61,12 +61,25 @@ instead: 3 us a layer, because it builds a tuple and backend names on every
 call -- not acceptable in a module whose whole point is host time, so it was
 replaced with the attribute read.
 
+**The same operator has a native fast path.** A biased inference `nn.Linear`
+also reaches `linear_with_bias_inference` in
+`src/bindings/pyjt/py_module_call.cc`, which builds the same `code` operator
+directly in C++ and saves the 8.6 us of Python graph construction. Its
+admission test looked at `use_cuda` and `accelerator_backend_id()` the same way,
+so the first version of this fix repaired only the Python route: the first
+ConvNeXt forward passed and the second one failed on the same operator (the
+error is raised by the Var the first forward left behind, on the next `sync`).
+That path now applies the same placement rule: an explicit placement whose
+backend is not CUDA declines.
+
 ## Results
 
-- The ConvNeXt forward (same config, `torch.no_grad()`) no longer raises and
-  returns `(1, 64, 4, 4)`. Note that ConvNeXt still cannot run under the shim:
-  its depthwise conv also hits KI-COMPAT-022's `var_relay` invariant. What this
-  page fixes is the second defect behind it.
+- ConvNeXt (batch 4, `torch.no_grad()`) runs five forwards in a row, each
+  returning `(1, 64, 4, 4)`. The first version of the fix let only the first
+  forward through; with both routes repaired it does not reproduce.
+- `compat/tests/torch/test_torch_hf_models.py::TestTorchHFModels::test_forward_and_eval_determinism`
+  (33 architectures, two forwards each) is **1 passed** in 97 s once this fix is
+  paired with the `var_relay` decline (`2026-10-31-cuda-var-relay-decline.md`).
 - `tests/nn/test_lt_linear_cuda.py`: 17 passed, including the new
   `test_a_host_placed_operand_declines_even_when_use_cuda_is_on` (it stamps an
   explicit CPU placement on the operands with `_set_construction_placement(0,
@@ -78,3 +91,4 @@ replaced with the attribute read.
 - Paired benchmark (same 4090, `benchmarks/torch_compat`, TF32 on both sides):
   `vit_b16_train` 191.5 / 169.4 ms (0.89x), `qwen3_train` 300.0 / 177.6 ms
   (0.59x) -- the same as before the change, with no measurable host cost.
+

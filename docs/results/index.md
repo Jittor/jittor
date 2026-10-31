@@ -11,6 +11,7 @@
 ```{toctree}
 :maxdepth: 1
 
+2026-10-31-cuda-var-relay-decline
 2026-10-31-cuda-linear-host-placement
 2026-10-29-ascend-bool-mask-broadcast
 2026-10-29-cuda-f32-attention-row-term

@@ -1,8 +1,8 @@
 # Known-Issues Ledger
 
 - Status: Maintained
-- Last reviewed: 2026-10-30
-- Baseline: `30d9f4998`
+- Last reviewed: 2026-10-31
+- Baseline: `211577a5a`
 - Owner: Jittor core maintainers
 - Review when: an entry is fixed or narrowed, a strict expected failure
   XPASSes, a new defect is reproduced, or at quarterly maintenance
@@ -1910,63 +1910,3 @@ workaround.
   Torch-mode test is collected (or native files that touch `torch` are isolated
   by `--dist loadfile`), so a file's result no longer depends on what ran
   before it in the same worker.
-
-## KI-COMPAT-022: ConvBERT's span conv and ConvNeXt's channel LayerNorm abort on a `var_relay` invariant under the shim
-
-- Severity: High (an internal invariant, so the model cannot run at all) but
-  narrow (two architectures, and only on the CUDA path)
-- Status: Open; reproduced 2026-10-30 at `30d9f4998`, and with `src/` and
-  `python/jittor/` checked out at `f37761c40`, identically -- so it predates
-  `81d0bdf2e`.
-- Owner: codegen/tuner maintainers with torch compatibility maintainers
-- Symptom:
-  `compat/tests/torch/test_torch_hf_models.py::TestTorchHFModels::test_forward_and_eval_determinism`
-  aborts at the `convbert` subtest (`hidden_size=64`, `conv_kernel_size=3`,
-  `head_ratio=2`) with `JittorError: var_relay.cc:107: [check failed:
-  fnodes.count(v)]`. The failing operator is
-  `fused_op(reindex, reindex, binary.multiply, reindex_reduce.add)` with
-  `in: float32[64,1,3,1], float32[1,64,8,1]`, `out: float32[1,64,8,1]` -- the
-  span conv's product (im2col/unfold), created at
-  `transformers/models/convbert/modeling_convbert.py:282`. Rebuilding the model
-  one architecture at a time shows `convnext` hits the same invariant; it was
-  invisible in the test because the aborted `convbert` Var stays in the graph
-  and every later `sync` reports that first failure. The other 31 `CFG`
-  architectures pass. `convnext` carries a second defect behind this one -- its
-  channel-last linears raised `code requires source for the selected backend`
-  when the CUDA route was admitted for a host-placed tensor -- which is fixed
-  separately in `docs/results/2026-10-31-cuda-linear-host-placement.md`; with
-  the optimizer off (`jt.flags.enable_tuner = 0`) ConvNeXt now runs.
-- Smallest reproduction (CUDA device, under the shim; the shim enables
-  `enable_tuner`, which is what makes the relay fire):
-
-  ```python
-  import torch, torch.nn as nn
-  d = nn.Conv1d(64, 64, 3, groups=64, padding=1, bias=False)
-  p = nn.Conv1d(64, 32, 1, bias=False)
-  v = torch.randn(1, 8, 64).transpose(1, 2)   # created outside no_grad
-  with torch.no_grad():
-      p(d(v)).numpy()                          # var_relay.cc:107
-  ```
-
-  What each variation does on the same device: `p(d(v.contiguous()))` passes;
-  one conv instead of two passes; a view created *inside* `no_grad` passes; the
-  same graph on CPU (`jt.flags.use_cuda = 0`) passes. So the trigger is a
-  strided (transposed) input built before the `no_grad` scope, fed through two
-  convolutions, on CUDA.
-- Cause: not yet isolated. `add_relay_group` requires every member of a relayed
-  op other than the relayed output to be a node of the fused op, and this graph
-  has one outside it. Ruled out: the `81d0bdf2e` transpose composition and
-  complex-pow changes (same result with those sources reverted). Ruled out as a
-  fix: declining the relay when a member is outside. That removes the abort for
-  `convbert` (the bare forward then matches the expected shape) but turns
-  `convnext` into `JittorError: code requires source for the selected backend
-  (code_op.cc:408)`: the relay is what lifts an op out of the fused op, so a
-  `jt.code` op cannot simply run inside it. The member has to join the fused op
-  -- the same conclusion KI-TUNER-001 reaches for a broadcast view.
-- Workaround: none; skip these two architectures under the shim.
-- Evidence: the test above, one process, `JITTOR_TORCH_SHIM=1`; the per-model
-  loop over `CFG` with and without the decline experiment above.
-- Exit condition: both architectures run, with the member inside the fused op
-  (not by weakening the relay's membership requirement); no numerical change to
-  the other 31 models.
-

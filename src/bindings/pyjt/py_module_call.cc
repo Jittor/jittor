@@ -684,13 +684,24 @@ PyObject* linear_with_bias_inference(PyObject* dict, PyObject* x) {
     if (!lt_linear_source_fn || lt_linear_header_text.empty() || !no_grad || amp_reg
             || !runtime_flag_use_cuda() || accelerator_backend_id() != BackendId::Cuda
             || !dict || !is_var(x))
-        return nullptr;
-    PyObject* weight = PyDict_GetItemString(dict, "weight");
+        return nullptr;    PyObject* weight = PyDict_GetItemString(dict, "weight");
     PyObject* bias = PyDict_GetItemString(dict, "bias");
     if (!weight || !is_var(weight) || !bias || !is_var(bias)) return nullptr;
     Var* a = GET_RAW_PTR(VarHolder, x)->var;
     Var* w = GET_RAW_PTR(VarHolder, weight)->var;
     Var* b = GET_RAW_PTR(VarHolder, bias)->var;
+    // `use_cuda` says where a new tensor would go, not where these live, and
+    // this op carries no cpu_src. The Torch frontend keeps a `torch.tensor(...)`
+    // on the host -- with an explicit placement of its own -- until the caller
+    // moves it: ConvNeXt's channel-last linears built this operator for a host
+    // operand and then failed in codegen ("code requires source for the
+    // selected backend") on the forward after the first. Same rule as
+    // `lt_linear_cuda._on_the_device`: an explicit placement other than CUDA
+    // declines, and no placement defers to the ambient one, CUDA.
+    for (Var* operand : {a, w, b})
+        if (operand->placement.explicit_backend
+                && operand->placement.device.backend != BackendId::Cuda)
+            return nullptr;
     NanoString dtype = a->dtype();
     if ((dtype != ns_float32 && dtype != ns_float16) || w->dtype() != dtype || b->dtype() != dtype)
         return nullptr;
