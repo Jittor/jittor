@@ -1,3 +1,13 @@
+## 2026-10-31 增量：CPU BF16 AdamW 续训差异定位到 exp_avg_sq
+
+在 /home/cgq/jittor 当前工作区、HEAD 5a41561b17bbbb412725c6edb2697063df1d2506 上，对上一轮唯一失败 node 做一次字段诊断，没有重跑整套。CPU Jittor core SHA256 仍为 51845b1462d8f3beaf5f9c2034bd96363a2925b90ff1dcec2bbcf02f9aeb5818，JITTOR_NO_BUILD=1，CUDA_VISIBLE_DEVICES 为空。失败确认为 CPU BF16 AdamW 的 exp_avg_sq：恢复前 state 完全相同；第二次 step 后参数对照通过，但 exp_avg_sq 为 [0.0314781479537487, 0.07143609970808029]，对照为 [0.03147624433040619, 0.07136933505535126]，max_abs=6.676465272903442e-05、max_rel=9.354809299111366e-04。该诊断只执行一个既有 node，1 failed、1 executed、0 skipped；没有改动源码、测试文件或 core。证据位于 /data6/cgq/jittor-lab/_state/test-suite/torch/20261031-main-bf16-adamw-restore-field-r2-prepared/，manifest SHA256 40ddd1570a4d9db2f099bf942a6787e8dd2cd6e79f8bf9802e6ce5ca6efbd77c。attempt-01 因默认 python 缺少 numpy，未执行测试，保留在同名 field-r1-prepared 目录。
+
+这是恢复后优化器二阶矩的数值续接差异；它可能影响更长续训，但当前只有微型 CPU 用例，不能外推为模型任务退化，也不能据此宣布完全无害。R14 的 Qwen seed821 CUDA 训练与 resume 仍是另一源码/配置上的实际模型证据。结合两者，后续应评估该二阶矩差异在声明支持的 BF16 训练续训上的实际轨迹影响；不为严格末位对齐无限重跑。
+
+最新设备快照仍不允许 Day4–5 正式测量：GPU1 利用率 0%，但仅空闲 19,385 MiB 且被外部进程占用约 61,653 MiB；GPU2 有 72,387 MiB 空闲，但利用率 90%，外部 PID 3160291 使用约 8,640 MiB。其余 GPU 亦不同时满足利用率 ≤10%、空闲显存 ≥60,000 MiB、无无关 PID。CPU core 的 lock 文件没有 holder；/ 余 33 GiB、/data6 余 5.5 TiB。没有本任务测试进程存活。
+
+origin/cgq_transformers 仍为 e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，分支 ahead/behind 104/0。其余 103 项 dirty/untracked 仍保持 status SHA256 2307d0e94eb9b3bc7fba2ede6944fa17e077934dd2beedfee42190737f7ea25c；overall release 继续 Not complete。
+
 ## 2026-10-31 续接：保存/续训 CPU 复核发现 BF16 AdamW 状态差异；正式性能窗口仍不合格
 
 在 /home/cgq/jittor 当前工作区继续，验证时 HEAD 1a6afb04bfac79078d887dbe9c3ff9849d4a8cfb，fetch 后 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 103/0。复核前后其他 103 项既有 dirty/untracked 状态的 SHA256 为 2307d0e94eb9b3bc7fba2ede6944fa17e077934dd2beedfee42190737f7ea25c；本轮未改源码或测试文件，新增实验记录只写入 /data6/cgq/jittor-lab/_state/。
