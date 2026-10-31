@@ -1,3 +1,11 @@
+## 2026-10-31 接续：optimizer 双设备用例通过；CUDA gate 计数未闭合
+
+当前工作区 `e1a3cdb00109c1605f20d5347dbd1b6f1b7a7e4c`，origin `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `106/0`。测试前后既有 103 项 dirty/untracked、status SHA256 `ad24d0fe82a758525cec03ee1e79373524c55422c274ac6a3b7e6c89a88b4402`、空 index 均一致；仅下列实验产物写入 `/data6`。
+
+当前 dirty 测试文件中两个 optimizer 设备放置相关用例在真实 A800 GPU2（逻辑 cuda:0）及 CPU/CUDA 动态设备循环下均通过，2 passed、25 deselected；复用 CUDA core SHA256 `83d5c1a0ac0481afbdbd250e295807f5b7e9005504fae055a0c77bc5a37d8aff`，测试文件 SHA256 `6daeac43d491eeb541583d68dafbde3f2b4f8ef5b6c48ae0bca11d840c5bfe25`。本次未测 fallback 计数。pytest 最终 rc=1 是因为通用 CUDA gate 未识别动态设备循环的 nodeid（0 accelerator cases），所以这只是窄诊断，不关闭 `KI-TEST-009`，也不算 CUDA gate 通过。完整细节见 [Day2–5 结果报告](../results/2026-10-26-torch-compat-release-day2-5.md) 与 artifact `/data6/cgq/jittor-lab/_state/test-suite/torch-cuda/20261030-main-optim-placement-focused-cuda-r5-prepared/`，manifest SHA256 `57db0c231684fee57efb4fed7a24b44d3b41f93c25adaac6ae38f03ce6abda4e`。
+
+Day4–5 正式性能/显存仍待合格稳定 GPU 窗口：匹配配置 PT/JT 至少三轮交替、每轮每侧至少十个热态样本，记录 load/首步/热态分布、allocator allocated/reserved 与 NVML 峰值，并单独测容量/OOM 边界。更广 Day2–5 仍需统一候选上的支持矩阵、held-out 任务质量、真实 activation recompute、保存恢复/跨框架序列化契约、DDP 与干净安装/打包验收。Overall release **Not complete**。
+
 ## 2026-10-31 增量：CPU BF16 AdamW 新进程续训轨迹与不中断训练一致
 
 为评估上一轮单进程 BF16 AdamW exp_avg_sq 对照差异是否表现为训练轨迹退化，在当前 CPU core 上做一次确定性小型线性回归续训诊断。Jittor Torch shim identity probe 通过，CPU dispatch、use_cuda=0、Jittor core SHA256 51845b1462d8f3beaf5f9c2034bd96363a2925b90ff1dcec2bbcf02f9aeb5818。固定输入/目标 dataset SHA256 199f2caeeba4d29ecf89a419edcb1ec583d9463676334e3dee6f55ff7d2a9ef1；Linear(2,1)、BF16、AdamW lr=0.01、betas=(0.9,0.999)、eps=1e-8、weight_decay=0.01、40 次 full-batch 更新，无随机层、RNG 依赖或 scheduler。

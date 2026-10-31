@@ -1,3 +1,9 @@
+## 2026-10-31 接续：optimizer CUDA 定向结果与发布门状态
+
+当前远端工作区 HEAD `e1a3cdb00109c1605f20d5347dbd1b6f1b7a7e4c`，origin ahead/behind `106/0`；103 项原有 dirty/untracked 与测试前状态 SHA256 `ad24d0fe82a758525cec03ee1e79373524c55422c274ac6a3b7e6c89a88b4402` 一致，index 为空。GPU2 的两个 optimizer 设备放置测试已在其现存 CUDA core（SHA256 `83d5c1a0ac0481afbdbd250e295807f5b7e9005504fae055a0c77bc5a37d8aff`）上执行：2 passed；通用 CUDA gate 因动态 CPU/CUDA 循环未被 accelerator 计数器识别而 rc=1，fallback 未采集，故仍是窄诊断，不关闭 `KI-TEST-009`。产物及启动失败记录见 `/data6/cgq/jittor-lab/_state/test-suite/torch-cuda/20261030-main-optim-placement-focused-cuda-r5-prepared/`，manifest SHA256 `57db0c231684fee57efb4fed7a24b44d3b41f93c25adaac6ae38f03ce6abda4e`。
+
+正式 Day4–5 性能/显存尚未验收；仍需合格负载窗口、三轮交替 JT/PT 配对测量、每轮每侧至少十个热态样本、延迟/吞吐分布、allocator/NVML 峰值和容量/OOM 边界。更广 Day2–5 还需最终候选的兼容矩阵、真实 held-out 模型指标、activation recompute、恢复/序列化、DDP、干净安装/打包。不得标记 overall complete。
+
 ## 2026-10-31 增量：CPU BF16 AdamW 新进程续训轨迹与不中断训练一致
 
 为评估上一轮单进程 BF16 AdamW exp_avg_sq 对照差异是否表现为训练轨迹退化，在当前 CPU core 上做一次确定性小型线性回归续训诊断。Jittor Torch shim identity probe 通过，CPU dispatch、use_cuda=0、Jittor core SHA256 51845b1462d8f3beaf5f9c2034bd96363a2925b90ff1dcec2bbcf02f9aeb5818。固定输入/目标 dataset SHA256 199f2caeeba4d29ecf89a419edcb1ec583d9463676334e3dee6f55ff7d2a9ef1；Linear(2,1)、BF16、AdamW lr=0.01、betas=(0.9,0.999)、eps=1e-8、weight_decay=0.01、40 次 full-batch 更新，无随机层、RNG 依赖或 scheduler。

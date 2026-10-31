@@ -1,3 +1,24 @@
+## 2026-10-31 接续：optimizer 双设备定向用例通过；CUDA 计数门仍开放
+
+当前工作区 HEAD `e1a3cdb00109c1605f20d5347dbd1b6f1b7a7e4c`，`origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`（ahead/behind 106/0）。定向验证前后 103 项既有 dirty/untracked 状态、SHA256 `ad24d0fe82a758525cec03ee1e79373524c55422c274ac6a3b7e6c89a88b4402` 和空 index 均未变化；没有改动或暂存源文件。
+
+在真实 GPU2 `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0`（本进程逻辑 `cuda:0`）上，使用专用 Jittor Python、Torch strict bootstrap、`JITTOR_NO_BUILD=1`，并复用 CUDA core SHA256 `83d5c1a0ac0481afbdbd250e295807f5b7e9005504fae055a0c77bc5a37d8aff`，定向执行 `test_native_backward_does_not_double_advance_step` 与 `test_bound_initializers_inside_no_grad_keep_parameter_trainable`。pytest 报告 2 passed、25 deselected、105.49 秒。运行时报告 `CUDA enabled`；当前测试文件的 `both_devices()` 在 CUDA capability 启用时会遍历 CPU 与 CUDA，第二项在 CUDA 分支还断言张量 location 为 device。故这两项当前路径没有重现原设备放置失败，但判断绑定当前 dirty 测试文件 SHA256 `6daeac43d491eeb541583d68dafbde3f2b4f8ef5b6c48ae0bca11d840c5bfe25` 及上述 core/source；本次没有采集 fallback 计数。
+
+进程最终返回码为 1，原因是通用 CUDA 门报告 `CUDA gate executed 0 accelerator cases; requires at least 1`：此类在单个 pytest item 内循环 CPU/CUDA 的用例 nodeid 不含当前计数器识别的 accelerator 路径标记。保留该门禁失败原件，不把 2 个用例结果写成完整 CUDA gate PASS，也不关闭 `KI-TEST-009`。实验包 `/data6/cgq/jittor-lab/_state/test-suite/torch-cuda/20261030-main-optim-placement-focused-cuda-r5-prepared/` 的 manifest SHA256 为 `57db0c231684fee57efb4fed7a24b44d3b41f93c25adaac6ae38f03ce6abda4e`；先前四次 runner/preflight 启动失败也均保留在相邻 r2–r4 产物中。
+
+本轮 GPU2 负载约 83%、空闲 72,387 MiB，仅用于功能定向检查，不能用于 Day4–5 性能/显存验收。正式性能门仍需合格稳定窗口、匹配 PT/JT 配置、至少三轮交替且每轮每侧至少十个热态样本，并报告 load/首步/热态延迟与吞吐分布、allocator allocated/reserved 和 NVML 峰值；容量/OOM 边界单独验收。
+
+## Day2–5 更广发布门待办
+
+- 锁定发布候选源码和支持范围，完成 API、storage/alias/autograd、device、dtype、layout 与 fallback 矩阵；对实际功能缺陷补修复和真实设备回归，解释每个 skip/未覆盖项。
+- 在最终候选上覆盖代表模型训练、恢复和固定 held-out 任务指标。R14 Qwen seed821 的两 epoch 与新进程 resume 是源码/配置绑定证据；held-out generation 质量分数仍缺失，其他旧模型证据不能自动转移到当前源码。
+- 证明 gradient checkpointing 有真实 activation recompute，并实测显存变化与速度代价；现有直接调用目标函数的 shim 不算完成。
+- 补齐声明支持范围内的 optimizer/scheduler/RNG/data-progress 新进程恢复；明确 Jittor portable 与 stock PyTorch 的序列化互操作契约，保留 `optimizer.pt` 跨框架读取失败记录。
+- 完成发布路径验证：维护的 Torch/CUDA 测试门、DDP 所需状态与训练路径、干净环境安装/打包/import/selftest；不得用启动成功或 CPU fallback 代替。
+- 最后完成上述 Day4–5 正式性能/显存与容量测量，并汇总可复现实验清单、限制和发布判定。
+
+Overall release remains **Not complete**。
+
 ## 2026-10-31 增量：CPU BF16 AdamW 新进程续训轨迹与不中断训练一致
 
 为评估上一轮单进程 BF16 AdamW exp_avg_sq 对照差异是否表现为训练轨迹退化，在当前 CPU core 上做一次确定性小型线性回归续训诊断。Jittor Torch shim identity probe 通过，CPU dispatch、use_cuda=0、Jittor core SHA256 51845b1462d8f3beaf5f9c2034bd96363a2925b90ff1dcec2bbcf02f9aeb5818。固定输入/目标 dataset SHA256 199f2caeeba4d29ecf89a419edcb1ec583d9463676334e3dee6f55ff7d2a9ef1；Linear(2,1)、BF16、AdamW lr=0.01、betas=(0.9,0.999)、eps=1e-8、weight_decay=0.01、40 次 full-batch 更新，无随机层、RNG 依赖或 scheduler。
