@@ -687,6 +687,10 @@ include docs/results/2026-10-29-ascend-bool-mask-broadcast.en.md
 include docs/results/2026-10-29-ascend-bool-mask-broadcast.md
 include docs/results/2026-10-29-cuda-f32-attention-row-term.en.md
 include docs/results/2026-10-29-cuda-f32-attention-row-term.md
+include docs/results/2026-10-31-cuda-linear-host-placement.en.md
+include docs/results/2026-10-31-cuda-linear-host-placement.md
+include docs/results/2026-10-31-cuda-var-relay-decline.en.md
+include docs/results/2026-10-31-cuda-var-relay-decline.md
 include docs/results/index.en.md
 include docs/results/index.md
 include docs/tutorials/index.en.md
