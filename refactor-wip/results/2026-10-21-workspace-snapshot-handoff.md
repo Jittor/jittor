@@ -1,5 +1,12 @@
 # 2026-10-21 工作区快照与本机接续交接
 
+## 2026-10-31 最新续接：当前主树 NCCL barrier 主机同步窄验证通过
+
+当前工作区 /home/cgq/jittor，HEAD db4618b7f73e7dd77d1822a3d3d614366d44508a；评测前后 source fingerprint b5779f89d464541ecb464632e407d5fc5b9e361c7cff8dd6ddbd7b8e19bf3e97 不变。两个独立 rank 从本树导入 Jittor，在真实 GPU2/GPU4、NCCL、cuda:0 上验证显式与默认 barrier；rank 1 在 rank 0 延迟写入 host marker 后返回默认 barrier，marker 已可见、等待约 0.509 秒，fallback 两端均为 0。当前 barrier 源 SHA 3a374332a539cd862bea1ac9a34e0febe6bc4392ffb2aecf4683d823aea276e6，复用 nccl0 core SHA 3b646629cb5d3a3d5804ba0aefe066617c90364e4038438a936e87b301d6ffce。结果与限制见 /data6/cgq/jittor-lab/_state/release-day23/20261031-main-nccl-barrier-sync-probe-r1/，result.json SHA256 b5c9ec3d906e4c86d1927cfc2c381ca10173d3057d013e9d69d4ce7eaa9b7a06。
+
+attempt-01 只因 Conda libstdc++ 缺少 GLIBCXX_3.4.30 在 Jittor import 前失败；attempt-02 预加载系统 libstdc++ 后 exit 0。R15 的临时 Var.sync 候选失败记录保持不变；本轮证明当前 marker.numpy() 路径，不证明完整 Accelerate DDP/no_sync。共享 GPU 下没有测性能或显存。下一步继续处理公开普通 DDP/no_sync 功能闭环；Day4–5 正式测量仍等稳定合格的设备窗口，overall release 继续 Not complete。
+
+
 ## 2026-10-31 最新续接：seed821 Qwen held-out generation JT/PT 对照完成
 
 评测在 /home/cgq/jittor 原工作区完成，HEAD fcebf8748b1e7a8667f96313a0b42bd226cfd9ab，源码 fingerprint 9ebffa322d64e4bbad6a4eb6959c3756410a5cccfcaee6bf661571c1a074b27f；评测前后 source inventory/status hash 不变。fetch 后 origin 为 e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 93/0。评测前保留 103 项既有 dirty/untracked，index 为空；无 reset、stash、clean、clone 或 push。

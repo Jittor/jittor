@@ -1,5 +1,14 @@
 # 整改看板
 
+## 2026-10-31 当前主树 NCCL barrier 主机同步窄验收通过
+
+在当前 /home/cgq/jittor 源码上，直接双 rank CUDA/NCCL 探针验证了现有 ProcessGroup barrier 的主机同步路径。源码 HEAD db4618b7f73e7dd77d1822a3d3d614366d44508a，完整 tree fingerprint b5779f89d464541ecb464632e407d5fc5b9e361c7cff8dd6ddbd7b8e19bf3e97；评测前后 fingerprint 与 git status hash 相同。distributed.py SHA256 3a374332a539cd862bea1ac9a34e0febe6bc4392ffb2aecf4683d823aea276e6；实际复用已热的 nccl0 core SHA256 3b646629cb5d3a3d5804ba0aefe066617c90364e4038438a936e87b301d6ffce，JITTOR_NO_BUILD=1，没有冷编译或改源码。
+
+rank 0/1 分别在物理 GPU2/GPU4、各自 cuda:0 运行；两边都从 /home/cgq/jittor/python 导入 Jittor，fallback 0→0、launcher exit 0。探针先验证显式 device_ids barrier，再让 rank 1 写 ready 哨兵；rank 0 延迟 0.5 秒后写 host marker，随后进入默认 barrier。rank 1 从默认 barrier 返回时 marker 已可见，等待约 0.509 秒，故本次确认的是当前源码 .numpy() 主机物化路径的跨 rank 同步，不追溯改写 R15 临时 Var.sync 候选失败。attempt-01 的 GLIBCXX_3.4.30 动态库问题发生在 Jittor import 前；attempt-02 预加载系统 libstdc++ 后通过。证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261031-main-nccl-barrier-sync-probe-r1/，result.json SHA256 b5c9ec3d906e4c86d1927cfc2c381ca10173d3057d013e9d69d4ce7eaa9b7a06。
+
+这只关闭当前 NCCL barrier 的设备放置与两 rank 主机同步窄路径，不代表普通 Accelerate DDP/no_sync、所有 collective、模型/精度范围或 release 全部通过。共享 GPU 快照约 28–34% 利用率、空闲 59,931–59,941 MiB；未采性能/显存数据，Day4–5 正式门继续开放。下一步继续闭合普通 DDP 的功能路径与公开 gate，同时保持声明范围 API/device/dtype/autograd/fallback、模型级 checkpoint 显存收益、安装/打包和序列化边界未完成状态；整体 release 仍为 Not complete。
+
+
 ## 2026-10-31 seed821 Qwen held-out generation JT/PT 小样本对照
 
 当前源码 HEAD fcebf8748b1e7a8667f96313a0b42bd226cfd9ab，评测前后源码 inventory fingerprint 均为 9ebffa322d64e4bbad6a4eb6959c3756410a5cccfcaee6bf661571c1a074b27f；评测期间 HEAD、源码清单和 git status hash 均未变化。当前树在本轮开始时保留 103 项既有 dirty/untracked，index 为空；fetch 后 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 93/0。

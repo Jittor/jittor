@@ -1,5 +1,24 @@
 # Torch Compatibility Release Acceptance: 2026-10-26 Day 2–5 Continuation
 
+## 2026-10-31 当前主树 NCCL barrier 主机同步双 rank 窄验证
+
+### 身份与运行协议
+
+直接运行独立探针，不经过 Torch pytest conftest。源码为 /home/cgq/jittor，HEAD db4618b7f73e7dd77d1822a3d3d614366d44508a，branch integrate/cgq-transformers-native-multicard-target，fetch 后 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 94/0。评测前后 tree fingerprint 为 b5779f89d464541ecb464632e407d5fc5b9e361c7cff8dd6ddbd7b8e19bf3e97，源码文件和 git status hash 未变；更新前保留 103 项既有 dirty/untracked，index 为空。
+
+当前 compat/torch/installers/distributed.py SHA256 为 3a374332a539cd862bea1ac9a34e0febe6bc4392ffb2aecf4683d823aea276e6。两 rank 使用 Jittor 1.3.11.0、CUDA 12.4、NCCL、backend_fallback=error、NCCL_P2P_DISABLE=1、JITTOR_NO_BUILD=1；复用独占且无 holder 的 nccl0 cache，core SHA256 3b646629cb5d3a3d5804ba0aefe066617c90364e4038438a936e87b301d6ffce。两个子进程均验证从 /home/cgq/jittor/python 导入，并实际启用 CUDA/NCCL。
+
+### 观察结果
+
+物理 GPU2（UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0）与 GPU4（UUID GPU-8bf405a2-a3dd-e203-8dd9-691e9f7b3530）分别运行 rank 0/1，进程内均为 cuda:0。显式 device_ids barrier 与默认设备 barrier 均返回；第二个 barrier 前 rank 1 写 ready 文件，rank 0 观察到后延迟 0.5 秒再写 rank0_complete 并调用 barrier。rank 1 返回时 marker 已存在，实际等待约 0.509 秒；两 rank fallback 都为 0，launcher exit code 0。
+
+该实验证明的是当前源码 _barrier 中 marker.numpy() 路径上的两 rank 主机同步。R15 的临时 _collective_result/Var.sync 候选 attempt-06 仍按原记录失败；本轮不回写它的状态。attempt-01 因 Conda libstdc++ 缺少 GLIBCXX_3.4.30 在导入 Jittor 前失败，原件保留；attempt-02 预加载系统 libstdc++ 后通过，源码、core 与 cache 未改。完整 rank logs、probe、launch script、输入/输出快照、source inventory 和逐项 SHA256 在 /data6/cgq/jittor-lab/_state/release-day23/20261031-main-nccl-barrier-sync-probe-r1/；result.json SHA256 b5c9ec3d906e4c86d1927cfc2c381ca10173d3057d013e9d69d4ce7eaa9b7a06。
+
+### 边界与后续
+
+这是低内存占用的功能探针，不提供性能或显存结论。运行前后 GPU2/4 约 27–34% 利用率、空闲 59,931–59,941 MiB，仍不满足 Day4–5 正式准入。下一步仍需验证普通公开 Accelerate DDP/no_sync 路径的梯度归约、closing backward、optimizer 更新和 rank 状态闭环；R19 历史测试体结果、旧外层 sentinel 失败及 R20 计数修复分别保留，不能由 barrier 通过外推。Day4–5 仍需合格窗口、至少三轮 JT/PT 交替且每轮每侧至少十个热态样本、延迟/吞吐分位数、allocator/NVML 峰值与容量/OOM 边界；更广 API/device/dtype/autograd/fallback、模型级 activation checkpoint 显存、安装/打包和跨框架序列化门继续 open。Overall release 保持 Not complete。
+
+
 ## 2026-10-31 seed821 Qwen3-0.6B held-out generation JT/PT 对照
 
 ### 源码、checkpoint 与协议
