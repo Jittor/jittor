@@ -1,3 +1,12 @@
+## 2026-11-01 02:54 +0800 续验：R3 placement 候选 Trainer resume 通过；GPU2 仍共享
+
+继续使用 /home/cgq/jittor，HEAD 751b274adbe0158784a7e3bcb3babdf63be14455，分支 integrate/cgq-transformers-native-multicard-target，origin ahead/behind 133/0。主源码 fingerprint 仍为 1fbdc0fa223b9fb3e016a9aca72f7b95cc6c93f3e10076f3b743d6035e15c343；102 项既有 dirty/untracked 的 porcelain SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211 未变。本轮没有改主源码。
+
+隔离候选 /data6/cgq/jittor-lab/_state/release-day23/20261101-trainer-copy-placement-r3-prepared/source 在 VarHolder::copy_into_preserving_aliases 去掉了同一公开 CPU 设备下多余的抽象 placement 相等限制，仍保留 shape、dtype、dense storage 与 graph-safety 检查；新增 FollowRuntime 目标对 explicit-CPU 来源的 copy_ 原位回归。候选 fingerprint 1731758d3e08197d05a8ff6c89214871e0a1d3839bf6ac9720b4112762d2769c，patch SHA256 d8bd4df49febe9859124f741757049779b2868246979051a1b13251e97f150af。定向 CPU 用例 1 passed；fresh-process Trainer 集成 6 passed、0 failed、0 skipped。PT 和 JT 各自的连续 4 步与 step 2 checkpoint 新进程恢复至 step 4 均有 272 项轨迹严格相同、0 mismatch；JT 0 fallback。结果仅绑定隔离候选和合成 tiny-BERT CPU fixture，不是主树、held-out 质量或性能/显存证据。
+
+GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 于 02:51 +0800 仍为 Default，共享利用率 99%、显存用量 18,081 MiB；yqa PID 3590512 与 cgq V2M4 PID 3847823 同时有 compute context，没有管理员/调度器独占租约。未启动 burner。占卡进程不能阻止其他用户创建 CUDA context；正式性能验收仍需管理员或调度器按 UUID/GRES/cgroup 提供独占窗口。
+
+下一步审阅候选 patch 的迁移条件，并继续非独占依赖的 Day2–5 发布门。正式 Day4–5 仍须至少三轮交替、每轮每侧至少十个热样本，报告 load/首步/热态 median、p95、离散度、吞吐与 allocator/NVML 峰值，并完成近容量/OOM 恢复和 checkpoint on/off 对照。DDP 多 rank checkpoint、声明范围支持矩阵、held-out 指标及 wheel baseline migration review 仍开放；Overall release **Not complete**。
 ## 2026-11-01 02:24 +0800 续验：CPU wheel smoke 通过；Trainer 集成暴露当前主树 copy_ placement 缺陷
 
 当前主工作区仍为 `/home/cgq/jittor`，分支 `integrate/cgq-transformers-native-multicard-target`，HEAD `ffa41a6e68837dd09f9d781d5b21c7b37a901857`；`origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind 132/0。主工作区原有 102 项折叠 porcelain 状态哈希仍为 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`，暂存区为空；用 `-uall` 展开未跟踪技能目录时显示 105 条，主源码与既有 dirty/untracked 文件未改。本轮只追加状态文档。

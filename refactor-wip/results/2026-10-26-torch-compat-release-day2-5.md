@@ -1,3 +1,30 @@
+## 2026-11-01 02:54 +0800 R3 copy_ placement 候选 Trainer resume 通过；主树未改
+
+### 主工作区和候选身份
+
+继续使用 /home/cgq/jittor，未重新 clone。候选实验开始时主仓库 HEAD 为 751b274adbe0158784a7e3bcb3babdf63be14455，分支 integrate/cgq-transformers-native-multicard-target，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 133/0。主树当前源码 fingerprint 1fbdc0fa223b9fb3e016a9aca72f7b95cc6c93f3e10076f3b743d6035e15c343。102 项既有 dirty/untracked porcelain SHA256 仍为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211；index 原先为空。本轮不修改主树源码、不触碰其他 dirty/untracked 文件。
+
+隔离候选在 /data6/cgq/jittor-lab/_state/release-day23/20261101-trainer-copy-placement-r3-prepared/source，基于当前源码 fingerprint 1fbdc0fa223b9fb3e016a9aca72f7b95cc6c93f3e10076f3b743d6035e15c343；候选 fingerprint 为 1731758d3e08197d05a8ff6c89214871e0a1d3839bf6ac9720b4112762d2769c，2,816 个源文件。唯一修改文件为 src/core/var_holder.cc、compat/tests/torch/test_daily_state_contracts.py 和 adapters/tests/test_trainer_stateful_integration.py。patch SHA256 d8bd4df49febe9859124f741757049779b2868246979051a1b13251e97f150af。
+
+### 修正内容与 CPU 回归
+
+当前主树 Trainer 集成原先在任何更新前因为 LoRA 初始权重 copy_ 失败：目标与来源的公开 device 均是 CPU，但目标 placement 为 FollowRuntime、来源为 explicit CPU。候选修正移除 copy_into_preserving_aliases 中不必要的 abstract placement/device_id 相等 guard；保留 dense shape、dtype、contiguous 及 graph safety 检查，并继续由 copy_into 根据实际 allocator/device 处理拷贝。新增用例确认 copy_ 在 no_grad 下写入正确、保留目标 backend 与 storage pointer，且后续修改来源不会改变目标。
+
+Focused CPU regression 为 1 passed、24 deselected、1.43 秒；构建 Jittor core 227 units 使用 g++，CUDA_VISIBLE_DEVICES 为空，nvcc_path 为空，没有启动 CUDA 进程。日志 SHA256 515237e240ab24801a7c29af5ee903352c93522aeebc35f18c34b897ac73d84c。
+
+Trainer stateful fresh-process 集成由独立 attempt-02 完成：**6 passed、0 failed、0 skipped，290.49 秒**。使用本地合成 tiny-BERT/LoRA、32 个重复样本、两个 DataLoader worker、4 个 optimizer update、CPU-only；固定同一个私有 JITTOR_HOME 后，连续 run 与 step 2 checkpoint 的 fresh-process resume 在 PT 与 JT 各自内部均逐项严格相同：每侧比较 272 项、atol=rtol=0、0 mismatch。JT 连续训练完成 global step 4，恢复进程从 step 2 到 step 4，累计 8 个 microbatch、6 个 trainable tensors、实际参数 device 为 CPU、fallback=0；状态报告中的训练 loss 为 0.6899333。PT 对照也在 step 2 恢复到 step 4，fallback=0。该严格比较是每个 runtime 内的 resume 对照，不代表 PT/JT 两框架轨迹互相逐位相同。
+
+完整 run root 为 /data6/cgq/jittor-lab/_state/trainer-resume/cpu-rwu3zg3h/。integration-r2.log SHA256 7fc628b65738f1ca50c40f867daeb4ac4ce247ea583a055695baaba9f7e39f79；summary.json SHA256 f68b777c188ceddcac040f867daeb4ac4ce247ea583a055695baaba9f7e39f79；JT compare.log SHA256 735db35d19d020a815c6e2a086605f3e2de8ec8d072c7d12722140cd5ba7fa93；PT compare.log SHA256 92ac8bcb25875c4899913cc97279df31765b0f9a0797f5cb050998f85adbf54d。候选综合审阅 JSON 为 /data6/cgq/jittor-lab/_state/release-day23/20261101-trainer-copy-placement-r3-prepared/integration-r2-review.json，SHA256 2e492adf1807911b98758ee27e26698e6b412e89368f14abb1141f96abecae94；plan-r4.json SHA256 7d39383f5bd37d30ff217ce01b853355ad85d256ce0bd83b62b72bb6597ec06c。
+
+首次连续 Jittor 进程触发了私有 oneDNN 构建和 MKL 自定义算子编译，报告耗时约 230.89 秒；集成总时长包含此首次 CPU 初始化，不可当作 benchmark。该 fixture 没有 held-out 质量或生成指标，也不证明 CUDA copy_、GPU 训练、显存或 release wheel 已通过。候选 patch 仍在外部隔离快照，不能回写为主树通过。
+
+### 失败原件、GPU 与剩余发布门
+
+此前 integration-r1 因把 cache 搬到不同 JITTOR_HOME 后 cache key 变化，触发 jit_utils restart guard，未进行训练更新；原日志 SHA256 3eef5469648c899817795b675fbfcf8f5523263f0368dac474ce8f2f7984c813。restart-preflight-r1 使用路径不匹配的 cache 后启动冷编译，在 120 秒预算结束退出 124；原日志 SHA256 bd179859be6954b03e57bfe143f7a4b45d24513b68247a5d7fb596d5790f5830。随后 restart-preflight-r2 在原私有 cache 路径启动成功，日志 SHA256 bf73f29d8791bb7f8a700bfd0c2fa28d1ccc4068ca844f491e518436d1ab7ec5。所有失败原件和此前 R14、序列化、wheel 门记录均保留。
+
+GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 于 2026-11-01 02:51 +0800 仍为 Default，共享利用率 99%、显存用量 18,081 MiB、空闲 62,958 MiB；compute PID 包括 yqa 3590512（8,640 MiB）和 cgq V2M4 3847823（9,424 MiB）。本轮 CPU 测试没有 GPU PID，也没有管理员/调度器独占租约。没有运行 GPU burner：该进程会占共享资源但不能禁止其他用户创建 CUDA context。Day4–5 正式测量仍要求管理员/调度器按 GPU UUID/GRES/cgroup 给出独占窗口。
+
+整体 Day2–5 仍开放：声明范围支持矩阵、统一最终候选 held-out 任务指标、候选合入后的 CUDA 实际训练/续训、DDP 多 rank checkpoint、序列化方向/格式互操作契约、clean wheel/sdist 与 baseline migration review。Day4–5 需固定匹配配置并做至少三轮 PT/JT 交替，每轮每侧不少于十个热态样本，报告 load/首步/热态 median、p95、离散度、吞吐与 allocator/NVML 峰值，并完成近容量/OOM 恢复和 checkpoint on/off 配对。Overall release **Not complete**。
 ## 2026-11-01 02:24 +0800 续验：CPU wheel smoke 通过；Trainer resume 在当前主树发现 copy_ placement 缺陷
 
 ### 源码身份与工作区保护

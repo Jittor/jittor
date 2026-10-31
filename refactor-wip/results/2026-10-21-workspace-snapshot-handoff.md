@@ -1,3 +1,12 @@
+## 2026-11-01 02:54 +0800 handoff：隔离 R3 Trainer 候选通过；GPU2 无独占租约
+
+主仓库 /home/cgq/jittor HEAD 751b274adbe0158784a7e3bcb3babdf63be14455，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 133/0；102 项既有 dirty/untracked 状态 SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211 未变，index 原先为空。主源码未动。
+
+隔离候选 /data6/cgq/jittor-lab/_state/release-day23/20261101-trainer-copy-placement-r3-prepared/source 指纹 1731758d3e08197d05a8ff6c89214871e0a1d3839bf6ac9720b4112762d2769c，patch SHA256 d8bd4df49febe9859124f741757049779b2868246979051a1b13251e97f150af。placement 定向用例 1 passed；Trainer CPU 集成 6 passed，PT/JT 各自的连续 4 步和 step 2 新进程恢复到 step 4 都是 272 项严格相同、0 mismatch，JT fallback=0。证据与哈希见 Day2–5 结果报告和 /data6/cgq/jittor-lab/_state/release-day23/20261101-trainer-copy-placement-r3-prepared/integration-r2-review.json。该修正尚未迁入主树；合成 CPU fixture 不证明 held-out 任务、CUDA、显存或 wheel。
+
+GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 于 02:51 +0800 为 Default、99% 利用率、18,081 MiB 已用；外部 yqa 与 cgq V2M4 compute 进程同时存在。没有管理员/调度器独占租约，本轮没有运行占卡程序。要阻止其他作业，需要管理员/调度器提供 UUID/GRES/cgroup 独占预约；普通 burner 做不到这一点。
+
+后续继续非独占 Day2–5 发布门，并审阅是否将 R3 修复合入最终候选。Day4–5 等独占窗口后按固定配置完成至少三轮 PT/JT 交替、每轮每侧十个热样本、分位数/离散度/吞吐与 allocator/NVML 峰值、容量/OOM 恢复及 checkpoint on/off 对照。整体 release 仍 **Not complete**。
 ## 2026-11-01 02:24 +0800 handoff：当前 wheel CPU smoke 通过；Trainer stateful resume 在权重 copy_ 前失败
 
 主仓库 `/home/cgq/jittor` HEAD `ffa41a6e68837dd09f9d781d5b21c7b37a901857`，分支 `integrate/cgq-transformers-native-multicard-target`；`origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind 132/0。102 项折叠 porcelain 哈希 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211` 未变，暂存区为空；`-uall` 展开计数为 105。仅更新三份状态文档，不改其他 dirty/untracked 文件，不 push。
