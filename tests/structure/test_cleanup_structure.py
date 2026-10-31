@@ -327,6 +327,7 @@ class TestCleanupStructure(unittest.TestCase):
         reviewed_test_tree_names = {
             "Base": "compat tests: a per-file unittest base with its own asserts",
             "both_devices": "a two-line parametrisation over the device list",
+            "device": "compat tests: per-file fixtures keep distinct device and fallback guards",
             "setUpModule": "the unittest module hook; seeding and guards are per-file",
             "pytest_addoption": "the pytest hook, once per conftest",
             "_cuda_available": "the capability probe, repeated per compat test file",

@@ -1,3 +1,19 @@
+## 2026-11-01 05:47 +0800 handoff：结构门通过；继续推进功能与正式性能发布门
+
+主工作区 /home/cgq/jittor，branch integrate/cgq-transformers-native-multicard-target，HEAD 8c5fe3a6d6346ebab9b237b97fa2f038d8de80ac；origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 137/0。此前 dirty/untracked 文件保持原样；本轮两处新增工作区改动只在 tests/structure/test_cleanup_structure.py 与 tests/structure/optim/test_optim_structure.py，没有碰其余 dirty 源码或测试。执行前 status 快照 SHA256 4d5f4225f1f0951d1e4ef57cc1cc7ab184fa54400532b67bf1c1d7f61d9f27f1，index 为空。
+
+布局检查通过；正确 cwd 下完整 tests/structure 为 1395 passed、6 skipped、0 failed（155.90s）。日志位于 /data6/cgq/jittor-lab/_state/release-day23/20261101-package-gates-current-main-r3-prepared/structure-r7/，SHA256 43cc9d1bc7f92cb9bdff45390cc3eee19a409abbba5a65a250ecc6dce891cafe。旧错误 cwd 的结构失败原件留存，不覆盖。该运行是 CPU 结构门，不是 CUDA 或性能证据。
+
+### 继续顺序
+
+1. 维护当前支持矩阵：列明支持的 API、device/dtype/layout、autograd/alias/storage 与 fallback 行为，以及每项实际验证身份和明确不支持边界；保留旧 strict comparator 的失败身份。
+2. 在当前候选补齐 held-out generation/任务指标，并审查 Qwen resume archive 的模型、optimizer、scheduler 是否绑定同一原子 checkpoint；已有 train-split capped generation 不可作 held-out 证据。
+3. 完成公开 Torch DDP/Trainer/Accelerate 的 2/4-rank 实际路径，覆盖梯度累积、尾批、eval、checkpoint 与 fresh-process resume，记录各 rank 一致性和 max-rank 资源。
+4. 审阅 wheel/sdist baseline 的 69 additions、302 changes、2 removals，完成未批准内容分类；在仓库外 clean 环境验证 core/compat/adapters 安装和承诺的 CUDA 路径。
+5. 取得 GPU2 UUID/GRES/cgroup 独占租约后，按 Day4–5 正式协议测量；至少三轮 PT/JT 交替、每轮每侧十个热样本，报告 load/首步/热态 median/p95/离散度、吞吐和 allocator/NVML/RSS 峰值，补近容量/OOM恢复及真实 activation recompute 的 checkpoint on/off 测量。GPU2 共享时不启动 burner 或正式性能运行，旧共享负载数据保持诊断用途。
+
+实用训练、结构门、性能/显存、DDP、打包迁移和 held-out 任务质量仍各自独立判断；整体 Day2–5 release Not complete。
+
 ## 2026-11-01 05:34 +0800 最终门禁复验
 
 本轮文档更新后布局门禁通过；结构门禁复跑仍为 1391 passed、6 skipped、4 failed，157.73s，rc=1，日志 SHA256 5525c8586ec63067fdddcf6514267bbe0ab5756e07fb13c4ca83df625030ba12。失败分类见 Day2–5 报告。当前工作树是原有 102 项 dirty/untracked 加三份状态文档，index 空；只提交本任务三份文档，不 push。

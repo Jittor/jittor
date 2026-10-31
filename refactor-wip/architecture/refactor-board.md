@@ -1,3 +1,13 @@
+## 2026-11-01 05:47 +0800 结构门通过；Day4–5 与整体发布仍未完成
+
+当前工作区为 /home/cgq/jittor，分支 integrate/cgq-transformers-native-multicard-target，HEAD 8c5fe3a6d6346ebab9b237b97fa2f038d8de80ac；刚 fetch 的 origin/cgq_transformers 为 e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 137/0。执行前暂存区为空；此前 dirty/untracked 保持原样。本轮只新增两处结构测试断言说明，未改 runtime 源码，也未启动 GPU 任务。
+
+结构测试只做了两项最小维护：在重复定义审阅表中解释 compat 测试的 per-file device fixture 各自承担不同 device/fallback guard；在 optimizer package 结构断言中纳入已有私有模块 python/jittor/optim/_state_placement.py。两项定向测试 2 passed。正确工作目录 /home/cgq/jittor 下按 CPU 配置复跑 tests/structure：1395 passed、6 skipped、0 failed，155.90 秒、rc=0；日志 SHA256 43cc9d1bc7f92cb9bdff45390cc3eee19a409abbba5a65a250ecc6dce891cafe，位于 /data6/cgq/jittor-lab/_state/release-day23/20261101-package-gates-current-main-r3-prepared/structure-r7/logs/pytest.log。跳过为 2 项 accelerator 及 4 项可选环境/工具覆盖（Jittor resolution 与 pytest-xdist）。此前错误工作目录留下的失败和日志均保留，未回写 PASS。bash tools/check_repo_layout.sh 也通过，246 active Markdown；日志 SHA256 92cde9bb8f21bca6428e208bdf9f24ba16bc21f5769a3c7ca8c2ce91f20ef094。测试与布局执行前工作树快照 SHA256 4d5f4225f1f0951d1e4ef57cc1cc7ab184fa54400532b67bf1c1d7f61d9f27f1，暂存区为空。
+
+这只关闭本轮仓库结构门禁，不等于更广发布门通过。当前主树 Qwen seed821 两 epoch 实训和 checkpoint-51 新进程续训证据、CPU wheel smoke 已记录；但 held-out generation 质量未通过，生成样本来自 train split 且顶到 48-token cap。Qwen resume 的状态值、设备映射与 RNG 检查通过，但 full archive 尚未证明权重、optimizer 与 scheduler 来自同一原子快照。Wheel/sdist baseline migration 的 69 additions、302 changes、2 removals 仍未审批；干净环境 CUDA package 验证、声明支持矩阵与公开 Torch DDP/Trainer 多 rank checkpoint/resume 仍开放。
+
+Day4–5 正式性能/显存仍未验收。GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 当前为共享负载，本轮未启动占卡程序或性能任务。正式验收仍需按同一源码/发行物、权重、数据、精度、shape、优化器和设备配置进行稳定的至少三轮 PT/JT 交替测量，每轮每侧至少十个热态样本，报告 load/首步/热态 median、p95、离散度、吞吐、allocator live/allocated 与 reserved 峰值、NVML 峰值和 CPU RSS，并覆盖近容量/OOM恢复及真实 activation recompute 的 checkpoint on/off 对照。共享 GPU 下既有测量仅是诊断；gradient-checkpointing shim 直接调用目标函数，不算重算或省显存证明。overall Day2–5 release 保持 **Not complete**。
+
 ## 2026-11-01 05:34 +0800 提交前复验：布局通过；结构门仍有四项失败
 
 文档更新后重跑 bash tools/check_repo_layout.sh，246 active Markdown，exit=0。复用现有 Jittor cache 重跑 tests/structure：1391 passed、6 skipped、4 failed，157.73s、rc=1；失败集合与首次全量一致，最终日志 SHA256 5525c8586ec63067fdddcf6514267bbe0ab5756e07fb13c4ca83df625030ba12。最终失败原因见下方 Day2–5 详细记录。当前 status 为原有 102 项加本任务三份文档共 105 项；新 porcelain SHA256 6edb9a1ac9ff6539471befa3e41b75a637d1f1ef4f740602950b193fae5e517d，index 仍为空。本轮仅暂存三份状态文档后提交，不 push；overall release 仍 **Not complete**。

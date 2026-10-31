@@ -34,7 +34,8 @@ class TestOptimStructure(unittest.TestCase):
     def test_physical_package_replaces_the_legacy_module(self):
         self.assertFalse((self.package.parent / "optim.py").exists())
         expected = {
-            "__init__.py", "base.py", "legacy_schedulers.py", "schedulers.py",
+            "__init__.py", "_state_placement.py", "base.py",
+            "legacy_schedulers.py", "schedulers.py",
         }
         self.assertEqual(
             {path.name for path in self.package.glob("*.py")}, expected,

@@ -1,3 +1,15 @@
+## 2026-11-01 05:47 +0800 结构门通过；Day4–5 与 Day2–5 发布门仍开放
+
+本轮沿用主工作区 /home/cgq/jittor，HEAD 8c5fe3a6d6346ebab9b237b97fa2f038d8de80ac；origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 137/0。新增改动仅为两份干净的结构测试文件；未编辑其他已有 dirty/untracked 文件，暂存区在本轮开始时为空。执行前 status 快照 SHA256 4d5f4225f1f0951d1e4ef57cc1cc7ab184fa54400532b67bf1c1d7f61d9f27f1。
+
+失败根因和修正：重复定义检查要求记录多个 compat 测试文件内 device pytest fixture 的用途；这些 per-file fixture 的参数、默认 device、CUDA skip 和 fallback guard 语义不同，故为名字补充审核理由，没有合并或修改 dirty 测试夹具。optimizer physical-package 断言漏列了工作区现存私有模块 python/jittor/optim/_state_placement.py，现将其补入文件集合预期。定向两项 2 passed，日志 SHA256 413e2b92810b92a018862b0ecc565015750bfbd55b6a02b3065b26f54ca21a9e。
+
+随后从仓库根目录，以 JITTOR_TORCH_SHIM=1、PYTHONPATH=python、CUDA_VISIBLE_DEVICES 为空、CPU 测试配置、系统 libstdc++ preload 与既有 /data6 Jittor cache 运行完整 tests/structure：1395 passed、6 skipped、0 failed，155.90 秒，rc=0。完整日志 SHA256 43cc9d1bc7f92cb9bdff45390cc3eee19a409abbba5a65a250ecc6dce891cafe，exit-code 为 0。6 个 skip 是 2 项 accelerator 及 4 项可选环境/工具覆盖；本轮结构测试没有创建 GPU workload。布局脚本通过（246 active Markdown），日志 SHA256 92cde9bb8f21bca6428e208bdf9f24ba16bc21f5769a3c7ca8c2ce91f20ef094。之前错误 cwd 产生的 4-failure 尝试及原日志保留；本次正确 cwd 结果作为新证据，不覆盖历史失败。
+
+本次进展只关闭 repository layout/structure gate。Day4–5 仍没有稳定独占窗口下的正式性能/显存结论：旧共享负载测量不具备发布效力，GPU2 当前仍共享使用。还需同身份/匹配配置下至少三轮交替 PT/JT、每轮每侧至少十个热态样本，报告 load、首步、热态统计与 allocator/NVML/RSS 峰值，并执行 near-capacity、OOM recovery 及已证明 activation recompute 的 checkpoint on/off 对照。
+
+更广 Day2–5 未完成项仍包括：公开 Torch DDP/Trainer/Accelerate 2/4-rank 常用训练、尾批/梯度累积/eval/checkpoint/fresh-process resume；独立 held-out generation 与任务质量；完整 API/operator × device/dtype/layout/autograd/alias/storage/fallback 支持矩阵及明确 unsupported 项；wheel/sdist baseline 变化的逐项迁移审阅与批准，以及仓库外 clean 环境的 core/compat/adapters 与 CUDA 安装验证。当前 Qwen 训练/续训和 CPU wheel smoke 证据按已有源码与配置保留，不扩张为通用通过；Qwen 生成分数是 train-split capped diagnostic，resume archive 原子同快照语义仍未证明。整体 release 继续 Not complete。
+
 ## 2026-11-01 05:34 +0800 提交前结构门禁复跑
 
 完成本轮三文档增量后，重新执行 bash tools/check_repo_layout.sh，documentation governance 与 repository layout 均通过，246 active Markdown。随后按同一 JITTOR_TORCH_SHIM/PYTHONPATH/CPU runtime、系统 libstdc++ preload 与已建好的 structure-r1 JITTOR_HOME/cache 重跑 tests/structure。结果与 structure-r3 完全相同：**1391 passed、6 skipped、4 failed，157.73s，rc=1**；最终 r4 日志 SHA256 为 5525c8586ec63067fdddcf6514267bbe0ab5756e07fb13c4ca83df625030ba12，产物在 /data6/cgq/jittor-lab/_state/release-day23/20261101-package-gates-current-main-r3-prepared/structure-r4/。四项失败仍是 device 测试定义重复未审阅、benchmarks.operators 缺失、optim package 结构白名单未含 _state_placement.py、外部 Motion324 因缺 omegaconf 导致 shim runtime 用例失败。未修改相关 dirty 源码或测试。三份文档的 git diff --check 无输出；暂存区仍空。
