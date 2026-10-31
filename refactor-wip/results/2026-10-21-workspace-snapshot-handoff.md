@@ -1,3 +1,17 @@
+## 2026-11-01 06:21 +0800 handoff：声明支持矩阵与 dtype 复验通过；GPU2 仍共享
+
+继续工作目录 `/home/cgq/jittor`，分支 `integrate/cgq-transformers-native-multicard-target`，基线 HEAD `09c4989e90c5cb7bc97c551cba98ad9c0891869d`；origin `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `138/0`。本轮在 runtime source fingerprint `ae682fe34dec0cf62e74f5dd3546c8c77dd7d97f23f03f7a4d4b7d11558f2499` 上修改两个测试文件、更新本 handoff 与唯一看板/Day2–5 报告；更新前 index 为空，原有 dirty/untracked 文件均保留。
+
+支持矩阵复验 **54 passed、0 skipped**，其中 CPU 35 passed，CUDA 38 passed；28 个单元明确未验证，包括缺 CuPy 的 `numpy_code` 和 no-probe 项，其他未构建 backend 未覆盖。独立 dtype 覆盖在真实 CUDA 上 **6 passed、0 skipped**。完整执行记录、失败原件、ABI 修复和文件 SHA256 已记入 Day2–5 结果报告；证据根目录为 `/data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-native-contract-matrix-gpu1-r1-prepared/` 与 `.../20261101-current-main-native-contract-matrix-gpu1-r2-prepared/`。矩阵测试分类器修正不改 runtime 行为；支持矩阵并未因此证明所有声明算子均通过。
+
+GPU2 当前仍为共享 `Default`：yqa PID `3590512` 的 compute-app 用量为 8,640 MiB（整卡占用 8,651 MiB），最新采样利用率约 79%。此账户没有 scheduler 命令或免密 sudo 权限，故无法建立系统级独占；没有启动 burner，也没有更改 GPU2 状态。性能测试要保证中途无其他 CUDA client，需要管理员/调度器按 UUID/GRES 与设备 cgroup 预留，并由对照测试自身在整段运行期间持有 context。Day4–5 正式性能/显存仍未验收。
+
+### 下一步
+
+1. 继续处理声明矩阵的 28 个未验证项和未构建后端范围，同时推进 public Torch DDP 多 rank checkpoint/resume、wheel baseline migration 审批及真正 held-out generation 质量评估。
+2. GPU2 等现有 yqa 任务结束后，请管理员/调度器建立独占租约；不要用普通 burner 冒充系统预留。取得租约后按三轮以上 PT/JT 交替、每轮每侧十个热样本，完整测 load/首步/热态分位数、离散度、吞吐、allocator/NVML/RSS 峰值、近容量/OOM 恢复及真实 activation recompute。
+3. R14 Qwen 两 epoch 训练和 checkpoint resume 的证据边界不变；严格数值对齐、实用训练、支持矩阵、Day4–5 性能/显存、DDP、打包迁移、held-out 任务质量分别判断。整体 Day2–5 release 保持 **Not complete**。
+
 ## 2026-11-01 05:47 +0800 handoff：结构门通过；继续推进功能与正式性能发布门
 
 主工作区 /home/cgq/jittor，branch integrate/cgq-transformers-native-multicard-target，HEAD 8c5fe3a6d6346ebab9b237b97fa2f038d8de80ac；origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 137/0。此前 dirty/untracked 文件保持原样；本轮两处新增工作区改动只在 tests/structure/test_cleanup_structure.py 与 tests/structure/optim/test_optim_structure.py，没有碰其余 dirty 源码或测试。执行前 status 快照 SHA256 4d5f4225f1f0951d1e4ef57cc1cc7ab184fa54400532b67bf1c1d7f61d9f27f1，index 为空。

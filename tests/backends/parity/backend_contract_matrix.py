@@ -519,6 +519,14 @@ UNPROBED_REASONS = {
     # cross-backend cell cannot be formed. Its own coverage is tests/ops/test_fft_op.py.
     "cufft_fft": "no declared CPU FFT to compare against; covered by tests/ops/test_fft_op.py",
     "fused_adamw": "fused optimizer step is compared by tests/optim, not by an op cell",
+    # Explicit-generator operations are stateful and currently have a CPU-only
+    # placement contract. Their accelerator cells cannot be compared here: the
+    # randint accelerator kernel is absent, and randperm/uniform explicitly
+    # reject accelerator JIT compilation. The Torch adapter has separate
+    # generator state/placement coverage.
+    "generator_randint": "explicit-generator randint has no CUDA kernel (`src/ops/composite/generator_randint_op.cc`); CUDA generator placement is separately covered as an explicit rejection",
+    "generator_randperm": "explicit-generator randperm is CPU-only (`src/ops/composite/generator_randperm_op.cc`); CPU generator state and advancement are covered by the Torch factory fidelity tests",
+    "generator_uniform": "explicit-generator uniform is CPU-only (`src/ops/composite/generator_uniform_op.cc`); no CUDA cell is in the supported contract",
     # Graph plumbing with no standalone value: `tapes` is only reachable from a
     # multi-output custom gradient, which `tape` already exercises.
     "tapes": "only reachable through a multi-output custom gradient; `tape` covers the mechanism",

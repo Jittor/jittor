@@ -1,3 +1,15 @@
+## 2026-11-01 06:21 +0800 当前声明支持矩阵与 dtype 门通过；GPU2 无独占
+
+当前工作树 `/home/cgq/jittor`，分支 `integrate/cgq-transformers-native-multicard-target`，HEAD `09c4989e90c5cb7bc97c551cba98ad9c0891869d`；`origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `138/0`。文档更新前 porcelain 为 104 项（原有 dirty/untracked 加本任务两个测试文件），SHA256 `5defff99a3dead581f87850dda3a6ec7443d0d15e621115ea8ddcc2e3fc7a2a3`，暂存区为空。只改动本任务的两个支持矩阵测试和本看板、Day2–5 报告、handoff 三份既有状态文档；不 push。
+
+在 runtime source fingerprint `ae682fe34dec0cf62e74f5dd3546c8c77dd7d97f23f03f7a4d4b7d11558f2499` 上，声明后端矩阵复验 **54 passed、0 skipped、132.55s、rc=0**；dtype value 覆盖 **6 passed、0 skipped、283.15s、rc=0**。矩阵绑定物理 GPU1 UUID `GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068`，实际 CUDA `cuda:0`。CPU 为 35 项 passed、6 项 no-probe；CUDA 为 38 项 passed、21 项 no-probe、1 项因缺可选 CuPy 而 no-dependency；ACL/ROCm/Corex 当前未构建。28 个未验证单元仍是开放覆盖范围，不算通过。
+
+首轮矩阵原件保留为 58 passed、2 failed，日志 SHA256 `52406edd0c664686787e45607bca89a804492c03a1cba2a3b67b5899e7548bb3`。失败是测试分类缺口：CUDA `numpy_code` 把缺 CuPy 包装成 RuntimeError，三项显式 Generator 算子缺少 no-probe 原因。随后只修改 `tests/backends/parity/backend_contract_matrix.py` 与 `test_backend_contract_matrix.py`：记录 Generator CUDA 不支持的原因，并在异步包装前识别 CuPy 缺依赖。矩阵通过复验的文件 SHA256 分别为 `37b898b5809214bc4e38f2011a133192013c622c104ea006cf51872403db0d9d` 与 `4b79dace5672c853b6564592d2fd818ff97fd74e8c470ca48531d919c1a1a992`。dtype 首次复跑因漏设系统 libstdc++ preload、缺 `GLIBCXX_3.4.30` 而在测试前退出 4；失败原件保留。修正 `LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libstdc++.so.6` 后的 6 项 CUDA dtype 结果日志 SHA256 `06d88affe97c5af38ef80efd1ef258075f55cab1b84664acbb7003a45e17a7c3`。完整矩阵通过日志 SHA256 `7870efc2a96e364355f3dd6c1e4c2723cd3037fc3dde9ebe5e6f933561daf555`。产物根目录：`/data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-native-contract-matrix-gpu1-r1-prepared/` 与 `.../20261101-current-main-native-contract-matrix-gpu1-r2-prepared/`。
+
+GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 在 06:21 +0800 仍为 `Default`，yqa PID `3590512` 的 compute-app 用量为 8,640 MiB（整卡占用 8,651 MiB），利用率约 79%。当前 shell 找不到 Slurm/scheduler 命令，`sudo -n -l` 需要密码；未杀进程、未改计算模式、未启动 burner，也未在 GPU2 测性能。普通 burner 既不能在 Default 模式阻止他人创建 CUDA context，又会与独立测试进程争用；要保证测试期独占，需管理员/调度器提供 GPU UUID/GRES 与设备 cgroup 租约，并让测试进程自身在租约内持有 context。
+
+这轮只推进声明支持矩阵和 dtype 功能覆盖，不是 Day4–5 性能/显存验收。held-out generation、公开 Torch DDP 多 rank checkpoint/resume、wheel baseline 审批、近容量/OOM 恢复及真实 activation recompute 仍开放。整体 Day2–5 release 继续 **Not complete**。
+
 ## 2026-11-01 05:47 +0800 结构门通过；Day4–5 与整体发布仍未完成
 
 当前工作区为 /home/cgq/jittor，分支 integrate/cgq-transformers-native-multicard-target，HEAD 8c5fe3a6d6346ebab9b237b97fa2f038d8de80ac；刚 fetch 的 origin/cgq_transformers 为 e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 137/0。执行前暂存区为空；此前 dirty/untracked 保持原样。本轮只新增两处结构测试断言说明，未改 runtime 源码，也未启动 GPU 任务。

@@ -136,6 +136,17 @@ class Snapshot:
             if reference.dtype.kind == "f" and not np.isfinite(reference).all():
                 return False, "CPU probe produced non-finite values"
             return True, ""
+        if row.name == "cuda" and op == "numpy_code":
+            # py_converter wraps a missing CuPy import in RuntimeError while
+            # executing the asynchronous custom op, so it does not reach the
+            # handler below as ModuleNotFoundError. Check the optional
+            # dependency before the callback crosses that boundary.
+            try:
+                import cupy  # noqa: F401
+            except (ImportError, OSError) as missing:
+                return (contract.MISSING_DEPENDENCY,
+                        "cuda/numpy_code requires optional CuPy: %s: %s" %
+                        (type(missing).__name__, str(missing)[:300]))
         try:
             actual = _run_probe(contract.PROBES[op], use_cuda=1)
         except ModuleNotFoundError as missing:

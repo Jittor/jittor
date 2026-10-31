@@ -1,3 +1,21 @@
+## 2026-11-01 06:21 +0800 主树声明支持矩阵与 dtype 覆盖复验；GPU2 独占不可用
+
+本轮在 `/home/cgq/jittor` 当前主树 HEAD `09c4989e90c5cb7bc97c551cba98ad9c0891869d` 上继续推进 Day2 支持矩阵。运行绑定 runtime source fingerprint `ae682fe34dec0cf62e74f5dd3546c8c77dd7d97f23f03f7a4d4b7d11558f2499`，测试文件变更及哈希列于下。测试使用隔离 `JITTOR_HOME`、TMP/HOME/XDG/CUDA cache，CUDA_VISIBLE_DEVICES 指向物理 GPU1 UUID `GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068`，进程内逻辑 `cuda:0`；不是 GPU2 性能测量。
+
+### 结果
+
+- `tests/backends/parity/test_backend_contract_matrix.py`：修复矩阵分类测试后 **54 passed、0 skipped，132.55s，rc=0**。CPU 35 项实际通过、6 项 no-probe；CUDA 38 项实际通过、21 项 no-probe、1 项 `no-dependency`（可选 CuPy 未安装）；ACL、ROCm、Corex 后端未构建。28 个未验证单元仍是明确覆盖缺口，未作通过推断。
+- `tests/backends/parity/test_dtype_coverage.py`：真实 CUDA dtype value sweep **6 passed、0 skipped，283.15s，rc=0**，覆盖整数宽度以及 FP16/BF16 elementwise、matmul、reduce、softmax 值对照。测试源码 SHA256 `276cdfb32dd1f855bb79eb91f1591cb5ca9adbee58aaa8e70143c8e78209b909`。
+- 矩阵首轮保存为 **58 passed、2 failed**，日志 SHA256 `52406edd0c664686787e45607bca89a804492c03a1cba2a3b67b5899e7548bb3`。失败来自测试分类器：异步 `numpy_code` 把缺 CuPy 包成 RuntimeError，且三项显式 Generator op 没有已写明的 no-probe 原因。修正后分别将缺 CuPy 归类为 `unverified:no-dependency`，并说明 generator_randint/randperm/uniform 的 CPU-only / CUDA 不支持边界；没有改 runtime 算子代码。复验后文件 SHA256：`backend_contract_matrix.py` `37b898b5809214bc4e38f2011a133192013c622c104ea006cf51872403db0d9d`；`test_backend_contract_matrix.py` `4b79dace5672c853b6564592d2fd818ff97fd74e8c470ca48531d919c1a1a992`。
+- dtype 首次单独启动在 Jittor 核心导入阶段因 Conda `libstdc++` 缺 `GLIBCXX_3.4.30` 退出码 4，未到断言；失败原件保留在 `attempt-02-dtype-only-r1-prepared/`，日志 SHA256 `45c7891dad7206d552ae713b2f5f305a9c5fd4a7162df66654ba269306ac8638`。明确设系统 `LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libstdc++.so.6` 后单次有界复跑通过，日志 SHA256 `06d88affe97c5af38ef80efd1ef258075f55cab1b84664acbb7003a45e17a7c3`。
+- 完整矩阵复验目录 `/data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-native-contract-matrix-gpu1-r2-prepared/`，日志 SHA256 `7870efc2a96e364355f3dd6c1e4c2723cd3037fc3dde9ebe5e6f933561daf555`。其 run plan 记录源码指纹、测试哈希、GPU UUID、复用隔离 functional cache 与 900 秒 cap。首轮与 dtype 失败/通过原件保留于 `20261101-current-main-native-contract-matrix-gpu1-r1-prepared/` 的对应子目录，没有覆盖。
+
+### GPU2 与 Day4–5
+
+06:21 +0800 检查时 GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 的 compute mode 为 `Default`；yqa PID `3590512` 的 compute-app 用量为 8,640 MiB（整卡占用 8,651 MiB），利用率约 79%。当前连接下没有可用 Slurm/scheduler 命令，passwordless sudo 不可用。没有写入或运行占卡 burner，也未改变设备模式。共享 Default 下的进程不能阻止其他 CUDA client；若启用 exclusive-process，burner 又会阻挡独立性能测试进程。正确验收需要管理员/调度器分配整张 GPU2 的 UUID/GRES 和设备 cgroup 租约，并让整个对照测试进程持有 context；外部 job 尚未结束前不能形成独占窗口。
+
+本轮未运行正式 Day4–5。正式验收仍需同源码与匹配配置下至少三轮 PT/JT 交替、每轮每侧至少十个热样本，并报告加载/首步/热态 median、p95、离散度、吞吐、allocator live/allocated/reserved、NVML 峰值、CPU RSS，以及近容量/OOM 恢复和真实 activation recompute 的 checkpoint on/off。共享负载下的旧测量继续仅作为诊断。overall release 仍 **Not complete**。
+
 ## 2026-11-01 05:47 +0800 结构门通过；Day4–5 与 Day2–5 发布门仍开放
 
 本轮沿用主工作区 /home/cgq/jittor，HEAD 8c5fe3a6d6346ebab9b237b97fa2f038d8de80ac；origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 137/0。新增改动仅为两份干净的结构测试文件；未编辑其他已有 dirty/untracked 文件，暂存区在本轮开始时为空。执行前 status 快照 SHA256 4d5f4225f1f0951d1e4ef57cc1cc7ab184fa54400532b67bf1c1d7f61d9f27f1。
