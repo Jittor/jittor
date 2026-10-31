@@ -1914,7 +1914,7 @@ workaround.
 ## KI-COMPAT-022: ConvBERT's span conv and ConvNeXt's channel LayerNorm abort on a `var_relay` invariant under the shim
 
 - Severity: High (an internal invariant, so the model cannot run at all) but
-  narrow (two architectures, CPU path on this machine)
+  narrow (two architectures, and only on the CUDA path)
 - Status: Open; reproduced 2026-10-30 at `30d9f4998`, and with `src/` and
   `python/jittor/` checked out at `f37761c40`, identically -- so it predates
   `81d0bdf2e`.
@@ -1932,6 +1932,23 @@ workaround.
   invisible in the test because the aborted `convbert` Var stays in the graph
   and every later `sync` reports that first failure. The other 31 `CFG`
   architectures pass.
+- Smallest reproduction (CUDA device, under the shim; the shim enables
+  `enable_tuner`, which is what makes the relay fire):
+
+  ```python
+  import torch, torch.nn as nn
+  d = nn.Conv1d(64, 64, 3, groups=64, padding=1, bias=False)
+  p = nn.Conv1d(64, 32, 1, bias=False)
+  v = torch.randn(1, 8, 64).transpose(1, 2)   # created outside no_grad
+  with torch.no_grad():
+      p(d(v)).numpy()                          # var_relay.cc:107
+  ```
+
+  What each variation does on the same device: `p(d(v.contiguous()))` passes;
+  one conv instead of two passes; a view created *inside* `no_grad` passes; the
+  same graph on CPU (`jt.flags.use_cuda = 0`) passes. So the trigger is a
+  strided (transposed) input built before the `no_grad` scope, fed through two
+  convolutions, on CUDA.
 - Cause: not yet isolated. `add_relay_group` requires every member of a relayed
   op other than the relayed output to be a node of the fused op, and this graph
   has one outside it. Ruled out: the `81d0bdf2e` transpose composition and
