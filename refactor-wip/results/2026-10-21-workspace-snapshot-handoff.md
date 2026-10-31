@@ -1,3 +1,20 @@
+## 2026-10-31 handoff：R11h CPU focused/core 通过；GPU2 独占前不启动 CUDA/正式性能
+
+主工作区 /home/cgq/jittor 本轮编辑前 HEAD fe8d248a6322e1159381d8ae0fbea97ceb67be09，分支 integrate/cgq-transformers-native-multicard-target，origin/cgq_transformers ahead/behind 128/0。102 项既有 dirty/untracked porcelain SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，index 为空；主源码未改。只更新三份既有状态文档，不 push。
+
+R11h 使用既有隔离 worktree /data6/cgq/jittor-lab/worktrees/torch-compat-fill-zero-runtime-grad-r11-20261031，HEAD 765f1791f3b00f9129fb3ec6342dadf2c9dc2dbe，fingerprint 1530199e462b27b9b32ce93b000555bff0b03c28af2f90ab6548c8c37307c770，source manifest SHA256 0de2c5c034676bfb29b446054d04a7da70a59bf07bda20497eeab97e0d95f844。R11g focused 曾有一项 alias pointer 失败；R11h 仅把 source Var clone 调用改为 backend.Var.clone(args[0])，随后当前 10 项 focused 为 9 passed、1 CPU capability skip、fallback=0；维护的原 Torch core 十文件为 227 passed、3 skipped、fallback=0，214.97 秒。R11h 是隔离候选，不代表主树或最终 wheel。失败与通过产物均保存在 Day2–5 结果报告所列 evidence paths，勿覆盖。
+
+### 建议的继续顺序
+
+1. 等待管理员为 GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 提供 EXCLUSIVE_PROCESS/GRES/device-cgroup 独占租约。15:09 UTC GPU2 快照为 Default、84% 利用率、17,009 MiB 已用；yqa CIFAR100 PID 3590512 可见，Slurm 主机 X12DPG-OA6 为 down。不能用 burner 代替租约。
+2. 独占满足后，以 /data6/cgq/jittor-lab/_state/release-day23/20261031-r11h-cuda-directed-gpu2-r1-prepared/launch.py 启动一次 source-bound CUDA 定向回归。launcher 会先查 UUID、exclusive mode、现存 compute PID 和 2807 项源码身份，再用私有 cache 冷编；物理 GPU2 应映射进程 cuda:0，fallback 必须为 0。超时/失败保留原件，不自动重跑。
+3. 对 R11h 做功能审阅/迁移决策，再绑定最终整合候选。不要把 R11h 隔离 CPU 结果或 R5/R14 的其它源码训练结果混成最终候选通过。
+4. Day4–5 需冻结匹配 JT/PT 源码、wheel/core、模型权重、数据、精度、shape、batch、优化器与设备；稳定独占窗口至少三轮交替，每轮每侧至少十个热样本，报告 load/首步/热态 median、p95、离散度、吞吐、allocator allocated/reserved 与 NVML 峰值。现有 R26 median ratio 1.595 尚未达到 1.10 目标。
+5. 分别完成近容量、最大 batch/sequence、OOM 与恢复，以及 checkpoint on/off 配对资源测量；记录重算、输出/梯度/更新一致性、速度成本和显存峰值。
+6. 在最终候选上关闭 API/operator × device × dtype × layout × autograd/alias/storage × fallback 矩阵；补预设阈值的真正 held-out 任务指标、训练与 fresh-process checkpoint 恢复、DDP Trainer 多 rank checkpoint、JT/PT 序列化互操作契约、clean wheel/sdist 安装及 baseline migration review。
+
+cuda-directed-r1 的 15:10 UTC preflight 因 compute mode 为 Default，状态 BLOCKED_EXCLUSIVE_MODE，SHA256 f5f6a59a7a03b38c94ec425f1f4c4d3233f1744ca7c63e0e55bc3b63caca471e；它在 Jittor import 前退出，不能算 CUDA 测试。Overall Day2–5 release 继续 **Not complete**。
+
 ## 2026-10-31 接续：R5 当前源码实用训练/续训完成；GPU2 独占仍受权限阻塞
 
 R5 在现有 `/home/cgq/jittor` 工作区完成，无 clone 或源码改动。HEAD `d26c31246613c9e6a34da2ee7b6853612c9049a3`，origin `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind 127/0；实验前 102 项其他 dirty/untracked 状态 SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`。证据目录 `/data6/cgq/jittor-lab/_state/release-day23/20261031-qwen-current-source-practical-r5-prepared/`，快照 manifest SHA256 `af6a7c4e140163820ca26703621974ceec29c5e2850df55335119004f56fe8ff`。

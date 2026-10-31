@@ -1,3 +1,38 @@
+## 2026-10-31 续验：R11h Torch focused/core CPU 门通过；CUDA 与 Day4–5 正式验收仍开放
+
+### 工作区和候选身份
+
+本轮文档编辑前 /home/cgq/jittor HEAD 为 fe8d248a6322e1159381d8ae0fbea97ceb67be09，分支 integrate/cgq-transformers-native-multicard-target，origin/cgq_transformers ahead/behind 128/0。102 项既有 dirty/untracked porcelain SHA256 为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，index 为空；主工作区源码未改。只准备提交三份状态文档，不 push。
+
+验证使用既有隔离 worktree /data6/cgq/jittor-lab/worktrees/torch-compat-fill-zero-runtime-grad-r11-20261031，HEAD 765f1791f3b00f9129fb3ec6342dadf2c9dc2dbe。R11h 源指纹为 1530199e462b27b9b32ce93b000555bff0b03c28af2f90ab6548c8c37307c770，source manifest SHA256 为 0de2c5c034676bfb29b446054d04a7da70a59bf07bda20497eeab97e0d95f844，清单覆盖 2807 个候选条目。相对 R11g 只修改 frontend.py 中一处 clone 分派：以 backend.Var.clone(args[0]) 绕过兼容层覆写的 Tensor.clone，从而满足 torch.Tensor(existing_tensor) 的 storage pointer alias 约定；R11 worktree 原有其他 dirty/untracked 内容保留。
+
+### R11g 失败与 R11h CPU 结果
+
+R11g 的 Torch focused 结果为 1 failed、8 passed、1 skipped、fallback=0。唯一失败位于 test_independent_tensor_installation_preserves_native_type：构造 alias 后要求 alias.data_ptr() 与 original.data_ptr() 一致，R11g 前端 clone 分派使其变为独立存储。失败产物保留在 /data6/cgq/jittor-lab/_state/release-day23/20261031-r11-qwen-fill-zero-torch-focused-full-r1-prepared/attempt-01-torch-focused-full/；raw log、worker、receipt SHA256 分别为 116ece4243ec82f0fac5d528b8853c8cec63b3d2aa549887e85865121080a16e、a92a73dc7b53ccd1d0686d88d1f896182589663466df873a9ff3e60ccee8557e、69516e31c729127d7efacfd5783c891f6780d326881a17dcb7768b6a2ad69703。
+
+修正后的 R11h 重跑相同 10 个 focused selectors，9 passed、1 skipped（该 CPU-only 进程跳过 CUDA 节点）、0 failed、fallback=0，7.25 秒。原维护 Torch core 的十个测试文件随后在同一 source fingerprint 下运行，230 collected/executed，227 passed、3 skipped（1 accelerator、2 torch）、0 failed、fallback=0，214.97 秒。core cache 使用独立 R11 候选 JITTOR_HOME，运行前无 holder；cache 从 6634 项、414,397,148 bytes 增至 7366 项、428,013,259 bytes。focused evidence 位于 /data6/cgq/jittor-lab/_state/release-day23/20261031-r11h-qwen-fill-zero-torch-focused-full-r2-prepared/；core evidence 位于 /data6/cgq/jittor-lab/_state/release-day23/20261031-r11h-torch-core10-r1-prepared/。core raw log SHA256 61ae23d02e2c3c45d83827c9029cfabe7e7b2f809f9f01e2ce856edc81185972，worker SHA256 2ce735d6ee3b36e6b8d0574488962fc726531fd285bfb6e08150400cc2c92c53，receipt SHA256 6837be732244323e0c28f9eb5b92a2a8be396e2fffc67310f600c8175368529b。
+
+R11h 是隔离候选，上述 CPU 结果不是当前主工作区或最终发布 wheel 的通过声明。第一次 source launcher 使用的 fingerprint 复算表达式与 manifest 身份不匹配，在 pytest 启动前中止；该 harness preflight 记录保留，没有覆盖后续有效 attempt。
+
+### CUDA、性能与显存状态
+
+R11h CUDA directed artifact /data6/cgq/jittor-lab/_state/release-day23/20261031-r11h-cuda-directed-gpu2-r1-prepared/ 已准备，绑定相同 manifest、GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0，并把物理 GPU2 映射为进程内 cuda:0。预期测试覆盖显式 CPU/CUDA fill_/zero_ 的别名、值与梯度；额外 probe 检查 torch.Tensor(native FollowRuntime Var) 的设备放置和 storage alias。launcher 仅在 compute mode 为 EXCLUSIVE_PROCESS 且无其它 compute PID 时才导入 Jittor、创建私有 CUDA cache 和开始最多 600 秒的单次冷编/功能尝试。
+
+15:09 UTC GPU2 处于 Default 模式，约 17,009 MiB 已用、64,030 MiB 空闲、84% 利用率，可见外部 yqa CIFAR100 PID 3590512；Slurm 显示 X12DPG-OA6 down。15:10 UTC fail-closed 检查记录 BLOCKED_EXCLUSIVE_MODE，SHA256 f5f6a59a7a03b38c94ec425f1f4c4d3233f1744ca7c63e0e55bc3b63caca471e；没有启动 Jittor、CUDA kernel、benchmark 或 burner。此前 gpu2-exclusive-run.sh 无权限切换 EXCLUSIVE_PROCESS，仍无法保证设备独占。R26 热态 median ratio 1.595 > 1.10 门槛；共享 GPU 下任何旧时间/显存只能作为诊断。
+
+正式 Day4–5 仍需：冻结并逐项绑定 JT/PT 源码、wheel/core、模型、权重、数据、shape/batch、dtype、优化器和运行环境；取得管理员提供的 UUID/GRES/device-cgroup 独占 GPU2 lease；在稳定窗口完成至少三轮交替 PT/JT，每轮每侧至少十个热样本；分别报告加载/准备、首步/JIT、热态延迟、吞吐的 median/p95/离散度与逐样本数据；报告 Jittor allocator allocated/reserved 和 NVML 峰值；另以匹配配置测最大可运行容量、OOM 与恢复。checkpoint on/off 需要同模型与输入的配对轮次、重算计数、输出/梯度/更新核验、速度成本和峰值显存。R32 CPU 通过证明其绑定 wheel 真实执行 recompute；R36 CUDA 只有 on 单侧，不能证明 GPU 显存收益。
+
+### 更广 Day2–5 发布门
+
+- 冻结一个最终候选，完成声明范围内 API/operator × device × dtype × layout × autograd/alias/storage × fallback 矩阵，并在最终源码/wheel/core 上执行真实 CPU 与 CUDA 定向回归。
+- 按预先制定的阈值和真正 held-out 数据完成生成/任务质量评估；当前固定 eval loss、Alpaca train split fixture 或达到 token cap 的前缀分数不构成质量通过。
+- 为同一最终候选绑定实际训练与 fresh-process checkpoint resume，记录真实设备/fallback、有限梯度、参数更新、loss/任务指标，以及模型、optimizer、scheduler、RNG 和样本顺序恢复。R5/R14 训练/resume 只能支持各自源码和配置。
+- 完成 DDP Trainer 多 rank 训练、同步、checkpoint 与续训；明确 JT portable-pickle optimizer 与 stock PyTorch 的可互操作格式及验证。
+- 完成 clean wheel/sdist 安装和 baseline migration review。R4 isolated package 修正尚未迁入主树。
+- 对最终候选证明 gradient checkpointing 的 activation recompute、梯度一致性和 CUDA on/off 峰值显存及速度差值；不能用 shim 调用成功或 CPU recompute 代替 CUDA 资源结论。
+
+Overall release 继续 Not complete。
+
 ## 2026-10-31 续验：R5 当前源码 Qwen 实用训练与续训通过；Day4–5 验收仍开放
 
 在 `/home/cgq/jittor` 既有工作区继续，未 clone 或改源码。R5 绑定 HEAD `d26c31246613c9e6a34da2ee7b6853612c9049a3`；实验前 102 项 dirty/untracked SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`；origin ref `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind 127/0。源码快照 manifest SHA256 `af6a7c4e140163820ca26703621974ceec29c5e2850df55335119004f56fe8ff`。证据目录：`/data6/cgq/jittor-lab/_state/release-day23/20261031-qwen-current-source-practical-r5-prepared/`。

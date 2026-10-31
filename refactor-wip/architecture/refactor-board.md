@@ -1,3 +1,25 @@
+## 2026-10-31 续验：R11h focused 与 Torch core CPU 门通过；CUDA/Day4–5 仍开放
+
+继续使用 /home/cgq/jittor 既有工作区。文档编辑前 HEAD 为 fe8d248a6322e1159381d8ae0fbea97ceb67be09，分支 integrate/cgq-transformers-native-multicard-target，origin/cgq_transformers ahead/behind 128/0；102 项既有 dirty/untracked 的 porcelain SHA256 为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，index 为空。主工作区源码未改；本轮只更新三份状态文档，其他 dirty/untracked 保持原样。
+
+R11h 是隔离候选，不是主工作区源码。候选 worktree /data6/cgq/jittor-lab/worktrees/torch-compat-fill-zero-runtime-grad-r11-20261031 的 HEAD 为 765f1791f3b00f9129fb3ec6342dadf2c9dc2dbe，源指纹 1530199e462b27b9b32ce93b000555bff0b03c28af2f90ab6548c8c37307c770，2807 项 source manifest SHA256 0de2c5c034676bfb29b446054d04a7da70a59bf07bda20497eeab97e0d95f844。相对 R11g 的一行源码修正把 Tensor 构造器中的 clone 分派改为 backend.Var.clone(args[0])，避免调入兼容层重载的 .clone() 并复制存储；其余候选 dirty 内容未清理或覆盖。
+
+R11g 的同一 10 项 Torch focused 曾有 1 failed、8 passed、1 skipped、fallback=0。失败是 independent frontend 回归要求 torch.Tensor(existing_tensor) 保持 storage pointer 别名；调用前端 clone 后指针改变。原始日志 SHA256 116ece4243ec82f0fac5d528b8853c8cec63b3d2aa549887e85865121080a16e，worker SHA256 a92a73dc7b53ccd1d0686d88d1f896182589663466df873a9ff3e60ccee8557e，receipt SHA256 69516e31c729127d7efacfd5783c891f6780d326881a17dcb7768b6a2ad69703；失败原件保留。R11h 在新源码身份上同组 10 项为 9 passed、1 skipped（CPU 无 CUDA）、fallback=0，7.25 秒；日志 SHA256 1d50552b0c660674858a999b5cff7c51c1d3483430fe2991c68a486dd999da51。完整 receipt 与 worker 位于 /data6/cgq/jittor-lab/_state/release-day23/20261031-r11h-qwen-fill-zero-torch-focused-full-r2-prepared/attempt-01-torch-focused-full/。
+
+随后运行维护中的 Torch core 原十文件选择集：230 collected/executed，227 passed、3 skipped（1 accelerator、2 torch），0 failed、fallback=0，214.97 秒。它绑定同一 R11h fingerprint 和 manifest，cache 从 6634 项/414,397,148 bytes 增至 7366 项/428,013,259 bytes；cache 为候选隔离目录，测试前无 holder。证据在 /data6/cgq/jittor-lab/_state/release-day23/20261031-r11h-torch-core10-r1-prepared/attempt-01-torch-core/，raw log SHA256 61ae23d02e2c3c45d83827c9029cfabe7e7b2f809f9f01e2ce856edc81185972，worker SHA256 2ce735d6ee3b36e6b8d0574488962fc726531fd285bfb6e08150400cc2c92c53，receipt SHA256 6837be732244323e0c28f9eb5b92a2a8be396e2fffc67310f600c8175368529b。
+
+下一项 CUDA 定向回归已绑定 R11h、GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 与逻辑 cuda:0，准备运行 explicit CPU/CUDA fill_/zero_ 回归并验证 torch.Tensor(native FollowRuntime Var) 的 storage alias。launcher 要求 EXCLUSIVE_PROCESS 且无现存 compute PID 才会导入 Jittor。2026-10-31 15:09 UTC GPU2 为 Default，约 17,009 MiB 已用、64,030 MiB 空闲、84% 利用率，外部 yqa CIFAR100 PID 3590512 正在运行；Slurm 的 X12DPG-OA6 仍为 down。15:10 UTC fail-closed preflight 以 BLOCKED_EXCLUSIVE_MODE 退出，未启动 Jittor/CUDA 测试。记录 SHA256 f5f6a59a7a03b38c94ec425f1f4c4d3233f1744ca7c63e0e55bc3b63caca471e；artifact /data6/cgq/jittor-lab/_state/release-day23/20261031-r11h-cuda-directed-gpu2-r1-prepared/。占卡包装器仍因权限不足无法设置独占模式；没有启动 burner。该候选 CUDA 与性能/显存结果仍待管理员提供独占租约。
+
+### 仍需关闭的发布门
+
+1. CUDA 功能回归：获得同 UUID 的独占租约后运行上述 source-bound directed test，确认实际设备为 cuda:0、fallback=0、别名/数值/梯度断言通过。此项没有性能结论。
+2. Day4–5 性能：冻结最终 JT/PT 源码、wheel/core、模型权重、数据与采样顺序、精度、shape、batch、优化器和运行环境；在稳定独占 GPU 窗口完成至少 3 轮交替测量，每轮每侧至少 10 个热样本。分别报告 load/准备、首步/JIT、热态延迟及吞吐的 median、p95、离散度，保留逐样本值与 fallback/设备信息。R26 的代表格 median ratio 1.595 尚未达到 1.10 目标；共享负载旧结果仅作诊断。
+3. Day4–5 显存/容量：同一配置测 allocator allocated/reserved 与 NVML 峰值；另测最大可运行 batch/sequence、OOM 行为及 OOM 后恢复。checkpoint on/off 必须同模型、同输入、交替配对，验证输出/梯度/更新并报告峰值显存与速度成本。R32 CPU 证据确认对应 wheel 实际做 activation recompute，R36 只有 CUDA on 单侧，均不构成最终 CUDA 显存节省结论。
+4. 更广 Day2–5 功能门：在最终冻结候选上补齐声明范围 API/operator × device × dtype × layout × autograd/alias/storage × fallback 矩阵；用预先确定阈值的真正 held-out 任务质量指标；对同一候选完成实际训练和新进程 checkpoint 恢复（模型、optimizer、scheduler、RNG、数据顺序、梯度、更新与 loss）。R5/R14 训练证据仅绑定各自源码/配置，不能自动代替 R11h 或后续合并候选。
+5. 其余 release 门：DDP Trainer 多 rank 保存/续训；明确 JT portable-pickle 与 stock PyTorch optimizer 的互操作契约；clean wheel/sdist 安装及 baseline migration review。R4 isolated package 修正尚未迁入主树，旧的 train-split/截断生成分数也不关闭 held-out 质量门。
+
+Overall release 继续 Not complete。
+
 ## 2026-10-31 续验：R5 当前源码 Qwen 实用训练/续训通过；GPU2 无法独占
 
 R5 绑定 HEAD `d26c31246613c9e6a34da2ee7b6853612c9049a3`、实验前 102 项 dirty/untracked SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211` 和快照 manifest `af6a7c4e140163820ca26703621974ceec29c5e2850df55335119004f56fe8ff`。Qwen3-0.6B LoRA seed821 两 epoch 在物理 GPU4（逻辑 `cuda:0`）完成 102 更新，0 skip、0 fallback；生命周期检查通过。epoch 加权 loss 为 1.205599/1.153534，eval loss 2.456431，接近 R14 PyTorch 对照 1.205680/1.154064/2.456644。checkpoint-51 新进程续至 102，930/930 状态值及 RNG/设备映射检查通过。
