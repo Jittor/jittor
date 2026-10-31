@@ -1,3 +1,29 @@
+## 2026-10-31 续验：R11h CUDA 定向回归尚未执行；Day4–5 与广泛发布门仍开放
+
+### 工作区、候选与设备身份
+
+编辑前主工作区 /home/cgq/jittor 的 HEAD 为 7a8552494fc80c63f9db926c15fbcc5cf96159a4，分支 integrate/cgq-transformers-native-multicard-target；刚 fetch 后 origin/cgq_transformers 为 e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 为 129/0。102 项既有 dirty/untracked porcelain SHA256 仍为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，index 为空。主工作区源码没有改动；本轮只更新这三份状态文档。R11h 仍是隔离候选：worktree /data6/cgq/jittor-lab/worktrees/torch-compat-fill-zero-runtime-grad-r11-20261031，HEAD 765f1791f3b00f9129fb3ec6342dadf2c9dc2dbe，source fingerprint 1530199e462b27b9b32ce93b000555bff0b03c28af2f90ab6548c8c37307c770，2807 项 source manifest SHA256 0de2c5c034676bfb29b446054d04a7da70a59bf07bda20497eeab97e0d95f844。
+
+本轮只做 GPU4 功能启动诊断，不采性能或显存结论。GPU4 UUID GPU-8bf405a2-a3dd-e203-8dd9-691e9f7b3530 为 Default；准入快照空闲 72,387 MiB，外部 yqa Python PID 3591114 占用 8,640 MiB，利用率随共享负载变化。GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 仍为 Default；最后快照有外部 yqa Python PID 3590512 占用 8,640 MiB，未启动占卡进程，也未运行 GPU2 测试。/data6 余量约 5.5 TiB；根分区 / 为 99% 使用、余 74 GiB，本轮产物均写在 /data6。
+
+### R11h GPU4 CUDA 启动尝试
+
+四次 source-bound attempt 都绑定相同 R11h fingerprint 与 GPU4 UUID；均未观察到本任务 PID 建立 GPU context，也没有 worker-result.json，目标 pytest selector 与 FollowRuntime alias probe 没有执行：
+
+1. /data6/cgq/jittor-lab/_state/release-day23/20261031-r11h-cuda-directed-gpu4-r1-prepared/attempt-01-cuda-directed 使用 R9 CPU bootstrap（use_cuda=0），编出的 core 未含 HAS_ACCELERATOR；随后 device.cc:61 报 No CUDA found。368.54 秒后以 SIGABRT 退出，raw log SHA256 19734308a916f48c5beaefdcd1517cc577f10b65bf9662bcb274f91f742d5bd7，receipt SHA256 d29a6d41ca9cc9fe3a759e30c1cd3620a37e27df42c771623b7919f63cdcf5bc。
+
+2. /data6/cgq/jittor-lab/_state/release-day23/20261031-r11h-cuda-directed-gpu4-r2-cudabootstrap-prepared/attempt-01-cuda-directed 改用通过过 R5 CUDA 训练的 runtime-environment.json（SHA256 be05765d6e52c54f4d6874f21f0f9b96562379a9cdce26dedd8a41978c859925），core 的 CUDA key 为 cu12.4.99_sm_80，228/228 个 core 单元编译完成。日志随后出现 CUDA enabled，但在 runtime.scope(use_cuda=1) 初始化时于 sync_all(bool) 段错误；addr2line 指向 vector<jittor::Var*>::_M_realloc_insert。382.18 秒后退出，raw log SHA256 2a10fd6859ddf59dd29e52eb7a02719a3b9ed087c1e3881121c8033cd98111e0，receipt SHA256 ea68b1ad9c750280a512562ab68a0ecc018a0048c1b300a4b2b9962328e8fefd。
+
+3. /data6/cgq/jittor-lab/_state/release-day23/20261031-r11h-cuda-directed-gpu4-r3-startup-order-prepared/attempt-01-cuda-directed 按 R5 identity-child 顺序加入 jit_utils_core 导入并复用 CUDA core 缓存。Jittor 发现 jit_utils 刚重建，提示该模块不能在当前进程重载并要求新进程重启命令；本进程以退出码 3 于 10.84 秒结束。raw log SHA256 e76b0890601ed2d28212e2ff38f3556dd905b66abb5cc4d65066ce2c775daf21，receipt SHA256 ce45883405e2d12e365a2d1813662de993e86e5c7ab5953e9635ff4ca07cbc02。
+
+4. /data6/cgq/jittor-lab/_state/release-day23/20261031-r11h-cuda-directed-gpu4-r4-reload-jitutils-prepared/attempt-02-cuda-directed 在新进程使用相同 JITTOR_HOME 绝对路径。启动器发现 CUDA backend 3/3 后开始重编 jittor_core（2/228），按预算保护器发 SIGTERM 停止，耗时 9.12 秒；状态为 BLOCKED_UNEXPECTED_CORE_REBUILD。raw log SHA256 5e66c76374704bddb11892993a0f6c3a7e39d27fb39c5827efb8c193813789df，receipt SHA256 28e5c7f2863e12daab22726f0f93a122c2419756f2c2e9144ad1403f4d2f5e3b。
+
+四份原始 attempt、cache、preflight 与 receipt 均保留，没有覆盖失败记录。R1–R4 都不能算 CUDA 功能通过。R11h 先前 9 passed、1 skipped 的 focused CPU 结果及 227 passed、3 skipped 的 Torch core CPU 结果仍绑定其原 source fingerprint，但不能外推为 CUDA 或最终发布候选通过。R11h 不迁入最终候选，直至 CUDA 初始化与 core cache 生命周期得到可复核的解决。
+
+### 发布门状态与接续
+
+下一项针对 R11h 的工作应先审查 jit_utils/core cache freshness 规则以及 R4 开始重编译的触发条件，再决定是否准备新的 source-bound CUDA attempt；本轮不再重启相同 launcher。Day4–5 正式性能/显存验收仍需 GPU2 UUID 的管理员级独占租约，当前账户不能设置 EXCLUSIVE_PROCESS，普通 burner 无法阻止其他 CUDA context。正式测量仍需冻结 PT/JT 配置、稳定独占窗口、至少 3 轮交替且每轮每侧至少 10 个热样本，并报告 load/首步/热态 median、p95、离散度、吞吐、allocator/NVML 峰值及容量/OOM 恢复和 checkpoint on/off 配对。更广 Day2–5 的支持矩阵、可信 held-out 指标、最终候选训练/新进程恢复、DDP 多 rank checkpoint、跨框架 optimizer 序列化契约及 baseline migration review 仍开放。Overall release 继续 **Not complete**。
+
 ## 2026-10-31 续验：R11h Torch focused/core CPU 门通过；CUDA 与 Day4–5 正式验收仍开放
 
 ### 工作区和候选身份

@@ -1,3 +1,11 @@
+## 2026-10-31 续验：R11h GPU4 CUDA 启动未到目标测试；Day4–5 仍开放
+
+主工作区 /home/cgq/jittor 本轮文档编辑前 HEAD 7a8552494fc80c63f9db926c15fbcc5cf96159a4；origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 129/0。102 项既有 dirty/untracked 的 porcelain SHA256 仍为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，index 为空；主源码未改，本轮仅更新三份状态文档。
+
+R11h 隔离候选的 CPU focused/core 证据继续有效；本轮在 GPU4 的 R1–R4 source-bound CUDA 启动尝试分别遇到 CPU-only core、sync_all 段错误、jit_utils fresh-process reload、和意外 core rebuild。四次都未执行目标 selector，也未观察到本任务 CUDA PID；失败原件及 SHA256 见 2026-10-26-torch-compat-release-day2-5.md 新增的 R11h GPU4 章节。停止继续重复启动；先查 cache freshness 和启动顺序，再决定下一次 CUDA attempt。
+
+GPU2 A800 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 最后检查为 Default，有外部 yqa PID 3590512 占用 8,640 MiB；当前账户不能设置 EXCLUSIVE_PROCESS。GPU4 功能尝试前记录到外部 yqa PID 3591114；其运行结果不作性能/显存证据。正式 Day4–5 仍需管理员提供按 UUID/GRES/cgroup 的独占租约，冻结匹配配置并完成至少三轮 PT/JT 交替、每轮每侧至少十个热态样本及容量/OOM/checkpoint 对照。更广 Day2–5 的支持矩阵、held-out 质量、最终候选训练恢复、DDP checkpoint、序列化契约和 migration review 仍未关闭。Overall **Not complete**。
+
 ## 2026-10-31 续验：R11h focused 与 Torch core CPU 门通过；CUDA/Day4–5 仍开放
 
 继续使用 /home/cgq/jittor 既有工作区。文档编辑前 HEAD 为 fe8d248a6322e1159381d8ae0fbea97ceb67be09，分支 integrate/cgq-transformers-native-multicard-target，origin/cgq_transformers ahead/behind 128/0；102 项既有 dirty/untracked 的 porcelain SHA256 为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，index 为空。主工作区源码未改；本轮只更新三份状态文档，其他 dirty/untracked 保持原样。

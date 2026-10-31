@@ -1,3 +1,11 @@
+## 2026-10-31 handoff：R11h CUDA runner/cache 初始化未通过；保留 CPU 结果和失败原件
+
+主工作区 /home/cgq/jittor 本轮编辑前 HEAD 7a8552494fc80c63f9db926c15fbcc5cf96159a4，分支 integrate/cgq-transformers-native-multicard-target；fetch 后 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 129/0。102 项既有 dirty/untracked porcelain SHA256 仍为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，index 为空。主源码未修改；只更新三份既有状态文档，不 push。
+
+R11h CPU focused 与 Torch core 结果仍分别为 9 passed/1 skipped、227 passed/3 skipped，fallback=0，且只支持其隔离源码 fingerprint 1530199e462b27b9b32ce93b000555bff0b03c28af2f90ab6548c8c37307c770。本轮四个 GPU4 功能启动 attempt 均未进入目标 CUDA selector：R1 使用 CPU bootstrap，R2 启用 CUDA 后在 sync_all 段错误，R3 因 jit_utils 重建要求新进程，R4 的保护器发现 jittor_core 从 2/228 重编译并中止。日志、收据和根因记录见 2026-10-26-torch-compat-release-day2-5.md；这些记录不得覆盖，也不构成 CUDA 通过。
+
+GPU2 当前为 Default，外部 yqa PID 3590512 占用约 8,640 MiB；尚无管理员级独占租约。下一步先审查 R3/R4 的 jit_utils/core cache freshness 与启动顺序，确认 source-bound warm/cold build 方案后再做单次 CUDA 功能尝试。正式性能/显存验收继续等待 GPU2 UUID/GRES/device-cgroup 独占租约；整体 Day2–5 release 保持 **Not complete**。
+
 ## 2026-10-31 handoff：R11h CPU focused/core 通过；GPU2 独占前不启动 CUDA/正式性能
 
 主工作区 /home/cgq/jittor 本轮编辑前 HEAD fe8d248a6322e1159381d8ae0fbea97ceb67be09，分支 integrate/cgq-transformers-native-multicard-target，origin/cgq_transformers ahead/behind 128/0。102 项既有 dirty/untracked porcelain SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，index 为空；主源码未改。只更新三份既有状态文档，不 push。
