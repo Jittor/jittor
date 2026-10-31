@@ -1,3 +1,9 @@
+## 2026-10-31 补充：旧指纹 BERT R18 已审计；GPU2 只记录到短 readiness 窗口
+
+既有 R18 BERT B8/S256 FP32 三轮配对并非空白：独立终审 `20261030-main-df45-bert-performance-r18-independent-terminal-r1/terminal-audit.json` 判定 `REPRESENTATIVE_THREE_PAIRS_EVIDENCE_VERIFIED`，SHA256 `08d7958485ff53880819f91418125b44a6e503354c82c9dcd084bbb5c9fb18e8`。但它绑定旧源码指纹 `df45a565...` / HEAD `e92681d...`，不匹配当前候选；JT/PT pooled median ratio `1.31283` 未达 1.10 时延诊断线，allocator live peak ratio `1.08066` 达到该代表格阈值；不含 near-capacity/OOM，也不是任务质量结果。当前源码候选仍需候选身份匹配的性能/显存证据，不能把 R18 外推为 release PASS。
+
+GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 在 readiness artifact `/data6/cgq/jittor-lab/_state/release-day23/20261031-main-day45-readiness-current-r1-prepared/` 连续 5 次、每隔 5 秒记录 0% 利用率、约 81,038 MiB 空闲且无报告的 compute PID；日志 SHA256 `412d3d16da4afc38fd7eae09450dac92801cf930eedf8b9b927aefd94ef4a154`。该短窗口没有启动配对测量；开始正式实验前仍需在 60 秒新鲜度内重做准入，并以锁定、可安装的候选执行。包 selftest 当前失败，故先修复包门，再决定是否复用已审计 harness 做一次当前候选测量。Overall release 仍 **Not complete**。
+
 ## 2026-10-31 接续：主包 wheel 安装自测失败；Day4–5 与广泛发布门仍开放
 
 在 `/home/cgq/jittor` 既有工作区继续；主包构建绑定 HEAD `a067d2dedb44cf6d039bb54fed2a3f5af94b7864`、origin/cgq_transformers=`e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`（ahead/behind `109/0`）。构建前工作区原有 103 项 dirty/untracked、porcelain SHA256 `ad24d0fe82a758525cec03ee1e79373524c55422c274ac6a3b7e6c89a88b4402`；本轮未改源码、测试或既有实验文件。

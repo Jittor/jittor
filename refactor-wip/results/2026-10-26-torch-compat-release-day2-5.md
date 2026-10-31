@@ -1,3 +1,11 @@
+## 2026-10-31 补充：R18 旧指纹代表格结果与当前 GPU readiness
+
+R18 已有可复核的三轮 BERT 代表格数据，不能笼统说此前从未完成三轮：独立终审 `/data6/cgq/jittor-lab/_state/release-day23/20261030-main-df45-bert-performance-r18-independent-terminal-r1/terminal-audit.json` 的状态为 `REPRESENTATIVE_THREE_PAIRS_EVIDENCE_VERIFIED`，SHA256 `08d7958485ff53880819f91418125b44a6e503354c82c9dcd084bbb5c9fb18e8`。配置为 BERT base 合成 B8/S256 FP32、固定权重/输入、实际 AdamW；PT/JT 三轮交替，每轮每侧 16 warmup、10 热样本，另外各做 3 次 allocator memory 与 3 次 CUDA attribution 更新；梯度有限且 CUDA placement/fallback 检查通过。它绑定旧源码指纹 `df45a56585f68874e8f1c64a80c9fff276bfe795e80c4d079cd06a8e7e528fc3`、HEAD `e92681d291272db1f1b9d0e3fe18cf35775a4de2`，不是本轮当前 source candidate。
+
+该代表格 pooled median PT/JT 分别 `118.458/155.516 ms`，JT/PT `1.31283`，逐轮比 `1.45562/1.21369/1.26798`；pooled p95 `130.296/166.738 ms`，标准差 `13.350/19.875 ms`。allocator live peak PT/JT 为 `3,343,963,136/3,613,674,496 bytes`，ratio `1.08066`；NVML 采样进程峰值 `3996/4544 MiB`。因此旧候选下时间诊断不达 1.10，allocator 代表格诊断达线；该实验没有 near-capacity/OOM 边界，不证明任务质量，也不能转移到当前候选或作为完整 Day4–5 PASS。实验限制包括固定 math/eager 与 16 warmup 新协议不同于历史 r3，观测含离散采样、阶段/热样本记录扰动及 `/proc` 可见性限制；详细归档在 handoff 第 777 行附近及 artifact 中。
+
+另在 2026-10-31T06:46:01Z–06:46:22Z，对 GPU2 进行了 5 个连续 5 秒 readiness 采样：每次空闲 `81038 MiB`、used `1 MiB`、utilization `0%`，该 UUID 没有出现在 compute-app PID 列表。artifact `/data6/cgq/jittor-lab/_state/release-day23/20261031-main-day45-readiness-current-r1-prepared/`，日志 SHA256 `412d3d16da4afc38fd7eae09450dac92801cf930eedf8b9b927aefd94ef4a154`。这只是短准入记录，未运行训练/性能；其新鲜度已过，正式测量需重新采样。先前因发布候选主 wheel 安装失败，未以该短窗口启动来源不匹配的 BERT 当前测量。修复安装/打包后，仍需在冻结候选上获取至少三轮匹配结果及容量/OOM 数据。
+
 ## 2026-10-31 续验：主包 wheel clean-install/selftest 失败；Day4–5 与广泛发布门未闭合
 
 本轮包门绑定 `/home/cgq/jittor` 的 HEAD `a067d2dedb44cf6d039bb54fed2a3f5af94b7864`，origin/cgq_transformers=`e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `109/0`。开工时既有 103 项 dirty/untracked 与状态 SHA256 `ad24d0fe82a758525cec03ee1e79373524c55422c274ac6a3b7e6c89a88b4402` 保留，index 为空；未改源码/测试、未动已有 cache 或 GPU 实验产物。当前 package artifact `/data6/cgq/jittor-lab/_state/release-day23/20261031-main-package-current-r1-prepared/`，adjudication JSON SHA256 `b432ec86ea1bd6098789d393b5b02fb952d60327a5095f08d47f0fcf597096dc`。

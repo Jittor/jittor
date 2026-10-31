@@ -1,3 +1,9 @@
+## 2026-10-31 补充交接：R18 BERT 三轮已审计但绑定旧源码；GPU2 readiness 需刷新
+
+旧候选 `df45a565...` / HEAD `e92681d...` 的 BERT B8/S256 FP32 R18 已完成三轮 JT/PT 配对并经独立终审验证（SHA256 `08d7958485ff53880819f91418125b44a6e503354c82c9dcd084bbb5c9fb18e8`）；JT/PT median ratio 为 1.31283、allocator live peak ratio 为 1.08066。它不是当前源码，也不含容量边界。新主包安装门发现实际 wheel 阻断，先处理后再以最终候选做匹配测量。
+
+GPU2 readiness artifact `/data6/cgq/jittor-lab/_state/release-day23/20261031-main-day45-readiness-current-r1-prepared/` 有连续 5 次 5 秒采样（0% 利用率、81038 MiB free、无 compute PID），日志 SHA256 `412d3d16da4afc38fd7eae09450dac92801cf930eedf8b9b927aefd94ef4a154`。当时没有启动计时实验；下次正式运行须在新鲜准入后执行。Day4–5 和 overall release 仍未完成。
+
 ## 2026-10-31 最新续接：主包 clean install selftest 暴露 wheel 缺模块；Day4–5 未验收
 
 本轮在既有 `/home/cgq/jittor` 继续，主包包门绑定 HEAD `a067d2dedb44cf6d039bb54fed2a3f5af94b7864`、origin `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`（109/0）。构建前 103 项既有 dirty/untracked 的 status SHA256 `ad24d0fe82a758525cec03ee1e79373524c55422c274ac6a3b7e6c89a88b4402`；源码和既有实验文件未改。本轮仅有隔离 `/data6` 包 artifact：`/data6/cgq/jittor-lab/_state/release-day23/20261031-main-package-current-r1-prepared/`，adjudication SHA256 `b432ec86ea1bd6098789d393b5b02fb952d60327a5095f08d47f0fcf597096dc`。
