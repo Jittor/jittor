@@ -1,3 +1,28 @@
+## 2026-11-01 07:06 +0800 optimizer/DDP CPU 覆盖发现两项失败；CUDA build cache 未匹配
+
+### CPU optimizer 与 distributed API 复验
+
+在当前 runtime fingerprint ae682fe34dec0cf62e74f5dd3546c8c77dd7d97f23f03f7a4d4b7d11558f2499、HEAD b562866b9、原有 worktree porcelain SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211 上，运行 optimizer state placement/restore、Torch optimizer、distributed API owners、Torch/native DDP owner separation 五个 CPU 测试文件。结果 **62 passed、75 accelerator-only skipped、2 failed，80.62 秒，rc=1**；共 collected 139、executed 125。pytest 日志 SHA256 656fc699e33e79b992ea33d35e4f6962cfcb43396ab3ef9bca4a255cceb8b74e。计划和摘要在 /data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-optim-ddp-cpu-r1-prepared/；plan SHA256 93f1bb3a216816837c507c92e728379062b0ef1baef621d0a3ff36c138e8453e，summary SHA256 0984e26ce1317017cfedb886ae1b82aac5cf5a6213ff6d705ca32c7a5341601c。
+
+两个失败需保持为发布缺口：
+
+1. test_optimizer_restore_devices.py::test_map_cpu_restore_to_per_parameter_device_and_next_step[cpu-adamw-dtype1]：BF16 AdamW 从 CPU-mapped state 恢复后再更新，初始 moment/state 和 dtype 检查通过，但后续 exp_avg 与连续训练参考不一致，最大绝对差 6.676465e-05、最大相对差 9.3548e-04。本轮未隔离根因，不据此归咎于序列化或某个单一算子。
+2. test_distributed_api_owners.py::test_init_destroy_store_and_backend_validation：测试要求单 rank backend=gloo 被保存并由 get_backend() 返回；现行 _init_process_group 只写 initialized/store，context 的 state 初始化没有 backend 字段，get_backend() 仍读 world group backend，测试观察到 state 缺少预期 backend=gloo。这是待解决的 API state/ownership 契约差异。
+
+本轮没有改源码或测试。该组只验证 CPU optimizer 与模拟的 Torch/native DDP ownership；75 个 accelerator-only 项被跳过，不能作为 CUDA optimizer restore 或多 rank 通信通过。
+
+### CUDA RNG 测试缓存复用失败
+
+为验证 native CUDA RNG state，先后尝试从当前工作树、再从已有 R3 冻结源快照运行 tests/backends/cuda/test_cuda_rng_state.py，两处测试文件 SHA256 均为 b04d20a673203dd5d04cc49a8e12fe1ec1c4ad34a53ab3ee79686a7b72a45640，runtime fingerprint 相同。测试绑定 GPU1 UUID GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068，该卡 preflight/after 均 1 MiB、0%、无 compute app；GPU2 未触碰。
+
+两次启动都因 cache key 与已编译 Qwen R3 core 不匹配，转而在原 JITTOR_HOME 下创建 f3384b3faef6 新目录并编译 native core op 单元。均在 pytest 收集/断言前按精确进程树 SIGTERM；日志空、无测试摘要、wrapper rc=1，不计测试失败或通过。原 R3 的 61ab724692e5 CUDA core 文件未删除；新增部分编译缓存保留。cache 路径为 /data6/cgq/jittor-lab/_state/release-day23/20261101-qwen-main-r3-practical-r1-prepared/runtime/jittor-home/.cache/jittor/jt1.3.11/g++11.4.0/py3.11.3/Linux-6.8.0-13x11/arch5d322f9c55/f3384b3faef6/default/cfg08ac6be4/cu12.4.99_sm_80/，733 个文件的部分缓存 manifest SHA256 e4de955ed4a9bd06fc7fe7d3b2399f0b80d8215cc92e2611131e30b4bb958bcc，记录于 CUDA RNG r2 证据目录。后续不再为这项测试重复该冷编译。
+
+### GPU2 与发布状态
+
+07:06 +0800 GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 为共享 Default，yqa PID 2279286 使用约 8640 MiB，util 约 78%；GPU1 仍空闲。Slurm X12DPG-OA6 仍为 down；当前 sacctmgr 对 cgq 没有 association，只有另一节点 cn2 显示 idle A100，不能为当前 GPU2 建立独占。没有启动 burner、正式 benchmark 或 GPU2 CUDA 测试。
+
+下一步先解决并验证 BF16 AdamW state 轨迹与 Torch distributed backend state 两个 CPU 缺口；CUDA RNG/optimizer/graph/step 与两 rank DDP 需要精确匹配的 warmed CUDA build 和可用设备。GPU2 独占租约取得后，再完成至少三轮 PT/JT 交替、每轮双方至少十个热样本、延迟分位数/离散度/吞吐、allocator/NVML/RSS 峰值、near-capacity/OOM 和真实 activation recompute checkpoint on/off。整体 Day2–5 release 仍 **Not complete**。
+
 ## 2026-11-01 06:55 +0800 wheel 差异按功能域归类；迁移批准仍开放
 
 ### 基线差异分布
@@ -30,6 +55,27 @@
 - ACL/native：这两项 ACL 文件删除仅完成静态替代核查；设备、构建和数值验证仍缺。
 
 下一步逐项处理新增与内容变化清单：为每个功能文件关联可复现测试、标注已验证设备与未支持边界；先审阅 generator/RNG/graph/step、AMP/optimizer/DDP、profiling/memory，再审阅 CUDA/ACL 和 123 项 native src 变化。只有完成逐项判断后才更新 migration allowlist。GPU2 仍被其他用户占用，Day4–5 独占性能/显存验收继续等待系统级租约。整体 Day2–5 release 仍 Not complete。
+
+## 2026-11-01 06:51 +0800 CPU 功能复验完成；GPU2 仍共享
+
+### 工作区与执行身份
+
+继续使用 /home/cgq/jittor 现有工作区，branch integrate/cgq-transformers-native-multicard-target，HEAD 202199ac920528f4e848e13ff897ab38a969ae9a，origin e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 140/0。执行前后 102 项既有 dirty/untracked porcelain SHA256 均为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211；测试未改源码或测试文件。运行绑定 runtime source fingerprint ae682fe34dec0cf62e74f5dd3546c8c77dd7d97f23f03f7a4d4b7d11558f2499，测试文件 SHA256 已写入证据 plan.json。
+
+### 失败原件与复验
+
+首轮 /data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-training-feature-cpu-r1-prepared/ 因所选 JITTOR_HOME 缺少当前环境 build key，意外触发新的 CPU jittor_core 配置 cfg1d275ac1，完整编译 227 个单元；约 313.93 秒时输出 7 个 pytest 进度点仍无最终汇总。为避免继续无边界编译，精确终止本任务 pytest 子树；wrapper 记录退出码 -15，原日志 SHA256 ab005ff2a1afa55d64ea7001a4cb4628f37b00106ee76341d29ed0dcd3d7338e。这次不计为测试通过。新建的核心缓存和失败原件均保留，未删除。
+
+随后在同一隔离 JITTOR_HOME 复用该 build key 进行有界复验，没有再次编译核心：
+
+- compat/tests/torch/test_generator_streams.py、test_torch_amp_training_loop.py、test_graph_replay_alias_warmup.py：14 passed、6 skipped，28.07 秒；跳过项为 accelerator-only。日志 SHA256 874252a9c3b2a35bdd0eb01a99c9c2ed4fb64b490ccc42a20ba39e59669cd8d5。
+- tests/core/test_step_capture.py：9 passed、18 skipped，7.17 秒；跳过项为 accelerator-only。日志 SHA256 4bb468b6ea9c1b7e17d38ccd1546d84ed04129374f0578b44f90fb10492f603f。
+
+复验使用 Python 3.11.3 / pytest 7.4.4、CUDA_VISIBLE_DEVICES 为空和 JITTOR_TEST_DEVICES=cpu。证据计划及摘要在 /data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-training-feature-cpu-r2-prepared/，plan.json SHA256 561d6f1af74add3bb12f4feec300d886eca1bb9235090b18f29eff379b1307f3，summary.json SHA256 64d4f951aaf6078528a2483fabe03c4550578932fe3d17e7d5ad563312922e24。这些 CPU 结果补充生成器流、AMP 训练循环、graph replay alias warmup 与原生 step capture 功能证据，不覆盖 accelerator 路径、速度或显存结论。
+
+### GPU2 与下一步
+
+06:50 +0800 最新设备快照中，GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 为 Default，yqa PID 3590512 使用 8640 MiB，利用率约 81%；GPU1 UUID GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068 当时无 compute app。没有启动占卡程序或本任务 CUDA 测试。普通 burner 无法阻止其他进程创建 CUDA context；GPU2 需管理员/调度器按 UUID/GRES 与设备 cgroup 提供独占租约。Day4–5 正式性能/显存仍未运行，需取得稳定独占窗口后执行至少三轮 PT/JT 交替、每轮每侧至少十个热样本，报告 load/首步/热态 median、p95、离散度、吞吐、allocator/NVML/RSS 峰值，并补近容量/OOM 恢复和真实 activation recompute checkpoint on/off 测量。整体 Day2–5 release 仍 Not complete。
 
 ## 2026-11-01 06:37 +0800 wheel 基线源码重建与迁移差异审阅
 
