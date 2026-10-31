@@ -1,3 +1,10 @@
+## 2026-10-31 最新交接：R24 分段诊断完成，zero_grad/forward 成为优先优化候选
+
+R24 使用 R19/R21 相同源码指纹、wheel/core、BERT B8/S256 FP32 权重/输入与 AdamW default 配置，在 GPU2/cuda:0 对 PT/JT 分别测 zero_grad、forward、backward、optimizer。每侧 30 个热样本，三轮交替，16 warmup/阶段；初始参数和输入配对一致，197 个梯度有限，更新发生，fallback=0。JT median：zero_grad 22.216 ms、forward 77.459 ms、backward 58.732 ms、optimizer 5.143 ms；PT 对照为 4.819、30.461、53.433、9.862 ms。诊断含分段同步边界，不是正式时延门。installed wheel 与工作区 _zero_grad_compat(set_to_none=False) 源哈希相同，其逐梯度 update/zeros_like 与高 zero_grad 计时相符，但尚无消融证明因果。forward 还需拆 attention/GEMM 与执行调度。
+
+R24 summary SHA256 7333eee81407832077499f2f75d75152f857b1da2c1e2c82f47016a543c024eb；独立审计 PASS_DIAGNOSTIC_EVIDENCE_ONLY SHA256 79a5299a4eb61993c0cf7d75a3aec79e10c9b62cd06dae1f9651e8a76af13ca0。一次只读 runtime 初始化失败和一次 GPU admission rejection 均保留；后续阶段在新目录/新 cache 副本完成，原 R21 cache 与 repo 102 项既有 dirty/untracked 状态未变。接下来做有界 zero_grad/forward 消融和 attention/GEMM 归因，再决定是否改源码与构建新 wheel；Day4–5 正式性能、OOM、真实 recompute，以及更广 Day2–5 发布门都仍开放。Overall release **Not complete**。
+
+---
 ## 2026-10-31 最新交接：R23 只读 trace 聚合完成，尚未找到单步瓶颈
 
 R23 对 R19/R21 已归档的六份 Jittor attribution trace 做只读聚合，没有运行 GPU workload/Jittor，不改代码、wheel 或 cache。GPU kernel event duration 在每份三步 trace 中约 239.06 ms（R19）和 237.02 ms（R21），SGEMM 累计约 199.80 / 199.50 ms；fused AdamW 累计约 5.695 ms/三步（R21）。端到端 Jittor median 约 150.630 / 148.923 ms，PyTorch median 107.903 / 94.494 ms。R21 ratio 变差来自 PT 默认配置的计时更低，而不是两轮 JT median 有明显差别。executor/device-wait trace 事件累计差异大，且 profiling trace 不能充当热样本的 wall-clock 分解，需保持归因未定。

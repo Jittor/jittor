@@ -1,3 +1,21 @@
+## 2026-10-31 续验：R24 BERT 分段计时完成；时延差集中在 zero_grad/forward
+
+R24 在 BERT B8/S256 FP32、eager attention、同一权重/输入及 AdamW user-default 配置上，对 PT/JT 的 zero_grad、forward、backward、optimizer 分段计时。绑定 HEAD 6537bdc89127dc8b2425578bcad8a6463277574f、source fingerprint 0382368b8754bf7a90e42382fd66b603ed2d3f323b5e8cda4820425871c7aa50、R19/R21 同一 wheel/core 与 GPU2/cuda:0；没有改源码或 wheel。三轮交替，每阶段 16 warmup、10 hot，共每侧 30 个热样本。每阶段实际设备正确、fallback=0、197 个梯度有限、201 个初始参数/缓冲逐值映射相同，三轮输入/optimizer 配置一致；首 loss 相同，逐步 hot loss 最大差小于 3.0e-7。
+
+| 组件 | PT median / p95 / std（ms） | JT median / p95 / std（ms） | JT/PT median |
+| --- | ---: | ---: | ---: |
+| zero_grad | 4.819 / 5.181 / 1.258 | 22.216 / 24.395 / 5.404 | 4.61 |
+| forward | 30.461 / 34.313 / 1.737 | 77.459 / 79.259 / 10.365 | 2.54 |
+| backward | 53.433 / 53.709 / 0.487 | 58.732 / 62.052 / 1.300 | 1.10 |
+| optimizer | 9.862 / 10.520 / 1.168 | 5.143 / 7.067 / 0.592 | 0.52 |
+| 分段合计 | 98.593 / 104.203 / 4.084 | 163.902 / 166.608 / 16.109 | 1.66 |
+
+这些分段边界显式同步，增加了诊断开销，所以不能当成正式热态时延结果；R19/R21 的正式比率仍为 1.39597 / 1.57601，1.10 线未达。R24 有两次保留的中断：attempt-01 因兼容 runtime 位于只读路径启动失败；attempt-02 的 jittor1 准入观察到 GPU 利用率 52%、无可见 PID 而拒绝启动；attempt-03 在三次空闲采样后只补跑剩余交替阶段。所有纳入汇总的阶段各自通过 GPU 准入，没有在被拒绝窗口采样。R21 原始 cache 指纹保持 fc698085cb9dd8f4feb58d0e3ed38b62d2b5f8eb565a45dfe42aec42fe96aa35；工作区 102 项既有 dirty/untracked 哈希未变。
+
+R24 summary SHA256 7333eee81407832077499f2f75d75152f857b1da2c1e2c82f47016a543c024eb；独立审计 PASS_DIAGNOSTIC_EVIDENCE_ONLY，SHA256 79a5299a4eb61993c0cf7d75a3aec79e10c9b62cd06dae1f9651e8a76af13ca0。读取到的 wheel 对应 _zero_grad_compat(set_to_none=False) 会逐参数更新已有梯度并重绑 .grad；文件哈希与安装 wheel target 一致。这个实现与 22.216 ms zero_grad median 相符，是后续优化候选，但 R24 没有对该机制做消融，不能据此声称根因已证明。下一步优先隔离此梯度清零路径和 Jittor forward 中 attention/GEMM 与调度开销，再决定源码变更；Day4–5 的最终 wheel 配对时延、近容量/OOM 和真实 activation recompute 收益仍开放。Overall release **Not complete**。
+
+---
+
 ## 2026-10-31 R23：只读审计已有 R19/R21 CUDA trace；瓶颈仍未隔离
 
 只读聚合 R19、R21 的三份 Jittor attribution trace，没有启动 GPU workload、Jittor、改源码、重建 wheel 或访问写入 JIT cache。R19 与 R21 都绑定 source fingerprint 0382368b8754bf7a90e42382fd66b603ed2d3f323b5e8cda4820425871c7aa50。每份 trace 含三次 profile update：GPU kernel duration 累计均值约 239.06 / 237.02 ms，ampere_sgemm 累计约 199.80 / 199.50 ms；R21 fused_adamw kernel 三步累计约 5.695 ms。已报告的端到端 Jittor pooled median 为 150.630 / 148.923 ms，而 PyTorch 为 107.903 / 94.494 ms；相邻轮次 Jittor 总时延近似不变，默认配置下 PyTorch 更快，故相对 ratio 变大不能归因于 Jittor 端明显变慢。

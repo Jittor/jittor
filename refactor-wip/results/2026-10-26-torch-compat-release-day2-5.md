@@ -1,3 +1,33 @@
+## 2026-10-31 增量：R24 BERT 分段时延诊断完成；待做根因消融与正式复验
+
+### 实验身份与协议
+
+R24 在 /home/cgq/jittor 现有工作区运行，绑定当前文档提交 HEAD 6537bdc89127dc8b2425578bcad8a6463277574f、source fingerprint 0382368b8754bf7a90e42382fd66b603ed2d3f323b5e8cda4820425871c7aa50、R19/R21 同一主/compat wheel SHA256 2e8f1a4418e3e9aee770843a6fd7d5471e3de12aaad75a8e8e78deee24baa3d9 / fd7e84f639dba09f9d8293b9d255df09aa7190b890093e614c340cc47a7a7d5a、core SHA256 050c612d6b29bb952c4debccc7eb791f1704e3c8a2040723cb352cbda789f986。BERT B8/S256 FP32，固定权重 SHA256 86fa7113367fd0d231a76571ca1b73a1b24166af33558fee960636ce56337ed7，同一随机输入、eager attention、AdamW foreach/fused=None。GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0，进程逻辑 cuda:0。
+
+按 PT0, JT0, PT1, JT1, PT2, JT2 的交替顺序执行三轮；每阶段 16 warmup、10 hot，另外保留 3-step memory 和 attribution 阶段。组件计时在 zero_grad、forward、backward、optimizer 前后显式同步，热计时阶段未开启 profiler。每种 runtime 共 30 个 hot 样本。因为显式同步边界增加诊断开销，分段时间用于比较组件相对成本，不作为 R19/R21 正式总步时延的替代。
+
+### 分段结果
+
+| 组件 | PT median / p95 / 标准差（ms） | JT median / p95 / 标准差（ms） | JT/PT median ratio |
+| --- | ---: | ---: | ---: |
+| zero_grad | 4.819 / 5.181 / 1.258 | 22.216 / 24.395 / 5.404 | 4.61 |
+| forward | 30.461 / 34.313 / 1.737 | 77.459 / 79.259 / 10.365 | 2.54 |
+| backward | 53.433 / 53.709 / 0.487 | 58.732 / 62.052 / 1.300 | 1.10 |
+| optimizer | 9.862 / 10.520 / 1.168 | 5.143 / 7.067 / 0.592 | 0.52 |
+| 分段合计 | 98.593 / 104.203 / 4.084 | 163.902 / 166.608 / 16.109 | 1.66 |
+
+每轮分段合计 median：PT 98.521 / 98.571 / 98.845 ms，JT 163.725 / 164.293 / 164.190 ms。配对三轮的 201 个初始参数/缓冲值和输入 hash 一致，optimizer group 均为 None/None；每阶段 197 个梯度有限、参数更新发生、fallback=0、native dispatch 为 cuda:0。三轮 first loss 都是 1.0；逐 hot loss 的最大绝对差为 2.38e-7、2.98e-7、2.38e-7。这为分段性能提供匹配输入/初值证据，但没有保存完整梯度张量做逐元素跨框架 allclose。
+
+### 解释、失败保留与限制
+
+R24 的相对成本集中在 JT zero_grad 和 forward；backward 接近 PT，JT optimizer 更新更快。安装 wheel 中的 compat/torch/optimizer_api.py 与工作区文件 SHA256 均为 ec50a82ba7ef46ebfa36de2e704484c787f0b3b9afc4411289bb8b2b41e622d0；其中 _zero_grad_compat(set_to_none=False) 逐个参数更新已有 gradient 并重绑 grad。安装 wheel 中 jittor/optim/base.py 与工作区同为 SHA256 98ffeb18334b0efae22182b3a4aa9092a3ed3d5820ee89c00ce513eecad9483e。该实现与 22.216 ms 的分段 median 相符，但 R24 没有关闭或替换该路径做消融；Jittor forward 的 77.459 ms 也还未再拆成 attention、GEMM 和调度成本，因此两处目前是可验证的优化候选，不是已证实的唯一根因。
+
+attempt-01 中 Jittor import 因 JITTOR_TORCH_RUNTIME_ROOT 留在只读目录而失败，日志保留；attempt-02 修正 runtime 绑定后成功完成 torch0/jittor0/torch1，但 jittor1 准入时 GPU utilization 为 52% 且无可见 compute PID，故拒绝采样；attempt-03 用全新 cache 副本、三次空闲采样后只执行 jittor1/torch2/jittor2。纳入的六阶段均通过各自的 GPU admission，R21 源 cache 未变，工作区状态未变。失败和部分阶段输出均未覆盖。
+
+R24 artifact：/data6/cgq/jittor-lab/_state/release-day23/20261031-bert-component-timing-r24-r1-prepared/。summary SHA256 7333eee81407832077499f2f75d75152f857b1da2c1e2c82f47016a543c024eb，独立审计 PASS_DIAGNOSTIC_EVIDENCE_ONLY SHA256 79a5299a4eb61993c0cf7d75a3aec79e10c9b62cd06dae1f9651e8a76af13ca0。R24 不关闭正式性能门：R19/R21 JT/PT median ratio 仍为 1.39597/1.57601，高于 1.10；显存近容量/OOM 与真实 activation-checkpoint recompute on/off 对照仍未完成。下一步先对 zero_grad(set_to_none=False) 与 forward 分段做一次有界消融/归因；若有源码变更，必须用新源码和 wheel 身份重做三轮正式配对。Overall release **Not complete**。
+
+---
+
 ## 2026-10-31 增量：R23 只读聚合 R19/R21 既有 trace，性能归因仍未完成
 
 ### 审计边界与证据身份
