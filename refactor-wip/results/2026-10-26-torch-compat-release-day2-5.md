@@ -1,3 +1,15 @@
+## 2026-10-31 增量：CPU BF16 AdamW 新进程续训轨迹与不中断训练一致
+
+为评估上一轮单进程 BF16 AdamW exp_avg_sq 对照差异是否表现为训练轨迹退化，在当前 CPU core 上做一次确定性小型线性回归续训诊断。Jittor Torch shim identity probe 通过，CPU dispatch、use_cuda=0、Jittor core SHA256 51845b1462d8f3beaf5f9c2034bd96363a2925b90ff1dcec2bbcf02f9aeb5818。固定输入/目标 dataset SHA256 199f2caeeba4d29ecf89a419edcb1ec583d9463676334e3dee6f55ff7d2a9ef1；Linear(2,1)、BF16、AdamW lr=0.01、betas=(0.9,0.999)、eps=1e-8、weight_decay=0.01、40 次 full-batch 更新，无随机层、RNG 依赖或 scheduler。
+
+三条独立 Python 进程运行结果完整保留在 /data6/cgq/jittor-lab/_state/test-suite/torch/20261031-main-bf16-resume-trajectory-cpu-r3-prepared/。baseline 进程完成 40 次更新，训练 loss 1.298828125→0.1537342072，固定验证 MSE 1.9765625→0.2781715393；seed 进程完成 1 次更新并保存 checkpoint；resume 是另一新进程，从 step 1 恢复后再做 39 次，结束于 step 40。39/39 个恢复后训练 loss 与不中断路径逐项完全相同，最终验证 MSE 完全相同，参数和 exp_avg_sq 的最终张量 max_abs 差都为 0；三进程梯度有限、实际更新 40 次合计、fallback delta 均为 0。checkpoint SHA256 9e55af6849cbf4a4a420e8398778f198d17e9067ae214f56a2b15bb1b61d9096，汇总 manifest SHA256 fc5e9d3ceb58d3f389f25496c75aff207db5c91231fccfe3f469df89651698e。
+
+这说明之前单进程里参考与恢复两个 optimizer 交替更新产生的 exp_avg_sq 差异，在该小型 CPU BF16 任务的新进程续训轨迹中没有复现。证据只支持此线性模型、数据、配置和 CPU 路径；它不是 Qwen/CUDA 结果，不替代 held-out 真实任务质量门，也不能覆盖 AdamW 其他 dtype/device。上一轮单 node 严格状态比较的 FAIL 原件仍保留，未改写为 PASS。当前结论是功能与任务轨迹窄路径通过，严格的单进程 moment state 比较仍有差异，需要按声明范围继续审视。
+
+实验期间未改动源码、测试文件或编译 core。代码目标文件 SHA 与实验前一致；工作树其他 103 项 status SHA256 仍是 2307d0e94eb9b3bc7fba2ede6944fa17e077934dd2beedfee42190737f7ea25c。runner 的初次 shell 语法失败、r2 因 worker PYTHONPATH 缺失而未执行，以及 r3 parent 聚合阶段对 dict 型 exp_avg_sq 的后处理错误都保留在各自 artifact；r3 三个训练进程本身成功，汇总由已保存 JSON 的 post-hoc adjudication 完成，没有重跑训练。
+
+正式 Day4–5 设备条件仍未满足：最新快照 GPU1 利用率 0% 但空闲显存仅 19,385 MiB；GPU2 空闲 72,387 MiB但利用率 87%，有外部 PID 3160291 使用约 8,640 MiB。CPU cache lock 无 holder，/ 余 33 GiB、/data6 余 5.5 TiB；无本任务活动进程。origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 105/0。overall release 仍 Not complete。
+
 ## 2026-10-31 增量：CPU BF16 AdamW 续训差异定位到 exp_avg_sq
 
 在 /home/cgq/jittor 当前工作区、HEAD 5a41561b17bbbb412725c6edb2697063df1d2506 上，对上一轮唯一失败 node 做一次字段诊断，没有重跑整套。CPU Jittor core SHA256 仍为 51845b1462d8f3beaf5f9c2034bd96363a2925b90ff1dcec2bbcf02f9aeb5818，JITTOR_NO_BUILD=1，CUDA_VISIBLE_DEVICES 为空。失败确认为 CPU BF16 AdamW 的 exp_avg_sq：恢复前 state 完全相同；第二次 step 后参数对照通过，但 exp_avg_sq 为 [0.0314781479537487, 0.07143609970808029]，对照为 [0.03147624433040619, 0.07136933505535126]，max_abs=6.676465272903442e-05、max_rel=9.354809299111366e-04。该诊断只执行一个既有 node，1 failed、1 executed、0 skipped；没有改动源码、测试文件或 core。证据位于 /data6/cgq/jittor-lab/_state/test-suite/torch/20261031-main-bf16-adamw-restore-field-r2-prepared/，manifest SHA256 40ddd1570a4d9db2f099bf942a6787e8dd2cd6e79f8bf9802e6ce5ca6efbd77c。attempt-01 因默认 python 缺少 numpy，未执行测试，保留在同名 field-r1-prepared 目录。
