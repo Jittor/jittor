@@ -1,5 +1,13 @@
 # 2026-10-21 工作区快照与本机接续交接
 
+
+## 2026-10-31 补充：R20 DDP 参数与 optimizer 状态报告通过
+
+HEAD b45bc7eb9523f530dfc4973ce9b2eec55ce5d7b3（origin/cgq_transformers ahead/behind 96/0）上的双 rank CUDA/NCCL no_sync 用例 exit 0；GPU2/GPU4 进程均为逻辑 cuda:0，各 1 passed/0 skipped、sentinel 1/1。结构化报告确认首个 no_sync 梯度保持 rank-local，closing backward 后梯度、最终参数与 optimizer state 两 rank 匹配；15 个参数标量改变，max abs update=0.014990580268204212，optimizer step=[1,1]，梯度/参数有限。证据 structured-current-head-ddp-r1/ 中 audit SHA256 为 bb4310ee55dac696a22c2c2b22b93abdb4664f5d5d98aa8424864ecd54ee90e5。nox 未安装；只关闭此 DDP 窄路径，不代表完整 nox、FSDP 或其他 collective 通过。
+
+预检 GPU2/GPU4 利用率 97%/94%、空闲 51,296/51,286 MiB 且有共享计算进程，不能做 Day4–5 正式测量；根分区余 33 GiB、/data6 余 5.5 TiB，无本任务进程或 cache holder。正式配对性能/显存与整体 Day2–5 release 仍未完成。
+
+
 ## 2026-10-31 最新接续：当前源码 Accelerate DDP 定向门通过；Day4–5 仍未开始正式验收
 
 继续使用 /home/cgq/jittor 原工作区。验证 HEAD fda5675c892fed75f206bf36d65c45628e4d55ed；origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 95/0。测试前 103 项 dirty/untracked 保留，本轮 noxfile.py 修正增加一项；没有 clone/reset/stash/clean/push。全部运行与失败原件在 /data6/cgq/jittor-lab/_state/release-day23/20261031-main-accelerate-ddp-nosync-r20-current-source-r1/。

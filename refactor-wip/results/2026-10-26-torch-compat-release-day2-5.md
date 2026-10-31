@@ -1,5 +1,16 @@
 # Torch Compatibility Release Acceptance: 2026-10-26 Day 2–5 Continuation
 
+
+## 2026-10-31 R20 Accelerate DDP 结构化状态复核补充
+
+在已修正 NCCL singleton warmup 与 backend_local_rank/LOCAL_RANK 的源码上，按 HEAD b45bc7eb9523f530dfc4973ce9b2eec55ce5d7b3 补跑一次有界双 rank 报告；origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 96/0。复核前 103 项既有 dirty/untracked 保留，index 为空；本次不改源码，只补结构化状态报告和三份指定文档。
+
+证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261031-main-accelerate-ddp-nosync-r20-current-source-r1/structured-current-head-ddp-r1/。launcher exit=0；两个 rank 分别在物理 GPU2/GPU4、NCCL、各自逻辑 cuda:0 运行目标用例，各 1 passed/0 skipped，Jittor session sentinel 各 collected=1 executed=1。paired-state-audit.json 确认：首次 no_sync backward 后梯度保持 rank-local 不同；closing backward 后梯度相同；最终参数与 optimizer state 跨 rank 相同；15 个参数标量改变、最大绝对参数更新 0.014990580268204212；每 rank 两项 optimizer step 均为 1；梯度与参数全为有限值。rank0 JSON SHA256 cd3054d1b99488df0e549df058610504ce287761eb51230eb5cee7d00c03ddbb，rank1 JSON SHA256 3af9e50c896b3d715512f31a6a01823867c853a96046bfd3aba5e5d52e0000dd，paired-state-audit.json SHA256 bb4310ee55dac696a22c2c2b22b93abdb4664f5d5d98aa8424864ecd54ee90e5。audit 同时记录本次源码文件哈希。
+
+该补测仅补齐当前 no_sync 路径的结构化参数/optimizer 状态证据。nox 未安装，故不声称完整 nox session 通过；不覆盖更广 collective/FSDP/模型和精度组合。预检 GPU2/GPU4 利用率为 97%/94%、空闲显存 51,296/51,286 MiB，另有外部计算 PID；根分区余 33 GiB、/data6 余 5.5 TiB、证据 cache 无 holder。该窗口只用于功能检查，Day4–5 性能/显存数据仍未采集。当前其他必需门与 overall release 仍 Not complete。
+
+
+
 ## 2026-10-31 当前源码 Accelerate DDP no_sync 定向终验与 Day2–5 未闭合门
 
 测试源码 HEAD fda5675c892fed75f206bf36d65c45628e4d55ed；origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 95/0。测试前保留 103 项既有 dirty/untracked，本轮 noxfile.py 增量后为 104 项；未清理其他修改。证据根目录 /data6/cgq/jittor-lab/_state/release-day23/20261031-main-accelerate-ddp-nosync-r20-current-source-r1/。

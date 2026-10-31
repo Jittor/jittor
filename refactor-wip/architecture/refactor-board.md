@@ -1,5 +1,14 @@
 # 整改看板
 
+## 2026-10-31 R20 Accelerate DDP 结构化状态复核通过；整体发布仍开放
+
+在 /home/cgq/jittor 原工作区对 HEAD b45bc7eb9523f530dfc4973ce9b2eec55ce5d7b3 做一次有界复核；origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 96/0。复核开始时保留 103 项既有 dirty/untracked，index 为空；本次只新增状态文档，不改源码。未 clone、reset、stash、clean 或 push。
+
+证据位于 /data6/cgq/jittor-lab/_state/release-day23/20261031-main-accelerate-ddp-nosync-r20-current-source-r1/structured-current-head-ddp-r1/。使用 JITTOR_ACCELERATE_INTEGRATION_OUTPUT 运行双 rank CUDA/NCCL；物理 GPU2/GPU4 各自逻辑 cuda:0，launcher exit=0，每 rank 1 passed/0 skipped，sentinel 均 collected=1 executed=1。结构化 audit 确认 no_sync 首个微批的 rank-local 梯度不同、closing backward 后梯度匹配、最终参数和 optimizer state 两 rank 相同；15 个参数标量更新，最大绝对更新 0.014990580268204212，两个 rank 的 optimizer step 均为 [1,1]，梯度与参数有限。rank0/rank1/audit JSON SHA256 分别为 cd3054d1b99488df0e549df058610504ce287761eb51230eb5cee7d00c03ddbb、3af9e50c896b3d715512f31a6a01823867c853a96046bfd3aba5e5d52e0000dd、bb4310ee55dac696a22c2c2b22b93abdb4664f5d5d98aa8424864ecd54ee90e5。
+
+这是 R20 no_sync→closing backward→AdamW 更新与状态同步的窄路径证据，不代表所有 collective、FSDP、精度/模型组合或完整 nox session（服务器未安装 nox）。GPU 预检中 GPU2/GPU4 利用率 97%/94%、空闲 51,296/51,286 MiB，且存在共享 VLLM 与其他进程；/ 可用 33 GiB、/data6 可用 5.5 TiB，无本任务进程或 cache lock holder。Day4–5 正式性能/显存验收设备准入不满足，仍须等利用率 ≤10%、空闲 ≥60,000 MiB 且无无关计算 PID；整体 Day2–5 release 继续 Not complete。
+
+
 ## 2026-10-31 当前源码 Accelerate DDP no_sync 定向门通过；Day4–5 与整体发布仍开放
 
 继续在 /home/cgq/jittor 原工作区。测试 HEAD fda5675c892fed75f206bf36d65c45628e4d55ed；origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 95/0。测试前 103 项既有 dirty/untracked 保留；本轮 noxfile.py 修正增加一项，index 在文档收尾前为空。测试时 tracked diff、porcelain-v2、untracked manifest SHA256 分别为 26cd96d9fe06816c477697ab4ada9b40b44eba786865ca82f7790df7eb766623、58a12399900ce9e1dcd866a7a961cd1f5a543e04afc32331631d78150eca6e43、7a6fa6d040d05b01f7d874ab05cd1f0c2d60f0196dbcaa46d6d37be941ddaab6。完整证据位于 /data6/cgq/jittor-lab/_state/release-day23/20261031-main-accelerate-ddp-nosync-r20-current-source-r1/。
