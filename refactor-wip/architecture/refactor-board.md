@@ -1,3 +1,11 @@
+## 2026-10-31 R23：只读审计已有 R19/R21 CUDA trace；瓶颈仍未隔离
+
+只读聚合 R19、R21 的三份 Jittor attribution trace，没有启动 GPU workload、Jittor、改源码、重建 wheel 或访问写入 JIT cache。R19 与 R21 都绑定 source fingerprint 0382368b8754bf7a90e42382fd66b603ed2d3f323b5e8cda4820425871c7aa50。每份 trace 含三次 profile update：GPU kernel duration 累计均值约 239.06 / 237.02 ms，ampere_sgemm 累计约 199.80 / 199.50 ms；R21 fused_adamw kernel 三步累计约 5.695 ms。已报告的端到端 Jittor pooled median 为 150.630 / 148.923 ms，而 PyTorch 为 107.903 / 94.494 ms；相邻轮次 Jittor 总时延近似不变，默认配置下 PyTorch 更快，故相对 ratio 变大不能归因于 Jittor 端明显变慢。
+
+trace 的 executor-batch 与 device-wait 事件累计在两批之间差异很大，但它们来自 profiling-only 的三步 trace，事件区间可能重叠，不能当成热态单步分解。R23 只生成只读 trace audit，SHA256 b3f169b5a844d4ace767543d8f3945fd01770e9367279b8784737e4edad1e4fd；它不给性能门记 PASS。下一项应做 profiler 关闭的匹配 forward/backward/optimizer 分段诊断，并另存独立 attribution；任何候选变更后再绑定新 wheel 做正式三轮配对。Overall release **Not complete**。
+
+---
+
 ## 2026-10-31 续验：R22 分离 AdamW 更新路径诊断通过；端到端门仍未达
 
 R22 使用 R19/R21 同一主/compat wheel、private core 和 BERT 参数形状，对 Jittor 默认 AdamW 与显式 unfused 做三轮交替、每阶段 5 次预热和 10 个热样本。仅优化器更新、固定合成梯度下，默认路径 median 4.212 ms，unfused 33.596 ms，profile device kernel 数为 7 对 197；15 步后最大绝对差 8.15e-10，allclose 通过。默认 trace 实际包含 fused_adamw；预先 selector 探针字段未能识别该路径，独立审计以运行 trace 为准。

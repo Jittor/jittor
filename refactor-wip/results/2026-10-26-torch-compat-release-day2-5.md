@@ -1,3 +1,27 @@
+## 2026-10-31 增量：R23 只读聚合 R19/R21 既有 trace，性能归因仍未完成
+
+### 审计边界与证据身份
+
+R23 读取 R19 的 jittor0/1/2 与 R21 attempt-03 的 jittor0/1/2 result.trace.json 和对应 result.json。trace SHA256 及逐文件汇总在 /data6/cgq/jittor-lab/_state/release-day23/20261031-r23-existing-trace-audit-r1/summary.json；审计文件 SHA256 为 b3f169b5a844d4ace767543d8f3945fd01770e9367279b8784737e4edad1e4fd。两轮 benchmark 都绑定 source fingerprint 0382368b8754bf7a90e42382fd66b603ed2d3f323b5e8cda4820425871c7aa50 和 R19/R21 记录中的相同 wheels/core，但 optimizer 配置不同：R19 显式 unfused，R21 为用户默认。
+
+这是文件读取与事件聚合，不启动 GPU workload 或 Jittor，不改源码/wheel，也不触碰 JIT cache。每条 attribution trace 对应三步 profiler update；下列是 trace event duration 累计值，不是 wall-clock 单步拆分，区间可能重叠。
+
+| trace 三步聚合均值 | R19 | R21 |
+| --- | ---: | ---: |
+| GPU kernel event duration 总和 | 239.062 ms | 237.021 ms |
+| ampere_sgemm kernel duration 总和 | 199.799 ms | 199.501 ms |
+| executor batch event duration 总和 | 128.307 ms | 207.281 ms |
+| device wait event duration 总和 | 39.226 ms | 155.095 ms |
+| fused AdamW GPU kernel（R21） | — | 5.695 ms |
+
+热态正式测量记录中的 Jittor/PyTorch pooled median：R19 为 150.630/107.903 ms，R21 为 148.923/94.494 ms。Jittor 两轮 median 接近；PyTorch 默认配置比 R19 显式 unfused 更快。因此 R21 较高的 JT/PT ratio 不能解释为 Jittor 的端到端 median 显著退化。GPU 侧 SGEMM trace 累计值接近，说明 R22 的 optimizer-only 结果不足以支持以 AdamW 更新作为端到端瓶颈结论。
+
+executor 与 wait event 的大幅差异无法从这些 profiling-only trace 直接映射到非 profiling 热样本；不同 optimizer 配置也是比较混杂项。不能从该审计宣称已找出根因、预测优化收益或关闭性能门。下一诊断应固定同一套 PT/JT optimizer 与模型配置，分别计时 forward、backward、optimizer，热计时期间关闭 profiler，另在热计时后采集 attribution；报告每部分 median/p95/离散度及数值/梯度/参数更新等价性。只有经源码变更的候选 wheel 通过既定至少三轮交替、每轮每侧至少十个热样本、包括 allocator/NVML 与 setup/load/first/hot 的正式复验，才可判定候选性能门。
+
+R23 不改变 Day4–5 结论：R19 ratio 1.39597、R21 ratio 1.57601 仍高于当前 1.10 诊断线；显存容量/OOM 边界与实际 activation checkpoint recompute on/off 资源对照仍未完成。Overall release **Not complete**。
+
+---
+
 ## 2026-10-31 增量：R22 AdamW 更新路径隔离诊断通过；发布时延门仍开放
 
 ### 身份与范围

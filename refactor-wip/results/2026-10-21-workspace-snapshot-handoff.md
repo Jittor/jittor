@@ -1,3 +1,10 @@
+## 2026-10-31 最新交接：R23 只读 trace 聚合完成，尚未找到单步瓶颈
+
+R23 对 R19/R21 已归档的六份 Jittor attribution trace 做只读聚合，没有运行 GPU workload/Jittor，不改代码、wheel 或 cache。GPU kernel event duration 在每份三步 trace 中约 239.06 ms（R19）和 237.02 ms（R21），SGEMM 累计约 199.80 / 199.50 ms；fused AdamW 累计约 5.695 ms/三步（R21）。端到端 Jittor median 约 150.630 / 148.923 ms，PyTorch median 107.903 / 94.494 ms。R21 ratio 变差来自 PT 默认配置的计时更低，而不是两轮 JT median 有明显差别。executor/device-wait trace 事件累计差异大，且 profiling trace 不能充当热样本的 wall-clock 分解，需保持归因未定。
+
+审计 summary: /data6/cgq/jittor-lab/_state/release-day23/20261031-r23-existing-trace-audit-r1/summary.json，SHA256 b3f169b5a844d4ace767543d8f3945fd01770e9367279b8784737e4edad1e4fd。下一步做 profiler 关闭的 PT/JT forward、backward、optimizer 分段诊断，固定 optimizer/模型配置并检查数值和更新等价性；之后若做性能优化，正式结果须绑定新 wheel 身份与三轮匹配热态窗口。Day4–5 的 OOM 边界和真实 activation recompute on/off 对照，以及更广 Day2–5 兼容发布门继续开放。Overall release **Not complete**。
+
+---
 ## 2026-10-31 最新交接：R22 隔离优化器诊断通过；下一步定位端到端模型计算
 
 仓库在测量时 HEAD 20d573a143f5a585ffa1131832471e070a55091f，origin/cgq_transformers 为 e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（ahead/behind 115/0）；102 项既有 dirty/untracked 状态 SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211 未变。R22 绑定 R19/R21 相同 wheel、core、权重和 199 个参数形状，在 GPU2/cuda:0 对 Jittor 默认与显式 unfused AdamW 做 3 轮 × 每阶段 10 个热样本。只测 optimizer step：默认 median 4.212 ms，unfused 33.596 ms，profile kernel 数 7 对 197；15 步后 max absolute difference 8.15e-10，allclose 通过。attempt-02 独立 audit 通过，attempt-01 汇总器失败的六阶段原件保留。
