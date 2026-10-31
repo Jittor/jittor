@@ -3693,3 +3693,14 @@ This result covers only a tiny FP32 forward copy, one reverse gradient, and plac
 ## 2026-10-30 Day4–5 window probe
 
 Five read-only samples at approximately five-second intervals from 11:21:28 to 11:21:49 UTC showed the designated UUID `GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5` at 100% utilization in all samples, with 17,993–18,711 MiB free. No timing workload was launched. This is a short readiness snapshot only; the formal paired performance and memory gate remains open.
+
+
+## 2026-11-01 R13h CUDA storage-alias functional recheck
+
+为复核 R13 旧版候选在 CUDA Tensor(native_var) 读回后执行 zero_() 时报告的 data pointer 变化，本轮对较新的 R13e source overlay 做了一个定点回归。没有修改源码或主工作区文件。候选位于 /data6/cgq/jittor-lab/worktrees/torch-compat-fill-zero-runtime-grad-r12-cuda-init-20261101，HEAD 765f1791f3b00f9129fb3ec6342dadf2c9dc2dbe，dirty/untracked 124 项，状态 SHA-256 cb95e7ad5f0320205ac3b10d7cad00ad4ee258a32c5dbc012247bfc69f40d1c9。R13e source manifest SHA-256 为 45fa417682359bcaec12d904c2569eb04651e055a5aa2b64a87ea63ff4b41121，2807 项逐项核对、0 mismatch；source fingerprint 1167ac8ccc2e731fed7b16842c9643b16a60106b97a3fda27224e597971421ce。
+
+在 A800 UUID GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068 上将其映射为 cuda:0，只运行 test_cuda_native_var_constructor_alias_keeps_storage_after_readback。结果 1 passed、0 skipped、fallback_count 0；pytest 0.26s，真实 CUDA 启用。GPU1 测试前后均为约 1 MiB used、0% util，运行进程已退出。成功 attempt-04 位于 /data6/cgq/jittor-lab/_state/release-day23/20261101-r13h-native-var-alias-gpu1-r1-prepared/attempt-04-warm-cache-correct-cwd/：result SHA-256 4f1fc7979712f6119b1b5318dd32a83ae2143d83de49aaa60ca0b6ef20e2a614，worker log SHA-256 0b33f9f2abc1f7908c26deaecc16481d274cf892a5c1937e10e02172c3f1f361，测试文件 SHA-256 09504e5e907afe0eebaa83aba31d7f08f5e90c6e46e6f7f5defd6e5888ed1cce。
+
+同一包保留了前三次准备尝试：attempt-01 只触发隔离 cache 的 jit_utils 首次重建；attempt-02 因复制 JITTOR_HOME 改变构建身份，开始 228 项 Jittor core 冷编译后在 37/228 处主动终止；attempt-03 运行目录不对，pytest 未收集测试。三次都没有形成测试结果，原始日志/退出码保留；有效功能结果只有 attempt-04。旧 source fingerprint 760f5251f5761fb32abc04981a8deb00332030be88ca3757bad057b7f96938f4 上的 R13 失败原件未覆盖。较新候选通过这个选择器说明旧失败在当前 overlay 下不再复现，但没有证明根因，也没有证明变更已经进入 /home/cgq/jittor 主树或覆盖其他 storage/view 情况。
+
+Day4–5 性能/显存门仍未通过。2026-11-01 07:51 CST，GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 为 Default 模式、约 8651 MiB used、78% util，PID 2279286 属于其他任务；A800 节点 X12DPG-OA6 为 DOWN。没有启动占卡程序，也没有声称 GPU2 独占；GPU1 的正确性运行不能替代正式性能窗口。仍需系统级 GPU reservation/独占分配后，按匹配配置完成至少三轮交替、每轮至少十个热态样本，并报告加载、首步、热态、median/p95/离散度及 allocator/NVML 峰值。整体 Day2–5 release gate 保持未完成。

@@ -2502,3 +2502,12 @@ The r1 isolated worktree preflight failure is preserved: the worktree omitted th
 A read-only CUDA API introspection through the shim-enabled environment unexpectedly invoked Jittor startup JIT. Process group 2707825 and its compiler children were verified against the exact command and dedicated session, then terminated; no files were removed. Preserve `/home/cgq/.cache/jittor/torch-shim/cgq-92dab87ea3805bdf/jittor_cache` as a potentially partial, unverified build artifact. It is not a validated core, test result, or performance result.
 
 A five-sample read-only window probe from 11:21:28 to 11:21:49 UTC found the Day4–5 target UUID `GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5` at 100% utilization throughout and 17,993–18,711 MiB free. No measurement workload started. The existing performance gate remains open.
+
+
+## 2026-11-01 handoff: R13h storage alias and GPU window
+
+R13e candidate manifest was revalidated over all 2807 candidate files with no mismatch. A fresh one-selector run on idle GPU1 passed the CUDA Tensor(native_var) readback/zero_() storage-alias regression (1 passed, 0 skipped, fallback 0), bound to source fingerprint 1167ac8ccc2e731fed7b16842c9643b16a60106b97a3fda27224e597971421ce. The old R13 failure under fingerprint 760f... and R13h setup-only attempts 01–03 remain preserved; only attempt-04 is a test result. This evidence belongs to the isolated R12/R13 candidate and does not mean main has absorbed it.
+
+At handoff, /home/cgq/jittor remains on HEAD 743a1de500c13427c7dee8ad4feb0698325a055e, origin e5cffe1ae60c418f53c5bb1cdca9182577fd2b81, 146 commits ahead and 102 pre-existing dirty/untracked paths (pre-doc-update status SHA-256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211). No source or experiment files were staged. The R13h process has exited and GPU1 is idle. GPU2 is still shared by PID 2279286; X12DPG-OA6 is DOWN, so no stable system-level exclusive window exists. / has 69 GiB free at 99% used and /data6 has 5.5 TiB free. No push was made.
+
+Next: keep Day4–5 timing and memory conclusions open until a system allocation can guarantee the same GPU across three alternating rounds; continue independent Day2–5 correctness and packaging gates meanwhile. Do not rerun completed R14 training, preflight, or previous successful resume evidence. Preserve all existing main-tree dirt and historical failure packages.

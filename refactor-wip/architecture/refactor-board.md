@@ -3425,3 +3425,10 @@ and r12 test overlay. Main df45 BERT full100 and fresh-process 50-to-100
 continuation completed, but 603 final state tensors differ from the continuous
 run. See the dated Day2–5 report for identities, metrics and limitations;
 this entry does not assert full release acceptance.
+
+
+### 2026-11-01 R13 CUDA storage-alias recheck
+
+- 在隔离 R12 候选的当前 R13e overlay 上，用真实 CUDA cuda:0 重测此前失败的 Tensor(native_var) 读回后别名用例：1 passed、0 skipped、fallback 0。GPU1 UUID GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068 运行前后均为空闲；该结果只验证一个功能语义，不是性能/显存结论，也不代表主树已合入。
+- 源指纹 1167ac8ccc2e731fed7b16842c9643b16a60106b97a3fda27224e597971421ce，候选 HEAD 765f1791f3b00f9129fb3ec6342dadf2c9dc2dbe；R13e manifest 覆盖 2807 项，复核 0 mismatch。早期指纹 760f... 的失败原件保留；新指纹的通过不能单独确定旧失败根因。
+- Day4–5 仍未验收：GPU2 继续由其他进程使用，A800 节点 X12DPG-OA6 为 DOWN；普通 CUDA holder 不能提供独占保证。完整结果与尝试记录见 Day2–5 报告和 R13h evidence package。
