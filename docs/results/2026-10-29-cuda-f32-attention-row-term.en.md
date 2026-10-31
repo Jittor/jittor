@@ -151,6 +151,13 @@ agree flags (9.5e-02 and 1.2e-01, the harness marks anything above 5e-2):
 those rows compare generated token ids, where greedy decoding of random weights
 flips occasional near-ties; both runtimes produce the full 136 tokens.
 
+The relay and linear-fast-path admission fixes (`81b1ffda8`, `b677f2358`) only
+change graphs that used to abort, so the matrix above still applies; the four
+conv-heavy rows were re-measured paired on an idle card at `resnet50_train`
+0.93x, `sd15_unet_train` 0.64x, `vit_b16_train` 0.89x and `ddpm_unet_train`
+0.97x (1.15x in the same batch, 0.97x when re-run alone: PyTorch drifted
+between 67 and 76 ms).
+
 ## Reproduction
 
 ```bash
