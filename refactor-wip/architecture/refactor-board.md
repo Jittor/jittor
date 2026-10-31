@@ -1,3 +1,14 @@
+## 2026-10-31 Torch `Tensor(existing)` storage alias 修复，CPU core 门通过；Day2–5 仍开放
+
+在服务器 `/home/cgq/jittor` 现有工作区继续，HEAD `ef21322dc9b38c89c2cbb07854ba65e8c442c025`，`origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，分支相对 origin ahead/behind `98/0`。工作区原有 103 项 dirty/untracked 保留；源码增量仅改兼容前端的一处构造分支和测试说明，状态只更新三份指定文档；未 clone、reset、stash、clean 或 push。
+
+定位并修复 `torch.Tensor(existing_var)` 存储不别名：旧实现先 clone 再写入 `_set_view_of` 元数据，指针仍不同；未显式指定 device 时现在用同形状 `view` 共享存储，并保留源 owner/path。显式 device 仍走复制路径。受维护 Torch CPU core runner 全量回归为 230 collected/executed，227 passed、3 skipped、0 failed；日志 SHA256 `cb9ddc6fcece3d43f8f7fb9474c2695168caebf45252d0e60fa72ffa2bae1a1e`。文件 SHA256：`frontend.py=d684c73e7f847f2b94b96502b06d47902dd585a7a70ffca927e83bc6b1e29e81`，`test_independent_frontend.py=bcadc625554d15360da08fc657197d436df47cd7319d2d6271d65dd9d0f5106a`。该改动只关闭 storage alias 缺陷；`requires_grad=False` 默认仍无法保留 PyTorch 的非叶图关系，KI-COMPAT-004 仍开放。
+
+CUDA 只做了限额探针准备和启动诊断，没有得到 CUDA alias 通过证据。attempt-01 在张量操作前因 `jit_utils` 刚重建、当前进程不能 reload 而退出；attempt-02 在预检阶段因相对 untracked 路径从错误 cwd 解析而中止；attempt-03 进入 import 后被 `JITTOR_NO_BUILD=1` 拒绝，原因是该配置的 `jittor_core` build stamp 与当前源码不匹配，未执行任何张量操作。三个原件均保存在 `/data6/cgq/jittor-lab/_state/test-suite/torch/tensor-alias-cuda-20261031/`；未做 cold bootstrap。探针期间 GPU2 约 94% 利用率、空闲约 51,296 MiB，属于共享负载，不用于性能或显存结论。
+
+正式 Day4–5 仍须冻结匹配源码/模型/权重/数据/精度/shape/config，在无无关进程且稳定低负载的设备上进行至少 3 轮 JT/PT 交替比较、每轮每侧至少 10 个热态样本，报告 load/首步/热态 latency、median/p95/离散度、allocator allocated/reserved 与 NVML 峰值，并给出最大容量/OOM 边界。更广 Day2–5 仍要完成支持范围 API/device/dtype/layout/autograd/fallback 证据、模型与恢复状态门、共同 held-out generation 判据、checkpoint 实际重算及显存收益、DDP/安装/序列化边界。已有 R14 训练与续训是配置绑定的正向证据，不替代上述门；overall release 仍为 **Not complete**。详见 [Day2–5 结果](../results/2026-10-26-torch-compat-release-day2-5.md)。
+
+
 # 整改看板
 
 ## 2026-10-31 Torch CPU core 门复核有 1 项失败；Day2–5 仍开放

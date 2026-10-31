@@ -1,3 +1,12 @@
+## 2026-10-31 当前接续：Torch storage alias CPU 门通过；CUDA 与 Day2–5 release 继续开放
+
+继续使用服务器 `/home/cgq/jittor` 原工作区。当前 HEAD `ef21322dc9b38c89c2cbb07854ba65e8c442c025`，origin `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，分支 ahead/behind `98/0`。既有 103 项 dirty/untracked 保留；仅本任务源码增量与三份状态文档纳入此次整理，不 push。
+
+已修复 `torch.Tensor(existing_var)` 未共享 storage 的问题，维护 Torch CPU core runner 230 collected/executed、227 passed、3 skipped、0 failed。默认 autograd 图关系仍有 KI-COMPAT-004 缺口。CUDA 定向尝试 attempt-01/02/03 均未到实际张量检查（首次 utility reload、第二次预检 cwd 错误、第三次 no-build core stamp 不匹配）；原始证据保存在 `/data6/cgq/jittor-lab/_state/test-suite/torch/tensor-alias-cuda-20261031/`，本轮未编译新 CUDA core。GPU 共享负载下不开展正式性能/显存测量。
+
+接续优先项仍是实际功能门：在现有已构建且源码身份明确的 CUDA core 可用时补做 alias/device/fallback 检查；随后继续 Day2–5 支持范围 API 与训练/恢复/任务质量、checkpoint 模型重算和显存、默认 DDP、安装/打包、序列化互操作边界。Day4–5 性能/容量门必须使用匹配配置和合格稳定窗口，至少三轮交替、每轮至少十个热态样本，报告 load/first/hot、median/p95/离散度及 allocator/NVML 峰值和 OOM 边界。overall release 仍 **Not complete**。
+
+
 # 2026-10-21 工作区快照与本机接续交接
 
 ## 2026-10-31 补充：Torch CPU core gate 有一项既有测试失败；正式性能门仍不具备条件

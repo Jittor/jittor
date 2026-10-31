@@ -242,8 +242,16 @@ class _TensorMeta(type):
             elif isinstance(args[0], (backend.NanoVector, _TorchSize)):
                 result = backend.empty(tuple(args[0]), dtype=dtype)
             elif isinstance(args[0], backend.Var):
-                result = backend.Var.clone(args[0])
-                result._set_view_of(args[0], Ellipsis)
+                if device is None:
+                    # Tensor(existing) aliases the source storage. A clone
+                    # followed by _set_view_of only records write-through
+                    # metadata; it does not make the allocation an alias.
+                    result = args[0].view(tuple(args[0].shape))
+                    result._torch_data_owner = args[0]
+                    result._torch_data_path = ()
+                else:
+                    result = backend.Var.clone(args[0])
+                    result._set_view_of(args[0], Ellipsis)
                 result.requires_grad = requires_grad
                 return result
             else:
