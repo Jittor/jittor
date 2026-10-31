@@ -1,5 +1,16 @@
 # 2026-10-21 工作区快照与本机接续交接
 
+## 2026-10-31 最新续接：seed821 Qwen held-out generation JT/PT 对照完成
+
+评测在 /home/cgq/jittor 原工作区完成，HEAD fcebf8748b1e7a8667f96313a0b42bd226cfd9ab，源码 fingerprint 9ebffa322d64e4bbad6a4eb6959c3756410a5cccfcaee6bf661571c1a074b27f；评测前后 source inventory/status hash 不变。fetch 后 origin 为 e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 93/0。评测前保留 103 项既有 dirty/untracked，index 为空；无 reset、stash、clean、clone 或 push。
+
+Qwen3-0.6B LoRA seed821 JT/PT 最终 checkpoint 在共同 17 条 held-out fixture 上完成 CUDA greedy generation；训练数据/config 关键字段一致，base/训练/eval fixture SHA 一致，adapter config 只在 target_modules 数组顺序不同，语义归一后相同。两端 GPU2 cuda:0、FP32 inference、总 token 96。PT EM/F1/ROUGE-L 为 0 / 0.208718 / 0.149341；JT 为 0 / 0.204534 / 0.148379；原始输出 14/17 相同。Jittor fallback 0→0。仅支持当前 checkpoint 和 17 个样本的有界对照，不作为整体 generation gate PASS。完整证据：/data6/cgq/jittor-lab/_state/release-day23/20261030-main-qwen-checkpoint-recompute-practical-r1/evidence/heldout-generation-r1/paired-metrics.json。
+
+attempt-01 因自动扫描构建外部 Motion324 扩展时缺少 omegaconf 在模型加载前失败；attempt-02 300 秒超时，8/17；attempt-03 使用 JITTOR_TORCH_SKIP_EXT_BUILD=1 后全量通过，前提是此 eager-attention 推理路径不依赖被跳过扩展。所有失败和 partial 产物保留。GPU 仍共享，评测后约 30% 利用率、59,941 MiB 空闲，未作任何正式性能或显存结论。
+
+下一步仍先等待 Day4–5 正式设备窗口，再做匹配 workload 的三轮以上 JT/PT 交替、每侧每轮至少十个热态样本、延迟/吞吐分位数和 allocator/NVML 峰值及容量/OOM 边界。广泛 Day2–5 继续完成支持范围 API/autograd/fallback、默认 DDP 终审、模型级 checkpoint 显存收益、安装/打包和跨框架序列化边界；overall release 保持 Not complete。
+
+
 ## 2026-10-31 最新续接：CUDA LlamaDecoderLayer checkpoint 重算与梯度通过窄验收
 
 在当前 Jittor CUDA 构建上，LlamaDecoderLayer 的 tiny config 单层测试将输入及 7 组 Linear 参数实际放在 GPU2/cuda:0（UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0`），checkpoint 前向与 backward 重算调用 `[1,0]`，输入/q_proj.weight 梯度对照未 checkpoint 基线通过，fallback=0。attempt-04 为 1 passed/0 skipped；外置 wrapper 只放宽 exact 输出比较，实际 max_abs=0，梯度容差断言仍使用原值。attempt-03 原 strict 断言以 max_abs `1.1920929e-7` 失败并保留，attempt-01/02 也保留；不改写 strict FAIL。

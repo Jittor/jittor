@@ -1,5 +1,34 @@
 # Torch Compatibility Release Acceptance: 2026-10-26 Day 2–5 Continuation
 
+## 2026-10-31 seed821 Qwen3-0.6B held-out generation JT/PT 对照
+
+### 源码、checkpoint 与协议
+
+在 /home/cgq/jittor 既有工作区继续，没有 clone。评测源码 HEAD 为 fcebf8748b1e7a8667f96313a0b42bd226cfd9ab，branch integrate/cgq-transformers-native-multicard-target；fetch 后 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 93/0。评测前后 inventory fingerprint 均为 9ebffa322d64e4bbad6a4eb6959c3756410a5cccfcaee6bf661571c1a074b27f，HEAD、源码清单与 status hash 一致；source snapshot 在 evidence/heldout-generation-r1/source-before.json 和 source-after.json。
+
+对照使用当前源码 Qwen3-0.6B LoRA seed821 两 epoch最终 checkpoint，以及已归档 PyTorch seed821 两 epoch最终 checkpoint；训练报告中 seed、初始化、train/eval SHA、样本数、epoch、batch size、gradient accumulation、mixed precision、num_workers、gradient checkpointing、max_grad_norm、更新数、sampler 与 fixed-order 字段全部相等。base config SHA 660db3b7…、train fixture SHA 3836597b…、eval fixture SHA d8318478… 相同。adapter model 各自 SHA 分别为 JT adea9cd2…、PT d48da15c…；adapter config 原始 SHA 不同，但 JSON 仅 target_modules 数组顺序不同（JT [v_proj,q_proj]，PT [q_proj,v_proj]），排序归一后语义一致。完整字段与哈希记于 paired-metrics.json。
+
+固定协议为共同 17 条 held-out eval，逐条 instruction/optional input prompt、target 不入 prompt、greedy use_cache=True、FP32 inference、总 token 上限 96；两端 prompt token 长度与 generation budget 相同，且 train/eval IDs 不相交。使用 Unicode NFKC/lower/Unicode word tokenization，报告 unweighted normalized exact match、word token F1 与 ROUGE-L 均值。GPU2 的 UUID 为 GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0，两端进程内均为 cuda:0，设备名称 NVIDIA A800 80GB PCIe。
+
+### 结果
+
+| Runtime | 完成样本 | normalized EM | word token F1 | ROUGE-L | 平均生成 token |
+|---|---:|---:|---:|---:|---:|
+| PyTorch 2.6.0+cu124 | 17/17 | 0.000000 | 0.208718 | 0.149341 | 79.823529 |
+| Jittor 1.3.11.0 Torch shim | 17/17 | 0.000000 | 0.204534 | 0.148379 | 79.823529 |
+| JT − PT | — | 0.000000 | −0.004184 | −0.000962 | 0.000000 |
+
+原始 prediction 文本 14/17 完全相同。Jittor fallback 计数从 0 到 0，全部参数实际在 cuda:0。17 条上未观察到 EM 命中；F1/ROUGE-L 仅作小样本对照，没有预先定义整体发布阈值、置信区间或多 seed 评估，因此不宣告总体 generation quality PASS。该证据仅绑定此源码、seed、配置、adapter 和固定 fixture。
+
+### 失败尝试与边界
+
+PT 全量结果在 pt/。Jittor attempt-01 在模型初始化前被 shim 自动扩展扫描触发的外部 /home/cgq/Motion324 重建失败，原因是其 setup.py 环境缺少 omegaconf；失败日志和 identity 保留。attempt-02 设跳过扩展构建后在 300 秒限额退出 124，保留 8/17 预测。attempt-03 在独立 jt-attempt03/ 使用 JITTOR_TORCH_SKIP_EXT_BUILD=1 并完成 17/17，退出码 0、fallback 0。该配置关闭本地扩展构建，但本任务使用 eager attention 且不依赖这些扩展，故只对本推理路径有效，不证明扩展兼容性。
+
+完整协议、运行脚本、原始日志、GPU/进程快照、predictions、reports、配对结果和尝试目录均保存在 /data6/cgq/jittor-lab/_state/release-day23/20261030-main-qwen-checkpoint-recompute-practical-r1/evidence/heldout-generation-r1/。该目录的数据只用于功能/任务指标；共享负载下的运行耗时、GPU 利用率与显存不纳入性能/显存验收。评测后 GPU2 约 30% 利用率、空闲 59,941 MiB；无本任务 generation 进程或 Jittor cache holder。根分区可用约 33 GiB，/data6 可用约 5.5 TiB。
+
+Day4–5 正式门仍要求合格稳定设备窗口（利用率 ≤10%、空闲 ≥60,000 MiB、无无关计算 PID）、匹配冻结配置、至少三轮交替 JT/PT 且每轮每侧至少十个热态样本；分别报告加载/首步/热态 latency 与 throughput 的 median、p95、离散度、allocator allocated/reserved 和 NVML 峰值，并测独立最大 batch/sequence 或 OOM 边界。更广发布门还包括声明范围 API/device/dtype/layout/edge/autograd/fallback、默认 DDP 最终 gate、模型级 checkpoint recompute 梯度和真实显存收益、安装/打包检查与 JT portable-pickle 对 stock PyTorch 的互操作边界。实用训练、JT 同框架 resume、此 held-out 小样本指标均不能替代这些门；overall release 仍为 Not complete。
+
+
 ## 2026-10-31 当前源码 Qwen 全量训练与新进程续训终审
 
 本轮继续使用服务器 /home/cgq/jittor 原工作区，没有 clone、reset、stash 或 clean。实验开始时 HEAD 为 0f9fcab760199be9eb696806fb2fb88ea9951f6c，分支 integrate/cgq-transformers-native-multicard-target；fetch 后 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 91/0。开始时 103 项既有 dirty/untracked 保留、index 为空。本轮没有改源码/测试；仅在收尾更新本状态记录规定的三份文档，未 push。当前源码 fingerprint 前后均为 de5a3c9a283bc4c4a0b4d4602dee409615a006d90bb97822474a929f9197d099。

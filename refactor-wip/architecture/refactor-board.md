@@ -1,5 +1,18 @@
 # 整改看板
 
+## 2026-10-31 seed821 Qwen held-out generation JT/PT 小样本对照
+
+当前源码 HEAD fcebf8748b1e7a8667f96313a0b42bd226cfd9ab，评测前后源码 inventory fingerprint 均为 9ebffa322d64e4bbad6a4eb6959c3756410a5cccfcaee6bf661571c1a074b27f；评测期间 HEAD、源码清单和 git status hash 均未变化。当前树在本轮开始时保留 103 项既有 dirty/untracked，index 为空；fetch 后 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 93/0。
+
+完成同 seed821、匹配训练配置的 Qwen3-0.6B LoRA 最终 checkpoint 在共同 17 条 held-out fixture 上 greedy generation 对照。PT 与 JT 的 seed、训练/评估 fixture SHA、样本数、两 epoch、batch/accumulation、BF16 训练配置、102 次更新、初始化及 sampler/fixed-order 报告字段一致；adapter config 的原始 SHA 不同只因 target_modules 数组顺序不同，排序归一后语义一致。评估均在 GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0、逻辑 cuda:0，FP32 inference、eager attention、greedy、use_cache=True、总 token 上限 96；train/eval IDs 不相交，prompt token 长度与 generation budget 配对一致。
+
+结果：PT normalized EM/F1/ROUGE-L = 0 / 0.208718 / 0.149341；JT = 0 / 0.204534 / 0.148379；JT-PT 平均差 0 / -0.004184 / -0.000962，17 条中 14 条原始生成文本完全一致。JT fallback 计数 0→0，17 条全部完成。结果只说明此源码、seed、checkpoint 与 17 条样本上的有界任务对照，不设为整体 generation quality PASS，也不外推泛化。证据和 attempt 原件在 /data6/cgq/jittor-lab/_state/release-day23/20261030-main-qwen-checkpoint-recompute-practical-r1/evidence/heldout-generation-r1/。
+
+Jittor attempt-01 的扩展自动构建失败（外部 /home/cgq/Motion324/setup.py 缺 omegaconf）；attempt-02 保留 300 秒超时原件（8/17）；attempt-03 在独立目录及 JITTOR_TORCH_SKIP_EXT_BUILD=1 下完成全部 17 条。该选项跳过全部本地扩展构建；本评估使用 eager attention 且不调用这些扩展，fallback 仍为 0。共享 GPU 下的时间和显存数据不用于正式验收。
+
+Day4–5 仍未通过：评测后 GPU2 利用率约 30%、空闲 59,941 MiB，仍是共享负载，不满足正式窗口的利用率 ≤10%、空闲 ≥60,000 MiB、无无关计算 PID。正式结论仍需冻结匹配 workload，至少三轮 JT/PT 交替、每轮每侧至少十个热态样本，报告 load/首步/热态 latency 与 throughput 的 median、p95、离散度、allocator allocated/reserved、NVML 峰值及独立最大容量/OOM 边界。更广 Day2–5 仍需闭合声明支持范围 API/device/dtype/layout/edge/autograd/fallback 矩阵、默认 DDP 终审、模型级 checkpoint recompute/显存收益、安装/打包检查和跨框架序列化边界；整体 release 保持 Not complete。
+
+
 ## 2026-10-31 CUDA LlamaDecoderLayer activation checkpoint 重算窄验收
 
 在当前兼容实现上补做真实 CUDA 单层验证。LlamaDecoderLayer 输入与 7 组 Linear 参数均实际位于 GPU2/cuda:0（UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0）；前向/反向中的 checkpoint 调用序列为 [1,0]，输入及 q_proj.weight 梯度对照未 checkpoint 基线通过，fallback 增量 0。证据位于 /data6/cgq/jittor-lab/_state/release-day23/20261030-main-qwen-checkpoint-recompute-practical-r1/evidence/cuda-checkpoint-llama-attempt04/。
