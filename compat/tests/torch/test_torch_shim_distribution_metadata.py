@@ -34,6 +34,14 @@ from _helpers.child_process import TORCH_MODE_VARIABLES, run_python_child
 
 _RESOURCES = Path(__file__).resolve().parents[3] / "compat" / "shim" / "resources"
 
+# The filter below works per *path entry*: a site directory holding any
+# `torch*.dist-info` is dropped whole. That is right for a reference PyTorch
+# installed into its own site directory -- the oracle environment -- but a venv
+# that also installs Jittor's shim there (the lab provisioned one that way)
+# loses every package on that path too, and the child then fails on the first
+# missing dependency (`tqdm`) rather than answering the question. The three
+# cases that run this way are only meaningful where a reference PyTorch keeps a
+# site directory of its own.
 _DROP_REFERENCE_TORCH = """
 import os as _os
 import sys as _sys
