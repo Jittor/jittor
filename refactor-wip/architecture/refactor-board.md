@@ -1,5 +1,11 @@
 # 整改看板
 
+## 2026-10-31 Torch CPU core 门复核有 1 项失败；Day2–5 仍开放
+
+在 /home/cgq/jittor 原工作区运行维护 Torch CPU core runner，HEAD 4c2909d45516db60aa45f6b1513dd3bf53a28c24，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 97/0。保留 103 项既有 dirty/untracked、空 index；未改源码或既有实验。结果 230 collected/executed，226 passed、3 skipped、1 failed；失败在既有 dirty 的 test_independent_frontend.py 中 torch.Tensor(original) 的 data_ptr alias 断言。日志 SHA256 b7f8820f1c28948cb5ca9398b5ff31b8c6e571ce95b3eb532a4bc22df3078fa2，详细源码身份、runner/cache 和 failure 定位见[Day2–5 结果](../results/2026-10-26-torch-compat-release-day2-5.md)。
+
+GPU2/4 测后约 94%/96% 利用率、空闲 51,296/51,286 MiB，正式 Day4–5 低负载/显存准入不满足。该 CPU 功能门也因一项失败未通过。Day4–5 三轮 JT/PT 配对热态性能、分位数、allocator/NVML 峰值及容量边界仍未完成；更广 API/device/dtype/autograd/fallback、模型质量阈值、模型级 activation-checkpoint 显存、分布式支持范围、checkpoint/序列化和干净安装门继续开放。overall release 保持 Not complete。
+
 ## 2026-10-31 R20 Accelerate DDP 结构化状态复核通过；整体发布仍开放
 
 在 /home/cgq/jittor 原工作区对 HEAD b45bc7eb9523f530dfc4973ce9b2eec55ce5d7b3 做一次有界复核；origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 96/0。复核开始时保留 103 项既有 dirty/untracked，index 为空；本次只新增状态文档，不改源码。未 clone、reset、stash、clean 或 push。

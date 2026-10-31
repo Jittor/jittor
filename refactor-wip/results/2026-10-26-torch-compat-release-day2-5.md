@@ -1,5 +1,30 @@
 # Torch Compatibility Release Acceptance: 2026-10-26 Day 2–5 Continuation
 
+## 2026-10-31 Torch CPU core 门复核：226 passed、1 failed；Day2–5 仍开放
+
+继续在服务器 /home/cgq/jittor 原工作区，没有 clone。测试时 HEAD 为 4c2909d45516db60aa45f6b1513dd3bf53a28c24，branch 为 integrate/cgq-transformers-native-multicard-target；origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind=97/0。测试前 index 为空，103 项既有 dirty/untracked 保留，未改源码、未动其他实验记录。测试启动时工作区绑定值：porcelain-v2 SHA256 9767ba86d66c728d7f051b4e50c9b10c96645e681f3c307b6a32870238ff14e9，tracked diff SHA256 a26ead1cc3bbf0132170ef75cd79bbef0636aa31e0c96e39679ad36a7422f892，untracked manifest SHA256 2906c366d5a3686397dfd496468c523b365f3bac83931a5b10b4bcded631978f。测试源码 compat/torch/installers/tensor/__init__.py SHA256 0b0fe230bfb937e5d6b0ed7fb0e80232e3190df7eb0bd75270243defd28e5aff；既有 dirty 测试 compat/tests/torch/test_independent_frontend.py SHA256 6b028c3f1e50faa97b04128b07d17a19dbd156307ca35eb57e50b047647a60f6。
+
+维护 runner 命令：JITTOR_LAB_ROOT=/data6/cgq/jittor-lab /home/cgq/anaconda3/bin/python tools/run_test_suite.py --session torch --tier core --backend cpu --jobs 0。复用本轮新建的隔离 JITTOR_HOME=/data6/cgq/jittor-lab/_state/test-suite/torch/home 与其 CPU JIT cache；首个 cold warm-up 后，第二次同 cache 完整收尾，未再建第二套冷缓存。结果为 collected=230、executed=230、226 passed、3 skipped（1 accelerator、2 torch）、1 failed，pytest 25.86s。唯一失败为 test_independent_tensor_installation_preserves_native_type；子进程 <string>:431 对应既有测试第 473 行 assert alias.data_ptr() == original.data_ptr()，即 torch.Tensor(original) 的 storage pointer 与 original 不一致。runner 未提供 fallback 计数，故此轮不推断 fallback=0。完整日志 /data6/cgq/jittor-lab/_state/test-suite/torch/core-cpu-recovery-20261031.log，SHA256 b7f8820f1c28948cb5ca9398b5ff31b8c6e571ce95b3eb532a4bc22df3078fa2。第一次 core 尝试因首轮 JIT 编译超出短时诊断窗口而中断；partial output 已出现 F 但没有 traceback，不能单独定性，后续同 cache 收尾日志才作为结果。测试完成后 runner/pytest/编译进程均退出；lock 文件存在但无持有者，隔离 cache 保留。服务器根分区可用 33 GiB、/data6 可用 5.5 TiB。
+
+测试后共享 GPU 快照：GPU2 利用率 94%、空闲 51,296 MiB；GPU4 利用率 96%、空闲 51,286 MiB。两卡均不满足正式 Day4–5 窗口要求（利用率 ≤10%、空闲显存 ≥60,000 MiB、无无关计算进程），不得用本轮或旧共享负载测量给出性能/显存结论。此前 Qwen 两 epoch/新进程续训、17 条 held-out generation、LlamaDecoderLayer 单层实际重算、双卡 no_sync 窄路径均保留各自有限范围；不能替代下列验收。
+
+### Day4–5 正式性能与显存验收待办
+
+1. 先等目标 GPU 满足低负载和显存准入；记录 GPU 型号/UUID、驱动/CUDA、时钟/功耗、后台 PID、可用显存、CPU/NUMA 与数据盘状态。未满足即只记录诊断，不启动正式计时。
+2. 冻结一组真实且可复现的 JT/PT workload：源码与测试身份、模型/权重、tokenizer/数据与顺序、batch/sequence/worker、precision/TF32/AMP、optimizer、checkpoint 开关、编译和 cache 状态、warm-up 规则、同步点、计时边界全部匹配；报告 load/compile、模型初始化、首步、热态训练或推理分别耗时。
+3. 至少三轮 JT/PT 交替配对，每轮每侧至少十个热态样本。保留原始样本，按 latency 与 throughput 报 median、p95 和离散度，并记录异常值与轮间差异。共享 GPU 历史数据只能作诊断，不能并入正式样本。
+4. 每个配对窗口同时报告 Jittor allocator allocated/reserved 峰值和 NVML 进程/设备峰值，并说明统计口径；按相同配置单独测可运行的最大 batch/sequence 与 OOM 边界、失败后是否能恢复。不能用 allocator 数字代替 NVML，也不能用单个小模型显存值概括所有模型。
+5. 每次结果保存 raw log、工具版本、source/workload manifest、环境快照、fallback 计数与输出哈希；失败、超时和无效窗口都保留，并与正式通过结果分开。
+
+### 更广 Day2–5 发布门待办
+
+- 明确发布承诺的 Torch API 与版本范围，形成 CPU/CUDA × dtype/layout/device × shape/index/broadcast/in-place/edge/error 的支持矩阵；对每格提供正反例、误差阈值和 fallback 行为。任何未支持项要显式列出，不能静默回退。
+- 对声明支持的 autograd 行为闭合 forward/backward、leaf/view/alias、二次 backward、retain_graph、梯度清零、RNG/context、AMP、优化器/调度器状态与设备映射，并有梯度、更新量、fallback 证据；当前 CPU core 的 alias pointer 失败必须定位修复或明确收窄承诺后再放行。
+- 对每个声明模型以固定权重、数据和配置记录真实设备、更新次数、有限梯度、参数变化、loss 曲线及预先定义的 held-out 质量阈值。Qwen 当前结果是 seed/config/样本范围内的有界证据，17 条 generation 还没有 release 质量阈值。
+- Activation checkpoint 要在完整代表模型上证明 backward 发生 activation recompute、梯度与无 checkpoint 对照满足阈值，并给出同配置 allocator/NVML 峰值和可运行容量变化；LlamaDecoderLayer 单层重算通过尚不能证明模型级省显存。
+- DDP/no_sync、collective、精度、模型、长周期恢复与 FSDP 仅按实际发布声明覆盖；R20 双卡 no_sync 结构化报告属于窄路径。Checkpoint 需分别验收同 Jittor 新进程恢复的模型/optimizer/scheduler/RNG/样本顺序，以及承诺支持的跨框架格式；已有 stock PyTorch 不能读取 JT portable-pickle optimizer.pt 的失败应单列，不得混为一谈。
+- 对干净隔离环境完成声明安装方式、依赖解析、离线/在线导入、最小训练、保存/恢复和扩展构建 smoke；核对 package manifest/入口点，不依赖开发机残留 editable install。
+- 最终维护一张发布 gate 表：逐项 PASS/FAIL/NOT RUN/NOT SUPPORTED，绑定源码、配置、原始证据、哈希、owner 与剩余风险；所有阻塞发布的 FAIL/NOT RUN 处理完之前，Day2–5 和 overall release 继续 Not complete。
 
 ## 2026-10-31 R20 Accelerate DDP 结构化状态复核补充
 

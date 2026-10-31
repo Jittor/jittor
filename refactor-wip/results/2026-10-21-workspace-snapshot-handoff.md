@@ -1,5 +1,10 @@
 # 2026-10-21 工作区快照与本机接续交接
 
+## 2026-10-31 补充：Torch CPU core gate 有一项既有测试失败；正式性能门仍不具备条件
+
+本轮继续在 /home/cgq/jittor 原工作区；HEAD 4c2909d45516db60aa45f6b1513dd3bf53a28c24，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（97/0），103 项原 dirty/untracked 与空 index 保留。维护 CPU core runner 在隔离 cache 上完成 230/230，226 passed、3 skipped、1 failed；失败为既有 dirty test_independent_frontend.py 的 torch.Tensor(original) data_ptr alias 断言。完整日志 /data6/cgq/jittor-lab/_state/test-suite/torch/core-cpu-recovery-20261031.log，SHA256 b7f8820f1c28948cb5ca9398b5ff31b8c6e571ce95b3eb532a4bc22df3078fa2；本轮未记录 fallback 数。
+
+测试后 GPU2/4 利用率 94%/96%、空闲显存 51,296/51,286 MiB，仍不满足 Day4–5 正式准入。后续先处理或限定 alias 失败对应的支持声明；性能门需等待 ≤10% 利用率、≥60,000 MiB 空闲及无无关计算进程，再冻结匹配 JT/PT 配置做至少三轮交替、每轮每侧十个热态样本，并给 median/p95/离散度、load/首步/热态和 allocator/NVML 峰值、容量/OOM 边界。完整剩余发布门见[Day2–5 结果](2026-10-26-torch-compat-release-day2-5.md)顶部更新；overall release 仍 Not complete。
 
 ## 2026-10-31 补充：R20 DDP 参数与 optimizer 状态报告通过
 
