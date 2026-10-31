@@ -1,3 +1,64 @@
+## 2026-10-31 增量：R19 当前 wheel BERT 三轮性能/显存测量完成；时延诊断线未达
+
+### 源码身份与执行范围
+
+在 `/home/cgq/jittor` 的既有工作区继续，没有 clone。R19 测量绑定 HEAD `4258239260f2b94c901714cf23d116e9b514b820`、origin/cgq_transformers `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`（ahead/behind `112/0`）、source fingerprint `0382368b8754bf7a90e42382fd66b603ed2d3f323b5e8cda4820425871c7aa50`，以及开跑时 102 项既有 dirty/untracked 状态 SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`。index 当时为空。实验未改源码；状态文档以外的既有文件保持原状。
+
+主 wheel SHA256 `2e8f1a4418e3e9aee770843a6fd7d5471e3de12aaad75a8e8e78deee24baa3d9`，compat wheel SHA256 `fd7e84f639dba09f9d8293b9d255df09aa7190b890093e614c340cc47a7a7d5a`。PT 2.6.0+cu124、Jittor 1.3.11.0、Transformers 4.56.2；BERT B8/S256 FP32、AdamW、固定权重 SHA256 `86fa7113367fd0d231a76571ca1b73a1b24166af33558fee960636ce56337ed7`。A800 GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0`，由进程环境映射成逻辑设备 0。worker 使用非 editable 当前 wheel 安装目标及独立 Jittor cache。R19 私有 core 由 attempt-01 冷编译产物提供；attempt-01 的后置路径断言失败记录保留，attempt-02 使用 `JITTOR_NO_BUILD=1` 对相同 core 做无重编绑定核验。core SHA256 `050c612d6b29bb952c4debccc7eb791f1704e3c8a2040723cb352cbda789f986`，jit_utils_core SHA256 `8e18a1e6d5ac1c7e419f7959297b683e8539054559a4b3ef07d00aee126d10c1`。
+
+### 配对测量结果
+
+控制顺序为 `torch0 → jittor0 → torch1 → jittor1 → torch2 → jittor2`，共三轮交替，每阶段 16 warmup、10 热态样本、另做 3 次 allocator memory 与 3 次 CUDA attribution 更新。六个 worker 都自然退出，receipt 无 retry；每阶段验证 197 个梯度、201 个初始参数/缓冲映射、有限 loss 与参数更新，native dispatch 为 `cuda:0`，fallback delta=0。三组 fixture、权重、math 条件和初始 master 对照一致。GPU2 五样本 fresh admission 通过，六阶段 NVML load audit 通过；共享主机仍有其他 GPU 上的训练进程，release-review 记录 13 条，不把整台主机称作空闲。
+
+| runtime | 热态 median | 热态 p95 | 热态标准差 | 三轮 median（ms） |
+| --- | ---: | ---: | ---: | --- |
+| PyTorch | 107.903 ms | 122.248 ms | 12.360 ms | 107.903 / 95.588 / 121.286 |
+| Jittor | 150.630 ms | 162.549 ms | 18.441 ms | 150.848 / 154.648 / 150.368 |
+
+每轮 JT/PT median ratio 为 `1.3980 / 1.6179 / 1.2398`，pool median ratio `1.39597`。基于 plan 中沿用的 1.10 线，当前代表格时延未达标。各轮 p95（PT/JT，ms）为 `117.924/152.265、119.403/172.138、124.874/151.449`；各轮标准差（PT/JT，ms）为 `9.283/14.919、10.654/24.136、10.789/14.516`。按每批 8 个序列折算，median 吞吐约 PT `74.14`、JT `53.11` 序列/秒；这是由热态 median 推导值。
+
+启动和首步数据（轮次顺序与上表一致）：
+
+- PyTorch：pre-model setup `3.590/3.662/3.641 s`；model ready `3.166/3.224/3.294 s`；first update `0.454/0.444/0.444 s`。
+- Jittor：pre-model setup `2.769/3.100/2.811 s`；model ready `28.587/4.824/4.937 s`；first update `163.960/2.872/2.798 s`。
+
+`model ready` 包含 math probe、模型构建与 201 项 master/input readback，不是单独的模型加载时间；Jittor 第 0 轮的首步还包含该配置首次算子编译及验证开销，后两轮首步约 2.8 秒。完整分项留在六个 result.json 与 trace。
+
+| runtime | allocator allocated 峰值 | allocator reserved 峰值 | NVML 进程峰值 |
+| --- | ---: | ---: | ---: |
+| PyTorch | 3,343,963,136 B（3,189.05 MiB） | 3,657,433,088 B（3,488 MiB） | 3,996 MiB |
+| Jittor | 3,613,674,496 B（3,446.27 MiB） | 4,361,027,584 B（4,159 MiB） | 4,634 MiB |
+
+allocator allocated 峰值 JT/PT ratio `1.08066`，达到 1.10 代表格诊断线；reserved ratio `1.19237`、NVML ratio `1.15966`。这组小型代表格不能外推近容量显存行为，仍需单独做容量/OOM 边界。
+
+### 终审与保留记录
+
+cohort receipt 状态 `COMPLETE_REQUIRES_INDEPENDENT_AUDIT`，SHA256 `50c2f21ee62846783b7781854d3e59755e5ebcd91e20451b494511adbee6daf0`；summary SHA256 `180358119bc66f91ca30a80aa9820fbcac8cb47397dd6066ec253d875efb21a5`。独立审计 attempt-02 状态 `R19_EVIDENCE_AUDIT_PASS_PERFORMANCE_TIME_GATE_FAIL`，SHA256 `85a3a2774e1cc5c71fb11ef3e55f2edb8d7560422c4e4f58ccf679c460eb3090`：源码/wheel/core 身份、六阶段结果和 NVML 文件 hash、配对 fixture、汇总指标复算、protected/performance cache 完整性及锁释放、无残留 cohort worker 均通过。该状态表示证据审计通过、时延诊断线未过；Day4–5 整体仍未完成。
+
+post-run audit attempt-01 文件 `postrun-independent-audit.json` 保留；其检查曾把实际设备字段 `"0"` 误按非 CUDA 判断，把 Jittor advisory lock 元数据变化误认为缓存污染，并错误匹配 no-build receipt 状态，且存在 `passed=false` 与 status 字符串不一致。attempt-02 修正审计解释后只读重核相同原件，没有重跑训练/配对测量。冷编译路径断言失败、math-probe wrapper 的 bytes/text 写入失败及其终态读审原件也均留存，未覆盖。
+
+R19 主目录：`/data6/cgq/jittor-lab/_state/release-day23/20261031-current-wheel-bert-performance-r19-prepared/`。关键文件：`source-lock.json` SHA256 `d367c0aeb7564e9c41a4da18108e1adf62ab0a8308b2abac4d18682a3c3230f8`、`release-review.json` SHA256 `13eca86847f87175fbe8dcdfceb5b5e238cd26a974376590851e336749a38896`、`measurement-attempt/receipt.json`、`summary.json` 与 `postrun-independent-audit-attempt-02.json`。六阶段的 per-stage receipt、GPU/NVML telemetry、loss/gradient/profile traces 与 cache snapshots 均保留在 `measurement-attempt/`。
+
+### Day4–5 尚需完成
+
+1. 时延门要先做有界 profile/优化诊断：关注 hot update 计算与执行开销，核查首次算子编译、Jittor device wait/executor batch 和同步读取的影响；将潜在优化落到新 source identity 与新 wheel，再在相同 B8/S256 FP32 配置做至少三轮交替、每侧每轮至少十个热样本的复验。沿用当前阈值，不根据观察结果回调门槛。
+2. 独立执行 capacity/OOM 边界比较：分 runtime、模型/配置递增显存需求，记录最大稳定配置、allocator allocated/reserved、NVML 峰值、失败/释放行为及设备状态；当前 B8/S256 不能代表边界。
+3. 做 activation checkpoint on/off 匹配测量，记录实际 recompute 的功能状态、峰值 allocated/reserved/NVML、step median/p95 与启动/编译成本。已有 CUDA decoder backward recompute 功能用例通过，但没有显存节省/速度代价结论。
+4. Day4–5 汇总需要把上述测量绑定同一最终发布候选；当前 R19 可作为当前 wheel BERT 代表格基线，结果为时延未达线、allocator allocated 达线、capacity 缺测。
+
+### 更广 Day2–5 发布门
+
+- 固定最终源码与 wheel，完成声明范围的 API/operator、CPU/CUDA、dtype、layout/alias、forward/gradient、fallback/error 矩阵；按实际声明范围记录通过、跳过与不支持项。
+- 在统一候选上补 held-out 任务质量：固定验证集 loss 与适合模型的 accuracy/generation 指标，并与 PyTorch 的 seed 波动对照。R14 seed821 Qwen LoRA 的两 epoch train/eval loss 与新进程 resume 通过仍只支持该源码/配置；当前 wheel 没有 held-out generation 质量验收。历史 17 条生成探索分数绑定旧指纹，不能替代当前候选门。
+- 在当前候选完成 DDP 多 rank 训练、梯度/optimizer 状态跨 rank 对照、checkpoint 保存/新进程恢复及 sampler/scheduler 进度核验；既有 DDP owner CPU 与历史 no_sync 双卡窄用例不覆盖完整 Trainer session。
+- 区分 JT 内部序列化 round-trip 与 stock PyTorch 互操作。stock `torch.load` 读取 JT portable-pickle `optimizer.pt` 的失败继续保留；需决定声明格式、支持/拒绝行为和文档。
+- 完成 clean CPU/CUDA 安装、sdist/wheel 内容审计与 release checks；当前 R3 default wheel baseline diff 仍有 69 additions、2 removals、302 changed hashes（baseline 1,033 paths），需受控逐项迁移审查。
+- 结合现有 BF16 AdamW CPU 新进程小模型轨迹与 `exp_avg_sq` 单步状态严格比较差异，判断声明范围是否需行为修复或以任务轨迹证据收敛优先级；不以逐位相同替代实用功能门。
+
+Overall release 保持 **Not complete**。
+
+---
+
 ## 2026-10-31 增量：主 wheel CUDA 安装与 compat 前反向/更新通过
 
 本次修复和验证的源码输入为 /home/cgq/jittor HEAD 62208754d65007c5e0ae7a21a85ae73563353a9d，加上开工时 109 项既有 dirty/untracked（porcelain SHA256 a1448a696968aa28fd29d60e28223958afcb3b9012fa7cb9fdcf3556605c0fb8）；origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 111/0。R3 构建使用当前工作树隔离副本，没有重新 clone；R4 冒烟期间该工作区状态哈希前后不变。

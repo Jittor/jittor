@@ -1,3 +1,15 @@
+## 2026-10-31 续验：R19 当前 wheel BERT 三轮测量完成；时延诊断线未达
+
+本轮在既有 `/home/cgq/jittor` 工作区完成当前 wheel 的 Day4–5 BERT 代表格测量，没有重新 clone、改源码或重做 R14 训练。测量绑定 HEAD `4258239260f2b94c901714cf23d116e9b514b820`、source fingerprint `0382368b8754bf7a90e42382fd66b603ed2d3f323b5e8cda4820425871c7aa50`、主/compat wheel SHA256 `2e8f1a…baa3d9` / `fd7e84…7a7d5a`；当时 102 项既有 dirty/untracked、porcelain SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`，index 为空。origin `cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `112/0`。
+
+R19 在 A800 GPU2（UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0`，进程逻辑 CUDA 设备 0）使用非 editable 已安装 wheel、BERT B8/S256 FP32、相同权重/输入/AdamW 配置，按 `torch0,jittor0,torch1,jittor1,torch2,jittor2` 交替运行三轮；每阶段 16 warmup、10 热态样本，并各做三次独立 allocator profile 与 CUDA attribution。六阶段均自然完成、fallback 0、197 个梯度检查、201 个参数/缓冲初始值映射、参数实际更新；目标 GPU 的 admission 和逐阶段 NVML load audit 通过。
+
+代表格热态 JT/PT pooled median 为 `150.630/107.903 ms`，p95 为 `162.549/122.248 ms`，标准差为 `18.441/12.360 ms`，median ratio `1.39597`；每轮 ratio 为 `1.3980/1.6179/1.2398`。按 1.10 诊断线，时延未达标。allocator allocated 峰值 JT/PT 为 `3,613,674,496/3,343,963,136 bytes`，ratio `1.08066`；reserved 为 `4,361,027,584/3,657,433,088 bytes`，ratio `1.19237`；NVML 进程峰值为 `4634/3996 MiB`，ratio `1.15966`。当前数据支持这个 BERT 代表格的实测比较，不含容量/OOM 边界；完整细节及 artifact hash 见[Day2–5 结果报告](../results/2026-10-26-torch-compat-release-day2-5.md)。
+
+Day4–5 状态：当前候选的正式测量证据已采集并经独立终审核对，时延诊断线未通过；allocator allocated 代表格指标通过，reserved/NVML 更高；容量/OOM 和 activation-checkpoint on/off 显存/速度收益仍未测。下一步先围绕热态更新时延和显存开销做有界诊断/优化，任何源码变化都须以新 source/wheel 身份重做匹配三轮配对；另行测量容量边界。广泛 Day2–5 仍开放：声明范围 API/device/dtype/layout/autograd/fallback 矩阵、当前候选 held-out 任务指标、DDP Trainer 多 rank 保存续训、checkpoint recompute 的资源收益、跨框架序列化契约，以及旧 wheel baseline 差异审查。Overall release **Not complete**。
+
+---
+
 ## 2026-10-31 接续：主包发布边界修复；当前 wheel 的 CUDA 安装 smoke 通过
 
 在 /home/cgq/jittor 既有工作区继续。包构建/安装输入绑定 HEAD 62208754d65007c5e0ae7a21a85ae73563353a9d、origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（ahead/behind 111/0）。实验前 109 项 dirty/untracked、porcelain SHA256 a1448a696968aa28fd29d60e28223958afcb3b9012fa7cb9fdcf3556605c0fb8；index 当时为空。R3/R4 实验写入 /data6；CUDA smoke 前后源码状态哈希一致，没有修改或清理其他既有工作。

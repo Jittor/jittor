@@ -1,3 +1,21 @@
+## 2026-10-31 最新交接：R19 当前 wheel 配对性能证据已采集，热态时延线未达
+
+R19 在当前 `/home/cgq/jittor` HEAD `4258239260f2b94c901714cf23d116e9b514b820`、source fingerprint `0382368b8754bf7a90e42382fd66b603ed2d3f323b5e8cda4820425871c7aa50` 上完成当前主/compat wheel 的非 editable BERT B8/S256 FP32 测量。origin/cgq_transformers 为 `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `112/0`。测量时保留 102 项既有 dirty/untracked（状态 SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`）；当时 index 为空，未改源码，未 push。
+
+三轮 PT/JT 交替、每轮 16 warmup + 10 热样本、3 次 allocator 与 CUDA attribution update 均结束；实际 GPU2/CUDA 设备 0，fallback 0，梯度和参数更新检查通过，NVML stable-load audit 六阶段通过。独立终审确认 artifact 与 summary 完整，但 pooled hot median JT/PT 为 `150.630/107.903 ms`、ratio `1.39597`，未达 1.10 时延诊断线。allocator allocated peak ratio `1.08066`；reserved ratio `1.19237`、NVML peak ratio `1.15966`。该 BERT 代表格没有测容量/OOM，故 Day4–5 整体仍开放。
+
+主要 artifact：`/data6/cgq/jittor-lab/_state/release-day23/20261031-current-wheel-bert-performance-r19-prepared/`。执行 receipt SHA256 `50c2f21ee62846783b7781854d3e59755e5ebcd91e20451b494511adbee6daf0`；summary SHA256 `180358119bc66f91ca30a80aa9820fbcac8cb47397dd6066ec253d875efb21a5`；终审 SHA256 `85a3a2774e1cc5c71fb11ef3e55f2edb8d7560422c4e4f58ccf679c460eb3090`。终审审计通过与性能时延门失败是两个结论。
+
+接手后优先顺序：
+
+1. 基于现有 trace 对当前 BERT 热更新时延做有界 profile/优化诊断；若改源码，创建新身份和 wheel，并复做同协议三轮配对，不放宽 1.10 线。
+2. 补 capacity/OOM boundary 和 activation checkpoint on/off 的 allocator/NVML/速度数据。
+3. 在统一发布候选上闭合支持矩阵、held-out 任务指标、DDP Trainer 多 rank 保存恢复、JT/PyTorch 序列化契约与 wheel baseline 迁移审查。具体清单见[Day2–5 结果报告](2026-10-26-torch-compat-release-day2-5.md)。
+
+R14 Qwen 实用训练、R19 BERT 性能代表格、旧候选 DDP/checkpoint/生成结果分别绑定各自源码和配置。当前没有证据把这些局部通过合并为完整 release。Overall release **Not complete**。
+
+---
+
 ## 2026-10-31 接续交接：主 wheel CUDA smoke 通过；Day4–5 正式测量待当前候选绑定
 
 在 /home/cgq/jittor 现有工作区继续，没有 clone。输入 HEAD 62208754d65007c5e0ae7a21a85ae73563353a9d、origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（ahead/behind 111/0）。开工 109 项既有 dirty/untracked、porcelain SHA256 a1448a696968aa28fd29d60e28223958afcb3b9012fa7cb9fdcf3556605c0fb8；R4 smoke 前后同值。其余既有源码与实验产物保留。
