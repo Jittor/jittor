@@ -1,3 +1,9 @@
+## 2026-10-31 handoff 增量：当前 wheel CUDA 别名尝试在冷编阶段超时
+
+当前主/compat wheel（SHA256 `2e8f1a4418e3e9aee770843a6fd7d5471e3de12aaad75a8e8e78deee24baa3d9` / `fd7e84f639dba09f9d8293b9d255df09aa7190b890093e614c340cc47a7a7d5a`）的公共 Tensor CUDA 跟随 runtime 别名检查未得到测试结论：两次 runner 缺少 `JITTOR_TORCH_SHIM=1`，在收集前退出；第三次修正环境后冷编到 `jittor_core 92/228`，于 300 秒上限结束，断言未执行。实验私有 cache 新增 677 项，未改源码或既有保护缓存。GPU4 当时由外部进程占用且利用率约 73–84%，该尝试不计功能通过或性能/显存证据；原件分别保留在 `/data6/cgq/jittor-lab/_state/release-day23/20261031-current-main-wheel-public-tensor-follow-runtime-cuda-r1-prepared/`、`...-r2-prepared/`、`...-r3-prepared/`，不自动重跑。
+
+Day4–5 仍需稳定 GPU 窗口下 JT/PT 三轮交替且每侧每轮至少十个热样本，报告 load/首步/热态 median、p95、离散度、吞吐及 allocator/NVML 峰值；近容量、最大可运行配置、OOM/恢复及 checkpoint 开关需单独以匹配 CUDA 配置验收。更广 Day2–5 仍包括支持矩阵、held-out 质量、候选绑定训练与恢复、DDP 多 rank checkpoint、序列化互操作契约、clean install 和 baseline migration review。Overall release 保持 **Not complete**。
+
 ## 2026-10-31 接续：R31 停在共享 GPU 准入，R32 确认 wheel 中 checkpoint 真正重算
 
 继续在原 /home/cgq/jittor，未 clone 或修改源码。测量前后 HEAD 3cf20912727973bb645428f3d3c3750d920c3a45，FETCH_HEAD/origin cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 120/0；102 项其他 dirty/untracked 状态 SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211 未变，index 为空。R31/R32 脚本、日志、cache 和审计均保存在 /data6/cgq/jittor-lab/_state/release-day23/，未放入仓库。

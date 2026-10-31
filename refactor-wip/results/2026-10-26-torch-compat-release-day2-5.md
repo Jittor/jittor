@@ -1,3 +1,13 @@
+## 2026-10-31 续验：当前 wheel CUDA 别名回归未形成测试结论
+
+针对当前 wheel 的 `test_cuda_public_tensor_constructor_preserves_follow_runtime_alias` 做了一次有界 CUDA 正确性尝试，绑定主/compat wheel SHA256 `2e8f1a4418e3e9aee770843a6fd7d5471e3de12aaad75a8e8e78deee24baa3d9` / `fd7e84f639dba09f9d8293b9d255df09aa7190b890093e614c340cc47a7a7d5a`、当前测试文件 SHA256 `d079146c5e54aadde4bfd5015b29db60d3ca93be7eab9676edbaa265c8c4a092` 与 GPU4 UUID `GPU-8bf405a2-a3dd-e203-8dd9-691e9f7b3530`。前两次启动因 runner 未设置仓库要求的 `JITTOR_TORCH_SHIM=1`，在 pytest 收集前停止；第三次明确注入后进入编译，但 300 秒预算到时停在 `jittor_core 92/228`，没有运行测试断言，也没有正确性 pass/fail 结果。677 个新增文件都在隔离实验 cache；源仓库 HEAD `28425b64b35ab2e1b49ac4693c31f46d7dd0e5e2`、102 项既有 dirty/untracked 状态及其 porcelain SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211` 未变。GPU4 同期由外部进程占用，利用率约 73–84%；本次只作为不完整的正确性尝试，绝非性能或显存证据。完整启动、receipt、日志与 cache 差异保存在 `/data6/cgq/jittor-lab/_state/release-day23/20261031-current-main-wheel-public-tensor-follow-runtime-cuda-r1-prepared/`、`...-r2-prepared/` 和 `/data6/cgq/jittor-lab/_state/release-day23/20261031-current-main-wheel-public-tensor-follow-runtime-cuda-r3-prepared/`；未重复启动。
+
+### Day4–5 与更广 Day2–5 验收清单
+
+Day4–5 正式性能/显存需要先冻结候选源码指纹、wheel/core、硬件与软件环境、权重/数据、精度和 workload 参数；只在低负载稳定窗口（GPU 利用率不高于 10%、空闲显存至少 60,000 MiB、没有无关计算进程）进行 JT/PT 至少三轮交替测量，每轮双方各至少十个热态样本。每轮记录加载、首步、热态耗时与吞吐的 median、p95、离散度，并采集 allocator live/allocated/reserved 与 NVML 峰值。单独跑匹配配置的近容量边界、最大可运行配置、OOM 行为及 OOM 后恢复；另以真实 CUDA 比较 checkpoint 开/关的速度与峰值显存。共享 GPU 下的旧测量只能作诊断。
+
+更广发布门需在同一冻结候选上完成声明范围的 API/operator × device × dtype × layout × autograd/alias/storage × fallback 矩阵；提供 held-out 任务质量分数及绑定数据、权重、训练配置的真实训练/新进程恢复证据；完成 DDP Trainer 多 rank checkpoint 保存/恢复、JT portable-pickle optimizer 与 stock PyTorch 的互操作支持契约、clean wheel/sdist 安装和 baseline migration review。现有 R14 Qwen 两 epoch 训练/续训证据不替代任务生成质量、正式性能或显存验收。Overall release 仍为 **Not complete**。
+
 ## 2026-10-31 R31–R32：上下文旁路未显示时延收益；当前 wheel 的 checkpoint 重算功能通过 CPU 验证
 
 ### R31：单 pair 的模块前端上下文敏感性诊断（未完成）

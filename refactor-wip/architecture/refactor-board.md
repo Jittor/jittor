@@ -1,3 +1,7 @@
+## 2026-10-31 续验：当前 wheel CUDA 别名回归未形成结论
+
+当前 wheel 的公共 Tensor CUDA 跟随 runtime 别名用例绑定主/compat wheel SHA256 `2e8f1a4418e3e9aee770843a6fd7d5471e3de12aaad75a8e8e78deee24baa3d9` / `fd7e84f639dba09f9d8293b9d255df09aa7190b890093e614c340cc47a7a7d5a`，GPU4 UUID `GPU-8bf405a2-a3dd-e203-8dd9-691e9f7b3530`。显式 Torch 模式修正后，独立尝试在 300 秒上限内编译到 `jittor_core 92/228` 后结束，断言未执行；677 项只新增于实验私有 cache。完整材料在 `/data6/cgq/jittor-lab/_state/release-day23/20261031-current-main-wheel-public-tensor-follow-runtime-cuda-r3-prepared/`，状态为 incomplete，不计为通过。GPU4 同期有外部进程且利用率约 73–84%，不构成稳定性能窗口；Day4–5 正式性能/显存与更广发布门保持开放。
+
 ## 2026-10-31 续验：R31 仅有一轮前端上下文配对；R32 在当前 wheel 上确认真实 checkpoint 重算
 
 R31 在当前 wheel/core、BERT B8/S256 FP32 eager fixture 和真实 GPU2/cuda:0 上完成一对各 10 个热前向的运行时敏感性比较。普通路径每次前向 227 次模块调用、251 次 tensor_frontend(default_placement=False) 进入；旁路模块上下文后仍为 227 次调用、24 次进入。两侧 median 为 44.457 / 44.499 ms，旁路反而慢约 0.095%；output 哈希与 loss 相同，但梯度映射哈希不同，未保存逐张量差值，无法判断差异大小。下一阶段准入采样见 GPU 利用率 51%，因此只完成一个 pair，不能形成三轮归因或正式性能结论。该路径当前不构成源码优化候选。R31 的完整 FAILURE、GPU 准入拒绝、私有 cache 和 partial review 均保留；partial review SHA256 c9f2084a8a0fc636c4306395189b9a6c53ac16ffb3d1a68ffb6ba979279a7347，partial audit SHA256 e17b4a20b5ac14b8f65a031b2450ea206b7b8fa8de092d9a9b411db6a406318d。
