@@ -2,7 +2,7 @@
 
 - Status: Maintained
 - Last reviewed: 2026-10-31
-- Baseline: `211577a5a`
+- Baseline: `cccbb1430`
 - Owner: Jittor core maintainers
 - Review when: an entry is fixed or narrowed, a strict expected failure
   XPASSes, a new defect is reproduced, or at quarterly maintenance
