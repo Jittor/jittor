@@ -63,7 +63,7 @@ class Tensor:
 def distributed_state(monkeypatch):
     context = get_install_context(jt)
     world = Group()
-    state = {"initialized": False, "store": None}
+    state = {"initialized": False, "store": None, "backend": None}
     groups = {world: ("nccl",)}
     monkeypatch.setitem(context.state, "distributed_api", MappingProxyType({
         "state": state, "world_group": world, "pg_map": groups,
@@ -164,7 +164,7 @@ def test_init_destroy_store_and_backend_validation(distributed_state, monkeypatc
     with pytest.raises(RuntimeError, match="does not match"):
         owner._init_process_group(backend="hccl", rank=2, world_size=4)
     owner._init_process_group(backend="cpu:gloo,cuda:nccl", rank=2, world_size=4)
-    assert state["initialized"]
+    assert state["initialized"] and state["backend"] == "cpu:gloo,cuda:nccl"
 
 
 def test_checkpoint_stubs_keep_policy_and_importable_owner(monkeypatch):
@@ -178,3 +178,26 @@ def test_checkpoint_stubs_keep_policy_and_importable_owner(monkeypatch):
         assert function._jittor_unimplemented.endswith("." + name)
         with pytest.raises(NotImplementedError, match="checkpoint"):
             function({})
+
+def test_single_rank_gloo_backend_public_api_roundtrip(tmp_path):
+    import datetime
+
+    dist = compatibility_owner(jt).distributed
+    store = dist.FileStore(str(tmp_path / "gloo-store.sqlite3"), 1)
+    assert not dist.is_initialized()
+    try:
+        dist.init_process_group(
+            backend="gloo", rank=0, world_size=1, store=store,
+            timeout=datetime.timedelta(seconds=5),
+        )
+        assert dist.is_initialized()
+        world_group = dist.group.WORLD
+        assert dist.get_backend() == "gloo"
+        assert dist.get_backend(group=world_group) == "gloo"
+        state = get_install_context(jt).state["distributed_api"]["state"]
+        assert state["backend"] == "gloo"
+    finally:
+        if dist.is_initialized():
+            dist.destroy_process_group()
+    assert not dist.is_initialized()
+    assert get_install_context(jt).state["distributed_api"]["state"]["backend"] is None

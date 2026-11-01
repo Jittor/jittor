@@ -410,6 +410,7 @@ def _init_process_group(*args, **kwargs):
             raise RuntimeError("torch/Jittor distributed rank mismatch")
     state["initialized"] = True
     state["store"] = store
+    state["backend"] = backend_name
     return None
 
 
@@ -421,6 +422,7 @@ def _destroy_process_group(*args, **kwargs):
     if callable(close):
         close()
     state["store"] = None
+    state["backend"] = None
     state["initialized"] = False
     return None
 
@@ -857,6 +859,9 @@ def _api_dist_is_initialized(*a, **k):
 def _api_dist_get_backend(group=None):
     _context = get_install_context(jt).state["distributed_api"]
     world_group = _context['world_group']
+    state = _context["state"]
+    if (group is None or group is world_group) and state.get("backend") is not None:
+        return state["backend"]
     return group._get_backend_name() if group is not None and hasattr(group, '_get_backend_name') else world_group._get_backend_name()
 
 
@@ -998,7 +1003,11 @@ def _install_distributed(g, registry=None):
     if dist is None:
         dist = _types.ModuleType("torch.distributed")
         _modules["torch.distributed"] = dist
-    state = {"initialized": _native_distributed_active(), "store": None}
+    state = {
+        "initialized": _native_distributed_active(),
+        "store": None,
+        "backend": None,
+    }
     world_group = _JittorProcessGroup(name="world")
     pg_map = {world_group: (world_group._get_backend_name(),)}
     get_install_context(g).state["distributed_api"] = MappingProxyType({
