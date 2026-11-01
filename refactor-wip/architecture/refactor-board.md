@@ -1,3 +1,10 @@
+## 2026-11-02 03:40 +0800 current-main CPU DCP 单 rank与兼容状态测试通过；更广发布门仍开放
+
+在 source HEAD a700e1dd033d617c3744e390af2ebe3ecb8e0404 上，以 JT_BACKEND=cpu、nvcc_path=""、CUDA_VISIBLE_DEVICES="" 和 fallback=error 完成当前 CPU-only 初始化。attempt-05 的 300 秒首次 CPU core 编译止于 100/227，未进入 DCP；attempt-06 复用这些对象，在新的 checkpoint 目录完成独立进程 save/load（env/save/load exit 均为 0，world_size=1，恢复 CPU weight、step=7、lr=0.025、counter=4，rank 文件 SHA256 e5450aa60941dda490e3c11bb72f42197b413a65f2292d08eda89d61de7ea89e）。attempt-06 输出清单 SHA256 e4a1fb3d9e5a0ba5313ea72e3be9b578057127b1ab58d4c7daa24c78579f5bbd。
+
+随后 current-main compat/tests/torch/test_checkpoint_state_dict.py 在同一 CPU backend 下 12 passed、0 skipped、25.17s；2 条 RuntimeWarning 来自显式测试 JITTOR_TORCH_ALLOW_STUB=1 的 sharded-tensor no-op stub。测试输出清单 SHA256 63c090d48bb77a364cf60ed216a6435d0b46eca8ca821e40ad0923eebcbb8e6b。DCP installer/test 的 source hash 与此前记录一致；细节和原件路径见 Day2–5 结果文档。
+
+这只闭合单 rank CPU DCP 与该测试文件覆盖，不能替代双 rank/NCCL、CUDA runtime 或 Day4–5 性能/显存验收。GPU2 仍是 Default/shared、17,299 MiB；本轮前后仍只有原有 yqa PID 3037196/3164740 各占 8,640 MiB。X12DPG-OA6 仍 DOWN，未启动 GPU holder。整体 Day2–5 保持 Not complete。
 ## 2026-11-02 03:25 +0800 GPU2 无法由普通 holder 排他；current-main CPU DCP cache 状态更正
 
 GPU2（UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0）在 03:22 +0800 复核为 Default compute mode、17,299 MiB 已用；PID 3037196 和 3164740 各占 8,640 MiB，采样利用率约 86–92%。X12DPG-OA6 仍为 DOWN（Unexpected reboot），Slurm ConstrainDevices=no；当前 SSH 身份为 uid=1001(cgq)。普通显存 holder 不能禁止其他进程创建 CUDA context，反而会与现有任务争用资源，因此没有启动 holder。正式 Day4–5 仍需管理员恢复节点并提供 GPU UUID/GRES 与 device-cgroup 独占租约。

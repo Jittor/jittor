@@ -1,3 +1,8 @@
+## 2026-11-02 03:40 下一步：保留单 rank CPU DCP 通过证据，继续处理双 rank与 CUDA 发布门
+
+current-main source HEAD a700e1dd033d617c3744e390af2ebe3ecb8e0404 已通过 JT_BACKEND=cpu / nvcc_path="" 的 no-CUDA初始化。attempt-06 的新进程 CPU DCP save/load 通过，恢复值与 checkpoint 一致；随后 compat/tests/torch/test_checkpoint_state_dict.py 12/12 通过且 0 skip。source/test hashes、运行参数和 manifest hashes 见 Day2–5 结果文档 03:40 条目；attempt-05 的 300 秒初次编译失败原件也保留，attempt-06 对它做增量续编，没有覆盖失败记录。
+
+下一步可用已构建的隔离 CPU cache 评估有界双 rank CPU/Gloo 或 MPI DCP 验证；先确认该安装器实际使用的 process-group backend 和 Jittor MPI build 配置，再为新输出准备单次预算，不能把 world_size=1 结果外推。随后仍需独占 CUDA lease 验收 R4 graph replay、captured-step/GradScaler overflow、CUDA 新增 kernel 与性能显存 cohort。GPU2 普通 holder 没有排他能力，当前 X12DPG-OA6 DOWN、ConstrainDevices=no，故 CUDA 项需管理员恢复节点并提供 UUID/GRES/device-cgroup 租约。Day4–5 与整体 Day2–5 不标 complete。
 ## 2026-11-02 03:25 +0800 下一步：先取得 GPU2 独占租约；DCP 阻塞需按真实异常重新定位
 
 GPU2 当前有两个外部进程运行，Default compute mode，Slurm 节点 DOWN 且 ConstrainDevices=no。普通 VRAM holder 不提供排他，不能用于正式性能测试；需要管理员恢复 X12DPG-OA6 并提供绑定 GPU UUID 的 GRES/device-cgroup 独占作业。独占前不要启动占卡程序或 Day4–5 cohort。
