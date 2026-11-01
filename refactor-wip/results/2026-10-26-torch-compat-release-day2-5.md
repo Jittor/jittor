@@ -1,3 +1,11 @@
+## 2026-11-02 02:16 +0800 wheel 差异追踪补充；GPU2 独占仍不可用
+
+继续在 /home/cgq/jittor 现有工作区。当前 HEAD f7510e4b33e3b1ff92780f91a6601d49f5815c03，索引干净；既有 dirty/untracked porcelain SHA256 为 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98，未改动或清理其他工作。
+
+对 current-main package r4（构建绑定快照 HEAD 5a1b42223573b25ea01734ce616c63fc31dd016a）的差异做了更窄映射：与前轮 r3 wheel 只有 dist-info/RECORD 和 jittor/src/ops/composite/fetch_op.cc 两个成员不同。后者 r4 SHA256 c3dadef00942aa7accda29a4eee3afb6673c58f199fe5e3e1ad5654e31868780，对应已有 direct CPU fetch 回归：CUDA-enabled build、CUDA_VISIBLE_DEVICES 为空、CPU runtime scope 下 int64/float32/bfloat16 的 jt.fetch + jt.sync_all(True) 通过，fallback=0、exit=0、cache diff=0；run.log SHA256 0b35f07fa246b41667e57d4b70480fc42d6cd980650edaea262b37defef7c13b。此证据只覆盖无可见设备的 CPU fetch 路径，不覆盖 CUDA allocator copy，也不覆盖其余 wheel 源码差异。新增映射说明 SHA256 c2a480c6c87df6d6485f3684afe6bd210e9253ab6b9c6313f8daa9f229d0f0e1，位于 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-wheel-migration-review-r2-prepared/fetch-op-followup.txt；证据包清单 SHA256 38398f12849dc000575efbb1c593aa64e5e89ec7e3b2b15e235a5ce8fbe02415。该映射不构成迁移批准；默认基线仍是 69 additions、302 changes、2 removals，0 approved。
+
+GPU2 实时复核为 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0、Default/shared、17,299 MiB、93% 利用率；外部 PID 4166405 与 3037196 各占 8,640 MiB。Slurm 节点 X12DPG-OA6 为 DOWN。普通用户态 holder 无法阻止其他 CUDA context，并会与现有进程争用资源，因此未编写或启动 holder；也未改 compute mode。需管理员提供 UUID/GRES 与 device-cgroup 独占租约后才能运行现有 R4。Day4–5 及更广 Day2–5 发布门继续 Not complete。
+
 ## 2026-11-02 02:08 +0800 current-main 当前源码 package-r4 构建及包内一致性验收
 
 在 /home/cgq/jittor 现有工作区完成当前源码的隔离打包验证，没有重新 clone，也未改动源码或其他既有工作区内容。源码身份为 HEAD 5a1b42223573b25ea01734ce616c63fc31dd016a，分支 integrate/cgq-transformers-native-multicard-target，相对 origin/cgq_transformers ahead/behind 184/0；105 项既有 dirty/untracked 的 porcelain SHA256 仍为 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98，索引干净。隔离副本按 nox packaging 的排除规则创建，source-files.sha256 的 SHA256 为 ec7060f76b743926bfad54c6f94bddf19e1fccc12c972c20079c78c9f811c76e。

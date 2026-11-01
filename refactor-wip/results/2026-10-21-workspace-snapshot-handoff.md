@@ -1,3 +1,11 @@
+## 2026-11-02 02:16 +0800 Handoff：wheel 差异已映射一项；GPU2 仍需系统独占
+
+当前 /home/cgq/jittor HEAD f7510e4b33e3b1ff92780f91a6601d49f5815c03，索引干净；既有 105 项 dirty/untracked 状态 SHA256 仍为 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98。只更新既有状态文档；新增差异说明保存在 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-wheel-migration-review-r2-prepared/fetch-op-followup.txt，SHA256 c2a480c6c87df6d6485f3684afe6bd210e9253ab6b9c6313f8daa9f229d0f0e1，包内清单 SHA256 38398f12849dc000575efbb1c593aa64e5e89ec7e3b2b15e235a5ce8fbe02415。
+
+r4 与 r3 wheel 的两项成员差异是 RECORD 元数据和 fetch_op.cc。后者可映射到已有 CPU 无可见设备 jt.fetch/sync_all 回归（fallback=0、exit=0）；CUDA allocator copy 路径和默认基线其他 301 项源码变化仍未验收。默认发布迁移比较继续 69 additions、302 changes、2 removals，0 approved。
+
+GPU2 复核时仍为 shared/Default，两个外部 PID 各占 8,640 MiB，utilization 93%；Slurm X12DPG-OA6 为 DOWN。没有创建或启动普通 holder，因为它不能防止别的 CUDA context，且无法在 PT/JT 交替进程间维持排他窗口。Day4–5 仍需管理员恢复 GRES 并发放 UUID/device-cgroup 独占租约，然后执行已准备的三轮交替 R4 套件。更广的 Day2–5 发布门仍开放，overall release 保持 Not complete。
+
 ## 2026-11-02 02:08 +0800 Handoff：当前源码包构建和 direct/sdist 一致性通过，发布迁移门仍开
 
 继续在 /home/cgq/jittor 现有工作区，HEAD 5a1b42223573b25ea01734ce616c63fc31dd016a，分支相对 origin/cgq_transformers ahead 184/0。本轮只新增了外部证据包，没有修改仓库源码；此前 105 项既有 dirty/untracked 状态 hash 仍为 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98，index clean。新证据 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-package-r4-prepared/ 的 artifact-files.sha256 SHA256 为 57fda94d47232c59b6420c7e1e80cafd3296b6997a602a4315d80cfd44fd3e11。

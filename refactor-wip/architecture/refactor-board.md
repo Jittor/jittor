@@ -1,3 +1,9 @@
+## 2026-11-02 02:16 +0800 wheel 差异追踪补充；GPU2 普通占卡无法排他
+
+current-main r4 对比上一轮 r3 的 wheel 仅有两项成员差异：生成的 dist-info/RECORD 和 jittor/src/ops/composite/fetch_op.cc。fetch_op.cc 的 CPU 零可见设备路径已有定向回归证据；范围、日志哈希和不覆盖 CUDA copy / 其他源码差异的限制记录在 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-wheel-migration-review-r2-prepared/fetch-op-followup.txt。默认发布基线仍为 69 additions、302 changes、2 removals，尚无批准。
+
+GPU2 最新复核仍是共享 Default 模式，利用率 93%，两个外部 PID 各占 8,640 MiB；X12DPG-OA6 为 DOWN。普通 holder 不能禁止其他 context，也不能给独立 benchmark 进程提供整段租约，故未写入或启动资源占用程序。R4 需要管理员恢复 GRES 并提供 UUID 绑定的 device-cgroup 独占分配；Day4–5 与总体 Day2–5 继续 Not complete。
+
 ## 2026-11-02 02:08 +0800 current-main 当前源码打包构建通过，wheel 迁移基线仍未过
 
 继续使用现有 /home/cgq/jittor 工作区，HEAD 为 5a1b42223573b25ea01734ce616c63fc31dd016a，分支相对 origin/cgq_transformers ahead 184/0。新建独立打包证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-package-r4-prepared/，源快照清单 SHA256 ec7060f76b743926bfad54c6f94bddf19e1fccc12c972c20079c78c9f811c76e。当前源码的 manifest 检查、主 sdist/wheel 构建、sdist 清单审计、direct 与 sdist-derived wheel 的内容审计和逐成员一致性、compat wheel 审计、两 wheel 单事务安装布局及 compat Python compileall 均通过；详见 Day2–5 结果和包内 NOTES.md。
