@@ -1,3 +1,12 @@
+## 2026-11-02 03:51 +0800 GPU2 holder 请求复核；current-main CPU MPI DCP 双 rank 未运行
+
+本轮收到“占住 GPU2 直到性能测试完成，并阻止其他程序”的请求后，实时检查 GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0：03:51 +0800 为 Default compute mode、17,299 MiB used、89% utilization；PID 3037196 和 3164740 是外部 /home/yqa/envs/sgn-keras3/bin/python，各占 8,640 MiB。SSH 身份 uid=1001(cgq)，Slurm 节点 X12DPG-OA6 为 DOWN（Node unexpectedly rebooted），ConstrainDevices=no。普通显存 holder 不能禁止别的进程创建 CUDA context，并可能挤压/干扰这两项现有任务，因此没有写入或启动 holder。正式性能 cohort 需管理员恢复节点并提供 GPU UUID/GRES 与 device-cgroup 独占租约。
+
+同时尝试把已通过的单 rank CPU DCP 扩展到双 rank MPI。实验包：/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-dcp-cpu-fresh-process-r1-prepared/attempt-08-cpu-mpi-dcp-r1/。源码 HEAD 7494d8e73ec3218e7d8de53ddd6672b688c80630；DCP installer SHA256 74fbc7a953f085f4568041ef7e56ccafcee4d1a6713de995958a01cbbc7fbf07，测试源 SHA256 1dba49714e104b9092a8506de244646d8898153cee538842540f638c5f1ea229。实验复制了通过的 CPU core cache 到隔离目录，GPU 全程隐藏。MPICH 原生 mpicc 不支持 Jittor 所调用的 --showme:compile/link；准备的实验内 adapter 未能完成验证。
+
+首次 MPI prebuild 以 rc=3 退出，Jittor 明确报告 jit_utils 刚重建、需在新进程重启命令；当时没有运行 MPI/DCP。保留原始失败后，单独记录的进程重启续跑以 180 秒上限 rc=124 停在独立 cfgde764b01 的 CPU core 编译；save/load 均为 125（未启动）。没有继续重试该新构建配置。原始 output manifest SHA256 37f17b742a12b047a51d31e0c7ff6502b7266a24a47268e4389f0e566f27baac；续跑 recovery manifest SHA256 e25a10d8ac707db9950722f06ed547fc1b76ba8d500c991a07ecf635e8b31e17；recovery-result SHA256 7833b2dd64096e5cff907efa9eef01decbb856f9295d3cf7014acc421135fbec。两份清单校验通过。source-before/after 的 HEAD 与状态签名相同；GPU2 前后均仍是原有 PID 3037196/3164740，没有本实验 GPU 进程。
+
+本结果不改变已通过的单 rank DCP与 12/12 CPU 兼容测试证据，也不构成双 rank通过或失败结论。Day4–5 仍需匹配配置、三轮交替且每轮每侧至少十个热态样本，报告 median/p95/离散度、加载/首步/热态时间、allocator/workspace 与 NVML 峰值；overall Day2–5 保持 Not complete。
 ## 2026-11-02 03:40 +0800 current-main CPU DCP fresh-process 与兼容测试文件通过
 
 本轮利用已存在的 CPU backend 构建入口推进 DCP，不走 CUDA compiler/extern 路径。固定源码 HEAD a700e1dd033d617c3744e390af2ebe3ecb8e0404；compat/torch/installers/distributed.py SHA256 74fbc7a953f085f4568041ef7e56ccafcee4d1a6713de995958a01cbbc7fbf07，compat/tests/torch/test_checkpoint_state_dict.py SHA256 1dba49714e104b9092a8506de244646d8898153cee538842540f638c5f1ea229，实验 source status hash 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98。runtime 明确设置 JT_BACKEND=cpu、nvcc_path=""、CUDA_VISIBLE_DEVICES=""、JITTOR_TEST_DEVICES=cpu；probe 断言 jt.has_cuda 为 false、nvcc_path 为空，并在 fallback=error 下执行。没有 GPU workload。

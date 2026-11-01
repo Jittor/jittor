@@ -1,3 +1,8 @@
+## 2026-11-02 03:51 +0800 GPU2 普通 holder 不具备排他能力；CPU MPI DCP 未越过 core 编译
+
+GPU2 实时仍为 Default compute mode、17,299 MiB 使用，PID 3037196/3164740 是外部 yqa 任务；X12DPG-OA6 仍 DOWN、ConstrainDevices=no。普通用户进程无法阻止其他 CUDA context，也可能挤压已有作业；没有启动占卡程序。Day4–5 需要管理员恢复节点并提供绑定 GPU UUID 的 GRES/device-cgroup 独占分配。
+
+current-main 双 rank CPU MPI DCP attempt-08 在 Jittor core 构建阶段超时，未进入 MPI custom ops、save/load 或 DCP collective。细节见 Day2–5 结果文档 03:51 条目。整体 Day2–5 继续开放。
 ## 2026-11-02 03:40 +0800 current-main CPU DCP 单 rank与兼容状态测试通过；更广发布门仍开放
 
 在 source HEAD a700e1dd033d617c3744e390af2ebe3ecb8e0404 上，以 JT_BACKEND=cpu、nvcc_path=""、CUDA_VISIBLE_DEVICES="" 和 fallback=error 完成当前 CPU-only 初始化。attempt-05 的 300 秒首次 CPU core 编译止于 100/227，未进入 DCP；attempt-06 复用这些对象，在新的 checkpoint 目录完成独立进程 save/load（env/save/load exit 均为 0，world_size=1，恢复 CPU weight、step=7、lr=0.025、counter=4，rank 文件 SHA256 e5450aa60941dda490e3c11bb72f42197b413a65f2292d08eda89d61de7ea89e）。attempt-06 输出清单 SHA256 e4a1fb3d9e5a0ba5313ea72e3be9b578057127b1ab58d4c7daa24c78579f5bbd。

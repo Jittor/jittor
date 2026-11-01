@@ -1,3 +1,8 @@
+## 2026-11-02 03:51 下一步：取得系统 GPU2 独占分配；普通 holder 不可作为隔离
+
+GPU2 仍有两个外部 yqa 进程，Default mode；X12DPG-OA6 为 DOWN，ConstrainDevices=no。没有启动占卡程序，因为它不能阻止其他 CUDA context，且会影响已有任务。Day4–5 的正式 cohort 需先由管理员恢复节点并通过 GRES/device-cgroup 按 UUID 分配独占设备。随后按三轮交替、每轮每侧至少十个热态样本，收集 median/p95/离散度、加载/首步/热态时间和 allocator/workspace/NVML 峰值。
+
+current-main 双 rank CPU MPI DCP attempt-08 首次只触发 jit_utils 重建；明确的进程重启续跑在 180 秒内仍用于独立 Jittor core 编译，未触及 MPI custom ops 或 DCP。失败与哈希记录见 Day2–5 结果文档 03:51 条目；不要把它记作双 rank功能失败，也不要沿 cfgde764b01 再盲目冷编译。单 rank CPU DCP 与 12/12 CPU 测试仍是目前功能证据。整体 Day2–5 继续开放。
 ## 2026-11-02 03:40 下一步：保留单 rank CPU DCP 通过证据，继续处理双 rank与 CUDA 发布门
 
 current-main source HEAD a700e1dd033d617c3744e390af2ebe3ecb8e0404 已通过 JT_BACKEND=cpu / nvcc_path="" 的 no-CUDA初始化。attempt-06 的新进程 CPU DCP save/load 通过，恢复值与 checkpoint 一致；随后 compat/tests/torch/test_checkpoint_state_dict.py 12/12 通过且 0 skip。source/test hashes、运行参数和 manifest hashes 见 Day2–5 结果文档 03:40 条目；attempt-05 的 300 秒初次编译失败原件也保留，attempt-06 对它做增量续编，没有覆盖失败记录。
