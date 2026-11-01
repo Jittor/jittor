@@ -1,3 +1,19 @@
+## 2026-11-02 07:30 +0800 current-main installed-wheel Torch CPU focused 5 项通过；GPU2 性能独占尚未开始
+
+### 源码、wheel 与测试
+
+继续使用 /home/cgq/jittor 现有工作区。执行前后 HEAD 均为 69c6ec840b20d424ac483020dc15dd7c61e1764d，origin/cgq_transformers 为 e5cffe1ae60c418f53c5bb1cdca9182577fd2b81；dirty/untracked status 内容前后相同，SHA256 为 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98。R5 main wheel SHA256 66c0f8176508325f3555f3f90c0b0b141463ae33cdc0b38b35e082dc62b01f47，compat wheel SHA256 08c84ae50617fa9761ec131c2e0e6247ca704af64ee2d3b560c6a18d2a0a81bf；模块解析至 R5 install 目录，installed-path core build 前后均 current，相关源文件与 R5 snapshot 字节一致，R5 artifact manifest 校验通过。
+
+证据位于 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-installed-torch-focus-r1-prepared/attempt-06/。CPU-only、fallback=error、JITTOR_TEST_REQUIRE_EXECUTION=1；pytest 5 passed、58 deselected、0 skipped、0 failed，434.40 秒，fallback 0→0。通过项为 fill_/zero_ alias 与参数梯度、内部 FollowRuntime alias、独立前端类型、反射 pow 舍入/倒数、标量 pow tensor device。独立前端用例内部通过 run_python_child 使用当前源码树子进程编译 helper；故父 session 的 wheel 解析与该子进程的源码解析分别记录，不将其描述为 wheel-only child 证据。测试后仓库 HEAD、status 与相关 source hash list 未变，R5 package artifact manifest 通过，遗留进程数为 0。
+
+attempt-01 到 05 的原件保留：缓存绝对路径重建、pytest hook 参数名、工作目录和 node selector 的包装器问题；这些 attempt 未形成产品测试结果。最终 run-result.json SHA256 a41743fe791105783aad28ab58effab3016006e1e9644d36b8bd6686aab4e0d6，pytest log SHA256 c312c5ac5e08876e17cad801575cfd9b7992bbab8e263bdba90fd936882649ab，attempt artifact-files.sha256 SHA256 0c16f8c0f2cb5a4e221b519f062ac8f523661ef2280c60a27c2fa708461ee3a2。
+
+### GPU2 与开放门
+
+GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 仍为 Default/shared；结束时 17,299 MiB、87%，外部 yqa PID 3037196/3164740 各占 8,640 MiB。没有杀进程或更改计算模式。sudo -n 已可用；现有 /data6/cgq/jittor-lab/tools/gpu2-exclusive-run.sh SHA256 c68ac63cca92bb7204b786f984062fced7de7dd509363bbc77e55b445cb6d16b 会等空卡、设 NVIDIA EXCLUSIVE_PROCESS、执行指定的整段测试命令并在退出时恢复。正式 benchmark 应作为 wrapper 的直接子命令运行；当前窗口未启动。
+
+Day4–5 仍需匹配配置的至少三轮 PT/JT 交替、每轮每侧至少 10 个热样本，并报告 median/p95/离散度、load/首步/热态时间、allocator/workspace/NVML 峰值与容量/OOM。共享 GPU 的旧结果仅供诊断。wheel default migration baseline 仍为 69 additions、302 changes、2 removals、0 approved；整体 Day2–5 仍 **Not complete**。
+
 ## 2026-11-02 06:59 +0800 current-main clean-installed wheel CPU runtime 通过；迁移基线与 Day4–5 仍开放
 
 ### 源码身份和工作区

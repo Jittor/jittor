@@ -1,3 +1,11 @@
+## 2026-11-02 07:30 +0800 current-main installed-wheel Torch CPU focused 5/5 通过；GPU2 独占路径已确认
+
+继续使用 /home/cgq/jittor，未重新 clone。运行时 HEAD 为 69c6ec840b20d424ac483020dc15dd7c61e1764d、origin/cgq_transformers 为 e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，既有工作区 status SHA256 前后均为 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98。R5 installed main/compat wheel SHA256 分别为 66c0f8176508325f3555f3f90c0b0b141463ae33cdc0b38b35e082dc62b01f47 和 08c84ae50617fa9761ec131c2e0e6247ca704af64ee2d3b560c6a18d2a0a81bf。
+
+R5 安装目录上的 CPU focused session 通过 5 项、58 项 deselected、0 skip/0 fail，fallback 0→0，core build 前后均 current；覆盖常量写入别名/梯度、FollowRuntime alias、独立前端类型和两项反射 pow 语义。独立前端用例的子进程按维护 helper 使用当前源码树，不能视作 wheel-only 子进程证据。失败的 attempt-01 至 05 均保留，最终证据见 Day2–5 文档。
+
+GPU2（GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0）仍 Default/shared：17,299 MiB、87%，外部 PID 3037196/3164740 各占 8,640 MiB。没有中断它们或切换模式。现有 /data6/cgq/jittor-lab/tools/gpu2-exclusive-run.sh（SHA256 c68ac63cca92bb7204b786f984062fced7de7dd509363bbc77e55b445cb6d16b）在空卡后切换 EXCLUSIVE_PROCESS，直接运行 benchmark 命令并在退出时恢复；当前 sudo -n 可用。GPU2 尚未进入独占窗口，Day4–5 和整体发布仍 Not complete。
+
 ## 2026-11-02 06:59 +0800 current-main clean-installed wheel CPU smoke 通过；迁移基线与 GPU2 独占仍开放
 
 在 `/home/cgq/jittor` 现有工作区继续，包源码快照绑定 HEAD `3fb131817e69ccc6728e670cbdf2db6f708cafdd`、origin/cgq_transformers `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，构建前既有工作区状态 SHA256 `8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98`。隔离包源码 2,784 个文件的 manifest SHA256 `ea517e4e2959a62c413a0d0a9e21100bfc01e0e1268cdd5379d9bf22d9497267`。证据目录 `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-package-r5-prepared/`，artifact-files.sha256 SHA256 `38d4c7e162ed2246e34aaf0d7b67af6a926561acb77ae550f678c2f49b9f0037`。

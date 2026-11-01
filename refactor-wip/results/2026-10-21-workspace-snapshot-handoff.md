@@ -1,3 +1,9 @@
+## 2026-11-02 07:30 +0800 Handoff：installed-wheel Torch CPU focused 5 项通过；GPU2 仍共享
+
+在 /home/cgq/jittor HEAD 69c6ec840b20d424ac483020dc15dd7c61e1764d 上，R5 installed-wheel CPU focused 测试 5 passed、58 deselected、0 skip/0 fail、fallback 0→0。仓库与相关源码 hash 前后不变，R5 manifest 复核通过；独立前端用例的 child process 按测试 helper 使用当前源码树，需与父 session 的 installed-wheel 模块解析分开解释。证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-installed-torch-focus-r1-prepared/attempt-06/，manifest SHA256 0c16f8c0f2cb5a4e221b519f062ac8f523661ef2280c60a27c2fa708461ee3a2。
+
+GPU2 仍 Default/shared，17,299 MiB、87%，外部 PID 3037196/3164740 各占 8,640 MiB。sudo -n 当前可用；已有 /data6/cgq/jittor-lab/tools/gpu2-exclusive-run.sh（SHA256 c68ac63cca92bb7204b786f984062fced7de7dd509363bbc77e55b445cb6d16b）会等待空卡后切换 EXCLUSIVE_PROCESS，将真实 benchmark 直接作为子命令运行，完成后恢复 Default。没有启动占显存 holder 或干预外部工作。待卡空闲时用该脚本覆盖整套三轮 PT/JT cohort；Day4–5 与 overall Day2–5 仍 Not complete。
+
 ## 2026-11-02 06:59 +0800 Handoff：current-main sdist/wheel clean CPU runtime 通过；GPU2 独占和广发布门仍开放
 
 current-main clean package 的 R5 证据已在 `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-package-r5-prepared/`。构建源码绑定 HEAD `3fb131817e69ccc6728e670cbdf2db6f708cafdd`、origin `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81` 和构建前工作区状态 SHA256 `8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98`。main sdist/wheel、compat wheel 内容审计和安装后 CPU autograd/SGD smoke 通过；artifact-files.sha256 SHA256 `38d4c7e162ed2246e34aaf0d7b67af6a926561acb77ae550f678c2f49b9f0037`。wheel default migration compare 仍是 69 additions、302 changes、2 removals、0 approved，未批准 baseline 更新。
