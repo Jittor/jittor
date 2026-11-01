@@ -1,3 +1,19 @@
+## 2026-11-01 13:07 +0800 handoff：GPU2 需系统级独占；current-main CPU 定向验证未进入 pytest 收集
+
+继续使用 `/home/cgq/jittor`。本轮文档提交前源码 HEAD `5630117a46f50616b77d6774e934f83aef7f767b`，branch `integrate/cgq-transformers-native-multicard-target`，origin `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `157/0`。文档改动前 dirty/untracked 有 105 项，porcelain SHA256 `8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98`；source inventory 2,822 项，fingerprint `10cea2e1f4df9ec161591939b19efbe2ad9ba4e99df96b8bf6d4638f9871b596`。仅编辑三份既有状态文档，提交时只暂存这三份文件。
+
+GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 由外部 yqa PID `2279286` 使用约 8,640 MiB，compute mode `Default`；Slurm 的 A800 节点 `X12DPG-OA6` 是 `DOWN`。普通 holder 只能争用显存，不能阻止其他 CUDA client。本轮未启动 burner、改设备模式或干预 PID。Day4–5 需要管理员/调度器提供 GPU UUID/GRES 独占与设备隔离租约。
+
+current-main 三项 CPU fill/zero 用例证据在 `/data6/cgq/jittor-lab/_state/release-day23/20261101-main-fillzero-current-focused-r1-prepared/`，manifest SHA256 `18535232c1a7849cab337c1d32d98889626a98ff76069b557ad484eb0f4035c5`。实验绑定上述 HEAD/source fingerprint；repo dirty 状态前后均为 105 项且 SHA256 一致。独立 cache copy 初始 manifest 与来源一致，current-main Jittor core SHA256 `02d13f8146f7cf16991dcdd4d1c9e76bfecefd57a8b41b85c65514acef5b174c`，原 R5 cache 未改。
+
+预检先因 PATH 缺 `python3.11-config` 退出，随后显式指定 `/home/cgq/anaconda3/bin/python3.11-config`；第二次 pytest bootstrap 因插件路径缺失而未收集用例。修正后 Jittor 更新隔离 cache metadata 并按 exit-3 提示重启；唯一受限重启在 120 秒内编译 `pyjt_jit_op_maker.cc` 时超时退出 124，0 个测试体执行。没有功能 pass/fail 结论；日志/cache diff 均保留，停止本预算内继续重跑。
+
+### 继续顺序
+
+Day4–5 等待系统级 GPU2 独占租约；拿到后再按至少三轮交替、每侧每轮至少十个热样本，报告延迟分位数/离散度、load/首步/热态、allocator/NVML 峰值、容量/OOM 恢复与 activation recompute 的实际显存对照。当前 CPU 定向验证需先找到可复用且源码/绝对路径匹配的已编译 runtime，或另定合理预算后再启动；不能将本轮初始化超时记成测试失败。并继续 multi-rank Trainer resume、wheel clean-install CUDA、FSDP2/DCP、ACL 迁移、held-out generation quality 与完整支持矩阵。整体 Day2–5 release 保持 **Not complete**。
+
+---
+
 ## 2026-11-01 12:45 +0800 handoff：current-main CUDA 新进程续训一致；GPU2 必须等系统级独占
 
 在 `/home/cgq/jittor` 继续。HEAD `79ee097727831d4e257f718be7fb3ac815579cdb`，branch `integrate/cgq-transformers-native-multicard-target`；刚 fetch 的 `origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `156/0`。实验前工作区仍有 102 项既有 dirty/untracked 状态，porcelain SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`，index 为空。仅更新本 handoff、Day2–5 结果与 refactor-board 三份文档；没有改运行时代码或测试，没有 push。

@@ -1,3 +1,25 @@
+## 2026-11-01 13:07 +0800 GPU2 无法由用户态 holder 独占；current-main 定向回归在 helper 编译阶段超时
+
+### 工作区与来源身份
+
+继续在 `/home/cgq/jittor`，本轮开始 HEAD `5630117a46f50616b77d6774e934f83aef7f767b`，branch `integrate/cgq-transformers-native-multicard-target`，origin `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `157/0`。文档改动前 dirty/untracked 为 105 项，porcelain SHA256 `8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98`；定向尝试前后相同。源码清单 2,822 项，fingerprint `10cea2e1f4df9ec161591939b19efbe2ad9ba4e99df96b8bf6d4638f9871b596`。本轮只修改三份既有状态文档，没有修改源码/测试，其他 dirty/untracked 文件保持原样。
+
+### GPU2 独占状态
+
+GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 在 13:05 +0800 由外部 yqa PID `2279286` 使用约 8,640 MiB，瞬时利用率约 50%，compute mode 为 `Default`。Slurm 中 A800 节点 `X12DPG-OA6` 为 `DOWN`，GRES 配置为 `gpu:a800:10`。普通用户态 CUDA holder 无法阻止其他用户启动计算进程；占满显存会与现有任务竞争资源，也不能提供独占保证。因此没有编写或启动显存 burner，没有改 compute mode，也没有终止或干扰该 PID。正式性能/显存测试需要管理员恢复节点并授予 GPU UUID/GRES 分配和设备隔离租约。
+
+### 当前源码定向回归
+
+证据包：`/data6/cgq/jittor-lab/_state/release-day23/20261101-main-fillzero-current-focused-r1-prepared/`，清单 SHA256 `18535232c1a7849cab337c1d32d98889626a98ff76069b557ad484eb0f4035c5`。实验绑定 HEAD `5630117a46f50616b77d6774e934f83aef7f767b` 与源码 fingerprint `10cea2e1f4df9ec161591939b19efbe2ad9ba4e99df96b8bf6d4638f9871b596`，目标为 CPU fill_/zero_ 的 alias/梯度及 FollowRuntime 保留。
+
+第一次 pytest bootstrap 因隔离 cache 的 jit_utils metadata 更新而 exit 3，测试内容未运行；按提示做的一次受限重启在 120 秒预算内持续编译 `pyjt_jit_op_maker.cc` CPU helper，最终 exit 124。pytest 未完成收集，0 个测试体执行，因此没有功能通过或失败结论。启动失败、重启和超时日志均保留；编译输出仅在独立 cache copy，原 R5 cache 未改。source fingerprint 和 105 项 dirty 状态前后相同；GPU1 UUID `GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068` 测后为 1 MiB/0%。本运行不支持性能或显存结论。
+
+### 发布状态
+
+Day4–5 正式门仍需同配置至少三轮交替、每侧每轮至少十个热态样本，报告 median/p95/离散度、load/首步/热态耗时、allocator/NVML 峰值、容量/OOM 恢复和真实 activation recompute 显存对照。multi-rank Trainer fresh-process checkpoint/resume、clean-installed wheel CUDA、FSDP2/DCP、ACL build/migration、合格 held-out generation quality 与完整支持矩阵仍开放。整体 Day2–5 release 保持 **Not complete**。
+
+---
+
 ## 2026-11-01 12:45 +0800 current-main CUDA Trainer checkpoint 新进程续训通过；GPU2 无法用户态独占
 
 ### 源码、工作区与证据身份

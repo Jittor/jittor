@@ -1,3 +1,13 @@
+## 2026-11-01 13:07 +0800 current-main 定向回归未进入测试收集；GPU2 无法用户态独占
+
+本轮开始 HEAD `5630117a46f50616b77d6774e934f83aef7f767b`，branch `integrate/cgq-transformers-native-multicard-target`，`origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `157/0`。文档改动前有 105 项 dirty/untracked，porcelain SHA256 `8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98`。CPU 定向验证前后 source fingerprint `10cea2e1f4df9ec161591939b19efbe2ad9ba4e99df96b8bf6d4638f9871b596` 和 dirty 状态均一致（2,822 项源码清单）；已有更改全部保留。
+
+GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 正由外部 yqa PID `2279286` 使用约 8,640 MiB，compute mode 为 `Default`；Slurm 的 A800 节点 `X12DPG-OA6` 为 `DOWN`。普通 holder 不能拒绝其他 CUDA client，显存 burner 会争用资源。本轮没有创建或启动 burner，也未改变设备模式或干预该 PID。正式 Day4–5 仍需系统级 GPU UUID/GRES 独占与设备隔离租约。
+
+三项 current-main CPU fill/zero 用例的证据包在 `/data6/cgq/jittor-lab/_state/release-day23/20261101-main-fillzero-current-focused-r1-prepared/`。隔离缓存初始化后，Jittor 在 120 秒限额内编译 C++ helper 并退出 124；pytest 未收集、未执行，不形成测试通过或失败结论。整体 Day2–5 release 仍 **Not complete**。
+
+---
+
 ## 2026-11-01 12:45 +0800 current-main CUDA Trainer 新进程续训严格一致；GPU2 独占仍受阻
 
 继续在 `/home/cgq/jittor`，HEAD `79ee097727831d4e257f718be7fb3ac815579cdb`，刚 fetch 的 `origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `156/0`。开始前既有 102 项 dirty/untracked porcelain SHA256 为 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`，index 为空。本轮只更新三份既有状态文档，不改源码/测试，不 push。
