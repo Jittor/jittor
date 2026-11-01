@@ -1,3 +1,11 @@
+## 2026-11-02 00:03 +0800 接续：DDP scalar 细分通过，BERT/LoRA 全前向仍需定位
+
+继续使用 `/home/cgq/jittor`，未重新 clone。当前 HEAD `fc437281f69a681c08ae94004a56dfb25e6ff621`，分支 `integrate/cgq-transformers-native-multicard-target`，origin/cgq_transformers `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind 176/0；源码指纹 `4755e03a116acbda401d5c83e5c1635ea9e75bb8f8e1ff22a8fc4979f1771a58`。既有 105 项 dirty/untracked hash 仍为 `8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98`，index clean；本轮没有改源码及其他既有工作。
+
+新增诊断位于 `/data6/cgq/jittor-lab/_state/release-day23/20261101-main-ddp-scalar-item-r1-prepared/`：attempt-10 完整 tiny BERT/LoRA 双 rank forward 在 150 秒 deadline 超时，rank1 栈落在 Transformers SDPA mask 的 `_var_item`，rank0 等待输出 loss；保留原始 rank 栈与 exit 124。attempt-11 则证明两个 rank 在 `jt.runtime.scope` 下直接处理 CUDA `int64` attention mask、调用相同 helper、all-reduce/barrier 均通过，fallback 为 0。两项源码与工作区状态前后不变，GPU worker 已清理。具体 SHA256 见 Day2–5 结果文档顶部。
+
+下一项有意义的功能诊断是在外部 GPU 负载合适时，复用已暖 cache、给真实模型中的 helper 入参/返回和每个 rank 的模型阶段增加打点；不再原样重跑冷态 attempt-10。GPU2 目前仍由 yqa PID `4166405` 在 Default/shared 模式下使用 8,640 MiB；`gpu2-exclusive-run.sh` 已准备，但当前账号执行 sudo 需密码，不能替他人停止该进程。正式 Day4–5 性能/显存门仍要管理员/调度器提供 GPU UUID/GRES 独占及设备隔离，再执行三轮交替与每侧每轮至少十个热态样本。更广 Day2–5 与整体 release 继续 **Not complete**。
+
 ## 2026-11-01 23:01 +0800 接续：零设备 CPU fetch 修复通过定向回归，实际 CUDA 复验待资源
 
 继续使用现有 /home/cgq/jittor，未重新 clone。提交前 HEAD 7b3a2e64bfd03c790ea0d8e766423cf33c37b46f，origin/cgq_transformers e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（ahead/behind 175/0）；工作区原有 105 项 dirty/untracked 状态 hash 保持 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98，开始时 index clean。产品改动限于 src/ops/composite/fetch_op.cc 的 lazy Copy-stream 初始化；源文件提交前 SHA256 c3dadef00942aa7accda29a4eee3afb6673c58f199fe5e3e1ad5654e31868780。原来的行尾空格 dirty diff 在工作树保留，提交时只 stage 本任务 hunk。

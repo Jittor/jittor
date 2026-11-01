@@ -1,3 +1,13 @@
+## 2026-11-02 00:03 +0800 DDP attention-mask细化：int64 helper 通过，真实 BERT/LoRA DDP 前向仍超时
+
+继续在 `/home/cgq/jittor` 既有工作区推进，未重新 clone。HEAD `fc437281f69a681c08ae94004a56dfb25e6ff621`，分支 `integrate/cgq-transformers-native-multicard-target`，origin/cgq_transformers `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`（ahead/behind 176/0）；源码指纹 `4755e03a116acbda401d5c83e5c1635ea9e75bb8f8e1ff22a8fc4979f1771a58`（2,823 文件）。实验前后 105 项既有 dirty/untracked 状态 SHA256 均为 `8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98`，index clean；没有改源码或其他既有文件。
+
+在 `/data6/cgq/jittor-lab/_state/release-day23/20261101-main-ddp-scalar-item-r1-prepared/` 新增两项限时正确性诊断。attempt-10 在 GPU4/GPU9、`jt.runtime.scope(use_cuda=1, backend_fallback="error")` 下，双 rank 直接执行 scalar `.item()`/bool 与 Transformers mask helper 均通过，BERT/LoRA 模型建立和 DDP 包装也完成；完整 forward 中 rank1 随后停在 BERT `_prepare_4d_attention_mask_for_sdpa` 的 `Var.to_bool -> _var_item`，rank0 等待 loss 取值。150 秒 job deadline exit 124。JIT cache 从 1123 增至 1225 项（新增 47 个 `.so`），`jittor_core` SHA256 未变；这项 timeout 没有证明产品死锁根因。
+
+attempt-11 用相同两 rank/设备，在 runtime scope 下直接复现 BERT 输入类型的 CUDA `int64` mask；比较、`torch.all(...).item()`、bool、helper、NCCL all-reduce（结果 3.0）和 barrier 全部通过，fallback delta 0，exit 0；cache 1225→1237 项。故 standalone scalar/helper 适配已被进一步验证，完整 Transformers/LoRA DDP forward 的挂起仍未解决，下一诊断应对实际模型 helper 入参和冷/暖 cache 分阶段打点，不复跑原样 attempt-10。详细路径与哈希见 Day2–5 结果文档顶部。
+
+GPU2 `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 仍为 Default/shared，yqa PID `4166405` 使用 8,640 MiB；当前账号 `sudo -n` 需密码，未启动 holder、未干预该进程。保留的 `/data6/cgq/jittor-lab/tools/gpu2-exclusive-run.sh` 只能在获得管理员权限且卡空闲后包裹实际单进程 benchmark。Day4–5 正式性能/显存验收仍需系统级 GPU UUID/GRES 独占与设备隔离；其三轮交替、每轮每侧至少十个热态样本及延迟/显存/容量报告要求不变。更广 Day2–5 门继续开放，整体 release 保持 **Not complete**。
+
 ## 2026-11-01 23:01 +0800 CPU fetch零设备路径已修复；GPU2仍无独占租约
 
 继续使用现有工作区，未重新 clone。HEAD 7b3a2e64bfd03c790ea0d8e766423cf33c37b46f，origin/cgq_transformers e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（ahead/behind 175/0）；实验前既有 dirty/untracked 状态 SHA256 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98、index clean。仅 src/ops/composite/fetch_op.cc 增加本任务修复；源码 SHA256 c3dadef00942aa7accda29a4eee3afb6673c58f199fe5e3e1ad5654e31868780。修改把 entry-device/Copy-stream 初始化延迟到首次 CUDA-backed fetch；CPU-only fetch 不再在 accelerator build、零可见设备时请求 device 0 stream。
