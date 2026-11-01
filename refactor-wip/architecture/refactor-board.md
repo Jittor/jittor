@@ -1,3 +1,14 @@
+## 2026-11-01 21:32 +0800 clean-installed wheel CUDA 功能 smoke 通过；正式性能门仍待独占资源
+
+本轮在 /home/cgq/jittor 既有工作区完成一次已安装 wheel 的真实 CUDA 功能验证。运行前 HEAD 为 666f96a1935988cd9b2508838bb1b6dbed1a11da，分支 integrate/cgq-transformers-native-multicard-target，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 171/0。源码 fingerprint 前后同为 176145b73e0507e98875a6033673e8d56532096953712fbe2e6eee02d41d5fde；105 项既有 dirty/untracked 的 SHA256 前后同为 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98，index 为空。本轮不改源码或其他既有文件。
+
+非 editable 安装来自已保留的 main 与 compat wheels；当前树与 wheel build source snapshot 的 2,823 个文件逐项比较，2,820 项相同，差异仅为三份状态文档，运行时代码文件全部相同。main wheel SHA256 bbe79c15dace5d6952dc79dcc7e2107e1f9df296d174d92500b85e24b9b434d8，compat wheel SHA256 61a0c8b396522d6e81700f79143e2d587985d6fbe7d136db184f59e208b4b7a8。
+
+attempt-03 绑定 Python 3.10.20、CUDA 12.4、sm80，并将可见设备 UUID 固定为物理 GPU0 GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5；GPU2 GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 未纳入此次任务。执行 185.06 秒，exit 0，status PASS_REAL_CUDA_INSTALLED_WHEELS。Jittor 从 wheel 安装目录导入，core 从私有 JITTOR_HOME 加载，selftest backend 为 CUDA；三步 loss 0.837932 → 0.272050 → 0.046918，参数发生更新。Torch shim 与 Jittor 模块身份不同，识别到一张 CUDA 设备；反向梯度为 [2, 4]，SGD 将参数 [1, 2] 更新为 [0.8, 1.6]。两侧 fallback 增量均为 0。CUDA placement 断言在 host NumPy readback 前通过；readback 后摘要中的 location=cpu 不作为持续设备驻留证据。该结果关闭本 wheel/Python/CUDA 配置的安装后功能 smoke，不提供性能或显存结论。
+
+更早的 admission 失败与进程集合变化终止均保留在同一证据包中，不记为功能失败或通过。正式 Day4–5 仍需系统级 GPU UUID/GRES 独占和 device-cgroup 隔离，再做匹配配置下至少三轮交替、每侧每轮至少十个热样本，并报告 median/p95/离散度、load/首步/热态、allocator/NVML 峰值、容量/OOM 恢复及实际 activation recompute 显存差异。DDP/FSDP2 多卡训练与新进程保存恢复、held-out generation quality、ACL build/migration 和更广支持矩阵仍开放；整体 Day2–5 release 保持 **Not complete**。证据路径和哈希见 Day2–5 结果记录顶部。
+
+
 ## 2026-11-01 21:11 +0800 调度复核：备用 A100 节点空闲但当前账户不能申请；GPU2 仍共享
 
 继续在 /home/cgq/jittor 现有工作区。当前 HEAD 1f2e6fba815a5bef46c4aee71b34ddb907289f0a，runtime 源码与前一条 DDP probe 的 dadc58093b75981c68c4c7a0a68d1eab773403e6 相同（其后仅提交状态文档）；origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 170/0。既有 102 项工作区状态哈希仍为 porcelain 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211、-uall 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98，索引为空；本轮未修改源码或实验文件。

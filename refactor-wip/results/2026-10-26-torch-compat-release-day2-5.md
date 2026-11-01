@@ -1,3 +1,30 @@
+## 2026-11-01 21:32 +0800 clean-installed main/compat wheels CUDA smoke 通过
+
+### 源码与 wheel 身份
+
+验证在 /home/cgq/jittor 既有工作区进行，运行前 HEAD 666f96a1935988cd9b2508838bb1b6dbed1a11da，分支 integrate/cgq-transformers-native-multicard-target，远端 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 171/0。运行前后源码 fingerprint 均为 176145b73e0507e98875a6033673e8d56532096953712fbe2e6eee02d41d5fde；105 项既有 dirty/untracked 状态 SHA256 均为 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98，index 为空。
+
+wheel 构建及安装产物保留于 /data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-clean-wheel-cuda-dcp-r1-prepared/。wheel build source snapshot HEAD 为 7e09fc315189bcc4ba641c75dd89666264221e3d。current-main 与该构建 source 的 2,823 个 tracked/untracked 文件逐项比较后，2,820 个完全相同，唯一差异是 refactor-board.md、2026-10-21-workspace-snapshot-handoff.md、2026-10-26-torch-compat-release-day2-5.md 三份状态文档；无运行时代码差异。比较清单：attempt-03-gpu0-correctness-only/wheel-source-comparison.json，SHA256 24e44eb51e36480b56c80261351ff35c05c55237539ccbb3f367fcb5cc5344d4。
+
+main wheel jittor-1.3.11.0-py3-none-any.whl SHA256 bbe79c15dace5d6952dc79dcc7e2107e1f9df296d174d92500b85e24b9b434d8；compat wheel jittor_torch-1.3.11.0-py3-none-any.whl SHA256 61a0c8b396522d6e81700f79143e2d587985d6fbe7d136db184f59e208b4b7a8。由 local wheel 使用 pip --target 安装；jittor 从 install target 导入，core 从独立 JITTOR_HOME 加载，PYTHONNOUSERSITE=1，不是 editable checkout。
+
+### 受控功能结果
+
+最终 attempt 为 /data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-clean-wheel-cuda-dcp-r1-prepared/attempt-03-gpu0-correctness-only/。运行预算 900 秒，实耗 185.06 秒，exit 0，status PASS_REAL_CUDA_INSTALLED_WHEELS。Python 为 3.10.20，CUDA 12.4，A800 sm80。CUDA_VISIBLE_DEVICES 绑定物理 GPU0 UUID GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5，逻辑 cuda:0；没有使用 GPU2。共享 GPU 进程与显存采样被记录，但本结果只作 correctness smoke，不作速度或显存测量。
+
+Jittor installed selftest 报告 backend=cuda、forward [1, 4, 9]、gradient [2, 4, 6]、3 个训练步 loss 0.8379318714, 0.2720496655, 0.0469177216、参数最大变化 0.18950443、fallback delta 0。Torch shim smoke 确认 torch is not jt、torch.cuda.device_count()==1、设备属性为 cuda:0 且 placement backend 为 CUDA；CUDA backward 梯度 [2, 4]，SGD 参数从 [1, 2] 变为 [0.80000001, 1.60000002]，shim fallback delta 0。测试在 host NumPy readback 前断言 tensor 的 location=device；随后 .numpy() 后生成的摘要显示 location=cpu，所以不据此声称 host readback 后仍保持 device location。私有 core SHA256 4c2969c255cb90956bb20214c0c28bde92993eef6f2da7eb511638f9ded4ea62。
+
+关键证据哈希：runtime/run.json 和 launch.log 均为 07c6f4bf85d6a8d5dd6346c129e61920e192c6faaa494291b0b5f2fa517164dc；selftest/installed-cuda-smoke.log 为 dd76ebb9a2529ac67f74bbcea1487ee7bbc9f305f998e3ec9100bb152765d146；current source before/after 分别为 3ccd4544bcd338485fbc94e789d2f6bad66069d40d6d9835c941c6b4152262fd 与 1b38a59b2bdff87f8bdbe0b063537d19ab2d4ee93bc3376646a1f0a7eb7e4deb，其 source fingerprint 与工作区状态均一致。postflight-sha256.txt 保存其余核心哈希。
+
+### 保留的未完成 attempt
+
+原计划 attempt-01 的 wheel build/install 均成功，但运行前 admission 发现 GPU1 只有 46,996 MiB free，CUDA smoke 没有启动；原件仍在 package root。attempt-02 在 GPU0 开始启动后，监测到共享 GPU 的 process set 变化而终止，exit -15；测试没有形成结论。attempt-02-gpu0/preparation-error-01.txt 记录了早先一条未进入测试的准备路径错误。没有覆盖上述原件。
+
+attempt-03 使用不同的 correctness-only admission：固定 GPU UUID、至少 50 GiB 入场空闲显存、共享负载只记录；运行中若空闲显存降到 15 GiB 以下才停止。该改动仅用于安装功能 smoke，不形成独占或性能门通过。
+
+此项只关闭这两份 wheels 在 Python 3.10.20/CUDA 12.4/A800 sm80 下的安装后功能 smoke。它不能替代多版本 wheel 矩阵、Day4–5 配对性能/显存验收，或 DDP/FSDP2 多卡训练和 fresh-process resume。GPU2 仍是 Default/shared，正式 Day4–5 需管理员/调度器提供指定 UUID/GRES 独占和 device-cgroup 隔离。
+
+
 ## 2026-11-01 21:11 +0800 调度复核：备用 A100 节点空闲但当前账户不能申请；GPU2 仍共享
 
 继续在 /home/cgq/jittor 现有工作区。当前 HEAD 1f2e6fba815a5bef46c4aee71b34ddb907289f0a，runtime 源码与前一条 DDP probe 的 dadc58093b75981c68c4c7a0a68d1eab773403e6 相同（其后仅提交状态文档）；origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 170/0。既有 102 项工作区状态哈希仍为 porcelain 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211、-uall 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98，索引为空；本轮未修改源码或实验文件。

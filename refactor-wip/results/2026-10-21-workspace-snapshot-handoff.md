@@ -1,3 +1,12 @@
+## 2026-11-01 21:32 +0800 接续：clean-installed wheel CUDA smoke 已通过，Day4–5 独占窗口仍缺
+
+current-main 运行前 HEAD 666f96a1935988cd9b2508838bb1b6dbed1a11da，源码 fingerprint 176145b73e0507e98875a6033673e8d56532096953712fbe2e6eee02d41d5fde，105 项既有 dirty/untracked SHA256 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98；wheel source 与当前树的差异仅为三份状态文档。未修改源码或其余 dirty/untracked 文件。
+
+20261101-current-main-clean-wheel-cuda-dcp-r1-prepared/attempt-03-gpu0-correctness-only/ 完成真实 CUDA installed-wheel smoke：Python 3.10.20/CUDA 12.4/A800 sm80，固定物理 GPU0 UUID GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5，Jittor 与 Torch shim 均 fallback=0，前反向和 optimizer 更新通过；3 步 selftest loss 下降。该结果只关闭这两份 wheel 在该配置的安装后功能验证，不是性能/显存结论，也没有使用 GPU2。细节、失败 attempt 与哈希见唯一看板及 Day2–5 结果报告顶部。
+
+继续优先关闭 DDP/FSDP2 双 rank 训练与新进程保存恢复；Day4–5 等系统级 GPU UUID/GRES 独占和 device-cgroup 租约后执行规定的三轮交替热态性能/显存协议。held-out generation quality、ACL build/migration 与更广支持矩阵也仍开放；整体 release 不得标完成。GPU2 当前为 Default/shared，普通 CUDA holder 无法阻止其他 client。
+
+
 ## 2026-11-01 21:11 +0800 接续：A100 空闲节点无法由当前 Slurm 账户申请
 
 当前 main HEAD 1f2e6fba815a5bef46c4aee71b34ddb907289f0a；源码路径相对前条 DDP barrier probe 未变，origin/cgq_transformers 仍 e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（ahead/behind 170/0）。cn2 在 Slurm a100 分区空闲，但两卡 srun --test-only 返回 Invalid account/account-partition；sacctmgr 未列出 cgq association，未提交作业。A800 节点仍 DOWN，GPU2 仍由 yqa PID 4166405 以 Default/shared 使用。没有启动 holder 或 NCCL 测试；普通 holder 不能实现系统级独占。详情和精确命令见 board 与 Day2–5 结果文档顶部。后续直接 NCCL 诊断与正式 Day4–5 需要调度器账号/管理员先提供隔离资源。
