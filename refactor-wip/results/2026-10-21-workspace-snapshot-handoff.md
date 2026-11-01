@@ -1,3 +1,22 @@
+## 2026-11-01 17:09 +0800 接续入口：DDP 新进程验证未运行到训练；GPU 显存诊断启动配置待修
+
+继续使用 /home/cgq/jittor，别重新 clone。文档更新前 HEAD 7d70cb5f11c61300aa174adae70356547fc5ce8d，branch integrate/cgq-transformers-native-multicard-target，刚 fetch 的 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 161/0；原有 102 项 dirty/untracked SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，index 为空。本轮实验绑定运行时 source fingerprint 3d32800588ed75d470b9897bc1df60d4a3a996619282766352933911060a9。
+
+multi-rank Trainer 证据包 /data6/cgq/jittor-lab/_state/release-day23/20261101-main-hf-trainer-ddp-resume-r1-prepared/。attempt-01 在一次性 jit_utils metadata 提示处停止；attempt-02 的两 rank full 阶段编译 core 到约 159/228 后遇 300 秒上限，exit 124，没有训练更新或报告。此实验预算已用尽，不覆盖 PyTorch control，也不重跑。后续新包应先对 use_nccl=1 的当前源码 build flags 做隔离、有界预构建，再运行同一 full → step-2 stop → fresh-process resume → step-4 protocol。
+
+Checkpoint CUDA 显存诊断包 /data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-checkpoint-memory-diagnostic-r1-prepared/ 原计划在 GPU1 以 Llama 6-layer synthetic training 比较 checkpoint on/off。attempt-01 仅遇 jit_utils metadata 提示，未加载模型；attempt-02 因 JITTOR_NO_BUILD=1 与 current cache build flags 不匹配而在 import 处退出，仍无 CUDA context、参数更新或显存值。一次 metadata 重启已用完；不再创建 attempt-03。下次若重开此诊断，先用当前源码规范 CUDA flags 完成 no-build core identity probe，并建立独立新计划/预算。
+
+GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 当前 Default/shared，VLLM PID 2737921 + yqa PID 4166405 共用约 29,781 MiB，利用率 98%；Slurm A800 节点 X12DPG-OA6 仍 down。GPU1 测后为 1 MiB/0%，GPU4 有外部负载。没有运行 holder/burner。正式 Day4–5 仍需系统级 GPU UUID/GRES 独占与设备隔离租约，并匹配至少三轮 PT/JT 交替、每轮每侧至少十个热样本，报告 median/p95/离散度、load/首步/热态、allocator/NVML 峰值、容量/OOM 恢复与实际 recompute 显存对照。clean-installed wheel CUDA、FSDP2/DCP scope、ACL build/migration、held-out generation quality、完整支持矩阵也未关闭；整体 release 继续 **Not complete**。
+
+### 接续顺序
+
+1. 取得管理员/调度器的 GPU2 UUID/GRES 独占与 device-cgroup 隔离，再进行正式 Day4–5 配对测量。
+2. 在 current-main fresh cache 中单独预构建 multi-rank use_nccl=1 core，预算固定且保留失败；预构建通过后再执行受控 Trainer full/stop/resume，不复用已超时的 attempt。
+3. 只有需要重开 checkpoint memory diagnostic 时，先确认当前 main CUDA cache 的 use_cuda/flags 与 no-build stamp 匹配；此前两次启动失败已保留，不能作为 memory evidence。
+4. 同步关闭 clean-installed wheel CUDA、DCP 支持范围、ACL 构建/迁移、合格 held-out quality 与支持矩阵。整体发布仍为 **Not complete**。
+
+---
+
 ## 2026-11-01 16:30 +0800 继续入口：held-out generation 对比已补；先拿 GPU2 排他租约再做 Day4–5
 
 继续在 /home/cgq/jittor 现有工作区，不要重新 clone。提交前 HEAD a7e919b279f778bff24bff6a1d14c55642dbf7d1，branch integrate/cgq-transformers-native-multicard-target，origin e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 160/0；本轮前 102 项既有 dirty/untracked 的 porcelain SHA256 为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，只编辑三份既有状态文档。

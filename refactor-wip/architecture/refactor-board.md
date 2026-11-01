@@ -1,3 +1,19 @@
+## 2026-11-01 17:09 +0800 current-main DDP Trainer 未越过冷编译；checkpoint 显存诊断停在启动
+
+继续使用 /home/cgq/jittor 现有工作区。文档修改前 HEAD 7d70cb5f11c61300aa174adae70356547fc5ce8d，branch integrate/cgq-transformers-native-multicard-target，刚 fetch 的 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 161/0；原有 102 项 dirty/untracked 的 porcelain SHA256 为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，index 为空。实验绑定源码 fingerprint 3d32800588ed75d470b9897bc1df60d4a3a996619282766352933911060a9。本轮不改运行时源码或测试。
+
+current-source 两 rank public HF Trainer fresh-process resume 证据包 /data6/cgq/jittor-lab/_state/release-day23/20261101-main-hf-trainer-ddp-resume-r1-prepared/。attempt-01 在 Jittor 一次性 jit_utils 元数据重建保护处退出，0 次更新；attempt-02 启动后 rank1 编译 Jittor core 到约 159/228，rank0 等待同一构建锁，300 秒限时退出 124。没有训练报告、checkpoint 或参数更新，不能记为 DDP 通过或功能失败；该实验预算内不再重跑。exit 文件 SHA256 ca2ebdf97d7469496b1f4b78958f9dc8447efdcb623953fee7b6996b762f6fff，launcher 日志 SHA256 c9f6685001f746a8f668638aefe3ec995cbba8769a1baa6fbe07883870984045，rank1 日志 SHA256 ee72981c519be3200a3dca891509ec95f8b9c63d03f42689eed14b578b555235。PyTorch 对照复用既有记录，没有重跑。
+
+checkpoint CUDA memory diagnostic 证据包 /data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-checkpoint-memory-diagnostic-r1-prepared/。attempt-01 只触发 jit_utils 的 .key/.d 元数据更新，exit 3，未加载模型；两个 .so 哈希未变，源 cache 未改。attempt-02 因 JITTOR_NO_BUILD=1 下已缓存 core 与当前启动 build flags 不匹配而报 BuildNotAllowed，仍未创建 CUDA context 或训练更新；这是启动配置问题，不是重计算或显存结果。两次记录均保留，依据 revision-02 的停止规则不再试第三次。当前 GPU1 为 1 MiB/0%；本轮没有显存 on/off 数值。
+
+GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 仍是 Default/shared，外部 VLLM/yqa 占用 29,781 MiB、利用率 98%；Slurm A800 节点 X12DPG-OA6 为 down。GPU4 仍有外部任务，本轮没有用它作性能比较。根文件系统 99% 使用、剩余 61 GiB；/data6 剩余 5.5 TiB。正式 Day4–5 必须等系统级 GPU UUID/GRES 独占和设备隔离租约，再按至少三轮交替、每轮每侧至少十个热样本完成时延分位数/离散度、加载/首步/热态、allocator/NVML 峰值、容量/OOM 恢复及真实 recompute 显存对照。multi-rank Trainer fresh resume、clean-installed wheel CUDA、FSDP2/DCP、ACL migration、合格 held-out generation quality 和完整支持矩阵仍开放；整体 Day2–5 release 保持 **Not complete**。
+
+### 继续顺序
+
+先取得 GPU2 系统级独占租约以完成正式 Day4–5。multi-rank DDP 下一次新实验应先用独立 cache、按 use_nccl=1 的真实启动配置完成有界 core 预构建，再启动 full/stop/resume，避免重复本轮 300 秒冷编译。activation memory diagnostic 后续准备应改用当前源码实际 CUDA build flags，并在启动模型前做 no-build core identity import 检查；本包 attempt-01/02 不覆盖该结果。继续处理 clean-installed wheel CUDA、DCP 支持范围、ACL 构建/迁移、held-out 质量规则与支持矩阵。
+
+---
+
 ## 2026-11-01 16:30 +0800 current-source Qwen held-out generation 对比已记录；Day4–5 等待 GPU2 系统级独占
 
 继续使用 /home/cgq/jittor 现有工作区。提交前 HEAD a7e919b279f778bff24bff6a1d14c55642dbf7d1，branch integrate/cgq-transformers-native-multicard-target，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 160/0。工作区原有 102 项 dirty/untracked，porcelain SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211；仅更新规定的三份状态文档。本轮运行时源码身份为 HEAD fe56f24746a51d4f7987e94b20a000a0ef7acf21、fingerprint e1e705658b054b34815843d1d2ce577b6541685c3939f37009104919bdb31535。

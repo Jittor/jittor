@@ -1,3 +1,31 @@
+## 2026-11-01 17:09 +0800 current-main DDP Trainer 冷编译超时；checkpoint GPU 显存对照未执行
+
+### 工作区与源码身份
+
+继续使用 /home/cgq/jittor，没有重新 clone。文档更新前 HEAD 7d70cb5f11c61300aa174adae70356547fc5ce8d，branch integrate/cgq-transformers-native-multicard-target，刚 fetch 的 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 161/0。本轮前有 102 项既有 dirty/untracked，porcelain SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，index 为空。实验 source fingerprint 为 3d32800588ed75d470b9897bc1df60d4a3a996619282766352933911060a9；src/core/var_holder.cc SHA256 53f73df53bd42465aed6ff5f51aa4bfe7569a9b0263576848f10e7dc48ab40a8、compat/torch/installers/data.py SHA256 0a4d1c151a9de5e3d57da60117f156e8641b26febd7c63a4727914fef04c33c8 与所复用的 current-main cache 源记录一致。本轮没有修改运行时源码或测试，只更新三份既有状态文档。
+
+### Public HF Trainer 双 rank 新进程续训
+
+证据包 /data6/cgq/jittor-lab/_state/release-day23/20261101-main-hf-trainer-ddp-resume-r1-prepared/ 绑定以上 HEAD/fingerprint、Transformers 4.56.2、Accelerate 1.10.1、PEFT 0.17.1、CUDA 12.2.140。协议为两 rank、GPU1 UUID GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068 和 GPU4 UUID GPU-8bf405a2-a3dd-e203-8dd9-691e9f7b3530、小型 BERT 分类加 LoRA、16 条合成样本、FP32、固定 seed、四次全局更新；full 后在 step 2 停止并新进程恢复到 step 4。复用已通过的 PyTorch control，没有重跑对照。
+
+attempt-01 在 Jittor 提示 jit_utils 一次性元数据重建、尚未进入训练时退出，0 updates；attempt-02 使用新输出目录和独立运行日志，rank1 在隔离 cache 编译 Jittor core，进度约 159/228，rank0 等待构建锁，300 秒阶段上限触发 exit 124。无训练报告、更新、保存或 resume，故本实验没有给出 DDP 功能结论。attempt-02 计划 SHA256 aef60fb08f4e39610a02adc2cb17091699c147d3c6b8c578a71ce348f49c3019；exit 文件 SHA256 ca2ebdf97d7469496b1f4b78958f9dc8447efdcb623953fee7b6996b762f6fff；launcher 日志 SHA256 c9f6685001f746a8f668638aefe3ec995cbba8769a1baa6fbe07883870984045；rank0/rank1 日志 SHA256 分别为 8805c92f5da0b23cceba6fdf7f9084d42570d6415b860c1ae4b9caa21e6a0813 / ee72981c519be3200a3dca891509ec95f8b9c63d03f42689eed14b578b555235。阶段前后 source fingerprint 和工作区状态一致；失败日志和部分 cache 编译痕迹保留。此次限时已用尽，本实验包不再重跑；后续若继续，应先在新的独立包用匹配 use_nccl=1 配置做一次有界 core 预构建。
+
+### Checkpoint CUDA recompute 显存诊断
+
+current-source CUDA memory diagnostic 包 /data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-checkpoint-memory-diagnostic-r1-prepared/ 使用单卡 GPU1、Transformers LlamaForCausalLM（6 层、hidden=384、intermediate=1024、batch=4、sequence=512、FP32、AdamW），比较 Jittor checkpoint on/off；用途限于功能与 allocator/NVML 峰值诊断，不是正式 PT/JT 性能门。
+
+attempt-01 的 worker exit 3，日志报 Jittor 一次性重建 jit_utils 元数据并明确要求重跑；没有模型、CUDA context 或更新。隔离 cache 相比原始 current-main cache 仅 jit_utils_core...so.key 与 .d 不同，core .so SHA256 仍为 02d13f8146f7cf16991dcdd4d1c9e76bfecefd57a8b41b85c65514acef5b174c，jit_utils .so SHA256 仍为 d83b331385c81f3ffa8b70ba2665acee73fe6ba7e5c300089af43170f80eebaf，源 cache 未改。run.sh 由 PowerShell 管道写入 CRLF，外层最终退出状态处理也有行尾问题；原脚本和 attempt-01 日志均保留。
+
+按 Jittor 的一次性 metadata 提示，revision-02 在独立 attempt-02 目录执行一次，不自动重试。worker 随后在 import 时报告 JITTOR_NO_BUILD=1 且 current core 对该 build configuration 不可用（BuildNotAllowed），worker exit 1；没有 CUDA context、模型更新或结果 JSON。诊断脚本设 use_cuda=0，而通过的 current-main Qwen CUDA launch 记录使用 use_cuda=1；这表明本次 cache/build flags 没匹配，属于环境/启动配置失败，不能解释为 checkpoint recompute 或显存不节省。revision-02 SHA256 c64137bf6abc656fcc586c08c566870ecbd2f05fc06318578be335725bcdbe2d，attempt-02 LF 脚本 SHA256 f7aa451f02939f7460840d99df2553d228abd8de7d8bb8e161654713e1e90ed5。按此有界计划停止，不再创建 attempt-03；没有生成 on/off memory 数值。
+
+### 资源与仍未闭合的验收
+
+两次诊断后 GPU1 为 1 MiB used / 0% utilization、没有项目 compute process；GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 仍为 Default/shared，NVML 29,781 MiB、98% utilization，外部 VLLM PID 2737921 使用 21,124 MiB、yqa PID 4166405 使用 8,640 MiB。Slurm A800 节点 X12DPG-OA6 仍为 down。GPU4 UUID GPU-8bf405a2-a3dd-e203-8dd9-691e9f7b3530 有外部 PID 4160520；没有用共享设备的 elapsed 做性能声明。root 盘 99% 使用、61 GiB free，/data6 有 5.5 TiB free。
+
+这些结果没有关闭 Day4–5。正式验收仍要求系统级 UUID/GRES 独占和设备隔离、匹配 PT/JT 配置、至少三轮交替且每轮每侧至少十个热态样本、median/p95/离散度、加载/首步/热态时间、allocator/NVML 峰值、容量/OOM 恢复，以及实测 checkpoint on/off recompute 显存与耗时。multi-rank DDP Trainer fresh-process resume、clean-installed wheel CUDA、FSDP2/DCP scope、ACL build/migration、合格 held-out generation quality 与完整支持矩阵也保持开放；overall Day2–5 release 继续 **Not complete**。
+
+---
+
 ## 2026-11-01 16:30 +0800 current-source Qwen held-out generation 匹配对比（有限诊断）
 
 ### 工作区与源码身份
