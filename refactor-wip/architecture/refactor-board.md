@@ -1,3 +1,8 @@
+## 2026-11-02 03:25 +0800 GPU2 无法由普通 holder 排他；current-main CPU DCP cache 状态更正
+
+GPU2（UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0）在 03:22 +0800 复核为 Default compute mode、17,299 MiB 已用；PID 3037196 和 3164740 各占 8,640 MiB，采样利用率约 86–92%。X12DPG-OA6 仍为 DOWN（Unexpected reboot），Slurm ConstrainDevices=no；当前 SSH 身份为 uid=1001(cgq)。普通显存 holder 不能禁止其他进程创建 CUDA context，反而会与现有任务争用资源，因此没有启动 holder。正式 Day4–5 仍需管理员恢复节点并提供 GPU UUID/GRES 与 device-cgroup 独占租约。
+
+DCP CPU preflight 阻塞描述更正：R3 prebuild core 并非缺失，而是因 src/ops/composite/fetch_op.cc 源签名落后而 stale。attempt-02 runtime cache 的 current jittor_core/jit_utils 通过 JITTOR_NO_BUILD current-build 检查；导入随后在 setup_cuda_extern 阶段失败。匹配 CUDA 12.2 bundle 中实际存在 cuDNN 8 开发文件（/home/cgq/.cache/jittor/jtcuda/cuda12.2_cudnn8_linux/include/cudnn.h 与 lib64/libcudnn.so）。compile_extern.setup_cuda_lib 的宽泛异常包装会把内部任意异常附成“Develop version of CUDNN not found”，故底层异常尚未确定，不能据此判断 cuDNN 缺失。该 no-build preflight 只改变 attempt-02 cache 的 jittor.lock 内容；core/module 编译产物未变，没有进入 DCP 测试。保留 attempt-04 的 300 秒预算结果，不重复编译或覆盖原件。
 ## 2026-11-02 03:13 +0800 R4 step_capture 与 GradScaler overflow 组合未验收
 
 R4 wheel 已包含 step_capture 与 AMP GradScaler；测试分别覆盖 captured training 和普通 GradScaler overflow/backoff，但没找到 captured step 中注入 overflow、跳步并恢复的组合轨迹。源码有 found_inf / skipped-step 设备态处理，因此这是未覆盖路径，不是已证实失败。当前 core cache 不匹配、GPU2 共享，未运行测试；下一项需比较 overflow skip 与下一有限步的参数、optimizer/scheduler/scaler 状态。整体 Day2–5 仍开放。

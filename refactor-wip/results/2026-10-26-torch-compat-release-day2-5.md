@@ -1,3 +1,10 @@
+## 2026-11-02 03:25 +0800 GPU2 独占阻塞与 DCP CPU preflight cache 纠正
+
+GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 在 03:22 +0800 为 Default compute mode，显存使用 17,299 MiB；外部 PID 3037196、3164740 各占 8,640 MiB，nvidia-smi 两次采样利用率为 86% 与 92%。X12DPG-OA6 为 DOWN（Unexpected reboot），Slurm 配置 ConstrainDevices=no，当前连接身份 uid=1001(cgq)。普通占卡/显存保留进程不能阻止其他用户继续向 GPU2 建立 context，而且会干扰这两个现有任务；本轮没有创建或启动 holder。Day4–5 正式性能显存测试仍需管理员恢复节点、清空现有任务并通过 UUID/GRES 与 device-cgroup 提供独占租约。
+
+更正此前“current core cache 缺失/不匹配”的概括：R3 prebuild 的 jittor_core.so 实际存在（SHA256 c318255df35a5bfe07957f36c7fe9b7108b2f772df07cdeff5343f0bf35f3a03），但其 build source signature 仅有 src/ops/composite/fetch_op.cc 落后于当前修复，因此该 cache 是 stale。另一个 attempt-02 current-main runtime cache 中的 jittor_core 与 jit_utils 已通过 JITTOR_NO_BUILD=1 的 current-build 检查；import 随后失败于 python/jittor/build/compile_extern.py::setup_cuda_extern，未进入 DCP save/load 测试。
+
+失败信息中的 cuDNN 开发版本提示不是根因证明：当前 Jittor CUDA 12.2 bundle 可见匹配的 cuDNN 8 头文件 /home/cgq/.cache/jittor/jtcuda/cuda12.2_cudnn8_linux/include/cudnn.h 和库 /home/cgq/.cache/jittor/jtcuda/cuda12.2_cudnn8_linux/lib64/libcudnn.so；setup_cuda_lib 外层 except 会将任意内部异常都附加为该提示，no-build preflight 未保留更底层 traceback，故真实失败原因未知。核对 attempt-04 cache-products-after 清单与当前 attempt-02 cache 后，唯一内容差异是 jittor.lock（哈希由 ac77dca3… 变为 dd72ffd0…）；没有发现 core/module 产物变化。preflight 没有编译或运行测试。保留已有 attempt-04 300 秒增量编译记录，不再重复该预算或改写证据。
 ## 2026-11-02 03:13 +0800 R4 step_capture / GradScaler 组合路径缺少直接验收
 
 只读核对 R4 包源码 HEAD 5a1b42223573b25ea01734ce616c63fc31dd016a、source manifest SHA256 ec7060f76b743926bfad54c6f94bddf19e1fccc12c972c20079c78c9f811c76e 与 main wheel SHA256 b87469fe5a6103d6f4fcea0e6292d663102ef5cd2be661439db2f81515cc3ef4。python/jittor/_runtime/step_capture.py 在 source snapshot、当前工作树和 wheel 内字节一致，SHA256 29ba0398a667aeb007b97f475092efd23df848249095b6f0137df4a4e1fa36ea；python/jittor/amp/grad_scaler.py 也进入 wheel，SHA256 7101e1e377621ed87e98caab131b0e78b9d17c6109b4284d35ce849a2180f5b2。

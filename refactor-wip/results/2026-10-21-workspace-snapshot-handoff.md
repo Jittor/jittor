@@ -1,3 +1,8 @@
+## 2026-11-02 03:25 +0800 下一步：先取得 GPU2 独占租约；DCP 阻塞需按真实异常重新定位
+
+GPU2 当前有两个外部进程运行，Default compute mode，Slurm 节点 DOWN 且 ConstrainDevices=no。普通 VRAM holder 不提供排他，不能用于正式性能测试；需要管理员恢复 X12DPG-OA6 并提供绑定 GPU UUID 的 GRES/device-cgroup 独占作业。独占前不要启动占卡程序或 Day4–5 cohort。
+
+current-main DCP CPU preflight 的准确状态是：attempt-02 runtime cache 的 jittor_core/jit_utils 通过 no-build freshness checks，随后在 CUDA extern setup 失败，未触及 DCP。匹配 CUDA 12.2 的 cuDNN 8 开发文件存在；“cuDNN develop version not found”来自宽泛异常包装，不能作为真实根因。失败预检只改变了 jittor.lock，不改编译产物。不要重复已经超时的 attempt-04 全量增量构建；下一次 CPU 路径只在确认如何绕过/满足 CUDA extern 初始化且有明确时间预算后推进，并保留独立输出目录。性能与显存验收仍须三轮交替、每轮每侧至少 10 个热态样本，并报告 median/p95/离散度、加载/首步/热态时间、allocator/workspace 与 NVML 峰值。
 ## 2026-11-02 03:13 下一步：验收 captured training 的 GradScaler overflow 恢复
 
 R4 step_capture 与 GradScaler 文件均已确认打入 main wheel，与 source snapshot 的字节哈希一致。core 测试覆盖 capture 的状态/RNG/dropout/memory；兼容测试分别覆盖 torch.compile 训练和普通 AMP/overflow，但没有直接覆盖 captured step 的 GradScaler overflow skip/recovery。详细 source/test 身份与静态路径见 Day2–5 结果文档 03:13 条目。
