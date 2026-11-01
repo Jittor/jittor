@@ -1,3 +1,15 @@
+## 2026-11-01 15:45 +0800 current-main Qwen 新进程续训严格一致；FSDP2 placement 通过，DCP save 仍缺 planner
+
+继续在 /home/cgq/jittor 现有工作区。文档提交前 HEAD 为 fe56f24746a51d4f7987e94b20a000a0ef7acf21，branch integrate/cgq-transformers-native-multicard-target，最新 fetch 的 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 159/0。本轮前后 102 项既有 dirty/untracked 状态 SHA256 为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，源码 fingerprint e1e705658b054b34815843d1d2ce577b6541685c3939f37009104919bdb31535；仅更新本看板、Day2–5 结果和 workspace handoff 三份状态文档。
+
+current-source Qwen3-0.6B LoRA（seed821、BF16、2 epochs、101 samples/epoch、accumulation=2）在 GPU1 实卡 GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068 / cuda:0 完成 102 updates，0 skips、0 fallback。checkpoint-51 新进程恢复到 step102，连续训练与 resume 后段样本顺序精确一致；930 个张量在 atol=rtol=0 下全部一致，112/112 LoRA 张量改变。固定 eval loss 为 2.4564309120，与 full run 相同。该结果不代表 held-out generation quality、普遍收敛或性能显存。
+
+当前源码两 rank FSDP2 CUDA placement 用例在 GPU1/GPU4 的真实 NCCL launcher 下通过，rank0/rank1 分别 39.74/33.28 秒；覆盖 managed 参数/buffer 设备位置、冻结/可训练角色、梯度和 optimizer update，fallback counter 无增量。紧邻的 FSDP2 full-model optimizer checkpoint-resume 用例在 accelerator.save_state 中失败：当前 Torch shim 无 torch.distributed.checkpoint.default_planner，缺少 Accelerate 所需 DefaultSavePlanner。attempt-04 只证明此前的训练与状态构建代码路径已执行；DCP 保存、加载和恢复尚未通过。
+
+GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 仍为 Default/shared，测量时可见外部 yqa 与 VLLM 进程，约 29,779 MiB 已用、92–99% 利用率。本轮未运行 GPU2 burner 或干预现有进程；普通 holder 无法阻止其他 CUDA client。正式 Day4–5 仍需管理员/调度器提供 GPU UUID/GRES 独占和设备隔离租约，并按匹配配置至少三轮交替、每侧每轮十个以上热样本，报告 median/p95/离散度、加载/首步/热态时延、allocator/NVML 峰值、容量/OOM 恢复和真实 activation recompute 显存对照。DCP planner、multi-rank fresh-process Trainer resume、clean-installed wheel CUDA、ACL build/migration、合格 held-out generation quality 和完整支持矩阵仍开放。整体 Day2–5 release 保持 **Not complete**。
+
+---
+
 ## 2026-11-01 13:50 +0800 current-main Torch core10 CPU 回归通过；GPU2 仍共享
 
 继续在 `/home/cgq/jittor` 的现有工作区。HEAD `a51bb1812b1e8cd886be643bcaf224d694dd5f65`，branch `integrate/cgq-transformers-native-multicard-target`，`origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `158/0`。本轮开始及结束均为 105 项既有 dirty/untracked，porcelain SHA256 `8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98`，index 为空；源码清单 2,822 项的 fingerprint 前后均为 `d3db97f9dfa2e7edba2967df6c1422ce23eb5948a9194eeb5dc3ba00859262b0`。只更新三份既有状态文档，不修改代码/测试，不触碰其他 dirty/untracked 文件，不 push。

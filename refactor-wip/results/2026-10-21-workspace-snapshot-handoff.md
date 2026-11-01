@@ -1,3 +1,15 @@
+## 2026-11-01 15:45 +0800 继续入口：current Qwen resume 通过；FSDP2 DCP 仍受 shim API 阻塞
+
+在 /home/cgq/jittor 当前工作区接续；不重新 clone。文档提交前 HEAD fe56f24746a51d4f7987e94b20a000a0ef7acf21，branch integrate/cgq-transformers-native-multicard-target，最新 origin/cgq_transformers e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 159/0。原有 dirty/untracked 共 102 项、porcelain SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，index 为空；current source fingerprint e1e705658b054b34815843d1d2ce577b6541685c3939f37009104919bdb31535。本轮完成后只更新规定的三份状态文档并以中文提交，不 push。
+
+新增实用训练证据：current-source Qwen3-0.6B LoRA full 与 checkpoint-51 新进程 resume 在真实 GPU1 cuda:0 完成至 step102，连续和续训比较 930 项在 atol=rtol=0 下全部一致；报告位于 /data6/cgq/jittor-lab/_state/release-day23/20261101-main-qwen-practical-current-source-resume-r1-prepared/evidence/attempt-03/continuous-vs-resume-compare.json，SHA256 87cb3617a5c1023d05b8f38194e7965aef49473a60b6d2051bdb2c73a7b1f4aa。FSDP2 双 rank CUDA placement/optimizer update 测试在 attempt-05 通过；证据在 /data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-fsdp2-nccl-r1-prepared/，manifest SHA256 c9140744904c793d12f75a6fd4c57de4742d7cb9a5c674cf0fc0ddfdffdd1bfb。attempt-04 的 Accelerate FSDP2 checkpoint-resume 在 save 阶段缺 torch.distributed.checkpoint.default_planner.DefaultSavePlanner，该功能仍未验证；不要把 placement pass 记作 DCP pass，也不要重复这两次已完成运行。
+
+下一步优先处理可执行的功能发布项：审计并补齐当前 shim/Accelerate 的 DCP planner 所有权与测试覆盖后，再对 FSDP2 做一次受控 checkpoint save/load/resume；并继续 clean-installed wheel CUDA 与 multi-rank Trainer 新进程恢复。任何新实验使用 current HEAD/fingerprint、独立 evidence/output 目录、有限预算，保留失败记录，不触碰本轮保存的 attempt-04/05。Day4–5 只能在管理员/调度器提供 GPU UUID/GRES 独占、设备隔离和释放时间明确的租约后运行；要求至少三轮交替、每轮每侧十个热样本、median/p95/离散度、加载/首步/热态、allocator/NVML 峰值、容量/OOM 恢复及真实 activation recompute 显存对照。
+
+GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 当前为 Default/shared，外部 yqa 与 VLLM 进程合计约占用 29.8 GiB。占卡程序不能阻止其他 CUDA client，且会与现有负载争用；本轮没有创建、启动或留下 holder，未干预现有 PID。性能测试必须先取得系统级排他租约。Day4–5、DCP resume、clean wheel CUDA、ACL 迁移、held-out generation quality 和支持矩阵均未闭合，整体 release 保持 **Not complete**。
+
+---
+
 ## 2026-11-01 13:50 +0800 current-main Torch core10 CPU 回归通过；GPU2 仍共享
 
 继续在 `/home/cgq/jittor` 的现有工作区。HEAD `a51bb1812b1e8cd886be643bcaf224d694dd5f65`，branch `integrate/cgq-transformers-native-multicard-target`，`origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `158/0`。本轮开始及结束均为 105 项既有 dirty/untracked，porcelain SHA256 `8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98`，index 为空；源码清单 2,822 项的 fingerprint 前后均为 `d3db97f9dfa2e7edba2967df6c1422ce23eb5948a9194eeb5dc3ba00859262b0`。只更新三份既有状态文档，不修改代码/测试，不触碰其他 dirty/untracked 文件，不 push。

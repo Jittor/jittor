@@ -1,3 +1,32 @@
+## 2026-11-01 15:45 +0800 current-source Qwen resume 逐位通过；FSDP2 placement 通过、checkpoint save 暴露 planner 缺口
+
+### 工作区与源码身份
+
+继续使用现有工作区 /home/cgq/jittor，没有重新 clone。文档改动前 HEAD fe56f24746a51d4f7987e94b20a000a0ef7acf21，branch integrate/cgq-transformers-native-multicard-target；刚 fetch 的 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 159/0。原有 102 项 dirty/untracked 文件的 porcelain SHA256 为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，index 为空。源码清单 fingerprint 为 e1e705658b054b34815843d1d2ce577b6541685c3939f37009104919bdb31535。本轮未改运行时代码或测试；仅编辑规定的三份状态文档，其他已有更改保持原样。
+
+### current-source Qwen full 与新进程 resume
+
+证据根目录为 /data6/cgq/jittor-lab/_state/release-day23/ 下的 20261101-main-qwen-practical-current-source-r2-prepared/ 和 20261101-main-qwen-practical-current-source-resume-r1-prepared/。实验绑定上述 HEAD、fingerprint 和 status SHA。配置为 Qwen3-0.6B LoRA、seed821、BF16、2 epochs、101 samples/epoch、batch=1、gradient accumulation=2。真实 GPU1 UUID GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068 映射到 cuda:0；完整训练到 global_step=102，0 次跳步、0 fallback。JT 按 epoch 的微批次 loss mean 从 1.2055992702 降至 1.1535344227；PT 对照从 1.2056800938 降至 1.1540639769。current-source Jittor 固定验证集 eval loss 为 2.4564309120，与其 full run 相同；PyTorch 对照在本记录中用于按 epoch 训练 loss 比较。
+
+独立新进程从 current-source checkpoint-51 恢复到 step102，完成 51 次更新；模型、optimizer、scheduler、Python/NumPy/CPU/CUDA RNG 和第二 epoch 样本顺序恢复检查通过。全量 continuous-vs-resume 比较为 930/930 张量通过、atol=rtol=0、failure_count=0、protocol/sample cursor/update count 均精确；112/112 LoRA 张量相对 checkpoint-51 改变。比较报告 continuous-vs-resume-compare.json SHA256 87cb3617a5c1023d05b8f38194e7965aef49473a60b6d2051bdb2c73a7b1f4aa。这只支持本源码、seed 和训练配置，不证明普遍收敛或生成质量；也没有形成性能或显存证据。
+
+### 双 rank FSDP2 CUDA placement 与 checkpoint-resume 结果
+
+实验包 /data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-fsdp2-nccl-r1-prepared/ 绑定相同 current-source HEAD/fingerprint/status。GPU1 UUID GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068 和 GPU4 UUID GPU-8bf405a2-a3dd-e203-8dd9-691e9f7b3530 用作 rank0/rank1；GPU2 未分配。两卡均为 shared，GPU4 有外部计算负载，所以仅形成正确性证据。
+
+- attempt-05 运行 compat/tests/torch/test_torch_fsdp2_cuda_placement.py::test_fully_shard_places_only_newly_managed_state_on_cuda：两个 rank 均 1 passed、0 skipped、0 failed，测试体各自耗时 39.74/33.28 秒，退出码 0。覆盖 newly managed state 的 CUDA placement、冻结/可训练参数和 buffer 角色、backward 梯度、真实 SGD 更新及 backend-fallback counter 无增量。rank log SHA256：rank0 ed6c0047ab2c1ec2ddf317e94bfb00e9cf8117f9eb58e96cafed1a729f7789d4，rank1 70b2d5661a4995875aa7798aef5071a776533e2d24ebfdedbf58862a5bbe63d3。evidence manifest SHA256 c9140744904c793d12f75a6fd4c57de4742d7cb9a5c674cf0fc0ddfdffdd1bfb。
+- attempt-04 运行 compat/tests/torch/test_accelerate_distributed_integration.py::test_fsdp2_full_model_optimizer_checkpoint_resume：1 collected、1 failed、0 skipped，耗时 104.76 秒，rank1 在 Accelerate save_fsdp_model 导入 torch.distributed.checkpoint.default_planner.DefaultSavePlanner 时失败，报 ModuleNotFoundError。测试在进入 accelerator.save_state 前已执行模型/optimizer update 与 full state dict 构建，但 checkpoint 写入、load 和 resume 没有成功完成。使用同一 shim 环境的 import probe 确认 torch.distributed.checkpoint.default_planner spec 不存在；这是当前兼容层/API 缺口，不应记为 NCCL 或显存故障。失败记录保存在 attempt-04，exit 文件 SHA256 4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865，rank1 log SHA256 63bcb426112b41af11285296eb04eae5251e1d304870d6c3854f217e25b46fcf，evidence manifest SHA256 87e3a2ac800ed64bfe9cdb87c58e9ae501f369b38bc4c446e087aad086737f28。
+
+两次运行前后 HEAD、102 项 dirty status hash 和源码 fingerprint 相同；source capture JSON 仅 captured_at_epoch 不同。attempt-05 前后测试进程均退出，GPU2 未分配。GPU2 观测到 compute mode Default、约 29,779 MiB 已用、利用率 92–99%，进程包括 yqa PID 2279286（约 8,640 MiB）与 VLLM::EngineCore PID 2737921（约 21,122 MiB）。没有启动显存占用程序，也没有干预这些进程；用户态 holder 无法保证拒绝其他 CUDA client。
+
+### 剩余发布门
+
+Day4–5 正式性能/显存验收仍需 GPU UUID/GRES 系统级独占和设备访问隔离；需固定 PT/JT 匹配配置、至少三轮交替、每侧每轮至少十个热态样本，报告 median/p95/离散度、模型加载/首步/热态耗时、allocator/NVML 峰值、容量/OOM 恢复和真实 activation recompute on/off 显存对照。GPU4 共享负载下的本次 wall time 不用于性能比较。本轮没有显存峰值、OOM 或容量阈值测量。
+
+其余开放项：补齐/验证当前 shim 的 Accelerate DCP DefaultSavePlanner 接口后再做一次 FSDP2 checkpoint save/load/resume；multi-rank Trainer 新进程恢复；clean-installed wheel CUDA smoke；ACL build/migration；合格 held-out generation quality；完整 Torch/Transformers/Accelerate/PEFT 支持矩阵。R14 实用训练和本轮 current-source 训练均不替代上述发布门。整体 Day2–5 release 继续 **Not complete**。
+
+---
+
 ## 2026-11-01 13:50 +0800 current-main Torch core10 CPU 回归通过；GPU2 仍共享
 
 继续在 `/home/cgq/jittor` 的现有工作区。HEAD `a51bb1812b1e8cd886be643bcaf224d694dd5f65`，branch `integrate/cgq-transformers-native-multicard-target`，`origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `158/0`。本轮开始及结束均为 105 项既有 dirty/untracked，porcelain SHA256 `8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98`，index 为空；源码清单 2,822 项的 fingerprint 前后均为 `d3db97f9dfa2e7edba2967df6c1422ce23eb5948a9194eeb5dc3ba00859262b0`。只更新三份既有状态文档，不修改代码/测试，不触碰其他 dirty/untracked 文件，不 push。
