@@ -1,3 +1,29 @@
+## 2026-11-01 10:29 +0800 current-main 双 rank Accelerate/NCCL：DDP 与 no_sync 通过，FSDP2 保存失败
+
+### 身份与范围
+
+在 `/home/cgq/jittor` 的现有工作区继续；HEAD `6b5af23a36ca2b89635957e032e6c0eb89c602b4`，branch `integrate/cgq-transformers-native-multicard-target`，origin/cgq_transformers `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `151/0`。测试前后 102 项既有 dirty/untracked porcelain SHA256 均为 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`，暂存区为空；`source-identity.before.txt` 与 `source-identity.after-attempt-07.txt` 相同。没有改运行时代码或测试。
+
+证据包：`/data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-accelerate-nccl-r1-prepared/`，最终证据 manifest SHA256 `deb902fe84be46e15e7e3f5e951ca9e7dd164cf402b02c4c1ddddfd09858171f`。各次启动原件都保留：attempt01 为 libstdc++ ABI 错误；attempt02 三项测试未完成，首项超过预算；attempt03 单测诊断在首个进度标记前未完成。attempt04 缺 `nvcc`、attempt05 错误选择共享默认 cache，均在进入 pytest 前停止，记录和新增 cache 状态均保留。
+
+### 已完成的两项双 rank DDP 功能检查
+
+Attempt06 使用准备好的隔离 Nox cache 和 GPU1/GPU6，Nox `nccl` 58 秒自然结束、rc=0；两个 rank 的 pytest 日志均为 `1 passed in 43 秒`、`0 skipped`、`collected=1 executed=1`。进程使用 Jittor Torch namespace、compat active、backend `nccl`、`backend_fallback=error`；rank 0/1 分别通过 `CUDA_VISIBLE_DEVICES=1`/`6` 映射到真实 GPU，测试 batch、gradient 与参数都在 CUDA。17 行小型数据覆盖三次微批、尾批的同步标记 `[False, True, True]`，并断言 `gather_for_metrics` 恰好返回 0–16 每个 ID。rank JSON SHA256 分别为 `d3547ec6e89a4549bb53efd96792db0be53e5ffdef990bafc111c526fd4c4faa`、`b711e7e02cf2c61002675573afb72c328e2496eb763d0f4bd5903321402fe0a2`。
+
+Attempt07 只运行此前未执行的两项，没有重复 attempt06 用例。`test_real_ddp_no_sync_then_closing_backward` 在两 rank 通过：首个 no_sync 梯度仍 rank-local，closing backward 后两侧梯度一致。两侧均为真实 CUDA/NCCL，fallback 设为 error，没有 skip。
+
+### FSDP2 checkpoint 失败及影响
+
+同次 attempt07 的 `test_fsdp2_full_model_optimizer_checkpoint_resume` 在 FSDP2 prepare 和第一次 optimizer update 之后，`accelerator.save_state(path[0], safe_serialization=False)` 处失败。Accelerate 1.10.1 `accelerate/utils/fsdp_utils.py::save_fsdp_model` 执行 `from torch.distributed.checkpoint.default_planner import DefaultSavePlanner`，实际异常为 `ModuleNotFoundError: No module named 'torch.distributed.checkpoint.default_planner'`。第一个 rank 退出 1 后 `jtrun` 停止另一个 rank；session rc=1，总耗时 133 秒，pytest 汇总为 1 failed、1 passed、0 skipped。保存动作没有成功，测试未到 `accelerator.load_state()`，所以不能报告 FSDP2 checkpoint restore/resume 通过。
+
+只读核对 `compat/torch/installers/distributed.py`：当前安装路径创建了 `torch.distributed.checkpoint`、`.state_dict` 和 `.filesystem`，没有注册 `.default_planner`；DCP save/load 入口被登记为 unimplemented。故当前证据确认 Accelerate 这条 FSDP2 save-state 路径不兼容，不是性能波动或 timeout。pytest 另报告该测试文件结束时 process-wide `number_of_hold_vars` 0→12、`number_of_lived_ops` 0→2、`number_of_lived_vars` 0→12，插件标记为“reported, not failed”，一并留档。
+
+Attempt06/07 分别保存了 Nox 总日志、两个 rank 日志和 rank JSON；hash、每次计划、退出码及源码指纹均在 artifact manifest 中。GPU6 当时有其他 qlt 进程且持续高利用率；本轮是功能检查，没有采信任何耗时作性能结果。GPU2 未参与。
+
+### 仍未通过的 Day2–5 发布门
+
+当前 main 的两项 Accelerate DDP 功能有双 rank 实际 CUDA 证据；这不等于 FSDP2 checkpoint 或新进程 DDP Trainer resume 通过，也不把 R14 独立快照的 Qwen 训练结果转移到此 HEAD。下一步应处理 DCP/default planner 的产品支持范围并用独立候选验证保存/恢复，同时补 multi-rank fresh-process Trainer resume。clean-installed wheel CUDA smoke 目前仍为未完成；ACL wheel 删除还缺 Ascend 构建/设备证据；17-row Qwen generation 仍全命中长度上限且源 split 是 train，未形成合格 held-out 质量门。Day4–5 正式性能/显存验收必须等 GPU2 系统级独占与设备隔离，再执行匹配配置三轮以上交替、每轮双方至少十个热样本，报告 median/p95/离散度、load/首步/热态和 allocator/NVML 峰值、容量/OOM 恢复以及真实 activation recompute。普通占卡程序不能提供排他保证。整体 release **Not complete**。
+
 ## 2026-11-01 09:34 +0800 clean-installed wheel CUDA smoke：R6 精确重启超时，未执行测试
 
 ### 绑定身份与执行结果

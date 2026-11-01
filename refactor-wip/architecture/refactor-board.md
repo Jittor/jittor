@@ -1,3 +1,11 @@
+## 2026-11-01 10:29 +0800 current-main 两项双 rank Accelerate DDP 用例通过；FSDP2 checkpoint 暴露 DCP 缺口
+
+继续使用 `/home/cgq/jittor`，HEAD `6b5af23a36ca2b89635957e032e6c0eb89c602b4`，origin/cgq_transformers `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `151/0`。本轮测试前后原有 102 项 dirty/untracked 状态 SHA256 均为 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`，index 为空；没有改源码或测试。双 rank 证据及终审清单在 `/data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-accelerate-nccl-r1-prepared/`，artifact manifest SHA256 `deb902fe84be46e15e7e3f5e951ca9e7dd164cf402b02c4c1ddddfd09858171f`。
+
+Attempt06 在 GPU1/GPU6 真 CUDA、NCCL、`backend_fallback=error` 下完成 `test_accumulate_real_ddp_tail_and_gather_for_metrics`，双 rank 各 `1 passed, 0 skipped`，覆盖 17 条数据的梯度累积、尾批同步和 gather。Attempt07 的 `test_real_ddp_no_sync_then_closing_backward` 双 rank 通过；FSDP2 full model/optimizer checkpoint 用例在 `accelerator.save_state()` 失败：Accelerate 导入缺失的 `torch.distributed.checkpoint.default_planner.DefaultSavePlanner`。当前 Torch shim 未注册该子模块，且 DCP save/load API 有显式 unimplemented 标记；因此没有保存成功或恢复证据。无 fresh-process 多 rank Trainer resume 证据。R14 Qwen 训练仍仅绑定其独立冻结源码身份。
+
+GPU2 `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 仍为 Default/shared，外部 yqa PID `2279286` 占约 8651 MiB；没有 burner 或性能测量。Day4–5 仍需系统级 UUID/GRES 独占与隔离租约，再执行既定三轮交替、每侧每轮至少十个热态样本、加载/首步/热态耗时及 allocator/NVML 峰值、离散度和容量恢复。clean wheel CUDA smoke、ACL 迁移审阅、合格 held-out 生成指标等门也仍开放。整体 Day2–5 release 继续 **Not complete**。
+
 ## 2026-11-01 09:34 +0800 clean-installed wheel CUDA smoke 的唯一重启超时；GPU2 仍被外部任务使用
 
 继续在 /home/cgq/jittor，R6 计划绑定 HEAD 7f10fbbe534d0cb9bd8094723eba64f95576cdb0、origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81；运行器前后记录既有 102 项工作区指纹 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211。未改代码或测试，index 初始为空。

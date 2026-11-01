@@ -1,3 +1,15 @@
+## 2026-11-01 10:29 +0800 handoff：双 rank DDP 子集通过；FSDP2 save_state 缺 DCP planner
+
+继续使用 `/home/cgq/jittor`，HEAD `6b5af23a36ca2b89635957e032e6c0eb89c602b4`，origin/cgq_transformers `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `151/0`。原有 102 项 dirty/untracked 指纹 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211` 未变、index 空。本轮未改源码/测试，也未 push。
+
+新增证据在 `/data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-accelerate-nccl-r1-prepared/`，artifact manifest SHA256 `deb902fe84be46e15e7e3f5e951ca9e7dd164cf402b02c4c1ddddfd09858171f`。Attempt06 的 17-row Accelerate DDP gradient-accumulation/tail/gather case 在真实两 rank CUDA/NCCL 上双侧 1 passed、0 skipped；attempt07 的 no_sync/closing-backward case 也双侧通过。attempt07 的 FSDP2 full model/optimizer checkpoint case 在第一次 update 后调用 `Accelerator.save_state()`，因缺 `torch.distributed.checkpoint.default_planner.DefaultSavePlanner` 而 ModuleNotFoundError；DCP save/load shim 同时标记为 unimplemented。没有保存或恢复成功证据。attempt02/03 的超时原件与 attempt04/05 启动失误也都保留，未覆盖或删除。
+
+GPU2 仍为 Default/shared，yqa PID `2279286` 使用约 8651 MiB；GPU1 在测试后恢复空闲，GPU6 有外部 qlt 任务。本轮不作性能/显存结论，没有启动 burner。整体 Day2–5 release 保持 **Not complete**。
+
+### 下一项
+
+先决定 FSDP2 checkpoint/DCP 是否属于当前发布支持范围；若属于，应在新的隔离源码候选上实现和验证 save/load，不能改写本轮失败证据。另需真实 multi-rank Trainer checkpoint 新进程续训。继续 wheel clean-install、ACL 迁移与有效 held-out 任务指标审查。Day4–5 只有取得 GPU UUID/GRES 独占和设备隔离租约后，才做既定三轮以上交替、每侧每轮至少十个热样本、median/p95/离散度及加载/首步/热态和 allocator/NVML 峰值、OOM 容量恢复、真实 activation recompute 测量；共享 GPU 的 elapsed 不得用于结论。
+
 ## 2026-11-01 09:34 +0800 handoff：wheel smoke 的规定重启已用尽；GPU2 不能靠用户态进程独占
 
 当前主树 /home/cgq/jittor HEAD 7f10fbbe534d0cb9bd8094723eba64f95576cdb0，origin/cgq_transformers e5cffe1ae60c418f53c5bb1cdca9182577fd2b81。R6 runner 前后记录既有 102 项 dirty/untracked 指纹 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211；本轮仅更新三份既有状态文档，不碰工作区其他文件，不 push。
