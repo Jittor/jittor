@@ -1,3 +1,23 @@
+## 2026-11-01 09:10 +0800 单 rank Gloo 查询修复；256-token Qwen 生成诊断完成但仍受截断
+
+本轮复核时主树 `/home/cgq/jittor` HEAD 为 `8982680242ceb2d4aafff247159c3a14b10f8123`，origin/cgq_transformers 为 `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `148/0`。原有 102 项 dirty/untracked porcelain SHA256 仍为 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`；本任务开始前暂存区为空。本轮新增 data6 诊断证据并更新本看板、Day2–5 结果和 handoff 文档；没有改其他源/测试文件，未 push。
+
+### 单 rank Gloo public backend 状态
+
+主树提交 `8982680242ceb2d4aafff247159c3a14b10f8123`（`修复单进程 Gloo 后端查询状态`）现在保存 init 请求的 backend；销毁时清除，并让 public `get_backend()` 与 world group API 返回请求的 `gloo`。FileStore、rank=0/world_size=1 的 public API 探针结果为 public/world-group `gloo`、destroy 后未初始化、backend state 清空、fallback 增量 0；Jittor 内部 communicator 标记仍是 `mpi`，不等同于 public API 返回值。新增回归后 owner suite 为 7 passed、0 skipped。源码及测试 SHA256 分别为 `797882418141bb118b947991dd3e29b580eea91457e456f1d5f097561ad5b15b` 与 `1befac44d0a236be2c1d0d79ed3a9fb6297db4378d6101e9d0c40e28927b7cfc`。证据目录 `/data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-dist-single-gloo-r2-prepared/`；public probe SHA256 `a969acc1e14587020d99826ee50a6625a09f7da763fdbce29cd79d8213c630a8`，owner suite log SHA256 `0b2c5d0b5d53981f6c85fb3581125b647f4ab72cfeabab79090a4ab7d015d2e0`。此证据只覆盖 CPU 单 rank；多 rank Gloo/DDP 仍开放。
+
+### Qwen 256-token 任务质量诊断
+
+证据包：`/data6/cgq/jittor-lab/_state/release-day23/20261101-qwen-main-r3-heldout-generation-extended-r1-prepared/`，绑定冻结 R1 source fingerprint `ae682fe34dec0cf62e74f5dd3546c8c77dd7d97f23f03f7a4d4b7d11558f2499`、Qwen3-0.6B 权重 SHA256 `f47f71177f32bcd101b7573ec9171e6a57f4f4d31148d38e382306f42996874b`、checkpoint-102 adapter SHA256 `adea9cd2a304af21478c54719685139fead0515edef865674ff419df3da02243`，以及 17 条 eval fixture SHA256 `d8318478c8991e75ba5cac474e1f3dfe95c0478da49ad8b2a8909c72fb72f84f`。17 个 eval indices 与 101 个 bounded LoRA train indices 不重叠，但每行的 upstream `source_split` 仍为 `train`。三组使用 GPU1 / UUID `GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068`、共享 Default 模式、greedy decode、总长 320 / 新生成上限 256；不作性能或显存结论。
+
+Jittor final 与 PyTorch final macro ROUGE-L 均为 `0.1075653479`，17/17 预测文本完全相同，exact match 均为 0；PyTorch initial macro ROUGE-L 为 `0.1023865588`，final 比 initial 高 `0.0051787891`，逐样本 8 高、6 低、3 相同。JT/PT final 与 PT initial 的 17/17 输出都达到 256-token 上限。故该诊断支持同一 checkpoint 的 JT/PT 确定性生成一致，并显示这 17 条上的 bounded ROUGE 小幅提高；它没有证明答案完整或广泛生成质量通过，held-out generation 门继续开放。Jittor fallback 前后均为 0。所有结果和逐样本输出见 `generation-summary.json`（SHA256 `112ceccde8330eb7f4969ffdb0745405ef0611c99ce34a0914a72fe02babdf3c`）；artifact manifest SHA256 `879013c4bf7218c97f168b5ef649863b2a6b3a2388af12f4fa4395dcd1238c02`。
+
+Jittor attempt-01 使用新 cache namespace，1200 秒到期、exit 124，停在首次 core/CUDA 编译；attempt-02 在更换 runtime root 的 cache 副本下以 exit 3 触发 jit_utils reload guard，未进入模型工作；两者原件均保留。attempt-03 使用原 R1 runtime/cache 绝对路径，仅将可见 UUID 改为 GPU1，exit 0；运行时向原 R1 JIT cache 增加了延迟编译 kernel，旧三份 48-token score 文件哈希未变。所有 attempt 日志、设备快照与退出码均在证据包内；未再抬高 token cap 重跑。
+
+### 当前开放门与资源
+
+GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 仍为 Default，共享由 yqa PID `2279286` 使用 8651 MiB；GPU1 在生成结束后恢复至 1 MiB、0% util。普通 holder 不能阻止别的 CUDA client，本轮未启动 burner、未杀进程、未更改设备模式。正式 Day4–5 仍需管理员/调度器授予独占租约，再做匹配配置、至少三轮 PT/JT 交替、每轮每侧至少十个热态样本，报告 median/p95/离散度、加载/首步/热态与 allocator/NVML 峰值，并覆盖容量/OOM 恢复和真实 activation recompute。多 rank DDP、wheel migration 审批、clean CUDA 安装和 generation quality 也未完成；整体 Day2–5 release 仍 **Not complete**。
+
 ## 2026-11-01 07:29 +0800 单进程 gloo 后端查询复现；GPU2 无法由用户态独占
 
 证据采集时主树 HEAD `577595f83d5868f07561f85a0f0521ac93a2c645`，`origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `145/0`；原有 102 项 dirty/untracked porcelain SHA256 仍为 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`，暂存区为空。本轮没有改运行时代码或测试，只新增 CPU API 诊断并更新状态文档。

@@ -1,3 +1,17 @@
+## 2026-11-01 09:10 +0800 handoff：Gloo 单 rank 查询已修复；长生成诊断仍全撞 token cap
+
+当前工作区继续使用 `/home/cgq/jittor`，branch `integrate/cgq-transformers-native-multicard-target`，HEAD `8982680242ceb2d4aafff247159c3a14b10f8123`；刚 fetch 的 origin/cgq_transformers 为 `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `148/0`。原有 102 项 dirty/untracked porcelain SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211` 保持不变；只更新既有三份状态文档，不 push。
+
+单 rank CPU FileStore 的 public `get_backend()` 请求 gloo 后现在返回 gloo，destroy 后状态清除；新增回归的 owner suite 为 7 passed、0 skipped。提交与证据细节见 Day2–5 结果 09:10 增量及 `/data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-dist-single-gloo-r2-prepared/`。此修复不证明多 rank DDP 或 Torch checkpoint/resume。
+
+Qwen 17-row extended diagnostic 证据位于 `/data6/cgq/jittor-lab/_state/release-day23/20261101-qwen-main-r3-heldout-generation-extended-r1-prepared/`。JT final 与 PT final 在同一 checkpoint 上逐条预测一致，macro ROUGE-L=0.107565；PT initial=0.102387；三臂均 17/17 命中 256-token cap、EM=0。fixture 与 bounded train indices 不重叠，但 upstream source_split=train。质量门仍开放，不再仅为消除截断重复扩 cap。Jittor run 曾有两次保留的准备失败，最终 attempt-03 使用原 R1 runtime/cache exit 0；artifact manifest SHA256 `879013c4bf7218c97f168b5ef649863b2a6b3a2388af12f4fa4395dcd1238c02`。
+
+资源复核：GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 仍是共享 Default，yqa PID `2279286` 使用约 8651 MiB；GPU1 在实验后空闲。普通 burner 无法实现排他，本轮没有启动。Day4–5 正式测量必须等管理员/调度器提供 GPU UUID/GRES 与设备隔离租约；仍需三轮以上 PT/JT 交替、每轮每侧至少十个热态样本、median/p95/离散度、加载/首步/热态、allocator/NVML 峰值，以及 OOM 恢复和真实 activation recompute。
+
+### 下一步
+
+按功能影响继续：优先推进公开 Torch 多 rank DDP checkpoint/resume 与 wheel migration 审阅/clean CUDA 安装；held-out generation 需换成具备明确 validation/test 来源的新任务数据和预先确定的任务质量规则。拿到 GPU2 独占租约后再执行 Day4–5 性能/显存正式协议。不要把 Qwen 256-token 诊断、R14 实训或共享 GPU 的单次 elapsed 当正式 release/性能结论；整体 release 保持 **Not complete**。
+
 ## 2026-11-01 07:29 +0800 handoff：gloo public backend 查询差异已实证；GPU2 等待系统级独占
 
 单进程 CPU public API 探针请求 gloo 后，`get_backend()` 实际返回 mpi；init/destroy 状态正常、fallback=0。backend 状态缺口已由真实 API 路径确认，不只是 fake group 单测观察。计划、JSON、日志、源文件哈希与 runner 行尾问题见 Day2–5 报告 07:29 和 `/data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-dist-single-gloo-r1-prepared/`。

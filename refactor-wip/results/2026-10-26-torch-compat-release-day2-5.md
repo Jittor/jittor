@@ -1,3 +1,27 @@
+## 2026-11-01 09:10 +0800 单 rank Gloo 回归通过；Qwen 长输出仍未过质量门
+
+### 仓库与证据身份
+
+主树 `/home/cgq/jittor` branch `integrate/cgq-transformers-native-multicard-target`，HEAD `8982680242ceb2d4aafff247159c3a14b10f8123`，origin/cgq_transformers `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `148/0`。本轮实验前 102 项原有 dirty/untracked 状态 SHA256 为 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`，暂存区为空；本次不改运行时代码，Gloo 修复已由该 HEAD 的先前提交带入。
+
+### Day2：单进程 public Gloo backend 查询修复
+
+`compat/torch/installers/distributed.py` 现在保存请求 backend，并在 destroy 时清除；`get_backend()` 与默认 world group 的 public 查询返回请求值。实际 FileStore API 探针使用 CPU、rank 0/world_size 1：init 前未初始化，init 后 public/world-group backend 均为 gloo，destroy 后状态清空，fallback delta=0。Jittor 内部 `world_group._get_backend_name()` 仍返回 mpi，这保留为内部 communicator 身份，不影响此次 public 兼容 API 返回。
+
+新增 public regression 后 `compat/tests/torch/test_distributed_api_owners.py` owner suite 为 7 passed、0 skipped、0 failed。运行代码/测试哈希分别为 `797882418141bb118b947991dd3e29b580eea91457e456f1d5f097561ad5b15b` 和 `1befac44d0a236be2c1d0d79ed3a9fb6297db4378d6101e9d0c40e28927b7cfc`。public probe result `a969acc1e14587020d99826ee50a6625a09f7da763fdbce29cd79d8213c630a8`，owner suite log `0b2c5d0b5d53981f6c85fb3581125b647f4ab72cfeabab79090a4ab7d015d2e0`，均在 `/data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-dist-single-gloo-r2-prepared/`。多 rank DDP、Torch checkpoint/resume 尚未由此关闭。
+
+### Qwen generation：完成 bounded 诊断，保留质量门未通过状态
+
+扩展实验目录为 `/data6/cgq/jittor-lab/_state/release-day23/20261101-qwen-main-r3-heldout-generation-extended-r1-prepared/`，计划 SHA256 `57884b0ecba2dd53fe8919b79373c0a91ffacb9308fef85441927d97643fb283`，结果摘要 SHA256 `112ceccde8330eb7f4969ffdb0745405ef0611c99ce34a0914a72fe02babdf3c`，evidence artifact manifest SHA256 `879013c4bf7218c97f168b5ef649863b2a6b3a2388af12f4fa4395dcd1238c02`。它绑定 R1 冻结源码 fingerprint `ae682fe34dec0cf62e74f5dd3546c8c77dd7d97f23f03f7a4d4b7d11558f2499`、Qwen3-0.6B base 权重 SHA `f47f71177f32bcd101b7573ec9171e6a57f4f4d31148d38e382306f42996874b`、checkpoint-102 adapter SHA `adea9cd2a304af21478c54719685139fead0515edef865674ff419df3da02243`、17-row eval fixture SHA `d8318478c8991e75ba5cac474e1f3dfe95c0478da49ad8b2a8909c72fb72f84f`。样本 indices 与 101-row bounded train fixture 重叠为 0；上游 source_split 仍为 train，因此不声称这是官方 validation/test split。
+
+三组在真实 CUDA GPU1（`GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068`，`cuda:0`）以共享 Default 模式运行，greedy、total=320/new=256。Jittor final 与 PyTorch final 的逐条预测完全一致（17/17），ROUGE-L macro 两边均为 0.1075653479，exact match 0；PyTorch initial 为 0.1023865588，final 增加 0.0051787891，逐样本 final 较高/较低/相同为 8/6/3。三组均 17/17 撞到 256-token 上限，JT fallback 前后 0。该结果说明这组 bounded 输出的框架间一致性和有限任务分数，不证明回答完整、held-out 泛化或生成质量 release pass；不再单纯反复提升 cap。
+
+Jittor attempt-01 超时 124、attempt-02 触发 jit_utils reload guard exit 3，原日志和资源快照均保留。attempt-03 使用原 R1 runtime/cache 路径、仅绑定 GPU1 UUID 后 exit 0，generation_elapsed diagnostic 933.832 秒；PyTorch final 和 initial 各 exit 0，generation_elapsed 分别 137.205 和 138.557 秒。以上计时受共享 GPU/缓存/初始化影响，仅作诊断，不能替代 Day4–5 配对性能。Jittor attempt-03 向原 R1 JIT cache 加入新 shape kernel；旧 48-token score JSON 哈希仍保持 `c310757080f3858efa4664c46faaf537a37abe6a17c534d283c5eba7ba5d9b31`、`dec6c0849de44bd2925e9a5941ad2e3461231c7517caa4e0a6283c03689dd5e8`、`17f8ec8542f0b9dfeb01f2e4b21e0b70340356202200afa230e7f9bbc057d1ba`。
+
+### Day4–5 及整体 release
+
+GPU2 当前仍由 yqa PID `2279286` 使用约 8651 MiB，compute mode Default；GPU1 在功能诊断结束后恢复空闲。没有独占系统租约，本轮未创建或运行 burner，未改 GPU compute mode。正式 Day4–5 仍需系统级独占和至少三轮交替、每轮每侧至少十个热样本、完整时延分位数/离散度与 allocator/NVML 峰值、近容量/OOM 恢复及真实 activation recompute 对照。多 rank DDP、wheel baseline migration、clean CUDA 安装与 generation quality 仍各自开放，overall Day2–5 release 继续 **Not complete**。
+
 ## 2026-11-01 07:29 +0800 public 单 rank gloo 查询返回 mpi；GPU2 独占请求受节点状态阻断
 
 ### 执行身份与 CPU public API 结果
