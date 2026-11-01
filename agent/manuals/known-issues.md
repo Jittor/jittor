@@ -1,7 +1,7 @@
 # Known-Issues Ledger
 
 - Status: Maintained
-- Last reviewed: 2026-11-01
+- Last reviewed: 2026-11-02
 - Baseline: `d8e30464c`
 - Owner: Jittor core maintainers
 - Review when: an entry is fixed or narrowed, a strict expected failure
@@ -1877,3 +1877,97 @@ workaround.
   match independent Torch on CPU and each claimed accelerator, including
   lifetime/offset tests; unsupported layouts are rejected or clearly declared
   instead of being silently represented as fully aliasing views.
+
+## KI-MEM-004: scalar boolean assignment retains one live operation
+
+- Severity: Low (bounded native CPU lifetime observation; growth is unmeasured).
+- Status: Open; reproduced on 2026-11-02 at
+  `9391a815dd6cc67b2d2fbe61fd9b4a1fad1d345a` in native CPU mode.
+- Owner: Jittor core memory / indexing maintainers.
+- Symptom: in a fresh native process, `live_ops` increases from 0 to 1 after
+  `value = jt.array(1.0); value[jt.array(True)] = jt.array(2.0);`
+  `assert value.item() == 2; del value`. It remains 1 after `gc.collect()`,
+  `jt.sync_all()`, and `jt.gc()`. This records one scalar-mask operation only;
+  repeated-call growth and accelerator behavior have not been established.
+- Cause: the retaining owner is not yet identified. The scalar-mask test leaves
+  the operation alive before the later argmax test starts; argmax itself leaves
+  the count unchanged. This is not evidence of an argmax/backward leak.
+- Workaround: lifetime tests for unrelated operators compare before/after live
+  operation counts, or run in a fresh process. This avoids test-order coupling;
+  it does not fix the scalar-mask retention or establish general leak freedom.
+- Evidence: run
+  `python -m pytest -q tests/core/test_setitem.py::TestSetitem::test_scalar_mask_with_var_value_compiles tests/ops/test_misc_issue.py::TestMiscIssue::test_argmax_memleak`
+  on the recorded baseline: the scalar-mask test passes, then the historical
+  argmax global-zero assertion fails with 1 live operation. Argmax alone passes.
+  Both test files are unchanged from `88b48a1f1` on that baseline; runtime
+  reproduction on `88b48a1f1` itself was not performed. The argmax regression
+  now checks its own count delta and retains its original sync/delete lifecycle.
+  Raw evidence: `$JITTOR_LAB_ROOT/_state/vllm-core-merge/20261101/logs/`
+  `smoke-argmax-minimal-sequence.log` and `smoke-scalar-mask-liveness.log`.
+- Exit condition: identify and justify or release the retained owner, add a
+  focused lifetime regression, and establish whether repeated scalar-mask
+  assignments accumulate live operations on each claimed backend.
+
+## KI-COMPAT-025: CPU bf16 autocast narrows an explicitly float32 loss
+
+- Severity: Medium (numerical fidelity in bounded autocast training).
+- Status: Open; reproduced 2026-11-02 on remote baseline
+  `88b48a1f18b2964f05090f65561e07ab64343715` and integration source
+  `ee116312ed3448a51c77ab1c9e2abeb45677f7f7`, with separate native caches
+  and asserted source paths. This is not introduced by the vLLM prerequisites.
+- Owner: Torch compatibility / AMP maintainers.
+- Symptom: `TestAutocastTraining::test_bfloat16_autocast` ends at
+  `0.158203125` against float32's `0.12238326668739319`, a relative difference of
+  `0.2926859143587205` beyond the unchanged 25% gate, on both commits. In CPU bf16 autocast,
+  `x = torch.ones(2).bfloat16(); y = torch.ones(2)` followed by
+  `((x.float() - y) ** 2).mean()` returns bf16: the explicit cast is float32,
+  but subtraction, square, and mean are narrowed. Independent real Torch
+  2.13 keeps all four stages float32 on the same CPU input.
+- Cause: the region-wide native AMP register lowers operations even after an
+  explicit float32 cast, unlike the per-operator autocast policy. The earlier
+  LayerNorm fix in `91ff825fc` remains active: all 80 training calls return
+  float32 from bf16 inputs with Torch autocast active. Changing only loss
+  construction in an untracked diagnostic to disable native AMP gives final
+  loss `0.12916548550128937` (5.54% from float32), with finite parameters and
+  gradients. This narrows the cause; it does not establish complete autocast
+  fidelity. The model uses ReLU, so this is not the SiLU issue KI-COMPAT-023.
+- Workaround: use float32 training for this bounded CPU task. Explicit
+  `.float()` inside the active region is insufficient to preserve the loss
+  arithmetic's dtype. No tolerance relaxation or runtime workaround is merged.
+- Evidence: the named case in
+  `compat/tests/torch/test_torch_half_precision_numerics.py` fails alone on
+  both commits; the candidate file has 10 passed, 1 skipped, and this failure.
+  Raw logs and source-identity/dtype probes are under
+  `$JITTOR_LAB_ROOT/_state/vllm-core-merge/20261101/`, indexed with hashes in
+  `bf16-diagnosis.json`. Historical KI-COMPAT-020 concerned the LayerNorm
+  output policy; its fix remains active. This distinct loss-arithmetic issue
+  does not reopen that mechanism. CUDA was not tested here.
+- Exit condition: a focused float32-loss dtype regression agrees with real
+  Torch, this unchanged training gate passes, and the complete half-precision
+  file plus related AMP/GradScaler tests pass on CPU and each claimed backend.
+
+
+## KI-COMPAT-026: lazy module imports invalidate initial namespace contracts
+
+- Severity: Medium (activation ownership and suite isolation).
+- Status: Open; reproduced on 2026-11-02 at `9391a815`.
+- Owner: Torch compatibility namespace / test maintainers.
+- Symptom: importing `torch.distributed.run` after activation adds a lazy module
+  that makes a later `compat.install(torch)` reject the completed graph.
+  Importing `jittor.compat.fsdp2.activation_checkpoint` also adds a normal Python
+  package attribute, so initial-public-surface tests fail in the warmed process.
+- Cause: initial namespace expectations and lazy imports are not reconciled.
+  A fresh child cannot be compared to a warmed parent's exact module-name set.
+- Workaround: run initial activation, alias and FSDP surface checks in clean
+  processes; do not disable strict ownership rejection or delete arbitrary
+  runtime modules to hide a changed graph.
+- Evidence: the four complete activation/alias/compat-structure/FSDP-structure
+  files pass 45 cases in a clean source environment. Importing only the two
+  modules above after collection reproduces six failures and 35 passes.
+  Source/test files involved are unchanged from `88b48a1`; an old-baseline
+  runtime reproduction was not performed for this issue. Logs are unversioned
+  under `$JITTOR_LAB_ROOT/_state/vllm-core-merge/20261101/logs/`:
+  `shim-clean-env-files.log` and `shim-order-repro.log`.
+- Exit condition: intentional lazy modules have explicit ownership and
+  initial-surface tests isolate their premise; the minimal import-order
+  sequence passes without weakening foreign-module rejection.

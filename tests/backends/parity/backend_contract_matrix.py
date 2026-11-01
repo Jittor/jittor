@@ -95,7 +95,8 @@ def load_optional_libraries():
     stated cause".
     """
     outcome = {}
-    for name in LIBRARY_NAMES:
+    # BLAS is registered lazily but is not part of the legacy library aliases.
+    for name in (*LIBRARY_NAMES, "blas"):
         try:
             module = get_library(name, load=True)
         except BaseException as error:            # noqa: BLE001 - recorded below
@@ -393,6 +394,30 @@ def _probe_batched_matmul(jt_):
     return jt_.matmul(a, b).numpy()
 
 
+def _probe_blas_product(jt_, name, batch_shape):
+    import numpy as np
+
+    left = _fixed((*batch_shape, 16, 24)).astype("float64")
+    right = _fixed((*batch_shape, 24, 12), 5.0).astype("float64")
+    # Call the named CPU implementation, not dispatch that could select oneDNN
+    # or a generic product. Check an independent numerical reference because
+    # the CPU cell otherwise only checks that its oracle is finite.
+    ops = get_library("blas", load=True).ops
+    actual = getattr(ops, name)(
+        jt_.array(left, dtype="float64"), jt_.array(right, dtype="float64"),
+        False, False).numpy()
+    np.testing.assert_allclose(actual, np.matmul(left, right), rtol=1e-10, atol=1e-10)
+    return actual
+
+
+def _probe_blas_matmul(jt_):
+    return _probe_blas_product(jt_, "blas_matmul", ())
+
+
+def _probe_blas_batched_matmul(jt_):
+    return _probe_blas_product(jt_, "blas_batched_matmul", (3,))
+
+
 def _probe_conv2d(jt_):
     x = jt_.array(_fixed((2, 3, 9, 10)))
     w = jt_.array(_fixed((4, 3, 3, 3), 2.0))
@@ -434,6 +459,8 @@ PROBES = {
     "code": _probe_code,
     "copy": _probe_copy,
     "cub_cumsum": _probe_cumsum,
+    "blas_matmul": _probe_blas_matmul,
+    "blas_batched_matmul": _probe_blas_batched_matmul,
     "cublas_matmul": _probe_matmul,
     "mkl_matmul": _probe_matmul,
     "cublas_batched_matmul": _probe_batched_matmul,
