@@ -1,3 +1,11 @@
+## 2026-11-02 02:08 +0800 Handoff：当前源码包构建和 direct/sdist 一致性通过，发布迁移门仍开
+
+继续在 /home/cgq/jittor 现有工作区，HEAD 5a1b42223573b25ea01734ce616c63fc31dd016a，分支相对 origin/cgq_transformers ahead 184/0。本轮只新增了外部证据包，没有修改仓库源码；此前 105 项既有 dirty/untracked 状态 hash 仍为 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98，index clean。新证据 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-package-r4-prepared/ 的 artifact-files.sha256 SHA256 为 57fda94d47232c59b6420c7e1e80cafd3296b6997a602a4315d80cfd44fd3e11。
+
+当前源码主 sdist/wheel、sdist-derived wheel 与 compat wheel 的打包审计通过，direct/sdist-derived 主 wheel 的 1,100 个成员完全相同，主包和 compat 包按一条 pip 命令安装后的关键文件布局与 Python compileall 通过。默认历史 wheel baseline 仍报告 69 additions、302 content changes、2 removals，均未获批准；没有用 modernization baseline 绕过这项迁移审阅。未运行依赖 Jittor core 的安装后 runtime smoke，因为匹配的当前 core cache 不完整；本轮没有冷编译，也没有用 GPU。
+
+GPU2 R4 仍 PREPARED_NOT_STARTED：卡上有两个外部进程，X12DPG-OA6 为 DOWN 且未启用设备 cgroup 隔离；需要管理员恢复 GRES 并发放 UUID 绑定的独占租约。current-main 双 rank DCP 阶段探针仍卡在匹配 core 导入前置门，attempt-04 冷编译预算已耗尽，不重跑。下一步先处理默认 wheel baseline 的逐项迁移审阅；运行时包 smoke 与 DCP 只在有可复用的匹配 core 后继续，Day4–5 则等系统级独占租约后运行既有 R4 套件。Trainer/FSDP2、新进程恢复、activation recompute 显存收益和更广 Day2–5 发布门仍开放，overall release 不标 complete。
+
 ## 2026-11-02 01:56 +0800 Handoff：当前 DCP 核心缓存不匹配，保留阶段探针失败
 
 最新双 rank stage attempt 只到 Jittor import，JITTOR_NO_BUILD=1 因 core 不匹配而退出，未进入 NCCL/DCP，未编译或生成 checkpoint；attempt manifest 083321506f5fb2d56a8731a701ac1f3286048f07cab106faf0002c2cdcd07ff8。之前的 DCP attempt-04 已耗尽 300 秒预算至 196/228，不能重跑。后续需找到或生成匹配当前 source 的完整 core cache，再继续分阶段验证。

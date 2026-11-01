@@ -1,3 +1,9 @@
+## 2026-11-02 02:08 +0800 current-main 当前源码打包构建通过，wheel 迁移基线仍未过
+
+继续使用现有 /home/cgq/jittor 工作区，HEAD 为 5a1b42223573b25ea01734ce616c63fc31dd016a，分支相对 origin/cgq_transformers ahead 184/0。新建独立打包证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-package-r4-prepared/，源快照清单 SHA256 ec7060f76b743926bfad54c6f94bddf19e1fccc12c972c20079c78c9f811c76e。当前源码的 manifest 检查、主 sdist/wheel 构建、sdist 清单审计、direct 与 sdist-derived wheel 的内容审计和逐成员一致性、compat wheel 审计、两 wheel 单事务安装布局及 compat Python compileall 均通过；详见 Day2–5 结果和包内 NOTES.md。
+
+默认 wheel-contents-final 发布基线比较仍失败：1,033 条基线对 1,100 条候选，69 additions、302 content changes、2 removals，0 项已批准。没有借用只适用于 modernization 阶段的另一基线，也没有改 allowlist。此轮是打包层验证，未做安装后 Jittor runtime/autograd smoke，避免打开不匹配的冷 core build；没有使用 GPU。GPU2 R4 仍需管理员 GRES 与 device-cgroup 独占租约，DCP/Trainer 新进程恢复、FSDP2、activation recompute 显存收益及更广支持矩阵仍未关闭。Day4–5 和 overall Day2–5 release 继续 Not complete。
+
 ## 2026-11-02 01:56 +0800 双 rank DCP 阶段探针被当前 Jittor core 缓存门禁拦下
 
 新建的 stage-marker attempt-01 绑定 /home/cgq/jittor HEAD cf4324884bb401704e4eb6ac4577dd2f21b0fd74、source fingerprint da00ea0ae265afce1b49444af4e630c54ea681846c20096377660c37f766341a。复用的 DDP warm cache 对当前 core 配置不匹配；JITTOR_NO_BUILD=1 在 import jittor 时拒绝构建，rank0 exit 1，rank1 被 launcher 停止。尚未初始化 NCCL 或进入 DCP.save；不是 DCP 产品结果。硬预算为 45 秒 NCCL timeout / 90 秒 job deadline / 110 秒外层上限，本次 3 秒内退出。

@@ -1,3 +1,17 @@
+## 2026-11-02 02:08 +0800 current-main 当前源码 package-r4 构建及包内一致性验收
+
+在 /home/cgq/jittor 现有工作区完成当前源码的隔离打包验证，没有重新 clone，也未改动源码或其他既有工作区内容。源码身份为 HEAD 5a1b42223573b25ea01734ce616c63fc31dd016a，分支 integrate/cgq-transformers-native-multicard-target，相对 origin/cgq_transformers ahead/behind 184/0；105 项既有 dirty/untracked 的 porcelain SHA256 仍为 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98，索引干净。隔离副本按 nox packaging 的排除规则创建，source-files.sha256 的 SHA256 为 ec7060f76b743926bfad54c6f94bddf19e1fccc12c972c20079c78c9f811c76e。
+
+证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-package-r4-prepared/，artifact-files.sha256 的 SHA256 为 57fda94d47232c59b6420c7e1e80cafd3296b6997a602a4315d80cfd44fd3e11；全量清单校验通过。复用已有 packaging venv（Python 3.11.3、build 1.3.0），未触碰 CUDA、未导入 Jittor runtime、未发起 JIT 编译或训练。
+
+当前快照下 tools/build/generate_manifest.py --check 通过。主 sdist 共 1,455 个成员，SHA256 c310a46cc88e56a376f8c0a730fdef02b48d4b911f17d43beb1769cf7e79a161；主 wheel SHA256 b87469fe5a6103d6f4fcea0e6292d663102ef5cd2be661439db2f81515cc3ef4。sdist inventory 检查、主 wheel 审计通过。由 sdist 重建的 wheel SHA256 1b93e1956801caa27aafa1f8dbc3c601ab1c4a8cc955c3806dc69a3ccc022be4；与直接 wheel 均为 1,100 条路径，逐项名称及内容差异为 0。compat wheel SHA256 d575dd057c0f3882d47b269547cc9e92665da6f2407ed31dfa36209a90fb3088，compat profile 的 182 路径审计通过。依 nox 的单事务方式把主 wheel 和 compat wheel 一次性安装到隔离 target 后，jittor、compat installer、shim、torch 文件布局齐全；安装目录下 jittor.compat 与 torch 的 compileall 通过。
+
+必需的默认 wheel-contents-final 基线比较仍失败：baseline 1,033 路径，候选 1,100 路径；69 additions、302 content changes、2 removals，0 approved。完整差异保存在 official-baseline-compare.log（SHA256 28c4ed686904b69e222dd02e897c1fdcb4b2dcd10c903fbd40868b53ba7b1943）。Day2–5 报告已明确 final-modernization 基线不适用于本次迁移，因此没有替换基线或放宽 allowlist。这个 gate 仍需逐项审阅并按真实发布策略批准。
+
+安装后 selftest/autograd runtime smoke 未运行：当前包改变了 core 源，现有匹配 core cache 不完整；本轮不消耗新的冷编译预算。两项工具调用探针分别保留：sdist checker 在无 .git 的隔离副本中调用会因无法发现 Git checkout 而失败，随后从实际工作区对同一 sdist 审计通过；把两个 pip install 分开执行并在第二次使用 --upgrade 会替换 target 下的主包目录，这不是 nox 流程，按要求改为单条 pip 事务后布局通过。相关日志、状态文件及说明都在证据目录内，未将探针失败记作产品失败。
+
+本轮收尾检查中 GPU2 仍为 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0、Default/shared，使用 17,299 MiB，utilization 93%；yqa PID 4166405 和 3037196 各使用 8,640 MiB。Slurm 节点 X12DPG-OA6 仍为 DOWN。没有启动 CUDA holder 或本轮 GPU 测试。Day4–5 正式性能/显存协议、current-source runtime 包 smoke、wheel migration 审批和其余 Day2–5 发布门仍未完成；overall release 保持 Not complete。
+
 ## 2026-11-02 01:56 +0800 current-main 双 rank DCP 阶段探针未越过 Jittor core 导入
 
 诊断目录：/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-ddp-dcp-stage-diagnostic-r1-prepared/attempt-01-stage-markers/。用途是在此前双 rank attempt 到达 save_start 后超时的基础上，给 DCP 内部 barrier、object broadcast、torch.save/load、jt.fetch/sync_all 加入阶段记录，区分阻塞发生在同步还是便携序列化。仅处理 CPU 上的两个 rank-local 小张量/optimizer 状态；NCCL 只用于分布式同步，使用 GPU0 UUID GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5 与 GPU4 UUID GPU-8bf405a2-a3dd-e203-8dd9-691e9f7b3530，GPU2 未使用。进场显存余量分别约 69 GiB、62 GiB，但两卡利用率约 100%/85%，所以这不是性能或显存测量。
