@@ -1,3 +1,15 @@
+## 2026-11-02 01:56 +0800 current-main 双 rank DCP 阶段探针未越过 Jittor core 导入
+
+诊断目录：/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-ddp-dcp-stage-diagnostic-r1-prepared/attempt-01-stage-markers/。用途是在此前双 rank attempt 到达 save_start 后超时的基础上，给 DCP 内部 barrier、object broadcast、torch.save/load、jt.fetch/sync_all 加入阶段记录，区分阻塞发生在同步还是便携序列化。仅处理 CPU 上的两个 rank-local 小张量/optimizer 状态；NCCL 只用于分布式同步，使用 GPU0 UUID GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5 与 GPU4 UUID GPU-8bf405a2-a3dd-e203-8dd9-691e9f7b3530，GPU2 未使用。进场显存余量分别约 69 GiB、62 GiB，但两卡利用率约 100%/85%，所以这不是性能或显存测量。
+
+执行绑定 /home/cgq/jittor HEAD cf4324884bb401704e4eb6ac4577dd2f21b0fd74、source fingerprint da00ea0ae265afce1b49444af4e630c54ea681846c20096377660c37f766341a、DCP installer SHA256 74fbc7a953f085f4568041ef7e56ccafcee4d1a6713de995958a01cbbc7fbf07、launcher SHA256 9329739e5d924a8abbab9c9f1448415fa8521cbf0e5357979e3b2fd2ed455057。运行器复用 20261101 DDP warm cache，并设置 JITTOR_NO_BUILD=1，缓存不匹配时立即失败，禁止隐式重编译；预算 45/90/110 秒，实际约 3 秒。
+
+两 rank 仅打印 process_start。rank0 在 jittor import 的 build_core() 报 BuildNotAllowed：现有 jittor_core 虽存在，但不是当前 source 的有效构建；rank1 随后被 launcher 终止。没有 process_group_ready、NCCL init、save_start、DCP 操作或 checkpoint。exit-code 为 1。rank0 log SHA256 5661a33a0b11ae3d9ddfd98906216d97e20f4f276d5120b72f9cc171c47c375c；rank1 log SHA256 fb7f53ddc04a34ad74555f57241e144881f18414f0aaf2dd1e82b75d6cb72fa1；launcher log SHA256 d0e4f73b2e87d827bafe67315f585e042a292550825fed34433ea7b891e69ffb；attempt manifest SHA256 083321506f5fb2d56a8731a701ac1f3286048f07cab106faf0002c2cdcd07ff8。
+
+JIT cache manifest before/after SHA256 都为 e4fb0cc99a8838d24c0051afde3a79402ebc261c96e337a666724f9c7426e536，无编译产物变化；source-before/source-after fingerprint 均为 da00ea0ae265afce1b49444af4e630c54ea681846c20096377660c37f766341a，工作区状态摘要均为 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98，GPU0/GPU4 未留下本次 worker。故本次是缓存/source 身份导致的 harness 前置失败，不纳入 DCP 成败判断。
+
+此前 current-main CPU fresh-process attempt-04 在另一隔离 cache 下用满 300 秒、Jittor core 编译至 196/228 后停止，未进入 DCP。该构建不延时、不重跑。以后只有获得匹配当前 source 的已完成 core cache，才有条件继续阶段化 DCP 验证；新 probe 脚本和原失败都保存在上述目录。Day4–5 性能包仍 PREPARED_NOT_STARTED，完整发布门保持开放。
+
 ## 2026-11-02 01:45 +0800 GPU2 holder 请求核验、R9 梯度定位与双 rank DCP 超时复审
 
 工作区复核：/home/cgq/jittor HEAD 9e2151705eed4d0adf171a47b8b9a8097622c17e，分支 integrate/cgq-transformers-native-multicard-target，origin/cgq_transformers ahead/behind 182/0。既有 dirty/untracked 文件状态摘要仍为 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98，tracked diff 摘要 9d6864dc82d45ecf0bac78bc118b77a6573481a03d89364d07c3805379ea1757，untracked 内容摘要 3370d8669846acb01163e3758008539da20ebc5db3c575d3ce7bb4e26ac852d0，index clean；本次只编辑这三份状态文档。

@@ -1,3 +1,11 @@
+## 2026-11-02 01:56 +0800 双 rank DCP 阶段探针被当前 Jittor core 缓存门禁拦下
+
+新建的 stage-marker attempt-01 绑定 /home/cgq/jittor HEAD cf4324884bb401704e4eb6ac4577dd2f21b0fd74、source fingerprint da00ea0ae265afce1b49444af4e630c54ea681846c20096377660c37f766341a。复用的 DDP warm cache 对当前 core 配置不匹配；JITTOR_NO_BUILD=1 在 import jittor 时拒绝构建，rank0 exit 1，rank1 被 launcher 停止。尚未初始化 NCCL 或进入 DCP.save；不是 DCP 产品结果。硬预算为 45 秒 NCCL timeout / 90 秒 job deadline / 110 秒外层上限，本次 3 秒内退出。
+
+缓存编译物清单 SHA256 前后均为 e4fb0cc99a8838d24c0051afde3a79402ebc261c96e337a666724f9c7426e536；工作区状态 hash 前后均为 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98，源码快照前后相同。没有构建、checkpoint 或遗留 probe worker。attempt manifest SHA256 083321506f5fb2d56a8731a701ac1f3286048f07cab106faf0002c2cdcd07ff8。完整细节见 Day2–5 结果顶部。
+
+前一份旧双 rank attempt-01 曾到达 save_start 后 60 秒无后续，仍无法定位内部阶段；新诊断没有提供阶段答案。current-main CPU fresh-process DCP attempt-04 已达到 300 秒构建上限（196/228）且按预算停止，不再重跑。下一步需要匹配当前 source 的完整 core cache，届时再运行有阶段标记的 DCP 保存/加载；不重开已耗尽的冷构建预算。GPU2 R4 仍需管理员 GRES + device-cgroup 独占租约；Day4–5 与整体 Day2–5 继续 Not complete。
+
 ## 2026-11-02 01:45 +0800 GPU2 无法由普通 holder 排他；R9 与双 rank DCP 诊断已收窄
 
 GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 当前为 Default/shared，显存 17,299 MiB、utilization 81%，仍有 yqa PID 4166405 与 3037196 各占 8,640 MiB。Slurm 节点 X12DPG-OA6 为 DOWN；虽登记 gpu:a800:10，TaskPlugin 仅 task/affinity、CgroupPlugin=null，当前 cgq 无 sudo。未创建或启动 CUDA holder，也未改 compute mode：用户态进程不能禁止其他 CUDA context，且此时会干扰现有任务。须管理员恢复节点并提供 GRES 独占 allocation 与 task/cgroup 设备隔离（ConstrainDevices），再在同一租约内运行 R4 套件。GPU2 R4 继续 PREPARED_NOT_STARTED，Day4–5 与 overall Day2–5 均 Not complete。

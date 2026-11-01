@@ -1,3 +1,9 @@
+## 2026-11-02 01:56 +0800 Handoff：当前 DCP 核心缓存不匹配，保留阶段探针失败
+
+最新双 rank stage attempt 只到 Jittor import，JITTOR_NO_BUILD=1 因 core 不匹配而退出，未进入 NCCL/DCP，未编译或生成 checkpoint；attempt manifest 083321506f5fb2d56a8731a701ac1f3286048f07cab106faf0002c2cdcd07ff8。之前的 DCP attempt-04 已耗尽 300 秒预算至 196/228，不能重跑。后续需找到或生成匹配当前 source 的完整 core cache，再继续分阶段验证。
+
+这项诊断没用 GPU2。GPU2 仍共享并被外部 PID 占用；Slurm 节点 DOWN，设备 cgroup 隔离未启用。正式 R4 需要管理员恢复 GRES/device-cgroup 独占分配。Day4–5 和 overall Day2–5 均未完成。
+
 ## 2026-11-02 01:45 +0800 Handoff：GPU2 需要系统租约；DCP/R9 结论边界已更新
 
 当前 /home/cgq/jittor HEAD 为 9e2151705eed4d0adf171a47b8b9a8097622c17e，分支 integrate/cgq-transformers-native-multicard-target，origin ahead 182；既有 dirty/untracked 哈希保持不变，105 项状态保留，索引开始时干净。新增的 R9、双 rank DCP 与 GPU2 诊断详情和证据哈希见 Day2–5 结果文档顶部。
