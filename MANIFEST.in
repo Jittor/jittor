@@ -693,6 +693,8 @@ include docs/results/2026-10-31-cuda-var-relay-decline.en.md
 include docs/results/2026-10-31-cuda-var-relay-decline.md
 include docs/results/2026-11-01-python-float-division.en.md
 include docs/results/2026-11-01-python-float-division.md
+include docs/results/2026-11-01-vllm-runtime-integration.en.md
+include docs/results/2026-11-01-vllm-runtime-integration.md
 include docs/results/index.en.md
 include docs/results/index.md
 include docs/tutorials/index.en.md

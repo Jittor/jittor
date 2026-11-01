@@ -531,13 +531,22 @@ class TestOptionalPointerPacking(unittest.TestCase):
                 bridge._compile(object(), signature, constants)
 
     @unittest.skipUnless(_HAVE_REAL_TRITON, "real upstream Triton is unavailable")
-    def test_native_specialization_and_disk_cache_distinguish_optional_positions(self):
-        # No compilation or device lookup: exercise the upstream cache identity
-        # which an in-memory compiler recorder cannot establish.
-        from triton.compiler import ASTSource
-        from triton.runtime.jit import BaseBackend, native_specialize_impl
-        self.assertEqual(native_specialize_impl(BaseBackend, None, False, True, True),
+    def test_modern_native_specialization_treats_none_as_constexpr(self):
+        # Older supported Triton releases do not expose the native helper.
+        # That does not exempt their ASTSource cache identity from testing.
+        jit_module = importlib.import_module("triton.runtime.jit")
+        specialize = getattr(jit_module, "native_specialize_impl", None)
+        backend = getattr(jit_module, "BaseBackend", None)
+        if specialize is None or backend is None:
+            self.skipTest("this Triton release has no native specialization helper")
+        self.assertEqual(specialize(backend, None, False, True, True),
                          ("constexpr", None))
+
+    @unittest.skipUnless(_HAVE_REAL_TRITON, "real upstream Triton is unavailable")
+    def test_disk_cache_distinguishes_optional_positions(self):
+        # No compilation or device lookup: exercise the upstream cache identity
+        # on both older and current releases, independently of native helpers.
+        from triton.compiler import ASTSource
         names = ["src", "optional", "scale", "out", "tail", "BLOCK"]
         function = types.SimpleNamespace(__name__="optional_cache_contract", arg_names=names,
                                          cache_key="fixed-function-source")

@@ -1840,3 +1840,40 @@ workaround.
   `docs/results/2026-11-01-python-float-division.md`.
 - Exit condition: repeated calls on one module answer the same bits, and the
   case is green.
+
+
+## KI-COMPAT-024: storage façades and some constructed views retain alias gaps
+
+- Severity: Medium (storage identity or Python writes can differ from Torch).
+- Status: Open; observed during CPU/CUDA work based on `f995bd1f4` through
+  `40d4414f45b89b7cb7f5efdc06ca622b674d772a` on 2026-10-30. The relevant
+  storage/gather implementations remain at integration baseline `88b48a1f1`;
+  this entry does not claim a fresh runtime reproduction on that baseline.
+- Owner: native storage / Torch Tensor compatibility maintainers.
+- Symptom: `tensor.untyped_storage().data_ptr()` reports Python object identity,
+  not allocation identity. General gap-containing `as_strided` requests use a
+  gather/copy. Historical probes found some `split` results with correct
+  physical pointers whose Python indexed assignment did not update their
+  source. This is a bounded historical observation, not a claim that every
+  split layout fails or that split reads are wrong.
+- Cause: `_Storage.data_ptr` returns `id(self._var)`; unsupported as-strided
+  layouts use the gather branch. The historical split issue concerned raw
+  getitem paths without the same VarHolder write provenance as registered view
+  APIs. Direct foreign-kernel writes through a physical pointer are a distinct
+  path and do not prove Python assignment ownership.
+- Workaround: check materialized Tensor.data_ptr and byte offsets for physical
+  sharing; construct supported views with slice/reshape/permute and perform
+  Python writes through their registered parent view. Do not infer general
+  alias support from correct read values.
+- Evidence: `compat/torch/installers/tensor/method_api.py` owns `_Storage` and
+  `_as_strided_as_view`. The historical pointer probe used
+  `x=torch.arange(12,dtype=torch.float32); x.data_ptr(); y=x.reshape(3,4).t()`
+  and compared Tensor.data_ptr with Storage.data_ptr. Separate CPU probes
+  exposed gather/split writeback boundaries. See the
+  [integration report](../../docs/results/2026-11-01-vllm-runtime-integration.md)
+  for the source/validation distinction. Raw historical artifacts remain under
+  `$JITTOR_LAB_ROOT/_state/vllm-product/20261030/`, unversioned.
+- Exit condition: allocation identity and valid strided/split write ownership
+  match independent Torch on CPU and each claimed accelerator, including
+  lifetime/offset tests; unsupported layouts are rejected or clearly declared
+  instead of being silently represented as fully aliasing views.

@@ -15,6 +15,7 @@ history.
 ```{toctree}
 :maxdepth: 1
 
+2026-11-01-vllm-runtime-integration.en
 2026-11-01-python-float-division.en
 2026-10-31-cuda-var-relay-decline.en
 2026-10-31-cuda-linear-host-placement.en
