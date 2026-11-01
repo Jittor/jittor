@@ -1,3 +1,16 @@
+## 2026-11-02 07:34 +0800 Day4–5 R4 测量包已准备；Slurm GPU2 lease gate 当前未满足
+
+current-main 正式性能/显存测量包位于 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-day45-exclusive-r1-prepared/，状态仍为 PREPARED_NOT_STARTED。source identity 捕获 HEAD 83c689507e872e21d8404a8e24c615d800e8ad4e；运行器会在真实执行时再记录当时 HEAD、tracked diff、完整 status 和 untracked 内容哈希。冻结 BERT 权重 SHA256 86fa7113367fd0d231a76571ca1b73a1b24166af33558fee960636ce56337ed7；FP32、AdamW(lr=1e-4, betas=(0.9,0.999), eps=1e-8, weight_decay=0.01)。
+
+协议已预置：seq=512 下 PT/JT 容量扫 batch 64、96、128、160、176、192、208、224，遇首次确认 OOM 停止，选择双方最大共同成功 batch；代表 batch=8/seq=256 与共同近容量点各跑三轮交替，每轮每侧 4 warmup、10 synchronized hot updates，起始顺序 JT/PT、PT/JT、JT/PT。采集加载/权重准备、首次 update、热态耗时、loss、allocator live/reserved/peak 和请求频率 100ms 的 NVML 峰值；各阶段有独立进程上限与总时限、自动重试为零。activation-checkpoint 的重计算与显存收益仍是单独门。
+
+本轮只读运行 gpu2_lease_preflight.sh，输出为 “live Slurm job required”；当前没有 SLURM_JOB_ID。scontrol show node X12DPG-OA6 报 State=DOWN / Node unexpectedly rebooted；GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 为 Default/shared，17,299 MiB used，外部 PID 3037196/3164740 各占 8,640 MiB。没有启动 holder、改 compute mode 或触碰其他任务。虽然 sudo -n 可用，普通 gpu2-exclusive-run.sh 也不满足这套正式测量的隔离门；R4 要求 live GRES job、task/cgroup、ConstrainDevices=yes、进程位于 job cgroup、管理员签发且字段匹配的 GPU2_LEASE_PROOF，并要求目标卡没有其他 CUDA PID。admin-lease-proof.template 只是模板，不能当作租约。
+
+节点恢复并取得 lease 后，按先 capacity sweep、再最大共同通过 batch 的 paired cohort 执行：
+/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-day45-exclusive-r1-prepared/scripts/run_capacity_sweep.sh
+/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-day45-exclusive-r1-prepared/scripts/run_paired.sh <largest-common-capacity-pass-batch>
+两条脚本各自先跑 lease preflight；需在同一有效 Slurm allocation/cgroup 中设置 SLURM_JOB_ID 与 GPU2_LEASE_PROOF。当前尚无正式性能或容量结果。Day4–5 与更广 Day2–5 仍 **Not complete**。
+
 ## 2026-11-02 07:30 +0800 current-main installed-wheel Torch CPU focused 5 项通过；GPU2 性能独占尚未开始
 
 ### 源码、wheel 与测试

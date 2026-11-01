@@ -1,3 +1,9 @@
+## 2026-11-02 07:34 +0800 Day4–5 R4 已备妥；GPU2 lease preflight 因无 Slurm allocation 停止
+
+current-main Day4–5 R4 正式测量包已存在于 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-day45-exclusive-r1-prepared/，含容量扫测、三轮交替 PT/JT 代表与近容量测量及 NVML/allocator 采样器。只读执行 gpu2_lease_preflight.sh 即以 “live Slurm job required” 停止；scontrol 显示 X12DPG-OA6 为 DOWN，GPU2 仍有外部 PID 3037196/3164740，共用 17,299 MiB。没有启动 holder 或更改计算模式。
+
+gpu2-exclusive-run.sh 即使能切 EXCLUSIVE_PROCESS，也不替代正式包要求的活跃 Slurm GPU GRES、task/cgroup、ConstrainDevices=yes 和管理员 lease proof；当前没有 job ID，且卡上仍有其他 CUDA client。节点恢复并获管理员分配/签发 proof 后，应在同一受限 job 内直接运行 R4 capacity sweep，再以最大共同通过 batch 运行 paired cohort。Day4–5 仍 Not complete。
+
 ## 2026-11-02 07:30 +0800 current-main installed-wheel Torch CPU focused 5/5 通过；GPU2 独占路径已确认
 
 继续使用 /home/cgq/jittor，未重新 clone。运行时 HEAD 为 69c6ec840b20d424ac483020dc15dd7c61e1764d、origin/cgq_transformers 为 e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，既有工作区 status SHA256 前后均为 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98。R5 installed main/compat wheel SHA256 分别为 66c0f8176508325f3555f3f90c0b0b141463ae33cdc0b38b35e082dc62b01f47 和 08c84ae50617fa9761ec131c2e0e6247ca704af64ee2d3b560c6a18d2a0a81bf。

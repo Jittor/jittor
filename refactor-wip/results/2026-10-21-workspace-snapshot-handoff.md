@@ -1,3 +1,9 @@
+## 2026-11-02 07:34 +0800 Handoff：R4 Day4–5 suite 已准备，但 GPU2 当前无 Slurm lease
+
+正式 R4 测量脚本已准备在 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-day45-exclusive-r1-prepared/；包括 seq512 capacity sweep、双方最大共同 batch 及三轮 PT/JT 交替 cohort。当前 preflight 输出 “live Slurm job required”；节点 X12DPG-OA6 为 DOWN，GPU2 仍有外部 PID 3037196/3164740，占 17,299 MiB。没有启动占卡程序、切换 compute mode 或干扰外部任务。
+
+仅有 sudo 或 EXCLUSIVE_PROCESS 不能替代 R4 需要的 live Slurm GRES + task/cgroup + ConstrainDevices=yes + 管理员 GPU2_LEASE_PROOF。节点恢复、卡空闲且 lease 到位后，在同一 allocation/cgroup 中直接先运行 scripts/run_capacity_sweep.sh，再用 scripts/run_paired.sh <largest-common-capacity-pass-batch> 完成三轮测试。Day4–5 和整体发布仍 Not complete。
+
 ## 2026-11-02 07:30 +0800 Handoff：installed-wheel Torch CPU focused 5 项通过；GPU2 仍共享
 
 在 /home/cgq/jittor HEAD 69c6ec840b20d424ac483020dc15dd7c61e1764d 上，R5 installed-wheel CPU focused 测试 5 passed、58 deselected、0 skip/0 fail、fallback 0→0。仓库与相关源码 hash 前后不变，R5 manifest 复核通过；独立前端用例的 child process 按测试 helper 使用当前源码树，需与父 session 的 installed-wheel 模块解析分开解释。证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-installed-torch-focus-r1-prepared/attempt-06/，manifest SHA256 0c16f8c0f2cb5a4e221b519f062ac8f523661ef2280c60a27c2fa708461ee3a2。
