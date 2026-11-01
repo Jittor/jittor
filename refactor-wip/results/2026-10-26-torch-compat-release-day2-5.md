@@ -1,3 +1,29 @@
+## 2026-11-01 12:32 +0800 current-main activation checkpoint CPU recompute 语义验证通过
+
+### 源码身份与证据目录
+
+本轮在 /home/cgq/jittor 的 HEAD a6273563a1345af518c3af65db2ede33006bbe0f 上运行，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind=155/0。102 项既有 dirty/untracked 工作区 porcelain SHA256 仍为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211；测试前后相同，index 在本轮文档更新前为空。只读的实现和测试哈希分别为 compat/torch/installers/data.py=0a4d1c151a9de5e3d57da60117f156e8641b26febd7c63a4727914fef04c33c8、compat/tests/torch/test_torch_checkpoint_recompute.py=95c8bb71d46c6c8dd0a2a12ae22627eeb1f3dddc7b2e6c9401ebe08034f3f359。
+
+证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261101-checkpoint-recompute-current-main-r1-prepared/，evidence-core.sha256 SHA256 9d709b916327b510809ce0fd0be5cc8fda2db2c1f6549915f668fab26322af2f。包含 plan、源码身份、测试日志、设备快照、旧 workspace manifest 核验结果及全部 setup attempt。旧 workspace manifest 来自 R4 源码快照，当前核验的三项不匹配恰好是后续 a6273563 提交更新的三份状态文档；本轮实现和测试文件的独立 SHA256 均与预登记值一致。该 manifest 另含一行既有格式告警，未将它当作源码通过证据。
+
+### CPU activation checkpoint 结果
+
+运行命令为 python -B -m pytest -vv -s -p no:cacheprovider /home/cgq/jittor/compat/tests/torch/test_torch_checkpoint_recompute.py，绑定 transformers_compat Python 3.11，JITTOR_CUDA=0、CUDA_VISIBLE_DEVICES 为空，复用 R4 已编译 CPU core。结果 exit_code=0，6 collected / 6 passed / 0 failed / 0 skipped，测试报告用时 51.49 秒。GPU1 UUID GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068 在运行前后均为 1 MiB、0% utilization。
+
+Llama decoder layer 用例验证 checkpoint 前向调用处于 no_grad，反向时再次执行；两次输出用 rtol=0, atol=0 比较完全一致。输入梯度与 q-projection 权重梯度均有限且非零，并与未 checkpoint 前向的梯度按 rtol=2e-4, atol=2e-5 匹配。captured module parameter、partial/super 调用、nested 输出及 RNG 恢复、Transformers GradientCheckpointingLayer protocol 等用例也通过。测试进程没有采集 backend fallback counter；不得据此宣称 fallback=0。
+
+尝试记录：attempt-00 是未 source env_jittor.sh 的环境导入探针，触发默认 CUDA-key core 编译后因 Anaconda libstdc++.so.6 缺少 GLIBCXX_3.4.30 而无法加载；未开始 pytest，默认 cache 完整保留。attempt-01 因使用新 cache_name 导致另一轮 227 translation-unit core 编译，在约 162 秒时被有意终止（exit 143），100 个对象文件与 8,135-byte 日志均保留，尚未收集测试。attempt-02 改为复用 R4 已编译 CPU cache 与 Torch shim runtime，随后一次运行通过；两次未通过 pytest 的准备尝试未覆盖或删除。
+
+### 结论边界与剩余门
+
+本证据支持当前源码 CPU 路径下 activation checkpoint 实际发生反向重计算，并保留输入/权重梯度语义。它没有直接测量激活存储量、allocator/NVML 峰值或峰值显存差，因此不证明节省了显存，也不是 Day4–5 性能样本。
+
+GPU2 在 2026-11-01 12:32 +0800 仍由外部 yqa PID 2279286 使用约 8651 MiB、Default/shared，GPU 利用率 71%。Slurm 节点 X12DPG-OA6 为 DOWN，cgq 无可见 GPU association。正式 Day4–5 仍需系统级 GPU UUID/GRES 独占和设备隔离，匹配配置至少三轮交替、PT/JT 每轮各至少十个热样本、median/p95/离散度、加载/首步/热态时间、allocator/NVML 峰值、容量/OOM 恢复及 checkpoint on/off 显存对照。
+
+multi-rank Trainer fresh-process checkpoint/resume、clean-installed wheel CUDA、FSDP2/DCP 保存恢复、ACL 构建/迁移、合格 held-out generation quality 和完整支持矩阵仍未验收。整体 Day2–5 release 保持 **Not complete**。
+
+---
+
 ## 2026-11-01 12:19 +0800 current-main CPU Trainer 新进程 checkpoint/resume 通过；Day4–5 仍待独占 GPU
 
 ### 身份与证据

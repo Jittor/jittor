@@ -1,3 +1,17 @@
+## 2026-11-01 12:32 +0800 current-main activation checkpoint CPU recompute 用例 6/6 通过；显存门仍开放
+
+继续在 /home/cgq/jittor。HEAD a6273563a1345af518c3af65db2ede33006bbe0f，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind=155/0。既有 102 项 dirty/untracked porcelain SHA256 仍为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211；测试前后相同，本轮无源码/测试修改。本轮仅更新三份状态文档，未 push。
+
+在 current-main CPU-only 环境运行现有 compat/tests/torch/test_torch_checkpoint_recompute.py：6 passed、0 failed、0 skipped，51.49 秒。Llama decoder layer 用例确认 checkpoint 前向在 no_grad 执行并在 backward 重计算；checkpoint 与普通前向输出逐位相同，输入/投影权重梯度有限、非零，并在 rtol=2e-4/atol=2e-5 下匹配普通路径。另有 nested output、captured module parameter、RNG 与 Transformers checkpoint layer protocol 用例通过。GPU1 全程 1 MiB/0%，此次运行未用 GPU。该测试没有采集 fallback counter，也没有 allocator/NVML 峰值或显存节省数据。
+
+证据包 /data6/cgq/jittor-lab/_state/release-day23/20261101-checkpoint-recompute-current-main-r1-prepared/，evidence-core.sha256 SHA256 9d709b916327b510809ce0fd0be5cc8fda2db2c1f6549915f668fab26322af2f。attempt-00 的 libstdc++ 导入失败与 attempt-01 的 100-object 部分 core 编译均保留；没有测试执行。attempt-02 复用已编译 R4 CPU cache 后通过，日志和退出状态均在清单中。旧 workspace manifest 的三处差异仅对应 a6273563 后更新的三份状态文档；当前实现和测试文件哈希分别为 0a4d1c151a9de5e3d57da60117f156e8641b26febd7c63a4727914fef04c33c8 与 95c8bb71d46c6c8dd0a2a12ae22627eeb1f3dddc7b2e6c9401ebe08034f3f359。
+
+12:32 +0800 GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 仍为 Default/shared，由外部 yqa PID 2279286 使用约 8651 MiB，utilization 71%。Slurm 节点 X12DPG-OA6 仍为 DOWN，原因是 node unexpectedly rebooted，cgq 没有可见 GPU association；本轮没有启动 holder 或更改设备模式。正式 Day4–5 仍需管理员提供 GPU UUID/GRES 独占及设备隔离租约，完成至少三轮交替、每侧每轮十个热态样本、延迟分位数/离散度、加载/首步/热态与 allocator/NVML 峰值、容量/OOM 恢复，以及 checkpoint on/off 的真实显存对照。
+
+本项证明了 activation recompute 的执行与梯度语义，但没有证明显存节省。multi-rank Trainer 新进程 checkpoint/resume、clean-installed wheel CUDA、FSDP2/DCP checkpoint、ACL 构建/迁移、合格 generation quality 和完整支持矩阵仍开放。整体 Day2–5 release 继续 **Not complete**。
+
+---
+
 ## 2026-11-01 12:19 +0800 current-main CPU Trainer 新进程续训通过；GPU2 独占仍受阻
 
 继续在 /home/cgq/jittor。当前 HEAD 085392083db798f1797bed192fdb06b2f57dba0e，branch integrate/cgq-transformers-native-multicard-target，origin/cgq_transformers e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 154/0。既有 102 项 dirty/untracked porcelain SHA256 仍为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，index 起始为空。本轮复核既有 R4 产物，只更新三份状态文档；未重跑训练、未改源码/测试、未 push。

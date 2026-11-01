@@ -1,3 +1,15 @@
+## 2026-11-01 12:32 +0800 current-main activation checkpoint CPU 重计算测试通过；显存结论仍开放
+
+当前 /home/cgq/jittor HEAD=a6273563a1345af518c3af65db2ede33006bbe0f，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind=155/0；既有 102 项工作区 porcelain SHA256=5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，运行前后未变。activation checkpoint 证据包 /data6/cgq/jittor-lab/_state/release-day23/20261101-checkpoint-recompute-current-main-r1-prepared/，manifest SHA256 9d709b916327b510809ce0fd0be5cc8fda2db2c1f6549915f668fab26322af2f。
+
+当前源码 CPU-only 跑 test_torch_checkpoint_recompute.py 得到 6 passed、0 failed、0 skipped。Llama layer 的 checkpointed 前向/反向调用计数确认实际重计算；checkpoint 与普通前向输出逐位一致，输入和权重梯度与普通路径按测试容差一致。GPU1 前后 1 MiB/0%，backend fallback counter 未采集。这证明重计算和梯度语义，不证明峰值显存下降。
+
+attempt-00 的 libstdc++ 导入失败、attempt-01 的 100-object 编译后主动中止及其日志均保留；attempt-02 复用既有 CPU cache 后通过。没有源码或测试改动。
+
+GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 在 12:32 +0800 由外部 PID 2279286 使用约 8651 MiB，Default/shared，利用率 71%；Slurm 节点 X12DPG-OA6 仍 DOWN，cgq 无 GPU association。未运行 holder。Day4–5 正式验收仍等待 UUID/GRES 独占租约、稳定三轮交替测量及显存/OOM/recompute 对照；multi-rank Trainer resume、clean wheel CUDA、FSDP2/DCP、ACL、held-out generation quality 和完整 API 矩阵也仍开放。总体 release 继续 **Not complete**。
+
+---
+
 ## 2026-11-01 12:19 +0800 当前源码 CPU Trainer 新进程续训证据；GPU2 仍无法独占
 
 当前 /home/cgq/jittor HEAD=085392083db798f1797bed192fdb06b2f57dba0e，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind=154/0。原有 102 项 dirty/untracked porcelain SHA256=5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211。R4 证据位于 /data6/cgq/jittor-lab/_state/release-day23/20261101-trainer-resume-current-main-r4-placement-fix-prepared/，绑定 HEAD 0853920 与 source manifest SHA256 8816dfd566bca46d3b2f9460e1488a7325636c0efc6c443bdf7143789758a207。
