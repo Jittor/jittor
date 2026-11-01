@@ -1,3 +1,9 @@
+## 2026-11-02 02:54 +0800 下一步：正式显存报告先统一统计窗口，保留 GPU2 隔离阻塞
+
+本轮只读核对 R3 checkpoint 显存实现与原始 worker。torch allocator 峰值是 Jittor Var pool 的每设备高水位，不含 TempAllocator workspace；R3 NVML 在 warmup 后 reset，20 ms 采样，所以绝对 process peak 的 on/off 差主要是 warmup 基线差，不能当作 hot transient 差。R3 hot-window Var-pool allocated 峰值 on 多 751 MB 的结果仍成立，但仅适用于该单次 synthetic Llama 配置。详见 Day2–5 结果文档顶部 02:54 条目及其中的原始结果哈希。
+
+恢复正式验收前，管理员需先恢复 X12DPG-OA6 并提供绑定 GPU2 UUID 的独占 GRES/device-cgroup lease。随后按源码身份和匹配配置执行三轮交替 PT/JT 性能 cohort（每轮每侧 ≥10 个 hot 样本），记录 load/first/hot 时延分布；另跑明确 whole-run 与 hot-window reset 边界的显存采集，覆盖 allocator、workspace、进程 NVML 和全设备用量。GPU2 当前仍被外部任务占用；普通 holder 不能提供排他，不启动 holder 或 benchmark。其他 Day2–5 门（clean-installed runtime、DCP/Trainer/FSDP2、发布范围及任务质量）仍逐项未闭合；overall release 不标 complete。
+
 ## 2026-11-02 02:50 +0800 checkpoint 真实重算已证实；该小型配置未省显存且热态变慢
 
 对保留的 R3 checkpoint on/off raw worker 和 NPZ 做了独立只读审计。on 模式六个 Llama 层在同一训练步中各记录到 [no_grad=1, no_grad=0]，off 模式各为 [0]；结合 compat _CheckpointRecompute.execute/grad 的实现，这证实当前 torch.utils.checkpoint.checkpoint 在此 Transformers Llama 配置中先无梯度执行、再于反向重算。compat/torch/installers/data.py SHA256 0a4d1c151a9de5e3d57da60117f156e8641b26febd7c63a4727914fef04c33c8 与当前工作树、R4 隔离源码以及 R4 compat wheel d575dd057c0f3882d47b269547cc9e92665da6f2407ed31dfa36209a90fb3088 内 jittor/compat/torch/installers/data.py 字节一致。此前“该 shim 尚无重算证据”的判断对这个 API/文件身份已被本证据修正；不外推到所有模型、所有选项或完整发布矩阵。

@@ -1,3 +1,15 @@
+## 2026-11-02 02:54 +0800 checkpoint 峰值口径复核：修正 NVML 热态差值解释并明确 workspace 缺口
+
+只读复核 R3 worker、原始 JSON 及对应源码。当前 compat/torch/installers/cuda/api.py、src/mem/mem_info.h/.cc、python/jittor/profiling/_memory.py 与 _sampler.py 的 SHA256 均与 R3 绑定 HEAD 3b384ad7e5d11097766eb1f086ce3f9d097d0ec0 一致；其中 api.py SHA256 为 d7dc58f8147a0b215ac65bd55a81505930adeb54740cb912fcacb2312ae05623。torch.cuda.memory_allocated/reserved/max_memory_allocated/max_memory_reserved 读取每设备 Jittor Var pool 的当前值或高水位：allocated 是 live Var bytes，reserved 是 pool live+cached bytes；Jittor profiler 另以事件轨迹记录 TempAllocator workspace。R3 worker 没有启用 jt.profile(memory=True)，因此其 Torch allocator 峰值不能代表包含 workspace 的完整 allocator 占用。
+
+R3 worker 在一轮额外 warmup 后同时 reset allocator/NVML 峰值，再测 10 个 hot step；NVML sampler 仅采当前 worker PID，每 20 ms 轮询。on/off 的 baseline allocated 相同，均为 176,273,920 bytes；baseline reserved 分别为 1,655,701,504 / 917,504,000 bytes。NVML baseline 分别为 2,162,163,712 / 1,423,966,208 bytes；窗口峰值为 2,168,455,168 / 1,426,063,360 bytes，窗口增量为 6,291,456 / 2,097,152 bytes（样本数 20 / 10）。所以先前记录的绝对 NVML process peak 差 742,391,808 bytes 在数值上成立，但其基线差已达 738,197,504 bytes；它不能解释成 hot step 额外产生约 742 MB 瞬态进程显存，也没有覆盖模型加载和首步期间的峰值。20 ms 采样也可能漏掉更短的 NVML 瞬态。
+
+allocator 的 hot-window Var-pool 结果仍显示 allocated 高水位 1,579,945,472 / 828,886,528 bytes；扣除相同 baseline 后增量为 1,403,671,552 / 652,612,608 bytes，on 多 751,058,944 bytes（约 716 MiB）。这支持“该单次小型配置中 checkpoint-on 的活跃 Var-pool 峰值更高”，不等于总设备峰值或包含 workspace 的全进程比较。reserved hot-window 增量仅为 6,291,456 / 1,048,576 bytes，绝对值的差主要受 warmup pool 基线影响。checkpoint on 的 hot median 仍为 46.619 ms、off 为 28.910 ms；单对、固定 on→off、共享负载结果继续只作诊断。
+
+证据绑定：R3 worker SHA256 51824d14972ec647fe6681d425ae1ac198e50c7b1cfeb310696347019bcbdc57；on/off 原始 worker-result SHA256 分别为 27f261f2c0f6b2c2585320bc1ab92d6ab090179d94458a40b6b325d52a1c7f06 / c7d37a3a7b4d5115fd64d1b91459a6cc201f95af12bad1b03e4b148d9de6535c；独立审计 JSON 仍为 4ec19bcabd7b32c3320ad22b97f61a048bacbe601856b631e485adaf96460af7。原始产物未改写。
+
+正式 Day4–5 显存采集须与时延 cohort 绑定同一源码、配置和独占 GPU lease，明确区分 whole-run（加载至退出）与 warm/hot phase 的基线和 reset 边界；同时记录 Jittor allocated/reserved 高水位、带 workspace 的独立 profiler 轨迹、NVML 每进程峰值与全设备使用量。workspace profiler 会改变执行开销，需与正式时延样本分开运行并各自标注。仍需至少三轮交替、每轮 PT/JT 各至少 10 个热态样本，并报告 load/first/hot latency 的 median、p95、离散度及峰值/容量/OOM 恢复。GPU2 于 02:51 复核仍为 shared（17,299 MiB、95% util，yqa PID 3037196 和 3164740 各 8,640 MiB）；节点 X12DPG-OA6 为 DOWN，TaskPlugin=task/affinity、ConstrainDevices=no。未启动新 GPU 任务。Day4–5 与整体 Day2–5 仍 Not complete。
+
 ## 2026-11-02 02:50 +0800 checkpoint 真实重算已证实；该小型配置未省显存且热态变慢
 
 对保留的 R3 checkpoint on/off raw worker 和 NPZ 做了独立只读审计。on 模式六个 Llama 层在同一训练步中各记录到 [no_grad=1, no_grad=0]，off 模式各为 [0]；结合 compat _CheckpointRecompute.execute/grad 的实现，这证实当前 torch.utils.checkpoint.checkpoint 在此 Transformers Llama 配置中先无梯度执行、再于反向重算。compat/torch/installers/data.py SHA256 0a4d1c151a9de5e3d57da60117f156e8641b26febd7c63a4727914fef04c33c8 与当前工作树、R4 隔离源码以及 R4 compat wheel d575dd057c0f3882d47b269547cc9e92665da6f2407ed31dfa36209a90fb3088 内 jittor/compat/torch/installers/data.py 字节一致。此前“该 shim 尚无重算证据”的判断对这个 API/文件身份已被本证据修正；不外推到所有模型、所有选项或完整发布矩阵。
