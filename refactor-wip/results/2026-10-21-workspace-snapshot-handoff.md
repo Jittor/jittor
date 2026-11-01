@@ -1,3 +1,13 @@
+## 2026-11-02 00:42 +0800 DCP CPU 新进程验证被 JIT 构建占满预算；GPU2 仍无独占
+
+当前仓库仍是 `/home/cgq/jittor`，HEAD `4dceb0458385d589f374dfa108a296ec40e44424`，origin `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`（ahead/behind 178/0）。实验前后既有工作树 hash 保持 `8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98`，源码 diff hash `9d6864dc82d45ecf0bac78bc118b77a6573481a03d89364d07c3805379ea1757` 不变，index clean。只在 `/data6` 保存本轮 DCP 验证脚本、隔离 cache 与结果；源码及 102 项其他 dirty/untracked 工作未改动。
+
+current-main CPU DCP 同进程 12 项测试仍通过；新的 fresh-process 诊断没有进入 DCP：两次 import 因 `jit_utils` rebuild 退出，固定 cache 路径后又在 `pyjt_jit_op_maker.cc` 首次编译达到 120 秒上限，未生成 checkpoint。详情和 SHA256 见 Day2–5 结果顶部 00:42 增量。保留所有 setup/timeout 原件，不为复跑冷编译改变状态标签。
+
+GPU2 快照仍为 Default/shared；外部 PID 4166405、3037196 各占 8,640 MiB，utilization 88%，无免密 sudo；没有启用 holder 或影响外部作业。已有 helper `/data6/cgq/jittor-lab/tools/gpu2-exclusive-run.sh` 已做语法核验，待卡空闲且取得 sudo 后，把完整性能命令作为一个子进程交给它，结束时由脚本恢复原 compute mode。
+
+**下一步**：先协调管理员/调度器取得目标 GPU UUID/GRES 独占和 device-cgroup 隔离；在该窗口内完成至少三轮交替、每轮 PT/JT 各至少十个热态样本的 Day4–5 性能/显存验收。随后选稳定双卡窗口做 current-main 双 rank DCP 保存并由新进程加载，优先复用已完成必要 JIT 构建的同一路径 cache；之后继续 Trainer 级 checkpoint/resume、FSDP2、held-out generation quality 与发布矩阵。Day2–5 和整体 release 均保持 **Not complete**。
+
 ## 2026-11-02 00:20 +0800 接续：双 rank BERT/LoRA CUDA 更新已通过，GPU2 独占权限未具备
 
 继续从 /home/cgq/jittor 现有仓库接手，没有重新 clone。HEAD 51379b54da97c227a08d5f9fe7c6716949e448b9，分支 integrate/cgq-transformers-native-multicard-target，origin/cgq_transformers e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（ahead/behind 177/0）。当前整体源码指纹 0a1b6dbb70d93d5cab4fdd1990212478a7e38236ecabdafd2b38aea6bac4d787；既有 105 项 dirty/untracked 状态哈希 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98，index clean。仅将三份状态文档纳入本任务提交，其他工作区内容继续保留。

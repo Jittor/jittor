@@ -1,3 +1,28 @@
+## 2026-11-02 00:42 +0800 current-main CPU DCP 新进程 attempt 未进入保存；GPU2 独占仍不可用
+
+### 源码身份与工作区
+
+实验使用 `/home/cgq/jittor` 当前工作区，HEAD `4dceb0458385d589f374dfa108a296ec40e44424`，分支 `integrate/cgq-transformers-native-multicard-target`，origin/cgq_transformers `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`（ahead/behind 178/0）。实验前后既有 dirty/untracked 工作树 SHA256 均为 `8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98`，`git diff --binary` SHA256 均为 `9d6864dc82d45ecf0bac78bc118b77a6573481a03d89364d07c3805379ea1757`，index clean。DCP 实现 `python/jittor/compat/torch/installers/distributed.py` SHA256 `74fbc7a953f085f4568041ef7e56ccafcee4d1a6713de995958a01cbbc7fbf07`；维护测试 `compat/tests/torch/test_checkpoint_state_dict.py` SHA256 `1dba49714e104b9092a8506de244646d8898153cee538842540f638c5f1ea229`。本诊断没有改仓库源码或测试。
+
+### 有界 DCP fresh-process 诊断
+
+新目录 `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-dcp-cpu-fresh-process-r1-prepared/`，目标是 CPU `world_size=1` 的 DCP rank-local 文件系统 checkpoint：进程 A 保存 model tensor、optimizer step/lr 和 Python counter；全新进程 B 加载到预分配目标并核对数值、dtype、device、目标对象身份及 metadata。`CUDA_VISIBLE_DEVICES` 为空，显式 `jt.runtime.scope(use_cuda=0, backend_fallback="error")`；每个 Python 阶段上限 120 秒，cache 位于本任务 `/data6` 隔离目录。
+
+- setup-attempt-01 是缓存目标目录未创建，exit 1；没有测试进程。
+- setup-attempt-02 的 env 初始化未找到 `python3.11-config`，在调用 Python 前退出；后续显式指定 `/home/cgq/anaconda3/bin/python3.11-config`。
+- functional attempt-01 和 attempt-02 均在 `jit_utils was rebuilt and cannot be reloaded in this process` 处 `save_rc=3`，没有进入 DCP。换用新 JITTOR_HOME 会使该模块重新构建。
+- attempt-03 固定复用 attempt-02 的 JITTOR_HOME/cache 后仍在首次构建 `pyjt_jit_op_maker.cc`；120 秒期限结束，`env_rc=0 save_rc=124 load_rc=125`。日志只有 Jittor 初始化/构建信息，没有 probe 的 `save_start`；checkpoint 目录不存在文件，load 因 save 未完成而跳过。它是有界构建超时，不判作 DCP 产品失败，也不构成新进程 DCP 通过。该 cache 保留构建产物，未清理或重试。
+
+attempt-03 `result.txt` SHA256 `3fdc82ae2665d663338aedeea3296fd59de17b62ed10a68bdec96f74c1983a36`；`logs/save.log` SHA256 `f8e0d0d7b9affa7f3ef7ef956cce21af43fec80a37e83affd86258e9d6d72c43`；`output-manifest.sha256` SHA256 `2b110bf94fb0333ac9b16c5e03ce8113d5b256dc04a2c9993bcf65c00f462a0a`；live poll 观察到生成的 `pyjt_jit_op_maker.cc` 正在隔离 cache 中编译，观察记录 SHA256 `99b32a8721aaf18bbecf7a8ea13f3130d681a3acc7b883fcff5879d08390e64d`。全包 manifest SHA256 `f214878ade693093b953f596535122a1abee82a57caf88c3a32477cdf5634a97`。完整 attempt、setup 错误、缓存前后清单和输出均保留。
+
+此前 current-main CPU focused DCP 同进程测试 attempt-09 的 12 项通过证据仍有效，但它只证明同一 Python 进程内的单 rank CPU roundtrip，不证明 fresh-process 或 NCCL 双 rank DCP。早前双 rank CUDA DCP attempt 曾在共享设备上超时；后续 DDP attempt-14 已证明某一暖 cache/设备组合下 barrier 与一步更新可通过，但本轮没有把这两项证据合并成 DCP 通过结论。
+
+### GPU2 与 Day4–5 门
+
+00:42 +0800 快照：GPU2 `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 仍是 Default/shared，PID `4166405` 与 `3037196` 各占 8,640 MiB，used 17,299 MiB，GPU utilization 88%；当前账户 `sudo -n` 失败。正式性能测量未启动。既有 `/data6/cgq/jittor-lab/tools/gpu2-exclusive-run.sh` 会等待卡空闲、请求管理员 sudo、切入 `EXCLUSIVE_PROCESS`，并包裹实际命令；空闲 holder 会阻挡测试自身，因此整套单进程 benchmark 应作为一个命令运行在该窗口中。
+
+正式 Day4–5 仍需系统级 UUID/GRES 独占和 device-cgroup 隔离；匹配配置至少三轮交替，每轮 PT/JT 各不少于十个热态样本；报告加载、首步、热态耗时及 median/p95/离散度、allocator/NVML 峰值、容量/OOM，并单独证明真实 activation recompute 的显存效果。已有共享负载测量仅作诊断。更广 Day2–5 发布门继续开放，整体 release 保持 **Not complete**。
+
 ## 2026-11-02 00:20 +0800 双 rank BERT/LoRA CUDA 一步更新通过；GPU2 性能预约仍受限
 
 本轮继续使用既有工作区 /home/cgq/jittor。HEAD 51379b54da97c227a08d5f9fe7c6716949e448b9，origin/cgq_transformers e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（ahead/behind 177/0），源码指纹 0a1b6dbb70d93d5cab4fdd1990212478a7e38236ecabdafd2b38aea6bac4d787。实验前后原有 105 项 dirty/untracked 状态 SHA256 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98，index clean；本增量只涉及状态文档。

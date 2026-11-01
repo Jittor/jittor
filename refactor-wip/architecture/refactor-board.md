@@ -1,3 +1,11 @@
+## 2026-11-02 00:42 +0800 current-main DCP 新进程诊断受 JIT 构建上限阻塞；GPU2 仍共享
+
+继续使用 /home/cgq/jittor 现有工作区。实验绑定 HEAD `4dceb0458385d589f374dfa108a296ec40e44424`，origin/cgq_transformers `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`（ahead/behind 178/0），实验前后既有工作树状态 SHA256 均为 `8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98`，源码 diff SHA256 均为 `9d6864dc82d45ecf0bac78bc118b77a6573481a03d89364d07c3805379ea1757`，索引干净。DCP 实现与维护测试 SHA256 分别为 `74fbc7a953f085f4568041ef7e56ccafcee4d1a6713de995958a01cbbc7fbf07` 和 `1dba49714e104b9092a8506de244646d8898153cee538842540f638c5f1ea229`。
+
+在 `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-dcp-cpu-fresh-process-r1-prepared/` 尝试用 CPU 张量做 DCP 单 rank 保存进程 A / 新进程加载 B。attempt-01/02 在 Jittor `jit_utils` 首次重建保护处退出，未进入 DCP。attempt-03 复用同一路径 cache 后，120 秒内一直编译 `pyjt_jit_op_maker.cc`，`save_rc=124`、`load_rc=125`；日志无 `save_start`、checkpoint 目录无文件，故这是构建超时，不是 DCP 通过或产品失败。源码状态前后不变；不再重复该冷编译。attempt-03 output manifest SHA256 `2b110bf94fb0333ac9b16c5e03ce8113d5b256dc04a2c9993bcf65c00f462a0a`，保存日志 SHA256 `f8e0d0d7b9affa7f3ef7ef956cce21af43fec80a37e83affd86258e9d6d72c43`。此前 current-main CPU focused 同进程 DCP 测试仍为 12 passed；不把它外推成新进程或双 rank 通过。
+
+资源快照（00:42 +0800）：GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 为 Default/shared，外部 PID `4166405`、`3037196` 各占 8,640 MiB，总计 17,299 MiB，GPU 利用率 88%；`sudo -n` 不可用。没有启动 CUDA holder、改设备模式或干预这些进程。Day4–5 正式性能/显存门仍需管理员/调度器提供 GPU UUID/GRES 独占及 device-cgroup 隔离，之后按匹配配置做至少三轮交替、每轮 JT/PT 各至少十个热态样本，并报告 load/首步/热态耗时、median/p95/离散度、allocator/NVML 峰值、容量/OOM 和真实 activation recompute 显存结果。更广 Day2–5 门与 overall release 继续 **Not complete**。
+
 ## 2026-11-02 00:20 +0800 双 rank BERT/LoRA CUDA 更新通过；GPU2 独占预约仍不可用
 
 继续在现有 /home/cgq/jittor 工作区推进，没有重新 clone。HEAD 51379b54da97c227a08d5f9fe7c6716949e448b9，分支 integrate/cgq-transformers-native-multicard-target，origin/cgq_transformers e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（ahead/behind 177/0），源码指纹 0a1b6dbb70d93d5cab4fdd1990212478a7e38236ecabdafd2b38aea6bac4d787。原有 105 项 dirty/untracked 状态 SHA256 仍为 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98，index clean；后续只更新三份状态文档。
