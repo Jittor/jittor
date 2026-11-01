@@ -1,3 +1,7 @@
+## 2026-11-02 03:06 +0800 current-main DCP 双 rank 仍未运行；静态发现错误传播覆盖缺口
+
+DCP 安装器静态路径中，rank-local I/O 或校验异常会在 rank 到达下一 barrier 前抛出，rank0 metadata 写入异常也会使其他 rank停在收尾同步；未发现跨 rank 错误状态汇聚。现有 DCP roundtrip 测试是 world-size 1。attempt-01-stage-markers 已验证产物清单，但因精确 current-core 缺失在 import 阶段退出，不能作为 DCP 运行结论；不重跑已耗尽冷编译预算。匹配 core 就绪后，先做双 rank 内部阶段追踪和单 rank 失败注入，再判断实现。GPU2 当前共享，Day4–5 仍需系统级独占租约；整体 Day2–5 Not complete。
+
 ## 2026-11-02 03:01 +0800 R4 CUDA 新增项已映射；generator_randint 矩阵说明与源码不一致
 
 R4 wheel 有 12 个 CUDA kernel/runtime additions。包快照包含 fused AdamW/SGD、LT Linear、CUDNN/fused attention、embedding/linear bias gradient、DDP bucket 等 CUDA 测试源，但 R4 打包流程未导入 Jittor、未运行 GPU tests。新增 CUDA GeneratorRandintOp 已设置 _cuda，Torch factory 的 CUDA-device randint 路由到它并有状态恢复用例；backend parity matrix 却仍以“无 CUDA kernel”为由豁免。需在当前 R4 GPU runtime 证据后核准该矩阵说明。GPU2 仍共享、节点 DOWN；不启动测试。Day2–5 继续 Not complete。

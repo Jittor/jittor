@@ -1,3 +1,14 @@
+## 2026-11-02 03:06 +0800 current-main DCP 双 rank 探针未越过导入；静态审阅发现 rank 本地失败缺少错误汇聚
+
+本轮只读检查绑定当前工作树 HEAD 4ed421da85b7b41f1b740f07b9c6bd2fb6565c58。compat/torch/installers/distributed.py SHA256 74fbc7a953f085f4568041ef7e56ccafcee4d1a6713de995958a01cbbc7fbf07；compat/tests/torch/test_checkpoint_state_dict.py SHA256 1dba49714e104b9092a8506de244646d8898153cee538842540f638c5f1ea229。既有 attempt-01-stage-markers/output-manifest.sha256 SHA256 083321506f5fb2d56a8731a701ac1f3286048f07cab106faf0002c2cdcd07ff8，清单验证通过；probe SHA256 e81141f0be8d40af480f7870b892209d2e381fbd72a27d8793595a90e1365a5a，rank0/1 日志 SHA256 分别 5661a33a0b11ae3d9ddfd98906216d97e20f4f276d5120b72f9cc171c47c375c / fb7f53ddc04a34ad74555f57241e144881f18414f0aaf2dd1e82b75d6cb72fa1。
+
+该 attempt 的两个进程只发出 process_start。rank0 在 import jittor 时因精确 CUDA 12.2/nox_nccl 配置的 jittor_core 缺失而触发 JITTOR_NO_BUILD=1 的 BuildNotAllowed；rank1 随后被 launcher 停止。没有到 process_group_ready、save_start 或 NCCL/DCP 阶段，exit code 为 1。因此这不是 DCP 产品失败，也没有定位先前曾到 save_start 的双 rank 超时。当前精确 core 仍缺失，既有冷构建预算已用尽，不重跑相同探针。
+
+静态控制流显示 _barrier 通过 mpi_all_reduce 后调用 marker.numpy()；_native_all_gather_object 先后 gather 长度与 payload，均通过 .numpy() 物化；save 路径为初始 barrier、generation 广播、各 rank 临时写入并 replace、barrier、rank0 原子发布 metadata、最终 barrier；load 路径为初始 barrier、rank-local 读取/校验/拷贝、最终 barrier。正常路径的 collective 次序对称，但 rank-local g.save/replace、rank0 metadata 写入或某 rank load/校验/拷贝抛错时，源码没有在下一 barrier 前收集并广播错误状态；因此 peer 可能继续等到 process-group 超时或失败。此为源码级风险，未由当前运行证实，也不能解释旧超时的具体原因。
+
+测试树中唯一直接成功的 DCP save/load roundtrip 是 test_checkpoint_state_dict.py::test_default_dcp_planners_roundtrip_rank_local_tensor_state，world size 为 1；其余命中是 reader/writer 路径、拒绝用例或 unsupported boundary，未发现双 rank DCP 成功或 rank-local I/O 错误传播测试。下一次仅在获得匹配 core cache 后，以两 rank 为限添加内部阶段标记，分别覆盖初始 barrier、长度/payload gather、rank-local 写盘、metadata 发布、load/copy 与收尾 barrier，并验证单 rank I/O/校验失败时其他 rank 能有界退出并获得一致失败结果。功能门继续开放；GPU2 仍由外部任务共享，Day4–5 性能/显存测试未启动，整体 Day2–5 保持 Not complete。
+
+本轮只审计现有源文件、测试树和失败原件，未运行 pytest、未使用 GPU、未修改源码/测试/实验原件。
 ## 2026-11-02 03:01 +0800 R4 CUDA 新增项源到测试映射；generator_randint 的 parity 豁免已过期可疑
 
 R4 默认 wheel diff 含 12 个 CUDA additions：generator_randint、LT Linear、DDP bucket、CUDNN attention/SDPA、embedding、flash attention、fused FP32 attention、linear bias、fused AdamW/SGD 及 optim package 初始化。包快照测试树有对应的 focused CUDA 用例：test_fused_adamw_cuda、test_fused_sgd_cuda、test_lt_linear_cuda、test_cudnn_fused_attention、test_fused_attention_f32、test_ddp_bucket、test_cuda_stable_gradients；flash 的 test_sdpa_cuda_flash_kernel 主要检验拒绝条件、kernel 注册/发布，不含成功执行断言。它们证明测试入口存在，不证明 R4 wheel 已通过运行。R4 打包记录明确说明未导入 Jittor、未执行 JIT 或 GPU workload；未发现该 wheel/source identity 下的 CUDA test output，故运行验收仍开放。

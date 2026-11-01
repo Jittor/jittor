@@ -1,3 +1,11 @@
+## 2026-11-02 03:06 +0800 下一步：DCP 需匹配 core 后做双 rank 阶段与失败传播验证
+
+复核了当前 HEAD 4ed421da85b7b41f1b740f07b9c6bd2fb6565c58 的 DCP 保存/恢复顺序。双 rank stage attempt-01 的产物清单通过校验，但 rank0 因 exact CUDA 12.2/nox_nccl jittor_core 不存在而在 import 阶段退出，rank1 被 launcher 停止；未进入 process-group 或 DCP 调用，不能判断产品通过或失败。不要重跑相同冷构建路径。
+
+源码显示正常 save/load collective 次序对称；rank-local 写盘/校验或 rank0 metadata 写入抛错时没有先汇聚错误再进入下一 barrier。直接 DCP 成功用例只有单 rank。下一步应待匹配 core cache 可复用时，用双 rank 阶段标记验证 barrier、object gather、写盘、metadata、load/copy，并对一个 rank 的 I/O/校验异常验证有界、对称失败。详细源码身份、测试映射和证据哈希见 Day2–5 结果文档 03:06 条目。
+
+GPU2 的普通 CUDA holder 不具备排他能力；服务器节点仍 DOWN 且没有 device-cgroup 隔离。正式 Day4–5 cohort 需要管理员提供 UUID/GRES 独占租约。overall Day2–5 仍 Not complete。
+
 ## 2026-11-02 03:01 +0800 R4 CUDA test map：下一项需 runtime 确认 generator_randint
 
 R4 的 12 个 CUDA additions 有若干对应的 focused CUDA 测试源，但 R4 打包流程没有运行 Jittor/GPU。静态核对发现 CUDA GeneratorRandintOp 与 Torch factory 的 CUDA generator 路由存在，而 parity matrix 仍写着“无 CUDA kernel”。这不是产品通过证据，也不单凭注释判为产品失败；需独占 CUDA runtime 上执行 test_cuda_generator_randint_is_device_native_and_restorable，再根据实测修正 parity coverage。相关源码、测试 hash 与 R4 wheel 身份见 Day2–5 结果文档顶部 03:01 条目。
