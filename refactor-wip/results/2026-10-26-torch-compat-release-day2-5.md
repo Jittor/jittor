@@ -1,3 +1,27 @@
+## 2026-11-01 12:19 +0800 current-main CPU Trainer 新进程 checkpoint/resume 通过；Day4–5 仍待独占 GPU
+
+### 身份与证据
+
+当前主树 /home/cgq/jittor，HEAD 085392083db798f1797bed192fdb06b2f57dba0e，branch integrate/cgq-transformers-native-multicard-target，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind=154/0。已有 102 项 dirty/untracked porcelain SHA256 为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211；本轮之前 index 为空。CPU Trainer 证据目录为 /data6/cgq/jittor-lab/_state/release-day23/20261101-trainer-resume-current-main-r4-placement-fix-prepared/。source manifest SHA256 8816dfd566bca46d3b2f9460e1488a7325636c0efc6c443bdf7143789758a207；当前源码中 src/core/var_holder.cc SHA256 53f73df53bd42465aed6ff1f5f51aa4bfe7569a9b0263576848f10e7dc48ab40a8。
+
+### 当前源码 CPU Trainer 结果
+
+Jittor CPU-only continuous 运行在合成 tiny BERT/LoRA fixture 上训练到 global_step=4，完成 8 个 microbatch，train_loss=0.6899333000。独立 first 运行停在 checkpoint-2（4 microbatches，loss=0.6857634187）；在新进程中从 checkpoint-2 恢复，restored_step=2 并继续到 global_step=4（4 microbatches，loss=0.3470516205）。恢复运行后半段样本顺序 [27,16,26,4,15,6,20,18] 与 continuous 的后半段一致；sampler generator hash 与 dataloader generator hash 分别为 a6396fda1d9bf5516632fcf72b35d7211b11aec63691b3f197ed806bc217ee51 与 0208074782abd5fc8064f49d7e675a36748cd54c1352537f41081925f4839740，两种运行一致。
+
+三次运行 exit_code=0，fallback=0，实际参数设备均为 CPU。6 个可训练张量在 step 1 到 step 4 全部变化；48 个梯度快照由 runner 检查有限值；完整轨迹没有非有限数值。continuous 与 first+fresh-process-resume 合并轨迹的 272 项比较为严格相等：atol=0、rtol=0、failure_count=0、worst max_abs=0。trajectory-analysis.json SHA256 a8db60b4fb0735c24401ae4fbaeef8fdbb603317afd5af4807d0e30c2ee4a772；resume-exact-diagnostic.json SHA256 b90a60b81154319c133f94a7238f1187d61934d8f66b74c04173bf821b863c55。
+
+此前 PyTorch tiny-fixture 参考 loss 为 continuous=0.6929354668、first=0.6955546141、resumed=0.3451581597；由于 PT 与 JT 样本顺序不同，这些数值不构成逐批轨迹等价或任务质量证据。该实验只关闭当前源码的单进程 CPU stateful checkpoint/resume 这一窄项，不构成 CUDA 或多 rank 恢复通过，也不属于性能/显存测试。
+
+前置失败记录保留在同一目录：CUDA-built core 且 CPU 可见设备的 attempt 在 optimizer save 处失败（Invalid stream device 0，配置错误）；CPU-only 首启遇到 jit_utils rebuild/reload guard，要求同命令重启；后续 CPU core build 在 300 秒预算结束，227/227 翻译单元完成但尚未进入 Trainer。之后仅使用缓存完成上述三条 CPU 运行，没有覆盖这些失败记录。CPU cache 锁仍可见，本轮未清理。
+
+### GPU2 独占条件
+
+2026-11-01 12:17 +0800 快照中，物理 GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 为 Default compute mode，外部 yqa PID 2279286 使用 8651 MiB，GPU 利用率 75–79%。Slurm 将 X12DPG-OA6 标为 DOWN，原因是 node unexpectedly rebooted；配置有 gpu:a800:10，当前 cgq 无可见 account/partition association。普通用户态占卡程序不能阻止其他进程，也无法提供可审计的独占租约；本轮未启动占卡负载、未变更 compute mode 或干预外部 PID。正式测量前需管理员恢复节点并配置 UUID/GRES 独占及设备隔离。
+
+Day4–5 仍需固定匹配配置至少三轮交替、PT/JT 每轮各至少十个热样本，并报告 median/p95/离散度、模型加载/首步/热态时间、allocator 与 NVML 峰值、容量/OOM 恢复和 activation recompute 真实性对照。multi-rank Trainer resume、clean-installed wheel CUDA、ACL build/migration、合格 held-out generation quality 和完整支持矩阵仍开放。整体 release 保持 **Not complete**。
+
+---
+
 ## 2026-11-01 11:36 +0800 current-main Rotten Tomatoes JT/PT 留出集正确性对照通过；性能门仍未验收
 
 ### 身份与保留范围

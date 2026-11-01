@@ -1,3 +1,17 @@
+## 2026-11-01 12:19 +0800 current-main CPU Trainer 新进程续训通过；GPU2 独占仍受阻
+
+继续在 /home/cgq/jittor。当前 HEAD 085392083db798f1797bed192fdb06b2f57dba0e，branch integrate/cgq-transformers-native-multicard-target，origin/cgq_transformers e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 154/0。既有 102 项 dirty/untracked porcelain SHA256 仍为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，index 起始为空。本轮复核既有 R4 产物，只更新三份状态文档；未重跑训练、未改源码/测试、未 push。
+
+当前源码 CPU-only Trainer 状态保存/新进程续训证据位于 /data6/cgq/jittor-lab/_state/release-day23/20261101-trainer-resume-current-main-r4-placement-fix-prepared/，source manifest SHA256 8816dfd566bca46d3b2f9460e1488a7325636c0efc6c443bdf7143789758a207。连续运行完成 4 steps / 8 microbatches；独立 first 运行在 checkpoint-2 停止，新进程从 checkpoint-2 恢复至 global_step=4。恢复样本顺序与连续运行后半段一致，sampler 与 dataloader generator 最终状态哈希一致，fallback=0、实际设备 CPU。6/6 可训练张量从 step 1 到 step 4 均改变，48 个梯度快照通过有限值断言；连续与合并续训轨迹 272 项逐项严格相同（atol=rtol=0，failure_count=0，worst max_abs=0）。trajectory-analysis.json SHA256 a8db60b4fb0735c24401ae4fbaeef8fdbb603317afd5af4807d0e30c2ee4a772，resume-exact-diagnostic.json SHA256 b90a60b81154319c133f94a7238f1187d61934d8f66b74c04173bf821b863c55。
+
+本结果仅覆盖合成 tiny BERT/LoRA、单进程 CPU Trainer checkpoint/resume；没有 CUDA、多 rank、held-out 任务质量或性能/显存结论。PyTorch tiny-fixture phase loss 的样本顺序不同，只能作为背景数值，不能作为逐批精度等价证据。前置的 CUDA-built/CPU-visible 尝试在 optimizer 保存处遇到 Invalid stream device 0；CPU-only 首启触发 jit_utils 必须重启；随后 300 秒核心编译预算耗尽且未开始训练。三份失败/超时原件均保留；当前 cache 锁仍在，未清理。
+
+GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 仍由外部 yqa PID 2279286 使用约 8651 MiB，采样利用率约 75–79%，compute mode 为 Default。Slurm 报 X12DPG-OA6 为 DOWN（Reason: node unexpectedly rebooted），GRES 为 gpu:a800:10，cgq 当前无可见 association；没有系统级独占租约。普通 CUDA holder 不能阻止其他用户启动进程，本轮未启动 burner、未改 compute mode、未终止该进程。GPU2 性能验收需先由管理员恢复节点并授予 UUID/GRES 与设备隔离的独占租约。
+
+Day4–5 正式性能/显存门仍要求匹配配置至少三轮交替、每轮每侧至少十个热态样本，报告 median/p95/离散度、load/首步/热态耗时、allocator/NVML 峰值、容量/OOM 恢复及真实 activation recompute 对照。multi-rank Trainer 新进程 checkpoint/resume、clean-installed wheel CUDA、ACL 构建/迁移、合格 generation quality 与完整支持矩阵仍开放；整体 Day2–5 release 继续 **Not complete**。
+
+---
+
 ## 2026-11-01 11:36 +0800 current-main Rotten Tomatoes JT/PT 留出集对照通过；Day4–5 与其余发布门仍开放
 
 继续在 /home/cgq/jittor，HEAD 3c2214d26da2304e01118000603090131b68b1d8，branch integrate/cgq-transformers-native-multicard-target，origin/cgq_transformers e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 153/0。原有 102 项 dirty/untracked porcelain SHA256 仍为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，暂存区为空。本轮仅更新这三份状态文档，未改源码/测试，未 push。

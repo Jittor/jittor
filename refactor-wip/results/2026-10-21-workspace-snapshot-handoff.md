@@ -1,3 +1,15 @@
+## 2026-11-01 12:19 +0800 当前源码 CPU Trainer 新进程续训证据；GPU2 仍无法独占
+
+当前 /home/cgq/jittor HEAD=085392083db798f1797bed192fdb06b2f57dba0e，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind=154/0。原有 102 项 dirty/untracked porcelain SHA256=5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211。R4 证据位于 /data6/cgq/jittor-lab/_state/release-day23/20261101-trainer-resume-current-main-r4-placement-fix-prepared/，绑定 HEAD 0853920 与 source manifest SHA256 8816dfd566bca46d3b2f9460e1488a7325636c0efc6c443bdf7143789758a207。
+
+current-source CPU-only tiny BERT/LoRA Trainer 连续运行 4 steps / 8 microbatches；独立运行于 checkpoint-2 停止，再由新进程恢复至 step 4。恢复样本顺序、sampler 与 dataloader 状态哈希都与 continuous 匹配；fallback=0、参数设备 CPU，6/6 可训练张量改变，48 个梯度快照有限。272 项 continuous 对比合并续训轨迹在 atol=rtol=0 下 failure_count=0、max_abs=0。该证据只支持单进程 CPU stateful resume，不是 CUDA、多 rank、任务质量或性能显存结论。前置配置错误、jit_utils restart 和 300 秒编译超时记录均保留；CPU cache 锁未清除。
+
+GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 当前由外部 yqa PID 2279286 使用约 8651 MiB、Default 模式，采样 GPU 利用率 75–79%。Slurm 节点 X12DPG-OA6 为 DOWN，GRES gpu:a800:10，cgq 无可见 association。用户态 holder 无法阻止其他作业，本轮未启动 burner、未改 compute mode、未触碰外部进程。GPU2 Day4–5 性能门需管理员恢复节点并提供系统级 UUID/GRES 独占租约及设备隔离。
+
+Day4–5 尚需匹配配置、至少三轮交替、每轮每侧十个热样本、median/p95/离散度、load/首步/热态时间、allocator/NVML 峰值、容量/OOM 恢复和真实 activation recompute 对照。multi-rank Trainer 新进程 resume、clean wheel CUDA、ACL 构建/迁移、合格 generation quality 与完整 API 矩阵仍开放。整体 Day2–5 release 继续 **Not complete**。
+
+---
+
 ## 2026-11-01 11:36 +0800 current-main held-out JT/PT 分类对照通过；正式 GPU 性能测量仍等待独占
 
 当前工作区为 /home/cgq/jittor，branch integrate/cgq-transformers-native-multicard-target，HEAD 3c2214d26da2304e01118000603090131b68b1d8，origin/cgq_transformers e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 153/0。原有 102 项 dirty/untracked porcelain SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211 保持不变；仅修改本 handoff、Day2–5 报告和 refactor-board 三份状态文档，不 push。
