@@ -1,3 +1,7 @@
+## 2026-11-02 03:01 +0800 R4 CUDA 新增项已映射；generator_randint 矩阵说明与源码不一致
+
+R4 wheel 有 12 个 CUDA kernel/runtime additions。包快照包含 fused AdamW/SGD、LT Linear、CUDNN/fused attention、embedding/linear bias gradient、DDP bucket 等 CUDA 测试源，但 R4 打包流程未导入 Jittor、未运行 GPU tests。新增 CUDA GeneratorRandintOp 已设置 _cuda，Torch factory 的 CUDA-device randint 路由到它并有状态恢复用例；backend parity matrix 却仍以“无 CUDA kernel”为由豁免。需在当前 R4 GPU runtime 证据后核准该矩阵说明。GPU2 仍共享、节点 DOWN；不启动测试。Day2–5 继续 Not complete。
+
 ## 2026-11-02 02:58 +0800 R4 ACL 新增项完成静态映射；CANN runtime 门仍开放
 
 R4 默认 wheel diff 的 15 项 ACL additions 含 cross-entropy、GELU、fused SGD 与 foreach native 路径；ACL 自动化测试树没有这些新路径的直接 case，手工模型探针使用 GELU/cross-entropy，但随包的结果说明无 R4 source fingerprint。当前服务器没有 Ascend toolkit/ccec，无法运行且不把旧说明当 R4 runtime 证据。wheel baseline 保持 0 项批准；如 ACL 属于声明支持范围，需在绑定当前 R4 源码的 CANN 环境完成 no-fallback forward/grad/optimizer 证据。整体 Day2–5 继续 Not complete。

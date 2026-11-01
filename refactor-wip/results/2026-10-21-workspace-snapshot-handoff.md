@@ -1,3 +1,9 @@
+## 2026-11-02 03:01 +0800 R4 CUDA test map：下一项需 runtime 确认 generator_randint
+
+R4 的 12 个 CUDA additions 有若干对应的 focused CUDA 测试源，但 R4 打包流程没有运行 Jittor/GPU。静态核对发现 CUDA GeneratorRandintOp 与 Torch factory 的 CUDA generator 路由存在，而 parity matrix 仍写着“无 CUDA kernel”。这不是产品通过证据，也不单凭注释判为产品失败；需独占 CUDA runtime 上执行 test_cuda_generator_randint_is_device_native_and_restorable，再根据实测修正 parity coverage。相关源码、测试 hash 与 R4 wheel 身份见 Day2–5 结果文档顶部 03:01 条目。
+
+GPU2 仍共享，Slurm 节点 DOWN 且 ConstrainDevices=no；本轮不启动 GPU 测试。取得独占租约后优先验证实际训练路径的 attention、embedding/linear、fused optimizer 与 generator；性能验收仍需三轮交替、每轮每侧 ≥10 热态样本。其他 wheel changes 和支持矩阵继续审核，overall release 保持开放。
+
 ## 2026-11-02 02:58 +0800 R4 ACL 发布门待 CANN 环境复核
 
 R4 默认 wheel 的 ACL additions 有 15 项，包含 GELU、cross-entropy、fused SGD 与 foreach native 路径；ACL 自动化套件未找到这几条新增路径的直接 case。手工模型报告调用 GELU/cross-entropy，但没有绑定 R4 源码身份的原始运行证据。服务器缺少 Ascend toolkit/ccec，当前只能把它们列为未验证；不更改 wheel baseline/allowlist。R4 wheel 与 diff 的哈希和测试范围见 Day2–5 结果文档顶部 02:58 条目。
