@@ -1,3 +1,13 @@
+## 2026-11-01 23:01 +0800 CPU fetch零设备路径已修复；GPU2仍无独占租约
+
+继续使用现有工作区，未重新 clone。HEAD 7b3a2e64bfd03c790ea0d8e766423cf33c37b46f，origin/cgq_transformers e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（ahead/behind 175/0）；实验前既有 dirty/untracked 状态 SHA256 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98、index clean。仅 src/ops/composite/fetch_op.cc 增加本任务修复；源码 SHA256 c3dadef00942aa7accda29a4eee3afb6673c58f199fe5e3e1ad5654e31868780。修改把 entry-device/Copy-stream 初始化延迟到首次 CUDA-backed fetch；CPU-only fetch 不再在 accelerator build、零可见设备时请求 device 0 stream。
+
+根因已由保留的 core10 失败栈和源码路径对应：portable save 调 jt.fetch 后 jt.sync_all(True)，FetchOp::run() 在检查 allocator 类型前无条件创建 accelerator Copy stream，零可见设备导致 Invalid stream device 0。历史失败原件实际位于 /data6/cgq/jittor-lab/_state/release-day23/20261101-main-torch-core10-cpu-current-r1-prepared/logs/pytest.log（SHA256 57f563d5f94df09c98267abc12960c9ddd96b24c3b5f7ba2da14c1f7296afa51，226 passed/3 skipped/1 failed）。此前 22:31 记录把失败路径指到 attempt-04；该路径实际是环境修正后的 227 passed/3 skipped/0 failed（log SHA256 d00534857b4fa94fb763f433a2156fe014939ba4b53706e2dda74a35040b4891），现以本条更正路径引用。
+
+新证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261101-main-cpu-fetch-lazy-copy-stream-r1-prepared/ 保留所有 setup、bootstrap、timeout 与通过产物。直接定向复核在 JITTOR_CUDA=1、CUDA 12.2/sm_80 构建缓存、CUDA_VISIBLE_DEVICES 为空、CPU runtime 下，对 int64/float32/bfloat16 CPU Var 执行 jt.fetch + jt.sync_all(True)：回调和数值检查通过，backend fallback=0，exit 0，cache diff 0。run.log SHA256 0b35f07fa246b41667e57d4b70480fc42d6cd980650edaea262b37defef7c13b，evidence manifest SHA256 76e6d3aaff04d1074b577346851d4b0c85f059ef0b3e33129235790c761e2beb。这证明 accelerator-enabled build 的无设备 CPU fetch 路径；没有实际 GPU 分配，不能据此声称 CUDA Copy-stream 路径已复验。原 10-file 集成用例 attempt 在新进程首次构建 oneDNN 时达到 600s 上限、没有到达断言；保留为 timeout，不重跑。
+
+当前 GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 为 Default/shared，yqa PID 4166405 持有 8,640 MiB，当前无 cgq Slurm 作业或 account association；A800 节点 X12DPG-OA6 为 DOWN。A100 cn2 虽 IDLE，当前账户同样没有可用 association。没有启动 holder 或干预他人进程。正式 Day4–5 仍需管理员/调度器分配目标 GPU UUID/GRES 独占及 device-cgroup 隔离，再完成至少三轮交替、每轮每侧至少十个热态样本和 load/首步/热态、median/p95/离散度、allocator/NVML peak、容量/OOM 与真实 recompute 显存报告。当前改动不关闭 DDP/FSDP2 训练与新进程恢复、held-out generation quality、ACL build/migration 或更广支持矩阵门；整体 Day2–5 与 release 继续 **Not complete**。
+
 ## 2026-11-01 22:31 +0800 CPU regression follow-up: fillzero passes; independent frontend serialization remains unresolved
 
 CPU focused 用例回溯确认 fill_/zero_ alias/gradient 与 FollowRuntime 三项均通过；没有源码变更。更广 CPU core10 的独立 frontend serialization 用例在 portable save 的全局同步处失败，JT_SYNC 诊断受缓存初始化影响未进入测试；详见 Day2–5 结果文档顶部。暂不重复本次缓存，也不把该失败归为产品根因已查明。

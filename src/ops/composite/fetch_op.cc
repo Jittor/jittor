@@ -136,10 +136,10 @@ void FetchOp::run() {
     bool need_copy_fence = false;
     // Devices this fetch read from, and the device to come back to.
     uint64 src_devices = 0;
-    int entry_device = current_device();
+    int entry_device = -1;
     int copy_device = 0;
-    auto copy_stream = backend_stream(
-        {accelerator_backend_id(), copy_device}, BackendStreamKind::Copy);
+    BackendStream copy_stream{};
+    bool copy_stream_initialized = false;
     event_queue.flush();
     #endif
     LOGvvvv << "fetch" << fetch_vars.size() << "vars" << fetch_vars;
@@ -149,6 +149,15 @@ void FetchOp::run() {
 
         #ifdef HAS_ACCELERATOR
         if (v->allocator->is_cuda()) {
+            // CPU-only fetch must not request a CUDA stream when this
+            // accelerator-enabled runtime has no visible devices.
+            if (!copy_stream_initialized) {
+                entry_device = current_device();
+                copy_stream = backend_stream(
+                    {accelerator_backend_id(), copy_device},
+                    BackendStreamKind::Copy);
+                copy_stream_initialized = true;
+            }
             // The event that orders this fetch after the kernels that
             // produced v has to be recorded on v's *own* device: stream 0 is
             // whichever device is current, and an event of another device

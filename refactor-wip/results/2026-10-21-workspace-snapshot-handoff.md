@@ -1,3 +1,11 @@
+## 2026-11-01 23:01 +0800 接续：零设备 CPU fetch 修复通过定向回归，实际 CUDA 复验待资源
+
+继续使用现有 /home/cgq/jittor，未重新 clone。提交前 HEAD 7b3a2e64bfd03c790ea0d8e766423cf33c37b46f，origin/cgq_transformers e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（ahead/behind 175/0）；工作区原有 105 项 dirty/untracked 状态 hash 保持 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98，开始时 index clean。产品改动限于 src/ops/composite/fetch_op.cc 的 lazy Copy-stream 初始化；源文件提交前 SHA256 c3dadef00942aa7accda29a4eee3afb6673c58f199fe5e3e1ad5654e31868780。原来的行尾空格 dirty diff 在工作树保留，提交时只 stage 本任务 hunk。
+
+新证据在 /data6/cgq/jittor-lab/_state/release-day23/20261101-main-cpu-fetch-lazy-copy-stream-r1-prepared/。直接 CPU fetch/sync_all 回归绑定完整源码指纹 2c1ac1b49ffb167775ecafc94fc8e3614b39634c46016ede7fad495136dda686、JITTOR_CUDA=1、CUDA 12.2/sm_80 build cache、空 CUDA_VISIBLE_DEVICES；int64/float32/bfloat16 callback/value 检查通过，fallback=0，cache diff=0。run.log SHA256 0b35f07fa246b41667e57d4b70480fc42d6cd980650edaea262b37defef7c13b，manifest SHA256 76e6d3aaff04d1074b577346851d4b0c85f059ef0b3e33129235790c761e2beb。焦点集成 runner 首次仅触发 jit_utils restart；第二次到 600s deadline 时其独立 frontend 子进程仍在首次构建 oneDNN，未执行到原断言，记录为 timeout 且不重试。core10 失败日志正确路径为该 CPU-current 包根目录 logs/pytest.log；此前 22:31 增量误指 attempt-04，后者实际 227 passed/3 skipped。
+
+当前资源复核：GPU2 仍 Default/shared，yqa PID 4166405 使用 8,640 MiB；无 cgq Slurm 作业或 association。A800 节点 X12DPG-OA6 DOWN；A100 cn2 IDLE 但账户无关联，因此无法正式预约。没有启动 holder/干预他人进程。下一步需取得实际 CUDA 分配后验证 CUDA allocator 的 fetch/copy-stream 首次初始化；再按现有 Day4–5 协议做系统级独占性能/显存验收。不要重跑已通过 R14 full/preflight/resume、已耗尽缓存诊断或本次 600s integration timeout。DDP/FSDP2 resume、held-out generation、ACL build/migration、支持矩阵仍开放；整体目标保持未完成。
+
 ## 2026-11-01 22:31 +0800 CPU regression follow-up: fillzero passes; independent frontend serialization remains unresolved
 
 本轮复核排除了 fill_/zero_ CPU 梯度分支作为待修缺陷：匹配当前相关源文件哈希的三项 focused 回归均通过。另一个 current-main CPU core10 失败发生在 portable torch.save 的 jt.fetch / jt.sync_all(True) 同步处，错误为 Invalid stream device 0；JT_SYNC 诊断没有越过 Jittor 初始化。先静态核对无 GPU 时 child 进程的 use_cuda / device_count 路径和缓存 build stamp，再决定怎样构造可复用的隔离 CPU runtime。不得简单复跑已经改变 821 行的诊断 cache。
