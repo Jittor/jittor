@@ -1,3 +1,9 @@
+## 2026-11-01 22:31 +0800 CPU regression follow-up: fillzero passes; independent frontend serialization remains unresolved
+
+CPU focused 用例回溯确认 fill_/zero_ alias/gradient 与 FollowRuntime 三项均通过；没有源码变更。更广 CPU core10 的独立 frontend serialization 用例在 portable save 的全局同步处失败，JT_SYNC 诊断受缓存初始化影响未进入测试；详见 Day2–5 结果文档顶部。暂不重复本次缓存，也不把该失败归为产品根因已查明。
+
+GPU2 当前仍共享且有 yqa 与 cgq 进程；没有普通账号级占卡程序可以形成排他。formal Day4–5 需管理员分配 GPU UUID/GRES 独占与 device-cgroup。Day2–5 与 overall release 继续开放。
+
 ## 2026-11-01 22:09 +0800 allocation 归因启动复核失败；GPU2 暂无系统级独占
 
 继续使用 /home/cgq/jittor，HEAD 41724940be5c8e817473aeb1e10c365640e471d8，分支 integrate/cgq-transformers-native-multicard-target，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 173/0。运行前源码 fingerprint 为 745e531bcad4ed84b96b8224f3265b96220d4d36875e6f3e558b32decf3e6c37；porcelain 与 -uall 状态哈希仍为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211 / 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98，索引为空。

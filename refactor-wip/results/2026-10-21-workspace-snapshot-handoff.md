@@ -1,3 +1,9 @@
+## 2026-11-01 22:31 +0800 CPU regression follow-up: fillzero passes; independent frontend serialization remains unresolved
+
+本轮复核排除了 fill_/zero_ CPU 梯度分支作为待修缺陷：匹配当前相关源文件哈希的三项 focused 回归均通过。另一个 current-main CPU core10 失败发生在 portable torch.save 的 jt.fetch / jt.sync_all(True) 同步处，错误为 Invalid stream device 0；JT_SYNC 诊断没有越过 Jittor 初始化。先静态核对无 GPU 时 child 进程的 use_cuda / device_count 路径和缓存 build stamp，再决定怎样构造可复用的隔离 CPU runtime。不得简单复跑已经改变 821 行的诊断 cache。
+
+GPU2 快照显示 yqa 与 cgq 进程同时占用且为 Default/shared；不要启动用户态 holder 或触碰现有 PID。正式性能/显存测量要等待管理员提供 UUID/GRES 独占及 device-cgroup 预约，然后按三轮交替、每侧每轮至少十个热态样本执行。其他 Day2–5 发布门仍未关闭，整体状态保持 Not complete。
+
 ## 2026-11-01 22:09 +0800 接续：GPU2 外部占用无法由普通 holder 排除；显存归因 attempt-03 未启动到模型
 
 当前工作区 /home/cgq/jittor，HEAD 41724940be5c8e817473aeb1e10c365640e471d8，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（ahead/behind 173/0）。既有 dirty/untracked 哈希保持 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211 / 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98；本轮只更新三份状态文档，没有改其它既有文件。
