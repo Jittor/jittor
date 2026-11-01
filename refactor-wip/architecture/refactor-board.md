@@ -1,3 +1,7 @@
+## 2026-11-02 02:58 +0800 R4 ACL 新增项完成静态映射；CANN runtime 门仍开放
+
+R4 默认 wheel diff 的 15 项 ACL additions 含 cross-entropy、GELU、fused SGD 与 foreach native 路径；ACL 自动化测试树没有这些新路径的直接 case，手工模型探针使用 GELU/cross-entropy，但随包的结果说明无 R4 source fingerprint。当前服务器没有 Ascend toolkit/ccec，无法运行且不把旧说明当 R4 runtime 证据。wheel baseline 保持 0 项批准；如 ACL 属于声明支持范围，需在绑定当前 R4 源码的 CANN 环境完成 no-fallback forward/grad/optimizer 证据。整体 Day2–5 继续 Not complete。
+
 ## 2026-11-02 02:54 +0800 checkpoint 显存口径复核；R3 的 NVML 绝对差值需按热身基线解释
 
 静态核对确认 R3 的 torch.cuda.max_memory_allocated/reserved 对应 Jittor Var allocator 的每设备高水位；它不含单独的 TempAllocator workspace。worker 未启用 jt.profile(memory=True)。NVML sampler 在热身后重置、每 20 ms 采样，因此约 742 MB 的绝对峰值差大部分已存在于热身基线；热态窗口增量差约 4 MiB。on 的 Var-pool 热态峰值仍比 off 高 751,058,944 bytes，但这不是完整设备/进程峰值。正式显存门需覆盖加载、首步、热态的 NVML 进程峰值，并单独取 allocator 与 workspace 轨迹。GPU2 仍有外部进程、节点 DOWN 且无 device-cgroup 隔离；不启动占卡或性能任务。整体 Day2–5 继续 Not complete。

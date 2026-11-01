@@ -1,3 +1,13 @@
+## 2026-11-02 02:58 +0800 R4 wheel ACL 新增项映射：自动化覆盖与 CANN runtime 证据不足
+
+只读复核 R4 默认 wheel diff 的 ACL additions。证据身份为包产物 HEAD 5a1b42223573b25ea01734ce616c63fc31dd016a、source file manifest SHA256 ec7060f76b743926bfad54c6f94bddf19e1fccc12c972c20079c78c9f811c76e、main wheel SHA256 b87469fe5a6103d6f4fcea0e6292d663102ef5cd2be661439db2f81515cc3ef4；与默认 wheel-contents-final 比较的 current-baseline-diff.tsv SHA256 ad25192b3906ef6a54f8ce8803adc4d75e4617956e7701052487ef1542bd6549。该 diff 总体为 69 additions、302 changes、2 removals、0 approved，其中 15 个 ACL additions 与 12 个 CUDA additions。没有替换基线、修改 allowlist 或批准范围。
+
+15 个 ACL additions 包含 cross_entropy_loss、GELU、fused SGD Python dispatch/kernel 文件和 foreach native C++ runner/头文件。与其配套的 R4 ACL 测试源里，test_acl_torch_compat.py SHA256 c4b323c39088cfc812ba38e1e02070f0cc9fae66abffe0318849373b4327d84f，覆盖 independent frontend、fused AdamW、norm、SDPA 等，但没有 cross-entropy、GELU、fused SGD 或 foreach 的直接测试方法；test_acl.py/test_aclop.py 的测试树也未找到这些新 kernel 的直接断言。搜索命中只在手工 max-model/xcheck 脚本里调用 GELU 与 cross-entropy，未发现 fused SGD/foreach 的 ACL 手工用例。ACL conftest 的 autouse fixture 会在执行时禁止 backend fallback，测试类也由 ACL capability gate 控制；这提供了好的验证入口，但本服务器无 /usr/local/Ascend，ccec/cann 不存在，本轮未运行 ACL tests。
+
+随 R4 source snapshot 的 manual/MAX_MODEL_RESULT.md SHA256 为 1ec8a4969fd2bb7b14ad3fc286d2820dc8ff287b6809040ecaca0868b4870daa，描述过往 NPU model probe 数字并称此前修正了 dispatch，但文件不含 commit、source fingerprint 或设备运行原始收据，不能绑定到 R4 wheel。不得以该说明证明新增 ACL kernel 当前 runtime 通过。
+
+关闭此项需在 CANN/ccec 可用环境下，绑定 R4 source fingerprint 与 wheel，对 cross-entropy/GELU/fused-SGD/foreach 覆盖实际 dispatch、forward 与适用的 gradient/state/update，保留 no-fallback 计数、设备身份和原始日志；其中 foreach/fused SGD 要有直达这些路径的用例。若这些路径不属于正式支持范围，需由发布策略明确界定，而不是通过放宽默认 baseline 代替。其他新增 CUDA kernels、profiling/runtime files、302 content changes 和 installed-wheel runtime smoke 仍未全部映射。overall Day2–5 不标 complete。
+
 ## 2026-11-02 02:54 +0800 checkpoint 峰值口径复核：修正 NVML 热态差值解释并明确 workspace 缺口
 
 只读复核 R3 worker、原始 JSON 及对应源码。当前 compat/torch/installers/cuda/api.py、src/mem/mem_info.h/.cc、python/jittor/profiling/_memory.py 与 _sampler.py 的 SHA256 均与 R3 绑定 HEAD 3b384ad7e5d11097766eb1f086ce3f9d097d0ec0 一致；其中 api.py SHA256 为 d7dc58f8147a0b215ac65bd55a81505930adeb54740cb912fcacb2312ae05623。torch.cuda.memory_allocated/reserved/max_memory_allocated/max_memory_reserved 读取每设备 Jittor Var pool 的当前值或高水位：allocated 是 live Var bytes，reserved 是 pool live+cached bytes；Jittor profiler 另以事件轨迹记录 TempAllocator workspace。R3 worker 没有启用 jt.profile(memory=True)，因此其 Torch allocator 峰值不能代表包含 workspace 的完整 allocator 占用。

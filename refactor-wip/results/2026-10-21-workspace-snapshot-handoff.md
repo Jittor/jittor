@@ -1,3 +1,9 @@
+## 2026-11-02 02:58 +0800 R4 ACL 发布门待 CANN 环境复核
+
+R4 默认 wheel 的 ACL additions 有 15 项，包含 GELU、cross-entropy、fused SGD 与 foreach native 路径；ACL 自动化套件未找到这几条新增路径的直接 case。手工模型报告调用 GELU/cross-entropy，但没有绑定 R4 源码身份的原始运行证据。服务器缺少 Ascend toolkit/ccec，当前只能把它们列为未验证；不更改 wheel baseline/allowlist。R4 wheel 与 diff 的哈希和测试范围见 Day2–5 结果文档顶部 02:58 条目。
+
+下一次接入 CANN 环境时，先对绑定源码和 wheel 的四条新增路径补 no-fallback runtime 证据，再继续审核剩余 CUDA additions、profiling/runtime 文件与内容改动；Day4–5 GPU cohort 仍需要独占 GPU lease，整体 release 门继续开放。
+
 ## 2026-11-02 02:54 +0800 下一步：正式显存报告先统一统计窗口，保留 GPU2 隔离阻塞
 
 本轮只读核对 R3 checkpoint 显存实现与原始 worker。torch allocator 峰值是 Jittor Var pool 的每设备高水位，不含 TempAllocator workspace；R3 NVML 在 warmup 后 reset，20 ms 采样，所以绝对 process peak 的 on/off 差主要是 warmup 基线差，不能当作 hot transient 差。R3 hot-window Var-pool allocated 峰值 on 多 751 MB 的结果仍成立，但仅适用于该单次 synthetic Llama 配置。详见 Day2–5 结果文档顶部 02:54 条目及其中的原始结果哈希。
