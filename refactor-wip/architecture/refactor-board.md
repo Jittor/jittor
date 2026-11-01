@@ -1,3 +1,11 @@
+## 2026-11-02 01:45 +0800 GPU2 无法由普通 holder 排他；R9 与双 rank DCP 诊断已收窄
+
+GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 当前为 Default/shared，显存 17,299 MiB、utilization 81%，仍有 yqa PID 4166405 与 3037196 各占 8,640 MiB。Slurm 节点 X12DPG-OA6 为 DOWN；虽登记 gpu:a800:10，TaskPlugin 仅 task/affinity、CgroupPlugin=null，当前 cgq 无 sudo。未创建或启动 CUDA holder，也未改 compute mode：用户态进程不能禁止其他 CUDA context，且此时会干扰现有任务。须管理员恢复节点并提供 GRES 独占 allocation 与 task/cgroup 设备隔离（ConstrainDevices），再在同一租约内运行 R4 套件。GPU2 R4 继续 PREPARED_NOT_STARTED，Day4–5 与 overall Day2–5 均 Not complete。
+
+本轮在冻结 R9 候选上完成 CPU-only 精确梯度诊断：attempt-02 中 alias/storage 与原位写入值一致；attempt-03 进一步按 backward 后读梯度的测试顺序比较 baseline、fill_、zero_，三者梯度均未发布。它提示问题在冻结候选的工厂叶节点语义基线，尚未证明内部根因；不复跑 R9 focused suite。R9 HEAD 765f1791f3b00f9129fb3ec6342dadf2c9dc2dbe、指纹 8afd3ed550f5cf113c67c0b4f7c159334781047bfda7e11232c9ab3184e7089d。current-main 另有已保存证据：CPU autograd focused 26 passed/2 accelerator skipped，以及 GPU4 FollowRuntime CUDA selector 通过，均不外推为 R9 或整体发布门通过。
+
+复核既有双 rank DCP attempt-01：两 rank NCCL 初始化后均到达 save_start，60 秒超时退出 124；没有 load_start、checkpoint shard 或 metadata。源码路径包含首个同步 barrier、generation 广播、rank-local g.save 与后续 barrier，但日志无内部阶段打点，现有证据不能判断挂在首个 barrier 还是保存过程。不重跑原用例，不将超时归因为产品死锁。详情与哈希见 Day2–5 结果顶部。本次没有改源码、CUDA 状态或任何既有实验原件。
+
 ## 2026-11-02 01:17 +0800 DCP attempt-04 超过构建预算；GPU2 独占租约仍不可用
 
 current-main DCP CPU 新进程 attempt-04 在隔离 cache 下运行 300 秒，核心编译到 196/228 后保存超时（save_rc=124，load_rc=125），没有进入 DCP 保存、没有 checkpoint；cache 有增量编译产物，源码身份前后相同。本轮已按预算停止，不再延长或重跑。此前 12 项同进程 DCP 测试仍通过，但新进程恢复尚未验收。完整日志、manifest 与产物位于 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-dcp-cpu-fresh-process-r1-prepared/attempt-04-incremental-cache-r1/。

@@ -1,3 +1,13 @@
+## 2026-11-02 01:45 +0800 Handoff：GPU2 需要系统租约；DCP/R9 结论边界已更新
+
+当前 /home/cgq/jittor HEAD 为 9e2151705eed4d0adf171a47b8b9a8097622c17e，分支 integrate/cgq-transformers-native-multicard-target，origin ahead 182；既有 dirty/untracked 哈希保持不变，105 项状态保留，索引开始时干净。新增的 R9、双 rank DCP 与 GPU2 诊断详情和证据哈希见 Day2–5 结果文档顶部。
+
+GPU2 现在有两个外部 yqa CUDA 进程，Default/shared，17,299 MiB used、utilization 81%。Slurm 节点 X12DPG-OA6 为 DOWN，task/cgroup 设备隔离未启用且账号无 sudo。未创建 holder 或触碰现有任务，因为普通 holder 不能阻止其他 context。需管理员恢复节点并提供绑定 UUID/GRES 的独占租约和设备 cgroup；之后在同一受控窗口运行现有 R4 完整测量包，Day4–5 暂未开始。
+
+冻结 R9 的 exact-gradient CPU 诊断中，baseline factory、fill_、zero_ 梯度都未发布；current-main 的独立 CPU autograd 与 GPU4 FollowRuntime 证据已通过，但不可互相替代。双 rank DCP 仅证明 NCCL init 和调用 save；60 秒超时无 checkpoint，内部阶段未知，不能写成通过或已证实死锁。不要重跑冻结 R9 全量套件、相同 DCP 60 秒用例、R14 full/preflight/resume 或已耗尽的 DCP 冷编译。
+
+下一步等待管理员 GPU UUID/GRES + cgroup 租约；功能门上，对 DCP 可先做静态定位/设计具有内部阶段输出的新有界诊断，但仅在与原失败有实质区别且缓存/设备预算合适时运行。其余未完成项包括 Trainer 新进程 checkpoint/resume、FSDP2、held-out generation quality、wheel/source/sdist migration/support matrix、真实 activation-recompute 显存对照；Overall Day2–5 与 release 继续 Not complete。
+
 ## 2026-11-02 01:17 +0800 Handoff：DCP 新进程仍未运行，GPU2 未能排他保留
 
 /home/cgq/jittor 当前 HEAD 为 70dc77b61dde4e4645331e842d83bec6ab291bb0，origin e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，分支 ahead 181；实验未改源码，保留 102 项既有 dirty/untracked 内容，只改三份状态文档。DCP attempt-04 复用隔离 Jittor cache 后编译到 196/228，300 秒保存阶段超时（124），未生成 checkpoint；加载跳过（125）。产物及哈希见 Day2–5 结果增量。不要无预算重跑；此前 CPU 同进程 12 项通过不代表 fresh-process DCP。

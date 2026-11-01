@@ -1,3 +1,19 @@
+## 2026-11-02 01:45 +0800 GPU2 holder 请求核验、R9 梯度定位与双 rank DCP 超时复审
+
+工作区复核：/home/cgq/jittor HEAD 9e2151705eed4d0adf171a47b8b9a8097622c17e，分支 integrate/cgq-transformers-native-multicard-target，origin/cgq_transformers ahead/behind 182/0。既有 dirty/untracked 文件状态摘要仍为 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98，tracked diff 摘要 9d6864dc82d45ecf0bac78bc118b77a6573481a03d89364d07c3805379ea1757，untracked 内容摘要 3370d8669846acb01163e3758008539da20ebc5db3c575d3ce7bb4e26ac852d0，index clean；本次只编辑这三份状态文档。
+
+GPU2 即时快照为 A800 80GB、UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0、Default mode、17,299 MiB used、81% utilization；非本任务进程 PID 4166405 与 3037196 分别用 8,640 MiB。Slurm 显示 X12DPG-OA6 为 DOWN，Gres=gpu:a800:10，但 TaskPlugin=task/affinity、CgroupPlugin=null；cgq UID 1001 无 sudo。没有普通用户可用的进程能够阻止其他用户创建 CUDA context，因此本轮没有写入或启动占卡程序、没有切换设备模式、没有触碰现有 PID。要保证测试期间无其他进程，需要管理员恢复节点、修复 Slurm GRES 分配并启用 task/cgroup 设备约束（ConstrainDevices），给出绑定 UUID 的独占租约。现有 gpu2-exclusive-run.sh 只控制同时 CUDA context，不能替代整段套件的设备隔离；R4 仍 PREPARED_NOT_STARTED。
+
+冻结 R9 复核包位于 /data6/cgq/jittor-lab/_state/release-day23/20261102-r9-fill-zero-grad-follow-runtime-diagnostic-r1-prepared/，绑定候选 HEAD 765f1791f3b00f9129fb3ec6342dadf2c9dc2dbe、源码指纹 8afd3ed550f5cf113c67c0b4f7c159334781047bfda7e11232c9ab3184e7089d。attempt-02 exact original cache 路径执行 CPU-only，exit 0、fallback 0；证实同底层 storage 的 alias 指针和值一致，FollowRuntime 原生后端为 -1，而 torch.Tensor(native) wrapper backend 显示 0，storage address/value 保持一致。result SHA256 b549592228ce86b45d22af7e1386259aa01d386bee3b2097ca6cdcd875b2f22e，probe log SHA256 9e19e83fdabea6a834b77adf8ebddcfd3075797469005b480a3a1dae48d212c1。
+
+attempt-03 按真实用例时序仅在 backward 后读 .grad，baseline torch.ones(..., requires_grad=True)、无 grad 模式下 fill_ 和 zero_ 三者梯度都为 null；原位值和 storage alias 检查通过。故 R9 focused 失败不独属于 fill_/zero_，结果提示工厂产生叶节点的梯度语义路径需查，但尚无内部根因证据。result SHA256 d78ac8e0cf86054c6afe00dd362d9f88093e0be9ccd5a194138180016b6c33e5，probe log SHA256 acac3774d419f9de258a40a3d8689aae92a715f1ea3d5d8114746be4873d11e4。此前 attempt-01 是隔离 JITTOR_HOME 改变路径缓存 key 后触发 jit_utils 重建保护；该 harness/cache 错误不算产品结果。以上均为冻结 R9，不覆盖 current-main 的后续修复。
+
+current-main 已存在而本轮未重跑的分离证据：/data6/cgq/jittor-lab/_state/release-day23/20261101-main-current-autograd-cpu-r1/attempt-02/pytest.log 为 26 passed、2 accelerator skips，fallback 0，日志 SHA256 b7ed495511a3f53d9d8abeef7de2ae149fc8c880824758bed4b7f1dd109b9e2c；另 /data6/cgq/jittor-lab/_state/release-day23/20261101-main-follow-runtime-cuda-r1/ 的 GPU4 targeted CUDA selector 通过。它们仅支持相应源码与窄配置，不关闭训练恢复、生成质量、FSDP2、包迁移或 Day4–5。
+
+复审双 rank DCP 记录 /data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-ddp-trainer-resume-r3-current-core-prebuild-prepared/validation/ddp-dcp-rank-local-attempt-01/：当时源码清单 hash 7e09fc315189bcc4ba641c75dd89666264221e3d，两 rank NCCL init success 并都打印 save_start；launcher 在 60 秒截止后停止各进程，exit 124。rank0/rank1 日志 SHA256 分别 f50ef0b305db65c38a795b4ac40b0daedd30e982ff5a9707520fd2a636d34f22、05ce8b859c989b1b7e28bb8e3d6bbb89f827dc482f1656ee741fa15a112a7ff1；probe SHA256 30b45bb612c3dfc9eca160e452261e4fd256681dcdf482e3e8f7aefb767f611e；distributed.py 当前 SHA256 74fbc7a953f085f4568041ef7e56ccafcee4d1a6713de995958a01cbbc7fbf07。checkpoint-files.sha256 为空，没有 load_start。由于仅在 dcp.save 调用前打阶段标记，现有日志无法区分第一道同步 barrier、generation broadcast、g.save 序列化或之后的 barrier；保持为未定位 timeout，不再复跑同一 60 秒用例。
+
+本轮未运行性能基准、未运行 CUDA holder，亦未更改源码或实验原件。整体 Day2–5 仍开放；Day4–5 必须等系统级 GPU 租约后按匹配配置完成三轮交替、每侧每轮不少于十个热态样本，并报告加载/真实首步/热态耗时、median/p95/离散度、allocator/NVML 峰值、容量/OOM 与真实 activation recompute 显存结果。
+
 ## 2026-11-02 01:17 +0800 DCP fresh-process attempt-04 与 GPU2 独占请求复核
 
 启动时仓库 HEAD 70dc77b61dde4e4645331e842d83bec6ab291bb0，origin e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（ahead/behind 181/0）。实验未改源码；index clean。102 项既有 dirty/untracked 工作保留，tracked diff SHA256 9d6864dc82d45ecf0bac78bc118b77a6573481a03d89364d07c3805379ea1757，untracked 内容摘要 3370d8669846acb01163e3758008539da20ebc5db3c575d3ce7bb4e26ac852d0。仅更新三份状态文档。
