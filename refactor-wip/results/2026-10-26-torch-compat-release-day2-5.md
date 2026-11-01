@@ -1,3 +1,35 @@
+## 2026-11-01 18:53 +0800 DDP broadcast placement 源码修复已过真实 NCCL 初始化同步；训练与 GPU2 独占仍未通过
+
+### 工作区与源码身份
+
+继续在 /home/cgq/jittor 现有工作区工作，不重新 clone。源码验证前 HEAD ed3cd7efa7f66b5726c9dbe731948fab2902e5f3，branch integrate/cgq-transformers-native-multicard-target，origin cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 0/164。任务源码 fingerprint 为 d438ec23445b9665ec3a4d494089c5f001e3dadc59b1b5376adedc7a13dc8bc9。本轮前工作区有 105 项既有 dirty/untracked；新增任务修改限于 compat/collectives.py 和 compat/tests/torch/test_collectives_broadcast_placement.py，所有其他既有文件保留。提交时仅暂存这两个任务文件及三份规定的状态文档，不 push。
+
+### DDP broadcast placement 修复与验证范围
+
+compat/collectives.py 增加 _broadcast_placement_scope(var)：实际 Var.location() 为 device/CPU 时分别显式绑定 backend；metadata-only Var 使用已有 placement metadata；scope 在异常时也会恢复。多 rank _broadcast_from_rank0 在该 scope 中创建 mpi_broadcast 输出并赋回参数；单 rank 保持 identity。
+
+当前源码的 focused CPU/mock 回归为 5 passed, 0 skipped, 0 failed, 0.06s。日志 SHA256 83b50e98874da7769991b945e115090cad1128324817c8bd9381b0f0681e4217，exit 文件 SHA256 9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa，结果目录 /data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-ddp-broadcast-placement-fix-r1-prepared/validation/main-root-focused-final-current-source/。
+
+之后用源码本身跑了受控 HF Trainer 双 rank NCCL 初始化检查。runner 保留 DDP init/sync 跟踪，但移除了外部 runtime placement monkeypatch；当前源码 _broadcast_from_rank0 实际负责 placement。rank0 与 rank1 trace 均为 DDP_INIT_BROADCAST_PASSED_STOP_BEFORE_TRAINING_STEP，ddp_sync_completed=true、fallback delta=0、training_step_entry.global_step=0，同步后模型设备计数均为 cuda:0:33。该 runner 没有逐个拦截 helper 以统计 broadcast call 数；它记录 DDP init/sync 完成以及 31 个参数和 2 个 buffer 同步后的设备清单。
+
+完整 source-level 证据包为 /data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-ddp-broadcast-placement-fix-r1-prepared/validation/hf-trainer-source-helper-attempt-01/。rank0 trace SHA256 d057240a04ba5bf0c9b6476faf805ca9bffb110d9a7be8c2ca6925de252d2d13，rank1 trace SHA256 3a1cb471e7f96cca354f18cc4e7b93f16be0232151ca14faeebf008c7d6d786b，launcher log SHA256 78cf17e63f62922e275e3095ec50ced3f26196ff4fdbbb35bd3f15e0b0c5b1f2，exit 文件 SHA256 ca2ebdf97d7469496b1f4b78958f9dc8447efdcb623953fee7b6996b762f6fff。作业到 210 秒清理上限时 exit 124；两份 trace 在此之前写完，故只确认真实初始同步通过。没有 optimizer 更新、checkpoint 或新进程 resume，不能记为完整 DDP 训练通过。
+
+同包 validation/two-rank-nccl-smoke-attempt-01..05/ 保存了 tiny fixture 诊断及失败原件：attempt-01 模型仍在 CPU，报 nccl_broadcast on cpu；attempt-02 的 host snapshot 影响了被测 residency；attempt-03 将 CPU 权重与 CUDA 输入做前向而未进入 DDP；attempt-04 以 150 秒超时；attempt-05 阶段跟踪显示两 rank 构造 DDP，rank0 到达第一步更新，rank1 停在 broadcast sync，45 秒后 exit 124。以上日志均保留，没有覆盖或自动重跑；tiny fixture 不覆盖 HF Trainer 源码级初始化通过，也不证明训练更新正确。
+
+### GPU2、Day4–5 与更广发布门
+
+postflight 时 GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 为 Default/shared，29,781 MiB 已用、GPU 利用率 87%，进程为外部 VLLM PID 2737921（21,124 MiB）与 yqa PID 4166405（8,640 MiB）；A800 Slurm 节点 X12DPG-OA6 为 DOWN，GRES 仅报告 gpu:a800:10。没有启动普通 holder，因为它无法排除 Default 模式的其他 CUDA client；也没有干预现有任务。GPU1 postflight 为 1 MiB/0%。
+
+Day4–5 正式性能/显存验收仍未开始，需要系统级 GPU UUID/GRES 独占及设备隔离。正式报告必须匹配 PT/JT 配置，至少三轮交替、每轮每侧至少十个热态样本，提供 median/p95/离散度、加载/首步/热态时延、allocator/NVML 峰值、容量/OOM 恢复，并确认 activation recompute 是否实际带来显存差异。更广 Day2–5 仍包括 DDP 训练与新进程恢复、FSDP2 DCP planner/save/load/resume、clean-installed wheel CUDA、ACL build/migration、合格 held-out generation 质量阈值及支持矩阵；整体 release 继续 Not complete。
+
+### 后续顺序
+
+1. 管理员/调度器恢复 A800 节点并提供 GPU2 UUID/GRES 排他与设备 cgroup 隔离，再执行 Day4–5。
+2. 对当前 DDP helper 用新的有界计划完成真实训练更新与 fresh-process resume；保留当前初始化通过/cleanup timeout 证据，不重跑完全相同的 cleanup 路径。
+3. 继续关闭 DCP save/load/resume、clean-installed wheel CUDA、ACL 迁移、held-out 生成质量门和更广支持矩阵。整体完成前不将 Day2–5 标成 complete。
+
+---
+
 ## 2026-11-01 18:18 +0800 current-main DDP placement workaround 只通过初始广播；GPU2 暂无可用独占租约
 
 ### 工作区与实验身份

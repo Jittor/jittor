@@ -16,6 +16,7 @@ that says ``common._all_gather_shards(...)`` keeps working unchanged.
 from __future__ import absolute_import
 
 import os
+from contextlib import contextmanager
 
 import jittor as jt
 
@@ -136,16 +137,63 @@ def _all_reduce_mean(var):
     return var.mpi_all_reduce("mean")
 
 
+@contextmanager
+def _broadcast_placement_scope(var):
+    """Make a collective result follow the tensor, not an unrelated ambient scope.
+
+    mpi_broadcast creates a result using Jittor's ambient placement. Torch DDP
+    can reach it while a CPU placement scope is active even though a parameter
+    has already been moved to CUDA. In that case, keep both the collective
+    result and its assignment on the parameter's actual device.
+    """
+    location = var.location()
+    if location == "device":
+        backend = 1
+    elif location == "cpu":
+        backend = 0
+    else:
+        # Preserve FollowRuntime/metadata-only behavior when the Var has no
+        # concrete allocation from which to infer a backend.
+        try:
+            backend = int(var.placement_backend)
+        except (AttributeError, TypeError, ValueError):
+            backend = -1
+        if backend < 0:
+            yield
+            return
+
+    try:
+        device_id = int(var.device_id)
+    except (AttributeError, TypeError, ValueError):
+        device_id = -1
+    if device_id < 0:
+        if backend == 1:
+            try:
+                device_id = int(jt.current_device())
+            except (AttributeError, TypeError, ValueError, RuntimeError):
+                device_id = 0
+        else:
+            device_id = 0
+
+    token = jt.core._set_tensor_placement(backend, max(device_id, 0))
+    try:
+        yield
+    finally:
+        jt.core._reset_tensor_placement(token)
+
+
 def _broadcast_from_rank0(var):
-    """Replace ``var`` with rank 0's copy in place. The identity on one rank."""
+    """Replace var with rank 0's copy in place. The identity on one rank."""
     if _world_size() <= 1:
         return var
     if not callable(getattr(var, "mpi_broadcast", None)):
         raise RuntimeError(
             "this Jittor build has no mpi_broadcast, so parameters cannot be "
             "broadcast to the %d ranks it was launched with." % _world_size())
-    var.assign(var.mpi_broadcast())
+    with _broadcast_placement_scope(var):
+        var.assign(var.mpi_broadcast())
     return var
+
 
 def _reduce_scalar(var, how):
     """Combine a 0-d/1-element Var across ranks. The identity on one rank.

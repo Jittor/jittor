@@ -1,3 +1,19 @@
+## 2026-11-01 18:53 +0800 DDP broadcast placement 源码修复通过初始化同步；GPU2 尚无排他租约
+
+继续使用 /home/cgq/jittor 现有工作区，没有重新 clone。验证绑定源码 fingerprint d438ec23445b9665ec3a4d494089c5f001e3dadc59b1b5376adedc7a13dc8bc9，实验前 HEAD ed3cd7efa7f66b5726c9dbe731948fab2902e5f3，branch integrate/cgq-transformers-native-multicard-target，origin cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81、ahead/behind 0/164。在原有 105 项 dirty/untracked 工作之外，只新增本任务的 compat/collectives.py 修改和 broadcast placement 回归文件；其余已有修改保持不动。
+
+compat/collectives.py 现在按 Var 的实际 location 显式设置 CUDA/CPU placement，并在 mpi_broadcast 与赋值期间恢复 ambient placement。当前源码针对性单测结果为 5 passed, 0 skipped, exit 0。current-source HF Trainer 两 rank NCCL 检查移除了外部 placement monkeypatch，实际使用仓库 helper；两 rank 均到达 DDP_INIT_BROADCAST_PASSED_STOP_BEFORE_TRAINING_STEP，sync 完成后各有 33 个模型参数/buffer 在 cuda:0，fallback delta=0，training step=0。runner 的逐参数 broadcast 计数钩子被移除以验证源码本身，证据记录 DDP init/sync 与同步后设备清单。
+
+source-level HF 证据包位于 /data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-ddp-broadcast-placement-fix-r1-prepared/validation/hf-trainer-source-helper-attempt-01/。launcher 以 exit 124 在 210 秒作业清理上限结束；rank trace 已在超时前保存，足以确认 DDP 初始同步通过，但没有执行训练更新、checkpoint 或新进程恢复。较小的双 rank 诊断 fixture 有独立失败/超时记录，不覆盖 HF Trainer 源码级结果，也不构成 DDP 训练通过。
+
+GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 当前仍为 Default/shared，postflight 约 29,781 MiB、87%，可见外部 VLLM PID 2737921 与 yqa PID 4166405；Slurm A800 节点 X12DPG-OA6 为 DOWN。普通 holder 无法阻止其他 CUDA client，本轮没有启动 holder、切换设备模式或干预现有进程。GPU1 已回到 1 MiB、0%。正式 Day4–5 仍须先取得系统级 GPU UUID/GRES 独占和设备隔离租约，再做至少三轮交替、每轮每侧至少十个热样本并报告 median/p95/离散度、load/首步/热态时延、allocator/NVML 峰值、容量/OOM 恢复及真实 recompute 显存差异。完整 DDP 训练/恢复、FSDP2 DCP、clean-installed wheel CUDA、ACL 和合格 held-out generation quality/支持矩阵仍开放；整体 Day2–5 release 保持 Not complete。
+
+### 下一步
+
+取得 GPU2 系统级独占租约后执行正式 Day4–5。继续用当前 DDP 源码先完成 bounded full/stop/fresh-process resume；再处理 DCP planner/save-load-resume、clean wheel CUDA、ACL build/migration、held-out 质量规则与更广支持矩阵。不要重跑已通过的 R14 Qwen full/preflight/resume，也不要把本次 DDP 初始化同步当作训练或恢复通过。
+
+---
+
 ## 2026-11-01 18:18 +0800 current-main DDP 显式 placement workaround 只通过初始广播；GPU2 暂无可用独占租约
 
 对 shim DDP 的独立设备追踪发现，33 个初始广播输入均来自 CUDA；29 个参数带 CUDA placement backend，4 个 LoRA 参数在广播输出上回落到 CPU。直接用现有 `device_scope_like` 未改变 CPU ambient placement；仅在外部运行时 wrapper 中按 Var 的实际设备显式设置 placement 后，两 rank 的真实 NCCL 初始广播通过（attempt-04，fallback 增量 0）。attempt-05 移除训练步骤拦截并尝试最多四步，但在 210 秒 job 上限 exit 124；只有初始化 trace，没有最终 report/checkpoint，不能算 Trainer 训练或恢复通过。源码未改，全部记录见 /data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-ddp-placement-trace-r1-prepared/。

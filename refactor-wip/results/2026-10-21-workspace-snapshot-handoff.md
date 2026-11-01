@@ -1,3 +1,19 @@
+## 2026-11-01 18:53 +0800 接续：DDP 源码级初始 NCCL 同步已通过；正式性能仍等系统级 GPU2 独占
+
+在 /home/cgq/jittor 现有工作区接续，没有重新 clone。当前任务实验绑定源码 fingerprint d438ec23445b9665ec3a4d494089c5f001e3dadc59b1b5376adedc7a13dc8bc9、提交前 HEAD ed3cd7efa7f66b5726c9dbe731948fab2902e5f3、branch integrate/cgq-transformers-native-multicard-target。原有 105 项 dirty/untracked 均保留；任务源码变更仅为 compat/collectives.py 和新增的 broadcast placement test。当前源码 focused tests 为 5 passed。
+
+两 rank HF Trainer NCCL 初始化检查直接调用当前源码 helper，移除了外部 placement monkeypatch。rank0/rank1 均完成 DDP sync，fallback delta=0，同步后 33 个参数/buffer 都在 cuda:0，并在 global step 0 的 training-step sentinel 停止。source-level 证据包 /data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-ddp-broadcast-placement-fix-r1-prepared/validation/hf-trainer-source-helper-attempt-01/；launcher 到 210 秒 cleanup 上限 exit 124，但两份 rank trace 已写出。没有执行更新、checkpoint 或 fresh-process resume，所以 DDP training/recovery gate 仍未关闭。
+
+较小双 rank smoke 的失败与 timeout 原件保留在同一包的 validation/two-rank-nccl-smoke-attempt-*，用于区分 fixture/model placement 问题与 HF Trainer source-level 初始化结果。不要复跑相同 tiny fixture 或已通过的初始同步 smoke。
+
+GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 postflight 仍为 Default/shared，29,781 MiB 已用，VLLM PID 2737921 与 yqa PID 4166405；GPU 利用率 87%。Slurm A800 节点 X12DPG-OA6 为 DOWN。用户态占卡程序不能阻止其他 CUDA client，且 GPU 已有外部进程，本轮未启动 holder、未改模式或干预进程。GPU1 已释放到 1 MiB/0%。正式 Day4–5 必须等待管理员/调度器提供指定 GPU UUID 的独占 GRES 与设备 cgroup 隔离，再按至少三轮交替、每侧每轮至少十个热样本完成延迟、显存、容量/OOM 恢复与真实重计算显存对照。
+
+### 建议接续顺序
+
+先取得 GPU2 系统级独占租约并完成 Day4–5；期间可继续处理不依赖 GPU2 独占的 DDP 训练/新进程恢复、FSDP2 DCP、clean wheel CUDA、ACL 和支持矩阵。保留本轮 DDP 源码级初始同步通过及 cleanup timeout 的边界，不把它等同于训练/恢复通过。整体 Day2–5 release 继续 Not complete。
+
+---
+
 ## 2026-11-01 18:18 +0800 接续入口：DDP workaround 通过初始广播但训练超时；GPU2 必须走管理员/调度器独占
 
 继续在 /home/cgq/jittor 原工作区；文档编辑前 HEAD 662dbc2331f4d6a8af91bd2f0599160777a3f8ea，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 0/163。编辑前原有 105 项 dirty/untracked 的 SHA256 为 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98，index SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211；本次仍只编辑三份指定状态文档，不改源码或测试，不 push。DDP 实验绑定 current-source fingerprint d0449514272aee249410b42872b9f434a2478742631d0177a92858f5aee72118。
