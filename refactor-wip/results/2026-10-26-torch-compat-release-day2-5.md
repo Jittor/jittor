@@ -1,3 +1,9 @@
+## 2026-11-02 00:51 +0800 GPU2 独占占卡当前不可启动
+
+再次核对 GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0`：A800 80GB、compute mode `Default`，显存已用 17,299 MiB，外部 PID `4166405` 与 `3037196` 各占 8,640 MiB，utilization 78%。Slurm 将节点 `X12DPG-OA6` 标为 `DOWN`，没有可用 allocation；配置虽有 `gpu:a800:10` GRES，但 `TaskPlugin=task/affinity`、`CgroupPlugin=null`，当前账号 `sudo -n` 失败。
+
+已有 `/data6/cgq/jittor-lab/tools/gpu2-exclusive-run.sh`（SHA256 `c68ac63cca92bb7204b786f984062fced7de7dd509363bbc77e55b445cb6d16b`）可在卡空闲并获管理员权限后切换 `EXCLUSIVE_PROCESS`、运行传入的长驻 benchmark 命令并恢复原模式；它不能驱逐当前 CUDA context，当前启动会无限等外部 PID，普通显存占位也不能阻止其他进程。因此没有启动 holder、改 compute mode 或影响现有作业。正式窗口需管理员恢复节点/提供 GPU UUID/GRES 独占及设备隔离，或先停掉现有作业并授予安全切换权限；之后把整个测量套件放入同一个受控窗口。Day4–5 与整体 Day2–5 继续 **Not complete**。
+
 ## 2026-11-02 00:42 +0800 current-main CPU DCP 新进程 attempt 未进入保存；GPU2 独占仍不可用
 
 ### 源码身份与工作区
