@@ -1,3 +1,12 @@
+## 2026-11-02 04:46 继续：FSDP2 save_state 阶段超时；GPU2 独占需管理员租约
+
+在 /home/cgq/jittor 现有工作区继续，未重新 clone。current HEAD a28c735f4947c31179a27f75c633ed0150bf75a2，fingerprint cc5f71670a2a496da27637d87b22daff54fc819dd86eba5ad50e8f769cbdeb93，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 200/0；既有工作区状态 hash 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98、索引干净。本轮只更新规定的三份状态文档。
+
+GPU1+GPU4 current-source FSDP2 checkpoint attempt-01 的 NCCL warmup 通过，但两 rank 在 `accelerator_save_state` 阶段达到 300 秒上限（rank exit=124）；rank1 等待 rank0 Jittor build lock。无 checkpoint/load/resume 结果，根因未定，原件与 manifest 均保留，不原样重跑。详情见 Day2–5 结果文档 04:46 条目。
+
+GPU2 04:42 +0800 有外部 yqa PID 3037196/3164740 各占 8,640 MiB，Default mode、17,299 MiB used、97%；X12DPG-OA6 DOWN、ConstrainDevices=no，cgq 无免密 sudo。未新建或启动 holder。已有 /data6/cgq/jittor-lab/tools/gpu2-exclusive-run.sh 只可在卡空闲并取得管理员权限后，以单一 CUDA 进程执行实际命令并在结束恢复模式；它不能作为后台 holder 与独立测试 worker 同时使用。正式 Day4–5 需要管理员恢复节点并提供 UUID/GRES/device-cgroup 独占租约。
+
+只读 r9 保存产物审计 PASS；Qwen seed821 的现有 full/resume 证据经源码路径交叉核对仍适用于原单设备训练配置，不代表多 rank、性能/显存或生成质量通过。接续时先定位 FSDP2 save_state 内部停滞，再继续未完成发布门；Day4–5 和整体 Day2–5 继续 Not complete。
 ## 2026-11-02 04:10 继续：current-source focused/core CPU 通过；GPU2 独占需管理员调度
 
 在 `/home/cgq/jittor` 当前源码 HEAD `6590952078ebd9e2a31ed7b7aafdfef576f0f107` / fingerprint `8ed7256a407acc26d3a7964c242c13af4a7ad51ceefb22d3cdef2041d152c7f9` 上，Torch focused 11 项为 10 pass、1 个 CUDA case skip、fallback=0；维护的 10 文件 Torch core 为 227 pass、3 skip、fallback=0。core 首次导入只触发明确 jit_utils rebuild，按预算在新进程重启一次后完成 227 项 core 编译和测试；两项结果的 source before/after 指纹一致，证据清单通过。详情与路径见 Day2–5 结果文档 04:10 条目。仓库既有 105 项工作区状态 hash 未变。

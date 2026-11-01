@@ -1,3 +1,32 @@
+## 2026-11-02 04:46 +0800 current-main FSDP2 阶段标记诊断到达 save_state 后超时；GPU2 holder 请求核实
+
+### 源码与诊断范围
+
+继续在 /home/cgq/jittor 现有工作区。current-main HEAD a28c735f4947c31179a27f75c633ed0150bf75a2，source fingerprint cc5f71670a2a496da27637d87b22daff54fc819dd86eba5ad50e8f769cbdeb93，源码文件数 2,823；既有工作区状态 SHA256 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98。测试源 compat/tests/torch/test_accelerate_distributed_integration.py SHA256 c2a2073ef50be99bdd578b81be3c2e524f02178a66302ec76e8234a37af444dc，安装器 compat/torch/installers/distributed.py SHA256 74fbc7a953f085f4568041ef7e56ccafcee4d1a6713de995958a01cbbc7fbf07。
+
+这次有界 attempt 用来定位此前 FSDP2 save/resume 无进度标记的超时；不是性能测试。GPU1 UUID GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068 与 GPU4 UUID GPU-8bf405a2-a3dd-e203-8dd9-691e9f7b3530 承载两个 rank，GPU2 明确排除；没有独占租约。复用已核验的 current-source CUDA core cache，先做单进程 NCCL warmup，随后只运行一次 world_size=2 的 pytest 用例 `test_fsdp2_full_model_optimizer_checkpoint_resume`。计划 SHA256 c6a7043c783bfea31fdd89cd53e85bf21d6956aa231a268cf680be19cfd1f79c，run.sh SHA256 71c8f0c3f2f83fa36f46aa413e03d74b0a200c0ad5aa8c272b63bf6e4ef99937。
+
+### 阶段结果与边界
+
+NCCL singleton warmup exit=0；rank job 达到 300 秒上限后 exit=124（`warm_rc=0 rank_rc=124`）。两 rank 均记录 `checkpoint_path_broadcast`、`first_update`、`accelerator_save_state`；rank1 在 04:38 +0800 记录等待 rank0 持有的 Jittor build lock，到 deadline 两边仍停在 save_state。attempt 目录未发现 checkpoint/model/optimizer 状态文件，也没有执行 load/resume；这不证明 FSDP2 checkpoint 成功，也不证明根因就是 build lock 或 DCP。相同 attempt 不重跑；若继续，先为保存内部 JIT/DCP 阶段取栈或阶段标记，再做一次有区别且有界的定位。
+
+source-before/after JSON 仅 captured_at_epoch 不同，其余 normalized 内容相同；output manifest 校验通过。attempt 路径 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-fsdp2-planner-progress-r1-prepared/attempt-01-progress-marked/。output manifest SHA256 0e7ecafb6876d17e06383f742ed5dc93046c416361701bb5c8f61392cbafe2bd；two-rank exit 文件 ca2ebdf97d7469496b1f4b78958f9dc8447efdcb623953fee7b6996b762f6fff；launcher log e235f05ea7a7ab7051fd0ff17e18b43288b42755d3fd3d3b4ffe4c36678a0c94；rank0/rank1 logs 分别为 60111c8061ef330f90caf2130d75de0da19e6a3d772a2e3070d356685366ae13 与 7980b1e7ebe1866a78b569724b7578be285b6b51d289c1d81c9a80d1f9932755。
+
+### GPU2 排他能力
+
+04:42 +0800 GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 为 Default compute mode，已用 17,299 MiB、利用率 97%；外部 yqa PID 3037196 和 3164740 各占 8,640 MiB。Slurm 节点 X12DPG-OA6 仍 DOWN，ConstrainDevices=no；当前身份 uid=1001(cgq)，`sudo -n` 不可用。普通 holder 无法阻止别的账号新建 CUDA context，也会争抢现有作业，故未启动。
+
+服务器已有 /data6/cgq/jittor-lab/tools/gpu2-exclusive-run.sh，SHA256 c68ac63cca92bb7204b786f984062fced7de7dd509363bbc77e55b445cb6d16b。它等待进程退出并要求 sudo 后切 EXCLUSIVE_PROCESS，执行作为唯一 CUDA context 的单个长生命周期 benchmark 命令，结束后恢复 Default；单独 holder 会阻塞另一进程的测试，因此不能实现后台占卡再让独立 PT/JT worker 进入。当前卡有外部 PID且账号无 sudo，包装器不能安全启动。正式 Day4–5 需管理员恢复节点、处理占用并发放按 UUID 绑定的 GRES/device-cgroup 独占租约；随后完成至少三轮 PT/JT 交替、每轮每侧至少十个热态样本及 median/p95/离散度、load/first/hot timing、allocator/workspace/NVML 峰值、容量/OOM 结果。
+
+### 可复用证据审计
+
+只读审计保留的 r9 native focused 结果，没有重跑测试。/data6/cgq/jittor-lab/_state/release-day23/20261028-qwen-fill-zero-r9-focused-cpu-native-r1-prepared/attempt-01-native-focused/root-native-saved-artifact-audit.json 状态为 PASS_R9_NATIVE_CPU_SAVED_ARTIFACT_AUDIT，SHA256 dc455071f03ba229ce589b4c6b1455c8746f8be992cd61070086e010b8636fba；两项 native pow 测试与 immutable saved artifacts 哈希一致，0 skip、0 fallback，cache 732→740（8 项新增、0 removed/changed）。历史 root-native-terminal-audit 仍为 FAIL，因为随后共享 cache 变为 6,594 项且 lock terminal 状态不同；保存产物审计 PASS 不代表 cache 终态相等或无锁。
+
+Qwen seed821 current-source full/resume 执行快照与当前单卡训练相关源码交叉核对后，8 个不同条目集中在分布式路径、CPU fetch copy 修复及测试/文档，没有改动单设备 Qwen 训练核心路径。因此现有 2-epoch、102 update、checkpoint-51 新进程恢复证据可继续支持该单设备配置的功能结论，不必为 source 标签重复训练；它不证明多 rank 训练/恢复、性能/显存、held-out generation quality 或原子 checkpoint archive。
+
+### 总体状态
+
+FSDP2 仍未越过 checkpoint save/resume 门；GPU2 不具备当前账号可施加的排他租约。已有 Qwen 单设备训练、CPU focused/core、单 rank CPU DCP 等证据维持各自范围；Day4–5 正式性能/显存和更广 Day2–5 发布门仍未完成，overall release 不标 complete。
 ## 2026-11-02 04:10 +0800 current-main Torch focused/core CPU 回归通过；GPU2 普通 holder 不能提供独占
 
 本轮继续在 `/home/cgq/jittor` 当前工作区推进 CPU 可验收项。源码 HEAD `6590952078ebd9e2a31ed7b7aafdfef576f0f107`，source fingerprint `8ed7256a407acc26d3a7964c242c13af4a7ad51ceefb22d3cdef2041d152c7f9`；测试前后均为 2,823 个 source entries、105 项 status entries，status SHA256 `8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98`。工作区既有改动未变。

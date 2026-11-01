@@ -1,3 +1,8 @@
+## 2026-11-02 04:46 +0800 current-main FSDP2 checkpoint 阶段诊断超时；GPU2 独占仍需管理员租约
+
+current-main 诊断绑定 HEAD a28c735f4947c31179a27f75c633ed0150bf75a2、source fingerprint cc5f71670a2a496da27637d87b22daff54fc819dd86eba5ad50e8f769cbdeb93、2,823 个源码文件；测试源与 installer SHA256 分别为 c2a2073ef50be99bdd578b81be3c2e524f02178a66302ec76e8234a37af444dc 和 74fbc7a953f085f4568041ef7e56ccafcee4d1a6713de995958a01cbbc7fbf07。GPU1+GPU4 attempt-01 的 NCCL warmup 通过，current-source Accelerate FSDP2 full-model/optimizer checkpoint-resume 测试在 300 秒预算后 exit 124。两边都到 accelerator_save_state；rank1 等待 rank0 持有的 Jittor build lock。无 checkpoint/resume 结果，原因未定，不能记作通过或已证实产品失败。来源与产物清单校验通过；细节见 Day2–5 结果文档本条。
+
+GPU2 04:42 +0800 为 Default/shared，17,299 MiB used、97% 利用率，外部 yqa PID 3037196/3164740 各占 8,640 MiB；X12DPG-OA6 仍 DOWN、ConstrainDevices=no，cgq 无免密 sudo。现有 gpu2-exclusive-run.sh（SHA256 c68ac63cca92bb7204b786f984062fced7de7dd509363bbc77e55b445cb6d16b）要求空闲卡和管理员权限，以 EXCLUSIVE_PROCESS 包裹一个实际长生命周期 CUDA 命令并在结束后恢复模式；它不是可与另一测试进程并行的占卡 holder。本轮未新建或启动 holder，也未触碰外部任务。正式 Day4–5 仍需管理员恢复节点并提供 GPU UUID/GRES 与 device-cgroup 独占租约。整体 Day2–5 release 继续 **Not complete**。
 ## 2026-11-02 04:10 +0800 current-main Torch focused/core CPU 回归通过；GPU2 仍不能由普通 holder 排他
 
 current-main 源码 HEAD 6590952078ebd9e2a31ed7b7aafdfef576f0f107、source fingerprint 8ed7256a407acc26d3a7964c242c13af4a7ad51ceefb22d3cdef2041d152c7f9；测试前后均为 2,823 个源码文件、105 项工作区状态，status SHA256 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98。11 项 focused 回归为 10 passed、1 个 CUDA case 因 backend 被显式关闭而 skip、fallback=0；随后当前源码 10 文件 Torch core 为 227 passed、3 skipped、fallback=0。core 首个进程仅触发 jit_utils 明确重启提示，第二进程在 600 秒总预算内编译并完成测试。GPU 全程隐藏。
