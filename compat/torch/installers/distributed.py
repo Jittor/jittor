@@ -1086,7 +1086,13 @@ def _model_parameter_names(model):
 
 def _get_model_state_dict(model, *a, options=None, submodules=None, **k):
     options = _state_dict_options(options, submodules)
-    state_dict = model.state_dict(*a, **k) if hasattr(model, "state_dict") else {}
+    if options.full_state_dict and getattr(model, "_is_fsdp_module", False):
+        fsdp = _fsdp_hooks.provider()
+        if fsdp is None:
+            raise RuntimeError("FSDP2 model checkpoint requires the registered state provider")
+        state_dict = fsdp._get_full_state_dict(model)
+    else:
+        state_dict = model.state_dict(*a, **k) if hasattr(model, "state_dict") else {}
     if options.ignore_frozen_params:
         _, trainable = _model_parameter_names(model)
         state_dict = {key: value for key, value in state_dict.items()
@@ -1107,6 +1113,11 @@ def _set_model_state_dict(model, state_dict, *a, options=None, submodules=None, 
         _broadcast_object_list(payload, src=0)
         incoming_keys = payload[0]
         template = model.state_dict()
+        if options.full_state_dict and getattr(model, "_is_fsdp_module", False):
+            fsdp = _fsdp_hooks.provider()
+            if fsdp is None:
+                raise RuntimeError("FSDP2 model checkpoint requires the registered state provider")
+            template = fsdp._get_full_state_dict(model)
         received = {}
         for key in incoming_keys:
             if key in template and isinstance(template[key], jt.Var):
@@ -1258,6 +1269,20 @@ def _set_optimizer_state_dict(model, optimizers, optim_state_dict, *,
                               submodules=None, options=None):
     options = _state_dict_options(options, submodules, optimizer=True)
     optimizers = _normalize_optimizers(optimizers)
+    if getattr(model, "_is_fsdp_module", False):
+        fsdp = _fsdp_hooks.provider()
+        if fsdp is None:
+            raise RuntimeError("FSDP2 optimizer checkpoint requires the registered state provider")
+        if options.full_state_dict:
+            shard_state = getattr(fsdp, "_shard_optimizer_state_dict", None)
+            if not callable(shard_state):
+                raise RuntimeError("FSDP2 state provider cannot shard full optimizer state")
+            optim_state_dict = shard_state(model, optim_state_dict)
+        refresh = getattr(fsdp, "refresh_optimizer_fsdp_params", None)
+        if not callable(refresh):
+            raise RuntimeError("FSDP2 state provider cannot refresh optimizer parameter shards")
+        for optimizer in optimizers:
+            refresh(optimizer)
     if not isinstance(optim_state_dict, Mapping):
         raise TypeError("optimizer state_dict must be a mapping")
     saved_state = optim_state_dict.get("state", {})

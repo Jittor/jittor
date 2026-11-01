@@ -1,3 +1,8 @@
+## 2026-11-02 05:28 +0800 current-main FSDP2 FULL checkpoint/resume 双 rank 通过；整体 Day2–5 仍开放
+
+在当前工作树接通 FSDP2 FULL model gather、rank0-only full-state 接收缓冲和 optimizer shard restore/rebind。绑定 source fingerprint `7b323ff95269f916c593e3d06c44d8e455bb1aa824d8c2e38f2ee75ff1330267` 的 attempt-07 在 GPU1/GPU4 真 CUDA、NCCL world_size=2 完成 Accelerate FSDP2 full model/optimizer save、load 与恢复后更新；两 rank 均 1 passed、0 skipped，fallback 禁止范围无调用，产物清单通过。attempt-03 到 06 的逐阶段失败原件均保留，详见 Day2–5 结果报告。
+
+该用例只覆盖小型 Linear 的两 rank 更新与 full checkpoint/resume，不代表多模型、scheduler/dataloader 或长训覆盖。GPU1/GPU4 当时是共享负载，结果只作功能证据；GPU2 仍有外部任务且账号无 sudo 排他能力。Day4–5 正式性能/显存和更广 Day2–5 发布门继续 Not complete；下一步继续 runtime 发布门，overall 不标 complete。
 ## 2026-11-02 05:09 +0800 FSDP2 optimizer shard 汇总路径已接入；真实两 rank 验证待资源窗口
 
 attempt-03 的 rank 级记录显示 FULL optimizer checkpoint 把 rank-local 动量直接逐张量广播：rank0 的 weight/bias 动量形状为 (8,)/(0,)，rank1 为 (4,)/(3,)，rank1 在广播第三个标量 step 时停住，rank0 已走完广播。已在 distributed checkpoint 入口先汇总字段元数据，再调用 FSDP2 现有 shard gather 重组完整 optimizer state，然后执行可选的 rank0 广播；现有 Accelerate FSDP2 两 rank 测试新增了完整参数矩形状和标量 step 断言。attempt-03 原始结果清单校验通过，rank job exit=124；新路径仅通过 py_compile 与 diff check，尚无运行时通过证据。

@@ -1,3 +1,22 @@
+## 2026-11-02 05:28 +0800 current-main FSDP2 FULL model/optimizer checkpoint-resume 双 rank 通过
+
+### 修复与运行证据
+
+在 `/home/cgq/jittor` 现有工作树继续，没有重新 clone。测试基线 HEAD `c2d0bc5cb0697586ab15845b9ca0b6e1beb436b0`，分支 `integrate/cgq-transformers-native-multicard-target`，origin/cgq_transformers=`e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`；运行时源指纹 `7b323ff95269f916c593e3d06c44d8e455bb1aa824d8c2e38f2ee75ff1330267`，2,823 source entries、107 status entries，status SHA256 `33bd6a4fe16d577c81e03507615ea5954f355107f786af74f02e3b2b86abda3a`。本任务两文件 SHA256：`compat/torch/installers/distributed.py`=`1b35a63821a9f4c5cd9157c97421937919c9c9128333b9c90a60243721232934`；`compat/tests/torch/test_accelerate_distributed_integration.py`=`21955c47fdf0e5f5130799495580b6dc68e8685d883db2c4fb0169bfd52334f8`。
+
+功能修复有三处：`StateDictOptions(full_state_dict=True)` 现在调用 FSDP2 full model gather；rank0-only FULL load 的接收模板也先 gather 成每个 rank 相同的 full shapes，再广播并分片回写；FULL optimizer load 在恢复前按当前 shard 切分 moment tensors，并刷新 flat-shard 重建后的 optimizer 参数引用。测试明确断言 full model `weight=(3,4)`、`bias=(3,)`，optimizer 非 step 状态与其同形；save 后再更新、load、核对模型/optimizer 恢复值，并验证继续更新与预期状态一致。
+
+attempt-07 目录：`/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-fsdp2-shard-gather-fix-r1-prepared/attempt-07-full-optimizer-shard-load/`。plan.json SHA256 `e68c39caa9775f7692cdff81d9066f1ae701fa2140ebb7310ce4bca1ff0a288e`；`output-manifest.sha256` 文件 SHA256 `7a0dac299a653e9f36470e1141c498e51cdf6d56f7c7246e3b750221c41f314d`，清单内所有文件校验通过。NCCL warmup exit=0，rank job exit=0；rank0/rank1 各 1 passed、0 skipped，pytest 分别 2.44s/2.67s。两个 rank 的 report 均为 `world_size=2`、backend NCCL、`device=cuda:0`，分别绑定 GPU1 UUID `GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068` 与 GPU4 UUID `GPU-8bf405a2-a3dd-e203-8dd9-691e9f7b3530`；Torch compat active，参数设备均为 CUDA。测试 fixture 禁止 backend fallback 且结束计数未变。source before/after fingerprint 完全相同；cache 1,169 项前后数量相同，唯一内容变化为运行后释放的 `jittor.lock`。GPU1/GPU4 当时有外部共享进程，因此此结果仅证明功能，不作为性能或显存测量。
+
+### 失败迭代与边界
+
+attempt-03（manifest SHA256 `1e0a36a77fb899d75c3ec9336f3c09a62d5c52b25181a60e2c9ccaa61cbf2258`）通过 warmup 后，暴露 FULL optimizer 已 gather、但 FULL model getter 仍返回 rank-local shape 的缺陷；测试在 getter shape 断言失败。attempt-04（`f0a280bcc134feb63c312d6b5f94e1d6fcd1afa6aa6a3f2a48eebd5fec05f8ea`）加入 model gather 后完成 getter 与保存，load 将 rank-local 4 元素缓冲传给 full loader，报 `weight` shape mismatch。attempt-05（`5109875a7b295cd5e69b7dbaf2b858bed9b96f39f8d89c4a17546c7fc237e01a`）改用 full-shape broadcast template 后，模型 load 通过，但 optimizer group 因 flat shard view 被重建而仍引用旧对象，名字映射失败。attempt-06（`48777d7c0785c4dea33fea37210a7bb5eb61cfb34ba871cdf3330b933f314a81`）刷新 optimizer 引用后，发现 FULL `exp_avg` 尚未切成本 rank shard。四次失败均已终态且清单保留，没有覆盖或删除。
+
+该 gate 只验证此源码、小型 Linear、两 rank CUDA/NCCL 上的一次训练更新与 Accelerate full checkpoint/resume；没有覆盖多模型规模、scheduler/dataloader、stock PyTorch 读取 Jittor portable-pickle optimizer、其他分布式后端或发布包全矩阵。不得据此关闭整体 Day2–5。
+
+### 后续门
+
+GPU2 仍有外部 yqa PID `3037196` 与 `3164740`，各约 8,640 MiB；Default compute mode、共享节点，当前 cgq 账号无 sudo。已有 `/data6/cgq/jittor-lab/tools/gpu2-exclusive-run.sh` 需卡空闲和管理员权限；没有占卡或中断外部任务。Day4–5 正式测量仍需按 GPU UUID 的系统级独占租约、至少三轮交替、每轮 JT/PT 各至少 10 个热态样本，并报告 median/p95/离散度、load/first/hot、allocator/workspace/NVML 峰值及容量/OOM。Graph replay、captured-step GradScaler overflow、双 rank DCP 错误传播、干净安装 wheel 与更广任务质量等门仍未全部完成；overall release 继续 **Not complete**。
 ## 2026-11-02 05:09 +0800 current-main FSDP2 optimizer shard gather 修复已接线；两 rank 运行时验收未完成
 
 ### 直接诊断证据

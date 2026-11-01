@@ -1,3 +1,8 @@
+## 2026-11-02 05:28 +0800 Handoff：current-main FSDP2 FULL checkpoint/resume 双 rank 功能门通过
+
+在既有 `/home/cgq/jittor` 工作树修正 FULL model gather、FULL load broadcast shape 和 optimizer shard restore/rebind。attempt-07 绑定 source fingerprint `7b323ff95269f916c593e3d06c44d8e455bb1aa824d8c2e38f2ee75ff1330267`，GPU1/GPU4 真 CUDA、NCCL world_size=2；Accelerate save/load、模型与 optimizer 状态恢复、再更新比较均通过，rank0/rank1 各 1 passed、0 skipped，fallback 计数未增长。输出清单文件 SHA256 `7a0dac299a653e9f36470e1141c498e51cdf6d56f7c7246e3b750221c41f314d`。attempt-03/04/05/06 的原始失败记录保留；准确阶段与清单哈希见 Day2–5 结果报告。
+
+两份代码与三份状态文档需只暂存本任务文件并中文提交，不 push；其余 105 项既有工作继续保留。GPU2 仍由外部任务使用，普通 holder 和当前 cgq 权限不能提供排他。下一步继续未关闭的 CUDA runtime/分布式发布门；Day4–5 只有获得管理员 GPU UUID/GRES 独占租约后才做正式三轮性能/显存 cohort。整体 Day2–5 仍 Not complete。
 ## 2026-11-02 05:09 +0800 Handoff：FSDP2 optimizer shard mismatch 已定位并接入 gather；等待不冷编译的 runtime 窗口
 
 继续使用 /home/cgq/jittor 现有工作区，未重新 clone。基线 HEAD 为 e57a394c8c8833227c0e79f3aec2c3499e82c2a9，分支 integrate/cgq-transformers-native-multicard-target，相对 origin/cgq_transformers ahead 201 / behind 0；origin 当前仍为 e5cffe1ae60c418f53c5bb1cdca9182577fd2b81。除本轮两个目标源码/测试文件外，既有 dirty/untracked 状态签名仍为 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98，索引此前干净。仅新增变更为 compat/torch/installers/distributed.py 和 compat/tests/torch/test_accelerate_distributed_integration.py，并需提交上述三份状态文档；不触碰其余 dirty/untracked 文件，不 push。

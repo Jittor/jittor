@@ -249,6 +249,7 @@ def test_fsdp2_full_model_optimizer_checkpoint_resume(distributed_scope, tmp_pat
         state = get_state_dict(model, optimizer, options=options)
         parameter_shapes = {name: tuple(value.shape)
                             for name, value in state[0].items()}
+        assert parameter_shapes == {"weight": (3, 4), "bias": (3,)}
         for name, fields in state[1]["state"].items():
             assert name in parameter_shapes
             for field, value in fields.items():
