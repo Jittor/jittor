@@ -1622,6 +1622,8 @@ def patch_input_batch_host_arrays(module):
         import torch
 
         num_reqs = self.num_reqs
+        if num_reqs == 0:
+            raise ValueError("zero-size array has no maximum prompt length")
         max_prompt_len = self.num_prompt_tokens[:num_reqs].max()
         result = torch.empty((num_reqs, max_prompt_len), device='cpu',
                              dtype=torch.int64, pin_memory=module.PIN_MEMORY)

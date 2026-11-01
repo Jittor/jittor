@@ -502,6 +502,7 @@ def _install_accelerator(g, registry=None):
     accelerator.memory_reserved = cuda.memory_reserved
     accelerator.max_memory_allocated = cuda.max_memory_allocated
     accelerator.memory_stats = cuda.memory_stats
+    accelerator.get_memory_info = cuda.mem_get_info
     accelerator.reset_peak_memory_stats = cuda.reset_peak_memory_stats
     accelerator.current_accelerator = _api_accelerator_current_accelerator
     g.accelerator = accelerator

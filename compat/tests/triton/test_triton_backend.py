@@ -22,7 +22,10 @@ from _helpers import capability as _test_capability
 import ctypes
 import importlib.util
 import os
+import sys
+import types
 import unittest
+from contextlib import ExitStack
 from unittest import mock
 import numpy as np
 
@@ -178,6 +181,19 @@ def _define_kernels():
         y = xmean * rstd * w + b
         tl.store(Y + cols, y, mask=mask)
 
+    @triton.jit
+    def optional_pointer_kernel(x_ptr, optional_ptr, scale, out_ptr, n, bias,
+                                optional_tail_ptr=None, BLOCK: tl.constexpr = 64):
+        offsets = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+        mask = offsets < n
+        value = tl.load(x_ptr + offsets, mask=mask, other=0)
+        if optional_ptr is not None:
+            value += tl.load(optional_ptr + offsets, mask=mask, other=0)
+        value = value * scale + bias
+        if optional_tail_ptr is not None:
+            value += tl.load(optional_tail_ptr + offsets, mask=mask, other=0)
+        tl.store(out_ptr + offsets, value, mask=mask)
+
     return (
         add_kernel,
         fma_kernel,
@@ -187,6 +203,7 @@ def _define_kernels():
         add_autotuned,
         attn_fwd,
         layernorm_kernel,
+        optional_pointer_kernel,
     )
 
 
@@ -194,6 +211,7 @@ def setUpModule():
     global _shim, triton, tl
     global add_kernel, fma_kernel, matmul_kernel, softmax_kernel
     global mul2_kernel, add_autotuned, attn_fwd, layernorm_kernel
+    global optional_pointer_kernel
     if not _HAVE:
         return
     try:
@@ -217,6 +235,7 @@ def setUpModule():
         add_autotuned,
         attn_fwd,
         layernorm_kernel,
+        optional_pointer_kernel,
     ) = _define_kernels()
 
 
@@ -262,6 +281,30 @@ class TestTritonBackend(unittest.TestCase):
             out = jt.zeros(n, dtype="float32")
             add_kernel[(triton.cdiv(n, BLOCK),)](x, y, out, n, BLOCK=BLOCK)
             self.ac(out.numpy(), xn + yn, atol=1e-6, msg=f"add n={n}")
+
+    def test_optional_pointers_preserve_branches_abi_and_cached_variants(self):
+        from jittor.compat.triton import backend as bridge
+        values = np.arange(97, dtype=np.float32) + 0.25
+        extra = np.arange(97, dtype=np.float32) * 0.125
+        x, addend = jt.array(values), jt.array(extra)
+        # None occurs before scalar/output arguments and at the tail. Alternate
+        # all specializations, then revisit cached ones in a different order.
+        variants = [(False, False), (True, False), (False, True), (True, True)]
+        for first, tail in variants + list(reversed(variants)):
+            out = jt.full((97,), -123., dtype="float32")
+            optional_pointer_kernel[(2,)](
+                x, addend if first else None, 3, out, 97, 7,
+                optional_tail_ptr=addend if tail else None, BLOCK=64)
+            expected = (values + (extra if first else 0)) * 3 + 7 + (extra if tail else 0)
+            self.ac(out.numpy(), expected, atol=0, rtol=0)
+        keys = [key for key in bridge._COMPILE_CACHE if key[0] == id(optional_pointer_kernel)]
+        self.assertEqual(len(keys), 4)
+        for key in keys:
+            signature, constants = dict(key[1]), dict(key[2])
+            for name in ("optional_ptr", "optional_tail_ptr"):
+                self.assertEqual(signature[name] == "constexpr", name in constants)
+                if name in constants:
+                    self.assertIsNone(constants[name])
 
     def test_fused_mul_add(self):
         n, BLOCK = 777, 128
@@ -365,6 +408,158 @@ class TestTritonBackend(unittest.TestCase):
         BLOCK = triton.next_power_of_2(N)
         layernorm_kernel[(M,)](X, Y, W, B, N, N, eps, BLOCK=BLOCK)
         self.ac(Y.numpy(), ref, atol=1e-3, rtol=1e-3, msg="layernorm")
+
+
+class TestOptionalPointerPacking(unittest.TestCase):
+    """Run actual binding/cache/packing code with a compiler and driver recorder."""
+
+    def test_none_constants_and_runtime_arguments_stay_disjoint(self):
+        from jittor.compat.triton import backend as bridge
+
+        class Tensor:
+            dtype, shape, is_cuda, device_id = "float32", (8,), True, 0
+
+            def __init__(self, pointer):
+                self.pointer = pointer
+
+            def data_ptr(self):
+                return self.pointer
+
+        def function(src, optional, scale, out, n, bias, tail=None, BLOCK=64):
+            pass
+
+        names = ("src", "optional", "scale", "out", "n", "bias", "tail", "BLOCK")
+        kernel = types.SimpleNamespace(
+            fn=function, __name__="optional_fixture",
+            params=[types.SimpleNamespace(name=name, is_constexpr=name == "BLOCK") for name in names])
+        compiled, launches = {}, []
+
+        class ASTSource:
+            def __init__(self, fn, signature, constants, attrs=None):
+                self.signature, self.constants = dict(signature), dict(constants)
+
+        def compile_source(source, target, options=None):
+            name = "optional_fixture_%d" % len(compiled)
+            compiled[name] = source
+            # Match modern upstream's two trailing scratch pointer parameters,
+            # including their declared-but-zero-size case.
+            runtime_count = sum(kind != "constexpr" for kind in source.signature.values())
+            parameters = ",\n".join(".param .u64 p%d" % i for i in range(runtime_count + 2))
+            return types.SimpleNamespace(
+                metadata=types.SimpleNamespace(name=name, num_warps=1, shared=0,
+                                               global_scratch_size=0, profile_scratch_size=0),
+                asm={"cubin": b"recorded", "ptx": ".visible .entry %s(\n%s\n) {}" % (name, parameters)})
+
+        class Driver:
+            arch = 89
+
+            def ensure_ctx(self):
+                pass
+
+            def ensure_dynamic_shared(self, function, shared):
+                pass
+
+            def get_function(self, cubin, name):
+                return name
+
+            def launch(self, function, grid, block, shared, params):
+                source = compiled[function]
+                values = []
+                runtime_signature = [(name, kind) for name, kind in source.signature.items()
+                                     if kind != "constexpr"]
+                for index, (name, signature) in enumerate(runtime_signature):
+                    scalar = ctypes.c_uint64 if signature.startswith("*") else ctypes.c_int32
+                    values.append((name, ctypes.cast(params[index], ctypes.POINTER(scalar)).contents.value))
+                scratch = [ctypes.cast(params[i], ctypes.POINTER(ctypes.c_uint64)).contents.value
+                           for i in range(len(runtime_signature), len(params))]
+                launches.append((source, values, scratch))
+
+        triton_module = types.ModuleType("triton")
+        triton_module.__path__ = []
+        compiler_module = types.ModuleType("triton.compiler")
+        compiler_module.ASTSource = ASTSource
+        backends_module = types.ModuleType("triton.backends")
+        backends_module.__path__ = []
+        backend_compiler_module = types.ModuleType("triton.backends.compiler")
+        backend_compiler_module.GPUTarget = lambda *values: values
+        modules = {"triton": triton_module, "triton.compiler": compiler_module,
+                   "triton.backends": backends_module,
+                   "triton.backends.compiler": backend_compiler_module}
+        with ExitStack() as stack:
+            stack.enter_context(mock.patch.dict(sys.modules, modules))
+            stack.enter_context(mock.patch.object(bridge, "real_triton", return_value=types.SimpleNamespace(compile=compile_source)))
+            stack.enter_context(mock.patch.object(bridge._Driver, "get", return_value=Driver()))
+            stack.enter_context(mock.patch.object(bridge, "_COMPILE_CACHE", {}))
+            stack.enter_context(mock.patch.object(bridge, "_is_var", return_value=False))
+            stack.enter_context(mock.patch.object(jt, "sync_all"))
+            for name, result in (("_stats_on", False), ("_guard_enabled", False),
+                                 ("_fast_sync_enabled", True), ("_sync_before_launch_enabled", False),
+                                 ("_sync_after_launch_enabled", False)):
+                stack.enter_context(mock.patch.object(bridge, name, return_value=result))
+            src, addend, out = Tensor(0x1000), Tensor(0x2000), Tensor(0x3000)
+            variants = [(None, None), (addend, None), (None, addend), (addend, addend)]
+            for optional, tail in variants + list(reversed(variants)):
+                bridge._run(kernel, (src, optional, 3, out, 8, 7), {"tail": tail, "BLOCK": 64}, (1,))
+                source, values, scratch = launches[-1]
+                expected = [("src", 0x1000)]
+                if optional is not None:
+                    expected.append(("optional", 0x2000))
+                expected.extend((("scale", 3), ("out", 0x3000), ("n", 8), ("bias", 7)))
+                if tail is not None:
+                    expected.append(("tail", 0x2000))
+                self.assertEqual(values, expected)
+                self.assertEqual(scratch, [0, 0])
+                for name, value in (("optional", optional), ("tail", tail)):
+                    self.assertEqual(name in source.constants, value is None)
+                    self.assertEqual(source.signature[name] == "constexpr", value is None)
+                    if value is None:
+                        self.assertIsNone(source.constants[name])
+            self.assertEqual(len(compiled), 4)
+            self.assertEqual(len(bridge._COMPILE_CACHE), 4)
+            # bind.apply_defaults must specialize an omitted optional value,
+            # too, and reuse the already compiled None/None variant.
+            bridge._run(kernel, (src, None, 3, out, 8, 7), {"BLOCK": 64}, (1,))
+            self.assertEqual(len(compiled), 4)
+            self.assertIsNone(launches[-1][0].constants["tail"])
+
+    def test_inconsistent_runtime_and_constant_signature_is_rejected(self):
+        from jittor.compat.triton import backend as bridge
+        for signature, constants in (({"optional": "*i8"}, {"optional": None}),
+                                     ({}, {"optional": None}),
+                                     ({"optional": "constexpr"}, {})):
+            with self.assertRaisesRegex(bridge.JittorTritonError, "constexpr signature slots"):
+                bridge._compile(object(), signature, constants)
+
+    @unittest.skipUnless(_HAVE_REAL_TRITON, "real upstream Triton is unavailable")
+    def test_modern_native_specialization_treats_none_as_constexpr(self):
+        # Older supported Triton releases do not expose the native helper.
+        # That does not exempt their ASTSource cache identity from testing.
+        jit_module = importlib.import_module("triton.runtime.jit")
+        specialize = getattr(jit_module, "native_specialize_impl", None)
+        backend = getattr(jit_module, "BaseBackend", None)
+        if specialize is None or backend is None:
+            self.skipTest("this Triton release has no native specialization helper")
+        self.assertEqual(specialize(backend, None, False, True, True),
+                         ("constexpr", None))
+
+    @unittest.skipUnless(_HAVE_REAL_TRITON, "real upstream Triton is unavailable")
+    def test_disk_cache_distinguishes_optional_positions(self):
+        # No compilation or device lookup: exercise the upstream cache identity
+        # on both older and current releases, independently of native helpers.
+        from triton.compiler import ASTSource
+        names = ["src", "optional", "scale", "out", "tail", "BLOCK"]
+        function = types.SimpleNamespace(__name__="optional_cache_contract", arg_names=names,
+                                         cache_key="fixed-function-source")
+        hashes = set()
+        for first, tail in ((False, False), (True, False), (False, True), (True, True)):
+            signature = dict(zip(names, ("*fp32", "*fp32", "i32", "*fp32", "*fp32", "constexpr")))
+            constants = {"BLOCK": 64}
+            for name, present in (("optional", first), ("tail", tail)):
+                if not present:
+                    signature[name] = "constexpr"
+                    constants[name] = None
+            hashes.add(ASTSource(function, signature, constants).hash())
+        self.assertEqual(len(hashes), 4)
 
 
 @unittest.skipUnless(_HAVE, "real upstream triton + CUDA not available")

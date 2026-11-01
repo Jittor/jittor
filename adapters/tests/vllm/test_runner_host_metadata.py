@@ -3,9 +3,13 @@
 from types import SimpleNamespace
 
 import importlib.util
+import inspect
+import os
 
 import numpy as np
 import pytest
+
+pytestmark = pytest.mark.cuda
 
 _VLLM = importlib.util.find_spec("vllm")
 _HAS_VLLM = _VLLM is not None and _VLLM.origin is not None
@@ -18,6 +22,13 @@ def _vllm_engine_available():
     # the file as collecting nothing.
     if not _HAS_VLLM:
         pytest.skip("vllm is not installed")
+    selected = os.environ.get("JITTOR_TEST_DEVICES", "").split(",")
+    if selected != [""] and "cuda" not in selected:
+        pytest.skip("CUDA runner metadata requires a CUDA test session")
+    import torch
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is required for runner host/device metadata")
+
 
 
 
@@ -117,18 +128,26 @@ _HOST_ALIASES = [
 ]
 
 
+def _input_batch(batch_type, torch):
+    # vLLM 0.29 makes per-group block capacity explicit.
+    options = {}
+    if "max_num_blocks_per_req" in inspect.signature(batch_type).parameters:
+        options["max_num_blocks_per_req"] = [1]
+    return batch_type(2, 16, 16, torch.device("cuda"), 32, [16], [16], **options)
+
+
 @pytest.mark.parametrize('array_name,tensor_name', _HOST_ALIASES)
 def test_input_batch_host_aliases(array_name, tensor_name):
     import torch
     from vllm.v1.worker.gpu_input_batch import InputBatch
 
-    batch = InputBatch(2, 16, 16, torch.device('cuda'), 32, [16], [16])
+    batch = _input_batch(InputBatch, torch)
     array = getattr(batch, array_name)
     tensor = getattr(batch, tensor_name)
     array[...] = 1
-    np.testing.assert_array_equal(tensor.numpy(), np.ones(array.shape, dtype=array.dtype))
+    np.testing.assert_array_equal(tensor.numpy(), np.ones(array.shape, dtype=np.asarray(array).dtype))
     tensor.fill_(0)
-    np.testing.assert_array_equal(getattr(batch, array_name), np.zeros(array.shape, dtype=array.dtype))
+    np.testing.assert_array_equal(getattr(batch, array_name), np.zeros(array.shape, dtype=np.asarray(array).dtype))
 
 
 @pytest.mark.parametrize('prompts', [([4, 5, 6], [8, 9]), ([], [8, 9]), ([], []), ()])
@@ -136,7 +155,7 @@ def test_prompt_token_metadata_contents_and_padding(prompts):
     import torch
     from vllm.v1.worker.gpu_input_batch import InputBatch
 
-    batch = InputBatch(2, 16, 16, torch.device('cuda'), 32, [16], [16])
+    batch = _input_batch(InputBatch, torch)
     batch.req_id_to_index = {str(i): i for i in range(len(prompts))}
     for i, prompt in enumerate(prompts):
         batch.num_prompt_tokens[i] = len(prompt)

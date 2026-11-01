@@ -117,7 +117,11 @@ __global__ void kernel(in0_type* x, out0_type* y, int len) {{
             v1 = ::max(v1, float(v[i][j]));
         }}
     __shared__ float vmax;
+#if CUB_VERSION >= 300000
+    auto tmp = BlockReduce(temp_storage).Reduce(v1, ::cuda::maximum<>());
+#else
     auto tmp = BlockReduce(temp_storage).Reduce(v1, cub::Max());
+#endif
     if (threadIdx.x == 0)
         vmax = tmp;
     __syncthreads();
@@ -250,7 +254,11 @@ __global__ void kernel(in0_type* x, out0_type* y, int len) {{
     float local = -INFINITY;
     for (int col = threadIdx.x; col < len; col += blockDim.x)
         local = ::max(local, float(x[base + col]));
+#if CUB_VERSION >= 300000
+    float reduced = BlockReduce(storage).Reduce(local, ::cuda::maximum<>());
+#else
     float reduced = BlockReduce(storage).Reduce(local, cub::Max());
+#endif
     if (threadIdx.x == 0) row_max = reduced;
     __syncthreads();
 

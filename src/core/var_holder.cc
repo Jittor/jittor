@@ -671,12 +671,18 @@ static auto make_transpose_view = op_constructor<VarPtr, Var*, NanoVector>("tran
 
 static auto make_storage_reshape = op_constructor<VarPtr, Var*, NanoVector>("reshape");
 static auto make_storage_broadcast = op_constructor<VarPtr, Var*, NanoVector, NanoVector>("broadcast_to");
+static auto make_dtype_view = op_constructor<VarPtr, Var*, NanoVector, NanoString>("reinterpret_view");
 static VarPtr apply_view_step(Var* value, const VarViewStep& step,
                              bool physical = false) {
     if (step.kind == VarViewStep::Expand)
         return make_storage_broadcast(value, NanoVector(step.axes), NanoVector());
     if (step.kind == VarViewStep::Reshape)
         return make_storage_reshape(value, NanoVector(step.axes));
+    if (step.kind == VarViewStep::Reinterpret) {
+        auto result = make_dtype_view(value, NanoVector(step.axes), step.dtype);
+        result.set_stop_grad(true);
+        return result;
+    }
     if (step.kind == VarViewStep::Transpose)
         return physical ? storage_view_transpose(value, NanoVector(step.axes))
                         : make_transpose_view(value, NanoVector(step.axes));
@@ -935,6 +941,27 @@ VarHolder* VarHolder::set_storage_view_of(VarHolder* base, bool expand) {
     return this;
 }
 
+VarHolder* VarHolder::set_dtype_view_of(VarHolder* base) {
+    USER_CHECK(base && shares_physical_storage(var, base->var))
+        << "dtype view requires shared physical storage";
+    drop_view();
+    attach_view(base, VarViewStep(NanoVector(var->shape), var->dtype()));
+    // Tensor.view(dtype) shares the mutation version but has no autograd
+    // relationship, even for a same-dtype view of a trainable source.
+    if (var->autograd_alias) {
+        auto state = var->autograd_alias;
+        state->source.reset();
+        state->inherit_requires_grad = false;
+        state->own_requires_grad = false;
+        state->created_without_grad = false;
+        state->recorded_view_history = false;
+        state->source_edge_enabled = false;
+    }
+    var->set_flag(VarFlags::_unrecorded_view, 0);
+    stop_grad();
+    return this;
+}
+
 VarHolder* VarHolder::storage_permute(NanoVector axes) {
     return new VarHolder(storage_view_transpose(grad_input(), axes));
 }
@@ -1000,6 +1027,11 @@ VarHolder* VarHolder::transpose_view_source() {
 // size [x_items(0) == y_items(1152)]"). Slices are left alone: they were
 // already only ever recorded against a compatible shape.
 static bool view_step_fits(Var* value, const VarViewStep& step) {
+    if (step.kind == VarViewStep::Reinterpret) {
+        int64 target = 1;
+        for (int i=0; i<(int)step.axes.size(); ++i) target *= step.axes[i];
+        return target * step.dtype.dsize() == value->num * value->dsize();
+    }
     if (step.kind == VarViewStep::Slice) return true;
     // A transpose step stores the axes permutation, not a shape: it applies to
     // any value of the same rank.
@@ -1122,6 +1154,11 @@ static VarPtr view_assignment_value(Var* base, const vector<VarViewStep>& steps,
             for (int j=0; j<axes.size(); ++j) inverse_values[axes[j]] = j;
             NanoVector inverse = NanoVector::make(inverse_values.data(), inverse_values.size());
             updated = make_transpose_view(value, move(inverse));
+        } else if (steps[i].kind == VarViewStep::Reinterpret) {
+            // Invert the byte interpretation, never a numeric cast. This
+            // lets a later slice assignment write through the dtype view and
+            // through any earlier shape/transpose/slice steps to the root.
+            updated = make_dtype_view(value, NanoVector(target->shape), target->dtype());
         } else if (steps[i].kind == VarViewStep::Expand || steps[i].kind == VarViewStep::Reshape) {
             USER_CHECK(value->num == target->num)
                 << "Cannot write to an expanded view with overlapping storage";
