@@ -1,3 +1,13 @@
+## 2026-11-02 02:31 +0800 current-main CPU torch.save/load smoke 被 runtime cache 重启门拦下
+
+继续使用 /home/cgq/jittor，不重新 clone。HEAD 1423a4144fdfae98a817edf01b5fd81cc5d99336；测试前后工作区 dirty/untracked porcelain SHA256 均为 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98，源码 fetch_op.cc SHA256 均为 c3dadef00942aa7accda29a4eee3afb6673c58f199fe5e3e1ad5654e31868780。只在 /data6 创建隔离缓存副本和运行记录，没有改源码或既有实验件。
+
+为补充 wheel r4/r3 差异中 fetch_op.cc 的实际消费路径，尝试运行已有 compat 测试 test_save_load_tensor_zero_error 与 test_save_load_dict_of_tensors。统一预算为每次 120 秒、JITTOR_NO_BUILD=1、CUDA_VISIBLE_DEVICES 为空、CPU scope；没有新测试代码写入仓库。attempt-01 的环境解析到 CUDA 12.4/default 配置，而唯一完整缓存对应 CUDA 12.2/nox_nccl，故 core build guard 拦截，exit 1。attempt-02 使用已记录的 CUDA 12.2/nox_nccl、nvcc、python_config 和编译标志，但 Jittor 首次 import 重建 jit_utils 后要求新进程，exit 3。attempt-03 对已暖缓存副本作一次新进程重启，仍遇到同一 jit_utils restart，exit 3。三个进程都在 pytest 收集之前退出，0 个测试执行；没有 core 编译或 GPU 访问。按预先声明的预算停止，不再重启该探针。
+
+完整证据在 /data6/cgq/jittor-lab/_state/release-day23/20261102-main-cpu-torch-save-fetch-r1-prepared/，artifact-files.sha256 SHA256 41902742917ddcb5e9fdc9662fa4e68d16340b620d5f5d022fc613ea6e9f1a09。三个 attempt 的 cache-after.sha256 均已对各自实际文件逐项校验；缓存副本、run logs、退出码、source/GPU before-after 收据均保留。GPU2 前后仍为 Default/shared，两个外部 PID 4166405 与 3037196 各占 8,640 MiB；没有创建 holder 或触碰 GPU。
+
+因此当前只保留已有 direct jt.fetch/jt.sync_all CPU 回归的窄证据；public torch.save/load 序列化路径与 clean-installed wheel runtime smoke 仍未验证，不能由这次 setup 阻断推断产品通过或失败。wheel 默认基线迁移、Day4–5 正式性能/显存及更广 Day2–5 发布门继续开放，overall release 不标 complete。
+
 ## 2026-11-02 02:16 +0800 wheel 差异追踪补充；GPU2 独占仍不可用
 
 继续在 /home/cgq/jittor 现有工作区。当前 HEAD f7510e4b33e3b1ff92780f91a6601d49f5815c03，索引干净；既有 dirty/untracked porcelain SHA256 为 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98，未改动或清理其他工作。

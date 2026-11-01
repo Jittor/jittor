@@ -1,3 +1,9 @@
+## 2026-11-02 02:31 +0800 Handoff：CPU 序列化补测未越过缓存重启
+
+对 current-main 的两个公共 torch.save/load CPU 用例做有界准备后，attempt-01 因 CUDA 12.4/default 与现有 CUDA 12.2/nox_nccl 缓存不匹配而退出；attempt-02/03 在匹配配置下因 jit_utils 重建要求再次重启而于 pytest 前退出。零测试执行，core 未编译，GPU 未用；停止该缓存试探。完整隔离证据包 /data6/cgq/jittor-lab/_state/release-day23/20261102-main-cpu-torch-save-fetch-r1-prepared/，manifest SHA256 41902742917ddcb5e9fdc9662fa4e68d16340b620d5f5d022fc613ea6e9f1a09。
+
+当前 HEAD 1423a4144，既有 dirty/untracked hash 保持 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98。GPU2 仍共享且有两个外部进程；Day4–5 需管理员 GRES/device-cgroup 独占。public serialization / installed-wheel runtime、DCP/Trainer fresh-process restore、FSDP2、ACL migration、held-out quality 与支持矩阵仍未全部关闭；overall Day2–5 Not complete。
+
 ## 2026-11-02 02:16 +0800 Handoff：wheel 差异已映射一项；GPU2 仍需系统独占
 
 当前 /home/cgq/jittor HEAD f7510e4b33e3b1ff92780f91a6601d49f5815c03，索引干净；既有 105 项 dirty/untracked 状态 SHA256 仍为 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98。只更新既有状态文档；新增差异说明保存在 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-wheel-migration-review-r2-prepared/fetch-op-followup.txt，SHA256 c2a480c6c87df6d6485f3684afe6bd210e9253ab6b9c6313f8daa9f229d0f0e1，包内清单 SHA256 38398f12849dc000575efbb1c593aa64e5e89ec7e3b2b15e235a5ce8fbe02415。

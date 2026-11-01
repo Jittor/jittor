@@ -1,3 +1,9 @@
+## 2026-11-02 02:31 +0800 CPU serialization smoke 未越过 jit_utils 重启门
+
+为扩展 fetch_op.cc 的 CPU 零可见设备证据，尝试在当前源码上运行两个既有 torch.save/load CPU 用例。三个隔离 attempt 都在 pytest 收集前停止：attempt-01 因默认解析到 CUDA 12.4/default 缓存而被 JITTOR_NO_BUILD 拦下；attempt-02/03 使用匹配 CUDA 12.2/nox_nccl 缓存后，jit_utils 仍要求新进程重启。按有界预算停止，没有 core 重编译、CUDA 测量或产品测试结果。完整日志与缓存 manifest：/data6/cgq/jittor-lab/_state/release-day23/20261102-main-cpu-torch-save-fetch-r1-prepared/，artifact-files.sha256 SHA256 41902742917ddcb5e9fdc9662fa4e68d16340b620d5f5d022fc613ea6e9f1a09。
+
+这不构成 serialization 通过或产品失败；public torch.save/load smoke 与 clean-installed wheel CUDA runtime gate 仍开放。HEAD 1423a4144，其他 105 项既有 dirty/untracked 内容 hash 未变。Day4–5 仍需管理员 GRES/device-cgroup 独占租约；整体 Day2–5 release 保持 Not complete。
+
 ## 2026-11-02 02:16 +0800 wheel 差异追踪补充；GPU2 普通占卡无法排他
 
 current-main r4 对比上一轮 r3 的 wheel 仅有两项成员差异：生成的 dist-info/RECORD 和 jittor/src/ops/composite/fetch_op.cc。fetch_op.cc 的 CPU 零可见设备路径已有定向回归证据；范围、日志哈希和不覆盖 CUDA copy / 其他源码差异的限制记录在 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-wheel-migration-review-r2-prepared/fetch-op-followup.txt。默认发布基线仍为 69 additions、302 changes、2 removals，尚无批准。
