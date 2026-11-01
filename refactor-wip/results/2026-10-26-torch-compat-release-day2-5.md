@@ -1,3 +1,13 @@
+## 2026-11-02 01:17 +0800 DCP fresh-process attempt-04 与 GPU2 独占请求复核
+
+启动时仓库 HEAD 70dc77b61dde4e4645331e842d83bec6ab291bb0，origin e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（ahead/behind 181/0）。实验未改源码；index clean。102 项既有 dirty/untracked 工作保留，tracked diff SHA256 9d6864dc82d45ecf0bac78bc118b77a6573481a03d89364d07c3805379ea1757，untracked 内容摘要 3370d8669846acb01163e3758008539da20ebc5db3c575d3ce7bb4e26ac852d0。仅更新三份状态文档。
+
+DCP attempt-04 在 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-dcp-cpu-fresh-process-r1-prepared/attempt-04-incremental-cache-r1/，复用 attempt-02 Jittor cache、输出目录独立，保存/加载各限 300 秒。环境初始化成功；Jittor 核心编译到 196/228 后保存 exit 124，加载因未产生 checkpoint 而 exit 125。未进入 DCP save、没有 checkpoint；cache 清单前后变化，源码身份前后相同。该结果是有界构建超时，不是 DCP 通过或产品失败；不再加时或重跑。result.txt SHA256 3fdc82ae2665d663338aedeea3296fd59de17b62ed10a68bdec96f74c1983a36，logs/save.log SHA256 c6635108f8de5782d899c2f51cf857aef139d444fcc52bb837ad61105f317ca2，output-manifest.sha256 SHA256 0c859f3d1bf1d5d6f0fe2f2897c6c129cdba75b81da04e4ddc34dd3b8640f566。此前 CPU 同进程 DCP 12 项测试继续有效；fresh-process 与双 rank DCP 未关闭。
+
+GPU2 实际状态：UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0，compute mode Default，用显存 17,299 MiB、utilization 约 93%；yqa PID 4166405、3037196 分别占 8,640 MiB。sudo -n 需密码；Slurm X12DPG-OA6 为 DOWN，TaskPlugin=task/affinity、CgroupPlugin=null。没有启动 CUDA holder 或切换模式。普通占显存进程不能防止其他 client 创建 context；EXCLUSIVE_PROCESS 下独立 holder 会挡住 benchmark 自身；R4 的独立 PT/JT worker 需要系统级 GRES/device-cgroup 隔离。管理员须先恢复节点并提供 ConstrainDevices=yes 的租约/隔离，才能执行 R4。R4 仍 PREPARED_NOT_STARTED，Day4–5 和 overall Day2–5 均 **Not complete**。
+
+本轮结束状态：102 项既有 dirty/untracked 保持；仅三份授权状态文档新增本条记录，其他源码、测试、文档及实验包均未改动。没有 push。
+
 ## 2026-11-02 01:09 +0800 current-main Day4–5 R4 测量包已准备；系统级独占仍不可用
 
 继续使用 /home/cgq/jittor 现有工作区。准备时 HEAD 为 83c689507e872e21d8404a8e24c615d800e8ad4e，origin/cgq_transformers 为 e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（祖先）；既有 105 项 dirty/untracked 状态 SHA256 仍为 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98，tracked diff SHA256 为 9d6864dc82d45ecf0bac78bc118b77a6573481a03d89364d07c3805379ea1757，untracked 文件内容摘要为 3370d8669846acb01163e3758008539da20ebc5db3c575d3ce7bb4e26ac852d0。源码与既有工作区文件未改动。

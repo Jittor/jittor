@@ -1,3 +1,9 @@
+## 2026-11-02 01:17 +0800 Handoff：DCP 新进程仍未运行，GPU2 未能排他保留
+
+/home/cgq/jittor 当前 HEAD 为 70dc77b61dde4e4645331e842d83bec6ab291bb0，origin e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，分支 ahead 181；实验未改源码，保留 102 项既有 dirty/untracked 内容，只改三份状态文档。DCP attempt-04 复用隔离 Jittor cache 后编译到 196/228，300 秒保存阶段超时（124），未生成 checkpoint；加载跳过（125）。产物及哈希见 Day2–5 结果增量。不要无预算重跑；此前 CPU 同进程 12 项通过不代表 fresh-process DCP。
+
+GPU2 有两个 yqa CUDA 进程，显存约 17.3 GiB，compute mode Default；当前账号没有免密 sudo，节点 X12DPG-OA6 为 DOWN，Slurm 未启用 task/cgroup 设备隔离。未启动 holder，因为它不能排除其他 client；EXCLUSIVE_PROCESS 下 holder 也会阻止 benchmark context。下一步需管理员恢复节点并发放 GRES/device-cgroup 租约，再运行已经准备的 R4 测量包。性能/显存验收与更广 Day2–5 release gate 均未完成，不能标 complete。
+
 ## 2026-11-02 01:09 +0800 current-main Day4–5 R4 测量包已准备；系统级独占仍不可用
 
 继续使用 /home/cgq/jittor 现有工作区。准备时 HEAD 为 83c689507e872e21d8404a8e24c615d800e8ad4e，origin/cgq_transformers 为 e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（祖先）；既有 105 项 dirty/untracked 状态 SHA256 仍为 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98，tracked diff SHA256 为 9d6864dc82d45ecf0bac78bc118b77a6573481a03d89364d07c3805379ea1757，untracked 文件内容摘要为 3370d8669846acb01163e3758008539da20ebc5db3c575d3ce7bb4e26ac852d0。源码与既有工作区文件未改动。

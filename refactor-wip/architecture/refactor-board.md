@@ -1,3 +1,9 @@
+## 2026-11-02 01:17 +0800 DCP attempt-04 超过构建预算；GPU2 独占租约仍不可用
+
+current-main DCP CPU 新进程 attempt-04 在隔离 cache 下运行 300 秒，核心编译到 196/228 后保存超时（save_rc=124，load_rc=125），没有进入 DCP 保存、没有 checkpoint；cache 有增量编译产物，源码身份前后相同。本轮已按预算停止，不再延长或重跑。此前 12 项同进程 DCP 测试仍通过，但新进程恢复尚未验收。完整日志、manifest 与产物位于 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-dcp-cpu-fresh-process-r1-prepared/attempt-04-incremental-cache-r1/。
+
+用户请求测试期间独占 GPU2。复核时该卡仍为 Default/shared，两个 yqa PID 各占 8,640 MiB；cgq 的 sudo 需要密码，A800 节点 X12DPG-OA6 为 DOWN，Slurm task/cgroup 设备隔离未启用。未启动普通 CUDA holder 或改设备模式：普通 holder 不能阻止其他 context，而 EXCLUSIVE_PROCESS 下单独 holder 会挡住 benchmark 进程。须由管理员恢复节点并提供 GRES + ConstrainDevices 租约后，才能启动已准备的 R4 suite。R4 仍 PREPARED_NOT_STARTED；Day4–5 与整体 Day2–5 **Not complete**。详情见 Day2–5 结果与 handoff 顶部。
+
 ## 2026-11-02 01:09 +0800 current-main Day4–5 R4 测量包已准备；系统级独占仍不可用
 
 继续使用 /home/cgq/jittor 现有工作区。准备时 HEAD 为 83c689507e872e21d8404a8e24c615d800e8ad4e，origin/cgq_transformers 为 e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（祖先）；既有 105 项 dirty/untracked 状态 SHA256 仍为 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98，tracked diff SHA256 为 9d6864dc82d45ecf0bac78bc118b77a6573481a03d89364d07c3805379ea1757，untracked 文件内容摘要为 3370d8669846acb01163e3758008539da20ebc5db3c575d3ce7bb4e26ac852d0。源码与既有工作区文件未改动。
