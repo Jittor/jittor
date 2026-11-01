@@ -1,3 +1,11 @@
+## 2026-11-01 20:54 +0800 双 rank DCP 定位到首个 barrier 的 CUDA 结果读回；GPU2 仍共享
+
+在状态文档提交 HEAD 542f893e997263d9537c22552914bd7fbe6d2968 上运行 targeted NCCL probe，当前 fingerprint 6efbaceffa6869fd1865c21150aade561a31b7cbdd56f883cb65ed0f42a0fa2f，origin/cgq_transformers 仍为 e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（ahead/behind 168/0）。porcelain / -uall 哈希仍为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211 / 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98。
+
+`ddp-object-broadcast-attempt-01` 两 rank 均到 accelerator_ready、barrier_start；45 秒 exit 124，rank 栈都停在 `distributed.py:536 marker.numpy()`，没有 barrier_done，也未进入 broadcast_object_list。rank0 log SHA256 `57cf9f420577352c80248b957abc1ad15be72db2437e073691e38c07ded63665`，rank1 `cbcf71c401de7c2163136011c317ebdb68f6a0979ac5379e16bf6ae3fc6c0eeb`，exit SHA256 `ca2ebdf97d7469491b6f4b78958f9dc8447efdcb623953fee7b6996b762f6fff`。当前 DCP `save()` 第一项就是 `_barrier()`，因此首个 barrier 是双 rank DCP attempt 超时的强线索；该 DCP attempt 本身无阶段标记，仍不把推断写成已证实的同一堆栈。无 checkpoint 保存或 load 通过。
+
+证据目录 `/data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-ddp-trainer-resume-r3-current-core-prebuild-prepared/validation/ddp-object-broadcast-attempt-01/`。GPU0/GPU4 仅用于功能诊断，GPU2 排除。GPU2 当前 Default/shared，yqa PID 4166405 与 cgq PID 2760269 仍占用；Day4–5 性能/显存验收仍需系统级独占租约。整体 Day2–5 release 继续 Not complete。
+
 ## 2026-11-01 20:50 +0800 current-source DDP 停在 CUDA scalar bool/item；双 rank DCP save 超时；GPU2 仍共享
 
 工作区 /home/cgq/jittor，HEAD 7e09fc315189bcc4ba641c75dd89666264221e3d，源码 fingerprint 821b9311ed943e74bac506c1ce748ccdc108443e5a348e7a71c056e604cd7a41；刚 fetch 的 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 167/0。porcelain 与 -uall 哈希分别为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211 和 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98，index clean；本轮未改仓库源码或动其他 dirty/untracked 项。

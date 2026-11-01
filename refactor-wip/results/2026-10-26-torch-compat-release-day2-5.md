@@ -1,3 +1,13 @@
+## 2026-11-01 20:54 +0800 双 rank barrier 在 marker.numpy() 阻塞；DCP 未到 object broadcast
+
+current HEAD 542f893e997263d9537c22552914bd7fbe6d2968（仅前一条三份状态文档提交），当前源码 fingerprint `6efbaceffa6869fd1865c21150aade561a31b7cbdd56f883cb65ed0f42a0fa2f`；source worktree porcelain / -uall 哈希仍分别为 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211` / `8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98`。实验绑定 current HEAD，GPU2 未使用。
+
+`ddp-object-broadcast-attempt-01` 是 2-rank NCCL 的小诊断：两个 rank 都完成 Accelerator 初始化并打印 `barrier_start`，但均未打印 `barrier_done`；faulthandler 重复栈停在 `/home/cgq/jittor/python/jittor/compat/torch/installers/distributed.py:536`，即 `marker.numpy()`，任务在 45 秒 deadline exit 124。未运行到 `broadcast_object_list`。rank0 日志 SHA256 `57cf9f420577352c80248b957abc1ad15be72db2437e073691e38c07ded63665`，rank1 `cbcf71c401de7c2163136011c317ebdb68f6a0979ac5379e16bf6ae3fc6c0eeb`，launcher exit 文件 SHA256 `ca2ebdf97d7469491b6f4b78958f9dc8447efdcb623953fee7b6996b762f6fff`；该结果给出了一个可复核的双 rank barrier 停点。
+
+current-source DCP rank-local save 在保存代码的第一阶段调用同一 `_barrier()`，所以新的独立诊断使首 barrier 成为先处理的嫌疑点；原 DCP attempt-01 没有阶段日志，只能报告 DCP `save_start` 后超时、未生成任何 shard/metadata、未进入 load，不能宣称原运行的线程栈已经直接证明相同原因。支持范围仍未通过双 rank DCP。
+
+本轮没有代码或既有 dirty 文件修改，GPU2 继续排除；其他发布状态不变。先修正并独立验证双 rank barrier 的 collective 物化/主机读回路径，再验证 DCP save/load 和 DDP 训练/恢复。正式性能/显存测试继续要求 GPU UUID/GRES 独占与 device-cgroup 隔离。
+
 ## 2026-11-01 20:50 +0800 DDP 实际 forward 暴露 CUDA scalar bool/item 阻塞；rank-local DCP 双 rank save 超时
 
 ### 源码与工作区身份

@@ -1,3 +1,11 @@
+## 2026-11-01 20:54 +0800 接续：NCCL barrier 停在 marker.numpy()，DCP 未进入 object broadcast
+
+当前 HEAD 542f893e997263d9537c22552914bd7fbe6d2968，source fingerprint 6efbaceffa6869fd1865c21150aade561a31b7cbdd56f883cb65ed0f42a0fa2f；origin ahead/behind 168/0，工作区其他 dirty/untracked 哈希仍为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211 / 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98。
+
+新的双 rank NCCL barrier probe：rank0/1 到达 `barrier_start`，都卡在 `distributed.py:536 marker.numpy()`；45 秒 exit 124，未到后续 broadcast_object_list。DCP save 的首操作是相同 barrier，故它是当前 DCP 双 rank 超时的优先定位目标，但原 DCP attempt 没有子阶段栈，保持为关联推断。证据见 `/data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-ddp-trainer-resume-r3-current-core-prebuild-prepared/validation/ddp-object-broadcast-attempt-01/`。
+
+GPU2 仍 Default/shared，yqa PID 4166405 用 8640 MiB，cgq PID 2760269 用 714 MiB；本轮使用 GPU0/GPU4 做功能诊断，未触及 GPU2。正式 Day4–5 仍等待系统级独占和设备 cgroup；DDP scalar item 与 DCP save/load 未通过，整体 release 保持 Not complete。
+
 ## 2026-11-01 20:50 +0800 接续：DDP forward 停在 CUDA scalar item；双 rank DCP save 未完成；GPU2 共享
 
 继续使用 /home/cgq/jittor，没有重新 clone。HEAD 7e09fc315189bcc4ba641c75dd89666264221e3d、fingerprint 821b9311ed943e74bac506c1ce748ccdc108443e5a348e7a71c056e604cd7a41；origin e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 167/0。porcelain / -uall 哈希保持 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211 / 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98；本轮未改仓库源码和既有 dirty 项。
