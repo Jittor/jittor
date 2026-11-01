@@ -1,3 +1,13 @@
+## 2026-11-02 02:50 +0800 checkpoint 真实重算已证实；该小型配置未省显存且热态变慢
+
+对保留的 R3 checkpoint on/off raw worker 和 NPZ 做了独立只读审计。on 模式六个 Llama 层在同一训练步中各记录到 [no_grad=1, no_grad=0]，off 模式各为 [0]；结合 compat _CheckpointRecompute.execute/grad 的实现，这证实当前 torch.utils.checkpoint.checkpoint 在此 Transformers Llama 配置中先无梯度执行、再于反向重算。compat/torch/installers/data.py SHA256 0a4d1c151a9de5e3d57da60117f156e8641b26febd7c63a4727914fef04c33c8 与当前工作树、R4 隔离源码以及 R4 compat wheel d575dd057c0f3882d47b269547cc9e92665da6f2407ed31dfa36209a90fb3088 内 jittor/compat/torch/installers/data.py 字节一致。此前“该 shim 尚无重算证据”的判断对这个 API/文件身份已被本证据修正；不外推到所有模型、所有选项或完整发布矩阵。
+
+同一诊断显示 on/off 的峰值 allocated 为 1,579,945,472 / 828,886,528 bytes（on 多 751,058,944 bytes，约 716 MiB），peak reserved 多 743,440,384 bytes，NVML process peak 多 742,391,808 bytes；10 样本 hot median 为 46.619 / 28.910 ms（on/off 1.613x）。loss、有限梯度与更新接近，fallback=0、真实 CUDA 成立。它是 GPU1 上单次固定 on→off、每侧 10 步的 6-layer synthetic Llama FP32 诊断，非独占租约；当前结论是重算有效、该配置没有显存收益且更慢，不能据此宣布正式性能/显存验收通过。原 plan.json 的 PREPARED_NOT_STARTED 状态保留，raw worker 两侧 exit=0；不回写原件。
+
+独立审计：/data6/cgq/jittor-lab/_state/release-day23/20261102-checkpoint-recompute-memory-independent-audit-r3-prepared/independent-audit.json SHA256 4ec19bcabd7b32c3320ad22b97f61a048bacbe601856b631e485adaf96460af7；artifact-files.sha256 SHA256 3a17efa02789cae71db59b197ed0730264c084b68e4a9a6fb84cfbd38e6caec2。GPU2 本轮复核为 shared，yqa PID 3037196 与 3164740 各占 8,640 MiB、利用率 87%；X12DPG-OA6 为 DOWN，Slurm TaskPlugin=task/affinity 且 ConstrainDevices=no，cgq 队列无作业。正式 Day4–5 仍需管理员恢复节点并配置 UUID/GRES 与 device-cgroup 隔离，之后按三轮交替、每侧每轮 ≥10 热样本测试；整体 Day2–5 仍 Not complete。
+
+本轮仅审计已有产物，没有重跑模型、测试或 GPU workload。checkpoint 重算路径在匹配的 current/R4 compat 文件身份下有直接 trace 证据；显存收益没有通过，现有单对照反而 on 高约 716 MiB allocated、hot median 慢 1.613x。后续 Day4–5 既要验证无 checkpoint 的匹配主 cohort，也要在明确支持的 checkpoint 模型上单独测 recompute/显存，不得把旧 R3 单对照当发布门。GPU2 无系统设备隔离且节点 DOWN，普通 holder 不可用；整体 Day2–5 继续开放。
+
 ## 2026-11-02 02:42 +0800 R4 wheel 两个 ACL 删除项已映射 native 替代路径；runtime 仍未验证
 
 R4 删除的 sigmoid_op.py 与 transpose_op.py 在历史路径中被引用；当前主 wheel 删除这两个 Python 适配器，同时打包与 source snapshot 字节一致的 sigmoid/transpose native C++ runner 和 ACL core dispatch。现有 ACL 测试包含这两项 forward/grad，但由 capability gate 控制；当前没有 CANN/ccec，未执行测试。因此只完成静态迁移映射，不记 runtime 通过，也不批准 wheel baseline。证据：/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-wheel-removal-review-r1-prepared/acl-removal-review.md，SHA256 ecc4ab349913777a3a9b944495a69bba2477ec433c6871cdba30e393886c443c；manifest SHA256 e876996abcfd666afe19f2942bf281ee6721108fe151d0fefb0550afa6fc41d8。默认 wheel baseline 仍为 69 additions、302 changes（其中 1 个生成 WHEEL metadata 差异，301 项源码/包内容差异）、2 removals、0 approved。
