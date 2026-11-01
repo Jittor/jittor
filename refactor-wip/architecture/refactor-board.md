@@ -1,3 +1,7 @@
+## 2026-11-01 17:44 +0800 current-main DDP Trainer 暴露 CPU 参数广播阻塞；checkpoint 重计算生效但未见显存节省
+
+current-source 两 rank Trainer 已在 attempt-03 越过 CUDA/NCCL 构建并成功初始化 NCCL，但 shim DDP 初始参数广播收到 CPU 张量，nccl_broadcast 报错，训练更新尚未开始；设备迁移根因仍待核实。GPU1 checkpoint on/off 诊断确认六层真实重计算，梯度与更新有限且接近，但 on 的 allocator/NVML 峰值都高于 off，不能记为省显存。GPU2 仍被外部 VLLM/yqa 进程共享；普通 holder 不能阻止其他 CUDA client，本轮未启动占卡进程。完整 DDP、DCP、wheel CUDA、ACL、合格生成质量与支持矩阵仍开放，Day4–5 正式性能/显存门仍需管理员/调度器的 UUID/GRES 独占与设备隔离。整体 Day2–5 release 继续 **Not complete**。
+
 ## 2026-11-01 17:09 +0800 current-main DDP Trainer 未越过冷编译；checkpoint 显存诊断停在启动
 
 继续使用 /home/cgq/jittor 现有工作区。文档修改前 HEAD 7d70cb5f11c61300aa174adae70356547fc5ce8d，branch integrate/cgq-transformers-native-multicard-target，刚 fetch 的 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 161/0；原有 102 项 dirty/untracked 的 porcelain SHA256 为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，index 为空。实验绑定源码 fingerprint 3d32800588ed75d470b9897bc1df60d4a3a996619282766352933911060a9。本轮不改运行时源码或测试。

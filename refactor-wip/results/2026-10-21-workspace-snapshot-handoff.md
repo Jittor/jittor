@@ -1,3 +1,17 @@
+## 2026-11-01 17:44 +0800 接续入口：DDP 广播收到 CPU 参数；GPU checkpoint 重计算通过但没有省显存证据
+
+继续在 /home/cgq/jittor 原工作区；文档编辑前 HEAD 3b384ad7e5d11097766eb1f086ce3f9d097d0ec0，origin e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 162/0。编辑前有 102 项既有 dirty/untracked、porcelain SHA256 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98，index 为空。r2 DDP 与 r3 checkpoint 诊断绑定源码 fingerprint 71f3dfb5baba8dafe8a108ce93f27604c0b5114458446c9d529cb41b18fd3f98；详细参数、哈希和阶段记录见 /home/cgq/jittor/refactor-wip/results/2026-10-26-torch-compat-release-day2-5.md 顶部及对应 /data6/cgq/jittor-lab/_state/release-day23/ 包。
+
+current-source 双 rank NCCL 成功初始化，但 Accelerate DDP 包装期 shim 广播参数时发现 CPU tensor 并报 nccl_broadcast on cpu，0 个训练更新；包装前各参数设备尚未采样，根因待定位。GPU1 checkpoint on/off 用例确实执行了六层 forward/recompute trace，fallback=0，首步梯度和参数更新有限且接近，但 allocator peak allocated delta 为 1.404 GB 对 0.653 GB，NVML sampled delta 为 6 MiB 对 2 MiB，未显示显存下降。此结果不是 Day4–5 性能/显存验收。
+
+GPU2 当前 Default/shared，外部 VLLM/yqa 共用约 29.8 GiB。占卡进程不能拒绝其他 CUDA client，本轮没有启动 holder；正式测量仍需管理员/调度器 GPU UUID/GRES 独占和设备隔离。root 盘约 61 GiB 可用，/data6 约 5.5 TiB 可用。
+
+### 下一步
+
+1. 先创建隔离的 DDP 源码候选，在 shim DDP 广播前记录所有参数和 buffer 的设备，找出 .to(cuda) 后仍留在 CPU 的张量，修复 placement 后再做受限 full/stop/fresh-resume；不重复当前失败步骤。
+2. 向管理员/调度器申请 GPU2 UUID/GRES 排他租约并验证隔离生效。正式 Day4–5 固定配置交替三轮以上、每轮每侧至少十个热样本，给出 median/p95/离散度、load/首步/热态、allocator/NVML 峰值、容量/OOM 恢复和真实 recompute 显存差异。普通 holder 不满足独占条件。
+3. 继续关闭 DCP planner/save/load/resume、clean-installed wheel CUDA、ACL build/migration、generation quality 阈值与支持矩阵。整体 Day2–5 release 维持 **Not complete**。
+
 ## 2026-11-01 17:09 +0800 接续入口：DDP 新进程验证未运行到训练；GPU 显存诊断启动配置待修
 
 继续使用 /home/cgq/jittor，别重新 clone。文档更新前 HEAD 7d70cb5f11c61300aa174adae70356547fc5ce8d，branch integrate/cgq-transformers-native-multicard-target，刚 fetch 的 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 161/0；原有 102 项 dirty/untracked SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，index 为空。本轮实验绑定运行时 source fingerprint 3d32800588ed75d470b9897bc1df60d4a3a996619282766352933911060a9。

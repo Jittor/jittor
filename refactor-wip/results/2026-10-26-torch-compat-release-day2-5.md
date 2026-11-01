@@ -1,3 +1,33 @@
+## 2026-11-01 17:44 +0800 current-source DDP Trainer 在 CPU 参数广播处失败；checkpoint 显存诊断未证明收益
+
+### 工作区与实验身份
+
+继续使用 /home/cgq/jittor 现有工作区。文档更新前 HEAD 3b384ad7e5d11097766eb1f086ce3f9d097d0ec0，branch integrate/cgq-transformers-native-multicard-target，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 162/0。本次编辑前有 102 项既有 dirty/untracked，porcelain SHA256 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98，index 为空。新增实验绑定 HEAD 3b384ad7e5d11097766eb1f086ce3f9d097d0ec0、源码 fingerprint 71f3dfb5baba8dafe8a108ce93f27604c0b5114458446c9d529cb41b18fd3f98；r3 memory 包记录的两份重点源码 hash 为 src/core/var_holder.cc 53f73df53bd42465aed6ff5f51aa4bfe7569a9b0263576848f10e7dc48ab40a8、compat/torch/installers/data.py 0a4d1c151a9de5e3d57da60117f156e8641b26febd7c63a4727914fef04c33c8。本轮不改运行时代码或测试，只更新三份既有状态文档；其他 dirty/untracked 文件保留，不 push。
+
+### 两 rank Hugging Face Trainer DDP 结果
+
+证据包 /data6/cgq/jittor-lab/_state/release-day23/20261101-main-hf-trainer-ddp-resume-r2-prepared/。attempt-01 在 Jittor jit_utils 一次性元数据重建提示后退出，0 次更新；attempt-02 在 270 秒 job 上限处于 jittor_core 171/228，exit 124，0 次更新；attempt-03 使用匹配的 CUDA 12.2.140、use_cuda=1、use_nccl=1 构建配置完成编译并成功初始化两 rank NCCL，随后在 Accelerate prepare_model 创建 shim DDP wrapper 时失败。两 rank 日志均显示 extra_api.py 的 _jittor_ddp_broadcast_parameters/jt.sync_all() 报 No kernel registered for nccl_broadcast on cpu，输入形状 float32[2,32]；没有 Trainer update、checkpoint 或 resume。
+
+现有 Module.to(device) shim 会请求 CUDA residency/迁移，但该 attempt 没有在 DDP 包装前记录每个 parameter/buffer 的实际设备，因此尚不能区分 Accelerate 是否跳过迁移、shim 的模型迁移是否未覆盖某些参数，或其他 placement 路径问题。此证据是 current-source DDP 功能阻塞，不能记成 pass；下一次需先在受控源码候选中增加包装前设备诊断并修复/验证，再做新的有界 full → step-2 stop → fresh-process resume。rank0/rank1 日志 SHA256 分别为 d48f6abc3c4686d70d6d5c742c0d283099fe9d3d9464eef8e49d96bbcef8bf47 / 16b14342910aa4a28014afcbcca0cbdb6c667627ac4d0c9ec0619faa1fe20979，attempt-03 launcher log SHA256 9ed9ef4bc509db0039e762ad0044296505b3e36bdd65cbce0efaf42cf819f5fb。此前 attempt 的超时和失败产物保留。
+
+### Checkpoint CUDA 实际重计算与显存值
+
+校正报告绑定后的证据包 /data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-checkpoint-memory-diagnostic-r3-prepared/，analysis.json SHA256 2d273426d43e3777ac328ae98be8b165affdb6d384a62a271d68df8a308dbd38。相同真实 A800 GPU1（UUID GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068，逻辑 cuda:0）完成 checkpoint on/off；CUDA core identity 当前、两侧 fallback=0。模型为 6 层 Llama、hidden 384、intermediate 1024、batch 4、sequence 512、FP32、AdamW、seed 821 固定合成 next-token 数据。每侧完成首个更新、重计算 trace、warmup 和 10 个诊断热步；on 六层 trace 均为 [1,0]，off 六层均为 [0]，证明此配置实际触发 activation recompute。
+
+首步 loss 为 on 6.3123564720、off 6.3123569489；梯度 L2 分别 2.2740809679 / 2.2740810125，更新 L2 0.3316239131 / 0.3316239134。首步 NPZ 的 gradient 与 updated-parameter 数组各有 11,015,040 项，均有限；on/off 最大绝对差分别 6.33e-8 / 1.04e-5。但 allocator peak allocated delta 为 on 1,403,671,552 bytes、off 652,612,608 bytes（约 2.15 倍）；peak reserved delta 为 6,291,456 / 1,048,576 bytes。NVML per-process 采样 peak delta 为 6,291,456 / 2,097,152 bytes（样本数 20 / 10）。因此本次小型 FP32 workload 的计数未显示 checkpoint-on 省显存，且峰值更高；on/off 顺序执行且计时热样本数有限，不能作正式时延比较。allocator hot median 为 on 46.62 ms、off 28.91 ms，仅作诊断，不作为性能结论。
+
+r3 修正的是 r2 已完成训练后报告序列化时的 KeyError: source_before.source_fingerprint，不是改模型或源码行为。cache before/after 清单为 1542/1554 项，13 项新增或变化（含 cache lock 与 JIT 产物）；均保留。r3 worker-result SHA256：on 27f261f2c0f6b2c2585320bc1ab92d6ab090179d94458a40b6b325d52a1c7f06，off c7d37a3a7b4d5115fd64d1b91459a6cc201f95af12bad1b03e4b148d9de6535c。r1/r2 的失败记录和 r2 的首步状态 NPZ 也未覆盖。
+
+### GPU2、正式 Day4–5 与更广 release gate
+
+2026-11-01 17:41 +0800 采样 GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 为 Default/shared，NVML 使用约 29,781 MiB、GPU 利用率 94%；可见外部 VLLM PID 2737921（21,124 MiB）与 yqa PID 4166405（8,640 MiB）。用户态 holder 只能作为本进程占用显存/算力，不能禁止其他 CUDA client 提交或创建 context；为避免与既有负载争抢，本轮没有写入、启动或留下占卡程序。需要管理员/调度器提供 GPU UUID/GRES 排他租约和设备隔离，才能满足 测试期间没有其他任务运行在 GPU2这一要求。
+
+正式 Day4–5 仍须在匹配配置下交替跑 PT/JT 至少三轮、每轮每侧至少 10 个热态样本，报告 median/p95/离散度、加载/首步/热态耗时、框架 allocator 与 NVML 峰值，并完成容量/OOM/恢复与 activation recompute 实际显存对照。单次 GPU1 诊断不能替代这一门。更广 Day2–5 仍需解决 DDP 新进程恢复、FSDP2/DCP planner/save/load/resume、clean-installed wheel CUDA、ACL build/migration、合格 held-out generation quality 阈值和支持矩阵。整体 release 继续 **Not complete**。
+
+### 接续顺序
+
+先在独立源码候选中插入 DDP 包装前 parameter/buffer device 与 fallback 诊断并修复实际 placement/broadcast 问题；修复后才重新执行有界的双 rank full/stop/resume。Day4–5 另行等 GPU2 UUID/GRES 独占和隔离，固定软件栈、模型、输入 shape 与 warmup 后完成正式三轮配对测量；holder 不能替代调度器排他。并继续 DCP、clean wheel CUDA、ACL 和质量/支持矩阵门；不得把此次 checkpoint recompute 生效写成显存节省通过。
+
 ## 2026-11-01 17:09 +0800 current-main DDP Trainer 冷编译超时；checkpoint GPU 显存对照未执行
 
 ### 工作区与源码身份
