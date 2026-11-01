@@ -1,3 +1,10 @@
+## 2026-11-02 07:46 +0800 Handoff：installed-wheel Torch core10 原始执行 227 passed、3 skipped；overall 仍开放
+
+在 `/home/cgq/jittor` HEAD `64135f1cd3865c811bf22ab84be72e218418c870` 上完成 R5 installed-wheel Torch CPU core10 attempt-07。原始 pytest 执行十个维护模块的 230 项，227 passed、3 skipped、0 failed，fallback 0→0、installed core current。runner 标为 FAIL 的原因是 selector 检查把相对 nodeid 路径与完整仓库路径比较，导致 `all_selectors_collected=false`；十个实际 nodeid 模块均与请求集合对应。保留 FAIL，不把含两项真实 dtype 语义差异 skip 的结果记为全通过。
+
+attempt-07 manifest SHA256 `076f54fb8b05e226b1c4782a41c66c65a333440b94bd66132365e188fb879810`；R5 package manifest `38d4c7e162ed2246e34aaf0d7b67af6a926561acb77ae550f678c2f49b9f0037` 已复核。代码与 dirty 状态未变。后续需处理 Torch `.long()` / 混合 dtype promotion 差异；selector 检查应在后续使用时修正，不要只为改标签重跑同一 suite。
+
+GPU2 当前仍共享；正式 Day4–5 测量需要管理员提供 Slurm GRES/device-cgroup 独占租约后，运行现有 capacity sweep 和 paired cohort。Day4–5 与更广 Day2–5 发布门均未完成。
 ## 2026-11-02 07:34 +0800 Handoff：R4 Day4–5 suite 已准备，但 GPU2 当前无 Slurm lease
 
 正式 R4 测量脚本已准备在 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-day45-exclusive-r1-prepared/；包括 seq512 capacity sweep、双方最大共同 batch 及三轮 PT/JT 交替 cohort。当前 preflight 输出 “live Slurm job required”；节点 X12DPG-OA6 为 DOWN，GPU2 仍有外部 PID 3037196/3164740，占 17,299 MiB。没有启动占卡程序、切换 compute mode 或干扰外部任务。

@@ -1,3 +1,9 @@
+## 2026-11-02 07:46 +0800 Installed-wheel Torch core10 CPU：227 passed、3 skipped；release 门仍未满足
+
+R5 installed-wheel CPU core10 attempt-07 在 `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-installed-torch-focus-r1-prepared/attempt-07/` 完成：pytest 收集并执行十个指定模块的 230 项，227 passed、3 skipped、0 failed，pytest 返回码 0，backend fallback 0→0，installed core 前后均 current。attempt manifest SHA256 为 `076f54fb8b05e226b1c4782a41c66c65a333440b94bd66132365e188fb879810`。
+
+runner 报告 FAIL 是因为 selector 检查将 pytest 的 `tests/...` nodeid 路径与 `python/jittor/compat/tests/...` 前缀比较，导致 `all_selectors_collected=false`；原始 nodeid 显示预期十个模块均有测试。三项 skip 中一项是本次 CPU 配置没有 CUDA，另两项是 `.long()` 返回 dtype 和混合 dtype promotion 的语义差异。按部分 CPU 证据记录，不视为发布门通过。GPU2 仍 Default/shared，Day4–5 独占测量未开始，整体 Day2–5 保持 Not complete。
+
 ## 2026-11-02 07:34 +0800 Day4–5 R4 已备妥；GPU2 lease preflight 因无 Slurm allocation 停止
 
 current-main Day4–5 R4 正式测量包已存在于 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-day45-exclusive-r1-prepared/，含容量扫测、三轮交替 PT/JT 代表与近容量测量及 NVML/allocator 采样器。只读执行 gpu2_lease_preflight.sh 即以 “live Slurm job required” 停止；scontrol 显示 X12DPG-OA6 为 DOWN，GPU2 仍有外部 PID 3037196/3164740，共用 17,299 MiB。没有启动 holder 或更改计算模式。

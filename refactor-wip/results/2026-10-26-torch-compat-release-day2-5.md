@@ -1,3 +1,17 @@
+## 2026-11-02 07:46 +0800 current-main R5 installed-wheel Torch core10 CPU：原始 pytest 227 passed、3 skipped；runner selector 检查误判
+
+继续在 `/home/cgq/jittor` 现有工作区操作，没有重新 clone。执行前后 HEAD 均为 `64135f1cd3865c811bf22ab84be72e218418c870`，origin/cgq_transformers 为 `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`；attempt-07 记录的工作区 status SHA256 前后相同，均为 `8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98`，既有 102 项 dirty/untracked 保持原状。
+
+本轮针对 R5 clean installed wheel 执行十个维护测试模块，解释器为 `/data6/cgq/jittor-lab/_state/nox/envs/pkg-current-main-r3/packaging/bin/python`。父进程解析的 Jittor、Jittor core 和 compat Torch 均由 R5 install 目录导入，十个测试源码 selector 与 R5 source snapshot 字节匹配。测试在 CPU runtime、strict bootstrap、fallback error 模式下完成；JITTOR_HOME 复用 attempt-06 的 installed-path cache，没有 GPU workload。一个独立前端测试的子进程按维护 helper 使用当前源码树，此项与父进程 installed-wheel import 证据分开解释。
+
+原始执行结果为 230 项收集且全部执行，227 passed、3 skipped、0 failed；pytest return code 0，fallback 0→0，core build 前后均 current。十个 nodeid 文件分别为 test_independent_frontend、test_torch_compat_nn、test_torch_compat_autograd、test_install_context、test_torch_compat_indexing、test_torch_compat_dtype、test_torch_compat_promotion、test_tensor_state、test_torch_compat_structure、test_compat_layering。3 项 skip：`test_large_last_dim_softmax_and_log_softmax` 需要 CUDA（本轮为 CPU）；`test_long_returns_int64_like_torch` 记录当前 `Var.long` 返回 int32 的已知语义差异；`test_promotion_full_torch_lattice` 记录混合 dtype 算术未按 Torch lattice 提升的 suspected bug。后二者是实质兼容缺口。
+
+attempt-07 runner 原始 status 为 `FAIL_R5_INSTALLED_WHEEL_TORCH_CORE10_CPU`、`all_selectors_collected=false`。检查表达式用 pytest nodeid 的相对路径 `tests/...` 去匹配完整 selector `python/jittor/compat/tests/...`；实际十个 nodeid 模块和十个 selector 一一对应。因此这是验收脚本路径判断缺陷，不是 pytest 收集失败。保留 runner FAIL 和 skip 原件，不把结果写成全通过，也不为改变状态重跑同一 suite。
+
+证据目录 `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-installed-torch-focus-r1-prepared/attempt-07/`。artifact manifest 自校验通过，SHA256 `076f54fb8b05e226b1c4782a41c66c65a333440b94bd66132365e188fb879810`；run-result.json SHA256 `867c517ea07eaaf66e367bee29ceece54563c07d9ca3d1f2c015d172b581f2b6`，raw.log SHA256 `c1884adab32990304fa5e1f8f005629b489a76fe75fb65ea2cf967a1b7826795`，run_core10_wheel.py SHA256 `af5a4b72988c69e62dd31285e018025eee576344046ff51ebda7a7ecde6de9fd`。R5 主 wheel SHA256 `66c0f8176508325f3555f3f90c0b0b141463ae33cdc0b38b35e082dc62b01f47`，compat wheel SHA256 `08c84ae50617fa9761ec131c2e0e6247ca704af64ee2d3b560c6a18d2a0a81bf`；R5 artifact manifest 复核通过，SHA256 `38d4c7e162ed2246e34aaf0d7b67af6a926561acb77ae550f678c2f49b9f0037`。package manifest before/after 完全一致，测试源码 hash 前后相同，attempt 后无残留进程。
+
+GPU2 在本轮前后仍为 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0`、Default mode、17,299 MiB used；采样 util 94%→90%，仍由其他任务共享，本轮没有独占租约。根盘 99% 使用、可用 52 GB，新证据写于 /data6（可用 5.5 TB）。GPU2 正式 R4 性能/显存 cohort 仍需恢复节点、活跃 Slurm GRES、task/cgroup、ConstrainDevices=yes 和管理员 lease proof。migration compare（69 additions、302 changes、2 removals、0 approved）、语义缺口、CUDA runtime 覆盖、Day4–5 性能/显存及整体 Day2–5 release gate 仍未完成；overall 不标 complete。
+
 ## 2026-11-02 07:34 +0800 Day4–5 R4 测量包已准备；Slurm GPU2 lease gate 当前未满足
 
 current-main 正式性能/显存测量包位于 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-day45-exclusive-r1-prepared/，状态仍为 PREPARED_NOT_STARTED。source identity 捕获 HEAD 83c689507e872e21d8404a8e24c615d800e8ad4e；运行器会在真实执行时再记录当时 HEAD、tracked diff、完整 status 和 untracked 内容哈希。冻结 BERT 权重 SHA256 86fa7113367fd0d231a76571ca1b73a1b24166af33558fee960636ce56337ed7；FP32、AdamW(lr=1e-4, betas=(0.9,0.999), eps=1e-8, weight_decay=0.01)。
