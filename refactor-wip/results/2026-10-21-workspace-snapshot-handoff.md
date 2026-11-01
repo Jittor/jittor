@@ -1,3 +1,16 @@
+## 2026-11-01 09:26 +0800 handoff：DDP 双 rank 缺少启动资源；ACL 删除静态映射已核实
+
+当前继续在 `/home/cgq/jittor`，HEAD `0eea97344dc40a11f7dcf50879d418b5628a5a68`，origin/cgq_transformers `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `149/0`。102 项既有 dirty/untracked 状态 SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211` 未变；index 原为空。本轮只增加三份状态文档内容，没有改代码、没有 push。
+
+双 rank DDP harness `compat/tests/torch/test_torch_ddp_grad_sync.py` 需要 mpirun；当前服务器无 mpirun/mpiexec，Slurm 对 cn2 CPU/A100 试分配报 account/partition 不匹配，X12DPG-OA6 down。Gloo 当前仅有单 rank public API 证据。multi-rank DDP 与 checkpoint/resume 仍开放，未启动多 rank workload。
+
+Wheel migration 的 ACL sigmoid/transpose Python wrapper 删除已和候选 native C++ 源清单、registry/executor 路由及 ACL 前向/梯度测试做静态映射；Ascend toolkit 缺失，未做 ACL 构建或设备测试，迁移 allowlist 不变。详情与复查记录见 Day2–5 结果增量和 `/data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-ddp-launch-acl-removal-review-r1-prepared/review.md`（SHA256 `a3b35ea2119f4a9d21483b63a35fb8d61067f540eef9cd6a9467896209961e92`）。
+
+GPU2 仍由外部 yqa PID `2279286` 在 Default/shared 模式占用约 8651 MiB。没有系统级独占租约，本轮未运行 burner 或性能工作负载。整体 Day2–5 release 保持 **Not complete**。
+
+### 下一步
+
+先取得管理员配置的有效 Slurm account/节点和 MPI 启动环境，再运行真正的两 rank DDP 训练与 Trainer checkpoint 新进程恢复；并继续核对 wheel 迁移清单。GPU2 系统级独占租约到位后再做 Day4–5 正式配对性能/显存验收。
 ## 2026-11-01 09:10 +0800 handoff：Gloo 单 rank 查询已修复；长生成诊断仍全撞 token cap
 
 当前工作区继续使用 `/home/cgq/jittor`，branch `integrate/cgq-transformers-native-multicard-target`，HEAD `8982680242ceb2d4aafff247159c3a14b10f8123`；刚 fetch 的 origin/cgq_transformers 为 `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `148/0`。原有 102 项 dirty/untracked porcelain SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211` 保持不变；只更新既有三份状态文档，不 push。

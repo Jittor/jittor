@@ -1,3 +1,29 @@
+## 2026-11-01 09:26 +0800 DDP 双 rank 启动受环境阻塞；ACL wheel 删除完成静态映射审阅
+
+### 仓库、资源与证据身份
+
+继续在 `/home/cgq/jittor` 现有主树。HEAD 为 `0eea97344dc40a11f7dcf50879d418b5628a5a68`；刷新 origin 后 `origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `149/0`。本轮开始时原有 102 项 dirty/untracked 状态 SHA256 为 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`，index 为空。仅修改三份既有状态文档，没有修改源码或测试，没有 push。
+
+GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 在 09:14–09:25 +0800 均为 Default/shared，外部 yqa PID `2279286` 占约 8640–8651 MiB；利用率动态在 12%–87%。`X12DPG-OA6` 为 Slurm down，针对该节点的 GRES 独占测试申请因 account/partition 不匹配失败。本轮未启动 burner、未改变设备模式、未终止外部进程，也没有在 GPU2 启动 workload。根分区剩余约 69 GiB、`/data6` 剩余约 5.5 TiB；新证据放在 data6。
+
+### 公开 Torch 多 rank DDP checkpoint/resume
+
+核对了正式测试入口 `compat/tests/torch/test_torch_ddp_grad_sync.py`：测试由 `run_mpi_python(2, ...)` 启动，覆盖 rank 间初始参数广播、反向同步、参数更新、no_sync 和梯度累积，但它本身不包含 Trainer checkpoint/resume。
+
+环境检查结果：`/usr`、`/opt`、Anaconda 与 Transformers 兼容环境下均未找到 `mpirun` 或 `mpiexec`；`srun --mpi=list` 只提供 `none`、`cray_shasta`、`pmi2`。两 rank CPU 任务和 cn2 上 A100 任务的 `srun --test-only` 均返回 `Invalid account or account/partition combination specified`；A800 节点 `X12DPG-OA6` 仍 down。源码检查还确认 public Gloo 证据仅覆盖单 rank，`world_size > 1` 的当前 bootstrap 要求 NCCL，因此不能把 Gloo 单 rank API 探针当成多 rank 替代证据。没有启动 pytest 或 DDP workload，本轮没有多 rank 通过/失败结果；Trainer 保存与新进程完整恢复门继续开放。
+
+检查记录：`/data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-ddp-launch-acl-removal-review-r1-prepared/review.md`，SHA256 `a3b35ea2119f4a9d21483b63a35fb8d61067f540eef9cd6a9467896209961e92`。
+
+### Wheel baseline 两项 ACL 删除：静态映射已核对，仍未批准
+
+R5 基线迁移清单中删除的是 `jittor/backends/acl/kernels/ops/sigmoid_op.py`（旧文件 SHA256 `7fc6988d43cea32fea277d94dd400b178a1cfe6091b672d07f3dbea372adc686`）和 `transpose_op.py`（`0de1d94f7bca5226e069cb98b076435bf969f18bde1240a77bf00c2d8818375d`）。候选仍在 `backends/acl/__init__.py::CORE_SOURCES` 中列出 `sigmoid_op_acl.cc` 与 `transpose_op_acl.cc`；native op registry/executor 保留 Sigmoid、SigmoidBackward 与 Transpose 路由。已有 ACL 前向及梯度用例为 `tests/backends/acl/test_aclop.py::test_sigmoid`、`test_sigmoid_grad`、`test_transpose`、`test_transpose_grad`。这将两项从“未找到替代路径”缩小为“native 路由保留、Python 包装层删除”的静态迁移项。
+
+本机未发现 `/usr/local/Ascend` toolkit/compiler，不能构建或运行 ACL 用例；上面的测试文件存在不等于运行通过。两项删除仍未获 allowlist 批准，须等 Ascend 构建/设备证据，或明确把 ACL 列为不支持并完成相应发布边界审阅。完整差异清单仍为 69 additions、301 content changes、2 removals；清单 SHA256 `223a8e7c9e59ce06b0fb379cd88a56e094b3b2a0a84c949b745dbe4df9285108`，位于 `/data6/cgq/jittor-lab/_state/release-day23/20261101-wheel-baseline-rebuild-r5-prepared/rebuilt-baseline-to-current.tsv`。allowlist 保持未修改。
+
+### 后续门
+
+优先在管理员恢复节点/账号或提供匹配 MPI 启动器后完成真正两 rank public Torch DDP + Trainer checkpoint + 新进程恢复，再继续逐项审阅剩余 wheel migration 项。Day4–5 仍需系统级 GPU2 独占租约、匹配 PT/JT 配置至少三轮交替、每轮双方至少十个热态样本、load/首步/热态 median/p95/离散度、allocator/NVML 峰值、近容量/OOM 恢复及真实 activation recompute 对照。整体 Day2–5 release 仍 **Not complete**。
+
 ## 2026-11-01 09:10 +0800 单 rank Gloo 回归通过；Qwen 长输出仍未过质量门
 
 ### 仓库与证据身份

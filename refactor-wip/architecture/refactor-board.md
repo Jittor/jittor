@@ -1,3 +1,12 @@
+## 2026-11-01 09:26 +0800 双 rank DDP 运行入口受阻；wheel 两项 ACL 删除完成静态映射审阅
+
+工作区继续使用 `/home/cgq/jittor`，HEAD `0eea97344dc40a11f7dcf50879d418b5628a5a68`，刚 fetch 的 origin/cgq_transformers 为 `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `149/0`。原有 102 项 dirty/untracked porcelain SHA256 仍为 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`，暂存区为空。本轮没有修改运行时代码或测试。
+
+公开两 rank DDP sync 测试要求 `mpirun`；服务器未找到 `mpirun/mpiexec`，Slurm 仅报告 `none/cray_shasta/pmi2`，cn2 CPU 与 A100 `srun --test-only` 均因 account/partition 不匹配失败，承载 GPU 的 `X12DPG-OA6` 仍为 down。多 rank DDP checkpoint/resume 仍未运行。wheel 审阅新增静态检查：基线的 ACL sigmoid/transpose Python 包装器已删除，但 candidate 仍包含相应 native C++ runner、构建清单和测试入口；服务器没有 Ascend toolkit，故这两项迁移仍未批准。
+
+GPU2 `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 仍为 Default/shared，由外部 PID `2279286` 占用约 8651 MiB；未启动 burner、未改 compute mode、未杀进程。详见 Day2–5 结果与 handoff 的本轮增量。整体 Day2–5 release 保持 **Not complete**。
+
+下一步：取得可用 MPI 启动器或管理员配置 Slurm account/节点后，执行实际两 rank DDP 训练和 checkpoint 新进程恢复；继续审阅 wheel migration 清单。Day4–5 正式性能/显存验收仍需 GPU2 UUID/GRES 独占租约和稳定测量窗口。
 ## 2026-11-01 09:10 +0800 单 rank Gloo 查询修复；256-token Qwen 生成诊断完成但仍受截断
 
 本轮复核时主树 `/home/cgq/jittor` HEAD 为 `8982680242ceb2d4aafff247159c3a14b10f8123`，origin/cgq_transformers 为 `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `148/0`。原有 102 项 dirty/untracked porcelain SHA256 仍为 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`；本任务开始前暂存区为空。本轮新增 data6 诊断证据并更新本看板、Day2–5 结果和 handoff 文档；没有改其他源/测试文件，未 push。
