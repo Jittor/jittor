@@ -1,3 +1,32 @@
+## 2026-11-01 16:30 +0800 current-source Qwen held-out generation 匹配对比（有限诊断）
+
+### 工作区与源码身份
+
+继续在 /home/cgq/jittor 原工作区，没有重新 clone。文档更新前 HEAD a7e919b279f778bff24bff6a1d14c55642dbf7d1，branch integrate/cgq-transformers-native-multicard-target，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 160/0。更新前有 102 项既有 dirty/untracked，porcelain SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，index 为空。当前运行时代码仍绑定 HEAD fe56f24746a51d4f7987e94b20a000a0ef7acf21、source fingerprint e1e705658b054b34815843d1d2ce577b6541685c3939f37009104919bdb31535；本轮只改三份既有状态文档。
+
+### 匹配配置与数据
+
+证据根目录：/data6/cgq/jittor-lab/_state/release-day23/20261101-qwen-heldout-generation-r1-prepared/。基础模型 Qwen3-0.6B 路径 /data3/huggingface/hub/models--Qwen--Qwen3-0.6B/snapshots/c1899de289a04d12100db370d81485cdf75e47ca，SHA256 f47f71177f32bcd101b7573ec9171e6a57f4f4d31148d38e382306f42996874b。Jittor adapter /data6/cgq/jittor-lab/_state/release-day23/20261101-main-qwen-practical-current-source-r2-prepared/training-full-attempt04/final，SHA256 adea9cd2a304af21478c54719685139fead0515edef865674ff419df3da02243；seed821 PyTorch adapter /home/cgq/jittor-lab/_state/release-day23/20261020-r3/hf-resume-acceptance-r10/torch-qwen-lora-821-bf16-full-r10/final，SHA256 d48da15c6e4574d91f8474e7e16a010a000f3c69542fb681ab43377f31ea2b36。两端使用同一 tokenizer 和 17 条 fixture：/home/cgq/jittor-lab/_state/release-day23/20261020-r1/fixtures/lora-eval.jsonl，SHA256 d8318478c8991e75ba5cac474e1f3dfe95c0478da49ad8b2a8909c72fb72f84f。fixture 是经 id/source_index/instruction 去重核验的内部保留子集，抽自 Alpaca train split，不是官方 test set。
+
+协议为 batch=17、left padding、最大输入 96 token，提示词与训练因果前缀一致（instruction/input 后接换行分隔符，不含 target）；FP32、eager attention、无 autocast，greedy do_sample=false、num_beams=1、use_cache=true、max_new_tokens=256。真实 GPU1 UUID GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068 映射到 cuda:0；模型参数与 buffer、生成 tensor 均在该设备，native dispatch 为该设备，fallback 增量 0。stock PyTorch 环境为 Torch 2.6.0+cu124、Transformers 4.56.2、PEFT 0.17.1。
+
+### 结果与解释边界
+
+attempt-04 两边均 exit 0，17/17 生成非空、0/17 生成 EOS、17/17 达到 256 token 上限，prompt truncation 为 0。归一化 exact match 两边均 0/17。ROUGE-L F1 mean：PT 0.0961402403，JT 0.0974154985，平均 JT−PT +0.0012752582；median：PT 0.0829875519，JT 0.0810810811。14/17 greedy token 序列完全一致，另 3 条不同（共同前缀分别 12、59、21 token）；逐条 ROUGE delta 的绝对值均值 0.0014995489、median signed delta 0、最大绝对值 0.0146666667。PyTorch batch 输出与先前单条 attempt-01 输出逐 token 一致，确认该批处理没有改变 PT 对照。
+
+这组结果显示该小型内部样本上的 ROUGE-L 接近，但没有预先指定的合格阈值、人工评审或官方 held-out 测试；所有生成都撞到 token 上限，不能作为合格 generation quality 结论。它也不等于 Day4–5 性能/显存验收。
+
+### 失败尝试与完整性
+
+attempt-01 Jittor 因选择错误 cache 后在模型加载前退出；attempt-02 的身份探针在读取 shim 的 torch.__file__ 时异常，未运行生成；attempt-03 的逐条模式在约 5 分 43 秒后因无样本完成而停止。各次原始日志、退出码、终止记录和 cache 均保留。attempt-04 切换到全批次后完成；没有删除或覆盖历史失败记录。
+
+attempt-04 文件 SHA256：batch evaluator 300713b4beff4c2e59c318b8510c9e7fe42c5cd08e74931f25e8bb3916ada061，protocol plan cb28f28d9fa275b4da3c7449f175c4db59d6b8c74982c02458a589f206a8ebd2，PT result bf331e1d3c690d00198fbc3fbb2b0398fcadad525ac84985d261f04ab5725d29，JT result 00454af84a7ee6126139f37d3d10982c138f6435e6e92341e39123e38db79d86，comparison 3e7aa2e53edccb2d4945c8db53db1407e51eb4c0072921b6cf818c38b9d7eba5，manifest c11e476d2bef96ceed7141e605fea699e1eec9e95875257f5db86fc7dfa59617。
+
+GPU1 测后已空闲；GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 仍为 Default/shared，NVML 采样 29,781 MiB / 81,920 MiB、94% 利用率，外部进程为 VLLM PID 2737921（21,124 MiB）及 yqa PID 4166405（8,640 MiB）。Slurm A800 节点 X12DPG-OA6 当前 DOWN，GPU2 不具备系统级排他租约。root 文件系统剩余 61 GiB、99% 使用；证据与新增输出位于 /data6。
+
+Day4–5 开始前仍需系统管理员/调度器提供针对 GPU UUID/GRES 的排他分配，并确认设备隔离确实阻止未获租约作业。之后固定模型、batch/sequence length、dtype、优化器、编译/warmup 策略与软件栈；在同一配置下至少三轮交替 PT/JT，每轮每侧至少十个热态测量样本。报告每侧 median/p95/离散度，并拆分模型加载、首步编译/初始化和稳态热态时延；记录框架 allocator 与 NVML 峰值、显存余量、可运行最大容量、OOM 行为及恢复。另用真实启用 activation recompute 的 checkpoint 路径做匹配开关对照，证明 recompute 确实发生并量化峰值显存变化及相应耗时。共享负载旧数值仅作诊断，不参与正式结论。整体 Day2–5 release 仍 **Not complete**。
+
+---
 ## 2026-11-01 15:45 +0800 current-source Qwen resume 逐位通过；FSDP2 placement 通过、checkpoint save 暴露 planner 缺口
 
 ### 工作区与源码身份

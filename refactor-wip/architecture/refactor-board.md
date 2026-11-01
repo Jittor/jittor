@@ -1,3 +1,13 @@
+## 2026-11-01 16:30 +0800 current-source Qwen held-out generation 对比已记录；Day4–5 等待 GPU2 系统级独占
+
+继续使用 /home/cgq/jittor 现有工作区。提交前 HEAD a7e919b279f778bff24bff6a1d14c55642dbf7d1，branch integrate/cgq-transformers-native-multicard-target，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 160/0。工作区原有 102 项 dirty/untracked，porcelain SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211；仅更新规定的三份状态文档。本轮运行时源码身份为 HEAD fe56f24746a51d4f7987e94b20a000a0ef7acf21、fingerprint e1e705658b054b34815843d1d2ce577b6541685c3939f37009104919bdb31535。
+
+current-source Qwen3-0.6B LoRA 在内部 17 条保留样本上完成 PyTorch/Jittor 匹配 greedy generation。两边均 17/17 输出非空、0/17 EOS、17/17 达到 256 新 token 上限；ROUGE-L mean 为 PT 0.096140、JT 0.097415，JT−PT 为 +0.001275，14/17 token 序列完全一致。该小样本来自 Alpaca train split，不是官方测试集；两边都撞到生成上限，因此这里只是比较性诊断，不构成生成质量通过。真实 GPU1 cuda:0，Jittor fallback 增量为 0。证据包 /data6/cgq/jittor-lab/_state/release-day23/20261101-qwen-heldout-generation-r1-prepared/，manifest SHA256 c11e476d2bef96ceed7141e605fea699e1eec9e95875257f5db86fc7dfa59617。
+
+GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 当前仍为 Default/shared，外部 VLLM 与 yqa 进程占用约 29,781 MiB，利用率 94%；Slurm A800 节点为 DOWN。普通用户态 holder 不能阻止其他 CUDA client。本轮 GPU1 已释放且无本轮实验进程。Day4–5 正式结论必须等系统级 GPU UUID/GRES 独占和设备隔离租约，再做匹配配置下至少三轮交替、每轮每侧至少十个热态样本，报告 median/p95/离散度、load/首步/热态时延、allocator/NVML 峰值、容量/OOM 恢复，并实测 activation recompute 显存差异。DCP planner/save-load-resume、clean-installed wheel CUDA、ACL build/migration、multi-rank fresh-process Trainer resume、合格 generation quality 与支持矩阵仍开放；整体 Day2–5 release 保持 **Not complete**。
+
+---
+
 ## 2026-11-01 15:45 +0800 current-main Qwen 新进程续训严格一致；FSDP2 placement 通过，DCP save 仍缺 planner
 
 继续在 /home/cgq/jittor 现有工作区。文档提交前 HEAD 为 fe56f24746a51d4f7987e94b20a000a0ef7acf21，branch integrate/cgq-transformers-native-multicard-target，最新 fetch 的 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 159/0。本轮前后 102 项既有 dirty/untracked 状态 SHA256 为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，源码 fingerprint e1e705658b054b34815843d1d2ce577b6541685c3939f37009104919bdb31535；仅更新本看板、Day2–5 结果和 workspace handoff 三份状态文档。

@@ -1,3 +1,14 @@
+## 2026-11-01 16:30 +0800 继续入口：held-out generation 对比已补；先拿 GPU2 排他租约再做 Day4–5
+
+继续在 /home/cgq/jittor 现有工作区，不要重新 clone。提交前 HEAD a7e919b279f778bff24bff6a1d14c55642dbf7d1，branch integrate/cgq-transformers-native-multicard-target，origin e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 160/0；本轮前 102 项既有 dirty/untracked 的 porcelain SHA256 为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，只编辑三份既有状态文档。
+
+Qwen3-0.6B current-source LoRA 与 seed821 PyTorch adapter 在 17 条内部保留样本上完成匹配 greedy generation：ROUGE-L mean JT/PT 为 0.097415/0.096140，14/17 token 序列一致；但 17/17 均达到 256-token 上限且 0/17 EOS，所以不算质量门通过。完整配置、样本、失败尝试和校验值见 /data6/cgq/jittor-lab/_state/release-day23/20261101-qwen-heldout-generation-r1-prepared/，manifest SHA256 c11e476d2bef96ceed7141e605fea699e1eec9e95875257f5db86fc7dfa59617。
+
+当前 sinfo 显示 A800 节点 DOWN、A100 节点 cn2 idle；GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 仍 Default/shared，外部 VLLM 和 yqa 进程合计占用 29,781 MiB、94%。用户态 holder/burner 无法阻止其他 CUDA client；要满足“中途不得有别的程序跑在 GPU2 上”，需管理员或调度器授予 GPU UUID/GRES 独占并启用设备隔离，holder 本身只能作为租约内的进程存活标记。当前没有创建 holder，未干预外部任务。GPU1 已释放。
+
+下一步：先取得独占租约并验证其他作业不可见/不可创建 GPU2 context；固定 PT/JT 对照配置，做至少三轮交替、每轮每侧至少十个热样本，报告 median/p95/离散度、加载/首步/热态、allocator/NVML 峰值、容量/OOM 恢复。另需确认 activation recompute 实际生效并产生可量化的显存差异。随后关闭更广发布门：FSDP2 DCP planner/save-load-resume、multi-rank Trainer 新进程恢复、clean-installed wheel CUDA、ACL build/migration、generation quality 阈值与更广 Torch/Transformers/Accelerate/PEFT 支持矩阵。整体 release 仍 **Not complete**。Day4–5 和其他门未通过前，不得标成 release complete。
+
+---
 ## 2026-11-01 15:45 +0800 继续入口：current Qwen resume 通过；FSDP2 DCP 仍受 shim API 阻塞
 
 在 /home/cgq/jittor 当前工作区接续；不重新 clone。文档提交前 HEAD fe56f24746a51d4f7987e94b20a000a0ef7acf21，branch integrate/cgq-transformers-native-multicard-target，最新 origin/cgq_transformers e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 159/0。原有 dirty/untracked 共 102 项、porcelain SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，index 为空；current source fingerprint e1e705658b054b34815843d1d2ce577b6541685c3939f37009104919bdb31535。本轮完成后只更新规定的三份状态文档并以中文提交，不 push。
