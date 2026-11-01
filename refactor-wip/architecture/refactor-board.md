@@ -1,3 +1,13 @@
+## 2026-11-02 00:20 +0800 双 rank BERT/LoRA CUDA 更新通过；GPU2 独占预约仍不可用
+
+继续在现有 /home/cgq/jittor 工作区推进，没有重新 clone。HEAD 51379b54da97c227a08d5f9fe7c6716949e448b9，分支 integrate/cgq-transformers-native-multicard-target，origin/cgq_transformers e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（ahead/behind 177/0），源码指纹 0a1b6dbb70d93d5cab4fdd1990212478a7e38236ecabdafd2b38aea6bac4d787。原有 105 项 dirty/untracked 状态 SHA256 仍为 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98，index clean；后续只更新三份状态文档。
+
+在 /data6/cgq/jittor-lab/_state/release-day23/20261101-main-ddp-scalar-item-r1-prepared/，attempt-12 的单卡 BERT/LoRA probe 因 optimizer 在 backward 后才创建而没有记录梯度槽，exit 1；这是探针顺序错误，原件保留，不作为产品失败。修正顺序后，attempt-13 在 GPU1 上验证真实 CUDA mask helper、有限 loss、分类器梯度 L1 2.5823256969451904、参数更新 L1 0.025823254138231277、optimizer step=1、backend fallback=0，exit 0。attempt-14 在 GPU1+GPU4 两 rank DDP 上完成同类 BERT/LoRA 前向、反向、梯度同步和一次 SGD 更新；两 rank 同步梯度 L1 均为 0.9858671426773071，更新 L1 均为 0.009858667850494385，barrier 与进程组销毁通过，fallback=0，exit 0。该证据只支持小型模型的一步 CUDA/DDP 训练；不等于 Trainer 全链路、新进程恢复、FSDP2、生成质量或性能验收。attempt-10 的完整 forward timeout 尚无根因；暖 cache 下的 attempt-14 没有复现，但设备与 cache 条件不同，不能据此归因。
+
+GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 在本轮仍为 Default/shared；快照中 yqa 的三个 CUDA PID 3010030、3010042、4166405 合计约 25.9 GiB，利用率 95–97%。当前账号 sudo -n 失败，没有启用独占模式或启动 holder。已有 /data6/cgq/jittor-lab/tools/gpu2-exclusive-run.sh 会在设备空闲且取得管理员权限后切到 EXCLUSIVE_PROCESS 并包裹实际命令；它不能驱逐现有 context。根盘仅余约 52 GiB、使用率 99%，GPU1/GPU4 也有外部负载，因此不启动新的 CUDA/DCP 诊断。计划中的 attempt-15 DCP 新进程验证没有生成目录、没有运行，记为未开始。
+
+Day4–5 正式性能/显存验收仍须先取得 GPU2（或等价设备）的系统级 UUID/GRES 独占与设备隔离，然后按匹配配置做至少三轮交替、每轮 JT/PT 各至少十个热态样本，报告 median/p95/离散度、加载/首步/热态耗时、allocator/NVML 峰值及容量/OOM；此前共享负载结果只作诊断。更广 Day2–5 发布门仍开放，整体 release 保持 **Not complete**。详见 Day2–5 结果与 handoff 顶部增量。
+
 ## 2026-11-02 00:03 +0800 DDP attention-mask细化：int64 helper 通过，真实 BERT/LoRA DDP 前向仍超时
 
 继续在 `/home/cgq/jittor` 既有工作区推进，未重新 clone。HEAD `fc437281f69a681c08ae94004a56dfb25e6ff621`，分支 `integrate/cgq-transformers-native-multicard-target`，origin/cgq_transformers `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`（ahead/behind 176/0）；源码指纹 `4755e03a116acbda401d5c83e5c1635ea9e75bb8f8e1ff22a8fc4979f1771a58`（2,823 文件）。实验前后 105 项既有 dirty/untracked 状态 SHA256 均为 `8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98`，index clean；没有改源码或其他既有文件。

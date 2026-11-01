@@ -1,3 +1,16 @@
+## 2026-11-02 00:20 +0800 接续：双 rank BERT/LoRA CUDA 更新已通过，GPU2 独占权限未具备
+
+继续从 /home/cgq/jittor 现有仓库接手，没有重新 clone。HEAD 51379b54da97c227a08d5f9fe7c6716949e448b9，分支 integrate/cgq-transformers-native-multicard-target，origin/cgq_transformers e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（ahead/behind 177/0）。当前整体源码指纹 0a1b6dbb70d93d5cab4fdd1990212478a7e38236ecabdafd2b38aea6bac4d787；既有 105 项 dirty/untracked 状态哈希 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98，index clean。仅将三份状态文档纳入本任务提交，其他工作区内容继续保留。
+
+新证据：attempt-13 在 GPU1 完成实际 CUDA BERT/LoRA 一步优化，fallback=0；attempt-14 在 GPU1+GPU4 两 rank 完成前向、反向、梯度同步和一步更新，barrier/销毁通过，fallback=0。证据路径和 SHA256 详见 refactor-wip/results/2026-10-26-torch-compat-release-day2-5.md 顶部增量。它们证明窄配置下的一步更新，不替代完整 Trainer、恢复、FSDP2、生成质量或性能门。attempt-10 timeout 根因仍未定；planned attempt-15 DCP roundtrip 未生成目录、未启动。
+
+GPU2 现为共享 Default，yqa 三个 CUDA worker 合计约 25.9 GiB、利用率约 95–97%；当前用户没有免密 sudo。既有 /data6/cgq/jittor-lab/tools/gpu2-exclusive-run.sh 需要卡空闲及管理员权限后才会开启 EXCLUSIVE_PROCESS 并运行传入的性能套件；本轮没有启动 holder，也没有影响他人进程。根盘剩余约 52 GiB，GPU1/GPU4 同样有外部负载，暂停新增 CUDA 诊断。
+
+下一步：
+1. 获取管理员/调度器对目标 GPU UUID/GRES 的独占预约和 device-cgroup 隔离，之后在 helper 内运行完整性能套件，完成三轮交替、每侧每轮至少十个热态样本，并提交 latency/memory/capacity 汇总。
+2. 在可用的稳定双卡窗口内完成 DCP 双 rank 新进程保存/加载，随后推进 Trainer 级 checkpoint/resume 与 FSDP2。
+3. 补齐 held-out generation quality、其他 Day2–5 门和发布矩阵；overall release 保持 **Not complete**。
+
 ## 2026-11-02 00:03 +0800 接续：DDP scalar 细分通过，BERT/LoRA 全前向仍需定位
 
 继续使用 `/home/cgq/jittor`，未重新 clone。当前 HEAD `fc437281f69a681c08ae94004a56dfb25e6ff621`，分支 `integrate/cgq-transformers-native-multicard-target`，origin/cgq_transformers `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind 176/0；源码指纹 `4755e03a116acbda401d5c83e5c1635ea9e75bb8f8e1ff22a8fc4979f1771a58`。既有 105 项 dirty/untracked hash 仍为 `8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98`，index clean；本轮没有改源码及其他既有工作。

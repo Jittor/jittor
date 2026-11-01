@@ -1,3 +1,21 @@
+## 2026-11-02 00:20 +0800 双 rank BERT/LoRA CUDA 一步更新通过；GPU2 性能预约仍受限
+
+本轮继续使用既有工作区 /home/cgq/jittor。HEAD 51379b54da97c227a08d5f9fe7c6716949e448b9，origin/cgq_transformers e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（ahead/behind 177/0），源码指纹 0a1b6dbb70d93d5cab4fdd1990212478a7e38236ecabdafd2b38aea6bac4d787。实验前后原有 105 项 dirty/untracked 状态 SHA256 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98，index clean；本增量只涉及状态文档。
+
+证据目录：/data6/cgq/jittor-lab/_state/release-day23/20261101-main-ddp-scalar-item-r1-prepared/。
+
+| 尝试 | 结果 | 关键证据 |
+| --- | --- | --- |
+| attempt-12 单卡 BERT/LoRA | exit 1；optimizer 在 backward 之后才创建，未能观察其梯度槽，属于探针顺序错误，不代表产品失败 | attempt-12-single-gpu-bert-lora/evidence/final-state.txt SHA256 67e7cca27b63e044df81ba6239d1f10137524b5ecb7e5ddf6e51666a9478d316；runner SHA256 417d4cd243e592f8a906eb1d38a987dde63502052980bddfd84d945c54dc0e37 |
+| attempt-13 单卡 BERT/LoRA 更新 | GPU1、runtime scope、fallback=0；loss 0.7072474360466003，分类器梯度 L1 2.5823256969451904，参数 SGD 更新 L1 0.025823254138231277，step=1，exit 0 | final-state SHA256 26e0f9d7d3942e55152e6427f5ae9bc8e3a569f887de846ddf34fe95cbea9753；runner SHA256 09c504c85a7a75f767611a6817b7a484bf1acaf7942a24da115b1a324f10f1d8 |
+| attempt-14 双 rank BERT/LoRA DDP 更新 | GPU1+GPU4；实际 CUDA int64 mask/helper、前向、反向、DDP 梯度同步、更新、barrier 与进程组销毁均通过；rank0/rank1 loss 分别为 0.7072474360466003 / 0.6810668112258911，两个 rank 同步梯度 L1 均为 0.9858671426773071，更新 L1 均为 0.009858667850494385，fallback=0，exit 0 | final-state SHA256 bbb2c56a1c50655b8a483c4e66fb998e9dd69318b901a141a7a486447d3da945；launcher SHA256 9c0e39525006e49ef88215aba9f77ce752a8e52f23e677b5aa3d15a08a0e6c03；rank0/rank1 stage SHA256 640922b062a3dbd0f69fb092e1032ddd763195a28e4e274e882ca7e3d5437da0 / 1fcac49f6e8d17930396d4a16ce310a658f5f5e345b33b68d722509e54c01382 |
+
+attempt-14 是小型 BERT/LoRA 的一步双 rank CUDA/DDP 证据，不是完整 Transformers Trainer、checkpoint 新进程恢复、FSDP2 或任务质量结论。attempt-10 在另一组设备/cache 状态下的完整 forward 曾于 150 秒超时，rank1 停在 SDPA mask 的 Var.to_bool -> _var_item，rank0 等待 loss；attempt-14 未复现挂起，但负载和 cache 已变化，根因仍未确认。stock PyTorch 不能读取 JT portable-pickle optimizer checkpoint 的互操作失败仍与 JT 新进程 resume 证据分开记录。计划中的 attempt-15 双 rank DCP 新进程验证没有生成证据目录且没有启动，不计作通过或失败。
+
+GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 当前为 Default/shared，yqa PID 3010030、3010042、4166405 在快照中各使用约 8.6 GiB，GPU 利用率 95–97%。sudo -n 不可用，未启动占卡程序；普通 holder 在已有 CUDA context 下不能阻止其他用户进程。既有 helper /data6/cgq/jittor-lab/tools/gpu2-exclusive-run.sh 要求 GPU 空闲、管理员权限，并通过 EXCLUSIVE_PROCESS 包裹实际测试命令。根盘剩余约 52 GiB（99% 已用），GPU1/GPU4 也有共享负载，本轮不执行额外 CUDA/DCP 任务。
+
+因此 Day4–5 正式性能/显存验收仍未开始。先由管理员/调度器提供 GPU UUID/GRES 独占及 device-cgroup 隔离，再绑定同一源码与匹配配置做至少三轮交替、每轮 JT/PT 各不少于十个热态样本；报告加载、首步、热态耗时的 median/p95/离散度、allocator/NVML peak、容量/OOM 和真实 activation recompute 显存结果。已有共享 GPU 或单轮结果只作诊断。更广 Day2–5 门仍包含完整分布式训练/恢复、held-out generation quality、支持矩阵及其余未关闭项；overall release 保持 **Not complete**。
+
 ## 2026-11-02 00:03 +0800 DDP mask 细分探针：独立 int64 helper 通过，BERT/LoRA 双 rank forward 超时
 
 继续使用 `/home/cgq/jittor` 现有工作区。HEAD `fc437281f69a681c08ae94004a56dfb25e6ff621`，origin `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`（ahead/behind 176/0），实验绑定源码指纹 `4755e03a116acbda401d5c83e5c1635ea9e75bb8f8e1ff22a8fc4979f1771a58`、2,823 文件。运行前后 105 项既有 dirty/untracked SHA256 均为 `8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98`，index clean；源码未变。
