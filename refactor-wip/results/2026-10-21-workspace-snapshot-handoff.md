@@ -1,3 +1,17 @@
+## 2026-11-01 18:18 +0800 接续入口：DDP workaround 通过初始广播但训练超时；GPU2 必须走管理员/调度器独占
+
+继续在 /home/cgq/jittor 原工作区；文档编辑前 HEAD 662dbc2331f4d6a8af91bd2f0599160777a3f8ea，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 0/163。编辑前原有 105 项 dirty/untracked 的 SHA256 为 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98，index SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211；本次仍只编辑三份指定状态文档，不改源码或测试，不 push。DDP 实验绑定 current-source fingerprint d0449514272aee249410b42872b9f434a2478742631d0177a92858f5aee72118。
+
+在 /data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-ddp-placement-trace-r1-prepared/ 中，设备追踪显示 33 个广播输入均在 CUDA，但 4 个 LoRA 广播结果因 CPU ambient placement 落到 CPU。外部 runtime wrapper 显式设 backend/device 后，attempt-04 两 rank 真实 NCCL 初始广播通过且 fallback=0，但在训练前停止并于 cleanup timeout；attempt-05 放开训练并限四步，210 秒时限 exit 124，只有初始化 trace，没有最终 report/checkpoint，故不能认定 DDP 训练、梯度或更新通过。失败记录保留，不重跑。本轮未改源码。
+
+GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 为 Default/shared；外部 VLLM/yqa PID 2737921/4166405 合计占约 29,781 MiB，利用率约 96%。Slurm A800 节点 X12DPG-OA6 为 DOWN（unexpected reboot），无 cgq 作业，当前可见 GRES 为 gpu:a800:10；sudo 需要密码。没有启动 holder 或干扰现有任务。holder 不能在 Default 模式拒绝其他 CUDA client；EXCLUSIVE_PROCESS 只有单一 context，独立 holder 反而会阻止另一 benchmark 进程使用设备。正式验收需管理员恢复节点、按 GPU UUID 提供 GRES 独占与设备 cgroup 隔离租约。
+
+### 下一步
+
+1. 取得并验证 GPU2 UUID/GRES 独占和 device-cgroup 租约，再做 Day4–5 配对验收：至少三轮交替，每轮每侧至少十个热态样本，报告 median/p95/离散度、load/首步/热态、allocator/NVML 峰值、容量/OOM 恢复及真实 activation recompute 显存差异。
+2. 把 DDP LoRA 参数广播 placement 发现落实为受控源码修复和测试后，再用新的有限预算做 full/stop/fresh-resume；attempt-05 不重跑。
+3. 继续关闭 DCP、clean-installed wheel CUDA、ACL build/migration、held-out quality 和支持矩阵。整体 Day2–5 release 保持 **Not complete**。
+
 ## 2026-11-01 17:44 +0800 接续入口：DDP 广播收到 CPU 参数；GPU checkpoint 重计算通过但没有省显存证据
 
 继续在 /home/cgq/jittor 原工作区；文档编辑前 HEAD 3b384ad7e5d11097766eb1f086ce3f9d097d0ec0，origin e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 162/0。编辑前有 102 项既有 dirty/untracked、porcelain SHA256 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98，index 为空。r2 DDP 与 r3 checkpoint 诊断绑定源码 fingerprint 71f3dfb5baba8dafe8a108ce93f27604c0b5114458446c9d529cb41b18fd3f98；详细参数、哈希和阶段记录见 /home/cgq/jittor/refactor-wip/results/2026-10-26-torch-compat-release-day2-5.md 顶部及对应 /data6/cgq/jittor-lab/_state/release-day23/ 包。

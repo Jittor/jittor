@@ -1,3 +1,9 @@
+## 2026-11-01 18:18 +0800 current-main DDP 显式 placement workaround 只通过初始广播；GPU2 暂无可用独占租约
+
+对 shim DDP 的独立设备追踪发现，33 个初始广播输入均来自 CUDA；29 个参数带 CUDA placement backend，4 个 LoRA 参数在广播输出上回落到 CPU。直接用现有 `device_scope_like` 未改变 CPU ambient placement；仅在外部运行时 wrapper 中按 Var 的实际设备显式设置 placement 后，两 rank 的真实 NCCL 初始广播通过（attempt-04，fallback 增量 0）。attempt-05 移除训练步骤拦截并尝试最多四步，但在 210 秒 job 上限 exit 124；只有初始化 trace，没有最终 report/checkpoint，不能算 Trainer 训练或恢复通过。源码未改，全部记录见 /data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-ddp-placement-trace-r1-prepared/。
+
+GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 目前仍为 Default/shared，VLLM 和 yqa 进程合计使用 29,781 MiB、利用率约 96%。Slurm A800 节点 X12DPG-OA6 为 DOWN（unexpected reboot），账号没有免密 sudo；普通 CUDA holder 不能阻止其他客户端。EXCLUSIVE_PROCESS 只允许一个 CUDA context，单独 holder 会占住 context，令另一个 benchmark 进程无法启动，因此不能满足“空闲时保留、测试进程可切换”的目标。需要管理员恢复节点并提供 GPU UUID/GRES 与设备 cgroup 独占租约。本轮未启动 holder、未触碰现有进程。Day4–5、DCP、wheel CUDA、ACL、合格生成质量和支持矩阵仍开放；整体 Day2–5 release 继续 **Not complete**。
+
 ## 2026-11-01 17:44 +0800 current-main DDP Trainer 暴露 CPU 参数广播阻塞；checkpoint 重计算生效但未见显存节省
 
 current-source 两 rank Trainer 已在 attempt-03 越过 CUDA/NCCL 构建并成功初始化 NCCL，但 shim DDP 初始参数广播收到 CPU 张量，nccl_broadcast 报错，训练更新尚未开始；设备迁移根因仍待核实。GPU1 checkpoint on/off 诊断确认六层真实重计算，梯度与更新有限且接近，但 on 的 allocator/NVML 峰值都高于 off，不能记为省显存。GPU2 仍被外部 VLLM/yqa 进程共享；普通 holder 不能阻止其他 CUDA client，本轮未启动占卡进程。完整 DDP、DCP、wheel CUDA、ACL、合格生成质量与支持矩阵仍开放，Day4–5 正式性能/显存门仍需管理员/调度器的 UUID/GRES 独占与设备隔离。整体 Day2–5 release 继续 **Not complete**。

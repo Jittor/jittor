@@ -1,3 +1,31 @@
+## 2026-11-01 18:18 +0800 current-main DDP placement workaround 只通过初始广播；GPU2 暂无可用独占租约
+
+### 工作区与实验身份
+
+继续使用 /home/cgq/jittor 现有工作区。文档编辑前 HEAD 662dbc2331f4d6a8af91bd2f0599160777a3f8ea，branch integrate/cgq-transformers-native-multicard-target，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 0/163。工作区有 105 项既有 dirty/untracked，porcelain SHA256 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98，index 状态 SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211。本轮新增实验绑定 current-source fingerprint d0449514272aee249410b42872b9f434a2478742631d0177a92858f5aee72118；不改运行时代码/测试，工作区既有 dirty/untracked 内容全部保留。
+
+### DDP 参数 placement 追踪与运行时 workaround
+
+证据包位于 /data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-ddp-placement-trace-r1-prepared/，含 attempt-01 至 attempt-05、启动脚本、rank 日志、追踪 JSON、源码身份和状态快照。attempt-01 在 HF Trainer/Accelerator prepare_model 前后核对 33 个参数和 buffer，均为 CUDA；因此故障不是 Trainer 漏掉模型迁移。attempt-02 在 DDP 广播图构建前后追踪到 33 个输入 Var 的 `location=device, device=cuda:0`；其中 29 个参数 placement_backend=1，4 个 LoRA 参数 placement_backend=-1。广播赋值调度后这 4 个 LoRA 输出变为 CPU（location=none、device_id=-1、backend=0）。ambient placement 为 CPU。attempt-03 只套用 `device_scope_like(var)`，输出仍在 CPU，因为该 helper 保留现有 CPU ambient placement。
+
+attempt-04 在外部诊断 runner 中围绕 `_broadcast_from_rank0` 按输入 Var 的实际 backend/device 显式设置 placement，并执行真实两 rank NCCL 广播。rank0/rank1 的 33 个参数同步后均为 CUDA，fallback 增量为 0，均记录 `DDP_INIT_BROADCAST_PASSED_STOP_BEFORE_TRAINING_STEP`；它只证明初始化广播通过，没有训练更新。随后 cleanup 卡住，到 210 秒 job 上限 exit 124，失败原件保留。
+
+attempt-05 沿用相同 runtime-only placement wrapper，移除训练步骤拦截，以相同 tiny BERT+LoRA 初始权重、seed 20261014、world size 2、每 rank batch 2、梯度累积 2、最多 4 updates 运行。设备为 GPU1 UUID GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068 和 GPU4 UUID GPU-8bf405a2-a3dd-e203-8dd9-691e9f7b3530，GPU2 明确排除；JITTOR_NO_BUILD=1，复用隔离 nox_nccl cache。两 rank 成功初始化 NCCL 并写出初始 placement trace，但 210 秒内没有最终 report 或 checkpoint；launcher exit 124，无法核验更新数、梯度、参数变化和两 rank 一致性，因此该 DDP 训练不算通过，也不构成性能/显存结果。attempt-05 与其他 attempts 原样保留，没有自动重跑。
+
+### GPU2 保留请求的实际限制
+
+2026-11-01 18:18 +0800，GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 仍处于 Default 模式，使用 29,781 MiB、利用率 96%；NVML 可见外部 VLLM PID 2737921（21,124 MiB）和 yqa PID 4166405（8,640 MiB）。没有启动 holder 或终止/干扰这些任务。Slurm 命令可用，但 `sinfo` 显示 A800 节点 X12DPG-OA6 为 DOWN，原因是 `Node unexpectedly rebooted`，当前无 cgq 作业；可见 GRES 配置只有 `gpu:a800:10`。账号的 `sudo -n -l` 要求密码，因此不能在驱动层切换 compute mode。
+
+普通用户态占卡进程无法阻止 Default 模式下其他客户端创建 CUDA context。NVIDIA 的 EXCLUSIVE_PROCESS 模式限制每张卡只能有一个 CUDA context；若让 holder 持有它，另一个独立的 PT/JT benchmark 进程也无法建立自己的 context。对“等待期间先占有设备、再允许租约内多进程测试、阻止其他用户”的正确路径是管理员恢复 A800 节点并提供针对 GPU UUID 的 GRES/Slurm 独占分配与设备 cgroup 隔离；通用 `gpu:a800:1` 还不足以指定物理 GPU2。NVIDIA compute mode 说明见 [nvidia-smi 文档](https://docs.nvidia.com/deploy/nvidia-smi/)。
+
+Day4–5 正式门仍未运行：匹配配置至少三轮交替、每轮每侧至少十个热样本，报告 median/p95/离散度、加载/首步/热态时延、allocator/NVML 峰值，并完成容量/OOM/恢复与真实 activation recompute 显存对照。更广 Day2–5 的 DCP save/load/resume、clean-installed wheel CUDA、ACL build/migration、合格 held-out generation quality 和支持矩阵仍开放；整体 release 保持 **Not complete**。
+
+### 接续顺序
+
+1. 管理员恢复 X12DPG-OA6，再配置 GPU2 UUID/GRES 与设备 cgroup 隔离；在拿到租约并验证未授权任务无法使用设备前，不启动显存 burner 或正式性能采样。
+2. DDP 后续先把观察到的 LoRA broadcast placement 缺陷落实为受控源码修复及单测，然后再用新预算做完整训练/新进程恢复；attempt-05 已按限时失败保留，不重跑。
+3. 并行继续不依赖 GPU2 租约的 DCP、wheel CUDA、ACL 和支持矩阵工作。Day4–5 与更广 release 门未全部通过前，总状态保持 **Not complete**。
+
 ## 2026-11-01 17:44 +0800 current-source DDP Trainer 在 CPU 参数广播处失败；checkpoint 显存诊断未证明收益
 
 ### 工作区与实验身份
