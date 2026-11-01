@@ -1,3 +1,17 @@
+## 2026-11-01 09:34 +0800 clean-installed wheel CUDA smoke：R6 精确重启超时，未执行测试
+
+### 绑定身份与执行结果
+
+证据目录：/data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-wheel-public-tensor-follow-runtime-cuda-r6-jittor-restart-prepared/。计划绑定 /home/cgq/jittor HEAD 7f10fbbe534d0cb9bd8094723eba64f95576cdb0，运行前后工作区指纹为 102 项 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211；本轮没有改源码或测试。测试来自此前 clean wheel lane：main wheel SHA256 2e8f1a4418e3e9aee770843a6fd7d5471e3de12aaad75a8e8e78deee24baa3d9、compat wheel SHA256 fd7e84f639dba09f9d8293b9d255df09aa7190b890093e614c340cc47a7a7d5a，wheel 源码构建 HEAD 28425b64b35ab2e1b49ac4693c31f46d7dd0e5e2；本次只针对源文件哈希 d079146c5e54aadde4bfd5015b29db60d3ca93be7eab9676edbaa265c8c4a092 的单个 public Tensor alias 用例，不代表当前完整 HEAD 的整套 clean install。
+
+R4 曾在 GPU1 建立 CUDA context 并完成 core 编译，但 pytest 收集因把仓库 compat 包当顶层包导入，报 attempted relative import beyond top-level package，98.294 秒、rc=1、0 项执行。R5 将字节一致的测试与 conftest 放到隔离 artifact 根目录，规避了导入根目录冲突；随后安装 wheel 的 check_cache_compile() 检测到 jit_utils 已更新并按设计以 JIT_UTILS_UPDATED_EXIT_CODE=3 要求原命令重启，8.702 秒、未触发 GPU、0 项执行。R6 保持 R5 的测试路径、工作目录、Python 与所有 cache/runtime 路径，仅使用新的证据输出目录，完成该指定的唯一重启。
+
+R6 终态 FAIL_OR_INCOMPLETE_RETAINED、rc -15、300.376 秒；runner 与 pytest/子进程在 pipe wait 上无进展，根因未确定。GPU1 UUID GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068 的 219 次采样均为 0% util、1 MiB、无 compute app；actual_gpu_seen=false，pytest 汇总 0 行，raw.log 为空。cache delta 记录 2 项新增、0 删除、436 项内容变化、196 项仅元数据变化；不能据此推断 GPU 运算发生。R6 plan SHA256 4d84cfcb7228cd3c0bb70b61cc0229d3991979d24ce5af4bfab9ae12f13d7529，runner ca103de9ecbfceef8150622d168d0aea214ad3dd7ae90fb97725e9033b935d41，receipt f76b2ed8db075071bfd06d862bdd4b26fe7982e8693241d954f28f26d6757fc7。R3–R6 原始产物均保留；R6 为按既定预算完成的一次重启，本轮不再重复该 smoke。
+
+### GPU2 与 Day4–5 边界
+
+2026-11-01 09:33 +0800 复查 GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 为 Default 模式，外部 yqa PID 2279286 使用 8640 MiB，设备总占用 8651 MiB，util 82%。未启动 holder/burner、未更改 compute mode、未干预外部 PID。普通占卡进程无法实现其他 CUDA client 不得运行的排他保证；正式性能/显存测试必须等管理员/调度器按 UUID/GRES 给予系统级独占和设备隔离。本轮没有 Day4–5 性能或显存测量结论，整体 release 继续 **Not complete**。
+
 ## 2026-11-01 09:26 +0800 DDP 双 rank 启动受环境阻塞；ACL wheel 删除完成静态映射审阅
 
 ### 仓库、资源与证据身份

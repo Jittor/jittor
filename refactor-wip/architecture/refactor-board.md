@@ -1,3 +1,11 @@
+## 2026-11-01 09:34 +0800 clean-installed wheel CUDA smoke 的唯一重启超时；GPU2 仍被外部任务使用
+
+继续在 /home/cgq/jittor，R6 计划绑定 HEAD 7f10fbbe534d0cb9bd8094723eba64f95576cdb0、origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81；运行器前后记录既有 102 项工作区指纹 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211。未改代码或测试，index 初始为空。
+
+wheel smoke 证据在 /data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-wheel-public-tensor-follow-runtime-cuda-r6-jittor-restart-prepared/。R6 是 R5 遇到 jit_utils reload guard 后按原命令唯一一次重启：300.376 秒后被预算停止，rc=-15；219 次 GPU1 快照均无 compute app、1 MiB 使用，actual_gpu_seen=false，pytest 汇总为空，raw.log 为空。结果是挂起/未完成，不能算测试失败或通过；按预算不再重复此 lane。GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 当前仍为 Default/shared，外部 yqa PID 2279286 用约 8640 MiB，采样利用率 82%。未运行 burner、未改 compute mode、未终止外部进程。
+
+普通 CUDA holder 无法阻止其他用户态 client 同时使用 Default 模式设备。Day4–5 正式性能/显存验收仍需管理员/调度器提供系统级 UUID/GRES 独占与设备隔离租约；占卡程序不能代替此条件。整体 Day2–5 release 保持 **Not complete**。
+
 ## 2026-11-01 09:26 +0800 双 rank DDP 运行入口受阻；wheel 两项 ACL 删除完成静态映射审阅
 
 工作区继续使用 `/home/cgq/jittor`，HEAD `0eea97344dc40a11f7dcf50879d418b5628a5a68`，刚 fetch 的 origin/cgq_transformers 为 `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `149/0`。原有 102 项 dirty/untracked porcelain SHA256 仍为 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`，暂存区为空。本轮没有修改运行时代码或测试。

@@ -1,3 +1,15 @@
+## 2026-11-01 09:34 +0800 handoff：wheel smoke 的规定重启已用尽；GPU2 不能靠用户态进程独占
+
+当前主树 /home/cgq/jittor HEAD 7f10fbbe534d0cb9bd8094723eba64f95576cdb0，origin/cgq_transformers e5cffe1ae60c418f53c5bb1cdca9182577fd2b81。R6 runner 前后记录既有 102 项 dirty/untracked 指纹 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211；本轮仅更新三份既有状态文档，不碰工作区其他文件，不 push。
+
+wheel CUDA 单用例 smoke 的 R4 收集失败、R5 jit_utils reload guard、R6 精确重启后 300.376 秒超时过程、wheel/test 身份和 SHA256 见 Day2–5 结果顶部。R6 在 GPU1 的 219 次采样都未见 compute app，未执行 pytest；按规定重启次数不再重复，不能算测试通过或失败。证据包 /data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-wheel-public-tensor-follow-runtime-cuda-r6-jittor-restart-prepared/ 已保留。
+
+GPU2 复查时仍是共享 Default，外部 yqa PID 2279286 使用约 8640 MiB、util 82%。未启动占卡程序或干预该进程；普通 CUDA holder 无法阻止其他 client。Day4–5 正式性能/显存结论需系统级 GPU UUID/GRES 独占和设备隔离租约，再执行既定三轮交替、每侧每轮至少十个热态样本及峰值/分位数/离散度和容量恢复协议。整体 Day2–5 release 仍 **Not complete**。
+
+### 下一步
+
+取得管理员/调度器的独占租约后安排 Day4–5；其间继续推进不依赖 GPU 独占的多 rank DDP 启动条件与 wheel migration 审阅。无需再试占卡程序，也不重复已完成的 R6 精确重启。
+
 ## 2026-11-01 09:26 +0800 handoff：DDP 双 rank 缺少启动资源；ACL 删除静态映射已核实
 
 当前继续在 `/home/cgq/jittor`，HEAD `0eea97344dc40a11f7dcf50879d418b5628a5a68`，origin/cgq_transformers `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `149/0`。102 项既有 dirty/untracked 状态 SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211` 未变；index 原为空。本轮只增加三份状态文档内容，没有改代码、没有 push。
