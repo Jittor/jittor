@@ -1,3 +1,11 @@
+## 2026-11-02 02:37 +0800 R29 只读拆解 attention.output 范围；GPU2 仍共享
+
+R29 在训练态、梯度开启时同步测了 attention.output 整体，覆盖 dense、dropout、残差相加与 LayerNorm；median 为 JT/PT 0.497/0.236 ms，ratio 2.106。插桩同时包含同步 hook 开销，没有内部算子分解，不能据此认定某一算子是根因。R29 绑定较早的 HEAD 02be05fcaab344735272a8526485330602f32ec0 / source fingerprint 0382368b8754bf7a90e42382fd66b603ed2d3f323b5e8cda4820425871c7aa50；当前 HEAD d8e7e2b51e30283a45ddcb07caeae15b29d88f92 与其间有 17 个文件的提交差异，故 R29 仅用于选择当前候选的后续诊断点，不能充当当前包的性能通过证据。只读复核报告：/data6/cgq/jittor-lab/_state/release-day23/20261102-r29-inner-breakdown-readonly-r1-prepared/read-only-findings.md，SHA256 125957c305e9dc7f092bc165b2c12833b42764d4ee0d056f69777fe6853ae5ab；artifact-files.sha256 SHA256 aa31da74d85fee979a9cfda46ec04c5baec35f2df3e62b104121f493f080d72c。
+
+本轮 GPU2 实时仍为 shared/Default，GPU UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0，利用率 94%、已用 17,299 MiB，两个外部 PID 各占 8,640 MiB；X12DPG-OA6 仍 DOWN。没有创建 CUDA holder。下一次先取得 Slurm GRES 与 device-cgroup 独占 UUID 租约，再对当前 main 做无 hook 的三轮交替正式 cohort（每轮每侧至少 10 个热态样本）；需要定位时才做内部阶段插桩，并将插桩结果与正式时延分开报告。Day4–5 和 overall Day2–5 release 仍 Not complete。
+
+本轮只读复核 R29 的 attention.output 是组合 region，不是算子级结论；同步 hook 会引入诊断成本。其旧源码身份不等于当前 main 候选。下次必须先有管理员 GRES/device-cgroup 独占 UUID 租约；先跑当前候选无插桩正式性能/显存 cohort，再视结果拆解 dense/dropout/residual add/LayerNorm。R29 失败原件、R14 训练产物、现有 dirty/untracked 文件均未改动；整体 Day2–5 仍开放。
+
 ## 2026-11-02 02:31 +0800 Handoff：CPU 序列化补测未越过缓存重启
 
 对 current-main 的两个公共 torch.save/load CPU 用例做有界准备后，attempt-01 因 CUDA 12.4/default 与现有 CUDA 12.2/nox_nccl 缓存不匹配而退出；attempt-02/03 在匹配配置下因 jit_utils 重建要求再次重启而于 pytest 前退出。零测试执行，core 未编译，GPU 未用；停止该缓存试探。完整隔离证据包 /data6/cgq/jittor-lab/_state/release-day23/20261102-main-cpu-torch-save-fetch-r1-prepared/，manifest SHA256 41902742917ddcb5e9fdc9662fa4e68d16340b620d5f5d022fc613ea6e9f1a09。
