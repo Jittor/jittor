@@ -1,3 +1,13 @@
+## 2026-11-01 21:11 +0800 调度复核：备用 A100 节点空闲但当前账户不能申请；GPU2 仍共享
+
+继续在 /home/cgq/jittor 现有工作区。当前 HEAD 1f2e6fba815a5bef46c4aee71b34ddb907289f0a，runtime 源码与前一条 DDP probe 的 dadc58093b75981c68c4c7a0a68d1eab773403e6 相同（其后仅提交状态文档）；origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 170/0。既有 102 项工作区状态哈希仍为 porcelain 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211、-uall 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98，索引为空；本轮未修改源码或实验文件。
+
+备用节点 cn2 在 a100 分区显示 IDLE、配置 8 张 A100。只读 srun --test-only --partition=a100 --nodes=1 --ntasks=1 --gres=gpu:a100:2 --time=00:05:00 --job-name=jt-ddp-check true 被 Slurm 拒绝：Invalid account or account/partition combination specified；当前用户 cgq 的 sacctmgr association 查询没有返回记录，未提交任何作业。A800 节点 X12DPG-OA6 仍是 DOWN。故当前没有可用的调度器隔离多卡窗口，不能安全做下一次 NCCL collective 复现。
+
+GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 在 21:10 +0800 仍为 Default/shared，yqa PID 4166405 使用 8,640 MiB、GPU 利用率 77%。普通用户态 holder 不能隔离其他账户，本轮未启动 holder、未触碰该进程。既有 r9 native CPU saved-artifact audit 为 PASS，但它不是 release acceptance；旧 r9 Torch focused 失败和 current-main autograd CPU 26 passed/2 accelerator skip 均已保存，不重复运行。整体 Day2–5 release 仍为 Not complete。
+
+后续多卡功能诊断需要先由管理员/调度器给当前账户添加有效 association 并提供独占 GRES/device-cgroup 作业，再在两张分配卡上单独测直接 NCCL all-reduce 的 issue、sync 与 host-readback 阶段；在拿到该窗口前，不凭共享卡超时栈臆改通信源码。正式 Day4–5 性能/显存验收仍需指定 GPU UUID 的系统级独占及规定的交替热态采样。
+
 ## 2026-11-01 21:03 +0800 DDP barrier 复核：shim 与原生路径都卡在 collective 同步；GPU2 不能由普通 holder 独占
 
 继续在现有工作区 /home/cgq/jittor，未重新 clone、未修改源码。实验绑定 HEAD dadc58093b75981c68c4c7a0a68d1eab773403e6、源码 fingerprint 4b0393e7340f32332a5f81b550f7b9cc3798f69674043c4f1104ace026a3d521；origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 169/0。porcelain 与 -uall 哈希仍为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211 / 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98，102 项既有 dirty/untracked 保持不变，index 为空。两个新 attempt 的 source before/after 指纹一致，manifest 校验通过。

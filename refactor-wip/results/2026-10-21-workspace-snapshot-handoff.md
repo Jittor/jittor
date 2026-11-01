@@ -1,3 +1,7 @@
+## 2026-11-01 21:11 +0800 接续：A100 空闲节点无法由当前 Slurm 账户申请
+
+当前 main HEAD 1f2e6fba815a5bef46c4aee71b34ddb907289f0a；源码路径相对前条 DDP barrier probe 未变，origin/cgq_transformers 仍 e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（ahead/behind 170/0）。cn2 在 Slurm a100 分区空闲，但两卡 srun --test-only 返回 Invalid account/account-partition；sacctmgr 未列出 cgq association，未提交作业。A800 节点仍 DOWN，GPU2 仍由 yqa PID 4166405 以 Default/shared 使用。没有启动 holder 或 NCCL 测试；普通 holder 不能实现系统级独占。详情和精确命令见 board 与 Day2–5 结果文档顶部。后续直接 NCCL 诊断与正式 Day4–5 需要调度器账号/管理员先提供隔离资源。
+
 ## 2026-11-01 21:03 +0800 接续：原生与 shim barrier 都卡住；GPU2 无法由普通用户态程序锁独占
 
 双 rank、scope-correct NCCL barrier 对照绑定 /home/cgq/jittor HEAD dadc58093b75981c68c4c7a0a68d1eab773403e6、source fingerprint 4b0393e7340f32332a5f81b550f7b9cc3798f69674043c4f1104ace026a3d521。shim 路径两 rank 停在 marker.numpy()；原生 ProcessGroup 路径停在 all_reduce(...).sync(device_sync=True)，各自 45 秒 exit 124。二者都完成 NCCL communicator 初始化，没有 barrier_done。结论限于 collective 执行/同步阶段仍未返回，根因未定；不要把上次 DCP timeout 说成已经证明由此 barrier 导致。新证据目录及 manifest SHA256 见 board 和 Day2–5 结果文档顶部。
