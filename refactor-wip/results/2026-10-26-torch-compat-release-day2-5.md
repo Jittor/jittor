@@ -1,3 +1,34 @@
+## 2026-11-02 06:59 +0800 current-main clean-installed wheel CPU runtime 通过；迁移基线与 Day4–5 仍开放
+
+### 源码身份和工作区
+
+继续使用 `/home/cgq/jittor`，没有重新 clone。包构建前 HEAD 为 `3fb131817e69ccc6728e670cbdf2db6f708cafdd`，origin/cgq_transformers 为 `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`；既有 dirty/untracked 状态 SHA256 为 `8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98`。构建与 smoke 后 HEAD 和状态 SHA256 均相同。本任务只更新三份既有状态文档；没有 stage 其他源码或实验文件。
+
+隔离源码副本位于 `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-package-r5-prepared/source/`，2,784 个文件，`source-files.sha256` 文件 SHA256 `ea517e4e2959a62c413a0d0a9e21100bfc01e0e1268cdd5379d9bf22d9497267`。构建使用 Python 3.11.3 既有 packaging 环境，没有从工作树运行安装后 smoke。
+
+### sdist、wheel 和迁移基线
+
+- main sdist：SHA256 `a9a2fa967096e337e93a87ea216b702b0e54bce41f564c07e76229893642d0de`，1,455 成员；`check_sdist_contents.py` 从真实 checkout 执行后通过。第一次从无 `.git` 的隔离副本调用审计器失败，原日志保留；该失败是审计器无法枚举 checkout，不是 sdist 产品结论。
+- main direct wheel：SHA256 `66c0f8176508325f3555f3f90c0b0b141463ae33cdc0b38b35e082dc62b01f47`，1,100 路径，内容审计通过。sdist-derived wheel 也是 1,100 路径，与 direct wheel additions/changes/removals 全为 0。
+- compat wheel：SHA256 `08c84ae50617fa9761ec131c2e0e6247ca704af64ee2d3b560c6a18d2a0a81bf`，compat profile 182 路径通过。main 与 compat wheel 在同一个 `pip install --target` transaction 安装，安装目录的 `jittor.compat` 和 `torch` compileall 通过。
+- 必需默认 baseline compare 仍失败：baseline 1,033 路径、候选 1,100 路径，69 additions、302 内容变化、2 removals，全部 0 approved。没有改 allowlist，也没有用 modernization baseline 替代 release baseline。
+
+### Clean-installed CPU runtime
+
+安装目标位于证据目录 `install/`，Python 3.11.3，隔离 `JITTOR_HOME`。由于 wheel 安装目录对应新的 Jittor cache key，旧源码工作树 CPU core 不能直接复用；在 attempt-03 的独立 cache 中进行了一次有界首次 CPU build，jittor_core 227/227，编译阶段约 330.9 秒，低于 600 秒上限。attempt-06 使用 `JITTOR_NO_BUILD=1` 复用该 exact installed-path core，rc=0。`jittor` 与 `jittor.compat.torch` 从安装目录导入，`jittor_core` 位于私有 cache，`core_build_is_current()` 为真；torch distribution spec 也指向安装目录。CPU 前向/反向得到梯度 `[2,4]`，SGD 将 `[1,2]` 更新到 `[0.8000000119,1.6000000238]`，按 rtol=atol=`1e-6` 通过；fallback 前后均为 0。
+
+attempt-01 到 attempt-05 均保留：no-build 探针发现旧 cache 无 wheel 安装路径 core；attempt-02 runner 在 runtime 前因未创建 cache 目录退出；attempt-03 的 core 构建完成但探针误读 `torch.__file__`（compat 的 `TorchNamespace` 不保证此属性）；attempt-04 把 optimizer 放在 backward 后构造，与维护用例顺序不同；attempt-05 用精确 Python 浮点相等检查拒绝了正确的 float32 更新。最终 attempt-06 改为安装 spec/compat module path 核对、维护的 optimizer 顺序和 `1e-6` 容差。
+
+attempt-01 曾复用既有 CPU cache 做 no-build 导入探针。`attempt-01-no-build-cache-diff.patch` 保留 83 个新增 hash 行与 78 个删除 hash 行，其中包含 `jit_utils_core` 和 JIT op 项；这不是 jittor_core 的通过证据。对应 lock 当前无 holder，原件与 cache 未清理。后续不再重跑此探针。
+
+R5 artifact 完整 manifest 文件 `artifact-files.sha256` SHA256 `38d4c7e162ed2246e34aaf0d7b67af6a926561acb77ae550f678c2f49b9f0037`，所有清单项已校验。CPU smoke 不提供 CUDA、性能、显存或广泛支持矩阵结论。
+
+### GPU2 与后续门
+
+终态复核 GPU2 为 Default/shared，17,299 MiB、约 93%，可见外部 PID 3037196 与 3164740 各 8,640 MiB。账号 `sudo -n` 仍需密码，X12DPG-OA6 仍不可作为独占作业窗口。已有 `/data6/cgq/jittor-lab/tools/gpu2-exclusive-run.sh` SHA256 `c68ac63cca92bb7204b786f984062fced7de7dd509363bbc77e55b445cb6d16b`；它等待空卡、请求管理员权限切换 `EXCLUSIVE_PROCESS`，并在退出时恢复模式，benchmark 必须作为同一个长进程命令执行。没有启动 holder 或触碰外部进程。
+
+仍需逐项审阅并批准 wheel migration baseline、声明范围 API/device/dtype/autograd/fallback 支持矩阵、current-candidate held-out 生成质量及端到端训练/恢复；Day4–5 仍需匹配配置、系统级 GPU UUID/GRES/device-cgroup 独占下至少三轮 PT/JT 交替、每轮每侧至少十个热样本，并报告 latency 分位数/离散度、load/first/hot、allocator/workspace/NVML 峰值与容量/OOM。overall Day2–5 继续 **Not complete**。
+
 ## 2026-11-02 06:35 +0800 current-main DCP 双 rank、dtype 保真及 rank-local 故障传播通过；Day4–5 仍开放
 
 ### 源码身份与实现

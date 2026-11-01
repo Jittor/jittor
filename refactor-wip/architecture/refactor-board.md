@@ -1,3 +1,11 @@
+## 2026-11-02 06:59 +0800 current-main clean-installed wheel CPU smoke 通过；迁移基线与 GPU2 独占仍开放
+
+在 `/home/cgq/jittor` 现有工作区继续，包源码快照绑定 HEAD `3fb131817e69ccc6728e670cbdf2db6f708cafdd`、origin/cgq_transformers `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，构建前既有工作区状态 SHA256 `8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98`。隔离包源码 2,784 个文件的 manifest SHA256 `ea517e4e2959a62c413a0d0a9e21100bfc01e0e1268cdd5379d9bf22d9497267`。证据目录 `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-package-r5-prepared/`，artifact-files.sha256 SHA256 `38d4c7e162ed2246e34aaf0d7b67af6a926561acb77ae550f678c2f49b9f0037`。
+
+R5 sdist（1,455 项）、main wheel（1,100 路径）及 compat wheel（182 路径）内容审计通过；direct wheel 与 sdist 重建 wheel 逐项一致，两个 wheel 在一个 pip transaction 中安装并通过 compat/torch compileall。默认历史 wheel baseline compare 仍是 69 additions、302 内容改变、2 removals、0 approved，因此 baseline migration 和更广支持矩阵仍未通过。attempt-06 在新装目录上完成 CPU Torch autograd/SGD smoke，梯度 `[2, 4]`、参数 `[1, 2] -> [0.8, 1.6]`（`1e-6` 容差）、fallback 0；它只覆盖 CPU 小型路径，不代表 CUDA、训练矩阵、性能或显存结论。
+
+GPU2 仍是 Default/shared：UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0`、17,299 MiB 已用、约 93%，外部进程 3037196/3164740 各用 8,640 MiB。普通 holder 不能隔离其他 CUDA client；现有 `/data6/cgq/jittor-lab/tools/gpu2-exclusive-run.sh` 需管理员权限、空卡，并把实际测试命令作为同一命令运行，当前没有启动。overall Day2–5 仍 **Not complete**。
+
 ## 2026-11-02 06:35 +0800 DCP 双 rank 与 CPU MPI dtype/故障传播验证通过；GPU2 性能独占仍阻塞
 
 current-main HEAD 6541592cb66b846c450fcfe904981a64b560ad23。最终绑定源码的 attempt-11 通过双 rank CPU MPI save/load、preflight 故障同步及 float32/bfloat16 all-gather dtype/值断言；attempt-13/14 分别通过 rank-local 写入/读取错误传播，CPU focused pytest 17 passed、0 skipped。attempt-10 暴露 MPI 不支持 bfloat16 后已修复为 float32 通信并 cast 回原 dtype；失败原件保留。详细 hashes/产物见 Day2–5 结果文档。

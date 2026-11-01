@@ -1,3 +1,11 @@
+## 2026-11-02 06:59 +0800 Handoff：current-main sdist/wheel clean CPU runtime 通过；GPU2 独占和广发布门仍开放
+
+current-main clean package 的 R5 证据已在 `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-package-r5-prepared/`。构建源码绑定 HEAD `3fb131817e69ccc6728e670cbdf2db6f708cafdd`、origin `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81` 和构建前工作区状态 SHA256 `8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98`。main sdist/wheel、compat wheel 内容审计和安装后 CPU autograd/SGD smoke 通过；artifact-files.sha256 SHA256 `38d4c7e162ed2246e34aaf0d7b67af6a926561acb77ae550f678c2f49b9f0037`。wheel default migration compare 仍是 69 additions、302 changes、2 removals、0 approved，未批准 baseline 更新。
+
+最终 attempt-06 使用已构建的 installed-path CPU core，梯度 `[2,4]`、SGD 更新 `[1,2] -> [0.8,1.6]`（`1e-6` 容差）、fallback 0。attempt-01 至 05 的准备/探针失败均保留；no-build 探针对旧 CPU cache 产生的 diff 未清理，详情见 Day2–5 报告。不要重跑 R5 package build 或 CPU core。
+
+GPU2 当前仍是 Default/shared，外部 PID 3037196/3164740 各占 8,640 MiB；sudo 需密码。已有 `gpu2-exclusive-run.sh` 必须等空卡并由管理员授权，且将实际 benchmark 包在同一命令中，不能由后台 holder 再启动独立 worker。继续处理 wheel baseline migration 与支持矩阵；held-out generation、端到端恢复、正式 Day4–5 性能/显存仍开放，overall release 保持 **Not complete**。
+
 ## 2026-11-02 06:35 +0800 Handoff：current-main 双 rank DCP 与 CPU MPI dtype/故障传播通过；GPU2 独占仍受阻
 
 在 /home/cgq/jittor 现有工作树（HEAD 6541592cb66b846c450fcfe904981a64b560ad23）完成 DCP 阶段错误同步和 CPU MPI all-gather 回退。attempt-11 双 rank save/load/preflight 与 float32、bfloat16 all-gather dtype/值通过；attempt-13/14 的 rank-local write/read 故障均让两边一致退出，load 目标状态未被改动。attempt-12 focused CPU pytest 17 passed、0 skipped。源码 hash 与 attempt manifest 见 Day2–5 结果文档 06:35 条目；attempt-02/03/04/05/10 失败原件保留。
