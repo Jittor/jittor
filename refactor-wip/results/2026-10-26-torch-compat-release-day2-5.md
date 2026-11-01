@@ -1,3 +1,29 @@
+## 2026-11-01 12:45 +0800 current-main CUDA Trainer checkpoint 新进程续训通过；GPU2 无法用户态独占
+
+### 源码、工作区与证据身份
+
+继续在 `/home/cgq/jittor` 的现有工作区。HEAD `79ee097727831d4e257f718be7fb3ac815579cdb`，branch `integrate/cgq-transformers-native-multicard-target`；刚 fetch `origin/cgq_transformers` 后为 `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `156/0`。实验开始时既有 102 项 dirty/untracked porcelain SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`，index 为空。只修改三份既有状态文档；其余 dirty/untracked 文件均保留，未 push。
+
+实验目录 `/data6/cgq/jittor-lab/_state/release-day23/20261101-trainer-resume-current-main-r5-cuda-gpu1-prepared/`。source identity 绑定上述 HEAD、102 项工作区指纹、`src/core/var_holder.cc` SHA256 `53f73df53bd42465aed6ff1f5f51aa4bfe7569a9b0263576848f10e7dc48ab40a8`、`compat/torch/installers/tensor/method_api.py` SHA256 `b4b4f4afa5373884a46eb1a0ddeb155eef92ae69316938c5de13dd4b39e42e6b`、Trainer runner 与 stateful adapter 哈希，及已存在 R4 CUDA core cache SHA256 `02d13f8146f7cf16991dcdd4d1c9e76bfecefd57a8b41b85c65514acef5b174c`。初始权重文件 SHA256 `4e595646d39667958e2e88efb0bf6950e9baf2d82b8ece57b31e709431391cf3`。
+
+### CUDA 连续训练和新进程续训
+
+实验只用 GPU1，物理 UUID `GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068`，Jittor 实际参数设备为 `cuda:0`。数据为 runner 生成的 synthetic tiny BERT/LoRA fixture，32 条样本，seed `20261014`，random sampler seed `20261025`，DataLoader generator seed `20261043`，dropout `0.1`、`num_workers=2`（兼容层用 worker threads）、prefetch factor `2`、显式 generator 和 stateful DataLoader，最大 4 optimizer steps。
+
+连续阶段完成 4 updates / 8 microbatches，Trainer 报告 train_loss `0.6918469071`；独立 first 阶段停在 checkpoint-2，完成 2 updates / 4 microbatches，报告 `0.6862289906`。全新进程从该 checkpoint 恢复，确认 `stateful_restored_step=2`，继续完成 2 updates / 4 microbatches 至 global_step 4。resume 报告 train_loss `0.3487323821` 使用了恢复后的 global-step accounting，不作为后半程独立平均损失；checkpoint 的 `trainer_state.log_history` 没有逐步 loss 项。连续和分段样本顺序完全一致：`[24,29,2,5,14,23,31,3,27,16,26,4,15,6,20,18]`。
+
+读取保存的 trajectory 后，continuous 对 first+resume 做 279 项逐数组精确比较，279/279 通过，覆盖每个 microbatch 的样本/worker 随机变换/输入、梯度快照、LoRA 参数、Adam exp_avg/exp_avg_sq/step、optimizer group、scheduler 与最终参数。48 个梯度数组均为有限值，其中 44 个非零；6/6 可训练张量从 step 1 到 4 改变。三个阶段均报告 fallback_count=0、实际参数设备 `cuda:0`、退出码 0。连续阶段计时约 230.404 秒，first 约 4.126 秒，resume 约 4.042 秒；GPU1 为共享 Default 模式，这些数值只用于运行记录，不是性能样本。
+
+证据目录含 plan、源码身份、设备快照、阶段日志、reports、checkpoints、trajectory 与比较摘要。`trajectory-comparison.json` SHA256 `f1d9addf7f6a87fbd64da18d8645a5064bd1960d5404de8b0bb94618fbc03722`；`evidence-manifest.sha256` SHA256 `0d71172143be475374832b3b747584f70950c9cbdbac3c13bb482beecb60e245`，清单内文件校验通过。结束后 GPU1 回到 1 MiB / 0%。结果仅覆盖合成小模型、单卡功能续训，不证明广泛收敛、任务生成质量、分布式恢复或性能/显存表现。
+
+### GPU2 holder 请求和正式 Day4–5 门
+
+GPU2 物理 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 在 2026-11-01 12:42 CST 仍由外部 yqa PID `2279286` 使用约 8651 MiB，利用率约 82%，compute mode 为 `Default`。Slurm `a800` 分区显示 UP，但承载该卡的 `X12DPG-OA6` 节点为 `DOWN`，原因 `Node unexpectedly rebooted`；没有可用的系统级 UUID/GRES 独占租约。普通用户态 CUDA holder 只能创建一个竞争进程，不能阻止其他作业启动，因此没有编写或启动占卡 burner，没有改 compute mode，也没有终止或干扰现有 PID。要实现“测试窗口内别人不能跑到 GPU2”，需要管理员恢复节点并提供调度器独占分配及设备级隔离。
+
+正式 Day4–5 仍未验收。可用独占窗口后，按匹配配置做至少三轮 PyTorch/Jittor 交替，每一轮每一侧至少十个热态样本；报告 median、p95 与离散度，并分别测加载、首步、热态时延和 allocator/NVML 峰值；补足容量边界、OOM 后恢复，并用真实 activation recompute on/off 对比证明显存节省。旧共享负载下测量只能作诊断，不并入 release 性能结论。
+
+更广泛发布门也未关闭：multi-rank Trainer fresh-process checkpoint/resume、clean-installed wheel CUDA、FSDP2/DCP 保存恢复、ACL 构建/迁移、明确来源且未被 token cap 截断的 held-out generation 质量评估、完整支持矩阵审阅。整体 Day2–5 release 继续 **Not complete**。
+
 ## 2026-11-01 12:32 +0800 current-main activation checkpoint CPU recompute 语义验证通过
 
 ### 源码身份与证据目录

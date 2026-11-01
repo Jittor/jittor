@@ -1,3 +1,15 @@
+## 2026-11-01 12:45 +0800 current-main CUDA Trainer 新进程续训严格一致；GPU2 独占仍受阻
+
+继续在 `/home/cgq/jittor`，HEAD `79ee097727831d4e257f718be7fb3ac815579cdb`，刚 fetch 的 `origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `156/0`。开始前既有 102 项 dirty/untracked porcelain SHA256 为 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`，index 为空。本轮只更新三份既有状态文档，不改源码/测试，不 push。
+
+current-main CUDA tiny BERT/LoRA Trainer 在 GPU1 UUID `GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068` 上完成：连续 4 updates、checkpoint-2 停止后新进程恢复至 step 4，实际 `cuda:0`、三阶段 fallback 均为 0。连续与分段轨迹 279/279 数组逐位一致，包含 batch/worker 随机输入、梯度、参数、optimizer、scheduler 与最终参数；样本顺序一致。48/48 梯度数组有限，44 个非零；6/6 可训练张量在 step 1 到 4 均改变。该证据仅支持合成 fixture 的 CUDA 功能正确性，不是性能/显存或任务质量结论。
+
+证据包 `/data6/cgq/jittor-lab/_state/release-day23/20261101-trainer-resume-current-main-r5-cuda-gpu1-prepared/`，轨迹比较 SHA256 `f1d9addf7f6a87fbd64da18d8645a5064bd1960d5404de8b0bb94618fbc03722`，全包 manifest SHA256 `0d71172143be475374832b3b747584f70950c9cbdbac3c13bb482beecb60e245`。GPU1 测后回到 1 MiB、0%。
+
+GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 在 12:42 复查仍由外部 yqa PID `2279286` 使用约 8651 MiB，compute mode `Default`；A800 分区存在，但节点 `X12DPG-OA6` 为 `DOWN`。用户态 holder 不能禁止其他进程进入，本轮没有启动占卡进程、改变设备模式或触碰该 PID。正式 Day4–5 仍需管理员/调度器提供 GPU UUID/GRES 独占和设备隔离租约，再按至少三轮交替、每轮每侧至少十个热态样本完成性能、显存、容量/OOM 恢复及真实 activation recompute 显存对照。
+
+multi-rank Trainer fresh-process checkpoint/resume、clean-installed wheel CUDA、FSDP2/DCP、ACL 构建/迁移、合格 held-out generation quality 与完整支持矩阵仍开放；整体 Day2–5 release 保持 **Not complete**。
+
 ## 2026-11-01 12:32 +0800 current-main activation checkpoint CPU recompute 用例 6/6 通过；显存门仍开放
 
 继续在 /home/cgq/jittor。HEAD a6273563a1345af518c3af65db2ede33006bbe0f，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind=155/0。既有 102 项 dirty/untracked porcelain SHA256 仍为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211；测试前后相同，本轮无源码/测试修改。本轮仅更新三份状态文档，未 push。

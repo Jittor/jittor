@@ -1,3 +1,19 @@
+## 2026-11-01 12:45 +0800 handoff：current-main CUDA 新进程续训一致；GPU2 必须等系统级独占
+
+在 `/home/cgq/jittor` 继续。HEAD `79ee097727831d4e257f718be7fb3ac815579cdb`，branch `integrate/cgq-transformers-native-multicard-target`；刚 fetch 的 `origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `156/0`。实验前工作区仍有 102 项既有 dirty/untracked 状态，porcelain SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`，index 为空。仅更新本 handoff、Day2–5 结果与 refactor-board 三份文档；没有改运行时代码或测试，没有 push。
+
+### 新增 current-main CUDA 功能证据
+
+证据包 `/data6/cgq/jittor-lab/_state/release-day23/20261101-trainer-resume-current-main-r5-cuda-gpu1-prepared/`，HEAD 与源码/fixture 身份见 `source-identity.json`。真实 GPU1 UUID `GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068` 映射为 `cuda:0`；synthetic tiny BERT/LoRA、32 条 fixture、初始权重 SHA256 `4e595646d39667958e2e88efb0bf6950e9baf2d82b8ece57b31e709431391cf3`、seed `20261014`、dropout 0.1、random sampler、两个 worker threads 和 stateful DataLoader。
+
+连续训练完成 4 updates；first 阶段保存并停在 checkpoint-2；独立新进程恢复 step 2 并完成至 step 4。三个阶段 fallback=0，实际参数设备为 `cuda:0`。连续与 first+resume 的样本序列相同；输入、worker 随机变换、梯度、参数、optimizer/scheduler state 和最终参数共 279 个数组逐项精确一致。48/48 梯度数组有限，6/6 训练张量更新。报告的 continuous train_loss 为 0.6918469；resume phase 报告值受 global-step accounting 影响，不作为独立半程均值。GPU1 已回到 1 MiB/0%，所有计时不作性能证据。轨迹比较 SHA256 `f1d9addf7f6a87fbd64da18d8645a5064bd1960d5404de8b0bb94618fbc03722`，全包 manifest SHA256 `0d71172143be475374832b3b747584f70950c9cbdbac3c13bb482beecb60e245`，清单校验通过。
+
+### GPU2 独占请求与剩余发布门
+
+GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 仍由外部 yqa PID `2279286` 使用约 8651 MiB，compute mode 为 `Default`；Slurm `a800` 分区存在但 `X12DPG-OA6` 节点为 `DOWN`。用户态占卡程序不能保证其他 CUDA client 被拒绝，本轮未创建或启动 burner、未改设备模式、未影响该 PID。Day4–5 正式验收须先取得管理员/调度器的 GPU UUID/GRES 独占租约和设备隔离；再按至少三轮交替、每轮每侧十个以上热态样本，报告 median/p95/离散度、加载/首步/热态时延、allocator/NVML 峰值、容量/OOM 恢复及真实 activation recompute 显存对照。
+
+当前尚有 multi-rank Trainer 新进程恢复、clean-installed wheel CUDA、FSDP2/DCP、ACL build/migration、合格 held-out generation quality 和完整支持矩阵等门。整体发布保持 **Not complete**。下一步先继续推进不依赖 GPU2 独占的 current-source CUDA/wheel 与分布式可运行性工作；GPU2 正式性能窗口需要管理员恢复节点并安排独占隔离，不能由 burner 替代。
+
 ## 2026-11-01 12:32 +0800 current-main activation checkpoint CPU 重计算测试通过；显存结论仍开放
 
 当前 /home/cgq/jittor HEAD=a6273563a1345af518c3af65db2ede33006bbe0f，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind=155/0；既有 102 项工作区 porcelain SHA256=5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，运行前后未变。activation checkpoint 证据包 /data6/cgq/jittor-lab/_state/release-day23/20261101-checkpoint-recompute-current-main-r1-prepared/，manifest SHA256 9d709b916327b510809ce0fd0be5cc8fda2db2c1f6549915f668fab26322af2f。
