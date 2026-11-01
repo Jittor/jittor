@@ -1,3 +1,9 @@
+## 2026-11-02 04:10 +0800 current-main Torch focused/core CPU 回归通过；GPU2 仍不能由普通 holder 排他
+
+current-main 源码 HEAD 6590952078ebd9e2a31ed7b7aafdfef576f0f107、source fingerprint 8ed7256a407acc26d3a7964c242c13af4a7ad51ceefb22d3cdef2041d152c7f9；测试前后均为 2,823 个源码文件、105 项工作区状态，status SHA256 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98。11 项 focused 回归为 10 passed、1 个 CUDA case 因 backend 被显式关闭而 skip、fallback=0；随后当前源码 10 文件 Torch core 为 227 passed、3 skipped、fallback=0。core 首个进程仅触发 jit_utils 明确重启提示，第二进程在 600 秒总预算内编译并完成测试。GPU 全程隐藏。
+
+GPU2 holder 请求复核：04:09 +0800 GPU2 仍为 Default、17,299 MiB 已用、利用率 93%，yqa PID 3037196/3164740 各占 8,640 MiB；X12DPG-OA6 仍 DOWN，Slurm ConstrainDevices=no。没有写入或启动普通 holder；它无法禁止其它 CUDA context，且会干扰已有进程。正式 Day4–5 需要管理员恢复节点、结束现有任务并按 GPU UUID 配置 GRES/device-cgroup 独占。Day4–5 与更广 Day2–5 release 仍开放。
+
 ## 2026-11-02 03:51 +0800 GPU2 普通 holder 不具备排他能力；CPU MPI DCP 未越过 core 编译
 
 GPU2 实时仍为 Default compute mode、17,299 MiB 使用，PID 3037196/3164740 是外部 yqa 任务；X12DPG-OA6 仍 DOWN、ConstrainDevices=no。普通用户进程无法阻止其他 CUDA context，也可能挤压已有作业；没有启动占卡程序。Day4–5 需要管理员恢复节点并提供绑定 GPU UUID 的 GRES/device-cgroup 独占分配。

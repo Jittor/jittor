@@ -1,3 +1,15 @@
+## 2026-11-02 04:10 +0800 current-main Torch focused/core CPU 回归通过；GPU2 普通 holder 不能提供独占
+
+本轮继续在 `/home/cgq/jittor` 当前工作区推进 CPU 可验收项。源码 HEAD `6590952078ebd9e2a31ed7b7aafdfef576f0f107`，source fingerprint `8ed7256a407acc26d3a7964c242c13af4a7ad51ceefb22d3cdef2041d152c7f9`；测试前后均为 2,823 个 source entries、105 项 status entries，status SHA256 `8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98`。工作区既有改动未变。
+
+current-source Torch focused attempt-03 使用已成功的 warm cache 路径、GPU 隐藏，11 个选定用例中 10 passed、1 skipped、0 failed、fallback=0；唯一 skip 是 CUDA 专用项，因为本次显式设置 CPU-only。pytest 77.24 秒，`output-manifest.sha256` 的 SHA256 为 `d68fcf8e3017563e9a15bbba8fc92ab6410e1682ca0d5d739b29ea624eedfcf7`，pytest log SHA256 `e7797ed0e478b17891f344fa9f3de4466ffeba0aa064aa94a880991b0aae176f`。证据目录：`/data6/cgq/jittor-lab/_state/release-day23/20261102-main-torch-focused-current-source-r1-prepared/attempt-03-torch-focused-warm-cache/`。
+
+随后对 current source 执行维护的 10 文件 Torch core CPU 回归。首次进程报告 jit_utils 已重建且“Nothing else has run”，按预先记录的启动恢复规则在同一总预算内新进程重启一次；第二进程完成 current-source core 编译（227 项，约 196.75 秒），pytest 227 passed、3 skipped、0 failed、fallback=0，pytest 15.44 秒，整体在 600 秒硬上限内。GPU 仍隐藏。复用的隔离 warm cache 有预期更新，cache diff 为 850 行；cache-after manifest SHA256 `a9c3d63b3dba489b5ee1c62991c9f39874a636111852b1c6ebc19bf3993404a1`。core evidence manifest SHA256 `2c911476c7f964b1d67c461b0866d232df8151f379d196c08989e1808c7cd126`，pytest log SHA256 `1f612c9824821ca5d05db9fdc4594cec9e23fe484ad21aabf5bf08a77dcd695f`。证据目录：`/data6/cgq/jittor-lab/_state/release-day23/20261102-main-torch-focused-current-source-r1-prepared/attempt-04-core10-current-source/`；focused 与 core manifests 均校验通过。更早绑定旧 fingerprint `d3db97…` 的 227-pass 结果仍按历史证据保留，不替代本次 current-source 结果。
+
+本轮也复核了 GPU2 独占请求。04:09 +0800 GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 为 Default compute mode、17,299 MiB used、93% utilization；外部 yqa PID 3037196 与 3164740 各占 8,640 MiB。连接身份 uid=1001(cgq)，Slurm 节点 X12DPG-OA6 为 DOWN（Node unexpectedly rebooted），`ConstrainDevices=no`。普通占显存/算力程序不能阻止其他进程建立 CUDA context，还会干扰现有任务，所以未编写或启动 holder。需管理员恢复节点、处理现有任务并发放按 GPU UUID 绑定的 GRES/device-cgroup 独占租约，才能做正式性能测量。
+
+上述 CPU 回归不构成 CUDA runtime、性能或显存通过。正式 Day4–5 仍需同配置至少三轮交替、每轮 PT/JT 各至少 10 个热样本，并报告 median/p95/离散度、加载/首步/热态耗时、allocator/workspace 与 NVML 峰值。双 rank DCP、CUDA graph/GradScaler 组合、FSDP2、干净安装 wheel runtime、held-out 任务质量及发布范围审阅等更广 Day2–5 门仍未全部关闭；overall release 保持 Not complete。
+
 ## 2026-11-02 03:51 +0800 GPU2 holder 请求复核；current-main CPU MPI DCP 双 rank 未运行
 
 本轮收到“占住 GPU2 直到性能测试完成，并阻止其他程序”的请求后，实时检查 GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0：03:51 +0800 为 Default compute mode、17,299 MiB used、89% utilization；PID 3037196 和 3164740 是外部 /home/yqa/envs/sgn-keras3/bin/python，各占 8,640 MiB。SSH 身份 uid=1001(cgq)，Slurm 节点 X12DPG-OA6 为 DOWN（Node unexpectedly rebooted），ConstrainDevices=no。普通显存 holder 不能禁止别的进程创建 CUDA context，并可能挤压/干扰这两项现有任务，因此没有写入或启动 holder。正式性能 cohort 需管理员恢复节点并提供 GPU UUID/GRES 与 device-cgroup 独占租约。

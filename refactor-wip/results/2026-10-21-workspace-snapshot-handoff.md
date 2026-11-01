@@ -1,3 +1,9 @@
+## 2026-11-02 04:10 继续：current-source focused/core CPU 通过；GPU2 独占需管理员调度
+
+在 `/home/cgq/jittor` 当前源码 HEAD `6590952078ebd9e2a31ed7b7aafdfef576f0f107` / fingerprint `8ed7256a407acc26d3a7964c242c13af4a7ad51ceefb22d3cdef2041d152c7f9` 上，Torch focused 11 项为 10 pass、1 个 CUDA case skip、fallback=0；维护的 10 文件 Torch core 为 227 pass、3 skip、fallback=0。core 首次导入只触发明确 jit_utils rebuild，按预算在新进程重启一次后完成 227 项 core 编译和测试；两项结果的 source before/after 指纹一致，证据清单通过。详情与路径见 Day2–5 结果文档 04:10 条目。仓库既有 105 项工作区状态 hash 未变。
+
+GPU2 04:09 快照仍有两个外部任务，Default mode、17,299 MiB、93% 利用率；节点 DOWN 且 Slurm `ConstrainDevices=no`。没有创建普通 holder，因为它不能阻止其他进程进入，也会污染测量。Day4–5 需要管理员恢复节点、清理现有占用并按 GPU UUID 提供 GRES/device-cgroup 独占租约。性能 cohort 仍按三轮交替、每轮 PT/JT 至少十个热样本，并采集 median/p95/离散度、load/first/hot timing、allocator/workspace/NVML 峰值。CPU 通过不关闭 CUDA/性能/显存门；overall Day2–5 继续 Not complete。
+
 ## 2026-11-02 03:51 下一步：取得系统 GPU2 独占分配；普通 holder 不可作为隔离
 
 GPU2 仍有两个外部 yqa 进程，Default mode；X12DPG-OA6 为 DOWN，ConstrainDevices=no。没有启动占卡程序，因为它不能阻止其他 CUDA context，且会影响已有任务。Day4–5 的正式 cohort 需先由管理员恢复节点并通过 GRES/device-cgroup 按 UUID 分配独占设备。随后按三轮交替、每轮每侧至少十个热态样本，收集 median/p95/离散度、加载/首步/热态时间和 allocator/workspace/NVML 峰值。
