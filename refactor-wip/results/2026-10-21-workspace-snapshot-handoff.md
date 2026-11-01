@@ -1,3 +1,9 @@
+## 2026-11-01 21:03 +0800 接续：原生与 shim barrier 都卡住；GPU2 无法由普通用户态程序锁独占
+
+双 rank、scope-correct NCCL barrier 对照绑定 /home/cgq/jittor HEAD dadc58093b75981c68c4c7a0a68d1eab773403e6、source fingerprint 4b0393e7340f32332a5f81b550f7b9cc3798f69674043c4f1104ace026a3d521。shim 路径两 rank 停在 marker.numpy()；原生 ProcessGroup 路径停在 all_reduce(...).sync(device_sync=True)，各自 45 秒 exit 124。二者都完成 NCCL communicator 初始化，没有 barrier_done。结论限于 collective 执行/同步阶段仍未返回，根因未定；不要把上次 DCP timeout 说成已经证明由此 barrier 导致。新证据目录及 manifest SHA256 见 board 和 Day2–5 结果文档顶部。
+
+GPU2 仍是 Default/shared，当前 yqa PID 4166405 使用 8,640 MiB，Slurm 节点 X12DPG-OA6 为 DOWN；用户态占卡程序无法阻止非协作 CUDA 进程，本轮没有启动 holder。Day4–5 需管理员提供 UUID/GRES 独占和设备 cgroup 隔离。所有其他卡当前也有外部进程，后续 NCCL 诊断需等待合适 GPU 窗口；整体 Day2–5 release 继续 Not complete。
+
 ## 2026-11-01 20:54 +0800 接续：NCCL barrier 停在 marker.numpy()，DCP 未进入 object broadcast
 
 当前 HEAD 542f893e997263d9537c22552914bd7fbe6d2968，source fingerprint 6efbaceffa6869fd1865c21150aade561a31b7cbdd56f883cb65ed0f42a0fa2f；origin ahead/behind 168/0，工作区其他 dirty/untracked 哈希仍为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211 / 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98。

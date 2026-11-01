@@ -1,3 +1,13 @@
+## 2026-11-01 21:03 +0800 DDP barrier 复核：shim 与原生路径都卡在 collective 同步；GPU2 不能由普通 holder 独占
+
+继续在现有工作区 /home/cgq/jittor，未重新 clone、未修改源码。实验绑定 HEAD dadc58093b75981c68c4c7a0a68d1eab773403e6、源码 fingerprint 4b0393e7340f32332a5f81b550f7b9cc3798f69674043c4f1104ace026a3d521；origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 169/0。porcelain 与 -uall 哈希仍为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211 / 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98，102 项既有 dirty/untracked 保持不变，index 为空。两个新 attempt 的 source before/after 指纹一致，manifest 校验通过。
+
+在已设置 runtime scope(use_cuda=1, backend_fallback=error) 的双 rank NCCL 诊断中，ddp-barrier-scope-attempt-01 两 rank 都完成 Accelerator 初始化、进入 shim barrier，随后停在 distributed.py:536 的 marker.numpy()，45 秒上限 exit 124。新的 ddp-barrier-native-compare-attempt-01 在同一 runtime scope 下绕过 shim，调用原生 ProcessGroup.barrier；两 rank NCCL 初始化均报告成功，但停在 process_group.py:381 的 all_reduce(...).sync(device_sync=True)，同样 45 秒 exit 124。两者都没有 barrier_done。证据收窄到 NCCL collective 的执行/同步阶段；shim 的 host materialization 不是唯一差异，但尚不能仅凭这些栈区分 collective kernel、stream 或设备同步根因。此前 DCP 双 rank attempt 的首 barrier 推断仍只是线索，不能说成该 attempt 已证明停在同一栈。
+
+证据保存在 /data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-ddp-trainer-resume-r3-current-core-prebuild-prepared/validation/ddp-barrier-scope-attempt-01/（manifest SHA256 fc8cd83a779012a4c224612d75941162b0b57794eb07ced11c63db61abeb6d49）和 ddp-barrier-native-compare-attempt-01/（manifest SHA256 fd63bc4c712dd28f948619a4599418161ff96e66d8837a950a64aefb1537ca94）。GPU2 全程排除。这些是共享 GPU 上的 bounded 功能诊断，不构成性能/显存结果；当前十张卡都有外部 CUDA 进程，因此本轮没有再发起 NCCL 复现。
+
+GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 仍为 Default/shared；21:01 +0800 采样到 yqa PID 4166405 使用 8,640 MiB、GPU 利用率 85%。Slurm 将节点 X12DPG-OA6 标为 DOWN；当前会话没有设备 cgroup 限制，/dev/nvidia2 对所有用户可写。普通 CUDA holder 只能占用资源或约束遵守同一锁的作业，不能阻止其他账户创建 CUDA context；本轮没有启动 holder、改驱动模式或干预现有训练。需要管理员恢复节点并提供 GPU UUID/GRES 独占与 device-cgroup 隔离，才能满足 Day4–5 正式验收的排他条件。整体 Day2–5 release 仍为 Not complete。
+
 ## 2026-11-01 20:54 +0800 双 rank DCP 定位到首个 barrier 的 CUDA 结果读回；GPU2 仍共享
 
 在状态文档提交 HEAD 542f893e997263d9537c22552914bd7fbe6d2968 上运行 targeted NCCL probe，当前 fingerprint 6efbaceffa6869fd1865c21150aade561a31b7cbdd56f883cb65ed0f42a0fa2f，origin/cgq_transformers 仍为 e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（ahead/behind 168/0）。porcelain / -uall 哈希仍为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211 / 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98。
