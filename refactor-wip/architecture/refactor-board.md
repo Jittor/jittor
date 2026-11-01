@@ -1,3 +1,13 @@
+## 2026-11-01 20:50 +0800 current-source DDP 停在 CUDA scalar bool/item；双 rank DCP save 超时；GPU2 仍共享
+
+工作区 /home/cgq/jittor，HEAD 7e09fc315189bcc4ba641c75dd89666264221e3d，源码 fingerprint 821b9311ed943e74bac506c1ce748ccdc108443e5a348e7a71c056e604cd7a41；刚 fetch 的 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 167/0。porcelain 与 -uall 哈希分别为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211 和 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98，index clean；本轮未改仓库源码或动其他 dirty/untracked 项。
+
+DDP attempt-05 warm-cache 在训练步 sample_id 的 clone().cpu().numpy() 读回处停住，210 秒 exit 124；独立双 rank NCCL 小张量同样 readback 通过，rank0/1 约 0.001/0.008 秒，fallback delta 0。attempt-06 改由 CPU dataset 记录索引后进入模型 forward，之后停在 Transformers modeling_attn_mask_utils.py:454 的 torch.all(mask == 1) Python bool 判断；栈进入 shim Var.__bool__ -> to_bool -> _var_item（method_api.py:830），210 秒 exit 124，无 microbatch、loss、梯度、更新或 checkpoint。DDP 训练门仍未通过，不要原样重跑。
+
+双 rank DCP attempt-01 双方进入 save_start，60 秒 exit 124；无 rank shard/metadata，未进入 load。current-source CPU DCP/state-dict focused 12/12 仅支持单 rank CPU 路径。证据在 /data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-ddp-trainer-resume-r3-current-core-prebuild-prepared/validation/ 的 full-attempt-05-warm-cache/、full-attempt-06-host-sampleids/、ddp-array-readback-attempt-01/、ddp-dcp-rank-local-attempt-01/。
+
+GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 为 Default/shared，utilization 约 87%；yqa PID 4166405 使用 8640 MiB，cgq PID 2760269（V2M4 temporal_metrics）使用 714 MiB。无 holder 或设备独占，本轮未干预进程。Day4–5 仍需系统级 UUID/GRES 租约和 device-cgroup 隔离，再按至少三轮交替、每轮每侧至少十个热样本完成规定统计。整体 Day2–5 release 继续 Not complete。
+
 ## 2026-11-01 19:54 +0800 current-source DCP CPU focused 回归 12/12 通过；双 rank CUDA 与 GPU2 排他仍开放
 
 已提交 current-source 06cf2b10a50049ad76cc6a47374fe6cdc64dcc42，源码 fingerprint c2a8608b4e6db7ed423eae56eaba75e8c7a7932ce929d390b53d6cd53d30dd5f。attempt-09 在 JITTOR_TEST_DEVICES=cpu 下执行 DCP/state-dict focused suite，12 passed、0 failed、0 skipped，1.62 秒，backend fallback=0；只有两条显式 opt-in ShardedTensor stub 警告。source before/after fingerprint 相同，cache .so 清单未变，仓库状态保持。证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-dcp-rank-local-r1-prepared/validation/cpu-focused-attempt-09/；pytest log SHA256 e42ecd17d083d6ea32af7e350e899b9f88ba49073341a8972940772ac81b3114，manifest SHA256 9c81bf35de0fe45b230f78694a4aa1f364106aca27655429eb6241ffdf2c1c66。

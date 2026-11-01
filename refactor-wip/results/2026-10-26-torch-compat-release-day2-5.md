@@ -1,3 +1,25 @@
+## 2026-11-01 20:50 +0800 DDP 实际 forward 暴露 CUDA scalar bool/item 阻塞；rank-local DCP 双 rank save 超时
+
+### 源码与工作区身份
+
+继续使用 /home/cgq/jittor 原工作区。绑定 HEAD 7e09fc315189bcc4ba641c75dd89666264221e3d、fingerprint 821b9311ed943e74bac506c1ce748ccdc108443e5a348e7a71c056e604cd7a41；git fetch origin cgq_transformers 后远端 e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 167/0。工作区 porcelain SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，-uall SHA256 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98，index clean。本轮实验仅在 /data6 新增证据，没有改仓库源码；既有 dirty/untracked 保持原样。
+
+### DDP current-source 训练诊断
+
+attempt-05 在 warm JIT cache 下仍未完成第一个 microbatch，runner 的 _array(sample_ids)（.detach().clone().cpu().numpy()）停住，210 秒 exit 124。ddp-array-readback-attempt-01 在双 rank NCCL、同一隔离 runtime 对新建 CUDA int64 tensor 执行相同 readback，rank0/1 通过，约 0.0009/0.0078 秒，fallback delta=0；这个小对照不代表训练通过。
+
+attempt-06 使用实验副本 runner 从 CPU dataset 记录索引，绕过训练前的 sample-id CUDA readback。两 rank 均进入模型 forward，随后在 Transformers modeling_attn_mask_utils.py:454 的 torch.all(mask == 1) Python bool 判断停住；栈进入 jittor.compat.torch.installers.tensor.method_api._var_item，再由 jittor._core.var.to_bool 调用。210 秒 exit 124，没有 training_step_done、有限 loss/gradient、参数更新或 checkpoint；current-source HF Trainer 双 rank 训练未通过。attempt-06 rank0/rank1 日志 SHA256 分别 48ef770f1fe09afdb7d94ae02a63d95195a0465378ee5e3a44e92dc643ed2fae、f506306985ba29df2e4d7b47e49f8f9fcc4806d4a15d965f2b46ad7ad8c5b92b；exit 文件 SHA256 ca2ebdf97d7469491b6f4b78958f9dc8447efdcb623953fee7b6996b762f6fff。attempt-05 rank logs SHA256 为 8e0c1411872e338708b1b04e50fa2b4a93faee3af99f78449405e94a6fb789e8 和 7ae74737029cd9c94a63118845bbacc396c4043ffcb5d5d03edee048eaebe343。
+
+attempt-05/06 使用共享 GPU0 与 GPU4 做功能训练诊断，GPU2 排除；结果不构成性能/显存数据。attempt-06 前后源码 fingerprint 与仓库状态哈希不变。不要原样重跑；先定位 CUDA scalar item()/bool() 路径并验证独立修正，再回到训练与 fresh-process resume。
+
+### 双 rank DCP rank-local save/load 诊断
+
+current-source attempt-01 在两个 NCCL rank 上用 CPU tensor 保存 rank-local model weight、optimizer step/exp_avg 与 cursor；双方都记录 save_start，但 60 秒 exit 124。没有 rank-00000.pt、rank-00001.pt 或 metadata.json，两 rank 都未进入 load，不能记为双 rank DCP 通过。失败在 DCP save() 协调/写入前段，现有日志无细分阶段，不断言具体 collective。rank0 log SHA256 f50ef0b305db65c38a795b4ac40b0daedd30e982ff5a9707520fd2a636d34f22，rank1 05ce8b859c989b1b7e28bb8e3d6bbb89f827dc482f1656ee741fa15a112a7ff1，exit 文件 SHA256 ca2ebdf97d7469491b6f4b78958f9dc8447efdcb623953fee7b6996b762f6fff。current-source CPU DCP/state-dict focused 12/12 通过仍只覆盖单 rank CPU/API 路径，不能替代双 rank checkpoint。
+
+### GPU2 与 Day4–5
+
+GPU2 当前 Default/shared：yqa PID 4166405 使用 8640 MiB，cgq PID 2760269（V2M4 temporal_metrics）使用 714 MiB，utilization 约 87%。用户无免密 sudo；普通 holder 不能限制其他 CUDA client，未杀进程或切换全局 compute mode。正式性能/显存验收先取得 GPU UUID/GRES 独占与 device-cgroup 隔离租约，再按匹配配置做至少三轮交替、每轮每侧至少十个热样本，并报告 median/p95/离散度、load/首步/热态时延、allocator/NVML 峰值、容量/OOM 恢复及真实 activation-recompute 显存差异。Day4–5 和整体 Day2–5 release 继续 Not complete。
+
 ## 2026-11-01 19:54 +0800 current-source DCP CPU 回归 12/12 通过；FSDP2 CUDA checkpoint 与 Day4–5 仍开放
 
 提交 06cf2b10a50049ad76cc6a47374fe6cdc64dcc42 对应 current-source fingerprint c2a8608b4e6db7ed423eae56eaba75e8c7a7932ce929d390b53d6cd53d30dd5f。在 JITTOR_TEST_DEVICES=cpu 环境运行 attempt-09：DCP/state-dict focused suite 12 passed、0 failed、0 skipped，1.62 秒，backend fallback=0；两条 warning 是显式允许的 ShardedTensor no-op stub。测试前后 source fingerprint 一致，cache .so 清单和 dirty-worktree hash 未变。证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-dcp-rank-local-r1-prepared/validation/cpu-focused-attempt-09/；pytest log SHA256 e42ecd17d083d6ea32af7e350e899b9f88ba49073341a8972940772ac81b3114，manifest SHA256 9c81bf35de0fe45b230f78694a4aa1f364106aca27655429eb6241ffdf2c1c66。

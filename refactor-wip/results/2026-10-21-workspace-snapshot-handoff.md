@@ -1,3 +1,13 @@
+## 2026-11-01 20:50 +0800 接续：DDP forward 停在 CUDA scalar item；双 rank DCP save 未完成；GPU2 共享
+
+继续使用 /home/cgq/jittor，没有重新 clone。HEAD 7e09fc315189bcc4ba641c75dd89666264221e3d、fingerprint 821b9311ed943e74bac506c1ce748ccdc108443e5a348e7a71c056e604cd7a41；origin e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 167/0。porcelain / -uall 哈希保持 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211 / 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98；本轮未改仓库源码和既有 dirty 项。
+
+新证据根目录 /data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-ddp-trainer-resume-r3-current-core-prebuild-prepared/validation/。attempt-05 warm-cache DDP 与 attempt-06 host-side sample-id DDP 均 210 秒 exit 124、0 完成 microbatch/更新/checkpoint。attempt-06 停在 Transformers BERT SDPA mask torch.all(mask == 1) Python bool 转换并进入 shim _var_item；双 rank 普通 CUDA tensor 的 .cpu().numpy() 对照通过。DDP 训练和新进程 resume 仍开放。
+
+双 rank DCP attempt-01 双方进入 save 后 60 秒 exit 124，无 rank shard/metadata、未进入 load。单 rank CPU focused DCP/state-dict 12/12 不能替代双 rank checkpoint。
+
+GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 为 Default/shared；yqa PID 4166405 使用 8640 MiB，cgq PID 2760269（V2M4 temporal_metrics）使用 714 MiB。本轮未干预。Day4–5 等系统级 GPU UUID/GRES 独占和 device-cgroup 隔离。下一步定位 CUDA scalar item()/bool() 与 DCP save 协调阶段，再回到 DDP checkpoint/resume；性能验收需在独占租约可用后开展。总体 Day2–5 release 继续 Not complete。
+
 ## 2026-11-01 19:54 +0800 接续：current-source DCP CPU focused 12/12 通过；GPU2 与双 rank checkpoint 仍未关闭
 
 current commit 06cf2b10a50049ad76cc6a47374fe6cdc64dcc42、source fingerprint c2a8608b4e6db7ed423eae56eaba75e8c7a7932ce929d390b53d6cd53d30dd5f。attempt-09 在 CPU 测试环境执行 focused DCP/state-dict suite，12 passed、0 failed、0 skipped、1.62 秒、backend fallback=0；证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-dcp-rank-local-r1-prepared/validation/cpu-focused-attempt-09/，pytest log SHA256 e42ecd17d083d6ea32af7e350e899b9f88ba49073341a8972940772ac81b3114，manifest SHA256 9c81bf35de0fe45b230f78694a4aa1f364106aca27655429eb6241ffdf2c1c66。该结果是 CPU 路径，不表示 FSDP2 双 rank CUDA save/load/resume 通过。
