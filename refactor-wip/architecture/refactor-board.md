@@ -1,3 +1,15 @@
+## 2026-11-01 11:36 +0800 current-main Rotten Tomatoes JT/PT 留出集对照通过；Day4–5 与其余发布门仍开放
+
+继续在 /home/cgq/jittor，HEAD 3c2214d26da2304e01118000603090131b68b1d8，branch integrate/cgq-transformers-native-multicard-target，origin/cgq_transformers e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 153/0。原有 102 项 dirty/untracked porcelain SHA256 仍为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，暂存区为空。本轮仅更新这三份状态文档，未改源码/测试，未 push。
+
+R7 在当前源码、官方 Rotten Tomatoes test split (revision aa13bc287fa6fcab6daf52f0dfb9994269ffea28，1066 条)、checkpoint-100 和真实 A800 GPU1 上完成 BF16 推理对照。batch=2、max_length=96、seed=821，物理 UUID GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068 映射到 cuda:0。JT accuracy 0.804878、macro-F1 0.804081、cross-entropy 0.462713；PT 为 0.803940、0.803115、0.462764。预测一致率 0.999062，accuracy 绝对差 0.000938，CE 绝对差 0.000052；ID/标签顺序相同，JT fallback 0→0、参数指纹不变、无梯度、0 次更新。该项仅为固定 checkpoint/测试集的正确性证据；93.057 秒是诊断时间，不能作为性能样本，也没有生成质量或显存验收结论。
+
+R3–R6 的初始化重启、部分核心编译超时、无关 Motion324 扩展缺包以及评估超时原件均保留。R7 完整包位于 /data6/cgq/jittor-lab/_state/release-day23/20261101-bert-current-main-rotten-tomatoes-test-eval-r7-progress-instrumented-continuation-prepared/，evidence-core.sha256 SHA256 ad888169dffe9cc9eefa9c8002329986ae9d8477273c6463ca828914d0acb473。评估后 GPU1 回到 1 MiB/0%、无计算进程；GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 仍由外部 yqa PID 2279286 使用约 8640 MiB，Default/shared；本轮没有触碰 GPU2 或启动 burner。
+
+Day4–5 正式性能/显存门仍需系统级 UUID/GRES 独占与设备隔离租约、匹配配置至少三轮交替且每侧每轮至少十个热样本，并报告 median/p95/离散度、加载/首步/热态、allocator/NVML 峰值、容量/OOM 恢复及真实 activation recompute 对照。multi-rank Trainer 新进程 checkpoint/resume、clean-installed wheel CUDA、ACL 构建/迁移、合格 generation quality 与完整支持矩阵仍开放。整体 Day2–5 release 继续 **Not complete**。
+
+---
+
 ## 2026-11-01 11:06 +0800 Rotten Tomatoes held-out PT 通过；current-source Jittor 初始化编译超时
 
 继续在 `/home/cgq/jittor`。本轮开始 HEAD `b42b978a89388498d79bfab2cd1f6723f31d3f93`，origin/cgq_transformers `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `152/0`；原有 102 项 dirty/untracked porcelain SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211` 未变、暂存区为空。只改三份既有状态文档；没有改代码/测试，也未 push。

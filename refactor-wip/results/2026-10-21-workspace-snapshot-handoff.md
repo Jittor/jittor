@@ -1,3 +1,15 @@
+## 2026-11-01 11:36 +0800 current-main held-out JT/PT 分类对照通过；正式 GPU 性能测量仍等待独占
+
+当前工作区为 /home/cgq/jittor，branch integrate/cgq-transformers-native-multicard-target，HEAD 3c2214d26da2304e01118000603090131b68b1d8，origin/cgq_transformers e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 153/0。原有 102 项 dirty/untracked porcelain SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211 保持不变；仅修改本 handoff、Day2–5 报告和 refactor-board 三份状态文档，不 push。
+
+current-main held-out JT/PT 对照证据：/data6/cgq/jittor-lab/_state/release-day23/20261101-bert-current-main-rotten-tomatoes-test-eval-r7-progress-instrumented-continuation-prepared/，evidence-core.sha256 SHA256 ad888169dffe9cc9eefa9c8002329986ae9d8477273c6463ca828914d0acb473。官方 Rotten Tomatoes test split 1066 条，checkpoint-100，BF16、batch 2、max_length 96、seed 821，GPU1 A800 实卡 UUID GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068 / cuda:0。JT accuracy/macro-F1/CE=0.804878/0.804081/0.462713，PT=0.803940/0.803115/0.462764；预测一致率 0.999062，fallback=0、参数不变、梯度 None、0 updates；预登记的四项任务指标阈值全部通过。93.057 秒只作诊断时间，不能当性能样本，也没有显存峰值、生成质量或 OOM/recompute 结论。
+
+R3–R6 的初始化/编译、无关扩展依赖和 300 秒超时原件均保留在各自 R3–R6 artifact 目录，manifest 已校验；最终 R7 继续复用 R4 的同绝对路径 Jittor cache，以保持编译键一致。GPU1 测后已释放至 1 MiB/0%、无 app。GPU2 仍由外部 yqa PID 2279286 在 Default/shared 模式下使用约 8640 MiB；未运行 burner、未改 compute mode、未触碰该卡。要做正式 Day4–5，先需要管理员/调度器授予 GPU UUID/GRES 与设备隔离的独占租约；普通 holder 不能阻止其他用户启动进程。
+
+下一步顺序：完成 clean-installed wheel CUDA smoke 与 multi-rank Trainer fresh-process checkpoint/resume；继续 ACL wheel build/migration 和完整支持矩阵审阅；generation quality 要使用有明确 validation/test 来源且不过长度上限的数据与预定义分数；真实 activation recompute 需通过调用次数/梯度和显存对照证明。Day4–5 在独占窗口到位后按同配置至少三轮交替、每侧每轮至少十个热样本，报告 median/p95/离散度、load/首步/热态与 allocator/NVML 峰值、容量/OOM recovery、checkpoint on/off recompute。总体 release 仍 **Not complete**。
+
+---
+
 ## 2026-11-01 11:06 +0800 handoff：新增 PT held-out baseline；Jittor test 对照因隔离编译预算超时
 
 当前仍在 `/home/cgq/jittor`，本轮开始 HEAD `b42b978a89388498d79bfab2cd1f6723f31d3f93`，origin/cgq_transformers `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `152/0`。原有 102 项 dirty/untracked 指纹 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211` 未变、index 为空。只更新本 handoff、看板和 Day2–5 结果文档；未改源码/测试、未 push。

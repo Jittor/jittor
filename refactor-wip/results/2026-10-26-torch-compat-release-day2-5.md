@@ -1,3 +1,45 @@
+## 2026-11-01 11:36 +0800 current-main Rotten Tomatoes JT/PT 留出集正确性对照通过；性能门仍未验收
+
+### 身份与保留范围
+
+本轮继续使用 /home/cgq/jittor 现有工作区，HEAD 3c2214d26da2304e01118000603090131b68b1d8，branch integrate/cgq-transformers-native-multicard-target，origin/cgq_transformers e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 153/0。102 项既有 dirty/untracked porcelain SHA256 仍为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，index 为空。本轮没有改运行时代码/测试，只更新三份既有状态文档，未 push。
+
+R7 证据目录：/data6/cgq/jittor-lab/_state/release-day23/20261101-bert-current-main-rotten-tomatoes-test-eval-r7-progress-instrumented-continuation-prepared/。其证据清单 evidence-core.sha256 SHA256 为 ad888169dffe9cc9eefa9c8002329986ae9d8477273c6463ca828914d0acb473；R7 plan/status 为 passed。清单覆盖 evaluator、输入、PT/JT 输出、逐样本数据、比较 JSON、运行器和日志；共享 Jittor 编译缓存位于单独的 R4 runtime 路径，未纳入该清单。
+
+### 数据、checkpoint 与运行配置
+
+数据是 cornell-movie-review-data/rotten_tomatoes 官方 test split，revision aa13bc287fa6fcab6daf52f0dfb9994269ffea28，共 1066 条，标签各 533；prepared JSONL SHA256 798266f44237235beac15126f040e5a2fc341924c007b4eb5c0f4e471595aa3a。模型是 checkpoint-100，model.safetensors SHA256 4d9913bfe4073c51daa9e8272042e98b5bb44794fafabace0d1fcbaf1412f342。配置为 max_length=96、batch_size=2、BF16、seed=821、仅 eval/无梯度，物理 GPU1 UUID GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068 映射到逻辑 cuda:0。R7 evaluator 只加每 32 条输出一次进度，不改变推理计算；脚本 SHA256 e9d916e312810b43c5688ee920195bbd3d0bdb8bb62ce3dee47374726dc1edab。
+
+### PyTorch 与 Jittor 结果
+
+PyTorch 基线来自先前 R2，不重跑：accuracy 0.8039399624765479、macro-F1 0.8031150720885123、cross-entropy 0.46276448928528685；结果 JSON SHA256 02bdd7110f5859df3cf34ba4a1e5b4c7fb496ba42bfdfa97a8d58a02cccbc27d，per-example NPZ SHA256 e02f770d71f5e3fd352c87c5c6b00f5ce4e852b50d51562a9fc9a475ccbddb8b。
+
+Jittor 在 GPU1 完成 1066/1066 条，exit 0，diagnostic elapsed 93.057 秒。accuracy 0.8048780487804879、macro-F1 0.8040808247889076、cross-entropy 0.46271279279979094；结果 JSON SHA256 d9c15a1c7a19980318ae570a297041dc537010a0cd7c4125b8543d14862d029c，per-example NPZ SHA256 f5a2756f3ef5a585f902e9468300109bd8c253fab85807af6c321d5dd49d7ffe。fallback_count_before/after 均 0，所有参数为 cuda:0，参数指纹前后相同且与 PT 指纹一致，梯度为 None、model.training=false、training_updates=0。
+
+同 ID/标签顺序逐样本对齐后，预测一致率为 0.99906191369606（1065/1066）；accuracy 绝对差 0.0009380863，macro-F1 绝对差 0.0009657527，CE 绝对差 0.0000516965。预先登记阈值（accuracy 各自≥0.70、accuracy 差≤0.02、CE 差≤0.03、prediction agreement≥0.99）全部通过。逐样本比较 JSON SHA256 2b50f8392c053ab2fd089430a603f4052ff01c2ea6ac50d67c0f1029edbbff0d；logit absolute error mean/p95/p99/max 为 0.0031125 / 0.0100351 / 0.0168902 / 0.0433816。logit 逐元素差异保留为数值边界，不推翻本次任务指标和预设阈值通过。
+
+### R3–R6 保留的中间结果
+
+这些启动均绑定同一数据、checkpoint 和当前主树，所有日志与失败产物继续保留，各目录 evidence-core.sha256 已校验：
+
+- R3：Jittor 初始化因 jit_utils 重建而以 exit 3 退出，尚未加载模型。
+- R4：新 JITTOR_HOME 的绝对路径改变编译键；第一次启动 exit 3，按原命令重启后 300 秒 exit 124，核心编译到 139/228。
+- R5：基于该缓存完成 228/228 核心和 CUDA op 编译；Torch shim 试图构建无关的 /home/cgq/Motion324/setup.py，因缺少 omegaconf 以 exit 1 退出，未开始模型评估。
+- R6：使用受支持的 JITTOR_TORCH_SKIP_EXT_BUILD=1 后进入 GPU1 模型评估，300 秒 exit 124、没有 result JSON；GPU1 峰值观察约 729 MiB。
+- R7：使用相同 R4 绝对 JITTOR_HOME 的已热缓存并跳过无关扩展构建，增加只读进度打印，完成整套推理和对照。
+
+上述耗时是启动/诊断过程，不作为正式性能或显存结果；没有为成功标签而删除或覆盖中间失败。
+
+### 发布门状态
+
+本结果只证明这个源码 HEAD、checkpoint、数据分割和配置下的 Jittor/PT 分类推理指标相近；不证明其他任务、生成质量、训练行为、通用 API 覆盖，也不替代 R14 独立源码 snapshot 训练证据。93.057 秒不纳入任何 latency/throughput 结论；没有记录 allocator/NVML 峰值或 near-capacity/OOM 恢复。
+
+GPU1 已回到 1 MiB/0%、无 compute app。GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 仍由外部 yqa PID 2279286 使用约 8640 MiB，compute mode Default/shared；本轮未使用 GPU2、未启动 holder/burner、未改 compute mode。普通 CUDA holder 不能阻止其他用户态进程使用共享卡。
+
+Day4–5 正式性能/显存协议仍需管理员/调度器提供 GPU UUID/GRES 与设备隔离租约，按匹配配置做至少三轮交替、每轮 PT/JT 各至少十个热态样本，报告 median/p95/离散度、load/首步/热态、allocator/NVML 峰值、near-capacity/OOM 恢复及已证明 activation recompute 的 checkpoint on/off 对照。仍开放：multi-rank Trainer 新进程 checkpoint/resume、clean-installed wheel CUDA smoke、ACL wheel build/migration 与设备证据、无长度截断的有效 held-out generation quality，以及完整 API/operator × device/dtype/layout/autograd/alias/storage/fallback 支持矩阵。整体 release 继续 **Not complete**。
+
+---
+
 ## 2026-11-01 11:06 +0800 官方 Rotten Tomatoes test split：PT 基线通过，Jittor 初始化编译超时
 
 ### 身份与数据绑定
