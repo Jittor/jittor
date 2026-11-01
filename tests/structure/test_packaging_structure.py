@@ -88,6 +88,35 @@ class TestPackagingStructure(unittest.TestCase):
             "jittor.compat.shim.deploy:main",
         )
 
+    def test_companion_versions_track_the_core_release(self):
+        try:
+            import tomllib
+        except ImportError:
+            try:
+                import tomli as tomllib
+            except ImportError:
+                from setuptools._vendor import tomli as tomllib
+        from packaging.requirements import Requirement
+        from packaging.utils import canonicalize_name
+
+        tree = ast.parse((self.python_root / "jittor/__init__.py").read_text())
+        versions = [ast.literal_eval(node.value) for node in tree.body
+                    if isinstance(node, ast.Assign)
+                    and any(isinstance(target, ast.Name) and target.id == "__version__"
+                            for target in node.targets)]
+        self.assertEqual(len(versions), 1, "core version must remain a single literal")
+        core_version = versions[0]
+        with (self.repo_root / "compat/pyproject.toml").open("rb") as stream:
+            frontend = tomllib.load(stream)["project"]
+        with (self.repo_root / "adapters/pyproject.toml").open("rb") as stream:
+            adapters = tomllib.load(stream)["project"]
+        self.assertEqual(frontend["version"], core_version)
+        for project, name in ((frontend, "jittor"), (adapters, "jittor-torch")):
+            with self.subTest(project=project["name"]):
+                dependencies = [Requirement(value) for value in project["dependencies"]]
+                matched = [item for item in dependencies if canonicalize_name(item.name) == name]
+                self.assertEqual(matched, [Requirement(name + "==" + core_version)])
+
     def test_manifest_covers_runtime_trees_without_cache_payloads(self):
         from importlib.util import module_from_spec, spec_from_file_location
 
