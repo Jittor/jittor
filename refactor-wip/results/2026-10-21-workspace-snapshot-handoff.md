@@ -1,3 +1,9 @@
+## 2026-11-02 06:35 +0800 Handoff：current-main 双 rank DCP 与 CPU MPI dtype/故障传播通过；GPU2 独占仍受阻
+
+在 /home/cgq/jittor 现有工作树（HEAD 6541592cb66b846c450fcfe904981a64b560ad23）完成 DCP 阶段错误同步和 CPU MPI all-gather 回退。attempt-11 双 rank save/load/preflight 与 float32、bfloat16 all-gather dtype/值通过；attempt-13/14 的 rank-local write/read 故障均让两边一致退出，load 目标状态未被改动。attempt-12 focused CPU pytest 17 passed、0 skipped。源码 hash 与 attempt manifest 见 Day2–5 结果文档 06:35 条目；attempt-02/03/04/05/10 失败原件保留。
+
+GPU2 仍由外部 PID 3037196/3164740 各占 8,640 MiB，Default/shared；账号 sudo 需密码，X12DPG-OA6 为 DOWN。未启动普通 holder。已有 gpu2-exclusive-run.sh 需管理员权限和空卡，且应直接包裹实际测试命令。Day4–5 性能/显存、clean-installed runtime、held-out 质量及其他广发布门仍开放，overall Not complete。
+
 ## 2026-11-02 05:53 +0800 Handoff：captured GradScaler overflow/recovery CUDA 功能门通过
 
 在 /home/cgq/jittor HEAD e2d450535cad5f3dc9adc02fc11017d5dbf5edae 修复 captured fused AdamW overflow 后 Python step 错进，并在物理 GPU1 真 CUDA、fallback=0 完成 attempt-06：1 passed、0 skipped；参数、moment、step、scaler state 与 eager 相符，状态读取后再次 capture 更新也通过。六个 attempt 原件均保留；最终 output-manifest SHA256 44d1764a57d57805076906d0160e95c29f41806fb3ac83fdf4bdd0c38cc1da16，receipt SHA256 7d503db6fb971c91bc3250b993999e609c4c2b8d69528b0391513234bd490ac3。完整路径见 Day2–5 结果文档。

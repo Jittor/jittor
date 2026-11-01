@@ -1,3 +1,9 @@
+## 2026-11-02 06:35 +0800 DCP 双 rank 与 CPU MPI dtype/故障传播验证通过；GPU2 性能独占仍阻塞
+
+current-main HEAD 6541592cb66b846c450fcfe904981a64b560ad23。最终绑定源码的 attempt-11 通过双 rank CPU MPI save/load、preflight 故障同步及 float32/bfloat16 all-gather dtype/值断言；attempt-13/14 分别通过 rank-local 写入/读取错误传播，CPU focused pytest 17 passed、0 skipped。attempt-10 暴露 MPI 不支持 bfloat16 后已修复为 float32 通信并 cast 回原 dtype；失败原件保留。详细 hashes/产物见 Day2–5 结果文档。
+
+GPU2 当前 Default/shared，外部 PID 3037196/3164740 各占 8,640 MiB；sudo 需密码且 Slurm 节点 DOWN。没有启动普通 holder 或干预其他任务。已有 gpu2-exclusive-run.sh 需要管理员权限和空卡，并包裹实际 benchmark 命令。CPU MPI 正确性证据不替代 Day4–5 性能/显存验收；整体仍 Not complete。
+
 ## 2026-11-02 05:53 +0800 current-main captured GradScaler 溢出/恢复 CUDA 功能门通过；GPU2 独占仍不可用
 
 在 /home/cgq/jittor HEAD e2d450535cad5f3dc9adc02fc11017d5dbf5edae 上，修复 captured fused AdamW 在 GradScaler overflow 后 Python optimizer step 多前进一步的问题：optimizer state/state_dict 读取时结算 device skip count，capture guard 令后续状态读取触发重建；多参数组仍走 host 决策。attempt-06 在物理 GPU1（UUID GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068，进程内 cuda:0）完成 CUDA 回归，1 passed、0 skipped、1.80s、fallback=0；参数、矩状态、step、scaler state 与 eager 对照一致，状态读取后再次 capture 更新也通过。GPU1 有共享 VLLM 进程，结果只作功能证据。六个 attempt 原件均保留；最终 output manifest SHA256 44d1764a57d57805076906d0160e95c29f41806fb3ac83fdf4bdd0c38cc1da16，receipt SHA256 7d503db6fb971c91bc3250b993999e609c4c2b8d69528b0391513234bd490ac3，细节见 Day2–5 结果文档。

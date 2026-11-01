@@ -1,3 +1,25 @@
+## 2026-11-02 06:35 +0800 current-main DCP 双 rank、dtype 保真及 rank-local 故障传播通过；Day4–5 仍开放
+
+### 源码身份与实现
+
+继续使用 /home/cgq/jittor 现有工作树。运行前后 HEAD 6541592cb66b846c450fcfe904981a64b560ad23，分支 integrate/cgq-transformers-native-multicard-target，上游 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead 204 / behind 0；运行前后工作区状态 SHA256 e435c98f92df9826fd605019c582775f6aa3cbc064715aa0cb434efb6e477f2e。任务文件 SHA256：compat/collectives.py 8efa8a0bcf29fdfb26780bab38e37bd2c9cdceff25b0b448a2729950720f46cc；compat/torch/installers/distributed.py aef766fa290a29448e27df02481d4e60fd5366b21b5f3c6572b993e57dcfecd8；compat/tests/torch/test_checkpoint_state_dict.py 3fe8e900ffcaf5397c5b746beadfc5c4938f2bef90d26687680cc2cf6ca651d。其他既有 dirty/untracked 文件未改动。
+
+_dcp_run_stage 在每个 rank 执行本地 action 后通过 _native_all_gather_object 汇总结果，使 save preflight、rank 文件写入、metadata 发布以及 load preflight、metadata/rank 文件读取、状态恢复中的 rank-local 异常由所有 rank 一致报错。CPU MPI 没有原生 mpi_all_gather Var op；新增 _mpi_cpu_all_gather_shards 以每个 source rank 一次 mpi_all_reduce 重建等长 shards，并用 Var.sync() 强制按相同顺序物化。Jittor CPU Var.location() 返回 none，因此 CPU 判断覆盖 cpu/none。MPI 不支持 bfloat16 collective，回退改用无损 float32 通信并 cast 回 bfloat16；此路径随 world size 增长，只作正确性回退，不作为性能路径。
+
+### 最终验证与产物
+
+attempt-11 复用已有 MPI CPU cache，prebuild/save/load/preflight 均 exit 0。world_size=2 保存生成两份 rank 文件；fresh-process load 恢复两边各自的权重、optimizer step、lr 和 rank。rank 1 preflight TypeError 使两边收到相同错误。另对 float32 和 bfloat16 做两 rank all-gather，值和输出 dtype 均通过。attempt-11 output-manifest 文件 SHA256 e1c39ec324321aa0b38df0c4eba29cc6dee05040f8ad4ffe60859a63b970086e。
+
+attempt-13 注入 rank 1 rank-file promotion OSError；两 rank 一致报 rank file write failed，metadata 未发布，manifest SHA256 125614d89c246939725a91fef63b01d3241f75bbc7d2f32a01ae2ca79ea9b417。attempt-14 从成功 checkpoint 独立副本 withholding rank 1 文件；两 rank 一致报 rank file read FileNotFoundError，目标状态未变，manifest SHA256 af350e17236b8e037d9e95524cfedbae05c30e996e5b94096590c84f3c1da8e9。attempt-12 focused CPU pytest 为 17 passed、0 skipped、2 warnings、2.99s，manifest SHA256 4f8c095aa8f6f78d4e085c7790395006537f11d1870e6382b4da6db20425848c。
+
+所有证据保存在 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-dcp-error-propagation-r1-prepared/。attempt-02/03 编译器配置失败、attempt-04 缺 CPU MPI all-gather、attempt-05 location=none 条件错误、attempt-10 MPI bfloat16 不支持均保留；后续各用独立目录修正并通过。git diff --check 对三份任务源码通过。以上只验证 CPU MPI，不外推为 NCCL/CUDA 结论，也不覆盖 all-gather 本身失效时的恢复。
+
+### GPU2 与发布状态
+
+06:30 +0800 GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 为 Default/shared，80 GiB 中已用 17,299 MiB、利用率 94%；外部 PID 3037196/3164740 各占 8,640 MiB。sudo -n 需密码，X12DPG-OA6 为 DOWN。未启动 holder、改 compute mode 或终止外部进程。已有 /data6/cgq/jittor-lab/tools/gpu2-exclusive-run.sh（SHA256 c68ac63cca92bb7204b786f984062fced7de7dd509363bbc77e55b445cb6d16b）需管理员权限及空卡，将真实测试命令置于 EXCLUSIVE_PROCESS 窗口；普通 holder 不能拦截其他 CUDA context，也不能与独立 benchmark worker 共存。
+
+Day4–5 正式性能/显存仍需同一候选、匹配配置下至少三轮 PT/JT 交替，每轮每侧至少十个热态样本，并报告 median/p95/离散度、load/first/hot、allocator/workspace/NVML 峰值和容量/OOM。更广 Day2–5 还需 clean-installed wheel/runtime/support matrix、held-out 生成质量和端到端恢复覆盖。整体 release 继续 Not complete。
+
 ## 2026-11-02 05:53 +0800 current-main captured GradScaler overflow/recovery CUDA 功能门通过；Day4–5 和更广发布门仍开放
 
 ### 功能修复与证据身份

@@ -20,6 +20,8 @@ from contextlib import contextmanager
 
 import jittor as jt
 
+from .._core.dtypes import dtype_name as _dtype_name
+
 from .diagnostics import EXPECTED, swallowed
 
 __all__ = ["_world_size", "_rank", "_in_true_distributed", "_nccl_ops",
@@ -94,6 +96,45 @@ def _slice_flat(flat, start, length):
     return flat[start:start + length]
 
 
+def _mpi_cpu_all_gather_shards(local_shard):
+    """Gather equal-shaped CPU shards over MPI when no native all-gather exists.
+
+    MPI all-reduce is available in Jittor CPU builds, while the matching
+    mpi_all_gather Var op is not. A source-at-a-time sum gives every rank the
+    same shard sequence. Materialize each collective before issuing the next
+    one so the ranks cannot flush their lazy graphs in different orders.
+    """
+    compile_extern = getattr(jt, "compile_extern", None)
+    if not bool(getattr(compile_extern, "in_mpi", False)):
+        return None
+    location = getattr(local_shard, "location", None)
+    if not callable(location) or location() not in ("cpu", "none"):
+        return None
+    reducer = getattr(local_shard, "mpi_all_reduce", None)
+    if not callable(reducer):
+        return None
+
+    rank = _rank()
+    size = _world_size()
+    dtype_name = _dtype_name(local_shard.dtype)
+    flat = local_shard.reshape((-1,))
+    # Jittor's MPI wrapper has no bfloat16 datatype. Since a gather has only
+    # one nonzero contributor per output shard, widening to float32 is exact;
+    # cast the gathered shard back before returning it.
+    if dtype_name == "bfloat16":
+        flat = flat.float32()
+    zero = jt.zeros_like(flat)
+    gathered = []
+    for source_rank in range(size):
+        contribution = flat if rank == source_rank else zero
+        part = contribution.mpi_all_reduce("add")
+        part.sync()
+        if dtype_name == "bfloat16":
+            part = part.bfloat16()
+        gathered.append(part)
+    return jt.concat(gathered, dim=0)
+
+
 def _all_gather_shards(local_shard):
     # On one rank the gather is the local shard itself. Say so before reaching
     # for a collective: ``fully_shard`` on a single process is a supported
@@ -106,7 +147,12 @@ def _all_gather_shards(local_shard):
         return ops.nccl_all_gather(local_shard)
     if callable(getattr(local_shard, "mpi_all_gather", None)):
         return local_shard.mpi_all_gather()
-    raise RuntimeError("Jittor NCCL all_gather is not available; launch with jittor.distributed.launch and use_nccl=1")
+    mpi_result = _mpi_cpu_all_gather_shards(local_shard)
+    if mpi_result is not None:
+        return mpi_result
+    raise RuntimeError(
+        "Jittor all_gather requires NCCL, HCCL, or the CPU MPI fallback; "
+        "launch with a matching distributed backend")
 
 
 def _reduce_scatter_padded(full_grad):

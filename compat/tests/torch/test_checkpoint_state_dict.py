@@ -216,6 +216,160 @@ def test_default_dcp_planners_roundtrip_rank_local_tensor_state(tmp_path):
     assert (checkpoint / "generations" / metadata["generation"] / "rank-00000.pt").is_file()
 
 
+@pytest.mark.skipif(not hasattr(torch, "_torch_compat_install_context"), reason="Jittor DCP compatibility")
+def test_dcp_stage_propagates_remote_rank_failure(monkeypatch):
+    from jittor.compat.torch.installers import distributed as owner
+
+    monkeypatch.setattr(owner, "_distributed_rank", lambda: 0)
+    monkeypatch.setattr(owner, "_distributed_world_size", lambda: 2)
+    gathered = []
+
+    def gather(output, local_status, group=None):
+        gathered.append(local_status)
+        output[:] = [
+            local_status,
+            {
+                "rank": 1,
+                "ok": False,
+                "error_type": "builtins.OSError",
+                "error": "rank-local file write failed",
+            },
+        ]
+
+    monkeypatch.setattr(owner, "_native_all_gather_object", gather)
+    with pytest.raises(RuntimeError) as caught:
+        owner._dcp_run_stage(True, "rank file write", lambda: "local success")
+
+    assert gathered == [{
+        "rank": 0, "ok": True, "error_type": None, "error": None,
+    }]
+    assert str(caught.value) == (
+        "distributed DCP rank file write failed; rank 1: "
+        "builtins.OSError: rank-local file write failed"
+    )
+
+
+@pytest.mark.skipif(not hasattr(torch, "_torch_compat_install_context"), reason="Jittor DCP compatibility")
+def test_dcp_stage_reports_local_failure_to_all_ranks(monkeypatch):
+    from jittor.compat.torch.installers import distributed as owner
+
+    monkeypatch.setattr(owner, "_distributed_rank", lambda: 1)
+    monkeypatch.setattr(owner, "_distributed_world_size", lambda: 2)
+    gathered = []
+
+    def gather(output, local_status, group=None):
+        gathered.append(local_status)
+        output[:] = [{
+            "rank": 0, "ok": True, "error_type": None, "error": None,
+        }, local_status]
+
+    monkeypatch.setattr(owner, "_native_all_gather_object", gather)
+
+    def fail_write():
+        raise OSError("disk quota exceeded")
+
+    with pytest.raises(RuntimeError, match="rank 1: builtins.OSError: disk quota exceeded"):
+        owner._dcp_run_stage(True, "rank file write", fail_write)
+    assert gathered[0]["ok"] is False
+    assert gathered[0]["error_type"] == "builtins.OSError"
+    assert gathered[0]["error"] == "disk quota exceeded"
+
+
+@pytest.mark.skipif(not hasattr(torch, "_torch_compat_install_context"), reason="Jittor DCP compatibility")
+def test_distributed_dcp_save_propagates_rank_file_failure(tmp_path, monkeypatch):
+    from jittor.compat.torch.installers import distributed as owner
+
+    monkeypatch.setattr(owner, "_dcp_rank_info", lambda *args, **kwargs: (0, 2, True))
+    monkeypatch.setattr(owner, "_distributed_rank", lambda: 0)
+    monkeypatch.setattr(owner, "_distributed_world_size", lambda: 2)
+    gathered = []
+
+    def gather(output, local_status, group=None):
+        gathered.append(local_status)
+        remote = ({"rank": 1, "ok": True, "error_type": None, "error": None}
+                  if len(gathered) == 1 else
+                  {"rank": 1, "ok": False, "error_type": "builtins.OSError",
+                   "error": "rank 1 disk failure"})
+        output[:] = [local_status, remote]
+
+    monkeypatch.setattr(owner, "_native_all_gather_object", gather)
+    monkeypatch.setattr(
+        owner, "_broadcast_object_list",
+        lambda values, src=0, group=None, device=None: values.__setitem__(
+            0, "test-generation"),
+    )
+
+    class Writer:
+        @staticmethod
+        def save(state, filename):
+            with open(filename, "wb") as stream:
+                stream.write(b"rank-zero-state")
+
+    save = owner._make_dcp_save(Writer())
+    with pytest.raises(RuntimeError, match="rank 1: builtins.OSError: rank 1 disk failure"):
+        save({"step": 1}, checkpoint_id=tmp_path)
+
+    assert len(gathered) == 2
+    assert (tmp_path / "generations" / "test-generation" /
+            "rank-00000.pt").is_file()
+    assert not (tmp_path / "metadata.json").exists()
+
+
+@pytest.mark.skipif(not hasattr(torch, "_torch_compat_install_context"), reason="Jittor DCP compatibility")
+def test_distributed_dcp_load_propagates_rank_file_read_failure(tmp_path, monkeypatch):
+    import json
+    from jittor.compat.torch.installers import distributed as owner
+
+    generation = "test-generation"
+    generation_root = tmp_path / "generations" / generation
+    generation_root.mkdir(parents=True)
+    (tmp_path / "metadata.json").write_text(json.dumps({
+        "format": owner._DCP_FORMAT,
+        "world_size": 2,
+        "generation": generation,
+        "files": ["rank-00000.pt", "rank-00001.pt"],
+    }))
+    monkeypatch.setattr(owner, "_dcp_rank_info", lambda *args, **kwargs: (0, 2, True))
+    monkeypatch.setattr(owner, "_distributed_rank", lambda: 0)
+    monkeypatch.setattr(owner, "_distributed_world_size", lambda: 2)
+    gathered = []
+
+    def gather(output, local_status, group=None):
+        gathered.append(local_status)
+        remote = ({"rank": 1, "ok": True, "error_type": None, "error": None}
+                  if len(gathered) == 1 else
+                  {"rank": 1, "ok": False,
+                   "error_type": "builtins.FileNotFoundError",
+                   "error": "rank 1 checkpoint shard missing"})
+        output[:] = [local_status, remote]
+
+    monkeypatch.setattr(owner, "_native_all_gather_object", gather)
+
+    class Reader:
+        @staticmethod
+        def load(filename, map_location=None):
+            return {"value": 9}
+
+    target = {"value": 0}
+    load = owner._make_dcp_load(Reader())
+    with pytest.raises(RuntimeError, match="rank 1 checkpoint shard missing"):
+        load(target, checkpoint_id=tmp_path)
+
+    assert len(gathered) == 2
+    assert target["value"] == 0
+
+
+@pytest.mark.skipif(not hasattr(torch, "_torch_compat_install_context"), reason="Jittor DCP compatibility")
+def test_dcp_single_rank_stage_preserves_local_exception():
+    from jittor.compat.torch.installers import distributed as owner
+
+    def fail_write():
+        raise OSError("single-rank disk failure")
+
+    with pytest.raises(OSError, match="single-rank disk failure"):
+        owner._dcp_run_stage(False, "rank file write", fail_write)
+
+
 @pytest.mark.skipif(not hasattr(torch, "_torch_compat_install_context"), reason="Jittor unsupported-boundary policy")
 def test_sharded_dcp_values_remain_explicitly_unsupported(tmp_path):
     import torch.distributed.checkpoint as dcp

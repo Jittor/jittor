@@ -869,44 +869,108 @@ def _dcp_write_json(path, value):
     os.replace(temporary, path)
 
 
+def _dcp_run_stage(distributed, stage, action):
+    """Run local checkpoint work and report failures before any rank advances.
+
+    A barrier after rank-local I/O is not sufficient: if one rank raises before
+    entering it, every peer waits forever. All ranks instead exchange a small
+    status record after each stage and raise the same error when any rank
+    failed.
+    """
+    if not distributed:
+        return action()
+
+    result = None
+    local_error = None
+    try:
+        result = action()
+    except Exception as error:
+        local_error = error
+        message = str(error)
+        error_type = "{}.{}".format(type(error).__module__,
+                                    type(error).__name__)
+    else:
+        message = None
+        error_type = None
+
+    local_status = {
+        "rank": int(_distributed_rank()),
+        "ok": local_error is None,
+        "error_type": error_type,
+        "error": message,
+    }
+    statuses = [None] * int(_distributed_world_size())
+    _native_all_gather_object(statuses, local_status)
+    failures = [
+        status for status in statuses
+        if not isinstance(status, Mapping) or not status.get("ok", False)
+    ]
+    if failures:
+        details = []
+        for status in failures:
+            if isinstance(status, Mapping):
+                details.append(
+                    "rank {}: {}: {}".format(
+                        status.get("rank", "?"),
+                        status.get("error_type", "checkpoint stage error"),
+                        status.get("error", "no error message"),
+                    )
+                )
+            else:
+                details.append("invalid rank status {!r}".format(status))
+        raise RuntimeError(
+            "distributed DCP {} failed; {}".format(stage, "; ".join(details))
+        )
+    if local_error is not None:
+        raise local_error
+    return result
+
+
 def _make_dcp_save(g):
     def save(state_dict, storage_writer=None, *args, checkpoint_id=None,
              planner=None, process_group=None, coordinator_rank=0, no_dist=False,
              **kwargs):
-        if args or kwargs:
-            unexpected = sorted(kwargs)
-            raise TypeError("unsupported DCP save arguments: %s" % unexpected)
-        _validate_dcp_planner(planner, DefaultSavePlanner, "save")
-        _validate_dcp_state(state_dict)
-        if not isinstance(state_dict, Mapping):
-            raise TypeError("DCP state_dict must be a mapping")
-        if int(coordinator_rank) != 0:
-            raise NotImplementedError("DCP coordinator_rank must be zero")
-        root = _dcp_path(checkpoint_id, storage_writer)
         rank, world_size, distributed = _dcp_rank_info(process_group, no_dist)
-        if distributed:
-            _barrier()
+
+        def preflight():
+            if args or kwargs:
+                unexpected = sorted(kwargs)
+                raise TypeError("unsupported DCP save arguments: %s" % unexpected)
+            _validate_dcp_planner(planner, DefaultSavePlanner, "save")
+            _validate_dcp_state(state_dict)
+            if not isinstance(state_dict, Mapping):
+                raise TypeError("DCP state_dict must be a mapping")
+            if int(coordinator_rank) != 0:
+                raise NotImplementedError("DCP coordinator_rank must be zero")
+            return _dcp_path(checkpoint_id, storage_writer)
+
+        root = _dcp_run_stage(distributed, "save preflight", preflight)
         generation = [uuid.uuid4().hex if rank == 0 else None]
         if distributed:
             _broadcast_object_list(generation, src=0)
         generation = str(generation[0])
         generation_root = os.path.join(root, "generations", generation)
-        os.makedirs(generation_root, exist_ok=True)
         filename = _dcp_rank_file(generation_root, rank)
         temporary = "%s.tmp.%d" % (filename, os.getpid())
-        g.save(state_dict, temporary)
-        os.replace(temporary, filename)
-        if distributed:
-            _barrier()
-        if rank == 0:
-            _dcp_write_json(os.path.join(root, _DCP_METADATA), {
-                "format": _DCP_FORMAT,
-                "world_size": world_size,
-                "generation": generation,
-                "files": ["rank-%05d.pt" % index for index in range(world_size)],
-            })
-        if distributed:
-            _barrier()
+
+        def write_rank_file():
+            os.makedirs(generation_root, exist_ok=True)
+            g.save(state_dict, temporary)
+            os.replace(temporary, filename)
+
+        _dcp_run_stage(distributed, "rank file write", write_rank_file)
+
+        def publish_metadata():
+            if rank == 0:
+                _dcp_write_json(os.path.join(root, _DCP_METADATA), {
+                    "format": _DCP_FORMAT,
+                    "world_size": world_size,
+                    "generation": generation,
+                    "files": ["rank-%05d.pt" % index
+                              for index in range(world_size)],
+                })
+
+        _dcp_run_stage(distributed, "metadata publish", publish_metadata)
         return None
 
     return save
@@ -951,39 +1015,49 @@ def _make_dcp_load(g):
     def load(state_dict, storage_reader=None, *args, checkpoint_id=None,
              planner=None, process_group=None, coordinator_rank=0, no_dist=False,
              **kwargs):
-        if args or kwargs:
-            unexpected = sorted(kwargs)
-            raise TypeError("unsupported DCP load arguments: %s" % unexpected)
-        _validate_dcp_planner(planner, DefaultLoadPlanner, "load")
-        if not isinstance(state_dict, dict):
-            raise TypeError("DCP load state_dict must be a mutable mapping")
-        if int(coordinator_rank) != 0:
-            raise NotImplementedError("DCP coordinator_rank must be zero")
-        root = _dcp_path(checkpoint_id, storage_reader)
         rank, world_size, distributed = _dcp_rank_info(process_group, no_dist)
-        if distributed:
-            _barrier()
-        with open(os.path.join(root, _DCP_METADATA), "r", encoding="utf-8") as stream:
-            metadata = json.load(stream)
-        if metadata.get("format") != _DCP_FORMAT:
-            raise ValueError("unsupported Jittor DCP checkpoint format")
-        if int(metadata.get("world_size", -1)) != world_size:
-            raise ValueError(
-                "DCP rank-local checkpoint world size %s does not match active world size %s"
-                % (metadata.get("world_size"), world_size))
-        expected_file = "rank-%05d.pt" % rank
-        if expected_file not in metadata.get("files", []):
-            raise ValueError("DCP checkpoint is missing the current rank file")
-        generation = metadata.get("generation")
-        if not isinstance(generation, str) or not generation:
-            raise ValueError("DCP checkpoint generation is missing")
-        generation_root = os.path.join(root, "generations", generation)
-        filename = _dcp_rank_file(generation_root, rank)
-        loaded = g.load(filename, map_location="cpu")
-        _validate_dcp_state(loaded)
-        _copy_dcp_state(state_dict, loaded)
-        if distributed:
-            _barrier()
+
+        def preflight():
+            if args or kwargs:
+                unexpected = sorted(kwargs)
+                raise TypeError("unsupported DCP load arguments: %s" % unexpected)
+            _validate_dcp_planner(planner, DefaultLoadPlanner, "load")
+            if not isinstance(state_dict, dict):
+                raise TypeError("DCP load state_dict must be a mutable mapping")
+            if int(coordinator_rank) != 0:
+                raise NotImplementedError("DCP coordinator_rank must be zero")
+            return _dcp_path(checkpoint_id, storage_reader)
+
+        root = _dcp_run_stage(distributed, "load preflight", preflight)
+
+        def read_rank_file():
+            with open(os.path.join(root, _DCP_METADATA), "r",
+                      encoding="utf-8") as stream:
+                metadata = json.load(stream)
+            if metadata.get("format") != _DCP_FORMAT:
+                raise ValueError("unsupported Jittor DCP checkpoint format")
+            if int(metadata.get("world_size", -1)) != world_size:
+                raise ValueError(
+                    "DCP rank-local checkpoint world size %s does not match active world size %s"
+                    % (metadata.get("world_size"), world_size))
+            expected_file = "rank-%05d.pt" % rank
+            if expected_file not in metadata.get("files", []):
+                raise ValueError("DCP checkpoint is missing the current rank file")
+            generation = metadata.get("generation")
+            if not isinstance(generation, str) or not generation:
+                raise ValueError("DCP checkpoint generation is missing")
+            generation_root = os.path.join(root, "generations", generation)
+            filename = _dcp_rank_file(generation_root, rank)
+            loaded = g.load(filename, map_location="cpu")
+            _validate_dcp_state(loaded)
+            return loaded
+
+        loaded = _dcp_run_stage(distributed, "rank file read", read_rank_file)
+
+        def copy_rank_state():
+            _copy_dcp_state(state_dict, loaded)
+
+        _dcp_run_stage(distributed, "state restore", copy_rank_state)
         return None
 
     return load
