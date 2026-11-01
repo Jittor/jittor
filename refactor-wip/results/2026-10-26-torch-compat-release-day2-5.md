@@ -1,3 +1,9 @@
+## 2026-11-02 02:42 +0800 R4 wheel 两个 ACL 删除项已映射 native 替代路径；runtime 仍未验证
+
+R4 删除的 sigmoid_op.py 与 transpose_op.py 在历史路径中被引用；当前主 wheel 删除这两个 Python 适配器，同时打包与 source snapshot 字节一致的 sigmoid/transpose native C++ runner 和 ACL core dispatch。现有 ACL 测试包含这两项 forward/grad，但由 capability gate 控制；当前没有 CANN/ccec，未执行测试。因此只完成静态迁移映射，不记 runtime 通过，也不批准 wheel baseline。证据：/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-wheel-removal-review-r1-prepared/acl-removal-review.md，SHA256 ecc4ab349913777a3a9b944495a69bba2477ec433c6871cdba30e393886c443c；manifest SHA256 e876996abcfd666afe19f2942bf281ee6721108fe151d0fefb0550afa6fc41d8。默认 wheel baseline 仍为 69 additions、302 changes（其中 1 个生成 WHEEL metadata 差异，301 项源码/包内容差异）、2 removals、0 approved。
+
+映射细节和精确文件 hash 见外部审阅文件。审阅只覆盖 R4 对 fixed default baseline 的两个 ACL Python 删除成员。旧文件在 baseline commit 中由 ACL Python facade 调用；R4 将 sigmoid、transpose 路径移到 core native ACL dispatch，并将 runner 源码包含进 wheel。测试定义存在不等于运行通过：测试在 capability 不可用时 skip，且本环境无 CANN/ccec。该静态替代路径也不代表从 302 changed 项中获准迁移；迁移门保持 open。
+
 ## 2026-11-02 02:37 +0800 R29 只读拆解 attention.output 范围；GPU2 仍共享
 
 R29 在训练态、梯度开启时同步测了 attention.output 整体，覆盖 dense、dropout、残差相加与 LayerNorm；median 为 JT/PT 0.497/0.236 ms，ratio 2.106。插桩同时包含同步 hook 开销，没有内部算子分解，不能据此认定某一算子是根因。R29 绑定较早的 HEAD 02be05fcaab344735272a8526485330602f32ec0 / source fingerprint 0382368b8754bf7a90e42382fd66b603ed2d3f323b5e8cda4820425871c7aa50；当前 HEAD d8e7e2b51e30283a45ddcb07caeae15b29d88f92 与其间有 17 个文件的提交差异，故 R29 仅用于选择当前候选的后续诊断点，不能充当当前包的性能通过证据。只读复核报告：/data6/cgq/jittor-lab/_state/release-day23/20261102-r29-inner-breakdown-readonly-r1-prepared/read-only-findings.md，SHA256 125957c305e9dc7f092bc165b2c12833b42764d4ee0d056f69777fe6853ae5ab；artifact-files.sha256 SHA256 aa31da74d85fee979a9cfda46ec04c5baec35f2df3e62b104121f493f080d72c。
