@@ -1,3 +1,7 @@
+## 2026-11-02 03:13 +0800 R4 step_capture 与 GradScaler overflow 组合未验收
+
+R4 wheel 已包含 step_capture 与 AMP GradScaler；测试分别覆盖 captured training 和普通 GradScaler overflow/backoff，但没找到 captured step 中注入 overflow、跳步并恢复的组合轨迹。源码有 found_inf / skipped-step 设备态处理，因此这是未覆盖路径，不是已证实失败。当前 core cache 不匹配、GPU2 共享，未运行测试；下一项需比较 overflow skip 与下一有限步的参数、optimizer/scheduler/scaler 状态。整体 Day2–5 仍开放。
+
 ## 2026-11-02 03:10 +0800 R4 graph_replay 已确认打入 wheel；CUDA runtime 尚无通过证据
 
 R4 默认 wheel 内 jittor/_runtime/graph_replay.py 字节与 source snapshot 相同；测试树含 correctness、结构化输出、alias warmup、workspace retention 和 torch.compile reduce-overhead 用例，其中 CUDA 路径仍需独占构建执行并确认不跳过。打包阶段只有安装布局/compileall 证据，没有 Jittor runtime 或 CUDA replay 结果；默认 wheel diff 仍是 69 additions、302 changes、2 removals、0 approved。GPU2 共享，暂不运行；Day2–5 不标 complete。

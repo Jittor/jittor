@@ -1,3 +1,12 @@
+## 2026-11-02 03:13 +0800 R4 step_capture / GradScaler 组合路径缺少直接验收
+
+只读核对 R4 包源码 HEAD 5a1b42223573b25ea01734ce616c63fc31dd016a、source manifest SHA256 ec7060f76b743926bfad54c6f94bddf19e1fccc12c972c20079c78c9f811c76e 与 main wheel SHA256 b87469fe5a6103d6f4fcea0e6292d663102ef5cd2be661439db2f81515cc3ef4。python/jittor/_runtime/step_capture.py 在 source snapshot、当前工作树和 wheel 内字节一致，SHA256 29ba0398a667aeb007b97f475092efd23df848249095b6f0137df4a4e1fa36ea；python/jittor/amp/grad_scaler.py 也进入 wheel，SHA256 7101e1e377621ed87e98caab131b0e78b9d17c6109b4284d35ce849a2180f5b2。
+
+tests/core/test_step_capture.py SHA256 a4ed285ff3d438403c407f0b60b903aeec74b54d31d1b2a5ea838e2bb58a5b98，覆盖 step 状态恰好更新一次、拒绝/re-capture、随机数与 dropout、显存缓冲区生命周期；CUDA 子类含 Philox、dropout 和 recording/memory case，但由 CUDA capability gate 控制。compat 的 test_torch_compile_replay.py 覆盖 torch.compile reduce-overhead 的训练 step；test_accelerate_amp.py 与 test_torch_amp_training_loop.py 分别覆盖普通 AMP/GradScaler 与 overflow/backoff。后两类覆盖没有组合起来：test_step_capture.py 本身不含 GradScaler/found_inf/overflow 用例；静态搜索也未发现 captured training 下的 GradScaler overflow skip/recovery 轨迹。
+
+这个交叉路径是实现明确支持的一部分：step_capture.live_fused_update 将 found_inf 放入设备端更新，并通过 _amp_skipped_steps 修正之后的 optimizer step；GradScaler.step 在 capture 活跃且 optimizer 支持设备 skip 时传递 _amp_found_inf，GradScaler.update 在设备态更新 scale/tracker。现有分开的 AMP 与 captured-step 用例不能证明 overflow 被跳过后参数、optimizer step、scheduler 与 scaler 都能在下一有限步恢复一致。本轮没有发现运行失败，所以记录为未覆盖风险，不判定产品缺陷。
+
+R4 package 流程没有运行 Jittor runtime/test，且当前没有匹配 core cache；GPU2 仍被外部任务共享，未启动用例。下一项功能验收应对固定训练轨迹注入一次 overflow，再运行有限恢复步，对 PT/JT 的 skip、参数、optimizer state/step、scheduler、GradScaler scale/tracker 与 loss 做绑定源码、device、fallback 的比较，并在 CUDA lane 确认未被 capability gate 跳过。Day4–5 时延/显存 cohort 仍另需独占 GPU；默认 wheel baseline 继续 69 additions、302 changes、2 removals、0 approved，整体 Day2–5 Not complete。
 ## 2026-11-02 03:10 +0800 R4 wheel graph_replay 成员与测试源映射完成；CUDA runtime 仍未执行
 
 只读映射默认 wheel baseline 的 graph replay 新增项。R4 包源码 HEAD 5a1b42223573b25ea01734ce616c63fc31dd016a、source manifest SHA256 ec7060f76b743926bfad54c6f94bddf19e1fccc12c972c20079c78c9f811c76e；main wheel SHA256 b87469fe5a6103d6f4fcea0e6292d663102ef5cd2be661439db2f81515cc3ef4。python/jittor/_runtime/graph_replay.py 在 R4 source snapshot、当前工作树和 wheel 解包成员的 SHA256 均为 c6d6e58bff56924b55312fcd466672ef02b30447902b309e94843f093d23af3c，确认该新增 runtime 文件确实进入 wheel。

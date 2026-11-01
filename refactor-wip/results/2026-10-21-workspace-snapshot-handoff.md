@@ -1,3 +1,9 @@
+## 2026-11-02 03:13 下一步：验收 captured training 的 GradScaler overflow 恢复
+
+R4 step_capture 与 GradScaler 文件均已确认打入 main wheel，与 source snapshot 的字节哈希一致。core 测试覆盖 capture 的状态/RNG/dropout/memory；兼容测试分别覆盖 torch.compile 训练和普通 AMP/overflow，但没有直接覆盖 captured step 的 GradScaler overflow skip/recovery。详细 source/test 身份与静态路径见 Day2–5 结果文档 03:13 条目。
+
+下一次应绑定同一训练配置注入一次 overflow，验证 capture 下参数/optimizer step/scheduler 不推进，GradScaler 按预期 backoff，随后有限步可恢复并更新；CUDA 运行需确认未 skip、fallback 为零。当前 R4 测试没有 runtime 结果，且 GPU2 共享、current core cache 缺失；不在此状态运行。Day4–5 和整体 Day2–5 继续开放。
+
 ## 2026-11-02 03:10 +0800 下一步：R4 graph_replay 需独占 CUDA runtime 验收
 
 已确认 R4 wheel 实际包含与 source snapshot 字节一致的 graph_replay runtime 文件，并映射了 core、multi-output、alias warmup、retention 与 torch.compile reduce-overhead 的测试入口。R4 包构建没有运行这些测试或 GPU workload，compileall 只证明语法编译；不记 runtime 通过。source/wheel/hash 和测试范围见 Day2–5 结果文档 03:10 条目。
