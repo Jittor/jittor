@@ -1,3 +1,14 @@
+## 2026-11-01 22:09 +0800 allocation 归因尝试在启动阶段失败；GPU2 独占前置条件仍缺失
+
+本轮继续使用 /home/cgq/jittor，未重新 clone。编辑前 HEAD 41724940be5c8e817473aeb1e10c365640e471d8，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 173/0。源码 fingerprint 为 745e531bcad4ed84b96b8224f3265b96220d4d36875e6f3e558b32decf3e6c37；102 项 porcelain 和 105 项 -uall 的既有状态哈希分别为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211、8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98，索引为空。运行前后源码与既有工作区状态相同。
+
+证据包位于 /data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-checkpoint-memory-attribution-r1-prepared/。attempt-01 在 jit_utils 自动重建后要求重启；attempt-02 的隔离 cache/build stamp 路径不匹配，被 JITTOR_NO_BUILD 在模型前拒绝；attempt-03 绑定 current-main DDP prebuild core，core SHA256 c318255df35a5bfe07957f36c7fe9b7108b2f772df07cdeff5343f0bf35f3a03，在隔离 cache 中迁移 build stamp 路径后仍重建 jit_utils。attempt-03 于 22:04:35 启动、22:04:44 退出，exit 3，未进入模型或 CUDA 工作，off 模式未运行。worker.log SHA256 95dba366a59a06f3bd2d69034d6b16c54cc5470cf280da2adb1c98c9e908c160，exit-code 文件 SHA256 1121cfccd5913f0a63fec40a6ffd44ea64f9dc135c66634ba001d10bcf4302a2。
+
+attempt-03 的 source fingerprint 前后均为 745e531bcad4ed84b96b8224f3265b96220d4d36875e6f3e558b32decf3e6c37；HEAD 41724940be5c8e817473aeb1e10c365640e471d8，2823 项文件、105 项状态。关键 profiler/allocator 源文件清单前后相同（SHA256 ebb84ad3555f9bf9a0d1b1a753a680b9d07462af5e0bcf7ee4dc9729f47aa2d1），core 前后相同（SHA256 e09fc40a0a4d45e522e3ca05a8d6331990ea179dffc15274e519b2c52c0dfaf6）。改动仅在本次隔离 artifact cache 内。无 worker 残留；所有失败原件保留且不复跑。
+
+GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 仍为 Default/shared；22:05 +0800 外部 yqa PID 4166405 使用 8,640 MiB，GPU 利用率约 77–79%。账户 cgq 为普通用户，Slurm 显示 A800 节点 X12DPG-OA6 为 DOWN，当前无 cgq 作业。未启动 holder，因为用户态 CUDA 进程不能阻止其它账户创建 context；没有干预现有任务。需要管理员协调 PID 所属任务完成、恢复节点，并提供 UUID/GRES 独占与 device-cgroup 约束。
+
+r3 单轮 JT 诊断已证明 activation checkpoint 存在重计算，但 on 的 allocator 峰值高于 off；本轮 attribution 未补充显存归因证据。正式 Day4–5 仍需独占资源下匹配配置至少三轮交替、每轮每侧至少十个热样本，并报告 median/p95/离散度、load/首步/热态时间、allocator/NVML 峰值与容量/OOM 边界。更广 Day2–5 门继续开放，整体 release **Not complete**。
 ## 2026-11-01 21:48 +0800 activation-checkpoint 诊断审计：真实重计算已证实，此配置未显示显存节省
 
 本轮只审阅已完成的 r3 CUDA 诊断，不重复训练或测试。工作区 HEAD `550d6965aaf5b1df9f2006ebfddc157b90460f3c`，`origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `172/0`；编辑前 102 项既有 dirty 状态 SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`、含全部 untracked 的 105 项 SHA256 `8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98`，索引为空。GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 仍是共享 Default，外部 yqa PID `4166405` 使用约 8.6 GiB；当前无 Slurm 作业。根盘约 54 GiB 可用，新增证据应放 `/data6`。

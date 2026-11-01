@@ -1,3 +1,12 @@
+## 2026-11-01 22:09 +0800 接续：GPU2 外部占用无法由普通 holder 排除；显存归因 attempt-03 未启动到模型
+
+当前工作区 /home/cgq/jittor，HEAD 41724940be5c8e817473aeb1e10c365640e471d8，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（ahead/behind 173/0）。既有 dirty/untracked 哈希保持 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211 / 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98；本轮只更新三份状态文档，没有改其它既有文件。
+
+allocation attribution attempt-03 在 isolated JittorHome 中重建 jit_utils 后 exit 3，模型更新和 profiler trace 未开始，off 对照未运行；attempt-01/02/03 原件保存在 /data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-checkpoint-memory-attribution-r1-prepared/，不覆盖或仅为状态标签重跑。GPU1 无残留 worker。此前 r3 证据只支持 synthetic Llama 配置触发真实重计算，不能支持该配置节省显存。
+
+GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 为 Default/shared，外部 yqa PID 4166405 使用 8,640 MiB、utilization 约 77–79%。cgq 是普通账号，A800 节点 X12DPG-OA6 在 Slurm 显示 DOWN，当前无作业。未启动 holder；普通用户态进程无法保证阻止其它 CUDA client，不能承诺该卡全程独占。下一步需要管理员协调现有任务并提供 GPU UUID/GRES 独占和 device-cgroup 隔离，再开始 Day4–5 正式验收。
+
+Day4–5 窗口到位后，绑定源码和匹配配置至少完成三轮交替，每轮 JT/PT 每侧至少十个热态样本；记录 load、首步、热态耗时的 median/p95/离散度、allocator/NVML 峰值、capacity/OOM 恢复及真实 activation recompute 显存差异。其余 Day2–5 门（DDP/FSDP2 训练与新进程恢复、held-out generation quality、ACL build/migration 与支持矩阵）继续开放；整体 release 不标 complete。
 ## 2026-11-01 21:48 +0800 activation-checkpoint 诊断审计：真实重计算已证实，此配置未显示显存节省
 
 本轮只审阅已完成的 r3 CUDA 诊断，不重复训练或测试。工作区 HEAD `550d6965aaf5b1df9f2006ebfddc157b90460f3c`，`origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `172/0`；编辑前 102 项既有 dirty 状态 SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`、含全部 untracked 的 105 项 SHA256 `8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98`，索引为空。GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 仍是共享 Default，外部 yqa PID `4166405` 使用约 8.6 GiB；当前无 Slurm 作业。根盘约 54 GiB 可用，新增证据应放 `/data6`。

@@ -1,3 +1,12 @@
+## 2026-11-01 22:09 +0800 allocation 归因启动复核失败；GPU2 暂无系统级独占
+
+继续使用 /home/cgq/jittor，HEAD 41724940be5c8e817473aeb1e10c365640e471d8，分支 integrate/cgq-transformers-native-multicard-target，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 173/0。运行前源码 fingerprint 为 745e531bcad4ed84b96b8224f3265b96220d4d36875e6f3e558b32decf3e6c37；porcelain 与 -uall 状态哈希仍为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211 / 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98，索引为空。
+
+allocation attribution 包 /data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-checkpoint-memory-attribution-r1-prepared/ 中，attempt-01/02/03 均未进入模型。attempt-03 使用匹配的 current-main core（SHA256 c318255df35a5bfe07957f36c7fe9b7108b2f772df07cdeff5343f0bf35f3a03）并隔离 cache、迁移 build stamp 路径后，仍在导入期重建 jit_utils 并 exit 3；worker.log SHA256 95dba366a59a06f3bd2d69034d6b16c54cc5470cf280da2adb1c98c9e908c160。没有 profiler trace，off 对照未运行；源码、关键 profiler/allocator 文件和工作区既有状态前后未变。所有 attempt 原件保留，不覆盖或简单重跑。
+
+GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 在 22:05 +0800 仍为 Default/shared，外部 yqa PID 4166405 使用 8,640 MiB、利用率约 77–79%。cgq 是普通账号；Slurm 的 A800 节点 X12DPG-OA6 为 DOWN，当前无 cgq 作业。未创建 holder、未终止外部进程或修改设备模式。用户态 holder 不能拒绝其它账号创建 CUDA context；需管理员协调现有占用并提供 GPU UUID/GRES 独占预约与 device-cgroup 隔离，才能满足正式 Day4–5 排他条件。
+
+r3 已证明指定配置存在 activation recompute，但单轮 JT 诊断没有显示显存节省，也不是正式性能/显存验收。正式门仍需匹配配置至少三轮交替、每轮每侧至少十个热态样本，报告 median/p95/离散度、加载/首步/热态耗时、allocator/NVML 峰值及容量/OOM 边界。更广 Day2–5 门仍开放，整体 release 保持 **Not complete**。
 ## 2026-11-01 21:48 +0800 activation-checkpoint 诊断审计：真实重计算已证实，此配置未显示显存节省
 
 本轮只审阅已完成的 r3 CUDA 诊断，不重复训练或测试。工作区 HEAD `550d6965aaf5b1df9f2006ebfddc157b90460f3c`，`origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `172/0`；编辑前 102 项既有 dirty 状态 SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`、含全部 untracked 的 105 项 SHA256 `8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98`，索引为空。GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 仍是共享 Default，外部 yqa PID `4166405` 使用约 8.6 GiB；当前无 Slurm 作业。根盘约 54 GiB 可用，新增证据应放 `/data6`。
