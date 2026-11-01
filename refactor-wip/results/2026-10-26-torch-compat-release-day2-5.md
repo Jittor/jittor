@@ -1,3 +1,28 @@
+## 2026-11-01 19:49 +0800 DCP 有限范围实现已落地；FSDP2 checkpoint 验证超时，Day4–5 仍需 GPU2 独占
+
+### 工作区与代码身份
+
+继续在 /home/cgq/jittor 现有工作区工作，没有重新 clone。HEAD 701f8cc1dbbd32715f1fe7c5d77304d1146b555f，branch integrate/cgq-transformers-native-multicard-target，远端 refs/heads/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 165/0。current-source fingerprint 为 494313a405daba9fb4541a71a0623aa837b8bfe7b9f71700ed30d078d1c8c414。attempt-07 前后工作区 porcelain SHA256 均为 ff0ac0262fb023a09a34cc092696afef43a5b87fed7668678a16ce5be582d683；其他 dirty/untracked 均保留，没有 stash/reset/clean。
+
+### DCP 支持范围和证据
+
+compat/torch/installers/distributed.py 提供 default planner、filesystem reader/writer、DCP save/load，以及 get/set state-dict 和 optimizer state-dict API。声明的范围为固定 world size、共享文件系统、rank-local portable snapshot；custom planner、跨 world-size reshard、DTensor/ShardedTensor 尚不支持。portable-pickle optimizer 文件也不能据此声称可由 stock PyTorch torch.load 互操作。
+
+CPU focused suite 在较早源码 fingerprint b440b4bec82fd0b7939b4f34018e77d1ff9335694ea59be928d365928a0590e0 上 **12 passed、0 failed**，覆盖 DCP roundtrip/path-required 与 sharded-state 政策；日志位于 /data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-dcp-rank-local-r1-prepared/validation/cpu-focused-attempt-08/pytest.log。该次运行早于最后的 NCCL CPU optimizer scalar broadcast patch，不能替代 current-source 双 rank save/load/resume 证据。
+
+### FSDP2 current-source checkpoint attempt-07
+
+单次有界 correctness attempt 使用 GPU1/GPU4，明确排除 GPU2。单卡 CUDA/NCCL warmup 通过；双 rank launcher 收集 1 个目标用例后，rank0/rank1 日志停在 collected item，900 秒 job deadline 后 exit 124。等待期间两个 rank 各约 100% CPU、各自 GPU 约 640 MiB，没有阶段标记、参数更新或 checkpoint 输出。脚本未设置 JITTOR_ACCELERATE_INTEGRATION_PROGRESS=1，因此无法从现有日志确定内部停滞位置。记录是无结论 timeout，不可记为 pass 或功能 failure；不原样重跑。原件在 /data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-fsdp2-nccl-r1-prepared/evidence/attempt-07/ 与 experiment-attempt07/。source-before/source-after fingerprint 与 HEAD 一致，测试进程已退出，cache .so 前后清单无差异，status hash 未变。
+
+### GPU2 与 Day4–5
+
+postflight GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 为 Default/shared，外部 yqa PID 4166405 使用约 8,640 MiB、GPU 利用率约 78%。普通 CUDA holder 不能阻止其他 client；本轮没有启动 holder、切换设备模式或干预 PID。要保证测试期间没有其他程序进入 GPU2，需管理员/调度器提供按 GPU UUID/GRES 的独占租约和 device-cgroup 隔离。
+
+Day4–5 尚未开始正式验收。取得系统级租约后，使用匹配 PT/JT 配置完成至少三轮交替、每轮每侧至少十个热样本，报告 median/p95/离散度、加载/首步/热态时延、allocator/NVML 峰值、容量/OOM 恢复，并量化 activation recompute 是否真正降低峰值显存。共享负载测量和功能正确性检查均不能替代此门。
+
+### 仍开放的 Day2–5 发布门
+
+FSDP2 DCP current-source 双 rank save/load/resume、DDP 训练与 fresh-process resume、clean-installed wheel CUDA、ACL build/migration、预先定义阈值的 held-out generation quality、更广 Torch/Transformers/Accelerate/PEFT 支持矩阵，以及 Day4–5 正式性能/显存仍未关闭。整体 release 保持 **Not complete**。
 ## 2026-11-01 18:53 +0800 DDP broadcast placement 源码修复已过真实 NCCL 初始化同步；训练与 GPU2 独占仍未通过
 
 ### 工作区与源码身份

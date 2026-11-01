@@ -1290,22 +1290,17 @@ class TestDistributedStubs(StubPolicyBase):
         import sys
         return sys.modules["torch.distributed"]
 
-    def test_dcp_save_is_refused(self):
+    def test_dcp_save_requires_storage_destination(self):
         import sys
         dcp = sys.modules["torch.distributed.checkpoint"]
-        self.assertRefuses(lambda: dcp.save({"w": jt.ones(2)}),
-                           "checkpoint.save", "discarding the checkpoint")
+        with self.assertRaisesRegex(ValueError, "checkpoint_id or a filesystem"):
+            dcp.save({"w": jt.ones(2)})
 
-    def test_dcp_load_is_refused(self):
+    def test_dcp_load_requires_checkpoint_source(self):
         import sys
         dcp = sys.modules["torch.distributed.checkpoint"]
-        self.assertRefuses(lambda: dcp.load({"w": jt.ones(2)}),
-                           "checkpoint.load")
-
-    def test_dcp_save_stub_fallback(self):
-        import sys
-        dcp = sys.modules["torch.distributed.checkpoint"]
-        self.assertStubFallback(lambda: dcp.save({"w": jt.ones(2)}))
+        with self.assertRaisesRegex(ValueError, "checkpoint_id or a filesystem"):
+            dcp.load({"w": jt.ones(2)})
 
     def test_single_rank_store_still_works(self):
         # One rank has nobody to meet, so a per-process dict IS a correct store.

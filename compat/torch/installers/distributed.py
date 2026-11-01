@@ -6,9 +6,12 @@ changing the compatibility semantics.
 
 import atexit
 import glob
+import json
 import os
 import warnings
 import pickle
+import uuid
+from collections.abc import Mapping
 
 import numpy as np
 
@@ -681,6 +684,9 @@ class Join:
         self.enable = enable
         self.throw_on_early_termination = throw_on_early_termination
     def __enter__(self):
+        if self.enable and int(_distributed_world_size()) > 1:
+            raise NotImplementedError(
+                "Join in a multi-rank process group requires notify/shadow-collective handling")
         return self
     def __exit__(self, exc_type, exc, tb):
         return False
@@ -763,6 +769,226 @@ class FileSystemWriter:
         self.path = path
 
 
+class DefaultSavePlanner:
+    """Planner marker for the supported same-world-size DCP snapshot path."""
+
+    def __init__(self, flatten_state_dict=True, flatten_sharded_tensors=True,
+                 dedup_replicated_tensors=True, storage_meta=None):
+        self.flatten_state_dict = bool(flatten_state_dict)
+        self.flatten_sharded_tensors = bool(flatten_sharded_tensors)
+        self.dedup_replicated_tensors = bool(dedup_replicated_tensors)
+        self.storage_meta = storage_meta
+
+
+class DefaultLoadPlanner:
+    """Planner marker for the supported same-world-size DCP snapshot path."""
+
+    def __init__(self, flatten_state_dict=True, flatten_sharded_tensors=True,
+                 allow_partial_load=False, dedup_replicated_tensors=True):
+        self.flatten_state_dict = bool(flatten_state_dict)
+        self.flatten_sharded_tensors = bool(flatten_sharded_tensors)
+        self.allow_partial_load = bool(allow_partial_load)
+        self.dedup_replicated_tensors = bool(dedup_replicated_tensors)
+
+
+_DCP_FORMAT = "jittor-rank-local-dcp-v1"
+_DCP_METADATA = "metadata.json"
+
+
+def _dcp_path(checkpoint_id, storage):
+    value = checkpoint_id
+    if value is None and storage is not None:
+        value = getattr(storage, "path", None)
+    if value is None:
+        raise ValueError("DCP requires checkpoint_id or a filesystem reader/writer")
+    return os.fspath(value)
+
+
+def _dcp_rank_info(process_group=None, no_dist=False):
+    active = _native_distributed_active()
+    if no_dist and active and int(_distributed_world_size()) > 1:
+        raise ValueError("no_dist cannot be used with an active multi-rank process group")
+    if process_group is not None:
+        raise NotImplementedError(
+            "Jittor DCP supports the default WORLD process group only")
+    if no_dist or not active:
+        return 0, 1, False
+    rank = int(_distributed_rank())
+    world_size = int(_distributed_world_size())
+    return rank, world_size, world_size > 1
+
+
+def _validate_dcp_state(value, path="state_dict"):
+    if isinstance(value, jt.Var):
+        return
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            _validate_dcp_state(item, "%s[%r]" % (path, key))
+        return
+    if isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            _validate_dcp_state(item, "%s[%d]" % (path, index))
+        return
+    if isinstance(value, (str, bytes, bool, int, float, type(None), np.generic)):
+        return
+    type_name = type(value).__name__
+    if type_name in ("ShardedTensor", "DTensor"):
+        raise NotImplementedError(
+            "ShardedTensor/DTensor chunk metadata and resharding are not supported")
+    raise TypeError("unsupported DCP value at %s: %s" % (path, type_name))
+
+
+def _validate_dcp_planner(planner, expected_type, action):
+    if planner is None:
+        planner = expected_type()
+    if not isinstance(planner, expected_type):
+        raise NotImplementedError(
+            "custom DCP planners are not supported by the rank-local snapshot format")
+    if (not planner.flatten_state_dict or not planner.flatten_sharded_tensors
+            or not planner.dedup_replicated_tensors):
+        raise NotImplementedError(
+            "only default DCP planner options are supported for %s" % action)
+    if isinstance(planner, DefaultSavePlanner) and planner.storage_meta is not None:
+        raise NotImplementedError("custom DCP storage metadata is not supported")
+    if isinstance(planner, DefaultLoadPlanner) and planner.allow_partial_load:
+        raise NotImplementedError("partial DCP loads are not supported")
+    return planner
+
+
+def _dcp_rank_file(root, rank):
+    return os.path.join(root, "rank-%05d.pt" % int(rank))
+
+
+def _dcp_write_json(path, value):
+    temporary = "%s.tmp.%d" % (path, os.getpid())
+    with open(temporary, "w", encoding="utf-8") as stream:
+        json.dump(value, stream, sort_keys=True)
+        stream.write("\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temporary, path)
+
+
+def _make_dcp_save(g):
+    def save(state_dict, storage_writer=None, *args, checkpoint_id=None,
+             planner=None, process_group=None, coordinator_rank=0, no_dist=False,
+             **kwargs):
+        if args or kwargs:
+            unexpected = sorted(kwargs)
+            raise TypeError("unsupported DCP save arguments: %s" % unexpected)
+        _validate_dcp_planner(planner, DefaultSavePlanner, "save")
+        _validate_dcp_state(state_dict)
+        if not isinstance(state_dict, Mapping):
+            raise TypeError("DCP state_dict must be a mapping")
+        if int(coordinator_rank) != 0:
+            raise NotImplementedError("DCP coordinator_rank must be zero")
+        root = _dcp_path(checkpoint_id, storage_writer)
+        rank, world_size, distributed = _dcp_rank_info(process_group, no_dist)
+        if distributed:
+            _barrier()
+        generation = [uuid.uuid4().hex if rank == 0 else None]
+        if distributed:
+            _broadcast_object_list(generation, src=0)
+        generation = str(generation[0])
+        generation_root = os.path.join(root, "generations", generation)
+        os.makedirs(generation_root, exist_ok=True)
+        filename = _dcp_rank_file(generation_root, rank)
+        temporary = "%s.tmp.%d" % (filename, os.getpid())
+        g.save(state_dict, temporary)
+        os.replace(temporary, filename)
+        if distributed:
+            _barrier()
+        if rank == 0:
+            _dcp_write_json(os.path.join(root, _DCP_METADATA), {
+                "format": _DCP_FORMAT,
+                "world_size": world_size,
+                "generation": generation,
+                "files": ["rank-%05d.pt" % index for index in range(world_size)],
+            })
+        if distributed:
+            _barrier()
+        return None
+
+    return save
+
+
+def _copy_dcp_state(target, source, path="state_dict"):
+    if isinstance(target, dict) and isinstance(source, Mapping):
+        if not target:
+            target.update(source)
+            return target
+        if set(target) != set(source):
+            raise ValueError("DCP key mismatch at %s" % path)
+        for key in list(target):
+            target[key] = _copy_dcp_state(target[key], source[key],
+                                           "%s[%r]" % (path, key))
+        return target
+    if isinstance(target, jt.Var) and isinstance(source, jt.Var):
+        if tuple(target.shape) != tuple(source.shape):
+            raise ValueError("DCP tensor shape mismatch at %s" % path)
+        if target.dtype != source.dtype:
+            raise TypeError("DCP tensor dtype mismatch at %s" % path)
+        if target.device != source.device:
+            source = source.to(target.device)
+        target.copy_(source)
+        return target
+    if isinstance(target, list) and isinstance(source, (list, tuple)):
+        if len(target) != len(source):
+            raise ValueError("DCP sequence length mismatch at %s" % path)
+        for index, item in enumerate(source):
+            target[index] = _copy_dcp_state(target[index], item,
+                                             "%s[%d]" % (path, index))
+        return target
+    if isinstance(target, tuple) and isinstance(source, (list, tuple)):
+        if len(target) != len(source):
+            raise ValueError("DCP sequence length mismatch at %s" % path)
+        return tuple(_copy_dcp_state(left, right, "%s[%d]" % (path, index))
+                     for index, (left, right) in enumerate(zip(target, source)))
+    return source
+
+
+def _make_dcp_load(g):
+    def load(state_dict, storage_reader=None, *args, checkpoint_id=None,
+             planner=None, process_group=None, coordinator_rank=0, no_dist=False,
+             **kwargs):
+        if args or kwargs:
+            unexpected = sorted(kwargs)
+            raise TypeError("unsupported DCP load arguments: %s" % unexpected)
+        _validate_dcp_planner(planner, DefaultLoadPlanner, "load")
+        if not isinstance(state_dict, dict):
+            raise TypeError("DCP load state_dict must be a mutable mapping")
+        if int(coordinator_rank) != 0:
+            raise NotImplementedError("DCP coordinator_rank must be zero")
+        root = _dcp_path(checkpoint_id, storage_reader)
+        rank, world_size, distributed = _dcp_rank_info(process_group, no_dist)
+        if distributed:
+            _barrier()
+        with open(os.path.join(root, _DCP_METADATA), "r", encoding="utf-8") as stream:
+            metadata = json.load(stream)
+        if metadata.get("format") != _DCP_FORMAT:
+            raise ValueError("unsupported Jittor DCP checkpoint format")
+        if int(metadata.get("world_size", -1)) != world_size:
+            raise ValueError(
+                "DCP rank-local checkpoint world size %s does not match active world size %s"
+                % (metadata.get("world_size"), world_size))
+        expected_file = "rank-%05d.pt" % rank
+        if expected_file not in metadata.get("files", []):
+            raise ValueError("DCP checkpoint is missing the current rank file")
+        generation = metadata.get("generation")
+        if not isinstance(generation, str) or not generation:
+            raise ValueError("DCP checkpoint generation is missing")
+        generation_root = os.path.join(root, "generations", generation)
+        filename = _dcp_rank_file(generation_root, rank)
+        loaded = g.load(filename, map_location="cpu")
+        _validate_dcp_state(loaded)
+        _copy_dcp_state(state_dict, loaded)
+        if distributed:
+            _barrier()
+        return None
+
+    return load
+
+
 class StateDictOptions:
     def __init__(self, *, full_state_dict=False, cpu_offload=False,
                  ignore_frozen_params=False, keep_submodule_prefixes=True,
@@ -776,26 +1002,292 @@ class StateDictOptions:
         self.flatten_optimizer_state_dict = bool(flatten_optimizer_state_dict)
 
 
-def _get_model_state_dict(model, *a, options=None, **k):
-    return model.state_dict(*a, **k) if hasattr(model, "state_dict") else {}
+def _state_dict_options(options=None, submodules=None, *, optimizer=False):
+    if options is None:
+        options = StateDictOptions()
+    if not isinstance(options, StateDictOptions):
+        raise TypeError("options must be a StateDictOptions instance")
+    if submodules is not None:
+        raise NotImplementedError("submodule-filtered state dictionaries are not supported")
+    if options.broadcast_from_rank0 and not options.full_state_dict:
+        raise ValueError("broadcast_from_rank0 requires full_state_dict")
+    if not options.keep_submodule_prefixes:
+        raise NotImplementedError("state-dict prefix removal is not supported")
+    if optimizer and options.flatten_optimizer_state_dict:
+        raise NotImplementedError("flatten_optimizer_state_dict is not supported")
+    return options
 
 
-def _set_model_state_dict(model, state_dict, *a, options=None, **k):
-    # `_is_fsdp_module` is set only by fsdp2, so a model carrying it proves
-    # fsdp2 was imported and has registered -- see jittor/compat/
-    # fsdp_hooks.py for why this file must not import fsdp2 directly.
+def _map_state_dict_values(value, transform):
+    if isinstance(value, jt.Var):
+        return transform(value)
+    if isinstance(value, Mapping):
+        return {key: _map_state_dict_values(item, transform)
+                for key, item in value.items()}
+    if isinstance(value, list):
+        return [_map_state_dict_values(item, transform) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_map_state_dict_values(item, transform) for item in value)
+    return value
+
+
+def _broadcast_state_dict_values(value):
+    if not _native_distributed_active() or int(_distributed_world_size()) <= 1:
+        return value
+    backend = str(_process_group.get_backend()).lower()
+
+    def broadcast(tensor):
+        original_device = str(tensor.device)
+        result = tensor.detach().clone()
+        if backend == "nccl" and not original_device.startswith("cuda"):
+            result = result.cuda()
+            _broadcast(result, src=0)
+            return result.cpu() if original_device == "cpu" else result.to(original_device)
+        if backend == "hccl" and not original_device.startswith("npu"):
+            result = result.npu()
+            _broadcast(result, src=0)
+            return result.cpu() if original_device == "cpu" else result.to(original_device)
+        _broadcast(result, src=0)
+        return result
+
+    return _map_state_dict_values(value, broadcast)
+
+
+def _normalize_optimizers(optimizers):
+    if optimizers is None:
+        return []
+    if hasattr(optimizers, "param_groups") and hasattr(optimizers, "state_dict"):
+        return [optimizers]
+    try:
+        result = list(optimizers)
+    except TypeError as error:
+        raise TypeError("optimizers must be an optimizer or an iterable of optimizers") from error
+    if any(not hasattr(optimizer, "param_groups") or not hasattr(optimizer, "state_dict")
+           for optimizer in result):
+        raise TypeError("every optimizer must provide param_groups and state_dict")
+    return result
+
+
+def _model_parameter_names(model):
+    names = {}
+    trainable = {}
+    named_parameters = getattr(model, "named_parameters", None)
+    if not callable(named_parameters):
+        return names, trainable
+    try:
+        parameters = named_parameters(remove_duplicate=False)
+    except TypeError:
+        parameters = named_parameters()
+    for name, parameter in parameters:
+        names.setdefault(id(parameter), name)
+        trainable[name] = bool(getattr(parameter, "requires_grad", True))
+    return names, trainable
+
+
+def _get_model_state_dict(model, *a, options=None, submodules=None, **k):
+    options = _state_dict_options(options, submodules)
+    state_dict = model.state_dict(*a, **k) if hasattr(model, "state_dict") else {}
+    if options.ignore_frozen_params:
+        _, trainable = _model_parameter_names(model)
+        state_dict = {key: value for key, value in state_dict.items()
+                      if key not in trainable or trainable[key]}
+    if options.broadcast_from_rank0:
+        state_dict = _broadcast_state_dict_values(state_dict)
+    if options.cpu_offload:
+        state_dict = _map_state_dict_values(state_dict, lambda value: value.cpu())
+    return state_dict
+
+
+def _set_model_state_dict(model, state_dict, *a, options=None, submodules=None, **k):
+    options = _state_dict_options(options, submodules)
+    # Non-coordinator ranks can receive an empty dictionary for a full-state
+    # load. Use the local model as a shape/device template before broadcasting.
+    if options.broadcast_from_rank0 and _native_distributed_active() and int(_distributed_world_size()) > 1:
+        payload = [list(state_dict) if _distributed_rank() == 0 else None]
+        _broadcast_object_list(payload, src=0)
+        incoming_keys = payload[0]
+        template = model.state_dict()
+        received = {}
+        for key in incoming_keys:
+            if key in template and isinstance(template[key], jt.Var):
+                destination = template[key].detach().clone()
+                if _distributed_rank() == 0 and key in state_dict:
+                    source = state_dict[key]
+                    if isinstance(source, jt.Var):
+                        source = source.to(destination.device)
+                    _copy_tensor(destination, source)
+                _broadcast(destination, src=0)
+                received[key] = destination
+            else:
+                object_payload = [state_dict[key] if _distributed_rank() == 0 and key in state_dict else None]
+                _broadcast_object_list(object_payload, src=0)
+                received[key] = object_payload[0]
+        state_dict = received
+    # The FSDP2 load provider is registered by fsdp2; this installer must not
+    # import that module directly.
     if getattr(model, "_is_fsdp_module", False):
         _fsdp = _fsdp_hooks.provider()
         if _fsdp is not None:
             _fsdp._load_full_state_dict(model, state_dict)
             return None
     if hasattr(model, "load_state_dict"):
-        return model.load_state_dict(state_dict, strict=getattr(options, "strict", True))
+        return model.load_state_dict(state_dict, strict=options.strict)
     return None
 
 
+def _initialize_optimizer_state(optimizer):
+    if getattr(optimizer, "state", None):
+        return
+    parameters = [parameter for group in optimizer.param_groups
+                  for parameter in group.get("params", [])]
+    if any(getattr(parameter, "grad", None) is not None for parameter in parameters):
+        return
+    original_grads = [(parameter, getattr(parameter, "grad", None))
+                      for parameter in parameters]
+    original_lrs = [(group, group.get("lr")) for group in optimizer.param_groups
+                    if "lr" in group]
+    try:
+        for parameter in parameters:
+            if getattr(parameter, "requires_grad", True):
+                parameter.grad = jt.zeros_like(parameter)
+        for group, _ in original_lrs:
+            group["lr"] = 0.0
+        optimizer.step()
+    finally:
+        for group, learning_rate in original_lrs:
+            group["lr"] = learning_rate
+        for parameter, gradient in original_grads:
+            parameter.grad = gradient
+
+
+def _get_optimizer_state_dict(model, optimizers, *, submodules=None, options=None):
+    options = _state_dict_options(options, submodules, optimizer=True)
+    optimizers = _normalize_optimizers(optimizers)
+    parameter_names, trainable = _model_parameter_names(model)
+    result = {"state": {}, "param_groups": []}
+    for optimizer in optimizers:
+        _initialize_optimizer_state(optimizer)
+        saved = optimizer.state_dict()
+        live_groups = optimizer.param_groups
+        saved_groups = saved.get("param_groups", [])
+        if len(live_groups) != len(saved_groups):
+            raise ValueError("optimizer state_dict parameter-group count mismatch")
+        local_ids = {}
+        for live_group, saved_group in zip(live_groups, saved_groups):
+            live_params = live_group.get("params", [])
+            saved_params = saved_group.get("params", [])
+            if len(live_params) != len(saved_params):
+                raise ValueError("optimizer state_dict parameter count mismatch")
+            names = []
+            for parameter, parameter_id in zip(live_params, saved_params):
+                name = parameter_names.get(id(parameter))
+                if name is None:
+                    raise ValueError("optimizer parameter is not present in model.named_parameters()")
+                local_ids[parameter_id] = name
+                if not options.ignore_frozen_params or trainable.get(name, True):
+                    names.append(name)
+            group = dict(saved_group)
+            group["params"] = names
+            result["param_groups"].append(group)
+        for parameter_id, state in saved.get("state", {}).items():
+            name = local_ids.get(parameter_id)
+            if name is None:
+                raise ValueError("optimizer state references a parameter outside its parameter groups")
+            if options.ignore_frozen_params and not trainable.get(name, True):
+                continue
+            if name in result["state"]:
+                raise ValueError("multiple optimizers contain state for parameter %s" % name)
+            result["state"][name] = state
+    if options.broadcast_from_rank0:
+        result = _broadcast_state_dict_values(result)
+    if options.cpu_offload:
+        result = _map_state_dict_values(result, lambda value: value.cpu())
+    return result
+
+
+def _set_optimizer_state_dict(model, optimizers, optim_state_dict, *,
+                              submodules=None, options=None):
+    options = _state_dict_options(options, submodules, optimizer=True)
+    optimizers = _normalize_optimizers(optimizers)
+    if not isinstance(optim_state_dict, Mapping):
+        raise TypeError("optimizer state_dict must be a mapping")
+    saved_state = optim_state_dict.get("state", {})
+    saved_groups = optim_state_dict.get("param_groups", [])
+    if not isinstance(saved_state, Mapping) or not isinstance(saved_groups, (list, tuple)):
+        raise TypeError("optimizer state_dict must contain state and param_groups")
+    parameter_names, _ = _model_parameter_names(model)
+    group_count = sum(len(optimizer.param_groups) for optimizer in optimizers)
+    if len(saved_groups) != group_count:
+        raise ValueError("optimizer state_dict parameter-group count mismatch")
+    prepared = []
+    group_index = 0
+    known_names = set()
+    for optimizer in optimizers:
+        template = optimizer.state_dict()
+        current_groups = optimizer.param_groups
+        template_groups = template.get("param_groups", [])
+        converted_groups = []
+        local_name_to_id = {}
+        if len(current_groups) != len(template_groups):
+            raise ValueError("optimizer state_dict parameter-group count mismatch")
+        for current, template_group in zip(current_groups, template_groups):
+            saved_group = saved_groups[group_index]
+            group_index += 1
+            current_params = current.get("params", [])
+            template_ids = template_group.get("params", [])
+            expected_names = [parameter_names.get(id(parameter)) for parameter in current_params]
+            if any(name is None for name in expected_names):
+                raise ValueError("optimizer parameter is not present in model.named_parameters()")
+            saved_names = list(saved_group.get("params", []))
+            if saved_names != expected_names:
+                raise ValueError("optimizer checkpoint parameter groups do not match the current optimizer")
+            if len(template_ids) != len(expected_names):
+                raise ValueError("optimizer state_dict parameter count mismatch")
+            for name, parameter_id in zip(expected_names, template_ids):
+                local_name_to_id[name] = parameter_id
+                known_names.add(name)
+            converted = dict(saved_group)
+            converted["params"] = list(template_ids)
+            converted_groups.append(converted)
+        converted_state = {}
+        for name, state in saved_state.items():
+            if name in local_name_to_id:
+                converted_state[local_name_to_id[name]] = state
+        prepared.append({"state": converted_state, "param_groups": converted_groups})
+    unknown = set(saved_state) - known_names
+    if unknown:
+        raise ValueError("optimizer checkpoint contains unknown parameter names: %s"
+                         % sorted(unknown))
+    # Validate all groups before changing any optimizer.
+    for optimizer, converted in zip(optimizers, prepared):
+        optimizer.load_state_dict(converted)
+    return None
+
+
+def _get_checkpoint_state_dict(model, optimizers=None, *, submodules=None, options=None):
+    return (_get_model_state_dict(model, options=options, submodules=submodules),
+            _get_optimizer_state_dict(model, optimizers,
+                                      options=options, submodules=submodules))
+
+
+def _set_checkpoint_state_dict(model, optimizers=None, *, model_state_dict=None,
+                               optim_state_dict=None, options=None):
+    result = None
+    if model_state_dict is not None:
+        result = _set_model_state_dict(model, model_state_dict, options=options)
+    if optim_state_dict is not None and optimizers is not None:
+        _set_optimizer_state_dict(model, optimizers, optim_state_dict, options=options)
+    return result
+
+
 class ShardedTensor:
-    pass
+    def __init__(self, *args, **kwargs):
+        if not _allow_stub():
+            raise NotImplementedError("DTensor chunk metadata and resharding are not supported")
+        _stub_unimplemented(
+            "torch.distributed._shard.sharded_tensor.ShardedTensor",
+            "construct a placeholder with no sharded metadata",
+            "Use regular tensors; ShardedTensor resharding is not supported.")
 
 
 class _RendezvousModule(_types.ModuleType):
@@ -928,22 +1420,40 @@ def _api_symmetric_memory_is_symm_mem_enabled_for_group(*a, **k):
 
 
 def _api_checkpoint_sd_get_state_dict(model, optimizers=None, *a, **k):
-    return (_get_model_state_dict(model, *a, **k), optimizers.state_dict() if hasattr(optimizers, 'state_dict') else {})
+    return _get_checkpoint_state_dict(model, optimizers, *a, **k)
 
 
 def _api_checkpoint_sd_set_state_dict(model, optimizers=None, model_state_dict=None, optim_state_dict=None, *a, **k):
-    return _set_model_state_dict(model, model_state_dict or {}, *a, **k)
+    return _set_checkpoint_state_dict(
+        model, optimizers, model_state_dict=model_state_dict,
+        optim_state_dict=optim_state_dict, *a, **k)
 
 
 def _api_sharded_tensor_init_from_local_shards(shards, *a, **k):
-    return shards[0] if shards else None
+    if not _allow_stub():
+        raise NotImplementedError("DTensor chunk metadata and resharding are not supported")
+    stub_result = shards[0] if shards else None
+    return _stub_unimplemented(
+        "torch.distributed._shard.sharded_tensor.init_from_local_shards",
+        "return only the first local tensor without global shard metadata",
+        "Use regular tensors; ShardedTensor resharding is not supported.",
+        stub_result=stub_result)
 
 
 def _api_sharded_tensor_empty(*a, **k):
-    return jt.empty(*a, **{kk: vv for kk, vv in k.items() if kk == 'dtype'})
+    if not _allow_stub():
+        raise NotImplementedError("DTensor chunk metadata and resharding are not supported")
+    stub_result = jt.empty(*a, **{kk: vv for kk, vv in k.items() if kk == 'dtype'})
+    return _stub_unimplemented(
+        "torch.distributed._shard.sharded_tensor.empty",
+        "return an ordinary local tensor without global shard metadata",
+        "Use regular tensors; ShardedTensor resharding is not supported.",
+        stub_result=stub_result)
 
 
-from ...stub_policy import unimplemented as _stub_unimplemented, record_unimplemented as _record_unimplemented
+from ...stub_policy import (allow_stub as _allow_stub,
+                            unimplemented as _stub_unimplemented,
+                            record_unimplemented as _record_unimplemented)
 
 class SerializationFormat:
     TORCH_SAVE = "torch_save"
@@ -1171,22 +1681,18 @@ def _install_distributed(g, registry=None):
     checkpoint.__path__ = getattr(checkpoint, "__path__", [])
     checkpoint.FileSystemReader = FileSystemReader
     checkpoint.FileSystemWriter = FileSystemWriter
-    # torch.distributed.checkpoint save/load were the identity: dcp.save()
-    # wrote nothing and returned successfully, so a sharded checkpoint was
-    # silently never persisted and dcp.load() silently left the model at its
-    # current weights. Refuse instead of losing the run.
-    checkpoint.load_state_dict = _api_checkpoint_load_state_dict
-    _record_unimplemented('torch.distributed.checkpoint.load_state_dict', _dcp_load_effect, _dcp_hint)
-    checkpoint.save_state_dict = _api_checkpoint_save_state_dict
-    _record_unimplemented('torch.distributed.checkpoint.save_state_dict', _dcp_save_effect, _dcp_hint)
-    checkpoint.load = _api_checkpoint_load
-    _record_unimplemented('torch.distributed.checkpoint.load', _dcp_load_effect, _dcp_hint)
-    checkpoint.save = _api_checkpoint_save
-    _record_unimplemented('torch.distributed.checkpoint.save', _dcp_save_effect, _dcp_hint)
+    checkpoint_load = _make_dcp_load(g)
+    checkpoint_save = _make_dcp_save(g)
+    checkpoint.load_state_dict = checkpoint_load
+    checkpoint.save_state_dict = checkpoint_save
+    checkpoint.load = checkpoint_load
+    checkpoint.save = checkpoint_save
     checkpoint_sd = _types.ModuleType("torch.distributed.checkpoint.state_dict")
     checkpoint_sd.StateDictOptions = StateDictOptions
     checkpoint_sd.get_model_state_dict = _get_model_state_dict
     checkpoint_sd.set_model_state_dict = _set_model_state_dict
+    checkpoint_sd.get_optimizer_state_dict = _get_optimizer_state_dict
+    checkpoint_sd.set_optimizer_state_dict = _set_optimizer_state_dict
     checkpoint_sd.get_state_dict = _api_checkpoint_sd_get_state_dict
     checkpoint_sd.set_state_dict = _api_checkpoint_sd_set_state_dict
     checkpoint_fs = _types.ModuleType("torch.distributed.checkpoint.filesystem")
@@ -1195,11 +1701,16 @@ def _install_distributed(g, registry=None):
     checkpoint_fs.SerializationFormat = SerializationFormat
     checkpoint_fs._write_item = _api_checkpoint_fs_write_item
     _record_unimplemented('torch.distributed.checkpoint.filesystem._write_item', _dcp_save_effect, _dcp_hint)
+    checkpoint_dp = _types.ModuleType("torch.distributed.checkpoint.default_planner")
+    checkpoint_dp.DefaultSavePlanner = DefaultSavePlanner
+    checkpoint_dp.DefaultLoadPlanner = DefaultLoadPlanner
     _modules["torch.distributed.checkpoint"] = checkpoint
     _modules["torch.distributed.checkpoint.state_dict"] = checkpoint_sd
     _modules["torch.distributed.checkpoint.filesystem"] = checkpoint_fs
+    _modules["torch.distributed.checkpoint.default_planner"] = checkpoint_dp
     checkpoint.state_dict = checkpoint_sd
     checkpoint.filesystem = checkpoint_fs
+    checkpoint.default_planner = checkpoint_dp
 
     shard = dist._shard
     shard.__path__ = getattr(shard, "__path__", [])
@@ -1274,9 +1785,14 @@ def _install_distributed(g, registry=None):
         "Import-compatible context and hooks do not implement uneven-input communication")
     register_api_bindings(checkpoint, "torch.distributed.checkpoint",
         ("load_state_dict", "save_state_dict", "load", "save", "FileSystemReader", "FileSystemWriter"),
-        Fidelity.UNIMPLEMENTED, "Checkpoint I/O follows the existing explicit unsupported policy")
+        Fidelity.APPROXIMATE, "Atomic per-rank tensor snapshots support same-world-size save/load; default WORLD only, no cross-world resharding or standard Torch DCP file layout")
+    register_api_bindings(checkpoint_dp, "torch.distributed.checkpoint.default_planner",
+        ("DefaultSavePlanner", "DefaultLoadPlanner"), Fidelity.APPROXIMATE,
+        "Planner import compatibility for same-world-size rank-local tensor snapshots")
     register_api_bindings(checkpoint_sd, "torch.distributed.checkpoint.state_dict",
-        ("StateDictOptions", "get_model_state_dict", "set_model_state_dict", "get_state_dict", "set_state_dict"),
+        ("StateDictOptions", "get_model_state_dict", "set_model_state_dict",
+         "get_optimizer_state_dict", "set_optimizer_state_dict",
+         "get_state_dict", "set_state_dict"),
         Fidelity.APPROXIMATE, "Local module state and registered FSDP load provider; "
         "full distributed checkpoint/options semantics are not implemented")
     register_api_bindings(rendezvous_mod, "torch.distributed.rendezvous", ("rendezvous",),

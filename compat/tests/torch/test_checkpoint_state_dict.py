@@ -177,8 +177,47 @@ def test_join_uneven_inputs_refuses_before_training_but_balanced_contexts_work(m
         stub_policy.set_allow_stub(previous)
 
 
+@pytest.mark.skipif(not hasattr(torch, "_torch_compat_install_context"), reason="Jittor DCP compatibility")
+def test_default_dcp_planners_roundtrip_rank_local_tensor_state(tmp_path):
+    import json
+    import torch.distributed.checkpoint as dcp
+    from torch.distributed.checkpoint.default_planner import DefaultLoadPlanner, DefaultSavePlanner
+
+    model_weight = torch.tensor(np.arange(6, dtype=np.float32).reshape(2, 3), device=DEVICE)
+    optimizer_step = torch.tensor(7, dtype=torch.int64, device=DEVICE)
+    source = {
+        "model": {"weight": model_weight},
+        "optimizer": {"step": optimizer_step, "lr": 0.025},
+        "counter": 4,
+    }
+    checkpoint = tmp_path / "rank-local"
+    save_planner = DefaultSavePlanner()
+    load_planner = DefaultLoadPlanner()
+    dcp.save(source, storage_writer=dcp.FileSystemWriter(checkpoint), planner=save_planner)
+
+    target_weight = torch.zeros_like(model_weight)
+    target_step = torch.zeros_like(optimizer_step)
+    target = {
+        "model": {"weight": target_weight},
+        "optimizer": {"step": target_step, "lr": 0.0},
+        "counter": 0,
+    }
+    dcp.load(target, storage_reader=dcp.FileSystemReader(checkpoint), planner=load_planner)
+
+    assert target["model"]["weight"] is target_weight
+    assert target["optimizer"]["step"] is target_step
+    np.testing.assert_array_equal(array(target_weight), array(model_weight))
+    np.testing.assert_array_equal(array(target_step), array(optimizer_step))
+    assert target["optimizer"]["lr"] == 0.025
+    assert target["counter"] == 4
+    metadata = json.loads((checkpoint / "metadata.json").read_text())
+    assert metadata["world_size"] == 1
+    assert metadata["files"] == ["rank-00000.pt"]
+    assert (checkpoint / "generations" / metadata["generation"] / "rank-00000.pt").is_file()
+
+
 @pytest.mark.skipif(not hasattr(torch, "_torch_compat_install_context"), reason="Jittor unsupported-boundary policy")
-def test_sharded_dcp_storage_remains_explicitly_unsupported(tmp_path):
+def test_sharded_dcp_values_remain_explicitly_unsupported(tmp_path):
     import torch.distributed.checkpoint as dcp
     from torch.distributed.checkpoint.default_planner import DefaultLoadPlanner, DefaultSavePlanner
     from torch.distributed._shard.sharded_tensor import ShardedTensor, empty, init_from_local_shards
@@ -186,20 +225,22 @@ def test_sharded_dcp_storage_remains_explicitly_unsupported(tmp_path):
 
     previous = stub_policy.set_allow_stub(False)
     try:
-        for planner in (DefaultSavePlanner, DefaultLoadPlanner):
-            with pytest.raises(NotImplementedError, match="DTensor chunk metadata"):
-                planner()
-        for reader_or_writer in (dcp.FileSystemReader, dcp.FileSystemWriter):
-            with pytest.raises(NotImplementedError, match="DTensor chunk metadata"):
-                reader_or_writer(tmp_path / "sharded")
+        assert isinstance(DefaultSavePlanner(), DefaultSavePlanner)
+        assert isinstance(DefaultLoadPlanner(), DefaultLoadPlanner)
+        assert dcp.FileSystemReader(tmp_path / "reader").path == tmp_path / "reader"
+        assert dcp.FileSystemWriter(tmp_path / "writer").path == tmp_path / "writer"
         with pytest.raises(NotImplementedError, match="DTensor chunk metadata"):
             ShardedTensor()
         with pytest.raises(NotImplementedError, match="DTensor chunk metadata"):
             init_from_local_shards([torch.ones(2, device=DEVICE)])
         with pytest.raises(NotImplementedError, match="DTensor chunk metadata"):
             empty((2,), dtype=torch.float32)
-        with pytest.raises(NotImplementedError, match="DTensor chunk metadata"):
-            dcp.save({"value": torch.ones(2, device=DEVICE)}, checkpoint_id=tmp_path / "sharded")
+
+        class DTensor:
+            pass
+
+        with pytest.raises(NotImplementedError, match="chunk metadata and resharding"):
+            dcp.save({"value": DTensor()}, checkpoint_id=tmp_path / "sharded")
         assert not (tmp_path / "sharded").exists()
     finally:
         stub_policy.set_allow_stub(previous)

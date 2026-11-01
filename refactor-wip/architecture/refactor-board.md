@@ -1,3 +1,16 @@
+## 2026-11-01 19:49 +0800 DCP CPU 接口用例通过；FSDP2 checkpoint 双 rank 验证 900 秒超时；GPU2 仍共享
+
+继续使用 /home/cgq/jittor 原工作区，未重新 clone。attempt-07 绑定 HEAD 701f8cc1dbbd32715f1fe7c5d77304d1146b555f、源码 fingerprint 494313a405daba9fb4541a71a0623aa837b8bfe7b9f71700ed30d078d1c8c414；branch integrate/cgq-transformers-native-multicard-target，远端 refs/heads/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 165/0。attempt 前后 porcelain SHA256 都是 ff0ac0262fb023a09a34cc092696afef43a5b87fed7668678a16ce5be582d683，工作区其他既有 dirty/untracked 保持原状。attempt 后源码 fingerprint 与 HEAD 未变；隔离 Jittor .so 清单 diff 为空，测试 rank 已全部退出。
+
+compat/torch/installers/distributed.py 增加了有限范围的 distributed checkpoint planner/reader/writer 和 state-dict API：同 world size、共享文件系统下按 rank 保存/恢复 portable snapshot，并显式拒绝未支持的 custom planner、跨 world-size reshard 和 DTensor/ShardedTensor 路径。CPU focused 测试在较早源码 fingerprint b440b4bec82fd0b7939b4f34018e77d1ff9335694ea59be928d365928a0590e0 上 **12 passed**；该轮早于当前 NCCL CPU scalar broadcast 修改，因此不作为当前源码的双 rank CUDA checkpoint 证据。日志：/data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-dcp-rank-local-r1-prepared/validation/cpu-focused-attempt-08/pytest.log。
+
+current-source FSDP2 full-model optimizer checkpoint-resume attempt-07 使用 GPU1 与 GPU4、GPU2 明确排除；singleton CUDA/NCCL warmup 通过，随后双 rank pytest 收集 1 项，但 rank0/rank1 日志均停在 collected item，900 秒 launcher 上限退出码 124。两 rank 等待期间各占约一个 CPU 核、每卡约 640 MiB，未产生阶段日志、训练更新或 checkpoint。计划没有启用 integration progress 环境标记，无法定位停滞位置；结果是无结论 timeout，不是 checkpoint 正确性通过或功能失败。原件位于 /data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-fsdp2-nccl-r1-prepared/evidence/attempt-07/ 与 experiment-attempt07/，不要覆盖或原样重跑。
+
+GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 当前为 Default/shared，外部 yqa PID 4166405 使用约 8,640 MiB、利用率约 78%。普通 CUDA holder 不能禁止其他 client 进入；本轮未启动 holder 或干预现有进程。Day4–5 正式性能/显存验收仍需管理员/调度器提供 GPU UUID/GRES 独占与设备 cgroup 隔离租约；按匹配配置完成至少三轮交替、每轮每侧至少十个热样本，并报告 median/p95/离散度、load/首步/热态时延、allocator/NVML 峰值、容量/OOM 恢复和实际 activation recompute 显存差异。完整 DCP save/load/resume、DDP 训练与新进程恢复、clean-installed wheel CUDA、ACL build/migration、合格 held-out generation quality 与支持矩阵仍开放；整体 Day2–5 release 继续 **Not complete**。
+
+### 下一步
+
+FSDP2 checkpoint 后续诊断需使用新 attempt 目录并启用阶段日志/CPU 栈采样，先定位 900 秒停滞点再决定是否投入新预算。性能/显存验收等 GPU2 系统级独占租约。
 ## 2026-11-01 18:53 +0800 DDP broadcast placement 源码修复通过初始化同步；GPU2 尚无排他租约
 
 继续使用 /home/cgq/jittor 现有工作区，没有重新 clone。验证绑定源码 fingerprint d438ec23445b9665ec3a4d494089c5f001e3dadc59b1b5376adedc7a13dc8bc9，实验前 HEAD ed3cd7efa7f66b5726c9dbe731948fab2902e5f3，branch integrate/cgq-transformers-native-multicard-target，origin cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81、ahead/behind 0/164。在原有 105 项 dirty/untracked 工作之外，只新增本任务的 compat/collectives.py 修改和 broadcast placement 回归文件；其余已有修改保持不动。

@@ -1,3 +1,10 @@
+## 2026-11-01 19:49 +0800 接续：DCP CPU focused 12/12；FSDP2 current-source checkpoint attempt 超时；GPU2 共享
+
+继续使用 /home/cgq/jittor 现有工作区。HEAD 701f8cc1dbbd32715f1fe7c5d77304d1146b555f，branch integrate/cgq-transformers-native-multicard-target，远端 refs/heads/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 165/0；current-source fingerprint 494313a405daba9fb4541a71a0623aa837b8bfe7b9f71700ed30d078d1c8c414。attempt-07 前后 porcelain SHA256 均为 ff0ac0262fb023a09a34cc092696afef43a5b87fed7668678a16ce5be582d683。
+
+DCP default planner/filesystem save-load/state-dict API 已有有限范围实现。CPU focused suite 在较早 fingerprint b440b4bec82fd0b7939b4f34018e77d1ff9335694ea59be928d365928a0590e0 上 12 passed；current-source 双 rank FSDP2 full-model optimizer checkpoint-resume attempt-07 用 GPU1/GPU4、排除 GPU2，收集 1 项后停在 collected item，900 秒 job deadline exit 124。rank 日志无阶段标记或更新/checkpoint，结果是无结论 timeout；源码/status/cache 检查通过且 workers 已退出。原件在 /data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-fsdp2-nccl-r1-prepared/evidence/attempt-07/，不覆盖或原样重跑。
+
+GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 当前 Default/shared，外部 yqa PID 4166405 使用约 8,640 MiB、利用率约 78%。普通 holder 无法阻止其他 CUDA client，未启动 holder 或干预现有任务。Day4–5 需管理员/调度器提供 GPU UUID/GRES 独占和 device-cgroup 隔离，再执行至少三轮交替、每轮每侧至少十个热样本及延迟/显存/容量与真实 recompute 报告。FSDP2 current-source resume、DDP full/resume、clean wheel CUDA、ACL、held-out generation quality 与支持矩阵仍开放；整体 Day2–5 release 继续 **Not complete**。后续诊断需新 artifact 目录并开启阶段标记/CPU 栈采样，先定位 FSDP2 timeout，再决定是否投入新预算。
 ## 2026-11-01 18:53 +0800 接续：DDP 源码级初始 NCCL 同步已通过；正式性能仍等系统级 GPU2 独占
 
 在 /home/cgq/jittor 现有工作区接续，没有重新 clone。当前任务实验绑定源码 fingerprint d438ec23445b9665ec3a4d494089c5f001e3dadc59b1b5376adedc7a13dc8bc9、提交前 HEAD ed3cd7efa7f66b5726c9dbe731948fab2902e5f3、branch integrate/cgq-transformers-native-multicard-target。原有 105 项 dirty/untracked 均保留；任务源码变更仅为 compat/collectives.py 和新增的 broadcast placement test。当前源码 focused tests 为 5 passed。
