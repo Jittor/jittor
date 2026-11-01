@@ -1799,29 +1799,44 @@ workaround.
   case states its device explicitly.
 
 
-## KI-COMPAT-023: `jt.nn.silu` and the Torch frontend's SiLU differ by a half-ulp on CUDA
+## KI-COMPAT-023: a SiLU module's first call and its later calls round differently
 
-- Severity: Low (one half-precision ulp, about 25% of elements; the values are
-  the same to within a half's rounding)
-- Status: Open; reproduced 2026-11-01 at `2869f2c5b` and, with the division
-  changes reverted and the core rebuilt, at `d8e30464c` too.
+- Severity: Low (one half-precision ulp, about a quarter of the elements)
+- Status: Open; reproduced 2026-11-01 at `3253801e8`, and with the day's
+  division changes reverted and the core rebuilt (`d8e30464c`) too.
 - Owner: torch compatibility / half-precision numerics
 - Symptom: `compat/tests/torch/test_native_fast_paths.py::TestNativeModuleDispatch::test_an_inference_group_norm_and_the_silu_after_it`
-  fails on CUDA at `torch.nn.Sequential(torch.nn.SiLU())(plain)` against
-  `jt.nn.silu(plain)` for half `plain`: 52-66 of 256 elements differ by one
-  half ulp (max 1.953e-03). The module spelling is bit-identical to real
-  PyTorch 2.11 (0 of 256 over several seeds), so `jt.nn.silu` is the side that
-  is off.
-- Cause: not isolated. `jt.nn.silu(half)` widens to float32, computes
-  `x * sigmoid(x)` and rounds once; the module path reaches the same function,
-  so the two must be taking different implementations somewhere between them
-  (the ACL `nn.silu` kernel is not involved on CUDA). A probe that builds the
-  same values outside the test and compares the two spellings under
-  `torch.no_grad()` agrees, while the test -- whose values are drawn inside the
-  scope -- does not, so grad-mode state is a suspect.
-- Workaround: none needed for accuracy; the difference is a half's last bit.
-  Use `torch.nn.functional.silu` (the frontend spelling) where bit-exact parity
-  with PyTorch is being asserted.
-- Evidence: the nodeid above, one process, `CUDA_VISIBLE_DEVICES` set; plus the
-  seed probe recorded in `docs/results/2026-11-01-python-float-division.md`.
-- Exit condition: the two spellings answer the same bits, and the case is green.
+  fails on CUDA where it compares `torch.nn.Sequential(silu)(plain)` with
+  `jt.nn.silu(plain)` for half `plain`: 52-77 of 256 elements differ by one half
+  ulp. The smaller reproduction is the module alone:
+
+  ```python
+  silu = torch.nn.SiLU()
+  plain = torch.randn(2, 8, 4, 4, device="cuda").half()
+  with torch.no_grad():
+      first = silu(plain)       # == torch.nn.functional.silu(plain) and
+      second = silu(plain)      #    == (plain.float32() * plain.float32().sigmoid()).half()
+  # first and second differ in ~68 of 256 elements
+  ```
+
+  The **first** call on a fresh module is the one that matches real PyTorch 2.11
+  bit for bit (0 of 256 over several seeds) and the widened float32 path; every
+  later call on that module answers as if the operands had stayed half
+  (`x * sigmoid(x)` in half precision), which is the 1-ulp side. `silu(plain)`
+  and `silu(plain.clone())` differ the same way, so it is a property of the
+  module/process after the first call, not of the tensor.
+- Cause: not isolated. Not the tuner (`enable_tuner=0` reproduces), not graph
+  replay (`auto_graph_replay=0` reproduces), not the dispatch cache
+  (`_prefer_forward` is class-level and stable), and not the ACL kernel (not
+  used on CUDA). The remaining suspect is the widening inside `nn.silu` --
+  `wide = x.float32(); (wide * wide.sigmoid()).cast(dtype)` -- losing its
+  float32 operands on the path the second call takes.
+- Workaround: none needed for accuracy. A test that asserts bit parity with
+  PyTorch should compare against a spelling that has not already run in the
+  same process, or compare with real PyTorch rather than between two Jittor
+  spellings.
+- Evidence: the snippet above and the nodeid, one process each, on an RTX 4090
+  with `JITTOR_TORCH_SHIM=1`; the values are also recorded in
+  `docs/results/2026-11-01-python-float-division.md`.
+- Exit condition: repeated calls on one module answer the same bits, and the
+  case is green.
