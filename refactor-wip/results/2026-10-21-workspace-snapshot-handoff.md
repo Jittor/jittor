@@ -1,3 +1,8 @@
+## 2026-11-01 19:54 +0800 接续：current-source DCP CPU focused 12/12 通过；GPU2 与双 rank checkpoint 仍未关闭
+
+current commit 06cf2b10a50049ad76cc6a47374fe6cdc64dcc42、source fingerprint c2a8608b4e6db7ed423eae56eaba75e8c7a7932ce929d390b53d6cd53d30dd5f。attempt-09 在 CPU 测试环境执行 focused DCP/state-dict suite，12 passed、0 failed、0 skipped、1.62 秒、backend fallback=0；证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-dcp-rank-local-r1-prepared/validation/cpu-focused-attempt-09/，pytest log SHA256 e42ecd17d083d6ea32af7e350e899b9f88ba49073341a8972940772ac81b3114，manifest SHA256 9c81bf35de0fe45b230f78694a4aa1f364106aca27655429eb6241ffdf2c1c66。该结果是 CPU 路径，不表示 FSDP2 双 rank CUDA save/load/resume 通过。
+
+FSDP2 attempt-07 仍按 900 秒 timeout 记录，无阶段、更新或 checkpoint；不可原样重跑。GPU2 Default/shared，外部 yqa PID 4166405 持有约 8.6 GiB；普通 holder 无法阻止其他 CUDA client。Day4–5 等系统级 GPU UUID/GRES 独占和设备隔离，整体 Day2–5 release 继续 Not complete。
 ## 2026-11-01 19:49 +0800 接续：DCP CPU focused 12/12；FSDP2 current-source checkpoint attempt 超时；GPU2 共享
 
 继续使用 /home/cgq/jittor 现有工作区。HEAD 701f8cc1dbbd32715f1fe7c5d77304d1146b555f，branch integrate/cgq-transformers-native-multicard-target，远端 refs/heads/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 165/0；current-source fingerprint 494313a405daba9fb4541a71a0623aa837b8bfe7b9f71700ed30d078d1c8c414。attempt-07 前后 porcelain SHA256 均为 ff0ac0262fb023a09a34cc092696afef43a5b87fed7668678a16ce5be582d683。

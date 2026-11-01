@@ -1,3 +1,8 @@
+## 2026-11-01 19:54 +0800 current-source DCP CPU 回归 12/12 通过；FSDP2 CUDA checkpoint 与 Day4–5 仍开放
+
+提交 06cf2b10a50049ad76cc6a47374fe6cdc64dcc42 对应 current-source fingerprint c2a8608b4e6db7ed423eae56eaba75e8c7a7932ce929d390b53d6cd53d30dd5f。在 JITTOR_TEST_DEVICES=cpu 环境运行 attempt-09：DCP/state-dict focused suite 12 passed、0 failed、0 skipped，1.62 秒，backend fallback=0；两条 warning 是显式允许的 ShardedTensor no-op stub。测试前后 source fingerprint 一致，cache .so 清单和 dirty-worktree hash 未变。证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-dcp-rank-local-r1-prepared/validation/cpu-focused-attempt-09/；pytest log SHA256 e42ecd17d083d6ea32af7e350e899b9f88ba49073341a8972940772ac81b3114，manifest SHA256 9c81bf35de0fe45b230f78694a4aa1f364106aca27655429eb6241ffdf2c1c66。
+
+此结果确认当前提交的 CPU DCP/state-dict 路径；没有覆盖双 rank CUDA save/load/resume。FSDP2 attempt-07 的 900 秒 timeout 仍无结论，不因这次 CPU pass 改写。GPU2 仍共享，Day4–5 正式性能/显存验收继续等待系统级独占资源租约和 device-cgroup 隔离；整体 release 仍 Not complete。
 ## 2026-11-01 19:49 +0800 DCP 有限范围实现已落地；FSDP2 checkpoint 验证超时，Day4–5 仍需 GPU2 独占
 
 ### 工作区与代码身份

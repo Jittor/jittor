@@ -1,3 +1,8 @@
+## 2026-11-01 19:54 +0800 current-source DCP CPU focused 回归 12/12 通过；双 rank CUDA 与 GPU2 排他仍开放
+
+已提交 current-source 06cf2b10a50049ad76cc6a47374fe6cdc64dcc42，源码 fingerprint c2a8608b4e6db7ed423eae56eaba75e8c7a7932ce929d390b53d6cd53d30dd5f。attempt-09 在 JITTOR_TEST_DEVICES=cpu 下执行 DCP/state-dict focused suite，12 passed、0 failed、0 skipped，1.62 秒，backend fallback=0；只有两条显式 opt-in ShardedTensor stub 警告。source before/after fingerprint 相同，cache .so 清单未变，仓库状态保持。证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-dcp-rank-local-r1-prepared/validation/cpu-focused-attempt-09/；pytest log SHA256 e42ecd17d083d6ea32af7e350e899b9f88ba49073341a8972940772ac81b3114，manifest SHA256 9c81bf35de0fe45b230f78694a4aa1f364106aca27655429eb6241ffdf2c1c66。
+
+这只补强 current-source CPU DCP/state-dict 路径，不验证双 rank CUDA checkpoint。current-source FSDP2 attempt-07 仍为 900 秒 timeout、无更新或 checkpoint，按前一条记录保留；GPU2 仍 Default/shared。Day4–5 必须取得系统级 UUID/GRES 独占和设备隔离，再完成交替性能/显存采样；整体 Day2–5 release 继续 Not complete。
 ## 2026-11-01 19:49 +0800 DCP CPU 接口用例通过；FSDP2 checkpoint 双 rank 验证 900 秒超时；GPU2 仍共享
 
 继续使用 /home/cgq/jittor 原工作区，未重新 clone。attempt-07 绑定 HEAD 701f8cc1dbbd32715f1fe7c5d77304d1146b555f、源码 fingerprint 494313a405daba9fb4541a71a0623aa837b8bfe7b9f71700ed30d078d1c8c414；branch integrate/cgq-transformers-native-multicard-target，远端 refs/heads/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 165/0。attempt 前后 porcelain SHA256 都是 ff0ac0262fb023a09a34cc092696afef43a5b87fed7668678a16ce5be582d683，工作区其他既有 dirty/untracked 保持原状。attempt 后源码 fingerprint 与 HEAD 未变；隔离 Jittor .so 清单 diff 为空，测试 rank 已全部退出。
