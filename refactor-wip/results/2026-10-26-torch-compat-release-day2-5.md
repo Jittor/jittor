@@ -1,3 +1,15 @@
+## 2026-11-01 13:50 +0800 current-main Torch core10 CPU 回归通过；GPU2 仍共享
+
+继续在 `/home/cgq/jittor` 的现有工作区。HEAD `a51bb1812b1e8cd886be643bcaf224d694dd5f65`，branch `integrate/cgq-transformers-native-multicard-target`，`origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `158/0`。本轮开始及结束均为 105 项既有 dirty/untracked，porcelain SHA256 `8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98`，index 为空；源码清单 2,822 项的 fingerprint 前后均为 `d3db97f9dfa2e7edba2967df6c1422ce23eb5948a9194eeb5dc3ba00859262b0`。只更新三份既有状态文档，不修改代码/测试，不触碰其他 dirty/untracked 文件，不 push。
+
+当前主线维护的 Torch core10 selectors 在隔离 CPU 环境通过：`JITTOR_CUDA=0`、`CUDA_VISIBLE_DEVICES=""`，runner 进入 `jt.runtime.scope(use_cuda=0, backend_fallback="error")` 并启用 fallback reporter；结果 **227 passed, 3 skipped, 0 failed，155.10 秒，backend fallback=0，exit=0**。nested subprocess 用例也通过。完整证据位于 `/data6/cgq/jittor-lab/_state/release-day23/20261101-main-torch-core10-cpu-current-r1-prepared/attempt-04-final-warm-cache/`；pytest log SHA256 `d00534857b4fa94fb763f433a2156fe014939ba4b53706e2dda74a35040b4891`，exit 文件 SHA256 `9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa`，evidence manifest SHA256 `b44fefa829cc2e3688b664ff28129d6e2435a0b0cf431205820d11d9462ad171`。postflight 记录 source before/after 相同、dirty 状态相同、cache diff 950 行。
+
+失败尝试也原样保留：首轮 226 passed、3 skipped、1 failed；失败用例的子进程在 CUDA-built cache + 隐藏 GPU 下执行 `sync_all` 报 `Invalid stream device 0`，因为子进程没有继承父进程的 runtime scope，不能把它归因于当前 Torch 兼容功能失败。一次错误 cache manifest 路径和一次独立 CPU cache 首启/编译超时均在各自 attempt 中保留；没有覆盖这些记录。修正环境变量后在同一 cache home 完成上面的最终轮次。
+
+该 core10 是 CPU 功能证据，不提供 CUDA、性能、显存或 generation-quality 结论。GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 的 postflight 仍是 compute mode `Default`，采样约 44,179 MiB 已用、利用率 100%，可见外部 VLLM 与 V2M4 计算进程；本轮测试进程未使用 GPU。用户态 holder/burner 不能阻止其他 CUDA client，故没有运行占卡程序或接触外部进程。正式 Day4–5 仍需系统级 GPU UUID/GRES 独占和设备隔离租约，并按匹配配置至少三轮交替、每轮每侧至少十个热态样本，报告 median/p95/离散度、load/首步/热态、allocator/NVML 峰值、容量/OOM 恢复，以及实际 activation recompute 的显存对照。multi-rank fresh-process checkpoint/resume、clean-installed wheel CUDA、FSDP2/DCP、ACL build/migration、合格 held-out generation quality 和完整支持矩阵仍开放；整体 Day2–5 release 继续 **Not complete**。
+
+---
+
 ## 2026-11-01 13:07 +0800 GPU2 无法由用户态 holder 独占；current-main 定向回归在 helper 编译阶段超时
 
 ### 工作区与来源身份
