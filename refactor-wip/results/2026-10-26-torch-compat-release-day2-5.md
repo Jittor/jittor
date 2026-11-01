@@ -1,3 +1,20 @@
+## 2026-11-01 21:48 +0800 activation-checkpoint 诊断审计：真实重计算已证实，此配置未显示显存节省
+
+本轮只审阅已完成的 r3 CUDA 诊断，不重复训练或测试。工作区 HEAD `550d6965aaf5b1df9f2006ebfddc157b90460f3c`，`origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `172/0`；编辑前 102 项既有 dirty 状态 SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`、含全部 untracked 的 105 项 SHA256 `8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98`，索引为空。GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 仍是共享 Default，外部 yqa PID `4166405` 使用约 8.6 GiB；当前无 Slurm 作业。根盘约 54 GiB 可用，新增证据应放 `/data6`。
+
+审计包 `/data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-checkpoint-memory-diagnostic-r3-prepared/` 的 `analysis.json` SHA256 `2d273426d43e3777ac328ae98be8b165affdb6d384a62a271d68df8a308dbd38`；on/off worker JSON SHA256 分别为 `27f261f2c0f6b2c2585320bc1ab92d6ab090179d94458a40b6b325d52a1c7f06` / `c7d37a3a7b4d5115fd64d1b91459a6cc201f95af12bad1b03e4b148d9de6535c`，两者 exit 0。计划文件的状态仍写 `PREPARED_NOT_STARTED`，与已存在的 attempt 与结果不一致；不改写原件，以 worker 输出和 analysis 作为完成证据。运行前后源码清单摘要均为 `66d88d99eb6fda38f7c3c478caddd760c870766823455c113c292720efca6e15`，源码运行期间未变。
+
+这项诊断绑定旧整体源码 fingerprint `71f3dfb5baba8dafe8a108ce93f27604c0b5114458446c9d529cb41b18fd3f98`、HEAD `3b384ad7e5d11097766eb1f086ce3f9d097d0ec0`，不是当前整树指纹；但 `compat/torch/installers/data.py` 与 `src/core/var_holder.cc` 的当前 SHA256 与该轮绑定值完全一致。运行实际使用 A800 GPU1 UUID `GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068` / `cuda:0`、`use_cuda=1`、fallback delta 0。六层 decoder 的 checkpoint on 调用轨迹均为 `[1,0]`，off 为 `[0]`，证实该配置确有 no-grad forward 与 backward 重计算；loss、梯度与更新有限，十步热态 loss 都下降。
+
+| 单轮 JT 诊断指标 | checkpoint off | checkpoint on |
+| --- | ---: | ---: |
+| 热态耗时 median（10 步） | 28.910 ms | 46.619 ms |
+| allocator peak allocated delta | 652,612,608 B | 1,403,671,552 B |
+| allocator peak reserved delta | 1,048,576 B | 6,291,456 B |
+| NVML 本进程采样 peak delta | 2,097,152 B | 6,291,456 B |
+
+`torch.cuda` 兼容接口从 Jittor 原生 allocator 读取 live/peak 值；C++ allocator 在每次分配/释放时维护 device high-water mark，reset 将峰值重置到当前 live bytes。故该结果不太可能由 Python 采样漏峰造成：在此模型与协议下，checkpoint on 的 peak allocated delta 约为 off 的 `2.15x`，热态 median 约 `1.61x`。这证明实际重计算，不证明省显存；当前是一个 JT-only 单轮 synthetic Llama、无 PyTorch 对照、无容量/OOM 测试，也非正式 Day4–5 结论。先定位 checkpoint 反向临时变量/allocator live peak 增长，再决定是否需要新的隔离诊断；不要重跑同一 r3。Day4–5 仍需系统级 GPU UUID/GRES 独占与 device-cgroup 隔离、至少三轮交替和每轮每侧至少十个热样本。更广 Day2–5 发布门保持开放，整体 release **Not complete**。
+
 ## 2026-11-01 21:32 +0800 clean-installed main/compat wheels CUDA smoke 通过
 
 ### 源码与 wheel 身份
