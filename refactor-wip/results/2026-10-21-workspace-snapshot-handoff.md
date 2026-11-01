@@ -1,3 +1,11 @@
+## 2026-11-02 05:09 +0800 Handoff：FSDP2 optimizer shard mismatch 已定位并接入 gather；等待不冷编译的 runtime 窗口
+
+继续使用 /home/cgq/jittor 现有工作区，未重新 clone。基线 HEAD 为 e57a394c8c8833227c0e79f3aec2c3499e82c2a9，分支 integrate/cgq-transformers-native-multicard-target，相对 origin/cgq_transformers ahead 201 / behind 0；origin 当前仍为 e5cffe1ae60c418f53c5bb1cdca9182577fd2b81。除本轮两个目标源码/测试文件外，既有 dirty/untracked 状态签名仍为 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98，索引此前干净。仅新增变更为 compat/torch/installers/distributed.py 和 compat/tests/torch/test_accelerate_distributed_integration.py，并需提交上述三份状态文档；不触碰其余 dirty/untracked 文件，不 push。
+
+attempt-03-optimizer-broadcast 的完整清单校验通过，并提供各 rank optimizer shard 形状不一致导致广播挂起的直接证据。已先 gather 元数据再重组 FULL optimizer state，并在既有两 rank integration case 加入 shape 回归断言；两个文件仅通过 py_compile/diff check，因 GPU 全部繁忙和 cache 身份问题，真实 checkpoint/resume 尚未验证。一次 CPU 元数据探针误触发 chang Python 新 cache 冷编译，停止于 164/228；partial cache/stale lock 留存，证据包位于 /data6/cgq/jittor-lab/_state/release-day23/20261102-fsdp2-metadata-helper-cpu-import-r1-prepared/，不清理、不重跑。
+
+GPU2 当前仍由外部任务共享，普通 holder 无排他能力；须由管理员提供可用 GPU UUID/GRES 与 device-cgroup 隔离租约后，运行一次真实两 rank FSDP2 checkpoint/resume 验证。Day4–5 与更广 Day2–5 release gate 仍开放，overall 不标 complete。
+
 ## 2026-11-02 04:46 继续：FSDP2 save_state 阶段超时；GPU2 独占需管理员租约
 
 在 /home/cgq/jittor 现有工作区继续，未重新 clone。current HEAD a28c735f4947c31179a27f75c633ed0150bf75a2，fingerprint cc5f71670a2a496da27637d87b22daff54fc819dd86eba5ad50e8f769cbdeb93，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 200/0；既有工作区状态 hash 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98、索引干净。本轮只更新规定的三份状态文档。

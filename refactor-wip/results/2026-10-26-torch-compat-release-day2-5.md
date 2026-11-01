@@ -1,3 +1,17 @@
+## 2026-11-02 05:09 +0800 current-main FSDP2 optimizer shard gather 修复已接线；两 rank 运行时验收未完成
+
+### 直接诊断证据
+
+在既有 attempt-03-optimizer-broadcast 目录完成日志审计，完整执行清单 output-manifest.sha256 校验通过，SHA256 为 3bae5eb508ab3058a8f75f2a7e990afeb6f3cf8d2eadf43404e488a3fede1cfa。attempt-03 的 warmup exit=0，world_size=2 作业在 180 秒预算后 exit=124。rank0 与 rank1 的 optimizer 本地 state_dict 都很快返回；FULL save 的局部动量形状不相同：weight exp_avg/exp_avg_sq 在 rank0 为 (8,)、rank1 为 (4,)；bias exp_avg/exp_avg_sq 在 rank0 为 (0,)、rank1 为 (3,)。两边 step 均为 CPU 标量。rank0 完成逐张量广播和 optimizer state 保存，rank1 在第三个张量广播处停住。没有完成 checkpoint save、load 或 resume；这不是通过证据。失败与原日志保留在 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-fsdp2-save-state-internal-stage-r2-prepared/attempt-03-optimizer-broadcast/。
+
+### 源码改动与验证范围
+
+以仓库 HEAD e57a394c8c8833227c0e79f3aec2c3499e82c2a9 为基线，修改 compat/torch/installers/distributed.py：当 FSDP2 采用 FULL_STATE_DICT 时，各 rank 先通过 all_gather_object 汇总 optimizer 字段元数据，再调用已存在的 _gather_optimizer_state_dict 按参数 shard 重组成完整矩状态，随后才执行可选的 rank0 广播。这样避免把形状不同的 rank-local shard 当作完整张量广播。现有 compat/tests/torch/test_accelerate_distributed_integration.py 加入回归断言：非 step 状态必须与 FULL model state 中同名参数形状相同，step 必须是标量。当前两个文件 SHA256 分别为 29840c806c0b09fd2b89e495b6210138dd6fd0fd0567d3974b82fb8b4be7ba72 和 02523d6b94475f8a3d6ee972bcf0c52eafdb411619a1d62d0a12d89ee77b3eeb。
+
+python3 -m py_compile 两个文件通过，针对这两个文件的 git diff --check 通过。没有运行回归用例或两 rank checkpoint/resume：所有 GPU 当前由共享负载占用，且不能复用本轮确认的 chang Python cache。CPU 元数据探针及失败原件保存在 /data6/cgq/jittor-lab/_state/release-day23/20261102-fsdp2-metadata-helper-cpu-import-r1-prepared/，artifact-files.sha256 的 SHA256 为 8be0137c452933c7c8d7d27ab991206c145e3c92a2a65d8fcb44f4396a192b28。探针在断言前导入 Jittor 时新建 Python 3.10.15 cache 并开始冷编译；在 jittor_core 164/228 时中止，没有删除 cache 文件。创建的 jittor.lock 记录 PID 3302884，进程和进程组现已退出、fuser 未发现 holder；cache 与 stale lock 留存，禁止把这次探针算作通过或在同一身份上重试冷编译。
+
+GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 在 05:07 +0800 仍是 Default/shared，外部 yqa PID 3037196 与 3164740 各占 8,640 MiB，卡总用量 17,299 MiB。Slurm 节点 X12DPG-OA6 仍 DOWN、ConstrainDevices=no，cgq 无免密 sudo；普通 holder 不能阻止其他 CUDA context，未启动 holder。下一步只在已验证 cache 可复用、且可用隔离 GPU 窗口具备后，做一次双 rank FSDP2 save/load/resume 验证，并验证两 rank 恢复前后 optimizer/model 状态及后续更新。Day4–5 性能/显存验收仍需管理员 GPU UUID/GRES/device-cgroup 独占租约、三轮交替且每轮每侧至少十个热态样本，以及 load/first/hot、median/p95/离散度、allocator/workspace/NVML 峰值。整体 Day2–5 保持 Not complete。
+
 ## 2026-11-02 04:46 +0800 current-main FSDP2 阶段标记诊断到达 save_state 后超时；GPU2 holder 请求核实
 
 ### 源码与诊断范围

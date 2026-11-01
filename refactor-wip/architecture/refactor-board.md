@@ -1,3 +1,9 @@
+## 2026-11-02 05:09 +0800 FSDP2 optimizer shard 汇总路径已接入；真实两 rank 验证待资源窗口
+
+attempt-03 的 rank 级记录显示 FULL optimizer checkpoint 把 rank-local 动量直接逐张量广播：rank0 的 weight/bias 动量形状为 (8,)/(0,)，rank1 为 (4,)/(3,)，rank1 在广播第三个标量 step 时停住，rank0 已走完广播。已在 distributed checkpoint 入口先汇总字段元数据，再调用 FSDP2 现有 shard gather 重组完整 optimizer state，然后执行可选的 rank0 广播；现有 Accelerate FSDP2 两 rank 测试新增了完整参数矩形状和标量 step 断言。attempt-03 原始结果清单校验通过，rank job exit=124；新路径仅通过 py_compile 与 diff check，尚无运行时通过证据。
+
+元数据 CPU 探针因 chang Python 版本触发新的 Jittor cache 编译，在 core 164/228 时已停止；新 cache 与失效 jittor.lock 留存，未清理。正式 GPU2 仍是 shared：外部 yqa PID 3037196/3164740 各占 8,640 MiB，约 17,299 MiB 总用量；所有 GPU 仍有高负载。没有启动 holder 或新 GPU job。下一步在复用已验证 Python/cache 且获得两张可用隔离 GPU 后，运行一次真实 FSDP2 checkpoint/resume gate，检查完整 optimizer shape、恢复状态及下一步更新；Day4–5 正式性能/显存与更广 Day2–5 发布门继续 Not complete。
+
 ## 2026-11-02 04:46 +0800 current-main FSDP2 checkpoint 阶段诊断超时；GPU2 独占仍需管理员租约
 
 current-main 诊断绑定 HEAD a28c735f4947c31179a27f75c633ed0150bf75a2、source fingerprint cc5f71670a2a496da27637d87b22daff54fc819dd86eba5ad50e8f769cbdeb93、2,823 个源码文件；测试源与 installer SHA256 分别为 c2a2073ef50be99bdd578b81be3c2e524f02178a66302ec76e8234a37af444dc 和 74fbc7a953f085f4568041ef7e56ccafcee4d1a6713de995958a01cbbc7fbf07。GPU1+GPU4 attempt-01 的 NCCL warmup 通过，current-source Accelerate FSDP2 full-model/optimizer checkpoint-resume 测试在 300 秒预算后 exit 124。两边都到 accelerator_save_state；rank1 等待 rank0 持有的 Jittor build lock。无 checkpoint/resume 结果，原因未定，不能记作通过或已证实产品失败。来源与产物清单校验通过；细节见 Day2–5 结果文档本条。

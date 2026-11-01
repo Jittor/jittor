@@ -1160,6 +1160,41 @@ def _initialize_optimizer_state(optimizer):
             parameter.grad = gradient
 
 
+def _fsdp_optimizer_rank_metadata(state):
+    """Describe rank-local optimizer values without moving tensor payloads."""
+    from jittor._core.dtypes import dtype_name
+
+    metadata = {}
+    for name, fields in state.items():
+        described = {}
+        for field, value in fields.items():
+            if field == "step":
+                if isinstance(value, jt.Var):
+                    value = value.numpy()
+                if isinstance(value, np.ndarray):
+                    if value.ndim != 0:
+                        raise ValueError("FSDP optimizer step must be scalar: %s" % name)
+                    value = value.item()
+                elif isinstance(value, np.generic):
+                    value = value.item()
+                if not np.isscalar(value):
+                    raise TypeError("FSDP optimizer step must be numeric: %s" % name)
+                described[field] = ("step", value)
+            elif isinstance(value, jt.Var):
+                described[field] = ("tensor", dtype_name(value.dtype))
+            elif isinstance(value, np.ndarray):
+                if value.ndim == 0:
+                    described[field] = ("value", value.item())
+                else:
+                    described[field] = ("tensor", value.dtype.name)
+            elif isinstance(value, np.generic):
+                described[field] = ("value", value.item())
+            else:
+                described[field] = ("value", value)
+        metadata[name] = described
+    return metadata
+
+
 def _get_optimizer_state_dict(model, optimizers, *, submodules=None, options=None):
     options = _state_dict_options(options, submodules, optimizer=True)
     optimizers = _normalize_optimizers(optimizers)
@@ -1198,6 +1233,20 @@ def _get_optimizer_state_dict(model, optimizers, *, submodules=None, options=Non
             if name in result["state"]:
                 raise ValueError("multiple optimizers contain state for parameter %s" % name)
             result["state"][name] = state
+    if options.full_state_dict and getattr(model, "_is_fsdp_module", False):
+        fsdp = _fsdp_hooks.provider()
+        if fsdp is None:
+            raise RuntimeError("FSDP2 optimizer checkpoint requires the registered state provider")
+        local_metadata = _fsdp_optimizer_rank_metadata(result["state"])
+        if _native_distributed_active() and int(_distributed_world_size()) > 1:
+            rank_metadata = [None] * int(_distributed_world_size())
+            _native_all_gather_object(rank_metadata, local_metadata)
+        else:
+            rank_metadata = [local_metadata]
+        # FSDP optimizer moments are rank-local shards. Reassemble those shards
+        # before any full-state broadcast; broadcasting local tensors directly
+        # assumes identical shapes and can hang when shard sizes differ.
+        result = fsdp._gather_optimizer_state_dict(model, result, rank_metadata)
     if options.broadcast_from_rank0:
         result = _broadcast_state_dict_values(result)
     if options.cpu_offload:
