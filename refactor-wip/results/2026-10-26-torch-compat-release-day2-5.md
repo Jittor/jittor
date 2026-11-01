@@ -1,3 +1,29 @@
+## 2026-11-01 11:06 +0800 官方 Rotten Tomatoes test split：PT 基线通过，Jittor 初始化编译超时
+
+### 身份与数据绑定
+
+本轮开始使用 `/home/cgq/jittor` 现有工作区，HEAD `b42b978a89388498d79bfab2cd1f6723f31d3f93`，branch `integrate/cgq-transformers-native-multicard-target`，origin/cgq_transformers `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `152/0`。102 项既有 dirty/untracked porcelain SHA256 为 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`，暂存区为空；HEAD 上最近提交只含这三份状态文档。本轮没有改源码/测试。
+
+R2 证据目录：`/data6/cgq/jittor-lab/_state/release-day23/20261101-bert-current-main-rotten-tomatoes-test-eval-r2-prepared/`。其 `evidence-core.sha256` SHA256 为 `0e6e2172ba5491c912d5092c4d6423aba44d62a0da612adb2cbf794be4ec031d`，逐项校验通过；partial summary SHA256 `d74c4544de4e8363769fdfc975dd5c51d7f779061ff0e5b2fb2c26fc1d115ea9`，runner diagnostics SHA256 `f5dad1450769a909813e99bd6f90cf2cc9feca62cf5fce08532333866c375601`。
+
+数据为官方 Rotten Tomatoes test split，revision `aa13bc287fa6fcab6daf52f0dfb9994269ffea28`，1,066 条（label 0/1 各 533）；JSONL SHA256 `798266f44237235beac15126f040e5a2fc341924c007b4eb5c0f4e471595aa3a`。checkpoint 为 `/data6/cgq/jittor-lab/_state/release-day23/20261030-main-e7d171-bert821-resume51to100-executor-r2-hold/attempt-01/bert_resume/output/checkpoints/checkpoint-100`，`model.safetensors` SHA256 `4d9913bfe4073c51daa9e8272042e98b5bb44794fafabace0d1fcbaf1412f342`，评估不加载 optimizer。每个 runtime 预先绑定 max length 96、batch size 2、BF16、seed 821、真实 GPU UUID `GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068` 映射到 `cuda:0`；不训练、不启梯度。阈值预先写入 plan：各侧 accuracy 至少 0.70、accuracy 差不超过 0.02、cross-entropy 差不超过 0.03、预测一致率至少 0.99。
+
+### PyTorch held-out 结果
+
+PyTorch 真实 A800 评估 1,066/1,066 条完成：accuracy `0.8039399625`、macro-F1 `0.8031150721`、cross-entropy `0.4627644893`。只对可由单侧判定的 accuracy 下限（0.70）通过。参数指纹 before/after 均为 `249e8c67d054a26f87c0aa4e383b1aa344c945b66947222e3764059c86956d24`，未变；所有参数梯度为 None，model 处于 eval，updates=0。结果 JSON SHA256 `02bdd7110f5859df3cf34ba4a1e5b4c7fb496ba42bfdfa97a8d58a02cccbc27d`，逐样本 NPZ SHA256 `e02f770d71f5e3fd352c87c5c6b00f5ce4e852b50d51562a9fc9a475ccbddb8b`。runner 在评估完成后的末尾 GPU grep 返回 1：脚本末行 CRLF 使回车符进入 grep pattern；结果 JSON 为 `status=passed`，独立设备查询确认 GPU1 为 1 MiB/0%、无计算进程。这是 runner 后置检查错误，不是评估错误，诊断在 `runner-diagnostics.json`。
+
+### Jittor 结果与限制
+
+初始 runner 在调用评估前因 venv PATH 找不到 `python3.11-config` 停止；已记录并用 `/home/cgq/anaconda3/bin/python3.11-config` 通过环境预检。之后唯一一次 Jittor evaluator 在 600 秒上限被终止（exit 124）。日志 `/logs/jittor.log` SHA256 `b332ea55af5acac149e72e80670ea1c031027ba41ba26b9be59a1322cf8f41db` 显示 Jittor 1.3.11、CUDA enabled，核心编译 228/228 完成后仍在 CUDA/JIT 扩展生成；没有产生 result JSON 或任务指标，故不计算 prediction agreement、accuracy gap、CE gap。Jittor cache 在隔离副本中从 1,187 个 `nox_nccl` 文件增至 2,381 个并保留；这次编译耗时不是性能样本。按预算不延时、不重跑。
+
+R1 目录 `/data6/cgq/jittor-lab/_state/release-day23/20261101-bert-current-main-rotten-tomatoes-test-eval-r1-prepared/` 保留原始 JSON parse failure。原数据本身 1,066 行均为合法 JSON；Python `str.splitlines()` 把 3 个 U+0085 当额外分隔符拆为 1,069 段。R2 使用字面 LF 解析，输入预检通过。
+
+### 发布门状态
+
+这是一个 held-out 数据上的 PyTorch 分类基线，不是 JT/PT 兼容通过证据，不替代 R14 Qwen 训练证据，也不证明生成质量。没有性能、吞吐、显存或 allocator 结论。GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 仍由外部 yqa PID `2279286` 使用约 8651 MiB，Default/shared；本轮没有触碰 GPU2。Day4–5 仍需系统级 UUID/GRES 独占及隔离，匹配配置至少三轮交替且每侧每轮至少十个热样本，记录 median/p95/离散度、load/首步/热态、allocator/NVML 峰值及容量/OOM 恢复和真实 activation recompute。
+
+更广泛 Day2–5 门仍未完成：当前源码 Jittor held-out 对照需在受控的匹配预热环境下重新规划预算；multi-rank Trainer 新进程 checkpoint/resume、clean-installed wheel CUDA、ACL 构建/迁移证据、有效 generation quality 和真实 activation recompute 仍开放。整体 release 继续 **Not complete**，不要把 R14 的源码专属证据转移到当前 HEAD。
+
 ## 2026-11-01 10:29 +0800 current-main 双 rank Accelerate/NCCL：DDP 与 no_sync 通过，FSDP2 保存失败
 
 ### 身份与范围

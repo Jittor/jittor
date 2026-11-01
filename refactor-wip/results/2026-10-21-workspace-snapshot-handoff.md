@@ -1,3 +1,15 @@
+## 2026-11-01 11:06 +0800 handoff：新增 PT held-out baseline；Jittor test 对照因隔离编译预算超时
+
+当前仍在 `/home/cgq/jittor`，本轮开始 HEAD `b42b978a89388498d79bfab2cd1f6723f31d3f93`，origin/cgq_transformers `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `152/0`。原有 102 项 dirty/untracked 指纹 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211` 未变、index 为空。只更新本 handoff、看板和 Day2–5 结果文档；未改源码/测试、未 push。
+
+新 R2 证据目录 `/data6/cgq/jittor-lab/_state/release-day23/20261101-bert-current-main-rotten-tomatoes-test-eval-r2-prepared/`，manifest `evidence-core.sha256` SHA256 `0e6e2172ba5491c912d5092c4d6423aba44d62a0da612adb2cbf794be4ec031d`。PyTorch 在官方 Rotten Tomatoes test 1,066 条上得到 accuracy 0.803940、macro-F1 0.803115、CE 0.462764，参数不变、无梯度/更新；该结果仅为 PyTorch held-out 基线。Jittor 600 秒内完成核心编译但 CUDA/JIT 扩展未结束，exit 124，无指标；没有 JT/PT 一致性结果。R1 JSONL parser failure、R2 启动诊断、运行日志、逐样本输出和缓存副本均保留。
+
+GPU2 当前仍由 yqa PID 2279286 占用约 8651 MiB、Default/shared；未启动 burner，未对卡做任何更改。普通用户态占卡无法保证其他 CUDA client 不运行；Day4–5 必须等待系统级 GPU UUID/GRES 独占与设备隔离，不采信共享负载测量。整体 release 仍 **Not complete**。
+
+### 下一步
+
+先不要重复这次 600 秒 Jittor 初始化/编译。需要继续该 held-out 对照时，先从当前源码身份匹配的已完成编译缓存确认可复用性，并在独立预算计划下启动；PyTorch 基线不能替代 Jittor 结果。并行推进 multi-rank Trainer fresh-process checkpoint/resume、clean wheel CUDA smoke、ACL 迁移证据和有效 held-out generation 质量评估。取得系统级独占租约后，Day4–5 按既定三轮交替、每侧每轮至少十个热态样本、延迟分位数/离散度、加载/首步/热态、allocator/NVML 峰值、near-capacity/OOM 恢复及真实 activation recompute 对照验收。
+
 ## 2026-11-01 10:29 +0800 handoff：双 rank DDP 子集通过；FSDP2 save_state 缺 DCP planner
 
 继续使用 `/home/cgq/jittor`，HEAD `6b5af23a36ca2b89635957e032e6c0eb89c602b4`，origin/cgq_transformers `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `151/0`。原有 102 项 dirty/untracked 指纹 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211` 未变、index 空。本轮未改源码/测试，也未 push。

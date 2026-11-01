@@ -1,3 +1,13 @@
+## 2026-11-01 11:06 +0800 Rotten Tomatoes held-out PT 通过；current-source Jittor 初始化编译超时
+
+继续在 `/home/cgq/jittor`。本轮开始 HEAD `b42b978a89388498d79bfab2cd1f6723f31d3f93`，origin/cgq_transformers `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `152/0`；原有 102 项 dirty/untracked porcelain SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211` 未变、暂存区为空。只改三份既有状态文档；没有改代码/测试，也未 push。
+
+新增评估目录 `/data6/cgq/jittor-lab/_state/release-day23/20261101-bert-current-main-rotten-tomatoes-test-eval-r2-prepared/`，绑定当前源码、BERT checkpoint-100 和官方 Rotten Tomatoes test split（revision `aa13bc287fa6fcab6daf52f0dfb9994269ffea28`，1,066 条）。真实 A800 GPU1 上 PyTorch BF16 评估结果：accuracy `0.803940`、macro-F1 `0.803115`、cross-entropy `0.462764`；参数指纹前后相同、无梯度、0 次更新，超过预先登记的 PyTorch accuracy 0.70 下限。逐样本输出与日志已保留。
+
+Jittor 在 600 秒预算内完成 228/228 个核心编译单元，但 CUDA/JIT 扩展仍在生成，最终 exit 124、没有评估指标。隔离 cache 从 1,187 个 `nox_nccl` 文件增长到 2,381 个；缓存和日志保留，没有延长或重跑。故没有 JT/PT prediction agreement、accuracy gap 或 CE gap 证据；该结果只支持 PyTorch test-split 基线，不证明 Jittor 兼容、训练或生成质量通过。R1 的输入解析失败也保留：`str.splitlines()` 将 3 个 U+0085 拆成额外行，R2 已修为按 JSONL LF 分隔。
+
+GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 仍由 yqa PID `2279286` 占用约 8651 MiB、Default/shared；本轮未用 GPU2、未运行 burner。GPU1 评估结束后恢复 1 MiB 且没有计算进程。普通占卡程序不能提供排他保证；Day4–5 正式性能/显存验收仍需管理员/调度器提供 UUID/GRES 与设备隔离租约，再做至少三轮交替、每侧每轮至少十个热样本及延迟分位数/离散度、加载/首步/热态、allocator/NVML 峰值、容量/OOM 和真实 activation recompute 对照。整体 Day2–5 release 继续 **Not complete**。
+
 ## 2026-11-01 10:29 +0800 current-main 两项双 rank Accelerate DDP 用例通过；FSDP2 checkpoint 暴露 DCP 缺口
 
 继续使用 `/home/cgq/jittor`，HEAD `6b5af23a36ca2b89635957e032e6c0eb89c602b4`，origin/cgq_transformers `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `151/0`。本轮测试前后原有 102 项 dirty/untracked 状态 SHA256 均为 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`，index 为空；没有改源码或测试。双 rank 证据及终审清单在 `/data6/cgq/jittor-lab/_state/release-day23/20261101-current-main-accelerate-nccl-r1-prepared/`，artifact manifest SHA256 `deb902fe84be46e15e7e3f5e951ca9e7dd164cf402b02c4c1ddddfd09858171f`。
