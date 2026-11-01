@@ -1,3 +1,13 @@
+## 2026-11-02 01:09 +0800 current-main Day4–5 R4 测量包已准备；系统级独占仍不可用
+
+继续使用 /home/cgq/jittor 现有工作区。准备时 HEAD 为 83c689507e872e21d8404a8e24c615d800e8ad4e，origin/cgq_transformers 为 e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（祖先）；既有 105 项 dirty/untracked 状态 SHA256 仍为 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98，tracked diff SHA256 为 9d6864dc82d45ecf0bac78bc118b77a6573481a03d89364d07c3805379ea1757，untracked 文件内容摘要为 3370d8669846acb01163e3758008539da20ebc5db3c575d3ce7bb4e26ac852d0。源码与既有工作区文件未改动。
+
+current-main R4 包保存在 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-day45-exclusive-r1-prepared/，package-files.sha256 的 SHA256 为 08aa96da16ccf5236defbb1b79c3ac72e230af5b2eef92e186412a327daf5bcb。绑定固定 BERT 权重 SHA256 86fa7113367fd0d231a76571ca1b73a1b24166af33558fee960636ce56337ed7。协议把容量扫描（seq=512，PT/JT 分别从 batch 64 扫至 224，首个确认 OOM 即停止）与正式比较分开；正式代表格及容量格要求 3 轮交替，每轮每侧 10 个热态样本、4 次 warmup，并记录模型加载、warmup 前的真实首步、热态 median/p95/标准差/CV、allocator live/reserved/peak、100ms NVML 进程显存峰值、参数更新与 fallback。对 worker 和整个 suite 都有时间上限、无自动重试；运行器 fail-closed，要求 job/UUID/GRES 对应的管理员租约证明和 device-cgroup 隔离。bash -n 与 Python py_compile 静态核验通过；R4 状态仍是 PREPARED_NOT_STARTED，没有性能测量或 CUDA benchmark 进程。
+
+旧 R3 的 first_step_seconds 实际在 warmup 后测量，且 NVML 只在每个 step 结束取样；R4 已修正这两点并去掉 JT 侧 profiler 对热态计时的包裹。原始 R3 结果保留为 shared-load 诊断。另更正独占边界：/data6/cgq/jittor-lab/tools/gpu2-exclusive-run.sh 通过 EXCLUSIVE_PROCESS 限制同时 CUDA context，但此套件会以独立 PT/JT 进程交替，进程释放 context 的间隙仍可被其他程序抢占，因此该 helper 单独不能满足整段测试的隔离要求。
+
+最近资源复核中，GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 仍为 Default/shared，外部 PID 4166405 与 3037196 各占 8,640 MiB；A800 节点 X12DPG-OA6 状态 DOWN，TaskPlugin=task/affinity、CgroupPlugin=null，账号无 sudo。对 a100、a800 的 srun --test-only 均返回 “Invalid account or account/partition combination specified”。因此尚无可执行的独占 allocation，R4 没有启动。下一步是取得管理员启用的 Slurm GRES + task/cgroup/ConstrainDevices 独占租约，然后运行该包；Day4–5 与整体 Day2–5 继续 **Not complete**。
+
 ## 2026-11-02 00:51 +0800 GPU2 独占占卡当前不可启动
 
 再次核对 GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0`：A800 80GB、compute mode `Default`，显存已用 17,299 MiB，外部 PID `4166405` 与 `3037196` 各占 8,640 MiB，utilization 78%。Slurm 将节点 `X12DPG-OA6` 标为 `DOWN`，没有可用 allocation；配置虽有 `gpu:a800:10` GRES，但 `TaskPlugin=task/affinity`、`CgroupPlugin=null`，当前账号 `sudo -n` 失败。
