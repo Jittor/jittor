@@ -1,3 +1,12 @@
+## 2026-11-02 03:10 +0800 R4 wheel graph_replay 成员与测试源映射完成；CUDA runtime 仍未执行
+
+只读映射默认 wheel baseline 的 graph replay 新增项。R4 包源码 HEAD 5a1b42223573b25ea01734ce616c63fc31dd016a、source manifest SHA256 ec7060f76b743926bfad54c6f94bddf19e1fccc12c972c20079c78c9f811c76e；main wheel SHA256 b87469fe5a6103d6f4fcea0e6292d663102ef5cd2be661439db2f81515cc3ef4。python/jittor/_runtime/graph_replay.py 在 R4 source snapshot、当前工作树和 wheel 解包成员的 SHA256 均为 c6d6e58bff56924b55312fcd466672ef02b30447902b309e94843f093d23af3c，确认该新增 runtime 文件确实进入 wheel。
+
+R4 source snapshot 有对应覆盖源：tests/core/test_graph_replay.py SHA256 b54e62ad0ec10169521286f262414297e9050395d69ba3ed38b664d5c6af454b，覆盖不同输入/形状、参数替换、随机图拒绝、返回结构、自动策略和 replay graph；tests/core/test_graph_replay_retention.py SHA256 47511931a2f8a46fc32630e443b1d02a1fddd56a59b155b2a72efc5f8d901429，其中 CUDA 专用用例核对峰值显存；tests/nn/test_graph_replay_multi_output.py SHA256 9ab05e61e05d72c9727b839e788743b2f9737218367001d03af38feaf1e235c4；compat/tests/torch/test_graph_replay_alias_warmup.py SHA256 2e6bd41bd337ec3a8299f13c82ebf35273ca3ce5837f74f47efcfb3ed1045b15，CPU/CUDA 参数化且启用 fallback 禁止；compat/tests/torch/test_torch_compile_replay.py SHA256 50d079486bb779369ac52c89f5e563c5a28639088fd4c29d7e695ca6e47f9c8e，含 torch.compile reduce-overhead 的 replay/workspace 用例。CUDA 类受可用构建能力条件控制，compat 测试也明确要求专门 CUDA job 确认未跳过。
+
+这些文件证明有较完整的测试入口，不证明 R4 wheel 的运行结果。R4 包流程只做构建、wheel/sdist 内容与安装布局审计及 Python compileall；未导入 Jittor core、未运行 replay tests 或 GPU workload。当前默认 wheel baseline 仍为 69 additions、302 content changes、2 removals、0 approved。下一步须在与 R4 wheel/source 绑定的独占 CUDA 环境执行无 fallback 的 distinct-input、形状/参数变化、workspace 回收后重放和峰值显存用例，再分别判断 runtime 功能与性能；GPU2 仍共享且节点 DOWN，本轮不启动。
+
+本轮只读比对 source/wheel/test 文件，没有运行测试、修改源码或改 baseline；整体 Day2–5 仍 Not complete。
 ## 2026-11-02 03:06 +0800 current-main DCP 双 rank 探针未越过导入；静态审阅发现 rank 本地失败缺少错误汇聚
 
 本轮只读检查绑定当前工作树 HEAD 4ed421da85b7b41f1b740f07b9c6bd2fb6565c58。compat/torch/installers/distributed.py SHA256 74fbc7a953f085f4568041ef7e56ccafcee4d1a6713de995958a01cbbc7fbf07；compat/tests/torch/test_checkpoint_state_dict.py SHA256 1dba49714e104b9092a8506de244646d8898153cee538842540f638c5f1ea229。既有 attempt-01-stage-markers/output-manifest.sha256 SHA256 083321506f5fb2d56a8731a701ac1f3286048f07cab106faf0002c2cdcd07ff8，清单验证通过；probe SHA256 e81141f0be8d40af480f7870b892209d2e381fbd72a27d8793595a90e1365a5a，rank0/1 日志 SHA256 分别 5661a33a0b11ae3d9ddfd98906216d97e20f4f276d5120b72f9cc171c47c375c / fb7f53ddc04a34ad74555f57241e144881f18414f0aaf2dd1e82b75d6cb72fa1。

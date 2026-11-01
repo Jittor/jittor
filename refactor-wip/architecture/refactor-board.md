@@ -1,3 +1,7 @@
+## 2026-11-02 03:10 +0800 R4 graph_replay 已确认打入 wheel；CUDA runtime 尚无通过证据
+
+R4 默认 wheel 内 jittor/_runtime/graph_replay.py 字节与 source snapshot 相同；测试树含 correctness、结构化输出、alias warmup、workspace retention 和 torch.compile reduce-overhead 用例，其中 CUDA 路径仍需独占构建执行并确认不跳过。打包阶段只有安装布局/compileall 证据，没有 Jittor runtime 或 CUDA replay 结果；默认 wheel diff 仍是 69 additions、302 changes、2 removals、0 approved。GPU2 共享，暂不运行；Day2–5 不标 complete。
+
 ## 2026-11-02 03:06 +0800 current-main DCP 双 rank 仍未运行；静态发现错误传播覆盖缺口
 
 DCP 安装器静态路径中，rank-local I/O 或校验异常会在 rank 到达下一 barrier 前抛出，rank0 metadata 写入异常也会使其他 rank停在收尾同步；未发现跨 rank 错误状态汇聚。现有 DCP roundtrip 测试是 world-size 1。attempt-01-stage-markers 已验证产物清单，但因精确 current-core 缺失在 import 阶段退出，不能作为 DCP 运行结论；不重跑已耗尽冷编译预算。匹配 core 就绪后，先做双 rank 内部阶段追踪和单 rank 失败注入，再判断实现。GPU2 当前共享，Day4–5 仍需系统级独占租约；整体 Day2–5 Not complete。

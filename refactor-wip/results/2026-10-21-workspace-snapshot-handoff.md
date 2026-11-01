@@ -1,3 +1,9 @@
+## 2026-11-02 03:10 +0800 下一步：R4 graph_replay 需独占 CUDA runtime 验收
+
+已确认 R4 wheel 实际包含与 source snapshot 字节一致的 graph_replay runtime 文件，并映射了 core、multi-output、alias warmup、retention 与 torch.compile reduce-overhead 的测试入口。R4 包构建没有运行这些测试或 GPU workload，compileall 只证明语法编译；不记 runtime 通过。source/wheel/hash 和测试范围见 Day2–5 结果文档 03:10 条目。
+
+下一步在绑定 R4 wheel/source 的独占 CUDA lease 上执行 no-fallback replay correctness、动态输入/形状/参数变化、workspace 回收后重放与 peak-memory 用例；正式时延 cohort 仍按 Day4–5 规定另行完成。GPU2 目前共享，不能用普通占卡进程排他。overall Day2–5 继续开放。
+
 ## 2026-11-02 03:06 +0800 下一步：DCP 需匹配 core 后做双 rank 阶段与失败传播验证
 
 复核了当前 HEAD 4ed421da85b7b41f1b740f07b9c6bd2fb6565c58 的 DCP 保存/恢复顺序。双 rank stage attempt-01 的产物清单通过校验，但 rank0 因 exact CUDA 12.2/nox_nccl jittor_core 不存在而在 import 阶段退出，rank1 被 launcher 停止；未进入 process-group 或 DCP 调用，不能判断产品通过或失败。不要重跑相同冷构建路径。
