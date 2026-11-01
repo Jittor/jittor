@@ -69,6 +69,10 @@ def _adamw_skips_step_on_device(self):
     """
     from jittor._runtime.dispatch import select_kernel
     from .optimizer_api import _torch_param_steps
+    # The captured found-inf counter is attached once per optimizer. Until it
+    # is stored per group, a multi-group AdamW must take the host decision path.
+    if len(self.param_groups) != 1:
+        return False
     for pg in self.param_groups:
         fused = pg.get("fused", getattr(self, "fused", None))
         if fused is False or (fused is not True and pg.get("foreach") is False):
@@ -77,16 +81,56 @@ def _adamw_skips_step_on_device(self):
             return False
         grads = pg.get("grads") or [None] * len(pg["params"])
         steps = _torch_param_steps(pg)
-        active = [(p, m, v, g, int(steps[i])) for i, (p, g, v, m) in enumerate(zip(
-            pg["params"], grads, pg["values"], pg["m"]))
-            if p.requires_grad and isinstance(g, jt.Var) and list(g.shape) == list(p.shape)]
+        active_indices = tuple(
+            i for i, (p, g) in enumerate(zip(pg["params"], grads))
+            if p.requires_grad and isinstance(g, jt.Var) and list(g.shape) == list(p.shape))
+        active = [(pg["params"][i], pg["m"][i], pg["values"][i],
+                   grads[i], int(steps[i])) for i in active_indices]
         if not active:
             continue
+        previous_indices = self.__dict__.get("_amp_skipped_step_indices")
+        if previous_indices is not None and tuple(previous_indices) != active_indices:
+            return False
         impl = select_kernel("optim.adamw_fused", active)
         if (impl is None or not getattr(impl, "accepts_live_step", False)
                 or len({entry[4] for entry in active}) != 1):
             return False
     return True
+
+
+def _settle_captured_adamw_steps(opt):
+    """Fold device-recorded overflow skips into Python optimizer state.
+
+    Replays keep the step live on device and count attempted updates in the
+    Python book. When callers inspect or serialize state, settle the number of
+    skipped updates so the public state matches eager AdamW. The identity guard
+    in live_fused_update then makes an existing capture rebuild before reuse.
+    """
+    skipped = opt.__dict__.get("_amp_skipped_steps")
+    if not isinstance(skipped, jt.Var):
+        return
+    try:
+        count = int(skipped.numpy().reshape(-1)[0])
+    except EXPECTED as exc:
+        swallowed("torch/optimizers.py _settle_captured_adamw_steps: skipped.numpy()", exc)
+        return
+    indices = tuple(opt.__dict__.get("_amp_skipped_step_indices", ()))
+    if count:
+        for pg in getattr(opt, "param_groups", ()):
+            steps = _torch_param_steps(pg)
+            for i in indices:
+                if 0 <= int(i) < len(steps):
+                    steps[int(i)] = max(0, int(steps[int(i)]) - count)
+        opt.n_step = max(
+            (int(step) for pg in getattr(opt, "param_groups", ())
+             for step in _torch_param_steps(pg)), default=0)
+    opt.__dict__.pop("_amp_skipped_steps", None)
+    opt.__dict__.pop("_amp_skipped_step_indices", None)
+
+
+def _state_dict_with_captured_adamw_steps(opt):
+    _settle_captured_adamw_steps(opt)
+    return _state_dict_torch(opt)
 
 
 def _install_optimizers(g, registry=None):
@@ -133,9 +177,18 @@ def _install_optimizers(g, registry=None):
         Base._OptState = _OptState
         Base.state = property(_state_getter)
         Base._torch_state_installed = True
+    if not getattr(_OptState, "_torch_captured_adamw_steps_wrapped", False):
+        _original_state_get = _OptState.get
+
+        def _state_get_with_captured_adamw_steps(state, param, default=None):
+            _settle_captured_adamw_steps(state._opt)
+            return _original_state_get(state, param, default)
+
+        _OptState.get = _state_get_with_captured_adamw_steps
+        _OptState._torch_captured_adamw_steps_wrapped = True
     if not getattr(Base, "_torch_state_dict_wrapped", False):
         _native_load_state_dict = Base.load_state_dict
-        Base.state_dict = _state_dict_torch
+        Base.state_dict = _state_dict_with_captured_adamw_steps
         Base.load_state_dict = _load_state_dict_torch
         Base._torch_state_dict_wrapped = True
     # torch's Optimizer.zero_grad accepts set_to_none=; jittor's rejects the kwarg.

@@ -1,3 +1,23 @@
+## 2026-11-02 05:53 +0800 current-main captured GradScaler overflow/recovery CUDA 功能门通过；Day4–5 和更广发布门仍开放
+
+### 功能修复与证据身份
+
+继续使用 /home/cgq/jittor 现有工作树，没有重新 clone。基线 HEAD e2d450535cad5f3dc9adc02fc11017d5dbf5edae，分支 integrate/cgq-transformers-native-multicard-target，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81；运行前 dirty/untracked 状态摘要 SHA256 b9efc074fa74e24bcd7543b585262cdf9c7107fef30aff079534f5e73ad68b5c。源码 before/after 哈希清单一致。实现文件：compat/torch/optimizers.py SHA256 bc0cf9ac416a9ef3f67da18e3dba0c40cc5757c7effc401ee8262a0dd4f2d1a0；python/jittor/_runtime/step_capture.py SHA256 1c93dc2c16fef5b09905c56050f38792aa5485ee7b47b3ca2647d6383027683b；compat/tests/torch/test_captured_grad_scaler.py SHA256 986727285ec95d557f5917ceca57e97ef9f7e83f0d8b770dfe67924e14ede20d。
+
+修复将 captured overflow skip 数在读取 optimizer state/state_dict 时折回有效 Python step，并清除临时标记；capture identity guard 使之后的更新重新 capture。多参数组不走这条 device-side skip 路径。回归按 finite、finite、overflow、finite 顺序对照 eager AdamW，检查参数、exp_avg、exp_avg_sq、公开与序列化 step、GradScaler scale/state；再检查读取公开状态后的下一步更新。attempt-06 使用 CUDA_VISIBLE_DEVICES=1，物理 GPU1 UUID GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068，进程内 cuda:0；CUDA enabled，fallback policy=error，fallback=0。同步 lazy tensor 后设备映射断言通过；结果 1 passed、0 skipped、1.80s，GradScaler scale 由 8 降至 4。GPU1 有共享 VLLM 进程，此项仅作功能结论。
+
+### 迭代记录与产物
+
+/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-captured-gradscaler-r1-prepared/ 中 attempt-01 至 attempt-06 全部保留。attempt-01 的 harness 在 replay 间读参数而破坏 capture；attempt-02 遗漏 zero_grad；attempt-03 暴露 overflow 时 optimizer step 真正多进一格；attempt-04 核心状态对照通过；attempt-05 在 lazy tensor 物化前检查 placement；attempt-06 补同步后的设备断言并通过。最终 attempt 目录为 attempt-06-cuda-captured-overflow。其 cache 清单各 1,261 项，新增/删除均为 0，只有 jittor.lock 哈希变化。receipt SHA256 7d503db6fb971c91bc3250b993999e609c4c2b8d69528b0391513234bd490ac3；output-manifest.sha256 文件 SHA256 44d1764a57d57805076906d0160e95c29f41806fb3ac83fdf4bdd0c38cc1da16，清单校验通过；cache-before/after SHA256 为 4e851d26c441c8216d417276f08438e563cc4bb53b49efb7af56eb2dccc8c446 / 05123eaaf067dab6495a7afd1b280ef4b72f3648b282325c7f8c39581cde0264。
+
+### GPU2 与仍开放的发布门
+
+05:52 +0800 GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 仍为 Default/shared，外部 yqa PID 3037196、3164740 各占 8,640 MiB；cgq 无免密 sudo。没有写入或启动普通 holder；它不能禁止其他 CUDA context。已有 /data6/cgq/jittor-lab/tools/gpu2-exclusive-run.sh（SHA256 c68ac63cca92bb7204b786f984062fced7de7dd509363bbc77e55b445cb6d16b）会等待 GPU 空闲、请求管理员 sudo、开启 EXCLUSIVE_PROCESS，并在该模式下运行实际 benchmark 命令，退出后恢复模式。它不能在当前作业运行时安全接管，也不适合先占卡、另开测试 worker 并行。
+
+Day4–5 需要同一候选下匹配模型、数据、dtype、batch、序列长度、优化器和训练步骤，至少三轮 PT/JT 交替，每轮每侧至少 10 个热态样本；按格报告 load、first-step、steady-state 耗时和 median/p95/离散度、allocator/workspace/NVML peak、CPU RSS、容量边界及 OOM/恢复。此前 checkpoint r3 单轮 JT 合成 Llama 已证实对应 activation-checkpoint 路径有重计算，但 on 的 allocator peak 和耗时高于 off；没有 PT 对照或容量/OOM，不是正式性能/显存通过。
+
+更广 Day2–5 仍需双 rank DCP 错误传播、针对最终候选的 clean-installed wheel/runtime 与支持矩阵复核、held-out generation/任务质量指标及其他日常工作流的端到端恢复覆盖。旧提交或小模型证据不能外推到最终候选。stock PyTorch 无法读取 JT portable-pickle optimizer 的跨框架互操作失败继续单列；它不推翻 Jittor 新进程 resume。Qwen seed821 两 epoch/恢复证据仅适用于记录的源码、seed 和配置，不证明普遍收敛或生成质量。overall release 继续 **Not complete**。
+
 ## 2026-11-02 05:28 +0800 current-main FSDP2 FULL model/optimizer checkpoint-resume 双 rank 通过
 
 ### 修复与运行证据

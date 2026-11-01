@@ -1,3 +1,9 @@
+## 2026-11-02 05:53 +0800 Handoff：captured GradScaler overflow/recovery CUDA 功能门通过
+
+在 /home/cgq/jittor HEAD e2d450535cad5f3dc9adc02fc11017d5dbf5edae 修复 captured fused AdamW overflow 后 Python step 错进，并在物理 GPU1 真 CUDA、fallback=0 完成 attempt-06：1 passed、0 skipped；参数、moment、step、scaler state 与 eager 相符，状态读取后再次 capture 更新也通过。六个 attempt 原件均保留；最终 output-manifest SHA256 44d1764a57d57805076906d0160e95c29f41806fb3ac83fdf4bdd0c38cc1da16，receipt SHA256 7d503db6fb971c91bc3250b993999e609c4c2b8d69528b0391513234bd490ac3。完整路径见 Day2–5 结果文档。
+
+GPU2 仍被外部 yqa PID 3037196/3164740 使用，Default/shared，账号无免密 sudo。没有启动不能提供互斥的普通 holder；已有 gpu2-exclusive-run.sh 要求空闲卡和管理员权限，再将真实 benchmark 命令置于 EXCLUSIVE_PROCESS 窗口。Day4–5 还需 UUID/GRES/device-cgroup 独占与三轮交替配对数据；更广 Day2–5 的双 rank DCP 错误传播、最终候选安装复核、held-out 任务质量和支持矩阵仍开放。overall release 继续 **Not complete**。
+
 ## 2026-11-02 05:28 +0800 Handoff：current-main FSDP2 FULL checkpoint/resume 双 rank 功能门通过
 
 在既有 `/home/cgq/jittor` 工作树修正 FULL model gather、FULL load broadcast shape 和 optimizer shard restore/rebind。attempt-07 绑定 source fingerprint `7b323ff95269f916c593e3d06c44d8e455bb1aa824d8c2e38f2ee75ff1330267`，GPU1/GPU4 真 CUDA、NCCL world_size=2；Accelerate save/load、模型与 optimizer 状态恢复、再更新比较均通过，rank0/rank1 各 1 passed、0 skipped，fallback 计数未增长。输出清单文件 SHA256 `7a0dac299a653e9f36470e1141c498e51cdf6d56f7c7246e3b750221c41f314d`。attempt-03/04/05/06 的原始失败记录保留；准确阶段与清单哈希见 Day2–5 结果报告。

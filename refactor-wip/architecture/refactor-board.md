@@ -1,3 +1,11 @@
+## 2026-11-02 05:53 +0800 current-main captured GradScaler 溢出/恢复 CUDA 功能门通过；GPU2 独占仍不可用
+
+在 /home/cgq/jittor HEAD e2d450535cad5f3dc9adc02fc11017d5dbf5edae 上，修复 captured fused AdamW 在 GradScaler overflow 后 Python optimizer step 多前进一步的问题：optimizer state/state_dict 读取时结算 device skip count，capture guard 令后续状态读取触发重建；多参数组仍走 host 决策。attempt-06 在物理 GPU1（UUID GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068，进程内 cuda:0）完成 CUDA 回归，1 passed、0 skipped、1.80s、fallback=0；参数、矩状态、step、scaler state 与 eager 对照一致，状态读取后再次 capture 更新也通过。GPU1 有共享 VLLM 进程，结果只作功能证据。六个 attempt 原件均保留；最终 output manifest SHA256 44d1764a57d57805076906d0160e95c29f41806fb3ac83fdf4bdd0c38cc1da16，receipt SHA256 7d503db6fb971c91bc3250b993999e609c4c2b8d69528b0391513234bd490ac3，细节见 Day2–5 结果文档。
+
+05:52 +0800 GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 仍为 Default/shared：外部 PID 3037196 与 3164740 各用 8,640 MiB，总用量 17,299 MiB、利用率 97%；cgq 无免密 sudo。没有启动普通占显存 holder，因为它不能阻止其他进程建立 CUDA context。已有 /data6/cgq/jittor-lab/tools/gpu2-exclusive-run.sh（SHA256 c68ac63cca92bb7204b786f984062fced7de7dd509363bbc77e55b445cb6d16b）需 GPU 空闲和管理员权限，切换 EXCLUSIVE_PROCESS 后包裹实际测试命令；不能在已有任务期间预留，也不能作为 holder 后再并行启动独立测试 worker。
+
+Day4–5 正式性能/显存仍需管理员按 UUID 提供 GRES/device-cgroup 独占窗口，同一候选与匹配配置下至少三轮 PT/JT 交替、每轮每侧至少 10 个热样本，并报告 median/p95/离散度、load/first/hot、allocator/workspace/NVML 峰值和容量/OOM。更广 Day2–5 发布门未完成，整体仍为 **Not complete**。
+
 ## 2026-11-02 05:28 +0800 current-main FSDP2 FULL checkpoint/resume 双 rank 通过；整体 Day2–5 仍开放
 
 在当前工作树接通 FSDP2 FULL model gather、rank0-only full-state 接收缓冲和 optimizer shard restore/rebind。绑定 source fingerprint `7b323ff95269f916c593e3d06c44d8e455bb1aa824d8c2e38f2ee75ff1330267` 的 attempt-07 在 GPU1/GPU4 真 CUDA、NCCL world_size=2 完成 Accelerate FSDP2 full model/optimizer save、load 与恢复后更新；两 rank 均 1 passed、0 skipped，fallback 禁止范围无调用，产物清单通过。attempt-03 到 06 的逐阶段失败原件均保留，详见 Day2–5 结果报告。

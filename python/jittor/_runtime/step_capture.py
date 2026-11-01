@@ -156,11 +156,24 @@ def live_fused_update(impl, lr, steps, indices, read_lr, frozen, found_inf=None,
                        lambda: [float(steps[first]), float(read_lr())])
     if found_inf is None:
         return hyper
+    if owner is None:
+        refuse("a captured GradScaler update needs an optimizer state owner")
+        return lr
+    current_indices = tuple(int(i) for i in indices)
+    previous_indices = owner.__dict__.get("_amp_skipped_step_indices")
+    if previous_indices is not None and tuple(previous_indices) != current_indices:
+        refuse("the captured AdamW parameter set changed")
+        return lr
     skipped = getattr(owner, "_amp_skipped_steps", None)
     if skipped is None:
         skipped = jt.zeros((1,), "float32")
         _materialize(skipped)
-        owner._amp_skipped_steps = skipped
+        owner.__dict__["_amp_skipped_steps"] = skipped
+        owner.__dict__["_amp_skipped_step_indices"] = current_indices
+    # Reading or saving optimizer state settles the host step book and clears
+    # these attributes. The existing graph must be rebuilt before reusing the
+    # captured step so its live step array starts from the settled value.
+    guard(lambda o=owner: id(o.__dict__.get("_amp_skipped_steps")))
     found = found_inf.float32().reshape((1,))
     hyper = jt.concat([hyper[:1] - skipped, hyper[1:2], found])
     skipped.update(skipped + found)
