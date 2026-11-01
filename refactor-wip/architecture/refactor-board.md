@@ -1,3 +1,9 @@
+## 2026-11-02 07:58 +0800 R5 installed-wheel checkpoint/HF 集成用例 2/2 通过；显存验收仍开放
+
+attempt-13 使用 R5 clean install 的 Jittor/Torch 模块和 Transformers 4.56.2，仅执行两项此前因依赖缺失而 skip 的 checkpoint 集成测试；2 passed、0 skipped/failed、pytest rc=0，fallback 0→0，core 前后 current。LlamaDecoderLayer checkpoint 重算测试约 50 秒。attempt manifest SHA256：1b85924506322095f52bd1aefa27be97cf558b8f5a8a2d757be636f389928494。
+
+当前 compat/torch/installers/data.py 与 R5 snapshot 同 SHA256 0a4d1c151a9de5e3d57da60117f156e8641b26febd7c63a4727914fef04c33c8；本结果证明该 API 在上述 CPU/HF 配置会于反向重算，不证明 activation checkpoint 节省显存。测试还报告 Transformers module 被替换但未恢复，标为报告项而非失败。GPU2 仍 Default/shared、17,299 MiB，Day4–5 独占 cohort 未开始；整体 Day2–5 保持 Not complete。
+
 ## 2026-11-02 07:46 +0800 Installed-wheel Torch core10 CPU：227 passed、3 skipped；release 门仍未满足
 
 R5 installed-wheel CPU core10 attempt-07 在 `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-installed-torch-focus-r1-prepared/attempt-07/` 完成：pytest 收集并执行十个指定模块的 230 项，227 passed、3 skipped、0 failed，pytest 返回码 0，backend fallback 0→0，installed core 前后均 current。attempt manifest SHA256 为 `076f54fb8b05e226b1c4782a41c66c65a333440b94bd66132365e188fb879810`。

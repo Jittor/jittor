@@ -1,3 +1,8 @@
+## 2026-11-02 07:58 +0800 Handoff：R5 installed-wheel HF checkpoint 集成两项通过；显存门未通过
+
+attempt-13 在 R5 clean installed wheel 上使用 Transformers 4.56.2，跑此前缺依赖的 LlamaDecoderLayer recompute 与 Transformers GradientCheckpointingLayer protocol 两用例：2 passed、0 skipped/failed、fallback 0→0、pytest rc=0，core current。实际 Jittor/Torch 模块路径均来自 R5 install，测试源码与 R5 snapshot 相同。manifest SHA256 1b85924506322095f52bd1aefa27be97cf558b8f5a8a2d757be636f389928494。
+
+当前 torch.utils.checkpoint.checkpoint 在该配置已有真实反向重算证据；R3 synthetic Llama on/off 诊断显示 checkpoint 模式更慢且 allocator 峰值更高，因此不宣称显存节省。GPU2 仍 Default/shared，Day4–5 正式性能/显存仍需 Slurm GRES/device-cgroup 独占租约和三轮配对测量。其它功能缺口及整体 Day2–5 release 仍开放。
 ## 2026-11-02 07:46 +0800 Handoff：installed-wheel Torch core10 原始执行 227 passed、3 skipped；overall 仍开放
 
 在 `/home/cgq/jittor` HEAD `64135f1cd3865c811bf22ab84be72e218418c870` 上完成 R5 installed-wheel Torch CPU core10 attempt-07。原始 pytest 执行十个维护模块的 230 项，227 passed、3 skipped、0 failed，fallback 0→0、installed core current。runner 标为 FAIL 的原因是 selector 检查把相对 nodeid 路径与完整仓库路径比较，导致 `all_selectors_collected=false`；十个实际 nodeid 模块均与请求集合对应。保留 FAIL，不把含两项真实 dtype 语义差异 skip 的结果记为全通过。
