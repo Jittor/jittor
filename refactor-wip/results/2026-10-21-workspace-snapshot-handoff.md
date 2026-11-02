@@ -1,3 +1,10 @@
+## 2026-11-02 15:27 +0800 Handoff：current-main 两 rank HF Trainer DDP stop/resume 轨迹吻合；sample-order recorder 待修正
+
+HEAD `9a93b746ea226a71ce1b8a63cfd2c766c0975813`、source fingerprint `b49758df5bff4e7fc3d144d609daf6edc2691ad001d18c7fdf07b5491924d015` 上，公共 Transformers Trainer + PEFT/BERT 两 rank NCCL DDP fixture 完成 full 两步、step1 checkpoint stop、新进程 resume 至 step2；每 rank 112 个非 sample-order 轨迹数组 max_abs=0、failure=0，fallback=0。测试使用 GPU0/GPU1，各映射为进程内 `cuda:0`；不构成性能/显存或任务质量结论。
+
+Dataset 访问副作用的 sample-order recorder 被 gradient accumulation 预取误导，实际输出有重复 ID，所以还未证明 sampler cursor/order 恢复。attempt-03 与 comparator 原件保留，补充哈希清单已生成；先修 collator host-ID recorder，再择有界资源窗口做 full/stop/resume 审计。15:27 +0800 GPU2 仍由外部 PID `3037196`、`3164740` 各用 8,640 MiB，`cgq` association 查询为空、目标节点 DOWN。用户要求管理员添加 association，本会话没有管理员消息通道，未代发；没有运行 holder。Day4–5 和更广 Day2–5 release 继续 **Not complete**。
+
+
 ## 2026-11-02 14:49 +0800 Handoff：current-main 公共 HF Trainer 单卡 step-1 新进程 resume 与不中断轨迹零容差一致
 
 在 `/home/cgq/jittor` 继续，执行时 HEAD `d30b89044ddbb6f499eb70b12f7fff9037452ed4`、source fingerprint `1e44760071de2bd3b105276dae01a3d1efcd5e89cb5e55b0b996d391e28642e2`。实际 GPU1/`cuda:0` 上，公共 HF Trainer + PEFT/BERT 小型单 rank 两步 fixture：step-1 保存 checkpoint，新进程恢复模型、optimizer/scheduler 与 Python/NumPy/CPU/CUDA RNG 后到 step 2；同配置不中断运行与拆分运行的 112 项轨迹零容差一致，fallback=0。该模型没有 DDP 包装，不能作为多 rank Trainer 证据。attempt-06 独立证据在 `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-hf-trainer-gpu1-r1-prepared/attempt-06-single-rank-trainer-resume/`；关键文件清单 SHA256 `73a9d04df300e423628b94938aa4024ac6f9d572c18f02355b86604bc65c8765`。详细尝试、harness 修正和边界见 Day2–5 结果报告 14:49 条目。

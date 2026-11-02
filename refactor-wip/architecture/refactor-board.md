@@ -1,3 +1,10 @@
+## 2026-11-02 15:27 +0800 current-main 两 rank 公共 Trainer DDP 与新进程 resume 轨迹通过；样本顺序证据待修正
+
+当前 HEAD `9a93b746ea226a71ce1b8a63cfd2c766c0975813`，origin/cgq_transformers 为 `e5cffe1ae60c418f53c5bb1dca9182577fd2b81`（ahead/behind 234/0），source fingerprint `b49758df5bff4e7fc3d144d609daf6edc2691ad001d18c7fdf07b5491924d015`。GPU0/GPU1 上的公共 Transformers Trainer + PEFT/BERT 两 rank NCCL DDP fixture 完成连续两步、step1 checkpoint 新进程恢复到 step2；每 rank 112 项轨迹数组比较 failure=0、max_abs=0、fallback=0。样本 ID recorder 读取 Dataset 预取副作用数组并产生重复 ID，尚未证明真实 sampler cursor/order 恢复；证据与修正方案见 Day2–5 报告。
+
+GPU2 正式 Day4–5 suite 未启动。15:27 +0800 GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 有外部 PID `3037196`、`3164740` 各用 8,640 MiB，utilization 94%；`cgq` Slurm association 查询为空、`X12DPG-OA6` 为 DOWN。用户要求管理员添加 association，但本会话没有管理员消息通道，未代发。GPU0–9 当前也都有 compute workloads，没有启动 holder 或新训练。Day4–5 与更广 Day2–5 发布门继续 **Not complete**。
+
+
 ## 2026-11-02 14:49 +0800 current-main 公共 HF Trainer 单卡新进程续训与连续训练逐位一致；整体 release 仍开放
 
 在当前工作区 HEAD `d30b89044ddbb6f499eb70b12f7fff9037452ed4`、source fingerprint `1e44760071de2bd3b105276dae01a3d1efcd5e89cb5e55b0b996d391e28642e2` 上，用 GPU1 实测公共 Transformers Trainer + PEFT/BERT 单卡流程：step-1 checkpoint 由新进程恢复到 step 2，与同配置连续两步训练的 112 项轨迹在零容差下完全一致；模型、optimizer/scheduler、Python/NumPy/CPU/CUDA RNG 恢复事件齐全，6 个可训练张量更新，fallback=0。测试绑定 GPU1 的 `cuda:0`，world size=1、NCCL process group size=1，未包装 public DDP；这是小型合成 fixture 的功能/恢复证据，不是多 rank Trainer、质量或性能验收。完整记录与校正后的轨迹合并审计见 [Day2–5 结果报告](../results/2026-10-26-torch-compat-release-day2-5.md) 和外部证据目录 `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-hf-trainer-gpu1-r1-prepared/attempt-06-single-rank-trainer-resume/`。
