@@ -8,6 +8,34 @@ from torch.utils import _pytree as pytree
 
 
 class TestCustomPytreeNodes(unittest.TestCase):
+    def test_treespec_hash_and_reflexive_equality(self):
+        class Node:
+            pass
+        class Context:
+            __hash__ = None
+            def __eq__(self, other):
+                raise AssertionError("self comparison must not compare context")
+        spec = pytree.TreeSpec(Node, Context(), [pytree.LeafSpec()])
+        self.assertTrue(spec == spec)
+        self.assertEqual({spec: "cached"}[spec], "cached")
+        for tree in ([1], (1,), {"x": 1}, OrderedDict(x=1), defaultdict(list, x=1)):
+            _, left = pytree.tree_flatten(tree)
+            _, right = pytree.tree_flatten(tree)
+            self.assertEqual(left, right)
+            self.assertEqual(hash(left), hash(right))
+            self.assertEqual({left: "cached"}[right], "cached")
+        self.assertEqual(hash(pytree.LeafSpec()), hash(pytree.LeafSpec()))
+
+    def test_defaultdict_treespec_json_protocol(self):
+        import json
+        _, spec = pytree.tree_flatten(defaultdict(list, x=1))
+        self.assertEqual(json.loads(pytree.treespec_dumps(spec)), [1, {
+            "type": "collections.defaultdict",
+            "context": {"default_factory_module": "builtins",
+                        "default_factory_name": "list", "dict_context": ["x"]},
+            "children_spec": [{"type": None, "context": None, "children_spec": []}],
+        }])
+
     def test_leaf_query_uses_registry_and_optional_predicate(self):
         class Output(dict):
             pass

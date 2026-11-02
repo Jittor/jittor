@@ -306,7 +306,10 @@ class _UtilsNS(_types2.ModuleType):
 
 class LeafSpec:
     def __eq__(self, other):
-        return isinstance(other, LeafSpec)
+        return type(self) is type(other)
+
+    def __hash__(self):
+        return hash((None, None, ()))
 
 
 class TreeSpec:
@@ -316,9 +319,25 @@ class TreeSpec:
         self.children_specs = list(children_specs)
 
     def __eq__(self, other):
-        return (isinstance(other, TreeSpec) and self.type is other.type
+        if self is other:
+            return True
+        return (type(self) is type(other) and self.type is other.type
                 and self.context == other.context
                 and self.children_specs == other.children_specs)
+
+    def __hash__(self):
+        if self.type is defaultdict:
+            factory, keys = self.context
+            context = factory, tuple(keys)
+        elif self.type in (dict, OrderedDict):
+            context = tuple(self.context)
+        elif self.type in (list, tuple, None):
+            context = self.context
+        else:
+            # Custom node contexts may be unhashable. Equal specs still have
+            # equal hashes when their context is omitted from the hash.
+            context = None
+        return hash((self.type, context, tuple(self.children_specs)))
 
 
 class MappingKey:
@@ -427,7 +446,8 @@ def _treespec_dumps(treespec, protocol=None):
         raise ValueError("Only TreeSpec serialization protocol 1 is supported")
     nodes = _utilities_context().state["pytree_nodes"]
     builtin_names = {list: "builtins.list", tuple: "builtins.tuple",
-                     dict: "builtins.dict", OrderedDict: "collections.OrderedDict"}
+                     dict: "builtins.dict", OrderedDict: "collections.OrderedDict",
+                     defaultdict: "collections.defaultdict"}
 
     def encode(spec):
         if isinstance(spec, LeafSpec):
@@ -439,7 +459,14 @@ def _treespec_dumps(treespec, protocol=None):
         if name is None:
             raise NotImplementedError("No registered serialization name for %s" % spec.type)
         convert = getattr(node, "to_dumpable_context", None)
-        context = convert(spec.context) if convert is not None else json.dumps(spec.context)
+        if convert is not None:
+            context = convert(spec.context)
+        elif spec.type is defaultdict:
+            factory, keys = spec.context
+            context = {"default_factory_module": factory.__module__,
+                       "default_factory_name": factory.__qualname__, "dict_context": keys}
+        else:
+            context = json.dumps(spec.context)
         return {"type": name, "context": context,
                 "children_spec": [encode(child) for child in spec.children_specs]}
 
