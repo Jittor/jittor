@@ -1,3 +1,11 @@
+## 2026-11-03 02:40 +0800 current-HEAD 安装 wheel 的 Embedding 与 Linear/Bias CUDA 功能格补证；Day2–5 仍未完成
+
+安装态 CUDA 定向验证补齐了 Embedding signed/repeated-index 二阶梯度与 chunk-boundary adjoint（2 passed、0 skipped，fallback 0→0，约 108 秒）、public linear 一/二阶梯度（通过）及 bias tile-boundary/non-contiguous cotangent（单项 follow-up 1 passed、0 skipped、24.94 秒，fallback 0→0）。linear+bias 组合 attempt 因 oneDNN 首次下载/编译达到 180 秒上限，bias 用例当时仅启动；该 timeout 原件保留，不能记作组合通过。
+
+执行包 manifest SHA256：Embedding d3f35aa9db30edf14d8733b966628f2d649f3ae22a9b36bdaefd2af28c7a8257；linear+bias 组合 timeout 166005ed2c1a68990672ef0a88471642e10e696e30217d98872c203ac82d63e4；bias 单项 follow-up de67e23d00784be119b6f77ba9ccbbb5192b3a2467d86b2a94008e8f1552aeb7。目录均位于 /data6/cgq/jittor-lab/_state/release-day23/，名称分别为 20261103-installed-wheel-embedding-cuda-r1、20261103-installed-wheel-linear-bias-cuda-r1、20261103-installed-wheel-linear-bias-boundary-cuda-r1-followup。测试绑定 main wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69、源 HEAD 35a1a7605ec475e9cbc1a9688afc299ee3bd8011、live HEAD 70387dd7acb8a5e5d85bad3633d1646d38c99dde；安装 kernel 哈希与快照匹配，复用 CUDA core SHA256 0e2fe909d3f33e27c220546693c40f27087357cefe198220f46c97f9a0353a90。GPU0 为共享负载，只作正确性验证，GPU2 未用。
+
+wheel baseline 仍有 69 additions、304 content changes、2 removals、0 approved。GPU2 仍由外部任务占用 45,880 MiB/100%，cgq 无 Slurm 作业，association/独占 lease 未就绪。Day4–5 及更广 Day2–5 发布门仍开放，整体 Not complete。
+
 ## 2026-11-03 02:31 +0800 current-HEAD 安装 wheel 的 grouped-query attention CUDA 前反向通过；整体发布门仍开放
 
 在 installed main wheel 上执行一个 Qwen 风格 grouped-query attention 带 mask 用例，真实 CUDA 前向与 q/k/v 梯度通过，确认压缩 K/V heads 原位读取；1 passed、0 skipped、fallback 0→0，installed kernel 哈希匹配源码，core build current。证据包 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-gqa-attention-cuda-r1/，manifest SHA256 d53d70af72bbb8dd7a68e38b731037da04307259a4b38c137b08e28d973ca9fe。这只验证一个 attention 格，不提供模型训练、性能或显存结论；wheel baseline 和 Day2–5 发布门仍未完成。

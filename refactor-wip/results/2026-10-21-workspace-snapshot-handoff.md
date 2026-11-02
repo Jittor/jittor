@@ -1,3 +1,12 @@
+## 2026-11-03 02:40 +0800 Handoff：current-HEAD 安装 wheel Embedding 与 Linear/Bias CUDA 定向功能格补证
+
+继续使用 /home/cgq/jittor 既有工作区；HEAD 70387dd7acb8a5e5d85bad3633d1646d38c99dde，origin/cgq_transformers 35a1a7605ec475e9cbc1a9688afc299ee3bd8011，工作区 clean。本轮没有源码修改。main wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69，输入源码 HEAD 35a1a7605ec475e9cbc1a9688afc299ee3bd8011。
+
+Embedding 两个已选 CUDA 用例通过（2/2、fallback 0→0）；public linear 一/二阶导数通过。linear+bias 组合 attempt 超时且 bias 用例未完成，保留原件；bias boundary/非连续 cotangent 的单项 follow-up 通过（1/1、24.94 秒、fallback 0→0）。执行包 manifest SHA256 依次为 d3f35aa9db30edf14d8733b966628f2d649f3ae22a9b36bdaefd2af28c7a8257、166005ed2c1a68990672ef0a88471642e10e696e30217d98872c203ac82d63e4、de67e23d00784be119b6f77ba9ccbbb5192b3a2467d86b2a94008e8f1552aeb7；目录均在 /data6/cgq/jittor-lab/_state/release-day23/。复用 CUDA core SHA256 0e2fe909d3f33e27c220546693c40f27087357cefe198220f46c97f9a0353a90，kernel 哈希与安装源码快照一致。
+
+GPU0 是共享卡，只用于正确性执行；GPU2 仍被外部任务占用 45,880 MiB/100%，cgq 没有 Slurm 作业，管理员 association 和可核验独占 lease 尚未到位。Day4–5 正式性能/显存窗口仍未启动，整体 Day2–5 Not complete。
+
+
 ## 2026-11-03 02:31 +0800 Handoff：安装 wheel grouped-query attention 带 mask CUDA 前反向通过
 
 current main wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69，源码输入 HEAD 35a1a7605ec475e9cbc1a9688afc299ee3bd8011。在物理 GPU0 上，test_grouped_query_heads_with_a_mask 对 Qwen 风格 GQA（6 query heads、2 KV heads、bool mask）完成 forward 与 q/k/v gradient oracle 比较，并确认 KV heads 不做 repeat 物化；1 passed、0 skipped，fallback 0→0，core build current，core SHA256 0e2fe909d3f33e27c220546693c40f27087357cefe198220f46c97f9a0353a90 前后不变。证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-gqa-attention-cuda-r1/，manifest SHA256 d53d70af72bbb8dd7a68e38b731037da04307259a4b38c137b08e28d973ca9fe。

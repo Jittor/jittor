@@ -1,3 +1,16 @@
+## 2026-11-03 02:40 +0800 current-HEAD 安装 wheel 的 CUDA Embedding 与 Linear/Bias 梯度定向验证；整体发布门仍开放
+
+在 current-HEAD main wheel 隔离安装路径上，物理 GPU0（进程内 cuda:0）、backend_fallback=error 且禁止 fallback 下执行定向正确性验证。Embedding signed/repeated indices 的前向、一/二阶梯度与确定性，以及 chunk 边界求和/adjoint，共 2 passed、0 skipped，fallback 0→0。public linear first/second derivatives 通过。linear+bias 组合 attempt 达到 180 秒时限，stdout 显示 bias 用例只启动、没有终态；该执行包保留为 timeout。之后仅将未完成的 bias tile-boundary/non-contiguous cotangent 单项再执行一次，24.94 秒完成，1 passed、0 skipped，fallback 0→0；没有重跑已经通过的 linear 或 embedding 用例。
+
+三个执行包及 manifest SHA256：Embedding /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-embedding-cuda-r1/ — d3f35aa9db30edf14d8733b966628f2d649f3ae22a9b36bdaefd2af28c7a8257；linear+bias 组合 timeout /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-linear-bias-cuda-r1/ — 166005ed2c1a68990672ef0a88471642e10e696e30217d98872c203ac82d63e4；bias 单项 follow-up /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-linear-bias-boundary-cuda-r1-followup/ — de67e23d00784be119b6f77ba9ccbbb5192b3a2467d86b2a94008e8f1552aeb7。
+
+wheel SHA256 为 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69，输入源码 HEAD 35a1a7605ec475e9cbc1a9688afc299ee3bd8011；live HEAD 70387dd7acb8a5e5d85bad3633d1646d38c99dde，测试前后工作区 clean。CUDA core SHA256 0e2fe909d3f33e27c220546693c40f27087357cefe198220f46c97f9a0353a90，三次均复用且未变化；Embedding/Linear-Bias kernel SHA256 分别为 701842990b83b92947ffab212c2394f052671b642ee08d9e6d6f0aa33d78e82d、7529ee91f260d4e8fb1bf1cb878dd76885ad9e271bbac0cc272fcced50d7d2a6，与源码快照一致。共享 GPU 上的结果只证明所测数值/梯度正确性，不证明性能或显存收益。
+
+本周修改主要涉及 Torch 张量存储别名/设备放置、优化器与 GradScaler/续训状态、activation checkpoint 反向梯度、DDP/NCCL/DCP/FSDP2 状态同步、CUDA attention/梯度/融合优化器及 main/compat 打包边界。本轮只新增已打包 wheel 的 Embedding 与 Linear/Bias 安装态证据，没有改产品源码或 allowlist。migration baseline 仍为 69 additions、304 content changes、2 removals、0 approved；generator_randint contract 旧分类、fused SGD 完整 option trajectory 超时、stock PyTorch 无法读取 JT portable-pickle optimizer.pt、held-out generation 质量及真实 activation recompute 显存效果仍开放。
+
+GPU2 当前外部占用 45,880 MiB/100%，cgq Slurm 队列为空且 association/独占租约未就绪。Day4–5 仍需匹配配置、至少三轮 PT/JT 交替、每侧每轮至少 10 个热样本，并报告 median/p95/离散度、load/首步/热态时间与 allocator/NVML 峰值。overall Day2–5 **Not complete**。
+
+
 ## 2026-11-03 02:31 +0800 current-HEAD 安装 wheel 的 grouped-query attention CUDA 前反向通过
 
 测试绑定 main wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69（源码快照 HEAD 35a1a7605ec475e9cbc1a9688afc299ee3bd8011）。测试源 tests/backends/cuda/test_fused_attention_f32.py SHA256 f4f6a8061887a7bb153202b8dda83c24755b1d7d89aaf22ff444f240ad98475c；wheel 中 fused_attention_f32_cuda.py 与源码哈希均为 0de90af465d2cc41f9185ba9b8bfa82b25ccee86a9eb96d018b0da4d42eab1a3。测试时 live repo HEAD 为 d5139161bf1dd7781fe4a9c6cae812f1df8c2de4，工作区干净。
