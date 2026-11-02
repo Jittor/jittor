@@ -1,3 +1,12 @@
+## 2026-11-03 01:36 +0800 当前工作区已推送 cgq_transformers；Day2–5 仍未完成
+
+本轮提交 1b5c2a50f8dac5cb7aa89808be8b1c08fda16a3b（父提交 4291227c47060c693c4d4464cc60b0521a34a5c3，中文提交说明“完善 Torch 兼容与分布式能力并记录发布门”）已普通快进推送到 cgq_transformers，远端从 9658d690774e383fb355ca1bf808dd3cd662f929 更新；推送后 local HEAD、origin tracking ref 与 git ls-remote 相同，工作区干净。提交共 113 个文件、8,609 insertions/773 deletions；没有创建 PR，也没有合并 2.0-refactor。推送回执保存在同轮 /data6/cgq/jittor-lab/_state/release-day23/20261103-current-working-tree-structure-gate-r2-prepared/push-receipt.json。
+
+本提交绑定的 current-tree CPU structure gate 为 1,558 项执行、1,556 通过、2 个 accelerator-only skip、0 failed；详细日志与红队突变证据见下方 R2 记录。该结构门不代表运行时 GPU 功能、性能、显存或整体 Day2–5 发布完成。
+
+GPU2 仍由外部任务占用 45,880 MiB、利用率 100%，cgq Slurm association 等待管理员添加。Day4–5 正式性能/显存验收及 activation recompute、held-out generation、wheel migration、跨框架 optimizer serialization 和更广功能矩阵仍开放。整体 Day2–5 **Not complete**。
+
+
 ## 2026-11-03 01:33 +0800 当前工作区 CPU 结构发布门通过；Day2–5 仍开放
 
 记录时，主工作区位于 `/home/cgq/jittor`，分支 `integrate/cgq-transformers-native-multicard-target`，HEAD `4291227c47060c693c4d4464cc60b0521a34a5c3`，`origin/cgq_transformers` 为 `9658d690774e383fb355ca1bf808dd3cd662f929`。完整结构门绑定当时的未提交工作树；运行前 index 为空，工作树含 90 个 tracked 修改和 21 个 untracked 路径。测试后唯一源码编辑是从 `src/ops/composite/fetch_op.cc` 清除既有行尾空格，目前为 89 个 tracked 修改、21 个 untracked 路径，未暂存。

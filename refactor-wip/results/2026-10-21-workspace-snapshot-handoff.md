@@ -1,8 +1,15 @@
+## 2026-11-03 01:36 +0800 Handoff：已推送 Torch/分布式工作区；下一步仍需 GPU2 allocation
+
+提交 1b5c2a50f8dac5cb7aa89808be8b1c08fda16a3b 已快进推送到远端 cgq_transformers，远端 ref 与本地 HEAD 一致、工作区干净。本提交含 113 个文件；没有 PR，也没有合并 2.0-refactor。current-tree CPU structure gate 1,556 passed、2 个 accelerator-only skip、0 failed，红队策略检查也通过；证据目录为 /data6/cgq/jittor-lab/_state/release-day23/20261103-current-working-tree-structure-gate-r2-prepared/。
+
+接下来需要管理员为 cgq 配置 campus-linux A100/A800 分区 association，再获得可核验的 GPU2 独占 allocation。当前 GPU2 仍有外部工作占用，正式 Day4–5 三轮交替 PT/JT 性能/显存验收未开始。overall Day2–5 继续 **Not complete**。
+
+
 ## 2026-11-03 01:33 +0800 Handoff：CPU 结构门通过；正式 GPU 验收仍等独占 allocation
 
 在当前主工作区分支 `integrate/cgq-transformers-native-multicard-target`、HEAD `4291227c47060c693c4d4464cc60b0521a34a5c3` 上完成 current-tree 结构发布门：1,558 项执行，1,556 passed、2 个 accelerator-only skip、0 failed；定向规则/owner 测试 28/28 通过。完整证据与 SHA256 在 `/data6/cgq/jittor-lab/_state/release-day23/20261103-current-working-tree-structure-gate-r2-prepared/`。两项异常策略突变均触发预期失败，`distributed.py` 已按原始 SHA 恢复。相关三份状态文档已更新，工作区布局与 whitespace 检查通过。
 
-提交前 index 为空，现有工作区约 89 个 tracked 修改和 21 个 untracked 路径；`origin/cgq_transformers` 在 `9658d690774e383fb355ca1bf808dd3cd662f929`，本地改动可普通快进发布。按用户最新授权，将当前工作区修改整体整理为中文提交后推送到 `cgq_transformers`，不创建 PR，也不合并 `2.0-refactor`。
+提交前 index 为空，现有工作区约 89 个 tracked 修改和 21 个 untracked 路径；`origin/cgq_transformers` 在 `9658d690774e383fb355ca1bf808dd3cd662f929`，本地改动可普通快进发布。该工作区已按用户授权整理为中文提交并推送到 cgq_transformers，未创建 PR，也未合并 2.0-refactor。
 
 Day4–5 正式性能/显存门仍未启动：GPU2 继续由外部任务占用，`cgq` Slurm association 待管理员添加。获得可核验独占 allocation 后，按已定的三轮交替 PT/JT、每轮每侧至少十个热样本方案继续；R14 Qwen 训练/续训、既有 preflight 和已通过结果不重跑。整体 Day2–5 **Not complete**。
 

@@ -1,3 +1,8 @@
+## 2026-11-03 01:36 +0800 当前工作区已推送；结构门通过不等于发布完成
+
+结构验收后，将当前 Torch compatibility、AMP/optimizer、native distributed/DDP、dataset、attention、tests、development docs 与三份状态文档作为一个中文提交推送：1b5c2a50f8dac5cb7aa89808be8b1c08fda16a3b（父提交 4291227c47060c693c4d4464cc60b0521a34a5c3），113 个文件、8,609 insertions/773 deletions。远端 cgq_transformers 从 9658d690774e383fb355ca1bf808dd3cd662f929 快进；git ls-remote 确认远端头与本地提交相同，工作树干净。未建 PR，未整合 2.0-refactor。推送回执位于 /data6/cgq/jittor-lab/_state/release-day23/20261103-current-working-tree-structure-gate-r2-prepared/push-receipt.json。
+
+
 ## 2026-11-03 01:33 +0800 current-tree CPU 结构发布子门通过；Day2–5 仍未完成
 
 在现有主工作区 HEAD `4291227c47060c693c4d4464cc60b0521a34a5c3` 加未提交修改上执行完整结构门，CPU-only、空 `CUDA_VISIBLE_DEVICES`、`use_cuda=0`。运行 `tools/release/test_check_sdist_contents.py`、`tools/release/test_check_wheel_contents.py`、`tests/structure`、`compat/tests/structure` 和 `adapters/tests/vllm/test_structure.py`：**1,558 collected/executed，1,556 passed、2 个 accelerator-only skipped、0 failed，255.82 秒**。完整日志 SHA256 `61c16c3d57fc6f50484b3f094824f45373e91cc99c6dee4db8014cc20f518dca`。另有 28 个受影响结构测试全部通过，日志 SHA256 `8a11c4e79250c502ebf321843a523152cc023cc1d90823da8acf2f7e4096024f`。
