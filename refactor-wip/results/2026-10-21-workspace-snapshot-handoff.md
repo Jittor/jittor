@@ -1,3 +1,11 @@
+## 2026-11-02 19:56 +0800 Handoff：CPU BF16 恢复 trace 梯度相同但二阶矩仍分叉
+
+HEAD daea30ffb47cbc8bd00fd86b47f6783a84d1b571，origin e5cffe1ae60c418f53c5bb1dca9182577fd2b81（ahead/behind 245/0）。工作区仍维持既有 102 项 dirty/untracked，porcelain SHA 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，tracked diff SHA 3ef743580bb7db38dbc9197f6f90e3182956d2bc29a55bce29c7eeea1bea6100；没有改产品源码。
+
+在同日 JT_BACKEND=cpu cache（source HEAD 7494d8e73ec3218e7d8de53ddd6672b688c80630，与当前 HEAD 的 src/ commit delta 为 0）的隔离副本中校正 build stamp 后，用 JITTOR_NO_BUILD=1 跑通 CPU BF16 trace：梯度和参数更新相同，FP32 exp_avg_sq 最大绝对差 6.676465e-05；把恢复 moments 拷贝到独立 stop-grad JT Var 后分叉仍在。根因未定位。package /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-cpu-bf16-trace-cuda-core-cpu-scope-r1-prepared/，final manifest SHA256 bbd5e046307334eaa6a050656f9ea755110cfe48db1f3a6d4c2bbea10b07bca2。下一项做相同输入的 direct Adam update 对照，再继续独立 CPU 发布门。
+
+GPU2 仍由外部作业占用，Slurm cn2/a100 idle 但 cgq association 未出现，srun test-only 报 invalid account/partition combination；X12DPG-OA6 down。GPU2 Day4–5 正式 suite 继续等待管理员配置和可验证独占租约。整体 Day2–5 release **Not complete**。
+
 ## 2026-11-02 19:36 +0800 Handoff：CPU BF16 trace 在匹配源码的 CUDA cache 上仍触发 core build
 
 HEAD `b7b686ee0a0db3fceae4fff174e71eed40257708`、origin `e5cffe1ae60c418f53c5bb1dca9182577fd2b81`（ahead/behind 244/0）。同日 current-source CUDA focused cache 的 source manifest 与当前文件全量一致，但其 CUDA build 配置在 `use_cuda=0` 运行仍触发 core 对象编译。attempt-01 因 `jit_utils` rebuild exit 3；唯一重启 attempt-02 开始编译 `pyjt_grad.cc`、`pyjt_jit_op_maker.cc`，提前停止、exit 143，trace 代码未运行。证据包 `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-cpu-bf16-trace-matched-runtime-r1-prepared/`，manifest SHA256 `fc5c492c43e69ae4a14b776557271b59bd5a974140edc100a3b8381fb968314f`。运行后回到 102 项 dirty/untracked 基线，porcelain SHA `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`，tracked diff SHA `3ef743580bb7db38dbc9197f6f90e3182956d2bc29a55bce29c7eeea1bea6100`。

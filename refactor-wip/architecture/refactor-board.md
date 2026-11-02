@@ -1,3 +1,15 @@
+## 2026-11-02 19:56 +0800 CPU BF16 restore trace 确认梯度一致、二阶矩仍分叉；Day2–5 未完成
+
+沿用现有工作区，HEAD daea30ffb47cbc8bd00fd86b47f6783a84d1b571，origin/cgq_transformers e5cffe1ae60c418f53c5bb1dca9182577fd2b81（ahead/behind 245/0）。本轮实验前后仍为既有 102 项 dirty/untracked，porcelain SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，tracked diff SHA256 3ef743580bb7db38dbc9197f6f90e3182956d2bc29a55bce29c7eeea1bea6100；没有改产品源码。
+
+取得同日已通过 CPU 测试的 JT_BACKEND=cpu core cache，并只在新的隔离副本中修正 build stamp 的绝对 cache 路径和两个 CPU 未编译的 CUDA cuDNN/cuBLAS test-op 文件 mtime/size；其余 854/856 项源码元数据及全部 generator 哈希与当前树一致。原缓存/原证据包未修改。用 JITTOR_NO_BUILD=1、空 CUDA_VISIBLE_DEVICES、use_cuda=0、CPU scope 跑通 trace：1 passed、fallback=0、jittor_has_cuda=false。该缓存证据限 CPU 路径，不是当前 CUDA 构建证据。
+
+连续路径与恢复路径第二步的梯度逐值相同，更新后参数完全相同，AdamW 两个 moment 的 dtype 均为 FP32。BF16 参数对应的 exp_avg 只有一个 1.19e-7 级分差；exp_avg_sq 更新仍差 [-1.903623e-6, -6.676465e-5]，最大绝对差 6.676465e-5。再将恢复侧 moments 拷贝到独立 stop-grad JT Var 后差异保持，因此单纯的 checkpoint storage alias/stop-grad 状态不足以解释它；根因仍未定位，没有放宽阈值或改实现。
+
+完整诊断包：/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-cpu-bf16-trace-cuda-core-cpu-scope-r1-prepared/，4,262 项文件清单 SHA256 bbd5e046307334eaa6a050656f9ea755110cfe48db1f3a6d4c2bbea10b07bca2。CPU trace log SHA256 73c596c52816a1fa2e3b2da54e6f4254a9a235dc70707b472d488a9717d0aaa8；storage trace log SHA256 928ce10b82d91df17b905a1a93bb1bfe693c39a1d2da79382da8c1a374f9e06d。原始 cache 启动失败及 harness 收集失败也留在同包中，工作区状态前后不变。
+
+GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 仍由外部 PID 3037196、3164740、1070731、1124222 占用，显存 45,880 MiB、利用率 100%。Slurm 的 cn2/a100 当前 idle，但 cgq association 查询为空，srun --test-only 返回 Invalid account or account/partition combination specified；X12DPG-OA6 仍 down。未占卡、未触碰外部进程，也未启动性能计时。整体 Day2–5 和 Day4–5 正式性能/显存验收继续 **Not complete**。
+
 ## 2026-11-02 19:36 +0800 CPU BF16 trace 再次被 core build 阻断；Day2–5 未完成
 
 找到了同日 current-source CUDA focused 成功 attempt-03 的预编译 cache，并完整核验其源文件清单与当前代码一致；复制到新的隔离目录后以 CPU 配置启动。attempt-01 因 `jit_utils` rebuild exit 3；按提示的唯一一次重启 attempt-02 开始编译 Jittor core 对象，按预算停止、exit 143，测试体均未运行。隔离 cache 保留 1,261 项，60 项哈希变化；原 cache 未改。证据包 `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-cpu-bf16-trace-matched-runtime-r1-prepared/`，manifest SHA256 `fc5c492c43e69ae4a14b776557271b59bd5a974140edc100a3b8381fb968314f`。

@@ -1,3 +1,19 @@
+## 2026-11-02 19:56 +0800 CPU BF16 AdamW trace 将分叉定位到梯度之后；Day2–5 仍未完成
+
+在现有 /home/cgq/jittor 工作区继续，HEAD daea30ffb47cbc8bd00fd86b47f6783a84d1b571，origin/cgq_transformers e5cffe1ae60c418f53c5bb1dca9182577fd2b81（ahead/behind 245/0）。实验前后 worktree 都是既有 102 项 dirty/untracked，porcelain SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，tracked diff SHA256 3ef743580bb7db38dbc9197f6f90e3182956d2bc29a55bce29c7eeea1bea6100；未改产品源码、未动其他 dirty 文件。
+
+为绕过 CUDA cache 与 CPU build key 不同的问题，找到同日 current-main DCP CPU cache。该 core 来自 attempt-08（cache source HEAD 7494d8e73ec3218e7d8de53ddd6672b688c80630；当前 HEAD 与该 HEAD 间无 src/ 提交差异，六个 dirty src 文件 mtime 均早于 core 构建），二进制 SHA256 8d1779b3ec3c322e93d020c07e7bb337bc7d7c8cbda8a8b41a519703b20004f7。build stamp 的 856 个源码条目中，854 项元数据与当前树一致；其余仅为两个 CUDA cuDNN/cuBLAS test-op 文件，CPU 配置 has_cuda=0 不编译这两个文件。所有 generator 文件的 mtime、大小和 SHA256 均匹配。将这两个未参与 CPU build 的 stamp 元数据及绝对 cache 路径仅改在新隔离副本中，原 package 不变；随后在 JITTOR_NO_BUILD=1、空 CUDA_VISIBLE_DEVICES、JT_BACKEND=cpu 下运行，没有编译 core。
+
+attempt-05 CPU transition trace：1 passed，30.03 秒，fallback=0，jittor_has_cuda=false。连续训练与 checkpoint restore 两侧在第二次更新前的梯度完全相同；FP32 参数和 BF16 参数的更新结果完全相同。BF16 参数对应的 exp_avg 差异最大约 1.19209e-7，exp_avg_sq 分别为连续路径 [0.03147624433040619, 0.07136933505535126]、恢复路径 [0.0314781479537487, 0.07143609970808029]，连续减恢复为 [-1.903623342514038e-6, -6.676465272903442e-5]。恢复前 moment 值相同，两个 moment dtype 都是 float32。
+
+attempt-06 storage trace 另将恢复侧 BF16 组的两个 moment 从 checkpoint tensor 复制成独立 stop-grad JT Var，再做相同更新；结果与未复制的 restore 路径相同。因此梯度值、参数值、dtype 和单纯的 loaded-storage alias/stop-grad 差异都不能解释分叉。还需检查 AdamW 的更新算子/执行路径；当前没有足够证据断言根因，也没有改动实现或放宽比较阈值。
+
+外部证据包：/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-cpu-bf16-trace-cuda-core-cpu-scope-r1-prepared/，包含 4,262 项的 final artifact manifest SHA256 bbd5e046307334eaa6a050656f9ea755110cfe48db1f3a6d4c2bbea10b07bca2。attempt-05 pytest log SHA256 73c596c52816a1fa2e3b2da54e6f4254a9a235dc70707b472d488a9717d0aaa8；attempt-06 attempt-04 pytest log SHA256 928ce10b82d91df17b905a1a93bb1bfe693c39a1d2da79382da8c1a374f9e06d。缓存配置失败、stamp normalizer 失败和 harness 收集失败均保留在包内，不覆盖原件。
+
+GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 仍被外部 PID 3037196、3164740、1070731、1124222 使用 45,880 MiB；当前 GPU2 利用率 100%。Slurm 节点 cn2/a100 显示 idle，但 cgq association 为空；srun --test-only --partition=a100 --nodes=1 --ntasks=1 --gres=gpu:1 被拒，提示 invalid account/partition combination。X12DPG-OA6 仍 down。本轮没有触碰 GPU2；Day4–5 三轮交替、每边每轮至少十个热态样本及 median/p95/离散度、加载/首步/热态耗时、allocator/NVML 峰值验收仍未执行，整体 release 保持 **Not complete**。
+
+后续优先用相同 CPU cache 做一个输入完全匹配的 direct adam_update 对照，以区分 optimizer wrapper/状态写入和 arithmetic kernel；之后继续 CPU serialization/interoperability 等独立发布门。GPU2 正式性能/显存 suite 需等待 cgq association 和可验证独占租约。
+
 ## 2026-11-02 19:36 +0800 CPU BF16 trace 仍未进入测试体；CUDA cache 不适配 CPU build 配置
 
 继续使用现有 `/home/cgq/jittor`，HEAD `b7b686ee0a0db3fceae4fff174e71eed40257708`，origin/cgq_transformers `e5cffe1ae60c418f53c5bb1dca9182577fd2b81`（ahead/behind 244/0）。启动前后源码工作区均恢复到既有 102 项 dirty/untracked，porcelain SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`，tracked diff SHA256 `3ef743580bb7db38dbc9197f6f90e3182956d2bc29a55bce29c7eeea1bea6100`；index 为空。临时跟踪脚本已移到外部证据包。
