@@ -1,3 +1,10 @@
+## 2026-11-02 15:48 +0800 Handoff：sample ID collator 记录修正通过 CPU smoke；CUDA resume 与 Day4–5 等资源
+
+外部 prepared package `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-ddp-trainer-resume-r2-host-batchids-r1-prepared/` 中的新 runner 从 collator feature 捕获 host sample IDs，并在 `training_step` 与 batch tensor IDs 对照后记录，避免预取游标误报。stock Accelerate 与实际 Jittor shim 的 CPU smoke 均通过，IDs `[8,9]`、`[10,11]` 精确对应；实际 Jittor smoke 无 CUDA 可见、回退 CPU。失败原件、cache delta 与恢复回执保存在包中。R2 runner 有进程/利用率 admission guard，静态语法通过，尚未启动 full/stop/resume。
+
+15:48 +0800 GPU0/1 有外部计算进程并满载，GPU2 由外部 PID `3037196`、`3164740`、`1070731` 共占 26,429 MiB、利用率 100%；无 `cgq` association，`X12DPG-OA6` DOWN。GPU2 Day4–5 仍需管理员 lease；本会话无法代发 association 请求。Day2–5 release 继续 **Not complete**。
+
+
 ## 2026-11-02 15:27 +0800 Handoff：current-main 两 rank HF Trainer DDP stop/resume 轨迹吻合；sample-order recorder 待修正
 
 HEAD `9a93b746ea226a71ce1b8a63cfd2c766c0975813`、source fingerprint `b49758df5bff4e7fc3d144d609daf6edc2691ad001d18c7fdf07b5491924d015` 上，公共 Transformers Trainer + PEFT/BERT 两 rank NCCL DDP fixture 完成 full 两步、step1 checkpoint stop、新进程 resume 至 step2；每 rank 112 个非 sample-order 轨迹数组 max_abs=0、failure=0，fallback=0。测试使用 GPU0/GPU1，各映射为进程内 `cuda:0`；不构成性能/显存或任务质量结论。

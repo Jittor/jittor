@@ -1,3 +1,10 @@
+## 2026-11-02 15:48 +0800 sample ID collator 记录已修正并通过 CPU smoke；CUDA resume 复核等待资源窗口
+
+沿用 current-main 工作区 HEAD `30e87dff639433a87fe9e280467618f4aa46ff77`、完整 source inventory fingerprint `095c4abb62246cb45bc48270fb5494211749d0cb67fae20010c7ebae96319259`。新外部包在 experiment runner 中由 collator 从当前 feature 捕获 sample IDs，附加普通 list，并于 `training_step` 和 batch tensor IDs 比较后记录。stock Accelerate 和实际 Jittor Torch shim 环境的 CPU smoke 均通过；每次捕获的 host IDs 与 tensor IDs 一致。Jittor smoke 隐藏所有 GPU并回退 CPU，这项结果只验证记录传递，不构成 CUDA/DDP 证据。完整/停点/新进程恢复复核尚未运行。
+
+15:48 +0800 GPU0/GPU1 均有外部训练进程且利用率 100%；GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 已用 26,429 MiB、利用率 100%，外部 PID `3037196`、`3164740`、`1070731`。Slurm 查询仍无 `cgq` association，`X12DPG-OA6` 为 DOWN；未启动 CUDA holder 或复测。Day4–5 suite 和整体 Day2–5 release 保持 **Not complete**。
+
+
 ## 2026-11-02 15:27 +0800 current-main 两 rank 公共 Trainer DDP 与新进程 resume 轨迹通过；样本顺序证据待修正
 
 当前 HEAD `9a93b746ea226a71ce1b8a63cfd2c766c0975813`，origin/cgq_transformers 为 `e5cffe1ae60c418f53c5bb1dca9182577fd2b81`（ahead/behind 234/0），source fingerprint `b49758df5bff4e7fc3d144d609daf6edc2691ad001d18c7fdf07b5491924d015`。GPU0/GPU1 上的公共 Transformers Trainer + PEFT/BERT 两 rank NCCL DDP fixture 完成连续两步、step1 checkpoint 新进程恢复到 step2；每 rank 112 项轨迹数组比较 failure=0、max_abs=0、fallback=0。样本 ID recorder 读取 Dataset 预取副作用数组并产生重复 ID，尚未证明真实 sampler cursor/order 恢复；证据与修正方案见 Day2–5 报告。
