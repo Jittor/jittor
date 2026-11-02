@@ -1,3 +1,12 @@
+## 2026-11-02 20:11 +0800 CPU BF16 direct AdamW 对照与序列化聚焦门；Day2–5 未完成
+
+沿用现有 `/home/cgq/jittor` 工作区，文档前序提交为 `d127a2b566324f2e3368d9ee4a49e04d5cea8378`。本轮实验期间没有改产品源码；tracked dirty diff SHA256 仍为 `3ef743580bb7db38dbc9197f6f90e3182956d2bc29a55bce29c7eeea1bea6100`。Porcelain SHA256 当前为 `8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98`（81 tracked dirty、24 untracked），较前一记录多 3 个 untracked；全部保留，未纳入本任务提交。
+
+用匹配 CPU 路径的 current-main BF16 AdamW 二阶矩 trace 做直接调用对照。修正临时 harness 后，CPU pytest 1 passed、27.25 秒、fallback=0、`jittor_has_cuda=false`。第二步开始前，连续/恢复两侧参数、梯度、exp_avg、exp_avg_sq 的 dtype 与数值均相同；把各侧输入复制为独立 JT Var 后直接调用 `adam_update`，两侧参数和 moments 逐值相同。兼容层 `optimizer.step()` 仍得到二阶矩差 `[-1.903623e-6, -6.676465e-5]`，最大绝对差 `6.676465e-5`，参数仍相同。这把差异进一步收窄到原 Var/梯度图或 wrapper 执行路径，但没有证明具体根因，也未改实现或阈值。完整包 `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-cpu-bf16-direct-adamw-update-r1-prepared/`，2,185 项文件 manifest SHA256 `a4d609cc52fd9ade98acbfc9a8ce7ea47a90f2c3322dc59d10db03f330acd54d`；正确 harness log SHA256 `5e262c2eafae0c892498870b31494586e0d04d7cdcb25c957451bb2560ff64ce`。两次未进入测试体的初始化/harness 失败也保留。
+
+另在当前工作树 CPU 跑 `test_serialization_api_owners.py` 与 `test_torch_compat_serialize.py`，共执行 50 项：45 passed、1 skipped、4 failed，37.06 秒。三项失败都因 `JITTOR_NO_BUILD=1` 环境没有可用 oneDNN v3，卷积进入库加载时报未预配；一项 `test_state_dict_keeps_tied_weight_aliases` 暴露 storage `data_ptr` 语义差异：当前 `_Storage.data_ptr()` 返回 `id(var)`，而 Tensor `data_ptr()` 返回底层 `_storage_address`，不满足该用例期望的 storage 地址合同。该实现问题尚未修复，剩余三个测试也未在匹配 oneDNN 环境复验。日志 SHA256 `c90d1c7dadee21a38900686f815b256015503cb0973117483106a1ed6b1c9ff7`。本轮序列化门不覆盖 stock PyTorch 读取 JT optimizer portable-pickle 的已知互操作失败。
+
+CPU core SHA256 `8d1779b3ec3c322e93d020c07e7bb337bc7d7c8cbda8a8b41a519703b20004f7`，来自 source HEAD `7494d8e73ec3218e7d8de53ddd6672b688c80630`；只验证 CPU 路径，不构成当前 CUDA 编译证据。GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 前后仍为 100% 利用率、45,880 MiB，本轮未触碰 GPU。正式 Day4–5 配对性能/显存与更广 Day2–5 发布门继续 **Not complete**。
 ## 2026-11-02 19:56 +0800 CPU BF16 restore trace 确认梯度一致、二阶矩仍分叉；Day2–5 未完成
 
 沿用现有工作区，HEAD daea30ffb47cbc8bd00fd86b47f6783a84d1b571，origin/cgq_transformers e5cffe1ae60c418f53c5bb1dca9182577fd2b81（ahead/behind 245/0）。本轮实验前后仍为既有 102 项 dirty/untracked，porcelain SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，tracked diff SHA256 3ef743580bb7db38dbc9197f6f90e3182956d2bc29a55bce29c7eeea1bea6100；没有改产品源码。

@@ -1,3 +1,10 @@
+## 2026-11-02 20:11 +0800 Handoff：CPU AdamW 分叉收窄，序列化发现 storage 地址合同问题
+
+本轮 direct AdamW trace 证明相同的 BF16 参数、梯度与 FP32 moments 输入经过独立 `adam_update` 调用得到完全相同输出，但兼容 optimizer.step 的 restored 与 continuous `exp_avg_sq` 仍差至 `6.676465e-5`。尚不能定根因，未改产品源码。证据包 `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-cpu-bf16-direct-adamw-update-r1-prepared/`，final manifest SHA256 `a4d609cc52fd9ade98acbfc9a8ce7ea47a90f2c3322dc59d10db03f330acd54d`。
+
+当前源树 CPU serialization gate 为 45 passed、1 skipped、4 failed：3 个卷积测试因隔离 cache 没有 oneDNN v3 而无法运行；tied-weight storage 测试指出 `_Storage.data_ptr()` 返回 `id(var)`，与底层地址语义不一致。下一步应先针对 Tensor storage 的基址、offset、view 和 tied alias 写小型 CPU 定向复验，并按范围修复该 storage API；oneDNN 三项只在已有匹配 runtime/cache 可复用时复验，不启动无界 cold build。stock PyTorch 读取 JT optimizer portable-pickle 的互操作失败继续单独处理。
+
+当前 worktree 有 81 tracked dirty、24 untracked；tracked diff hash 仍为 `3ef743580bb7db38dbc9197f6f90e3182956d2bc29a55bce29c7eeea1bea6100`，porcelain SHA256 `8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98`。三份状态文档将单独暂存。GPU2 仍被外部负载占用，Slurm 尚无 cgq association；Day4–5 正式验收与整体 Day2–5 继续 **Not complete**。
 ## 2026-11-02 19:56 +0800 Handoff：CPU BF16 恢复 trace 梯度相同但二阶矩仍分叉
 
 HEAD daea30ffb47cbc8bd00fd86b47f6783a84d1b571，origin e5cffe1ae60c418f53c5bb1dca9182577fd2b81（ahead/behind 245/0）。工作区仍维持既有 102 项 dirty/untracked，porcelain SHA 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，tracked diff SHA 3ef743580bb7db38dbc9197f6f90e3182956d2bc29a55bce29c7eeea1bea6100；没有改产品源码。
