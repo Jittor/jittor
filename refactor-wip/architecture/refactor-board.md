@@ -1,3 +1,11 @@
+## 2026-11-03 04:10 +0800 安装 wheel serialization：CPU 全过，CUDA 发现两项放置失败
+
+current installed main wheel（source HEAD 35a1a7605ec475e9cbc1a9688afc299ee3bd8011，wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69）上的序列化/state_dict 套件已分别完成 CPU 与 CUDA 执行。CPU 39/39 通过，fallback 0→0；CUDA 为 37 通过、2 失败，fallback 0→0，失败仅在 CUDA 放置分支：assign=True 状态替换后 location 报 cpu；NumPy state_dict 加载后 Conv2d 参数仍在 CPU，CUDA 输入触发 mixed-placement 错误。CUDA core SHA256 0e2fe909d3f33e27c220546693c40f27087357cefe198220f46c97f9a0353a90 前后不变，物理 GPU0 用于功能验证，GPU2 未暴露；不构成性能/显存结果。
+
+CUDA 运行前的 GLIBCXX loader 预检已通过；之前的 CUDA import 失败与 FROZEN_TEST runner 漏传均保留为启动失败，不计产品测试失败。CPU 外层展示 wrapper 的 carriage-return 错误也已审计修正，runner/pytest 原始 rc 均为 0。完整 attempt 和 manifest 在 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-serialization-cuda-r1/，manifest SHA256 7a2b940efb16f9a6c23066aedcb4222926b504b8a95099c1d69f1f23a77490e9。
+
+此结果推翻上一条“序列化套件未进入 pytest”的临时状态：CPU 完整套件通过，CUDA 真实执行但有两项功能缺陷。下一步应修复并定向复验这两个 CUDA state_dict/device placement 路径；stock PyTorch 读取 JT portable-pickle optimizer 的互操作问题仍单独记录。Day4–5 正式性能/显存门及更广 Day2–5 发布门仍未完成。
+
 ## 2026-11-03 03:59 +0800 installed-wheel serialization suite 未进入 pytest；保留启动诊断
 
 本轮选择 current installed main wheel 的 `compat/tests/torch/test_torch_compat_serialize.py`，目的是补查 safetensors 与 Torch shim 保存加载路径。测试文件 SHA256 `aa3768dc616f00d1f0bb0e58f6c4ab30d2bee92bc7890bf1e6e183365db2ca02`，wheel SHA256 `b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69`，wheel source HEAD `35a1a7605ec475e9cbc1a9688afc299ee3bd8011`；执行时 repo 与 `origin/cgq_transformers` 均为 `f3788643a88316a0e2cd2ea65911a48b97dea3a5`，工作区 clean。

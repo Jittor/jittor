@@ -1,3 +1,9 @@
+## 2026-11-03 04:10 +0800 Handoff：serialization CPU 39/39 通过；CUDA 发现两项 state_dict 放置失败
+
+current installed main wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69，源码 HEAD 35a1a7605ec475e9cbc1a9688afc299ee3bd8011，测试 SHA256 aa3768dc616f00d1f0bb0e58f6c4ab30d2bee92bc7890bf1e6e183365db2ca02。CPU 完整套件 39 passed、fallback 0→0；CUDA 在物理 GPU0 完成 37 passed、2 failed、fallback 0→0，core SHA256 前后相同，GPU2 未用。两项 CUDA 失败分别是 assign=True 替换后的 location 显示 CPU，以及 NumPy state_dict restore 后 Conv2d weight 留在 CPU、与 CUDA 输入混放。具体断言和栈保存在 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-serialization-cuda-r1/attempt-11-cuda-libstdcpp-serialization/stdout.log。
+
+ attempt-08/10 的启动问题、attempt-09 成功预检、CPU wrapper 回执纠正和 attempt-11 的真实测试结果均未覆盖或删除。证据包 manifest SHA256 7a2b940efb16f9a6c23066aedcb4222926b504b8a95099c1d69f1f23a77490e9；当前仓库 HEAD ae6ceab4255b8a336d23633206b9d87a1794e834 与 origin/cgq_transformers 一致，未合并 origin/2.0-refactor。下一项功能工作是修复后只重测两个失败 CUDA 测试；R14 full/resume 和 CPU 39 项不重跑。正式 Day4–5 性能/显存验收仍等待管理员添加 cgq Slurm association 与 GPU2 独占窗口，整体 Day2–5 保持 Not complete。
+
 ## 2026-11-03 03:59 +0800 Handoff：serialization wheel suite 未执行，需先固定 CPU backend/cache
 
 本轮准备验证 current installed main wheel 的 `test_torch_compat_serialize.py`，测试 SHA256 `aa3768dc616f00d1f0bb0e58f6c4ab30d2bee92bc7890bf1e6e183365db2ca02`、wheel SHA256 `b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69`，wheel 源码 HEAD `35a1a7605ec475e9cbc1a9688afc299ee3bd8011`。live repo 和远端 `cgq_transformers` 当时均为 `f3788643a88316a0e2cd2ea65911a48b97dea3a5`，工作区 clean。

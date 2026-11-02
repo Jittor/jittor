@@ -1,3 +1,13 @@
+## 2026-11-03 04:10 +0800 安装 wheel serialization CPU/CUDA 双端验收：CPU 通过，CUDA 定位到两项设备放置缺陷
+
+对 current installed main wheel 执行 compat/tests/torch/test_torch_compat_serialize.py，测试 SHA256 aa3768dc616f00d1f0bb0e58f6c4ab30d2bee92bc7890bf1e6e183365db2ca02；wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69，输入源码 HEAD 35a1a7605ec475e9cbc1a9688afc299ee3bd8011。测试时 live HEAD 为 ae6ceab4255b8a336d23633206b9d87a1794e834，origin/cgq_transformers 为 ae6ceab4255b8a336d23633206b9d87a1794e834，origin/2.0-refactor 为 a3783a04a0fdf921abfe1e3c0d7c93256ee70bd3。CPU attempt-07 执行 39 passed、0 failed/skip、15.08 秒，fallback 0→0，CPU core SHA256 13ee2862304d354a20a9fefbe51dd8daee46066084b6c21f9385ffcfa7adf991 前后未变。外层 Windows/PowerShell 展示命令在读取回执时因 carriage-return 路径解析返回非零，但 runner 与 pytest 原始回执均 rc=0；纠正记录位于 attempt-07-cpu-serialization/audit-correction.json。
+
+CUDA attempt-11 在物理 GPU0 UUID GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5（进程内 cuda:0）实际运行 42.90 秒，37 passed、2 failed、0 skip，fallback 0→0；CUDA core SHA256 0e2fe909d3f33e27c220546693c40f27087357cefe198220f46c97f9a0353a90 前后相同，GPU2 未暴露。失败项为 TestStateDict.test_load_state_dict_assign_does_not_mutate_shared_source：CUDA 分支的 location 检查期望 device、实际为 cpu；以及 TestStateDict.test_load_state_dict_from_numpy_roundtrip：CUDA Conv2d 前向发现 CUDA 输入与 CPU weight 混放。两项都属于当前 wheel 的实测功能失败，不能归成 setup 问题。attempt-08 的 Conda GLIBCXX 导入失败、attempt-09 的系统 libstdc++/libgomp 预检通过、attempt-10 的 FROZEN_TEST 漏传均各自保留，pytest 未运行的尝试不计测试结果。
+
+证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-serialization-cuda-r1/；artifact-files.sha256 SHA256 7a2b940efb16f9a6c23066aedcb4222926b504b8a95099c1d69f1f23a77490e9。完整摘要和测试身份见目录内 result.json、attempt-11-cuda-libstdcpp-serialization/outcome-review.json。此轮没有修改产品源码或测试；只更新状态文档和独立审计材料。
+
+结论：installed wheel 的 CPU serialization/state_dict 39 项通过；CUDA 有两项设备放置缺陷，修复后只需定向复验这两个 CUDA 测试。之前 stock PyTorch torch.load 无法读 JT optimizer.pt 的跨框架互操作失败仍单独保留。GPU0 共享负载只作正确性证据。Day4–5 性能/显存仍须管理员配置 cgq association 和可核验独占 GPU2，并按三轮交替、每轮每侧至少十个热样本采集 median/p95/离散度、加载/首步/热态时间及 allocator/NVML 峰值；更广 Day2–5 发布门继续 Not complete。
+
 ## 2026-11-03 03:59 +0800 安装态 serialization suite 未进入 pytest；不构成产品测试失败
 
 计划在 current installed main wheel 上运行 `compat/tests/torch/test_torch_compat_serialize.py`，补充 safetensors、portable-pickle roundtrip 与模块状态保存加载的功能覆盖。测试 SHA256 `aa3768dc616f00d1f0bb0e58f6c4ab30d2bee92bc7890bf1e6e183365db2ca02`；wheel SHA256 `b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69`，绑定源码 HEAD `35a1a7605ec475e9cbc1a9688afc299ee3bd8011`。当时 live HEAD 与 `origin/cgq_transformers` 都是 `f3788643a88316a0e2cd2ea65911a48b97dea3a5`，仓库 clean。
