@@ -1,3 +1,9 @@
+## 2026-11-03 03:34 +0800 Handoff：installed-wheel CPU storage/alias/strided-load 40 passed
+
+在当前 main wheel 隔离安装路径上执行三份 storage/alias 测试，40 passed、22 个 CUDA 变体 deselected，19.50 秒；fallback 0→0，core current 且 SHA256 前后相同 13ee2862304d354a20a9fefbe51dd8daee46066084b6c21f9385ffcfa7adf991。测试覆盖 view/as_strided stride、写穿、storage alias mutation version、torch.load 的 strided storage/map_location。wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69；证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-storage-alias-cpu-r1/，artifact manifest SHA256 eb03f448cf61714f7bd9d4d35b3157de4b93146537cee9c9c6a594eb64a8dc2c。
+
+这是 CPU 安装态子集，不覆盖 CUDA 变体或整体 wheel migration approval。GPU 性能/显存和更广 Day2–5 发布门保持开放。
+
 ## 2026-11-03 03:31 +0800 Handoff：installed-wheel CUDA checkpoint RNG probe 通过
 
 使用 wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69，在物理 GPU0 UUID GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5 上完成 3 元素 checkpoint probe。no-grad forward/recompute 调用轨迹 [1,0]；CUDA 随机输出逐位重放，backward 后调用方 CUDA RNG state 不变；梯度 [3,3,3]，fallback 0→0，CUDA core build current 且 SHA256 前后相同 0e2fe909d3f33e27c220546693c40f27087357cefe198220f46c97f9a0353a90。实现文件 SHA256 8f0042aa56b2a68b061d4975adaf1addd436d0056e0bd2553a91bd0b46a31b9b。证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-checkpoint-cuda-r2/，artifact manifest SHA256 8eb50b0a5dc4150ee1fe2b605f24d33de2abd18523a4f2625c10f8dbdacfc744。
