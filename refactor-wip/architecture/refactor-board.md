@@ -1,3 +1,11 @@
+## 2026-11-02 23:23 +0800 Qwen held-out 生成 attempt05 超时，Day2–5 仍未完成
+
+在隔离证据包中固定了 AlpacaEval 805 条提示词（revision 0a98450566635934660ae023319170cad8f00428，文件 SHA256 d92b92c51e8f1962a21193abe74e6f727c2bc8286035f4041505ff38a7c3ae51），绑定 R5 seed821 候选源码指纹 89157afb357abbb882057230ecb0e86586deeef7fb010a7cc51b3577eea054a6 和 adapter SHA256 adea9cd2a304af21478c54719685139fead0515edef865674ff419df3da02243。数据审计在实际 R5 的 101 条训练 fixture 与既有 17 条 eval fixture 上分别未发现规范化提示词重叠；这不代表与所有上游训练语料全局无重叠。
+
+attempt05 在真实 GPU0（UUID GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5，进程内 cuda:0）运行 900 秒后由 timeout 以 exit 124 结束，805 条中写出 0 条。模型与 CUDA context 已加载，但首条生成之前仍持续触发隔离 JITTOR_HOME overlay 内的 CUDA/C++ JIT 编译；strace 记录到 NVCC 编译子进程。没有 held-out 分数，也无法核对 fallback-after。原始 R4 jittor_core SHA256 保持 bdcb95c0043fc9af3d558adb19f243d792c8404aeb8f5bc8800957ef3f60d5a5。attempt 清单 SHA256 25ea1436a8bfdbba2e754845b743360a90c39d10f06848472b933acb66c5fded，plan 状态已记为 HELDOUT_JITTOR_ATTEMPT05_TIMED_OUT_NO_GENERATION。
+
+本轮不构成生成质量或性能/显存证据；PyTorch 配对基线和 AlpacaEval 官方 judge 均未运行。GPU2 未使用，仍由外部作业占用 45,880 MiB/100%，cgq Slurm association 仍待管理员配置。下一步先核对隔离 overlay 中新增编译项与算子形状特化，再设计限量、配对的 held-out 正确性诊断；不要直接重复 805 条、512 token 的同一冷启动配置。正式 Day4–5 与更广 Day2–5 发布门保持 **Not complete**。
+
 ## 2026-11-02 22:45 +0800 current-main Torch CPU 与 CUDA 定向正确性通过；Day2–5 仍未完成
 
 在现有 HEAD/origin `cgq_transformers` `84290a5ec28fdecc8207ee124b2afd8aa4b6a8f2` 上补齐当前源码的 Torch autograd focused、十文件 CPU core 与真实 CUDA fill/zero 回归：分别为 26 passed/2 CUDA 条件跳过、227 passed/3 合理跳过、2 passed。Nox CUDA 通过系统 libstdc++ preload wrapper 进入测试，backend_fallback=error；仅属正确性证据。第一轮全树 Torch 收集在测试执行前因 ecosystem runner helper 导入缺失而失败，需先修复收集阻断再继续广覆盖。

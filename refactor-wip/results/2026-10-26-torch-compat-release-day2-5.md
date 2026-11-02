@@ -1,3 +1,13 @@
+## 2026-11-02 23:23 +0800 Held-out generation attempt05 到时退出，未形成质量分数
+
+为 R5 seed821 当前源码 Qwen3-0.6B LoRA 建立了独立 held-out 生成诊断。数据来自 tatsu-lab/alpaca_eval 固定 revision 0a98450566635934660ae023319170cad8f00428，共 805 条，SHA256 d92b92c51e8f1962a21193abe74e6f727c2bc8286035f4041505ff38a7c3ae51。805 条提示词均非空且唯一；与实际 R5 101 条训练 fixture、既有 17 条 eval fixture 的规范化提示词重叠数均为 0，但没有对全部上游语料做全局去重。Tokenizer-only CPU 预检的输入长度为 min 4、max 484、mean 36.13、p95 120，无截断。
+
+绑定源码 HEAD d26c31246613c9e6a34da2ee7b6853612c9049a3、fingerprint 89157afb357abbb882057230ecb0e86586deeef7fb010a7cc51b3577eea054a6，候选 adapter SHA256 adea9cd2a304af21478c54719685139fead0515edef865674ff419df3da02243。attempt05 在 GPU0 UUID GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5（cuda:0）执行 900 秒，timeout exit 124，预测文件 0 行。Jittor 已完成模型/CUDA 初始化，但在首条生成前持续进行 CUDA/C++ JIT 编译；NVCC 子进程和 syscall 记录保存在 attempt 目录。没有可报告的 EM、token-F1、ROUGE-L、生成长度或 fallback-after 结果；没有运行 PyTorch 配对基线或官方 AlpacaEval judge。
+
+证据根目录为 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-qwen-heldout-alpaca-eval-r1-prepared/。attempt-05 的 final-sha256sums.txt SHA256 为 25ea1436a8bfdbba2e754845b743360a90c39d10f06848472b933acb66c5fded；plan.json SHA256 为 087e7cfd2d04ed398a01347b16c6f5c6c229776dfaf969e20aa9840605052b40。隔离 overlay 结束时包含 3,844 个 cache 文件；R4 原始 jittor_core 哈希仍为 bdcb95c0043fc9af3d558adb19f243d792c8404aeb8f5bc8800957ef3f60d5a5。GPU2 未暴露给该进程，仍由外部工作占用 45,880 MiB/100%。
+
+数据集虽来自 AlpacaEval，本轮既没有完成生成，也没有运行官方评审；此前也未登记 lexical 指标的通过阈值，因此不能据此关闭模型质量门。该诊断不是 Day4–5 性能或显存验收。后续先分析隔离 cache 的新增编译项和形状特化，再选择可控的小规模配对生成验证；正式性能窗仍需 cgq association 与 GPU2 独占租约。更广 Day2–5 发布门保持 **Not complete**。
+
 ## 2026-11-02 22:45 +0800 current-main Torch CPU focused/core 与 CUDA fill/zero 回归；Day2–5 仍未完成
 
 使用现有 `/home/cgq/jittor`，执行 HEAD 与 `origin/cgq_transformers` 均为 `84290a5ec28fdecc8207ee124b2afd8aa4b6a8f2`。测试时保留 81 个 tracked dirty 与 21 个 untracked，index 为空；porcelain SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`、tracked diff SHA256 `b97553cf0eb6cc4ca17f3f929071c3ab5db92322030ddef33a79c2da38786200`。当前源码文件哈希：`compat/torch/installers/tensor/method_api.py` 为 `72d532017d93b04ff5c72d5a28016c1085c383f38c1a8fe00c71842c73e5b8f5`；`compat/tests/torch/test_torch_compat_autograd_semantics.py` 为 `d079146c5e54aadde4bfd5015b29db60d3ca93be7eab9676edbaa265c8c4a092`。工作区与源码哈希在各测试前后未变。

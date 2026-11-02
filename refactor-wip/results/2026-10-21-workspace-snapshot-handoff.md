@@ -1,3 +1,9 @@
+## 2026-11-02 23:23 +0800 Handoff：held-out Qwen generation 在 JIT 冷启动阶段超时
+
+继续使用 /home/cgq/jittor；提交前 HEAD/origin/cgq_transformers 为 f935b81a61a27409220a9e7114080e22cb23bb6e。本轮 attempt05 是 R5 seed821 候选的 805 条 AlpacaEval 诊断，绑定 source fingerprint 89157afb357abbb882057230ecb0e86586deeef7fb010a7cc51b3577eea054a6 与 adapter SHA256 adea9cd2a304af21478c54719685139fead0515edef865674ff419df3da02243。真实 GPU0/cuda:0 执行 900 秒，timeout exit 124，0 条预测；模型已加载，首样本前持续 CUDA/C++ JIT 编译。没有质量分数、fallback-after 结果或 PyTorch 配对基线。完整输出、strace、GPU 前后快照与逐文件 SHA256 在 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-qwen-heldout-alpaca-eval-r1-prepared/attempt-05-jittor-r5-seed821/；manifest SHA256 25ea1436a8bfdbba2e754845b743360a90c39d10f06848472b933acb66c5fded。
+
+本轮没有触碰仓库源码，也没有重跑 R14/R5 训练、已通过 preflight 或正式性能采样。原始 R4 jittor_core SHA256 仍为 bdcb95c0043fc9af3d558adb19f243d792c8404aeb8f5bc8800957ef3f60d5a5；GPU2 未使用，外部占用 45,880 MiB/100%；cgq Slurm association 仍待管理员添加。下一步先审视 attempt05 隔离 cache 的编译增量和 shape-specialization 行为，再定一个有限、可配对的 held-out 生成子集；不要直接重复相同 805 条、512 token 冷启动任务。正式 Day4–5 仍受独占 GPU2 阻塞，整体 Day2–5 维持 **Not complete**。
+
 ## 2026-11-02 22:45 +0800 Handoff：current-main Torch CPU 与真实 CUDA 定向门通过；全树收集和 GPU2 性能门开放
 
 当前分支与 `origin/cgq_transformers` 同为 `84290a5ec28fdecc8207ee124b2afd8aa4b6a8f2`。Torch autograd focused CPU 为 26 passed/2 CUDA skip，十文件 CPU core 为 227 passed/3 skip，GPU0 上 fill/zero 两个真实 CUDA 用例为 2 passed。保存证据 manifest SHA256 `f8508800b37d758f582e4f0b5a9078b05c33b174d0cb35f42b00b520ff7d3880`。这些结果不覆盖全树 Torch collection；后续先处理 `_evaluate_preserving_parameter_grads` 导入缺失，再扩展未覆盖范围。
