@@ -1,3 +1,7 @@
+## 2026-11-03 02:28 +0800 current-HEAD 安装 wheel 的 fused SGD 部分功能通过；完整选项矩阵超时
+
+在安装态 CUDA wheel 上，fused SGD 的 unsupported-dtype 回退和超过 chunk 的参数列表更新两项完成并通过；覆盖全部 optimizer option 组合的轨迹方法在 180 秒硬上限终止，整个 suite 不记为通过。复用 core SHA256 0e2fe909d3f33e27c220546693c40f27087357cefe198220f46c97f9a0353a90，证据包 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-fused-sgd-cuda-r2/，manifest SHA256 64ecd2492058bcbc4a6ff2d44676fb05e2dd6642cd3de09186b9fec645e35c35。这是部分功能证据，不是训练、性能或显存结论；整体 Day2–5 仍未完成。
+
 ## 2026-11-03 02:23 +0800 current-HEAD 安装 wheel 的 fused AdamW CUDA 更新通过；Day2–5 仍未完成
 
 在 current-HEAD main wheel 的隔离安装路径上，使用真实 CUDA 执行 fused AdamW 单项：42 个参数张量跨过单次 36 项 launch table，包含空张量与尾部尺寸，并与 FP64 AdamW 公式比较；结果 1 passed、0 skipped，fallback 0→0，安装 wheel 内 kernel 哈希与源码快照一致，core build current 且 core SHA256 0e2fe909d3f33e27c220546693c40f27087357cefe198220f46c97f9a0353a90 未变。证据包 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-fused-adamw-cuda-r1/，manifest SHA256 a2b0588dd4b58304480d2d8f81db8ac552c23dada102e57aed98bb15dc6d8918。

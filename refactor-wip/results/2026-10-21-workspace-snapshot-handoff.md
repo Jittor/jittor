@@ -1,3 +1,9 @@
+## 2026-11-03 02:28 +0800 Handoff：installed wheel fused SGD 部分通过，完整 option trajectory 超时
+
+在 wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69 的 installed CUDA 路径中，fused SGD 两个 unittest 方法完整通过：unsupported FP16 dtype 的优化器回退，以及超过 chunk 的长参数列表实际更新。第三个全部 optimizer option 组合轨迹达到 180 秒上限，suite exit 124，不能报整体通过。core SHA256 0e2fe909d3f33e27c220546693c40f27087357cefe198220f46c97f9a0353a90 未变；artifact manifest SHA256 64ecd2492058bcbc4a6ff2d44676fb05e2dd6642cd3de09186b9fec645e35c35，目录 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-fused-sgd-cuda-r2/。
+
+不重跑同一完整 suite。下一步保持 wheel migration 未批准，按已观察到的功能差异选择更直接且预算有界的运行覆盖；若将来需要追完整 optimizer option 矩阵，先使用独立缓存和分项上限，明确这不是既有 suite 的通过替代。GPU2 仍共享占用、cgq Slurm association 未配置，正式 Day4–5 窗口依旧不可用。整体 Day2–5 保持 Not complete。
+
 ## 2026-11-03 02:23 +0800 Handoff：installed wheel fused AdamW CUDA 更新通过
 
 current-HEAD main wheel（source HEAD 35a1a7605ec475e9cbc1a9688afc299ee3bd8011，wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69）已在物理 GPU0 上执行 fused AdamW 路径。test_a_list_longer_than_one_launch 对 42 参数张量分块、空 tensor、尾部和 AdamW 更新公式的检查为 1 passed、0 skipped；fallback 0→0，installed kernel 哈希一致，core build current，core SHA256 0e2fe909d3f33e27c220546693c40f27087357cefe198220f46c97f9a0353a90。证据包 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-fused-adamw-cuda-r1/，manifest SHA256 a2b0588dd4b58304480d2d8f81db8ac552c23dada102e57aed98bb15dc6d8918。

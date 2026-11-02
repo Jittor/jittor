@@ -1,3 +1,11 @@
+## 2026-11-03 02:28 +0800 current-HEAD 安装 wheel 的 fused SGD 两个方法通过；完整 suite 超时
+
+绑定 main wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69（源码快照 HEAD 35a1a7605ec475e9cbc1a9688afc299ee3bd8011），live repo 在运行前 HEAD e81208daefce0a00cfd28d29d6cc007494d954b9 且工作区干净。物理 GPU0 UUID GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5 映射为进程内 cuda:0；GPU2 未使用。测试源码 tests/optim/test_fused_sgd_cuda.py SHA256 7a063a60bdb25d0474149deb4e372b63d5f7163e424a09166a82ff86a2f2f5b9；安装 wheel kernel fused_sgd_cuda.py 与快照源码 SHA256 均为 5d7c15f09429e8d8bdd0fc9bc590654d0688e2ce342c5dbb7bdb4d4f1aa1d971。installed Jittor 和 kernel 路径通过断言，复用 CUDA core SHA256 0e2fe909d3f33e27c220546693c40f27087357cefe198220f46c97f9a0353a90，前后不变。
+
+test suite 在 180.13 秒硬上限 exit 124。原始 unittest 输出表明 test_a_dtype_it_cannot_serve_falls_back 和 test_a_parameter_list_longer_than_one_chunk 各自完整通过：前者检查融合路径不能服务 FP16 时的优化器算法回退，后者验证长参数列表分块后的实际更新值。随后 test_every_option_combination_matches_the_portable_update 已开始但没有完成；test_it_is_off_when_asked 未运行。故整体 suite 失败/超时，不把未完成选项组合改写成通过。运行在 backend_fallback=error 与 forbid_backend_fallbacks() 下；不作性能或显存结论。GPU0 共享负载，开始显存 7,541 MiB / 92%，结束 7,541 MiB / 26%。
+
+证据包 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-fused-sgd-cuda-r2/，artifact manifest SHA256 64ecd2492058bcbc4a6ff2d44676fb05e2dd6642cd3de09186b9fec645e35c35。两个运行器准备错误均记录在 preparation-history.json；正式 suite 仅运行一次、达到既定上限后停止，不重跑。当前 wheel baseline 仍为 69 additions、304 content changes、2 removals、0 approved；fused SGD option parity 与其它差异、generator_randint 矩阵记录矛盾、正式 Day4–5 和更广 Day2–5 仍开放。
+
 ## 2026-11-03 02:23 +0800 current-HEAD 安装 wheel 的 fused AdamW CUDA 更新通过
 
 绑定 main wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69（源码快照 HEAD 35a1a7605ec475e9cbc1a9688afc299ee3bd8011），在 Python 3.11.3、物理 GPU0 UUID GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5、进程内 cuda:0 上，从 installed target 导入 Jittor，加载安装包中的 fused_adamw_cuda.py。当前 live repo HEAD 为 26db77add612f1a7c068ebaf9f70dbcd120d711c；产品源码与构建 wheel 的来源一致。
