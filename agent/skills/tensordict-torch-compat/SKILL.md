@@ -118,7 +118,7 @@ TensorDict 六 workers / 29 pairs、全部参数与 sample 梯度、三步 SGD �
 | `torch._C._nn._parse_to`、通用 tensor 索引/梯度语义 | `jittor.compat.torch`，先做无 TensorDict 的最小复现 |
 | native 算子或真实设备计算错误 | Jittor 核心 |
 
-`adapters/` 没有 TensorDict adapter。已有 `compat/tests/torch/test_tensordict_compat.py` 是
+私有 helper 适配由 [jittor-tensordict](https://github.com/JittorEcosystem/jittor-tensordict) 独立维护。已有 `compat/tests/torch/test_tensordict_compat.py` 是
 另一条可选 CUDA 单解释器门禁，含 CPU conversion、构造/update/index/lazy stack；它有依赖和
 设备 skip 条件。`_jittor_index_compat=True` 和 import 成功都不能替代真实行为与梯度证据。
 本轮正式双解释器 case 通过不等于旧 optional 文件已重跑。历史 constraints 导入失败已由

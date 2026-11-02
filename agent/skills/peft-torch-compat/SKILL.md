@@ -219,7 +219,7 @@ peft 是纯 `import torch` 消费者，**第三行（adapter）为空**；修复
   mmengine 0.10.7。pip 顺带拉入的 torch 2.14.0 / transformers 5.16.1 / numpy 2.5.3 已从
   site 删除，改用 venv 的 torch 2.13.0 / transformers 5.5.3 / numpy 2.3.5。
 - `$JITTOR_LAB_ROOT/_state/verify-ml/site-peft17`：`pip install --target site-peft17
-  transformers==4.56.2 peft==0.17.1 ms-swift==4.5.2`（4.56.2 是 `jittor_adapters` 允许的
+  transformers==4.56.2 peft==0.17.1 ms-swift==4.5.2`（4.56.2 是 Transformers 独立 adapter 允许的
   版本之一；transformers 走 site 覆盖 venv 的 5.5.3），torch 已删除。
 
 **实际跑通的命令**（site-peft17；原命令的 peft 0.20.0 在 shim 上起不来，见下）：

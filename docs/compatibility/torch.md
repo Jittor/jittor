@@ -82,7 +82,7 @@ Jittor 就把 `flags.use_cuda` 置 1。
 `torch.npu.is_available()` 作为开关去走 `torch_npu` 专属路径——而 `torch_npu` 是编译
 过的 PyTorch 扩展，这里没有它。答 `False` 让那些分支保持关闭，计算走通用的 `cuda`
 路径。同理，可选的 Transformers 适配器把 `is_torch_npu_available()` 也改成返回
-`False`（`adapters/jittor_adapters/transformers.py`）。所以：**判断有没有加速器请问
+`False`（[jittor-transformers](https://github.com/JittorEcosystem/jittor-transformers/blob/main/jittor_transformers/adapter.py)）。所以：**判断有没有加速器请问
 `torch.cuda.is_available()`，不要问 `torch.npu.is_available()`。**
 
 `torch.__file__` 指向实际被导入的那个 `torch/__init__.py`——已部署的那份入口文件，
@@ -243,33 +243,20 @@ CPU 回退检测。用 `REAL_TORCH_PYTHON` 指向真 PyTorch 解释器，可选�
 | `peft` | llama 上的 LoRA | |
 | `ms-swift` | 它自己的 LoRA tuner（llama） | 需要 `peft < 0.20`；ms-swift 4.5.2 配 peft 0.19 在真 PyTorch 下也报同样的 `TypeError` |
 | `mmcv` / `mmengine` | `mmcv.cnn.ConvModule`、`mmengine.model.BaseModule` | CPU、CUDA、NPU；仅限纯 Python 层，见下 |
-| `torchmetrics` | 分类与回归指标（`compat/tests/torch/test_torchmetrics_compat.py`） | 1.7.4，经 `jittor_adapters.torchmetrics` 适配 |
+| `torchmetrics` | 分类与回归指标（[jittor-torchmetrics runtime tests](https://github.com/JittorEcosystem/jittor-torchmetrics/blob/main/tests/runtime/test_torchmetrics_compat.py)） | 1.7.4，经 `jittor_torchmetrics` 适配 |
 
 有两条边界属于**架构性的**，不是尚未完成的工作：
 
 - **编译过的 PyTorch 扩展。** `mmcv.ops` 以及任何自带 `torch` 链接 `.so` 的包，都是
   针对 PyTorch 的 C++ ABI 编译的。**Python 层的兼容层无法加载它们**；这些算子需要
   Jittor 自己的实现——`jittor.models` 和原生算子面就是为要紧的那些场景提供的。
-- **自己掌管设备的运行时。** vLLM 内嵌自定义 CUDA kernel 和它自己的显存与调度层，
-  而不是调用 `torch.*`，所以光靠 shim 带不动它。它通过可选适配器
-  `jittor_adapters.vllm`（随 `jittor-torch-adapters` 发行物分发，entry point 名
-  `jittor_vllm`）运行，由适配器针对 Jittor 提供那些 kernel：vLLM V1 能加载
-  Qwen3-0.6B、建立 KV cache、完成真实 CUDA 上的贪心解码，token 与真实
-  PyTorch/Transformers **完全一致**，四 token 暖启动生成 `0.109s` 对 `0.137s`。
-  verl 走同一条路——它的 import、协议、FSDP2 和 PPO 门禁都通过，含四卡 FSDP2。
+- **自己掌管设备的运行时。** vLLM 的 kernel 和设备调度超出 Torch API 范围，由 [jittor-vllm](https://github.com/JittorEcosystem/jittor-vllm) 通过 `jittor_vllm` 入口接入；verl 的私有策略由 [jittor-verl](https://github.com/JittorEcosystem/jittor-verl) 维护。版本与设备验收以各仓库记录为准，框架不打包这些集成。
 
 TRELLIS.2 4B 曾在一个**不在本仓库**的外部适配器上以四个真实 CUDA 扩展完成对齐的
 端到端流水，暖态流水中位数是 `7.515s` 对真实 PyTorch 的 `6.878s`——约 `1.09x`，
 **性能尚未验收**；该测量是一次性结论，见[下游库台账](../performance/library-standing.md)。
 
-项目专属的粘合代码都在通过 entry point 注册的可选适配器里，**不在主线 Jittor 中**，
-理由见[仓库布局](../development/repository-layout.md)。本仓库维护的一份是
-[`adapters/`](https://github.com/Jittor/jittor/blob/master/adapters/README.md)
-（发行物 `jittor-torch-adapters`，Python 包 `jittor_adapters`），它有三个 entry
-point：`jittor_transformers`（Transformers 4.56.2 / 5.5.3：让它自带的 `torch_npu`
-探测返回假）、`jittor_torchmetrics`（TorchMetrics 1.7.4）、`jittor_vllm`。版本是显式
-的：未识别的版本会抛 `UnsupportedAdapterVersion` 而不是碰运气。TRELLIS 与 Gaussian
-Splatting 的粘合代码不在本仓库，也没有随本发布线发布。
+项目专属粘合代码通过 [JittorEcosystem](https://github.com/JittorEcosystem) 的独立包安装。主仓[适配器索引](../../adapters/README.md) 链接各仓库源码、测试与支持记录。核心与 compat 不依赖适配器合集；注册和版本检查通过公开模块补丁契约显式失败，通用数学和 Torch 语义仍属于框架。
 
 ## 复数与 FFT
 

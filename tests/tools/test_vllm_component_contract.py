@@ -32,6 +32,7 @@ def pair(request, tmp_path, monkeypatch):
     root = tmp_path / 'framework'
     root.mkdir()
     adapter = adapter_binding(root)
+    monkeypatch.setenv("JITTOR_VLLM_SOURCE", str(root.parent / "adapter-source"))
     captures = {}
     for name in ('native.cc', 'runner.py'):
         (root / name).write_text(name)
@@ -87,13 +88,17 @@ def test_complete_pair_retains_all_four_gradients(pair):
 
 
 @pytest.mark.parametrize('change', ['missing', 'bootstrap', 'metadata', 'record', 'entry_points',
-                                    'direct_url', 'version', 'registration', 'source_root'])
-def test_actual_maintained_adapter_identity_is_required(pair, change):
+                                    'direct_url', 'version', 'registration', 'source_root', 'missing_source', 'foreign_source'])
+def test_actual_maintained_adapter_identity_is_required(pair, change, monkeypatch):
     compare, values, _, _ = pair
     value = values[1]
     binding = value['adapter_distribution']
     if change == 'missing':
         del value['adapter_distribution']
+    elif change == 'foreign_source':
+        monkeypatch.setenv('JITTOR_VLLM_SOURCE', '/foreign/adapter')
+    elif change == 'missing_source':
+        monkeypatch.delenv('JITTOR_VLLM_SOURCE')
     elif change == 'bootstrap':
         binding['bootstrap'] = '/foreign/bootstrap.py'
     elif change in ('metadata', 'record', 'entry_points', 'direct_url'):
@@ -104,7 +109,7 @@ def test_actual_maintained_adapter_identity_is_required(pair, change):
         text = path.read_text()
         text = (text.replace('2.0.0', '9.0.0') if change == 'version' else
                 text.replace('jittor_vllm', 'other') if change == 'registration' else
-                text.replace('adapters', 'foreign'))
+                text.replace('adapter-source', 'foreign'))
         path.write_text(text)
         binding[key + '_sha256'] = contract.digest(path)
     with pytest.raises(ValueError, match='adapter|entry point'):

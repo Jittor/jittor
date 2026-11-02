@@ -10,11 +10,12 @@ from _installed_source_proof import require
 
 UPSTREAM_COMMIT = '98dff2a81d747d1dba01a47f939f48c3526d4206'
 WHEEL_SHA256 = '09d48617fc2be9c6cdcd5db480651ab0d84817b257204f2cc2e3ecbb70bbb635'
+ADAPTER_VERSION = '2.0.0.dev6'
 
 
 def framework_sources(root, *, baseline=None):
     root = Path(root)
-    scope = ['python', 'compat', 'src', 'backends', 'adapters']
+    scope = ['python', 'compat', 'src', 'backends']
     selection = (['ls-files', *scope] if baseline is None else
                  ['ls-tree', '-r', '--name-only', baseline, '--', *scope])
     tracked = subprocess.check_output(
@@ -69,14 +70,17 @@ def framework_snapshot(root):
 
 
 def validate_adapter_installation(binding, root):
-    """Check the actual editable carrier and the loaded maintained bootstrap."""
+    """Bind an independent editable adapter to its explicitly selected checkout."""
     import configparser
     from email.parser import BytesParser
     import json
 
     require(isinstance(binding, dict), 'Missing actual vLLM adapter installation')
     root = Path(root).resolve()
-    bootstrap = root / 'adapters/jittor_adapters/vllm/bootstrap.py'
+    configured = os.environ.get('JITTOR_VLLM_SOURCE')
+    require(configured, 'Set JITTOR_VLLM_SOURCE to the independently installed adapter checkout')
+    adapter_root = Path(configured).expanduser().resolve()
+    bootstrap = adapter_root / 'jittor_vllm/bootstrap.py'
     require(binding.get('bootstrap') == str(bootstrap), 'Foreign vLLM adapter bootstrap')
     paths = {}
     for key, filename in (('metadata', 'METADATA'), ('record', 'RECORD'),
@@ -89,14 +93,14 @@ def validate_adapter_installation(binding, root):
     require(len({paths[key].parent for key in ('metadata', 'record', 'entry_points', 'direct_url')}) == 1,
             'Mixed vLLM adapter distribution metadata roots')
     metadata_value = BytesParser().parsebytes(paths['metadata'].read_bytes())
-    require(metadata_value['Name'] == 'jittor-torch-adapters' and metadata_value['Version'] == '2.0.0',
+    require(metadata_value['Name'] == 'jittor-vllm' and metadata_value['Version'] == ADAPTER_VERSION,
             'Wrong actual vLLM adapter distribution identity')
     entries = configparser.ConfigParser()
     entries.read_string(paths['entry_points'].read_text())
     require(entries.get('jittor.module_patches', 'jittor_vllm', fallback='')
-            == 'jittor_adapters.vllm:register', 'Missing actual maintained vLLM entry point')
+            == 'jittor_vllm:register', 'Missing actual maintained vLLM entry point')
     direct = json.loads(paths['direct_url'].read_text())
-    require(direct.get('url') == (root / 'adapters').as_uri()
+    require(direct.get('url') == adapter_root.as_uri()
             and direct.get('dir_info', {}).get('editable') is True, 'Foreign actual vLLM adapter source')
 
 
@@ -104,11 +108,11 @@ def adapter_installation(root):
     import sys
 
     root = Path(root).resolve()
-    module = sys.modules.get('jittor_adapters.vllm.bootstrap')
+    module = sys.modules.get('jittor_vllm.bootstrap')
     require(module is not None, 'Maintained vLLM adapter bootstrap was not loaded')
-    dist = metadata.distribution('jittor-torch-adapters')
+    dist = metadata.distribution('jittor-vllm')
     require(any(entry.group == 'jittor.module_patches' and entry.name == 'jittor_vllm'
-                and entry.value == 'jittor_adapters.vllm:register' for entry in dist.entry_points),
+                and entry.value == 'jittor_vllm:register' for entry in dist.entry_points),
             'Actual vLLM adapter entry point was not installed')
     paths = {name: Path(dist._path) / filename for name, filename in
              (('metadata', 'METADATA'), ('record', 'RECORD'), ('entry_points', 'entry_points.txt'),

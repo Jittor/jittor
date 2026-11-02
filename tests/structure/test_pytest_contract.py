@@ -322,7 +322,7 @@ def _automatic_markers(relative, device=None, selected=None):
 
 def test_pytest_owns_collection_and_strict_xfail_policy():
     config = _pytest_config()
-    assert config["testpaths"] == ["tests", "compat/tests", "adapters/tests"]
+    assert config["testpaths"] == ["tests", "compat/tests"]
     assert config["xfail_strict"] is True
     markers = {entry.split(":", 1)[0] for entry in config["markers"]}
     assert markers == {

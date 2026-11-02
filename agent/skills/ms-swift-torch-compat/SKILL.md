@@ -222,7 +222,7 @@ ms-swift 是纯 `import torch` 消费者，**adapter（第三行）为空**。�
   peft 0.20.0**（及 mmcv-lite 2.2.0、mmengine 0.10.7）；pip 拉入的 torch 2.14.0 /
   transformers 5.16.1 / numpy 2.5.3 已从 site 删除，改用 venv 的对应版本。
 - `$JITTOR_LAB_ROOT/_state/verify-ml/site-peft17`：`pip install --target site-peft17
-  transformers==4.56.2 peft==0.17.1 ms-swift==4.5.2`（4.56.2 是 `jittor_adapters` 允许的
+  transformers==4.56.2 peft==0.17.1 ms-swift==4.5.2`（4.56.2 是 Transformers 独立 adapter 允许的
   版本），torch 已删除。
 
 **实际跑通的命令**（site-peft17；原命令的 ms-swift 4.5.3+peft 0.20.0 在 shim 上失败，见下）：

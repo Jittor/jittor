@@ -122,7 +122,7 @@ CPU 显式隐藏 CUDA；两库共 10 个 worker、35 对数组须全部被公共
 | detached/cloned reset 状态 `+=` 后输入梯度丢失 | tensor installer 的 augmented operator 与共享 `_ip` owner；同文件验证四种 augmented 运算、reset state 和 no_grad |
 | 基础 Var/Op 算子数值错误 | Jittor 核心；不能塞进 TorchMetrics adapter |
 
-已有 `adapters/jittor_adapters/torchmetrics.py` 仅处理 1.7.4 的有界 helper policy
+已有 [jittor-torchmetrics](https://github.com/JittorEcosystem/jittor-torchmetrics) 仅处理 1.7.4 的有界 helper policy
 （`_bincount`、`dim_zero_cat`、`_safe_divide`），不承担通用 Module/梯度语义。
 `compat/tests/torch/test_torchmetrics_compat.py` 是另一条带硬编码期望值及 adapter 标记断言的
 可选路径。本轮没有以它证明分类、排名或 adapter 门禁；不要将其直接交给原生 Torch 解释器。

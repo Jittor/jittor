@@ -34,7 +34,7 @@ Torch 命名空间都复制进一个模块的许可，也不是在计算已经�
 | 可复用的导入/构建/补丁机制 | `jittor.compat` |
 | Torch shim 运行时/部署与顶层 `torch` 表面 | `jittor.compat.shim` |
 | Triton API 桥 | `jittor.compat.triton` |
-| 单个项目的模型/版本粘合 | 可选适配器包（`adapters/`） |
+| 单个项目的模型/版本粘合 | [独立下游适配仓库](https://github.com/JittorEcosystem) |
 
 如果多个下游项目需要同一个算子，就把算子提升到原生领域。如果它们只需要同一套补丁
 机制，就提升该机制，同时把每个补丁留在核心之外。新下游库的分流判据在

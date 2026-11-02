@@ -1540,7 +1540,7 @@ workaround.
   only operators the process registered through `torch.library`; the
   compatibility layer synthesises no aten operators, so code that binds
   `torch.ops.aten.<name>` raises `AttributeError: torch.ops.aten has no op ...`.
-  The vLLM adapter (`adapters/jittor_adapters/vllm/aten_ops.py`, registered from
+  The vLLM adapter ([aten_ops.py](https://github.com/JittorEcosystem/jittor-vllm/blob/main/jittor_vllm/aten_ops.py), registered from
   its bootstrap when `vllm` is imported) registers `reshape` and `reshape.default`
   (forwarding to Jittor) and `_scaled_dot_product_flash_attention` /
   `_scaled_dot_product_efficient_attention`, which exist so module-scope bindings
@@ -1554,8 +1554,8 @@ workaround.
   in its adapter, structural ones forwarding to Jittor primitives and kernels
   Jittor lacks refusing with a clear error, as `aten_ops.py` does. Select a
   diffusion attention backend that does not call the refusing operators.
-- Evidence: `adapters/jittor_adapters/vllm/aten_ops.py`;
-  `adapters/jittor_adapters/vllm/bootstrap.py`.
+- Evidence: [aten_ops.py](https://github.com/JittorEcosystem/jittor-vllm/blob/main/jittor_vllm/aten_ops.py);
+  [bootstrap.py](https://github.com/JittorEcosystem/jittor-vllm/blob/main/jittor_vllm/bootstrap.py).
 - Exit condition: a general aten bridge in the compatibility layer (structural
   ops mapped to Jittor primitives, quantized and flash variants refused with a
   clear error), or a recorded decision that aten names are adapter-owned; then

@@ -108,10 +108,8 @@ class TestPackagingStructure(unittest.TestCase):
         core_version = versions[0]
         with (self.repo_root / "compat/pyproject.toml").open("rb") as stream:
             frontend = tomllib.load(stream)["project"]
-        with (self.repo_root / "adapters/pyproject.toml").open("rb") as stream:
-            adapters = tomllib.load(stream)["project"]
         self.assertEqual(frontend["version"], core_version)
-        for project, name in ((frontend, "jittor"), (adapters, "jittor-compat")):
+        for project, name in ((frontend, "jittor"),):
             with self.subTest(project=project["name"]):
                 dependencies = [Requirement(value) for value in project["dependencies"]]
                 matched = [item for item in dependencies if canonicalize_name(item.name) == name]

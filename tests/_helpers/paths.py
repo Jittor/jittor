@@ -5,8 +5,7 @@ import os
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TEST_ROOT = REPO_ROOT / "tests"
-TEST_ROOTS = (TEST_ROOT, REPO_ROOT / "compat/tests",
-              REPO_ROOT / "adapters/tests", REPO_ROOT / "adapters/jittor_adapters")
+TEST_ROOTS = (TEST_ROOT, REPO_ROOT / "compat/tests")
 
 
 def iter_test_files(pattern="test_*.py"):

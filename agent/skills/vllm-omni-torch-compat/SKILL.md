@@ -267,7 +267,7 @@ vLLM-Omni server 的原生对拍属于 vllm-omni 自身栈，未做。
 
 MiniMax-H3 按报告是**消费未修改**：断点尽量落 jittor core / compat，不要为它写模型侧
 补丁。vLLM 侧唯一合法的 adapter 是仓内
-[`adapters/jittor_adapters/vllm/`](../../../adapters/jittor_adapters/vllm/)（见
+[`adapters/jittor_adapters/vllm/`](https://github.com/JittorEcosystem/jittor-vllm/blob/main/jittor_vllm/)（见
 [`vllm-torch-compat`](../vllm-torch-compat/SKILL.md)）。
 
 ## 坑与假绿

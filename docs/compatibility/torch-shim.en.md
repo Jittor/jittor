@@ -106,19 +106,18 @@ Adapters use two public entry-point groups:
 - **`jittor.external_backends`** — register extension-discovery policies through
   `jittor.compat.external_backend`.
 
-The adapter maintained in this repository is a separate distribution:
-`jittor-torch-adapters` (source in
-[`adapters/`](https://github.com/Jittor/jittor/blob/master/adapters/README.md),
-Python package `jittor_adapters`, depending on the same version of
-`jittor-compat`). It registers three `jittor.module_patches` entry points:
+Downstream integrations are separate distributions in [JittorEcosystem](https://github.com/JittorEcosystem). Core and compat do not depend on an adapter bundle. Each repository owns its runtime, tests, version constraints and device support records. The optional module-patch entry points are:
 
-| entry point | Version | Role |
-| --- | --- | --- |
-| `jittor_transformers` | Transformers 4.56.2, 5.5.3 | Make Transformers' own `torch_npu` probe return false |
-| `jittor_torchmetrics` | TorchMetrics 1.7.4 | Private bincount / concatenation / safe-divide helpers preserve existing Jittor behavior |
-| `jittor_vllm` | see `adapters/README.md` | vLLM's compiled extension surface and layer patches |
+| Entry point | Repository |
+|---|---|
+| `jittor_transformers` | [jittor-transformers](https://github.com/JittorEcosystem/jittor-transformers) |
+| `jittor_torchmetrics` | [jittor-torchmetrics](https://github.com/JittorEcosystem/jittor-torchmetrics) |
+| `jittor_tensordict` | [jittor-tensordict](https://github.com/JittorEcosystem/jittor-tensordict) |
+| `jittor_verl` | [jittor-verl](https://github.com/JittorEcosystem/jittor-verl) |
+| `jittor_vllm` | [jittor-vllm](https://github.com/JittorEcosystem/jittor-vllm) |
+| `jittor_deepspeed` | [jittor-deepspeed](https://github.com/JittorEcosystem/jittor-deepspeed) |
 
-Installing it makes the entry points discoverable; when it is not installed they
+Installing the selected integration makes the entry points discoverable; when it is not installed they
 are reported as `unavailable` and the frontend is unaffected. Versions are
 explicit: an unrecognized version raises `UnsupportedAdapterVersion` when the
 patch is applied. **Jittor itself does not import these third-party libraries,

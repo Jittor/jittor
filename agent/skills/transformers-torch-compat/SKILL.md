@@ -109,7 +109,7 @@ CPU 轨显式隐藏 CUDA、固定真实 Torch 2.11.0+cpu；安装包/编译缓�
 
 Transformer 专用 adapter 只做一件事：把 `transformers.utils.import_utils.is_torch_npu_available`
 钉成返回 `False`，避免原生 `torch_npu` 探测进入独立 Jittor 前端
-（[`adapters/jittor_adapters/transformers.py`](../../../adapters/jittor_adapters/transformers.py)，
+（[`jittor_transformers/adapter.py`](https://github.com/JittorEcosystem/jittor-transformers/blob/main/jittor_transformers/adapter.py)，
 `SUPPORTED_VERSIONS = {4.56.2, 5.5.3}`）。实测该 guard 已生效
 （`_jittor_transformers_npu_guard is True`，`is_torch_npu_available() is False`）。
 
@@ -206,7 +206,7 @@ PyTorch CPU。
 
 | 断点 | 分流 | 依据 |
 | --- | --- | --- |
-| 原生 `torch_npu` 探测进入独立 Jittor 前端 | **adapter** | 库私有实现细节，已由 `adapters/jittor_adapters/transformers.py` 的 NPU guard 处理；版本门 `SUPPORTED_VERSIONS={4.56.2,5.5.3}`，失败 fail-closed |
+| 原生 `torch_npu` 探测进入独立 Jittor 前端 | **adapter** | 库私有实现细节，已由 `jittor_transformers/adapter.py` 的 NPU guard 处理；版本门 `SUPPORTED_VERSIONS={4.56.2,5.5.3}`，失败 fail-closed |
 | `param.grad` 曝光为 `None`（计算对、只暴露错） | **jittor.compat.torch** | 已在 compat 修（见 [`jittor-torch-diff`](../jittor-torch-diff/SKILL.md)），不是核心缺能力 |
 | 拼写/签名与 torch 不同的 API | **jittor.compat.torch** | compat 只做适配；出现第二套实现即放错位置 |
 | 能力本身 jittor 没有（例：NPU bool 归约，公共 `jt.all`/`Tensor.all`/`jt.any` 是 Transformers 需要的路径） | **jittor 核心** | [`known-issues` KI-BACKEND-001](../../manuals/known-issues.md) |
@@ -247,7 +247,7 @@ PyTorch CPU。
 - 门禁：[`test_ecosystem_parity.py`](../../../compat/tests/torch/test_ecosystem_parity.py)、
   [`test_ecosystem_speed.py`](../../../compat/tests/torch/test_ecosystem_speed.py)、
   [`noxfile.py`](../../../noxfile.py) 的 `ecosystem` session。
-- Adapter：[`adapters/jittor_adapters/transformers.py`](../../../adapters/jittor_adapters/transformers.py)。
+- Adapter：[`jittor_transformers/adapter.py`](https://github.com/JittorEcosystem/jittor-transformers/blob/main/jittor_transformers/adapter.py)。
 - 对拍/分流方法：[`jittor-torch-diff`](../jittor-torch-diff/SKILL.md)、
   [`downstream-library-adaptation`](../downstream-library-adaptation/SKILL.md)；
   更深的性能方法：[`jittor-transformers-perf`](../jittor-transformers-perf/SKILL.md)。

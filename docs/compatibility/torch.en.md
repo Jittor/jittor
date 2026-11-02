@@ -83,7 +83,7 @@ backend (`compat/torch/types.py`, `compat/torch/frontend.py`,
 as a switch to take `torch_npu`-specific paths—and `torch_npu` is a compiled PyTorch extension that is not
 present here. Answering `False` keeps those branches closed and lets computation take the generic `cuda` path.
 Likewise, the optional Transformers adapter makes `is_torch_npu_available()` return `False` too
-(`adapters/jittor_adapters/transformers.py`). So: **to ask whether an accelerator exists, ask
+([jittor-transformers](https://github.com/JittorEcosystem/jittor-transformers/blob/main/jittor_transformers/adapter.py)). So: **to ask whether an accelerator exists, ask
 `torch.cuda.is_available()`, not `torch.npu.is_available()`.**
 
 `torch.__file__` points to the `torch/__init__.py` that was actually imported—the deployed entry file, or (when
@@ -245,7 +245,7 @@ CPU-fallback detection. Point `REAL_TORCH_PYTHON` at the real PyTorch interprete
 | `peft` | LoRA on llama | |
 | `ms-swift` | its own LoRA tuner (llama) | requires `peft < 0.20`; ms-swift 4.5.2 with peft 0.19 raises the same `TypeError` under real PyTorch |
 | `mmcv` / `mmengine` | `mmcv.cnn.ConvModule`, `mmengine.model.BaseModule` | CPU, CUDA, NPU; pure-Python layers only, see below |
-| `torchmetrics` | classification and regression metrics (`compat/tests/torch/test_torchmetrics_compat.py`) | 1.7.4, through the `jittor_adapters.torchmetrics` adapter |
+| `torchmetrics` | classification and regression metrics ([jittor-torchmetrics runtime tests](https://github.com/JittorEcosystem/jittor-torchmetrics/blob/main/tests/runtime/test_torchmetrics_compat.py)) | 1.7.4, through the `jittor_torchmetrics` adapter |
 
 Two boundaries are **architectural**, not unfinished work:
 
@@ -253,27 +253,14 @@ Two boundaries are **architectural**, not unfinished work:
   compiled against PyTorch's C++ ABI. **A Python-level compatibility layer cannot load them**; those operators
   need Jittor's own implementations—`jittor.models` and the native operator surface exist for the cases that
   matter.
-- **Runtimes that manage devices themselves.** vLLM embeds custom CUDA kernels and its own memory and scheduling
-  layers rather than calling `torch.*`, so the shim alone cannot carry it. It runs through the optional adapter
-  `jittor_adapters.vllm` (shipped with the `jittor-torch-adapters` distribution, entry point name
-  `jittor_vllm`), which provides those kernels for Jittor: vLLM V1 can load Qwen3-0.6B, build a KV cache, and
-  complete greedy decoding on real CUDA with tokens **exactly matching** real PyTorch/Transformers, and
-  four-token warm-start generation takes `0.109s` versus `0.137s`. verl takes the same path—its import,
-  protocol, FSDP2, and PPO gates all pass, including four-card FSDP2.
+- **Runtimes that manage devices themselves.** vLLM embeds kernels and device scheduling beyond the Torch API. Its integration belongs to [jittor-vllm](https://github.com/JittorEcosystem/jittor-vllm), registered through `jittor_vllm`. verl policies belong to [jittor-verl](https://github.com/JittorEcosystem/jittor-verl). Version and device acceptance are recorded by those repositories; the framework does not bundle these integrations.
 
 TRELLIS.2 4B once completed an aligned end-to-end pipeline with four real CUDA extensions on an external adapter
 **not in this repository**, with a warm-state pipeline median of `7.515s` versus `6.878s` for real PyTorch—about
 `1.09x`, **performance not yet accepted**; that measurement is a one-off conclusion, see the
 [downstream library ledger](../performance/library-standing.en.md).
 
-Project-specific glue code lives in optional adapters registered through entry points, **not in mainline
-Jittor**; the rationale is in [repository layout](../development/repository-layout.en.md). The one maintained in
-this repository is [`adapters/`](https://github.com/Jittor/jittor/blob/master/adapters/README.md) (distribution
-`jittor-torch-adapters`, Python package `jittor_adapters`), which has three entry points: `jittor_transformers`
-(Transformers 4.56.2 / 5.5.3: make its own `torch_npu` probe return false), `jittor_torchmetrics`
-(TorchMetrics 1.7.4), and `jittor_vllm`. Versions are explicit: an unrecognized version raises
-`UnsupportedAdapterVersion` rather than trying its luck. Glue code for TRELLIS and Gaussian Splatting is not in
-this repository and is not shipped with this release line.
+Project-specific glue is installed through independent packages from [JittorEcosystem](https://github.com/JittorEcosystem). The main [adapter index](../../adapters/README.en.md) links their source, tests and support records. Core and compat do not depend on an adapter bundle. Registration/version checks remain fail-closed through public module-patch contracts; generic math and Torch semantics remain in the framework.
 
 ## Complex numbers and FFT
 

@@ -140,7 +140,6 @@ NN_MIGRATION_FILES = (
 PYTEST_POLICY_FILES = (
     "tests/conftest.py",
     "compat/tests/conftest.py",
-    "adapters/tests/conftest.py",
     "tests/_helpers/pytest_policy.py",
     "tests/_helpers/paths.py",
     "tests/_helpers/layout_seed.py",
@@ -203,7 +202,6 @@ STRUCTURE_TESTS = (
     "tools/release/test_check_wheel_contents.py",
     "tests/structure",
     "compat/tests/structure",
-    "adapters/tests/vllm/test_structure.py",
 )
 # No CPU_TESTS list any more. The CPU gate runs the whole tree in two
 # processes -- native semantics and Torch-compatibility semantics cannot share
@@ -787,20 +785,22 @@ def _install_compat_source(session, env, runner=None):
         str(source / "compat"),
         external=runner is not None,
     )
-    if runner is None:
-        # adapters/tests/vllm imports `jittor_adapters`, a separate
-        # distribution in the tree; without it those files fail collection.
-        session.run(
-            python,
-            "-m",
-            "pip",
-            "install",
-            "--no-deps",
-            "--no-build-isolation",
-            "-e",
-            str(source / "adapters"),
-        )
     _COMPAT_SOURCE_INSTALLS.add(key)
+
+
+def _install_ecosystem_adapter(session, env, python, library):
+    """Install an explicit independent checkout for a requested ecosystem gate."""
+    variable = "JITTOR_" + library.upper() + "_SOURCE"
+    selected = os.environ.get(variable)
+    if not selected:
+        session.error("Set %s to a checkout of https://github.com/JittorEcosystem/jittor-%s"
+                      % (variable, library))
+    source = Path(selected).expanduser().resolve()
+    if not (source / "pyproject.toml").is_file():
+        session.error("%s is not an adapter project: %s" % (variable, source))
+    env[variable] = str(source)
+    session.run(python, "-m", "pip", "install", "--no-deps", "--no-build-isolation",
+                "-e", str(source), external=True, env=env)
 
 
 #: The completion detector, shared with ``tools/run_test_suite.py``. A native
@@ -1237,7 +1237,7 @@ def structure(session):
         "tqdm==4.67.1",
     )
     session.run("bash", "tools/check_repo_layout.sh", external=True, env=env)
-    # The core, compat and adapters distributions, editable (see the helper).
+    # The core and compat distributions, editable (see the helper).
     _install_compat_source(session, env)
     test_paths = tuple(session.posargs) or STRUCTURE_TESTS
     if not session.posargs:
@@ -2424,18 +2424,7 @@ def _ecosystem_deepspeed_session(session, multirank=False):
         env=oracle_env,
     )
     _install_compat_source(session, env, python)
-    session.run(
-        python,
-        "-m",
-        "pip",
-        "install",
-        "--no-deps",
-        "--no-build-isolation",
-        "-e",
-        str(REPO_ROOT / "adapters"),
-        external=True,
-        env=env,
-    )
+    _install_ecosystem_adapter(session, env, python, "deepspeed")
     test = "test_ecosystem_deepspeed_multirank.py" if multirank else "test_ecosystem_deepspeed.py"
     _run_pytest_once(
         session, ["compat/tests/torch/" + test], env, python, timeout=7200 if multirank else 3600
@@ -3184,18 +3173,7 @@ def ecosystem_vllm(session):
     session.run(oracle, "-c", oracle_check + versions, external=True, env=oracle_env)
     _set_hardware_python_config(session, python, env)
     _install_compat_source(session, env, python)
-    session.run(
-        python,
-        "-m",
-        "pip",
-        "install",
-        "--no-deps",
-        "--no-build-isolation",
-        "-e",
-        str(REPO_ROOT / "adapters"),
-        external=True,
-        env=env,
-    )
+    _install_ecosystem_adapter(session, env, python, "vllm")
     session.run(
         python,
         "-c",

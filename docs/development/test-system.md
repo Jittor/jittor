@@ -47,7 +47,7 @@ compat/tests/             # 可选 jittor-compat 项目的测试根
 ├── structure/            # 名字归属与命名空间发布的结构契约
 ├── fsdp2/                # FSDP2
 └── triton/               # Triton 桥
-adapters/tests/           # 第三方 adapter（含 vllm/）
+adapters/                 # 独立 JittorEcosystem 仓库索引（不含源码或测试）
 ```
 
 三个根都经由薄 conftest 加载 `tests/_helpers/pytest_policy.py`。helper 是 monorepo 的
