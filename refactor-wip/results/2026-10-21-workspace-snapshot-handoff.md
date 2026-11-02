@@ -1,3 +1,10 @@
+## 2026-11-02 09:01 +0800 Handoff：修正 torchrun LOCAL_RANK 映射；GPU2 正式性能 lease 仍未取得
+
+在 /home/cgq/jittor 将 launcher 的公共 LOCAL_RANK 改为节点内 rank，并保留 JT_NCCL_LOCAL_RANK=0 作为每个单卡可见 rank 的 backend 映射；process_group.py 未改。完整 CPU launcher 文件在 attempt-02 为 16 passed、1 个 ABI 环境失败；修正 ABI preload 后 attempt-03 单项 1 passed。两轮源码/测试身份一致，17 个用例均有通过证据，但不声称单次整套 17/17。细节、cache 影响和 manifest hashes 见 Day2–5 报告 2026-11-02 09:01 条目。
+
+保留 attempt-02 首次 Jittor core 编译生成的 743 个 cache 新文件，不清理或重复冷编译；attempt-03 没有 cache 文件增删。当前没有测试或编译进程，测试未使用 GPU。GPU2 仍被 PID 3037196 / 3164740 使用；Slurm 节点 DOWN、设备约束关闭，sudo 需要密码，因此 Day4–5 独占 cohort 暂不能开始。
+
+下一步保留当前 R5 包与 dirty 状态，继续审查 package baseline 差异和 CPU 支持面；正式性能数据必须待管理员恢复节点并提供 GPU2 GRES/device-cgroup lease 后采集，按至少三轮交替、每轮至少十个热态样本及 median/p95/离散度、加载/首步/热态、allocator/NVML 峰值协议执行。不要重跑本轮冷编译或 R14 已通过训练。
 ## 2026-11-02 08:43 +0800 Handoff：R2 wheel source-map 单项误报已核实，baseline migration 仍开放
 
 `jittor/backends/__init__.py` 并非 R2 候选包缺源码：R2 wheel 成员、baseline commit `f66e2458a748a5814f28ca4705753ec29b330311` 的 `python/jittor/backends/__init__.py`，以及 R5 source/wheel/install 内容哈希均为 `0df9e1d211b49ef4904ca74ea08310269ca4dc141fa2e3d8a0a9772b9b64ab40`。旧清单是路径映射误报，原 R2 证据保留；审计收据 SHA256 `6cbc10633eb0a065314d354f9f0d2244e0025f1c1cfdef06978b856d5907fba2`。

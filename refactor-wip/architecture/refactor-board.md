@@ -1,3 +1,12 @@
+## 2026-11-02 09:01 +0800 current-main torchrun LOCAL_RANK 契约修复并完成 CPU launcher 用例覆盖
+
+当前 dirty launcher 的 rank 环境已修正：torchrun 公共 LOCAL_RANK 设为节点内 rank；当 launcher 为每个子进程只暴露一张设备时，JT_NCCL_LOCAL_RANK / JT_HCCL_LOCAL_RANK 仍保留后端设备 rank 0。启动摘要分别打印两个 rank。现有 process_group.py 保持不变，因为其公共 get_local_rank() 和 init_process_group() 已优先读取标准 LOCAL_RANK。源码 python/jittor/distributed/launch.py SHA256 b969871c7da9b347df0df3fc8c19bd1364a10daae2426e6043e8e6ae0ed7b8ea；现有脏测试 tests/distributed/test_launch.py SHA256 b46c723a6d0ba578567a796f3765bb5bbba737f53b49534b4110571403f10312，该测试期望 LOCAL_RANK=rank、后端 rank 0。
+
+CPU-only 证据保存在 /data6/cgq/jittor-lab/_state/release-day23/20261102-r5-jtrun-launcher-cpu-r1-prepared/。attempt-02 对 17 项完整收集并执行，16 passed、0 skipped；test_torchrun_environment_and_per_rank_device_mapping 通过。剩余 module-help 用例因运行器漏设 R5 所需 LD_PRELOAD，在 Jittor core 导入时找不到 GLIBCXX_3.4.30，attempt-02 rc=1，原始失败保留；随后只在 attempt-03 使用正确 ABI 环境重跑该单项，1 passed、0 skipped、rc=0。两次源码与测试 SHA 一致，合计覆盖全部 17 项；不将其表述为一次 17/17 的全套运行。attempt-02 / attempt-03 manifest SHA256 分别为 5aa10da1ab5b9e1f18175423961e7e7dd09a85cdca39d4bf080a804fd3c61129、963e302312451c8964422889fcf739cee662dcfb20a4fb8beddadfbb622e3087。
+
+attempt-02 的模块帮助导入首次触发共享 CPU cache 的 228 TU core build，cache 文件 2,977→3,720（新增 743、删除 0、既有文件内容变化 2）；保留生成物，不清理、不重复冷编译。attempt-03 复用生成的 core，无新增/删除，仅 jittor.lock 元数据改变。两轮均 CUDA_VISIBLE_DEVICES 为空，未使用 GPU；GPU2 前后仍是其他用户 PID 3037196 / 3164740 共用的 17,299 MiB，采样利用率 93–96%，未启动独占 holder。当前 sudo 非交互执行需密码，Slurm 节点 X12DPG-OA6 为 DOWN 且 ConstrainDevices=no，正式 GPU2 lease 仍不可用。
+
+继续使用现有 /home/cgq/jittor 工作树，HEAD 12f47ff78d07dead52713a36a394b125b5a3d37e；本轮 fetch 后 origin/cgq_transformers 仍为 e5cffe1ae60c418f53c5bb1cdca9182577fd2b81。测试前后原有 102 项 dirty 状态签名一致；测试文件及其他脏工作均未暂存。本项只修复 launcher 环境合同，不改变 wheel baseline 审批状态，也不代表 CUDA/NCCL 或整体 Day2–5 通过；Day4–5 正式性能/显存与更广 release gate 继续开放。
 ## 2026-11-02 08:43 +0800 R5 wheel baseline source-map 误报已纠正；迁移差异仍未批准
 
 R2 source reconstruction 把候选项 `jittor/backends/__init__.py` 标成缺源码，但实际映射源路径是 `python/jittor/backends/__init__.py`。该成员在 R2 候选 R3 wheel、baseline 源提交 `f66e2458a748a5814f28ca4705753ec29b330311)、当前 R5 source snapshot、R5 wheel 和 clean install 中 SHA256 均为 `0df9e1d211b49ef4904ca74ea08310269ca4dc141fa2e3d8a0a9772b9b64ab40`，因此是 mapping false positive，不是源码缺失或内容差异。审计收据 `/data6/cgq/jittor-lab/_state/release-day23/20261102-wheel-baseline-source-map-correction-r1-prepared/audit.txt` SHA256 `6cbc10633eb0a065314d354f9f0d2244e0025f1c1cfdef06978b856d5907fba2`；R2 原件保留。
