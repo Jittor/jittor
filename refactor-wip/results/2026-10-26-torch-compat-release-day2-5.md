@@ -1,3 +1,10 @@
+## 2026-11-02 20:24 +0800 修复 Torch storage.data_ptr 基址语义
+
+当前 `_Storage.data_ptr()` 返回 `id(var)`，与 Torch 的 storage 地址合同不符。Jittor C++ 将 `mem_ptr` 定义为该 Var 逻辑首元素地址，并单独记录 allocation-relative offset，因此基址为 `int(var._storage_address) - int(var._storage_offset()) * dtype_size`。CPU 最小复现原用例 1 failed，日志 SHA256 `0875f3b614e9405c15ec4525cebfc933bba370ad17eeda29a464e87349e64898`。
+
+完成上述修复，并扩展 tied-weight 回归：base tensor 和末元素 view 返回相同 storage 基址，view 的 `data_ptr` 等于基址加 storage offset，最后一个元素范围抵达 storage 尾部。tied-weight 与 copy alias 用例 2 passed / 1.04 秒，日志 SHA256 `6cc09546c1456452b4397b1b56423b3082bdf47b29ba493ec2211dc9225ae6a9`。CPU serialization 聚焦文件 49 passed、1 CUDA 条件 skip / 8.24 秒，日志 SHA256 `b35ecd3f2f5643cfb7d2d23ad27e5262fe0677ef90d818380bb67da73ffa480f`。相关 structure 子集 24 passed；全量 structure 在 180 秒达到约 82% 后 exit 124，不计通过。repo layout 检查通过。
+
+所有证据位于 `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-storage-data-ptr-focused-r1-prepared/`，422 项 manifest SHA256 `e043e6a3ad1c75fcf60c350754f1bf6f404d0d89541405da424b689998fd80e1`。未做 CUDA 验证；GPU2 仍有外部负载。CPU BF16 optimizer state 差异、stock PyTorch 读取 JT portable-pickle optimizer 的失败，以及 Day4–5 独占性能/显存验收仍开放；整体 release **Not complete**。
 ## 2026-11-02 20:11 +0800 CPU BF16 direct AdamW 与当前 serialization gate 结果
 
 **direct AdamW trace。** 为判定 CPU BF16 AdamW restore 后 `exp_avg_sq` 的细小分叉是否来自直接更新数学，准备同输入 direct-call 对照。隔离证据包为 `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-cpu-bf16-direct-adamw-update-r1-prepared/`，final artifact manifest 2,185 项，SHA256 `a4d609cc52fd9ade98acbfc9a8ce7ea47a90f2c3322dc59d10db03f330acd54d`。CPU core SHA256 `8d1779b3ec3c322e93d020c07e7bb337bc7d7c8cbda8a8b41a519703b20004f7`，source HEAD `7494d8e73ec3218e7d8de53ddd6672b688c80630`；JITTOR_NO_BUILD=1、空 CUDA_VISIBLE_DEVICES、fallback 禁止。attempt-01 的通用 stamp walker 因 MPI custom-op stamp schema 不同失败；attempt-02 第一次只触发 jit_utils 更新并按 Jittor 要求重启，下一次因临时 harness 导入路径错误未收集测试，二者原日志留存。修正 harness 后只运行一次：1 passed、27.25 秒、0 fallback、CPU runtime。

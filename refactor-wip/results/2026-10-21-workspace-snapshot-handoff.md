@@ -1,3 +1,8 @@
+## 2026-11-02 20:24 +0800 Handoff：CPU Torch storage 基址语义修正通过聚焦门
+
+`_Storage.data_ptr()` 现返回 allocation 基址（逻辑首元素地址减 storage offset），tied alias/view CPU 回归通过。CPU serialization 两文件为 49 passed、1 CUDA skip；相关 structure 子集 24/24 passed，layout 检查通过。全量 `tests/structure` 180 秒到约 82% exit 124，日志保留，未算通过。修复和新增断言已单独暂存，文件中的既有 dirty hunks 仍未暂存。
+
+实验包 `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-storage-data-ptr-focused-r1-prepared/`，manifest SHA256 `e043e6a3ad1c75fcf60c350754f1bf6f404d0d89541405da424b689998fd80e1`。CUDA 路径尚未验证；GPU2 仍有外部负载且 cgq Slurm association 待管理员处理。Day4–5 与整体 Day2–5 继续 **Not complete**。
 ## 2026-11-02 20:11 +0800 Handoff：CPU AdamW 分叉收窄，序列化发现 storage 地址合同问题
 
 本轮 direct AdamW trace 证明相同的 BF16 参数、梯度与 FP32 moments 输入经过独立 `adam_update` 调用得到完全相同输出，但兼容 optimizer.step 的 restored 与 continuous `exp_avg_sq` 仍差至 `6.676465e-5`。尚不能定根因，未改产品源码。证据包 `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-cpu-bf16-direct-adamw-update-r1-prepared/`，final manifest SHA256 `a4d609cc52fd9ade98acbfc9a8ce7ea47a90f2c3322dc59d10db03f330acd54d`。

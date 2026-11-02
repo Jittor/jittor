@@ -425,7 +425,9 @@ class _Storage:
     def __init__(self, var):
         self._var = var
     def data_ptr(self):
-        return id(self._var)
+        var = self._var
+        return int(var._storage_address) - (
+            int(var._storage_offset()) * _storage_dsize(var))
     def size(self):
         return int(self._var.numel())
     def nbytes(self):

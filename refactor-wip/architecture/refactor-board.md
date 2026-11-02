@@ -1,3 +1,10 @@
+## 2026-11-02 20:24 +0800 修复 Torch Storage.data_ptr 基址语义；Day2–5 未完成
+
+从已同步的 HEAD/origin `a099f09c674e4fee7dcc5d8bfd2d83d8e8d1fe6e` 接续。确认 compat 路径与 python/jittor 路径的 method_api.py 是同一 inode。原实现把 `id(var)` 当 storage 地址；Jittor 的 `_storage_address` 是 view 的逻辑首元素指针，因此 storage 基址应为 `address - storage_offset * dtype_size`。先运行 tied-weight 最小复现，稳定在 Tensor 与 Storage 地址比较处失败，1 failed；日志 SHA256 `0875f3b614e9405c15ec4525cebfc933bba370ad17eeda29a464e87349e64898`。
+
+修正 `_Storage.data_ptr()` 并为 view 增加基址/offset 断言。tied-weight 和 copy alias 两个 CPU 定向测试 2 passed / 1.04 秒；serialization owners 与 Torch serialization 两文件在 `use_mkl=0` CPU 环境 49 passed、1 CUDA 条件跳过 / 8.24 秒；相关 structure 子集 24 passed / 5.25 秒；repo layout 检查通过。全量 `tests/structure` 在 180 秒预算到约 82% 后 exit 124，没有最终 pytest 汇总，保留为未完成验证。index 只暂存修复和回归断言，两个文件内既有其他 dirty hunks 保持未暂存。
+
+实验包 `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-storage-data-ptr-focused-r1-prepared/`，422 项 manifest SHA256 `e043e6a3ad1c75fcf60c350754f1bf6f404d0d89541405da424b689998fd80e1`。仅有 CPU 证据，GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 仍为外部负载 45,880 MiB/100%，未触碰。CUDA storage 地址验证、Day4–5 正式性能/显存及整体 Day2–5 继续 **Not complete**。
 ## 2026-11-02 20:11 +0800 CPU BF16 direct AdamW 对照与序列化聚焦门；Day2–5 未完成
 
 沿用现有 `/home/cgq/jittor` 工作区，文档前序提交为 `d127a2b566324f2e3368d9ee4a49e04d5cea8378`。本轮实验期间没有改产品源码；tracked dirty diff SHA256 仍为 `3ef743580bb7db38dbc9197f6f90e3182956d2bc29a55bce29c7eeea1bea6100`。Porcelain SHA256 当前为 `8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98`（81 tracked dirty、24 untracked），较前一记录多 3 个 untracked；全部保留，未纳入本任务提交。

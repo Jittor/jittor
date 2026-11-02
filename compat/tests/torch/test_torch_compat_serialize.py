@@ -286,8 +286,15 @@ class TestStateDict(Base):
             weight = state["encoder.weight"]
             storage = weight.untyped_storage()
             self.assertEqual(weight.data_ptr(), storage.data_ptr(), dev)
+            last = weight.view(-1)[-1]
+            self.assertEqual(last.untyped_storage().data_ptr(), storage.data_ptr(),
+                             f"view retains base storage {dev}")
             self.assertEqual(
-                weight.view(-1)[-1].data_ptr() + weight.element_size(),
+                last.data_ptr(),
+                storage.data_ptr() + last.storage_offset() * weight.element_size(),
+                f"view data pointer reflects storage offset {dev}")
+            self.assertEqual(
+                last.data_ptr() + weight.element_size(),
                 storage.data_ptr() + storage.nbytes(),
                 f"full view covers its root storage {dev}",
             )
