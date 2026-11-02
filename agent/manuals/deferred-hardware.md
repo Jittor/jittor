@@ -365,3 +365,37 @@ arg-reduce 的维度、原值、索引及梯度用
 NaN、混合正负零、整型边界与范数非有限值仍按 KI-BACKEND-025、026、027 保留限制；
 本轮没有修改设备 saturation mode，不能由观测结果推断所有硬件都不支持 Inf / NaN。
 复查条件：SDK / 驱动、范数或 arg-reduce 分派、共享 dtype / shape 语义变化。
+
+## 2026-11-02 混合 CPU 前缀重放：其他加速器待验
+
+Owner：执行器、设备图与 Torch 兼容层维护者。本轮只在 CPU 和 Ascend310P3 实测。
+新增的是通用执行器机制，不以 310P 结果代替 910B、CUDA、ROCm 或多卡验收。
+没有保留实验性 Linear/Addmm 分派；已有 SoC 卷积、范数和极值分派范围保持各自契约。
+
+待执行的共享回归：显式 CPU 输入私有副本的 construction placement；kept fused
+内部条件随输入更新；CPU 前缀每次重算及 H2D；低层未调用 bind 时的边界地址保护；
+排队输入、参数/源存储改变、预算与 invalidate 后释放；全设备图的原路径。
+随机、opaque 和待执行 D2H 仍须拒绝，不能以 CPU placement 或 `_is_constant` 充当纯度证据。
+
+910B 上按既有 ACL 准入环境串行运行：
+
+```bash
+JITTOR_TORCH_SHIM=0 <jittor-python> -m pytest -q \
+  tests/backends/acl/test_acl_graph_host_prefix.py
+JITTOR_TORCH_SHIM=1 <jittor-python> -m pytest -q \
+  compat/tests/torch/test_ne_identity.py
+```
+
+记录实际 NPU 与 CPU 子用例数量、输出驻留和零回退，不能把混合文件的总数称为全部 NPU。
+同时对独立 CPU 和原生设备 oracle 验收真实模型的全部输出，设备图统计须显示实际启动。
+
+CUDA 等后端先运行原有 `tests/core/test_graph_capture.py`、
+`tests/core/test_graph_replay.py`、`tests/core/test_graph_replay_retention.py`、
+`tests/nn/test_graph_replay_multi_output.py`，再为该设备运行等价的动态 CPU 前缀场景。
+ACL 文件的固定 backend 标识不能直接作为 CUDA 前缀验收；原全设备图测试也不能代替它。
+共享保存/重算规则另需 activation checkpoint 与 rematerialization 的前向、梯度回归。
+
+`ne` 方法/运算符的同对象实数自比较及标量创建设备也需在目标设备复验。
+不同 holder、complex 和独立函数路径不因同对象用例通过而获得验收；raw scalar
+比较须另查半精度量化与 64-bit 整数边界。BF16 CPU 探针不证明 310P BF16 计算支持。
+复查条件：后端 capture/copy 接口、CPU 前缀库存、liveness/kept 规则、Torch 类型或设备构造变化。

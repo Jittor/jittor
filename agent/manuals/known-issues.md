@@ -1,7 +1,7 @@
 # Known-Issues Ledger
 
 - Status: Maintained
-- Last reviewed: 2026-10-30
+- Last reviewed: 2026-11-02
 - Baseline: `02b021cba3c22f7907ae283610d82fe6dd6fb4de`; per-entry verification scopes below
 - Owner: Jittor core maintainers
 - Review when: an entry is fixed or narrowed, a strict expected failure
@@ -1226,6 +1226,42 @@ workaround.
 - Evidence: [`test_jt_array_float64_narrowing`](../../tests/debug/test_kernel_traps.py).
 - Exit condition: a public dtype-default decision changes the default and its
   explicit-dtype assertion together.
+
+## KI-DTYPE-005: CPU scalar comparisons differ at half and int64 boundaries
+
+- Severity: High (incorrect comparison masks).
+- Status: Open; observed 2026-11-02 on CPU with the scoped ne/replay changes
+  based on `d5bd7f551`. Other devices are not established by these cases.
+- Owner: dtype and Torch comparison-adapter maintainers.
+- Symptom: operator, method and function equality against a Python scalar
+  return false for FP16 `[0] == 1e-12` and `[1] == (1 + 2**-11)`, where
+  independent Torch CPU first converts the scalar to half and returns true.
+  Explicit int64 `[9223372036854775807] == 9223372036854775807` also returns
+  false instead of true. At `2**53+1`, both equality and inequality differ;
+  int64 `[-9223372036854775808] != 0` returns false instead of true.
+  The same-object `x != x` correction does not address scalar signatures.
+- Scope/cause: equality forwards the raw native scalar signature; the legacy
+  inequality path also decomposes through subtraction and absolute value.
+  Conversion/promotion and arithmetic-boundary stages are not fully isolated;
+  do not assign all failures to a single cast or the array-default policy.
+- Workaround: for the measured CPU domain, resolve the intended result dtype,
+  construct an explicitly typed RHS tensor, convert the LHS if required, then
+  use equality and logical-not for inequality. This exact operand preparation
+  matched independent CPU on 210 fields, including BF16. It was not installed
+  as an automatic shortcut because complete-model speed gains were unstable.
+  This is not evidence of BF16 computation on 310P.
+- Evidence: unversioned `public-scalar-{torch,jittor}-cpu.json` under
+  `$JITTOR_LAB_ROOT/_state/generative-vision-310p/iteration-2026-11-02/`
+  records five public cases and all six operator/method/function spellings.
+  `cpu-ne-scalar/` retains both raw candidates (178/192 exact), typed CPU and
+  ambient-ACL CPU controls (210/210 exact), and the rejected timing experiment.
+  A minimal CPU reproduction, with an independently installed Torch interpreter
+  as the comparison, is `x=torch.tensor([1.], dtype=torch.float16, device='cpu');
+  print(x.eq(1+2**-11))`.
+- Exit condition: public CPU comparison spellings preserve Torch weak-scalar
+  quantization and exact integer boundaries, with focused independent-oracle
+  tests for NaN/Inf, half ties, subnormals, scalar categories, signed/unsigned
+  bounds, dtype/device and gradients; then verify any claimed accelerator scope.
 
 ## KI-COMPLEX-001: native complex capability gaps
 

@@ -396,6 +396,8 @@ def replay_metadata(module):
     if replay is not None:
         result['replay'] = dict(stats=dict(replay.stats), refused=replay.refused,
             device_graph_active=bool(replay._cuda_graph), device_graph_refused=replay._graph_refused,
+            device_graph_host_prefix=bool(getattr(replay, '_graph_has_host_prefix', False)),
+            host_prefix_retained_bytes=getattr(replay, '_graph_host_prefix_bytes', 0),
             estimated_retained_bytes=replay._graph_bytes, retained_bytes_limit=replay._max_retained_bytes)
     return result
 

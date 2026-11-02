@@ -56,6 +56,8 @@ Jittor vs 真 PyTorch 数据，而不是把 JIT、H2D 或 lazy graph 漏执行�
 - Ascend SAM2 真实图像、点提示与掩码对拍：`benchmark_sam2_ascend.py`
 - Ascend arg-reduce 的 value / index 不变量：`probe_acl_arg_reduce.py`
 - norm / normalize 的 NaN、Inf、溢出与 epsilon 对拍：`probe_acl_vector_norm.py`
+- 实数 Tensor 自比较的 NaN / Inf、dtype 与设备对拍：`probe_tensor_ne_identity.py`
+- 公共 Linear 的有限值、抵消、小值与特殊值对拍：`probe_acl_linear.py`
 
 ### 生成与视觉效果验收
 
@@ -490,3 +492,47 @@ JITTOR_TORCH_SHIM=1 <jittor-python> agent/skills/jittor-transformers-perf/script
 
 `--require-match` 使参考 mask 或有限误差不匹配时非零退出。每个 dtype 和边界分别
 报告；常规有限输入、极值保留与梯度准入不能用一个宽松容差混成“支持”。
+
+### CPU 前缀与设备图
+
+自动重放可将封闭的显式 CPU 前缀和 H2D 保留在普通执行器中，每次重新执行后再
+启动设备图。只准入已预热的内置张量运算、CPU 叶子与显式复制；opaque code、随机数、
+待执行的 D2H 或未证明的依赖仍拒绝录图。不能以 `_is_constant` 或 CPU placement
+代替依赖审查，也不能缓存模型输出。CPU 计算、传输、等待和结果复制都计入整模时间。
+
+`graph_replay.device_graph_host_prefix` 记录是否真正进入此路径；
+`host_prefix_retained_bytes` 是额外前缀预算上界，独立于原有
+`estimated_retained_bytes`，两者不能冒充实测峰值。基准读取这些元数据不执行张量。
+前缀每次重算后检查设备边界地址，地址改变则释放旧录图并走执行器；原全设备图不加
+前缀等待。当前真机证据为 310P，其他卡的验收见 deferred-hardware。
+
+Torch 方法/运算符的实数 `x != x` 复用 canonical `isnan(x)`，仅限同一个 Python
+Tensor 对象；不同 holder 的别名和独立 `torch.ne` 函数不因此获得特殊值验收。
+比较 Python 数字时在输入设备上创建标量，避免 CPU mask 在 NPU 外层作用域中产生
+多余 D2H；返回值也保留 Torch Tensor 类型与设备。不能把 CPU IEEE 比较成立直接
+外推为 raw scalar 签名满足 Torch 弱标量转换；半精度量化和大整数须单独验证。
+
+```bash
+probe="$JITTOR_SOURCE_ROOT/agent/skills/jittor-transformers-perf/scripts/probe_tensor_ne_identity.py"
+<real-torch-cpu-python> "$probe" --backend torch --device cpu \
+  --output "$JITTOR_LAB_ROOT/_state/ne/cpu.json"
+JT_BACKEND=cpu <jittor-python> "$probe" --backend jittor --device cpu \
+  --reference "$JITTOR_LAB_ROOT/_state/ne/cpu.json" --require-exact \
+  --output "$JITTOR_LAB_ROOT/_state/ne/jittor-cpu.json"
+<jittor-python> "$probe" --backend jittor --device npu \
+  --reference "$JITTOR_LAB_ROOT/_state/ne/cpu.json" --require-exact \
+  --output "$JITTOR_LAB_ROOT/_state/ne/jittor-npu.json"
+```
+
+上述 Jittor 进程须激活独立 Torch shim。默认只测 operator / method 自比较；
+`--spellings function --aliases` 是原路径的额外诊断，可能明确失败。原生 Torch NPU
+也可能不满足 CPU Inf 自比较，不能将相同 SDK 错误当作正确参考。
+`probe_acl_linear.py` 同样先保存独立 CPU reference，再用 `--reference` 对拍原生 NPU
+和 Jittor，`--require-match` 将误差变为非零退出；默认无参考的 `passed=null` 不代表
+数学验收。`--special-values` 的结果须与有限域分开报告，此工具不安装新 Linear 分派。
+
+Swin 的 CPU 前缀在异构 CPU 上受核心调度影响。最终配对计时可用外部配置
+`taskset -c "$BENCH_CPUSET"` 将两侧绑定到相同的独立物理核，并记录 affinity 与线程数；
+不可把改变 affinity 的收益算成代码提速。检查整个样本序列；若早期数值持续上升，增加
+完整前向预热后重测，不能只取较快的前几个样本。动态 CPU 前缀案例本轮采用至少
+15 次完整预热、两轮反序各 15 样本和两个不同输入 slot。

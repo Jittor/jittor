@@ -874,3 +874,24 @@ class TestGraphReplayCuda(TestGraphReplay):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_cpu_dynamic_ternary_condition_survives_replay_input_writes():
+    class Select(nn.Module):
+        def execute(self, value):
+            return jt.ternary(value > 0, value * 2, value - 3)
+    replay = None
+    with jt.flag_scope(use_cuda=0, use_acl=0, auto_graph_replay=0, check_graph=1), jt.no_grad():
+        source = [np.full((4, 4), n, dtype="float32") for n in (-3, -1, 0, 1, 3, -2, 2)]
+        feed = [jt.array(value) for value in source]
+        for value in feed:
+            value.sync(True, False)
+        replay = GraphReplay(Select())
+        try:
+            answers = [replay(value) for value in feed]
+            jt.sync(answers, True, False)
+            for actual, value in zip(answers, source):
+                np.testing.assert_array_equal(actual.numpy(), np.where(value > 0, value * 2, value - 3))
+            assert replay.stats["replayed"] == len(feed)
+        finally:
+            replay.invalidate()

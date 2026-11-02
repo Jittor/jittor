@@ -509,8 +509,24 @@ def _torch_eq(input, other):
 def _torch_ne(input, other):
     if not _comparison_operand(other):
         raise TypeError("ne(): other must be a Tensor or Number, not " + type(other).__name__)
+    if (input is other and isinstance(input, _NativeVar)
+            and (input.dtype.is_float() or input.dtype.is_int() or input.dtype.is_bool())):
+        # ne(x, x) is exactly isnan(x) for a real tensor, including infinities
+        # and signed zeros. Reuse the canonical device predicate instead of
+        # building subtraction and duplicate NaN-classification graphs.
+        # Storage aliases with different Python holders keep the path below.
+        with _new_scope(input, None):
+            return _owner.jt.isnan(input)
     a = input if isinstance(input, _NativeVar) else _owner.jt.array(input)
-    b = other if isinstance(other, _NativeVar) else _owner.jt.array(other)
+    if isinstance(other, _NativeVar):
+        b = other
+    elif isinstance(input, _NativeVar):
+        # A scalar belongs to this operand, even inside a model running under
+        # another construction device. Keep array's existing dtype inference.
+        with _new_scope(input, None):
+            b = _owner.jt.array(other)
+    else:
+        b = _owner.jt.array(other)
     if _jittor_dtype_name(a.dtype) == "bool":
         a = a.int32()
     if isinstance(b, _NativeVar) and _jittor_dtype_name(b.dtype) == "bool":
