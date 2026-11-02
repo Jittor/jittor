@@ -1,3 +1,21 @@
+## 2026-11-02 08:29 +0800 R5 installed-wheel AdamW 未使用梯度/延迟参与 CPU 契约 1/1 通过；GPU2 独占仍受阻
+
+### 验证目标与结果
+
+继续覆盖实际训练会遇到的 optimizer 契约：同一 AdamW 参数在前几步没有梯度，之后才参与 loss 时，zero_grad 的两种模式、参数顺序、状态创建、权重衰减和更新步数是否与预期一致。attempt-24 运行 `compat/tests/torch/test_torch_optimizer_unused_grad.py::TestAdamWUnusedGradient::test_repeated_zero_grad_cpu`。一个 pytest case 内覆盖 `set_to_none=False/True` 与未使用参数排在首/尾两种排列；未使用参数前 3 步必须保持无 grad、无 optimizer state、无参数变化，后 2 步开始参与更新，并校验 AdamW 数值参考和每个参数的 step。
+
+R5 installed wheel 结果为 1 collected、1 passed、0 skipped/failed，pytest rc=0；backend fallback 0→0，installed core build 前后 current。实际 `jittor`、`torch`、`jittor.compat.torch` 分别从 R5 install 下的模块路径加载。R5 package manifest SHA256 `38d4c7e162ed2246e34aaf6a926561acb77ae550f678c2f49b9f0037` 前后复核一致。当前测试源与 R5 source SHA256 为 `6b99754690487c06615799990ac7b98f721065d17b20a79a1fed07f7ea59fb19`；`optim_frontend.py` 为 `527a0f497b8e4f2c011c755c720e6a7dc3d5eb04705f4d6c705dbe0347b89675`，`optimizer_api.py` 为 `ec50a82ba7ef46ebfa36de2e704484c787f0b3b9afc4411289bb8b2b41e622d0`，`optimizer_restore.py` 为 `d169cbfe5fce18e2a7aee1ec7635efb1bd6451895ab12efb04fe804c3f416f43`；当前源码、R5 source 与 installed wheel 文件逐项一致。
+
+attempt-22 的 pytest hook 把形参命名为 `test_report`，在插件注册时 infrastructure failure，尚未收集测试；attempt-23 修正签名后仍有旧变量引用，在 setup 期间触发 pytest INTERNALERROR，测试 call 未执行。两次失败均保留，不覆盖：attempt-22 artifact manifest SHA256 `8e2a6d5fd8b757ae5ee2d422d3f4052e774a6ee89ac48329206b19af9a071223`；attempt-23 `53902c24f473a61d2019df635c0ce6da15cec016a6ddd45465d38e6830949bd8`。attempt-24 成功证据目录为 `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-installed-torch-focus-r1-prepared/attempt-24-optimizer-unused-gradient-cpu/`；artifact manifest SHA256 `cc7041addb73b70f79a28797f3760cbf205bf3dcadbaa38a009d73bdfe9b6f42`，`run-result.json` SHA256 `25910d2759353e4640fa0810db145b47d5e928c5292fea7605a8eb45055f2b37`，`raw.log` SHA256 `db86ee760eb8951c62787db57aa0de1a5c908cc52ce6248d6b6313e001e0187c`。
+
+该结果限 R5 单个 CPU optimizer case，不代表 CUDA 更新、训练收敛、性能或整体发布门。运行绑定 HEAD `b30aaec39e7020a29da5d6a4c9efdf748b1102f7`；测试前后工作区均 102 项、状态 SHA256 `8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98`，origin/cgq_transformers 为 `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`（ahead/behind 214/0）。没有修改源码或既有 dirty 文件，运行后无 pytest/cache holder 进程。CPU Jittor cache 清单从 2,961 增至 2,977 项，新增 16、未删除；另有 132 个既有条目的哈希变化，详见 attempt 的 cache-before/after 与 cache-diff.patch，未清理。attempt-24 前后 GPU2 显存均为 17,299 MiB、利用率约 92%，本用例没有使用 GPU。
+
+### GPU2 独占请求与发布门状态
+
+08:24 与 08:28 的现场快照中，GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 仍是 Default/shared；PID 3037196、3164740（`/home/yqa/envs/sgn-keras3/bin/python`）各占 8,640 MiB，GPU 利用率在 87%–95%。Slurm 节点 `X12DPG-OA6` 因 `Node unexpectedly rebooted` 为 DOWN，GRES 为 `gpu:a800:10`；当前 `TaskPlugin=task/affinity`、`ConstrainDevices=no`。
+
+现有 `/data6/cgq/jittor-lab/tools/gpu2-exclusive-run.sh` SHA256 `c68ac63cca92bb7204b786f984062fced7de7dd509363bbc77e55b445cb6d16b` 会等待 GPU 进程退出、请求管理员权限切到 NVIDIA EXCLUSIVE_PROCESS，把给定的真实 CUDA 命令作为长期子进程执行，结束后恢复 Default。它适用于把实际 benchmark 本身放在同一受限进程中运行，不能先启动独立 holder，再由另一个 CUDA worker/测试程序占卡；这也不能替代 Day4–5 预备包要求的 live Slurm GRES 与 device-cgroup lease。由于卡上有其他进程且节点 DOWN，本轮没有启动新 holder、切换模式或干预外部进程。正式性能/显存验收仍需管理员恢复节点、清理现有占用并按目标 UUID 提供隔离租约，然后按 R4 预备包进行容量扫测和至少三轮交替 cohort；整体 Day2–5 仍 Not complete。
+
 ## 2026-11-02 08:22 +0800 R5 installed-wheel saved input alias/version backward 用例 1/1 通过
 
 ### 功能契约与结果

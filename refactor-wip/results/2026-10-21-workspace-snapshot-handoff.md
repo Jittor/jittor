@@ -1,3 +1,9 @@
+## 2026-11-02 08:29 +0800 Handoff：R5 AdamW 延迟使用参数 CPU 契约通过；GPU2 无法由独立 holder 排他
+
+attempt-24 在 R5 installed wheel 上运行 AdamW unused-gradient 单一 CPU pytest case：1 passed、0 skipped/failed，fallback 0→0、core current；覆盖两种 zero_grad 模式和两种参数顺序，前三步未使用参数无梯度/状态/更新，后续更新与参考值一致。当前/R5 测试源和三份 optimizer 实现文件一致。attempt manifest SHA256 `cc7041addb73b70f79a28797f3760cbf205bf3dcadbaa38a009d73bdfe9b6f42`；attempt-22/23 harness 失败均保留并有各自 manifest。
+
+GPU2 仍由 PID 3037196/3164740 各用 8,640 MiB；节点 X12DPG-OA6 为 DOWN，`ConstrainDevices=no`。已有 `gpu2-exclusive-run.sh` 只能等待空卡后直接执行实际 benchmark 命令并恢复模式，不能作为后台 holder 再启动独立测试进程；正式验收还缺 live Slurm GRES/device-cgroup lease。本轮未启动 holder。Day4–5 与更广 Day2–5 发布门继续开放。
+
 ## 2026-11-02 08:22 +0800 Handoff：R5 installed-wheel saved alias version backward 用例通过
 
 attempt-21 在 R5 installed wheel 上验证自定义 library autograd 保存的 tensor 经 detached alias 原地修改后，backward 正确报 version mismatch：1 passed、0 skipped/failed，fallback 0→0，core current。测试和 library/in-place installer 文件与 R5 source/install 字节一致；artifact manifest SHA256 `cc30ce68ceb0e04c3fec6019fc2fbbac9082202c124ce485f33e2dc6e9bcab95`。

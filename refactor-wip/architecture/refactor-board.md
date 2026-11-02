@@ -1,3 +1,9 @@
+## 2026-11-02 08:29 +0800 R5 installed-wheel AdamW 未使用梯度 CPU 用例通过；GPU2 独占当前受阻
+
+attempt-24 对 R5 installed wheel 执行 AdamW 延迟使用参数用例：1 collected、1 passed，0 skip/fail，pytest rc=0，fallback 0→0，core current。用例覆盖两种 zero_grad 模式与两种参数顺序，检查前 3 步未使用参数不建状态、不更新，后续参与时与 AdamW 参考值一致。attempt manifest SHA256 `cc7041addb73b70f79a28797f3760cbf205bf3dcadbaa38a009d73bdfe9b6f42`。attempt-22/23 是 runner hook 记录器错误，均未执行测试调用，原件分别以 manifest `8e2a6d5fd8b757ae5ee2d422d3f4052e774a6ee89ac48329206b19af9a071223`、`53902c24f473a61d2019df635c0ce6da15cec016a6ddd45465d38e6830949bd8` 保留。
+
+GPU2 仍由外部 PID 3037196、3164740 各占 8,640 MiB，Default mode；X12DPG-OA6 为 DOWN，Slurm `ConstrainDevices=no`。现有 `gpu2-exclusive-run.sh` 会等待空卡后以 EXCLUSIVE_PROCESS 执行它接收的真实 CUDA 命令并在结束时恢复，不能作为单独后台 holder 再运行另一份测试；正式门还要求 live Slurm GRES/device-cgroup lease。本轮没有新增或启动 holder。Day4–5 和整体 Day2–5 release 仍未完成。
+
 ## 2026-11-02 08:22 +0800 R5 installed-wheel saved tensor alias version 检查通过
 
 attempt-21 使用 R5 installed wheel 执行 `test_library_saved_input_mutated_through_detached_alias_rejects_backward`：1 passed、0 skipped/failed，pytest rc=0，fallback 0→0，core current。该用例用 `torch.library.register_autograd` 保存输入，再经 `detach()` alias 做 `no_grad` 原地写入，确认 backward 按预期报 version mismatch。测试、library owner、in-place installer 当前/R5 source/install 哈希一致。artifact manifest SHA256 `cc30ce68ceb0e04c3fec6019fc2fbbac9082202c124ce485f33e2dc6e9bcab95`。
