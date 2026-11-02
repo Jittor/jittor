@@ -1,3 +1,9 @@
+## 2026-11-02 14:12 +0800 checkpoint-102 的 17 样本 fixture 生成完成；质量门与 Day4–5 性能门仍开放
+
+current-main checkpoint-102 在 GPU1 完成 17 条固定 eval fixture 贪心生成：word-token F1 `0.2045338135`、ROUGE-L `0.1483792414`、EM `0`，fallback `0`。独立审计与 41 项 SHA 清单通过。fixture ID 虽与实验 train JSONL 不重叠，但来源标签都是 `alpaca:train`，总生成长度上限 96 tokens；这只是有限 fixture 结果，没有定义 quality threshold，不关闭 held-out generation quality 门。源码执行身份、attempt-04 失败原件与 attempt-05 audit 见 [Day2–5 结果报告](../results/2026-10-26-torch-compat-release-day2-5.md)。
+
+Day4–5 GPU2 正式 suite 未启动：外部任务仍在 GPU2，`X12DPG-OA6` 为 DOWN 且 `ConstrainDevices=no`；需管理员添加 `cgq` association，恢复节点并给出可验证 GRES/device-cgroup 独占租约。整体 Day2–5 发布门保持 **Not complete**。
+
 ## 2026-11-02 13:58 +0800 current-main Qwen 实用训练与 step51 新进程续训已审计通过；整体 release 仍开放
 
 current HEAD `ef62df24c678f292989db93a35e85113d6ef04b5`、source fingerprint `d7cc22fd3881c1a7ab5528c66981dc7d761b2ce59802ecda78d6dfa2344d502a` 上，Qwen3-0.6B LoRA seed821 在真实 GPU1 完成 51 次更新，新进程从 checkpoint-51 恢复后再完成 51 次，到 step102；0 skip、0 fallback，930 项状态值、337 项设备映射及 RNG 状态恢复检查通过。逐微批次 epoch mean 为 `1.2055992702 → 1.1535344227`，与匹配输入的 R14 结果相近；独立 audit v3 与 evidence manifest 均通过。详细配置、R14/PT 对照与文件哈希见 [Day2–5 结果报告](../results/2026-10-26-torch-compat-release-day2-5.md)。

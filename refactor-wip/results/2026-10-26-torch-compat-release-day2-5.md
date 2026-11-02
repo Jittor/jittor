@@ -1,3 +1,13 @@
+## 2026-11-02 14:12 +0800 current-main checkpoint-102 17 样本生成评估通过执行审计；不构成 held-out quality 验收
+
+**当前源码与执行。** 在两阶段训练之后，继续使用同一个 `/home/cgq/jittor` 工作区，对 checkpoint-102 做固定 eval fixture 生成。该生成发生在三份状态文档的中文提交 `2281cb7bad4230e74eb9aae4ef5919b6a9bbc686` 之后，因此运行绑定 HEAD `2281cb7bad4230e74eb9aae4ef5919b6a9bbc686`、source fingerprint `79d7b81e7116b3c463d2a94bf5901b9244d0eb73355518622bc6aa9645f41b24`；这次提交只改了状态文档，1099 个 scoped source 文件哈希 `e83ecc86de5789527c9b318c5bed4c36f8013ef03569e10bba3a1c4d87ed94ae` 与训练期相同，run 前后源码/工作区快照一致。物理 GPU1 UUID `GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068` 映射为 `cuda:0`，核心库 SHA256 `d2aea33bd566ad8b2b5fbf6edb43fe060f5d8fd389d95eae8d22744f4f390811`；17 条生成于 14:04:18–14:10:21 +0800 完成，rc=0，fallback 0→0。GPU2 未暴露给进程；其既有外部 PID 3037196、3164740 前后不变。
+
+**指标与边界。** 使用和既有 Torch/Jittor probe 相同的 17 条 eval JSONL、贪心解码、use_cache、总长上限 96 tokens。独立重算与 runner 一致：normalized EM `0.0`、word-token F1 `0.2045338135`、ROUGE-L `0.1483792414`、平均生成 `79.82` tokens；全部逐样本分数有限，精确 prompt/input overlap 检查为 0。所有 fixture ID 都标为 `alpaca:train`，虽然它们与本实验训练 JSONL 的 ID 和 prompt 不重叠，仍不能称为规范 held-out split；该小样本和截断解码也没有定义 release 质量阈值，因此只记录为当前 checkpoint 的 fixture 生成行为，不判为生成质量验收。与既有另一 adapter 的旧 JT generation 17 条输出逐项一致；旧 adapter SHA 和源码候选不同，PyTorch 参照也不是同权重受控对照，只作描述性上下文。
+
+新 attempt 与独立审计位于 `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-qwen20-cuda1-practical-r2-warmcache-r1-prepared/attempt-05-jittor-current-main-step102-skip-ext-build/`。audit SHA256 `ed8c3598dcb3f21a910c6a1a0583002da79d4f4cb91694396921636cfca77e20`；41 项 `generation-evidence.sha256` 校验清单 SHA256 `98df1050ce1f286b1530b4af9cedce5c7bf1950b105d4afa7d2e350e7e75dc7e`，全部通过。attempt-04 因 Torch shim 尝试构建无关 Motion324 扩展、环境缺 `omegaconf`，在模型加载前退出；原件及 plan-correction 保留。attempt-05 按既有成功 generation runner 加 `JITTOR_TORCH_SKIP_EXT_BUILD=1` 后完成；未改源码。
+
+这仍不是性能或显存测量；GPU1 是共享卡，generation elapsed time 不作为性能结论。Day4–5 suite 仍等待管理员添加 `cgq` association、恢复 DOWN 节点并签发 GPU2 GRES/device-cgroup 独占租约；更广 Day2–5 发布门继续 **Not complete**。
+
 ## 2026-11-02 13:58 +0800 current-main Qwen seed821 两阶段训练与新进程续训通过独立审计；Day4–5 独占租约仍未取得
 
 **源码和工作区。** 沿用 `/home/cgq/jittor`，没有重新 clone。训练执行绑定 HEAD `ef62df24c678f292989db93a35e85113d6ef04b5`、`origin/cgq_transformers=e5cffe1ae60c418f53c5bb1dca9182577fd2b81`（ahead/behind 231/0）、source fingerprint `d7cc22fd3881c1a7ab5528c66981dc7d761b2ce59802ecda78d6dfa2344d502a`、1099 个 scoped source entries。run 前后 fingerprint、完整 porcelain 快照均一致：105 条 full-status entries，status SHA256 `8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98`；tracked diff SHA256 `3ef743580bb7db38dbc9197f6f90e3182956d2bc29a55bce29c7eeea1bea6100`，index 为空。已有源码改动保持原样。

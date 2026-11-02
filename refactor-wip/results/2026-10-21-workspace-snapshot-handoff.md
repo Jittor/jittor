@@ -1,3 +1,9 @@
+## 2026-11-02 14:12 +0800 Handoff：checkpoint-102 fixture generation audit 通过，质量门未关
+
+current-main checkpoint-102 在 GPU1 / `cuda:0` 对固定 17 条 eval fixture 完成贪心生成，0 fallback；独立审计复算 EM `0`、word-token F1 `0.2045338135`、ROUGE-L `0.1483792414`。41 项证据清单 SHA256 `98df1050ce1f286b1530b4af9cedce5c7bf1950b105d4afa7d2e350e7e75dc7e`。所有样本 ID 标记 `alpaca:train`；因此不作为正式 held-out generation score。run 在状态文档提交 `2281cb7...` 后，代码 scoped fingerprint `79d7b81e...`，训练更新和 resume 结果仍绑定前一 HEAD `ef62df24...`，该后续提交只含三份状态文档。完整来源、旧 attempt-04 导入失败及限制见 [Day2–5 结果报告](2026-10-26-torch-compat-release-day2-5.md)。
+
+GPU2 性能租约仍待管理员添加 `cgq` association 并恢复 `X12DPG-OA6`，随后配置设备 cgroup 并授予匹配 UUID/GRES 独占 allocation。正式 Day4–5 和更广 Day2–5 门均保持 **Not complete**；本轮没有使用 GPU2 或后台 holder。
+
 ## 2026-11-02 13:58 +0800 Handoff：current-main Qwen 两 epoch 与新进程 resume 通过审计；GPU2 性能租约待管理员
 
 current-main Qwen3-0.6B LoRA seed821 在 GPU1 完成 step1–51，保存 checkpoint-51；新进程精确恢复模型、optimizer、scheduler、Python/NumPy/CPU/CUDA RNG 后完成 step52–102。102 次更新无跳步、无 fallback；930 项状态值和 337 项设备映射核对通过。正确的微批次 epoch mean 为 `1.2055992702 → 1.1535344227`，current-main final eval loss `2.4564309120`。attempt-03 独立 audit v3 SHA256 `4df0de6c300cdae03afedd6f0da183a0a57e150df153fcd6e823d53c9c76da01`，25 项证据清单 SHA256 `7d1581715cc63c103b8b52e6fe73a2a07ea072070be52be3663ef4a9b3359e42`。完整对照与限制见 [Day2–5 结果报告](2026-10-26-torch-compat-release-day2-5.md)。
