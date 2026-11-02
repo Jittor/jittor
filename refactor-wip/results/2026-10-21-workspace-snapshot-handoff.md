@@ -1,3 +1,17 @@
+## 2026-11-03 06:11 +0800 修复 PyTorch shim 序列化异常后的绑定污染；新 main wheel 已构建
+
+继续审查 `save_pytorch()` 的异常路径时发现，先前的 `finally` 修补仍有缺陷：Torch shim 的 storage 类虽然绑定在 `torch` 命名空间，类对象的 `__module__` 却指向 Jittor installer；按类对象的 owner 恢复会写错命名空间，同时把模块级 `targets` 替换成 shim 原类。现在通过上下文管理器记录每个实际命名空间字典、属性原本是否存在和原对象，异常时按逆序精确恢复；用重入锁保护本 exporter 的并发调用，且不再修改全局目标列表。
+
+回归证据分开记录。修复前的真实 shim 运行观察到 `torch.HalfStorage` 留成 serializer stub；修复后在既有 warm CPU Jittor/TorchNamespace runtime（`JITTOR_NO_BUILD=1`、backend fallback=error、跳过第三方扩展构建）强制 pickle 异常，验证 9 个命名空间绑定和 9 项目标列表均恢复，失败归档不存在；同一进程随后成功导出 586-byte 标量归档。stock PyTorch 2.8.0+cu128 从该归档读回 `{"recovered": 7}`。实际 runtime 使用 checkout 模块 SHA256 `843411da94a28a51576c20ed6745f13770aaff0f275fb076475481bc2a515e67`；另有 external-owner 与原本缺失属性两种 9-target 回归通过。
+
+以已推送源码提交 `9a9096bb5588816ca0e090cbcb4c18a6e967ab0e` 的 Git archive 构建 main wheel，SHA256 `bab474943f9c9c45ee59c7582b83bf054c75bc511c2cef585ba5a504d9b7d055`，大小 2,320,073 bytes。fresh pip target 安装成功，core wheel 内容审计通过（1,100 paths）；源码、wheel member、安装态模块 SHA256 均为 `843411da94a28a51576c20ed6745f13770aaff0f275fb076475481bc2a515e67`。从该安装态模块运行选中的异常恢复测试，在 stock PyTorch 2.8.0+cu128 和最小 Jittor 类型 stub 下 3 passed、4 deselected；这些用例在进入 Jittor Tensor/ZipFile 路径前抛错。与上一中间 wheel 比较时 0 additions、0 removals、2 个未批准内容变化（模块本身和 RECORD），compare exit=1；未改 allowlist，也不据此宣称 broader wheel migration 通过。
+
+安装态完整 Jittor 启动另有保留的失败 attempt-08：加载新 target 模块前，warm Jittor core import 在 `jittor_core` 内 segfault；该进程未执行本修复代码，cache manifest 前后通过且 core SHA256 保持 `13ee2862304d354a20a9fefbe51dd8daee46066084b6c21f9385ffcfa7adf991`。因此实际 shim 运行证据来自既有 warm runtime 加载 hash 相同的 checkout 文件；新 wheel 的直接证据是安装身份与 stock PyTorch 异常路径回归，不是 fresh target 的完整 Jittor 启动/cold-install 验收。
+
+源码提交 `9a9096b` 已快进推送到 `origin/cgq_transformers`；没有 PR，也没有合并 `2.0-refactor`。实验目录分别为 `/data6/cgq/jittor-lab/_state/release-day23/20261103-save-pytorch-target-namespace-r1/`（manifest SHA256 `e61455dac8976590fd805c905b8f3d6f3d08203d1dde1f434aee7d0ced987f52`）和 `/data6/cgq/jittor-lab/_state/release-day23/20261103-main-wheel-target-namespace-fix-r1/`（manifest SHA256 `65ef761158b2299b751f128abeddaeb5b6f3d8da82e0fca6bbbc6333ed532ec6`）。
+
+这项仅补强显式 PyTorch ZIP exporter 的异常安全；JT portable-pickle optimizer 直接交给 stock `torch.load` 的失败仍单独记录。Day4–5 正式性能/显存验收与更广 Day2–5 发布门保持未完成：GPU2 仍被外部任务占用，`cgq` Slurm association 待管理员添加；尚无独占窗口下三轮交替、每轮每侧至少十个热态样本的 median/p95/离散度和 allocator/NVML 峰值证据。
+
 ## 2026-11-03 05:45 +0800 Handoff：序列化异常路径全局恢复修复已定向复现并通过
 
 
