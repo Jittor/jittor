@@ -1,3 +1,17 @@
+## 2026-11-02 08:37 +0800 R14 Qwen fixture-held-out generation 终审有探索性分数；GPU2 holder 请求受当前共享占用限制
+
+### Held-out generation 证据与边界
+
+复核目录 `/data6/cgq/jittor-lab/_state/release-day23/20261031-r14-qwen-heldout-generation-r34-r3-prepared/`。它绑定 R14 seed821 Qwen LoRA checkpoint-102，源码 HEAD `e4a3894065953efa50ea23a0e52b45511b835f59`、fingerprint `89157afb357abbb882057230ecb0e86586deeef7fb010a7cc51b3577eea054a6`、merged 权重 SHA256 `f095b2a370e865976df3e028fdde8d354ff04afdc28746b770ac34755bb98a6d`。runner rc=0；独立审计通过证据完整性与指标重算，核验 train=101、eval=17、instruction/input overlap=0、物理设备 UUID 和 checkpoint 哈希。runner SHA256 `cf9bed4409f8ad1af0647b4390b36eeb005ecf2887ee9b4bf3a8a7aca2f1abfd`，summary SHA256 `9f4b04fb183e5fc011fcddd05f488fe2493e115b39bbb4803399753c7049a740`；base/merged prediction SHA256 分别为 `7e2720b20a7e17cd147612ebdfcd7cff0fea9c3e3de12ded4db0739857ce2307`、`8ac17b093908a9bf16fda60f7acbc05ab9bfb2f539367a20af1257b6e805d852`。
+
+17 条样本上的 base→merged token-F1 为 0.1429135280→0.1616024741，ROUGE-L F1 为 0.0873170414→0.1042517479，exact match 为 0→0。生成采用 greedy、max_new_tokens=256，17/17 输出均 hit cap，因此这些是截断前缀的探索性重合分数；eval 来自 R14 训练文件中的 fixture held-out 行、源 split 仍标为 train，并非官方验证集。运行时是 stock PyTorch/Transformers、物理 GPU2、只读 inference_mode、无梯度和 optimizer update，不覆盖 Jittor generation，也不证明普遍生成质量。早期 r1/r2 EOS/cap 失败保持原样留存。终审 `status.json` 把正常 `SystemExit(0)` 标成 `FAILED_OR_INTERRUPTED`，但 runner.returncode 是 0，summary 与 independent-audit 均 PASS；记录此包装层状态不一致，不重跑。
+
+### GPU2 独占与 Day4–5 门
+
+当前复核时 GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 仍为 Default，已有 PID 3037196、3164740 各用 8,640 MiB，合计 17,299 MiB、利用率约 85%。因此没有启动另一个显存/CUDA holder，也没有结束、暂停或改变其他人的进程。仓库现有 `/data6/cgq/jittor-lab/tools/gpu2-exclusive-run.sh` 已实现等待当前 CUDA clients 退出、使用 sudo 切 EXCLUSIVE_PROCESS、在同一窗口执行给定的实际测试命令并在退出时恢复 Default；它适用于测试命令本身，不是可与另一测试 worker 分开的 holder。Slurm X12DPG-OA6 仍 DOWN，当前 cgq dry-run allocation 因 account/partition 无效而失败，`ConstrainDevices=no`，所以该脚本也不能满足 R4 对 live GRES、task/device-cgroup 和管理员 lease proof 的要求。
+
+正式 Day4–5 仍需获得隔离 lease 后按已准备 R4 流程完成容量/OOM 扫测和至少三轮交替配对，每轮至少十个热态样本，报告 load/first-step/hot timings、median/p95/离散度及 allocator/NVML 峰值。现有共享负载测量只作诊断；Day4–5 和更广 Day2–5 发布门仍未完成。
+
 ## 2026-11-02 08:29 +0800 R5 installed-wheel AdamW 未使用梯度/延迟参与 CPU 契约 1/1 通过；GPU2 独占仍受阻
 
 ### 验证目标与结果

@@ -1,3 +1,9 @@
+## 2026-11-02 08:37 +0800 R14 Qwen fixture-held-out generation 审计完成；GPU2 独占窗口仍不可用
+
+R34 证据包位于 `/data6/cgq/jittor-lab/_state/release-day23/20261031-r14-qwen-heldout-generation-r34-r3-prepared/`。runner 退出码为 0；独立审计状态 `PASS_EVIDENCE_INTEGRITY_AND_METRIC_RECOMPUTE_WITH_SCOPE_LIMITS`，重算分数和 runner、summary、两份预测文件哈希一致。17 条 fixture-held-out 样本无 instruction/input 重叠；merged 相对 base 的 token-F1 为 0.142914→0.161602、ROUGE-L F1 为 0.087317→0.104252，exact match 均为 0。所有 17 个输出都达到 256-token 上限，且源数据 split 标记为 train；这是 stock PyTorch 的前缀探索分数，不代表完整答案质量，不测试 Jittor 推理，也不构成质量门通过。status.json 将正常 `SystemExit(0)` 包装成 `FAILED_OR_INTERRUPTED`，与 runner rc=0、summary PASS 和独立审计 PASS 不一致，保留并明确记录该终端状态缺陷，不重跑。
+
+GPU2 当前仍有外部 PID 3037196、3164740 各占 8,640 MiB（合计 17,299 MiB，约 85% 利用率），compute mode 为 Default。已有 `/data6/cgq/jittor-lab/tools/gpu2-exclusive-run.sh` 可等卡空闲后请求 sudo 切换 NVIDIA EXCLUSIVE_PROCESS，将实际测试命令包在独占窗口内运行并在退出后恢复；独立空转 holder 不能替代该流程，也不能替代正式 R4 所需的 live Slurm GRES/device-cgroup lease。X12DPG-OA6 仍 DOWN，现无有效 cgq allocation，且 `ConstrainDevices=no`；本轮未启动 holder 或触碰外部进程。Day4–5 正式性能/显存 cohort 与更广 Day2–5 发布门继续未完成。
+
 ## 2026-11-02 08:29 +0800 R5 installed-wheel AdamW 未使用梯度 CPU 用例通过；GPU2 独占当前受阻
 
 attempt-24 对 R5 installed wheel 执行 AdamW 延迟使用参数用例：1 collected、1 passed，0 skip/fail，pytest rc=0，fallback 0→0，core current。用例覆盖两种 zero_grad 模式与两种参数顺序，检查前 3 步未使用参数不建状态、不更新，后续参与时与 AdamW 参考值一致。attempt manifest SHA256 `cc7041addb73b70f79a28797f3760cbf205bf3dcadbaa38a009d73bdfe9b6f42`。attempt-22/23 是 runner hook 记录器错误，均未执行测试调用，原件分别以 manifest `8e2a6d5fd8b757ae5ee2d422d3f4052e774a6ee89ac48329206b19af9a071223`、`53902c24f473a61d2019df635c0ce6da15cec016a6ddd45465d38e6830949bd8` 保留。

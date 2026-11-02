@@ -1,3 +1,9 @@
+## 2026-11-02 08:37 +0800 Handoff：R14 held-out generation 分数已复核；GPU2 尚不能安全独占
+
+R34 generation 终审 runner rc=0，独立审计重新计算的分数及 runner/summary/prediction 哈希均匹配。17 条 fixture-held-out 样本无输入重叠；base→merged token-F1 为 0.142914→0.161602、ROUGE-L F1 为 0.087317→0.104252、exact match 均 0。17 个生成都达到 256-token 上限，样本源 split 标记为 train；结果仅是 stock PyTorch/Transformers 的截断前缀探索分数，不是 Jittor 推理或质量验收。status.json 的 `FAILED_OR_INTERRUPTED` 来自对正常 `SystemExit(0)` 的包装，runner rc=0 且 summary/audit PASS；问题保留记录，不重跑。证据目录：`/data6/cgq/jittor-lab/_state/release-day23/20261031-r14-qwen-heldout-generation-r34-r3-prepared/`。
+
+GPU2 当前仍由外部 PID 3037196/3164740 各占 8,640 MiB；Default 模式、17,299 MiB 已用、利用率约 85%。不启动独立 holder 或触碰这些进程。已有 `/data6/cgq/jittor-lab/tools/gpu2-exclusive-run.sh` 可等待空卡后把真实测试命令直接置于 EXCLUSIVE_PROCESS 窗口，并在结束时恢复；但正式 R4 仍缺 live Slurm GRES/device-cgroup lease（X12DPG-OA6 DOWN、`ConstrainDevices=no`）。Day4–5 正式性能/显存验收和更广 Day2–5 发布门继续开放。
+
 ## 2026-11-02 08:29 +0800 Handoff：R5 AdamW 延迟使用参数 CPU 契约通过；GPU2 无法由独立 holder 排他
 
 attempt-24 在 R5 installed wheel 上运行 AdamW unused-gradient 单一 CPU pytest case：1 passed、0 skipped/failed，fallback 0→0、core current；覆盖两种 zero_grad 模式和两种参数顺序，前三步未使用参数无梯度/状态/更新，后续更新与参考值一致。当前/R5 测试源和三份 optimizer 实现文件一致。attempt manifest SHA256 `cc7041addb73b70f79a28797f3760cbf205bf3dcadbaa38a009d73bdfe9b6f42`；attempt-22/23 harness 失败均保留并有各自 manifest。
