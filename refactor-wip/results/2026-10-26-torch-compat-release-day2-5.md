@@ -1,3 +1,11 @@
+## 2026-11-03 03:08 +0800 installed wheel fused SGD 的 fused=False selector 边界通过
+
+在 installed main wheel 的 CPU cache 上执行有界动态 selector spy。构造参数 fused=False 与 param-group 设置 fused=False 两种路径各完成一步 SGD 参数更新，均未调用 optim.sgd_fused selector；默认 fused=None 正向对照调用 selector 一次。两种更新都从 [1, 2] 得到约 [0.8000000119, 1.6000000238]，fallback 0→0。CPU core build current，SHA256 前后均为 13ee2862304d354a20a9fefbe51dd8daee46066084b6c21f9385ffcfa7adf991。
+
+证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-sgd-fused-off-selector-r1/，artifact-files manifest SHA256 94f05294726ddc0747bad146fd29ba2e4b8df24e96bac25e1cab20d402852f1e。绑定 wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69、源 HEAD 35a1a7605ec475e9cbc1a9688afc299ee3bd8011、SGD source SHA256 acff9799e218fa78949028c287e79f058fdfb969ec90fa985e8e7e44ac6fedf7、fused_sgd_cuda.py SHA256 5d7c15f09429e8d8bdd0fc9bc590654d0688e2ce342c5dbb7bdb4d4f1aa1d971。原测试 test_it_is_off_when_asked 仍是 no-op，未改写其历史状态；该独立 probe 提供 wheel 安装身份下的真实 selector 调用边界证据。
+
+该项为 CPU 正确性检查，不是 CUDA 执行、性能或显存结果。GPU2 仍被外部使用，正式 Day4–5 验收等待 cgq 独占 allocation；整体 Day2–5 未完成。
+
 ## 2026-11-03 03:05 +0800 installed main/compat wheel CPU DDP surface 39 passed；Day2–5 仍未完成
 
 ### 验收结果

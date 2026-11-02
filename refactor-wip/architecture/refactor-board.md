@@ -1,3 +1,9 @@
+## 2026-11-03 03:08 +0800 installed wheel 的 fused=False SGD selector 路径补证通过
+
+对 current main wheel 做 CPU-only selector spy：显式构造参数 fused=False、param-group 覆盖 fused=False 均完成参数更新 [1, 2]→[0.8, 1.6]，两者对 optim.sgd_fused selector 的调用次数均为 0；默认 fused=None 的正向对照确实进入 selector 一次，fallback 0→0。绑定 main wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69、wheel source HEAD 35a1a7605ec475e9cbc1a9688afc299ee3bd8011、SGD source SHA256 acff9799e218fa78949028c287e79f058fdfb969ec90fa985e8e7e44ac6fedf7、fused_sgd_cuda.py SHA256 5d7c15f09429e8d8bdd0fc9bc590654d0688e2ce342c5dbb7bdb4d4f1aa1d971。CPU core SHA256 13ee2862304d354a20a9fefbe51dd8daee46066084b6c21f9385ffcfa7adf991，前后不变且 build current。
+
+执行包 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-sgd-fused-off-selector-r1/，artifact manifest SHA256 94f05294726ddc0747bad146fd29ba2e4b8df24e96bac25e1cab20d402852f1e。此有界 CPU probe 补上此前发现的 test_it_is_off_when_asked no-op 对关闭 selector 的独立覆盖缺口；不改源码/测试，也不提供 CUDA 性能或显存结论。GPU2 仍由外部任务占用，Day4–5 正式门及更广 Day2–5 仍 Not complete。
+
 ## 2026-11-03 03:05 +0800 installed main/compat wheel 的 CPU DDP surface 39 passed；真实多卡与性能门仍开放
 
 在当前 main wheel 的隔离安装路径上，compat/tests/torch/test_ddp_owner_separation.py、test_ddp_comm_hook_surface.py、test_ddp_comm_hook_transaction.py 共 39 项通过（24.52 秒，0 skip、0 fail），fallback 0→0，core_build_is_current() 为真。结果绑定 wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69、wheel source HEAD 35a1a7605ec475e9cbc1a9688afc299ee3bd8011 与当时 live HEAD e97c38852869c4a4e335934b481939c9d3609874；安装 DDP 文件 SHA256 66b44ab55dcd6eea22aa2019e7542aec9fa605a1cfe592c24692c994f93a59b3。CPU core SHA256 前后均为 13ee2862304d354a20a9fefbe51dd8daee46066084b6c21f9385ffcfa7adf991。

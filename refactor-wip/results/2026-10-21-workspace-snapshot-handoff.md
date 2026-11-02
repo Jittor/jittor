@@ -1,3 +1,9 @@
+## 2026-11-03 03:08 +0800 Handoff：installed wheel fused=False SGD selector 边界补证通过
+
+在 installed main wheel CPU 路径中，constructor fused=False 与 param-group fused=False 均完成 SGD 更新且 selector spy 记录 0 次 optim.sgd_fused 调用；默认 fused=None 正向对照调用 1 次，fallback 0→0。core current，哈希前后均为 13ee2862304d354a20a9fefbe51dd8daee46066084b6c21f9385ffcfa7adf991。artifact 位于 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-sgd-fused-off-selector-r1/，manifest SHA256 94f05294726ddc0747bad146fd29ba2e4b8df24e96bac25e1cab20d402852f1e。只补独立覆盖，不修改源码或测试；原 test_it_is_off_when_asked 的 no-op 记录保留。
+
+GPU2 仍外部高负载，正式 Day4–5 性能/显存门未运行。更广 Day2–5 仍 Not complete。
+
 ## 2026-11-03 03:05 +0800 Handoff：installed wheel CPU DDP surface 39 passed；多卡/性能验收仍开放
 
 在 /home/cgq/jittor 当前安装 wheel 执行三份 DDP CPU surface 测试，共 39 passed、0 skipped、24.52 秒，fallback 0→0，core build current。wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69，wheel source HEAD 35a1a7605ec475e9cbc1a9688afc299ee3bd8011，执行时 live HEAD e97c38852869c4a4e335934b481939c9d3609874，CPU core SHA256 前后相同为 13ee2862304d354a20a9fefbe51dd8daee46066084b6c21f9385ffcfa7adf991。证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-cpu-ddp-surface-r4/，manifest SHA256 fcd56b6200c7a77cfa225a315d683a52d491998b366c76f912af9ebbcbc96222。
