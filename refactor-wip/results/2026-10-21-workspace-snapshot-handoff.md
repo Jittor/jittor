@@ -1,3 +1,9 @@
+## 2026-11-02 17:15 +0800 Handoff：current-main CUDA native 批次 408 passed、8 failed；Torch-shim 后续批次未运行
+
+沿用 `/home/cgq/jittor`，执行 HEAD `fc5798bcdedfaf6271c1dadc1f04efa98f3d602f`，origin/cgq_transformers `e5cffe1ae60c418f53c5bb1dca9182577fd2b81`（237/0）。Nox CUDA session 在 GPU1 UUID `GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068` 上完成 228/228 CUDA core build 与 probe，随后 native batch 得到 408 passed、8 failed、71 skipped、3 xfailed（490 collected，38:54，exit 1）。失败集中于 CPU 外部 op dispatch、cuBLAS/cuDNN capability relay 未发生，以及 contract matrix 未说明 `my_cuda`/`no_cuda`。process-mode 的 Torch-shim 后续批次（device parity、TF32、tests/ops）没有运行；具体节点与哈希见 [Day2–5 结果报告](2026-10-26-torch-compat-release-day2-5.md)。外部证据包 `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-torch-cuda-suite-r1-prepared/` 中 final manifest SHA256 为 `6b6b8cc0cab37db4eeb7a39aff1108a8e02b4b0dd87f5b56c3949f4294df8c9c`。
+
+测试过程 GPU1 未独占，故此结果只作为当前源码的诊断性正确性记录，不是性能/显存结论。GPU2 仍被外部任务占满；cgq Slurm association、目标节点恢复与可验证独占租约仍待管理员处理，本会话没有管理员联络渠道，未代发申请。下一步先针对失败 dispatch/registry 项定位并修复，再安排未执行的 Torch-shim batch；GPU2 Day4–5 正式测量仍按既有三轮配对协议等待独占租约。102 项既有 dirty/untracked 工作保持原样，overall Day2–5 release 继续 **Not complete**。
+
 ## 2026-11-02 16:20 +0800 Handoff：CPU 打包候选自洽与合装 smoke 通过；approved baseline 与 GPU2 性能门未过
 
 current-main packaging snapshot 绑定 HEAD 537ab1d154a8d8153e443d2347e584cc84921b29、origin e5cffe1ae60c418f53c5bb1dca9182577fd2b81（ahead/behind 236/0），source manifest SHA256 0515d37eee5ebbccc4fe98275be6021d37764572513aaf8b33751ba05376de54。Nox attempt-03 对 approved wheel baseline 失败（1,033 → 1,100 paths；69 added、302 changed、2 removed、0 allowlisted）。未改基线或 allowlist。candidate-relative attempt-04 session 成功：direct/from-sdist wheel 零差异，sdist audit、隔离安装后的核心 selftest、core+compat autograd smoke 均通过；无 CUDA 可见，只算 CPU package/install 证据。完整差异、日志和哈希位于 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-packaging-r1-prepared/，当轮 manifest SHA256 d5276c32763166f141e9249f728b2d682059e0ba44da873a136c954cda689b1a。
