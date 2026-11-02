@@ -1,3 +1,8 @@
+## 2026-11-02 13:10 +0800 接续：current-HEAD Torch CPU focused 10 passed、2 CUDA skip；未触碰 GPU2
+
+在 current HEAD 2b1fd485bd8d778904bf64e5f6047d6d3b0c1a66 上运行 12 项 CPU focused，pytest rc=0，10 passed、2 个 CUDA 专用项 skipped、0 failed、fallback=0。实验包 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-torch-focused-current-head-r1-prepared/；source fingerprint f437d8663cc2c8c2558707769c7b0498740544d2264d27c74cf428cded6055a4。runner 的 selector-prefix guard 将正常 pytest nodeid 前缀差异误记为 failure；独立审计确认 12 个配置项与实际 call reports 精确对应，原 receipt 仍保留。core SHA d2aea33b…f390811 未变，cache 只有 jittor.lock 改动，没有新增 GPU compute PID，GPU2 未暴露给运行进程。审计 SHA 与测试范围见 Day2–5 报告 13:10 条目。
+
+此结果不关闭 current CUDA focused、完整 Trainer/DDP checkpoint 恢复或 Day4–5 性能/显存门。GPU2 仍共享且被外部 PID 使用；节点 X12DPG-OA6 为 DOWN，未启用 task/cgroup 设备限制，也没有 cgq association。需管理员补齐 association 与有效 GPU2 lease 后才能启动 R2 full performance suite。
 ## 2026-11-02 12:58 +0800 接续：R2 Day4–5 suite 已补冷编译 bootstrap，仍等待管理员 GPU2 lease
 
 在现有 /home/cgq/jittor 继续，未 clone、未碰 GPU2，也未改源码。R1 Day4–5 包因空 JITTOR_HOME 配合 120 秒首个 Jittor capacity cap，无法覆盖历史约 335 秒的当前源码 CUDA core 冷编译；另有 fresh-cache jit_utils rc=3 重启路径。R1 保留不改。新 R2 包位于 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-day45-exclusive-r2-cold-compile-prepared/，manifest SHA256 ccc6e30bfcf85a154d2f7be9929554586221a91df8432445cfc20ec913406d74。静态核验：8 个 shell 脚本语法通过、4 个 Python AST 通过、20 项文件清单校验通过。R2 full suite 把 core bootstrap、容量 sweep 和配对测量放在同一 Slurm allocation，最长 100 分钟；当前没有实际启动，所以不产生性能/显存结论。
