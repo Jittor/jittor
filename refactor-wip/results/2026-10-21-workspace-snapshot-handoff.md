@@ -1,3 +1,11 @@
+## 2026-11-03 03:59 +0800 Handoff：serialization wheel suite 未执行，需先固定 CPU backend/cache
+
+本轮准备验证 current installed main wheel 的 `test_torch_compat_serialize.py`，测试 SHA256 `aa3768dc616f00d1f0bb0e58f6c4ab30d2bee92bc7890bf1e6e183365db2ca02`、wheel SHA256 `b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69`，wheel 源码 HEAD `35a1a7605ec475e9cbc1a9688afc299ee3bd8011`。live repo 和远端 `cgq_transformers` 当时均为 `f3788643a88316a0e2cd2ea65911a48b97dea3a5`，工作区 clean。
+
+六次准备/启动均未进入 pytest：前两次是 helper 准备器问题；两次 CUDA cache 启动被 Jittor 的 jit_utils rebuild guard 阻断；一次未设 `JT_BACKEND=cpu`，导致自动 nvcc 路径编译出新 core 后遇到 Conda GLIBCXX 依赖错误；显式 CPU backend 的 20 秒 import 预检又落到新 cache 配置并超时。记录：`/data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-serialization-cuda-r1/`，manifest SHA256 `efc651ef90d8a50713d7f37a40581a40df27f0d716a966c3587adf8d699f2468`。不要把它算作用例失败或通过，不重复相同冷启动。此前已验证 CPU core hash `13ee2862304d354a20a9fefbe51dd8daee46066084b6c21f9385ffcfa7adf991` 未变；当前没有本任务进程或 cache lock。
+
+GPU2 仍为外部任务约 37,235 MiB、100% 利用率；cgq 暂无 Slurm job，association 等待管理员配置。正式 Day4–5 性能/显存验收与整体 Day2–5 发布门仍开放。
+
 ## 2026-11-03 03:42 +0800 Handoff：installed-wheel CUDA alias/version 22 passed
 
 在 current main wheel 安装路径的物理 GPU0 上，test_torch_storage_alias_versions.py CUDA 变体 22 passed、22 CPU 变体 deselected，56.70 秒，fallback 0→0，core current 且哈希前后同为 0e2fe909d3f33e27c220546693c40f27087357cefe198220f46c97f9a0353a90。覆盖别名写入、saved tensor version guard、view 与 clone 存储关系。证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-storage-alias-cuda-r1/，artifact manifest SHA256 e64a66894b7b6b411361a01b225036235f4d2356d561adf1eda303b11ac732b7。

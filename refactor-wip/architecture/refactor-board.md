@@ -1,3 +1,13 @@
+## 2026-11-03 03:59 +0800 installed-wheel serialization suite 未进入 pytest；保留启动诊断
+
+本轮选择 current installed main wheel 的 `compat/tests/torch/test_torch_compat_serialize.py`，目的是补查 safetensors 与 Torch shim 保存加载路径。测试文件 SHA256 `aa3768dc616f00d1f0bb0e58f6c4ab30d2bee92bc7890bf1e6e183365db2ca02`，wheel SHA256 `b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69`，wheel source HEAD `35a1a7605ec475e9cbc1a9688afc299ee3bd8011`；执行时 repo 与 `origin/cgq_transformers` 均为 `f3788643a88316a0e2cd2ea65911a48b97dea3a5`，工作区 clean。
+
+这组尝试全部在 pytest 收集前停止：attempt-01/02 是 helper 路径和忽略 `__pycache__` 的准备器错误；attempt-03/04 被 Jittor 的 `jit_utils was rebuilt; nothing else has run` 保护拦下；attempt-05 将 `use_cuda=0` 当作后端选择，Jittor 仍自动发现 nvcc，编译出 CUDA core（SHA256 `39c3d168baa638f46098e860163cb144e9679510ee07ea2c54f04c9cc189aa92`），随后因 Conda `libstdc++.so.6` 缺少 `GLIBCXX_3.4.30` 而在 import 阶段退出；attempt-06 显式设 `JT_BACKEND=cpu` 后选到新 cache 配置 `cfgfa41b8a9`，20 秒 import 预检超时。所有日志和纠正说明都保存在 `/data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-serialization-cuda-r1/`，artifact manifest SHA256 `efc651ef90d8a50713d7f37a40581a40df27f0d716a966c3587adf8d699f2468`；清单校验通过。
+
+因此该套件没有测试结果，不记作产品 PASS 或 FAIL。此前 CPU core SHA256 `13ee2862304d354a20a9fefbe51dd8daee46066084b6c21f9385ffcfa7adf991` 未改变；没有遗留测试进程或 cache lock，GPU2 未暴露给任务。本轮新建的 JIT 缓存保留，不清理、不重跑相同冷启动。下一次若继续此套件，先让运行环境固定选择已验证 CPU core 对应的 backend/cache。
+
+GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 仍约占用 37,235/81,920 MiB、100% 利用率，`squeue -u cgq` 为空；cgq 的 Slurm association 仍待管理员配置。正式 Day4–5 性能/显存窗口和更广 Day2–5 发布门继续 Not complete。
+
 ## 2026-11-03 03:42 +0800 installed main wheel 的 CUDA storage alias/version 子集通过
 
 在 current installed main wheel、物理 GPU0（进程内 cuda:0）上运行 test_torch_storage_alias_versions.py 的 CUDA 参数化项：22 passed、22 个 CPU 参数 deselected、0 skip/failure，用时 56.70 秒，fallback 0→0；CUDA core build current，SHA256 前后相同 0e2fe909d3f33e27c220546693c40f27087357cefe198220f46c97f9a0353a90。测试文件 SHA256 be7a942883329dd8e00c55beb93c43d638de02471b01db4afb26e6ad3531ec1e；wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69。证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-storage-alias-cuda-r1/，manifest SHA256 e64a66894b7b6b411361a01b225036235f4d2356d561adf1eda303b11ac732b7。与前次 CPU storage/alias 40 passed 合并看，alias-version 参数化用例的 CPU 与 CUDA 分支均已分别执行通过；view/strided-load 当前仅有 CPU 证据。GPU0 是共享卡，本项仅作功能正确性核验，不作性能/显存结论，GPU2 未用。

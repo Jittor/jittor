@@ -1,3 +1,13 @@
+## 2026-11-03 03:59 +0800 安装态 serialization suite 未进入 pytest；不构成产品测试失败
+
+计划在 current installed main wheel 上运行 `compat/tests/torch/test_torch_compat_serialize.py`，补充 safetensors、portable-pickle roundtrip 与模块状态保存加载的功能覆盖。测试 SHA256 `aa3768dc616f00d1f0bb0e58f6c4ab30d2bee92bc7890bf1e6e183365db2ca02`；wheel SHA256 `b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69`，绑定源码 HEAD `35a1a7605ec475e9cbc1a9688afc299ee3bd8011`。当时 live HEAD 与 `origin/cgq_transformers` 都是 `f3788643a88316a0e2cd2ea65911a48b97dea3a5`，仓库 clean。
+
+attempt-01/02 分别因 helper 路径假设错误、目录比较包含已有 `__pycache__` 而在测试前停止。attempt-03/04 在 Jittor import 时触发 `jit_utils was rebuilt; nothing else has run`，没有进入 pytest。attempt-05 的 `use_cuda=0` 环境变量没有选择 CPU backend，Jittor 自动发现 nvcc 并构建 CUDA core；该新 core SHA256 `39c3d168baa638f46098e860163cb144e9679510ee07ea2c54f04c9cc189aa92`，随后因 Conda `libstdc++.so.6` 缺少 `GLIBCXX_3.4.30` 在 import 时失败。attempt-06 改用 `JT_BACKEND=cpu`，但生成了新的 `cfgfa41b8a9` cache 配置，20 秒启动预检超时。六次均无 pytest collection、无断言、无 fallback 计数结论；这是 runner/backend/cache 启动问题，不是产品测试失败。
+
+完整尝试和原始日志位于 `/data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-serialization-cuda-r1/`，manifest SHA256 `efc651ef90d8a50713d7f37a40581a40df27f0d716a966c3587adf8d699f2468`，校验通过。预先通过的 CPU core SHA256 `13ee2862304d354a20a9fefbe51dd8daee46066084b6c21f9385ffcfa7adf991` 仍在原路径且未改变；本轮没有清理新生成的缓存，也没有重跑冷编译。
+
+这次未补上 serialization 覆盖。已通过的 storage/alias、CPU state_dict/DCP、checkpoint RNG 重计算证据仍按各自范围有效；R14 的 stock PyTorch 无法读取 JT portable-pickle optimizer 文件仍是独立互操作诊断。Day4–5 正式验收仍需匹配配置、至少三轮交替且每轮每侧至少十个热态样本，并记录 median/p95/离散度、加载/首步/热态耗时及 allocator/NVML 峰值。当前 GPU2 仍约 37,235 MiB/100% 外部使用，`squeue -u cgq` 为空，association 等待管理员配置。整体 Day2–5 保持 Not complete。
+
 ## 2026-11-03 03:42 +0800 installed main wheel CUDA storage alias/version 检查 22/22 通过
 
 current installed main wheel 在物理 GPU0 UUID GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5、进程内 cuda:0 上执行 test_torch_storage_alias_versions.py 的 CUDA 变体，22 passed、22 个 CPU 变体 deselected、0 skipped/failure，用时 56.70 秒。fallback 0→0，Jittor/Torch shim 来自隔离安装 target，CUDA core build current 且哈希前后均为 0e2fe909d3f33e27c220546693c40f27087357cefe198220f46c97f9a0353a90。用例核验 detach/Parameter 双向别名写入、saved input 被别名修改后的 backward version guard、materialized/pending forward、view alias、exp saved output 和 clone 独立存储等行为。test SHA256 be7a942883329dd8e00c55beb93c43d638de02471b01db4afb26e6ad3531ec1e；main wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69，wheel source HEAD 35a1a7605ec475e9cbc1a9688afc299ee3bd8011，执行时 live HEAD 5088161421e0ed14dcb9e168acdcd6fe794d9118。证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-storage-alias-cuda-r1/，manifest SHA256 e64a66894b7b6b411361a01b225036235f4d2356d561adf1eda303b11ac732b7，包内校验通过。
