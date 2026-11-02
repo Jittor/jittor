@@ -1,3 +1,9 @@
+## 2026-11-03 06:20 +0800 新 main wheel exporter 在 warm Jittor CPU runtime 复核通过；旧启动崩溃未复现
+
+针对 attempt-08 的 warm core segfault，仅做一次有界复核。attempt-01 从 SSH 默认工作目录启动，Jittor 导入成功，但 Torch shim 误发现 /home/cgq/Motion324 并尝试构建扩展，因该项目环境缺少 omegaconf 退出；它是环境/runner 失败，不计产品结果。attempt-02 将工作目录固定到 /tmp，在 CUDA 隐藏、jt.flags.use_cuda=0、backend_fallback=error、JITTOR_NO_BUILD=1 下，实际导入现有 current-head 安装态 Jittor 与 TorchNamespace，再从新 main wheel 的 fresh target 加载 save_pytorch.py（模块 SHA256 843411da94a28a51576c20ed6745f13770aaff0f275fb076475481bc2a515e67）。强制 pickle 异常后 9 项 Torch 命名空间绑定和目标列表均恢复，失败归档不存在；同一进程随后成功写出 586-byte 标量归档。runtime exit=0；warm core 与 jit_utils core 的 SHA256 前后不变，分别为 13ee2862304d354a20a9fefbe51dd8daee46066084b6c21f9385ffcfa7adf991、f9ad0a34c7008616775eed0e125125d5e9b3923efeb459c1d17302c132c5830c。
+
+旧 attempt-08 的 segfault 在此复核中未复现；本次只证明新 wheel exporter 模块能在既有 warm Jittor/Torch shim runtime 完成异常恢复与写出，不证明从新 wheel target 独立导入 Jittor 或 fresh core build。attempt-01 失败与 attempt-02 通过原件均保留，证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261103-main-wheel-target-namespace-fix-r2-startup-repro/，artifact-manifest SHA256 78699b66ecab114e9c6e70a6764e3d584e287eb77481c3f1ed70496aa4f37895。该 CPU 功能复核不产生性能/显存结论；Day4–5 正式验收和更广 Day2–5 发布门继续开放。
+
 ## 2026-11-03 06:11 +0800 修复 PyTorch shim 序列化异常后的绑定污染；新 main wheel 已构建
 
 继续审查 `save_pytorch()` 的异常路径时发现，先前的 `finally` 修补仍有缺陷：Torch shim 的 storage 类虽然绑定在 `torch` 命名空间，类对象的 `__module__` 却指向 Jittor installer；按类对象的 owner 恢复会写错命名空间，同时把模块级 `targets` 替换成 shim 原类。现在通过上下文管理器记录每个实际命名空间字典、属性原本是否存在和原对象，异常时按逆序精确恢复；用重入锁保护本 exporter 的并发调用，且不再修改全局目标列表。
