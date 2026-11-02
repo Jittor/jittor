@@ -1,3 +1,9 @@
+## 2026-11-02 08:08 +0800 R5 installed-wheel 单 rank gloo backend state 用例通过
+
+attempt-15 在 R5 clean installed wheel 上只执行 `test_init_destroy_store_and_backend_validation`：1 passed、0 skipped/failed，pytest rc=0，fallback 0→0，installed core 前后 current。`jittor`、`torch`、`jittor.compat.torch` 均从 R5 install 路径加载。测试和产品文件当前/R5 source SHA256 分别为 `1befac44d0a236be2c1d0d79ed3a9fb6297db4378d6101e9d0c40e28927b7cfc`、`aef766fa290a29448e27df02481d4e60fd5366b21b5f3c6572b993e57dcfecd8`，并与安装包内 distributed installer 一致。结果清单 SHA256 `4882726ecbe0161058e400b6881a27b551fcd8200ec20920f5613934c22171a0`。
+
+此结果确认该 R5 wheel 的单 rank CPU gloo 初始化/销毁、backend 状态读取、store 关闭和 backend mismatch 检查；不代表多 rank Gloo/NCCL 或 CUDA 验收。历史失败原件保留，按其当时源码与测试身份解释。HEAD `1c4f964e20fd9354e75b0f0216b0a30ac922c90d` 和既有 102 项工作区状态前后相同，status SHA256 `8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98`；origin/cgq_transformers ahead/behind 为 211/0。共享 CPU cache 文件没有增删，仅 `jittor.lock` 元数据哈希变化，执行结束无测试进程。GPU2 仍 Default/shared，外部 PID 3037196/3164740 各占 8640 MiB；Slurm 节点 X12DPG-OA6 为 DOWN，Day4–5 独占性能/显存和更广 Day2–5 发布门仍开放，overall Not complete。
+
 ## 2026-11-02 08:01 +0800 R5 installed-wheel checkpoint state_dict / DCP CPU suite 17/17 通过
 
 attempt-14 对 clean R5 installed wheel 运行 test_checkpoint_state_dict.py：17 passed、0 skipped/failed、pytest rc=0，fallback 0→0，installed core current。覆盖 model/optimizer restore 后继续更新、多 optimizer state、named/tied/frozen parameter、DCP 默认 planner 单 rank roundtrip 和失败传播处理。artifact manifest SHA256 5d1369792c755f30c153b7c8b634f36646d370394b41bb1695d5b73deea02ae8。

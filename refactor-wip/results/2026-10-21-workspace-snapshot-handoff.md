@@ -1,3 +1,8 @@
+## 2026-11-02 08:08 +0800 Handoff：R5 installed-wheel 单 rank gloo backend state 精确用例通过
+
+attempt-15 在 R5 clean installed wheel 上只跑 `test_init_destroy_store_and_backend_validation`：1 passed、0 skipped/failed，fallback 0→0，core current；实际 Jittor/Torch/compat Torch 均来自 R5 install。测试 SHA256 `1befac44d0a236be2c1d0d79ed3a9fb6297db4378d6101e9d0c40e28927b7cfc`，distributed installer SHA256 `aef766fa290a29448e27df02481d4e60fd5366b21b5f3c6572b993e57dcfecd8`。artifact manifest SHA256 `4882726ecbe0161058e400b6881a27b551fcd8200ec20920f5613934c22171a0`。
+
+此结果限单 rank CPU state 契约，不代替多 rank 或 CUDA 验收。GPU2 仍有外部进程且 Slurm 节点 DOWN；正式 Day4–5 需 live GRES/device-cgroup 独占租约，overall Day2–5 继续 Not complete。
 ## 2026-11-02 08:01 +0800 Handoff：R5 installed-wheel checkpoint state_dict / DCP CPU 17 项通过
 
 attempt-14 在 R5 installed wheel 上完成 test_checkpoint_state_dict.py，17 passed、0 skip/fail，fallback 0→0、installed core current；覆盖模型与 optimizer state restore/resume、DCP rank-local planner roundtrip 及注入的失败传播路径。artifact manifest SHA256 5d1369792c755f30c153b7c8b634f36646d370394b41bb1695d5b73deea02ae8。

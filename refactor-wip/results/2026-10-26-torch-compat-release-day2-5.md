@@ -1,3 +1,17 @@
+## 2026-11-02 08:08 +0800 R5 installed-wheel 单 rank gloo backend state 精确用例 1/1 通过
+
+### 目的与执行范围
+
+历史 current-main CPU focused 结果曾记录 `_init_process_group` 初始化后 `backend` state 字段缺失这一失败。本轮不改源码、不重跑旧失败套件，只在已安装 R5 wheel 上复核对应精确契约：`compat/tests/torch/test_distributed_api_owners.py::test_init_destroy_store_and_backend_validation`。它检查单 rank `backend="gloo"` 初始化后的 `initialized/store/backend` 状态、默认及 world-group `get_backend()`、销毁时 store 关闭与状态清理，以及 active backend mismatch 的错误路径。
+
+执行包为 `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-installed-torch-focus-r1-prepared/attempt-15-distributed-backend-state-cpu/`。结果 1 passed、0 skipped、0 failed，pytest rc=0；`fallback_before=0`、`fallback_after=0`，core build 前后 current。Jittor、Torch、compat Torch 的实际导入路径均在 `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-package-r5-prepared/install/` 下。current/R5 测试文件 SHA256 为 `1befac44d0a236be2c1d0d79ed3a9fb6297db4378d6101e9d0c40e28927b7cfc`；current、R5 source 与 R5 installed `distributed.py` SHA256 均为 `aef766fa290a29448e27df02481d4e60fd5366b21b5f3c6572b993e57dcfecd8`。R5 package artifact manifest 前后通过校验且相同。
+
+### 结果解释与现场保护
+
+证据绑定 R5 package manifest `38d4c7e162ed2246e34aaf0d7b67af6a926561acb77ae550f678c2f49b9f0037` 与上述单文件哈希。artifact manifest SHA256 为 `4882726ecbe0161058e400b6881a27b551fcd8200ec20920f5613934c22171a0`，`run-result.json` SHA256 为 `e11183c87ca24ec0cfe1207facc2b11dc38f01f8bc204b3c2f6db836898c13f9`，`raw.log` SHA256 为 `b98087f37737a2b9817b5675ad5d5874d2b4489843d38392e2a7c44cbd2b2a7b`。终审确认 manifest 内文件校验通过；HEAD 前后均为 `1c4f964e20fd9354e75b0f0216b0a30ac922c90d`，porcelain 状态前后均 102 项、SHA256 `8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98`，没有产品源码变化。CPU cache 无文件新增/删除，仅共享 `jittor.lock` 元数据发生变化；没有清理该锁，执行结束无测试进程。
+
+该通过结果关闭的是当前 R5 installed wheel 上这一个单 rank CPU API state 用例，不证明真实多 rank Gloo/NCCL、CUDA backend、checkpoint 多进程恢复或整体训练续训。历史失败与当时证据继续保留，不据此重写旧状态。GPU2 本轮未用于测试；当前仍为 Default/shared，外部 PID 3037196 与 3164740 各占 8640 MiB，Slurm 节点 `X12DPG-OA6` 为 DOWN（Node unexpectedly rebooted）。正式 Day4–5 仍需管理员恢复节点、提供按 UUID 的 live GRES/device-cgroup 独占租约，再按容量与三轮交替协议测量。更广 Day2–5 发布门和 overall release 均为 Not complete。
+
 ## 2026-11-02 08:01 +0800 current-main R5 installed-wheel checkpoint state_dict / DCP CPU suite 17/17 通过
 
 继续在 /home/cgq/jittor，HEAD 为 4fb43a030ceb1b33583732a237a81d1b729d33a3，origin/cgq_transformers 为 e5cffe1ae60c418f53c5bb1cdca9182577fd2b81。attempt-14 测试前后 HEAD 相同，既有 workspace porcelain SHA256 前后均为 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98；dirty/untracked 102 项保持原状，未改产品源码或历史实验原件。
