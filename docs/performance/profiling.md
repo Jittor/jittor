@@ -178,6 +178,16 @@ Torch 兼容模式下 `torch.cuda.memory._record_memory_history/_snapshot/_dump_
   每次分配、释放、段增减时更新（`sfrl_device_memory_stats`）；`memory_summary()` 的版式与
   PyTorch 逐字符相同（原生 API 标题写 Jittor，兼容模式写 PyTorch）。
 
+**显存不够时**：设备拒绝分配（池已归还缓存并重试之后）抛 `jittor.JittorOutOfMemoryError`
+（`RuntimeError` 的子类；Torch 兼容模式下抛它的子类 `torch.OutOfMemoryError`，即
+`torch.cuda.OutOfMemoryError`）。消息开头是 PyTorch 的那几句——
+`CUDA out of memory. Tried to allocate …. GPU n has a total capacity of … of which … is free.
+Including non-Jittor memory, this process has … memory in use. Of the allocated memory … is
+allocated by Jittor, and … is reserved by Jittor but unallocated.`（兼容模式下写 PyTorch），
+数字取自池自己的计数和 NVML；随后是 jittor 的建议（请求比整卡还大时提示查形状）和出错算子的
+创建位置。PyTorch 末尾那句 `PYTORCH_CUDA_ALLOC_CONF` 的建议在这里不适用，没有照抄。
+`memory_stats()` 的 `num_ooms` 与快照里的 `oom` 条目同时记一次。
+
 与 PyTorch 数字不同的地方来自分配器本身，不是记录方式：小段是 1 MiB（PyTorch 2 MiB），块按 512 B
 对齐，块属于它所在段的池；释放不排在流后面，所以 `free_requested` 与 `free_completed` 同时发生；
 没有 `max_split_size`，因此没有 oversize 分配和段；cuBLAS 工作区不从池里分配，不出现在快照里。

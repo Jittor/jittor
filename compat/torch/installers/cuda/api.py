@@ -379,8 +379,35 @@ class CUDAGraph:
     """Annotation placeholder; graph capture and replay are unsupported."""
 
 
-class OutOfMemoryError(RuntimeError):
-    pass
+class OutOfMemoryError(jt.JittorOutOfMemoryError):
+    """torch.OutOfMemoryError: a refused device allocation. The native error,
+    so ``except jittor.JittorOutOfMemoryError`` catches it too; while the
+    Torch layer is installed the core raises this class (see
+    ``_install_out_of_memory_error``), and the traceback names it as PyTorch's."""
+
+
+OutOfMemoryError.__module__ = "torch"
+OutOfMemoryError.__qualname__ = "OutOfMemoryError"
+
+
+def _install_out_of_memory_error():
+    """Raise torch.OutOfMemoryError, worded as PyTorch's, until the install is undone."""
+    import jittor_utils
+    from ....transaction import current_transaction
+    module = jittor_utils.cc
+    missing = object()
+    previous = getattr(module, "_out_of_memory_error_class", missing)
+    module._out_of_memory_error_class = OutOfMemoryError
+    jt.core.set_out_of_memory_framework("PyTorch")
+    transaction = current_transaction()
+    if transaction is not None:
+        def restore():
+            jt.core.set_out_of_memory_framework("Jittor")
+            if previous is missing:
+                module.__dict__.pop("_out_of_memory_error_class", None)
+            else:
+                module._out_of_memory_error_class = previous
+        transaction.record_undo(restore)
 
 def _cuda_visible_devices_empty():
     import os as _os_cuda

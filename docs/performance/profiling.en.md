@@ -214,6 +214,19 @@ In Torch compatibility mode `torch.cuda.memory._record_memory_history/_snapshot/
   (`sfrl_device_memory_stats`); `memory_summary()` matches PyTorch's layout
   character for character (titled Jittor in the native API, PyTorch in Torch mode).
 
+**When memory runs out**: a device allocation refused after the pools gave back
+their cache and retried raises `jittor.JittorOutOfMemoryError` (a `RuntimeError`;
+in Torch mode its subclass `torch.OutOfMemoryError`, which is
+`torch.cuda.OutOfMemoryError`). The message opens with PyTorch's sentences --
+`CUDA out of memory. Tried to allocate .... GPU n has a total capacity of ... of
+which ... is free. Including non-Jittor memory, this process has ... memory in use.
+Of the allocated memory ... is allocated by Jittor, and ... is reserved by Jittor but
+unallocated.` (PyTorch in Torch mode) -- with numbers from the pools' own counters
+and NVML, then jittor's advice (a request larger than the card points at a shape)
+and where the failing operator was built. PyTorch's closing
+`PYTORCH_CUDA_ALLOC_CONF` hint does not apply here and is not copied. `num_ooms` in
+`memory_stats()` and an `oom` entry in the snapshot each count it once.
+
 Numbers differ from PyTorch's where the allocator does, not the recording: small
 segments are 1 MiB (PyTorch: 2 MiB), blocks are 512-byte aligned and belong to
 their segment's pool; frees do not wait behind a stream, so `free_requested` and

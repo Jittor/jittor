@@ -5,6 +5,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include <iomanip>
+#include <sstream>
 #include <algorithm>
 #if defined(__linux__)
 #include <sys/sysinfo.h>
@@ -365,6 +366,44 @@ int64 device_memory_reserved_peak(int device) {
 
 void reset_device_memory_peak(int device) {
     sfrl_reset_device_peak(device);
+}
+
+// c10's format_size, so the numbers read as PyTorch's do.
+static string oom_size(int64 size) {
+    std::ostringstream os;
+    os.precision(2);
+    os << std::fixed;
+    if (size <= 1024) os << size << " bytes";
+    else if (size <= 1048576) os << (size / 1024.0) << " KiB";
+    else if (size <= 1073741824LL) os << (size / 1048576.0) << " MiB";
+    else os << (size / 1073741824.0) << " GiB";
+    return os.str();
+}
+
+static string& oom_framework() {
+    static string* name = new string("Jittor");
+    return *name;
+}
+
+void set_out_of_memory_framework(const string& name) { oom_framework() = name; }
+
+string device_out_of_memory_message(int device, int64 requested, int64 free_bytes,
+                                    int64 total_bytes, int64 process_bytes) {
+    const string& fw = oom_framework();
+    std::ostringstream os;
+    os << "CUDA out of memory. Tried to allocate " << oom_size(requested) << ".";
+    if (total_bytes >= 0)
+        os << " GPU " << device << " has a total capacity of " << oom_size(total_bytes)
+           << " of which " << oom_size(free_bytes) << " is free.";
+    if (process_bytes >= 0)
+        os << " Including non-" << fw << " memory, this process has " << oom_size(process_bytes)
+           << " memory in use.";
+    int64 allocated = sfrl_device_live_bytes(device);
+    int64 reserved = sfrl_device_reserved_bytes(device);
+    os << " Of the allocated memory " << oom_size(allocated) << " is allocated by " << fw
+       << ", and " << oom_size(std::max<int64>(reserved - allocated, 0)) << " is reserved by "
+       << fw << " but unallocated.";
+    return os.str();
 }
 
 vector<int64> device_memory_stats(int device) {

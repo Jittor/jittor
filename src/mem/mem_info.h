@@ -92,6 +92,20 @@ vector<int64> device_memory_stats(int device);
 void reset_device_memory_accumulated(int device);
 
 /**
+ * PyTorch's out-of-memory sentences for a refused device allocation: what was
+ * asked for, the card's capacity and free memory, what this process holds
+ * (``process_bytes``, -1 when NVML cannot say) and how much of the pools is
+ * allocated and how much reserved but unallocated. ``framework`` names the
+ * pools' owner in them; see :func:`set_out_of_memory_framework`.
+ */
+string device_out_of_memory_message(int device, int64 requested, int64 free_bytes,
+                                    int64 total_bytes, int64 process_bytes);
+/// The name the out-of-memory message gives the pools' owner: "Jittor", or
+/// "PyTorch" while the Torch layer is installed.
+// @pyjt(set_out_of_memory_framework)
+void set_out_of_memory_framework(const string& name);
+
+/**
  * Every byte the pools have handed out for Vars on one device since the
  * process started; it only grows. Device -1 is the host. The difference
  * across a call is the sum of everything that call allocated -- what it would
