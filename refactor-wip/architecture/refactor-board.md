@@ -1,3 +1,8 @@
+## 2026-11-02 19:12 +0800 CPU BF16 差分诊断启动受限；Day2–5 仍未完成
+
+对 19:00 新发现的 CPU BF16 AdamW state 差异准备了梯度/moment 跟踪脚本，但三次启动都停在 Jittor core/jit_utils 初始化，未执行诊断代码。两次 core 编译在 120 秒预算内不能完成，已停止并保留日志；一次命中 jit_utils rebuild 提示后保留原件。诊断使用空 CUDA_VISIBLE_DEVICES，没有触碰 GPU。隔离 cache 15,722→15,966 项，新增244、删除0、153项哈希变化。证据包见 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-cpu-bf16-state-transition-r1-prepared/，attempt-03 log SHA256 fe59919cb64cd1a888a58b2d5eda7c5c90da16c1864d033e760cc2f4c3ecf0a1。
+
+CPU BF16 差异仍需在预配 CPU runtime/cache 下定位。GPU2 Day4–5 性能/显存验收仍需管理员添加 cgq Slurm association、恢复节点和可验证独占租约；overall Day2–5 **Not complete**。
 ## 2026-11-02 19:00 +0800 周总结与 optimizer restore 新结果；Day2–5 仍未完成
 
 最近一周已取得 R14 seed821 Qwen LoRA 两 epoch/102 更新和 checkpoint-51 新进程续训证据；current-main 另有 Qwen 训练续训、双 rank Trainer 样本顺序与恢复轨迹通过。current-main CUDA 回归修复、聚焦 TF32 和设备 smoke 补齐了部分功能覆盖；786 项 Torch-shim CUDA gate、wheel baseline migration、held-out generation 与 GPU2 正式性能/显存门仍开放。R3/R5 指定路径已有 recompute 证据，现有 R3 on/off 诊断未显示显存收益。详细周总结见 [Day2–5 结果报告](../results/2026-10-26-torch-compat-release-day2-5.md)。

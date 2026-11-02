@@ -1,3 +1,8 @@
+## 2026-11-02 19:12 +0800 Handoff：CPU BF16 跟踪未启动，需预配 CPU runtime/cache
+
+为定位 CPU BF16 AdamW 恢复后的第二矩差异，准备了更新前梯度和更新后 moment 的跟踪脚本。三次启动均未进入脚本：两次触发 227/228 项 Jittor core 冷编译并在预算内停止，一次停在 jit_utils rebuild 提示。日志与隔离 cache 变更均保留，GPU 未被该诊断使用。证据目录为 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-cpu-bf16-state-transition-r1-prepared/，attempt-03 log SHA256 fe59919cb64cd1a888a58b2d5eda7c5c90da16c1864d033e760cc2f4c3ecf0a1。下一步应使用预配 CPU runtime/cache 再执行一次有界差分诊断。
+
+GPU2 正式 Day4–5 仍等待管理员提供 cgq Slurm association、节点恢复和 GRES/device-cgroup 独占租约。overall Day2–5 release 继续 **Not complete**。
 ## 2026-11-02 19:00 +0800 Handoff：本周训练/续训成果与 current-main optimizer restore 新结果
 
 本周 R14 Qwen LoRA 在真实 CUDA 上完成两 epoch、102 次更新；checkpoint-51 新进程续训通过，并核对了优化器、调度器、RNG、样本顺序和 LoRA 参数变化。current-main 还有独立 Qwen 训练续训、双 rank Trainer 新进程恢复、NCCL DCP 与 barrier 定向证据。修复和 smoke 补齐部分 CUDA Torch-shim 覆盖，较大的 CUDA compatibility、approved wheel migration、held-out quality 与 GPU2 性能/显存门仍未关闭；具体结果见 [Day2–5 报告](2026-10-26-torch-compat-release-day2-5.md)。

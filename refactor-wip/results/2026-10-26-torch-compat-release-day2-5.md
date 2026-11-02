@@ -1,3 +1,13 @@
+## 2026-11-02 19:12 +0800 CPU BF16 差异跟踪准备未进入诊断脚本
+
+针对上一条 CPU AdamW BF16 恢复后第二矩差异，准备了只在 CPU 上记录连续训练/恢复后梯度与 moment 的差分脚本。源码绑定 HEAD 64ac182d93d174dc4872a1ce4b8ea3210e116bc0、origin/cgq_transformers e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，既有 tracked diff SHA256 3ef743580bb7db38dbc9197f6f90e3182956d2bc29a55bce29c7eeea1bea6100，目标测试文件 SHA256 c9ff7be24a6dd0e4b5e0300f262d1f6addde39f0f2da0205d3171d50bef0cbfd。CUDA_VISIBLE_DEVICES 设为空；diagnostic 未触碰 GPU。
+
+三次启动均未执行差分脚本：attempt-01 因 nvcc_path 为空进入新的 227 对象 core 编译，限时 exit 143；attempt-02 停在 jit_utils rebuild 提示、exit 3，pytest/脚本均未运行；attempt-03 改回 warm CUDA core 配置后仍开始 228 对象编译，在约 52/228 且 ETA 仍约 319 秒时提前停止，exit 143。没有无限等待，也没有再重复冷启动。
+
+外部目录 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-cpu-bf16-state-transition-r1-prepared/ 保留脚本、命令、全部日志和 cache 清单。隔离 cache 从 15,722 增至 15,966 项，新增 244、删除 0、153 个共有路径哈希改变。attempt-03 log SHA256 fe59919cb64cd1a888a58b2d5eda7c5c90da16c1864d033e760cc2f4c3ecf0a1；cache-after manifest SHA256 52833a719e6daf44a119f3ce896dfdced02b15df6b160b461634bc1003d3b7d6。运行后无遗留诊断进程，工作区状态与 tracked diff 指纹未变化。
+
+因此 CPU BF16 状态轨迹差异仍未定位。下一步须在预配 CPU runtime/cache 下执行这一条有界诊断，观测更新前梯度、更新后 exp_avg 与 exp_avg_sq；不要复用这次不匹配的直接启动方式。Day4–5 独占 GPU2 性能/显存 suite 仍等待管理员添加 cgq Slurm association、恢复目标节点及提供 GRES/device-cgroup lease。overall Day2–5 release 仍为 **Not complete**。
+
 ## 2026-11-02 19:00 +0800 最近一周成果汇总与 current-main optimizer restore 诊断
 
 ### 最近一周主要成果（2026-10-26 至 2026-11-02）
