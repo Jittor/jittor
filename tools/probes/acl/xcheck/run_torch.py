@@ -1,8 +1,13 @@
 """Real-PyTorch reference: faithful GPT-2 (same arch as model_jt.py), load the
 SAME weights.npz + input, run fwd+bwd, dump loss + per-name grad L2."""
+import argparse
 import math, json, numpy as np, torch, torch.nn as nn, torch.nn.functional as F
+if hasattr(torch, "_torch_compat_install_context"):
+    raise RuntimeError("the oracle must use real PyTorch, not the Jittor shim")
 B, T, V, L, H, E = 2, 64, 512, 2, 4, 128
-dev = "cuda" if torch.cuda.is_available() else "cpu"
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--device", choices=("cpu", "cuda"), required=True)
+dev = parser.parse_args().device
 
 class CSA(nn.Module):
     def __init__(s, E, H):

@@ -1,6 +1,6 @@
 """Find the largest GPT-style model trainable on ONE 910B3 (64GB), then
-report it as the max for 8-card data-parallel (DP replicates the model, so the
-per-card memory ceiling is what bounds model size; 8 cards give ~8x throughput).
+measure a single-process full-parameter Adam step. This is a capacity probe,
+not a LoRA or multi-card throughput benchmark.
 """
 import sys, time, numpy as np, jittor as jt
 # NB: use_acl alone routes to native ACL ops but leaves use_cuda=0, which keeps
@@ -12,6 +12,7 @@ _process_policy_scopes = _ProcessPolicyStack()
 _process_policy_atexit.register(_process_policy_scopes.close)
 _process_policy_scopes.enter_context(jt.runtime.scope(use_acl=1))
 _process_policy_scopes.enter_context(jt.runtime.scope(use_cuda=1))
+jt.runtime.backend_fallback = "error"
 from jittor import nn
 import math
 
@@ -57,35 +58,21 @@ def make_gpt(L, H, E, V=50257, T=1024):
             return nn.cross_entropy_loss(logits, tgt.reshape(-1))
     return GPT()
 
-def try_train(L,H,E,B,T,dtype="float32",lora=False):
+def try_train(L,H,E,B,T,dtype="float32"):
     m=make_gpt(L,H,E,T=T)
     if dtype!="float32":
         for p in m.parameters():
             p.assign(p.cast(dtype))
-    if lora:
-        # LoRA-style: freeze base, train only a small adapter -> no optimizer
-        # state for the frozen bulk (this is what bounds large-model LoRA).
-        for p in m.parameters():
-            p.stop_grad()
-        adapter=[jt.zeros((E,16)).cast(dtype), jt.zeros((16,E)).cast(dtype)]
-        for a in adapter: a.start_grad()
-        opt=jt.optim.Adam(adapter,lr=1e-4)
-    else:
-        opt=jt.optim.Adam(m.parameters(),lr=1e-4)
+    opt=jt.optim.Adam(m.parameters(),lr=1e-4)
     nparams=sum(p.numel() for p in m.parameters())
     d=np.random.randint(0,50257,size=(B,T+1)).astype(np.int32)
     x=jt.array(d[:,:-1]); y=jt.array(d[:,1:])
     loss=m(x,y)
-    if lora:
-        loss=loss + 0.0*(x.float32().sum()*0)  # keep graph; adapter unused in toy fwd
     opt.step(loss); jt.sync_all(True)
     return nparams
 
 if __name__=="__main__":
     L,H,E,B,T = [int(a) for a in sys.argv[1:6]]
     dtype = sys.argv[6] if len(sys.argv)>6 else "float32"
-    try:
-        n=try_train(L,H,E,B,T,dtype=dtype)
-        print(f"OK L={L} H={H} E={E} B={B} T={T} dt={dtype} params={n/1e6:.0f}M", flush=True)
-    except Exception as e:
-        print(f"OOM/ERR L={L} H={H} E={E} B={B} T={T} dt={dtype}: {repr(e)[:80]}", flush=True)
+    n=try_train(L,H,E,B,T,dtype=dtype)
+    print(f"OK L={L} H={H} E={E} B={B} T={T} dt={dtype} params={n/1e6:.0f}M", flush=True)

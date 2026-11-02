@@ -1,5 +1,6 @@
 """Fixed official Diffusers payload and actual-process installation authority."""
 
+import ast
 import hashlib
 from importlib import metadata
 from pathlib import Path
@@ -82,8 +83,24 @@ def framework_snapshot(root, *, baseline=None):
 
     root = Path(root)
     result = component_snapshot(root, baseline=baseline)
+    gate = 'tools/run_diffusers_gate.py'
+    gate_bytes = (subprocess.check_output(['git', '-C', str(root), 'show', baseline + ':' + gate])
+                  if baseline is not None else (root / gate).read_bytes())
+    # Resolve the dependency from the selected consumer, never from files that
+    # happen to exist in today's checkout. Older gates loaded the TF launcher;
+    # extracted gates load the shared environment module instead.
+    candidates = {'tools/run_transformers_gate.py', 'tools/ecosystem_environment.py'}
+    dependencies = {node.value for node in ast.walk(ast.parse(gate_bytes, filename=gate))
+                    if isinstance(node, ast.Constant) and isinstance(node.value, str)
+                    and node.value in candidates}
+    require(len(dependencies) == 1, 'Unknown or ambiguous Diffusers environment dependency')
+    dependency = dependencies.pop()
+    selection = (['ls-files', '--', dependency] if baseline is None else
+                 ['ls-tree', '-r', '--name-only', baseline, '--', dependency])
+    require(subprocess.check_output(['git', '-C', str(root), *selection], text=True).strip() == dependency,
+            'Diffusers environment dependency is absent from the selected source inventory')
     for name in ('agent/skills/torch-compat-repo-runbook/scripts/_diffusers_installation.py',
-                 'tools/run_diffusers_gate.py', 'tools/run_transformers_gate.py'):
+                 gate, dependency):
         data = (subprocess.check_output(['git', '-C', str(root), 'show', baseline + ':' + name])
                 if baseline is not None else (root / name).read_bytes())
         result[name] = hashlib.sha256(data).hexdigest()
@@ -98,6 +115,6 @@ def validate_measurement_source(value, baseline):
 
 
 def validate_runtime_metadata(value, baseline, expected_platform=None):
-    from _metric_td_installation import validate_runtime_metadata as component_runtime
+    from _component_runtime import validate_runtime_metadata as component_runtime
 
     component_runtime(value, baseline, expected_platform, source_validator=validate_measurement_source)

@@ -262,11 +262,8 @@ network 与 manual 测试要在模块 docstring 里说明其外部要求。
 | --- | --- | --- |
 | `JITTOR_TEST_IMAGENET_TRAIN` | ImageNet 布局的训练目录（每类一个子目录）。`tests/data/test_dataset.py` 用它验证多 worker `Dataset` 与 `num_workers=0` 的逐 batch 一致；`tests/data/test_image_folder.py` 再加上可选的 `torch`/`torchvision`，把 Jittor 的 `ImageFolder` 与 `torchvision` 的对齐 | 整个用例类 skip，reason 指名该变量 |
 | `REAL_TORCH_SITE` | 进程内的独立 PyTorch oracle（见上文"进程模式隔离"） | 跳过可选的 PyTorch 对比；**已部署的 shim 不顶替它** |
-| `QWEN3_0_6B` | `tests/backends/acl/manual/xcheck/qwen_logits.py` 的 Qwen3-0.6B checkpoint 目录。该脚本在真实 torch 与 Jittor shim 下各 dump 一次下一个 token 的 logits，再由 `compare.py` 对位 | 脚本直接报 `KeyError` 退出——它是 `manual`，不由门禁调度 |
 
-`tests/backends/acl/manual/` 下的脚本（GPT-2 的前向/梯度对位、Qwen3 的 logits 对位）
-需要真实昇腾设备，**手动运行**，用法与已验证的结果见该目录的 README；设备侧的配置见
-[昇腾 910B 指南](../guides/ascend-910b.md)。
+原生 GPT 前向/梯度探针移至 `tools/probes/acl/`，需要手动配置真实设备。Qwen3 专属探针移至 [jittor-transformers 测试文档](https://github.com/JittorEcosystem/jittor-transformers/blob/main/docs/testing.md)，按其固定版本与显式模型参数运行。设备配置见 [昇腾 910B 指南](../guides/ascend-910b.md)。迁移不构成新的硬件验收。
 
 ## 维护者探针
 

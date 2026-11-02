@@ -15,6 +15,20 @@ class TestPackagingStructure(unittest.TestCase):
         if not cls.pyproject_path.is_file():
             raise unittest.SkipTest("packaging metadata requires a source checkout")
 
+    def test_notebook_container_copies_every_runtime_resource_root(self):
+        # Core package-data maps resources outside python/. A pip install can
+        # otherwise succeed while the installed JIT compiler lacks its sources.
+        spec = importlib.util.spec_from_file_location(
+            "manifest_container_contract", self.repo_root / "tools/build/generate_manifest.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        roots = {Path(path).parts[0] for path in module.runtime_resources(self.repo_root)}
+        copied = set()
+        for line in (self.repo_root / "Dockerfile").read_text().splitlines():
+            if line.startswith("COPY "):
+                copied.update(line.split()[1:-1])
+        self.assertFalse(roots - copied, "Docker build omits runtime resource roots")
+
     def test_find_packages_matches_every_regular_package(self):
         from setuptools import find_packages
 

@@ -11,9 +11,11 @@
 | [jittor-tensordict](https://github.com/JittorEcosystem/jittor-tensordict) | `jittor_tensordict` |
 | [jittor-verl](https://github.com/JittorEcosystem/jittor-verl) | `jittor_verl` |
 | [jittor-deepspeed](https://github.com/JittorEcosystem/jittor-deepspeed) | `jittor_deepspeed` |
+| [jittor-trl](https://github.com/JittorEcosystem/jittor-trl) | `jittor_trl` |
+| [jittor-ms-swift](https://github.com/JittorEcosystem/jittor-ms-swift) | `jittor_ms_swift` |
 | [jittor-vllm](https://github.com/JittorEcosystem/jittor-vllm) | `jittor_vllm` |
 
-在相应仓库中按其快速开始文档安装。每个项目独立固定上游版本，使用 `jittor.module_patches` 注册；仅安装所需项目即可。核心和 `jittor-compat` 不依赖 adapter 合集。
+在相应仓库中按其快速开始文档安装。每个项目独立固定上游版本；需要运行时补丁的集成使用 `jittor.module_patches` 注册，TRL 和 ms-swift 维护验证工具，不安装空补丁。仅安装所需项目即可。核心和 `jittor-compat` 不依赖 adapter 合集。
 
 通用计算问题修回 Jittor，Torch 公共语义问题修回 compat，第三方库私有行为留在对应集成仓库。设备与功能支持以各仓的实际验收记录为准。
 

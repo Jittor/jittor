@@ -262,56 +262,6 @@ def to_tensor(pic):
 pil_to_tensor = to_tensor
 
 
-def _to_jittor_array(pic):
-    """
-    Function for turning Image.Image or np.ndarray (HWC) to jt.Var (CHW).
-    Args::
-        [in] img(PIL Image.Image or np.ndarray): Input image.
-             If input type is np.ndarray, the shape should be in HWC.
-    Return:
-        [out] jt.Var in shape CHW.
-    Example::
-        
-        img = Image.open(...)
-        img_ = transform.to_tensor(img)
-    """
-    if not(F_pil._is_pil_image(pic) or _is_numpy(pic)):
-        raise TypeError(f'img should be PIL Image or ndarray. Got {type(pic)}.')
-
-    if _is_numpy(pic) and not _is_numpy_image(pic):
-        raise ValueError(f'img should be 2/3 dimensional. Got {pic.ndim} dimensions.')
-
-    if _is_numpy(pic):
-        # handle numpy array
-        if pic.ndim == 2:
-            pic = pic[:, :, None]
-
-        img = jt.array(pic.transpose((2, 0, 1)))
-        # backward compatibility
-        if _jittor_dtype_name(img.dtype) == 'uint8':
-            return img.float().divide(255)
-        else:
-            return img
-
-    # handle PIL Image
-    if pic.mode == 'I':
-        img = jt.array(np.asarray(pic, dtype=np.int32))
-    elif pic.mode == 'I;16':
-        img = jt.array(np.asarray(pic, dtype=np.int16))
-    elif pic.mode == 'F':
-        img = jt.array(np.asarray(pic, dtype=np.float32))
-    elif pic.mode == '1':
-        img = jt.array(np.asarray(pic, dtype=np.uint8) * 255, dtype='uint8')
-    else:
-        img = jt.array(np.asarray(pic, dtype=np.uint8))
-
-    # put it from HWC to CHW format
-    img = img.reshape(pic.size[1], pic.size[0], len(pic.getbands()))
-    img = img.permute((2, 0, 1))
-    if _jittor_dtype_name(img.dtype) == 'uint8':
-        return img.float().divide(255)
-    else:
-        return img
 
 def to_pil_image(pic, mode=None):
     """Convert a tensor or an ndarray to PIL Image.

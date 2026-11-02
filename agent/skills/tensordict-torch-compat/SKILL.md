@@ -98,9 +98,9 @@ collector 检查两个 trainable 参数、零 frozen、sample 梯度、完整轨
 
 ## 断点归属与旧门禁
 
-完整 CPU maintained 入口 `ecosystem_metric_tensordict_source` 同时执行 Metrics 与 TensorDict，
+完整 CPU 组件入口在独立 jittor-tensordict 仓库执行，
 保留本 case 全部 29 对数组、两个参数和 sample 梯度、seed 0/7 及三步 SGD，不接受缩减协议。
-使用 `python tools/provision_ecosystem_nightly.py --library metric_tensordict --state-root <new-external-state> --run`
+使用 `python tools/provision_component.py --jittor-source "$JITTOR_SOURCE" --state-root <new-external-state> --run`
 完整配置独立 controller/candidate/oracle 环境并通过各自 `pip check`。
 provisioner 获取真实 `v0.10.0` tag 并检查 peeled commit，不能给任意 SHA 合成版本。
 安装 proof 保留实际 pip RECORD；源码闭包必须包含已提交的维护 runner。
@@ -118,8 +118,10 @@ TensorDict 六 workers / 29 pairs、全部参数与 sample 梯度、三步 SGD �
 | `torch._C._nn._parse_to`、通用 tensor 索引/梯度语义 | `jittor.compat.torch`，先做无 TensorDict 的最小复现 |
 | native 算子或真实设备计算错误 | Jittor 核心 |
 
-私有 helper 适配由 [jittor-tensordict](https://github.com/JittorEcosystem/jittor-tensordict) 独立维护。已有 `compat/tests/torch/test_tensordict_compat.py` 是
+私有 helper 适配由 [jittor-tensordict](https://github.com/JittorEcosystem/jittor-tensordict) 独立维护。已有 [独立 CUDA 回归](https://github.com/JittorEcosystem/jittor-tensordict/blob/main/tests/test_dense_cuda.py) 是
 另一条可选 CUDA 单解释器门禁，含 CPU conversion、构造/update/index/lazy stack；它有依赖和
 设备 skip 条件。`_jittor_index_compat=True` 和 import 成功都不能替代真实行为与梯度证据。
 本轮正式双解释器 case 通过不等于旧 optional 文件已重跑。历史 constraints 导入失败已由
 真实 owner 修复和本次 CPU/CUDA 执行闭环替代；不能用旧缺包结论否认当前固定版本结果。
+
+完整组件协议已迁至 [jittor-tensordict](https://github.com/JittorEcosystem/jittor-tensordict/blob/main/docs/testing.md)，上述 `tools/provision_component.py` 命令在独立仓库执行。旧验收报告保留原始源码身份，迁移不视为重新验收。

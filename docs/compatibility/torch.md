@@ -92,13 +92,13 @@ Jittor 就把 `flags.use_cuda` 置 1。
 
 ## 数值正确性
 
-与**真实 PyTorch**用相同权重和输入对拍（`tests/backends/acl/manual/xcheck/`，
-手工运行，需要真实昇腾设备）：
+原 GPT-2 手工探针只比较 loss 和梯度范数，Qwen 探针仅保存部分 logits 摘要；
+这些结果不能证明完整前向、反向或跨后端逐位一致。原观察与证据边界保留在
+[ACL 手工探针历史记录](../results/acl-manual-probes.md)。
 
-- GPT-2 前向 + 反向与 torch 相差约 `1e-7`（CUDA）/ `1e-5`（昇腾）；
-- 真实 Qwen3-0.6B（经 transformers）产生**完全相同的 top-5 下一 token 预测**，
-  logits 相差约 `1e-4`；
-- jittor-ACL 与 jittor-CUDA 之间**逐位一致**。
+[原生诊断工具](../../tools/probes/acl/README.md)供维护者定位数值偏差；正式支持结论
+应使用同权重、同输入、同设备的独立 PyTorch 参考，比较完整输出与梯度并排除 fallback。
+Transformers 专项验收由 [Jittor Transformers](https://github.com/JittorEcosystem/jittor-transformers) 维护。
 
 ## 混合精度（bf16 / fp16）
 

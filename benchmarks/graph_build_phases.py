@@ -10,7 +10,7 @@ totals and says the split is unavailable, rather than printing zeros.
     JT_GRAPH_BUILD_PROFILE=1 JITTOR_HOME=... TMPDIR=... CUDA_VISIBLE_DEVICES=N \
     nvcc_path=/usr/local/cuda/bin/nvcc PATH=/usr/local/cuda/bin:$PATH \
     PYTHONPATH=<repo>/python taskset -c ... python \
-        tools/benchmarks/graph_build_phases.py --case unet2d --device cuda
+        benchmarks/graph_build_phases.py --case unet2d --device cuda
 
 What "building" means here: the Python calls that create the operators, with
 nothing executed.  ``--flush 0`` turns off ``auto_flush_ops`` so that no
@@ -84,8 +84,8 @@ def case_unet2d(torch, jt, device):
     This is the model the 9 ms in the plan came from
     (docs/notes/pipelined-execution.md).
     """
-    sys.path.insert(0, os.path.join(_repo_root(), "tests"))
-    from compat.torch import _ecosystem_speed
+    sys.path.insert(0, os.path.join(_repo_root(), "compat", "tests", "torch"))
+    import _ecosystem_speed
 
     builder, _ = _ecosystem_speed.CASES["large_diffusers_unet2d"]
     model, spec = builder(torch)
@@ -155,9 +155,9 @@ CASES = {
 
 
 def _repo_root():
-    # tools/benchmarks/<this file>
+    # benchmarks/<this file>
     here = os.path.dirname(os.path.abspath(__file__))
-    return os.path.dirname(os.path.dirname(here))
+    return os.path.dirname(here)
 
 
 def main():
@@ -181,8 +181,7 @@ def main():
     import jittor as jt
     print("jittor:", os.path.dirname(jt.__file__))
 
-    if options.device == "cuda":
-        jt.flags.use_cuda = 1
+    jt.flags.use_cuda = int(options.device == "cuda")
     print("has_cuda:", jt.has_cuda, "use_cuda:", jt.flags.use_cuda)
 
     factory = CASES[options.case]

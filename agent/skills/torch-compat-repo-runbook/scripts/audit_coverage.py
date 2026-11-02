@@ -55,13 +55,6 @@ def dedicated_gates(root):
         "flash-attention": ("flash-attention-training", "ecosystem_flash_attention",
                             "compat/tests/torch/test_ecosystem_flash_attention.py",
                             "test_real_flash_attention_training"),
-        "ms-swift": ("swift-trainer", "ecosystem_swift",
-                     "compat/tests/torch/test_ecosystem_swift.py",
-                     "EcosystemSwift::test_ms_swift_trainer_full_llama"),
-        "verl": ("verl-component-training", "ecosystem_verl_training",
-                 "compat/tests/torch/test_ecosystem_verl_training.py",
-                 ("EcosystemVERLTraining::test_verl_ppo_gae_vanilla",
-                  "EcosystemVERLTraining::test_verl_distillation_k3")),
         "mmengine": ("openmmlab-installed-train-step", "ecosystem_openmmlab_installed",
                      "compat/tests/torch/test_ecosystem_openmmlab_installed.py",
                      "EcosystemOpenMMLabInstalled::test_mmengine_train_step"),
@@ -129,6 +122,9 @@ def audit(root=ROOT):
         reports = ["docs/results/" + name for name in references if (root / "docs/results" / name).is_file()]
         rows.append({
             "repo": repo, "skill": skill.relative_to(root).as_posix(),
+            "external_repository": ("https://github.com/JittorEcosystem/jittor-" + repo
+                                    if repo in {"ms-swift", "verl", "transformers", "torchmetrics",
+                                                "tensordict", "vllm", "deepspeed", "trl"} else None),
             "registered_cases": direct,
             "dedicated_gates": dedicated.get(repo, []),
             "gate_cases": [{"case": name, "tests": methods[name]} for name in direct if name in methods],

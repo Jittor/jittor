@@ -84,7 +84,7 @@ def main(argv=None):
     frozen = framework_snapshot(ROOT)
     source = source_descriptor(args.checkout, args.wheel)
     args.output.mkdir(parents=True, exist_ok=True)
-    common = load('diffusers_runtime_environment', ROOT / 'tools/run_transformers_gate.py')
+    common = load('diffusers_runtime_environment', ROOT / 'tools/ecosystem_environment.py')
     verify = load('diffusers_reference_comparison', SCRIPTS / 'verify_repo.py')
     environments, wrappers = {}, {}
     for runtime, python in (('torch', args.oracle_python), ('jittor', args.candidate_python)):

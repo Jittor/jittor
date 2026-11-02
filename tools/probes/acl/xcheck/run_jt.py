@@ -2,6 +2,9 @@
 and per-name grad L2.  Usage: python run_jt.py [acl|cuda]"""
 import sys, json, math, numpy as np, jittor as jt
 backend = sys.argv[1] if len(sys.argv) > 1 else "acl"
+if backend not in ("acl", "cuda"):
+    raise ValueError("backend must be acl or cuda")
+jt.runtime.backend_fallback = "error"
 from contextlib import ExitStack as _ProcessPolicyStack
 import atexit as _process_policy_atexit
 _process_policy_scopes = _ProcessPolicyStack()

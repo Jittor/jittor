@@ -79,7 +79,7 @@ def test_invalid_or_reduced_launch_protocol_is_refused(gate, tmp_path, change):
 def test_diffusers_callback_always_uses_its_fixed_source_validator(monkeypatch):
     monkeypatch.syspath_prepend(str(SCRIPTS))
     import _diffusers_installation as diffusers
-    import _metric_td_installation as component
+    import _component_runtime as component
 
     calls = []
     monkeypatch.setattr(component, 'validate_runtime_metadata', lambda *args, **kwargs: calls.append((args, kwargs)))
@@ -96,17 +96,19 @@ def test_historical_snapshot_reads_immutable_git_tools_and_preserves_existing_cl
 
     monkeypatch.setattr(component, 'framework_snapshot', lambda *args, **kwargs: {'existing-source': 'a' * 64})
     names = ('agent/skills/torch-compat-repo-runbook/scripts/_diffusers_installation.py',
-             'tools/run_diffusers_gate.py', 'tools/run_transformers_gate.py')
+             'tools/run_diffusers_gate.py', 'tools/ecosystem_environment.py')
     subprocess.run(['git', '-C', str(tmp_path), 'init', '-q'], check=True)
+    contents = {name: 'VALUE = ' + repr(name) + '\n' for name in names}
+    contents['tools/run_diffusers_gate.py'] = "common = load('environment', ROOT / 'tools/ecosystem_environment.py')\n"
     for name in names:
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text('committed ' + name)
+        path.write_text(contents[name])
     subprocess.run(['git', '-C', str(tmp_path), 'add', *names], check=True)
     subprocess.run(['git', '-C', str(tmp_path), '-c', 'user.name=Fixture', '-c',
                     'user.email=fixture@example.invalid', 'commit', '-qm', 'fixture'], check=True)
     baseline = subprocess.check_output(['git', '-C', str(tmp_path), 'rev-parse', 'HEAD'], text=True).strip()
-    expected = {name: hashlib.sha256(('committed ' + name).encode()).hexdigest() for name in names}
+    expected = {name: hashlib.sha256(contents[name].encode()).hexdigest() for name in names}
     for name in names:
         (tmp_path / name).write_text('dirty current file')
     value = diffusers.framework_snapshot(tmp_path, baseline=baseline)

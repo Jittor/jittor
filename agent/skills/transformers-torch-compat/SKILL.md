@@ -42,24 +42,15 @@ RoPE Llama；BERT/ViT 包含 pooler。固定初始权重分别执行 seed 7/19 �
 
 ## 完整 CPU 维护门禁与 nightly
 
-`ecosystem_transformers_source` 保留全部十场景（原九模型场景及 32768-token
-Longformer）、base、seed 7/19 扰动和三步 SGD；禁止通过 preflight 或场景子集替代。
-固定 Transformers 4.56.2 的完整官方源码/wheel、实际安装 METADATA/RECORD，
-两侧完整梯度与原数值预算沿用
-[完整来源重测](../../../docs/results/2026-10-16-transformers-main-source-training.md)。
+完整十场景协议（原九模型及 32768-token Longformer）迁至
+[jittor-transformers 历史协议](https://github.com/JittorEcosystem/jittor-transformers/blob/main/docs/historical-replay.md)。
+该协议保留 Transformers 4.56.2、base、seed 7/19 扰动、三步 SGD 和原始数值预算，
+与独立仓默认 5.9.0 官方测试分开。按独立仓说明运行 `tools/provision_replay.py`，
+其 nightly 在独立仓执行。安装身份、完整梯度与原预算不得用 preflight 或场景子集替代。
 
-生态 workflow 的 `maintained-cpu` 矩阵通过下列入口准备三个全新解释器，
-为候选与独立 oracle 安装完整依赖并分别执行 `pip check`，再调用该完整 nox session：
-
-```bash
-<healthy-python-3.11> tools/provision_ecosystem_nightly.py \
-  --library transformers --state-root "$JITTOR_LAB_ROOT/_state/transformers-nightly/run" --run
-```
-
-CPU 轨显式隐藏 CUDA、固定真实 Torch 2.11.0+cpu；安装包/编译缓存和原始阶段产物
-都在独立 state 下，单测不复用该编译缓存。保留 command、失败日志、完整安装锁及
-数值产物。本地运行和 workflow 配置不能证明 GitHub scheduled 作业已实际执行；
-不新增 CUDA、性能等级、完整 Trainer 或任意 checkpoint 的支持结论。
+旧验收仍对应 [原始来源重测](../../../docs/results/2026-10-16-transformers-main-source-training.md)
+记录的提交、版本和设备。迁移后的宿主测试不是重新执行完整数值协议；不新增硬件、性能、
+完整 Trainer 或任意 checkpoint 的支持结论。
 
 ## 历史 H3 两侧环境
 

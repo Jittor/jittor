@@ -93,13 +93,16 @@ code like `os.path.dirname(torch.__file__)` gets a real directory.
 
 ## Numerical correctness
 
-Cross-checked against **real PyTorch** with identical weights and inputs (`tests/backends/acl/manual/xcheck/`,
-run manually, requires a real Ascend device):
+The old GPT-2 manual probe compared loss and gradient norms; the Qwen probe saved
+only selected logit summaries. These cannot establish full forward/backward or
+bitwise cross-backend equivalence. Observations and evidence limits are retained
+in the [archived ACL probe report](../results/acl-manual-probes.en.md).
 
-- GPT-2 forward + backward differs from torch by about `1e-7` (CUDA) / `1e-5` (Ascend);
-- real Qwen3-0.6B (through transformers) produces **exactly the same top-5 next-token predictions**, with logits
-  differing by about `1e-4`;
-- jittor-ACL and jittor-CUDA are **bitwise identical**.
+The [native diagnostic tools](../../tools/probes/acl/README.md) help maintainers
+locate drift. Acceptance requires identical weights and inputs, an independent
+same-device PyTorch reference, full output/gradient comparisons, and no fallback.
+Transformers-specific acceptance is maintained in
+[Jittor Transformers](https://github.com/JittorEcosystem/jittor-transformers).
 
 ## Mixed precision (bf16 / fp16)
 

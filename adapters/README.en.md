@@ -11,9 +11,11 @@ Library-specific implementations, tests, tutorials and support records live in i
 | [jittor-tensordict](https://github.com/JittorEcosystem/jittor-tensordict) | `jittor_tensordict` |
 | [jittor-verl](https://github.com/JittorEcosystem/jittor-verl) | `jittor_verl` |
 | [jittor-deepspeed](https://github.com/JittorEcosystem/jittor-deepspeed) | `jittor_deepspeed` |
+| [jittor-trl](https://github.com/JittorEcosystem/jittor-trl) | `jittor_trl` |
+| [jittor-ms-swift](https://github.com/JittorEcosystem/jittor-ms-swift) | `jittor_ms_swift` |
 | [jittor-vllm](https://github.com/JittorEcosystem/jittor-vllm) | `jittor_vllm` |
 
-Follow each repository's quickstart to install it. Each project pins its upstream versions and registers through `jittor.module_patches`; install only the projects you need. Core and `jittor-compat` do not depend on an adapter bundle.
+Follow each repository's quickstart to install it. Each project pins its upstream versions. Integrations needing runtime patches register through `jittor.module_patches`; TRL and ms-swift maintain validation tools without empty patch registrations. Install only the projects you need. Core and `jittor-compat` do not depend on an adapter bundle.
 
 General computation belongs in Jittor, public Torch semantics in compat, and library-private behavior in the corresponding integration. Feature and hardware support is bounded by each repository's execution evidence.
 
