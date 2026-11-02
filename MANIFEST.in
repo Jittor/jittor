@@ -695,6 +695,8 @@ include docs/results/2026-10-29-stock-vision-ascend310p.en.md
 include docs/results/2026-10-29-stock-vision-ascend310p.md
 include docs/results/2026-10-30-vision-ascend310p-optimization.en.md
 include docs/results/2026-10-30-vision-ascend310p-optimization.md
+include docs/results/2026-11-02-vision-ascend310p-replay.en.md
+include docs/results/2026-11-02-vision-ascend310p-replay.md
 include docs/results/index.en.md
 include docs/results/index.md
 include docs/tutorials/index.en.md

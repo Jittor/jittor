@@ -15,6 +15,7 @@ history.
 ```{toctree}
 :maxdepth: 1
 
+2026-11-02-vision-ascend310p-replay.en
 2026-10-30-vision-ascend310p-optimization.en
 2026-10-29-stock-vision-ascend310p.en
 2026-10-25-recent-pr-integration.en
@@ -138,6 +139,7 @@ history.
 
 | Result | Status | Date |
 | --- | --- | --- |
+| [Ascend 310P: CPU prefixes and vision device graphs](2026-11-02-vision-ascend310p-replay.en.md) | Same-commit Swin latency falls 32.64% but Torch remains faster; measured Depth SDPA configuration 1.64× faster; RT original order unaccepted | 2026-11-02 |
 | [Ascend 310P: vision remeasurement and FP16 corrections](2026-10-30-vision-ascend310p-optimization.en.md) | No stable production speed gain; extrema and single-axis norm corrected; Conv/Swin slower, RT original order unaccepted | 2026-10-30 |
 | [Ascend 310P: four complete vision models](2026-10-29-stock-vision-ascend310p.en.md) | Classification / depth pairs pass; measured Depth configuration 1.65× faster; Swin still slower; RT-DETR ordered failure excluded | 2026-10-29 |
 | [Ascend 910B3: cold-cache startup, ACL execution and NPU gate](2026-08-28-ascend-910b-validation.en.md) | NPU gate 397 passed / 9 skipped; the capability boundaries behind the skips remain open | 2026-08-28, reviewed 2026-09-01 |

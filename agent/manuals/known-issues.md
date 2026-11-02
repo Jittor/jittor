@@ -2,7 +2,7 @@
 
 - Status: Maintained
 - Last reviewed: 2026-11-02
-- Baseline: `02b021cba3c22f7907ae283610d82fe6dd6fb4de`; per-entry verification scopes below
+- Baseline: `013bc35bdeb3d460c269c85dc9781e841731764e`; per-entry verification scopes below
 - Owner: Jittor core maintainers
 - Review when: an entry is fixed or narrowed, a strict expected failure
   XPASSes, a new defect is reproduced, or at quarterly maintenance
@@ -1230,8 +1230,9 @@ workaround.
 ## KI-DTYPE-005: CPU scalar comparisons differ at half and int64 boundaries
 
 - Severity: High (incorrect comparison masks).
-- Status: Open; observed 2026-11-02 on CPU with the scoped ne/replay changes
-  based on `d5bd7f551`. Other devices are not established by these cases.
+- Status: Open; observed 2026-11-02 on the CPU comparison paths included in
+  `013bc35bdeb3d460c269c85dc9781e841731764e`. Other devices are not established
+  by these cases.
 - Owner: dtype and Torch comparison-adapter maintainers.
 - Symptom: operator, method and function equality against a Python scalar
   return false for FP16 `[0] == 1e-12` and `[1] == (1 + 2**-11)`, where
@@ -1255,6 +1256,9 @@ workaround.
   records five public cases and all six operator/method/function spellings.
   `cpu-ne-scalar/` retains both raw candidates (178/192 exact), typed CPU and
   ambient-ACL CPU controls (210/210 exact), and the rejected timing experiment.
+  The [310P replay report](../../docs/results/2026-11-02-vision-ascend310p-replay.en.md)
+  distinguishes these scalar limits from accepted self-ne/placement fixes and
+  reports the final default-scheduling performance controls.
   A minimal CPU reproduction, with an independently installed Torch interpreter
   as the comparison, is `x=torch.tensor([1.], dtype=torch.float16, device='cpu');
   print(x.eq(1+2**-11))`.
