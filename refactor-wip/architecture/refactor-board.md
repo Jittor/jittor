@@ -1,3 +1,13 @@
+## 2026-11-03 04:22 +0800 修复 NumPy state_dict 的 CUDA 放置回归；serialization 39/39 通过
+
+上轮 installed-wheel serialization CUDA attempt-11 的 2 项失败现已拆分复核：test_load_state_dict_from_numpy_roundtrip 是真实源码问题，NumPy 值没有设备信息，转成 Var 时未继承目标模块的 frontend placement，导致 CUDA 模块仍持有 CPU weight；test_load_state_dict_assign_does_not_mutate_shared_source 是测试顺序造成的误报，原测试在逐个检查共享别名时先对前一个别名调用 .numpy()，该 host readback 可迁移共享存储，后续 location 断言才看到 CPU。原始 attempt-11 失败记录保留，未改写。
+
+本轮在 _preserve_target_dtypes_for_load 中按 tensor_frontend(type(target), like=target) 创建源值；assign 测试改成先检查全部别名的 dtype/device/location，再进行 numpy readback。更新后的 serialization 文件在 installed wheel 的 module namespace 中注入当前 checkout helper 后执行完整 39 项：39 passed、0 failed/skip、1.94s，CPU/CUDA both_devices 分支均执行；物理 GPU0 UUID GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5 映射为 cuda:0，fallback 0→0。CUDA core build current，SHA256 前后均为 0e2fe909d3f33e27c220546693c40f27087357cefe198220f46c97f9a0353a90。wheel 本身仍是 source HEAD 35a1a7605ec475e9cbc1a9688afc299ee3bd8011 的旧包；本项验证的是当前 helper 源码覆盖运行，尚未证明新建 wheel 的打包安装路径。
+
+完整证据在 /data6/cgq/jittor-lab/_state/release-day23/20261103-main-state-dict-placement-fix-r1/attempt-02/，artifact manifest SHA256 32e1e7c8211948b5b556df0c9f9d5003d2a76cb44e6605895b20766f8b4d38f5。attempt-01 两项定向用例也通过；其外层脚本因 CRLF 退出解析有误的原日志仍保留，不作为测试失败或完整套件证据。
+
+本项仅关闭当前 serialization/state_dict 两条受影响功能路径，GPU2 未使用，不含性能/显存结论。尚待将补丁纳入新安装包并验证更广 wheel/function gate；JT portable-pickle optimizer 文件仍有 stock PyTorch torch.load 互操作失败的独立记录。Day4–5 正式性能/显存门及更广 Day2–5 发布门仍 Not complete。
+
 ## 2026-11-03 04:10 +0800 安装 wheel serialization：CPU 全过，CUDA 发现两项放置失败
 
 current installed main wheel（source HEAD 35a1a7605ec475e9cbc1a9688afc299ee3bd8011，wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69）上的序列化/state_dict 套件已分别完成 CPU 与 CUDA 执行。CPU 39/39 通过，fallback 0→0；CUDA 为 37 通过、2 失败，fallback 0→0，失败仅在 CUDA 放置分支：assign=True 状态替换后 location 报 cpu；NumPy state_dict 加载后 Conv2d 参数仍在 CPU，CUDA 输入触发 mixed-placement 错误。CUDA core SHA256 0e2fe909d3f33e27c220546693c40f27087357cefe198220f46c97f9a0353a90 前后不变，物理 GPU0 用于功能验证，GPU2 未暴露；不构成性能/显存结果。

@@ -1,3 +1,15 @@
+## 2026-11-03 04:22 +0800 修复 serialization CUDA state_dict 放置缺陷；完整套件通过
+
+对 attempt-11 的两项 CUDA failure 做了根因区分并修复。真实缺陷在 _preserve_target_dtypes_for_load：NumPy checkpoint value 不携带 device，先前直接 _state_source_to_var(value) 会按 FollowRuntime 产生 host tensor。现在构造该源 Var 时进入 tensor_frontend(type(target), like=target)，使后续 dtype 保持和 load 使用目标参数的 frontend placement。对应测试也补充了真实 CUDA 模块从 NumPy state_dict 恢复后进行 Conv2d 前向的验证。
+
+另一项 assign=True failure 是 observation-order 假红：测试先检查一个共享别名、再调用该别名 .numpy()，然后才检查其余别名；host readback 对共享 storage 的迁移影响了后续 location 观察。现改为先对全部 aliases 同步并检查 dtype/device/location，再读取 numpy 值。没有改 assign 产品逻辑。旧 attempt-11 原始 37 passed/2 failed 仍保留，不回写成 PASS；其中第二项不作为 assign 产品缺陷。
+
+验证绑定 checkout HEAD 53a702c3a8af127760b38885533a3e8794228740 的当前文件：module_methods.py SHA256 090b8ed3d9f1ff31719f2e34d03944ee22d8f3457389843c5a211ef35afb9f75，测试 SHA256 f49aab9eb248569825bb1446a6967538f96a934b76493447c2b6c2cd6cc94a99。使用隔离安装 main wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69 与既有 CUDA core；runner 将仅此最新 helper 函数体注入 wheel 的 module globals，其余 runtime/module 和 core 都来自隔离安装包。全文件收集 39 项，实跑 39 passed、0 failed、0 skipped，1.94 秒；测试 helper 同时执行 CPU 与 CUDA 分支，CUDA 设备为物理 GPU0 / 进程内 cuda:0，fallback 0→0，core build current，SHA256 前后不变 0e2fe909d3f33e27c220546693c40f27087357cefe198220f46c97f9a0353a90。本次不是新 wheel 构建验收，因而明确作为源码 helper 覆盖的 installed-wheel functional check。
+
+复验材料：/data6/cgq/jittor-lab/_state/release-day23/20261103-main-state-dict-placement-fix-r1/attempt-02/，manifest SHA256 32e1e7c8211948b5b556df0c9f9d5003d2a76cb44e6605895b20766f8b4d38f5。attempt-01 的两个定向用例为 2 passed；attempt-01 外层 shell 因 carriage-return exit 参数问题报告非零，但其 pytest/runner rc 均为 0，原日志一并保留，不影响 attempt-02 完整套件的独立结果。
+
+该功能修复不构成性能/显存结果，也不关闭更广 Day2–5。待办继续包括将源码补丁纳入新 wheel 并验证安装态、JT portable-pickle optimizer 对 stock PyTorch 的互操作、完整 wheel migration/function gate，以及 Day4–5 的独占稳定窗口。Day4–5 仍需至少三轮交替、每轮每侧至少十个热样本，并报告 median/p95/离散度、加载/首步/热态耗时和 allocator/NVML 峰值；共享 GPU0 的此次运行只作 correctness evidence。
+
 ## 2026-11-03 04:10 +0800 安装 wheel serialization CPU/CUDA 双端验收：CPU 通过，CUDA 定位到两项设备放置缺陷
 
 对 current installed main wheel 执行 compat/tests/torch/test_torch_compat_serialize.py，测试 SHA256 aa3768dc616f00d1f0bb0e58f6c4ab30d2bee92bc7890bf1e6e183365db2ca02；wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69，输入源码 HEAD 35a1a7605ec475e9cbc1a9688afc299ee3bd8011。测试时 live HEAD 为 ae6ceab4255b8a336d23633206b9d87a1794e834，origin/cgq_transformers 为 ae6ceab4255b8a336d23633206b9d87a1794e834，origin/2.0-refactor 为 a3783a04a0fdf921abfe1e3c0d7c93256ee70bd3。CPU attempt-07 执行 39 passed、0 failed/skip、15.08 秒，fallback 0→0，CPU core SHA256 13ee2862304d354a20a9fefbe51dd8daee46066084b6c21f9385ffcfa7adf991 前后未变。外层 Windows/PowerShell 展示命令在读取回执时因 carriage-return 路径解析返回非零，但 runner 与 pytest 原始回执均 rc=0；纠正记录位于 attempt-07-cpu-serialization/audit-correction.json。

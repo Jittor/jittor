@@ -455,13 +455,17 @@ class TestStateDict(Base):
             self.assertTrue(model.p2.requires_grad, dev)
             self.assertFalse(model.buf.requires_grad, dev)
             self.assertEqual([name for name, _ in model.named_buffers()], ["buf"])
-            for value in (model.p1, model.p2, model.buf):
+            values = (model.p1, model.p2, model.buf)
+            # Check all shared aliases before numpy readback: producing the
+            # first array may migrate their common storage to the host.
+            for value in values:
                 value.sync()
                 self.assertEqual(value.dtype, source.dtype, dev)
                 self.assertEqual(value.device.type, dev, dev)
                 self.assertEqual(value.is_cuda, dev == "cuda", dev)
                 self.assertEqual(
                     value.location(), "device" if dev == "cuda" else "cpu", dev)
+            for value in values:
                 self.ac(value.numpy(), [4.0, 5.0], atol=0, rtol=0, msg=dev)
 
         both_devices(body)

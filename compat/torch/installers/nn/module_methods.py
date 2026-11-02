@@ -424,7 +424,12 @@ def _preserve_target_dtypes_for_load(root, state_dict):
         target = _find_state_target(root, key)
         if not isinstance(target, jt.Var):
             continue
-        src = _state_source_to_var(value)
+        # NumPy checkpoint values carry no device. Build them in the target's
+        # frontend placement so loading into a CUDA module does not create a
+        # FollowRuntime host tensor.
+        from ...frontend import tensor_frontend
+        with tensor_frontend(type(target), like=target):
+            src = _state_source_to_var(value)
         if not isinstance(src, jt.Var):
             continue
         if src.shape != target.shape:

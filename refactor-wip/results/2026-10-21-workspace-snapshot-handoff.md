@@ -1,3 +1,13 @@
+## 2026-11-03 04:22 +0800 Handoff：serialization CUDA state_dict 修复后 39 项通过
+
+已修改 /home/cgq/jittor 当前 checkout 中的 compat/torch/installers/nn/module_methods.py 与 compat/tests/torch/test_torch_compat_serialize.py。NumPy state_dict 恢复现在在目标 module frontend placement 下构造 source Var；assign alias 测试会先验证所有共享别名的位置，再做 .numpy() host readback，避免读回改变后续断言观察的 storage placement。
+
+完整序列化套件 attempt-02：39 passed、0 failed/skip、1.94s，实际覆盖 CPU 与 CUDA，fallback 0→0；CUDA 为物理 GPU0 UUID GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5 / 进程内 cuda:0，core build current 且 SHA256 前后同为 0e2fe909d3f33e27c220546693c40f27087357cefe198220f46c97f9a0353a90。helper 和 test 的 source SHA256 分别为 090b8ed3d9f1ff31719f2e34d03944ee22d8f3457389843c5a211ef35afb9f75、f49aab9eb248569825bb1446a6967538f96a934b76493447c2b6c2cd6cc94a99。由于复用先前 wheel/core，runner 仅将当前 helper 函数体注入安装态 module namespace；该结果不宣称新 wheel 已打包。证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261103-main-state-dict-placement-fix-r1/attempt-02/，artifact manifest SHA256 32e1e7c8211948b5b556df0c9f9d5003d2a76cb44e6605895b20766f8b4d38f5。
+
+attempt-01 的两个定向用例 2 passed；其外层 launcher 在 pytest 后因 CRLF 参数解析报错，原始日志保留。attempt-02 使用修正的 LF launcher，收集与 runner 均 rc=0。此前 attempt-11 的 37/39 实际结果不重写；assign 一项审计为测试读回顺序假红，NumPy placement 一项为本次修复的真实缺陷。
+
+当前 Day2–5 仍未完成：优先把补丁装入新的 wheel identity 并继续更广功能/互操作发布门；Day4–5 性能/显存验收等待管理员配置 cgq Slurm association 与可核验的独占 GPU 窗口。此轮没有使用 GPU2，也没有产生性能或显存结论。
+
 ## 2026-11-03 04:10 +0800 Handoff：serialization CPU 39/39 通过；CUDA 发现两项 state_dict 放置失败
 
 current installed main wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69，源码 HEAD 35a1a7605ec475e9cbc1a9688afc299ee3bd8011，测试 SHA256 aa3768dc616f00d1f0bb0e58f6c4ab30d2bee92bc7890bf1e6e183365db2ca02。CPU 完整套件 39 passed、fallback 0→0；CUDA 在物理 GPU0 完成 37 passed、2 failed、fallback 0→0，core SHA256 前后相同，GPU2 未用。两项 CUDA 失败分别是 assign=True 替换后的 location 显示 CPU，以及 NumPy state_dict restore 后 Conv2d weight 留在 CPU、与 CUDA 输入混放。具体断言和栈保存在 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-serialization-cuda-r1/attempt-11-cuda-libstdcpp-serialization/stdout.log。
