@@ -1,3 +1,13 @@
+## 2026-11-02 19:28 +0800 CPU BF16 梯度/moment 跟踪仍未进入测试体；Day2–5 未完成
+
+继续沿用 `/home/cgq/jittor`，HEAD `bbe0d7e527e4631df95449d811208ac584afb127`，origin/cgq_transformers `e5cffe1ae60c418f53c5bb1dca9182577fd2b81`，ahead/behind `243/0`。实验前后仓库均为既有 102 项 dirty/untracked，porcelain SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`，tracked diff SHA256 `3ef743580bb7db38dbc9197f6f90e3182956d2bc29a55bce29c7eeea1bea6100`，index 为空；临时跟踪测试已移入证据包，源码工作区回到原状态。
+
+CPU BF16 AdamW trace attempt-01 在隔离 cache 重建 `jit_utils` 后按 Jittor 提示退出 3，测试体未运行。依提示只重启一次的 attempt-02 仍未进入测试体：约 56 秒后发现本次隔离 cache 要新编译 Jittor core 的 `pyjt_jit_tests.cc`，触发预设的提前停止条件；终止本次 pytest/编译进程后记录 exit 143。该运行 `CUDA_VISIBLE_DEVICES` 为空、测试选择为 CPU；没有使用 GPU。隔离 cache 文件数由 15,722 增至 15,724，新增 2、删除 0；含部分编译产物，保留且不复用。工作区没有留下新增测试文件。
+
+只读源码检查确认 restore 按参数逐一映射 optimizer state，BF16 AdamW moment 使用 FP32；当前 5/6 结果仍只说明恢复前 moment 相同、更新后参数比较通过、`exp_avg_sq` 分叉。因本次没有记录到梯度，根因仍无法区分梯度路径与二阶矩更新路径；没有改实现或放宽断言。
+
+完整证据包：`/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-cpu-bf16-trace-nox-r1-prepared/`。artifact-files 清单 SHA256 `5ff466fd1029665f3fc3a5abc2a77e33b5efd6e2519c034dd80074b24850a76a`；attempt-02 log SHA256 `87182eeb675926bdee72e448495fc48af97a26e4aca77b7bf7533dc1ffe2a5ff`，exit receipt SHA256 `9d9b18720961e9b4689fd763b85e7b6f36160ccd3a8a1c9ddc5103bb0f66c396`。GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 仍由外部 PID `3037196`、`3164740`、`1070731`、`1124222` 占用，使用 45,880 MiB、utilization 100%；没有触碰这些进程。下一步需先取得与当前源码匹配的预编译 CPU runtime/cache，再运行同一有界梯度/state trace。正式 Day4–5 GPU2 测量仍等管理员添加 cgq Slurm association、恢复节点并提供可验证独占租约；overall Day2–5 **Not complete**。
+
 ## 2026-11-02 19:12 +0800 CPU BF16 差异跟踪准备未进入诊断脚本
 
 针对上一条 CPU AdamW BF16 恢复后第二矩差异，准备了只在 CPU 上记录连续训练/恢复后梯度与 moment 的差分脚本。源码绑定 HEAD 64ac182d93d174dc4872a1ce4b8ea3210e116bc0、origin/cgq_transformers e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，既有 tracked diff SHA256 3ef743580bb7db38dbc9197f6f90e3182956d2bc29a55bce29c7eeea1bea6100，目标测试文件 SHA256 c9ff7be24a6dd0e4b5e0300f262d1f6addde39f0f2da0205d3171d50bef0cbfd。CUDA_VISIBLE_DEVICES 设为空；diagnostic 未触碰 GPU。

@@ -1,3 +1,9 @@
+## 2026-11-02 19:28 +0800 Handoff：CPU BF16 trace 因 core 编译停止；等待匹配预编译 runtime/cache
+
+沿用 `/home/cgq/jittor`，HEAD `bbe0d7e527e4631df95449d811208ac584afb127`，origin `e5cffe1ae60c418f53c5bb1dca9182577fd2b81`（ahead/behind 243/0）。本轮只读 optimizer restore/AdamW 路径；现有证据不足以解释 CPU BF16 `exp_avg_sq` 分叉，未改源码或阈值。attempt-01 因 `jit_utils` rebuild exit 3；依提示的一次 attempt-02 因新 core 编译触发预算停止、exit 143，trace 函数未运行。隔离证据包 `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-cpu-bf16-trace-nox-r1-prepared/`，manifest SHA256 `5ff466fd1029665f3fc3a5abc2a77e33b5efd6e2519c034dd80074b24850a76a`。结束后工作区恢复 102 项 dirty/untracked 基线，porcelain SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`、tracked diff SHA256 `3ef743580bb7db38dbc9197f6f90e3182956d2bc29a55bce29c7eeea1bea6100`。
+
+后续先取得与源码匹配的预编译 CPU runtime/cache，再继续这一项差分诊断。GPU2 正式 Day4–5 性能/显存 suite 仍等待管理员补 cgq Slurm association、节点恢复和可验证独占租约；不得将整体 Day2–5 标成完成。
+
 ## 2026-11-02 19:12 +0800 Handoff：CPU BF16 跟踪未启动，需预配 CPU runtime/cache
 
 为定位 CPU BF16 AdamW 恢复后的第二矩差异，准备了更新前梯度和更新后 moment 的跟踪脚本。三次启动均未进入脚本：两次触发 227/228 项 Jittor core 冷编译并在预算内停止，一次停在 jit_utils rebuild 提示。日志与隔离 cache 变更均保留，GPU 未被该诊断使用。证据目录为 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-cpu-bf16-state-transition-r1-prepared/，attempt-03 log SHA256 fe59919cb64cd1a888a58b2d5eda7c5c90da16c1864d033e760cc2f4c3ecf0a1。下一步应使用预配 CPU runtime/cache 再执行一次有界差分诊断。

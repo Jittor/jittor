@@ -1,3 +1,9 @@
+## 2026-11-02 19:28 +0800 CPU BF16 restore discrepancy 仍未定位；Day2–5 未完成
+
+按上一轮提示重启了 CPU BF16 梯度/moment trace。attempt-01 在 `jit_utils` rebuild 后 exit 3；attempt-02 进入新 Jittor core 编译并按预算提前停止、exit 143，两个 attempt 都没有执行测试体。证据包 `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-cpu-bf16-trace-nox-r1-prepared/` 的 manifest SHA256 `5ff466fd1029665f3fc3a5abc2a77e33b5efd6e2519c034dd80074b24850a76a`。临时脚本已移出仓库，102 项既有工作区指纹与 tracked diff 未变。源码检查没有足够证据判定梯度或 moment 更新根因，也没有源码修复。
+
+下一步使用匹配 current source 的预编译 CPU runtime/cache 再做有界 trace；不为此重复冷编译。GPU2 仍为外部负载，正式 Day4–5 要等 cgq association、节点恢复和可核验 GRES/device-cgroup 独占租约。overall release **Not complete**。
+
 ## 2026-11-02 19:12 +0800 CPU BF16 差分诊断启动受限；Day2–5 仍未完成
 
 对 19:00 新发现的 CPU BF16 AdamW state 差异准备了梯度/moment 跟踪脚本，但三次启动都停在 Jittor core/jit_utils 初始化，未执行诊断代码。两次 core 编译在 120 秒预算内不能完成，已停止并保留日志；一次命中 jit_utils rebuild 提示后保留原件。诊断使用空 CUDA_VISIBLE_DEVICES，没有触碰 GPU。隔离 cache 15,722→15,966 项，新增244、删除0、153项哈希变化。证据包见 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-cpu-bf16-state-transition-r1-prepared/，attempt-03 log SHA256 fe59919cb64cd1a888a58b2d5eda7c5c90da16c1864d033e760cc2f4c3ecf0a1。
