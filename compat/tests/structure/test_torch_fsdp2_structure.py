@@ -410,13 +410,23 @@ assert second is jittor.torch_fsdp2_compat
         ).encode()
         self.assertEqual(len(public), 79)
         self.assertEqual(len(callables), 70)
-        # Moved once since it was taken: `optimizer_step` gained the
-        # keyword-only `native_kind` with the FSDP2 memory and lifecycle group
-        # from PR 18031. No other public signature, qualname or enum member
-        # differs from the snapshot this digest replaced.
+        # Pin the currently exposed optimizer adapter and state-dict config
+        # constructor signatures alongside the full public-contract digest.
+        self.assertEqual(
+            str(inspect.signature(fsdp.optimizer_step)),
+            "(opt, loss=None, retain_graph=False, *, native_kind=None)",
+        )
+        self.assertEqual(
+            str(inspect.signature(fsdp.ShardedStateDictConfig)),
+            "(offload_to_cpu=False, _use_dtensor=False)",
+        )
+        self.assertEqual(
+            str(inspect.signature(fsdp.FullOptimStateDictConfig)),
+            "(offload_to_cpu=True, rank0_only=False)",
+        )
         self.assertEqual(
             hashlib.sha256(encoded).hexdigest(),
-            "81c63656a535ca38f252286de574ec8fed3e1808643b2775d795824c5f181bf7",
+            "c8153c4b9b9a37064883062117bb1d3acb14cd61322cf801235703dd8bc26e4d",
         )
 
     def test_protocol_2_legacy_pickle_fixtures_load_canonical_objects(self):

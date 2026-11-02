@@ -5,6 +5,7 @@ the native backend's function, executed under the frontend's result-type and
 autograd policy. Native-only utilities are not exposed through missing reads.
 """
 import numbers
+from contextlib import nullcontext
 
 from .api_delegates import bind_delegates
 from .context import get_install_context
@@ -56,6 +57,25 @@ class NativeOperation:
     #: 5x3 input answered with a (5,3) ``U`` where torch and numpy both give
     #: (5,5) -- a quietly different answer, not an error.
     _TORCH_DEFAULTS = {"linalg.svd": {"full_matrices": True}}
+    _AUTOMIXED_PASSTHROUGH = frozenset(
+        name for name in _NATIVE_NAMES
+        if name not in ("matmul", "bmm", "baddbmm", "einsum"))
+
+    @staticmethod
+    def _first_var(value, var_type):
+        if isinstance(value, var_type):
+            return value
+        if isinstance(value, (tuple, list)):
+            for item in value:
+                found = NativeOperation._first_var(item, var_type)
+                if found is not None:
+                    return found
+        if isinstance(value, dict):
+            for item in value.values():
+                found = NativeOperation._first_var(item, var_type)
+                if found is not None:
+                    return found
+        return None
 
     def __call__(self, *args, **kwargs):
         import jittor
@@ -70,12 +90,28 @@ class NativeOperation:
         if self._operation_key in ("fft.fftfreq", "fft.rfftfreq"):
             kwargs = dict(kwargs)
             device = kwargs.pop("device", None)
-        with tensor_frontend(context.state["Var"], device=device):
+        like = self._first_var(args, context.native_backend.Var)
+        with tensor_frontend(context.state["Var"], device=device, like=like,
+                             default_placement=False if like is not None else True):
             if self._operation_key in ("div", "divide"):
                 return _torch_div(context, *args, **kwargs)
             if isinstance(implementation, type) and issubclass(implementation, context.native_backend.Function):
                 implementation = implementation()
-            return implementation(*args, **kwargs)
+            if self._operation_key == "baddbmm":
+                from .amp import _autocast_cast_inputs
+                values = list(args) + list(kwargs.values())
+                cast_values = _autocast_cast_inputs(*values)
+                args = tuple(cast_values[:len(args)])
+                kwargs = dict(zip(kwargs, cast_values[len(args):]))
+            if self._operation_key in self._AUTOMIXED_PASSTHROUGH:
+                from .amp import autocast_any_enabled
+                scope = (jittor.flag_scope(amp_reg=0)
+                         if autocast_any_enabled() else nullcontext())
+                with scope:
+                    return implementation(*args, **kwargs)
+            from .amp import _autocast_scope_for_inputs
+            with _autocast_scope_for_inputs(*args, *kwargs.values()):
+                return implementation(*args, **kwargs)
 
     def __reduce__(self):
         return operation, (self._operation_key,)

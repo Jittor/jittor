@@ -252,6 +252,33 @@ class TestTorchHFCudaDevice(unittest.TestCase):
         self.assertIsNot(meta, cpu)
         self.assertFalse(cpu.is_meta)
 
+    def test_explicit_meta_factory_rejects_materialization_without_checkpoint_values(self):
+        placeholder = torch.empty((2, 3), device="meta", requires_grad=True)
+        self.assertTrue(placeholder.is_meta)
+        self.assertEqual(placeholder.device.type, "meta")
+        self.assertEqual(tuple(placeholder.shape), (2, 3))
+        self.assertTrue(placeholder.requires_grad)
+        for conversion in (
+            lambda: placeholder.to("cpu"),
+            lambda: placeholder.cpu(),
+            lambda: placeholder.to("cuda"),
+            lambda: placeholder.numpy(),
+            lambda: placeholder.tolist(),
+        ):
+            with self.assertRaisesRegex(NotImplementedError, "Cannot copy out of meta"):
+                conversion()
+        scalar_placeholder = torch.empty((1,), dtype=torch.int64, device="meta")
+        for conversion in (
+            scalar_placeholder.item,
+            lambda: int(scalar_placeholder),
+            lambda: float(scalar_placeholder),
+            lambda: bool(scalar_placeholder),
+            lambda: format(scalar_placeholder, "d"),
+        ):
+            with self.assertRaisesRegex(NotImplementedError, "Cannot copy out of meta"):
+                conversion()
+        self.assertTrue(placeholder.is_meta)
+
     def test_legacy_tensor_data_constructor_defaults_to_cpu(self):
         for data in ([1.0, 2.0, 3.0], np.array([1.0, 2.0, 3.0], dtype=np.float64)):
             with self.subTest(data_type=type(data).__name__):

@@ -1,3 +1,26 @@
+## 2026-11-03 01:33 +0800 当前工作区 CPU 结构发布门通过；Day2–5 仍开放
+
+记录时，主工作区位于 `/home/cgq/jittor`，分支 `integrate/cgq-transformers-native-multicard-target`，HEAD `4291227c47060c693c4d4464cc60b0521a34a5c3`，`origin/cgq_transformers` 为 `9658d690774e383fb355ca1bf808dd3cd662f929`。完整结构门绑定当时的未提交工作树；运行前 index 为空，工作树含 90 个 tracked 修改和 21 个 untracked 路径。测试后唯一源码编辑是从 `src/ops/composite/fetch_op.cc` 清除既有行尾空格，目前为 89 个 tracked 修改、21 个 untracked 路径，未暂存。
+
+current-tree CPU-only 结构发布门执行 **1,558/1,558 项，1,556 passed、2 个 accelerator-only skip、0 failed**，用时 255.82 秒。范围含 sdist/wheel 内容、`tests/structure`、`compat/tests/structure` 与 vLLM structure；使用 `JITTOR_TORCH_SHIM=1`、空 `CUDA_VISIBLE_DEVICES`、`use_cuda=0`，没有运行 GPU 功能、性能或显存测试。完整日志 SHA256 `61c16c3d57fc6f50484b3f094824f45373e91cc99c6dee4db8014cc20f518dca`；定向结构文件 28/28 通过，日志 SHA256 `8a11c4e79250c502ebf321843a523152cc023cc1d90823da8acf2f7e4096024f`。
+
+本轮修正显式 Generator 不支持时退回全局 RNG 的行为（现在 fail closed）、闭包空 cell 与参数迭代的异常处理、DDP checkpoint 阶段唯一宽异常捕获的协调重抛规则，以及全局模块表写入分类；同时更新 descriptor/MRO 和 FSDP2 当前签名结构断言。两项真实源码突变分别移除本地重抛与改名获准函数，结构规则都按预期失败；`distributed.py` 已按 SHA256 `8f557002109b7d25dbbca2dfc1637db5a39073450f4cae16725e131ee357493f` 精确恢复。工作区布局检查通过，`git diff --check` 通过。
+
+证据目录为 `/data6/cgq/jittor-lab/_state/release-day23/20261103-current-working-tree-structure-gate-r2-prepared/`，包含完整/定向日志、红队拒绝日志、源码备份和启动尝试记录。前两次错误环境启动均在测试节点完成前终止；其中一次误选 CUDA cache 编译到 95/228 后停止，另一次选到重复路径下的 CPU cache。它们不是测试结果，相关 partial cache 保留且未复用；正确 CPU cache 完整构建后用于定向和完整结构门。
+
+本轮没有关闭功能范围、真实训练或 Day4–5 性能/显存发布门。GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 仍被外部进程占用 45,880 MiB、利用率 100%；`cgq` Slurm association 等待管理员添加。正式性能/显存验收仍要求独占窗口、至少三轮 PT/JT 交替、每侧每轮至少十个热样本，并记录 median/p95/离散度、加载/首步/热态和 allocator/NVML 峰值。整体 Day2–5 **Not complete**。
+
+
+## 2026-11-03 00:57 +0800 R10 CUDA cold build 与 fill_/zero_ 正确性通过；Day2–5 仍未完成
+
+R10 隔离候选仍绑定 HEAD 765f1791f3b00f9129fb3ec6342dadf2c9dc2dbe、源码指纹 4a7b6e76e23efbd8479b807a25747eea9506023c0a632a3d22e57bec8c71edc9。CUDA 冷构建在真实 GPU0 UUID GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5 上自然完成；Jittor 进度 228/228，独立 build-stamp 审计核对 231 个编译单元（194 个仓库源码、37 个生成 cache 单元）。root terminal audit 状态通过，SHA256 fb471147ceaeae6f81ffb43ac5ac28876338642702deed3deededce4dad517f5；本阶段仅证明 CUDA build identity，不含张量、训练、性能或显存结论。R3 package manifest SHA256 82ad0778b351063dafd33a5ead2a2a4e86ef0b73a2b8b929a8467333a1915ad6。
+
+随后在单独的正确性计划中执行一个 CUDA pytest 节点：test_cuda_constant_writes_keep_explicit_cpu_and_cuda_storage，结果 **1 passed、1 executed、0 skipped**；环境要求真实 CUDA 和至少一个 accelerator test，backend_fallback=error。额外的直接 CUDA 探针验证 torch.Tensor(native_jt_var) 保留 FollowRuntime placement (-1)、storage alias 与 cuda:0 dispatch，之后 fill_ / zero_ 均保留别名并写入期望值，fallback 被禁止。设备当时存在外部负载且 GPU 利用率较高，因此这只作为正确性证据，不作性能或显存比较。该轮在已绑定冷 cache 中由 942 项增至 980 项（新增38、删除0、既有项变化0）；core、jit_utils、build stamp 哈希保持不变，JIT lock 与测试进程组结束时清空。
+
+正确性 attempt root audit SHA256 e896f7b02a6755d512f0bf7d8e288b69b9df3b2dd400002741cd5538826d5d18，状态 PASS_R10_CUDA_FOCUSED_FUNCTIONAL_AUDIT；计划 SHA256 045932ef9577f8731e7bc1cc858f2bb53666a1a9dff7c3b7ab6716b68420e8e5，package manifest SHA256 6a8518b9e68a37de76560aff6d3d9814056b449038db996ae7078be4aeb8d179。外层汇总 CLI 在写出上述通过审计后仍以非零状态结束，记录为控制器错误：它把正常 SystemExit(0) 捕获成异常；pytest 子进程 exit 0，独立 root audit 的所有终态检查通过。保留该 mismatch，不重复运行已通过的 CUDA 用例。
+
+R10 CPU focused、ten-file CPU suite、CUDA cold 与上述定向 CUDA 正确性均绑定隔离候选，不能外推为当前 /home/cgq/jittor 源码整体发布通过。GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 仍由外部作业占用，cgq Slurm association 等待管理员配置。Day4–5 正式验收仍需 GPU2 可核验独占、PT/JT 至少三轮交替且每轮每侧至少十个热样本，报告 median/p95/离散度、加载/首步/热态时间与 allocator/NVML 峰值；真实 activation recompute on/off、held-out generation 质量、wheel migration、跨框架 optimizer 序列化和更广支持矩阵仍开放。整体 Day2–5 **Not complete**。
+
 ## 2026-11-03 00:26 +0800 R10 fill_/zero_ focused CPU 通过；Day2–5 仍未完成
 
 沿 R9 隔离候选建立 R10 快照，HEAD `765f1791f3b00f9129fb3ec6342dadf2c9dc2dbe`，源码指纹 `4a7b6e76e23efbd8479b807a25747eea9506023c0a632a3d22e57bec8c71edc9`。只在候选快照中采用四个已审阅的当前源码文件：Torch factories/frontend 与 pyjt tensor frontend `.cc/.h`。R10 CPU 冷编译 227 个 TU、356.57 秒并通过身份审计；Torch focused 10 项中 9 passed、1 个 CUDA-only skip、fallback=0，两个 `fill_`/`zero_` 目标回归均通过。该证据绑定 R10，不代表当前主工作区整体验收。

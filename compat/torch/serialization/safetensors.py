@@ -6,10 +6,13 @@ from types import MappingProxyType
 import numpy as np
 import jittor as jt
 try:
-    from safetensors_rust import SafetensorError as _SafetensorError
+    from safetensors import SafetensorError as _SafetensorError
 except ImportError:
-    class _SafetensorError(ValueError):
-        pass
+    try:
+        from safetensors_rust import SafetensorError as _SafetensorError
+    except ImportError:
+        class _SafetensorError(ValueError):
+            pass
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from ..context import get_install_context, registry_for
 from ..fidelity import Fidelity, register_api_bindings
@@ -140,16 +143,16 @@ class _PySafeOpen:
 
 
 def _load_bytes(data):
-    n = struct.unpack("<Q", data[:8])[0]
-    header = json.loads(data[8:8 + n].decode("utf-8"))
-    header.pop("__metadata__", None)
-    base = 8 + n
-    out = {}
-    for key, entry in header.items():
-        start, end = entry["data_offsets"]
-        arr = _bytes_to_np(data[base + start:base + end], entry["dtype"], entry["shape"])
-        out[key] = _to_tensor(arr, entry["dtype"], "cpu")
-    return out
+    from safetensors import deserialize
+
+    # Keep malformed headers and payloads on the same validated Rust parser
+    # path as upstream instead of accepting truncated slices or leaking JSON,
+    # struct, and NumPy buffer errors.
+    return {
+        key: _to_tensor(_bytes_to_np(entry["data"], entry["dtype"], entry["shape"]),
+                        entry["dtype"], "cpu")
+        for key, entry in deserialize(data)
+    }
 
 
 def _load_file(filename, device="cpu"):

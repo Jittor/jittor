@@ -120,5 +120,12 @@ def test_tensor_uniform_honors_generator_stream():
 
     np.testing.assert_array_equal(first.numpy(), second.numpy())
     assert not np.array_equal(first.numpy(), advanced.numpy())
-    assert first_generator.get_state().numpy().tolist() == [73, 14]
-    assert second_generator.get_state().numpy().tolist() == [73, 7]
+    # The public state is now a versioned CPU uint8 payload; verify the same
+    # native counters instead of assuming the obsolete two-int encoding.
+    assert jt.Generator.get_state(first_generator)[-2:] == (73, 14)
+    assert jt.Generator.get_state(second_generator)[-2:] == (73, 7)
+    saved = first_generator.get_state()
+    expected = torch.empty(7).uniform_(-2.0, 3.0, generator=first_generator)
+    first_generator.set_state(saved)
+    replay = torch.empty(7).uniform_(-2.0, 3.0, generator=first_generator)
+    np.testing.assert_array_equal(expected.numpy(), replay.numpy())

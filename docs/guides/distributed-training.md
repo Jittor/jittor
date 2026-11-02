@@ -26,7 +26,9 @@ CUDA_VISIBLE_DEVICES=0,1 jtrun --nproc-per-node=2 examples/distributed/native_dd
 `python -m jittor.distributed.launch` 是同一 launcher 的模块入口。每个进程获得
 `RANK`、`LOCAL_RANK`、`WORLD_SIZE`、`LOCAL_WORLD_SIZE`、`MASTER_ADDR` 和 `MASTER_PORT`；
 NCCL 子进程只看见分配给自己的 GPU。launcher 在任一 rank 失败时终止其余 rank，并返回非零
-状态。
+状态。需要为一个训练作业设置墙钟上限时，可以传入 `--job-timeout=秒数`；到期后 launcher
+会停止所有 rank 进程组、清理 rendezvous 文件并返回状态码 `124`。该选项默认关闭，以免
+意外截断本来运行时间较长的训练；它与只限制 communicator rendezvous 的 `--timeout` 不同。
 
 ## 训练循环
 
@@ -62,9 +64,17 @@ buffers。构造后应保持参数对象、shape、dtype、可训练状态和设
 同步 backward 按稳定模型顺序对累积梯度求平均。NCCL 使用同 dtype、同设备的连续
 梯度块，每块通常不超过 25 MiB 且最多含 64 个参数；单个超出容量的参数单独通信。
 分组内只提交原始 sum，退出 NCCL group 并建立流依赖后才平均和拆回优化器梯度。
-这减少了逐参数通信及构图成本，当前没有计算通信重叠。`with model.no_sync():` 暂存
-本地梯度，退出后需要一次同步的 `optimizer.backward(loss)` 才能调用 `optimizer.step()`。
+当一个 NCCL DDP wrapper 的全部可训练参数由同一优化器覆盖，且没有额外的输入梯度目标时，
+同步 backward 会先完整建立反向图，再按原生梯度就绪顺序逐桶求值和提交通信，设备上的
+后续反向计算可与通信重叠；所有桶完成后才平均和发布优化器梯度。其他路径使用完整
+backward 后归约。`with model.no_sync():`
+暂存本地梯度，退出后需要一次同步的 `optimizer.backward(loss)` 才能调用 `optimizer.step()`。
 该实现每个进程只使用一张设备，不会替用户搬运模型；先把模型放到当前 rank 的设备上。
+
+桶计算在反向图建立完毕、构图临时梯度引用释放后执行，避免构图期间提前求值造成的中间
+张量存活时间延长。通信缓冲仍须保留到对应通信完成。选择 local batch 时应测量实际
+训练步的显存峰值，并同时比较吞吐；通信与计算重叠不保证所有模型都更快。
+`retain_graph=True` 会保留计算图，应单独测量显存。单 rank 使用普通 autograd 路径。
 
 使用 AdamW 的 CUDA 训练可显式选择已有的融合更新，以减少 Python 构图和 kernel
 launch 成本；对照其他框架时，两侧应使用相同的融合设置并独立验证训练与恢复结果：

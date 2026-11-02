@@ -120,7 +120,7 @@ def _cublas_batched_matmul(a, b, trans_a=False, trans_b=False):
 
 
 def _amp_retypes_output_to_half():
-    """True when the AMP policy in force will give this product a half output.
+    """True when AMP will retype this product to a low-precision output.
 
     Read off ``amp_reg``, which is the register dtype inference actually
     consults, and not off ``auto_mixed_precision_level``, which is only one of
@@ -135,7 +135,8 @@ def _amp_retypes_output_to_half():
     ``keep_reduce | keep_white``, which does not retype anything to a half, and
     declining oneDNN there was a 99x slowdown bought for nothing.
     """
-    return bool(int(jt.flags.amp_reg) & jt.amp_flags.prefer16)
+    return bool(int(jt.flags.amp_reg) &
+                (jt.amp_flags.prefer16 | jt.amp_flags.prefer_bfloat16))
 
 
 def _supports_mkl(a, b, trans_a=False, trans_b=False):
@@ -411,6 +412,8 @@ def _mixed_float_compute_dtype(a, b):
         return None
     names = (_jittor_dtype_name(a.dtype), _jittor_dtype_name(b.dtype))
     amp_reg = int(jt.flags.amp_reg)
+    if amp_reg & jt.amp_flags.prefer_bfloat16:
+        return "bfloat16"
     if amp_reg & jt.amp_flags.prefer16:
         return "bfloat16" if "bfloat16" in names else "float16"
     if amp_reg & jt.amp_flags.prefer32:

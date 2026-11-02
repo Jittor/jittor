@@ -8,6 +8,9 @@ from typing import cast
 
 import jittor as jt
 from ..diagnostics import EXPECTED, swallowed
+from .device_validation import (
+    _DEVICE_TYPES, _check_index, _check_type, _is_index, kind_of,
+)
 
 class _CallableBool(int):
     """A bool that also answers a call, for the two APIs that read it.
@@ -29,6 +32,7 @@ class _CallableBool(int):
         return repr(bool(self))
 
     __str__ = __repr__
+
 
 class dtype:
     """Immutable Torch dtype identity, independent of Python strings."""
@@ -128,6 +132,7 @@ class dtype:
 def _restore_dtype(name, is_floating_point):
     return dtype(name, is_floating_point)
 
+
 def _make_dtypes(ns):
     specs = [
         ("float32", True), ("float64", True), ("float16", True),
@@ -193,53 +198,6 @@ def _dtype_to_str(d, *, require_compute=True):
         return d.__name__
     return str(d)
 
-
-def kind_of(value):
-    return type(value).__name__
-
-
-def _check_type(name):
-    """The device type ``name`` designates, or a torch-shaped refusal."""
-    if name not in _DEVICE_TYPES:
-        raise RuntimeError(
-            "Expected one of %s device type at start of device string: %s"
-            % (", ".join(sorted(_DEVICE_TYPES)), name))
-    return name
-
-
-def _is_index(value):
-    """An integer that is an index, not a bool.
-
-    ``numbers.Integral`` rather than ``int``: a numpy integer is not an
-    ``int``, and ``torch.device(np.int64(1))`` works in torch.
-    """
-    import numbers
-    return isinstance(value, numbers.Integral) and not isinstance(value, bool)
-
-
-def _check_index(index):
-    """torch rejects a negative device index rather than storing it."""
-    if index is None:
-        return None
-    if not _is_index(index):
-        raise TypeError("torch.device(): device index must be an int, not %s"
-                        % (kind_of(index),))
-    if index < 0:
-        raise RuntimeError("Device index must not be negative")
-    return int(index)
-
-
-#: The device types ``torch.device`` accepts, plus jittor's own ``npu``
-#: spelling for Ascend. torch rejects anything else with "Expected one of
-#: cpu, cuda, ..."; accepting an unknown name is not harmless here, because
-#: ``_device_is_cuda``/``_device_is_cpu`` both answer False for it and the
-#: tensor then silently stays on the ambient device -- a typo like
-#: ``.to("cuda1")`` became "leave it where it is" with no error.
-_DEVICE_TYPES = frozenset((
-    "cpu", "cuda", "npu", "ipu", "xpu", "mkldnn", "opengl", "opencl", "ideep",
-    "hip", "ve", "fpga", "maia", "xla", "lazy", "vulkan", "mps", "meta", "hpu",
-    "mtia", "privateuseone",
-))
 
 #: The accelerator a bare index names. torch reads ``torch.device(1)`` as
 #: "index 1 of the current accelerator"; here that is CUDA, or Ascend on a
@@ -327,8 +285,8 @@ class device:
     # meta tensors in jittor, but we can make the *meta* context observable: push
     # it on a thread-local stack so Var.device reports "meta" inside it. Tensors
     # are still really allocated (harmless -- real weights get loaded over them),
-    # but transformers correctly skips the eager init. A meta block therefore
-    # does not join the default-device stack.
+    # but transformers correctly skips the eager init. Meta contexts participate
+    # in default-device precedence and route their backing storage to CPU.
     # An *indexed* CUDA device context is not a no-op any more: torch's
     # `with torch.device("cuda:1"):` makes device 1 the default new tensors
     # are built on, and jittor now has a current device that means exactly
@@ -336,6 +294,7 @@ class device:
     def __enter__(self):
         if self.type == "meta":
             _DEVICE_CTX_STACK.append(self)
+            _default_device_stack().append(self)
             return self
         _default_device_stack().append(self)
         if self.type in ("cuda", "npu") and self.index is not None:
@@ -353,6 +312,9 @@ class device:
         if self.type == "meta":
             if _DEVICE_CTX_STACK and _DEVICE_CTX_STACK[-1] is self:
                 _DEVICE_CTX_STACK.pop()
+            stack = _default_device_stack()
+            if stack and stack[-1] is self:
+                stack.pop()
         else:
             stack = _default_device_stack()
             if stack and stack[-1] is self:
@@ -402,12 +364,8 @@ def active_device_context() -> typing.Optional[device]:
 
 def _set_meta_placeholder(v, enabled=True):
     """Track a real Jittor Var that stands in for a torch meta tensor."""
-    if isinstance(v, jt.Var):
-        try:
-            v._jittor_torch_meta = bool(enabled)
-        except EXPECTED as exc:
-            swallowed("torch/types.py _set_meta_placeholder: set marker", exc)
-    return v
+    from .meta import mark_placeholder
+    return mark_placeholder(v, enabled)
 
 
 Number = typing.Union[int, float, bool]

@@ -287,7 +287,7 @@ def _named_parameters(self, prefix="", recurse=True, remove_duplicate=True):
     """Torch's ``named_parameters``: an iterator, with prefix/dedup."""
     reg = get_tensor_state(jt).leaf_params
     seen = set()
-    for name, v in self._iter_named_vars("parameters", recurse):
+    for name, v in self._iter_named_vars("parameters", recurse, remove_duplicate):
         if remove_duplicate and id(v) in seen:
             continue
         seen.add(id(v))
@@ -303,11 +303,7 @@ def _named_parameters(self, prefix="", recurse=True, remove_duplicate=True):
 
 def _named_buffers(self, prefix="", recurse=True, remove_duplicate=True):
     """Torch's ``named_buffers``, which defaults ``recurse=True``."""
-    seen = set()
-    for name, v in _ORIG_MODULE_NAMED_BUFFERS(self, recurse=recurse):
-        if remove_duplicate and id(v) in seen:
-            continue
-        seen.add(id(v))
+    for name, v in self._iter_named_vars("buffers", recurse, remove_duplicate):
         yield (prefix + ("." if prefix else "") + name, v)
 
 
@@ -348,6 +344,27 @@ def _find_state_target(root, key):
     return obj
 
 
+def _find_state_parent(root, key):
+    """Resolve a dotted state key to its owning module and leaf name."""
+    parts = str(key).split(".")
+    if not parts or not parts[-1]:
+        return None, None
+    obj = root
+    for part in parts[:-1]:
+        if isinstance(obj, nn.Sequential):
+            if part in obj.layers:
+                obj = obj[part]
+            elif str(part).isdigit() and int(part) in obj.layers:
+                obj = obj[int(part)]
+            else:
+                return None, None
+        elif hasattr(obj, part):
+            obj = getattr(obj, part)
+        else:
+            return None, None
+    return obj, parts[-1]
+
+
 def _state_source_to_var(value):
     """Coerce one state-dict value to a Jittor Var."""
     if isinstance(value, jt.Var):
@@ -359,8 +376,41 @@ def _state_source_to_var(value):
         return jt.array(value)
 
 
+def _assign_state_value(root, key, source):
+    """Install one checkpoint value with Torch's ``assign=True`` ownership.
+
+    Replace only the named slot, leaving unnamed ties on the old holder. An
+    ordinary checkpoint Tensor becomes a Parameter holder sharing its data;
+    checkpoint Parameters and buffer values are installed directly, as Torch
+    does. In particular, assignment must not clone checkpoint storage.
+    """
+    parent, name = _find_state_parent(root, key)
+    target = getattr(parent, name) if parent is not None and hasattr(parent, name) else None
+    if parent is None or not isinstance(target, jt.Var):
+        return False
+    source = _state_source_to_var(source)
+    if not isinstance(source, jt.Var) or source.shape != target.shape:
+        return False
+    value = source
+    role = None
+    if hasattr(parent, "_var_roles"):
+        role = {str(n): r for n, _, r in parent._var_roles()}.get(str(name))
+    if role == "parameter":
+        owner = getattr(type(parent), "_nn_frontend_owner", None)
+        parameter_type = getattr(owner, "Parameter", nn.Parameter)
+        if not isinstance(source, parameter_type):
+            value = parameter_type(source, requires_grad=bool(target.requires_grad))
+        else:
+            # Torch reuses an incoming Parameter, including this flag change.
+            value.requires_grad_(bool(target.requires_grad))
+    # Module registration owns buffer roles; do not tag a shared source. The
+    # existing __setattr__ also promotes an incoming Parameter in a buffer slot.
+    setattr(parent, name, value)
+    return True
+
+
 def _preserve_target_dtypes_for_load(root, state_dict):
-    """Cast each source value to the dtype of the live destination."""
+    """Cast and move source values to the live destination metadata."""
     # torch.load_state_dict(assign=False), the default used by TRELLIS.2,
     # copies checkpoint values into existing parameters/buffers and keeps
     # the destination dtype.  Jittor's native load replaces through update(),
@@ -381,10 +431,19 @@ def _preserve_target_dtypes_for_load(root, state_dict):
             continue
         target_dtype = _jittor_dtype_name(target.dtype)
         if _jittor_dtype_name(src.dtype) == target_dtype:
-            continue
+            casted = src
+        else:
+            casted = src.cast(target_dtype)
+        target_device = target.device
+        if casted.device != target_device:
+            casted = casted.to(target_device)
+        # assign=False copies checkpoint values, including same-dtype/device
+        # tensors. Rebinding the source Var aliases CUDA optimizer storage and
+        # makes an EMA/reference model follow updates of the loaded model.
+        from ...frontend import clone
         if converted is None:
             converted = dict(state_dict)
-        converted[key] = src.cast(target_dtype)
+        converted[key] = clone(casted.detach())
     return state_dict if converted is None else converted
 
 
@@ -458,13 +517,41 @@ def _load_state_dict(self, state_dict, strict=True, assign=False):
                 trainable.add(n)
     except EXPECTED as exc:
         swallowed("torch/installers/nn.py _load_state_dict: for n, p in self.named_parameters():", exc)
-    load_state = state_dict if assign else _preserve_target_dtypes_for_load(self, state_dict)
+    if assign:
+        # Replace each named slot independently. Do not let native
+        # ``load_parameters`` mutate a tied/meta holder in place.
+        for key, value in state_dict.items():
+            if str(key) not in set(unexpected):
+                if not _assign_state_value(self, key, value):
+                    raise RuntimeError(
+                        "Error assigning state_dict key %r: the registered target "
+                        "could not be replaced" % str(key))
+        load_state = {}
+    else:
+        # A meta target has no storage to copy into. PyTorch treats the
+        # assign=False operation as a warning/no-op; materializing our
+        # storage-backed placeholder would make later checkpoint assignment
+        # observe the wrong device and residency.
+        raw_state = {}
+        for key, value in state_dict.items():
+            if getattr(_find_state_target(self, key), "_jittor_torch_meta", False):
+                if not getattr(value, "_jittor_torch_meta", False):
+                    import warnings
+                    warnings.warn(
+                        "for %s: copying from a non-meta parameter in the checkpoint "
+                        "to a meta parameter in the current model is a no-op. "
+                        "Pass assign=True to install the checkpoint value." % key,
+                        UserWarning, stacklevel=2)
+                continue
+            raw_state[key] = value
+        load_state = _preserve_target_dtypes_for_load(self, raw_state)
     if unexpected:
         # jittor's load_parameters LOG.w's on every unknown key; drop them
         # here so a strict=False load stays quiet, exactly like torch.
         load_state = {k: v for k, v in load_state.items()
                       if str(k) not in set(unexpected)}
-    _ORIG_MODULE_LOAD_STATE_DICT(self, load_state)
+    if load_state:
+        _ORIG_MODULE_LOAD_STATE_DICT(self, load_state)
     try:
         for n, p in self.named_parameters():
             if n in trainable and p.is_stop_grad():
@@ -513,7 +600,7 @@ class _ParamList:
             try:
                 self._produce()
             except StopIteration:
-                pass
+                return self._items
         return self._items
 
     def __iter__(self):
@@ -1024,7 +1111,9 @@ def _get_parameter(self, target):
     # buffers from `get_parameter`, which torch answers with AttributeError.
     # The module's own parameter listing is the authority; buffers are tracked
     # separately, by name (see Module.register_buffer).
-    if isinstance(v, jt.Var) and target in {n for n, _ in self.named_parameters()}:
+    if isinstance(v, jt.Var) and target in {
+        n for n, _ in self.named_parameters(remove_duplicate=False)
+    }:
         return v
     raise AttributeError(f"`{target}` is not a parameter")
 
@@ -1040,7 +1129,7 @@ def _get_buffer(self, target):
     if not hasattr(mod, leaf):
         raise AttributeError(f"`{target}` is not a buffer")
     v = getattr(mod, leaf)
-    names = {n for n, _ in self.named_buffers()}
+    names = {n for n, _ in self.named_buffers(remove_duplicate=False)}
     if isinstance(v, jt.Var) and target in names:
         return v
     raise AttributeError(f"`{target}` is not a buffer")
@@ -1098,14 +1187,15 @@ register_fidelity(
 register_fidelity(
     "torch.nn.Module.named_parameters", _named_parameters, Fidelity.APPROXIMATE,
     "Yields (name, Var) for trainable Vars reachable by attribute walk. "
-    "recurse= and prefix= honored; remove_duplicate= is accepted and always "
-    "de-duplicates. Order follows attribute definition order, which matches "
+    "recurse= and prefix= honored; remove_duplicate= controls whether tied "
+    "aliases are retained. Order follows attribute definition order, which matches "
     "torch for modules built in __init__ but is not guaranteed for modules "
     "assembled dynamically.")
 register_fidelity(
     "torch.nn.Module.named_buffers", _named_buffers, Fidelity.APPROXIMATE,
     "Yields (name, Var) for buffer-tagged Vars, including non-persistent ones, "
-    "matching torch. Buffer identity comes from jittor's .is_buffer tag rather "
+    "matching torch; remove_duplicate=False retains tied aliases. Buffer "
+    "identity comes from jittor's .is_buffer tag rather "
     "than a separate _buffers dict.")
 register_fidelity(
     "torch.nn.Module.named_modules", _named_modules, Fidelity.APPROXIMATE,

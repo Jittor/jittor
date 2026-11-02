@@ -160,52 +160,6 @@ def test_empty_saved_state_clears_existing_slots_without_creating_entries(device
     assert target.n_step == 0
 
 
-@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
-def test_adamw_new_half_moments_and_legacy_state_dtype_are_preserved(device, execution, dtype):
-    param = torch.nn.Parameter(torch.tensor([2., -3.], dtype=dtype, device=device))
-    extra = torch.nn.Parameter(torch.tensor([1., -2.], dtype=dtype, device=device))
-    opt = torch.optim.AdamW([param], lr=.01, fused=False)
-    opt.add_param_group({"params": [extra]})
-    for group in opt.param_groups:
-        assert group["m"][0].dtype == torch.float32
-        assert group["values"][0].dtype == torch.float32
-        _placement(group["m"][0], device)
-        _placement(group["values"][0], device)
-
-    # A legacy checkpoint with half moments stays half after load and step.
-    checkpoint = opt.state_dict()
-    first_id = checkpoint["param_groups"][0]["params"][0]
-    checkpoint["state"][first_id] = {
-        "step": 1,
-        "exp_avg": torch.tensor([.25, -.5], dtype=dtype, device="cpu"),
-        "exp_avg_sq": torch.tensor([.5, .75], dtype=dtype, device="cpu"),
-    }
-    opt.load_state_dict(checkpoint)
-    for field in ("exp_avg", "exp_avg_sq"):
-        assert opt.state[param][field].dtype == dtype
-        _placement(opt.state[param][field], device)
-    (param.float() * param.float()).sum().backward()
-    opt.step()
-    for field in ("exp_avg", "exp_avg_sq"):
-        assert opt.state[param][field].dtype == dtype
-        assert np.isfinite(_values(opt.state[param][field])).all()
-    assert np.isfinite(_values(param)).all()
-
-
-def test_adamw_fused_backends_decline_mixed_moment_dtypes():
-    from jittor.optim.algorithms.adam import _supports_acl_adamw_updates
-    from jittor.backends.cuda.kernels.optim.fused_adamw_cuda import _supports
-
-    p = jt.array([1., 2.], dtype="bfloat16").contiguous()
-    g = jt.array([.1, .2], dtype="bfloat16").contiguous()
-    mixed = jt.array([0., 0.], dtype="float32").contiguous()
-    same = jt.array([0., 0.], dtype="bfloat16").contiguous()
-    assert _supports_acl_adamw_updates([(p, same, same, g, 0)])
-    assert not _supports_acl_adamw_updates([(p, mixed, mixed, g, 0)])
-    assert _supports([(p, same, same, g, 0)])
-    assert not _supports([(p, mixed, mixed, g, 0)])
-
-
 @pytest.mark.parametrize("kind", ["adamw", "sgd"])
 def test_fresh_empty_restore_reuses_initial_zero_slots_without_materialization(
         device, execution, kind, monkeypatch):

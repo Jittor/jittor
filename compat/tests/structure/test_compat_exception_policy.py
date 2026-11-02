@@ -137,6 +137,62 @@ def _deferred_rethrow(handler):
         and isinstance(value.slice, ast.Constant) and value.slice.value == 0 for value in raised)
 
 
+def _coordinated_status_capture(path, handler):
+    # DCP rank-local work must report its exception through a collective before
+    # any rank raises; otherwise peers can hang at the next collective. Keep
+    # this exception narrow and prove both the status exchange and local rethrow.
+    if (path.relative_to(_COMPAT).as_posix() != "torch/installers/distributed.py"
+            or not isinstance(handler.type, ast.Name)
+            or handler.type.id != "Exception" or handler.name != "error"):
+        return False
+    if not isinstance(getattr(handler, "_policy_parent", None), ast.Try):
+        return False
+    function = handler
+    while function is not None and not isinstance(
+            function, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        function = getattr(function, "_policy_parent", None)
+    if function is None or function.name != "_dcp_run_stage":
+        return False
+    parent_try = handler._policy_parent
+    capture = any(
+        isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "local_error"
+                for target in node.targets)
+        and isinstance(node.value, ast.Name) and node.value.id == "error"
+        for statement in handler.body for node in ast.walk(statement)
+    )
+    if not capture:
+        return False
+    try_index = next((index for index, statement in enumerate(function.body)
+                      if statement is parent_try), None)
+    if try_index is None:
+        return False
+    gather_index = next((
+        index for index, statement in enumerate(function.body[try_index + 1:], try_index + 1)
+        if isinstance(statement, ast.Expr)
+        and isinstance(statement.value, ast.Call)
+        and isinstance(statement.value.func, ast.Name)
+        and statement.value.func.id == "_native_all_gather_object"
+    ), None)
+    if gather_index is None:
+        return False
+    for statement in function.body[gather_index + 1:]:
+        if not isinstance(statement, ast.If) or not isinstance(statement.test, ast.Compare):
+            continue
+        test = statement.test
+        if (len(test.ops) == 1 and isinstance(test.ops[0], ast.IsNot)
+                and isinstance(test.left, ast.Name) and test.left.id == "local_error"
+                and len(test.comparators) == 1
+                and isinstance(test.comparators[0], ast.Constant)
+                and test.comparators[0].value is None
+                and any(isinstance(node, ast.Raise)
+                        and isinstance(node.exc, ast.Name)
+                        and node.exc.id == "local_error"
+                        for item in statement.body for node in ast.walk(item))):
+            return True
+    return False
+
+
 def _only_reraises(handler):
     return _outcomes(handler.body) == {"raise"} or _deferred_rethrow(handler)
 
@@ -185,9 +241,16 @@ class TestCompatExceptionPolicy(unittest.TestCase):
             "a handler whose whole body is `pass` leaves nothing behind; "
             "record it with jittor.compat.diagnostics.swallowed(what, exc)")
 
+    def test_dcp_coordinated_error_capture_is_the_only_broad_capture(self):
+        allowed = [(path.relative_to(_COMPAT).as_posix(), handler.name)
+                   for path, handler in _handlers()
+                   if _coordinated_status_capture(path, handler)]
+        self.assertEqual(allowed, [("torch/installers/distributed.py", "error")])
+
     def test_no_handler_catches_exception_at_large(self):
         offenders = [_where(path, handler) for path, handler in _handlers()
-                     if _is_broad(handler) and not _only_reraises(handler)]
+                     if _is_broad(handler) and not _only_reraises(handler)
+                     and not _coordinated_status_capture(path, handler)]
         self.assertEqual(
             offenders, [],
             "name the exceptions the block can raise, or use the declared "

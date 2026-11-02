@@ -1,11 +1,15 @@
-"""Bounded optimizer checkpoint restore; dependencies injected by owner."""
+"""Optimizer state restore implementation for the Torch compatibility layer."""
 from collections.abc import Mapping
+
 import jittor as jt
 import numpy as np
+
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from .context import get_install_context
 
-def load_state_dict_torch(self, state_dict, _torch_optimizer_kind, _torch_param_steps):
+
+def _restore_optimizer_state(self, state_dict):
+    from .optimizer_api import _torch_optimizer_kind, _torch_param_steps
     restore_seen = bool(getattr(self, "_torch_optimizer_restore_seen", False))
     _context = get_install_context(jt)
     _native_load_state_dict = _context.state["optimizer_native_api"]['_native_load_state_dict']

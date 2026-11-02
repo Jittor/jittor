@@ -48,7 +48,32 @@ PyObject* selected_type() {
     PyObject* value = nullptr;
     if (PyContextVar_Get(context_variable(), nullptr, &value) < 0)
         throw std::runtime_error("cannot read tensor frontend context");
+    if (value && PyTuple_Check(value) && PyTuple_GET_SIZE(value) == 2) {
+        PyObject* type = PyTuple_GET_ITEM(value, 0);
+        Py_INCREF(type);
+        Py_DECREF(value);
+        return type;
+    }
     return value;
+}
+
+PyObject* selected_candidate() {
+    PyObject* value = nullptr;
+    if (PyContextVar_Get(context_variable(), nullptr, &value) < 0)
+        throw std::runtime_error("cannot read tensor frontend context");
+    if (!value) return nullptr;
+    if (!PyTuple_Check(value) || PyTuple_GET_SIZE(value) != 2) {
+        Py_DECREF(value);
+        return nullptr;
+    }
+    PyObject* candidate = PyTuple_GET_ITEM(value, 1);
+    Py_XINCREF(candidate);
+    Py_DECREF(value);
+    if (candidate == Py_None) {
+        Py_DECREF(candidate);
+        return nullptr;
+    }
+    return candidate;
 }
 
 bool is_frontend_instance(PyObject* value) {
@@ -79,12 +104,25 @@ PyObject* current_tensor_frontend_type() {
     return value;
 }
 
-PyObject* set_tensor_frontend_type(PyObject* type) {
+PyObject* set_tensor_frontend_type(PyObject* type, PyObject* candidate) {
     USER_CHECK(type && PyType_Check(type)
         && PyType_IsSubtype(reinterpret_cast<PyTypeObject*>(type),
                             &PyjtVarHolder.ht_type))
         << "tensor frontend must be a real Var type or subtype";
-    PyObject* token = PyContextVar_Set(context_variable(), type);
+    PyObject* value = type;
+    PyObject* owned_tuple = nullptr;
+    if (candidate && candidate != Py_None) {
+        owned_tuple = PyTuple_New(2);
+        if (!owned_tuple)
+            throw std::runtime_error("cannot create tensor frontend context value");
+        Py_INCREF(type);
+        Py_INCREF(candidate);
+        PyTuple_SET_ITEM(owned_tuple, 0, type);
+        PyTuple_SET_ITEM(owned_tuple, 1, candidate);
+        value = owned_tuple;
+    }
+    PyObject* token = PyContextVar_Set(context_variable(), value);
+    Py_XDECREF(owned_tuple);
     if (!token)
         throw std::runtime_error("cannot set tensor frontend context");
     return token;
@@ -175,6 +213,11 @@ void PyTensorFrontendScope::select(
     PyObject* candidate = is_frontend_instance(self) ? self : nullptr;
     for (int64 i = 0; !candidate && args && i < count; ++i)
         candidate = frontend_candidate(args[i], scan_sequences);
+    PyObjHolder inherited_candidate;
+    if (!candidate) {
+        inherited_candidate.obj = selected_candidate();
+        candidate = inherited_candidate.obj;
+    }
     PyObject* existing = selected_type();
     if (existing) {
         try {
@@ -303,10 +346,16 @@ void PyTensorFrontendScope::apply_policy(PyObject* type, PyObject* candidate) {
     previous_policy_ = get_autograd_policy();
     set_autograd_policy((bits & 1) != 0, (bits & 2) != 0);
     TensorPlacement placement = selected_placement();
-    if (!placement.explicit_backend && candidate && GET_INITED_FLAG(VarHolder, 1, candidate))
+    bool follow_runtime_candidate = false;
+    if (!placement.explicit_backend && candidate && GET_INITED_FLAG(VarHolder, 1, candidate)) {
         placement = GET_RAW_PTR(VarHolder, candidate)->var->placement;
-    if (!placement.explicit_backend) placement = current_tensor_placement();
-    if (!placement.explicit_backend)
+        follow_runtime_candidate = !placement.explicit_backend;
+    }
+    if (!placement.explicit_backend) {
+        TensorPlacement current = current_tensor_placement();
+        if (current.explicit_backend || !follow_runtime_candidate) placement = current;
+    }
+    if (!placement.explicit_backend && !follow_runtime_candidate)
         placement = TensorPlacement({runtime_use_cuda() ? accelerator_backend_id() : BackendId::Cpu,
                                      runtime_use_cuda() ? current_device() : 0});
     previous_placement_ = current_tensor_placement();

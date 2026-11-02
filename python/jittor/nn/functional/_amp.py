@@ -31,7 +31,8 @@ def bias_for_compute_dtype(product, bias):
     purpose: they measured 23 us per `nn.Linear` call at (1,128,512).
     """
     amp_reg = jt.flags.amp_reg
-    if amp_reg and (amp_reg & (jt.amp_flags.prefer16 | jt.amp_flags.prefer32)) \
+    if amp_reg and (amp_reg & (jt.amp_flags.prefer16 | jt.amp_flags.prefer32 |
+                               jt.amp_flags.prefer_bfloat16)) \
             and hasattr(bias, "cast") and product.dtype != bias.dtype:
         return bias.cast(product.dtype)
     return bias

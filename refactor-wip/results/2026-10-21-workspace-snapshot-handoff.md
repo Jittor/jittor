@@ -1,3 +1,20 @@
+## 2026-11-03 01:33 +0800 Handoff：CPU 结构门通过；正式 GPU 验收仍等独占 allocation
+
+在当前主工作区分支 `integrate/cgq-transformers-native-multicard-target`、HEAD `4291227c47060c693c4d4464cc60b0521a34a5c3` 上完成 current-tree 结构发布门：1,558 项执行，1,556 passed、2 个 accelerator-only skip、0 failed；定向规则/owner 测试 28/28 通过。完整证据与 SHA256 在 `/data6/cgq/jittor-lab/_state/release-day23/20261103-current-working-tree-structure-gate-r2-prepared/`。两项异常策略突变均触发预期失败，`distributed.py` 已按原始 SHA 恢复。相关三份状态文档已更新，工作区布局与 whitespace 检查通过。
+
+提交前 index 为空，现有工作区约 89 个 tracked 修改和 21 个 untracked 路径；`origin/cgq_transformers` 在 `9658d690774e383fb355ca1bf808dd3cd662f929`，本地改动可普通快进发布。按用户最新授权，将当前工作区修改整体整理为中文提交后推送到 `cgq_transformers`，不创建 PR，也不合并 `2.0-refactor`。
+
+Day4–5 正式性能/显存门仍未启动：GPU2 继续由外部任务占用，`cgq` Slurm association 待管理员添加。获得可核验独占 allocation 后，按已定的三轮交替 PT/JT、每轮每侧至少十个热样本方案继续；R14 Qwen 训练/续训、既有 preflight 和已通过结果不重跑。整体 Day2–5 **Not complete**。
+
+
+## 2026-11-03 00:57 +0800 Handoff：R10 真实 CUDA fill_/zero_ 定向回归通过
+
+在 R10 隔离候选（HEAD 765f1791f3b00f9129fb3ec6342dadf2c9dc2dbe，fingerprint 4a7b6e76e23efbd8479b807a25747eea9506023c0a632a3d22e57bec8c71edc9）上完成 CUDA cold identity audit 和一个 CUDA focused pytest：**1 passed / 1 executed / 0 skipped**，再加 torch.Tensor(native_jt_var) 的 FollowRuntime 别名、cuda:0 dispatch、fill_ / zero_ 值验证；fallback=0/error。GPU0 当时有外部负载，结果仅证明功能正确，不含性能/显存结论。
+
+root functional audit PASS_R10_CUDA_FOCUSED_FUNCTIONAL_AUDIT，SHA256 e896f7b02a6755d512f0bf7d8e288b69b9df3b2dd400002741cd5538826d5d18；cache 新增38、无删除或既有内容变化，core/utils/stamp 身份不变，lock 和进程组清空。外层收尾 CLI 因捕获 SystemExit(0) 而返回非零，已与成功的子进程报告和独立审计分开记录；不重跑该用例。
+
+主仓库当前 branch 为 integrate/cgq-transformers-native-multicard-target，提交前 HEAD 4291227c47060c693c4d4464cc60b0521a34a5c3，origin/cgq_transformers=9658d690774e383fb355ca1bf808dd3cd662f929；远端未发生移动，本地提交可快进推送。当前工作区中的既有 Torch compatibility、优化器、AMP、分布式、数据、attention 与测试修改按用户最新指示先整理推送；不合并 2.0-refactor，不创建 PR。整体 Day2–5 与正式 Day4–5 门仍开放，GPU2 独占 association 等待管理员配置。
+
 ## 2026-11-03 00:26 +0800 Handoff：R10 fill_/zero_ focused 通过，ten-file pytest 通过但外层状态标签仍有缺陷
 
 R10 隔离候选绑定 HEAD `765f1791f3b00f9129fb3ec6342dadf2c9dc2dbe` 与源码 fingerprint `4a7b6e76e23efbd8479b807a25747eea9506023c0a632a3d22e57bec8c71edc9`，覆盖 Torch constant factory leaf 注册、Torch frontend native Var 路径和 pyjt frontend placement candidate。focused CPU 10 项中 9 passed、1 CUDA-only skip、fallback=0，两个目标 `fill_`/`zero_` 回归通过；cold 227 TU identity build 为 356.57 秒。

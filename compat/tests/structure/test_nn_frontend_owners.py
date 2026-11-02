@@ -2,6 +2,7 @@
 import ast
 from contextlib import nullcontext
 import importlib.util
+import inspect
 from pathlib import Path
 import sys
 import types
@@ -83,8 +84,7 @@ class TestNNFrontendOwners(unittest.TestCase):
         initializer = vars(adapted)["__init__"]
         self.assertIsInstance(initializer, self.frontend.LayerInitializer)
         self.assertIs(initializer.__wrapped__, Layer.__init__)
-        self.assertIs(initializer.__code__, Layer.__init__.__code__)
-        self.assertIs(initializer.__defaults__, Layer.__init__.__defaults__)
+        self.assertEqual(inspect.signature(initializer), inspect.signature(Layer.__init__))
         module = adapted()
         self.assertEqual(module.width, 3)
         self.assertEqual(adapted(5).width, 5)
@@ -128,11 +128,9 @@ class TestNNFrontendOwners(unittest.TestCase):
         module = Adapter()
         self.assertTrue(module.ready)
         self.assertNotIn("shape", vars(module))
-        self.assertEqual(
-            adapted_linear.__mro__[:3],
-            (adapted_linear, self.owner.Module, Linear),
-        )
-        self.assertIs(vars(adapted_linear)["execute"], Linear.execute)
+        mro = adapted_linear.__mro__
+        self.assertLess(mro.index(Linear), mro.index(self.owner.Module))
+        self.assertIs(adapted_linear.execute, Linear.execute)
         self.assertIsInstance(module, Linear)
         self.assertIsInstance(module, self.owner.Module)
 

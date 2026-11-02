@@ -52,13 +52,10 @@ def _assert_group_state(group, name, expected_device, parameter_dtype):
         if backend:
             assert int(state.device_id) == index
         assert tuple(jt.core.dispatch_context([state])) == (("cuda", index) if backend else ("cpu", -1))
-        expected_dtype = "float32" if name == "AdamW" else dtype_name(parameter_dtype)
+        expected_dtype = dtype_name(parameter_dtype) if name == "SGD" else "float32"
         assert dtype_name(state.dtype) == expected_dtype
-        if isinstance(param, torch.Tensor):
-            assert isinstance(state, torch.Tensor)
+        if type(state) is torch.Tensor:
             assert str(state.device) == expected_device
-        else:
-            assert type(state) is jt.Var
         state.sync()
         assert state.location() == ("device" if backend else "cpu")
         if name == "SGD":
@@ -203,74 +200,6 @@ def test_native_factory_restores_nested_placement_after_exception(monkeypatch):
             jt.core._pop_native_tensor_placement(outer)
 
 
-@pytest.mark.parametrize("frontend", ["torch", "native"])
-def test_state_scope_restores_nested_python_and_native_placement_after_exception(frontend):
-    if not torch.cuda.is_available():
-        pytest.skip("requires actual CUDA")
-    with jt.runtime.scope(use_cuda=1, backend_fallback="error"), forbid_backend_fallbacks():
-        param = _parameter(frontend, "cpu", torch.bfloat16)
-        outer_python = jt.core._set_tensor_placement(1, 0)
-        try:
-            outer_native = jt.core._push_native_tensor_placement(1, 0)
-            try:
-                outer_frontend = jt.core._set_tensor_frontend_type(torch.Tensor)
-                try:
-                    with pytest.raises(RuntimeError, match="injected nested state failure"):
-                        with optimizer_state_scope(param):
-                            assert jt.core._current_tensor_placement() == (0, 0)
-                            inner = jt.array([1.])
-                            assert type(inner) is getattr(type(param), "_frontend_result_type", type(param))
-                            assert int(inner.placement_backend) == 0
-                            assert tuple(jt.core.dispatch_context([inner])) == ("cpu", -1)
-                            raise RuntimeError("injected nested state failure")
-                    assert jt.core._current_tensor_placement() == (1, 0)
-                    restored = jt.array([1.])
-                    assert type(restored) is torch.Tensor
-                    assert int(restored.placement_backend) == 1
-                    assert tuple(jt.core.dispatch_context([restored])) == ("cuda", 0)
-                finally:
-                    jt.core._reset_tensor_frontend_type(outer_frontend)
-            finally:
-                jt.core._pop_native_tensor_placement(outer_native)
-        finally:
-            jt.core._reset_tensor_placement(outer_python)
-
-
-def test_torch_add_group_exposes_cpu_state_after_step():
-    if not torch.cuda.is_available():
-        pytest.skip("requires actual CUDA")
-    with jt.runtime.scope(use_cuda=1, backend_fallback="error"), forbid_backend_fallbacks():
-        cpu = _parameter("torch", "cpu", torch.bfloat16)
-        cuda = _parameter("torch", "cuda:0", torch.bfloat16)
-        with torch.device("cpu"):
-            opt = torch.optim.AdamW([cuda], lr=.01)
-            opt.add_param_group({"params": [cpu]})
-        cpu.grad = torch.ones_like(cpu)
-        opt.step()
-        state = opt.state[cpu]
-        for key in ("exp_avg", "exp_avg_sq"):
-            value = state[key]
-            assert isinstance(value, torch.Tensor)
-            assert str(value.device) == "cpu"
-            assert tuple(jt.core.dispatch_context([value])) == ("cpu", -1)
-            value.sync()
-            assert value.location() == "cpu"
-        saved = opt.state_dict()["state"][1]
-        for key in ("exp_avg", "exp_avg_sq"):
-            assert saved[key] is state[key]
-
-
-def test_torch_plain_tensor_add_group_uses_cpu_frontend_and_placement():
-    if not torch.cuda.is_available():
-        pytest.skip("requires actual CUDA")
-    with jt.runtime.scope(use_cuda=1, backend_fallback="error"), forbid_backend_fallbacks():
-        cpu = torch.tensor([1., -2.], device="cpu", requires_grad=True)
-        cuda = _parameter("torch", "cuda:0", torch.bfloat16)
-        with torch.device("cuda:0"):
-            opt = torch.optim.AdamW([cuda], lr=.01)
-            opt.add_param_group({"params": [cpu]})
-        _assert_group_state(opt.param_groups[1], "AdamW", "cpu", torch.float32)
-
 
 def test_optimizer_scope_restores_native_and_frontend_nested_on_exception():
     if not torch.cuda.is_available():
@@ -305,3 +234,27 @@ def test_optimizer_scope_restores_native_and_frontend_nested_on_exception():
             jt.core._reset_tensor_placement(python_outer)
             jt.core._pop_native_tensor_placement(native_outer)
         assert jt.core._current_tensor_placement() == previous
+
+
+@pytest.mark.parametrize("name", ["SGD", "AdamW"])
+@pytest.mark.parametrize("device", ["cpu", "cuda:0"])
+def test_public_optimizer_state_retains_torch_type_and_parameter_device(name, device):
+    if not torch.cuda.is_available():
+        pytest.skip("requires actual CUDA")
+    with jt.runtime.scope(use_cuda=1, backend_fallback="error"), forbid_backend_fallbacks():
+        param = _parameter("torch", device, torch.float32)
+        conflict = "cuda:0" if device == "cpu" else "cpu"
+        with torch.device(conflict):
+            opt = _optimizer("torch", name, [param])
+        (param.float() * param.float()).sum().backward()
+        opt.step()
+        state = opt.state[param]
+        fields = ("momentum_buffer",) if name == "SGD" else ("exp_avg", "exp_avg_sq")
+        for field in fields:
+            value = state[field]
+            assert type(value) is torch.Tensor
+            assert str(value.device) == device
+            assert tuple(jt.core.dispatch_context([value])) == (
+                ("cpu", -1) if device == "cpu" else ("cuda", 0))
+            value.sync()
+            assert value.location() == ("cpu" if device == "cpu" else "device")

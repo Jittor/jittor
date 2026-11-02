@@ -11,7 +11,7 @@ namespace jittor {
 EXTERN_LIB PyObject* current_tensor_frontend_type();
 
 // @pyjt(_set_tensor_frontend_type)
-PyObject* set_tensor_frontend_type(PyObject* type);
+PyObject* set_tensor_frontend_type(PyObject* type, PyObject* candidate=nullptr);
 
 // @pyjt(_reset_tensor_frontend_type)
 void reset_tensor_frontend_type(PyObject* token);

@@ -1,3 +1,26 @@
+## 2026-11-03 01:33 +0800 current-tree CPU 结构发布子门通过；Day2–5 仍未完成
+
+在现有主工作区 HEAD `4291227c47060c693c4d4464cc60b0521a34a5c3` 加未提交修改上执行完整结构门，CPU-only、空 `CUDA_VISIBLE_DEVICES`、`use_cuda=0`。运行 `tools/release/test_check_sdist_contents.py`、`tools/release/test_check_wheel_contents.py`、`tests/structure`、`compat/tests/structure` 和 `adapters/tests/vllm/test_structure.py`：**1,558 collected/executed，1,556 passed、2 个 accelerator-only skipped、0 failed，255.82 秒**。完整日志 SHA256 `61c16c3d57fc6f50484b3f094824f45373e91cc99c6dee4db8014cc20f518dca`。另有 28 个受影响结构测试全部通过，日志 SHA256 `8a11c4e79250c502ebf321843a523152cc023cc1d90823da8acf2f7e4096024f`。
+
+验证期间修复了实际功能缺口：显式 Generator 无法覆盖的随机工厂调用现在抛出 `NotImplementedError`，不再悄悄消耗全局随机流；空闭包 cell 通过 diagnostics 留痕，`_ParamList._all()` 在自然耗尽时返回已收集项。DDP checkpoint 阶段唯一获准的 `except Exception` 规则限定为 `_dcp_run_stage`，并要求先收集各 rank 状态、再重抛本地错误；另一处 `ddp_comm_hooks._publish_new_module` 写入被准确标为事务前普通组合。NN frontend 结构断言改为检查 descriptor 暴露的真实签名和 Linear/Module 的 MRO 关系，FSDP2 API digest 同步当前 optimizer 与 state-dict config 签名。
+
+结构规则的真实源码突变验证也通过：删除 DCP 本地重抛后，两个策略节点都失败；重命名获准函数后同样失败。两轮突变退出码均为 1，原始 `distributed.py` 已逐字节恢复，SHA256 `8f557002109b7d25dbbca2dfc1637db5a39073450f4cae16725e131ee357493f`。证据包 `/data6/cgq/jittor-lab/_state/release-day23/20261103-current-working-tree-structure-gate-r2-prepared/` 保存完整日志、首轮定向失败、修正后定向通过、两次突变拒绝、源码备份与 attempts/identity JSON。错误环境启动没有完成任何测试节点；其中新建的 partial cache 保留，不复用。
+
+此结构门不测运行时 GPU 正确性、性能或显存。测试先按 227 个 translation units 建立 CPU Jittor cache，再复用该 cache 执行完整结构门；该过程没有独立 build-stamp 终审，不能充当 Day4–5 编译身份或性能证据。执行期间没有使用 GPU。之后 `git diff --check` 与 `bash tools/check_repo_layout.sh` 通过，文档治理扫描到 246 个活动 Markdown 文件。
+
+工作区仍有大批待推送的 Torch compatibility、AMP/optimizer、distributed/DDP、dataset、attention、测试与文档修改。本轮提交前 HEAD 与 `origin/cgq_transformers` 的关系、diff identity 和 untracked 清单保存在同证据目录的 `working-tree-identity.json`。GPU2 独占与 Slurm association 尚未到位；Held-out generation、真实 activation recompute/memory、wheel migration、跨框架 optimizer 序列化和更广功能覆盖仍开放。整体 Day2–5 **Not complete**。
+
+
+## 2026-11-03 00:57 +0800 R10 CUDA cold build 与 fill_/zero_ 正确性通过；Day2–5 仍未完成
+
+R10 隔离候选仍绑定 HEAD 765f1791f3b00f9129fb3ec6342dadf2c9dc2dbe、源码指纹 4a7b6e76e23efbd8479b807a25747eea9506023c0a632a3d22e57bec8c71edc9。CUDA 冷构建在真实 GPU0 UUID GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5 上自然完成；Jittor 进度 228/228，独立 build-stamp 审计核对 231 个编译单元（194 个仓库源码、37 个生成 cache 单元）。root terminal audit 状态通过，SHA256 fb471147ceaeae6f81ffb43ac5ac28876338642702deed3deededce4dad517f5；本阶段仅证明 CUDA build identity，不含张量、训练、性能或显存结论。R3 package manifest SHA256 82ad0778b351063dafd33a5ead2a2a4e86ef0b73a2b8b929a8467333a1915ad6。
+
+随后在单独的正确性计划中执行一个 CUDA pytest 节点：test_cuda_constant_writes_keep_explicit_cpu_and_cuda_storage，结果 **1 passed、1 executed、0 skipped**；环境要求真实 CUDA 和至少一个 accelerator test，backend_fallback=error。额外的直接 CUDA 探针验证 torch.Tensor(native_jt_var) 保留 FollowRuntime placement (-1)、storage alias 与 cuda:0 dispatch，之后 fill_ / zero_ 均保留别名并写入期望值，fallback 被禁止。设备当时存在外部负载且 GPU 利用率较高，因此这只作为正确性证据，不作性能或显存比较。该轮在已绑定冷 cache 中由 942 项增至 980 项（新增38、删除0、既有项变化0）；core、jit_utils、build stamp 哈希保持不变，JIT lock 与测试进程组结束时清空。
+
+正确性 attempt root audit SHA256 e896f7b02a6755d512f0bf7d8e288b69b9df3b2dd400002741cd5538826d5d18，状态 PASS_R10_CUDA_FOCUSED_FUNCTIONAL_AUDIT；计划 SHA256 045932ef9577f8731e7bc1cc858f2bb53666a1a9dff7c3b7ab6716b68420e8e5，package manifest SHA256 6a8518b9e68a37de76560aff6d3d9814056b449038db996ae7078be4aeb8d179。外层汇总 CLI 在写出上述通过审计后仍以非零状态结束，记录为控制器错误：它把正常 SystemExit(0) 捕获成异常；pytest 子进程 exit 0，独立 root audit 的所有终态检查通过。保留该 mismatch，不重复运行已通过的 CUDA 用例。
+
+R10 CPU focused、ten-file CPU suite、CUDA cold 与上述定向 CUDA 正确性均绑定隔离候选，不能外推为当前 /home/cgq/jittor 源码整体发布通过。GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 仍由外部作业占用，cgq Slurm association 等待管理员配置。Day4–5 正式验收仍需 GPU2 可核验独占、PT/JT 至少三轮交替且每轮每侧至少十个热样本，报告 median/p95/离散度、加载/首步/热态时间与 allocator/NVML 峰值；真实 activation recompute on/off、held-out generation 质量、wheel migration、跨框架 optimizer 序列化和更广支持矩阵仍开放。整体 Day2–5 **Not complete**。
+
 ## 2026-11-03 00:26 +0800 R10 fill_/zero_ repair 与 ten-file CPU suite；Day2–5 仍未完成
 
 ### 源码与隔离边界

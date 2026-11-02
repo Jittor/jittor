@@ -7,6 +7,32 @@ from torch.nn.modules.module import register_module_module_registration_hook
 
 
 class TestModuleRegistrationHooks(unittest.TestCase):
+    def test_get_parameter_resolves_tied_alias_hidden_by_named_parameter_dedup(self):
+        model = torch.nn.Module()
+        model.embedding = torch.nn.Embedding(8, 4)
+        model.lm_head = torch.nn.Linear(4, 8, bias=False)
+        model.lm_head.weight = model.embedding.weight
+
+        self.assertNotIn("lm_head.weight", dict(model.named_parameters()))
+        self.assertIn(
+            "lm_head.weight",
+            dict(model.named_parameters(remove_duplicate=False)),
+        )
+        self.assertIs(model.get_parameter("lm_head.weight"), model.embedding.weight)
+
+    def test_get_buffer_resolves_tied_alias_hidden_by_named_buffer_dedup(self):
+        model = torch.nn.Module()
+        value = torch.tensor([1.0])
+        model.register_buffer("primary", value)
+        model.register_buffer("alias", value)
+
+        self.assertEqual([name for name, _ in model.named_buffers()], ["primary"])
+        self.assertEqual(
+            [name for name, _ in model.named_buffers(remove_duplicate=False)],
+            ["primary", "alias"],
+        )
+        self.assertIs(model.get_buffer("alias"), value)
+
     def test_lazy_batch_norm_types_are_distinct_and_fail_closed(self):
         regular = torch.nn.BatchNorm1d(3)
         for name in ("LazyBatchNorm1d", "LazyBatchNorm2d", "LazyBatchNorm3d"):

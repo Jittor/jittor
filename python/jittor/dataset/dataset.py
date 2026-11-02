@@ -191,6 +191,33 @@ class Dataset(object):
         for x, y in dataset:
             ......
     '''
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        # Native distributed sharding is defined for map-style datasets. A
+        # subclass that replaces __iter__ would otherwise bypass _get_index_list
+        # and silently feed every rank the same iterable.
+        custom_iter = getattr(cls, "__iter__", None)
+        if custom_iter is None or custom_iter is Dataset.__iter__:
+            return
+        if getattr(custom_iter, "_jittor_native_ddp_guard", False):
+            return
+
+        def guarded_iter(self, *args, **kwargs):
+            from jittor import distributed as dist
+            if dist.get_world_size() > 1:
+                raise NotImplementedError(
+                    "Iterable-style Dataset (__iter__ override) is not "
+                    "supported by native distributed sharding; use a "
+                    "map-style Dataset with __len__ and __getitem__.")
+            return custom_iter(self, *args, **kwargs)
+
+        guarded_iter.__name__ = getattr(custom_iter, "__name__", "__iter__")
+        guarded_iter.__qualname__ = getattr(
+            custom_iter, "__qualname__", "%s.__iter__" % cls.__name__)
+        guarded_iter.__doc__ = getattr(custom_iter, "__doc__", None)
+        guarded_iter._jittor_native_ddp_guard = True
+        cls.__iter__ = guarded_iter
+
     def __init__(self,
                  batch_size = 16,
                  shuffle = False,
@@ -384,10 +411,14 @@ class Dataset(object):
         # torch-compatible: run user worker init hook once per worker process,
         # after seeding so users can re-seed deterministically if desired.
         worker_init_fn = getattr(self, "worker_init_fn", None)
-        if worker_init_fn is not None:
-            worker_init_fn(worker_id)
         import time
         try:
+            # Keep user code inside the worker error-reporting boundary. If
+            # this hook raises before the try block, the child exits without
+            # publishing its traceback and the parent can only report a dead
+            # worker with no useful cause.
+            if worker_init_fn is not None:
+                worker_init_fn(worker_id)
             # Time PIL.Image.open in THIS process only. A worker is jittor's
             # own process and exists to load data, so the measurement it
             # reports back through status[4] is paid for here -- not in the

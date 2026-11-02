@@ -497,6 +497,11 @@ def _array_keep_dtype(data):
 
 
 def tensor(data, dtype=None, device=None, requires_grad=False, **kw):
+    from ...meta import finish, is_placeholder, requested
+    from ...frontend import data_constructor_device
+    device = data_constructor_device(device)
+    if is_placeholder(data) and not requested(device):
+        raise NotImplementedError("Cannot copy out of meta tensor; no data!")
     g = compatibility_owner(jt)
     Var = g.Var
     with tensor_frontend(Var, device=device, like=data):
@@ -550,10 +555,15 @@ def tensor(data, dtype=None, device=None, requires_grad=False, **kw):
         if requires_grad:
             v.requires_grad_(True)
             _torch_register_leaf(v)
-        return v
+        return finish(v, device, data)
 
 
 def as_tensor(data, dtype=None, device=None):
+    from ...meta import finish, is_placeholder, requested
+    from ...frontend import data_constructor_device
+    device = data_constructor_device(device)
+    if is_placeholder(data) and not requested(device, data):
+        raise NotImplementedError("Cannot copy out of meta tensor; no data!")
     g = compatibility_owner(jt)
     Var = g.Var
     with tensor_frontend(Var, device=device, like=data):
@@ -561,25 +571,29 @@ def as_tensor(data, dtype=None, device=None):
             r = data if isinstance(data, Var) else g.Tensor(data)
             if dtype is not None and _jittor_dtype_name(r.dtype) != _dtype_to_str(dtype):
                 r = r.cast(_dtype_to_str(dtype))
+            if r is data and device is not None and requested(device) != is_placeholder(r):
+                from ...frontend import clone
+                r = clone(r)
             if _device_is_cpu(device):
-                return _make_cpu_resident(r)
+                return finish(_make_cpu_resident(r), device)
             if _device_is_cuda(device):
-                return _move_to_cuda_index(_make_cuda_resident(r, force=True, device=device), g.device(device))
-            return r
+                return finish(_move_to_cuda_index(_make_cuda_resident(r, force=True, device=device), g.device(device)), device)
+            return finish(r, device, data)
         return tensor(data, dtype=dtype, device=device)
 
 
 def from_numpy(arr, *, device=None):
+    from ...meta import finish
     g = compatibility_owner(jt)
     Var = g.Var
     with tensor_frontend(Var, device=device if device is not None else "cpu"):
         v = _array_keep_dtype(arr)
         v.requires_grad_(False)
         if _device_is_cpu(device):
-            return _make_cpu_resident(v)
+            return finish(_make_cpu_resident(v), device)
         if _device_is_cuda(device):
-            return _move_to_cuda_index(_make_cuda_resident(v, force=True, device=device), g.device(device))
-        return v
+            return finish(_move_to_cuda_index(_make_cuda_resident(v, force=True, device=device), g.device(device)), device)
+        return finish(v, device if device is not None else "cpu")
 
 
 def frombuffer(buffer, *, dtype, count=-1, offset=0, requires_grad=False):
@@ -763,8 +777,8 @@ def cat(tensors, dim=0, out=None, axis=None):
     # the values (Qwen's float32 RoPE then contains BF16-rounded halves).
     # Torch autocast leaves cat at the promoted input precision. Suspend the
     # native register before inference and allocation, as for binary ops.
-    from ...amp import autocast_dtype
-    if autocast_dtype() is not None:
+    from ...amp import autocast_any_enabled
+    if autocast_any_enabled():
         with jt.flag_scope(amp_reg=0):
             out_var = _jt_concat(fixed, dim)
     else:

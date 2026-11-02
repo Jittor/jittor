@@ -4,8 +4,9 @@ import jittor as jt
 
 from ..base import (
     Optimizer, _grad_matches_param, _param_requires_grad,
-    _state_buffer, _update_preserve_dtype,
+    _adaptive_state_buffer, _update_preserve_dtype,
 )
+from ..._core.dtypes import dtype_name
 
 class RMSprop(Optimizer):
     """ RMSprop Optimizer.
@@ -28,12 +29,12 @@ class RMSprop(Optimizer):
         for pg in self.param_groups:
             values = pg["values"] = []
             for p in pg["params"]:
-                values.append(_state_buffer(p))
+                values.append(_adaptive_state_buffer(p))
 
     def add_param_group(self, group):
         values = group["values"] = []
         for p in group["params"]:
-            values.append(_state_buffer(p))
+            values.append(_adaptive_state_buffer(p))
         super().add_param_group(group)
 
     def step(self, loss=None, retain_graph=False):
@@ -45,7 +46,17 @@ class RMSprop(Optimizer):
             alpha = pg.get("alpha", self.alpha)
             for p, g, v in zip(pg["params"], pg["grads"], pg["values"]):
                 if not _param_requires_grad(p) or not _grad_matches_param(p, g): continue
-                _update_preserve_dtype(v, alpha * v + (1-alpha) * g * g)
-                _update_preserve_dtype(
-                    p, p - lr * g / (jt.sqrt(v) + eps))
+                if dtype_name(p.dtype) in ("float16", "bfloat16"):
+                    with jt.flag_scope(amp_reg=0):
+                        if dtype_name(v.dtype) != "float32":
+                            v.update(v.float32())
+                        grad = g.float32()
+                        _update_preserve_dtype(
+                            v, alpha * v + (1-alpha) * grad * grad)
+                        _update_preserve_dtype(
+                            p, p.float32() - lr * grad / (jt.sqrt(v) + eps))
+                else:
+                    _update_preserve_dtype(v, alpha * v + (1-alpha) * g * g)
+                    _update_preserve_dtype(
+                        p, p - lr * g / (jt.sqrt(v) + eps))
         self.post_step()

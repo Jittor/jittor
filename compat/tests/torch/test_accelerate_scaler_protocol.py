@@ -113,8 +113,28 @@ def test_scaler_tracks_unscale_and_overflow_per_optimizer(reverse):
     scaler.update()
     np.testing.assert_array_equal(_values(a), [1.])
     np.testing.assert_allclose(_values(b), [1.8], rtol=0, atol=2e-7)
+    assert np.isposinf(_values(a.grad)).all()
     np.testing.assert_array_equal(_values(b.grad), [2.])
     assert scaler.get_scale() == 4.
+
+
+def test_scaler_skipped_step_retains_visible_grad_and_recovers_after_zero_grad():
+    p = _parameter(1.)
+    optimizer = torch.optim.SGD([p], lr=.1)
+    scaler = torch.amp.GradScaler(_DEVICE, init_scale=8)
+    scaler.scale((p * float("inf")).sum()).backward()
+    scaler.step(optimizer)
+    np.testing.assert_array_equal(_values(p), [1.])
+    assert np.isposinf(_values(p.grad)).all()
+    assert optimizer.param_groups[0].get("grads") is None
+    scaler.update()
+
+    optimizer.zero_grad(set_to_none=True)
+    scaler.scale(p.square().sum()).backward()
+    assert torch.isfinite(p.grad).all().item()
+    scaler.step(optimizer)
+    scaler.update()
+    assert _values(p)[0] < 1.
 
 
 def test_scaler_rejects_invalid_unscale_and_step_order():
@@ -210,8 +230,7 @@ def test_scaler_new_positional_signature_disabled_and_nested_outputs():
     outputs = [p, (p * 2,)]
     scaled = scaler.scale(outputs)
     if _SHIM:
-        assert scaler._scale.ndim == 0
-        assert jt.core.dispatch_context([scaler._scale]) == jt.core.dispatch_context([p])
+        assert jt.core.dispatch_context([scaled[0]]) == jt.core.dispatch_context([p])
     assert isinstance(scaled, list) and isinstance(scaled[1], tuple)
     np.testing.assert_array_equal(_values(scaled[0]), [8.])
     np.testing.assert_array_equal(_values(scaled[1][0]), [16.])
@@ -273,7 +292,12 @@ def test_scaler_float64_nonfinite_check_matches_backend_detection_domain():
         p = torch.nn.Parameter(torch.ones(1, dtype=torch.float64, device=_DEVICE))
         optimizer = torch.optim.SGD([p], lr=.1 / magnitude)
         scaler = torch.amp.GradScaler(_DEVICE, init_scale=8)
-        scaler.scale((p * magnitude).sum()).backward()
+        product = p * magnitude
+        assert product.dtype == torch.float64
+        np.testing.assert_array_equal(_values(product), [magnitude])
+        np.testing.assert_array_equal(_values(p.mul(magnitude)), [magnitude])
+        np.testing.assert_array_equal(_values(torch.mul(p, magnitude)), [magnitude])
+        scaler.scale(product.sum()).backward()
         assert np.isfinite(_values(p.grad)).all()
         scaler.step(optimizer)
         scaler.update()
@@ -311,13 +335,21 @@ def test_half_weak_scalar_and_typed_scale_keep_distinct_backend_protocols():
     p = torch.nn.Parameter(torch.tensor([.25, -.125], dtype=torch.float16, device=_DEVICE))
     weak = p * 65536.
     np.testing.assert_array_equal(_values(weak), [16384., -8192.])
+    np.testing.assert_array_equal(_values(p * 65536), [16384., -8192.])
     np.testing.assert_array_equal(_values(65536. * p), [16384., -8192.])
     for result in (p.mul(65536.), torch.mul(p, 65536.), torch.multiply(p, 65536.)):
         assert result.dtype == torch.float16
         np.testing.assert_array_equal(_values(result), [16384., -8192.])
     if _DEVICE == "cpu":
-        with pytest.raises(RuntimeError, match="without overflow"):
-            torch.add(torch.zeros_like(p), p, alpha=65536.)
+        accepted = torch.add(torch.zeros_like(p), p, alpha=65504.)
+        assert accepted.dtype == torch.float16
+        np.testing.assert_array_equal(_values(accepted), [16376., -8188.])
+        for alpha in (65505., 65536.):
+            with pytest.raises(RuntimeError, match="without overflow"):
+                torch.add(torch.zeros_like(p), p, alpha=alpha)
+        mixed = torch.add(torch.zeros_like(p).float(), p, alpha=65536.)
+        assert mixed.dtype == torch.float32
+        np.testing.assert_array_equal(_values(mixed), [16384., -8192.])
     else:
         added = torch.add(torch.zeros_like(p), p, alpha=65536.)
         assert added.dtype == torch.float16
@@ -330,8 +362,10 @@ def test_half_weak_scalar_and_typed_scale_keep_distinct_backend_protocols():
     assert typed.dtype == torch.float16
     if _DEVICE == "cuda":
         assert np.isposinf(_values(scaled)[0]) and np.isneginf(_values(scaled)[1])
+        assert np.isposinf(_values(typed)[0]) and np.isneginf(_values(typed)[1])
     else:
         np.testing.assert_array_equal(_values(scaled), [16384., -8192.])
+        np.testing.assert_array_equal(_values(typed), [16384., -8192.])
     np.testing.assert_array_equal(_values(scaled), _values(typed))
     for result in (p.mul(scalar), torch.mul(p, scalar), torch.multiply(p, scalar)):
         assert result.dtype == torch.float16
@@ -343,9 +377,13 @@ def test_public_sqrt_autocast_preserves_dtype_values_and_backward():
     with torch.autocast(_DEVICE, dtype=torch.bfloat16):
         output = torch.sqrt(p)
         method_output = p.sqrt()
+        exp_output = torch.exp(p)
     assert output.dtype == torch.float32
     assert method_output.dtype == torch.float32
+    assert exp_output.dtype == torch.float32
     np.testing.assert_array_equal(_values(output), [.5, 1.])
     np.testing.assert_array_equal(_values(method_output), [.5, 1.])
+    np.testing.assert_allclose(_values(exp_output), np.exp([.25, 1.]),
+                               rtol=1e-6, atol=0)
     output.sum().backward()
     np.testing.assert_array_equal(_values(p.grad), [1., .5])

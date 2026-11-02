@@ -67,6 +67,15 @@ def set_default_device_spelling(device):
     _DEFAULT_DEVICE = device
 
 
+def data_constructor_device(device):
+    """Resolve tensor/as_tensor placement before considering source placement."""
+    if device is not None:
+        return device
+    from .types import active_device_context
+    contextual = active_device_context()
+    return contextual if contextual is not None else _DEFAULT_DEVICE
+
+
 def _placement_request(backend, device, like=None, default_placement=True):
     """Resolve native placement without changing Runtime flags or materializing.
 
@@ -107,6 +116,8 @@ def _placement_request(backend, device, like=None, default_placement=True):
     numeric_index = isinstance(device, int) and not isinstance(device, bool)
     name = "cuda" if numeric_index else (getattr(device, "type", None) or str(device).split(":", 1)[0])
     if name == "cpu":
+        return 0, 0
+    if name == "meta":
         return 0, 0
     if name not in ("cuda", "npu"):
         raise NotImplementedError("native Tensor placement does not support device %r" % str(device))
@@ -153,7 +164,7 @@ class tensor_frontend:
         if backend is None:
             return None
         core = backend.core
-        self._token = core._set_tensor_frontend_type(self._type)
+        self._token = core._set_tensor_frontend_type(self._type, self._like)
         self._placement_token = self._precision_token = self._policy_bits = None
         try:
             self._precision_token = core._set_float32_precision(
@@ -198,8 +209,9 @@ class FrontendFactory:
         update_wrapper(self, function)
 
     def __call__(self, *args, **kwargs):
+        from .meta import finish
         with tensor_frontend(self.tensor_type, device=kwargs.get("device")):
-            return self.function(*args, **kwargs)
+            return finish(self.function(*args, **kwargs), kwargs.get("device"))
 
     def __get__(self, instance, owner=None):
         return self if instance is None else MethodType(self, instance)
@@ -231,8 +243,12 @@ class _TensorMeta(type):
                 % ", ".join(sorted(kwargs))
             )
         from .nested import _TorchSize
+        device = data_constructor_device(device)
+        from .meta import finish
         dtype = requested_dtype if requested_dtype is not None else _default_tensor_dtype(backend)
-        with tensor_frontend(cls, like=args[0] if len(args) == 1 else None, device=device):
+        source_var = len(args) == 1 and isinstance(args[0], backend.Var)
+        with tensor_frontend(cls, like=args[0] if source_var else None, device=device,
+                             default_placement=not source_var):
             if not args:
                 result = backend.empty((0,), dtype=dtype)
             elif all(isinstance(arg, int) for arg in args):
@@ -250,14 +266,13 @@ class _TensorMeta(type):
                     result._torch_data_owner = args[0]
                     result._torch_data_path = ()
                 else:
-                    result = backend.Var.clone(args[0])
-                    result._set_view_of(args[0], Ellipsis)
+                    result = args[0].clone()
                 result.requires_grad = requires_grad
-                return result
+                return finish(result, device, args[0])
             else:
                 result = backend.array(args[0], dtype=dtype)
             result.requires_grad = requires_grad
-            return result
+            return finish(result, device)
 
 
 def make_tensor_type(backend):
@@ -290,11 +305,14 @@ def clone(input, *, memory_format=None):
                 result = backend.Var.copy(input)
                 result.sync()
                 setattr(result, "_jittor_torch_force_cpu", True)
-            return result
-        return backend.Var.copy(input)
+            from .meta import finish
+            return finish(result, like=input)
+        from .meta import finish
+        return finish(backend.Var.copy(input), like=input)
 
 
 def parameter_new(cls, data=None, requires_grad=True):
+    from .meta import finish
     backend = cls._parameter_backend
     with tensor_frontend(cls, like=data):
         if data is None:
@@ -303,7 +321,7 @@ def parameter_new(cls, data=None, requires_grad=True):
             source = data if isinstance(data, backend.Var) else backend.array(data)
             value = backend.Var.detach(source)
     value.requires_grad = bool(requires_grad)
-    return value
+    return finish(value, like=data)
 
 
 def parameter_init(self, data=None, requires_grad=True):
@@ -356,8 +374,17 @@ def rebuild_tensor(tensor_type, array, dtype, requires_grad, device=None):
 
 def deepcopy_tensor(value, memo):
     from copy import deepcopy
+    from .tensor_object_state import get_tensor_object_state
     result = rebuild_tensor(type(value), value.numpy(), _jittor_dtype_name(value.dtype),
                             value.requires_grad, str(value.device))
     memo[id(value)] = result
     result.__dict__.update(deepcopy(_python_state(value), memo))
+    # Rebuilt storage is independent. View write-through metadata must not
+    # redirect mutations to the old view's owner, including legacy holders.
+    state = get_tensor_object_state(result)
+    if state is not None:
+        state.data_owner = None
+        state.data_path = ()
+    result.__dict__.pop("_torch_data_owner", None)
+    result.__dict__.pop("_torch_data_path", None)
     return result

@@ -66,9 +66,10 @@ def _invoke_factory(name, args, kwargs):
     if implementation is None:
         raise RuntimeError("torch.%s is not installed" % name)
     from ..frontend import tensor_frontend
+    from ..meta import finish
     like = args[0] if args and (name.endswith("_like") or name in _TENSOR_FIRST_ARGUMENT) else None
     with tensor_frontend(context.target_namespace.Var, device=kwargs.get("device"), like=like):
-        return implementation(*args, **kwargs)
+        return finish(implementation(*args, **kwargs), kwargs.get("device"), like)
 
 
 def arange(*args, **kwargs):
@@ -226,6 +227,12 @@ def _shape_arg(v):
     return _shape_dim(v)
 
 
+def _arange_scalar(value):
+    # A range bound/step is a scalar, not a dimension: int(value.item())
+    # would silently truncate floating Tensor steps.
+    return value.item() if isinstance(value, (np.generic, jt.Var)) else value
+
+
 def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
     g = get_install_context(jt).target_namespace
     # ACL adapters call jt.empty thousands of times; keep the FP32 fast path.
@@ -239,16 +246,29 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
         if native_shape:
             out = orig(*args)
             out._jittor_torch_ext_mutable = True
+            out.requires_grad_(False)
             return out
     # _invoke_factory already established native construction placement.
     _requires_grad = bool(kwargs.get("requires_grad", False))
     for k in _DROP:
         kwargs.pop(k, None)
+    if name == "arange":
+        args = tuple(_arange_scalar(value) for value in args)
+        for key in ("start", "end", "step"):
+            if key in kwargs:
+                kwargs[key] = _arange_scalar(kwargs[key])
+        if kwargs.get("dtype") is None:
+            values = args + tuple(kwargs[key] for key in ("start", "end", "step")
+                                  if key in kwargs)
+            kwargs["dtype"] = (_dtype_to_str(g.get_default_dtype())
+                               if any(isinstance(value, (float, np.floating)) for value in values)
+                               else "int64")
     # Jittor shape conversion rejects numpy scalars; normalize them.
     # Only for the factories that really take a shape: tril/triu take
     # the matrix to transform, and a 1x1 matrix holds a single element,
     # so shape conversion would collapse it into an integer dimension.
-    _takes_shape = not (name.endswith("_like") or name in _TENSOR_ARGUMENT)
+    _takes_shape = not (name == "arange" or name.endswith("_like")
+                        or name in _TENSOR_ARGUMENT)
     if args and _takes_shape:
         args = tuple(_shape_arg(a) for a in args)
     # Jittor factories reject Size/NanoVector tuple subclasses.
@@ -411,8 +431,8 @@ def _draw_from_generator(name, generator, args, kwargs):
     Covering a call is all-or-nothing: what comes back has to be the tensor the
     same call returns *without* a generator -- same shape, same dtype, same
     requires_grad -- because a generator chooses which stream a draw comes from
-    and nothing else. Arguments this cannot read that way return None, and the
-    original factory runs.
+    and nothing else. Arguments this cannot read that way return None so the
+    adapter can fail closed instead of drawing from the global stream.
     """
     import numpy as _np
     rng = getattr(generator, "_rng", None)
@@ -592,7 +612,9 @@ def _random_adapter(original, *args, generator=None, _name=None, **kwargs):
     drawn = _draw_from_generator(name, generator, args, kwargs) if generator is not None else None
     if drawn is not None:
         return drawn
-    _seed_from(generator)
+    if generator is not None:
+        raise NotImplementedError(
+            "torch.{} cannot preserve the explicit Generator for this call".format(name))
     return original(*args, **kwargs)
 
 

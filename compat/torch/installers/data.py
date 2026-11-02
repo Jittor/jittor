@@ -1023,8 +1023,10 @@ def _checkpoint_collect_hidden(value, variables, index_by_id,
         for cell in value.__closure__ or ():
             try:
                 closure.append(cell.cell_contents)
-            except ValueError:
-                pass
+            except ValueError as exc:
+                swallowed(
+                    "torch/installers/data.py _checkpoint_collect_hidden: "
+                    "empty closure cell", exc)
         globals_used = (
             value.__globals__[name] for name in value.__code__.co_names
             if name in value.__globals__

@@ -13,7 +13,7 @@ from .. import optimizer_kinds as _optimizer_kinds
 from .tensor_state import get_tensor_state
 from .installers.tensor.autograd_api import _optimizer_maybe_has_fsdp_params
 from jittor.optim.algorithms.adam import adam_update
-from .optim_frontend import _validate_adam_groups
+from .optim_frontend import _initialize_default, _validate_adam_groups, _validate_sgd_groups
 
 def _init(self, *a, **k):
     _context = get_install_context(jt)
@@ -296,9 +296,8 @@ def _state_dict_torch(self):
 
 
 def _load_state_dict_torch(self, state_dict):
-    # Keep the public owner in optimizer_api while isolating checkpoint restore.
-    from .optimizer_restore import load_state_dict_torch
-    return load_state_dict_torch(self, state_dict, _torch_optimizer_kind, _torch_param_steps)
+    from .optimizer_restore import _restore_optimizer_state
+    return _restore_optimizer_state(self, state_dict)
 
 
 def _zero_grad_compat(self, set_to_none=True):
@@ -683,11 +682,8 @@ def adamw_step(self, loss=None, retain_graph=False, closure=None, **kwargs):
     return _adam_step(self, loss, retain_graph, closure, kwargs, True)
 
 
-def _initialize_default(self, params, lr, args, kwargs, name):
-    initializer = get_install_context(jt).state["optimizer_native_api"]["initializers"][name]
-    return initializer(self, params, lr, *args, **kwargs)
-
 def sgd_step(self, loss=None, retain_graph=False, closure=None, **kwargs):
+    _validate_sgd_groups(self)
     return _step_with_closure(self, loss, retain_graph, closure, kwargs, 'sgd')
 
 

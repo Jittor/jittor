@@ -168,6 +168,42 @@ class RNGStateContract:
 
 
 class TestCPURNGState(RNGStateContract, unittest.TestCase):
+    def test_dropout_module_defaults_to_training_and_eval_disables_it(self):
+        import jittor as jt
+        from contextlib import nullcontext
+
+        runtime = (jt.runtime.scope(use_cuda=0, backend_fallback="error")
+                   if hasattr(torch, "_torch_compat_install_context")
+                   else nullcontext())
+        fallback_guard = nullcontext()
+        if hasattr(torch, "_torch_compat_install_context"):
+            from jittor._runtime.fallback import forbid_backend_fallbacks
+
+            fallback_guard = forbid_backend_fallbacks()
+
+        with runtime, fallback_guard:
+            torch.manual_seed(20261013)
+            layer = torch.nn.Dropout(p=0.2)
+            self.assertTrue(layer.training)
+            x = torch.ones((8192,), dtype=torch.float32, device="cpu")
+            output = values(layer(x))
+            keep_fraction = float(np.count_nonzero(output) / output.size)
+            self.assertAlmostEqual(keep_fraction, 0.8, delta=0.02)
+            self.assertTrue(np.all((output == 0.0) | (output == 1.25)))
+
+            layer.eval()
+            self.assertFalse(layer.training)
+            np.testing.assert_array_equal(values(layer(x)), np.ones_like(output))
+
+            layer.train()
+            torch.manual_seed(1729)
+            module_output = values(layer(x))
+            torch.manual_seed(1729)
+            functional_output = values(
+                torch.nn.functional.dropout(x, p=0.2, training=True)
+            )
+            np.testing.assert_array_equal(module_output, functional_output)
+
     def test_initial_seed_and_external_random_streams_are_preserved(self):
         torch.manual_seed(42)
         state42 = torch.get_rng_state()
@@ -305,7 +341,7 @@ class TestCUDARNGState(RNGStateContract, unittest.TestCase):
                 b"JITTOR_CUDA_PHILOX4X32_10_V1", b"JITTOR_CURAND_XORWOW_U32_V1"
             )
             invalid = torch.tensor(np.frombuffer(legacy, dtype=np.uint8).copy(), dtype=torch.uint8)
-            with self.assertRaises(RuntimeError):
+            with self.assertRaises(ValueError):
                 torch.cuda.set_rng_state(invalid)
             np.testing.assert_array_equal(values(torch.cuda.get_rng_state()), values(original))
 
@@ -322,15 +358,24 @@ def resume_worker(target_device, mode, checkpoint, output_file):
     model = torch.nn.Sequential(torch.nn.Linear(4, 4), torch.nn.Dropout(0.25))
     optimizer = torch.optim.AdamW(model.parameters(), lr=0.03)
     model, optimizer = accelerator.prepare(model, optimizer)
-    # Initializers may use unsupported cuRAND distributions. This fixture tests
-    # continuation of uniform FP32 noise/dropout after model preparation.
+    for name, parameter in model.named_parameters():
+        if parameter.device.type != target_device:
+            raise AssertionError(
+                "Accelerator.prepare left parameter %s on %s, expected %s"
+                % (name, parameter.device, target_device)
+            )
+    # Reset after initialization so every checkpoint starts at the same stream.
     torch.manual_seed(1729 if mode == "reference" else 991)
     base = torch.arange(1, 9, dtype=torch.float32, device=target_device).reshape(2, 4) / 8
     records = []
 
     def step(index):
         augmentation = random.random() + float(np.random.random())
-        noise = torch.rand(2, 4, device=target_device) * 0.1
+        uniform32 = torch.rand(2, 4, dtype=torch.float32, device=target_device)
+        normal32 = torch.randn(2, 4, dtype=torch.float32, device=target_device)
+        uniform64 = torch.rand(2, 4, dtype=torch.float64, device=target_device)
+        normal64 = torch.randn(2, 4, dtype=torch.float64, device=target_device)
+        noise = (uniform32 + normal32 + uniform64.float() + normal64.float()) * 0.025
         optimizer.zero_grad()
         prediction = model(base + noise + augmentation)
         if str(prediction.device).split(":", 1)[0] != target_device:
@@ -339,6 +384,8 @@ def resume_worker(target_device, mode, checkpoint, output_file):
         accelerator.backward(loss)
         optimizer.step()
         records.append({"step": index, "augmentation": augmentation,
+                        "random": [values(value).tolist() for value in
+                                   (uniform32, normal32, uniform64, normal64)],
                         "output": values(prediction).tolist(),
                         "parameters": [values(p).tolist() for p in model.parameters()],
                         "loss": float(loss.item())})
@@ -348,6 +395,12 @@ def resume_worker(target_device, mode, checkpoint, output_file):
         accelerator.save_state(checkpoint, safe_serialization=False)
     else:
         accelerator.load_state(checkpoint)
+    for name, parameter in model.named_parameters():
+        if parameter.device.type != target_device:
+            raise AssertionError(
+                "Accelerator.load_state moved parameter %s to %s, expected %s"
+                % (name, parameter.device, target_device)
+            )
     step(2)
     step(3)
     result = {"records": [record for record in records if record["step"] > 1],

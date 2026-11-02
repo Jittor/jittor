@@ -228,6 +228,114 @@ class TestArray(unittest.TestCase):
         assert isinstance(b, jt.Var)
         assert (b.data == [1,2,3,4]).all()
 
+    def _check_pickle_bfloat16_roundtrip(self):
+        import pickle
+
+        values = np.array([[-2.5, -0.001, 0.0], [0.002, 1.125, 3.25]],
+                          dtype=np.float32)
+        original = jt.array(values, dtype="bfloat16") * 2
+        original.sync()
+        if jt.flags.use_cuda:
+            self.assertEqual(original.location(), "device")
+        expected = original.numpy()
+        for protocol in (4, pickle.HIGHEST_PROTOCOL):
+            payload = pickle.dumps(original, protocol)
+            for amp_reg in (0, jt.amp_flags.array_prefer | jt.amp_flags.prefer16,
+                            jt.amp_flags.array_prefer | jt.amp_flags.prefer32):
+                with self.subTest(protocol=protocol, amp_reg=amp_reg):
+                    with jt.flag_scope(amp_reg=amp_reg):
+                        restored = pickle.loads(payload)
+                        restored.sync()
+                    self.assertIsInstance(restored, jt.Var)
+                    self.assertEqual(str(restored.dtype), "bfloat16")
+                    if jt.flags.use_cuda:
+                        self.assertEqual(restored.location(), "device")
+                    np.testing.assert_array_equal(restored.numpy(), expected)
+
+    @jt.flag_scope(use_cuda=0, amp_reg=0)
+    def test_pickle_bfloat16_roundtrip(self):
+        self._check_pickle_bfloat16_roundtrip()
+
+    @_test_capability.accelerator_required("cuda", backend=jt)
+    @jt.flag_scope(use_cuda=1, amp_reg=0)
+    def test_pickle_bfloat16_roundtrip_cuda(self):
+        self._check_pickle_bfloat16_roundtrip()
+
+    def _check_save_load_bfloat16_optimizer_grads(self):
+        import os
+        import tempfile
+
+        parameter = jt.array([1.5, -2.0, 0.25], dtype="bfloat16")
+        coefficients = jt.array([-0.001, 0.002, -0.5], dtype="bfloat16")
+        optimizer = jt.optim.SGD([parameter], lr=0.125, momentum=0.5)
+        optimizer.backward((parameter * coefficients).sum())
+        state = optimizer.state_dict()
+        gradient = state["defaults"]["param_groups"][0]["grads"][0]
+        gradient.sync()
+        self.assertEqual(str(gradient.dtype), "bfloat16")
+        if jt.flags.use_cuda:
+            self.assertEqual(gradient.location(), "device")
+        expected = gradient.numpy()
+        self.assertTrue(np.any(expected < 0))
+        self.assertTrue(np.any(expected > 0))
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "optimizer.tar")
+            jt.save({"optimizer": state, "gradients": (gradient,)}, path)
+            loaded = jt.load(path)
+        saved_gradient = loaded["optimizer"]["defaults"]["param_groups"][0]["grads"][0]
+        for restored in (saved_gradient, loaded["gradients"][0]):
+            self.assertEqual(str(restored.dtype), "bfloat16")
+            # Pickle preserves aliases, and .numpy() moves the shared Var to
+            # the host. Check actual arithmetic rather than its prior residency.
+            result = restored * 2
+            result.sync()
+            if jt.flags.use_cuda:
+                self.assertEqual(result.location(), "device")
+            np.testing.assert_array_equal(restored.numpy(), expected)
+            np.testing.assert_array_equal(result.numpy(), expected * 2)
+        restored_optimizer = jt.optim.SGD([parameter.clone()], lr=0.125, momentum=0.5)
+        restored_optimizer.load_state_dict(loaded["optimizer"])
+        restored_gradient = restored_optimizer.param_groups[0]["grads"][0]
+        self.assertEqual(str(restored_gradient.dtype), "bfloat16")
+        result = restored_gradient * 2
+        result.sync()
+        if jt.flags.use_cuda:
+            self.assertEqual(result.location(), "device")
+        np.testing.assert_array_equal(restored_gradient.numpy(), expected)
+        np.testing.assert_array_equal(result.numpy(), expected * 2)
+
+    @jt.flag_scope(use_cuda=0, amp_reg=0)
+    def test_save_load_bfloat16_optimizer_grads(self):
+        self._check_save_load_bfloat16_optimizer_grads()
+
+    @_test_capability.accelerator_required("cuda", backend=jt)
+    @jt.flag_scope(use_cuda=1, amp_reg=0)
+    def test_save_load_bfloat16_optimizer_grads_cuda(self):
+        self._check_save_load_bfloat16_optimizer_grads()
+
+    @jt.flag_scope(use_cuda=0, amp_reg=0, auto_convert_64_to_32=0)
+    def test_pickle_other_dtypes_preserves_values(self):
+        import pickle
+
+        for dtype in ("bool", "int8", "uint8", "int16", "uint16", "int32",
+                      "uint32", "int64", "uint64", "float16", "float32", "float64"):
+            with self.subTest(dtype=dtype):
+                values = np.array([0, 1, 7], dtype=dtype)
+                original = jt.array(values, dtype=dtype)
+                restored = pickle.loads(pickle.dumps(original, 4))
+                self.assertEqual(str(restored.dtype), dtype)
+                np.testing.assert_array_equal(restored.numpy(), values)
+
+        # Old BF16 pickles are indistinguishable from genuine uint16 Vars.
+        # Preserve those integers instead of guessing that they contain BF16 bits.
+        class LegacyVarPayload:
+            def __reduce__(self):
+                return (jt.Var, (np.array([47750, 15107, 47619], dtype=np.uint16),))
+
+        legacy = pickle.loads(pickle.dumps(LegacyVarPayload(), 4))
+        self.assertEqual(str(legacy.dtype), "uint16")
+        np.testing.assert_array_equal(legacy.numpy(), [47750, 15107, 47619])
+
     def test_tuple_array(self):
         a = jt.array((4,5))
         expect_error(lambda : jt.array({}), exc_type=RuntimeError,

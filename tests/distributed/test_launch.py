@@ -72,20 +72,43 @@ print(" ".join("%s=%s" % (key, os.environ.get(key)) for key in keys), flush=True
 
 
 def _launch(nproc, code, logdir, timeout, rendezvous_timeout=120,
-            env=None, inherit=True):
+            env=None, inherit=True, job_timeout=None):
     # Through _helpers.child_process, the launcher passes its environment down
     # to every rank, so an unpinned PYTHONPATH here would put another checkout
     # in all of them. The ranks need no GPU; explicit backend setup is tested
     # without importing the runtime in the parent.
     start = time.time()
+    command = [
+        os.fspath(_LAUNCH), "--nproc-per-node", str(nproc), "--backend", "nccl",
+        "--device-ids", ",".join(str(rank) for rank in range(nproc)),
+        "--log-dir", logdir, "--standalone", "--timeout", str(rendezvous_timeout),
+    ]
+    if job_timeout is not None:
+        command.extend(["--job-timeout", str(job_timeout)])
+    command.extend(["--", PYTHON, "-c", code])
     done = run_python_child(
-        [os.fspath(_LAUNCH), "--nproc-per-node", str(nproc), "--backend", "nccl",
-         "--device-ids", ",".join(str(rank) for rank in range(nproc)),
-         "--log-dir", logdir, "--standalone", "--timeout", str(rendezvous_timeout),
-         "--", PYTHON, "-c", code],
+        command,
         cwd=_REPO_ROOT, env=env, inherit=inherit,
         merge_stderr=True, timeout=timeout)
     return done, time.time() - start
+
+
+def _pid_is_running(pid):
+    """Return whether a PID can still execute, excluding an exited zombie."""
+    proc_stat = Path("/proc/%d/stat" % pid)
+    if proc_stat.exists():
+        try:
+            state = proc_stat.read_text().rsplit(") ", 1)[1].split()[0]
+            return state != "Z"
+        except (IndexError, OSError):
+            pass
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
 
 class TestLaunchFailurePropagation(unittest.TestCase):
@@ -114,6 +137,40 @@ class TestLaunchFailurePropagation(unittest.TestCase):
         # The sleeping ranks are gone too: _stop_all waits for them before the
         # launcher returns, so "came back in seconds" also means "did not leave
         # three ten-minute sleepers behind".
+
+    def test_job_timeout_stops_rank_process_groups_and_cleans_rendezvous(self):
+        code = """
+import os, subprocess, sys, time
+child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"])
+print("rank=%s pid=%s child_pid=%s" %
+      (os.environ["JT_NCCL_RANK"], os.getpid(), child.pid), flush=True)
+time.sleep(600)
+"""
+        done, elapsed = _launch(
+            2, code, self.tmp.name, timeout=120, job_timeout=2)
+        self.assertEqual(done.returncode, 124, done.stdout[-3000:])
+        self.assertLess(elapsed, 30, done.stdout[-3000:])
+        self.assertIn("job timed out", done.stdout)
+        self.assertIn("all rank process groups stopped", done.stdout)
+
+        pids = []
+        for rank in range(2):
+            rank_log = Path(self.tmp.name, "rank%d.log" % rank).read_text()
+            self.assertIn("rank=%d " % rank, rank_log)
+            fields = dict(item.split("=", 1) for item in rank_log.strip().split())
+            pids.extend([int(fields["pid"]), int(fields["child_pid"])])
+
+        deadline = time.time() + 5
+        while time.time() < deadline and any(_pid_is_running(pid) for pid in pids):
+            time.sleep(0.05)
+        self.assertFalse(
+            any(_pid_is_running(pid) for pid in pids),
+            "live rank/worker PIDs after timeout: %s" %
+            [pid for pid in pids if _pid_is_running(pid)],
+        )
+        left = sorted(name for name in os.listdir(self.tmp.name)
+                      if "rootinfo" in name or ".hb" in name)
+        self.assertEqual(left, [], "left behind: %s" % left)
 
     def test_rendezvous_files_are_cleaned_up(self):
         """No rootinfo and no watchdog heartbeats left in the log directory.

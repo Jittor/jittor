@@ -317,6 +317,9 @@ CLASSIFIED = {
     # The canonical Triton domain is part of plain Jittor startup, same reason.
     (C + "triton/__init__.py", "install", "sys.modules"): "pre-ledger",
     (C + "triton/__init__.py", "_ensure_libcuda_linkable", "env"): "pre-ledger",
+    # Plain composition can publish these aliases before Torch mode and before
+    # any install transaction is created.
+    (C + "torch/ddp_comm_hooks.py", "_publish_new_module", "sys.modules"): "pre-ledger",
 
     # ---- deployed payload, a different process -----------------------------
     (C + "shim/resources/torch/__init__.py", "<module>", "sys.modules"): "deployed-payload",

@@ -18,6 +18,46 @@ class _IndexDataset(Dataset):
         return index
 
 
+class _IterableOnlyDataset(Dataset):
+    def __iter__(self):
+        yield from range(4)
+
+
+class _IterableMixin:
+    def __iter__(self):
+        yield from range(4)
+
+
+class _MixedIterableDataset(_IterableMixin, Dataset):
+    pass
+
+
+def test_iterable_style_dataset_fails_closed_for_native_distributed(
+        monkeypatch):
+    monkeypatch.setattr(dist, "get_world_size", lambda: 2)
+    dataset = _IterableOnlyDataset(batch_size=2, num_workers=0)
+
+    with pytest.raises(NotImplementedError, match="Iterable-style Dataset"):
+        list(dataset)
+
+
+def test_mixin_iterable_style_dataset_fails_closed_for_native_distributed(
+        monkeypatch):
+    monkeypatch.setattr(dist, "get_world_size", lambda: 2)
+    dataset = _MixedIterableDataset(batch_size=2, num_workers=0)
+
+    with pytest.raises(NotImplementedError, match="Iterable-style Dataset"):
+        list(dataset)
+
+
+def test_iterable_style_dataset_remains_usable_without_distribution(
+        monkeypatch):
+    monkeypatch.setattr(dist, "get_world_size", lambda: 1)
+    dataset = _IterableOnlyDataset(batch_size=2, num_workers=0)
+
+    assert list(dataset) == [0, 1, 2, 3]
+
+
 def test_dataset_uses_native_rank_to_partition_global_batches(monkeypatch):
     expected = {
         0: [0, 1, 2, 6, 7, 8],

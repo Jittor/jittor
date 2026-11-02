@@ -200,9 +200,94 @@ class TestConstructorDtype(Base):
 
     def test_arange_dtype(self):
         def body(dev):
-            self.assertEqual(dts(torch.arange(5)), "int64", dev)
-            self.assertEqual(dts(torch.arange(0.0, 5.0)), "float32", dev)  # float range -> float32
-            self.ae(torch.arange(5).numpy(), np.arange(5, dtype="int64"), dev)
+            cases = [
+                ((5,), {}, "int64"),
+                ((5,), {"dtype": None}, "int64"),
+                ((), {"end": np.int64(5)}, "int64"),
+                ((0.0, 5.0), {}, "float32"),
+                ((), {"start": np.float64(0), "end": 5, "dtype": None}, "float32"),
+            ]
+            for args, kwargs, expected_dtype in cases:
+                with self.subTest(device=dev, args=args, kwargs=kwargs):
+                    value = torch.arange(*args, device=dev, **kwargs)
+                    self.assertEqual(dts(value), expected_dtype, dev)
+                    self.assertEqual(value.device.type, dev)
+                    self.ae(value.numpy(), np.arange(5, dtype=expected_dtype), dev)
+        both_devices(body)
+
+    def test_arange_preserves_fractional_scalar_steps(self):
+        def body(dev):
+            for step in (np.float64(0.25), torch.tensor(0.25, device=dev)):
+                for args, kwargs in [((0, 1, step), {}),
+                                     ((), {"start": 0, "end": 1, "step": step})]:
+                    value = torch.arange(*args, device=dev, **kwargs)
+                    self.assertEqual(dts(value), "float32", dev)
+                    self.assertEqual(value.device.type, dev)
+                    self.ae(value.numpy(), np.array([0, 0.25, 0.5, 0.75], "float32"), dev)
+        both_devices(body)
+
+    def test_arange_int64_arithmetic_preserves_large_bounds(self):
+        def body(dev):
+            start = 2**53 + 7
+            for step in (3, -3):
+                end = start + 4 * step
+                expected = np.array(list(range(start, end, step)), dtype="int64")
+                for kwargs in ({}, {"dtype": None}, {"dtype": torch.int64}):
+                    value = torch.arange(start, end, step, device=dev, **kwargs)
+                    self.assertEqual(dts(value), "int64", dev)
+                    self.assertEqual(value.device.type, dev)
+                    np.testing.assert_array_equal(value.numpy(), expected, err_msg=dev)
+        both_devices(body)
+
+    def test_arange_float32_does_not_overflow_integer_bounds(self):
+        def body(dev):
+            start, step = 2**40, 2**18
+            expected = np.array([start + i * step for i in range(4)], dtype="float32")
+            value = torch.arange(start, start + 4 * step, step,
+                                 dtype=torch.float32, device=dev)
+            self.assertEqual(dts(value), "float32", dev)
+            self.assertEqual(value.device.type, dev)
+            np.testing.assert_array_equal(value.numpy(), expected, err_msg=dev)
+        both_devices(body)
+
+    def test_arange_float64_arithmetic_and_default_dtype(self):
+        previous = torch.get_default_dtype()
+        try:
+            torch.set_default_dtype(torch.float64)
+            start, step = 1.0 + 2**-30, 2**-32
+            expected = np.array([start + i * step for i in range(4)], dtype="float64")
+
+            def body(dev):
+                for kwargs in ({}, {"dtype": None}, {"dtype": torch.float64}):
+                    value = torch.arange(start, start + 4 * step, step,
+                                         device=dev, **kwargs)
+                    self.assertEqual(dts(value), "float64", dev)
+                    self.assertEqual(value.device.type, dev)
+                    np.testing.assert_array_equal(value.numpy(), expected, err_msg=dev)
+                integer = torch.arange(4, device=dev)
+                self.assertEqual(dts(integer), "int64", dev)
+                self.assertEqual(integer.device.type, dev)
+                self.ae(integer.numpy(), np.arange(4, dtype="int64"), dev)
+            both_devices(body)
+        finally:
+            torch.set_default_dtype(previous)
+
+    def test_native_arange_rejects_invalid_bounds_and_step(self):
+        for start, end, step in ((0, 5, 0), (0.0, 5.0, 0.0)):
+            with self.assertRaises(ZeroDivisionError):
+                jt.arange(start, end, step)
+        for start, end, step in ((5, 0, 1), (0, 5, -1)):
+            with self.assertRaises(RuntimeError):
+                jt.arange(start, end, step)
+
+    def test_native_arange_keeps_default_dtype(self):
+        def body(dev):
+            integer = jt.arange(4)
+            floating = jt.arange(0, 1, 0.25)
+            self.assertEqual(str(integer.dtype), "int32", dev)
+            self.assertEqual(str(floating.dtype), "float32", dev)
+            self.ae(integer.numpy(), np.arange(4, dtype="int32"), dev)
+            self.ae(floating.numpy(), np.array([0, 0.25, 0.5, 0.75], "float32"), dev)
         both_devices(body)
 
     def test_like_constructors_keep_dtype(self):

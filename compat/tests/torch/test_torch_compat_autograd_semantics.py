@@ -53,6 +53,32 @@ class TestPythonScalarsNeverRequireGrad(unittest.TestCase):
         self.assertEqual(float(leaf.grad), 3.0)
 
 
+class TestInPlaceCopyPreservesRequiresGrad(unittest.TestCase):
+    def test_copy_under_no_grad_preserves_frozen_and_trainable_parameters(self):
+        with jt.flag_scope(use_cuda=0):
+            frozen = torch.nn.Parameter(
+                torch.tensor(np.array([1.0, 2.0], dtype=np.float32)),
+                requires_grad=False,
+            )
+            trainable = torch.nn.Parameter(
+                torch.tensor(np.array([3.0, 4.0], dtype=np.float32)),
+                requires_grad=True,
+            )
+
+            with torch.no_grad():
+                frozen.copy_(torch.tensor(np.array([5.0, 6.0], dtype=np.float32)))
+                trainable.copy_(torch.tensor(np.array([7.0, 8.0], dtype=np.float32)))
+
+            self.assertFalse(frozen.requires_grad)
+            self.assertTrue(trainable.requires_grad)
+            np.testing.assert_array_equal(frozen.numpy(), [5.0, 6.0])
+            np.testing.assert_array_equal(trainable.numpy(), [7.0, 8.0])
+
+            (trainable * trainable).sum().backward()
+            self.assertIsNotNone(trainable.grad)
+            self.assertIsNone(frozen.grad)
+
+
 class TestNeedsInputGrad(unittest.TestCase):
     """ctx.needs_input_grad: one flag per argument PASSED, and no kwargs.
 
@@ -212,6 +238,69 @@ class TestInPlaceConstantWrites(unittest.TestCase):
                     np.testing.assert_array_equal(alias.numpy(), np.full((3, 2), constant))
         self.assertEqual(jt.core.backend_fallback_count(), before_fallback)
 
+    def test_public_tensor_constructor_preserves_follow_runtime_alias(self):
+        from jittor._runtime.fallback import forbid_backend_fallbacks
+        with jt.runtime.scope(use_cuda=0, backend_fallback="error"), forbid_backend_fallbacks():
+            native = jt.ones((3, 2), dtype="float32").stop_grad()
+            target = torch.Tensor(native)
+            self.assertEqual(native.placement_backend, -1)
+            self.assertEqual(target.placement_backend, -1)
+            explicit_cpu = torch.Tensor(native, device="cpu")
+            self.assertEqual(explicit_cpu.placement_backend, 0)
+            device_id = native.device_id
+            pointer = target.data_ptr()
+            self.assertEqual(native._storage_address, pointer)
+            for operation, constant in (("fill_", 2.0), ("zero_", 0.0)):
+                with self.subTest(operation=operation):
+                    with torch.no_grad():
+                        returned = (target.fill_(constant) if operation == "fill_"
+                                    else target.zero_())
+                    self.assertIs(returned, target)
+                    self.assertEqual(target.data_ptr(), pointer)
+                    self.assertEqual(native._storage_address, pointer)
+                    self.assertEqual(target.placement_backend, -1)
+                    self.assertEqual(native.placement_backend, -1)
+                    self.assertEqual(target.device_id, device_id)
+                    self.assertEqual(native.device_id, device_id)
+                    np.testing.assert_array_equal(
+                        native.numpy(), np.full((3, 2), constant))
+
+
+    def test_cuda_public_tensor_constructor_preserves_follow_runtime_alias(self):
+        from _helpers import capability
+        capability.require_accelerator("cuda")
+        if not jt.flags.use_cuda:
+            self.skipTest("accelerator prerequisite: dedicated CUDA test mode required")
+        from jittor._runtime.fallback import forbid_backend_fallbacks
+        before_fallback = jt.core.backend_fallback_count()
+        with jt.runtime.scope(use_cuda=1, backend_fallback="error"), forbid_backend_fallbacks():
+            native = jt.ones((3, 2), dtype="float32").stop_grad()
+            target = torch.Tensor(native)
+            native.sync()
+            target.sync()
+            pointer = target.data_ptr()
+            self.assertEqual(native._storage_address, pointer)
+            self.assertEqual(native.placement_backend, -1)
+            self.assertEqual(target.placement_backend, -1)
+            self.assertEqual(native.device_id, target.device_id)
+            self.assertEqual(tuple(jt.core.dispatch_context([native])), ("cuda", 0))
+            self.assertEqual(tuple(jt.core.dispatch_context([target])), ("cuda", 0))
+            for operation, constant in (("fill_", 2.0), ("zero_", 0.0)):
+                with self.subTest(operation=operation), torch.no_grad():
+                    returned = (target.fill_(constant) if operation == "fill_"
+                                else target.zero_())
+                    self.assertIs(returned, target)
+                    target.sync()
+                    native.sync()
+                    self.assertEqual(target.data_ptr(), pointer)
+                    self.assertEqual(target._storage_address, pointer)
+                    self.assertEqual(native._storage_address, pointer)
+                    self.assertEqual(target.device_id, native.device_id)
+                    self.assertEqual(target.placement_backend, -1)
+                    self.assertEqual(native.placement_backend, -1)
+                    np.testing.assert_array_equal(
+                        native.numpy(), np.full((3, 2), constant, dtype=np.float32))
+        self.assertEqual(jt.core.backend_fallback_count(), before_fallback)
     def test_cuda_constant_writes_keep_explicit_cpu_and_cuda_storage(self):
         from _helpers import capability
         capability.require_accelerator("cuda")

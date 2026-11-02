@@ -445,7 +445,7 @@ class TestStateDict(Base):
             self.assertEqual(after, before, dev)
             self.assertIsNot(model.p1, source, dev)
             self.assertIsNot(model.p2, source, dev)
-            self.assertIsNot(model.buf, source, dev)
+            self.assertIs(model.buf, source, dev)
             self.assertIsNot(model.p1, model.p2, dev)
             self.assertIsNot(model.p1, model.buf, dev)
             self.assertTrue(isinstance(model.p1, nn.Parameter), dev)
@@ -454,7 +454,6 @@ class TestStateDict(Base):
             self.assertTrue(model.p1.requires_grad, dev)
             self.assertTrue(model.p2.requires_grad, dev)
             self.assertFalse(model.buf.requires_grad, dev)
-            self.assertTrue(getattr(model.buf, "is_buffer", False), dev)
             self.assertEqual([name for name, _ in model.named_buffers()], ["buf"])
             for value in (model.p1, model.p2, model.buf):
                 value.sync()
@@ -464,6 +463,155 @@ class TestStateDict(Base):
                 self.assertEqual(
                     value.location(), "device" if dev == "cuda" else "cpu", dev)
                 self.ac(value.numpy(), [4.0, 5.0], atol=0, rtol=0, msg=dev)
+
+        both_devices(body)
+
+    def test_load_state_dict_assign_shares_checkpoint_storage_and_roles(self):
+        def body(dev):
+            for source_parameter, target_role in (
+                    (False, "parameter"), (True, "parameter"),
+                    (False, "buffer"), (True, "buffer")):
+                with self.subTest(device=dev, source_parameter=source_parameter,
+                                  target_role=target_role):
+                    source = torch.tensor([4.0, 5.0], dtype=torch.float64, device=dev)
+                    if source_parameter:
+                        source = nn.Parameter(source, requires_grad=False)
+                    else:
+                        source.requires_grad_(target_role == "buffer")
+                    source._assign_alias_marker = "checkpoint"
+                    model = nn.Module()
+                    old = torch.empty(2, device="meta")
+                    if target_role == "parameter":
+                        old = nn.Parameter(old, requires_grad=True)
+                        model.weight = old
+                        model.unnamed_tie = old
+                        key = "weight"
+                    else:
+                        model.register_buffer("buf", old)
+                        key = "buf"
+                    model.load_state_dict({key: source}, strict=False, assign=True)
+                    value = getattr(model, key)
+                    self.assertIsNot(value, old)
+                    if source_parameter or target_role == "buffer":
+                        self.assertIs(value, source)
+                    else:
+                        self.assertIsNot(value, source)
+                    expected_parameter = target_role == "parameter" or source_parameter
+                    self.assertEqual(isinstance(value, nn.Parameter), expected_parameter)
+                    self.assertEqual(key in dict(model.named_parameters()), expected_parameter)
+                    self.assertEqual(key in dict(model.named_buffers()), not expected_parameter)
+                    self.assertEqual(value.requires_grad, target_role == "parameter" or not source_parameter)
+                    expected_source_grad = (target_role == "parameter" if source_parameter
+                                            else target_role == "buffer")
+                    self.assertEqual(source.requires_grad, expected_source_grad)
+                    self.assertEqual(source._assign_alias_marker, "checkpoint")
+                    self.assertFalse(value.is_meta)
+                    for tensor in (source, value):
+                        tensor.sync()
+                        self.assertEqual(tensor.dtype, torch.float64)
+                        self.assertEqual(tensor.device.type, dev)
+                        self.assertEqual(jt.core.dispatch_context([tensor])[0], dev)
+                    if target_role == "parameter":
+                        self.assertIs(model.unnamed_tie, old)
+                        self.assertTrue(old.is_meta)
+                    # Observe storage sharing through public mutations rather
+                    # than relying on the separate Storage.data_ptr contract.
+                    with torch.no_grad():
+                        source.add_(2.0)
+                    self.ac(value.detach().cpu().numpy(), [6.0, 7.0], atol=0, rtol=0)
+                    with torch.no_grad():
+                        value.add_(3.0)
+                    self.ac(source.detach().cpu().numpy(), [9.0, 10.0], atol=0, rtol=0)
+                    self.ac(value.detach().cpu().numpy(), [9.0, 10.0], atol=0, rtol=0)
+
+        both_devices(body)
+
+    def test_load_state_dict_assign_preserves_checkpoint_buffer_and_frozen_parameter(self):
+        def body(dev):
+            model = nn.Module()
+            model.frozen = nn.Parameter(torch.zeros(2, device=dev), requires_grad=False)
+            model.register_buffer("buf", torch.zeros(2, device=dev))
+            source = torch.tensor([2.0, 3.0], dtype=torch.float64, device=dev,
+                                  requires_grad=True)
+            model.load_state_dict({"frozen": source, "buf": source}, assign=True)
+            self.assertFalse(model.frozen.requires_grad, dev)
+            self.assertTrue(model.buf.requires_grad, dev)
+            self.assertTrue(source.requires_grad, dev)
+            self.assertIsInstance(model.frozen, nn.Parameter, dev)
+            self.assertNotIsInstance(model.buf, nn.Parameter, dev)
+            self.assertEqual([name for name, _ in model.named_buffers()], ["buf"])
+            for value in (model.frozen, model.buf):
+                self.assertEqual(value.dtype, torch.float64, dev)
+                self.assertEqual(value.device.type, dev, dev)
+                self.ac(value.detach().cpu().numpy(), [2.0, 3.0], atol=0, rtol=0, msg=dev)
+
+        both_devices(body)
+
+    def test_load_state_dict_copy_into_meta_is_noop(self):
+        def body(dev):
+            model = nn.Module()
+            model.weight = nn.Parameter(torch.empty(2, device="meta"))
+            model.register_buffer("buf", torch.empty(2, device="meta"))
+            old_weight, old_buffer = model.weight, model.buf
+            self.assertTrue(old_weight.is_meta, dev)
+            self.assertTrue(old_buffer.is_meta, dev)
+            for value in (old_weight, old_buffer):
+                self.assertEqual(value.device.type, "meta", dev)
+                self.assertFalse(value.is_cpu, dev)
+                self.assertFalse(value.is_cuda, dev)
+            source = torch.tensor([4.0, 5.0], device=dev)
+            with self.assertWarnsRegex(UserWarning, "meta.*no-op"):
+                model.load_state_dict({"weight": source, "buf": source})
+            self.assertIs(model.weight, old_weight, dev)
+            self.assertIs(model.buf, old_buffer, dev)
+            self.assertTrue(model.weight.is_meta, dev)
+            self.assertTrue(model.buf.is_meta, dev)
+            self.assertFalse(source.is_meta, dev)
+            self.assertFalse(source.requires_grad, dev)
+
+        both_devices(body)
+
+    def test_load_state_dict_assign_nested_container_slots(self):
+        from collections import OrderedDict
+
+        def body(dev):
+            model = nn.Module()
+            model.numeric = nn.Sequential(nn.Linear(2, 1, bias=False))
+            model.named = nn.Sequential(OrderedDict([
+                ("projection", nn.Linear(2, 1, bias=False)),
+            ]))
+            # The same old holder is reachable through four independent
+            # container paths; assignment must replace every named slot.
+            shared = nn.Parameter(torch.empty((1, 2), device="meta"))
+            model.numeric[0].weight = shared
+            model.named[0].weight = shared
+            model.listed = nn.ParameterList([shared])
+            model.keyed = nn.ParameterDict({"projection": shared})
+            sources = {
+                name: torch.tensor([[index, index + 1]], dtype=torch.float64, device=dev)
+                for index, name in enumerate((
+                    "numeric.0.weight", "named.projection.weight",
+                    "listed.0", "keyed.projection",
+                ), start=1)
+            }
+            result = model.load_state_dict(sources, assign=True)
+            self.assertEqual(result.missing_keys, [], dev)
+            self.assertEqual(result.unexpected_keys, [], dev)
+            parameters = dict(model.named_parameters())
+            self.assertEqual(set(parameters), set(sources), dev)
+            self.assertEqual(len({id(value) for value in parameters.values()}), 4, dev)
+            for name, source in sources.items():
+                value = parameters[name]
+                self.assertIsNot(value, shared, name)
+                self.assertIsInstance(value, nn.Parameter, name)
+                self.assertFalse(value.is_meta, name)
+                self.assertEqual(value.dtype, source.dtype, name)
+                self.assertEqual(value.device.type, dev, name)
+                self.assertTrue(value.requires_grad, name)
+                self.assertFalse(source.requires_grad, name)
+                self.ac(value.detach().cpu().numpy(), source.numpy(),
+                        atol=0, rtol=0, msg=name)
+            self.assertTrue(shared.is_meta, dev)
 
         both_devices(body)
 

@@ -34,6 +34,26 @@ class TestOptimizer(unittest.TestCase):
         assert np.allclose(opt.param_groups[0]['grads'][0].norm(), 0.01)
         opt.step()
 
+    def test_clip_grad_norm_accumulates_low_precision_norm_in_fp32(self):
+        for dtype in ("float16", "bfloat16"):
+            with self.subTest(dtype=dtype):
+                a = jt.ones((1024,), dtype=dtype)
+                opt = jt.optim.SGD([a], 0.1)
+                opt.backward((a * 0).sum())
+                grad = opt.param_groups[0]["grads"][0]
+                grad.update(jt.ones_like(grad) * 32)
+
+                amp_reg = (jt.amp_flags.prefer_bfloat16
+                           if dtype == "bfloat16"
+                           else jt.amp_flags.prefer16)
+                with jt.flag_scope(amp_reg=amp_reg |
+                                   jt.amp_flags.array_prefer):
+                    opt.clip_grad_norm(10.0, 2)
+
+                clipped = np.asarray(grad.numpy(), dtype=np.float32)
+                self.assertAlmostEqual(
+                    float(np.linalg.norm(clipped)), 10.0, places=1)
+
     def test_state_dict(self):
         a = jt.ones(2)
         opt = jt.optim.SGD([a], 0.1)

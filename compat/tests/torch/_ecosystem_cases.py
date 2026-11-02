@@ -110,7 +110,7 @@ def _diffusers_unet(torch):
     return model, inputs
 
 
-def _peft_lora_llama(torch):
+def _build_peft_lora_llama(torch, lora_dropout=0.0):
     from peft import LoraConfig, get_peft_model
     from transformers import AutoConfig, AutoModelForCausalLM
 
@@ -129,13 +129,22 @@ def _peft_lora_llama(torch):
     lora = LoraConfig(
         r=4,
         lora_alpha=8,
-        lora_dropout=0.0,
+        lora_dropout=lora_dropout,
         target_modules=["q_proj", "v_proj"],
         task_type="CAUSAL_LM",
     )
     model = get_peft_model(base, lora)
     inputs = {"input_ids": ("int64", (2, 8), 128)}
     return model, inputs
+
+
+def _peft_lora_llama(torch):
+    return _build_peft_lora_llama(torch, lora_dropout=0.0)
+
+
+def _peft_lora_llama_dropout(torch):
+    """LoRA case that consumes a stochastic mask on every training forward."""
+    return _build_peft_lora_llama(torch, lora_dropout=0.2)
 
 
 def _peft_lora_qwen2(torch):
@@ -335,6 +344,7 @@ CASES = {
     "diffusers_unet2d": (_diffusers_unet, ("diffusers",)),
     "diffusers_dit": (_diffusers_transformer, ("diffusers",)),
     "peft_lora_llama": (_peft_lora_llama, ("transformers", "peft")),
+    "peft_lora_llama_dropout": (_peft_lora_llama_dropout, ("transformers", "peft")),
     "peft_lora_qwen2": (_peft_lora_qwen2, ("transformers", "peft")),
     "mmcv_conv_module": (_mmcv_conv_module, ("mmcv", "mmengine")),
     "mmengine_base_module": (_mmengine_base_model, ("mmengine",)),
@@ -345,6 +355,7 @@ CASES = {
 # this case's loss graph. Cases absent from this mapping retain the historical
 # comparison-only behavior until their upstream contract is audited.
 EXPECTED_MISSING_TRAINABLE_GRADS = {
+    "peft_lora_llama": (),
     "peft_lora_qwen2": (),
 }
 

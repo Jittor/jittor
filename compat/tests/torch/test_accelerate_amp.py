@@ -73,6 +73,38 @@ class TestAccelerateAmpAutograd(unittest.TestCase):
                         self.assertEqual(result.dtype, torch.float32)
                         self.assertEqual(result.device.type, "cpu")
 
+    def test_autocast_selects_matrix_eligible_operations(self):
+        with jt.flag_scope(use_cuda=int(_DEVICE == "cuda")):
+            matrix = torch.ones((2, 2), dtype=torch.float32, device=_DEVICE)
+            batch = matrix.unsqueeze(0)
+            with torch.autocast(_DEVICE, dtype=torch.bfloat16):
+                results = (
+                    torch.matmul(matrix, matrix),
+                    torch.mm(matrix, matrix),
+                    torch.bmm(batch, batch),
+                    torch.baddbmm(torch.zeros_like(batch), batch, batch),
+                    torch.zeros_like(batch).baddbmm(batch, batch),
+                    torch.einsum("ij,jk->ik", matrix, matrix),
+                    torch.addmm(torch.zeros_like(matrix), matrix, matrix),
+                    torch.zeros_like(matrix).addmm(matrix, matrix),
+                )
+                for result in results:
+                    self.assertEqual(result.dtype, torch.bfloat16)
+                    self.assertEqual(result.device.type, _DEVICE)
+                    np.testing.assert_array_equal(_values(result),
+                                                 np.full(result.shape, 2.))
+            self.assertEqual(matrix.dtype, torch.float32)
+            host_matrix = matrix.cpu()
+            host_batch = batch.cpu()
+            with torch.autocast("cuda", dtype=torch.bfloat16):
+                cpu_results = (
+                    torch.matmul(host_matrix, host_matrix),
+                    torch.baddbmm(torch.zeros_like(host_batch), host_batch, host_batch),
+                    torch.addmm(torch.zeros_like(host_matrix), host_matrix, host_matrix),
+                )
+                for result in cpu_results:
+                    self.assertEqual(result.dtype, torch.float32)
+
     def test_functional_autocast_preserves_native_and_subclass_protocol(self):
         observed = []
 

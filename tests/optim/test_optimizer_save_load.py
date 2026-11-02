@@ -1,11 +1,12 @@
 import unittest
+import numpy as np
 import jittor as jt
 from jittor import nn
 import os
 
 
-def compare(x, y, shape=4):
-    assert((x == y).sum() == shape)
+def compare(x, y):
+    np.testing.assert_allclose(x.numpy(), y.numpy(), rtol=2e-6, atol=2e-6)
 
 
 def _run_optimizer_roundtrip(optimzer_type, **kwargs):

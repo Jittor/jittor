@@ -65,7 +65,8 @@ class TestInstallationOwners(unittest.TestCase):
             def __float__(self): return 2.0
         ns = {"jt": SimpleNamespace(), "EXPECTED": (ValueError,),
               "swallowed": lambda *args: None, "_dtype_to_str": str}
-        definitions("installers/factories.py", ["_linspace_adapter", "_seed_from", "_random_adapter"], ns)
+        definitions("installers/factories.py", [
+            "_linspace_adapter", "_seed_from", "_draw_from_generator", "_random_adapter"], ns)
         ns["_linspace_adapter"](native, Scalar(), Scalar(), Scalar(), dtype="float64")
         self.assertEqual(calls, [((2.0, 2.0, 2), {}), ("cast", "float64")])
         with self.assertRaisesRegex(NotImplementedError, "explicit Generator"):
