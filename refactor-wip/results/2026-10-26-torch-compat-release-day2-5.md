@@ -4,7 +4,7 @@
 
 绑定源码 HEAD d26c31246613c9e6a34da2ee7b6853612c9049a3、fingerprint 89157afb357abbb882057230ecb0e86586deeef7fb010a7cc51b3577eea054a6，候选 adapter SHA256 adea9cd2a304af21478c54719685139fead0515edef865674ff419df3da02243。attempt05 在 GPU0 UUID GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5（cuda:0）执行 900 秒，timeout exit 124，预测文件 0 行。Jittor 已完成模型/CUDA 初始化，但在首条生成前持续进行 CUDA/C++ JIT 编译；NVCC 子进程和 syscall 记录保存在 attempt 目录。没有可报告的 EM、token-F1、ROUGE-L、生成长度或 fallback-after 结果；没有运行 PyTorch 配对基线或官方 AlpacaEval judge。
 
-证据根目录为 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-qwen-heldout-alpaca-eval-r1-prepared/。attempt-05 的 final-sha256sums.txt SHA256 为 25ea1436a8bfdbba2e754845b743360a90c39d10f06848472b933acb66c5fded；plan.json SHA256 为 087e7cfd2d04ed398a01347b16c6f5c6c229776dfaf969e20aa9840605052b40。隔离 overlay 结束时包含 3,844 个 cache 文件；R4 原始 jittor_core 哈希仍为 bdcb95c0043fc9af3d558adb19f243d792c8404aeb8f5bc8800957ef3f60d5a5。GPU2 未暴露给该进程，仍由外部工作占用 45,880 MiB/100%。
+证据根目录为 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-qwen-heldout-alpaca-eval-r1-prepared/。attempt-05 的 final-sha256sums.txt SHA256 为 bc4e12e02da1c8634f2d54d7898696155dd85d83ab3c851687f54aa5480d8028；plan.json SHA256 为 087e7cfd2d04ed398a01347b16c6f5c6c229776dfaf969e20aa9840605052b40。对隔离 overlay 与 2,905 文件的基线 cache 逐路径、逐哈希比较后，结束时有 3,844 个文件，新增 939 个、其中 234 个新编译 op 动态库，分属 29 类文件名签名；基线文件缺失或哈希变化为 0。这表明首样本前发生大量 JIT 编译，但不证明原因仅是 shape specialization，也不是性能指标。R4 原始 jittor_core 哈希仍为 bdcb95c0043fc9af3d558adb19f243d792c8404aeb8f5bc8800957ef3f60d5a5。GPU2 未暴露给该进程，仍由外部工作占用 45,880 MiB/100%。
 
 数据集虽来自 AlpacaEval，本轮既没有完成生成，也没有运行官方评审；此前也未登记 lexical 指标的通过阈值，因此不能据此关闭模型质量门。该诊断不是 Day4–5 性能或显存验收。后续先分析隔离 cache 的新增编译项和形状特化，再选择可控的小规模配对生成验证；正式性能窗仍需 cgq association 与 GPU2 独占租约。更广 Day2–5 发布门保持 **Not complete**。
 
