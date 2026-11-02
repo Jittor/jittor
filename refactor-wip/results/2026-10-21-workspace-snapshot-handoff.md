@@ -1,3 +1,11 @@
+## 2026-11-02 21:48 +0800 Handoff：current-main CUDA 梯度与 optimizer 定向测试通过
+
+继续使用 /home/cgq/jittor；HEAD/origin cgq_transformers 为 304500ea83ce1e1191ee7f3f4d5efc60911529d4。81 tracked dirty 和 21 untracked 原样保留，index 为空，源码/测试指纹前后未变。GPU0 UUID GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5、cuda:0、backend_fallback=error 下，stable gradients 8/8、fused AdamW 1/1、cuBLASLt 8/8 通过、0 跳过。证据包 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-cuda-stable-gradients-r1-prepared/，artifact manifest SHA256 2d77097361e06727c526f357d485a6488d9cedbfe06d6b6352db63197d302684。
+
+这些结果补强当前源码上的低层 CUDA 梯度和更新语义；cuBLASLt 测试包含 portable 梯度路径的三步 SGD 实际更新。它们不代表模型级训练曲线、held-out 质量、性能或显存收益。GPU2 未使用，仍有外部工作占用 45,880 MiB、100%。
+
+下一步继续按实际缺口补剩余 CUDA/native/installed-wheel 功能，不重跑本轮 17 项；wheel baseline 的 69 additions/约 300 content changes 尚未获批准，不能改 allowlist 伪造通过。正式 Day4–5 等管理员添加 cgq association 与可验证 GPU2 独占租约，再执行既有三轮交替协议。held-out generation、activation recompute 显存收益、wheel migration 和跨框架 optimizer 文件互操作仍开放，整体 Day2–5 保持 **Not complete**。
+
 ## 2026-11-02 21:26 +0800 Handoff：current-main CUDA 补测通过，正式性能窗口仍受阻
 
 继续使用 /home/cgq/jittor，HEAD/origin cgq_transformers 为 847b40f4fa88c26a8213a4e20cfa332e3d8c5f60。dirty state 为 81 tracked、21 untracked，index 为空；测试期间无产品源码变化。GPU0 UUID GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5、cuda:0、backend_fallback=error 下，argmax/argmin 2/2、CUDA op capabilities 6/6、backend contract matrix 54/54 通过；matrix 仍有 27 个 no-probe cells，未覆盖后端不算通过。

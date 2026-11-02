@@ -1,3 +1,13 @@
+## 2026-11-02 21:48 +0800 current-main CUDA 梯度、fused AdamW 与 cuBLASLt 定向验收通过；Day2–5 仍未完成
+
+绑定现有 /home/cgq/jittor 的 HEAD/origin/cgq_transformers 304500ea83ce1e1191ee7f3f4d5efc60911529d4。执行期间保留 81 个 tracked dirty、21 个 untracked，index 为空；tracked diff SHA256 b97553cf0eb6cc4ca17f3f929071c3ab5db92322030ddef33a79c2da38786200，porcelain SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211。所测源码哈希前后相同。
+
+隔离 cache 的真实 CUDA 测试均在 GPU0 UUID GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5（进程内 cuda:0）和 backend_fallback=error 下完成：tests/nn/test_cuda_stable_gradients.py 8 passed、0 skipped（166.83s）；tests/backends/cuda/test_fused_adamw_cuda.py 1 passed、0 skipped（3.67s）；tests/nn/test_lt_linear_cuda.py 8 passed、0 skipped（58.94s）。三个 Nox session 均有 JITTOR-SESSION-COMPLETE 和实际执行计数，合计 17 项通过。
+
+cuBLASLt 用例中“梯度走 portable path 后 SGD 三步实际更新参数、梯度有限”的断言通过；这补充了低层训练更新功能证据，但不是模型任务训练或性能结果。GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 未暴露给测试，结束复核仍为外部进程占用 45,880 MiB、100%。本轮没有性能/显存结论。
+
+证据包 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-cuda-stable-gradients-r1-prepared/，最终 artifact manifest SHA256 2d77097361e06727c526f357d485a6488d9cedbfe06d6b6352db63197d302684。Day4–5 仍需管理员添加 cgq association 与可验证 GPU2 独占租约；整体 Day2–5 保持 **Not complete**。
+
 ## 2026-11-02 21:26 +0800 current-main CUDA capability 与 backend contract 补测通过；Day2–5 仍未完成
 
 绑定现有 /home/cgq/jittor 的 HEAD 与 origin/cgq_transformers：847b40f4fa88c26a8213a4e20cfa332e3d8c5f60。测试期间无产品源码变化；81 个 tracked dirty、21 个 untracked 保留，index 为空，tracked diff SHA256 b97553cf0eb6cc4ca17f3f929071c3ab5db92322030ddef33a79c2da38786200，porcelain SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211。

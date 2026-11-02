@@ -1,3 +1,21 @@
+## 2026-11-02 21:48 +0800 current-main CUDA 梯度与优化器更新定向验收通过；Day2–5 未完成
+
+沿用 /home/cgq/jittor，HEAD 和 origin/cgq_transformers 均为 304500ea83ce1e1191ee7f3f4d5efc60911529d4。测试期间 git worktree 指纹未变：81 tracked dirty、21 untracked、index 为空；tracked diff SHA256 b97553cf0eb6cc4ca17f3f929071c3ab5db92322030ddef33a79c2da38786200，porcelain SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211。目标测试与 CUDA kernel 文件运行前后的 SHA256 相同。
+
+使用真实 GPU0 UUID GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5、进程内 cuda:0、backend_fallback=error，三个有界 Nox session 全部实际执行通过：
+
+- tests/nn/test_cuda_stable_gradients.py：8 collected/executed/passed，0 skipped，166.83s。覆盖 bias 抵消与 float64 oracle、tile 边界、非连续 cotangent、embedding 分块/重复/负索引/空与 scalar 输入、稳定排序、dtype 和一二阶梯度。
+- tests/backends/cuda/test_fused_adamw_cuda.py：1 passed，0 skipped，3.67s。用 42 个参数列表检查超过单次 36 项 launch table 的分块、空 tensor、大小尾部和 AdamW 更新公式。
+- tests/nn/test_lt_linear_cuda.py：8 passed，0 skipped，58.94s。覆盖 cuBLASLt 与 portable path 数值、TF32/FP16/autocast dtype、重复调用、拒绝条件，以及梯度回退后执行三步 SGD 更新并核验参数改变和有限梯度。
+
+三个 session 均记录 JITTOR-SESSION-COMPLETE 的 collected/executed 数和 Nox success，合计 17 passed。test_a_gradient_falls_back_and_still_learns 中的 fallback 是 cuBLASLt 未服务梯度时转 portable 算子继续训练；backend_fallback=error 仍用于阻止后端 CPU fallback 冒充 CUDA。该 suite 不是模型级学习曲线、held-out 质量、端到端训练或性能/显存验收。
+
+证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-cuda-stable-gradients-r1-prepared/。artifact-files.sha256 文件 SHA256 为 2d77097361e06727c526f357d485a6488d9cedbfe06d6b6352db63197d302684。起始 cache 15,632 项，结束 15,984 项，新增 352、删除 0、共有路径 789 项哈希变化；仅在独立 r1 cache 内编译。第一次 Nox session 在 pytest 前按 Jittor 的 jit_utils rebuild 规则退出；同命令的一次提示重启通过，完整失败和成功原件均保留。Nox 按 CUDA session 配置将当前 compat 源码 editable 安装到专用测试环境；仓库路径与源码指纹未改变。
+
+GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 未暴露给测试；完成时外部 compute PID 仍占 45,880 MiB、100%。共享负载中的 GPU0 correctness 结果不构成性能或显存结论。Day4–5 正式验收仍待管理员添加 cgq Slurm association 并提供可核验独占 GPU2 GRES/device-cgroup lease，之后才可按三轮交替、每轮每侧至少 10 个热态样本报告 median/p95/离散度、加载/首步/热态耗时和 allocator/NVML 峰值。
+
+更广泛 Day2–5 仍有 approved wheel migration、held-out generation 质量分数、特定 release 候选上的真实 activation recompute 显存收益、stock PyTorch 对 JT optimizer portable-pickle 文件的互操作等开放门槛。整体保持 **Not complete**。
+
 ## 2026-11-02 21:26 +0800 current-main CUDA 补测；Day2–5 未完成
 
 接续 /home/cgq/jittor，测试绑定 HEAD/origin/cgq_transformers 847b40f4fa88c26a8213a4e20cfa332e3d8c5f60。测试期间产品源码无变化；81 tracked dirty、21 untracked 原样保留，index 为空；tracked diff SHA256 b97553cf0eb6cc4ca17f3f929071c3ab5db92322030ddef33a79c2da38786200，porcelain SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211。
