@@ -1,3 +1,9 @@
+## 2026-11-03 02:31 +0800 Handoff：安装 wheel grouped-query attention 带 mask CUDA 前反向通过
+
+current main wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69，源码输入 HEAD 35a1a7605ec475e9cbc1a9688afc299ee3bd8011。在物理 GPU0 上，test_grouped_query_heads_with_a_mask 对 Qwen 风格 GQA（6 query heads、2 KV heads、bool mask）完成 forward 与 q/k/v gradient oracle 比较，并确认 KV heads 不做 repeat 物化；1 passed、0 skipped，fallback 0→0，core build current，core SHA256 0e2fe909d3f33e27c220546693c40f27087357cefe198220f46c97f9a0353a90 前后不变。证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-gqa-attention-cuda-r1/，manifest SHA256 d53d70af72bbb8dd7a68e38b731037da04307259a4b38c137b08e28d973ca9fe。
+
+该证据仅覆盖一个 installed-wheel CUDA attention 格，GPU0 共享负载，不作性能/显存结论。后续继续审查其它 wheel 差异和安装态实际功能；保留 wheel baseline 0 approved。GPU2 仍由外部任务占用，cgq Slurm association 等待管理员配置，Day4–5 正式性能/显存窗口未启动；整体 Day2–5 仍 Not complete。
+
 ## 2026-11-03 02:28 +0800 Handoff：installed wheel fused SGD 部分通过，完整 option trajectory 超时
 
 在 wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69 的 installed CUDA 路径中，fused SGD 两个 unittest 方法完整通过：unsupported FP16 dtype 的优化器回退，以及超过 chunk 的长参数列表实际更新。第三个全部 optimizer option 组合轨迹达到 180 秒上限，suite exit 124，不能报整体通过。core SHA256 0e2fe909d3f33e27c220546693c40f27087357cefe198220f46c97f9a0353a90 未变；artifact manifest SHA256 64ecd2492058bcbc4a6ff2d44676fb05e2dd6642cd3de09186b9fec645e35c35，目录 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-fused-sgd-cuda-r2/。

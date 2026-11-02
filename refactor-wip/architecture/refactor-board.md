@@ -1,3 +1,7 @@
+## 2026-11-03 02:31 +0800 current-HEAD 安装 wheel 的 grouped-query attention CUDA 前反向通过；整体发布门仍开放
+
+在 installed main wheel 上执行一个 Qwen 风格 grouped-query attention 带 mask 用例，真实 CUDA 前向与 q/k/v 梯度通过，确认压缩 K/V heads 原位读取；1 passed、0 skipped、fallback 0→0，installed kernel 哈希匹配源码，core build current。证据包 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-gqa-attention-cuda-r1/，manifest SHA256 d53d70af72bbb8dd7a68e38b731037da04307259a4b38c137b08e28d973ca9fe。这只验证一个 attention 格，不提供模型训练、性能或显存结论；wheel baseline 和 Day2–5 发布门仍未完成。
+
 ## 2026-11-03 02:28 +0800 current-HEAD 安装 wheel 的 fused SGD 部分功能通过；完整选项矩阵超时
 
 在安装态 CUDA wheel 上，fused SGD 的 unsupported-dtype 回退和超过 chunk 的参数列表更新两项完成并通过；覆盖全部 optimizer option 组合的轨迹方法在 180 秒硬上限终止，整个 suite 不记为通过。复用 core SHA256 0e2fe909d3f33e27c220546693c40f27087357cefe198220f46c97f9a0353a90，证据包 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-fused-sgd-cuda-r2/，manifest SHA256 64ecd2492058bcbc4a6ff2d44676fb05e2dd6642cd3de09186b9fec645e35c35。这是部分功能证据，不是训练、性能或显存结论；整体 Day2–5 仍未完成。

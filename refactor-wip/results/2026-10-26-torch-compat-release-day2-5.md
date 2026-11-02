@@ -1,3 +1,13 @@
+## 2026-11-03 02:31 +0800 current-HEAD 安装 wheel 的 grouped-query attention CUDA 前反向通过
+
+测试绑定 main wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69（源码快照 HEAD 35a1a7605ec475e9cbc1a9688afc299ee3bd8011）。测试源 tests/backends/cuda/test_fused_attention_f32.py SHA256 f4f6a8061887a7bb153202b8dda83c24755b1d7d89aaf22ff444f240ad98475c；wheel 中 fused_attention_f32_cuda.py 与源码哈希均为 0de90af465d2cc41f9185ba9b8bfa82b25ccee86a9eb96d018b0da4d42eab1a3。测试时 live repo HEAD 为 d5139161bf1dd7781fe4a9c6cae812f1df8c2de4，工作区干净。
+
+物理 GPU0 UUID GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5 映射为进程内 cuda:0。TestFusedAttentionF32.test_grouped_query_heads_with_a_mask 结果 1 passed、0 skipped、0 failed：batch=2、query heads=6、KV heads=2、seq=33、head dim=40，应用 bool mask；与独立 numpy reference 比较 forward 和 dq/dk/dv gradients，验证压缩 KV heads 没有先 repeat 物化。jittor 与 kernel 模块路径均指向 installed target，core_build_is_current() 为 true；core SHA256 0e2fe909d3f33e27c220546693c40f27087357cefe198220f46c97f9a0353a90 前后未变。启用 forbid_backend_fallbacks() 与 backend_fallback=error，计数 0→0。
+
+证据包 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-gqa-attention-cuda-r1/，artifact manifest SHA256 d53d70af72bbb8dd7a68e38b731037da04307259a4b38c137b08e28d973ca9fe。复用同 wheel 身份 CUDA core；测试自身 15.177 秒、完整运行 16.641 秒。GPU0 是共享设备（运行前 7,541 MiB/91%，结束 7,541 MiB/23%），GPU2 未使用，故不作速度或显存判断。
+
+该结果补上当前 wheel 的一个 grouped-query attention CUDA 安装态功能格，不代表完整 attention API、任意 mask/layout/dtype，亦不代表整网训练验收。wheel baseline 仍为 69 additions、304 content changes、2 removals、0 approved；Generator contract matrix 矛盾、fused SGD 完整 option trajectory 超时及其它 wheel 差异继续开放。正式 Day4–5 与整体 Day2–5 保持 Not complete。
+
 ## 2026-11-03 02:28 +0800 current-HEAD 安装 wheel 的 fused SGD 两个方法通过；完整 suite 超时
 
 绑定 main wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69（源码快照 HEAD 35a1a7605ec475e9cbc1a9688afc299ee3bd8011），live repo 在运行前 HEAD e81208daefce0a00cfd28d29d6cc007494d954b9 且工作区干净。物理 GPU0 UUID GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5 映射为进程内 cuda:0；GPU2 未使用。测试源码 tests/optim/test_fused_sgd_cuda.py SHA256 7a063a60bdb25d0474149deb4e372b63d5f7163e424a09166a82ff86a2f2f5b9；安装 wheel kernel fused_sgd_cuda.py 与快照源码 SHA256 均为 5d7c15f09429e8d8bdd0fc9bc590654d0688e2ce342c5dbb7bdb4d4f1aa1d971。installed Jittor 和 kernel 路径通过断言，复用 CUDA core SHA256 0e2fe909d3f33e27c220546693c40f27087357cefe198220f46c97f9a0353a90，前后不变。
