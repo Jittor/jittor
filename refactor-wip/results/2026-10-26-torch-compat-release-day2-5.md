@@ -1,3 +1,11 @@
+## 2026-11-03 03:37 +0800 installed main wheel checkpoint state_dict 与 DCP CPU suite 17/17 通过
+
+在 current installed main wheel 上执行 compat/tests/torch/test_checkpoint_state_dict.py：17 passed、0 skipped，用时 17.11 秒；fallback 0→0，core_build_is_current() 为真，CPU core SHA256 前后均为 13ee2862304d354a20a9fefbe51dd8daee46066084b6c21f9385ffcfa7adf991。用例覆盖命名 model/optimizer state、optimizer param-group 与学习率恢复、多 optimizer、tied/frozen 参数、missing state、严格/非严格恢复、恢复后继续更新、DCP 默认 planner 单 rank roundtrip，以及 DCP rank failure 的错误传播模拟。
+
+两条 opt-in sharded-tensor stub 用例额外发出 RuntimeWarning，指出 Jittor 的接口为 no-op 并缺少全局 shard metadata；测试验证的是 stub 边界行为，不代表实现了完整 sharded tensor。测试文件 SHA256 3fe8e900ffcaf5397c5b746beadfc5c4938f2bef90d26687680cc2cf6ca651d4；main wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69，wheel source HEAD 35a1a7605ec475e9cbc1a9688afc299ee3bd8011，执行时 live repo HEAD 6d1057ac4f1ffffeffeeccc6664275716f84632d。证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-checkpoint-state-dict-cpu-r1/，artifact manifest SHA256 dff1b04d6d5a5a08f516dd2747b5ad6b11387ccec330f797ae604ee20a1e34d3，文件校验通过。
+
+该套件验证安装态 CPU save/load、优化器状态恢复和单 rank DCP 功能，不替代真实多 rank DCP、cross-framework stock PyTorch torch.load 互操作，也不关闭更广 Day2–5 发布门。
+
 ## 2026-11-03 03:34 +0800 installed main wheel 的 storage/view/alias/load-stride CPU 验证通过
 
 在 main wheel 隔离安装路径执行 compat/tests/torch/test_torch_view_storage.py、test_torch_storage_alias_versions.py 与 test_torch_compat_load_strided.py。pytest 使用 CPU-only 参数选择，40 passed、22 个 CUDA 变体 deselected，用时 19.50 秒，0 failure/skip；fallback 0→0，core_build_is_current() 为真，CPU core SHA256 前后均为 13ee2862304d354a20a9fefbe51dd8daee46066084b6c21f9385ffcfa7adf991。验证包含 transpose/as_strided stride、view 写穿、detach/parameter 双向 alias、saved-tensor mutation version guard、未物化前向在 alias 写入后的值与梯度，以及 .pt archive 的保存 stride、storage offset、wide dtype 与 map_location 读取。

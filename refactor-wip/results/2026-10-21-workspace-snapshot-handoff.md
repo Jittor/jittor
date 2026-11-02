@@ -1,3 +1,9 @@
+## 2026-11-03 03:37 +0800 Handoff：installed-wheel checkpoint state_dict/DCP CPU suite 17 passed
+
+current installed main wheel 执行 test_checkpoint_state_dict.py 为 17 passed、0 skipped、17.11 秒，fallback 0→0，core current，CPU core SHA256 前后同为 13ee2862304d354a20a9fefbe51dd8daee46066084b6c21f9385ffcfa7adf991。覆盖 named model/optimizer state、param-group、multi-optimizer、tied/frozen 参数、missing state、继续更新和 DCP 单 rank roundtrip/错误传播。两项 sharded-tensor opt-in stub 警告仍说明它们是 no-op 接口。
+
+测试 SHA256 3fe8e900ffcaf5397c5b746beadfc5c4938f2bef90d26687680cc2cf6ca651d4，wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69。证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-checkpoint-state-dict-cpu-r1/，artifact manifest SHA256 dff1b04d6d5a5a08f516dd2747b5ad6b11387ccec330f797ae604ee20a1e34d3，哈希校验通过。单 rank CPU 结果不覆盖真实多 rank，也不解决 stock PyTorch 对 JT portable-pickle optimizer.pt 的读取失败。
+
 ## 2026-11-03 03:34 +0800 Handoff：installed-wheel CPU storage/alias/strided-load 40 passed
 
 在当前 main wheel 隔离安装路径上执行三份 storage/alias 测试，40 passed、22 个 CUDA 变体 deselected，19.50 秒；fallback 0→0，core current 且 SHA256 前后相同 13ee2862304d354a20a9fefbe51dd8daee46066084b6c21f9385ffcfa7adf991。测试覆盖 view/as_strided stride、写穿、storage alias mutation version、torch.load 的 strided storage/map_location。wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69；证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-storage-alias-cpu-r1/，artifact manifest SHA256 eb03f448cf61714f7bd9d4d35b3157de4b93146537cee9c9c6a594eb64a8dc2c。
