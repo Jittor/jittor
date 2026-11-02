@@ -1,3 +1,11 @@
+## 2026-11-02 22:16 +0800 BF16 restore state materialization matrix; clone/copyback candidate preserves four-step parity
+
+在现有 HEAD/origin `cgq_transformers` `eb28bd1ea26561e69055166cf084dc1b10dfbf8b` 上完成 CPU-only 有界 materialization 矩阵和临时 update wrapper 对照，fallback=0。实际 CPU restore 的 same-device `_to` 返回 checkpoint state 的同一对象/storage；`copy=True` 返回新对象/storage。只转换 restore 侧 state 时原有 BF16 二阶矩差仍在；只转换 continuous 侧，或对两侧使用相同 clone/copy/detach/materialize 操作，下一步参数与 moments 均逐项相同。
+
+进一步用临时 monkeypatch 在每次 Adam update 前 clone `m`/`v`，让原有 `adam_update` 修改 clone，再把 moments 更新回原 slot。该 CPU BF16 小型轨迹 4 步的参数与 moments 和未修改实现逐值相同；step 1 保存恢复后，step 2–4 continuous/resumed 也逐值相同，fallback=0。候选尚未进入产品代码或完整测试套件；CUDA 行为及性能/显存成本尚未验证。
+
+本轮没有修改任何仓库源码或测试。证据包 `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-cpu-bf16-materialization-matrix-r1-prepared/`，manifest SHA256 `986aa47180f70818a83e5d701c57eec6d7efe97f1d943d1fc7f0909dc6a07da3`。既有 81 tracked dirty、21 untracked 和 index 空状态保持；GPU2 未使用，外部占用前后均 45,880 MiB/100%。Day4–5 与更广 Day2–5 发布门继续 **Not complete**。
+
 ## 2026-11-02 22:02 +0800 CPU BF16 optimizer restore Var metadata/dispatch diagnostic; release remains open
 
 在 HEAD/origin/cgq_transformers `ef0cea17cb8fc6c9af1c3fb733ae18d0e60fd460` 上完成一次有界 CPU trace，`CUDA_VISIBLE_DEVICES=`、`JT_BACKEND=cpu`、`JITTOR_NO_BUILD=1`、`backend_fallback=error`，0 fallback。复原前连续与恢复两侧的参数、梯度、一二阶矩数值逐项相同；可见 Var 元数据除地址外相同，只有恢复态 moments 的 `is_stop_grad=False`，连续态为 True。两侧均未选择 fused kernel，走同一 `adam_update(torch_math=True)` Python 路径。第二步参数相同，BF16 参数的 `exp_avg_sq` 差为 `[-1.903623342514038e-06, -6.676465272903442e-05]`。

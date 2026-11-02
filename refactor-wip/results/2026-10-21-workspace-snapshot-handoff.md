@@ -1,3 +1,10 @@
+## 2026-11-02 22:16 +0800 Handoff: paired state clone/copyback retains exact BF16 resume parity
+
+CPU-only materialization matrix confirmed the live same-device CPU `_to` path aliases the loaded checkpoint state object/storage. Restore-only copy/clone/detach/array rematerialization left the original BF16 second-moment delta; applying the same transform to continuous state alone or to both sides made the next update exact. The earlier state-only normalization control transformed both sides, not just restored state.
+
+A temporary update wrapper that clones AdamW m/v for arithmetic and copies updated moments back produced exactly the unmodified trajectory over four BF16 CPU steps. Saving at step 1 and resuming also matched continuous parameter/moment values exactly at steps 2–4, fallback=0. This remains a candidate harness, not a product change; performance, memory, CUDA/fused behavior, and full regression suites are unverified.
+
+Evidence package: /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-cpu-bf16-materialization-matrix-r1-prepared/. No repository source/test was changed; existing dirty work remains intact. GPU2 stayed external at 45,880 MiB/100%. Next, under source-change authorization, implement this candidate in the portable Torch optimizer path and run exact multi-step BF16 resume plus optimizer/device regressions; preserve formal Day4–5 exclusive-GPU and broader Day2–5 gates as open.
 ## 2026-11-02 22:02 +0800 Handoff：BF16 restore delta survives stop-grad-only normalization
 
 在 HEAD/origin `ef0cea17cb8fc6c9af1c3fb733ae18d0e60fd460` 上做了 CPU-only、有界 BF16 AdamW continuous/resume trace。下一步前参数、梯度、moments 值相同；visible Var 差别为恢复态 moments `is_stop_grad=False` 而 continuous 为 True。两侧走同一非 fused Python `adam_update` 路径，参数 update 逐值相同，BF16 `exp_avg_sq` 差 `[-1.903623342514038e-06, -6.676465272903442e-05]`，fallback=0。

@@ -1,3 +1,19 @@
+## 2026-11-02 22:16 +0800 CPU BF16 optimizer state materialization matrix 与 clone/copyback 语义候选；Day2–5 未完成
+
+沿用现有 `/home/cgq/jittor`。诊断绑定 HEAD/origin/cgq_transformers `eb28bd1ea26561e69055166cf084dc1b10dfbf8b`。开始/结束 regular porcelain 均为 102 项、SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`；tracked diff SHA256 `b97553cf0eb6cc4ca17f3f929071c3ab5db92322030ddef33a79c2da38786200`；index 为空；porcelain -uall SHA256 `8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98`。源码/测试文件未改，SHA256 前后相同：`optimizer_restore.py` `d169cbfe5fce18e2a7aee1ec7635efb1bd6451895ab12efb04fe804c3f416f43`，`optimizer_api.py` `ec50a82ba7ef46ebfa36de2e704484c787f0b3b9afc4411289bb8b2b41e622d0`，`test_optimizer_restore_devices.py` `c9ff7be24a6dd0e4b5e0300f262d1f6addde39f0f2da0205d3171d50bef0cbfd`。
+
+CPU-only 环境设置为 `CUDA_VISIBLE_DEVICES=`、`JT_BACKEND=cpu`、`use_cuda=0`、`JITTOR_NO_BUILD=1`、`backend_fallback=error`，使用上一轮隔离 CPU cache 的私有副本，验证 core stamp 的源/generator 与二进制元数据后搬迁副本内绝对 cache 路径。首次运行按 Jittor 规则遇到 `jit_utils` rebuild exit 3，保留原日志后同命令重启成功；后续 paired、continuous-only 和 clone/copyback 诊断均 exit 0。所有试验均无 fallback。
+
+**同设备 _to 及单侧/双侧状态归一化。** 实际 restore 加载的 CPU slot 与 `loaded["state"]` 是同一 Python object、同一 storage pointer；`_to(value, device="cpu")` 也返回同一对象，`_to(..., copy=True)` 则创建不同对象和 storage。before-step continuous 与 restored 参数、梯度、`m`、`values` 数值均精确一致，既有 BF16 `exp_avg_sq` 差为 `[-1.903623342514038e-06, -6.676465272903442e-05]`。
+
+对恢复侧单独应用 `to(copy=True)`、`clone`、`clone().stop_grad()`、`detach`、`detach().clone()`、`jt.array` 或 NumPy 重物化，差异均保留。对连续侧单独应用这些同类转换，下一步参数与两类 moments 均逐值一致。两侧同时应用相同转换时结果也逐值一致，包括两侧 `clone` 且保留各自原 stop-grad 状态。这更正了前序“state-only re-materialization 可消除差异”的范围：前序控制其实同时物化 continuous 和 restored 两侧，不能据此推断只物化恢复侧就足够。证据指向连续训练累积的 Var/update 历史，但尚未证明 Jittor 内部根因。
+
+**可实施候选的多步验证。** 外部 harness 暂时 monkeypatch Torch optimizer 的 Python `adam_update` 调用：每步将 state `m`/`v` clone 到工作 Var，原 `adam_update` 修改工作副本后再把 moments 写回原 state slots。2 参数（FP32 和 BF16）、CPU 的四步 BF16 AdamW 诊断中，带 wrapper 的连续轨迹与未修改代码在 step 1–4 的参数和 moments 全部逐值相同；wrapper 轨迹在 step 1 保存/恢复后，step 2–4 continuous 和 resumed 两侧每项也全部逐值相同。三个比较分支均 `max_abs=0`，fallback delta=0。这是候选语义验证，不是产品实现或回归测试；它没有测完整模型、checkpoint 兼容矩阵、CUDA/fused fallback、时间开销或峰值显存。
+
+完整证据包位于 `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-cpu-bf16-materialization-matrix-r1-prepared/`，artifact manifest SHA256 `986aa47180f70818a83e5d701c57eec6d7efe97f1d943d1fc7f0909dc6a07da3`。GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 未用于 CPU 诊断，前后均为 45,880 MiB/100% 外部占用。
+
+下一步应在授权修改源码后，将 clone/copyback 候选落入 Torch optimizer portable update 路径，增加多步、BF16、checkpoint-resume 精确回归，并运行现有 optimizer/device suites；同时评估是否只在非 fused 路径需要，以及每步 state copy 的时间/显存影响。当前未更改源码。Day4–5 正式性能/显存仍待管理员添加 `cgq` Slurm association 和可核验 GPU2 独占 lease，然后执行至少三轮交替、每侧每轮至少十个热态样本，报告 median/p95/离散度、load/first-step/steady-state 时间及 allocator/NVML 峰值。approved wheel migration、held-out generation、真实 activation recompute 显存收益、stock PyTorch optimizer portable-pickle 互操作和更广发布门也仍开放，整体 **Not complete**。
+
 ## 2026-11-02 22:02 +0800 CPU BF16 optimizer restore Var metadata/dispatch diagnostic；Day2–5 未完成
 
 在现有 `/home/cgq/jittor` 工作区、HEAD/origin `cgq_transformers` `ef0cea17cb8fc6c9af1c3fb733ae18d0e60fd460` 继续。测试前后常规 porcelain 状态均为 102 项，SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`；tracked diff SHA256 `b97553cf0eb6cc4ca17f3f929071c3ab5db92322030ddef33a79c2da38786200`；index 为空。逐文件 `porcelain -uall` 指纹也保持 `8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98`。目标 restore 测试、`optimizer_api.py`、`adam.py` 的 SHA256 前后相同，分别为 `c9ff7be24a6dd0e4b5e0300f262d1f6addde39f0f2da0205d3171d50bef0cbfd`、`ec50a82ba7ef46ebfa36de2e704484c787f0b3b9afc4411289bb8b2b41e622d0`、`25029ab666e08fe2b9b6a944b0b414f2bb6bdafd86b6e6dd4a0f6115168f560d`。未改产品或测试源码。
