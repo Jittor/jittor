@@ -1,3 +1,13 @@
+## 2026-11-02 20:53 +0800 current-main CUDA amax correctness 补测通过；Day2–5 未完成
+
+本轮只补测上次 786 项 Torch-shim CUDA suite 停在的 `tests/backends/parity/test_device_parity.py::TestDeviceParity::test_amax`。绑定 HEAD/origin `2b9b1e4d0f5204d78002f99c60eabd0a8e2c8048` 和既有 dirty state：81 tracked dirty、21 untracked；运行前后 porcelain SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`，tracked diff SHA256 `b97553cf0eb6cc4ca17f3f929071c3ab5db92322030ddef33a79c2da38786200`，源码工作区未变。
+
+以物理 GPU0 UUID `GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5` 运行，进程内映射 `cuda:0`；Nox CUDA session 强制真实 accelerator 用例执行，`backend_fallback=error`。结果 1 passed、0 skipped、102.55 秒，exit 0。日志记录 CUDA enabled 和 `collected=1 executed=1`。这仅关闭 `amax` 一个 correctness 节点；此前 786 项 suite 仍只完成最初 8 项后停止，不能据此写成全套通过。
+
+实验包 `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-cuda-amax-focused-r1-prepared/`，artifact manifest SHA256 `5f17fe710783ae8e1fc10252600c601be1d5f65816506d919e1187dfcfa4c9cd`。Nox CUDA cache 是 attempt-10 cache 的隔离副本：15,349→15,479 文件，新增 130、删除 0、只改 1 个锁文件；原缓存 core SHA256 `201d8a15de240aa796641b51209d039048769db45e7f69a1115a0e06503ba8bf` 未变。当前 native source 相比 cache 来源有两处 cublas/cudnn test-op 断言改动，目标 `amax` 测试不触及这两条路径；目标测试文件 SHA256 `a439bef78817deaa2a0c30cc6bf923037f73d6508b508de1147e166e762568dc`。
+
+GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 未映射给测试，显存仍为外部任务占用 45,880 MiB、100%。本次共享 GPU correctness 结果不构成性能/显存证据。Day4–5 仍等待管理员配置 `cgq` Slurm association 与可核验的 GPU2 GRES/device-cgroup 租约；正式协议至少三轮交替、每轮每侧至少 10 个热态样本，并报告 median/p95/离散度、加载/首步/热态时间和 allocator/NVML 峰值。held-out generation、activation recompute 显存收益、approved wheel migration、更多 Torch-shim CUDA 范围及跨框架 optimizer 序列化仍未关闭，整体 Day2–5 **Not complete**。
+
 ## 2026-11-02 20:33 +0800 CPU BF16 AdamW wrapper 图路径诊断；Day2–5 未完成
 
 接续 storage.data_ptr 修复提交 2273a24f8b6fbec8e8623a17adaab2ba20b0a1a1，origin/cgq_transformers 已指向同一提交。诊断结束时工作区有 81 个 tracked dirty 路径、21 个 untracked 条目，index 为空；tracked diff SHA256 b97553cf0eb6cc4ca17f3f929071c3ab5db92322030ddef33a79c2da38786200，porcelain SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211。本轮未改源码。

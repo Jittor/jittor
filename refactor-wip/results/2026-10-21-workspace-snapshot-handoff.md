@@ -1,3 +1,11 @@
+## 2026-11-02 20:53 +0800 Handoff：CUDA amax 单项 correctness 补测通过
+
+沿用 `/home/cgq/jittor`，HEAD 与 origin/cgq_transformers 同为 `2b9b1e4d0f5204d78002f99c60eabd0a8e2c8048`。只运行上次 786 项 Torch-shim CUDA suite 的中断节点 `TestDeviceParity::test_amax`；物理 GPU0 UUID `GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5` 映射为 `cuda:0`，`backend_fallback=error`，结果 1 passed / 0 skipped / 102.55 秒。运行前后工作区指纹相同，81 tracked dirty、21 untracked 均保留。cache 使用独立副本，原始 CUDA core 哈希不变。
+
+证据包 `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-cuda-amax-focused-r1-prepared/`，artifact manifest SHA256 `5f17fe710783ae8e1fc10252600c601be1d5f65816506d919e1187dfcfa4c9cd`。GPU2 未暴露给进程，外部占用保持 45,880 MiB、100%。该结果只覆盖 amax correctness，未对性能/显存作判断。
+
+下一步继续按有界小批次覆盖剩余 CUDA correctness；不重启 786 项整批。Day4–5 正式测量等管理员添加 cgq association 和 GPU2 独占租约；held-out generation、checkpoint recompute 的真实显存收益、wheel baseline migration 与 stock PyTorch optimizer 文件互操作仍开放。整体 Day2–5 保持 **Not complete**。
+
 ## 2026-11-02 20:33 +0800 Handoff：BF16 wrapper 差异收窄到 Var 表示/图执行路径
 
 继续使用 /home/cgq/jittor。storage.data_ptr 修复提交 2273a24f8b6fbec8e8623a17adaab2ba20b0a1a1 已推到 origin/cgq_transformers；未提 PR，未合并 2.0-refactor。81 个 tracked dirty 与 21 个 untracked 条目保留，index 为空。

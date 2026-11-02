@@ -1,3 +1,13 @@
+## 2026-11-02 20:53 +0800 current-main CUDA amax correctness 补测通过；Day2–5 仍未完成
+
+在现有 `/home/cgq/jittor` 上以 HEAD/origin `2b9b1e4d0f5204d78002f99c60eabd0a8e2c8048` 运行。测试前后工作区均为 81 个 tracked dirty、21 个 untracked，porcelain SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`、tracked diff SHA256 `b97553cf0eb6cc4ca17f3f929071c3ab5db92322030ddef33a79c2da38786200`，index 为空。
+
+针对上次 786 项 Torch-shim CUDA suite 在 `TestDeviceParity::test_amax` 处按时限停止的断点，只单跑该节点。GPU0 UUID `GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5` 映射为进程内 `cuda:0`；Nox 要求 CUDA 执行和至少一个 accelerator case，`backend_fallback=error`。结果 **1 passed、0 skipped，102.55 秒，exit 0**，日志有 CUDA enabled 与 `JITTOR-SESSION-COMPLETE collected=1 executed=1`。本轮只确认 amax correctness，不是整批 CUDA gate、性能或显存结论。
+
+为避免写入旧 cache，使用 attempt-10 的 755 MB cache 做独立物理副本并在副本内改路径。cache 从 15,349 到 15,479 个文件（新增 130、删除 0、仅 `jittor.lock` 1 项变化）；原 cache 的 CUDA core SHA256 前后均为 `201d8a15de240aa796641b51209d039048769db45e7f69a1115a0e06503ba8bf`。复制缓存之后有两处 cublas/cudnn test-op 断言源文件变化，但 `test_amax` 不涉及它们，目标测试文件 SHA256 `a439bef78817deaa2a0c30cc6bf923037f73d6508b508de1147e166e762568dc`。完整包 `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-cuda-amax-focused-r1-prepared/`，`artifact-files.sha256` 文件 SHA256 `5f17fe710783ae8e1fc10252600c601be1d5f65816506d919e1187dfcfa4c9cd`。
+
+GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 未暴露给测试，外部 4 个 PID 与 45,880 MiB 占用前后未变。剩余 CUDA correctness 继续逐项有界推进；正式 Day4–5 仍须等 `cgq` association 与可验证 GPU2 独占租约，并按三轮交替、每轮至少十个热态样本完成统计。整体 Day2–5 继续 **Not complete**。
+
 ## 2026-11-02 20:33 +0800 CPU BF16 AdamW wrapper 图路径诊断；发布门仍未完成
 
 沿用当前工作区 HEAD/origin cgq_transformers 2273a24f8b6fbec8e8623a17adaab2ba20b0a1a1。诊断期间保留 81 个 tracked dirty 路径、21 个 untracked 条目，index 为空；tracked diff SHA256 b97553cf0eb6cc4ca17f3f929071c3ab5db92322030ddef33a79c2da38786200，porcelain SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211。未改产品源码或其他工作区文件。
