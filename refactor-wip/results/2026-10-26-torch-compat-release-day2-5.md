@@ -1,3 +1,9 @@
+## 2026-11-03 03:42 +0800 installed main wheel CUDA storage alias/version 检查 22/22 通过
+
+current installed main wheel 在物理 GPU0 UUID GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5、进程内 cuda:0 上执行 test_torch_storage_alias_versions.py 的 CUDA 变体，22 passed、22 个 CPU 变体 deselected、0 skipped/failure，用时 56.70 秒。fallback 0→0，Jittor/Torch shim 来自隔离安装 target，CUDA core build current 且哈希前后均为 0e2fe909d3f33e27c220546693c40f27087357cefe198220f46c97f9a0353a90。用例核验 detach/Parameter 双向别名写入、saved input 被别名修改后的 backward version guard、materialized/pending forward、view alias、exp saved output 和 clone 独立存储等行为。test SHA256 be7a942883329dd8e00c55beb93c43d638de02471b01db4afb26e6ad3531ec1e；main wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69，wheel source HEAD 35a1a7605ec475e9cbc1a9688afc299ee3bd8011，执行时 live HEAD 5088161421e0ed14dcb9e168acdcd6fe794d9118。证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-storage-alias-cuda-r1/，manifest SHA256 e64a66894b7b6b411361a01b225036235f4d2356d561adf1eda303b11ac732b7，包内校验通过。
+
+这补上了前次 CPU-only storage suite 中被 deselect 的 CUDA alias/version 参数分支；CPU 与 CUDA 分支分别执行，没有在单轮中混用设备。结合 CPU 的 view/as_strided 和 .pt strided-load 检查，已覆盖当前安装态的高优先级 storage/alias 功能面；view/as_strided 与 .pt load 本身仍只有 CPU 证据。GPU0 为共享负载，本结果不是性能/显存结论；整体 wheel migration baseline 与 Day2–5 release 仍开放。
+
 ## 2026-11-03 03:37 +0800 installed main wheel checkpoint state_dict 与 DCP CPU suite 17/17 通过
 
 在 current installed main wheel 上执行 compat/tests/torch/test_checkpoint_state_dict.py：17 passed、0 skipped，用时 17.11 秒；fallback 0→0，core_build_is_current() 为真，CPU core SHA256 前后均为 13ee2862304d354a20a9fefbe51dd8daee46066084b6c21f9385ffcfa7adf991。用例覆盖命名 model/optimizer state、optimizer param-group 与学习率恢复、多 optimizer、tied/frozen 参数、missing state、严格/非严格恢复、恢复后继续更新、DCP 默认 planner 单 rank roundtrip，以及 DCP rank failure 的错误传播模拟。

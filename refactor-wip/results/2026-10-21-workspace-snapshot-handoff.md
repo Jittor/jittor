@@ -1,3 +1,9 @@
+## 2026-11-03 03:42 +0800 Handoff：installed-wheel CUDA alias/version 22 passed
+
+在 current main wheel 安装路径的物理 GPU0 上，test_torch_storage_alias_versions.py CUDA 变体 22 passed、22 CPU 变体 deselected，56.70 秒，fallback 0→0，core current 且哈希前后同为 0e2fe909d3f33e27c220546693c40f27087357cefe198220f46c97f9a0353a90。覆盖别名写入、saved tensor version guard、view 与 clone 存储关系。证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-storage-alias-cuda-r1/，artifact manifest SHA256 e64a66894b7b6b411361a01b225036235f4d2356d561adf1eda303b11ac732b7。
+
+与前一 CPU suite 分开记录：CPU 40 passed、22 CUDA 变体 deselected；该 CPU suite 的 view/as_strided 和 strided load 不因此获得 CUDA 覆盖。GPU0 是共享卡，结果仅属功能验证；GPU2 未用，Day4–5 正式性能/显存与更广 Day2–5 门仍开放。
+
 ## 2026-11-03 03:37 +0800 Handoff：installed-wheel checkpoint state_dict/DCP CPU suite 17 passed
 
 current installed main wheel 执行 test_checkpoint_state_dict.py 为 17 passed、0 skipped、17.11 秒，fallback 0→0，core current，CPU core SHA256 前后同为 13ee2862304d354a20a9fefbe51dd8daee46066084b6c21f9385ffcfa7adf991。覆盖 named model/optimizer state、param-group、multi-optimizer、tied/frozen 参数、missing state、继续更新和 DCP 单 rank roundtrip/错误传播。两项 sharded-tensor opt-in stub 警告仍说明它们是 no-op 接口。
