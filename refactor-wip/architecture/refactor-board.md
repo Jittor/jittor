@@ -1,3 +1,15 @@
+## 2026-11-03 01:54 +0800 current HEAD wheel/sdist 与 CPU 安装训练烟测通过；baseline migration 未完成
+
+在现有 /home/cgq/jittor 工作区从干净 HEAD 35a1a7605ec475e9cbc1a9688afc299ee3bd8011 制作不可变源码快照；origin/cgq_transformers 与 HEAD 一致，构建前后工作区干净。快照含 2,823 个文件，清单 SHA256 268a54f9dba48aae28a4e93d80d8b7981deb7d1ce743d1024169fdb9786b10f8。
+
+current-HEAD main sdist（1,455 members）、core wheel（1,100 paths）、compat wheel（182 paths）均构建成功，内容审计通过；sdist 重建 wheel 与 direct wheel 的 1,100 项逐项一致。main+compat wheel 在隔离 target 同一 pip transaction 安装，compileall 通过。新安装路径的 CPU core 首次编译 227/227 TU、344.546 秒；clean-installed smoke 确认 core_build_is_current()、梯度 [2, 4]、SGD 参数 [1, 2] -> [0.800000012, 1.600000024]，fallback 0。官方 jittor.selftest 通过：CPU 13 个子包导入、三步 Conv/BatchNorm/SGD，loss 0.484051 -> 0.148223，最大权重变化 0.153。
+
+默认批准 wheel baseline 仍失败：1,033 baseline paths 对 1,100 candidate paths，69 additions、304 content changes、2 removals，批准数 0；未改 baseline 或 allowlist。因此本轮关闭的是 current-HEAD 的打包、安装与 CPU 功能 smoke 子门，不是 wheel migration approval，也不提供 CUDA、性能或显存结论。证据包 /data6/cgq/jittor-lab/_state/release-day23/20261103-current-head-wheel-gate-r1-prepared/，artifact manifest SHA256 782d09b8669584f9f9a8e8f41d1f2531c4f5a0bd80927dd7bdc0dee870b653b1；主 wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69，compat wheel ccef7f4733c19fddde40ec677cbfaf423f34bde3a35ae928874e63171417e3a7。
+
+同时复核旧 R9 native CPU 产物：不可变 saved-artifact audit 为 PASS（SHA256 dc455071f03ba229ce589b4c6b1455c8746f8be992cd61070086e010b8636fba，原用例 2 passed / 0 skipped、rc 0、fallback 0）；独立 terminal audit 保持 FAIL（SHA256 2ae11a6875723dc642ce8572a0204ee9bf3ea92370357d7ca6902323e48323b8），原因是测试后缓存从保存的 740 项增长到当前 6,594 项，且精确锁 inode / kernel-lock 清理检查未通过。故保存结果仍可作为其隔离 R9 源码身份下的 CPU 正确性证据，不能改写终审状态，也不转移成当前 HEAD 验收。
+
+GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 仍由外部任务占用 45,880 MiB、100%；cgq 当前无 Slurm 队列作业，association 仍等管理员添加。Day4–5 独占性能/显存门及更广 Day2–5 发布门继续开放，整体 Not complete。
+
 ## 2026-11-03 01:36 +0800 当前工作区已推送 cgq_transformers；Day2–5 仍未完成
 
 本轮提交 1b5c2a50f8dac5cb7aa89808be8b1c08fda16a3b（父提交 4291227c47060c693c4d4464cc60b0521a34a5c3，中文提交说明“完善 Torch 兼容与分布式能力并记录发布门”）已普通快进推送到 cgq_transformers，远端从 9658d690774e383fb355ca1bf808dd3cd662f929 更新；推送后 local HEAD、origin tracking ref 与 git ls-remote 相同，工作区干净。提交共 113 个文件、8,609 insertions/773 deletions；没有创建 PR，也没有合并 2.0-refactor。推送回执保存在同轮 /data6/cgq/jittor-lab/_state/release-day23/20261103-current-working-tree-structure-gate-r2-prepared/push-receipt.json。

@@ -1,3 +1,12 @@
+## 2026-11-03 01:54 +0800 Handoff：current HEAD wheel 与 CPU clean-install smoke 通过，迁移基线仍未批准
+
+已在 /home/cgq/jittor 当前干净 HEAD 35a1a7605ec475e9cbc1a9688afc299ee3bd8011 上重建 main/compat sdist 与 wheel；sdist/core/compat 内容审计及 direct-wheel 对 sdist 重建 wheel 的一致性检查通过。两 wheel 隔离安装后的 CPU selftest 和 Torch shim autograd/SGD smoke 通过，fallback 0。详见 /data6/cgq/jittor-lab/_state/release-day23/20261103-current-head-wheel-gate-r1-prepared/，evidence manifest SHA256 782d09b8669584f9f9a8e8f41d1f2531c4f5a0bd80927dd7bdc0dee870b653b1。
+
+wheel 默认迁移 baseline 仍有 69 additions、304 content changes、2 removals、0 approved；此项不因安装烟测通过而关闭，allowlist 未改。下一步继续审阅差异并关联现有功能测试，明确待测 device/backend 边界；随后在管理员为 cgq 配置 Slurm association 且取得可核验 GPU2 独占租约后做 Day4–5 正式 PT/JT 三轮交替、每轮每侧至少十个热样本。held-out generation、activation checkpoint 显存收益、跨框架 optimizer serialization 和更广功能矩阵仍开放，整体 Day2–5 Not complete。
+
+R9 native CPU 原件的只读 saved-artifact audit PASS，但旧 root terminal audit FAIL 于后来发生的 cache 变化（740 -> 6,594 项）及精确锁终态检查。两者分别保留；原两项 CPU 测试本身为 2 passed / 0 skipped，不把 terminal FAIL 翻成运行失败，也不把 R9 证据转移到当前 HEAD。历史审计细节见 Day2–5 结果报告最新增量。
+
+
 ## 2026-11-03 01:36 +0800 Handoff：已推送 Torch/分布式工作区；下一步仍需 GPU2 allocation
 
 提交 1b5c2a50f8dac5cb7aa89808be8b1c08fda16a3b 已快进推送到远端 cgq_transformers，远端 ref 与本地 HEAD 一致、工作区干净。本提交含 113 个文件；没有 PR，也没有合并 2.0-refactor。current-tree CPU structure gate 1,556 passed、2 个 accelerator-only skip、0 failed，红队策略检查也通过；证据目录为 /data6/cgq/jittor-lab/_state/release-day23/20261103-current-working-tree-structure-gate-r2-prepared/。

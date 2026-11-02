@@ -1,3 +1,27 @@
+## 2026-11-03 01:54 +0800 current HEAD clean wheel/sdist CPU 安装训练烟测通过；migration approval 仍开放
+
+### 源码与打包产物
+
+继续在现有 /home/cgq/jittor 工作区操作，没有重新 clone。执行前后 HEAD、origin/cgq_transformers 均为 35a1a7605ec475e9cbc1a9688afc299ee3bd8011；porcelain 为空。以 git archive HEAD 制作只读构建快照，2,823 个文件，source-files.sha256 SHA256 268a54f9dba48aae28a4e93d80d8b7981deb7d1ce743d1024169fdb9786b10f8；构建后对快照逐项校验通过。
+
+Python 3.11.3 packaging 环境从该快照构建 main sdist、main wheel 与 compat sdist/wheel，均 rc=0。sdist 审计通过（1,455 members）；core wheel 审计通过（1,100 paths）；compat wheel 审计通过（182 paths）；direct wheel 和 sdist 重建 wheel 按路径与内容逐项比较，added/changed/removed 均为 0。产物 SHA256：main wheel b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69，main sdist 1bec94310d9eced351e52fe95c4f6f54fc2072cc962ebb92fd6efae9b6c3f153，compat wheel ccef7f4733c19fddde40ec677cbfaf423f34bde3a35ae928874e63171417e3a7，compat sdist 49d08e8eb7315104c5ca86c42e64138d18036e1b0ed459a4e5cb492985ebeb11，sdist-derived main wheel 39299d2433e8e8d5f152bb031e5a4e9b65b5cedf3e23c7183c173773c1d0d138。
+
+### clean-installed CPU 功能门
+
+main 与 compat wheel 在隔离安装目录同一 pip transaction 安装，compileall 通过。首次 installed-path CPU core 编译 227/227 translation units，用时 344.546 秒；构建产物 SHA256 与 build stamp 记录在 evidence manifest。安装 smoke 验证 jittor、Torch shim 与 compat 模块来自该 target，core_build_is_current() 为真；torch.tensor([1,2], requires_grad=True) 上梯度为 [2,4]，SGD 将参数从 [1,2] 更新到 [0.8000000119,1.6000000238]（rtol=atol=1e-6），fallback counter 前后均为 0。官方 python -m jittor.selftest 通过：CPU backend、13 个关键子包导入，Conv/BatchNorm/SGD 三步 loss 从 0.4840511382 到 0.1482221186，最大权重变化 0.153。该自测是固定小型 CPU smoke，不等于大模型训练验收。
+
+### 尚未关闭的 wheel migration 门
+
+必须使用的默认 baseline compare 仍 rc=1：基线 1,033 paths、candidate 1,100 paths，69 additions、304 content changes（其中 4 个 dist-info 成员变化）、2 removals，0 approved。没有改 baseline 或 allowlist，也没有把“包可构建、安装后可运行”替代为“迁移差异已批准”。需继续逐项审阅迁移成员并关联功能覆盖；对无证据的后端和功能保留未验证状态。
+
+证据包 /data6/cgq/jittor-lab/_state/release-day23/20261103-current-head-wheel-gate-r1-prepared/。package-summary.json SHA256 89427193836a25055b2ed0ea4b3fb9204c9c6f259169d613ca2985cc0c2553fa；artifact-files.sha256 SHA256 782d09b8669584f9f9a8e8f41d1f2531c4f5a0bd80927dd7bdc0dee870b653b1。
+
+### R9 native saved audit 终态区分
+
+补做保存产物审阅时发现旧 R9 native CPU 的 root-native-saved-artifact-audit.json 已 PASS，SHA256 dc455071f03ba229ce589b4c6b1455c8746f8be992cd61070086e010b8636fba；原运行两项通过、无跳过、fallback 0。另一方面 root-native-terminal-audit.json 为 FAIL，SHA256 2ae11a6875723dc642ce8572a0204ee9bf3ea92370357d7ca6902323e48323b8：之后该隔离 cache 从保存时 740 项增到 6,594 项，current cache snapshot 不匹配；精确 lock inode / kernel lock 检查也未通过。此 FAIL 是不可变测试结果审计与之后可变 cache/锁终态核验不同的状态，不覆盖原 PASS，也不更改 R9 测试结果；不能转移到当前 main HEAD。
+
+本轮完全 CPU-only，GPU2 未暴露给进程；结束时该卡仍为外部占用 45,880 MiB / 100%，cgq 无 Slurm 活动作业。Day4–5 正式性能/显存验收仍需管理员配置 association 和可核验 GPU2 独占 allocation，再按至少三轮交替、每侧每轮至少十个热样本测量；held-out generation quality、真实 activation recompute 显存收益、stock PyTorch optimizer 文件互操作与更广支持矩阵仍开放。整体 Day2–5 Not complete。
+
 ## 2026-11-03 01:36 +0800 当前工作区已推送；结构门通过不等于发布完成
 
 结构验收后，将当前 Torch compatibility、AMP/optimizer、native distributed/DDP、dataset、attention、tests、development docs 与三份状态文档作为一个中文提交推送：1b5c2a50f8dac5cb7aa89808be8b1c08fda16a3b（父提交 4291227c47060c693c4d4464cc60b0521a34a5c3），113 个文件、8,609 insertions/773 deletions。远端 cgq_transformers 从 9658d690774e383fb355ca1bf808dd3cd662f929 快进；git ls-remote 确认远端头与本地提交相同，工作树干净。未建 PR，未整合 2.0-refactor。推送回执位于 /data6/cgq/jittor-lab/_state/release-day23/20261103-current-working-tree-structure-gate-r2-prepared/push-receipt.json。
