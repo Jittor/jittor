@@ -1,3 +1,9 @@
+## 2026-11-02 08:43 +0800 R5 wheel baseline source-map 误报已纠正；迁移差异仍未批准
+
+R2 source reconstruction 把候选项 `jittor/backends/__init__.py` 标成缺源码，但实际映射源路径是 `python/jittor/backends/__init__.py`。该成员在 R2 候选 R3 wheel、baseline 源提交 `f66e2458a748a5814f28ca4705753ec29b330311)、当前 R5 source snapshot、R5 wheel 和 clean install 中 SHA256 均为 `0df9e1d211b49ef4904ca74ea08310269ca4dc141fa2e3d8a0a9772b9b64ab40`，因此是 mapping false positive，不是源码缺失或内容差异。审计收据 `/data6/cgq/jittor-lab/_state/release-day23/20261102-wheel-baseline-source-map-correction-r1-prepared/audit.txt` SHA256 `6cbc10633eb0a065314d354f9f0d2244e0025f1c1cfdef06978b856d5907fba2`；R2 原件保留。
+
+R5 wheel SHA256 `66c0f8176508325f3555f3f90c0b0b141463ae33cdc0b38b35e082dc62b01f47`，package artifact manifest SHA256 `38d4c7e162ed2246e34aaf0d7b67af6a926561acb77ae550f678c2f49b9f0037`。修正 source mapping 不批准任何差异、不改 baseline/allowlist；当前比较仍为 69 additions、302 content changes、2 removals，三类均 0 approved。四项 dist-info 生成元数据变化和全部实质源码变化仍需迁移审查；Day2–5 不标 complete。
+
 ## 2026-11-02 08:37 +0800 R14 Qwen fixture-held-out generation 审计完成；GPU2 独占窗口仍不可用
 
 R34 证据包位于 `/data6/cgq/jittor-lab/_state/release-day23/20261031-r14-qwen-heldout-generation-r34-r3-prepared/`。runner 退出码为 0；独立审计状态 `PASS_EVIDENCE_INTEGRITY_AND_METRIC_RECOMPUTE_WITH_SCOPE_LIMITS`，重算分数和 runner、summary、两份预测文件哈希一致。17 条 fixture-held-out 样本无 instruction/input 重叠；merged 相对 base 的 token-F1 为 0.142914→0.161602、ROUGE-L F1 为 0.087317→0.104252，exact match 均为 0。所有 17 个输出都达到 256-token 上限，且源数据 split 标记为 train；这是 stock PyTorch 的前缀探索分数，不代表完整答案质量，不测试 Jittor 推理，也不构成质量门通过。status.json 将正常 `SystemExit(0)` 包装成 `FAILED_OR_INTERRUPTED`，与 runner rc=0、summary PASS 和独立审计 PASS 不一致，保留并明确记录该终端状态缺陷，不重跑。

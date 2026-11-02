@@ -1,3 +1,9 @@
+## 2026-11-02 08:43 +0800 Handoff：R2 wheel source-map 单项误报已核实，baseline migration 仍开放
+
+`jittor/backends/__init__.py` 并非 R2 候选包缺源码：R2 wheel 成员、baseline commit `f66e2458a748a5814f28ca4705753ec29b330311` 的 `python/jittor/backends/__init__.py`，以及 R5 source/wheel/install 内容哈希均为 `0df9e1d211b49ef4904ca74ea08310269ca4dc141fa2e3d8a0a9772b9b64ab40`。旧清单是路径映射误报，原 R2 证据保留；审计收据 SHA256 `6cbc10633eb0a065314d354f9f0d2244e0025f1c1cfdef06978b856d5907fba2`。
+
+R5 当前默认 wheel compare 仍是 69 additions、302 changes、2 removals、0 approved；本次没有更改 allowlist 或 baseline，迁移门保持开放。GPU0–9 当前均有外部 CUDA client、Slurm 无 cgq 活跃 allocation；Day4–5 正式性能/显存门仍待独占 GRES/device-cgroup lease。
+
 ## 2026-11-02 08:37 +0800 Handoff：R14 held-out generation 分数已复核；GPU2 尚不能安全独占
 
 R34 generation 终审 runner rc=0，独立审计重新计算的分数及 runner/summary/prediction 哈希均匹配。17 条 fixture-held-out 样本无输入重叠；base→merged token-F1 为 0.142914→0.161602、ROUGE-L F1 为 0.087317→0.104252、exact match 均 0。17 个生成都达到 256-token 上限，样本源 split 标记为 train；结果仅是 stock PyTorch/Transformers 的截断前缀探索分数，不是 Jittor 推理或质量验收。status.json 的 `FAILED_OR_INTERRUPTED` 来自对正常 `SystemExit(0)` 的包装，runner rc=0 且 summary/audit PASS；问题保留记录，不重跑。证据目录：`/data6/cgq/jittor-lab/_state/release-day23/20261031-r14-qwen-heldout-generation-r34-r3-prepared/`。

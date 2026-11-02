@@ -1,3 +1,9 @@
+## 2026-11-02 08:43 +0800 R5 wheel baseline source reconstruction 的单项缺失分类为路径映射误报；未改变批准数
+
+原 R2 报告中的 `candidate-source-missing.txt` 只有 `jittor/backends/__init__.py`。逐字节复核发现源码实际位于 `python/jittor/backends/__init__.py`；R2 候选 R3 wheel 中该成员、baseline source commit `f66e2458a748a5814f28ca4705753ec29b330311` 的 source blob，以及 R5 当前 source snapshot/main wheel/clean install 的 SHA256 都是 `0df9e1d211b49ef4904ca74ea08310269ca4dc141fa2e3d8a0a9772b9b64ab40`。因此 R2 的 1 个 source-missing 是路径前缀映射误报，不是候选包漏源码；R2 summary、missing list 及原始 wheel 均未覆盖或修改。更正审计：`/data6/cgq/jittor-lab/_state/release-day23/20261102-wheel-baseline-source-map-correction-r1-prepared/audit.txt`，SHA256 `6cbc10633eb0a065314d354f9f0d2244e0025f1c1cfdef06978b856d5907fba2`。
+
+此修正仅提升 source mapping 解释，不审查/批准实质代码变更。R5 installed package 当前默认 baseline 比较仍有 69 additions、302 changes、2 removals，0 approved；R2 映射校正后剩余 generated dist-info 项及代码差异仍开放。Day4–5 受 GPU2/集群独占租约阻塞，当前 0–9 号卡均有外部 CUDA client，Slurm 对 cgq 无有效队列项；本轮未运行 GPU workload。
+
 ## 2026-11-02 08:37 +0800 R14 Qwen fixture-held-out generation 终审有探索性分数；GPU2 holder 请求受当前共享占用限制
 
 ### Held-out generation 证据与边界
