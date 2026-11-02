@@ -52,8 +52,9 @@ class TestTorchMemorySnapshot(unittest.TestCase):
         self.assertEqual(list(data), SNAPSHOT_KEYS)
         trace = data["device_traces"][torch.cuda.current_device()]
         self.assertEqual(list(trace[0]), TRACE_KEYS)
-        self.assertTrue({"segment_alloc", "alloc", "free_requested", "free_completed"}
-                        <= {e["action"] for e in trace})
+        # segment_alloc too, unless earlier work left enough cached segments
+        # (tests/runtime/test_memory_history.py checks segments directly).
+        self.assertTrue({"alloc", "free_requested", "free_completed"} <= {e["action"] for e in trace})
         # The weights' blocks are named after the line that built the model.
         weight = model[0].weight.numel() * 4
         blocks = [b for s in data["segments"] for b in s["blocks"]

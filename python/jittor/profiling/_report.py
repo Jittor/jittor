@@ -76,7 +76,7 @@ class ProfileResult:
 
     def __init__(self, *, t0, t1, strings, ops, batches, waits, kernels, copies,
                  correlation, device_note, memory, python, replay, steps, truncated,
-                 on_host=False):
+                 on_host=False, stacks=None):
         self.t0, self.t1 = t0, t1
         self.wall_ns = t1 - t0
         self.strings = strings
@@ -92,6 +92,9 @@ class ProfileResult:
         self.steps = steps
         self.truncated = truncated
         self.on_host = on_host
+        # Stack id -> frames ({"name", "filename", "line"}, innermost first),
+        # when the profile recorded stacks.
+        self.stacks = stacks
         self._by_seq = {op["seq"]: op for op in ops}
         self._op_wait = self._waits_inside_ops()
         for rec in kernels + copies:

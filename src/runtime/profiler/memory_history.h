@@ -33,6 +33,9 @@ struct Op;
 
 // 0 off; otherwise a MemoryHistoryMode bit set.
 EXTERN_LIB int memory_history_mode;
+// Nonzero while someone wants `Op::memory_stack` captured: bit 1 the memory
+// history (allocation stacks), bit 2 a `jt.profile(stacks=True)` region.
+EXTERN_LIB int capture_op_stacks;
 
 enum MemoryHistoryMode {
     mh_on = 1,            // block state (and its stacks) for snapshots
@@ -65,6 +68,9 @@ uint32 memory_history_intern_stack(const uint32* frames, size_t count);
 void memory_history_start(int64 mode, int64 max_entries);
 // @pyjt(memory_history_mode_now)
 int64 memory_history_mode_now();
+/// Turn op-stack capture on or off for one of its users (`capture_op_stacks` bits).
+// @pyjt(set_op_stack_capture)
+void set_op_stack_capture(int64 user, bool on);
 /// "trace:field,...;segment:field,...;block:field,..."
 // @pyjt(memory_history_layout)
 string memory_history_layout();

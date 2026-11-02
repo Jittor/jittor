@@ -20,6 +20,7 @@
 namespace jittor {
 
 int memory_history_mode = 0;
+int capture_op_stacks = 0;
 
 namespace {
 
@@ -151,9 +152,15 @@ void memory_history_start(int64 mode, int64 max_entries) {
     if (mode & mh_clear_trace) s.traces.clear();
     s.max_entries = max_entries;
     memory_history_mode = (int)(mode & ~mh_clear_trace);
+    set_op_stack_capture(1, memory_history_mode & mh_alloc_stacks);
 }
 
 int64 memory_history_mode_now() { return memory_history_mode; }
+
+void set_op_stack_capture(int64 user, bool on) {
+    if (on) capture_op_stacks |= (int)user;
+    else capture_op_stacks &= ~(int)user;
+}
 
 string memory_history_layout() { return kLayout; }
 

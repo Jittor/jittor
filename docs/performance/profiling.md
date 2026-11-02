@@ -18,8 +18,24 @@ prof.export_chrome_trace("step.json")   # chrome://tracing 或 Perfetto 打开
 ```
 
 Torch 兼容模式下，`torch.profiler.profile` 与 `torch.autograd.profiler.profile` 就是
-它：`key_averages().table()`、`export_chrome_trace`、`schedule`/`on_trace_ready`、
-`record_function` 都可用。
+它，而且产物与 PyTorch 2.11 的一样（`compat/torch/profiler.py`）：
+
+- `events()`/`key_averages()` 是 PyTorch 的 `FunctionEvent`/`FunctionEventAvg`：每个算子、每个
+  `record_function` 区间是 CPU 事件，每个 kernel/拷贝是 CUDA 事件，kernel 的时间同时记为发射它的
+  算子的 self 设备时间；区间的 total = 自身 + 子事件。惰性执行下，区间里**建**的算子往往在区间
+  结束后才执行，它们仍算区间的子事件（执行器按建算子时打开的区间记，`op_records[i]["range"]`）。
+- `table()` 的列、宽度、截断、单位、排序键和页脚与 PyTorch 的 `_build_table` 相同；
+  `profile_memory` 给出每个算子分配减释放的 CPU/CUDA Mem（self 与 total），`record_shapes` +
+  `group_by_input_shape` 给出 `[[64, 256], [512, 256]]` 形式的 Input Shapes，`with_stack` +
+  `group_by_stack_n` 给出 Source Location（建算子时的 Python 栈，`file(line): func`，最内层在前，
+  去掉 jittor 自己的帧）。kernel 名按 C++ 反修饰显示。
+- `export_chrome_trace` 写 Kineto 格式（顶层键、`cpu_op`/`user_annotation`/`kernel`/`gpu_memcpy`、
+  ac2g 流、`[memory]` 瞬时事件、`GPU n`/`stream n` 元数据、kernel 的 grid/block/寄存器/共享内存），
+  TensorBoard profiler 插件、HTA、Perfetto 按 PyTorch trace 读；`export_stacks` 写火焰图格式；
+  `export_memory_timeline` 写 `[times, sizes]`（json/json.gz）或 matplotlib 图（html），版式与
+  PyTorch 相同，但 jittor 不把分配分成参数/梯度/激活，全部记在 "Unknown"。
+- 没有的：Python 函数调用事件（`python_function`）、CUDA runtime API 事件、`with_flops`、
+  `with_modules`。原生 `jt.profile(stacks=True)` 在 `result.stacks` 里给出同样的栈。
 
 ## 读报告，再决定下一步
 
@@ -123,6 +139,7 @@ pip install "jittor[profile]"   # nvidia-cuda-cupti-cu12==12.2.142，对应 jitt
 | `prof.memory` | `MemoryReport`：`peak_allocated`、`peak_with_workspace`、`pool_peak_reserved`、`live_by("op"/"site"/"tensor"/"origin")`、`fragmentation`、`timeline` |
 | `prof.replay` | 区域内设备图发射次数；注册的重放对象的计数增量与拒绝原因 |
 | `prof.op_records` / `kernel_records` / `copy_records` | 原始记录 |
+| `prof.stacks` | `stacks=True` 时，栈 id → 帧列表（`op_records[i]["stack"]` 索引它）；否则 `None` |
 
 `prof.step()` 标记步边界。`jt.profiling.record_function(name)` 在 trace 里标一段主机
 区间。

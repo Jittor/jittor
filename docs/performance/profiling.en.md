@@ -20,8 +20,33 @@ prof.export_chrome_trace("step.json")   # chrome://tracing 或 Perfetto 打开
 ```
 
 In Torch compatibility mode, `torch.profiler.profile` and
-`torch.autograd.profiler.profile` are exactly this: `key_averages().table()`,
-`export_chrome_trace`, `schedule`/`on_trace_ready` and `record_function` all work.
+`torch.autograd.profiler.profile` are exactly this, and what they produce is what
+PyTorch 2.11 produces (`compat/torch/profiler.py`):
+
+- `events()`/`key_averages()` are PyTorch's `FunctionEvent`/`FunctionEventAvg`:
+  each operator and each `record_function` range is a CPU event, each kernel/copy
+  a CUDA event whose time is also its launching operator's self device time; a
+  range's total is its own time plus its children's. Under lazy execution an
+  operator **built** inside a range often runs after the range closes; it is still
+  the range's child (the executor records the range open when the op was built,
+  `op_records[i]["range"]`).
+- `table()` has PyTorch's `_build_table` columns, widths, truncation, units, sort
+  keys and footer; `profile_memory` gives each operator's allocated-minus-freed
+  CPU/CUDA Mem (self and total), `record_shapes` + `group_by_input_shape` give Input
+  Shapes as `[[64, 256], [512, 256]]`, `with_stack` + `group_by_stack_n` give Source
+  Location (the Python stack that built the operator, `file(line): func`, innermost
+  first, without jittor's own frames). Kernel names are demangled.
+- `export_chrome_trace` writes Kineto's format (top-level keys, `cpu_op`/
+  `user_annotation`/`kernel`/`gpu_memcpy`, ac2g flows, `[memory]` instants,
+  `GPU n`/`stream n` metadata, kernel grid/block/registers/shared memory), which
+  TensorBoard's profiler plugin, HTA and Perfetto read as a PyTorch trace;
+  `export_stacks` writes the flame-graph format; `export_memory_timeline` writes
+  `[times, sizes]` (json/json.gz) or the matplotlib plot (html) in PyTorch's layout,
+  but jittor does not classify allocations into parameters/gradients/activations,
+  so every byte is "Unknown".
+- Not there: Python function events (`python_function`), CUDA runtime API events,
+  `with_flops`, `with_modules`. Native `jt.profile(stacks=True)` gives the same
+  stacks in `result.stacks`.
 
 ## Read the report and choose the next step
 
@@ -142,6 +167,7 @@ Beyond `prof.summary()`, the structured data is in:
 | `prof.memory` | `MemoryReport`: `peak_allocated`, `peak_with_workspace`, `pool_peak_reserved`, `live_by("op"/"site"/"tensor"/"origin")`, `fragmentation`, `timeline` |
 | `prof.replay` | device graph launches inside the region; count deltas and refusal reasons for registered replay objects |
 | `prof.op_records` / `kernel_records` / `copy_records` | raw records |
+| `prof.stacks` | with `stacks=True`, stack id → frames (indexed by `op_records[i]["stack"]`); otherwise `None` |
 
 `prof.step()` marks a step boundary. `jt.profiling.record_function(name)` marks a
 host interval in the trace.

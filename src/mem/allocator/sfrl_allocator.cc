@@ -747,8 +747,17 @@ void SFRLAllocator::fence_capture(vector<Allocation>& held) {
         char* begin = (char*)block->memory_ptr;
         auto range = touched(begin, begin + block->size);
         if (!range.first) continue;
+        // The statistics see the free block go and, out of it, a held block
+        // and whatever free remainders the carving split off.
+        note_inactive_split(device(), block, -1);
+        CachingBlock* left = block;
+        CachingBlock* right = block->next;
         block = carve_free(block, range.first, range.second);
         block->occupied = true;
+        if (left != block) note_inactive_split(device(), left, 1);
+        if (block->next != right) note_inactive_split(device(), block->next, 1);
+        block->requested = block->size;
+        note_block(device(), block, 1);
         size_t id = block->blocks->insert_occupied(block);
         used_memory += block->size;
         note_device_alloc(device(), block->size);

@@ -877,8 +877,9 @@ def install(ctx):
     _modules["torch.profiler"] = _profiler
     g.profiler = _profiler
     register_api_bindings(_profiler, "torch.profiler", _TORCH_PROFILER_NAMES, Fidelity.APPROXIMATE,
-                          "Backed by jittor.profiling: one row per launched jittor operator with "
-                          "executor host time and CUPTI device time; self and total times are equal.")
+                          "Backed by jittor.profiling: PyTorch's events, averages, table and Kineto trace "
+                          "over jittor operators, record_function ranges and CUPTI kernels; no Python "
+                          "function or CUDA runtime events, flops or modules.")
 
     if "torch.utils.tensorboard" not in _modules:
         _tb = _types2.ModuleType("torch.utils.tensorboard")
