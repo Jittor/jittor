@@ -1,3 +1,29 @@
+## 2026-11-02 19:00 +0800 最近一周成果汇总与 current-main optimizer restore 诊断
+
+### 最近一周主要成果（2026-10-26 至 2026-11-02）
+
+**实用训练与续训。** R14 隔离源码快照 e4a3894065953efa50ea23a0e52b45511b835f59 上，seed821 Qwen LoRA 在真实 CUDA 完成两 epoch、102 次更新，0 次跳步、0 fallback；按 epoch 汇总的微批次 loss 从 1.205469 降至 1.153617，PyTorch 对照从 1.205680 降至 1.154064。固定验证集 eval loss 为 Jittor 2.455552、PyTorch 2.456644。新进程从 checkpoint-51 恢复至 102，再更新 51 次；模型、optimizer、scheduler、Python/NumPy/CPU/CUDA RNG 与第二 epoch 样本顺序审计通过，930 项状态值、337 项张量设备映射通过，112/112 个 LoRA 张量均相对 checkpoint-51 改变。完整证据目录为 /data6/cgq/jittor-lab/_state/release-day23/20261030-r14-qwen-practical-final-r1-prepared/。该结论绑定该源码、seed 与配置。
+
+current-main 的 seed821 Qwen3-0.6B 训练和续训另有独立证据：102 次更新，epoch 微批次 mean loss 1.2055992702→1.1535344227，固定 eval loss 2.456431，对照 PyTorch 为 2.456644。它与 R14 是不同源码身份，数值不合并成同一实验结论。
+
+**训练状态与分布式。** current-main 公共 Transformers Trainer + PEFT/BERT 双 rank NCCL fixture 完成 full 两步与 step-1 checkpoint 后的新进程恢复至 step 2。修正 collator 预取带来的样本 ID 记录问题后，full 与 stop+resume 的两个 rank 样本顺序一致；每 rank 52 项轨迹数组对照均零差异，最终 6 个可训练 LoRA 张量一致且均有更新，恢复报告含 model、optimizer/scheduler 与 RNG。另有双 rank NCCL DCP 状态保存恢复、barrier backend 路径及单 rank Trainer 恢复的定向证据；每项都受其 fixture 和源码身份限制。
+
+**CUDA 兼容性与发布检查。** 修复 current-main CUDA 回归中的七个测试/算子派发问题；修复后的 native process-mode attempt-07 为 415 passed、71 skipped、3 xfailed、1 failed，唯一失败是 A800 驱动对非法地址访问返回 717、旧断言仅接受 700；聚焦复验通过。Torch-shim TF32 测试 5 passed。较大的 786 项 Torch-shim CUDA 批次只完成 8 项后按有界时间停止，不能算整批通过。最近的 current-main HF CUDA device smoke 有 4 项通过，tiny BERT/GPT2/T5 前向在 210 秒内未完成。current wheel 与 approved baseline 的迁移差异仍是新增 69、变化 302、删除 2、批准 0；没有改 allowlist 或基线。
+
+**显存、质量和发布边界。** R3/R5 特定 checkpoint API/model 路径已有真实 activation recompute 证据；R3 synthetic Llama 的 checkpoint-on allocated peak 约 1.404 GB、off 约 0.653 GB，热态 median 46.619 ms 对 28.910 ms，没有显示显存节省。当前 release 候选仍需匹配配置的正式 on/off 性能和显存测量。Qwen fixture generation 没有使用规范 held-out split，因此没有 held-out 任务质量分数。stock PyTorch torch.load 不能读取 JT portable-pickle 格式的 optimizer.pt，这与同一 Jittor 新进程 resume 已通过的功能证据分别记录。
+
+### 新增功能证据：CPU/CUDA 混合参数的 optimizer 恢复与下一步更新
+
+在现有 /home/cgq/jittor 工作区 HEAD 3c63658ef494d95959f543d44156313c19027121、origin/cgq_transformers e5cffe1ae60c418f53c5bb1dca9182577fd2b81（ahead/behind 241/0）运行。测试绑定 102 项既有 dirty/untracked 状态 SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211、tracked diff SHA256 3ef743580bb7db38dbc9197f6f90e3182956d2bc29a55bce29c7eeea1bea6100；目标测试文件 SHA256 c9ff7be24a6dd0e4b5e0300f262d1f6addde39f0f2da0205d3171d50bef0cbfd。启动前后源码和仓库状态签名未变，index 无预存改动。本任务没有修改或清理任何已有仓库文件。
+
+测试只运行 compat/tests/torch/test_optimizer_restore_devices.py::test_map_cpu_restore_to_per_parameter_device_and_next_step 的 6 个 CPU/CUDA 参数组合，GPU1 UUID GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068 在进程中映射为 cuda:0；fallback=error、accelerator minimum gate 开启。结果为 5 passed、1 failed、117.68 秒、Nox exit 1。CPU AdamW float32、CPU SGD float32、CUDA AdamW float32、CUDA AdamW bfloat16 与 CUDA SGD float32 通过。唯一失败是 CPU AdamW bfloat16：恢复前的 parameter 与 moment 值核对通过，恢复后一步的参数比较通过，但第二矩 exp_avg_sq 出现最大绝对差 6.676465e-05、相对差 9.3548e-04。该结果指向 CPU BF16 后续状态轨迹差异，原因仍待定位；不能按全面 CUDA 失败或单纯断言误差处理，也没有因它放宽比较阈值。
+
+三次 attempt 均完整保留：attempt-01 在一次性 jit_utils rebuild 预检处结束，pytest 未运行；attempt-02 的选择表达式筛掉 6 项，被 accelerator minimum gate 正确拒绝，测试函数仍未运行；attempt-03 是上述完整结果。隔离 Nox cache 从 15,534 增至 15,722 项，新增 188、删除 0、681 个共有路径哈希改变。完整执行包位于 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-optimizer-restore-cuda-r1-prepared/；attempt-03 log SHA256 c6a590c0c540f07f0165ee82f976c466490c2dc3f37411deff7a0f2815dd0312，artifact-files 清单对包内证据校验通过。运行后没有遗留测试进程；GPU2 UUID 未暴露给进程，原有外部进程集合保持不变。共享 GPU1 上的 correctness 运行不产生性能或显存结论。
+
+### 后续工作
+
+先用有界诊断确定 CPU BF16 差异来自梯度还是 optimizer 第二矩更新，再决定是否修复兼容实现；不要只放宽断言。之后继续按实际影响补齐剩余 Torch-shim CUDA 功能范围和 approved wheel baseline 逐项审阅。Day4–5 正式性能/显存仍等待管理员添加 cgq Slurm association、恢复目标节点并提供 GPU2 UUID/GRES 与 device-cgroup 独占租约。取得租约后按至少三轮交替、每轮至少十个热态样本，报告 median/p95/离散度、加载/首步/热态耗时及 allocator/NVML 峰值。overall Day2–5 release 维持 **Not complete**。
+
 ## 2026-11-02 18:46 +0800 current-main HF/Torch CUDA 设备 smoke：4 项通过，模型前向节点受限时未完成
 
 在现有 `/home/cgq/jittor` 工作区 HEAD `3a2ebe3733a3f20f7356bfd343791c81105c0bd7`、origin/cgq_transformers `e5cffe1ae60c418f53c5bb1dca9182577fd2b81`（ahead/behind 240/0）上运行；启动前后 dirty 状态与源码 diff 指纹一致：102 项短状态 SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`，tracked diff SHA256 `3ef743580bb7db38dbc9197f6f90e3182956d2bc29a55bce29c7eeea1bea6100`。没有修改仓库源码或既有 dirty/untracked 文件。

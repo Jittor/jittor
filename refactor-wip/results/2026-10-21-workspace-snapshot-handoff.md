@@ -1,3 +1,10 @@
+## 2026-11-02 19:00 +0800 Handoff：本周训练/续训成果与 current-main optimizer restore 新结果
+
+本周 R14 Qwen LoRA 在真实 CUDA 上完成两 epoch、102 次更新；checkpoint-51 新进程续训通过，并核对了优化器、调度器、RNG、样本顺序和 LoRA 参数变化。current-main 还有独立 Qwen 训练续训、双 rank Trainer 新进程恢复、NCCL DCP 与 barrier 定向证据。修复和 smoke 补齐部分 CUDA Torch-shim 覆盖，较大的 CUDA compatibility、approved wheel migration、held-out quality 与 GPU2 性能/显存门仍未关闭；具体结果见 [Day2–5 报告](2026-10-26-torch-compat-release-day2-5.md)。
+
+新增混合 CPU/CUDA optimizer restore 一步更新用例运行 6 项，5 passed、1 failed。唯一问题是 CPU BF16 AdamW 恢复后的第二矩出现小幅轨迹差异；恢复前状态和参数更新比较通过，仍需分辨梯度与 state-update 来源。证据目录为 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-optimizer-restore-cuda-r1-prepared/，attempt-03 log SHA256 c6a590c0c540f07f0165ee82f976c466490c2dc3f37411deff7a0f2815dd0312。工作区源码与既有 dirty/untracked 文件未改动。
+
+下一步对 CPU BF16 discrepancy 做一次有界诊断并据证据修复；GPU2 正式 Day4–5 suite 仍需管理员提供 cgq Slurm association、节点恢复及可验证的 GRES/device-cgroup lease。overall Day2–5 release 继续 **Not complete**。
 ## 2026-11-02 18:46 +0800 Handoff：current-main CUDA 设备 smoke 四项通过，一项模型节点超出有界窗口
 
 继续使用 `/home/cgq/jittor`，当前 HEAD `3a2ebe3733a3f20f7356bfd343791c81105c0bd7`、origin/cgq_transformers `e5cffe1ae60c418f53c5bb1dca9182577fd2b81`（ahead/behind 240/0）。工作区保留的 102 项短状态 SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`，tracked diff SHA256 `3ef743580bb7db38dbc9197f6f90e3182956d2bc29a55bce29c7eeea1bea6100`，测试前后未变。

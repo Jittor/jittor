@@ -1,3 +1,10 @@
+## 2026-11-02 19:00 +0800 周总结与 optimizer restore 新结果；Day2–5 仍未完成
+
+最近一周已取得 R14 seed821 Qwen LoRA 两 epoch/102 更新和 checkpoint-51 新进程续训证据；current-main 另有 Qwen 训练续训、双 rank Trainer 样本顺序与恢复轨迹通过。current-main CUDA 回归修复、聚焦 TF32 和设备 smoke 补齐了部分功能覆盖；786 项 Torch-shim CUDA gate、wheel baseline migration、held-out generation 与 GPU2 正式性能/显存门仍开放。R3/R5 指定路径已有 recompute 证据，现有 R3 on/off 诊断未显示显存收益。详细周总结见 [Day2–5 结果报告](../results/2026-10-26-torch-compat-release-day2-5.md)。
+
+新增 current-main optimizer restore 定向审计绑定 HEAD 3c63658ef494d95959f543d44156313c19027121 和既有 102 项工作树指纹；混合 CPU/CUDA 参数的恢复后一步更新用例 5/6 通过。唯一失败为 CPU BF16 AdamW 后续更新的第二矩 exp_avg_sq，最大绝对差 6.676465e-05、相对差 9.3548e-04；恢复前 state 和更新后的参数比较通过。根因未确定，不放宽阈值。GPU1 correctness run 为共享负载，GPU2 未暴露。执行与失败原件位于 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-optimizer-restore-cuda-r1-prepared/，attempt-03 log SHA256 c6a590c0c540f07f0165ee82f976c466490c2dc3f37411deff7a0f2815dd0312。
+
+下一项先用有界诊断区分 CPU BF16 梯度差异与 optimizer state 更新差异，再继续剩余 CUDA 功能范围。Day4–5 仍需管理员补 cgq Slurm association、恢复节点并给出 GPU2 GRES/device-cgroup 独占租约；正式协议至少三轮交替、每轮每侧十个热态样本并报告分位数、离散度、加载/首步/热态时间及 allocator/NVML 峰值。overall Day2–5 **Not complete**。
 ## 2026-11-02 18:46 +0800 current-main Torch/HF CUDA 设备 smoke 部分通过；Day2–5 仍未完成
 
 当前 HEAD `3a2ebe3733a3f20f7356bfd343791c81105c0bd7`，origin/cgq_transformers `e5cffe1ae60c418f53c5bb1dca9182577fd2b81`（ahead/behind 240/0）。Nox CUDA attempt-02 在 GPU1 UUID `GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068` 上收集 5 项：显式 CUDA tensor 往返、空 tensor、bool-mask 极值与 multinomial、CUDA runtime 下 data constructors 默认 CPU 四项通过；小型 Transformers BERT/GPT2/T5 forward 项在 210 秒硬限时内未完成，exit 143，没有断言失败报告。attempt-01 只在 Nox jit_utils 初始化探针终止，0 项 pytest 执行；两次原件都保留，不为耗时节点重复启动。
