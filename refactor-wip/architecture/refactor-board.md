@@ -1,3 +1,11 @@
+## 2026-11-03 07:25 +0800 精确 main+compat wheel 的 CPU checkpoint/state_dict/DCP 套件 17/17 通过
+
+在已独立 pip 安装并完成 cold-root smoke 的精确 main wheel（SHA256 `bab474943f9c9c45ee59c7582b83bf054c75bc511c2cef585ba5a504d9b7d055`，源码提交 `9a9096bb5588816ca0e090cbcb4c18a6e967ab0e`）与 compat wheel（SHA256 `740a9034c375e70b55ade864f75acbed7e492f09532bcf68ab64ac24a070b975`，源码提交 `19a07871932743dae226107fc9403e756d56bdef`）安装根上，运行 `compat/tests/torch/test_checkpoint_state_dict.py`：17 passed、0 failed/skip，用时 30.90 秒，fallback 0→0。pytest 子进程实际从隔离安装根导入 Jittor 与 Torch shim；设备为 CPU。绑定的测试文件 SHA256 `3fe8e900ffcaf5397c5b746beadfc5c4938f2bef90d26687680cc2cf6ca651d4`。
+
+执行复用已验证的 attempt-03 CPU cache 绝对路径与完整 build flags，import 阶段设 `JITTOR_NO_BUILD=1` 并检查 core current；core SHA256 前后相同 `2c8460f5af6e8d33d26b53df8b3f3c047c60851db5138e342cef0a2b7ca788e6`，没有重复冷构建。此前隔离 cache 副本 attempt-01–07 的启动/cache identity 原件均保留；其中 attempt-05 只触发 `jit_utils` 更新后 exit 3，attempt-08 才进入 pytest。原 cold-root manifest SHA256 `09267b8673d4429658c4f5ae01ca5a75acf12bbd51b1cbe2f304d213a9699768` 保留；本次 attempt manifest SHA256 `50690ca1c808ac8c67c21f5c47b10786f029471b4238b1adb582f2a5860e5d6c`，更新后完整 root manifest SHA256 `d22e2ca48bbb6e43dfcb4cbf185350736318d7a0d49461fbb50b7e7dfbd3e961`，校验通过。cache 文件 1465→1561，新增 96、删除 0；唯一既有文件变化为 JIT lock，core 和既有 op 文件未变。
+
+两条 sharded-tensor opt-in case 发出预期 no-op stub RuntimeWarning；这不证明真实全局 sharded tensor，也不覆盖真实多 rank CUDA DCP。该结果补上精确 main+compat wheel 的 CPU checkpoint/state_dict 与单 rank DCP 安装态功能门；不提供 CUDA、训练、性能或显存结论。GPU2 未访问，正式 Day4–5 与更广 Day2–5 发布门继续 **Not complete**。
+
 ## 2026-11-03 07:08 +0800 Held-out 超时的 softmax shape-specialization 归因成立；CUDA 候选探针因共享负载未启动
 
 对 attempt-05 留存的 234 个新增 op 动态库做静态源代码审计，其中 203 个是 fused `CodeOp` FP32 warp-softmax kernel，203 个编译期宽度互不相同，范围 15–269。当前 `_softmax_warp_fp32_cls(length)` 按精确 length 缓存（`lru_cache(maxsize=32)`），生成源码将 `ceil(length/32)`、列边界和行 stride 固定到源码中。这直接证明了该路径存在大量按长度特化的 JIT 变体，并强烈支持自回归长度变化导致反复生成/编译是 900 秒零输出的主要因素；缓存审计不能给出 900 秒中编译时间占比，也没有生成质量分数。静态审计文件位于 `/data6/cgq/jittor-lab/_state/release-day23/20261103-qwen-heldout-softmax-shape-audit-r1/`，其分析明确保留以上因果边界。

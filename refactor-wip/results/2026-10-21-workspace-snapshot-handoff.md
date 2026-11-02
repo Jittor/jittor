@@ -1,3 +1,7 @@
+## 2026-11-03 07:25 +0800 续接：精确 main+compat wheel 的 CPU checkpoint/state_dict/DCP 17/17 通过
+
+在已 cold-root 验收的精确 main+compat wheel 安装根上运行 checkpoint/state_dict/DCP CPU 文件：17 passed、0 failed/skip，fallback 0→0，30.90 秒；安装模块来源正确，core current 且 SHA256 前后不变。执行复用原 verified CPU cache 并禁止 core rebuild。原 root manifest `09267b...` 保留；follow-up attempt manifest `50690c...` 与更新后的 root manifest `d22e2c...` 均已校验。sharded-tensor stub warning 仍不代表真实 shard metadata 支持；此项不覆盖 CUDA、多 rank、性能或显存门。详细范围与证据见主板和 Day2–5 结果报告；Day4–5 与整体发布门仍未完成。
+
 ## 2026-11-03 07:08 +0800 续接：held-out 超时 softmax 静态归因完成，CUDA 正确性探针等待稳定设备
 
 静态审计 attempt-05 的缓存，发现 203 个新增 FP32 warp-softmax `CodeOp` 分别绑定 203 个编译期宽度（15–269）；源实现按精确行宽生成源码，说明 shape-specific JIT 很可能是零输出超时的主要原因，但未量化编译占比，也未获得质量分数。按 `ceil(length/32)` 分桶的候选只完成设计，尚未做 CUDA 前向/梯度验证。首个 probe 在任何 softmax 运算前因 `jit_utils` 重建安全退出；第二次因 GPU0 三个五秒样本利用率 17%、100%、19% 未满足准入门槛而没有启动。GPU2 未触碰，源码未改。静态分析和准入记录详见主板及 Day2–5 记录中的路径与 SHA256；Day4–5 和整体 Day2–5 仍未完成。

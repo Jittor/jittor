@@ -1,3 +1,11 @@
+## 2026-11-03 07:25 +0800 精确 main+compat wheel CPU checkpoint/state_dict/DCP 安装态复核通过
+
+在精确 main/compat wheel 独立安装根（wheel SHA256 分别为 `bab474943f9c9c45ee59c7582b83bf054c75bc511c2cef585ba5a504d9b7d055` 与 `740a9034c375e70b55ade864f75acbed7e492f09532bcf68ab64ac24a070b975`）运行 `compat/tests/torch/test_checkpoint_state_dict.py`，17 passed、0 failed/skip、fallback 0→0。测试绑定 SHA256 `3fe8e900ffcaf5397c5b746beadfc5c4938f2bef90d26687680cc2cf6ca651d4`，实际模块来自安装根；CPU core current，SHA256 前后相同 `2c8460f5af6e8d33d26b53df8b3f3c047c60851db5138e342cef0a2b7ca788e6`。该套件覆盖命名 state 与 optimizer 恢复、参数组/多 optimizer、保存后继续更新、单 rank DCP planner roundtrip 和错误传播。
+
+该次 30.90 秒执行复用同一 exact CPU cache 路径与完整环境 flags，import 时禁止 core build；cache 1465→1561，仅新增 96 项，删除 0，唯一旧文件变化是 `jittor.lock`。主 root 更新 manifest SHA256 `d22e2ca48bbb6e43dfcb4cbf185350736318d7a0d49461fbb50b7e7dfbd3e961`，attempt manifest SHA256 `50690ca1c808ac8c67c21f5c47b10786f029471b4238b1adb582f2a5860e5d6c`。attempt-01–07 的环境/准备失败原件仍保留；只有 attempt-08 是产品测试结果。两条 opt-in sharded-tensor no-op 警告维持已知边界。
+
+这是 CPU 安装态功能证据，不覆盖 CUDA 或真实多 rank DCP，也不构成性能/显存验收。Day4–5 独占窗口和整体 Day2–5 发布门仍开放。
+
 ## 2026-11-03 07:08 +0800 Held-out 生成超时定位到按行宽特化的 softmax JIT；候选 CUDA 正确性验证等待稳定 GPU
 
 复核 attempt-05 的新增缓存源码：234 个新增 op `.so` 中有 203 个 fused FP32 warp-softmax `CodeOp`，对应 203 个不同编译期宽度（15–269）。源实现 `_softmax_warp_fp32_cls(length)` 以精确宽度为缓存键，且在 CUDA 源码中常量化 `ceil(length/32)`、列界与行 stride。该证据强烈支持自回归长度变化触发 shape-specific JIT 是 900 秒首条生成未完成的主要原因，但并未测出编译耗时占比、也没有输出任何 held-out 质量分数。静态审计目录为 `/data6/cgq/jittor-lab/_state/release-day23/20261103-qwen-heldout-softmax-shape-audit-r1/`。
