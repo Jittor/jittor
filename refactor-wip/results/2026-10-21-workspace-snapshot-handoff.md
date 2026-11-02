@@ -1,3 +1,11 @@
+## 2026-11-02 13:58 +0800 Handoff：current-main Qwen 两 epoch 与新进程 resume 通过审计；GPU2 性能租约待管理员
+
+current-main Qwen3-0.6B LoRA seed821 在 GPU1 完成 step1–51，保存 checkpoint-51；新进程精确恢复模型、optimizer、scheduler、Python/NumPy/CPU/CUDA RNG 后完成 step52–102。102 次更新无跳步、无 fallback；930 项状态值和 337 项设备映射核对通过。正确的微批次 epoch mean 为 `1.2055992702 → 1.1535344227`，current-main final eval loss `2.4564309120`。attempt-03 独立 audit v3 SHA256 `4df0de6c300cdae03afedd6f0da183a0a57e150df153fcd6e823d53c9c76da01`，25 项证据清单 SHA256 `7d1581715cc63c103b8b52e6fe73a2a07ea072070be52be3663ef4a9b3359e42`。完整对照与限制见 [Day2–5 结果报告](2026-10-26-torch-compat-release-day2-5.md)。
+
+训练绑定 HEAD `ef62df24c678f292989db93a35e85113d6ef04b5`、source fingerprint `d7cc22fd3881c1a7ab5528c66981dc7d761b2ce59802ecda78d6dfa2344d502a`；run 前后 dirty/untracked 工作区保持一致，index 空。R2 实用训练产物在 `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-qwen20-cuda1-practical-r2-warmcache-r1-prepared/`，未覆盖 R14、R1 或失败 attempt。
+
+Day4–5 性能/显存 R2 suite 仍 `PREPARED_NOT_STARTED`：GPU2 外部任务仍在运行，节点 DOWN、无 `cgq` association 与设备 cgroup 独占租约。用户要求管理员添加 cgq association；完成后还需恢复节点并获得实际 GPU2 UUID/GRES lease，才能运行容量扫测和至少三轮交替配对窗口。没有 held-out generation 分数或 activation recompute/显存节省结论；更广 Day2–5 release 仍 **Not complete**。
+
 ## 2026-11-02 13:27 +0800 接续：current-HEAD 两个 CUDA focused 用例在 GPU1 通过；GPU2 仍等待管理员租约
 
 在 HEAD af87532bca7a6842dbf6c295e246f2ead6b97dfa、origin/cgq_transformers e5cffe1ae60c418f53c5bb1dca9182577fd2b81（ahead/behind 230/0）的现有工作区，针对 CPU focused run 跳过的两个 CUDA 专用项做了单卡功能验证。GPU1 UUID GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068 映射为进程内 cuda:0，2 passed、0 skipped/failed、fallback=0；GPU2 未对该进程可见。source fingerprint cce06c927ac0407e70c715353295b06ea6331c60ec0a495efd8efbb30832a8be、真实 CUDA core SHA256 d2aea33bd566ad8b2b5fbf6edb43fe060f5d8fd389d95eae8d22744f4f390811，均由执行 receipt 与独立 v2 审计绑定。完整日志与校验清单见 Day2–5 报告 13:27 条目指向的 evidence package。

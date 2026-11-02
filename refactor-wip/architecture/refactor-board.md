@@ -1,3 +1,9 @@
+## 2026-11-02 13:58 +0800 current-main Qwen 实用训练与 step51 新进程续训已审计通过；整体 release 仍开放
+
+current HEAD `ef62df24c678f292989db93a35e85113d6ef04b5`、source fingerprint `d7cc22fd3881c1a7ab5528c66981dc7d761b2ce59802ecda78d6dfa2344d502a` 上，Qwen3-0.6B LoRA seed821 在真实 GPU1 完成 51 次更新，新进程从 checkpoint-51 恢复后再完成 51 次，到 step102；0 skip、0 fallback，930 项状态值、337 项设备映射及 RNG 状态恢复检查通过。逐微批次 epoch mean 为 `1.2055992702 → 1.1535344227`，与匹配输入的 R14 结果相近；独立 audit v3 与 evidence manifest 均通过。详细配置、R14/PT 对照与文件哈希见 [Day2–5 结果报告](../results/2026-10-26-torch-compat-release-day2-5.md)。
+
+Day4–5 性能/显存 suite 仍未启动。GPU2 被外部 PID 占用，`X12DPG-OA6` 为 DOWN、`ConstrainDevices=no`；用户没有 Slurm account，管理员需添加 `cgq` association 并恢复节点，再提供 GPU2 UUID/GRES 与 device-cgroup 独占租约。没有租约前不把共享负载下的测量作正式结果。更广 Day2–5 发布门与 overall release 保持 **Not complete**；本次实用训练不构成 held-out generation 质量或 activation-checkpoint 显存节省证据。
+
 ## 2026-11-02 13:27 +0800 current-HEAD 两个 CUDA focused 用例通过；GPU2 性能门仍需独占租约
 
 在沿用的 /home/cgq/jittor 工作区，HEAD af87532bca7a6842dbf6c295e246f2ead6b97dfa，刚 fetch 的 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1dca9182577fd2b81（ahead/behind 230/0），102 项既有 dirty/untracked 状态未改变。将 13:10 CPU focused run 中仅因 CPU scope 跳过的两个 CUDA 用例单独绑定 GPU1 UUID GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068 执行；进程内为 cuda:0，2 passed、0 skipped、0 failed、pytest rc=0、fallback=0。覆盖 public Tensor constructor FollowRuntime alias 与显式 CPU/CUDA storage；current source fingerprint cce06c927ac0407e70c715353295b06ea6331c60ec0a495efd8efbb30832a8be，运行前后相同，加载真实 CUDA core SHA256 d2aea33bd566ad8b2b5fbf6edb43fe060f5d8fd389d95eae8d22744f4f390811。独立审计 v2 通过；GPU1/GPU2 外部进程集合无变化，GPU2 UUID 未暴露给测试进程。完整配置与证据见 Day2–5 报告 13:27 条目及 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-torch-cuda-focused-gpu1-r1-prepared/。

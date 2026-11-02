@@ -1,3 +1,17 @@
+## 2026-11-02 13:58 +0800 current-main Qwen seed821 两阶段训练与新进程续训通过独立审计；Day4–5 独占租约仍未取得
+
+**源码和工作区。** 沿用 `/home/cgq/jittor`，没有重新 clone。训练执行绑定 HEAD `ef62df24c678f292989db93a35e85113d6ef04b5`、`origin/cgq_transformers=e5cffe1ae60c418f53c5bb1dca9182577fd2b81`（ahead/behind 231/0）、source fingerprint `d7cc22fd3881c1a7ab5528c66981dc7d761b2ce59802ecda78d6dfa2344d502a`、1099 个 scoped source entries。run 前后 fingerprint、完整 porcelain 快照均一致：105 条 full-status entries，status SHA256 `8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98`；tracked diff SHA256 `3ef743580bb7db38dbc9197f6f90e3182956d2bc29a55bce29c7eeea1bea6100`，index 为空。已有源码改动保持原样。
+
+**实用训练结果。** 在真实物理 GPU1 UUID `GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068` 上以单卡映射 `cuda:0` 执行 Qwen3-0.6B LoRA，seed 821、BF16、batch 1、gradient accumulation 2、101 条训练样本、17 条固定评估样本。attempt-02 完成 step 1–51 并保存 checkpoint-51；attempt-03 新进程从该 checkpoint 恢复，完成 step 52–102 并生成 checkpoint-102。总计 102 次成功 optimizer update、0 次跳步，loss/梯度均有限，实际参数设备为 `cuda:0`，fallback 及 lifecycle 后 fallback 均为 0；strict save/merge/reload/generation consistency lifecycle 完成。恢复比较器 strict hash 无缺失/多余/变化，930 项状态值逐项一致，337 项张量设备映射一致；Python、NumPy、CPU、CUDA RNG 检查通过。GPU2 未暴露给训练进程。
+
+按 `report.json` 的原始 `microbatches[].loss` 计算，每 epoch 101 个微批次，current-main epoch mean 为 `1.2055992702 → 1.1535344227`。同训练数据 SHA256 `3836597b696a3b79b81ac9f34bc79ce9a4d06cf6e8bf204aabf48dc5d924ecf0`、eval SHA256 `d8318478c8991e75ba5cac474e1f3dfe95c0478da49ad8b2a8909c72fb72f84f`、seed/model/config 的 R14 full 对应均值为 `1.2054693076 → 1.1536167642`；既有 PyTorch 对照为 `1.205680 → 1.154064`。current-main step 51 / step 102 固定 eval loss 分别为 `2.4698171616` / `2.4564309120`；R14 final 为 `2.4555516243`，PyTorch 对照为 `2.456644`。这里的 epoch 统计只使用逐微批次 loss；attempt-02 的第一版 audit 中 `effective_unscaled_train_loss_estimate` 字段不是该指标，旧审计原件保留，v3 审计重新从原始微批次数据计算。
+
+独立审计产物位于 `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-qwen20-cuda1-practical-r2-warmcache-r1-prepared/`。attempt-03 audit v3 SHA256 `4df0de6c300cdae03afedd6f0da183a0a57e150df153fcd6e823d53c9c76da01`；25 项 `audit-v3-evidence.sha256` 清单 SHA256 `7d1581715cc63c103b8b52e6fe73a2a07ea072070be52be3663ef4a9b3359e42`，逐项校验通过。audit-v2 的两处审计脚本缺陷及早期启动配置错误均保留，没有覆盖原件。
+
+该证据支持此源码、seed、数据和配置下的单卡实用训练与新进程续训，不是性能/显存验收或普遍收敛结论。实际运行在共享 GPU1 上，不把训练耗时当基准结果；gradient-checkpointing shim 直接调用目标函数，没有证明 activation recompute 或显存节省，也没有 held-out generation 质量分数。stock PyTorch `torch.load` 对 JT portable-pickle `optimizer.pt` 的互操作失败仍作为独立未解决项记录。
+
+Day4–5 正式性能/显存 suite `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-day45-exclusive-r2-cold-compile-prepared/` 仍为 `PREPARED_NOT_STARTED`。GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 仍有外部 PID 3037196/3164740 各用 8640 MiB；节点 `X12DPG-OA6` 为 DOWN、`ConstrainDevices=no`。用户确认没有 Slurm account，需管理员添加 `cgq` association 并恢复节点，随后取得可验证的 GPU2 GRES/device-cgroup 独占租约，才能执行已准备的容量与三轮配对测量。训练结果不替代该性能/显存门；更广 Day2–5 发布门及 overall release 继续 **Not complete**。
+
 ## 2026-11-02 13:27 +0800 current-HEAD 两个 CUDA focused 用例通过；正式性能/显存门仍未启动
 
 **源码与范围。** 沿用 /home/cgq/jittor，没有重新 clone。执行前 fetch origin/cgq_transformers 后，HEAD 为 af87532bca7a6842dbf6c295e246f2ead6b97dfa，origin 为 e5cffe1ae60c418f53c5bb1dca9182577fd2b81（ahead/behind 230/0）；102 项既有 dirty/untracked 路径、tracked diff 与空 index 均保持不变。current source fingerprint 为 cce06c927ac0407e70c715353295b06ea6331c60ec0a495efd8efbb30832a8be（1099 个 scoped source entries），运行前后相同。本次目的是执行 13:10 CPU focused run 中因 CPU scope 跳过的两个 CUDA 专用用例，不扩展成 full suite 或性能测量。
