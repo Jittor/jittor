@@ -8,7 +8,7 @@ description: 在 Jittor torch shim 与独立 PyTorch 两套解释器上运行和
 ## 当前维护门禁（2026-10-16）
 
 干净测量源码 `c9978992512024a4951a139e4c3d221aaa2584b1` 的实际 CPU/CUDA
-来源重测见 [vLLM component scorecards](../../../docs/results/2026-10-15-vllm-component-scorecards.md)。
+来源重测见 [vLLM component scorecards](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-15-vllm-component-scorecards.md)。
 两侧实际安装官方 vLLM `0.29.0`、Transformers `5.13.0`，独立 oracle 是真实二进制
 PyTorch `2.13.0+cu130`。每设备 base 和 seed 7/19 输入扰动均比较输出及全部四项
 输入梯度，共 15 数组、六独立 worker；无可训练参数，最高 L2。
@@ -40,7 +40,7 @@ collector 会重算全部六阶段、检查扰动、真实安装和实际平台�
 
 组件走真实 native component 路径，不验证 `_C` kernel、完整模型、engine、Omni、
 训练或速度。原整引擎 `GraphPickler` 导入失败记录仍是历史边界，新重测未验收整引擎。
-生产修复与邻接验证见 [RMSNorm / Triton alias](../../../docs/results/2026-10-15-rmsnorm-triton-alias.md)。
+生产修复与邻接验证见 [RMSNorm / Triton alias](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-15-rmsnorm-triton-alias.md)。
 以下旧环境和历史速度只描述其日期。
 
 ## 源码注册分母（2026-10-15）
@@ -70,8 +70,7 @@ collector 会重算全部六阶段、检查扰动、真实安装和实际平台�
 [`downstream-library-adaptation`](../downstream-library-adaptation/SKILL.md) 分类表里
 **合法需要独立 adapter 的第三行**（库私有实现细节），本 skill 按那个框架执行。
 
-**不覆盖**：不新增 vLLM 版本支持声明（[`adapters/README.md`](../../../adapters/README.md)
-明确不为当前安装版本背书）；不做 serving/训练性能验收。2026-09-19 所述环境没有 vLLM 源码 checkout；2026-10-15
+**不覆盖**：不新增 vLLM 版本支持声明（支持范围以独立 [jittor-vllm](https://github.com/JittorEcosystem/jittor-vllm) 的实际验收为准）；不做 serving/训练性能验收。2026-09-19 所述环境没有 vLLM 源码 checkout；2026-10-15
 已恢复上文固定源码并核对注册分母，尚不能据此授予 engine 级验收，见「证据」。
 
 ## 两侧环境
@@ -179,10 +178,10 @@ python tools/run_host_tests.py
 
 ## 证据
 
-- 报告：[`2026-08-31-vllm-ascend-jittor-bootstrap.md`](../../../docs/results/2026-08-31-vllm-ascend-jittor-bootstrap.md)（NPU）；
+- 报告：[`2026-08-31-vllm-ascend-jittor-bootstrap.md`](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-08-31-vllm-ascend-jittor-bootstrap.md)（NPU）；
   `2026-09-08-vllm-independent-distribution.md`（adapter 抽取进仓）与
   `2026-08-23-verl-vllm-trellis-current-baseline.md`（CUDA）两份已退役，Git 历史 `e3c369acb` 可查。
-- 准入与版本矩阵：[`adapters/README.md`](../../../adapters/README.md)、
+- 准入与版本矩阵：[jittor-vllm](https://github.com/JittorEcosystem/jittor-vllm)、
   [`_common.py`](https://github.com/JittorEcosystem/jittor-transformers/blob/main/jittor_transformers/_common.py)。
 - **已核实**：两侧 venv 的 vllm/transformers/torch 版本、oracle 断言、shim 身份、
   adapter 文件与 `jittor_vllm` entry point 存在、host-only 生命周期测试

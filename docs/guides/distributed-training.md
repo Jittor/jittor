@@ -5,7 +5,7 @@ Jittor 原生数据并行使用 `jtrun` 启动进程、`jittor.distributed` 管�
 NCCL；MPI 可继续用于已有 legacy 程序。本指南不依赖 `jittor.compat.torch`。
 
 本指南的训练示例是单机多 GPU 数据并行。原生 FSDP、TP、ZeRO 和分片 checkpoint 的
-验证范围分别见[维护者结果](../results/index.md)，不能由启动成功推断训练分片已验收。
+验证范围分别见[维护者结果](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/index.md)，不能由启动成功推断训练分片已验收。
 Jittor 的反向与更新入口是 `optimizer.backward(loss)` 和 `optimizer.step()`；
 Torch 风格的 `loss.backward()` 不属于原生 DDP 契约。
 

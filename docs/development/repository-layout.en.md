@@ -86,9 +86,9 @@ and defects and limitations are in the
 [issue ledger](https://github.com/Jittor/jittor/blob/master/agent/manuals/known-issues.md).
 Process material from the 2.0 cleanup was deleted at close-out (it remains in Git history):
 design contracts that still hold moved into `docs/development/`, `docs/notes/` and
-`docs/compatibility/`, validation reports that are still the only evidence for an open issue
-were condensed into `docs/results/`, and the wheel-content baseline moved into
-`tools/release/baselines/`.
+`docs/compatibility/`. Historical validation reports use commit-pinned references; new execution
+records belong in GitHub issues/PRs. `docs/` contains no dated reports, result trees or presentation
+artifacts. Wheel-content baselines live in `tools/release/baselines/`.
 
 Active indexes and inbound links must resolve; archived conclusions and their original test
 evidence are **not rewritten into present-day success**. The documentation checks maintain this
@@ -242,7 +242,7 @@ Torch compatibility is split by **ownership**, not by downstream project:
    **Mainline Jittor installs no resident TRELLIS or Gaussian Splatting finder into every
    process.**
 
-Downstream glue and its dedicated tests belong to independent [JittorEcosystem](https://github.com/JittorEcosystem) repositories. The main `adapters/` directory only indexes them; neither core nor `jittor-compat` depends on an adapter bundle. [jittor-vllm](https://github.com/JittorEcosystem/jittor-vllm) publishes the optional `jittor_vllm` module-patch entry point and owns its version/device acceptance. Integrations use the shared owner-aware transaction mechanism for registration and rollback.
+Downstream glue and its dedicated tests belong to independent [JittorEcosystem](https://github.com/JittorEcosystem) repositories. The root README links the ecosystem organization; neither core nor `jittor-compat` depends on an adapter bundle. [jittor-vllm](https://github.com/JittorEcosystem/jittor-vllm) publishes the optional `jittor_vllm` module-patch entry point and owns its version/device acceptance. Integrations use the shared owner-aware transaction mechanism for registration and rollback.
 
 **An installer must report every attempted patch independently.** A broad
 `try/except Exception: pass` wrapped around a series of patches is forbidden -- a single failure

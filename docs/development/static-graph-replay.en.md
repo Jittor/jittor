@@ -2,8 +2,8 @@
 
 - Status: implemented (`35cedb1a3` inference graph replay, `2f794e289` training step capture)
 - Last reviewed: 2026-10-14
-- Basis: [the 2026-09-14 parity report](../results/2026-09-14-jittor-vs-pytorch.en.md),
-  [the 2026-09-24 real-model parity run](../results/2026-09-24-torch-compat-real-models.en.md)
+- Basis: [the 2026-09-14 parity report](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-09-14-jittor-vs-pytorch.en.md),
+  [the 2026-09-24 real-model parity run](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-09-24-torch-compat-real-models.en.md)
 - Recheck when: the capture guards, the automatic-policy thresholds, or the replay counters in
   `jt.profile` change
 

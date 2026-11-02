@@ -85,4 +85,4 @@ separately after explicitly materializing its declared storage placement.
 This API does not supply parameter/gradient sharding, native FSDP, TP, ZeRO
 stages 2/3, elastic resharding, or two-host rendezvous acceptance. The broader
 distributed capability request remains partially implemented. See the
-[verification report](../results/2026-10-15-native-zero-optimizer.en.md).
+[verification report](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-15-native-zero-optimizer.en.md).

@@ -35,7 +35,7 @@ description: 在 Jittor torch shim 与原生 PyTorch 上运行/验证 vLLM-Omni 
 
 ## Full-gradient diagnosis (2026-10-15)
 
-[The pinned H3 autograd audit](../../../docs/results/2026-10-15-h3-autograd-boundary.md)
+[The pinned H3 autograd audit](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-15-h3-autograd-boundary.md)
 uses clean diagnostic source `521314943b480517b6fb422c09359fc521081a8f`.
 Real Torch 2.13.0+cu130 and candidate each reject the complete gradient protocol
 in both eval and public `model.train(True)` modes: 32/36 parameter and all four
@@ -107,7 +107,7 @@ JITTOR_TORCH_SHIM=1 CUDA_VISIBLE_DEVICES="<gpu>" JT_CUDA_KERNEL_MATH=strict \
   HOME="$JITTOR_LAB_ROOT/_state/h3/run/candidate-home" \
   TMPDIR="$JITTOR_LAB_ROOT/_state/h3/run/candidate-tmp" \
   JITTOR_HOME="$JITTOR_LAB_ROOT/_state/h3/run/cuda-jittor" \
-  PYTHONPATH="$PWD/python:<verified-private-facade>:$PWD/adapters:<matched-package-sites>" \
+  PYTHONPATH="$PWD/python:<verified-private-facade>:<matched-package-sites>" \
   <jittor-python> agent/skills/vllm-omni-torch-compat/scripts/probe_h3.py \
   --runtime jittor --device cuda \
   --vllm-checkout "$JITTOR_LAB_ROOT/vllm-evidence/upstream/vllm029" \
@@ -266,8 +266,8 @@ vLLM-Omni server 的原生对拍属于 vllm-omni 自身栈，未做。
 | 部署 core 缺整套 stream 一致性 | 部署（stale `.so`，见坑 1、2） |
 
 MiniMax-H3 按报告是**消费未修改**：断点尽量落 jittor core / compat，不要为它写模型侧
-补丁。vLLM 侧唯一合法的 adapter 是仓内
-[`adapters/jittor_adapters/vllm/`](https://github.com/JittorEcosystem/jittor-vllm/blob/main/jittor_vllm/)（见
+补丁。vLLM 侧 adapter 在独立仓库维护：
+[`jittor_vllm/`](https://github.com/JittorEcosystem/jittor-vllm/blob/main/jittor_vllm/)（见
 [`vllm-torch-compat`](../vllm-torch-compat/SKILL.md)）。
 
 ## 坑与假绿
@@ -296,9 +296,9 @@ MiniMax-H3 按报告是**消费未修改**：断点尽量落 jittor core / compa
 
 ## 证据
 
-- 主报告：[`docs/results/2026-09-14-vllm-omni-h3-enablement.md`](../../../docs/results/2026-09-14-vllm-omni-h3-enablement.md)（34+ 节）。
-- [`2026-09-12-minimax-h3-torch-compat.md`](../../../docs/results/2026-09-12-minimax-h3-torch-compat.md)、
-  [`2026-09-14-autocast-conv-mixed-dtype.md`](../../../docs/results/2026-09-14-autocast-conv-mixed-dtype.md)。
+- 主报告：[`docs/results/2026-09-14-vllm-omni-h3-enablement.md`](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-09-14-vllm-omni-h3-enablement.md)（34+ 节）。
+- [`2026-09-12-minimax-h3-torch-compat.md`](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-09-12-minimax-h3-torch-compat.md)、
+  [`2026-09-14-autocast-conv-mixed-dtype.md`](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-09-14-autocast-conv-mixed-dtype.md)。
 - lab：`$JITTOR_LAB_ROOT/minimax-h3/`（run/env 脚本 + 176 个 `probe_*.py`）；原始日志、权重、
   FlashAttention build、JIT cache 未版本化于 `$JITTOR_LAB_ROOT/_state/h3/`。
 - **已核实**：两个 env 脚本内容、两侧 venv 版本、vllm-omni HEAD、oracle 断言、shim 身份、

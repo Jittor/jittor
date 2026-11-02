@@ -84,7 +84,7 @@ a.cuda(99)         # RuntimeError：超出可见设备数
 (The Torch compatibility layer is slightly more permissive: `Tensor.to(1)` /
 `Module.to(1)` read as `cuda:1` there, because bare indices are common in
 multi-GPU inference stacks, see section 31 of
-`docs/results/2026-09-14-vllm-omni-h3-enablement.md`. Permissiveness is fine;
+[历史记录](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-09-14-vllm-omni-h3-enablement.md). Permissiveness is fine;
 silent loss is not.)
 
 **An unnumbered `cuda` means different things in the two layers**, deliberately:

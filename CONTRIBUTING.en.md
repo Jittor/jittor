@@ -51,7 +51,6 @@ CI requirements are documented in [`agent/manuals/environment.md`](agent/manuals
 ├── python/jittor/       # the Python runtime package (pure Python)
 ├── python/jittor_utils/ # bootstrap for the build utilities in jittor/build/utils/
 ├── compat/              # the optional `jittor-compat` distribution: torch shim, FSDP2, triton
-├── adapters/            # external adapter repository index (JittorEcosystem)
 ├── tests/               # repository pytest suite; not shipped in wheels
 ├── examples/            # runnable examples and MyST notebook sources
 ├── benchmarks/          # ASV regressions, Torch comparisons, and ACL measurements
@@ -179,7 +178,6 @@ every page belongs to exactly one section:
 | [`docs/compatibility/`](docs/compatibility/) | the Torch compatibility layer and its acceptance rules |
 | [`docs/development/`](docs/development/) | repository layout, source architecture, test system, known-issue write-ups |
 | [`docs/research/`](docs/research/) | proposals that are not yet decided |
-| [`docs/results/`](docs/results/) | reproducible maintainer conclusions, each with status, commit, scope, maintainer and recheck condition |
 | [`docs/releases/`](docs/releases/) | release notes |
 
 - Update [`README.md`](README.en.md) for installation or first-use changes. It is

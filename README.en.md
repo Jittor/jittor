@@ -16,6 +16,7 @@ while its C++ and CUDA backend compiles and tunes operators for each workload.
 - [Models](https://cg.cs.tsinghua.edu.cn/jittor/resources/)
 - [API documentation](https://cg.cs.tsinghua.edu.cn/jittor/assets/docs/index.html)
 - [Forum](https://discuss.jittor.org/)
+- [Ecosystem integrations (JittorEcosystem)](https://github.com/JittorEcosystem)
 - [Awesome Jittor (English)](docs/community/AWESOME-JITTOR-LIST.en.md) |
   [Awesome Jittor (中文)](docs/community/AWESOME-JITTOR-LIST.md)
 

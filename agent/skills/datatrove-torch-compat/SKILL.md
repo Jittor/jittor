@@ -84,6 +84,6 @@ Jittor 导入前的编译错误归构建前置，不能算 DataTrove 数值验�
 ## 证据
 
 服务器上同一固定输入的两侧实测结果见
-[`CPU 适配报告`](../../../docs/results/2026-10-24-datatrove-cpu-compatibility.md)。
+[`CPU 适配报告`](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-24-datatrove-cpu-compatibility.md)。
 普通 pytest 门禁发现该测试文件；没有依赖时显式报告环境 skip，验收环境使用
 `JITTOR_REQUIRE_DATATROVE=1` 强制实际执行。

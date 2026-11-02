@@ -11,7 +11,7 @@ real PyTorch**, use
 [`benchmarks/torch_compat/`](https://github.com/Jittor/jittor/blob/master/benchmarks/torch_compat/README.md)
 -- it already handles two interpreters, warmup to steady state, per-step numerical alignment,
 and the memory convention. The current gap table is in the
-[downstream library performance ledger](../performance/library-standing.en.md). The pattern
+[downstream library performance ledger](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/performance/library-standing.en.md). The pattern
 below is suitable for local single-model comparisons:
 
 ```python

@@ -37,9 +37,7 @@ def test_both_root_adapters_register_the_same_policy_once():
 
 def test_external_adapters_are_not_owned_by_core_gates():
     assert gate_scope.TEST_ROOTS == ("tests", "compat/tests")
-    assert not (REPO_ROOT / "adapters/pyproject.toml").exists()
-    assert not (REPO_ROOT / "adapters/jittor_adapters").exists()
-    assert not (REPO_ROOT / "adapters/tests").exists()
+    assert not (REPO_ROOT / "adapters").exists()
 
 
 def test_moved_backend_paths_keep_device_and_process_contracts():

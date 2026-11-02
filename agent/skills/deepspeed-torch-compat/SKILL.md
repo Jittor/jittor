@@ -128,16 +128,16 @@ worker graph ID，也不通过 stale `.grad` 推断当前图。高级 reentrant/
 Review when: DeepSpeed 六个钉死源码文件、native autograd/holder、Module 注册/序列化、
 optimizer state、compat public `gradient_task.participating_tensors`、`owned_runtime_hook`、
 `transaction` 或 `module_patcher` 改变。详细的维护者结论在
-[单 rank FP32 Engine 验收报告](../../../docs/results/2026-10-15-deepspeed-zero-engine.md)。
+[单 rank FP32 Engine 验收报告](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-15-deepspeed-zero-engine.md)。
 报告绑定原始计算基线、独立 CPU/CUDA oracle 与主线整合验证。双 rank BF16 的独立
-源码及硬件边界见[多卡验证报告](../../../docs/results/2026-10-15-deepspeed-bfloat16-multirank.md)。
+源码及硬件边界见[多卡验证报告](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-15-deepspeed-bfloat16-multirank.md)。
 维护入口、CPU Adam 舍入边界、FileStore 控制面及最终 clean-source 四格复验见
-[维护门禁验收报告](../../../docs/results/2026-10-15-deepspeed-maintained-gate.md)。
+[维护门禁验收报告](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-15-deepspeed-maintained-gate.md)。
 原始日志不版本化。
 
 同规格 CPU MPI backend 与 CUDA 公共 `jtrun` 的完整 paired BF16 协议、官方 wheel
 源码闭包/独立重建证明及统一 L3 审核见
-[配对协议验收报告](../../../docs/results/2026-10-15-deepspeed-paired-protocol.md)。
+[配对协议验收报告](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-15-deepspeed-paired-protocol.md)。
 `scripts/collect_deepspeed_scorecard.py`（位于 `torch-compat-repo-runbook` skill）重算
 两扰动、两 rank、两 runtime 的实际原始数据，再调用共享 protocol dispatcher；
 使用空 registry axes/references，不生成整库覆盖率。完整 protocol semantic dict 必须

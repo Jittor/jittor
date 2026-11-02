@@ -115,3 +115,14 @@ def test_historical_snapshot_reads_immutable_git_tools_and_preserves_existing_cl
     assert value == dict(expected, **{'existing-source': 'a' * 64})
     value[names[0]] = 'b' * 64
     assert diffusers.framework_snapshot(tmp_path, baseline=baseline)[names[0]] == expected[names[0]]
+
+
+def test_default_report_is_immutable_history_not_a_required_checkout_file(gate, monkeypatch):
+    module, root, argv = gate
+    import audit_coverage
+    validated = []
+    monkeypatch.setattr(audit_coverage, 'validate_report_reference',
+                        lambda report, checkout: validated.append((report, checkout)))
+    args = module.options(argv[:-2])
+    assert args.report.startswith('https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/')
+    assert validated == [(args.report, root)]

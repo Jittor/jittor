@@ -156,9 +156,9 @@ bf16 均 `3e-2`。这些判据在首次两侧比较前固定，禁止看结果�
   Q/K/V 反向和 dropout 种子重放；`nox -s optional` 的 math/native 阶段各自验收。
 - `tests/tools/test_flash_training_comparison.py` 用合成产物验证缺失的小梯度/更新、
   不同协议、脏源码、损坏产物和禁用断言不能假绿。
-- [CUDA 扩展 Philox 与融合训练回归](../../../docs/results/2026-10-15-cuda-extension-philox.md)
+- [CUDA 扩展 Philox 与融合训练回归](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-15-cuda-extension-philox.md)
   是已提交的 native CUDA 证据，明确没有将其等同于独立 PyTorch FlashAttention 对拍。
-- [公开训练 API 独立对拍](../../../docs/results/2026-10-15-flash-attention-training-oracles.md)
+- [公开训练 API 独立对拍](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-15-flash-attention-training-oracles.md)
   记录干净 `71c5be74e` 的六入口、48 条真实 CUDA 三步轨迹，保留原阈值、完整梯度和
   单独更新检查；另记录 `06ed62ad7` 的 12 个正式 CUDA 门禁场景与固定 causality 输入扰动。
 
@@ -188,7 +188,7 @@ bf16 均 `3e-2`。这些判据在首次两侧比较前固定，禁止看结果�
 上游 FlashAttention 没有对应 CPU 执行，因此共享广度仍为 **0 / 7**；这与六项 CUDA
 API 的实测执行范围分开报告，不放宽 CPU 阶梯要求。KV cache、速度及其他形状仍未验。
 
-[独立安装来源与完整训练复验](../../../docs/results/2026-10-16-flash-attention-installed-source-training.md)
+[独立安装来源与完整训练复验](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-16-flash-attention-installed-source-training.md)
 记录 `c33627faa` 的原十二格 / 48 worker，以及独立 host artifact guard
 `be4827ef3`；两份 source/manifest 分开，CPU 缺失仍 blocked、CUDA 广度不增加。
 

@@ -2500,7 +2500,7 @@ def ecosystem_accelerate(session):
             "--baseline",
             baseline,
             "--report",
-            "docs/results/2026-10-16-accelerate-maintained-cpu-nightly.md",
+            "https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-16-accelerate-maintained-cpu-nightly.md",
             "--command",
             "nox -s ecosystem_accelerate (JITTOR_ACCELERATE_COMPLETE_CPU=1)",
             "--output",

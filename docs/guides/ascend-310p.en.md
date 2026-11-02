@@ -22,10 +22,10 @@ zero CPU fallback under `backend_fallback=error`, and every skip classified by c
 Model-level acceptance: Transformers 4.56.2 + Torch shim, Qwen3-0.6B FP16 greedy
 generation with zero fallback and identical results across three repeats (requires
 `acl_allow_hf32=1`; RoPE's FP32 `inv_freq @ position_ids` takes an explicit reduced
-precision path), see `docs/results/2026-09-22-qwen3-ascend310p-fp16.md`.
+precision path), see [历史记录](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-09-22-qwen3-ascend310p-fp16.md).
 For the current 2.0 code, the synchronous performance comparison, input-length and
 snapshot-weight constraints are in the
-[310P3 performance report](../results/2026-10-12-qwen3-ascend310p-performance.en.md).
+[310P3 performance report](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-12-qwen3-ascend310p-performance.en.md).
 
 ## Capability differences from 910B
 

@@ -96,7 +96,7 @@ code like `os.path.dirname(torch.__file__)` gets a real directory.
 The old GPT-2 manual probe compared loss and gradient norms; the Qwen probe saved
 only selected logit summaries. These cannot establish full forward/backward or
 bitwise cross-backend equivalence. Observations and evidence limits are retained
-in the [archived ACL probe report](../results/acl-manual-probes.en.md).
+in the [archived ACL probe report](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/acl-manual-probes.en.md).
 
 The [native diagnostic tools](../../tools/probes/acl/README.md) help maintainers
 locate drift. Acceptance requires identical weights and inputs, an independent
@@ -197,8 +197,8 @@ to about `1e-6`.
 > (`torch.__torch_version__` / `torch.version.__version__`; `torch.__version__` reports Jittor's own version).
 > The version of real PyTorch used as the reference **varies by report**: the nightly ecosystem gate uses the
 > CPU build `2.7.1` (`.github/workflows/ecosystem.yml`), the
-> [real-model gap table](../results/2026-09-24-torch-compat-real-models.en.md) uses `2.11.0+cu128`, and the more
-> recent measurements in the [downstream library ledger](../performance/library-standing.en.md) use
+> [real-model gap table](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-09-24-torch-compat-real-models.en.md) uses `2.11.0+cu128`, and the more
+> recent measurements in the [downstream library ledger](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/performance/library-standing.en.md) use
 > `2.13.0+cu129`. When citing a number, cite its reference version along with it.
 
 - **Decoder LLMs**: gpt2, llama, qwen2/qwen3, mistral, gemma/gemma2, phi/phi3, opt, bloom, gpt_neox, gptj,
@@ -261,9 +261,9 @@ Two boundaries are **architectural**, not unfinished work:
 TRELLIS.2 4B once completed an aligned end-to-end pipeline with four real CUDA extensions on an external adapter
 **not in this repository**, with a warm-state pipeline median of `7.515s` versus `6.878s` for real PyTorch—about
 `1.09x`, **performance not yet accepted**; that measurement is a one-off conclusion, see the
-[downstream library ledger](../performance/library-standing.en.md).
+[downstream library ledger](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/performance/library-standing.en.md).
 
-Project-specific glue is installed through independent packages from [JittorEcosystem](https://github.com/JittorEcosystem). The main [adapter index](../../adapters/README.en.md) links their source, tests and support records. Core and compat do not depend on an adapter bundle. Registration/version checks remain fail-closed through public module-patch contracts; generic math and Torch semantics remain in the framework.
+Project-specific glue is installed through independent packages from [JittorEcosystem](https://github.com/JittorEcosystem). Each independent repository maintains its source, tests and support records. Core and compat do not depend on an adapter bundle. Registration/version checks remain fail-closed through public module-patch contracts; generic math and Torch semantics remain in the framework.
 
 ## Complex numbers and FFT
 

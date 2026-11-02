@@ -27,7 +27,6 @@ api/index.en
 compatibility/index.en
 notes/index.en
 performance/index.en
-results/index.en
 ```
 
 ```{toctree}
@@ -51,7 +50,7 @@ contributing.en
 | Run on Ascend, Iluvatar, or multiple devices | [Guides](guides/index.en.md) |
 | Understand memory, precision, or asynchronous execution | [How Jittor works](notes/index.en.md) |
 | Investigate an error or performance problem | [Debugging guide](guides/debugging.en.md), [performance](performance/index.en.md) |
-| See phenomena and conclusions others have already checked | [Verification results](results/index.en.md) |
+| Historical evidence (not current support) | [Git history](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/index.en.md) |
 | Check whether a system / Python / backend combination was verified | [Platform support](guides/platform-support.en.md) |
 | Look up a known numerical, performance, or compatibility gap | [Known limitations](guides/known-limitations.en.md) |
 | Upgrade from 1.x | [2.0 release notes](releases/2.0.en.md) |

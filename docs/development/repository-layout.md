@@ -70,8 +70,8 @@ Torch 兼容、机制说明（`docs/notes/`）、性能、发布说明、社区�
 [`agent/manuals/deferred-hardware.md`](https://github.com/Jittor/jittor/blob/master/agent/manuals/deferred-hardware.md)，缺陷与限制见
 [问题总账](https://github.com/Jittor/jittor/blob/master/agent/manuals/known-issues.md)。2.0 整改期的过程材料已在收口时删除（Git
 历史中可查）：仍然成立的设计契约迁入了 `docs/development/`、`docs/notes/` 与
-`docs/compatibility/`，仍是某项未关闭问题唯一证据的验证报告压缩后迁入 `docs/results/`，
-wheel 内容基线迁入 `tools/release/baselines/`。
+`docs/compatibility/`；历史验证报告通过固定提交引用，新执行记录写入 GitHub issue/PR。
+`docs/` 不保留日期报告、结果树或演示产物。wheel 内容基线位于 `tools/release/baselines/`。
 
 活跃索引与入链必须可解析；已归档的结论及其原始测试证据**不被改写成当前的成功**。
 文档检查维持这条"活跃/归档"边界。
@@ -204,7 +204,7 @@ Torch 兼容按**归属**而不是按下游项目划分：
    `jittor-hf-compat`，通过 entry point 注册。**主线 Jittor 不为每个进程安装常驻的
    TRELLIS 或 Gaussian Splatting finder。**
 
-下游粘合代码及其专属测试由 [JittorEcosystem](https://github.com/JittorEcosystem) 的独立仓库维护。主仓 `adapters/` 只保留索引；核心与 `jittor-compat` 均不依赖适配器合集。[jittor-vllm](https://github.com/JittorEcosystem/jittor-vllm) 发布可选的 `jittor_vllm` 模块补丁入口，并独立维护版本和设备验收。集成通过共享的所有权事务机制完成注册与回滚。
+下游粘合代码及其专属测试由 [JittorEcosystem](https://github.com/JittorEcosystem) 的独立仓库维护。主仓通过根 README 链接生态组织；核心与 `jittor-compat` 均不依赖适配器合集。[jittor-vllm](https://github.com/JittorEcosystem/jittor-vllm) 发布可选的 `jittor_vllm` 模块补丁入口，并独立维护版本和设备验收。集成通过共享的所有权事务机制完成注册与回滚。
 
 **安装器必须独立报告每一次尝试的补丁。** 禁止在一串补丁外面套一个宽泛的
 `try/except Exception: pass`——否则一次失败会把之后所有兼容工作都掩盖掉。

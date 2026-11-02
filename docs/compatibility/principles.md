@@ -136,4 +136,4 @@ CUDA、ROCm 或 NPU 的 API 之后。只有以下条件全部成立时，后端�
 持续存在的限制记录到
 [已知问题总账](https://github.com/Jittor/jittor/blob/master/agent/manuals/known-issues.md)，
 并附 owner 以及一个能指示限制何时消失的测试或复现。可复现的维护者结论记录到
-[结果](../results/index.md)。
+[结果](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/index.md)。

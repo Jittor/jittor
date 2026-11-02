@@ -2,8 +2,8 @@
 
 - 状态：已实现（`35cedb1a3` 推理图重放，`2f794e289` 训练步捕获）
 - 上次复查：2026-10-14
-- 依据：[2026-09-14 的对位报告](../results/2026-09-14-jittor-vs-pytorch.md)、
-  [2026-09-24 的真实模型对位](../results/2026-09-24-torch-compat-real-models.md)
+- 依据：[2026-09-14 的对位报告](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-09-14-jittor-vs-pytorch.md)、
+  [2026-09-24 的真实模型对位](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-09-24-torch-compat-real-models.md)
 - 复查触发：捕获的护栏、自动策略的门槛，或 `jt.profile` 的重放计数发生变化时
 
 ## 为什么是这条

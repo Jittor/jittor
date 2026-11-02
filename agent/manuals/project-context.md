@@ -1,10 +1,10 @@
 # Jittor Project Context
 
 - Status: Current-state index, not a history log
-- Last reviewed: 2026-10-29
-- Baseline reviewed: `173c1f0a2`
+- Last reviewed: 2026-11-03
+- Baseline reviewed: `866d5d3e721e9f1d101742b8fe4f97106651491e`
 - Owner: Jittor core maintainers
-- Freshness expires: 2027-01-06
+- Freshness expires: 2027-02-03
 - Review when: the release line, a top-level goal or an indexed location changes
 
 Find where things are here, then read only the document your task needs.
@@ -16,50 +16,25 @@ graph, the C++ core in `src/` fuses and compiles kernels, and backends live unde
 `backends/<name>/` (CPU, CUDA, ROCm, ACL/Ascend, Corex, and `comm/{mpi,nccl,hccl}`).
 The Torch compatibility layer is the separate `jittor-compat` project in `compat/`
 (published as `jittor.compat`, including the `import torch` shim); downstream
-library adapters are independently maintained in [JittorEcosystem](https://github.com/JittorEcosystem); `adapters/` is an index only. The goal is a maintainable, Torch-grade
+library adapters are independently maintained in [JittorEcosystem](https://github.com/JittorEcosystem); the root README links the ecosystem repositories. The goal is a maintainable, Torch-grade
 framework that keeps the JIT/meta-operator design, under the gates in
 [Torch compatibility principles](../../docs/compatibility/principles.md).
 
 ## Current state
 
-The 2.0 restructuring has landed and the tree is in pre-release cleanup: the
-refactor-period board, plans and handoff documents are gone, and task status now
-lives in GitHub issues and pull requests. The accepted layout is in
-[repository layout](../../docs/development/repository-layout.md); packaging targets
-Python 3.7-3.13; [`noxfile.py`](../../noxfile.py) and
-[`tools/run_test_suite.py`](../../tools/run_test_suite.py) are the maintained gate
-surface (tiers `core` / `smoke` / full, see `AGENTS.md`). User-facing breaking
-changes: [2.0 migration notes](../../docs/releases/2.0.md). The Ascend 310P
-support from PR #18043 is integrated (SoC capability table, reduced-precision
-opt-in, ACL inference helpers and mapped composite ops), and user documentation
-is now paired: Chinese-default `X.md` plus English `X.en.md`, with
-`README.md` / `README.en.md` at the root. The duplicate-capability audit
-consolidated optimizer state-name translation, vLLM accelerator detection,
-slot mapping, async host copies and sampling-snapshot caches, and the AMP
-half-preference test; forward-placement and jagged-axis have contract
-tripwires. The continuous-test rounds also fixed checkpoint buffer-class
-preservation, half-contraction accumulation, 0-D setitem codegen, scalar
-`sum(dim=0)`, the CPU deterministic query, the mapped-ACL parity inventory,
-the StepCapture replay copy window (KI-EXEC-016 closed), and the
-Torch autocast layer_norm float32 result (KI-COMPAT-020 closed); exact-value
-cuDNN tests opt into the new strict float32 precision tier. The CUDA
-performance round took the float32 memory-efficient attention backward's row
-term from a per-layer score-matrix rebuild to `dO . O` except on rows whose
-mass sits on one key, resolved `zero_grad` and optimizer readers once per
-parameter list instead of once per tensor, and taught the Torch frontend to
-hand an exact causal mask to the backends as `is_causal` (off Ascend, where
-the verdict's host read defeats graph replay). The 14-workload
-`benchmarks/torch_compat` matrix now compares at a geometric mean of 0.59x
-with no workload slower than PyTorch (BERT-large having been 6.55x on the
-earlier micro-suite), and the per-group optimizer write took `qwen3_train`
-from 412 to 265 ms on a 910B3
-([results](../../docs/results/2026-10-29-cuda-f32-attention-row-term.md)). On
-Ascend, the boolean attention mask no longer expands to score size before the
-fused call: qwen3-0.6B prefill went from 54.99 to 35.69 ms a step on a 910B3,
-below PyTorch's first-step device time, with the mask semantics re-checked
-against the float64 reference for batch, head and key-axis layouts; the
-per-group optimizer write took `qwen3_train` from 412 to 268 ms there
-([results](../../docs/results/2026-10-29-ascend-bool-mask-broadcast.md)).
+The 2.0 restructuring is in pre-release cleanup. The maintained layout is in
+[repository layout](../../docs/development/repository-layout.md); core and compat
+are separate distributions, and downstream integrations belong to JittorEcosystem.
+Packaging targets Python 3.7-3.13. [`noxfile.py`](../../noxfile.py) and
+[`tools/run_test_suite.py`](../../tools/run_test_suite.py) own the test entry points
+and `core` / `smoke` / full tiers. User-facing changes are in
+[2.0 migration notes](../../docs/releases/2.0.md).
+
+Documentation is paired Chinese/English and organized by topic. Dated execution
+reports and presentation artifacts have been removed; prior evidence remains in
+Git history and is linked by full commit SHA. Current validation evidence and task
+status belong in GitHub issues/PRs. Historical measurements do not grant support
+for the current revision; open failures and hardware gaps are tracked below.
 
 ## Where information lives
 
@@ -76,7 +51,7 @@ per-group optimizer write took `qwen3_train` from 412 to 268 ms there
 | Torch compatibility | [compatibility index](../../docs/compatibility/index.md) |
 | Backend guides (Ascend, Corex, jtrun; legacy MPI) | [guides index](../../docs/guides/index.md) |
 | Performance method | [benchmarking](../../docs/performance/benchmarking.md) |
-| Reproducible verification results | [results index](../../docs/results/index.md) |
+| Historical verification evidence | [results index](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/index.md) |
 | Reusable verification tools | `agent/skills/` (listed in [agent-index.md](agent-index.md)) |
 | Task status, handoff, evidence | GitHub issues and pull requests |
 
@@ -105,6 +80,6 @@ per-group optimizer write took `qwen3_train` from 412 to 268 ms there
 
 Sync with the target remote branch as `AGENTS.md` requires and record the SHA;
 isolate the run per [environment](environment.md); search
-[known-issues.md](known-issues.md) and the [results index](../../docs/results/index.md)
+[known-issues.md](known-issues.md) and the [results index](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/index.md)
 for existing evidence; reproduce minimally before editing. Update this page only
 when its current-state summary or a location changes.

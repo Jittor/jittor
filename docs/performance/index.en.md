@@ -4,16 +4,13 @@
 :maxdepth: 1
 
 benchmarking.en
-library-standing.en
 ```
 
-A performance conclusion only means something when it is **reproducible**:
-isolated compilation caches, explicit synchronisation, and the exact commit
-recorded. [Benchmarking](benchmarking.en.md) describes that protocol, and the
-[downstream library ledger](library-standing.en.md) records how far each
-library has been measured. They are separate because the methodology rarely
-changes while the numbers change on every measurement.
+Measurements must isolate compilation caches, synchronize explicitly, and record the
+exact commit, device and reference environment. [Benchmarking](benchmarking.en.md)
+defines the protocol. Record each run in its GitHub issue/PR; downstream benchmarks
+and support scopes belong to the corresponding [JittorEcosystem repository](https://github.com/JittorEcosystem).
+Historical numbers are not support or performance promises for the current revision.
 
-For hands-on tuning see [performance comparison](../guides/performance-comparison.en.md)
-and [memory optimization](../guides/memory-optimization.en.md). To understand
-why something is fast or slow, see [how Jittor works](../notes/index.en.md).
+For tuning, see [performance comparison](../guides/performance-comparison.en.md) and
+[memory optimization](../guides/memory-optimization.en.md); mechanisms are in [notes](../notes/index.en.md).

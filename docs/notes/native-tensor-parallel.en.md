@@ -1,7 +1,7 @@
 # Native tensor-parallel linear layers
 
 Status: bounded native column/row linear implementation. Verification baseline
-and device scope are recorded in the [maintainer result](../results/2026-10-15-native-tensor-parallel.en.md). Recheck after
+and device scope are recorded in the [maintainer result](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-15-native-tensor-parallel.en.md). Recheck after
 collective adjoints, native optimizer synchronization or checkpoint changes.
 
 `jittor.distributed.tensor_parallel.ColumnParallelLinear` stores only its
@@ -78,7 +78,7 @@ No whole-process memory peak or throughput improvement is claimed.
 
 ## BF16 CUDA training with FP32 state
 
-The [AdamW/BF16 result](../results/2026-10-15-native-tensor-parallel-adamw-bf16.en.md)
+The [AdamW/BF16 result](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-15-native-tensor-parallel-adamw-bf16.en.md)
 verifies actual BF16 input and weight operands of the CUDA linear products,
 FP32 master parameters, input/parameter gradients and both AdamW moments.
 Native mixed precision uses the existing flags; TP adds no autocast context

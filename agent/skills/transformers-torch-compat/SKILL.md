@@ -21,7 +21,7 @@ NPU 专项（条目存在但未跑）。深度性能分析（SDPA 后端、算�
 
 ## 当前验证基线
 
-2026-10-15 的 [模型族矩阵](../../../docs/results/2026-10-15-transformers-model-family-matrix.md)
+2026-10-15 的 [模型族矩阵](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-15-transformers-model-family-matrix.md)
 在提交 `8e388d108` 上验证九项 CPU/CUDA 场景，最高 L3（三步 SGD），每个设备覆盖
 8/374 模型族、2/46 任务。使用 Python 3.11.16、NumPy 1.26.4、Jittor 2.0.0、
 Transformers 4.56.2（上游 `cd74917ffc3e8f84e4a886052c5ab32b7ac623cc`）与独立
@@ -32,7 +32,7 @@ RoPE Llama；BERT/ViT 包含 pooler。固定初始权重分别执行 seed 7/19 �
 不以 import 成功作为覆盖。尚未证明完整训练、32K、generation 或 L4 性能。
 `JITTOR_ECOSYSTEM_CACHE_ROOT` 应指向当前任务独占缓存，首次编译串行，且与单测分离。
 
-独立 [32768-token Longformer 补证](../../../docs/results/2026-10-15-longformer-32768-context-oracles.md)
+独立 [32768-token Longformer 补证](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-15-longformer-32768-context-oracles.md)
 绑定源码 `cbe154c3`，CPU/CUDA 均完成全参数/输入梯度、seed 7/19 扰动及三步训练。
 该项是 tiny-width encoder + pooler 的 L3，按独立基线计 1/374 模型族，不并入上述
 `8e388d108` 的分子。通过 `test_ecosystem_longformer.py` 单独运行，设置
@@ -48,7 +48,7 @@ RoPE Llama；BERT/ViT 包含 pooler。固定初始权重分别执行 seed 7/19 �
 与独立仓默认 5.9.0 官方测试分开。按独立仓说明运行 `tools/provision_replay.py`，
 其 nightly 在独立仓执行。安装身份、完整梯度与原预算不得用 preflight 或场景子集替代。
 
-旧验收仍对应 [原始来源重测](../../../docs/results/2026-10-16-transformers-main-source-training.md)
+旧验收仍对应 [原始来源重测](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-16-transformers-main-source-training.md)
 记录的提交、版本和设备。迁移后的宿主测试不是重新执行完整数值协议；不新增硬件、性能、
 完整 Trainer 或任意 checkpoint 的支持结论。
 
@@ -316,7 +316,7 @@ oracle 报 `torch.cuda.max_memory_allocated`（**活跃**字节，单卡），ji
 `device_memory_reserved`）。**不要**继续引用上表两列相除的倍数。
 
 改成同口径后差额仍在（2.88x），于是逐阶段查了根因，结论是**两回事叠加**，都记在
-`docs/results/2026-09-19-torch-compat-runbook-verification.md`：
+[历史记录](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-09-19-torch-compat-runbook-verification.md)：
 
 1. **shim 的 bug（已修）**：`p.grad` 每一步都是新对象——`zero_grad(set_to_none=False)`
    用 `zeros_like` 重建、optimizer-free 的累加写成 `prev + gr`，而 torch 两处都是就地操作。

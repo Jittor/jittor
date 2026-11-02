@@ -165,4 +165,4 @@ A compatibility change should include the smallest applicable set:
 Record persistent limitations in the
 [known-issues ledger](https://github.com/Jittor/jittor/blob/master/agent/manuals/known-issues.md),
 with an owner and a test or reproduction that signals when the limitation is
-gone. Record a reproducible maintainer conclusion in [results](../results/index.en.md).
+gone. Record a reproducible maintainer conclusion in [results](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/index.en.md).

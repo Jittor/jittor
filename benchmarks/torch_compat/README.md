@@ -14,7 +14,7 @@
 手工运行，不被 pytest 收集，不进 CI。
 
 当前的差距表与它的测量条件见
-[`docs/results/2026-09-24-torch-compat-real-models.md`](../../docs/results/2026-09-24-torch-compat-real-models.md)。
+[`docs/results/2026-09-24-torch-compat-real-models.md`](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-09-24-torch-compat-real-models.md)。
 
 ## 工作负载
 
@@ -143,7 +143,7 @@ python benchmarks/torch_compat/report.py old.json new.json       # 两次运行�
 ## 怎么读
 
 **比值 = Jittor 耗时 / PyTorch 耗时（每步中位数），小于 1 表示 Jittor 更快。** 与
-[`docs/performance/library-standing.md`](../../docs/performance/library-standing.md) 口径一致。
+[`docs/performance/library-standing.md`](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/performance/library-standing.md) 口径一致。
 
 - **时间**：计时步的中位数。预热至少跑工作负载声明的步数，然后一直跑到相邻两步相差不到
   10%（最多再加 20 步）——Jittor 的后几步仍可能碰到首次出现的形状而编译，固定步数的预热

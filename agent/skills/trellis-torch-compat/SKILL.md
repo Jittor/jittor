@@ -15,7 +15,7 @@ description: 验证真实 pinned TRELLIS.2 导出模型的独立 CPU/CUDA 数值
 `sdpa`；全部 FP32，TF32 和 cuDNN benchmark 关闭。
 
 可复查结论、完整基线、误差、环境差异和原始证据入口见
-[`2026-10-15-trellis-model-validation.md`](../../../docs/results/2026-10-15-trellis-model-validation.md)。
+[`2026-10-15-trellis-model-validation.md`](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-15-trellis-model-validation.md)。
 维护者：下游兼容性维护者。Review when：上游声明/模型源码、compat attention/Conv3d/
 normalization/autograd/optimizer、device/precision 检查、所选 CUDA 二进制或门禁协议变化。
 
@@ -105,7 +105,7 @@ auditor 重检。上游没有打包声明或发行版 version，`installation_ki
   --platform "cpu=$JITTOR_LAB_ROOT/_state/trellis-installed-source-fresh/20261016/cpu-platform-v1.json" \
   --platform "cuda=$JITTOR_LAB_ROOT/_state/trellis-installed-source-fresh/20261016/cuda-platform-v1.json" \
   --baseline b6947541b5bddfa87098d40c6f4e09ad0e704c54 \
-  --report docs/results/2026-10-15-trellis-model-validation.md \
+  --report https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-15-trellis-model-validation.md \
   --command '<exact validation command and environment>' \
   --output "$FRESH_SCORECARD_JSON"
 ```

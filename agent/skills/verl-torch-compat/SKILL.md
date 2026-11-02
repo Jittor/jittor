@@ -30,5 +30,5 @@ python tools/provision_training.py --state-root "$JITTOR_LAB_ROOT/_state/verl/<r
 完整组件协议固定 `e5a627cf55c94d85406556854c2c1a22db4ff5e7` / `0.10.0.dev`，
 与独立 adapter 的 `0.9.1` 版本不同；迁移后单独维护，不互相授予支持。
 
-- [2026-10-15-verl-installed-source-training.md](../../../docs/results/2026-10-15-verl-installed-source-training.md)：保留原测量提交、包版本、设备和范围；不是迁移后的重新验收。
-- [2026-10-15-verl-registered-component-oracles.md](../../../docs/results/2026-10-15-verl-registered-component-oracles.md)：保留原测量提交、包版本、设备和范围；不是迁移后的重新验收。
+- [2026-10-15-verl-installed-source-training.md](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-15-verl-installed-source-training.md)：保留原测量提交、包版本、设备和范围；不是迁移后的重新验收。
+- [2026-10-15-verl-registered-component-oracles.md](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-15-verl-registered-component-oracles.md)：保留原测量提交、包版本、设备和范围；不是迁移后的重新验收。

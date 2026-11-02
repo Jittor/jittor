@@ -495,7 +495,7 @@ retain_grad 持续到该 holder 的生命期结束。它的 flag、梯度、data
 point，或在历史别名 `jittor.torch_compat` 被导入时运行。**这防止类级的 Torch 改造在无关
 进程中改变原生 Jittor API。**
 
-vLLM 实现和专属测试位于独立的 [jittor-vllm](https://github.com/JittorEcosystem/jittor-vllm)，不由 Jittor 或 jittor-compat 分发。可选 Torch 阶段发现 `jittor.module_patches` 中的 `jittor_vllm` 入口，指向 `jittor_vllm:register`。注册器通过共享事务机制装配导入前的扩展设置及导入后的层补丁。未安装时报告 `unavailable`，不破坏 Torch。公开 Jittor 原语负责数学实现，独立仓库负责硬件验收。主仓 `adapters/` 仅为仓库索引，不是可安装合集。
+vLLM 实现和专属测试位于独立的 [jittor-vllm](https://github.com/JittorEcosystem/jittor-vllm)，不由 Jittor 或 jittor-compat 分发。可选 Torch 阶段发现 `jittor.module_patches` 中的 `jittor_vllm` 入口，指向 `jittor_vllm:register`。注册器通过共享事务机制装配导入前的扩展设置及导入后的层补丁。未安装时报告 `unavailable`，不破坏 Torch。公开 Jittor 原语负责数学实现，独立仓库负责硬件验收。主仓根 README 提供生态组织入口，不保留适配器目录。
 
 归属顺序是：
 

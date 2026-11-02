@@ -10,7 +10,7 @@ description: 把 diffusers 分别跑在 jittor 的 `import torch` shim 与原生
 The current strict guard rejects both original `1a92` rows: their worker packets
 lack wheel SHA and actual METADATA/RECORD bindings. Keep their original numerical
 facts and earlier auditor outcomes; never reconstruct missing historical fields.
-[Current profile and validation status](../../../docs/results/2026-10-16-diffusers-official-installation.md)
+[Current profile and validation status](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-16-diffusers-official-installation.md)
 uses official Diffusers 0.35.1 at `0f252be0ed42006c125ef4429156cb13ae6c1d60`,
 wheel SHA256 `fe29ff10200970c7c5934c6488c213e2a77a03dad5e6fa00bbd8e1d04234cb0e`.
 This PyPI artifact differs from the old local source-built wheel. All 697 payload
@@ -44,7 +44,7 @@ requires `--wheel`; the common collector also requires `--wheel diffusers=WHEEL`
 
 ## Historical installed-source evidence (2026-10-15)
 
-[Fresh CPU/CUDA UNet L3 evidence](../../../docs/results/2026-10-15-diffusers-installed-source.md)
+[Fresh CPU/CUDA UNet L3 evidence](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-15-diffusers-installed-source.md)
 uses clean framework `1a92aae04f4c70fa44e251f8fafdc7e2cd77beda`, Diffusers
 0.35.1 at `0f252be0ed42006c125ef4429156cb13ae6c1d60`, and a wheel built
 from that exact clean source. All twelve real processes bind all 695 package
@@ -65,7 +65,7 @@ numerical records below retain their original provenance and limits.
 
 ## 历史验收入口（2026-10-14）
 
-[CPU/CUDA oracle 与三步训练 scorecard](../../../docs/results/2026-10-14-downstream-oracle-scorecards.md)
+[CPU/CUDA oracle 与三步训练 scorecard](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-14-downstream-oracle-scorecards.md)
 记录 Diffusers 0.35.1 的 `UNet2DModel` 组件：独立二进制 Torch 对拍、输入扰动、
 全部请求梯度及三步更新。该证据不计入 pipeline 注册覆盖，不证明完整生成 pipeline、
 真实尺寸性能或 NPU。计算基线为 `230ba7a0305091fb64ec81a679f32dcaefcea518`；
@@ -74,7 +74,7 @@ numerical records below retain their original provenance and limits.
 
 ## 组件 scorecard 的可复用迁移
 
-[组件迁移报告](../../../docs/results/2026-10-15-diffusers-component-scorecards.md)
+[组件迁移报告](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-15-diffusers-component-scorecards.md)
 保留原 `230ba7a0` 数值基线，使用 clean `f61555a81` 工具复算并接受 CPU/CUDA 两条
 L3；`UNet2DModel` 在每个设备计 `model_api 1/87`，四个 pipeline 轴仍为零。
 这不是在新框架提交上重跑模型，原安装完整来源缺失也没有回填。
@@ -333,7 +333,7 @@ REAL_TORCH_PYTHON=<real-torch-python> \
   在 transformers 的同口径复核里，换成 like-for-like 只把倍数挪动约 10%、**没有**消掉差距
   （live 2.88x、pool 2.76x）。那 2.88x 后来查清了：主因是 shim 的 `p.grad` 每步换对象
   （已修），剩下的 2.11x whole-run 是**第一步瞬态**，稳态每步只有 1.11x——详见
-  `docs/results/2026-09-19-torch-compat-runbook-verification.md`。所以「口径不同」既不足以
+  [历史记录](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-09-19-torch-compat-runbook-verification.md)。所以「口径不同」既不足以
   解释 `large_diffusers_unet2d` 的 1.10 GiB -> 3.78 GiB，也不能就此认定是稳态开销；
   这三个 case 尚未按新口径重测，重测之前两侧都不下结论（既不说 jittor 占更多，也不说 parity）。
 - 本次全程耗时 ~23.5 min，主要花在首次 JIT 内核编译与官方 flash 扩展构建（fresh

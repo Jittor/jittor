@@ -71,7 +71,7 @@ a.cuda(99)         # RuntimeError：超出可见设备数
 
 （torch 兼容层比这里宽一点：`Tensor.to(1)` / `Module.to(1)` 在那边读作
 `cuda:1`，因为在多卡推理栈里裸编号很常见，见
-`docs/results/2026-09-14-vllm-omni-h3-enablement.md` 第 31 节。宽是可以的，
+[历史记录](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-09-14-vllm-omni-h3-enablement.md) 第 31 节。宽是可以的，
 悄悄丢掉不行。）
 
 **不带编号的 `cuda` 在两层里含义不同**，这是有意的：

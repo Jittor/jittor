@@ -36,7 +36,7 @@ followed by these fields, in this order:
 
 Keep an entry to what a reader needs to reproduce, avoid and close the problem.
 Investigation narratives, refuted attempts and before/after tables belong in the
-commit message, the pull request, or a dated `docs/results/` report; an entry
+commit message or the GitHub issue/pull request; an entry
 may name one refuted attempt when repeating it is the likely mistake.
 
 ## Ids
@@ -51,8 +51,7 @@ may name one refuted attempt when repeating it is the likely mistake.
   later entry was given a fresh id.)
 - Code comments, test messages and documents cite the id. The change that
   deletes or renumbers an entry also rewords those citations
-  (`git grep -n "KI-<AREA>-<NNN>"`); dated `docs/results/` reports may keep a
-  historical mention.
+  (`git grep -n "KI-<AREA>-<NNN>"`); archived reports remain in Git history.
 
 ## Closing an entry
 
@@ -344,7 +343,7 @@ workaround.
 - Cause: the positive excess of the 49 fused kernels was about 0.59 ms and none
   of it is code generation: 0.55 ms was the float64 scalar division that
   KI-COMPAT-009 carried -- that entry closed on 2026-11-01 by dividing in the
-  tensor's dtype (see `docs/results/2026-11-01-python-float-division.md`), so
+  tensor's dtype (see [历史记录](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-11-01-python-float-division.md)), so
   this 0.55 ms needs re-measuring rather than assuming -- 0.10 ms a bare
   `transpose` (`src/ops/composite/transpose_op.cc`), and 0.23 ms of launch
   latency across about 60 kernels that move almost no data.
@@ -426,7 +425,7 @@ workaround.
   supported through `aclnnProd`/`aclnnProdDim`.
 - Evidence: [`reduce_dtypes.py`](../../tests/opinfo/definitions/reduce_dtypes.py),
   [device parity](../../tests/backends/parity/test_device_parity.py),
-  [Ascend 910B validation](../../docs/results/2026-08-28-ascend-910b-validation.md).
+  [Ascend 910B validation](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-08-28-ascend-910b-validation.md).
 - Exit condition: every affected dtype executes and matches the CPU reference on
   a real NPU, turning the skips into passes.
 
@@ -440,7 +439,7 @@ workaround.
 - Workaround: run this operation on a backend with a maintained `atan2` kernel;
   do not mask the process failure with a broad CPU fallback.
 - Evidence: [`pointwise_binary.py`](../../tests/opinfo/definitions/pointwise_binary.py),
-  [Ascend 910B validation](../../docs/results/2026-08-28-ascend-910b-validation.md).
+  [Ascend 910B validation](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-08-28-ascend-910b-validation.md).
 - Exit condition: the float32 OpInfo reference and a focused crash reproducer
   pass repeatedly on a real NPU without an expected skip.
 
@@ -454,7 +453,7 @@ workaround.
   native call.
 - Workaround: execute `irfft` on a backend with a maintained complex FFT path.
 - Evidence: [`fft.py`](../../tests/opinfo/definitions/fft.py),
-  [Ascend 910B validation](../../docs/results/2026-08-28-ascend-910b-validation.md).
+  [Ascend 910B validation](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-08-28-ascend-910b-validation.md).
 - Exit condition: forward values match NumPy and the operation exits within the
   maintained timeout on repeated real-NPU runs.
 
@@ -1180,7 +1179,7 @@ workaround.
   `numpy.floor_divide` before relying on the result.
 - Evidence: [`test_floor_divide.py`](../../tests/ops/test_floor_divide.py),
   [`sample_floor_divide`](../../tests/opinfo/definitions/pointwise_binary.py),
-  [Ascend 910B validation](../../docs/results/2026-08-28-ascend-910b-validation.md).
+  [Ascend 910B validation](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-08-28-ascend-910b-validation.md).
 - Exit condition: the same fixed-vector and OpInfo coverage passes on a real
   ROCm device.
 
@@ -1251,7 +1250,7 @@ workaround.
   NaN values against NumPy before relying on comparison masks.
 - Evidence: [`test_nan_self_comparisons_across_dtypes`](../../tests/debug/test_kernel_traps.py),
   [`test_float_comparisons_with_nan`](../../tests/ops/test_fusion_correctness.py),
-  [Ascend 910B validation](../../docs/results/2026-08-28-ascend-910b-validation.md).
+  [Ascend 910B validation](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-08-28-ascend-910b-validation.md).
 - Exit condition: pass the remaining dtype matrix on a real NPU and the complete
   matrix on a real ROCm device.
 
@@ -1653,8 +1652,8 @@ workaround.
   covered by the passing constructor matrix. Raw probes are unversioned under
   `$JITTOR_LAB_ROOT/_state/tensor-alias-main-0fb/` and the independent
   `tensor-alias-independent-review` / `tensor-alias-unfreeze-review` states;
-  see the [constructor follow-up](../../docs/results/2026-10-15-size-factory-leaves.md#tensor-source-constructor-follow-up).
-- Follow-up: [recorded producer identity](../../docs/results/2026-10-16-recorded-grad-fn-freeze.md)
+  see the [constructor follow-up](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-15-size-factory-leaves.md#tensor-source-constructor-follow-up).
+- Follow-up: [recorded producer identity](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-16-recorded-grad-fn-freeze.md)
   fixes source-freeze grad_fn loss only; the independent lifecycle probe of 32 combinations
   still finds 17 differing combinations. Mutation guards and inherited flags stay open.
 - Exit condition: native view creation/mutation metadata and source-state
@@ -1884,7 +1883,7 @@ workaround.
   spellings.
 - Evidence: the snippet above and the nodeid, one process each, on an RTX 4090
   with `JITTOR_TORCH_SHIM=1`; the values are also recorded in
-  `docs/results/2026-11-01-python-float-division.md`.
+  [历史记录](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-11-01-python-float-division.md).
 - Exit condition: repeated calls on one module answer the same bits, and the
   case is green.
 
@@ -1917,7 +1916,7 @@ workaround.
   `x=torch.arange(12,dtype=torch.float32); x.data_ptr(); y=x.reshape(3,4).t()`
   and compared Tensor.data_ptr with Storage.data_ptr. Separate CPU probes
   exposed gather/split writeback boundaries. See the
-  [integration report](../../docs/results/2026-11-01-vllm-runtime-integration.md)
+  [integration report](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-11-01-vllm-runtime-integration.md)
   for the source/validation distinction. Raw historical artifacts remain under
   `$JITTOR_LAB_ROOT/_state/vllm-product/20261030/`, unversioned.
 - Exit condition: allocation identity and valid strided/split write ownership

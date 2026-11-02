@@ -13,6 +13,7 @@ import json
 import math
 from pathlib import Path
 import re
+import subprocess
 import zipfile
 
 from registry_inventory import ROOT, git, inventory, write_json
@@ -22,6 +23,50 @@ from _installed_source_proof import installation_proofs, validate_installations
 PLATFORM_FIELDS = ("os", "cpu", "accelerator_model", "card_count", "card_indices", "driver",
                    "cuda", "cann", "nvcc", "gcc", "nvidia_wheels", "jittor_flags", "oracle")
 FLAGS = ("use_cuda", "use_acl", "graph_replay", "tf32", "hf32")
+
+
+def validate_report_reference(report, root=ROOT):
+    """Resolve context only; execution always requires the live evidence gates.
+
+    Archived reports are read from immutable Git blobs, never fetched from an
+    arbitrary URL or treated as evidence that today's source passed a test.
+    """
+    root = Path(root).resolve()
+    if isinstance(report, str) and report.startswith("https://"):
+        match = re.fullmatch(
+            r"https://github\.com/Jittor/jittor/blob/([0-9a-f]{40})/"
+            r"(docs/results/[A-Za-z0-9][A-Za-z0-9._-]*\.md)(?:#[^\s?]*)?", report)
+        _require(match is not None, "Historical report requires a pinned Jittor commit URL")
+        commit, path = match.groups()
+        try:
+            kind = subprocess.check_output(["git", "-C", str(root), "cat-file", "-t", commit], stderr=subprocess.PIPE)
+            _require(kind.strip() == b"commit", "Historical report identity is not a commit")
+            entry = subprocess.check_output(["git", "-C", str(root), "ls-tree", commit, "--", path], stderr=subprocess.PIPE)
+            _require(entry.startswith(b"100644 blob ") or entry.startswith(b"100755 blob "),
+                     "Missing regular historical report blob")
+            payload = subprocess.check_output(["git", "-C", str(root), "show", commit + ":" + path], stderr=subprocess.PIPE)
+        except subprocess.CalledProcessError as error:
+            raise ValueError("Historical report Git object is unavailable; run git fetch origin " + commit) from error
+        return {"kind": "historical-context", "repository": "https://github.com/Jittor/jittor",
+                "commit": commit, "path": path, "sha256": hashlib.sha256(payload).hexdigest()}
+    _require(isinstance(report, str), "Missing versioned results report")
+    path = (root / report).resolve()
+    _require(report.startswith("docs/results/") and root in path.parents and path.is_file(),
+             "Missing versioned results report")
+    return {"kind": "local-context", "path": report,
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+
+
+def report_references(source):
+    """Keep archived URLs separate from required files in the active tree."""
+    urls = re.findall(r"https?://[^\s<>()`\[\]]+", source)
+    historical = sorted({url for url in urls if "/docs/results/" in url})
+    local = source
+    for url in urls:
+        local = local.replace(url, "")
+    names = sorted(set(re.findall(r"docs/results/([\w.-]+\.md)", local)) |
+                   set(re.findall(r"20\d{2}-\d{2}-\d{2}-[A-Za-z0-9._-]+\.md", local)))
+    return names, historical
 
 
 def _assignments(path):
@@ -117,8 +162,13 @@ def audit(root=ROOT):
         prefix = repo.replace("-", "_")
         direct = [name for name in cases if name.startswith((prefix + "_", "large_" + prefix + "_"))]
         source = skill.read_text(encoding="utf-8")
-        references = sorted(set(re.findall(r"docs/results/([\w.-]+\.md)", source)) |
-                            set(re.findall(r"20\d{2}-\d{2}-\d{2}-[A-Za-z0-9._-]+\.md", source)))
+        references, historical = report_references(source)
+        historical_reports, invalid_historical_reports = [], []
+        for url in historical:
+            try:
+                historical_reports.append(dict(validate_report_reference(url, root), url=url))
+            except ValueError as error:
+                invalid_historical_reports.append({"url": url, "reason": str(error)})
         reports = ["docs/results/" + name for name in references if (root / "docs/results" / name).is_file()]
         rows.append({
             "repo": repo, "skill": skill.relative_to(root).as_posix(),
@@ -131,6 +181,8 @@ def audit(root=ROOT):
             "dependency_cases": [name for name, data in cases.items()
                                  if ("swift" if repo == "ms-swift" else repo) in data["requires"]],
             "reports": reports,
+            "historical_reports": historical_reports,
+            "invalid_historical_reports": invalid_historical_reports,
             "report_mentions": [str(path.relative_to(root)) for path in sorted((root / "docs/results").glob("*.md"))
                                 if path.name != "index.md" and re.search(r"\b" + re.escape(repo) + r"\b", path.read_text(encoding="utf-8"), re.I)],
             "missing_reports": [name for name in references if "docs/results/" + name not in reports],
@@ -337,9 +389,7 @@ def validate_record(record, inventories, baseline, root=ROOT):
     evidence = record.get("evidence", {})
     _require(evidence.get("command"), "Missing reproducible command")
     report = evidence.get("report", "")
-    report_path = (root / report).resolve()
-    _require(report.startswith("docs/results/") and root.resolve() in report_path.parents and report_path.is_file(),
-             "Missing versioned results report")
+    validate_report_reference(report, root)
     gate = evidence.get("gate_nodeid", "")
     gate_path = gate.split("::")[0]
     gate_file = (root / gate_path).resolve()
@@ -426,7 +476,8 @@ def scorecard(inventories, records, baseline, root=ROOT):
         except (ValueError, KeyError, TypeError) as error:
             rejected.append({"index": index, "case": record.get("case"), "reason": str(error)})
             continue
-        accepted.append(dict(record, verified_level=level))
+        evidence = dict(record["evidence"], report_reference=validate_report_reference(record["evidence"]["report"], root))
+        accepted.append(dict(record, evidence=evidence, verified_level=level))
     protocol_rows = [row for row in accepted if row.get("record_kind") == "protocol"]
     blocked = []
     if protocol_rows:
