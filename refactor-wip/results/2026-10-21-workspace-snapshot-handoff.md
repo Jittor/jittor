@@ -1,3 +1,11 @@
+## 2026-11-02 09:49 +0800 接续：训练轨迹产物比较器单测通过；GPU2 独占和产品发布门仍开放
+
+当前 /home/cgq/jittor HEAD 812a8f4450a5a634d3b363751674705aa08ca679，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 220/0。工作树原有 102 项 dirty/untracked 未改，状态 SHA256 前后均为 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98。
+
+新增的外部验证包 /data6/cgq/jittor-lab/_state/release-day23/20261102-training-trajectory-validator-cpu-r1-prepared/attempt-03-pure-unit-no-framework-import/ 对训练轨迹比较器单测 9/9 通过，0.28 秒。此结果只校验后续训练证据的合并和差异判断逻辑，不是训练或续训通过。attempt-01/02 收集前失败原件保留；attempt-02 曾读取默认 Jittor cache 且无 cache delta，之后改在隔离 HOME/JITTOR_HOME 并跳过上层 runtime conftest，未再访问该路径。汇总包清单 SHA256 97e22427966ccfe768b5ed8909dcfbd7420afb98a6e144d25aa176f4264fdfb6。
+
+GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 仍有外部 PID 3037196/3164740 各占 8,640 MiB；A800 节点 X12DPG-OA6 状态 DOWN，当前没有 cgq Slurm allocation 或设备 cgroup 独占租约，不启动 holder。正式 R4 容量扫测与三轮 PT/JT cohort 继续等待管理员 GRES/device-cgroup lease。后续仍需完成统一候选真实训练与新进程恢复、DDP Trainer 多 rank checkpoint、held-out 指标、声明支持矩阵、序列化互操作契约和 wheel baseline migration；overall release **Not complete**。
+
 ## 2026-11-02 09:36 +0800 接续：R9 focused 重复失败已封存；Day4–5 仍等待 GPU2 独占租约
 
 本轮误对已经有失败记录的 R9 source identity 再运行了一次 Torch CPU focused；现已停止该分支，不再重跑。来源仍为隔离 worktree HEAD 765f1791f3b00f9129fb3ec6342dadf2c9dc2dbe / fingerprint 8afd3ed550f5cf113c67c0b4f7c159334781047bfda7e11232c9ab3184e7089d。独立 attempt 路径为 /data6/cgq/jittor-lab/_state/release-day23/20261102-r9-fill-zero-torch-focused-cpu-r1-finalized/attempt-01-torch-focused/；7 passed、1 CPU capability skip、2 failed，fallback=0，source before/after 相同。两个失败仍是 fill_/zero_ 后 .grad=None 与 torch.Tensor(native_var) placement 由 -1 变为 0。result SHA256 958c60fd00fa1b79e758be63cf3b3034a90d34d7b956e3bf8a21a9cfbd414f40，receipt SHA256 5d6cf5370adf7d51a798167d084d9e7ab0817dda6cd9f2f1b1d15ade484779e3。它们与此前 R9/R10 记录重复，不新增功能结论；后续以 current-main/R5 与 R11g/R13 的独立源码身份记录为准。

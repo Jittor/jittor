@@ -1,3 +1,13 @@
+## 2026-11-02 09:49 +0800 current-main 训练轨迹产物比较器单测 9/9 通过；不构成产品训练结论
+
+在 /home/cgq/jittor 当前工作树 HEAD 812a8f4450a5a634d3b363751674705aa08ca679、origin/cgq_transformers e5cffe1ae60c418f53c5bb1cdca9182577fd2b81 上，对尚无执行记录的 compat/tests/torch/test_training_trajectory_runner.py 做了单元验证。目标是先检查未来训练/续训证据比较器对 shape/dtype/非有限值、逐步 loss 合并、缺步/冲突和完整更新数的拒绝逻辑。测试使用 R5 packaging 环境 Python 3.11、pytest 7.4.4、NumPy 1.26.4；最终 attempt-03 为 9 passed、0 skipped/failed、0.28 秒、rc=0。它只验证证据工具，不证明 Jittor/PyTorch 训练、设备执行、DDP checkpoint/resume 或任务质量。
+
+证据保存在 /data6/cgq/jittor-lab/_state/release-day23/20261102-training-trajectory-validator-cpu-r1-prepared/。attempt-01 因 pytest 兼容模式策略要求 JITTOR_TORCH_SHIM=1 而在收集前退出，rc=4，日志 SHA256 2e8714da3fa2c62106bf9e73bb33a1fd04a8c988e0e745a68a4abdf18c86dd6f；attempt-02 设置该模式后进入 compat/tests/conftest.py 导入当前源码 Jittor，在收集前因 GLIBCXX_3.4.30 缺失而退出，rc=3，日志 SHA256 38cbf71475dddee66e4d2becb961d1e074ba9b7c859ebf97181f8a6f28faec24。attempt-02 日志显示访问了默认 /home/cgq/.cache/jittor/torch-shim 路径，但没有 cache 前后清单，因此不声称该默认缓存未变化；没有重跑这条导入路径。
+
+attempt-03 在独立 HOME/JITTOR_HOME 与 pytest 临时目录运行，并以 --confcutdir=/home/cgq/jittor/compat/tests/torch 排除会导入 Jittor 的上层集成 conftest；该测试文件本身不导入 Jittor/Torch，也未创建 CUDA context。attempt-03 log SHA256 ac8294512ff267307ebf085b2358c62527cc89ccc5feaa210f3989e49e0d220f，attempt manifest SHA256 bb26d508697c46d96be0644ba147f7ca668ec528ed77a27d8ce30fb6f558d0ec，三次 attempt 汇总包清单 SHA256 97e22427966ccfe768b5ed8909dcfbd7420afb98a6e144d25aa176f4264fdfb6。关键输入 SHA256：测试 75ee1230d80f3dcf1d3734a0348b85512592e35f46e0e01fecfb915a0d458aef，runner c4b732146b7abed616d355627cee44b25e8e3cccd72b9decfd1b1b35b12a2dba。
+
+执行前后工作树状态签名均为 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98，102 项既有 dirty/untracked 保持，index 为空；没有修改仓库源码或实验原件。Day4–5 正式验收仍需系统级 GPU2 GRES/device-cgroup 独占；更广发布门中的统一候选训练与恢复、DDP Trainer 多 rank checkpoint、held-out 任务质量、支持矩阵、序列化契约和 wheel baseline migration 仍开放，overall release 继续 **Not complete**。
+
 ## 2026-11-02 09:36 +0800 R9 Torch focused 重复执行：两个既知失败原样保留
 
 ### 本轮绑定和执行

@@ -1,3 +1,9 @@
+## 2026-11-02 09:49 +0800 训练轨迹证据比较器单测 9/9 通过；Day2–5 发布门仍开放
+
+在当前 /home/cgq/jittor HEAD 812a8f4450a5a634d3b363751674705aa08ca679 上，使用 R5 packaging Python 3.11 / pytest 7.4.4，对 compat/tests/torch/test_training_trajectory_runner.py 做隔离工具单测：9 passed、0.28s、rc=0。attempt-03 通过 --confcutdir 避开上层导入 Jittor 的集成 conftest，使用独立 HOME/JITTOR_HOME；不涉及框架运行时、CUDA、训练或 DDP 功能。attempt-01 的 torch-mode 策略拒绝与 attempt-02 的 GLIBCXX_3.4.30 收集前失败均保留，attempt-02 默认 cache delta 未测，不声称缓存无变化。证据、输入哈希和失败原件见 [Day2–5 结果报告](../results/2026-10-26-torch-compat-release-day2-5.md) 对应 2026-11-02 09:49 条目。
+
+本轮未修改源码；既有 102 项 dirty/untracked 状态签名前后保持 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98。GPU2 仍由其他任务占用且 X12DPG-OA6 为 DOWN，R4 正式性能/显存测量未启动。训练工具单测不关闭训练/恢复产品门，overall Day2–5 继续 **Not complete**。
+
 ## 2026-11-02 09:36 +0800 R9 Torch focused 重复执行后仍失败；保留原件，不计为新进展
 
 本轮绑定隔离 R9 worktree /data6/cgq/jittor-lab/worktrees/torch-compat-storage-silu-cat-grad-rmsnorm-pow-fill-zero-20261028-r9，HEAD 765f1791f3b00f9129fb3ec6342dadf2c9dc2dbe、fingerprint 8afd3ed550f5cf113c67c0b4f7c159334781047bfda7e11232c9ab3184e7089d。Torch runner 使用独立包 /data6/cgq/jittor-lab/_state/release-day23/20261102-r9-fill-zero-torch-focused-cpu-r1-finalized/；final binding/offline package guard 通过。原 native 740-file cache 的条目均保留且未改，当前 6,598-file 基线另有扩展审计；原失败的 native terminal audit 继续保留。正式 focused attempt 收集 10 项，7 passed、1 个 CPU CUDA-capability skip、2 failed，fallback=0；source before/after 一致、子进程组已退出、cache 无增删或内容变化，仅 14 个已部署文件记录为 mtime-only。
