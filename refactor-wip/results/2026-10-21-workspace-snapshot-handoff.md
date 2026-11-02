@@ -1,3 +1,11 @@
+## 2026-11-03 00:26 +0800 Handoff：R10 fill_/zero_ focused 通过，ten-file pytest 通过但外层状态标签仍有缺陷
+
+R10 隔离候选绑定 HEAD `765f1791f3b00f9129fb3ec6342dadf2c9dc2dbe` 与源码 fingerprint `4a7b6e76e23efbd8479b807a25747eea9506023c0a632a3d22e57bec8c71edc9`，覆盖 Torch constant factory leaf 注册、Torch frontend native Var 路径和 pyjt frontend placement candidate。focused CPU 10 项中 9 passed、1 CUDA-only skip、fallback=0，两个目标 `fill_`/`zero_` 回归通过；cold 227 TU identity build 为 356.57 秒。
+
+维护十文件 Torch CPU pytest 报告为 230 collected、227 passed、3 个已声明 skip、0 failed。attempt-01 外层误用 focused validator，原件保留；attempt-02 修正 validator 后子进程 exit 0、状态 `PASS_TORCH_CPU_CORE10`，但外层 `run.py` 最后仍按旧 focused 标签填 `all_checks_passed=false`、CLI exit 1。独立审计已复核全部逐项 phase、skip 原因、fallback、环境、源码、cache、lock 与进程组，状态明确保留外层 mismatch；不再重跑。根审计 `/data6/cgq/jittor-lab/_state/release-day23/20261102-root-r10-fill-zero-torch-core10-r2-audit/root-core10-terminal-audit.json`，SHA256 `ba38ea6bc6a93cf04b2c7dabc30601b3664b462058526be28a9f35cc9257337b`。
+
+R10 证据在隔离 worktree 与 `_state`，没有修改 `/home/cgq/jittor` 源码。现有主工作区 HEAD/origin 均为 `9658d690774e383fb355ca1bf808dd3cd662f929`；81 tracked dirty、21 untracked 和空 index 保持。GPU2 仍被外部任务占用 45,880 MiB/100%，cgq Slurm association 等待管理员配置，故正式 Day4–5 三轮性能/显存验收未开展。后续先保持上述 runner-terminal caveat 可见；取得独占 GPU2 allocation 后执行正式 PT/JT 配对性能与显存方案。held-out 质量、真实 activation recompute 证据、wheel migration 与跨框架 optimizer serialization 等更广 Day2–5 门仍开，整体 **Not complete**。
+
 ## 2026-11-02 23:23 +0800 Handoff：held-out Qwen generation 在 JIT 冷启动阶段超时
 
 继续使用 /home/cgq/jittor；提交前 HEAD/origin/cgq_transformers 为 f935b81a61a27409220a9e7114080e22cb23bb6e。本轮 attempt05 是 R5 seed821 候选的 805 条 AlpacaEval 诊断，绑定 source fingerprint 89157afb357abbb882057230ecb0e86586deeef7fb010a7cc51b3577eea054a6 与 adapter SHA256 adea9cd2a304af21478c54719685139fead0515edef865674ff419df3da02243。真实 GPU0/cuda:0 执行 900 秒，timeout exit 124，0 条预测；模型已加载，首样本前持续 CUDA/C++ JIT 编译。没有质量分数、fallback-after 结果或 PyTorch 配对基线。完整输出、strace、GPU 前后快照与逐文件 SHA256 在 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-qwen-heldout-alpaca-eval-r1-prepared/attempt-05-jittor-r5-seed821/；manifest SHA256 bc4e12e02da1c8634f2d54d7898696155dd85d83ab3c851687f54aa5480d8028。缓存差分为基线 2,905 个文件、最终 3,844 个，新增 939 个（含 234 个新编译 op 动态库、29 类文件名签名），基线文件缺失或哈希变化为 0；该现象记录 JIT 冷启动成本，不单独证明 shape specialization 是唯一原因。

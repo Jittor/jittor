@@ -1,3 +1,23 @@
+## 2026-11-03 00:26 +0800 R10 fill_/zero_ repair 与 ten-file CPU suite；Day2–5 仍未完成
+
+### 源码与隔离边界
+
+为解决 R9 CPU Torch focused 中保留的 `fill_` trainable leaf gradient 与 `torch.Tensor(native_jt_var)` FollowRuntime placement 两项失败，从 R9 候选建 R10 隔离快照：`/data6/cgq/jittor-lab/worktrees/torch-compat-fill-zero-leaf-placement-20261102-r10/`，HEAD `765f1791f3b00f9129fb3ec6342dadf2c9dc2dbe`，fingerprint `4a7b6e76e23efbd8479b807a25747eea9506023c0a632a3d22e57bec8c71edc9`。R10 采用四个已审阅的当前源码文件：`compat/torch/installers/factories.py`、`compat/torch/frontend.py`、`src/bindings/pyjt/py_tensor_frontend.cc`、`.h`；不改 `/home/cgq/jittor` 中的文件，也不改变当前分支 HEAD。当前主工作区 HEAD/origin `cgq_transformers` 均为 `9658d690774e383fb355ca1bf808dd3cd662f929`，81 tracked dirty、21 untracked、index 为空，原样保留。
+
+R10 冷编译在 CPU 上通过，227 TU，356.57 秒；cold receipt SHA256 `3a76cd7dc9e09e07c0cfde085fbe619c1dcb4b779e9785179dd529b7c3a22a31`，独立 root cold audit SHA256 `f34c966ceed21543aaf7f1966feac824735b4d6cd013ec83cbd10d180b81cf7d`。没有 tensor、测试或模型在 cold-build 阶段启动。第一次 focused pretest 被缓存快照 schema 不一致拦下，pytest 尚未启动；保留记录后将实际 saved snapshot 确定性规范化，没有重做 cold build。
+
+### Torch focused CPU
+
+R10 focused 10 项收集，9 passed、1 个 CUDA-only case 在 CPU 下 skip、0 failed、fallback=0，266.534 秒。`test_cpu_fill_and_zero_preserve_aliases_and_parameter_gradients` 与 `test_constant_writes_preserve_native_follow_runtime_alias` 均通过；后者直接覆盖 `torch.Tensor(native_jt_var)` 后的 FollowRuntime placement、storage alias 以及后续 `fill_`/`zero_`。核心产物 SHA256：`jittor_core` `6974c2aaf580d2977556aef5b8e32599fa8643246a514db0015f04835a463ebb`，`jit_utils_core` `e9a5057638f4cdf90985b760c400e3be85a9cf8c21cc4a7caba805e0f9de1a5e`，build stamp `3b9405c8f2a876b4f2d86b5d8eca559bf4176a4c0f0d31884d04d565138e2804`。运行期间源码/environment/build 身份和 fallback 检查通过；cache 新增 5,858 项、删除/变化/拒绝项均为 0，新增项由隔离 JIT、oneDNN 固定目录及 11 条逐项依赖记录核准。focused root audit：`/data6/cgq/jittor-lab/_state/release-day23/20261102-root-r10-fill-zero-torch-focused-audit-r1/root-torch-terminal-audit-r2.json`，SHA256 `7bfb35902c4400b2e5d02052c613b27acf316e1216001e53eba12b5b8de35b7f`。
+
+### Ten-file Torch CPU core
+
+沿相同 R10 源码执行维护的十个 Torch CPU 测试文件。attempt-01 的 pytest 本身返回 0，阶段报告为 230 collected、227 passed、3 skipped、0 failed，但外层误用 focused-only validator 并留下失败；该 attempt 和 post-hoc 诊断均保留。修正文件级选择及 phase validator 后，在独立 attempt-02 运行 36.751 秒：pytest 230/227/3/0、fallback=0，source/environment/core/cache/lock 检查通过；起始 cache 绑定 attempt-01 终态，新增、删除、变化和拒绝项均为 0。
+
+attempt-02 子进程状态 `PASS_TORCH_CPU_CORE10`、exit 0，逐项结果完整。外层 `run.py` 最后仍以旧的 `PASS_TORCH_CPU_FOCUSED` 字符串计算 `all_checks_passed`，因此 receipt 字段为 false、CLI exit 1；这是一项保留的执行包装器状态错误，不是 pytest case failure。独立 root audit 对 230 个 node、690 个 setup/call/teardown 报告、227 pass、3 个预期 skip、0 fail、fallback、源码、cache 与进程终态逐项核验通过，但明确保留外层 mismatch：`/data6/cgq/jittor-lab/_state/release-day23/20261102-root-r10-fill-zero-torch-core10-r2-audit/root-core10-terminal-audit.json`，SHA256 `ba38ea6bc6a93cf04b2c7dabc30601b3664b462058526be28a9f35cc9257337b`。三项 skip 为两个源码标记的 dtype semantic-difference case（`Var.long` 和混合 dtype promotion）以及一个 CUDA-only large softmax case。
+
+R10 功能结果不等于当前主工作区或 Day2–5 发布整体通过。GPU2 仍由外部进程占用 45,880 MiB/100%，cgq Slurm association 尚未配置；正式性能/显存验收至少需要三轮 PT/JT 交替、每轮每侧至少十个热态样本，并报告 median/p95/离散度、加载/首步/热态耗时、allocator/NVML 峰值、容量/OOM 恢复以及真实 checkpoint recompute on/off 对照。held-out generation attempt05 超时且无预测质量分数；wheel migration review、optimizer portable-pickle 跨框架契约和更广设备/API 支持矩阵仍开放。整体 Day2–5 继续 **Not complete**。
+
 ## 2026-11-02 23:23 +0800 Held-out generation attempt05 到时退出，未形成质量分数
 
 为 R5 seed821 当前源码 Qwen3-0.6B LoRA 建立了独立 held-out 生成诊断。数据来自 tatsu-lab/alpaca_eval 固定 revision 0a98450566635934660ae023319170cad8f00428，共 805 条，SHA256 d92b92c51e8f1962a21193abe74e6f727c2bc8286035f4041505ff38a7c3ae51。805 条提示词均非空且唯一；与实际 R5 101 条训练 fixture、既有 17 条 eval fixture 的规范化提示词重叠数均为 0，但没有对全部上游语料做全局去重。Tokenizer-only CPU 预检的输入长度为 min 4、max 484、mean 36.13、p95 120，无截断。

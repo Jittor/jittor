@@ -1,3 +1,13 @@
+## 2026-11-03 00:26 +0800 R10 fill_/zero_ focused CPU 通过；Day2–5 仍未完成
+
+沿 R9 隔离候选建立 R10 快照，HEAD `765f1791f3b00f9129fb3ec6342dadf2c9dc2dbe`，源码指纹 `4a7b6e76e23efbd8479b807a25747eea9506023c0a632a3d22e57bec8c71edc9`。只在候选快照中采用四个已审阅的当前源码文件：Torch factories/frontend 与 pyjt tensor frontend `.cc/.h`。R10 CPU 冷编译 227 个 TU、356.57 秒并通过身份审计；Torch focused 10 项中 9 passed、1 个 CUDA-only skip、fallback=0，两个 `fill_`/`zero_` 目标回归均通过。该证据绑定 R10，不代表当前主工作区整体验收。
+
+同源码十文件 Torch CPU suite 的 pytest 报告为 230 collected、227 passed、3 个源码声明 skip、0 failed，fallback=0。第一次外层终审因误用 focused-only selector validator 留下失败；纠正 validator 后的 attempt-02 中，子进程与独立审计均通过，但外层 `run.py` 的 `all_checks_passed` 仍把 core10 状态与旧 focused 标签比较，故 CLI exit 1。原始结果与原因均保留；按 pytest 阶段报告记录功能 suite 通过，不把外层 controller 伪记为 clean pass，也不再重跑。
+
+现有 `/home/cgq/jittor` 的 HEAD 与 `origin/cgq_transformers` 同为 `9658d690774e383fb355ca1bf808dd3cd662f929`；81 tracked dirty、21 untracked 保留，index 为空。R10 实验在隔离 worktree 和 `_state` 证据目录运行，未改写主工作区源码。GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 仍有外部任务占用 45,880 MiB、100% 利用率，cgq Slurm association 尚待管理员添加，所以正式 Day4–5 窗口未启动。
+
+下一步优先保持发布门未完成：修正 core10 runner 的终态标签比较只用于后续新运行；管理员提供可核验 GPU2 独占 allocation 后，按至少三轮 PT/JT 交替、每轮双方至少十个热样本完成正式性能/显存验收。held-out 生成质量、真实 activation recompute/显存收益、wheel baseline migration、跨框架 optimizer 序列化互操作及更广支持矩阵仍开放。整体 Day2–5 **Not complete**。
+
 ## 2026-11-02 23:23 +0800 Qwen held-out 生成 attempt05 超时，Day2–5 仍未完成
 
 在隔离证据包中固定了 AlpacaEval 805 条提示词（revision 0a98450566635934660ae023319170cad8f00428，文件 SHA256 d92b92c51e8f1962a21193abe74e6f727c2bc8286035f4041505ff38a7c3ae51），绑定 R5 seed821 候选源码指纹 89157afb357abbb882057230ecb0e86586deeef7fb010a7cc51b3577eea054a6 和 adapter SHA256 adea9cd2a304af21478c54719685139fead0515edef865674ff419df3da02243。数据审计在实际 R5 的 101 条训练 fixture 与既有 17 条 eval fixture 上分别未发现规范化提示词重叠；这不代表与所有上游训练语料全局无重叠。
