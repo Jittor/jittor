@@ -117,6 +117,53 @@ workaround.
   hook keyed by code object observes the same calls), delete the exclusion list
   and re-take the Torch baseline.
 
+## KI-TEST-019: ten native CPU oracle cases fail on the pre-cleanup baseline
+
+- Severity: Medium (the native oracle gate is not green).
+- Status: Open; confirmed 2026-11-03 on clean `0a23c2410cf3571e15200466b4caf4019f90d8cf`
+  and the cleanup working tree based on `6c621be80e17cb2f968121bb30b6be278e7a3e72`.
+- Owner: test infrastructure, native operators and compatibility maintainers.
+- Symptom: with Python 3.11.18, NumPy 1.26.4 and independent CPU Torch 2.7.1+cpu,
+  ten exact nodeids fail on both trees:
+  `tests/distributed/test_process_store.py::TestProcessGroupOwnership::test_native_and_torch_share_classes_and_legacy_pickle`;
+  `tests/core/test_var.py::TestVarFunctions::test_norm`;
+  `tests/nn/test_conv_transpose.py::TestConvTranspose::{test,test_function}`;
+  `tests/ops/test_unique.py::TestSparse::{test_unique,test_unique_dim}`;
+  `tests/type/test_complex.py::TestComplexLinalg::{test_complex_matmul,test_complex_matmul_batch}`;
+  `tests/type/test_complex.py::TestTensordot::{test_complex_tensordot_numberdim,test_complex_tensordot_tupledim}`.
+- Cause: respectively, a child imports genuine Torch before requesting the shim;
+  float32 L1 reduction relative differences around `1.6e-6` exceed `1e-7`;
+  a convolution log-count assertion sees zero after numerical checks pass, and
+  the functional case passes `bias=False` into a guard expecting a tensor or
+  `None`; old positional `unique` arguments return two values where tests unpack
+  three; legacy `ComplexNumber` reaches matmul shape validation without `ndim`.
+  The log-count symptom overlaps [KI-TUNER-001](#ki-tuner-001-the-matmul-and-conv-relays-never-fire-so-a-hand-written-meta-op-product-runs-as-a-generic-kernel);
+  it is not a second independently established tuner defect. All five test files
+  are unchanged between the two trees. These failures predate the cleanup.
+- Workaround: keep these cases reported as failures; do not replace the oracle
+  with the shim or loosen numerical checks without an explicit error analysis.
+  Use isolated process modes and current public argument conventions when
+  constructing new comparisons; legacy complex-wrapper coverage remains open.
+- Evidence: a serial retry of 245 original failed/error nodeids produced
+  **187 passed, 48 skipped, 10 failed** in 764.60 s; the former random-concat
+  timeout passed. The same ten failures on the clean baseline reproduced in
+  70.97 s. The skip count is not passing numerical evidence.
+  External, unversioned evidence lives under
+  `$JITTOR_LAB_ROOT/_state/cleanup-implementation/`: `native-retry.log`,
+  `native-baseline.log`, `native-retry-nodeids.txt`, `run_native_retry.py` and
+  `run_native_baseline.py`. Commands were `native-retry-venv/bin/python
+  run_native_retry.py` and `native-retry-venv/bin/python run_native_baseline.py`
+  from that state directory; each invokes `python -m pytest -q --timeout=900`
+  with exact nodeids, CPU-only flags, one runtime thread and serial compilation.
+  Both use explicit `REAL_TORCH_SITE` from that environment; the baseline also
+  sets `PYTHONPATH` to its isolated checkout's `python/`. Captured source paths
+  confirm the baseline was imported. Logs are supporting local evidence, not
+  required repository inputs; the listed nodeids and environment reproduce it.
+- Exit condition: resolve and independently verify all ten contracts against
+  genuine CPU Torch, preserving numerical and gradient coverage; remove this
+  entry only when the exact cases pass without hiding failures or substituting
+  the candidate as its own oracle. Accelerator support requires separate runs.
+
 ## KI-TEST-012: the PR smoke tier takes about 390 s, not under five minutes
 
 - Severity: Limitation (gate cost)
