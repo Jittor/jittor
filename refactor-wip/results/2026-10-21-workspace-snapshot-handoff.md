@@ -1,3 +1,9 @@
+## 2026-11-02 22:45 +0800 Handoff：current-main Torch CPU 与真实 CUDA 定向门通过；全树收集和 GPU2 性能门开放
+
+当前分支与 `origin/cgq_transformers` 同为 `84290a5ec28fdecc8207ee124b2afd8aa4b6a8f2`。Torch autograd focused CPU 为 26 passed/2 CUDA skip，十文件 CPU core 为 227 passed/3 skip，GPU0 上 fill/zero 两个真实 CUDA 用例为 2 passed。保存证据 manifest SHA256 `f8508800b37d758f582e4f0b5a9078b05c33b174d0cb35f42b00b520ff7d3880`。这些结果不覆盖全树 Torch collection；后续先处理 `_evaluate_preserving_parameter_grads` 导入缺失，再扩展未覆盖范围。
+
+GPU2 仍有外部占用，cgq Slurm association 与可核验的独占租约尚未到位，因此 Day4–5 正式配对性能/显存窗口不能启动。已有 current-main Qwen 两 epoch与新进程恢复证据、此前 R14 隔离快照证据均保留各自源码身份，不重复训练。继续推进时应优先消除当前源码的全树收集阻断和更广功能门；待管理员配置有效 GPU2 独占 allocation 后，再运行既定三轮交替性能/显存方案。overall Day2–5 **Not complete**。
+
 ## 2026-11-02 22:16 +0800 Handoff: paired state clone/copyback retains exact BF16 resume parity
 
 CPU-only materialization matrix confirmed the live same-device CPU `_to` path aliases the loaded checkpoint state object/storage. Restore-only copy/clone/detach/array rematerialization left the original BF16 second-moment delta; applying the same transform to continuous state alone or to both sides made the next update exact. The earlier state-only normalization control transformed both sides, not just restored state.

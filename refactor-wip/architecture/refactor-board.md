@@ -1,3 +1,9 @@
+## 2026-11-02 22:45 +0800 current-main Torch CPU 与 CUDA 定向正确性通过；Day2–5 仍未完成
+
+在现有 HEAD/origin `cgq_transformers` `84290a5ec28fdecc8207ee124b2afd8aa4b6a8f2` 上补齐当前源码的 Torch autograd focused、十文件 CPU core 与真实 CUDA fill/zero 回归：分别为 26 passed/2 CUDA 条件跳过、227 passed/3 合理跳过、2 passed。Nox CUDA 通过系统 libstdc++ preload wrapper 进入测试，backend_fallback=error；仅属正确性证据。第一轮全树 Torch 收集在测试执行前因 ecosystem runner helper 导入缺失而失败，需先修复收集阻断再继续广覆盖。
+
+测试绑定 porcelain SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`、tracked diff SHA256 `b97553cf0eb6cc4ca17f3f929071c3ab5db92322030ddef33a79c2da38786200`，index 为空。证据包及失败尝试均保留；清单文件 SHA256 `f8508800b37d758f582e4f0b5a9078b05c33b174d0cb35f42b00b520ff7d3880`。GPU2 仍由外部任务占用，且 cgq Slurm association/独占租约未到位；正式 Day4–5 三轮交替性能/显存验收未启动。更广 Day2–5 发布门维持 **Not complete**。
+
 ## 2026-11-02 22:16 +0800 BF16 restore state materialization matrix; clone/copyback candidate preserves four-step parity
 
 在现有 HEAD/origin `cgq_transformers` `eb28bd1ea26561e69055166cf084dc1b10dfbf8b` 上完成 CPU-only 有界 materialization 矩阵和临时 update wrapper 对照，fallback=0。实际 CPU restore 的 same-device `_to` 返回 checkpoint state 的同一对象/storage；`copy=True` 返回新对象/storage。只转换 restore 侧 state 时原有 BF16 二阶矩差仍在；只转换 continuous 侧，或对两侧使用相同 clone/copy/detach/materialize 操作，下一步参数与 moments 均逐项相同。
