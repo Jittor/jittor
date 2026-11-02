@@ -1,3 +1,9 @@
+## 2026-11-02 13:27 +0800 current-HEAD 两个 CUDA focused 用例通过；GPU2 性能门仍需独占租约
+
+在沿用的 /home/cgq/jittor 工作区，HEAD af87532bca7a6842dbf6c295e246f2ead6b97dfa，刚 fetch 的 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1dca9182577fd2b81（ahead/behind 230/0），102 项既有 dirty/untracked 状态未改变。将 13:10 CPU focused run 中仅因 CPU scope 跳过的两个 CUDA 用例单独绑定 GPU1 UUID GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068 执行；进程内为 cuda:0，2 passed、0 skipped、0 failed、pytest rc=0、fallback=0。覆盖 public Tensor constructor FollowRuntime alias 与显式 CPU/CUDA storage；current source fingerprint cce06c927ac0407e70c715353295b06ea6331c60ec0a495efd8efbb30832a8be，运行前后相同，加载真实 CUDA core SHA256 d2aea33bd566ad8b2b5fbf6edb43fe060f5d8fd389d95eae8d22744f4f390811。独立审计 v2 通过；GPU1/GPU2 外部进程集合无变化，GPU2 UUID 未暴露给测试进程。完整配置与证据见 Day2–5 报告 13:27 条目及 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-torch-cuda-focused-gpu1-r1-prepared/。
+
+该结果只补齐这两个 current-HEAD CUDA focused 功能用例，不代表完整 Torch CUDA suite、Trainer/DDP 训练或 checkpoint resume、性能/显存验收通过。13:27 GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 仍被外部 PID 3037196/3164740 各占 8,640 MiB；Slurm 队列为空、X12DPG-OA6 为 DOWN、ConstrainDevices=no，cgq association 仍待管理员添加。R2 正式 Day4–5 suite 未启动；更广 Day2–5 发布门继续 Not complete。
+
 ## 2026-11-02 13:10 +0800 current-HEAD Torch focused CPU 回归已实测；性能门仍等待 GPU2 租约
 
 在当前 HEAD 2b1fd485bd8d778904bf64e5f6047d6d3b0c1a66、origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（ahead/behind 229/0）上，新建隔离 package 运行 Torch focused CPU 选择器：12 项收集、10 passed、2 个 CUDA 专用项按 CPU scope 跳过、0 failed、pytest rc=0、fallback=0。source fingerprint f437d8663cc2c8c2558707769c7b0498740544d2264d27c74cf428cded6055a4，测试前后相同；Jittor core 产品 d2aea33b…f390811 前后相同，cache 仅 jittor.lock 改变。执行器原 receipt 保留其 selector-prefix 错误；独立离线审计剥除预期 nodeid 的 compat/ 前缀后，确认与实际 tests/torch/ 节点逐项一致。该结果只支持当前源码上的 CPU focused 用例，不是 CUDA、full Trainer、完整 Torch core 或发布验收。

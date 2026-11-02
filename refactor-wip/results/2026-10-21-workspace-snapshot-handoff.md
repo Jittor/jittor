@@ -1,3 +1,9 @@
+## 2026-11-02 13:27 +0800 接续：current-HEAD 两个 CUDA focused 用例在 GPU1 通过；GPU2 仍等待管理员租约
+
+在 HEAD af87532bca7a6842dbf6c295e246f2ead6b97dfa、origin/cgq_transformers e5cffe1ae60c418f53c5bb1dca9182577fd2b81（ahead/behind 230/0）的现有工作区，针对 CPU focused run 跳过的两个 CUDA 专用项做了单卡功能验证。GPU1 UUID GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068 映射为进程内 cuda:0，2 passed、0 skipped/failed、fallback=0；GPU2 未对该进程可见。source fingerprint cce06c927ac0407e70c715353295b06ea6331c60ec0a495efd8efbb30832a8be、真实 CUDA core SHA256 d2aea33bd566ad8b2b5fbf6edb43fe060f5d8fd389d95eae8d22744f4f390811，均由执行 receipt 与独立 v2 审计绑定。完整日志与校验清单见 Day2–5 报告 13:27 条目指向的 evidence package。
+
+此结果不关闭完整 CUDA suite、Trainer/DDP checkpoint resume、Day4–5 性能/显存或整体 Day2–5 release。GPU2 外部 PID 3037196/3164740 各占 8,640 MiB；节点 X12DPG-OA6 为 DOWN，ConstrainDevices=no，用户没有 cgq association，需要管理员添加 association 并提供可核验的 GPU2 独占作业租约。未启动普通占卡程序，因为它不能保证阻止其他进程使用该卡。
+
 ## 2026-11-02 13:10 +0800 接续：current-HEAD Torch CPU focused 10 passed、2 CUDA skip；未触碰 GPU2
 
 在 current HEAD 2b1fd485bd8d778904bf64e5f6047d6d3b0c1a66 上运行 12 项 CPU focused，pytest rc=0，10 passed、2 个 CUDA 专用项 skipped、0 failed、fallback=0。实验包 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-torch-focused-current-head-r1-prepared/；source fingerprint f437d8663cc2c8c2558707769c7b0498740544d2264d27c74cf428cded6055a4。runner 的 selector-prefix guard 将正常 pytest nodeid 前缀差异误记为 failure；独立审计确认 12 个配置项与实际 call reports 精确对应，原 receipt 仍保留。core SHA d2aea33b…f390811 未变，cache 只有 jittor.lock 改动，没有新增 GPU compute PID，GPU2 未暴露给运行进程。审计 SHA 与测试范围见 Day2–5 报告 13:10 条目。
