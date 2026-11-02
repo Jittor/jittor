@@ -1,3 +1,15 @@
+## 2026-11-02 10:40 +0800 current-main Qwen 单个非零学习率 CUDA 更新通过；30 分钟 attempt 未完成 51 steps
+
+来源：沿用 /home/cgq/jittor 当前 dirty 工作区，HEAD aa541675998e0422cbe96d436ef6f03191f09668，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（ahead/behind 221/0）。训练 worktree 指纹 e19d6aa0c08b17f6fe2e923c4290e45afcc58776b7712ea3346437d47ef72ef3。attempt 包：/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-qwen20-cuda1-practical-r1-prepared/jt-full51-attempt01/；模型、adapter、fixture、命令和 GPU 前置快照在包内 provenance/attempt 文件中。配置为 Qwen3-0.6B LoRA seed821、CUDA BF16、batch=1、gradient accumulation=2、seq=96/target=48、51-step stop horizon；物理 GPU1 UUID GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068 映射到进程内 cuda:0，fallback scope=forbid。该 current-main 新源码尝试不是历史 R14 重跑，也不是性能测量。
+
+Jittor core 首次编译 228/228，约 335 秒；初始 probe 写出 116,692,756-byte NPZ。step 1 学习率为 0，无参数变化。step 2 首个非零学习率更新通过 UPDATE_FUNCTION_CHECK_PASSED：loss=0.8847917318；匹配输入、optimizer 参数覆盖、参数状态、设备/dtype/gradient/moment/step、完整有限梯度、未跳步、零 fallback 和 BF16 projection autocast 检查均通过。梯度 L2 norm=0.7488155084，112 个可训练 LoRA 参数全部变化；输入后端 cuda、device id 0，actual_device=cuda:0，fallback 0→0。first-update-evidence.json SHA256 0ae5c32271a5fbdd24e1b6c23b17e91c9dd640ef410c63cb27c8d6674d362231；first-nonzero-update-evidence.json SHA256 373c706b5be15b049b5feb4135e3aa2d102c6cbfd124b7888fee0eb87e45df53。证据范围仅为实际 forward/backward 和选定 optimizer 更新。
+
+约 30 分钟运行窗口后 session 返回 rc=1，无终端错误文本；worker.log SHA256 19db1b36a0e8d10610d845b21f0a4ee2d658bc55fd13230fad249a9aead797e0。进程 3594746/3594748 已退出，该 attempt 无残留 GPU 进程。没有生成 report、checkpoint-51、完整 loss 轨迹、固定 held-out eval、generation 指标或 resume 检查，因此不满足实用训练验收，不因部分进展重跑。单次 CUDA 更新也不证明收敛、生成质量，或 gradient checkpointing 的 recompute/显存节省。
+
+相邻两个 PyTorch 控制 attempt 在 optimizer 更新前失败且保留：attempt-01 observer 缺少 jittor module；attempt-02 observer 对独立 Torch tensor 调用 jt.core.dispatch_context() 失败；不再重试该 observer。早先环境探针在 GLIBCXX_3.4.30 处失败，并触及默认 /home/cgq/.cache/jittor/torch-shim/cgq-92dab87ea3805bdf/jittor_cache；没有 pre-probe manifest，不声称缓存未变化。current-main attempt 的 CUDA runtime 曾警告 LD_LIBRARY_PATH=/usr/local/cuda/lib64 可能导致 CUDA library 选择错误；step 2 实际设备和 fallback 检查通过，警告保留。工作区 HEAD、tracked diff 与原 status 签名未变；dirty/untracked 102 项，staged=0。
+
+GPU1 有外部负载，本 attempt 仅是功能执行证据。GPU2 10:31 时 PID 3037196/3164740 各占 8,640 MiB、利用率 94%；10:40 仍占 17,299 MiB、利用率 91%。普通 CUDA holder 无法禁止其他用户启动任务，故未创建或启动 holder。Slurm 节点 X12DPG-OA6 仍 DOWN，无 live GRES/device-cgroup 独占租约。Day4–5 仍需有效独占租约，按至少三轮交替、每轮至少十个热态样本，报告 median/p95/离散度、加载/首步/热态耗时及 allocator/NVML 峰值；更广 Day2–5 发布门与 overall release **Not complete**。
+
 ## 2026-11-02 09:49 +0800 current-main 训练轨迹产物比较器单测 9/9 通过；不构成产品训练结论
 
 在 /home/cgq/jittor 当前工作树 HEAD 812a8f4450a5a634d3b363751674705aa08ca679、origin/cgq_transformers e5cffe1ae60c418f53c5bb1cdca9182577fd2b81 上，对尚无执行记录的 compat/tests/torch/test_training_trajectory_runner.py 做了单元验证。目标是先检查未来训练/续训证据比较器对 shape/dtype/非有限值、逐步 loss 合并、缺步/冲突和完整更新数的拒绝逻辑。测试使用 R5 packaging 环境 Python 3.11、pytest 7.4.4、NumPy 1.26.4；最终 attempt-03 为 9 passed、0 skipped/failed、0.28 秒、rc=0。它只验证证据工具，不证明 Jittor/PyTorch 训练、设备执行、DDP checkpoint/resume 或任务质量。

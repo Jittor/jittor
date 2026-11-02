@@ -1,3 +1,11 @@
+## 2026-11-02 10:40 +0800 Handoff：current-main Qwen 首个有效 CUDA 更新有证据；有界 51-step run 未完成
+
+沿用 /home/cgq/jittor，不 clone、不清理既有更改。HEAD aa541675998e0422cbe96d436ef6f03191f09668，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（221/0），dirty/untracked 仍 102 项、staged 0。attempt 包在 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-qwen20-cuda1-practical-r1-prepared/，worktree 指纹 e19d6aa0c08b17f6fe2e923c4290e45afcc58776b7712ea3346437d47ef72ef3。实际 GPU1→cuda:0、fallback=0；step 2 loss=0.8847917318、finite gradient L2=0.7488155084，112/112 LoRA 参数改变，首个非零学习率 optimizer 更新检查通过。core 首次编译 228/228，初始 probe 与 update evidence 保留。
+
+约 30 分钟后 run 退出，session rc=1、无终端错误文本；没有完整 report、51-step checkpoint、训练轨迹、held-out 分数或 resume 验证，不计为训练验收、不重跑相同 attempt。两个 PyTorch observer 失败均发生在更新前且保留；此前环境探针触及默认 cache、无 pre-probe manifest 的限制及 LD_LIBRARY_PATH 警告已写入 Day2–5 报告。
+
+GPU2 仍由 PID 3037196/3164740 共用 17,299 MiB，采样利用率 91%；X12DPG-OA6 为 DOWN。普通 holder 不能提供全局排他，本轮未启动占卡程序。正式 Day4–5 需管理员提供 live GRES/device-cgroup lease，再执行既有配对性能/显存方案。Day2–5 overall **Not complete**。
+
 ## 2026-11-02 09:49 +0800 接续：训练轨迹产物比较器单测通过；GPU2 独占和产品发布门仍开放
 
 当前 /home/cgq/jittor HEAD 812a8f4450a5a634d3b363751674705aa08ca679，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 220/0。工作树原有 102 项 dirty/untracked 未改，状态 SHA256 前后均为 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98。

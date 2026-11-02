@@ -1,3 +1,11 @@
+## 2026-11-02 10:40 +0800 current-main Qwen 首个非零学习率更新通过；有界训练未完成；GPU2 仍不可独占
+
+在现有 /home/cgq/jittor 工作区继续，源码 HEAD aa541675998e0422cbe96d436ef6f03191f09668，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（ahead/behind 221/0）；训练源码指纹 e19d6aa0c08b17f6fe2e923c4290e45afcc58776b7712ea3346437d47ef72ef3。Qwen3-0.6B LoRA seed821 当前源码尝试位于 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-qwen20-cuda1-practical-r1-prepared/。物理 GPU1 UUID GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068 映射到 cuda:0；step 2 非零学习率更新 loss=0.8847917，梯度有限、L2 norm=0.7488155，112/112 可训练 LoRA 张量改变，BF16 投影、optimizer 覆盖、实际 CUDA 设备及 zero-fallback 检查通过，fallback=0。该结果只证明一次实际 forward/backward/update 可运行；step 1 是零学习率，没有参数更新。
+
+51-step attempt 在约 30 分钟有界窗口后退出，工具会话返回 rc=1 且无终端错误文本；没有完整 report、step-51 checkpoint、完整训练轨迹、held-out 任务分数或 resume 证据。probe、optimizer coverage 与两个 update 检查文件均保留；不重启本 attempt，也不重复历史 R14 full/preflight/resume。新源码的 CUDA/Jittor core 首次编译 228/228 已完成，缓存保留。GPU1 同时承受外部负载，本次不形成性能或显存结论。此前两个 PyTorch harness attempt 均在 optimizer update 前失败并保留；另有环境探针因 GLIBCXX_3.4.30 失败并触及默认 /home/cgq/.cache/jittor/torch-shim/... cache，缺少 pre-probe manifest，不声称该 cache 未变化。
+
+GPU2 仍有外部 PID 3037196、3164740 各占 8,640 MiB；10:31 采样利用率 94%，10:40 总占用 17,299 MiB、利用率 91%。X12DPG-OA6 为 DOWN，没有 live GRES/device-cgroup 独占租约。普通显存 holder 不能拦截其他进程；本轮未创建或启动 holder，也未触碰外部进程。工作区原有 102 项 dirty/untracked、staged 0；本轮前后 status 与 tracked diff 哈希不变。Day4–5 正式性能/显存验收、更广 Day2–5 发布门及 overall release 均 **Not complete**。
+
 ## 2026-11-02 09:49 +0800 训练轨迹证据比较器单测 9/9 通过；Day2–5 发布门仍开放
 
 在当前 /home/cgq/jittor HEAD 812a8f4450a5a634d3b363751674705aa08ca679 上，使用 R5 packaging Python 3.11 / pytest 7.4.4，对 compat/tests/torch/test_training_trajectory_runner.py 做隔离工具单测：9 passed、0.28s、rc=0。attempt-03 通过 --confcutdir 避开上层导入 Jittor 的集成 conftest，使用独立 HOME/JITTOR_HOME；不涉及框架运行时、CUDA、训练或 DDP 功能。attempt-01 的 torch-mode 策略拒绝与 attempt-02 的 GLIBCXX_3.4.30 收集前失败均保留，attempt-02 默认 cache delta 未测，不声称缓存无变化。证据、输入哈希和失败原件见 [Day2–5 结果报告](../results/2026-10-26-torch-compat-release-day2-5.md) 对应 2026-11-02 09:49 条目。
