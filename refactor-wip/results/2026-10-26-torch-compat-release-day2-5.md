@@ -1,3 +1,15 @@
+## 2026-11-02 08:01 +0800 current-main R5 installed-wheel checkpoint state_dict / DCP CPU suite 17/17 通过
+
+继续在 /home/cgq/jittor，HEAD 为 4fb43a030ceb1b33583732a237a81d1b729d33a3，origin/cgq_transformers 为 e5cffe1ae60c418f53c5bb1cdca9182577fd2b81。attempt-14 测试前后 HEAD 相同，既有 workspace porcelain SHA256 前后均为 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98；dirty/untracked 102 项保持原状，未改产品源码或历史实验原件。
+
+测试文件 compat/tests/torch/test_checkpoint_state_dict.py SHA256 3fe8e900ffcaf5397c5b746beadfc5c4938f2bef90d26687680cc2cf6ca651d4，与 R5 source snapshot 字节一致；产品 compat/torch/installers/data.py SHA256 0a4d1c151a9de5e3d57da60117f156e8641b26febd7c63a4727914fef04c33c8。R5 package artifact manifest 复核通过，SHA256 38d4c7e162ed2246e34aaf0d7b67af6a926561acb77ae550f678c2f49b9f0037。
+
+attempt-14 使用 R5 install 中的 Jittor/Torch 模块、维护 packaging Python、CPU runtime、strict bootstrap 与 fallback error；pytest 收集 17 项，17 passed、0 skipped、0 failed，pytest rc=0、fallback 0→0、core build 前后均 current。通过项包括 named model/optimizer restore 后继续更新、多个 optimizer、missing state 处理、tied/frozen 参数名、DCP default planner 的 rank-local tensor roundtrip、模拟远端及本地 rank 写入/读取失败传播、sharded state 的明确不支持边界。末尾两个 warnings 来自用例显式开启 JITTOR_TORCH_ALLOW_STUB=1，提示 sharded tensor stub 是 no-op；它们不是失败或静默支持证据。
+
+证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-installed-torch-focus-r1-prepared/attempt-14-checkpoint-state-cpu/。artifact manifest SHA256 5d1369792c755f30c153b7c8b634f36646d370394b41bb1695d5b73deea02ae8，run-result.json SHA256 fff68af68ef8f1ea2469a587609746827f20de5f375a379001ea05d5bbf6bb8b，raw.log SHA256 d770f4b54e1c5b1550acf39fd765ce08a0948dc4fbf549b5694b1a21e1405980。package manifest before/after 相同，HEAD、porcelain、测试源码和产品源码前后不变；复用已 current 的 R5 CPU core，结果目录位于 /data6，磁盘可用 5.5 TB，测试后无残留进程。
+
+结果范围仅为当前 R5 安装 wheel 的 CPU、单进程功能测试。rank-local error test 用 monkeypatch 注入 rank 行为，不是双 rank通信；本轮没有验证新进程整体训练恢复、CUDA state placement，也没有解决已保留的 JT portable-pickle optimizer.pt 无法被 stock PyTorch torch.load 读取的问题。此前 R14 实用训练 resume 是另一个绑定源码/配置的证据。GPU2 仍 Default/shared、17,299 MiB；Day4–5 正式验收仍需管理员 Slurm GRES + task/cgroup + ConstrainDevices=yes + per-job UUID lease proof，取得后运行 R4 capacity sweep 和三轮配对 cohort。overall Day2–5 保持 Not complete。
+
 ## 2026-11-02 07:58 +0800 current-main R5 installed-wheel Transformers checkpoint 集成用例 2/2 通过；保留 attempt-08 至 12 的准备失败
 
 在 /home/cgq/jittor HEAD e1878c2c3d095ccc9bd1c62579fae4168d71f4c0、origin/cgq_transformers e5cffe1ae60c418f53c5bb1cdca9182577fd2b81 上继续。测试前后 workspace status SHA256 均为 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98，原有 102 项 dirty/untracked 未变。本轮未改源码、wheel、既有失败记录或 GPU2。

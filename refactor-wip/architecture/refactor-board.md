@@ -1,3 +1,9 @@
+## 2026-11-02 08:01 +0800 R5 installed-wheel checkpoint state_dict / DCP CPU suite 17/17 通过
+
+attempt-14 对 clean R5 installed wheel 运行 test_checkpoint_state_dict.py：17 passed、0 skipped/failed、pytest rc=0，fallback 0→0，installed core current。覆盖 model/optimizer restore 后继续更新、多 optimizer state、named/tied/frozen parameter、DCP 默认 planner 单 rank roundtrip 和失败传播处理。artifact manifest SHA256 5d1369792c755f30c153b7c8b634f36646d370394b41bb1695d5b73deea02ae8。
+
+这是 CPU、单进程套件；rank failure case 通过 monkeypatch 模拟，不能替代实际 fresh-process resume、双 rank DCP 或 PT/JT serialization interoperability。GPU2 Day4–5 独占性能/显存门仍未开始，整体 Day2–5 保持 Not complete。
+
 ## 2026-11-02 07:58 +0800 R5 installed-wheel checkpoint/HF 集成用例 2/2 通过；显存验收仍开放
 
 attempt-13 使用 R5 clean install 的 Jittor/Torch 模块和 Transformers 4.56.2，仅执行两项此前因依赖缺失而 skip 的 checkpoint 集成测试；2 passed、0 skipped/failed、pytest rc=0，fallback 0→0，core 前后 current。LlamaDecoderLayer checkpoint 重算测试约 50 秒。attempt manifest SHA256：1b85924506322095f52bd1aefa27be97cf558b8f5a8a2d757be636f389928494。

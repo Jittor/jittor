@@ -1,3 +1,8 @@
+## 2026-11-02 08:01 +0800 Handoff：R5 installed-wheel checkpoint state_dict / DCP CPU 17 项通过
+
+attempt-14 在 R5 installed wheel 上完成 test_checkpoint_state_dict.py，17 passed、0 skip/fail，fallback 0→0、installed core current；覆盖模型与 optimizer state restore/resume、DCP rank-local planner roundtrip 及注入的失败传播路径。artifact manifest SHA256 5d1369792c755f30c153b7c8b634f36646d370394b41bb1695d5b73deea02ae8。
+
+该结果仅证明 CPU 单进程维护套件；没有证明真实双 rank DCP、fresh-process 完整训练恢复、CUDA state placement 或 JT checkpoint 与 stock PyTorch 序列化互读。GPU2 仍共享，正式 Day4–5 性能/显存门及整体 Day2–5 发布门继续开放。
 ## 2026-11-02 07:58 +0800 Handoff：R5 installed-wheel HF checkpoint 集成两项通过；显存门未通过
 
 attempt-13 在 R5 clean installed wheel 上使用 Transformers 4.56.2，跑此前缺依赖的 LlamaDecoderLayer recompute 与 Transformers GradientCheckpointingLayer protocol 两用例：2 passed、0 skipped/failed、fallback 0→0、pytest rc=0，core current。实际 Jittor/Torch 模块路径均来自 R5 install，测试源码与 R5 snapshot 相同。manifest SHA256 1b85924506322095f52bd1aefa27be97cf558b8f5a8a2d757be636f389928494。
