@@ -8,6 +8,8 @@
 
 复验材料：/data6/cgq/jittor-lab/_state/release-day23/20261103-main-state-dict-placement-fix-r1/attempt-02/，manifest SHA256 32e1e7c8211948b5b556df0c9f9d5003d2a76cb44e6605895b20766f8b4d38f5。attempt-01 的两个定向用例为 2 passed；attempt-01 外层 shell 因 carriage-return exit 参数问题报告非零，但其 pytest/runner rc 均为 0，原日志一并保留，不影响 attempt-02 完整套件的独立结果。
 
+源码修复和三份状态文档已提交为 31baba861ec61da8fe0467228fec6b00e0dcd718（修复CUDA state_dict目标设备放置并补齐序列化回归），并已快进推送到 origin/cgq_transformers；远端 ref 核对一致。没有创建 PR，也没有合并 origin/2.0-refactor。
+
 该功能修复不构成性能/显存结果，也不关闭更广 Day2–5。待办继续包括将源码补丁纳入新 wheel 并验证安装态、JT portable-pickle optimizer 对 stock PyTorch 的互操作、完整 wheel migration/function gate，以及 Day4–5 的独占稳定窗口。Day4–5 仍需至少三轮交替、每轮每侧至少十个热样本，并报告 median/p95/离散度、加载/首步/热态耗时和 allocator/NVML 峰值；共享 GPU0 的此次运行只作 correctness evidence。
 
 ## 2026-11-03 04:10 +0800 安装 wheel serialization CPU/CUDA 双端验收：CPU 通过，CUDA 定位到两项设备放置缺陷

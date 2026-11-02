@@ -6,6 +6,8 @@
 
 attempt-01 的两个定向用例 2 passed；其外层 launcher 在 pytest 后因 CRLF 参数解析报错，原始日志保留。attempt-02 使用修正的 LF launcher，收集与 runner 均 rc=0。此前 attempt-11 的 37/39 实际结果不重写；assign 一项审计为测试读回顺序假红，NumPy placement 一项为本次修复的真实缺陷。
 
+源码修复和三份状态文档已提交为 31baba861ec61da8fe0467228fec6b00e0dcd718（修复CUDA state_dict目标设备放置并补齐序列化回归），并已快进推送到 origin/cgq_transformers；远端 ref 核对一致。没有创建 PR，也没有合并 origin/2.0-refactor。
+
 当前 Day2–5 仍未完成：优先把补丁装入新的 wheel identity 并继续更广功能/互操作发布门；Day4–5 性能/显存验收等待管理员配置 cgq Slurm association 与可核验的独占 GPU 窗口。此轮没有使用 GPU2，也没有产生性能或显存结论。
 
 ## 2026-11-03 04:10 +0800 Handoff：serialization CPU 39/39 通过；CUDA 发现两项 state_dict 放置失败
