@@ -2018,3 +2018,24 @@ workaround.
 - Exit condition: intentional lazy modules have explicit ownership and
   initial-surface tests isolate their premise; the minimal import-order
   sequence passes without weakening foreign-module rejection.
+
+## KI-COMPAT-027: compiled Accelerate helpers require full-graph capture
+
+- Severity: Medium (compiled training helpers).
+- Status: Open; reproduced on 2026-11-03 with core/compat `0a23c241`.
+- Owner: Torch compatibility compiler maintainers.
+- Symptom: Accelerate 1.10.1's original
+  `tests/test_utils.py::UtilsTester::test_convert_to_fp32` fails when it invokes
+  `torch.compile(fullgraph=True)`; the independent PyTorch reference passes.
+- Cause: `compat/torch/installers/compiler.py` explicitly rejects full-graph
+  capture, which is distinct from the native per-operator JIT execution path.
+- Workaround: use the eager `Accelerator.prepare` / `backward` training path.
+  Its selected three-step CPU configuration passes independent parameter,
+  loss and gradient comparisons in the integration repository.
+- Evidence: [Accelerate validation records](https://github.com/JittorEcosystem/jittor-accelerate/blob/main/docs/validation.md),
+  upstream commit `623cc0ba588d192c77758939a6e340adf07edd4f`.
+  The separate nested-tensor failure in `test_pad_across_processes` is tracked
+  by KI-COMPAT-003.
+- Exit condition: implement full-graph capture semantics and pass the original
+  compiled-helper test and graph-break rejection regressions on the declared
+  device, while preserving the eager training behavior.

@@ -4,9 +4,14 @@
 
 Library-specific implementations, tests, tutorials and support records live in independent [JittorEcosystem](https://github.com/JittorEcosystem) repositories. This directory is an index, not an installable distribution.
 
-| Repository / distribution | Python module |
+| Repository | Python module / entry |
 |---|---|
 | [jittor-transformers](https://github.com/JittorEcosystem/jittor-transformers) | `jittor_transformers` |
+| [jittor-datasets](https://github.com/JittorEcosystem/jittor-datasets) | `jittor_datasets` |
+| [jittor-tokenizers](https://github.com/JittorEcosystem/jittor-tokenizers) | `jittor_tokenizers` |
+| [jittor-safetensors](https://github.com/JittorEcosystem/jittor-safetensors) | `jittor_safetensors` |
+| [jittor-accelerate](https://github.com/JittorEcosystem/jittor-accelerate) | Official APIs and validation tools |
+| [jittor-ray](https://github.com/JittorEcosystem/jittor-ray) | Official APIs and validation tools |
 | [jittor-torchmetrics](https://github.com/JittorEcosystem/jittor-torchmetrics) | `jittor_torchmetrics` |
 | [jittor-tensordict](https://github.com/JittorEcosystem/jittor-tensordict) | `jittor_tensordict` |
 | [jittor-verl](https://github.com/JittorEcosystem/jittor-verl) | `jittor_verl` |
@@ -15,7 +20,7 @@ Library-specific implementations, tests, tutorials and support records live in i
 | [jittor-ms-swift](https://github.com/JittorEcosystem/jittor-ms-swift) | `jittor_ms_swift` |
 | [jittor-vllm](https://github.com/JittorEcosystem/jittor-vllm) | `jittor_vllm` |
 
-Follow each repository's quickstart to install it. Each project pins its upstream versions. Integrations needing runtime patches register through `jittor.module_patches`; TRL and ms-swift maintain validation tools without empty patch registrations. Install only the projects you need. Core and `jittor-compat` do not depend on an adapter bundle.
+Follow each repository's quickstart to install it. Each project pins its upstream versions. Integrations needing runtime patches register through `jittor.module_patches`; validation repositories run official APIs and their accompanying tests. Install only the projects you need.
 
 General computation belongs in Jittor, public Torch semantics in compat, and library-private behavior in the corresponding integration. Feature and hardware support is bounded by each repository's execution evidence.
 
