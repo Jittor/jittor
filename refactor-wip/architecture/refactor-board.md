@@ -1,3 +1,9 @@
+## 2026-11-02 22:02 +0800 CPU BF16 optimizer restore Var metadata/dispatch diagnostic; release remains open
+
+在 HEAD/origin/cgq_transformers `ef0cea17cb8fc6c9af1c3fb733ae18d0e60fd460` 上完成一次有界 CPU trace，`CUDA_VISIBLE_DEVICES=`、`JT_BACKEND=cpu`、`JITTOR_NO_BUILD=1`、`backend_fallback=error`，0 fallback。复原前连续与恢复两侧的参数、梯度、一二阶矩数值逐项相同；可见 Var 元数据除地址外相同，只有恢复态 moments 的 `is_stop_grad=False)，连续态为 True。两侧均未选择 fused kernel，走同一 `adam_update(torch_math=True)` Python 路径。第二步参数相同，BF16 参数的 `exp_avg_sq` 差为 `[-1.903623342514038e-06, -6.676465272903442e-05]`。
+
+只对恢复态 moments 原地设 stop-grad，且保留值与 storage 地址，差异仍然存在；所以 stop-grad 标志单独不是根因。先前重物化独立 Var 的控制可消除差异，根因仍未证明，本轮没有改算法或阈值。证据包 `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-cpu-bf16-var-dispatch-r1-prepared/`，manifest SHA256 `502fe1a89a4e1996094fe07cd2d919fe1d394d6c94efa2721f899376c981f8eb`。工作区既有 81 tracked dirty、21 untracked 和 index 空状态保持；GPU2 未用于测试，前后仍由外部工作占 45,880 MiB/100%。Day4–5 独占性能/显存及更广 Day2–5 发布门继续 **Not complete**。
+
 ## 2026-11-02 21:48 +0800 current-main CUDA 梯度、fused AdamW 与 cuBLASLt 定向验收通过；Day2–5 仍未完成
 
 绑定现有 /home/cgq/jittor 的 HEAD/origin/cgq_transformers 304500ea83ce1e1191ee7f3f4d5efc60911529d4。执行期间保留 81 个 tracked dirty、21 个 untracked，index 为空；tracked diff SHA256 b97553cf0eb6cc4ca17f3f929071c3ab5db92322030ddef33a79c2da38786200，porcelain SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211。所测源码哈希前后相同。

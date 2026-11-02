@@ -1,3 +1,19 @@
+## 2026-11-02 22:02 +0800 CPU BF16 optimizer restore Var metadata/dispatch diagnostic；Day2–5 未完成
+
+在现有 `/home/cgq/jittor` 工作区、HEAD/origin `cgq_transformers` `ef0cea17cb8fc6c9af1c3fb733ae18d0e60fd460` 继续。测试前后常规 porcelain 状态均为 102 项，SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`；tracked diff SHA256 `b97553cf0eb6cc4ca17f3f929071c3ab5db92322030ddef33a79c2da38786200`；index 为空。逐文件 `porcelain -uall` 指纹也保持 `8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98`。目标 restore 测试、`optimizer_api.py`、`adam.py` 的 SHA256 前后相同，分别为 `c9ff7be24a6dd0e4b5e0300f262d1f6addde39f0f2da0205d3171d50bef0cbfd`、`ec50a82ba7ef46ebfa36de2e704484c787f0b3b9afc4411289bb8b2b41e622d0`、`25029ab666e08fe2b9b6a944b0b414f2bb6bdafd86b6e6dd4a0f6115168f560d`。未改产品或测试源码。
+
+本轮为 CPU-only、单组连续与 checkpoint 恢复对照，120 秒上限；使用独立复制的既有 CPU cache，运行时设置 `CUDA_VISIBLE_DEVICES=`、`JT_BACKEND=cpu`、`use_cuda=0`、`JITTOR_NO_BUILD=1`、`backend_fallback=error`。缓存 core 的源文件/generator 元数据与二进制 stamp 经核对后才改写复制件中的绝对 cache 路径。启动中的 find harness 错误、Jittor 提示重启的 `jit_utils` rebuild exit，以及因 SSH cwd 错误扫描到 `/home/cgq/Motion324/setup.py` 并缺 `omegaconf` 的失败均保留；从仓库 cwd 的 corrected trace exit 0，额外 stop-grad 控制 exit 0。
+
+第二次 optimizer step 前，continuous 与 restored 两组参数、梯度、`m`、`values` 数值逐项相同；参数 dtype 为 FP32/BF16，BF16 梯度为 BF16、moments 为 FP32。两侧 Var 的公开 Python 类型、dtype、shape、leaf/grad_fn、storage offset、stride、CPU dispatch context 一致（物理地址不同属独立张量预期）。可见差别是 continuous moments `is_stop_grad=True`，restored moments 为 `False`。
+
+dispatch trace 显示两侧各参数都尝试选择 `optim.adamw_fused` 且结果均为 `None`，随后调用同一 `adam_update`，参数相同（`torch_math=True`、step=2、相同 betas/lr/eps/weight decay）；CPU fallback delta 0。step 后参数逐值相同；一阶矩最大差 `1.1920928955078125e-7`，BF16 参数的二阶矩差为 `[-1.903623342514038e-06, -6.676465272903442e-05]`。
+
+为区分 stop-grad 标志与内部 state 表示，额外把 restored 两组 `m` / `values` 原地调用 `stop_grad()`。四个 slot 的值保持逐值相同，storage address 均不变，标志从 False 变 True；但下一步的 `m` / `exp_avg_sq` 差与 baseline 完全一致。因此 stop-grad 标志单独不足以解释差异。前一轮将 moments 重物化成独立 Var 后差异消失；当前证据支持继续检查同设备 `_to` 是否保留来源 Var 的内部执行历史、以及不经 NumPy 的独立 materialize 变体，但尚未证明具体根因。暂不修改实现或放宽容差。
+
+证据完整包：`/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-cpu-bf16-var-dispatch-r1-prepared/`，artifact manifest SHA256 `502fe1a89a4e1996094fe07cd2d919fe1d394d6c94efa2721f899376c981f8eb`。本轮未暴露任何 GPU；GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 前后均为 45,880 MiB / 100% 外部占用。
+
+下一项优先做同设备 `_to` 与 loaded slot 的独立 materialization/内部依赖最小对照，再与匹配 stock PyTorch 的 AdamW 公式逐步对照。CPU BF16 恢复 parity 保持开放。Day4–5 正式性能/显存仍需管理员添加 `cgq` Slurm association 和可核验 GPU2 独占 lease，然后执行至少三轮交替、每轮每侧至少十个热态样本并报告 median/p95/离散度、加载/首步/热态耗时及 allocator/NVML 峰值；approved wheel migration、held-out generation、真实 activation recompute 显存证据、stock PyTorch 读取 JT optimizer portable-pickle 互操作和更广发布门也继续开放，整体 **Not complete**。
+
 ## 2026-11-02 21:48 +0800 current-main CUDA 梯度与优化器更新定向验收通过；Day2–5 未完成
 
 沿用 /home/cgq/jittor，HEAD 和 origin/cgq_transformers 均为 304500ea83ce1e1191ee7f3f4d5efc60911529d4。测试期间 git worktree 指纹未变：81 tracked dirty、21 untracked、index 为空；tracked diff SHA256 b97553cf0eb6cc4ca17f3f929071c3ab5db92322030ddef33a79c2da38786200，porcelain SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211。目标测试与 CUDA kernel 文件运行前后的 SHA256 相同。

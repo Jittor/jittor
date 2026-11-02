@@ -1,3 +1,11 @@
+## 2026-11-02 22:02 +0800 Handoff：BF16 restore delta survives stop-grad-only normalization
+
+在 HEAD/origin `ef0cea17cb8fc6c9af1c3fb733ae18d0e60fd460` 上做了 CPU-only、有界 BF16 AdamW continuous/resume trace。下一步前参数、梯度、moments 值相同；visible Var 差别为恢复态 moments `is_stop_grad=False` 而 continuous 为 True。两侧走同一非 fused Python `adam_update` 路径，参数 update 逐值相同，BF16 `exp_avg_sq` 差 `[-1.903623342514038e-06, -6.676465272903442e-05]`，fallback=0。
+
+只把恢复态 moments 原地设 stop-grad，保持值和 storage，不能消除差异。前一轮重新物化 moments 后差异消失；更深层 Var/materialization/执行历史仍待定位，不能据此改算法或阈值。下一步对比同设备 `_to` 行为和非 NumPy 独立 materialization，并和匹配 stock PyTorch 更新对照。证据包 `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-cpu-bf16-var-dispatch-r1-prepared/`，manifest SHA256 `502fe1a89a4e1996094fe07cd2d919fe1d394d6c94efa2721f899376c981f8eb`。
+
+本轮未用 GPU，GPU2 仍被外部任务占 45,880 MiB/100%。Day4–5 正式验收仍待管理员配置 cgq association 与可核验的 GPU2 独占租约；wheel migration、held-out generation、真实 activation recompute 显存证据和跨框架 optimizer portable-pickle 互操作仍开放，整体 Day2–5 保持 **Not complete**。
+
 ## 2026-11-02 21:48 +0800 Handoff：current-main CUDA 梯度与 optimizer 定向测试通过
 
 继续使用 /home/cgq/jittor；HEAD/origin cgq_transformers 为 304500ea83ce1e1191ee7f3f4d5efc60911529d4。81 tracked dirty 和 21 untracked 原样保留，index 为空，源码/测试指纹前后未变。GPU0 UUID GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5、cuda:0、backend_fallback=error 下，stable gradients 8/8、fused AdamW 1/1、cuBLASLt 8/8 通过、0 跳过。证据包 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-cuda-stable-gradients-r1-prepared/，artifact manifest SHA256 2d77097361e06727c526f357d485a6488d9cedbfe06d6b6352db63197d302684。
