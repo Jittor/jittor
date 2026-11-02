@@ -1,3 +1,10 @@
+## 2026-11-03 03:05 +0800 installed main/compat wheel 的 CPU DDP surface 39 passed；真实多卡与性能门仍开放
+
+在当前 main wheel 的隔离安装路径上，compat/tests/torch/test_ddp_owner_separation.py、test_ddp_comm_hook_surface.py、test_ddp_comm_hook_transaction.py 共 39 项通过（24.52 秒，0 skip、0 fail），fallback 0→0，core_build_is_current() 为真。结果绑定 wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69、wheel source HEAD 35a1a7605ec475e9cbc1a9688afc299ee3bd8011 与当时 live HEAD e97c38852869c4a4e335934b481939c9d3609874；安装 DDP 文件 SHA256 66b44ab55dcd6eea22aa2019e7542aec9fa605a1cfe592c24692c994f93a59b3。CPU core SHA256 前后均为 13ee2862304d354a20a9fefbe51dd8daee46066084b6c21f9385ffcfa7adf991。
+
+执行包 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-cpu-ddp-surface-r4/，artifact manifest SHA256 fcd56b6200c7a77cfa225a315d683a52d491998b366c76f912af9ebbcbc96222。r1 因启动环境选中 CUDA cache，在 180 秒到期时仅编译到 91/228；r2/r3 的 CPU core 已正确命中，但测试前 harness 错把 Torch shim namespace 当作有 __file__ 的模块，pytest 未运行。各失败包保留，不复用其 partial CUDA cache。r4 改用 wheel spec 和 sys.modules['jittor_core'] 核验后通过；最终 wrapper 仅在输出 stderr 尾部时返回非零，pytest 自身 rc=0，artifact 终审和 manifest 校验通过。
+
+这只补上 installed-wheel CPU DDP ownership/no_sync 与 comm-hook transaction 表面；服务器无 mpirun，不证明真实 MPI/NCCL。GPU2 仍由外部作业占用（45,880 MiB、100%），cgq 无 Slurm allocation；根分区余量约 50 GB。Day4–5 正式性能/显存和更广 Day2–5 发布门继续 Not complete。
 ## 2026-11-03 02:51 +0800 current-HEAD 安装 wheel 的 fused SGD option trajectory 补测通过；测试套件整体仍不标通过
 
 将前次 180 秒组合 attempt 中未完成的 test_every_option_combination_matches_the_portable_update 单独执行一次：10 个合法 SGD option 组合、每组四步 fused/portable 轨迹比较全部通过；1 passed、0 skipped，fallback 0→0，用时 122.401 秒。之前组合 attempt 的 timeout 原件保留，不将整套 suite 改标通过。两项此前通过的 FP16 unsupported fallback 与长参数分块证据仍有效。另发现未运行的 test_it_is_off_when_asked 当前把 _trajectory(False) 与自身比较，是 no-op；option matrix 里的 portable 侧确实走 fused=False，但没有 selector spy 证明关闭时不调用 fused selector，不能把该节点当作关闭开关的独立覆盖。

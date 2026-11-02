@@ -1,3 +1,19 @@
+## 2026-11-03 03:05 +0800 installed main/compat wheel CPU DDP surface 39 passed；Day2–5 仍未完成
+
+### 验收结果
+
+在 current main wheel 的隔离安装路径上，CPU-only 执行 test_ddp_owner_separation.py、test_ddp_comm_hook_surface.py、test_ddp_comm_hook_transaction.py，pytest 为 **39 passed、0 skipped、0 failed，24.52 秒**；fallback counter 0→0、安装模块来源检查通过、core_build_is_current() 为真。wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69，wheel source HEAD 35a1a7605ec475e9cbc1a9688afc299ee3bd8011，live repository HEAD e97c38852869c4a4e335934b481939c9d3609874。安装 DDP module SHA256 66b44ab55dcd6eea22aa2019e7542aec9fa605a1cfe592c24692c994f93a59b3；复用的已安装 CPU core SHA256 13ee2862304d354a20a9fefbe51dd8daee46066084b6c21f9385ffcfa7adf991，测试前后相同。
+
+最终执行包为 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-cpu-ddp-surface-r4/，artifact-files manifest SHA256 fcd56b6200c7a77cfa225a315d683a52d491998b366c76f912af9ebbcbc96222；测试期间命中已有 CPU cache cfg1d275ac1，没有重新编译 core。r4 pytest 子进程 exit 0，39 项通过；外层收尾只因 PowerShell CRLF 使最后一条 stderr tail 路径带回车而返回非零，exit.json、日志和文件 manifest 均已逐项核验。不要将外层展示错误记为 pytest 失败。
+
+### 保留的启动与 harness 失败
+
+- r1 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-cpu-ddp-surface-r1/，manifest SHA256 36835cb7ec4457339527993fad30bac462f53bedc405be5766d8a2532354fae6：环境未显式清空 nvcc_path，Jittor 选择 cu12.2.140_sm_80，180 秒到期时只到 91/228 TU；pytest 未启动。保留 partial CUDA cache，不复用。
+- r2 与 r3 分别保留于 ...cpu-ddp-surface-r2/（manifest 1336160ee26b1af02899d1c32365f009d33d892d9efd4da8c91d5fcba28f1116）和 ...r3/（manifest c8d346ba9a502e1eb720d5b6cf2c7288321b1cf25127147328f32e0d892af01d）。补齐 CPU 环境后均命中原 CPU core，但 runner 对 Torch shim proxy 读取 torch.__file__，在 pytest 前报 AttributeError；因此不计为功能测试失败。
+- r4 使用 PathFinder 取得 wheel 中 torch distribution origin，并从 sys.modules['jittor_core'] 核验 core 身份，执行上述三份文件通过。
+
+本项只证明安装 wheel 的 CPU DDP ownership、no_sync 和 comm-hook transaction 表面。mpirun 不可用，没有真实 MPI/NCCL 证据。GPU2 仍外部占用 45,880 MiB/100%，cgq Slurm association/allocation 未就绪，根分区仅约 50 GB 可用；不得在此状态下做正式性能结论。Day4–5 仍要求可核验独占、至少三轮 PT/JT 交替、每轮双方各至少十个热样本，以及 median/p95/离散度、加载/首步/热态和 allocator/NVML 峰值。wheel migration（69 additions、304 changes、2 removals、0 approved）、真实 activation recompute/显存收益、held-out generation 与更广功能矩阵仍开放；整体 Day2–5 Not complete。
+
 ## 2026-11-03 02:51 +0800 current-HEAD 安装 wheel 的 fused SGD option matrix 单项补测通过
 
 针对前次 fused SGD CUDA suite 在 180 秒超时、option trajectory 只启动未完成的情况，仅单独运行该方法一次，没有重跑整套或已通过节点。test_every_option_combination_matches_the_portable_update 对 10 个合法 (momentum, weight_decay, dampening, nesterov) 组合分别比较 fused=True/False 的四步模型参数轨迹，结果 **1 passed、0 skipped、0 failed**，fallback counter 0→0；unittest 用时 122.401 秒，完整 subprocess 用时 123.816 秒。运行时 backend_fallback=error 并禁止 fallback，core_build_is_current() 为真，installed Jittor/kernel 路径正确，CUDA core 前后 SHA256 相同。

@@ -1,3 +1,9 @@
+## 2026-11-03 03:05 +0800 Handoff：installed wheel CPU DDP surface 39 passed；多卡/性能验收仍开放
+
+在 /home/cgq/jittor 当前安装 wheel 执行三份 DDP CPU surface 测试，共 39 passed、0 skipped、24.52 秒，fallback 0→0，core build current。wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69，wheel source HEAD 35a1a7605ec475e9cbc1a9688afc299ee3bd8011，执行时 live HEAD e97c38852869c4a4e335934b481939c9d3609874，CPU core SHA256 前后相同为 13ee2862304d354a20a9fefbe51dd8daee46066084b6c21f9385ffcfa7adf991。证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-cpu-ddp-surface-r4/，manifest SHA256 fcd56b6200c7a77cfa225a315d683a52d491998b366c76f912af9ebbcbc96222。
+
+r1 的错误 CUDA cache 编译 timeout 及 r2/r3 的 runner 前置异常均保留；pytest 仅 r4 实际执行。mpirun 不可用，因此本项不覆盖真实 MPI/NCCL。GPU2 仍 45,880 MiB/100% 外部占用，cgq 没有 Slurm allocation；Day4–5 正式性能/显存验收及更广 Day2–5 门继续 Not complete。R14 Qwen 训练/续训、此前已通过的 preflight 与 cold build 均不重跑。
+
 ## 2026-11-03 02:51 +0800 Handoff：fused SGD 未完成 option trajectory 单项通过，保留整套 timeout
 
 在 /home/cgq/jittor 现有工作区继续，live HEAD ed9b53a8a5202c3590fe4f20381a2214781a1a7a；wheel 仍绑定源码 HEAD 35a1a7605ec475e9cbc1a9688afc299ee3bd8011、main wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69。本轮没有改产品源码或测试。
