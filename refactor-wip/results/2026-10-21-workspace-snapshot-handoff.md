@@ -1,3 +1,9 @@
+## 2026-11-02 10:58 +0800 接续：current-main Torch focused 在 import 阶段失败；GPU2 不能由普通 holder 独占
+
+current-main focused 一次性 attempt 使用 /home/cgq/jittor HEAD b17638fe25ee2bc9ec66ddcae19a91abe1c8145f，source fingerprint 1722cb11e133c861784ce877c8a70942c8f217ce6895416d06020595175df3a4。import jittor 时 jit_utils 重建触发 SystemExit(3)，pytest 0 项收集/执行；状态为基础设施失败，不是测试断言失败。源码、产品快照未变，包内 cache 有 3 个既有 .d/.key/jittor.lock 文件变化；完整路径、日志与哈希见 Day2–5 结果报告。保留 attempt，不重跑；focused 未通过前不进入 Torch core。
+
+GPU2 仍有 PID 3037196/3164740 各用 8,640 MiB，约 17,299 MiB 已用、利用率 87%、Default；X12DPG-OA6 为 DOWN、ConstrainDevices=no、sudo -n 失败。现有 gpu2-exclusive-run.sh 是“等空卡后把实际 benchmark 直接放在独占模式里运行”的包装器，不是可与 benchmark 分离的后台占卡器。本轮未创建 holder 或触碰外部进程。Day4–5 及整体 Day2–5 release 继续 **Not complete**。
+
 ## 2026-11-02 10:40 +0800 Handoff：current-main Qwen 首个有效 CUDA 更新有证据；有界 51-step run 未完成
 
 沿用 /home/cgq/jittor，不 clone、不清理既有更改。HEAD aa541675998e0422cbe96d436ef6f03191f09668，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（221/0），dirty/untracked 仍 102 项、staged 0。attempt 包在 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-qwen20-cuda1-practical-r1-prepared/，worktree 指纹 e19d6aa0c08b17f6fe2e923c4290e45afcc58776b7712ea3346437d47ef72ef3。实际 GPU1→cuda:0、fallback=0；step 2 loss=0.8847917318、finite gradient L2=0.7488155084，112/112 LoRA 参数改变，首个非零学习率 optimizer 更新检查通过。core 首次编译 228/228，初始 probe 与 update evidence 保留。

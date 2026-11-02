@@ -1,3 +1,9 @@
+## 2026-11-02 10:58 +0800 current-main Torch focused 在 Jittor import 前置检查退出；GPU2 仍无独占条件
+
+current-main focused attempt 在 import jittor 时因隔离 cache 中 jit_utils 重建而 SystemExit(3)，pytest 尚未收集测试；源码与 core 产品绑定未变，cache 仅 3 个既有元数据/编译记录文件变化。失败原件和 SHA256 见 [Day2–5 结果报告](../results/2026-10-26-torch-compat-release-day2-5.md)。该失败不进入 Torch core 门，也不重跑本 attempt。
+
+GPU2 当前仍有外部 PID 3037196/3164740 各占 8,640 MiB，利用率 87%、Default 模式；X12DPG-OA6 为 DOWN、ConstrainDevices=no、sudo -n 不可用。已有 gpu2-exclusive-run.sh 只能在卡空闲且有 sudo 后，把实际 benchmark 直接置于 EXCLUSIVE_PROCESS 窗口；没有启动后台 holder。Day4–5 正式性能/显存验收、更广 Day2–5 发布门及 overall release 继续 **Not complete**。
+
 ## 2026-11-02 10:40 +0800 current-main Qwen 首个非零学习率更新通过；有界训练未完成；GPU2 仍不可独占
 
 在现有 /home/cgq/jittor 工作区继续，源码 HEAD aa541675998e0422cbe96d436ef6f03191f09668，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（ahead/behind 221/0）；训练源码指纹 e19d6aa0c08b17f6fe2e923c4290e45afcc58776b7712ea3346437d47ef72ef3。Qwen3-0.6B LoRA seed821 当前源码尝试位于 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-qwen20-cuda1-practical-r1-prepared/。物理 GPU1 UUID GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068 映射到 cuda:0；step 2 非零学习率更新 loss=0.8847917，梯度有限、L2 norm=0.7488155，112/112 可训练 LoRA 张量改变，BF16 投影、optimizer 覆盖、实际 CUDA 设备及 zero-fallback 检查通过，fallback=0。该结果只证明一次实际 forward/backward/update 可运行；step 1 是零学习率，没有参数更新。

@@ -1,3 +1,13 @@
+## 2026-11-02 10:58 +0800 current-main Torch focused 未进入 pytest；GPU2 独占条件不可用
+
+当前源码绑定为 /home/cgq/jittor HEAD b17638fe25ee2bc9ec66ddcae19a91abe1c8145f、origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81；focused runner 记录的源码指纹为 1722cb11e133c861784ce877c8a70942c8f217ce6895416d06020595175df3a4，工作区状态签名 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98，执行前后相同。单次 focused attempt 位于 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-torch-focused-current-worktree-r1-prepared/attempt-01-torch-focused/，runner SHA256 ff6f8e6481e3ead2247ace7cf6f52dad442210886cda05fe8206b500c25f979b。
+
+attempt 在 import jittor 时于 compiler.check_cache_compile() 以 SystemExit(3) 退出，日志为 “jit_utils was rebuilt and cannot be reloaded in this process. Nothing else has run: rerun the same command.” 因此 pytest 未收集任何 selector、0 项测试执行；这属于运行时产品/cache 绑定基础设施失败，不是测试断言失败，也不构成 focused 通过。runner status 为 FOCUSED_ATTEMPT_FAILURE_RETAINED，rc=1；子进程组已退出，源码指纹和绑定产品快照前后相同，jittor_core SHA256 d2aea33bd566ad8b2b5fbf6edb43fe060f5d8fd389d95eae8d22744f4f390811。隔离包 cache 无增删，但 3 个既有文件内容发生变化：jit_utils_core.cpython-311-x86_64-linux-gnu.so.d、对应 .key、jittor.lock；保留这些产物，不重跑该 attempt。receipt SHA256 19da88d9c945a6b76997df94d87baec1c18edf2e7ccae7f2133aaf112a12d5f8，raw.log SHA256 650eccd0a1720e44d032d710e01ac4b948e6258180b0d5b0a6ea63cc89985bfd。
+
+GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 仍由外部 PID 3037196、3164740 各使用 8,640 MiB；检查时总用量 17,299 MiB、利用率 87%、compute mode Default。Slurm 节点 X12DPG-OA6 为 DOWN，ConstrainDevices=no，sudo -n 校验失败。现有 /data6/cgq/jittor-lab/tools/gpu2-exclusive-run.sh 会等待 GPU 空闲、请求 sudo 设置 EXCLUSIVE_PROCESS，并将实际 benchmark 命令作为唯一 CUDA 进程直接运行后恢复；当前不能启动，也不能由单独后台 holder 保证排他或让另起的 benchmark 同时运行。本轮未创建 holder、未触碰外部进程，focused attempt 的 GPU 前后快照显示 GPU2 仍只有上述进程。
+
+因此 Torch focused 尚未通过，按门槛不进入 Torch core；GPU2 正式性能/显存 cohort 仍需管理员恢复节点并提供活跃 GRES/device-cgroup 独占租约。Day4–5、更广 Day2–5 发布门及 overall release 均 **Not complete**。
+
 ## 2026-11-02 10:40 +0800 current-main Qwen 单个非零学习率 CUDA 更新通过；30 分钟 attempt 未完成 51 steps
 
 来源：沿用 /home/cgq/jittor 当前 dirty 工作区，HEAD aa541675998e0422cbe96d436ef6f03191f09668，origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（ahead/behind 221/0）。训练 worktree 指纹 e19d6aa0c08b17f6fe2e923c4290e45afcc58776b7712ea3346437d47ef72ef3。attempt 包：/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-qwen20-cuda1-practical-r1-prepared/jt-full51-attempt01/；模型、adapter、fixture、命令和 GPU 前置快照在包内 provenance/attempt 文件中。配置为 Qwen3-0.6B LoRA seed821、CUDA BF16、batch=1、gradient accumulation=2、seq=96/target=48、51-step stop horizon；物理 GPU1 UUID GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068 映射到进程内 cuda:0，fallback scope=forbid。该 current-main 新源码尝试不是历史 R14 重跑，也不是性能测量。
