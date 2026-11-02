@@ -1,3 +1,19 @@
+## 2026-11-02 18:46 +0800 current-main HF/Torch CUDA 设备 smoke：4 项通过，模型前向节点受限时未完成
+
+在现有 `/home/cgq/jittor` 工作区 HEAD `3a2ebe3733a3f20f7356bfd343791c81105c0bd7`、origin/cgq_transformers `e5cffe1ae60c418f53c5bb1dca9182577fd2b81`（ahead/behind 240/0）上运行；启动前后 dirty 状态与源码 diff 指纹一致：102 项短状态 SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`，tracked diff SHA256 `3ef743580bb7db38dbc9197f6f90e3182956d2bc29a55bce29c7eeea1bea6100`。没有修改仓库源码或既有 dirty/untracked 文件。
+
+**CUDA 覆盖。** 从当前 `compat/tests/torch/test_torch_hf_cuda_device.py` 选择 5 个节点；GPU1 UUID `GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068` 单卡可见并映射为 `cuda:0`，Nox 设置 `backend_fallback=error`、`JITTOR_TEST_REQUIRE_CUDA=1` 和 accelerator-minimum gate。通过项为显式 CUDA tensor CPU↔CUDA 往返、空 CUDA tensor/拼接、CUDA bool-mask 极值保持有限且 multinomial 输出在 CUDA、CUDA runtime 下普通 tensor/arange/zeros factory 仍默认 CPU并显式 CUDA 构造正确。四项均显示 PASSED。
+
+第五项 `test_small_transformers_cuda_device_forward` 一次性创建并运行 tiny BERT/GPT2/T5，pytest 进入该节点后直到 210 秒外层限时到达仍未结束；Nox 收集 5 项、前 4 passed，第 5 项没有 assertion traceback 或完成报告，timeout wrapper 返回 143。故记录为不完整/资源窗口耗尽，不记作测试断言失败，也不声称 3 个模型通过。GPU1 测量期间利用率处于共享高负载、可用显存约 51–52 GiB；本结果不支持延迟或显存结论。GPU2 未传给运行进程且未操作。
+
+**保留的 attempt 与 cache。** 外部证据包 `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-hf-cuda-device-smoke-r1-prepared/`。attempt-01 的 Nox preflight 报 `jit_utils was rebuilt and cannot be reloaded in this process. Nothing else has run`，exit 1、pytest 0 cases；同一隔离 cache 完成 jit_utils 初始化后，attempt-02 才进入上述实际测试。attempt-01 pytest log SHA256 `fec98d9b0044bd349fe917bdc41f9b9652e2342247511173de9222b2d69b3d46`；attempt-02 plan SHA256 `922329e9c0501321ab9c374ff706cdd0852a4dae45bd0e6f4d1125d4b66d5ef3`，runner SHA256 `fa80552cd655840f0db3c69fc2b853c038d7f080f32ad6153a9b5a3b4eac350a`，pytest log SHA256 `041b124e54e4fcb945745fad24cac03e115725e385d5c9f70c9f422629aaf0b3`，exit receipt SHA256 `9d9b18720961e9b4689fd763b85e7b6f36160ccd3a8a1c9ddc5103bb0f66c396`。两次失败/未完成原件和完整 cache 清单均保留。
+
+本次 correctness cache 是从 current-main CUDA package 复制到隔离 Nox 根；attempt-02 前后 15,349→15,534 个文件，增加185、删除0、682 个共同路径哈希变化；核心库哈希前后为 `201d8a15de240aa796641b51209d039048769db45e7f69a1115a0e06503ba8bf` 和 `040cb213d9e11c80080bbffd7067a1564aeb3d6fa9bddf54542fb994abbcdd39`，均有 manifest 记录。artifact-files SHA256 `97d58316f6a0525c7b09caeac6880b458fc338da6659ce25d61b448925a79d6b`，24 项清单验证通过。
+
+**activation-checkpoint 状态更正。** 18:17 的周总结写成 shim 直接执行、没有 recompute 证据，现更正：当前 `compat/torch/installers/data.py` SHA256 `0a4d1c151a9de5e3d57da60117f156e8641b26febd7c63a4727914fef04c33c8`，与 R3/R5 审计绑定实现文件一致。R3 CUDA synthetic Llama 六层 on 调用轨迹为 `[no_grad=1, no_grad=0]`、off 为 `[0]`，支持先 no-grad forward、再 backward 重算；但 allocated peak on/off 为 `1,403,671,552/652,612,608 bytes`，热态 median 为 `46.619/28.910 ms`。所以特定路径已证实真实 recompute，该实验未显示省显存，且旧整体 source fingerprint 不等于本轮 current-main release identity；current release 候选仍缺匹配配置 on/off 正式速度/显存测量。已同步修正本报告 18:17 周总结中的过时句子。
+
+下一步继续当前候选的低成本、非重复 CUDA correctness 范围；本次模型前向慢节点不原样重跑。approved wheel baseline migration、held-out generation、stock PyTorch optimizer 文件互操作契约和其他 Torch-shim 覆盖仍开放。Day4–5 GPU2 正式性能/显存仍等待 cgq Slurm association、节点恢复和独占 GRES/device-cgroup 租约；overall release 保持 **Not complete**。
+
 ## 2026-11-02 18:30 +0800 current-main 双 rank Trainer 样本顺序与新进程续训审计通过；Day2–5 仍未完成
 
 在现有 `/home/cgq/jittor` 工作区 HEAD `23524398c59e7fec917ed8122ea09ef8b0d7139b` 上执行，source fingerprint `c25190d2bf38b5d14b3445771c877ed0d00bd24ea14886d0620313c48d8fd1bb`；刷新后的 origin/cgq_transformers 为 `e5cffe1ae60c418f53c5bb1dca9182577fd2b81`，ahead/behind 239/0。启动前 102 项短状态、105 项展开状态，状态 SHA256 `8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98`，tracked diff SHA256 `3ef743580bb7db38dbc9197f6f90e3182956d2bc29a55bce29c7eeea1bea6100`；实验前后状态与 diff 指纹未变化。本轮只更新既有状态文档。
@@ -19,7 +35,7 @@ Day4–5 正式性能/显存验收仍要求 GPU2 专属 GRES/device-cgroup 租�
 - **真实训练与续训：** current-main Qwen3-0.6B LoRA seed821 在真实 CUDA 上完成 102 次更新并从 step-51 新进程恢复；没有跳步或 fallback。两 epoch 微批次平均 loss 从 JT 1.205599 降至 1.153534，PyTorch 从 1.205680 降至 1.154064；固定 eval loss JT 2.456431、PyTorch 2.456644。这支持该源码、seed 和配置下的训练功能及相近趋势，不外推到其他模型或生成质量。公共 HF Trainer 单 rank checkpoint resume 与连续两步轨迹吻合；两 rank DDP Trainer 也有轨迹吻合证据，但最初 sample-order recorder 受预取影响，产生重复 ID，修正后的 recorder 目前仅有 CPU smoke，尚未完成对应的 CUDA 两 rank stop/resume 复核。
 - **分布式与状态恢复：** 修正 Torch barrier 的 ProcessGroup 后端路径；两 rank NCCL DCP toy 状态保存/恢复通过。FSDP2 全量状态恢复、optimizer 聚合及 GradScaler 等路径有针对性实现和双卡/定向证据。它们仍是各自覆盖范围的结果，不代替完整 Trainer/DDP 发布矩阵。
 - **安装包与发布检查：** 当前源码 wheel/sdist 往返及隔离安装、核心 selftest、core+compat autograd smoke 通过；approved wheel 对照仍失败，清单从基线 1,033 项变为候选 1,100 项，新增 69、变化 302、删除 2、批准项 0。没有改基线或 allowlist。stock PyTorch 不能读取 JT portable-pickle 格式的 optimizer.pt，跨框架序列化互操作仍单独开放。
-- **性能/显存和质量边界：** 正式 Day4–5 配对性能/显存验收未完成；activation-checkpoint shim 直接执行目标函数，没有证明实际 recompute 或显存节省。固定 Qwen fixture 生成结果来自 train 来源标签，不能作为 held-out quality 分数。整体 release 继续 **Not complete**。
+- **性能/显存和质量边界：** 正式 Day4–5 配对性能/显存验收未完成。R3/R5 已有指定实现/API与模型的真实 recompute 证据；R3 synthetic Llama 的 checkpoint-on allocator allocated peak 高于 off，热态 median 也更慢，没有显示显存节省。当前候选仍缺匹配资源与配置的 on/off 峰值显存和速度结论。固定 Qwen fixture 生成结果来自 train 来源标签，不能作为 held-out quality 分数。整体 release 继续 **Not complete**。
 
 ### 本轮 current-main CUDA 回归与源码修复
 

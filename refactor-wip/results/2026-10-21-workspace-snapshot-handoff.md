@@ -1,3 +1,11 @@
+## 2026-11-02 18:46 +0800 Handoff：current-main CUDA 设备 smoke 四项通过，一项模型节点超出有界窗口
+
+继续使用 `/home/cgq/jittor`，当前 HEAD `3a2ebe3733a3f20f7356bfd343791c81105c0bd7`、origin/cgq_transformers `e5cffe1ae60c418f53c5bb1dca9182577fd2b81`（ahead/behind 240/0）。工作区保留的 102 项短状态 SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`，tracked diff SHA256 `3ef743580bb7db38dbc9197f6f90e3182956d2bc29a55bce29c7eeea1bea6100`，测试前后未变。
+
+Nox CUDA attempt-02 只让 GPU1 UUID `GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068` 可见；显式 CUDA tensor 往返、empty tensor、bool-mask/multinomial、runtime 下 CPU-default constructors 共 4 passed。tiny BERT/GPT2/T5 forward 第 5 项在 210 秒限时结束时未完成（exit 143，无断言错误）。attempt-01 仅遇到 jit_utils 一次性 rebuild，pytest 0 项。所有原件在 `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-hf-cuda-device-smoke-r1-prepared/`，artifact manifest SHA256 `97d58316f6a0525c7b09caeac6880b458fc338da6659ce25d61b448925a79d6b`。cache 与 core 的变化、exit 解释及周总结更正见 [Day2–5 结果报告](2026-10-26-torch-compat-release-day2-5.md)。
+
+补充 checkpoint 状态：当前 compat data.py SHA 与 R3/R5 绑定文件相同，已有特定 CUDA Llama recompute 证据；R3 on 模式 allocator peak 高于 off、速度较慢，未显示显存节省。当前候选完整性能/显存结论仍需独占测量。GPU2 仍无 cgq Slurm association/独占租约，X12DPG-OA6 为 DOWN；更广 Day2–5 与 Day4–5 release 维持 **Not complete**。
+
 ## 2026-11-02 18:30 +0800 Handoff：current-main 两 rank Trainer checkpoint/order resume 通过；GPU2 性能租约与更广 Day2–5 门继续开放
 
 沿用 `/home/cgq/jittor`，HEAD `23524398c59e7fec917ed8122ea09ef8b0d7139b`，source fingerprint `c25190d2bf38b5d14b3445771c877ed0d00bd24ea14886d0620313c48d8fd1bb`，origin/cgq_transformers `e5cffe1ae60c418f53c5bb1dca9182577fd2b81`（ahead/behind 239/0）。实验期间 102 项短状态、105 项展开状态及 tracked diff SHA 未变化；没有修改或清理其他 dirty/untracked 工作。

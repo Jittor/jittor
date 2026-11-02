@@ -1,3 +1,11 @@
+## 2026-11-02 18:46 +0800 current-main Torch/HF CUDA 设备 smoke 部分通过；Day2–5 仍未完成
+
+当前 HEAD `3a2ebe3733a3f20f7356bfd343791c81105c0bd7`，origin/cgq_transformers `e5cffe1ae60c418f53c5bb1dca9182577fd2b81`（ahead/behind 240/0）。Nox CUDA attempt-02 在 GPU1 UUID `GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068` 上收集 5 项：显式 CUDA tensor 往返、空 tensor、bool-mask 极值与 multinomial、CUDA runtime 下 data constructors 默认 CPU 四项通过；小型 Transformers BERT/GPT2/T5 forward 项在 210 秒硬限时内未完成，exit 143，没有断言失败报告。attempt-01 只在 Nox jit_utils 初始化探针终止，0 项 pytest 执行；两次原件都保留，不为耗时节点重复启动。
+
+实验绑定 102 项既有短状态 SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`、tracked diff SHA256 `3ef743580bb7db38dbc9197f6f90e3182956d2bc29a55bce29c7eeea1bea6100`；运行后不变。隔离 cache 留存 15,349→15,534 项，新增185、删除0、682项哈希变化；Nox CUDA core 记录为 `201d8a15de240aa796641b51209d039048769db45e7f69a1115a0e06503ba8bf` → `040cb213d9e11c80080bbffd7067a1564aeb3d6fa9bddf54542fb994abbcdd39`。GPU1 为共享负载，GPU2 未暴露；这只覆盖功能，不是性能/显存结论。包与哈希见 Day2–5 报告。
+
+更正前一增量对 activation checkpoint 的描述：R3/R5 的特定实现与模型已有真实 recompute 证据，但 R3 synthetic Llama checkpoint-on allocated peak 高于 off（约 1.404 GB 对 0.653 GB），热态 median 也更慢（46.619 ms 对 28.910 ms），没有显示显存收益。完整发布候选的匹配 on/off 性能与显存测量仍未完成。总体 Day2–5 release **Not complete**。
+
 ## 2026-11-02 18:30 +0800 接续：current-main 两 rank Trainer DDP 样本顺序与新进程续训复核通过；整体 Day2–5 未完成
 
 继续在现有工作区执行，HEAD `23524398c59e7fec917ed8122ea09ef8b0d7139b`，刷新后的 origin/cgq_transformers 为 `e5cffe1ae60c418f53c5bb1dca9182577fd2b81`（ahead/behind 239/0），source fingerprint `c25190d2bf38b5d14b3445771c877ed0d00bd24ea14886d0620313c48d8fd1bb`。实验前后工作区维持 102 项短状态、105 项展开状态；运行未修改源码或既有文件。
