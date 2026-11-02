@@ -1,3 +1,9 @@
+## 2026-11-02 16:20 +0800 current-main packaging 往返与安装 smoke 通过；正式基线比较失败，GPU2 仍无独占条件
+
+在现有工作区 HEAD 537ab1d154a8d8153e443d2347e584cc84921b29、origin/cgq_transformers e5cffe1ae60c418f53c5bb1dca9182577fd2b81（ahead/behind 236/0）上制作外部当前源码快照，3,894 个文件、1 个符号链接；source-files.sha256 为 0515d37eee5ebbccc4fe98275be6021d37764572513aaf8b33751ba05376de54。Nox packaging attempt-03 与已批准 wheel 基线比较失败：基线 1,033 项、候选 1,100 项，增加 69、内容变化 302、删除 2，批准变更数为 0。没有修改基线或 allowlist。attempt-04 以 attempt-03 候选 wheel 作为相对一致性/安装诊断输入，wheel 与 sdist 重建 wheel 均为 1,100 项且零差异；核心包 selftest、核心与 compat 合装、shim autograd smoke 均通过。它是 CPU-only 候选打包证据，不代表批准基线通过。详细哈希见 Day2–5 报告顶部和外部包 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-packaging-r1-prepared/，证据 manifest SHA256 d5276c32763166f141e9249f728b2d682059e0ba44da873a136c954cda689b1a。
+
+16:20 +0800 GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 使用 36,621 MiB、利用率 100%，外部 PID 3037196、3164740、1070731 分别占 8,640、8,640、19,316 MiB。cgq Slurm association 与队列为空，X12DPG-OA6 仍 DOWN。用户表示无 Slurm account，并请管理员添加 cgq association；本会话没有管理员联络渠道，未代发申请。未启动普通 holder 或 GPU benchmark，也未操作外部进程。Day4–5 正式性能/显存 suite 仍需可核验的 GPU2 GRES/device-cgroup 独占租约及三轮交替测量。held-out quality、真实 activation recompute/显存证据、样本顺序校验后的两 rank 新进程 resume、序列化互操作及批准 wheel baseline migration 仍开放；整体 Day2–5 release 保持 **Not complete**。
+
 ## 2026-11-02 15:48 +0800 sample ID collator 记录已修正并通过 CPU smoke；CUDA resume 复核等待资源窗口
 
 沿用 current-main 工作区 HEAD `30e87dff639433a87fe9e280467618f4aa46ff77`、完整 source inventory fingerprint `095c4abb62246cb45bc48270fb5494211749d0cb67fae20010c7ebae96319259`。新外部包在 experiment runner 中由 collator 从当前 feature 捕获 sample IDs，附加普通 list，并于 `training_step` 和 batch tensor IDs 比较后记录。stock Accelerate 和实际 Jittor Torch shim 环境的 CPU smoke 均通过；每次捕获的 host IDs 与 tensor IDs 一致。Jittor smoke 隐藏所有 GPU并回退 CPU，这项结果只验证记录传递，不构成 CUDA/DDP 证据。完整/停点/新进程恢复复核尚未运行。

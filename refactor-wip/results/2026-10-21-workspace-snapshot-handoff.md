@@ -1,3 +1,9 @@
+## 2026-11-02 16:20 +0800 Handoff：CPU 打包候选自洽与合装 smoke 通过；approved baseline 与 GPU2 性能门未过
+
+current-main packaging snapshot 绑定 HEAD 537ab1d154a8d8153e443d2347e584cc84921b29、origin e5cffe1ae60c418f53c5bb1dca9182577fd2b81（ahead/behind 236/0），source manifest SHA256 0515d37eee5ebbccc4fe98275be6021d37764572513aaf8b33751ba05376de54。Nox attempt-03 对 approved wheel baseline 失败（1,033 → 1,100 paths；69 added、302 changed、2 removed、0 allowlisted）。未改基线或 allowlist。candidate-relative attempt-04 session 成功：direct/from-sdist wheel 零差异，sdist audit、隔离安装后的核心 selftest、core+compat autograd smoke 均通过；无 CUDA 可见，只算 CPU package/install 证据。完整差异、日志和哈希位于 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-packaging-r1-prepared/，当轮 manifest SHA256 d5276c32763166f141e9249f728b2d682059e0ba44da873a136c954cda689b1a。
+
+16:20 +0800 GPU2 仍有 36,621 MiB、100% 利用率，三个外部 PID 共占该卡。用户没有 Slurm account 并要求管理员添加 cgq association；association/queue 仍空、X12DPG-OA6 DOWN，本会话没有管理员消息渠道，未代发，也没有启动 holder 或操作外部任务。Day4–5 正式性能/显存 suite 需管理员 association、节点恢复和可验证 GPU2 独占租约后再运行。approved packaging baseline migration、held-out quality、activation recompute/显存、样本顺序修正后的两 rank resume 与序列化互操作也仍待验收。整体 Day2–5 release 为 **Not complete**。
+
 ## 2026-11-02 15:48 +0800 Handoff：sample ID collator 记录修正通过 CPU smoke；CUDA resume 与 Day4–5 等资源
 
 外部 prepared package `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-ddp-trainer-resume-r2-host-batchids-r1-prepared/` 中的新 runner 从 collator feature 捕获 host sample IDs，并在 `training_step` 与 batch tensor IDs 对照后记录，避免预取游标误报。stock Accelerate 与实际 Jittor shim 的 CPU smoke 均通过，IDs `[8,9]`、`[10,11]` 精确对应；实际 Jittor smoke 无 CUDA 可见、回退 CPU。失败原件、cache delta 与恢复回执保存在包中。R2 runner 有进程/利用率 admission guard，静态语法通过，尚未启动 full/stop/resume。
