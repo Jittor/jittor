@@ -1,3 +1,9 @@
+## 2026-11-03 03:31 +0800 Handoff：installed-wheel CUDA checkpoint RNG probe 通过
+
+使用 wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69，在物理 GPU0 UUID GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5 上完成 3 元素 checkpoint probe。no-grad forward/recompute 调用轨迹 [1,0]；CUDA 随机输出逐位重放，backward 后调用方 CUDA RNG state 不变；梯度 [3,3,3]，fallback 0→0，CUDA core build current 且 SHA256 前后相同 0e2fe909d3f33e27c220546693c40f27087357cefe198220f46c97f9a0353a90。实现文件 SHA256 8f0042aa56b2a68b061d4975adaf1addd436d0056e0bd2553a91bd0b46a31b9b。证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-checkpoint-cuda-r2/，artifact manifest SHA256 8eb50b0a5dc4150ee1fe2b605f24d33de2abd18523a4f2625c10f8dbdacfc744。
+
+r1 仅在 runner 模块身份检查失败，测试未启动；独立 r2 修复检查后已执行。共享 GPU 功能 probe 不用于性能/显存结论；formal Day4–5 和更广 Day2–5 gate 继续开放。
+
 ## 2026-11-03 03:27 +0800 Handoff：checkpoint CUDA follow-up runner 前置校验失败，测试未执行
 
 复用 installed-wheel CUDA core SHA256 0e2fe909d3f33e27c220546693c40f27087357cefe198220f46c97f9a0353a90 准备 checkpoint CUDA RNG probe；runner 在读取 Torch shim namespace 的 __file__ 时抛 AttributeError，pytest 尚未启动。returncode 1、1.37 秒，core 未变；这是 runner 前置错误，不归为产品测试失败，也不计 CUDA 功能通过。证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-checkpoint-cuda-r1/，manifest SHA256 d4e0b478e0f28e0b6a1023dcc30d5d72199f4fc898e55bde9f9fa2a75cd3a8ce。

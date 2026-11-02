@@ -1,3 +1,7 @@
+## 2026-11-03 03:31 +0800 installed main wheel 的 CUDA checkpoint 重计算与 RNG 回放通过
+
+修正 runner 的 Torch 模块身份检查后，在安装态 wheel、物理 GPU0（进程内 cuda:0）上完成有界 3 元素 probe：checkpoint 函数调用轨迹 [1,0]，确认 no-grad 前向和反向重计算；CUDA 随机样本逐位一致，反向后 caller CUDA RNG state 保持不变，梯度 [3,3,3]，fallback 0→0。wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69；实现文件 SHA256 8f0042aa56b2a68b061d4975adaf1addd436d0056e0bd2553a91bd0b46a31b9b；复用 CUDA core SHA256 0e2fe909d3f33e27c220546693c40f27087357cefe198220f46c97f9a0353a90，前后不变且 build current。证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-checkpoint-cuda-r2/，artifact manifest SHA256 8eb50b0a5dc4150ee1fe2b605f24d33de2abd18523a4f2625c10f8dbdacfc744。该共享 GPU 正确性 probe 不提供性能或显存结论；正式 Day4–5 与更广 Day2–5 发布门仍未完成。
+
 ## 2026-11-03 03:27 +0800 checkpoint CUDA follow-up r1 在 pytest 前被 runner 阻断；无测试结论
 
 安装 wheel 的 CUDA follow-up 已准备独立目录并复用既有 CUDA core；runner 在校验模块来源时把 Torch shim namespace 当作普通模块读取 __file__，抛 AttributeError 后退出，耗时 1.37 秒，checkpoint 测试未启动。CUDA core SHA256 前后保持 0e2fe909d3f33e27c220546693c40f27087357cefe198220f46c97f9a0353a90，未发生重编译；错误只属于 runner 前置校验，不是产品测试失败，也不能算 CUDA checkpoint 通过。失败证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-checkpoint-cuda-r1/，artifact manifest SHA256 d4e0b478e0f28e0b6a1023dcc30d5d72199f4fc898e55bde9f9fa2a75cd3a8ce。GPU0 是共享卡，尝试后观测到 100% 利用率，因此没有重跑；GPU2 未暴露给该进程。CUDA checkpoint 正确性和正式 Day4–5 窗口仍开放。

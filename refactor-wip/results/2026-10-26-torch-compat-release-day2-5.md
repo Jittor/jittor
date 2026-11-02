@@ -1,3 +1,9 @@
+## 2026-11-03 03:31 +0800 installed main wheel CUDA checkpoint 重计算与 RNG 状态保持通过
+
+修正 r1 runner 的模块来源检查后，r2 在 current installed main wheel 上使用真实 CUDA 完成定向 probe。运行设备为物理 GPU0 UUID GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5（进程内 cuda:0），样本 shape [3]，总用时 12.68 秒。forward/recompute 调用轨迹为 [1,0]，调用两次的 CUDA 随机样本逐位相同；backward 后 caller CUDA RNG state 与 backward 前一致，梯度为 [3.0,3.0,3.0]，fallback 0→0。runner 校验了 installed Jittor/Torch shim/checkpoint 来源、CUDA core 路径、build current 与源码身份。checkpoint 文件 SHA256 8f0042aa56b2a68b061d4975adaf1addd436d0056e0bd2553a91bd0b46a31b9b；main wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69；复用 CUDA core SHA256 0e2fe909d3f33e27c220546693c40f27087357cefe198220f46c97f9a0353a90，前后未变。证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-checkpoint-cuda-r2/，artifact manifest SHA256 8eb50b0a5dc4150ee1fe2b605f24d33de2abd18523a4f2625c10f8dbdacfc744，文件校验通过。
+
+这是 current wheel 在 CUDA 上真实执行 checkpoint 重计算和 CUDA RNG 保存/恢复的功能证据；该 probe 极小且 GPU0 为共享负载，不支持速度或显存节省结论。CPU 兼容 Transformers 环境的 6/6 checkpoint suite 继续有效。前一 r1 attempt 的 namespace __file__ harness 错误及其原件保留；r2 通过 PathFinder spec 校验后实际执行成功。GPU2 正式性能/显存窗口仍待 cgq association 和独占 allocation；更广 Day2–5 发布门保持未完成。
+
 ## 2026-11-03 03:27 +0800 checkpoint CUDA runner r1 在测试前失败；不计为产品测试结果
 
 为在 current installed main wheel 上补充 CUDA checkpoint RNG 检查，准备了隔离 attempt 并复用已有 CUDA core。runner 成功加载 CUDA core，但在模块路径校验时把 Torch shim namespace 当作有 __file__ 的普通模块，抛出 AttributeError；pytest/测试函数均未运行。attempt 共 1.37 秒，returncode 1，core SHA256 前后相同为 0e2fe909d3f33e27c220546693c40f27087357cefe198220f46c97f9a0353a90，因此这是 runner 缺陷，不是 checkpoint CUDA 失败或通过。目录 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-checkpoint-cuda-r1/，artifact manifest SHA256 d4e0b478e0f28e0b6a1023dcc30d5d72199f4fc898e55bde9f9fa2a75cd3a8ce，全部包内哈希校验通过。
