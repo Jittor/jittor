@@ -8,7 +8,7 @@ version = "2.0.0"
 description = "Versioned optional third-party adapters for the Jittor Torch frontend"
 readme = "README.md"
 requires-python = ">=3.7"
-dependencies = ["jittor-torch==2.0.1"]
+dependencies = ["jittor-torch==2.0.2"]
 
 [project.entry-points."jittor.module_patches"]
 jittor_transformers = "jittor_adapters.transformers:register"
