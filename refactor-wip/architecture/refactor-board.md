@@ -1,3 +1,12 @@
+## 2026-11-02 18:17 +0800 接续：current-main CUDA 回归修复已聚焦验证；整体 Day2–5 仍未完成
+
+在现有 /home/cgq/jittor 工作区继续，HEAD 48c4065ea842bafa6bfdc6c40c7228ffa604b7dc，origin/cgq_transformers e5cffe1ae60c418f53c5bb1dca9182577fd2b81（ahead/behind 237/0）。attempt-09/11 启动前有 102 项既有 dirty/untracked，加上 7 项本任务源码改动共 109 项，index 为空；既有文件均保留。
+
+current-main Nox CUDA native 批次 attempt-07 收集 490 项，415 passed、71 skipped、3 xfailed、1 failed，22:40。唯一失败是 teardown 用例只接受 CUDA 错误码 700，而 A800/当前驱动对该非法地址访问返回 717；用例现接受两种合法错误名并仍核对 teardown 错误的报告顺序。attempt-09 聚焦复验 1 passed。此前针对原 8 项失败的 attempt-06 为 8/8 passed。Torch-shim CUDA TF32 attempt-11 在 GPU1 的 cuda:0 路径 5 passed、0 skipped，40.72s。更广的 Torch-shim 批次 attempt-10 收集 786 项，在共享 GPU1 上有 8 项通过后，因已观测到的运行速度无法在有界窗口内完成而有意中断；下一项 amax 被中断，不记为断言失败，也不能把该批次记作通过。完整 native batch 未因单个修复用例而重复。
+
+正式 Day4–5 GPU2 性能/显存验收仍等待管理员补 cgq Slurm association、恢复目标节点，并提供可核验的 GPU2 GRES/device-cgroup 独占租约；本轮没有暴露或操作 GPU2。三轮交替、每轮至少十个热态样本及 median/p95/离散度、加载/首步/热态耗时和 allocator/NVML 峰值要求不变。held-out generation quality、真实 activation recompute 显存证据、样本顺序核验后的两 rank 新进程 resume、stock PyTorch 对 JT portable optimizer.pt 的互操作、approved wheel baseline migration 和剩余 CUDA Torch-shim 范围仍开放。overall Day2–5 release **Not complete**。
+
+外部证据包：/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-torch-cuda-suite-r1-prepared/。attempt-07/09/10/11 的执行身份、日志、前后资源快照与哈希见 Day2–5 结果报告。
 ## 2026-11-02 17:15 +0800 current-main CUDA correctness 批次有 8 项失败；后半 Torch-shim 批次未运行
 
 在现有工作区执行时 HEAD 为 `fc5798bcdedfaf6271c1dadc1f04efa98f3d602f`，刚 fetch 的 origin/cgq_transformers 为 `e5cffe1ae60c418f53c5bb1dca9182577fd2b81`（ahead/behind 237/0）。Nox CUDA session 绑定 GPU1 UUID `GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068`，进程内映射为 cuda:0，GPU2 未暴露；CUDA core 228/228 编译与 CUDA probe 通过。首个 native process-mode batch 收集 490 项，结果 408 passed、8 failed、71 skipped、3 xfailed，38:54，退出码 1。失败包括三个外部测试算子被派发到 CPU 且无 CPU kernel、matmul/conv capability 结果数值正确但未出现预期 cuBLAS/cuDNN relay、两个 cuDNN 测试未观察到预期 dispatch log，以及 contract matrix 未登记 `my_cuda`/`no_cuda`。Nox 因此没有运行后续 Torch-shim batch：device parity、Torch CUDA TF32 和 tests/ops。该 run 是诊断性正确性证据，不能标记完整 CUDA gate 通过，也不是性能/显存证据。

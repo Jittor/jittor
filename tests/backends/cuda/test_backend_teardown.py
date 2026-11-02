@@ -95,8 +95,11 @@ _POISON_CONTEXT = textwrap.dedent("""
         print("THE-FAULT: %s" % fault, file=sys.stderr, flush=True)
     else:
         raise AssertionError("the out-of-bounds write was never reported")
-    assert ctypes.CDLL(None).cudaDeviceSynchronize() == 700  # cudaErrorIllegalAddress
-    print("POISONED", flush=True)
+    fault_code = ctypes.CDLL(None).cudaDeviceSynchronize()
+    # The driver may report an invalid global access as illegal-address (700)
+    # or invalid-address-space (717), depending on its virtual-address path.
+    assert fault_code in (700, 717), fault_code
+    print("POISONED:%d" % fault_code, flush=True)
 """)
 
 
@@ -116,7 +119,7 @@ class TestBackendTeardown(unittest.TestCase):
 
     def test_failing_teardown_is_reported_not_fatal(self):
         proc = _run_child(_TOUCH_BACKENDS + _POISON_CONTEXT)
-        self.assertIn("POISONED", proc.stdout)
+        self.assertIn("POISONED", proc.stdout, proc.stderr[-4000:])
         tail = proc.stderr[-8000:]
 
         # Before the fix: SIGABRT (returncode 134) and 'terminate called after
@@ -133,10 +136,12 @@ class TestBackendTeardown(unittest.TestCase):
         # broke the run outlives the cleanup noise instead of being replaced
         # by it. Both orderings are on the record -- the fault while the
         # process was still running, the teardown error after it.
-        self.assertIn("cudaErrorIllegalAddress", proc.stderr)
-        self.assertLess(proc.stderr.index("cudaErrorIllegalAddress"),
-                        proc.stderr.index("CUDA teardown error"),
-                        tail)
+        fault_names = ("cudaErrorIllegalAddress", "cudaErrorInvalidAddressSpace")
+        fault_positions = [proc.stderr.index(name) for name in fault_names
+                           if name in proc.stderr]
+        self.assertTrue(fault_positions, tail)
+        self.assertLess(min(fault_positions),
+                        proc.stderr.index("CUDA teardown error"), tail)
 
 
 if __name__ == "__main__":

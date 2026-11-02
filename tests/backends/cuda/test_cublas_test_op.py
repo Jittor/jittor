@@ -13,6 +13,7 @@ from jittor import compile_extern
 
 @_test_capability.library_required("cublas", backend=jt)
 class TestCublasTestOp(unittest.TestCase):
+    @jt.flag_scope(use_cuda=1)
     def test(self):
         from jittor.compile_extern import cublas_ops
         assert cublas_ops.cublas_test(2).data==123
@@ -22,6 +23,7 @@ class TestCublasTestOp(unittest.TestCase):
 
 @_test_capability.library_required("cudnn", backend=jt)
 class TestCudnnTestOp(unittest.TestCase):
+    @jt.flag_scope(use_cuda=1)
     def test(self):
         from jittor.compile_extern import cudnn_ops
         assert cudnn_ops.cudnn_test("").data == 123

@@ -1,3 +1,24 @@
+## 2026-11-02 18:17 +0800 本周主要成果与 current-main CUDA 回归继续；Day2–5 发布门仍开放
+
+### 最近一周主要成果（2026-10-26 至 2026-11-02）
+
+- **真实训练与续训：** current-main Qwen3-0.6B LoRA seed821 在真实 CUDA 上完成 102 次更新并从 step-51 新进程恢复；没有跳步或 fallback。两 epoch 微批次平均 loss 从 JT 1.205599 降至 1.153534，PyTorch 从 1.205680 降至 1.154064；固定 eval loss JT 2.456431、PyTorch 2.456644。这支持该源码、seed 和配置下的训练功能及相近趋势，不外推到其他模型或生成质量。公共 HF Trainer 单 rank checkpoint resume 与连续两步轨迹吻合；两 rank DDP Trainer 也有轨迹吻合证据，但最初 sample-order recorder 受预取影响，产生重复 ID，修正后的 recorder 目前仅有 CPU smoke，尚未完成对应的 CUDA 两 rank stop/resume 复核。
+- **分布式与状态恢复：** 修正 Torch barrier 的 ProcessGroup 后端路径；两 rank NCCL DCP toy 状态保存/恢复通过。FSDP2 全量状态恢复、optimizer 聚合及 GradScaler 等路径有针对性实现和双卡/定向证据。它们仍是各自覆盖范围的结果，不代替完整 Trainer/DDP 发布矩阵。
+- **安装包与发布检查：** 当前源码 wheel/sdist 往返及隔离安装、核心 selftest、core+compat autograd smoke 通过；approved wheel 对照仍失败，清单从基线 1,033 项变为候选 1,100 项，新增 69、变化 302、删除 2、批准项 0。没有改基线或 allowlist。stock PyTorch 不能读取 JT portable-pickle 格式的 optimizer.pt，跨框架序列化互操作仍单独开放。
+- **性能/显存和质量边界：** 正式 Day4–5 配对性能/显存验收未完成；activation-checkpoint shim 直接执行目标函数，没有证明实际 recompute 或显存节省。固定 Qwen fixture 生成结果来自 train 来源标签，不能作为 held-out quality 分数。整体 release 继续 **Not complete**。
+
+### 本轮 current-main CUDA 回归与源码修复
+
+运行使用现有 /home/cgq/jittor 工作区；HEAD 48c4065ea842bafa6bfdc6c40c7228ffa604b7dc，origin/cgq_transformers e5cffe1ae60c418f53c5bb1dca9182577fd2b81（237/0）。attempt-09 与 attempt-11 的工作树身份为 109 项 porcelain 状态 SHA256 60d38ff91953eec67b90660e7aae6b36295b1aa5ce2494d93e2d15042f167b6f，tracked diff SHA256 3758e321c9263353b3112a01ba0584ecbec88186ff4515fe65de8577112c3861，index 为空。测试只将 GPU1 UUID GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068 映射为 cuda:0；它是共享高负载 correctness run，不是性能或显存测量。
+
+本轮修复了七个任务文件中的 current-main CUDA 测试问题：CUBLAS/CUDNN 自测算子显式派发 CUDA 并将结果复制到设备输出；自测用例进入 CUDA scope；contract matrix 移到会注册临时自定义 op 的 CUDA 测试之前；matmul/conv capability 检查改为走 public API 并核验实际实现；cuDNN forward/backward 用例更新到现行 public conv2d 路径；teardown 测试接受该驱动返回的 700/717 两种非法地址代码，同时继续检查故障先于 teardown 错误报告。
+
+- attempt-07 完整 native process-mode 批次仍为 1 failed、415 passed、71 skipped、3 xfailed（490 collected，1360.82s）。唯一 failure 是上述 700/717 环境代码差异。修复后 attempt-09 单项复验通过；没有为了改变状态标签而重跑 22 分钟全批。
+- attempt-11 运行 compat/tests/torch/test_torch_compat_cuda_tf32.py，Nox CUDA probe 成功，5 passed、0 skipped、40.72s，退出码 0。
+- attempt-10 原计划覆盖 device parity、TF32 与 tests/ops，共收集 786 项；共享 GPU1 下先完成 8 项 device parity，随后在 amax 执行时有意中断。日志退出码 1 表示中断，不能解释为断言 failure 或完整 gate 通过；TF32 已由独立 attempt-11 完成，tests/ops 和 device parity 剩余项仍未覆盖。
+- 原始完整日志、取消批次、独立复验、pre/postflight 和 runner 均保存在 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-torch-cuda-suite-r1-prepared/evidence/，不覆盖旧 attempt。
+
+接下来先在有界窗口内拆分处理 Torch-shim CUDA 剩余范围，记录每个完成与未完成节点；不重复完整 native 批次。双 rank sample-order/resume、approved wheel baseline、held-out generation 和真实 activation recompute 仍需各自的实现/证据。GPU2 性能/显存套件等管理员 association、目标节点恢复及独占租约后再启动；不能用 correctness 结果替代 Day4–5 测量。
 ## 2026-11-02 17:15 +0800 current-main Nox CUDA correctness 批次发现 8 个失败；全套门禁未完成
 
 在 `/home/cgq/jittor` 现有工作区执行，未 clone、reset、stash 或 clean。运行绑定源码 HEAD `fc5798bcdedfaf6271c1dadc1f04efa98f3d602f`，origin/cgq_transformers `e5cffe1ae60c418f53c5bb1dca9182577fd2b81`（fetch 后 ahead/behind 237/0）；开跑工作区 102 项既有 dirty/untracked 状态的 porcelain SHA256 为 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`，tracked diff SHA256 为 `3ef743580bb7db38dbc9197f6f90e3182956d2bc29a55bce29c7eeea1bea6100`，index 为空。既有改动全部保留。

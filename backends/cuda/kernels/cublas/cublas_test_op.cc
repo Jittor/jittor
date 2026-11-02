@@ -15,6 +15,8 @@ namespace jittor {
 
 #ifndef JIT
 CublasTestOp::CublasTestOp(int size_mult) : size_mult(size_mult) {
+    set_flag(OpFlags::_cpu, 0);
+    set_flag(OpFlags::_cuda, 1);
     output = create_output(1, ns_float32);
 }
 
@@ -23,10 +25,12 @@ void CublasTestOp::jit_prepare(JK& jk) {
 }
 
 #else // JIT
-#ifdef JIT_cpu
+#ifdef JIT_cuda
 void CublasTestOp::jit_run() {
     ASSERT(cublas_test_entry(size_mult)==0);
-    output->ptr<T>()[0] = 123;
+    T result = 123;
+    auto status = cudaMemcpy(output->ptr<T>(), &result, sizeof(result), cudaMemcpyHostToDevice);
+    ASSERT(status == cudaSuccess) << cudaGetErrorString(status);
 }
 #endif
 #endif // JIT

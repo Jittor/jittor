@@ -115,14 +115,16 @@ class TestCudnnConvOp(unittest.TestCase):
             ) as raw_log:
                 x = jt.random(xshape)
                 w = jt.random(wshape)
-                y = conv_oihw(x, w, stride, padding, dilation)
+                x_nchw = x.transpose(0, 3, 1, 2).contiguous()
+                y = jt.nn.conv2d(x_nchw, w, None, stride, padding, dilation)
                 y.sync()
             with jt.flag_scope(use_cuda=0, enable_tuner=1):
                 cy = conv_oihw(x, w, stride, padding, dilation)
                 cy.sync()
             logs = find_log_with_re(raw_log, "(Jit op key (not )?found: cudnn_conv.*)")
             assert len(logs)==1 and "oihw" in logs[0][0], logs
-            assert np.allclose(y.data, cy.data), np.abs(y.data-cy.data).max()
+            actual = y.transpose(0, 2, 3, 1).data
+            assert np.allclose(actual, cy.data), np.abs(actual-cy.data).max()
         check([10,100,100,3], [5,3,3,3], stride=2, padding=0, dilation=1)
         check([10,40,50,4], [5,4,5,5], stride=1, padding=1, dilation=1)
         check([10,40,50,4], [5,4,4,4], stride=3, padding=1, dilation=1)
@@ -163,7 +165,7 @@ class TestCudnnConvOp(unittest.TestCase):
             ) as raw_log:
                 x = jt.random(xshape)
                 w = jt.random(wshape)
-                y = conv(x, w, stride, padding)
+                y = jt.nn.conv2d(x, w, None, stride, padding, dilation)
                 mask = jt.random(y.shape)
                 loss = mask * y
                 dx, dw = jt.grad(loss, [x, w])
@@ -171,7 +173,7 @@ class TestCudnnConvOp(unittest.TestCase):
 
             # fails when enable_tuner=1, something wrong with mkl_conv_backward_x maybe.
             with jt.flag_scope(use_cuda=0, enable_tuner=0):
-                cy = conv(x, w, stride, padding)
+                cy = jt.nn.conv2d(x, w, None, stride, padding, dilation)
                 closs = mask * cy
                 cdx, cdw = jt.grad(closs, [x, w])
                 jt.sync([cy, closs, cdx, cdw])

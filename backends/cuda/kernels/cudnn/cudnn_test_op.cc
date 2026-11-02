@@ -16,6 +16,8 @@ namespace jittor {
 
 #ifndef JIT
 CudnnTestOp::CudnnTestOp(string cmd) : cmd(move(cmd)) {
+    set_flag(OpFlags::_cpu, 0);
+    set_flag(OpFlags::_cuda, 1);
     output = create_output(1, ns_float32);
 }
 
@@ -24,7 +26,7 @@ void CudnnTestOp::jit_prepare(JK& jk) {
 }
 
 #else // JIT
-#ifdef JIT_cpu
+#ifdef JIT_cuda
 void CudnnTestOp::jit_run() {
     auto args = split(cmd, " ");
     if (!cmd.size()) args.clear();
@@ -32,7 +34,9 @@ void CudnnTestOp::jit_run() {
     for (uint i=0; i<args.size(); i++)
         v[i] = &args[i][0];
     ASSERT(cudnn_test_entry(v.size(), &v[0])==0);
-    output->ptr<T>()[0] = 123;
+    T result = 123;
+    auto status = cudaMemcpy(output->ptr<T>(), &result, sizeof(result), cudaMemcpyHostToDevice);
+    ASSERT(status == cudaSuccess) << cudaGetErrorString(status);
 }
 #endif
 #endif // JIT

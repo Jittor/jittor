@@ -214,7 +214,6 @@ CPU_TORCH_ORACLE_TESTS = (
     "tests/models/test_network_training_parity.py",
 )
 CUDA_TESTS = (
-    "tests/backends/cuda",
     # The cross-backend contract matrix (4.13). It is generated from the
     # registry, so this is the session where its accelerator column actually
     # executes -- and where it refuses to report a CUDA build's column as
@@ -222,6 +221,10 @@ CUDA_TESTS = (
     # tree: there it checks the matrix builder and the CPU column, and prints
     # the accelerator column's reason for being unverified.
     "tests/backends/parity/test_backend_contract_matrix.py",
+    # Run the registry snapshot before CUDA tests that register temporary
+    # custom ops. Those names belong to their test graph, not the backend-wide
+    # implementation registry and should not leak into this matrix.
+    "tests/backends/cuda",
     "tests/backends/parity/test_dtype_coverage.py",
     # The longest single entry in this gate by a wide margin: ~227 generated
     # cases at about a minute each. It stays in one process; the `cuda` session
