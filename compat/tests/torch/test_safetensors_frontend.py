@@ -7,6 +7,23 @@ import pytest
 from _helpers.child_process import run_python_child
 
 
+@pytest.mark.parametrize("name", ["x" * length for length in range(1, 9)])
+def test_safetensors_header_alignment_matches_native_encoder(name):
+    import struct
+    import numpy as np
+    import torch
+    st = pytest.importorskip("safetensors.torch")
+    native = pytest.importorskip("safetensors.numpy")
+
+    values = np.arange(6, dtype=np.float32).reshape(2, 3)
+    tensor = torch.tensor(values, device="cpu")
+    encoded = st.save({name: tensor})
+    assert encoded == native.save({name: values})
+    header_size = struct.unpack("<Q", encoded[:8])[0]
+    assert header_size % 8 == 0
+    np.testing.assert_array_equal(native.load(encoded)[name], values)
+
+
 def test_safetensors_frontend_dtype_device_and_numpy_owner(tmp_path):
     pytest.importorskip("safetensors")
     result = run_python_child(["-c", textwrap.dedent("""
