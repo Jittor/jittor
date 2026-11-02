@@ -1,6 +1,6 @@
 ## 2026-11-02 22:02 +0800 CPU BF16 optimizer restore Var metadata/dispatch diagnostic; release remains open
 
-在 HEAD/origin/cgq_transformers `ef0cea17cb8fc6c9af1c3fb733ae18d0e60fd460` 上完成一次有界 CPU trace，`CUDA_VISIBLE_DEVICES=`、`JT_BACKEND=cpu`、`JITTOR_NO_BUILD=1`、`backend_fallback=error`，0 fallback。复原前连续与恢复两侧的参数、梯度、一二阶矩数值逐项相同；可见 Var 元数据除地址外相同，只有恢复态 moments 的 `is_stop_grad=False)，连续态为 True。两侧均未选择 fused kernel，走同一 `adam_update(torch_math=True)` Python 路径。第二步参数相同，BF16 参数的 `exp_avg_sq` 差为 `[-1.903623342514038e-06, -6.676465272903442e-05]`。
+在 HEAD/origin/cgq_transformers `ef0cea17cb8fc6c9af1c3fb733ae18d0e60fd460` 上完成一次有界 CPU trace，`CUDA_VISIBLE_DEVICES=`、`JT_BACKEND=cpu`、`JITTOR_NO_BUILD=1`、`backend_fallback=error`，0 fallback。复原前连续与恢复两侧的参数、梯度、一二阶矩数值逐项相同；可见 Var 元数据除地址外相同，只有恢复态 moments 的 `is_stop_grad=False`，连续态为 True。两侧均未选择 fused kernel，走同一 `adam_update(torch_math=True)` Python 路径。第二步参数相同，BF16 参数的 `exp_avg_sq` 差为 `[-1.903623342514038e-06, -6.676465272903442e-05]`。
 
 只对恢复态 moments 原地设 stop-grad，且保留值与 storage 地址，差异仍然存在；所以 stop-grad 标志单独不是根因。先前重物化独立 Var 的控制可消除差异，根因仍未证明，本轮没有改算法或阈值。证据包 `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-cpu-bf16-var-dispatch-r1-prepared/`，manifest SHA256 `502fe1a89a4e1996094fe07cd2d919fe1d394d6c94efa2721f899376c981f8eb`。工作区既有 81 tracked dirty、21 untracked 和 index 空状态保持；GPU2 未用于测试，前后仍由外部工作占 45,880 MiB/100%。Day4–5 独占性能/显存及更广 Day2–5 发布门继续 **Not complete**。
 
