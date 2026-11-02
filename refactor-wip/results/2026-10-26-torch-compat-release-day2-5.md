@@ -1,3 +1,19 @@
+## 2026-11-02 08:20 +0800 R5 installed-wheel `.long()` 与完整 promotion 原断言 2/2 通过
+
+### 验证目的与方法
+
+attempt-07 的 R5 core10 原始结果为 227 passed、3 skipped，其中 `.long()` int64 和 mixed-dtype promotion 两项是源码中显式标记的 semantic skip，并未执行。当前 `compat/torch/installers/tensor/methods.py` 已包含 `_CAST_APIS["long"] -> int64` 和 mixed dtype binary promotion wrapper；为确认 skip 说明是否仍对应实际行为，本轮在 `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-installed-torch-focus-r1-prepared/attempt-20-dtype-unskip-pytest-cpu/` 建立隔离副本，只移除这两处 skip 装饰，原始断言及测试源保持不变。
+
+两个精确用例 `TestCastMethods.test_long_returns_int64_like_torch` 与 `TestTypePromotion.test_promotion_full_torch_lattice` 在 R5 installed wheel 上按正常 pytest/unittest 生命周期执行：2 passed、0 skipped/failed，pytest rc=0，fallback 0→0，core build 前后 current。Jittor、Torch、compat Torch 均从 R5 install 路径加载。R5 package artifact manifest SHA256 `38d4c7e162ed2246e34aaf0d7b67af6a926561acb77ae550f678c2f49b9f0037` 已前后校验一致。当前与 R5 test source SHA256 `acc1253dc5d3c1a169caf402989b1de1622a1deaa5b1958494cc0582ba714cea`；`tensor/methods.py` SHA256 `3718f32d7689d316c9afdba36593e021ae3be47bfab9bd771663980f3e0b24bc`，`tensor/method_api.py` SHA256 `b4b4f4afa5373884a46eb1a0ddeb155eef92ae69316938c5de13dd4b39e42e6b`，`python/jittor/_core/var.py` SHA256 `d6bff6f25f5b835922c60f91afd1882a5c941003e899fa53bdc39a275c535c03`；所列当前源码、R5 source 和安装文件字节一致。
+
+### 失败尝试与边界
+
+为保留执行过程，attempt-16 用 pytest 插件改写 skip 状态但用例仍被 unittest 跳过（0 assertion executed，runner 正确判为失败）；attempt-17 直接调用装饰后方法仍触发 SkipTest；attempt-18 调用 `__wrapped__` 原函数体，两个断言通过但不覆盖 pytest 生命周期；attempt-19 的隔离 pytest 插件因 hook 参数误命名为 `run_report`，在收集前 infrastructure failure。它们均保留且各自 manifest 已校验。最终 attempt-20 才是在隔离副本上正常收集并执行的 2/2 结果。attempt-20 artifact manifest SHA256 `09e49e0181f2f97094f73d0f29bd0722d58c58e07686a6fbbe790864bfffa462`，`run-result.json` SHA256 `a7a2dab7e6088bb238ba30a6aa2ec0b88fceb2b67108efdc4b01885691e8095a`，`raw.log` SHA256 `79a2a55592b8108f1b3afc95e3567e6897c0e6d0c5e0e78f0ad070c152d4e2fb`。attempt-16/17/18/19 manifests 依次为 `225545f070acc703553a979559b1b2f13c4fef5b876f7c137819bec80eea3069`、`55ed2226f63e5ce416b50acbb6966465d8f5f69a50725cc74f349a37ccd17718`、`ccf3b28c43023fd203fcc5ac3e2f931a4ee6ce68c94b0d85cf07a5e183688fa8`、`35b0e92816aa51b4bcf3ed4b9b2dd3f8879be8343d20baae042ab13c1ac6cffa`。
+
+新结果说明旧 skip 文案与本 R5 配置下的这两项实际 CPU 行为不符；它不改写 attempt-07 原始 3 skip，也不证明原始测试文件已通过、CUDA 行为、其他 dtype 组合或整体 suite。临时副本、support fixtures 与运行器全部留在 `/data6` attempt 目录，仓库测试和产品源码均未更改。HEAD 与 102 项既有工作区状态前后相同；cache 无文件新增/删除，仅 `jittor.lock` 元数据变化，执行后无测试进程。
+
+GPU2 本轮仍未用于测试：UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 仍 Default/shared，外部 PID 3037196、3164740 各占 8640 MiB；节点 `X12DPG-OA6` 仍为 DOWN（Node unexpectedly rebooted）。Day4–5 仍需管理员恢复节点并提供 UUID/GRES/device-cgroup 独占租约，再执行 capacity sweep 和三轮交替性能/显存 cohort；整体 Day2–5 release 继续 Not complete。
+
 ## 2026-11-02 08:08 +0800 R5 installed-wheel 单 rank gloo backend state 精确用例 1/1 通过
 
 ### 目的与执行范围

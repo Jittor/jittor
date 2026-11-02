@@ -1,3 +1,8 @@
+## 2026-11-02 08:20 +0800 Handoff：R5 installed-wheel 两个 dtype semantic skip 的原断言 2/2 通过
+
+attempt-20 在隔离测试副本中移除两处旧 skip 装饰，正常 pytest/unittest 执行 `.long()` int64 和 mixed dtype 完整 promotion 两项：2 passed、0 skipped/failed，fallback 0→0，core current；Jittor/Torch/compat Torch 来自 R5 install。artifact manifest SHA256 `09e49e0181f2f97094f73d0f29bd0722d58c58e07686a6fbbe790864bfffa462`。原套件 skip 与 attempt-16/17/19 harness 失败均保留；该结果限 R5 CPU 精确用例，不证明 CUDA 或整套 dtype 行为。
+
+GPU2 仍被外部任务占用，Slurm 节点 DOWN；正式 Day4–5 独占性能/显存门和整体 Day2–5 发布门未完成。
 ## 2026-11-02 08:08 +0800 Handoff：R5 installed-wheel 单 rank gloo backend state 精确用例通过
 
 attempt-15 在 R5 clean installed wheel 上只跑 `test_init_destroy_store_and_backend_validation`：1 passed、0 skipped/failed，fallback 0→0，core current；实际 Jittor/Torch/compat Torch 均来自 R5 install。测试 SHA256 `1befac44d0a236be2c1d0d79ed3a9fb6297db4378d6101e9d0c40e28927b7cfc`，distributed installer SHA256 `aef766fa290a29448e27df02481d4e60fd5366b21b5f3c6572b993e57dcfecd8`。artifact manifest SHA256 `4882726ecbe0161058e400b6881a27b551fcd8200ec20920f5613934c22171a0`。

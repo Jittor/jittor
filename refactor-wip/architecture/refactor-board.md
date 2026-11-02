@@ -1,3 +1,9 @@
+## 2026-11-02 08:20 +0800 R5 installed-wheel dtype 旧 skip 断言隔离 pytest 2/2 通过
+
+attempt-20 在 R5 installed wheel 上对测试文件临时副本只移除 `.long()` 和完整 promotion 两处旧 `unittest.skip`，按正常 pytest/unittest 生命周期执行原断言：2 passed、0 skipped/failed，fallback 0→0，core current。当前/R5 测试源 SHA256 `acc1253dc5d3c1a169caf402989b1de1622a1deaa5b1958494cc0582ba714cea`；方法安装器、method_api、Var 源与 R5 install 一致。artifact manifest SHA256 `09e49e0181f2f97094f73d0f29bd0722d58c58e07686a6fbbe790864bfffa462`。
+
+因此这两个精确 CPU 断言在当前 R5 包配置下通过；原 core10 的 227 passed、3 skipped 历史结果仍保留，当前仓库测试文件仍有 skip 标记，不能把隔离副本结果外推到 CUDA 或整套 dtype 矩阵。attempt-16/17 的绕过 skip 失败、attempt-19 的 pytest 插件签名错误及 attempt-18 的直接函数体通过均保留，各有 manifest。GPU2 仍共享占用，Slurm 节点 DOWN；Day4–5 正式性能/显存和整体 Day2–5 发布门仍未完成。
+
 ## 2026-11-02 08:08 +0800 R5 installed-wheel 单 rank gloo backend state 用例通过
 
 attempt-15 在 R5 clean installed wheel 上只执行 `test_init_destroy_store_and_backend_validation`：1 passed、0 skipped/failed，pytest rc=0，fallback 0→0，installed core 前后 current。`jittor`、`torch`、`jittor.compat.torch` 均从 R5 install 路径加载。测试和产品文件当前/R5 source SHA256 分别为 `1befac44d0a236be2c1d0d79ed3a9fb6297db4378d6101e9d0c40e28927b7cfc`、`aef766fa290a29448e27df02481d4e60fd5366b21b5f3c6572b993e57dcfecd8`，并与安装包内 distributed installer 一致。结果清单 SHA256 `4882726ecbe0161058e400b6881a27b551fcd8200ec20920f5613934c22171a0`。
