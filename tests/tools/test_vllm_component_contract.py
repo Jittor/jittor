@@ -116,6 +116,35 @@ def test_actual_maintained_adapter_identity_is_required(pair, change, monkeypatc
         compare()
 
 
+@pytest.mark.parametrize('change', ['changed', 'added', 'deleted', 'payload',
+                                    'missing_inventory', 'incomplete_inventory', 'symlink'])
+def test_complete_external_adapter_runtime_is_required(pair, change):
+    compare, values, _, _ = pair
+    binding = values[1]['adapter_distribution']
+    package = Path(binding['bootstrap']).parent
+    if change == 'changed':
+        (package / 'layers.py').write_text('# changed non-bootstrap runtime\n')
+    elif change == 'added':
+        (package / 'unrecorded.py').write_text('# extra runtime\n')
+    elif change == 'deleted':
+        (package / 'ops/buffers.py').unlink()
+    elif change == 'payload':
+        (package / 'ops/kernel.bin').write_bytes(b'changed compiled payload')
+    elif change == 'missing_inventory':
+        del binding['runtime_files_sha256']
+    elif change == 'incomplete_inventory':
+        del binding['runtime_files_sha256']['jittor_vllm/layers.py']
+    else:
+        path = package / 'layers.py'
+        payload = path.read_bytes()
+        path.unlink()
+        foreign = package.parent / 'foreign.py'
+        foreign.write_bytes(payload)
+        path.symlink_to(foreign)
+    with pytest.raises(ValueError, match='adapter'):
+        compare()
+
+
 @pytest.mark.parametrize('change', ['gradient', 'shape', 'dtype', 'nonfinite', 'extra', 'budget'])
 def test_missing_or_invalid_numeric_evidence_is_rejected(pair, change):
     compare, _, paths, arrays = pair

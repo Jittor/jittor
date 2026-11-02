@@ -26,6 +26,16 @@ def adapter_binding(root):
     bootstrap = adapter_root / 'jittor_vllm/bootstrap.py'
     bootstrap.parent.mkdir(parents=True)
     bootstrap.write_text('# maintained adapter fixture\n')
+    runtime = {
+        '__init__.py': b'# independent adapter package\n',
+        'layers.py': b'# maintained layer integration\n',
+        'ops/buffers.py': b'# nested runtime implementation\n',
+        'ops/kernel.bin': b'compiled payload fixture',
+    }
+    for relative, data in runtime.items():
+        path = bootstrap.parent / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
     metadata_root = root / 'candidate-site/jittor_vllm-2.0.0.dev6.dist-info'
     metadata_root.mkdir(parents=True)
     payloads = {'metadata': ('METADATA', 'Metadata-Version: 2.1\nName: jittor-vllm\nVersion: 2.0.0.dev6\n'),
@@ -40,6 +50,8 @@ def adapter_binding(root):
         paths[key] = path
     result = {key: str(path) for key, path in paths.items()}
     result.update({key + '_sha256': sha(path.read_bytes()) for key, path in paths.items()})
+    runtime['bootstrap.py'] = bootstrap.read_bytes()
+    result['runtime_files_sha256'] = {'jittor_vllm/' + name: sha(data) for name, data in runtime.items()}
     return result
 
 
