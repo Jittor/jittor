@@ -1,3 +1,11 @@
+## 2026-11-03 04:38 +0800 installed-wheel CUDA checkpoint/state_dict/DCP 套件 17/17 通过
+
+新增 attempt-05：test_checkpoint_state_dict.py 在真实 CUDA cuda:0 上 17 passed、0 failed/skip，用时 22.09 秒；fallback 0→0，CUDA core build current，SHA256 前后同为 0e2fe909d3f33e27c220546693c40f27087357cefe198220f46c97f9a0353a90。测试覆盖 model/optimizer 命名 state 恢复与继续更新、多 optimizer、参数组、DCP 默认 planner 单 rank roundtrip，以及 rank 错误传播路径。测试文件 SHA256 3fe8e900ffcaf5397c5b746beadfc5c4938f2bef90d26687680cc2cf6ca651d4。
+
+运行绑定已安装 compat wheel 中 SHA256 090b8ed3d9f1ff31719f2e34d03944ee22d8f3457389843c5a211ef35afb9f75 的 _preserve_target_dtypes_for_load 函数体，并使用已有 warm main-wheel Jittor/PyTorch shim 与 CUDA core；没有做新安装根冷编译。GPU0 是共享卡，执行前后分别采样为 7,539/7,489 MiB、96%/97% 利用率，本项只作功能正确性证据；GPU2 未用。两条 sharded-tensor opt-in 用例发出预期 RuntimeWarning，接口仍是缺少全局 shard metadata 的 no-op stub；这不代表完整 sharded tensor 或真实 multi-rank CUDA DCP 已实现。
+
+完整原始证据位于 /data6/cgq/jittor-lab/_state/release-day23/20261103-main-state-dict-placement-wheel-r1/attempt-05/，结果摘要在 attempt-05/result.json，artifact-manifest.sha256 的 SHA256 为 ff25633dd267d7073a29df311dda449b18a770bf2032baadafb9d954f9161dc7。本轮不增加性能/显存结论，也不关闭 cold-install wheel baseline；Day4–5 正式验收与更广 Day2–5 发布门仍未完成。
+
 ## 2026-11-03 04:34 +0800 新 compat wheel 已含 state_dict 修复；安装态序列化 39/39 通过
 
 基于已推送源码 HEAD 19a07871932743dae226107fc9403e756d56bdef 构建 jittor_torch compat wheel，wheel SHA256 740a9034c375e70b55ade864f75acbed7e492f09532bcf68ab64ac24a070b975；pip 安装到新隔离 target 成功。wheel 中 jittor/compat/torch/installers/nn/module_methods.py 与修复源码 SHA256 一致：090b8ed3d9f1ff31719f2e34d03944ee22d8f3457389843c5a211ef35afb9f75。compat/ 相对原 wheel source HEAD 35a1a7605ec475e9cbc1a9688afc299ee3bd8011 只有此模块与测试文件两项变化，后者不打包。
