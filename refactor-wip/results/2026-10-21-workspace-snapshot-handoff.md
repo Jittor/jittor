@@ -1,3 +1,9 @@
+## 2026-11-02 12:42 +0800 接续：两 rank NCCL DCP 玩具状态 save/load 通过；Trainer/性能仍未关闭
+
+当前 source fingerprint 60f17cf07f26eebfb54a5205ef8e0385c9d615ba29599f3435f5abda591e805b、HEAD 89e3ff259d677e3847b723fa5d5a3e5554d57a4c。在真实 GPU0/GPU1 NCCL 上，两 rank 对 rank-local CPU 模型权重、optimizer step/exp_avg、epoch/sample cursor 完成 DCP save/load 与 barrier，逐 rank 状态、metadata 和双 shard 检查通过，fallback delta=0。attempt-01/02 是 jit_utils 重建前置退出，attempt-03 停在资源 PID churn preflight；只有 attempt-04 运行到 DCP 用例并通过。证据路径和 artifact manifest SHA 见 Day2–5 报告 12:42 条目。
+
+这不是完整 HF Trainer 两 rank 训练、新进程续训或任务质量证据。继续排查 BERT attention-mask scalar bool/item 的完整 Trainer 停点时，使用阶段化检查和已验证的当前 NCCL barrier，避免原样重跑已超时的 Trainer attempt。GPU2 仍共享且缺 cgq association；Day4–5 正式性能/显存与更广 Day2–5 release 保持 Not complete。
+
 ## 2026-11-02 12:30 +0800 接续：CPU mock 证据已归档；终审保留当前 105 项工作区状态
 
 barrier attempt-05 执行前后 status hash 是 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，证据包没有保存对应路径清单。状态文档提交 70cce27810cbb447f99dd9ff65b291ff04526ba5 后，终审只读快照显示 105 项 dirty/untracked，hash 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98；相对记录多 3 项，但不能由现存证据定位差异，本轮未重置或清理。CPU mock 的通过范围、真实 NCCL 与 Trainer 的未验收状态见 Day2–5 报告顶部。

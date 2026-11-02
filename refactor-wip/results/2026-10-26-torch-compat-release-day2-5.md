@@ -1,3 +1,15 @@
+## 2026-11-02 12:42 +0800 current-source 两 rank NCCL DCP save/load 通过；旧 Trainer timeout 不作通过
+
+**目标与绑定。** 这次有界正确性检查用于确认提交 5a2a7c6caef9c9148aba47b599a5f53da9d7cc9e 的 Torch shim 到 ProcessGroup barrier 路径，能否让两 rank Distributed Checkpoint 在当前工作树上完成保存和恢复。最终 attempt 位于 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-ddp-dcp-after-barrier-r1-prepared/attempt-04-original-warm-cache-after-pid-churn/。HEAD 为 89e3ff259d677e3847b723fa5d5a3e5554d57a4c，source fingerprint 60f17cf07f26eebfb54a5205ef8e0385c9d615ba29599f3435f5abda591e805b，2824 个 source entries、105 项 dirty/untracked。前后 fingerprint 与状态 SHA256 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98 一致。与先前已通过的双 rank BERT/LoRA cache source 相比，src 与 backends 下 native 文件一致；current source 的改动在 Python compatibility/launch 与状态文档。
+
+**执行。** attempt-01 与 attempt-02 都将 warm cache 复制到新 JITTOR_HOME 后因 jit_utils 一次重建而退出 RC=3，日志明确说明 DCP 代码尚未运行。attempt-03 在 GPU0 首次采样观察到外部 PID churn 后停止于 preflight，没有启动 worker。为避免重复 cache relocation，attempt-04 串行使用之前通过的 warm cache 原绝对路径；独立保存了 68 MiB cache baseline 副本。物理 GPU0 UUID GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5 与物理 GPU1 UUID GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068；每个 worker 在本地报告 cuda:0，NCCL 初始化记录对应 NVML device 0/1。GPU2 排除。三次准入采样可用显存均超过 50,000 MiB；这是正确性检查，不作性能采样。
+
+**结果。** 两 rank 均通过 DCP save_start、load_start、pass；各自 barrier 与进程组生命周期完成，fallback delta=0。rank0 恢复自己的 model weight [0.25, 1.25]、optimizer step 7、exp_avg 和 epoch=3/sample=5；rank1 恢复 [1.25, 2.25]、step 8、exp_avg 和 epoch=3/sample=16。脚本对每项预期值、load 原目标 tensor identity 及 rank0 metadata 做断言。metadata 为 format=jittor-rank-local-dcp-v1、world_size=2、rank-00000.pt 与 rank-00001.pt；checkpoint 共 4 个文件。exit code=0，source/core 产品前后不变，jittor_core SHA256 ed4620e54f35edda5c8e9957a5e605f3a24f5cd84f9507b9359d21d85f00a9b4。共享 warm cache 从 1372 增至 1380 文件；基线副本保存在该 attempt 中。artifact-files.sha256 SHA256 d887b0cb4fe7d95a5210d9dc1b448b3f6c004cefc121b36d7a24e34eb0d4f043，清单逐项复核通过。
+
+这使当前源码具备一项真实两 rank NCCL DCP 保存/恢复证据，但 payload 是 CPU-resident toy state，不是实际训练中的 HF Trainer/optimizer 全链路或新进程 Trainer resume。此前 HF Trainer 在 BERT attention-mask scalar bool/item 停住的失败保留；本结果与它不同，不能推出旧 timeout 的根因已完全消失。代码未改，仓库 105 项 dirty/untracked 原样保留，未 push。
+
+终审资源状态：GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 为 Default/shared，17,299 MiB 使用中、利用率 92%，外部 PID 3037196 与 3164740 各占 8,640 MiB；cgq Slurm 队列为空，用户没有 account，仍需管理员添加 cgq association 才可申请独占 lease。Day4–5 正式配对性能/显存和容量边界、完整 HF Trainer checkpoint/resume、更广 Day2–5 发布门仍 Not complete。
+
 ## 2026-11-02 12:30 +0800 最终工作区快照与 attempt-05 状态签名不一致，所有既有改动已保留
 
 CPU 回归 attempt-05 的不可变证据记录执行前后 status hash 为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211；该包未保存对应 porcelain 路径列表。其后只提交三份状态文档，commit 70cce27810cbb447f99dd9ff65b291ff04526ba5，未 push。终审只读快照为 105 项 dirty/untracked、porcelain SHA256 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98，与 attempt-05 的 102 项记录相差 3 项。没有足够证据把差异归因到具体文件或操作者，本轮没有清理、覆盖、暂存或提交这些工作区路径。其余 attempt-05 结果与原始哈希保持不变。

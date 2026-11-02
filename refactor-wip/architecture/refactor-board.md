@@ -1,3 +1,9 @@
+## 2026-11-02 12:42 +0800 current-source 两 rank NCCL DCP save/load 通过；完整 Trainer 与性能门仍开放
+
+在 barrier 源码修复后的工作树上，attempt-04 使用真实 GPU0/GPU1 NCCL 完成 Distributed Checkpoint save、load、rank barrier 与各 rank 状态检查，fallback delta=0。来源 HEAD 89e3ff259d677e3847b723fa5d5a3e5554d57a4c，完整工作树 fingerprint 60f17cf07f26eebfb54a5205ef8e0385c9d615ba29599f3435f5abda591e805b；run 前后相同。详细配置、attempt-01/02 bootstrap 失败与 attempt-03 未启动的 preflight 记录见 Day2–5 报告顶部。
+
+本证据只覆盖很小的 rank-local 模型/optimizer/游标状态及 checkpoint 文件和 metadata，不等于 Transformers Trainer 完整训练、新进程训练恢复或任务质量通过。旧 HF Trainer mask scalar 停点仍需单独解决；GPU2 仍 Default/shared，17,299 MiB、利用率 92%，外部 PID 3037196/3164740。Day4–5 和更广 Day2–5 release 继续 Not complete。
+
 ## 2026-11-02 12:30 +0800 barrier CPU mock 通过；终审发现工作区快照有 3 项状态漂移
 
 attempt-05 CPU bootstrap 与 2 个 mock 用例结果已在提交 5a2a7c6caef9c9148aba47b599a5f53da9d7cc9e 的证据包中留档。其执行前后 status hash 均为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211。随后状态文档提交为 70cce27810cbb447f99dd9ff65b291ff04526ba5；最终只读检查显示 105 项 dirty/untracked，porcelain hash 为 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98。证据包只保留旧 hash、没有旧路径清单，因此无法从现存记录归因这 3 项差异；本轮未清理、覆盖或重置这些路径。GPU2 仍为 Default/shared，17,299 MiB、94%，外部 PID 3037196/3164740；队列无 cgq 作业。Day4–5 与更广发布门仍 Not complete。
