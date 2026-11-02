@@ -1,3 +1,7 @@
+## 2026-11-03 07:08 +0800 续接：held-out 超时 softmax 静态归因完成，CUDA 正确性探针等待稳定设备
+
+静态审计 attempt-05 的缓存，发现 203 个新增 FP32 warp-softmax `CodeOp` 分别绑定 203 个编译期宽度（15–269）；源实现按精确行宽生成源码，说明 shape-specific JIT 很可能是零输出超时的主要原因，但未量化编译占比，也未获得质量分数。按 `ceil(length/32)` 分桶的候选只完成设计，尚未做 CUDA 前向/梯度验证。首个 probe 在任何 softmax 运算前因 `jit_utils` 重建安全退出；第二次因 GPU0 三个五秒样本利用率 17%、100%、19% 未满足准入门槛而没有启动。GPU2 未触碰，源码未改。静态分析和准入记录详见主板及 Day2–5 记录中的路径与 SHA256；Day4–5 和整体 Day2–5 仍未完成。
+
 ## 2026-11-03 06:49 +0800 精确 main+compat wheel fresh target CPU Tensor 往返通过；Day4–5 与整体发布门继续开放
 
 以 main wheel `bab474943f9c9c45ee59c7582b83bf054c75bc511c2cef585ba5a504d9b7d055`（代码提交 `9a9096bb5588816ca0e090cbcb4c18a6e967ab0e`）和 compat wheel `740a9034c375e70b55ade864f75acbed7e492f09532bcf68ab64ac24a070b975`（代码提交 `19a07871932743dae226107fc9403e756d56bdef`）完成独立 pip target 验收。attempt-03 在 CPU 上完成安装态 Jittor core 冷构建（227/227，约 323.5 秒）；首轮 smoke 随后因 harness 读取 `torch.__file__` 停止，而 `TorchNamespace` 有意隐藏此 import metadata。修正后 attempt-05 预检确认加载 attempt-03 的原 core；attempt-06 从同一安装 target 实际导出 Jittor CPU `float32` Tensor `[0.25, -1.5, 3.0]`，独立 stock PyTorch 2.6.0+cu124 以 `weights_only=True` 读回相同 dtype、shape 和数值。JT 与 stock 结果均 PASS，归档 757 bytes、SHA256 `a1227cc1cf746d67608fad1fdfcb1f7757b9f87fcfda9a564b9ceb41adacab36`；fallback 0→0，core build current，core SHA256 前后同为 `2c8460f5af6e8d33d26b53df8b3f3c047c60851db5138e342cef0a2b7ca788e6`。证据目录 `/data6/cgq/jittor-lab/_state/release-day23/20261103-exact-main-compat-wheel-cold-root-r1/`，最终 manifest SHA256 `09267b8673d4429658c4f5ae01ca5a75acf12bbd51b1cbe2f304d213a9699768`，全项校验通过。

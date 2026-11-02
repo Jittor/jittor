@@ -1,3 +1,11 @@
+## 2026-11-03 07:08 +0800 Held-out 生成超时定位到按行宽特化的 softmax JIT；候选 CUDA 正确性验证等待稳定 GPU
+
+复核 attempt-05 的新增缓存源码：234 个新增 op `.so` 中有 203 个 fused FP32 warp-softmax `CodeOp`，对应 203 个不同编译期宽度（15–269）。源实现 `_softmax_warp_fp32_cls(length)` 以精确宽度为缓存键，且在 CUDA 源码中常量化 `ceil(length/32)`、列界与行 stride。该证据强烈支持自回归长度变化触发 shape-specific JIT 是 900 秒首条生成未完成的主要原因，但并未测出编译耗时占比、也没有输出任何 held-out 质量分数。静态审计目录为 `/data6/cgq/jittor-lab/_state/release-day23/20261103-qwen-heldout-softmax-shape-audit-r1/`。
+
+正在评估的候选是按 `ceil(length/32)` 分桶，用运行时 `len` 替代长度常量，保留原每 lane 运算顺序与 XOR reduction tree；观测宽度最多对应 9 个桶。一次隔离 probe attempt-01 在 softmax 前因 `jit_utils` 重建以设计的 exit 3 停止，未执行产品运算；更新后的辅助库现已留存，可供相同命令重启。未启动 attempt-02，因为 GPU0 三个相隔 5 秒样本的利用率为 17%、100%、19%，没达到预设连续稳定阈值；可用显存为 73,500 MiB，GPU2 完全未用。准入记录 manifest SHA256 `d70bd2e986014135a53c2c5bea158adf459a8fe58f82b8bfc343f454363d53cb`，失败前置 attempt manifest SHA256 `884038ae191f33825fae340ee7000159bbe4da3417b8580ca6ba99c292ffb29b`。因此目前没有候选核正确性结果、生成指标或性能结论，且没有改动仓库源码。
+
+下一步是等待 GPU0 满足预设准入后，做一次限量的前向/梯度等值探针；完整 held-out 生成配对与 Day4–5 正式性能/显存验收仍开放。overall Day2–5 release 不得标记完成。
+
 ## 2026-11-03 06:49 +0800 精确 main+compat wheel fresh target CPU Tensor 往返通过；Day4–5 与整体发布门继续开放
 
 以 main wheel `bab474943f9c9c45ee59c7582b83bf054c75bc511c2cef585ba5a504d9b7d055`（代码提交 `9a9096bb5588816ca0e090cbcb4c18a6e967ab0e`）和 compat wheel `740a9034c375e70b55ade864f75acbed7e492f09532bcf68ab64ac24a070b975`（代码提交 `19a07871932743dae226107fc9403e756d56bdef`）完成独立 pip target 验收。attempt-03 在 CPU 上完成安装态 Jittor core 冷构建（227/227，约 323.5 秒）；首轮 smoke 随后因 harness 读取 `torch.__file__` 停止，而 `TorchNamespace` 有意隐藏此 import metadata。修正后 attempt-05 预检确认加载 attempt-03 的原 core；attempt-06 从同一安装 target 实际导出 Jittor CPU `float32` Tensor `[0.25, -1.5, 3.0]`，独立 stock PyTorch 2.6.0+cu124 以 `weights_only=True` 读回相同 dtype、shape 和数值。JT 与 stock 结果均 PASS，归档 757 bytes、SHA256 `a1227cc1cf746d67608fad1fdfcb1f7757b9f87fcfda9a564b9ceb41adacab36`；fallback 0→0，core build current，core SHA256 前后同为 `2c8460f5af6e8d33d26b53df8b3f3c047c60851db5138e342cef0a2b7ca788e6`。证据目录 `/data6/cgq/jittor-lab/_state/release-day23/20261103-exact-main-compat-wheel-cold-root-r1/`，最终 manifest SHA256 `09267b8673d4429658c4f5ae01ca5a75acf12bbd51b1cbe2f304d213a9699768`，全项校验通过。
