@@ -1,3 +1,11 @@
+## 2026-11-03 05:02 +0800 独立 wheel 安装根冷构建与功能验收：56/56 通过
+
+以固定哈希的 main wheel（SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69，来源 HEAD 35a1a7605ec475e9cbc1a9688afc299ee3bd8011）和 compat wheel（SHA256 740a9034c375e70b55ade864f75acbed7e492f09532bcf68ab64ac24a070b975，来源 HEAD 19a07871932743dae226107fc9403e756d56bdef）重新 pip 安装到全新 target；新建隔离 JITTOR_HOME，从安装目录直接导入 jittor、torch shim 和兼容 helper，没有源码或运行时函数覆盖。独立 CUDA core 冷构建耗时 408.37 秒，core SHA256 0f75262b8518e40ce12769a7af79c8c70f21fbae9e4a796e86000decfd5ddc07，build current。
+
+attempt-01 的包身份和 cold build 已通过，但测试收集因隔离副本漏带 tests/_helpers 支持包而停止，pytest 未执行任何用例；shell 的后处理哈希命令也有转义错误。两项均按 harness 问题保留原件。attempt-02 补入绑定源码快照的 tests/_helpers 后，在同一 fresh install root 与已冷构建 core 上执行 test_checkpoint_state_dict.py 17/17 和 test_torch_compat_serialize.py 39/39，共 56 passed、0 failed/skip，用时 272.89 秒，fallback 0→0；core 哈希前后相同。两条 sharded-tensor opt-in 警告仍说明其接口是没有全局 shard metadata 的 no-op stub。
+
+执行使用共享 GPU0（UUID GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5），采样显存前后均为 7,539 MiB、利用率采样 18%→42%；仅作功能正确性证据，不作性能/显存结论，GPU2 未用。证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261103-independent-wheel-cold-root-r1/；artifact-manifest.sha256 SHA256 为 907589f9d08a5440d1c0452df2e82fceba96b9dd2d8c66406989cea35c35468e。该项关闭这两组用例的 fresh pip target/cold core 缺口，不等于完整 wheel migration baseline，也不证明真实 multi-rank CUDA DCP 或完整 sharded tensor。Day4–5 正式性能/显存与更广 Day2–5 发布门仍未完成。
+
 ## 2026-11-03 04:38 +0800 installed-wheel CUDA checkpoint/state_dict/DCP 套件 17/17 通过
 
 新增 attempt-05：test_checkpoint_state_dict.py 在真实 CUDA cuda:0 上 17 passed、0 failed/skip，用时 22.09 秒；fallback 0→0，CUDA core build current，SHA256 前后同为 0e2fe909d3f33e27c220546693c40f27087357cefe198220f46c97f9a0353a90。测试覆盖 model/optimizer 命名 state 恢复与继续更新、多 optimizer、参数组、DCP 默认 planner 单 rank roundtrip，以及 rank 错误传播路径。测试文件 SHA256 3fe8e900ffcaf5397c5b746beadfc5c4938f2bef90d26687680cc2cf6ca651d4。
