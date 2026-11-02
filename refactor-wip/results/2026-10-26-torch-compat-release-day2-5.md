@@ -1,3 +1,15 @@
+## 2026-11-02 19:36 +0800 CPU BF16 trace 仍未进入测试体；CUDA cache 不适配 CPU build 配置
+
+继续使用现有 `/home/cgq/jittor`，HEAD `b7b686ee0a0db3fceae4fff174e71eed40257708`，origin/cgq_transformers `e5cffe1ae60c418f53c5bb1dca9182577fd2b81`（ahead/behind 244/0）。启动前后源码工作区均恢复到既有 102 项 dirty/untracked，porcelain SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`，tracked diff SHA256 `3ef743580bb7db38dbc9197f6f90e3182956d2bc29a55bce29c7eeea1bea6100`；index 为空。临时跟踪脚本已移到外部证据包。
+
+只读找到同日 current-source CUDA focused attempt-03 使用的已编译 cache，并复制到新的隔离目录，没有改动原包。原包 source-files 清单 SHA256 `4e4d5a9b499987abe141d45c2f13c020cf53c3cd3fc0f808adad4ed604a5fcf1` 对照当前源文件全量核验无差异，相关 optimizer、测试和 PyJT binding 文件哈希一致；原缓存 Jittor core SHA256 `1b02f30ec14e6dfefe911b4b692a39884bbf29dcece4363b317a04b0defcf3c5`，该原包 attempt-03 曾有 pytest exit 0 的定向 CUDA 证据。
+
+本轮 attempt-01 在 `jit_utils` 重建后依 Jittor 提示退出 3，测试体未运行。只重启一次的 attempt-02 使用空 `CUDA_VISIBLE_DEVICES`、`use_cuda=0` 和 CPU test selection，但启动后仍编译生成的 `pyjt_grad.cc`、`pyjt_jit_op_maker.cc` 等 core 对象；按预算在约 49 秒停止并记录 exit 143，测试体未运行。隔离 cache 文件仍为 1,261 项，新增 0、删除 0，60 项哈希变化；部分编译状态完整保留且不复用。诊断未使用 GPU，也没有发现 CPU BF16 discrepancy 的根因。
+
+新证据包 `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-cpu-bf16-trace-matched-runtime-r1-prepared/`，artifact-files 清单 SHA256 `fc5c492c43e69ae4a14b776557271b59bd5a974140edc100a3b8381fb968314f`；attempt-01 log SHA256 `814b9217559ba948fbeabc54ebc19cf75da0e12e7d35bcfb5235e2bc316a202d`，attempt-02 log SHA256 `bc7a6153cb0c4b243a421a415b19dc88e43c3097aa478f7570b32d31f8d629d7`，exit receipt 为 3 和 143。下一步需要使用 `use_cuda=0` 的 current-source CPU runtime/cache，或取得有界 CPU core build 窗口；本轮不再重复同一 CUDA-cache/CPU-config 启动。
+
+GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 仍被外部进程占用，45,880 MiB、utilization 100%；GPU2 性能/显存验收仍等管理员添加 cgq Slurm association、恢复节点并提供可核验独占租约。overall Day2–5 **Not complete**。
+
 ## 2026-11-02 19:28 +0800 CPU BF16 梯度/moment 跟踪仍未进入测试体；Day2–5 未完成
 
 继续沿用 `/home/cgq/jittor`，HEAD `bbe0d7e527e4631df95449d811208ac584afb127`，origin/cgq_transformers `e5cffe1ae60c418f53c5bb1dca9182577fd2b81`，ahead/behind `243/0`。实验前后仓库均为既有 102 项 dirty/untracked，porcelain SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`，tracked diff SHA256 `3ef743580bb7db38dbc9197f6f90e3182956d2bc29a55bce29c7eeea1bea6100`，index 为空；临时跟踪测试已移入证据包，源码工作区回到原状态。

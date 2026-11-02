@@ -1,3 +1,9 @@
+## 2026-11-02 19:36 +0800 CPU BF16 trace 再次被 core build 阻断；Day2–5 未完成
+
+找到了同日 current-source CUDA focused 成功 attempt-03 的预编译 cache，并完整核验其源文件清单与当前代码一致；复制到新的隔离目录后以 CPU 配置启动。attempt-01 因 `jit_utils` rebuild exit 3；按提示的唯一一次重启 attempt-02 开始编译 Jittor core 对象，按预算停止、exit 143，测试体均未运行。隔离 cache 保留 1,261 项，60 项哈希变化；原 cache 未改。证据包 `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-cpu-bf16-trace-matched-runtime-r1-prepared/`，manifest SHA256 `fc5c492c43e69ae4a14b776557271b59bd5a974140edc100a3b8381fb968314f`。
+
+下一步需要 current-source `use_cuda=0` 预编译 CPU cache 或有界 CPU core build 窗口；CPU BF16 差异仍未定位。GPU2 正式 Day4–5 仍等 cgq association、节点恢复和独占租约；overall release **Not complete**。
+
 ## 2026-11-02 19:28 +0800 CPU BF16 restore discrepancy 仍未定位；Day2–5 未完成
 
 按上一轮提示重启了 CPU BF16 梯度/moment trace。attempt-01 在 `jit_utils` rebuild 后 exit 3；attempt-02 进入新 Jittor core 编译并按预算提前停止、exit 143，两个 attempt 都没有执行测试体。证据包 `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-cpu-bf16-trace-nox-r1-prepared/` 的 manifest SHA256 `5ff466fd1029665f3fc3a5abc2a77e33b5efd6e2519c034dd80074b24850a76a`。临时脚本已移出仓库，102 项既有工作区指纹与 tracked diff 未变。源码检查没有足够证据判定梯度或 moment 更新根因，也没有源码修复。

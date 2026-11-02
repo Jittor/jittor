@@ -1,3 +1,9 @@
+## 2026-11-02 19:36 +0800 Handoff：CPU BF16 trace 在匹配源码的 CUDA cache 上仍触发 core build
+
+HEAD `b7b686ee0a0db3fceae4fff174e71eed40257708`、origin `e5cffe1ae60c418f53c5bb1dca9182577fd2b81`（ahead/behind 244/0）。同日 current-source CUDA focused cache 的 source manifest 与当前文件全量一致，但其 CUDA build 配置在 `use_cuda=0` 运行仍触发 core 对象编译。attempt-01 因 `jit_utils` rebuild exit 3；唯一重启 attempt-02 开始编译 `pyjt_grad.cc`、`pyjt_jit_op_maker.cc`，提前停止、exit 143，trace 代码未运行。证据包 `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-cpu-bf16-trace-matched-runtime-r1-prepared/`，manifest SHA256 `fc5c492c43e69ae4a14b776557271b59bd5a974140edc100a3b8381fb968314f`。运行后回到 102 项 dirty/untracked 基线，porcelain SHA `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`，tracked diff SHA `3ef743580bb7db38dbc9197f6f90e3182956d2bc29a55bce29c7eeea1bea6100`。
+
+先取得 current-source CPU 配置的预编译 cache 或有界 CPU core build 窗口，再做梯度/state trace；GPU2 正式 Day4–5 仍需管理员 association、节点恢复和可验证独占租约，overall release **Not complete**。
+
 ## 2026-11-02 19:28 +0800 Handoff：CPU BF16 trace 因 core 编译停止；等待匹配预编译 runtime/cache
 
 沿用 `/home/cgq/jittor`，HEAD `bbe0d7e527e4631df95449d811208ac584afb127`，origin `e5cffe1ae60c418f53c5bb1dca9182577fd2b81`（ahead/behind 243/0）。本轮只读 optimizer restore/AdamW 路径；现有证据不足以解释 CPU BF16 `exp_avg_sq` 分叉，未改源码或阈值。attempt-01 因 `jit_utils` rebuild exit 3；依提示的一次 attempt-02 因新 core 编译触发预算停止、exit 143，trace 函数未运行。隔离证据包 `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-cpu-bf16-trace-nox-r1-prepared/`，manifest SHA256 `5ff466fd1029665f3fc3a5abc2a77e33b5efd6e2519c034dd80074b24850a76a`。结束后工作区恢复 102 项 dirty/untracked 基线，porcelain SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`、tracked diff SHA256 `3ef743580bb7db38dbc9197f6f90e3182956d2bc29a55bce29c7eeea1bea6100`。
