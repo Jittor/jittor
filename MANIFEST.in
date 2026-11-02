@@ -841,6 +841,8 @@ include src/runtime/profiler/cache_info.cc
 include src/runtime/profiler/cache_info.h
 include src/runtime/profiler/memory_checker.cc
 include src/runtime/profiler/memory_checker.h
+include src/runtime/profiler/memory_history.cc
+include src/runtime/profiler/memory_history.h
 include src/runtime/profiler/profiler.cc
 include src/runtime/profiler/profiler.h
 include src/runtime/profiler/profiler_guard.h

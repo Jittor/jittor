@@ -146,6 +146,54 @@ Beyond `prof.summary()`, the structured data is in:
 `prof.step()` marks a step boundary. `jt.profiling.record_function(name)` marks a
 host interval in the trace.
 
+## Memory over a whole run: snapshots and allocator statistics
+
+`jt.profile` answers one region. To see how memory grows and fragments over a
+whole training run, use PyTorch's tools; the calls and what they produce are
+those of PyTorch 2.11:
+
+```python
+jt.profiling.record_memory_history(max_entries=100000)   # torch.cuda.memory._record_memory_history
+train()
+jt.profiling.dump_memory_snapshot("snap.pickle")          # torch.cuda.memory._dump_snapshot
+jt.profiling.record_memory_history(None)
+print(jt.profiling.memory_summary())                      # torch.cuda.memory_summary's table
+```
+
+In Torch compatibility mode `torch.cuda.memory._record_memory_history/_snapshot/_dump_snapshot`,
+`torch.cuda.memory_snapshot`, `memory_stats`, `memory_summary` and
+`reset_accumulated_memory_stats` are these functions.
+
+- **Snapshot**: the pickle has PyTorch's keys, actions (`segment_alloc`/`alloc`/
+  `free_requested`/`free_completed`/`segment_free`/`oom`/`snapshot`) and nesting, so
+  it opens in <https://pytorch.org/memory_viz> and reads with `torch.cuda._memory_viz`
+  (`segsum`, `trace_plot`, `segment_plot`). The records come from the SFRL pools
+  themselves (`src/runtime/profiler/memory_history.{h,cc}`): a segment is what a pool
+  got from the driver, a block what was split out of it, and addresses are real
+  device addresses. `enabled="state"` keeps only the live blocks, `"all"` the whole
+  trace too; `context` chooses whether stacks are kept; `max_entries` keeps the newest
+  entries per device; stopping discards the records, as in PyTorch.
+  `jt.profiling.record_function` ranges go to `external_annotations`.
+- **Stacks**: under lazy execution a block is allocated when the graph runs, and the
+  Python stack at that moment is the line that forced execution. A tensor's block
+  therefore carries the full Python stack **that built its operator** (innermost
+  frame first); a library workspace is charged to the operator running; a free, and
+  an allocation outside the executor, carry the stack of the moment (when the thread
+  holds the GIL). Frames are Python only, no C++ (`stacks="all"` equals `"python"`).
+- **Statistics**: `memory_stats()` has every key of `torch.cuda.memory_stats` --
+  allocation, segment, active and inactive-split counts and bytes, reserved and
+  requested bytes, each for the all/small/large pools as current/peak/allocated/
+  freed, and `num_alloc_retries`, `num_ooms`, `num_device_alloc/free`. They are
+  counted on every pool allocation, free and segment change
+  (`sfrl_device_memory_stats`); `memory_summary()` matches PyTorch's layout
+  character for character (titled Jittor in the native API, PyTorch in Torch mode).
+
+Numbers differ from PyTorch's where the allocator does, not the recording: small
+segments are 1 MiB (PyTorch: 2 MiB), blocks are 512-byte aligned and belong to
+their segment's pool; frees do not wait behind a stream, so `free_requested` and
+`free_completed` coincide; with no `max_split_size` nothing is oversize; cuBLAS
+workspaces are not allocated from the pools and do not appear in a snapshot.
+
 ## Graph replay
 
 Once `jt.graph_replay` has recorded a device graph, a step is a single

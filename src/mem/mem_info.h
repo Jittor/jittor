@@ -71,9 +71,25 @@ int64 device_memory_peak(int device);
 int64 device_memory_reserved_peak(int device);
 
 /// Restart both high-water marks (allocated and reserved) at their current
-/// values, like torch's ``reset_peak_memory_stats``.
+/// values, like torch's ``reset_peak_memory_stats``; the peaks of
+/// :func:`device_memory_stats` restart with them.
 // @pyjt(reset_device_memory_peak)
 void reset_device_memory_peak(int device);
+
+/**
+ * The statistics torch's caching allocator keeps, for one device's pools:
+ * allocations, segments, active and inactive-split blocks and their bytes,
+ * reserved and requested bytes, each for all/small/large pools as current,
+ * peak, allocated and freed; then alloc retries, OOMs, segment allocations and
+ * segment frees. Flat, in the order of `SfrlStat`/`SfrlCounter`
+ * (mem/allocator/sfrl_allocator.h); `torch.cuda.memory_stats` names them.
+ */
+// @pyjt(device_memory_stats)
+vector<int64> device_memory_stats(int device);
+/// Restart the allocated/freed totals and the counters, like torch's
+/// ``reset_accumulated_memory_stats``.
+// @pyjt(reset_device_memory_accumulated)
+void reset_device_memory_accumulated(int device);
 
 /**
  * Every byte the pools have handed out for Vars on one device since the

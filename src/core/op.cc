@@ -26,6 +26,7 @@
 #include "ops/op_register.h"
 #include "utils/graph_build_profile.h"
 #include "runtime/rematerialization_scope.h"
+#include "runtime/profiler/memory_history.h"
 
 namespace jittor {
 
@@ -83,6 +84,8 @@ bool lookup_unrecorded_view_edge(Node* source, Node* target) {
 Op::Op() {
     rematerialization_owner = rematerialization_construction_owner();
     launch_origin = capture_launch_origin();
+    if (PREDICT_BRANCH_NOT_TAKEN(memory_history_mode & mh_alloc_stacks))
+        memory_stack = capture_memory_stack();
     float32_precision = current_float32_precision_policy();
     flags.set(NodeFlags::_var, 0);
     set_flag(OpFlags::_cpu, 1);

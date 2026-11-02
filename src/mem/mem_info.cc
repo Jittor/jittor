@@ -367,6 +367,14 @@ void reset_device_memory_peak(int device) {
     sfrl_reset_device_peak(device);
 }
 
+vector<int64> device_memory_stats(int device) {
+    return sfrl_device_memory_stats(device);
+}
+
+void reset_device_memory_accumulated(int device) {
+    sfrl_reset_device_accumulated(device);
+}
+
 int64 device_memory_window_start(int device) {
     return sfrl_device_window_start(device);
 }

@@ -127,7 +127,8 @@ void note_graph_launch_begin();
 void note_graph_launch_end();
 
 // Set around `Allocator::alloc` in `Var::alloc`, so a pool event can name the
-// Var it is for.
+// Var it is for (and the memory history, its producer's stack).
+Var* step_trace_current_var();
 struct StepTraceVarScope {
     Var* saved = nullptr;
     bool on = false;

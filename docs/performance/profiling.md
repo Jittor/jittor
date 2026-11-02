@@ -127,6 +127,44 @@ pip install "jittor[profile]"   # nvidia-cuda-cupti-cu12==12.2.142，对应 jitt
 `prof.step()` 标记步边界。`jt.profiling.record_function(name)` 在 trace 里标一段主机
 区间。
 
+## 整段运行的显存：快照与分配器统计
+
+`jt.profile` 回答一个区域；要看一整段训练里显存怎么涨、碎在哪，用 PyTorch 的那套工具，
+接口与产物和 PyTorch 2.11 相同：
+
+```python
+jt.profiling.record_memory_history(max_entries=100000)   # torch.cuda.memory._record_memory_history
+train()
+jt.profiling.dump_memory_snapshot("snap.pickle")          # torch.cuda.memory._dump_snapshot
+jt.profiling.record_memory_history(None)
+print(jt.profiling.memory_summary())                      # torch.cuda.memory_summary 的表
+```
+
+Torch 兼容模式下 `torch.cuda.memory._record_memory_history/_snapshot/_dump_snapshot`、
+`torch.cuda.memory_snapshot`、`memory_stats`、`memory_summary`、`reset_accumulated_memory_stats`
+就是这些函数。
+
+- **快照**：pickle 的键、动作（`segment_alloc`/`alloc`/`free_requested`/`free_completed`/
+  `segment_free`/`oom`/`snapshot`）和嵌套与 PyTorch 的相同，可以直接拖进
+  <https://pytorch.org/memory_viz>，也能用 `torch.cuda._memory_viz`（`segsum`、`trace_plot`、
+  `segment_plot`）读。记录来自 SFRL 池本身（`src/runtime/profiler/memory_history.{h,cc}`）：
+  段是池向驱动要的那一块，块是段里切出来的那一块，地址是真实设备地址。
+  `enabled="state"` 只记当前活着的块，`"all"` 再记全过程；`context` 决定记不记栈；
+  `max_entries` 每卡保留最新的若干条；停止时清掉记录，与 PyTorch 一样。
+  `jt.profiling.record_function` 的区间写进 `external_annotations`。
+- **栈**：惰性执行下，块分配发生在执行时，那一刻的 Python 栈是触发执行的那行。所以张量块记的是
+  **建出它的算子时**的完整 Python 栈（最内层在前）；库的工作区记到正在跑的算子；释放和执行器外的
+  分配记当下的栈（持有 GIL 时）。只有 Python 帧，没有 C++ 帧（`stacks="all"` 与 `"python"` 相同）。
+- **统计**：`memory_stats()` 有 `torch.cuda.memory_stats` 的全部键——分配、段、活跃与
+  inactive split 的块数和字节、保留与请求字节，按 all/small/large 池各给 current/peak/
+  allocated/freed，以及 `num_alloc_retries`、`num_ooms`、`num_device_alloc/free`。计数在池的
+  每次分配、释放、段增减时更新（`sfrl_device_memory_stats`）；`memory_summary()` 的版式与
+  PyTorch 逐字符相同（原生 API 标题写 Jittor，兼容模式写 PyTorch）。
+
+与 PyTorch 数字不同的地方来自分配器本身，不是记录方式：小段是 1 MiB（PyTorch 2 MiB），块按 512 B
+对齐，块属于它所在段的池；释放不排在流后面，所以 `free_requested` 与 `free_completed` 同时发生；
+没有 `max_split_size`，因此没有 oversize 分配和段；cuBLAS 工作区不从池里分配，不出现在快照里。
+
 ## 图重放
 
 `jt.graph_replay` 录成设备图之后，一步只剩一次 `graph_launch`，执行器不运行——旧的

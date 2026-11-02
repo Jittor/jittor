@@ -38,6 +38,10 @@ The older tools remain: ``jt.profile_scope``/``jt.profiler`` is a per-operator
 kernel micro-benchmark (it synchronizes and optionally re-runs each operator),
 and ``profile_memory_enable`` with ``jt.get_max_memory_treemap`` a
 ``trace_py_var``-based memory tree. See ``docs/performance/profiling.md``.
+
+For a whole run rather than a region, ``record_memory_history`` keeps every
+device allocation and free with its Python stack, and ``dump_memory_snapshot``
+writes them as the pickle PyTorch's memory_viz opens.
 """
 
 import time
@@ -47,11 +51,16 @@ import jittor_core as _core
 
 from . import _cupti
 from ._memory import MemoryReport
+from ._memory_history import (dump_memory_snapshot, memory_snapshot, note_annotation,
+                              record_memory_history)
+from ._memory_stats import memory_stats, memory_summary, reset_accumulated_memory_stats
 from ._report import ProfileResult
 from ._sampler import NvmlSampler, PythonSampler
 
 __all__ = ["profile", "Profile", "ProfileResult", "MemoryReport", "record_function",
-           "register_replay_source"]
+           "register_replay_source", "record_memory_history", "memory_snapshot",
+           "dump_memory_snapshot", "memory_stats", "memory_summary",
+           "reset_accumulated_memory_stats"]
 
 _ST_OPS, _ST_MEMORY, _ST_SHAPES = 1, 2, 4
 _replay_sources = weakref.WeakSet()
@@ -287,11 +296,13 @@ class record_function:
 
     def __enter__(self):
         self._id = _core.step_trace_range_begin(self.name)
+        note_annotation("START", self.name)
         return self
 
     def __exit__(self, *exc):
         _core.step_trace_range_end(self._id)
         self._id = -1
+        note_annotation("END", self.name)
         return False
 
     def __call__(self, fn):

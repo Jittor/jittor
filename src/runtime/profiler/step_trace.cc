@@ -10,6 +10,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include "runtime/profiler/step_trace.h"
+#include "runtime/profiler/memory_history.h"
 #include "runtime/launch_diagnostics.h"
 #include "runtime/executor_entry.h"
 #include "runtime/holder_state.h"
@@ -497,8 +498,10 @@ void note_graph_launch_end() {
         if (it->kind == ok_graph_launch) { end_record(it->seq); return; }
 }
 
+Var* step_trace_current_var() { return current_var; }
+
 StepTraceVarScope::StepTraceVarScope(Var* v) {
-    if (PREDICT_BRANCH_NOT_TAKEN(step_trace_mode & st_memory)) {
+    if (PREDICT_BRANCH_NOT_TAKEN((step_trace_mode & st_memory) | memory_history_mode)) {
         on = true;
         saved = current_var;
         current_var = v;
