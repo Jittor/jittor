@@ -1,3 +1,13 @@
+## 2026-11-03 04:34 +0800 新 compat wheel 已含 state_dict 修复；安装态序列化 39/39 通过
+
+基于已推送源码 HEAD 19a07871932743dae226107fc9403e756d56bdef 构建 jittor_torch compat wheel，wheel SHA256 740a9034c375e70b55ade864f75acbed7e492f09532bcf68ab64ac24a070b975；pip 安装到新隔离 target 成功。wheel 中 jittor/compat/torch/installers/nn/module_methods.py 与修复源码 SHA256 一致：090b8ed3d9f1ff31719f2e34d03944ee22d8f3457389843c5a211ef35afb9f75。compat/ 相对原 wheel source HEAD 35a1a7605ec475e9cbc1a9688afc299ee3bd8011 只有此模块与测试文件两项变化，后者不打包。
+
+直接从新 target 导入 Jittor 会按安装根路径选择新的 core cache key；JITTOR_NO_BUILD=1 在测试前安全拒绝了该 cold build，未编译。Jittor 又会在 import 阶段预先导入 compatibility 模块，单纯 path overlay 不能替换已加载模块。本轮因此从已安装新 compat wheel 的 module_methods.py 精确载入 _preserve_target_dtypes_for_load 函数体到匹配的 warm main-wheel 模块 globals，再运行完整序列化套件。结果 39 passed、0 failed/skip、2.20s，CPU 与真实 CUDA both_devices 分支均执行；设备为 GPU0 UUID GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5 / cuda:0，fallback 0→0。复用 CUDA core build current，SHA256 前后均为 0e2fe909d3f33e27c220546693c40f27087357cefe198220f46c97f9a0353a90，GPU2 未用。
+
+证据根目录 /data6/cgq/jittor-lab/_state/release-day23/20261103-main-state-dict-placement-wheel-r1/，artifact manifest SHA256 db39a2e5b8f02d2028a180f570c168b2288ce9e50ea7c26abd728e6cddf14a0c；成功回归 attempt-04。attempt-01 的 wrapper/CRLF、attempt-02 的 no-build cache key、attempt-03 的 eager import path overlay 失败，以及 attempt-04 的前两次 runner 检查错误都保留在同一证据根，不作为产品测试失败；最终 attempt-04 preflight 与完整套件均 rc=0。
+
+此项证明新 compat wheel 中的修复函数与既有相同 main wheel/core 配套时通过完整功能套件；不等于新 Jittor root 的冷安装，也不批准整体 wheel migration baseline。此前修复源码/测试 commit 31baba861ec61da8fe0467228fec6b00e0dcd718 已推送 cgq_transformers，无 PR，未合并 2.0-refactor。stock PyTorch 读取 JT portable-pickle optimizer 的互操作问题、更广发布门和 Day4–5 独占性能/显存验收仍未完成。
+
 ## 2026-11-03 04:22 +0800 修复 NumPy state_dict 的 CUDA 放置回归；serialization 39/39 通过
 
 上轮 installed-wheel serialization CUDA attempt-11 的 2 项失败现已拆分复核：test_load_state_dict_from_numpy_roundtrip 是真实源码问题，NumPy 值没有设备信息，转成 Var 时未继承目标模块的 frontend placement，导致 CUDA 模块仍持有 CPU weight；test_load_state_dict_assign_does_not_mutate_shared_source 是测试顺序造成的误报，原测试在逐个检查共享别名时先对前一个别名调用 .numpy()，该 host readback 可迁移共享存储，后续 location 断言才看到 CPU。原始 attempt-11 失败记录保留，未改写。

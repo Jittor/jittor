@@ -1,3 +1,13 @@
+## 2026-11-03 04:34 +0800 state_dict 修复已打入 compat wheel；39 项安装态回归通过
+
+在源码修复 31baba861ec61da8fe0467228fec6b00e0dcd718 之后，以 HEAD 19a07871932743dae226107fc9403e756d56bdef 的 compat/ 快照构建 jittor_torch wheel。产物 SHA256 740a9034c375e70b55ade864f75acbed7e492f09532bcf68ab64ac24a070b975，pip target 安装成功；wheel 内 module_methods.py 的 SHA256 为 090b8ed3d9f1ff31719f2e34d03944ee22d8f3457389843c5a211ef35afb9f75，与当前修复源码一致。对比先前 wheel source HEAD 35a1a7605ec475e9cbc1a9688afc299ee3bd8011，compat/ 下只变更 module_methods.py 与 test_torch_compat_serialize.py。
+
+安装态完整序列化测试 39 passed、0 failed/skip、2.20 秒，fallback 0→0；CPU/CUDA 参数分支都执行，CUDA 为物理 GPU0 UUID GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5 / 进程内 cuda:0。core build current，SHA256 前后相同 0e2fe909d3f33e27c220546693c40f27087357cefe198220f46c97f9a0353a90。测试 runner 将新 wheel 已安装的确切 helper 函数体载入既有 warm main-wheel 模块 globals，因为 Jittor import 会 eager-load compatibility，且新安装根会改变 core cache identity。新 root 的直接 import 在 JITTOR_NO_BUILD=1 下于 pytest 前停止，无冷编译；最终证据明确不是 cold-install full package claim，也不声称整体 wheel baseline 通过。
+
+证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261103-main-state-dict-placement-wheel-r1/，artifact manifest SHA256 db39a2e5b8f02d2028a180f570c168b2288ce9e50ea7c26abd728e6cddf14a0c；attempt-04 的 preflight/full runner rc 均为 0。中间构建 wrapper 及新 cache/path probe 失败原件均保留，不覆盖旧 installed-wheel serialization attempt-11 的 37/39 FAIL 原始证据。
+
+该项使 NumPy state_dict CUDA placement 修复有了实际构建 compat wheel 中的函数体回归证据。后续仍需处理 stock PyTorch torch.load 读取 JT portable-pickle optimizer 的互操作、默认 wheel migration baseline、其他更广 Day2–5 功能发布门；Day4–5 正式性能/显存仍要求可核验独占、至少三轮交替且每轮每侧十个热样本、median/p95/离散度和 allocator/NVML 峰值，GPU0 共享负载结果不用于性能结论。整体 Day2–5 未完成。
+
 ## 2026-11-03 04:22 +0800 修复 serialization CUDA state_dict 放置缺陷；完整套件通过
 
 对 attempt-11 的两项 CUDA failure 做了根因区分并修复。真实缺陷在 _preserve_target_dtypes_for_load：NumPy checkpoint value 不携带 device，先前直接 _state_source_to_var(value) 会按 FollowRuntime 产生 host tensor。现在构造该源 Var 时进入 tensor_frontend(type(target), like=target)，使后续 dtype 保持和 load 使用目标参数的 frontend placement。对应测试也补充了真实 CUDA 模块从 NumPy state_dict 恢复后进行 Conv2d 前向的验证。

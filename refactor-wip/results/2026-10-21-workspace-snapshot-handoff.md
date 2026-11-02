@@ -1,3 +1,13 @@
+## 2026-11-03 04:34 +0800 Handoff：修复已进入新 compat wheel，39 项 CPU/CUDA 序列化回归通过
+
+以源码 HEAD 19a07871932743dae226107fc9403e756d56bdef 构建 jittor_torch wheel，SHA256 740a9034c375e70b55ade864f75acbed7e492f09532bcf68ab64ac24a070b975；pip 安装成功。新 wheel 内 module_methods.py 哈希与修复源码一致，为 090b8ed3d9f1ff31719f2e34d03944ee22d8f3457389843c5a211ef35afb9f75。与 wheel 原 source HEAD 35a1a7605ec475e9cbc1a9688afc299ee3bd8011 相比，compat/ 只改此模块和未打包的对应测试。
+
+attempt-04 从已安装的新 compat wheel 文件读取 _preserve_target_dtypes_for_load，加载到同一 main-wheel Jittor compatibility module globals；完整 serialization suite 39 passed、0 failed/skip、2.20 秒，CPU/CUDA 两分支均执行，GPU0/cuda:0，fallback 0→0。主 wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69 未变，warm CUDA core SHA256 前后同为 0e2fe909d3f33e27c220546693c40f27087357cefe198220f46c97f9a0353a90 且 build current。全包新安装根的 import 会要求不同 cache key；JITTOR_NO_BUILD=1 按设计阻止冷编译，故本证据只声明新 compat wheel 函数与既有相同 main wheel/core 配套通过，不声明独立 cold-install full package 或 wheel baseline 通过。
+
+证据 /data6/cgq/jittor-lab/_state/release-day23/20261103-main-state-dict-placement-wheel-r1/，artifact manifest SHA256 db39a2e5b8f02d2028a180f570c168b2288ce9e50ea7c26abd728e6cddf14a0c。attempt-01 至 attempt-03 与 attempt-04 的 runner 前两次检查失败原件均保留。源码修复 commit 31baba861ec61da8fe0467228fec6b00e0dcd718 和状态记录 commit 19a07871932743dae226107fc9403e756d56bdef 均已推送 cgq_transformers，无 PR，未合并 2.0-refactor。
+
+后续 Day2–5 继续处理 JT optimizer serialization 的 stock PyTorch 互操作与更广 release gate；Day4–5 等待 Slurm association 和 GPU2 可核验独占窗口。整体目标未完成。
+
 ## 2026-11-03 04:22 +0800 Handoff：serialization CUDA state_dict 修复后 39 项通过
 
 已修改 /home/cgq/jittor 当前 checkout 中的 compat/torch/installers/nn/module_methods.py 与 compat/tests/torch/test_torch_compat_serialize.py。NumPy state_dict 恢复现在在目标 module frontend placement 下构造 source Var；assign alias 测试会先验证所有共享别名的位置，再做 .numpy() host readback，避免读回改变后续断言观察的 storage placement。
