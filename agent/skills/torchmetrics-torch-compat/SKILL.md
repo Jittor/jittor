@@ -20,7 +20,7 @@ TorchMetrics **1.7.4** 与独立 Torch **2.11.0+cu128** 完成真实 CPU/CUDA �
 seed=7 输入扰动；所有输出和两组梯度均精确一致。该环境没有安装
 `jittor-torch-adapters`，未发现 `jittor.module_patches` entry point；builder 不启用 adapter。
 完整环境、上游 SHA、哈希及范围见
-[维护者报告](../../../docs/results/2026-10-15-metric-state-and-tensordict-oracles.md)。
+[维护者报告](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-15-metric-state-and-tensordict-oracles.md)。
 
 后续接入 `EcosystemParity::test_torchmetrics_regression` 与继承的 CUDA 节点，
 两组输入梯度均为必需字段；真实 CPU/CUDA 各一项通过。中央 `registry_inventory.py`
@@ -66,7 +66,7 @@ Metrics 每设备 6 个完整数组精确相同，输出和两组输入梯度均
 分子为 **2/105 @ upstream 986eb900b8bc660ff8174c95ec8f702e0e5cb6ca**。
 TensorDict 另有独立 L3 行；共享 auditor 实际接受共四条记录、零拒绝。
 两侧 TF32/benchmark 关闭、highest、fallback error/count0，CUDA 有实际指针/UUID/驻留证据。
-新报告：[固定官方安装来源与完整协议](../../../docs/results/2026-10-16-metrics-tensordict-installed-source.md)。
+新报告：[固定官方安装来源与完整协议](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-16-metrics-tensordict-installed-source.md)。
 
 `90ee` 的原始数组和当时结果保持不动；当前严格 guard 因缺固定官方 wheel/实际
 METADATA/RECORD 证明拒绝其四条记录，不能从今天的安装目录回填旧证据。
@@ -113,7 +113,7 @@ CPU 显式隐藏 CUDA；本库 4 个 worker、6 对数组须全部被 collector 
 两库共 10 workers / 35 pairs，三独立环境完整解析与 `pip check` 均通过，公共 auditor 两条 CPU
 记录全部接受；其中 Metrics 六对数组、完整输入梯度为 L2，分母仍为 2/105。
 完整官方 wheel 载荷和实际 METADATA/pip RECORD 已独立复核，原始 seal 与命令见
-[专用报告](../../../docs/results/2026-10-16-metrics-tensordict-maintained-cpu-nightly.md)。
+[专用报告](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-16-metrics-tensordict-maintained-cpu-nightly.md)。
 工作流接线本身不证明 hosted schedule 已运行；历史 `912` CPU/CUDA 测量不重标。
 
 | 纯 API 断点 | owner 与回归 |

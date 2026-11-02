@@ -30,5 +30,5 @@ python tools/provision_training.py --state-root "$JITTOR_LAB_ROOT/_state/ms-swif
 完整 Swift SFT 协议固定 `ff5128777dd3dc5538f1a95fbcc29442c327d7d2` / `4.5.2`；
 Swift 自带 LoRA tuner 与 Trainer LoRA 是不同场景。
 
-- [2026-10-15-swift-trainer-installed-source.md](../../../docs/results/2026-10-15-swift-trainer-installed-source.md)：保留原测量提交、包版本、设备和范围；不是迁移后的重新验收。
-- [2026-10-14-downstream-oracle-scorecards.md](../../../docs/results/2026-10-14-downstream-oracle-scorecards.md)：保留原测量提交、包版本、设备和范围；不是迁移后的重新验收。
+- [2026-10-15-swift-trainer-installed-source.md](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-15-swift-trainer-installed-source.md)：保留原测量提交、包版本、设备和范围；不是迁移后的重新验收。
+- [2026-10-14-downstream-oracle-scorecards.md](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-14-downstream-oracle-scorecards.md)：保留原测量提交、包版本、设备和范围；不是迁移后的重新验收。

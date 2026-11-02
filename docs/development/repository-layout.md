@@ -70,8 +70,8 @@ Torch 兼容、机制说明（`docs/notes/`）、性能、发布说明、社区�
 [`agent/manuals/deferred-hardware.md`](https://github.com/Jittor/jittor/blob/master/agent/manuals/deferred-hardware.md)，缺陷与限制见
 [问题总账](https://github.com/Jittor/jittor/blob/master/agent/manuals/known-issues.md)。2.0 整改期的过程材料已在收口时删除（Git
 历史中可查）：仍然成立的设计契约迁入了 `docs/development/`、`docs/notes/` 与
-`docs/compatibility/`，仍是某项未关闭问题唯一证据的验证报告压缩后迁入 `docs/results/`，
-wheel 内容基线迁入 `tools/release/baselines/`。
+`docs/compatibility/`；历史验证报告通过固定提交引用，新执行记录写入 GitHub issue/PR。
+`docs/` 不保留日期报告、结果树或演示产物。wheel 内容基线位于 `tools/release/baselines/`。
 
 活跃索引与入链必须可解析；已归档的结论及其原始测试证据**不被改写成当前的成功**。
 文档检查维持这条"活跃/归档"边界。

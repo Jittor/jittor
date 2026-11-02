@@ -20,7 +20,7 @@ description: Jittor 开发任务的上下文路由入口。用于定位当前状
 - 架构与模块边界：[`docs/development/source-architecture.md`](../../../docs/development/source-architecture.md)
 - Torch 兼容验收：[`docs/compatibility/principles.md`](../../../docs/compatibility/principles.md)
 - 测试体系：[`docs/development/test-system.md`](../../../docs/development/test-system.md)
-- 已有验证报告：[`docs/results/index.md`](../../../docs/results/index.md)
+- 历史验证记录（固定提交，不代表当前支持）：[`docs/results/index.md`](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/index.md)
 
 ## 工作纪律速记
 
@@ -33,7 +33,7 @@ description: Jittor 开发任务的上下文路由入口。用于定位当前状
 7. **效率优先**：先跑最小复现和定向测试，再逐层扩大门禁
 8. **计算跑在 device 上**：torch_compat 里新加的计算要考虑效率，至少能跑在 device（GPU/NPU）上，不能只在 CPU
 9. 当前状态入口变化才更新 `project-context.md`；活跃缺陷更新 `known-issues.md`；
-   详细证据写入 `docs/results/`
+   详细验证证据写入 GitHub issue/PR，不在 docs 新建日期报告
 10. **多用 subagent 提升效率**（并行验证、分卡并行等）
 
 ## 快速开工
@@ -41,5 +41,5 @@ description: Jittor 开发任务的上下文路由入口。用于定位当前状
 1. 按 `AGENTS.md` 同步目标远端分支并记录 SHA；确认分支、提交和 dirty state：`git status --short --branch`
 2. 读 `agent/manuals/project-context.md` 并打开任务相关链接
 3. 按 `agent/manuals/environment.md` 隔离缓存和运行状态
-4. 搜索 `agent/manuals/known-issues.md` 与 `docs/results/` 中的既有证据
+4. 搜索 `agent/manuals/known-issues.md`、相关 GitHub issue/PR 与固定提交中的历史证据
 5. 最小复现后再修改，按变更风险逐层扩大测试

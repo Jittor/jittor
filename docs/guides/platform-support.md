@@ -1,7 +1,8 @@
 # 平台支持
 
 本页回答一个问题：**某个操作系统、Python 版本或加速后端，是在哪里被验证过的。**
-每一行都给出证据位置——CI 工作流、`docs/results/` 里的报告，或者「未验证」。
+每一行都给出证据位置——CI 工作流、固定提交中的历史报告，或者「未验证」。
+历史报告只证明其记录的基线和环境，不代表当前修订已重新验收。
 
 **未验证不等于不能用**，它等于没有人能替你保证。对一个没有门禁的组合，先自己跑
 `python -m jittor.selftest` 和相关测试，再把它当成可用。
@@ -33,7 +34,7 @@ wheel。
 | 3.11 | 门禁。所有维护的工具与测试会话都钉在 3.11（`CI_PYTHON_VERSION`），CPU/CUDA/NPU/结构/文档门禁都在它上面跑 |
 | 3.7 | 门禁。`nox -s py37` 用真实 3.7 解释器编译全树（下界检查，不是全量测试） |
 | 3.12 / 3.13 | 门禁。`nox -s py312`、`nox -s py313` 构建并跑已安装 wheel 的自检；3.13 这一条在 NumPy 2.x 下跑 |
-| 3.8 / 3.9 / 3.10 | 声明支持，**没有专门的 CI 作业**。3.9 有一次真实使用记录：昇腾验证报告的机器是 Python 3.9.25（[Ascend 910B3 验证](../results/2026-08-28-ascend-910b-validation.md)） |
+| 3.8 / 3.9 / 3.10 | 声明支持，**没有专门的 CI 作业**。3.9 有一次真实使用记录：昇腾验证报告的机器是 Python 3.9.25（[Ascend 910B3 验证](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-08-28-ascend-910b-validation.md)） |
 
 运行 `transformers` 需要 Python 3.10 以上（它用 `types.UnionType`），这是上游的要求，
 不是 Jittor 的，见 [Torch 兼容](../compatibility/torch.md)。
@@ -45,7 +46,7 @@ wheel。
 | CPU | g++ ≥ 5.4（Linux）、clang ≥ 8 + `libomp`（macOS），需要 OpenMP | 门禁，`cpu.yml` |
 | CPU oneDNN relay | 只有 float32 | 随 CPU 门禁；dtype 范围与单次调用开销是开口项 `KI-BACKEND-011` |
 | CUDA | 构建需要 `nvcc`；CUDA < 11 会额外取 cub，CUDA 11 优先选 cuDNN 8。`jittor[cuda12]` extra 钉 CUDA 12.2.2 运行时与 cuDNN ≥ 8.9.7 < 10（Linux x86_64） | 门禁，`cuda.yml`：自托管 RTX 4090（sm_89）+ CUDA 12.2（`CI_CUDA_VERSION`）。CUDA 11 与 13 的 wheel 家族**未提供** |
-| 昇腾 NPU（ACL/HCCL），单卡 | CANN 9（门禁断言 `atc --version` 为 9.x），设备须报 Ascend 910B | 门禁，`npu.yml`（Linux ARM64、`/dev/davinci0`、fail-closed 的设备探针）。一次完整的冷缓存验证记在 [Ascend 910B3 验证](../results/2026-08-28-ascend-910b-validation.md)：CANN 9.0.0、驱动 25.5.1、`397 passed, 9 skipped` |
+| 昇腾 NPU（ACL/HCCL），单卡 | CANN 9（门禁断言 `atc --version` 为 9.x），设备须报 Ascend 910B | 门禁，`npu.yml`（Linux ARM64、`/dev/davinci0`、fail-closed 的设备探针）。一次完整的冷缓存验证记在 [Ascend 910B3 验证](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-08-28-ascend-910b-validation.md)：CANN 9.0.0、驱动 25.5.1、`397 passed, 9 skipped` |
 | 昇腾 NPU（ACL），Ascend 950PR / x86-64 | CANN 9.1 | **部分验证，无门禁**。`e5886b6f6`（2026-09-10）在真机上以 `backend_fallback=error` 零回退跑通 matmul、卷积前向反向、随机分布、CNN 与 transformer block 训练；同一提交上 `tests/backends/acl/test_acl.py` 为 32 passed / 11 failed。`docs/guides/ascend-910b.md` 里的一处同步开关测量也来自这台机器 |
 | 昇腾 NPU，多卡 HCCL | — | **未验证**：需要 ≥ 2 张 910B3，见 [`agent/manuals/deferred-hardware.md`](https://github.com/Jittor/jittor/blob/master/agent/manuals/deferred-hardware.md) 的 `8.02` |
 | ROCm | — | **未验证**。`nox -s rocm` 存在但没有 CI 工作流、也没有设备；HIP provider 的 `runtime/driver.cc` 至今没被编译器读过（`deferred-hardware.md` 的 `4.12`）。MIOpen 与 rccl 是**有意未实现**，会抛 `NotImplementedError` |
@@ -62,8 +63,8 @@ wheel。
 | --- | --- | --- |
 | 声明的 Torch API 级别 | `2.11.0`（`torch.__torch_version__`、`torch.version.__version__`） | `compat/torch/installers/cuda/bindings.py`；`torch.__version__` 仍报告 Jittor 自己的版本 |
 | nightly 生态对拍的参照 torch | CPU 版 `2.7.1`，配 `transformers 4.46.3`、`diffusers 0.31.0`、`peft 0.13.2` | 门禁，`.github/workflows/ecosystem.yml`（`nox -s ecosystem`，七个用例跑两遍，比输出与每个梯度） |
-| 真实模型差距表的参照 torch | `2.11.0+cu128`（cuDNN 9.19），Transformers 4.56.2、Diffusers 0.35.1 | [Torch 兼容层在真实模型上对 PyTorch](../results/2026-09-24-torch-compat-real-models.md) |
-| 最近几次 SDPA / 端到端测量的参照 torch | `2.13.0+cu129` | [下游库性能台账](../performance/library-standing.md) |
+| 真实模型差距表的参照 torch | `2.11.0+cu128`（cuDNN 9.19），Transformers 4.56.2、Diffusers 0.35.1 | [Torch 兼容层在真实模型上对 PyTorch](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-09-24-torch-compat-real-models.md) |
+| 最近几次 SDPA / 端到端测量的参照 torch | `2.13.0+cu129` | [下游库性能台账](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/performance/library-standing.md) |
 | 下游集成准入版本 | 按库独立限定 | [JittorEcosystem](https://github.com/JittorEcosystem) 各仓库维护版本校验与硬件验收，未识别版本显式拒绝 |
 
 **编译过的 PyTorch 扩展一概不支持**：`mmcv.ops`、`torch_npu` 这类自带针对 PyTorch

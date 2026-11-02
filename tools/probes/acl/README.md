@@ -5,7 +5,7 @@ results. The native GPT implementations exercise Jittor core; downstream
 Transformers checkpoint validation belongs to
 [Jittor Transformers](https://github.com/JittorEcosystem/jittor-transformers).
 Historical observations and their limits are retained in
-[the archived report](../../../docs/results/acl-manual-probes.en.md).
+[the archived report](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/acl-manual-probes.en.md).
 
 Run from an external state directory so weights and JSON never enter the source
 tree. Select an allocated device in the environment before starting Python.

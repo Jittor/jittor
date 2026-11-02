@@ -7,7 +7,7 @@ existing legacy programs. This guide does not depend on `jittor.compat.torch`.
 
 The training example in this guide is single-machine multi-GPU data parallelism. The
 verification scope for native FSDP, TP, ZeRO, and sharded checkpoints is documented
-separately in [maintainer results](../results/index.en.md); a successful launch does not
+separately in [maintainer results](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/index.en.md); a successful launch does not
 imply that training sharding is accepted. Jittor's backward and update entry points are
 `optimizer.backward(loss)` and `optimizer.step()`; the Torch-style `loss.backward()` is not
 part of the native DDP contract.

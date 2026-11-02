@@ -178,7 +178,6 @@ every page belongs to exactly one section:
 | [`docs/compatibility/`](docs/compatibility/) | the Torch compatibility layer and its acceptance rules |
 | [`docs/development/`](docs/development/) | repository layout, source architecture, test system, known-issue write-ups |
 | [`docs/research/`](docs/research/) | proposals that are not yet decided |
-| [`docs/results/`](docs/results/) | reproducible maintainer conclusions, each with status, commit, scope, maintainer and recheck condition |
 | [`docs/releases/`](docs/releases/) | release notes |
 
 - Update [`README.md`](README.en.md) for installation or first-use changes. It is

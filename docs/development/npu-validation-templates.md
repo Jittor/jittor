@@ -13,13 +13,11 @@
 
 ## 使用方式与证据要求
 
-复制下面的模板到该主题既有的维护者结果报告；新主题写成
-`docs/results/YYYY-MM-DD-topic.md`，开头的元数据块写明状态、日期、基线提交、验证范围
-（设备、软件版本、跑了什么和没跑什么）、维护者（写角色，不写个人）与复查条件，并把它
-加进 [`docs/results/index.md`](../results/index.md) 的 toctree 与索引表。报告只保存可复现
-的结论，不复制成项目历史，过期时删除或归档。活跃缺陷只在
+复制下面的模板到相关 GitHub issue/PR，写明状态、日期、基线提交、验证范围
+（设备、软件版本、跑了什么和没跑什么）、维护者（写角色）与复查条件。
+不在 docs 新建日期报告或结果目录。活跃缺陷只在
 [已知问题总账](https://github.com/Jittor/jittor/blob/master/agent/manuals/known-issues.md) 维护 owner、证据链接、workaround
-和退出条件；任务状态记在 GitHub issue 与 PR 中，PR 描述携带验证证据。修复后在报告保留
+和退出条件；任务状态记在 GitHub issue 与 PR 中，PR 描述携带验证证据。修复后在 issue/PR 保留
 前后证据，按总账规则移除已解决条目。
 
 原始 stdout/stderr、pytest XML、设备快照、profile、计时 JSON/CSV、缓存和二进制

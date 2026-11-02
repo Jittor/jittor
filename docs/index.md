@@ -22,7 +22,6 @@ api/index
 compatibility/index
 notes/index
 performance/index
-results/index
 ```
 
 ```{toctree}
@@ -53,7 +52,7 @@ index.en
 | 在昇腾、天数或多卡上运行 | [使用指南](guides/index.md) |
 | 弄清显存、精度或异步执行的行为 | [机制说明](notes/index.md) |
 | 调查一个报错或性能问题 | [调试指南](guides/debugging.md)、[性能](performance/index.md) |
-| 看别人已经查过的现象和结论 | [验证结论](results/index.md) |
+| 查阅历史验证证据（不代表当前支持） | [Git 历史](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/index.md) |
 | 确认某个系统 / Python / 后端有没有被验证过 | [平台支持](guides/platform-support.md) |
 | 查一个已知的数值、性能或兼容缺口 | [已知限制](guides/known-limitations.md) |
 | 从 1.x 升上来 | [2.0 发布说明](releases/2.0.md) |

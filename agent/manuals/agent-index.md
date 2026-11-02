@@ -2,7 +2,7 @@
 
 `agent/` 只保存操作手册（`manuals/`）与可复用 skill（`skills/`），这里是两者的唯一入口。
 仓库维护命令在 `tools/`；设计与机制说明在 `docs/development/`、`docs/notes/` 和
-`docs/compatibility/`，验证结论在 `docs/results/`；任务状态、交接和验证证据记在
+`docs/compatibility/`；任务状态、交接和验证证据记在
 GitHub issue 与 PR 中。原始日志、缓存和大体积产物放在 `$JITTOR_LAB_ROOT`（未设置时用
 仓库同级的 `jittor-lab/`），见[工作区边界](collaboration.md#工作区边界)。
 

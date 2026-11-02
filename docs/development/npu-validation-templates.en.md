@@ -15,12 +15,9 @@ it does not maintain a second task board or issue ledger.
 
 ## How to use it and evidence requirements
 
-Copy the templates below into the topic's existing maintainer result report; write a new topic
-as `docs/results/YYYY-MM-DD-topic.md`, with an opening metadata block stating status, date,
+Copy these templates into the relevant GitHub issue/PR. Record status, date,
 baseline commit, validation scope (device, software versions, what was and was not run),
-maintainer (a role, not a person) and recheck conditions, and add it to the toctree and index
-table of [`docs/results/index.md`](../results/index.en.md). Reports keep only reproducible
-conclusions; do not let them become project history, and delete or archive them once stale.
+maintainer role and recheck conditions. Do not create dated reports or result trees in docs.
 Active defects maintain owner, evidence links, workaround and exit criteria only in the
 [known-issues ledger](https://github.com/Jittor/jittor/blob/master/agent/manuals/known-issues.md);
 task status is recorded in GitHub issues and PRs, and PR descriptions carry the validation

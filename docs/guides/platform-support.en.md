@@ -2,7 +2,8 @@
 
 This page answers one question: **where has a given operating system, Python version, or
 accelerator backend actually been verified?** Every row gives the location of the evidence --
-a CI workflow, a report in `docs/results/`, or "unverified".
+a CI workflow, a commit-pinned historical report, or "unverified".
+Historical reports establish only their recorded baseline and environment, not acceptance of the current revision.
 
 **Unverified does not mean unusable**; it means no one can guarantee it for you. For a
 combination without a gate, run `python -m jittor.selftest` and the relevant tests yourself
@@ -36,7 +37,7 @@ wheel is produced.
 | 3.11 | Gate. All maintained tooling and test sessions are pinned to 3.11 (`CI_PYTHON_VERSION`), and the CPU/CUDA/NPU/structure/docs gates all run on it |
 | 3.7 | Gate. `nox -s py37` compiles the whole tree with a real 3.7 interpreter (a lower-bound check, not the full tests) |
 | 3.12 / 3.13 | Gate. `nox -s py312`, `nox -s py313` build and run the installed wheel's self-test; the 3.13 entry runs against NumPy 2.x |
-| 3.8 / 3.9 / 3.10 | Declared supported, **with no dedicated CI job**. 3.9 has one real-use record: the machine in the Ascend verification report ran Python 3.9.25 ([Ascend 910B3 validation](../results/2026-08-28-ascend-910b-validation.en.md)) |
+| 3.8 / 3.9 / 3.10 | Declared supported, **with no dedicated CI job**. 3.9 has one real-use record: the machine in the Ascend verification report ran Python 3.9.25 ([Ascend 910B3 validation](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-08-28-ascend-910b-validation.en.md)) |
 
 Running `transformers` requires Python 3.10 or newer (it uses `types.UnionType`); that is an
 upstream requirement, not Jittor's, see [Torch compatibility](../compatibility/torch.en.md).
@@ -48,7 +49,7 @@ upstream requirement, not Jittor's, see [Torch compatibility](../compatibility/t
 | CPU | g++ ≥ 5.4 (Linux), clang ≥ 8 + `libomp` (macOS), OpenMP required | Gate, `cpu.yml` |
 | CPU oneDNN relay | float32 only | With the CPU gate; the dtype range and per-call overhead are open item `KI-BACKEND-011` |
 | CUDA | building needs `nvcc`; CUDA < 11 additionally fetches cub, CUDA 11 prefers cuDNN 8. The `jittor[cuda12]` extra pins the CUDA 12.2.2 runtime and cuDNN ≥ 8.9.7 < 10 (Linux x86_64) | Gate, `cuda.yml`: self-hosted RTX 4090 (sm_89) + CUDA 12.2 (`CI_CUDA_VERSION`). CUDA 11 and 13 wheel families are **not provided** |
-| Ascend NPU (ACL/HCCL), single card | CANN 9 (the gate asserts `atc --version` is 9.x), device must report Ascend 910B | Gate, `npu.yml` (Linux ARM64, `/dev/davinci0`, fail-closed device probe). A complete cold-cache verification is recorded in [Ascend 910B3 validation](../results/2026-08-28-ascend-910b-validation.en.md): CANN 9.0.0, driver 25.5.1, `397 passed, 9 skipped` |
+| Ascend NPU (ACL/HCCL), single card | CANN 9 (the gate asserts `atc --version` is 9.x), device must report Ascend 910B | Gate, `npu.yml` (Linux ARM64, `/dev/davinci0`, fail-closed device probe). A complete cold-cache verification is recorded in [Ascend 910B3 validation](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-08-28-ascend-910b-validation.en.md): CANN 9.0.0, driver 25.5.1, `397 passed, 9 skipped` |
 | Ascend NPU (ACL), Ascend 950PR / x86-64 | CANN 9.1 | **Partially verified, no gate**. `e5886b6f6` (2026-09-10) ran matmul, convolution forward/backward, random distributions, CNN and transformer block training with `backend_fallback=error` and zero fallback on real hardware; on the same commit `tests/backends/acl/test_acl.py` was 32 passed / 11 failed. One synchronization-switch measurement in `docs/guides/ascend-910b.md` also comes from this machine |
 | Ascend NPU, multi-card HCCL | — | **Unverified**: needs ≥ 2 910B3 cards, see `8.02` in [`agent/manuals/deferred-hardware.md`](https://github.com/Jittor/jittor/blob/master/agent/manuals/deferred-hardware.md) |
 | ROCm | — | **Unverified**. `nox -s rocm` exists but there is no CI workflow and no device; the HIP provider's `runtime/driver.cc` has never been read by a compiler (`4.12` in `deferred-hardware.md`). MIOpen and rccl are **intentionally unimplemented** and raise `NotImplementedError` |
@@ -65,8 +66,8 @@ test, 7 have no tests yet, and 1 is unimplemented (open item `KI-BACKEND-013`).
 | --- | --- | --- |
 | Declared Torch API level | `2.11.0` (`torch.__torch_version__`, `torch.version.__version__`) | `compat/torch/installers/cuda/bindings.py`; `torch.__version__` still reports Jittor's own version |
 | Reference torch for nightly ecosystem cross-checks | CPU build `2.7.1`, with `transformers 4.46.3`, `diffusers 0.31.0`, `peft 0.13.2` | Gate, `.github/workflows/ecosystem.yml` (`nox -s ecosystem`, seven cases run twice, comparing outputs and every gradient) |
-| Reference torch for the real-model gap table | `2.11.0+cu128` (cuDNN 9.19), Transformers 4.56.2, Diffusers 0.35.1 | [Torch compatibility layer vs PyTorch on real models](../results/2026-09-24-torch-compat-real-models.en.md) |
-| Reference torch for recent SDPA / end-to-end measurements | `2.13.0+cu129` | [Downstream library performance ledger](../performance/library-standing.en.md) |
+| Reference torch for the real-model gap table | `2.11.0+cu128` (cuDNN 9.19), Transformers 4.56.2, Diffusers 0.35.1 | [Torch compatibility layer vs PyTorch on real models](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-09-24-torch-compat-real-models.en.md) |
+| Reference torch for recent SDPA / end-to-end measurements | `2.13.0+cu129` | [Downstream library performance ledger](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/performance/library-standing.en.md) |
 | Library versions supported by integrations | Scoped independently by library | [JittorEcosystem](https://github.com/JittorEcosystem) repositories own version guards and hardware acceptance; unknown versions are rejected |
 
 **Compiled PyTorch extensions are not supported at all**: packages such as `mmcv.ops` and

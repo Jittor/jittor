@@ -94,7 +94,7 @@ Jittor 就把 `flags.use_cuda` 置 1。
 
 原 GPT-2 手工探针只比较 loss 和梯度范数，Qwen 探针仅保存部分 logits 摘要；
 这些结果不能证明完整前向、反向或跨后端逐位一致。原观察与证据边界保留在
-[ACL 手工探针历史记录](../results/acl-manual-probes.md)。
+[ACL 手工探针历史记录](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/acl-manual-probes.md)。
 
 [原生诊断工具](../../tools/probes/acl/README.md)供维护者定位数值偏差；正式支持结论
 应使用同权重、同输入、同设备的独立 PyTorch 参考，比较完整输出与梯度并排除 fallback。
@@ -190,8 +190,8 @@ weights = load_file("model.safetensors")
 > （`torch.__torch_version__` / `torch.version.__version__`；`torch.__version__`
 > 报告的是 Jittor 自己的版本）。作为参照物的真实 PyTorch 版本**按报告而异**：
 > nightly 生态门禁用 CPU 版 `2.7.1`（`.github/workflows/ecosystem.yml`），
-> [真实模型差距表](../results/2026-09-24-torch-compat-real-models.md)用
-> `2.11.0+cu128`，[下游库台账](../performance/library-standing.md)里较新的几次测量
+> [真实模型差距表](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-09-24-torch-compat-real-models.md)用
+> `2.11.0+cu128`，[下游库台账](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/performance/library-standing.md)里较新的几次测量
 > 用 `2.13.0+cu129`。引用某个数字时连它的参照版本一起引用。
 
 - **解码器 LLM**：gpt2、llama、qwen2/qwen3、mistral、gemma/gemma2、phi/phi3、opt、
@@ -254,7 +254,7 @@ CPU 回退检测。用 `REAL_TORCH_PYTHON` 指向真 PyTorch 解释器，可选�
 
 TRELLIS.2 4B 曾在一个**不在本仓库**的外部适配器上以四个真实 CUDA 扩展完成对齐的
 端到端流水，暖态流水中位数是 `7.515s` 对真实 PyTorch 的 `6.878s`——约 `1.09x`，
-**性能尚未验收**；该测量是一次性结论，见[下游库台账](../performance/library-standing.md)。
+**性能尚未验收**；该测量是一次性结论，见[下游库台账](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/performance/library-standing.md)。
 
 项目专属粘合代码通过 [JittorEcosystem](https://github.com/JittorEcosystem) 的独立包安装。各独立仓库维护源码、测试与支持记录。核心与 compat 不依赖适配器合集；注册和版本检查通过公开模块补丁契约显式失败，通用数学和 Torch 语义仍属于框架。
 

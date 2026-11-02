@@ -13,7 +13,7 @@ from urllib.parse import unquote, urlsplit
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # Trees of historical evidence that are not authoritative active documentation.
-# None at present: dated docs/results/ reports are kept link-clean like any page.
+# None at present: retained topic documents are checked like every active page.
 EXCLUDED_PREFIXES = ()
 
 REQUIRED_DOCUMENTS = (
@@ -27,7 +27,6 @@ REQUIRED_DOCUMENTS = (
     "docs/development/source-architecture.md",
     "docs/development/acl-backend-contracts.md",
     "docs/development/torch-install-transactions.md",
-    "docs/results/index.md",
     "agent/manuals/agent-index.md",
     "agent/manuals/deferred-hardware.md",
     "benchmarks/asv/asv.conf.json",
@@ -45,6 +44,7 @@ REFERENCE_LINK = re.compile(r"^\s*\[[^\]]+\]:\s*(?:<([^>]+)>|(\S+))")
 HTML_LINK = re.compile(r"\b(?:href|src)\s*=\s*[\"']([^\"']+)[\"']", re.IGNORECASE)
 FENCE = re.compile(r"^\s*(`{3,}|~{3,})")
 SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
+DATED_NAME = re.compile(r"(?:^|[-_])\d{4}-\d{2}-\d{2}(?=[-_.]|$)")
 
 
 def _relative(path):
@@ -137,8 +137,21 @@ def check_links(documents):
     return errors
 
 
-def check_contract(documents):
+def check_document_names(documents):
     errors = []
+    for document in documents:
+        relative = _relative(document)
+        if (relative.startswith("docs/") and document.suffix == ".md"
+                and DATED_NAME.search(document.name)):
+            errors.append(
+                "{0}: dated Markdown reports belong in GitHub issues/PRs; "
+                "keep stable topic documentation in docs/".format(relative)
+            )
+    return errors
+
+
+def check_contract(documents):
+    errors = check_document_names(documents)
     for relative in REQUIRED_DOCUMENTS:
         if not (REPO_ROOT / relative).is_file():
             errors.append("missing required document: {0}".format(relative))

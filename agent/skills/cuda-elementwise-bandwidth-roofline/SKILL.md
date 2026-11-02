@@ -249,7 +249,7 @@ H20 的访存快了四倍，于是**先到的瓶颈不再是访存，而是发�
 **判据：换一代卡先重量一次第 1 节的 copy 带宽，再判断本文件第 6 节那两条结论是否还成立。**
 「已经贴着屋顶」这句话必须连机器一起说。
 
-细节与完整数据见 `docs/results/2026-09-12-cuda-metaop-launch-index-scalar.md`。
+细节与完整数据见 [历史记录](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-09-12-cuda-metaop-launch-index-scalar.md)。
 
 ## 6.6 机器被别人占满时怎么量（本文其余部分默认独占卡）
 

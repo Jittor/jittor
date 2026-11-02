@@ -192,7 +192,7 @@ PR 只报告时间；速度上限断言用于固定硬件的 nightly/验收。�
     "parameter_gradients": {"requested": 1, "checked": 1}, "input_gradients": {"requested": 0, "checked": 0}
   },
   "evidence": {
-    "command": "<完整命令>", "report": "docs/results/<dated-report>.md", "gate_nodeid": "<文件>::<真实测试节点>",
+    "command": "<完整命令>", "report": "<commit-pinned-historical-report-URL>", "gate_nodeid": "<文件>::<真实测试节点>",
     "artifacts": [
       {"role": "reference", "path": "<checkout外原始输出>", "sha256": "<SHA256>"},
       {"role": "candidate", "path": "<checkout外原始输出>", "sha256": "<SHA256>"},
@@ -204,6 +204,11 @@ PR 只报告时间；速度上限断言用于固定硬件的 nightly/验收。�
   }
 }
 ```
+
+`evidence.report` 只记录历史背景，使用完整提交 SHA 固定的 GitHub 报告链接。
+验收器从本地 Git 历史校验原始 blob 与哈希；浅克隆须先获取该提交。
+它不授予当前支持级别：当前源码、安装身份、原始数值与设备证据仍必须全部通过。
+本次运行的结论写入对应 GitHub issue/PR，不在 docs 新建报告。
 
 L3 追加 `training: {steps, loss_trajectory_passed, parameter_trajectory_passed, trainable, frozen, trainable_parameters, frozen_parameters}`，后两项是实际参数名列表；artifacts 另需 `training-reference-metadata` 与 `training-candidate-metadata`，指向两侧 training probe 的原始 JSON。L4 追加
 `speed`（上一节字段，加 `model/batch/sequence/dtype/precision/phase`、`graph_regime`、

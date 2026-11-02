@@ -237,7 +237,7 @@ gradient must be checked.
     "parameter_gradients": {"requested": 1, "checked": 1}, "input_gradients": {"requested": 0, "checked": 0}
   },
   "evidence": {
-    "command": "<完整命令>", "report": "docs/results/<dated-report>.md", "gate_nodeid": "<文件>::<真实测试节点>",
+    "command": "<完整命令>", "report": "<commit-pinned-historical-report-URL>", "gate_nodeid": "<文件>::<真实测试节点>",
     "artifacts": [
       {"role": "reference", "path": "<checkout外原始输出>", "sha256": "<SHA256>"},
       {"role": "candidate", "path": "<checkout外原始输出>", "sha256": "<SHA256>"},
@@ -249,6 +249,12 @@ gradient must be checked.
   }
 }
 ```
+
+`evidence.report` is historical context only, referenced by a GitHub URL pinned to a full
+commit SHA. The validator checks its original blob and hash in local Git history; shallow
+clones must fetch that commit first. This reference cannot grant current support: current
+source, installation identity, raw numerical outputs and device evidence must still pass.
+Record the new run in its GitHub issue/PR, not a new report under docs.
 
 L3 adds `training: {steps, loss_trajectory_passed, parameter_trajectory_passed, trainable, frozen, trainable_parameters, frozen_parameters}`, where the last two are lists of actual parameter names; its artifacts additionally need `training-reference-metadata` and `training-candidate-metadata`, pointing at the raw JSON of both sides' training probes. L4 adds `speed` (the fields of the previous section, plus `model/batch/sequence/dtype/precision/phase`, `graph_regime`, `no_concurrent_work: true`, `memory: {source, jittor_peak_bytes, oracle_peak_bytes}`); the device evidence adds `fallback: {policy: "error", count: 0}`. The machine check covers structure, SHAs, members, gate-node existence, numerical/level prerequisites and sampling conventions; it **does not replace the maintainer's check that the raw results really came from that command**.
 

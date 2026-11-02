@@ -68,4 +68,4 @@ FP32 master 参数的 AMP，或对 BF16 Adam/AdamW 支持的证明。活动的�
 
 这个 API 不提供参数/梯度分片、原生 FSDP、TP、ZeRO 第二/第三阶段、弹性重新分片，或多
 主机 rendezvous 验收。更广的分布式能力需求仍只是部分实现。见
-[验证报告](../results/2026-10-15-native-zero-optimizer.md)。
+[验证报告](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-15-native-zero-optimizer.md)。

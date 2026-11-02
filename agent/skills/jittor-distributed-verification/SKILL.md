@@ -707,5 +707,5 @@ layer/output/gradient difference with fixed oracle weights; preserve the
 original thresholds and earlier raw tensors. Check first and second derivatives
 on each real device when repairing a core differentiation rule. CPU and CUDA
 low-precision kernels can have different rounding boundaries. The
-[saved-output tanh verification](../../../docs/results/2026-10-15-tanh-fsdp-bfloat16.md)
+[saved-output tanh verification](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-15-tanh-fsdp-bfloat16.md)
 records this method and the fixed-input BF16 FSDP repair.

@@ -100,7 +100,8 @@ JITTOR_TORCH_SHIM=1 PYTHONPATH=python python -m pytest -q tests/structure
   环境规则与问题总账分别维护在
   [`agent/manuals/environment.md`](agent/manuals/environment.md) 和
   [`agent/manuals/known-issues.md`](agent/manuals/known-issues.md)。
-- `docs/results/` 保存可复现的维护者验证结论，不复制成长篇项目历史。原始日志、缓存、
-  二进制和 benchmark 数据不进入文档树。
+- 执行记录、阶段性验证与测速结论写入 GitHub issue/PR，不在 `docs/` 新建日期命名文档、
+  结果目录或演示产物。历史报告通过固定提交引用；原始日志、缓存、二进制和 benchmark
+  数据留在仓库外。可复用机制与操作说明按主题维护。
 - 稳定结论注明状态、对应提交、验证范围、维护者和复查条件；过期信息应删除或归档，
   不在多个文件中重复维护。

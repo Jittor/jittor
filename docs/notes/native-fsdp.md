@@ -2,7 +2,7 @@
 
 状态：有界的 CUDA/NCCL 正确性实现。FP32 训练与固定布局的换进程续跑已有维护者证据。
 BF16 计算也满足记录的容差与精确续跑，但它与二进制 Torch 之间的微小梯度差异仍是一项
-明确的数值限制。实测来源、阈值与条件见[验证记录](../results/2026-10-15-native-fsdp.md)。
+明确的数值限制。实测来源、阈值与条件见[验证记录](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-15-native-fsdp.md)。
 Owner：Jittor 核心维护者；当存储、集合通信、优化器梯度、精度策略或 checkpoint 编码
 发生变化时复查。
 

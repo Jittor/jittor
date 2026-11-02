@@ -114,7 +114,7 @@ MMCV 扫描整个包，保留条件分支、alias、注册循环和依赖扩展�
 
 固定 clean `2aa27ffe1ce1699c888575f3b5fb3092b1fc6eff` 的 CPU/CUDA 实测、三步
 真实 owner 轨迹、源码分母及 precision 否定证据见
-[OpenMMLab 结果报告](../../../docs/results/2026-10-15-openmmlab-training-oracles.md)。
+[OpenMMLab 结果报告](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-15-openmmlab-training-oracles.md)。
 本场景两设备授 L3；具体 registry refs、全部可训练参数与未覆盖轴以该报告和
 原始 scorecard 为准，不外推完整 Runner、编译 ops 或性能级别。
 
@@ -122,7 +122,7 @@ MMCV 扫描整个包，保留条件分支、alias、注册循环和依赖扩展�
 ## 完整安装来源证明的维护入口
 
 更强来源协议的 fresh CPU/CUDA 证据见
-[完整安装来源训练报告](../../../docs/results/2026-10-15-openmmlab-installed-source-training.md)。
+[完整安装来源训练报告](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-15-openmmlab-installed-source-training.md)。
 测量源为 clean `9345f99aad2a67ec7c043427a1dfd661c53c4369`，显式扰动梯度门禁与实际
 nox 源为 `99120d4a5c1f1814833e15e16e90bc993cf5f1b8`。旧 `2aa27ffe...` 原始数据不补填
 来源字段；当前更强准入以新记录为准。两平台保留原三 seed、全部参数/输入梯度与真实

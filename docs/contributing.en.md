@@ -22,13 +22,13 @@ language-copied documentation tree.
 Each page belongs to exactly one section: usage guides [`guides/`](guides/index.en.md), mechanism notes
 [`notes/`](notes/index.en.md), Torch compatibility [`compatibility/`](compatibility/index.en.md), development
 documentation [`development/`](development/index.en.md), research proposals [`research/`](research/index.en.md),
-validation conclusions [`results/`](results/index.en.md), release notes
+release notes
 [`releases/`](releases/index.en.md). A new page must enter its section's toctree, or the site has no entry for
 it (the structure gate reports orphan pages).
 
 Task status and handoffs are recorded in GitHub issues and PRs, **not in a board maintained in the repository**;
-PR descriptions carry the validation evidence. Reproducible maintainer validation conclusions go into
-`docs/results/`, and every report must carry status, corresponding commit, validation scope,
+PR descriptions carry validation evidence. Execution records also belong in GitHub issues/PRs,
+not dated documents or result trees under docs. Record status, corresponding commit, validation scope,
 maintainer, and review conditions; the format and required metadata are in
 [NPU defect and performance record templates](development/npu-validation-templates.en.md).
 

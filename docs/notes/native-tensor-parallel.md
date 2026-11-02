@@ -1,7 +1,7 @@
 # 原生张量并行线性层
 
 状态：有界的原生 column/row 线性实现。验证基线与设备范围记录在
-[维护者结果](../results/2026-10-15-native-tensor-parallel.md)。当集合通信伴随算子、原生
+[维护者结果](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-15-native-tensor-parallel.md)。当集合通信伴随算子、原生
 优化器同步或 checkpoint 变化后重新检查。
 
 `jittor.distributed.tensor_parallel.ColumnParallelLinear` 只保存本 rank 的输出行与本地
@@ -63,7 +63,7 @@ FSDP+TP 组合、分片词表 loss、超出已验证 BF16 协议的混合精度�
 
 ## BF16 CUDA 训练配 FP32 状态
 
-[AdamW/BF16 结果](../results/2026-10-15-native-tensor-parallel-adamw-bf16.md)验证了 CUDA
+[AdamW/BF16 结果](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-15-native-tensor-parallel-adamw-bf16.md)验证了 CUDA
 线性乘积的实际 BF16 输入与权重操作数、FP32 master 参数、输入/参数梯度以及两个 AdamW
 动量矩。原生混合精度使用既有的 flag；TP 不额外引入 autocast 上下文或优化器算术：
 

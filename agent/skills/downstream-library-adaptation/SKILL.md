@@ -185,7 +185,7 @@ compat 还行——所以第 6 节第 5 条的过期条件是必须的。
 
 ## 8. 落盘
 
-- dated `docs/results/YYYY-MM-DD-topic.md`：Status / Date / **Baseline commit** / Owner /
+- GitHub issue/PR 的验收记录（不在 docs 创建日期报告）：Status / Date / **Baseline commit** / Owner /
   **Review when**，记环境、命令、结果、边界；
 - 真实 gap 进 [`known-issues`](../../manuals/known-issues.md)：owner、可执行证据、
   workaround、退出条件；

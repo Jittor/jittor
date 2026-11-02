@@ -70,6 +70,62 @@ class CoverageAuditTests(unittest.TestCase):
         self.serial = 0
         self.bind_measurements(self.row)
 
+    def archived_report(self):
+        for command in (("init", "-q"), ("add", "docs/results/evidence.md"),
+                        ("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                         "commit", "-qm", "Archive report fixture")):
+            subprocess.run(["git", "-C", str(self.root), *command], check=True,
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        commit = subprocess.check_output(["git", "-C", str(self.root), "rev-parse", "HEAD"], text=True).strip()
+        (self.root / "docs/results/evidence.md").unlink()
+        return "https://github.com/Jittor/jittor/blob/" + commit + "/docs/results/evidence.md"
+
+    def test_pinned_deleted_report_is_context_not_current_execution(self):
+        url = self.archived_report()
+        self.row["evidence"]["report"] = url
+        result = audit.scorecard(self.sources, [self.row], self.baseline, self.root)
+        self.assertEqual(len(result["accepted"]), 1, result["rejected"])
+        reference = result["accepted"][0]["evidence"]["report_reference"]
+        self.assertEqual(reference["kind"], "historical-context")
+        self.assertEqual(reference["sha256"], hashlib.sha256(b"measured evidence").hexdigest())
+        stale = copy.deepcopy(self.row)
+        stale["jittor_commit"] = "f" * 40
+        self.assertFalse(audit.scorecard(self.sources, [stale], self.baseline, self.root)["accepted"])
+        raw = Path(self.row["evidence"]["artifacts"][0]["path"])
+        raw.write_text("tampered")
+        self.assertFalse(audit.scorecard(self.sources, [self.row], self.baseline, self.root)["accepted"])
+
+    def test_archived_report_requires_real_commit_regular_blob_and_pinned_url(self):
+        url = self.archived_report()
+        commit = url.split("/blob/")[1].split("/")[0]
+        tree = subprocess.check_output(["git", "-C", str(self.root), "rev-parse", "HEAD^{tree}"], text=True).strip()
+        invalid = (url.replace(commit, "main"), url.replace(commit, commit[:7]),
+                   url.replace(commit, "f" * 40), url.replace(commit, tree),
+                   url.replace("evidence.md", "missing.md"),
+                   url.replace("docs/results/evidence.md", "docs/results/../evidence.md"),
+                   url.replace("github.com", "example.invalid"), url + "?raw=1")
+        for value in invalid:
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                audit.validate_report_reference(value, self.root)
+        self.assertEqual(audit.validate_report_reference(url + "#scope", self.root),
+                         audit.validate_report_reference(url, self.root))
+        self.assertEqual(audit.report_references("[old](" + url + ")"), ([], [url]))
+        names, historical = audit.report_references("[old](" + url + ") docs/results/current.md")
+        self.assertEqual(names, ["current.md"])
+        self.assertEqual(historical, [url])
+
+    def test_archived_report_rejects_symlink_blob(self):
+        url = self.archived_report()
+        link = self.root / "docs/results/link.md"
+        link.symlink_to("evidence.md")
+        subprocess.run(["git", "-C", str(self.root), "add", "docs/results/link.md"], check=True)
+        subprocess.run(["git", "-C", str(self.root), "-c", "user.name=Fixture",
+                        "-c", "user.email=fixture@example.invalid", "commit", "-qm", "Symlink fixture"], check=True)
+        commit = subprocess.check_output(["git", "-C", str(self.root), "rev-parse", "HEAD"], text=True).strip()
+        url = "https://github.com/Jittor/jittor/blob/" + commit + "/docs/results/link.md"
+        with self.assertRaisesRegex(ValueError, "regular historical report blob"):
+            audit.validate_report_reference(url, self.root)
+
     def test_deepspeed_engine_gate_is_separate_from_ordinary_model_cases(self):
         row = next(item for item in audit.audit(ROOT)["repos"] if item["repo"] == "deepspeed")
         self.assertEqual(row["registered_cases"], [])

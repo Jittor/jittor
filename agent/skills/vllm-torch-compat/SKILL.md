@@ -8,7 +8,7 @@ description: 在 Jittor torch shim 与独立 PyTorch 两套解释器上运行和
 ## 当前维护门禁（2026-10-16）
 
 干净测量源码 `c9978992512024a4951a139e4c3d221aaa2584b1` 的实际 CPU/CUDA
-来源重测见 [vLLM component scorecards](../../../docs/results/2026-10-15-vllm-component-scorecards.md)。
+来源重测见 [vLLM component scorecards](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-15-vllm-component-scorecards.md)。
 两侧实际安装官方 vLLM `0.29.0`、Transformers `5.13.0`，独立 oracle 是真实二进制
 PyTorch `2.13.0+cu130`。每设备 base 和 seed 7/19 输入扰动均比较输出及全部四项
 输入梯度，共 15 数组、六独立 worker；无可训练参数，最高 L2。
@@ -40,7 +40,7 @@ collector 会重算全部六阶段、检查扰动、真实安装和实际平台�
 
 组件走真实 native component 路径，不验证 `_C` kernel、完整模型、engine、Omni、
 训练或速度。原整引擎 `GraphPickler` 导入失败记录仍是历史边界，新重测未验收整引擎。
-生产修复与邻接验证见 [RMSNorm / Triton alias](../../../docs/results/2026-10-15-rmsnorm-triton-alias.md)。
+生产修复与邻接验证见 [RMSNorm / Triton alias](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-15-rmsnorm-triton-alias.md)。
 以下旧环境和历史速度只描述其日期。
 
 ## 源码注册分母（2026-10-15）
@@ -178,7 +178,7 @@ python tools/run_host_tests.py
 
 ## 证据
 
-- 报告：[`2026-08-31-vllm-ascend-jittor-bootstrap.md`](../../../docs/results/2026-08-31-vllm-ascend-jittor-bootstrap.md)（NPU）；
+- 报告：[`2026-08-31-vllm-ascend-jittor-bootstrap.md`](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-08-31-vllm-ascend-jittor-bootstrap.md)（NPU）；
   `2026-09-08-vllm-independent-distribution.md`（adapter 抽取进仓）与
   `2026-08-23-verl-vllm-trellis-current-baseline.md`（CUDA）两份已退役，Git 历史 `e3c369acb` 可查。
 - 准入与版本矩阵：[jittor-vllm](https://github.com/JittorEcosystem/jittor-vllm)、

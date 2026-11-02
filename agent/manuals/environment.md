@@ -199,7 +199,7 @@ non-causal blocks, an attention-elided ablation priced the composite at
 3.82 s/decode against torch's fused cuDNN kernel at 0.54 s, out of a 3.48 s
 total gap; naming the source took that decode from 10.13 s to 8.30 s with
 identical output statistics. See
-[`docs/results/2026-09-14-vllm-omni-h3-enablement.md`](../../docs/results/2026-09-14-vllm-omni-h3-enablement.md)
+[`docs/results/2026-09-14-vllm-omni-h3-enablement.md`](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-09-14-vllm-omni-h3-enablement.md)
 section 45.
 
 ### Ascend NPU

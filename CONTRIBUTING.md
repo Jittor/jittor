@@ -156,7 +156,6 @@ python -m nox -s cuda -- tests/nn/test_nn_capabilities.py
 | [`docs/compatibility/`](docs/compatibility/) | Torch 兼容层及其验收规则 |
 | [`docs/development/`](docs/development/) | 仓库布局、源码架构、测试体系、已知问题说明 |
 | [`docs/research/`](docs/research/) | 尚未定案的研究提案 |
-| [`docs/results/`](docs/results/) | 可复现的维护者结论，每条带状态、提交、范围、维护者与复查条件 |
 | [`docs/releases/`](docs/releases/) | 发布说明 |
 
 - 安装或首次使用发生变化时更新 [`README.md`](README.md)。它是唯一权威的根 README，

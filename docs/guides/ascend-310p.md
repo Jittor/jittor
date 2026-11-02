@@ -20,9 +20,9 @@
 模型级验收：Transformers 4.56.2 + Torch shim，Qwen3-0.6B FP16 greedy
 生成零回退且三次重复一致（需 `acl_allow_hf32=1`，RoPE 的 FP32
 `inv_freq @ position_ids` 走显式降精度），详见
-`docs/results/2026-09-22-qwen3-ascend310p-fp16.md`。
+[历史记录](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-09-22-qwen3-ascend310p-fp16.md)。
 当前 2.0 代码的同步性能对比、输入长度与快照权重约束见
-[310P3 性能报告](../results/2026-10-12-qwen3-ascend310p-performance.md)。
+[310P3 性能报告](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-12-qwen3-ascend310p-performance.md)。
 
 ## 与 910B 的能力差异
 

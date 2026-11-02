@@ -23,7 +23,7 @@ Without it this stack decodes noise: the VAE decode is built on one Python
 thread and fetched on another, and before the fix that produced all-NaN or
 garbage output in roughly two thirds of requests. The failure is silent -- the
 server returns 200, the job reports `error=None`, and the mp4 is noise. See
-`docs/results/2026-09-14-vllm-omni-h3-enablement.md` section 49.
+[历史记录](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-09-14-vllm-omni-h3-enablement.md) section 49.
 
 ## Environment
 

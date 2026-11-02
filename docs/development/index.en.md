@@ -44,5 +44,5 @@ known-issues/parallel-compiler-segfault.en
 | [Async error diagnostics contract](async-error-diagnostics.en.md) | The bounded launch-record ring and how it differs from graph metadata |
 | [Test system](test-system.en.md) | Test tiers, gates, and acceptance rules; optional fixtures, manual scripts, and maintainer probes |
 | [Downstream coverage and scorecards](downstream-scorecards.en.md) | Registry denominators, device and numerics evidence, and L2-L5 acceptance fields |
-| [NPU defect and performance record templates](npu-validation-templates.en.md) | Which fields an Ascend conclusion must record under `docs/results/` |
+| [NPU defect and performance record templates](npu-validation-templates.en.md) | Fields required for Ascend validation evidence in issues/PRs |
 | [Parallel compiler: file-level deadlock and operator-level segfault](known-issues/parallel-compiler-segfault.en.md) | The `KI-COMPILER-001` investigation: two same-name failures with different causes, reproduction protocol, and acceptance bar |

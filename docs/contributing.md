@@ -19,12 +19,12 @@
 每一页只属于一个栏目：使用指南 [`guides/`](guides/index.md)、机制说明
 [`notes/`](notes/index.md)、Torch 兼容 [`compatibility/`](compatibility/index.md)、
 开发文档 [`development/`](development/index.md)、研究提案
-[`research/`](research/index.md)、验证结论 [`results/`](results/index.md)、发布说明
+[`research/`](research/index.md)、发布说明
 [`releases/`](releases/index.md)。新增页面必须进对应栏目的 toctree，否则站点里没有
 入口（结构门禁会报孤立页面）。
 
 任务状态与交接记在 GitHub issue 与 PR 中，**不在仓库里维护看板**；PR 描述携带验证证据。
-可复现的维护者验证结论写进 `docs/results/`，每份报告都要带状态、对应提交、验证范围、
+执行记录也写入 GitHub issue/PR，不在 docs 建日期报告或结果树。每次验证写明状态、对应提交、验证范围、
 维护者和复查条件，格式与必填元数据见
 [NPU 缺陷与性能记录模板](development/npu-validation-templates.md)。
 

@@ -89,7 +89,7 @@ oracle 产出权重和参考值，shim 从同一份权重重算。
    CUDA。`large_transformers_bert` 修完 grad 身份 bug 后，稳态每步只差 1.11x，而 whole-run
    是 2.11x——差额全在第一次 backward / 第一个训练步。报显存时把稳态与首步分开写，
    否则预算按 whole-run 留、实际训练循环用不到；反之亦然。逐阶段量法见
-   `docs/results/2026-09-19-torch-compat-runbook-verification.md`。
+   [历史记录](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-09-19-torch-compat-runbook-verification.md)。
 
 ## 四、跑四轴
 
@@ -173,7 +173,7 @@ CPython minor 版本不同时默认拒绝共享包站，确实只走稳定 ABI �
 
 ## 七、落盘
 
-- 可复现结论写 `docs/results/YYYY-MM-DD-<topic>.md`：Status / 日期 / Baseline commit /
+- 可复现结论写进相关 GitHub issue/PR：Status / 日期 / Baseline commit /
   Owner / Review when，以及环境、命令、结果、边界。
 - 原始日志、包站、缓存、`verify-report.json` 留在 `$JITTOR_LAB_ROOT/_state/<topic>/`，
   不进主仓库。
@@ -240,7 +240,7 @@ case、runner 和三步训练 probe。它串行执行 base、seed 7 扰动及三
 
 准备固定的 PEFT/Transformers clean checkout、官方 wheel、独立双解释器及私有状态目录；
 先显式 CPU，再执行真实 CUDA。完整环境变量、collector 命令及范围见
-[PEFT 来源与训练结果](../../../docs/results/2026-10-15-peft-installed-source-training.md)。
+[PEFT 来源与训练结果](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-15-peft-installed-source-training.md)。
 普通 ecosystem pytest 的一步 parity 与这个完整 L3 gate 分开；nightly 未选择新 session
 时不能声称已有定期执行。历史 raw 缺来源字段时重新运行，不能反向补证。
 
@@ -250,7 +250,7 @@ case、runner 和三步训练 probe。它串行执行 base、seed 7 扰动及三
 它完整配置三个独立环境并执行原 438 数组/8 阶段 worker 协议，要求原参数/输入梯度、三步保存前训练及两步新进程续训，
 各 prefix 完整依赖解析与 `pip check`、实际官方 wheel/METADATA/pip RECORD 和公共 L3 准入均为必需。
 `JITTOR_ACCELERATE_COMPLETE_CPU=1` 才启用 fixed CPU 模式，不改变普通 CPU/CUDA 调用。
-实际执行状态和边界见[专用报告](../../../docs/results/2026-10-16-accelerate-maintained-cpu-nightly.md)，
+实际执行状态和边界见[专用报告](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-16-accelerate-maintained-cpu-nightly.md)，
 不将本地执行或工作流接线称为 hosted schedule 已运行，不用 CPU world1 配对 CUDA world2。
 
 Accelerate 没有与模型族同义的注册表。`tools/run_accelerate_gate.py` 直接调用维护中的
@@ -277,7 +277,7 @@ python agent/skills/torch-compat-repo-runbook/scripts/collect_accelerate_scoreca
   --run "$JITTOR_LAB_ROOT/_state/accelerate-protocol/cpu" \
   --run "$JITTOR_LAB_ROOT/_state/accelerate-protocol/cuda" \
   --upstream "$JITTOR_LAB_ROOT/accelerate-validation/upstream" \
-  --baseline <full-measured-source-SHA> --report docs/results/<dated-report>.md \
+  --baseline <full-measured-source-SHA> --report <commit-pinned-historical-report-URL> \
   --command '<exact measurement commands>' \
   --output "$JITTOR_LAB_ROOT/_state/accelerate-protocol/scorecard"
 ```

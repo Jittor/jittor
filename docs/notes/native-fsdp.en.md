@@ -4,7 +4,7 @@ Status: bounded CUDA/NCCL correctness implementation. FP32 training and fixed-la
 fresh-process continuation have maintainer evidence. BF16 computation also passes
 the recorded tolerances and exact continuation, but its small-gradient difference
 from binary Torch remains an explicit numerical limitation. See the
-[validation record](../results/2026-10-15-native-fsdp.en.md) for the measured source,
+[validation record](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-15-native-fsdp.en.md) for the measured source,
 thresholds and conditions. Owner: Jittor core maintainers; review when storage,
 collectives, optimizer gradients, precision policy or checkpoint encoding changes.
 
