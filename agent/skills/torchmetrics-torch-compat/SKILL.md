@@ -104,11 +104,11 @@ CPU 显式隐藏 CUDA，CUDA 两侧恢复实际 `JT_BUILD_NVCC_PATH`，不得猜
 
 ## 断点归属与 adapter 边界
 
-完整 CPU maintained 入口为 `nox -s ecosystem_metric_tensordict_source`，同时要求两库原协议，
+完整 CPU 组件入口在独立 jittor-torchmetrics 仓库执行，
 不能选择更少 case、梯度、步数或放宽预算。可用
-`python tools/provision_ecosystem_nightly.py --library metric_tensordict --state-root <new-external-state> --run`
+`python tools/provision_component.py --jittor-source "$JITTOR_SOURCE" --state-root <new-external-state> --run`
 创建三个独立环境、完整解析依赖并执行该入口。新 profile 保留实际 pip RECORD，使用固定官方 wheel，
-CPU 显式隐藏 CUDA；两库共 10 个 worker、35 对数组须全部被公共 collector 验收。
+CPU 显式隐藏 CUDA；本库 4 个 worker、6 对数组须全部被 collector 验收。
 实际 clean `c47033ed0a6bb692922efa98ecbbf7896bfe867f` 完整 fresh CPU profile 已通过：
 两库共 10 workers / 35 pairs，三独立环境完整解析与 `pip check` 均通过，公共 auditor 两条 CPU
 记录全部接受；其中 Metrics 六对数组、完整输入梯度为 L2，分母仍为 2/105。
@@ -122,8 +122,10 @@ CPU 显式隐藏 CUDA；两库共 10 个 worker、35 对数组须全部被公共
 | detached/cloned reset 状态 `+=` 后输入梯度丢失 | tensor installer 的 augmented operator 与共享 `_ip` owner；同文件验证四种 augmented 运算、reset state 和 no_grad |
 | 基础 Var/Op 算子数值错误 | Jittor 核心；不能塞进 TorchMetrics adapter |
 
-已有 `adapters/jittor_adapters/torchmetrics.py` 仅处理 1.7.4 的有界 helper policy
+已有 [jittor-torchmetrics](https://github.com/JittorEcosystem/jittor-torchmetrics) 仅处理 1.7.4 的有界 helper policy
 （`_bincount`、`dim_zero_cat`、`_safe_divide`），不承担通用 Module/梯度语义。
 `compat/tests/torch/test_torchmetrics_compat.py` 是另一条带硬编码期望值及 adapter 标记断言的
 可选路径。本轮没有以它证明分类、排名或 adapter 门禁；不要将其直接交给原生 Torch 解释器。
 历史“未安装/没有 ecosystem case”的结果已被上述固定版本的组件证据替代，不能扩大成整库支持。
+
+完整组件协议已迁至 [jittor-torchmetrics](https://github.com/JittorEcosystem/jittor-torchmetrics/blob/main/docs/testing.md)，上述 `tools/provision_component.py` 命令在独立仓库执行。旧验收报告保留原始源码身份，迁移不视为重新验收。

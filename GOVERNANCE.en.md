@@ -69,7 +69,7 @@ Module Maintainers are responsible for specific modules or components of the Jit
 - Backends (`backends/`: `cpu/ cuda/ acl/ rocm/ corex/ comm/`)
 - Neural Network Modules (`python/jittor/nn/`)
 - Model Library (`python/jittor/models/`)
-- Torch Compatibility (`compat/`) and optional adapters (`adapters/`)
+- Torch Compatibility (`compat/`) and [JittorEcosystem integrations](https://github.com/JittorEcosystem)
 - Documentation (`docs/`)
 - Testing Infrastructure (`tests/`)
 - Build System and CI (`.github/workflows/`, `noxfile.py`, `pyproject.toml`)

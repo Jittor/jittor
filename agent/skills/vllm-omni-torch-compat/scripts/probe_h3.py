@@ -185,10 +185,13 @@ def run(args, np, stack, identities):
         origin = getattr(jt, "__file__", None)
         if not origin or Path(origin).resolve() != args.source_root / "python/jittor/__init__.py":
             raise RuntimeError("Candidate imported a different Jittor source tree")
-        import jittor_adapters.vllm.layers as adapter_layers
+        import jittor_vllm.layers as adapter_layers
 
+        adapter_source = os.environ.get("JITTOR_VLLM_SOURCE")
+        if not adapter_source:
+            raise RuntimeError("Set JITTOR_VLLM_SOURCE to the independent adapter checkout")
         if Path(adapter_layers.__file__).resolve() != (
-            args.source_root / "adapters/jittor_adapters/vllm/layers.py"
+            Path(adapter_source).expanduser().resolve() / "jittor_vllm/layers.py"
         ):
             raise RuntimeError("Candidate imported a different adapter source tree")
         jt.flags.use_cuda = int(args.device == "cuda")

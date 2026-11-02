@@ -111,8 +111,8 @@ class CoverageAuditTests(unittest.TestCase):
         nox = self.root / "noxfile.py"
         nox.write_text(session_source)
         self.assertEqual(len(audit.dedicated_gates(self.root)["deepspeed"]), 1)
-        for target, source in ((gate, test_source), (trellis_gate, trellis_source), (swift_gate, swift_source),
-                               (flash_gate, flash_source), (verl_gate, verl_source),
+        for target, source in ((gate, test_source), (trellis_gate, trellis_source),
+                               (flash_gate, flash_source),
                                (mm_gate, mm_source), (nox, session_source)):
             with self.subTest(path=target.name):
                 target.write_text("def unrelated(): pass\n")
@@ -120,24 +120,6 @@ class CoverageAuditTests(unittest.TestCase):
                     audit.dedicated_gates(self.root)
                 target.write_text(source)
 
-        for invalid in ("def test_ms_swift_trainer_full_llama(): pass\n",
-                        "class WrongOwner:\n    def test_ms_swift_trainer_full_llama(self): pass\n",
-                        "class EcosystemSwift:\n    pass\n"
-                        "def unrelated():\n    def test_ms_swift_trainer_full_llama(): pass\n"):
-            swift_gate.write_text(invalid)
-            with self.subTest(source=invalid), self.assertRaisesRegex(ValueError, "dedicated gate"):
-                audit.dedicated_gates(self.root)
-
-        swift_gate.write_text(swift_source)
-        for invalid in (
-                verl_source.replace("    def test_verl_distillation_k3(self): pass\n", ""),
-                verl_source.replace("    def test_verl_ppo_gae_vanilla(self): pass\n", ""),
-                verl_source.replace("EcosystemVERLTraining", "WrongOwner")):
-            verl_gate.write_text(invalid)
-            with self.subTest(source=invalid), self.assertRaisesRegex(ValueError, "dedicated gate"):
-                audit.dedicated_gates(self.root)
-
-        verl_gate.write_text(verl_source)
         for invalid in (
                 mm_source.replace("    def test_mmengine_train_step(self): pass\n", ""),
                 mm_source.replace("    def test_mmcv_convmodule_train_step(self): pass\n", ""),
@@ -164,27 +146,19 @@ class CoverageAuditTests(unittest.TestCase):
                                     for node in item["tests"]))
 
 
-    def test_swift_trainer_class_method_is_a_dedicated_gate_without_fake_case(self):
+    def test_ms_swift_protocol_is_owned_by_independent_repository(self):
         row = next(item for item in audit.audit(ROOT)["repos"] if item["repo"] == "ms-swift")
-        case = "ms_swift_trainer_full_llama"
-        self.assertNotIn(case, row["registered_cases"])
-        self.assertNotIn(case, [item["case"] for item in row["gate_cases"]])
-        self.assertEqual(row["dedicated_gates"], [{
-            "protocol": "swift-trainer", "session": "ecosystem_swift",
-            "tests": ["compat/tests/torch/test_ecosystem_swift.py::EcosystemSwift::test_ms_swift_trainer_full_llama"],
-        }])
+        self.assertEqual(row["dedicated_gates"], [])
+        self.assertEqual(row["external_repository"], "https://github.com/JittorEcosystem/jittor-ms-swift")
         self.assertIsNone(row["verified_level"])
 
-    def test_verl_training_discovers_both_actual_class_methods_without_claiming_execution(self):
+
+    def test_verl_protocol_is_owned_by_independent_repository(self):
         row = next(item for item in audit.audit(ROOT)["repos"] if item["repo"] == "verl")
-        self.assertEqual(set(row["registered_cases"]),
-                         {"verl_ppo_gae_vanilla", "verl_distillation_k3"})
-        self.assertEqual(row["dedicated_gates"], [{
-            "protocol": "verl-component-training", "session": "ecosystem_verl_training",
-            "tests": ["compat/tests/torch/test_ecosystem_verl_training.py::EcosystemVERLTraining::" + name
-                      for name in ("test_verl_ppo_gae_vanilla", "test_verl_distillation_k3")],
-        }])
+        self.assertEqual(row["dedicated_gates"], [])
+        self.assertEqual(row["external_repository"], "https://github.com/JittorEcosystem/jittor-verl")
         self.assertIsNone(row["verified_level"])
+
 
     def artifact_json(self, row, role, value):
         self.serial += 1

@@ -30,6 +30,23 @@ class BenchmarkCatalogTests(unittest.TestCase):
             self.assertTrue(all(suite["workloads"] for suite in listing["suites"]))
             self.assertEqual(list(Path(directory).iterdir()), [])
 
+    def test_graph_profile_resolves_current_model_fixture(self):
+        from benchmarks import graph_build_phases
+        import sys
+        from types import SimpleNamespace
+        from unittest.mock import Mock, patch
+
+        model = Mock(return_value=SimpleNamespace(sample="output"))
+        frontend = SimpleNamespace(randn=Mock(return_value="sample"),
+                                   randint=Mock(return_value="timestep"))
+        diffusers = SimpleNamespace(UNet2DModel=Mock(return_value=model))
+        with patch.dict(sys.modules, {"diffusers": diffusers}), patch.object(sys, "path", list(sys.path)):
+            build = graph_build_phases.case_unet2d(frontend, None, "cpu")
+            self.assertEqual(build(), "output")
+        model.assert_called_once_with(sample="sample", timestep="timestep")
+        frontend.randn.assert_called_once_with(4, 3, 64, 64)
+        frontend.randint.assert_called_once_with(0, 1000, (4,))
+
     def test_asv_inventory_reads_source_without_executing_it(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

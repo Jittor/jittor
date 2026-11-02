@@ -11,6 +11,7 @@
 ```{toctree}
 :maxdepth: 1
 
+acl-manual-probes
 2026-11-01-vllm-runtime-integration
 2026-11-01-python-float-division
 2026-10-31-cuda-var-relay-decline

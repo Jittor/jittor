@@ -49,7 +49,7 @@ compat/tests/             # 可选 jittor-compat 项目的测试根
 ├── structure/            # 名字归属与命名空间发布的结构契约
 ├── fsdp2/                # FSDP2
 └── triton/               # Triton 桥
-adapters/tests/           # 第三方 adapter（含 vllm/）
+adapters/                 # Independent JittorEcosystem repository index (no runtime or tests)
 ```
 
 All three roots load `tests/_helpers/pytest_policy.py` through a thin conftest. The helper is a
@@ -307,12 +307,8 @@ specific precondition, and **never quietly switch to a weaker check**.
 | --- | --- | --- |
 | `JITTOR_TEST_IMAGENET_TRAIN` | An ImageNet-layout training directory (one subdirectory per class). `tests/data/test_dataset.py` uses it to verify that a multi-worker `Dataset` matches `num_workers=0` batch by batch; `tests/data/test_image_folder.py` additionally uses the optional `torch`/`torchvision` to align Jittor's `ImageFolder` with `torchvision` | the whole test class skips, with the reason naming the variable |
 | `REAL_TORCH_SITE` | the in-process independent PyTorch oracle (see "Process-mode isolation" above) | the optional PyTorch comparison is skipped; **a deployed shim does not stand in for it** |
-| `QWEN3_0_6B` | the Qwen3-0.6B checkpoint directory for `tests/backends/acl/manual/xcheck/qwen_logits.py`. That script dumps the next-token logits once under real torch and once under the Jittor shim, and `compare.py` then aligns them | the script exits with a `KeyError` -- it is `manual` and not scheduled by any gate |
 
-The scripts under `tests/backends/acl/manual/` (GPT-2 forward/gradient alignment, Qwen3 logits
-alignment) need a real Ascend device and are **run manually**; usage and verified results are in
-that directory's README, and device-side configuration is in the
-[Ascend 910B guide](../guides/ascend-910b.en.md).
+Native GPT forward/gradient probes live in `tools/probes/acl/` and require explicit real-device setup. Qwen3-specific probes live in [jittor-transformers testing](https://github.com/JittorEcosystem/jittor-transformers/blob/main/docs/testing.en.md), with pinned versions and explicit model arguments. See the [Ascend 910B guide](../guides/ascend-910b.en.md) for device configuration. Migration grants no new hardware acceptance.
 
 ## Maintainer probes
 

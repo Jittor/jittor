@@ -148,17 +148,17 @@ fallback 能骗过的那一个**：NPU 真发生 CPU 回退时，它会完美一
 ## 6. Adapter 准入清单
 
 只有第 0 节第三行还剩东西时才建 adapter。目录形态是自足单元，`cp -r` 能整体搬走：
-代码与它的 `tests/` 同住。进仓必须齐：
+运行代码与顶层 `tests/` 位于同一个独立仓库。每个下游项目在 `JittorEcosystem` 单独维护；主仓 `adapters/` 只保留导航。独立仓库必须齐：
 
 1. **断点表 + 分流声明**：为什么这不是 compat 缺陷、也不是 jittor 缺功能；
 2. **继承共享 relocatable 契约**：只 import 公开入口白名单、不碰私有属性、不给
    `jt`/`jittor`/`torch` 任何属性赋值、扫描用 `rglob` 防新子包绕过、**规则本身带负向
    测试**、扫描排除 `tests/`；
 3. **版本矩阵 fail-closed**：用
-   [`_common.py`](../../../adapters/jittor_adapters/_common.py) 的 `require_version` 与
+   [`_common.py`](https://github.com/JittorEcosystem/jittor-transformers/blob/main/jittor_transformers/_common.py) 的 `require_version` 与
    `SUPPORTED_VERSIONS`，**不要自己造**；未验证版本显式拒绝，不能默默 arm 一个 finder
    去骗没验过的库；
-4. **独立发行**：删掉 `adapters/` 整棵树，主仓其余门禁结果不变；
+4. **独立发行**：不依赖主仓 checkout 路径；主仓门禁不收集下游仓库测试；
 5. **真机验收报告**，`Review when:` 必须包含 **adapter 依赖的 compat 公开入口变更**
    （`owned_runtime_hook`、`transaction`、`module_patcher`）；
 6. **库缺席的诚实 skip 类别**：库名进 `ENVIRONMENT_SKIP_PATTERNS`，并按

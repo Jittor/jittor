@@ -40,7 +40,7 @@ Use the lowest reusable layer that correctly owns the behavior:
 | Reusable import/build/patch mechanism | `jittor.compat` |
 | Torch shim runtime/deploy and top-level `torch` surface | `jittor.compat.shim` |
 | Triton API bridge | `jittor.compat.triton` |
-| One project's model/version glue | an optional adapter package (`adapters/`) |
+| One project's model/version glue | an [independent downstream integration](https://github.com/JittorEcosystem) |
 
 If several downstream projects need the same operation, promote the operation to
 the native domain. If they only need the same patching mechanism, promote the

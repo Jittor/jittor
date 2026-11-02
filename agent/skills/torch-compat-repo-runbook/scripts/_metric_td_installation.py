@@ -1,4 +1,9 @@
-"""Fixed official payloads for the existing Metrics/TensorDict components."""
+"""Historical Metrics/TensorDict evidence decoding and legacy source identities.
+
+Current execution/provisioning is maintained by the two independent ecosystem
+repositories. This reader remains for existing report/source proofs; Diffusers
+also retains the historical source-closure contract when reviewing old runs.
+"""
 
 import ast
 from functools import lru_cache
@@ -120,6 +125,22 @@ def framework_snapshot(root, *, baseline=None):
               'agent/skills/torch-compat-repo-runbook/scripts/training_probe.py',
               'agent/skills/torch-compat-repo-runbook/scripts/verify_repo.py',
               'agent/skills/torch-compat-repo-runbook/scripts/_runtime_platform.py']
+    runtime_helper = 'agent/skills/torch-compat-repo-runbook/scripts/_component_runtime.py'
+    helper_selection = (['ls-files', '--', runtime_helper] if baseline is None else
+                        ['ls-tree', '-r', '--name-only', baseline, '--', runtime_helper])
+    helper_tracked = bool(subprocess.check_output(
+        ['git', '-C', str(root), *helper_selection], text=True).strip())
+    consumer = 'agent/skills/torch-compat-repo-runbook/scripts/_metric_td_installation.py'
+    consumer_bytes = (subprocess.check_output(['git', '-C', str(root), 'show', baseline + ':' + consumer])
+                      if baseline is not None else (root / consumer).read_bytes())
+    imports_helper = any(isinstance(node, ast.ImportFrom) and node.module == '_component_runtime'
+                         or isinstance(node, ast.Import) and any(alias.name == '_component_runtime'
+                                                               for alias in node.names)
+                         for node in ast.walk(ast.parse(consumer_bytes, filename=consumer)))
+    require(not imports_helper or helper_tracked,
+            'Component runtime helper is imported but absent from the selected source inventory')
+    if helper_tracked:
+        paths.append(runtime_helper)
     # A historical measurement predating the maintained runner retains exactly
     # its original closure. File existence on today's disk cannot choose it.
     tools = ('tools/run_metric_td_gate.py', 'tools/run_transformers_gate.py')
@@ -161,52 +182,8 @@ def validate_measurement_source(value, baseline):
 
 
 def validate_runtime_metadata(value, baseline, expected_platform=None, *, source_validator=None):
-    (validate_measurement_source if source_validator is None else source_validator)(value, baseline)
-    runtime, device = value.get('runtime'), value.get('device')
-    require(runtime in ('torch', 'jittor') and device in ('cpu', 'cuda'), 'Wrong component runtime/device')
-    identity = value.get('interpreter', {})
-    require(identity.get('is_shim') is (runtime == 'jittor')
-            and type(identity.get('pid')) is int and identity['pid'] > 0,
-            'Missing independent actual component process identity')
-    if runtime == 'torch':
-        binary = identity.get('binary_extension')
-        require(binary and Path(binary).is_file() and digest(binary) == identity.get('binary_sha256'),
-                'Missing actual independent binary Torch extension')
-    paths = value.get('runtime_environment', {})
-    require(set(paths) == {'HOME', 'JITTOR_HOME', 'TMPDIR', 'XDG_CACHE_HOME'}
-            and all(isinstance(path, str) and Path(path).is_absolute() for path in paths.values()),
-            'Missing actual isolated component runtime paths')
-    platform = value.get('platform', {})
-    controls = value.get('device_controls', {})
-    observations = value.get('tensor_observations', [])
-    require(platform.get('precision') == value.get('tf32') and observations
-            and all(row.get('device') == device for row in observations),
-            'Missing actual component precision/tensor device observations')
-    if runtime == 'jittor':
-        require(value.get('fallback_policy') == 'error' and value.get('fallback_count') == 0
-                and value.get('native_runtime_flags', {}).get('use_cuda') == int(device == 'cuda')
-                and all(row.get('dispatch') == device and row.get('location') ==
-                        ('device' if device == 'cuda' else 'cpu') for row in observations),
-                'Missing native component residency/zero-fallback proof')
-    if device == 'cpu':
-        require(controls.get('cuda_visible_devices') == '' and controls.get('cuda_available') is False
-                and platform.get('card_count') == 0 and platform.get('card_indices') == [],
-                'CPU component did not explicitly hide CUDA')
-    else:
-        physical = platform.get('physical_devices', [])
-        require(controls.get('cuda_available') is True and len(physical) == platform.get('card_count') == 1
-                and controls.get('cuda_device', {}).get('uuid') == physical[0]['uuid']
-                and all(row.get('pointer_device') == 0 for row in observations),
-                'Component tensor pointers differ from the allocated physical CUDA device')
-    if expected_platform is not None:
-        if runtime == 'jittor':
-            require(platform == {key: item for key, item in expected_platform.items() if key != 'oracle'},
-                    'Record platform differs from actual candidate worker')
-        else:
-            for key in ('os', 'cpu', 'accelerator_model', 'card_count', 'card_indices', 'physical_devices',
-                        'driver', 'cann', 'precision'):
-                require(platform.get(key) == expected_platform.get(key), 'Oracle/candidate physical platform mismatch')
-            oracle = expected_platform.get('oracle', {})
-            require(oracle.get('is_shim') is False and oracle.get('torch_version') == identity['torch_version']
-                    and oracle.get('binary_extension') == identity['binary_extension'],
-                    'Record oracle differs from actual independent process')
+    """Read historical component evidence; current execution lives downstream."""
+    from _component_runtime import validate_runtime_metadata as validate
+
+    return validate(value, baseline, expected_platform,
+                    source_validator=source_validator or validate_measurement_source)

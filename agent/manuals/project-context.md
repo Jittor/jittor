@@ -16,7 +16,7 @@ graph, the C++ core in `src/` fuses and compiles kernels, and backends live unde
 `backends/<name>/` (CPU, CUDA, ROCm, ACL/Ascend, Corex, and `comm/{mpi,nccl,hccl}`).
 The Torch compatibility layer is the separate `jittor-compat` project in `compat/`
 (published as `jittor.compat`, including the `import torch` shim); downstream
-library adapters live in `adapters/`. The goal is a maintainable, Torch-grade
+library adapters are independently maintained in [JittorEcosystem](https://github.com/JittorEcosystem); `adapters/` is an index only. The goal is a maintainable, Torch-grade
 framework that keeps the JIT/meta-operator design, under the gates in
 [Torch compatibility principles](../../docs/compatibility/principles.md).
 

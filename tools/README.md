@@ -5,12 +5,11 @@ of the installed `jittor` API. It intentionally has no `__init__.py` files and
 must remain absent from wheels.
 
 Most commands write state below
-`${JITTOR_LAB_ROOT:-../jittor-lab}/_state`. Review commands under a `legacy/`
-directory before use; they preserve old workflows but are not recommended for
-new deployments.
+`${JITTOR_LAB_ROOT:-../jittor-lab}/_state`.
 
-- `benchmarks/`: one-off phase timers; maintained benchmarks live in the root
-  `benchmarks/` tree (ASV regressions, Torch comparisons, and ACL measurements).
+Benchmark commands live in the root `benchmarks/` tree (ASV regressions,
+Torch comparisons, graph profiling, and ACL measurements).
+
 - `build/`: explicit source and asset builders.
 - `distributed/`: operator-facing distributed helpers.
 - `docs/`: documentation builders, links and governance checks.

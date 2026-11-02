@@ -1,6 +1,6 @@
 ---
 name: vllm-torch-compat
-description: 在 Jittor torch shim 与独立 PyTorch 两套解释器上运行和验证 vLLM 的 runbook——怎么跑 shim、怎么跑 oracle、怎么对拍数值与速度，以及断点该落 jittor 核心 / jittor.compat.torch / adapter 的哪一层。用于修改 adapters/jittor_adapters/vllm/、复验 vLLM 接入或排查 vLLM 在 shim 上的 import/执行问题。
+description: 在 Jittor torch shim 与独立 PyTorch 两套解释器上运行和验证 vLLM 的 runbook——怎么跑 shim、怎么跑 oracle、怎么对拍数值与速度，以及断点该落 jittor 核心 / jittor.compat.torch / adapter 的哪一层。用于修改独立 jittor-vllm 仓库、复验 vLLM 接入或排查 vLLM 在 shim 上的 import/执行问题。
 ---
 
 # vLLM 的 shim ⇄ 原生 torch 对拍
@@ -109,29 +109,21 @@ oracle 侧的下游库版本必须与 shim 侧一致。
 
 ## 在 shim 上跑
 
-adapter 的结构与生命周期测试（不编译、不 JIT；实测 `9 passed in 6.57s`）：
+adapter 的结构与生命周期测试在独立仓库执行：
 
 ```bash
-cd <repo-root>
-JITTOR_VLLM_HOST_ONLY=1 JITTOR_TORCH_SHIM=1 PYTHONPATH=adapters \
-  python -m pytest -q \
-    adapters/tests/vllm/test_plugin_lifecycle.py \
-    adapters/tests/vllm/test_arming_ownership.py \
-    adapters/tests/vllm/test_runtime_ownership.py
+cd "$JITTOR_VLLM_SOURCE"
+python tools/run_host_tests.py
 ```
 
-`JITTOR_TORCH_SHIM=1` 不可省：实测缺它会被仓库 pytest guard 直接拒绝（报
-"these paths run under Torch compatibility mode"，是 ERROR 不是 FAILED）。
+安装与真实设备验收见 [jittor-vllm 测试说明](https://github.com/JittorEcosystem/jittor-vllm/blob/main/docs/testing.md)。独立仓库管理自己的测试选择和依赖；主仓门禁不再收集这些测试。
 
-有真实后端时的数值/结构测试在 [`adapters/tests/vllm/`](../../../adapters/tests/vllm/)
-（`test_structure.py`、`test_flash_attn.py`、`test_backend.py`、`test_layers.py`）；先读
-[`conftest.py`](../../../adapters/tests/vllm/conftest.py) 的 `JITTOR_VLLM_HOST_ONLY` 开关。
 结构门禁要求 adapter 只经公开入口 import jittor、不碰私有属性、不给 `jt`/`jittor`/`torch`
 赋值——`test_structure.py` 里带负向用例。
 
 在真实 vLLM checkout 上跑：验证环境没有源码 checkout，报告里的外置 adapter 已不在此仓。
-`import jittor_adapters.vllm` 本身不激活任何东西，必须经 `jittor_vllm` entry point 调
-[`register`](../../../adapters/jittor_adapters/vllm/registration.py)。
+`import jittor_vllm` 本身不激活任何东西，必须经 `jittor_vllm` entry point 调
+[`register`](https://github.com/JittorEcosystem/jittor-vllm/blob/main/jittor_vllm/registration.py)。
 
 ## 在原生 torch 上跑
 
@@ -166,7 +158,7 @@ JITTOR_VLLM_HOST_ONLY=1 JITTOR_TORCH_SHIM=1 PYTHONPATH=adapters \
 
 | 断点 | 层 | 依据 |
 | --- | --- | --- |
-| `vllm._C` / `_moe_C` / `_vllm_fa2_C` 等编译扩展、`torch.ops._C` 算子 | **adapter** | 库私有实现，非 torch API；[`bootstrap.py`](../../../adapters/jittor_adapters/vllm/bootstrap.py) 做成 importable-but-empty 并用公开 Jittor primitive 补算子 |
+| `vllm._C` / `_moe_C` / `_vllm_fa2_C` 等编译扩展、`torch.ops._C` 算子 | **adapter** | 库私有实现，非 torch API；[`bootstrap.py`](https://github.com/JittorEcosystem/jittor-vllm/blob/main/jittor_vllm/bootstrap.py) 做成 importable-but-empty 并用公开 Jittor primitive 补算子 |
 | layer / attention patch（RMSNorm、ServingAttention 等） | **adapter** | 指向 `jt.nn` 公开 primitive，不碰私有属性 |
 | vLLM 从 `torch.__version__` 推断 API level | **`jittor.compat.torch`** | 公开入口 `compat_report_torch_api_version`；adapter 不得写 `torch.__version__` |
 | `torch.library.infer_schema` / `Library` / `ops`、distributed `Store`、FakeTensor 边界 | **jittor core / compat** | 缺功能或缺拼写 |
@@ -175,7 +167,7 @@ JITTOR_VLLM_HOST_ONLY=1 JITTOR_TORCH_SHIM=1 PYTHONPATH=adapters \
 
 ## 坑与假绿
 
-1. `import jittor_adapters.vllm` 看着像"接好了"——它什么都不做，要经 `register`/`arm`。
+1. `import jittor_vllm` 看着像"接好了"——它什么都不做，要经 `register`/`arm`。
 2. 编译扩展是 **importable-but-empty stub**：缺一个算子不报错，只拿错结果跑到输出。必须
    按下游实际调用的算子做差集（`downstream-library-adaptation` 第 6.7 条）。
 3. adapter 测试缺 `JITTOR_TORCH_SHIM=1` 会 ERROR，容易被误读成环境坏了。
@@ -191,7 +183,7 @@ JITTOR_VLLM_HOST_ONLY=1 JITTOR_TORCH_SHIM=1 PYTHONPATH=adapters \
   `2026-09-08-vllm-independent-distribution.md`（adapter 抽取进仓）与
   `2026-08-23-verl-vllm-trellis-current-baseline.md`（CUDA）两份已退役，Git 历史 `e3c369acb` 可查。
 - 准入与版本矩阵：[`adapters/README.md`](../../../adapters/README.md)、
-  [`_common.py`](../../../adapters/jittor_adapters/_common.py)。
+  [`_common.py`](https://github.com/JittorEcosystem/jittor-transformers/blob/main/jittor_transformers/_common.py)。
 - **已核实**：两侧 venv 的 vllm/transformers/torch 版本、oracle 断言、shim 身份、
   adapter 文件与 `jittor_vllm` entry point 存在、host-only 生命周期测试
   `9 passed in 6.57s`（历史）。当前组件 case 的新证据以上文 2026-10-15 报告为准。
@@ -207,7 +199,7 @@ JITTOR_VLLM_HOST_ONLY=1 JITTOR_TORCH_SHIM=1 PYTHONPATH=adapters \
 这是 2026-09-19 的历史观察；2026-10-15 新增组件门禁，但仍不授予 engine 支持。
 
 **任务给的命令**（`JITTOR_VLLM_HOST_ONLY=1 JITTOR_TORCH_SHIM=1 PYTHONPATH=adapters`，
-跑整个 `adapters/tests/vllm/`）：
+运行独立 jittor-vllm 仓库的设备测试）：
 
 ```
 27 failed, 25 passed, 1 error, 37 subtests passed in 1.45s

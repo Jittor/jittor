@@ -67,7 +67,7 @@ test, 7 have no tests yet, and 1 is unimplemented (open item `KI-BACKEND-013`).
 | Reference torch for nightly ecosystem cross-checks | CPU build `2.7.1`, with `transformers 4.46.3`, `diffusers 0.31.0`, `peft 0.13.2` | Gate, `.github/workflows/ecosystem.yml` (`nox -s ecosystem`, seven cases run twice, comparing outputs and every gradient) |
 | Reference torch for the real-model gap table | `2.11.0+cu128` (cuDNN 9.19), Transformers 4.56.2, Diffusers 0.35.1 | [Torch compatibility layer vs PyTorch on real models](../results/2026-09-24-torch-compat-real-models.en.md) |
 | Reference torch for recent SDPA / end-to-end measurements | `2.13.0+cu129` | [Downstream library performance ledger](../performance/library-standing.en.md) |
-| Library versions supported by adapters | Transformers 4.56.2 / 5.5.3; TorchMetrics 1.7.4 | `adapters/pyproject.toml` and [`adapters/README.md`](https://github.com/Jittor/jittor/blob/master/adapters/README.md); unrecognized versions raise `UnsupportedAdapterVersion` |
+| Library versions supported by integrations | Scoped independently by library | [JittorEcosystem](https://github.com/JittorEcosystem) repositories own version guards and hardware acceptance; unknown versions are rejected |
 
 **Compiled PyTorch extensions are not supported at all**: packages such as `mmcv.ops` and
 `torch_npu` that ship `.so` files compiled against the PyTorch C++ ABI cannot be installed by
