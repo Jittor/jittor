@@ -1,3 +1,11 @@
+## 2026-11-02 20:33 +0800 Handoff：BF16 wrapper 差异收窄到 Var 表示/图执行路径
+
+继续使用 /home/cgq/jittor。storage.data_ptr 修复提交 2273a24f8b6fbec8e8623a17adaab2ba20b0a1a1 已推到 origin/cgq_transformers；未提 PR，未合并 2.0-refactor。81 个 tracked dirty 与 21 个 untracked 条目保留，index 为空。
+
+新的 CPU-only BF16 AdamW 诊断显示：原始 wrapper 路径仍复现二阶矩差；两侧都复制梯度后二阶矩一致而一阶矩仍分叉；两侧都复制 state slots 后两个 moment 一致。梯度和 state 同时复制也一致，但数值与只复制 state 的路径不完全相同。这说明表示/执行历史可能参与差异，具体根因仍未证明，未改产品算法。证据包和哈希见 [Day2–5 报告](2026-10-26-torch-compat-release-day2-5.md)。
+
+下一步对比 fresh/restored Tensor、Var、底层 storage 与 stop-grad 元数据及实际 arithmetic dispatch，并建立最小 stock PyTorch 对照；再决定是否修复和新增回归。GPU2 仍由外部任务占用、cgq 缺 Slurm association，因此正式 Day4–5 性能/显存协议暂不能执行；held-out generation、跨框架 optimizer 格式互操作及更广 CUDA/support matrix 也仍开放。整体 release 继续 **Not complete**。
+
 ## 2026-11-02 20:24 +0800 Handoff：CPU Torch storage 基址语义修正通过聚焦门
 
 `_Storage.data_ptr()` 现返回 allocation 基址（逻辑首元素地址减 storage offset），tied alias/view CPU 回归通过。CPU serialization 两文件为 49 passed、1 CUDA skip；相关 structure 子集 24/24 passed，layout 检查通过。全量 `tests/structure` 180 秒到约 82% exit 124，日志保留，未算通过。修复和新增断言已单独暂存，文件中的既有 dirty hunks 仍未暂存。

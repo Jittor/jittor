@@ -1,3 +1,15 @@
+## 2026-11-02 20:33 +0800 CPU BF16 AdamW wrapper 图路径诊断；Day2–5 未完成
+
+接续 storage.data_ptr 修复提交 2273a24f8b6fbec8e8623a17adaab2ba20b0a1a1，origin/cgq_transformers 已指向同一提交。诊断结束时工作区有 81 个 tracked dirty 路径、21 个 untracked 条目，index 为空；tracked diff SHA256 b97553cf0eb6cc4ca17f3f929071c3ab5db92322030ddef33a79c2da38786200，porcelain SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211。本轮未改源码。
+
+实验用来区分 BF16 restore 后 exp_avg_sq 分叉是否受 wrapper 输入 Var 表示或图历史影响。复用隔离 CPU runtime/core，设置 CUDA_VISIBLE_DEVICES 为空、JT_BACKEND=cpu、use_cuda=0、JITTOR_NO_BUILD=1 与 fallback error；不代表 CUDA 结果。第一次从错误目录启动时，torch shim 扫描到 /home/cgq/Motion324/setup.py，因缺少 omegaconf 在诊断代码执行前退出；原件保留。修正为从仓库启动后一次完成，exit 0、fallback delta 0、jittor_has_cuda=false。
+
+基线复现连续与恢复路径的二阶矩差 [-1.903623342514038e-06, -6.676465272903442e-05]。两边梯度复制成独立 stop-grad Var 后，二阶矩逐值相同，但一阶矩仍有差异；两边的 m 与 exp_avg_sq slots 都复制成独立 stop-grad Var 后，两类 moment 更新逐值相同。梯度和状态同时复制时也相同，但产出的共同二阶矩与只复制状态时不同。变化说明运行路径受 Var 表示、图历史或惰性依赖影响；这并未确定根因，也未与 stock PyTorch 数学结果重新对照，因此不能据此改算法或阈值。
+
+脚本 SHA256 0e42cd06560970ad1bd5b6d16249cb12455725773fcadb49a1dd1f7fd0c42a9a；首次失败日志 e7d09fc04fcd48c8bec64ed70e07f54c7896aa8568c52f30eb8a2b5d2ad6d42f；修正后成功日志 b84caeaa148a77be92e81fafbe28e9fbe8c25de9664c36ec5e9147c40fd71b74。完整包位于 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-cpu-bf16-wrapper-graph-diagnostic-r1-prepared/，manifest SHA256 e3e88de6a1b4c49c0a06f3d65bbda3b10b42031d8d9098acc6bb31ac8027db72。
+
+下一步检查 fresh 与 load 后 state/gradient 的精确 Python/C++ 类型元数据及 optimizer arithmetic dispatch，再用匹配 stock PyTorch 的独立数值对照找出最小触发条件。GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 仍是共享占用，当前没有 cgq Slurm association；Day4–5 仍需管理员配置可验证的 GRES/device-cgroup 独占租约，再按至少三轮交替、每轮每侧至少十个热态样本采集性能、峰值显存、load/首步/热态时间和离散度。整体 Day2–5 release 继续 **Not complete**。
+
 ## 2026-11-02 20:24 +0800 修复 Torch storage.data_ptr 基址语义
 
 当前 `_Storage.data_ptr()` 返回 `id(var)`，与 Torch 的 storage 地址合同不符。Jittor C++ 将 `mem_ptr` 定义为该 Var 逻辑首元素地址，并单独记录 allocation-relative offset，因此基址为 `int(var._storage_address) - int(var._storage_offset()) * dtype_size`。CPU 最小复现原用例 1 failed，日志 SHA256 `0875f3b614e9405c15ec4525cebfc933bba370ad17eeda29a464e87349e64898`。

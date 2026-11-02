@@ -1,3 +1,11 @@
+## 2026-11-02 20:33 +0800 CPU BF16 AdamW wrapper 图路径诊断；发布门仍未完成
+
+沿用当前工作区 HEAD/origin cgq_transformers 2273a24f8b6fbec8e8623a17adaab2ba20b0a1a1。诊断期间保留 81 个 tracked dirty 路径、21 个 untracked 条目，index 为空；tracked diff SHA256 b97553cf0eb6cc4ca17f3f929071c3ab5db92322030ddef33a79c2da38786200，porcelain SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211。未改产品源码或其他工作区文件。
+
+CPU-only BF16 AdamW wrapper 诊断复现原始恢复差异。只将两边梯度都物化为独立 stop-grad Var 后，exp_avg_sq 相等但 exp_avg 仍不同；只将两边 moment slots 都物化为独立 stop-grad Var 后，两类 moment 都相等。两者同时物化时也相等，但共同的 exp_avg_sq 数值与“只物化 state”变体不同。这说明 Var 表示、图历史或延迟更新路径影响结果，根因仍不明；没有改算法或放宽阈值。隔离证据包 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-cpu-bf16-wrapper-graph-diagnostic-r1-prepared/，4 项文件 manifest SHA256 e3e88de6a1b4c49c0a06f3d65bbda3b10b42031d8d9098acc6bb31ac8027db72。
+
+GPU2 未使用，结束时外部占用 45,880 MiB、97%。Day4–5 正式性能/显存与更广 Day2–5 发布门继续 **Not complete**。
+
 ## 2026-11-02 20:24 +0800 修复 Torch Storage.data_ptr 基址语义；Day2–5 未完成
 
 从已同步的 HEAD/origin `a099f09c674e4fee7dcc5d8bfd2d83d8e8d1fe6e` 接续。确认 compat 路径与 python/jittor 路径的 method_api.py 是同一 inode。原实现把 `id(var)` 当 storage 地址；Jittor 的 `_storage_address` 是 view 的逻辑首元素指针，因此 storage 基址应为 `address - storage_offset * dtype_size`。先运行 tied-weight 最小复现，稳定在 Tensor 与 Storage 地址比较处失败，1 failed；日志 SHA256 `0875f3b614e9405c15ec4525cebfc933bba370ad17eeda29a464e87349e64898`。
