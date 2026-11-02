@@ -1,3 +1,20 @@
+## 2026-11-02 21:26 +0800 current-main CUDA 补测；Day2–5 未完成
+
+接续 /home/cgq/jittor，测试绑定 HEAD/origin/cgq_transformers 847b40f4fa88c26a8213a4e20cfa332e3d8c5f60。测试期间产品源码无变化；81 tracked dirty、21 untracked 原样保留，index 为空；tracked diff SHA256 b97553cf0eb6cc4ca17f3f929071c3ab5db92322030ddef33a79c2da38786200，porcelain SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211。
+
+真实 GPU0 UUID GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5 映射为 cuda:0，Nox 强制 accelerator case 且 backend_fallback=error。结果：
+- tests/backends/parity/test_device_parity.py::TestDeviceParity::test_argmax 与 test_argmin：2 passed、0 skipped，62.90s。
+- tests/backends/cuda/test_cuda_op_capabilities.py：6 passed、0 skipped，30.16s，涉及 capability/dtypes、cuRAND、CUB、cuBLAS、cuDNN。
+- tests/backends/parity/test_backend_contract_matrix.py：54 collected、54 executed、54 passed，118.16s。矩阵摘要 CPU 35 passed/6 no-probe、CUDA 39 passed/21 no-probe，共 27 no-probe cells；ACL/ROCm/CoreX 未构建，HCCL/MPI/NCCL 未加载。no-probe 组合不算执行通过。
+
+argmax/argmin 初次失败是复制 cache 搬迁导致的误证据：旧复制 CUB DSO 的 RUNPATH 指向另一 Nox cache，并加载另一份 jittor_core。保留失败原件后，在 r2 隔离 cache 内重链复制扩展，RUNPATH 和动态链接均指向 r2，复测通过；无源码修改。历史诊断仍在 20261102-current-main-cuda-reductions-focused-r1-prepared 与 20261102-current-main-cuda-argreduce-cub-lazy-fix-r1-prepared。
+
+证据包 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-cuda-argreduce-cub-relocated-cache-fix-r1-prepared/，artifact manifest 文件 SHA256 13126fe75b64ca9b74e8e407d26c74f96c4c6e76ee357df7761e494ceff3e0ed；source-binding 包含提交、dirty fingerprints、GPU/device/fallback 和结果。测试使用独立 cache，不支持性能提升、显存节省或完整发布覆盖结论。
+
+GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 未用于测试；复核时为 45,880 MiB、100% 利用率。因缺少 account/partition association，srun --test-only 被拒；用户已请管理员添加 cgq association。正式 Day4–5 仍需稳定独占租约、三轮交替、每轮每侧至少 10 个热态样本及 median/p95/离散度、加载/首步/热态和 allocator/NVML 峰值。
+
+更广泛 Day2–5 仍有 held-out generation 指标、gradient-checkpointing 的真实 activation recompute/显存收益、approved wheel migration、stock PyTorch 读取 JT optimizer portable-pickle 文件等开放项。整体保持 **Not complete**。
+
 ## 2026-11-02 20:53 +0800 current-main CUDA amax correctness 补测通过；Day2–5 未完成
 
 本轮只补测上次 786 项 Torch-shim CUDA suite 停在的 `tests/backends/parity/test_device_parity.py::TestDeviceParity::test_amax`。绑定 HEAD/origin `2b9b1e4d0f5204d78002f99c60eabd0a8e2c8048` 和既有 dirty state：81 tracked dirty、21 untracked；运行前后 porcelain SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`，tracked diff SHA256 `b97553cf0eb6cc4ca17f3f929071c3ab5db92322030ddef33a79c2da38786200`，源码工作区未变。

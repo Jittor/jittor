@@ -1,3 +1,13 @@
+## 2026-11-02 21:26 +0800 current-main CUDA capability 与 backend contract 补测通过；Day2–5 仍未完成
+
+绑定现有 /home/cgq/jittor 的 HEAD 与 origin/cgq_transformers：847b40f4fa88c26a8213a4e20cfa332e3d8c5f60。测试期间无产品源码变化；81 个 tracked dirty、21 个 untracked 保留，index 为空，tracked diff SHA256 b97553cf0eb6cc4ca17f3f929071c3ab5db92322030ddef33a79c2da38786200，porcelain SHA256 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211。
+
+真实 GPU0 UUID GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5 映射为 cuda:0，backend_fallback=error。三组定向正确性结果：argmax/argmin 2 passed、0 skipped（62.90s）；CUDA op capability 6 passed、0 skipped（30.16s）；backend contract matrix 54/54 passed（118.16s）。矩阵仍有 27 个 no-probe cells；ACL/ROCm/CoreX 未构建，HCCL/MPI/NCCL 未加载，不能据此声称全后端覆盖。
+
+argmax/argmin 的初次误失败源于复制 cache 中 CUB DSO 的绝对 RUNPATH 指向另一 cache 并装入错误的 jittor_core。保留失败原件后，在隔离 r2 cache 内重链复制扩展，目标测试通过；未改产品源码。证据包 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-cuda-argreduce-cub-relocated-cache-fix-r1-prepared/，artifact manifest 文件 SHA256 13126fe75b64ca9b74e8e407d26c74f96c4c6e76ee357df7761e494ceff3e0ed。
+
+GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 未暴露给测试；复核为 45,880 MiB、100% 利用率。本轮只有功能正确性证据，不含性能/显存结论。Day4–5 仍需管理员添加 cgq Slurm association、可核验的 GPU2 独占租约和三轮交替（每轮每侧至少 10 个热态样本），并报告 median/p95/离散度、加载/首步/热态耗时及 allocator/NVML 峰值。整体 Day2–5 保持 **Not complete**。
+
 ## 2026-11-02 20:53 +0800 current-main CUDA amax correctness 补测通过；Day2–5 仍未完成
 
 在现有 `/home/cgq/jittor` 上以 HEAD/origin `2b9b1e4d0f5204d78002f99c60eabd0a8e2c8048` 运行。测试前后工作区均为 81 个 tracked dirty、21 个 untracked，porcelain SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`、tracked diff SHA256 `b97553cf0eb6cc4ca17f3f929071c3ab5db92322030ddef33a79c2da38786200`，index 为空。

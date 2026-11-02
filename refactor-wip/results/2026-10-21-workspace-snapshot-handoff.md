@@ -1,3 +1,11 @@
+## 2026-11-02 21:26 +0800 Handoff：current-main CUDA 补测通过，正式性能窗口仍受阻
+
+继续使用 /home/cgq/jittor，HEAD/origin cgq_transformers 为 847b40f4fa88c26a8213a4e20cfa332e3d8c5f60。dirty state 为 81 tracked、21 untracked，index 为空；测试期间无产品源码变化。GPU0 UUID GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5、cuda:0、backend_fallback=error 下，argmax/argmin 2/2、CUDA op capabilities 6/6、backend contract matrix 54/54 通过；matrix 仍有 27 个 no-probe cells，未覆盖后端不算通过。
+
+误失败查明为搬迁 cache 的 CUB DSO RUNPATH 指向另一 cache。保留原失败后，只在隔离 r2 cache 重链复制扩展并复测，无产品源码改动。证据包 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-cuda-argreduce-cub-relocated-cache-fix-r1-prepared/，manifest SHA256 13126fe75b64ca9b74e8e407d26c74f96c4c6e76ee357df7761e494ceff3e0ed。
+
+GPU2 未用于测试，复核为 45,880 MiB、100% 利用率。管理员尚未添加 cgq Slurm association，因此不能取得独占 GRES lease 开始正式 Day4–5 计时。后续继续按实际缺口做有界 correctness/功能验证，不重跑本轮已通过节点；待 association 和 GPU2 独占租约可用，再按三轮交替、每轮每侧至少十个热态样本完成性能/显存统计。held-out generation、真实 checkpoint recompute 显存收益、wheel migration、跨框架 optimizer 文件互操作仍开放，整体 Day2–5 保持 **Not complete**。
+
 ## 2026-11-02 20:53 +0800 Handoff：CUDA amax 单项 correctness 补测通过
 
 沿用 `/home/cgq/jittor`，HEAD 与 origin/cgq_transformers 同为 `2b9b1e4d0f5204d78002f99c60eabd0a8e2c8048`。只运行上次 786 项 Torch-shim CUDA suite 的中断节点 `TestDeviceParity::test_amax`；物理 GPU0 UUID `GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5` 映射为 `cuda:0`，`backend_fallback=error`，结果 1 passed / 0 skipped / 102.55 秒。运行前后工作区指纹相同，81 tracked dirty、21 untracked 均保留。cache 使用独立副本，原始 CUDA core 哈希不变。
