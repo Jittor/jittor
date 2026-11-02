@@ -1,3 +1,13 @@
+## 2026-11-02 09:13 +0800 R6 package candidate 与 installed launcher smoke 通过；GPU2 holder 不能排他
+
+证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-package-r6-launchfix-prepared/。候选基于 R5 immutable source snapshot HEAD 3fb131817e69ccc6728e670cbdf2db6f708cafdd，仅应用已提交 launcher 修复；launch.py SHA256 b969871c7da9b347df0df3fc8c19bd1364a10daae2426e6043e8e6ae0ed7b8ea。未把 102 项 dirty/untracked 工作树整体打包。direct wheel SHA256 3ff3ef01612c245dc13859729a2191786fecdfc433ddbf3e30a93f081f68b511，sdist SHA256 ef2d14765179c7ebbb5ee258cb8a20ffdaa31e6ce5386d0c0035b077a65e9bad，sdist-built wheel SHA256 cc5aeda22f657d530b58dcd110cfa8d7438df3ea3dd08e460a4a8b1ca2a0bf6c。两 wheel 的 1,100 个成员路径与内容逐项相同，容器 SHA 不同；构建 rc=0。baseline diff 为 69 additions、301 changes、2 removals、0 approved，compare rc=1。
+
+installed wheel 双 rank launcher smoke rc=0，LOCAL_RANK=rank、JT_HCCL_LOCAL_RANK=0、ASCEND_RT_VISIBLE_DEVICES=rank。子进程只打印环境，未初始化 HCCL、未执行设备计算，故不是通信或 CUDA 证据。首次 import 编译 228 TU；cache manifest 3,918→4,859，新增 941、删除 0、既有哈希变化 0，生成物保留。attempt manifest SHA256 50ffc1446a489d5f603d081d5a8e022e5900185acab132a17528af58fd7fd1a1；聚合证据 SHA256 f3ed3c2a1013011830aa18b1f9f4c2de92f449e5362341808e5fbaf58da46008。
+
+GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 有外部 PID 3037196、3164740，各占 8,640 MiB，共 17,299 MiB，compute mode Default，利用率采样 92%。普通 holder 不能排斥进程；启动会争用资源，本轮未创建/运行 holder，也未干预现有任务。Slurm ConstrainDevices=no、节点不可用，sudo -n 需密码；须由管理员提供 GPU2 live GRES/device-cgroup lease 或有效独占策略。现有 gpu2-exclusive-run.sh 应等待空卡后直接包裹 benchmark。
+
+Day4–5 正式性能/显存仍需匹配配置与独占窗口、至少三轮交替且每轮不少于十个热态样本，并报告 median/p95/离散度、load/first-step/hot timings 及 allocator/NVML 峰值。共享负载只作诊断；更广 Day2–5 release 继续开放，overall 不标 complete。
+
 ## 2026-11-02 09:01 +0800 current-main native launcher LOCAL_RANK 回归修复；CPU 用例全覆盖但分两次执行
 
 本轮修正 python/jittor/distributed/launch.py::_rank_environment() 将 LOCAL_RANK 错设为 masked backend-local-rank 的行为。新环境同时保留 torchrun 语义：RANK=rank、LOCAL_RANK=rank、JT_NCCL_LOCAL_RANK=0、每个 rank 的 CUDA_VISIBLE_DEVICES 单卡映射；日志也将公共 local rank 与 backend local rank 分开。没有改动原生 process-group 公共 API。当前源码文件 SHA256 b969871c7da9b347df0df3fc8c19bd1364a10daae2426e6043e8e6ae0ed7b8ea，测试文件 SHA256 b46c723a6d0ba578567a796f3765bb5bbba737f53b49534b4110571403f10312。

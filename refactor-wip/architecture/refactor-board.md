@@ -1,3 +1,11 @@
+## 2026-11-02 09:13 +0800 R6 current-main launcher 包冒烟通过；GPU2 无法由普通 holder 排他
+
+R6 包候选从不可变 R5 source snapshot HEAD 3fb131817e69ccc6728e670cbdf2db6f708cafdd 构建，只叠加已提交 LOCAL_RANK 修复，launcher SHA256 b969871c7da9b347df0df3fc8c19bd1364a10daae2426e6043e8e6ae0ed7b8ea；不是当前 dirty worktree 完整发布包。sdist/wheel 均构建 rc=0。direct wheel SHA256 3ff3ef01612c245dc13859729a2191786fecdfc433ddbf3e30a93f081f68b511，sdist SHA256 ef2d14765179c7ebbb5ee258cb8a20ffdaa31e6ce5386d0c0035b077a65e9bad，sdist 重建 wheel SHA256 cc5aeda22f657d530b58dcd110cfa8d7438df3ea3dd08e460a4a8b1ca2a0bf6c。两 wheel 的 1,100 个成员逐项内容一致，归档 SHA 不同。默认 baseline compare 69 added、301 content changes、2 removed、0 approved，差异保留。
+
+installed wheel 双 rank jtrun 环境 smoke 通过：LOCAL_RANK=0/1、JT_HCCL_LOCAL_RANK=0、ASCEND_RT_VISIBLE_DEVICES=0/1，rc=0；只打印环境，不初始化 HCCL/设备计算，CUDA_VISIBLE_DEVICES 为空、use_cuda=0。首次导入编译 228 个 core TU；cache manifest 3,918→4,859 项，新增 941、删除/旧项变化均为 0，缓存保留、不重复冷编译。attempt manifest SHA256 50ffc1446a489d5f603d081d5a8e022e5900185acab132a17528af58fd7fd1a1；聚合证据 manifest SHA256 f3ed3c2a1013011830aa18b1f9f4c2de92f449e5362341808e5fbaf58da46008。
+
+GPU2 仍由外部 yqa PID 3037196、3164740 各占 8,640 MiB（共 17,299 MiB），Default mode，检查时利用率 92%。普通 holder 不能阻止别的进程连接；现在启动会争用共享作业，本轮未创建或启动 holder，也未触碰外部进程。Slurm ConstrainDevices=no 且 sudo -n 需密码；需要管理员提供 live GRES/device-cgroup lease 或有效独占策略，再由现有 gpu2-exclusive-run.sh 直接包住 benchmark。Day4–5 与整体 Day2–5 仍未完成。
+
 ## 2026-11-02 09:01 +0800 current-main torchrun LOCAL_RANK 契约修复并完成 CPU launcher 用例覆盖
 
 当前 dirty launcher 的 rank 环境已修正：torchrun 公共 LOCAL_RANK 设为节点内 rank；当 launcher 为每个子进程只暴露一张设备时，JT_NCCL_LOCAL_RANK / JT_HCCL_LOCAL_RANK 仍保留后端设备 rank 0。启动摘要分别打印两个 rank。现有 process_group.py 保持不变，因为其公共 get_local_rank() 和 init_process_group() 已优先读取标准 LOCAL_RANK。源码 python/jittor/distributed/launch.py SHA256 b969871c7da9b347df0df3fc8c19bd1364a10daae2426e6043e8e6ae0ed7b8ea；现有脏测试 tests/distributed/test_launch.py SHA256 b46c723a6d0ba578567a796f3765bb5bbba737f53b49534b4110571403f10312，该测试期望 LOCAL_RANK=rank、后端 rank 0。

@@ -1,3 +1,9 @@
+## 2026-11-02 09:13 +0800 Handoff：R6 launcher wheel 两 rank 环境通过；GPU2 仍无排他 lease
+
+R6 candidate 基于 R5 source snapshot HEAD 3fb131817e69ccc6728e670cbdf2db6f708cafdd 加已提交 launcher 修复。direct wheel SHA256 3ff3ef01612c245dc13859729a2191786fecdfc433ddbf3e30a93f081f68b511，sdist SHA256 ef2d14765179c7ebbb5ee258cb8a20ffdaa31e6ce5386d0c0035b077a65e9bad；sdist wheel 与 direct wheel 的 1,100 个成员路径/内容一致。installed wheel 双 rank smoke 验证 LOCAL_RANK=rank、backend local rank=0、device visibility 按 rank 分配；rc=0，但不初始化 HCCL。聚合证据 manifest SHA256 f3ed3c2a1013011830aa18b1f9f4c2de92f449e5362341808e5fbaf58da46008；baseline 69 additions、301 changes、2 removals、0 approved。
+
+smoke 首次导入生成 941 个 cache 新项（3,918→4,859），未删或改写旧项；保留且不重跑冷编译。GPU2 仍被外部 PID 3037196/3164740 占用 17,299 MiB，Default mode。普通 holder 不能排斥他人；因 ConstrainDevices=no、无免密 sudo，本轮没有启动占卡程序。下一步需管理员提供有效独占 GRES/device-cgroup lease，再用现有 gpu2-exclusive-run.sh 直接运行容量扫测和三轮 paired cohort。Day4–5 与整体 Day2–5 release 仍未完成。
+
 ## 2026-11-02 09:01 +0800 Handoff：修正 torchrun LOCAL_RANK 映射；GPU2 正式性能 lease 仍未取得
 
 在 /home/cgq/jittor 将 launcher 的公共 LOCAL_RANK 改为节点内 rank，并保留 JT_NCCL_LOCAL_RANK=0 作为每个单卡可见 rank 的 backend 映射；process_group.py 未改。完整 CPU launcher 文件在 attempt-02 为 16 passed、1 个 ABI 环境失败；修正 ABI preload 后 attempt-03 单项 1 passed。两轮源码/测试身份一致，17 个用例均有通过证据，但不声称单次整套 17/17。细节、cache 影响和 manifest hashes 见 Day2–5 报告 2026-11-02 09:01 条目。
