@@ -1,3 +1,9 @@
+## 2026-11-03 03:27 +0800 Handoff：checkpoint CUDA follow-up runner 前置校验失败，测试未执行
+
+复用 installed-wheel CUDA core SHA256 0e2fe909d3f33e27c220546693c40f27087357cefe198220f46c97f9a0353a90 准备 checkpoint CUDA RNG probe；runner 在读取 Torch shim namespace 的 __file__ 时抛 AttributeError，pytest 尚未启动。returncode 1、1.37 秒，core 未变；这是 runner 前置错误，不归为产品测试失败，也不计 CUDA 功能通过。证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-checkpoint-cuda-r1/，manifest SHA256 d4e0b478e0f28e0b6a1023dcc30d5d72199f4fc898e55bde9f9fa2a75cd3a8ce。
+
+GPU0 是共享卡，结束采样为 100% 利用率，本轮没有重跑；GPU2 未使用。CPU checkpoint 6/6 通过仍有效；CUDA checkpoint 正确性、GPU memory attribution、正式 Day4–5 窗口和更广 Day2–5 门保持开放。
+
 ## 2026-11-03 03:19 +0800 Handoff：installed main wheel checkpoint 重计算 6/6 通过
 
 在 Transformers 4.56.2 兼容环境的隔离安装 main wheel 上执行 checkpoint 定向测试：6 passed、0 skipped、48.04 秒，CPU runtime、fallback 0→0、core build current；core SHA256 前后相同 13ee2862304d354a20a9fefbe51dd8daee46066084b6c21f9385ffcfa7adf991。覆盖前向 no-grad 和反向重计算、RNG 回放、输入/模块参数梯度、LlamaDecoderLayer 梯度对照及 HF checkpoint layer 协议。该轮证明功能重计算发生，不证明 activation memory 节省。

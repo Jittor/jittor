@@ -1,3 +1,9 @@
+## 2026-11-03 03:27 +0800 checkpoint CUDA runner r1 在测试前失败；不计为产品测试结果
+
+为在 current installed main wheel 上补充 CUDA checkpoint RNG 检查，准备了隔离 attempt 并复用已有 CUDA core。runner 成功加载 CUDA core，但在模块路径校验时把 Torch shim namespace 当作有 __file__ 的普通模块，抛出 AttributeError；pytest/测试函数均未运行。attempt 共 1.37 秒，returncode 1，core SHA256 前后相同为 0e2fe909d3f33e27c220546693c40f27087357cefe198220f46c97f9a0353a90，因此这是 runner 缺陷，不是 checkpoint CUDA 失败或通过。目录 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-checkpoint-cuda-r1/，artifact manifest SHA256 d4e0b478e0f28e0b6a1023dcc30d5d72199f4fc898e55bde9f9fa2a75cd3a8ce，全部包内哈希校验通过。
+
+此时 GPU0 为共享卡，预检后采样显示 100% 利用率；未在当前共享负载下重跑。GPU2 未分配给进程。已通过的 CPU checkpoint 6/6 结果保持有效，但 CUDA RNG 重计算仍待独立验证；Day4–5 正式性能/显存及更广 Day2–5 发布门继续未完成。
+
 ## 2026-11-03 03:19 +0800 installed main wheel activation checkpoint 重计算验证通过；GPU 显存收益仍未建立
 
 使用隔离安装的 main wheel 执行 compat/tests/torch/test_torch_checkpoint_recompute.py。在兼容 Transformers 4.56.2 的环境中，6 passed、0 skipped、pytest 用时 48.04 秒；runtime 为 CPU，fallback 0→0，core_build_is_current() 为真，Jittor core SHA256 前后均为 13ee2862304d354a20a9fefbe51dd8daee46066084b6c21f9385ffcfa7adf991。六项覆盖 nested outputs、captured/module parameters、no-grad 路径、CPU RNG 回放、LlamaDecoderLayer 输入及权重梯度与未 checkpoint 基线比较、Transformers GradientCheckpointingLayer 协议。调用轨迹确认前向在 no-grad 下执行，反向阶段重执行 wrapped function，RNG 输出回放一致；这是实际的重计算功能证据。
