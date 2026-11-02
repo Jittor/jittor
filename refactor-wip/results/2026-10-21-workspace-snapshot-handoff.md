@@ -1,3 +1,9 @@
+## 2026-11-02 11:58 +0800 Handoff：current-main Qwen 两阶段 102 更新与 step51 新进程续训通过；GPU2 独占等待管理员 association
+
+在现有 `/home/cgq/jittor` 工作树完成 current-main Qwen3-0.6B LoRA seed821 两阶段训练：step1–51 保存 checkpoint-51，新进程恢复后完成 step52–102。源码指纹 `e19d6aa0c08b17f6fe2e923c4290e45afcc58776b7712ea3346437d47ef72ef3`（训练源码 HEAD `aa541675998e0422cbe96d436ef6f03191f09668`；记录时 HEAD `d432c6bdec3e6a0d4bfd934614bcc270bce656b9` 仅有后续状态文档差异），实际 GPU1→`cuda:0`、fallback=0、跳步=0。JT epoch 微批次 loss `1.205599→1.153534`，PT `1.205680→1.154064`；最终 eval loss JT `2.456431`、PT `2.456644`。恢复状态/RNG、930 项状态值、112/112 LoRA 张量更新及 lifecycle 检查通过。完整配置、限制和哈希见 Day2–5 结果报告顶部；证据根目录 `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-qwen-practical-r2-prepared/`。本结果不构成性能/显存或 generation quality 验收，overall Day2–5 继续 **Not complete**。
+
+11:58 +0800 GPU2 仍为 Default/shared，17,299 MiB 使用中，外部 PID 3037196 / 3164740 各占 8,640 MiB。当前无 cgq Slurm allocation；用户确认无可用 account，需管理员添加 cgq association。普通 holder 不能保证禁止其它进程运行，本轮未启动 holder 或触碰外部进程。管理员提供有效 association 后，还需获得 GPU UUID/GRES 与 device-cgroup 独占 lease，才可执行现有 Day4–5 容量及三轮配对测试。整体 release 保持 **Not complete**。
+
 ## 2026-11-02 10:58 +0800 接续：current-main Torch focused 在 import 阶段失败；GPU2 不能由普通 holder 独占
 
 current-main focused 一次性 attempt 使用 /home/cgq/jittor HEAD b17638fe25ee2bc9ec66ddcae19a91abe1c8145f，source fingerprint 1722cb11e133c861784ce877c8a70942c8f217ce6895416d06020595175df3a4。import jittor 时 jit_utils 重建触发 SystemExit(3)，pytest 0 项收集/执行；状态为基础设施失败，不是测试断言失败。源码、产品快照未变，包内 cache 有 3 个既有 .d/.key/jittor.lock 文件变化；完整路径、日志与哈希见 Day2–5 结果报告。保留 attempt，不重跑；focused 未通过前不进入 Torch core。

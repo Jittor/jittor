@@ -1,3 +1,9 @@
+## 2026-11-02 11:58 +0800 current-main Qwen seed821 两阶段 102 更新及新进程续训通过；GPU2 独占仍缺 Slurm association
+
+当前源码训练指纹 e19d6aa0c08b17f6fe2e923c4290e45afcc58776b7712ea3346437d47ef72ef3（训练源码 HEAD aa541675998e0422cbe96d436ef6f03191f09668；当前工作树 HEAD d432c6bdec3e6a0d4bfd934614bcc270bce656b9 的后续差异仅为状态文档）。seed821 Qwen3-0.6B LoRA 在物理 GPU1 / cuda:0 完成 51+51 更新，0 skip、0 fallback；step51 checkpoint 新进程续训恢复到 step102，状态/RNG 和 112/112 LoRA 更新核验通过。JT 两 epoch 微批次平均 loss 1.205599→1.153534，PT 对照 1.205680→1.154064；JT 最终 eval loss 2.456431，PT 2.456644。训练和续训不是性能/显存结论，也没有 held-out generation 质量分数；详情与原始哈希见 [Day2–5 结果报告](../results/2026-10-26-torch-compat-release-day2-5.md)。
+
+GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 在 11:58 +0800 为 Default/shared，外部 PID 3037196、3164740 各占 8,640 MiB；当前无 cgq Slurm allocation。用户确认没有可用 account，需管理员为 cgq 添加 association。普通 CUDA holder 不能阻止共享卡上的其他进程，本轮未启动 holder；须取得有效 GRES/device-cgroup 独占租约后再运行已准备的 Day4–5 cohort。Day4–5 和更广 Day2–5 release 继续 **Not complete**。
+
 ## 2026-11-02 10:58 +0800 current-main Torch focused 在 Jittor import 前置检查退出；GPU2 仍无独占条件
 
 current-main focused attempt 在 import jittor 时因隔离 cache 中 jit_utils 重建而 SystemExit(3)，pytest 尚未收集测试；源码与 core 产品绑定未变，cache 仅 3 个既有元数据/编译记录文件变化。失败原件和 SHA256 见 [Day2–5 结果报告](../results/2026-10-26-torch-compat-release-day2-5.md)。该失败不进入 Torch core 门，也不重跑本 attempt。
