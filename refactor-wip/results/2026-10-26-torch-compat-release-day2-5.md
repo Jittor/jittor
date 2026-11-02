@@ -1,3 +1,13 @@
+## 2026-11-03 02:19 +0800 current-HEAD 安装 wheel 的 CUDA Generator randint 真实设备功能通过
+
+wheel 安装运行补上此前 R4 静态映射留下的一个具体缺口。测试绑定 main wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69，其源码快照 HEAD 为 35a1a7605ec475e9cbc1a9688afc299ee3bd8011；测试期间 /home/cgq/jittor HEAD 为 a4a87e60c0fc997b5ed9bc077d8b8962fd779108，工作区干净且仅比 origin/cgq_transformers 多一笔状态文档提交，测试文件与 generator_randint_op.cc 在 live tree 和 wheel snapshot 中哈希一致。
+
+在 Python 3.11.3、物理 GPU0 UUID GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5（进程内 cuda:0）上，从 installed target 导入 jittor 与 torch shim，独立 JITTOR_HOME 中的 CUDA core build current。TestTorchFactoryFidelity.test_cuda_generator_randint_is_device_native_and_restorable 结果 1 passed、0 skipped、0 failed；覆盖显式 CUDA Generator 与输出设备匹配、状态保存/恢复后随机数回放、device mismatch 报错，以及 torch.device(cuda:0) 作用域下显式 CPU 输出仍保留 CPU placement。forbid_backend_fallbacks() 与 backend_fallback=error 均启用，fallback counter 0→0。core SHA256 0e2fe909d3f33e27c220546693c40f27087357cefe198220f46c97f9a0353a90 前后不变。
+
+证据包 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-cuda-generator-r4-cache-reuse/，artifact manifest SHA256 832dc7f61cf953129309323aec0fb168e9226e38986131825f39597d5632c599。r2 首次 CUDA core 冷构建 228/228 TU、278.16 秒；r4 复用同一 core 后总耗时 62.16 秒，测试本身 3.485 秒。r2/r3 的动态库加载环境失败均未进入测试方法；失败原件与 loader 探针都保留在相邻 attempt 目录，r4 没有改写。GPU0 在共享负载下运行（开始 7,535 MiB/97%，结束 7,535 MiB/100%），因此只作正确性证据；GPU2 未暴露给进程，不作性能/显存结论。
+
+此结果确认 wheel 中 generator_randint_op.cc 的设备原生功能并能从安装包导入，但只审验 69 additions、304 content changes 中的一条路径。默认 baseline 仍 0 approved；ACL 路径缺 CANN 运行环境，其余新增 CUDA attention、embedding、linear bias、DDP bucket、fused optimizers 与 profiling/runtime 差异尚未完成逐域审查。tests/backends/parity/backend_contract_matrix.py 对 generator_randint 的“无 CUDA kernel”声明与本次真实测试矛盾，需在后续源码任务中复核该矩阵的 supported/unsupported 分类；本次按“只更新既有状态文档”的范围未改源码。wheel migration、held-out generation、activation recompute 显存收益、跨框架 optimizer serialization、正式 Day4–5 性能/显存验收及整体 Day2–5 继续 Not complete。
+
 ## 2026-11-03 01:54 +0800 current HEAD clean wheel/sdist CPU 安装训练烟测通过；migration approval 仍开放
 
 ### 源码与打包产物

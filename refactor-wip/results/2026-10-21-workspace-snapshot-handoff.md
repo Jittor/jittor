@@ -1,3 +1,9 @@
+## 2026-11-03 02:19 +0800 Handoff：current-HEAD 安装 wheel 的 CUDA Generator randint 通过；继续迁移审查
+
+current-HEAD 包装 smoke 已从 CPU 扩展到一个真实 CUDA 安装路径。main wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69，源码输入 HEAD 35a1a7605ec475e9cbc1a9688afc299ee3bd8011；测试时 live repo HEAD a4a87e60c0fc997b5ed9bc077d8b8962fd779108，与 wheel source 的测试/kernel 文件哈希一致。单测 test_cuda_generator_randint_is_device_native_and_restorable 为 1 passed、0 skipped，安装路径模块校验与 core_build_is_current() 通过，fallback 0→0。core SHA256 0e2fe909d3f33e27c220546693c40f27087357cefe198220f46c97f9a0353a90；证据包 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-cuda-generator-r4-cache-reuse/，manifest SHA256 832dc7f61cf953129309323aec0fb168e9226e38986131825f39597d5632c599。
+
+本轮 GPU0 为共享卡，结果只用于功能核验；GPU2 未使用，仍须管理员添加 cgq Slurm association 后再准备正式性能/显存窗口。R1 wheel baseline 迁移仍 0 approved，CUDA Generator 路径的旧 contract matrix 声明现在与运行结果矛盾。下一步按有限范围核对该矩阵语义和其余 wheel 差异；优先处理实际训练影响的 CUDA op/optimizer 与安装路径覆盖，不改 allowlist 来制造通过。ACL/CANN 缺少运行环境需单列。性能窗口仍要求可核验独占、至少三轮 PT/JT 交替和每轮双方至少 10 个热样本；整体 Day2–5 保持 Not complete。
+
 ## 2026-11-03 01:54 +0800 Handoff：current HEAD wheel 与 CPU clean-install smoke 通过，迁移基线仍未批准
 
 已在 /home/cgq/jittor 当前干净 HEAD 35a1a7605ec475e9cbc1a9688afc299ee3bd8011 上重建 main/compat sdist 与 wheel；sdist/core/compat 内容审计及 direct-wheel 对 sdist 重建 wheel 的一致性检查通过。两 wheel 隔离安装后的 CPU selftest 和 Torch shim autograd/SGD smoke 通过，fallback 0。详见 /data6/cgq/jittor-lab/_state/release-day23/20261103-current-head-wheel-gate-r1-prepared/，evidence manifest SHA256 782d09b8669584f9f9a8e8f41d1f2531c4f5a0bd80927dd7bdc0dee870b653b1。

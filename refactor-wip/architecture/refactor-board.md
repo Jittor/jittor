@@ -1,3 +1,9 @@
+## 2026-11-03 02:19 +0800 current-HEAD 安装 wheel 的 CUDA 显式 Generator randint 验收通过；Day2–5 仍未完成
+
+current-HEAD 主 wheel（输入源码 HEAD 35a1a7605ec475e9cbc1a9688afc299ee3bd8011，wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69）在隔离安装路径上完成 CUDA 显式 Generator randint 定向测试：1 passed、0 skipped，检查 CUDA 设备放置、Generator 状态回放及 device mismatch；额外核对安装的 jittor/torch 模块来源、core build current、fallback 守卫和计数 0→0。CUDA core SHA256 0e2fe909d3f33e27c220546693c40f27087357cefe198220f46c97f9a0353a90，其源码测试和 kernel 哈希分别为 38ef3be26005ddd354b56078b8d68dfc0a463e58fa7bd3bcf9a9b0a51d7bb718 与 aa545869865390dbb6f6a50f8ef456b000cbe3e6f656c8ed9e6b90aa220fa9d0。证据包 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-cuda-generator-r4-cache-reuse/，artifact manifest SHA256 832dc7f61cf953129309323aec0fb168e9226e38986131825f39597d5632c599。
+
+该项关闭了新增 generator_randint CUDA 路径在当前 wheel 安装身份下缺少真实执行证据的子门，并确认旧 backend contract matrix 中“无 CUDA kernel”的记录已过期，矩阵仍待后续校正。GPU0 在共享负载下用于功能正确性，GPU2 未使用；本结果不提供性能或显存结论。wheel baseline 仍是 1,033 对 1,100 paths、69 additions、304 content changes、2 removals、0 approved；此单项不能批准其余 wheel 差异。正式 Day4–5 和更广 Day2–5 发布门保持开放。
+
 ## 2026-11-03 01:54 +0800 current HEAD wheel/sdist 与 CPU 安装训练烟测通过；baseline migration 未完成
 
 在现有 /home/cgq/jittor 工作区从干净 HEAD 35a1a7605ec475e9cbc1a9688afc299ee3bd8011 制作不可变源码快照；origin/cgq_transformers 与 HEAD 一致，构建前后工作区干净。快照含 2,823 个文件，清单 SHA256 268a54f9dba48aae28a4e93d80d8b7981deb7d1ce743d1024169fdb9786b10f8。
