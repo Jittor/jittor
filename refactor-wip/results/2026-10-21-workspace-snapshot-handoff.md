@@ -1,3 +1,11 @@
+## 2026-11-02 18:30 +0800 Handoff：current-main 两 rank Trainer checkpoint/order resume 通过；GPU2 性能租约与更广 Day2–5 门继续开放
+
+沿用 `/home/cgq/jittor`，HEAD `23524398c59e7fec917ed8122ea09ef8b0d7139b`，source fingerprint `c25190d2bf38b5d14b3445771c877ed0d00bd24ea14886d0620313c48d8fd1bb`，origin/cgq_transformers `e5cffe1ae60c418f53c5bb1dca9182577fd2b81`（ahead/behind 239/0）。实验期间 102 项短状态、105 项展开状态及 tracked diff SHA 未变化；没有修改或清理其他 dirty/untracked 工作。
+
+外部 attempt `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-ddp-trainer-resume-r2-host-batchids-r1-prepared/attempt-03-shared-correctness/` 完成公共 HF Trainer + PEFT/BERT 两 rank NCCL DDP：full 2 steps、step 1 checkpoint stop、新进程 resume 到 step 2，三阶段 exit=0。rank0 的 full/恢复样本 ID 均为 `[0,1,4,5,8,9,12,13]`，rank1 均为 `[2,3,6,7,10,11,14,15]`；每 rank 每个比较点 52 项轨迹数组零差异，最终 6 个 LoRA 张量一致并确有更新。两个 rank 均为 Jittor CUDA、NCCL world_size=2、fallback=0；GPU0/1 为共享负载，不形成性能或显存证据。artifact 与独立 audit 清单通过，audit result SHA256 `5052e08fd924c32b47e07b37bf40a4dfe5297d2ff7d990c4829e0d6f738d007a`。具体配置、loss 和审计文件哈希见 [Day2–5 结果报告](2026-10-26-torch-compat-release-day2-5.md) 与该外部 attempt。
+
+后续仍需处理剩余 Torch-shim CUDA 范围、approved wheel baseline migration、跨框架 optimizer 文件互操作、held-out generation quality、真实 activation recompute/显存证据，并按三轮交替稳定协议完成 Day4–5 GPU2 性能/显存验收。cgq Slurm association、节点恢复及 GPU2 GRES/device-cgroup 独占租约尚未到位；用户已要求管理员添加 association。overall Day2–5 release 维持 **Not complete**。
+
 ## 2026-11-02 18:17 +0800 Handoff：current-main CUDA focused 修复通过；完整 CUDA/Torch-shim gate 和 Day4–5 仍开放
 
 继续使用 /home/cgq/jittor，不 clone。源码基准 HEAD 48c4065ea842bafa6bfdc6c40c7228ffa604b7dc，origin/cgq_transformers e5cffe1ae60c418f53c5bb1dca9182577fd2b81（ahead/behind 237/0）。attempt-09/11 启动前为 102 项既有 dirty/untracked 加 7 项本任务代码改动，共 109 项；其余既有改动均保留，没有触碰其他源码或实验文件。

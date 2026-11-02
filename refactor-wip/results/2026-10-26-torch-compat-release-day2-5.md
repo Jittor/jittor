@@ -1,3 +1,17 @@
+## 2026-11-02 18:30 +0800 current-main 双 rank Trainer 样本顺序与新进程续训审计通过；Day2–5 仍未完成
+
+在现有 `/home/cgq/jittor` 工作区 HEAD `23524398c59e7fec917ed8122ea09ef8b0d7139b` 上执行，source fingerprint `c25190d2bf38b5d14b3445771c877ed0d00bd24ea14886d0620313c48d8fd1bb`；刷新后的 origin/cgq_transformers 为 `e5cffe1ae60c418f53c5bb1dca9182577fd2b81`，ahead/behind 239/0。启动前 102 项短状态、105 项展开状态，状态 SHA256 `8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98`，tracked diff SHA256 `3ef743580bb7db38dbc9197f6f90e3182956d2bc29a55bce29c7eeea1bea6100`；实验前后状态与 diff 指纹未变化。本轮只更新既有状态文档。
+
+**协议和设备。** 使用 tiny BERT+LoRA FP32 fixture、公共 Transformers Trainer、PEFT 和两 rank NCCL DDP；16 个顺序样本、每卡 batch 2、gradient accumulation 2、dropout 0、seed 20261014、AdamW、linear scheduler、max_steps 2。GPU0 UUID `GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5` 与 GPU1 UUID `GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068` 对应两个实际 rank；每个进程内参数设备为 `cuda:0`，runtime 为 Jittor，NCCL world_size=2，fallback=0。CUDA_VISIBLE_DEVICES 仅暴露这两张卡，GPU2 未触碰。GPU0/GPU1 处于共享负载，没有独占性能窗口。
+
+**结果。** 一次 full run 到 step 2；另一次在 step 1 写出 checkpoint 后停止，独立新进程从该 checkpoint 恢复到 step 2。修正后的 collator 从本批 features 捕获 host sample IDs，并在 training_step 与 batch tensor IDs 对照，消除了 Dataset 预取游标造成的假顺序。rank0 full 与 stop+resume 顺序都是 `[0,1,4,5,8,9,12,13]`；rank1 都是 `[2,3,6,7,10,11,14,15]`。每 phase exit=0。
+
+rank0 微批次 loss full 为 `[0.3450433016, 0.3462346494, 0.3446999788, 0.3456178308]`，rank1 为 `[0.3444582522, 0.3455908597, 0.3428727388, 0.3451750278]`；各自 stop 与 resume 的拼接数组与 full 一致且有限。独立审计对每 rank 的 step-1/full-vs-stop、step-2/full-vs-resume 各比较 52 个轨迹数组，缺项、非有限项及差异项均为 0，max_abs/max_rel 均为 0；每 rank 最终 6 个可训练参数张量 full-vs-resume 精确一致，且 6 个张量相对初始值均发生变化。resume report 记录 model_loaded、optimizer_scheduler_loaded、rng_loaded。stop checkpoint 中存在 adapter_model.safetensors、optimizer.pt、scheduler.pt、trainer_state.json 与 rng_state_0/1.pth。此证据支持该 fixture 的训练数据顺序、checkpoint 新进程恢复与更新功能；它不代表大模型收敛、held-out 任务质量或浮点跨环境逐位保证。
+
+**证据与完整性。** 外部目录 `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-ddp-trainer-resume-r2-host-batchids-r1-prepared/attempt-03-shared-correctness/`；整体 exit=0。artifact-files 与 audit-integrity 清单验证通过；source/core 指纹一致，warm NCCL core SHA256 `ed4620e54f35edda5c8e9957a5e605f3a24f5cd84f9507b9359d21d85f00a9b4`。独立审计结果 SHA256 `5052e08fd924c32b47e07b37bf40a4dfe5297d2ff7d990c4829e0d6f738d007a`，audit-integrity 清单 SHA256 `c59ae2edec51ad3c95fd6da4cf06dc91d824f7520ca72da31d501c3fad1cd8b0`；审计脚本 SHA256 `29ce321f46f20ab3692b0681d464dcff7d54bef396398aea0072bb8284c68142`。runner SHA256 `a1b44d660c21bbb71937a7097672edfbe8b5a403fcde01c19465e01b8c33ab76`，实验计划 SHA256 `129c36fd8d592a61910c85e0076993f0f8c536fd219c80066e26ae8e94853f76`。输入 warm cache 清单 1516 项、输出仍 1516 项，路径新增/删除为 0，20 项哈希变化；缓存未清理或回滚。所有失败历史与实验产物保留。
+
+Day4–5 正式性能/显存验收仍要求 GPU2 专属 GRES/device-cgroup 租约与稳定窗口：至少三轮交替、每轮不少于十个热态样本，报告 median/p95/离散度、加载/首步/热态耗时和 allocator/NVML 峰值。用户没有 Slurm account，已要求管理员添加 cgq association；当前仍无可用租约，未运行 GPU2 holder。该 correctness 实验不能替代性能门。剩余 Torch-shim CUDA gate、approved packaging baseline migration、stock PyTorch 对 JT portable optimizer.pt 互操作、held-out generation、真实 activation recompute 显存证据及其他 Day2–5 发布门仍开放，overall release **Not complete**。
+
 ## 2026-11-02 18:17 +0800 本周主要成果与 current-main CUDA 回归继续；Day2–5 发布门仍开放
 
 ### 最近一周主要成果（2026-10-26 至 2026-11-02）

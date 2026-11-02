@@ -1,3 +1,13 @@
+## 2026-11-02 18:30 +0800 接续：current-main 两 rank Trainer DDP 样本顺序与新进程续训复核通过；整体 Day2–5 未完成
+
+继续在现有工作区执行，HEAD `23524398c59e7fec917ed8122ea09ef8b0d7139b`，刷新后的 origin/cgq_transformers 为 `e5cffe1ae60c418f53c5bb1dca9182577fd2b81`（ahead/behind 239/0），source fingerprint `c25190d2bf38b5d14b3445771c877ed0d00bd24ea14886d0620313c48d8fd1bb`。实验前后工作区维持 102 项短状态、105 项展开状态；运行未修改源码或既有文件。
+
+current-main 公共 Transformers Trainer + PEFT/BERT FP32 两 rank NCCL fixture 在 GPU0/GPU1 完成 full 两步、step-1 checkpoint 后停止、新进程恢复至 step 2。collator host IDs 经 training_step 与实际 batch tensor IDs 核验后，两个 rank 的 full 顺序与 stop+resume 完全相同：rank0 `[0,1,4,5,8,9,12,13]`，rank1 `[2,3,6,7,10,11,14,15]`。各 phase 自然退出码为 0；每 rank 的 52 项 step-1/step-2 轨迹数组与 full 对照均零差异，最终 6 个 LoRA 参数张量一致且相对初始化确有更新。恢复事件记录了 model、optimizer/scheduler 与 RNG；fallback=0，参数位于实际 CUDA 路径。细节和 loss 序列见 Day2–5 结果报告本条目。
+
+证据包：`/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-ddp-trainer-resume-r2-host-batchids-r1-prepared/attempt-03-shared-correctness/`。完整 artifact 与 audit manifests 校验通过；独立 audit result SHA256 `5052e08fd924c32b47e07b37bf40a4dfe5297d2ff7d990c4829e0d6f738d007a`，audit-integrity manifest SHA256 `c59ae2edec51ad3c95fd6da4cf06dc91d824f7520ca72da31d501c3fad1cd8b0`。runner SHA256 `a1b44d660c21bbb71937a7097672edfbe8b5a403fcde01c19465e01b8c33ab76`，plan SHA256 `129c36fd8d592a61910c85e0076993f0f8c536fd219c80066e26ae8e94853f76`。运行使用共享 GPU0/GPU1，无独占租约；不能据此推断性能或显存。GPU2 未暴露给实验。共享 JIT cache 清单 1516 项，路径无新增/删除、20 项内容哈希变化，均保留未清理。
+
+更新后续优先项：剩余 Torch-shim CUDA 范围、approved wheel baseline migration、stock PyTorch 对 JT optimizer 文件互操作、held-out generation quality、真实 activation recompute/显存证据，以及 Day4–5 GPU2 独占窗口仍开放。GPU2 验收继续等待管理员为 cgq 添加 Slurm association、节点恢复及可验证 GRES/device-cgroup 独占租约；正式性能协议仍为至少三轮交替、每轮十个以上热态样本并报告 median/p95/离散度、加载/首步/热态时间及 allocator/NVML 峰值。overall Day2–5 release 保持 **Not complete**。
+
 ## 2026-11-02 18:17 +0800 接续：current-main CUDA 回归修复已聚焦验证；整体 Day2–5 仍未完成
 
 在现有 /home/cgq/jittor 工作区继续，HEAD 48c4065ea842bafa6bfdc6c40c7228ffa604b7dc，origin/cgq_transformers e5cffe1ae60c418f53c5bb1dca9182577fd2b81（ahead/behind 237/0）。attempt-09/11 启动前有 102 项既有 dirty/untracked，加上 7 项本任务源码改动共 109 项，index 为空；既有文件均保留。
