@@ -1,3 +1,9 @@
+## 2026-11-02 12:28 +0800 接续：barrier CPU mock 回归通过；真实 NCCL 结果仍待隔离 GPU
+
+源码修复和回归测试已在提交 `5a2a7c6caef9c9148aba47b599a5f53da9d7cc9e`。本轮在 `/data6` 隔离 cache 为当前源码 bootstrap CPU core 后运行两个 mock 用例，2 passed、NCCL 用例因未分配设备而跳过；仓库 102 项既有 dirty/untracked 状态签名前后不变。证据路径及 SHA 见 Day2–5 报告顶部。该 mock 通过不代表真实 NCCL collective 通过。
+
+下一项设备依赖仍受资源条件限制：GPU2 为 Default/shared、约 17,299 MiB 已占用，用户没有 Slurm account，需管理员添加 `cgq` association 后获得 GRES/device-cgroup 独占租约。另一个已保存的 DDP Trainer attempt 停在 BERT mask 的 CUDA scalar `.item()/to_bool`，不因 barrier 修复而关闭。Day4–5 性能/显存 cohort 与更广 Day2–5 release 均未完成；不启动普通 holder，不重跑相同 DDP 超时。
+
 ## 2026-11-02 12:20 +0800 接续：current-main Torch barrier 路径已修正；实际 NCCL/Trainer 验证仍未完成
 
 沿用 `/home/cgq/jittor`，基线 HEAD `c632c114d304d9427567f696b6f3d28c56d15bb4`，origin `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `224/0`。修改 Torch shim barrier，使其走 Jittor ProcessGroup 原生 backend all-reduce 和 device sync；NCCL/HCCL 支持明确 device id。两个测试 mock 已添加。纯 Python AST mock 检查 5 项通过；真实 pytest 因当前隔离 cache 没有与源码配置匹配的 core，在 `JITTOR_NO_BUILD=1` 下 import 前失败，未重编。失败 cache 触及的旧目录只有 `jittor.lock`、`probe.json` 两个内容变化，清单及原件保留。细节和 hashes 见 Day2–5 报告顶部。

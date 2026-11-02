@@ -1,3 +1,7 @@
+## 2026-11-02 12:28 +0800 current-main barrier 纯 CPU mock 回归通过；真实 NCCL barrier/Trainer 仍未验收
+
+在提交 `5a2a7c6caef9c9148aba47b599a5f53da9d7cc9e` 对应源码上，用独立 `/data6` cache bootstrap CPU core（43.1 秒、`has_cuda=0`），两个 Python mock 用例 2 passed，真实 NCCL 用例按环境跳过；无 GPU 可见，仓库状态签名前后相同。它验证 shim 委托和设备同步参数，不证明 NCCL 设备运行。详情见 [Day2–5 结果报告](../results/2026-10-26-torch-compat-release-day2-5.md)。GPU2 仍共享负载，缺 cgq Slurm association；Day4–5 及更广发布门继续 **Not complete**。
+
 ## 2026-11-02 12:20 +0800 current-main DDP barrier 后端路径修复已落源码；Trainer 仍有独立 CUDA scalar 读回阻塞
 
 在现有 `/home/cgq/jittor` 工作区，针对保存的两 rank barrier probe 停在 `marker.numpy()` 的证据，将 Torch shim `_barrier` 改为委托活动 ProcessGroup；ProcessGroup barrier 按 NCCL/HCCL 选择设备，再通过原生 backend all-reduce 和 `sync(device_sync=True)` 完成同步。新增两个 mock 回归用例。改动只覆盖 barrier 实现与对应测试，源码 SHA256 及独立证据见 [Day2–5 结果报告](../results/2026-10-26-torch-compat-release-day2-5.md)。
