@@ -45,11 +45,10 @@ class TensorWrapper:
         self.data = data
     def __reduce__(self):
         a = tuple(self.data.shape)
-        # calc stride
-        stride = [1]
-        for i in range(len(a)-1, 0, -1):
-            stride.append(stride[-1]*a[i])
-        stride = stride[::-1]
+        # calc contiguous stride; a scalar has an empty shape and stride.
+        stride = [1] * len(a)
+        for i in range(len(a)-2, -1, -1):
+            stride[i] = stride[i+1]*a[i+1]
 
         return (_rebuild_tensor_v2, (
             TensorStorage(self.data),

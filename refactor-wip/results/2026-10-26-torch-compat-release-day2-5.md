@@ -1,3 +1,21 @@
+## 2026-11-03 05:26 +0800 显式 PyTorch ZIP 导出的标量 stride 修复与 R14 optimizer 对读
+
+### 修改与最小复现
+
+修改 python/jittor/serialization/save_pytorch.py 的 TensorWrapper.__reduce__。旧实现从 [1] 起算 stride，导致 rank-0 shape () 仍输出 (1,)；stock PyTorch 2.6 在 _rebuild_tensor_v2 抛 RuntimeError: unequal size length (0) and stride length (1)。已先在未修复源码上运行新增回归并复现此错误，失败原件保留。
+
+修复后 test_stock_pytorch_loads_exported_scalar_tensor_archive 通过；同一文件其余 native serialization ownership 测试合计为 4 passed、0 failed/skip，CPU runtime scope。测试覆盖标量、向量、矩阵，fallback policy 为 error；回归执行使用 stock PyTorch，而非 Jittor Torch shim。
+
+### R14 checkpoint-51 互操作验证
+
+输入为 R14 checkpoint-51 optimizer.pt，4,611,114 bytes，SHA256 93bb7c198431bbda175b653d16e81d5c38006737b52c2f8abd929350fcbba905，输入 checkpoint manifest SHA256 36c882835ecaa6f31325b62ab43322ffa1b83a142620c2e31fddcc4e3df5bed8。在现有安装 wheel 的 Jittor/Torch shim runtime 中，用 checkout save_pytorch.py（SHA256 7ebce5a5a2705a9fb22b2715af56dede28f47d7f4e5580fe7efe7de18fbacb51）执行显式 ZIP export；独立 stock PyTorch 2.6.0+cu124 从另一个 Python 环境读回。导出 archive SHA256 b8e3591bd996cd1976e9c0c8a4a56083331f05b697416996679b2f663de0ac71，4,672,914 bytes；336 tensor、136 scalar、121 container 全部通过 recursive dtype/shape/value/key summary，摘要 SHA256 c110ebabd5e450d101e8c0a5cb928ef796c2d478b89f3695693a80b65091839d。运行 CPU scope，fallback 0→0；CUDA core 0f75262b8518e40ce12769a7af79c8c70f21fbae9e4a796e86000decfd5ddc07 前后不变，GPU process 前后无新增。
+
+这是 checkout source exporter 覆盖运行的互操作证据，不是修复版 wheel 的安装态证据；main/compat wheel identity 仍分别为 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69 和 740a9034c375e70b55ade864f75acbed7e492f09532bcf68ab64ac24a070b975，修复尚未打入新的 main wheel。stock-result.json 的 status 字段因复用 runner 保留了错误的 installed-wheel 标签；原文件与原 manifest 未改写，由 amendment audit 明确更正为 PASS_STOCK_PYTORCH_READS_CHECKOUT_SOURCE_EXPLICIT_EXPORT。
+
+原始失败回归证据位于 /data6/cgq/jittor-lab/_state/release-day23/20261103-current-wheel-r14-optimizer-zip-export-r2/attempt-01-baseline/，manifest SHA256 29b5af59669119f40b6a7be82f7bac4ff417befc62818eec10365d3729cb9612；单项修复回归 attempt-02-fixed-source/ manifest SHA256 5e71d2d1339e675557de64efcbd6aa37b59bf4e228c639999ff52abca872005c；完整相关文件回归 attempt-03-source-serialization-suite/ manifest SHA256 b2b739297f186684d31edff16886d87270b1fe382225d98fcb4bccec8c998e8c。R14 export/read 及更正记录分别保存在 sourcefix root 的 attempt-01 与 amendment-01-label-correction，manifest SHA256 为 57861be762473f0dbd15f9f0bd89143bc85b7347af3f38fa6b4898e1b5e2072b、443fa44ef4da3fe93b76fcd3b155a0d97c2e39e1c7d503fc95596c5538afa654。
+
+原 JT portable-pickle 格式直接给 stock torch.load 的旧失败仍独立成立；本修复只让显式 PyTorch ZIP exporter 的 rank-0 Tensor 元数据合法。R14 Jittor 新进程续训结果不受影响，也不因这次转换而改变。新 main wheel 安装验证、更广 Day2–5 发布门及 Day4–5 性能/显存验收均仍待完成；本次没有性能结论。
+
 ## 2026-11-03 05:09 +0800 独立 wheel 安装根 CPU DDP surface 39/39 通过
 
 在 2026-11-03 05:02 +0800 记录的同一全新 pip 安装 target、已冷构建 CUDA core 和安装包身份上，补跑 CPU DDP compatibility surface：test_ddp_owner_separation.py、test_ddp_comm_hook_surface.py、test_ddp_comm_hook_transaction.py 共 39 passed、0 failed/skip，用时 17.00 秒。覆盖 Torch/native DDP 所有权隔离与 no_sync 梯度累积、Accelerate/communication-hook 的显式 unsupported 边界，以及 hook namespace 安装事务回滚/idempotency。测试直接导入 fresh target 中的 jittor、Torch shim 和 compat helper；没有源码或运行时 overlay。Jittor runtime scope 与 jt.flags.use_cuda 均为 CPU，fallback 0→0，core build current 且 SHA256 前后同为 0f75262b8518e40ce12769a7af79c8c70f21fbae9e4a796e86000decfd5ddc07。GPU2 未暴露；GPU process 前后快照无本测试新增进程。

@@ -1,3 +1,13 @@
+## 2026-11-03 05:26 +0800 Handoff：显式 PyTorch ZIP exporter 标量 stride 修复并通过 R14 source-overlay 对读
+
+当前 checkout integrate/cgq-transformers-native-multicard-target 基线 2f01da6dd40e1058a3c3095e06a95e3c455be1a8，开始时与 origin/cgq_transformers 同步、工作区干净。修复 python/jittor/serialization/save_pytorch.py 的 rank-0 stride，并在 tests/serialization/test_native_serialization_ownership.py 增加 stock PyTorch roundtrip。未修复回归以 size=()、stride=(1,) 复现失败；修复后单项通过，相关测试文件 4/4 通过。源码 SHA256 7ebce5a5a2705a9fb22b2715af56dede28f47d7f4e5580fe7efe7de18fbacb51，测试 SHA256 8d6c1fbe40468242748d3f22f6e07f97fa98457deaf50ae0e416852bc582485b。
+
+R14 checkpoint-51 optimizer 显式转为 PyTorch ZIP 后，独立 stock PyTorch 2.6.0+cu124 读取 336 tensors、136 scalars、121 containers，递归摘要一致。此项把 checkout source exporter 动态加载到已有安装 wheel runtime；新 main wheel 尚未构建或安装。CPU scope、fallback 0→0、CUDA core 哈希未变、GPU process 无新增。raw JT portable-pickle 文件直接 stock torch.load 失败仍未修复，需与 ZIP exporter 分开记录。
+
+证据：baseline attempt manifest 29b5af59669119f40b6a7be82f7bac4ff417befc62818eec10365d3729cb9612；修复单项 5e71d2d1339e675557de64efcbd6aa37b59bf4e228c639999ff52abca872005c；完整 serialization 文件 b2b739297f186684d31edff16886d87270b1fe382225d98fcb4bccec8c998e8c；R14 source-overlay 对读 57861be762473f0dbd15f9f0bd89143bc85b7347af3f38fa6b4898e1b5e2072b；标签更正 443fa44ef4da3fe93b76fcd3b155a0d97c2e39e1c7d503fc95596c5538afa654。源码与测试已提交并推送 cgq_transformers，没有 PR，也未合并 2.0-refactor。
+
+下一步：将修改构建进新 main wheel，在 fresh target 安装并复验显式 ZIP 互操作；继续更广 Day2–5 功能门。Day4–5 仍需管理员加 cgq Slurm association 后申请可核验 GPU 独占资源，按规定做 3 轮交替、每轮每侧至少 10 个热态样本、报告 median/p95/离散度和 allocator/NVML 峰值。当前 GPU2 仍被外部任务占用，本次 CPU 验证未使用 GPU。整体目标未完成。
+
 ## 2026-11-03 05:09 +0800 独立 wheel 安装根 CPU DDP surface 39/39 通过
 
 在 2026-11-03 05:02 +0800 记录的同一全新 pip 安装 target、已冷构建 CUDA core 和安装包身份上，补跑 CPU DDP compatibility surface：test_ddp_owner_separation.py、test_ddp_comm_hook_surface.py、test_ddp_comm_hook_transaction.py 共 39 passed、0 failed/skip，用时 17.00 秒。覆盖 Torch/native DDP 所有权隔离与 no_sync 梯度累积、Accelerate/communication-hook 的显式 unsupported 边界，以及 hook namespace 安装事务回滚/idempotency。测试直接导入 fresh target 中的 jittor、Torch shim 和 compat helper；没有源码或运行时 overlay。Jittor runtime scope 与 jt.flags.use_cuda 均为 CPU，fallback 0→0，core build current 且 SHA256 前后同为 0f75262b8518e40ce12769a7af79c8c70f21fbae9e4a796e86000decfd5ddc07。GPU2 未暴露；GPU process 前后快照无本测试新增进程。

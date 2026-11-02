@@ -45,3 +45,23 @@ def test_historical_rebuild_pickle_roundtrip():
     canonical = importlib.import_module("jittor.serialization.load_pytorch")
     assert legacy.jittor_rebuild is canonical.jittor_rebuild
     assert pickle.loads(pickle.dumps(legacy.jittor_rebuild)) is canonical.jittor_rebuild
+
+
+def test_stock_pytorch_loads_exported_scalar_tensor_archive(tmp_path):
+    torch = pytest.importorskip("torch")
+    save_pytorch = importlib.import_module("jittor.serialization.save_pytorch").save_pytorch
+    path = str(tmp_path / "stock-pytorch-scalar.pt")
+
+    with jt.runtime.scope(use_cuda=0, backend_fallback="error"):
+        source = {
+            "step": jt.array(7).int64(),
+            "vector": jt.array([1, 2, 3]).int32(),
+            "matrix": jt.array([[1.5, -2.0], [3.0, 4.5]]),
+        }
+        save_pytorch(path, source)
+
+    restored = torch.load(path, map_location="cpu", weights_only=True)
+    assert restored["step"].shape == torch.Size([])
+    assert restored["step"].item() == 7
+    torch.testing.assert_close(restored["vector"], torch.tensor([1, 2, 3], dtype=torch.int32))
+    torch.testing.assert_close(restored["matrix"], torch.tensor([[1.5, -2.0], [3.0, 4.5]]))
