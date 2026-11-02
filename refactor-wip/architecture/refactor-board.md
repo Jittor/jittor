@@ -1,3 +1,11 @@
+## 2026-11-02 12:20 +0800 current-main DDP barrier 后端路径修复已落源码；Trainer 仍有独立 CUDA scalar 读回阻塞
+
+在现有 `/home/cgq/jittor` 工作区，针对保存的两 rank barrier probe 停在 `marker.numpy()` 的证据，将 Torch shim `_barrier` 改为委托活动 ProcessGroup；ProcessGroup barrier 按 NCCL/HCCL 选择设备，再通过原生 backend all-reduce 和 `sync(device_sync=True)` 完成同步。新增两个 mock 回归用例。改动只覆盖 barrier 实现与对应测试，源码 SHA256 及独立证据见 [Day2–5 结果报告](../results/2026-10-26-torch-compat-release-day2-5.md)。
+
+当前没有可匹配的隔离 CPU core，pytest 在 `JITTOR_NO_BUILD=1` 下因 import 需要重建 core 而退出，0 项源码断言执行；未重编。纯 Python AST 函数执行 mock 覆盖默认/显式 group、device id、NCCL/HCCL 设备派发和设备同步，通过。当前可用的旧 full-attempt-06 双 rank Trainer 仍卡在 BERT attention-mask `Tensor.item()/to_bool`，与 barrier probe 是不同阻塞点；本修复不证明 Trainer 或双 rank 训练已通过。
+
+GPU2 仍被外部 PID 3037196/3164740 使用，Default/shared；用户没有可用 Slurm account，需管理员添加 `cgq` association 才能申请有效 GRES/device-cgroup 独占租约。Day4–5 正式配对性能/显存 cohort 及更广 Day2–5 release 继续 **Not complete**。
+
 ## 2026-11-02 11:58 +0800 current-main Qwen seed821 两阶段 102 更新及新进程续训通过；GPU2 独占仍缺 Slurm association
 
 当前源码训练指纹 e19d6aa0c08b17f6fe2e923c4290e45afcc58776b7712ea3346437d47ef72ef3（训练源码 HEAD aa541675998e0422cbe96d436ef6f03191f09668；当前工作树 HEAD d432c6bdec3e6a0d4bfd934614bcc270bce656b9 的后续差异仅为状态文档）。seed821 Qwen3-0.6B LoRA 在物理 GPU1 / cuda:0 完成 51+51 更新，0 skip、0 fallback；step51 checkpoint 新进程续训恢复到 step102，状态/RNG 和 112/112 LoRA 更新核验通过。JT 两 epoch 微批次平均 loss 1.205599→1.153534，PT 对照 1.205680→1.154064；JT 最终 eval loss 2.456431，PT 2.456644。训练和续训不是性能/显存结论，也没有 held-out generation 质量分数；详情与原始哈希见 [Day2–5 结果报告](../results/2026-10-26-torch-compat-release-day2-5.md)。

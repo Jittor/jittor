@@ -374,10 +374,17 @@ class ProcessGroup:
             "{} process-group reduce_scatter is unavailable".format(
                 backend or "active backend"))
 
-    def barrier(self):
+    def barrier(self, device_id=None):
         if self.rank() < 0 or self.size() <= 1:
             return None
         marker = jt.array([self.rank()], dtype="int32")
+        backend = self._collective_backend()
+        if backend == "nccl":
+            marker = (marker.cuda(device_id) if device_id is not None
+                      else marker.cuda())
+        elif backend == "hccl":
+            marker = (marker.npu(device_id) if device_id is not None
+                      else marker.npu())
         self.all_reduce(marker, "sum").sync(device_sync=True)
         return None
 

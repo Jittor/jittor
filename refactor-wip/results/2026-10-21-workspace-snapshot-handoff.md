@@ -1,3 +1,11 @@
+## 2026-11-02 12:20 +0800 接续：current-main Torch barrier 路径已修正；实际 NCCL/Trainer 验证仍未完成
+
+沿用 `/home/cgq/jittor`，基线 HEAD `c632c114d304d9427567f696b6f3d28c56d15bb4`，origin `e5cffe1ae60c418f53c5bb1cdca9182577fd2b81`，ahead/behind `224/0`。修改 Torch shim barrier，使其走 Jittor ProcessGroup 原生 backend all-reduce 和 device sync；NCCL/HCCL 支持明确 device id。两个测试 mock 已添加。纯 Python AST mock 检查 5 项通过；真实 pytest 因当前隔离 cache 没有与源码配置匹配的 core，在 `JITTOR_NO_BUILD=1` 下 import 前失败，未重编。失败 cache 触及的旧目录只有 `jittor.lock`、`probe.json` 两个内容变化，清单及原件保留。细节和 hashes 见 Day2–5 报告顶部。
+
+旧 DDP `full-attempt-06-host-sampleids` 的 210 秒 Trainer 超时发生在 BERT attention-mask 路径的 CUDA scalar `.item()/to_bool`，不在 barrier；因此不声称 Trainer 或 checkpoint/resume 已通过，也不重跑同配置 attempt。后续先针对该标量物化路径做静态定位和可隔离回归，再等有效双 rank GPU allocation 做实际 NCCL/Trainer 检查。
+
+GPU2 仍被外部进程共享占用，无 Slurm allocation；用户没有可用 account，管理员需添加 `cgq` association。普通显存 holder 不能阻止别的进程。取得 live GRES/device-cgroup 独占租约前，不运行 GPU2 正式 cohort。Day4–5 性能/显存验收及更广 Day2–5 release 均 **Not complete**。本轮继续保留原有 dirty/untracked 工作，不 push。
+
 ## 2026-11-02 11:58 +0800 Handoff：current-main Qwen 两阶段 102 更新与 step51 新进程续训通过；GPU2 独占等待管理员 association
 
 在现有 `/home/cgq/jittor` 工作树完成 current-main Qwen3-0.6B LoRA seed821 两阶段训练：step1–51 保存 checkpoint-51，新进程恢复后完成 step52–102。源码指纹 `e19d6aa0c08b17f6fe2e923c4290e45afcc58776b7712ea3346437d47ef72ef3`（训练源码 HEAD `aa541675998e0422cbe96d436ef6f03191f09668`；记录时 HEAD `d432c6bdec3e6a0d4bfd934614bcc270bce656b9` 仅有后续状态文档差异），实际 GPU1→`cuda:0`、fallback=0、跳步=0。JT epoch 微批次 loss `1.205599→1.153534`，PT `1.205680→1.154064`；最终 eval loss JT `2.456431`、PT `2.456644`。恢复状态/RNG、930 项状态值、112/112 LoRA 张量更新及 lifecycle 检查通过。完整配置、限制和哈希见 Day2–5 结果报告顶部；证据根目录 `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-qwen-practical-r2-prepared/`。本结果不构成性能/显存或 generation quality 验收，overall Day2–5 继续 **Not complete**。

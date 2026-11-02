@@ -520,21 +520,16 @@ def _broadcast(tensor, src=0, group=None, async_op=False, group_src=None):
 
 def _barrier(group=None, async_op=False, device_ids=None):
     size = _require_supported_group(group)
-    marker = None
     if size > 1:
-        marker = jt.array(np.asarray([_distributed_rank()], dtype=np.int32))
-        backend = _process_group.get_backend(group)
+        process_group = (
+            _process_group.get_default_group() if group is None else group
+        )
         device_id = device_ids[0] if device_ids else None
-        if backend == "nccl":
-            marker = marker.cuda(device_id) if device_id is not None else marker.cuda()
-        elif backend == "hccl":
-            marker = marker.npu(device_id) if device_id is not None else marker.npu()
-        marker = marker.mpi_all_reduce("sum")
-        # Var.sync() can return after the local lazy graph is submitted, before
-        # the peer has completed this collective. Materializing the scalar on
-        # host preserves the synchronous barrier contract.
-        marker.numpy()
-    return _collective_result(marker, async_op)
+        process_group.barrier(device_id=device_id)
+    # ProcessGroup.barrier synchronizes the selected device before returning.
+    # The compatibility Work is consequently already complete, matching the
+    # synchronous ProcessGroup implementation used by the other collectives.
+    return _collective_result(None, async_op, issued=False)
 
 
 def _broadcast_object_list(object_list, src=0, group=None, device=None):
