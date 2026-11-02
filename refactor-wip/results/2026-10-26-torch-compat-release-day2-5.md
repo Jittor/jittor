@@ -1,3 +1,12 @@
+## 2026-11-03 02:51 +0800 current-HEAD 安装 wheel 的 fused SGD option matrix 单项补测通过
+
+针对前次 fused SGD CUDA suite 在 180 秒超时、option trajectory 只启动未完成的情况，仅单独运行该方法一次，没有重跑整套或已通过节点。test_every_option_combination_matches_the_portable_update 对 10 个合法 (momentum, weight_decay, dampening, nesterov) 组合分别比较 fused=True/False 的四步模型参数轨迹，结果 **1 passed、0 skipped、0 failed**，fallback counter 0→0；unittest 用时 122.401 秒，完整 subprocess 用时 123.816 秒。运行时 backend_fallback=error 并禁止 fallback，core_build_is_current() 为真，installed Jittor/kernel 路径正确，CUDA core 前后 SHA256 相同。
+
+证据包 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-fused-sgd-options-followup-r1/，manifest SHA256 7a32237c270418f24cf9f0ab2b865dd5a755006be5272b81dbd0c3caf67e21cb。wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69，源码快照 HEAD 35a1a7605ec475e9cbc1a9688afc299ee3bd8011，live HEAD ed9b53a8a5202c3590fe4f20381a2214781a1a7a。test_fused_sgd_cuda.py SHA256 7a063a60bdb25d0474149deb4e372b63d5f7163e424a09166a82ff86a2f2f5b9；SGD implementation source/wheel SHA256 acff9799e218fa78949028c287e79f058fdfb969ec90fa985e8e7e44ac6fedf7；installed fused_sgd_cuda.py SHA256 5d7c15f09429e8d8bdd0fc9bc590654d0688e2ce342c5dbb7bdb4d4f1aa1d971；CUDA core SHA256 0e2fe909d3f33e27c220546693c40f27087357cefe198220f46c97f9a0353a90。GPU0 当时有共享负载（运行前 89%），GPU2 未暴露；不作性能/显存结论。
+
+组合 suite 的旧 attempt 仍按 timeout 保留。原 test_it_is_off_when_asked 方法内容是两次调用 _trajectory(False) 并比较结果，不能证明 fused selector 在显式关闭时未被调用；option matrix 已将 fused=False 用作 portable 对照，但未直接 spy 选择器。因此不宣称完整 suite 通过，后续若修测试需另行遵照源码改动约束。本结果只关闭安装 wheel 下 fused SGD option parity 的未完成轨迹项；Day4–5 和整体 Day2–5 仍 Not complete。
+
+
 ## 2026-11-03 02:45 +0800 current wheel baseline additions/removals 首轮源码归因；不批准迁移
 
 只读复核 current-HEAD wheel 的既有 compare 产物。69 个新增成员分为 backends 27（ACL 12、CUDA 15）、jittor/src 24、profiling 6、nn 5、_runtime 3、amp 2、_core 1、optim 1。304 个内容变化中，jittor/src 有 123 项、backends 92 项、nn 34 项，其余 55 项包含其它代码与 dist-info；这些内容变化尚未逐项审查，默认许可列表没有调整。

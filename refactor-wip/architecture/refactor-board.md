@@ -1,3 +1,9 @@
+## 2026-11-03 02:51 +0800 current-HEAD 安装 wheel 的 fused SGD option trajectory 补测通过；测试套件整体仍不标通过
+
+将前次 180 秒组合 attempt 中未完成的 test_every_option_combination_matches_the_portable_update 单独执行一次：10 个合法 SGD option 组合、每组四步 fused/portable 轨迹比较全部通过；1 passed、0 skipped，fallback 0→0，用时 122.401 秒。之前组合 attempt 的 timeout 原件保留，不将整套 suite 改标通过。两项此前通过的 FP16 unsupported fallback 与长参数分块证据仍有效。另发现未运行的 test_it_is_off_when_asked 当前把 _trajectory(False) 与自身比较，是 no-op；option matrix 里的 portable 侧确实走 fused=False，但没有 selector spy 证明关闭时不调用 fused selector，不能把该节点当作关闭开关的独立覆盖。
+
+证据包 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-fused-sgd-options-followup-r1/，manifest SHA256 7a32237c270418f24cf9f0ab2b865dd5a755006be5272b81dbd0c3caf67e21cb。绑定 wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69、wheel 源 HEAD 35a1a7605ec475e9cbc1a9688afc299ee3bd8011、live HEAD ed9b53a8a5202c3590fe4f20381a2214781a1a7a；installed SGD source 与快照 SHA256 acff9799e218fa78949028c287e79f058fdfb969ec90fa985e8e7e44ac6fedf7，fused_sgd kernel SHA256 5d7c15f09429e8d8bdd0fc9bc590654d0688e2ce342c5dbb7bdb4d4f1aa1d971，CUDA core SHA256 0e2fe909d3f33e27c220546693c40f27087357cefe198220f46c97f9a0353a90 且前后未变。GPU0 为共享卡，只作正确性证据；GPU2 未用，正式性能/显存门仍开放。
+
 ## 2026-11-03 02:45 +0800 current wheel migration 差异首轮分类完成；审批仍为零
 
 对 current-HEAD main wheel baseline compare 做只读复核，未改 baseline、allowlist 或源码。69 个新增成员分布为 backends 27（其中 ACL 12、CUDA 15）、jittor/src 24、profiling 6、nn 5、_runtime 3、amp 2、_core 1、optim 1。304 个内容变化中最大类别为 jittor/src 123、backends 92、nn 34，仍须逐项审阅。两项删除为旧 ACL Python 包装 jittor/backends/acl/kernels/ops/sigmoid_op.py 与 transpose_op.py；提交 e7bf82046 将 sigmoid 转为原生 launcher，transpose 改走 core TransposeOp/aclnnPermute，并删除冗余 CodeOp。当前树仍有 sigmoid/transpose 原生 ACL 源码与注册，已有结构断言覆盖该所有权迁移。

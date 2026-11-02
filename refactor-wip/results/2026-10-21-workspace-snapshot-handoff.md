@@ -1,3 +1,12 @@
+## 2026-11-03 02:51 +0800 Handoff：fused SGD 未完成 option trajectory 单项通过，保留整套 timeout
+
+在 /home/cgq/jittor 现有工作区继续，live HEAD ed9b53a8a5202c3590fe4f20381a2214781a1a7a；wheel 仍绑定源码 HEAD 35a1a7605ec475e9cbc1a9688afc299ee3bd8011、main wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69。本轮没有改产品源码或测试。
+
+前次 suite 超时中仅补跑 test_every_option_combination_matches_the_portable_update：10 个合法 option 组合、每组四步 fused/portable 参数轨迹均通过；1 passed、122.401 秒、fallback 0→0。证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-fused-sgd-options-followup-r1/，manifest SHA256 7a32237c270418f24cf9f0ab2b865dd5a755006be5272b81dbd0c3caf67e21cb。整套 timeout 原件保持原状态。未运行的 test_it_is_off_when_asked 比较两份相同 fused=False 轨迹，是 no-op，不能证明关闭 selector；不将整套 suite 记为通过。
+
+GPU0 为共享负载，仅用于功能正确性；GPU2 仍由外部占用，正式 Day4–5 独占性能/显存验收未启动。Day2–5 整体 Not complete。
+
+
 ## 2026-11-03 02:45 +0800 Handoff：wheel 差异首轮静态归因完成，未改审批表
 
 在既有 main wheel baseline compare 产物上只读分类 69 项新增、304 项内容变化和 2 项删除。新增里 backends 27（ACL 12、CUDA 15）、JIT C++ 源 24、profiling 6、nn 5、runtime 3、AMP 2、core 1、optimizer 1。两项删除是 ACL sigmoid/transpose Python CodeOp 包装；提交 e7bf82046 显示其转为原生 launcher/core op，当前源树仍有原生文件和结构断言。ccec 与 ASCEND_TOOLKIT_HOME 均缺失，不能提供 ACL 硬件验收。全部迁移仍是 69 additions、304 changes、2 removals、0 approved。
