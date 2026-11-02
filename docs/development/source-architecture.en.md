@@ -622,7 +622,7 @@ Torch installers run after an explicit Torch-mode preflight, or through the depl
 point, or when the historical alias `jittor.torch_compat` is imported. **This prevents class-level
 Torch transformations from changing the native Jittor API in unrelated processes.**
 
-The vLLM implementation and its tests live in [jittor-vllm](https://github.com/JittorEcosystem/jittor-vllm), independently of Jittor and jittor-compat. The optional Torch stage discovers `jittor_vllm` in `jittor.module_patches`, targeting `jittor_vllm:register`. Its registrar assembles pre-import extension settings and post-import layer patches through the shared transaction mechanism. Missing installation is reported as `unavailable` without breaking Torch. Public Jittor primitives own the mathematical implementation; the downstream repository owns hardware acceptance. The main `adapters/` directory is only a repository index, not an installable bundle.
+The vLLM implementation and its tests live in [jittor-vllm](https://github.com/JittorEcosystem/jittor-vllm), independently of Jittor and jittor-compat. The optional Torch stage discovers `jittor_vllm` in `jittor.module_patches`, targeting `jittor_vllm:register`. Its registrar assembles pre-import extension settings and post-import layer patches through the shared transaction mechanism. Missing installation is reported as `unavailable` without breaking Torch. Public Jittor primitives own the mathematical implementation; the downstream repository owns hardware acceptance. The root README links the ecosystem organization; the main repository has no adapter directory.
 
 The ownership order is:
 

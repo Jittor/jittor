@@ -15,6 +15,7 @@
 - [模型库](https://cg.cs.tsinghua.edu.cn/jittor/resources/)
 - [API 文档](https://cg.cs.tsinghua.edu.cn/jittor/assets/docs/index.html)
 - [论坛](https://discuss.jittor.org/)
+- [生态集成（JittorEcosystem）](https://github.com/JittorEcosystem)
 - [Awesome Jittor（中文）](docs/community/AWESOME-JITTOR-LIST.md) |
   [Awesome Jittor（English）](docs/community/AWESOME-JITTOR-LIST.en.md)
 

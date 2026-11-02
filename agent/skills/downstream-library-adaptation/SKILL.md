@@ -148,7 +148,7 @@ fallback 能骗过的那一个**：NPU 真发生 CPU 回退时，它会完美一
 ## 6. Adapter 准入清单
 
 只有第 0 节第三行还剩东西时才建 adapter。目录形态是自足单元，`cp -r` 能整体搬走：
-运行代码与顶层 `tests/` 位于同一个独立仓库。每个下游项目在 `JittorEcosystem` 单独维护；主仓 `adapters/` 只保留导航。独立仓库必须齐：
+运行代码与顶层 `tests/` 位于同一个独立仓库。每个下游项目在 `JittorEcosystem` 单独维护；主仓不保留适配目录，根 README 链接生态组织。独立仓库必须齐：
 
 1. **断点表 + 分流声明**：为什么这不是 compat 缺陷、也不是 jittor 缺功能；
 2. **继承共享 relocatable 契约**：只 import 公开入口白名单、不碰私有属性、不给

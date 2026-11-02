@@ -70,8 +70,7 @@ collector 会重算全部六阶段、检查扰动、真实安装和实际平台�
 [`downstream-library-adaptation`](../downstream-library-adaptation/SKILL.md) 分类表里
 **合法需要独立 adapter 的第三行**（库私有实现细节），本 skill 按那个框架执行。
 
-**不覆盖**：不新增 vLLM 版本支持声明（[`adapters/README.md`](../../../adapters/README.md)
-明确不为当前安装版本背书）；不做 serving/训练性能验收。2026-09-19 所述环境没有 vLLM 源码 checkout；2026-10-15
+**不覆盖**：不新增 vLLM 版本支持声明（支持范围以独立 [jittor-vllm](https://github.com/JittorEcosystem/jittor-vllm) 的实际验收为准）；不做 serving/训练性能验收。2026-09-19 所述环境没有 vLLM 源码 checkout；2026-10-15
 已恢复上文固定源码并核对注册分母，尚不能据此授予 engine 级验收，见「证据」。
 
 ## 两侧环境
@@ -182,7 +181,7 @@ python tools/run_host_tests.py
 - 报告：[`2026-08-31-vllm-ascend-jittor-bootstrap.md`](../../../docs/results/2026-08-31-vllm-ascend-jittor-bootstrap.md)（NPU）；
   `2026-09-08-vllm-independent-distribution.md`（adapter 抽取进仓）与
   `2026-08-23-verl-vllm-trellis-current-baseline.md`（CUDA）两份已退役，Git 历史 `e3c369acb` 可查。
-- 准入与版本矩阵：[`adapters/README.md`](../../../adapters/README.md)、
+- 准入与版本矩阵：[jittor-vllm](https://github.com/JittorEcosystem/jittor-vllm)、
   [`_common.py`](https://github.com/JittorEcosystem/jittor-transformers/blob/main/jittor_transformers/_common.py)。
 - **已核实**：两侧 venv 的 vllm/transformers/torch 版本、oracle 断言、shim 身份、
   adapter 文件与 `jittor_vllm` entry point 存在、host-only 生命周期测试

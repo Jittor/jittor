@@ -32,7 +32,7 @@
   按 [`agent/skills/downstream-library-adaptation/SKILL.md`](agent/skills/downstream-library-adaptation/SKILL.md) 执行：先按其三行判据分流到
   jittor 核心、`jittor.compat.torch` 或 adapter，再按其 device 阶梯和准入清单验收。
   不在该流程外新增 adapter。下游实现和专属测试在 `JittorEcosystem` 的独立仓库维护；
-  主仓 `adapters/` 仅保留中英文导航，不再分发 adapter 合集。
+  主仓不保留 `adapters/` 目录；生态仓库入口见根 README。
 
 ## Repository Boundary
 

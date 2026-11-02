@@ -256,7 +256,7 @@ TRELLIS.2 4B 曾在一个**不在本仓库**的外部适配器上以四个真实
 端到端流水，暖态流水中位数是 `7.515s` 对真实 PyTorch 的 `6.878s`——约 `1.09x`，
 **性能尚未验收**；该测量是一次性结论，见[下游库台账](../performance/library-standing.md)。
 
-项目专属粘合代码通过 [JittorEcosystem](https://github.com/JittorEcosystem) 的独立包安装。主仓[适配器索引](../../adapters/README.md) 链接各仓库源码、测试与支持记录。核心与 compat 不依赖适配器合集；注册和版本检查通过公开模块补丁契约显式失败，通用数学和 Torch 语义仍属于框架。
+项目专属粘合代码通过 [JittorEcosystem](https://github.com/JittorEcosystem) 的独立包安装。各独立仓库维护源码、测试与支持记录。核心与 compat 不依赖适配器合集；注册和版本检查通过公开模块补丁契约显式失败，通用数学和 Torch 语义仍属于框架。
 
 ## 复数与 FFT
 

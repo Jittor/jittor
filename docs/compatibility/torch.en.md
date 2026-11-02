@@ -263,7 +263,7 @@ TRELLIS.2 4B once completed an aligned end-to-end pipeline with four real CUDA e
 `1.09x`, **performance not yet accepted**; that measurement is a one-off conclusion, see the
 [downstream library ledger](../performance/library-standing.en.md).
 
-Project-specific glue is installed through independent packages from [JittorEcosystem](https://github.com/JittorEcosystem). The main [adapter index](../../adapters/README.en.md) links their source, tests and support records. Core and compat do not depend on an adapter bundle. Registration/version checks remain fail-closed through public module-patch contracts; generic math and Torch semantics remain in the framework.
+Project-specific glue is installed through independent packages from [JittorEcosystem](https://github.com/JittorEcosystem). Each independent repository maintains its source, tests and support records. Core and compat do not depend on an adapter bundle. Registration/version checks remain fail-closed through public module-patch contracts; generic math and Torch semantics remain in the framework.
 
 ## Complex numbers and FFT
 

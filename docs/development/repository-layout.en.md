@@ -242,7 +242,7 @@ Torch compatibility is split by **ownership**, not by downstream project:
    **Mainline Jittor installs no resident TRELLIS or Gaussian Splatting finder into every
    process.**
 
-Downstream glue and its dedicated tests belong to independent [JittorEcosystem](https://github.com/JittorEcosystem) repositories. The main `adapters/` directory only indexes them; neither core nor `jittor-compat` depends on an adapter bundle. [jittor-vllm](https://github.com/JittorEcosystem/jittor-vllm) publishes the optional `jittor_vllm` module-patch entry point and owns its version/device acceptance. Integrations use the shared owner-aware transaction mechanism for registration and rollback.
+Downstream glue and its dedicated tests belong to independent [JittorEcosystem](https://github.com/JittorEcosystem) repositories. The root README links the ecosystem organization; neither core nor `jittor-compat` depends on an adapter bundle. [jittor-vllm](https://github.com/JittorEcosystem/jittor-vllm) publishes the optional `jittor_vllm` module-patch entry point and owns its version/device acceptance. Integrations use the shared owner-aware transaction mechanism for registration and rollback.
 
 **An installer must report every attempted patch independently.** A broad
 `try/except Exception: pass` wrapped around a series of patches is forbidden -- a single failure

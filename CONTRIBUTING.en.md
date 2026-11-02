@@ -51,7 +51,6 @@ CI requirements are documented in [`agent/manuals/environment.md`](agent/manuals
 ├── python/jittor/       # the Python runtime package (pure Python)
 ├── python/jittor_utils/ # bootstrap for the build utilities in jittor/build/utils/
 ├── compat/              # the optional `jittor-compat` distribution: torch shim, FSDP2, triton
-├── adapters/            # external adapter repository index (JittorEcosystem)
 ├── tests/               # repository pytest suite; not shipped in wheels
 ├── examples/            # runnable examples and MyST notebook sources
 ├── benchmarks/          # ASV regressions, Torch comparisons, and ACL measurements

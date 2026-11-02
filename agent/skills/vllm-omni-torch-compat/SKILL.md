@@ -107,7 +107,7 @@ JITTOR_TORCH_SHIM=1 CUDA_VISIBLE_DEVICES="<gpu>" JT_CUDA_KERNEL_MATH=strict \
   HOME="$JITTOR_LAB_ROOT/_state/h3/run/candidate-home" \
   TMPDIR="$JITTOR_LAB_ROOT/_state/h3/run/candidate-tmp" \
   JITTOR_HOME="$JITTOR_LAB_ROOT/_state/h3/run/cuda-jittor" \
-  PYTHONPATH="$PWD/python:<verified-private-facade>:$PWD/adapters:<matched-package-sites>" \
+  PYTHONPATH="$PWD/python:<verified-private-facade>:<matched-package-sites>" \
   <jittor-python> agent/skills/vllm-omni-torch-compat/scripts/probe_h3.py \
   --runtime jittor --device cuda \
   --vllm-checkout "$JITTOR_LAB_ROOT/vllm-evidence/upstream/vllm029" \
@@ -266,8 +266,8 @@ vLLM-Omni server 的原生对拍属于 vllm-omni 自身栈，未做。
 | 部署 core 缺整套 stream 一致性 | 部署（stale `.so`，见坑 1、2） |
 
 MiniMax-H3 按报告是**消费未修改**：断点尽量落 jittor core / compat，不要为它写模型侧
-补丁。vLLM 侧唯一合法的 adapter 是仓内
-[`adapters/jittor_adapters/vllm/`](https://github.com/JittorEcosystem/jittor-vllm/blob/main/jittor_vllm/)（见
+补丁。vLLM 侧 adapter 在独立仓库维护：
+[`jittor_vllm/`](https://github.com/JittorEcosystem/jittor-vllm/blob/main/jittor_vllm/)（见
 [`vllm-torch-compat`](../vllm-torch-compat/SKILL.md)）。
 
 ## 坑与假绿

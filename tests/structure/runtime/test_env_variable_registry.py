@@ -17,7 +17,7 @@ import jittor as jt
 from jittor._runtime import env_report
 
 ROOT = Path(__file__).resolve().parents[3]
-SCANNED = ("src", "backends", "python/jittor", "compat", "adapters")
+SCANNED = ("src", "backends", "python/jittor", "compat")
 SUFFIXES = {".py", ".cc", ".h", ".cu", ".cuh"}
 LITERAL = re.compile(r"""["'](JT_[A-Z0-9_]*[A-Z0-9])["']""")
 

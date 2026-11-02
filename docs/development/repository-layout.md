@@ -204,7 +204,7 @@ Torch 兼容按**归属**而不是按下游项目划分：
    `jittor-hf-compat`，通过 entry point 注册。**主线 Jittor 不为每个进程安装常驻的
    TRELLIS 或 Gaussian Splatting finder。**
 
-下游粘合代码及其专属测试由 [JittorEcosystem](https://github.com/JittorEcosystem) 的独立仓库维护。主仓 `adapters/` 只保留索引；核心与 `jittor-compat` 均不依赖适配器合集。[jittor-vllm](https://github.com/JittorEcosystem/jittor-vllm) 发布可选的 `jittor_vllm` 模块补丁入口，并独立维护版本和设备验收。集成通过共享的所有权事务机制完成注册与回滚。
+下游粘合代码及其专属测试由 [JittorEcosystem](https://github.com/JittorEcosystem) 的独立仓库维护。主仓通过根 README 链接生态组织；核心与 `jittor-compat` 均不依赖适配器合集。[jittor-vllm](https://github.com/JittorEcosystem/jittor-vllm) 发布可选的 `jittor_vllm` 模块补丁入口，并独立维护版本和设备验收。集成通过共享的所有权事务机制完成注册与回滚。
 
 **安装器必须独立报告每一次尝试的补丁。** 禁止在一串补丁外面套一个宽泛的
 `try/except Exception: pass`——否则一次失败会把之后所有兼容工作都掩盖掉。
