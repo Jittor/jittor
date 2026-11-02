@@ -1,3 +1,11 @@
+## 2026-11-03 03:19 +0800 installed main wheel activation checkpoint 重计算验证通过；GPU 显存收益仍未建立
+
+使用隔离安装的 main wheel 执行 compat/tests/torch/test_torch_checkpoint_recompute.py。在兼容 Transformers 4.56.2 的环境中，6 passed、0 skipped、pytest 用时 48.04 秒；runtime 为 CPU，fallback 0→0，core_build_is_current() 为真，Jittor core SHA256 前后均为 13ee2862304d354a20a9fefbe51dd8daee46066084b6c21f9385ffcfa7adf991。六项覆盖 nested outputs、captured/module parameters、no-grad 路径、CPU RNG 回放、LlamaDecoderLayer 输入及权重梯度与未 checkpoint 基线比较、Transformers GradientCheckpointingLayer 协议。调用轨迹确认前向在 no-grad 下执行，反向阶段重执行 wrapped function，RNG 输出回放一致；这是实际的重计算功能证据。
+
+证据绑定 main wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69、wheel source HEAD 35a1a7605ec475e9cbc1a9688afc299ee3bd8011。安装的 compat/torch/installers/data.py 与当前工作区同文件 SHA256 8f0042aa56b2a68b061d4975adaf1addd436d0056e0bd2553a91bd0b46a31b9b；测试 SHA256 95c8bb71d46c6c8dd0a2a12ae22627eeb1f3dddc7b2e6c9401ebe08034f3f359。执行包 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-checkpoint-recompute-cpu-r2-transformers456/ 的 artifact manifest SHA256 为 511378c70c2d6fac60a23f63c80c4a0b8836c44c2606f2e2c75f0d3b614c4fe2，包内哈希校验通过。此前 Transformers 4.57.6 运行有 4 passed、2 skipped；两个 skip 是可选 Transformers 集成导入不可用。兼容环境下的 r2 将全六项跑通。
+
+这更新了历史条目“当时 shim 直接运行目标函数并保留激活”的状态：该观察对应旧源码快照，后续实现现已在当前安装 wheel 上通过功能检查。该轮只在 CPU 上验证功能，没有做 GPU 显存对照或显存归因；R3 单轮共享 GPU 诊断中 checkpoint-on 峰值高于 off，仍不能形成收益结论。本结果不关闭 Day4–5 性能/显存验收，也不关闭更广 Day2–5 发布门。
+
 ## 2026-11-03 03:08 +0800 installed wheel fused SGD 的 fused=False selector 边界通过
 
 在 installed main wheel 的 CPU cache 上执行有界动态 selector spy。构造参数 fused=False 与 param-group 设置 fused=False 两种路径各完成一步 SGD 参数更新，均未调用 optim.sgd_fused selector；默认 fused=None 正向对照调用 selector 一次。两种更新都从 [1, 2] 得到约 [0.8000000119, 1.6000000238]，fallback 0→0。CPU core build current，SHA256 前后均为 13ee2862304d354a20a9fefbe51dd8daee46066084b6c21f9385ffcfa7adf991。

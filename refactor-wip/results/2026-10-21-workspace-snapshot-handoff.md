@@ -1,3 +1,11 @@
+## 2026-11-03 03:19 +0800 Handoff：installed main wheel checkpoint 重计算 6/6 通过
+
+在 Transformers 4.56.2 兼容环境的隔离安装 main wheel 上执行 checkpoint 定向测试：6 passed、0 skipped、48.04 秒，CPU runtime、fallback 0→0、core build current；core SHA256 前后相同 13ee2862304d354a20a9fefbe51dd8daee46066084b6c21f9385ffcfa7adf991。覆盖前向 no-grad 和反向重计算、RNG 回放、输入/模块参数梯度、LlamaDecoderLayer 梯度对照及 HF checkpoint layer 协议。该轮证明功能重计算发生，不证明 activation memory 节省。
+
+wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69，source HEAD 35a1a7605ec475e9cbc1a9688afc299ee3bd8011；当前工作区 checkpoint 实现文件与安装内容的 SHA256 均为 8f0042aa56b2a68b061d4975adaf1addd436d0056e0bd2553a91bd0b46a31b9b，测试 SHA256 95c8bb71d46c6c8dd0a2a12ae22627eeb1f3dddc7b2e6c9401ebe08034f3f359。证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-checkpoint-recompute-cpu-r2-transformers456/，artifact manifest SHA256 511378c70c2d6fac60a23f63c80c4a0b8836c44c2606f2e2c75f0d3b614c4fe2，文件校验通过。此前 4.57.6 环境的两项可选 Transformers 集成 skip 保留；兼容环境 r2 无 skip。
+
+这补正了旧状态中“shim 直接调用目标函数”的描述：它记录的是旧版本，当前 wheel 已含重计算实现。GPU activation memory、正式 Day4–5 性能/显存窗口和更广 Day2–5 发布门仍开放。
+
 ## 2026-11-03 03:08 +0800 Handoff：installed wheel fused=False SGD selector 边界补证通过
 
 在 installed main wheel CPU 路径中，constructor fused=False 与 param-group fused=False 均完成 SGD 更新且 selector spy 记录 0 次 optim.sgd_fused 调用；默认 fused=None 正向对照调用 1 次，fallback 0→0。core current，哈希前后均为 13ee2862304d354a20a9fefbe51dd8daee46066084b6c21f9385ffcfa7adf991。artifact 位于 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-sgd-fused-off-selector-r1/，manifest SHA256 94f05294726ddc0747bad146fd29ba2e4b8df24e96bac25e1cab20d402852f1e。只补独立覆盖，不修改源码或测试；原 test_it_is_off_when_asked 的 no-op 记录保留。
