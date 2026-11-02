@@ -1,3 +1,17 @@
+## 2026-11-03 05:32 +0800 修复版 main wheel 收录标量 stride 修复；R14 optimizer 对读通过
+
+### 构建与 target 安装
+
+以已推送源码 commit 76e68f279a444540603ae043ee229b3f14d9b647 的 Git archive 构建 main wheel。wheel SHA256 c478a64f2b31d5b2da6764c80632210564b9de2404f02ee74c10fc6c43c3cd56，大小 2,319,905 bytes；通过 pip --no-deps --target 安装到新 target，命令 exit 0。wheel 内 jittor/serialization/save_pytorch.py、安装 target 的同一路径、构建源码副本三者字节相同，SHA256 均为 7ebce5a5a2705a9fb22b2715af56dede28f47d7f4e5580fe7efe7de18fbacb51。源码文件身份检查 PASS，installed main wheel member 对读测试 PASS。
+
+### R14 checkpoint 实际互操作
+
+从新安装 target 动态加载 wheel 内 exporter 文件，绑定到既有已验证的 main+compat warm runtime；输入 R14 checkpoint-51 optimizer.pt（4,611,114 bytes，SHA256 93bb7c198431bbda175b653d16e81d5c38006737b52c2f8abd929350fcbba905）。导出 ZIP 为 4,672,914 bytes，SHA256 b8e3591bd996cd1976e9c0c8a4a56083331f05b697416996679b2f663de0ac71。独立 stock PyTorch 2.6.0+cu124 成功读回 336 tensors、136 scalars、121 containers；所有 key、容器结构、dtype、shape、值签名一致，summary SHA256 c110ebabd5e450d101e8c0a5cb928ef796c2d478b89f3695693a80b65091839d。Jittor CPU scope，fallback 0→0，CUDA core SHA256 前后相同为 0f75262b8518e40ce12769a7af79c8c70f21fbae9e4a796e86000decfd5ddc07，GPU2 未暴露。
+
+这是“新 wheel 中精确 exporter 文件 + 既有 warm Jittor/compat runtime”的安装模块验证；没有从新 target 导入 Jittor，也没有重新冷编译。证据根目录 /data6/cgq/jittor-lab/_state/release-day23/20261103-r14-optimizer-main-wheel-fix-r1/，完整 artifact manifest SHA256 94ae709bbbaa58dbc58b6dde0a07df18fb0e65fb1e79b66290cf07dfb8efa019；wheel file hash manifest SHA256 f2b9037895c1d3a2b5031bb14f5ede0c8e029556fd322e5966677f2cc549aa3b；R14 子目录 manifest SHA256 984b60055cc5d9bffa1548bf1ee8f87bea3807c8aeddec81adee835335b60428。首次 wheel 文件身份 audit 错把源码副本根目录当作 wheel member 路径，保留了空 audit 原件；修正路径后 wheel/member/target 三方 hash 匹配。该准备器问题不影响 wheel build、pip install 或 R14 执行结果。
+
+原 JT portable-pickle optimizer 直接 stock torch.load 的跨框架失败仍独立存在；这项验证通过的是显式 PyTorch ZIP exporter。新 target 完整 Jittor import/cold-core、其他广泛 wheel migration gate、多 rank NCCL 与 Day4–5 正式性能/显存验收仍未完成；目前不把整体 Day2–5 标为 complete。
+
 ## 2026-11-03 05:26 +0800 显式 PyTorch ZIP 导出的标量 stride 修复与 R14 optimizer 对读
 
 ### 修改与最小复现

@@ -1,3 +1,11 @@
+## 2026-11-03 05:32 +0800 Handoff：修复版 main wheel 已安装，R14 stock PyTorch ZIP 对读通过
+
+源码提交 76e68f279a444540603ae043ee229b3f14d9b647 已推送。以其 Git archive 构建的 main wheel SHA256 c478a64f2b31d5b2da6764c80632210564b9de2404f02ee74c10fc6c43c3cd56，fresh pip target 安装成功；wheel 内与安装态 save_pytorch.py SHA256 均为 7ebce5a5a2705a9fb22b2715af56dede28f47d7f4e5580fe7efe7de18fbacb51。
+
+新 target 中的 exporter 文件与既有 warm Jittor/compat runtime 配套后，R14 checkpoint-51 optimizer 的 336 tensor、136 scalar、121 container 被 stock PyTorch 2.6.0+cu124 完整读回，summary 一致。CPU scope、fallback 0→0、core 未改变、GPU2 未暴露。该项没有从新 target 导入 Jittor或重新冷编译；只声明 wheel 文件身份及 exporter 对读通过。完整 evidence root manifest SHA256 94ae709bbbaa58dbc58b6dde0a07df18fb0e65fb1e79b66290cf07dfb8efa019，R14 子 manifest SHA256 984b60055cc5d9bffa1548bf1ee8f87bea3807c8aeddec81adee835335b60428。
+
+原 JT portable-pickle optimizer 直接 stock torch.load 仍失败；需要与现已通过的显式 ZIP exporter 路径分别记录。下一步继续完成其他 Day2–5 wheel/功能发布门；Day4–5 仍需 cgq Slurm association 与独占 GPU，按三轮交替、每轮每侧至少十个热态样本的协议测量 median/p95/离散度及 allocator/NVML 峰值。整体目标保持未完成。
+
 ## 2026-11-03 05:26 +0800 Handoff：显式 PyTorch ZIP exporter 标量 stride 修复并通过 R14 source-overlay 对读
 
 当前 checkout integrate/cgq-transformers-native-multicard-target 基线 2f01da6dd40e1058a3c3095e06a95e3c455be1a8，开始时与 origin/cgq_transformers 同步、工作区干净。修复 python/jittor/serialization/save_pytorch.py 的 rank-0 stride，并在 tests/serialization/test_native_serialization_ownership.py 增加 stock PyTorch roundtrip。未修复回归以 size=()、stride=(1,) 复现失败；修复后单项通过，相关测试文件 4/4 通过。源码 SHA256 7ebce5a5a2705a9fb22b2715af56dede28f47d7f4e5580fe7efe7de18fbacb51，测试 SHA256 8d6c1fbe40468242748d3f22f6e07f97fa98457deaf50ae0e416852bc582485b。

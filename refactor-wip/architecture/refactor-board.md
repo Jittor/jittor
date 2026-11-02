@@ -1,3 +1,13 @@
+## 2026-11-03 05:32 +0800 修复版 main wheel 已安装；R14 optimizer 与 stock PyTorch 对读通过
+
+跟进 05:26 的源码修复：从已推送源码 commit 76e68f279a444540603ae043ee229b3f14d9b647 构建 main wheel 并 pip 安装到 fresh target。wheel SHA256 c478a64f2b31d5b2da6764c80632210564b9de2404f02ee74c10fc6c43c3cd56，2,319,905 bytes；wheel member 与 installed target 中 save_pytorch.py 的 SHA256 均为 7ebce5a5a2705a9fb22b2715af56dede28f47d7f4e5580fe7efe7de18fbacb51。
+
+从该新 target 动态加载的精确 exporter 模块与既有 warm Jittor/compat runtime 配套，对不可变 R14 checkpoint-51 optimizer.pt 做显式 ZIP export；stock PyTorch 2.6.0+cu124 读回 336 tensors、136 scalars、121 containers，递归摘要一致。输入 SHA256 93bb7c198431bbda175b653d16e81d5c38006737b52c2f8abd929350fcbba905，ZIP SHA256 b8e3591bd996cd1976e9c0c8a4a56083331f05b697416996679b2f663de0ac71，摘要 SHA256 c110ebabd5e450d101e8c0a5cb928ef796c2d478b89f3695693a80b65091839d。CPU scope、fallback 0→0，既有 CUDA core SHA256 0f75262b8518e40ce12769a7af79c8c70f21fbae9e4a796e86000decfd5ddc07 前后相同；GPU process 快照没有本任务新增进程，GPU2 未暴露。
+
+边界：wheel 已构建并 pip 安装；为了不重复冷编译，本项没有从新 target 导入 Jittor 或重新构建 core，而是执行新 target 中精确打包的 exporter 文件，并绑定到已验证的 warm runtime。因此它关闭了修复文件的 wheel 收录与 R14 跨框架 exporter 对读，不代表新 target 的完整 Jittor import/cold-install gate。原 JT portable-pickle optimizer 直接 stock torch.load 仍有独立失败记录。完整包实验目录 /data6/cgq/jittor-lab/_state/release-day23/20261103-r14-optimizer-main-wheel-fix-r1/，artifact manifest SHA256 94ae709bbbaa58dbc58b6dde0a07df18fb0e65fb1e79b66290cf07dfb8efa019；R14 子项 manifest SHA256 984b60055cc5d9bffa1548bf1ee8f87bea3807c8aeddec81adee835335b60428。
+
+day2–5 更广发布门仍开放，Day4–5 性能/显存没有新结论；GPU2 被外部任务占用且 cgq Slurm association 仍待管理员配置。此前 05:26 记录“尚未构建新 wheel”对应当时状态，现由本条更新；整体目标未完成。
+
 ## 2026-11-03 05:26 +0800 修复显式 PyTorch ZIP 导出的标量 stride；R14 optimizer source-overlay 对读通过
 
 python/jittor/serialization/save_pytorch.py 现在按张量 rank 生成 contiguous stride；rank-0 张量得到空 stride ()。未修复版本的 stock PyTorch 回归按预期复现 size=()、stride=(1,) 长度不匹配。修复后，新增 stock PyTorch roundtrip 回归通过，test_native_serialization_ownership.py 全文件为 4 passed。
