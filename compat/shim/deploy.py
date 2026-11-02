@@ -167,7 +167,7 @@ def _plan(target, resource_root=None):
     # `importlib.metadata.packages_distributions()` reads `top_level.txt` (or a
     # RECORD) to map an import name back to its distribution. Without it the
     # deployed `torch` distribution is invisible and the mapping falls to
-    # `jittor-torch`, whose own version is Jittor's: Transformers then reads
+    # `jittor-compat`, whose own version is Jittor's: Transformers then reads
     # `torch` as 1.3.x, decides PyTorch < 2.5, and disables its model code.
     top_level = _required_source_file(
         os.path.join(root, "torch_dist_info", "top_level.txt"),

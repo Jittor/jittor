@@ -761,7 +761,7 @@ def _install_compat_source(session, env, runner=None):
         return
     if runner is None:
         # The core as well, in this session's own venv: an editable
-        # `jittor-torch` alone makes `jittor` a namespace package there, which
+        # `jittor-compat` alone makes `jittor` a namespace package there, which
         # is the shadowing tests/structure/test_core_package_not_shadowed.py
         # guards (and a pre-provisioned hardware interpreter is left alone).
         session.run(

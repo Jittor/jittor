@@ -14,7 +14,7 @@ Find where things are here, then read only the document your task needs.
 Jittor is a JIT deep-learning framework built on meta-operators: Python builds a
 graph, the C++ core in `src/` fuses and compiles kernels, and backends live under
 `backends/<name>/` (CPU, CUDA, ROCm, ACL/Ascend, Corex, and `comm/{mpi,nccl,hccl}`).
-The Torch compatibility layer is the separate `jittor-torch` project in `compat/`
+The Torch compatibility layer is the separate `jittor-compat` project in `compat/`
 (published as `jittor.compat`, including the `import torch` shim); downstream
 library adapters live in `adapters/`. The goal is a maintainable, Torch-grade
 framework that keeps the JIT/meta-operator design, under the gates in

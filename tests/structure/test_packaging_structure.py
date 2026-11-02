@@ -23,7 +23,7 @@ class TestPackagingStructure(unittest.TestCase):
             for path in self.python_root.rglob("__init__.py")
         }
         # `python/jittor/compat` is a development symlink to the top-level
-        # compat/ tree -- the separate jittor-torch distribution. rglob does not
+        # compat/ tree -- the separate jittor-compat distribution. rglob does not
         # follow it, and setup.py excludes it so the core wheel never ships
         # another distribution's packages, which `test_pyproject_uses_regular
         # _package_discovery` pins; discovery is asked the same question here.
@@ -81,7 +81,7 @@ class TestPackagingStructure(unittest.TestCase):
         self.assertTrue(config["tool"]["setuptools"]["include-package-data"])
         with (self.repo_root / "compat/pyproject.toml").open("rb") as stream:
             compat_config = tomllib.load(stream)
-        self.assertEqual(compat_config["project"]["name"], "jittor-torch")
+        self.assertEqual(compat_config["project"]["name"], "jittor-compat")
         self.assertNotIn("jittor-torch-shim", config["project"].get("scripts", {}))
         self.assertEqual(
             compat_config["project"]["scripts"]["jittor-torch-shim"],
@@ -111,7 +111,7 @@ class TestPackagingStructure(unittest.TestCase):
         with (self.repo_root / "adapters/pyproject.toml").open("rb") as stream:
             adapters = tomllib.load(stream)["project"]
         self.assertEqual(frontend["version"], core_version)
-        for project, name in ((frontend, "jittor"), (adapters, "jittor-torch")):
+        for project, name in ((frontend, "jittor"), (adapters, "jittor-compat")):
             with self.subTest(project=project["name"]):
                 dependencies = [Requirement(value) for value in project["dependencies"]]
                 matched = [item for item in dependencies if canonicalize_name(item.name) == name]

@@ -96,7 +96,7 @@ Flash 二进制。同步重写 wheel、安装目录和 RECORD 也不能替换该
 需要重新构建并验收，不能只更改配置中的版本字符串。
 这些文件及所有安装字节都由每个实际 tensor 进程重新核验，不能事后补写旧 raw。
 probe 的 `--source-proof` 与 collector 的同名选项使用该配置。候选端另核实真实
-`jittor-torch` carrier 的 METADATA/RECORD、递归 facade 文件、实际生成的 C++/CUDA
+`jittor-compat` carrier 的 METADATA/RECORD、递归 facade 文件、实际生成的 C++/CUDA
 桥接源码和二进制；API 兼容版本不替代 carrier 发行版本。
 
 维护 session 自动执行全部十二格（六 API × fp16/bf16），每格 base/受控扰动各跑两个

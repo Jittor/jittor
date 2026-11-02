@@ -42,7 +42,7 @@ tests/                    # 原生测试根
 ├── debug/ utils/ tools/  # 诊断、通用工具与仓库工具
 ├── integration/          # 示例、notebook 与跨组件工作流
 └── structure/            # 仓库、打包与静态契约
-compat/tests/             # 可选 jittor-torch 项目的测试根
+compat/tests/             # 可选 jittor-compat 项目的测试根
 ├── torch/                # Torch 模式下真跑张量的行为测试
 ├── structure/            # 名字归属与命名空间发布的结构契约
 ├── fsdp2/                # FSDP2
@@ -526,7 +526,7 @@ nox 会话会建立隔离的状态与缓存。**直接并发运行时也必须�
 看起来是好的（1888 collected），错误全落在 setup，所以很容易误判成"收集不了"。
 `python/jittor/compat` 是指向 `compat/` 的符号链接，从它进去包名就解析成
 `jittor.compat.tests.torch`，相对导入成立。门禁里没有这个问题是因为
-`_run_pytest_once` 会先 `pip install -e compat/`，把 `jittor-torch` 装成真包。
+`_run_pytest_once` 会先 `pip install -e compat/`，把 `jittor-compat` 装成真包。
 
 ## JIT 缓存：冷启动的代价，和它什么时候白付了
 

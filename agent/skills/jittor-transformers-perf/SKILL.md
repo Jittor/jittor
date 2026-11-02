@@ -72,7 +72,7 @@ JITTOR_HOME="$perf_run/compat-cache" cache_name=npu_matmul_compat \
   "$perf_python" "$perf_script" --mode compat --output "$perf_run/compat.json"
 ```
 
-解释器需已安装当前核心和独立 `jittor-torch` 兼容发行版；源码 `PYTHONPATH`
+解释器需已安装当前核心和独立 `jittor-compat` 兼容发行版；源码 `PYTHONPATH`
 本身不会安装独立包。`jittor.compat.shim` 是安装后的公开入口，不应改为 native alias。
 用与测试相同的已安装解释器设置 `JITTOR_CI_PYTHON`；例如 task venv 的 `bin/python`。
 先在对应的隔离缓存中只验证导入与身份，再启动计时：
@@ -95,7 +95,7 @@ JITTOR_TORCH_SHIM=0 JITTOR_HOME="$perf_run/compat-cache" \
 不能外推到整个模型。此入口的代码审查/语法检查不代表真实 NPU 性能已经验证。
 
 Ascend 整模对拍必须为 Jittor 和原生 `torch_npu` 使用独立 Python 进程、相同
-Transformers 版本和相同本地 checkpoint。Jittor 解释器安装独立 `jittor-torch`，或在
+Transformers 版本和相同本地 checkpoint。Jittor 解释器安装独立 `jittor-compat`，或在
 已有 Torch 发行元数据的测试环境设置 `JITTOR_TORCH_SHIM=1`；工具检查 shim 标记，
 不再要求 `torch is jittor`。加载权重后显式迁移到 NPU；两侧都通过
 `ASCEND_RT_VISIBLE_DEVICES` 选择已分配设备。首次 JIT 单列，稳态 prefill 和

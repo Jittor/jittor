@@ -48,7 +48,7 @@
 - `python/jittor/build/{dlink_compiler.py,dumpdef.py}` 与 `python/jittor/tools/tracer.py`
   （tracer 由绑定层通过其显式模块名访问）；
 - `python/jittor/contrib/math_util/src/*.h`；
-- `compat/shim/cpp_extension/{include,src}/**`，由可选的 `jittor-torch` 发行物**独占
+- `compat/shim/cpp_extension/{include,src}/**`，由可选的 `jittor-compat` 发行物**独占
   拥有**，作为扩展的已安装 ABI 资源边界；
 - `python/jittor_utils` 作为 `python/jittor` 的同级目录；
 - `python/jittor/__init__.py` 里字面量形式的 `__version__ = '...'` 赋值——只要发布与
@@ -123,7 +123,7 @@ entry point。
 │   ├── nn/  optim/  autograd/  fft/  sparse/  dataset/  transform/  models/
 │   ├── linalg/  distributions/  init/
 │   ├── distributed/  contrib/  tools/
-├── compat/                   # 独立发行物（jittor-torch）：torch shim、fsdp2、triton；vLLM 属于 adapters/
+├── compat/                   # 独立发行物（jittor-compat）：torch shim、fsdp2、triton；vLLM 属于 adapters/
 ├── tools/  tests/  docs/  examples/  benchmarks/
 └── agent/                    # 只有 manuals/ 与 skills/
 ```
@@ -206,7 +206,7 @@ Torch 兼容按**归属**而不是按下游项目划分：
 
 vLLM 的粘合代码及其专属测试由主仓库的 `adapters/jittor_adapters/vllm` 与
 `adapters/tests/vllm` 拥有，随既有的 `jittor-torch-adapters` 发行物分发，**不需要单独的
-仓库或发布**。核心与 `jittor-torch` 都不打包该实现，也不打包已废弃的 `jittor.compat.vllm`。
+仓库或发布**。核心与 `jittor-compat` 都不打包该实现，也不打包已废弃的 `jittor.compat.vllm`。
 可选的 Torch 阶段只发现名为 `jittor_vllm` 的模块补丁 entry point；不存在时保持可选。
 该适配器用共享的、owner 感知的回滚机制保存导入前的扩展设置与导入后的补丁。
 

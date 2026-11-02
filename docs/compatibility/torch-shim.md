@@ -1,7 +1,7 @@
 # Torch shim
 
 Torch shim 让一个面向 torch 编写的 Python 应用把 Jittor 当作运行时。可复用的 Torch
-API、部署、扩展构建、导入补丁和外部后端机制，全部归**独立的 `jittor-torch` 发行物**
+API、部署、扩展构建、导入补丁和外部后端机制，全部归**独立的 `jittor-compat` 发行物**
 所有；核心 `jittor` 发行物**不包含**任何这些兼容文件。项目专属的运行时策略由可选的
 适配器发行物提供。
 
@@ -35,7 +35,7 @@ python -m pip install -e . -e ./compat
 里安装这个可选的 editable 项目。测试第二个 checkout 时，也要装那个 checkout 的
 `compat` 项目。nox 的运行时门禁就是这么显式做的。
 
-wheel 部署时，在同一个环境里安装配套的核心 wheel 与 `jittor-torch` wheel。分别用
+wheel 部署时，在同一个环境里安装配套的核心 wheel 与 `jittor-compat` wheel。分别用
 `python -m build .` 和 `python -m build ./compat` 构建，后者声明了对核心版本的依赖。
 **`torch` 本身由这个独立 wheel 提供。** 下面的部署助手在应用需要时会额外装上随包的
 第三方 stub。
@@ -92,7 +92,7 @@ JIT kernel 关闭 CUDA fast-math contraction。项目自己的扩展保留其构
 
 本仓库维护的适配器是一个独立发行物：`jittor-torch-adapters`（源码在
 [`adapters/`](https://github.com/Jittor/jittor/blob/master/adapters/README.md)，
-Python 包 `jittor_adapters`，依赖 `jittor-torch` 同版本）。它注册三个
+Python 包 `jittor_adapters`，依赖 `jittor-compat` 同版本）。它注册三个
 `jittor.module_patches` entry point：
 
 | entry point | 版本 | 作用 |
@@ -109,7 +109,7 @@ entry point 形状做成各自的可选发行物，**不在本仓库，也不随
 
 ## 部署
 
-`jittor-torch-shim` 是 `jittor-torch` 发行物提供的命令（`compat/pyproject.toml`
+`jittor-torch-shim` 是 `jittor-compat` 发行物提供的命令（`compat/pyproject.toml`
 的 `[project.scripts]`，实现在 `compat/shim/deploy.py`）：
 
 ```bash

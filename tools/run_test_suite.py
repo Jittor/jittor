@@ -234,7 +234,7 @@ except ImportError:
 expected = sys.argv[1]
 source_python = sys.argv[2] if len(sys.argv) > 2 else ""
 try:
-    dist = metadata.distribution("jittor-torch")
+    dist = metadata.distribution("jittor-compat")
 except metadata.PackageNotFoundError:
     dist = None
 valid = dist is not None
@@ -253,7 +253,7 @@ if not valid and expected and source_python:
     linked = pathlib.Path(source_python) / "jittor" / "compat"
     valid = linked.is_dir() and linked.resolve() == pathlib.Path(expected).resolve()
 if not valid:
-    target = expected or "jittor-torch"
+    target = expected or "jittor-compat"
     print("Torch suite needs the matching frontend installation. Run:", file=sys.stderr)
     args = [sys.executable, "-m", "pip", "install", "--no-deps", "--no-build-isolation"]
     if expected:

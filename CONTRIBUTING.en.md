@@ -50,7 +50,7 @@ CI requirements are documented in [`agent/manuals/environment.md`](agent/manuals
 ├── backends/            # one directory per backend: cpu/ cuda/ acl/ rocm/ corex/ comm/
 ├── python/jittor/       # the Python runtime package (pure Python)
 ├── python/jittor_utils/ # bootstrap for the build utilities in jittor/build/utils/
-├── compat/              # the optional `jittor-torch` distribution: torch shim, FSDP2, triton
+├── compat/              # the optional `jittor-compat` distribution: torch shim, FSDP2, triton
 ├── adapters/            # the optional `jittor-torch-adapters` distribution
 ├── tests/               # repository pytest suite; not shipped in wheels
 ├── examples/            # runnable examples and MyST notebook sources

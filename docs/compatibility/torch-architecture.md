@@ -24,7 +24,7 @@
 | 框架转 IR | `torch.*` 调用如何变成图上的节点 | `compat/torch/` |
 | 算子优化 | 图如何融合、编译并落到设备 | `src/core/fuser*`、`src/codegen/`、`backends/` |
 
-`jittor-torch` 发行物的描述把边界写得很直接：**"Independent Torch frontend using
+`jittor-compat` 发行物的描述把边界写得很直接：**"Independent Torch frontend using
 Jittor's native Var/Op graph"**（`compat/pyproject.toml`）。兼容层不建立第二张图，
 也不复制数学实现；它只负责把框架语义翻译到这张图上。
 

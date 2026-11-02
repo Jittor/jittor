@@ -26,7 +26,7 @@ pipeline:
 | Framework to IR | How `torch.*` calls become nodes on the graph | `compat/torch/` |
 | Operator optimization | How the graph is fused, compiled, and lowered to devices | `src/core/fuser*`, `src/codegen/`, `backends/` |
 
-The `jittor-torch` distribution description states the boundary directly:
+The `jittor-compat` distribution description states the boundary directly:
 **"Independent Torch frontend using Jittor's native Var/Op graph"**
 (`compat/pyproject.toml`). The compatibility layer builds no second graph and
 copies no mathematical implementation; it is only responsible for translating

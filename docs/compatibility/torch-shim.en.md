@@ -3,7 +3,7 @@
 The Torch shim lets a Python application written against torch use Jittor as its
 runtime. The reusable Torch API, deployment, extension building, import
 patching, and external-backend mechanisms are all owned by the **separate
-`jittor-torch` distribution**; the core `jittor` distribution **contains none of
+`jittor-compat` distribution**; the core `jittor` distribution **contains none of
 these compatibility files**. Project-specific runtime policy is provided by
 optional adapter distributions.
 
@@ -40,7 +40,7 @@ editable project in the same interpreter. When testing a second checkout,
 install that checkout's `compat` project as well. The nox runtime gate does
 exactly this explicitly.
 
-For wheel deployments, install the matching core wheel and the `jittor-torch`
+For wheel deployments, install the matching core wheel and the `jittor-compat`
 wheel in the same environment. Build them with `python -m build .` and
 `python -m build ./compat` respectively; the latter declares a dependency on the
 core version. **`torch` itself is provided by this separate wheel.** The
@@ -110,7 +110,7 @@ The adapter maintained in this repository is a separate distribution:
 `jittor-torch-adapters` (source in
 [`adapters/`](https://github.com/Jittor/jittor/blob/master/adapters/README.md),
 Python package `jittor_adapters`, depending on the same version of
-`jittor-torch`). It registers three `jittor.module_patches` entry points:
+`jittor-compat`). It registers three `jittor.module_patches` entry points:
 
 | entry point | Version | Role |
 | --- | --- | --- |
@@ -129,7 +129,7 @@ shape, **not in this repository and not shipped with this release line**.
 
 ## Deployment
 
-`jittor-torch-shim` is the command provided by the `jittor-torch` distribution
+`jittor-torch-shim` is the command provided by the `jittor-compat` distribution
 (`[project.scripts]` in `compat/pyproject.toml`, implemented in
 `compat/shim/deploy.py`):
 

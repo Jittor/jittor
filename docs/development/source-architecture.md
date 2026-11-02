@@ -473,7 +473,7 @@ NN、数值与张量 API 的兼容安装器以及 FlashAttention 适配器都是
 安装状态捕获的公开可调用对象可以保留模块级标识；**有状态的安装路径保留显式上下文和其原有
 注册顺序**。原生 Parameter 是真正的 Var 子类；原生 Module 按属性名注册参数与缓冲，
 **不读写 Torch 角色标记**。Torch 专属的赋值规则住在独立 Module 适配器或显式的历史安装器里。
-物理的 `compat/` 树现在就是独立的 `jittor-torch` 发行物，**核心打包排除它**。显式的历史模式
+物理的 `compat/` 树现在就是独立的 `jittor-compat` 发行物，**核心打包排除它**。显式的历史模式
 仍然改造原生类，**不得与独立激活混为一谈**。
 
 基本索引使用原生 `VarView` 跟踪，而不是平行的 Python `_torch_index_parent`/切片链。尚无原生
@@ -497,7 +497,7 @@ point，或在历史别名 `jittor.torch_compat` 被导入时运行。**这防�
 
 vLLM 的实现及其专属测试位于主仓库的 `adapters/jittor_adapters/vllm` 与
 `adapters/tests/vllm`，由既有的 `jittor-torch-adapters` 发行物分发，**不由 Jittor 或
-jittor-torch 分发**。可选的 Torch 阶段选择名为 `jittor_vllm` 的 `jittor.module_patches`
+jittor-compat 分发**。可选的 Torch 阶段选择名为 `jittor_vllm` 的 `jittor.module_patches`
 entry point，指向 `jittor_adapters.vllm:register`。它的 `register(callback) -> None` 注册器
 装配导入前的扩展设置，并通过共享的事务机制注册导入后的层补丁。**未安装时报告 `unavailable`
 而不破坏 Torch。** 公开的 Jittor 原语仍然是数学实现本身。该抽离**不包含**单独维护的昇腾
@@ -752,7 +752,7 @@ Torch 的 dtype 对象及其原生/NumPy 消费点遵循上文的"dtype 边界"�
 - `backends/acl/{include,kernels/native,src}/`
 - `backends/comm/`
 - `python/jittor/contrib/math_util/src/`
-- `compat/shim/cpp_extension/`（可选的 `jittor-torch` 发行物）
+- `compat/shim/cpp_extension/`（可选的 `jittor-compat` 发行物）
 
 **只有当源码 checkout、sdist、wheel、冷 JIT 构建和安装后冒烟测试全部一致时，一次搬动才算
 完成。** 目录美观本身不是搬动这些资源的理由。

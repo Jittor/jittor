@@ -28,7 +28,7 @@
 机器地址或固定设备编号。外部产物丢失时应能通过记录重新生成。
 
 原生、独立 compat、真实 PyTorch oracle 各用独立进程。原生模式清除 shim 激活变量；
-compat 明确激活独立命名空间并记录 `torch is not jittor`。记录核心和独立 `jittor-torch`
+compat 明确激活独立命名空间并记录 `torch is not jittor`。记录核心和独立 `jittor-compat`
 包的来源、版本及安装方式，不把 `import jittor as torch` 当作 compat。
 真实 PyTorch/`torch_npu` oracle 需证明来自二进制实现，不能解析到 Jittor shim。
 各进程使用独立 `JITTOR_HOME` 或 `cache_name`，测试缓存不得与 benchmark 共享；

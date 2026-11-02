@@ -59,7 +59,7 @@ validated independently**:
   (the tracer is reached by the binding layer through its explicit module name);
 - `python/jittor/contrib/math_util/src/*.h`;
 - `compat/shim/cpp_extension/{include,src}/**`, **owned exclusively** by the optional
-  `jittor-torch` distribution as the installed ABI resource boundary for extensions;
+  `jittor-compat` distribution as the installed ABI resource boundary for extensions;
 - `python/jittor_utils` as a sibling directory of `python/jittor`;
 - the literal `__version__ = '...'` assignment in `python/jittor/__init__.py` -- as long as
   release and cache readers still parse it directly.
@@ -150,7 +150,7 @@ preserved only in Git history; the layout itself is guarded by the structural ga
 │   ├── nn/  optim/  autograd/  fft/  sparse/  dataset/  transform/  models/
 │   ├── linalg/  distributions/  init/
 │   ├── distributed/  contrib/  tools/
-├── compat/                   # 独立发行物（jittor-torch）：torch shim、fsdp2、triton；vLLM 属于 adapters/
+├── compat/                   # 独立发行物（jittor-compat）：torch shim、fsdp2、triton；vLLM 属于 adapters/
 ├── tools/  tests/  docs/  examples/  benchmarks/
 └── agent/                    # 只有 manuals/ 与 skills/
 ```
@@ -245,7 +245,7 @@ Torch compatibility is split by **ownership**, not by downstream project:
 The vLLM glue code and its dedicated tests are owned by `adapters/jittor_adapters/vllm` and
 `adapters/tests/vllm` in the main repository, distributed with the existing
 `jittor-torch-adapters` distribution, **without a separate repository or release**. Neither the
-core nor `jittor-torch` packages that implementation, nor the abandoned `jittor.compat.vllm`.
+core nor `jittor-compat` packages that implementation, nor the abandoned `jittor.compat.vllm`.
 The optional Torch stage only discovers a module-patch entry point named `jittor_vllm`; when it
 is absent the stage stays optional. That adapter uses the shared, owner-aware rollback mechanism
 to save pre-import extension settings and post-import patches.

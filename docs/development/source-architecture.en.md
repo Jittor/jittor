@@ -595,7 +595,7 @@ explicit context and its original registration order**. A native Parameter is a 
 subclass; a native Module registers parameters and buffers by attribute name, **without reading
 or writing Torch role markers**. Torch-specific assignment rules live in a separate Module
 adapter or in explicit historical installers. The physical `compat/` tree is now the standalone
-`jittor-torch` distribution, and **core packaging excludes it**. The explicit historical mode
+`jittor-compat` distribution, and **core packaging excludes it**. The explicit historical mode
 still transforms native classes and **must not be conflated with a standalone activation**.
 
 Basic indexing is tracked with native `VarView` rather than a parallel Python
@@ -624,7 +624,7 @@ Torch transformations from changing the native Jittor API in unrelated processes
 
 The vLLM implementation and its dedicated tests live in the main repository's
 `adapters/jittor_adapters/vllm` and `adapters/tests/vllm`, are distributed by the existing
-`jittor-torch-adapters` distribution, and **are not distributed by Jittor or jittor-torch**. The
+`jittor-torch-adapters` distribution, and **are not distributed by Jittor or jittor-compat**. The
 optional Torch stage selects the `jittor.module_patches` entry point named `jittor_vllm`, pointing
 at `jittor_adapters.vllm:register`. Its `register(callback) -> None` registrar assembles
 pre-import extension settings and registers post-import layer patches through the shared
@@ -956,7 +956,7 @@ changing them needs special review:
 - `backends/acl/{include,kernels/native,src}/`
 - `backends/comm/`
 - `python/jittor/contrib/math_util/src/`
-- `compat/shim/cpp_extension/` (the optional `jittor-torch` distribution)
+- `compat/shim/cpp_extension/` (the optional `jittor-compat` distribution)
 
 **A move is complete only when the source checkout, sdist, wheel, cold JIT build and installed
 smoke test all agree.** Directory tidiness alone is not a reason to move these resources.

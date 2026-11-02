@@ -3,7 +3,7 @@ requires = ["setuptools>=61", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "jittor-torch"
+name = "jittor-compat"
 version = "2.0.2"
 description = "Independent Torch frontend using Jittor's native Var/Op graph"
 requires-python = ">=3.7"

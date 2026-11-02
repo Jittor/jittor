@@ -243,7 +243,7 @@ conflate the two.
 
 ## Editable installs of core and compat
 
-`jittor` (core) and `jittor-torch` (compat) are two distributions that share one
+`jittor` (core) and `jittor-compat` (compat) are two distributions that share one
 import package. Compat installs into `jittor.compat` without owning `jittor`, so
 its editable install declares `jittor` as an implicit namespace: the generated
 finder carries `NAMESPACES = {'jittor': []}` and appends a path placeholder to

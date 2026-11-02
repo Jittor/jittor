@@ -44,7 +44,7 @@ tests/                    # 原生测试根
 ├── debug/ utils/ tools/  # 诊断、通用工具与仓库工具
 ├── integration/          # 示例、notebook 与跨组件工作流
 └── structure/            # 仓库、打包与静态契约
-compat/tests/             # 可选 jittor-torch 项目的测试根
+compat/tests/             # 可选 jittor-compat 项目的测试根
 ├── torch/                # Torch 模式下真跑张量的行为测试
 ├── structure/            # 名字归属与命名空间发布的结构契约
 ├── fsdp2/                # FSDP2
@@ -606,7 +606,7 @@ every case fails with
 collected), and the errors all land in setup, which is easily misread as "cannot collect".
 `python/jittor/compat` is a symlink to `compat/`, and entering through it resolves the package
 name to `jittor.compat.tests.torch`, so the relative import holds. The gate does not have this
-problem because `_run_pytest_once` first runs `pip install -e compat/`, installing `jittor-torch`
+problem because `_run_pytest_once` first runs `pip install -e compat/`, installing `jittor-compat`
 as a real package.
 
 ## JIT cache: the cost of a cold start, and when it is paid for nothing

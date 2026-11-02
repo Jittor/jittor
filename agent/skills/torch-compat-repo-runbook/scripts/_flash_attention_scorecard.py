@@ -335,8 +335,8 @@ def capture_implementation(root, source, runtime, torch, flash_attn, extension, 
         compatibility_metadata = facade_metadata(root, package)
         external.update({str(Path(compatibility_metadata['directory']) / n): h
                          for n, h in compatibility_metadata['files'].items()})
-        distribution = md.distribution('jittor-torch')
-        require(distribution.metadata['Name'] == 'jittor-torch', 'Missing real candidate carrier')
+        distribution = md.distribution('jittor-compat')
+        require(distribution.metadata['Name'] == 'jittor-compat', 'Missing real candidate carrier')
         carrier = {'name': distribution.metadata['Name'], 'version': distribution.version,
                    'metadata': bound(Path(distribution._path) / 'METADATA'),
                    'record': bound(Path(distribution._path) / 'RECORD')}
@@ -376,7 +376,7 @@ def validate_implementation(value, source, root, runtime):
             and proof.get('version_semantics') == 'public API version; actual carrier identity is separate',
             'Missing independent implementation identity')
     carrier = proof.get('carrier_distribution', {})
-    require(carrier.get('name') == ('flash_attn' if runtime == 'torch' else 'jittor-torch'),
+    require(carrier.get('name') == ('flash_attn' if runtime == 'torch' else 'jittor-compat'),
             'Actual distribution carrier mismatch')
     external = proof.get('external_files', {})
     require(source['upstream_files'].items() <= external.items(), 'Missing actual native source/CUTLASS binding')

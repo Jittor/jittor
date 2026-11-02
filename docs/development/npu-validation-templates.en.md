@@ -36,7 +36,7 @@ fixed device numbers. External artifacts that are lost must be regenerable from 
 Native, standalone compat and the real PyTorch oracle each use a separate process. Native mode
 clears the shim activation variables; compat explicitly activates the standalone namespace and
 records `torch is not jittor`. Record the source, version and installation method of both the
-core package and the standalone `jittor-torch` package, and do not treat
+core package and the standalone `jittor-compat` package, and do not treat
 `import jittor as torch` as compat. A real PyTorch/`torch_npu` oracle must be shown to come from
 a binary implementation and must not resolve to the Jittor shim. Each process uses its own
 `JITTOR_HOME` or `cache_name`; test caches must not be shared with benchmarks; the first JIT or
