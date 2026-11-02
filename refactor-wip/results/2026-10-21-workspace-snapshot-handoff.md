@@ -1,3 +1,8 @@
+## 2026-11-02 08:22 +0800 Handoff：R5 installed-wheel saved alias version backward 用例通过
+
+attempt-21 在 R5 installed wheel 上验证自定义 library autograd 保存的 tensor 经 detached alias 原地修改后，backward 正确报 version mismatch：1 passed、0 skipped/failed，fallback 0→0，core current。测试和 library/in-place installer 文件与 R5 source/install 字节一致；artifact manifest SHA256 `cc30ce68ceb0e04c3fec6019fc2fbbac9082202c124ce485f33e2dc6e9bcab95`。
+
+结果只覆盖 CPU 单用例。GPU2 仍共享，Slurm 节点 DOWN；Day4–5 性能/显存门及整体 Day2–5 release 未完成。
 ## 2026-11-02 08:20 +0800 Handoff：R5 installed-wheel 两个 dtype semantic skip 的原断言 2/2 通过
 
 attempt-20 在隔离测试副本中移除两处旧 skip 装饰，正常 pytest/unittest 执行 `.long()` int64 和 mixed dtype 完整 promotion 两项：2 passed、0 skipped/failed，fallback 0→0，core current；Jittor/Torch/compat Torch 来自 R5 install。artifact manifest SHA256 `09e49e0181f2f97094f73d0f29bd0722d58c58e07686a6fbbe790864bfffa462`。原套件 skip 与 attempt-16/17/19 harness 失败均保留；该结果限 R5 CPU 精确用例，不证明 CUDA 或整套 dtype 行为。

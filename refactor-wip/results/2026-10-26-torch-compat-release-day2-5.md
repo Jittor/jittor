@@ -1,3 +1,15 @@
+## 2026-11-02 08:22 +0800 R5 installed-wheel saved input alias/version backward 用例 1/1 通过
+
+### 功能契约与结果
+
+attempt-21 运行 `compat/tests/torch/test_library_saved_alias_version.py::test_library_saved_input_mutated_through_detached_alias_rejects_backward`。自定义 `torch.library` CPU op 在 autograd setup 中保存原始输入；forward 先物化，然后通过 `x.detach()` 得到的 alias 在 `no_grad` 下 `fill_`，最后 backward 必须拒绝使用已被原地修改的 saved tensor。R5 installed wheel 上结果为 1 passed、0 skipped/failed，pytest rc=0；fallback 0→0，core build 前后 current。该行为覆盖自定义 library autograd 的 saved tensor version 检查与 detached alias 的原地修改传播。
+
+执行目录 `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-installed-torch-focus-r1-prepared/attempt-21-saved-alias-version-cpu/`。Jittor、Torch、compat Torch 实际模块均来自 R5 install。R5 package manifest SHA256 `38d4c7e162ed2246e34aaf6a926561acb77ae550f678c2f49b9f0037`（本轮包文件清单校验前后相同）。测试 SHA256 `87cd082c90f2fd9508c468dee9288b0f5f0a6528f96692d329459e1221d8f902`；`compat/torch/library.py` `40de286d6efbe12420c6d295073b075fe9c362fc558bdc5b96f71d0fb954f79c`；`tensor/inplace_api.py` `48fb70da94f5497076895382432703b7ff4017ced1fae51146624cfe2e3798df`；`tensor/method_api.py` `b4b4f4afa5373884a46eb1a0ddeb155eef92ae69316938c5de13dd4b39e42e6b`；`tensor/methods.py` `3718f32d7689d316c9afdba36593e021ae3be47bfab9bd771663980f3e0b24bc`。这些当前源码、R5 source 与安装文件逐项字节一致。artifact manifest SHA256 `cc30ce68ceb0e04c3fec6019fc2fbbac9082202c124ce485f33e2dc6e9bcab95`，`run-result.json` SHA256 `721d7047d1705baba5c5a7fc528d79b0df1786deb4e4501aab355646a0ff97ca`，`raw.log` SHA256 `81a6f04466a11bd387acd0a6634491ae830daf40edf2ebe61a35efbdc76fad14`。
+
+### 范围与现场
+
+这是 CPU 单一 alias/version 用例，不证明其他 tensor in-place API、CUDA 版本计数、多进程训练恢复或整体 Day2–5 发布门。HEAD 测试前后均为 `8ecec9f764f8036caafc47ad4c18b1f1334d853e`，既有 porcelain 状态均 102 项、SHA256 `8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98`；没有产品源码修改。共享 CPU cache 无文件新增/删除，仅 `jittor.lock` 元数据哈希改变；执行后无测试进程。GPU2 未用于本轮，当前 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 为 Default/shared，显存 17,299 MiB、利用率约 92%，外部 PID 3037196 与 3164740 各占 8640 MiB。Slurm 节点 `X12DPG-OA6` 仍因 Node unexpectedly rebooted 而 DOWN。正式 Day4–5 仍等待管理员恢复节点并提供 UUID/GRES/device-cgroup 独占租约；整体 release 保持 Not complete。
+
 ## 2026-11-02 08:20 +0800 R5 installed-wheel `.long()` 与完整 promotion 原断言 2/2 通过
 
 ### 验证目的与方法

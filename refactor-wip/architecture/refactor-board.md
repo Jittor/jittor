@@ -1,3 +1,9 @@
+## 2026-11-02 08:22 +0800 R5 installed-wheel saved tensor alias version 检查通过
+
+attempt-21 使用 R5 installed wheel 执行 `test_library_saved_input_mutated_through_detached_alias_rejects_backward`：1 passed、0 skipped/failed，pytest rc=0，fallback 0→0，core current。该用例用 `torch.library.register_autograd` 保存输入，再经 `detach()` alias 做 `no_grad` 原地写入，确认 backward 按预期报 version mismatch。测试、library owner、in-place installer 当前/R5 source/install 哈希一致。artifact manifest SHA256 `cc30ce68ceb0e04c3fec6019fc2fbbac9082202c124ce485f33e2dc6e9bcab95`。
+
+范围限 R5 CPU 单用例，不代表所有 in-place API 或 CUDA/整体 release 通过。仓库源码和既有状态未变化，CPU cache 无文件增删，仅 `jittor.lock` 元数据变化。GPU2 仍有外部任务，Slurm 节点 DOWN；Day4–5 与整体 Day2–5 发布门继续开放。
+
 ## 2026-11-02 08:20 +0800 R5 installed-wheel dtype 旧 skip 断言隔离 pytest 2/2 通过
 
 attempt-20 在 R5 installed wheel 上对测试文件临时副本只移除 `.long()` 和完整 promotion 两处旧 `unittest.skip`，按正常 pytest/unittest 生命周期执行原断言：2 passed、0 skipped/failed，fallback 0→0，core current。当前/R5 测试源 SHA256 `acc1253dc5d3c1a169caf402989b1de1622a1deaa5b1958494cc0582ba714cea`；方法安装器、method_api、Var 源与 R5 install 一致。artifact manifest SHA256 `09e49e0181f2f97094f73d0f29bd0722d58c58e07686a6fbbe790864bfffa462`。
