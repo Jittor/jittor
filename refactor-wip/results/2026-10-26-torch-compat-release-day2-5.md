@@ -1,3 +1,12 @@
+## 2026-11-03 02:45 +0800 current wheel baseline additions/removals 首轮源码归因；不批准迁移
+
+只读复核 current-HEAD wheel 的既有 compare 产物。69 个新增成员分为 backends 27（ACL 12、CUDA 15）、jittor/src 24、profiling 6、nn 5、_runtime 3、amp 2、_core 1、optim 1。304 个内容变化中，jittor/src 有 123 项、backends 92 项、nn 34 项，其余 55 项包含其它代码与 dist-info；这些内容变化尚未逐项审查，默认许可列表没有调整。
+
+两项删除是 jittor/backends/acl/kernels/ops/sigmoid_op.py 和 transpose_op.py。git history 指向 2026-09-11 的 e7bf82046“ACL: 把剩余 CodeOp 提升为原生算子，并优化算子发射路径”：sigmoid 已有同一 aclnnSigmoid 原生映射，transpose 由 core TransposeOp 映射 aclnnPermute；当前仓库仍包含 sigmoid_op_acl.cc、transpose_op_acl.cc 和对应编译输入。tests/structure/backends/acl 下有 transpose 参数归一化和 sigmoid launcher 结构断言，说明删除意图是移除冗余 Python CodeOp 包装。该证据支持将删除标作预期重构候选，但不等于 wheel transition 获批，也不等于 Ascend runtime 通过。
+
+运行环境没有 ccec，ASCEND_TOOLKIT_HOME 未设置，ACL 运行验证仍不可用。审计源为 /data6/cgq/jittor-lab/_state/release-day23/20261103-current-head-wheel-gate-r1-prepared/baseline-compare.log 和 package-summary.json；manifest SHA256 782d09b8669584f9f9a8e8f41d1f2531c4f5a0bd80927dd7bdc0dee870b653b。原门状态保持 69 additions、304 changes、2 removals、0 approved。需继续审查 jittor/src 与 backends 大量内容变化及 CUDA/ACL/profiling 等新增路径，再决定候选变更的发布审批；overall Day2–5 Not complete。
+
+
 ## 2026-11-03 02:40 +0800 current-HEAD 安装 wheel 的 CUDA Embedding 与 Linear/Bias 梯度定向验证；整体发布门仍开放
 
 在 current-HEAD main wheel 隔离安装路径上，物理 GPU0（进程内 cuda:0）、backend_fallback=error 且禁止 fallback 下执行定向正确性验证。Embedding signed/repeated indices 的前向、一/二阶梯度与确定性，以及 chunk 边界求和/adjoint，共 2 passed、0 skipped，fallback 0→0。public linear first/second derivatives 通过。linear+bias 组合 attempt 达到 180 秒时限，stdout 显示 bias 用例只启动、没有终态；该执行包保留为 timeout。之后仅将未完成的 bias tile-boundary/non-contiguous cotangent 单项再执行一次，24.94 秒完成，1 passed、0 skipped，fallback 0→0；没有重跑已经通过的 linear 或 embedding 用例。

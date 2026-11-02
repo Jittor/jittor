@@ -1,3 +1,10 @@
+## 2026-11-03 02:45 +0800 Handoff：wheel 差异首轮静态归因完成，未改审批表
+
+在既有 main wheel baseline compare 产物上只读分类 69 项新增、304 项内容变化和 2 项删除。新增里 backends 27（ACL 12、CUDA 15）、JIT C++ 源 24、profiling 6、nn 5、runtime 3、AMP 2、core 1、optimizer 1。两项删除是 ACL sigmoid/transpose Python CodeOp 包装；提交 e7bf82046 显示其转为原生 launcher/core op，当前源树仍有原生文件和结构断言。ccec 与 ASCEND_TOOLKIT_HOME 均缺失，不能提供 ACL 硬件验收。全部迁移仍是 69 additions、304 changes、2 removals、0 approved。
+
+证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261103-current-head-wheel-gate-r1-prepared/，manifest SHA256 782d09b8669584f9f9a8e8f41d1f2531c4f5a0bd80927dd7bdc0dee870b653b。工作区 HEAD b778f32f57cdaca35e4ab047638c36faec6a59ff、origin/cgq_transformers 35a1a7605ec475e9cbc1a9688afc299ee3bd8011；wheel diff 审查未改源码或审批清单。GPU2 仍被外部占用，formal Day4–5 仍等待 cgq association 与可核验独占 lease。
+
+
 ## 2026-11-03 02:40 +0800 Handoff：current-HEAD 安装 wheel Embedding 与 Linear/Bias CUDA 定向功能格补证
 
 继续使用 /home/cgq/jittor 既有工作区；HEAD 70387dd7acb8a5e5d85bad3633d1646d38c99dde，origin/cgq_transformers 35a1a7605ec475e9cbc1a9688afc299ee3bd8011，工作区 clean。本轮没有源码修改。main wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69，输入源码 HEAD 35a1a7605ec475e9cbc1a9688afc299ee3bd8011。

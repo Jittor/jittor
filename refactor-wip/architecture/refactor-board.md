@@ -1,3 +1,9 @@
+## 2026-11-03 02:45 +0800 current wheel migration 差异首轮分类完成；审批仍为零
+
+对 current-HEAD main wheel baseline compare 做只读复核，未改 baseline、allowlist 或源码。69 个新增成员分布为 backends 27（其中 ACL 12、CUDA 15）、jittor/src 24、profiling 6、nn 5、_runtime 3、amp 2、_core 1、optim 1。304 个内容变化中最大类别为 jittor/src 123、backends 92、nn 34，仍须逐项审阅。两项删除为旧 ACL Python 包装 jittor/backends/acl/kernels/ops/sigmoid_op.py 与 transpose_op.py；提交 e7bf82046 将 sigmoid 转为原生 launcher，transpose 改走 core TransposeOp/aclnnPermute，并删除冗余 CodeOp。当前树仍有 sigmoid/transpose 原生 ACL 源码与注册，已有结构断言覆盖该所有权迁移。
+
+ACL runtime 复核未找到 ccec，ASCEND_TOOLKIT_HOME 未配置；因此此删除的静态迁移依据不能替代 Ascend 硬件验证。原始 package compare 仍为 69 additions、304 changes、2 removals、0 approved。证据使用 /data6/cgq/jittor-lab/_state/release-day23/20261103-current-head-wheel-gate-r1-prepared/ 中 baseline-compare.log 与 package-summary.json（artifact manifest SHA256 782d09b8669584f9f9a8e8f41d1f2531c4f5a0bd80927dd7bdc0dee870b653b）。不因首轮分类而放宽默认 allowlist。
+
 ## 2026-11-03 02:40 +0800 current-HEAD 安装 wheel 的 Embedding 与 Linear/Bias CUDA 功能格补证；Day2–5 仍未完成
 
 安装态 CUDA 定向验证补齐了 Embedding signed/repeated-index 二阶梯度与 chunk-boundary adjoint（2 passed、0 skipped，fallback 0→0，约 108 秒）、public linear 一/二阶梯度（通过）及 bias tile-boundary/non-contiguous cotangent（单项 follow-up 1 passed、0 skipped、24.94 秒，fallback 0→0）。linear+bias 组合 attempt 因 oneDNN 首次下载/编译达到 180 秒上限，bias 用例当时仅启动；该 timeout 原件保留，不能记作组合通过。
