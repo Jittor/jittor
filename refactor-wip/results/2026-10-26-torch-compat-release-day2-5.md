@@ -1,3 +1,11 @@
+## 2026-11-03 05:09 +0800 独立 wheel 安装根 CPU DDP surface 39/39 通过
+
+在 2026-11-03 05:02 +0800 记录的同一全新 pip 安装 target、已冷构建 CUDA core 和安装包身份上，补跑 CPU DDP compatibility surface：test_ddp_owner_separation.py、test_ddp_comm_hook_surface.py、test_ddp_comm_hook_transaction.py 共 39 passed、0 failed/skip，用时 17.00 秒。覆盖 Torch/native DDP 所有权隔离与 no_sync 梯度累积、Accelerate/communication-hook 的显式 unsupported 边界，以及 hook namespace 安装事务回滚/idempotency。测试直接导入 fresh target 中的 jittor、Torch shim 和 compat helper；没有源码或运行时 overlay。Jittor runtime scope 与 jt.flags.use_cuda 均为 CPU，fallback 0→0，core build current 且 SHA256 前后同为 0f75262b8518e40ce12769a7af79c8c70f21fbae9e4a796e86000decfd5ddc07。GPU2 未暴露；GPU process 前后快照无本测试新增进程。
+
+执行证据位于 /data6/cgq/jittor-lab/_state/release-day23/20261103-independent-wheel-cold-root-r2-cpu-ddp/，runner-result.json 与 pytest 均为 PASS。artifact-manifest.sha256 SHA256 ae9f408fa09d2926dac6cb08d6c29d378350af7a741cb4cd088ffbd80f9a07ea；包含外层回执问题说明的 amendment manifest SHA256 a9bc231cdbb0c6c7daa34e660625270f66a1f28c07727f7565ea8c1e55856923。原始 run.sh exit code 为 0，pytest rc=0，测试及原 artifact manifest 校验均成功；PowerShell→SSH 的外层回执因 CRLF 将最终 exit 参数变成 0\r，在打印成功结果后返回非零。此包装问题已单独保留并作 post-hoc audit，没有重跑测试。
+
+与同一 fresh install root 上此前 56/56 合并看，独立安装根现有 95 项分两次通过；这不是一次 95 项总套件，也不是完整 wheel migration gate。新增 DDP 测试是 CPU surface 与 mock transaction，不证明真实 2/4-rank process group、Trainer/Accelerate 多卡训练或 NCCL。另核对 R14 lora-eval.jsonl 的 17 个 ID 与训练子集 101 个 ID 无交集，但 17 个 ID 均标记为 Alpaca 原始 train split，故仍不能作为独立 held-out generation 质量分数；本轮未运行生成。检查时 GPU2 仍约 37,235 MiB、100%，性能/显存验收和更广 Day2–5 发布门继续未完成。
+
 ## 2026-11-03 05:02 +0800 独立 wheel 安装根冷构建与功能验收：56/56 通过
 
 以固定哈希的 main wheel（SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69，来源 HEAD 35a1a7605ec475e9cbc1a9688afc299ee3bd8011）和 compat wheel（SHA256 740a9034c375e70b55ade864f75acbed7e492f09532bcf68ab64ac24a070b975，来源 HEAD 19a07871932743dae226107fc9403e756d56bdef）重新 pip 安装到全新 target；新建隔离 JITTOR_HOME，从安装目录直接导入 jittor、torch shim 和兼容 helper，没有源码或运行时函数覆盖。独立 CUDA core 冷构建耗时 408.37 秒，core SHA256 0f75262b8518e40ce12769a7af79c8c70f21fbae9e4a796e86000decfd5ddc07，build current。
