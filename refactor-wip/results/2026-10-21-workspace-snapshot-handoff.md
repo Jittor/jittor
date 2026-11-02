@@ -1,3 +1,9 @@
+## 2026-11-02 12:58 +0800 接续：R2 Day4–5 suite 已补冷编译 bootstrap，仍等待管理员 GPU2 lease
+
+在现有 /home/cgq/jittor 继续，未 clone、未碰 GPU2，也未改源码。R1 Day4–5 包因空 JITTOR_HOME 配合 120 秒首个 Jittor capacity cap，无法覆盖历史约 335 秒的当前源码 CUDA core 冷编译；另有 fresh-cache jit_utils rc=3 重启路径。R1 保留不改。新 R2 包位于 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-day45-exclusive-r2-cold-compile-prepared/，manifest SHA256 ccc6e30bfcf85a154d2f7be9929554586221a91df8432445cfc20ec913406d74。静态核验：8 个 shell 脚本语法通过、4 个 Python AST 通过、20 项文件清单校验通过。R2 full suite 把 core bootstrap、容量 sweep 和配对测量放在同一 Slurm allocation，最长 100 分钟；当前没有实际启动，所以不产生性能/显存结论。
+
+执行前提仍未满足：GPU2 外部 PID 3037196、3164740 各占 8,640 MiB，Slurm 队列为空，用户没有 cgq association；13:00 +0800 复核节点仍 DOWN、TaskPlugin=task/affinity、CgroupPlugin=null，cgroup.conf 不可读且 cgq 无 association 行。节点恢复、task/cgroup、ConstrainDevices=yes 和管理员签发的 GPU2 lease proof 也必须到位。获得 lease 后从 R2 的 scripts/run_full_suite.sh 启动整个流程，不使用独立 holder。R1/R2 状态、资源快照和证据边界见 Day2–5 报告本条目。工作区其余 102 项 dirty/untracked 改动保持不动，不 push。
+
 ## 2026-11-02 12:42 +0800 接续：两 rank NCCL DCP 玩具状态 save/load 通过；Trainer/性能仍未关闭
 
 当前 source fingerprint 60f17cf07f26eebfb54a5205ef8e0385c9d615ba29599f3435f5abda591e805b、HEAD 89e3ff259d677e3847b723fa5d5a3e5554d57a4c。在真实 GPU0/GPU1 NCCL 上，两 rank 对 rank-local CPU 模型权重、optimizer step/exp_avg、epoch/sample cursor 完成 DCP save/load 与 barrier，逐 rank 状态、metadata 和双 shard 检查通过，fallback delta=0。attempt-01/02 是 jit_utils 重建前置退出，attempt-03 停在资源 PID churn preflight；只有 attempt-04 运行到 DCP 用例并通过。证据路径和 artifact manifest SHA 见 Day2–5 报告 12:42 条目。

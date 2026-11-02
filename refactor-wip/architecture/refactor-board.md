@@ -1,3 +1,13 @@
+## 2026-11-02 12:58 +0800 Day4–5 R4 冷缓存路径已修订为 R2；GPU2 独占租约仍缺
+
+静态审计发现 R1 测量包在新建的空 JITTOR_HOME 上直接启动首个 Jittor 容量 worker，但 worker 上限为 120 秒；当前源码历史 CUDA core 冷编约 335 秒，fresh-cache 的 jit_utils 还可能要求一次新的解释器启动。R1 原件保持未运行、未修改。为避免拿到租约后才遇到前置超时，在外部状态目录单独准备 R2：/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-day45-exclusive-r2-cold-compile-prepared/。R2 包清单 SHA256 ccc6e30bfcf85a154d2f7be9929554586221a91df8432445cfc20ec913406d74；R1 包清单 SHA256 仍为 08aa96da16ccf5236defbb1b79c3ac72e230af5b2eef92e186412a327daf5bcb。
+
+R2 加入 bootstrap_current_cuda_core.sh 与 run_full_suite.sh：正式运行必须在同一个 live GPU2 Slurm allocation 内依次完成 CUDA core bootstrap、容量扫测和配对测量。已知 jit_utils 重建退出码 3 仅在日志匹配精确提示时进入一次新的进程；每个导入阶段限 600 秒、bootstrap 总限 1,200 秒。容量扫测和配对 suite 各限 40 分钟，完整预算最多 100 分钟；没有测量自动重试。bootstrap 验证当前源码 core、CUDA backend 和单卡进程序号；它的编译时间单独记录，不并入性能数据，真实模型首步仍在 warmup 前测量。容量结果与配对 near-capacity batch、source identity 都有关联。另将 CUDA toolkit 路径前置到 env_jittor.sh 初始化，并把 HF 与 Torch shim runtime cache 指向 R2 私有目录。
+
+R2 完成静态验证：8 个 shell 脚本 bash -n 通过，4 个 Python 脚本 AST 解析通过，20 项包文件 SHA256 清单全部通过。该检查没有创建 CUDA context、Slurm 作业或基准运行；R2 runtime 仍为空，因此没有性能、显存、容量或 OOM 结果。远端工作区 HEAD f3f578aeac3f39f0edc7bd2d2882b4ac1ca795a0，origin/cgq_transformers 为 e5cffe1ae60c418f53c5bb1cdca9182577fd2b81（ahead/behind 228/0）；git status --short 102 行，完整 porcelain SHA256 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98，tracked diff SHA256 3ef743580bb7db38dbc9197f6f90e3182956d2bc29a55bce29c7eeea1bea6100，untracked 内容 SHA256 3370d8669846acb01163e3758008539da20ebc5db3c575d3ce7bb4e26ac852d0。
+
+现场 Slurm 队列为空。GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 使用 17,299 MiB、利用率 95%，仍由外部 PID 3037196 和 3164740 各使用 8,640 MiB；没有 cgq association 或有效租约。13:00 +0800 复核：X12DPG-OA6 为 DOWN（Node unexpectedly rebooted），TaskPlugin=task/affinity、CgroupPlugin=null，/etc/slurm/cgroup.conf 不可读，sacctmgr 对 cgq 没有 association 记录。管理员仍需添加 association、恢复节点并提供 task/cgroup、ConstrainDevices=yes、匹配 GPU2 UUID 的 per-job lease proof，且目标卡无外部 CUDA PID 后才可运行 R2。Day4–5 与更广 Day2–5 发布门继续 Not complete。
+
 ## 2026-11-02 12:42 +0800 current-source 两 rank NCCL DCP save/load 通过；完整 Trainer 与性能门仍开放
 
 在 barrier 源码修复后的工作树上，attempt-04 使用真实 GPU0/GPU1 NCCL 完成 Distributed Checkpoint save、load、rank barrier 与各 rank 状态检查，fallback delta=0。来源 HEAD 89e3ff259d677e3847b723fa5d5a3e5554d57a4c，完整工作树 fingerprint 60f17cf07f26eebfb54a5205ef8e0385c9d615ba29599f3435f5abda591e805b；run 前后相同。详细配置、attempt-01/02 bootstrap 失败与 attempt-03 未启动的 preflight 记录见 Day2–5 报告顶部。
