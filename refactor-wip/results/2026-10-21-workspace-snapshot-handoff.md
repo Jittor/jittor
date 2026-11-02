@@ -1,3 +1,10 @@
+## 2026-11-02 14:49 +0800 Handoff：current-main 公共 HF Trainer 单卡 step-1 新进程 resume 与不中断轨迹零容差一致
+
+在 `/home/cgq/jittor` 继续，执行时 HEAD `d30b89044ddbb6f499eb70b12f7fff9037452ed4`、source fingerprint `1e44760071de2bd3b105276dae01a3d1efcd5e89cb5e55b0b996d391e28642e2`。实际 GPU1/`cuda:0` 上，公共 HF Trainer + PEFT/BERT 小型单 rank 两步 fixture：step-1 保存 checkpoint，新进程恢复模型、optimizer/scheduler 与 Python/NumPy/CPU/CUDA RNG 后到 step 2；同配置不中断运行与拆分运行的 112 项轨迹零容差一致，fallback=0。该模型没有 DDP 包装，不能作为多 rank Trainer 证据。attempt-06 独立证据在 `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-hf-trainer-gpu1-r1-prepared/attempt-06-single-rank-trainer-resume/`；关键文件清单 SHA256 `73a9d04df300e423628b94938aa4024ac6f9d572c18f02355b86604bc65c8765`。详细尝试、harness 修正和边界见 Day2–5 结果报告 14:49 条目。
+
+Day4–5 suite 仍等待管理员为 `cgq` 添加 Slurm association、恢复 DOWN 节点并提供 GPU2 GRES/device-cgroup 独占租约；GPU2 当前被外部 PID 3037196/3164740 占用。普通占卡程序不能阻止他人使用 GPU2，本轮没有启动 holder；不接触这些外部进程。获准租约后从既有 R2 `run_full_suite.sh` 运行容量检查及至少三轮交替性能/显存测量。held-out quality、真实 activation recompute 显存证据、完整多 rank Trainer/DDP resume、序列化互操作与 wheel/support matrix 等 release 门仍开放；整体状态 **Not complete**。
+
+
 ## 2026-11-02 14:12 +0800 Handoff：checkpoint-102 fixture generation audit 通过，质量门未关
 
 current-main checkpoint-102 在 GPU1 / `cuda:0` 对固定 17 条 eval fixture 完成贪心生成，0 fallback；独立审计复算 EM `0`、word-token F1 `0.2045338135`、ROUGE-L `0.1483792414`。41 项证据清单 SHA256 `98df1050ce1f286b1530b4af9cedce5c7bf1950b105d4afa7d2e350e7e75dc7e`。所有样本 ID 标记 `alpaca:train`；因此不作为正式 held-out generation score。run 在状态文档提交 `2281cb7...` 后，代码 scoped fingerprint `79d7b81e...`，训练更新和 resume 结果仍绑定前一 HEAD `ef62df24...`，该后续提交只含三份状态文档。完整来源、旧 attempt-04 导入失败及限制见 [Day2–5 结果报告](2026-10-26-torch-compat-release-day2-5.md)。

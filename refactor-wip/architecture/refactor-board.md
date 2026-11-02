@@ -1,3 +1,10 @@
+## 2026-11-02 14:49 +0800 current-main 公共 HF Trainer 单卡新进程续训与连续训练逐位一致；整体 release 仍开放
+
+在当前工作区 HEAD `d30b89044ddbb6f499eb70b12f7fff9037452ed4`、source fingerprint `1e44760071de2bd3b105276dae01a3d1efcd5e89cb5e55b0b996d391e28642e2` 上，用 GPU1 实测公共 Transformers Trainer + PEFT/BERT 单卡流程：step-1 checkpoint 由新进程恢复到 step 2，与同配置连续两步训练的 112 项轨迹在零容差下完全一致；模型、optimizer/scheduler、Python/NumPy/CPU/CUDA RNG 恢复事件齐全，6 个可训练张量更新，fallback=0。测试绑定 GPU1 的 `cuda:0`，world size=1、NCCL process group size=1，未包装 public DDP；这是小型合成 fixture 的功能/恢复证据，不是多 rank Trainer、质量或性能验收。完整记录与校正后的轨迹合并审计见 [Day2–5 结果报告](../results/2026-10-26-torch-compat-release-day2-5.md) 和外部证据目录 `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-hf-trainer-gpu1-r1-prepared/attempt-06-single-rank-trainer-resume/`。
+
+GPU2 正式 Day4–5 suite 仍未启动：UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 当前有外部 PID `3037196`/`3164740` 各用 8,640 MiB；`X12DPG-OA6` 为 DOWN，Slurm 无 cgq job/association，`ConstrainDevices=no`。用户确认没有 Slurm account，并要求管理员添加 `cgq` association；未联系管理员，也未启动普通 holder，因为它不能阻止其他用户继续提交任务。需节点恢复及有效 GPU2 GRES/device-cgroup 独占租约后运行已准备的 R2 三轮配对套件。更广 Day2–5 门与 overall release 继续 **Not complete**。
+
+
 ## 2026-11-02 14:12 +0800 checkpoint-102 的 17 样本 fixture 生成完成；质量门与 Day4–5 性能门仍开放
 
 current-main checkpoint-102 在 GPU1 完成 17 条固定 eval fixture 贪心生成：word-token F1 `0.2045338135`、ROUGE-L `0.1483792414`、EM `0`，fallback `0`。独立审计与 41 项 SHA 清单通过。fixture ID 虽与实验 train JSONL 不重叠，但来源标签都是 `alpaca:train`，总生成长度上限 96 tokens；这只是有限 fixture 结果，没有定义 quality threshold，不关闭 held-out generation quality 门。源码执行身份、attempt-04 失败原件与 attempt-05 audit 见 [Day2–5 结果报告](../results/2026-10-26-torch-compat-release-day2-5.md)。

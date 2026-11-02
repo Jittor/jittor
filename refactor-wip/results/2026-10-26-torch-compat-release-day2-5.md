@@ -1,3 +1,22 @@
+## 2026-11-02 14:49 +0800 current-main 公共 HF Trainer 单卡新进程恢复与连续训练轨迹零差异；Day4–5 仍待 GPU2 lease
+
+**源码与工作区身份。** 沿用 `/home/cgq/jittor`，没有重新 clone。执行绑定 HEAD `d30b89044ddbb6f499eb70b12f7fff9037452ed4`、origin `e5cffe1ae60c418f53c5bb1dca9182577fd2b81`（ahead/behind 233/0）、source fingerprint `1e44760071de2bd3b105276dae01a3d1efcd5e89cb5e55b0b996d391e28642e2`，2,824 个 source entries。测试前后 fingerprint、HEAD、source entry count 和完整 git status signature 一致；当时工作区有 102 项既有 dirty/untracked，status SHA256 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`，index 为空。没有改动仓库源码或既有 dirty 文件；运行使用独立外部包目录。
+
+**实测范围和结果。** 对当前 main 的公共 Transformers Trainer + PEFT BERT sequence classification 小型合成 fixture 做单卡生命周期恢复检查：seed `20261013`、16 条 fixture、sequential sampler、dropout 0、gradient accumulation 2、最多 2 次 optimizer update、无 dataloader worker。实际 GPU1 UUID `GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068` 映射为进程内 `cuda:0`；模型参数设备全部为 CUDA，6 个可训练张量改变，fallback=0。attempt-06 先运行到 step 1 并保存 `checkpoint-1`，新 Jittor 进程恢复 optimizer/scheduler 与 RNG 后走完 step 2；再以同一初始权重和配置完成不中断的两步对照。恢复事件包含 `model_loaded`、`optimizer_scheduler_loaded` 和 `rng_loaded`，checkpoint 中单 rank RNG 文件为 `rng_state.pth`。该进程虽建立 NCCL world-size-1 process group，但模型没有被 DDP 包装（`public_ddp=false`），因此此证据只覆盖单 rank Trainer，不覆盖多 rank/DDP。
+
+step-1 边界的 40 个重叠状态值（参数、optimizer、scheduler）逐项完全相同；排除 54 个只用于记录恢复前状态的 `resume/` 诊断数组后，拼接轨迹共 112 项，与不中断轨迹在 `atol=0, rtol=0` 下全部一致，样本顺序也一致：`[4,5,4,5,8,9,8,9]`。三个训练进程均 rc=0。Jittor core SHA256 前后均为 `ca51fcce2c1a05db1795b8117ccc2d2feb0843006dc2d1fb5328044c2b5a20fb`。
+
+**尝试和审计记录。** 包根目录为 `/data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-hf-trainer-gpu1-r1-prepared/`。attempt-04 保留了测试脚本按 DDP 规则错误要求 `rng_state_0.pth` 的失败；Transformers 单 rank 实际写入的是 `rng_state.pth`。attempt-05 修正文件名后，另一个 harness 断言错误地拒绝了 world-size-1 NCCL process group。attempt-06 记录真实 process-group 与包装类型，并完成三段训练；其原始 merge helper 又把相同的 step-1 边界状态误判为冲突（merge rc=1），原日志 `logs/merge.log` 保留。未重跑训练；独立的 `scripts/merge-overlap-safe.py` 仅对已生成轨迹做精确合并，40 个重叠值通过后再由 comparator 做零容差比较。
+
+attempt-06 的 `evidence/key-files-exact.sha256` SHA256 为 `73a9d04df300e423628b94938aa4024ac6f9d572c18f02355b86604bc65c8765`，清单 8 项逐项校验通过；合并审计 JSON SHA256 `69e273b09d0a91634b1835f8e874372cc3460a5428212c284b490c07c2a2e2f4`，零容差比较 JSON SHA256 `b19734ff2c98217632ba2dcb21ebd84a85bb184247e476955745e5fcd9037b0b`，合并器 SHA256 `646d9885d40e1fd98b20eb3fcb2cdc2f22005736b292f441c71c71ebdae1d59f`。attempt-04/05 的原始产物与失败日志均保留，没有覆盖。
+
+这不是 held-out task quality、普遍收敛、公开 DDP 多 rank、性能或显存结论；GPU1 当时有外部 VLLM 占用，所有 elapsed time 均不作基准数据。R14 Qwen 实用训练与此 BERT toy fixture 也不替代 Day4–5 正式性能门。
+
+**Day4–5 资源门与更广发布门。** 14:49 +0800 复核 GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 为 Default/shared，17,299 MiB 使用中，外部 PID `3037196` 与 `3164740` 各占 8,640 MiB；Slurm 队列为空，`X12DPG-OA6` 状态 DOWN，`ConstrainDevices=no`，`cgq` 没有 account association。用户确认没有 Slurm account，并要求管理员添加 `cgq` association；没有代为联系管理员。普通 CUDA holder 不能形成排他租约，也不能阻止其他用户启动任务，因此没有运行 holder。需管理员恢复节点、添加 association 并提供针对 GPU2 UUID 的可验证 GRES/device-cgroup lease，之后才能启动已准备的 R2 正式套件。
+
+R2 仍为 `PREPARED_NOT_STARTED`。正式性能/显存结论仍要求至少 3 轮交替、每轮每侧至少 10 个热态样本，报告 median/p95/离散度、加载/首步/热态耗时和 allocator/NVML 峰值；共享卡旧测量只作诊断。更广 Day2–5 发布门还缺多 rank Trainer/DDP checkpoint resume、规范 held-out generation 质量阈值、activation recompute 与显存节省实证、Torch/Jittor optimizer 序列化互操作契约，以及声明支持矩阵和 wheel/baseline migration 收口。整体 Day2–5 与 overall release 均保持 **Not complete**。
+
+
 ## 2026-11-02 14:12 +0800 current-main checkpoint-102 17 样本生成评估通过执行审计；不构成 held-out quality 验收
 
 **当前源码与执行。** 在两阶段训练之后，继续使用同一个 `/home/cgq/jittor` 工作区，对 checkpoint-102 做固定 eval fixture 生成。该生成发生在三份状态文档的中文提交 `2281cb7bad4230e74eb9aae4ef5919b6a9bbc686` 之后，因此运行绑定 HEAD `2281cb7bad4230e74eb9aae4ef5919b6a9bbc686`、source fingerprint `79d7b81e7116b3c463d2a94bf5901b9244d0eb73355518622bc6aa9645f41b24`；这次提交只改了状态文档，1099 个 scoped source 文件哈希 `e83ecc86de5789527c9b318c5bed4c36f8013ef03569e10bba3a1c4d87ed94ae` 与训练期相同，run 前后源码/工作区快照一致。物理 GPU1 UUID `GPU-ecb44f7d-870b-b9a4-a3d6-10301bae6068` 映射为 `cuda:0`，核心库 SHA256 `d2aea33bd566ad8b2b5fbf6edb43fe060f5d8fd389d95eae8d22744f4f390811`；17 条生成于 14:04:18–14:10:21 +0800 完成，rc=0，fallback 0→0。GPU2 未暴露给进程；其既有外部 PID 3037196、3164740 前后不变。
