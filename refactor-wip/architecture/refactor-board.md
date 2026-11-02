@@ -1,3 +1,7 @@
+## 2026-11-02 12:30 +0800 barrier CPU mock 通过；终审发现工作区快照有 3 项状态漂移
+
+attempt-05 CPU bootstrap 与 2 个 mock 用例结果已在提交 5a2a7c6caef9c9148aba47b599a5f53da9d7cc9e 的证据包中留档。其执行前后 status hash 均为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211。随后状态文档提交为 70cce27810cbb447f99dd9ff65b291ff04526ba5；最终只读检查显示 105 项 dirty/untracked，porcelain hash 为 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98。证据包只保留旧 hash、没有旧路径清单，因此无法从现存记录归因这 3 项差异；本轮未清理、覆盖或重置这些路径。GPU2 仍为 Default/shared，17,299 MiB、94%，外部 PID 3037196/3164740；队列无 cgq 作业。Day4–5 与更广发布门仍 Not complete。
+
 ## 2026-11-02 12:28 +0800 current-main barrier 纯 CPU mock 回归通过；真实 NCCL barrier/Trainer 仍未验收
 
 在提交 `5a2a7c6caef9c9148aba47b599a5f53da9d7cc9e` 对应源码上，用独立 `/data6` cache bootstrap CPU core（43.1 秒、`has_cuda=0`），两个 Python mock 用例 2 passed，真实 NCCL 用例按环境跳过；无 GPU 可见，仓库状态签名前后相同。它验证 shim 委托和设备同步参数，不证明 NCCL 设备运行。详情见 [Day2–5 结果报告](../results/2026-10-26-torch-compat-release-day2-5.md)。GPU2 仍共享负载，缺 cgq Slurm association；Day4–5 及更广发布门继续 **Not complete**。

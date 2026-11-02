@@ -1,3 +1,9 @@
+## 2026-11-02 12:30 +0800 接续：CPU mock 证据已归档；终审保留当前 105 项工作区状态
+
+barrier attempt-05 执行前后 status hash 是 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211，证据包没有保存对应路径清单。状态文档提交 70cce27810cbb447f99dd9ff65b291ff04526ba5 后，终审只读快照显示 105 项 dirty/untracked，hash 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98；相对记录多 3 项，但不能由现存证据定位差异，本轮未重置或清理。CPU mock 的通过范围、真实 NCCL 与 Trainer 的未验收状态见 Day2–5 报告顶部。
+
+GPU2 仍共享占用，无 cgq Slurm allocation；用户没有可用 account，需管理员添加 cgq association。当前没有启动 holder、GPU 任务或 benchmark。Day4–5 和更广 Day2–5 release 继续 Not complete。
+
 ## 2026-11-02 12:28 +0800 接续：barrier CPU mock 回归通过；真实 NCCL 结果仍待隔离 GPU
 
 源码修复和回归测试已在提交 `5a2a7c6caef9c9148aba47b599a5f53da9d7cc9e`。本轮在 `/data6` 隔离 cache 为当前源码 bootstrap CPU core 后运行两个 mock 用例，2 passed、NCCL 用例因未分配设备而跳过；仓库 102 项既有 dirty/untracked 状态签名前后不变。证据路径及 SHA 见 Day2–5 报告顶部。该 mock 通过不代表真实 NCCL collective 通过。

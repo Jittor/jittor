@@ -1,3 +1,9 @@
+## 2026-11-02 12:30 +0800 最终工作区快照与 attempt-05 状态签名不一致，所有既有改动已保留
+
+CPU 回归 attempt-05 的不可变证据记录执行前后 status hash 为 5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211；该包未保存对应 porcelain 路径列表。其后只提交三份状态文档，commit 70cce27810cbb447f99dd9ff65b291ff04526ba5，未 push。终审只读快照为 105 项 dirty/untracked、porcelain SHA256 8f0b6612b32bbb1dd5da864908d9c8b8fb78d834089d41c1ab11f1b09fb44f98，与 attempt-05 的 102 项记录相差 3 项。没有足够证据把差异归因到具体文件或操作者，本轮没有清理、覆盖、暂存或提交这些工作区路径。其余 attempt-05 结果与原始哈希保持不变。
+
+终审时 GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 仍是 Default/shared，17,299 MiB 使用中、利用率 94%，外部 PID 3037196 和 3164740 各占 8,640 MiB；cgq 队列为空。根文件系统可用 52 GiB 且为 99% 使用，实验盘 /data6 可用 5.5 TiB。没有运行新的 GPU/性能任务。用户无 Slurm account，需管理员添加 cgq association 后才能申请有效 GPU GRES/device-cgroup 独占租约。Day4–5 性能/显存与更广 Day2–5 发布门仍 Not complete。
+
 ## 2026-11-02 12:28 +0800 current-main Torch barrier CPU mock 回归 2/2 通过；NCCL/Trainer 与性能门仍开放
 
 **执行。** 在本轮提交 `5a2a7c6caef9c9148aba47b599a5f53da9d7cc9e` 上，为避免复用上轮因源码配置不匹配而失败的 cache，在 `/data6/cgq/jittor-lab/_state/release-day23/20261102-ddp-process-group-barrier-fix-r1-prepared/attempt-05-cpu-current-source-bootstrap/` 建了隔离 `JITTOR_HOME`，串行 bootstrap 当前源码的 CPU core（43.1 秒，`has_cuda=0`），再运行 `compat/tests/torch/test_torch_distributed_barrier.py` 中两个 mock 用例：**2 passed、1 个 NCCL 用例 deselected、0.82 秒**。pytest 有一条已知环境变量弃用 warning。`CUDA_VISIBLE_DEVICES` 为空；仓库 status SHA256 前后均为 `5a6d83a6bce78a372494d8bd340a7a6d685c368b5cbec203a42bbd543c070211`，dirty/untracked 的原始 102 项不变。没有触及默认 cache 或 GPU 上的任务。
