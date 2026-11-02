@@ -1,3 +1,13 @@
+## 2026-11-03 02:23 +0800 current-HEAD 安装 wheel 的 fused AdamW CUDA 更新通过
+
+绑定 main wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69（源码快照 HEAD 35a1a7605ec475e9cbc1a9688afc299ee3bd8011），在 Python 3.11.3、物理 GPU0 UUID GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5、进程内 cuda:0 上，从 installed target 导入 Jittor，加载安装包中的 fused_adamw_cuda.py。当前 live repo HEAD 为 26db77add612f1a7c068ebaf9f70dbcd120d711c；产品源码与构建 wheel 的来源一致。
+
+tests/backends/cuda/test_fused_adamw_cuda.py 的 test_a_list_longer_than_one_launch 结果 1 passed、0 skipped。42 个参数张量覆盖超过单次 36 项 launch table 的分块、空张量、每块边界尾部，并对 p/m/v 更新与 FP64 AdamW 公式做比较。测试源码 SHA256 8667ea7b8ff1c8bdb7fcc69677dee3972b11307c5f6a37f9828cfae79b8c75ef；wheel kernel 和源码 kernel SHA256 均为 55d001c14b49743c34e7dab164d20f15ed9a7dc1cf5de10e08a77c87dc677b36。installed Jittor 路径、kernel 路径、core_build_is_current() 均核对通过；core SHA256 0e2fe909d3f33e27c220546693c40f27087357cefe198220f46c97f9a0353a90 前后不变。启用 forbid_backend_fallbacks() 与 backend_fallback=error，fallback counter 0→0。
+
+证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-fused-adamw-cuda-r1/，artifact manifest SHA256 a2b0588dd4b58304480d2d8f81db8ac552c23dada102e57aed98bb15dc6d8918。复用了同一 wheel 身份的隔离 CUDA core；完整耗时 9.545 秒，测试自身 8.186 秒，未冷编译 core。GPU0 是共享设备（运行前 7,539 MiB、18%；运行后 7,539 MiB、19%），因此只记 correctness，不记性能或显存。GPU2 未使用。
+
+当前 wheel baseline 仍包含 69 additions、304 content changes、2 removals、0 approved。此项仅验证其中 fused AdamW 一条安装态 CUDA 路径，不能替代其他算子、后端或整体迁移审查。旧 parity matrix 的 generator_randint 声明矛盾仍待后续源码任务核对；正式 Day4–5 与更广 Day2–5 保持 Not complete。
+
 ## 2026-11-03 02:19 +0800 current-HEAD 安装 wheel 的 CUDA Generator randint 真实设备功能通过
 
 wheel 安装运行补上此前 R4 静态映射留下的一个具体缺口。测试绑定 main wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69，其源码快照 HEAD 为 35a1a7605ec475e9cbc1a9688afc299ee3bd8011；测试期间 /home/cgq/jittor HEAD 为 a4a87e60c0fc997b5ed9bc077d8b8962fd779108，工作区干净且仅比 origin/cgq_transformers 多一笔状态文档提交，测试文件与 generator_randint_op.cc 在 live tree 和 wheel snapshot 中哈希一致。

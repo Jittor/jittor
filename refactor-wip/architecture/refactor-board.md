@@ -1,3 +1,9 @@
+## 2026-11-03 02:23 +0800 current-HEAD 安装 wheel 的 fused AdamW CUDA 更新通过；Day2–5 仍未完成
+
+在 current-HEAD main wheel 的隔离安装路径上，使用真实 CUDA 执行 fused AdamW 单项：42 个参数张量跨过单次 36 项 launch table，包含空张量与尾部尺寸，并与 FP64 AdamW 公式比较；结果 1 passed、0 skipped，fallback 0→0，安装 wheel 内 kernel 哈希与源码快照一致，core build current 且 core SHA256 0e2fe909d3f33e27c220546693c40f27087357cefe198220f46c97f9a0353a90 未变。证据包 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-fused-adamw-cuda-r1/，manifest SHA256 a2b0588dd4b58304480d2d8f81db8ac552c23dada102e57aed98bb15dc6d8918。
+
+该项补上了已打包 fused AdamW CUDA kernel 的安装态功能证据，不是模型训练或性能/显存测量。wheel baseline 仍 0 approved；其它 CUDA、ACL 和更广发布门继续开放。
+
 ## 2026-11-03 02:19 +0800 current-HEAD 安装 wheel 的 CUDA 显式 Generator randint 验收通过；Day2–5 仍未完成
 
 current-HEAD 主 wheel（输入源码 HEAD 35a1a7605ec475e9cbc1a9688afc299ee3bd8011，wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69）在隔离安装路径上完成 CUDA 显式 Generator randint 定向测试：1 passed、0 skipped，检查 CUDA 设备放置、Generator 状态回放及 device mismatch；额外核对安装的 jittor/torch 模块来源、core build current、fallback 守卫和计数 0→0。CUDA core SHA256 0e2fe909d3f33e27c220546693c40f27087357cefe198220f46c97f9a0353a90，其源码测试和 kernel 哈希分别为 38ef3be26005ddd354b56078b8d68dfc0a463e58fa7bd3bcf9a9b0a51d7bb718 与 aa545869865390dbb6f6a50f8ef456b000cbe3e6f656c8ed9e6b90aa220fa9d0。证据包 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-cuda-generator-r4-cache-reuse/，artifact manifest SHA256 832dc7f61cf953129309323aec0fb168e9226e38986131825f39597d5632c599。

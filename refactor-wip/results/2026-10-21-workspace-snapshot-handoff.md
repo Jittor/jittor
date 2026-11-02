@@ -1,3 +1,9 @@
+## 2026-11-03 02:23 +0800 Handoff：installed wheel fused AdamW CUDA 更新通过
+
+current-HEAD main wheel（source HEAD 35a1a7605ec475e9cbc1a9688afc299ee3bd8011，wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69）已在物理 GPU0 上执行 fused AdamW 路径。test_a_list_longer_than_one_launch 对 42 参数张量分块、空 tensor、尾部和 AdamW 更新公式的检查为 1 passed、0 skipped；fallback 0→0，installed kernel 哈希一致，core build current，core SHA256 0e2fe909d3f33e27c220546693c40f27087357cefe198220f46c97f9a0353a90。证据包 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-fused-adamw-cuda-r1/，manifest SHA256 a2b0588dd4b58304480d2d8f81db8ac552c23dada102e57aed98bb15dc6d8918。
+
+这只关闭 fused AdamW 一条 wheel runtime 功能格，不是训练曲线、性能或显存结论。GPU2 仍由外部任务占用，cgq association 尚待管理员配置；性能门仍要求系统级独占、至少三轮 PT/JT 交替和每轮每侧十个热样本。下一步继续审查实际 wheel 差异与安装态功能覆盖，保持 baseline 0 approved，不放宽 allowlist。整体 Day2–5 仍 Not complete。
+
 ## 2026-11-03 02:19 +0800 Handoff：current-HEAD 安装 wheel 的 CUDA Generator randint 通过；继续迁移审查
 
 current-HEAD 包装 smoke 已从 CPU 扩展到一个真实 CUDA 安装路径。main wheel SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69，源码输入 HEAD 35a1a7605ec475e9cbc1a9688afc299ee3bd8011；测试时 live repo HEAD a4a87e60c0fc997b5ed9bc077d8b8962fd779108，与 wheel source 的测试/kernel 文件哈希一致。单测 test_cuda_generator_randint_is_device_native_and_restorable 为 1 passed、0 skipped，安装路径模块校验与 core_build_is_current() 通过，fallback 0→0。core SHA256 0e2fe909d3f33e27c220546693c40f27087357cefe198220f46c97f9a0353a90；证据包 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-cuda-generator-r4-cache-reuse/，manifest SHA256 832dc7f61cf953129309323aec0fb168e9226e38986131825f39597d5632c599。
