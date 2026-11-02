@@ -8,6 +8,53 @@ from torch.utils import _pytree as pytree
 
 
 class TestCustomPytreeNodes(unittest.TestCase):
+    def test_leaf_query_uses_registry_and_optional_predicate(self):
+        class Output(dict):
+            pass
+        value = Output(x=1)
+        self.assertTrue(pytree.tree_is_leaf(value))
+        pytree.register_pytree_node(Output, pytree._dict_flatten,
+                                   lambda xs, keys: Output(zip(keys, xs)))
+        self.assertFalse(pytree._is_leaf(value))
+        self.assertTrue(pytree.tree_is_leaf(value, is_leaf=lambda x: x is value))
+        self.assertFalse(pytree.tree_is_leaf([], is_leaf=lambda x: False))
+
+    def test_treespec_structural_equality_and_json_protocol(self):
+        class Output(dict):
+            pass
+        pytree.register_pytree_node(Output, pytree._dict_flatten,
+                                   lambda xs, keys: Output(zip(keys, xs)),
+                                   serialized_type_name="test.Output")
+        _, spec = pytree.tree_flatten(Output(x=1))
+        expected = pytree.TreeSpec(Output, ["x"], [pytree.LeafSpec()])
+        self.assertEqual(spec, expected)
+        self.assertNotEqual(spec, pytree.TreeSpec(Output, ["y"], [pytree.LeafSpec()]))
+        self.assertEqual(pytree.treespec_dumps(spec),
+                         '[1, {"type": "test.Output", "context": "[\\"x\\"]", '
+                         '"children_spec": [{"type": null, "context": null, "children_spec": []}]}]')
+        with self.assertRaises(ValueError):
+            pytree.treespec_dumps(spec, protocol=99)
+        with self.assertRaises(TypeError):
+            pytree.treespec_dumps({})
+
+    def test_treespec_serialization_callbacks_and_missing_name(self):
+        import json
+        class Node:
+            pass
+        marker = object()
+        pytree.register_pytree_node(Node, lambda x: ([], marker), lambda xs, ctx: Node(),
+                                   serialized_type_name="test.Node",
+                                   to_dumpable_context=lambda ctx: {"marker": ctx is marker},
+                                   from_dumpable_context=lambda ctx: marker)
+        _, spec = pytree.tree_flatten(Node())
+        self.assertEqual(json.loads(pytree.treespec_dumps(spec))[1]["context"], {"marker": True})
+        class Unnamed:
+            pass
+        pytree.register_pytree_node(Unnamed, lambda x: ([], None), lambda xs, ctx: Unnamed())
+        _, spec = pytree.tree_flatten(Unnamed())
+        with self.assertRaises(NotImplementedError):
+            pytree.treespec_dumps(spec)
+
     def test_dict_key_order_and_key_types(self):
         keyed, context = pytree._dict_flatten_with_keys({"z": 2, "a": 3})
         self.assertEqual(context, ["z", "a"])

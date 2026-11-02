@@ -1,5 +1,6 @@
 """Module-level utility APIs; installation only publishes their namespace."""
 from collections import OrderedDict, defaultdict
+import json
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import jittor as jt
@@ -304,7 +305,8 @@ class _UtilsNS(_types2.ModuleType):
 
 
 class LeafSpec:
-    pass
+    def __eq__(self, other):
+        return isinstance(other, LeafSpec)
 
 
 class TreeSpec:
@@ -312,6 +314,11 @@ class TreeSpec:
         self.type = type
         self.context = context
         self.children_specs = list(children_specs)
+
+    def __eq__(self, other):
+        return (isinstance(other, TreeSpec) and self.type is other.type
+                and self.context == other.context
+                and self.children_specs == other.children_specs)
 
 
 class MappingKey:
@@ -405,6 +412,38 @@ def _defaultdict_unflatten(values, context):
 
 def _get_node_type(x):
     return type(x)
+
+
+def _tree_is_leaf(tree, is_leaf=None):
+    if is_leaf is not None and is_leaf(tree):
+        return True
+    return _get_node_type(tree) not in _utilities_context().state["pytree_nodes"]
+
+
+def _treespec_dumps(treespec, protocol=None):
+    if not isinstance(treespec, (TreeSpec, LeafSpec)):
+        raise TypeError("treespec must be a TreeSpec")
+    if protocol is not None and protocol != 1:
+        raise ValueError("Only TreeSpec serialization protocol 1 is supported")
+    nodes = _utilities_context().state["pytree_nodes"]
+    builtin_names = {list: "builtins.list", tuple: "builtins.tuple",
+                     dict: "builtins.dict", OrderedDict: "collections.OrderedDict"}
+
+    def encode(spec):
+        if isinstance(spec, LeafSpec):
+            return {"type": None, "context": None, "children_spec": []}
+        if not isinstance(spec, TreeSpec):
+            raise TypeError("TreeSpec children must be TreeSpecs")
+        node = nodes.get(spec.type)
+        name = getattr(node, "serialized_type_name", None) or builtin_names.get(spec.type)
+        if name is None:
+            raise NotImplementedError("No registered serialization name for %s" % spec.type)
+        convert = getattr(node, "to_dumpable_context", None)
+        context = convert(spec.context) if convert is not None else json.dumps(spec.context)
+        return {"type": name, "context": context,
+                "children_spec": [encode(child) for child in spec.children_specs]}
+
+    return json.dumps([1, encode(treespec)])
 
 
 def _tree_flatten(x):
@@ -595,8 +634,7 @@ def _api_pytree_register_pytree_node(
     if (to_dumpable_context is None) != (from_dumpable_context is None):
         raise ValueError("Both context serialization callbacks must be provided together")
     node = _NodeDef(flatten_fn, unflatten_fn, flatten_with_keys_fn)
-    # Keep the declared serialization identity with the node. TreeSpec JSON
-    # serialization is a separate API and is not provided by this frontend.
+    # Keep serialization identity and context conversion with the node.
     node.serialized_type_name = serialized_type_name
     node.to_dumpable_context = to_dumpable_context
     node.from_dumpable_context = from_dumpable_context
@@ -866,6 +904,9 @@ def install(ctx):
         _pytree.FlattenFunc = object
         _pytree.UnflattenFunc = object
         _pytree._get_node_type = _get_node_type
+        _pytree.tree_is_leaf = _tree_is_leaf
+        _pytree._is_leaf = _tree_is_leaf
+        _pytree.treespec_dumps = _treespec_dumps
         _pytree._list_flatten = _list_flatten
         _pytree._list_unflatten = _list_unflatten
         _pytree._list_flatten_with_keys = _list_flatten_with_keys
