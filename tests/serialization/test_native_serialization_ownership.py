@@ -2,6 +2,7 @@
 
 import importlib
 import pickle
+import sys
 
 import jittor as jt
 import numpy as np
@@ -65,3 +66,23 @@ def test_stock_pytorch_loads_exported_scalar_tensor_archive(tmp_path):
     assert restored["step"].item() == 7
     torch.testing.assert_close(restored["vector"], torch.tensor([1, 2, 3], dtype=torch.int32))
     torch.testing.assert_close(restored["matrix"], torch.tensor([[1.5, -2.0], [3.0, 4.5]]))
+
+
+def test_save_pytorch_restores_pickle_targets_after_failure(tmp_path):
+    pytest.importorskip("torch")
+    serializer = importlib.import_module("jittor.serialization.save_pytorch")
+    bindings = []
+    for target in serializer.targets:
+        module = sys.modules[target.__module__]
+        bindings.append((module, target.__name__, module.__dict__.get(target.__name__)))
+
+    class FailingPickle:
+        def __reduce__(self):
+            raise RuntimeError("forced pickle failure")
+
+    path = str(tmp_path / "must-not-be-written.pt")
+    with pytest.raises(RuntimeError, match="forced pickle failure"):
+        serializer.save_pytorch(path, {"payload": FailingPickle()})
+
+    for module, name, original in bindings:
+        assert module.__dict__.get(name) is original

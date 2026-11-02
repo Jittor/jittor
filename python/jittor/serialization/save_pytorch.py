@@ -106,9 +106,11 @@ def save_pytorch(path, obj):
     pickler = pickle.Pickler(data_buf, protocol=pickle_protocol)
     pickler.persistent_id = persistent_id
     global targets
-    targets = swap_targets(targets)
-    pickler.dump(obj)
-    targets = swap_targets(targets)
+    original_targets = swap_targets(targets)
+    try:
+        pickler.dump(obj)
+    finally:
+        targets = swap_targets(original_targets)
     data_value = data_buf.getvalue()
 
     # use previous pytorch code to save data

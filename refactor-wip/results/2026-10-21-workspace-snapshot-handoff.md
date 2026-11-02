@@ -1,3 +1,12 @@
+## 2026-11-03 05:45 +0800 Handoff：序列化异常路径全局恢复修复已定向复现并通过
+
+
+检查 `python/jittor/serialization/save_pytorch.py` 时发现，`save_pytorch()` 为生成 PyTorch pickle 临时替换 `torch`/`torch._utils` 中的重建符号；若 `pickler.dump()` 抛异常，旧代码会跳过恢复，导致调用进程中的全局符号被 Jittor stub 替代。新增回归先按对象身份核验该污染，修复以局部变量保存原符号并在 `finally` 中恢复。修复前复现为 1 failed，修复后实际仓库测试项通过 1/1。
+
+执行使用 stock PyTorch 2.6.0+cu124、CPU 进程及最小 Jittor 类型假模块；异常发生在 `ZipFile` 和 Jittor Tensor API 之前。没有触及 CUDA/GPU、没有编译 core，也没有声称 fresh wheel/Jittor runtime 验收。尝试从新安装 target 导入 Jittor 时，`JITTOR_NO_BUILD=1` 因 cache source key 与既有 CPU core 不同而安全拒绝；没有启动冷编译。首次 pytest harness 误载入仓库 state-leak fixture、另一次 runner 脚本有引号错误，均保留且未计测试；修正 confcutdir 后执行的仓库测试文件通过。源码 SHA256 `6a64b708ac48078e3b55dd8b7bac7505b6304270c355c2fe43cf55956369bee0`，测试 SHA256 `b6f44eadb892c680537fc7e0045c05d00d0923058a7f082d2d83f4921ef28844`。完整实验证据目录 `/data6/cgq/jittor-lab/_state/release-day23/20261103-save-pytorch-target-restore-r1/`，manifest SHA256 `9926659df2317253ecc354cfd500084681c298f8783064aaa72a4226c3a198f7`。
+
+本修复只覆盖显式 PyTorch ZIP 导出器异常安全；JT portable-pickle optimizer 直接传给 stock `torch.load` 的跨框架失败仍单独记录。源码补丁尚未进入修复版 main wheel；后续仍需核验包身份与安装态，不能把本回归当作 fresh wheel 证据。Day4–5 正式性能/显存验收仍受独占 GPU2 与 cgq Slurm association 阻塞，更广 wheel migration 仍有未批准的 package delta；整体 Day2–5 保持未完成。
+
 ## 2026-11-03 05:32 +0800 Handoff：修复版 main wheel 已安装，R14 stock PyTorch ZIP 对读通过
 
 源码提交 76e68f279a444540603ae043ee229b3f14d9b647 已推送。以其 Git archive 构建的 main wheel SHA256 c478a64f2b31d5b2da6764c80632210564b9de2404f02ee74c10fc6c43c3cd56，fresh pip target 安装成功；wheel 内与安装态 save_pytorch.py SHA256 均为 7ebce5a5a2705a9fb22b2715af56dede28f47d7f4e5580fe7efe7de18fbacb51。
