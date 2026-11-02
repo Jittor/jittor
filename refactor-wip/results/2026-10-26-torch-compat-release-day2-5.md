@@ -1,3 +1,24 @@
+## 2026-11-02 09:36 +0800 R9 Torch focused 重复执行：两个既知失败原样保留
+
+### 本轮绑定和执行
+
+没有重新 clone，继续使用 /home/cgq/jittor；本轮前 HEAD 81deed07d1c0ddfa0c6e9f92b771e8ad44b0fb0d，fetch 后 origin/cgq_transformers=e5cffe1ae60c418f53c5bb1cdca9182577fd2b81 为祖先，ahead/behind 219/0。执行前工作区有 102 项既有 dirty/untracked，index 为空；没有改动这些源码或实验文件。
+
+R9 候选及指纹保持为 /data6/cgq/jittor-lab/worktrees/torch-compat-storage-silu-cat-grad-rmsnorm-pow-fill-zero-20261028-r9、HEAD 765f1791f3b00f9129fb3ec6342dadf2c9dc2dbe、fingerprint 8afd3ed550f5cf113c67c0b4f7c159334781047bfda7e11232c9ab3184e7089d。新建的独立 runner 包为 /data6/cgq/jittor-lab/_state/release-day23/20261102-r9-fill-zero-torch-focused-cpu-r1-finalized/，package manifest SHA256 3fc9d9979deb8d72b3a9200e122d10ec9688ab915395ee314a2ffb8f3f4dc369。离线绑定检查在不导入 Jittor/Torch/Pytest 的情况下通过；它将已保存的 native 740-file snapshot 与后续 cache 扩展分开绑定。扩展审计 SHA256 078e89ff49df3a8d4aae63147346f6b9e223960df006c8fc93957bc4c8976535，baseline SHA256 c3d0ca5c7820ada01b846d7f7762852f1283a9eeea64ed3f624583d2343cd0ff，对应 6,598 项 cache；740 项旧文件无删除、无内容变化，新增的 5,858 项来自后续诊断。历史 native terminal audit 的 FAIL 未覆盖。
+
+Torch focused 使用 CPU、CUDA_VISIBLE_DEVICES=""、fallback error 和 600 秒硬上限；实际约 13 秒结束。10 项中 7 passed、1 个需要 CUDA 的测试按能力条件 skip、2 failed，fallback=0。失败为：
+
+- test_cpu_fill_and_zero_preserve_aliases_and_parameter_gradients：in-place fill_/zero_ 后，trainable leaf 的 target.grad 为 None。
+- test_constant_writes_preserve_native_follow_runtime_alias：torch.Tensor(native_var) 的 placement_backend 变为 0，预期仍为 FollowRuntime 的 -1。
+
+result SHA256 958c60fd00fa1b79e758be63cf3b3034a90d34d7b956e3bf8a21a9cfbd414f40；receipt SHA256 5d6cf5370adf7d51a798167d084d9e7ab0817dda6cd9f2f1b1d15ade484779e3；raw.log SHA256 1a2a98bebcf4b6f07b88d8c5f3799f39b202ad4636fe9d4343c82e72ba81583c；cache-delta SHA256 f77ca8fecc2973a74cb78b0c6303ffe05bd12075a8f4eca5f366ccc06058188d。source identity before/after 相同，fallback=0，私有子进程组退出，操作锁终态空闲；cache 没有新增、删除或内容改写，只有 14 个部署文件发生 mtime-only 变化。失败文件和收据完整保留。
+
+### 结果解释及下一步
+
+这是一次不应重复的 R9 focused 重跑：既有 Day2–5 报告早已记录相同的 R9/R10 两个失败，也记录了隔离 R11g 的后续局部修正和 current-main/R5 安装测试；本轮总结不引入新根因，不覆盖这些后续证据，也不作为 release 进展或通过项。R9 worktree 保持 frozen，没有改源码；不再沿 R9/R10 重跑。后续优先按最新 current-main/R5 安装记录推进尚未完成的 release gate。
+
+GPU2 快照仍显示 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0、Default/shared、17,299 MiB 已用、约 95% 利用率，外部 PID 3037196 与 3164740 各占 8,640 MiB。没有占卡 holder、没有碰触这些进程。本轮 CPU 测试不产生任何 GPU 性能/显存证据。Day4–5 仍要求管理员提供有效 Slurm GPU GRES、task/device-cgroup 隔离与 per-job UUID lease proof；之后运行既有 R4 capacity sweep，再执行三轮交替、每轮每侧至少十个热态样本的 PT/JT cohort。wheel migration 与更广发布矩阵仍未关闭，overall 保持 Not complete。
+
 ## 2026-11-02 09:13 +0800 R6 package candidate 与 installed launcher smoke 通过；GPU2 holder 不能排他
 
 证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261102-current-main-package-r6-launchfix-prepared/。候选基于 R5 immutable source snapshot HEAD 3fb131817e69ccc6728e670cbdf2db6f708cafdd，仅应用已提交 launcher 修复；launch.py SHA256 b969871c7da9b347df0df3fc8c19bd1364a10daae2426e6043e8e6ae0ed7b8ea。未把 102 项 dirty/untracked 工作树整体打包。direct wheel SHA256 3ff3ef01612c245dc13859729a2191786fecdfc433ddbf3e30a93f081f68b511，sdist SHA256 ef2d14765179c7ebbb5ee258cb8a20ffdaa31e6ce5386d0c0035b077a65e9bad，sdist-built wheel SHA256 cc5aeda22f657d530b58dcd110cfa8d7438df3ea3dd08e460a4a8b1ca2a0bf6c。两 wheel 的 1,100 个成员路径与内容逐项相同，容器 SHA 不同；构建 rc=0。baseline diff 为 69 additions、301 changes、2 removals、0 approved，compare rc=1。

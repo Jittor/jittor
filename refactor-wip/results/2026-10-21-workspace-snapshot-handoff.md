@@ -1,3 +1,9 @@
+## 2026-11-02 09:36 +0800 接续：R9 focused 重复失败已封存；Day4–5 仍等待 GPU2 独占租约
+
+本轮误对已经有失败记录的 R9 source identity 再运行了一次 Torch CPU focused；现已停止该分支，不再重跑。来源仍为隔离 worktree HEAD 765f1791f3b00f9129fb3ec6342dadf2c9dc2dbe / fingerprint 8afd3ed550f5cf113c67c0b4f7c159334781047bfda7e11232c9ab3184e7089d。独立 attempt 路径为 /data6/cgq/jittor-lab/_state/release-day23/20261102-r9-fill-zero-torch-focused-cpu-r1-finalized/attempt-01-torch-focused/；7 passed、1 CPU capability skip、2 failed，fallback=0，source before/after 相同。两个失败仍是 fill_/zero_ 后 .grad=None 与 torch.Tensor(native_var) placement 由 -1 变为 0。result SHA256 958c60fd00fa1b79e758be63cf3b3034a90d34d7b956e3bf8a21a9cfbd414f40，receipt SHA256 5d6cf5370adf7d51a798167d084d9e7ab0817dda6cd9f2f1b1d15ade484779e3。它们与此前 R9/R10 记录重复，不新增功能结论；后续以 current-main/R5 与 R11g/R13 的独立源码身份记录为准。
+
+执行前 /home/cgq/jittor HEAD 81deed07d1c0ddfa0c6e9f92b771e8ad44b0fb0d，fetch 后 origin 为 e5cffe1ae60c418f53c5bb1cdca9182577fd2b81，ahead/behind 219/0，原有 102 项 dirty/untracked 保持；没有修改候选 R9 源码或其他实验原件。正式 Day4–5 仍无法启动：GPU2 有外部进程共享使用，X12DPG-OA6 为 DOWN、ConstrainDevices=no，没有本任务有效 Slurm UUID/GRES + device-cgroup lease。不要启动普通 holder；取得管理员租约后直接运行已准备的 R4 容量扫描与三轮交替性能/显存 cohort。overall Day2–5 仍 Not complete。
+
 ## 2026-11-02 09:13 +0800 Handoff：R6 launcher wheel 两 rank 环境通过；GPU2 仍无排他 lease
 
 R6 candidate 基于 R5 source snapshot HEAD 3fb131817e69ccc6728e670cbdf2db6f708cafdd 加已提交 launcher 修复。direct wheel SHA256 3ff3ef01612c245dc13859729a2191786fecdfc433ddbf3e30a93f081f68b511，sdist SHA256 ef2d14765179c7ebbb5ee258cb8a20ffdaa31e6ce5386d0c0035b077a65e9bad；sdist wheel 与 direct wheel 的 1,100 个成员路径/内容一致。installed wheel 双 rank smoke 验证 LOCAL_RANK=rank、backend local rank=0、device visibility 按 rank 分配；rc=0，但不初始化 HCCL。聚合证据 manifest SHA256 f3ed3c2a1013011830aa18b1f9f4c2de92f449e5362341808e5fbaf58da46008；baseline 69 additions、301 changes、2 removals、0 approved。

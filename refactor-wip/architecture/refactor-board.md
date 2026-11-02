@@ -1,3 +1,11 @@
+## 2026-11-02 09:36 +0800 R9 Torch focused 重复执行后仍失败；保留原件，不计为新进展
+
+本轮绑定隔离 R9 worktree /data6/cgq/jittor-lab/worktrees/torch-compat-storage-silu-cat-grad-rmsnorm-pow-fill-zero-20261028-r9，HEAD 765f1791f3b00f9129fb3ec6342dadf2c9dc2dbe、fingerprint 8afd3ed550f5cf113c67c0b4f7c159334781047bfda7e11232c9ab3184e7089d。Torch runner 使用独立包 /data6/cgq/jittor-lab/_state/release-day23/20261102-r9-fill-zero-torch-focused-cpu-r1-finalized/；final binding/offline package guard 通过。原 native 740-file cache 的条目均保留且未改，当前 6,598-file 基线另有扩展审计；原失败的 native terminal audit 继续保留。正式 focused attempt 收集 10 项，7 passed、1 个 CPU CUDA-capability skip、2 failed，fallback=0；source before/after 一致、子进程组已退出、cache 无增删或内容变化，仅 14 个已部署文件记录为 mtime-only。
+
+两个失败分别是 fill_/zero_ 后 leaf .grad 为 None，以及 torch.Tensor(native_var) 将 FollowRuntime placement 从 -1 变成显式 CPU 0。结果 SHA256 958c60fd00fa1b79e758be63cf3b3034a90d34d7b956e3bf8a21a9cfbd414f40，receipt SHA256 5d6cf5370adf7d51a798167d084d9e7ab0817dda6cd9f2f1b1d15ade484779e3，raw log SHA256 1a2a98bebcf4b6f07b88d8c5f3799f39b202ad4636fe9d4343c82e72ba81583c。报告与 handoff 已列出原 attempt 路径及本轮重复执行的原因：这两项 R9/R10 失败和 R11g 后续修正此前已经记录，本轮是重复验证，不构成新的功能进展；不再运行 R9/R10。此前 current-main/R5 安装 focused、CPU core、checkpoint/DCP 证据保持各自源码身份，不被本次结果覆盖。
+
+GPU2 仍是共享 Default 模式，外部进程各占 8,640 MiB；本轮 focused 全程 CPU，没有启动 holder 或 CUDA 测量。Day4–5 仍需管理员提供活跃 GRES 与 device-cgroup 独占租约，之后才能运行已准备好的 R4 容量扫描和三轮 PT/JT 配对 cohort；更广 wheel migration、CUDA/runtime 与发布矩阵仍开放，overall Not complete。
+
 ## 2026-11-02 09:13 +0800 R6 current-main launcher 包冒烟通过；GPU2 无法由普通 holder 排他
 
 R6 包候选从不可变 R5 source snapshot HEAD 3fb131817e69ccc6728e670cbdf2db6f708cafdd 构建，只叠加已提交 LOCAL_RANK 修复，launcher SHA256 b969871c7da9b347df0df3fc8c19bd1364a10daae2426e6043e8e6ae0ed7b8ea；不是当前 dirty worktree 完整发布包。sdist/wheel 均构建 rc=0。direct wheel SHA256 3ff3ef01612c245dc13859729a2191786fecdfc433ddbf3e30a93f081f68b511，sdist SHA256 ef2d14765179c7ebbb5ee258cb8a20ffdaa31e6ce5386d0c0035b077a65e9bad，sdist 重建 wheel SHA256 cc5aeda22f657d530b58dcd110cfa8d7438df3ea3dd08e460a4a8b1ca2a0bf6c。两 wheel 的 1,100 个成员逐项内容一致，归档 SHA 不同。默认 baseline compare 69 added、301 content changes、2 removed、0 approved，差异保留。
