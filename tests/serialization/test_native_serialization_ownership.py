@@ -3,6 +3,7 @@
 import importlib
 import pickle
 import sys
+import types
 
 import jittor as jt
 import numpy as np
@@ -86,3 +87,52 @@ def test_save_pytorch_restores_pickle_targets_after_failure(tmp_path):
 
     for module, name, original in bindings:
         assert module.__dict__.get(name) is original
+
+
+@pytest.mark.parametrize("binding_kind", ["external-owner", "missing"])
+def test_save_pytorch_restores_torch_targets_after_failure(binding_kind, tmp_path, monkeypatch):
+    pytest.importorskip("torch")
+    serializer = importlib.reload(importlib.import_module("jittor.serialization.save_pytorch"))
+    targets_before = list(serializer.targets)
+    fake_torch = types.ModuleType("torch")
+    fake_utils = types.ModuleType("torch._utils")
+    shim_owner_name = "_test_jittor_torch_storage_owner"
+    shim_owner = types.ModuleType(shim_owner_name)
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setitem(sys.modules, "torch._utils", fake_utils)
+    monkeypatch.setitem(sys.modules, shim_owner_name, shim_owner)
+
+    missing = object()
+    bindings = []
+    for target in serializer.targets:
+        namespace = fake_utils.__dict__ if target.__module__ == "torch._utils" else fake_torch.__dict__
+        if binding_kind == "external-owner":
+            if target.__name__ == "_rebuild_tensor_v2":
+                def original(*args):
+                    return None
+                original.__name__ = target.__name__
+                original.__qualname__ = target.__name__
+                original.__module__ = shim_owner_name
+            else:
+                original = type(target.__name__, (), {"__module__": shim_owner_name})
+            setattr(shim_owner, target.__name__, original)
+            namespace[target.__name__] = original
+        else:
+            original = missing
+        bindings.append((namespace, target.__name__, original))
+
+    class FailingPickle:
+        def __reduce__(self):
+            raise RuntimeError("forced pickle failure")
+
+    path = str(tmp_path / "must-not-be-written.pt")
+    with pytest.raises(RuntimeError, match="forced pickle failure"):
+        serializer.save_pytorch(path, {"payload": FailingPickle()})
+    assert not (tmp_path / "must-not-be-written.pt").exists()
+    assert serializer.targets == targets_before
+
+    for namespace, name, original in bindings:
+        if original is missing:
+            assert name not in namespace
+        else:
+            assert namespace.get(name) is original

@@ -1,11 +1,13 @@
 """PyTorch archive writer; imported only when serialization is requested."""
-from jittor._core.dtypes import dtype_name as _jittor_dtype_name
-
-import jittor as jt
-from jittor import nn
+from contextlib import contextmanager
 import io
 import pickle
 import sys
+import threading
+
+import jittor as jt
+from jittor import nn
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import torch
 
 class HalfStorage: pass
@@ -29,12 +31,28 @@ _rebuild_tensor_v2.__module__ = "torch._utils"
 
 targets = [HalfStorage, BFloat16Storage, FloatStorage, LongStorage, IntStorage, ShortStorage, CharStorage, BoolStorage, _rebuild_tensor_v2]
 
-def swap_targets(targets):
-    original_targets = []
-    for target in targets:
-        original_targets.append(sys.modules[target.__module__].__dict__.get(target.__name__, target))
-        sys.modules[target.__module__].__dict__[target.__name__] = target
-    return original_targets
+_TARGET_PATCH_LOCK = threading.RLock()
+
+
+@contextmanager
+def _temporary_torch_pickle_targets(targets):
+    with _TARGET_PATCH_LOCK:
+        bindings = []
+        try:
+            for target in targets:
+                namespace = sys.modules[target.__module__].__dict__
+                name = target.__name__
+                existed = name in namespace
+                original = namespace.get(name)
+                bindings.append((namespace, name, existed, original))
+                namespace[name] = target
+            yield
+        finally:
+            for namespace, name, existed, original in reversed(bindings):
+                if existed:
+                    namespace[name] = original
+                else:
+                    namespace.pop(name, None)
 
 class TensorStorage:
     def __init__(self, data):
@@ -105,12 +123,8 @@ def save_pytorch(path, obj):
     pickle_protocol = 2
     pickler = pickle.Pickler(data_buf, protocol=pickle_protocol)
     pickler.persistent_id = persistent_id
-    global targets
-    original_targets = swap_targets(targets)
-    try:
+    with _temporary_torch_pickle_targets(tuple(targets)):
         pickler.dump(obj)
-    finally:
-        targets = swap_targets(original_targets)
     data_value = data_buf.getvalue()
 
     # use previous pytorch code to save data
