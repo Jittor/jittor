@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-SCRIPTS = ROOT / 'agent/skills/torch-compat-repo-runbook/scripts'
+SCRIPTS = ROOT / 'tools/ecosystem'
 
 
 def load(name):

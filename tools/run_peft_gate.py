@@ -18,7 +18,7 @@ import time
 import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPTS = ROOT / 'agent/skills/torch-compat-repo-runbook/scripts'
+SCRIPTS = ROOT / 'tools/ecosystem'
 sys.path.insert(0, str(SCRIPTS))
 
 

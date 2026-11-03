@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[4]
 
 
 def test_registry_has_one_tu_owner_and_preserves_typed_query_arguments(tmp_path):
-    script = ROOT / "agent/skills/acl-host-syntax-check/make_cann_stub.py"
+    script = ROOT / "agent/skills/acl-host-syntax-check/scripts/make_cann_stub.py"
     spec = importlib.util.spec_from_file_location("registry_sdk_stub", script)
     stubber = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(stubber)

@@ -49,8 +49,8 @@ def _run(runtime, case, checkout, output, weights=None, perturb_input=None):
     with np.load(output, allow_pickle=False) as archive:
         arrays = {key: archive[key].copy() for key in archive}
     metadata = json.loads(output.with_suffix('.json').read_text())
-    sys.path.insert(0, str(ROOT / 'agent/skills/torch-compat-repo-runbook/scripts'))
-    sys.path.insert(0, str(ROOT / 'agent/skills/trellis-torch-compat/scripts'))
+    sys.path.insert(0, str(ROOT / 'tools/ecosystem'))
+    sys.path.insert(0, str(ROOT / 'tools/ecosystem/trellis'))
     from registry_inventory import inventory
     from _source_binding import validate_phase
     validate_phase(metadata, inventory('trellis', checkout))

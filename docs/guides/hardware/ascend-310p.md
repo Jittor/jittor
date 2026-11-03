@@ -118,10 +118,11 @@ Torch 程序需激活独立兼容命名空间。分派按 SoC、dtype、轴、�
   后缀的录图。CPU 工作、等待与传输不会被省略。随机、opaque 和待执行 D2H
   依赖仍拒绝录图；前缀预算和地址有效性检查也必须通过。
 
-当前验证与未完成项在 [PR #18043](https://github.com/Jittor/jittor/pull/18043)、
-[问题总账](../../../agent/manuals/known-issues.md)和
-[待硬件验收清单](../../../agent/manuals/deferred-hardware.md)中维护。
-性能与完整输出对拍方法见[性能 skill](../../../agent/skills/jittor-transformers-perf/SKILL.md)。
+当前验证与未完成项在 [PR #18043](https://github.com/Jittor/jittor/pull/18043) 中维护。
+[历史问题总账](https://github.com/Jittor/jittor/blob/3cf654e15aea6de02e5c9b0b4064e286ea19b24c/agent/manuals/known-issues.md)和
+[历史硬件验收清单](https://github.com/Jittor/jittor/blob/3cf654e15aea6de02e5c9b0b4064e286ea19b24c/agent/manuals/deferred-hardware.md)保留此前边界，
+不因文档清理关闭这些条目。
+性能与完整输出对拍方法见[性能 skill](../../../agent/skills/jittor-performance-profiling/SKILL.md)。
 此前的[完整模型与效果记录](https://github.com/Jittor/jittor/blob/eecff5ce5aa0d02aba3a246fcfb5632596732b44/docs/results/2026-11-02-vision-ascend310p-replay.md)
 固定在旧实现提交，不代表后续整合的速度、支持范围或所有设备已经验证。
 
@@ -130,7 +131,7 @@ Torch 程序需激活独立兼容命名空间。分派按 SoC、dtype、轴、�
 - `x[i]`（纯整数索引）的反向在 310P 上可能读到未初始化字节：这是
   `setitem_inplace` 图优化把梯度打包进零基座后的调度层缺陷，与 ACL 核
   无关。公开路径（`GetItemACL`）已绕行；原生 op 路径在测试中声明为
-  预期失败，详见 `agent/manuals/known-issues.md` KI-BACKEND-022。
+  预期失败，详见 [历史记录](https://github.com/Jittor/jittor/blob/3cf654e15aea6de02e5c9b0b4064e286ea19b24c/agent/manuals/known-issues.md) KI-BACKEND-022。
 - bool mask 的 `where`/`masked_fill` 在 310P 上静默无效；涉及非有限值
   的路径已改用 `nonzero`+`IndexPutImpl`。
 - 310P 不声明训练能力：缺少的反向算子由组合实现补齐并逐一对拍，

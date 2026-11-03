@@ -32,7 +32,7 @@ class LongformerCaseTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_registry_listing_and_audit_include_the_executable_node(self):
-        script = ROOT / "agent/skills/torch-compat-repo-runbook/scripts/verify_repo.py"
+        script = ROOT / "tools/ecosystem/verify_repo.py"
         result = run_python_child(["-S", str(script), "--repo", "transformers", "--list-only"],
                                   without_torch_mode=True)
         self.assertEqual(result.returncode, 0, result.stderr)

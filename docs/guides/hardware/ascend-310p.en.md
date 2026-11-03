@@ -137,10 +137,11 @@ ordering are not changed to obtain acceptance.
   still refuse recording; retention budgets and address-validity checks must also pass.
 
 Current evidence and open scope are maintained in
-[PR #18043](https://github.com/Jittor/jittor/pull/18043), the
-[known-issues ledger](../../../agent/manuals/known-issues.md) and
-[deferred-hardware list](../../../agent/manuals/deferred-hardware.md).
-The [performance skill](../../../agent/skills/jittor-transformers-perf/SKILL.md) defines timing
+[PR #18043](https://github.com/Jittor/jittor/pull/18043). The archived
+[known-issues ledger](https://github.com/Jittor/jittor/blob/3cf654e15aea6de02e5c9b0b4064e286ea19b24c/agent/manuals/known-issues.md) and
+[deferred-hardware list](https://github.com/Jittor/jittor/blob/3cf654e15aea6de02e5c9b0b4064e286ea19b24c/agent/manuals/deferred-hardware.md) preserve earlier limits;
+document cleanup does not close them.
+The [performance skill](../../../agent/skills/jittor-performance-profiling/SKILL.md) defines timing
 and complete-output comparisons. The earlier [complete-model/image record](https://github.com/Jittor/jittor/blob/eecff5ce5aa0d02aba3a246fcfb5632596732b44/docs/results/2026-11-02-vision-ascend310p-replay.en.md)
 is pinned to its measured implementation and does not validate later integrations or every
 other device.
@@ -151,7 +152,7 @@ other device.
   this is a scheduler-layer defect after the `setitem_inplace` graph optimization packs the
   gradient into a zero base, unrelated to ACL kernels. The public path (`GetItemACL`) has
   been worked around; the native op path is declared as an expected failure in tests, see
-  `agent/manuals/known-issues.md` KI-BACKEND-022.
+  [historical record](https://github.com/Jittor/jittor/blob/3cf654e15aea6de02e5c9b0b4064e286ea19b24c/agent/manuals/known-issues.md) KI-BACKEND-022.
 - bool-mask `where`/`masked_fill` silently have no effect on 310P; paths involving
   non-finite values have switched to `nonzero`+`IndexPutImpl`.
 - 310P makes no training claims: missing backward operators are filled in with composite

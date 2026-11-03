@@ -10,7 +10,7 @@ from _helpers.child_process import PYTHON
 from _ecosystem_harness import REAL_TORCH_PYTHON, _run_command
 
 ROOT = Path(__file__).resolve().parents[3]
-SCRIPTS = ROOT / 'agent/skills/torch-compat-repo-runbook/scripts'
+SCRIPTS = ROOT / 'tools/ecosystem'
 
 
 def compare_primitives(test, checkout, wheel):

@@ -43,7 +43,7 @@ def _acl_supports_fp32_cube():
 # capability gap the test can guard at call time. On Ascend310P the in-place
 # setitem graph optimization materializes the getitem backward's gradient value
 # inside the zeros base allocation, and the base fill can leave unwritten
-# bytes (see agent/manuals/known-issues.md).
+# bytes (see the historical issue records linked from AGENTS.md).
 _XFAIL_BY_SOC = {"Ascend310P": {"getbwd/int_index"}}
 
 PASS, FAIL = 0, 0

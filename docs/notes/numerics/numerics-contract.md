@@ -337,7 +337,7 @@ dim 0：改前改后同为 2.47e-3。这不是退化——**NumPy 在同一形�
 | 关掉 cuDNN 自动调优之后，梯度仍有 `1.1e-6` 的残余随 `auto_flush_ops` 变动 | CUDA | `KI-EXEC-003` |
 
 完整的条目——严重度、证据、owner 和退出条件——在仓库的
-[`agent/manuals/known-issues.md`](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/manuals/known-issues.md)。
+[历史记录](https://github.com/Jittor/jittor/blob/3679de22c02c83b982432a0e1bdb3da148411c50/agent/manuals/known-issues.md)。
 
 ## 相关
 

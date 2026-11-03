@@ -64,7 +64,7 @@ network 与 manual 测试要在模块 docstring 里说明其外部要求。
   并**强制清理总账**。
 - **不要**在测试体外面捕获任意异常再转成 skip。要在执行前**窄范围地**探测可选环境。
 - 每个持久的预期失败都要列进
-  [问题总账](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/manuals/known-issues.md)，
+  [历史记录](https://github.com/Jittor/jittor/blob/3679de22c02c83b982432a0e1bdb3da148411c50/agent/manuals/known-issues.md)，
   带 owner 和退出条件。
 
 ## 先检查执行量和会话完成，再解释失败
@@ -143,5 +143,5 @@ jt.cudnn.set_benchmark(0)
 自动调优会根据可用显存选算法；不固定它，就同时改变了被测开关和卷积算法。
 前向与梯度都要比较，逐元素相对误差以对应元素作分母，不能用整份梯度的 RMS 替代。
 详见[数值契约](../../notes/numerics/numerics-contract.md)；历史动机在
-[问题总账](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/manuals/known-issues.md)的
+[历史记录](https://github.com/Jittor/jittor/blob/3679de22c02c83b982432a0e1bdb3da148411c50/agent/manuals/known-issues.md)的
 KI-EXEC-001/003 与 KI-TEST-004 中。本协议不构成新的硬件验收。

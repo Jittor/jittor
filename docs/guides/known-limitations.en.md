@@ -2,16 +2,9 @@
 
 [Section contents](index.en.md) · [中文](known-limitations.md)
 
-This page summarizes **user-visible open items**: things that affect the numbers you get,
-the speed, or whether an API is available at all. Each entry has an identifier pointing to
-the [issue ledger](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/manuals/known-issues.md)
--- **the ledger is the single source of truth**, with reproduction commands, measurement
-conditions, disproven hypotheses, and current progress; this page gives only one sentence
-and its impact.
+This page summarizes user-visible limitations from the [historical records](https://github.com/Jittor/jittor/blob/3679de22c02c83b982432a0e1bdb3da148411c50/agent/manuals/known-issues.md): numerical behavior, performance and unavailable APIs. The KI identifiers preserve their original reproduction and evidence links. This cleanup does not revalidate or close them; check the latest GitHub issue/PR and reproduce against your version before relying on an old status.
 
-Only **open** items are listed. Fixed entries are removed from the ledger, and the fix
-evidence stays in result reports and Git history. Entries that are purely test
-infrastructure, gate runtime, or static-check coverage are not listed here.
+Update this summary when a limitation is fixed, with a link to its verification. Test-infrastructure-only issues remain outside this user guide.
 
 ## Numerics and semantics
 
@@ -67,4 +60,4 @@ infrastructure, gate runtime, or static-check coverage are not listed here.
 
 Backends awaiting hardware acceptance (ROCm, Iluvatar Corex, multi-card HCCL, cross-machine)
 are listed in [Platform support](hardware/platform-support.en.md) and
-[`agent/manuals/deferred-hardware.md`](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/manuals/deferred-hardware.md).
+[historical record](https://github.com/Jittor/jittor/blob/3679de22c02c83b982432a0e1bdb3da148411c50/agent/manuals/deferred-hardware.md).

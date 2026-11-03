@@ -69,7 +69,7 @@ SUITES = (
         "id": "profiling",
         "purpose": "Find operator, training, kernel bandwidth and cold-build bottlenecks.",
         "entrypoints": [
-            "agent/skills/jittor-transformers-perf/SKILL.md",
+            "benchmarks/profiling/README.md",
             "agent/skills/cuda-elementwise-bandwidth-roofline/SKILL.md",
             "agent/skills/jittor-single-kernel-cold-profile/SKILL.md",
         ],
@@ -77,7 +77,7 @@ SUITES = (
         "role": "Manual, individually scoped diagnostic tools; follow each skill's environment protocol.",
         "declared_devices": ["cpu", "cuda", "npu"],
         "runtimes": ["tool-specific Jittor/native or Torch frontend", "optional binary PyTorch"],
-        "notes": "Legacy tools have distinct frontend assumptions; they are not an interchangeable validated suite.",
+        "notes": "Each tool declares its frontend and timing scope; listing does not establish hardware validation.",
     },
 )
 

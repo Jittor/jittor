@@ -13,7 +13,7 @@ import zipfile
 import pytest
 
 
-SCRIPTS = Path(__file__).resolve().parents[2] / 'agent/skills/torch-compat-repo-runbook/scripts'
+SCRIPTS = Path(__file__).resolve().parents[2] / 'tools/ecosystem'
 
 
 def sha(data):

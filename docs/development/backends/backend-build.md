@@ -98,7 +98,7 @@ Python 构建协议**不替代** `src/runtime/backend.h` 带版本的 `BackendOp
 受支持的缓存策略下。**这些都不证明 CANN/ROCm/Corex 的 ABI 或设备正确性**：在目标机器上配置
 SDK、设 `JT_BACKEND`，在支持该断言的套件里禁用 CPU 回退，先测普通计算、扩展加载与失败传播，
 再声称硬件支持。各后端上机要跑什么见
-[`agent/manuals/deferred-hardware.md`](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/manuals/deferred-hardware.md)。
+[历史记录](https://github.com/Jittor/jittor/blob/3679de22c02c83b982432a0e1bdb3da148411c50/agent/manuals/deferred-hardware.md)。
 
 ## 运行时资源
 

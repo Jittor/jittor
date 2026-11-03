@@ -252,7 +252,7 @@ NPU. Re-verification requires device residency and zero computation fallback att
 the guard.
 
 Executable evidence and exit conditions are in the
-[active issue ledger](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/manuals/known-issues.md).
+[historical record](https://github.com/Jittor/jittor/blob/3679de22c02c83b982432a0e1bdb3da148411c50/agent/manuals/known-issues.md).
 
 ## Run Qwen3-8B with Transformers
 

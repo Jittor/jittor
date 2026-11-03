@@ -17,9 +17,23 @@ protocol applies to every downstream; NPU-specific driver/operator investigation
 the [NPU templates](npu-validation-templates.en.md); timing details follow the
 [benchmarking specification](../../performance/benchmarking.en.md).
 
+## Evidence levels
+
+| Level | What it establishes | Required evidence |
+| --- | --- | --- |
+| L1 | The selected import/forward entry runs | Actual execution; no numerical coverage claim |
+| L2 | Numerical agreement for the declared case | Independent reference, identical weights/inputs, outputs and all requested gradients |
+| L3 | Multi-step training behavior | L2 plus loss and parameter trajectories, including frozen parameters |
+| L4 | Performance for the declared workload | L3 plus comparable timing and process-memory measurements |
+| L5 | Execution on the claimed accelerator | Cumulative evidence plus actual device identity and zero fallback |
+
+Every level is limited to its recorded version, device and specification. For CPU-only
+measurements, do not claim accelerator L5. Integration support tables may use clearer task
+status names, provided they link to the exact evidence and its limits.
+
 ## Upstream denominators
 
-The entry point is [`registry_inventory.py`](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/torch-compat-repo-runbook/scripts/registry_inventory.py),
+The entry point is [`registry_inventory.py`](https://github.com/Jittor/jittor/blob/2.0-refactor/tools/ecosystem/registry_inventory.py),
 which reads only Git-tracked sources and imports neither Torch nor the downstream library. It
 must run on a clean checkout; record the full SHA, remote, source version and the SHA256 of the
 registration source files; re-enumerate for every scorecard and never accept a hand-written
@@ -40,7 +54,7 @@ and its negative tests first, then give coverage numbers; never silently drop it
 be parsed.
 
 ```bash
-scripts=agent/skills/torch-compat-repo-runbook/scripts
+scripts=tools/ecosystem
 python -S "$scripts/registry_inventory.py" --repo transformers \
   --checkout "$JITTOR_LAB_ROOT/downstream-coverage/upstream/transformers" \
   --output "$JITTOR_LAB_ROOT/_state/downstream-coverage/transformers-registry.json"
@@ -55,9 +69,9 @@ python -S "$scripts/audit_coverage.py" scorecard \
 Without `--evidence` it generates the complete inventory with a **zero verified numerator**,
 meaning this run has no acceptable new evidence; it must not be read as "nothing ever passed
 historically". Report each axis separately as `X / N @ upstream SHA`; do not add model counts,
-task counts and method counts together. core/broad/tail sampling rules follow the
-[adaptation workflow](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/downstream-library-adaptation/SKILL.md);
-the report must list the scenario count per tier and the unverified cells, and the core matrix
+task counts and method counts together. The core tier is the promised scenario matrix,
+broad is stratified registry sampling, and tail is representative long-tail coverage.
+List each tier's scenario count, selection rationale and unverified cells; the core matrix
 must reach at least L3.
 
 `gate_cases` in the audit records shared model CASES; `dedicated_gates` separately records
@@ -272,7 +286,7 @@ These hashes prove what was actually installed in this run; they must still be c
 
 By default evidence is still bound to the current HEAD. Auditing historical reports may pass `--baseline <完整40位Jittor SHA>` explicitly; that SHA must be a real commit in the local Git, and the output records `baseline_policy=explicit-historical`, the measured baseline and the current `auditor_commit`. This only re-audits evidence for an old commit; it cannot prove the current code also passes. Never change the SHA in an old measurement to the current HEAD; new acceptance for the current tree must re-run the computation.
 
-The existing [`verify_repo.py`](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/torch-compat-repo-runbook/scripts/verify_repo.py)
+The existing [`verify_repo.py`](https://github.com/Jittor/jittor/blob/2.0-refactor/tools/ecosystem/verify_repo.py)
 reuses the ecosystem runners and can quickly produce both sides' raw metadata and numerical
 diagnostics. It does not exercise input perturbation, multi-step optimizer trajectories or
 complete platform/process-peak collection, so its output is explicitly marked
@@ -280,7 +294,7 @@ complete platform/process-peak collection, so its output is explicitly marked
 complete scorecard row.
 
 Multi-step supplementary evidence can be produced with
-[`training_probe.py`](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/torch-compat-repo-runbook/scripts/training_probe.py):
+[`training_probe.py`](https://github.com/Jittor/jittor/blob/2.0-refactor/tools/ecosystem/training_probe.py):
 the same registered builder, with an independent oracle saving the complete initial weights,
 which the candidate loads before running the same SGD. The tool preserves the upstream tuner's
 trainable/frozen partition and outputs per-step losses, parameter/input gradients and the full
@@ -288,7 +302,7 @@ parameter trajectory; frozen parameters changing, missing requested gradients, n
 values or device mismatches fail outright. It takes host snapshots of the raw gradients and
 parameters to pin down the semantics of lazy updates; it makes no performance claim. For the
 concrete two-interpreter commands see the
-[runbook](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/torch-compat-repo-runbook/SKILL.md#多步训练证据).
+[tool guide](https://github.com/Jittor/jittor/blob/2.0-refactor/tools/ecosystem/README.md).
 
 ## Issue/PR record template
 
