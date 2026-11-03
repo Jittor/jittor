@@ -594,7 +594,20 @@ class _Storage:
     def __init__(self, var):
         self._var = var
     def data_ptr(self):
-        return id(self._var)
+        """Address of the allocation's first element, as torch reports it.
+
+        torch's contract is ``tensor.data_ptr() == storage().data_ptr() +
+        storage_offset() * element_size``. safetensors' shared-weight
+        detection compares the two pointers (`_is_complete`) and refuses to
+        save a tied model when they disagree, so Python object identity is
+        not a usable stand-in: distinct views of one allocation have
+        different ``id()`` values but must report the same storage address,
+        and a contiguous tensor's two pointers must be equal.
+        """
+        _owner.jt.graph_replay_barrier(
+            "Tensor.storage().data_ptr exposes storage to an external consumer")
+        return (int(self._var._storage_address)
+                - int(self._var._storage_offset()) * _storage_dsize(self._var))
     def size(self):
         return int(self._var.numel())
     def nbytes(self):
