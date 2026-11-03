@@ -56,7 +56,8 @@ PyTorch 2.11 produces (`compat/torch/profiler.py`):
   `user_annotation`/`kernel`/`gpu_memcpy`, ac2g flows, `[memory]` instants,
   `GPU n`/`stream n` metadata, kernel grid/block/registers/shared memory), which
   TensorBoard's profiler plugin, HTA and Perfetto read as a PyTorch trace;
-  `export_stacks` writes the flame-graph format; `export_memory_timeline` writes
+  `export_stacks` writes the flame-graph format (a fused operator gives one call
+  stack per member, sharing its value); `export_memory_timeline` writes
   `[times, sizes]` (json/json.gz) or the matplotlib plot (html) in PyTorch's layout,
   but jittor does not classify allocations into parameters/gradients/activations,
   so every byte is "Unknown".
@@ -221,7 +222,9 @@ In Torch compatibility mode `torch.cuda.memory._record_memory_history/_snapshot/
   therefore carries the full Python stack **that built its operator** (innermost
   frame first); a library workspace is charged to the operator running; a free, and
   an allocation outside the executor, carry the stack of the moment (when the thread
-  holds the GIL). Frames are Python only, no C++ (`stacks="all"` equals `"python"`).
+  holds the GIL). An operator built before recording started and run after it has
+  no build-time stack, so its blocks carry the line that forced execution. Frames
+  are Python only, no C++ (`stacks="all"` equals `"python"`).
 - **Statistics**: `memory_stats()` has every key of `torch.cuda.memory_stats` --
   allocation, segment, active and inactive-split counts and bytes, reserved and
   requested bytes, each for the all/small/large pools as current/peak/allocated/

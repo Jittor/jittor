@@ -433,16 +433,19 @@ void StepTraceOpScope::named(Op* op, bool is_fused, int device) {
 }
 
 StepTraceCompileScope::StepTraceCompileScope() {
-    if (PREDICT_BRANCH_NOT_TAKEN(step_trace_mode & st_ops) && current_op >= 0) {
-        seq = current_op;
-        t_begin = now_ns();
-    }
+    if (!PREDICT_BRANCH_NOT_TAKEN(step_trace_mode & st_ops) || current_op < 0) return;
+    // Only the op's own compile: one a batch nested inside it does while
+    // planning is that batch's compile phase.
+    PendingOp* p = find_pending(current_op);
+    if (!p || p->kind != ok_op || p->batch != current_batch) return;
+    seq = current_op;
+    t_begin = now_ns();
 }
 
 StepTraceCompileScope::~StepTraceCompileScope() {
     if (seq < 0) return;
     PendingOp* p = find_pending(seq);
-    if (!p || p->kind != ok_op) return;
+    if (!p) return;
     if (!p->t_compile) p->t_compile = t_begin;
     p->compile_ns += now_ns() - t_begin;
 }

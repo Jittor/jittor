@@ -41,7 +41,8 @@ Torch 兼容模式下，`torch.profiler.profile` 与 `torch.autograd.profiler.pr
   去掉 jittor 自己的帧）。kernel 名按 C++ 反修饰显示。
 - `export_chrome_trace` 写 Kineto 格式（顶层键、`cpu_op`/`user_annotation`/`kernel`/`gpu_memcpy`、
   ac2g 流、`[memory]` 瞬时事件、`GPU n`/`stream n` 元数据、kernel 的 grid/block/寄存器/共享内存），
-  TensorBoard profiler 插件、HTA、Perfetto 按 PyTorch trace 读；`export_stacks` 写火焰图格式；
+  TensorBoard profiler 插件、HTA、Perfetto 按 PyTorch trace 读；`export_stacks` 写火焰图格式
+  （融合算子每个成员一条调用栈，平分它的值）；
   `export_memory_timeline` 写 `[times, sizes]`（json/json.gz）或 matplotlib 图（html），版式与
   PyTorch 相同，但 jittor 不把分配分成参数/梯度/激活，全部记在 "Unknown"。
 - 没有的：Python 函数调用事件（`python_function`）、CUDA runtime API 事件、`with_flops`、
@@ -181,7 +182,8 @@ Torch 兼容模式下 `torch.cuda.memory._record_memory_history/_snapshot/_dump_
   `jt.profiling.record_function` 的区间写进 `external_annotations`。
 - **栈**：惰性执行下，块分配发生在执行时，那一刻的 Python 栈是触发执行的那行。所以张量块记的是
   **建出它的算子时**的完整 Python 栈（最内层在前）；库的工作区记到正在跑的算子；释放和执行器外的
-  分配记当下的栈（持有 GIL 时）。只有 Python 帧，没有 C++ 帧（`stacks="all"` 与 `"python"` 相同）。
+  分配记当下的栈（持有 GIL 时）。算子在开始记录之前就建好、开始记录之后才执行时，它没有建算子时的栈，
+块记的是触发执行的那行。只有 Python 帧，没有 C++ 帧（`stacks="all"` 与 `"python"` 相同）。
 - **统计**：`memory_stats()` 有 `torch.cuda.memory_stats` 的全部键——分配、段、活跃与
   inactive split 的块数和字节、保留与请求字节，按 all/small/large 池各给 current/peak/
   allocated/freed，以及 `num_alloc_retries`、`num_ooms`、`num_device_alloc/free`。计数在池的

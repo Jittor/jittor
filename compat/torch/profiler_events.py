@@ -315,17 +315,21 @@ class EventList(list):
                 "self_privateuse1_time_total"]
 
     def export_stacks(self, path, metric):
-        """One ``outer;...;inner value`` line per event with a stack, for flame graphs."""
+        """One ``outer;...;inner value`` line per event with a stack, for flame
+        graphs. A fused operator has one call stack per line fused into it,
+        and they share its value equally."""
         if metric not in self.supported_export_stacks_metrics():
             raise ValueError("metric should be one of: " + str(self.supported_export_stacks_metrics()))
         translate = str.maketrans(" ;\t\n", "____")
         with open(path, "w") as f:
             for event in self:
-                if event.stack:
-                    value = getattr(event, _sort_attr(metric))
-                    if int(value) > 0:
-                        frames = ";".join(entry.translate(translate) for entry in reversed(event.stack))
-                        f.write("%s %d\n" % (frames, int(value)))
+                chains = getattr(event, "_call_stacks", None) or ([event.stack] if event.stack else [])
+                value = int(getattr(event, _sort_attr(metric))) if chains else 0
+                for i, chain in enumerate(chains):
+                    share = value // len(chains) + (1 if i < value % len(chains) else 0)
+                    if share > 0:
+                        frames = ";".join(entry.translate(translate) for entry in reversed(chain))
+                        f.write("%s %d\n" % (frames, share))
 
     def key_averages(self, group_by_input_shapes=False, group_by_stack_n=0,
                      group_by_overload_name=False):
@@ -564,22 +568,34 @@ def _demangle(name):
     return _demangled[name]
 
 
-def _op_stack(result, record, strings):
-    """The operator's stack entries. A fused operator was built on as many
-    lines as it has members: their innermost frames first, in member order,
-    then the callers of the last."""
+def _op_stacks(result, record, strings):
+    """The call stacks that built the operator, as entry lists: one, or for a
+    fused operator one per member (distinct, in member order)."""
     stacks = result.stacks
     if stacks is None:
         return []
-    root = _stack_entries(stacks[record["stack"]]) if 0 < record["stack"] < len(stacks) else []
-    if record["stacks"] <= 0:
-        return root
+    ids = [record["stack"]]
+    if record["stacks"] > 0:
+        ids = [int(id) for id in strings[record["stacks"]].split(",")]
+    chains = []
+    for id in ids:
+        entries = _stack_entries(stacks[id]) if 0 < id < len(stacks) else []
+        if entries and entries not in chains:
+            chains.append(entries)
+    return chains
+
+
+def _merged_stack(chains):
+    """An event's ``stack``: a fused operator was built on as many lines as it
+    has members, so their innermost frames come first, in member order, then
+    the callers of the last."""
+    if len(chains) < 2:
+        return list(chains[0]) if chains else []
     lines = []
-    for id in strings[record["stacks"]].split(","):
-        entries = _stack_entries(stacks[int(id)]) if 0 < int(id) < len(stacks) else []
-        if entries and entries[0] not in lines:
-            lines.append(entries[0])
-    return lines + [entry for entry in root[1:] if entry not in lines]
+    for chain in chains:
+        if chain[0] not in lines:
+            lines.append(chain[0])
+    return lines + [entry for entry in chains[-1][1:] if entry not in lines]
 
 
 def _stack_entries(frames):
@@ -598,9 +614,11 @@ def _build_events(result, use_device, record_shapes, with_stack, profile_memory)
     compiles = []
     for record in result.op_records:
         shapes = _input_shapes(strings[record["shapes"]]) if record_shapes and record["shapes"] > 0 else []
-        stack = _op_stack(result, record, strings) if with_stack else []
+        chains = _op_stacks(result, record, strings) if with_stack else []
         event = FunctionEvent(record["seq"], strings[record["name"]], us(record["t_start"]),
-                              us(record["t_end"]), DeviceType.CPU, shapes, stack, use_device)
+                              us(record["t_end"]), DeviceType.CPU, shapes, _merged_stack(chains),
+                              use_device)
+        event._call_stacks = chains
         event._built_in = record["range"]
         host.append(event)
         if record["compile_ns"]:
@@ -615,6 +633,7 @@ def _build_events(result, use_device, record_shapes, with_stack, profile_memory)
                               stack=list(op.stack) if op is not None else [], use_device=use_device)
         event._built_in = -1
         event._compiles = op
+        event._call_stacks = list(op._call_stacks) if op is not None else []
         host.append(event)
     for op, record in compiles:
         start = us(record["t_compile"])

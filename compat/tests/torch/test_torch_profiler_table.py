@@ -9,6 +9,7 @@ its kernels') and the text against PyTorch 2.11's layout.
 """
 
 import gzip
+import inspect
 import json
 import os
 import re
@@ -111,8 +112,8 @@ class TestTorchProfilerTable(unittest.TestCase):
         x = torch.randn(64, 64, device="cuda")
         torch.cuda.synchronize()
         with profile(activities=[ProfilerActivity.CPU], with_stack=True) as prof:
-            a = (x * 0.4142135)   # a constant no other test uses
-            b = a - 0.7320508
+            a = (x * 0.4142135); first = inspect.currentframe().f_lineno   # a new constant
+            b = a - 0.7320508; second = inspect.currentframe().f_lineno
             b.exp().sum().item()
         events = prof.events()
         compiles = [e for e in events if e.name == "jit_compile"]
@@ -131,6 +132,16 @@ class TestTorchProfilerTable(unittest.TestCase):
         self.assertTrue(fused)
         here = [s for s in fused[0].stack if os.path.basename(__file__) in s]
         self.assertGreaterEqual(len(here), 2, fused[0].stack)
+        # For a flame graph each of those lines is its own call stack, not a
+        # caller of the other.
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "stacks.txt")
+            prof.export_stacks(path, "self_cpu_time_total")
+            lines = open(path).read().splitlines()
+        marks = ["(%d):" % first, "(%d):" % second]
+        self.assertTrue(any(marks[0] in line for line in lines), lines)
+        self.assertTrue(any(marks[1] in line for line in lines), lines)
+        self.assertFalse([line for line in lines if marks[0] in line and marks[1] in line], lines)
 
     def test_the_table_is_pytorchs(self):
         averages = self.prof.key_averages()
