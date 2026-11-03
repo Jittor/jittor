@@ -124,7 +124,7 @@ ABI or device correctness**: configure the SDK on the target machine, set `JT_BA
 CPU fallback in the suite that supports that assertion, and test ordinary computation, extension
 loading and failure propagation before claiming hardware support. For what to run on each
 backend see
-[`agent/manuals/deferred-hardware.md`](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/manuals/deferred-hardware.md).
+[historical record](https://github.com/Jittor/jittor/blob/3679de22c02c83b982432a0e1bdb3da148411c50/agent/manuals/deferred-hardware.md).
 
 ## Runtime resources
 

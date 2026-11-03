@@ -41,7 +41,7 @@ CPU-only 是**另一个缓存分区**（路径里没有 `cu12.x` 段），核心
 `nvcc_path` 的 CUDA 轮**，两轮都绿才算完。
 
 缓存目录按 checkout 路径（`jittor_path_key`）、`cache_name` 与构建配置指纹（`cfg*`）分区，
-不再带分支名；改源码只触发 `cache_compile` 的增量重编。缓存维护遵循 [环境规则](../../manuals/environment.md)；空间不足时先确认归属与活跃进程，
+不再带分支名；改源码只触发 `cache_compile` 的增量重编。缓存维护遵循 [隔离验证环境](../isolated-validation/SKILL.md)；空间不足时先确认归属与活跃进程，
 不要以固定体积阈值删除仍被使用的缓存。
 
 ## 4. 改 `src/utils` 后的第一次运行必然"失败"
@@ -516,7 +516,7 @@ taskset -c $CORES python repro.py
 
 基线绿 + 自己红 = 分支引入的回归，接着 `git log -- <相关文件>` 逐个提交读**说明**
 （不是 diff）：说明里会写「我把 X 从 A 改成了 B」，而回归通常就是那句 B 的副作用。
-基线也红 = 陈年缺陷，记入 `agent/manuals/known-issues.md`（或开 GitHub issue），别自己扛。
+基线也红 = 陈年缺陷，记入 [GitHub issue](https://github.com/Jittor/jittor/issues)（或开 GitHub issue），别自己扛。
 
 **`PYTHONPATH` 那一行不能省**（见 §1）：少了它你在拿主树的代码打主树的分。
 

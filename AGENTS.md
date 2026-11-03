@@ -6,18 +6,15 @@
 不得用旧本地代码覆盖远端更新。禁止通过丢弃改动或自动 stash 清场来同步。整合期间冻结同一工作树的
 测试与协作者写入；同步前的结果保留原基线，按实际变更复验受影响范围。
 
-## Start Here
+## 按任务查阅
 
-开始任务前依次阅读：
+直接按当前任务查阅[开发文档](docs/development/index.md)或[技能目录](agent/README.md)，
+不再要求依次阅读协作手册和项目上下文。同步、缓存、验证与提交规则只在本文件维护。
 
-1. [`agent/manuals/collaboration.md`](agent/manuals/collaboration.md)：协作、验证和 JIT 并发规则。
-2. [`agent/skills/jittor-dev-context/SKILL.md`](agent/skills/jittor-dev-context/SKILL.md)：上下文入口。
-3. [`agent/manuals/project-context.md`](agent/manuals/project-context.md)：当前状态和主题索引。
-4. 与任务相关的架构文档、已知问题和既有结果报告。
-
-任务、状态与交接记录在 GitHub issue 与 PR 中，验证证据写进 PR 描述；等待硬件验收的事项记在
-[`agent/manuals/deferred-hardware.md`](agent/manuals/deferred-hardware.md)，缺陷与限制记在
-[问题总账](agent/manuals/known-issues.md)。不在 agent/ 下另建看板或结果树。
+任务、缺陷、待硬件验收事项与验证结果记在 GitHub issue/PR。
+既有的[问题记录](https://github.com/Jittor/jittor/blob/3679de22c02c83b982432a0e1bdb3da148411c50/agent/manuals/known-issues.md)和
+[硬件验收记录](https://github.com/Jittor/jittor/blob/3679de22c02c83b982432a0e1bdb3da148411c50/agent/manuals/deferred-hardware.md)保留在固定提交中，
+未因文档清理而关闭或重新验收。涉及其中条目时，按最新源码复现并在 issue/PR 记录后续处置。
 
 ## Working Method
 
@@ -30,13 +27,13 @@
 - 不使用宽泛异常捕获隐藏安装、注册、编译或后端错误。
 - 接入或验证下游 Torch 生态库（新库对拍、生态门禁 case、独立 adapter 新增或修改）
   按 [`agent/skills/downstream-library-adaptation/SKILL.md`](agent/skills/downstream-library-adaptation/SKILL.md) 执行：先按其三行判据分流到
-  jittor 核心、`jittor.compat.torch` 或 adapter，再按其 device 阶梯和准入清单验收。
+  jittor 核心、`jittor.compat.torch` 或 adapter，再按所声明的设备与功能范围验证。
   不在该流程外新增 adapter。下游实现和专属测试在 `JittorEcosystem` 的独立仓库维护；
   主仓不保留 `adapters/` 目录；生态仓库入口见根 README。
 
 ## Repository Boundary
 
-- 主仓库只保存源码、测试、公开文档、`agent/` 协作文档和可复用工具。
+- 主仓库只保存源码、测试、公开文档、`agent/` 技能和可复用工具。
 - 独立实验、下游 checkout 和大体积产物放在 `$JITTOR_LAB_ROOT/<topic>/`。
 - `HOME`、`JITTOR_HOME`、`TMPDIR`、模型缓存、编译缓存和原始日志放在
   `$JITTOR_LAB_ROOT/_state/<topic>/<run>/`。
@@ -48,10 +45,10 @@
 
 ## Agent 文档边界
 
-- `agent/` 只维护主仓核心、后端和通用 compat 的协作入口与可复用方法，不为每个下游库复制 skill、安装手册或支持表。
+- `agent/` 只保留 `README.md` 技能目录与 `skills/` 实用技能，不再建立协作手册、项目上下文或任务清单。
 - 下游专属流程在 `JittorEcosystem` 对应仓库维护；主仓只保留统一的问题分流规则。
 - 仍被主仓门禁调用的生态验证脚本位于 `tools/ecosystem/`，性能探针位于 `benchmarks/`；不要将它们藏在逐库技能目录中，也不要将工具存在视为支持验收。
-- 上下文页只做索引；未解决缺陷与硬件义务各维护一处，历史执行记录通过 Git 和 issue/PR 查询。
+- 协作规则在根 `AGENTS.md` 维护；问题状态与执行记录使用 GitHub issue/PR。
 
 ## 单测分层
 
@@ -103,10 +100,6 @@ JITTOR_TORCH_SHIM=1 PYTHONPATH=python python -m pytest -q tests/structure
 - 长期机制说明放在 `docs/notes/`，仓库布局、源码架构、测试体系与已知问题放在
   `docs/development/`，研究提案放在 `docs/project/research/`。仓库不保留任务看板、计划或交接
   这类过程文档。
-- [`agent/manuals/project-context.md`](agent/manuals/project-context.md) 只做当前状态索引；
-  环境规则与问题总账分别维护在
-  [`agent/manuals/environment.md`](agent/manuals/environment.md) 和
-  [`agent/manuals/known-issues.md`](agent/manuals/known-issues.md)。
 - 执行记录、阶段性验证与测速结论写入 GitHub issue/PR，不在 `docs/` 新建日期命名文档、
   结果目录或演示产物。历史报告通过固定提交引用；原始日志、缓存、二进制和 benchmark
   数据留在仓库外。可复用机制与操作说明按主题维护。

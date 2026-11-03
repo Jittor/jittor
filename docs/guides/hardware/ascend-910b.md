@@ -225,7 +225,7 @@ MaxDim/MinDim，反向把上游梯度散射到选中的第一个下标；当前�
 与独立 NumPy 参考吻合。重新验证需要设备驻留，且守卫内的计算回退尝试为零。
 
 可执行证据与退出条件见
-[活跃问题总账](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/manuals/known-issues.md)。
+[历史记录](https://github.com/Jittor/jittor/blob/3679de22c02c83b982432a0e1bdb3da148411c50/agent/manuals/known-issues.md)。
 
 ## 用 Transformers 跑 Qwen3-8B
 

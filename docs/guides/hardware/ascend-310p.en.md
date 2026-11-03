@@ -116,7 +116,7 @@ conversion may increase device memory usage.
   this is a scheduler-layer defect after the `setitem_inplace` graph optimization packs the
   gradient into a zero base, unrelated to ACL kernels. The public path (`GetItemACL`) has
   been worked around; the native op path is declared as an expected failure in tests, see
-  `agent/manuals/known-issues.md` KI-BACKEND-022.
+  [historical record](https://github.com/Jittor/jittor/blob/3679de22c02c83b982432a0e1bdb3da148411c50/agent/manuals/known-issues.md) KI-BACKEND-022.
 - bool-mask `where`/`masked_fill` silently have no effect on 310P; paths involving
   non-finite values have switched to `nonzero`+`IndexPutImpl`.
 - 310P makes no training claims: missing backward operators are filled in with composite

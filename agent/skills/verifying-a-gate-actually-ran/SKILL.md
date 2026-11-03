@@ -627,7 +627,7 @@ fuser -v "$JITTOR_HOME/.cache/jittor/jittor.lock" 2>&1
    pass，但 `src/codegen/opt/pass_manager.cc` 里它排在 `AtomicTunerPass` 之后，读一眼就能排除；真正的原因
    是 CUDA 全归约的快路径（`backends/cuda/kernels/nn/full_reduce_cuda.py`）让 `x.sum()` 不再进融合算子 JIT。
    `$JITTOR_HOME` 下 `jit/` 目录的文件名带算子键，看有没有对应的 kernel 族比读断言快得多。
-5. 定位到就停手：把归因写进对应的 GitHub issue/PR，真实缺陷记入 `agent/manuals/known-issues.md`。
+5. 定位到就停手：把归因写进对应的 GitHub issue/PR，真实缺陷记入 [GitHub issue](https://github.com/Jittor/jittor/issues)。
 
 **一次正确的优化可以让一条测试静默失去意义**：给热路径装快路径、绕过某个 pass 时，去 grep 谁在测被绕开的
 那条路径——测试不会因为它测的路径消失而变红，只会变得没有意义。同一类的活口：`SharedReducePass::run()`

@@ -30,7 +30,7 @@ description: 将下游问题分流到 Jittor 核心、通用 Torch 兼容层或 
 5. 下游支持表只更新实际执行通过的功能、规格、版本和设备，引用修复提交与验证证据。
 
 上游 checkout、模型、日志和编译状态放在外部 `JITTOR_LAB_ROOT`，目录与并发规则见
-[环境手册](../../manuals/environment.md)。不要把外部 checkout 或手动补丁复制进主仓。
+[隔离验证环境](../isolated-validation/SKILL.md)。不要把外部 checkout 或手动补丁复制进主仓。
 
 ## 什么证据能支持什么结论
 
@@ -57,6 +57,6 @@ description: 将下游问题分流到 Jittor 核心、通用 Torch 兼容层或 
 [`tools/ecosystem/`](../../../tools/ecosystem)，其存在不代表对应库已经通过验收。
 新增库的专属用例和执行流程放在生态仓库，不继续向主仓扩充逐库操作手册。
 
-任务和运行证据写入 GitHub issue/PR；主仓未解决的核心/compat 缺陷记录在
-[问题总账](../../manuals/known-issues.md)，待设备验证记录在
-[硬件验收清单](../../manuals/deferred-hardware.md)。不在 `agent/` 维护第二份支持矩阵或运行历史。
+任务、核心/compat 缺陷、待设备验证与运行证据都记录在 GitHub issue/PR。
+旧问题的固定来源见根 [AGENTS.md](../../../AGENTS.md)，清理文档不改变未解决状态。
+不在 `agent/` 维护第二份支持矩阵或运行历史。

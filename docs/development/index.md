@@ -91,10 +91,10 @@ known-issues/parallel-compiler-segfault
 
 ## 记录结果与缺陷
 
-运行结果、提交、命令、设备和限制写入对应 GitHub issue/PR。
-[问题总账](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/manuals/known-issues.md)维护活跃缺陷；
-[待硬件验收项](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/manuals/deferred-hardware.md)维护未完成的设备验证。
-开发文档只保留可复用机制，不再维护另一份运行日志。
+任务、缺陷、待硬件验收与实际执行结果在 GitHub issue/PR 维护。
+协作规则见 [AGENTS.md](https://github.com/Jittor/jittor/blob/2.0-refactor/AGENTS.md)，
+按任务使用[技能目录](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/README.md)。
+旧问题和硬件验收记录通过该规则页的固定提交链接查阅，未复验不等于已解决。
 
 ## 兼容架构与贡献流程
 

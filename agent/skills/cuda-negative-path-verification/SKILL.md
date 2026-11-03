@@ -188,4 +188,4 @@ cuTT 不走它，只是没人编过所以没人看见）；`cutt_transpose` 的�
 记录本次环境实际缺少的设备、驱动或 SDK，不从机器类型推断已安装的后端库。
 在已分配的设备上运行本页自检与 `get_library_ops(..., load=True)`，保存失败原因；
 没有目标设备时明确记为未执行。等待硬件的验收项写入
-[`deferred-hardware.md`](../../manuals/deferred-hardware.md)。
+[GitHub issue](https://github.com/Jittor/jittor/issues)。
