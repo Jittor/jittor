@@ -37,8 +37,8 @@ class TestModelSharedWeights:
 
         model = Model().to(device)
         with torch.no_grad():
-            model.a.weight.copy_(torch.arange(16, dtype=torch.float32).reshape(4, 4))
-            model.a.bias.copy_(torch.arange(4, dtype=torch.float32))
+            model.a.weight.copy_(torch.arange(16, dtype=torch.float32, device=device).reshape(4, 4))
+            model.a.bias.copy_(torch.arange(4, dtype=torch.float32, device=device))
         path = str(tmp_path / "model.safetensors")
         safetensors_torch.save_model(model, path)
 
@@ -48,7 +48,9 @@ class TestModelSharedWeights:
 
         fresh = Model().to(device)
         missing, unexpected = safetensors_torch.load_model(fresh, path, device=device)
-        assert missing == [] and unexpected == []
+        # load_state_dict reports incompatible keys as an empty set plus list;
+        # the contract is that nothing is missing and nothing is unexpected.
+        assert not missing and not unexpected
         assert fresh.b is fresh.a
         assert torch.equal(fresh.a.weight, model.a.weight)
         assert torch.equal(fresh.a.bias, model.a.bias)
