@@ -46,6 +46,9 @@ CUDA12_COMPONENTS = (
     ("cuda_runtime", "nvidia-cuda-runtime-cu12", "==12.2.140", "nvidia/cuda_runtime"),
     ("cublas", "nvidia-cublas-cu12", "==12.2.5.6", "nvidia/cublas"),
     ("cuda_nvrtc", "nvidia-cuda-nvrtc-cu12", "==12.2.140", "nvidia/cuda_nvrtc"),
+    # Accepted at runtime from 8.9.7, but jittor[cuda12] asks for >=9: the
+    # fused attention's frontend (nvidia-cudnn-frontend 1.30) builds no graph
+    # against 8.x, so that path would decline on every call. See pyproject.toml.
     ("cudnn", "nvidia-cudnn-cu12", ">=8.9.7,<10", "nvidia/cudnn"),
     ("cufft", "nvidia-cufft-cu12", "==11.0.8.103", "nvidia/cufft"),
     ("curand", "nvidia-curand-cu12", "==10.3.3.141", "nvidia/curand"),

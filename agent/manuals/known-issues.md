@@ -1,8 +1,8 @@
 # Known-Issues Ledger
 
 - Status: Maintained
-- Last reviewed: 2026-11-02
-- Baseline: `013bc35bdeb3d460c269c85dc9781e841731764e`; per-entry verification scopes below
+- Last reviewed: 2026-11-03
+- Baseline: `d8e30464c`; per-entry verification scopes below
 - Owner: Jittor core maintainers
 - Review when: an entry is fixed or narrowed, a strict expected failure
   XPASSes, a new defect is reproduced, or at quarterly maintenance
@@ -36,7 +36,7 @@ followed by these fields, in this order:
 
 Keep an entry to what a reader needs to reproduce, avoid and close the problem.
 Investigation narratives, refuted attempts and before/after tables belong in the
-commit message, the pull request, or a dated `docs/results/` report; an entry
+commit message or the GitHub issue/pull request; an entry
 may name one refuted attempt when repeating it is the likely mistake.
 
 ## Ids
@@ -51,8 +51,7 @@ may name one refuted attempt when repeating it is the likely mistake.
   later entry was given a fresh id.)
 - Code comments, test messages and documents cite the id. The change that
   deletes or renumbers an entry also rewords those citations
-  (`git grep -n "KI-<AREA>-<NNN>"`); dated `docs/results/` reports may keep a
-  historical mention.
+  (`git grep -n "KI-<AREA>-<NNN>"`); archived reports remain in Git history.
 
 ## Closing an entry
 
@@ -116,6 +115,53 @@ workaround.
 - Exit condition: record calls without replacing anything (a `sys.setprofile`
   hook keyed by code object observes the same calls), delete the exclusion list
   and re-take the Torch baseline.
+
+## KI-TEST-019: ten native CPU oracle cases fail on the pre-cleanup baseline
+
+- Severity: Medium (the native oracle gate is not green).
+- Status: Open; confirmed 2026-11-03 on clean `0a23c2410cf3571e15200466b4caf4019f90d8cf`
+  and the cleanup working tree based on `6c621be80e17cb2f968121bb30b6be278e7a3e72`.
+- Owner: test infrastructure, native operators and compatibility maintainers.
+- Symptom: with Python 3.11.18, NumPy 1.26.4 and independent CPU Torch 2.7.1+cpu,
+  ten exact nodeids fail on both trees:
+  `tests/distributed/test_process_store.py::TestProcessGroupOwnership::test_native_and_torch_share_classes_and_legacy_pickle`;
+  `tests/core/test_var.py::TestVarFunctions::test_norm`;
+  `tests/nn/test_conv_transpose.py::TestConvTranspose::{test,test_function}`;
+  `tests/ops/test_unique.py::TestSparse::{test_unique,test_unique_dim}`;
+  `tests/type/test_complex.py::TestComplexLinalg::{test_complex_matmul,test_complex_matmul_batch}`;
+  `tests/type/test_complex.py::TestTensordot::{test_complex_tensordot_numberdim,test_complex_tensordot_tupledim}`.
+- Cause: respectively, a child imports genuine Torch before requesting the shim;
+  float32 L1 reduction relative differences around `1.6e-6` exceed `1e-7`;
+  a convolution log-count assertion sees zero after numerical checks pass, and
+  the functional case passes `bias=False` into a guard expecting a tensor or
+  `None`; old positional `unique` arguments return two values where tests unpack
+  three; legacy `ComplexNumber` reaches matmul shape validation without `ndim`.
+  The log-count symptom overlaps [KI-TUNER-001](#ki-tuner-001-the-matmul-and-conv-relays-never-fire-so-a-hand-written-meta-op-product-runs-as-a-generic-kernel);
+  it is not a second independently established tuner defect. All five test files
+  are unchanged between the two trees. These failures predate the cleanup.
+- Workaround: keep these cases reported as failures; do not replace the oracle
+  with the shim or loosen numerical checks without an explicit error analysis.
+  Use isolated process modes and current public argument conventions when
+  constructing new comparisons; legacy complex-wrapper coverage remains open.
+- Evidence: a serial retry of 245 original failed/error nodeids produced
+  **187 passed, 48 skipped, 10 failed** in 764.60 s; the former random-concat
+  timeout passed. The same ten failures on the clean baseline reproduced in
+  70.97 s. The skip count is not passing numerical evidence.
+  External, unversioned evidence lives under
+  `$JITTOR_LAB_ROOT/_state/cleanup-implementation/`: `native-retry.log`,
+  `native-baseline.log`, `native-retry-nodeids.txt`, `run_native_retry.py` and
+  `run_native_baseline.py`. Commands were `native-retry-venv/bin/python
+  run_native_retry.py` and `native-retry-venv/bin/python run_native_baseline.py`
+  from that state directory; each invokes `python -m pytest -q --timeout=900`
+  with exact nodeids, CPU-only flags, one runtime thread and serial compilation.
+  Both use explicit `REAL_TORCH_SITE` from that environment; the baseline also
+  sets `PYTHONPATH` to its isolated checkout's `python/`. Captured source paths
+  confirm the baseline was imported. Logs are supporting local evidence, not
+  required repository inputs; the listed nodeids and environment reproduce it.
+- Exit condition: resolve and independently verify all ten contracts against
+  genuine CPU Torch, preserving numerical and gradient coverage; remove this
+  entry only when the exact cases pass without hiding failures or substituting
+  the candidate as its own oracle. Accelerator support requires separate runs.
 
 ## KI-TEST-012: the PR smoke tier takes about 390 s, not under five minutes
 
@@ -290,19 +336,23 @@ workaround.
 
 - Severity: Limitation (performance)
 - Status: Open; measured 2026-09-06 on an sm_89 GPU with TF32, exclusive card
-- Owner: code generation, with the Torch-compat division in KI-COMPAT-009
+- Owner: code generation
 - Symptom: the elementwise class of a `large_diffusers_unet2d` step was 3.37 ms
   (nsys) / 3.29 ms (profiler), 1086 GB/s, roofline ratio 0.84 -- already at the
   measured copy bandwidth -- against PyTorch's 3.04 ms.
 - Cause: the positive excess of the 49 fused kernels was about 0.59 ms and none
-  of it is code generation: the float64 scalar division of KI-COMPAT-009
-  (0.55 ms), a bare `transpose` (`src/ops/composite/transpose_op.cc`, 0.10 ms),
-  and about 60 kernels that move almost no data (0.23 ms of launch latency).
+  of it is code generation: 0.55 ms was the float64 scalar division that
+  KI-COMPAT-009 carried -- that entry closed on 2026-11-01 by dividing in the
+  tensor's dtype (see [历史记录](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-11-01-python-float-division.md)), so
+  this 0.55 ms needs re-measuring rather than assuming -- 0.10 ms a bare
+  `transpose` (`src/ops/composite/transpose_op.cc`), and 0.23 ms of launch
+  latency across about 60 kernels that move almost no data.
 - Workaround: none.
 - Evidence: `agent/skills/cuda-elementwise-bandwidth-roofline/` (measurement
   scripts, nsys and profiler cross-checked, measured copy roofline).
-- Exit condition: re-measure after KI-COMPAT-009 is decided; close when the
-  class is no slower than PyTorch's on the same step.
+- Exit condition: re-measure the class on the same step now that the division
+  no longer widens; close when it is no slower, or narrow the entry to what
+  remains.
 
 ## KI-TUNER-001: the matmul and conv relays never fire, so a hand-written meta-op product runs as a generic kernel
 
@@ -375,7 +425,7 @@ workaround.
   supported through `aclnnProd`/`aclnnProdDim`.
 - Evidence: [`reduce_dtypes.py`](../../tests/opinfo/definitions/reduce_dtypes.py),
   [device parity](../../tests/backends/parity/test_device_parity.py),
-  [Ascend 910B validation](../../docs/results/2026-08-28-ascend-910b-validation.md).
+  [Ascend 910B validation](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-08-28-ascend-910b-validation.md).
 - Exit condition: every affected dtype executes and matches the CPU reference on
   a real NPU, turning the skips into passes.
 
@@ -389,7 +439,7 @@ workaround.
 - Workaround: run this operation on a backend with a maintained `atan2` kernel;
   do not mask the process failure with a broad CPU fallback.
 - Evidence: [`pointwise_binary.py`](../../tests/opinfo/definitions/pointwise_binary.py),
-  [Ascend 910B validation](../../docs/results/2026-08-28-ascend-910b-validation.md).
+  [Ascend 910B validation](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-08-28-ascend-910b-validation.md).
 - Exit condition: the float32 OpInfo reference and a focused crash reproducer
   pass repeatedly on a real NPU without an expected skip.
 
@@ -403,7 +453,7 @@ workaround.
   native call.
 - Workaround: execute `irfft` on a backend with a maintained complex FFT path.
 - Evidence: [`fft.py`](../../tests/opinfo/definitions/fft.py),
-  [Ascend 910B validation](../../docs/results/2026-08-28-ascend-910b-validation.md).
+  [Ascend 910B validation](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-08-28-ascend-910b-validation.md).
 - Exit condition: forward values match NumPy and the operation exits within the
   maintained timeout on repeated real-NPU runs.
 
@@ -420,7 +470,7 @@ workaround.
   was not measurable on memory-bound 16M-element `divide`/`sqrt`/`exp`/`log`
   (0.1-0.8%, inside the control's spread); the compute-bound cost is unmeasured.
 - Evidence: `tests/backends/parity/test_subnormal_contract.py` (both policies
-  must differ for it to pass); [numerics contract](../../docs/notes/numerics-contract.md).
+  must differ for it to pass); [numerics contract](../../docs/notes/numerics/numerics-contract.md).
 - Exit condition: delete only if the default changes; that decision needs a
   compute-bound cost measurement with a pinned fusion shape, and the contract
   test and the numerics page change with it.
@@ -467,11 +517,11 @@ workaround.
   their own lifetime. The full acceptance run still needs 910B3 evidence.
   The narrower 310P3 FP16 inference subset, shared launch path and attributes
   have device evidence in the
-  [Qwen3 performance report](../../docs/results/2026-10-12-qwen3-ascend310p-performance.md);
+  [Qwen3 performance report](https://github.com/Jittor/jittor/blob/eecff5ce5aa0d02aba3a246fcfb5632596732b44/docs/results/2026-10-12-qwen3-ascend310p-performance.md);
   this does not validate the data-channel cache or close the 910B3 requirement.
 - Workaround: validate on hardware with `backend_fallback=error` and the
   fallback-count check before relying on an ACL operator.
-- Evidence: [`docs/development/acl-backend-contracts.md`](../../docs/development/acl-backend-contracts.md)
+- Evidence: [`docs/development/backends/acl-backend-contracts.md`](../../docs/development/backends/acl-backend-contracts.md)
   (migration order and the device acceptance command); host contracts under
   `tests/structure/backends/acl/`; the hardware run in
   [deferred-hardware.md](deferred-hardware.md) (Ascend 910B3 single card).
@@ -960,7 +1010,7 @@ workaround.
   DSA side queue, while `aclnnDropout` serialises on the compute stream
   and made `bert_base_train` 8% slower (see that entry's follow-up).
   The separate FP16
-  [310P3 Qwen3 report](../../docs/results/2026-10-12-qwen3-ascend310p-performance.md)
+  [310P3 Qwen3 report](https://github.com/Jittor/jittor/blob/eecff5ce5aa0d02aba3a246fcfb5632596732b44/docs/results/2026-10-12-qwen3-ascend310p-performance.md)
   validates native frontend indexing/cat dispatch, explicit packed weights and
   attention changes. That measured speedup does not close this entry's broader
   910B3 workload gaps.
@@ -1121,7 +1171,7 @@ workaround.
   eight cases failed on clean `659e6a47f`; their original scope is retained.
   Before/after logs are unversioned under
   `$JITTOR_LAB_ROOT/_state/generative-vision-310p/logs/oct29-argsort-{before,after}.log`;
-  see the [four-model vision report](../../docs/results/2026-10-29-stock-vision-ascend310p.md).
+  see the [four-model vision report](https://github.com/Jittor/jittor/blob/eecff5ce5aa0d02aba3a246fcfb5632596732b44/docs/results/2026-10-29-stock-vision-ascend310p.md).
 - Exit condition: the original eight cases complete on real 910B3, including
   the declared float64 policy, with device residency and zero fallback;
   unsupported stable sorting stays explicitly rejected rather than silently ignored.
@@ -1139,7 +1189,7 @@ workaround.
   `numpy.floor_divide` before relying on the result.
 - Evidence: [`test_floor_divide.py`](../../tests/ops/test_floor_divide.py),
   [`sample_floor_divide`](../../tests/opinfo/definitions/pointwise_binary.py),
-  [Ascend 910B validation](../../docs/results/2026-08-28-ascend-910b-validation.md).
+  [Ascend 910B validation](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-08-28-ascend-910b-validation.md).
 - Exit condition: the same fixed-vector and OpInfo coverage passes on a real
   ROCm device.
 
@@ -1210,7 +1260,7 @@ workaround.
   NaN values against NumPy before relying on comparison masks.
 - Evidence: [`test_nan_self_comparisons_across_dtypes`](../../tests/debug/test_kernel_traps.py),
   [`test_float_comparisons_with_nan`](../../tests/ops/test_fusion_correctness.py),
-  [Ascend 910B validation](../../docs/results/2026-08-28-ascend-910b-validation.md).
+  [Ascend 910B validation](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-08-28-ascend-910b-validation.md).
 - Exit condition: pass the remaining dtype matrix on a real NPU and the complete
   matrix on a real ROCm device.
 
@@ -1256,7 +1306,7 @@ workaround.
   records five public cases and all six operator/method/function spellings.
   `cpu-ne-scalar/` retains both raw candidates (178/192 exact), typed CPU and
   ambient-ACL CPU controls (210/210 exact), and the rejected timing experiment.
-  The [310P replay report](../../docs/results/2026-11-02-vision-ascend310p-replay.en.md)
+  The [310P replay report](https://github.com/Jittor/jittor/blob/eecff5ce5aa0d02aba3a246fcfb5632596732b44/docs/results/2026-11-02-vision-ascend310p-replay.en.md)
   distinguishes these scalar limits from accepted self-ne/placement fixes and
   reports the final default-scheduling performance controls.
   A minimal CPU reproduction, with an independently installed Torch interpreter
@@ -1274,11 +1324,39 @@ workaround.
 - Owner: dtype, autograd and linear-algebra maintainers
 - Symptom: CUDA complex `prod`, second-order complex autograd/JVP, complex128,
   native complex linear-algebra kernels, and some CUDA eig environments are not
-  supported; the calls refuse explicitly.
+  supported; the calls refuse explicitly. On Ascend, `jt.fft.rfft` lowers to a
+  fused `unary/imag` variant the ACL backend does not register, so the call
+  refuses (`unregistered fused operator variant: unary/imag`) instead of
+  computing on the device.
 - Workaround: none beyond the supported complex64 surface.
-- Evidence: [native complex dtype decision](../../docs/notes/complex-dtype.md).
+- Evidence: [native complex dtype decision](../../docs/notes/numerics/complex-dtype.md);
+  `tests/backends/acl/test_acl_indexing.py::test_acl_rfft_keeps_lazy_dft_constants_alive`
+  on Ascend 910B3 with CANN 9.0.0 (2026-10-28).
 - Exit condition: remove each sub-item only with focused CPU and accelerator
   tests for its operation and derivative order.
+
+## KI-AUTOGRAD-005: a `numpy_code` or `jt.code` gradient cannot be differentiated again
+
+- Severity: Limitation
+- Status: Limitation, confirmed 2026-10-29 on `4543b0f2b` plus the change that
+  made the `jt.code` case raise (it returned 0 before).
+- Owner: autograd maintainers
+- Symptom: a second derivative through an op whose backward is a numpy
+  callback or a `cpu_grad_src`/`cuda_grad_src` source raises "cannot
+  differentiate a ... gradient again". That includes max/min pooling, which
+  runs as a `jt.code` op by default, so a gradient penalty through
+  `jt.nn.max_pool2d` raises; `complex_pinv` and `complex_eig` have no
+  backward at all.
+- Cause: the backward is opaque user code; nothing says how its result
+  changes with its inputs (`torch.autograd.function.once_differentiable` is
+  the same contract).
+- Workaround: write the op as a `jt.Function` whose `grad` uses
+  differentiable jittor ops. For pooling, `jittor.pool.pool_use_code_op =
+  False` selects the reindex implementation, which differentiates twice.
+- Evidence: `tests/ops/test_code_op.py::TestCodeOp::test_second_derivative_through_a_code_gradient_raises`,
+  `tests/ops/test_numpy_code_op.py::TestCodeOp::test_second_derivative_through_a_numpy_code_gradient_raises`.
+- Exit condition: pooling's default path differentiates twice, and the
+  remaining callback ops either do or are documented as first-order only.
 
 ## KI-EXEC-002: a profile scope cannot measure work launched before it opened
 
@@ -1320,7 +1398,7 @@ workaround.
 - Evidence: `tests/backends/cuda/test_autotuning_isolation.py`,
   `tests/backends/cuda/test_auto_flush_graph_split.py` (disables autotuning so
   the band does not hide smaller errors);
-  [numerics contract](../../docs/notes/numerics-contract.md).
+  [numerics contract](../../docs/notes/numerics/numerics-contract.md).
 - Exit condition: the algorithm chosen for a shape does not depend on what else
   is resident (measure into a fixed-size scratch buffer, or key the cache on
   something stable); a regression sweeps `auto_flush_ops` and compares gradients,
@@ -1558,7 +1636,7 @@ workaround.
   only operators the process registered through `torch.library`; the
   compatibility layer synthesises no aten operators, so code that binds
   `torch.ops.aten.<name>` raises `AttributeError: torch.ops.aten has no op ...`.
-  The vLLM adapter (`adapters/jittor_adapters/vllm/aten_ops.py`, registered from
+  The vLLM adapter ([aten_ops.py](https://github.com/JittorEcosystem/jittor-vllm/blob/main/jittor_vllm/aten_ops.py), registered from
   its bootstrap when `vllm` is imported) registers `reshape` and `reshape.default`
   (forwarding to Jittor) and `_scaled_dot_product_flash_attention` /
   `_scaled_dot_product_efficient_attention`, which exist so module-scope bindings
@@ -1572,8 +1650,8 @@ workaround.
   in its adapter, structural ones forwarding to Jittor primitives and kernels
   Jittor lacks refusing with a clear error, as `aten_ops.py` does. Select a
   diffusion attention backend that does not call the refusing operators.
-- Evidence: `adapters/jittor_adapters/vllm/aten_ops.py`;
-  `adapters/jittor_adapters/vllm/bootstrap.py`.
+- Evidence: [aten_ops.py](https://github.com/JittorEcosystem/jittor-vllm/blob/main/jittor_vllm/aten_ops.py);
+  [bootstrap.py](https://github.com/JittorEcosystem/jittor-vllm/blob/main/jittor_vllm/bootstrap.py).
 - Exit condition: a general aten bridge in the compatibility layer (structural
   ops mapped to Jittor primitives, quantized and flash variants refused with a
   clear error), or a recorded decision that aten names are adapter-owned; then
@@ -1624,54 +1702,14 @@ workaround.
   covered by the passing constructor matrix. Raw probes are unversioned under
   `$JITTOR_LAB_ROOT/_state/tensor-alias-main-0fb/` and the independent
   `tensor-alias-independent-review` / `tensor-alias-unfreeze-review` states;
-  see the [constructor follow-up](../../docs/results/2026-10-15-size-factory-leaves.md#tensor-source-constructor-follow-up).
-- Follow-up: [recorded producer identity](../../docs/results/2026-10-16-recorded-grad-fn-freeze.md)
+  see the [constructor follow-up](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-15-size-factory-leaves.md#tensor-source-constructor-follow-up).
+- Follow-up: [recorded producer identity](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-16-recorded-grad-fn-freeze.md)
   fixes source-freeze grad_fn loss only; the independent lifecycle probe of 32 combinations
   still finds 17 differing combinations. Mutation guards and inherited flags stay open.
 - Exit condition: native view creation/mutation metadata and source-state
   propagation agree with independent Torch on CPU and each claimed accelerator,
   including absence of unintended accumulator activation. Preserve the existing
   old/new graph snapshots and storage/gradient contracts when adding this support.
-
-## KI-COMPAT-009: a float32 tensor divided by a Python float is computed in float64
-
-- Severity: Limitation (performance; the result is the float32 PyTorch gives)
-- Status: Open; a design decision is pending. Measured 2026-09-06 on an sm_89 GPU.
-- Owner: torch compatibility / tensor operators
-- Symptom: `x / 2.0` for a float32 `x` on CPU or CUDA casts `x` to float64,
-  divides by a float64 0-d array and casts back, to match PyTorch to the last
-  ulp. On GPUs whose FP64 rate is 1/64 of FP32 this is the largest single excess
-  in the fused elementwise class: about 0.55 ms of a diffusers UNet2D step
-  (every `ResnetBlock2D` ends in `/ self.output_scale_factor`); removing the
-  widening measured 3.29 -> 2.73 ms for that class (see KI-CODEGEN-004).
-- Cause: `use_wide` in the true-division path of
-  `compat/torch/installers/tensor/method_api.py` (float32 widens to float64,
-  float16/bfloat16 widen only to float32, ACL does not widen); the native
-  `_fast_binary` builds the same widened sequence bit for bit.
-- Workaround: multiply by the reciprocal (`x * (1 / s)`), which stays float32,
-  where 1-ulp agreement with PyTorch is not required.
-- Evidence: `compat/tests/torch/test_torch_compat_promotion.py`,
-  `compat/tests/torch/test_native_fast_paths.py`.
-- Exit condition: decide whether 1-ulp parity is worth FP64 on consumer GPUs (for
-  example widen only where FP64 is fast, or compute `x * (1/s)` with a
-  correction), update the promotion tests with the decision, and delete the entry.
-
-## KI-COMPAT-010: torchmetrics' classification and regression metrics fail under the Torch frontend on CUDA
-
-- Severity: Medium (an ecosystem library's core metrics do not run)
-- Status: Open; reproduced 2026-10-12 on CUDA with torchmetrics installed (the
-  gates do not install it, so the cases skip there)
-- Owner: torch compatibility maintainers
-- Symptom: `test_classification_metrics` dies in `reduce_op.cc` with "Reduce
-  dim out of range: requested dims [0,] for a 0-D var"; `test_regression_metrics`
-  fails to compile a fused operator; `test_torchmetrics_required_torch_ops`
-  reports a required op as unsupported.
-- Cause: not isolated; the first is a `dim=0` reduction of a 0-d tensor, which
-  torch accepts.
-- Workaround: none.
-- Evidence: `JITTOR_TORCH_SHIM=1 python -m pytest -q compat/tests/torch/test_torchmetrics_compat.py`
-  on a CUDA machine with torchmetrics.
-- Exit condition: the three cases pass on CUDA.
 
 ## KI-COMPAT-011: an RNN under the Torch frontend on CUDA does not run through cuDNN
 
@@ -1864,12 +1902,27 @@ workaround.
      `compat/tests/torch/test_stock_rms_norm_acl.py` covers the portable
      results, fast-path boundaries and explicit low-level rejection. Other
      widths and dtypes are not inferred from the rejected cases.
+  9. **Fused CrossEntropyLoss forward**: on the installed 310P/CANN 9.1.0
+     package, correctly widened int64 labels still reach an
+     `aclnnCrossEntropyLossGetWorkspaceSize` failure (161001; ascend310p is
+     not configured through the OpDef AddConfig). The provider currently
+     reaches this SDK route; no forward numerical or backward acceptance,
+     or verified workaround, follows from the int64-label repair. On
+     2026-11-03 the original 515 scoped ACL/CPU cases passed while the added
+     `tests/backends/acl/test_acl_codeop_gradients.py::TestACLCodeOpGradients::test_cross_entropy_forward_and_gradient`
+     failed before producing a loss. Its provider, runner and test match
+     upstream `56cd4b562`; retain that upstream label-width repair for 910B.
+     Evidence is unversioned
+     `$JITTOR_LAB_ROOT/_state/generative-vision-310p/pr-2026-11-03/npu-native.log`.
+     A fresh process running only that case fails with the same SoC rejection
+     and no preceding graph recording (`cross-entropy-fresh.log` in the same
+     directory); the earlier unrelated teardown message is not its diagnosis.
 - Also fixed along the way: `all_acl`/`any_acl` gained the `keepdims`
   parameter the public API added (was a signature regression on every
   NPU); `IndexPutImpl` runner now memcpys base->out itself so a
   `share_with`-aliased output cannot be mistaken for already-copied.
 - Review/expiry condition: re-run `tests/backends/acl/` on the 310P3 when
-  the CANN version changes; a new opp package may close items 3-8.
+  the CANN version changes; a new opp package may close items 3-9.
 
 ## KI-BACKEND-022: getitem integer-index backward can read uninitialized bytes when `setitem_inplace` packs the gradient
 
@@ -1923,7 +1976,7 @@ workaround.
   was refused by the tighter 1 MiB budget; precision and model math were
   unchanged. This is a measured configuration, not a default-path fix.
 - Evidence: The failed default run and successful scoped run are preserved
-  separately in the [310P optimization report](../../docs/results/2026-10-22-generative-vision-ascend310p-optimization.md),
+  separately in the [310P optimization report](https://github.com/Jittor/jittor/blob/eecff5ce5aa0d02aba3a246fcfb5632596732b44/docs/results/2026-10-22-generative-vision-ascend310p-optimization.md),
   including source identity, actual policy flags and the unversioned logs.
 - Exit condition: The original unhooked SDXL reproduction completes repeated
   fresh-process warm-up / timed generations under the default recording
@@ -1952,7 +2005,7 @@ workaround.
   `$JITTOR_LAB_ROOT/_state/generative-vision-310p/iteration-2026-10-27/index-select-oct29/`.
   `tests/backends/acl/test_acl_single_axis_gather.py` verifies legal indices
   and declined forms only; its passing count excludes the out-of-bounds
-  controls. See the [four-model vision report](../../docs/results/2026-10-29-stock-vision-ascend310p.md).
+  controls. See the [four-model vision report](https://github.com/Jittor/jittor/blob/eecff5ce5aa0d02aba3a246fcfb5632596732b44/docs/results/2026-10-29-stock-vision-ascend310p.md).
 - Exit condition: both public advanced Index and GatherV2 paths reject
   upper/lower out-of-bounds selectors, including mixed valid/invalid and
   strided inputs, on real ACL devices with zero fallback, while preserving
@@ -2014,7 +2067,7 @@ workaround.
   `$JITTOR_LAB_ROOT/_state/generative-vision-310p/iteration-2026-10-30/rtdetr/`.
   `argreduce-public` compares native/compat × max/min before/after and confirms
   unchanged values, zero signs and indices. See the
-  [310P vision follow-up](../../docs/results/2026-10-30-vision-ascend310p-optimization.en.md)
+  [310P vision follow-up](https://github.com/Jittor/jittor/blob/eecff5ce5aa0d02aba3a246fcfb5632596732b44/docs/results/2026-10-30-vision-ascend310p-optimization.en.md)
   for the finite MaxDim/MinDim correction and remaining first-index limits;
   passing finite-domain tests do not count special-value cases as accepted.
 - Exit condition: real ACL public native/compat max/min/argmax/argmin select
@@ -2052,7 +2105,7 @@ workaround.
   unversioned state root
   `$JITTOR_LAB_ROOT/_state/generative-vision-310p/iteration-2026-10-30/rtdetr/`.
   Exact input/expected arrays remain in the unchanged versioned test. See the
-  [310P vision follow-up](../../docs/results/2026-10-30-vision-ascend310p-optimization.en.md)
+  [310P vision follow-up](https://github.com/Jittor/jittor/blob/eecff5ce5aa0d02aba3a246fcfb5632596732b44/docs/results/2026-10-30-vision-ascend310p-optimization.en.md)
   for the independent failure and its boundary; the test was not relaxed.
 - Exit condition: independently isolate casts and SDK outputs, repair the
   proper owner, then pass exact int32-boundary and int64-magnitude forward
@@ -2109,10 +2162,231 @@ workaround.
   independent CPU then NPU each save 80 fields. NPU reports
   `reference_matched=false` honestly against CPU. `--require-match` turns the
   discrepancy into a failing run. The normal diagnostic exit is not parity.
-  See the [310P vision follow-up](../../docs/results/2026-10-30-vision-ascend310p-optimization.en.md)
+  See the [310P vision follow-up](https://github.com/Jittor/jittor/blob/eecff5ce5aa0d02aba3a246fcfb5632596732b44/docs/results/2026-10-30-vision-ascend310p-optimization.en.md)
   for finite accuracy corrections, the non-improving production A/B and
   preserved nonfinite/epsilon limits.
 - Exit condition: public vector_norm/norm/normalize preserve CPU NaN/Inf masks,
   overflow behavior and appropriate epsilon semantics on real ACL devices,
   while retaining finite values/dtypes, existing gradient fallbacks and zero
   backend fallback. Recheck when CANN, conversion or norm dispatch changes.
+
+## KI-TEST-016: the ACL Torch-compat suite is red under the shim for placement reasons
+
+- Severity: Medium (fourteen pre-existing failures in one file would hide a real
+  regression in the same file)
+- Status: Open; reproduced 2026-10-29 on an Ascend 910B3 at `1a750dbee` and
+  `d3ae2bbd6` with identical results.
+- Owner: test infrastructure maintainers
+- Symptom: in native mode `pytest tests/backends/acl` reports 1 failed (the
+  rfft case) / 441 passed / 11 skipped. Under `JITTOR_TORCH_SHIM=1` the same
+  directory reports 15 failed / 455 passed / 12 skipped, and 14 of the failures
+  are in `test_acl_torch_compat.py`: relu, silu, pad, roll, rms_norm,
+  group_norm, batch_norm and fused_adamw among them. Their assertions
+  (`_assert_acl_device`, `output.is_cuda is False`) see `'cpu' != 'device'`.
+- Cause: under the shim on this machine a tensor made by `torch.tensor(...)`
+  lands on the host, so the ACL provider is never asked and the recorders and
+  placement checks see nothing. Those cases rely on `jt.flag_scope(use_acl=1,
+  use_cuda=1)` making the accelerator the default device, which does not happen
+  in this mode on this machine. Not yet distinguished: the flag scope's default
+  device against the shim's device resolution.
+- Workaround: run the ACL gate in native mode, where the numbers above hold; a
+  case that needs shim placement states `device="npu"` itself, as
+  `test_sdpa_boolean_mask_layouts_stay_on_acl` now does.
+- Evidence: the two directory runs above on a 910B3.
+- Exit condition: the file passes under the shim on a 910B3, or every placement
+  case states its device explicitly.
+
+
+## KI-COMPAT-023: a SiLU module's first call and its later calls round differently
+
+- Severity: Low (one half-precision ulp, about a quarter of the elements)
+- Status: Open; reproduced 2026-11-01 at `3253801e8`, and with the day's
+  division changes reverted and the core rebuilt (`d8e30464c`) too.
+- Owner: torch compatibility / half-precision numerics
+- Symptom: `compat/tests/torch/test_native_fast_paths.py::TestNativeModuleDispatch::test_an_inference_group_norm_and_the_silu_after_it`
+  fails on CUDA where it compares `torch.nn.Sequential(silu)(plain)` with
+  `jt.nn.silu(plain)` for half `plain`: 52-77 of 256 elements differ by one half
+  ulp. The smaller reproduction is the module alone:
+
+  ```python
+  silu = torch.nn.SiLU()
+  plain = torch.randn(2, 8, 4, 4, device="cuda").half()
+  with torch.no_grad():
+      first = silu(plain)       # == torch.nn.functional.silu(plain) and
+      second = silu(plain)      #    == (plain.float32() * plain.float32().sigmoid()).half()
+  # first and second differ in ~68 of 256 elements
+  ```
+
+  The **first** call on a fresh module is the one that matches real PyTorch 2.11
+  bit for bit (0 of 256 over several seeds) and the widened float32 path; every
+  later call on that module answers as if the operands had stayed half
+  (`x * sigmoid(x)` in half precision), which is the 1-ulp side. `silu(plain)`
+  and `silu(plain.clone())` differ the same way, so it is a property of the
+  module/process after the first call, not of the tensor.
+- Cause: not isolated. Not the tuner (`enable_tuner=0` reproduces), not graph
+  replay (`auto_graph_replay=0` reproduces), not the dispatch cache
+  (`_prefer_forward` is class-level and stable), and not the ACL kernel (not
+  used on CUDA). The remaining suspect is the widening inside `nn.silu` --
+  `wide = x.float32(); (wide * wide.sigmoid()).cast(dtype)` -- losing its
+  float32 operands on the path the second call takes.
+- Workaround: none needed for accuracy. A test that asserts bit parity with
+  PyTorch should compare against a spelling that has not already run in the
+  same process, or compare with real PyTorch rather than between two Jittor
+  spellings.
+- Evidence: the snippet above and the nodeid, one process each, on an RTX 4090
+  with `JITTOR_TORCH_SHIM=1`; the values are also recorded in
+  [历史记录](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-11-01-python-float-division.md).
+- Exit condition: repeated calls on one module answer the same bits, and the
+  case is green.
+
+
+## KI-COMPAT-024: storage façades and some constructed views retain alias gaps
+
+- Severity: Medium (storage identity or Python writes can differ from Torch).
+- Status: Open; observed during CPU/CUDA work based on `f995bd1f4` through
+  `40d4414f45b89b7cb7f5efdc06ca622b674d772a` on 2026-10-30. The relevant
+  storage/gather implementations remain at integration baseline `88b48a1f1`;
+  this entry does not claim a fresh runtime reproduction on that baseline.
+- Owner: native storage / Torch Tensor compatibility maintainers.
+- Symptom: `tensor.untyped_storage().data_ptr()` reports Python object identity,
+  not allocation identity. General gap-containing `as_strided` requests use a
+  gather/copy. Historical probes found some `split` results with correct
+  physical pointers whose Python indexed assignment did not update their
+  source. This is a bounded historical observation, not a claim that every
+  split layout fails or that split reads are wrong.
+- Cause: `_Storage.data_ptr` returns `id(self._var)`; unsupported as-strided
+  layouts use the gather branch. The historical split issue concerned raw
+  getitem paths without the same VarHolder write provenance as registered view
+  APIs. Direct foreign-kernel writes through a physical pointer are a distinct
+  path and do not prove Python assignment ownership.
+- Workaround: check materialized Tensor.data_ptr and byte offsets for physical
+  sharing; construct supported views with slice/reshape/permute and perform
+  Python writes through their registered parent view. Do not infer general
+  alias support from correct read values.
+- Evidence: `compat/torch/installers/tensor/method_api.py` owns `_Storage` and
+  `_as_strided_as_view`. The historical pointer probe used
+  `x=torch.arange(12,dtype=torch.float32); x.data_ptr(); y=x.reshape(3,4).t()`
+  and compared Tensor.data_ptr with Storage.data_ptr. Separate CPU probes
+  exposed gather/split writeback boundaries. See the
+  [integration report](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-11-01-vllm-runtime-integration.md)
+  for the source/validation distinction. Raw historical artifacts remain under
+  `$JITTOR_LAB_ROOT/_state/vllm-product/20261030/`, unversioned.
+- Exit condition: allocation identity and valid strided/split write ownership
+  match independent Torch on CPU and each claimed accelerator, including
+  lifetime/offset tests; unsupported layouts are rejected or clearly declared
+  instead of being silently represented as fully aliasing views.
+
+## KI-MEM-004: scalar boolean assignment retains one live operation
+
+- Severity: Low (bounded native CPU lifetime observation; growth is unmeasured).
+- Status: Open; reproduced on 2026-11-02 at
+  `9391a815dd6cc67b2d2fbe61fd9b4a1fad1d345a` in native CPU mode.
+- Owner: Jittor core memory / indexing maintainers.
+- Symptom: in a fresh native process, `live_ops` increases from 0 to 1 after
+  `value = jt.array(1.0); value[jt.array(True)] = jt.array(2.0);`
+  `assert value.item() == 2; del value`. It remains 1 after `gc.collect()`,
+  `jt.sync_all()`, and `jt.gc()`. This records one scalar-mask operation only;
+  repeated-call growth and accelerator behavior have not been established.
+- Cause: the retaining owner is not yet identified. The scalar-mask test leaves
+  the operation alive before the later argmax test starts; argmax itself leaves
+  the count unchanged. This is not evidence of an argmax/backward leak.
+- Workaround: lifetime tests for unrelated operators compare before/after live
+  operation counts, or run in a fresh process. This avoids test-order coupling;
+  it does not fix the scalar-mask retention or establish general leak freedom.
+- Evidence: run
+  `python -m pytest -q tests/core/test_setitem.py::TestSetitem::test_scalar_mask_with_var_value_compiles tests/ops/test_misc_issue.py::TestMiscIssue::test_argmax_memleak`
+  on the recorded baseline: the scalar-mask test passes, then the historical
+  argmax global-zero assertion fails with 1 live operation. Argmax alone passes.
+  Both test files are unchanged from `88b48a1f1` on that baseline; runtime
+  reproduction on `88b48a1f1` itself was not performed. The argmax regression
+  now checks its own count delta and retains its original sync/delete lifecycle.
+  Raw evidence: `$JITTOR_LAB_ROOT/_state/vllm-core-merge/20261101/logs/`
+  `smoke-argmax-minimal-sequence.log` and `smoke-scalar-mask-liveness.log`.
+- Exit condition: identify and justify or release the retained owner, add a
+  focused lifetime regression, and establish whether repeated scalar-mask
+  assignments accumulate live operations on each claimed backend.
+
+## KI-COMPAT-025: CPU bf16 autocast narrows an explicitly float32 loss
+
+- Severity: Medium (numerical fidelity in bounded autocast training).
+- Status: Open; reproduced 2026-11-02 on remote baseline
+  `88b48a1f18b2964f05090f65561e07ab64343715` and integration source
+  `ee116312ed3448a51c77ab1c9e2abeb45677f7f7`, with separate native caches
+  and asserted source paths. This is not introduced by the vLLM prerequisites.
+- Owner: Torch compatibility / AMP maintainers.
+- Symptom: `TestAutocastTraining::test_bfloat16_autocast` ends at
+  `0.158203125` against float32's `0.12238326668739319`, a relative difference of
+  `0.2926859143587205` beyond the unchanged 25% gate, on both commits. In CPU bf16 autocast,
+  `x = torch.ones(2).bfloat16(); y = torch.ones(2)` followed by
+  `((x.float() - y) ** 2).mean()` returns bf16: the explicit cast is float32,
+  but subtraction, square, and mean are narrowed. Independent real Torch
+  2.13 keeps all four stages float32 on the same CPU input.
+- Cause: the region-wide native AMP register lowers operations even after an
+  explicit float32 cast, unlike the per-operator autocast policy. The earlier
+  LayerNorm fix in `91ff825fc` remains active: all 80 training calls return
+  float32 from bf16 inputs with Torch autocast active. Changing only loss
+  construction in an untracked diagnostic to disable native AMP gives final
+  loss `0.12916548550128937` (5.54% from float32), with finite parameters and
+  gradients. This narrows the cause; it does not establish complete autocast
+  fidelity. The model uses ReLU, so this is not the SiLU issue KI-COMPAT-023.
+- Workaround: use float32 training for this bounded CPU task. Explicit
+  `.float()` inside the active region is insufficient to preserve the loss
+  arithmetic's dtype. No tolerance relaxation or runtime workaround is merged.
+- Evidence: the named case in
+  `compat/tests/torch/test_torch_half_precision_numerics.py` fails alone on
+  both commits; the candidate file has 10 passed, 1 skipped, and this failure.
+  Raw logs and source-identity/dtype probes are under
+  `$JITTOR_LAB_ROOT/_state/vllm-core-merge/20261101/`, indexed with hashes in
+  `bf16-diagnosis.json`. Historical KI-COMPAT-020 concerned the LayerNorm
+  output policy; its fix remains active. This distinct loss-arithmetic issue
+  does not reopen that mechanism. CUDA was not tested here.
+- Exit condition: a focused float32-loss dtype regression agrees with real
+  Torch, this unchanged training gate passes, and the complete half-precision
+  file plus related AMP/GradScaler tests pass on CPU and each claimed backend.
+
+
+## KI-COMPAT-026: lazy module imports invalidate initial namespace contracts
+
+- Severity: Medium (activation ownership and suite isolation).
+- Status: Open; reproduced on 2026-11-02 at `9391a815`.
+- Owner: Torch compatibility namespace / test maintainers.
+- Symptom: importing `torch.distributed.run` after activation adds a lazy module
+  that makes a later `compat.install(torch)` reject the completed graph.
+  Importing `jittor.compat.fsdp2.activation_checkpoint` also adds a normal Python
+  package attribute, so initial-public-surface tests fail in the warmed process.
+- Cause: initial namespace expectations and lazy imports are not reconciled.
+  A fresh child cannot be compared to a warmed parent's exact module-name set.
+- Workaround: run initial activation, alias and FSDP surface checks in clean
+  processes; do not disable strict ownership rejection or delete arbitrary
+  runtime modules to hide a changed graph.
+- Evidence: the four complete activation/alias/compat-structure/FSDP-structure
+  files pass 45 cases in a clean source environment. Importing only the two
+  modules above after collection reproduces six failures and 35 passes.
+  Source/test files involved are unchanged from `88b48a1`; an old-baseline
+  runtime reproduction was not performed for this issue. Logs are unversioned
+  under `$JITTOR_LAB_ROOT/_state/vllm-core-merge/20261101/logs/`:
+  `shim-clean-env-files.log` and `shim-order-repro.log`.
+- Exit condition: intentional lazy modules have explicit ownership and
+  initial-surface tests isolate their premise; the minimal import-order
+  sequence passes without weakening foreign-module rejection.
+
+## KI-COMPAT-027: compiled Accelerate helpers require full-graph capture
+
+- Severity: Medium (compiled training helpers).
+- Status: Open; reproduced on 2026-11-03 with core/compat `0a23c241`.
+- Owner: Torch compatibility compiler maintainers.
+- Symptom: Accelerate 1.10.1's original
+  `tests/test_utils.py::UtilsTester::test_convert_to_fp32` fails when it invokes
+  `torch.compile(fullgraph=True)`; the independent PyTorch reference passes.
+- Cause: `compat/torch/installers/compiler.py` explicitly rejects full-graph
+  capture, which is distinct from the native per-operator JIT execution path.
+- Workaround: use the eager `Accelerator.prepare` / `backward` training path.
+  Its selected three-step CPU configuration passes independent parameter,
+  loss and gradient comparisons in the integration repository.
+- Evidence: [Accelerate validation records](https://github.com/JittorEcosystem/jittor-accelerate/blob/main/docs/validation.md),
+  upstream commit `623cc0ba588d192c77758939a6e340adf07edd4f`.
+  The separate nested-tensor failure in `test_pad_across_processes` is tracked
+  by KI-COMPAT-003.
+- Exit condition: implement full-graph capture semantics and pass the original
+  compiled-helper test and graph-break rejection regressions on the declared
+  device, while preserving the eager training behavior.

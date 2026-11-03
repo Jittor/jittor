@@ -46,7 +46,14 @@ class EcosystemParity(EcosystemComparison):
         self._compare("diffusers_unet2d")
 
     def test_transformers_t5(self):
-        self._compare("transformers_t5")
+        # T5's decoder MLP runs two large random projections through a gate
+        # and a ReLU, so its `wi` gradient is a difference of large terms: on
+        # CUDA with TF32 on both sides that gradient reads 3.3e-2 while every
+        # other tensor in the case stays at 3-5e-3, and the same comparison
+        # with TF32 off agrees to 9e-7 (CPU, too, to 1e-6). The disagreement is
+        # TF32's ten-bit mantissa, not a kernel, so this case asks the
+        # question without it. KI-COMPAT-021 was this margin.
+        self._compare("transformers_t5", tf32=False)
 
     def test_transformers_whisper(self):
         self._compare("transformers_whisper")

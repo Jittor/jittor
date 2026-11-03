@@ -7,6 +7,7 @@ and an import at module level here would put both on an import-time cycle.
 import jittor as jt
 from jittor.optim.algorithms.adam import adam_update
 from jittor.optim.base import _update_preserve_dtype
+from .installers.tensor.method_api import _optimizer_write_scope
 from ..diagnostics import EXPECTED, swallowed
 
 
@@ -126,32 +127,34 @@ def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay
                     self.__dict__.get("_amp_found_inf"), self)
             updates = fused_impl(
                 active, lr_arg, b0, b1, weight_decay, eps)
-            for (p, m, v, _, _), (new_p, new_m, new_v) in zip(
-                    active, updates):  # fused_adamw keeps each input's dtype
-                _update_preserve_dtype(p, new_p)
-                _update_preserve_dtype(m, new_m)
-                _update_preserve_dtype(v, new_v)
-                if p.is_stop_grad():
-                    p.start_grad()
+            with _optimizer_write_scope():
+                for (p, m, v, _, _), (new_p, new_m, new_v) in zip(
+                        active, updates):  # fused_adamw keeps each input's dtype
+                    _update_preserve_dtype(p, new_p)
+                    _update_preserve_dtype(m, new_m)
+                    _update_preserve_dtype(v, new_v)
+                    if p.is_stop_grad():
+                        p.start_grad()
             continue
         step_capture.refuse("the per-parameter Adam update bakes its step count in")
-        for i, (p, g, v, m) in enumerate(zip(
-                pg["params"], grads, pg["values"], pg["m"])):
-            was_trainable = bool(p.requires_grad)
-            if not was_trainable or not isinstance(g, jt.Var) or list(g.shape) != list(p.shape):
-                continue
-            param_steps[i] = int(param_steps[i]) + 1
-            _update_in_target_dtype(p, adam_update(
-                p, g, v, m, lr=lr, eps=eps, weight_decay=weight_decay,
-                betas=(b0, b1), step=param_steps[i],
-                decoupled_weight_decay=decoupled_weight_decay,
-                torch_math=True,
-            ))
-            try:
-                if was_trainable and p.is_stop_grad():
-                    p.start_grad()
-            except EXPECTED as exc:
-                swallowed("torch/optimizers.py _adam_step_torch: if was_trainable and p.is_stop_grad():", exc)
+        with _optimizer_write_scope():
+            for i, (p, g, v, m) in enumerate(zip(
+                    pg["params"], grads, pg["values"], pg["m"])):
+                was_trainable = bool(p.requires_grad)
+                if not was_trainable or not isinstance(g, jt.Var) or list(g.shape) != list(p.shape):
+                    continue
+                param_steps[i] = int(param_steps[i]) + 1
+                _update_in_target_dtype(p, adam_update(
+                    p, g, v, m, lr=lr, eps=eps, weight_decay=weight_decay,
+                    betas=(b0, b1), step=param_steps[i],
+                    decoupled_weight_decay=decoupled_weight_decay,
+                    torch_math=True,
+                ))
+                try:
+                    if was_trainable and p.is_stop_grad():
+                        p.start_grad()
+                except EXPECTED as exc:
+                    swallowed("torch/optimizers.py _adam_step_torch: if was_trainable and p.is_stop_grad():", exc)
     # The torch loss.backward(); optimizer.step() spelling keeps grads
     # until an explicit zero_grad(). Preserve Jittor's historical
     # step(loss) behavior for callers using that native shorthand.

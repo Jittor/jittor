@@ -187,7 +187,7 @@ JITTOR_HOME="$perf_run/compat-cache" cache_name=npu_matmul_compat \
   "$perf_python" "$perf_script" --mode compat --output "$perf_run/compat.json"
 ```
 
-解释器需已安装当前核心和独立 `jittor-torch` 兼容发行版；源码 `PYTHONPATH`
+解释器需已安装当前核心和独立 `jittor-compat` 兼容发行版；源码 `PYTHONPATH`
 本身不会安装独立包。`jittor.compat.shim` 是安装后的公开入口，不应改为 native alias。
 用与测试相同的已安装解释器设置 `JITTOR_CI_PYTHON`；例如 task venv 的 `bin/python`。
 先在对应的隔离缓存中只验证导入与身份，再启动计时：
@@ -203,14 +203,14 @@ JITTOR_TORCH_SHIM=0 JITTOR_HOME="$perf_run/compat-cache" \
 最后再对拍。整个计算处于零回退守卫内；任何 ACL、数值或驻留失败都不输出成功报告。
 记录每次延迟、median、p95、回退计数、设备快照、Python/包来源、提交和 dirty 补丁
 摘要；原始 JSON 只允许写到 lab 下且在 checkout 外。保存运行前驱动/固件/CANN 版本
-快照，并按 [NPU 记录模板](../../../docs/development/npu-validation-templates.md) 填写报告。
+快照，并按 [NPU 记录模板](../../../docs/development/testing/npu-validation-templates.md) 填写报告。
 
 本入口测量单次前向的 Python 构图到同步完成延迟，不含 D2H、首次编译或训练。
 保持各组 shape、精度和设备负载一致，多轮交错重跑后再形成比较结论；微基准结果
 不能外推到整个模型。此入口的代码审查/语法检查不代表真实 NPU 性能已经验证。
 
 Ascend 整模对拍必须为 Jittor 和原生 `torch_npu` 使用独立 Python 进程、相同
-Transformers 版本和相同本地 checkpoint。Jittor 解释器安装独立 `jittor-torch`，或在
+Transformers 版本和相同本地 checkpoint。Jittor 解释器安装独立 `jittor-compat`，或在
 已有 Torch 发行元数据的测试环境设置 `JITTOR_TORCH_SHIM=1`；工具检查 shim 标记，
 不再要求 `torch is jittor`。加载权重后显式迁移到 NPU；两侧都通过
 `ASCEND_RT_VISIBLE_DEVICES` 选择已分配设备。首次 JIT 单列，稳态 prefill 和
@@ -334,9 +334,11 @@ CUDA_VISIBLE_DEVICES=<gpu> cache_name=softmax_boundary \
   --task softmax-case --length 50257 --rows 2 --dtype float32
 ```
 
-详细结果查 `docs/results/index.md`（昇腾 Qwen3 训练见
-`docs/results/2026-08-30-qwen3-ascend-training.md`；早期按算子的 transformers 报告已退役，
-Git 历史 `e3c369acb` 可查）；数值精度对拍仍使用
+详细结果查 [历史记录](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/index.md)（昇腾 Qwen3 训练见
+[历史记录](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-08-30-qwen3-ascend-training.md)；早期按算子的 transformers 报告已退役，
+Git 历史 `e3c369acb` 可查）。310P 视觉重放的历史数值另见
+[固定提交报告](https://github.com/Jittor/jittor/blob/eecff5ce5aa0d02aba3a246fcfb5632596732b44/docs/results/2026-11-02-vision-ascend310p-replay.md)，
+当前整合验证写入 [PR #18043](https://github.com/Jittor/jittor/pull/18043)，不将旧数据算作新提交结果；数值精度对拍仍使用
 `agent/skills/jittor-torch-diff/`。
 
 ### Ascend 生成与视觉模型组件

@@ -96,7 +96,7 @@ Flash 二进制。同步重写 wheel、安装目录和 RECORD 也不能替换该
 需要重新构建并验收，不能只更改配置中的版本字符串。
 这些文件及所有安装字节都由每个实际 tensor 进程重新核验，不能事后补写旧 raw。
 probe 的 `--source-proof` 与 collector 的同名选项使用该配置。候选端另核实真实
-`jittor-torch` carrier 的 METADATA/RECORD、递归 facade 文件、实际生成的 C++/CUDA
+`jittor-compat` carrier 的 METADATA/RECORD、递归 facade 文件、实际生成的 C++/CUDA
 桥接源码和二进制；API 兼容版本不替代 carrier 发行版本。
 
 维护 session 自动执行全部十二格（六 API × fp16/bf16），每格 base/受控扰动各跑两个
@@ -145,7 +145,7 @@ bf16 均 `3e-2`。这些判据在首次两侧比较前固定，禁止看结果�
 平台记录包含真实 GPU/driver 清单、可见卡、CPU、Torch/CUDA、编译器、NVIDIA wheel、
 源码与二进制 hash、关键 flag。`use_acl` 是 native `use_cuda` 的遗留别名，单独读它
 不能证明运行了 NPU；实际 CUDA dispatch 和张量设备另行断言。工具不输出 L4 速度结论。
-通过比较器后，再按[统一 scorecard 协议](../../../docs/development/downstream-scorecards.md)
+通过比较器后，再按[统一 scorecard 协议](../../../docs/development/testing/downstream-scorecards.md)
 登记实测范围与覆盖分母；工具存在、单侧完成或合成验证器测试都不算库的已验分子。
 
 ## 回归与证据
@@ -156,9 +156,9 @@ bf16 均 `3e-2`。这些判据在首次两侧比较前固定，禁止看结果�
   Q/K/V 反向和 dropout 种子重放；`nox -s optional` 的 math/native 阶段各自验收。
 - `tests/tools/test_flash_training_comparison.py` 用合成产物验证缺失的小梯度/更新、
   不同协议、脏源码、损坏产物和禁用断言不能假绿。
-- [CUDA 扩展 Philox 与融合训练回归](../../../docs/results/2026-10-15-cuda-extension-philox.md)
+- [CUDA 扩展 Philox 与融合训练回归](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-15-cuda-extension-philox.md)
   是已提交的 native CUDA 证据，明确没有将其等同于独立 PyTorch FlashAttention 对拍。
-- [公开训练 API 独立对拍](../../../docs/results/2026-10-15-flash-attention-training-oracles.md)
+- [公开训练 API 独立对拍](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-15-flash-attention-training-oracles.md)
   记录干净 `71c5be74e` 的六入口、48 条真实 CUDA 三步轨迹，保留原阈值、完整梯度和
   单独更新检查；另记录 `06ed62ad7` 的 12 个正式 CUDA 门禁场景与固定 causality 输入扰动。
 
@@ -188,7 +188,7 @@ bf16 均 `3e-2`。这些判据在首次两侧比较前固定，禁止看结果�
 上游 FlashAttention 没有对应 CPU 执行，因此共享广度仍为 **0 / 7**；这与六项 CUDA
 API 的实测执行范围分开报告，不放宽 CPU 阶梯要求。KV cache、速度及其他形状仍未验。
 
-[独立安装来源与完整训练复验](../../../docs/results/2026-10-16-flash-attention-installed-source-training.md)
+[独立安装来源与完整训练复验](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-16-flash-attention-installed-source-training.md)
 记录 `c33627faa` 的原十二格 / 48 worker，以及独立 host artifact guard
 `be4827ef3`；两份 source/manifest 分开，CPU 缺失仍 blocked、CUDA 广度不增加。
 

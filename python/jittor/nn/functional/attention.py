@@ -7,7 +7,7 @@ import math
 
 import jittor as jt
 from jittor._core.flags import _output_requires_grad
-from jittor._runtime.dispatch import select_kernel, try_dispatch
+from jittor._runtime.dispatch import dispatch_context, select_kernel, try_dispatch
 
 
 def _attention_bias(scores, attn_mask, is_causal):
@@ -28,6 +28,74 @@ def _attention_bias(scores, attn_mask, is_causal):
         else:
             scores = scores + attn_mask.cast(scores.dtype)
     return scores
+
+
+#: The mask whose causal verdict `_exactly_causal` last computed: (key, verdict).
+_EXACT_CAUSAL = [None, False]
+
+
+def _exactly_causal(mask, query_length, source_length, batch=1):
+    """Whether `mask` is literally the causal keep-mask.
+
+    Transformers builds a ``[1, 1, lq, lk]`` boolean causal mask and hands a
+    view of it to every layer; a mask carrying one block per batch is the same
+    statement when every block matches. A fused kernel reads either as
+    ``is_causal``; handed the mask instead, it splits the work into gemms plus
+    a score-sized bias. The check is exact -- every block has to equal
+    ``tril(ones)`` -- so a padded or differently laid out mask keeps the
+    general path.
+    """
+    if _jittor_dtype_name(mask.dtype) != "bool":
+        return False
+    if len(mask.shape) != 4 or query_length != source_length or query_length < 2:
+        return False
+    blocks = int(mask.shape[0])
+    if int(mask.shape[1]) != 1 or blocks not in (1, int(batch)):
+        return False
+    if int(mask.shape[-2]) != query_length or int(mask.shape[-1]) != source_length:
+        return False
+    try:
+        base = mask._view_base_id() if mask._is_view() else -1
+        key = (base, mask.var_ptr if base < 0 else 0, tuple(mask.shape),
+               mask._storage_offset(), tuple(mask._storage_strides()))
+    except Exception:
+        key = None
+    if key is not None and _EXACT_CAUSAL[0] == key:
+        return _EXACT_CAUSAL[1]
+    with jt.no_grad():
+        expected = jt.tril(jt.ones((query_length, source_length), dtype="bool"))
+        blocks_value = mask.reshape((blocks, query_length, source_length))
+        if blocks == 1:
+            verdict = bool(
+                (blocks_value.reshape((query_length, source_length)) == expected).all().item()
+            )
+        else:
+            verdict = bool(
+                (blocks_value == expected.broadcast(blocks_value.shape)).all().item()
+            )
+    if key is not None:
+        _EXACT_CAUSAL[0], _EXACT_CAUSAL[1] = key, verdict
+    return verdict
+
+
+def causal_mask_rewrite(query, key, attn_mask, is_causal):
+    """Whether this call's mask should be handed on as ``is_causal``.
+
+    The verdict costs one host read of a mask that a decoder rebuilds every
+    step, and that read lands in the middle of building a step's graph. On
+    Ascend it defeats ``auto_graph_replay``: qwen3_prefill on a 910B3 went from
+    35.5 ms (host 0.5) to 84 ms (host 83) when the rewrite ran there, against a
+    4.5 ms device win. CUDA and the host keep it -- their graph replay is a
+    different mechanism and measured faster with the rewrite in place.
+    """
+    if attn_mask is None or is_causal:
+        return False
+    if len(query.shape) != 4 or len(key.shape) != 4:
+        return False
+    if dispatch_context().backend not in ("cuda", "cpu"):
+        return False
+    return _exactly_causal(attn_mask, int(query.shape[-2]), int(key.shape[-2]),
+                           int(query.shape[0]))
 
 
 def _product(a, b, trans_a=False, trans_b=False):
@@ -257,6 +325,10 @@ def scaled_dot_product_attention(
     """
     if type(allow_reduced_precision) is not bool:
         raise TypeError("allow_reduced_precision must be bool")
+    if causal_mask_rewrite(query, key, attn_mask, is_causal):
+        # The mask says exactly what `is_causal` says, and a fused kernel runs
+        # the latter as one engine call where the former becomes a bias.
+        attn_mask, is_causal = None, True
     precision_options = (
         {"allow_reduced_precision": True}
         if allow_reduced_precision

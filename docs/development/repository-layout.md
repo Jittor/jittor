@@ -1,5 +1,9 @@
 # 仓库布局
 
+[本栏目目录](index.md) · [English](repository-layout.en.md)
+
+需要决定代码、资源、测试或工具放在哪里时查本页。它规定仓库与发行物边界；模块内部的依赖见[源码架构](source-architecture.md)，提交前验证见[测试体系](testing/test-system.md)。
+
 - 状态：已接受
 - 日期：2026-08-11
 - 上次复查：2026-09-09
@@ -48,7 +52,7 @@
 - `python/jittor/build/{dlink_compiler.py,dumpdef.py}` 与 `python/jittor/tools/tracer.py`
   （tracer 由绑定层通过其显式模块名访问）；
 - `python/jittor/contrib/math_util/src/*.h`；
-- `compat/shim/cpp_extension/{include,src}/**`，由可选的 `jittor-torch` 发行物**独占
+- `compat/shim/cpp_extension/{include,src}/**`，由可选的 `jittor-compat` 发行物**独占
   拥有**，作为扩展的已安装 ABI 资源边界；
 - `python/jittor_utils` 作为 `python/jittor` 的同级目录；
 - `python/jittor/__init__.py` 里字面量形式的 `__version__ = '...'` 赋值——只要发布与
@@ -67,18 +71,18 @@ Torch 兼容、机制说明（`docs/notes/`）、性能、发布说明、社区�
 
 **仓库不保存任务看板、计划、交接或分工这类过程文档。** 任务、状态与交接记在 GitHub issue
 与 PR 中，验证证据写进 PR 描述；等待硬件验收的事项见
-[`agent/manuals/deferred-hardware.md`](https://github.com/Jittor/jittor/blob/master/agent/manuals/deferred-hardware.md)，缺陷与限制见
-[问题总账](https://github.com/Jittor/jittor/blob/master/agent/manuals/known-issues.md)。2.0 整改期的过程材料已在收口时删除（Git
+[`agent/manuals/deferred-hardware.md`](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/manuals/deferred-hardware.md)，缺陷与限制见
+[问题总账](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/manuals/known-issues.md)。2.0 整改期的过程材料已在收口时删除（Git
 历史中可查）：仍然成立的设计契约迁入了 `docs/development/`、`docs/notes/` 与
-`docs/compatibility/`，仍是某项未关闭问题唯一证据的验证报告压缩后迁入 `docs/results/`，
-wheel 内容基线迁入 `tools/release/baselines/`。
+`docs/compatibility/`；历史验证报告通过固定提交引用，新执行记录写入 GitHub issue/PR。
+`docs/` 不保留日期报告、结果树或演示产物。wheel 内容基线位于 `tools/release/baselines/`。
 
 活跃索引与入链必须可解析；已归档的结论及其原始测试证据**不被改写成当前的成功**。
 文档检查维持这条"活跃/归档"边界。
 
 `agent/` 只包含 `manuals/` 与 `skills/`；仓库检查脚本一律在 `tools/`。工作流入口是
-[`agent/manuals/agent-index.md`](https://github.com/Jittor/jittor/blob/master/agent/manuals/agent-index.md)。社区项目列表在
-`docs/community/`；ASV 源配置在 `benchmarks/asv/asv.conf.json`——nox 从该配置推导绝对的输入
+[`agent/manuals/agent-index.md`](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/manuals/agent-index.md)。社区项目列表在
+`docs/project/community/`；ASV 源配置在 `benchmarks/asv/asv.conf.json`——nox 从该配置推导绝对的输入
 与外部输出路径，不把基准运行状态搬进工作树。
 所有基准统一归属 [`benchmarks/`](https://github.com/Jittor/jittor/blob/2.0-refactor/benchmarks/README.md)：`asv/` 保存性能回归套件，
 `torch_compat/` 保存真实模型对照，`acl/` 保存昇腾测量、数值交叉验证与 CANN 探针。
@@ -123,7 +127,7 @@ entry point。
 │   ├── nn/  optim/  autograd/  fft/  sparse/  dataset/  transform/  models/
 │   ├── linalg/  distributions/  init/
 │   ├── distributed/  contrib/  tools/
-├── compat/                   # 独立发行物（jittor-torch）：torch shim、fsdp2、triton；vLLM 属于 adapters/
+├── compat/                   # 独立发行物（jittor-compat）：torch shim、fsdp2、triton；下游适配位于 JittorEcosystem 独立仓库
 ├── tools/  tests/  docs/  examples/  benchmarks/
 └── agent/                    # 只有 manuals/ 与 skills/
 ```
@@ -204,11 +208,7 @@ Torch 兼容按**归属**而不是按下游项目划分：
    `jittor-hf-compat`，通过 entry point 注册。**主线 Jittor 不为每个进程安装常驻的
    TRELLIS 或 Gaussian Splatting finder。**
 
-vLLM 的粘合代码及其专属测试由主仓库的 `adapters/jittor_adapters/vllm` 与
-`adapters/tests/vllm` 拥有，随既有的 `jittor-torch-adapters` 发行物分发，**不需要单独的
-仓库或发布**。核心与 `jittor-torch` 都不打包该实现，也不打包已废弃的 `jittor.compat.vllm`。
-可选的 Torch 阶段只发现名为 `jittor_vllm` 的模块补丁 entry point；不存在时保持可选。
-该适配器用共享的、owner 感知的回滚机制保存导入前的扩展设置与导入后的补丁。
+下游粘合代码及其专属测试由 [JittorEcosystem](https://github.com/JittorEcosystem) 的独立仓库维护。主仓通过根 README 链接生态组织；核心与 `jittor-compat` 均不依赖适配器合集。[jittor-vllm](https://github.com/JittorEcosystem/jittor-vllm) 发布可选的 `jittor_vllm` 模块补丁入口，并独立维护版本和设备验收。集成通过共享的所有权事务机制完成注册与回滚。
 
 **安装器必须独立报告每一次尝试的补丁。** 禁止在一串补丁外面套一个宽泛的
 `try/except Exception: pass`——否则一次失败会把之后所有兼容工作都掩盖掉。

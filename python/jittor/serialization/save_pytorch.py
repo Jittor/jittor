@@ -8,7 +8,6 @@ import pickle
 import sys
 from contextlib import contextmanager
 from types import ModuleType
-import torch
 
 class HalfStorage:
     pass

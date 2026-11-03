@@ -325,5 +325,5 @@ vLLM 内嵌自定义 CUDA kernel，还有自己的显存管理和调度层，**�
 * [把已有 PyTorch 脚本迁到 Jittor](torch_compat_migration.md)：迁移时必须改的几处。
 * [混合精度](mixed_precision.md)：精度策略在两种前端下的写法。
 * 各库的完整实测结论与门禁状态，见维护者文档
-  [用 PyTorch API 写 Jittor](https://github.com/Jittor/jittor/blob/master/docs/compatibility/torch.md)。
+  [用 PyTorch API 写 Jittor](https://github.com/Jittor/jittor/blob/2.0-refactor/docs/compatibility/torch.md)。
 * 回到 [教程总目录](README.md)。

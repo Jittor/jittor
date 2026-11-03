@@ -199,7 +199,7 @@ non-causal blocks, an attention-elided ablation priced the composite at
 3.82 s/decode against torch's fused cuDNN kernel at 0.54 s, out of a 3.48 s
 total gap; naming the source took that decode from 10.13 s to 8.30 s with
 identical output statistics. See
-[`docs/results/2026-09-14-vllm-omni-h3-enablement.md`](../../docs/results/2026-09-14-vllm-omni-h3-enablement.md)
+[`docs/results/2026-09-14-vllm-omni-h3-enablement.md`](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-09-14-vllm-omni-h3-enablement.md)
 section 45.
 
 ### Ascend NPU
@@ -214,7 +214,7 @@ python -m nox -s npu
 ```
 
 For the validated 910B version matrix, real-device probe, and current backend
-limitations, see the [Ascend 910B guide](../../docs/guides/ascend-910b.md).
+limitations, see the [Ascend 910B guide](../../docs/guides/hardware/ascend-910b.md).
 
 ### ROCm, MPI, and NCCL
 
@@ -243,7 +243,7 @@ conflate the two.
 
 ## Editable installs of core and compat
 
-`jittor` (core) and `jittor-torch` (compat) are two distributions that share one
+`jittor` (core) and `jittor-compat` (compat) are two distributions that share one
 import package. Compat installs into `jittor.compat` without owning `jittor`, so
 its editable install declares `jittor` as an implicit namespace: the generated
 finder carries `NAMESPACES = {'jittor': []}` and appends a path placeholder to

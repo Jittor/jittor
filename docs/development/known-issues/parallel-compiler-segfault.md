@@ -1,5 +1,9 @@
 # 并行编译器：文件级死锁与算子级段错误
 
+[本栏目目录](../index.md) · [English](parallel-compiler-segfault.en.md)
+
+本页保留特定编译故障的历史调查，不代替当前缺陷总账。先查[已知问题](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/manuals/known-issues.md)确认状态；日常测试慢的问题先看[JIT 缓存](../testing/jit-cache.md)，需要分析具体进程和锁机制时再查本页。
+
 - 状态：**文件级编译进程池的死锁已修复**（2026-09-16）；并行**算子**编译器的段错误 /
   状态损坏在非 Jupyter 负载下仍未解决
 - 上次复查：2026-09-16
@@ -14,7 +18,7 @@
   无明显性能回退（死锁一项已由下面的回归测试与对照数据关闭）
 
 这一页是**单个问题的调查记录**，不是已知问题的清单。问题总账在
-[`agent/manuals/known-issues.md`](https://github.com/Jittor/jittor/blob/master/agent/manuals/known-issues.md)，
+[`agent/manuals/known-issues.md`](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/manuals/known-issues.md)，
 本页对应其中的 `KI-COMPILER-001`；两边的状态、workaround 与退出条件必须一致，
 改一边就改另一边。总账里其余条目只有条目本身，没有对应的长文页面。
 

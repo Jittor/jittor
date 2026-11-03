@@ -2,7 +2,7 @@
 #
 # This installs the project FROM THIS SOURCE TREE, not a published package.
 # Two distributions live in this repo -- core (`jittor`, pyproject.toml at the
-# repo root) and compat (`jittor-torch`, pyproject.toml under compat/) -- and
+# repo root) and compat (`jittor-compat`, pyproject.toml under compat/) -- and
 # both get installed, plus the pytest tooling tools/run_test_suite.py needs.
 #
 # Build (from repo root):

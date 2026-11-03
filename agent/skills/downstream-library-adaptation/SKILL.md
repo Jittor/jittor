@@ -18,7 +18,7 @@ description: 接入或验证一个下游 Torch 生态库时的流程与准入标
 | 能力有，拼写/签名不同 | **`jittor.compat.torch`** | compat 只做适配；**出现第二套实现就是放错了** |
 | 这个库私有的实现细节 | **adapter** | 它根本不是 torch API |
 
-[`torch-compatibility-principles`](../../../docs/compatibility/principles.md)
+[`torch-compatibility-principles`](../../../docs/development/compatibility/principles.md)
 和 [`project-context`](../../manuals/project-context.md) 写了前两行；第三行原先只用
 排除法说"不属于 core"，没给地址，这是 adapter 失控的根源。
 
@@ -79,7 +79,7 @@ policy-loss、distillation-loss 注册与 Hydra 入口。各轴分开计数，**
 `audit_coverage.py scorecard --upstream ... --evidence ...` 才核查当前平台与证据并计算分子。
 反作弊负向测试位于 [`test_downstream_coverage.py`](../../../tests/tools/test_downstream_coverage.py)。
 固定平台/速度表头、完整命令、证据格式与报告模板见
-[统一下游 scorecard 协议](../../../docs/development/downstream-scorecards.md)。
+[统一下游 scorecard 协议](../../../docs/development/testing/downstream-scorecards.md)。
 
 ## 2. 裸跑，收集断点
 
@@ -136,7 +136,7 @@ fallback 能骗过的那一个**：NPU 真发生 CPU 回退时，它会完美一
 - **③ 拿不到时**（目标卡上的原生下游栈装不起来），退回用 Jittor CPU 对 Jittor device，
   **必须配 `fallback_count == 0`**，并在报告里标成**降级证据**，不能声称"与原生栈一致"。
 - **核心算子门禁里的 device parity 层不要动**。
-  [`test-system`](../../../docs/development/test-system.md) 第 3 层跨 device 跑整个 OpInfo
+  [`test-system`](../../../docs/development/testing/test-system.md) 第 3 层跨 device 跑整个 OpInfo
   库，那里逐算子的外部 device oracle 根本拿不到，它是唯一可规模化的手段。删的是**新库
   接入流程**里的那一步，不是仓库已有的 parity 层。
 
@@ -148,17 +148,17 @@ fallback 能骗过的那一个**：NPU 真发生 CPU 回退时，它会完美一
 ## 6. Adapter 准入清单
 
 只有第 0 节第三行还剩东西时才建 adapter。目录形态是自足单元，`cp -r` 能整体搬走：
-代码与它的 `tests/` 同住。进仓必须齐：
+运行代码与顶层 `tests/` 位于同一个独立仓库。每个下游项目在 `JittorEcosystem` 单独维护；主仓不保留适配目录，根 README 链接生态组织。独立仓库必须齐：
 
 1. **断点表 + 分流声明**：为什么这不是 compat 缺陷、也不是 jittor 缺功能；
 2. **继承共享 relocatable 契约**：只 import 公开入口白名单、不碰私有属性、不给
    `jt`/`jittor`/`torch` 任何属性赋值、扫描用 `rglob` 防新子包绕过、**规则本身带负向
    测试**、扫描排除 `tests/`；
 3. **版本矩阵 fail-closed**：用
-   [`_common.py`](../../../adapters/jittor_adapters/_common.py) 的 `require_version` 与
+   [`_common.py`](https://github.com/JittorEcosystem/jittor-transformers/blob/main/jittor_transformers/_common.py) 的 `require_version` 与
    `SUPPORTED_VERSIONS`，**不要自己造**；未验证版本显式拒绝，不能默默 arm 一个 finder
    去骗没验过的库；
-4. **独立发行**：删掉 `adapters/` 整棵树，主仓其余门禁结果不变；
+4. **独立发行**：不依赖主仓 checkout 路径；主仓门禁不收集下游仓库测试；
 5. **真机验收报告**，`Review when:` 必须包含 **adapter 依赖的 compat 公开入口变更**
    （`owned_runtime_hook`、`transaction`、`module_patcher`）；
 6. **库缺席的诚实 skip 类别**：库名进 `ENVIRONMENT_SKIP_PATTERNS`，并按
@@ -185,7 +185,7 @@ compat 还行——所以第 6 节第 5 条的过期条件是必须的。
 
 ## 8. 落盘
 
-- dated `docs/results/YYYY-MM-DD-topic.md`：Status / Date / **Baseline commit** / Owner /
+- GitHub issue/PR 的验收记录（不在 docs 创建日期报告）：Status / Date / **Baseline commit** / Owner /
   **Review when**，记环境、命令、结果、边界；
 - 真实 gap 进 [`known-issues`](../../manuals/known-issues.md)：owner、可执行证据、
   workaround、退出条件；

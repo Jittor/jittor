@@ -119,6 +119,31 @@ class TestFusedAttentionF32(unittest.TestCase):
                     self.assertLess(float(error.max() / (np.abs(want).max() + 1e-30)), net_tol)
                     self.assertLess(float((error / (np.abs(want) + 1e-3)).max()), pe_tol)
 
+    def test_mixed_saturated_and_diffuse_rows_backward(self):
+        # One launch can see both decisions: rows 0 and 2 put their mass on a
+        # single key and reconstruct it, rows 1 and 3 spread it and take the
+        # cheap term. Neither branch may disturb the other's rows.
+        shape = (1, 1, 4, 6)
+        rng = np.random.RandomState(507)
+        q, k, v = (rng.uniform(-1, 1, size=shape).astype("float32")
+                   for _ in range(3))
+        q = q.copy()
+        q[0, 0, (0, 2)] *= 80
+        dout = rng.standard_normal(shape).astype("float32")
+        for causal in (False, True):
+            with self.subTest(causal=causal):
+                expected = _reference(q, k, v, causal, dout)
+                jq, jk, jv = (jt.array(a) for a in (q, k, v))
+                out = scaled_dot_product_attention(jq, jk, jv, is_causal=causal)
+                grads = jt.grad((out * jt.array(dout)).sum(), [jq, jk, jv])
+                actual = [a.numpy().copy() for a in [out] + list(grads)]
+                for index, (got, want) in enumerate(zip(actual, expected)):
+                    self.assertTrue(np.isfinite(got).all())
+                    error = np.abs(got.astype("float64") - want)
+                    net_tol, pe_tol = (2e-4, 2e-3) if index == 0 else (2e-3, 5e-3)
+                    self.assertLess(float(error.max() / (np.abs(want).max() + 1e-30)), net_tol)
+                    self.assertLess(float((error / (np.abs(want) + 1e-3)).max()), pe_tol)
+
     def test_constant_values_have_zero_query_and_key_gradients(self):
         rng = np.random.RandomState(913)
         shape = (1, 1, 7, 6)

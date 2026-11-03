@@ -29,8 +29,7 @@ def test_nightly_keeps_existing_gate_and_runs_both_complete_maintained_sessions(
     assert workflow['on']['schedule'] and 'workflow_dispatch' in workflow['on']
     assert workflow['jobs']['ecosystem']['steps'][-1]['run'] == 'python -m nox -s ecosystem'
     job = workflow['jobs']['maintained-cpu']
-    assert job['strategy']['matrix']['library'] == ['peft', 'swift', 'verl', 'transformers', 'openmmlab',
-                                                 'diffusers', 'metric_tensordict', 'accelerate']
+    assert job['strategy']['matrix']['library'] == ['peft', 'openmmlab', 'diffusers', 'accelerate']
     assert job['strategy']['fail-fast'] == 'false'
     steps = job['steps']
     run = next(step for step in steps if 'tools/provision_ecosystem_nightly.py' in step.get('run', ''))
@@ -60,23 +59,16 @@ def test_environment_discards_shim_overlay_and_gpu_selection(provision, tmp_path
     assert 'VERL_USE_EXTERNAL_MODULES' not in env and 'VERL_USE_EXTERNAL_PLUGINS' not in env
 
 
-def test_verl_runtime_profile_preserves_original_numpy_two_component_pins(provision):
-    roots = provision.runtime_roots('verl')
-    assert set(roots) >= {'numpy==2.2.6', 'transformers==5.5.3', 'ray[default]==2.54.1',
-                          'tensordict==0.10.0', 'huggingface-hub==1.5.0', 'peft==0.17.1'}
-    assert not any(value.startswith(('numpy==1.', 'transformers==4.', 'verl[')) for value in roots)
-    assert 'numpy==1.26.4' in provision.runtime_roots('swift')
-    assert 'numpy==1.26.4' in provision.runtime_roots('peft')
-    assert set(provision.runtime_roots('swift')) == set(provision.COMMON + provision.SWIFT_DEPS)
+@pytest.mark.parametrize('library', ('swift', 'verl', 'transformers', 'metric_tensordict'))
+def test_migrated_profiles_are_not_owned_by_core(provision, library):
+    for function in (provision.runtime_roots, provision.session_name):
+        with pytest.raises(ValueError, match='Unknown maintained'):
+            function(library)
 
 
 @pytest.mark.parametrize('library,session', [('peft', 'ecosystem_peft'),
-                                            ('swift', 'ecosystem_swift'),
-                                            ('verl', 'ecosystem_verl_training'),
-                                            ('transformers', 'ecosystem_transformers_source'),
                                             ('openmmlab', 'ecosystem_openmmlab_installed'),
                                             ('diffusers', 'ecosystem_diffusers_source'),
-                                            ('metric_tensordict', 'ecosystem_metric_tensordict_source'),
                                             ('accelerate', 'ecosystem_accelerate')])
 def test_profiles_invoke_the_actual_complete_maintained_session(provision, library, session):
     assert provision.session_name(library) == session
@@ -225,17 +217,8 @@ def test_runtime_uses_canonical_test_pins_without_conflicting_build_setuptools(p
     assert not any(pin.startswith(('mypy==', 'ruff==', 'asv==')) for pin in controller)
 
 
-def test_swift_keeps_the_executed_numpy_one_data_abi(provision):
-    assert 'numpy==1.26.4' in provision.COMMON
-    assert 'datasets==3.6.0' in provision.SWIFT_DEPS
-    assert 'pyarrow==19.0.1' in provision.SWIFT_DEPS
 
 
-def test_transformers_uses_the_original_numpy_one_complete_runtime(provision):
-    assert set(provision.runtime_roots('transformers')) == set(provision.COMMON)
-    assert 'numpy==1.26.4' in provision.runtime_roots('transformers')
-    assert not any(value.startswith(('transformers==5', 'peft==', 'datasets==', 'ray'))
-                   for value in provision.runtime_roots('transformers'))
 
 
 def test_openmmlab_keeps_complete_base_dependencies_and_numpy_one(provision):

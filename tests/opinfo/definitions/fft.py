@@ -61,7 +61,7 @@ _NEEDS_CUPY = skip(
 
 #: A float64 input asks for a complex128 spectrum, and jittor has no complex128
 #: dtype at all -- registering one means extending the core's dtype size table
-#: first (KI-COMPLEX-001, docs/notes/complex-dtype.md). `view_as_complex` says
+#: first (KI-COMPLEX-001, docs/notes/numerics/complex-dtype.md). `view_as_complex` says
 #: so at the boundary now; there is nothing for the reference check to compare.
 _NO_COMPLEX128 = skip(
     dtypes=("float64",),

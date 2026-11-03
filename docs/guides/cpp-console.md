@@ -1,5 +1,7 @@
 # C++ 控制台接口
 
+[本栏目目录](index.md) · [English](cpp-console.en.md)
+
 控制台接口把 Jittor 的 Python 运行时嵌入到 C++17 程序里。它的数组桥接让带类型的
 C++ 数组进入 Jittor 运算时**少一次 Python 层拷贝**。
 

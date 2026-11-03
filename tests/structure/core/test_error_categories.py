@@ -108,7 +108,10 @@ MIGRATED_BROADCAST_SHAPE_BOUNDARIES = {
 # boundaries on the same caller-supplied `(x, shape, dtype)` triple, not
 # internal invariants.
 MIGRATED_REINTERPRET_VIEW_BOUNDARIES = {
-    "src/ops/composite/reinterpret_view_op.cc": 10,
+    # Replace the blanket contiguous-only rejection with three precise guards:
+    # last stride 1 for itemsize changes, byte-stride divisibility, and refusal
+    # to reinterpret an arbitrary non-contiguous reshape (net two boundaries).
+    "src/ops/composite/reinterpret_view_op.cc": 12,
 }
 
 # 2026-09-11: 1 -> 3. Besides the shape check this entry was named for,
@@ -496,11 +499,18 @@ def test_public_shape_cardinality_migration_is_explicit_and_bounded():
     for relative in _LEDGER:
         source = (ROOT / relative).read_text()
         actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
-        if relative == "src/ops/composite/code_op.cc":
-            # Backend provenance is independent of the shape/cardinality ledger.
-            for guard in ("USER_CHECK(backend.empty()", "USER_CHECK(execution_backend() == expected)"):
-                assert source.count(guard) == 1
-                actual -= 1
+        # Backend provenance, and refusing to differentiate a callback's
+        # gradient again, are independent of the shape/cardinality ledger.
+        other_guards = {
+            "src/ops/composite/code_op.cc": (
+                "USER_CHECK(backend.empty()", "USER_CHECK(execution_backend() == expected)",
+                "USER_CHECK(!data.count(code_backward_key))"),
+            "src/ops/composite/numpy_code_op.cc": (
+                "USER_CHECK(!_results.ints.count(dout_input_index_key))",),
+        }
+        for guard in other_guards.get(relative, ()):
+            assert source.count(guard) == 1
+            actual -= 1
         counts[relative] = actual
     # Report every disagreement, not just the first. Three entries went stale
     # behind one that failed earlier in iteration order and stayed invisible

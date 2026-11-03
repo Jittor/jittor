@@ -9,7 +9,7 @@ description: 在 Jittor 的 torch shim 与原生 PyTorch 两侧运行并对比 P
 
 完整有界门禁为 `nox -s ecosystem_peft`，复用 `tools/run_peft_gate.py` 执行双解释器
 base、seed 7 输入扰动和三步 SGD，强校验全部 177 数值字段及完整安装来源。
-[安装来源与训练报告](../../../docs/results/2026-10-15-peft-installed-source-training.md)
+[安装来源与训练报告](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-15-peft-installed-source-training.md)
 保留原 CPU/CUDA 证据与注册分母；不能从 tiny LoRA 外推其他 tuner 或整库支持。
 
 `.github/workflows/ecosystem.yml` 的独立 `maintained-cpu` job 已接入该完整 session。
@@ -23,12 +23,12 @@ python3.11 tools/provision_ecosystem_nightly.py --library peft \
 新 state 内创建 controller、候选和真实二进制 Torch oracle 三个独立环境，安装完整
 依赖并逐环境 `pip check`，显式隐藏 CUDA。固定 PEFT/TF 官方 Git/wheel 身份沿用
 `_peft_scorecard.PINS`；不依赖个人环境或伪造 Torch metadata。
-[nightly 接线与本地实际验收](../../../docs/results/2026-10-15-maintained-ecosystem-nightly.md)
+[nightly 接线与本地实际验收](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-15-maintained-ecosystem-nightly.md)
 记录本次完整 CPU 通过；未触发或声称已完成 GitHub scheduled run。
 
 ## 历史验收入口（2026-10-14）
 
-[CPU/CUDA oracle 与三步训练 scorecard](../../../docs/results/2026-10-14-downstream-oracle-scorecards.md)
+[CPU/CUDA oracle 与三步训练 scorecard](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-14-downstream-oracle-scorecards.md)
 记录 PEFT 0.17.1 的 `peft_lora_llama`：独立二进制 Torch 对拍、固定权重输入扰动、
 全部请求梯度及三步更新。验收限于 tiny Llama 的 LoRA 参数，不能外推 dense Llama、
 其他 tuner、真实尺寸性能或 NPU。计算基线为 `230ba7a0305091fb64ec81a679f32dcaefcea518`；
@@ -219,7 +219,7 @@ peft 是纯 `import torch` 消费者，**第三行（adapter）为空**；修复
   mmengine 0.10.7。pip 顺带拉入的 torch 2.14.0 / transformers 5.16.1 / numpy 2.5.3 已从
   site 删除，改用 venv 的 torch 2.13.0 / transformers 5.5.3 / numpy 2.3.5。
 - `$JITTOR_LAB_ROOT/_state/verify-ml/site-peft17`：`pip install --target site-peft17
-  transformers==4.56.2 peft==0.17.1 ms-swift==4.5.2`（4.56.2 是 `jittor_adapters` 允许的
+  transformers==4.56.2 peft==0.17.1 ms-swift==4.5.2`（4.56.2 是 Transformers 独立 adapter 允许的
   版本之一；transformers 走 site 覆盖 venv 的 5.5.3），torch 已删除。
 
 **实际跑通的命令**（site-peft17；原命令的 peft 0.20.0 在 shim 上起不来，见下）：

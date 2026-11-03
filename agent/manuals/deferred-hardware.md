@@ -25,9 +25,9 @@ GitHub issue 和 PR 描述里；本页不记进度，只记硬件到手那天要
 | `8.18` | 多机 checkpoint：2 机保存、4 机加载的续训 | 两台机器（加载需 4 机） | 两台机器 |
 | `10.22` | 两节点 DDP/FSDP 冒烟与掉线门禁进 nightly | 两台机器 | 两台机器 |
 
-各硬件的操作步骤不在这里：Ascend 看 [`docs/guides/ascend-910b.md`](../../docs/guides/ascend-910b.md)，
+各硬件的操作步骤不在这里：Ascend 看 [`docs/guides/hardware/ascend-910b.md`](../../docs/guides/hardware/ascend-910b.md)，
 HCCL 多卡看 [`hccl-on-device-verification.md`](hccl-on-device-verification.md)，Corex 看
-[`docs/guides/corex.md`](../../docs/guides/corex.md)。
+[`docs/guides/hardware/corex.md`](../../docs/guides/hardware/corex.md)。
 
 ## 没有硬件时，什么算「代码改完了」
 
@@ -68,14 +68,14 @@ HCCL 多卡看 [`hccl-on-device-verification.md`](hccl-on-device-verification.md
 | 命令 | `nox -s npu`（需 `CANN_SET_ENV` 指向 `set_env.sh`，否则 session 直接 error） |
 | fail-closed | `JITTOR_TEST_REQUIRE_ACL=1`、`JITTOR_TEST_ACCELERATOR_MIN_EXECUTED=1`；session 先跑 `npu-smi info`，再跑一个带精确期望值的 matmul 探针 |
 | 覆盖 | `tests/backends/acl/test_acl.py`、`test_acl_torch_compat.py`、`test_aclop.py`、`test_acl_indexing.py`、`tests/ops/test_ops.py`、`tests/ops/test_floor_divide.py::TestFloorDivideNPU` 等 |
-| 步骤 | [`docs/guides/ascend-910b.md`](../../docs/guides/ascend-910b.md) |
+| 步骤 | [`docs/guides/hardware/ascend-910b.md`](../../docs/guides/hardware/ascend-910b.md) |
 
 绿了之后可以判定的项：**`6.B02`**（executeOp 失败都抛；静态侧已由
 `test_acl_runner_failure_contract` 与 `test_acl_tensor_workspace_contract` 钉住）、**`6.B16`**
 （`sync_run=1/0` 两条路径；精确 nodeid 在 Ascend 指南里）、**`8.06`** 的已迁 family（静态合同
 102 passed，逐 family 的设备行为要在这里过一遍）、**`4.11`/`4.12`** 的 ACL 注册路径。
 ACL 的主机侧契约（数据通道、描述符缓存外壳、launcher 收口）见
-[`docs/development/acl-backend-contracts.md`](../../docs/development/acl-backend-contracts.md)。
+[`docs/development/backends/acl-backend-contracts.md`](../../docs/development/backends/acl-backend-contracts.md)。
 
 #### `8.06`：launch 尾部归零之后，还差什么
 
@@ -113,7 +113,7 @@ launcher ABI 断言全过，反向对照见下）、以及不变量式静态合�
 3. **失败真的抛，而不是静默给出未初始化输出。** 本波把三处「打印后 return / 根本不检查」
    改成 `launch()` 的 `LOGf`。设备侧的判据是**负向**的：构造一个会让 workspace 查询失败的
    调用（例如给 `prod` 一个 ACL 不接受的 dtype 组合），确认得到带算子名与解码后 ACL 状态的
-   异常，而**不是**一个数值错误的结果。`docs/guides/ascend-910b.md` 的
+   异常，而**不是**一个数值错误的结果。`docs/guides/hardware/ascend-910b.md` 的
    `forbid_backend_fallbacks()` / `backend_fallback=error` 一节是配套开关。
    在此之前不得声称这三处已验证：静态合同只能证明源码里没有那条 return。
 
@@ -173,7 +173,7 @@ launcher ABI 断言全过，反向对照见下）、以及不变量式静态合�
 | | |
 | --- | --- |
 | 命令 | **尚无 nox session** ← 硬件日之前要建 |
-| 现有材料 | [`docs/guides/corex.md`](../../docs/guides/corex.md)（48 行，最薄的一份）；`tests/backends/corex/test_corex_discovery.py` 用离线 fake compiler 验发现路径 |
+| 现有材料 | [`docs/guides/hardware/corex.md`](../../docs/guides/hardware/corex.md)（48 行，最薄的一份）；`tests/backends/corex/test_corex_discovery.py` 用离线 fake compiler 验发现路径 |
 
 等它的项：**`8.14`**（`check()` 只读、路径可配置）。**代码半已闭合**（2026-09-07 复核）：
 前置 `4.12` 已合并，`process_acl` 全树 0 处；`backends/corex/__init__.py` 现在没有 `check()`，只有只读的

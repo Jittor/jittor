@@ -30,7 +30,7 @@ def _compat_module(name):
         if error.name in ("jittor.compat", name):
             raise ModuleNotFoundError(
                 "Torch compatibility was requested but is not installed; "
-                "install the jittor-torch distribution", name=error.name
+                "install the jittor-compat distribution", name=error.name
             ) from error
         raise
 

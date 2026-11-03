@@ -172,7 +172,7 @@ def main():
     parser.add_argument("--baseline", required=True)
     parser.add_argument("--source-proof", type=Path,
                         help="Fresh independent implementation proof; historical registry records remain unchanged")
-    parser.add_argument("--report", default="docs/results/2026-10-15-flash-attention-training-oracles.md")
+    parser.add_argument("--report", default="https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-15-flash-attention-training-oracles.md")
     args = parser.parse_args()
     root = args.root.resolve()
     evidence = args.evidence_dir.resolve()

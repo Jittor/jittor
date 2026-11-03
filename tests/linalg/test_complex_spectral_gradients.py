@@ -79,7 +79,7 @@ def _torch_reconstruction_grad(a, p):
 
     Runs under `_real_torch_python()`'s interpreter, NOT `sys.executable`:
     jittor's own compat layer installs a top-level `torch` package (the
-    Torch shim, `jittor-torch`), so a plain `sys.executable -c "import
+    Torch shim, `jittor-compat`), so a plain `sys.executable -c "import
     torch"` in this repo's own interpreter silently resolves to jittor's
     shim (same site-packages), not upstream PyTorch -- defeating the whole
     point of an "independent" oracle. This needs a genuinely separate
@@ -120,7 +120,7 @@ def _oracle_env():
 
 def _real_torch_python():
     """Locate a Python interpreter with real (non-shim) PyTorch installed,
-    isolated from this repo's own `jittor`/`jittor-torch`. Override with
+    isolated from this repo's own `jittor`/`jittor-compat`. Override with
     ``JITTOR_TEST_REAL_TORCH_PYTHON``; falls back to a conventional dev venv
     path. Raises if neither is usable -- callers should catch and skip."""
     candidates = []

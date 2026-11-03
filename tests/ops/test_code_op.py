@@ -486,6 +486,21 @@ class TestCodeOp(unittest.TestCase):
                 @out0(0) = data["x"];
             ''').sync()
         assert a.item() == 123
+    def test_second_derivative_through_a_code_gradient_raises(self):
+        # The backward is the user's grad source; nothing says how to
+        # differentiate it again. That used to answer 0 with only a
+        # "does not depend on the loss" warning.
+        x = jt.array(np.array([2.0, -1.5], dtype="float32"))
+        y = jt.code(
+            x.shape, x.dtype, [x],
+            cpu_src="for (int i=0; i<in0_shape0; i++) @out(i) = @in0(i)*@in0(i)*@in0(i);",
+            cpu_grad_src=["for (int i=0; i<in0_shape0; i++) @out(i) = @dout(i)*3*@in0(i)*@in0(i);"],
+        )
+        first = jt.grad(y.sum(), x)
+        np.testing.assert_allclose(first.numpy(), [12.0, 6.75])
+        with self.assertRaisesRegex(RuntimeError, "cannot differentiate a jt.code gradient again"):
+            jt.grad(first.sum(), x)
+
 
 if __name__ == "__main__":
     unittest.main()

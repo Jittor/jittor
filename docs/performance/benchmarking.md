@@ -1,8 +1,12 @@
 # 性能基准测试
 
+[本栏目目录](index.md) · [English](benchmarking.en.md)
+
 Jittor 用 ASV 0.6.6 保存按提交索引的耗时与内存结果。套件**刻意使用当前 Python 环境**
 （`--python=same`）：为每个历史提交新建环境的话，测到的主要是 Jittor 的编译与安装
 成本，而不是稳态运行性能。
+
+运行 ASV 前，先按[性能对比方法](comparison.md)对齐正确性、设备和精度。下文依次说明本地计时、缓存隔离、结果留存与 CI；需要定位开销来源时使用[性能分析](profiling.md)。
 
 ## 可靠的本地计时
 
@@ -96,7 +100,7 @@ ASV_ACCELERATE_DEVICE=cuda python -m nox -s benchmark_accelerate
 
 ## 生态对比
 
-`tests/compat/torch/test_ecosystem_parity.py` 与 `test_ecosystem_speed.py` 对比**两个
+`compat/tests/torch/test_ecosystem_parity.py` 与 `test_ecosystem_speed.py` 对比**两个
 独立进程**——Jittor 的和二进制 PyTorch 的。两个进程都必须在加载下游库之前拿到各自的
 `torch` 命名空间。
 
@@ -127,8 +131,8 @@ CUDA 参数抛出显式的 ASV skip。真实 PyTorch 是**可选的 oracle**，�
 ## 昇腾 NPU 的手工对照
 
 ASV 套件不覆盖昇腾。ACL 后端与同机 `torch + torch_npu` 的速度和数值对照放在
-[`benchmarks/acl/`](https://github.com/Jittor/jittor/blob/master/benchmarks/acl/README.md)：`bench_jittor.py` / `bench_torch.py` 跑同一组网络
-（规格见 [`benchmarks/acl/models.md`](https://github.com/Jittor/jittor/blob/master/benchmarks/acl/models.md)），`benchmarks/acl/xval/` 把 Jittor 的权重和
+[`benchmarks/acl/`](https://github.com/Jittor/jittor/blob/2.0-refactor/benchmarks/acl/README.md)：`bench_jittor.py` / `bench_torch.py` 跑同一组网络
+（规格见 [`benchmarks/acl/models.md`](https://github.com/Jittor/jittor/blob/2.0-refactor/benchmarks/acl/models.md)），`benchmarks/acl/xval/` 把 Jittor 的权重和
 输入灌进 torch 逐步比对 loss 与梯度，`benchmarks/acl/probes/` 是绕开 Jittor 直接调 aclnn 的
 探针。这些都需要真实设备，**手工运行**，不进 CI，并且要与 ASV 用不同的编译缓存。
 
@@ -138,25 +142,15 @@ A/B 之间重新编译会让先跑的一方系统性占优、`jt.profiler` 的 `
 
 ## CPU 线程绑核
 
-任何 CPU 对比都要绑核。Jittor 与 PyTorch 默认都不设置 OpenMP affinity，在多核主机上
-调度器会在两次测量之间迁移线程：同一个 Jittor ViT 步在六次运行里测出
-`0.5555`~`0.7074s`——那是**相差 25% 的两个簇，不是一段离散**。设置
+两侧使用相同的线程数、亲和性和 CPU 配额。OpenMP 线程迁移会在代码不变时改变耗时，例如可以设置：
 
 ```bash
 export OMP_PROC_BIND=close
 export OMP_PLACES=cores
 ```
 
-后，四次运行收敛到 `0.5165`~`0.5195s`。绑核对**两个运行时**都值 `10`–`30%`，所以
-不绑核的对比可以把结论倒过来：某个扩散 UNet 不绑核读作 `0.90x`、绑核读作 `1.16x`，
-因为在那个模型上 PyTorch 从绑核中获益比 Jittor 更多。
+重复测量，报告中位数、离散度和亲和性设置。`/proc/stat` 表示实际活跃程度，不是可用配额；排查容器限制时查看 `/sys/fs/cgroup/cpu.max`。
 
-读 CPU 数字的人要记住两条推论：
-
-- **不绑核测出的比值不构成证据。** 两边都绑核、多次运行取中位数，并说明是哪种配置
-  产生的这个数字。
-- 用 `/proc/stat` 观察到的"核在忙"是负载**实际达到**的并行度，不是上限。在断言配额
-  限制了什么之前，先看 `/sys/fs/cgroup/cpu.max`。
 
 ## 记录选定的修订
 

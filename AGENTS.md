@@ -28,10 +28,11 @@
   unittest 与 benchmark 不得共享同一编译缓存。
 - 公共行为变化需要定向回归测试；涉及共享语义时扩大到 CPU 与相关加速后端。
 - 不使用宽泛异常捕获隐藏安装、注册、编译或后端错误。
-- 接入或验证下游 Torch 生态库（新库对拍、生态门禁 case、`adapters/` 新增或修改）
+- 接入或验证下游 Torch 生态库（新库对拍、生态门禁 case、独立 adapter 新增或修改）
   按 [`agent/skills/downstream-library-adaptation/SKILL.md`](agent/skills/downstream-library-adaptation/SKILL.md) 执行：先按其三行判据分流到
   jittor 核心、`jittor.compat.torch` 或 adapter，再按其 device 阶梯和准入清单验收。
-  不在该流程外新增 adapter。
+  不在该流程外新增 adapter。下游实现和专属测试在 `JittorEcosystem` 的独立仓库维护；
+  主仓不保留 `adapters/` 目录；生态仓库入口见根 README。
 
 ## Repository Boundary
 
@@ -93,13 +94,14 @@ JITTOR_TORCH_SHIM=1 PYTHONPATH=python python -m pytest -q tests/structure
   索引页同样成对（`index.md` / `index.en.md`）。英文页的相对链接指向 `X.en.md`，
   中文页指向 `X.md`。修改一侧时必须同步另一侧。
 - 长期机制说明放在 `docs/notes/`，仓库布局、源码架构、测试体系与已知问题放在
-  `docs/development/`，研究提案放在 `docs/research/`。仓库不保留任务看板、计划或交接
+  `docs/development/`，研究提案放在 `docs/project/research/`。仓库不保留任务看板、计划或交接
   这类过程文档。
 - [`agent/manuals/project-context.md`](agent/manuals/project-context.md) 只做当前状态索引；
   环境规则与问题总账分别维护在
   [`agent/manuals/environment.md`](agent/manuals/environment.md) 和
   [`agent/manuals/known-issues.md`](agent/manuals/known-issues.md)。
-- `docs/results/` 保存可复现的维护者验证结论，不复制成长篇项目历史。原始日志、缓存、
-  二进制和 benchmark 数据不进入文档树。
+- 执行记录、阶段性验证与测速结论写入 GitHub issue/PR，不在 `docs/` 新建日期命名文档、
+  结果目录或演示产物。历史报告通过固定提交引用；原始日志、缓存、二进制和 benchmark
+  数据留在仓库外。可复用机制与操作说明按主题维护。
 - 稳定结论注明状态、对应提交、验证范围、维护者和复查条件；过期信息应删除或归档，
   不在多个文件中重复维护。

@@ -1,9 +1,13 @@
 # Performance benchmarking
 
+[Section contents](index.en.md) · [中文](benchmarking.md)
+
 Jittor uses ASV 0.6.6 to retain per-commit timing and memory results. The suite
 **deliberately uses the current Python environment** (`--python=same`): creating a fresh
 environment for every historical commit would mostly measure Jittor's compilation and
 installation cost rather than steady-state runtime performance.
+
+Before running ASV, use the [comparison method](comparison.en.md) to align correctness, device and precision. This page then covers local timing, isolated caches, retained results and CI. For attribution rather than timing, use [profiling](profiling.en.md).
 
 ## Reliable local timing
 
@@ -110,7 +114,7 @@ directly.
 
 ## Ecosystem comparison
 
-`tests/compat/torch/test_ecosystem_parity.py` and `test_ecosystem_speed.py` compare **two
+`compat/tests/torch/test_ecosystem_parity.py` and `test_ecosystem_speed.py` compare **two
 independent processes** -- Jittor's and binary PyTorch's. Both processes must obtain their
 own `torch` namespace before loading downstream libraries.
 
@@ -151,8 +155,8 @@ executes -- **a run where every parameter is skipped is unacceptable.**
 
 The ASV suite does not cover Ascend. Speed and numerical comparisons between the ACL
 backend and same-machine `torch + torch_npu` live in
-[`benchmarks/acl/`](https://github.com/Jittor/jittor/blob/master/benchmarks/acl/README.md): `bench_jittor.py` / `bench_torch.py` run the same set of networks
-(specifications in [`benchmarks/acl/models.md`](https://github.com/Jittor/jittor/blob/master/benchmarks/acl/models.md)), `benchmarks/acl/xval/` feeds Jittor weights and
+[`benchmarks/acl/`](https://github.com/Jittor/jittor/blob/2.0-refactor/benchmarks/acl/README.md): `bench_jittor.py` / `bench_torch.py` run the same set of networks
+(specifications in [`benchmarks/acl/models.md`](https://github.com/Jittor/jittor/blob/2.0-refactor/benchmarks/acl/models.md)), `benchmarks/acl/xval/` feeds Jittor weights and
 inputs into torch to compare loss and gradients step by step, and `benchmarks/acl/probes/`
 contains probes that call aclnn directly, bypassing Jittor. All of these need real devices
 and are **run manually**; they do not enter CI and must use a different compilation cache
@@ -166,28 +170,15 @@ numerical drift on long trajectories, first run the comparison in
 
 ## CPU thread pinning
 
-Any CPU comparison must pin cores. Neither Jittor nor PyTorch sets OpenMP affinity by
-default, and on a multi-core host the scheduler migrates threads between measurements:
-the same Jittor ViT step measured `0.5555`~`0.7074s` across six runs -- that is **two
-clusters differing by 25%, not one spread**. After setting
+Use the same thread count, affinity and CPU quota on both sides. OpenMP thread migration can change timing independently of the code under test. For example:
 
 ```bash
 export OMP_PROC_BIND=close
 export OMP_PLACES=cores
 ```
 
-four runs converged to `0.5165`~`0.5195s`. Pinning is worth `10`–`30%` for **both
-runtimes**, so an unpinned comparison can invert the conclusion: one diffusion UNet reads
-as `0.90x` unpinned and `1.16x` pinned, because PyTorch benefits more from pinning than
-Jittor on that model.
+Repeat the measurement, report the median and dispersion, and record affinity settings. `/proc/stat` shows achieved activity, not the available quota; inspect `/sys/fs/cgroup/cpu.max` when investigating a container limit.
 
-Readers of CPU numbers should remember two corollaries:
-
-- **A ratio measured without pinning is not evidence.** Pin both sides, take the median of
-  several runs, and state which configuration produced the number.
-- The "cores busy" seen in `/proc/stat` is the parallelism that load **actually
-  achieved**, not a ceiling. Before asserting what a quota limits, look at
-  `/sys/fs/cgroup/cpu.max`.
 
 ## Recording the selected revision
 

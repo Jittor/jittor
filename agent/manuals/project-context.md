@@ -1,10 +1,10 @@
 # Jittor Project Context
 
 - Status: Current-state index, not a history log
-- Last reviewed: 2026-10-28
-- Baseline reviewed: `6f9caee1c`
+- Last reviewed: 2026-11-03
+- Baseline reviewed: `866d5d3e721e9f1d101742b8fe4f97106651491e`
 - Owner: Jittor core maintainers
-- Freshness expires: 2027-01-06
+- Freshness expires: 2027-02-03
 - Review when: the release line, a top-level goal or an indexed location changes
 
 Find where things are here, then read only the document your task needs.
@@ -14,38 +14,33 @@ Find where things are here, then read only the document your task needs.
 Jittor is a JIT deep-learning framework built on meta-operators: Python builds a
 graph, the C++ core in `src/` fuses and compiles kernels, and backends live under
 `backends/<name>/` (CPU, CUDA, ROCm, ACL/Ascend, Corex, and `comm/{mpi,nccl,hccl}`).
-The Torch compatibility layer is the separate `jittor-torch` project in `compat/`
+The Torch compatibility layer is the separate `jittor-compat` project in `compat/`
 (published as `jittor.compat`, including the `import torch` shim); downstream
-library adapters live in `adapters/`. The goal is a maintainable, Torch-grade
+library adapters are independently maintained in [JittorEcosystem](https://github.com/JittorEcosystem); the root README links the ecosystem repositories. The goal is a maintainable, Torch-grade
 framework that keeps the JIT/meta-operator design, under the gates in
-[Torch compatibility principles](../../docs/compatibility/principles.md).
+[Torch compatibility principles](../../docs/development/compatibility/principles.md).
 
 ## Current state
 
-The 2.0 restructuring has landed and the tree is in pre-release cleanup: the
-refactor-period board, plans and handoff documents are gone, and task status now
-lives in GitHub issues and pull requests. The accepted layout is in
-[repository layout](../../docs/development/repository-layout.md); packaging targets
-Python 3.7-3.13; [`noxfile.py`](../../noxfile.py) and
-[`tools/run_test_suite.py`](../../tools/run_test_suite.py) are the maintained gate
-surface (tiers `core` / `smoke` / full, see `AGENTS.md`). User-facing breaking
-changes: [2.0 migration notes](../../docs/releases/2.0.md). The Ascend 310P
-support from PR #18043 is integrated (SoC capability table, reduced-precision
-opt-in, ACL inference helpers and mapped composite ops); the latest follow-up is in
-[310P CPU-prefix replay and vision remeasurement](../../docs/results/2026-11-02-vision-ascend310p-replay.md),
-with the precision baseline in [FP16 corrections](../../docs/results/2026-10-30-vision-ascend310p-optimization.md),
-with the broader model scope in the [four-model verification](../../docs/results/2026-10-29-stock-vision-ascend310p.md). User documentation
-is now paired: Chinese-default `X.md` plus English `X.en.md`, with
-`README.md` / `README.en.md` at the root. The duplicate-capability audit
-consolidated optimizer state-name translation, vLLM accelerator detection,
-slot mapping, async host copies and sampling-snapshot caches, and the AMP
-half-preference test; forward-placement and jagged-axis have contract
-tripwires. The continuous-test rounds also fixed checkpoint buffer-class
-preservation, half-contraction accumulation, 0-D setitem codegen, scalar
-`sum(dim=0)`, the CPU deterministic query, the mapped-ACL parity inventory,
-the StepCapture replay copy window (KI-EXEC-016 closed), and the
-Torch autocast layer_norm float32 result (KI-COMPAT-020 closed); exact-value
-cuDNN tests opt into the new strict float32 precision tier.
+The 2.0 restructuring is in pre-release cleanup. The maintained layout is in
+[repository layout](../../docs/development/repository-layout.md); core and compat
+are separate distributions, and downstream integrations belong to JittorEcosystem.
+Packaging targets Python 3.7-3.13. [`noxfile.py`](../../noxfile.py) and
+[`tools/run_test_suite.py`](../../tools/run_test_suite.py) own the test entry points
+and `core` / `smoke` / full tiers. User-facing changes are in
+[2.0 migration notes](../../docs/project/releases/2.0.md).
+
+Documentation is paired Chinese/English and organized by topic. Dated execution
+reports and presentation artifacts have been removed; prior evidence remains in
+Git history and is linked by full commit SHA. Current validation evidence and task
+status belong in GitHub issues/PRs. Historical measurements do not grant support
+for the current revision; open failures and hardware gaps are tracked below.
+
+The 310P inference and model-coverage changes are reviewed in
+[PR #18043](https://github.com/Jittor/jittor/pull/18043). Its earlier vision
+measurements are preserved in the [pinned 310P replay report](https://github.com/Jittor/jittor/blob/eecff5ce5aa0d02aba3a246fcfb5632596732b44/docs/results/2026-11-02-vision-ascend310p-replay.en.md)
+(implementation `013bc35bdeb3d460c269c85dc9781e841731764e`); they do not
+claim validation or performance for a later integration commit.
 
 ## Where information lives
 
@@ -57,12 +52,12 @@ cuDNN tests opt into the new strict float32 precision tier.
 | Open defects and limitations | [known-issues.md](known-issues.md) |
 | Work waiting for hardware | [deferred-hardware.md](deferred-hardware.md) |
 | Source architecture and module boundaries | [source architecture](../../docs/development/source-architecture.md), [development index](../../docs/development/index.md) |
-| Test system and gate tiers | [test system](../../docs/development/test-system.md) |
+| Test system and gate tiers | [test system](../../docs/development/testing/test-system.md) |
 | Mechanism notes (numerics, placement, profiling) | [notes index](../../docs/notes/index.md) |
 | Torch compatibility | [compatibility index](../../docs/compatibility/index.md) |
 | Backend guides (Ascend, Corex, jtrun; legacy MPI) | [guides index](../../docs/guides/index.md) |
 | Performance method | [benchmarking](../../docs/performance/benchmarking.md) |
-| Reproducible verification results | [results index](../../docs/results/index.md) |
+| Historical verification evidence | [results index](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/index.md) |
 | Reusable verification tools | `agent/skills/` (listed in [agent-index.md](agent-index.md)) |
 | Task status, handoff, evidence | GitHub issues and pull requests |
 
@@ -84,13 +79,13 @@ cuDNN tests opt into the new strict float32 precision tier.
   (KI-CODEGEN-003, KI-CODEGEN-004, KI-COMPAT-009), pipelined memory and backward
   submission (KI-EXEC-004, KI-EXEC-010).
 - **Gate trust.** Gate cost (KI-TEST-012, KI-TEST-013).
-- **Research.** [Agent-operable optimization](../../docs/research/agentic-optimization.md)
+- **Research.** [Agent-operable optimization](../../docs/project/research/agentic-optimization.md)
   is a proposal only; no autonomous mutation path exists.
 
 ## Before running work
 
 Sync with the target remote branch as `AGENTS.md` requires and record the SHA;
 isolate the run per [environment](environment.md); search
-[known-issues.md](known-issues.md) and the [results index](../../docs/results/index.md)
+[known-issues.md](known-issues.md) and the [results index](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/index.md)
 for existing evidence; reproduce minimally before editing. Update this page only
 when its current-state summary or a location changes.

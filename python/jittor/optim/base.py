@@ -15,52 +15,9 @@ from jittor._runtime.dispatch import dispatch_context
 # ***************************************************************
 import jittor as jt
 import numpy as np
-import operator
 import warnings
 from copy import deepcopy
-from functools import partial
 
-
-_STANDARD_OPTIMIZER_ARITHMETIC = (
-    operator.add, operator.mul, operator.truediv, operator.sub)
-
-
-def _fp32_optimizer_binary(operation, left, right):
-    if not isinstance(left, jt.Var):
-        left = jt.array(left, dtype="float32").stop_grad()
-    if not isinstance(right, jt.Var):
-        right = jt.array(right, dtype="float32").stop_grad()
-    return operation(left, right)
-
-
-def _concrete_frontend_tensor(tensor):
-    tensor_type = type(tensor)
-    metadata = vars(tensor_type)
-    return (metadata.get("_frontend_backend") is jt or (
-        metadata.get("_parameter_backend") is jt
-        and len(tensor_type.__bases__) == 1
-        and vars(tensor_type.__bases__[0]).get("_frontend_backend") is jt))
-
-
-def _optimizer_arithmetic(tensors, coefficients, *, enabled=True):
-    """Use native FP32 arithmetic only for resolved frontend tensors."""
-    if not enabled or not all(_concrete_frontend_tensor(t) for t in tensors):
-        return _STANDARD_OPTIMIZER_ARITHMETIC
-    if jt.flags.amp_reg != 0:
-        return _STANDARD_OPTIMIZER_ARITHMETIC
-    if not all(isinstance(c, (int, float)) for c in coefficients) or not all(
-            _jittor_dtype_name(t.dtype) == "float32" for t in tensors):
-        return _STANDARD_OPTIMIZER_ARITHMETIC
-    param = tensors[0]
-    placement = (param.placement_backend, param.device_id)
-    if not all((t.placement_backend, t.device_id) == placement
-               for t in tensors[1:]):
-        return _STANDARD_OPTIMIZER_ARITHMETIC
-    context = jt.core.dispatch_context([param])
-    if context[0] not in ("cpu", "cuda") or context != jt.core.dispatch_context([]):
-        return _STANDARD_OPTIMIZER_ARITHMETIC
-    return tuple(partial(_fp32_optimizer_binary, operation) for operation in (
-        jt.add, jt.multiply, jt.divide, jt.subtract))
 
 def _grad_matches_param(p, g):
     return isinstance(g, jt.Var) and list(g.shape) == list(p.shape)

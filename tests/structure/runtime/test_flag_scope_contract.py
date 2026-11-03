@@ -38,17 +38,11 @@ _ALLOWED = {
         "to select the device the run executes on",
 }
 
-#: Directories outside the rule: probes a person runs by hand, never collected.
-_ALLOWED_PREFIXES = ("tests/backends/acl/manual/",)
-
-
 def _candidate_files():
     from _helpers.paths import iter_test_files
     for path in iter_test_files("*.py"):
         relative = path.relative_to(REPO_ROOT).as_posix()
         if relative in _ALLOWED:
-            continue
-        if relative.startswith(_ALLOWED_PREFIXES):
             continue
         if path.name.startswith("test_") or path.parent.name == "_helpers":
             yield path, relative

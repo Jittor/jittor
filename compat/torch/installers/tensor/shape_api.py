@@ -105,7 +105,8 @@ def _bitcast(self, dt):
     reinterpret_view = getattr(jt, "reinterpret_view", None)
     npd = _np_view_of.get(ds, _np.uint8)
     if reinterpret_view is not None and ds in _np_view_of:
-        return reinterpret_view(self, shape, ds)
+        result = reinterpret_view(self, shape, ds)
+        return result._set_dtype_view_of(self)
     return jt.array(_np.ascontiguousarray(self.numpy()).view(npd))
 
 
@@ -130,7 +131,8 @@ def _reshape_or_view(self, shape, _kw, *, allow_copy):
             return out
     # torch's `.view(dtype)` / `.view(dtype=...)` REINTERPRETS the bytes as
     # another dtype (bitcast), e.g. weight.view(torch.uint8) for byte-packing
-    # in vLLM weight transfer. jittor has no dtype-view; bitcast via numpy.
+    # in vLLM weight transfer. The native reinterpret_view preserves the byte
+    # storage and rescales valid non-contiguous strides into the new dtype.
     # (NB: 'dtype' the kwarg must not shadow the `dtype` class used below.)
     _context = get_install_context(jt)
     _native = _context.state["tensor_shape_api"]

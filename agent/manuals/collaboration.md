@@ -11,8 +11,7 @@
    再通过 [`project-context.md`](project-context.md) 定位相关文档。
 3. **确认环境与问题**：按需阅读 [`environment.md`](environment.md) 和
    [`known-issues.md`](known-issues.md)，不要依赖个人机器路径或过期会话记录。
-4. **确认既有证据**：在 [`docs/results/`](../../docs/results/index.md) 查找已有结论；新主题的
-   报告使用 `YYYY-MM-DD-topic.md`。
+4. **确认既有证据**：检查相关 GitHub issue/PR 与问题总账；旧报告可查[固定提交中的历史记录](https://github.com/Jittor/jittor/tree/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results)。
 5. **开始工作**，遵循下面的协作规范。
 
 ## 协作规范
@@ -25,9 +24,9 @@
   PR 中注明条目编号。
 - **`deferred-hardware.md`** 只记等硬件验收的事项与上机命令，不记进度。
 - **`docs/`** 保存长期架构决策、测试契约、开发指南和研究提案。
-- **结果报告**记录验证口径、命令、结果、结论和已知边界。原始日志、缓存、
-  二进制和大体积结果放在 `$JITTOR_LAB_ROOT`，
-  报告中标明“未版本化”，不要放进 Jittor 主仓库。
+- **验证证据**写入 GitHub issue/PR，记录口径、提交、命令、结果和已知边界；不在
+  `docs/` 创建日期报告或结果树。原始日志、缓存、二进制和大体积结果放在
+  `$JITTOR_LAB_ROOT`，注明“未版本化”。
 - 稳定文档注明状态、复查日期、对应基线、owner 和复查触发条件。
 - 任务领取、状态、交接与验收证据记在 GitHub issue 与 PR 中，仓库不保留看板或交接文档。
 

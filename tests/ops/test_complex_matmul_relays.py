@@ -236,7 +236,21 @@ class TestFindBlas(unittest.TestCase):
         # depends on a CBLAS (dependencies are searched too, which is what lets
         # a wrapper such as conda's libcblas.so stand in for its backend).
         import _ctypes
-        not_blas = _ctypes.__file__
+        not_blas = getattr(_ctypes, "__file__", None)
+        if not_blas is None:
+            # Standalone CPython can build _ctypes into the interpreter.
+            # Its shared Python library is another loadable non-BLAS fixture;
+            # use the interpreter's own configuration, not a host-specific path.
+            import sysconfig
+            from pathlib import Path
+            libdir = sysconfig.get_config_var("LIBDIR")
+            libname = sysconfig.get_config_var("LDLIBRARY")
+            if not libdir or not libname:
+                self.skipTest("this interpreter exposes no non-BLAS shared-library fixture")
+            candidate = Path(libdir) / libname
+            if not candidate.is_file():
+                self.skipTest("this interpreter has neither a shared _ctypes nor libpython")
+            not_blas = str(candidate)
         with mock.patch.dict(os.environ, {"JT_BUILD_BLAS_LIB_PATH": not_blas}):
             found, reasons = compile_extern.find_blas()
         self.assertIsNone(found)

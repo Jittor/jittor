@@ -92,6 +92,12 @@ def routing(monkeypatch):
         "_pair": lambda value: tuple(value) if isinstance(value, (tuple, list)) else (value, value),
         "_arg_policy": SimpleNamespace(ignored=ignored),
         "_INPLACE_CONSEQUENCE": "not performed in place",
+        # SDPA asks `causal_mask_rewrite` before routing. The verdict is a host
+        # read of the mask, so it is cached per mask view in module state, and
+        # the backend it consults is the same `dispatch_context` this fixture
+        # answers "acl" with -- which is why the rewrite declines here.
+        "_EXACT_CAUSAL": [None, False],
+        "dispatch_context": native.core.dispatch_context,
     }
     return SimpleNamespace(namespace=namespace, jt=native, seen=seen,
                            marker=marker, register=register, dispatch=dispatch)
@@ -238,7 +244,8 @@ def test_layer_norm_keeps_affine_parameters_and_validates_before_dispatch(routin
 
 
 def test_matmul_bmm_and_transpose_reuse_existing_keys(routing):
-    names = ["_operand", "_check_matmul_shapes", "_transpose_base_last2", "_matmul_2d_cublas",
+    names = ["_operand", "_check_matmul_shapes", "_transpose_base_last2", "_keep_operand_grads",
+             "_matmul_2d_cublas",
              "_mixed_float_compute_dtype", "_matmul_kernel_dispatch",
              # The AMP scope the three generic contractions share. It is a
              # module-level helper rather than three copies of the same
@@ -296,7 +303,8 @@ def test_softmax_uses_existing_key_after_public_axis_validation(routing, monkeyp
 
 def test_sdpa_validates_dtype_and_dropout_before_registered_attention(routing):
     function = _definitions("nn/functional/attention.py",
-                            ["scaled_dot_product_attention", "_shape", "_repeated_heads",
+                            ["causal_mask_rewrite", "_exactly_causal",
+                             "scaled_dot_product_attention", "_shape", "_repeated_heads",
                              "_expand_heads"],
                             routing.namespace)["scaled_dot_product_attention"]
     routing.register("nn.scaled_dot_product_attention")

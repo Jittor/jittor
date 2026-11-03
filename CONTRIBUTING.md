@@ -41,8 +41,7 @@ export cache_name="${cache_name:-local-dev}"
 ├── backends/            # one directory per backend: cpu/ cuda/ acl/ rocm/ corex/ comm/
 ├── python/jittor/       # the Python runtime package (pure Python)
 ├── python/jittor_utils/ # bootstrap for the build utilities in jittor/build/utils/
-├── compat/              # the optional `jittor-torch` distribution: torch shim, FSDP2, triton
-├── adapters/            # the optional `jittor-torch-adapters` distribution
+├── compat/              # the optional `jittor-compat` distribution: torch shim, FSDP2, triton
 ├── tests/               # repository pytest suite; not shipped in wheels
 ├── examples/            # runnable examples and MyST notebook sources
 ├── benchmarks/          # ASV regressions, Torch comparisons, and ACL measurements
@@ -82,7 +81,7 @@ wheel 把同样的目录装成 `jittor/src/` 与 `jittor/backends/<name>/`。这
 
 ## 测试
 
-仓库测试统一位于根目录 [`tests/`](tests/)，由 pytest 收集；已有
+仓库测试统一位于根目录 [`tests/`](tests)，由 pytest 收集；已有
 `unittest.TestCase` 无需改写。测试配置和合法 marker 均在
 [`pyproject.toml`](pyproject.toml) 中定义。
 
@@ -152,13 +151,14 @@ python -m nox -s cuda -- tests/nn/test_nn_capabilities.py
 
 | 栏目 | 内容 |
 | --- | --- |
-| [`docs/guides/`](docs/guides/) | 任务指南：硬件、调试、显存、平台支持与限制 |
-| [`docs/notes/`](docs/notes/) | 长期有效的框架机制（精度、放置、异步执行） |
-| [`docs/compatibility/`](docs/compatibility/) | Torch 兼容层及其验收规则 |
-| [`docs/development/`](docs/development/) | 仓库布局、源码架构、测试体系、已知问题说明 |
-| [`docs/research/`](docs/research/) | 尚未定案的研究提案 |
-| [`docs/results/`](docs/results/) | 可复现的维护者结论，每条带状态、提交、范围、维护者与复查条件 |
-| [`docs/releases/`](docs/releases/) | 发布说明 |
+| [`docs/getting-started/`](docs/getting-started/index.md) | 安装、第一次计算与训练 |
+| [`docs/guides/`](docs/guides/index.md) | 硬件、分布式训练、调试与使用限制 |
+| [`docs/compatibility/`](docs/compatibility/index.md) | 使用与部署 Torch 兼容层 |
+| [`docs/performance/`](docs/performance/index.md) | 性能测量、分析与显存优化 |
+| [`docs/api/`](docs/api/index.md) | 公开接口参考 |
+| [`docs/notes/`](docs/notes/index.md) | 精度、设备放置与运行时机制 |
+| [`docs/development/`](docs/development/index.md) | 源码架构、开发契约、测试与贡献流程 |
+| [`docs/project/`](docs/project/index.md) | 发布说明、社区项目与研究提案 |
 
 - 安装或首次使用发生变化时更新 [`README.md`](README.md)。它是唯一权威的根 README，
   中文版为 `README.md`，英文版为 `README.en.md`；不要再加按语言复制或生成的第三份。

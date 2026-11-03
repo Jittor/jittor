@@ -54,7 +54,7 @@ def options(argv=None):
     parser.add_argument('--wheel', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--cache-root', type=Path, required=True)
-    parser.add_argument('--report', default='docs/results/2026-10-16-diffusers-official-installation.md')
+    parser.add_argument('--report', default='https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-16-diffusers-official-installation.md')
     args = parser.parse_args(argv)
     for name in ('candidate_python', 'oracle_python', 'checkout', 'wheel', 'output', 'cache_root'):
         setattr(args, name, getattr(args, name).absolute())
@@ -65,9 +65,12 @@ def options(argv=None):
             parser.error('Output and benchmark caches must be outside the source checkout')
     if args.output.exists() and any(args.output.iterdir()):
         parser.error('Use a new empty output directory')
-    report = (ROOT / args.report).resolve()
-    if not args.report.startswith('docs/results/') or ROOT not in report.parents or not report.is_file():
-        parser.error('An existing versioned results report is required')
+    sys.path.insert(0, str(SCRIPTS))
+    from audit_coverage import validate_report_reference
+    try:
+        validate_report_reference(args.report, ROOT)
+    except ValueError as error:
+        parser.error(str(error))
     return args
 
 
@@ -84,7 +87,7 @@ def main(argv=None):
     frozen = framework_snapshot(ROOT)
     source = source_descriptor(args.checkout, args.wheel)
     args.output.mkdir(parents=True, exist_ok=True)
-    common = load('diffusers_runtime_environment', ROOT / 'tools/run_transformers_gate.py')
+    common = load('diffusers_runtime_environment', ROOT / 'tools/ecosystem_environment.py')
     verify = load('diffusers_reference_comparison', SCRIPTS / 'verify_repo.py')
     environments, wrappers = {}, {}
     for runtime, python in (('torch', args.oracle_python), ('jittor', args.candidate_python)):

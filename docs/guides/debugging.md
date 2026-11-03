@@ -1,5 +1,7 @@
 # 调试 Jittor 程序
 
+[本栏目目录](index.md) · [English](debugging.en.md)
+
 Jittor 惰性执行、运行时编译算子。下面这些诊断手段都是**用性能换更准确的失败信息**，
 只在复现问题时打开。
 
@@ -35,7 +37,7 @@ jt.flags.lazy_execution = 0
 ## 诊断显存耗尽
 
 单次迭代就超出显存时，先用 `jt.profile()` 看峰值那一刻谁活着（见
-[性能与显存画像](../notes/profiling.md)），再减小模型或批次。显式同步加回收有助于判断是不是临时图被
+[性能与显存画像](../performance/profiling.md)），再减小模型或批次。显式同步加回收有助于判断是不是临时图被
 留住了：
 
 ```python

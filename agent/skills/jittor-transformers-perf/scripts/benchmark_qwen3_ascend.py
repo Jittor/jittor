@@ -141,7 +141,7 @@ def benchmark(args, runtime):
         import torch
 
         if not hasattr(torch, "_torch_compat_install_context"):
-            raise RuntimeError("torch is not the Jittor frontend; install jittor-torch or activate the shim")
+            raise RuntimeError("torch is not the Jittor frontend; install jittor-compat or activate the shim")
         device = torch.device("cuda")
         synchronize = lambda: jt.sync_all(True)
         backend_version = jt.__version__

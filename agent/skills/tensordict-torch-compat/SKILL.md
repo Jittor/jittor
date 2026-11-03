@@ -20,7 +20,7 @@ Torch API 语义要分别复现，不能仅凭安装或补丁标记判通过。
 TensorDict **0.10.0** 与独立 Torch **2.11.0+cu128** 的 CPU/CUDA 基线、固定权重 seed=7
 输入扰动和三步 SGD 均通过。每步检查输出、loss、两个参数梯度、输入梯度和更新后的两个参数，
 共 21 个轨迹数组；两个 trainable 参数、零 frozen 参数。本次没有启用额外 adapter。
-详见 [维护者报告](../../../docs/results/2026-10-15-metric-state-and-tensordict-oracles.md)。
+详见 [维护者报告](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-15-metric-state-and-tensordict-oracles.md)。
 
 这是绑定原测量基线的 **L3 组件协议证据**。后续加入
 `EcosystemParity::test_tensordict_index_and_stack` 与继承的 CUDA 节点，显式要求全部
@@ -72,7 +72,7 @@ PYTHONPATH=python JITTOR_TORCH_SHIM=1 \
 lazy_stack 组合，不扩大为完整容器、分布式或训练设施。CPU 最大绝对误差 9.54e-7，
 CUDA 7.15e-7；原 .002/.01 预算不变，实际 TF32/benchmark 关闭、highest、F0。
 与 Metrics 共四行被共享 auditor 实际接受、零拒绝。见
-[严格官方来源报告](../../../docs/results/2026-10-16-metrics-tensordict-installed-source.md)。
+[严格官方来源报告](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-16-metrics-tensordict-installed-source.md)。
 
 `90ee` 原数组保留；当前 guard 拒绝其缺少固定官方 wheel/METADATA/RECORD 的记录，
 不补造历史来源。新测量绑定 36 个上游 Python 文件及完整 42 个官方 wheel 包文件。
@@ -98,9 +98,9 @@ collector 检查两个 trainable 参数、零 frozen、sample 梯度、完整轨
 
 ## 断点归属与旧门禁
 
-完整 CPU maintained 入口 `ecosystem_metric_tensordict_source` 同时执行 Metrics 与 TensorDict，
+完整 CPU 组件入口在独立 jittor-tensordict 仓库执行，
 保留本 case 全部 29 对数组、两个参数和 sample 梯度、seed 0/7 及三步 SGD，不接受缩减协议。
-使用 `python tools/provision_ecosystem_nightly.py --library metric_tensordict --state-root <new-external-state> --run`
+使用 `python tools/provision_component.py --jittor-source "$JITTOR_SOURCE" --state-root <new-external-state> --run`
 完整配置独立 controller/candidate/oracle 环境并通过各自 `pip check`。
 provisioner 获取真实 `v0.10.0` tag 并检查 peeled commit，不能给任意 SHA 合成版本。
 安装 proof 保留实际 pip RECORD；源码闭包必须包含已提交的维护 runner。
@@ -108,7 +108,7 @@ provisioner 获取真实 `v0.10.0` tag 并检查 peeled commit，不能给任意
 TensorDict 六 workers / 29 pairs、全部参数与 sample 梯度、三步 SGD 为 L3，分母仍为 2/60；
 两库共 35 pairs / 38 份非零梯度 / 12 次参数更新已独立重算，公共 auditor 两条 CPU 记录全部接受。
 三独立环境完整依赖解析、各侧 `pip check`、完整官方载荷与实际 METADATA/pip RECORD 均复核，
-原始 seal 和实际边界见[专用报告](../../../docs/results/2026-10-16-metrics-tensordict-maintained-cpu-nightly.md)。
+原始 seal 和实际边界见[专用报告](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-16-metrics-tensordict-maintained-cpu-nightly.md)。
 不重标 `912` 记录，不将工作流接线声称为 hosted nightly 已执行。
 
 | 断点 | 实际 owner |
@@ -118,8 +118,10 @@ TensorDict 六 workers / 29 pairs、全部参数与 sample 梯度、三步 SGD �
 | `torch._C._nn._parse_to`、通用 tensor 索引/梯度语义 | `jittor.compat.torch`，先做无 TensorDict 的最小复现 |
 | native 算子或真实设备计算错误 | Jittor 核心 |
 
-`adapters/` 没有 TensorDict adapter。已有 `compat/tests/torch/test_tensordict_compat.py` 是
+私有 helper 适配由 [jittor-tensordict](https://github.com/JittorEcosystem/jittor-tensordict) 独立维护。已有 [独立 CUDA 回归](https://github.com/JittorEcosystem/jittor-tensordict/blob/main/tests/test_dense_cuda.py) 是
 另一条可选 CUDA 单解释器门禁，含 CPU conversion、构造/update/index/lazy stack；它有依赖和
 设备 skip 条件。`_jittor_index_compat=True` 和 import 成功都不能替代真实行为与梯度证据。
 本轮正式双解释器 case 通过不等于旧 optional 文件已重跑。历史 constraints 导入失败已由
 真实 owner 修复和本次 CPU/CUDA 执行闭环替代；不能用旧缺包结论否认当前固定版本结果。
+
+完整组件协议已迁至 [jittor-tensordict](https://github.com/JittorEcosystem/jittor-tensordict/blob/main/docs/testing.md)，上述 `tools/provision_component.py` 命令在独立仓库执行。旧验收报告保留原始源码身份，迁移不视为重新验收。
