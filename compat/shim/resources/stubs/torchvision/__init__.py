@@ -276,6 +276,43 @@ class Resize:
         return f"Resize(size={self.size}, interpolation={self.interpolation})"
 
 
+class RandomResizedCrop:
+    """torchvision.transforms.RandomResizedCrop for PIL images and Vars."""
+
+    def __init__(self, size, scale=(0.08, 1.0), ratio=(3.0 / 4.0, 4.0 / 3.0),
+                 interpolation=InterpolationMode.BILINEAR, antialias=True, **kw):
+        self.size = (size, size) if isinstance(size, int) else tuple(size)
+        self.scale = tuple(scale)
+        self.ratio = tuple(ratio)
+        self.interpolation = interpolation
+        self.antialias = antialias
+
+    def _crop_box(self, h, w):
+        import random
+        area = h * w
+        for _ in range(10):
+            target = random.uniform(*self.scale) * area
+            aspect = random.uniform(*self.ratio)
+            cw = int(round((target * aspect) ** 0.5))
+            ch = int(round((target / aspect) ** 0.5))
+            if 0 < cw <= w and 0 < ch <= h:
+                return random.randint(0, h - ch), random.randint(0, w - cw), ch, cw
+        side = min(h, w)
+        return (h - side) // 2, (w - side) // 2, side, side
+
+    def __call__(self, pic):
+        from PIL import Image as _Im
+        if isinstance(pic, _Im.Image):
+            i, j, ch, cw = self._crop_box(pic.height, pic.width)
+            cropped = pic.crop((j, i, j + cw, i + ch))
+            return cropped.resize((self.size[1], self.size[0]), _pil_resample(self.interpolation))
+        i, j, ch, cw = self._crop_box(pic.shape[-2], pic.shape[-1])
+        return Resize(self.size, self.interpolation, antialias=self.antialias)(pic[..., i:i + ch, j:j + cw])
+
+    def __repr__(self):
+        return f"RandomResizedCrop(size={self.size}, scale={self.scale}, ratio={self.ratio})"
+
+
 class ToPILImage:
     def __init__(self, mode=None):
         self.mode = mode
@@ -590,7 +627,8 @@ _CONCRETE = {"InterpolationMode": InterpolationMode, "ImageReadMode": ImageReadM
              # real class-based transforms (torchvision.transforms.*)
              "Compose": Compose, "Normalize": Normalize, "ToTensor": ToTensor,
              "Resize": Resize, "ToPILImage": ToPILImage, "Lambda": Lambda,
-             "CenterCrop": CenterCrop, "ColorJitter": ColorJitter}
+             "CenterCrop": CenterCrop, "ColorJitter": ColorJitter,
+             "RandomResizedCrop": RandomResizedCrop}
 
 
 class _AnyModule(types.ModuleType):
