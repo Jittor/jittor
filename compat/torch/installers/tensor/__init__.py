@@ -1074,6 +1074,7 @@ from .shape_api import (
     _torch_view_base,
     _torch_size,
     _torch_sum,
+    _torch_mean,
     _torch_var_sum,
 )
 from types import MappingProxyType
@@ -1130,6 +1131,12 @@ def install_methods(ctx):
     Var.sum = _torch_var_sum
     if _orig_module_sum is not None:
         g.sum = _torch_sum
+    # The plain-reduction normalization below covers the Tensor methods; the
+    # module-level mean kept the native function, so torch.mean(x, dim=[...])
+    # (torchmetrics SCC) failed on the list spelling.
+    _orig_module_mean = getattr(g, "mean", None)
+    if _orig_module_mean is not None:
+        g.mean = _torch_mean
     # Full dim/dims/keepdim normalization for the plain reductions that map onto
     # jittor's scalar-`dim` / tuple-`dims` overload pair (mean/prod/any/all). mmdet
     # exercises tuple dims here, e.g. yolact_head's loss.mean(dim=(1, 2)).
@@ -1204,6 +1211,7 @@ def install_methods(ctx):
         '_Size': locals().get('_Size'),
         '_orig_index_add_inplace': locals().get('_orig_index_add_inplace'),
         '_orig_module_sum': locals().get('_orig_module_sum'),
+        '_orig_module_mean': locals().get('_orig_module_mean'),
         '_orig_reshape': locals().get('_orig_reshape'),
         '_orig_var_sum': locals().get('_orig_var_sum'),
     })
