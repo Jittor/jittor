@@ -3,7 +3,7 @@
 import jittor as jt
 from jittor._runtime.dispatch import select_kernel
 
-from ._amp import bias_for_compute_dtype
+from ._amp import amp_contraction_inputs, amp_contraction_scope, bias_for_compute_dtype
 
 def conv_transpose(input, weight, bias=None, stride=1, padding=0, output_padding=0, groups=1, dilation=1):
     if groups == 1:
@@ -35,15 +35,19 @@ def conv_transpose(input, weight, bias=None, stride=1, padding=0, output_padding
                                padding, output_padding, dilation, 1)
         if kernel is not None:
             return kernel(x, weight, bias, stride, padding, output_padding, dilation, 1)
+        x, weight = amp_contraction_inputs(x, weight)
         shape = (N, i, o, H, W, h, w)
         xx = x.broadcast(shape, (2, 5, 6)) # i,h,w
         ww = weight.broadcast(shape, (0, 3, 4)) # N,H,W
-        y = (ww*xx).reindex_reduce("add", out_shape, [
-            'i0', # N
-            'i2', # o
-            f'i3*{stride_h}-{padding_h}+i5*{dilation_h}', # Hid+Khid
-            f'i4*{stride_w}-{padding_w}+i6*{dilation_w}', # Wid+KWid
-        ])
+        # Like matmul and forward convolution, the product/reduction is one
+        # low-precision contraction, not fall-through Tensor arithmetic.
+        with amp_contraction_scope():
+            y = (ww*xx).reindex_reduce("add", out_shape, [
+                'i0', # N
+                'i2', # o
+                f'i3*{stride_h}-{padding_h}+i5*{dilation_h}', # Hid+Khid
+                f'i4*{stride_w}-{padding_w}+i6*{dilation_w}', # Wid+KWid
+            ])
         if isinstance(bias, jt.Var):
             b = bias_for_compute_dtype(y, bias).broadcast(y.shape, [0,2,3])
             y = y + b
@@ -95,6 +99,7 @@ def conv_transpose(input, weight, bias=None, stride=1, padding=0, output_padding
         if kernel is not None:
             return kernel(input, weight, bias, stride, padding, output_padding,
                           dilation, groups)
+        input, weight = amp_contraction_inputs(input, weight)
         shape = [N,G,oc//G,CpG,oh,ow,h,w]
         xx = input.reindex(shape, [
             'i0',
@@ -109,12 +114,13 @@ def conv_transpose(input, weight, bias=None, stride=1, padding=0, output_padding
             'i7'
         ])
         ww.compile_options = xx.compile_options = {"G":G,"C":C}
-        y = (ww*xx).reindex_reduce("add", out_shape, [
-            'i0', # Nid
-            f'i1*{CpG}+i3', # Gid
-            f'i4*{stride[0]}-{padding[0]}+i6*{dilation[0]}', # Hid+Khid
-            f'i5*{stride[1]}-{padding[1]}+i7*{dilation[1]}', # Wid+KWid
-        ])
+        with amp_contraction_scope():
+            y = (ww*xx).reindex_reduce("add", out_shape, [
+                'i0', # Nid
+                f'i1*{CpG}+i3', # Gid
+                f'i4*{stride[0]}-{padding[0]}+i6*{dilation[0]}', # Hid+Khid
+                f'i5*{stride[1]}-{padding[1]}+i7*{dilation[1]}', # Wid+KWid
+            ])
         if bias is not None:
             b = bias_for_compute_dtype(y, bias).broadcast(y.shape, [0,2,3])
             y = y + b
@@ -153,16 +159,18 @@ def conv_transpose3d(input, weight, bias=None, stride=1, padding=0, output_paddi
                            padding, dilation, groups)
     if kernel is not None:
         return kernel(x, weight, out_shape[2:], stride, padding, dilation, groups)
+    x, weight = amp_contraction_inputs(x, weight)
     shape = (N, i, o, D, H, W, d, h, w)
     xx = x.broadcast(shape, (2, 6, 7, 8)) # i,h,w
     ww = weight.broadcast(shape, (0, 3, 4, 5)) # N,H,W
-    y = (ww*xx).reindex_reduce("add", out_shape, [
-        'i0', # N
-        'i2', # o
-        f'i3*{stride_d}-{padding_d}+i6*{dilation_d}', # Did+Kdid
-        f'i4*{stride_h}-{padding_h}+i7*{dilation_h}', # Hid+Khid
-        f'i5*{stride_w}-{padding_w}+i8*{dilation_w}', # Wid+KWid
-    ])
+    with amp_contraction_scope():
+        y = (ww*xx).reindex_reduce("add", out_shape, [
+            'i0', # N
+            'i2', # o
+            f'i3*{stride_d}-{padding_d}+i6*{dilation_d}', # Did+Kdid
+            f'i4*{stride_h}-{padding_h}+i7*{dilation_h}', # Hid+Khid
+            f'i5*{stride_w}-{padding_w}+i8*{dilation_w}', # Wid+KWid
+        ])
     if isinstance(bias, jt.Var):
         b = bias_for_compute_dtype(y, bias).broadcast(y.shape, [0,2,3,4])
         y = y + b

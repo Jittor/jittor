@@ -3,7 +3,6 @@
 import copy
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
-import json
 import random
 import socket
 import sys
@@ -16,6 +15,7 @@ from jittor.serialization.sharded import (
 import numpy as np
 import pytest
 
+from _helpers.native_runtime import assert_native_runtime
 from _helpers import torch_runtime
 from _helpers.native_checkpoint import (
     assert_trace, check_bfloat16_training_resume, model_optimizer,
@@ -23,8 +23,100 @@ from _helpers.native_checkpoint import (
 )
 
 
+def _sgd_checkpoint_fixture(sharded=False, frozen=False):
+    model = jt.nn.Linear(3, 2)
+    if frozen:
+        model.bias.stop_grad()
+    if sharded:
+        from jittor.distributed.fsdp import fully_shard
+        model = fully_shard(model)
+    return model, jt.optim.SGD(model.parameters(), lr=.1, fused=False)
+
+
+@pytest.mark.parametrize("sharded", [False, True])
+@pytest.mark.parametrize("mixed", [False, True])
+def test_sgd_optional_momentum_checkpoint_resume(tmp_path, sharded, mixed):
+    model, optimizer = _sgd_checkpoint_fixture(sharded, frozen=mixed)
+    if mixed:
+        # Enable momentum after construction, with one parameter still frozen.
+        optimizer.param_groups[0]["momentum"] = .5
+    optimizer.step(model(jt.ones((2, 3))).sum())
+    values = optimizer.param_groups[0]["values"]
+    assert values[-1] is None
+    assert isinstance(values[0], jt.Var) if mixed else values[0] is None
+    checkpoint.save_training_state(model, optimizer, tmp_path)
+    optimizer.step(model(jt.ones((2, 3))).sum())
+    expected = {name: value.numpy().copy() for name, value in model.state_dict().items()}
+
+    fresh, resumed = _sgd_checkpoint_fixture(sharded)
+    checkpoint.load_training_state(fresh, resumed, tmp_path)
+    assert resumed.param_groups[0]["values"][-1] is None
+    resumed.step(fresh(jt.ones((2, 3))).sum())
+    for name, value in fresh.state_dict().items():
+        np.testing.assert_array_equal(value.numpy(), expected[name])
+
+
+@pytest.mark.parametrize("sharded", [False, True])
+@pytest.mark.parametrize("invalid", ["shape", "dtype", "object", "initialized", "length",
+                                     "missing_flags", "empty_flags", "nonbool_flag"])
+def test_sgd_optional_state_validation_is_atomic(tmp_path, invalid, sharded):
+    model, optimizer = _sgd_checkpoint_fixture(sharded)
+    optimizer.step(model(jt.ones((2, 3))).sum())
+    checkpoint.save_training_state(model, optimizer, tmp_path / "good")
+    state = checkpoint.load(tmp_path / "good")
+    group = state["optimizer"]["state"]["defaults"]["param_groups"][0]
+    if invalid == "shape":
+        group["values"][0] = jt.zeros((1, 3))
+    elif invalid == "dtype":
+        group["values"][0] = jt.zeros((2, 3), dtype="float64")
+    elif invalid == "object":
+        group["values"][0] = "not an optimizer tensor"
+    elif invalid == "initialized":
+        group["momentum_initialized"][0] = True
+    elif invalid == "length":
+        group["values"].append(None)
+    elif invalid == "missing_flags":
+        del group["momentum_initialized"]
+    elif invalid == "empty_flags":
+        group["momentum_initialized"] = []
+    else:
+        group["momentum_initialized"][0] = 0
+    checkpoint.save(state, tmp_path / "bad")
+    fresh, resumed = _sgd_checkpoint_fixture(sharded)
+    before = {name: value.numpy().copy() for name, value in fresh.state_dict().items()}
+    before_rng = jt.core.rng_state("cpu")
+    with pytest.raises((ValueError, checkpoint.CheckpointError),
+                       match="optimizer.*(state|tensor-list)|FSDP tensor|TensorShard.*mismatch"):
+        checkpoint.load_training_state(fresh, resumed, tmp_path / "bad")
+    assert resumed.n_step == 0
+    assert all(value is None for value in resumed.param_groups[0]["values"])
+    assert jt.core.rng_state("cpu") == before_rng
+    for name, value in fresh.state_dict().items():
+        np.testing.assert_array_equal(value.numpy(), before[name])
+
+
+@pytest.mark.parametrize("sharded", [False, True])
+def test_legacy_sgd_tensor_state_restores_into_lazy_optimizer(tmp_path, sharded):
+    model, optimizer = _sgd_checkpoint_fixture(sharded)
+    optimizer.step(model(jt.ones((2, 3))).sum())
+    group = optimizer.param_groups[0]
+    group["values"] = [jt.zeros_like(parameter).stop_grad() for parameter in group["params"]]
+    del group["momentum_initialized"]
+    checkpoint.save_training_state(model, optimizer, tmp_path)
+    optimizer.step(model(jt.ones((2, 3))).sum())
+    expected = {name: value.numpy().copy() for name, value in model.state_dict().items()}
+    fresh, resumed = _sgd_checkpoint_fixture(sharded)
+    checkpoint.load_training_state(fresh, resumed, tmp_path)
+    assert all(isinstance(value, jt.Var) for value in resumed.param_groups[0]["values"])
+    resumed.step(fresh(jt.ones((2, 3))).sum())
+    for name, value in fresh.state_dict().items():
+        np.testing.assert_array_equal(value.numpy(), expected[name])
+
+
 @pytest.mark.parametrize("restore_existing", [False, True])
 def test_native_training_resume_and_rng(tmp_path, restore_existing):
+    assert_native_runtime(jt)
+    torch_before = sys.modules.get("torch")
     assert not torch_runtime.torch_shim_loaded()
     model, optimizer = model_optimizer()
     reference = numpy_trajectory(5)
@@ -54,6 +146,8 @@ def test_native_training_resume_and_rng(tmp_path, restore_existing):
         got = training_step(fresh, resumed)
         assert_trace(got, expected[index], exact=True)
         assert_trace(got, reference[index + 3])
+    assert_native_runtime(jt)
+    assert sys.modules.get("torch") is torch_before
     assert not torch_runtime.torch_shim_loaded()
 
 

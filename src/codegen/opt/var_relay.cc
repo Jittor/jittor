@@ -40,6 +40,26 @@ int VarRelayManager::add_relay_group(FusedOp* fop, const vector<pair<Var*, Var*>
                 LOGvvvv << "Var allready relayed" << p2.second;
                 return -1;
             }
+    // A dense-only constructor can insert a contiguous copy of a strided
+    // operand. Such a new Var is outside this fused execution plan and cannot
+    // be mapped to a relay member. Reject before taking ownership or detaching
+    // any graph edges; the existing fused implementation remains executable.
+    std::unordered_set<Node*> fnodes;
+    fnodes.reserve(fop->ops.size()+fop->vars.size());
+    for (auto& op : fop->ops) fnodes.insert(op);
+    for (auto& v : fop->vars) fnodes.insert(v.var);
+    for (const auto& pair : group) {
+        Op* candidate = pair.first->input();
+        ASSERT(candidate);
+        for (const auto& member : candidate->codegen().var_members) {
+            Var* var = GET_VAR_MEMBER(candidate, member.second);
+            if (var && var != pair.first && !fnodes.count(var)) {
+                LOGvvv << "Relay candidate introduces an unplanned member"
+                    << candidate->name() << member.first;
+                return -1;
+            }
+        }
+    }
     relay_groups.emplace_back();
     auto& relay_group = relay_groups.back();
     relay_group.relayed_pairs.reserve(group.size());
@@ -49,10 +69,6 @@ int VarRelayManager::add_relay_group(FusedOp* fop, const vector<pair<Var*, Var*>
     }
     
     // break the input link between relay and target
-    std::unordered_set<Node*> fnodes;
-    fnodes.reserve(fop->ops.size()+fop->vars.size());
-    for (auto& op : fop->ops) fnodes.insert(op);
-    for (auto& v : fop->vars) fnodes.insert(v.var); 
     vector<Node*>& q = relay_group.nodes;
     vector<Node*> s;
     for (const auto& p : group) {

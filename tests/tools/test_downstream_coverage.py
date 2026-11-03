@@ -143,6 +143,8 @@ class CoverageAuditTests(unittest.TestCase):
         swift_gate = self.root / "compat/tests/torch/test_ecosystem_swift.py"
         verl_gate = self.root / "compat/tests/torch/test_ecosystem_verl_training.py"
         mm_gate = self.root / "compat/tests/torch/test_ecosystem_openmmlab_installed.py"
+        trl_gate = self.root / "tools/run_trl_gate.py"
+        trl_gate.parent.mkdir(parents=True)
         gate.parent.mkdir(parents=True)
         test_source = "def test_real_deepspeed_engine_training_and_resume(): pass\n"
         trellis_source = "def test_real_trellis_models_training(): pass\n"
@@ -157,7 +159,10 @@ class CoverageAuditTests(unittest.TestCase):
         session_source = ("def ecosystem_deepspeed(session): pass\ndef ecosystem_trellis(session): pass\n"
                           "def ecosystem_flash_attention(session): pass\ndef ecosystem_swift(session): pass\n"
                           "def ecosystem_verl_training(session): pass\n"
-                          "def ecosystem_openmmlab_installed(session): pass\n")
+                          "def ecosystem_openmmlab_installed(session): pass\n"
+                          "def ecosystem_trl(session): pass\n")
+        trl_source = "def main(): pass\ndef run(args): pass\ndef audit_pair(): pass\n"
+        trl_gate.write_text(trl_source)
         gate.write_text(test_source)
         trellis_gate.write_text(trellis_source)
         flash_gate.write_text(flash_source)
@@ -167,9 +172,9 @@ class CoverageAuditTests(unittest.TestCase):
         nox = self.root / "noxfile.py"
         nox.write_text(session_source)
         self.assertEqual(len(audit.dedicated_gates(self.root)["deepspeed"]), 1)
-        for target, source in ((gate, test_source), (trellis_gate, trellis_source),
-                               (flash_gate, flash_source),
-                               (mm_gate, mm_source), (nox, session_source)):
+        for target, source in ((gate, test_source), (trellis_gate, trellis_source), (swift_gate, swift_source),
+                               (flash_gate, flash_source), (verl_gate, verl_source),
+                               (mm_gate, mm_source), (trl_gate, trl_source), (nox, session_source)):
             with self.subTest(path=target.name):
                 target.write_text("def unrelated(): pass\n")
                 with self.assertRaisesRegex(ValueError, "dedicated gate"):
@@ -183,6 +188,16 @@ class CoverageAuditTests(unittest.TestCase):
             mm_gate.write_text(invalid)
             with self.subTest(source=invalid), self.assertRaisesRegex(ValueError, "dedicated gate"):
                 audit.dedicated_gates(self.root)
+
+    def test_trl_cli_is_discovered_without_inventing_a_pytest_case_or_level(self):
+        row = next(item for item in audit.audit(ROOT)["repos"] if item["repo"] == "trl")
+        self.assertEqual(row["registered_cases"], [])
+        self.assertEqual(row["gate_cases"], [])
+        self.assertEqual(row["dedicated_gates"], [{
+            "protocol": "trl-text-trainer-training", "session": "ecosystem_trl",
+            "entrypoints": ["tools/run_trl_gate.py::main"],
+        }])
+        self.assertIsNone(row["verified_level"])
 
     def test_openmmlab_installed_discovers_actual_methods_without_claiming_execution(self):
         rows = {item["repo"]: item for item in audit.audit(ROOT)["repos"]}
@@ -1014,14 +1029,20 @@ class VerifyRunnerTests(unittest.TestCase):
         fake.REAL_TORCH_PYTHON = "independent-oracle"
         fake.EcosystemComparison = unittest.TestCase
         fake._torch_shim_is_active = lambda: True
+        fake._enabled = lambda name: os.environ.get(name) == "1"
         fake._distributions_available = lambda requirements: False
         sys.path.insert(0, str(ROOT / "compat/tests/torch"))
         path = ROOT / "compat/tests/torch/test_ecosystem_verl.py"
         spec = importlib.util.spec_from_file_location("verl_gate_contract", path)
         module = importlib.util.module_from_spec(spec)
         with mock.patch.dict(sys.modules, {"_ecosystem_harness": fake}), \
-                mock.patch.dict(os.environ, {"JITTOR_TEST_DEVICES": "cpu"}):
+                mock.patch.dict(os.environ, {"JITTOR_TEST_DEVICES": "cpu", "JITTOR_REQUIRE_VERL": "0"}):
+            unselected = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(unselected)
+            self.assertTrue(unselected.EcosystemVERL.__unittest_skip__)
+            os.environ["JITTOR_REQUIRE_VERL"] = "1"
             spec.loader.exec_module(module)
+        self.assertFalse(getattr(module.EcosystemVERL, "__unittest_skip__", False))
         comparison = module.EcosystemVERL()
         with self.assertRaisesRegex(AssertionError, "requires available dependencies"):
             comparison.setUp()

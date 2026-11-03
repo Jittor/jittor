@@ -10,6 +10,7 @@ import unittest
 from _ecosystem_harness import (
     REAL_TORCH_PYTHON,
     EcosystemComparison,
+    _enabled,
     _torch_shim_is_active,
     _distributions_available,
 )
@@ -22,6 +23,8 @@ if _DEVICE not in ("cpu", "cuda"):
     raise ValueError("VERL component gate needs exactly JITTOR_TEST_DEVICES=cpu or cuda")
 
 
+@unittest.skipUnless(_enabled("JITTOR_REQUIRE_VERL"),
+                     "opt-in VERL NumPy2/Transformers5 component profile is not selected")
 @unittest.skipUnless(REAL_TORCH_PYTHON, "REAL_TORCH_PYTHON is not configured")
 @unittest.skipUnless(_torch_shim_is_active(), "this interpreter does not run torch as Jittor")
 class EcosystemVERL(EcosystemComparison):

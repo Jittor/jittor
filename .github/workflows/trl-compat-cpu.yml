@@ -1,0 +1,101 @@
+name: TRL compatibility / CPU
+
+on:
+  schedule:
+    - cron: "25 3 * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "src/**"
+      - "backends/**"
+      - "python/**"
+      - "compat/**"
+      - "noxfile.py"
+      - "agent/skills/torch-compat-repo-runbook/scripts/trl_*.py"
+      - "agent/skills/torch-compat-repo-runbook/scripts/registry_inventory.py"
+      - "agent/skills/torch-compat-repo-runbook/scripts/audit_coverage.py"
+      - "tools/run_trl_gate.py"
+      - "tests/tools/test_trl_gate.py"
+      - "tests/structure/test_trl_nox_gate.py"
+      - "requirements/trl-compat.txt"
+      - ".github/workflows/trl-compat-cpu.yml"
+      - "pyproject.toml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  baseline:
+    uses: ./.github/workflows/_ci-baseline.yml
+
+  trl-text:
+    needs: baseline
+    runs-on: ${{ needs.baseline.outputs.host_runner }}
+    container:
+      image: ${{ needs.baseline.outputs.cpu_ci_image }}
+    timeout-minutes: 120
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      JT_BUILD_USE_MKL: "0"
+      JT_BUILD_USE_MPI: "0"
+      JT_BUILD_USE_NCCL: "0"
+      JT_BUILD_USE_CUTT: "0"
+      CUDA_VISIBLE_DEVICES: ""
+      nvcc_path: ""
+    steps:
+      - name: Check out candidate source
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Install CPU toolchain
+        run: |
+          apt-get update
+          apt-get install --yes --no-install-recommends build-essential libomp-dev git ca-certificates
+      - name: Set up gate Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Provision independent pinned environments
+        shell: bash
+        run: |
+          set -euo pipefail
+          for runtime in oracle candidate; do
+            python -m venv "${RUNNER_TEMP}/trl-${runtime}"
+            "${RUNNER_TEMP}/trl-${runtime}/bin/python" -m pip install pip setuptools==80.9.0 wheel==0.48.0
+            "${RUNNER_TEMP}/trl-${runtime}/bin/python" -m pip install \
+              --index-url https://download.pytorch.org/whl/cpu torch==2.8.0
+            "${RUNNER_TEMP}/trl-${runtime}/bin/python" -m pip install -r requirements/trl-compat.txt
+            "${RUNNER_TEMP}/trl-${runtime}/bin/python" -m pip freeze > "${RUNNER_TEMP}/trl-${runtime}-lock.txt"
+          done
+          "${RUNNER_TEMP}/trl-candidate/bin/python" -m pip install \
+            --no-deps --no-build-isolation --config-settings editable_mode=compat -e .
+          "${RUNNER_TEMP}/trl-candidate/bin/python" -m pip install \
+            --no-deps --no-build-isolation -e compat
+          git clone https://github.com/huggingface/trl.git "${RUNNER_TEMP}/trl-upstream"
+          git -C "${RUNNER_TEMP}/trl-upstream" checkout --detach 46d09bd2408f17605409fb3ee8ba12705add7faa
+      - name: Run 16 paired offline text Trainer cases
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/run_trl_gate.py \
+            --jittor-python "${RUNNER_TEMP}/trl-candidate/bin/python" \
+            --oracle-python "${RUNNER_TEMP}/trl-oracle/bin/python" \
+            --upstream "${RUNNER_TEMP}/trl-upstream" \
+            --output "${RUNNER_TEMP}/trl-gate" --device cpu --steps 3
+      - name: Retain full numerical and provenance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trl-text-cpu
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/trl-gate/*.json
+            ${{ runner.temp }}/trl-gate/logs/
+            ${{ runner.temp }}/trl-gate/audits/
+            ${{ runner.temp }}/trl-gate/measurements/
+            ${{ runner.temp }}/trl-*-lock.txt

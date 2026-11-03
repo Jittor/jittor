@@ -9,6 +9,7 @@ Split out of the tensor installer, which it runs as part of.
 """
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
+from contextlib import nullcontext
 import functools
 import inspect
 from ..context import get_install_context
@@ -84,6 +85,8 @@ def _invoke_factory(name, args, kwargs):
         mean = kwargs.get("mean", args[0] if args else None)
         std = kwargs.get("std", args[1] if len(args) > 1 else None)
         like = mean if isinstance(mean, jt.Var) else std if isinstance(std, jt.Var) else None
+        if any(isinstance(value, jt.Var) and value.requires_grad for value in (mean, std)):
+            raise NotImplementedError("torch.normal with trainable mean/std tensors is not implemented")
     requested = kwargs.get("device")
     # ``torch.arange(tensor_bound)`` inherits the bound tensor's device when no
     # explicit device is supplied. This matters for CUDA scalar bounds used by
@@ -304,6 +307,7 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
         if native_shape:
             out = orig(*args)
             out._jittor_torch_ext_mutable = True
+            out.requires_grad_(False)
             return out
     # _invoke_factory already established native construction placement.
     _requires_grad = bool(kwargs.get("requires_grad", False))
@@ -318,7 +322,7 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
     # Only for the factories that really take a shape: tril/triu take
     # the matrix to transform, and a 1x1 matrix holds a single element,
     # so shape conversion would collapse it into an integer dimension.
-    _takes_shape = not (name.endswith("_like") or name in _TENSOR_ARGUMENT)
+    _takes_shape = not (name.endswith("_like") or name in _TENSOR_ARGUMENT or name == "normal")
     if args and name == "arange":
         # arange takes bounds and a step, not dimensions: a 0-D float tensor
         # step (`1 / count`) must stay fractional, which `_shape_arg` would

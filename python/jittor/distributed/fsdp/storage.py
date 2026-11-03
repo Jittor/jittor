@@ -132,7 +132,9 @@ def _flat_entry_slices(state, flat_var, *, api):
     out = []
     for entry in state.true_fsdp_params:
         local_start, local_len = _flat_local_overlap(state, entry)
-        out.append(common._slice_flat(flat_var, local_start, local_len))
+        # Optimizer shards share the flat storage, but are independent leaves.
+        # A differentiable slice cannot be frozen without freezing its base.
+        out.append(common._slice_flat(flat_var, local_start, local_len).detach())
     return out
 
 

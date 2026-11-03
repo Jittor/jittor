@@ -290,7 +290,7 @@ def grad(outputs, inputs, grad_outputs=None, retain_graph=None,
             "materialize_grads=True, but got: allow_unused=False.")
     allow_unused = bool(materialize_grads) if allow_unused is None \
         else bool(allow_unused)
-    with _create_graph_scope(create_graph):
+    with _create_graph_scope(create_graph), jt.flag_scope(gradient_accumulation_order=1):
         with _backward_callbacks():
             gs = list(jt.core.grad_optional(loss, ins, rg))
     missing = [i for i, value in enumerate(gs) if value is None]
@@ -305,6 +305,12 @@ def grad(outputs, inputs, grad_outputs=None, retain_graph=None,
         raise RuntimeError(
             "One of the differentiated Tensors appears to not have been "
             "used in the graph. Set allow_unused=True if this is desired.")
+    # Like AccumulateGrad, the public VJP returns each input's own dtype.
+    # Native backward expressions may have wider intermediates. Keep this
+    # cast in the graph for create_graph=True; preserve unused None entries.
+    gs = [g.cast(value.dtype)
+          if g is not None and _jittor_dtype_name(g.dtype) != _jittor_dtype_name(value.dtype)
+          else g for g, value in zip(gs, ins)]
     if not create_graph:
         # detach() severs the graph edge but leaves jittor's requires_grad
         # flag set, and torch reports requires_grad=False here; clear it on

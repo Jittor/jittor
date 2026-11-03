@@ -382,6 +382,12 @@ def _install_reductions(g):
     g.masked_select = Var.masked_select = _numerical_masked_select
     g.softmax = Var.softmax = _numerical_softmax
     g.log_softmax = Var.log_softmax = _numerical_log_softmax
+    from ...native_api import tensor_log, tensor_rsqrt, tensor_exp, tensor_log_, tensor_rsqrt_
+    Var.log = tensor_log
+    Var.rsqrt = tensor_rsqrt
+    Var.exp = tensor_exp
+    Var.log_ = tensor_log_
+    Var.rsqrt_ = tensor_rsqrt_
 
     # Methods with no module-level torch spelling to widen.
     Var.masked_scatter = masked_scatter
@@ -682,6 +688,20 @@ def _bind_fast_cat():
 
 
 def cat(tensors, dim=0, out=None, axis=None):
+    # Torch autocast leaves cat at the input/promoted dtype; native Jittor AMP
+    # can round its temporary concat buffer to half before the wrapper casts it
+    # back. Preserve native AMP behavior outside the Torch autocast context.
+    amp_reg = int(jt.flags.amp_reg)
+    prefer_half = jt.amp_flags.prefer16 | jt.amp_flags.prefer_bfloat16
+    if amp_reg & prefer_half:
+        from jittor._runtime.amp_context import torch_autocast_active
+        if torch_autocast_active():
+            with jt.flag_scope(amp_reg=amp_reg & ~prefer_half):
+                return _cat_impl(tensors, dim=dim, out=out, axis=axis)
+    return _cat_impl(tensors, dim=dim, out=out, axis=axis)
+
+
+def _cat_impl(tensors, dim=0, out=None, axis=None):
     if out is None and axis is None and type(dim) is int:
         fast = (_FAST_CAT or _bind_fast_cat())(tensors, dim)
         if fast is not NotImplemented:
@@ -1112,10 +1132,10 @@ def install_methods(ctx):
         # only when the native view explicitly rejects this target shape.
         _orig_reshape = _native_var.view
 
-    # Keep the existing Torch-facing promotion for narrow integer sums
-    # (yolox/rtmdet SimOTA assigners do mask.sum() on a uint8 match matrix).
-    # Native CUDA reductions now support these dtypes directly, but exposing the
-    # narrow native output here would change the compatibility-layer dtype policy.
+    # Torch promotes bool and integer sums to int64 by default, before the
+    # reduction; an explicit dtype or out tensor selects the accumulation type.
+    # Native reduction output types are not the Torch-facing dtype policy
+    # (for example, native bool sums count in int32).
     # torch reductions accept a *tuple* of dims (e.g. loss.mean(dim=(1, 2)) in
     # yolact_head, x.sum(dim=(2, 3))). jittor splits these into a scalar overload
     # (kwarg `dim`, single int) and a tuple overload (kwarg `dims`); passing a tuple
@@ -1209,5 +1229,5 @@ def install_methods(ctx):
     })
 
     register_api_bindings(Var, 'torch.Tensor',
-        ('bmm', 'clamp_max', 'clamp_min', 'diff', 'eq', 'expm1', 'fliplr', 'flipud', 'fmod', 'ge', 'gt', 'index_add_', 'le', 'log1p', 'lt', 'mm', 'mv', 'ne', 'neg', 'reciprocal', 'relu', 'relu_', 'remainder', 'reshape', 'size', 'softplus', 'square', 'square_', 'sum', 'trapezoid', 'trapz', 'view') + tuple(_SHAPE_REDUCTION_APIS.keys()),
+        ('log', 'rsqrt', 'exp', 'log_', 'rsqrt_', 'bmm', 'clamp_max', 'clamp_min', 'diff', 'eq', 'expm1', 'fliplr', 'flipud', 'fmod', 'ge', 'gt', 'index_add_', 'le', 'log1p', 'lt', 'mm', 'mv', 'ne', 'neg', 'reciprocal', 'relu', 'relu_', 'remainder', 'reshape', 'size', 'softplus', 'square', 'square_', 'sum', 'trapezoid', 'trapz', 'view') + tuple(_SHAPE_REDUCTION_APIS.keys()),
         Fidelity.APPROXIMATE, 'Tensor operations share the native Var/Op graph and explicit frontend state; unsupported layouts, device capabilities, and retained compatibility approximations remain restricted')

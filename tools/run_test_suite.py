@@ -30,6 +30,9 @@ green CPU tier says nothing about them. Each backend keeps its own JIT cache.
 
 Runtime state (JIT caches, temporary files) is written under
 ``$JITTOR_LAB_ROOT/_state/test-suite`` so it never lands in the checkout.
+``JITTOR_TEST_TMP_ROOT`` can place temporary fixtures on a separate filesystem
+when that lab root is itself nested in a different Git checkout. It must be
+absolute and outside every checkout; JIT caches retain their usual location.
 """
 
 from __future__ import print_function
@@ -46,6 +49,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 sys.path.insert(0, str(REPO_ROOT / "tests"))
 from _helpers.child_process import PYTHON, run_python_child, source_python_dir  # noqa: E402
+from _helpers.artifacts import _outside_checkout  # noqa: E402
 from _helpers.gate_scope import (  # noqa: E402
     native_arguments,
     torch_arguments,
@@ -144,9 +148,18 @@ def _session_state(session, backend="cpu"):
 
 def _session_environment(session, serial_compile=False, backend="cpu"):
     state = _session_state(session, backend)
+    name = session if backend == "cpu" else "%s-%s" % (session, backend)
+    temporary = state / "tmp"
+    configured_tmp = os.environ.get("JITTOR_TEST_TMP_ROOT")
+    if configured_tmp:
+        temporary_root = Path(configured_tmp).expanduser()
+        if not temporary_root.is_absolute():
+            raise ValueError("JITTOR_TEST_TMP_ROOT must be absolute")
+        temporary = _outside_checkout(temporary_root / name, REPO_ROOT.resolve())
+    temporary.mkdir(parents=True, exist_ok=True)
     environment = dict(os.environ)
     environment["JITTOR_HOME"] = str(state / "home")
-    environment["TMPDIR"] = str(state / "tmp")
+    environment["TMPDIR"] = str(temporary)
     if backend == "cuda":
         nvcc = _resolve_nvcc()
         if not nvcc:

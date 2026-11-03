@@ -3201,6 +3201,50 @@ def native_multinode(session):
 
 
 @nox.session(python=False)
+def ecosystem_trl(session):
+    """Run all sixteen pinned FP32 text Trainers against independent PyTorch."""
+    python = _hardware_python()
+    oracle = os.environ.get("REAL_TORCH_PYTHON", "").strip()
+    upstream = os.environ.get("JITTOR_TRL_CHECKOUT", "").strip()
+    device = os.environ.get("JITTOR_TEST_DEVICES", "cpu").strip()
+    if not oracle or not Path(oracle).is_file():
+        session.error("TRL needs REAL_TORCH_PYTHON naming an independent PyTorch interpreter")
+    if not upstream or not Path(upstream).is_dir():
+        session.error("TRL needs JITTOR_TRL_CHECKOUT naming the clean pinned upstream")
+    if device not in ("cpu", "cuda"):
+        session.error("TRL requires exactly cpu or cuda")
+    allocation = os.environ.get("CUDA_VISIBLE_DEVICES", "").strip()
+    if device == "cuda" and (not allocation or "," in allocation):
+        session.error("TRL CUDA requires exactly one allocated CUDA_VISIBLE_DEVICES ordinal or UUID")
+    overrides = {}
+    if len(session.posargs) % 2:
+        session.error("TRL allows only paired --output and --jittor-home paths")
+    for index in range(0, len(session.posargs), 2):
+        key, value = session.posargs[index:index + 2]
+        if key not in ("--output", "--jittor-home") or key in overrides or not value or value.startswith("--"):
+            session.error("TRL allows unique output/cache paths; all sixteen three-step cases are required")
+        overrides[key] = value
+    _root, env = _session_env(session, "ecosystem-trl")
+    for name in ("CUDA_HOME", "JT_BUILD_NVCC_PATH", "nvcc_path", "LD_LIBRARY_PATH",
+                 "JITTOR_CUDA_WHEEL_STRICT", "JITTOR_CUDA_WHEEL_DISABLE"):
+        if name in os.environ:
+            env[name] = os.environ[name]
+    env["CUDA_VISIBLE_DEVICES"] = allocation if device == "cuda" else ""
+    if device == "cpu":
+        env.update(JT_BUILD_NVCC_PATH="", nvcc_path="")
+    _set_hardware_python_config(session, python, env)
+    output = overrides.get("--output", str(NOX_STATE_ROOT / "ecosystem-trl" / device / "measurements"))
+    arguments = ["--jittor-python", python, "--oracle-python", oracle, "--upstream", upstream,
+                 "--device", device, "--steps", "3", "--output", output]
+    if "--jittor-home" in overrides:
+        arguments += ["--jittor-home", overrides["--jittor-home"]]
+    if device == "cuda":
+        arguments += ["--cuda-device", allocation]
+    session.run(python, str(REPO_ROOT / "tools/run_trl_gate.py"),
+                *arguments, external=True, env=env)
+
+
+@nox.session(python=False)
 def ecosystem_peft(session):
     """Run the full original PEFT LoRA L3 scope with independent installed-source proof."""
     root, env = _session_env(session, "ecosystem-peft")

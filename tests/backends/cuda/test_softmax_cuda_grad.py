@@ -130,6 +130,43 @@ class TestSoftmaxCudaGrad(unittest.TestCase):
             grad = jt.grad((y * jt.array(cot_np)).sum(), x)
             return jt.fetch_sync([y, grad])
 
+    def test_narrow_register_backward_uses_saved_output_and_float_epilogue(self):
+        from jittor._runtime import forbid_backend_fallbacks
+
+        def round_narrow(value, dtype):
+            value = np.asarray(value, dtype='float32')
+            if dtype == 'float16':
+                return value.astype('float16').astype('float32')
+            bits = value.view('uint32')
+            return ((bits + np.uint32(0x7fff) + ((bits >> 16) & 1))
+                    & np.uint32(0xffff0000)).view('float32')
+
+        # Independent Torch same-y backward controls bind these two seeds.
+        # The nonuniform seed distinguishes Torch's rounded dy*y temporary
+        # from moving that first product to FP32 as well.
+        for dtype in ('float16', 'bfloat16'):
+            for log in (False, True):
+                for seed in ([1., 1., 1., 1.], [.123, -.456, .789, -1.234]):
+                    with self.subTest(dtype=dtype, log=log, seed=seed), \
+                            jt.flag_scope(use_cuda=1, amp_reg=0), forbid_backend_fallbacks():
+                        x = jt.array(np.array([.2501, .5001, 1.001, 2.001], 'float32')).cast(dtype)
+                        cotangent = jt.array(np.array(seed, 'float32')).cast(dtype)
+                        y = softmax_v1(x, log=log)
+                        saved = y.float32().numpy().copy()
+                        g = cotangent.float32().numpy()
+                        gradient = jt.grad((y * cotangent).sum(), x)
+                        for value in (x, cotangent, y, gradient):
+                            value.sync()
+                            self.assertEqual(value.location(), 'device')
+                        if log:
+                            expected = g - np.exp(saved) * g.sum(dtype='float32')
+                        else:
+                            temporary = round_narrow(saved * g, dtype)
+                            expected = temporary - saved * temporary.sum(dtype='float32')
+                        expected = round_narrow(expected, dtype)
+                        np.testing.assert_array_equal(gradient.float32().numpy(), expected)
+                        np.testing.assert_array_equal(y.float32().numpy(), saved)
+
     def test_every_schedule_matches_an_exact_float64_reference(self):
         rng = np.random.RandomState(20260907)
         for length, kind, route in CASES:

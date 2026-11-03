@@ -15,6 +15,7 @@ this process cannot place a worker -- no second core in the calling thread's
 last-level cache domain -- the cases that need one skip.
 """
 
+import time
 import unittest
 
 import numpy as np
@@ -143,6 +144,70 @@ print("TWO_THREADS_OK", middle - before)
 """
 
 
+_MIGRATE_ALIASES = """
+import ctypes
+import threading
+import time
+import numpy as np
+import jittor as jt
+
+jt.flags.backend_fallback = "error"
+jt.flags.auto_graph_replay = 0
+jt.flags.auto_flush_ops = 23
+jt.flags.async_execution = 1
+jt.flags.async_min_caller_us = 0
+with jt.flag_scope(use_cuda=0):
+    host = jt.array(np.arange(12, dtype="int32").reshape(3, 4))
+    alias = host._storage_permute((1, 0))
+    alias.sync()
+assert host.location() == alias.location() == "cpu"
+assert host._storage_address == alias._storage_address
+jt.flags.use_cuda = 1
+x = jt.array(np.eye(64, dtype="float32"))
+w = jt.array(np.eye(64, dtype="float32"))
+jt.sync_all(True)
+fallbacks = jt.core.backend_fallback_count()
+result = []
+errors = []
+
+def migrate():
+    try:
+        result.append(alias.device_ptr_ready)
+    except BaseException as error:
+        errors.append(repr(error))
+
+with jt.no_grad():
+    before = jt.core.async_exec_batches()
+    for _ in range(60):
+        # Keep this batch entirely on CUDA: a native integer scalar add
+        # introduces host work, which correctly prevents worker admission.
+        x = jt.matmul(x, w)
+    jt.submit_pending(x)
+    deadline = time.monotonic() + 30
+    while jt.core.async_exec_batches() == before and time.monotonic() < deadline:
+        time.sleep(.001)
+    thread = threading.Thread(target=migrate)
+    thread.start()
+    thread.join(30)
+    assert not thread.is_alive(), "alias migration did not finish"
+    x.sync()
+    ran = jt.core.async_exec_batches() - before
+assert not errors, errors
+assert len(result) == 1 and result[0]
+assert host.location() == alias.location() == "device"
+assert host._storage_address == alias._storage_address == result[0]
+library = ctypes.CDLL("libcuda.so.1")
+device = ctypes.c_int(-1)
+assert library.cuPointerGetAttribute(ctypes.byref(device), 9,
+        ctypes.c_void_p(result[0])) == 0
+assert device.value == 0
+np.testing.assert_array_equal(alias.numpy(), np.arange(12).reshape(3, 4).T)
+np.testing.assert_array_equal(host.numpy(), np.arange(12).reshape(3, 4))
+assert jt.core.backend_fallback_count() == fallbacks
+print("MIGRATE_ALIASES_OK", ran)
+"""
+
+
 @unittest.skipIf(not _worker_backend(), "No accelerator the worker runs on")
 class TestAsyncExecution(unittest.TestCase):
     def setUp(self):
@@ -176,6 +241,108 @@ class TestAsyncExecution(unittest.TestCase):
         self.assertEqual(ran_sync, 0)
         self._need_worker(ran)
         np.testing.assert_array_equal(got, want)
+
+    @unittest.skipUnless(_worker_backend() == "cuda", "requires CUDA streams")
+    def test_direct_storage_copy_is_published_to_the_next_worker(self):
+        # Delay only the framework's copy stream. The worker's compute stream
+        # can finish its batch, and the calling thread can queue the D2D copy,
+        # while those bytes are still pending. No host/device-wide wait is the
+        # fix: the next worker must inherit the copy's completion event.
+        header = r'''
+        #include "runtime/backend_streams.h"
+        #include "runtime/device.h"
+        __global__ void delay_copy(unsigned long long cycles) {
+            auto started = clock64();
+            while (clock64() - started < cycles) {}
+        }
+        __global__ void mark_ready(int* output) { output[0] = 1; }
+        '''
+        source = r'''
+        auto stream = jittor::accelerator_backend_stream(
+            jittor::current_device(), jittor::BackendStreamKind::Copy);
+        delay_copy<<<1, 1, 0, reinterpret_cast<cudaStream_t>(stream)>>>(200000000);
+        mark_ready<<<1, 1>>>(out0_p);
+        '''
+        with jt.flag_scope(auto_flush_ops=1, auto_flush_bytes=0,
+                           async_flush_ops=1), jt.no_grad():
+            target = jt.zeros((4,), dtype="int32")
+            values = jt.array(np.arange(4, dtype="int32"))
+            jt.sync_all(True)
+            before = jt.core.async_exec_batches()
+            ready = jt.code((1,), "int32", [], cuda_header=header, cuda_src=source)
+            jt.submit_pending(ready)
+            deadline = time.monotonic() + 30
+            while jt.core.async_exec_batches() == before and time.monotonic() < deadline:
+                time.sleep(.001)
+            self._need_worker(jt.core.async_exec_batches() - before)
+            target._copy_into(values)
+            # Native clone shares storage. Use copy so the worker actually
+            # reads the destination bytes into an independent allocation.
+            result = target.copy()
+            jt.submit_pending(result)
+            result.sync()
+            self.assertEqual(result.location(), "device")
+            np.testing.assert_array_equal(result.numpy(), np.arange(4, dtype="int32"))
+
+    @unittest.skipUnless(_worker_backend() == "cuda", "requires CUDA graphs")
+    def test_graph_launch_is_published_to_the_next_worker(self):
+        # The recorded kernel writes only legal integers. Its delay leaves
+        # enough time for an unordered worker copy to read the preceding zeros.
+        header = r'''
+        __global__ void delayed_range(int* output) {
+            auto started = clock64();
+            while (clock64() - started < 200000000) {}
+            for (int i = 0; i < 4; ++i) output[i] = i + 1;
+        }
+        '''
+        graph = 0
+        try:
+            with jt.flag_scope(auto_flush_ops=0), jt.no_grad():
+                output = jt.zeros((4,), dtype="int32")
+                output.sync()
+                with jt.flag_scope(keep_graph=2, async_execution=0):
+                    computed = jt.code((4,), "int32", [], cuda_header=header,
+                                       cuda_src="delayed_range<<<1, 1>>>(out0_p);")
+                    computed.sync()
+                    self.assertTrue(jt.core.graph_capture_begin())
+                    try:
+                        computed.sync(False, False)
+                        # The compiled-step recorder uses this same stable
+                        # preallocated-output pattern. Reading output back here
+                        # would migrate it and invalidate the recorded address.
+                        output._copy_into(computed, False)
+                    finally:
+                        graph = jt.core.graph_capture_end()
+                    self.assertNotEqual(graph, 0)
+                del computed
+                jt.sync_all(True)
+                pointer = output._storage_address
+                self.assertEqual(output.location(), "device")
+                dummy = jt.ones((4,), dtype="int32")
+                dummy.sync()
+                with jt.flag_scope(auto_flush_ops=1, auto_flush_bytes=0,
+                                   async_flush_ops=1):
+                    before = jt.core.async_exec_batches()
+                    establish = dummy.copy()
+                    jt.submit_pending(establish)
+                    deadline = time.monotonic() + 30
+                    while jt.core.async_exec_batches() == before and time.monotonic() < deadline:
+                        time.sleep(.001)
+                    self._need_worker(jt.core.async_exec_batches() - before)
+                    self.assertEqual(output._storage_address, pointer)
+                    jt.core.graph_launch(graph)
+                    result = output.copy()
+                    jt.submit_pending(result)
+                    result.sync()
+                    self.assertEqual(result.location(), "device")
+                    self.assertNotEqual(result._storage_address, pointer)
+                    np.testing.assert_array_equal(result.numpy(), np.arange(1, 5, dtype="int32"))
+        finally:
+            if graph:
+                # Cleanup waits after the observation, including on a failed
+                # assertion, so the captured buffers outlive their launches.
+                jt.core.graph_wait()
+                jt.core.graph_release(graph)
 
     def test_intermediates_read_back_while_the_worker_runs(self):
         with jt.no_grad():
@@ -324,6 +491,18 @@ class TestAsyncExecution(unittest.TestCase):
                                 name="async_two_threads", timeout=600)
         self.assertEqual(done.returncode, 0, done.stdout[-3000:])
         self.assertIn("TWO_THREADS_OK", done.stdout)
+
+    @unittest.skipUnless(_worker_backend() == "cuda", "requires CUDA migration")
+    def test_a_second_thread_can_migrate_a_host_alias_group(self):
+        # A migration waits for the worker before locking the alias ring.
+        # Keep the second Python thread in a child: using a second binding
+        # thread deliberately stands the worker down for that process.
+        done = run_child_script(_MIGRATE_ALIASES, text=True, merge_stderr=True,
+                                name="async_migrate_aliases", timeout=120)
+        self.assertEqual(done.returncode, 0, done.stdout[-3000:])
+        self.assertIn("MIGRATE_ALIASES_OK", done.stdout)
+        ran = int(done.stdout.rsplit("MIGRATE_ALIASES_OK ", 1)[1].split()[0])
+        self._need_worker(ran)
 
 
 if __name__ == "__main__":

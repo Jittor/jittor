@@ -125,6 +125,19 @@ def _method_configs():
 class TestPeftQwenMethods(unittest.TestCase):
     def setUp(self):
         self._previous_use_cuda = jt.flags.use_cuda
+        # PEFT 0.17.1 BOFT's environment context does not restore CC/CXX
+        # when its optional extension load raises. Keep that external side
+        # effect inside this test, including assertion/setup error paths.
+        compiler_environment = {key: os.environ.get(key) for key in ("CC", "CXX")}
+
+        def restore_compilers():
+            for key, value in compiler_environment.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+        self.addCleanup(restore_compilers)
         jt.flags.use_cuda = 0
 
     def tearDown(self):

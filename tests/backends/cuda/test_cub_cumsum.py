@@ -162,6 +162,43 @@ class TestCubToolchain(unittest.TestCase):
     def test_non_last_axis_scan_and_gradient(self):
         self._check((5, 6, 7), 1, "float32")
 
+    @jt.flag_scope(use_cuda=1, amp_reg=0)
+    def test_partial_blocks_and_tile_carry(self):
+        """Also run under racecheck: a correct scan must have no shared races.
+
+        Tiny generation masks use a partially occupied block. A later tile
+        needs the carry from the entire preceding block, including when the
+        last tile has only one valid item. Integer-valued binary fractions
+        make every forward and reverse-gradient reference exact.
+        """
+        self.assertIsNotNone(cub_ops, "CUDA must compile and register CUB")
+        before = jt.core.backend_fallback_count()
+        with forbid_backend_fallbacks():
+            for dtype in ("int32", "int64", "float32", "float64"):
+                tile = (512 if np.dtype(dtype).itemsize == 8 else 1024) * 4
+                for rows in (1, 3):
+                    for columns in (1, 4, 7, tile - 1, tile, tile + 1):
+                        with self.subTest(dtype=dtype, rows=rows, columns=columns):
+                            values = (np.arange(rows * columns).reshape(rows, columns) % 7 - 3).astype(dtype)
+                            if dtype == "int64":
+                                values += 2 ** 32
+                            elif dtype.startswith("float"):
+                                values *= .125
+                            x = jt.array(values, dtype=dtype)
+                            y = jt.cub_cumsum(x, -1)
+                            y.sync()
+                            self.assertEqual(y.location(), "device")
+                            self.assertEqual(str(y.dtype), dtype)
+                            np.testing.assert_array_equal(y.numpy(), np.cumsum(values, axis=-1, dtype=dtype))
+                            if dtype.startswith("float"):
+                                upstream = ((np.arange(rows * columns).reshape(rows, columns) % 5 - 2) * .125).astype(dtype)
+                                grad = jt.grad((y * jt.array(upstream, dtype=dtype)).sum(), x)
+                                grad.sync()
+                                self.assertEqual(grad.location(), "device")
+                                expected = np.flip(np.cumsum(np.flip(upstream, -1), axis=-1, dtype=dtype), -1)
+                                np.testing.assert_array_equal(grad.numpy(), expected)
+        self.assertEqual(jt.core.backend_fallback_count(), before)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -263,7 +263,7 @@ def save_training_state(model, optimizer, checkpoint_id, *, extra=None,
                     group[field] = type(values)(RankLocal(value) if name in sharded else value
                                                 for name, value in zip(names, values))
     from .fsdp.checkpoint import _encode
-    _encode(state, model)
+    _encode(state, model, optimizer)
     return save(state, checkpoint_id, process_group=process_group, store=store,
                 overwrite=overwrite, timeout=timeout)
 
@@ -279,7 +279,8 @@ def load_training_state(model, optimizer, checkpoint_id, *, process_group=None):
     rank, world, ranks, _ = _context(process_group)
     if world != manifest["world_size"] or set(ranks) != set(manifest["ranks"]):
         raise ValueError("training checkpoint rank/world mismatch; RNG resharding is unsupported")
-    from .fsdp.checkpoint import _requests, _decode, _restore_trainability
+    from .fsdp.checkpoint import _requests, _decode, _restore_trainability, _missing_sgd_value
+    from jittor.optim.algorithms.sgd import SGD
     requests = _requests(model, optimizer, manifest, rank, _parameter_names(model, optimizer))
     state = restore_tree(checkpoint_id, manifest, ranks[rank], tensor_shards=requests)
     if state["training_version"] != 1:
@@ -294,7 +295,7 @@ def load_training_state(model, optimizer, checkpoint_id, *, process_group=None):
         raise ValueError("native checkpoint optimizer FQN/group order mismatch")
     if set(model.state_dict()) != set(state["model"]):
         raise ValueError("native checkpoint model FQN mismatch")
-    _decode(state, model)
+    _decode(state, model, optimizer)
     saved_groups = saved_optimizer["state"]["defaults"]["param_groups"]
     if len(saved_groups) != len(optimizer.param_groups):
         raise ValueError("native checkpoint optimizer group count mismatch")
@@ -303,11 +304,15 @@ def load_training_state(model, optimizer, checkpoint_id, *, process_group=None):
         for field, values in saved_group.items():
             template = target_group.get(field)
             tensor_list = isinstance(template, (list, tuple)) and any(isinstance(v, jt.Var) for v in template)
-            if field == "grads" or tensor_list:
+            optional_sgd = field == "values" and isinstance(optimizer, SGD)
+            if field == "grads" or tensor_list or optional_sgd:
                 if not isinstance(values, (list, tuple)) or len(values) != len(parameters):
                     raise ValueError("native checkpoint optimizer tensor-list length mismatch: " + field)
                 for index, (value, parameter) in enumerate(zip(values, parameters)):
-                    reference = template[index] if tensor_list else parameter
+                    if _missing_sgd_value(optimizer, saved_group, field, index, value):
+                        continue
+                    reference = (template[index] if tensor_list and isinstance(template[index], jt.Var)
+                                 else parameter)
                     if (not isinstance(value, jt.Var) or tuple(value.shape) != tuple(reference.shape)
                             or field != "grads" and str(value.dtype) != str(reference.dtype)):
                         raise ValueError("native checkpoint optimizer state shape/dtype mismatch: " + field)

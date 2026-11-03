@@ -33,7 +33,7 @@ def _bucketize_impl(
     comparison = ((input.unsqueeze(-1) >= flattened)
                   if right else (input.unsqueeze(-1) > flattened))
     result = comparison.int32().sum(-1)
-    return result if out_int32 else result.int64()
+    return result.int32() if out_int32 else result.int64()
 
 
 def bucketize(input, boundaries, out_int32=False, right=False, **kwargs):

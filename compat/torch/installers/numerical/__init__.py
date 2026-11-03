@@ -29,6 +29,8 @@ from ...fidelity import Fidelity, register_fidelity, register_api_bindings
 from ....diagnostics import EXPECTED, swallowed
 
 from .batching import vmap
+from .elementwise import remainder
+from .indexing import triu_indices, tril_indices
 
 register_fidelity(
     "torch.vmap", vmap, Fidelity.APPROXIMATE,
@@ -270,6 +272,15 @@ _TAKE_ALONG_DIM_FIDELITY_DETAIL = (
     "integer indices but omits out, device, layout, and dtype keyword semantics"
 )
 
+
+for _triangular in (triu_indices, tril_indices):
+    register_fidelity(
+        "torch." + _triangular.__name__, _triangular, Fidelity.APPROXIMATE,
+        "native row-major triangle coordinates with int32/int64 and device selection; "
+        "uses a composite rectangular grid; non-strided layouts are unsupported",
+    )
+del _triangular
+
 from .indexing import take_along_dim
 
 register_fidelity(
@@ -296,6 +307,12 @@ register_fidelity(
 _RECIPROCAL_FIDELITY_DETAIL = (
     "matches Torch elementwise reciprocal values for supported real tensors but "
     "omits device, layout, and dtype keyword semantics"
+)
+
+
+register_fidelity(
+    "torch.remainder", remainder, Fidelity.APPROXIMATE,
+    "uses native floor-modulo and its gradients; out= is explicitly unsupported",
 )
 
 from .elementwise import reciprocal
@@ -1197,6 +1214,8 @@ def install(ctx):
     # Native log1p owns the computation; Torch owns integer promotion.
     g.log1p = log1p
     _bind_missing(g, "reciprocal", reciprocal)
+    _bind_missing(g, "remainder", remainder)
+    Var.remainder = remainder
     _bind_missing(g, "lerp", lerp)
     # torch.div/divide take a `rounding_mode`, which the native op does not, so
     # these are force-set rather than `_bind_missing`-ed -- jittor's own `div`
@@ -1225,6 +1244,8 @@ def install(ctx):
     # jt.gather returns the index's shape (batch, k, 1), collapsing seq_len -> beam
     # search crashed on the next `seq[:, :, cur_len] = ...` setitem. Broadcast first.
     _bind_missing(g, "take_along_dim", take_along_dim)
+    g.triu_indices = triu_indices
+    g.tril_indices = tril_indices
     _orig_all = getattr(g, "all", None)
     _orig_any = getattr(g, "any", None)
     if callable(_orig_all):
@@ -1361,7 +1382,7 @@ def install(ctx):
     register_api_bindings(Var, "torch.Tensor", (
         "abs", "movedim", "moveaxis", "index_put", "index_copy",
         "tensor_split", "take", "equal", "quantile", "nanquantile",
-        "det", "inverse",
+        "det", "inverse", "remainder",
     ), Fidelity.APPROXIMATE,
         "Shares the numerical module's implementation; existing dtype, layout and fallback limitations remain")
     register_api_bindings(sparse_namespace, "torch.sparse", ("sum",),

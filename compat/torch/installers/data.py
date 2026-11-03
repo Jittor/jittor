@@ -5,6 +5,7 @@ changing the compatibility semantics.
 """
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
+from contextlib import nullcontext
 import collections as _collections_data
 import concurrent.futures as _futures_data
 import itertools as _itertools_data
@@ -323,11 +324,10 @@ def _default_collate(batch):
     elem = batch[0]
     if isinstance(elem, jt.Var):
         from ..frontend import tensor_frontend
-        with tensor_frontend(g.Var):
-            result = jt.stack(list(batch), dim=0)
-            if not any(value.requires_grad for value in batch):
-                result.requires_grad_(False)
-            return result
+        stopped = not any(value.requires_grad for value in batch)
+        with tensor_frontend(g.Var, like=elem, default_placement=False), \
+                jt.no_grad() if stopped else nullcontext():
+            return jt.stack(list(batch), dim=0)
     if isinstance(elem, (_np.ndarray, _np.generic)):
         values = _np.stack(batch)
         return g.as_tensor(values, dtype=_jittor_dtype_name(values.dtype)).requires_grad_(False)

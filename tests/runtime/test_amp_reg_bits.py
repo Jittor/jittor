@@ -54,6 +54,20 @@ def amp_level(level):
 
 
 class TestAmpBitNames(unittest.TestCase):
+    def test_disabled_policy_preserves_explicit_float64_and_restores_amp(self):
+        # FP32 preference is not an AMP-off scope: callers can explicitly
+        # request wider arithmetic, including inside a captured backward.
+        with jt.flag_scope(auto_convert_64_to_32=0):
+            x = jt.array([1.0 + 2.0**-40, 2.0 + 2.0**-40], dtype="float64")
+            with amp_level(6):
+                before = jt.flags.amp_reg
+                with jt.flag_scope(amp_reg=jt.amp_flags.disabled):
+                    self.assertEqual(jt.flags.amp_reg, 0)
+                    y = x + x
+                    self.assertEqual(str(y.dtype), "float64")
+                    np.testing.assert_array_equal(y.numpy(), x.numpy() * 2)
+                self.assertEqual(jt.flags.amp_reg, before)
+
     def test_the_python_names_match_the_cpp_constants(self):
         from jittor_utils.backend_resources import core_root
         # The C++ core lives beside the package (``src/``), not inside it.

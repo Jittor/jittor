@@ -31,11 +31,11 @@ def test_callable_checkpoint_preserves_receiving_functions(name):
     opt.step()
     scheduler.step()
     saved = copy.deepcopy(scheduler.state_dict())
-    assert set(saved) == {"base_lrs", "last_epoch", "_step_count", "verbose",
+    assert set(saved) == {"base_lrs", "last_epoch", "_step_count", "_is_initial",
                            "_get_lr_called_within_step", "_last_lr", "lr_lambdas"}
     assert saved["lr_lambdas"] == [None, {"factor": 0.25}]
-    assert saved["verbose"] is False
-    assert "_is_initial" not in saved
+    assert "verbose" not in saved
+    assert saved["_is_initial"] is False
     assert saved["_get_lr_called_within_step"] is False
     target_fn = lambda epoch: 0.5
     target_obj = Factor(0.75)
@@ -84,13 +84,38 @@ def test_initial_lr_resume_and_live_context_flags():
     assert not scheduler._is_initial and not scheduler._get_lr_called_within_step
 
 
-def test_scheduler_state_dict_keeps_verbose_and_omits_transient_initial_flag():
+def test_scheduler_state_dict_uses_torch28_initial_flag_and_keeps_legacy_verbose():
     scheduler = torch.optim.lr_scheduler.StepLR(
         MetadataOptimizer(), step_size=2, gamma=0.5, verbose=True)
     state = scheduler.state_dict()
-    assert state["verbose"] is True
-    assert "_is_initial" not in state
+    # The compatibility-only constructor flag remains accessible, while the
+    # serialized fields match the independent PyTorch 2.8 scheduler format.
+    assert scheduler.verbose is True
+    assert "verbose" not in state
+    assert state["_is_initial"] is False
     assert scheduler._is_initial is False
+
+
+@pytest.mark.parametrize("name", ["LambdaLR", "MultiplicativeLR"])
+def test_torch28_scheduler_state_roundtrip_retains_initial_flag(name):
+    cls = getattr(torch.optim.lr_scheduler, name)
+    optimizer = MetadataOptimizer()
+    scheduler = cls(optimizer, lambda epoch: 0.8 ** epoch)
+    optimizer.step(); scheduler.step()
+    expected = copy.deepcopy(scheduler.state_dict())
+    assert expected["_is_initial"] is False
+    assert "verbose" not in expected
+    other_optimizer = MetadataOptimizer()
+    other = cls(other_optimizer, lambda epoch: 0.8 ** epoch)
+    other_optimizer.param_groups = copy.deepcopy(optimizer.param_groups)
+    checkpoint = copy.deepcopy(expected)
+    other.load_state_dict(checkpoint)
+    assert checkpoint == expected
+    assert other.state_dict() == expected
+    optimizer.step(); scheduler.step()
+    other_optimizer.step(); other.step()
+    assert other.state_dict() == scheduler.state_dict()
+    assert other_optimizer.param_groups == optimizer.param_groups
 
 
 def test_context_flags_reset_when_get_lr_raises():

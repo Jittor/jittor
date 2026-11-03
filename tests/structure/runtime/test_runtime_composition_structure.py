@@ -121,27 +121,35 @@ class TestRuntimeCompositionStructure(unittest.TestCase):
                 self.assertIs(pickle.loads(legacy), implementation)
 
     def test_compat_composition_keeps_native_core_implementations_available(self):
-        if vmap_state.batching_patches_installed():
-            raise unittest.SkipTest(vmap_state.skip_reason())
-        import jittor
-        import torch
-        from jittor._runtime import core_api
+        # This is a bootstrap identity contract. Native vmap may legitimately
+        # publish its lazy dispatch wrappers later in the caller process.
+        result = self._run_mode_probe(r'''
+import json
+import unittest
+self = unittest.TestCase()
+import jittor
+import torch
+from jittor._runtime import core_api
 
-        self.assertIs(jittor.grad, core_api.grad)
-        self.assertEqual(
-            torch.grad.__module__,
-            "jittor.compat.torch.installers.tensor",
-        )
-        self.assertIs(jittor.save, core_api.save)
-        self.assertIs(jittor.load, core_api.load)
-        self.assertIsNot(torch.grad, jittor.grad)
-        self.assertIsNot(torch.save, jittor.save)
-        self.assertIsNot(torch.load, jittor.load)
-        required = [
-            report for report in jittor._compat_composition_report.torch_reports if report.required
-        ]
-        self.assertTrue(required)
-        self.assertTrue(all(report.status == "complete" for report in required))
+self.assertIs(jittor.grad, core_api.grad)
+self.assertEqual(
+    torch.grad.__module__,
+    "jittor.compat.torch.installers.tensor",
+)
+self.assertIs(jittor.save, core_api.save)
+self.assertIs(jittor.load, core_api.load)
+self.assertIsNot(torch.grad, jittor.grad)
+self.assertIsNot(torch.save, jittor.save)
+self.assertIsNot(torch.load, jittor.load)
+required = [
+    report for report in jittor._compat_composition_report.torch_reports if report.required
+]
+self.assertTrue(required)
+self.assertTrue(all(report.status == "complete" for report in required))
+
+print("RESULT=" + json.dumps({"owners_checked": True}))
+''', torch_mode=True)
+        self.assertEqual(result, {"owners_checked": True})
 
     def _run_mode_probe(self, source, torch_mode=False):
         env = os.environ.copy()

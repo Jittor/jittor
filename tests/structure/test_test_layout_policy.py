@@ -130,8 +130,20 @@ def test_sessionfinish_flushes_worker_survey_and_keeps_execution_gate(monkeypatc
     monkeypatch.setattr(pytest_policy, "_files_that_executed_nothing", lambda: [])
     monkeypatch.setattr(pytest_policy, "_files_that_collected_nothing", lambda: ["missing.py"])
     session = SimpleNamespace(config=SimpleNamespace(workerinput={"workerid": "gw2"},
+                                                     workeroutput={},
                                                      option=SimpleNamespace(collectonly=False)),
                               exitstatus=0)
     pytest_policy.pytest_sessionfinish(session, 0)
     assert flushed == [".gw2"]
-    assert session.exitstatus == 1
+    assert session.exitstatus == 0
+    assert session.config.workeroutput[pytest_policy._XDIST_COLLECTION_KEY] == {
+        "selected": sorted(pytest_policy._SELECTED_FILES),
+        "collected": sorted(pytest_policy._COLLECTED_FILES),
+    }
+    # Only the controller has the union of worker execution reports. It must
+    # still reject the genuinely empty file after those facts are merged.
+    controller = SimpleNamespace(config=SimpleNamespace(
+        option=SimpleNamespace(collectonly=False)), exitstatus=0)
+    pytest_policy.pytest_sessionfinish(controller, 0)
+    assert controller.exitstatus == 1
+    assert flushed == [".gw2"]

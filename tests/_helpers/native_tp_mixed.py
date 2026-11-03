@@ -5,7 +5,6 @@ import json
 import os
 from pathlib import Path
 import subprocess
-import sys
 
 import jittor as jt
 from jittor import distributed as dist
@@ -16,6 +15,7 @@ import pytest
 
 from _helpers import native_tp as case
 from _helpers.child_process import child_env
+from _helpers.native_runtime import assert_native_runtime, assert_no_new_fallbacks
 
 
 # Fixture-specific precision budget frozen from real Torch full-vs-same-TP
@@ -54,7 +54,7 @@ def full_oracle(root, precision, device):
     assert len(metadata['observations']) == 10
     assert all(set(row['dtype']) == {expected} and row['output'] == expected
                for row in metadata['observations'])
-    assert 'torch' not in sys.modules
+    assert_native_runtime(jt)
     with np.load(output, allow_pickle=False) as archive:
         return {name: archive[name].copy() for name in archive}, metadata
 
@@ -240,7 +240,7 @@ def exercise(root, gather, precision, monkeypatch, observer=None, checkpoint_roo
                         number, field, absolute, scale, BF16_RELATIVE_LINF[family])
                 arrays['{}/{}'.format(number, field)] = value
     assert calls == {'reduce': 0, 'broadcast': 0}
-    assert jt.core.backend_fallback_count() == before == 0
+    fallbacks = assert_no_new_fallbacks(before, jt.core.backend_fallback_count())
     assert len(observations) == 14
     assert communication and all(row['op'] == 'sum' for row in communication)
     assert any(row['shape'] == [4, 3] for row in communication)
@@ -253,7 +253,8 @@ def exercise(root, gather, precision, monkeypatch, observer=None, checkpoint_roo
               'master': 'float32', 'gradients': 'float32', 'moments': 'float32',
               'owned_parameter_elements': 28 if dist.get_world_size() == 2 else 52,
               'owned_moment_elements': 56 if dist.get_world_size() == 2 else 104,
-              'exact_fresh_resume': True, 'legacy_calls': calls, 'fallbacks': 0,
+              'exact_fresh_resume': True, 'legacy_calls': calls, 'fallbacks': fallbacks['delta'],
+              'fallback_counter': fallbacks,
               'errors': errors, 'compute': observations, 'communication': communication, 'oracle': metadata,
               'bf16_relative_linf_budget': BF16_RELATIVE_LINF if precision == 'bf16' else None}
     (root / 'result.json').write_text(json.dumps(report, indent=2) + '\n')

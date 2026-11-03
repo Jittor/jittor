@@ -26,10 +26,25 @@ namespace jittor {
 
 #ifdef JIT_cuda
 
+// Keep FP32 arithmetic in FP32: promotion to the double overload changes
+// rounded powers (including reciprocal frequencies used by rotary embeddings).
+inline __device__ float _signed_pow(float x, float y) {
+    if (x < 0 && ::floorf(y) == y)
+        return ::powf(-x, y) * (::fmodf(y, 2.0f) != 0.0f ? -1.0f : 1.0f);
+    return ::powf(x, y);
+}
+
 inline __device__ double _signed_pow(double x, double y) {
     if (x < 0 && ::floor(y) == y)
         return ::pow(-x, y) * (::fmod(y, 2.0) != 0.0 ? -1.0 : 1.0);
     return ::pow(x, y);
+}
+
+// Preserve the former double path for mixed operand types and integers.
+// An exact float/float call selects the non-template FP32 overload above.
+template <class A, class B>
+inline __device__ double _signed_pow(A x, B y) {
+    return _signed_pow(double(x), double(y));
 }
 
 #endif

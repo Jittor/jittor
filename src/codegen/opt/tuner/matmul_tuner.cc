@@ -102,6 +102,7 @@ void MatmulTuner::run(PassManager* pm, TunerManager* tm) {
         if (!make_matmul) continue;
         auto rvar = make_matmul(xx, yy, t1, t2);
         auto rid = fop->context->vrm.add_relay_group(fop, {{rvar, rop->y}});
+        if (rid < 0) continue;
         auto srid = "relay"+S(rid);
         add_candidate(srid, 1);
         add_candidate(srid, 0);

@@ -95,7 +95,7 @@ _OWNERSHIP = {
     },
     shard: {
         "_flat_local_overlap", "_flat_entry_slices", "_refresh_flat_entry_shards",
-        "_mark_fsdp_param_var", "_fsdp_param_entry", "is_fsdp_managed_param",
+        "_mark_fsdp_param_var", "_optimizer_state_view", "_fsdp_param_entry", "is_fsdp_managed_param",
         "_fsdp_var_to_local", "_fsdp_var_full_tensor", "_fsdp_var_redistribute",
         "_named_parameters_with_owner", "_iter_modules", "_iter_fsdp_modules",
         "_apply_fsdp_attr", "_init_true_fsdp_state", "_unshard_module_params",

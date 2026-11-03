@@ -169,3 +169,25 @@ def index_put_(input, indices, values, accumulate=False):
         input.assign(input.index_add(0, index.int64().reshape((-1,)), vals))
         return input
     raise NotImplementedError("index_put_(accumulate=True) with a partial multi-dim index")
+
+
+def _triangular_indices(kind, row, col, offset, dtype, device, layout):
+    from . import jt, _dtype_to_str
+    from ...context import get_install_context
+    from ...frontend import tensor_frontend
+    if layout is not None and str(layout) != "torch.strided":
+        raise NotImplementedError("triangular indices require strided layout")
+    context = get_install_context(jt)
+    with tensor_frontend(context.state["Var"], device=device):
+        return getattr(jt, kind + "_indices")(
+            row, col, offset, "int64" if dtype is None else _dtype_to_str(dtype))
+
+
+def triu_indices(row, col, offset=0, *, dtype=None, device=None, layout=None):
+    """Adapt dtype/device options to the native upper-triangle coordinate owner."""
+    return _triangular_indices("triu", row, col, offset, dtype, device, layout)
+
+
+def tril_indices(row, col, offset=0, *, dtype=None, device=None, layout=None):
+    """Adapt dtype/device options to the native lower-triangle coordinate owner."""
+    return _triangular_indices("tril", row, col, offset, dtype, device, layout)

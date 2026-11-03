@@ -19,6 +19,7 @@ from jittor._runtime.dispatch import dispatch_context, optional_kernel, try_disp
 
 from .backends import hooks as _backend_hooks
 from jittor.backends.cuda.kernels.nn.rms_norm_cuda import _fused_add_rms_norm_cuda, _rms_norm_cuda
+from jittor.backends.cuda.kernels.nn.rms_norm_precise_cuda import _rms_norm_precise_cuda
 from jittor.backends.cuda.kernels.nn.rope_cuda import _rotary_embedding_cuda
 from jittor.backends.cuda.kernels.nn.swiglu_cuda import _silu_and_mul_cuda
 
@@ -70,6 +71,9 @@ def silu_and_mul(x):
 
 def rms_norm(x, weight, eps=1e-6):
     """Root-mean-square normalise ``x`` over its last axis and scale."""
+    precise = _rms_norm_precise_cuda(x, weight, eps)
+    if precise is not None:
+        return precise
     backend = _backend_hooks.rms_norm_cuda or _rms_norm_cuda
     backend_weight = weight
     if (

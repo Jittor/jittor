@@ -389,7 +389,9 @@ class JittorShapeError(JittorError, _builtins.ValueError): ...
 #   topk
 #   transpose
 #   tril
+#   tril_indices
 #   triu
+#   triu_indices
 #   type_as
 #   uint16
 #   uint32
@@ -9271,7 +9273,9 @@ to_int: Any
 tolist: Any
 topk: Any
 tril: Any
+tril_indices: Any
 triu: Any
+triu_indices: Any
 type_as: Any
 unbind: Any
 unique: Any

@@ -307,6 +307,12 @@ def _torch_register_leaf(v):
     their result immediately; Var.requires_grad_ also calls this helper later.
     """
     try:
+        state = getattr(v, "_jittor_fsdp2_state", None)
+        if (getattr(v, "_jittor_fsdp2_role", None) == "shard"
+                and getattr(state, "true_fsdp_flat", False)):
+            # Full parameters publish AD gradients; the flat master owns the
+            # optimizer accumulation. Entry slices must not publish duplicates.
+            return
         if isinstance(v, jt.Var) and v._has_leaf_accumulator():
             get_tensor_state(jt).leaf_params[id(v)] = v
     except EXPECTED as exc:

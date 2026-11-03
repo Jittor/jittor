@@ -376,6 +376,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
 
     _native_add = g.add
     g.add = _add
+    Var.add = _add
 
     g.cumsum = _owner.cumsum
     Var.cumsum = _owner.cumsum

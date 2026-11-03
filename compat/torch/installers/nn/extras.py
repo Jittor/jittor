@@ -12,7 +12,7 @@ from .... import collectives as _collectives
 
 from .module_methods import _install_module_methods
 from .rnn import _rnn_pad_sequence, PackedSequence, pack_padded_sequence, pad_packed_sequence
-from .norm_utils import _get_total_norm, _clip_grads_with_norm_
+from .norm_utils import _get_total_norm, _clip_grads_with_norm_, get_total_norm
 
 def _ddp_world_size():
     """This rank's view of the world. See collectives._world_size."""
@@ -230,6 +230,8 @@ def _install_nn_extras(nn, registry=None):
     nn.utils = _u
     _clip_grad = _types_nn_utils.ModuleType("torch.nn.utils.clip_grad")
 
+    _u.get_total_norm = get_total_norm
+    _u.clip_grads_with_norm_ = _clip_grads_with_norm_
     _clip_grad._get_total_norm = _get_total_norm
     _clip_grad._clip_grads_with_norm_ = _clip_grads_with_norm_
     _clip_grad.clip_grad_norm_ = getattr(_u, "clip_grad_norm_", None)

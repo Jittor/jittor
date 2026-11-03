@@ -158,8 +158,8 @@ class TestFSDP2Nccl(unittest.TestCase):
         self.assertEqual(objects, expected_objects)
 
         gathered_objects = [None] * world_size if int(jt.rank) == 0 else None
-        dist.gather_object(
-            {"rank": int(jt.rank)}, gathered_objects, dst=0)
+        # Use the same payload whose expected result is asserted below.
+        dist.gather_object(payload, gathered_objects, dst=0)
         if int(jt.rank) == 0:
             self.assertEqual(
                 gathered_objects, expected_objects)
@@ -225,8 +225,10 @@ class TestFSDP2Nccl(unittest.TestCase):
         from jittor.compat.fsdp2.dtensor import init_device_mesh
 
         world = int(jt.world_size)
-        if world < 4 or world % 2:
-            self.skipTest("requires an even world of at least four ranks")
+        if world < 4:
+            self.skipTest("requires at least four CUDA devices")
+        if world % 2:
+            self.skipTest("requires an even world size")
         mesh = init_device_mesh("cuda", (world // 2, 2), mesh_dim_names=("replicate", "shard"))
         jt.seed(932)
         model = nn.Linear(4, 3)

@@ -7,6 +7,8 @@
 #include <typeinfo>
 #include "runtime/device.h"
 #include "runtime/backend.h"
+#include "runtime/backend_streams.h"
+#include "runtime/executor_entry.h"
 
 #ifdef HAS_ACCELERATOR
 #include "mem/allocator/cuda_dual_allocator.h"
@@ -470,6 +472,14 @@ static bool migrate_group(Var* var, Allocator* allocator, bool to_gpu) {
 
 void migrate_to_cpu(Var* var, Allocator* allocator) {
     #ifdef HAS_ACCELERATOR
+    if (!backend_compute_stream_scope_active() && !inside_executor()) {
+        // A migration can copy a whole alias ring. Wait before taking that
+        // ring's mutex: the worker can need it while finishing its batch.
+        async_exec_wait();
+        ExecutorEntryScope entry;
+        migrate_to_cpu(var, allocator);
+        return;
+    }
     if (!use_cuda_managed_allocator)
         allocator = cpu_allocator;
     #endif
@@ -526,6 +536,12 @@ void migrate_to_cpu(Var* var, Allocator* allocator) {
 
 void migrate_to_gpu(Var* var, Allocator* allocator) {
     #ifdef HAS_ACCELERATOR
+    if (!backend_compute_stream_scope_active() && !inside_executor()) {
+        async_exec_wait();
+        ExecutorEntryScope entry;
+        migrate_to_gpu(var, allocator);
+        return;
+    }
     // only happend when not using use_cuda_managed_allocator
     if (var->storage_span_bytes() == 0) {
         migrate_empty_var(var, allocator);

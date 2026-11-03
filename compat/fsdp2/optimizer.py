@@ -92,6 +92,13 @@ def _sgd_hparams(opt, pg):
     )
 
 
+def _physical_shard(value):
+    """Expose the native holder inside an opt-in public global-shape view."""
+    if isinstance(value, jt.Var) and vars(type(value)).get("_fsdp_global_shape_view", False):
+        return jt.Var(value)
+    return value
+
+
 def _sgd_update_for_param(opt, pg, state, entry, param, grad, value, *, index):
     """Update one shard; ``index`` is the parameter's slot in ``pg``.
 
@@ -101,7 +108,11 @@ def _sgd_update_for_param(opt, pg, state, entry, param, grad, value, *, index):
     """
     lr, momentum, weight_decay, dampening, nesterov = _sgd_hparams(opt, pg)
     initialized = momentum_initialized_flags(pg)
-    if not isinstance(value, jt.Var) or list(value.shape) != list(param.shape):
+    public_value = value
+    param, grad = _physical_shard(param), _physical_shard(grad)
+    value = _physical_shard(value)
+    physical_shape = list(jt.Var.shape.__get__(param, type(param)))
+    if not isinstance(value, jt.Var) or list(value.shape) != physical_shape:
         value = jt.zeros_like(param).stop_grad()
     updated = sgd_update(
         param, grad, value, lr=lr, momentum=momentum, weight_decay=weight_decay,
@@ -109,6 +120,9 @@ def _sgd_update_for_param(opt, pg, state, entry, param, grad, value, *, index):
         momentum_initialized=initialized[index], torch_math=getattr(opt, "torch_math", False))
     if momentum != 0 or nesterov:
         initialized[index] = True
+    if isinstance(public_value, jt.Var) and public_value is not value:
+        public_value.update(value)
+        value = public_value
     return updated.stop_grad(), value
 
 
@@ -124,14 +138,24 @@ def _adam_hparams(opt, pg):
 def _adam_update_for_param(opt, pg, param, grad, value, momentum, *,
                            decoupled_weight_decay, n_step):
     lr, eps, weight_decay, betas = _adam_hparams(opt, pg)
-    if not isinstance(value, jt.Var) or list(value.shape) != list(param.shape):
+    public_value, public_momentum = value, momentum
+    param, grad = _physical_shard(param), _physical_shard(grad)
+    value, momentum = _physical_shard(value), _physical_shard(momentum)
+    physical_shape = list(jt.Var.shape.__get__(param, type(param)))
+    if not isinstance(value, jt.Var) or list(value.shape) != physical_shape:
         value = jt.zeros_like(param).stop_grad()
-    if not isinstance(momentum, jt.Var) or list(momentum.shape) != list(param.shape):
+    if not isinstance(momentum, jt.Var) or list(momentum.shape) != physical_shape:
         momentum = jt.zeros_like(param).stop_grad()
     updated = adam_update(
         param, grad, value, momentum, lr=lr, eps=eps, weight_decay=weight_decay,
         betas=betas, step=n_step, decoupled_weight_decay=decoupled_weight_decay,
         torch_math=True)
+    if isinstance(public_value, jt.Var) and public_value is not value:
+        public_value.update(value)
+        value = public_value
+    if isinstance(public_momentum, jt.Var) and public_momentum is not momentum:
+        public_momentum.update(momentum)
+        momentum = public_momentum
     return updated.stop_grad(), value, momentum
 
 
@@ -333,6 +357,11 @@ def optimizer_step(opt, loss=None, retain_graph=False, *, native_kind=None):
         opt._build_grad_map()
     except EXPECTED as exc:
         swallowed("fsdp2/optimizer.py optimizer_step: opt._build_grad_map()", exc)
+    # Opt-in per-parameter shards can be empty on a rank. Materialize the
+    # step on every rank before a later local read can diverge in whether it
+    # flushes pending collective work. This must not affect the default path.
+    if any(getattr(state, "torch_dim0_per_parameter", False) for state in states):
+        jt.sync_all()
     return True
 
 

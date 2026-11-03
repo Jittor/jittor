@@ -1,5 +1,6 @@
 """Torch tensor scans ownership."""
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
+from ...amp import _autocast_fp32_call
 
 def _assign_out(out, value):
     """Assign through the native view owner, including retained output views."""
@@ -17,7 +18,15 @@ def _cumulative(native, input, dim, dtype, out):
     _owner = _import_module(__package__)
     if isinstance(input, _owner.jt.Var) and _jittor_dtype_name(input.dtype) in ("bool", "uint8"):
         input = input.cast("int64")
-    result = native(input, dim)
+    selected = dtype
+    if out is not None:
+        if dtype is not None and _owner._dtype_to_str(dtype) != _jittor_dtype_name(out.dtype):
+            raise RuntimeError("cumulative operation: dtype must match out dtype")
+        selected = out.dtype if dtype is None else dtype
+    if selected is not None:
+        input = input.cast(_owner._dtype_to_str(selected))
+    result = _autocast_fp32_call(native, input, dim,
+                                 eligible=dtype is None and out is None)
     if dtype is not None:
         result = result.cast(_owner._dtype_to_str(dtype))
     if out is not None:

@@ -28,6 +28,7 @@ remote、源码版本与注册源文件 SHA256；每次 scorecard 重新枚举�
 | Diffusers | `pipelines._import_structure` 的全部可选分支：pipeline 模块族与 API；AutoPipeline 家族/任务另列；`models._import_structure` 全部公开导出另列 `model_api` | 模型导出轴包含 helper、mixin、enum、函数及 Flax，不是模型族数；UNet 单模块不证明整 pipeline；AutoPipeline 子集不冒充全库 |
 | ms-swift | `register_model(ModelMeta)` 模型族；`SWIFT_MAPPING` tuner；普通/Megatron trainer 与 CLI；参数 `task_type`/`rlhf_type` 的 Literal | 普通与 Megatron 轴分开；一个 tiny LoRA 不证明全量/分布式/所有 trainer 方法 |
 | verl | advantage-estimator、policy-loss、distillation-loss 注册；Hydra 入口 | 入口包括训练、评测与生成；登记不证明完整 PPO/GRPO 流水或全部模型 |
+| TRL | 顶层公开 Trainer 导出，包含可选依赖条件分支；复用 `trl_inventory.py` 的 AST 解析 | 16 种文本方法是显式子集；完整分母仍含两种 diffusion Trainer。微型 FP32 训练不证明全模型、AMP、检查点或分布式支持 |
 
 这里枚举的是**源码声明**，包含可选依赖的条件分支。没有安装某个依赖不应缩小分母。
 上游增加新的动态注册方式或解析器遇到未知布局时失败，先更新解析器与负向测试，再给
@@ -55,6 +56,8 @@ python -S "$scripts/audit_coverage.py" scorecard \
 审计中的 `gate_cases` 记录共享模型 CASES；`dedicated_gates` 单独记录 DeepSpeed Engine
 这类专用协议入口及 nox session，不将其伪装为普通模型 case。两者只证明门禁已接入，
 `verified_level` 仍为空；L 级必须由当前 scorecard 的实际执行证据授予。
+TRL 的双解释器训练 CLI 以 `entrypoints` 登记真实 `main` 入口，不伪造 pytest 节点。
+登记仍不授予分子；专用轨迹比较通过也不能仅靠改写标签转换成下面的通用模型 scorecard。
 
 ## 每行必填的平台块
 

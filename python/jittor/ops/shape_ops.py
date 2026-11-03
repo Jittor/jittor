@@ -82,7 +82,7 @@ def repeat_interleave(x,repeats,dim=None,output_size=None):
         # unsqueezing a size-1 axis right after `dim`, broadcasting it to
         # `repeats`, and folding it back into `dim` produces.
         if repeats == 1:
-            return x
+            return x.copy(False)
         tar_shape = list(x.shape)
         tar_shape[dim] = tar_shape[dim] * repeats
         broadcast_shape = [-1] * (dim + 1) + [repeats] + [-1] * (x.ndim - dim - 1)
@@ -530,3 +530,30 @@ def tril(input: Var, diagonal:int=0) -> Var:
     index = input.index()
     mask = index[-2] >= index[-1] - diagonal
     return jt.ternary(mask, input, jt.zeros_like(input))
+
+
+def _triangular_indices(row, col, offset, dtype, upper):
+    import operator
+    import jittor as jt
+    from jittor._core.dtypes import dtype_name
+    row, col, offset = operator.index(row), operator.index(col), operator.index(offset)
+    if row < 0 or col < 0:
+        raise RuntimeError("triangular indices require nonnegative row and col")
+    dtype = dtype_name(dtype)
+    if dtype not in ("int32", "int64"):
+        raise RuntimeError("triangular indices require int32 or int64 dtype")
+    if not row or not col:
+        return jt.empty((2, 0), dtype=dtype)
+    rows, columns = jt.index((row, col), dtype="int64")
+    mask = columns - rows >= offset if upper else columns - rows <= offset
+    return jt.stack(jt.where(mask, dtype=dtype), dim=0)
+
+
+def triu_indices(row, col, offset=0, dtype="int64"):
+    """Row-major coordinates of an upper triangle, using native device ops."""
+    return _triangular_indices(row, col, offset, dtype, True)
+
+
+def tril_indices(row, col, offset=0, dtype="int64"):
+    """Row-major coordinates of a lower triangle, using native device ops."""
+    return _triangular_indices(row, col, offset, dtype, False)

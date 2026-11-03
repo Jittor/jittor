@@ -216,6 +216,31 @@ void backend_compute_stream_release(uint64 devices) {
     }
 }
 
+namespace {
+thread_local BackendComputeStreamScope* active_compute_scope = nullptr;
+}
+
+bool backend_compute_stream_scope_active() { return active_compute_scope != nullptr; }
+
+BackendComputeStreamScope::BackendComputeStreamScope(uint64& devices)
+    : devices(devices), outer(active_compute_scope) {
+    if (!outer) backend_compute_stream_acquire();
+    active_compute_scope = this;
+}
+
+BackendComputeStreamScope::~BackendComputeStreamScope() {
+    active_compute_scope = outer;
+    if (outer) {
+        outer->devices |= devices;
+        return;
+    }
+    try {
+        backend_compute_stream_release(devices);
+    } catch (const std::exception& error) {
+        LOGe << "Compute handoff failed:" << error.what();
+    }
+}
+
 void backend_side_stream_defer_join(BackendStreamKind kind, int device) {
     int side = side_index(kind);
     auto& item = get_resources(device);

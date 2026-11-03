@@ -14,7 +14,7 @@ import re
 import subprocess
 
 
-REPOS = ("transformers", "peft", "diffusers", "ms-swift", "verl", "mmengine", "mmcv", "flash-attention", "trellis", "vllm", "vllm-omni", "torchmetrics", "tensordict")
+REPOS = ("transformers", "peft", "diffusers", "ms-swift", "verl", "trl", "mmengine", "mmcv", "flash-attention", "trellis", "vllm", "vllm-omni", "torchmetrics", "tensordict")
 ROOT = Path(__file__).resolve().parents[4]
 
 
@@ -107,12 +107,14 @@ def inventory(repo, checkout):
     remote = git(checkout, "remote", "get-url", "origin")
     files = git(checkout, "ls-files", "--", "*.py").splitlines()
     prefix = {"transformers": "src/transformers/", "peft": "src/peft/",
-              "diffusers": "src/diffusers/", "ms-swift": "swift/", "verl": "verl/", "mmengine": "mmengine/", "mmcv": "mmcv/", "flash-attention": "flash_attn/", "trellis": "trellis2/", "vllm": "vllm/", "vllm-omni": "vllm_omni/", "torchmetrics": "src/torchmetrics/", "tensordict": "tensordict/"}[repo]
+              "diffusers": "src/diffusers/", "ms-swift": "swift/", "verl": "verl/", "trl": "trl/", "mmengine": "mmengine/", "mmcv": "mmcv/", "flash-attention": "flash_attn/", "trellis": "trellis2/", "vllm": "vllm/", "vllm-omni": "vllm_omni/", "torchmetrics": "src/torchmetrics/", "tensordict": "tensordict/"}[repo]
     files = [path for path in files if path.startswith(prefix)]
     if repo == "transformers":
         selected = [path for path in files if path.endswith("models/auto/modeling_auto.py")]
     elif repo == "peft":
         selected = [path for path in files if path.endswith("utils/peft_types.py")]
+    elif repo == "trl":
+        selected = ["trl/__init__.py", "trl/trainer/__init__.py"]
     elif repo == "diffusers":
         selected = [path for path in files if path.endswith(("pipelines/auto_pipeline.py", "pipelines/__init__.py"))
                     or path == "src/diffusers/models/__init__.py"]
@@ -145,7 +147,13 @@ def inventory(repo, checkout):
                      "sources": sorted(set(sources))})
         used.update(sources)
 
-    if repo == "transformers":
+    if repo == "trl":
+        from trl_inventory import inventory as trainer_inventory
+        trainers = trainer_inventory(checkout, expected_revision=commit, selected=frozenset())
+        add("trainer", "top-level public Trainer exports, including conditional exports",
+            trainers["denominator"]["members"], trainers["source_files_sha256"])
+        declaration_details = trainers
+    elif repo == "transformers":
         mappings = source.assignments(r"MODEL_.*MAPPING_NAMES|MODEL_MAPPING_NAMES")
         base = [(path, name, node) for path, name, node in mappings if name == "MODEL_MAPPING_NAMES"]
         if len(base) != 1:
@@ -409,6 +417,11 @@ def inventory(repo, checkout):
     if repo == "flash-attention":
         result["scope"] = ("All public top-level attention functions explicitly exported by flash_attn.__init__; "
                            "not all internal APIs, features, shapes or dtypes. Enumeration verifies no member.")
+    if repo == "trl":
+        result["declaration_details"] = declaration_details
+        result["scope"] = ("All source-declared top-level public Trainer exports, including optional diffusion APIs; "
+                           "no member is verified by enumeration. A tiny text Trainer scenario does not establish "
+                           "all models, mixed precision, checkpoint, distributed or optional generation backends.")
     if repo == "diffusers":
         result["declaration_details"] = declaration_details
         result["scope"] = ("Pipeline declaration axes and the independent complete models public-export axis; "

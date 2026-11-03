@@ -29,11 +29,28 @@ def _device():
     return device
 
 
+@pytest.mark.skipif(_device() != "cuda", reason="Requires CUDA SiLU VJP arithmetic")
+def test_cuda_silu_vjp_preserves_the_inner_fp32_fma():
+    # Independent Torch CUDA observations of actual Qwen gate/cotangent pairs.
+    # Separate multiply/add changes the final FP16 rounding at both sites.
+    with jt.flag_scope(use_cuda=1, amp_reg=0), forbid_backend_fallbacks():
+        x = jt.array([-1.296875, -1.7333984375]).float16()
+        seed = jt.array([-.6513671875, .379638671875]).float16()
+        gradient = jt.grad((jt.nn.silu(x) * seed).sum(), x)
+        gradient.sync()
+        assert gradient.location() == "device"
+        np.testing.assert_array_equal(gradient.float32().numpy(),
+                                      [.0025806427001953125, -.0269775390625])
+
+
 @pytest.mark.parametrize("dtype", ["float16", "bfloat16"])
 @pytest.mark.parametrize("autocast", [False, True])
 def test_low_precision_silu_output_and_two_derivatives(dtype, autocast):
     device = _device()
-    raw = np.array([-20., -10., -5., -3., -1., -.125, 0., .125, 1., 3., 5., 10., 20.])
+    # A real Qwen MLP gate value straddles a FP16 rounding boundary:
+    # multiply-by-reciprocal rounds down while one FP32 division rounds up.
+    raw = np.array([-20., -10., -5., -3., -2.724609375, -1., -.125,
+                    0., .125, 1., 3., 5., 10., 20.])
     data = _round(raw, dtype)
     cotangent = _round(np.random.RandomState(7).uniform(.2, 1.1, raw.shape), dtype)
     direction = _round(np.random.RandomState(19).uniform(.2, 1.1, raw.shape), dtype)

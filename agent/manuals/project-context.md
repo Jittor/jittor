@@ -65,6 +65,7 @@ for the current revision; open failures and hardware gaps are tracked below.
 - **Silent numerics.** cuDNN autotuning coupled to scheduling (KI-EXEC-003).
 - **Torch frontend gaps.** torchmetrics on CUDA (KI-COMPAT-010), RNN off cuDNN
   (KI-COMPAT-011), in-process shim metadata (KI-COMPAT-012).
+- **TRL text training.** Historical pinned 16/18 text-Trainer and Qwen3 evidence is retained in the TRL validation report (historical validation record; see PR evidence). Those results bind the prior snapshot and have not been revalidated on the current integration; see KI-COMPAT-016, -017, -019 and -021.
 - **Executor and liveness.** Threaded writers to one parameter (KI-EXEC-005),
   liveness underflows (KI-EXEC-008), the op-level
   parallel compiler (KI-COMPILER-001).

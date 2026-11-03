@@ -23,6 +23,7 @@ static auto make_reduce = op_constructor<VarPtr, Var*, NanoString, NanoVector, b
 static auto make_reduce2 = op_constructor<VarPtr, Var*, NanoString, uint, uint>("reduce");
 static auto make_ternary = op_constructor<VarPtr, Var*, Var*, Var*>("ternary");
 static auto make_number = op_constructor<VarPtr, float, Var*>("number");
+static auto make_array = op_constructor<VarPtr, const void*, NanoVector, NanoString>("array");
 
 unordered_set<string> reduce_ops = {
     /**
@@ -390,6 +391,13 @@ VarPtr ReduceOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     }
     if (ns == ns_mean) {
         VarPtr a = make_broadcast_to(dout, v, reduce_mask, keepdims_mask);
+        if (a->dtype() == ns_float64) {
+            // number(float, like) has already rounded 1/N before widening it.
+            // Keep the scalar in the actual double cotangent's precision.
+            double ratio = static_cast<double>(out->num) / v->num;
+            VarPtr n = make_array(&ratio, {}, ns_float64);
+            return make_binary(a, n, ns_multiply);
+        }
         VarPtr n = make_number(1.0f*out->num / v->num, a);
         return make_binary(a, n, ns_multiply);
     }

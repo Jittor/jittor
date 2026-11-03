@@ -1,5 +1,7 @@
 """Torch numerical reductions operations."""
 
+from functools import lru_cache
+
 def _reduce_alias(native, input, dim=None, keepdim=False, *, axis=None,
                   keepdims=None, out=None):
     d = axis if axis is not None else dim
@@ -198,13 +200,78 @@ def logcumsumexp(input, dim):
     return _logcumsumexp_impl(input, dim)
 
 
+@lru_cache(maxsize=1)
+def _fixed_row_logsumexp_class():
+    """Build the Torch-only CUDA path and its first/second derivative rules."""
+    from . import jt
+    from jittor._runtime.dispatch import try_dispatch
+
+    class _FixedRowLogsumexpVJP(jt.Function):
+        def _run_call(self, x, seed, lse):
+            self.original = jt.ops.reshape(x, x.shape)
+            self.seed = jt.ops.reshape(seed, seed.shape)
+            return super()._run_call(x, seed, lse)
+
+        def execute(self, x, seed, lse):
+            with jt.flag_scope(amp_reg=jt.amp_flags.disabled):
+                probability = jt.exp(x - lse.reshape((-1, 1)).broadcast(x.shape))
+                return probability * seed.broadcast(x.shape)
+
+        def grad(self, direction):
+            with jt.flag_scope(amp_reg=jt.amp_flags.disabled):
+                probability = jt.nn.softmax(self.original, dim=-1)
+                dot = (probability * direction).sum([1], keepdims=True)
+                dx = self.seed.broadcast(self.original.shape) * probability * (
+                    direction - dot.broadcast(self.original.shape))
+                return dx, dot, None
+
+    class _FixedRowLogsumexp(jt.Function):
+        def _run_call(self, x):
+            self.original = jt.ops.reshape(x, x.shape)
+            return super()._run_call(x)
+
+        def execute(self, x):
+            with jt.flag_scope(amp_reg=jt.amp_flags.disabled):
+                result = try_dispatch('nn.torch_logsumexp_last', x)
+            if result is None:
+                raise RuntimeError('selected CUDA logsumexp kernel became unavailable')
+            self.result = result
+            return result
+
+        def grad(self, seed):
+            return _FixedRowLogsumexpVJP()(self.original, seed.reshape((-1, 1)), self.result)
+
+    return _FixedRowLogsumexp
+
+
 def logsumexp(input, dim, keepdim=False):
     """Compute a numerically stable log-sum-exp reduction."""
     from . import (
         jt,
     )
-    m = input.max(dim, keepdims=True)
-    out = m + jt.log(jt.exp(input - m).sum(dim, keepdims=True))
+    # Large FP32 last-axis CUDA reductions are used by TRL's selective
+    # log-softmax. The generated reduction can use unordered atomics; select
+    # the fixed-order backend only when its placement and layout contract holds.
+    # All native Jittor spellings and unsupported Torch cases retain their path.
+    if (input.ndim >= 2 and type(dim) is int and dim in (-1, input.ndim - 1)
+            and int(input.shape[-1]) >= 32768
+            and str(input.dtype).replace('torch.', '') == 'float32'):
+        from jittor._runtime.dispatch import select_kernel
+        row = input.reshape((-1, int(input.shape[-1])))
+        if select_kernel('nn.torch_logsumexp_last', row) is not None:
+            result = _fixed_row_logsumexp_class()()(row)
+            shape = tuple(int(v) for v in input.shape[:-1])
+            return result.reshape(shape + ((1,) if keepdim else ()))
+    name = str(input.dtype).replace("torch.", "")
+    if name == 'float32':
+        # Torch keeps FP32 logsumexp in FP32 under CUDA autocast, including
+        # layouts that decline the fixed-order backend.
+        with jt.flag_scope(amp_reg=jt.amp_flags.disabled):
+            m = input.max(dim, keepdims=True)
+            out = m + jt.log(jt.exp(input - m).sum(dim, keepdims=True))
+    else:
+        m = input.max(dim, keepdims=True)
+        out = m + jt.log(jt.exp(input - m).sum(dim, keepdims=True))
     # Back to the input's dtype for the two half types. The shift-exp-sum-log
     # chain is computed in float32 whatever it is handed -- `exp` is on jittor's
     # white list (`src/type/nano_string.cc`), so it widens -- and that is the
@@ -214,7 +281,6 @@ def logsumexp(input, dim, keepdim=False):
     # model, at the op transformers reach for in every attention and every
     # cross-entropy. `jittor.nn.functional.softmax.logsumexp` carries the same
     # narrowing for the native spelling.
-    name = str(input.dtype).replace("torch.", "")
     if name in ("float16", "bfloat16") and \
             str(out.dtype).replace("torch.", "") != name:
         out = out.cast(name)

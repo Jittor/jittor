@@ -11,6 +11,36 @@ def _get_total_norm(tensors, norm_type=2.0, error_if_nonfinite=False,
     return _get_total_norm_device(
         list(tensors), norm_type, error_if_nonfinite)
 
+def get_total_norm(tensors, norm_type=2.0, error_if_nonfinite=False,
+                   foreach=None):
+    """Compute a plain or same-mesh DTensor norm through public Torch APIs."""
+    if isinstance(tensors, _jt.Var):
+        tensors = [tensors]
+    tensors = list(tensors)
+    if any(not isinstance(value, _jt.Var) for value in tensors):
+        raise TypeError("get_total_norm expects tensors")
+    from torch.distributed.tensor import DTensor, Replicate
+    distributed = [isinstance(value, DTensor) for value in tensors]
+    if not any(distributed):
+        return _get_total_norm(tensors, norm_type, error_if_nonfinite, foreach)
+    if not all(distributed):
+        raise ValueError("get_total_norm requires one tensor placement group")
+    first = tensors[0]
+    mesh = first.device_mesh
+    placements = tuple(first.placements)
+    if (mesh.ndim != 1 or len(placements) != 1 or
+            not (placements[0].is_shard() or placements[0].is_replicate())):
+        raise NotImplementedError("DTensor norm requires a one-dimensional shard or replica mesh")
+    for value in tensors[1:]:
+        if value.device_mesh != mesh or tuple(value.placements) != placements:
+            raise ValueError("get_total_norm requires matching mesh and placements")
+    local = [value.to_local() for value in tensors]
+    group = mesh.get_group() if placements[0].is_shard() else False
+    total = _get_total_norm_device(local, norm_type, error_if_nonfinite,
+                                   shard_reduce=group)
+    return DTensor.from_local(total, mesh, (Replicate(),))
+
+
 def _clip_grads_with_norm_(parameters, max_norm, total_norm,
                            foreach=None):
     del foreach

@@ -4,7 +4,7 @@ import jittor as jt
 from jittor.misc import _pair, _triple
 from jittor._runtime.dispatch import select_kernel
 
-from ._amp import bias_for_compute_dtype
+from ._amp import amp_contraction_inputs, amp_contraction_scope, bias_for_compute_dtype
 
 def same_padding_pairs(kernel_size, dilation):
     """Torch's per-dimension ``(before, after)`` split for ``padding='same'``.
@@ -139,6 +139,7 @@ def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1,
     if kernel is not None:
         return kernel(x, weight, bias, stride, padding, dilation, groups,
                       _depthwise_fast_path=_depthwise_fast_path)
+    x, weight = amp_contraction_inputs(x, weight)
     if groups == 1:
         N,C,H,W = x.shape
         oh, ow = out_height, out_width
@@ -151,7 +152,7 @@ def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1,
         # in float32 (`cublas_compute_type.h`, `float32_precision.h`). See
         # `nn/functional/matrix.py::_contraction_scope`, which is the same bit
         # for the same reason.
-        with jt.flag_scope(amp_reg=jt.flags.amp_reg | jt.amp_flags.keep_reduce):
+        with amp_contraction_scope():
             xx = x.reindex([N,out_channels,C,oh,ow,Kh,Kw], [
                     'i0', # Nid
                     'i2', # Cid
@@ -188,8 +189,9 @@ def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1,
         # and ww, this one set {"G": G} on xx alone, so the same layer produced
         # two different fused-op keys depending on how it was called.
         ww.compile_options = xx.compile_options = {"G":G,"C":C}
-        yy = xx*ww
-        y = yy.reindex_reduce('add', [N, oc, oh, ow], [
+        with amp_contraction_scope():
+            yy = xx*ww
+            y = yy.reindex_reduce('add', [N, oc, oh, ow], [
                 'i0',
                 f'i1*{oc//G}+i2',
                 'i4',
@@ -243,6 +245,7 @@ def conv3d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
     if kernel is not None:
         y = kernel(x, weight, stride, padding, dilation, groups)
     elif groups == 1:
+        x, weight = amp_contraction_inputs(x, weight)
         N,C,D,H,W = x.shape
         Kd, Kh, Kw = weight.shape[-3:]
         od = (D+padding[0]*2-Kd*dilation[0]+dilation[0]-1)//stride[0]+1
@@ -254,7 +257,7 @@ def conv3d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
         # cuDNN path honours -- and `reduce16_no_fp32_acc` is not the answer to
         # that, because it also switches off the float32 accumulator. See the
         # conv2d scope above and `nn/functional/matrix.py::_contraction_scope`.
-        with jt.flag_scope(amp_reg=jt.flags.amp_reg | jt.amp_flags.keep_reduce):
+        with amp_contraction_scope():
             xx = x.reindex([N,out_channels,C,od,oh,ow,Kd,Kh,Kw], [
                     'i0', # Nid
                     'i2', # Cid
@@ -266,6 +269,7 @@ def conv3d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
             yy = xx*ww
             y = yy.sum([2,6,7,8]) # Kc, Kh, Kw,Kd
     else:
+        x, weight = amp_contraction_inputs(x, weight)
         N,C,D,H,W = x.shape
         Kd, Kh, Kw = weight.shape[-3:]
         G = groups
@@ -291,8 +295,9 @@ def conv3d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
                 'i8',
                 'i9'
             ])
-        yy = xx*ww
-        y = yy.reindex_reduce('add', [N, oc, od, oh, ow], [
+        with amp_contraction_scope():
+            yy = xx*ww
+            y = yy.reindex_reduce('add', [N, oc, od, oh, ow], [
                 'i0',
                 f'i1*{oc//G}+i2',
                 'i4',

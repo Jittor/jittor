@@ -12,6 +12,41 @@
 
 namespace jittor {
 
+// Ring memory contains bytes, not live NanoVector objects. Packed shapes keep
+// their historical sixteen-byte wire format; spilled shapes carry dimensions,
+// never a process-local heap pointer or its reference count.
+static void push_shape(RingBuffer* rb, const NanoVector& shape, uint64& offset) {
+    int64 words[2] = {shape.is_spilled() ? 0 : shape.data,
+                      shape.is_spilled() ? NanoVector::spilled_tag : shape.offset};
+    rb->push(sizeof(words), offset);
+    std::memcpy(rb->get_ptr(sizeof(words), offset), words, sizeof(words));
+    if (shape.is_spilled()) {
+        rb->push_t<int64>(shape.size(), offset);
+        for (int i=0; i<shape.size(); ++i)
+            rb->push_t<int64>(shape[i], offset);
+    }
+}
+
+static NanoVector pop_shape(RingBuffer* rb, uint64& offset) {
+    int64 words[2];
+    rb->pop(sizeof(words), offset);
+    std::memcpy(words, rb->get_ptr(sizeof(words), offset), sizeof(words));
+    NanoVector shape;
+    if ((words[1] & ((1 << NanoVector::size_nbits)-1)) == NanoVector::spilled_tag) {
+        auto rank = rb->pop_t<int64>(offset);
+        CHECK(rank >= 0 && rank <= NanoVector::max_tensor_rank) << "Invalid ring tensor rank";
+        for (int64 i=0; i<rank; ++i) {
+            auto dimension = rb->pop_t<int64>(offset);
+            CHECK(dimension >= 0) << "Invalid ring tensor dimension";
+            shape.push_back(dimension);
+        }
+    } else {
+        shape.data = words[0];
+        shape.offset = words[1];
+    }
+    return shape;
+}
+
 static void push_py_object_pickle(RingBuffer* rb, PyObject* obj, uint64& __restrict__ offset) {
     PyObjHolder pickle(PyImport_ImportModule("pickle"));
     PyObjHolder dumps(PyObject_GetAttrString(pickle.obj, "dumps"));
@@ -106,7 +141,7 @@ static void push_py_object(RingBuffer* rb, PyObject* obj, uint64& __restrict__ o
             args.dtype = get_type_str(arr);
             size = PyArray_Size(arr);
             if (!is_c_style(arr)) {
-                rb->push_t<NanoVector>(args.shape, offset);
+                push_shape(rb, args.shape, offset);
                 rb->push_t<NanoString>(args.dtype, offset);
                 rb->push(size, offset);
                 args.ptr = rb->get_ptr(size, offset);
@@ -134,7 +169,7 @@ static void push_py_object(RingBuffer* rb, PyObject* obj, uint64& __restrict__ o
                 args.ptr = arr->data;
             }
         }
-        rb->push_t<NanoVector>(args.shape, offset);
+        push_shape(rb, args.shape, offset);
         rb->push_t<NanoString>(args.dtype, offset);
         rb->push(size, offset);
         std::memcpy(rb->get_ptr(size, offset), args.ptr, size);
@@ -184,7 +219,7 @@ static PyObject* pop_py_object(RingBuffer* rb, uint64& __restrict__ offset, bool
     }
     if (t==5 || t==7) {
         ArrayArgs args;
-        args.shape = rb->pop_t<NanoVector>(offset);
+        args.shape = pop_shape(rb, offset);
         args.dtype = rb->pop_t<NanoString>(offset);
         int64 size = args.dtype.dsize();
         for (int i=0; i<args.shape.size(); i++)

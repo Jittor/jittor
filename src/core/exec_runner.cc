@@ -419,23 +419,7 @@ struct BatchReleaseRecord {
 };
 }
 
-#ifdef HAS_ACCELERATOR
-namespace {
-// Publishes the batch's device work for the next thread into the executor, on
-// every exit including an exception. Destructors do not throw, and a failure
-// here must not replace whatever error is already unwinding.
-struct ComputeHandoffScope {
-    const uint64& devices;
-    ~ComputeHandoffScope() {
-        try {
-            backend_compute_stream_release(devices);
-        } catch (const std::exception& error) {
-            LOGe << "Compute handoff failed:" << error.what();
-        }
-    }
-};
-}
-#endif
+
 
 DEFINE_FLAG(int, reuse_dying_inputs, 1, "Let an elementwise kernel write an output into the memory of an input it reads for the last time, as PyTorch's inductor does with its in/out buffers. The output takes over a block the allocator was about to free, so the peak does not carry both, and the kernel writes cache lines it has just read instead of evicting others for new ones: a 12.6 M-element GELU backward reading a gradient the previous GEMM just wrote runs in 118 us in place against 153 us into a fresh buffer on a 4090. 2 also checks, after every segment that reused one, that the input's memory did go. 0 always allocates.");
 
@@ -799,8 +783,7 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
     // On the way out even if the batch threw: the kernels launched before the
     // throw are still in flight, and a thread that never publishes them leaves
     // the next one free to read what they are still writing.
-    backend_compute_stream_acquire();
-    ComputeHandoffScope compute_handoff{touched_devices};
+    BackendComputeStreamScope compute_handoff(touched_devices);
     #else
     (void)entry_device;
     #endif

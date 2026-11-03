@@ -474,7 +474,7 @@ void StampProbeOp::jit_run() {
 #: answerable across processes, and asserting it in-process would pass whether
 #: or not the stamp works.
 _STAMP_OP_PROBE = r"""
-import json, os, sys
+import hashlib, json, os, sys
 
 import jittor_utils as jit_utils
 
@@ -488,10 +488,13 @@ jit_utils.run_cmds = run_cmds
 import jittor as jt
 
 directory = sys.argv[1]
+# Parallel cases share a JIT cache. Keep each case's library stable across its
+# two children without letting another temporary source directory overwrite it.
+namespace = "gen_ops_stamp_probe_" + hashlib.sha256(os.path.abspath(directory).encode()).hexdigest()[:16]
 ops = jt.compile_custom_ops([
     os.path.join(directory, "stamp_probe_op.h"),
     os.path.join(directory, "stamp_probe_op.cc"),
-])
+], gen_name_=namespace)
 values = ops.stamp_probe([4], "float32").numpy().tolist()
 
 print("CUSTOM_OP_RESULT " + json.dumps({

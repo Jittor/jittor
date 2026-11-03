@@ -59,12 +59,16 @@ def _fused_sgd_cuda(entries, lr, momentum, weight_decay, dampening, nesterov, st
     live = [lr] if isinstance(lr, jt.Var) else []
     params = [e[0] for e in entries]
     grads = [e[1] for e in entries]
-    vels = [e[2] for e in entries]
+    plain = momentum == 0 and dampening == 0 and not nesterov
+    # The plain kernel never reads or writes velocity, but its argument ABI
+    # still requires matching shapes. Alias the parameter for absent state;
+    # this adds no allocation and is never published as a momentum buffer.
+    vels = [e[0] if e[2] is None and plain else e[2] for e in entries]
     outs = jt.fused_sgd(params, vels, grads, 0.0 if live else float(lr),
                         float(momentum), float(weight_decay), float(dampening),
                         bool(nesterov), False, bool(step <= 1), live)
-    plain = momentum == 0 and dampening == 0 and not nesterov
-    return list(zip(outs[:len(entries)], vels if plain else outs[len(entries):]))
+    return list(zip(outs[:len(entries)],
+                    [e[2] for e in entries] if plain else outs[len(entries):]))
 
 
 #: Takes the learning rate as a device Var as well as a number.

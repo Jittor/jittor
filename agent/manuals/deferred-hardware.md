@@ -24,6 +24,7 @@ GitHub issue 和 PR 描述里；本页不记进度，只记硬件到手那天要
 | `8.17` | 跨机网络与诊断：带宽微基准、掉线在超时内退出 | 两台机器 | 两台机器 |
 | `8.18` | 多机 checkpoint：2 机保存、4 机加载的续训 | 两台机器（加载需 4 机） | 两台机器 |
 | `10.22` | 两节点 DDP/FSDP 冒烟与掉线门禁进 nightly | 两台机器 | 两台机器 |
+| `11.01` | SGD 延迟动量状态在 ACL 融合更新和保存恢复中的行为 | Ascend + CANN | ACL 的 SGD 可选状态 |
 
 各硬件的操作步骤不在这里：Ascend 看 [`docs/guides/hardware/ascend-910b.md`](../../docs/guides/hardware/ascend-910b.md)，
 HCCL 多卡看 [`hccl-on-device-verification.md`](hccl-on-device-verification.md)，Corex 看
@@ -60,6 +61,29 @@ HCCL 多卡看 [`hccl-on-device-verification.md`](hccl-on-device-verification.md
 照这个形状建。
 
 ## 硬件到手那天跑什么
+
+### ACL 的 SGD 可选状态
+
+`11.01`：CPU/CUDA 已验证无动量时不创建状态，以及中途开启动量、暂停、保存恢复。
+ACL 的融合 ABI 仍要求临时连续 velocity 输入；这条路径未做真机验证，不能从 CUDA
+的零动量分配结论外推。先按下文配置 CANN 并确认设备可用，再从仓库根目录执行：
+
+```bash
+JITTOR_TORCH_SHIM=0 JITTOR_TEST_DEVICES=npu <jittor-python> - <<'PY'
+import jittor as jt
+import pytest
+jt.flags.use_acl = 1
+with jt.runtime.scope(backend_fallback="error"):
+    probe = jt.array([1., 2.])
+    probe.sync()
+    assert jt.core.dispatch_context([probe])[0] == "acl"
+    assert probe.location() == "device"
+    raise SystemExit(pytest.main(["-q", "tests/optim/test_sgd_lazy_momentum.py"]))
+PY
+```
+
+验收要求：真实 ACL 计算、零 backend fallback、参数值和恢复后的动量正确，且无动量状态
+仍为未创建。允许融合 ABI 的临时输入分配，不将它描述为 ACL 零临时内存开销。
 
 ### Ascend 910B3，单卡（CANN）
 

@@ -302,3 +302,793 @@ CUDA 缺 CPU world2 对应时保留独立数值结论，但进入 `blocked`，�
 设备/rank benchmark 缓存，不能指向单测缓存。协议 dispatcher 只允许明确的 repo/id；
 专用 validator 尚未存在或 scope 不匹配时拒绝。配对比较完整设备无关协议描述，不能将
 不同 world、precision、ZeRO stage 或训练规格配成一对；失败/阻塞不填 verified level。
+
+### Full-checkpoint TRL SFT probe
+
+`scripts/trl_sft_probe.py` observes the official TRL 0.21.0 `SFTTrainer.train()`
+with Transformers 4.56.2 and Accelerate 1.10.1. Use a pinned, local
+`Qwen/Qwen3-0.6B` checkpoint, including its tokenizer, in independent runtimes.
+All parameters remain trainable; the default is three FP32 SGD updates at
+`1e-4`, batch one, eager attention, and at most 32 tokens. One fixed text record
+is repeated so sampler differences cannot change the training inputs. This is
+a bounded compatibility experiment, not a convergence or throughput benchmark.
+
+Prepare the normal isolated environments first. Run CPU before the accelerator;
+use separate device caches and serialize first compilation. With
+`HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1`, run the oracle first to create the
+shared nonpersistent buffer artifact (the checkpoint omits RoPE frequencies):
+
+```bash
+<oracle-python> agent/skills/torch-compat-repo-runbook/scripts/trl_sft_probe.py run \
+  --root "$PWD" --model "$JITTOR_LAB_ROOT/<checkpoint>" \
+  --upstream "$JITTOR_LAB_ROOT/<trl-checkout>" \
+  --initial-buffers "$JITTOR_LAB_ROOT/_state/<run>/buffers.npz" \
+  --runtime torch --device cpu --steps 3 \
+  --output "$JITTOR_LAB_ROOT/_state/<run>/torch-cpu"
+
+<jittor-python> agent/skills/torch-compat-repo-runbook/scripts/trl_sft_probe.py run \
+  --root "$PWD" --model "$JITTOR_LAB_ROOT/<checkpoint>" \
+  --upstream "$JITTOR_LAB_ROOT/<trl-checkout>" \
+  --initial-buffers "$JITTOR_LAB_ROOT/_state/<run>/buffers.npz" \
+  --runtime jittor --device cpu --steps 3 \
+  --output "$JITTOR_LAB_ROOT/_state/<run>/jittor-cpu"
+
+<oracle-python> agent/skills/torch-compat-repo-runbook/scripts/trl_sft_probe.py compare \
+  --reference "$JITTOR_LAB_ROOT/_state/<run>/torch-cpu" \
+  --candidate "$JITTOR_LAB_ROOT/_state/<run>/jittor-cpu" \
+  --output "$JITTOR_LAB_ROOT/_state/<run>/comparison.json"
+```
+
+Pin the official TRL checkout to `46d09bd2408f17605409fb3ee8ba12705add7faa`.
+Providing `--upstream` verifies the installed TRL package against that clean
+source. Reuse the exact buffer artifact and model for CUDA, with new output
+paths and `--device cuda`. The output directory must not already exist.
+
+The probe writes every parameter gradient and updated parameter one tensor at
+a time, plus actual model inputs, logits, loss and an embedding-output gradient.
+Three updates require roughly 14 GB per runtime. It checks exact initial state,
+input dtypes, tensor coverage, device residency, hashes and zero fallback;
+missing gradients or changed artifacts fail closed. Host snapshots add I/O and
+synchronization, so reported elapsed times are diagnostic only. The probe does
+not test streaming datasets, checkpoint resume, AdamW, mixed precision, LoRA or
+distributed training, and does not grant registry coverage or nightly admission.
+
+### Full-checkpoint TRL DPO and GRPO probes
+
+`scripts/trl_rl_probe.py` observes official TRL 0.21.0 DPO/GRPO training with the
+same full Qwen3-0.6B checkpoint, downstream pins and independent environments
+as SFT. Prepare the shared oracle-created `initial-buffers.npz` first; this
+probe requires it to exist. Each formal run uses ten distinct examples and ten
+FP32 SGD updates at `1e-4`, with all 310 parameter tensors trainable.
+
+Use private CPU/CUDA caches and offline environments. Set `OMP_NUM_THREADS=4`,
+`MKL_NUM_THREADS=4`, `OPENBLAS_NUM_THREADS=4`, `DISABLE_MULTIPROCESSING=1`,
+`JT_USE_PARALLEL_OP_COMPILER=0` and `JT_CUDA_KERNEL_MATH=strict` for the recorded
+configuration. CPU must hide accelerators and disable CUDA/NVCC; CUDA must
+explicitly select the actual device/toolkit. First JIT compilation stays serial.
+
+From the checkout, run the oracle before its matching candidate:
+
+```bash
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 JITTOR_TORCH_SHIM=0 \
+<oracle-python> agent/skills/torch-compat-repo-runbook/scripts/trl_rl_probe.py \
+  --root "$PWD" --algorithm dpo --device cpu --runtime torch --steps 10 --threads 4 \
+  --model "$JITTOR_LAB_ROOT/_state/trl-qwen3-sft/model" \
+  --initial-buffers "$JITTOR_LAB_ROOT/_state/trl-qwen3-sft/initial-buffers.npz" \
+  --upstream "$JITTOR_LAB_ROOT/trl-qwen3-sft/upstream" \
+  --output "$JITTOR_LAB_ROOT/_state/<new-run>/dpo-torch-cpu"
+
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 JITTOR_TORCH_SHIM=1 PYTHONPATH=python \
+<jittor-python> agent/skills/torch-compat-repo-runbook/scripts/trl_rl_probe.py \
+  --root "$PWD" --algorithm dpo --device cpu --runtime jittor --steps 10 --threads 4 \
+  --model "$JITTOR_LAB_ROOT/_state/trl-qwen3-sft/model" \
+  --initial-buffers "$JITTOR_LAB_ROOT/_state/trl-qwen3-sft/initial-buffers.npz" \
+  --upstream "$JITTOR_LAB_ROOT/trl-qwen3-sft/upstream" \
+  --reference "$JITTOR_LAB_ROOT/_state/<new-run>/dpo-torch-cpu" \
+  --output "$JITTOR_LAB_ROOT/_state/<new-run>/dpo-jittor-cpu"
+```
+
+Repeat with `--algorithm grpo` and distinct `grpo-*` output/reference paths.
+After CPU, repeat both pairs with `--device cuda`, a separate CUDA cache and
+distinct `*-cuda` paths. Never pair different devices or reuse an existing
+output directory. Keep probe sources unchanged across each pair; their hashes
+are checked. Read both `status` and `numerical_passed`: execution can complete
+while numerical comparisons fail. This probe does not use exit status alone
+to signal numerical acceptance failure.
+
+DPO uses one preference pair per update, beta `0.1` and sigmoid loss. Official
+reference log probabilities are precomputed for **both** train and evaluation
+data before updates. Evaluation uses the same ten training pairs, not held-out
+quality data.
+
+GRPO uses one prompt/two completions per update, beta `0.04`, explicit `grpo`
+loss, a resident reference model and sixteen-token completion limit. The oracle
+samples real completions and records effective configuration with
+`use_model_defaults=False`; the candidate verifies/replays those exact tokens.
+Official reward normalization, KL, policy loss and gradients still execute.
+Batch rows are canonically reordered together to remove backend RNG ordering
+differences. Actual character/length rewards and nonzero reward-group counts
+are recorded; this is not semantic accuracy or independent online sampling
+parity. Final fixed-completion evaluation compares each group's own pre-update
+log probabilities with the final policy, so before values come from different
+policy states. Separate native generation smoke needs its own provenance and
+does not replace controlled numerical comparison.
+
+The training probe compares every step's complete parameter gradients, final
+weights, losses and method-specific observations. It does not collect full
+model logits, input/embedding gradients or per-step updated-weight snapshots.
+Budgets remain `atol=1e-5, rtol=1e-4` with the documented field-scale floor.
+Report failed elements alongside category relative L2; final weight error
+should also be divided by the actual update norm. Additional trained-model
+logit comparisons must load and verify each runtime's saved final weights and
+use identical tokenized prompts, not independently sampled answers.
+
+Oracle traces retain roughly 26 GB each; candidates stream-compare gradients
+and retain final weights plus hashes/statistics. These asymmetric I/O costs
+rule out a speed comparison. Keep `scorecard_eligible=false`: full model size
+and ten completed steps do not grant an L level or library-wide compatibility.
+Protocol, results and boundaries are in the
+DPO/GRPO report (historical validation record; see PR evidence).
+
+### Compare trained DPO/GRPO model logits
+
+`scripts/trl_final_logits_probe.py` reads the completed training traces above,
+loads each runtime's own full final parameter set, verifies all saved-array
+hashes and reads parameters back after copying to verify exact loaded bytes.
+The complete 310-parameter inventory, shared buffers, model/tokenizer artifacts,
+training protocol and runtime/device identities must match. It does not retrain
+or substitute the original checkpoint weights for trained weights.
+
+Run genuine Torch first, then Jittor, in the same isolated environments as
+training. The following CPU example uses the DPO trace paths above. Existing
+output directories are rejected:
+
+```bash
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 JITTOR_TORCH_SHIM=0 \
+<oracle-python> agent/skills/torch-compat-repo-runbook/scripts/trl_final_logits_probe.py \
+  --root "$PWD" --runtime torch --device cpu --threads 4 \
+  --model "$JITTOR_LAB_ROOT/_state/trl-qwen3-sft/model" \
+  --initial-buffers "$JITTOR_LAB_ROOT/_state/trl-qwen3-sft/initial-buffers.npz" \
+  --upstream "$JITTOR_LAB_ROOT/trl-qwen3-sft/upstream" \
+  --training-trace "$JITTOR_LAB_ROOT/_state/<new-run>/dpo-torch-cpu" \
+  --output "$JITTOR_LAB_ROOT/_state/<new-run>/dpo-logits-torch-cpu"
+
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 JITTOR_TORCH_SHIM=1 PYTHONPATH=python \
+<jittor-python> agent/skills/torch-compat-repo-runbook/scripts/trl_final_logits_probe.py \
+  --root "$PWD" --runtime jittor --device cpu --threads 4 \
+  --model "$JITTOR_LAB_ROOT/_state/trl-qwen3-sft/model" \
+  --initial-buffers "$JITTOR_LAB_ROOT/_state/trl-qwen3-sft/initial-buffers.npz" \
+  --upstream "$JITTOR_LAB_ROOT/trl-qwen3-sft/upstream" \
+  --training-trace "$JITTOR_LAB_ROOT/_state/<new-run>/dpo-jittor-cpu" \
+  --reference "$JITTOR_LAB_ROOT/_state/<new-run>/dpo-logits-torch-cpu" \
+  --output "$JITTOR_LAB_ROOT/_state/<new-run>/dpo-logits-jittor-cpu"
+```
+
+There is no `--algorithm` argument: the method comes from `--training-trace`.
+`--reference` is the independent oracle **logit** output, not its training trace.
+Directories or explicit `manifest.json` paths are accepted for both. Repeat for
+GRPO by changing the trace/output paths; repeat on CUDA using `--device cuda`
+and the completed same-device training traces. Preserve separate device caches
+and serialize first compilation as before.
+
+For all ten identical tokenized prompts, the probe saves complete `[1,T,V]`
+logits and next-token `[V]` vectors, with `V=151936`, in FP32/eager eval mode,
+no sampling and no cache. It checks actual physical input/output residency and
+zero fallback. Candidate manifests report maximum absolute error, RMSE,
+relative L2, strict-budget failed fields/elements, top-1 agreement and FP64
+softmax `KL(P_Torch || P_Jittor)`. Read `comparison.logits` for all prompt
+positions and `comparison.next_logits` for the ten next-token decisions;
+their top-1 agreement denominators differ.
+
+The resulting discrepancy combines **training and inference** differences,
+because the two models load their own trained weights. It is not a same-weight
+operator test or a claim about sampled-answer quality. `status=complete` does
+not imply zero strict-budget failures, and `scorecard_eligible` stays false.
+
+
+### TRL trainer inventory and bounded breadth probe
+
+`scripts/trl_inventory.py` derives all public Trainer exports, including
+conditional exports, from the clean pinned TRL checkout without importing it.
+Its default selection is the original eleven-method language-model subset.
+The maintained gate below explicitly selects sixteen text Trainers from the
+full 18-Trainer denominator. Inventory/selection counts alone are not numerical
+support counts; the two excluded conditional exports are the deprecated
+diffusion/image Trainers `AlignPropTrainer` and `DDPOTrainer`.
+
+```bash
+python agent/skills/torch-compat-repo-runbook/scripts/trl_inventory.py \
+  --upstream "$JITTOR_LAB_ROOT/trl-qwen3-sft/upstream" \
+  --output "$JITTOR_LAB_ROOT/_state/<new-run>/inventory.json"
+```
+
+`scripts/trl_mainstream_probe.py` executes official Trainer training on a
+randomly initialized two-layer Qwen3 (hidden size 32, vocabulary 256), with a
+local synthetic tokenizer and ten distinct input sequences. It does not load
+the pretrained 0.6B checkpoint. Supported experiment selectors are `sft`,
+`dpo`, `kto`, `orpo`, `cpo`, `reward`, `ppo`, `rloo`, `gkd`, `online_dpo`, `grpo`.
+A selector being available is not evidence that its runtime comparison passes.
+
+Use the same isolated interpreter/offline/device environment as the full-model
+probes. First run the genuine oracle, then the candidate, using new output
+paths for every method/device pair:
+
+```bash
+<oracle-python> agent/skills/torch-compat-repo-runbook/scripts/trl_mainstream_probe.py \
+  --root "$PWD" --upstream "$JITTOR_LAB_ROOT/trl-qwen3-sft/upstream" \
+  --runtime torch --device cpu --algorithm kto --steps 10 \
+  --output "$JITTOR_LAB_ROOT/_state/<new-run>/kto-torch-cpu"
+
+<jittor-python> agent/skills/torch-compat-repo-runbook/scripts/trl_mainstream_probe.py \
+  --root "$PWD" --upstream "$JITTOR_LAB_ROOT/trl-qwen3-sft/upstream" \
+  --runtime jittor --device cpu --algorithm kto --steps 10 \
+  --reference "$JITTOR_LAB_ROOT/_state/<new-run>/kto-torch-cpu" \
+  --output "$JITTOR_LAB_ROOT/_state/<new-run>/kto-jittor-cpu"
+```
+
+Repeat on CUDA only with a same-device genuine oracle and explicit accelerator
+environment. Serialize each cache's users and initial compilation. Initial
+parameters and buffers for every model role are transferred from the oracle
+and read back byte-for-byte. Every optimizer step records all trained parameter
+gradients, retained embedding-output gradients and updated parameters; fixed
+model state, observed outputs, final evaluation outputs and real device dispatch
+are checked. PPO trains its policy and value models. Reward uses a scalar head,
+so its output is not a vocabulary logit vector. Per-method metadata records
+actual batch size, rollouts and sample exposure; ten updates need not mean ten
+examples processed (KTO uses batch two).
+
+Online methods run local generation forwards and scores. During generation,
+candidate multinomial token choices are replayed from the oracle to keep later
+training inputs identical. This is controlled-token numerical testing, not
+independent sampling parity or model quality evidence. Source/initial-state
+identities must match; changing a measured probe requires a new pair. Completion
+and numerical acceptance are separate manifest fields: inspect
+`status`, `optimizer_steps`, `fallback_count`, `numerical_passed`, and individual
+`comparison` failures. A process exit of zero alone is not numerical acceptance.
+The report keeps tiny breadth and full-checkpoint evidence separate:
+TRL mainstream experiments (historical validation record; see PR evidence).
+
+
+### Maintained sixteen-text-Trainer gate and extra five selectors
+
+[`tools/run_trl_gate.py`](../../../tools/run_trl_gate.py) is the maintained
+entry; [the CPU workflow](../../../.github/workflows/trl-compat-cpu.yml) schedules
+it nightly, supports manual dispatch and scopes PR runs to relevant paths.
+The canonical local wrapper is `nox -s ecosystem_trl`: set
+`JITTOR_CI_PYTHON`, `REAL_TORCH_PYTHON`, `JITTOR_TRL_CHECKOUT` and exactly
+`JITTOR_TEST_DEVICES=cpu` or `cuda`. It fixes the complete sixteen-method,
+three-update matrix; only fresh output/exclusive cache paths may be overridden.
+`registry_inventory.py --repo trl` reuses the same full AST denominator, and
+`audit_coverage.py audit` discovers this dedicated CLI without granting an L
+level or pretending it is a model-builder case.
+Provision two independent Python 3.11 virtual environments using
+[`requirements/trl-compat.txt`](../../../requirements/trl-compat.txt): TRL
+0.21.0, Transformers 4.56.2, Accelerate 1.10.1, datasets 3.6.0, PEFT 0.17.1 and
+NumPy 1.26.4. The oracle must import genuine Torch 2.8.0 with its own native
+binary. Install core editable with `--config-settings editable_mode=compat`
+and the separate `compat` package only in the candidate; do not activate its
+shim in the oracle. The tool neither installs packages nor downloads weights.
+
+```bash
+<oracle-python> tools/run_trl_gate.py \
+  --jittor-python <jittor-python> --oracle-python <oracle-python> \
+  --upstream "$JITTOR_LAB_ROOT/trl-qwen3-sft/upstream" \
+  --output "$JITTOR_LAB_ROOT/_state/<new-run>/trl-gate-cpu" \
+  --jittor-home "$JITTOR_LAB_ROOT/_state/<leased-cpu-cache>" \
+  --device cpu --steps 3
+```
+
+The upstream must be clean official TRL at
+`46d09bd2408f17605409fb3ee8ba12705add7faa`; output must be fresh and outside the
+checkout. Default is CPU and three actual updates. All sixteen genuine-Torch
+references are generated afresh before the source-frozen candidate batch.
+The gate serially leases the optional cache, checks private environments and
+pins, zero fallback, actual optimizer calls, every trained gradient/parameter
+and embedding-gradient role at every step, original initialization payloads,
+final prompts, retained array hashes and recomputed original-budget comparisons.
+Two identically incomplete traces cannot pass. Unused Jittor runtime-context
+changes do not invalidate an otherwise independent Torch reference; candidate
+runtime sources are frozen and checked separately. Only pre-measurement
+`jit_utils` rebuild exit 3 permits a documented warm-up restart; training
+failures are preserved, not retried into an existing trace.
+
+Inspect `summary.json`, `inventory.json`, environment/binary proofs,
+`producer-sources.json`, `runtime-sources.json`, per-command receipts and
+`audits/`. Success requires sixteen paired strict passes, rather than sixteen
+successful imports. A CUDA run additionally requires `--device cuda
+--cuda-device <allocated-gpu>` and an exclusive CUDA cache; the scheduled
+workflow covers CPU only. All of this remains random tiny FP32 text coverage,
+not pretrained full-model, mixed-precision, speed or diffusion acceptance.
+
+The five additional text selectors live in
+[`trl_tail_probe.py`](scripts/trl_tail_probe.py): `prm`, `bco`, `iterative_sft`,
+`nash_md`, `xpo`. To diagnose one separately, use the same upstream/environment
+and oracle-first pattern as `trl_mainstream_probe.py`, replacing the script
+and selector, for example:
+
+```bash
+trl_scripts="$PWD/agent/skills/torch-compat-repo-runbook/scripts"
+trl_state="$JITTOR_LAB_ROOT/_state/<new-run>"
+trl_upstream="$JITTOR_LAB_ROOT/trl-qwen3-sft/upstream"
+<oracle-python> "$trl_scripts/trl_tail_probe.py" \
+  --root "$PWD" --upstream "$trl_upstream" --runtime torch --device cpu \
+  --algorithm nash_md --steps 10 --output "$trl_state/nash-torch/trace"
+<jittor-python> "$trl_scripts/trl_tail_probe.py" \
+  --root "$PWD" --upstream "$trl_upstream" --runtime jittor --device cpu \
+  --algorithm nash_md --steps 10 --reference "$trl_state/nash-torch/trace" \
+  --output "$trl_state/nash-jittor/trace"
+```
+
+PRM trains token-level reward outputs, not vocabulary logits.
+NashMD/XPO execute two generation calls per update, including NashMD's actual
+geometric-mixture forward; only discrete choices are replayed. This does not
+establish independent sampling parity or every optional BCO/online setting.
+
+
+### Diagnose full-model numerical discrepancies
+
+Use `scripts/trl_rounding_probe.py` for a same-checkpoint, archived step-zero
+DPO/GRPO diagnostic, then `scripts/trl_rounding_compare.py` to hash-check and
+compare observations. Start with FP32 CPU/CUDA, and use `--precision fp64` as
+a precision control: it removes Qwen's internal FP32 casts and explicitly
+types constants to avoid KI-DTYPE-003. These diagnostic overrides do not grant
+production FP64 support. `--eager-rms` is a process-local fusion ablation.
+
+Preserve common reference probabilities, original input/weight hashes, zero
+fallback and actual devices; do not substitute an unrelated tiny model. The
+probe retains full gradients of selected blocks/norms and samples the rest.
+Do not describe those samples as all gradient elements. Read the comparison's
+unmatched fields and distinguish full/sampled gradient summaries. Use the
+existing offline interpreter/cache isolation and new output directories.
+Measured commands, limitations and current conclusions are in the
+rounding diagnosis (historical validation record; see PR evidence).
+
+### Full-checkpoint TRL method matrix with bounded trace storage
+
+[`trl_full_probe.py`](scripts/trl_full_probe.py), with
+[`trl_full_cases.py`](scripts/trl_full_cases.py), runs official trainers for
+`kto`, `orpo`, `cpo`, `reward`, `ppo`, `rloo`, `gkd`, and `online_dpo` on the full
+local Qwen3-0.6B checkpoint. Keep the same pinned downstream stack, offline
+settings, independent interpreters, source binding, shared buffers and explicit
+CPU/CUDA selection described above. New output directories are mandatory.
+CPU precedes CUDA; serialize users of each JIT cache and allocate devices
+explicitly. These are FP32 SGD probes, not LoRA/AdamW probes.
+
+From the repository root, set task-specific paths (the shared buffers must
+already exist), then run each method's oracle before its candidate:
+
+```bash
+trl_scripts="$PWD/agent/skills/torch-compat-repo-runbook/scripts"
+trl_state="$JITTOR_LAB_ROOT/_state/<new-run>"
+trl_model="$JITTOR_LAB_ROOT/_state/trl-qwen3-sft/model"
+trl_buffers="$JITTOR_LAB_ROOT/_state/trl-qwen3-sft/initial-buffers.npz"
+trl_upstream="$JITTOR_LAB_ROOT/trl-qwen3-sft/upstream"
+
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 JITTOR_TORCH_SHIM=0 \
+<oracle-python> "$trl_scripts/trl_full_probe.py" \
+  --root "$PWD" --model "$trl_model" --upstream "$trl_upstream" \
+  --initial-buffers "$trl_buffers" --algorithm orpo --steps 10 --threads 4 \
+  --learning-rate 1e-4 --runtime torch --device cpu \
+  --output "$trl_state/orpo-torch-cpu/trace"
+
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 JITTOR_TORCH_SHIM=1 PYTHONPATH=python \
+<jittor-python> "$trl_scripts/trl_full_probe.py" \
+  --root "$PWD" --model "$trl_model" --upstream "$trl_upstream" \
+  --initial-buffers "$trl_buffers" --algorithm orpo --steps 10 --threads 4 \
+  --learning-rate 1e-4 --runtime jittor --device cpu \
+  --reference "$trl_state/orpo-torch-cpu/trace" \
+  --output "$trl_state/orpo-jittor-cpu/trace"
+
+<oracle-python> "$trl_scripts/trl_full_collect.py" \
+  --reference "$trl_state/orpo-torch-cpu/trace" \
+  --candidate "$trl_state/orpo-jittor-cpu/trace" \
+  --output "$trl_state/orpo-cpu-audit.json"
+```
+
+Replace the algorithm and all corresponding paths together. For CUDA repeat
+the pair with `--device cuda`, separate output paths and the allocated CUDA
+cache/device. The formal protocol uses ten updates; `--steps 1` is only a
+smoke test. Ten distinct records do not imply ten total exposures: inspect
+per-method batch/rollout metadata. Reward/value heads and GKD's perturbed
+teacher are synchronized diagnostic fixtures, not independently trained
+quality models. Online methods replay oracle multinomial choices while
+executing local generation forwards and scores; this does not establish
+independent sampling parity. Multi-model memory requirements can block a
+method before training; such a run is not a passed matrix cell.
+
+This storage protocol samples intermediate gradients and updated parameters
+at stride 4096, while checking complete gradient finiteness/norms. It compares
+all final-step parameter gradients and final parameters; only the oracle
+retains those bulk payloads. Candidate manifests retain hashes/comparison
+statistics for them. It is **not all-elements, all-steps gradient coverage**.
+The collector verifies original payloads or completed lossless archives and
+reconciles recorded comparisons; it cannot independently reconstruct omitted
+candidate payloads from their hashes. Inspect completed status, real optimizer
+updates, device/fallback checks and numerical failures separately. Keep the
+original `atol=1e-5, rtol=1e-4`; the tools do not award registry coverage,
+nightly admission, quality/convergence claims or throughput results.
+
+### Full-model PPO with policy/value LoRA
+
+[`trl_ppo_lora_probe.py`](scripts/trl_ppo_lora_probe.py), with
+[`trl_ppo_lora_case.py`](scripts/trl_ppo_lora_case.py), defines a separate
+FP32 AdamW profile using three complete Qwen3-0.6B bases. Official PPO disables
+policy adapters for the reference instead of loading a fourth model. Policy
+and value use rank-8 q/v LoRA; the value score head is also trained, for 225
+tensors/2,294,784 parameters. The reward head is a synchronized diagnostic
+fixture. This does not replace the full-parameter PPO capacity result.
+
+Use the path variables, isolated pinned interpreters and offline environment
+from the full-checkpoint example. First execute the one-update CPU prerequisite:
+
+```bash
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 JITTOR_TORCH_SHIM=0 \
+<oracle-python> "$trl_scripts/trl_ppo_lora_probe.py" \
+  --root "$PWD" --model "$trl_model" --upstream "$trl_upstream" \
+  --initial-buffers "$trl_buffers" --algorithm ppo --steps 1 --threads 4 \
+  --runtime torch --device cpu --output "$trl_state/ppo-lora-torch-cpu/trace"
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 JITTOR_TORCH_SHIM=1 PYTHONPATH=python \
+<jittor-python> "$trl_scripts/trl_ppo_lora_probe.py" \
+  --root "$PWD" --model "$trl_model" --upstream "$trl_upstream" \
+  --initial-buffers "$trl_buffers" --algorithm ppo --steps 1 --threads 4 \
+  --runtime jittor --device cpu --reference "$trl_state/ppo-lora-torch-cpu/trace" \
+  --output "$trl_state/ppo-lora-jittor-cpu/trace"
+```
+
+After checking that pair, repeat both commands with `--device cuda --steps 10`,
+fresh CUDA output/reference paths, the same explicitly allocated physical GPU
+and an exclusively leased CUDA `JITTOR_HOME`. Use the selected toolkit's explicit
+compiler path consistently. The CPU control visits two prompts once; CUDA uses
+five two-prompt rollouts and two minibatches, hence ten actual optimizer calls.
+All initial adapters/heads are exported by the oracle under `initial/`; the
+candidate verifies and loads them, without assuming matching random generators.
+
+Every trained gradient, parameter and Adam state is retained at every actual
+call. Native generation executes in both runtimes; only sampled discrete tokens
+are replayed. Scalar losses are observed at official `accelerator.backward`.
+The candidate manifest's `comparison` and `numerical_passed` distinguish execution
+completion from strict parity; do not turn exit 0 into a numerical pass. Keep the
+original tolerance. CPU's one-minibatch upstream `val/ratio_var` is undefined,
+while observed loss/gradients/state must remain finite. This probe does not test
+checkpoint resume, model quality or throughput. Exact measured sources and
+results are described in the PPO/loss report (historical validation record; see PR evidence).
+
+### CUDA generation index diagnostics
+
+[`trl_generation_index_probe.py`](scripts/trl_generation_index_probe.py) observes
+boolean-mask gathers in the native generation path. Run `mask` first in the
+independent Torch environment, then with `--runtime jittor --reference` pointing
+to that output, using the same `--batch-size` and `--repetitions`. Both commands
+require `--root`, `--device cuda` and a new external `--output` directory.
+`--observe metadata` records shape/dtype/device; `--observe values` also
+synchronizes and retains the actual index values. Observation can change race
+timing and therefore cannot establish that an intermittent failure is absent.
+
+`--boundary-stress --require-async` varies bounded allocations before the mask
+operation and rejects a candidate run unless the actual async executor runs.
+It changes no runtime flags and generates only valid indices. Keep its samples,
+source hashes, device checks and zero-fallback result together. `ppo` additionally
+requires `--upstream`, an explicit observation level and the maintained official
+PPO producer; its original numerical contracts remain unchanged. A passing
+stress run is supporting evidence, not attribution of a historical CUDA fault.
+
+### Practical SFT: LoRA, AdamW and fresh-process checkpoint resume
+
+[`trl_practical_probe.py`](scripts/trl_practical_probe.py) uses official
+`SFTTrainer` and PEFT 0.17.1 on the complete Qwen3-0.6B base, with only rank-8
+`q_proj`/`v_proj` adapters trainable (alpha 16, dropout 0). It runs ten distinct
+short texts, batch one, maximum length 32, AdamW learning rate `1e-4`, weight
+decay `0.01` and a ten-step linear schedule. The oracle creates the shared
+initial-adapter NPZ; both sides verify identical base/adapters/buffers and
+frozen base parameters. Inspect PEFT dependencies before installation; never
+let dependency resolution replace the shim with a genuine Torch wheel.
+
+Using the path variables above, run the oracle first, then the candidate:
+
+```bash
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 JITTOR_TORCH_SHIM=0 \
+<oracle-python> "$trl_scripts/trl_practical_probe.py" run \
+  --root "$PWD" --model "$trl_model" --upstream "$trl_upstream" \
+  --initial-buffers "$trl_buffers" --initial-adapters "$trl_state/adapters.npz" \
+  --runtime torch --device cpu --precision fp32 \
+  --output "$trl_state/practical-torch-cpu"
+
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 JITTOR_TORCH_SHIM=1 PYTHONPATH=python \
+<jittor-python> "$trl_scripts/trl_practical_probe.py" run \
+  --root "$PWD" --model "$trl_model" --upstream "$trl_upstream" \
+  --initial-buffers "$trl_buffers" --initial-adapters "$trl_state/adapters.npz" \
+  --runtime jittor --device cpu --precision fp32 \
+  --output "$trl_state/practical-jittor-cpu"
+
+<oracle-python> "$trl_scripts/trl_practical_compare.py" \
+  --reference "$trl_state/practical-torch-cpu" \
+  --candidate "$trl_state/practical-jittor-cpu" \
+  --output "$trl_state/practical-cpu-comparison.json"
+```
+
+The trace captures every trainable gradient, adapter update and Adam moment/
+step, fixed-prompt full-vocabulary logits, scheduler/scaler state and RNG
+observations. The posthoc comparator independently requires all 112 adapters
+(1,146,880 trainable parameters), 5,649 full-run or 2,829 resumed-run fields,
+all actual optimizer steps and nonempty per-step state. Two equally incomplete
+manifests cannot pass. Resume also binds and rehashes the reference's actual
+checkpoint-five files; comparing a directory with itself is rejected. Collector
+source hashes are recorded separately from the measured producer hashes.
+Preserve archived producer versions when hardening posthoc comparison; this
+is a re-audit of existing traces, not a new training measurement. Cross-runtime comparison normalizes **only scalar integer Adam
+step-counter values** to float64 for exact value comparison; original dtype
+mismatches remain explicit and prevent strict API parity. Other dtypes and
+numerical budgets are unchanged. A same-runtime uninterrupted repeat control
+uses `trl_practical_compare.py --repeat` with two separate completed runs.
+
+For each runtime, launch a **new process** with the same run arguments and a
+new output directory, adding its own saved checkpoint path. For example:
+
+```bash
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 JITTOR_TORCH_SHIM=1 PYTHONPATH=python \
+<jittor-python> "$trl_scripts/trl_practical_probe.py" run \
+  --root "$PWD" --model "$trl_model" --upstream "$trl_upstream" \
+  --initial-buffers "$trl_buffers" --initial-adapters "$trl_state/adapters.npz" \
+  --runtime jittor --device cpu --precision fp32 \
+  --resume "$trl_state/practical-jittor-cpu/trainer/checkpoint-5" \
+  --output "$trl_state/practical-jittor-cpu-resume"
+
+<oracle-python> "$trl_scripts/trl_practical_compare.py" --resume \
+  --reference "$trl_state/practical-jittor-cpu" \
+  --candidate "$trl_state/practical-jittor-cpu-resume" \
+  --output "$trl_state/practical-jittor-cpu-resume-comparison.json"
+```
+
+Repeat for Torch with its own checkpoint. Both uninterrupted and resumed
+training retain `max_steps=10`; never shorten the first schedule to five.
+Resume must reproduce steps 6–10, including inputs, Adam state, scheduler,
+scaler and RNG; same-runtime comparison requires exact values. This does not
+claim cross-runtime optimizer-checkpoint interoperability. If CUDA resume
+is inexact, compare fresh uninterrupted repeats before attributing the
+entire difference to checkpoint restoration.
+
+After CPU FP32, repeat in CUDA with `--precision fp32`, `fp16`, or `bf16`, new
+paths and matching precision in both runtimes and their resumes. FP16 uses
+`--initial-loss-scale 65536` by default. A diagnostic alternative such as
+`--initial-loss-scale 1024` must be set identically and recorded as a different
+protocol, preserving the original failed/skipped-step run. Count actual
+optimizer updates, not merely Trainer global steps: overflow can skip updates.
+Record module output dtypes/physical devices, not just configuration flags.
+Native BF16 acceleration and functional CUDA BF16 support are different
+capabilities; test the latter directly and report both. No multi-GPU,
+DeepSpeed, quantized-LoRA or full-parameter AdamW coverage follows from these
+single-device adapter experiments.
+
+
+### Expanded full-model LoRA methods
+
+[`trl_lora_probe.py`](scripts/trl_lora_probe.py) extends the practical observer
+to official `sft`, `dpo` and `grpo` Trainers. With `trl_scripts`, `trl_state`,
+`trl_model`, `trl_buffers` and `trl_upstream` set as in the full-checkpoint
+example, run an independent pair with identical adapters and arguments:
+
+```bash
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 JITTOR_TORCH_SHIM=0 \
+<oracle-python> "$trl_scripts/trl_lora_probe.py" run \
+  --root "$PWD" --model "$trl_model" --upstream "$trl_upstream" \
+  --initial-buffers "$trl_buffers" --initial-adapters "$trl_state/adapters.npz" \
+  --algorithm sft --gradient-accumulation 2 --max-length 128 \
+  --runtime torch --device cpu --precision fp32 \
+  --output "$trl_state/lora-sft-torch"
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 JITTOR_TORCH_SHIM=1 PYTHONPATH=python \
+<jittor-python> "$trl_scripts/trl_lora_probe.py" run \
+  --root "$PWD" --model "$trl_model" --upstream "$trl_upstream" \
+  --initial-buffers "$trl_buffers" --initial-adapters "$trl_state/adapters.npz" \
+  --algorithm sft --gradient-accumulation 2 --max-length 128 \
+  --runtime jittor --device cpu --precision fp32 \
+  --reference "$trl_state/lora-sft-torch" --output "$trl_state/lora-sft-jittor"
+<oracle-python> "$trl_scripts/trl_lora_compare.py" \
+  --reference "$trl_state/lora-sft-torch" --candidate "$trl_state/lora-sft-jittor" \
+  --initial-adapters "$trl_state/adapters.npz" --output "$trl_state/lora-sft-comparison.json"
+```
+
+The oracle creates the adapter archive if absent; both sides verify it. The
+protocol always uses ten updates and checkpoint 5. `--gradient-accumulation`
+accepts 1/2 and `--max-length` 32/128; unequal SFT microbatch lengths exercise
+upstream token-loss handling without replacement normalization. DPO/GRPO use
+their actual official objectives, with checked discrete-token replay for GRPO.
+For CUDA allocate its device/cache explicitly and use matching `--device cuda`
+and `--precision fp32|fp16|bf16`; FP16's default initial scale here is 1024.
+Fresh-process own-checkpoint continuation adds `--resume
+<own-run>/trainer/checkpoint-5` to the unchanged run arguments and a fresh output;
+compare it against that runtime's full run with `trl_lora_compare.py --resume`.
+`--repeat` audits separate uninterrupted repeats. Inspect strict failures,
+full adapter gradients/state and actual updates, not only completed status.
+
+The 2026-10-25 report (historical validation record; see PR evidence)
+separates tiny sixteen-method strict passes from full-model FP32 and AMP
+cross-runtime strict failures. After the nested-SiLU and frozen mixed-RMS
+repairs, measured FP16/BF16 own-runtime resume is exact in 2,829 fields each;
+full cross-runtime training remains open. An actual first-layer FP32 RMS
+replay is within three ULPs of the FP64 ideal in both runtimes; it does not
+explain every final ten-update discrepancy.
+
+### Two-rank CUDA DDP and checkpoint continuation
+
+[`trl_ddp_probe.py`](scripts/trl_ddp_probe.py) launches a genuine Torch oracle
+and candidate on exactly two explicitly allocated GPUs. Lease two distinct,
+existing external rank caches first; the launcher warms them serially before
+measurement. Its fixed scope is complete Qwen3-0.6B FP32 LoRA SFT, ten updates,
+rank-distinct inputs, real DDP/NCCL and fresh checkpoint-5 continuation.
+
+```bash
+<oracle-python> "$trl_scripts/trl_ddp_probe.py" launch \
+  --root "$PWD" --state "$trl_state/ddp" --model "$trl_model" \
+  --upstream "$trl_upstream" --initial-buffers "$trl_buffers" \
+  --initial-adapters "$trl_state/adapters.npz" \
+  --oracle-python <oracle-python> --jittor-python <jittor-python> \
+  --devices '<allocated-gpu-a>,<allocated-gpu-b>' --nvcc '<nvcc-path>' \
+  --rank-cache-home "$JITTOR_LAB_ROOT/_state/<leased-rank0-cache>" \
+  --rank-cache-home "$JITTOR_LAB_ROOT/_state/<leased-rank1-cache>"
+```
+
+`--runtime torch|jittor|both` defaults to both. `--append-runtime` is only for
+adding the missing runtime to the same preserved state, not retrying existing
+measurements. Read `measurements/<runtime>/{full,resume}/rank*/manifest.json`,
+`<runtime>-resume-comparison.json` and `cross-comparison.json`. The collector
+checks two actual ranks, full adapter/gradient/moment/counter inventories,
+rank-consistent trained parameters, distinct inputs, physical devices, zero
+fallback and exact own-runtime resume. Launch completion alone does not imply
+cross-runtime strict acceptance. To re-audit without training, use `compare
+--reference <full-run> --candidate <other-run> --mode cross|resume --output
+<new-json>`. This is not DeepSpeed/FSDP, arbitrary world-size or distributed
+mixed-precision coverage.
+
+### Matched SFT throughput, separate from correctness
+
+[`trl_throughput_probe.py`](scripts/trl_throughput_probe.py) uses official
+full-model LoRA SFT with accumulation two and the fixed unequal 128/39–40-token
+sequence schedule. Reserve one otherwise idle physical GPU and one exclusive
+candidate cache. Prime all profiles before timing:
+
+```bash
+<oracle-python> "$trl_scripts/trl_throughput_probe.py" driver \
+  --root "$PWD" --model "$trl_model" --upstream "$trl_upstream" \
+  --initial-buffers "$trl_buffers" --initial-adapters "$trl_state/adapters.npz" \
+  --oracle-python <oracle-python> --jittor-python <jittor-python> \
+  --gpu '<allocated-gpu>' --nvcc '<nvcc-path>' \
+  --jittor-home "$JITTOR_LAB_ROOT/_state/<leased-throughput-cache>" \
+  --stage prime --state "$trl_state/throughput"
+```
+
+Repeat the identical command with `--stage measure`. The driver runs FP32,
+FP16 and BF16, three paired repeats in alternating runtime order. Each measured
+row has five warm-up and twenty timed actual optimizer calls; timings reject
+new/changed JIT binaries and skipped updates. Token rates distinguish input
+nonpadding tokens from causal prediction targets. Source/device/fallback,
+frozen base and all 112 adapter gradients/states are checked outside the timed
+interval. Inspect the completed `summary.json` and per-row `result.json`,
+including hardware, versions and cache provenance. Existing-cache setup is
+explicitly not a genuine cold-start measurement. Throughput does not grant
+cross-runtime numerical parity, model-quality or allocator-memory claims;
+retain the separate full correctness and continuation comparisons.
+
+### Replay actual AMP backward boundaries
+
+[`trl_backward_boundary_probe.py`](scripts/trl_backward_boundary_probe.py) captures
+one genuine-Torch backward from the full practical SFT profile and intentionally
+stops before the first optimizer update. Use a complete matching formal oracle
+trace; FP16 capture uses loss scale 1024. Capture requires every adapter gradient
+to match that formal reference exactly.
+
+```bash
+JITTOR_TORCH_SHIM=0 <oracle-python> "$trl_scripts/trl_backward_boundary_probe.py" capture \
+  --root "$PWD" --model "$trl_model" --upstream "$trl_upstream" \
+  --initial-buffers "$trl_buffers" --initial-adapters "$trl_state/adapters.npz" \
+  --reference "$trl_state/formal-torch-fp16/trace" --precision fp16 \
+  --output "$trl_state/backward-fp16-capture"
+<jittor-python> "$trl_scripts/trl_backward_boundary_probe.py" replay \
+  --root "$PWD" --runtime jittor --source "$trl_state/backward-fp16-capture" \
+  --output "$trl_state/backward-fp16-jittor"
+```
+
+Select one allocated CUDA device and an exclusive cache through the environment,
+as for the practical producer. Replay also accepts `--runtime torch` for the
+independent control and `--kinds lora_B rms lm_head` to select boundaries. It uses
+identical captured activations/weights/cotangents and attaches no native module
+hooks. A complete diagnostic is not complete training or quality acceptance.
+
+### Isolate CUDA loss and local DDP components
+
+[`trl_ddp_local_probe.py`](scripts/trl_ddp_local_probe.py) separates a repeated
+cross-entropy calculation from full-model local backward replay. Its measured
+`ce` route supports CPU/CUDA and retains loss, full input gradients and native
+saved LSE; use independent runtimes on the same explicitly allocated device:
+
+```bash
+<oracle-python> "$trl_scripts/trl_ddp_local_probe.py" ce --root "$PWD" \
+  --runtime torch --device cuda --rows 16 --vocab 151936 --repetitions 32 \
+  --output "$trl_state/ce-torch"
+<jittor-python> "$trl_scripts/trl_ddp_local_probe.py" ce --root "$PWD" \
+  --runtime jittor --device cuda --rows 16 --vocab 151936 --repetitions 32 \
+  --output "$trl_state/ce-jittor"
+<oracle-python> "$trl_scripts/trl_ddp_local_probe.py" compare \
+  --reference "$trl_state/ce-torch" --candidate "$trl_state/ce-jittor" \
+  --output "$trl_state/ce-comparison.json"
+```
+
+`local` additionally requires the explicit model, upstream, initial buffers,
+adapters and rank trace. A noninitial `--step` must load retained preceding-step
+parameters; an optional `--parameter-trace` supplies rank-zero payloads for a
+rank-one input. Every loaded parameter must match the selected rank's recorded
+SHA, shape and dtype. This unmeasured local-model mode is a diagnostic aid, not
+evidence that collectives or a full distributed training trajectory pass.
+
+### Isolate AMP precision-policy differences
+
+[`trl_amp_precision_probe.py`](scripts/trl_amp_precision_probe.py) runs a small
+CUDA RMSNorm arithmetic chain and FP32 elementwise multiplication under both
+FP16 and BF16 autocast. It records each node's actual dtype/device, verifies
+shared inputs and preserves the original dtype even when snapshots require a
+float32 NumPy representation. It has no `--device` flag: this is a CUDA-only
+microdiagnostic, not a substitute for full-model training.
+
+```bash
+JITTOR_TORCH_SHIM=0 <oracle-python> "$trl_scripts/trl_amp_precision_probe.py" run \
+  --root "$PWD" --runtime torch --output "$trl_state/amp-torch"
+JITTOR_TORCH_SHIM=1 PYTHONPATH=python \
+<jittor-python> "$trl_scripts/trl_amp_precision_probe.py" run \
+  --root "$PWD" --runtime jittor --output "$trl_state/amp-jittor"
+<oracle-python> "$trl_scripts/trl_amp_precision_probe.py" compare \
+  --reference "$trl_state/amp-torch" --candidate "$trl_state/amp-jittor" \
+  --output "$trl_state/amp-comparison.json"
+```
+
+Allocate the CUDA device/cache before these runs. Distinguish observed dtype
+policy changes from ordinary FP32 reduction rounding; this microprobe alone
+cannot quantify how much of a full training discrepancy each operator causes.
+
+### Preserve full-trace evidence with lossless archives
+
+[`trl_trace_archive.py`](scripts/trl_trace_archive.py) defaults to **dry-run**.
+Only explicit `--archive` compresses completed, zero-fallback Torch-oracle
+`final_gradient`/`final_parameter` NPY payloads using the external `zstd`
+executable. It leaves manifests and all other observations unchanged:
+
+```bash
+<oracle-python> "$trl_scripts/trl_trace_archive.py" \
+  "$trl_state/orpo-torch-cpu/trace"
+<oracle-python> "$trl_scripts/trl_trace_archive.py" \
+  "$trl_state/orpo-torch-cpu/trace" --archive
+```
+
+Every sibling `.npy.zst` must reconstruct the **exact original NPY bytes**:
+raw SHA256/length and array SHA256/dtype/shape/finiteness are checked. The
+archive, recovery journal and containing directories are fsynced before
+removing the redundant uncompressed copy. Exclusive journal/completion files
+are stored beside the trace directory and sealed read-only on completion;
+they bind the unchanged original manifest and complete bulk inventory.
+Existing receipts or archives are never overwritten. An interrupted archive
+leaves recovery evidence and fails closed; do not erase it to force a retry.
+
+The collector automatically reads completed archives through
+`read_archived_array`/`ArchiveReader`, checking recovery metadata and payloads.
+The full-checkpoint producer still reads its reference with `np.load`. Before
+reusing an archived reference for another training run, restore ordinary NPY
+files into a **new, separate** trace directory:
+
+```bash
+<oracle-python> "$trl_scripts/trl_trace_archive.py" \
+  "$trl_state/orpo-torch-cpu/trace" \
+  --restore-to "$trl_state/restored-orpo-torch-cpu/trace"
+```
+
+Recovery copies the unchanged manifest, initial extras and small observations,
+then checks each decoded payload's original NPY SHA256/length and array
+metadata. `restore-journal.jsonl` and `restore-complete.json` live beside the
+new trace. Use the new trace as `--reference` only after completion. Source
+archives are untouched, existing destinations are rejected, and failed partial
+destinations are retained without a completion receipt. Put the destination on
+persistent storage when restoring a temporary-memory reference.
+
+Keep the journal, completion receipt, original manifest and compressed arrays
+together. RAM-backed traces require persistent copies of **all** these files
+before that temporary storage disappears. Compression preserves the data;
+retaining hashes alone does not. This workflow does not authorize discarding
+raw evidence. The collector's separate `--prune-oracle-bulk` operation destroys
+recoverability and is not part of these commands or a substitute for archival.

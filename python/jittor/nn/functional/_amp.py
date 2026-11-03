@@ -1,4 +1,4 @@
-"""One rule for adding a fused operator's bias while the amp register is active.
+"""Compute-dtype preparation for native mixed-precision contractions.
 
 `torch.autocast` casts an operator's *inputs* to the compute dtype -- bias
 included -- so `Conv3d(float32 x, float32 w, float32 b)` under
@@ -21,6 +21,35 @@ float32 propagated into the layer norms and linears behind them -- that is the
 """
 
 import jittor as jt
+from jittor._core.dtypes import dtype_name
+
+
+def amp_contraction_inputs(x, weight):
+    """Round operands before building a portable AMP forward/backward graph.
+
+    An output-only dtype preference leaves original FP32 operands saved for
+    the backward. cuDNN casts both operands before invoking its kernel; the
+    portable contractions need the same input-rounding boundary.
+    """
+    preferences = (jt.amp_flags.prefer16 | jt.amp_flags.prefer_bfloat16
+                   | jt.amp_flags.prefer32)
+    if not int(jt.flags.amp_reg) & preferences:
+        return x, weight
+    compute = str(jt.binary_dtype_infer('add', dtype_name(x.dtype), dtype_name(weight.dtype)))
+    return (x if dtype_name(x.dtype) == compute else x.cast(compute),
+            weight if dtype_name(weight.dtype) == compute else weight.cast(compute))
+
+
+def amp_contraction_scope():
+    """Use the rounded inputs' dtype without lowering derivative intermediates.
+
+    Call after ``amp_contraction_inputs``. Keep explicit native accumulator
+    options, while clearing the preference already applied to the operands.
+    """
+    preferences = (jt.amp_flags.prefer16 | jt.amp_flags.prefer_bfloat16
+                   | jt.amp_flags.prefer32)
+    register = (int(jt.flags.amp_reg) & ~preferences) | jt.amp_flags.keep_reduce
+    return jt.flag_scope(amp_reg=register)
 
 
 def prefers_half():

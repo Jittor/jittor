@@ -4,6 +4,7 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
+#include <algorithm>
 #include "bindings/pybind/py_var_tracer.h"
 #include "bindings/pyjt/py_converter.h"
 #include "core/grad.h"
@@ -102,6 +103,15 @@ int get_autograd_policy() {
 }
 
 DECLARE_FLAG(int, auto_mixed_precision_level);
+
+DEFINE_FLAG_WITH_SETTER(int, gradient_accumulation_order, 0,
+    "Gradient contribution order: 0 preserves consumer registration order; "
+    "1 visits newer consumers first.");
+
+void setter_gradient_accumulation_order(const int&, const int& value) {
+    USER_CHECK(value == 0 || value == 1)
+        << "gradient_accumulation_order must be 0 or 1, got " << value;
+}
 
 static auto make_binary = op_constructor<VarPtr, Var*, Var*, NanoString>("binary");
 static auto make_unary = op_constructor<VarPtr, Var*, NanoString>("unary");
@@ -292,6 +302,8 @@ vector<VarPtr> grad(
     // No auto-flush while the backward graph is half built; see
     // `SubmissionPipeline::grad_construction_depth`.
     GradConstructionScope construction(runtime_submission_pipeline());
+    USER_CHECK(gradient_accumulation_order == 0 || gradient_accumulation_order == 1)
+        << "gradient_accumulation_order must be 0 or 1, got " << gradient_accumulation_order;
     LOGvv << "loss:" >> loss << "targets:" >> targets;
     USER_CHECK(loss->is_float()) << "Loss should be float";
     USER_CHECK(!loss->flag(VarFlags::_first_order_only))
@@ -425,6 +437,12 @@ vector<VarPtr> grad(
             }
             outgoing.push_back(move(snapshot));
         }
+
+        if (gradient_accumulation_order == 1)
+            std::stable_sort(outgoing.begin(), outgoing.end(),
+                [](const GradOpSnapshot& a, const GradOpSnapshot& b) {
+                    return a.op->id > b.op->id;
+                });
 
         auto& grad = grads[i];
         #ifdef PREVENT_LARGE_FUSED_OP

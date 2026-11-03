@@ -2,12 +2,17 @@
 
 import importlib
 import pickle
+from pathlib import Path
 import sys
 from types import ModuleType
 
 import jittor as jt
 import numpy as np
 import pytest
+
+from _helpers.child_process import run_python_child
+from _helpers.native_runtime import assert_native_runtime
+from _helpers.torch_runtime import installed_spec
 
 
 @pytest.fixture(autouse=True)
@@ -26,6 +31,28 @@ def test_native_save_load_roundtrip(tmp_path):
 
 
 def test_torch_archive_save_load_roundtrip(tmp_path):
+    # A deployed Torch shim publishes process-global execution policy when it
+    # is imported. Exercise that real archive owner in its own interpreter.
+    if installed_spec("torch") is None:
+        pytest.skip("torch is not installed")
+    assert_native_runtime(jt)
+    script = """
+import runpy, sys
+from pathlib import Path
+scope = runpy.run_path(sys.argv[1])
+scope["_torch_archive_save_load_roundtrip"](Path(sys.argv[2]))
+print("TORCH_ARCHIVE_ROUNDTRIP_COMPLETE")
+"""
+    result = run_python_child(
+        ["-c", script, str(Path(__file__).resolve()), str(tmp_path)],
+        without_torch_mode=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "TORCH_ARCHIVE_ROUNDTRIP_COMPLETE" in result.stdout
+    assert_native_runtime(jt)
+
+
+def _torch_archive_save_load_roundtrip(tmp_path):
     pytest.importorskip("torch")
     path = str(tmp_path / "weights.pth")
     source = {"weight": jt.array([[1.25, -2.0], [3.5, 4.0]]),

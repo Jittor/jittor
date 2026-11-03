@@ -324,6 +324,58 @@ def sigmoid(x):
     return jt.sigmoid(x)
 
 
+class _SiLULowPrecisionVJP(jt.Function):
+    """The low-precision VJP and its derivatives keep FP32 intermediates."""
+
+    def _run_call(self, x, seed):
+        self.x, self.seed = (jt.ops.reshape(value, value.shape)
+                            for value in (x, seed))
+        return super()._run_call(x, seed)
+
+    def execute(self, x, seed):
+        with jt.flag_scope(amp_reg=jt.amp_flags.disabled):
+            fused = try_dispatch("nn.silu.backward_opmath", x, seed)
+            if fused is not None:
+                return fused
+            wide = x.float32()
+            # The generic sigmoid saturates/clamps tails on some backends.
+            # SiLU's derivative needs the unclamped FP32 reciprocal.
+            sigmoid = 1 / (1 + jt.exp(-wide))
+            return (seed.float32() * sigmoid * (
+                1 + wide * (1 - sigmoid))).cast(x.dtype)
+
+    def grad(self, grad_output):
+        with jt.flag_scope(amp_reg=jt.amp_flags.disabled):
+            wide, seed = self.x.float32(), self.seed.float32()
+            sigmoid = 1 / (1 + jt.exp(-wide))
+            direction = grad_output.float32()
+            dx = direction * seed * sigmoid * (1 - sigmoid) * (
+                2 + wide * (1 - 2 * sigmoid))
+            dseed = direction * sigmoid * (1 + wide * (1 - sigmoid))
+            return dx.cast(self.x.dtype), dseed.cast(self.seed.dtype)
+
+
+class _SiLULowPrecision(jt.Function):
+    """Round once after FP32 forward and closed-form backward arithmetic."""
+
+    def _run_call(self, original_input):
+        # Function tapes its positional input. Retain the original graph edge
+        # as well so differentiating the closed-form VJP remains connected.
+        self.x = jt.ops.reshape(original_input, original_input.shape)
+        return super()._run_call(original_input)
+
+    def execute(self, x):
+        with jt.flag_scope(amp_reg=jt.amp_flags.disabled):
+            wide = x.float32()
+            # A multiply by a separately rounded reciprocal can cross the
+            # final half/BF16 rounding midpoint. Use the single division.
+            return (wide / (1 + jt.exp(-wide))).cast(x.dtype)
+
+    def grad(self, grad_output):
+        with jt.flag_scope(amp_reg=jt.amp_flags.disabled):
+            return _SiLULowPrecisionVJP()(self.x, grad_output)
+
+
 def silu(x, inplace=False):     # inplace: accepted for torch/mmcv compat, ignored
     r''' Applies the element-wise function:
 
@@ -354,11 +406,9 @@ def silu(x, inplace=False):     # inplace: accepted for torch/mmcv compat, ignor
     if _jittor_dtype_name(x.dtype) in ("float16", "bfloat16"):
         # SiLU rounds once at its public boundary. A narrow sigmoid followed
         # by a narrow multiply adds a rounding step absent from the opmath
-        # implementation. Keep native AD connected through the widening cast.
-        dtype = x.dtype
-        with jt.flag_scope(amp_reg=jt.amp_flags.disabled):
-            wide = x.float32()
-            return (wide * wide.sigmoid()).cast(dtype)
+        # implementation. A single FP32 division also preserves values at
+        # half-precision rounding midpoints. Its VJP retains higher derivatives.
+        return _SiLULowPrecision()(x)
     return x * x.sigmoid()
 
 

@@ -55,15 +55,17 @@ class LRScheduler:
         try:
             self.step()
         finally:
-            del self._is_initial
+            self._is_initial = False
 
     def get_lr(self):
         return list(self.base_lrs)
     def get_last_lr(self):
         return list(self._last_lr)
     def state_dict(self):
+        # Keep the legacy verbose attribute available to callers, but match
+        # the pinned Torch 2.8 checkpoint format, which does not serialize it.
         return {k: v for k, v in self.__dict__.items()
-                if k not in ("optimizer", "_is_initial")}
+                if k not in ("optimizer", "verbose")}
     def load_state_dict(self, sd):
         self.__dict__.update(sd)
     def step(self, epoch=None):
@@ -81,7 +83,7 @@ class LRScheduler:
 def _lambda_state_dict(scheduler):
     from types import FunctionType
     state = {k: v for k, v in scheduler.__dict__.items()
-             if k not in ("optimizer", "lr_lambdas", "_is_initial")}
+             if k not in ("optimizer", "lr_lambdas", "verbose")}
     state["lr_lambdas"] = [
         None if isinstance(fn, FunctionType) else fn.__dict__.copy()
         for fn in scheduler.lr_lambdas

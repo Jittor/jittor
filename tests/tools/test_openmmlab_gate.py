@@ -8,7 +8,6 @@ from pathlib import Path
 import shutil
 import sys
 import tempfile
-import types
 import unittest
 from unittest import mock
 
@@ -220,17 +219,19 @@ class OpenMMLabGateTests(unittest.TestCase):
         self.assertIn("0.01", command)
 
     def test_selected_gate_fails_missing_oracle_dependencies_and_device(self):
-        fake = types.ModuleType("_ecosystem_harness")
-        fake.REAL_TORCH_PYTHON = ""
-        fake.SPEED_RATIO = ""
-        fake.EcosystemComparison = unittest.TestCase
-        fake._enabled = lambda name: True
-        fake._torch_shim_is_active = lambda: True
-        fake._distributions_available = lambda names: True
+        import _ecosystem_harness as harness
+
         path = ROOT / "compat/tests/torch/test_ecosystem_openmmlab.py"
         spec = importlib.util.spec_from_file_location("openmmlab_admission_probe", path)
         module = importlib.util.module_from_spec(spec)
-        with mock.patch.dict(sys.modules, {"_ecosystem_harness": fake}):
+        # Keep the real comparison/runner helpers available to the training
+        # module; this test changes only admission inputs, never its math.
+        with mock.patch.multiple(
+            harness, REAL_TORCH_PYTHON="", SPEED_RATIO="",
+            EcosystemComparison=unittest.TestCase,
+            _enabled=lambda name: True, _torch_shim_is_active=lambda: True,
+            _distributions_available=lambda names: True,
+        ):
             spec.loader.exec_module(module)
         gate = module.EcosystemOpenMMLab()
         with self.assertRaisesRegex(AssertionError, "independent real Torch"):

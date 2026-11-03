@@ -81,6 +81,11 @@ def _real_imag(value):
 
 def _fft_core(value, size, dim, inverse, norm=None):
     value, restore = _to_last(value, dim)
+    # The complex component bridge reinterprets physical pairs. Permuting a
+    # transform axis can create a strided view, so materialize at this compute
+    # boundary while preserving the native copy's backward edge.
+    if isinstance(value, jt.Var) and "complex" in _jittor_dtype_name(value.dtype):
+        value = value.contiguous()
     real0, imag0 = _real_imag(value)
     real = _resize_last(real0, size)
     imag = _resize_last(imag0, size) if imag0 is not None else None
@@ -105,7 +110,7 @@ def _fft_core(value, size, dim, inverse, norm=None):
 
     output = _make_complex(out_real, out_imag)
     if restore is not None:
-        output = output.permute(*restore)
+        output = output.permute(*restore).contiguous()
     return output
 
 

@@ -205,6 +205,9 @@ def _mesh_groups(mesh, dp_mesh_dims):
 def fully_shard(module, *, mesh=None, reshard_after_forward=True,
                 shard_placement_fn=None, mp_policy=None, offload_policy=None,
                 ignored_params=None, dp_mesh_dims=None, **kwargs):
+    # Check the complete request before setting _fsdp_state, moving tensors,
+    # adding methods, or marking any member of a module list as sharded.
+    shard._preflight_dim0_experiment(module, ignored_params)
     if isinstance(module, (list, tuple)):
         for m in module:
             fully_shard(

@@ -129,6 +129,15 @@ def dedicated_gates(root):
             raise ValueError("Maintained dedicated gate entry is missing: " + repo)
         result[repo] = [{"protocol": protocol, "session": session,
                          "tests": [relative + "::" + selector for selector in methods]}]
+    # A multi-interpreter Trainer protocol is a CLI, not an ordinary model
+    # builder or pytest node. Discover it without inventing test/L-level credit.
+    relative = "tools/run_trl_gate.py"
+    tree = ast.parse((root / relative).read_text(encoding="utf-8"))
+    entries = {node.name for node in tree.body if isinstance(node, ast.FunctionDef)}
+    if "ecosystem_trl" not in sessions or not {"main", "run", "audit_pair"} <= entries:
+        raise ValueError("Maintained dedicated gate entry is missing: trl")
+    result["trl"] = [{"protocol": "trl-text-trainer-training", "session": "ecosystem_trl",
+                      "entrypoints": [relative + "::main"]}]
     return result
 
 

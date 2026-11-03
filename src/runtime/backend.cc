@@ -1,4 +1,6 @@
 #include "runtime/backend.h"
+#include "runtime/backend_streams.h"
+#include "runtime/async_exec.h"
 #include "runtime/runtime.h"
 #include "runtime/executor_entry.h"
 #include "runtime/launch_diagnostics.h"
@@ -67,11 +69,39 @@ void backend_copy(void* dst, Device dst_device, const void* src,
     if (id == BackendId::Cpu) {
         copy(dst, dst_device, src, src_device, size, ordered);
     } else {
-        // All blocking accelerator transfers share this boundary, including
-        // alias-group and delayed-free migration. Pool bookkeeping remains
-        // outside; callers must own the executor before the GIL can drop.
-        DeviceWaitScope wait;
-        copy(dst, dst_device, src, src_device, size, ordered);
+        auto transfer = [&](bool release_gil) {
+            uint64 devices = 0;
+            for (Device device : {dst_device, src_device}) {
+                if (device.backend == BackendId::Cpu) continue;
+                USER_CHECK(device.index >= 0 && device.index < 64)
+                    << "Invalid accelerator copy device" << device.index;
+                devices |= 1ull << device.index;
+            }
+            BackendComputeStreamScope handoff(devices);
+            if (release_gil) {
+                DeviceWaitScope wait;
+                copy(dst, dst_device, src, src_device, size, ordered);
+            } else {
+                copy(dst, dst_device, src, src_device, size, ordered);
+            }
+        };
+        if (backend_compute_stream_scope_active() || inside_executor()) {
+            // Inside a batch, reuse its ordering and publish once at its end.
+            // The worker must never take its caller's executor entry lock.
+            // A caller already holding the entry lock also owns its waiting:
+            // do not wait again for a job posted by another thread meanwhile.
+            transfer(true);
+        } else {
+            // A direct copy can follow an empty run_sync, which published no
+            // device work. Its PTDS still queues work that the next worker
+            // batch must wait for, including a join of a side-stream copy.
+            async_exec_wait();
+            ExecutorEntryScope entry;
+            // Preserve the bare caller's GIL contract: acquiring the entry
+            // for stream-state serialization does not opt its SDK call into
+            // the GIL release that explicitly guarded executor callers use.
+            transfer(false);
+        }
     }
 }
 

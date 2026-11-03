@@ -118,6 +118,45 @@ class TestStepCapture(unittest.TestCase):
         self.assertIsNotNone(cap.refused)
         self.assertIn("read a value back", cap.refused)
 
+    def test_declared_refusal_before_imperative_store_keeps_original_loss(self):
+        state = jt.array([0.], dtype="float32")
+        state.sync()
+
+        def step(value):
+            loss = (state * value).sum()
+            step_capture.refuse("imperative update is outside the captured graph")
+            update = state + 1
+            jt.sync_all()
+            with jt.no_grad():
+                state._copy_into(update)
+            return loss
+
+        captured = jt.capture_step(step)
+        got = []
+        for value in (1, 2, 3, 4):
+            got.append(float(captured(jt.array([value], dtype="float32")).numpy()))
+            self.assertEqual(jt.flags.keep_graph, 0)
+        np.testing.assert_array_equal(got, [0., 2., 6., 12.])
+        np.testing.assert_array_equal(state.numpy(), [4.])
+        self.assertEqual(captured.stats["captured"], 1)
+        self.assertEqual(captured.stats["replayed"], 0)
+        self.assertIn("imperative update", captured.refused)
+
+    def test_declared_refusal_restores_policy_when_step_raises(self):
+        def step(value):
+            step_capture.refuse("this step raises")
+            raise RuntimeError("expected failure")
+
+        captured = jt.capture_step(step)
+        value = jt.array([1.])
+        with self.assertRaisesRegex(RuntimeError, "expected failure"):
+            captured(value)
+        with jt.flag_scope(keep_graph=1):
+            with self.assertRaisesRegex(RuntimeError, "expected failure"):
+                captured(value)
+            self.assertEqual(jt.flags.keep_graph, 1)
+        self.assertEqual(jt.flags.keep_graph, 0)
+
     def test_a_guarded_scalar_that_changes_is_recaptured(self):
         rate = {"lr": 0.1}
 

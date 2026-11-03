@@ -275,6 +275,35 @@ class _Training:
             np.testing.assert_allclose(g, w, rtol=1e-5, atol=1e-6)
         return got[2], want[2], got[3]
 
+    def test_captured_adamw_keeps_leaf_storage_and_detached_aliases(self):
+        torch.manual_seed(0)
+        model = nn.Sequential(nn.Linear(8, 32), nn.ReLU(), nn.Linear(32, 4)).to(self.device)
+        parameters = list(model.parameters())
+        aliases = [parameter.detach() for parameter in parameters]
+        pointers = [parameter.data_ptr() for parameter in parameters]
+        optimizer = torch.optim.AdamW(parameters, lr=1e-2)
+
+        def step(x):
+            optimizer.zero_grad(set_to_none=True)
+            loss = model(x).square().mean()
+            loss.backward()
+            optimizer.step()
+            return loss
+
+        run = torch.compile(step, mode="reduce-overhead")
+        rng = np.random.RandomState(0)
+        for _ in range(5):
+            value = torch.tensor(rng.randn(16, 8).astype("float32"), device=self.device)
+            float(run(value))
+            for parameter, alias, pointer in zip(parameters, aliases, pointers):
+                self.assertTrue(parameter.is_leaf)
+                self.assertEqual(parameter.data_ptr(), pointer)
+                np.testing.assert_array_equal(alias.cpu().numpy(),
+                                              parameter.detach().cpu().numpy())
+        if self.device == "cuda":
+            self.assertIsNone(run.refused)
+            self.assertGreater(run.stats["replayed"], 0)
+
     def test_an_adamw_step_is_replayed_with_its_schedule(self):
         opt, eager_opt, run = self._compare()
         if self.device == "cuda":

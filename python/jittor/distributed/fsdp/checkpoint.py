@@ -22,6 +22,16 @@ def _optimizer_tensor_list(names, group, field):
     return values
 
 
+def _missing_sgd_value(optimizer, group, field, index, value):
+    """Only an uninitialized SGD momentum slot may omit its tensor."""
+    from jittor.optim.algorithms.sgd import SGD, MOMENTUM_INITIALIZED
+
+    flags = group.get(MOMENTUM_INITIALIZED)
+    return (value is None and field == "values" and isinstance(optimizer, SGD)
+            and isinstance(flags, (list, tuple))
+            and len(flags) == len(group["values"]) and flags[index] is False)
+
+
 def _entries(model):
     result = {}
     for name, parameter in model.named_parameters():
@@ -61,7 +71,7 @@ def _descriptor(value, state, entry):
     return TensorShard(common._slice_flat(value, 0, count), entry.shape, start)
 
 
-def _encode(state, model):
+def _encode(state, model, optimizer):
     entries = _entries(model)
     if not entries:
         return
@@ -76,8 +86,10 @@ def _encode(state, model):
                 continue
             values = _optimizer_tensor_list(names, group, field)
             group[field] = type(values)(
-                _descriptor(value, *entries[name]) if name in entries else value
-                for name, value in zip(names, values)
+                _descriptor(value, *entries[name])
+                if name in entries and not _missing_sgd_value(optimizer, group, field, index, value)
+                else value
+                for index, (name, value) in enumerate(zip(names, values))
             )
 
 
@@ -103,7 +115,7 @@ def _requests(model, optimizer, manifest, rank, parameter_names):
     return requests
 
 
-def _decode(state, model):
+def _decode(state, model, optimizer):
     entries = _entries(model)
     if state.get("fsdp_layout", {}) != _layout(model):
         raise ValueError("native checkpoint FSDP ownership/layout mismatch")
@@ -132,7 +144,9 @@ def _decode(state, model):
             if field in group:
                 values = _optimizer_tensor_list(names, group, field)
                 group[field] = type(values)(
-                    local(value, name) for name, value in zip(names, values)
+                    None if _missing_sgd_value(optimizer, group, field, index, value)
+                    else local(value, name)
+                    for index, (name, value) in enumerate(zip(names, values))
                 )
 
 

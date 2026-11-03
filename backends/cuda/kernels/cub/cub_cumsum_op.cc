@@ -76,13 +76,19 @@ __global__ void BlockScanKernel(Tx* __restrict__ xp, Ty* __restrict__ yp, int ba
     int batch_id = blockIdx.x;
     int offset = threadIdx.x * ITEMS_PER_THREAD;
     __shared__ Tx prefix_sum[1];
-    prefix_sum[0] = 0;
+    if (threadIdx.x == 0)
+        prefix_sum[0] = 0;
+    __syncthreads();
 
-    for (int block_offset = offset; block_offset < num_items; block_offset += BLOCK_THREADS * ITEMS_PER_THREAD) {
-        int items = ITEMS_PER_THREAD;
-        if (block_offset + ITEMS_PER_THREAD > num_items) {
-            items = num_items - block_offset;
-        }
+    // BlockScan is a block collective, including on a short final tile. Keep
+    // every thread in the same loop and zero-pad invalid items. A per-thread
+    // loop bound let inactive threads exit while others used the collective;
+    // their unsynchronised carry initialisation also raced its first read.
+    for (int tile = 0; tile < num_items; tile += BLOCK_THREADS * ITEMS_PER_THREAD) {
+        int block_offset = tile + offset;
+        int items = num_items - block_offset;
+        if (items > ITEMS_PER_THREAD) items = ITEMS_PER_THREAD;
+        if (items < 0) items = 0;
         Tx thread_data[ITEMS_PER_THREAD] = {0};
         #pragma unroll
         for (int i = 0; i < ITEMS_PER_THREAD; ++i) {

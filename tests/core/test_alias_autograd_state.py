@@ -1,23 +1,18 @@
 """View eligibility and mutation history belong to the native graph owner."""
 
 import gc
-import sys
-
 import numpy as np
 import pytest
 
 import jittor as jt
+from _helpers.native_runtime import native_execution_scope
 from jittor.autograd.policy import EXPLICIT_REQUIRES_GRAD, NATIVE, policy_scope
-from jittor._runtime.fallback import forbid_backend_fallbacks
 
 
 @pytest.fixture(autouse=True)
 def native_only():
-    assert 'jittor.compat.torch' not in sys.modules
-    assert 'torch' not in sys.modules
-    with forbid_backend_fallbacks():
+    with native_execution_scope(jt):
         yield
-        jt.sync_all(True)
 
 
 def alias_of(source):

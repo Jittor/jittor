@@ -78,22 +78,20 @@ from .loss_modules import LOSS_CLASSES, PixelShuffle, PixelUnshuffle
 from .extra_api import _adapt_extra
 
 def _softmax(input, dim=-1, _stacklevel=3, dtype=None):
-    _context = get_install_context(jt)
-    _jt_softmax = _context.state["nn_functional_native"]['_jt_softmax']
-    if dtype is not None:
-        input = input.cast(_dtype_to_str(dtype))
-    return _jt_softmax(input, dim=dim)
+    from ..numerical.elementwise import softmax
+    return softmax(input, dim=dim, dtype=dtype)
 
 
 def _log_softmax(input, dim=None, _stacklevel=3, dtype=None):
-    # torch: F.log_softmax(input, dim=None, _stacklevel=3, dtype=None); dtype
-    # casts the input first (losses ask for float32 log-probabilities of half
-    # logits). The native function takes no dtype, as with softmax above.
-    _context = get_install_context(jt)
-    _jt_log_softmax = _context.state["nn_functional_native"]['_jt_log_softmax']
-    if dtype is not None:
-        input = input.cast(_dtype_to_str(dtype))
-    return _jt_log_softmax(input, dim=dim)
+    from ..numerical.elementwise import log_softmax
+    return log_softmax(input, dim=dim, dtype=dtype)
+
+
+def _softmax_module_execute(self, input):
+    functional = get_install_context(jt).target_namespace.nn.functional
+    function = getattr(functional, self._function_name)
+    return function(input, *self.args, **self.kw)
+
 
 
 def _interpolate(input=None, size=None, scale_factor=None,
@@ -274,6 +272,10 @@ def _install_functional(ctx):
     if hasattr(nn, "log_softmax"):
         _jt_log_softmax = nn.log_softmax
         F.log_softmax = _log_softmax
+    for name in ("Softmax", "LogSoftmax"):
+        module = getattr(nn, name, None)
+        if module is not None:
+            module.execute = _softmax_module_execute
     if hasattr(nn, "linear"): F.linear = nn.linear
     if hasattr(nn, "interpolate"):
         # torch.nn.functional.interpolate defaults to mode='nearest', but

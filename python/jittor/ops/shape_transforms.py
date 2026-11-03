@@ -56,11 +56,11 @@ def repeat(x, *shape):
     tar_shape = (np.array(x_shape) * np.array(rep_shape)).tolist()
 
     x = x.reshape(tar_shape)
-    # A copy, as torch's repeat is: the expand/reshape above is a view with a
-    # zero stride on every reproduced axis, so a write through the result was
-    # refused and it kept aliasing the source. `contiguous` keeps the graph
-    # lazy; it only makes the produced buffer its own.
-    return x.contiguous()
+    # Repeat always owns writable storage. For a real broadcast, contiguous
+    # materializes the zero-stride view. When all repetitions are one, the
+    # result can already be contiguous and contiguous() would alias the input;
+    # an explicit copy is needed for that case.
+    return x.copy(False) if all(rep == 1 for rep in rep_shape) else x.contiguous()
 
 
 def chunk(x, chunks, dim=0):

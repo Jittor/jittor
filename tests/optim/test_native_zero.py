@@ -1,8 +1,8 @@
 """Native ZeRO stage-one arithmetic, ownership and checkpoint preflight."""
 
-import sys
-
+import copy
 import jittor as jt
+from _helpers.native_runtime import assert_native_runtime
 import numpy as np
 import pytest
 from jittor.distributed import ZeroRedundancyOptimizer, checkpoint
@@ -12,9 +12,62 @@ from _helpers.native_zero import (model_optimizer, step, numpy_trajectory,
                                   assert_reference, assert_exact, check_bfloat16_resume)
 
 
+@pytest.mark.parametrize("momentum", [False, True])
+def test_zero_sgd_optional_momentum_checkpoint_resume(tmp_path, momentum):
+    def fresh():
+        model = jt.nn.Linear(3, 2)
+        optimizer = ZeroRedundancyOptimizer(model.parameters(), jt.optim.SGD, lr=.1, fused=False)
+        return model, optimizer
+
+    model, optimizer = fresh()
+    if momentum:
+        optimizer.param_groups[0]["momentum"] = .5
+    optimizer.step(model(jt.ones((2, 3))).sum())
+    checkpoint.save_training_state(model, optimizer, tmp_path)
+    optimizer.step(model(jt.ones((2, 3))).sum())
+    expected = {name: value.numpy().copy() for name, value in model.state_dict().items()}
+    restored, resumed = fresh()
+    checkpoint.load_training_state(restored, resumed, tmp_path)
+    resumed.step(restored(jt.ones((2, 3))).sum())
+    for name, value in restored.state_dict().items():
+        np.testing.assert_array_equal(value.numpy(), expected[name])
+
+
+@pytest.mark.parametrize("invalid", ["shape", "dtype", "object", "initialized", "length",
+                                     "missing_flags", "empty_flags", "nonbool_flag"])
+def test_zero_sgd_optional_state_validation_is_atomic(invalid):
+    parameter = jt.ones((2, 3)).start_grad()
+    optimizer = ZeroRedundancyOptimizer([parameter], jt.optim.SGD, lr=.1)
+    state = copy.deepcopy(optimizer.state_dict())
+    group = state["defaults"]["zero_state"].value["state"]["defaults"]["param_groups"][0]
+    if invalid == "shape":
+        group["values"][0] = jt.zeros((1, 3))
+    elif invalid == "dtype":
+        group["values"][0] = jt.zeros((2, 3), dtype="float64")
+    elif invalid == "object":
+        group["values"][0] = "not an optimizer tensor"
+    elif invalid == "initialized":
+        group["momentum_initialized"][0] = True
+    elif invalid == "length":
+        group["values"].append(None)
+    elif invalid == "missing_flags":
+        del group["momentum_initialized"]
+    elif invalid == "empty_flags":
+        group["momentum_initialized"] = []
+    else:
+        group["momentum_initialized"][0] = 0
+    before = parameter.numpy().copy()
+    with pytest.raises(ValueError, match="native ZeRO checkpoint"):
+        optimizer.load_state_dict(state)
+    assert optimizer.n_step == 0
+    assert optimizer.local_optimizer.param_groups[0]["values"] == [None]
+    np.testing.assert_array_equal(parameter.numpy(), before)
+
+
 @pytest.mark.parametrize("algorithm", ["Adam", "AdamW", "SGD"])
 @pytest.mark.parametrize("frozen", [False, True])
 def test_owned_math_accumulation_and_fresh_checkpoint(algorithm, frozen, tmp_path):
+    assert_native_runtime(jt)
     assert not torch_runtime.torch_shim_loaded()
     model, optimizer = model_optimizer(algorithm, frozen=frozen)
     baseline, full = model_optimizer(algorithm, zero=False, frozen=frozen)

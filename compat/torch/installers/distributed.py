@@ -5,6 +5,7 @@ changing the compatibility semantics.
 """
 
 import atexit
+from dataclasses import dataclass
 import glob
 import os
 import warnings
@@ -19,8 +20,8 @@ from ..checkpoint_state import (
     get_optimizer_state_dict, set_optimizer_state_dict,
     get_model_state_dict, set_model_state_dict, get_state_dict, set_state_dict,
 )
-from ..ddp_comm_hooks import install_ddp_comm_hooks
 from ..fidelity import Fidelity, register_api_bindings
+from ..ddp_comm_hooks import install_ddp_comm_hooks
 from ...diagnostics import EXPECTED, swallowed
 from ...transaction import set_env, set_flag
 from ... import collectives as _collectives
@@ -833,17 +834,18 @@ class FileSystemWriter:
         self.path = path
 
 
+@dataclass
 class StateDictOptions:
-    def __init__(self, *, full_state_dict=False, cpu_offload=False,
-                 ignore_frozen_params=False, keep_submodule_prefixes=True,
-                 strict=True, broadcast_from_rank0=False, flatten_optimizer_state_dict=False):
-        self.full_state_dict = bool(full_state_dict)
-        self.cpu_offload = bool(cpu_offload)
-        self.ignore_frozen_params = bool(ignore_frozen_params)
-        self.keep_submodule_prefixes = bool(keep_submodule_prefixes)
-        self.strict = bool(strict)
-        self.broadcast_from_rank0 = bool(broadcast_from_rank0)
-        self.flatten_optimizer_state_dict = bool(flatten_optimizer_state_dict)
+    """Options for distributed checkpoint state, matching the Torch dataclass."""
+
+    full_state_dict: bool = False
+    cpu_offload: bool = False
+    ignore_frozen_params: bool = False
+    keep_submodule_prefixes: bool = True
+    strict: bool = True
+    broadcast_from_rank0: bool = False
+    flatten_optimizer_state_dict: bool = False
+    dsd_fqn_modifiers: str = "_fqn_modifiers"
 
 
 def _get_model_state_dict(model, submodules=None, *, options=None):
@@ -1373,6 +1375,9 @@ def _install_distributed(g, registry=None):
     register_api_bindings(join_mod, "torch.distributed.algorithms.join",
         ("Join", "Joinable", "JoinHook"), Fidelity.UNIMPLEMENTED,
         "Import-compatible context and hooks do not implement uneven-input communication")
+    register_api_bindings(g.nn.parallel.DistributedDataParallel,
+        "torch.nn.parallel.DistributedDataParallel", ("register_comm_hook",),
+        Fidelity.UNIMPLEMENTED, "Custom communication hooks explicitly refuse; default native reduction remains available")
     register_api_bindings(checkpoint, "torch.distributed.checkpoint",
         ("load_state_dict", "save_state_dict", "load", "save", "FileSystemReader", "FileSystemWriter"),
         Fidelity.UNIMPLEMENTED, "Checkpoint I/O follows the existing explicit unsupported policy")

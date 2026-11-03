@@ -1024,6 +1024,17 @@ class TestFSDP2Compat(unittest.TestCase):
         for parameter, expected in zip(module.parameters(), before):
             np.testing.assert_array_equal(parameter.numpy(), expected)
 
+    def test_public_clip_grad_helpers_match_private_implementation(self):
+        import torch
+        grads = [torch.tensor([3.0, 4.0]), torch.tensor([0.0, -3.0])]
+        params = [types.SimpleNamespace(grad=grad) for grad in grads]
+        self.assertAlmostEqual(float(torch.nn.utils.get_total_norm(grads).item()),
+                               np.sqrt(34.0), places=5)
+        self.assertEqual(float(torch.nn.utils.get_total_norm([]).item()), 0.0)
+        total = torch.nn.utils.get_total_norm(grads)
+        self.assertIsNone(torch.nn.utils.clip_grads_with_norm_(params, 1.0, total))
+        self.assertLessEqual(float(np.linalg.norm(np.concatenate([g.numpy() for g in grads]))), 1.00001)
+
     def test_private_clip_grad_helpers(self):
         from torch.nn.utils.clip_grad import (
             _clip_grads_with_norm_,

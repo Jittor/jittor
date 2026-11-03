@@ -18,4 +18,17 @@ bool backend_side_stream_any_join_pending(BackendStreamKind kind);
 void backend_compute_stream_acquire();
 void backend_compute_stream_release(uint64 devices);
 
+// A batch and an imperative storage copy use the same handoff boundary.
+// Nested copies add their source/destination devices to the enclosing batch;
+// only the outer scope waits for or publishes another thread's compute work.
+struct BackendComputeStreamScope {
+    uint64& devices;
+    BackendComputeStreamScope* outer;
+    explicit BackendComputeStreamScope(uint64& devices);
+    ~BackendComputeStreamScope();
+    BackendComputeStreamScope(const BackendComputeStreamScope&) = delete;
+    BackendComputeStreamScope& operator=(const BackendComputeStreamScope&) = delete;
+};
+bool backend_compute_stream_scope_active();
+
 } // namespace jittor

@@ -185,7 +185,8 @@ def test_execution_snapshot_obeys_native_only_collection_ownership(tmp_path, mon
         policy._SELECTED_FILES.clear()
         policy._COLLECTED_FILES.clear()
         policy._snapshot_selected_files(config)
-        expected = {ordinary} if torch_mode else {native, ordinary}
+        # Each process accounts only for files its collection hook admits.
+        expected = {ordinary} if torch_mode else {native}
         assert policy._SELECTED_FILES == expected
         assert set(policy._files_that_collected_nothing()) == expected
         assert policy.pytest_ignore_collect(tmp_path / native, config) is (

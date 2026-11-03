@@ -8,6 +8,7 @@
 #include "runtime/backend_streams.h"
 #include "runtime/backend.h"
 #include "runtime/device.h"
+#include "runtime/executor_entry.h"
 #include "mem/allocator.h"
 #include "runtime/profiler/step_trace.h"
 #include <unordered_map>
@@ -129,10 +130,28 @@ int64 graph_capture_end() {
 void graph_launch(int64 graph) {
     // Counted, and traced when a step trace is open: a replayed step runs no
     // executor batch, so without this record its profile is simply empty.
-    join_async_batch();
-    note_graph_launch_begin();
-    backend_graph_launch(reinterpret_cast<void*>(graph));
-    note_graph_launch_end();
+    auto launch = [&] {
+        uint64 devices = 0;
+        if (graph) {
+            int device = current_device();
+            USER_CHECK(device >= 0 && device < 64) << "Invalid graph device" << device;
+            devices = 1ull << device;
+        }
+        // A replay issues work without an executor batch. Publish its stream
+        // after launching, just like an imperative copy, so a later worker
+        // cannot mistake its own previous batch for the latest producer.
+        BackendComputeStreamScope handoff(devices);
+        note_graph_launch_begin();
+        backend_graph_launch(reinterpret_cast<void*>(graph));
+        note_graph_launch_end();
+    };
+    if (backend_compute_stream_scope_active() || inside_executor()) {
+        launch();
+    } else {
+        async_exec_wait();
+        ExecutorEntryScope entry;
+        launch();
+    }
 }
 
 void graph_wait() {

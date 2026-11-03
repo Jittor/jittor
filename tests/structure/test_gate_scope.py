@@ -385,6 +385,10 @@ def test_skip_reason_buckets_are_stable_and_other_is_counted(monkeypatch):
             "two CUDA devices are required") == "insufficient-devices"
         assert policy.classify_skip_reason_bucket(
             "at least 2 devices are required") == "insufficient-devices"
+        assert policy.classify_skip_reason_bucket(
+            "requires at least four CUDA devices and an even world size") == "insufficient-devices"
+        assert policy.classify_skip_reason_bucket(
+            "requires at least 4 CUDA devices") == "insufficient-devices"
         assert policy.classify_skip_reason_bucket("No CUDA found") == "accelerator"
         assert policy.classify_skip_reason_bucket("cuda is required") == "accelerator"
         assert (

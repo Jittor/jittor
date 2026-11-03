@@ -127,7 +127,8 @@ def _run_post_accumulate_hooks(leaves, grad_by_id):
                     raise RuntimeError("Tensor post accumulate grad hook must return None")
 
 
-def _fill_opt_grads(opt, grad_by_id, filled_param_ids=None):
+def _fill_opt_grads(opt, grad_by_id, filled_param_ids=None, *,
+                    fsdp_provider=None, zero_override=None):
     # Replicate the grad-storage half of jittor's Optimizer.backward() but
     # from an already-computed {id(param): grad} map (so a SINGLE jt.grad
     # pass feeds every optimizer + every leaf — no N-times-repeated backward).
@@ -135,7 +136,8 @@ def _fill_opt_grads(opt, grad_by_id, filled_param_ids=None):
     # next backward overwrites rather than accumulates) and tolerates a param
     # whose shape changed (3DGS densify replaces params) by replacing — not
     # .update()-ing — the stored grad Var.
-    zero = getattr(opt, "_Optimizer__zero_grad", True)
+    zero = (getattr(opt, "_Optimizer__zero_grad", True)
+            if zero_override is None else zero_override)
     if filled_param_ids is None:
         filled_param_ids = set()
     for pg in opt.param_groups:
@@ -144,6 +146,10 @@ def _fill_opt_grads(opt, grad_by_id, filled_param_ids=None):
             grads_list = pg["grads"] = [None] * len(pg["params"])
         for i, p in enumerate(pg["params"]):
             if not isinstance(p, _NativeVar) or not p.requires_grad:
+                continue
+            # FSDP already published the reduced shard. Replacing it with
+            # this leaf's full gradient loses both placement and reduction.
+            if fsdp_provider is not None and fsdp_provider.is_fsdp_managed_param(p):
                 continue
             g = grad_by_id.get(id(p))
             if g is None:
@@ -316,7 +322,7 @@ def _backward_impl(self, gradient=None, retain_graph=None, create_graph=False, *
     # historical zero-materialization untouched and use the compatibility
     # core entry point that preserves missing gradients explicitly.
     from ...autograd import _create_graph_scope
-    with _create_graph_scope(create_graph):
+    with _create_graph_scope(create_graph), _owner.jt.flag_scope(gradient_accumulation_order=1):
         grads = _owner.jt.core.grad_optional(self, leaves, retain_graph)
     grad_by_id = {}
     for p, gr in zip(leaves, grads):
@@ -352,13 +358,19 @@ def _backward_impl(self, gradient=None, retain_graph=None, create_graph=False, *
             else:
                 prev.add_(gr)
     # fill each optimizer's pg["grads"] so its step(loss=None) consumes them
+    fsdp_zero_flags = {id(o): getattr(o, "_Optimizer__zero_grad", True)
+                       for o in fsdp_opts}
     if _fsdp2_backward is not None and fsdp_opts:
         _fsdp2_backward.fill_fsdp_optimizer_grads_from_grad_map(fsdp_opts, grad_by_id)
     for o in opts:
         if _fsdp2_backward is not None and id(o) in fsdp_opt_ids \
                 and not _fsdp2_backward.optimizer_has_non_fsdp_params(o):
             continue
-        _fill_opt_grads(o, grad_by_id, filled_param_ids)
+        _fill_opt_grads(
+            o, grad_by_id, filled_param_ids,
+            fsdp_provider=_fsdp2_backward if id(o) in fsdp_opt_ids else None,
+            zero_override=fsdp_zero_flags.get(id(o)),
+        )
     # DDP's synchronisation point, deliberately here rather than next to
     # grad_optional above: it has to average the *accumulated* gradient.
     # `no_sync()` exists so several micro-batches accumulate locally and

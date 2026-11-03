@@ -2,6 +2,7 @@
 
 import types
 import sys
+import os
 
 from jittor.distributed.fsdp import storage as _storage
 import weakref
@@ -11,6 +12,7 @@ from jittor import nn
 
 from . import common, dtensor
 from ..torch.parameter_containers import ParameterDictAdapter, ParameterListAdapter
+from ..torch.nested import _TorchSize
 from ..diagnostics import EXPECTED, swallowed
 
 
@@ -19,6 +21,7 @@ _EXPORTS = (
     "_flat_entry_slices",
     "_refresh_flat_entry_shards",
     "_mark_fsdp_param_var",
+    "_optimizer_state_view",
     "_fsdp_param_entry",
     "is_fsdp_managed_param",
     "_fsdp_var_to_local",
@@ -67,19 +70,75 @@ def _bind_parameter_aliases(state, role):
         _bind_entry_aliases(entry, value)
 
 
+_GLOBAL_SHAPE_VIEW_TYPES = weakref.WeakKeyDictionary()
+
+
+def _global_view_shape(value):
+    entry = getattr(value, "_jittor_fsdp2_entry", None)
+    if entry is not None:
+        return _TorchSize(entry.shape)
+    return _TorchSize(jt.Var.shape.__get__(value, type(value)))
+
+
+def _global_view_ndim(value):
+    return len(_global_view_shape(value))
+
+
+def _global_view_numel(value):
+    result = 1
+    for dimension in _global_view_shape(value):
+        result *= int(dimension)
+    return result
+
+
+def _install_global_shape_view(value):
+    """Opt-in experimental Torch-only public metadata on the same holder."""
+    base = type(value)
+    if vars(base).get("_fsdp_global_shape_view", False):
+        return value
+    view_type = _GLOBAL_SHAPE_VIEW_TYPES.get(base)
+    if view_type is None:
+        attrs = {"__module__": __name__, "_fsdp_global_shape_view": True,
+                 "shape": property(_global_view_shape),
+                 "ndim": property(_global_view_ndim), "numel": _global_view_numel,
+                 # A nested FSDP root must see the same frontend before and
+                 # after a child parameter receives its public shape view.
+                 "_frontend_result_type": getattr(base, "_frontend_result_type", base)}
+        # Preserve the frontend's explicit dispatch markers, which some
+        # optimizer paths intentionally inspect on the concrete class.
+        for key in ("_frontend_backend", "_frontend_result_type", "_parameter_backend"):
+            if key in vars(base):
+                attrs[key] = vars(base)[key]
+        view_type = type("_FSDPGlobalShape_" + base.__name__, (base,), attrs)
+        _GLOBAL_SHAPE_VIEW_TYPES[base] = view_type
+    value.__class__ = view_type
+    return value
+
+
 class _ShardTensorMethod:
     """Resolve the current shard through weak metadata, never retain its Var."""
 
-    def __init__(self, function, state, entry, role):
+    def __init__(self, function, state, entry, role, tensor=None):
         self.function = function
         self.state = weakref.ref(state)
         self.entry = weakref.ref(entry) if entry is not None else None
         self.role = role
+        # An already published gradient must keep referring to its own value,
+        # even after a later backward changes state.true_fsdp_last_grads.
+        # Keep only a weak reference to avoid retaining superseded Vars.
+        self.original_grad = (weakref.ref(tensor) if role in ("grad_shard", "state_shard") and
+                              getattr(state, "torch_dim0_per_parameter", False) and
+                              tensor is not None else None)
 
     def _resolve_tensor(self, state, entry):
         if entry is None:
             return state.true_fsdp_flat_shard
-        if self.role == "grad_shard":
+        if self.role in ("grad_shard", "state_shard"):
+            if self.original_grad is not None:
+                gradient = self.original_grad()
+                if gradient is None:
+                    raise ReferenceError("the original FSDP gradient has been released")
+                return gradient
             for current, gradient in zip(
                 state.true_fsdp_params, getattr(state, "true_fsdp_last_grads", ())
             ):
@@ -126,8 +185,11 @@ def _mark_fsdp_param_var(var, state, entry, role):
         object.__setattr__(var, "_jittor_fsdp2_entry", entry)
         object.__setattr__(var, "_jittor_fsdp2_module", getattr(state, "true_fsdp_module", None))
         object.__setattr__(var, "_jittor_fsdp2_role", role)
+        if (getattr(state, "torch_dim0_per_parameter", False) and entry is not None
+                and role in ("shard", "grad_shard", "state_shard")):
+            _install_global_shape_view(var)
         object.__setattr__(
-            var, "size", _ShardTensorMethod(_fsdp_var_size, state, entry, role)
+            var, "size", _ShardTensorMethod(_fsdp_var_size, state, entry, role, var)
         )
         object.__setattr__(
             var,
@@ -149,13 +211,13 @@ def _mark_fsdp_param_var(var, state, entry, role):
         # Resolve through weak metadata. Bound native methods retain each
         # temporary Var and leak every superseded all-gathered parameter.
         object.__setattr__(
-            var, "to_local", _ShardTensorMethod(_fsdp_var_to_local, state, entry, role)
+            var, "to_local", _ShardTensorMethod(_fsdp_var_to_local, state, entry, role, var)
         )
         object.__setattr__(
-            var, "full_tensor", _ShardTensorMethod(_fsdp_var_full_tensor, state, entry, role)
+            var, "full_tensor", _ShardTensorMethod(_fsdp_var_full_tensor, state, entry, role, var)
         )
         object.__setattr__(
-            var, "redistribute", _ShardTensorMethod(_fsdp_var_redistribute, state, entry, role)
+            var, "redistribute", _ShardTensorMethod(_fsdp_var_redistribute, state, entry, role, var)
         )
         getattr(var, "__dict__", {}).pop("_local_tensor", None)
     except EXPECTED as exc:
@@ -181,10 +243,27 @@ def is_fsdp_managed_param(param):
     return state is not None and entry is not None
 
 
+def _optimizer_state_view(param, value):
+    """Expose an opt-in per-parameter shard buffer as a live DTensor view."""
+    state, entry = _fsdp_param_entry(param)
+    if (state is None or not getattr(state, "torch_dim0_per_parameter", False)
+            or not isinstance(value, jt.Var)):
+        return value
+    return _mark_fsdp_param_var(value, state, entry, "state_shard")
+
+
 def _fsdp_var_to_local(self, *args, **kwargs):
     state, entry = _fsdp_param_entry(self)
     if state is None or entry is None:
         return self
+    if getattr(state, "torch_dim0_per_parameter", False):
+        local = self if getattr(self, "_jittor_fsdp2_role", None) in ("grad_shard", "state_shard") else entry.shard
+        rows_per_rank = common._ceil_div(entry.shape[0], state.true_fsdp_world_size)
+        start = min(state.true_fsdp_rank * rows_per_rank, entry.shape[0])
+        local_rows = min(rows_per_rank, entry.shape[0] - start)
+        row_numel = entry.numel // entry.shape[0]
+        real = common._slice_flat(local, 0, local_rows * row_numel)
+        return real.reshape((local_rows,) + entry.shape[1:])
     if getattr(self, "_jittor_fsdp2_role", None) == "grad_shard":
         return self
     return entry.shard
@@ -203,7 +282,7 @@ def _fsdp_var_full_tensor(self, *args, **kwargs):
     state, entry = _fsdp_param_entry(self)
     if state is None or entry is None:
         return self
-    if getattr(self, "_jittor_fsdp2_role", None) == "grad_shard":
+    if getattr(self, "_jittor_fsdp2_role", None) in ("grad_shard", "state_shard"):
         return common._full_gradient_from_shard(self, state, entry)
     if (
         getattr(state, "true_fsdp_unsharded", False)
@@ -339,6 +418,34 @@ def _apply_fsdp_attr(module, name, value, recurse=True):
     return module
 
 
+def _preflight_dim0_experiment(module, ignored_params=()):
+    """Reject unsupported inputs before FSDP installs any state or methods.
+
+    This is scoped only to the opt-in Torch compatibility experiment. It is
+    not a general rollback for allocator, device or communication failures.
+    """
+    mode = os.environ.get("JITTOR_TORCH_FSDP2_DIM0_EXPERIMENT", "0")
+    if mode not in ("0", "1"):
+        raise ValueError("JITTOR_TORCH_FSDP2_DIM0_EXPERIMENT must be 0 or 1")
+    if mode == "0":
+        return
+    if isinstance(module, (tuple, list)):
+        for child in module:
+            _preflight_dim0_experiment(child, ignored_params)
+        return
+    if module is None or not hasattr(module, "parameters"):
+        raise TypeError("fully_shard() expects a torch.nn.Module-compatible object")
+    ignored = {id(param) for param in (ignored_params or ())}
+    for _, owner, _, param in _named_parameters_with_owner(module, recurse=True):
+        if id(param) in ignored or is_fsdp_managed_param(param):
+            continue
+        if isinstance(owner, (nn.ParameterList, ParameterListAdapter, ParameterDictAdapter)):
+            raise NotImplementedError("FSDP2 cannot shard ParameterList/ParameterDict")
+        shape = tuple(int(x) for x in param.shape)
+        if not shape or any(x <= 0 for x in shape):
+            raise NotImplementedError("experimental dim-0 layout requires positive parameter dimensions")
+
+
 def _init_true_fsdp_state(module, state):
     tensor_types = {
         getattr(type(param), "_frontend_result_type", type(param))
@@ -350,6 +457,40 @@ def _init_true_fsdp_state(module, state):
     state.frontend_type = next(iter(tensor_types), None)
     with common._frontend_scope(state):
         return _init_true_fsdp_state_impl(module, state)
+
+
+def _init_dim0_state(module, state, params, *, world_size, rank):
+    """Initialize opt-in Torch row shards without changing native storage."""
+    entries = []
+    state.true_fsdp_module = module
+    state.true_fsdp_flat = False
+    for name, owner, attr, param in params:
+        shape = tuple(int(x) for x in param.shape)
+        numel = common._param_numel(param)
+        shard_numel = common._ceil_div(shape[0], world_size) * (numel // shape[0])
+        padded_numel = shard_numel * world_size
+        flat_full = common._pad_flat(common._flatten_var(param), padded_numel)
+        local = _materialize_initial_shard(
+            common._slice_flat(flat_full, rank * shard_numel, shard_numel))
+        entry = common.StateRecord(
+            name=name, owner=owner, attr=attr, shape=shape, dtype=param.dtype,
+            numel=numel, padded_numel=padded_numel, shard_numel=shard_numel,
+            shard=local, full_param=None,
+            requires_grad=_storage._parameter_requires_grad(param))
+        entries.append(entry)
+        _mark_fsdp_param_var(local, state, entry, "shard")
+        if entry.requires_grad:
+            if local.is_stop_grad():
+                local.start_grad()
+        elif not local.is_stop_grad():
+            local.stop_grad()
+        object.__setattr__(owner, attr, local)
+    state.true_fsdp_initialized = True
+    state.true_fsdp_rank = rank
+    state.true_fsdp_world_size = world_size
+    state.true_fsdp_params = entries
+    state.true_fsdp_unsharded = False
+    return state
 
 
 def _init_true_fsdp_state_impl(module, state):
@@ -376,15 +517,25 @@ def _init_true_fsdp_state_impl(module, state):
                 "storage needs container-aware replacement at every shard transition"
             )
     total_numel = sum(common._param_numel(param) for _, _, _, param in params)
-    initialized = _storage._init_true_fsdp_state_impl(
-        module,
-        state,
-        params,
-        world_size=ws,
-        rank=rank,
-        flat=common._fsdp2_flat_enabled(ws, total_numel),
-        api=sys.modules[__name__],
-    )
+    # Experimental Torch-only branch. Keep native storage unchanged and refuse
+    # unsupported cases before making any parameter or process-group changes.
+    dim0_mode = os.environ.get("JITTOR_TORCH_FSDP2_DIM0_EXPERIMENT", "0")
+    if dim0_mode not in ("0", "1"):
+        raise ValueError("JITTOR_TORCH_FSDP2_DIM0_EXPERIMENT must be 0 or 1")
+    if dim0_mode == "1":
+        for _, owner, _, param in params:
+            shape = tuple(int(x) for x in param.shape)
+            if not shape or any(x <= 0 for x in shape):
+                raise NotImplementedError("experimental dim-0 layout requires positive parameter dimensions")
+        state.torch_dim0_per_parameter = True
+    if dim0_mode == "1":
+        initialized = _init_dim0_state(module, state, params, world_size=ws, rank=rank)
+    else:
+        initialized = _storage._init_true_fsdp_state_impl(
+            module, state, params, world_size=ws, rank=rank,
+            flat=common._fsdp2_flat_enabled(ws, total_numel),
+            api=sys.modules[__name__],
+        )
     for entry, (_, owner, attr, param) in zip(state.true_fsdp_params, params):
         entry.aliases = aliases.get(id(param), ((owner, attr),))
     _bind_parameter_aliases(state, "shard")

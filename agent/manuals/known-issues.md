@@ -1818,6 +1818,178 @@ workaround.
   deterministically and near CUB throughput, or a justified deterministic
   strategy is selected; the rank-1 allocation gate passes.
 
+
+## KI-COMPAT-016: Tensor shared memory is missing for streaming Hugging Face datasets
+
+> Historical evidence from the TRL backup snapshot; applicability to the current integration is not yet revalidated.
+
+- Severity: Medium.
+- Status: Open, reproduced on CPU at `897d9cc61` on 2026-10-21.
+- Owner: Torch compatibility and storage maintainers.
+- Symptom: with `datasets==3.6.0`, `IterableDataset.from_generator` calls
+  `torch.tensor(0).share_memory_()` while creating its epoch counter and raises
+  `AttributeError`. This blocked the initial TRL 0.21.0 Qwen3 SFT experiment
+  before the Trainer was created.
+- Cause: the Torch Tensor surface does not expose `share_memory_`; implementing
+  it requires actual shared storage semantics, not an identity stub.
+- Workaround: use a map-style `datasets.Dataset` with zero dataloader workers
+  when streaming/shared worker state is not required. This does not establish
+  streaming or multiprocess dataset support.
+- Evidence: in the activated Jittor Torch environment,
+  `python -c 'import torch; torch.tensor(0).share_memory_()'` reproduces the
+  missing method. The downstream reproduction is
+  `datasets.IterableDataset.from_generator(lambda: iter([{"text": "example"}]))`.
+- Exit condition: implement and test CPU shared-storage visibility across
+  processes and the documented CUDA behavior, then execute the real datasets
+  streaming constructor and worker path without substituting a no-op.
+
+
+## KI-COMPAT-017: Full Qwen3 DPO training exceeds the strict CPU numerical budget
+
+> Historical evidence from the TRL backup snapshot; applicability to the current integration is not yet revalidated.
+
+- Severity: Medium.
+- Status: Open, reproduced at `b9517ff13` on 2026-10-21.
+- Owner: numerical kernels and Torch compatibility maintainers.
+- Symptom: ten FP32 SGD updates through TRL 0.21.0 DPOTrainer finish on both
+  independent runtimes, but 47 of 3,100 parameter-gradient tensors exceed the
+  fixed `atol=1e-5, rtol=1e-4` element budget on CPU. All final parameter tensors
+  pass; close final weights do not establish strict gradient agreement.
+- Cause: not isolated to an operator. Matched checkpoint, inputs, buffers,
+  downstream sources and actual CPU dispatch rule out a different training
+  protocol or device fallback. A separate initial reward-accuracy disagreement
+  comes from applying a strict positive-margin test to zero versus rounding
+  noise; it does not explain the gradient differences.
+- Follow-up (2026-10-22): same-weight precision controls (historical validation record; see PR evidence)
+  strongly support finite-precision and operation-order sensitivity. Explicit
+  FP64 reduces full-forward discrepancy to 1.17e-13; GRPO hotspot deviations
+  from FP64 are comparable in both runtimes. This bounded diagnostic does not
+  clear every ten-step failure; the original acceptance status is unchanged.
+- Follow-up (2026-10-23): full-checkpoint and practical controls (historical validation record; see PR evidence)
+  also find strict-budget failures in other full TRL methods and LoRA/AdamW
+  profiles. The earlier FP64 diagnosis does not establish the cause of every
+  new method's drift. The independently reproduced AMP policy deviation is
+  tracked separately as KI-COMPAT-018.
+- Workaround: retain the failed comparisons and quantitative error report;
+  do not claim strict numerical equivalence or relax the acceptance threshold.
+- Evidence: the CPU command pair and measured errors in
+  the DPO/GRPO report (historical validation record; see PR evidence), using
+  `trl_rl_probe.py --algorithm dpo --steps 10` and independent interpreters.
+- Exit condition: identify the numerical source and rerun the unchanged
+  complete protocol within its original budget on CPU and the claimed devices.
+
+
+## KI-COMPAT-019: Externally injected fractional Adam live counters are truncated
+
+> Historical evidence from the TRL backup snapshot; applicability to the current integration is not yet revalidated.
+
+- Severity: Low.
+- Status: Open, narrowed on 2026-10-25; normal integer counter lifecycle and
+  legacy initialized numeric-zero restore are repaired.
+- Owner: Torch optimizer and serialization compatibility maintainers.
+- Symptom: genuine Torch Adam/AdamW accepts an external live-counter mutation
+  to 7.5 and advances it to 8.5. A read-only AST-extracted model of the candidate
+  bookkeeping advances it to 8. This is outside the valid integer-step TRL
+  experiments; it is not evidence that normal live state is still a Python
+  float, nor a fresh candidate numerical or CUDA reproduction.
+- Cause: the integer native step bookkeeping converts the exposed value through
+  `int(...)` before incrementing. Normal live counters now expose stable mutable
+  scalar Tensors with tested identity, dtype/device, state-dict aliasing,
+  integer mutation, replacement/deletion, group addition and reordered restore.
+  Initialized legacy state with a numeric zero and existing moments is also
+  retained. Original checkpoints already held scalar FP32 counters; the old
+  live Python-float representation must not be described as a saved-FP64 defect.
+- Workaround: keep externally edited step counters at nonnegative integer values
+  for the measured TRL scope. Do not claim complete Torch counter mutation or
+  graph-capture equivalence from eager integer lifecycle coverage.
+- Evidence: current text and LoRA validation (historical validation record; see PR evidence),
+  `compat/tests/torch/test_torch_adam_live_state.py`, twelve independent genuine
+  Torch controls and seven final CUDA counter/default-fused tests.
+  `$JITTOR_LAB_ROOT/_state/trl-adam-live/counter-fractional-readonly-review-20261025.json`
+  explicitly separates the genuine-Torch observation from the extracted scalar
+  model and records that no Jittor candidate numerical run was made for this edge.
+- Exit condition: preserve supported fractional live-counter mutations through
+  the actual optimizer update and restore on the claimed devices, with
+  independent Torch controls and without regressing normal integer lifecycle,
+  identity, aliasing or exact checkpoint continuation.
+
+
+## KI-COMPAT-024: independent Tensor deepcopy self-owner contract disagrees with its core test
+
+- Severity: Low
+- Status: Resolved for the tested self-owner contract (2026-11-01)
+- Owner: Torch compatibility maintainers
+- Symptom: CPU core test `test_independent_tensor_installation_preserves_native_type`
+  fails when an independent frontend tensor has its internal data owner set to itself
+  and is deep-copied; the test expects the copied data owner to be `None`.
+- Cause: `deepcopy_tensor` preserves an internal self-owner reference as a
+  self-reference to the copy. The old test incorrectly required that internal
+  reference to be cleared; this is distinct from public storage independence.
+- Resolution: require the self-owner to point to the copied tensor and retain
+  independent allocation and writeback checks. A real PyTorch reference and
+  Jittor both pass CPU and CUDA storage/gradient controls. CPU and CUDA native
+  and Torch core gates pass after the test correction; no runtime behavior was
+  changed for this issue.
+- Evidence: CPU core job 143572 and baseline-only test job 143631 in the
+  FSDP dim0 results report. The latter reproduces the same assertion on baseline
+  `de9e6ce52aae7c73c629885d2b95d91b4e2a0b75`.
+  Corrected core gates: 144927; independent CPU/CUDA storage and gradient
+  controls: 145147. The CUDA noncontiguous sparse in-place add case is not a
+  supported PyTorch reference operation; that control checks dense mutation
+  and storage isolation instead.
+
+## KI-COMPAT-022: Intermittent CUDA indexing failure during tiny PPO generation
+
+> Historical TRL reports called this KI-COMPAT-021; that identifier now belongs to the upstream T5 issue above. The backup reports retain their original text. Applicability to the current integration is not yet revalidated.
+
+- Severity: High.
+- Status: Open for attribution of the original first fault. Shared scan and
+  cross-thread stream-ordering defects were independently reproduced and
+  repaired on 2026-10-26; their passing controls do not establish which one
+  caused the 2026-10-25 failure at `527cb3205` plus the row-LSE repair.
+- Owner: CUDA executor/indexing and Torch compatibility maintainers.
+- Symptom: the maintained sixteen-method CUDA gate completes six candidate
+  methods, then tiny PPO generation reports out-of-range indices on an axis
+  of length four and CUDA error 719. The process context is unusable afterward.
+  This is a failed gate, even though full-model PPO LoRA and later isolated
+  tiny PPO controls complete on the same machine.
+- Cause: the original error-719 first fault remains unbound. Two shared owners
+  now have independent causal reproductions. The tiled CUB scan reused shared
+  carry without uniform collective participation/barriers: racecheck reports
+  72 hazards in its direct control and 27 in official PPO, then zero after
+  repair. Separately, imperative device copies and graph launches did not
+  publish their compute-stream work to the async worker; legal delayed writes
+  made a later independent copy read stale bytes. The shared handoff scope
+  repairs both boundaries without a device-wide synchronization on each call.
+  Transformers' `kv_arange += kv_offset` can reach this direct-copy owner;
+  identity paths can instead return without a device copy. This static
+  call-path evidence does not establish that the historical failed call
+  performed a copy or capture its first fault.
+- Workaround: none validated. Preserve the failed trace; a successful retry
+  demonstrates only that retry's execution, not absence of the intermittent fault.
+- Evidence: PPO and loss-repeatability report (historical validation record; see PR evidence),
+  `tools/run_trl_gate.py --device cuda --steps 3`; unversioned
+  `$JITTOR_LAB_ROOT/_state/trl-ddp-local-20261025/postfix-cuda16-gate-r2/logs/ppo-jittor.log`
+  and `ppo-generation-bounded-investigation-receipt.json` bind the failure,
+  exact-environment controls, mask tests and preserved cache artifacts.
+  `$JITTOR_LAB_ROOT/_state/trl-completion-20261026/indexing/verified-defects-audit-final.json`
+  binds the three valid shared-owner red/green controls and exact patch.
+  `indexing/final-r7-cpu-cuda-audit.json` binds the final sixteen-method gates
+  on both devices and the 128-sample mask control to the numerical sources.
+  The separate `indexing/historical-ppo-pair/fullprint-pair-audit.json` (SHA256
+  `6ca5e537caf2e112b4171484b46ba28827271a6cde48ebe4461eb34949b17b40`)
+  reconstructs all 1,277 historical runtime files and uses the same historical
+  producer on old/repaired endpoints. Both complete three updates, three
+  generations and all 372 original fields, with zero fallback and no reproduced
+  error 719. Full-print memcheck returns 86: its 196/210 reports are handled
+  `cuKernelGetFunction` API-400 queries. This is not strict sanitizer acceptance
+  or historical first-fault attribution. Invalid setup attempts, initialization
+  waits and interrupted compilation retain their own excluded status. See the
+  final numerical and validation report (historical validation record; see PR evidence)
+  for the distinct protocol and source boundaries.
+- Exit condition: obtain a causal reproduction/first-fault binding, repair the
+  shared owner, and pass the unchanged CUDA gate plus repeated generation
+  controls without cache clearing, sampling replay changes or global sync workarounds.
 ## KI-TEST-016: the ACL Torch-compat suite is red under the shim for placement reasons
 
 - Severity: Medium (fourteen pre-existing failures in one file would hide a real

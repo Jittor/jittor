@@ -126,7 +126,7 @@ def _momentum_buffer(param):
     `jt.zeros` is a broadcast of a scalar and carries no storage of its own,
     which the fused optimizer kernels reject: they write their inputs in place
     and so require contiguous storage. Paying one materialisation at
-    construction keeps the hot path free of the copy.
+    first use keeps subsequent steps free of the copy.
 
     It is also built on the *parameter's* device rather than the ambient one
     (`_state_buffer` -> `zeros_like`): an optimizer created for a model that
@@ -147,11 +147,17 @@ def _acl_fused_sgd_updates(entries, lr, momentum, weight_decay, dampening, neste
 
     parameters = [entry[0] for entry in entries]
     gradients = [entry[1] for entry in entries]
-    velocities = [entry[2] for entry in entries]
+    # CANN requires a dense velocity argument even for a plain update. Keep
+    # that temporary local to this kernel rather than permanent unused state.
+    velocities = [entry[2] if entry[2] is not None else _momentum_buffer(entry[0])
+                  for entry in entries]
     new_parameters, new_velocities = fused_sgd_acl(
         parameters, velocities, gradients, lr, momentum, weight_decay, dampening, nesterov, step
     )
-    return list(zip(new_parameters, new_velocities))
+    # Momentum-free entries use a temporary dense buffer for CANN; do not
+    # expose it as persistent optimizer state when the caller supplied None.
+    return [(parameter, velocity if entry[2] is not None else None)
+            for entry, parameter, velocity in zip(entries, new_parameters, new_velocities)]
 
 
 # float32 only: the ACL runner hands the CANN foreach operators their
@@ -202,15 +208,15 @@ class SGD(Optimizer):
 
         # initialize required arguments
         for pg in self.param_groups:
-            values = pg["values"] = []
-            for p in pg["params"]:
-                values.append(_momentum_buffer(p))
+            uses_momentum = pg.get("momentum", momentum) != 0 or pg.get("nesterov", nesterov)
+            pg["values"] = [_momentum_buffer(p) if uses_momentum else None
+                            for p in pg["params"]]
             pg[MOMENTUM_INITIALIZED] = [False] * len(pg["params"])
 
     def add_param_group(self, group):
-        values = group["values"] = []
-        for p in group["params"]:
-            values.append(_momentum_buffer(p))
+        uses_momentum = group.get("momentum", self.momentum) != 0 or group.get("nesterov", self.nesterov)
+        group["values"] = [_momentum_buffer(p) if uses_momentum else None
+                           for p in group["params"]]
         group[MOMENTUM_INITIALIZED] = [False] * len(group["params"])
         self.param_groups.append(group)
 
@@ -276,8 +282,14 @@ class SGD(Optimizer):
             ]
             if not active_index:
                 continue
-            active = [(pg["params"][i], pg["grads"][i], pg["values"][i]) for i in active_index]
             uses_momentum = not (momentum == 0 and not nesterov)
+            if uses_momentum:
+                for i in active_index:
+                    if pg["values"][i] is None:
+                        # Parameters may have moved since construction. The
+                        # first real momentum update allocates on their device.
+                        pg["values"][i] = _momentum_buffer(pg["params"][i])
+            active = [(pg["params"][i], pg["grads"][i], pg["values"][i]) for i in active_index]
             if not uses_momentum:
                 # Dampening only scales momentum's recurrence. The fused ACL
                 # kernel applied it to the plain update as well.

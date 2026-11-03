@@ -1,0 +1,16 @@
+# Offline 16/18 text-Trainer gate, Python 3.11. Provision Torch separately:
+# genuine torch==2.8.0 CPU in the oracle; candidate activates the Jittor shim.
+trl==0.21.0
+transformers==4.56.2
+accelerate==1.15.0
+datasets==3.6.0
+numpy==1.26.4
+peft==0.17.1
+huggingface-hub==0.35.3
+tokenizers==0.22.2
+safetensors==0.6.2
+pyarrow==19.0.1
+pandas==2.2.3
+astunparse==1.6.3
+pillow==11.0.0
+tqdm==4.70.1

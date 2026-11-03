@@ -6,6 +6,7 @@ import math
 import builtins as _builtins
 from collections.abc import Sequence,Iterable
 from .. import _arg_policy
+from .shape_ops import triu_indices, tril_indices
 from .._runtime.dispatch import dispatch_context, optional_kernel, register_kernel, select_kernel, try_dispatch
 
 # Bootstrap registers CUDA kernels explicitly before composing this facade.
@@ -354,7 +355,9 @@ __all__ = [
     "tolist",
     "topk",
     "tril",
+    "tril_indices",
     "triu",
+    "triu_indices",
     "unbind",
     "unique",
     "unique_consecutive",

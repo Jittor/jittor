@@ -57,3 +57,33 @@ class TestFusedAdamwCuda(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipIf(not _test_capability.check_accelerator("cuda", backend=jt).enabled,
+                 "no usable CUDA in this build")
+class TestFusedAdamwScalarPrecision(unittest.TestCase):
+    def test_zero_state_complements_and_parameter_update_match_independent_cuda(self):
+        from jittor._runtime import forbid_backend_fallbacks
+
+        # Independent PyTorch 2.8 CUDA foreach AdamW, float32 state. These
+        # gradients distinguish float(1-beta) from 1-float(beta), and the
+        # parameter fixture binds the divide/addcdiv rounding order too.
+        gradient = np.array([.0033893585205078125, -.004253387451171875,
+                             .002529144287109375, .00069427490234375,
+                             -.00551605224609375, -.00047016143798828125,
+                             .0006160736083984375, -.0014486312866210938], dtype="float32")
+        expected_parameter = np.array([-9.999969915952533e-5, 9.999977191910148e-5,
+                                       -9.999960457207635e-5, -9.999856411013752e-5,
+                                       9.999982285080478e-5, 9.999786561820656e-5,
+                                       -9.999836765928194e-5, 9.999931353377178e-5], dtype="float32")
+        expected_moment = np.float32(1.0 - .9) * gradient
+        expected_variance = np.float32(1.0 - .999) * (gradient * gradient)
+        with jt.flag_scope(use_cuda=1, amp_reg=0), forbid_backend_fallbacks():
+            parameter = jt.zeros((8,))
+            moment, variance = jt.zeros((8,)), jt.zeros((8,))
+            outputs = jt.fused_adamw([parameter], [moment], [variance], [jt.array(gradient)],
+                                    jt.array(1.).stop_grad(), .0001, .9, .999, .01, 1e-8)
+            for value, expected in zip(outputs, [expected_parameter, expected_moment, expected_variance]):
+                value.sync()
+                self.assertEqual(value.location(), "device")
+                np.testing.assert_array_equal(value.numpy(), expected)

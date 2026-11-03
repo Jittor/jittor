@@ -443,6 +443,34 @@ def test_complete_suite_runner_owns_cpu_and_process_mode_environment(monkeypatch
     assert native["TMPDIR"] != torch["TMPDIR"]
 
 
+def test_complete_suite_runner_can_separate_temporary_fixtures_from_git_lab(monkeypatch, tmp_path):
+    module = _load_test_suite_runner()
+    lab = tmp_path / "outer-checkout" / "lab"
+    (lab.parent / ".git").mkdir(parents=True)
+    monkeypatch.setattr(module, "_lab_root", lambda: lab)
+    temporary = tmp_path / "external-temporary"
+    monkeypatch.setenv("JITTOR_TEST_TMP_ROOT", str(temporary))
+    native = module._session_environment("native")
+    torch = module._session_environment("torch")
+    assert Path(native["TMPDIR"]) == temporary / "native"
+    assert Path(torch["TMPDIR"]) == temporary / "torch"
+    assert Path(native["JITTOR_HOME"]).is_relative_to(lab)
+    assert Path(torch["JITTOR_HOME"]).is_relative_to(lab)
+
+
+def test_complete_suite_runner_rejects_unsafe_temporary_override(monkeypatch, tmp_path):
+    import pytest
+
+    module = _load_test_suite_runner()
+    monkeypatch.setattr(module, "_lab_root", lambda: tmp_path / "lab")
+    checkout = tmp_path / "other-checkout"
+    (checkout / ".git").mkdir(parents=True)
+    for unsafe in ("relative-directory", str(checkout / "temporary"), str(REPO_ROOT / "tmp")):
+        monkeypatch.setenv("JITTOR_TEST_TMP_ROOT", unsafe)
+        with pytest.raises(ValueError):
+            module._session_environment("native")
+
+
 def test_complete_suite_runner_preserves_oracle_only_for_native_on_each_backend(monkeypatch, tmp_path):
     module = _load_test_suite_runner()
     monkeypatch.setattr(module, "_lab_root", lambda: tmp_path)

@@ -418,11 +418,17 @@ assert object_state.force_cpu and object_state.rms_norm_unit_weight is fresh
 assert "_jittor_torch_force_cpu" not in vars(fresh)
 assert "_torch_acl_rms_norm_unit_weight" not in vars(fresh)
 copied_state = copy.deepcopy(fresh)
+# The upstream self-owner contract preserves this self-reference on the copy;
+# the allocation and writeback must nevertheless be independent of fresh.
 assert copied_state._torch_data_owner is copied_state
+assert copied_state._torch_data_path == ()
+assert copied_state.data_ptr() != fresh.data_ptr()
 assert copied_state._torch_acl_rms_norm_unit_weight is copied_state
 assert copied_state._jittor_torch_force_cpu
 restored_state = pickle.loads(pickle.dumps(fresh))
-assert restored_state._torch_data_owner is restored_state
+assert restored_state._torch_data_owner is None
+assert restored_state._torch_data_path == ()
+assert restored_state.data_ptr() != fresh.data_ptr()
 assert restored_state._torch_acl_rms_norm_unit_weight is restored_state
 assert restored_state._jittor_torch_force_cpu
 del object_state.force_cuda  # A state restored from an older pickle.

@@ -688,6 +688,7 @@ _FILES_WITH_ITEMS = set()
 #: ``pytest_collection_modifyitems`` and ``pytest_deselected``; the pair is what
 #: lets ``_files_that_collected_nothing()`` mean collection.
 _COLLECTED_FILES = set()
+_XDIST_COLLECTION_KEY = "jittor_collection_accounting"
 _SKIP_REASON_BUCKETS = Counter()
 #: {lowercased reason: n} for the skips that landed in `other`, so the report can
 #: name them instead of printing a count that reds a run and explains nothing.
@@ -720,6 +721,8 @@ _SKIP_BUCKET_PATTERNS = {
     # method contract sat behind that skip: four cases that never ran outside a
     # multi-GPU box, reported exactly like four that passed.
     "insufficient-devices": (
+        "at least four cuda devices",
+        "at least 4 cuda devices",
         "two cuda devices",
         "two devices",
         "2 devices",
@@ -845,15 +848,51 @@ def pytest_runtest_logreport(report):
             global _ACCELERATOR_EXECUTED
             _ACCELERATOR_EXECUTED += 1
     elif report.skipped and report.when in ("setup", "call"):
-        record["skipped"] += 1
-        reason = _skip_reason(report)
-        record["reasons"].add(reason)
-        bucket = classify_skip_reason_bucket(reason)
-        _SKIP_REASON_BUCKETS[bucket] += 1
-        if bucket == "other":
-            _OTHER_SKIP_REASONS[reason] += 1
-        if _real_torch_is_required() and _blames_missing_torch(reason):
-            _MISSING_REAL_TORCH.append((report.nodeid, reason))
+        _record_file_skip(relative, report)
+
+
+def _record_file_skip(relative, report):
+    record = _FILE_OUTCOMES.setdefault(relative, {"executed": 0, "skipped": 0, "reasons": set()})
+    record["skipped"] += 1
+    reason = _skip_reason(report)
+    record["reasons"].add(reason)
+    bucket = classify_skip_reason_bucket(reason)
+    _SKIP_REASON_BUCKETS[bucket] += 1
+    if bucket == "other":
+        _OTHER_SKIP_REASONS[reason] += 1
+    if _real_torch_is_required() and _blames_missing_torch(reason):
+        _MISSING_REAL_TORCH.append((report.nodeid, reason))
+
+
+def pytest_collectreport(report):
+    # Module-level importorskip/skip has no runtest report. xdist forwards
+    # these collection reports to its controller, deduplicating workers.
+    if report.skipped:
+        relative = _relative_to_repo(report.nodeid.split("::", 1)[0])
+        _COLLECTED_FILES.add(relative)
+        _FILES_WITH_ITEMS.add(relative)
+        _record_file_skip(relative, report)
+
+
+@pytest.hookimpl(optionalhook=True)
+def pytest_xdist_node_collection_finished(node, ids):
+    # The controller itself collects no items. The completion sentinel must
+    # report the workers' common selection, not len(controller.items) == 0.
+    from _helpers import session_completion
+
+    session_completion.record_collected(len(ids))
+
+
+@pytest.hookimpl(optionalhook=True)
+def pytest_testnodedown(node, error):
+    # Collection (including deselection) happens in every worker; execution
+    # reports already arrive at the controller exactly once per assigned case.
+    # Merge only collection facts, never duplicate the execution/skip counts.
+    accounting = getattr(node, "workeroutput", {}).get(_XDIST_COLLECTION_KEY, {})
+    _SELECTED_FILES.update(accounting.get("selected", ()))
+    _COLLECTED_FILES.update(accounting.get("collected", ()))
+    _COLLECTED_FILES.update((getattr(node, "workeroutput", {}) or {}).get(
+        _XDIST_COLLECTED_FILES_KEY, ()))
 
 
 def _blames_missing_torch(reason):
@@ -949,12 +988,53 @@ def _accepted_skip_patterns():
     return tuple(pattern for pattern in ENVIRONMENT_SKIP_PATTERNS if pattern not in required)
 
 
+_PROFILE_SKIP_SWITCHES = {
+    "opt-in longformer 32768-token gate": "JITTOR_ECOSYSTEM_LONGFORMER_32K",
+    "opt-in real openmmlab training gate": "JITTOR_ECOSYSTEM_OPENMMLAB",
+    "opt-in source-bound openmmlab training gate": "JITTOR_ECOSYSTEM_OPENMMLAB_INSTALLED",
+    "set jittor_ecosystem_large=1 to run the realistic-size measurement": "JITTOR_ECOSYSTEM_LARGE",
+    "opt-in real swift trainer gate": "JITTOR_ECOSYSTEM_SWIFT",
+    "opt-in verl numpy2/transformers5 component profile is not selected": "JITTOR_REQUIRE_VERL",
+    "opt-in source-bound verl training gate": "JITTOR_ECOSYSTEM_VERL_TRAINING",
+    "opt-in vllm component gate": "JITTOR_ECOSYSTEM_VLLM",
+}
+
+
+def _enabled_skip_switch(name):
+    value = os.environ.get(name, "").strip().lower()
+    if name == "JITTOR_ECOSYSTEM_LARGE":
+        # Match this measurement's existing skipUnless predicate exactly.
+        return value not in ("", "0")
+    return value not in ("", "0", "false", "no", "off")
+
+
+def _registered_skip_bucket(reason):
+    text = str(reason or "").lower().removeprefix("skipped: ").strip()
+    switch = _PROFILE_SKIP_SWITCHES.get(text)
+    if switch is not None and not _enabled_skip_switch(switch):
+        return "opt-in"
+    # These are missing optional variants in the shared ecosystem harness,
+    # whose per-library REQUIRE flag makes a selected dependency mandatory.
+    for dependency in ("diffusers", "swift"):
+        if text == "missing " + dependency:
+            if not (_enabled_skip_switch("JITTOR_REQUIRE_OPTIONAL_DEPS")
+                    or _enabled_skip_switch("JITTOR_REQUIRE_" + dependency.upper())):
+                return "environment"
+    return None
+
+
 def _environment_explains(reasons):
     """Whether every skip in a file blamed something this machine lacks."""
     patterns = _accepted_skip_patterns()
     if not reasons or not patterns:
         return False
-    return all(any(pattern in reason for pattern in patterns) for reason in reasons)
+    def explained(reason):
+        text = str(reason or "").lower().removeprefix("skipped: ").strip()
+        if text in _PROFILE_SKIP_SWITCHES:
+            return _registered_skip_bucket(reason) is not None
+        return (_registered_skip_bucket(reason) is not None
+                or any(pattern in reason for pattern in patterns))
+    return all(explained(reason) for reason in reasons)
 
 
 #: ``(nodeid, reason)`` for skips that a real-PyTorch session must not have.
@@ -986,6 +1066,13 @@ def _snapshot_selected_files(config):
         arguments = [_absolute_selection(argument, invocation) for argument in config.args]
         if not arguments:
             return
+        # pytest bypasses ignore-collection hooks for explicit file/node
+        # arguments; directory walks obey the active process-mode filter.
+        explicit_files = {
+            Path(argument.partition("::")[0]).resolve()
+            for argument in arguments
+            if Path(argument.partition("::")[0]).is_file()
+        }
         # A `test_*.py` that is a script is not part of the selection as a test
         # file -- the refusal above is what keeps it out of collection -- so it
         # must not be reported as a file the session proved nothing about
@@ -1004,7 +1091,8 @@ def _snapshot_selected_files(config):
                 ],
             )
             if not _refuses_collection(REPO_ROOT / path)
-            and not (_torch_mode_is_active() and path in NATIVE_MODE_PATHS)
+            if ((REPO_ROOT / path).resolve() in explicit_files
+                or pytest_ignore_collect(REPO_ROOT / path, config) is not True)
         )
     except Exception:
         pass
@@ -1155,6 +1243,9 @@ def classify_skip_reason_bucket(reason):
     pressure the bucket exists to apply.
     """
     text = str(reason or "").lower()
+    registered = _registered_skip_bucket(text)
+    if registered is not None:
+        return registered
     for bucket in _SKIP_BUCKET_ORDER[:-1]:
         if any(pattern in text for pattern in _SKIP_BUCKET_PATTERNS.get(bucket, ())):
             return bucket
@@ -1234,6 +1325,16 @@ def pytest_sessionfinish(session, exitstatus):
     """
     _flush_worker_state_leaks(session)
     _publish_xdist_collected_files(session.config, _COLLECTED_FILES)
+    if _xdist_worker_id(session.config) is not None:
+        session.config.workeroutput[_XDIST_COLLECTION_KEY] = {
+            "selected": sorted(_SELECTED_FILES),
+            "collected": sorted(_COLLECTED_FILES),
+        }
+        # A worker collected the whole selection but was assigned only part
+        # of it. Auditing unassigned files here creates false empty findings,
+        # and xdist does not propagate a worker-only exitstatus=1 as a failed
+        # case. The controller owns the gate after merging all worker facts.
+        return
     required_accelerator = _required_accelerator_executions()
     if required_accelerator and _ACCELERATOR_EXECUTED < required_accelerator:
         session.exitstatus = 1
@@ -1285,14 +1386,6 @@ def _publish_xdist_collected_files(config, collected_files):
     workeroutput = getattr(config, "workeroutput", None)
     if workeroutput is not None:
         workeroutput[_XDIST_COLLECTED_FILES_KEY] = sorted(collected_files)
-
-
-@pytest.hookimpl(optionalhook=True)
-def pytest_testnodedown(node, error):
-    """Merge collection facts before the controller evaluates session policy."""
-    workeroutput = getattr(node, "workeroutput", None) or {}
-    collected_files = workeroutput.get(_XDIST_COLLECTED_FILES_KEY, ())
-    _COLLECTED_FILES.update(collected_files)
 
 
 def _install_api_coverage(session):

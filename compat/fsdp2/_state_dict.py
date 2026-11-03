@@ -92,11 +92,18 @@ def _gather_optimizer_state_dict(module, state_dict, rank_metadata):
                 local_values = []
                 for name, entry in named_entries:
                     value = state_dict["state"].get(name, {}).get(field)
+                    dim0 = getattr(state, "torch_dim0_per_parameter", False)
+                    # Public DTensor metadata is global; checkpoint gathering
+                    # needs the actual padded local storage on each rank.
+                    shape = (tuple(jt.Var.shape.__get__(entry.shard, type(entry.shard)))
+                             if dim0 else tuple(entry.shard.shape))
                     if value is None:
                         spec = next(metadata[current][field]
                                     for current, _ in named_entries if field in metadata.get(current, {}))
-                        value = common._zeros_like_shape(entry.shard, entry.shard.shape, dtype=spec[1]).stop_grad()
-                    if tuple(value.shape) != tuple(entry.shard.shape):
+                        value = common._zeros_like_shape(entry.shard, shape, dtype=spec[1]).stop_grad()
+                    if dim0 and vars(type(value)).get("_fsdp_global_shape_view", False):
+                        value = jt.Var(value)
+                    if tuple(value.shape) != shape:
                         raise ValueError("FSDP optimizer state is not parameter-shaped: {}.{}".format(name, field))
                     local_values.append(common._flatten_var(value))
                 if getattr(state, "true_fsdp_flat", False):
@@ -157,10 +164,12 @@ def _load_full_state_dict(module, state_dict, strict=True, *, already_replicated
     if missing and not strict:
         state_dict = dict(_get_full_state_dict(module), **state_dict)
     consumed = set()
+    dim0_loaded = False
     for fsdp_module in shard._iter_fsdp_modules(module, recurse=True):
         state = getattr(fsdp_module, "_fsdp_state", None)
         if state is None or not getattr(state, "true_fsdp_initialized", False):
             continue
+        dim0_loaded |= bool(getattr(state, "torch_dim0_per_parameter", False))
         full_values = []
         for entry in state.true_fsdp_params:
             # State-dict hooks define the portable namespace. Resolve the key
@@ -228,4 +237,8 @@ def _load_full_state_dict(module, state_dict, strict=True, *, already_replicated
         if tuple(value.shape) != tuple(current[key].shape):
             raise RuntimeError("FSDP checkpoint buffer shape mismatch: {}".format(key))
         current[key].assign(value)
+    # Materialize all per-parameter checkpoint broadcasts in a common order
+    # before the next optimizer-state collective can begin on another rank.
+    if dim0_loaded:
+        jt.sync_all()
     return consumed

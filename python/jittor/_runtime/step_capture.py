@@ -387,6 +387,10 @@ def refuse(reason):
     """The step being captured cannot be replayed; it keeps running as written."""
     if _ACTIVE is not None and _ACTIVE.refused is None:
         _ACTIVE.refused = reason
+        # Once refused, this call continues as an ordinary step. Imperative
+        # stores may sync its graph before returning; retaining that graph
+        # would recompute it against parameters those stores already changed.
+        jt.flags.keep_graph = 0
 
 
 class _Capture:
@@ -765,6 +769,7 @@ class StepCapture:
         return None
 
     # -- replay --------------------------------------------------------
+    @jt.no_grad()
     def _write_back(self, cap):
         with jt.no_grad():
             for _, old, new, inplace in cap.state:

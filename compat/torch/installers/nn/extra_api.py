@@ -84,6 +84,10 @@ class _DistributedDataParallel(_DataParallel):
 
     require_backward_grad_sync = True
 
+    def register_comm_hook(self, state, hook):
+        from ...ddp_comm_hooks import reject_registration
+        return reject_registration(state, hook)
+
     def __init__(self, module, *args, **kwargs):
         super().__init__(module, *args, **kwargs)
         state = _types_nn_private.SimpleNamespace(

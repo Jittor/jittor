@@ -993,6 +993,7 @@ include tools/run_accelerate_gate.py
 include tools/run_diffusers_gate.py
 include tools/run_peft_gate.py
 include tools/run_test_suite.py
+include tools/run_trl_gate.py
 prune compat
 prune build
 prune dist

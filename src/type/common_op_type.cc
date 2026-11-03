@@ -67,7 +67,9 @@ unordered_map<string,string> common_op_type_cuda_map = {
     // sign-aware pow (see type/pow_compute.h): CUDA ::pow returns NaN for a
     // negative base even with an integer exponent (transformers' tanh-GELU
     // does pow(x, 3.0)); route through jittor::_signed_pow to match std::pow.
-    {"pow", "(($1)jittor::_signed_pow(($2),($4)))"},
+    // Weak scalar literals may be emitted as C++ double/int despite a FP32
+    // tensor result. Select FP32 opmath before overload resolution.
+    {"pow", "@if(@strcmp($1,float32)==0,(($1)jittor::_signed_pow(float($2),float($4))),(($1)jittor::_signed_pow(($2),($4))))"},
     {"maximum", "jittor::_max($1($2), $1($4))"},
     {"minimum", "jittor::_min($1($2), $1($4))"},
     // See the CPU table.

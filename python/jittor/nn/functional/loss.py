@@ -54,6 +54,30 @@ def _legacy_reduction(reduction, size_average, reduce):
     return "mean" if size_average else "sum"
 
 
+class _CrossEntropyRowsVJP(jt.Function):
+    """Fused first derivative with a connected analytic higher derivative."""
+
+    def _run_call(self, x, safe, statistics, scale):
+        self.x, self.scale = (jt.ops.reshape(v, v.shape) for v in (x, scale))
+        self.safe = safe
+        return super()._run_call(x, safe, statistics, scale)
+
+    def execute(self, x, safe, statistics, scale):
+        from jittor.backends.cuda.kernels.nn.softmax_cuda import _cross_entropy_row_gradient
+        return _cross_entropy_row_gradient(x, statistics, safe, scale)
+
+    def grad(self, direction):
+        with jt.flag_scope(amp_reg=jt.amp_flags.disabled):
+            probability = jt.nn.softmax(self.x, dim=-1)
+            product = probability * direction
+            dx = self.scale.broadcast(self.x, [1]) * (
+                product - probability * product.sum([1], keepdims=True))
+            picked = direction.reindex([self.x.shape[0]], ["i0", "@e0(i0)"],
+                                       extras=[self.safe])
+            dscale = product.sum([1]) - picked
+            return dx, None, None, dscale
+
+
 class _CrossEntropyRows(jt.Function):
     """Per-row ``(logsumexp(x) - x[target]) * weight`` with a closed-form backward.
 
@@ -73,6 +97,10 @@ class _CrossEntropyRows(jt.Function):
     gradient is handed back in the input's dtype.
     """
 
+    def _run_call(self, x, target, target_weight):
+        self.original_x = jt.ops.reshape(x, x.shape)
+        return super()._run_call(x, target, target_weight)
+
     def execute(self, x, target, target_weight):
         rows = x.shape[0]
         # Torch inputs can arrive as a materialized host target beside a
@@ -90,31 +118,58 @@ class _CrossEntropyRows(jt.Function):
                              in ("float16", "bfloat16") else None)
         if self.narrow_dtype is not None:
             x = x.float32()
-        # An ignored or out-of-range target still has to index somewhere; its
-        # weight is 0, so which column it reads does not matter.
-        safe = jt.ternary(target_weight != 0, target, jt.zeros_like(target))
-        # Spelled exactly as the composite did: under the Torch frontend
-        # `x.max(1)` is torch's (values, indices) pair.
-        top = x.max([1], keepdims=True)
-        lse = ((x - top).exp().sum([1], keepdims=True).log() + top).reshape((rows,))
-        picked = x.reindex([rows], ["i0", "@e0(i0)"], extras=[safe])
-        self.saved = (x, safe, lse, target_weight)
-        return (lse - picked) * target_weight
+        # Statistics and weighted row losses use the widened input dtype on
+        # every backend, including the composite reduction fallback.
+        with jt.flag_scope(amp_reg=jt.amp_flags.disabled):
+            # An ignored or out-of-range target still has to index somewhere; its
+            # weight is 0, so which column it reads does not matter.
+            safe = jt.ternary(target_weight != 0, target, jt.zeros_like(target))
+            # Spelled exactly as the composite did: under the Torch frontend
+            # `x.max(1)` is torch's (values, indices) pair.
+            backend = getattr(_CrossEntropyRows, "_lse_backend", None)
+            if backend is None:
+                from jittor.backends.cuda.kernels.nn import softmax_cuda as backend
+                _CrossEntropyRows._lse_backend = backend
+            statistics = backend._cross_entropy_row_statistics(x)
+            lse = (None if statistics is not None else backend._cross_entropy_lse(x))
+            if statistics is not None:
+                picked = x.reindex([rows], ["i0", "@e0(i0)"], extras=[safe])
+                self.saved_statistics = (safe, statistics, target_weight)
+                return (statistics[:, 1] - (picked - statistics[:, 0])) * target_weight
+            self.saved_statistics = None
+            if lse is None:
+                top = x.max([1], keepdims=True)
+                lse = ((x - top).exp().sum([1], keepdims=True).log() + top).reshape((rows,))
+            picked = x.reindex([rows], ["i0", "@e0(i0)"], extras=[safe])
+            self.saved = (x, safe, lse, target_weight)
+            return (lse - picked) * target_weight
 
     def grad(self, dloss):
         # Not cleared: a retain_graph backward may call grad() again.
+        if self.saved_statistics is not None:
+            safe, statistics, target_weight = self.saved_statistics
+            with jt.flag_scope(amp_reg=jt.amp_flags.disabled):
+                x = self.original_x.float32()
+                dx = _CrossEntropyRowsVJP()(x, safe, statistics, dloss * target_weight)
+                return dx.cast(self.narrow_dtype) if self.narrow_dtype is not None else dx, None, None
         x, safe, lse, target_weight = self.saved
-        scale = dloss * target_weight
-        # `scale` at each row's target column and 0 elsewhere, built by the
-        # reindex itself -- a one-hot from `index(1) == target` would
-        # materialise an [N, C] index grid first.
-        at_target = scale.reindex(x.shape, ["i0"], overflow_value=0,
-                                  overflow_conditions=["i1 != @e0(i0)"],
-                                  extras=[safe])
-        dx = (x - lse.broadcast(x, [1])).exp() * scale.broadcast(x, [1]) - at_target
-        if self.narrow_dtype is not None:
-            dx = dx.cast(self.narrow_dtype)
-        return dx, None, None
+        # Forward widens half inputs before computing the saved statistics.
+        # The taped Function restores its forward AMP register in backward;
+        # allowing that register to narrow these operations loses FP32 opmath
+        # even after Torch's autocast region has exited. Only the final cast
+        # below may return the derivative to a narrow input's dtype.
+        with jt.flag_scope(amp_reg=jt.amp_flags.disabled):
+            scale = dloss * target_weight
+            # `scale` at each row's target column and 0 elsewhere, built by the
+            # reindex itself -- a one-hot from `index(1) == target` would
+            # materialise an [N, C] index grid first.
+            at_target = scale.reindex(x.shape, ["i0"], overflow_value=0,
+                                      overflow_conditions=["i1 != @e0(i0)"],
+                                      extras=[safe])
+            dx = (x - lse.broadcast(x, [1])).exp() * scale.broadcast(x, [1]) - at_target
+            if self.narrow_dtype is not None:
+                dx = dx.cast(self.narrow_dtype)
+            return dx, None, None
 
 
 def cross_entropy_loss(output, target, weight=None, ignore_index=None,reduction='mean'):

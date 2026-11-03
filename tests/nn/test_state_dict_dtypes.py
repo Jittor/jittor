@@ -16,12 +16,15 @@ side ``load_state_dict`` then either refuses the entry or keeps the float copy.
 conversions have to describe the same tensors.
 """
 
+import json
+from pathlib import Path
 import unittest
 
 import numpy as np
 
 import jittor as jt
 from _helpers import torch_runtime
+from _helpers.child_process import run_python_child
 
 
 def _torch_name_is_importable():
@@ -42,9 +45,32 @@ def _torch_name_is_importable():
     return torch_runtime.installed_spec("torch") is not None
 
 
-def _as_numpy(t):
-    """The returned object is a torch tensor or the shim's stand-in."""
-    return t.numpy() if hasattr(t, "numpy") else np.asarray(t)
+def _torch_conversion_report(big=None):
+    # Importing a deployed Torch shim changes process-wide graph policy. Keep
+    # that intentional conversion in its own interpreter so native tests retain
+    # their original frontend, while exercising the actual installed owner.
+    script = """
+import json, runpy, sys
+import numpy as np
+import jittor as jt
+model = runpy.run_path(sys.argv[1])["_Model"]()
+if sys.argv[2] != "None":
+    model.register_buffer("big", jt.array(np.array([int(sys.argv[2])], dtype="int64"), dtype="int64"))
+state = model.state_dict(to="torch")
+print("STATE_DICT_CONVERSION " + json.dumps({
+    "dtypes": {k: str(v.dtype).replace("torch.", "") for k, v in state.items()},
+    "values": {k: v.numpy().tolist() for k, v in state.items()},
+}))
+"""
+    result = run_python_child(
+        ["-c", script, str(Path(__file__).resolve()), str(big)],
+        without_torch_mode=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    reports = [line[len("STATE_DICT_CONVERSION "):]
+               for line in result.stdout.splitlines() if line.startswith("STATE_DICT_CONVERSION ")]
+    assert len(reports) == 1, result.stdout
+    return json.loads(reports[0])
 
 
 class _Model(jt.Module):
@@ -79,19 +105,13 @@ class TestStateDictDtypes(unittest.TestCase):
 
     def test_torch_conversion_keeps_every_dtype(self):
         """The one that used to force float32 on all four entries."""
-        got = self.model.state_dict(to="torch")
-        # `torch` here is whatever the process has installed under that name --
-        # the shim in a Jittor dev environment, real torch elsewhere. Either way
-        # the dtype it reports has to be the dtype it was handed, so the
-        # assertion does not depend on which one it is.
-        self.assertEqual({k: str(v.dtype).replace("torch.", "")
-                          for k, v in got.items()}, self.expected)
+        self.assertEqual(_torch_conversion_report()["dtypes"], self.expected)
 
     def test_values_survive_the_conversion(self):
-        got = self.model.state_dict(to="torch")
-        np.testing.assert_array_equal(_as_numpy(got["steps"]), [7])
-        np.testing.assert_array_equal(_as_numpy(got["mask"]), [True, False])
-        np.testing.assert_array_equal(_as_numpy(got["wide"]), [1, 2])
+        got = _torch_conversion_report()["values"]
+        np.testing.assert_array_equal(got["steps"], [7])
+        np.testing.assert_array_equal(got["mask"], [True, False])
+        np.testing.assert_array_equal(got["wide"], [1, 2])
 
     def test_a_value_that_float32_cannot_hold(self):
         """int64 is not just a label here.
@@ -101,11 +121,8 @@ class TestStateDictDtypes(unittest.TestCase):
         different number, not merely a different dtype.
         """
         big = 2 ** 53 + 1
-        model = _Model()
-        model.register_buffer(
-            "big", jt.array(np.array([big], dtype="int64"), dtype="int64"))
-        got = model.state_dict(to="torch")
-        self.assertEqual(int(_as_numpy(got["big"])[0]), big)
+        got = _torch_conversion_report(big)["values"]
+        self.assertEqual(got["big"][0], big)
 
 
 if __name__ == "__main__":

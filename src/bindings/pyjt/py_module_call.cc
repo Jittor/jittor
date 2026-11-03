@@ -48,6 +48,7 @@ auto make_cublas_matmul = op_constructor<VarPtr, Var*, Var*, bool, bool, bool>("
 PyObject* rms_inference_impl = nullptr;
 PyObject* rms_source_fn = nullptr;
 bool acl_possible = true;
+PyObject* rms_precise_name = nullptr;
 PyObject* rms_training_name = nullptr;
 PyObject* rms_inference_name = nullptr;
 // `lt_linear_cuda`'s header and its (cached) source function, and the sources
@@ -564,6 +565,10 @@ PyObject* activation_module(PyTypeObject* type, PyObject* dict, PyObject* x) {
     if (kernel_op_registered(relu ? "nn.relu" : "nn.silu")) return nullptr;
     static auto make_unary_mc = op_constructor<VarPtr, Var*, NanoString>("unary");
     if (relu) return wrap_like_input(x, make_unary_mc(v, ns_relu));
+    // The functional SiLU owner widens half inputs for sigmoid and product,
+    // then rounds once. Keep that precision boundary on warmed nested calls:
+    // a narrow sigmoid here differs from the first call through Python.
+    if (v->dtype() == ns_float16 || v->dtype() == ns_bfloat16) return nullptr;
     // `x.sigmoid()` is the native unary unless a kernel is registered for it.
     if (!v->dtype().is_float() || kernel_op_registered("tensor.sigmoid")) return nullptr;
     PyObjHolder gate(wrap_like_input(x, make_unary_mc(v, ns_sigmoid)));
@@ -830,12 +835,18 @@ PyObject* rms_norm_inference(PyObject* module, PyObject* dict, PyObject* x) {
     double epsilon = PyFloat_AsDouble(eps);
     if (PyErr_Occurred()) { PyErr_Clear(); return nullptr; }
     PyObjHolder call_args(PyTuple_Pack(3, x, weight, eps));
+    // The Python owner gives its shared precise arithmetic first refusal.
+    // A warmed module call must preserve that same dispatch priority.
+    PyObjHolder precise(kernel_select(rms_precise_name, call_args.obj, nullptr));
+    if (!precise.obj || precise.obj != Py_None) return nullptr;
     PyObjHolder training(kernel_select(rms_training_name, call_args.obj, nullptr));
     if (!training.obj || training.obj != Py_None) return nullptr;
     PyObjHolder inference(kernel_select(rms_inference_name, call_args.obj, nullptr));
     if (!inference.obj || inference.obj != rms_inference_impl) return nullptr;
     Var* a = GET_RAW_PTR(VarHolder, x)->var;
     Var* gamma = GET_RAW_PTR(VarHolder, weight)->var;
+    // Match the frontend owner's mixed-dtype admission before bypassing it.
+    if (a->dtype() != gamma->dtype()) return nullptr;
     int64 hidden = a->shape[a->shape.size() - 1];
     int64 threads = 32;
     while (threads < std::min<int64>(hidden, 1024)) threads *= 2;
@@ -1081,6 +1092,7 @@ void module_call_bind(PyObject* module_cls_, PyObject* dispatch_call_,
     PyObject* acl = dispatch_parts && PyDict_Check(dispatch_parts)
         ? PyDict_GetItemString(dispatch_parts, "acl_possible") : nullptr;
     acl_possible = !acl || PyObject_IsTrue(acl) != 0;
+    if (!rms_precise_name) rms_precise_name = PyUnicode_InternFromString("nn.rms_norm.precise");
     if (!rms_training_name) rms_training_name = PyUnicode_InternFromString("nn.rms_norm.training");
     if (!rms_inference_name) rms_inference_name = PyUnicode_InternFromString("nn.rms_norm.inference");
     rms_sources.clear();

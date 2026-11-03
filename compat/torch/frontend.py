@@ -357,16 +357,26 @@ def make_parameter_type(backend, tensor_type):
     })
 
 
-#: Attributes a runtime notes on a tensor -- the weight version a convolution
-#: has seen, see `jittor/nn/backends/cudnn.py` -- which a pickle or a copy of
-#: the tensor must not carry.
-_RUNTIME_CACHES = ("_jittor_conv_filter",)
+#: Runtime metadata tied to the original allocation must not cross a pickle or
+#: deepcopy. In particular a copied .data tensor owns independent storage;
+#: keeping its old writeback owner would detach later differentiable writes.
+_RUNTIME_CACHES = ("_jittor_conv_filter", "_torch_data_owner", "_torch_data_path")
 
 
 def _python_state(value):
     state = value.__dict__.copy()
     for name in _RUNTIME_CACHES:
         state.pop(name, None)
+    metadata = state.get("_torch_object_state")
+    if metadata is not None:
+        # Current holders store the same alias provenance in object state;
+        # older pickles use the individual attributes removed above. Clone
+        # only that metadata so the original .data alias remains live.
+        from copy import copy
+        metadata = copy(metadata)
+        metadata.data_owner = None
+        metadata.data_path = ()
+        state["_torch_object_state"] = metadata
     return state
 
 

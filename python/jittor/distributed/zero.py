@@ -262,10 +262,17 @@ class ZeroRedundancyOptimizer(Optimizer):
                     values = saved[field]
                     if not isinstance(values, (list, tuple)) or len(values) != len(target[field]):
                         raise ValueError("native ZeRO checkpoint owned state length mismatch")
-                    for value, template in zip(values, target[field]):
-                        if isinstance(template, jt.Var):
-                            if (not isinstance(value, jt.Var) or tuple(value.shape) != tuple(template.shape)
-                                    or dtype_name(value.dtype) != dtype_name(template.dtype)):
+                    for index, (value, template) in enumerate(zip(values, target[field])):
+                        optional_sgd = field == "values" and self._optimizer_class is SGD
+                        flags = saved.get("momentum_initialized")
+                        if (optional_sgd and value is None
+                                and isinstance(flags, (list, tuple)) and len(flags) == len(values)
+                                and flags[index] is False):
+                            continue
+                        if isinstance(template, jt.Var) or optional_sgd:
+                            reference = template if isinstance(template, jt.Var) else target["params"][index]
+                            if (not isinstance(value, jt.Var) or tuple(value.shape) != tuple(reference.shape)
+                                    or dtype_name(value.dtype) != dtype_name(reference.dtype)):
                                 raise ValueError("native ZeRO checkpoint owned state shape/dtype mismatch")
                         elif type(value) is not type(template):
                             raise ValueError("native ZeRO checkpoint state flag type mismatch")
