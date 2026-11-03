@@ -279,16 +279,37 @@ def gauss_(tensor, *args, **kwargs):
     return _native_initializer('gauss_', tensor, *args, **kwargs)
 
 
-def xavier_uniform_(tensor, *args, **kwargs):
-    return _native_initializer('xavier_uniform_', tensor, *args, **kwargs)
+def xavier_uniform_(tensor, gain=1.0, generator=None):
+    if generator is None:
+        return _native_initializer('xavier_uniform_', tensor, gain)
+    # Native xavier_uniform_ has no generator parameter. Its distribution is
+    # uniform(-bound, bound) with bound = gain * sqrt(6 / (fan_in + fan_out));
+    # route the draw through uniform_, which advances the shim Generator.
+    if _not_var(tensor):
+        return tensor
+    import math
+    from jittor.init._fan import _calculate_fan_in_and_fan_out
+    fan_in, fan_out = _calculate_fan_in_and_fan_out(tuple(tensor.shape))
+    bound = gain * math.sqrt(6.0 / (fan_in + fan_out))
+    return uniform_(tensor, -bound, bound, generator)
 
 
 def xavier_gauss_(tensor, *args, **kwargs):
     return _native_initializer('xavier_gauss_', tensor, *args, **kwargs)
 
 
-def xavier_normal_(tensor, *args, **kwargs):
-    return _native_initializer('xavier_normal_', tensor, *args, **kwargs)
+def xavier_normal_(tensor, gain=1.0, generator=None):
+    if generator is None:
+        # jittor's xavier_normal implementation is named xavier_gauss_; native
+        # jittor.init has no xavier_normal_ symbol.
+        return _native_initializer('xavier_gauss_', tensor, gain)
+    if _not_var(tensor):
+        return tensor
+    import math
+    from jittor.init._fan import _calculate_fan_in_and_fan_out
+    fan_in, fan_out = _calculate_fan_in_and_fan_out(tuple(tensor.shape))
+    std = gain * math.sqrt(2.0 / (fan_in + fan_out))
+    return normal_(tensor, 0.0, std, generator)
 
 
 def relu_invariant_gauss_(tensor, *args, **kwargs):
@@ -342,15 +363,14 @@ def _install_init_aliases(registry=None):
     for _nm in ("kaiming_normal_", "kaiming_uniform_", "gauss_",
                 "xavier_uniform_", "xavier_gauss_", "xavier_normal_",
                 "relu_invariant_gauss_", "invariant_uniform_"):
-        if hasattr(_init, _nm):
+        # xavier_normal_ has no native jittor symbol (jittor names the same
+        # distribution xavier_gauss_); install the Torch-style implementation
+        # unconditionally instead of aliasing it to the native function, which
+        # cannot accept a generator.
+        if hasattr(_init, _nm) or _nm == "xavier_normal_":
             setattr(_init, _nm, _INITIALIZER_APIS[_nm])
             if hasattr(_tensor_type, _nm):
                 setattr(_tensor_type, _nm, getattr(_init, _nm))
-    # keep jittor's good xavier/kaiming; add torch-name aliases for the rest
-    aliases = {"xavier_normal_": "xavier_gauss_"}
-    for tname, jname in aliases.items():
-        if not hasattr(_init, tname) and hasattr(_init, jname):
-            setattr(_init, tname, getattr(_init, jname))
     # initializers torch has that jittor lacks -- best-effort implementations
     # jittor.init's own `_calculate_fan_in_and_fan_out` takes a *shape*; torch's
     # takes the tensor. Handed a tensor, the native one indexes it and returns

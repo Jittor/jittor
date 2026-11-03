@@ -248,3 +248,53 @@ def test_kaiming_uniform_accepts_an_explicit_generator(rng_device):
     # fan_in = 4, gain = sqrt(2 / (1 + a^2)), bound = sqrt(3) * gain / sqrt(4)
     assert np.all(np.abs(first) <= 0.5 + 1e-6)
     assert np.any(first != 0)
+
+
+@pytest.mark.parametrize("name", ["xavier_uniform_", "xavier_normal_"])
+@pytest.mark.parametrize("dtype", [torch.float16, torch.float32, torch.float64])
+def test_xavier_initialization_consumes_private_generator(name, dtype, rng_device):
+    torch.manual_seed(181)
+    generator = torch.Generator(device=rng_device).manual_seed((1 << 63) + 29)
+    tensor = torch.zeros((5, 7), dtype=dtype, device=rng_device, requires_grad=True)
+    global_before = _states()
+    state = generator.get_state()
+    initialize = getattr(torch.nn.init, name)
+    result = initialize(tensor, generator=generator)
+    assert result is tensor and result.dtype == dtype and result.device.type == rng_device
+    values = _array(result)
+    assert not np.array_equal(_array(state), _array(generator.get_state()))
+    _same_states(_states(), global_before)
+    generator.set_state(state)
+    np.testing.assert_array_equal(
+        _array(initialize(torch.zeros_like(tensor), generator=generator)), values)
+    assert tensor.is_leaf and tensor.requires_grad
+    (tensor * 2).sum().backward()
+    np.testing.assert_array_equal(_array(tensor.grad), np.full((5, 7), 2.))
+
+
+@pytest.mark.parametrize("gain", [0.5, 1.0, 2.0])
+def test_xavier_uniform_generator_respects_gain_bound(gain, rng_device):
+    import math
+    tensor = torch.zeros((4, 9), dtype=torch.float64, device=rng_device)
+    generator = torch.Generator(device=rng_device).manual_seed(7)
+    torch.nn.init.xavier_uniform_(tensor, gain=gain, generator=generator)
+    bound = gain * math.sqrt(6.0 / (9 + 4))
+    values = _array(tensor)
+    assert np.abs(values).max() <= bound
+    assert np.abs(values).max() > 0
+
+
+def test_xavier_generator_rejects_low_rank_atomically(rng_device):
+    generator = torch.Generator(device=rng_device).manual_seed(5)
+    state = generator.get_state()
+    tensor = torch.zeros(7, dtype=torch.float64, device=rng_device)
+    with pytest.raises(ValueError):
+        torch.nn.init.xavier_uniform_(tensor, generator=generator)
+    np.testing.assert_array_equal(_array(tensor), np.zeros(7))
+    np.testing.assert_array_equal(_array(generator.get_state()), _array(state))
+
+
+def test_xavier_normal_default_path_is_finite(rng_device):
+    tensor = torch.zeros((3, 5), dtype=torch.float64, device=rng_device)
+    torch.nn.init.xavier_normal_(tensor)
+    assert np.isfinite(_array(tensor)).all()
