@@ -296,6 +296,14 @@ def _install_cuda(g, registry=None):
         import multiprocessing as _mp
         _modules["torch.multiprocessing"] = _mp
     g.multiprocessing = _modules["torch.multiprocessing"]
+    # PyTorch's torch.multiprocessing.spawn reports worker failures with these
+    # exceptions; the stdlib spawn module Jittor aliases does not define them.
+    # transformers.test_tensor_parallel_mixin imports them at module load, and
+    # causal-LM test modules import that mixin.
+    import multiprocessing.spawn as _mp_spawn
+    for _spawn_exception in ("ProcessRaisedException", "ProcessExitedException"):
+        if not hasattr(_mp_spawn, _spawn_exception):
+            setattr(_mp_spawn, _spawn_exception, type(_spawn_exception, (RuntimeError,), {}))
     _mp_reductions = _types.ModuleType("torch.multiprocessing.reductions")
     _mp_reductions.reduce_tensor = _api_mp_reductions_reduce_tensor
     _mp_reductions.rebuild_cuda_tensor = _api_mp_reductions_rebuild_cuda_tensor
