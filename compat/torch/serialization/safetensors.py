@@ -182,8 +182,10 @@ def _load_bytes(data):
     return out
 
 
-def _load_file(filename, device="cpu"):
-    with _PySafeOpen(filename, device=device) as safe:
+def _load_file(filename, device="cpu", *, backend="mmap"):
+    # ``safetensors.torch.load_model`` calls ``load_file`` with ``backend=``;
+    # accepting only ``device`` raised TypeError before any weight loaded.
+    with _PySafeOpen(filename, device=device, backend=backend) as safe:
         return {key: safe.get_tensor(key) for key in safe.keys()}
 
 
