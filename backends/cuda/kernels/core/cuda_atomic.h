@@ -5,8 +5,11 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #pragma once
+#ifdef IS_ROCM
+#include <hip/hip_runtime.h>
+#include <hip/hip_fp16.h>
+#else
 #include <cuda_fp16.h>
-#ifndef IS_ROCM
 #include <cuda_bf16.h>
 #endif
 #include "core/common.h"

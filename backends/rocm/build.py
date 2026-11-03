@@ -23,6 +23,11 @@ class LibraryBuild:
 
 
 _LIBRARIES = {
+    "hiprand": (
+        "hiprand/hiprand_kernel.h", (),
+        ("hiprand/hiprand_random_op.h", "hiprand/hiprand_random_op.cc",
+         "hiprand/random.h", "hiprand/random.cu"),
+    ),
     "hipblas": (
         "hipblas/hipblas.h", ("hipblas",),
         ("hipblas/hipblas_matmul_op.h", "hipblas/hipblas_matmul_op.cc", "hipblas/gemm_layout.h",

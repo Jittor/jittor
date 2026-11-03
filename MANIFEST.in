@@ -303,6 +303,10 @@ include backends/rocm/libraries/hipblas/hipblas_matmul_op.cc
 include backends/rocm/libraries/hipblas/hipblas_matmul_op.h
 include backends/rocm/libraries/hipblas/hipblas_wrapper.cc
 include backends/rocm/libraries/hipblas/hipblas_wrapper.h
+include backends/rocm/libraries/hiprand/hiprand_random_op.cc
+include backends/rocm/libraries/hiprand/hiprand_random_op.h
+include backends/rocm/libraries/hiprand/random.cu
+include backends/rocm/libraries/hiprand/random.h
 include backends/rocm/libraries/rocprim/rocprim_cumsum_op.cc
 include backends/rocm/libraries/rocprim/rocprim_cumsum_op.h
 include backends/rocm/libraries/rocprim/scan.cu

@@ -23,7 +23,7 @@ def install_libraries(context):
     """Build native sources without CUDA aliases or source transformation."""
     root = Path(__file__).resolve().parents[1]
     specs = tuple(library_build(context.config.resources["rocm_home"], root, name)
-                  for name in ("hipblas", "rocprim"))
+                  for name in ("hipblas", "rocprim", "hiprand"))
     modules = []
     for spec in specs:
         module = context.compile_custom_ops(

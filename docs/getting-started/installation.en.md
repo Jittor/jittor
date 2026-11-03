@@ -46,6 +46,35 @@ PYCPU
 
 The result should be `[2. 4. 6.]`. The first run may compile code. If it fails, check the compiler, headers or dependencies named in the error. For further installation checks, run `python -m jittor.selftest`.
 
+## Configure ROCm / HIP
+
+Install the device driver and the complete HIP development toolchain, including `hipcc`, the HIP
+runtime, the hipBLAS and rocPRIM headers and libraries, and the hipRAND device headers. The Python package does not install these
+system dependencies. For Hygon DTK, set `ROCM_HOME` to the SDK root, rather than its `hip/` subdirectory.
+
+```bash
+export JT_BACKEND=rocm
+export ROCM_HOME="${ROCM_PATH:-/opt/rocm}"
+export JITTOR_HOME="${STATE:-../jittor-lab/_state/getting-started}/rocm"
+DISABLE_MULTIPROCESSING=1 python - <<'PYHIP'
+import jittor as jt
+assert jt.compiler.has_rocm
+with jt.runtime.scope(use_cuda=1, backend_fallback="error"):
+    result = (jt.array([1.0, 2.0, 3.0]) * 2).sum()
+    result.sync()
+    assert result.location() == "device"
+    assert result.item() == 12.0
+    print("HIP device computation passed")
+PYHIP
+```
+
+`use_cuda` is the runtime's general accelerator switch; `JT_BACKEND=rocm` selects the actual backend.
+This check forbids CPU fallback. Configuration reports a missing HIP runtime development library as
+`libamdhip64.so`; missing hipBLAS or rocPRIM dependencies also fail explicitly. MIOpen and RCCL
+providers remain unimplemented. This check does not establish convolution-library, multi-device
+communication, or arbitrary-model support; see [platform support](../guides/hardware/platform-support.en.md)
+for the validation scope.
+
 ## Add Torch compatibility when needed
 
 `jittor-compat` is a separate distribution. For this checkout, install both projects from the repository root in a new dedicated environment:
