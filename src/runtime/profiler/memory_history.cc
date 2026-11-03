@@ -233,12 +233,11 @@ vector<int64> memory_history_segments(int device) {
             for (CachingBlock* b = head; b; b = b->next) {
                 Block blk{(int64)(uintptr_t)b->memory_ptr, (int64)b->size, 0, b->occupied ? 1 : 0, 0};
                 if (b->occupied) {
+                    // The block keeps its request; the history knows the stack
+                    // of what it saw allocated.
+                    blk.requested = b->requested;
                     auto found = s.blocks.find((uint64)blk.address);
-                    blk.requested = blk.size;
-                    if (found != s.blocks.end()) {
-                        blk.requested = found->second.requested;
-                        blk.stack = found->second.stack;
-                    }
+                    if (found != s.blocks.end()) blk.stack = found->second.stack;
                     seg.allocated += blk.size;
                     seg.requested += blk.requested;
                 }
