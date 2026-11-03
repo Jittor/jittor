@@ -1910,6 +1910,14 @@ def _api_add(self, o, alpha=1):
     return _ip(self, self + o * alpha, preserve_storage=True)
 
 
+def _api_addcmul(self, tensor1, tensor2, *, value=1):
+    return _ip(self, self + value * tensor1 * tensor2, preserve_storage=True)
+
+
+def _api_lerp(self, end, weight):
+    return _ip(self, self + weight * (end - self), preserve_storage=True)
+
+
 def _api_sub(self, o, alpha=1):
     return _ip(self, self - o * alpha, preserve_storage=True)
 
