@@ -14,7 +14,7 @@ def _install_autograd(g, registry=None):
     autograd.enable_grad = g.enable_grad
     autograd.Variable = g.Tensor
     g.Tensor._execution_engine = api._Engine()
-    for name in ("grad", "backward", "set_detect_anomaly", "detect_anomaly"):
+    for name in ("grad", "backward", "gradcheck", "set_detect_anomaly", "detect_anomaly"):
         setattr(autograd, name, getattr(api, name))
     g.autograd = autograd
     autograd.__path__ = getattr(autograd, "__path__", [])
@@ -33,6 +33,13 @@ def _install_autograd(g, registry=None):
                           "Native Var/Op graph; backward uses existing leaf accumulation and "
                           "grad uses native optional gradients. Batched gradients and advanced "
                           "engine options retain the existing compatibility limitations.")
+    register_api_bindings(autograd, "torch.autograd", ("gradcheck",),
+                          Fidelity.APPROXIMATE,
+                          "Real floating-point CPU inputs with central finite differences and "
+                          "analytic Jacobians from torch.autograd.grad; tensor or tuple-of-tensor "
+                          "outputs; default eps/atol/rtol and raise_exception. Complex inputs, "
+                          "forward-mode AD, batched gradients, sparse outputs and masked checks "
+                          "raise NotImplementedError.")
     register_api_bindings(autograd, "torch.autograd", ("set_detect_anomaly", "detect_anomaly"),
                           Fidelity.UNIMPLEMENTED, "Annotation-only scope; no anomaly detection.")
     register_api_bindings(profiler, "torch.autograd.profiler",
