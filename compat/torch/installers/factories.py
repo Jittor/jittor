@@ -681,6 +681,51 @@ def _bernoulli_adapter(original, *args, generator=None, **kwargs):
     return original(*args, **kwargs) if drawn is None else drawn
 
 
+def _randint_adapter(original, *args, generator=None, **kwargs):
+    """Accept torch.randint's (low[, high], size) spellings.
+
+    torch accepts ``randint(high, size)``, ``randint(low, high, size)`` and the
+    keyword spellings ``high=``/``low=``/``size=`` with size positional or a
+    keyword; jittor's sampler is ``randint(low, high, shape)``.  The generic
+    constructor adapter routes a keyword ``size`` into the first positional
+    slot, which jittor reads as ``low`` and fails with ``high - low`` TypeError.
+    torchmetrics' classification fixtures and transformers' DETR determinism
+    test use exactly that keyword form.
+    """
+    size = kwargs.pop("size", None)
+    low = kwargs.pop("low", None)
+    high = kwargs.pop("high", None)
+    positional = list(args)
+    if size is None and len(positional) >= 2:
+        size = positional.pop()
+    if high is None:
+        if len(positional) == 1:
+            high = positional.pop()
+        elif len(positional) == 2:
+            low, high = positional[0], positional[1]
+            positional.clear()
+        elif len(positional) > 2:
+            raise TypeError("randint() takes at most 3 positional arguments")
+    elif positional:
+        if len(positional) == 1 and low is None:
+            low = positional.pop()
+        else:
+            raise TypeError("randint() got multiple values for an argument")
+    if high is None:
+        raise TypeError("randint() missing required argument 'high'")
+    if size is None:
+        raise TypeError("randint() missing required argument 'size'")
+    if low is None:
+        low = 0
+
+    def _scalar(value):
+        return value.item() if isinstance(value, jt.Var) else int(value)
+
+    shape = tuple(int(dim) for dim in size) if isinstance(size, (tuple, list)) else (int(size),)
+    return _random_adapter(original, _scalar(low), _scalar(high), shape,
+                           generator=generator, _name="randint", **kwargs)
+
+
 def _random_adapter(original, *args, generator=None, _name=None, **kwargs):
     if _name == "bernoulli":
         return _bernoulli_adapter(original, *args, generator=generator, **kwargs)
@@ -697,6 +742,12 @@ def _install_random_and_linspace(g):
     for name in ("randn", "rand", "randint", "randperm", "normal",
                  "randn_like", "rand_like", "multinomial", "bernoulli"):
         original = _factory_implementation(getattr(g, name, None))
-        if original is not None:
+        if original is None:
+            continue
+        if name == "randint":
+            # torch's size=/high= spellings need their own normalization before
+            # the constructor adapter sees a shape in the low slot.
+            _publish_factory(g, name, functools.partial(_randint_adapter, original))
+        else:
             _publish_factory(g, name,
                              functools.partial(_random_adapter, original, _name=name))
