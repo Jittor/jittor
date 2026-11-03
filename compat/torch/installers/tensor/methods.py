@@ -353,6 +353,27 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     if not hasattr(Var, "is_signed"):
         Var.is_signed = _api_is_signed
 
+    # `jt.array(...)` returns a native jittor_core.Var, which is not an
+    # instance of the shim's Tensor proxy; predicates installed only on the
+    # proxy are invisible there. torchmetrics reads `preds.is_floating_point`
+    # on native Vars, so mirror the dtype predicates onto jittor's Var class.
+    _native_var = None
+    try:
+        from jittor import jittor_core as _jittor_core
+        _native_var = getattr(_jittor_core, "Var", None)
+    except Exception:
+        _native_var = None
+    if _native_var is None or _native_var is Var:
+        _native_var = getattr(g, "Var", None)
+    if _native_var is not None and _native_var is not Var:
+        for _pred_name, _pred in (
+            ("is_floating_point", _api_is_floating_point),
+            ("is_complex", _api_is_complex),
+            ("is_signed", _api_is_signed),
+        ):
+            if not hasattr(_native_var, _pred_name):
+                setattr(_native_var, _pred_name, _pred)
+
     # torch storage introspection: peft/safetensors call tensor.storage()
     # .data_ptr() / .untyped_storage().nbytes() to detect shared/tied weights.
     # jittor has no exposed storage object; expose identity-based stand-ins so
