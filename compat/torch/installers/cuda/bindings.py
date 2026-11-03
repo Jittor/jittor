@@ -299,8 +299,12 @@ def _install_cuda(g, registry=None):
     # PyTorch's torch.multiprocessing.spawn reports worker failures with these
     # exceptions; the stdlib spawn module Jittor aliases does not define them.
     # transformers.test_tensor_parallel_mixin imports them at module load, and
-    # causal-LM test modules import that mixin.
-    import multiprocessing.spawn as _mp_spawn
+    # causal-LM test modules import that mixin. The alias can be imported under
+    # either name, and an import performed before this one would create a
+    # second module object, so publish one patched module under both names.
+    import importlib as _importlib
+    _mp_spawn = _importlib.import_module("multiprocessing.spawn")
+    _modules["torch.multiprocessing.spawn"] = _mp_spawn
     for _spawn_exception in ("ProcessRaisedException", "ProcessExitedException"):
         if not hasattr(_mp_spawn, _spawn_exception):
             setattr(_mp_spawn, _spawn_exception, type(_spawn_exception, (RuntimeError,), {}))
