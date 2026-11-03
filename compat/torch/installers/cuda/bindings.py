@@ -323,6 +323,13 @@ def _install_cuda(g, registry=None):
     if "torch._C" not in _modules:
         c_mod = _types.ModuleType("torch._C")
         c_mod._TensorMeta = type(getattr(g, "Tensor", jt.Var))
+        # TorchScript/ONNX symbolic functions annotate their arguments and
+        # return values with these C++ types. Several transformers models
+        # define such annotations at class-creation time (for example
+        # sew_d.modeling_sew_d.XDropout.symbolic), so the names must resolve
+        # even though Jittor has no TorchScript or ONNX graph exporter.
+        c_mod.Graph = type("Graph", (), {})
+        c_mod.Value = type("Value", (), {})
         c_mod._get_tracing_state = _api_c_mod__get_tracing_state
         c_mod._log_api_usage_once = _api_c_mod__log_api_usage_once
         c_mod._cuda_clearCublasWorkspaces = _api_c_mod__cuda_clearCublasWorkspaces
