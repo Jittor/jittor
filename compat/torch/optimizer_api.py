@@ -22,6 +22,41 @@ from jittor.optim.algorithms.adam import adam_update
 
 
 def _init(self, *a, **k):
+    params = a[0] if a else k.get('params')
+    defaults = k.get('defaults')
+    if len(a) >= 2 and isinstance(a[1], Mapping):
+        defaults = a[1]
+    if isinstance(defaults, Mapping):
+        # Torch's Optimizer.__init__(params, defaults): third-party optimizers
+        # (schedulefree and friends) subclass this and rely on their custom
+        # defaults being copied into every parameter group and on state[p]
+        # being a mutable mapping. Jittor's native signature is (params, lr),
+        # so installing it directly would drop the custom keys.
+        values = dict(defaults)
+        groups = list(params)
+        if not groups:
+            raise ValueError("optimizer got an empty parameter list")
+        if not isinstance(groups[0], Mapping):
+            groups = [{'params': groups}]
+        self.defaults = values
+        self.param_groups = []
+        self.lr = values.get('lr')
+        self.param_sync_iter = 10000
+        self.n_step = 0
+        self._grad_map = {}
+        self._absent_grads = set()
+        object.__setattr__(self, '_Optimizer__zero_grad', True)
+        object.__setattr__(self, '_Optimizer__input_params', [])
+        for group in groups:
+            group = dict(group)
+            group['params'] = list(group['params'])
+            for key, value in values.items():
+                group.setdefault(key, value)
+            self.param_groups.append(group)
+        reg = get_tensor_state(jt).active_optimizers
+        reg[:] = [r for r in reg if r() is not None and r() is not self]
+        reg.append(_weakref.ref(self))
+        return
     _context = get_install_context(jt)
     _orig_init = _context.state["optimizer_native_api"]['_orig_init']
     _orig_init(self, *a, **k)

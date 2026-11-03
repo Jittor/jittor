@@ -108,6 +108,7 @@ class _ParamState(dict):
 class _OptState:
     def __init__(self, opt):
         self._opt = opt
+        self._external = {}
     def _find(self, param):
         for pg in self._opt.param_groups:
             for i, p in enumerate(pg.get("params", [])):
@@ -144,6 +145,9 @@ class _OptState:
         if pg is None:
             raise KeyError(param)
         kind = _torch_optimizer_kind(self._opt)
+        if kind not in _TORCH_TO_NATIVE_STATE and kind != "lbfgs":
+            self._external.setdefault(id(param), {})[key] = value
+            return
         if key == "step":
             if isinstance(value, jt.Var):
                 value = value.item()
@@ -174,8 +178,13 @@ class _OptState:
         pg, i = self._find(param)
         if pg is None:
             return default
-        steps = _param_steps(pg)
         kind = _torch_optimizer_kind(self._opt)
+        if kind not in _TORCH_TO_NATIVE_STATE and kind != "lbfgs":
+            # A third-party optimizer defines its own state layout; keep the
+            # Torch contract (state[p] is a mutable mapping) without guessing
+            # a native buffer name.
+            return self._external.setdefault(id(param), {})
+        steps = _param_steps(pg)
         if kind == "adagrad":
             return _ParamState(self, param, {
                 "sum": pg["values"][i], "step": steps[i]})
