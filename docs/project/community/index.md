@@ -8,9 +8,11 @@
 使用问题可在[论坛](https://discuss.jittor.org/)讨论；可复现缺陷请提交
 [GitHub issue](https://github.com/Jittor/jittor/issues)，注明版本、环境与最小示例。
 
+<!-- sphinx-only
 ```{toctree}
 :hidden:
 :maxdepth: 1
 
 projects
 ```
+-->

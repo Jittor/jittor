@@ -13,6 +13,8 @@ decision rules see
 This page fills in just one thing the root guide does not expand on: **how the documentation itself is changed,
 built, and checked.**
 
+Write section navigation as ordinary Markdown links so pages remain readable on GitHub. Put site-only `toctree` directives inside HTML comments beginning with `<!-- sphinx-only` and ending with `-->`; `conf.py` expands them during the site build, while GitHub keeps them hidden. Do not publish navigation options as visible code blocks.
+
 ## Rules for the documentation tree
 
 The Chinese MyST Markdown under `docs/` is the default Sphinx source. Every page also has

@@ -14,6 +14,7 @@ Start with platform support and known limitations, then configure your device. T
 - [Ascend 310P: Configuration, Capability Boundaries, and Verification](hardware/ascend-310p.en.md)
 - [Iluvatar Corex: Discovery and Follow-up Verification](hardware/corex.en.md)
 
+<!-- sphinx-only
 ```{toctree}
 :maxdepth: 1
 :hidden:
@@ -24,6 +25,7 @@ hardware/ascend-910b.en
 hardware/ascend-310p.en
 hardware/corex.en
 ```
+-->
 
 ## Distributed training
 
@@ -32,6 +34,7 @@ New native scripts start with single-machine training through `jtrun`. The MPI g
 - [Native Single-Machine Multi-GPU Training](distributed/distributed-training.en.md)
 - [Distributed Training with MPI](distributed/distributed-mpi.en.md)
 
+<!-- sphinx-only
 ```{toctree}
 :maxdepth: 1
 :hidden:
@@ -39,6 +42,7 @@ New native scripts start with single-machine training through `jtrun`. The MPI g
 distributed/distributed-training.en
 distributed/distributed-mpi.en
 ```
+-->
 
 ## Debugging and integration
 
@@ -47,6 +51,7 @@ Use debugging for failures and unexpected values. The C++ console guide covers e
 - [Debugging Jittor Programs](debugging.en.md)
 - [C++ Console Interface](cpp-console.en.md)
 
+<!-- sphinx-only
 ```{toctree}
 :maxdepth: 1
 :hidden:
@@ -54,6 +59,7 @@ Use debugging for failures and unexpected values. The C++ console guide covers e
 debugging.en
 cpp-console.en
 ```
+-->
 
 ## Measure and optimize
 
@@ -68,6 +74,7 @@ Choose the state to shard: optimizer state with ZeRO, linear-layer features with
 - [Native FSDP storage, backward and checkpoint ownership](distributed/native-fsdp.en.md)
 - [Native sharded checkpoint files](distributed/native-sharded-checkpoint.en.md)
 
+<!-- sphinx-only
 ```{toctree}
 :maxdepth: 1
 :hidden:
@@ -77,14 +84,17 @@ distributed/native-tensor-parallel.en
 distributed/native-fsdp.en
 distributed/native-sharded-checkpoint.en
 ```
+-->
 
 ## Mixed-precision training
 
 Start with [mixed precision](mixed-precision.en.md) for autocast and gradient scaling, then check the device and operator limits.
 
+<!-- sphinx-only
 ```{toctree}
 :hidden:
 :maxdepth: 1
 
 mixed-precision.en
 ```
+-->

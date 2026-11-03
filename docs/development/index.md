@@ -11,6 +11,7 @@
 - [查找源码归属](source-architecture.md)
 - [选择并运行测试](testing/test-system.md)
 
+<!-- sphinx-only
 ```{toctree}
 :hidden:
 :maxdepth: 1
@@ -19,6 +20,7 @@ repository-layout
 source-architecture
 testing/test-system
 ```
+-->
 
 ## 修改核心或算子
 
@@ -30,6 +32,7 @@ testing/test-system
 - [ACL 发射器、属性与描述符](backends/acl-backend-contracts.md)
 - [图回放与训练步捕获](runtime/static-graph-replay.md)
 
+<!-- sphinx-only
 ```{toctree}
 :hidden:
 :maxdepth: 1
@@ -42,6 +45,7 @@ backends/backend-build
 backends/acl-backend-contracts
 runtime/static-graph-replay
 ```
+-->
 
 ## 修改 Torch 兼容或下游集成
 
@@ -49,6 +53,7 @@ runtime/static-graph-replay
 - [安装事务与回滚](compatibility/install-transactions.md)
 - [下游支持范围与验收证据](testing/downstream-scorecards.md)
 
+<!-- sphinx-only
 ```{toctree}
 :hidden:
 :maxdepth: 1
@@ -57,6 +62,7 @@ compatibility/frontend-boundaries
 compatibility/install-transactions
 testing/downstream-scorecards
 ```
+-->
 
 ## 验证并排查问题
 
@@ -68,6 +74,7 @@ testing/downstream-scorecards
 - [记录 NPU 复现和性能证据](testing/npu-validation-templates.md)
 - [并行编译故障调查](known-issues/parallel-compiler-segfault.md)
 
+<!-- sphinx-only
 ```{toctree}
 :hidden:
 :maxdepth: 1
@@ -80,6 +87,7 @@ runtime/async-error-diagnostics
 testing/npu-validation-templates
 known-issues/parallel-compiler-segfault
 ```
+-->
 
 ## 记录结果与缺陷
 
@@ -92,6 +100,7 @@ known-issues/parallel-compiler-segfault
 
 修改兼容前端或文档时阅读这些专题；运行模型请先看用户兼容指南。
 
+<!-- sphinx-only
 ```{toctree}
 :hidden:
 :maxdepth: 1
@@ -101,7 +110,7 @@ compatibility/torch-architecture
 compatibility/torch-lowering
 compatibility/principles
 ```
-
+-->
 - [贡献流程](contributing.md)
 - [共享计算图与前端分层](compatibility/torch-architecture.md)
 - [调用下沉到核心](compatibility/torch-lowering.md)

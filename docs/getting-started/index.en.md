@@ -27,9 +27,11 @@ python -m notebook --ServerApp.root_dir="$STATE"
 
 Complete installation before running the cells. The tutorial directory lists prerequisites and device requirements; chapters that download datasets need network access. Generated notebooks and your outputs stay in `STATE`.
 
+<!-- sphinx-only
 ```{toctree}
 :hidden:
 
 installation.en
 quickstart.en
 ```
+-->

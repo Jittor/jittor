@@ -13,6 +13,7 @@
 
 参与代码或文档维护，请先看 [贡献指南](../development/contributing.md)。
 
+<!-- sphinx-only
 ```{toctree}
 :hidden:
 :maxdepth: 1
@@ -21,3 +22,4 @@ releases/index
 community/index
 research/index
 ```
+-->

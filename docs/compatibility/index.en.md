@@ -10,12 +10,14 @@ For existing PyTorch code, `jittor-compat` provides Torch-style tensors, models 
 
 These interfaces are not an unconditional replacement for every PyTorch version, model and device. Importing a library does not establish that its training, distributed or accelerator paths have been validated.
 
+<!-- sphinx-only
 ```{toctree}
 :hidden:
 
 torch.en
 torch-shim.en
 ```
+-->
 
 ## Change the compatibility implementation
 

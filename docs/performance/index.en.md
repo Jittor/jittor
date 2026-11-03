@@ -13,6 +13,7 @@ Work in this order: establish a comparable baseline, identify the bottleneck, ma
 
 Profiling adds measurement overhead. After making a change, rerun the baseline without diagnostic instrumentation. Keep compilation caches separate from tests, and store raw measurements outside the source tree. Record conclusions in the relevant GitHub issue or PR; library-specific benchmarks and support scopes belong to [JittorEcosystem](https://github.com/JittorEcosystem).
 
+<!-- sphinx-only
 ```{toctree}
 :maxdepth: 1
 :hidden:
@@ -22,3 +23,4 @@ benchmarking.en
 profiling.en
 memory-optimization.en
 ```
+-->

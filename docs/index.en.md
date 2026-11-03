@@ -35,6 +35,7 @@ from historical validation. [Known limitations](guides/known-limitations.en.md) 
 current usage boundaries. Historical measurements apply only to their recorded commit
 and environment; they do not establish acceptance of the current revision.
 
+<!-- sphinx-only
 ```{toctree}
 :hidden:
 :maxdepth: 2
@@ -45,7 +46,9 @@ guides/index.en
 compatibility/index.en
 performance/index.en
 ```
+-->
 
+<!-- sphinx-only
 ```{toctree}
 :hidden:
 :maxdepth: 2
@@ -56,6 +59,7 @@ notes/index.en
 development/index.en
 project/index.en
 ```
+-->
 
 [Source](https://github.com/Jittor/jittor/tree/2.0-refactor) ·
 [Report an issue](https://github.com/Jittor/jittor/issues) ·

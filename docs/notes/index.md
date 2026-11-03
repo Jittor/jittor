@@ -14,6 +14,7 @@
 - [复数 dtype](numerics/complex-dtype.md)
 - [数值契约](numerics/numerics-contract.md)
 
+<!-- sphinx-only
 ```{toctree}
 :maxdepth: 1
 :hidden:
@@ -23,6 +24,7 @@ numerics/float32-precision-policy
 numerics/complex-dtype
 numerics/numerics-contract
 ```
+-->
 
 ## 运行时机制
 
@@ -32,6 +34,7 @@ numerics/numerics-contract
 - [运行时内省](runtime/runtime-introspection.md)
 - [CUDA 库的 plan 缓存](runtime/cuda-library-plan-caches.md)
 
+<!-- sphinx-only
 ```{toctree}
 :maxdepth: 1
 :hidden:
@@ -40,3 +43,4 @@ runtime/pipelined-execution
 runtime/runtime-introspection
 runtime/cuda-library-plan-caches
 ```
+-->

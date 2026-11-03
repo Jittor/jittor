@@ -14,6 +14,7 @@
 - [昇腾 310P：配置、能力边界与验证](hardware/ascend-310p.md)
 - [天数 Corex：探测与后续验证](hardware/corex.md)
 
+<!-- sphinx-only
 ```{toctree}
 :maxdepth: 1
 :hidden:
@@ -24,6 +25,7 @@ hardware/ascend-910b
 hardware/ascend-310p
 hardware/corex
 ```
+-->
 
 ## 分布式训练
 
@@ -32,6 +34,7 @@ hardware/corex
 - [原生单机多卡训练](distributed/distributed-training.md)
 - [用 MPI 做分布式训练](distributed/distributed-mpi.md)
 
+<!-- sphinx-only
 ```{toctree}
 :maxdepth: 1
 :hidden:
@@ -39,6 +42,7 @@ hardware/corex
 distributed/distributed-training
 distributed/distributed-mpi
 ```
+-->
 
 ## 调试与嵌入
 
@@ -47,6 +51,7 @@ distributed/distributed-mpi
 - [调试 Jittor 程序](debugging.md)
 - [C++ 控制台接口](cpp-console.md)
 
+<!-- sphinx-only
 ```{toctree}
 :maxdepth: 1
 :hidden:
@@ -54,6 +59,7 @@ distributed/distributed-mpi
 debugging
 cpp-console
 ```
+-->
 
 ## 测量与优化
 
@@ -68,6 +74,7 @@ cpp-console
 - [原生 FSDP 的存储、反向与 checkpoint 归属](distributed/native-fsdp.md)
 - [原生分片 checkpoint 文件](distributed/native-sharded-checkpoint.md)
 
+<!-- sphinx-only
 ```{toctree}
 :maxdepth: 1
 :hidden:
@@ -77,14 +84,17 @@ distributed/native-tensor-parallel
 distributed/native-fsdp
 distributed/native-sharded-checkpoint
 ```
+-->
 
 ## 混合精度训练
 
 从[混合精度](mixed-precision.md)了解 autocast 和梯度缩放，再核对设备与算子限制。
 
+<!-- sphinx-only
 ```{toctree}
 :hidden:
 :maxdepth: 1
 
 mixed-precision
 ```
+-->

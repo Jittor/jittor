@@ -34,6 +34,7 @@ Jittor 是一个基于即时编译的深度学习框架。你可以使用原生 
 [已知限制](guides/known-limitations.md) 列出使用时需要注意的边界。
 历史测量只适用于原记录的提交与环境，不代表当前版本已经重新验收。
 
+<!-- sphinx-only
 ```{toctree}
 :hidden:
 :maxdepth: 2
@@ -44,7 +45,9 @@ guides/index
 compatibility/index
 performance/index
 ```
+-->
 
+<!-- sphinx-only
 ```{toctree}
 :hidden:
 :maxdepth: 2
@@ -55,7 +58,9 @@ notes/index
 development/index
 project/index
 ```
+-->
 
+<!-- sphinx-only
 ```{toctree}
 :hidden:
 :maxdepth: 1
@@ -63,6 +68,7 @@ project/index
 
 index.en
 ```
+-->
 
 [源码](https://github.com/Jittor/jittor/tree/2.0-refactor) ·
 [问题反馈](https://github.com/Jittor/jittor/issues) ·

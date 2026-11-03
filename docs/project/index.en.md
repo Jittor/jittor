@@ -14,6 +14,7 @@ and the [User guides](../guides/index.en.md).
 
 Before changing code or documentation, read the [contribution guide](../development/contributing.en.md).
 
+<!-- sphinx-only
 ```{toctree}
 :hidden:
 :maxdepth: 1
@@ -22,3 +23,4 @@ releases/index.en
 community/index.en
 research/index.en
 ```
+-->

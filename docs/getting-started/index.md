@@ -27,9 +27,11 @@ python -m notebook --ServerApp.root_dir="$STATE"
 
 先完成安装，再运行这些单元格。教程目录注明了前置知识与设备要求；包含数据集下载的章节需要网络。生成的 notebook 和运行结果写在 `STATE` 中，便于保留自己的练习。
 
+<!-- sphinx-only
 ```{toctree}
 :hidden:
 
 installation
 quickstart
 ```
+-->

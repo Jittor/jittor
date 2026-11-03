@@ -10,12 +10,14 @@
 
 这些接口不是所有 PyTorch 版本、模型与设备的无条件替代。成功导入一个库，也不代表它的训练、分布式或加速器路径已通过验证。
 
+<!-- sphinx-only
 ```{toctree}
 :hidden:
 
 torch
 torch-shim
 ```
+-->
 
 ## 修改兼容实现
 

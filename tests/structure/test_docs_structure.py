@@ -116,6 +116,24 @@ class TestDocsStructure(unittest.TestCase):
         self.assertIn('"inventory.json"', adapter)
         self.assertNotIn("eval-rst", adapter)
 
+    def test_site_navigation_is_hidden_on_github_and_expanded_for_sphinx(self):
+        import re
+
+        tree = ast.parse((self.docs_root / "conf.py").read_text())
+        handler = next(node for node in tree.body
+                       if isinstance(node, ast.FunctionDef) and node.name == "_expand_sphinx_only")
+        namespace = {"re": re}
+        exec(compile(ast.Module(body=[handler], type_ignores=[]), "conf.py", "exec"), namespace)
+        for fence in ("```", ":::"):
+            directive = fence + "{toctree}\n:hidden:\n\nchild\n" + fence
+            source = ["# Title\n<!-- ordinary comment -->\n<!-- sphinx-only\n" + directive + "\n-->\n"]
+            namespace["_expand_sphinx_only"](None, "index", source)
+            self.assertEqual(source[0], "# Title\n<!-- ordinary comment -->\n" + directive + "\n")
+        for page in self.docs_root.rglob("*.md"):
+            text = page.read_text(encoding="utf-8")
+            visible = re.sub(r"<!--.*?-->", "", text, flags=re.S)
+            self.assertNotIn("{toctree}", visible, str(page))
+
     def test_asv_config_preserves_repository_and_external_run_paths(self):
         config_path = self.repo_root / "benchmarks" / "asv" / "asv.conf.json"
         config = json.loads(config_path.read_text(encoding="utf-8"))

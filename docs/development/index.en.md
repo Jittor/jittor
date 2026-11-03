@@ -12,6 +12,7 @@ The topic pages define implementation contracts, not a checklist that every cont
 - [Find the source owner](source-architecture.en.md)
 - [Choose and run tests](testing/test-system.en.md)
 
+<!-- sphinx-only
 ```{toctree}
 :hidden:
 :maxdepth: 1
@@ -20,6 +21,7 @@ repository-layout.en
 source-architecture.en
 testing/test-system.en
 ```
+-->
 
 ## Change core or operators
 
@@ -31,6 +33,7 @@ testing/test-system.en
 - [ACL launchers, attributes and descriptors](backends/acl-backend-contracts.en.md)
 - [Graph replay and training-step capture](runtime/static-graph-replay.en.md)
 
+<!-- sphinx-only
 ```{toctree}
 :hidden:
 :maxdepth: 1
@@ -43,6 +46,7 @@ backends/backend-build.en
 backends/acl-backend-contracts.en
 runtime/static-graph-replay.en
 ```
+-->
 
 ## Change Torch compatibility or downstream integrations
 
@@ -50,6 +54,7 @@ runtime/static-graph-replay.en
 - [Install transactions and rollback](compatibility/install-transactions.en.md)
 - [Downstream scope and acceptance evidence](testing/downstream-scorecards.en.md)
 
+<!-- sphinx-only
 ```{toctree}
 :hidden:
 :maxdepth: 1
@@ -58,6 +63,7 @@ compatibility/frontend-boundaries.en
 compatibility/install-transactions.en
 testing/downstream-scorecards.en
 ```
+-->
 
 ## Validate and diagnose
 
@@ -69,6 +75,7 @@ testing/downstream-scorecards.en
 - [Record NPU reproduction and performance evidence](testing/npu-validation-templates.en.md)
 - [Parallel compiler failure investigation](known-issues/parallel-compiler-segfault.en.md)
 
+<!-- sphinx-only
 ```{toctree}
 :hidden:
 :maxdepth: 1
@@ -81,6 +88,7 @@ runtime/async-error-diagnostics.en
 testing/npu-validation-templates.en
 known-issues/parallel-compiler-segfault.en
 ```
+-->
 
 ## Report a result or defect
 
@@ -93,6 +101,7 @@ owns pending device acceptance. This guide keeps reusable mechanisms, not a seco
 
 Use these pages when changing the compatibility frontend or documentation, rather than when running a model.
 
+<!-- sphinx-only
 ```{toctree}
 :hidden:
 :maxdepth: 1
@@ -102,7 +111,7 @@ compatibility/torch-architecture.en
 compatibility/torch-lowering.en
 compatibility/principles.en
 ```
-
+-->
 - [Contribution workflow](contributing.en.md)
 - [Shared graph and frontend layers](compatibility/torch-architecture.en.md)
 - [Lowering calls to the core](compatibility/torch-lowering.en.md)

@@ -13,6 +13,7 @@
 
 性能分析工具本身有开销。改动后，关闭诊断工具重新测量基线。编译缓存与单测分开，原始数据保存在源码树之外。结论写入相关 GitHub issue 或 PR；库专属测速和支持范围由 [JittorEcosystem](https://github.com/JittorEcosystem) 维护。
 
+<!-- sphinx-only
 ```{toctree}
 :maxdepth: 1
 :hidden:
@@ -22,3 +23,4 @@ benchmarking
 profiling
 memory-optimization
 ```
+-->

@@ -14,6 +14,7 @@ Read devices and placement before mixing backends. For low precision, distinguis
 - [Complex dtypes](numerics/complex-dtype.en.md)
 - [Numerics contract](numerics/numerics-contract.en.md)
 
+<!-- sphinx-only
 ```{toctree}
 :maxdepth: 1
 :hidden:
@@ -23,6 +24,7 @@ numerics/float32-precision-policy.en
 numerics/complex-dtype.en
 numerics/numerics-contract.en
 ```
+-->
 
 ## Runtime behavior
 
@@ -32,6 +34,7 @@ Understand when work executes, inspect runtime state without changing it, and le
 - [Runtime introspection](runtime/runtime-introspection.en.md)
 - [CUDA library plan caches](runtime/cuda-library-plan-caches.en.md)
 
+<!-- sphinx-only
 ```{toctree}
 :maxdepth: 1
 :hidden:
@@ -40,3 +43,4 @@ runtime/pipelined-execution.en
 runtime/runtime-introspection.en
 runtime/cuda-library-plan-caches.en
 ```
+-->

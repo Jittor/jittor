@@ -27,6 +27,7 @@ jittor.distributions
 jittor.loss3d
 :::
 
+<!-- sphinx-only
 :::{toctree}
 :hidden:
 :maxdepth: 2
@@ -44,3 +45,4 @@ linalg.en
 distributions.en
 loss3d.en
 :::
+-->
