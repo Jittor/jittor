@@ -498,8 +498,12 @@ class _TypedTensorMeta(type):
             else:
                 v = jt.zeros(tuple(int(a) for a in args), dtype=cls._jdtype)
             result = v.cast(cls._jdtype)
+            # torch.FloatTensor()/IntTensor()/... return a leaf with
+            # requires_grad=False. Jittor's cast result is a non-leaf that
+            # reports requires_grad=True, so the leaf-only public setter raises;
+            # stop_grad() is the native way to clear the flag on a fresh result.
             if not tensor_input:
-                result.requires_grad_(False)
+                result = result.stop_grad()
             return result
 
 
