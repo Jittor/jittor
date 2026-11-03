@@ -215,7 +215,7 @@ def test_npu_fixture_does_not_bypass_policy_before_native_import(
 def test_standalone_runners_use_native_scope_instead_of_log_wording():
     paths = (
         "compat/tests/torch/_ecosystem_runner.py",
-        "agent/skills/jittor-transformers-perf/scripts/benchmark_qwen3_ascend.py",
+        "benchmarks/torch_compat/benchmark_qwen3_ascend.py",
     )
     for path in paths:
         tree = ast.parse((ROOT / path).read_text())

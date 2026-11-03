@@ -16,7 +16,7 @@ import zipfile
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SCRIPTS = ROOT / "agent/skills/torch-compat-repo-runbook/scripts"
+SCRIPTS = ROOT / "tools/ecosystem"
 sys.path.insert(0, str(ROOT / "tests"))
 from _helpers.child_process import PYTHON, run_python_child  # noqa: E402
 

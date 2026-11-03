@@ -18,7 +18,8 @@ OpInfo 数据库覆盖 179 个算子的真实数值。**公开可调用面约 12
 
 ## 运行
 
-**必须用 PYTHONPATH，不要 editable 安装 core**：
+下面按源码 worktree 验证，显式选择源码并确认 `jittor.__file__`。若验证已构建的 wheel，
+使用独立安装环境、去掉源码 `PYTHONPATH`，并记录发行物对应提交：
 
 ```bash
 export PYTHONPATH=<repo>/python

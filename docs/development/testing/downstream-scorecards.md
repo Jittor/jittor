@@ -15,9 +15,22 @@
 [NPU 模板](npu-validation-templates.md)；计时细节沿用
 [基准规范](../../performance/benchmarking.md)。
 
+## 证据级别
+
+| 级别 | 证明什么 | 必需证据 |
+| --- | --- | --- |
+| L1 | 指定导入/前向入口可运行 | 实际执行；不计入数值覆盖率 |
+| L2 | 声明场景的数值一致 | 独立参考、相同权重与输入、输出与全部请求梯度 |
+| L3 | 多步训练行为 | L2 加 loss 与参数轨迹，包含冻结参数检查 |
+| L4 | 声明负载的性能 | L3 加同口径时间与进程内存测量 |
+| L5 | 声明加速设备的实际执行 | 累计证据加真实设备身份与零 fallback |
+
+所有级别都只适用于记录的版本、设备与规格；CPU 测量不能授予加速卡 L5。
+生态仓库的支持表可以使用更直观的任务状态，但必须链接到确切证据与边界。
+
 ## 上游分母
 
-入口是 [`registry_inventory.py`](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/torch-compat-repo-runbook/scripts/registry_inventory.py)，
+入口是 [`registry_inventory.py`](https://github.com/Jittor/jittor/blob/2.0-refactor/tools/ecosystem/registry_inventory.py)，
 只读 Git 跟踪的源文件，不导入 Torch 或下游库。必须是干净的 checkout，记录完整 SHA、
 remote、源码版本与注册源文件 SHA256；每次 scorecard 重新枚举，不接受手写分母。
 
@@ -34,7 +47,7 @@ remote、源码版本与注册源文件 SHA256；每次 scorecard 重新枚举�
 覆盖数；不得把不能解析的项静默丢掉。
 
 ```bash
-scripts=agent/skills/torch-compat-repo-runbook/scripts
+scripts=tools/ecosystem
 python -S "$scripts/registry_inventory.py" --repo transformers \
   --checkout "$JITTOR_LAB_ROOT/downstream-coverage/upstream/transformers" \
   --output "$JITTOR_LAB_ROOT/_state/downstream-coverage/transformers-registry.json"
@@ -48,9 +61,7 @@ python -S "$scripts/audit_coverage.py" scorecard \
 
 未传 `--evidence` 可生成**零已验分子**的完整清单，表示本次没有可接受的新证据，不能
 解释成“历史上从没跑通过”。各轴分别报告 `X / N @ upstream SHA`，不把模型数、任务数、
-方法数相加。core/broad/tail 的抽样规则按
-[适配流程](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/downstream-library-adaptation/SKILL.md) 执行；报告必须列每层
-场景数及未验证格，core 矩阵至少 L3。
+方法数相加。core 表示承诺的核心场景矩阵，broad 表示按注册表分层抽样，tail 表示长尾代表；报告必须列每层场景数、选择理由及未验证格，core 矩阵至少 L3。
 
 审计中的 `gate_cases` 记录共享模型 CASES；`dedicated_gates` 单独记录 DeepSpeed Engine
 这类专用协议入口及 nox session，不将其伪装为普通模型 case。两者只证明门禁已接入，
@@ -237,17 +248,16 @@ SCM wheel 的逐阶段严格绑定继续保留。
 
 默认仍将证据绑定当前 HEAD。审计历史报告可显式传 `--baseline <完整40位Jittor SHA>`，该 SHA 必须是本地 Git 中的真实 commit；输出记录 `baseline_policy=explicit-historical`、测量 baseline 与当前 `auditor_commit`。这只重新审计旧提交的证据，不能证明当前代码也通过。不得将旧测量中的 SHA 改成当前 HEAD；当前树的新验收须重新执行计算。
 
-现有 [`verify_repo.py`](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/torch-compat-repo-runbook/scripts/verify_repo.py)
+现有 [`verify_repo.py`](https://github.com/Jittor/jittor/blob/2.0-refactor/tools/ecosystem/verify_repo.py)
 复用生态 runner，可快速生成双方原始元数据和数值诊断。它不执行输入扰动、多步优化器
 轨迹或完整平台/进程峰值采集，因此输出明确标 `scorecard_eligible=false`；不要把单 case
 的 `passed` 自动转换为完整 scorecard 行。
 
-多步补证可运行 [`training_probe.py`](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/torch-compat-repo-runbook/scripts/training_probe.py)：
+多步补证可运行 [`training_probe.py`](https://github.com/Jittor/jittor/blob/2.0-refactor/tools/ecosystem/training_probe.py)：
 同一个已注册 builder，独立 oracle 保存完整初始权重，candidate 加载后运行相同 SGD。
 工具保留 upstream tuner 的 trainable/frozen 划分，输出每步 loss、参数/输入梯度与全部参数
 轨迹，冻结参数发生变化、缺请求梯度、非有限值、device 不一致都会直接失败。它对原始
-梯度与参数做 host 快照以固定 lazy update 的语义；没有性能结论。具体双解释器命令见
-[runbook](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/skills/torch-compat-repo-runbook/SKILL.md#多步训练证据)。
+梯度与参数做 host 快照以固定 lazy update 的语义；没有性能结论。具体双解释器命令见[工具说明](https://github.com/Jittor/jittor/blob/2.0-refactor/tools/ecosystem/README.md)。
 
 ## Issue/PR 记录模板
 

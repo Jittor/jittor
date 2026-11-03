@@ -12,11 +12,11 @@ ROOT = Path(__file__).resolve().parents[2]
 
 @pytest.fixture
 def observed(monkeypatch):
-    monkeypatch.syspath_prepend(str(ROOT / 'agent/skills/torch-compat-repo-runbook/scripts'))
+    monkeypatch.syspath_prepend(str(ROOT / 'tools/ecosystem'))
     import _runtime_platform as shared
 
     spec = importlib.util.spec_from_file_location(
-        'omni_platform_test', ROOT / 'agent/skills/vllm-omni-torch-compat/scripts/probe_h3.py')
+        'omni_platform_test', ROOT / 'tools/ecosystem/vllm_omni/probe_h3.py')
     probe = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(probe)
     monkeypatch.setattr(shared.platform, 'platform', lambda: 'observed OS')

@@ -10,10 +10,10 @@ description: 验证 jittor 优化器语义（梯度累积等价性、全局梯�
 
 ## 0. 前置：别测错一棵树
 
-- `pytest` 会用当前 worktree 的 `python/`（`tests/conftest.py` 决定，可用 `JITTOR_SOURCE_ROOT` 覆盖）。
-- **手写的 `python -c`、脚本、子进程都不会**：`jittor` 是 editable 安装，`.pth` 指向主树。
-  必须显式 `PYTHONPATH=<worktree>/python`，并且第一次验证前先自检：
-  `python -c "import jittor,os;print(os.path.dirname(jittor.__file__))"` 必须打印 worktree 路径。
+- 源码验证使用仓库测试入口，或显式 `PYTHONPATH=<worktree>/python`，核对
+  `jittor.__file__` 来自目标树；不能假设 editable 安装恰好指向该 worktree。
+- 安装产物验证使用隔离 wheel 环境，不注入源码路径；确认导入位置及 wheel 对应提交。
+  子进程按同样的来源契约独立核对。
 - 每个并行 agent 用自己的 `JITTOR_HOME` 与 `TMPDIR`；**同一个 JITTOR_HOME 下不要并发跑
   两个 jittor 进程**。纯 Python 改动加 `JITTOR_TEST_DEVICES=cpu nvcc_path=""` 快很多。
 

@@ -14,7 +14,7 @@ from _helpers.vllm_installation import installation as installed_fixture
 from _helpers.vllm_installation import contract as installation_contract
 from _helpers.vllm_installation import adapter_binding
 
-SCRIPTS = Path(__file__).resolve().parents[2] / 'agent/skills/torch-compat-repo-runbook/scripts'
+SCRIPTS = Path(__file__).resolve().parents[2] / 'tools/ecosystem'
 @pytest.fixture
 def installation(tmp_path):
     with installed_fixture(tmp_path) as value:

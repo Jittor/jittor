@@ -3,7 +3,7 @@ import copy
 import hashlib
 from pathlib import Path
 import pytest
-SCRIPTS = Path(__file__).resolve().parents[2] / 'agent/skills/torch-compat-repo-runbook/scripts'
+SCRIPTS = Path(__file__).resolve().parents[2] / 'tools/ecosystem'
 
 def sha(value):
     return hashlib.sha256(value).hexdigest()

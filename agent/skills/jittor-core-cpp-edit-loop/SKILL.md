@@ -10,14 +10,11 @@ description: 改 src/ 下 C++ 核心时的编辑—重编—验证循环。包�
 
 ## 1. 先自检：解释器导入的是哪棵树
 
-开发环境里 jittor 是 **editable 安装**，`site-packages` 的 `.pth` 指向**某一棵固定的源码树**。
-在 git worktree 里裸跑 `python -c "import jittor"` 导入的是那棵树，**不是你改的这棵**。
-一行复现（`jt.array(np.uint8([200])).item()` 这种）最容易这样跑，然后得出"已经是对的"的错误结论。
+editable 安装可能指向另一棵源码树。源码验证使用仓库测试入口，或显式设置
+`PYTHONPATH=<worktree>/python`，并核对实际导入位置。验证 wheel 时则使用隔离安装环境，
+不注入源码路径，并记录 wheel 对应的源码提交；两种口径不能混用。
 
-- `pytest` 是安全的：`tests/conftest.py` 让它跑在哪个 worktree 就导哪棵树（`JITTOR_SOURCE_ROOT` 可覆盖）。
-- **任何手写的 `python -c`、`python 脚本.py`、子进程，都必须显式加 `PYTHONPATH=<你的 worktree>/python`。**
-
-每轮验证前先跑一次这个，必须打印出你自己的目录：
+源码验证前运行下面的自检，确认打印的是目标 worktree：
 
 ```bash
 PYTHONPATH=$WT/python JITTOR_HOME=$JH TMPDIR=$TD \
@@ -27,8 +24,8 @@ PYTHONPATH=$WT/python JITTOR_HOME=$JH TMPDIR=$TD \
 ## 2. 缓存隔离是硬性的
 
 每个并发进程一套 `JITTOR_HOME` 与 `TMPDIR`。共享缓存的并发运行会互相损坏，表现是
-**在与你的改动完全无关的算子上大面积报梯度不符**，看起来像回归。同理：不要 `kill -9`
-正在编译的 Jittor 进程；真要杀，先把该进程的 `JITTOR_HOME` 整个删掉再重跑。
+**在与你的改动完全无关的算子上大面积报梯度不符**，看起来像回归。不要在编译进程仍存活时删除缓存。需要停止时先结束本任务的进程并确认所有子进程退出，
+保留错误日志，再用新的隔离缓存复现；不要清理其他任务的缓存。
 
 ## 3. 把重编从十分钟压到半分钟
 
@@ -44,8 +41,8 @@ CPU-only 是**另一个缓存分区**（路径里没有 `cu12.x` 段），核心
 `nvcc_path` 的 CUDA 轮**，两轮都绿才算完。
 
 缓存目录按 checkout 路径（`jittor_path_key`）、`cache_name` 与构建配置指纹（`cfg*`）分区，
-不再带分支名；改源码只触发 `cache_compile` 的增量重编。跑久了 `du -sh $JITTOR_HOME`，
-切过很多配置、超过 20G 就整个删掉重来。
+不再带分支名；改源码只触发 `cache_compile` 的增量重编。缓存维护遵循 [环境规则](../../manuals/environment.md)；空间不足时先确认归属与活跃进程，
+不要以固定体积阈值删除仍被使用的缓存。
 
 ## 4. 改 `src/utils` 后的第一次运行必然"失败"
 
@@ -60,16 +57,9 @@ E   SystemExit: 3
 这**不是**你的改动有问题：jittor 重新编了 `jit_utils_core` 之后要求换一个新进程
 （退出码 3，`JIT_UTILS_UPDATED_EXIT_CODE`）。**原样重跑同一条命令**即可。不要因为这个去改代码。
 
-同一类的第二种假失败：**rebase 之后 `tests/build/test_cache_dependencies.py` 会红
-一次**。它断言同一个头文件在所有缓存条目里记的哈希一致，而 rebase 会带进别人对
-`var.h` 这类头文件的改动，缓存里还留着 rebase 之前记录的条目：
-
-```
-AssertionError: 'a6e2...' != 'e6e1...' : .../src/core/var.h
-```
-
-看起来像自己的改动破坏了缓存依赖，其实 `rm -rf $JITTOR_HOME/.cache` 重跑就绿。
-**判据**：失败指向的是一个你没碰过的头文件，且你刚 rebase 过。
+同步后出现缓存依赖断言失败时，先保留完整诊断和原基线，在新的隔离缓存复现。
+新缓存通过只能帮助定位旧缓存状态；不能仅凭“刚同步过”或“失败文件没改过”判定为假失败。
+持久失败按真实回归调查，验证结论注明源码提交和缓存条件。
 
 ## 5. 静默错值的复现判据
 

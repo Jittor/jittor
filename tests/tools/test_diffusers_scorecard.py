@@ -9,7 +9,7 @@ import sys
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-SCRIPTS = ROOT / 'agent/skills/torch-compat-repo-runbook/scripts'
+SCRIPTS = ROOT / 'tools/ecosystem'
 
 
 def load(name):
@@ -126,8 +126,14 @@ def test_archived_training_program_must_match_original_hash(monkeypatch):
     return UNet2DModel(), {}
 CASES = {'diffusers_unet2d': (_diffusers_unet, ('diffusers',))}
 '''
-    monkeypatch.setattr(tool.subprocess, 'check_output',
-                        lambda cmd: builder if cmd[-1].endswith('_ecosystem_cases.py') else program)
+    def captured_git(cmd, **kwargs):
+        if 'ls-tree' in cmd:
+            return 'agent/skills/torch-compat-repo-runbook/scripts/training_probe.py\n'
+        if cmd[-1].endswith('_ecosystem_cases.py'):
+            return builder
+        assert cmd[-1].endswith('agent/skills/torch-compat-repo-runbook/scripts/training_probe.py')
+        return program
+    monkeypatch.setattr(tool.subprocess, 'check_output', captured_git)
     proof = tool.measured_source(ROOT, 'a' * 40, hashlib.sha256(program).hexdigest())
     assert proof['builder_file_sha256'] == hashlib.sha256(builder).hexdigest()
     with pytest.raises(ValueError, match='program hash'):

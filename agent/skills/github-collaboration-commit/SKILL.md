@@ -1,12 +1,12 @@
 ---
 name: github-collaboration-commit
-description: 多人或多 agent 在 Jittor 仓库协作时的同步、提交、推送与 Pull Request 流程：开工前以远端为准同步并记录 SHA、只暂存当前任务的文件、简明中文提交信息、只做快进推送、PR 描述写清验证证据与未完成项。开始或恢复一个任务、准备提交或推送、发起或更新 PR、交接未完成工作时使用。
+description: 多人或多 agent 在 Jittor 仓库协作时的同步、提交、推送与 Pull Request 流程：开工前以远端为准同步并记录 SHA、只暂存当前任务的文件、简明英文提交信息、只做快进推送、PR 描述写清验证证据与未完成项。开始或恢复一个任务、准备提交或推送、发起或更新 PR、交接未完成工作时使用。
 ---
 
 # 协作、提交与 Pull Request
 
 本 skill 把 `AGENTS.md` 的协作规则落成命令。下文 `<target>` 指本次任务的目标远端分支
-（默认分支是 `master`；以任务说明为准），`origin` 指它所在的远端。
+（由本次任务指定；不得用默认分支代替目标分支），`origin` 指它所在的远端。
 
 ## 1. 开工或恢复任务：先以远端为准同步
 
@@ -51,13 +51,13 @@ git status --short          # 只能出现本任务碰过的文件；不认识�
 git diff -- <文件...>
 git add <文件1> <文件2>      # 显式路径，不用 git add -A / git add . / git commit -a
 git diff --cached --stat
-git commit                  # 简明中文提交信息
+git commit                  # 简明英文提交信息
 git show --stat --format="" HEAD   # 确认提交里没有你没碰过的路径
 ```
 
 - 一个提交表达一个可独立理解的逻辑步骤，不混入无关格式化、缓存、日志、模型或个人环境文件。
   拆开会造出比修复前更糟的中间状态时才合并，并在提交信息里写明为什么不能拆。
-- 提交信息标题用简明中文，以动词或变更对象开头，例如「修复 NPU 归约反向的 dtype 处理」。
+- 提交信息标题按 `AGENTS.md` 使用简明英文，例如 `Fix NPU reduction gradient dtype`。
   改动大或原因不明显时在正文写：问题、原因、改动、验证（命令与 device）、限制。
 - 提交前运行仓库约定的检查：
 

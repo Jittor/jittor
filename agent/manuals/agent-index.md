@@ -1,6 +1,6 @@
 # Jittor Agent 文档索引
 
-`agent/` 只保存操作手册（`manuals/`）与可复用 skill（`skills/`），这里是两者的唯一入口。
+`agent/` 只保存操作手册（`manuals/`）与可复用 skill（`skills/`），这里是两者的导航入口。
 仓库维护命令在 `tools/`；设计与机制说明在 `docs/development/`、`docs/notes/` 和
 `docs/compatibility/`；任务状态、交接和验证证据记在
 GitHub issue 与 PR 中。原始日志、缓存和大体积产物放在 `$JITTOR_LAB_ROOT`（未设置时用
@@ -17,7 +17,7 @@ GitHub issue 与 PR 中。原始日志、缓存和大体积产物放在 `$JITTOR
 ## Manuals
 
 - [collaboration.md](collaboration.md)：协作流程、文档纪律、验证原则、JIT 并发与工作区边界。
-- [project-context.md](project-context.md)：项目是什么、当前状态、信息在哪、当前重点。
+- [project-context.md](project-context.md)：项目是什么、当前状态、信息在哪。
 - [environment.md](environment.md)：隔离运行模板、Python 与工具、各后端门禁的前置条件。
 - [known-issues.md](known-issues.md)：未关闭缺陷与已知限制的总账（条目格式与编号规则在其头部）。
 - [deferred-hardware.md](deferred-hardware.md)：代码已写、等硬件验收的事项与上机命令。
@@ -62,13 +62,14 @@ GitHub issue 与 PR 中。原始日志、缓存和大体积产物放在 `$JITTOR
 
 ### 性能
 
+- [jittor-performance-profiling](../skills/jittor-performance-profiling/SKILL.md)：选择核心与 compat 性能探针；工具在 `benchmarks/` 维护。
+
 - [jittor-core-planning-cost](../skills/jittor-core-planning-cost/SKILL.md)：核心记账改动的规划开销定价。
 - [jittor-graph-construction-cost](../skills/jittor-graph-construction-cost/SKILL.md)：Python 前端建图的主机开销。
 - [codegen-optimization-in-effect](../skills/codegen-optimization-in-effect/SKILL.md)：证明指令级 codegen 优化真的生成且有收益。
 - [cuda-elementwise-bandwidth-roofline](../skills/cuda-elementwise-bandwidth-roofline/SKILL.md)：逐元素 kernel 的带宽屋顶线与同口径对比。
 - [cuda-reduction-strategy-comparison](../skills/cuda-reduction-strategy-comparison/SKILL.md)：CUDA 归约三种策略的选择与测量。
 - [cuda-backend-choice-proof](../skills/cuda-backend-choice-proof/SKILL.md)：证明 CUDA 库算子选到了预期算法、精度或缓存键。
-- [jittor-transformers-perf](../skills/jittor-transformers-perf/SKILL.md)：Transformers 在 shim 与 PyTorch 上的 CUDA/昇腾性能分析。
 
 ### 无目标硬件时的后端验证
 
@@ -82,23 +83,7 @@ GitHub issue 与 PR 中。原始日志、缓存和大体积产物放在 `$JITTOR
 - [torch-api-cohort-promotion](../skills/torch-api-cohort-promotion/SKILL.md)：把一族 torch API 写成模块级一等对象并登记保真度。
 - [jittor-torch-diff](../skills/jittor-torch-diff/SKILL.md)：shim 与真 PyTorch 的双解释器前反向对拍与梯度调试。
 
-### 下游生态库
+### 主仓与下游的交界
 
-- [downstream-library-adaptation](../skills/downstream-library-adaptation/SKILL.md)：接入下游库的分流判据、device 阶梯与 adapter 准入。
-- [torch-compat-repo-runbook](../skills/torch-compat-repo-runbook/SKILL.md)：下游库 runbook 模板与四轴验收协议。
-- [transformers-torch-compat](../skills/transformers-torch-compat/SKILL.md)：HuggingFace Transformers。
-- [diffusers-torch-compat](../skills/diffusers-torch-compat/SKILL.md)：diffusers。
-- [peft-torch-compat](../skills/peft-torch-compat/SKILL.md)：PEFT（LoRA）。
-- [ms-swift-torch-compat](../skills/ms-swift-torch-compat/SKILL.md)：ms-swift 自带 LoRA tuner。
-- [deepspeed-torch-compat](../skills/deepspeed-torch-compat/SKILL.md)：固定上游版本的真实 Engine 训练与检查点门禁。
-- [mmcv-torch-compat](../skills/mmcv-torch-compat/SKILL.md)：mmcv（mmcv-lite 的 `mmcv.cnn`）。
-- [mmengine-torch-compat](../skills/mmengine-torch-compat/SKILL.md)：MMEngine 的模型基类。
-- [tensordict-torch-compat](../skills/tensordict-torch-compat/SKILL.md)：TensorDict。
-- [torchmetrics-torch-compat](../skills/torchmetrics-torch-compat/SKILL.md)：TorchMetrics。
-- [flash-attention-torch-compat](../skills/flash-attention-torch-compat/SKILL.md)：官方 flash-attention 与 SDPA 接线。
-- [vllm-torch-compat](../skills/vllm-torch-compat/SKILL.md)：vLLM。
-- [vllm-omni-torch-compat](../skills/vllm-omni-torch-compat/SKILL.md)：vLLM-Omni 的 MiniMax-H3 推理。
-- [verl-torch-compat](../skills/verl-torch-compat/SKILL.md)：verl（PPO、FSDP2、权重传输）。
-- [datatrove-torch-compat](../skills/datatrove-torch-compat/SKILL.md)：DataTrove CPU token dataset 与本地 JSONL 管线验证。
-- [trellis-torch-compat](../skills/trellis-torch-compat/SKILL.md)：TRELLIS.2 3D 生成 pipeline。
-- [torchquantum-readme-validation](../skills/torchquantum-readme-validation/SKILL.md)：TorchQuantum README 用法验证。
+- [downstream-library-adaptation](../skills/downstream-library-adaptation/SKILL.md)：将问题分流到核心、通用 compat 或独立集成仓库，并确定对应回归证据。
+- 各库的版本组合、adapter、官方测试、教程、基准与功能/芯片支持表由 [JittorEcosystem](https://github.com/JittorEcosystem) 对应仓库维护。主仓不再复制每个项目的运行手册。

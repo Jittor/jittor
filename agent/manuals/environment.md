@@ -9,7 +9,7 @@
 
 This document describes portable environment contracts. Host addresses, personal
 paths, device allocation, credentials, and one-off command output belong in
-local run configuration or a dated result report, not here.
+local run configuration and GitHub issue/PR evidence, not here.
 
 ## Workspace roots
 
@@ -109,7 +109,7 @@ uv run --locked python tools/run_test_suite.py --tier core --backend cuda
 ```
 
 ```bash
-python -m pip install -e .
+python -m pip install --config-settings editable_mode=compat -e .
 python -m pip install -r requirements/dev-tools.txt
 python -m jittor.selftest
 python -m nox -s structure
@@ -140,67 +140,18 @@ export JITTOR_CI_PYTHON="${JITTOR_CI_PYTHON:-$(command -v python)}"
 python -m nox -s cuda
 ```
 
-### Optional compatibility packages
+### Downstream environments
 
-The optional compatibility session uses the same pre-provisioned CUDA Python
-environment and requires TorchMetrics, mmcv-lite, MMEngine, PEFT, Safetensors,
-TensorDict, and the deployed FlashAttention adapter. It runs offline and fails
-before pytest when a required package is not discoverable.
+Use the corresponding [JittorEcosystem repository](https://github.com/JittorEcosystem)
+for its supported version combination, adapter installation and integration gates.
+Do not copy a downstream dependency list or native-extension build procedure into
+this manual. The main repository's `optional` nox session is a main-repository
+regression entry, not proof that an ecosystem library is supported in full.
 
-```bash
-export nvcc_path="$(command -v nvcc)"
-export JITTOR_CI_PYTHON="${JITTOR_CI_PYTHON:-$(command -v python)}"
-python -m nox -s optional
-```
-
-To extend the same gate to the native fused FlashAttention backend, point the
-session at an official source checkout. The session first runs the deployed
-adapter tests with math fallback enabled, then runs a separate native-required
-phase so the two contracts cannot mask or contradict each other. The native
-phase defaults to head dimension 32 and fp16; set
-`JITTOR_FLASH_ATTN_HEAD_DIMS` or `JITTOR_FLASH_ATTN_DTYPES` to expand it. These
-values are unioned with the base `32/fp16` capability rather than replacing it.
-It covers fused forward, dense/varlen/packed backward, dropout RNG replay, GQA,
-and float32 opt-in cast. A native build or load failure cannot fall back to math
-attention in that phase.
-
-```bash
-export JITTOR_FLASH_ATTN_JITTOR_SRC=/path/to/flash-attention
-python -m nox -s optional
-```
-
-#### `F.scaled_dot_product_attention` uses that extension only when it is named
-
-`compat/torch/installers/nn/attention.py` tries the native fused backend before
-falling back to jittor's composite `mul -> matmul -> softmax -> matmul`
-(`_try_flash_scaled_dot_product_attention`), but it can only load the extension
-when `JITTOR_FLASH_ATTN_JITTOR_SRC` points at a source checkout. With the
-variable unset every call misses with `no_backend` and the composite runs, which
-is easy to miss because the fallback is numerically correct and silent.
-
-The branch is instrumented, so this is readable rather than inferable:
-
-```python
-import jittor as jt
-from jittor.compat import diagnostics
-print(diagnostics.sdpa_flash_stats(jt))   # hits, misses-by-reason, backend
-```
-
-`misses={'no_backend': n}` means the extension was never configured. Set the
-three `JITTOR_FLASH_ATTN_JITTOR_SRC` / `_HEAD_DIMS` / `_DTYPES` variables to get
-the fused path; leave `JITTOR_FLASH_ATTN_JITTOR_REQUIRED` unset so shapes and
-dtypes the extension does not cover keep falling back instead of aborting, and
-leave `JITTOR_FLASH_ATTN_CAST_FLOAT32` unset unless rerouting float32 attention
-through a bf16 cast is the intended numerics.
-
-The cost of the silent fallback is model-dependent and can be most of a
-workload. On the MiniMax-H3 video VAE decoder's `(1, 32, 1797, 64)` fp16
-non-causal blocks, an attention-elided ablation priced the composite at
-3.82 s/decode against torch's fused cuDNN kernel at 0.54 s, out of a 3.48 s
-total gap; naming the source took that decode from 10.13 s to 8.30 s with
-identical output statistics. See
-[`docs/results/2026-09-14-vllm-omni-h3-enablement.md`](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-09-14-vllm-omni-h3-enablement.md)
-section 45.
+When a downstream case exposes a core or generic compat defect, reproduce it in
+an isolated main-repository environment and keep the smallest regression here.
+The downstream repository remains responsible for rerunning its real application
+on each claimed device after consuming the fix.
 
 ### Ascend NPU
 
@@ -233,8 +184,8 @@ pytest workers. Set `JITTOR_NCCL_WORLD_SIZE` to exercise more ranks and expose
 at least that many devices.
 
 ```bash
-CUDA_VISIBLE_DEVICES=0,1 python -m nox -s nccl
-JITTOR_NCCL_WORLD_SIZE=4 CUDA_VISIBLE_DEVICES=0,1,2,3 python -m nox -s nccl
+CUDA_VISIBLE_DEVICES=<allocated-two-gpus> python -m nox -s nccl
+JITTOR_NCCL_WORLD_SIZE=4 CUDA_VISIBLE_DEVICES=<allocated-four-gpus> python -m nox -s nccl
 ```
 
 An unavailable backend is an environment result. A reproduced kernel, dtype, or
@@ -268,11 +219,11 @@ python -m pip install --no-deps --no-build-isolation \
     --config-settings editable_mode=compat -e .
 
 # a clean installation
-python -m pip install dist/jittor-*.whl dist/jittor_torch-*.whl
+python -m pip install dist/jittor-*.whl dist/jittor_compat-*.whl
 ```
 
 `editable_mode=compat` writes a plain `.pth` path entry instead of a meta-path
-finder. `__editable__.jittor-*.pth` sorts before `__editable__.jittor_torch-*.pth`
+finder. `__editable__.jittor-*.pth` sorts before `__editable__.jittor_compat-*.pth`
 (`-` precedes `_`), so core's path entry is on `sys.path` before compat appends
 its placeholder and `PathFinder` finds the real package first.
 

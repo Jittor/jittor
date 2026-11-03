@@ -1,45 +1,20 @@
 ---
 name: jittor-dev-context
-description: Jittor 开发任务的上下文路由入口。用于定位当前状态、架构契约、环境规则、活跃问题和验证纪律，适用于修复、重构、对拍、后端复验和模型覆盖。
+description: Jittor 主仓的上下文入口；按任务定位核心、后端、通用 compat、环境和验证规则，并区分 JittorEcosystem 的下游责任。
 ---
 
-# Jittor → Torch-Grade 项目上下文
+# Jittor 主仓上下文入口
 
-**用途**：开始在 Jittor 仓库工作前，用本 skill 定位所需上下文，避免读取或复制一份
-不断增长的会话历史。
+开始或恢复任务时，先遵守根 [`AGENTS.md`](../../../AGENTS.md) 的同步要求，再依次读取：
 
-## 必读
+1. [协作手册](../../manuals/collaboration.md)：主仓与生态仓库的责任边界。
+2. [项目上下文](../../manuals/project-context.md)：当前源码、测试和文档入口。
+3. 与任务相关的 [环境规则](../../manuals/environment.md)、[问题总账](../../manuals/known-issues.md)、
+   [待硬件验收项](../../manuals/deferred-hardware.md) 和公开开发文档。
 
-开工前**必须阅读** [`agent/manuals/project-context.md`](../../manuals/project-context.md)。
-它是短索引，不是完整历史；manuals 与 skills 的完整目录在
-[`agent/manuals/agent-index.md`](../../manuals/agent-index.md)。再按任务选择：
+从 [skill 索引](../../manuals/agent-index.md) 选择已有方法，不要求每个任务通读所有材料。
+下游专属安装与验收到对应 JittorEcosystem 仓库查阅；问题需要改动核心或 compat 时，
+按 [适配分流流程](../downstream-library-adaptation/SKILL.md) 建立主仓最小复现。
 
-- 环境、缓存和后端前置：[`agent/manuals/environment.md`](../../manuals/environment.md)
-- 未关闭缺陷、限制与 workaround：[`agent/manuals/known-issues.md`](../../manuals/known-issues.md)
-- 等硬件验收的事项：[`agent/manuals/deferred-hardware.md`](../../manuals/deferred-hardware.md)
-- 架构与模块边界：[`docs/development/source-architecture.md`](../../../docs/development/source-architecture.md)
-- Torch 兼容验收：[`docs/development/compatibility/principles.md`](../../../docs/development/compatibility/principles.md)
-- 测试体系：[`docs/development/testing/test-system.md`](../../../docs/development/testing/test-system.md)
-- 历史验证记录（固定提交，不代表当前支持）：[`docs/results/index.md`](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/index.md)
-
-## 工作纪律速记
-
-1. **宁可响亮崩也不静默错**
-2. **verify-then-fix**（~75% 审计是误报，先复现再修）
-3. 改动必须验证所有声明支持的后端；无目标硬件时明确报告未验证
-4. 对拍/调试工具沉淀到 `agent/skills/`
-5. 提交信息用简明中文，只暂存本任务涉及的文件，不用 `git add -A` 或 stash
-6. 只在用户要求时 push
-7. **效率优先**：先跑最小复现和定向测试，再逐层扩大门禁
-8. **计算跑在 device 上**：torch_compat 里新加的计算要考虑效率，至少能跑在 device（GPU/NPU）上，不能只在 CPU
-9. 当前状态入口变化才更新 `project-context.md`；活跃缺陷更新 `known-issues.md`；
-   详细验证证据写入 GitHub issue/PR，不在 docs 新建日期报告
-10. **多用 subagent 提升效率**（并行验证、分卡并行等）
-
-## 快速开工
-
-1. 按 `AGENTS.md` 同步目标远端分支并记录 SHA；确认分支、提交和 dirty state：`git status --short --branch`
-2. 读 `agent/manuals/project-context.md` 并打开任务相关链接
-3. 按 `agent/manuals/environment.md` 隔离缓存和运行状态
-4. 搜索 `agent/manuals/known-issues.md`、相关 GitHub issue/PR 与固定提交中的历史证据
-5. 最小复现后再修改，按变更风险逐层扩大测试
+本 skill 不重复同步、提交、测试预算或缓存规则，也不另设与 `AGENTS.md` 冲突的要求。
+更新它仅用于修正入口与归属；执行记录写入 GitHub issue/PR。

@@ -12,7 +12,7 @@ from _helpers.child_process import run_python_child
 
 SCRIPT = (
     Path(__file__).resolve().parents[2]
-    / "agent/skills/flash-attention-torch-compat/scripts/compare_training.py"
+    / "tools/ecosystem/flash_attention/compare_training.py"
 )
 
 

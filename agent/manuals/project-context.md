@@ -1,85 +1,37 @@
-# Jittor Project Context
+# Jittor 主仓上下文
 
-- Status: Current-state index, not a history log
-- Last reviewed: 2026-11-03
-- Baseline reviewed: `866d5d3e721e9f1d101742b8fe4f97106651491e`
-- Owner: Jittor core maintainers
-- Freshness expires: 2027-02-03
-- Review when: the release line, a top-level goal or an indexed location changes
+本页只说明当前维护边界和查找入口。任务进度与验证结果在 GitHub issue/PR；缺陷状态以
+[问题总账](known-issues.md) 为准，不在这里复制一份。
 
-Find where things are here, then read only the document your task needs.
+## 仓库负责什么
 
-## What the project is
+Jittor 以元算子与即时编译执行张量计算。原生 Python API 在 `python/jittor/`，
+编译器与运行时 C++ 在 `src/`，设备与通信后端在 `backends/`。
 
-Jittor is a JIT deep-learning framework built on meta-operators: Python builds a
-graph, the C++ core in `src/` fuses and compiles kernels, and backends live under
-`backends/<name>/` (CPU, CUDA, ROCm, ACL/Ascend, Corex, and `comm/{mpi,nccl,hccl}`).
-The Torch compatibility layer is the separate `jittor-compat` project in `compat/`
-(published as `jittor.compat`, including the `import torch` shim); downstream
-library adapters are independently maintained in [JittorEcosystem](https://github.com/JittorEcosystem); the root README links the ecosystem repositories. The goal is a maintainable, Torch-grade
-framework that keeps the JIT/meta-operator design, under the gates in
-[Torch compatibility principles](../../docs/development/compatibility/principles.md).
+`jittor-compat` 是本仓 `compat/` 维护的独立发行物，安装为 `jittor.compat`，负责通用
+Torch API 和 shim。它与核心共享运行时，但不是某个下游库的 adapter。
 
-## Current state
+[独立生态仓库](https://github.com/JittorEcosystem) 负责下游版本组合、注册与适配、官方测试、
+教程、测速和功能/芯片支持表。主仓不再保存 `adapters/` 合集，也不为每个下游库维护专属 skill。
+由下游暴露的核心/compat 缺陷仍修回主仓，并保留不依赖完整下游安装的最小回归。
 
-The 2.0 restructuring is in pre-release cleanup. The maintained layout is in
-[repository layout](../../docs/development/repository-layout.md); core and compat
-are separate distributions, and downstream integrations belong to JittorEcosystem.
-Packaging targets Python 3.7-3.13. [`noxfile.py`](../../noxfile.py) and
-[`tools/run_test_suite.py`](../../tools/run_test_suite.py) own the test entry points
-and `core` / `smoke` / full tiers. User-facing changes are in
-[2.0 migration notes](../../docs/project/releases/2.0.md).
+## 按任务找入口
 
-Documentation is paired Chinese/English and organized by topic. Dated execution
-reports and presentation artifacts have been removed; prior evidence remains in
-Git history and is linked by full commit SHA. Current validation evidence and task
-status belong in GitHub issues/PRs. Historical measurements do not grant support
-for the current revision; open failures and hardware gaps are tracked below.
-
-## Where information lives
-
-| Kind | Location |
+| 任务 | 入口 |
 | --- | --- |
-| Rules for agents and maintainers | [`AGENTS.md`](../../AGENTS.md), [collaboration](collaboration.md) |
-| Entry index of manuals and skills | [agent-index.md](agent-index.md) |
-| Environment, isolation, backend prerequisites | [environment.md](environment.md) |
-| Open defects and limitations | [known-issues.md](known-issues.md) |
-| Work waiting for hardware | [deferred-hardware.md](deferred-hardware.md) |
-| Source architecture and module boundaries | [source architecture](../../docs/development/source-architecture.md), [development index](../../docs/development/index.md) |
-| Test system and gate tiers | [test system](../../docs/development/testing/test-system.md) |
-| Mechanism notes (numerics, placement, profiling) | [notes index](../../docs/notes/index.md) |
-| Torch compatibility | [compatibility index](../../docs/compatibility/index.md) |
-| Backend guides (Ascend, Corex, jtrun; legacy MPI) | [guides index](../../docs/guides/index.md) |
-| Performance method | [benchmarking](../../docs/performance/benchmarking.md) |
-| Historical verification evidence | [results index](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/index.md) |
-| Reusable verification tools | `agent/skills/` (listed in [agent-index.md](agent-index.md)) |
-| Task status, handoff, evidence | GitHub issues and pull requests |
+| 开始修改、同步与提交 | [`AGENTS.md`](../../AGENTS.md)、[协作手册](collaboration.md) |
+| 准备环境、选择缓存和后端 | [environment.md](environment.md) |
+| 确定源码与资源归属 | [源码架构](../../docs/development/source-architecture.md)、[仓库布局](../../docs/development/repository-layout.md) |
+| 选择测试范围 | [测试体系](../../docs/development/testing/test-system.md)、[`tools/run_test_suite.py`](../../tools/run_test_suite.py) |
+| 修改通用 Torch 兼容语义 | [兼容原则](../../docs/development/compatibility/principles.md)、[兼容架构](../../docs/development/compatibility/torch-architecture.md) |
+| 从下游问题分流到主仓 | [适配分流流程](../skills/downstream-library-adaptation/SKILL.md) |
+| 查未解决缺陷 | [known-issues.md](known-issues.md) |
+| 补真实设备验收 | [deferred-hardware.md](deferred-hardware.md) |
+| 找验证与诊断方法 | [agent-index.md](agent-index.md) |
+| 用户文档与升级说明 | [文档首页](../../docs/index.md)、[2.0 升级说明](../../docs/project/releases/2.0.md) |
 
-## Active focus areas
+## 使用证据
 
-- **Accelerator coverage without CPU fallback.** NPU reduction, FFT and atan2 gaps
-  (KI-BACKEND-001..003), ACL launcher/descriptor work that has never run on a
-  device (KI-BACKEND-012), untested backend gradients (KI-BACKEND-013), and
-  ROCm/NPU verification of shared semantics (KI-OPS-002, KI-SEMANTICS-003).
-  Commands for hardware day are in [deferred-hardware.md](deferred-hardware.md).
-- **Silent numerics.** cuDNN autotuning coupled to scheduling (KI-EXEC-003).
-- **Torch frontend gaps.** torchmetrics on CUDA (KI-COMPAT-010), RNN off cuDNN
-  (KI-COMPAT-011), in-process shim metadata (KI-COMPAT-012).
-- **Executor and liveness.** Threaded writers to one parameter (KI-EXEC-005),
-  liveness underflows (KI-EXEC-008), the op-level
-  parallel compiler (KI-COMPILER-001).
-- **Performance gaps.** Broadcast operands in fused kernels (KI-CODEGEN-001), dead
-  matmul/conv relays (KI-TUNER-001), UNet reductions and elementwise kernels
-  (KI-CODEGEN-003, KI-CODEGEN-004, KI-COMPAT-009), pipelined memory and backward
-  submission (KI-EXEC-004, KI-EXEC-010).
-- **Gate trust.** Gate cost (KI-TEST-012, KI-TEST-013).
-- **Research.** [Agent-operable optimization](../../docs/project/research/agentic-optimization.md)
-  is a proposal only; no autonomous mutation path exists.
-
-## Before running work
-
-Sync with the target remote branch as `AGENTS.md` requires and record the SHA;
-isolate the run per [environment](environment.md); search
-[known-issues.md](known-issues.md) and the [results index](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/index.md)
-for existing evidence; reproduce minimally before editing. Update this page only
-when its current-state summary or a location changes.
+当前源码结构与测试入口从目标远端最新提交核对。旧报告只作为定位线索，不表示当前版本已经通过；
+需要历史证据时从问题条目、GitHub issue/PR 或 Git 历史进入。
+不得用导入成功、CPU fallback、静态检查或全 skip 代替真实设备执行。

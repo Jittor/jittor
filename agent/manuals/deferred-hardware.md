@@ -1,4 +1,4 @@
-# 缺硬件时怎么把代码改完，以及硬件到手那天跑什么
+# 主仓待硬件验收清单
 
 有一批工作「代码可以现在写，验收要等机器」。这一页是它们的**唯一清单**（见下表），并回答三个
 问题：硬件到手那天**跑什么**、**绿了之后哪几项算被证明**、**哪些还根本没有可跑的测试**。
@@ -6,6 +6,10 @@
 表里的编号沿用整改期的任务号，只作稳定标签，便于在提交历史里检索。各项的进展与验证证据记在
 GitHub issue 和 PR 描述里；本页不记进度，只记硬件到手那天要执行什么。代码缺陷与性能限制记在
 [已知问题总账](known-issues.md)。
+
+本页保留核心、后端、通用 compat 和分布式协议的验收责任。某个下游模型可以作为复现载体，
+但其版本组合、应用测试与支持表由对应 [JittorEcosystem 仓库](https://github.com/JittorEcosystem) 维护；
+跨仓验证必须同时记录主仓提交与下游提交。迁移专属流程不能把尚未完成的设备验收标为完成。
 
 ## 待硬件验收的项目
 
@@ -20,7 +24,7 @@ GitHub issue 和 PR 描述里；本页不记进度，只记硬件到手那天要
 | `10.19` | 每个带 `grad()` 的后端算子都有对 CPU 参考的梯度测试：60 条里 36 条要硬件，7 条连测试都还没有 | 多卡 CUDA/MPI、Ascend、ROCm | 后端 `grad()` 的 CPU 参考对拍；HCCL |
 | `8.14` | Corex 探测只读、路径可配置：`discover()` 在真实安装上给出正确结论 | Corex / 天数卡 | Corex / 天数 |
 | `8.15` | 多机 rendezvous：真实两机 collective 对拍 | 两台机器 | 两台机器 |
-| `8.16` | 多机启动器：`jtrun --nnodes=2` 跑通 transformers 训练 | 两台机器 | 两台机器 |
+| `8.16` | 多机启动器：`jtrun --nnodes=2` 的应用集成验收（Transformers 用例由生态仓库维护） | 两台机器 | 两台机器 |
 | `8.17` | 跨机网络与诊断：带宽微基准、掉线在超时内退出 | 两台机器 | 两台机器 |
 | `8.18` | 多机 checkpoint：2 机保存、4 机加载的续训 | 两台机器（加载需 4 机） | 两台机器 |
 | `10.22` | 两节点 DDP/FSDP 冒烟与掉线门禁进 nightly | 两台机器 | 两台机器 |
@@ -213,7 +217,7 @@ launcher ABI 断言全过，反向对照见下）、以及不变量式静态合�
 训练、两机 loss 轨迹一致）、**`8.17`**（跨机带宽微基准、掉线在超时内退出）、**`8.18`**（2 机保存、
 4 机加载的续训）、**`10.22`**（两节点 smoke 进 nightly）。
 
-上述 runner 验证固定双节点的原生 FSDP 协议；Transformers 训练、跨机带宽/网络掉线、
+上述 runner 验证固定双节点的原生 FSDP 协议；Transformers 训练须联合对应生态仓库验收，跨机带宽/网络掉线、
 2 机保存后 4 机加载及 scheduled nightly 仍须分别验收，不能由该 runner 的单次成功推断。
 旧 MPI collective 梯度测试继续使用下表的 `mpi_hardware` 入口，独立于 `jtrun` 多机验收。
 
@@ -323,4 +327,4 @@ PY
 - padding 负宽裁剪/补齐与完整输入梯度，index-fill dtype 和错误域；portable/fused optimizer 保存旧 forward、参数/状态 dtype、data/detach/strided 别名与指针，以及发布梯度身份；registered-buffer 替换/更新后 replay guards。捕获仅验收后端真实公开支持的能力，unsupported 必须明确拒绝，不能以 eager/CPU fallback 冒充 capture 成功。
 - 每组核对真实 backend/ordinal、device storage、fallback 计数零，并保留执行数量；不得仅依据 import、nox 退出零或全 skip 判通过。
 
-现有 `test_log1p_softplus_precision.py`、`test_sigmoid_negative_tail_precision.py`、`test_pad_widths.py` 与部分 dtype fixtures 明确只选 CPU/CUDA，须先按维护后的 `rocm` / `npu` 路径扩展设备参数及 residency 断言，**直接设置 JITTOR_TEST_DEVICES 不会使它们获得其他后端覆盖**。OpInfo 旧 `log(1+x)` case 和上述四个存储 case 也不能替代这份数值/optimizer/replay 完整矩阵。维护者将新增精确 nodeids、实际命令、提交 SHA、通过/跳过数量和设备信息写入结果报告后，再收窄或删除本条。
+现有 `test_log1p_softplus_precision.py`、`test_sigmoid_negative_tail_precision.py`、`test_pad_widths.py` 与部分 dtype fixtures 明确只选 CPU/CUDA，须先按维护后的 `rocm` / `npu` 路径扩展设备参数及 residency 断言，**直接设置 JITTOR_TEST_DEVICES 不会使它们获得其他后端覆盖**。OpInfo 旧 `log(1+x)` case 和上述四个存储 case 也不能替代这份数值/optimizer/replay 完整矩阵。维护者将新增精确 nodeids、实际命令、提交 SHA、通过/跳过数量和设备信息写入 GitHub issue/PR 后，再收窄或删除本条。

@@ -9,7 +9,7 @@ import pytest
 @pytest.fixture
 def collector():
     root = Path(__file__).resolve().parents[2]
-    path = root / "agent/skills/flash-attention-torch-compat/scripts/collect_scorecard.py"
+    path = root / "tools/ecosystem/flash_attention/collect_scorecard.py"
     spec = importlib.util.spec_from_file_location("flash_scorecard_collection", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

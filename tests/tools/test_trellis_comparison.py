@@ -96,7 +96,7 @@ def test_fallback_or_nonbinary_oracle_rejected(gate, pair, change):
 
 @pytest.fixture(scope='module')
 def collector():
-    path = ROOT / 'agent/skills/trellis-torch-compat/scripts/collect_scorecard.py'
+    path = ROOT / 'tools/ecosystem/trellis/collect_scorecard.py'
     spec = importlib.util.spec_from_file_location('trellis_scorecard_collector', path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

@@ -1,27 +1,14 @@
-# 上机验证：删除 HCCL 集合通信的 4 次同步（硬件清单项 `8.02` 的 HCCL 部分）
+# HCCL 同步策略的真实设备验收
 
-后端审计（分布式部分）里严重度为**关键**的一条：四个 HCCL 集合通信算子各自在调用前后都做
-`aclrtSynchronizeDevice()` + `aclrtSynchronizeStream(aclstream)`，**每次通信 4 次全设备
-或全流同步**，NPU 多卡训练的流水被彻底打断。
+本页对应[待硬件验收项](deferred-hardware.md) `8.02`：比较四个集合通信算子的完整同步与流序策略。
+源码位于 `backends/comm/hccl/inc/hccl_wrapper.h` 的 `hccl_collective_begin()` / `hccl_collective_end()`，
+开关由 `backends/comm/hccl/src/hccl_wrapper.cc` 的 `hccl_collective_full_sync()` 读取。
 
-这四次同步**按读代码是多余的**：`aclstream` 是全局唯一的（`backends/acl/include/acl_jittor.h`），
-所有 ACL 算子都往它上面排队，所以集合通信天然排在「算出输入的那些算子」之后、
-「消费输出的那些算子」之前。
+- `JT_HCCL_COLLECTIVE_SYNC=full`：默认策略，保留调用前后的设备与流同步。
+- `JT_HCCL_COLLECTIVE_SYNC=stream-order`：候选策略，依赖队列顺序。
 
-**但"按读代码"不是"验证过"。** 做这项改动的主机没有昇腾硬件，这段代码连编译都做不到，
-更不可能跑一次。所以这四次同步**没有直接删掉**，而是收进一个开关：
-
-- `JT_HCCL_COLLECTIVE_SYNC=full`（**默认**）——保持历史行为，与改动前逐字等价。
-- `JT_HCCL_COLLECTIVE_SYNC=stream-order`——不做那四次同步，依赖流序。
-
-代码位置：`backends/comm/hccl/inc/hccl_wrapper.h` 的 `hccl_collective_begin()` /
-`hccl_collective_end()`，开关读取在 `backends/comm/hccl/src/hccl_wrapper.cc` 的
-`hccl_collective_full_sync()`。四个算子（all_reduce / all_gather / reduce / broadcast）
-都只调这两个函数，不再各写一遍同步。
-
-**本文档的清单在真机上全绿之后，才可以把默认值改成 `stream-order`，并把开关和它的注释
-一起删掉。** 在那之前这项 HCCL 同步优化保持「待实机」，登记在
-[硬件延迟清单](deferred-hardware.md)。
+静态等价与主机桩测试不证明真实设备安全。下面的数值、竞态和时序验收完成之前，不改默认策略，
+也不把开关删除。验证结果写入主仓 GitHub issue/PR；本页只维护可复用的验收步骤。
 
 ## 需要的机器与软件
 
@@ -57,7 +44,7 @@ print("device count", jt.get_device_count())
 '
 ```
 
-**判据**（四条全部满足才算在 NPU 上）：
+**环境准入检查**（只证明源码、能力与配置；实际设备计算还必须通过后续 A/B 数值测试）：
 
 1. `SELFCHECK` 打印的是你的 worktree，不是 site-packages 里的 editable 安装目标。
 2. `jt.compile_extern.hccl_ops is not None`。为 None 说明 HCCL 没编，后面所有集合通信
@@ -92,7 +79,7 @@ done
 ## 第 2 步：压竞态（这是真正要验的东西）
 
 去掉同步之后最容易出的错是**竞态**，而竞态在小张量、单次运行下大概率不复现。
-照 `agent/skills/jittor-distributed-verification/SKILL.md` 里
+照 [分布式验证 skill](../skills/jittor-distributed-verification/SKILL.md) 里
 「把集合通信挪到侧流之后：跑绿一次不算数」那一节的第 3 条做，把 NCCL 换成 HCCL：
 
 - 输入**现算**（默认流上一串算子的结果），不要用提前造好的常量；
@@ -111,9 +98,8 @@ done
 - 用 CANN 的 profiler 取 timeline，确认 `stream-order` 下集合通信与计算的
   区间相交，而 `full` 下不相交（方法与判据同 skill 里的 nsys 那一节，
   「立刻同步那一档并发数必须是 0」这条对应 `full`）；
-- 或至少给出端到端计时：`stream-order` 必须显著快于 `full`。删掉 4 次全设备同步
-  如果**一点不变快**，说明开关没生效（先检查是不是拼错了值——拼错会 LOGf，
-  不会静默按 `full` 走）。
+- 补充同口径端到端计时，报告两种模式的波动与收益。耗时不变不能单独证明开关未生效；
+  应用可能受其它瓶颈限制。必须用实际调用或 timeline 证据确认同步策略，再判断性能收益。
 
 ## 还剩一处没动
 

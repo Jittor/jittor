@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'tests'))
 from _helpers.child_process import PYTHON  # noqa: E402
 
-sys.path.insert(0, str(ROOT / 'agent/skills/torch-compat-repo-runbook/scripts'))
+sys.path.insert(0, str(ROOT / 'tools/ecosystem'))
 from _peft_scorecard import compare_arrays, installed_payload, source_files, validate_binding  # noqa: E402
 
 class _GateTests(unittest.TestCase):
@@ -203,9 +203,9 @@ class TestPEFTNumerics(_GateTests):
             except OSError as error:
                 self.skipTest('Host cannot create directory symlinks: ' + str(error))
             names = ['noxfile.py', 'tools/run_peft_gate.py',
-                     'agent/skills/torch-compat-repo-runbook/scripts/_peft_scorecard.py',
-                     'agent/skills/torch-compat-repo-runbook/scripts/collect_peft_scorecards.py',
-                     'agent/skills/torch-compat-repo-runbook/scripts/training_probe.py',
+                     'tools/ecosystem/_peft_scorecard.py',
+                     'tools/ecosystem/collect_peft_scorecards.py',
+                     'tools/ecosystem/training_probe.py',
                      'compat/tests/torch/_ecosystem_runner.py', 'compat/tests/torch/_ecosystem_cases.py']
             for name in names:
                 path = root / name

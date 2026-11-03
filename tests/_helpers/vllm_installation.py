@@ -12,7 +12,7 @@ import types
 from unittest import mock
 import zipfile
 
-SCRIPTS = Path(__file__).resolve().parents[2] / 'agent/skills/torch-compat-repo-runbook/scripts'
+SCRIPTS = Path(__file__).resolve().parents[2] / 'tools/ecosystem'
 sys.path.insert(0, str(SCRIPTS))
 import _vllm_installation as contract  # noqa: E402
 

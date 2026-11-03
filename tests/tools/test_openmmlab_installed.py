@@ -14,7 +14,7 @@ from unittest import mock
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[2]
-SCRIPTS = ROOT / 'agent/skills/torch-compat-repo-runbook/scripts'
+SCRIPTS = ROOT / 'tools/ecosystem'
 
 
 class OpenMMLabInstalledContracts(unittest.TestCase):

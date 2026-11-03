@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tests"))
 from _helpers.child_process import run_python_child  # noqa: E402
 
-PROBE = ROOT / "agent/skills/torch-compat-repo-runbook/scripts/training_probe.py"
+PROBE = ROOT / "tools/ecosystem/training_probe.py"
 
 
 class TrainingProbeArguments(unittest.TestCase):

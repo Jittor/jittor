@@ -23,34 +23,12 @@ git archive HEAD | tar -x -C $SC/pristine      # 整棵树 20MB 级
 **不要用 `git stash`**（栈是全仓库共用的，见 `git-worktree-shared-state`），也不要靠
 「等会儿 `git checkout --` 回去」——你会在中途需要同时看到两个版本。
 
-### 例外：CUDA 基线不能用新目录，必须复用预热的 `JITTOR_HOME`
+### CUDA 基线也使用独立工作树
 
-上面那棵副本树跑 CPU 基线没问题，**跑 CUDA 基线会失败**，而且失败信息指向别处：
-
-```
-Check failed ret(256) == 0(0) Run cmd failed: "nvcc" ".../nan_checker.cu" ...
-WARN third-party archives 3 still to download: dnnl_lnx_2.2.0_cpu_gomp.tgz, cub-1.11.0.tgz, cutt-1.2.zip
-```
-
-**同一条 nvcc 命令单独手跑是成功的**，所以很容易被当成自己改坏了或机器坏了。真正的原因是
-一次**冷** CUDA 构建要拉三个三方包，而主机没有网络出口（有网时先 `nox -s prefetch` 填好镜像）。能带 CUDA 构建的只有别人
-预热过的那个 `JITTOR_HOME`，而缓存目录名里带源码内容哈希——副本树换个路径就是冷的。
-
-所以 CUDA 的 A/B 要这样做：**把工作树临时切回基线提交，复用同一个 `JITTOR_HOME` 跑，
-再切回来**，并且把还原放进 `trap`：
-
-```bash
-restore() { for f in $NEW; do cp "$ASIDE/$(basename $f)" "$f"; done
-            git checkout "$MINE" -- $OLD; }
-trap restore EXIT
-for f in $NEW; do cp "$f" "$ASIDE/"; rm -f "$f"; done   # 新增的文件先挪走
-git checkout "$BASE" -- $OLD
-<跑 CUDA 门禁>
-```
-
-`trap` 不是讲究，是必需：这一段跑三十分钟，中间任何异常退出都会把工作树**留在基线状态**，
-而你的改动只存在于 `$ASIDE` 里。代价是这段时间不能改代码（第 3 节的快照法在这里用不了，
-因为快照树的缓存是冷的）。
+冷缓存缺少第三方依赖是环境前置问题，不是临时覆盖当前工作树的理由。为基线准备
+独立缓存和所需依赖，串行预热后再运行；确认实际导入的源码和提交。不要为复用热缓存
+在正在工作的 checkout 中切换基线文件，也不要让两个工作树并发使用同一编译缓存。
+环境无法补齐时记录基线未执行，不能把缓存问题推断成源码回归。
 
 ## 2. 归一化文本比对：搬运的判据
 

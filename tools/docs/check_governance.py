@@ -235,9 +235,6 @@ def check_contract(documents):
         )
     if "/home/" in context or re.search(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", context):
         errors.append("project-context.md contains machine-specific environment details")
-    for token in ("Last reviewed:", "Baseline reviewed:", "Owner:", "Freshness expires:"):
-        if token not in context:
-            errors.append("project-context.md is missing freshness metadata: {0}".format(token))
 
     stale_references = (
         "README.cn.md",

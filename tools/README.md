@@ -13,6 +13,10 @@ Torch comparisons, graph profiling, and ACL measurements).
 - `build/`: explicit source and asset builders.
 - `distributed/`: operator-facing distributed helpers.
 - `docs/`: documentation builders, links and governance checks.
+- `ecosystem/`: live source-binding and oracle tools used by core/compat regression
+  gates. Per-library integration instructions and support claims belong to the
+  corresponding JittorEcosystem repository; these tools do not establish support
+  merely by discovering a case or a repository.
 - `lint/`: import-layering and other source checks used by the structure gate.
 - `probes/`: maintainer sweeps that print where two equivalent computations,
   devices or round trips disagree. They are not tests; their output is the

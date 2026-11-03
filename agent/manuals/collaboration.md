@@ -1,73 +1,49 @@
-# Jittor Agent 协作手册
+# Jittor 主仓协作手册
 
-本手册说明 AI agent 与维护者在 Jittor 仓库内的协作、验证和文档规则。入口索引见
-[agent-index.md](agent-index.md)。
+本页补充 [`AGENTS.md`](../../AGENTS.md) 的协作方式；同步、工作区边界、提交与测试要求以该文件为准。
+文档入口是 [agent-index.md](agent-index.md)，当前源码与工具入口见 [project-context.md](project-context.md)。
 
-## 开工流程
+## 先确定改动归属
 
-1. **先同步**：按 [`AGENTS.md`](../../AGENTS.md) 获取并整合目标远端分支，记录同步后的提交 SHA；
-   保留本地工作，不用 stash 或丢弃改动来清场。
-2. **再读上下文**：阅读 [`jittor-dev-context`](../skills/jittor-dev-context/SKILL.md)，
-   再通过 [`project-context.md`](project-context.md) 定位相关文档。
-3. **确认环境与问题**：按需阅读 [`environment.md`](environment.md) 和
-   [`known-issues.md`](known-issues.md)，不要依赖个人机器路径或过期会话记录。
-4. **确认既有证据**：检查相关 GitHub issue/PR 与问题总账；旧报告可查[固定提交中的历史记录](https://github.com/Jittor/jittor/tree/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results)。
-5. **开始工作**，遵循下面的协作规范。
+| 内容 | 维护位置 |
+| --- | --- |
+| 原生张量、自动微分、编译器、运行时与后端 | 本仓源码、`tests/` 与公开开发文档 |
+| 通用 Torch API、shim、序列化与分布式兼容语义 | 本仓 `compat/`、对应测试与开发文档 |
+| 某个下游库的版本适配、教程、官方测试、测速与功能/芯片支持范围 | [JittorEcosystem](https://github.com/JittorEcosystem) 中对应仓库 |
+| 跨仓发现的核心或 compat 缺陷 | 在主仓修复并加入最小回归；下游仓库保留集成验收 |
 
-## 协作规范
+下游适配按 [downstream-library-adaptation](../skills/downstream-library-adaptation/SKILL.md) 分流。
+主仓不维护第二份下游安装矩阵、支持表或项目运行手册。迁移材料前核对承接仓库；没有承接的未解决问题不能因清理而消失。
 
-### 文档更新（核心纪律）
+## 记录只保留一个归属
 
-- **`project-context.md`** 是当前状态索引，只在目标、状态或文档入口变化时更新。
-- **`known-issues.md`** 是未关闭缺陷与已知限制的总账。新增条目按其头部的格式写清
-  severity、owner、可执行证据、workaround 和退出条件；修复后删除条目，修复提交在提交信息或
-  PR 中注明条目编号。
-- **`deferred-hardware.md`** 只记等硬件验收的事项与上机命令，不记进度。
-- **`docs/`** 保存长期架构决策、测试契约、开发指南和研究提案。
-- **验证证据**写入 GitHub issue/PR，记录口径、提交、命令、结果和已知边界；不在
-  `docs/` 创建日期报告或结果树。原始日志、缓存、二进制和大体积结果放在
-  `$JITTOR_LAB_ROOT`，注明“未版本化”。
-- 稳定文档注明状态、复查日期、对应基线、owner 和复查触发条件。
-- 任务领取、状态、交接与验收证据记在 GitHub issue 与 PR 中，仓库不保留看板或交接文档。
+- [project-context.md](project-context.md)：当前结构与入口，不复制问题列表或执行历史。
+- [environment.md](environment.md)：主仓环境、缓存隔离与后端前置条件。
+- [known-issues.md](known-issues.md)：主仓尚未解决的缺陷与限制，保留最小复现、证据和关闭条件。
+- [deferred-hardware.md](deferred-hardware.md)：主仓待硬件验收项；缺设备不等于通过。
+- GitHub issue/PR：任务状态、交接、执行命令与结果。旧材料由 Git 历史保留，不在 `agent/` 新建报告树。
+- `docs/`：用户指南、长期机制与实现契约。不要在 skill 中复制整篇公开文档。
 
-### Skill 沉淀
+维护条目时区分“旧证据”“当前实现”和“本次实际执行”。文档整理不刷新硬件验收基线，也不关闭未复验缺陷。
 
-工作过程中写出的**可复用工具**（对拍脚本、验证 harness、调试探针等），沉淀为 skill：
+## Skill 与工具
 
-- 在 `../skills/` 下创建新目录，包含 `SKILL.md`（说明用途和用法）与工具文件，并在
-  [agent-index.md](agent-index.md) 加一行。
-- skill 里的命令要能在当前树上运行：路径用 `git ls-files` 核对，机器相关的位置写成
-  `$JITTOR_LAB_ROOT/...`、`<jittor-python>`、`CUDA_VISIBLE_DEVICES=<gpu>` 这类占位，
-  脚本不带个人默认路径（未设置时报错退出）。
-- 已有 skill 直接复用，别重新造轮子；方法不再适用于当前树的 skill 应删除或并入相关 skill。
+主仓 skill 只描述核心、后端、通用 compat 或仓库维护中可复用的方法；项目专属流程由下游仓库维护。
+新增前先查 [索引](agent-index.md)，能合并到现有方法就不另建入口。命令引用当前树中的真实路径；
+机器地址、凭据、设备分配和个人目录只放在本地运行配置。
 
-### 效率原则
+通用仓库命令放在 `tools/`；skill 配套的小型验证脚本可以跟随 skill。
+独立实验、下游 checkout 与原始产物按 [环境规则](environment.md) 放在仓库外。
 
-- **按目标后端验证**：先在最容易定位问题的后端跑通，再验证所有声明支持的设备。
-- **计算在 device 上**：torch_compat 里新加的计算必须能跑在 GPU/NPU 上，不能只支持 CPU。
-- **多用 subagent**：互不依赖的验证任务并行展开（分卡并行、多模型并行、三后端并行）。
-- **verify-then-fix**：~75% 的审计是误报，先复现再修。
+## 验证与并行协作
 
-### JIT 并发规则
+先最小复现，再修改；验证结果须包含实际执行数量、失败和 skip 原因。
+多个 agent 可按互不重叠的文件或验证任务分工；同步远端期间停止同一工作树的写入与测试。
 
-Jittor 使用文件锁串行化 JIT 编译。多个进程共享缓存并首次编译时可能长期等待：
+首次 JIT 或扩展编译串行完成。并行验证必须使用独立的 `JITTOR_HOME` 或 cache name，
+benchmark 与 unittest 不共用编译缓存。长时间无输出时先检查编译进程与 `jittor.lock`，不要把等待锁当成算子挂死。
 
-1. 新算子或新扩展的首次编译必须串行完成。
-2. 并行任务必须使用不同的 `JITTOR_HOME` 或 `cache_name`。
-3. unittest 与 benchmark 不得共享同一缓存并行运行。
-4. 进程长时间无输出时，先检查 `jittor.lock` 持有者和编译子进程，再判断
-   是否为模型运行卡住。
+## 工作区边界
 
-### 工作区边界
-
-- 主仓库：源码、测试、文档、人工报告和可复用 skill。
-- `$JITTOR_LAB_ROOT/<topic>/`：独立实验、下游 checkout、脚本运行目录和产物。
-- `$JITTOR_LAB_ROOT/_state/<topic>/<run>/`：`HOME`、`JITTOR_HOME`、`TMPDIR`、
-  wheel/模型/编译缓存与原始日志。
-- `$JITTOR_LAB_ROOT/worktrees/`：并行 agent 的 Git worktree。
-- 不在主仓库顶层新建 `jittor_fsdp2`、`*_work`、`*_probe` 等实验目录。
-- 提交前运行 `bash tools/check_repo_layout.sh`，直接检查工作区顶层是否越界；
-  `tests/structure/test_no_private_paths.py` 拒绝个人目录、主机地址和按主机名分支的代码。
-
-`agent/` 只有 `manuals/` 与 `skills/` 两个目录；长期设计资料按语义写入根目录 `docs/`，
-仓库维护命令统一放在 `tools/`，wheel 内容基线位于 `tools/release/baselines/`。
+源码、测试、公开文档与可复用维护方法留在主仓。实验、worktree、缓存、日志和构建产物的位置由
+[`AGENTS.md`](../../AGENTS.md#repository-boundary) 与 [环境模板](environment.md#workspace-roots) 统一规定；本页不另设规则。
