@@ -38,7 +38,12 @@ def _init(self, *a, **k):
             raise ValueError("optimizer got an empty parameter list")
         if not isinstance(groups[0], Mapping):
             groups = [{'params': groups}]
-        self.defaults = values
+        # The native Optimizer exposes `defaults` as a read-only property
+        # derived from the non-underscore instance attributes, so seed the
+        # individual keys instead of assigning the mapping itself.
+        for key, value in values.items():
+            if key not in ('param_groups', 'params', 'defaults'):
+                setattr(self, key, value)
         self.param_groups = []
         self.lr = values.get('lr')
         self.param_sync_iter = 10000
