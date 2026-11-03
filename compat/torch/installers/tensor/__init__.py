@@ -898,6 +898,13 @@ def _check_tensor_all(condition, message=None):
     return _check_condition(condition, message, RuntimeError)
 
 
+def _check_with(error_type, condition, message=None):
+    # torch._check_with(error_type, cond, msg_callable): raise the selected
+    # exception type when cond is false. transformers' torch_compilable_check
+    # uses it for model-level shape assertions (e.g. Mask2Former).
+    return _check_condition(condition, message, error_type)
+
+
 def _check_is_size(i, message=None, **kwargs):
     return _check(int(i) >= 0, message)
 
@@ -1006,6 +1013,7 @@ def install(ctx):
     g._check_type = _check_type
     g._check_not_implemented = _check_not_implemented
     g._check_tensor_all = _check_tensor_all
+    g._check_with = _check_with
     g._assert_async = _assert_async
 
     # torch.cat: tolerate empty tensors (skip zero-numel inputs) like torch,
