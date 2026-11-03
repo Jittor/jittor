@@ -21,6 +21,7 @@ Run:  python -m pytest compat/tests/triton/test_triton_backend.py
 from _helpers import capability as _test_capability
 import ctypes
 import importlib.util
+import importlib.machinery
 import os
 import sys
 import types
@@ -32,15 +33,19 @@ import numpy as np
 import jittor as jt
 
 
-#: A genuine upstream triton, not the shim this repo deploys under the name.
-#:
-#: ``find_spec("triton")`` answers yes for the shim as well, and ``setUpModule``
-#: then skips the *whole module* when ``import triton.language`` fails -- which
-#: took the launch-device tests at the bottom, the ones that need no triton at
-#: all, down with it. Written inline rather than as a helper call: collection
-#: may not run this file's own functions (tests/structure/test_pytest_contract).
+#: Inspect package structure without importing a candidate module graph.
+#: The Jittor shim also supplies triton.language, but has no upstream compiler.
+#: Real compiler/runtime import errors remain failures in the tests below.
 try:
-    _HAVE_REAL_TRITON = importlib.util.find_spec("triton.language") is not None
+    _triton_spec = importlib.util.find_spec("triton")
+    _triton_paths = getattr(_triton_spec, "submodule_search_locations", None)
+    _HAVE_REAL_TRITON = bool(
+        _triton_paths
+        and getattr(_triton_spec, "loader", None) is not None
+        and not getattr(sys.modules.get("triton"), "__triton_shim__", False)
+        and not getattr(sys.modules.get("triton"), "__jittor_triton_shim__", False)
+        and importlib.machinery.PathFinder.find_spec("triton.compiler", _triton_paths) is not None
+    )
 except (ImportError, ValueError):
     _HAVE_REAL_TRITON = False
 
@@ -412,6 +417,40 @@ class TestTritonBackend(unittest.TestCase):
 
 class TestOptionalPointerPacking(unittest.TestCase):
     """Run actual binding/cache/packing code with a compiler and driver recorder."""
+
+    def test_upstream_prerequisite_rejects_shim_without_importing_candidates(self):
+        import ast
+        from pathlib import Path
+        import tempfile
+
+        # Execute the actual collection probe against a source-only fixture.
+        # Its imports deliberately fail: discovery must not execute them or
+        # swallow a genuine upstream import failure during the later test.
+        tree = ast.parse(Path(__file__).read_text())
+        probe = next(node for node in tree.body if isinstance(node, ast.Try)
+                     and any(isinstance(child, ast.Name) and child.id == "_triton_spec"
+                             for child in ast.walk(node)))
+        code = compile(ast.Module(body=[probe], type_ignores=[]), __file__, "exec")
+        with tempfile.TemporaryDirectory() as folder:
+            package = Path(folder) / "triton"
+            package.mkdir()
+            (package / "__init__.py").write_text("raise RuntimeError('upstream import failed')\n")
+            spec = importlib.util.spec_from_file_location("triton", package / "__init__.py")
+            with mock.patch.object(importlib.util, "find_spec", return_value=spec):
+                for compiler, marker, expected in ((False, False, False),
+                                                   (True, False, True),
+                                                   (True, True, False)):
+                    if compiler:
+                        (package / "compiler").mkdir(exist_ok=True)
+                        (package / "compiler/__init__.py").write_text("raise RuntimeError('compiler failed')\n")
+                    owner = types.SimpleNamespace(__triton_shim__=marker)
+                    with mock.patch.dict(sys.modules, {"triton": owner}):
+                        scope = dict(importlib=importlib, sys=sys)
+                        exec(code, scope)
+                    self.assertEqual(scope["_HAVE_REAL_TRITON"], expected)
+            candidate = importlib.util.module_from_spec(spec)
+            with self.assertRaisesRegex(RuntimeError, "upstream import failed"):
+                spec.loader.exec_module(candidate)
 
     def test_none_constants_and_runtime_arguments_stay_disjoint(self):
         from jittor.compat.triton import backend as bridge

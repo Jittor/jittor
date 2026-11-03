@@ -150,7 +150,7 @@ preserved only in Git history; the layout itself is guarded by the structural ga
 │   ├── nn/  optim/  autograd/  fft/  sparse/  dataset/  transform/  models/
 │   ├── linalg/  distributions/  init/
 │   ├── distributed/  contrib/  tools/
-├── compat/                   # 独立发行物（jittor-compat）：torch shim、fsdp2、triton；vLLM 属于 adapters/
+├── compat/                   # 独立发行物（jittor-compat）：torch shim、fsdp2、triton；downstream integrations live in independent JittorEcosystem repositories
 ├── tools/  tests/  docs/  examples/  benchmarks/
 └── agent/                    # 只有 manuals/ 与 skills/
 ```
@@ -242,13 +242,7 @@ Torch compatibility is split by **ownership**, not by downstream project:
    **Mainline Jittor installs no resident TRELLIS or Gaussian Splatting finder into every
    process.**
 
-The vLLM glue code and its dedicated tests are owned by `adapters/jittor_adapters/vllm` and
-`adapters/tests/vllm` in the main repository, distributed with the existing
-`jittor-torch-adapters` distribution, **without a separate repository or release**. Neither the
-core nor `jittor-compat` packages that implementation, nor the abandoned `jittor.compat.vllm`.
-The optional Torch stage only discovers a module-patch entry point named `jittor_vllm`; when it
-is absent the stage stays optional. That adapter uses the shared, owner-aware rollback mechanism
-to save pre-import extension settings and post-import patches.
+Downstream glue and its dedicated tests belong to independent [JittorEcosystem](https://github.com/JittorEcosystem) repositories. The main `adapters/` directory only indexes them; neither core nor `jittor-compat` depends on an adapter bundle. [jittor-vllm](https://github.com/JittorEcosystem/jittor-vllm) publishes the optional `jittor_vllm` module-patch entry point and owns its version/device acceptance. Integrations use the shared owner-aware transaction mechanism for registration and rollback.
 
 **An installer must report every attempted patch independently.** A broad
 `try/except Exception: pass` wrapped around a series of patches is forbidden -- a single failure

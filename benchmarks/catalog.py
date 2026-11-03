@@ -60,7 +60,7 @@ SUITES = (
     {
         "id": "graph-build",
         "purpose": "Separate host graph construction phases from completed-step execution.",
-        "entrypoints": ["tools/benchmarks/graph_build_phases.py"],
+        "entrypoints": ["benchmarks/graph_build_phases.py"],
         "references": [],
         "role": "Manual diagnostic; phase counters require a profiling build.",
         "runtimes": ["jittor Torch frontend"],

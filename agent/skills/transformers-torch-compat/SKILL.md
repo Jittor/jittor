@@ -42,24 +42,15 @@ RoPE Llama；BERT/ViT 包含 pooler。固定初始权重分别执行 seed 7/19 �
 
 ## 完整 CPU 维护门禁与 nightly
 
-`ecosystem_transformers_source` 保留全部十场景（原九模型场景及 32768-token
-Longformer）、base、seed 7/19 扰动和三步 SGD；禁止通过 preflight 或场景子集替代。
-固定 Transformers 4.56.2 的完整官方源码/wheel、实际安装 METADATA/RECORD，
-两侧完整梯度与原数值预算沿用
-[完整来源重测](../../../docs/results/2026-10-16-transformers-main-source-training.md)。
+完整十场景协议（原九模型及 32768-token Longformer）迁至
+[jittor-transformers 历史协议](https://github.com/JittorEcosystem/jittor-transformers/blob/main/docs/historical-replay.md)。
+该协议保留 Transformers 4.56.2、base、seed 7/19 扰动、三步 SGD 和原始数值预算，
+与独立仓默认 5.9.0 官方测试分开。按独立仓说明运行 `tools/provision_replay.py`，
+其 nightly 在独立仓执行。安装身份、完整梯度与原预算不得用 preflight 或场景子集替代。
 
-生态 workflow 的 `maintained-cpu` 矩阵通过下列入口准备三个全新解释器，
-为候选与独立 oracle 安装完整依赖并分别执行 `pip check`，再调用该完整 nox session：
-
-```bash
-<healthy-python-3.11> tools/provision_ecosystem_nightly.py \
-  --library transformers --state-root "$JITTOR_LAB_ROOT/_state/transformers-nightly/run" --run
-```
-
-CPU 轨显式隐藏 CUDA、固定真实 Torch 2.11.0+cpu；安装包/编译缓存和原始阶段产物
-都在独立 state 下，单测不复用该编译缓存。保留 command、失败日志、完整安装锁及
-数值产物。本地运行和 workflow 配置不能证明 GitHub scheduled 作业已实际执行；
-不新增 CUDA、性能等级、完整 Trainer 或任意 checkpoint 的支持结论。
+旧验收仍对应 [原始来源重测](../../../docs/results/2026-10-16-transformers-main-source-training.md)
+记录的提交、版本和设备。迁移后的宿主测试不是重新执行完整数值协议；不新增硬件、性能、
+完整 Trainer 或任意 checkpoint 的支持结论。
 
 ## 历史 H3 两侧环境
 
@@ -109,7 +100,7 @@ CPU 轨显式隐藏 CUDA、固定真实 Torch 2.11.0+cpu；安装包/编译缓�
 
 Transformer 专用 adapter 只做一件事：把 `transformers.utils.import_utils.is_torch_npu_available`
 钉成返回 `False`，避免原生 `torch_npu` 探测进入独立 Jittor 前端
-（[`adapters/jittor_adapters/transformers.py`](../../../adapters/jittor_adapters/transformers.py)，
+（[`jittor_transformers/adapter.py`](https://github.com/JittorEcosystem/jittor-transformers/blob/main/jittor_transformers/adapter.py)，
 `SUPPORTED_VERSIONS = {4.56.2, 5.5.3}`）。实测该 guard 已生效
 （`_jittor_transformers_npu_guard is True`，`is_torch_npu_available() is False`）。
 
@@ -206,7 +197,7 @@ PyTorch CPU。
 
 | 断点 | 分流 | 依据 |
 | --- | --- | --- |
-| 原生 `torch_npu` 探测进入独立 Jittor 前端 | **adapter** | 库私有实现细节，已由 `adapters/jittor_adapters/transformers.py` 的 NPU guard 处理；版本门 `SUPPORTED_VERSIONS={4.56.2,5.5.3}`，失败 fail-closed |
+| 原生 `torch_npu` 探测进入独立 Jittor 前端 | **adapter** | 库私有实现细节，已由 `jittor_transformers/adapter.py` 的 NPU guard 处理；版本门 `SUPPORTED_VERSIONS={4.56.2,5.5.3}`，失败 fail-closed |
 | `param.grad` 曝光为 `None`（计算对、只暴露错） | **jittor.compat.torch** | 已在 compat 修（见 [`jittor-torch-diff`](../jittor-torch-diff/SKILL.md)），不是核心缺能力 |
 | 拼写/签名与 torch 不同的 API | **jittor.compat.torch** | compat 只做适配；出现第二套实现即放错位置 |
 | 能力本身 jittor 没有（例：NPU bool 归约，公共 `jt.all`/`Tensor.all`/`jt.any` 是 Transformers 需要的路径） | **jittor 核心** | [`known-issues` KI-BACKEND-001](../../manuals/known-issues.md) |
@@ -247,7 +238,7 @@ PyTorch CPU。
 - 门禁：[`test_ecosystem_parity.py`](../../../compat/tests/torch/test_ecosystem_parity.py)、
   [`test_ecosystem_speed.py`](../../../compat/tests/torch/test_ecosystem_speed.py)、
   [`noxfile.py`](../../../noxfile.py) 的 `ecosystem` session。
-- Adapter：[`adapters/jittor_adapters/transformers.py`](../../../adapters/jittor_adapters/transformers.py)。
+- Adapter：[`jittor_transformers/adapter.py`](https://github.com/JittorEcosystem/jittor-transformers/blob/main/jittor_transformers/adapter.py)。
 - 对拍/分流方法：[`jittor-torch-diff`](../jittor-torch-diff/SKILL.md)、
   [`downstream-library-adaptation`](../downstream-library-adaptation/SKILL.md)；
   更深的性能方法：[`jittor-transformers-perf`](../jittor-transformers-perf/SKILL.md)。

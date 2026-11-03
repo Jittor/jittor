@@ -38,7 +38,7 @@ SHA256，未知版本、源码变更或导入后激活均拒绝。
 将下游 checkout、wheel 和原始产物放在 `$JITTOR_LAB_ROOT/deepspeed/` 与
 `$JITTOR_LAB_ROOT/_state/deepspeed/`，不写进主仓库。两端使用同一源码版本的真实
 DeepSpeed 发行包；构建包时使用 binary Torch，不让 pip 换掉 oracle。
-Jittor 端独立安装 `adapters/` 发行包，不能靠 source `sys.path` 假装 entry point 已安装。
+Jittor 端独立安装 [jittor-deepspeed](https://github.com/JittorEcosystem/jittor-deepspeed) 发行包，不能靠 source `sys.path` 假装 entry point 已安装。
 
 准备两套 Python 环境后执行：
 

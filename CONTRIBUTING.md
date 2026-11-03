@@ -42,7 +42,7 @@ export cache_name="${cache_name:-local-dev}"
 ├── python/jittor/       # the Python runtime package (pure Python)
 ├── python/jittor_utils/ # bootstrap for the build utilities in jittor/build/utils/
 ├── compat/              # the optional `jittor-compat` distribution: torch shim, FSDP2, triton
-├── adapters/            # the optional `jittor-torch-adapters` distribution
+├── adapters/            # 独立适配仓库索引（JittorEcosystem）
 ├── tests/               # repository pytest suite; not shipped in wheels
 ├── examples/            # runnable examples and MyST notebook sources
 ├── benchmarks/          # ASV regressions, Torch comparisons, and ACL measurements

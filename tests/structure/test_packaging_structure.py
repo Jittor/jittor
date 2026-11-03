@@ -15,6 +15,20 @@ class TestPackagingStructure(unittest.TestCase):
         if not cls.pyproject_path.is_file():
             raise unittest.SkipTest("packaging metadata requires a source checkout")
 
+    def test_notebook_container_copies_every_runtime_resource_root(self):
+        # Core package-data maps resources outside python/. A pip install can
+        # otherwise succeed while the installed JIT compiler lacks its sources.
+        spec = importlib.util.spec_from_file_location(
+            "manifest_container_contract", self.repo_root / "tools/build/generate_manifest.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        roots = {Path(path).parts[0] for path in module.runtime_resources(self.repo_root)}
+        copied = set()
+        for line in (self.repo_root / "Dockerfile").read_text().splitlines():
+            if line.startswith("COPY "):
+                copied.update(line.split()[1:-1])
+        self.assertFalse(roots - copied, "Docker build omits runtime resource roots")
+
     def test_find_packages_matches_every_regular_package(self):
         from setuptools import find_packages
 
@@ -108,10 +122,8 @@ class TestPackagingStructure(unittest.TestCase):
         core_version = versions[0]
         with (self.repo_root / "compat/pyproject.toml").open("rb") as stream:
             frontend = tomllib.load(stream)["project"]
-        with (self.repo_root / "adapters/pyproject.toml").open("rb") as stream:
-            adapters = tomllib.load(stream)["project"]
         self.assertEqual(frontend["version"], core_version)
-        for project, name in ((frontend, "jittor"), (adapters, "jittor-compat")):
+        for project, name in ((frontend, "jittor"),):
             with self.subTest(project=project["name"]):
                 dependencies = [Requirement(value) for value in project["dependencies"]]
                 matched = [item for item in dependencies if canonicalize_name(item.name) == name]

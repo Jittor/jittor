@@ -123,7 +123,7 @@ entry point。
 │   ├── nn/  optim/  autograd/  fft/  sparse/  dataset/  transform/  models/
 │   ├── linalg/  distributions/  init/
 │   ├── distributed/  contrib/  tools/
-├── compat/                   # 独立发行物（jittor-compat）：torch shim、fsdp2、triton；vLLM 属于 adapters/
+├── compat/                   # 独立发行物（jittor-compat）：torch shim、fsdp2、triton；下游适配位于 JittorEcosystem 独立仓库
 ├── tools/  tests/  docs/  examples/  benchmarks/
 └── agent/                    # 只有 manuals/ 与 skills/
 ```
@@ -204,11 +204,7 @@ Torch 兼容按**归属**而不是按下游项目划分：
    `jittor-hf-compat`，通过 entry point 注册。**主线 Jittor 不为每个进程安装常驻的
    TRELLIS 或 Gaussian Splatting finder。**
 
-vLLM 的粘合代码及其专属测试由主仓库的 `adapters/jittor_adapters/vllm` 与
-`adapters/tests/vllm` 拥有，随既有的 `jittor-torch-adapters` 发行物分发，**不需要单独的
-仓库或发布**。核心与 `jittor-compat` 都不打包该实现，也不打包已废弃的 `jittor.compat.vllm`。
-可选的 Torch 阶段只发现名为 `jittor_vllm` 的模块补丁 entry point；不存在时保持可选。
-该适配器用共享的、owner 感知的回滚机制保存导入前的扩展设置与导入后的补丁。
+下游粘合代码及其专属测试由 [JittorEcosystem](https://github.com/JittorEcosystem) 的独立仓库维护。主仓 `adapters/` 只保留索引；核心与 `jittor-compat` 均不依赖适配器合集。[jittor-vllm](https://github.com/JittorEcosystem/jittor-vllm) 发布可选的 `jittor_vllm` 模块补丁入口，并独立维护版本和设备验收。集成通过共享的所有权事务机制完成注册与回滚。
 
 **安装器必须独立报告每一次尝试的补丁。** 禁止在一串补丁外面套一个宽泛的
 `try/except Exception: pass`——否则一次失败会把之后所有兼容工作都掩盖掉。

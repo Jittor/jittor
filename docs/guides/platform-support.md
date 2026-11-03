@@ -64,7 +64,7 @@ wheel。
 | nightly 生态对拍的参照 torch | CPU 版 `2.7.1`，配 `transformers 4.46.3`、`diffusers 0.31.0`、`peft 0.13.2` | 门禁，`.github/workflows/ecosystem.yml`（`nox -s ecosystem`，七个用例跑两遍，比输出与每个梯度） |
 | 真实模型差距表的参照 torch | `2.11.0+cu128`（cuDNN 9.19），Transformers 4.56.2、Diffusers 0.35.1 | [Torch 兼容层在真实模型上对 PyTorch](../results/2026-09-24-torch-compat-real-models.md) |
 | 最近几次 SDPA / 端到端测量的参照 torch | `2.13.0+cu129` | [下游库性能台账](../performance/library-standing.md) |
-| 适配器支持的库版本 | Transformers 4.56.2 / 5.5.3；TorchMetrics 1.7.4 | `adapters/pyproject.toml` 与 [`adapters/README.md`](https://github.com/Jittor/jittor/blob/master/adapters/README.md)；未识别的版本会抛 `UnsupportedAdapterVersion` |
+| 下游集成准入版本 | 按库独立限定 | [JittorEcosystem](https://github.com/JittorEcosystem) 各仓库维护版本校验与硬件验收，未识别版本显式拒绝 |
 
 **编译过的 PyTorch 扩展一概不支持**：`mmcv.ops`、`torch_npu` 这类自带针对 PyTorch
 C++ ABI 编译的 `.so` 的包，Python 层的兼容层装不进来。这是架构边界，不是待办事项，

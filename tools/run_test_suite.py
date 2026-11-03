@@ -165,7 +165,12 @@ def _session_environment(session, serial_compile=False, backend="cpu"):
         environment["JITTOR_TEST_DEVICES"] = "cpu"
         environment.pop("JITTOR_TEST_REQUIRE_CUDA", None)
         environment.pop("JITTOR_TEST_ACCELERATOR_MIN_EXECUTED", None)
-    environment["REAL_TORCH_SITE"] = ""
+    # Native oracle tests preload explicitly configured binary PyTorch before
+    # importing Jittor. Clearing this path makes discovery succeed while the
+    # later oracle import fails. Torch-mode tests must never inherit it:
+    # pytest's oracle precedence would otherwise disable their shim.
+    if session == "torch":
+        environment["REAL_TORCH_SITE"] = ""
     environment["JITTOR_TORCH_SHIM"] = "1" if session == "torch" else "0"
     # Keep the standalone runner fail-closed like both nox gate sessions.  A
     # skip without an explicit environment reason is otherwise reported but

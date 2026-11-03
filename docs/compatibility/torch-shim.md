@@ -90,18 +90,18 @@ JIT kernel 关闭 CUDA fast-math contraction。项目自己的扩展保留其构
 - **`jittor.external_backends`** —— 通过 `jittor.compat.external_backend` 注册扩展
   发现策略。
 
-本仓库维护的适配器是一个独立发行物：`jittor-torch-adapters`（源码在
-[`adapters/`](https://github.com/Jittor/jittor/blob/master/adapters/README.md)，
-Python 包 `jittor_adapters`，依赖 `jittor-compat` 同版本）。它注册三个
-`jittor.module_patches` entry point：
+下游集成在 [JittorEcosystem](https://github.com/JittorEcosystem) 中独立发行，核心与 compat 不依赖适配器合集。每个仓库维护自己的源码、测试、版本约束和设备支持记录。可选模块补丁入口如下：
 
-| entry point | 版本 | 作用 |
-| --- | --- | --- |
-| `jittor_transformers` | Transformers 4.56.2、5.5.3 | 让 Transformers 自带的 `torch_npu` 探测返回假 |
-| `jittor_torchmetrics` | TorchMetrics 1.7.4 | 私有的 bincount / 拼接 / safe-divide 助手保持既有 Jittor 行为 |
-| `jittor_vllm` | 见 `adapters/README.md` | vLLM 的编译扩展面与层补丁 |
+| entry point | 仓库 |
+|---|---|
+| `jittor_transformers` | [jittor-transformers](https://github.com/JittorEcosystem/jittor-transformers) |
+| `jittor_torchmetrics` | [jittor-torchmetrics](https://github.com/JittorEcosystem/jittor-torchmetrics) |
+| `jittor_tensordict` | [jittor-tensordict](https://github.com/JittorEcosystem/jittor-tensordict) |
+| `jittor_verl` | [jittor-verl](https://github.com/JittorEcosystem/jittor-verl) |
+| `jittor_vllm` | [jittor-vllm](https://github.com/JittorEcosystem/jittor-vllm) |
+| `jittor_deepspeed` | [jittor-deepspeed](https://github.com/JittorEcosystem/jittor-deepspeed) |
 
-安装它即可让 entry point 被发现；未安装时报告为 `unavailable`，不影响前端。
+安装所需集成即可让 entry point 被发现；未安装时报告为 `unavailable`，不影响前端。
 版本是显式的：未识别的版本在应用补丁时抛 `UnsupportedAdapterVersion`。
 **Jittor 自身不导入这些第三方库、不检查它们的目录结构、也不安装长期存在的项目专属
 导入 finder。** 其它项目（TRELLIS、Gaussian Splatting 之类）的粘合代码按同样的

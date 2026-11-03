@@ -24,6 +24,10 @@ def test_vllm_session_binds_gate_device_versions_and_oracle(monkeypatch, tmp_pat
     monkeypatch.setenv('JT_BUILD_NVCC_PATH', '/opt/cuda/bin/nvcc')
     monkeypatch.setenv('JITTOR_SOURCE_ROOT', '/foreign/source')
     monkeypatch.setenv('JITTOR_ECOSYSTEM_SPEED_RATIO', '1.01')
+    adapter_source = tmp_path / 'jittor-vllm'
+    adapter_source.mkdir()
+    (adapter_source / 'pyproject.toml').write_text('[project]\nname = "jittor-vllm"\n')
+    monkeypatch.setenv('JITTOR_VLLM_SOURCE', str(adapter_source))
     monkeypatch.setenv('JITTOR_VLLM_CHECKOUT', str(tmp_path))
     wheel = tmp_path / 'actual-vllm.whl'
     wheel.touch()
@@ -48,6 +52,7 @@ def test_vllm_session_binds_gate_device_versions_and_oracle(monkeypatch, tmp_pat
     assert env['JITTOR_ECOSYSTEM_TF32'] == '0'
     assert env['JITTOR_VLLM_CHECKOUT'] == str(tmp_path)
     assert env['JITTOR_VLLM_WHEEL'] == str(wheel)
+    assert env['JITTOR_VLLM_SOURCE'] == str(adapter_source)
     assert env['PYTEST_ADDOPTS'] == ''
     assert env['JT_BACKEND'] == env['JITTOR_TEST_DEVICES'] == device
     assert env['JT_USE_CUDA'] == env['use_cuda'] == str(int(device == 'cuda'))
@@ -68,7 +73,7 @@ def test_vllm_session_binds_gate_device_versions_and_oracle(monkeypatch, tmp_pat
     assert ('assert torch.cuda.is_available()' if device == 'cuda' else
             'assert not torch.cuda.is_available()') in command[-1]
     installs = [args for args, _kw in session.calls if 'pip' in args and 'install' in args]
-    assert any(args[-1] == str(Path(__file__).resolve().parents[2] / 'adapters')
+    assert any(args[-1] == str(adapter_source)
                and '--no-deps' in args and '--no-build-isolation' in args for args in installs)
 
 
@@ -123,3 +128,16 @@ def test_vllm_case_and_full_input_gradient_contract_are_registered():
     assert set(case["REQUIRED_GRADIENTS"]) == {
         'ingrad::gates', 'ingrad::hidden_states', 'ingrad::query', 'ingrad::key',
     }
+
+
+@pytest.mark.parametrize("source", (None, "missing-project"))
+def test_adapter_installation_requires_explicit_project(monkeypatch, tmp_path, source):
+    if source is None:
+        monkeypatch.delenv("JITTOR_VLLM_SOURCE", raising=False)
+    else:
+        monkeypatch.setenv("JITTOR_VLLM_SOURCE", str(tmp_path / source))
+    module = _load_noxfile(monkeypatch, tmp_path)
+    session = _FakeSession(tmp_path, "/opt/candidate/bin/python3-config")
+    with pytest.raises(AssertionError, match="JITTOR_VLLM_SOURCE"):
+        module["_install_ecosystem_adapter"](session, {}, "/opt/candidate/bin/python", "vllm")
+    assert not session.calls

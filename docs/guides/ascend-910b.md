@@ -306,10 +306,11 @@ export backend_fallback=error
 
 ```bash
 python -m pip install "transformers==4.56.2" "jinja2==3.1.6"
+export JITTOR_TRANSFORMERS_SOURCE=/path/to/jittor-transformers
 export QWEN3_MODEL=/path/to/Qwen3-8B
 export JITTOR_TORCH_SHIM=1
 
-backend_fallback=error python tests/backends/acl/manual/run_qwen3_transformers.py \
+backend_fallback=error python "$JITTOR_TRANSFORMERS_SOURCE/tools/probes/run_qwen3_transformers.py" \
   --model "$QWEN3_MODEL" \
   --dtype bfloat16 \
   --max-new-tokens 8 \
