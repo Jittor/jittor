@@ -416,7 +416,7 @@ comparison is not your fault.
 
 The complete entries — severity, evidence, owner and exit conditions — are in the
 repository's
-[`agent/manuals/known-issues.md`](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/manuals/known-issues.md).
+[historical record](https://github.com/Jittor/jittor/blob/3679de22c02c83b982432a0e1bdb3da148411c50/agent/manuals/known-issues.md).
 
 ## Related
 

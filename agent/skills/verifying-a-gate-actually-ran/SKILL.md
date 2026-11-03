@@ -14,28 +14,28 @@ description: 在相信一次绿色的测试运行之前，先证明它跑的是�
 
 ## 一、你测的是哪一棵树
 
-开发环境里 `jittor` 是 editable 安装：site-packages 的 `.pth` 指向**主工作树**。所以在
-worktree 里裸跑 `python -c "import jittor"` 导入的是主树，不是你的改动。
+先确定验证对象是源码还是安装产物，再检查实际导入来源。editable 安装可能指向另一棵
+工作树，普通脚本也可能正确导入预期的 wheel；不能仅凭命令形式判断。
 
-- `pytest` 是对的：`tests/conftest.py` 把本 checkout 的 `python/` 放在 sys.path 最前，
-  在 worktree 里跑 pytest 天然导入本 worktree。
-- **手写的 `python -c`、`python 脚本.py`、`subprocess`、`nox` 一律不对**，必须显式设
-  `PYTHONPATH=<你的工作树>/python`。
-- `nox` 会新建 venv，里面的 jittor 来源要单独确认，不能假设。
+- 源码验证：使用仓库测试入口，或显式设置 `PYTHONPATH=<worktree>/python`；确认
+  `jittor.__file__` 与目标源码路径一致。`JITTOR_SOURCE_ROOT` 等覆盖项也要检查。
+- wheel 验证：使用隔离安装环境，清除源码路径注入，确认导入的是该环境的发行物，
+  记录 wheel 对应提交。不能为让检查通过而把源码重新加到 `PYTHONPATH`。
+- nox 与子进程按各自会话的安装/源码契约核对来源，不默认继承父进程的正确性。
 
-每次开始验证前先跑这一条，它必须打印你自己的工作树路径：
+源码自检示例：
 
 ```bash
 PYTHONPATH=$WORKTREE/python JITTOR_HOME=$MYCACHE TMPDIR=$MYTMP \
-  python -c "import jittor, os; print(os.path.dirname(jittor.__file__))"
+  python -c "import jittor; print(jittor.__file__)"
 ```
 
-C++ 改动还要再确认一次缓存目录：Jittor 的 cache 路径里带工作树名，
-`Create cache dir: .../<工作树名>/jit` 打印的名字不是你的，就说明这次编译的不是你的源码。
+C++ 验证同时记录实际 `cache_path`、源码身份和构建配置。当前缓存按路径与配置指纹
+分区，不以分支名或易读的工作树名作为唯一身份依据。
 
 ## 二、用例真的被实例化了吗
 
-pytest 对"0 个用例"和"全部通过"的输出**没有区别**：两者都退出 0。本仓库因此丢过整层证据——
+零实例化的测试类可能不产生失败；是否真正覆盖目标不能只看最终退出码。本仓库因此丢过整层证据——
 227 个算子的反向正确性（gradcheck）在三套门禁里都实例化为 0 个用例，同时三套门禁全绿。
 
 机制（`tests/_helpers/device_types.py`）：
@@ -627,7 +627,7 @@ fuser -v "$JITTOR_HOME/.cache/jittor/jittor.lock" 2>&1
    pass，但 `src/codegen/opt/pass_manager.cc` 里它排在 `AtomicTunerPass` 之后，读一眼就能排除；真正的原因
    是 CUDA 全归约的快路径（`backends/cuda/kernels/nn/full_reduce_cuda.py`）让 `x.sum()` 不再进融合算子 JIT。
    `$JITTOR_HOME` 下 `jit/` 目录的文件名带算子键，看有没有对应的 kernel 族比读断言快得多。
-5. 定位到就停手：把归因写进对应的 GitHub issue/PR，真实缺陷记入 `agent/manuals/known-issues.md`。
+5. 定位到就停手：把归因写进对应的 GitHub issue/PR，真实缺陷记入 [GitHub issue](https://github.com/Jittor/jittor/issues)。
 
 **一次正确的优化可以让一条测试静默失去意义**：给热路径装快路径、绕过某个 pass 时，去 grep 谁在测被绕开的
 那条路径——测试不会因为它测的路径消失而变红，只会变得没有意义。同一类的活口：`SharedReducePass::run()`

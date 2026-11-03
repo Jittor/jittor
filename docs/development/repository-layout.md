@@ -70,9 +70,9 @@ Torch 兼容、机制说明（`docs/notes/`）、性能、发布说明、社区�
 （`index.md` / `index.en.md`）各自只链接本语言的页面。
 
 **仓库不保存任务看板、计划、交接或分工这类过程文档。** 任务、状态与交接记在 GitHub issue
-与 PR 中，验证证据写进 PR 描述；等待硬件验收的事项见
-[`agent/manuals/deferred-hardware.md`](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/manuals/deferred-hardware.md)，缺陷与限制见
-[问题总账](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/manuals/known-issues.md)。2.0 整改期的过程材料已在收口时删除（Git
+与 PR 中，验证证据写进 PR 描述。既有待复查的硬件事项见
+[历史记录](https://github.com/Jittor/jittor/blob/3679de22c02c83b982432a0e1bdb3da148411c50/agent/manuals/deferred-hardware.md)，历史缺陷与限制见
+[历史记录](https://github.com/Jittor/jittor/blob/3679de22c02c83b982432a0e1bdb3da148411c50/agent/manuals/known-issues.md)。2.0 整改期的过程材料已在收口时删除（Git
 历史中可查）：仍然成立的设计契约迁入了 `docs/development/`、`docs/notes/` 与
 `docs/compatibility/`；历史验证报告通过固定提交引用，新执行记录写入 GitHub issue/PR。
 `docs/` 不保留日期报告、结果树或演示产物。wheel 内容基线位于 `tools/release/baselines/`。
@@ -80,8 +80,8 @@ Torch 兼容、机制说明（`docs/notes/`）、性能、发布说明、社区�
 活跃索引与入链必须可解析；已归档的结论及其原始测试证据**不被改写成当前的成功**。
 文档检查维持这条"活跃/归档"边界。
 
-`agent/` 只包含 `manuals/` 与 `skills/`；仓库检查脚本一律在 `tools/`。工作流入口是
-[`agent/manuals/agent-index.md`](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/manuals/agent-index.md)。社区项目列表在
+`agent/` 只包含 `README.md` 与 `skills/`；协作规则只在根 `AGENTS.md` 维护，仓库检查脚本在 `tools/`。按任务选用
+[技能目录](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/README.md)。社区项目列表在
 `docs/project/community/`；ASV 源配置在 `benchmarks/asv/asv.conf.json`——nox 从该配置推导绝对的输入
 与外部输出路径，不把基准运行状态搬进工作树。
 所有基准统一归属 [`benchmarks/`](https://github.com/Jittor/jittor/blob/2.0-refactor/benchmarks/README.md)：`asv/` 保存性能回归套件，
@@ -129,7 +129,7 @@ entry point。
 │   ├── distributed/  contrib/  tools/
 ├── compat/                   # 独立发行物（jittor-compat）：torch shim、fsdp2、triton；下游适配位于 JittorEcosystem 独立仓库
 ├── tools/  tests/  docs/  examples/  benchmarks/
-└── agent/                    # 只有 manuals/ 与 skills/
+└── agent/                    # README.md 与 skills/
 ```
 
 旧树没有说明的三条规则：

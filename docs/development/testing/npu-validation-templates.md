@@ -20,7 +20,7 @@
 复制下面的模板到相关 GitHub issue/PR，写明状态、日期、基线提交、验证范围
 （设备、软件版本、跑了什么和没跑什么）、维护者（写角色）与复查条件。
 不在 docs 新建日期报告或结果目录。活跃缺陷只在
-[已知问题总账](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/manuals/known-issues.md) 维护 owner、证据链接、workaround
+[历史记录](https://github.com/Jittor/jittor/blob/3679de22c02c83b982432a0e1bdb3da148411c50/agent/manuals/known-issues.md) 维护 owner、证据链接、workaround
 和退出条件；任务状态记在 GitHub issue 与 PR 中，PR 描述携带验证证据。修复后在 issue/PR 保留
 前后证据，按总账规则移除已解决条目。
 

@@ -31,7 +31,7 @@ export cache_name="${cache_name:-local-dev}"
 ```
 
 使用 CUDA 时，若 `nvcc` 不在 `PATH` 中，请设置 `nvcc_path`。各后端的 CI 要求见
-[`agent/manuals/environment.md`](agent/manuals/environment.md)。
+[隔离验证环境](agent/skills/isolated-validation/SKILL.md)。
 
 ## 仓库结构
 
@@ -47,7 +47,7 @@ export cache_name="${cache_name:-local-dev}"
 ├── benchmarks/          # ASV regressions, Torch comparisons, and ACL measurements
 ├── tools/               # build, docs, lint, release and maintenance commands
 ├── docs/                # the single user- and contributor-facing documentation tree
-├── agent/               # operational manuals and skills (manuals/ and skills/ only)
+├── agent/               # practical skills and their catalogue
 ├── pyproject.toml       # authoritative package, tool, and pytest configuration
 └── noxfile.py           # reproducible local and CI sessions
 ```

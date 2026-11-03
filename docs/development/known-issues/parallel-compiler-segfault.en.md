@@ -2,7 +2,7 @@
 
 [Section contents](../index.en.md) · [中文](parallel-compiler-segfault.md)
 
-This is a historical investigation reference, not the current defect ledger. Check [known issues](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/manuals/known-issues.md) for current status first. For routine slow-test diagnosis use [JIT cache](../testing/jit-cache.en.md); use this page when investigating the specific process/lock failure mechanisms.
+This is a historical investigation reference, not the current defect ledger. Check [historical record](https://github.com/Jittor/jittor/blob/3679de22c02c83b982432a0e1bdb3da148411c50/agent/manuals/known-issues.md) for current status first. For routine slow-test diagnosis use [JIT cache](../testing/jit-cache.en.md); use this page when investigating the specific process/lock failure mechanisms.
 
 - Status: **the file-level compile-pool deadlock is fixed** (2026-09-16); the segfault /
   state corruption of the parallel **operator** compiler is still unresolved under
@@ -21,7 +21,7 @@ This is a historical investigation reference, not the current defect ledger. Che
 
 This page is **the investigation record of a single problem**, not an inventory of known
 issues. The ledger is
-[`agent/manuals/known-issues.md`](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/manuals/known-issues.md),
+[historical record](https://github.com/Jittor/jittor/blob/3679de22c02c83b982432a0e1bdb3da148411c50/agent/manuals/known-issues.md),
 where this page corresponds to `KI-COMPILER-001`; the status, workaround and exit criteria on
 both sides must agree, so changing one means changing the other. The remaining ledger entries
 exist only as entries, without a corresponding long-form page.

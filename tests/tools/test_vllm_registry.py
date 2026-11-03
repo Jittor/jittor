@@ -8,8 +8,7 @@ import unittest
 from unittest import mock
 
 
-SCRIPT = (Path(__file__).resolve().parents[2] / 'agent/skills/'
-          'torch-compat-repo-runbook/scripts/_vllm_registry.py')
+SCRIPT = (Path(__file__).resolve().parents[2] / 'tools/ecosystem/_vllm_registry.py')
 
 
 class TestVllmRegistry(unittest.TestCase):

@@ -1,65 +1,38 @@
 ---
 name: jittor-worktree-verification
-description: 在 git worktree 里验证 Jittor 改动时，确认跑的确实是本 worktree 的代码。用于任何在 worktree（而非主树）中改 python/jittor、src/、backends/ 或 compat/ 后要跑脚本、python -c、mpirun、benchmark 或子进程验证的场合。裸 python 命令会静默导入主树，测出来的绿是别人的绿。
+description: 在 git worktree 里验证 Jittor 改动时，确认跑的确实是本 worktree 的代码。用于任何在 worktree（而非主树）中改 python/jittor、src/、backends/ 或 compat/ 后要跑脚本、python -c、mpirun、benchmark 或子进程验证的场合。源码与安装产物分别核对来源，避免 editable 安装或路径注入让验证对象漂移。
 ---
 
 # 在 worktree 里验证 Jittor 改动
 
-**核心事实**：Jittor 通常以 **editable 方式**装进 conda 环境。`site-packages` 里是一个
-`.pth` 文件，指向**主树**的 `python/` 目录，不是你的 worktree。所以在 worktree 里执行
-裸 `python -c "import jittor"`，导入的是**主树**代码。你的改动一行都没生效，测出来的
-结果与你无关。
+## 先选择验证对象
 
-这条不会报错、不会警告、不会有任何迹象。唯一的症状是「改了没反应」或「修完还是错」。
+| 验证对象 | 来源契约 |
+| --- | --- |
+| 当前 worktree 源码 | 使用仓库测试入口，或显式设置 `PYTHONPATH=<worktree>/python`；确认 `jittor.__file__` 来自目标树 |
+| 当前提交构建的 wheel | 在隔离环境安装产物，清除源码路径注入；确认 `jittor.__file__` 来自安装目录并记录构建提交 |
 
-## 开工自检（每个新 worktree 做一次，每次换验证方式再做一次）
+editable 安装可能指向另一棵工作树，也可能已经正确指向当前树；普通 Python 命令是否
+正确取决于环境，不能一概判断。源码 checkout 的 pytest 会配置源码路径，nox 各会话
+则有自己的源码/产物约定。每次换验证方式都重新核对。
 
-```bash
-# 必须打印出你自己的 worktree 路径
-JITTOR_HOME=<你的 _home> TMPDIR=<你的 _tmp> \
-PYTHONPATH=<你的 worktree>/python \
-python -c "import jittor, os; print(os.path.dirname(os.path.dirname(jittor.__file__)))"
-```
-
-把它和 `git rev-parse --show-toplevel` 比一下。不相等就说明你在测别人的代码。
-
-想看 editable 指向哪里：
+源码自检：
 
 ```bash
-cat "$(python -c 'import site;print(site.getsitepackages()[0])')"/__editable__*jittor*.pth
+JITTOR_HOME=<隔离缓存> TMPDIR=<隔离临时目录> \
+PYTHONPATH=<worktree>/python \
+python -c "import jittor; print(jittor.__file__)"
 ```
 
-## 三件套环境变量：少一个会发生什么
+输出应位于 `<worktree>/python/jittor/`。安装产物验证不要使用这条源码命令；在安装环境
+中直接打印来源，确认不落在 checkout。核心和 compat 是独立发行物，单独注入核心源码
+不会安装 compat。
 
-| 变量 | 作用 | 少了会怎样 |
-| --- | --- | --- |
-| `PYTHONPATH=<worktree>/python` | 让 `import jittor` 命中本 worktree | **静默导入主树**，改动完全不生效 |
-| `JITTOR_HOME=<自己的缓存目录>` | 隔离 JIT 缓存 | 与别的 agent 共用缓存 → 缓存损坏 → 在毫不相干的算子上大面积报错 |
-| `TMPDIR=<自己的临时目录>` | 隔离编译临时文件 | 同上，且可能写满 `/tmp` |
+## 缓存与子进程
 
-三个一起写，不要只写一个。
-
-## pytest 是对的，手写命令不是
-
-`tests/conftest.py` 会把 **本 checkout 的 `python/`**
-插到 `sys.path[0]`。所以在 worktree 里跑 pytest 天然导入本 worktree——**这是唯一
-自动正确的入口**。
-
-```bash
-# 正确：在 worktree 里直接跑，不需要 PYTHONPATH
-cd <worktree> && JITTOR_HOME=... TMPDIR=... pytest tests/<...> -x -q
-```
-
-要用 pytest 测**另一个**目录的副本：`JITTOR_SOURCE_ROOT=<那个目录> pytest ...`
-（以前要在每条命令上写 `-o pythonpath=<那个目录>/python`）。
-
-会**静默测错代码**的入口（都要手动加 `PYTHONPATH`）：
-
-- `python -c "..."` 和 `python some_script.py`
-- `mpirun ... python ...`（每个 rank 各自 import，全都会走主树）
-- 任何 `subprocess` / `os.system` 起的子进程
-- benchmark 脚本、profile 脚本、复现脚本
-- `python -m` 起的模块
+每个并发任务使用独立 `JITTOR_HOME` 与 `TMPDIR`，放在 lab 的状态目录。默认缓存位置
+可能被其它任务共享；首次 JIT 串行预热，测试与 benchmark 不共享缓存并发运行。
+普通脚本、mpirun 和子进程也要验证各自来源；不能假设它们继承了父进程的 `sys.path`。
 
 ### 测试里起子进程：只有一个入口，而且是强制的
 
@@ -111,9 +84,9 @@ r = run_mpi_python(2, [script_path])                 # mpirun -np 2 python scrip
 
 「跑绿了」不等于通过。还要能回答：
 
-1. `jittor.__file__` 在我的 worktree 里吗？
+1. `jittor.__file__` 是否符合本次选定的源码或 wheel 来源契约？
 2. 如果验证涉及子进程（mpirun / launch / subprocess），**子进程**里的
-   `jittor.__file__` 也在我的 worktree 里吗？
+   `jittor.__file__` 是否也符合相同来源契约？
 3. 缓存目录是我自己的 `JITTOR_HOME` 吗？（日志里的 `cache_path:` 一行会打出来，看一眼）
 4. 除了本任务的新测试，我跑了**受影响目录的既有测试**吗？
 
@@ -142,35 +115,11 @@ r = run_mpi_python(2, [script_path])                 # mpirun -np 2 python scrip
 **因此：worktree 里禁止 `git stash`。** stash 栈是全局的一个栈，两个 agent 各自
 `push` 再各自 `pop`，拿回来的是对方的改动——这不是理论风险，已经真实发生过一次完整对调。
 
-### 要做「修前失败、修后通过」怎么办
+### 修前与修后对照
 
-用补丁文件，存在**自己的 `TMPDIR`** 里：
-
-```bash
-git diff -- <你改的文件> > "$TMPDIR/fix.patch"   # 存下修后状态
-git checkout -- <你改的文件>                      # 回到修前
-<跑测试，确认它失败——这一步才是重点>
-git apply "$TMPDIR/fix.patch"                     # 回到修后
-<再跑一次，确认它通过>
-```
-
-新增的文件不在 `git diff` 里，用 `mv` 挪走再挪回来，**不要** `git stash -u`。
-
-### 万一已经被 stash 串号了
-
-stash commit 只是变成悬垂对象，没被删。按 message 找回来：
-
-```bash
-for c in $(git fsck --unreachable --no-progress 2>/dev/null | grep commit | awk '{print $3}'); do
-  echo "$c :: $(git log -1 --format='%ci %s' $c)"
-done | sort -k2
-```
-
-stash 的 message 形如 `On <分支>: <你写的 -m 文本>` 或 `WIP on <分支>: <提交标题>`。
-认出自己那条之后 `git stash apply <commit>`（先把误 pop 进来的别人的文件
-`git checkout --` 还原掉，别提交它们；还原前先 `git diff > 一份patch` 存起来还给对方）。
-
-本仓库禁止 `git stash`（见 `AGENTS.md`）；上面的找回办法只用于别人已经 stash 过、你的改动被串走的情况。
+为基线与修复准备不同的 worktree 或只读快照，分别记录提交并配置隔离缓存。
+不要在当前工作树中反复 checkout、apply 来切换基线，也不要用共享 stash 暂存改动。
+Git 共享状态和恢复流程见 [git-worktree-shared-state](../git-worktree-shared-state/SKILL.md)。
 
 ## 跑套件期间不要改源码
 
@@ -185,17 +134,16 @@ checkout 回去、再 apply 回来，结果是 **373 failed / 563 passed**；同
 所以：
 
 - **后台跑套件时，工作区必须静止。** 要么等它跑完，要么先把要做的编辑做完再启动。
-- 「修前失败 / 修后通过」的 patch 对拉（`git diff > $TMPDIR/x.patch` → `checkout --`
-  → 跑 → `git apply`）**只能在没有后台套件时做**。
+- 修前与修后分别在冻结的工作树运行，避免后台测试读到混合版本。
 - 看到「大面积、跨文件、与改动无关」的失败，第一反应先问「刚才这棵树动过吗」，
   再去查缓存损坏或并发。静止重跑一次比读 373 条 traceback 快得多。
 
 ## 改了 C++ 之后
 
-改 `src/**` 或 `backends/**` 的 C++ 之后，**每个新进程**都要重编，
-第一次约 10 分钟（核心约 156 个 TU）。所以：
+C++ 改动触发受影响单元的增量编译；是否需要编译由源码、缓存和构建配置决定，
+不是每个新进程都重编。首次构建单列计时，并为运行预留实际冷编译预算。
 
-- C++ 改动攒着一次验证，不要改一行跑一次。
-- 编译期间**不要 `kill -9`**。真要杀，先把整个 `JITTOR_HOME` 删掉再重跑。
-- 多进程验证（mpirun）第一次会串行编译（`jittor.lock` 是 flock 互斥的），时间是单进程
-  的 N 倍，别按单进程的耗时设超时。
+- 首次 JIT/扩展编译串行完成，随后按隔离缓存规则运行多进程测试。
+- 不要在编译进程存活时删除缓存。需要中止时先停止本任务进程及子进程，保留诊断，
+  再用新的隔离缓存复现；不清理其他任务状态。
+- 同步或换配置后的结果只代表实际测试的提交与缓存条件，不能直接复用旧结论。

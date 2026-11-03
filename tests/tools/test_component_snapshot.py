@@ -7,7 +7,7 @@ import subprocess
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-SCRIPTS = 'agent/skills/torch-compat-repo-runbook/scripts/'
+SCRIPTS = 'tools/ecosystem/'
 LEGACY = 'tools/run_transformers_gate.py'
 ENVIRONMENT = 'tools/ecosystem_environment.py'
 RUNTIME = SCRIPTS + '_component_runtime.py'

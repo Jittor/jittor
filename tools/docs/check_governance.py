@@ -20,9 +20,9 @@ REQUIRED_DOCUMENTS = (
     "README.md",
     "CONTRIBUTING.md",
     "AGENTS.md",
-    "agent/manuals/project-context.md",
-    "agent/manuals/environment.md",
-    "agent/manuals/known-issues.md",
+    "agent/README.md",
+    "agent/skills/hccl-on-device-verification/SKILL.md",
+    "agent/skills/isolated-validation/SKILL.md",
     "docs/index.md",
     "docs/getting-started/index.md",
     "docs/getting-started/installation.md",
@@ -38,8 +38,6 @@ REQUIRED_DOCUMENTS = (
     "docs/development/source-architecture.md",
     "docs/development/backends/acl-backend-contracts.md",
     "docs/development/compatibility/install-transactions.md",
-    "agent/manuals/agent-index.md",
-    "agent/manuals/deferred-hardware.md",
     "benchmarks/asv/asv.conf.json",
     "docs/development/compatibility/principles.md",
     "docs/notes/numerics/complex-dtype.md",
@@ -175,12 +173,10 @@ def check_contract(documents):
             )
         )
 
-    if (REPO_ROOT / "agent" / "manuals" / "design").exists():
-        errors.append("retired documentation path still exists: agent/manuals/design")
-    allowed_agent_entries = {"manuals", "skills"}
+    allowed_agent_entries = {"README.md", "skills"}
     for entry in (REPO_ROOT / "agent").iterdir():
         if entry.name not in allowed_agent_entries:
-            errors.append("agent only owns manuals/skills; repository commands belong in tools: " + entry.name)
+            errors.append("agent only owns README.md and skills/; rules belong in AGENTS.md: " + entry.name)
 
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     for token in (
@@ -225,19 +221,6 @@ def check_contract(documents):
     for token in ("cc-connect", "/home/"):
         if token in agents:
             errors.append("AGENTS.md contains host/tool-specific rule: {0}".format(token))
-
-    context_path = REPO_ROOT / "agent" / "manuals" / "project-context.md"
-    context = context_path.read_text(encoding="utf-8")
-    context_lines = len(context.splitlines())
-    if context_lines > 180:
-        errors.append(
-            "project-context.md must remain an index (<=180 lines); found {0}".format(context_lines)
-        )
-    if "/home/" in context or re.search(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", context):
-        errors.append("project-context.md contains machine-specific environment details")
-    for token in ("Last reviewed:", "Baseline reviewed:", "Owner:", "Freshness expires:"):
-        if token not in context:
-            errors.append("project-context.md is missing freshness metadata: {0}".format(token))
 
     stale_references = (
         "README.cn.md",

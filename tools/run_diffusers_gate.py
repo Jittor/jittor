@@ -11,7 +11,7 @@ import sys
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPTS = ROOT / 'agent/skills/torch-compat-repo-runbook/scripts'
+SCRIPTS = ROOT / 'tools/ecosystem'
 CASE = 'diffusers_unet2d'
 RUNTIME_KEYS = ('HOME', 'REAL_HOME', 'JITTOR_HOME', 'TMPDIR', 'XDG_CACHE_HOME',
                 'JITTOR_TORCH_CACHE_ROOT', 'JITTOR_TORCH_RUNTIME_ROOT', 'JITTOR_TORCH_HOME',

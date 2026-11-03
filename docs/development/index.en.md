@@ -92,10 +92,10 @@ known-issues/parallel-compiler-segfault.en
 
 ## Report a result or defect
 
-Record a run, its commit, command, device and limitations in the related GitHub issue/PR.
-The [known-issues ledger](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/manuals/known-issues.md)
-owns active defects; [deferred hardware](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/manuals/deferred-hardware.md)
-owns pending device acceptance. This guide keeps reusable mechanisms, not a second results log.
+Track tasks, defects, pending hardware acceptance and execution results in GitHub issues/PRs.
+Repository rules live in [AGENTS.md](https://github.com/Jittor/jittor/blob/2.0-refactor/AGENTS.md);
+select a practical method from the [skill catalogue](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/README.md).
+The rules page links immutable historical issue and hardware records. Unverified items remain unresolved.
 
 ## Compatibility architecture and contribution workflow
 

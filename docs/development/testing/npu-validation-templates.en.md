@@ -23,7 +23,7 @@ Copy these templates into the relevant GitHub issue/PR. Record status, date,
 baseline commit, validation scope (device, software versions, what was and was not run),
 maintainer role and recheck conditions. Do not create dated reports or result trees in docs.
 Active defects maintain owner, evidence links, workaround and exit criteria only in the
-[known-issues ledger](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/manuals/known-issues.md);
+[historical record](https://github.com/Jittor/jittor/blob/3679de22c02c83b982432a0e1bdb3da148411c50/agent/manuals/known-issues.md);
 task status is recorded in GitHub issues and PRs, and PR descriptions carry the validation
 evidence. After a fix, keep the before/after evidence in the report and remove the resolved
 entry according to the ledger rules.

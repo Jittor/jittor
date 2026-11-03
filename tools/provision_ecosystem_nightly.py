@@ -17,7 +17,7 @@ import sys
 import urllib.request
 import zipfile
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPTS = ROOT / 'agent/skills/torch-compat-repo-runbook/scripts'
+SCRIPTS = ROOT / 'tools/ecosystem'
 TORCH = '2.11.0+cpu'
 COMMON = ('numpy==1.26.4', 'accelerate==1.10.1', 'huggingface-hub==0.35.3', 'tokenizers==0.22.2', 'safetensors==0.8.0', 'astunparse==1.6.3', 'pillow==11.0.0', 'tqdm==4.67.1')
 RUNTIME_SETUPTOOLS = 'setuptools==80.9.0'

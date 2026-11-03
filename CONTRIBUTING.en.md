@@ -40,7 +40,7 @@ export cache_name="${cache_name:-local-dev}"
 ```
 
 For CUDA, set `nvcc_path` when `nvcc` is not already on `PATH`. Backend-specific
-CI requirements are documented in [`agent/manuals/environment.md`](agent/manuals/environment.md).
+CI requirements are documented in [isolated validation](agent/skills/isolated-validation/SKILL.md).
 
 ## Repository map
 
@@ -56,7 +56,7 @@ CI requirements are documented in [`agent/manuals/environment.md`](agent/manuals
 ├── benchmarks/          # ASV regressions, Torch comparisons, and ACL measurements
 ├── tools/               # build, docs, lint, release and maintenance commands
 ├── docs/                # the single user- and contributor-facing documentation tree
-├── agent/               # operational manuals and skills (manuals/ and skills/ only)
+├── agent/               # practical skills and their catalogue
 ├── pyproject.toml       # authoritative package, tool, and pytest configuration
 └── noxfile.py           # reproducible local and CI sessions
 ```

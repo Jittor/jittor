@@ -11,7 +11,7 @@ from _ecosystem_harness import REAL_TORCH_PYTHON, _comparison_floor, _divergence
 from _ecosystem_openmmlab_cases import PARAMETERS_BY_CASE, BUFFER_NAMES_BY_CASE
 
 ROOT = Path(__file__).resolve().parents[3]
-PROBE = ROOT / "agent/skills/torch-compat-repo-runbook/scripts/openmmlab_training_probe.py"
+PROBE = ROOT / "tools/ecosystem/openmmlab_training_probe.py"
 
 
 def _training_run(python, runtime, case, output, device, weights=None):

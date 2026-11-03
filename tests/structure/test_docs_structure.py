@@ -44,6 +44,13 @@ class TestDocsStructure(unittest.TestCase):
     def test_one_canonical_documentation_tree_remains(self):
         self.assertTrue((self.docs_root / "conf.py").is_file())
         self.assertTrue((self.docs_root / "index.md").is_file())
+        self.assertTrue((self.repo_root / "agent" / "README.md").is_file())
+        ignored = subprocess.run(
+            ("git", "check-ignore", "--no-index", "--", "agent/README.md"),
+            cwd=str(self.repo_root), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            universal_newlines=True,
+        )
+        self.assertEqual(ignored.returncode, 1, ignored.stdout + ignored.stderr)
         retired = (
             "doc",
             "docs/results",
@@ -52,7 +59,9 @@ class TestDocsStructure(unittest.TestCase):
             "agent/results",
             "agent/baselines",
             "agent/scripts",
-            "agent/README.md",
+            "agent/manuals",
+            "agent/skills/jittor-dev-context",
+            "agent/skills/github-collaboration-commit",
             "asv.conf.json",
             "bench",
             "benchmarks/asv.conf.json",
@@ -357,7 +366,7 @@ class TestDocsStructure(unittest.TestCase):
                 "docs/development/core-validation.en.md",
                 "docs/project/releases/2.0.md",
                 "docs/notes/iso-8601.md",
-                "agent/manuals/2026-11-02.md",
+                "agent/skills/example/references/2026-11-02.md",
             )
             for relative in dated:
                 with self.subTest(path=relative):

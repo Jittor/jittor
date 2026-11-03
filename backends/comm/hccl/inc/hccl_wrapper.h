@@ -124,7 +124,7 @@ hardware, so the removal cannot be run even once here. Deleting the syncs
 outright would ship an unverified change to the one code path whose failure
 mode is a silently wrong gradient on someone else's cluster. Behind a switch,
 the on-machine step is one environment variable and an A/B comparison rather
-than a code edit -- see `agent/manuals/hccl-on-device-verification.md`.
+than a code edit -- see `agent/skills/hccl-on-device-verification/SKILL.md`.
 
 Flip the default to `stream-order` once that document's checklist passes on a
 real multi-card Ascend node; the switch (and this comment) can go with it.

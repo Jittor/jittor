@@ -84,10 +84,10 @@ directory; the root `README.md` and `README.en.md` are paired the same way. Each
 
 **The repository keeps no process documents such as task boards, plans, handoff notes or
 assignments.** Tasks, status and handoff are recorded in GitHub issues and PRs, and validation
-evidence goes into PR descriptions; items awaiting hardware acceptance are in
-[`agent/manuals/deferred-hardware.md`](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/manuals/deferred-hardware.md),
-and defects and limitations are in the
-[issue ledger](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/manuals/known-issues.md).
+evidence goes into PR descriptions. Inherited hardware items awaiting revalidation remain in the
+[historical record](https://github.com/Jittor/jittor/blob/3679de22c02c83b982432a0e1bdb3da148411c50/agent/manuals/deferred-hardware.md),
+and inherited defect/limitation evidence remains in the
+[historical record](https://github.com/Jittor/jittor/blob/3679de22c02c83b982432a0e1bdb3da148411c50/agent/manuals/known-issues.md).
 Process material from the 2.0 cleanup was deleted at close-out (it remains in Git history):
 design contracts that still hold moved into `docs/development/`, `docs/notes/` and
 `docs/compatibility/`. Historical validation reports use commit-pinned references; new execution
@@ -98,9 +98,9 @@ Active indexes and inbound links must resolve; archived conclusions and their or
 evidence are **not rewritten into present-day success**. The documentation checks maintain this
 "active/archived" boundary.
 
-`agent/` contains only `manuals/` and `skills/`; repository check scripts always live in
-`tools/`. The workflow entry point is
-[`agent/manuals/agent-index.md`](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/manuals/agent-index.md).
+`agent/` contains only `README.md` and `skills/`; collaboration rules live in root `AGENTS.md`, and repository check scripts live in
+`tools/`. Choose a practical method from
+[skill catalogue](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/README.md).
 The community project list is in `docs/project/community/`; the ASV source configuration is
 `benchmarks/asv/asv.conf.json` -- nox derives absolute input and external output paths from
 that configuration and does not move benchmark run state into the working tree.
@@ -156,7 +156,7 @@ preserved only in Git history; the layout itself is guarded by the structural ga
 │   ├── distributed/  contrib/  tools/
 ├── compat/                   # 独立发行物（jittor-compat）：torch shim、fsdp2、triton；downstream integrations live in independent JittorEcosystem repositories
 ├── tools/  tests/  docs/  examples/  benchmarks/
-└── agent/                    # 只有 manuals/ 与 skills/
+└── agent/                    # README.md 与 skills/
 ```
 
 Three rules the old tree did not state:

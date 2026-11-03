@@ -2492,7 +2492,7 @@ def ecosystem_accelerate(session):
         ).strip()
         session.run(
             python,
-            "agent/skills/torch-compat-repo-runbook/scripts/collect_accelerate_scorecards.py",
+            "tools/ecosystem/collect_accelerate_scorecards.py",
             "--run",
             str(output),
             "--upstream",
@@ -2724,7 +2724,7 @@ def ecosystem_flash_attention(session):
     )
     session.run(
         python,
-        str(REPO_ROOT / "agent/skills/flash-attention-torch-compat/scripts/collect_scorecard.py"),
+        str(REPO_ROOT / "tools/ecosystem/flash_attention/collect_scorecard.py"),
         "--root",
         str(REPO_ROOT),
         "--upstream",

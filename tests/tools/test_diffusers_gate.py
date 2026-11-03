@@ -10,7 +10,7 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SCRIPTS = ROOT / 'agent/skills/torch-compat-repo-runbook/scripts'
+SCRIPTS = ROOT / 'tools/ecosystem'
 
 
 @pytest.fixture
@@ -95,7 +95,7 @@ def test_historical_snapshot_reads_immutable_git_tools_and_preserves_existing_cl
     import _metric_td_installation as component
 
     monkeypatch.setattr(component, 'framework_snapshot', lambda *args, **kwargs: {'existing-source': 'a' * 64})
-    names = ('agent/skills/torch-compat-repo-runbook/scripts/_diffusers_installation.py',
+    names = ('tools/ecosystem/_diffusers_installation.py',
              'tools/run_diffusers_gate.py', 'tools/ecosystem_environment.py')
     subprocess.run(['git', '-C', str(tmp_path), 'init', '-q'], check=True)
     contents = {name: 'VALUE = ' + repr(name) + '\n' for name in names}

@@ -2,14 +2,9 @@
 
 [本栏目目录](index.md) · [English](known-limitations.en.md)
 
-这一页是**用户可见的开口项**的摘要：会影响你拿到的数值、速度，或者某个 API 直接不
-可用的事情。每条带一个编号，指向
-[问题总账](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/manuals/known-issues.md)
-——**总账才是唯一真源**，有复现命令、测量条件、已被推翻的猜想和当前进展；这里只给
-一句话和它的影响。
+本页汇总[历史记录](https://github.com/Jittor/jittor/blob/3679de22c02c83b982432a0e1bdb3da148411c50/agent/manuals/known-issues.md)中影响数值、性能与 API 可用性的限制。KI 编号用于查找原始复现和证据；本次整理没有重新验收或关闭这些条目。判断当前版本时应查最新 GitHub issue/PR，并按实际版本复现。
 
-只收**开口**项。已修条目从总账移除，修复证据保存在结果报告和 Git 历史中。
-纯测试基础设施、门禁耗时与静态检查覆盖这类条目不在这里。
+限制修复后同步更新本页并链接验证证据。纯测试基础设施问题不列入用户指南。
 
 ## 数值与语义
 
@@ -65,4 +60,4 @@
 
 等硬件才能验收的后端（ROCm、天数 Corex、多卡 HCCL、跨机）列在
 [平台支持](hardware/platform-support.md)与
-[`agent/manuals/deferred-hardware.md`](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/manuals/deferred-hardware.md)。
+[历史记录](https://github.com/Jittor/jittor/blob/3679de22c02c83b982432a0e1bdb3da148411c50/agent/manuals/deferred-hardware.md)。

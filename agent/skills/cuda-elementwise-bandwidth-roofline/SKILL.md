@@ -22,9 +22,9 @@ CUDA_VISIBLE_DEVICES=<自己的卡> nvcc_path=/usr/local/cuda/bin/nvcc \
 PATH=/usr/local/cuda/bin:$PATH taskset -c <自己的核段> python <脚本>
 ```
 
-**`PYTHONPATH` 不能省**：开发环境里 jittor 是 editable 安装、`.pth` 指向主树，
-裸跑 `python 脚本.py` 量的是别人的代码，而且是静默的。每次量之前先
-`print(os.path.dirname(jittor.__file__))` 确认。**性能任务里测错树 = 整份数据作废。**
+上面的命令用于源码测量；运行前核对 `jittor.__file__` 来自目标 worktree。
+如果测量 wheel，则使用独立安装环境并清除源码路径注入，记录产物对应提交。
+无论哪种方式，源码身份、缓存与设备必须在计时前确认。
 
 性能测量期间那张卡要独占，前后各看一眼 `nvidia-smi`。
 

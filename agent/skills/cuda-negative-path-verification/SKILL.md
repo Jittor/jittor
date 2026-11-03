@@ -5,17 +5,17 @@ description: 在有 CUDA 的开发机上真正跑 CUDA 负向用例（错误路�
 
 # 先证明这台机器有 CUDA
 
-**PR 描述或 issue 里的「本机无 CUDA」几乎总是环境变量造成的假象。** 最常见的成因是照搬
-了 CPU-only 的加速写法（`JITTOR_TEST_DEVICES=cpu nvcc_path=""`）之后再去读
-`jt.has_cuda`——`nvcc_path=""` 会让 jittor 认为没有 nvcc，于是 `has_cuda` 为 0，
-而这与硬件无关。
+`jt.has_cuda == 0` 可能来自设备不可见、SDK/驱动缺失，也可能是继承了 CPU-only 配置
+（如 `JITTOR_TEST_DEVICES=cpu` 或空的 `nvcc_path`）。先检查实际分配的设备、驱动、工具链
+和环境变量，再区分硬件缺失与配置问题。不要预设开发机一定有 CUDA。
 
-自检必须四项一起看，缺一项结论都不成立：
+下面是源码 worktree 的自检示例。`CUDA_HOME` 必须指向已确认的 SDK 根目录，不能照搬
+机器路径。若验证安装产物，使用隔离环境并去掉源码 `PYTHONPATH`，核对安装包来源。
 
 ```bash
 PYTHONPATH=$WORKTREE/python JITTOR_HOME=$MYCACHE TMPDIR=$MYTMP \
-CUDA_VISIBLE_DEVICES=$MYGPU nvcc_path=/usr/local/cuda/bin/nvcc \
-PATH=/usr/local/cuda/bin:$PATH \
+CUDA_VISIBLE_DEVICES=$MYGPU nvcc_path="$CUDA_HOME/bin/nvcc" \
+PATH="$CUDA_HOME/bin:$PATH" \
 python -c "
 import os, jittor as jt
 print('tree     ', os.path.dirname(jt.__file__))   # 必须是你的 worktree
@@ -30,20 +30,21 @@ print('matmul   ', float(a.matmul(a).sum().item()) != 0)
 
 判据与陷阱：
 
-- **`nvcc_path` 必须显式给。** 不给（或给空串）时 `has_cuda` 为 0，而这不是「没有卡」。
-- **`PYTHONPATH` 必须显式给**（手写 `python -c` 时）。不给就是在测主树，失败是静默的。
-  `pytest` 不需要，`tests/conftest.py` 会选本 checkout 的 `python/`。
-- **`jit_utils was rebuilt and cannot be reloaded in this process`** 不是错误：原样重跑
-  同一条命令即可，可能要连跑两次。
-- 冷编译 CUDA 核心约 **45 秒**（不是十分钟）。第一次慢是预期。
-- 打印出来的 `Found cuda archs: [..]` 才是硬件事实；`sm_89` 是 RTX 4090。
+- 工具链可由 Jittor 自动发现；需要固定 SDK 时显式指定 `nvcc_path`，并确认日志中的最终路径。
+  空路径会禁用发现，不等于物理设备不存在。
+- 源码验证应确认 `jittor.__file__` 来自目标 worktree；wheel 验证应确认它来自隔离安装产物。
+  测试入口和子进程的来源分别核对，不能靠是否设置 `PYTHONPATH` 判断。
+- 遇到明确的 `jit_utils was rebuilt and cannot be reloaded in this process` 退出提示，
+  在同一基线重新启动进程；其它编译错误不可按这个理由忽略。
+- 冷编译耗时取决于工具链、缓存与机器负载，单列记录，不使用固定秒数作为判据。
+- CUDA 架构编号不能唯一确定芯片型号。记录驱动查询到的设备身份，并执行目标设备计算。
 
 # 跑整个 CUDA 目录
 
 ```bash
 JITTOR_HOME=$MYCACHE TMPDIR=$MYTMP \
-CUDA_VISIBLE_DEVICES=$MYGPU nvcc_path=/usr/local/cuda/bin/nvcc \
-PATH=/usr/local/cuda/bin:$PATH \
+CUDA_VISIBLE_DEVICES=$MYGPU nvcc_path="$CUDA_HOME/bin/nvcc" \
+PATH="$CUDA_HOME/bin:$PATH" \
 taskset -c $MYCORES python -m pytest tests/backends/cuda -v -rs -p no:cacheprovider
 ```
 
@@ -61,7 +62,7 @@ taskset -c $MYCORES python -m pytest tests/backends/cuda -v -rs -p no:cacheprovi
 定位方法（缓存已热时几秒）：
 
 ```bash
-CUDA_VISIBLE_DEVICES=$MYGPU nvcc_path=/usr/local/cuda/bin/nvcc gdb_path= \
+CUDA_VISIBLE_DEVICES=$MYGPU nvcc_path="$CUDA_HOME/bin/nvcc" gdb_path= \
 PYTHONPATH=$WORKTREE/python JITTOR_HOME=$MYCACHE TMPDIR=$MYTMP \
 gdb -batch -ex "set pagination off" -ex run -ex "bt 45" \
     --args python repro.py
@@ -184,8 +185,7 @@ cuTT 不走它，只是没人编过所以没人看见）；`cutt_transpose` 的�
 
 # 报「缺硬件」之前
 
-开发主机上真正常缺的是 **Ascend / CANN / NPU、ROCm、Corex 与多机（要两台）**。
-一台 CUDA 主机上 cuDNN、cuBLAS、cuFFT、cuSPARSE、CUB、NCCL（单机多卡）通常都在——
-先用本页开头的自检和上面的 `get_library_ops(..., load=True)` 证明，
-**不要凭环境变量的副作用写「本机无 CUDA」。** 等硬件的验收项记在
-`agent/manuals/deferred-hardware.md`。
+记录本次环境实际缺少的设备、驱动或 SDK，不从机器类型推断已安装的后端库。
+在已分配的设备上运行本页自检与 `get_library_ops(..., load=True)`，保存失败原因；
+没有目标设备时明确记为未执行。等待硬件的验收项写入
+[GitHub issue](https://github.com/Jittor/jittor/issues)。

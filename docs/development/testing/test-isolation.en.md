@@ -68,7 +68,7 @@ an independent reference. They do not replace OpInfo forward references or numer
 - **Do not** catch arbitrary exceptions outside the test body and turn them into skips. Probe the
   optional environment **narrowly** before execution.
 - Every persistent expected failure must be listed in the
-  [issue ledger](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/manuals/known-issues.md)
+  [historical record](https://github.com/Jittor/jittor/blob/3679de22c02c83b982432a0e1bdb3da148411c50/agent/manuals/known-issues.md)
   with an owner and exit criteria.
 
 ## Check execution and completion before interpreting failures
@@ -151,5 +151,5 @@ Autotuning otherwise chooses an algorithm based on available memory, so the comp
 both the intended flag and the convolution algorithm. Compare forward and gradients, and compute
 elementwise relative error against the corresponding element, not a whole-gradient RMS.
 See the [numerics contract](../../notes/numerics/numerics-contract.en.md); KI-EXEC-001/003 and KI-TEST-004
-in the [issue ledger](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/manuals/known-issues.md)
+in the [historical record](https://github.com/Jittor/jittor/blob/3679de22c02c83b982432a0e1bdb3da148411c50/agent/manuals/known-issues.md)
 provide the historical motivation. This protocol does not grant new hardware acceptance.

@@ -82,4 +82,4 @@ helper 的策略，否则这个工具在最该报警的地方沉默。
 
 它比较的是**调用序列**，不是**实参**。传错张量个数、顺序、类型，token 流照样相同。
 所以它和桩 SDK 的 TU 检查（`agent/skills/acl-host-syntax-check`）是互补的两层，
-两层都过也**不是硬件验证**——设备侧留什么写进 `agent/manuals/deferred-hardware.md`。
+两层都过也**不是硬件验证**——设备侧留什么写进 [GitHub issue](https://github.com/Jittor/jittor/issues)。

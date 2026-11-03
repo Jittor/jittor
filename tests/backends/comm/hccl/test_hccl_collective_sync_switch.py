@@ -17,7 +17,7 @@ code can be compiled against real CANN headers, let alone run, and the syncs
 were therefore *not* deleted. They moved behind
 ``JT_HCCL_COLLECTIVE_SYNC``, default ``full`` (bit-for-bit the old behaviour),
 with ``stream-order`` dropping them. The on-device checklist that has to pass
-before the default flips is ``agent/manuals/hccl-on-device-verification.md``.
+before the default flips is ``agent/skills/hccl-on-device-verification/SKILL.md``.
 
 What is checkable anywhere is what this test does, following
 ``test_hccl_check_macros.py``: lift the two bracket helpers verbatim out of
