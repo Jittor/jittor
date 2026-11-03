@@ -82,7 +82,7 @@ def case_unet2d(torch, jt, device):
     """The `large_diffusers_unet2d` case of compat/tests/torch/_ecosystem_speed.
 
     This is the model the 9 ms in the plan came from
-    (docs/notes/pipelined-execution.md).
+    (docs/notes/runtime/pipelined-execution.md).
     """
     sys.path.insert(0, os.path.join(_repo_root(), "compat", "tests", "torch"))
     import _ecosystem_speed

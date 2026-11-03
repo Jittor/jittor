@@ -94,7 +94,7 @@ JITTOR_TORCH_SHIM=1 PYTHONPATH=python python -m pytest -q tests/structure
   索引页同样成对（`index.md` / `index.en.md`）。英文页的相对链接指向 `X.en.md`，
   中文页指向 `X.md`。修改一侧时必须同步另一侧。
 - 长期机制说明放在 `docs/notes/`，仓库布局、源码架构、测试体系与已知问题放在
-  `docs/development/`，研究提案放在 `docs/research/`。仓库不保留任务看板、计划或交接
+  `docs/development/`，研究提案放在 `docs/project/research/`。仓库不保留任务看板、计划或交接
   这类过程文档。
 - [`agent/manuals/project-context.md`](agent/manuals/project-context.md) 只做当前状态索引；
   环境规则与问题总账分别维护在

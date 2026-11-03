@@ -1,5 +1,7 @@
 # 设备与放置
 
+[本栏目目录](index.md) · [English](device-placement.en.md)
+
 这篇讲清楚三件事：一个张量到底在哪张卡上、怎么让它换一张卡、以及什么时候
 Jittor 会拒绝你。
 

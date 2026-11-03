@@ -220,7 +220,7 @@ CUDA/driver 或 CANN、nvcc/gcc、nvidia wheel、Jittor SHA/flags、独立 oracl
 上游 SHA/version/remote、离线种子及 tiny/real 规格。L4 另需同卡时间/ratio/验收上限、
 整进程峰值、warmup/iters、统计量、PURE eager/default 图重放模式、无并发声明与 agreement。
 具体 schema、可执行命令与可复制的结果报告模板以
-[统一下游 scorecard 协议](../../../docs/development/downstream-scorecards.md) 为唯一入口。
+[统一下游 scorecard 协议](../../../docs/development/testing/downstream-scorecards.md) 为唯一入口。
 
 `scorecard` 子命令每次重新读取 registry，不接受调用者提供小分母；版本/提交不符、
 丢失平台块、skip/xfail/全skip、缺CPU①、非零fallback、缺梯度、假gate节点、产物哈希不符、

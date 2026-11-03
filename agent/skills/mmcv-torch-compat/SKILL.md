@@ -108,7 +108,7 @@ MMCV 扫描整个包，保留条件分支、alias、注册循环和依赖扩展�
 [`test_ecosystem_openmmlab.py`](../../../compat/tests/torch/test_ecosystem_openmmlab.py)。
 可复现覆盖与平台协议遵循
 [共享 runbook](../torch-compat-repo-runbook/SKILL.md) 与
-[scorecard 协议](../../../docs/development/downstream-scorecards.md)。
+[scorecard 协议](../../../docs/development/testing/downstream-scorecards.md)。
 具体通过级别只取带 source SHA、逐设备 raw hashes 的结果报告；环境缺库记录与旧 tiny
 速度不能转移到新版本、新平台或新训练路径。
 

@@ -88,7 +88,7 @@ JITTOR_TORCH_SHIM=0 JITTOR_HOME="$perf_run/compat-cache" \
 最后再对拍。整个计算处于零回退守卫内；任何 ACL、数值或驻留失败都不输出成功报告。
 记录每次延迟、median、p95、回退计数、设备快照、Python/包来源、提交和 dirty 补丁
 摘要；原始 JSON 只允许写到 lab 下且在 checkout 外。保存运行前驱动/固件/CANN 版本
-快照，并按 [NPU 记录模板](../../../docs/development/npu-validation-templates.md) 填写报告。
+快照，并按 [NPU 记录模板](../../../docs/development/testing/npu-validation-templates.md) 填写报告。
 
 本入口测量单次前向的 Python 构图到同步完成延迟，不含 D2H、首次编译或训练。
 保持各组 shape、精度和设备负载一致，多轮交错重跑后再形成比较结论；微基准结果

@@ -12,7 +12,7 @@ description: 在单机上验证 Jittor 分布式改动（MPI / NCCL 集合通信
 ## 固定节点 launcher 控制面
 
 公开 `jtrun` / `python -m jittor.distributed.launch` 的固定节点参数与边界见
-[原生分布式指南](../../../docs/guides/distributed-training.md)。Linux/NCCL 多节点模式
+[原生分布式指南](../../../docs/guides/distributed/distributed-training.md)。Linux/NCCL 多节点模式
 使用 launcher agent 持有的原生 TCPStore 交换 WORLD/subgroup unique id，并在节点间
 转发退出与心跳；root-info 心跳文件只属于本节点。各节点必须使用相同的节点数、本地进程数、
 job id 和 master endpoint。所有 WORLD rank 以相同顺序创建 subgroup。

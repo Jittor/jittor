@@ -1,5 +1,7 @@
 # C++ Console Interface
 
+[Section contents](index.en.md) · [中文](cpp-console.md)
+
 The console interface embeds Jittor's Python runtime into C++17 programs. Its array bridge
 lets typed C++ arrays enter Jittor operations with **one fewer Python-level copy**.
 

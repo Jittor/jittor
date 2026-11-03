@@ -383,5 +383,5 @@ for rnd in range(2):
 * [用 PyTorch API 写 Jittor](torch_compat.md)：激活方式、张量与训练的完整入门。
 * [检查点与断点续训](checkpointing.md)：原生 `load_state_dict` 静默失败的完整机理。
 * 生态库（transformers / diffusers / PEFT 等）的接入与验证结论，见
-  [用 PyTorch API 写 Jittor 文档](https://github.com/Jittor/jittor/blob/master/docs/compatibility/torch.md)。
+  [用 PyTorch API 写 Jittor 文档](https://github.com/Jittor/jittor/blob/2.0-refactor/docs/compatibility/torch.md)。
 * 回到 [教程总目录](README.md)。

@@ -1,5 +1,9 @@
 # Repository layout
 
+[Section contents](index.en.md) · [中文](repository-layout.md)
+
+Use this to place code, resources, tests or tools. It defines repository and distribution boundaries; [source architecture](source-architecture.en.md) covers dependencies within modules, and the [test system](testing/test-system.en.md) covers validation.
+
 - Status: accepted
 - Date: 2026-08-11
 - Last reviewed: 2026-09-09
@@ -81,9 +85,9 @@ directory; the root `README.md` and `README.en.md` are paired the same way. Each
 **The repository keeps no process documents such as task boards, plans, handoff notes or
 assignments.** Tasks, status and handoff are recorded in GitHub issues and PRs, and validation
 evidence goes into PR descriptions; items awaiting hardware acceptance are in
-[`agent/manuals/deferred-hardware.md`](https://github.com/Jittor/jittor/blob/master/agent/manuals/deferred-hardware.md),
+[`agent/manuals/deferred-hardware.md`](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/manuals/deferred-hardware.md),
 and defects and limitations are in the
-[issue ledger](https://github.com/Jittor/jittor/blob/master/agent/manuals/known-issues.md).
+[issue ledger](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/manuals/known-issues.md).
 Process material from the 2.0 cleanup was deleted at close-out (it remains in Git history):
 design contracts that still hold moved into `docs/development/`, `docs/notes/` and
 `docs/compatibility/`. Historical validation reports use commit-pinned references; new execution
@@ -96,8 +100,8 @@ evidence are **not rewritten into present-day success**. The documentation check
 
 `agent/` contains only `manuals/` and `skills/`; repository check scripts always live in
 `tools/`. The workflow entry point is
-[`agent/manuals/agent-index.md`](https://github.com/Jittor/jittor/blob/master/agent/manuals/agent-index.md).
-The community project list is in `docs/community/`; the ASV source configuration is
+[`agent/manuals/agent-index.md`](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/manuals/agent-index.md).
+The community project list is in `docs/project/community/`; the ASV source configuration is
 `benchmarks/asv/asv.conf.json` -- nox derives absolute input and external output paths from
 that configuration and does not move benchmark run state into the working tree.
 All benchmarks belong under [`benchmarks/`](https://github.com/Jittor/jittor/blob/2.0-refactor/benchmarks/README.md):

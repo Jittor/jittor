@@ -470,7 +470,7 @@ workaround.
   was not measurable on memory-bound 16M-element `divide`/`sqrt`/`exp`/`log`
   (0.1-0.8%, inside the control's spread); the compute-bound cost is unmeasured.
 - Evidence: `tests/backends/parity/test_subnormal_contract.py` (both policies
-  must differ for it to pass); [numerics contract](../../docs/notes/numerics-contract.md).
+  must differ for it to pass); [numerics contract](../../docs/notes/numerics/numerics-contract.md).
 - Exit condition: delete only if the default changes; that decision needs a
   compute-bound cost measurement with a pinned fusion shape, and the contract
   test and the numerics page change with it.
@@ -518,7 +518,7 @@ workaround.
   CPU-compiled contract probes); none of it has executed on a 910B3.
 - Workaround: validate on hardware with `backend_fallback=error` and the
   fallback-count check before relying on an ACL operator.
-- Evidence: [`docs/development/acl-backend-contracts.md`](../../docs/development/acl-backend-contracts.md)
+- Evidence: [`docs/development/backends/acl-backend-contracts.md`](../../docs/development/backends/acl-backend-contracts.md)
   (migration order and the device acceptance command); host contracts under
   `tests/structure/backends/acl/`; the hardware run in
   [deferred-hardware.md](deferred-hardware.md) (Ascend 910B3 single card).
@@ -1279,7 +1279,7 @@ workaround.
   refuses (`unregistered fused operator variant: unary/imag`) instead of
   computing on the device.
 - Workaround: none beyond the supported complex64 surface.
-- Evidence: [native complex dtype decision](../../docs/notes/complex-dtype.md);
+- Evidence: [native complex dtype decision](../../docs/notes/numerics/complex-dtype.md);
   `tests/backends/acl/test_acl_indexing.py::test_acl_rfft_keeps_lazy_dft_constants_alive`
   on Ascend 910B3 with CANN 9.0.0 (2026-10-28).
 - Exit condition: remove each sub-item only with focused CPU and accelerator
@@ -1348,7 +1348,7 @@ workaround.
 - Evidence: `tests/backends/cuda/test_autotuning_isolation.py`,
   `tests/backends/cuda/test_auto_flush_graph_split.py` (disables autotuning so
   the band does not hide smaller errors);
-  [numerics contract](../../docs/notes/numerics-contract.md).
+  [numerics contract](../../docs/notes/numerics/numerics-contract.md).
 - Exit condition: the algorithm chosen for a shape does not depend on what else
   is resident (measure into a fixed-size scratch buffer, or key the cache on
   something stable); a regression sweeps `auto_flush_ops` and compares gradients,

@@ -39,7 +39,7 @@ napoleon_numpy_docstring = True
 intersphinx_mapping = {
     "python": ("https://docs.python.org/3", None),
     "numpy": ("https://numpy.org/doc/stable/", None),
-    "pytorch": ("https://pytorch.org/docs/stable/", None),
+    "pytorch": ("https://docs.pytorch.org/docs/stable/", None),
 }
 intersphinx_cache_limit = 7
 intersphinx_timeout = 15
@@ -71,7 +71,7 @@ html_logo = "_static/logo.png"
 html_static_path = ["_static"]
 html_theme_options = {
     "source_repository": "https://github.com/Jittor/jittor/",
-    "source_branch": "master",
+    "source_branch": "2.0-refactor",
     "source_directory": "docs/",
 }
 
@@ -101,3 +101,6 @@ def setup(app):
     metadata = module.setup(app)
     app.connect("autodoc-process-docstring", _sanitize_autodoc_docstring)
     return metadata
+
+# Keep section links usable in both Markdown readers and the generated site.
+myst_heading_anchors = 4

@@ -145,7 +145,7 @@ bf16 均 `3e-2`。这些判据在首次两侧比较前固定，禁止看结果�
 平台记录包含真实 GPU/driver 清单、可见卡、CPU、Torch/CUDA、编译器、NVIDIA wheel、
 源码与二进制 hash、关键 flag。`use_acl` 是 native `use_cuda` 的遗留别名，单独读它
 不能证明运行了 NPU；实际 CUDA dispatch 和张量设备另行断言。工具不输出 L4 速度结论。
-通过比较器后，再按[统一 scorecard 协议](../../../docs/development/downstream-scorecards.md)
+通过比较器后，再按[统一 scorecard 协议](../../../docs/development/testing/downstream-scorecards.md)
 登记实测范围与覆盖分母；工具存在、单侧完成或合成验证器测试都不算库的已验分子。
 
 ## 回归与证据

@@ -16,18 +16,18 @@
     {"legacy": "doc/source/jittor.distributions.md", "docname": "api/distributions", "title": "Probability distributions API", "catalog": "api/distributions", "assets": [], "legacy_anchors": ["jittor-distributions"], "status": "verified"},
     {"legacy": "doc/source/jittor.loss3d.md", "docname": "api/loss3d", "title": "3D loss API", "catalog": "api/loss3d", "assets": [], "legacy_anchors": ["jittor-loss3d"], "status": "verified"},
     {"legacy": "doc/source/jittor.console.md", "docname": "guides/cpp-console", "title": "C++ console interface", "catalog": "guides/cpp-console", "assets": [], "legacy_anchors": ["jittor-console"], "status": "verified"},
-    {"legacy": "doc/source/jittor.mpi.md", "docname": "guides/distributed-mpi", "title": "Distributed training with MPI", "catalog": "guides/distributed-mpi", "assets": [], "legacy_anchors": ["jittor-mpi"], "status": "verified"},
+    {"legacy": "doc/source/jittor.mpi.md", "docname": "guides/distributed/distributed-mpi", "title": "Distributed training with MPI", "catalog": "guides/distributed-mpi", "assets": [], "legacy_anchors": ["jittor-mpi"], "status": "verified"},
     {"legacy": "doc/source/Jittor调试技巧.md", "docname": "guides/debugging", "title": "Debugging Jittor programs", "catalog": "guides/debugging", "assets": [], "legacy_anchors": [], "status": "verified"},
-    {"legacy": "doc/source/Jittor性能测试与对比方法.md", "docname": "guides/performance-comparison", "title": "Comparing framework performance", "catalog": "guides/performance-comparison", "assets": [], "legacy_anchors": [], "status": "verified"},
-    {"legacy": "doc/source/Jittor显存以及内存优化方法.md", "docname": "guides/memory-optimization", "title": "Memory optimization", "catalog": "guides/memory-optimization", "assets": [], "legacy_anchors": [], "status": "verified"},
+    {"legacy": "doc/source/Jittor性能测试与对比方法.md", "docname": "performance/comparison", "title": "Comparing framework performance", "catalog": "guides/performance-comparison", "assets": [], "legacy_anchors": [], "status": "verified"},
+    {"legacy": "doc/source/Jittor显存以及内存优化方法.md", "docname": "performance/memory-optimization", "title": "Memory optimization", "catalog": "guides/memory-optimization", "assets": [], "legacy_anchors": [], "status": "verified"},
     {"legacy": "doc/source/jittor_as_torch.src.md", "docname": "compatibility/torch", "title": "Using Jittor as PyTorch", "catalog": "compatibility/torch", "assets": [], "legacy_anchors": [], "status": "verified"},
     {"legacy": "doc/logo.png", "docname": "_static/logo.png", "title": "Jittor logo", "catalog": null, "assets": ["_static/logo.png"], "legacy_anchors": [], "status": "verified"},
     {"legacy": "doc/source/todo.md", "docname": null, "title": "Retired documentation backlog", "catalog": null, "assets": [], "legacy_anchors": [], "status": "verified"},
     {"legacy": "doc/Makefile", "docname": null, "title": "Replaced by nox docs sessions", "catalog": null, "assets": [], "legacy_anchors": [], "status": "verified"},
     {"legacy": "doc/build_doc.sh", "docname": null, "title": "Replaced by nox docs sessions", "catalog": null, "assets": [], "legacy_anchors": [], "status": "verified"},
-    {"legacy": "agent/manuals/design/complex-dtype.md", "docname": "notes/complex-dtype", "title": "Native Complex Dtype", "catalog": "architecture/complex-dtype", "assets": [], "legacy_anchors": [], "status": "verified"},
+    {"legacy": "agent/manuals/design/complex-dtype.md", "docname": "notes/numerics/complex-dtype", "title": "Native Complex Dtype", "catalog": "architecture/complex-dtype", "assets": [], "legacy_anchors": [], "status": "verified"},
     {"legacy": "agent/manuals/design/parallel-compiler-segfault.md", "docname": "development/known-issues/parallel-compiler-segfault", "title": "Parallel Operator Compiler Segmentation Fault", "catalog": "development/known-issues/parallel-compiler-segfault", "assets": [], "legacy_anchors": [], "status": "verified"},
-    {"legacy": "agent/manuals/design/test-system.md", "docname": "development/test-system", "title": "Test System", "catalog": "testing/test-system", "assets": [], "legacy_anchors": [], "status": "verified"},
+    {"legacy": "agent/manuals/design/test-system.md", "docname": "development/testing/test-system", "title": "Test System", "catalog": "testing/test-system", "assets": [], "legacy_anchors": [], "status": "verified"},
     {"legacy": "agent/manuals/design/source-architecture.md", "docname": "development/source-architecture", "title": "Source Architecture and Module Boundaries", "catalog": "architecture/source-architecture", "assets": [], "legacy_anchors": [], "status": "verified"}
   ]
 }

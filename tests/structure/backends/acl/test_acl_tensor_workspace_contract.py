@@ -9,7 +9,7 @@ UTILS_H = ACL_ROOT / "include" / "aclops" / "utils.h"
 UTILS_CC = ACL_ROOT / "kernels" / "native" / "utils.cc"
 ACL_H = ACL_ROOT / "include" / "acl_jittor.h"
 ACL_CC = ACL_ROOT / "src" / "acl_jittor.cc"
-GUIDE = REPO_ROOT / "docs" / "guides" / "ascend-910b.md"
+GUIDE = REPO_ROOT / "docs" / "guides" / "hardware" / "ascend-910b.md"
 
 
 def _function_body(source, signature):

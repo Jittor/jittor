@@ -18,7 +18,7 @@ The Torch compatibility layer is the separate `jittor-compat` project in `compat
 (published as `jittor.compat`, including the `import torch` shim); downstream
 library adapters are independently maintained in [JittorEcosystem](https://github.com/JittorEcosystem); the root README links the ecosystem repositories. The goal is a maintainable, Torch-grade
 framework that keeps the JIT/meta-operator design, under the gates in
-[Torch compatibility principles](../../docs/compatibility/principles.md).
+[Torch compatibility principles](../../docs/development/compatibility/principles.md).
 
 ## Current state
 
@@ -28,7 +28,7 @@ are separate distributions, and downstream integrations belong to JittorEcosyste
 Packaging targets Python 3.7-3.13. [`noxfile.py`](../../noxfile.py) and
 [`tools/run_test_suite.py`](../../tools/run_test_suite.py) own the test entry points
 and `core` / `smoke` / full tiers. User-facing changes are in
-[2.0 migration notes](../../docs/releases/2.0.md).
+[2.0 migration notes](../../docs/project/releases/2.0.md).
 
 Documentation is paired Chinese/English and organized by topic. Dated execution
 reports and presentation artifacts have been removed; prior evidence remains in
@@ -46,7 +46,7 @@ for the current revision; open failures and hardware gaps are tracked below.
 | Open defects and limitations | [known-issues.md](known-issues.md) |
 | Work waiting for hardware | [deferred-hardware.md](deferred-hardware.md) |
 | Source architecture and module boundaries | [source architecture](../../docs/development/source-architecture.md), [development index](../../docs/development/index.md) |
-| Test system and gate tiers | [test system](../../docs/development/test-system.md) |
+| Test system and gate tiers | [test system](../../docs/development/testing/test-system.md) |
 | Mechanism notes (numerics, placement, profiling) | [notes index](../../docs/notes/index.md) |
 | Torch compatibility | [compatibility index](../../docs/compatibility/index.md) |
 | Backend guides (Ascend, Corex, jtrun; legacy MPI) | [guides index](../../docs/guides/index.md) |
@@ -73,7 +73,7 @@ for the current revision; open failures and hardware gaps are tracked below.
   (KI-CODEGEN-003, KI-CODEGEN-004, KI-COMPAT-009), pipelined memory and backward
   submission (KI-EXEC-004, KI-EXEC-010).
 - **Gate trust.** Gate cost (KI-TEST-012, KI-TEST-013).
-- **Research.** [Agent-operable optimization](../../docs/research/agentic-optimization.md)
+- **Research.** [Agent-operable optimization](../../docs/project/research/agentic-optimization.md)
   is a proposal only; no autonomous mutation path exists.
 
 ## Before running work

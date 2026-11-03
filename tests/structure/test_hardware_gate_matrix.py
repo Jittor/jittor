@@ -7,7 +7,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_ROOT = REPO_ROOT / ".github" / "workflows"
-TEST_SYSTEM = REPO_ROOT / "docs" / "development" / "test-system.md"
+TEST_SYSTEM = REPO_ROOT / "docs" / "development" / "testing" / "test-system.md"
 MANUAL_SESSIONS = ("optional", "rocm", "mpi", "nccl")
 
 

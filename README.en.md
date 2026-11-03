@@ -11,14 +11,15 @@ Jittor is a high-performance deep learning framework based on just-in-time
 compilation and meta-operators. Its Python frontend uses dynamic graph execution,
 while its C++ and CUDA backend compiles and tunes operators for each workload.
 
+- [Documentation for this branch](docs/index.en.md)
 - [Website](https://cg.cs.tsinghua.edu.cn/jittor/)
 - [Tutorials](https://cg.cs.tsinghua.edu.cn/jittor/tutorial/)
 - [Models](https://cg.cs.tsinghua.edu.cn/jittor/resources/)
 - [API documentation](https://cg.cs.tsinghua.edu.cn/jittor/assets/docs/index.html)
 - [Forum](https://discuss.jittor.org/)
 - [Ecosystem integrations (JittorEcosystem)](https://github.com/JittorEcosystem)
-- [Awesome Jittor (English)](docs/community/AWESOME-JITTOR-LIST.en.md) |
-  [Awesome Jittor (中文)](docs/community/AWESOME-JITTOR-LIST.md)
+- [Awesome Jittor (English)](docs/project/community/projects.en.md) |
+  [Awesome Jittor (中文)](docs/project/community/projects.md)
 
 <a id="quickstart"></a>
 ## Quickstart
@@ -253,13 +254,13 @@ stack. Set `JITTOR_CUDA_WHEEL_DISABLE=1` to use only the system/JTCUDA libraries
 ```bash
 git clone https://github.com/Jittor/jittor.git
 cd jittor
-python -m pip install -e .
+python -m pip install --config-settings editable_mode=compat -e .
 python -m jittor.selftest
 ```
 
 The C++ and CUDA sources live beside the Python package, not inside it: the
-core is [`src/`](src/) and each backend is `backends/<name>/` (for example
-[`backends/cuda/`](backends/cuda/)). In a checkout Jittor finds them by looking
+core is [`src/`](src) and each backend is `backends/<name>/` (for example
+[`backends/cuda/`](backends/cuda)). In a checkout Jittor finds them by looking
 next to `python/jittor/` -- `src/core/common.h` identifies the core, and a
 backend is the directory with its `__init__.py`; a wheel ships the same trees as
 `jittor/src/` and `jittor/backends/<name>/`. Editing any of those sources

@@ -1,5 +1,7 @@
 # Debugging Jittor Programs
 
+[Section contents](index.en.md) · [中文](debugging.md)
+
 Jittor executes lazily and compiles operators at runtime. The diagnostics below all
 **trade performance for more accurate failure information**, so enable them only while
 reproducing an issue.
@@ -38,7 +40,7 @@ jt.flags.lazy_execution = 0
 ## Diagnose out-of-memory
 
 When a single iteration exceeds device memory, first use `jt.profile()` to see who is alive
-at the peak (see [Performance and memory profiling](../notes/profiling.en.md)), then reduce
+at the peak (see [Performance and memory profiling](../performance/profiling.en.md)), then reduce
 the model or batch size. Explicit synchronization plus collection helps determine whether a
 temporary graph is being retained:
 

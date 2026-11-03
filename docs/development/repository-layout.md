@@ -1,5 +1,9 @@
 # 仓库布局
 
+[本栏目目录](index.md) · [English](repository-layout.en.md)
+
+需要决定代码、资源、测试或工具放在哪里时查本页。它规定仓库与发行物边界；模块内部的依赖见[源码架构](source-architecture.md)，提交前验证见[测试体系](testing/test-system.md)。
+
 - 状态：已接受
 - 日期：2026-08-11
 - 上次复查：2026-09-09
@@ -67,8 +71,8 @@ Torch 兼容、机制说明（`docs/notes/`）、性能、发布说明、社区�
 
 **仓库不保存任务看板、计划、交接或分工这类过程文档。** 任务、状态与交接记在 GitHub issue
 与 PR 中，验证证据写进 PR 描述；等待硬件验收的事项见
-[`agent/manuals/deferred-hardware.md`](https://github.com/Jittor/jittor/blob/master/agent/manuals/deferred-hardware.md)，缺陷与限制见
-[问题总账](https://github.com/Jittor/jittor/blob/master/agent/manuals/known-issues.md)。2.0 整改期的过程材料已在收口时删除（Git
+[`agent/manuals/deferred-hardware.md`](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/manuals/deferred-hardware.md)，缺陷与限制见
+[问题总账](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/manuals/known-issues.md)。2.0 整改期的过程材料已在收口时删除（Git
 历史中可查）：仍然成立的设计契约迁入了 `docs/development/`、`docs/notes/` 与
 `docs/compatibility/`；历史验证报告通过固定提交引用，新执行记录写入 GitHub issue/PR。
 `docs/` 不保留日期报告、结果树或演示产物。wheel 内容基线位于 `tools/release/baselines/`。
@@ -77,8 +81,8 @@ Torch 兼容、机制说明（`docs/notes/`）、性能、发布说明、社区�
 文档检查维持这条"活跃/归档"边界。
 
 `agent/` 只包含 `manuals/` 与 `skills/`；仓库检查脚本一律在 `tools/`。工作流入口是
-[`agent/manuals/agent-index.md`](https://github.com/Jittor/jittor/blob/master/agent/manuals/agent-index.md)。社区项目列表在
-`docs/community/`；ASV 源配置在 `benchmarks/asv/asv.conf.json`——nox 从该配置推导绝对的输入
+[`agent/manuals/agent-index.md`](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/manuals/agent-index.md)。社区项目列表在
+`docs/project/community/`；ASV 源配置在 `benchmarks/asv/asv.conf.json`——nox 从该配置推导绝对的输入
 与外部输出路径，不把基准运行状态搬进工作树。
 所有基准统一归属 [`benchmarks/`](https://github.com/Jittor/jittor/blob/2.0-refactor/benchmarks/README.md)：`asv/` 保存性能回归套件，
 `torch_compat/` 保存真实模型对照，`acl/` 保存昇腾测量、数值交叉验证与 CANN 探针。

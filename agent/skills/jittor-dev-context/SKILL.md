@@ -18,8 +18,8 @@ description: Jittor 开发任务的上下文路由入口。用于定位当前状
 - 未关闭缺陷、限制与 workaround：[`agent/manuals/known-issues.md`](../../manuals/known-issues.md)
 - 等硬件验收的事项：[`agent/manuals/deferred-hardware.md`](../../manuals/deferred-hardware.md)
 - 架构与模块边界：[`docs/development/source-architecture.md`](../../../docs/development/source-architecture.md)
-- Torch 兼容验收：[`docs/compatibility/principles.md`](../../../docs/compatibility/principles.md)
-- 测试体系：[`docs/development/test-system.md`](../../../docs/development/test-system.md)
+- Torch 兼容验收：[`docs/development/compatibility/principles.md`](../../../docs/development/compatibility/principles.md)
+- 测试体系：[`docs/development/testing/test-system.md`](../../../docs/development/testing/test-system.md)
 - 历史验证记录（固定提交，不代表当前支持）：[`docs/results/index.md`](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/index.md)
 
 ## 工作纪律速记

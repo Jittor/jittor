@@ -1,64 +1,62 @@
 # Jittor documentation
 
-[中文（默认）](index.md) | English
+[中文](index.md)
 
-Jittor is a deep-learning framework built on just-in-time compilation and
-meta-operators. The frontend exposes a Python dynamic-graph interface; the
-backend compiles operators into C++ and CUDA code tuned for the actual
-workload.
+Jittor is a deep-learning framework built on just-in-time compilation. Use the
+native Jittor API, or run supported PyTorch code through `jittor-compat`.
 
-This site covers installation and first steps, tutorials, the API reference,
-usage guides, Torch compatibility, framework internals, and contributor
-documentation.
+## Get started
+
+If you are new to Jittor, follow these steps:
+
+1. [Installation and environment](getting-started/installation.en.md): choose an installation method and check your interpreter and compiler.
+2. [Your first training example](getting-started/quickstart.en.md): run a forward pass, gradients and parameter updates on CPU.
+3. [Continue learning](getting-started/index.en.md): choose native Jittor or Torch compatibility tutorials.
+
+For an existing PyTorch project, start with [Torch compatibility](compatibility/index.en.md).
+For libraries such as vLLM and Transformers, also check the versions and devices
+supported by the corresponding [JittorEcosystem project](https://github.com/JittorEcosystem).
+
+## Find a task
+
+| What you want to do | Start here |
+| --- | --- |
+| Configure hardware, run distributed training or diagnose a problem | [User guides](guides/index.en.md) |
+| Look up functions, classes and parameters | [API reference](api/index.en.md) |
+| Understand devices, precision and lazy execution | [Core concepts](notes/index.en.md) |
+| Profile time and memory or compare performance | [Performance](performance/index.en.md) |
+| Change the framework, add features or run tests | [Developer guide](development/index.en.md) |
+| Read migration notes, find community projects or explore research | [Project information](project/index.en.md) |
+
+## Check before you run
+
+[Platform support](guides/hardware/platform-support.en.md) distinguishes continuous tests
+from historical validation. [Known limitations](guides/known-limitations.en.md) explains
+current usage boundaries. Historical measurements apply only to their recorded commit
+and environment; they do not establish acceptance of the current revision.
 
 ```{toctree}
+:hidden:
 :maxdepth: 2
-:caption: Getting started
+:caption: Use Jittor
 
+getting-started/index.en
 guides/index.en
-tutorials/index.en
-```
-
-```{toctree}
-:maxdepth: 2
-:caption: Reference
-
-api/index.en
 compatibility/index.en
-notes/index.en
 performance/index.en
 ```
 
 ```{toctree}
+:hidden:
 :maxdepth: 2
-:caption: Project
+:caption: Reference and development
 
+api/index.en
+notes/index.en
 development/index.en
-research/index.en
-releases/index.en
-community/index.en
-contributing.en
+project/index.en
 ```
 
-## Where to start
-
-| What you want to do | Where to go |
-| --- | --- |
-| Install and run a first model | [Install and quick start](https://github.com/Jittor/jittor#install), [tutorials](tutorials/index.en.md) |
-| Look up a function | [API reference](api/index.en.md) |
-| Run PyTorch code on Jittor | [Torch compatibility](compatibility/index.en.md) |
-| Run on Ascend, Iluvatar, or multiple devices | [Guides](guides/index.en.md) |
-| Understand memory, precision, or asynchronous execution | [How Jittor works](notes/index.en.md) |
-| Investigate an error or performance problem | [Debugging guide](guides/debugging.en.md), [performance](performance/index.en.md) |
-| Historical evidence (not current support) | [Git history](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/index.en.md) |
-| Check whether a system / Python / backend combination was verified | [Platform support](guides/platform-support.en.md) |
-| Look up a known numerical, performance, or compatibility gap | [Known limitations](guides/known-limitations.en.md) |
-| Upgrade from 1.x | [2.0 release notes](releases/2.0.en.md) |
-| Contribute code to Jittor | [Contributing guide](contributing.en.md), [development documentation](development/index.en.md) |
-
-## Project links
-
-- [Website](https://cg.cs.tsinghua.edu.cn/jittor/)
-- [Source repository](https://github.com/Jittor/jittor)
-- [Issue tracker](https://github.com/Jittor/jittor/issues)
-- [Forum](https://discuss.jittor.org/)
+[Source](https://github.com/Jittor/jittor/tree/2.0-refactor) ·
+[Report an issue](https://github.com/Jittor/jittor/issues) ·
+[Forum](https://discuss.jittor.org/)

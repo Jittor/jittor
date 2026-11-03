@@ -1,40 +1,42 @@
-# 机制说明
+# 核心概念
 
-这一节解释 Jittor 的运行方式——那些不看文档就会被行为"意外"到的地方：张量到底
-在哪张卡上、低精度累加什么时候生效、两个设备为什么给出不同的数、惰性执行为什么让
-GPU 闲着。
+[文档首页](../index.md) · [English](index.en.md)
 
-写给已经能跑通模型、开始关心结果是否正确、快慢是否合理的人。想了解代码怎么组织、
-错误如何分级、算子源码怎么写，见[开发文档](../development/index.md)。
+这些页面解释写模型和调优时需要理解的行为。先看用法与约束，再按需阅读实现细节。
+
+## 设备与数值
+
+混用设备前先读设备与放置。使用低精度时，区分输入 dtype 与累加精度；特殊值和跨设备结果的规则集中在数值契约。
+
+- [设备与放置](device-placement.md)
+- [混合精度训练](../guides/mixed-precision.md)
+- [float32 累加精度](numerics/float32-precision-policy.md)
+- [复数 dtype](numerics/complex-dtype.md)
+- [数值契约](numerics/numerics-contract.md)
 
 ```{toctree}
 :maxdepth: 1
+:hidden:
 
 device-placement
-numerics-contract
-float32-precision-policy
-cuda-library-plan-caches
-runtime-introspection
-mixed-precision
-complex-dtype
-pipelined-execution
-profiling
-native-sharded-checkpoint
-native-zero-optimizer
-native-tensor-parallel
-native-fsdp
+numerics/float32-precision-policy
+numerics/complex-dtype
+numerics/numerics-contract
 ```
 
-## 按问题索引
+## 运行时机制
 
-| 遇到的现象 | 看这篇 |
-| --- | --- |
-| 张量在哪张卡上？`.cpu()` / `.cuda()` 怎么用 | [设备与放置](device-placement.md) |
-| CPU 和 CUDA 的结果对不上；NaN、无穷、次正规数、归约精度 | [数值契约](numerics-contract.md) |
-| TF32、fp32 矩阵乘精度、`float32_matmul_precision` | [float32 累加精度](float32-precision-policy.md) |
-| cuFFT/cuTT/cuDNN plan 缓存归谁、何时释放、怎么观察 | [CUDA 库的 plan 缓存](cuda-library-plan-caches.md) |
-| 测试里该怎么问"有没有 CUDA""当前策略是什么""泄漏了几个 Var" | [运行时内省](runtime-introspection.md) |
-| fp16 / bf16 训练怎么开、loss scale、`GradScaler` | [混合精度训练](mixed-precision.md) |
-| 复数支持到什么程度 | [复数 dtype](complex-dtype.md) |
-| 为什么 GPU 利用率上不去、`auto_flush_ops` 是什么 | [流水式惰性执行](pipelined-execution.md) |
-| 一步的时间和显存去哪了、主机瓶颈还是设备瓶颈 | [性能与显存画像](profiling.md) |
+了解计算何时执行、如何只读查询状态，以及 CUDA 库计划如何缓存。测量时间和显存请走[性能工作流](../performance/index.md)。
+
+- [流水式惰性执行](runtime/pipelined-execution.md)
+- [运行时内省](runtime/runtime-introspection.md)
+- [CUDA 库的 plan 缓存](runtime/cuda-library-plan-caches.md)
+
+```{toctree}
+:maxdepth: 1
+:hidden:
+
+runtime/pipelined-execution
+runtime/runtime-introspection
+runtime/cuda-library-plan-caches
+```

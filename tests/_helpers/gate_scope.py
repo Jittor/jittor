@@ -189,7 +189,7 @@ def _ignores(paths):
 #: Named through `python/jittor/compat`, the symlink a source checkout already
 #: relies on, the same files run: pytest finds `compat/pyproject.toml` as the
 #: inifile and the package is imported as `jittor.compat`, which is its name.
-#: `docs/development/test-system.md` has told people this for a while; the gate
+#: `docs/development/testing/test-system.md` has told people this for a while; the gate
 #: arguments themselves did not follow it.
 _COMPAT_LINK = "python/jittor/"
 

@@ -214,7 +214,7 @@ python -m nox -s npu
 ```
 
 For the validated 910B version matrix, real-device probe, and current backend
-limitations, see the [Ascend 910B guide](../../docs/guides/ascend-910b.md).
+limitations, see the [Ascend 910B guide](../../docs/guides/hardware/ascend-910b.md).
 
 ### ROCm, MPI, and NCCL
 

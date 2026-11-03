@@ -1,5 +1,7 @@
 # Devices and placement
 
+[Section contents](index.en.md) · [中文](device-placement.md)
+
 This page clarifies three things: which accelerator a tensor is actually on, how to
 move it to another one, and when Jittor will refuse you.
 

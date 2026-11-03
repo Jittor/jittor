@@ -110,7 +110,7 @@ def _markdown_targets(path):
 
 #: A floating ``blob`` URL into this repository names a working-tree path, so it
 #: can be checked like a relative link -- and it has to be, because the layout
-#: moves. Four links in ``docs/notes/complex-dtype.md`` pointed at
+#: moves. Four links in ``docs/notes/numerics/complex-dtype.md`` pointed at
 #: ``tests/core/test_complex*.py`` long after those files moved to
 #: ``tests/type`` and ``tests/autograd``; nothing noticed, because a link with a
 #: scheme was skipped whether or not it named something local.

@@ -1,15 +1,24 @@
 # 性能
 
+[文档首页](../index.md) · [English](index.en.md)
+
+按顺序完成四件事：建立可比较的基线、定位瓶颈、修改一个因素、重新测量。正确性检查放在计时区间之外，记录确切代码、设备、精度和输入。
+
+| 要做什么 | 阅读 |
+| --- | --- |
+| 选取相同工作负载，对比两个框架 | [性能对比](comparison.md) |
+| 测量单个操作，或保存跨提交的对比 | [基准测试](benchmarking.md) |
+| 找到一步的时间与显存开销来源 | [性能分析](profiling.md) |
+| 确认大块分配后降低峰值显存 | [显存优化](memory-optimization.md) |
+
+性能分析工具本身有开销。改动后，关闭诊断工具重新测量基线。编译缓存与单测分开，原始数据保存在源码树之外。结论写入相关 GitHub issue 或 PR；库专属测速和支持范围由 [JittorEcosystem](https://github.com/JittorEcosystem) 维护。
+
 ```{toctree}
 :maxdepth: 1
+:hidden:
 
+comparison
 benchmarking
+profiling
+memory-optimization
 ```
-
-性能测量应隔离编译缓存、显式同步，并记录确切提交、设备和对照环境。
-[基准测试方法](benchmarking.md) 说明测量口径；每次实测结果写入相关 GitHub issue/PR，
-下游库的测速与支持范围由对应的 [JittorEcosystem 仓库](https://github.com/JittorEcosystem) 维护。
-历史性能数字不作为当前版本的支持或速度承诺。
-
-动手优化见 [性能对比](../guides/performance-comparison.md) 与
-[显存优化](../guides/memory-optimization.md)；机制说明见 [notes](../notes/index.md)。

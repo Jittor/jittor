@@ -619,7 +619,7 @@ for forbidden in ('jittor', 'PIL', 'pywebio'):
             self.assertFalse(output.exists(), result.stdout)
 
     def test_vcompiler_retirement_is_documented(self):
-        release_note = self.repo_root / "docs" / "releases" / "2.0.md"
+        release_note = self.repo_root / "docs" / "project" / "releases" / "2.0.md"
         source = release_note.read_text(encoding="utf-8")
         self.assertIn("jittor.vcompiler", source)
         # The release note is written in Chinese; "破坏性变更" is the heading it

@@ -633,4 +633,3 @@ fuser -v "$JITTOR_HOME/.cache/jittor/jittor.lock" 2>&1
 那条路径——测试不会因为它测的路径消失而变红，只会变得没有意义。同一类的活口：`SharedReducePass::run()`
 开头是 `if (para_opt_level < 4) return;`，而 `para_opt_level` 默认 3（`loop_var_analyze_pass.cc`），
 所以默认门禁对这个 pass 的覆盖是零，要覆盖就得显式 `jt.flags.para_opt_level = 4`。
-

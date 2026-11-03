@@ -293,7 +293,7 @@ print("峰值 %.2f MiB" % (prof.memory.peak_allocated / mib))
 `prof.summary()` 给出完整报告：墙钟被拆成 Python 构图、执行器规划、算子发射、等待设备
 几项；有显卡且装了 CUPTI 时还有每个算子、每个 kernel 的设备时间；显存部分给出峰值那一刻
 谁活着、是哪一行 Python 建的。`prof.export_chrome_trace("step.json")` 可以在
-Perfetto 里看时间线。细节见[性能与显存画像](../../docs/notes/profiling.md)。
+Perfetto 里看时间线。细节见[性能与显存画像](../../docs/performance/profiling.md)。
 
 ## 6. 一次体检的完整流程
 

@@ -1,43 +1,42 @@
 # How Jittor works
 
-This section explains how Jittor runs -- the places where behaviour surprises
-you unless it is written down: which device a tensor really lives on, when
-low-precision accumulation applies, why two devices produce different numbers,
-and why lazy execution leaves the GPU idle.
+[Documentation](../index.en.md) · [中文](index.md)
 
-It is written for people who can already run a model and now care whether the
-results are correct and the speed is reasonable. For how the code is organised,
-how errors are categorised, and how operator sources are written, see the
-[development documentation](../development/index.en.md).
+These pages explain behavior you need to account for when writing or tuning a model. Start with the relevant contract; implementation details follow the usage and limitations.
+
+## Devices and numerics
+
+Read devices and placement before mixing backends. For low precision, distinguish the dtype of inputs from the precision used to accumulate results. The numerics contract collects special-value and cross-device rules.
+
+- [Devices and placement](device-placement.en.md)
+- [Mixed-precision training](../guides/mixed-precision.en.md)
+- [float32 accumulation precision](numerics/float32-precision-policy.en.md)
+- [Complex dtypes](numerics/complex-dtype.en.md)
+- [Numerics contract](numerics/numerics-contract.en.md)
 
 ```{toctree}
 :maxdepth: 1
+:hidden:
 
 device-placement.en
-numerics-contract.en
-float32-precision-policy.en
-cuda-library-plan-caches.en
-runtime-introspection.en
-mixed-precision.en
-complex-dtype.en
-pipelined-execution.en
-profiling.en
-native-sharded-checkpoint.en
-native-zero-optimizer.en
-native-tensor-parallel.en
-native-fsdp.en
+numerics/float32-precision-policy.en
+numerics/complex-dtype.en
+numerics/numerics-contract.en
 ```
 
-## Index by question
+## Runtime behavior
 
-| Symptom | Read |
-| --- | --- |
-| Which device is a tensor on? How do `.cpu()` / `.cuda()` work? | [Devices and placement](device-placement.en.md) |
-| CPU and CUDA disagree; NaN, infinity, subnormals, reduction precision | [Numerics contract](numerics-contract.en.md) |
-| TF32, fp32 matmul precision, `float32_matmul_precision` | [float32 accumulation precision](float32-precision-policy.en.md) |
-| Who owns cuFFT/cuTT/cuDNN plan caches, when are they released, how to observe them | [CUDA library plan caches](cuda-library-plan-caches.en.md) |
-| How tests ask "is CUDA available", "what is the current policy", "how many Vars leaked" | [Runtime introspection](runtime-introspection.en.md) |
-| Enabling fp16 / bf16 training, loss scaling, `GradScaler` | [Mixed-precision training](mixed-precision.en.md) |
-| How far complex-number support goes | [Complex dtypes](complex-dtype.en.md) |
-| Why GPU utilisation stays low, and what `auto_flush_ops` is | [Pipelined lazy execution](pipelined-execution.en.md) |
-| Where a step's time and memory go; host-bound or device-bound | [Performance and memory profiling](profiling.en.md) |
+Understand when work executes, inspect runtime state without changing it, and learn how CUDA library plans are cached. To measure time or memory, use the [performance workflow](../performance/index.en.md).
+
+- [Pipelined lazy execution](runtime/pipelined-execution.en.md)
+- [Runtime introspection](runtime/runtime-introspection.en.md)
+- [CUDA library plan caches](runtime/cuda-library-plan-caches.en.md)
+
+```{toctree}
+:maxdepth: 1
+:hidden:
+
+runtime/pipelined-execution.en
+runtime/runtime-introspection.en
+runtime/cuda-library-plan-caches.en
+```

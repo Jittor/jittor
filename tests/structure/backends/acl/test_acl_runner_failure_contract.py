@@ -9,7 +9,7 @@ ACL_ROOT = REPO_ROOT / "backends" / "acl"
 BASE_OP = ACL_ROOT / "kernels" / "native" / "base_op_acl.cc"
 ACLOPS = ACL_ROOT / "kernels" / "native"
 EXEC = ACL_ROOT / "src" / "acl_op_exec.cc"
-GUIDE = REPO_ROOT / "docs" / "guides" / "ascend-910b.md"
+GUIDE = REPO_ROOT / "docs" / "guides" / "hardware" / "ascend-910b.md"
 
 # The aclnn execute call takes exactly these four arguments, so its presence is
 # a reliable marker of a runner that drives the launch itself instead of going
@@ -121,7 +121,7 @@ def test_ascend_guide_states_the_launcher_migration_is_closed():
     owners still drove the execute call, so what is and is not covered is
     pinned here rather than left to prose.
     """
-    guide = (REPO_ROOT / "docs/development/acl-backend-contracts.en.md").read_text(encoding="utf-8")
+    guide = (REPO_ROOT / "docs/development/backends/acl-backend-contracts.en.md").read_text(encoding="utf-8")
     for required in (
         "Shared launcher migration is closed for the standard owners",
         "SWhere, Sigmoid backward, BatchNorm",

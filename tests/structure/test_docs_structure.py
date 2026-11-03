@@ -215,6 +215,112 @@ class TestDocsStructure(unittest.TestCase):
         self.assertEqual(checked, 1)
         self.assertTrue(any("duplicate HTML anchors" in issue for issue in issues))
 
+    def test_api_build_checker_checks_both_languages(self):
+        spec = spec_from_file_location("_docs_checker", str(
+            self.repo_root / "tools/docs/check_build.py"))
+        checker = module_from_spec(spec)
+        spec.loader.exec_module(checker)
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "api").mkdir()
+            inventory = root / "inventory.json"
+            inventory.write_text(json.dumps({"pages": [{
+                "docname": "api/sample", "objects": ["jittor.Sample"],
+            }]}), encoding="utf-8")
+            (root / "api/sample.html").write_text('<div id="jittor.Sample"></div>')
+            issues, checked = checker._check_api(root, inventory)
+            self.assertEqual(checked, 1)
+            self.assertTrue(any("missing API page" in issue and "sample.en.html" in issue
+                                for issue in issues))
+            translated = root / "api/sample.en.html"
+            translated.write_text('<div id="jittor.sample"></div>')
+            issues, checked = checker._check_api(root, inventory)
+            self.assertEqual(checked, 2)
+            self.assertEqual(issues, ["jittor.Sample has no HTML anchor in api/sample.en"])
+            translated.write_text('<div id="jittor.Sample"></div>')
+            self.assertEqual(checker._check_api(root, inventory), ([], 2))
+            translated.write_text('<div id="jittor.Sample"></div>' * 2)
+            issues, checked = checker._check_api(root, inventory)
+            self.assertTrue(any("api/sample.en has duplicate HTML anchors" in issue
+                                for issue in issues))
+
+    def test_translated_autodoc_keeps_local_targets_without_global_registration(self):
+        from types import SimpleNamespace
+
+        source = self.docs_root / "_myst_autodoc.py"
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+        bridge = next(node for node in tree.body
+                      if isinstance(node, ast.ClassDef) and node.name == "PublicAutomoduleBridge")
+        method = next(node for node in bridge.body
+                      if isinstance(node, ast.FunctionDef) and node.name == "_source")
+        targets = next(node for node in tree.body
+                       if isinstance(node, ast.FunctionDef) and node.name == "_local_api_targets")
+        namespace = {"_ALIAS_PREFIX": "jittor-rst-", "_public_members": lambda module: [
+            ("Sample", None, "autoclass"), ("extra", None, "autofunction")],
+            "addnodes": SimpleNamespace(desc_signature=object)}
+        exec(compile(ast.Module(body=[method, targets], type_ignores=[]), str(source), "exec"),
+             namespace)
+        owner = SimpleNamespace(arguments=["jittor"], env=SimpleNamespace(docname="api/sample"),
+                                _rich_objects=lambda module: {"jittor.Sample"})
+        canonical = namespace["_source"](owner)
+        self.assertNotIn(":no-index:", canonical)
+        owner.env.docname += ".en"
+        translated = namespace["_source"](owner)
+        self.assertEqual(translated.count(":no-index:"), 2)
+        self.assertIn("jittor-rst-autoclass:: jittor.Sample", translated)
+        self.assertNotIn("jittor.extra", translated)
+        signatures = [dict(module="jittor", fullname="Sample", ids=[]),
+                      dict(module="jittor", fullname="Sample", ids=[]),
+                      dict(module="jittor", fullname="Sample.method", ids=[])]
+        document = SimpleNamespace(ids={})
+        def note_target(node):
+            for identifier in node["ids"]:
+                self.assertNotIn(identifier, document.ids)
+                document.ids[identifier] = node
+        document.note_explicit_target = note_target
+        root = SimpleNamespace(findall=lambda kind: signatures)
+        namespace["_local_api_targets"]([root], document)
+        self.assertEqual(set(document.ids), {"jittor.Sample", "jittor.Sample.method"})
+        self.assertEqual(signatures[1]["ids"], [])
+
+    def test_bilingual_autodoc_uses_the_canonical_inventory(self):
+        # Execute the production method without importing Sphinx or Jittor.
+        from types import SimpleNamespace
+
+        source = self.docs_root / "_myst_autodoc.py"
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+        bridge = next(node for node in tree.body
+                      if isinstance(node, ast.ClassDef) and node.name == "PublicAutomoduleBridge")
+        method = next(node for node in bridge.body
+                      if isinstance(node, ast.FunctionDef) and node.name == "_rich_objects")
+        namespace = {"Path": Path, "json": json}
+        exec(compile(ast.Module(body=[method], type_ignores=[]), str(source), "exec"), namespace)
+        rich_objects = namespace["_rich_objects"]
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            inventory = root / "api" / "inventory.json"
+            inventory.parent.mkdir()
+            inventory.write_text(json.dumps({"pages": [{
+                "docname": "api/contrib",
+                "objects": ["jittor.contrib.concat", "jittor.contrib.stack", "jittor.nn.Linear"],
+            }]}), encoding="utf-8")
+            dependencies = []
+            env = SimpleNamespace(srcdir=str(root), docname="api/contrib",
+                                  note_dependency=dependencies.append)
+            owner = SimpleNamespace(env=env)
+            for docname in ("api/contrib", "api/contrib.en"):
+                with self.subTest(docname=docname):
+                    env.docname = docname
+                    self.assertEqual(rich_objects(owner, "jittor.contrib"),
+                                     {"jittor.contrib.concat", "jittor.contrib.stack"})
+                    self.assertEqual(dependencies[-1], str(inventory))
+            env.docname = "api/missing.en"
+            with self.assertRaisesRegex(RuntimeError, "API inventory has no page for api/missing.en"):
+                rich_objects(owner, "jittor.contrib")
+            inventory.unlink()
+            with self.assertRaises(FileNotFoundError):
+                rich_objects(owner, "jittor.contrib")
+
     def test_governance_rejects_dated_reports_but_keeps_topic_documents(self):
         checker_path = self.repo_root / "tools" / "docs" / "check_governance.py"
         spec = spec_from_file_location("_jittor_docs_governance", str(checker_path))
@@ -231,7 +337,7 @@ class TestDocsStructure(unittest.TestCase):
             retained = (
                 "docs/development/core-validation.md",
                 "docs/development/core-validation.en.md",
-                "docs/releases/2.0.md",
+                "docs/project/releases/2.0.md",
                 "docs/notes/iso-8601.md",
                 "agent/manuals/2026-11-02.md",
             )

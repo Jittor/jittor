@@ -37,7 +37,7 @@ before the report is made. Pass ``sync=False`` to leave both edges alone.
 The older tools remain: ``jt.profile_scope``/``jt.profiler`` is a per-operator
 kernel micro-benchmark (it synchronizes and optionally re-runs each operator),
 and ``profile_memory_enable`` with ``jt.get_max_memory_treemap`` a
-``trace_py_var``-based memory tree. See ``docs/notes/profiling.md``.
+``trace_py_var``-based memory tree. See ``docs/performance/profiling.md``.
 """
 
 import time
