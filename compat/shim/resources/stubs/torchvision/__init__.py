@@ -499,6 +499,67 @@ class _WeightEnum(metaclass=_IRMMeta):
     IMAGENET1K_V1 = "imagenet1k_v1"
 
 
+def _box_convert(boxes, in_fmt="xyxy", out_fmt="xyxy"):
+    """torchvision.ops.box_convert on jittor Vars."""
+    import numpy as _np
+    t = boxes if isinstance(boxes, _jt.Var) else _jt.array(_np.asarray(boxes, dtype=_np.float32))
+    if t.ndim == 1:
+        t = t.unsqueeze(0)
+    t = t.float32()
+    a, b, c, d = t[:, 0], t[:, 1], t[:, 2], t[:, 3]
+    src, dst = str(in_fmt).lower(), str(out_fmt).lower()
+    if src == "xyxy":
+        x1, y1, x2, y2 = a, b, c, d
+    elif src == "xywh":
+        x1, y1, x2, y2 = a, b, a + c, b + d
+    elif src == "cxcywh":
+        x1, y1, x2, y2 = a - c / 2, b - d / 2, a + c / 2, b + d / 2
+    else:
+        raise ValueError(f"Unsupported box format: {in_fmt}")
+    if dst == "xyxy":
+        return _jt.stack([x1, y1, x2, y2], dim=1)
+    if dst == "xywh":
+        return _jt.stack([x1, y1, x2 - x1, y2 - y1], dim=1)
+    if dst == "cxcywh":
+        return _jt.stack([(x1 + x2) / 2, (y1 + y2) / 2, x2 - x1, y2 - y1], dim=1)
+    raise ValueError(f"Unsupported box format: {out_fmt}")
+
+
+def _draw_bounding_boxes(image, boxes, labels=None, colors=None, fill=False,
+                         width=1, font=None, font_size=None):
+    """torchvision.utils.draw_bounding_boxes on a uint8 CHW tensor."""
+    import numpy as _np
+    from PIL import Image as _Im, ImageDraw as _ImageDraw
+    arr = image.numpy() if isinstance(image, _jt.Var) else _np.asarray(image)
+    if arr.ndim == 2:
+        arr = _np.repeat(arr[:, :, None], 3, axis=2)
+    elif arr.ndim == 3 and arr.shape[0] in (1, 3, 4):
+        arr = _np.transpose(arr, (1, 2, 0))
+    if arr.ndim == 3 and arr.shape[2] == 1:
+        arr = _np.repeat(arr, 3, axis=2)
+    if arr.ndim == 3 and arr.shape[2] >= 3:
+        arr = arr[:, :, :3]
+    if arr.dtype != _np.uint8:
+        arr = _np.clip(arr, 0, 255).astype(_np.uint8)
+    pil = _Im.fromarray(arr)
+    draw = _ImageDraw.Draw(pil)
+    b = boxes.numpy() if isinstance(boxes, _jt.Var) else _np.asarray(boxes)
+    color_list = list(colors) if isinstance(colors, (list, tuple)) else None
+    for index, box in enumerate(_np.asarray(b)):
+        x1, y1, x2, y2 = (float(v) for v in box[:4])
+        color = color_list[index % len(color_list)] if color_list else (colors or "red")
+        draw.rectangle([x1, y1, x2, y2], outline=color, width=int(width),
+                       fill=color if fill else None)
+        if labels is not None and index < len(labels):
+            draw.text((x1 + 2, y1 + 2), str(labels[index]), fill=color)
+    out = _np.transpose(_np.asarray(pil), (2, 0, 1)).astype(_np.uint8)
+    return _frontend_tensor(_jt.array(out))
+
+
+class _OpsModule(types.ModuleType):
+    box_convert = staticmethod(_box_convert)
+
+
 class _ModelsModule(types.ModuleType):
     VGG16_Weights = type("VGG16_Weights", (_WeightEnum,), {})
     AlexNet_Weights = type("AlexNet_Weights", (_WeightEnum,), {})
@@ -513,6 +574,7 @@ class _ModelsModule(types.ModuleType):
 class _UtilsModule(types.ModuleType):
     make_grid = staticmethod(_make_grid)
     save_image = staticmethod(_save_image)
+    draw_bounding_boxes = staticmethod(_draw_bounding_boxes)
 
 
 _CONCRETE = {"InterpolationMode": InterpolationMode, "ImageReadMode": ImageReadMode,
@@ -524,6 +586,7 @@ _CONCRETE = {"InterpolationMode": InterpolationMode, "ImageReadMode": ImageReadM
              "center_crop": _center_crop, "rgb_to_grayscale": _rgb_to_grayscale,
              "grayscale_to_rgb": _grayscale_to_rgb,
              "make_grid": _make_grid, "save_image": _save_image,
+             "draw_bounding_boxes": _draw_bounding_boxes,
              # real class-based transforms (torchvision.transforms.*)
              "Compose": Compose, "Normalize": Normalize, "ToTensor": ToTensor,
              "Resize": Resize, "ToPILImage": ToPILImage, "Lambda": Lambda,
@@ -568,11 +631,13 @@ class _Finder(importlib.abc.MetaPathFinder, importlib.abc.Loader):
 sys.meta_path.insert(0, _Finder())
 _models = _ModelsModule("torchvision.models")
 _utils = _UtilsModule("torchvision.utils")
+_ops = _OpsModule("torchvision.ops")
 models = _models
 utils = _utils
 transforms = _module_for_name("torchvision.transforms")
 sys.modules.setdefault("torchvision.models", _models)
 sys.modules.setdefault("torchvision.utils", _utils)
+sys.modules.setdefault("torchvision.ops", _ops)
 sys.modules.setdefault("torchvision.transforms", transforms)
 sys.modules.setdefault("torchvision.transforms.functional",
                        _module_for_name("torchvision.transforms.functional"))
@@ -585,6 +650,8 @@ def __getattr__(name):
         return _models
     if name == "utils":
         return _utils
+    if name == "ops":
+        return _ops
     if name in ("transforms", "functional", "v2", "F"):
         return _module_for_name("torchvision." + name)
     raise AttributeError(name)

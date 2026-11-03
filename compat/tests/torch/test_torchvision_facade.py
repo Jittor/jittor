@@ -74,5 +74,24 @@ class TestTorchvisionFacade(unittest.TestCase):
             ColorJitter(hue=0.7)
 
 
+    def test_draw_bounding_boxes_and_box_convert(self):
+        from PIL import Image
+        from torchvision.ops import box_convert
+        from torchvision.transforms.functional import pil_to_tensor
+        from torchvision.utils import draw_bounding_boxes
+
+        image = Image.new("RGB", (32, 24), (10, 20, 30))
+        tensor = pil_to_tensor(image)
+        boxes = torch.tensor([[4.0, 5.0, 10.0, 8.0]])
+        converted = box_convert(boxes, "xywh", "xyxy")
+        np.testing.assert_allclose(
+            converted.numpy(), [[4.0, 5.0, 14.0, 13.0]], rtol=1e-6)
+        drawn = draw_bounding_boxes(tensor, converted, colors="red", labels=["a"])
+        self.assertEqual(tuple(drawn.shape), (3, 24, 32))
+        self.assertIn("uint8", str(drawn.dtype))
+        np.testing.assert_array_equal(
+            drawn.numpy()[:, 5, 4], np.array([255, 0, 0], dtype=np.uint8))
+
+
 if __name__ == "__main__":
     unittest.main()
