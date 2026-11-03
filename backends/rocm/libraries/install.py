@@ -38,7 +38,7 @@ def install_libraries(context):
 def install_kernels():
     """Run after core loading; native domain imports may follow this step."""
     from jittor._runtime.dispatch import register_kernel
-    register_kernel("matmul", "rocm_legacy", _hipblas_matmul,
+    register_kernel("matmul", "rocm", _hipblas_matmul,
                     dtypes={"float32", "float64"}, supports=_supports_matmul, priority=100)
-    register_kernel("misc.scan_2d", "rocm_legacy", _rocprim_scan,
+    register_kernel("misc.scan_2d", "rocm", _rocprim_scan,
                     dtypes={"float32", "float64", "int32", "int64"}, priority=100)

@@ -37,7 +37,8 @@ _LIBRARIES = {
     "rocprim": (
         "rocprim/device/device_scan.hpp", (),
         ("rocprim/rocprim_cumsum_op.h", "rocprim/rocprim_cumsum_op.cc",
-         "rocprim/scan.h", "rocprim/scan.cu"),
+         "rocprim/scan.h", "rocprim/scan.cu", "rocprim/arg_reduce.h", "rocprim/arg_reduce.cu",
+         "rocprim/rocm_arg_reduce_op.h", "rocprim/rocm_arg_reduce_op.cc"),
     ),
 }
 

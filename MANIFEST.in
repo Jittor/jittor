@@ -184,6 +184,7 @@ include backends/cuda/include/helper_functions.h
 include backends/cuda/include/helper_image.h
 include backends/cuda/include/helper_string.h
 include backends/cuda/include/helper_timer.h
+include backends/cuda/include/indexing_runtime.h
 include backends/cuda/include/jittor_accelerator.h
 include backends/cuda/include/stream_compat.h
 include backends/cuda/kernels/core/candidate_op.cc
@@ -307,6 +308,10 @@ include backends/rocm/libraries/hiprand/hiprand_random_op.cc
 include backends/rocm/libraries/hiprand/hiprand_random_op.h
 include backends/rocm/libraries/hiprand/random.cu
 include backends/rocm/libraries/hiprand/random.h
+include backends/rocm/libraries/rocprim/arg_reduce.cu
+include backends/rocm/libraries/rocprim/arg_reduce.h
+include backends/rocm/libraries/rocprim/rocm_arg_reduce_op.cc
+include backends/rocm/libraries/rocprim/rocm_arg_reduce_op.h
 include backends/rocm/libraries/rocprim/rocprim_cumsum_op.cc
 include backends/rocm/libraries/rocprim/rocprim_cumsum_op.h
 include backends/rocm/libraries/rocprim/scan.cu

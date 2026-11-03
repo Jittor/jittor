@@ -164,7 +164,7 @@ def test_python_registration_is_narrow_and_uses_native_names(monkeypatch):
     monkeypatch.setitem(sys.modules, dispatch.__name__, dispatch)
     installer.install_kernels()
     assert [args[0] for args, _ in calls] == ["matmul", "misc.scan_2d"]
-    assert all(args[1] == "rocm_legacy" for args, _ in calls)
+    assert all(args[1] == "rocm" for args, _ in calls)
     assert calls[0][1]["dtypes"] == {"float32", "float64"}
     assert calls[1][1]["dtypes"] == {"float32", "float64", "int32", "int64"}
     a = SimpleNamespace(ndim=2, dtype="float32")

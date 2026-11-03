@@ -240,13 +240,16 @@ BACKEND_GRAD_COVERAGE = (
      "tests/nn/test_onednn_conv_row.py::test_the_transpose_row_agrees_with_the_generic_path",
      "cpu_jittor"),
 
-    # ---- ROCm. No AMD device on this machine. -----------------------------
+    # ---- ROCm. Hardware routes remain explicit; this inventory is not a run.
     ("backends/rocm/libraries/hipblas/hipblas_matmul_op.cc", "HipblasMatmulOp",
-     "tests/backends/rocm/test_rocm.py::TestBMM::test_bmm_rocm",
+     "tests/backends/rocm/test_rocm_runtime.py::test_hipblas_transposes_and_gradients",
      "rocm_hardware"),
     ("backends/rocm/libraries/rocprim/rocprim_cumsum_op.cc", "RocprimCumsumOp",
-     "tests/backends/rocm/test_rocm.py::TestROCm::test_rocm_fused_op",
-     "rocm_hardware_no_grad_test"),
+     "tests/backends/rocm/test_rocm_runtime.py::test_public_cumsum_dispatch_and_axes",
+     "rocm_hardware"),
+    ("backends/rocm/libraries/rocprim/rocm_arg_reduce_op.cc", "RocmArgReduceOp",
+     "tests/backends/rocm/test_rocm_runtime.py::test_arg_reduction_values_indices_and_ties",
+     "rocm_hardware"),
 
     # ---- ACL / Ascend. No NPU on this machine. ----------------------------
     ("backends/acl/kernels/ops/arg_reduce_op.py", "ArgReduceACL",

@@ -45,7 +45,7 @@ def configure(context: BuildContext) -> BuildConfig:
     return config.evolve(backend="rocm", has_rocm=True, has_cuda=True, is_cuda=False,
         has_accelerator=True, hipcc_path=hipcc, nvcc_path=hipcc, cc_flags=flags,
         nvcc_flags=flags + " -x hip", kernel_compiler=hipcc, kernel_language="hip",
-        kernel_compile_flags=sdk_flags + " -x hip -include hip/hip_runtime.h -I" + shlex.quote(str(cuda_root / "include")),
+        kernel_compile_flags=sdk_flags + " -x hip --gpu-max-threads-per-block=1024 -include hip/hip_runtime.h -I" + shlex.quote(str(cuda_root / "include")),
         backend_link_flags=config.backend_link_flags + link_flags,
         backend_sources=config.backend_sources + (BuildSource(str(runtime), language="hip", flags=flags),),
         resources=dict(config.resources, rocm_home=home, rocm_runtime=runtime),

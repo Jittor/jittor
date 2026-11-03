@@ -53,6 +53,7 @@ def test_native_provider_returns_build_config_without_transform(tmp_path, monkey
     assert result.kernel_language == "hip"
     assert "-D__HIP_PLATFORM_AMD__" in shlex.split(result.cc_flags)
     assert "-D__HIP_PLATFORM_AMD__" in shlex.split(result.kernel_compile_flags)
+    assert "--gpu-max-threads-per-block=1024" in shlex.split(result.kernel_compile_flags)
     assert len(result.backend_sources) == 1
     assert isinstance(result.backend_sources[0], BuildSource)
     assert result.backend_sources[0].language == "hip"
