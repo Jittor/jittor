@@ -682,6 +682,20 @@ def _bind_fast_cat():
 
 
 def cat(tensors, dim=0, out=None, axis=None):
+    # Torch autocast preserves the promoted input dtype. Native Jittor AMP may
+    # round a concat temporary before casting it back; change only this Torch
+    # frontend operation and restore the caller's AMP flags on exit.
+    amp_reg = int(jt.flags.amp_reg)
+    prefer_half = jt.amp_flags.prefer16 | jt.amp_flags.prefer_bfloat16
+    if amp_reg & prefer_half:
+        from jittor._runtime.amp_context import torch_autocast_active
+        if torch_autocast_active():
+            with jt.flag_scope(amp_reg=amp_reg & ~prefer_half):
+                return _cat_impl(tensors, dim=dim, out=out, axis=axis)
+    return _cat_impl(tensors, dim=dim, out=out, axis=axis)
+
+
+def _cat_impl(tensors, dim=0, out=None, axis=None):
     if out is None and axis is None and type(dim) is int:
         fast = (_FAST_CAT or _bind_fast_cat())(tensors, dim)
         if fast is not NotImplemented:
