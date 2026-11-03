@@ -144,6 +144,11 @@ class ProfileResult:
         graph = sum(o["t_end"] - o["t_start"] for o in self.op_records
                     if o["kind"] == GRAPH_LAUNCH and o["batch"] not in by_id)
         launched = [o for o in self.op_records if o["kind"] == OP]
+        # An operator compiles its kernel the first time it runs; that is
+        # compilation, not launching.
+        in_ops = min(sum(o["compile_ns"] for o in launched), launch)
+        compile_ += in_ops
+        launch -= in_ops
         return {
             "wall": self.wall_ns,
             "python_and_graph_build": max(self.wall_ns - top - graph - outside_wait, 0),
@@ -213,7 +218,7 @@ class ProfileResult:
             st.calls += 1
             wait = self._op_wait.get(o["seq"], 0)
             st.wait_ns += wait
-            st.host_ns += o["t_end"] - o["t_start"] - wait
+            st.host_ns += o["t_end"] - o["t_start"] - wait - o["compile_ns"]
             st.alloc_ns += o["t_alloc"] - o["t_start"]
             st.device_ns += device.get(o["seq"], 0)
             st.kernels += kernels.get(o["seq"], 0)
@@ -284,7 +289,7 @@ class ProfileResult:
             site = _site(self.strings[o["site"]]) if o["site"] >= 0 else "(no Python site)"
             s = sites[site]
             s["ops"] += 1
-            s["launch_ns"] += o["t_end"] - o["t_start"]
+            s["launch_ns"] += o["t_end"] - o["t_start"] - o["compile_ns"]
             s["device_ns"] += device.get(o["seq"], 0)
         if self.python is not None:
             per = self.python.interval * 1e9

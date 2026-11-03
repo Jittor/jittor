@@ -13,8 +13,11 @@ What the events are:
 * one CPU event per launched jittor operator (a fused kernel group is one
   operator) -- its host time is the executor's time to launch it; Python
   graph construction is not charged to operators (``jt.profile``'s host split
-  has it) -- and one per ``record_function`` range, which contains the
-  operators launched inside it, so "self" excludes them as in PyTorch;
+  has it) -- and one per ``record_function`` range, whose children are the
+  operators built inside it, wherever the lazy graph later ran; an event's
+  "self" time excludes whatever ran inside it;
+* one ``jit_compile`` event wherever a kernel was generated and compiled (as
+  the executor planned, or as an operator first ran -- then under it);
 * one CUDA event per kernel and copy CUPTI saw, its time also charged to the
   operator that launched it as that operator's self device time;
 * ``profile_memory``: an event's memory is what the pools handed out minus
@@ -22,7 +25,8 @@ What the events are:
 * ``record_shapes``: input shapes as lists of dimensions;
 * ``with_stack``: the Python stack that built the operator, as
   ``"file(line): function"`` entries innermost first, without jittor's own
-  frames; ``export_stacks`` writes them for flame graphs;
+  frames (a fused operator lists each member's line first); ``export_stacks``
+  writes them for flame graphs;
 * ``export_memory_timeline``: the device's allocated bytes over the region,
   all in PyTorch's "Unknown" category -- jittor does not classify
   allocations into parameters, gradients and activations;

@@ -127,6 +127,8 @@ class FunctionEvent(_Times):
         # Own device time (kernels it launched) and own memory; the totals
         # add the children's.
         self._own_device_us = 0.0
+        # Host time of the events that ran inside this one, whoever owns them.
+        self._nested_us = 0.0
         self._own_cpu_memory = 0
         self._own_device_memory = 0
 
@@ -134,20 +136,17 @@ class FunctionEvent(_Times):
     def key(self):
         return self.name
 
-    # A child normally runs inside its parent, and then these are PyTorch's
-    # elapsed and elapsed-minus-children. An operator built inside a
-    # record_function range runs when the graph executes, often after the
-    # range closed; its time is still the range's, so the total is the range's
-    # own time plus its children's wherever they ran.
-    def _inside(self, child):
-        return child.time_range.start >= self.time_range.start and child.time_range.end <= self.time_range.end
-
+    # Self time is the event's elapsed time less what ran inside it, and the
+    # total adds its children's totals. In eager PyTorch a child is what ran
+    # inside, so these are PyTorch's numbers. Under jittor's lazy execution an
+    # operator built in a record_function range usually runs later -- at a
+    # sync in another range or outside any -- and is still that range's child,
+    # while the range it ran in does not count its time as its own either.
     @property
     def self_cpu_time_total(self):
         if self.device_type != DeviceType.CPU:
             return 0.0
-        return self.time_range.elapsed_us() - sum(child.cpu_time_total for child in self.cpu_children
-                                                  if self._inside(child))
+        return self.time_range.elapsed_us() - self._nested_us
 
     @property
     def cpu_time_total(self):
@@ -565,6 +564,24 @@ def _demangle(name):
     return _demangled[name]
 
 
+def _op_stack(result, record, strings):
+    """The operator's stack entries. A fused operator was built on as many
+    lines as it has members: their innermost frames first, in member order,
+    then the callers of the last."""
+    stacks = result.stacks
+    if stacks is None:
+        return []
+    root = _stack_entries(stacks[record["stack"]]) if 0 < record["stack"] < len(stacks) else []
+    if record["stacks"] <= 0:
+        return root
+    lines = []
+    for id in strings[record["stacks"]].split(","):
+        entries = _stack_entries(stacks[int(id)]) if 0 < int(id) < len(stacks) else []
+        if entries and entries[0] not in lines:
+            lines.append(entries[0])
+    return lines + [entry for entry in root[1:] if entry not in lines]
+
+
 def _stack_entries(frames):
     """PyTorch's ``"file(line): function"`` entries, innermost first, without
     the frames of jittor itself (PyTorch's own C++ frames are not shown
@@ -578,33 +595,53 @@ def _build_events(result, use_device, record_shapes, with_stack, profile_memory)
     strings, t0 = result.strings, result.t0
     us = lambda ns: (ns - t0) / 1e3
     host = []
-    for record in sorted(result.op_records, key=lambda r: (r["t_start"], -r["t_end"])):
+    compiles = []
+    for record in result.op_records:
         shapes = _input_shapes(strings[record["shapes"]]) if record_shapes and record["shapes"] > 0 else []
-        stack = []
-        if with_stack and result.stacks is not None and 0 < record.get("stack", 0) < len(result.stacks):
-            stack = _stack_entries(result.stacks[record["stack"]])
+        stack = _op_stack(result, record, strings) if with_stack else []
         event = FunctionEvent(record["seq"], strings[record["name"]], us(record["t_start"]),
                               us(record["t_end"]), DeviceType.CPU, shapes, stack, use_device)
-        event._built_in = record.get("range", -1)
+        event._built_in = record["range"]
         host.append(event)
+        if record["compile_ns"]:
+            compiles.append((event, record))
     by_seq = {event.id: event for event in host}
-    # Nesting: what ran inside a record_function range is its child, and so
-    # is an operator built inside one, wherever it ran.
+    next_id = max([e.id for e in host] + [-1]) + 1
+    # Kernels are generated and compiled the first time they are needed:
+    # while the executor plans a batch, or when an operator first runs -- then
+    # the compile is the operator's child, so its own time is its launch.
+    def compile_event(start, end, op=None):
+        event = FunctionEvent(next_id, "jit_compile", start, end, DeviceType.CPU,
+                              stack=list(op.stack) if op is not None else [], use_device=use_device)
+        event._built_in = -1
+        event._compiles = op
+        host.append(event)
+    for op, record in compiles:
+        start = us(record["t_compile"])
+        compile_event(start, start + record["compile_ns"] / 1e3, op)
+        next_id += 1
+    for batch in result.batches:
+        if batch["t_planned"] and batch["t_compiled"] > batch["t_planned"]:
+            compile_event(us(batch["t_planned"]), us(batch["t_compiled"]))
+            next_id += 1
+    host.sort(key=lambda e: (e.time_range.start, -e.time_range.end))
+    # What ran inside an event is not its own time. Its children are what was
+    # built inside it if it is a record_function range (wherever they ran),
+    # otherwise what ran inside it; a compile belongs to its operator.
     open_events = []
     for event in host:
         while open_events and open_events[-1].time_range.end <= event.time_range.start:
             open_events.pop()
-        parent = None
+        inside = None
         if open_events and event.time_range.end <= open_events[-1].time_range.end:
-            parent = open_events[-1]
-        if parent is None and event._built_in in by_seq:
-            parent = by_seq[event._built_in]
+            inside = open_events[-1]
+            inside._nested_us += event.time_range.elapsed_us()
+        parent = getattr(event, "_compiles", None) or by_seq.get(event._built_in) or inside
         if parent is not None:
             event.set_cpu_parent(parent)
             parent.append_cpu_child(event)
         open_events.append(event)
     device = []
-    next_id = max([e.id for e in host] + [-1]) + 1
     for record in sorted(result.kernel_records + result.copy_records, key=lambda r: r["start"]):
         event = FunctionEvent(next_id, _demangle(record["name"]), us(record["start"]),
                               us(record["end"]), DeviceType.CUDA, use_device=use_device)

@@ -79,6 +79,59 @@ class TestTorchProfilerTable(unittest.TestCase):
         self.assertAlmostEqual(forward.device_time_total,
                                sum(c.device_time_total for c in forward.cpu_children), places=6)
 
+    def test_operators_belong_to_the_range_that_built_them_not_the_one_that_ran_them(self):
+        x = torch.randn(64, 64, device="cuda")
+        (x @ x).relu().sum().item()
+        with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA]) as prof:
+            with record_function("build"):
+                y = (x @ x).relu().sum()      # lazily: nothing runs here
+            with record_function("run"):
+                y.item()                      # the graph executes here
+            torch.cuda.synchronize()
+        events = prof.events()
+        build = next(e for e in events if e.name == "build")
+        run = next(e for e in events if e.name == "run")
+        ops = [e for e in events if e.cpu_parent is build]
+        self.assertTrue(ops)
+        # Only the executor's own work (planning-time compiles) is the run's.
+        self.assertFalse([e for e in events if e.cpu_parent is run and e.name != "jit_compile"])
+        self.assertTrue(all(run.time_range.start <= e.time_range.start for e in ops))
+        # The range they ran in does not count them as its own time, and the
+        # one that built them totals them.
+        inside = sum(e.cpu_time_total for e in events if e.cpu_parent is not None
+                     and e.cpu_parent.name in ("build", "run")
+                     and run.time_range.start <= e.time_range.start
+                     and e.time_range.end <= run.time_range.end)
+        self.assertAlmostEqual(run.self_cpu_time_total, run.time_range.elapsed_us() - inside, places=3)
+        self.assertAlmostEqual(build.cpu_time_total,
+                               build.self_cpu_time_total + sum(e.cpu_time_total for e in ops), places=3)
+        self.assertGreater(build.device_time_total, 0)
+
+    def test_a_first_run_compile_is_its_own_event_under_the_operator(self):
+        x = torch.randn(64, 64, device="cuda")
+        torch.cuda.synchronize()
+        with profile(activities=[ProfilerActivity.CPU], with_stack=True) as prof:
+            a = (x * 0.4142135)   # a constant no other test uses
+            b = a - 0.7320508
+            b.exp().sum().item()
+        events = prof.events()
+        compiles = [e for e in events if e.name == "jit_compile"]
+        self.assertTrue(compiles)
+        for c in compiles:
+            # Compiled while the executor planned, or by the operator as it
+            # first ran -- then the operator's own time leaves it out.
+            op = c.cpu_parent
+            if op is None:
+                continue
+            self.assertIn(c, op.cpu_children)
+            self.assertAlmostEqual(op.self_cpu_time_total,
+                                   op.time_range.elapsed_us() - c.time_range.elapsed_us(), places=3)
+        # The fused kernel was built on two lines; its stack names both.
+        fused = [e for e in events if e.name.startswith("fused") and e.stack]
+        self.assertTrue(fused)
+        here = [s for s in fused[0].stack if os.path.basename(__file__) in s]
+        self.assertGreaterEqual(len(here), 2, fused[0].stack)
+
     def test_the_table_is_pytorchs(self):
         averages = self.prof.key_averages()
         text = averages.table(row_limit=10)

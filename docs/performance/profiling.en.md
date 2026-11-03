@@ -27,9 +27,25 @@ PyTorch 2.11 produces (`compat/torch/profiler.py`):
   each operator and each `record_function` range is a CPU event, each kernel/copy
   a CUDA event whose time is also its launching operator's self device time; a
   range's total is its own time plus its children's. Under lazy execution an
-  operator **built** inside a range often runs after the range closes; it is still
-  the range's child (the executor records the range open when the op was built,
-  `op_records[i]["range"]`).
+  operator **built** inside a range often runs after the range closes (at an
+  `.item()`/sync in another range, or outside any); it is still the child of the
+  range that built it (the executor records the range open when the op was built,
+  `op_records[i]["range"]`), and the range it ran in does not count that time as
+  its own. So `forward`'s total is every operator the forward pass built, and the
+  range that syncs keeps only its own time.
+- A new kernel is generated and compiled the first time it is needed: while the
+  executor plans a batch, or when an operator first runs. That time is a
+  `jit_compile` event (under the operator in the second case), not part of the
+  operator's launch; native `jt.profile`'s host split counts it under "JIT compile
+  / kernel lookup" too. With no new kernel it is a short cache lookup.
+- A fused operator has as many members as lines that built it: its stack lists
+  each member's innermost frame first (in member order), then the callers of the
+  last, so Source Location shows every line fused into it.
+- Region edges: entry runs `jt.sync_all(True)`, so a graph built before the
+  profile but not yet run executes on entry and is not in the result; exit syncs
+  too, so what the region built has run before it ends. Native
+  `jt.profile(sync=False)` syncs at neither edge, and a graph built in the region
+  but not synced there runs outside it, unrecorded.
 - `table()` has PyTorch's `_build_table` columns, widths, truncation, units, sort
   keys and footer; `profile_memory` gives each operator's allocated-minus-freed
   CPU/CUDA Mem (self and total), `record_shapes` + `group_by_input_shape` give Input

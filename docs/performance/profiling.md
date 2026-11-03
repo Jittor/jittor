@@ -23,7 +23,17 @@ Torch 兼容模式下，`torch.profiler.profile` 与 `torch.autograd.profiler.pr
 - `events()`/`key_averages()` 是 PyTorch 的 `FunctionEvent`/`FunctionEventAvg`：每个算子、每个
   `record_function` 区间是 CPU 事件，每个 kernel/拷贝是 CUDA 事件，kernel 的时间同时记为发射它的
   算子的 self 设备时间；区间的 total = 自身 + 子事件。惰性执行下，区间里**建**的算子往往在区间
-  结束后才执行，它们仍算区间的子事件（执行器按建算子时打开的区间记，`op_records[i]["range"]`）。
+  结束后才执行（在另一个区间里的 `.item()`/sync 处，或在所有区间之外），它们仍算建它的区间的子事件
+  （执行器按建算子时打开的区间记，`op_records[i]["range"]`）；执行它们的那个区间也不把这段时间算作
+  自身时间。所以 `forward` 的 total 是前向建出的全部算子，而做 sync 的区间只剩自己的时间。
+- 新 kernel 第一次需要时才生成和编译：执行器规划一批算子时，或算子第一次运行时。这段时间是一个
+  `jit_compile` 事件（后者挂在该算子下），不算进算子的发射时间；原生 `jt.profile` 的主机拆分同样记在
+  "JIT compile / kernel lookup"。没有新 kernel 时它只是很短的查缓存。
+- 一个融合算子由几行代码建出来，就有几个成员：它的栈先列每个成员最内层的那一帧（按成员顺序），
+  再接最后一个成员的调用方，Source Location 因此能看到所有融合进来的行。
+- 区间边界：进入时 `jt.sync_all(True)`，所以在 profile 之前建好、还没执行的图在进入时就执行完，
+  不出现在结果里；退出时同样 sync，区间里建的图在退出前一定执行完。原生 `jt.profile(sync=False)`
+  两边都不 sync，区间里建而没 sync 的图在区间外执行，不被记录。
 - `table()` 的列、宽度、截断、单位、排序键和页脚与 PyTorch 的 `_build_table` 相同；
   `profile_memory` 给出每个算子分配减释放的 CPU/CUDA Mem（self 与 total），`record_shapes` +
   `group_by_input_shape` 给出 `[[64, 256], [512, 256]]` 形式的 Input Shapes，`with_stack` +

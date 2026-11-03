@@ -3,6 +3,7 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <mutex>
@@ -29,11 +30,12 @@ int step_trace_mode = 0;
 namespace {
 
 constexpr const char* kLayout =
-    "ops:seq,kind,batch,name,t_start,t_alloc,t_end,device,fused,shapes,site,out_bytes,stack,range;"
+    "ops:seq,kind,batch,name,t_start,t_alloc,t_end,device,fused,shapes,site,out_bytes,stack,range,"
+    "t_compile,compile_ns,stacks;"
     "batches:batch,parent,t_begin,t_planned,t_compiled,t_launched,t_end;"
     "waits:t_begin,t_end,batch;"
     "memory:t,kind,device,bytes,allocator,allocation,op,var,var_desc,producer,site";
-constexpr int kOpFields = 14;
+constexpr int kOpFields = 17;
 constexpr int kBatchFields = 7;
 constexpr int kWaitFields = 3;
 constexpr int kMemFields = 11;
@@ -117,6 +119,12 @@ struct PendingOp {
     // The record_function range open on the building thread when the op was
     // built, -1 for none: under lazy execution it runs later, outside it.
     int64 range = -1;
+    // JIT compilation (or loading a cached kernel) inside the op: when it
+    // first started and how long it took in all (StepTraceCompileScope).
+    int64 t_compile = 0, compile_ns = 0;
+    // A fused op's members' stacks, distinct and in member order, as an
+    // interned "id,id,..." string; 0 for an unfused op.
+    int64 stacks = 0;
     int kind = ok_op;
 };
 
@@ -219,7 +227,7 @@ void end_record(int64 seq) {
     if (!s.room(s.ops, kOpFields)) return;
     int64 rec[kOpFields] = {p.seq, p.kind, p.batch, p.name, p.t_start, p.t_alloc,
                             t_end, p.device, p.fused, p.shapes, p.site, p.out_bytes, p.stack,
-                            p.range};
+                            p.range, p.t_compile, p.compile_ns, p.stacks};
     s.ops.insert(s.ops.end(), rec, rec + kOpFields);
 }
 
@@ -407,8 +415,36 @@ void StepTraceOpScope::named(Op* op, bool is_fused, int device) {
     p->shapes = with_shapes ? s.intern(shapes) : 0;
     p->site = s.site(root->launch_origin);
     p->stack = root->memory_stack;
+    if (is_fused) {
+        // Each member was built on its own line; the root's stack names one.
+        string ids;
+        vector<uint32> seen;
+        for (Op* member : ((FusedOp*)op)->ops) {
+            uint32 id = member->memory_stack;
+            if (!id || std::find(seen.begin(), seen.end(), id) != seen.end()) continue;
+            seen.push_back(id);
+            if (ids.size()) ids += ',';
+            ids += std::to_string(id);
+        }
+        p->stacks = s.intern(ids);
+    }
     p->device = device;
     p->out_bytes = out_bytes;
+}
+
+StepTraceCompileScope::StepTraceCompileScope() {
+    if (PREDICT_BRANCH_NOT_TAKEN(step_trace_mode & st_ops) && current_op >= 0) {
+        seq = current_op;
+        t_begin = now_ns();
+    }
+}
+
+StepTraceCompileScope::~StepTraceCompileScope() {
+    if (seq < 0) return;
+    PendingOp* p = find_pending(seq);
+    if (!p || p->kind != ok_op) return;
+    if (!p->t_compile) p->t_compile = t_begin;
+    p->compile_ns += now_ns() - t_begin;
 }
 
 void StepTraceOpScope::allocated() {

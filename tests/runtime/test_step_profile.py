@@ -316,6 +316,38 @@ class TestStacksAndRanges(unittest.TestCase):
         self.assertTrue(built, [(r["kind"], r["range"]) for r in prof.op_records])
         self.assertTrue(all(r["t_start"] >= ranges[0]["t_end"] for r in built))
 
+    def test_a_fused_operator_names_every_line_fused_into_it(self):
+        with jt.flag_scope(use_cuda=0):
+            x = jt.randn(16, 16)
+            x.sync()
+            with jt.profile(stacks=True, memory=False) as prof:
+                a = x * 2.5; first = inspect.currentframe().f_lineno
+                b = a + 1.5; second = inspect.currentframe().f_lineno
+                b.sync()
+        fused = [r for r in prof.op_records if r["fused"] > 1 and r["stacks"] > 0]
+        self.assertTrue(fused, [(prof.result.strings[r["name"]], r["stacks"]) for r in prof.op_records])
+        ids = [int(i) for i in prof.result.strings[fused[0]["stacks"]].split(",")]
+        lines = {f["line"] for i in ids for f in prof.result.stacks[i] if f["filename"] == __file__}
+        self.assertLessEqual({first, second}, lines)
+
+    def test_a_first_run_compile_is_compilation_not_launch(self):
+        # A new kernel is generated and compiled while the executor plans the
+        # batch, or else when its operator first runs; either way it is
+        # compilation, and the operator's launch time leaves it out.
+        with jt.flag_scope(use_cuda=0):
+            x = jt.randn(37, 41)
+            x.sync()
+            with jt.profile(memory=False) as prof:
+                # A constant no other test uses: this process has not built it.
+                (x * 0.6180339 - 0.2718281).exp().sync()
+        self.assertGreater(prof.result.host["executor_compile"], 0)
+        compiled = [r for r in prof.op_records if r["compile_ns"] > 0]
+        for r in compiled:
+            self.assertGreaterEqual(r["t_compile"], r["t_start"])
+            self.assertLessEqual(r["t_compile"] + r["compile_ns"], r["t_end"])
+        self.assertGreaterEqual(prof.result.host["executor_compile"],
+                                sum(r["compile_ns"] for r in compiled))
+
 
 if __name__ == "__main__":
     unittest.main()
