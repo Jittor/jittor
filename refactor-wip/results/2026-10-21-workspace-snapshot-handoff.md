@@ -1,3 +1,11 @@
+## 2026-11-03 08:20 +0800 Handoff：本周功能进展与 exact wheel 双卡 Trainer resume 闭环
+
+近一周主要成果：R14 seed821 Qwen LoRA 两 epoch/102 updates、0 skip/0 fallback；checkpoint-51 新进程续训到 102，并通过 930 状态值、337 张量设备映射和 112/112 LoRA 张量更新核验。current-main Qwen 两阶段 102 更新也通过。Torch compatibility 完成 CUDA state_dict 设备放置、显式 PyTorch ZIP scalar stride、序列化异常绑定恢复等修复；独立 wheel 的 storage/view/alias、checkpoint/state_dict/DCP、serialization、DDP surface 和 RNG recompute 定向 CPU/CUDA 验收均有记录。held-out 生成超时有 softmax shape-specialization 静态归因但无质量分数；JT portable-pickle optimizer 仍不能由 stock PyTorch torch.load 直接读取。
+
+本轮精确安装 main/compat wheel 双 rank CUDA/NCCL Trainer+PEFT LoRA full、step-1 checkpoint stop、新进程 resume 到 step 2 均通过。fallback 0、梯度有限、6 个训练参数更新并跨 rank 完全同步；每 rank 112 项合并轨迹与 uninterrupted full 零容差逐位相等，shim weights_only=True 可读取实际 optimizer checkpoint。main wheel SHA256 bab474943f9c9c45ee59e7582b83bf054c75bc511c2cef585ba5a504d9b7d055，compat wheel SHA256 740a9034c375e70b55ade864f75acbed7e492f09532bcf68ab64ac24a070b975，CUDA core SHA256 13f544589a325a8a644d7db805c1dfdd40e5a210b1ce7b4e7f8b5ffaf7360cbc。证据根 /data6/cgq/jittor-lab/_state/release-day23/20261103-exact-wheel-ddp-trainer-cuda-r1-prepared/，manifest SHA256 a3266c053a6846b1f21337e9df0032fd7791b360e0c8f196b0b4010c24dc1485；完整限制和 attempt 因果见 Day2–5 结果报告。
+
+下一优先项仍是 Day4–5 性能/显存验收和剩余广泛发布门。GPU2 当前被外部任务占用，普通 holder 不能排除其他进程，cgq Slurm association 仍待管理员配置；此次训练进程只暴露 GPU0/1。短诊断导入无 NVML 分配后终止，但不声称它在设备枚举层面不可见 GPU2。未产生性能/显存或 generation-quality 结论；overall Day2–5 不得标为 complete。
+
 ## 2026-11-03 07:25 +0800 续接：精确 main+compat wheel 的 CPU checkpoint/state_dict/DCP 17/17 通过
 
 在已 cold-root 验收的精确 main+compat wheel 安装根上运行 checkpoint/state_dict/DCP CPU 文件：17 passed、0 failed/skip，fallback 0→0，30.90 秒；安装模块来源正确，core current 且 SHA256 前后不变。执行复用原 verified CPU cache 并禁止 core rebuild。原 root manifest `09267b...` 保留；follow-up attempt manifest `50690c...` 与更新后的 root manifest `d22e2c...` 均已校验。sharded-tensor stub warning 仍不代表真实 shard metadata 支持；此项不覆盖 CUDA、多 rank、性能或显存门。详细范围与证据见主板和 Day2–5 结果报告；Day4–5 与整体发布门仍未完成。

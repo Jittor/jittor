@@ -1,3 +1,11 @@
+## 2026-11-03 08:20 +0800 精确安装 wheel 双 rank Trainer full/stop/fresh resume 通过；Day4–5 仍开放
+
+近一周功能主线：R14 seed821 Qwen LoRA 在真实 CUDA 完成两 epoch、102 次更新，0 跳步/0 fallback；checkpoint-51 新进程续训到 102，930 项状态值、337 项设备映射和 112/112 个 LoRA 张量变化核验通过。current-main Qwen 两段 102 更新也独立通过。Torch 兼容侧修复 CUDA state_dict 目标设备放置、显式 PyTorch ZIP scalar stride 和序列化异常后的全局绑定恢复；独立 main/compat wheel 的 storage、checkpoint/state_dict/DCP、serialization、DDP surface 与 RNG 重计算定向子集已取得 CPU/CUDA 功能证据。
+
+本轮 exact main+compat wheel 的双卡 NCCL tiny BERT+PEFT LoRA full 两步、step-1 checkpoint stop、新进程 resume 到 step 2 均通过。fallback 0、梯度有限，6 个可训练张量都更新且 rank 间同步差为 0；每 rank 112 项合并轨迹与 uninterrupted full 零容差逐位一致。CUDA core SHA256 13f544589a325a8a644d7db805c1dfdd40e5a210b1ce7b4e7f8b5ffaf7360cbc；证据根 /data6/cgq/jittor-lab/_state/release-day23/20261103-exact-wheel-ddp-trainer-cuda-r1-prepared/，manifest SHA256 a3266c053a6846b1f21337e9df0032fd7791b360e0c8f196b0b4010c24dc1485。
+
+以上均为功能证据，不是性能或显存数据。训练仅暴露 GPU0/1；GPU2 有外部任务占用，cgq 尚无 Slurm association，无法保证独占。一段诊断导入在无 NVML 分配后终止，但缺少设备掩码，故不声称设备枚举层面绝对不可见。Day4–5 正式性能窗口、held-out generation 质量分数及更广 Day2–5 门仍未完成；overall Not complete。
+
 ## 2026-11-03 07:25 +0800 精确 main+compat wheel 的 CPU checkpoint/state_dict/DCP 套件 17/17 通过
 
 在已独立 pip 安装并完成 cold-root smoke 的精确 main wheel（SHA256 `bab474943f9c9c45ee59c7582b83bf054c75bc511c2cef585ba5a504d9b7d055`，源码提交 `9a9096bb5588816ca0e090cbcb4c18a6e967ab0e`）与 compat wheel（SHA256 `740a9034c375e70b55ade864f75acbed7e492f09532bcf68ab64ac24a070b975`，源码提交 `19a07871932743dae226107fc9403e756d56bdef`）安装根上，运行 `compat/tests/torch/test_checkpoint_state_dict.py`：17 passed、0 failed/skip，用时 30.90 秒，fallback 0→0。pytest 子进程实际从隔离安装根导入 Jittor 与 Torch shim；设备为 CPU。绑定的测试文件 SHA256 `3fe8e900ffcaf5397c5b746beadfc5c4938f2bef90d26687680cc2cf6ca651d4`。

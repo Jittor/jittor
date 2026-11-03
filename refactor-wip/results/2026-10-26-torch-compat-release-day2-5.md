@@ -1,3 +1,23 @@
+## 2026-11-03 08:20 +0800 本周进展汇总；精确安装 wheel 双 rank Trainer fresh resume 通过
+
+### 近一周主要成果（10/27–11/03）
+
+- 实用训练：R14 seed821 Qwen LoRA 真实 CUDA 两 epoch、102 更新，0 跳步/0 fallback；微批次 epoch loss 1.205469 → 1.153617，PyTorch 对照 1.205680 → 1.154064，固定 eval loss JT 2.455552 / PT 2.456644。checkpoint-51 新进程恢复至 102，模型、optimizer、scheduler、Python/NumPy/CPU/CUDA RNG 与第二 epoch 样本序列通过核验；930 项状态值、337 项张量设备映射通过，112/112 个 LoRA 张量改变。current-main Qwen 两段 102 更新的微批次 epoch mean 为 1.2055992702 → 1.1535344227，final eval loss 2.4564309120。以上只约束于相应源码、seed 与配置，不代表一般收敛或生成质量通过。
+- 兼容实现与安装包：修复 CUDA state_dict restore 的设备放置、PyTorch ZIP exporter 的标量 stride、serializer 异常后的 Torch 命名空间绑定恢复；独立 main/compat wheel 的 storage/view/alias、checkpoint 重计算与 RNG、checkpoint/state_dict/DCP、serialization、DDP surface 有 CPU/CUDA 定向证据。精确 wheel cold-root CPU checkpoint/state_dict/DCP 为 17/17；checkpoint shim 有真实前向 no-grad 与 backward recompute 证据，尚无 activation memory 节省证据。
+- 未关闭的问题：held-out 生成超时的静态审计发现 softmax 按精确宽度生成大量 JIT 变体，但编译占比和生成质量分数未知；JT portable-pickle optimizer 仍不能直接由 stock torch.load 读回。
+
+### 精确安装 main+compat wheel 双 rank Trainer full/stop/resume
+
+绑定 main wheel SHA256 bab474943f9c9c45ee59e7582b83bf054c75bc511c2cef585ba5a504d9b7d055（源码 9a9096bb5588816ca0e090cbcb4c18a6e967ab0e）、compat wheel SHA256 740a9034c375e70b55ade864f75acbed7e492f09532bcf68ab64ac24a070b975（源码 19a07871932743dae226107fc9403e756d56bdef）及 CUDA core SHA256 13f544589a325a8a644d7db805c1dfdd40e5a210b1ce7b4e7f8b5ffaf7360cbc。环境 Python 3.11.3、Transformers 4.56.1、PEFT 0.17.0、Accelerate 1.15.0；tiny local BERT sequence classifier + LoRA，FP32，seed 20261014，数据 16，每卡 batch 2、gradient accumulation 2、最大 2 steps。NCCL world size 2，训练进程物理 GPU0/1 映射正确。
+
+full attempt-18 到 step 2；stop attempt-19 在 step 1 保存 checkpoint；resume attempt-27 从新进程恢复到 step 2。fallback 均为 0，24 个梯度张量/rank 均有限，6 个可训练张量均改变；step1、step2 和 resume step2 的 rank 间参数最大差均为 0。rank0/rank1 各自 stop+resume 合并后对 full 的 112 项轨迹以 atol=0、rtol=0 比较，failure 0、最大差 0；恢复的数据游标后缀分别为 rank0 [8,9,12,13]、rank1 [10,11,14,15]。Jittor shim 新进程以 weights_only=True 加载实际 optimizer checkpoint 通过（6 optimizer states、2 param groups、18 tensor values）。
+
+attempt-16 在 300 秒内生成 386 个冷 JIT 文件后超时，未形成训练结果；缓存变热后的 attempt-18 成功。初次 resume 因 torch metadata 2.4.1 被 Transformers 安全版本门挡在 optimizer load 前；未 patch 或关闭检查，而是让隔离 overlay 暴露服务器上真实安装的 torch 2.8.0 dist-info，Jittor wheel 仍是实际导入模块，且 shim 使用 weights_only=True。attempt-25 另发现 rank1 目录仅有 rank1 RNG 状态；构造含公共 checkpoint 文件和两 rank RNG 的独立输入后 attempt-27 通过。Python 3.11.16 cache mismatch 等准备失败原件均保留。详见执行摘要与 trajectory checks。
+
+证据根 /data6/cgq/jittor-lab/_state/release-day23/20261103-exact-wheel-ddp-trainer-cuda-r1-prepared/；104 项 artifact-manifest.sha256 的 SHA256 a3266c053a6846b1f21337e9df0032fd7791b360e0c8f196b0b4010c24dc1485；experiment-result.json SHA256 13d84fbaa5410f7d2f5ad54b5ef8ea429feaf096b55617fc6064dbc4f79d1e7e；trajectory-checks.json SHA256 fd61e6b9a8a7a6077aca8251e22d00aeeae7fe519ee6e69bdf2d17e4b27c8362。
+
+本轮 CUDA 时间不构成性能样本，GPU0/1 有共享负载。GPU2 仍有外部任务，cgq Slurm association 待管理员添加；一段短诊断进程无 NVML 分配后已终止，但因未设设备掩码，不声明设备枚举层面绝对不可见。Day4–5 必须等可核验独占租约，按至少三轮交替、每侧每轮至少十个热态样本记录 median/p95/离散度、加载/首步/热态时间及 allocator/NVML 峰值。held-out generation、广泛 wheel migration 和更广 Day2–5 release gate 仍未完成；overall Not complete。
+
 ## 2026-11-03 07:25 +0800 精确 main+compat wheel CPU checkpoint/state_dict/DCP 安装态复核通过
 
 在精确 main/compat wheel 独立安装根（wheel SHA256 分别为 `bab474943f9c9c45ee59c7582b83bf054c75bc511c2cef585ba5a504d9b7d055` 与 `740a9034c375e70b55ade864f75acbed7e492f09532bcf68ab64ac24a070b975`）运行 `compat/tests/torch/test_checkpoint_state_dict.py`，17 passed、0 failed/skip、fallback 0→0。测试绑定 SHA256 `3fe8e900ffcaf5397c5b746beadfc5c4938f2bef90d26687680cc2cf6ca651d4`，实际模块来自安装根；CPU core current，SHA256 前后相同 `2c8460f5af6e8d33d26b53df8b3f3c047c60851db5138e342cef0a2b7ca788e6`。该套件覆盖命名 state 与 optimizer 恢复、参数组/多 optimizer、保存后继续更新、单 rank DCP planner roundtrip 和错误传播。
