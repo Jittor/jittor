@@ -14,7 +14,7 @@ from ...context import registry_for
 from ...fidelity import Fidelity, register_fidelity
 from ...nested import _torch_register_leaf
 from ...tensor_state import get_tensor_state
-from ...types import _device_is_cpu, _device_is_cuda, _is_index, _make_cpu_resident, _make_cuda_resident, current_accelerator_index, device, dtype, _cuda_index_of
+from ...types import _DEVICE_CTX_STACK, _device_is_cpu, _device_is_cuda, _is_index, _make_cpu_resident, _make_cuda_resident, current_accelerator_index, device, dtype, _cuda_index_of
 from ....diagnostics import EXPECTED, swallowed
 from ....stub_policy import unimplemented as _unimplemented
 from .... import fsdp_hooks as _fsdp_hooks
@@ -855,7 +855,7 @@ def _module_replace_vars(self, convert, recurse=True):
                             if new_gradient is not gradient:
                                 gradient.assign(new_gradient)
                     elif replacement is not value:
-                        for attribute in ("is_buffer", "persistent"):
+                        for attribute in ("is_buffer", "persistent", "_jittor_torch_meta_data"):
                             if hasattr(value, attribute):
                                 setattr(replacement, attribute, getattr(value, attribute))
                     converted[identity] = replacement
@@ -1205,6 +1205,32 @@ def _get_buffer(self, target):
     raise AttributeError(f"`{target}` is not a buffer")
 
 
+_register_buffer_original = [None]
+
+
+def _register_buffer(self, key, value=None, persistent=True, **kwargs):
+    """Register a buffer, tagging data built under the shim's meta context.
+
+    transformers' from_pretrained builds models inside ``torch.device("meta")``
+    and later materializes non-persistent buffers with ``torch.empty_like``.
+    Jittor has no meta storage: the buffer already holds its real values, so
+    the tag lets ``empty_like`` copy them instead of exposing uninitialized
+    memory (CLIP position_ids, SpeechT5 sinusoidal weights).
+    """
+    result = _register_buffer_original[0](self, key, value, persistent=persistent, **kwargs)
+    try:
+        if _DEVICE_CTX_STACK and getattr(_DEVICE_CTX_STACK[-1], "type", None) == "meta":
+            buffer = getattr(self, key, None)
+            if isinstance(buffer, jt.Var):
+                buffer._jittor_torch_meta_data = True
+    except EXPECTED as exc:
+        swallowed("torch/installers/nn.py _register_buffer: meta-data hint", exc)
+    return result
+
+
+_register_buffer._jittor_torch_meta_hint = True
+
+
 def _register_parameter(self, name, param):
     """Torch's ``register_parameter``: an explicit "this is a parameter"."""
     # This is torch's explicit "this attribute is a parameter" call, so
@@ -1451,6 +1477,9 @@ def _install_module_methods(nn, registry=None):
         M.get_buffer = _get_buffer
     if not hasattr(M, "register_parameter"):
         M.register_parameter = _register_parameter
+    if not getattr(M.register_buffer, "_jittor_torch_meta_hint", False):
+        _register_buffer_original[0] = M.register_buffer
+        M.register_buffer = _register_buffer
     if not hasattr(M, "type"):
         M.type = _module_type
     if not isinstance(M.__dict__.get("_non_persistent_buffers_set"), property):

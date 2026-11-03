@@ -225,8 +225,22 @@ def _allocate_empty_like(input):
     return jt.empty(input.shape, dtype=input.dtype)
 
 
+def _copy_like(input):
+    return input.clone()
+
+
 def _empty_like_implementation(input, **kwargs):
     """Apply the shared factory options to the compiler's empty allocation."""
+    if getattr(input, "_jittor_torch_meta_data", False):
+        # The shim's meta context allocates real host storage, so a buffer
+        # built there already holds the values from __init__.  transformers'
+        # _move_missing_keys_from_meta_to_device materializes non-persistent
+        # buffers with torch.empty_like; returning uninitialized memory makes
+        # it lose those values, and the later _init_weights restore is skipped
+        # for modules that are already initialized (CLIP position_ids,
+        # SpeechT5 sinusoidal weights).  Materializing the emulated meta
+        # storage therefore copies it instead of exposing garbage.
+        return _constructor_adapter("empty_like", _copy_like, False, input, **kwargs)
     return _constructor_adapter("empty_like", _allocate_empty_like, False, input, **kwargs)
 
 
