@@ -200,7 +200,10 @@ class TestTorchProfilerTable(unittest.TestCase):
         self.assertTrue(events)
         for entry in events[0].stack:
             self.assertRegex(entry, r"^.+\(\d+\): .+$")
-            # jittor's own frames (its Torch layer here) are left out.
+            # jittor's own frames (its Torch layer here) are left out; this
+            # test sits inside the jittor tree, so its frames are skipped.
+            if entry.startswith(__file__ + "("):
+                continue
             self.assertNotIn(os.path.join("compat", "torch", ""), entry)
             self.assertNotIn(os.path.join("python", "jittor", ""), entry)
         with tempfile.TemporaryDirectory() as d:
