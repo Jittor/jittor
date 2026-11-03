@@ -146,7 +146,11 @@ class _OptState:
             raise KeyError(param)
         kind = _torch_optimizer_kind(self._opt)
         if kind not in _TORCH_TO_NATIVE_STATE and kind != "lbfgs":
-            self._external.setdefault(id(param), {})[key] = value
+            store = getattr(self._opt, "_torch_external_state", None)
+            if store is None:
+                store = {}
+                object.__setattr__(self._opt, "_torch_external_state", store)
+            store.setdefault(id(param), {})[key] = value
             return
         if key == "step":
             if isinstance(value, jt.Var):
@@ -182,8 +186,13 @@ class _OptState:
         if kind not in _TORCH_TO_NATIVE_STATE and kind != "lbfgs":
             # A third-party optimizer defines its own state layout; keep the
             # Torch contract (state[p] is a mutable mapping) without guessing
-            # a native buffer name.
-            return self._external.setdefault(id(param), {})
+            # a native buffer name. `state` builds a fresh _OptState per
+            # access, so the storage must live on the optimizer itself.
+            store = getattr(self._opt, "_torch_external_state", None)
+            if store is None:
+                store = {}
+                object.__setattr__(self._opt, "_torch_external_state", store)
+            return store.setdefault(id(param), {})
         steps = _param_steps(pg)
         if kind == "adagrad":
             return _ParamState(self, param, {
