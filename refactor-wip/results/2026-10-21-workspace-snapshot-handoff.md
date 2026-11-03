@@ -1,3 +1,9 @@
+## 2026-11-03 08:32 +0800：current-main wheel baseline复现并隔离构建器差异
+
+已用当前源码提交9a9096bb5588816ca0e090cbcb4c18a6e967ab0e、固定Python 3.11.3/setuptools 83.0.0/wheel 0.45.1重建main wheel。core wheel结构审计通过；与此前35a1 wheel仅 save_pytorch.py 和 RECORD变化。默认baseline仍有69 additions、305 changes、2 removals、0 approved。两项ACL CodeOp文件是e7bf82046中有意删除并转为native实现；当前没有CANN设备证据，因此不批准相关差异。审计产物与manifest见 /data6/cgq/jittor-lab/_state/release-day23/20261103-current-main-wheel-migration-audit-r1/。
+
+下一步应继续审阅未批准wheel成员并关联覆盖证据，不批量放宽baseline。Day4–5仍受GPU2外部占用和cgq Slurm association缺失阻塞；取得独占租约后再运行规定的三轮PT/JT交替性能与显存测量。整体Day2–5保持 **Not complete**。
+
 ## 2026-11-03 08:20 +0800 Handoff：本周功能进展与 exact wheel 双卡 Trainer resume 闭环
 
 近一周主要成果：R14 seed821 Qwen LoRA 两 epoch/102 updates、0 skip/0 fallback；checkpoint-51 新进程续训到 102，并通过 930 状态值、337 张量设备映射和 112/112 LoRA 张量更新核验。current-main Qwen 两阶段 102 更新也通过。Torch compatibility 完成 CUDA state_dict 设备放置、显式 PyTorch ZIP scalar stride、序列化异常绑定恢复等修复；独立 wheel 的 storage/view/alias、checkpoint/state_dict/DCP、serialization、DDP surface 和 RNG recompute 定向 CPU/CUDA 验收均有记录。held-out 生成超时有 softmax shape-specialization 静态归因但无质量分数；JT portable-pickle optimizer 仍不能由 stock PyTorch torch.load 直接读取。

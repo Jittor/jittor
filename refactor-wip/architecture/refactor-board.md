@@ -1,3 +1,11 @@
+## 2026-11-03 08:32 +0800 current-main wheel migration audit复现：结构合同通过，baseline仍未批准
+
+从源码提交 9a9096bb5588816ca0e090cbcb4c18a6e967ab0e 的不可变 Git archive 使用既有 Python 3.11.3、setuptools 83.0.0、wheel 0.45.1 packaging环境重建 main wheel，产物 SHA256 18116fb386dd079e46f5b75e352cc84be29b0101912f447de44bd5c997d7c697。wheel自比较的core profile检查通过，1100个成员、无增加/变更/删除；与35a1a760旧current-head wheel比较只有 save_pytorch.py 和 RECORD 两个成员变化，源码成员哈希为 843411da94a28a51576c20ed6745f13770aaff0f275fb076475481bc2a515e67。
+
+同口径正式baseline比较仍失败于未批准差异：69 additions、305 content changes、2 removals、0 approved。两项源码删除由 e7bf82046 明确完成，分别迁移到 native/sigmoid_op_acl.cc 和 native/transpose_op_acl.cc；该迁移尚无本机CANN真卡证据，故没有加入allowlist。先前 bab474 wheel 使用 bdist_wheel 0.38.4，导致 LICENSE dist-info 路径、METADATA/WHEEL/RECORD 另有工具链噪声；新复现使用同一83.0.0构建器隔离了这部分噪声。
+
+证据位于 /data6/cgq/jittor-lab/_state/release-day23/20261103-current-main-wheel-migration-audit-r1/，source archive SHA256 41520f23258be82e3b282de13997f4d0d29f5afa2ccd6ba55ef2c8f27ef2066d，artifact-manifest SHA256 29b88df50026e7343e179de5d7e5a74da2b597244ec0353034b01fcf42b8ce9c。重建wheel只做结构审计，没有重新安装或运行产品测试；此前 exact wheel 功能结果仍绑定 9a9096bb 源码。没有改源码、baseline或allowlist，也没有访问GPU。后续应逐域审阅69/305差异并补足ACL设备证据；Day4–5仍需GPU2独占窗口。整体Day2–5 **Not complete**。
+
 ## 2026-11-03 08:20 +0800 精确安装 wheel 双 rank Trainer full/stop/fresh resume 通过；Day4–5 仍开放
 
 近一周功能主线：R14 seed821 Qwen LoRA 在真实 CUDA 完成两 epoch、102 次更新，0 跳步/0 fallback；checkpoint-51 新进程续训到 102，930 项状态值、337 项设备映射和 112/112 个 LoRA 张量变化核验通过。current-main Qwen 两段 102 更新也独立通过。Torch 兼容侧修复 CUDA state_dict 目标设备放置、显式 PyTorch ZIP scalar stride 和序列化异常后的全局绑定恢复；独立 main/compat wheel 的 storage、checkpoint/state_dict/DCP、serialization、DDP surface 与 RNG 重计算定向子集已取得 CPU/CUDA 功能证据。

@@ -1,3 +1,23 @@
+## 2026-11-03 08:32 +0800 current-main wheel migration审计按固定构建器复现
+
+### 源码与构建身份
+
+复核对象为当前产品源码提交 9a9096bb5588816ca0e090cbcb4c18a6e967ab0e。仓库HEAD为 1ff69830ed31e6490458cd671794052b79750f32，origin/cgq_transformers与本地相同；该产品提交到HEAD仅有三份状态文档变化，工作树在审计时干净。使用 git archive 生成只读源码包并在副本上构建，避免污染仓库和源归档。
+
+复用已有 Python 3.11.3、setuptools 83.0.0、wheel 0.45.1 的 packaging环境，禁用索引和依赖解析。构建成功，main wheel大小2,320,100 bytes，SHA256 18116fb386dd079e46f5b75e352cc84be29b0101912f447de44bd5c997d7c697。source.tar SHA256 41520f23258be82e3b282de13997f4d0d29f5afa2ccd6ba55ef2c8f27ef2066d。产物、源码归档、比较日志和退出码汇总在 /data6/cgq/jittor-lab/_state/release-day23/20261103-current-main-wheel-migration-audit-r1/；artifact-manifest.sha256 的SHA256为29b88df50026e7343e179de5d7e5a74da2b597244ec0353034b01fcf42b8ce9c。
+
+### 结果
+
+wheel与自身比较并通过core profile结构审计：1100 paths，0 additions、0 content changes、0 removals，exit 0。与35a1a7605ec475e9cbc1a9688afc299ee3bd8011构建的current-head wheel（SHA256 b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69）比较，路径集合一致，仅 jittor/serialization/save_pytorch.py 与 RECORD 两项变化，exit 1表示变更尚未有逐项allowlist；实际源码文件SHA256为843411da94a28a51576c20ed6745f13770aaff0f275fb076475481bc2a515e67。此结果把最新序列化修复绑定到wheel成员。
+
+正式 wheel-contents-final baseline仍未通过：baseline 1033 paths、candidate 1100 paths、69 additions、305 content changes、2 removals、0 approved。没有更改默认baseline、removal list、addition或content-change allowlist。两个ACL移除路径是源码中有意删除，不是构建漏包：提交 e7bf82046 删除了原 sigmoid_op.py 与 transpose_op.py CodeOp wrapper，同时增加 native/sigmoid_op_acl.cc、native/transpose_op_acl.cc 并扩展 tests/backends/acl/test_acl.py。缺少CANN设备运行证据，不能据静态迁移批准ACL功能。
+
+上一个确切源码wheel bab474943f9c9c45ee59c7582b83bf054c75bc511c2cef585ba5a504d9b7d055由系统pip调用 bdist_wheel 0.38.4 构建；它与固定构建器产物相比，LICENSE仍为同一SHA256 8b18f18c9c43b17e6e2bcdefc8df9d423c12e6769d5d13cf6a46fed31e7e1666，但dist-info路径从 licenses/LICENSE.txt 改为 LICENSE.txt，METADATA为2.1对2.4，Generator字段也不同。此构建器噪声单独产生1个addition、1个removal和3个content changes。固定构建器复现的baseline差异为69/305/2，排除了这部分噪声。
+
+### 结论与边界
+
+结构审计通过只证明归档成员符合当前core包合同，不代表历史迁移差异已经批准。固定构建器重建的wheel未再次安装或运行功能测试；最近 exact main/compat wheel 的安装、CUDA checkpoint和两rank Trainer证据绑定相同的产品源码提交，但使用不同dist-info构建器结果。此处没有修改产品源码，也没有使用GPU，不产生性能或显存结论。下一步是逐域审阅剩余差异、确认跨包内容变更的功能覆盖，并取得ACL设备证据；正式Day4–5仍要求可核验的GPU2独占租约、三轮交替及每轮每侧至少十个热态样本。整体Day2–5发布门保持 **Not complete**。
+
 ## 2026-11-03 08:20 +0800 本周进展汇总；精确安装 wheel 双 rank Trainer fresh resume 通过
 
 ### 近一周主要成果（10/27–11/03）
