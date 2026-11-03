@@ -190,3 +190,55 @@ def test_a_small_nonzero_gap_keeps_its_derivative(device, kind, dtype, log2_gap,
     got, expected = hvp(dtype), hvp(_double(dtype))
     assert np.abs(expected).max() > 1.0 / gap ** 2 * 1e-4
     np.testing.assert_allclose(got, expected, rtol=0, atol=1e-4 * np.abs(expected).max())
+
+
+# A rotated near-repeated spectrum, I + gap * R / 2 with a 16 eps gap. Jacobi
+# at cuSOLVER's default tolerance (CUDA SVD, and CuPy's batched eigh) stopped
+# before rotating such a matrix and returned the identity as its vectors: the
+# top projector was 0.33 off, the gradient 0.46 and the HVP 1.5. The bounds
+# here are what a backward-stable factorization leaves at this gap (torch:
+# projector 0.014, gradient 0.15), measured against numpy's complex128
+# factorization of the same rounded input.
+def _rotated_near_repeat(dtype, offset=0.0):
+    eps = np.finfo(np.float32).eps
+    gap, theta, phase = 16 * eps, 0.47, 0.63 + offset
+    off = np.sin(theta) * (np.exp(1j * phase) if dtype.startswith("complex") else 1.0)
+    axis = np.array([[-np.cos(theta), off], [np.conj(off), np.cos(theta)]])
+    return (np.eye(2) + gap * axis / 2).astype(dtype), gap
+
+
+@pytest.mark.parametrize("kind", ["eigh", "svd"])
+@pytest.mark.parametrize("dtype", ["float32", "complex64"])
+@pytest.mark.parametrize("batched", [False, True])
+def test_a_rotated_near_repeat_is_resolved(device, kind, dtype, batched):
+    rng = np.random.default_rng(31)
+    cplx = dtype.startswith("complex")
+    members = [_rotated_near_repeat(dtype, offset) for offset in ((0.0, 0.21) if batched else (0.0,))]
+    h = np.stack([m for m, _ in members]) if batched else members[0][0]
+    gap = members[0][1]
+    c = rng.normal(size=(2, 2)) + (1j * rng.normal(size=(2, 2)) if cplx else 0)
+    c = ((c + c.conj().T) / 2).astype(dtype)
+
+    x = jt.array(h, dtype=dtype)
+    vec = linalg.eigh(x)[1][..., -1:] if kind == "eigh" else linalg.svd(x)[0][..., :1]
+    p = jt.matmul(vec, vec.transpose(-1, -2).conj())
+    loss = (jt.matmul(jt.array(c, dtype=dtype), p) * jt.array(np.eye(2), dtype="float32")).real.sum()
+    g = jt.grad(loss, x).numpy().astype("complex128")
+    for b, member in enumerate(h if batched else [h]):
+        hh = member.astype("complex128")
+        ref = _top_projector_loss_np  # loss of the top projector, complex128
+        vec_ref = (np.linalg.eigh(hh)[1][:, -1:] if kind == "eigh" else np.linalg.svd(hh)[0][:, :1])
+        p_ref = vec_ref @ vec_ref.conj().T
+        got = p.numpy()[b] if batched else p.numpy()
+        assert np.linalg.norm(got - p_ref) / np.linalg.norm(p_ref) < 0.05
+        gb = g[b] if batched else g
+        worst = scale = 0.0
+        for _ in range(4):
+            d = rng.normal(size=(2, 2)) + (1j * rng.normal(size=(2, 2)) if cplx else 0)
+            d = (d + d.conj().T) / 2
+            t = gap * 1e-4
+            fd = (ref(hh + t * d, c.astype("complex128"), kind)
+                  - ref(hh - t * d, c.astype("complex128"), kind)) / (2 * t)
+            worst = max(worst, abs(np.real(np.sum(np.conj(gb) * d)) - fd))
+            scale = max(scale, abs(fd))
+        assert worst <= 0.15 * scale, (worst, scale)

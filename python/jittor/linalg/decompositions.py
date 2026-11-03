@@ -14,7 +14,7 @@ import numpy as np
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from jittor._core.function import Function
 from ._helpers import (
-    _cuda_svd_reduced, _host_lapack, _is_cupy,
+    _cuda_eigh, _cuda_svd_reduced, _host_lapack, _is_cupy,
     _batching_aware, _conj_T, _diag_embed, _diag_of, _eye_like, _linalg_errors_raise,
     _cn_to_native, _is_native_complex, _matmul, _native_to_cn, _reconnect,
     _transpose,
@@ -102,7 +102,7 @@ def _svd_reduced_forward(np, data):
     a = data["inputs"][0]
     u, s, v = data["outputs"]
     #TODO:remove copyto
-    if _is_cupy(np) and a.ndim == 2 and a.size:
+    if _is_cupy(np) and a.size:
         tu, ts, tv = _cuda_svd_reduced(np, a)
     else:
         tu, ts, tv = np.linalg.svd(a, full_matrices=0)
@@ -406,7 +406,10 @@ def eigh(x):
 def _eigh_forward(np, data):
     a = data["inputs"][0]
     w, v = data["outputs"]
-    tw, tv = np.linalg.eigh(a, UPLO='L')
+    if _is_cupy(np) and a.size:
+        tw, tv = _cuda_eigh(np, a)
+    else:
+        tw, tv = np.linalg.eigh(a, UPLO='L')
     np.copyto(w, tw)
     np.copyto(v, tv)
 
