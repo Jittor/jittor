@@ -1076,7 +1076,12 @@ def setup_nccl(store=None):
         _stub_inc = os.path.join(backend_root(jittor_path, "comm"), "nccl", "nompi_inc")
         _mpi_flags = f' -DJT_NCCL_NO_MPI -I"{_mpi_inc}" -I"{_stub_inc}" '
     else:
-        _mpi_flags = mpi_compile_flags
+        # mpi_compile_flags only exists once the MPI compile recipe has run
+        # (setup_mpi). Hosts built with use_mpi=0 reach this branch during NCCL
+        # setup, where the flag string has never been defined; the MPI bootstrap
+        # is not compiled in, so there is nothing to add. Match the guarded use
+        # below (`'mpi_compile_flags' in globals()`).
+        _mpi_flags = globals().get('mpi_compile_flags', '')
     nccl = compile_custom_ops(nccl_src_files, backend="accelerator",
         extra_flags=(
             f" -I\"{nccl_include_path}\" {_mpi_flags} "
