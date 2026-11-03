@@ -47,5 +47,32 @@ class TestTorchvisionFacade(unittest.TestCase):
                 self.assertEqual(float(padded[1].sum().item()), 0.0)
 
 
+    def test_color_jitter_pil_and_tensor(self):
+        from PIL import Image
+        from torchvision.transforms import ColorJitter, Compose, ToTensor
+
+        image = Image.new("RGB", (8, 6), (120, 60, 30))
+        identity = ColorJitter(0, 0, 0, 0)
+        self.assertIs(identity(image), image)
+
+        darker = ColorJitter(brightness=(0.5, 0.5))(image)
+        self.assertEqual(darker.size, image.size)
+        self.assertEqual(darker.mode, image.mode)
+        self.assertNotEqual(list(darker.getdata()), list(image.getdata()))
+
+        warmer = ColorJitter(hue=(0.25, 0.25))(image)
+        self.assertEqual(warmer.size, image.size)
+
+        tensor = Compose([ColorJitter(0, 0, 0, 0), ToTensor()])(image)
+        self.assertEqual(tuple(tensor.shape), (3, 6, 8))
+
+        ones = torch.ones(3, 4, 5)
+        halved = ColorJitter(brightness=(0.5, 0.5))(ones)
+        np.testing.assert_allclose(halved.numpy(), np.full((3, 4, 5), 0.5), rtol=1e-6)
+
+        with self.assertRaises(ValueError):
+            ColorJitter(hue=0.7)
+
+
 if __name__ == "__main__":
     unittest.main()
