@@ -2072,6 +2072,11 @@ def _api_is_leaf(self):
     return bool(self.is_backward_leaf)
 
 
+def _api_is_quantized(self):
+    # Native Var does not represent quantized tensor storage.
+    return False
+
+
 def _api_is_sparse(self):
     # Native Var storage is dense; unsupported sparse factories never produce
     # a Var whose storage this capability query could misclassify.

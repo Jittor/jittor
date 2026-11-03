@@ -37,6 +37,7 @@ from .method_api import (
     _api_is_contiguous,
     _api_is_leaf,
     _api_is_sparse,
+    _api_is_quantized,
     _api_retains_grad,
     _api_is_cpu,
     _api_is_mps,
@@ -463,6 +464,9 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # of silently calling every intermediate a leaf.
     Var.is_leaf = property(_api_is_leaf)
     Var.is_sparse = property(_api_is_sparse)
+    Var.is_quantized = property(_api_is_quantized)
+    register_api_bindings(Var, 'torch.Tensor', ('is_quantized',), Fidelity.EXACT,
+                          'Native Var has no quantized tensor storage.')
     register_api_bindings(Var, 'torch.Tensor', ('is_sparse',), Fidelity.EXACT,
                           'Native Var has dense storage; sparse construction is unsupported.')
     # torch's nested-tensor flag; jittor has no nested tensors -> always False.
