@@ -6,7 +6,6 @@ from .api import (
     CudaRuntimeState,
     EXPECTED,
     OutOfMemoryError,
-    _install_out_of_memory_error,
     TorchFunctionMode,
     _CUDA_TENSOR_TYPES,
     _CudaDeviceContext,
@@ -491,8 +490,6 @@ def _install_accelerator(g, registry=None):
         g.OutOfMemoryError = OutOfMemoryError
     if not hasattr(cuda, "OutOfMemoryError"):
         cuda.OutOfMemoryError = g.OutOfMemoryError
-    if g.OutOfMemoryError is OutOfMemoryError:
-        _install_out_of_memory_error()
 
     # Build once, but publish on every install: a failed install restores the
     # module table while this attribute survives on the jittor module, so an

@@ -103,14 +103,14 @@ def _kineto_trace(prof):
                  {"name": "thread_sort_index", "ph": "M", "ts": t0, "pid": device, "tid": stream,
                   "args": {"sort_index": stream}}]
     span = {"ph": "X", "cat": "Trace", "ts": t0, "dur": us(result.t1 - result.t0), "pid": "Spans",
-            "tid": "PyTorch Profiler", "name": "PyTorch Profiler (0)", "args": {"Op count": 0}}
+            "tid": "Jittor Profiler", "name": "Jittor Profiler (0)", "args": {"Op count": 0}}
     trace = {"schemaVersion": 1, "deviceProperties": _device_properties(sorted({d for d, _ in devices})),
              "with_stack": int(bool(prof.with_stack)), "profile_memory": int(bool(prof.profile_memory)),
              "record_shapes": int(bool(prof.record_shapes)), "displayTimeUnit": "ms",
              "baseTimeNanoseconds": base_ns,
-             "traceEvents": events + meta + [span, {"name": "Iteration Start: PyTorch Profiler",
+             "traceEvents": events + meta + [span, {"name": "Iteration Start: Jittor Profiler",
                                                   "ph": "i", "s": "g", "pid": "Traces",
-                                                  "tid": "Trace PyTorch Profiler", "ts": t0}]}
+                                                  "tid": "Trace Jittor Profiler", "ts": t0}]}
     return trace
 
 

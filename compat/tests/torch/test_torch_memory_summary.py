@@ -4,7 +4,7 @@ table.
 ``memory_stats`` used to return five of torch's ~120 keys, so code reading
 ``num_ooms`` or ``active_bytes.all.peak`` raised KeyError, and
 ``memory_summary`` printed a five-row table of jittor's own that tools parsing
-torch's could not read.
+torch's could not read. The table is torch's layout titled as jittor's.
 """
 
 import unittest
@@ -41,7 +41,7 @@ class TestTorchMemorySummary(unittest.TestCase):
         torch.randn(100, 100, device="cuda").sum().item()
         lines = torch.cuda.memory_summary().splitlines()
         self.assertEqual(lines[0], "|" + "=" * 75 + "|")
-        self.assertEqual(lines[1], "|" + " " * 18 + "PyTorch CUDA memory summary, device ID %-17d |"
+        self.assertEqual(lines[1], "|" + " " * 18 + "Jittor CUDA memory summary, device ID %-18d |"
                          % torch.cuda.current_device())
         self.assertEqual(lines[5], "|        Metric         | Cur Usage  | Peak Usage | Tot Alloc  | Tot Freed  |")
         labels = [line[1:24].strip() for line in lines[6:] if line.startswith("| ")]

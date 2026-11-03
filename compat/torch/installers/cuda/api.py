@@ -379,35 +379,10 @@ class CUDAGraph:
     """Annotation placeholder; graph capture and replay are unsupported."""
 
 
-class OutOfMemoryError(jt.JittorOutOfMemoryError):
-    """torch.OutOfMemoryError: a refused device allocation. The native error,
-    so ``except jittor.JittorOutOfMemoryError`` catches it too; while the
-    Torch layer is installed the core raises this class (see
-    ``_install_out_of_memory_error``), and the traceback names it as PyTorch's."""
-
-
-OutOfMemoryError.__module__ = "torch"
-OutOfMemoryError.__qualname__ = "OutOfMemoryError"
-
-
-def _install_out_of_memory_error():
-    """Raise torch.OutOfMemoryError, worded as PyTorch's, until the install is undone."""
-    import jittor_utils
-    from ....transaction import current_transaction
-    module = jittor_utils.cc
-    missing = object()
-    previous = getattr(module, "_out_of_memory_error_class", missing)
-    module._out_of_memory_error_class = OutOfMemoryError
-    jt.core.set_out_of_memory_framework("PyTorch")
-    transaction = current_transaction()
-    if transaction is not None:
-        def restore():
-            jt.core.set_out_of_memory_framework("Jittor")
-            if previous is missing:
-                module.__dict__.pop("_out_of_memory_error_class", None)
-            else:
-                module._out_of_memory_error_class = previous
-        transaction.record_undo(restore)
+# torch.OutOfMemoryError is jittor's own error for a refused device
+# allocation, so ``except torch.cuda.OutOfMemoryError`` catches what the
+# allocator raises and the traceback still names jittor.
+OutOfMemoryError = jt.JittorOutOfMemoryError
 
 def _cuda_visible_devices_empty():
     import os as _os_cuda
@@ -891,12 +866,11 @@ def _mem_max_reserved(device=None, *a, **k):
 
 
 def _mem_summary(device=None, abbreviated=False):
-    """torch.cuda.memory_summary: torch's table, character for character, over
-    jittor's pool statistics."""
+    """torch.cuda.memory_summary: torch's table over jittor's pool statistics,
+    titled as jittor's."""
     from jittor.profiling import memory_summary
     index = _mem_device_key(device)
-    return memory_summary(index, abbreviated, stats=_api_cuda_memory_stats(device),
-                          framework="PyTorch")
+    return memory_summary(index, abbreviated, stats=_api_cuda_memory_stats(device))
 
 
 def _reset_peak(device=None, *a, **k):
@@ -1765,7 +1739,7 @@ _CUDA_FIDELITY_DETAILS = {
     _api_cuda_memory_snapshot: "Segments of jittor's device pools in PyTorch's format.",
     _api_cuda_memory_stats: "Every PyTorch key, from jittor's pool counters; small segments are 1 MiB and nothing is oversize (no max_split_size).",
     _api_cuda_reset_accumulated_memory_stats: "Restarts the allocated/freed totals and counters of jittor's pool statistics.",
-    _mem_summary: "PyTorch's table layout over jittor's pool statistics.",
+    _mem_summary: "PyTorch's table layout over jittor's pool statistics, titled Jittor.",
     _mem_max_reserved: "Per-device high-water of what jittor's pools hold from the driver; excludes the CUDA context and library workspaces.",
     _mem_get_info: "cudaMemGetInfo on the device asked about; the fallback reports jittor's pools only, so it excludes other processes.",
     _api_cuda_synchronize: "Waits for every device this run touched, which is stronger than torch's per-device synchronize.",

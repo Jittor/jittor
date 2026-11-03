@@ -46,7 +46,6 @@ static PyObject* jittor_type_error = nullptr;
 static PyObject* jittor_shape_error = nullptr;
 static PyObject* jittor_linalg_error = nullptr;
 static PyObject* jittor_oom_error = nullptr;
-static PyObject* jit_utils_module = nullptr;
 
 static PyObject* add_error_class(PyObject* m, const char* name, PyObject* bases,
                                  const char* doc) {
@@ -85,21 +84,6 @@ static void def_error_classes(PyObject* m) {
         "The device could not supply the memory an allocation needed, after "
         "Jittor's pools gave back what they had cached and retried. "
         "torch.OutOfMemoryError in Torch mode.");
-    jit_utils_module = m;
-}
-
-// The class an out-of-memory error is raised as: JittorOutOfMemoryError, or
-// a subclass the Torch layer puts in `_out_of_memory_error_class` so that the
-// traceback names torch.OutOfMemoryError as PyTorch's does.
-static PyObject* out_of_memory_error_class() {
-    PyObject* cls = PyObject_GetAttrString(jit_utils_module, "_out_of_memory_error_class");
-    if (!cls) {
-        PyErr_Clear();
-        return jittor_oom_error;
-    }
-    // The module holds the reference the caller borrows.
-    Py_DECREF(cls);
-    return PyType_Check(cls) && PyObject_IsSubclass(cls, jittor_oom_error) == 1 ? cls : jittor_oom_error;
 }
 
 // Made on first use rather than with the others: it derives from numpy's
@@ -123,7 +107,7 @@ PyObject* python_error_class(const std::exception& e) {
     if (dynamic_cast<const UserIndexError*>(&e)) return jittor_index_error;
     if (dynamic_cast<const UserLinAlgError*>(&e)) return linalg_error_class();
     if (dynamic_cast<const InternalInvariantError*>(&e)) return jittor_internal_error;
-    if (dynamic_cast<const DeviceOutOfMemoryError*>(&e)) return out_of_memory_error_class();
+    if (dynamic_cast<const DeviceOutOfMemoryError*>(&e)) return jittor_oom_error;
     return jittor_error;
 }
 

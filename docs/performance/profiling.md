@@ -176,14 +176,14 @@ Torch 兼容模式下 `torch.cuda.memory._record_memory_history/_snapshot/_dump_
   inactive split 的块数和字节、保留与请求字节，按 all/small/large 池各给 current/peak/
   allocated/freed，以及 `num_alloc_retries`、`num_ooms`、`num_device_alloc/free`。计数在池的
   每次分配、释放、段增减时更新（`sfrl_device_memory_stats`）；`memory_summary()` 的版式与
-  PyTorch 逐字符相同（原生 API 标题写 Jittor，兼容模式写 PyTorch）。
+  PyTorch 逐字符相同，只是标题写 Jittor（兼容模式下也是）。
 
 **显存不够时**：设备拒绝分配（池已归还缓存并重试之后）抛 `jittor.JittorOutOfMemoryError`
-（`RuntimeError` 的子类；Torch 兼容模式下抛它的子类 `torch.OutOfMemoryError`，即
-`torch.cuda.OutOfMemoryError`）。消息开头是 PyTorch 的那几句——
+（`RuntimeError` 的子类；Torch 兼容模式下 `torch.OutOfMemoryError` 和
+`torch.cuda.OutOfMemoryError` 就是这个类，所以按 torch 名字捕获照样接得住）。消息开头是 PyTorch 的那几句——
 `CUDA out of memory. Tried to allocate …. GPU n has a total capacity of … of which … is free.
 Including non-Jittor memory, this process has … memory in use. Of the allocated memory … is
-allocated by Jittor, and … is reserved by Jittor but unallocated.`（兼容模式下写 PyTorch），
+allocated by Jittor, and … is reserved by Jittor but unallocated.`（兼容模式下同样写 Jittor），
 数字取自池自己的计数和 NVML；随后是 jittor 的建议（请求比整卡还大时提示查形状）和出错算子的
 创建位置。PyTorch 末尾那句 `PYTORCH_CUDA_ALLOC_CONF` 的建议在这里不适用，没有照抄。
 `memory_stats()` 的 `num_ooms` 与快照里的 `oom` 条目同时记一次。

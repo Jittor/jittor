@@ -380,16 +380,9 @@ static string oom_size(int64 size) {
     return os.str();
 }
 
-static string& oom_framework() {
-    static string* name = new string("Jittor");
-    return *name;
-}
-
-void set_out_of_memory_framework(const string& name) { oom_framework() = name; }
-
 string device_out_of_memory_message(int device, int64 requested, int64 free_bytes,
                                     int64 total_bytes, int64 process_bytes) {
-    const string& fw = oom_framework();
+    const char* fw = "Jittor";
     std::ostringstream os;
     os << "CUDA out of memory. Tried to allocate " << oom_size(requested) << ".";
     if (total_bytes >= 0)

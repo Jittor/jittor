@@ -212,16 +212,16 @@ In Torch compatibility mode `torch.cuda.memory._record_memory_history/_snapshot/
   freed, and `num_alloc_retries`, `num_ooms`, `num_device_alloc/free`. They are
   counted on every pool allocation, free and segment change
   (`sfrl_device_memory_stats`); `memory_summary()` matches PyTorch's layout
-  character for character (titled Jittor in the native API, PyTorch in Torch mode).
+  character for character, titled Jittor (in Torch mode too).
 
 **When memory runs out**: a device allocation refused after the pools gave back
 their cache and retried raises `jittor.JittorOutOfMemoryError` (a `RuntimeError`;
-in Torch mode its subclass `torch.OutOfMemoryError`, which is
-`torch.cuda.OutOfMemoryError`). The message opens with PyTorch's sentences --
+in Torch mode `torch.OutOfMemoryError` and `torch.cuda.OutOfMemoryError` are
+this class, so handlers catching the torch names still catch it). The message opens with PyTorch's sentences --
 `CUDA out of memory. Tried to allocate .... GPU n has a total capacity of ... of
 which ... is free. Including non-Jittor memory, this process has ... memory in use.
 Of the allocated memory ... is allocated by Jittor, and ... is reserved by Jittor but
-unallocated.` (PyTorch in Torch mode) -- with numbers from the pools' own counters
+unallocated.` (Jittor in Torch mode too) -- with numbers from the pools' own counters
 and NVML, then jittor's advice (a request larger than the card points at a shape)
 and where the failing operator was built. PyTorch's closing
 `PYTORCH_CUDA_ALLOC_CONF` hint does not apply here and is not copied. `num_ooms` in
