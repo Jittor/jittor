@@ -62,7 +62,7 @@ namespace jittor
         vector<int64_t> convOutPads;
         vector<int64_t> convDilations;
         bool convWithBias;
-        bool is_transposed;
+        bool is_transposed = false;
         int64_t group;
 
         // 析构函数
@@ -154,6 +154,11 @@ namespace jittor
         }
     };
 
+    struct UpsampleBilinear2dAttr : UpsampleNearest2dAttr
+    {
+        bool alignCorners = false;
+    };
+
     struct ConcatAttr : AclOpAttr
     {
         int64_t tensorNum;
@@ -207,6 +212,11 @@ namespace jittor
         ~RangeAttr()
         {
         }
+    };
+
+    struct GeluAttr : AclOpAttr
+    {
+        int64_t approximate = 0;
     };
 
     struct LeakyReluAttr : AclOpAttr
@@ -337,6 +347,7 @@ namespace jittor
     {
         double scale;
         int64_t headNum;
+        bool causal = true;
     };
 
     struct IncreFlashAttentionAttr : AclOpAttr

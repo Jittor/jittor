@@ -338,6 +338,51 @@ class TestPoolFunctional(Base):
                         msg=f"maxpool k{k}s{s}p{p} {dev}")
             both_devices(body)
 
+    def test_max_pool2d_list_geometry(self):
+        """Hiera query pooling receives spatial lists from its JSON config."""
+        expected = pool2d_ref(self.x, [2, 3], [2, 1], [0, 1], mode="max")
+
+        def body(dev):
+            x = torch.tensor(self.x)
+            module = torch.nn.MaxPool2d([2, 3], stride=[2, 1], padding=[0, 1])
+            self.ac(module(x).numpy(), expected, msg=f"MaxPool2d list module {dev}")
+            result = torch.nn.functional.max_pool2d(x, [2, 3], stride=[2, 1], padding=[0, 1])
+            self.ac(result.numpy(), expected, msg=f"MaxPool2d list functional {dev}")
+            default_stride = torch.nn.MaxPool2d([2, 3])
+            self.ac(default_stride(x).numpy(), pool2d_ref(self.x, [2, 3], mode="max"),
+                    msg=f"MaxPool2d list default stride {dev}")
+
+        both_devices(body)
+
+    @jt.flag_scope(use_cuda=0)
+    def test_max_pool2d_channels_last_cpu_forward_and_gradient(self):
+        """An NCHW view of NHWC storage needs CPU forward and gradient sources."""
+        rng = np.random.RandomState(20261021)
+        values = rng.uniform(-3.0, -0.1, (2, 4, 5, 6)).astype("float32")
+        # Two equal maxima in the first window pin first-position tie breaking;
+        # negative inputs also ensure padding cannot win a window.
+        values[0, 0, 0, :2] = -0.01
+        kernel, stride, padding = (2, 3), (1, 2), (0, 1)
+        expected = pool2d_ref(values, kernel, stride, padding, mode="max")
+        seed = rng.randn(*expected.shape).astype("float32")
+        expected_grad = np.zeros_like(values)
+        for n, c, row, col in np.ndindex(*expected.shape):
+            begin_h, begin_w = row * stride[0] - padding[0], col * stride[1] - padding[1]
+            h0, w0 = max(begin_h, 0), max(begin_w, 0)
+            h1, w1 = min(begin_h + kernel[0], values.shape[2]), min(begin_w + kernel[1], values.shape[3])
+            patch = values[n, c, h0:h1, w0:w1]
+            winner_h, winner_w = np.unravel_index(np.argmax(patch), patch.shape)
+            expected_grad[n, c, h0 + winner_h, w0 + winner_w] += seed[n, c, row, col]
+
+        source = torch.tensor(np.ascontiguousarray(values.transpose(0, 2, 3, 1)), requires_grad=True)
+        x = source._storage_permute((0, 3, 1, 2))
+        self.assertFalse(x._storage_is_contiguous())
+        output = torch.nn.functional.max_pool2d(x, kernel, stride, padding)
+        gradient, = torch.autograd.grad((output * torch.tensor(seed)).sum(), (source,))
+        self.ac(output.numpy(), expected, msg="CPU channels-last max pooling output")
+        self.ac(gradient.numpy().transpose(0, 3, 1, 2), expected_grad,
+                msg="CPU channels-last max pooling gradient")
+
     def test_max_pool2d_ceil_mode(self):
         x = self.x
         def body(dev):
@@ -427,6 +472,37 @@ class TestAdaptivePool(Base):
 # nn.Conv2d / nn.MaxPool2d / nn.AvgPool2d module forward
 # ---------------------------------------------------------------------------
 class TestModuleForward(Base):
+    def test_conv2d_module_list_geometry(self):
+        """JSON-configured models pass lists for all spatial arguments."""
+        rs = np.random.RandomState(20261020)
+        x = rs.randn(1, 4, 7, 8).astype("float32")
+        w = rs.randn(6, 2, 3, 2).astype("float32")
+        b = rs.randn(6).astype("float32")
+        expected = conv2d_ref(x, w, b, stride=[2, 1], padding=[1, 2],
+                              dilation=[1, 2], groups=2)
+
+        def body(dev):
+            for layer_type in (nn.Conv2d, torch.nn.Conv2d):
+                with self.subTest(device=dev, layer=layer_type):
+                    layer = layer_type(4, 6, [3, 2], stride=[2, 1],
+                                       padding=[1, 2], dilation=[1, 2], groups=2)
+                    layer.weight.assign(jt.array(w))
+                    layer.bias.assign(jt.array(b))
+                    got = layer(torch.tensor(x)).numpy()
+                    self.assertEqual(got.shape, expected.shape)
+                    self.ac(got, expected, msg=f"Conv2d list geometry {dev}")
+
+        both_devices(body)
+
+    def test_conv2d_module_rejects_invalid_list_geometry(self):
+        for layer_type in (nn.Conv2d, torch.nn.Conv2d):
+            for argument, value in (("kernel_size", [3, 0]), ("stride", [1, 0]),
+                                    ("padding", [-1, 0]), ("dilation", [1, 0])):
+                kwargs = {"kernel_size": [3, 3], argument: value}
+                with self.subTest(layer=layer_type, argument=argument):
+                    with self.assertRaisesRegex(ValueError, argument):
+                        layer_type(2, 2, **kwargs)
+
     def test_conv2d_module(self):
         rs = np.random.RandomState(20)
         x = rs.randn(2, 3, 8, 8).astype("float32")

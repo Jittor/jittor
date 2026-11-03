@@ -45,7 +45,7 @@
 
 ## 性能与生成代码
 
-- [jittor-performance-profiling](skills/jittor-performance-profiling/SKILL.md)：构图、规划、执行和通用性能入口。
+- [jittor-performance-profiling](skills/jittor-performance-profiling/SKILL.md)：构图、规划、执行、ACL 数值探针与混合 CPU 前缀重放诊断。
 - [jittor-single-kernel-cold-profile](skills/jittor-single-kernel-cold-profile/SKILL.md)：合成单核的冷编译分阶段计时。
 - [codegen-optimization-in-effect](skills/codegen-optimization-in-effect/SKILL.md)：源码、机器指令与实际收益的证据链。
 - [cuda-elementwise-bandwidth-roofline](skills/cuda-elementwise-bandwidth-roofline/SKILL.md)：逐元素流量、copy 带宽与 profiler 归因。

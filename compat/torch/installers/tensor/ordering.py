@@ -18,11 +18,15 @@ def argsort(input, dim=-1, descending=False, **kwargs):
 def topk(input, k, dim=-1, largest=True, sorted=True):
     """Return the ``k`` largest (or smallest) values and their indices.
 
-    Built on argsort rather than the native topk: the latter is unreliable on
-    the ACL backend (an internal getitem "too many slices").
+    Backend selection is shared with native topk. The portable fallback keeps
+    the existing argsort/gather path because native ACL slicing is restricted.
     """
     from importlib import import_module as _import_module
+    from jittor.ops.sorting import _select_topk_kernel
     _owner = _import_module(__package__)
+    kernel = _select_topk_kernel(input, k, dim, largest, sorted)
+    if kernel is not None:
+        return _owner._TopK(*kernel(input, k, dim, largest, sorted))
     indices, _ = _owner._NATIVE_ARGSORT(input, dim=dim, descending=largest)
     rank = input.ndim
     axis = dim if dim >= 0 else dim + rank

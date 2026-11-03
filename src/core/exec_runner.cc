@@ -1123,8 +1123,15 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         }
         if (is_fused_op) {
             propergate_needed_flags(fused_op);
-            if (keep_graph)
-                for (Var* var : op->outputs()) rematerialization_mark_kept(var);
+            if (keep_graph) {
+                // An inlined intermediate is still part of the kept graph.
+                // In particular ternary marks its bool condition as saved for
+                // backward. Without _kept, an input copy's saved-reader barrier
+                // materializes/finishes that condition from the PREVIOUS input,
+                // turning every later replay into a stale conditional branch.
+                for (Op* member : fused_op.ops)
+                    for (Var* var : member->outputs()) rematerialization_mark_kept(var);
+            }
             vector<Var*> outputs;
             for (Var* var : op->outputs()) outputs.push_back(var);
             finish_fused_outputs(outputs);

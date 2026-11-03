@@ -7,6 +7,7 @@
 #include <sstream>
 #include <algorithm>
 #include "core/graph.h"
+#include "runtime/graph_capture.h"
 #include "runtime/node_index.h"
 #include "core/var_holder.h"
 #include "core/var.h"
@@ -41,6 +42,12 @@ int64 do_graph_check() {
     for (auto& vh : runtime_holder_state().holders()) {
         if (0==visited[vh->var]++)
             queue.push_back(vh->var);
+    }
+    // A device recording owns real native VarPtr roots in addition to Python
+    // holders. Count the exact claims, including repeated pins of one Var;
+    // these are not exemptions from the liveness invariant.
+    for (Var* value : graph_capture_held_vars()) {
+        if (0 == visited[value]++) queue.push_back(value);
     }
     LOGvv << "Check hold_vars size" << queue.size();
     int vhsize = queue.size();
