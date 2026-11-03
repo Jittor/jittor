@@ -52,9 +52,7 @@ extern/mkl/mkldnn_lnx*/*
 # Agent deliverables are Markdown; transient state and other generated files stay
 # outside the repository or under the ignored worklog/cache paths below.
 /agent/*
-!/agent/manuals/
-!/agent/manuals/**/
-!/agent/manuals/**/*.md
+!/agent/README.md
 !/agent/skills/
 !/agent/skills/**
 /agent/skills/**/.cache/

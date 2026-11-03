@@ -44,6 +44,13 @@ class TestDocsStructure(unittest.TestCase):
     def test_one_canonical_documentation_tree_remains(self):
         self.assertTrue((self.docs_root / "conf.py").is_file())
         self.assertTrue((self.docs_root / "index.md").is_file())
+        self.assertTrue((self.repo_root / "agent" / "README.md").is_file())
+        ignored = subprocess.run(
+            ("git", "check-ignore", "--no-index", "--", "agent/README.md"),
+            cwd=str(self.repo_root), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            universal_newlines=True,
+        )
+        self.assertEqual(ignored.returncode, 1, ignored.stdout + ignored.stderr)
         retired = (
             "doc",
             "docs/results",
