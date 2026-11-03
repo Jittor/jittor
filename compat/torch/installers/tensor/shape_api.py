@@ -257,6 +257,22 @@ def _torch_sum(input, *a, **k):
     return _orig_module_sum(input, *a, **k)
 
 
+def _torch_mean(input, *a, **k):
+    """torch.mean with torch's dim spellings.
+
+    The Tensor method normalizes a tuple/list of dims onto jittor's ``dims``
+    overload, but the module-level spelling still referred to the native
+    function, which rejects ``torch.mean(x, dim=[1, 2, 3])`` (torchmetrics'
+    SpatialCorrelationCoefficient reduces four axes this way).
+    """
+    _context = get_install_context(jt)
+    Var = _context.state["Var"]
+    _orig_module_mean = _context.state["tensor_shape_api"]['_orig_module_mean']
+    if isinstance(input, Var):
+        a, k = _norm_reduce_kw(a, k)
+    return _orig_module_mean(input, *a, **k)
+
+
 def _index_add_inplace(self, dim, index, source, *, alpha=1):
     # Through the Tensor in-place owner, not the native `index_add_`: that one
     # assigns without the requires-grad bookkeeping, so the written sources
