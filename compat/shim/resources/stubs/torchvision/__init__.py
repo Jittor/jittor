@@ -594,10 +594,12 @@ def _draw_bounding_boxes(image, boxes, labels=None, colors=None, fill=False,
 
 
 class _OpsModule(types.ModuleType):
+    __path__ = []   # package marker so torchvision.<ns>.<sub> imports descend
     box_convert = staticmethod(_box_convert)
 
 
 class _ModelsModule(types.ModuleType):
+    __path__ = []   # package marker so torchvision.<ns>.<sub> imports descend
     VGG16_Weights = type("VGG16_Weights", (_WeightEnum,), {})
     AlexNet_Weights = type("AlexNet_Weights", (_WeightEnum,), {})
     SqueezeNet1_1_Weights = type("SqueezeNet1_1_Weights", (_WeightEnum,), {})
@@ -609,6 +611,7 @@ class _ModelsModule(types.ModuleType):
 
 
 class _UtilsModule(types.ModuleType):
+    __path__ = []   # package marker so torchvision.<ns>.<sub> imports descend
     make_grid = staticmethod(_make_grid)
     save_image = staticmethod(_save_image)
     draw_bounding_boxes = staticmethod(_draw_bounding_boxes)
