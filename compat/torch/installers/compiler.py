@@ -479,6 +479,26 @@ def _api_fx_wrap(f=None, *a, **k):
     return f if f is not None and callable(f) else _identity
 
 
+_FX_PYTREE_NODES = {}
+_FX_PYTREE_EXACT_MATCH = {}
+
+
+def _api_fx_register_pytree_flatten_spec(cls, flatten_fn_spec, flatten_fn_exact_match_spec=None):
+    """Accept the FX flatten spec transformers registers for DynamicCache.
+
+    The spec is consumed only by symbolic tracing/export, which Jittor does
+    not produce; storing it keeps the registration inspectable without
+    pretending a trace exists.
+    """
+    _FX_PYTREE_NODES[cls] = flatten_fn_spec
+    _FX_PYTREE_EXACT_MATCH[cls] = flatten_fn_exact_match_spec
+
+
+def _api_fx_dict_flatten_spec(d, spec):
+    """Flatten a dict in the order recorded by an FX tree spec."""
+    return [d[key] for key in spec.context]
+
+
 def _api_dynamo_disable(f=None, **k):
     return f if f is not None else _identity
 
@@ -792,6 +812,17 @@ def install(ctx):
     _fx.wrap = _api_fx_wrap
     _modules["torch.fx"] = _fx
     g.fx = _fx
+    # transformers.cache_utils registers an FX flatten spec for DynamicCache
+    # at import time (transformers.generation imports cache_utils). The spec is
+    # consumed only by torch.export and symbolic tracing, which Jittor does not
+    # produce, so accept the registration and keep it inspectable.
+    _fx_pytree = _types2.ModuleType("torch.fx._pytree")
+    _fx_pytree.SUPPORTED_NODES = _FX_PYTREE_NODES
+    _fx_pytree.SUPPORTED_NODES_EXACT_MATCH = _FX_PYTREE_EXACT_MATCH
+    _fx_pytree.register_pytree_flatten_spec = _api_fx_register_pytree_flatten_spec
+    _fx_pytree._dict_flatten_spec = _api_fx_dict_flatten_spec
+    _fx._pytree = _fx_pytree
+    _modules["torch.fx._pytree"] = _fx_pytree
     # torch._dynamo: minimal importable stubs for libraries that probe or
     # decorate with Dynamo APIs. Jittor runs eagerly/JIT through its own stack.
     _dynamo = _types2.ModuleType("torch._dynamo")

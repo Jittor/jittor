@@ -661,7 +661,29 @@ def _draw_from_generator(name, generator, args, kwargs):
     return t
 
 
+def _bernoulli_adapter(original, *args, generator=None, **kwargs):
+    """torch.bernoulli(input, p=...): sample with one constant probability.
+
+    jittor's bernoulli draws each element with the probability stored in that
+    element and takes no ``p``; transformers' SpeechT5 decoder calls the scalar
+    torch form ``torch.bernoulli(inputs_embeds[0], p=p)``.
+    """
+    p = kwargs.pop("p", None)
+    if p is not None:
+        reference = args[0] if args else kwargs.pop("input", None)
+        if reference is None:
+            raise TypeError("bernoulli() missing required argument: 'input'")
+        probs = jt.full_like(reference, float(p))
+        return jt.bernoulli(probs) if generator is None else jt.bernoulli(probs, generator=generator)
+    if generator is None:
+        return original(*args, **kwargs)
+    drawn = _draw_from_generator("bernoulli", generator, args, kwargs)
+    return original(*args, **kwargs) if drawn is None else drawn
+
+
 def _random_adapter(original, *args, generator=None, _name=None, **kwargs):
+    if _name == "bernoulli":
+        return _bernoulli_adapter(original, *args, generator=generator, **kwargs)
     if generator is None:
         return original(*args, **kwargs)
     drawn = _draw_from_generator(_name, generator, args, kwargs)
