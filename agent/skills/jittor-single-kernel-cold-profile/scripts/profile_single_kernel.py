@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Measure the cold cost of one generated C++ kernel.
+"""Measure the cold cost of a fixed synthetic C++ kernel.
 
 The phases are intentionally explicit and independent:
-source generation, Jittor cache_compile, compiler, linker, and dynamic load.
+template writing, Jittor cache_compile, compiler, linker, and dynamic load.
+Template writing is not a measurement of real Jittor code generation.
 This script is a diagnostic harness; it does not modify Jittor's compiler or
 optimization settings.
 """
@@ -106,7 +107,7 @@ def main():
         cache_available = False
         if not args.no_cache_compile:
             try:
-                sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "python"))
+                sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "python"))
                 import jittor_utils
 
                 jittor_utils.try_import_jit_utils_core(True)

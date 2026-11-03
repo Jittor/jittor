@@ -2,7 +2,8 @@
 
 Run it the way SKILL.md says (PYTHONPATH is not optional).  Output is one line
 per (device, flag combination, slice index); ``bad=0/N`` everywhere is the
-expected state.
+expected state. This diagnostic selects available devices and does not fail
+on nonzero counts; inspect every row. It is not an acceptance gate.
 """
 import gc
 

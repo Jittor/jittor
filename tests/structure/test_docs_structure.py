@@ -86,6 +86,35 @@ class TestDocsStructure(unittest.TestCase):
         self.assertFalse(list(self.repo_root.rglob("*.src.md")))
         self.assertFalse(list(self.repo_root.rglob("*.ipynb")))
 
+    def test_skill_catalog_detects_missing_stale_and_misplaced_resources(self):
+        spec = spec_from_file_location(
+            "skill_governance", self.repo_root / "tools/docs/check_governance.py")
+        governance = module_from_spec(spec)
+        spec.loader.exec_module(governance)
+        self.assertEqual(governance.check_skill_catalog(self.repo_root / "agent"), [])
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            skill = root / "skills" / "sample"
+            skill.mkdir(parents=True)
+            (skill / "SKILL.md").write_text("# Sample\n")
+            catalog = root / "README.md"
+            catalog.write_text("[sample](skills/sample/SKILL.md)\n")
+            self.assertEqual(governance.check_skill_catalog(root), [])
+            catalog.write_text("[old](skills/old/SKILL.md)\n")
+            errors = governance.check_skill_catalog(root)
+            self.assertTrue(any("absent from catalog" in error for error in errors))
+            self.assertTrue(any("stale skill" in error for error in errors))
+            catalog.write_text("[sample](skills/sample/SKILL.md)\n")
+            (skill / "helper.py").write_text("pass\n")
+            self.assertTrue(any("belongs in scripts/" in error
+                                for error in governance.check_skill_catalog(root)))
+            (skill / "scripts").mkdir()
+            (skill / "helper.py").rename(skill / "scripts" / "helper.py")
+            self.assertEqual(governance.check_skill_catalog(root), [])
+            (skill / "SKILL.md").unlink()
+            self.assertTrue(any("missing skill entry" in error
+                                for error in governance.check_skill_catalog(root)))
+
     def test_sphinx_configuration_is_myst_only_and_import_safe(self):
         path = self.docs_root / "conf.py"
         source = path.read_text(encoding="utf-8")

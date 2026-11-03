@@ -2,17 +2,15 @@
 """Render the pyjt bindings for a few headers without building jittor.
 
 `pyjt_compiler.py` only needs `jittor_utils`, not the compiled core, so the
-generator can be run on its own.  Point this at two checkouts (or at the same
-one before and after an edit) and diff the output to see exactly what a change
+generator can be run on its own.  Point this at two independently preserved checkouts and diff the output to see exactly what a change
 to the generator does to the emitted C++ -- seconds instead of a rebuild.
 
     python render_bindings.py <repo>/python <out_dir> [<gen_dir>]
 
 <gen_dir> is a cache `gen/` directory; if given, `jit_op_maker.h` is taken from
 there and prefixed with `var_holder.h`, the way compiler.py does it, so the
-Var methods and the type object end up in the output too.  Find one with:
-
-    find "$JITTOR_HOME/.cache/jittor" -name jit_op_maker.h
+Var methods and the type object end up in the output too. Use the gen/ under
+the active jittor.compiler.cache_path, not an arbitrary cached directory.
 """
 import importlib.util
 import os

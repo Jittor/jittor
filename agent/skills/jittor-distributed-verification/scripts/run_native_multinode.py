@@ -161,7 +161,7 @@ def environment(args, *, oracle=False):
 
 
 def launcher_command(args):
-    tool = args.source_root / 'agent/skills/jittor-distributed-verification/native_multinode_worker.py'
+    tool = args.source_root / 'agent/skills/jittor-distributed-verification/scripts/native_multinode_worker.py'
     address = '127.0.0.1' if args.stage == 'warm' else args.master_addr
     port = 0 if args.stage == 'warm' else args.master_port
     command = [str(args.python), '-m', 'jittor.distributed.launch', '--backend=nccl',
@@ -227,7 +227,7 @@ def seal(args):
             files[path.relative_to(output).as_posix()] = {'bytes': path.stat().st_size, 'sha256': sha256(path)}
     write_json(output / 'raw-bindings.json', {'source_sha': args.source_sha, 'source_status': '',
                                             'files': files})
-    script = args.source_root / 'agent/skills/jittor-distributed-verification/recheck_native_fsdp.py'
+    script = args.source_root / 'agent/skills/jittor-distributed-verification/scripts/recheck_native_fsdp.py'
     command = [str(args.oracle_python), str(script), '--bindings', str(output / 'raw-bindings.json'),
                '--source-manifest', str(output / 'source-node0.json'),
                '--expected-source', args.source_sha, '--source-root', str(args.source_root),
@@ -268,7 +268,7 @@ def main():
     if args.stage == 'oracle':
         for kind in ('sgd', 'adamw'):
             for dtype in ('float32', 'bfloat16'):
-                command = [str(args.oracle_python), str(args.source_root / 'agent/skills/jittor-distributed-verification/native_fsdp_oracle.py'),
+                command = [str(args.oracle_python), str(args.source_root / 'agent/skills/jittor-distributed-verification/scripts/native_fsdp_oracle.py'),
                            '--source-root', str(args.source_root), '--device', 'cuda', '--kind', kind,
                            '--dtype', dtype, '--output-dir', str(args.shared_output / 'cuda-unit/oracle-results')]
                 run_command(args, command, environment(args, oracle=True), 'oracle-' + kind + '-' + dtype)

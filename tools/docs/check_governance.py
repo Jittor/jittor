@@ -159,8 +159,34 @@ def check_document_names(documents):
     return errors
 
 
+def check_skill_catalog(agent_root):
+    """Keep skills discoverable and executable resources in their own folder."""
+    errors = []
+    catalog = (agent_root / "README.md").read_text(encoding="utf-8")
+    indexed = set(re.findall(r"\]\((skills/[^)]+/SKILL\.md)\)", catalog))
+    actual = set()
+    for folder in sorted((agent_root / "skills").iterdir()):
+        if not folder.is_dir():
+            errors.append("skill entry must be a directory: " + folder.name)
+            continue
+        entry = folder / "SKILL.md"
+        if not entry.is_file():
+            errors.append("missing skill entry: " + folder.name)
+            continue
+        actual.add(entry.relative_to(agent_root).as_posix())
+        for resource in folder.iterdir():
+            if resource.is_file() and resource.suffix in {".py", ".sh"}:
+                errors.append("skill executable belongs in scripts/: " + str(resource))
+    for missing in sorted(actual - indexed):
+        errors.append("skill absent from catalog: " + missing)
+    for stale in sorted(indexed - actual):
+        errors.append("stale skill catalog entry: " + stale)
+    return errors
+
+
 def check_contract(documents):
     errors = check_document_names(documents)
+    errors.extend(check_skill_catalog(REPO_ROOT / "agent"))
     for relative in REQUIRED_DOCUMENTS:
         if not (REPO_ROOT / relative).is_file():
             errors.append("missing required document: {0}".format(relative))

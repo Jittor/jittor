@@ -52,8 +52,12 @@ python -c 'import sys, jittor; print(sys.executable); print(jittor.__file__)'
 源码的快速检查由测试 runner 管理模式与环境：
 
 ```bash
-python tools/run_test_suite.py --tier core --backend cpu
+JITTOR_LAB_ROOT="$run_root/suite" python tools/run_test_suite.py --tier core --backend cpu
 ```
+
+runner 会重设 `JITTOR_HOME`/`TMPDIR` 到其 lab 根下的 `_state/test-suite/`。
+因此基线、候选和并行任务要各自指定独立的 runner lab 根，并核对最终路径；
+仅在外层设置不同 `JITTOR_HOME` 不足以隔离。上面的 `suite` 位于本次 run 内。
 
 选择 CUDA/NPU 前确认实际分配的设备、驱动和工具链；不要因为继承了 CPU-only 变量就
 误报缺硬件，也不要根据 `cuda` 接口名推断芯片厂商。nox 会话有自己的隔离环境与输入
@@ -63,7 +67,17 @@ python tools/run_test_suite.py --tier core --backend cpu
 下游库的版本组合和官方用例到 [JittorEcosystem](https://github.com/JittorEcosystem)
 对应仓库运行，发现核心/compat 缺陷时再在主仓保留最小复现。
 
-## 4. 收尾
+## 4. 多 worktree 与基线
+
+Git worktree 的源码与 index 分开，但对象库、refs 和部分仓库配置共享。
+检查 `git worktree list` 与当前分支，避免让两个任务写同一工作树或移动对方依赖的分支引用。
+新 worktree 不会自动包含当前未提交文件；候选验证需保存完整补丁和必要的新文件，并核对身份。
+
+基线与候选用不同源码目录、缓存和输出目录，同一配置分别预热。
+不要临时 checkout 旧文件再复制回来：这会覆盖并发修改，也让运行结果失去确定源码身份。
+测试运行期间不切换源码；同步后按实际变化复验，不重标旧结果的 SHA。
+
+## 5. 收尾
 
 记录提交、解释器、包来源、实际设备、命令、完成数量、skip 原因和结果。验证结论写入
 GitHub issue/PR，日志与数据保留在本次 lab 目录；运行结束不会把未执行的硬件项变成通过。

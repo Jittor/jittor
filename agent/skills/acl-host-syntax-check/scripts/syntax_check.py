@@ -22,7 +22,7 @@ It does not prove the operator is called correctly. The per-operator
 they are stubbed variadic. The registry now explicitly adapts its live query
 families rather than selecting an overloaded constructor. No header diagnostic
 is filtered: a nonzero compiler status always fails. Argument-level mistakes
-in an SDK workspace query still need a real Ascend 910B3 build.
+in an SDK workspace query still need a build against the real target CANN SDK.
 
 ``--check-launchers`` adds a separate generated translation unit that asserts
 every ``launch(ret, <symbol>, ...)`` site names a function with the exact
@@ -55,11 +55,11 @@ typedef aclnnStatus (*AclExecuteAbi)(void *, uint64_t, aclOpExecutor *, aclrtStr
 """
 
 
-def compile_flags(repo, cache, stub):
+def compile_flags(repo, cache, stub, cuda_include):
     acl = repo / "backends" / "acl"
     extra = []
     if platform.machine() != "aarch64":
-        # __fp16 is an aarch64 builtin and CANN hosts are aarch64. On an x86_64
+        # __fp16 is an aarch64 builtin. On an x86_64
         # review host the equivalent storage type is _Float16; without this the
         # fp16 branch of binary_op_acl.cc cannot be parsed at all.
         extra.append("-D__fp16=_Float16")
@@ -76,7 +76,7 @@ def compile_flags(repo, cache, stub):
         "-I", str(acl / "include" / "aclops"),
         "-I", str(repo / "backends" / "cuda" / "include"),
         "-I", str(repo / "backends" / "cuda"),
-        "-I", "/usr/local/cuda/include",
+        "-I", str(cuda_include),
         "-I", str(cache),
     ]
 
@@ -89,6 +89,8 @@ def main():
     parser.add_argument("--python-include", required=True)
     parser.add_argument("--stub", required=True, help="where to build the CANN stub tree")
     parser.add_argument("--cxx", default="g++")
+    parser.add_argument("--cuda-include", required=True,
+                        help="CUDA compatibility headers for this build configuration")
     parser.add_argument("--check-launchers", action="store_true",
                         help="also assert every launch() site names an execute ABI")
     parser.add_argument("sources", nargs="+")
@@ -100,7 +102,8 @@ def main():
 
     make_cann_stub.build(acl_root, stub)
 
-    flags = compile_flags(repo, pathlib.Path(args.jittor_cache), stub)
+    flags = compile_flags(repo, pathlib.Path(args.jittor_cache), stub,
+                          pathlib.Path(args.cuda_include))
     flags += ["-I", args.python_include]
 
     failed = False

@@ -3194,7 +3194,7 @@ def native_multinode(session):
         session.error("native_multinode requires explicit runner arguments; use -- --help")
     session.run(
         _hardware_python(),
-        str(REPO_ROOT / "agent/skills/jittor-distributed-verification/run_native_multinode.py"),
+        str(REPO_ROOT / "agent/skills/jittor-distributed-verification/scripts/run_native_multinode.py"),
         *session.posargs,
         external=True,
     )

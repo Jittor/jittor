@@ -1,8 +1,7 @@
 """Measure and attribute the wall-clock cost of ``import jittor``.
 
-Run it, do not read it, when you need to answer "where did those seconds go".
-A profiler answers that question with 40% overhead on this import, which is
-enough to reorder the phases; every number here is plain ``perf_counter``.
+Run in an isolated diagnostic process; timings use ``perf_counter`` and
+instrumentation overhead is not assumed to be zero.
 
 Three levels, because no single mechanism sees all of it:
 
@@ -16,14 +15,13 @@ Three levels, because no single mechanism sees all of it:
   a separate package and ``compiler.py`` reaches it by attribute lookup, so a
   patch installed before ``import jittor`` survives.
 * level 3 -- the source generators, by calling them again after the import.
-  They are idempotent (same inputs, same output files), so a second call
-  prices the first.
+  This measures warmed generator work, not the original cold generation.
 
 Usage:
 
     EXPECT_JITTOR_SRC=<worktree>/python \\
     PYTHONPATH=<worktree>/python JITTOR_HOME=... TMPDIR=... \\
-    python agent/skills/jittor-build-change-verification/measure_import_cost.py
+    python agent/skills/jittor-build-change-verification/scripts/measure_import_cost.py
 
 ``EXPECT_JITTOR_SRC`` is not optional: without it the numbers may well come
 from the *installed* jittor rather than the tree you are changing, and there
@@ -121,8 +119,8 @@ def level2_and_3(expect_src):
         raise RuntimeError("imported %r, expected a tree under %r"
                            % (jittor.__file__, expect_src))
 
-    import jittor.compiler as compiler
-    import jittor.pyjt_compiler as pyjt_compiler
+    from jittor.build import compiler
+    from jittor.build import pyjt_compiler
 
     for name, call in (
         ("gen_jit_flags", compiler.gen_jit_flags),
@@ -141,7 +139,7 @@ def level2_and_3(expect_src):
 
 
 INTERESTING = (
-    "jittor", "jittor.compiler", "jittor.compile_extern", "jittor.init_cupy",
+    "jittor", "jittor.build.compiler", "jittor.build.compile_extern", "jittor.init_cupy",
     "jittor.compat.triton", "jittor_core", "jittor_mpi_core", "jittor_utils",
     "cupy", "numpy", "jittor.extern.acl.acl_compiler",
 )
