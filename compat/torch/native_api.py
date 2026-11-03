@@ -71,6 +71,26 @@ class NativeOperation:
         with tensor_frontend(context.state["Var"], device=device):
             if isinstance(implementation, type) and issubclass(implementation, context.native_backend.Function):
                 implementation = implementation()
+            if self._operation_key == "unique_consecutive" and args:
+                # The native implementation builds its run mask with
+                # ``jt.concat``, which allocates through the *ambient*
+                # placement. The Torch frontend keeps that on the host, so a
+                # CUDA input mixed placements inside concat/setitem and raised
+                # "Expected all tensor inputs on the same backend and device
+                # for setitem". The frontend scope already holds a placement,
+                # so switch it to the input's own device for this call and
+                # restore it afterwards; a host-placed input keeps behaving as
+                # before.
+                first = args[0]
+                if isinstance(first, context.state["Var"]):
+                    backend = int(first.placement_backend)
+                    if backend >= 0:
+                        token = jittor.core._set_tensor_placement(
+                            backend, max(int(first.device_id), 0))
+                        try:
+                            return implementation(*args, **kwargs)
+                        finally:
+                            jittor.core._reset_tensor_placement(token)
             return implementation(*args, **kwargs)
 
     def __reduce__(self):
