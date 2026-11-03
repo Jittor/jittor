@@ -40,6 +40,20 @@ def _rotate(img, angle, *a, **k):                    # 90-multiple fast path; el
 # through torchvision.transforms.functional on tensors. The stub made tvF.X a
 # dummy class -> `pil_to_tensor(img)` returned a class with no .ndim and crashed.
 # Implement the handful of ops the VL image pipeline uses, on jittor Vars / PIL.
+def _frontend_tensor(value):
+    # Return the torch-facing Tensor type when jittor-torch-shim is deployed.
+    # A bare native Var shares the storage but is not an instance of
+    # torch.Tensor, and datasets' torch formatting (and callers like
+    # Dataset.set_transform) expect the facade type.
+    try:
+        import torch as _torch
+        if hasattr(_torch, "_torch_compat_install_context"):
+            return _torch.tensor(value)
+    except Exception:
+        pass
+    return value
+
+
 def _pil_to_tensor(pic):
     # PIL image -> uint8 CHW Var (torchvision.pil_to_tensor semantics)
     import numpy as _np
@@ -47,7 +61,7 @@ def _pil_to_tensor(pic):
     if arr.ndim == 2:
         arr = arr[:, :, None]
     t = _jt.array(arr.copy())           # HWC
-    return t.permute(2, 0, 1)           # CHW
+    return _frontend_tensor(t.permute(2, 0, 1))   # CHW
 
 def _to_tensor(pic):
     # torchvision.transforms.functional.to_tensor semantics:
@@ -55,7 +69,8 @@ def _to_tensor(pic):
     import numpy as _np
     from PIL import Image as _Im
     if isinstance(pic, _jt.Var):
-        return pic.float32() / 255.0 if "uint8" in _jittor_dtype_name(pic.dtype) else pic.float32()
+        t = pic.float32() / 255.0 if "uint8" in _jittor_dtype_name(pic.dtype) else pic.float32()
+        return _frontend_tensor(t)
     if isinstance(pic, _Im.Image):
         arr = _np.asarray(pic)
     else:
@@ -68,7 +83,7 @@ def _to_tensor(pic):
         arr = arr.astype(_np.float32)
     if arr.ndim == 3:
         arr = arr.transpose(2, 0, 1)
-    return _jt.array(arr.copy())
+    return _frontend_tensor(_jt.array(arr.copy()))
 
 def _resize(img, size, interpolation="bilinear", antialias=True, **k):
     # img: CHW (or NCHW) Var. size: int or (h,w). Route through jittor interpolate.
