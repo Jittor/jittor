@@ -1,6 +1,3 @@
-import contextlib
-import enum
-
 from ...fidelity import Fidelity, register_api_bindings
 import jittor as jt
 from ...context import registry_for
@@ -186,32 +183,6 @@ def _install_nn_extras(nn, registry=None):
         flex_mod.noop_mask = _api_flex_mod_noop_mask
         _modules["torch.nn.attention.flex_attention"] = flex_mod
     attn_mod.flex_attention = flex_mod
-    # PyTorch's scaled-dot-product-attention backend selection API. Jittor
-    # dispatches every SDPA request to its single native implementation, so the
-    # backend choice is accepted for API compatibility but never changes the
-    # computation. transformers imports SDPBackend and sdpa_kernel from
-    # torch.nn.attention while collecting its generation tests.
-    if not hasattr(attn_mod, "SDPBackend"):
-        class SDPBackend(enum.Enum):
-            ERROR = -1
-            MATH = 0
-            FLASH_ATTENTION = 1
-            EFFICIENT_ATTENTION = 2
-            CUDNN_ATTENTION = 3
-            OVERRIDEABLE = 4
-
-        @contextlib.contextmanager
-        def sdpa_kernel(backends, set_priority=False):
-            if isinstance(backends, (SDPBackend, str)):
-                backends = [backends]
-            invalid = [backend for backend in backends if not isinstance(backend, SDPBackend)]
-            if invalid:
-                raise ValueError(
-                    "sdpa_kernel expects torch.nn.attention.SDPBackend values, got {!r}".format(invalid))
-            yield
-
-        attn_mod.SDPBackend = SDPBackend
-        attn_mod.sdpa_kernel = sdpa_kernel
     nn.attention = attn_mod
 
     # nn.utils.clip_grad_norm_/clip_grad_value_ (also provided by torch_shim,
@@ -545,10 +516,6 @@ def _install_nn_extras(nn, registry=None):
         parallel_mod, "torch.nn.parallel", ("DataParallel", "DistributedDataParallel"),
         Fidelity.APPROXIMATE, "Native module wrapper and registered collectives; "
         "the complete Torch process-group and bucket interface is not supported")
-    register_api_bindings(
-        attn_mod, "torch.nn.attention", ("SDPBackend", "sdpa_kernel"),
-        Fidelity.APPROXIMATE, "Backend selection is accepted for import and call "
-        "compatibility; Jittor dispatches one native SDPA implementation regardless of backend")
     for _path, _names in (
         ("torch.nn.attention.flex_attention", ("flex_attention", "create_block_mask",
          "and_masks", "or_masks", "noop_mask")),

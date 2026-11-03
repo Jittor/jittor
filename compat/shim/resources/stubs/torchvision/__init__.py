@@ -40,20 +40,6 @@ def _rotate(img, angle, *a, **k):                    # 90-multiple fast path; el
 # through torchvision.transforms.functional on tensors. The stub made tvF.X a
 # dummy class -> `pil_to_tensor(img)` returned a class with no .ndim and crashed.
 # Implement the handful of ops the VL image pipeline uses, on jittor Vars / PIL.
-def _frontend_tensor(value):
-    # Return the torch-facing Tensor type when jittor-torch-shim is deployed.
-    # A bare native Var shares the storage but is not an instance of
-    # torch.Tensor, and datasets' torch formatting (and callers like
-    # Dataset.set_transform) expect the facade type.
-    try:
-        import torch as _torch
-        if hasattr(_torch, "_torch_compat_install_context"):
-            return _torch.tensor(value)
-    except Exception:
-        pass
-    return value
-
-
 def _pil_to_tensor(pic):
     # PIL image -> uint8 CHW Var (torchvision.pil_to_tensor semantics)
     import numpy as _np
@@ -61,7 +47,7 @@ def _pil_to_tensor(pic):
     if arr.ndim == 2:
         arr = arr[:, :, None]
     t = _jt.array(arr.copy())           # HWC
-    return _frontend_tensor(t.permute(2, 0, 1))   # CHW
+    return t.permute(2, 0, 1)           # CHW
 
 def _to_tensor(pic):
     # torchvision.transforms.functional.to_tensor semantics:
@@ -69,8 +55,7 @@ def _to_tensor(pic):
     import numpy as _np
     from PIL import Image as _Im
     if isinstance(pic, _jt.Var):
-        t = pic.float32() / 255.0 if "uint8" in _jittor_dtype_name(pic.dtype) else pic.float32()
-        return _frontend_tensor(t)
+        return pic.float32() / 255.0 if "uint8" in _jittor_dtype_name(pic.dtype) else pic.float32()
     if isinstance(pic, _Im.Image):
         arr = _np.asarray(pic)
     else:
@@ -83,7 +68,7 @@ def _to_tensor(pic):
         arr = arr.astype(_np.float32)
     if arr.ndim == 3:
         arr = arr.transpose(2, 0, 1)
-    return _frontend_tensor(_jt.array(arr.copy()))
+    return _jt.array(arr.copy())
 
 def _resize(img, size, interpolation="bilinear", antialias=True, **k):
     # img: CHW (or NCHW) Var. size: int or (h,w). Route through jittor interpolate.
@@ -331,119 +316,6 @@ class CenterCrop:
         return f"CenterCrop(size={self.size})"
 
 
-class ColorJitter:
-    """torchvision.transforms.ColorJitter on PIL images and jittor Vars.
-
-    Scalar parameters expand to torchvision's random factor ranges; a tuple is
-    sampled directly.  PIL images use ImageEnhance (hue as an HSV H-channel
-    shift); tensors are adjusted in float RGB space with the torchvision YIQ
-    hue rotation.
-    """
-
-    def __init__(self, brightness=0, contrast=0, saturation=0, hue=0):
-        self.brightness = self._check_input(brightness, "brightness")
-        self.contrast = self._check_input(contrast, "contrast")
-        self.saturation = self._check_input(saturation, "saturation")
-        self.hue = self._check_input(hue, "hue")
-
-    @staticmethod
-    def _check_input(value, name):
-        if isinstance(value, bool):
-            raise TypeError(f"{name} must be a number or a sequence of two numbers")
-        if isinstance(value, (int, float)):
-            if value < 0:
-                raise ValueError(f"{name} must be non-negative")
-            if name == "hue":
-                if value > 0.5:
-                    raise ValueError("hue values must be in [-0.5, 0.5]")
-                bounds = (-float(value), float(value))
-            else:
-                bounds = (max(0.0, 1.0 - float(value)), 1.0 + float(value))
-        elif isinstance(value, (list, tuple)) and len(value) == 2:
-            bounds = (float(value[0]), float(value[1]))
-            if bounds[0] < 0 or bounds[1] < 0:
-                raise ValueError(f"{name} values must be non-negative")
-            if bounds[0] > bounds[1]:
-                raise ValueError(f"{name} values must be in increasing order")
-            if name == "hue" and (bounds[0] < -0.5 or bounds[1] > 0.5):
-                raise ValueError("hue values must be in [-0.5, 0.5]")
-        else:
-            raise TypeError(f"{name} must be a number or a sequence of two numbers")
-        center = 0.0 if name == "hue" else 1.0
-        return None if bounds[0] == bounds[1] == center else bounds
-
-    def __call__(self, img):
-        import random
-        import numpy as _np
-        from PIL import Image as _Im
-
-        operations = []
-        for name in ("brightness", "contrast", "saturation", "hue"):
-            bounds = getattr(self, name)
-            if bounds is not None:
-                operations.append((name, random.uniform(*bounds)))
-        random.shuffle(operations)
-        if not operations:
-            return img  # identity, as in torchvision
-        if isinstance(img, _Im.Image):
-            from PIL import ImageEnhance
-            for name, factor in operations:
-                if name == "brightness":
-                    img = ImageEnhance.Brightness(img).enhance(factor)
-                elif name == "contrast":
-                    img = ImageEnhance.Contrast(img).enhance(factor)
-                elif name == "saturation":
-                    img = ImageEnhance.Color(img).enhance(factor)
-                else:
-                    mode = img.mode
-                    bands = list(img.convert("HSV").split())
-                    shift = int(round(factor * 255))
-                    bands[0] = bands[0].point(lambda pixel: (pixel + shift) % 256)
-                    img = _Im.merge("HSV", bands).convert(mode)
-            return img
-        t = img if isinstance(img, _jt.Var) else _jt.array(_np.asarray(img))
-        t = t.float32()
-        squeezed = []
-        while t.ndim < 4:
-            t = t.unsqueeze(0)
-            squeezed.append(0)
-        for name, factor in operations:
-            if name == "brightness":
-                t = t * float(factor)
-            elif name == "contrast":
-                mean = t.mean(dim=2, keepdim=True).mean(dim=3, keepdim=True)
-                t = (t - mean) * float(factor) + mean
-            elif name == "saturation":
-                gray = t.mean(dim=1, keepdim=True)
-                t = gray + (t - gray) * float(factor)
-            else:
-                t = self._adjust_hue(t, float(factor))
-        for _ in squeezed:
-            t = t.squeeze(0)
-        return t
-
-    @staticmethod
-    def _adjust_hue(t, factor):
-        import math
-        r, g, b = t[:, 0:1], t[:, 1:2], t[:, 2:3]
-        y = 0.299 * r + 0.587 * g + 0.114 * b
-        i = 0.596 * r - 0.274 * g - 0.322 * b
-        q = 0.211 * r - 0.523 * g + 0.312 * b
-        angle = factor * 2.0 * math.pi
-        cosine, sine = math.cos(angle), math.sin(angle)
-        i_rot = i * cosine - q * sine
-        q_rot = i * sine + q * cosine
-        r_new = y + 0.956 * i_rot + 0.621 * q_rot
-        g_new = y - 0.272 * i_rot - 0.647 * q_rot
-        b_new = y - 1.106 * i_rot + 1.703 * q_rot
-        return _jt.stack([r_new, g_new, b_new], dim=1)
-
-    def __repr__(self):
-        return (f"ColorJitter(brightness={self.brightness}, "
-                f"contrast={self.contrast}, saturation={self.saturation}, "
-                f"hue={self.hue})")
-
-
 def _make_grid(tensor, nrow=8, padding=2, normalize=False, value_range=None,
                scale_each=False, pad_value=0, **kw):
     if value_range is None and "range" in kw:
@@ -527,7 +399,7 @@ _CONCRETE = {"InterpolationMode": InterpolationMode, "ImageReadMode": ImageReadM
              # real class-based transforms (torchvision.transforms.*)
              "Compose": Compose, "Normalize": Normalize, "ToTensor": ToTensor,
              "Resize": Resize, "ToPILImage": ToPILImage, "Lambda": Lambda,
-             "CenterCrop": CenterCrop, "ColorJitter": ColorJitter}
+             "CenterCrop": CenterCrop}
 
 
 class _AnyModule(types.ModuleType):
