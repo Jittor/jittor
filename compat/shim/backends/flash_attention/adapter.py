@@ -257,6 +257,9 @@ def _make_official_backend(low_level: ModuleType, root: pathlib.Path,
         _check_dropout_backward(q, dropout, needs_grad)
         if (packed_low_level is not None and not needs_grad and dropout == 0.0
                 and not return_attn_probs):
+            # Materialize logical views before exposing pointers to the native
+            # bridge, so their physical storage matches the reported strides.
+            q, k, v = (x.contiguous() if not x.is_contiguous() else x for x in (q, k, v))
             return packed_low_level.fwd(q, k, v, float(softmax_scale), bool(causal), wl, wr)
         if needs_grad:
             return _DenseNativeAttention(
@@ -391,9 +394,34 @@ def _make_official_backend(low_level: ModuleType, root: pathlib.Path,
                 and not return_attn_probs):
             _check_args(dropout_p, softcap, alibi_slopes, return_attn_probs)
             wl, wr = _facade._window_size_pair(kwargs.get("window_size", window_size))
-            scale = qkv.shape[-1] ** -0.5 if softmax_scale is None else float(softmax_scale)
-            return packed_low_level.varlen_qkvpacked_fwd(
+            head_dim = int(qkv.shape[-1])
+            scale = head_dim ** -0.5 if softmax_scale is None else float(softmax_scale)
+            padding = (-head_dim) % 8
+            if padding:
+                # Match upstream FlashAttention: pad Q/K/V but retain the
+                # original scale, then discard padded output channels.
+                import torch.nn.functional as F
+                qkv = F.pad(qkv, (0, padding))
+            out = packed_low_level.varlen_qkvpacked_fwd(
                 qkv, cu_seqlens, int(max_seqlen), scale, bool(causal), wl, wr)
+            return out[..., :head_dim] if padding else out
+        head_dim = int(qkv.shape[-1])
+        padding = (-head_dim) % 8
+        if padding and _grad_enabled(qkv):
+            # The native training kernel also requires aligned heads. Pad as
+            # ordinary differentiable Torch operations, retaining the scale
+            # of the original head and slicing the output back afterward.
+            import torch.nn.functional as F
+            scale = head_dim ** -0.5 if softmax_scale is None else float(softmax_scale)
+            padded = F.pad(qkv, (0, padding))
+            q, k, v = (padded[:, i].contiguous() for i in range(3))
+            result = flash_attn_varlen_func(
+                q, k, v, cu_seqlens, cu_seqlens, max_seqlen, max_seqlen,
+                dropout_p, scale, causal, window_size, softcap, alibi_slopes,
+                deterministic, return_attn_probs, *args, **kwargs)
+            if return_attn_probs:
+                return (result[0][..., :head_dim],) + tuple(result[1:])
+            return result[..., :head_dim]
         if packed_split_enabled:
             split = _facade._split_qkvpacked_cuda(qkv)
             if split is not None:
