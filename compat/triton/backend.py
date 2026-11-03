@@ -1024,6 +1024,8 @@ def _compile(jitfn, signature, constants, options=None, device=0):
     device 0 in a rank that uses another device and may not be allowed near
     that one.
     """
+    if {name for name, kind in signature.items() if kind == "constexpr"} != set(constants):
+        raise JittorTritonError("Triton constants must match the constexpr signature slots")
     triton = real_triton()
     from triton.compiler import ASTSource
 
@@ -1233,8 +1235,8 @@ def _run(jitfn, args, kwargs, grid):
         raise JittorTritonError(
             "could not bind args for triton kernel %r: %s" % (kname, e))
 
-    signature = {}        # runtime param name -> triton type code
-    constants = {}        # constexpr param name -> python value
+    signature = {}        # every param name -> runtime type or "constexpr"
+    constants = {}        # explicit constexpr or implicit None -> python value
     runtime_vals = []     # (name, sig, value) in param order, runtime only
     out_vars = []         # jittor Vars touched (kept alive across launch)
 
@@ -1244,7 +1246,15 @@ def _run(jitfn, args, kwargs, grid):
         return val
 
     for name, val in bound.arguments.items():
-        if name in constexpr_names:
+        if name in constexpr_names or val is None:
+            # Upstream specializes an unannotated Python None as constexpr
+            # None. A null runtime pointer is different: `ptr is not None`
+            # then retains a branch which can load/store address zero. Keep
+            # Keep the constexpr slot in ASTSource's complete signature, but
+            # out of runtime_vals/argument packing. Upstream's disk-cache hash
+            # sorts signature *values*: dropping names lets (ptr, None) and
+            # (None, ptr) collide and reuse a cubin with a different ABI.
+            signature[name] = "constexpr"
             constants[name] = _unwrap_constexpr(val)
             continue
         if _is_tensor(val):
@@ -1306,10 +1316,6 @@ def _run(jitfn, args, kwargs, grid):
             signature[name] = _ptr_sig(val)
             runtime_vals.append((name, signature[name], val))
             out_vars.append(val)
-        elif val is None:
-            # triton models a None pointer arg as *i8; pass null
-            signature[name] = "*i8"
-            runtime_vals.append((name, "*i8", None))
         else:
             val = _unwrap_constexpr(val)
             sig = _scalar_sig(val)
@@ -1442,7 +1448,8 @@ def _run(jitfn, args, kwargs, grid):
     for (name, sig, val) in runtime_vals:
         if sig.startswith("*"):
             if val is None:
-                cv = ctypes.c_uint64(0)
+                raise JittorTritonError(
+                    "None argument %r escaped constexpr specialization" % name)
             else:
                 ptr = pointers[name]
                 nbytes = _tensor_nbytes(val, sig) if guard_enabled else 0

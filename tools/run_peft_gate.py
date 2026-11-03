@@ -18,7 +18,7 @@ import time
 import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPTS = ROOT / 'agent/skills/torch-compat-repo-runbook/scripts'
+SCRIPTS = ROOT / 'tools/ecosystem'
 sys.path.insert(0, str(SCRIPTS))
 
 
@@ -237,7 +237,7 @@ def validate_completed_run(directory, sources, baseline, execution):
     output.mkdir()
     try:
         record = collect(directory, sources, baseline, output,
-                         'docs/results/2026-10-15-peft-installed-source-training.md')
+                         'https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-10-15-peft-installed-source-training.md')
     except ValueError as error:
         execution['validation'] = {'status': 'failed', 'error': str(error)}
         (directory / 'execution.json').write_text(json.dumps(execution, indent=2) + '\n')

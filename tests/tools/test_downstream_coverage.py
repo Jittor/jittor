@@ -16,7 +16,7 @@ import zipfile
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SCRIPTS = ROOT / "agent/skills/torch-compat-repo-runbook/scripts"
+SCRIPTS = ROOT / "tools/ecosystem"
 sys.path.insert(0, str(ROOT / "tests"))
 from _helpers.child_process import PYTHON, run_python_child  # noqa: E402
 
@@ -70,6 +70,62 @@ class CoverageAuditTests(unittest.TestCase):
         self.serial = 0
         self.bind_measurements(self.row)
 
+    def archived_report(self):
+        for command in (("init", "-q"), ("add", "docs/results/evidence.md"),
+                        ("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                         "commit", "-qm", "Archive report fixture")):
+            subprocess.run(["git", "-C", str(self.root), *command], check=True,
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        commit = subprocess.check_output(["git", "-C", str(self.root), "rev-parse", "HEAD"], text=True).strip()
+        (self.root / "docs/results/evidence.md").unlink()
+        return "https://github.com/Jittor/jittor/blob/" + commit + "/docs/results/evidence.md"
+
+    def test_pinned_deleted_report_is_context_not_current_execution(self):
+        url = self.archived_report()
+        self.row["evidence"]["report"] = url
+        result = audit.scorecard(self.sources, [self.row], self.baseline, self.root)
+        self.assertEqual(len(result["accepted"]), 1, result["rejected"])
+        reference = result["accepted"][0]["evidence"]["report_reference"]
+        self.assertEqual(reference["kind"], "historical-context")
+        self.assertEqual(reference["sha256"], hashlib.sha256(b"measured evidence").hexdigest())
+        stale = copy.deepcopy(self.row)
+        stale["jittor_commit"] = "f" * 40
+        self.assertFalse(audit.scorecard(self.sources, [stale], self.baseline, self.root)["accepted"])
+        raw = Path(self.row["evidence"]["artifacts"][0]["path"])
+        raw.write_text("tampered")
+        self.assertFalse(audit.scorecard(self.sources, [self.row], self.baseline, self.root)["accepted"])
+
+    def test_archived_report_requires_real_commit_regular_blob_and_pinned_url(self):
+        url = self.archived_report()
+        commit = url.split("/blob/")[1].split("/")[0]
+        tree = subprocess.check_output(["git", "-C", str(self.root), "rev-parse", "HEAD^{tree}"], text=True).strip()
+        invalid = (url.replace(commit, "main"), url.replace(commit, commit[:7]),
+                   url.replace(commit, "f" * 40), url.replace(commit, tree),
+                   url.replace("evidence.md", "missing.md"),
+                   url.replace("docs/results/evidence.md", "docs/results/../evidence.md"),
+                   url.replace("github.com", "example.invalid"), url + "?raw=1")
+        for value in invalid:
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                audit.validate_report_reference(value, self.root)
+        self.assertEqual(audit.validate_report_reference(url + "#scope", self.root),
+                         audit.validate_report_reference(url, self.root))
+        self.assertEqual(audit.report_references("[old](" + url + ")"), ([], [url]))
+        names, historical = audit.report_references("[old](" + url + ") docs/results/current.md")
+        self.assertEqual(names, ["current.md"])
+        self.assertEqual(historical, [url])
+
+    def test_archived_report_rejects_symlink_blob(self):
+        url = self.archived_report()
+        link = self.root / "docs/results/link.md"
+        link.symlink_to("evidence.md")
+        subprocess.run(["git", "-C", str(self.root), "add", "docs/results/link.md"], check=True)
+        subprocess.run(["git", "-C", str(self.root), "-c", "user.name=Fixture",
+                        "-c", "user.email=fixture@example.invalid", "commit", "-qm", "Symlink fixture"], check=True)
+        commit = subprocess.check_output(["git", "-C", str(self.root), "rev-parse", "HEAD"], text=True).strip()
+        url = "https://github.com/Jittor/jittor/blob/" + commit + "/docs/results/link.md"
+        with self.assertRaisesRegex(ValueError, "regular historical report blob"):
+            audit.validate_report_reference(url, self.root)
+
     def test_deepspeed_engine_gate_is_separate_from_ordinary_model_cases(self):
         row = next(item for item in audit.audit(ROOT)["repos"] if item["repo"] == "deepspeed")
         self.assertEqual(row["registered_cases"], [])
@@ -111,8 +167,8 @@ class CoverageAuditTests(unittest.TestCase):
         nox = self.root / "noxfile.py"
         nox.write_text(session_source)
         self.assertEqual(len(audit.dedicated_gates(self.root)["deepspeed"]), 1)
-        for target, source in ((gate, test_source), (trellis_gate, trellis_source), (swift_gate, swift_source),
-                               (flash_gate, flash_source), (verl_gate, verl_source),
+        for target, source in ((gate, test_source), (trellis_gate, trellis_source),
+                               (flash_gate, flash_source),
                                (mm_gate, mm_source), (nox, session_source)):
             with self.subTest(path=target.name):
                 target.write_text("def unrelated(): pass\n")
@@ -120,24 +176,6 @@ class CoverageAuditTests(unittest.TestCase):
                     audit.dedicated_gates(self.root)
                 target.write_text(source)
 
-        for invalid in ("def test_ms_swift_trainer_full_llama(): pass\n",
-                        "class WrongOwner:\n    def test_ms_swift_trainer_full_llama(self): pass\n",
-                        "class EcosystemSwift:\n    pass\n"
-                        "def unrelated():\n    def test_ms_swift_trainer_full_llama(): pass\n"):
-            swift_gate.write_text(invalid)
-            with self.subTest(source=invalid), self.assertRaisesRegex(ValueError, "dedicated gate"):
-                audit.dedicated_gates(self.root)
-
-        swift_gate.write_text(swift_source)
-        for invalid in (
-                verl_source.replace("    def test_verl_distillation_k3(self): pass\n", ""),
-                verl_source.replace("    def test_verl_ppo_gae_vanilla(self): pass\n", ""),
-                verl_source.replace("EcosystemVERLTraining", "WrongOwner")):
-            verl_gate.write_text(invalid)
-            with self.subTest(source=invalid), self.assertRaisesRegex(ValueError, "dedicated gate"):
-                audit.dedicated_gates(self.root)
-
-        verl_gate.write_text(verl_source)
         for invalid in (
                 mm_source.replace("    def test_mmengine_train_step(self): pass\n", ""),
                 mm_source.replace("    def test_mmcv_convmodule_train_step(self): pass\n", ""),
@@ -164,27 +202,19 @@ class CoverageAuditTests(unittest.TestCase):
                                     for node in item["tests"]))
 
 
-    def test_swift_trainer_class_method_is_a_dedicated_gate_without_fake_case(self):
+    def test_ms_swift_protocol_is_owned_by_independent_repository(self):
         row = next(item for item in audit.audit(ROOT)["repos"] if item["repo"] == "ms-swift")
-        case = "ms_swift_trainer_full_llama"
-        self.assertNotIn(case, row["registered_cases"])
-        self.assertNotIn(case, [item["case"] for item in row["gate_cases"]])
-        self.assertEqual(row["dedicated_gates"], [{
-            "protocol": "swift-trainer", "session": "ecosystem_swift",
-            "tests": ["compat/tests/torch/test_ecosystem_swift.py::EcosystemSwift::test_ms_swift_trainer_full_llama"],
-        }])
+        self.assertEqual(row["dedicated_gates"], [])
+        self.assertEqual(row["external_repository"], "https://github.com/JittorEcosystem/jittor-ms-swift")
         self.assertIsNone(row["verified_level"])
 
-    def test_verl_training_discovers_both_actual_class_methods_without_claiming_execution(self):
+
+    def test_verl_protocol_is_owned_by_independent_repository(self):
         row = next(item for item in audit.audit(ROOT)["repos"] if item["repo"] == "verl")
-        self.assertEqual(set(row["registered_cases"]),
-                         {"verl_ppo_gae_vanilla", "verl_distillation_k3"})
-        self.assertEqual(row["dedicated_gates"], [{
-            "protocol": "verl-component-training", "session": "ecosystem_verl_training",
-            "tests": ["compat/tests/torch/test_ecosystem_verl_training.py::EcosystemVERLTraining::" + name
-                      for name in ("test_verl_ppo_gae_vanilla", "test_verl_distillation_k3")],
-        }])
+        self.assertEqual(row["dedicated_gates"], [])
+        self.assertEqual(row["external_repository"], "https://github.com/JittorEcosystem/jittor-verl")
         self.assertIsNone(row["verified_level"])
+
 
     def artifact_json(self, row, role, value):
         self.serial += 1

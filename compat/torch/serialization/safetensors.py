@@ -247,6 +247,8 @@ def _save_dict(tensors, metadata=None):
     if metadata:
         header["__metadata__"] = {str(k): str(v) for k, v in metadata.items()}
     raw_header = json.dumps(header, separators=(",", ":")).encode("utf-8")
+    # The format aligns the data buffer to eight bytes with JSON whitespace.
+    raw_header += b" " * (-len(raw_header) % 8)
     return struct.pack("<Q", len(raw_header)) + raw_header + b"".join(blobs)
 
 

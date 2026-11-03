@@ -1,15 +1,10 @@
 # Known Limitations
 
-This page summarizes **user-visible open items**: things that affect the numbers you get,
-the speed, or whether an API is available at all. Each entry has an identifier pointing to
-the [issue ledger](https://github.com/Jittor/jittor/blob/master/agent/manuals/known-issues.md)
--- **the ledger is the single source of truth**, with reproduction commands, measurement
-conditions, disproven hypotheses, and current progress; this page gives only one sentence
-and its impact.
+[Section contents](index.en.md) · [中文](known-limitations.md)
 
-Only **open** items are listed. Fixed entries are removed from the ledger, and the fix
-evidence stays in result reports and Git history. Entries that are purely test
-infrastructure, gate runtime, or static-check coverage are not listed here.
+This page summarizes user-visible limitations from the [historical records](https://github.com/Jittor/jittor/blob/3679de22c02c83b982432a0e1bdb3da148411c50/agent/manuals/known-issues.md): numerical behavior, performance and unavailable APIs. The KI identifiers preserve their original reproduction and evidence links. This cleanup does not revalidate or close them; check the latest GitHub issue/PR and reproduce against your version before relying on an old status.
+
+Update this summary when a limitation is fixed, with a link to its verification. Test-infrastructure-only issues remain outside this user guide.
 
 ## Numerics and semantics
 
@@ -18,7 +13,7 @@ infrastructure, gate runtime, or static-check coverage are not listed here.
 | `KI-DTYPE-002` | implicit construction in `jt.array` narrows 64-bit NumPy values to 32 bits | current default behavior, with an explicit escape hatch; specify the dtype explicitly when mixing float64 data |
 | `KI-SEMANTICS-003` | backend verification for floating-point comparisons is incomplete | CPU/CUDA and NPU float32 verified; other NPU dtypes and ROCm unverified |
 | `KI-OPS-002` | backend verification for integer floor-division is incomplete | CPU/CUDA/NPU verified, ROCm pending |
-| `KI-COMPLEX-001` | native complex capabilities have gaps | some linear algebra and FFT go through a real/imaginary bridge, `complex128` unsupported; see [complex dtype](../notes/complex-dtype.en.md) |
+| `KI-COMPLEX-001` | Gaps in complex operators and higher derivatives | complex64/complex128 are native dtypes; see [complex dtypes](../notes/numerics/complex-dtype.en.md) for FFT, backend and derivative-order limits |
 
 ## Performance and memory
 
@@ -29,9 +24,8 @@ infrastructure, gate runtime, or static-check coverage are not listed here.
 | `KI-CODEGEN-004` | fused elementwise kernels in one UNet2D step are about 10% slower | same as above |
 | `KI-TUNER-001` | with hand-written meta-operator product forms, matmul/conv relay does not trigger and falls back to a generic kernel | the common user path is fixed; hand-written forms are still much slower |
 | `KI-OPS-006` | NaN-correct CPU max/min reductions run at only half speed | results correct, throughput halved (already improved by half) |
-| `KI-EXEC-004` | pipelined execution costs 43% more peak memory | measured and accepted trade-off; see [pipelined execution](../notes/pipelined-execution.en.md) |
+| `KI-EXEC-004` | pipelined execution costs 43% more peak memory | measured and accepted trade-off; see [pipelined execution](../notes/runtime/pipelined-execution.en.md) |
 | `KI-EXEC-010` | backward graph construction does not participate in pipeline submission | the device is idle while the backward graph is built |
-| `KI-COMPAT-009` | dividing a float32 tensor by a Python float computes in float64 | results match PyTorch, at the cost of one extra wide-type operation |
 | `KI-DIST-001` | FSDP2 flat sharding peaks higher than the unsharded model | numerically correct; no memory savings, see `compat/tests/fsdp2/test_fsdp_memory.py` |
 | `KI-BACKEND-011` | the oneDNN CPU path only handles float32, and per-call overhead is unmeasured | non-float32 CPU convolution/matmul goes through the generic kernel |
 
@@ -40,9 +34,9 @@ infrastructure, gate runtime, or static-check coverage are not listed here.
 | ID | Symptom | Impact |
 | --- | --- | --- |
 | `KI-COMPAT-001` | the Torch namespace mixes native-only helpers with imported symbols | `dir(torch)` has more entries than real torch; registered in the Torch API inventory |
-| `KI-COMPAT-002` | `torch.ops.aten` has no native operator surface | `import vllm_omni` does not get past the import |
+| `KI-COMPAT-002` | No general native `torch.ops.aten` surface | Adapters register bounded operators; import success does not imply arbitrary aten support |
 | `KI-COMPAT-003` | nested tensors are not `Tensor` | `isinstance(torch.nested.as_nested_tensor(...), torch.Tensor)` is false |
-| `KI-COMPAT-004` | factory function results are not backward leaves | `torch.ones(3, requires_grad=True).is_leaf` is false; gradients themselves are correct |
+| `KI-COMPAT-004` | Tensor aliases lack some mutation guards and dynamic trainability semantics | View autograd still differs; the former factory-leaf issue is closed |
 | — | no Lightning compatibility layer | `pytorch_lightning` / `lightning` are unsupported; the in-house `jittor.lightning` was removed in 2026-07 |
 | — | compiled PyTorch extensions cannot be installed | packages compiled against the PyTorch C++ ABI such as `mmcv.ops` and `torch_npu`; an architectural boundary, see [Torch compatibility](../compatibility/torch.en.md) |
 
@@ -65,5 +59,5 @@ infrastructure, gate runtime, or static-check coverage are not listed here.
 | `KI-EXEC-008` | the CUDA convolution test file occasionally aborts when the live forward count underflows | the whole process aborts |
 
 Backends awaiting hardware acceptance (ROCm, Iluvatar Corex, multi-card HCCL, cross-machine)
-are listed in [Platform support](platform-support.en.md) and
-[`agent/manuals/deferred-hardware.md`](https://github.com/Jittor/jittor/blob/master/agent/manuals/deferred-hardware.md).
+are listed in [Platform support](hardware/platform-support.en.md) and
+[historical record](https://github.com/Jittor/jittor/blob/3679de22c02c83b982432a0e1bdb3da148411c50/agent/manuals/deferred-hardware.md).

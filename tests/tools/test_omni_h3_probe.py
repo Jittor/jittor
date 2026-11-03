@@ -11,7 +11,7 @@ from _helpers.child_process import run_python_child
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SCRIPT = ROOT / "agent/skills/vllm-omni-torch-compat/scripts/probe_h3.py"
+SCRIPT = ROOT / "tools/ecosystem/vllm_omni/probe_h3.py"
 
 
 class H3ProbeContracts(unittest.TestCase):

@@ -15,6 +15,20 @@ class TestPackagingStructure(unittest.TestCase):
         if not cls.pyproject_path.is_file():
             raise unittest.SkipTest("packaging metadata requires a source checkout")
 
+    def test_notebook_container_copies_every_runtime_resource_root(self):
+        # Core package-data maps resources outside python/. A pip install can
+        # otherwise succeed while the installed JIT compiler lacks its sources.
+        spec = importlib.util.spec_from_file_location(
+            "manifest_container_contract", self.repo_root / "tools/build/generate_manifest.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        roots = {Path(path).parts[0] for path in module.runtime_resources(self.repo_root)}
+        copied = set()
+        for line in (self.repo_root / "Dockerfile").read_text().splitlines():
+            if line.startswith("COPY "):
+                copied.update(line.split()[1:-1])
+        self.assertFalse(roots - copied, "Docker build omits runtime resource roots")
+
     def test_find_packages_matches_every_regular_package(self):
         from setuptools import find_packages
 
@@ -23,7 +37,7 @@ class TestPackagingStructure(unittest.TestCase):
             for path in self.python_root.rglob("__init__.py")
         }
         # `python/jittor/compat` is a development symlink to the top-level
-        # compat/ tree -- the separate jittor-torch distribution. rglob does not
+        # compat/ tree -- the separate jittor-compat distribution. rglob does not
         # follow it, and setup.py excludes it so the core wheel never ships
         # another distribution's packages, which `test_pyproject_uses_regular
         # _package_discovery` pins; discovery is asked the same question here.
@@ -81,12 +95,39 @@ class TestPackagingStructure(unittest.TestCase):
         self.assertTrue(config["tool"]["setuptools"]["include-package-data"])
         with (self.repo_root / "compat/pyproject.toml").open("rb") as stream:
             compat_config = tomllib.load(stream)
-        self.assertEqual(compat_config["project"]["name"], "jittor-torch")
+        self.assertEqual(compat_config["project"]["name"], "jittor-compat")
         self.assertNotIn("jittor-torch-shim", config["project"].get("scripts", {}))
         self.assertEqual(
             compat_config["project"]["scripts"]["jittor-torch-shim"],
             "jittor.compat.shim.deploy:main",
         )
+
+    def test_companion_versions_track_the_core_release(self):
+        try:
+            import tomllib
+        except ImportError:
+            try:
+                import tomli as tomllib
+            except ImportError:
+                from setuptools._vendor import tomli as tomllib
+        from packaging.requirements import Requirement
+        from packaging.utils import canonicalize_name
+
+        tree = ast.parse((self.python_root / "jittor/__init__.py").read_text())
+        versions = [ast.literal_eval(node.value) for node in tree.body
+                    if isinstance(node, ast.Assign)
+                    and any(isinstance(target, ast.Name) and target.id == "__version__"
+                            for target in node.targets)]
+        self.assertEqual(len(versions), 1, "core version must remain a single literal")
+        core_version = versions[0]
+        with (self.repo_root / "compat/pyproject.toml").open("rb") as stream:
+            frontend = tomllib.load(stream)["project"]
+        self.assertEqual(frontend["version"], core_version)
+        for project, name in ((frontend, "jittor"),):
+            with self.subTest(project=project["name"]):
+                dependencies = [Requirement(value) for value in project["dependencies"]]
+                matched = [item for item in dependencies if canonicalize_name(item.name) == name]
+                self.assertEqual(matched, [Requirement(name + "==" + core_version)])
 
     def test_manifest_covers_runtime_trees_without_cache_payloads(self):
         from importlib.util import module_from_spec, spec_from_file_location

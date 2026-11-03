@@ -10,8 +10,8 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SCRIPT_DIR = Path("agent/skills/flash-attention-torch-compat/scripts")
-RUNBOOK = ROOT / "agent/skills/torch-compat-repo-runbook/scripts"
+SCRIPT_DIR = Path("tools/ecosystem/flash_attention")
+RUNBOOK = ROOT / "tools/ecosystem"
 
 
 def load_module(name, path):

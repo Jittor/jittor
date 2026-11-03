@@ -77,16 +77,20 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        library: [peft, swift, verl, transformers, openmmlab, diffusers, metric_tensordict, accelerate]
+        library: [peft, openmmlab, diffusers, accelerate]
     steps:
-      - name: Check out measured source
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
+      # Git must precede checkout so container images without it do not fall
+      # back to an archive without the immutable report/source objects.
       - name: Install native CPU and source-provenance toolchain
         run: |
           apt-get update
           apt-get install --yes --no-install-recommends build-essential libomp-dev git ca-certificates
+      - name: Check out measured source
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          # Historical report links are verified against local Git blobs.
+          fetch-depth: 0
       - name: Install OpenCV runtime libraries
         if: matrix.library == 'openmmlab'
         run: apt-get install --yes --no-install-recommends libgl1 libglib2.0-0t64
@@ -117,7 +121,6 @@ jobs:
             ${{ runner.temp }}/maintained-${{ matrix.library }}/commands.json
             ${{ runner.temp }}/maintained-${{ matrix.library }}/provision.json
             ${{ runner.temp }}/maintained-${{ matrix.library }}/upstream-proof.json
-            ${{ runner.temp }}/maintained-${{ matrix.library }}/swift-inventory.json
             ${{ runner.temp }}/maintained-${{ matrix.library }}/resolved-lock-*.txt
             ${{ runner.temp }}/maintained-${{ matrix.library }}/lab/_state/nox/**/measurements/**
             ${{ runner.temp }}/maintained-${{ matrix.library }}/maintained-output/

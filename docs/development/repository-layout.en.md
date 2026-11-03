@@ -1,5 +1,9 @@
 # Repository layout
 
+[Section contents](index.en.md) · [中文](repository-layout.md)
+
+Use this to place code, resources, tests or tools. It defines repository and distribution boundaries; [source architecture](source-architecture.en.md) covers dependencies within modules, and the [test system](testing/test-system.en.md) covers validation.
+
 - Status: accepted
 - Date: 2026-08-11
 - Last reviewed: 2026-09-09
@@ -59,7 +63,7 @@ validated independently**:
   (the tracer is reached by the binding layer through its explicit module name);
 - `python/jittor/contrib/math_util/src/*.h`;
 - `compat/shim/cpp_extension/{include,src}/**`, **owned exclusively** by the optional
-  `jittor-torch` distribution as the installed ABI resource boundary for extensions;
+  `jittor-compat` distribution as the installed ABI resource boundary for extensions;
 - `python/jittor_utils` as a sibling directory of `python/jittor`;
 - the literal `__version__ = '...'` assignment in `python/jittor/__init__.py` -- as long as
   release and cache readers still parse it directly.
@@ -80,24 +84,24 @@ directory; the root `README.md` and `README.en.md` are paired the same way. Each
 
 **The repository keeps no process documents such as task boards, plans, handoff notes or
 assignments.** Tasks, status and handoff are recorded in GitHub issues and PRs, and validation
-evidence goes into PR descriptions; items awaiting hardware acceptance are in
-[`agent/manuals/deferred-hardware.md`](https://github.com/Jittor/jittor/blob/master/agent/manuals/deferred-hardware.md),
-and defects and limitations are in the
-[issue ledger](https://github.com/Jittor/jittor/blob/master/agent/manuals/known-issues.md).
+evidence goes into PR descriptions. Inherited hardware items awaiting revalidation remain in the
+[historical record](https://github.com/Jittor/jittor/blob/3679de22c02c83b982432a0e1bdb3da148411c50/agent/manuals/deferred-hardware.md),
+and inherited defect/limitation evidence remains in the
+[historical record](https://github.com/Jittor/jittor/blob/3679de22c02c83b982432a0e1bdb3da148411c50/agent/manuals/known-issues.md).
 Process material from the 2.0 cleanup was deleted at close-out (it remains in Git history):
 design contracts that still hold moved into `docs/development/`, `docs/notes/` and
-`docs/compatibility/`, validation reports that are still the only evidence for an open issue
-were condensed into `docs/results/`, and the wheel-content baseline moved into
-`tools/release/baselines/`.
+`docs/compatibility/`. Historical validation reports use commit-pinned references; new execution
+records belong in GitHub issues/PRs. `docs/` contains no dated reports, result trees or presentation
+artifacts. Wheel-content baselines live in `tools/release/baselines/`.
 
 Active indexes and inbound links must resolve; archived conclusions and their original test
 evidence are **not rewritten into present-day success**. The documentation checks maintain this
 "active/archived" boundary.
 
-`agent/` contains only `manuals/` and `skills/`; repository check scripts always live in
-`tools/`. The workflow entry point is
-[`agent/manuals/agent-index.md`](https://github.com/Jittor/jittor/blob/master/agent/manuals/agent-index.md).
-The community project list is in `docs/community/`; the ASV source configuration is
+`agent/` contains only `README.md` and `skills/`; collaboration rules live in root `AGENTS.md`, and repository check scripts live in
+`tools/`. Choose a practical method from
+[skill catalogue](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/README.md).
+The community project list is in `docs/project/community/`; the ASV source configuration is
 `benchmarks/asv/asv.conf.json` -- nox derives absolute input and external output paths from
 that configuration and does not move benchmark run state into the working tree.
 All benchmarks belong under [`benchmarks/`](https://github.com/Jittor/jittor/blob/2.0-refactor/benchmarks/README.md):
@@ -150,9 +154,9 @@ preserved only in Git history; the layout itself is guarded by the structural ga
 │   ├── nn/  optim/  autograd/  fft/  sparse/  dataset/  transform/  models/
 │   ├── linalg/  distributions/  init/
 │   ├── distributed/  contrib/  tools/
-├── compat/                   # 独立发行物（jittor-torch）：torch shim、fsdp2、triton；vLLM 属于 adapters/
+├── compat/                   # 独立发行物（jittor-compat）：torch shim、fsdp2、triton；downstream integrations live in independent JittorEcosystem repositories
 ├── tools/  tests/  docs/  examples/  benchmarks/
-└── agent/                    # 只有 manuals/ 与 skills/
+└── agent/                    # README.md 与 skills/
 ```
 
 Three rules the old tree did not state:
@@ -242,13 +246,7 @@ Torch compatibility is split by **ownership**, not by downstream project:
    **Mainline Jittor installs no resident TRELLIS or Gaussian Splatting finder into every
    process.**
 
-The vLLM glue code and its dedicated tests are owned by `adapters/jittor_adapters/vllm` and
-`adapters/tests/vllm` in the main repository, distributed with the existing
-`jittor-torch-adapters` distribution, **without a separate repository or release**. Neither the
-core nor `jittor-torch` packages that implementation, nor the abandoned `jittor.compat.vllm`.
-The optional Torch stage only discovers a module-patch entry point named `jittor_vllm`; when it
-is absent the stage stays optional. That adapter uses the shared, owner-aware rollback mechanism
-to save pre-import extension settings and post-import patches.
+Downstream glue and its dedicated tests belong to independent [JittorEcosystem](https://github.com/JittorEcosystem) repositories. The root README links the ecosystem organization; neither core nor `jittor-compat` depends on an adapter bundle. [jittor-vllm](https://github.com/JittorEcosystem/jittor-vllm) publishes the optional `jittor_vllm` module-patch entry point and owns its version/device acceptance. Integrations use the shared owner-aware transaction mechanism for registration and rollback.
 
 **An installer must report every attempted patch independently.** A broad
 `try/except Exception: pass` wrapped around a series of patches is forbidden -- a single failure

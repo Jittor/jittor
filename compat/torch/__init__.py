@@ -246,7 +246,7 @@ class TorchActivationError(ImportError, RuntimeError):
             pass
 
     and a bare `RuntimeError` walks straight through it. That is not a torch
-    problem: on a machine with jittor-torch deployed, `import tensorboardX`
+    problem: on a machine with jittor-compat deployed, `import tensorboardX`
     failed outright, and it fails the same way for any package written that
     way, *including for programs using only native Jittor*.
 

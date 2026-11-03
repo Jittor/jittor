@@ -12,8 +12,8 @@ import zipfile
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "agent/skills/torch-compat-repo-runbook/scripts"))
-sys.path.insert(0, str(ROOT / "agent/skills/vllm-omni-torch-compat/scripts"))
+sys.path.insert(0, str(ROOT / "tools/ecosystem"))
+sys.path.insert(0, str(ROOT / "tools/ecosystem/vllm_omni"))
 import _omni_installation as installation  # noqa: E402
 
 

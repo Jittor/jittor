@@ -33,7 +33,7 @@ def import_torch(runtime, device="cuda"):
     """Return ``torch`` for the requested runtime, and refuse the other one.
 
     The Jittor side is a plain ``import torch`` in an environment with
-    ``jittor-torch`` installed -- what a user does. The in-process
+    ``jittor-compat`` installed -- what a user does. The in-process
     ``JITTOR_TORCH_SHIM=1`` switch the unit tests use installs the module but
     not the runtime site that publishes ``torch``'s distribution metadata, so
     Transformers and Diffusers decide PyTorch is absent and refuse to build a
@@ -46,7 +46,7 @@ def import_torch(runtime, device="cuda"):
 
         if not hasattr(torch, "_torch_compat_install_context"):
             raise SystemExit("torch did not resolve to the Jittor shim; "
-                             "install jittor-torch (pip install -e compat)")
+                             "install jittor-compat (pip install -e compat)")
         return torch
     import torch
 

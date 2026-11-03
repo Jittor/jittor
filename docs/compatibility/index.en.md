@@ -1,26 +1,24 @@
-# Torch compatibility
+# Use Torch compatibility
 
-Jittor provides a Torch-compatible frontend: point `import torch` at Jittor and
-code written for PyTorch runs on Jittor.
+[Documentation](../index.en.md) · [中文](index.md)
 
+For existing PyTorch code, `jittor-compat` provides Torch-style tensors, models and optimizers backed by Jittor. Check the APIs you need, then select downstream integrations by their pinned versions and device support records.
+
+- First attempt: [install the compatibility package](../getting-started/installation.en.md), then run the [CPU training example](torch.en.md).
+- Make an application start with `import torch`: [installation and deployment](torch-shim.en.md).
+- Use vLLM, Transformers or another library: consult its [JittorEcosystem](https://github.com/JittorEcosystem) repository for versions, tutorials and support scope.
+
+These interfaces are not an unconditional replacement for every PyTorch version, model and device. Importing a library does not establish that its training, distributed or accelerator paths have been validated.
+
+<!-- sphinx-only
 ```{toctree}
-:maxdepth: 1
+:hidden:
 
 torch.en
 torch-shim.en
-torch-architecture.en
-torch-lowering.en
-principles.en
 ```
+-->
 
-| Document | Contents |
-| --- | --- |
-| [Torch-compatible API](torch.en.md) | Supported interface range, semantic differences, and unsupported parts |
-| [Torch shim](torch-shim.en.md) | How the shim is deployed, what it affects, and how to diagnose it |
-| [Layered architecture](torch-architecture.en.md) | Unified computation graph, framework lowering, and operator optimization |
-| [Call lowering](torch-lowering.en.md) | How PyTorch calls become IR nodes, and the new API surface |
-| [Compatibility principles](principles.en.md) | Acceptance gates: ownership, activation boundary, fallback, and evidence |
+## Change the compatibility implementation
 
-The compatibility layer only adapts **spelling and signatures**; the capability
-itself comes from Jittor. When Jittor does not provide a capability, the layer
-reports a clear error instead of silently returning a suspicious result.
+Maintainers should read the [compatibility principles](../development/compatibility/principles.en.md), then the [architecture](../development/compatibility/torch-architecture.en.md) and [call lowering](../development/compatibility/torch-lowering.en.md). These explain ownership and acceptance requirements; they are not prerequisites for running an application.

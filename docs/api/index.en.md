@@ -1,8 +1,15 @@
 # API reference
 
-API pages read the public exports of the installed Jittor package.
-`inventory.json` is the single machine-readable source for their stability
-contract; the pages themselves do not repeat the symbol list.
+[Documentation](../index.en.md) · [中文](index.md)
+
+Find native Jittor modules and functions by task. Parameters and public objects come from the package installed when the documentation is built; availability also depends on your version and device. For existing Torch code, read the [Torch compatibility guide](../compatibility/torch.en.md).
+
+- Tensors and gradients: [core](core.en.md).
+- Models and training: [layers](nn.en.md), [attention](nn-attention.en.md), [models](models.en.md), [initialization](init.en.md), [optimizers and schedulers](optim.en.md).
+- Data preparation: [datasets](dataset.en.md), [transforms](transform.en.md).
+- Specialized computation: [linear algebra](linalg.en.md), [distributions](distributions.en.md), [3D losses](loss3d.en.md), [contributed utilities](contrib.en.md).
+
+If you have not written a training script yet, start with the [quickstart](../getting-started/quickstart.en.md).
 
 :::{autosummary}
 jittor
@@ -20,7 +27,9 @@ jittor.distributions
 jittor.loss3d
 :::
 
+<!-- sphinx-only
 :::{toctree}
+:hidden:
 :maxdepth: 2
 
 core.en
@@ -36,3 +45,4 @@ linalg.en
 distributions.en
 loss3d.en
 :::
+-->

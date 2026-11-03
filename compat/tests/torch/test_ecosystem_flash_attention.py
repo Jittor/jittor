@@ -14,7 +14,7 @@ from _helpers.artifacts import artifact_directory
 
 
 ROOT = Path(__file__).resolve().parents[3]
-SCRIPTS = ROOT / "agent/skills/flash-attention-torch-compat/scripts"
+SCRIPTS = ROOT / "tools/ecosystem/flash_attention"
 APIS = (
     "flash_attn_func", "flash_attn_kvpacked_func", "flash_attn_qkvpacked_func",
     "flash_attn_varlen_func", "flash_attn_varlen_kvpacked_func", "flash_attn_varlen_qkvpacked_func",

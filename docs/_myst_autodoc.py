@@ -10,6 +10,7 @@ import json
 from myst_parser.mdit_to_docutils.base import make_document
 from myst_parser.mocking import MockRSTParser
 from pathlib import Path
+from sphinx import addnodes
 from sphinx.ext.autodoc.directive import DummyOptionSpec
 from sphinx.util.docutils import SphinxDirective
 
@@ -64,6 +65,21 @@ class RstDirectiveBridge(SphinxDirective):
         return list(nested.children)
 
 
+def _local_api_targets(result, document):
+    """Retain translated signature anchors without registering domain objects."""
+    for root in result:
+        for signature in root.findall(addnodes.desc_signature):
+            fullname = signature.get("fullname")
+            if not fullname:
+                continue
+            module = signature.get("module")
+            identifier = (module + "." if module else "") + fullname
+            # Overloaded signatures share one public anchor on a page.
+            if identifier not in document.ids:
+                signature["ids"].append(identifier)
+                document.note_explicit_target(signature)
+
+
 def _public_members(module_name):
     module = importlib.import_module(module_name)
     declared = getattr(module, "__all__", None)
@@ -102,8 +118,13 @@ class PublicAutomoduleBridge(RstDirectiveBridge):
         inventory_path = Path(self.env.srcdir) / "api" / "inventory.json"
         self.env.note_dependency(str(inventory_path))
         inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
+        # Both language pages document the same API objects; the inventory
+        # stores only canonical (Chinese-default) docnames.
+        docname = self.env.docname
+        if docname.endswith(".en"):
+            docname = docname[:-3]
         for page in inventory["pages"]:
-            if page["docname"] == self.env.docname:
+            if page["docname"] == docname:
                 return {name for name in page["objects"] if name.rsplit(".", 1)[0] == module_name}
         raise RuntimeError("API inventory has no page for {}".format(self.env.docname))
 
@@ -117,12 +138,18 @@ class PublicAutomoduleBridge(RstDirectiveBridge):
         missing = sorted(rich_objects - discovered)
         if missing:
             raise RuntimeError("stable API objects are not publicly exported: {}".format(missing))
-        lines = [".. py:module:: {}".format(module_name), ""]
+        translated = self.env.docname.endswith(".en")
+        lines = [".. py:module:: {}".format(module_name)]
+        if translated:
+            lines.append("   :no-index:")
+        lines.append("")
         for member, _value, directive in members:
             qualified = module_name + "." + member
             if qualified not in rich_objects:
                 continue
             lines.append(".. {}{}:: {}".format(_ALIAS_PREFIX, directive, qualified))
+            if translated:
+                lines.append("   :no-index:")
             lines.append("")
         return "\n".join(lines) + "\n"
 
@@ -130,6 +157,8 @@ class PublicAutomoduleBridge(RstDirectiveBridge):
         module_name = self.arguments[0]
         rich_objects = self._rich_objects(module_name)
         result = super(PublicAutomoduleBridge, self).run()
+        if self.env.docname.endswith(".en"):
+            _local_api_targets(result, self.state.document)
         for member, value, _directive in _public_members(module_name):
             qualified = module_name + "." + member
             if qualified in rich_objects:

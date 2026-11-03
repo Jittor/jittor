@@ -34,7 +34,7 @@ def _oracle_env():
 
 def _real_torch_python():
     """Locate a Python interpreter with real (non-shim) PyTorch installed,
-    isolated from this repo's own jittor/jittor-torch. Mirrors
+    isolated from this repo's own jittor/jittor-compat. Mirrors
     tests/linalg/test_complex_spectral_gradients.py's helper of the same
     name/contract."""
     candidates = []

@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 
-SCRIPTS = Path(__file__).resolve().parents[2] / 'agent/skills/torch-compat-repo-runbook/scripts'
+SCRIPTS = Path(__file__).resolve().parents[2] / 'tools/ecosystem'
 
 
 @pytest.fixture
@@ -114,7 +114,7 @@ def test_new_source_closure_does_not_retrofit_old_commits(tmp_path, monkeypatch)
     git('add', '.')
     git('-c', 'commit.gpgsign=false', 'commit', '-qm', 'Old source closure')
     old = git('rev-parse', 'HEAD')
-    helper = 'agent/skills/torch-compat-repo-runbook/scripts/_runtime_platform.py'
+    helper = 'tools/ecosystem/_runtime_platform.py'
     (tmp_path / helper).write_text('# new platform source fixture\n', encoding='utf-8')
     git('add', helper)
     git('-c', 'commit.gpgsign=false', 'commit', '-qm', 'New source closure')

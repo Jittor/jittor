@@ -16,12 +16,12 @@ python benchmarks/catalog.py --suite torch-compat --json
 
 | 套件 | 回答的问题 | 运行方式 |
 | --- | --- | --- |
-| [`asv/`](asv/) | 算子、小模型、优化器和传输在不同提交间有没有回归 | `nox -s benchmark` / `nox -s benchmark_cuda`；CI 只选取部分工作负载，其余手工运行 |
+| [`asv/`](asv) | 算子、小模型、优化器和传输在不同提交间有没有回归 | `nox -s benchmark` / `nox -s benchmark_cuda`；CI 只选取部分工作负载，其余手工运行 |
 | [`torch_compat/`](torch_compat/README.md) | 同一份真实模型代码经 Jittor Torch 前端运行，与独立 PyTorch 相差多少 | 手工运行，设备选项为 CPU、CUDA、NPU；具体模型是否通过需看设备实测 |
 | [`acl/`](acl/README.md) | 原生 ACL 后端与 `torch_npu` 的速度、数值和 CANN 发射开销 | 在真实昇腾设备上手工运行，含 `xval/` 与 `probes/` |
 | [`ecosystem-speed`](../compat/tests/torch/test_ecosystem_speed.py) | 真实规模的生态前向与反向相对参考运行时多慢 | opt-in pytest 测量，显式设置比值阈值才作为门禁 |
-| [`graph-build`](../tools/benchmarks/graph_build_phases.py) | 构图的主机开销在哪个阶段，执行是否混进计时 | 手工诊断，CPU/CUDA；阶段细分需要 profiling build |
-| [`profiling`](../agent/skills/jittor-transformers-perf/SKILL.md) | 算子、训练、带宽与冷编译成本的瓶颈 | 按各 skill 的独立环境运行，工具的前端与计时口径各异 |
+| [`graph-build`](graph_build_phases.py) | 构图的主机开销在哪个阶段，执行是否混进计时 | 手工诊断，CPU/CUDA；阶段细分需要 profiling build |
+| [`profiling`](profiling/README.md) | 算子、训练、带宽与冷编译成本的瓶颈 | 按各 skill 的独立环境运行，工具的前端与计时口径各异 |
 
 这些套件各自保留依赖、计时协议与设备要求；ASV 只扫描 `asv/`，不会导入手工测量脚本。
 完整的计时、正确性和结果留存要求见[基准测试规范](../docs/performance/benchmarking.md)。

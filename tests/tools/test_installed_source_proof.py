@@ -9,7 +9,7 @@ import unittest
 import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] /
-                       "agent/skills/torch-compat-repo-runbook/scripts"))
+                       "tools/ecosystem"))
 from _installed_source_proof import installation_proofs, validate_installations  # noqa: E402
 
 

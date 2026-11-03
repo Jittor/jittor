@@ -833,33 +833,6 @@ def check_cache_disk_space(path, minimum_mb=None):
 lock_path: Optional[str] = None
 
 
-def _git_head_file(path):
-    """The file whose change can change the branch name, or None.
-
-    In a linked worktree ``.git`` is a *file* naming the real git directory,
-    and HEAD lives there, not next to the sources.
-    """
-    path = os.path.abspath(path)
-    while True:
-        candidate = os.path.join(path, ".git")
-        if os.path.isdir(candidate):
-            return os.path.join(candidate, "HEAD")
-        if os.path.isfile(candidate):
-            try:
-                with open(candidate) as f:
-                    line = f.readline().strip()
-            except OSError:
-                return None
-            if not line.startswith("gitdir:"):
-                return None
-            gitdir = line[len("gitdir:"):].strip()
-            if not os.path.isabs(gitdir):
-                gitdir = os.path.join(path, gitdir)
-            return os.path.join(gitdir, "HEAD")
-        parent = os.path.dirname(path)
-        if parent == path:
-            return None
-        path = parent
 
 
 def cache_root():

@@ -7,8 +7,7 @@ import unittest
 from unittest import mock
 
 
-SCRIPT = (Path(__file__).resolve().parents[2] / 'agent/skills/'
-          'torch-compat-repo-runbook/scripts/_trellis_registry.py')
+SCRIPT = (Path(__file__).resolve().parents[2] / 'tools/ecosystem/_trellis_registry.py')
 
 
 class TestTrellisRegistry(unittest.TestCase):

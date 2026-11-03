@@ -69,7 +69,7 @@ Jittor 采用分层治理结构，包含以下角色：
 - 后端（`backends/`：`cpu/ cuda/ acl/ rocm/ corex/ comm/`）
 - 神经网络模块（`python/jittor/nn/`）
 - 模型库（`python/jittor/models/`）
-- Torch 兼容层（`compat/`）与可选适配器（`adapters/`）
+- Torch 兼容层（`compat/`）与 [JittorEcosystem 下游集成](https://github.com/JittorEcosystem)
 - 文档（`docs/`）
 - 测试基础设施（`tests/`）
 - 构建系统和 CI（`.github/workflows/`、`noxfile.py`、`pyproject.toml`）

@@ -16,7 +16,7 @@ lazy execution -- `lazy_execution` defaults to on, `src/core/executor.cc`).
 Master's executor is a different, from-scratch rewrite (this file predates
 that fix landing here at all), and separately has its own ASAN-verified fix
 for an analogous relay/fusion use-after-free (KI-COMPILER-005 in
-`agent/manuals/known-issues.md`: `VarRelayManager::add_relay_group` freed
+`the historical issue records linked from AGENTS.md`: `VarRelayManager::add_relay_group` freed
 inputs a fused op still pointed at; fixed by making `removed_input_vars` own
 its vars via `VarPtr` instead of borrowing raw pointers) -- ownership rather
 than a manual counter. Master's `GetitemOp`/`SetitemOp` also hold no cached

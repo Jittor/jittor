@@ -239,7 +239,7 @@ class _DeviceProps:
 #: names were where a torch write landed). Because the tiers are stored rather than
 #: pushed to a flag, "the write was accepted and reads back" is not evidence
 #: that it took effect -- what pins that is the compute type the library call
-#: logs. See docs/notes/float32-precision-policy.md.
+#: logs. See docs/notes/numerics/float32-precision-policy.md.
 #:
 #: compat/tests/torch/test_torch_backends_tf32.py drives this table;
 #: compat/tests/torch/test_torch_compat_cuda_tf32.py pins each spelling to the

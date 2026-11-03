@@ -14,7 +14,7 @@
 手工运行，不被 pytest 收集，不进 CI。
 
 当前的差距表与它的测量条件见
-[`docs/results/2026-09-24-torch-compat-real-models.md`](../../docs/results/2026-09-24-torch-compat-real-models.md)。
+[`docs/results/2026-09-24-torch-compat-real-models.md`](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-09-24-torch-compat-real-models.md)。
 
 ## 工作负载
 
@@ -77,7 +77,7 @@ conda run -n torch-ref pip install "torch==2.11.0+cu128" \
     --index-url https://download.pytorch.org/whl/cu128
 conda run -n torch-ref pip install transformers==4.56.2 diffusers==0.35.1 numpy==1.26.4 nvidia-ml-py
 
-# Jittor 侧：core 用 compat 模式可编辑安装，再装 jittor-torch（见 agent/manuals/environment.md）
+# Jittor 侧：core 用 compat 模式可编辑安装，再装 jittor-compat（见 agent/skills/isolated-validation/SKILL.md）
 pip install -e ".[cuda12]" --group dev --config-settings editable_mode=compat
 pip install --no-deps --no-build-isolation -e compat
 pip install transformers==4.56.2 diffusers==0.35.1 nvidia-ml-py
@@ -143,7 +143,7 @@ python benchmarks/torch_compat/report.py old.json new.json       # 两次运行�
 ## 怎么读
 
 **比值 = Jittor 耗时 / PyTorch 耗时（每步中位数），小于 1 表示 Jittor 更快。** 与
-[`docs/performance/library-standing.md`](../../docs/performance/library-standing.md) 口径一致。
+[`docs/performance/library-standing.md`](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/performance/library-standing.md) 口径一致。
 
 - **时间**：计时步的中位数。预热至少跑工作负载声明的步数，然后一直跑到相邻两步相差不到
   10%（最多再加 20 步）——Jittor 的后几步仍可能碰到首次出现的形状而编译，固定步数的预热
@@ -184,3 +184,33 @@ dtype、batch/config、seed、精度策略、所需模型库与 NumPy 的版本�
 - 选一张空闲的卡（`--gpu`），不要和单元测试或另一个测速抢同一张卡；
 - 只把同一台机器、同一 `--size`、同一 dtype 的数字放在一起比；
 - 贴出结论时带上提交、GPU 和双方版本——`results.md` 的表头已经写好，直接引用它。
+
+## Ascend Qwen3 框架对照
+
+`benchmark_qwen3_ascend.py` 与 `compare_qwen3_ascend.py` 保留核心/compat 的整模回退、
+缓存与重放验证入口。它们不是 Transformers 全库支持声明；库版本组合和官方测试支持
+由 [jittor-transformers](https://github.com/JittorEcosystem/jittor-transformers) 维护。
+
+两侧使用相同本地 checkpoint、Transformers 版本、dtype 和生成长度，分别在 Jittor
+compat 与真实 `torch_npu` 解释器中运行。外部设置已分配的 `ASCEND_RT_VISIBLE_DEVICES`，
+配置 CANN，并为每个进程分配独立的 `JITTOR_HOME` 和临时目录。
+
+```bash
+python benchmarks/torch_compat/benchmark_qwen3_ascend.py \
+  --backend jittor --model "$MODEL_DIR" --dtype float16 \
+  --new-tokens 32 --fixed-length --warmups 6 --samples 5 --validate-prompts \
+  --logits-output "$RUN_DIR/jittor-logits.npy" --output "$RUN_DIR/jittor.json"
+```
+
+在真实 PyTorch 环境以 `--backend torch` 和不同输出路径运行同样参数，再比较：
+
+```bash
+python benchmarks/torch_compat/compare_qwen3_ascend.py \
+  "$RUN_DIR/jittor.json" "$RUN_DIR/torch.json" --output "$RUN_DIR/parity.json"
+```
+
+`RUN_DIR` 必须是 lab 内的本次运行目录。310P 的 `--allow-hf32`、权重转换、attention、
+static cache 和 compile 选项均按实际需求显式设置，记录两侧差异。`--validate-prompts`
+检查同模型的缓存/重放一致性，跨框架正确性仍要比较 token 与完整 logits；Jittor 侧还
+要求零后端回退。首次编译单列，稳态每个样本同步；不得把显式 compile 或权重预转换的
+收益归因于普通 eager 执行。详细可选参数以脚本的 `--help` 为准。

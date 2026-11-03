@@ -44,13 +44,24 @@ class TestDocsStructure(unittest.TestCase):
     def test_one_canonical_documentation_tree_remains(self):
         self.assertTrue((self.docs_root / "conf.py").is_file())
         self.assertTrue((self.docs_root / "index.md").is_file())
+        self.assertTrue((self.repo_root / "agent" / "README.md").is_file())
+        ignored = subprocess.run(
+            ("git", "check-ignore", "--no-index", "--", "agent/README.md"),
+            cwd=str(self.repo_root), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            universal_newlines=True,
+        )
+        self.assertEqual(ignored.returncode, 1, ignored.stdout + ignored.stderr)
         retired = (
             "doc",
+            "docs/results",
+            "docs/slides",
             "agent/design",
             "agent/results",
             "agent/baselines",
             "agent/scripts",
-            "agent/README.md",
+            "agent/manuals",
+            "agent/skills/jittor-dev-context",
+            "agent/skills/github-collaboration-commit",
             "asv.conf.json",
             "bench",
             "benchmarks/asv.conf.json",
@@ -74,6 +85,35 @@ class TestDocsStructure(unittest.TestCase):
         self.assertEqual(tracked.stdout, "")
         self.assertFalse(list(self.repo_root.rglob("*.src.md")))
         self.assertFalse(list(self.repo_root.rglob("*.ipynb")))
+
+    def test_skill_catalog_detects_missing_stale_and_misplaced_resources(self):
+        spec = spec_from_file_location(
+            "skill_governance", self.repo_root / "tools/docs/check_governance.py")
+        governance = module_from_spec(spec)
+        spec.loader.exec_module(governance)
+        self.assertEqual(governance.check_skill_catalog(self.repo_root / "agent"), [])
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            skill = root / "skills" / "sample"
+            skill.mkdir(parents=True)
+            (skill / "SKILL.md").write_text("# Sample\n")
+            catalog = root / "README.md"
+            catalog.write_text("[sample](skills/sample/SKILL.md)\n")
+            self.assertEqual(governance.check_skill_catalog(root), [])
+            catalog.write_text("[old](skills/old/SKILL.md)\n")
+            errors = governance.check_skill_catalog(root)
+            self.assertTrue(any("absent from catalog" in error for error in errors))
+            self.assertTrue(any("stale skill" in error for error in errors))
+            catalog.write_text("[sample](skills/sample/SKILL.md)\n")
+            (skill / "helper.py").write_text("pass\n")
+            self.assertTrue(any("belongs in scripts/" in error
+                                for error in governance.check_skill_catalog(root)))
+            (skill / "scripts").mkdir()
+            (skill / "helper.py").rename(skill / "scripts" / "helper.py")
+            self.assertEqual(governance.check_skill_catalog(root), [])
+            (skill / "SKILL.md").unlink()
+            self.assertTrue(any("missing skill entry" in error
+                                for error in governance.check_skill_catalog(root)))
 
     def test_sphinx_configuration_is_myst_only_and_import_safe(self):
         path = self.docs_root / "conf.py"
@@ -113,6 +153,24 @@ class TestDocsStructure(unittest.TestCase):
         self.assertIn("nodes.literal_block", adapter)
         self.assertIn('"inventory.json"', adapter)
         self.assertNotIn("eval-rst", adapter)
+
+    def test_site_navigation_is_hidden_on_github_and_expanded_for_sphinx(self):
+        import re
+
+        tree = ast.parse((self.docs_root / "conf.py").read_text())
+        handler = next(node for node in tree.body
+                       if isinstance(node, ast.FunctionDef) and node.name == "_expand_sphinx_only")
+        namespace = {"re": re}
+        exec(compile(ast.Module(body=[handler], type_ignores=[]), "conf.py", "exec"), namespace)
+        for fence in ("```", ":::"):
+            directive = fence + "{toctree}\n:hidden:\n\nchild\n" + fence
+            source = ["# Title\n<!-- ordinary comment -->\n<!-- sphinx-only\n" + directive + "\n-->\n"]
+            namespace["_expand_sphinx_only"](None, "index", source)
+            self.assertEqual(source[0], "# Title\n<!-- ordinary comment -->\n" + directive + "\n")
+        for page in self.docs_root.rglob("*.md"):
+            text = page.read_text(encoding="utf-8")
+            visible = re.sub(r"<!--.*?-->", "", text, flags=re.S)
+            self.assertNotIn("{toctree}", visible, str(page))
 
     def test_asv_config_preserves_repository_and_external_run_paths(self):
         config_path = self.repo_root / "benchmarks" / "asv" / "asv.conf.json"
@@ -213,6 +271,149 @@ class TestDocsStructure(unittest.TestCase):
         self.assertEqual(checked, 1)
         self.assertTrue(any("duplicate HTML anchors" in issue for issue in issues))
 
+    def test_api_build_checker_checks_both_languages(self):
+        spec = spec_from_file_location("_docs_checker", str(
+            self.repo_root / "tools/docs/check_build.py"))
+        checker = module_from_spec(spec)
+        spec.loader.exec_module(checker)
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "api").mkdir()
+            inventory = root / "inventory.json"
+            inventory.write_text(json.dumps({"pages": [{
+                "docname": "api/sample", "objects": ["jittor.Sample"],
+            }]}), encoding="utf-8")
+            (root / "api/sample.html").write_text('<div id="jittor.Sample"></div>')
+            issues, checked = checker._check_api(root, inventory)
+            self.assertEqual(checked, 1)
+            self.assertTrue(any("missing API page" in issue and "sample.en.html" in issue
+                                for issue in issues))
+            translated = root / "api/sample.en.html"
+            translated.write_text('<div id="jittor.sample"></div>')
+            issues, checked = checker._check_api(root, inventory)
+            self.assertEqual(checked, 2)
+            self.assertEqual(issues, ["jittor.Sample has no HTML anchor in api/sample.en"])
+            translated.write_text('<div id="jittor.Sample"></div>')
+            self.assertEqual(checker._check_api(root, inventory), ([], 2))
+            translated.write_text('<div id="jittor.Sample"></div>' * 2)
+            issues, checked = checker._check_api(root, inventory)
+            self.assertTrue(any("api/sample.en has duplicate HTML anchors" in issue
+                                for issue in issues))
+
+    def test_translated_autodoc_keeps_local_targets_without_global_registration(self):
+        from types import SimpleNamespace
+
+        source = self.docs_root / "_myst_autodoc.py"
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+        bridge = next(node for node in tree.body
+                      if isinstance(node, ast.ClassDef) and node.name == "PublicAutomoduleBridge")
+        method = next(node for node in bridge.body
+                      if isinstance(node, ast.FunctionDef) and node.name == "_source")
+        targets = next(node for node in tree.body
+                       if isinstance(node, ast.FunctionDef) and node.name == "_local_api_targets")
+        namespace = {"_ALIAS_PREFIX": "jittor-rst-", "_public_members": lambda module: [
+            ("Sample", None, "autoclass"), ("extra", None, "autofunction")],
+            "addnodes": SimpleNamespace(desc_signature=object)}
+        exec(compile(ast.Module(body=[method, targets], type_ignores=[]), str(source), "exec"),
+             namespace)
+        owner = SimpleNamespace(arguments=["jittor"], env=SimpleNamespace(docname="api/sample"),
+                                _rich_objects=lambda module: {"jittor.Sample"})
+        canonical = namespace["_source"](owner)
+        self.assertNotIn(":no-index:", canonical)
+        owner.env.docname += ".en"
+        translated = namespace["_source"](owner)
+        self.assertEqual(translated.count(":no-index:"), 2)
+        self.assertIn("jittor-rst-autoclass:: jittor.Sample", translated)
+        self.assertNotIn("jittor.extra", translated)
+        signatures = [dict(module="jittor", fullname="Sample", ids=[]),
+                      dict(module="jittor", fullname="Sample", ids=[]),
+                      dict(module="jittor", fullname="Sample.method", ids=[])]
+        document = SimpleNamespace(ids={})
+        def note_target(node):
+            for identifier in node["ids"]:
+                self.assertNotIn(identifier, document.ids)
+                document.ids[identifier] = node
+        document.note_explicit_target = note_target
+        root = SimpleNamespace(findall=lambda kind: signatures)
+        namespace["_local_api_targets"]([root], document)
+        self.assertEqual(set(document.ids), {"jittor.Sample", "jittor.Sample.method"})
+        self.assertEqual(signatures[1]["ids"], [])
+
+    def test_bilingual_autodoc_uses_the_canonical_inventory(self):
+        # Execute the production method without importing Sphinx or Jittor.
+        from types import SimpleNamespace
+
+        source = self.docs_root / "_myst_autodoc.py"
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+        bridge = next(node for node in tree.body
+                      if isinstance(node, ast.ClassDef) and node.name == "PublicAutomoduleBridge")
+        method = next(node for node in bridge.body
+                      if isinstance(node, ast.FunctionDef) and node.name == "_rich_objects")
+        namespace = {"Path": Path, "json": json}
+        exec(compile(ast.Module(body=[method], type_ignores=[]), str(source), "exec"), namespace)
+        rich_objects = namespace["_rich_objects"]
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            inventory = root / "api" / "inventory.json"
+            inventory.parent.mkdir()
+            inventory.write_text(json.dumps({"pages": [{
+                "docname": "api/contrib",
+                "objects": ["jittor.contrib.concat", "jittor.contrib.stack", "jittor.nn.Linear"],
+            }]}), encoding="utf-8")
+            dependencies = []
+            env = SimpleNamespace(srcdir=str(root), docname="api/contrib",
+                                  note_dependency=dependencies.append)
+            owner = SimpleNamespace(env=env)
+            for docname in ("api/contrib", "api/contrib.en"):
+                with self.subTest(docname=docname):
+                    env.docname = docname
+                    self.assertEqual(rich_objects(owner, "jittor.contrib"),
+                                     {"jittor.contrib.concat", "jittor.contrib.stack"})
+                    self.assertEqual(dependencies[-1], str(inventory))
+            env.docname = "api/missing.en"
+            with self.assertRaisesRegex(RuntimeError, "API inventory has no page for api/missing.en"):
+                rich_objects(owner, "jittor.contrib")
+            inventory.unlink()
+            with self.assertRaises(FileNotFoundError):
+                rich_objects(owner, "jittor.contrib")
+
+    def test_governance_rejects_dated_reports_but_keeps_topic_documents(self):
+        checker_path = self.repo_root / "tools" / "docs" / "check_governance.py"
+        spec = spec_from_file_location("_jittor_docs_governance", str(checker_path))
+        checker = module_from_spec(spec)
+        spec.loader.exec_module(checker)
+        with TemporaryDirectory() as directory:
+            checker.REPO_ROOT = Path(directory)
+            dated = (
+                "docs/results/2026-11-02-validation.md",
+                "docs/results/2026-11-02-validation.en.md",
+                "docs/development/2026-11-02.md",
+                "docs/notes/validation-2026-11-02.en.md",
+            )
+            retained = (
+                "docs/development/core-validation.md",
+                "docs/development/core-validation.en.md",
+                "docs/project/releases/2.0.md",
+                "docs/notes/iso-8601.md",
+                "agent/skills/example/references/2026-11-02.md",
+            )
+            for relative in dated:
+                with self.subTest(path=relative):
+                    errors = checker.check_document_names([checker.REPO_ROOT / relative])
+                    self.assertEqual(len(errors), 1)
+                    self.assertIn(relative, errors[0])
+                    self.assertIn("GitHub issues/PRs", errors[0])
+            self.assertEqual(checker.check_document_names([
+                checker.REPO_ROOT / relative for relative in retained
+            ]), [])
+
+    def test_documentation_tree_has_no_dated_report_names(self):
+        checker_path = self.repo_root / "tools" / "docs" / "check_governance.py"
+        spec = spec_from_file_location("_jittor_docs_governance", str(checker_path))
+        checker = module_from_spec(spec)
+        spec.loader.exec_module(checker)
+        self.assertEqual(checker.check_document_names(self.docs_root.rglob("*.md")), [])
+
     def test_docs_dependencies_are_locked_without_legacy_plugins(self):
         direct = {
             line.strip()
@@ -282,12 +483,8 @@ class TestDocsStructure(unittest.TestCase):
         merely because someone built the docs would report a clean repository as
         broken.
         """
-        # `docs/slides/` holds authored decks -- a .pptx and one standalone
-        # HTML presentation -- which are sources like any .md page. What this
-        # rule guards against is a build product committed beside its source.
-        authored = ("docs/slides/",)
         for pattern in ("*.rst", "*.pot", "*.mo", "*.html"):
-            tracked = [path for path in self._tracked(pattern) if not path.startswith(authored)]
+            tracked = self._tracked(pattern)
             self.assertEqual(tracked, [], pattern)
         self.assertEqual(self._tracked("_build/**"), [])
         self.assertFalse(any(path.is_dir() for path in self.docs_root.glob("_build/*")))
@@ -466,6 +663,49 @@ class TestDocsStructure(unittest.TestCase):
             self.repo_root, source, "https://cg.cs.tsinghua.edu.cn/jittor/", "markdown"
         )
         self.assertIsNone(website, website)
+
+    def test_pinned_repository_urls_use_git_history(self):
+        checker_path = self.repo_root / "tools" / "docs" / "check_links.py"
+        spec = spec_from_file_location("_jittor_docs_links", str(checker_path))
+        checker = module_from_spec(spec)
+        spec.loader.exec_module(checker)
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            def git(*arguments):
+                return subprocess.run(
+                    ("git",) + arguments, cwd=str(root), check=True,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    universal_newlines=True,
+                ).stdout.strip()
+
+            git("init")
+            (root / "docs").mkdir()
+            report = root / "docs" / "old report.md"
+            report.write_text("Historical evidence\n", encoding="utf-8")
+            git("add", "docs/old report.md")
+            git("-c", "user.name=Documentation test", "-c",
+                "user.email=docs@example.invalid", "commit", "-m", "Add report")
+            revision = git("rev-parse", "HEAD")
+            report.unlink()
+            (root / "docs" / "new.md").write_text("Current page\n", encoding="utf-8")
+            base = "https://github.com/Jittor/jittor/"
+
+            def resolve(kind, ref, path):
+                return checker._resolve(
+                    root, root / "README.md",
+                    base + kind + "/" + ref + "/" + path, "markdown",
+                )
+
+            self.assertIsNone(resolve("blob", revision, "docs/old%20report.md#evidence"))
+            self.assertIsNone(resolve("tree", revision, "docs"))
+            self.assertIn("missing repository URL target", resolve("blob", "master", "docs/old%20report.md"))
+            self.assertIsNone(resolve("blob", "master", "docs/new.md"))
+            self.assertIn("missing historical", resolve("blob", revision, "docs/new.md"))
+            self.assertIn("tree URL names a Git blob", resolve("tree", revision, "docs/old%20report.md"))
+            self.assertIn("blob URL names a Git tree", resolve("blob", revision, "docs"))
+            self.assertIn("fetch-depth: 0", resolve("blob", "0" * 40, "docs/old%20report.md"))
+            self.assertIn("escapes repository", resolve("blob", revision, "../outside.md"))
 
 
 if __name__ == "__main__":
