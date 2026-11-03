@@ -149,6 +149,9 @@ class _Sampler:
         self.data_source = data_source
     def __iter__(self):
         raise NotImplementedError
+    def __class_getitem__(cls, item):
+        # torch's Sampler is generic; libraries subclass it as Sampler[T].
+        return cls
 
 
 class _SequentialSampler(_Sampler):
