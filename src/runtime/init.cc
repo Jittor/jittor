@@ -120,10 +120,39 @@ void cleanup() {
 void wait_for_devices() {
     async_exec_wait();
 #ifdef HAS_ACCELERATOR
-    // Already raised to the program, which then chose to carry on; waiting
-    // would only raise the same lost context again as if it were news.
-    if (!accelerator_work_launched() || device_context_lost()) return;
-    backend_synchronize({accelerator_backend_id(), current_device()});
+    // Every device given work is waited for, not only the current one: the
+    // program may have switched away from the device that faulted. A device
+    // whose lost context was already raised to the program, which then chose
+    // to carry on, is skipped; waiting would only raise the same error again
+    // as if it were news.
+    auto backend = accelerator_backend_id();
+    uint64 lost = device_contexts_lost(backend);
+    uint64 devices = devices_launched(backend) & ~lost;
+    if (!devices) return;
+    // CUDA fails every device of the process once one has a sticky error
+    // (driver 580: a trap on device 1 makes device 0's synchronize and copies
+    // return the same code). After a loss the program has seen, a device's
+    // failure is news only if the device was given work since -- that work
+    // never ran. One given nothing since fails with the error already raised.
+    uint64 news = lost ? devices_launched_since_loss(backend) : devices;
+    const auto& ops = backend_ops(backend);
+    int previous = ops.current_device();
+    for (int device = 0; device < 64; ++device) {
+        uint64 bit = 1ull << device;
+        if (!(devices & bit)) continue;
+        // Selected first: synchronize() checks the current device's pending
+        // error before waiting, and a lost current device would report its
+        // old error in place of this one's.
+        if (device != ops.current_device()) ops.set_device(device);
+        try {
+            ops.synchronize(bit);
+        } catch (const std::exception&) {
+            // Absorbed only when the error was sticky (the check that raised
+            // it recorded this device as lost) and is the one already raised.
+            if ((news & bit) || !device_context_lost({backend, device})) throw;
+        }
+    }
+    if (previous >= 0 && previous != ops.current_device()) ops.set_device(previous);
 #endif
 }
 

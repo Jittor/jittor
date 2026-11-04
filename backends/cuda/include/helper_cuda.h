@@ -83,8 +83,19 @@ inline const char *cuda_error_note(cudaError_t error) {
           : "";
   }
 }
+// The device a CUDA error raised now belongs to: the one being synchronized
+// or launched on if a LaunchErrorScope says so, else the thread's selection.
+inline jittor::Device cuda_error_device() {
+  int index = -1;
+  if (cudaGetDevice(&index) != cudaSuccess) index = -1;
+  return jittor::launch_error_device({jittor::BackendId::Cuda, index});
+}
 inline void note_if_sticky(cudaError_t error) {
-  if (cuda_error_is_sticky(error)) jittor::note_device_context_lost();
+  if (cuda_error_is_sticky(error)) jittor::note_device_context_lost(cuda_error_device());
+}
+#else
+inline jittor::Device cuda_error_device() {
+  return jittor::launch_error_device({jittor::BackendId::Cuda, -1});
 }
 #endif
 // The other libraries' status codes carry no such note.
@@ -211,7 +222,8 @@ template <typename T>
 void peek_always(T result, char const *const func, const char *const file,
                  int const line) {
   if (result) {
-    if (jittor::device_context_lost()) return;
+    // Only the device whose lost context was already raised is quiet here.
+    if (jittor::device_context_lost(cuda_error_device())) return;
     LOGe << "CUDA teardown error at" << file >> ":" >> line << " code="
       >> static_cast<unsigned int>(result) >> "(" << _cudaGetErrorEnum(result) << ")"
       << func;

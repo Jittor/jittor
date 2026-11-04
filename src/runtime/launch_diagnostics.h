@@ -79,10 +79,30 @@ struct LaunchOperationScope {
     ~LaunchOperationScope();
 };
 EXTERN_LIB void record_active_launch(BackendStream stream);
-// Whether this process has launched anything on an accelerator. A device fault
-// only surfaces when something waits for the device, and only then is there a
-// device worth waiting for at exit; a CPU-only run must not create a context.
-EXTERN_LIB bool accelerator_work_launched();
+// The devices of `backend` this process has launched work on, one bit per
+// device index. A device fault only surfaces when something waits for that
+// device, so these are the devices worth waiting for at exit; a CPU-only run
+// must not create a context.
+EXTERN_LIB uint64 devices_launched(BackendId backend);
+// Those of them given work since a lost context was last recorded on any
+// device of `backend`.
+EXTERN_LIB uint64 devices_launched_since_loss(BackendId backend);
+
+// The device an error raised now belongs to: the one a LaunchErrorScope names,
+// else `current`.
+EXTERN_LIB Device launch_error_device(Device current);
+// Recorded once an error that leaves a device's context unusable (CUDA's
+// sticky errors, see cuda_error_is_sticky) has been raised. Every later call
+// on that device fails with it, so teardown's handle destroys there fail too,
+// and reporting each of those after the real error only buries it under
+// lines that name cuDNN or cuBLAS instead. Kept per device, and set only for
+// a device whose own call returned the error, so no other device's failures
+// are silenced on its account. (CUDA does fail every device of the process
+// once one has a sticky error -- measured on driver 580 -- but which of those
+// failures is news is wait_for_devices' question, not this record's.)
+EXTERN_LIB void note_device_context_lost(Device device);
+EXTERN_LIB bool device_context_lost(Device device);
+EXTERN_LIB uint64 device_contexts_lost(BackendId backend);
 
 struct LaunchErrorScope {
     Device previous_device;

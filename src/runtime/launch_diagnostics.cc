@@ -232,12 +232,43 @@ LaunchOperationScope::LaunchOperationScope(const LaunchRecord& record) : previou
     active_launch = &record;
 }
 LaunchOperationScope::~LaunchOperationScope() { active_launch = previous; }
-static std::atomic<bool> accelerator_launched{false};
-bool accelerator_work_launched() { return accelerator_launched.load(std::memory_order_relaxed); }
+// One bit per device index, per BackendId.
+static constexpr int kBackendSlots = 8;
+static std::atomic<uint64> launched_devices[kBackendSlots];
+static std::atomic<uint64> lost_devices[kBackendSlots];
+// Cleared each time a lost context is recorded on the backend.
+static std::atomic<uint64> launched_since_loss[kBackendSlots];
+static uint64 device_bit(Device device) {
+    uint32 slot = uint32(device.backend);
+    if (slot >= kBackendSlots || device.index < 0 || device.index >= 64) return 0;
+    return 1ull << device.index;
+}
+static uint64 backend_bits(const std::atomic<uint64>* bits, BackendId backend) {
+    uint32 slot = uint32(backend);
+    return slot < kBackendSlots ? bits[slot].load(std::memory_order_relaxed) : 0;
+}
+uint64 devices_launched(BackendId backend) { return backend_bits(launched_devices, backend); }
+uint64 device_contexts_lost(BackendId backend) { return backend_bits(lost_devices, backend); }
+uint64 devices_launched_since_loss(BackendId backend) {
+    return backend_bits(launched_since_loss, backend);
+}
+void note_device_context_lost(Device device) {
+    if (uint64 bit = device_bit(device)) {
+        launched_since_loss[uint32(device.backend)].store(0, std::memory_order_relaxed);
+        lost_devices[uint32(device.backend)].fetch_or(bit, std::memory_order_relaxed);
+    }
+}
+bool device_context_lost(Device device) {
+    return device_contexts_lost(device.backend) & device_bit(device);
+}
 void record_active_launch(BackendStream stream) {
-    if (stream.device.backend != BackendId::Cpu
-        && !accelerator_launched.load(std::memory_order_relaxed))
-        accelerator_launched.store(true, std::memory_order_relaxed);
+    if (stream.device.backend != BackendId::Cpu) {
+        uint64 bit = device_bit(stream.device);
+        uint32 slot = uint32(stream.device.backend) % kBackendSlots;
+        for (auto* launched : {&launched_devices[slot], &launched_since_loss[slot]})
+            if (bit && !(launched->load(std::memory_order_relaxed) & bit))
+                launched->fetch_or(bit, std::memory_order_relaxed);
+    }
     if (!active_launch) return;
     runtime_launch_history().record(*active_launch, stream.device,
                                     reinterpret_cast<uintptr_t>(stream.handle));
@@ -253,6 +284,11 @@ LaunchErrorScope::~LaunchErrorScope() {
     error_device = previous_device;
     error_stream = previous_stream;
     error_stream_known = previous_known;
+}
+Device launch_error_device(Device current) {
+    if (error_device.index >= 0) return error_device;
+    if (current.index < 0) current.index = runtime_device_state().current_device;
+    return current;
 }
 string cuda_launch_error_context() {
     Device device = error_device;

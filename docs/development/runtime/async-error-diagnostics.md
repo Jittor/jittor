@@ -49,13 +49,22 @@ jt.introspection.diagnostics.launch_history(backend="cuda", device=0, stream=Non
 `Var.sync()` 与 `jt.sync_all()` 默认**不等设备**（`device_sync=False`），只把工作交出去。
 最后一次读回结果之后才出错的 kernel，此前会让进程以 0 退出，stderr 上只剩一行指向 cuDNN
 的 teardown 错误。现在正常退出时（无未捕获异常、退出码为 0），`jittor_exit` 调用
-`core._wait_for_devices()`：先等异步执行队列，再同步加速器设备，**只在本进程确实向加速器
-发射过工作时才同步**，纯 CPU 进程不会因此创建设备上下文。若这时抛出错误，打印完整诊断并以
-退出码 1 结束；sticky 错误之后的 teardown 句柄销毁失败不再逐条打印。程序已经捕获过的
-sticky 错误不会在退出时再报一次。需要在某处确认工作已完成时，用 `jt.sync_all(True)`。
+`core._wait_for_devices()`：先等异步执行队列，再逐个同步本进程**发射过工作的每个设备**
+（不只是当前设备，程序可能已经切走）。纯 CPU 进程不同步，也不会因此创建设备上下文。
+若这时抛出错误，打印完整诊断并以退出码 1 结束。需要在某处确认工作已完成时，用
+`jt.sync_all(True)`。
+
+sticky 错误（如设备端 trap、非法地址）按设备记录：只有自己的调用返回了该错误的设备，
+其 teardown 句柄销毁失败才不再逐条打印，其他设备照常报告。实测（驱动 580，CUDA 13.0）
+一张卡出现 sticky 错误后，同一进程里其他卡的同步和拷贝也返回同一错误码，此后也无法再初始化
+新的设备上下文。因此在程序已经捕获过一次 sticky 错误之后，退出时：
+
+- 之后又拿到新工作的设备，同步失败照常报告（那些工作没有执行）；
+- 之后没有拿到新工作的设备，同步返回的 sticky 错误就是已经报过的那个，记为失效、不再重报。
 
 带越界下标记录的设备故障以 `JittorIndexError`（`IndexError` 子类）抛出，第一行就是
-`index ... is out of bounds ...`，CUDA 错误码随后。
+`index ... is out of bounds ...`，CUDA 错误码随后。另一张卡的 sticky 错误之后，kernel
+不会真正执行，此时报告里只有设备号和发射位置，没有下标。
 
 **不要用 `trace_py_var>=2` 来测这个**：旧的图追踪器会在每个 Op 之后刻意同步。新的历史
 与该追踪器无关，**不引入额外同步**。

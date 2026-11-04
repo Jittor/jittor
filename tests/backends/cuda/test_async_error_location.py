@@ -182,3 +182,97 @@ def test_a_clean_cuda_program_exits_zero_and_quietly():
     '''), env={"JT_SYNC": "0"}, text=True, timeout=180, name="device_clean_exit")
     assert result.returncode == 0, result.stdout + result.stderr
     assert "still pending" not in result.stderr, result.stderr
+
+
+def _require_two_cuda_devices():
+    _require_cuda()
+    import jittor as jt
+    from _helpers import capability
+    if int(capability.device_count("cuda", backend=jt)) < 2:
+        pytest.skip("needs at least two cuda devices")
+
+
+def test_a_fault_on_another_device_is_reported_after_switching_back():
+    """The exit wait synchronized only the current device: a kernel that
+    faulted on device 1 after the program had switched back to device 0 went
+    unreported and the process exited 0."""
+    _require_two_cuda_devices()
+    result = run_child_script(textwrap.dedent('''
+        import jittor as jt
+        jt.flags.use_cuda = 1
+        jt.flags.device_id = 0
+        (jt.ones(3) * 2).numpy()
+        with jt.flag_scope(device_id=1):
+            y = jt.ones((5, 3))[jt.array([7])]
+            y.sync()
+        (jt.ones(3) * 2).numpy()
+        print("LAST-LINE", flush=True)
+    '''), env={"JT_SYNC": "0"}, text=True, timeout=180,
+        crash_isolated=True, name="device_fault_other_device")
+    assert "LAST-LINE" in result.stdout, result.stdout + result.stderr
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "a device error was still pending" in result.stderr, result.stderr
+    assert "index 7 is out of bounds for dimension 0 with size 5" in result.stderr, result.stderr
+    assert "teardown error" not in result.stderr, result.stderr
+
+
+def test_a_caught_fault_on_one_device_does_not_hide_another_devices_fault():
+    """Whether a context was lost was one flag for the whole process: once the
+    program had caught device 0's fault, a later fault on device 1 was skipped
+    at exit as if it were the same one."""
+    _require_two_cuda_devices()
+    result = run_child_script(textwrap.dedent('''
+        import jittor as jt
+        jt.flags.use_cuda = 1
+        jt.flags.device_id = 0
+        # Both contexts exist before the fault: after a sticky error CUDA
+        # refuses to create another (cudaErrorDevicesUnavailable).
+        for device in (0, 1):
+            with jt.flag_scope(device_id=device):
+                (jt.ones(3) * 2).numpy()
+        try:
+            jt.ones((5, 3))[jt.array([7])].numpy()
+        except IndexError:
+            print("CAUGHT", flush=True)
+        with jt.flag_scope(device_id=1):
+            y = jt.ones((4, 3))[jt.array([9])]
+            y.sync()
+        print("LAST-LINE", flush=True)
+    '''), env={"JT_SYNC": "0"}, text=True, timeout=180,
+        crash_isolated=True, name="device_fault_second_device")
+    assert "CAUGHT" in result.stdout, result.stdout + result.stderr
+    assert "LAST-LINE" in result.stdout, result.stdout + result.stderr
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "a device error was still pending" in result.stderr, result.stderr
+    # Device 1's own index is named only where its kernel still runs: CUDA
+    # fails every device of a process once one has a sticky error (driver
+    # 580), and then the launch never happens. Either way the report is
+    # device 1's, with the line that gave it the work.
+    assert "device=1" in result.stderr, result.stderr
+    assert "device_fault_second_device" in result.stderr and ".py:15\n" in result.stderr, result.stderr
+    assert "teardown error" not in result.stderr, result.stderr
+
+
+def test_a_fault_caught_on_one_device_is_not_reported_again_through_another():
+    """Once one device has a sticky error, CUDA fails the others too. A device
+    whose work had all been read before the fault, and that was given nothing
+    since, must not report that same error at exit as if it were pending."""
+    _require_two_cuda_devices()
+    result = run_child_script(textwrap.dedent('''
+        import jittor as jt
+        jt.flags.use_cuda = 1
+        jt.flags.device_id = 0
+        (jt.ones(3) * 2).numpy()
+        with jt.flag_scope(device_id=1):
+            try:
+                jt.ones((4, 3))[jt.array([9])].numpy()
+            except IndexError:
+                print("CAUGHT", flush=True)
+        print("LAST-LINE", flush=True)
+    '''), env={"JT_SYNC": "0"}, text=True, timeout=180,
+        crash_isolated=True, name="device_fault_caught_other_device")
+    assert "CAUGHT" in result.stdout, result.stdout + result.stderr
+    assert "LAST-LINE" in result.stdout, result.stdout + result.stderr
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "still pending" not in result.stderr, result.stderr
+    assert "teardown error" not in result.stderr, result.stderr

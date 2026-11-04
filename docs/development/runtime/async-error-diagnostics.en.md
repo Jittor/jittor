@@ -55,6 +55,34 @@ validates the backend spelling and non-negative device/stream values, and it nei
 initializes nor queries the hardware backend during the call (`-1` is the only stream
 sentinel).
 
+## Device faults nothing read
+
+`Var.sync()` and `jt.sync_all()` do **not wait for the device** by default
+(`device_sync=False`); they only hand the work over. A kernel that faulted after the last
+read of a result used to let the process exit 0, leaving only a teardown error naming cuDNN
+on stderr. Now, on a normal exit (no uncaught exception, exit code 0), `jittor_exit` calls
+`core._wait_for_devices()`: it waits for the async execution queue, then synchronizes
+**every device this process launched work on**, one at a time (not only the current one,
+since the program may have switched away). A CPU-only process synchronizes nothing and
+creates no device context. If that raises, the full diagnostic is printed and the process
+exits 1. Where the work must be finished, call `jt.sync_all(True)`.
+
+Sticky errors (a device-side trap, an illegal address) are recorded per device: only a
+device whose own call returned the error stops reporting its teardown handle-destroy
+failures; other devices report as usual. Measured on driver 580 (CUDA 13.0): once one card
+has a sticky error, the other cards' synchronize and copy calls in the same process return
+the same code, and no new device context can be created. So after the program has caught a
+sticky error, at exit:
+
+- a device given new work since then reports its failure (that work never ran);
+- a device given nothing since returns the error already raised; it is recorded as lost and
+  not reported again.
+
+A device fault with a recorded out-of-range index is raised as `JittorIndexError` (an
+`IndexError`), with `index ... is out of bounds ...` as its first line and the CUDA error
+after it. After another card's sticky error the kernel never runs, so the report names only
+the device and the launch site, without the index.
+
 **Do not test this with `trace_py_var>=2`**: the old graph tracer deliberately synchronizes
 after every Op. The new history is unrelated to that tracer and **introduces no additional
 synchronization**.
