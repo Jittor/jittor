@@ -10,6 +10,12 @@ from ..fidelity import Fidelity, register_fidelity
 from ..library import install_torch_library
 from ..context import get_install_context
 from ..context import TransformGetItemToIndex as _TransformGetItemToIndex
+from ..fx import (
+    Argument, Attribute, Graph, GraphAppendingTracer, GraphModule, Node, Proxy,
+    Interpreter, Target, Transformer, Tracer, TraceError, _legal_ops,
+    _side_effectful_functions, has_side_effect, map_aggregate, map_arg,
+    set_public_graph_module_class, symbolic_trace, wrap,
+)
 from .factories import _install_empty_like
 
 
@@ -119,22 +125,6 @@ def _bind_missing(target, name, implementation):
 
 def _identity(value):
     return value
-
-
-class Graph:
-    """Annotation placeholder; no FX graph representation."""
-
-
-class GraphModule:
-    """Annotation placeholder; no FX graph execution."""
-
-
-class Proxy:
-    """Annotation placeholder; no FX tracing."""
-
-
-class Node:
-    """Annotation placeholder; no FX node representation."""
 
 
 class OptimizedModule(jt.nn.Module):
@@ -475,10 +465,6 @@ def _api_jit_annotate(type, value):
     return value
 
 
-def _api_fx_wrap(f=None, *a, **k):
-    return f if f is not None and callable(f) else _identity
-
-
 _FX_PYTREE_NODES = {}
 _FX_PYTREE_EXACT_MATCH = {}
 
@@ -578,8 +564,42 @@ def _api_onnx_is_in_onnx_export():
     return False
 
 
-_COMPILER_PLACEHOLDERS = frozenset((Graph, GraphModule, Proxy, Node, OptimizedModule,
-                                   onnx_export))
+def _register_fx_fidelity(graph_module_cls):
+    """Record what the FX surface does and does not promise.
+
+    Tracing and interpretation are real, eager implementations; what they do
+    not provide is torch's compiler artifact (aten graph capture, pickling,
+    shape propagation, codegen into compiled kernels).  ``map_arg`` and
+    ``map_aggregate`` are structurally identical to torch's and get EXACT.
+    """
+    detail = ("Eager FX graph model interpreted through Jittor ops; no aten "
+              "capture, shape propagation, or compiled artifact.")
+    for api, implementation in (
+            ("torch.fx.Graph", Graph),
+            ("torch.fx.Node", Node),
+            ("torch.fx.Proxy", Proxy),
+            ("torch.fx.GraphModule", graph_module_cls),
+            ("torch.fx.Interpreter", Interpreter),
+            ("torch.fx.Transformer", Transformer),
+            ("torch.fx.Tracer", Tracer),
+            ("torch.fx.symbolic_trace", symbolic_trace),
+            ("torch.fx.wrap", wrap)):
+        register_fidelity(api, implementation, Fidelity.APPROXIMATE, detail)
+    register_fidelity(
+        "torch.fx.map_arg", map_arg, Fidelity.EXACT,
+        "Recurses over Node arguments exactly as torch.fx.node.map_arg.")
+    register_fidelity(
+        "torch.fx.node.map_arg", map_arg, Fidelity.EXACT,
+        "Recurses over Node arguments exactly as torch.fx.node.map_arg.")
+    register_fidelity(
+        "torch.fx.node.map_aggregate", map_aggregate, Fidelity.EXACT,
+        "Recurses over every aggregate leaf exactly as torch.fx.node.")
+    register_fidelity(
+        "torch.fx.has_side_effect", has_side_effect, Fidelity.EXACT,
+        "Reports membership in the side-effectful callable registry.")
+
+
+_COMPILER_PLACEHOLDERS = frozenset((OptimizedModule, onnx_export))
 
 
 def _register_compiler_fidelity(ctx):
@@ -802,16 +822,76 @@ def install(ctx):
                            ("torch.ao.nn", _ao_nn), ("torch.ao.nn.quantized", _ao_quantized)):
         _modules.setdefault(_name, _module)
     _bind_missing(g, "ao", _modules["torch.ao"])
+    # torch.fx: a real, eager graph model.  DeepSpeed imports the graph IR and
+    # Interpreter at module scope (runtime.engine -> compile.passes ->
+    # profilers.graph_profile), so an importable placeholder is not enough:
+    # Node/Graph must carry users and operands, symbolic_trace must record
+    # operators, and Interpreter must execute them against Jittor tensors.
+    # See compat/torch/fx.py for the supported surface and its limitations.
+    _public_graph_module = _adapt_module(GraphModule)
+    set_public_graph_module_class(_public_graph_module)
     _fx = _types2.ModuleType("torch.fx")
     # A package, so its submodules can be imported and answered below.
     _fx.__path__ = []
     _fx.Graph = Graph
-    _fx.GraphModule = GraphModule
+    _fx.GraphModule = _public_graph_module
     _fx.Proxy = Proxy
     _fx.Node = Node
-    _fx.wrap = _api_fx_wrap
+    _fx.Interpreter = Interpreter
+    _fx.Transformer = Transformer
+    _fx.Tracer = Tracer
+    _fx.TraceError = TraceError
+    _fx.symbolic_trace = symbolic_trace
+    _fx.wrap = wrap
+    _fx.map_arg = map_arg
+    _fx.has_side_effect = has_side_effect
+    _fx_node = _types2.ModuleType("torch.fx.node")
+    _fx_node.Node = Node
+    _fx_node.map_arg = map_arg
+    _fx_node.map_aggregate = map_aggregate
+    _fx_node.Argument = Argument
+    _fx_node.Target = Target
+    _fx_node.has_side_effect = has_side_effect
+    # DeepSpeed's deepcompile passes register effectful overloads here; the
+    # interpreter's elimination honours the same set.
+    _fx_node._side_effectful_functions = _side_effectful_functions
+    _fx_node._legal_ops = _legal_ops
+    _fx_graph = _types2.ModuleType("torch.fx.graph")
+    _fx_graph.Graph = Graph
+    _fx_graph.Node = Node
+    _fx_proxy = _types2.ModuleType("torch.fx.proxy")
+    _fx_proxy.Proxy = Proxy
+    _fx_proxy.Attribute = Attribute
+    _fx_proxy.TraceError = TraceError
+    _fx_proxy.GraphAppendingTracer = GraphAppendingTracer
+    _fx_graph_module = _types2.ModuleType("torch.fx.graph_module")
+    _fx_graph_module.GraphModule = _public_graph_module
+    _fx_interpreter = _types2.ModuleType("torch.fx.interpreter")
+    _fx_interpreter.Interpreter = Interpreter
+    _fx_interpreter.Transformer = Transformer
+    # torch.fx._symbolic_trace is where torch defines Tracer/symbolic_trace;
+    # downstream code imports it directly as well as from torch.fx.
+    _fx_symbolic = _types2.ModuleType("torch.fx._symbolic_trace")
+    _fx_symbolic.Tracer = Tracer
+    _fx_symbolic.symbolic_trace = symbolic_trace
+    _fx_symbolic.wrap = wrap
+    _fx_symbolic.TraceError = TraceError
+    _fx_symbolic.GraphAppendingTracer = GraphAppendingTracer
+    _fx.node = _fx_node
+    _fx.graph = _fx_graph
+    _fx.proxy = _fx_proxy
+    _fx.graph_module = _fx_graph_module
+    _fx.interpreter = _fx_interpreter
+    _fx._symbolic_trace = _fx_symbolic
     _modules["torch.fx"] = _fx
+    _modules["torch.fx.node"] = _fx_node
+    _modules["torch.fx.graph"] = _fx_graph
+    _modules["torch.fx.proxy"] = _fx_proxy
+    _modules["torch.fx.graph_module"] = _fx_graph_module
+    _modules["torch.fx.interpreter"] = _fx_interpreter
+    _modules["torch.fx._symbolic_trace"] = _fx_symbolic
     g.fx = _fx
+    _register_fx_fidelity(_public_graph_module)
     # transformers.cache_utils registers an FX flatten spec for DynamicCache
     # at import time (transformers.generation imports cache_utils). The spec is
     # consumed only by torch.export and symbolic tracing, which Jittor does not
