@@ -224,7 +224,15 @@ class _OptState:
     def __getitem__(self, param):
         r = self.get(param, None)
         if r is None:
-            raise KeyError(param)
+            # torch's Optimizer.state is a defaultdict(dict): reading the
+            # state of a parameter that has not been updated yet creates an
+            # empty entry instead of raising. DeepSpeed's ZeRO-2 mixed
+            # precision linkage reads every optimizer group's entry right
+            # after stepping only the first group, so this read has to answer.
+            pg, i = self._find(param)
+            if pg is None:
+                raise KeyError(param)
+            return _ParamState(self, param, {})
         return r
     def __setitem__(self, param, d):
         pg, i = self._find(param)

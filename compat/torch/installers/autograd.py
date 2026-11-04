@@ -3,6 +3,7 @@ from .. import autograd as api
 from ..context import get_install_context
 from ..fidelity import Fidelity, register_api_bindings
 from ...diagnostics import EXPECTED, swallowed
+from .tensor.autograd_api import _get_grad_fn_or_grad_acc
 
 
 def _install_autograd(g, registry=None):
@@ -93,6 +94,7 @@ def install_parity(ctx):
     graph = ctx.registry.ensure("torch.autograd.graph")
     for name in ("saved_tensors_hooks", "save_on_cpu", "Node"):
         setattr(graph, name, getattr(api, name))
+    graph._get_grad_fn_or_grad_acc = _get_grad_fn_or_grad_acc
     autograd.graph = graph
     variable = ctx.registry.ensure("torch.autograd.variable")
     variable.Variable = ctx.jittor_module.Tensor
@@ -103,6 +105,10 @@ def install_parity(ctx):
                           Fidelity.UNIMPLEMENTED, "Annotation-only decorator; does not prohibit higher derivatives.")
     register_api_bindings(graph, "torch.autograd.graph", ("saved_tensors_hooks", "save_on_cpu", "Node"),
                           Fidelity.UNIMPLEMENTED, "Metadata-only scopes; no saved-tensor packing or offload.")
+    register_api_bindings(graph, "torch.autograd.graph", ("_get_grad_fn_or_grad_acc",),
+                          Fidelity.APPROXIMATE,
+                          "Leaf tensors answer a cached AccumulateGrad; non-leaves answer the native "
+                          "producer identity .grad_fn reports. No worker graph nodes or engine state.")
     register_api_bindings(variable, "torch.autograd.variable", ("Variable",),
                           Fidelity.APPROXIMATE,
                           "Tensor alias with graph-task final callbacks after native gradients "

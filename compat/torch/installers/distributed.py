@@ -21,6 +21,10 @@ from ..checkpoint_state import (
 )
 from ..ddp_comm_hooks import install_ddp_comm_hooks
 from ..fidelity import Fidelity, register_api_bindings
+from ..gradient_task import (
+    current_graph_task_id as _current_graph_task_id_state,
+    will_engine_execute_node as _will_engine_execute_node_state,
+)
 from ...diagnostics import EXPECTED, swallowed
 from ...transaction import set_env, set_flag
 from ... import collectives as _collectives
@@ -485,9 +489,21 @@ def _get_world_size(group=None):
 
 
 def _current_graph_task_id():
-    # Jittor has no PyTorch reentrant graph-task identifier. DeepSpeed uses
-    # -1 to mean an ordinary forward, distinct from checkpoint recomputation.
-    return -1
+    # torch's graph-task id is live while backward hooks run. The shim's
+    # post-accumulate participation scope is that window (see gradient_task);
+    # outside it the answer stays -1, torch's "ordinary forward" value.
+    return _current_graph_task_id_state()
+
+
+def _api_will_engine_execute_node(node):
+    """``torch._C._will_engine_execute_node`` over the shim's accumulators.
+
+    DeepSpeed's ``count_used_parameters_in_backward`` sums this over the
+    objects ``torch.autograd.graph._get_grad_fn_or_grad_acc`` returns; for a
+    leaf that object exposes ``variable`` and participation is known while the
+    post-accumulate phase runs.
+    """
+    return _will_engine_execute_node_state(node)
 
 
 class _ReduceOp:
@@ -1417,6 +1433,7 @@ def _install_distributed(g, registry=None):
     if not hasattr(g, "_C"):
         g._C = _CNS()
     g._C._current_graph_task_id = _current_graph_task_id
+    g._C._will_engine_execute_node = _api_will_engine_execute_node
     _install_fsdp2_distributed(dist, g, registry=registry)
     g.distributed = dist
     register_api_bindings(dist, "torch.distributed",

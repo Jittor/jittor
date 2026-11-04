@@ -66,6 +66,7 @@ from .method_api import (
     _set_,
     _record_stream,
     _assign_data_owner,
+    _attach_expand_grad_fn,
     _backward,
     _baddbmm,
     _cast_if_needed,
@@ -186,10 +187,29 @@ def _install_expand_shape_adapter(Var):
         if len(shape) == 1 and isinstance(shape[0], (tuple, list)):
             shape = tuple(shape[0])
         normalized = tuple(int(value) for value in shape)
-        return native(self, *normalized)
+        return _attach_expand_grad_fn(self, native(self, *normalized))
 
     expand._torch_shape_adapter = True
     Var.expand = expand
+
+
+def _install_expand_as_grad_adapter(Var):
+    """Give ``Tensor.expand_as`` torch's view identity when it is a no-op.
+
+    ``Var.expand_as`` is the native ``broadcast_var``; a target shape equal to
+    the source forwards the source itself. torch returns a non-leaf view, and
+    DeepSpeed's ZeRO hook registration reads ``grad_fn.next_functions`` from
+    it. Widen the Python surface here; the native var is untouched.
+    """
+    native = getattr(Var, "expand_as", None)
+    if native is None or getattr(native, "_torch_expand_grad_adapter", False):
+        return
+
+    def expand_as(self, other):
+        return _attach_expand_grad_fn(self, native(self, other))
+
+    expand_as._torch_expand_grad_adapter = True
+    Var.expand_as = expand_as
 
 
 def _bind_native_binary(jt, natives, mark_cpu_like):
@@ -218,6 +238,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     _bind_native_fast_paths(_owner.jt)
     _NativeVar = _owner.jt.Var
     _install_expand_shape_adapter(Var)
+    _install_expand_as_grad_adapter(Var)
     _native_operators = {name: getattr(Var, name, None) for name in _BINARY_APIS}
     _bind_native_binary(_owner.jt, _native_operators, _owner._mark_cpu_like)
 

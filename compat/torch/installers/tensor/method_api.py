@@ -2090,6 +2090,12 @@ def _api_is_contiguous(self, *a, **k):
 
 
 def _api_is_leaf(self):
+    # A shape-preserving expand is a forwarded broadcast inside Jittor, but
+    # torch models it as a view: the Python result carries the synthetic
+    # ExpandBackward so is_leaf answers False without touching the source Var.
+    state = getattr(self, "__dict__", None)
+    if state is not None and state.get("_torch_synthetic_grad_fn") is not None:
+        return False
     return bool(self.is_backward_leaf)
 
 
@@ -2213,6 +2219,7 @@ _UNARY_INPLACE_APIS = {
 
 from .autograd_api import (
     _TorchGradFn,
+    _attach_expand_grad_fn,
     _backward,
     _fill_opt_grads,
     _grad_fn,

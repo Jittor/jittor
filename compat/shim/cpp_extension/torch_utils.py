@@ -10,6 +10,7 @@ implementations for PyTorch-style CUDA extensions such as 3DGS' rasterizer.
 """
 import importlib.util
 import os
+import subprocess
 import sys
 import types
 import hashlib
@@ -294,6 +295,28 @@ def _jt_cuda_home():
         return os.environ.get("CUDA_HOME") or os.environ.get("CUDA_PATH")
 
 
+def is_ninja_available():
+    """Whether a ``ninja`` executable answers, as torch defines the query.
+
+    DeepSpeed's op builders import this pair before a JIT load; without them
+    the optional CPU ``deepspeed_shm_comm`` op cannot reach the builder at all.
+    The shim's ``load`` drives its own build, so this is the capability probe
+    torch code expects, not a build implementation.
+    """
+    try:
+        subprocess.check_output(["ninja", "--version"])
+    except Exception:
+        return False
+    return True
+
+
+def verify_ninja_availability():
+    """Raise the same ``RuntimeError`` torch raises when ninja is missing."""
+    if not is_ninja_available():
+        raise RuntimeError(
+            "Ninja is required to load C++ extensions (pip install ninja to get it)")
+
+
 def make_cpp_extension_module():
     mod = types.ModuleType("torch.utils.cpp_extension")
     mod.BuildExtension = BuildExtension
@@ -303,6 +326,8 @@ def make_cpp_extension_module():
     mod.load_inline = load_inline
     mod.include_paths = include_paths
     mod.library_paths = library_paths
+    mod.is_ninja_available = is_ninja_available
+    mod.verify_ninja_availability = verify_ninja_availability
     mod.IS_HIP_EXTENSION = False
     mod.ROCM_HOME = None
     try:
