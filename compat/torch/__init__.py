@@ -80,6 +80,7 @@ from .installers import (
     nn,
     npu,
     numerical,
+    package as package_installer,
     tensor,
     utilities,
 )
@@ -165,6 +166,7 @@ _REQUIRED_STEPS: Tuple[InstallStep, ...] = (
     ("distributed", distributed.install),
     ("core.extended", core.install_misc),
     ("serialization", _install_serialization),
+    ("package", package_installer.install),
     ("utilities", utilities.install),
     ("utilities.runtime-knobs", utilities.install_runtime_knobs),
     ("data", data.install),
