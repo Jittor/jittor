@@ -144,10 +144,14 @@ include backends/comm/nccl/ops/nccl_all_reduce_op.cc
 include backends/comm/nccl/ops/nccl_all_reduce_op.h
 include backends/comm/nccl/ops/nccl_broadcast_op.cc
 include backends/comm/nccl/ops/nccl_broadcast_op.h
+include backends/comm/nccl/ops/nccl_recv_op.cc
+include backends/comm/nccl/ops/nccl_recv_op.h
 include backends/comm/nccl/ops/nccl_reduce_op.cc
 include backends/comm/nccl/ops/nccl_reduce_op.h
 include backends/comm/nccl/ops/nccl_reduce_scatter_op.cc
 include backends/comm/nccl/ops/nccl_reduce_scatter_op.h
+include backends/comm/nccl/ops/nccl_send_op.cc
+include backends/comm/nccl/ops/nccl_send_op.h
 include backends/comm/nccl/ops/nccl_test_op.cc
 include backends/comm/nccl/ops/nccl_test_op.h
 include backends/comm/nccl/src/nccl_wrapper.cc
