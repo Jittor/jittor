@@ -502,6 +502,8 @@ class TestTorchCompatStructure(unittest.TestCase):
             "data",
             "distributions",
             "compiler",
+            "export",
+            "pipelining",
             "numerical",
             "numerical.signal",
             "autograd.module-keys",
@@ -557,7 +559,7 @@ class TestTorchCompatStructure(unittest.TestCase):
             "core.py", "tensor", "factories.py", "autograd.py", "nn",
             "nn_init.py", "cuda", "npu.py", "distributed.py", "data.py",
             "distributions.py", "numerical", "compiler.py", "package.py",
-            "utilities.py",
+            "export.py", "pipelining.py", "utilities.py",
         }
         self.assertEqual(
             {path.name for path in installers.iterdir()
