@@ -1546,6 +1546,10 @@ def _api_mps_is_available():
     return False
 
 
+def _api_mps_current_allocated_memory():
+    raise RuntimeError("Cannot execute getCurrentAllocatedMemory() without MPS backend.")
+
+
 def _api_cpu_get_cpu_capability():
     return 'DEFAULT'
 

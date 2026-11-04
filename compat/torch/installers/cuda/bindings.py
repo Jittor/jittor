@@ -85,6 +85,7 @@ from .api import (
     _api_mp_reductions_rebuild_cuda_tensor,
     _api_mp_reductions_rebuild_tensor,
     _api_mp_reductions_reduce_tensor,
+    _api_mps_current_allocated_memory,
     _api_mps_is_available,
     _api_overrides_get_default_nowrap_functions,
     _current_stream,
@@ -275,6 +276,9 @@ def _install_cuda(g, registry=None):
         if _mod is None:
             _mod = _types.ModuleType("torch." + _dev_ns)
             _modules["torch." + _dev_ns] = _mod
+        if _dev_ns == "mps":
+            _mod.current_allocated_memory = getattr(
+                _mod, "current_allocated_memory", _api_mps_current_allocated_memory)
         _mod.is_available = getattr(_mod, "is_available", _api_mod_is_available)
         _mod.is_initialized = getattr(_mod, "is_initialized", _api_mod_is_initialized)
         _mod.device_count = getattr(_mod, "device_count", _api_mod_device_count)
