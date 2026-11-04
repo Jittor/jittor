@@ -11,6 +11,7 @@
 #include <csignal>
 #include "runtime/init.h"
 #include "runtime/async_exec.h"
+#include "runtime/launch_diagnostics.h"
 #include "runtime/rng_state.h"
 #include "runtime/executor_entry.h"
 #include "ops/op_register.h"
@@ -114,6 +115,34 @@ void cleanup() {
     // round of stream destruction.
     for (auto cb : take_cleanup_callbacks())
         cb();
+}
+
+void wait_for_devices() {
+    // Drain submitted work only. Do not evaluate unused lazy graphs at exit.
+    async_exec_wait();
+#ifdef HAS_ACCELERATOR
+    for (unsigned backend = 1; backend <= unsigned(BackendId::Corex); ++backend) {
+        auto id = BackendId(backend);
+        auto mask = launched_device_mask(id);
+        // CUDA may propagate a reported sticky fault through other contexts.
+        // Preserve errors for any work submitted since the first reported loss.
+        bool reported_cuda_loss = id == BackendId::Cuda && lost_device_mask(id);
+        auto new_work = devices_launched_after_loss(id);
+        for (int index = 0; index < 64; ++index) {
+            Device device{id, index};
+            auto bit = uint64(1) << index;
+            if (!(mask & bit) || device_context_lost(device)) continue;
+            try {
+                backend_synchronize(device);
+            } catch (const std::exception&) {
+                // Only deduplicate a sticky fault already reported to the
+                // program, on a device with no subsequent submissions.
+                if (!reported_cuda_loss || (new_work & bit) ||
+                    !device_context_lost(device)) throw;
+            }
+        }
+    }
+#endif
 }
 
 static void init_device_architectures() {

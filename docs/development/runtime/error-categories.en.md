@@ -71,3 +71,18 @@ On the signal-handler side there is `segfault_sigaction` and everything it can r
 only `write(2)` and `_exit`.** `handle_signal` is a Windows-only handler; it does not throw,
 but it uses `std::cerr` and `abort()`, neither of which is async-signal-safe, so it is tracked
 separately from these two tiers.
+
+## Cross-entropy class targets
+
+Integer class targets for native `jittor.nn.cross_entropy_loss` and the Torch
+frontend must lie in `[0, C)`, except for the configured `ignore_index`.
+Invalid targets raise `IndexError` when evaluated. A CUDA device assertion may
+invalidate the process's device context.
+
+This tightens the native API's previous behavior of silently ignoring arbitrary
+out-of-range labels. Native function callers intending to ignore a label must pass `ignore_index`
+explicitly. Ignored labels do not index class weights or contribute loss or
+gradients; the loss formula for valid labels is unchanged.
+
+The native function ignores no label by default. The `CrossEntropyLoss` module
+and Torch functional API default to `ignore_index=-100`, matching PyTorch.

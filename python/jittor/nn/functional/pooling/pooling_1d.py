@@ -10,9 +10,9 @@ def _with_batch_dim(x, operation):
         return operation(x)
     if x.ndim == 2:
         return operation(x.unsqueeze(0)).squeeze(0)
-    raise ValueError(
-        "pool1d expected a 2-D or 3-D input, got %d-D input" % x.ndim
-    )
+    raise jt.JittorShapeError(
+        "pool1d expected a 2-D (C, L) or 3-D (N, C, L) input, but got a %d-D "
+        "input of shape %s." % (x.ndim, list(x.shape)))
 
 
 def _adaptive_avg_pool1d(x, *, output_size):

@@ -106,4 +106,13 @@ def dtype_for_compute(value):
     if value is None:
         return None
     import jittor_core
-    return jittor_core._checked_dtype_name(value)
+    import jittor_utils
+    try:
+        return jittor_core._checked_dtype_name(value)
+    except jittor_utils.cc.JittorTypeError:
+        # The converter's own report is the signature listing of the internal
+        # `_checked_dtype_name`, which `jt.array(..., dtype=)` and
+        # `jt.randn(..., dtype=)` callers never called.
+        raise jittor_utils.cc.JittorTypeError(
+            "unknown dtype %r; expected a jittor dtype such as 'float32', "
+            "'int64' or 'bool'" % (value,)) from None

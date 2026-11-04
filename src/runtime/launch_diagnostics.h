@@ -79,6 +79,16 @@ struct LaunchOperationScope {
     ~LaunchOperationScope();
 };
 EXTERN_LIB void record_active_launch(BackendStream stream);
+// Whether this process has launched anything on an accelerator. A device fault
+// only surfaces when something waits for the device, and only then is there a
+// device worth waiting for at exit; a CPU-only run must not create a context.
+// Device masks are independent of the bounded diagnostic history.
+EXTERN_LIB uint64 launched_device_mask(BackendId backend);
+EXTERN_LIB Device launch_error_device(Device current);
+EXTERN_LIB void note_device_context_lost(Device device);
+EXTERN_LIB uint64 lost_device_mask(BackendId backend);
+EXTERN_LIB uint64 devices_launched_after_loss(BackendId backend);
+EXTERN_LIB bool device_context_lost(Device device);
 
 struct LaunchErrorScope {
     Device previous_device;
