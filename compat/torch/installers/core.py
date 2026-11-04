@@ -560,6 +560,31 @@ def where(condition, input=None, other=None, *, out=None):
     return _torch_where_select(condition, input, other)
 
 
+def fill(input, value):
+    """Return a filled tensor while retaining Torch's autograd relationships."""
+    if not isinstance(input, jt.Var):
+        raise TypeError("fill(): input must be a Tensor")
+    if isinstance(value, jt.Var) and value.ndim != 0:
+        raise RuntimeError("fill_ only supports 0-dimension value tensor but got tensor with %s dimensions." % value.ndim)
+    from jittor._core.var import device_scope_like
+    with device_scope_like(input):
+        if not isinstance(value, jt.Var):
+            value = jt.array(value)
+        value = value.cast(input.dtype)
+        mask = jt.zeros_like(input).bool()
+        result = _torch_where_select(mask, input, value)
+        if tuple(result.shape) != tuple(input.shape):
+            result = result.reshape(input.shape)
+        return result
+
+
+def fill_(input, value):
+    """In-place form of :func:`fill`."""
+    if not isinstance(input, jt.Var):
+        raise TypeError("fill_(): input must be a Tensor")
+    return input.fill_(value)
+
+
 def bincount(input, weights=None, minlength=0):
     x = input.reshape(-1).int64()
     ml = max(int(minlength), 0)
@@ -1174,6 +1199,8 @@ _MISC_BINDINGS = {
     "PyTorchFileReader": PyTorchFileReader,
     "norm": norm,
     "where": where,
+    "fill": fill,
+    "fill_": fill_,
     "bincount": bincount,
     "segment_reduce": segment_reduce,
     "is_autocast_enabled": is_autocast_enabled,
@@ -1232,6 +1259,8 @@ _MISC_DETAILS = {
     "set_rng_state": "restores the native CPU generator seed and exact stream position; foreign or legacy seed-only states are refused",
     "norm": "existing Torch norm adapter; out and extra keyword semantics are not implemented",
     "where": "existing one- or three-argument selection; out is not implemented",
+    "fill": "out-of-place fill with scalar value and input/value autograd; device and dtype edge cases remain under validation",
+    "fill_": "in-place tensor fill; inherits Tensor.fill_ device and autograd limitations",
     "bincount": "native scatter-add implementation; existing flatten/minlength behavior retained",
     "segment_reduce": "lengths-based dim-0 reduction only; additional keyword semantics are not implemented",
     "finfo": "NumPy limits plus declared metadata-only low-precision specs; this does not enable their computation",
