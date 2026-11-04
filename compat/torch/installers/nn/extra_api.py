@@ -29,6 +29,37 @@ def _adapt_extra(template, registry):
         return template
     return get_install_context(registry.target_namespace).state["nn_class_adapter"](template)
 
+def fuse_conv_bn_weights(conv_w, conv_b, bn_rm, bn_rv, bn_eps, bn_w, bn_b, transpose=False):
+    """Fuse inference BatchNorm statistics into convolution parameters."""
+    w_dtype = conv_w.dtype
+    b_dtype = conv_b.dtype if conv_b is not None else w_dtype
+    bias_requires_grad = conv_b.requires_grad if conv_b is not None else False
+    if conv_b is None:
+        conv_b = bn_rm.new_zeros(bn_rm.shape, requires_grad=False)
+    if bn_w is None:
+        bn_w = bn_rm.new_ones(bn_rm.shape)
+    if bn_b is None:
+        bn_b = bn_rm.new_zeros(bn_rm.shape)
+    inv_std = (bn_rv + bn_eps).rsqrt()
+    shape = ([1, -1] if transpose else [-1, 1]) + [1] * (len(conv_w.shape) - 2)
+    weight = (conv_w * (bn_w * inv_std).reshape(shape)).to(dtype=w_dtype)
+    bias = ((conv_b - bn_rm) * inv_std * bn_w + bn_b).to(dtype=b_dtype)
+    parameter = get_install_context(jt).target_namespace.nn.Parameter
+    return parameter(weight, conv_w.requires_grad), parameter(bias, bias_requires_grad)
+
+
+def fuse_conv_bn_eval(conv, bn, transpose=False):
+    if conv.training or bn.training:
+        raise AssertionError("Fusion only for eval!")
+    if bn.running_mean is None or bn.running_var is None:
+        raise AssertionError("BatchNorm running statistics are required")
+    fused = _copy.deepcopy(conv)
+    fused.weight, fused.bias = fuse_conv_bn_weights(
+        fused.weight, fused.bias, bn.running_mean, bn.running_var,
+        bn.eps, bn.weight, bn.bias, transpose)
+    return fused
+
+
 class UninitializedTensorMixin:
     pass
 

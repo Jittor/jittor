@@ -10,6 +10,7 @@ import concurrent.futures as _futures_data
 import itertools as _itertools_data
 import numbers as _numbers_data
 import threading as _threading_data
+import typing as _typing_data
 
 import jittor as jt
 
@@ -144,7 +145,10 @@ class _Subset(_TorchDataset):
         return self.dataset[self.indices[idx]]
 
 
-class _Sampler:
+_SamplerT = _typing_data.TypeVar("_SamplerT", covariant=True)
+
+
+class _Sampler(_typing_data.Generic[_SamplerT]):
     def __init__(self, data_source=None):
         self.data_source = data_source
     def __iter__(self):
