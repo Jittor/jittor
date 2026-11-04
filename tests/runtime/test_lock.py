@@ -9,6 +9,7 @@
 # ***************************************************************
 import unittest
 import os, subprocess, tempfile
+import select
 import jittor as jt
 import jittor_utils as jit_utils
 from jittor_utils import lock as jit_lock
@@ -155,6 +156,170 @@ class TestBuildLockIsShared(unittest.TestCase):
             with jit_lock.lock_scope():
                 pass
             self.assertEqual(_lock_state(self.lock.filename), "busy")
+
+    @unittest.skipUnless(hasattr(os, "fork"), "fork is required")
+    def test_fork_child_cannot_enter_while_parent_holds_the_build_lock(self):
+        """The child must get a new flock description before C++ lock calls."""
+        if self.lock.is_locked:
+            self.skipTest("the parent already holds the session build lock")
+
+        attempting_r, attempting_w = os.pipe()
+        acquired_r, acquired_w = os.pipe()
+        release_r, release_w = os.pipe()
+        child = None
+        parent_holds_lock = False
+        try:
+            jt.core.lock_acquire()
+            parent_holds_lock = True
+            child = os.fork()
+            if child == 0:
+                try:
+                    os.close(attempting_r)
+                    os.close(acquired_r)
+                    os.close(release_w)
+                    os.write(attempting_w, b"A")
+                    jt.core.lock_acquire()
+                    os.write(acquired_w, b"L")
+                    os.read(release_r, 1)
+                    jt.core.lock_release()
+                except BaseException as error:
+                    try:
+                        os.write(acquired_w, b"E" + repr(error).encode("utf8"))
+                    except OSError:
+                        pass
+                os._exit(0)
+
+            os.close(attempting_w)
+            attempting_w = -1
+            os.close(acquired_w)
+            acquired_w = -1
+            os.close(release_r)
+            release_r = -1
+
+            ready, _, _ = select.select([attempting_r], [], [], 10)
+            self.assertTrue(ready, "fork child did not reach lock acquisition")
+            self.assertEqual(os.read(attempting_r, 1), b"A")
+
+            # Keep the parent lock held for a bounded observation window. An
+            # inherited OFD or stale C++ _has_lock lets the child through here.
+            ready, _, _ = select.select([acquired_r], [], [], 0.25)
+            entered_before_release = os.read(acquired_r, 4096) if ready else b""
+
+            jt.core.lock_release()
+            parent_holds_lock = False
+            if entered_before_release:
+                entered_after_release = b""
+            else:
+                ready, _, _ = select.select([acquired_r], [], [], 10)
+                self.assertTrue(ready, "fork child did not acquire after parent release")
+                entered_after_release = os.read(acquired_r, 4096)
+            os.write(release_w, b"R")
+            _, status = os.waitpid(child, 0)
+            child = None
+            entered = entered_before_release or entered_after_release
+            self.assertFalse(
+                entered_before_release,
+                "fork child entered the build critical section before parent release: "
+                + repr(entered_before_release),
+            )
+            self.assertEqual(entered, b"L")
+            self.assertTrue(os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0, status)
+        finally:
+            if parent_holds_lock:
+                jt.core.lock_release()
+            if child is not None:
+                try:
+                    os.write(release_w, b"R")
+                except OSError:
+                    pass
+                try:
+                    os.waitpid(child, 0)
+                except ChildProcessError:
+                    pass
+            for fd in (attempting_r, attempting_w, acquired_r, acquired_w, release_r, release_w):
+                if fd >= 0:
+                    try:
+                        os.close(fd)
+                    except OSError:
+                        pass
+
+    @unittest.skipUnless(hasattr(os, "fork"), "fork is required")
+    def test_fork_child_lock_reopen_failure_is_reported_without_releasing_parent(self):
+        if self.lock.is_locked:
+            self.skipTest("the parent already holds the session build lock")
+
+        original_open = os.open
+        original_fd = self.lock.fd
+        original_path = self.lock.filename
+        read_fd, write_fd = os.pipe()
+        child = None
+        new_fd = None
+        directory = tempfile.mkdtemp()
+        path = os.path.join(directory, "jittor.lock")
+        try:
+            new_fd = original_open(path, os.O_RDWR | os.O_CREAT, 0o600)
+            self.lock.fd = new_fd
+            self.lock.filename = path
+            self.lock.core.set_lock_fd(new_fd, False)
+            self.lock.lock()
+
+            parent_pid = os.getpid()
+
+            def fail_child_reopen(filename, flags, *args, **kwargs):
+                if os.getpid() != parent_pid and os.fspath(filename) == path:
+                    raise OSError(24, "injected fork-child lock reopen failure")
+                return original_open(filename, flags, *args, **kwargs)
+
+            os.open = fail_child_reopen
+            child = os.fork()
+            if child == 0:
+                try:
+                    os.close(read_fd)
+                    try:
+                        self.lock.lock()
+                    except RuntimeError as error:
+                        os.write(write_fd, b"E" + str(error).encode("utf8"))
+                    else:
+                        os.write(write_fd, b"L")
+                finally:
+                    os._exit(0)
+
+            os.open = original_open
+            os.close(write_fd)
+            write_fd = -1
+            ready, _, _ = select.select([read_fd], [], [], 10)
+            self.assertTrue(ready, "fork child did not report its lock result")
+            result = os.read(read_fd, 4096)
+            self.assertTrue(result.startswith(b"E"), result)
+            self.assertIn(b"could not reopen the build lock after fork", result)
+            self.assertTrue(self.lock.is_locked, "child failure changed parent lock state")
+            self.assertEqual(_lock_state(path), "busy")
+            _, status = os.waitpid(child, 0)
+            child = None
+            self.assertTrue(os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0, status)
+        finally:
+            os.open = original_open
+            if child is not None:
+                try:
+                    os.waitpid(child, 0)
+                except ChildProcessError:
+                    pass
+            if self.lock.is_locked:
+                self.lock.unlock()
+            self.lock.fd = original_fd
+            self.lock.filename = original_path
+            self.lock.core.set_lock_fd(original_fd, False)
+            if new_fd is not None:
+                os.close(new_fd)
+            if os.path.exists(path):
+                os.unlink(path)
+            os.rmdir(directory)
+            for fd in (read_fd, write_fd):
+                if fd >= 0:
+                    try:
+                        os.close(fd)
+                    except OSError:
+                        pass
 
 
 @unittest.skipIf(os.name == 'nt', "flock semantics are POSIX only")
