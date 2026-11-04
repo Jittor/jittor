@@ -29,6 +29,17 @@ include shim/resources/stubs/flash_attn/flash_attn_interface.py
 include shim/resources/stubs/flash_attn/ops/__init__.py
 include shim/resources/stubs/flash_attn/ops/triton/__init__.py
 include shim/resources/stubs/flash_attn/ops/triton/rotary.py
+include shim/resources/stubs/torch_xla/__init__.py
+include shim/resources/stubs/torch_xla/_emulation.py
+include shim/resources/stubs/torch_xla/core/__init__.py
+include shim/resources/stubs/torch_xla/core/xla_model.py
+include shim/resources/stubs/torch_xla/debug/__init__.py
+include shim/resources/stubs/torch_xla/debug/metrics.py
+include shim/resources/stubs/torch_xla/distributed/__init__.py
+include shim/resources/stubs/torch_xla/distributed/parallel_loader.py
+include shim/resources/stubs/torch_xla/distributed/spmd/__init__.py
+include shim/resources/stubs/torch_xla/distributed/xla_multiprocessing.py
+include shim/resources/stubs/torch_xla/runtime.py
 include shim/resources/stubs/torchaudio/__init__.py
 include shim/resources/stubs/torchdata/__init__.py
 include shim/resources/stubs/torchvision/__init__.py
