@@ -258,6 +258,20 @@ def test_multi_rank_execution_is_refused(monkeypatch):
         pipelining.pipeline(MLP(), mb_args=(torch.randn(1, 4),), split_spec={})
 
 
+def test_step_can_suppress_merged_outputs():
+    model = MLP()
+    pipe = torch.distributed.pipelining.pipeline(
+        model, mb_args=(torch.randn(1, 4),), split_spec={})
+    stage = pipe.build_stage(0, device=None)
+    schedule = torch.distributed.pipelining.ScheduleGPipe(stage, 1)
+    batch = torch.randn(2, 4)
+    with torch.no_grad():
+        assert schedule.step(batch, return_outputs=False) is None
+        # The run still happened, and the next call returns the output.
+        output = schedule.step(batch)
+    np.testing.assert_allclose(_numpy(output), _numpy(model(batch)), rtol=1e-6)
+
+
 def test_training_and_invalid_schedules_are_refused():
     model = MLP()
     pipe = torch.distributed.pipelining.pipeline(

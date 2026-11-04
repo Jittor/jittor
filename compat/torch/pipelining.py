@@ -1,11 +1,12 @@
 """Single-stage ``torch.distributed.pipelining`` with the GPipe schedule.
 
 Upstream pipelines partition a traced model graph into stages, place one stage
-per rank, and move activations between ranks with send/recv.  That machinery
-needs a captured graph, a process group with point-to-point collectives, and a
-stage executor.  None of those exist for the Jittor shim in this tree (the FX
-interpreter is a separate change; ``torch.distributed`` has no working
-send/recv).
+per rank, and move activations between ranks with send/recv.  The
+compatibility layer now has a partial FX tracer/interpreter and basic
+point-to-point primitives, but it has no graph partitioning into stage
+modules, no stage executor, and no activation-scheduling machinery that
+pipelining needs.  This layer therefore implements the single-process,
+single-stage workflow.
 
 What this module provides
 -------------------------
@@ -24,13 +25,14 @@ What this module provides
 
 Boundaries
 ----------
-* **More than one stage** requires graph partitioning and activation transfer;
-  ``pipeline()`` raises ``NotImplementedError`` naming that, rather than
-  returning a Pipe whose stages cannot run.
-* **More than one rank** requires point-to-point collectives.  When
-  ``torch.distributed`` is initialized with ``world_size > 1``, ``pipeline()``
-  and ``build_stage`` raise instead of pretending each rank holds the whole
-  model.
+* **More than one stage** requires partitioning the model into stage modules
+  and scheduling activations between them; ``pipeline()`` raises
+  ``NotImplementedError`` naming that, rather than returning a Pipe whose
+  stages cannot run.
+* **More than one rank** requires per-stage placement and cross-rank
+  activation transfer.  When ``torch.distributed`` is initialized with
+  ``world_size > 1``, ``pipeline()`` and ``build_stage`` raise instead of
+  pretending each rank holds the whole model.
 * **Training** (``ScheduleGPipe(loss_fn=...)``, ``target``, ``losses``) needs a
   backward pass split across stages; it is refused.  Forward-only inference,
   which is what ``accelerate.prepare_pippy`` uses, is supported.
@@ -170,8 +172,8 @@ class PipelineStage(object):
             _refuse(
                 "torch.distributed.pipelining.PipelineStage",
                 "run one stage of a %d-stage pipeline without the graph "
-                "partition and cross-rank activation transfer that would "
-                "connect the stages" % num_stages,
+                "partition and stage scheduling that would connect the "
+                "stages" % num_stages,
                 "Only a single-stage pipeline is implemented.")
         self.submod = submod
         # The callable this stage executes.  Upstream executes the traced
@@ -306,8 +308,8 @@ def _check_single_rank(api):
     if world_size > 1:
         _refuse(
             api,
-            "run a pipeline over %d ranks without implementing point-to-point "
-            "activation transfer between stages" % world_size,
+            "run a pipeline over %d ranks without implementing per-stage "
+            "placement and activation transfer between stages" % world_size,
             "This layer implements the single-process workflow only; launch "
             "with one process and an empty split spec.")
 
@@ -377,7 +379,7 @@ def pipeline(module, mb_args, mb_kwargs=None, split_spec=None,
             "torch.distributed.pipelining.pipeline with %d split points"
             % len(split_spec),
             "run a model partitioned into %d stages without graph "
-            "partitioning and cross-rank activation transfer" % num_stages,
+            "partitioning and stage scheduling" % num_stages,
             "This layer supports a single stage; pass an empty split_spec "
             "(accelerate does this when num_processes == 1).")
 
@@ -674,12 +676,15 @@ class ScheduleGPipe(object):
     def n_microbatches(self):
         return self._n_microbatches
 
-    def step(self, *args, target=None, losses=None, **kwargs):
+    def step(self, *args, target=None, losses=None, return_outputs=True,
+             **kwargs):
         """Run one iteration with whole-batch inputs and return the output.
 
         Only the last stage returns the (merged) output; upstream returns
-        ``None`` on earlier stages.  ``target``/``losses`` are refused because
-        they imply a backward pass.
+        ``None`` on earlier stages.  ``return_outputs=False`` keeps the run
+        but suppresses the merged result (the schedule API kept this flag
+        before torch 2.5 removed it).  ``target``/``losses`` are refused
+        because they imply a backward pass.
         """
 
         if target is not None or losses is not None:
@@ -694,7 +699,7 @@ class ScheduleGPipe(object):
         for index, (chunk_args, chunk_kwargs) in enumerate(
                 zip(args_split, kwargs_split)):
             self._stage.forward_one_chunk(index, chunk_args, chunk_kwargs)
-        if self._stage.is_last:
+        if self._stage.is_last and return_outputs:
             return merge_chunks(self._stage.output_chunks,
                                 self._output_merge_spec)
         return None

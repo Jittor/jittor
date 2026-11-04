@@ -3,9 +3,12 @@
 Upstream ``torch.export`` traces a module with Dynamo/PT2, normalizes the
 resulting operations to the ATen functional dialect, derives shape constraints
 from the example inputs, and returns an ``ExportedProgram`` that runs the
-captured graph.  Nothing in that pipeline exists in Jittor: the framework has
-no ATen operator set, no symbolic shape environment, and (in this tree) no FX
-interpreter that could execute a captured graph faithfully.
+captured graph.  Jittor has no ATen operator set and no symbolic shape
+environment, and the compatibility layer's FX tracer is partial: it captures
+operators, methods, indexing, leaf module calls and ``get_attr``, but not
+native function calls such as ``torch.relu(proxy)``.  A traced graph is
+therefore available for some modules and absent for others; it is never used as
+the execution engine here.
 
 What this module provides
 -------------------------
@@ -153,8 +156,9 @@ _GRAPH_DETAIL = (
     "normalization or shape constraints are captured")
 _GRAPH_EFFECT = ("report a graph that was never captured; " + _GRAPH_DETAIL)
 _GRAPH_HINT = (
-    "Use ExportedProgram as a callable, or run the module directly. A future "
-    "torch.fx interpreter can supply the traced graph; nothing in this build can.")
+    "Use ExportedProgram as a callable, or run the module directly. "
+    "torch.fx.symbolic_trace supplies the graph for modules it can trace; "
+    "when tracing fails the reason is recorded under torch.compat_swallowed().")
 
 
 def _maybe_trace(module):
