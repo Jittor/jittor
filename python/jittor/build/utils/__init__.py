@@ -514,6 +514,19 @@ def _main_module_not_reexecuted():
         main.__spec__ = spec
 
 
+def compile_pool_size(mem_bytes, cpus):
+    """Compiler processes for `run_cmds`: one per 3 GiB of memory, at most 16,
+    and no more than the CPUs this process may run on.
+
+    The CPU bound is the affinity's, as the native parallel compiler's is
+    (`parallel_compile_worker_count`). Without it a worker pinned to one CPU
+    started 16 compilers that all shared that CPU, each holding a compiler's
+    memory and none finishing sooner.
+    """
+    by_memory = min(16, max(int(mem_bytes / (1024.**3) // 3), 1))
+    return min(by_memory, max(int(cpus), 1)) if cpus else by_memory
+
+
 def run_cmds(cmds, cache_path, jittor_path, msg="run_cmds"):
     global pool_size, p
     # Under MPI (mpirun), the OpenMPI runtime installs atfork handlers and a
@@ -537,9 +550,8 @@ def run_cmds(cmds, cache_path, jittor_path, msg="run_cmds"):
         if pool_size == 0:
             try:
                 mem_bytes = get_total_mem()
-                mem_gib = mem_bytes/(1024.**3)
-                pool_size = min(16,max(int(mem_gib // 3), 1))
-                LOG.i(f"Total mem: {mem_gib:.2f}GB, using {pool_size} procs for compiling.")
+                pool_size = compile_pool_size(mem_bytes, len(_available_cpu_ids()))
+                LOG.i(f"Total mem: {mem_bytes/(1024.**3):.2f}GB, using {pool_size} procs for compiling.")
             except ValueError:
                 # On macOS, python with version lower than 3.9 do not support SC_PHYS_PAGES.
                 # Use hard coded pool size instead.

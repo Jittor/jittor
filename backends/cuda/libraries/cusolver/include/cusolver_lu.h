@@ -35,41 +35,62 @@ JT_CUSOLVER_LU(cuComplex, C)
 JT_CUSOLVER_LU(cuDoubleComplex, Z)
 #undef JT_CUSOLVER_LU
 
-// getrf on `lu` (n x n, column-major, overwritten), then getrs with `op`
-// against `rhs` (n x k, column-major, overwritten with the solution). Raises
-// for a singular matrix after reading the two statuses back -- the one host
-// sync, which a recording cannot contain: there the recording is marked as
-// holding host work, which makes graph_capture_end refuse it, and nothing is
-// read.
+// For each of `batch` matrices, getrf on `lu` (n x n, column-major,
+// overwritten; matrix m at lu + m n^2), then getrs with `op` against `rhs`
+// (n x k, column-major, overwritten with the solution; matrix m at
+// rhs + m n k). One workspace and one pivot buffer serve every matrix, as the
+// calls run in order on the stream. Raises for a singular matrix after reading
+// every status back together -- the one host sync, which a recording cannot
+// contain: there the recording is marked as holding host work, which makes
+// graph_capture_end refuse it, and nothing is read.
 template <class Tc>
-void lu_solve(cusolverDnHandle_t handle, cudaStream_t stream, int n, int k,
-              Tc* lu, Tc* rhs, cublasOperation_t op, const char* what) {
+void lu_solve_batch(cusolverDnHandle_t handle, cudaStream_t stream, int64 batch, int n, int k,
+                    Tc* lu, Tc* rhs, cublasOperation_t op, const char* what) {
     auto& exe = runtime_executor();
     int lwork = 0;
     checkCudaErrors(CusolverLu<Tc>::buffer(handle, n, lu, &lwork));
     auto work = exe.alloc_temp(sizeof(Tc) * (size_t)std::max(lwork, 1));
     auto ipiv = exe.alloc_temp(sizeof(int) * (size_t)n);
-    // getrf's status and getrs's, read together.
-    auto info = exe.alloc_temp(2 * sizeof(int));
-    checkCudaErrors(CusolverLu<Tc>::getrf(handle, n, lu, (Tc*)work.ptr,
-                                         (int*)ipiv.ptr, (int*)info.ptr));
-    checkCudaErrors(CusolverLu<Tc>::getrs(handle, op, n, k, lu, (const int*)ipiv.ptr,
-                                           rhs, (int*)info.ptr + 1));
+    // getrf's status and getrs's for each matrix, read together.
+    auto info = exe.alloc_temp(2 * sizeof(int) * (size_t)batch);
+    int* status_dev = (int*)info.ptr;
+    for (int64 m = 0; m < batch; m++) {
+        Tc* lu_m = lu + m * (int64)n * n;
+        checkCudaErrors(CusolverLu<Tc>::getrf(handle, n, lu_m, (Tc*)work.ptr,
+                                             (int*)ipiv.ptr, status_dev + 2 * m));
+        checkCudaErrors(CusolverLu<Tc>::getrs(handle, op, n, k, lu_m, (const int*)ipiv.ptr,
+                                               rhs + m * (int64)n * k, status_dev + 2 * m + 1));
+    }
     if (graph_capture_recording) {
         graph_capture_saw_host_work = true;
         return;
     }
-    int status[2] = {0, 0};
-    checkCudaErrors(cudaMemcpyAsync(status, info.ptr, sizeof(status),
+    vector<int> status(2 * batch);
+    checkCudaErrors(cudaMemcpyAsync(status.data(), status_dev, sizeof(int) * status.size(),
                                     cudaMemcpyDeviceToHost, stream));
     checkCudaErrors(cudaStreamSynchronize(stream));
-    // A negative status names an argument this code passed wrongly.
-    ASSERT(status[0] >= 0 && status[1] == 0)
-        << what << ": cuSOLVER getrf/getrs reported an illegal argument (devInfo"
-        << status[0] >> "," << status[1] >> ")";
-    _TYPED_ERROR_IF(UserLinAlgError, status[0] > 0)
-        << what >> ": Singular matrix (U[" >> status[0] - 1 >> "," >> status[0] - 1
-        >> "] of its LU factorization is exactly zero)";
+    for (int64 m = 0; m < batch; m++) {
+        // A negative status names an argument this code passed wrongly.
+        ASSERT(status[2 * m] >= 0 && status[2 * m + 1] == 0)
+            << what << ": cuSOLVER getrf/getrs reported an illegal argument (devInfo"
+            << status[2 * m] >> "," << status[2 * m + 1] >> ")";
+        int pivot = status[2 * m] - 1;
+        if (batch == 1)
+            _TYPED_ERROR_IF(UserLinAlgError, pivot >= 0)
+                << what >> ": Singular matrix (U[" >> pivot >> "," >> pivot
+                >> "] of its LU factorization is exactly zero)";
+        else
+            _TYPED_ERROR_IF(UserLinAlgError, pivot >= 0)
+                << what >> ": Singular matrix (matrix" << m << "of the batch: U[" >> pivot
+                >> "," >> pivot >> "] of its LU factorization is exactly zero)";
+    }
+}
+
+// lu_solve_batch for one matrix.
+template <class Tc>
+void lu_solve(cusolverDnHandle_t handle, cudaStream_t stream, int n, int k,
+              Tc* lu, Tc* rhs, cublasOperation_t op, const char* what) {
+    lu_solve_batch(handle, stream, 1, n, k, lu, rhs, op, what);
 }
 
 } // jittor

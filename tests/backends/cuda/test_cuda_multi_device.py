@@ -311,6 +311,60 @@ class TestSecondDevice(_DeviceCase):
         a.sync()
         self.assertEqual(_pointer_device(a.device_raw_ptr), 1)
 
+    def test_an_implicit_tensor_is_refused_next_to_an_explicitly_placed_one(self):
+        # A DLPack import carries an explicit placement. An implicitly placed
+        # tensor on another card used to pass the explicit-placement check
+        # unnoticed, and the kernel on the import's card then read the other
+        # card's pointer; a Python number is still moved.
+        with jt.flag_scope(device_id=1):
+            source = jt.array(np.arange(6, dtype="float32"))
+            source.sync()
+        imported = jt.from_dlpack(source)
+        self.assertEqual(imported.device_id, 1)
+        local = jt.array(np.ones(6, "float32"))
+        local.sync()
+        with self.assertRaises(Exception) as caught:
+            imported + local
+        self.assertIn("same CUDA device", str(caught.exception))
+        self.assertEqual(local.device_id, 0)
+        shifted = imported * 3 + 1
+        self.assertEqual(shifted.device_id, 1)
+        np.testing.assert_array_equal(shifted.numpy(), np.arange(6) * 3 + 1)
+
+    def test_a_gradient_lands_on_its_target_s_device(self):
+        # The seed `make_number(1, loss)` and every gradient grown from it
+        # used to be made on the current device: an x on cuda:0 differentiated
+        # under cuda:1 got its gradient on cuda:1, where torch keeps it on
+        # cuda:0. Both directions, a native and a DLPack (explicitly placed)
+        # target, and a constant-zero gradient.
+        chains = {
+            "x": lambda x: x,
+            "sum": lambda x: x.sum(),
+            "sum real": lambda x: x.real.sum(),
+            "sum real clone": lambda x: x.clone().real.sum(),
+            "pow 1": lambda x: (x ** (1 + 0j)).real.sum(),
+            "times 0": lambda x: (x * 0).real.sum(),
+        }
+        for target, ambient in ((0, 1), (1, 0)):
+            for origin in ("native", "dlpack"):
+                for name, chain in chains.items():
+                    with self.subTest(target=target, ambient=ambient, origin=origin, chain=name):
+                        dtype = "float64" if name in ("x", "sum") else "complex128"
+                        shape = () if name == "x" else (3,)
+                        with jt.flag_scope(device_id=target):
+                            x = jt.array(np.full(shape, 1.5), dtype=dtype)
+                            x.sync()
+                            if origin == "dlpack":
+                                x = jt.from_dlpack(x)
+                        with jt.flag_scope(device_id=ambient):
+                            g = jt.grad(chain(x), x)
+                            g.sync()
+                            self.assertEqual(jt.current_device(), ambient)
+                        self.assertEqual(g.device_id, target)
+                        self.assertEqual(_pointer_device(g.device_raw_ptr), target)
+                        expected = 0.0 if name == "times 0" else 1.0
+                        np.testing.assert_array_equal(g.numpy(), np.full(shape, expected))
+
     def test_a_pending_host_copy_is_not_retargeted_either(self):
         host = jt.ones((3,), "float32").cpu()
         other = jt.ones((3,), "float32").cuda(1)

@@ -1368,11 +1368,21 @@ def pow(x, y):
     :param y: the second input.
     :type y: a python number or jt.Var.
     '''
-    if isinstance(x,Var) and isinstance(y, (ori_int, ori_float)):
+    if isinstance(x,Var) and isinstance(y, (ori_int, ori_float, ori_complex)):
         if y == 2:
             return x.sqr()
         if y == 3 and _jittor_dtype_name(x.dtype) == "float32":
             return x*x*x
+        if (y == 0 or y == 1) and _jittor_dtype_name(x.dtype).startswith("complex"):
+            # torch special-cases these two Python-scalar exponents of a
+            # complex tensor: x ** 0 is ones (with a zero gradient) and
+            # x ** 1 is x. A tensor exponent goes through the kernel, where a
+            # zero base gives 0 ** 0 = nan+nanj and a NaN gradient at 0 ** 1,
+            # as torch's tensor pow does.
+            if y == 1:
+                return x.clone()
+            import jittor as jt
+            return jt.ternary(jt.ones(x.shape, "bool"), jt.ones(x.shape, x.dtype), x)
     return core.ops.pow(x, y)
 
 Var.pow = Var.__pow__ = pow
@@ -1838,24 +1848,6 @@ Var.__dlpack_device__ = Var.dlpack_device
 to_dlpack = core.to_dlpack
 
 
-def _dlpack_is_contiguous(shape, strides):
-    # Mirrors dlpack.cc::dl_tensor_is_contiguous() exactly (same algorithm,
-    # same "size-1 axes don't constrain their stride" rule), since this is
-    # the read-only Python-side half of the same contiguity decision -- the
-    # C++ side re-derives it independently from the same DLTensor as a
-    # defense-in-depth check, but the *choice* of which import path to take
-    # is made here, before the capsule is consumed.
-    if strides is None or 0 in shape:
-        # An empty tensor has no bytes, so its strides constrain nothing.
-        return True
-    expect = 1
-    for i in range(len(shape) - 1, -1, -1):
-        if shape[i] != 1 and strides[i] != expect:
-            return False
-        expect *= shape[i]
-    return True
-
-
 def _dlpack_flat_span(shape, strides):
     # The minimum and maximum ELEMENT offset (relative to the DLTensor's own
     # byte_offset) reachable by any legal index into `shape` under `strides`
@@ -1865,8 +1857,8 @@ def _dlpack_flat_span(shape, strides):
     # 0" case. Zero-length axes are excluded from both min and max: an axis
     # with shape[i]==0 contributes no actual index (0..shape[i]-1 is empty),
     # so its stride must not be allowed to inflate/deflate the span -- a
-    # wholly empty tensor counts as contiguous (_dlpack_is_contiguous) and
-    # never reaches this function for exactly this reason.
+    # wholly empty tensor is aliasable (dlpack_peek) and never reaches this
+    # function for exactly this reason.
     min_off = 0
     max_off = 0
     for s, st in zip(shape, strides):
@@ -1880,7 +1872,7 @@ def _dlpack_flat_span(shape, strides):
     return min_off, max_off
 
 
-def from_dlpack(obj):
+def from_dlpack(obj, *, copy=None):
     ''' Import a tensor from another array library via the DLPack protocol.
     Accepts either a raw DLPack capsule (the legacy
     torch.utils.dlpack.from_dlpack(capsule) style) or any object
@@ -1888,55 +1880,73 @@ def from_dlpack(obj):
     tensors, ...), matching numpy.from_dlpack/torch.from_dlpack's own dual
     calling convention, on CPU or an accelerator device.
 
-    A row-major contiguous source is imported zero-copy, aliasing the
-    producer's own memory directly (freed via the producer's DLPack deleter
-    once this Var's storage is no longer referenced).
+    A contiguous source, and a strided one with non-negative strides (a
+    transposed, permuted or step-sliced torch tensor), is imported zero-copy:
+    the result aliases the producer's memory, as a storage view when it is
+    strided, and the producer's DLPack deleter runs once this Var's storage
+    is no longer referenced. A source with a negative stride, which a Jittor
+    Var cannot alias, is gathered into an independent contiguous copy.
 
-    A non-contiguous source (e.g. a transposed/permuted/sliced-with-a-step
-    PyTorch tensor, which PyTorch's own __dlpack__() happily exports with
-    real, non-default strides) is real, first-class supported here too:
-    since Jittor's Var has no stride concept at all (only ever row-major
-    contiguous storage), it cannot alias such a view zero-copy, but it CAN
-    and does correctly import its values, by (1) importing the minimal flat
-    span of raw elements the given strides can reach as a genuinely
-    contiguous 1-D buffer (still zero-copy at this stage -- an ordinary
-    foreign-memory import, same as the contiguous path), then (2) gathering
-    the producer's logical (strided) shape out of that flat buffer with one
-    ordinary, already-differentiable jittor advanced-index op (index()-built
-    offsets + a single getitem), which performs the actual element
-    reordering as a real device-side op -- never a host round-trip, and
-    never a silent misread of the data. The result is a new, independently-
-    owned contiguous Var with correct values; the "zero-copy aliasing"
-    property is the only thing not preserved, because it is fundamentally
-    impossible without giving Jittor a real stride model.
+    `copy` follows the array API: True always returns an independent copy,
+    False requires an alias and raises BufferError when there can be none, and
+    None (the default) aliases whenever it can.
+
+    A CUDA producer is handed Jittor's compute stream (`__dlpack__(stream=)`),
+    so its pending work is ordered before Jittor's without waiting for the
+    whole device; a producer that does not take the argument is waited for.
 
     The returned Var is explicitly pinned to the source's physical device
-    (see Var.migrate_to_device) when that device is a GPU. '''
+    (see Var.to_device) when that device is a GPU. '''
+    if copy not in (None, True, False):
+        raise TypeError("from_dlpack: copy must be None, True or False")
+    ordered = False
     if hasattr(obj, "__dlpack__"):
-        # Advertise support for the DLPack>=0.8 versioned capsule (the
-        # "current standard" struct -- core.from_dlpack_capsule accepts
-        # either). NumPy/CuPy/PyTorch's own __dlpack__() all honor
-        # max_version and hand back a "dltensor_versioned" capsule once
-        # asked; a producer whose __dlpack__ doesn't accept the newer
-        # kwargs at all (pre-array API standard) falls back to the legacy
-        # no-argument call.
-        try:
-            capsule = obj.__dlpack__(max_version=(1, 0))
-        except TypeError:
+        kwargs = {"max_version": (1, 0)}
+        device = getattr(obj, "__dlpack_device__", None)
+        if device is not None:
+            device_type, device_id = device()
+            if device_type == 2:  # kDLCUDA
+                kwargs["stream"] = core.dlpack_consumer_stream(ori_int(device_id))
+        if copy is not None:
+            kwargs["copy"] = copy
+        # A producer older than the array API takes fewer keywords; drop them
+        # one at a time, `copy` first, and remember what it did honour.
+        capsule = None
+        for drop in ((), ("copy",), ("copy", "max_version"),
+                     ("copy", "max_version", "stream")):
+            attempt = {k: v for k, v in kwargs.items() if k not in drop}
+            try:
+                capsule = obj.__dlpack__(**attempt)
+            except TypeError:
+                continue
+            ordered = "stream" in attempt
+            copied = "copy" in attempt and copy is True
+            break
+        if capsule is None:
             capsule = obj.__dlpack__()
+            ordered = copied = False
     else:
         capsule = obj
+        copied = False
 
-    shape, strides = core.dlpack_peek(capsule)
-    if _dlpack_is_contiguous(shape, strides):
-        return core.from_dlpack_capsule(capsule)
+    shape, strides, aliasable = core.dlpack_peek(capsule)
+    if aliasable:
+        result = core.from_dlpack_capsule(capsule, None, 0, ordered)
+        if copy is True and not copied:
+            result = result.clone()
+            result.sync()
+        return result
+    if copy is False:
+        raise BufferError(
+            "from_dlpack(copy=False): the tensor has negative strides %s, which a "
+            "Jittor Var cannot alias" % (tuple(strides),))
 
-    # Strided producer: materialize a real, correctly-valued, independently
-    # owned contiguous copy instead of rejecting the tensor -- see the
-    # docstring above for the full design rationale.
+    # A negative stride: import the flat element span the strides reach,
+    # zero-copy, and gather the logical tensor out of it with one
+    # device-side advanced-index op.
     min_off, max_off = _dlpack_flat_span(shape, strides)
     flat_len = max_off - min_off + 1
-    flat = core.from_dlpack_capsule(capsule, flat_len, min_off)
+    flat = core.from_dlpack_capsule(capsule, flat_len, min_off, ordered)
 
     idx = None
     for d, st in enumerate(strides):
@@ -1951,15 +1961,9 @@ def from_dlpack(obj):
     else:
         idx = idx - min_off
     result = flat[idx]
-    # Jittor's execution is lazy: without forcing this now, the gather above
-    # would only actually run (reading `flat`, which zero-copy aliases the
-    # producer's own memory) whenever the caller first materializes the
-    # result -- an arbitrarily later point at which the producer may already
-    # have mutated or reused that memory. That would make the "independent
-    # copy" semantics documented above a race rather than a guarantee, unlike
-    # copy=True's export path (also an immediate, eager memcpy). Sync here so
-    # the gather -- and therefore the real, owned copy -- happens NOW, before
-    # from_dlpack() returns, matching an eager copy's usual guarantee.
+    # Lazy execution would run the gather whenever the caller first reads
+    # the result, by which time the producer may have reused its memory.
+    # Run it now, so the copy is a copy when from_dlpack() returns.
     result.sync()
     return result
 

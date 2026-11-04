@@ -443,9 +443,11 @@ def test_owner_native_activation_freed_and_recomputed_with_live_lease():
         before = [(i, row) for i, row in allocations if i < cursor]
         after = [(i, row) for i, row in allocations if i >= cursor]
         assert before and after, "OWNER_NO_ORIGINAL_ACTIVATION_REALLOCATION"
-        ops = jt.core.step_trace_ops()
+        from jittor.profiling import _layout, _records
+
+        ops = _records(jt.core.step_trace_ops(), _layout()["ops"])
         strings = jt.core.step_trace_strings()
-        names = {ops[i]: strings[ops[i+3]] for i in range(0, len(ops), 12)}
+        names = {op["seq"]: strings[op["name"]] for op in ops}
         assert all("matmul" in names.get(row[6], "") for _, row in before + after)
         first_i, first = before[0]
         assert any(first_i < i < after[0][0] and row[3] < 0

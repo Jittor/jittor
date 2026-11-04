@@ -237,33 +237,179 @@ def _cuda_gesv(cp, a, b, out):
                            "(devInfo %d, %d)" % (t, t, status[0], status[1]))
 
 
-def _cuda_svd_reduced(cp, a):
-    """Reduced ``(u, s, vh)`` of one (M, N) matrix on CUDA.
+def _gesvdj(cp, a):
+    """Jacobi SVD of a batch ``a`` (B, M, N) on CUDA, converged to eps^2.
 
-    Jacobi (``gesvdj``) first, as torch does: for the 64-512 square complex64
-    matrices of an MPS truncation it is 3x faster than the QR-iteration
-    ``gesvd`` CuPy's ``svd`` calls (128x128: 3.1 ms against 9.2 ms, torch
-    3.1 ms). When it does not converge it reports so, and the matrix goes to
-    ``gesvd`` instead -- the same fallback torch takes. Reading that status is
-    one host sync.
+    Returns ``(u, s, v, info)``: reduced factors, V itself, and the
+    per-matrix status on the device (0 when converged).
+
+    cuSOLVER's default tolerance (machine eps, relative to ``||A||``) took
+    ``I + E``, a near-identity matrix with two singular values 16 eps apart,
+    for diagonal after zero sweeps and returned the identity as its vectors:
+    the top projector was 0.33 off (torch's Jacobi 0.014, ``gesvd`` exact).
+    Accuracy there is set by the gap, not by ``||A||``. Jacobi converges
+    quadratically, so eps^2 costs one more sweep: 7 -> 8 for a 128x128
+    complex64, 10-15% more time, and every size from 8 to 256 converged.
+    CuPy's ``gesvdj`` does not take a tolerance, hence the direct calls.
     """
-    import cupyx
-    from cupyx import cusolver
+    from cupy_backends.cuda.libs import cusolver as _cs
+    from cupy.cuda import device as _device
+    batch, m, n = a.shape
+    k = min(m, n)
+    complex_input = a.dtype.kind == "c"
+    real = np.float32 if a.dtype in (np.float32, np.complex64) else np.float64
+    letter = {np.dtype(np.float32): "s", np.dtype(np.float64): "d",
+              np.dtype(np.complex64): "c", np.dtype(np.complex128): "z"}[np.dtype(a.dtype)]
+    handle = _device.get_cusolver_handle()
+    _cs.setStream(handle, cp.cuda.get_current_stream().ptr)
+    params = _cs.createGesvdjInfo()
     try:
-        with cupyx.errstate(linalg="raise"):
-            u, s, v = cusolver.gesvdj(a, full_matrices=False)
-    except np.linalg.LinAlgError:
-        return cp.linalg.svd(a, full_matrices=False)
-    # gesvdj returns V itself, (N, K)
-    return u, s, v.conj().T
+        _cs.xgesvdjSetTolerance(params, float(np.finfo(real).eps) ** 2)
+        # Column-major matrices: a C-ordered (B, N, M) array holds each (M, N)
+        # matrix in column-major order.
+        af = cp.ascontiguousarray(a.transpose(0, 2, 1))
+        s = cp.empty((batch, k), real)
+        info = cp.zeros(batch, np.int32)
+        if batch > 1 and m <= 32 and n <= 32:
+            # One launch for the batch, as torch takes small batches; full
+            # U (M, M) and V (N, N), sliced to the reduced factors below.
+            u = cp.empty((batch, m, m), a.dtype)
+            v = cp.empty((batch, n, n), a.dtype)
+            size = getattr(_cs, letter + "gesvdjBatched_bufferSize")(
+                handle, 1, m, n, af.data.ptr, m, s.data.ptr, u.data.ptr, m,
+                v.data.ptr, n, params, batch)
+            work = cp.empty(max(size, 1), a.dtype)
+            getattr(_cs, letter + "gesvdjBatched")(
+                handle, 1, m, n, af.data.ptr, m, s.data.ptr, u.data.ptr, m,
+                v.data.ptr, n, work.data.ptr, size, info.data.ptr, params, batch)
+            u = u.transpose(0, 2, 1)[:, :, :k]
+            v = v.transpose(0, 2, 1)[:, :, :k]
+        else:
+            u = cp.empty((batch, k, m), a.dtype)
+            v = cp.empty((batch, k, n), a.dtype)
+            size = getattr(_cs, letter + "gesvdj_bufferSize")(
+                handle, 1, 1, m, n, af[0].data.ptr, m, s[0].data.ptr, u[0].data.ptr, m,
+                v[0].data.ptr, n, params)
+            work = cp.empty(max(size, 1), a.dtype)
+            for b in range(batch):
+                getattr(_cs, letter + "gesvdj")(
+                    handle, 1, 1, m, n, af[b].data.ptr, m, s[b].data.ptr, u[b].data.ptr, m,
+                    v[b].data.ptr, n, work.data.ptr, size, info[b:].data.ptr, params)
+            u = u.transpose(0, 2, 1)
+            v = v.transpose(0, 2, 1)
+    finally:
+        _cs.destroyGesvdjInfo(params)
+    return u, s, v, info
+
+
+def _cuda_eigh(cp, a):
+    """``eigh(a, UPLO='L')`` of an (..., N, N) batch on CUDA.
+
+    One matrix is cuSOLVER's divide-and-conquer ``syevd``/``heevd``, which
+    CuPy's ``eigh`` calls and which is accurate there. CuPy sends a batch to
+    Jacobi (``syevjBatched``) at its default tolerance, which -- as for the
+    SVD (`_gesvdj`) -- stops on a near-identity matrix before rotating: the
+    top eigenprojector of ``I + E`` with a 16 eps gap came back 0.33 off while
+    the same matrix alone was exact. A batch of N <= 32 is Jacobi converged to
+    eps^2, one launch; larger ones, and any matrix Jacobi did not converge
+    on, take ``syevd`` one at a time.
+    """
+    from cupy_backends.cuda.libs import cusolver as _cs
+    from cupy.cuda import device as _device
+    if a.ndim == 2:
+        return cp.linalg.eigh(a, UPLO="L")
+    shape = a.shape
+    n = shape[-1]
+    flat = a.reshape((-1, n, n))
+    batch = flat.shape[0]
+    real = np.float32 if a.dtype in (np.float32, np.complex64) else np.float64
+    w = cp.empty((batch, n), real)
+    v = cp.empty((batch, n, n), a.dtype)
+    converged = np.zeros(batch, bool)
+    if n <= 32 and batch > 1:
+        name = {np.dtype(np.float32): "ssyevj", np.dtype(np.float64): "dsyevj",
+                np.dtype(np.complex64): "cheevj", np.dtype(np.complex128): "zheevj"}[np.dtype(a.dtype)]
+        handle = _device.get_cusolver_handle()
+        _cs.setStream(handle, cp.cuda.get_current_stream().ptr)
+        params = _cs.createSyevjInfo()
+        try:
+            _cs.xsyevjSetTolerance(params, float(np.finfo(real).eps) ** 2)
+            # Column-major (B, N, N): each matrix as it is, its lower
+            # triangle read, overwritten with the eigenvectors as columns.
+            work_a = cp.ascontiguousarray(flat.transpose(0, 2, 1))
+            info = cp.zeros(batch, np.int32)
+            lower = 0
+            size = getattr(_cs, name + "Batched_bufferSize")(
+                handle, 1, lower, n, work_a.data.ptr, n, w.data.ptr, params, batch)
+            work = cp.empty(max(size, 1), a.dtype)
+            getattr(_cs, name + "Batched")(
+                handle, 1, lower, n, work_a.data.ptr, n, w.data.ptr, work.data.ptr, size,
+                info.data.ptr, params, batch)
+            # Rescaled as the SVD's (see `_cuda_svd_reduced`): Jacobi's vectors
+            # come back some ten eps from unit norm, which the backward's
+            # measured resolution then took for error and zeroed a 16 eps gap.
+            vectors = work_a.transpose(0, 2, 1)
+            v[...] = vectors / cp.linalg.norm(vectors, axis=-2, keepdims=True)
+            converged = cp.asnumpy(info) == 0
+        finally:
+            _cs.destroySyevjInfo(params)
+    for b in np.flatnonzero(~converged):
+        w[b], v[b] = cp.linalg.eigh(flat[b], UPLO="L")
+    return w.reshape(shape[:-1]), v.reshape(shape)
+
+
+def _cuda_svd_reduced(cp, a):
+    """Reduced ``(u, s, vh)`` of an (..., M, N) batch on CUDA.
+
+    Jacobi (``gesvdj``, see `_gesvdj`) first, as torch does: for the 64-512
+    square complex64 matrices of an MPS truncation it is 3x faster than the
+    QR-iteration ``gesvd`` CuPy's ``svd`` calls (128x128: 3.1 ms against
+    9.2 ms, torch 3.1 ms). A matrix it does not converge on goes to ``gesvd``
+    instead -- the same fallback torch takes.
+
+    The singular values are then re-read as ``||a v_i||``, whose error is
+    second order in the vectors'. Jacobi's own values carry the rounding of
+    every rotation: for ``diag(1, 1 + 2^-19)`` in complex64 one came back an
+    ulp off, which is 1/16 of the gap, and the gradient through that gap 3%
+    off (LAPACK's SVD, and torch's, exact). Re-read, the values may change
+    order by a rounding; such a matrix is sorted again, vectors included.
+    """
+    shape = a.shape
+    m, n = shape[-2:]
+    flat = a.reshape((-1, m, n))
+    u, s, v, info = _gesvdj(cp, flat)
+    # Jacobi's vectors come back with norms some ten eps from 1 (2x2
+    # complex64: 20 eps of non-orthogonality, almost all of it scale, where
+    # LAPACK's are within one). Rescaled, the backward's measured resolution
+    # (decompositions.py `_resolution`) sees the rotation's error only.
+    u = u / cp.linalg.norm(u, axis=-2, keepdims=True)
+    v = v / cp.linalg.norm(v, axis=-2, keepdims=True)
+    # ||a v_i||, stationary at an exact right vector, so its error is second
+    # order in v's: within one eps of LAPACK's values where Jacobi's own were
+    # 240 eps off (128x128 complex64).
+    s = cp.linalg.norm(cp.matmul(flat, v), axis=-2).astype(s.dtype)
+    # The status and whether the re-read values still descend, in one read.
+    unsorted = (s[:, 1:] > s[:, :-1]).any(axis=-1) if s.shape[-1] > 1 else cp.zeros_like(info, bool)
+    status = cp.asnumpy(cp.stack([info != 0, unsorted]))
+    for b in np.flatnonzero(status[1] & ~status[0]):
+        order = cp.argsort(-s[b])
+        s[b], u[b], v[b] = s[b][order], u[b][:, order], v[b][:, order]
+    vh = v.conj().transpose(0, 2, 1)
+    for b in np.flatnonzero(status[0]):
+        u[b], s[b], vh[b] = cp.linalg.svd(flat[b], full_matrices=False)
+    k = s.shape[-1]
+    return (u.reshape(shape[:-2] + (m, k)), s.reshape(shape[:-2] + (k,)),
+            vh.reshape(shape[:-2] + (k, n)))
 
 
 #: The CUDA rows of the four 2-D linalg kernels below: native cuSOLVER and
 #: cuBLAS ops on Jittor's own stream, the way torch calls them from ATen.
 #: Through the ``numpy_code`` callbacks a 64x64 complex64 solve paid ~130 us
 #: in the executor's Python callback and CuPy's array wrapping on top of the
-#: library calls, and QR a host sync torch does not make. A batch, or a CUDA
-#: toolchain without cuSOLVER (``setup_cusolver``), keeps the callbacks.
+#: library calls, and QR a host sync torch does not make. A batch of solves
+#: takes cuBLAS's batched LU (``cublas_solve_batched``) or, for large matrices,
+#: ``cusolver_solve`` one matrix after another; a batch of the other three, or
+#: a CUDA toolchain without cuSOLVER (``setup_cusolver``), keeps the callbacks.
 _LAPACK_DTYPES = {"float32", "float64", "complex64", "complex128"}
 
 
@@ -275,8 +421,32 @@ def _cublas_ops():
     return get_library_ops("cublas", load=True)
 
 
+#: The largest order a batch of solves takes cuBLAS's batched LU for; above
+#: it, cuSOLVER's getrf/getrs one matrix after another is faster, as torch
+#: also chooses. Measured on an RTX 4090, complex64, a batch of 4.
+_CUBLAS_BATCHED_SOLVE_MAX_N = 256
+
+
+def _has_cublas_solve_batched():
+    return getattr(_cublas_ops(), "cublas_solve_batched", None) is not None
+
+
 def _supports_cuda_solve(a, b):
-    return a.ndim == 2 and b.ndim == 2 and a.dtype == b.dtype and _cusolver_ops() is not None
+    # `solve` has broadcast the batch dimensions already, so a batch of `a`
+    # and `b` share them.
+    if a.dtype != b.dtype or b.ndim != a.ndim or a.ndim < 2 or _cusolver_ops() is None:
+        return False
+    return (a.ndim == 2 or a.shape[-1] > _CUBLAS_BATCHED_SOLVE_MAX_N
+            or not _has_cublas_solve_batched())
+
+
+def _supports_cuda_solve_batched(a, b):
+    # One `getrfBatched`/`getrsBatched` pair takes the whole batch, where the
+    # CuPy callback paid the executor's Python callback and array wrapping on
+    # every call, and its backward three times.
+    return (a.ndim > 2 and b.ndim == a.ndim and a.dtype == b.dtype
+            and _has_cublas_solve_batched()
+            and (a.shape[-1] <= _CUBLAS_BATCHED_SOLVE_MAX_N or _cusolver_ops() is None))
 
 
 def _supports_cuda_square(a):
@@ -288,8 +458,17 @@ def _supports_cuda_trsm(a, b, upper):
             and getattr(_cublas_ops(), "cublas_trsm", None) is not None)
 
 
+def _dense(x):
+    # A broadcast batch is an expand view; the ops address matrices densely.
+    return x if x._storage_is_contiguous() else x.contiguous()
+
+
 def _cuda_solve(a, b):
-    return _cusolver_ops().cusolver_solve(a, b)
+    return _cusolver_ops().cusolver_solve(_dense(a), _dense(b))
+
+
+def _cuda_solve_batched(a, b):
+    return _cublas_ops().cublas_solve_batched(_dense(a), _dense(b))
 
 
 def _cuda_inv(a):
@@ -307,6 +486,8 @@ def _cuda_solve_triangular(a, b, upper):
 
 register_kernel("linalg_solve", "cuda", _cuda_solve, dtypes=_LAPACK_DTYPES,
                 supports=_supports_cuda_solve)
+register_kernel("linalg_solve", "cuda", _cuda_solve_batched, dtypes=_LAPACK_DTYPES,
+                supports=_supports_cuda_solve_batched)
 register_kernel("linalg_inv", "cuda", _cuda_inv, dtypes=_LAPACK_DTYPES,
                 supports=_supports_cuda_square)
 register_kernel("linalg_qr", "cuda", _cuda_qr, dtypes=_LAPACK_DTYPES,

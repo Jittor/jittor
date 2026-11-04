@@ -182,8 +182,8 @@ def _load_bytes(data):
     return out
 
 
-def _load_file(filename, device="cpu"):
-    with _PySafeOpen(filename, device=device) as safe:
+def _load_file(filename, device="cpu", *, backend="mmap"):
+    with _PySafeOpen(filename, device=device, backend=backend) as safe:
         return {key: safe.get_tensor(key) for key in safe.keys()}
 
 
@@ -197,12 +197,26 @@ def _reject_shared_storage(tensors):
     Storage identity is the frontend's ``untyped_storage().data_ptr()``, the
     same key those libraries deduplicate on.
     """
-    names = {}
+    allocations = {}
     for key, value in tensors.items():
         storage = getattr(value, "untyped_storage", None)
-        if storage is not None:
-            names.setdefault(storage().data_ptr(), []).append(key)
-    shared = [group for group in names.values() if len(group) > 1]
+        if storage is not None and value.numel():
+            pointer = storage().data_ptr()
+            start = value.data_ptr()
+            end = start + value.numel() * value.element_size()
+            allocations.setdefault((str(value.device), pointer), []).append((start, end, key))
+    shared = []
+    for ranges in allocations.values():
+        group, last_end = [], 0
+        for start, end, key in sorted(ranges):
+            if group and start >= last_end:
+                if len(group) > 1:
+                    shared.append(group)
+                group = []
+            group.append(key)
+            last_end = max(last_end, end)
+        if len(group) > 1:
+            shared.append(group)
     if shared:
         raise RuntimeError(
             "Some tensors share memory, this will lead to duplicate memory on disk "

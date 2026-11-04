@@ -260,7 +260,8 @@ int main(int argc, char** argv) {
         self.write("job/memory.max", 2 * GIB)
         tree = ast.parse((PYTHON_ROOT / "jittor/build/utils/__init__.py").read_text())
         functions = [node for node in tree.body if isinstance(node, ast.FunctionDef)
-                     and node.name in ("get_total_mem", "run_cmds")]
+                     and node.name in ("get_total_mem", "run_cmds", "compile_pool_size",
+                                       "_available_cpu_ids")]
         pool_sizes = []
         class Pool:
             def __init__(self, size, **kwargs):
@@ -273,7 +274,8 @@ int main(int argc, char** argv) {
         module.limit_memory = lambda memory: self.cgroup.limit_memory(memory, self.groups, self.mountinfo)
         namespace = dict(__package__="compile_memory_probe", Any=object,
             _main_module_not_reexecuted=contextlib.nullcontext, os=SimpleNamespace(name="posix",
-            sysconf=lambda name: 4096 if name == "SC_PAGE_SIZE" else HOST_MEMORY // 4096, environ={}),
+            sysconf=lambda name: 4096 if name == "SC_PAGE_SIZE" else HOST_MEMORY // 4096, environ={},
+            cpu_count=lambda: 64),
             sys=SimpleNamespace(platform="linux"),
             platform=SimpleNamespace(system=lambda: "Linux"), Pool=Pool, pool_size=0,
             mp=SimpleNamespace(current_process=lambda: SimpleNamespace(_config={})),

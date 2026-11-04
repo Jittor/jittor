@@ -306,3 +306,22 @@ def test_a_numpy_code_operator_on_explicit_cuda_inputs_gets_device_arrays():
     tail = finished.stdout[-3000:]
     assert finished.returncode == 0, tail
     assert {"REFUSED", "RAN"} & set(finished.stdout.splitlines()), tail
+
+@pytest.mark.parametrize("source,ambient", [("cpu", 1), ("cuda", 0)])
+@pytest.mark.parametrize("by_row", [False, True])
+def test_unique_counts_inherit_explicit_input_placement(source, ambient, by_row):
+    import jittor as jt
+    import torch
+    raw = np.array([[1, 2], [2, 3], [1, 2], [4, 5]], dtype=np.int64)
+    with _cuda_runtime():
+        x = torch.tensor(raw, dtype=torch.int64, device=source)
+        x.sync()
+        with jt.flag_scope(use_cuda=ambient):
+            values, inverse, counts = torch.unique(x, dim=0 if by_row else None, return_inverse=True, return_counts=True)
+            jt.sync_all(True)
+        want = np.unique(raw, return_inverse=True, return_counts=True, axis=0 if by_row else None)
+        for value in (values, inverse, counts):
+            assert value.device.type == source
+        np.testing.assert_array_equal(values.numpy(), want[0])
+        np.testing.assert_array_equal(inverse.numpy().reshape(want[1].shape), want[1])
+        np.testing.assert_array_equal(counts.numpy(), want[2])

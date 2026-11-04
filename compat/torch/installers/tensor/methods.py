@@ -38,6 +38,7 @@ from .method_api import (
     _api_is_contiguous,
     _api_is_leaf,
     _api_is_sparse,
+    _api_is_quantized,
     _api_retains_grad,
     _api_is_cpu,
     _api_is_mps,
@@ -358,8 +359,8 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
 
     # torch storage introspection: peft/safetensors call tensor.storage()
     # .data_ptr() / .untyped_storage().nbytes() to detect shared/tied weights.
-    # jittor has no exposed storage object; expose identity-based stand-ins so
-    # save_pretrained's tied-weight detection works (each Var is its own storage).
+    # Expose the native allocation address so detached aliases and offset
+    # views retain their shared storage identity.
     if not hasattr(Var, "storage"):
         Var.storage = _api_storage
     if not hasattr(Var, "untyped_storage"):
@@ -466,6 +467,9 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # of silently calling every intermediate a leaf.
     Var.is_leaf = property(_api_is_leaf)
     Var.is_sparse = property(_api_is_sparse)
+    Var.is_quantized = property(_api_is_quantized)
+    register_api_bindings(Var, 'torch.Tensor', ('is_quantized',), Fidelity.EXACT,
+                          'Native Var has no quantized tensor storage.')
     register_api_bindings(Var, 'torch.Tensor', ('is_sparse',), Fidelity.EXACT,
                           'Native Var has dense storage; sparse construction is unsupported.')
     # torch's nested-tensor flag; jittor has no nested tensors -> always False.

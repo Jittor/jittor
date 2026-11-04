@@ -40,6 +40,10 @@ def fused_sgd_acl(parameters, velocities, gradients, lr, momentum,
         float(lr), float(momentum), float(weight_decay), float(dampening),
         bool(nesterov), False, bool(step <= 1),
     )
+    if momentum == 0:
+        # The kernel leaves the velocities alone; hand them back as they are,
+        # as the CUDA kernel does, so nothing rebinds them.
+        return result[:count], list(velocities)
     return result[:count], result[count:]
 
 

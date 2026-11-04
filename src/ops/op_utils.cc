@@ -13,6 +13,16 @@ static auto make_array = op_constructor<VarPtr, const void*, NanoVector, NanoStr
 static auto make_unary = op_constructor<VarPtr, Var*, NanoString>("unary");
 static auto make_broadcast_to = op_constructor<VarPtr, Var*, Var*, NanoVector>("broadcast_to");
 
+// The constant is made where `x` is, not on the current device: a gradient
+// seed `make_number(1, loss)` used to land on the ambient GPU while the loss
+// lived on another, and so did every gradient grown from it (`grad(x, x)` for
+// an x on cuda:0 under cuda:1 came back on cuda:1). A pending array is moved
+// the way Op::propagate_device moves a pending scalar.
+static void place_like(Var* constant, Var* x) {
+    constant->device_id = x->device_id;
+    if (x->placement.explicit_backend) constant->placement = x->placement;
+}
+
 VarPtr make_number(float number, Var* x) {
     union Number {
         float32 f32;
@@ -25,10 +35,12 @@ VarPtr make_number(float number, Var* x) {
     if (x->dtype() == ns_int32) v.i32 = number; else
     if (x->dtype() == ns_int64) v.i64 = number; else {
         VarPtr nums = make_array(&number, {}, ns_float32);
+        place_like(nums.ptr, x);
         nums = make_broadcast_to(nums, x, {});
         return make_unary(nums, x->dtype());
     }
     VarPtr nums = make_array(&v, {}, x->dtype());
+    place_like(nums.ptr, x);
     return make_broadcast_to(nums, x, {});
 }
 

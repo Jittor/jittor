@@ -63,7 +63,7 @@ def _fused_sgd_cuda(entries, lr, momentum, weight_decay, dampening, nesterov, st
     outs = jt.fused_sgd(params, vels, grads, 0.0 if live else float(lr),
                         float(momentum), float(weight_decay), float(dampening),
                         bool(nesterov), False, bool(step <= 1), live)
-    plain = momentum == 0 and dampening == 0 and not nesterov
+    plain = momentum == 0
     return list(zip(outs[:len(entries)], vels if plain else outs[len(entries):]))
 
 

@@ -203,7 +203,7 @@ def unique(
         cuda_src=
         _cuda_tensor_ops.unique_compact_source(need_inverse)
     )
-    indice_shape = (output.shape[0], )
+    unique_indices = output
     output = input_sorted[output][:]
 
     new_shape = list(orig_shape[1:])
@@ -213,8 +213,10 @@ def unique(
         inverse = inverse.view(temp_shape).transpose(dim, 0)
 
     if return_counts:
-        counts = jt.zeros(indice_shape, dtype=jt.int32)
-        jt.scatter_(counts, 0, inverse.flatten(), jt.ones(dimlen), reduce='add')
+        # Keep auxiliaries on the input device, independent of factory defaults.
+        counts = unique_indices * 0
+        ones = inverse.flatten() * 0 + 1
+        jt.scatter_(counts, 0, inverse.flatten(), ones, reduce='add')
 
     if return_inverse and return_counts:
         return output, inverse, counts

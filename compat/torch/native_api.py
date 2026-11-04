@@ -68,9 +68,17 @@ class NativeOperation:
         if self._operation_key in ("fft.fftfreq", "fft.rfftfreq"):
             kwargs = dict(kwargs)
             device = kwargs.pop("device", None)
-        with tensor_frontend(context.state["Var"], device=device):
+        unique_operation = self._operation_key in ("unique", "unique_consecutive")
+        source = (args[0] if args else kwargs.get("input")) if unique_operation else None
+        with tensor_frontend(context.state["Var"], device=device, like=source):
             if isinstance(implementation, type) and issubclass(implementation, context.native_backend.Function):
                 implementation = implementation()
+            if unique_operation:
+                result = implementation(*args, **kwargs)
+                # Torch always represents inverse indices and counts as int64.
+                if isinstance(result, tuple):
+                    result = (result[0],) + tuple(value.int64() for value in result[1:])
+                return result
             return implementation(*args, **kwargs)
 
     def __reduce__(self):

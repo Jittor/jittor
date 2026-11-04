@@ -55,6 +55,27 @@ class TestFunction(unittest.TestCase):
         )
         np.testing.assert_allclose((value * 2).numpy(), [2.0, 4.0])
 
+    def test_a_raising_backward_raises_again_on_retry(self):
+        # The callback used to be released on its first error, so a second
+        # jt.grad over the same loss failed `check failed: callback.deleter`
+        # instead of raising the user's error again.
+        class Reject(Function):
+            def execute(self, x):
+                return x * x
+
+            def grad(self, g):
+                raise RuntimeError("deliberately rejected derivative")
+
+        for use_cuda in ((0, 1) if jt.has_cuda else (0,)):
+            with jt.flag_scope(use_cuda=use_cuda):
+                x = jt.array([2.0])
+                x.sync()
+                loss = Reject.apply(x).sum()
+                for _ in range(3):
+                    with self.assertRaisesRegex(RuntimeError, "deliberately rejected derivative"):
+                        jt.grad(loss, x)
+                np.testing.assert_allclose(loss.numpy(), 4.0)
+
     def test_first_order_only_gradient_rejects_higher_order(self):
         class FirstOrderOnlySquare(Function):
             def execute(self, value):
@@ -466,6 +487,29 @@ class TestFunctionHigherOrder(unittest.TestCase):
                 with jt.flag_scope(missing_grad_error=1):
                     second = jt.grad(first.real.sum(), x)
                 np.testing.assert_allclose(second.numpy(), [12 - 6j, -9 - 3j], rtol=1e-6)
+
+    def test_a_call_leaves_no_cyclic_garbage(self):
+        # The container walk was a recursive local function, which refers to
+        # itself through its closure: every call left a cycle for the cyclic
+        # GC (eight objects a call), on the path every Function takes.
+        import gc
+        save, load = self.CONTAINERS["mixed"]
+        cube = self._cube_saving(save, load)
+
+        def step():
+            x = jt.array([2.0, -1.5])
+            first = jt.grad(cube.apply(x).sum(), x)
+            jt.grad(first.sum(), x).sync()
+
+        step()
+        gc.collect()
+        gc.disable()
+        try:
+            for _ in range(5):
+                step()
+            self.assertEqual(gc.collect(), 0)
+        finally:
+            gc.enable()
 
     def test_one_input_saved_in_several_containers_stays_one_var(self):
         class Saves(Function):

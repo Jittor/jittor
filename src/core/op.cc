@@ -341,7 +341,20 @@ void Op::propagate_device() {
     if (target.explicit_backend) {
         const int dev = target.device.backend == BackendId::Cpu ? -1 : target.device.index;
         for (Var* v : inputs()) {
-            if (!v->placement.explicit_backend || v->placement == target) continue;
+            if (v->placement == target) continue;
+            if (!v->placement.explicit_backend) {
+                // An implicitly placed input names its device only through
+                // device_id. A Python number in native mode is one, made on
+                // the current device: next to a DLPack import or a `.cuda(1)`
+                // of an explicit tensor on another card it was left there, and
+                // the kernel on the target card read its pointer and faulted
+                // with an illegal address.
+                if (dev < 0 || v->device_id < 0 || v->device_id == dev) continue;
+                if (is_pending_scalar(v) && retarget_pending(v, dev, target)) continue;
+                USER_ERROR << "Expected all inputs to be on the same CUDA device, but found"
+                    << "cuda:" >> dev << "and cuda:" >> v->device_id << "for op" << name() >> "."
+                    << "\nMove one side with Var.to_device() / .to(\"cuda:N\") first.";
+            }
             USER_CHECK(is_pending_scalar(v) && retarget_pending(v, dev, target))
                 << "Expected all tensor inputs on the same backend and device for" << name()
                 << "; use an explicit device copy before mixing CPU and accelerator tensors";
