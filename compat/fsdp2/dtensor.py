@@ -338,7 +338,7 @@ def distribute_tensor(tensor, device_mesh=None, placements=None, src_data_rank=0
         mesh_ranks = np.asarray(mesh.mesh).reshape(-1)
         if common._rank() not in mesh_ranks:
             raise RuntimeError("current rank is not a member of the DTensor mesh")
-        if mesh_ranks.size > 1:
+        if mesh_ranks.size > 1 and src_data_rank is not None:
             from jittor.distributed import broadcast
             tensor = broadcast(
                 tensor, src=int(mesh_ranks[0]), group=mesh.get_group())
@@ -356,11 +356,16 @@ def distribute_tensor(tensor, device_mesh=None, placements=None, src_data_rank=0
         raise RuntimeError("current rank is not a member of the DTensor mesh")
     world_size = int(mesh_ranks.size)
     local_rank = int(rank_positions[0])
-    if int(src_data_rank) not in set(int(rank) for rank in mesh_ranks):
-        raise ValueError("src_data_rank must belong to the DeviceMesh")
-    if world_size > 1:
-        from jittor.distributed import broadcast
-        tensor = broadcast(tensor, src=int(src_data_rank), group=mesh.get_group())
+    # PyTorch's ``src_data_rank=None`` means "the data is already replicated
+    # on every rank, slice it locally". Context parallelism relies on that: the
+    # caller broadcast the full sequence before sharding, and a second broadcast
+    # here would overwrite a deliberately per-rank buffer with rank 0's copy.
+    if src_data_rank is not None:
+        if int(src_data_rank) not in set(int(rank) for rank in mesh_ranks):
+            raise ValueError("src_data_rank must belong to the DeviceMesh")
+        if world_size > 1:
+            from jittor.distributed import broadcast
+            tensor = broadcast(tensor, src=int(src_data_rank), group=mesh.get_group())
     dim_size = global_shape[dim]
     if dim_size % world_size:
         raise NotImplementedError(
