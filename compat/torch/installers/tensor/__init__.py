@@ -682,6 +682,14 @@ def _bind_fast_cat():
 
 
 def cat(tensors, dim=0, out=None, axis=None):
+    from ...amp import _effective_autocast_device
+    if _effective_autocast_device() is not None:
+        with jt.flag_scope(amp_reg=0):
+            return _cat_impl(tensors, dim, out, axis)
+    return _cat_impl(tensors, dim, out, axis)
+
+
+def _cat_impl(tensors, dim=0, out=None, axis=None):
     if out is None and axis is None and type(dim) is int:
         fast = (_FAST_CAT or _bind_fast_cat())(tensors, dim)
         if fast is not NotImplemented:

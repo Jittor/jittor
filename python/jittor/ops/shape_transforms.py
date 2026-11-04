@@ -31,6 +31,11 @@ def repeat(x, *shape):
     '''
     if len(shape) == 1 and isinstance(shape[0], Sequence):
         shape = shape[0]
+    if all(size == 1 for size in shape):
+        result = x.clone()
+        if len(shape) > x.ndim:
+            result = result.reshape((1,) * (len(shape) - x.ndim) + tuple(x.shape))
+        return result
     len_x_shape = len(x.shape)
     len_shape = len(shape)
     x_shape = x.shape

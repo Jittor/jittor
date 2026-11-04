@@ -19,6 +19,8 @@
 #include <cub/cub.cuh>
 #include <thrust/device_vector.h>
 #include <thrust/transform.h>
+#include <thrust/iterator/counting_iterator.h>
+#include <thrust/iterator/transform_iterator.h>
 #endif
 
 namespace jittor {
@@ -91,8 +93,8 @@ void CubWhereOp::jit_run(){
     
     To* out_temp = outs[0]->ptr<To>();
 
-    cub::CountingInputIterator<To> counting_itr(0);
-    cub::TransformInputIterator<bool, NonZeroOp<Ti>, Ti*> itr(cond->ptr<Ti>(), NonZeroOp<Ti>());
+    thrust::counting_iterator<To> counting_itr(0);
+    auto itr = thrust::make_transform_iterator(cond->ptr<Ti>(), NonZeroOp<Ti>());
     temp_storage_bytes = 0;
     checkCudaErrors(cub::DeviceSelect::Flagged(nullptr, temp_storage_bytes, counting_itr, itr, out_temp, (To*)num_nonzeros, N));
     temp_storage = runtime_executor().temp_allocator->alloc(temp_storage_bytes, temp_storage_allocation);

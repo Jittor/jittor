@@ -611,6 +611,13 @@ struct VarHolder {
     // @pyjt(__get__data)
     DataView data();
     
+    // Identity of a saved value; reading it never materializes a tensor.
+    // @pyjt(_saved_storage_version)
+    inline vector<uint64> saved_storage_version() {
+        auto token = var->storage_version_token();
+        return {uint64(var->id), token->identity, token->value.load(std::memory_order_relaxed)};
+    }
+
     // @pyjt(__get__raw_ptr)
     uint64 raw_ptr();
 

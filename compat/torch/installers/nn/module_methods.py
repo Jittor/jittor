@@ -151,6 +151,9 @@ def _standard_rms_norm(self, args, kwargs):
     weight = getattr(self, "weight", None)
     if not isinstance(value, jt.Var) or not isinstance(weight, jt.Var):
         return None
+    # Mixed input/weight dtypes have promotion semantics owned by forward.
+    if _jittor_dtype_name(value.dtype) != _jittor_dtype_name(weight.dtype):
+        return None
     epsilon = self.__dict__["variance_epsilon"]
     pytorch_order = _acl_bfloat16_rms_norm(value, weight, epsilon)
     if pytorch_order is not None:

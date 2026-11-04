@@ -82,7 +82,7 @@ def repeat_interleave(x,repeats,dim=None,output_size=None):
         # unsqueezing a size-1 axis right after `dim`, broadcasting it to
         # `repeats`, and folding it back into `dim` produces.
         if repeats == 1:
-            return x
+            return x.clone()
         tar_shape = list(x.shape)
         tar_shape[dim] = tar_shape[dim] * repeats
         broadcast_shape = [-1] * (dim + 1) + [repeats] + [-1] * (x.ndim - dim - 1)

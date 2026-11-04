@@ -1149,9 +1149,10 @@ def install(ctx):
     register_api_bindings(ctx.jittor_module, "torch", ("fliplr",),
                           Fidelity.APPROXIMATE,
                           "Dense tensor column reversal using native flip; sparse layouts are unsupported")
-    from .shape import triu_indices
+    from .shape import triu_indices, tril_indices
     ctx.jittor_module.triu_indices = triu_indices
-    register_api_bindings(ctx.jittor_module, "torch", ("triu_indices",),
+    ctx.jittor_module.tril_indices = tril_indices
+    register_api_bindings(ctx.jittor_module, "torch", ("triu_indices", "tril_indices"),
                           Fidelity.APPROXIMATE,
                           "Dense integer triangular coordinates; sparse layouts are unsupported")
     _modules = ctx.registry.module_map

@@ -64,6 +64,22 @@ class _AutocastState(_threading.local):
 
 _autocast_state = _AutocastState()
 
+def _preserve_autocast_arithmetic():
+    """Protect Torch scalar arithmetic from the native AMP bias.
+
+    Native contractions deliberately set ``keep_reduce`` around their internal
+    multiply/reduce expression. Keep that compute policy intact: it is part of
+    matmul/convolution, rather than a user-visible elementwise operation.
+    Native AMP outside a Torch autocast region remains unchanged.
+    """
+    if not _autocast_state.order:
+        return False
+    register = int(jt.flags.amp_reg)
+    return bool(register & (_AMP_PREFER16 | _AMP_PREFER_BFLOAT16)) \
+        and not bool(register & _AMP_KEEP_REDUCE)
+
+
+
 # The device types torch's own device parser accepts, in its order: its error
 # message quotes this list, and a string outside it is not a device at all.
 _TORCH_DEVICE_TYPES = (
