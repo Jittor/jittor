@@ -1023,6 +1023,20 @@ def _api_dist_get_global_rank(group=None, group_rank=0):
     return int(group_rank) if group is None or getattr(group, 'ranks', None) is None else int(group.ranks[int(group_rank)])
 
 
+def _api_get_node_local_rank(fallback_rank=0):
+    """Torch's ``get_node_local_rank``: LOCAL_RANK, then the caller's fallback.
+
+    ``fallback_rank=None`` asks for the global rank, which is what torch does
+    when a launcher sets no ``LOCAL_RANK``.
+    """
+    local_rank = os.environ.get("LOCAL_RANK")
+    if local_rank is not None and str(local_rank).strip() != "":
+        return int(local_rank)
+    if fallback_rank is None:
+        return int(_distributed_rank())
+    return int(fallback_rank)
+
+
 def _api_dist_get_process_group_ranks(group=None):
     return list(range(_distributed_world_size())) if group is None or getattr(group, 'ranks', None) is None else list(group.ranks)
 
@@ -1218,6 +1232,7 @@ def _install_distributed(g, registry=None):
     dist.new_subgroups_by_enumeration = _new_subgroups_by_enumeration
     dist.get_global_rank = _api_dist_get_global_rank
     dist.get_process_group_ranks = _api_dist_get_process_group_ranks
+    dist.get_node_local_rank = _api_get_node_local_rank
     dist.is_torchelastic_launched = _api_dist_is_torchelastic_launched
     dist.ReduceOp = getattr(dist, "ReduceOp", _ReduceOp)
     if not hasattr(dist.ReduceOp, "RedOpType"):
@@ -1445,6 +1460,7 @@ def _install_distributed(g, registry=None):
          "reduce_scatter_tensor", "broadcast", "all_gather_object",
          "broadcast_object_list", "gather_object", "new_group",
          "new_subgroups_by_enumeration", "get_global_rank", "get_process_group_ranks",
+         "get_node_local_rank",
          "Store", "TCPStore", "FileStore", "PrefixStore"),
         Fidelity.APPROXIMATE,
         "Reuses native ProcessGroup, store and collective owners; group, reduction "
