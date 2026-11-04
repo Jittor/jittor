@@ -362,6 +362,7 @@ class TestCleanupStructure(unittest.TestCase):
             "transpose0231_2": "the second of that pair's permutations",
             "_oracle_env": "the real-PyTorch oracle's environment minus the shim, per oracle test",
             "device": "a cpu/cuda parametrised fixture with the capability guard",
+            "rng_device": "a device fixture shared with public state-contract tests",
             "complex_device": "the same fixture, named for the complex dtype tests",
             "scalar_device": "the same fixture, named for the scalar-contract tests",
             "scalar_promotion_device": "the same fixture, named for the promotion tests",

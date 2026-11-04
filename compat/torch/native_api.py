@@ -59,6 +59,21 @@ class NativeOperation:
         import jittor
         context = get_install_context(jittor)
         implementation = context.state["native_torch_operations"][self._operation_key]
+        if self._operation_key in ("mul", "multiply"):
+            kwargs = dict(kwargs)
+            for position, name in enumerate(("input", "other")):
+                if name in kwargs:
+                    if len(args) > position:
+                        raise TypeError("%s received %s more than once" % (self._operation_key, name))
+                    if len(args) == position:
+                        args += (kwargs.pop(name),)
+            if len(args) == 2 and not kwargs:
+                from .installers.tensor.method_api import _tensor_mul
+                left, right = args
+                if isinstance(left, context.state["Var"]):
+                    return _tensor_mul(left, right)
+                if isinstance(right, context.state["Var"]):
+                    return _tensor_mul(right, left)
         defaults = self._TORCH_DEFAULTS.get(self._operation_key)
         if defaults:
             kwargs = dict(kwargs)

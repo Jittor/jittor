@@ -43,7 +43,7 @@ def save_for_backward(self, *tensors):
     # Keep the existing holder-rebinding guard on the tensors actually saved.
     # Forward intermediates retain their own identity and history.
     self._saved_versions = tuple(
-        (t.id if isinstance(t, jt.Var) else None)
+        (tuple(t._saved_storage_version()) if isinstance(t, jt.Var) else None)
         for t in self._saved_tensors)
 
 
@@ -53,7 +53,7 @@ def _saved_tensors(self):
     if versions:
         for tensor, version in zip(saved, versions):
             if isinstance(tensor, jt.Var) and version is not None \
-                    and tensor.id != version:
+                    and tuple(tensor._saved_storage_version()) != version:
                 raise RuntimeError(
                     "one of the variables needed for gradient "
                     "computation has been modified by an inplace "
@@ -189,7 +189,9 @@ def _call_record_inputs(self, *args, **kw):
     rebinds = getattr(ctx, "_taped_input_rebinds", None)
     versions = getattr(ctx, "_saved_versions", None)
     if rebinds and versions:
-        ctx._saved_versions = tuple(rebinds.get(v, v) for v in versions)
+        ctx._saved_versions = tuple(
+            (rebinds.get(v[0], v[0]), *v[1:]) if v is not None else None
+            for v in versions)
     # Capture each forward OUTPUT's (shape, dtype) so the grad bridge can
     # materialize a zeros grad for outputs that don't reach the backward'd
     # scalar (torch's materialize_grads=True; see grad() below).
@@ -305,6 +307,10 @@ def grad(outputs, inputs, grad_outputs=None, retain_graph=None,
         raise RuntimeError(
             "One of the differentiated Tensors appears to not have been "
             "used in the graph. Set allow_unused=True if this is desired.")
+    # Each public gradient has its input dtype, including promoted concat.
+    for i, gradient in enumerate(gs):
+        if gradient is not None and gradient.dtype != ins[i].dtype:
+            gs[i] = gradient.cast(ins[i].dtype)
     if not create_graph:
         # detach() severs the graph edge but leaves jittor's requires_grad
         # flag set, and torch reports requires_grad=False here; clear it on

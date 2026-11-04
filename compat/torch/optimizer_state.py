@@ -6,6 +6,7 @@ bindings stay in optimizer_api; this module owns their state-view helpers.
 from collections.abc import Mapping
 import jittor as jt
 from .context import get_install_context
+from .optimizer_adam import _AdamStep
 from .. import optimizer_kinds as _optimizer_kinds
 from jittor.optim.algorithms.sgd import (
     momentum_initialized_flags as _momentum_initialized_flags,
@@ -126,7 +127,7 @@ class _OptState:
         if "_adagrad_steps" in pg:
             steps[i].update(_adagrad_step_tensor(0))
         else:
-            steps[i] = 0
+            list.__setitem__(steps, i, 0)
         if _torch_optimizer_kind(self._opt) == "sgd":
             _momentum_initialized_flags(pg)[i] = False
         for key in ("m", "values", "v", "d", "pre_grad"):
@@ -153,13 +154,13 @@ class _OptState:
             store.setdefault(id(param), {})[key] = value
             return
         if key == "step":
-            if isinstance(value, jt.Var):
+            if isinstance(value, jt.Var) and kind not in ("adam", "adamw"):
                 value = value.item()
             steps = _param_steps(pg)
             if kind == "adagrad":
                 steps[i].update(_adagrad_step_tensor(value))
             else:
-                steps[i] = int(value)
+                steps[i] = value if isinstance(value, jt.Var) else int(value)
             self._sync_n_step()
             return
         target = _native_state_key(kind, key)
@@ -197,17 +198,17 @@ class _OptState:
         if kind == "adagrad":
             return _ParamState(self, param, {
                 "sum": pg["values"][i], "step": steps[i]})
-        if int(steps[i]) <= 0:
+        if not isinstance(steps[i], _AdamStep) and int(steps[i]) <= 0:
             return default
         names = _NATIVE_TO_TORCH_STATE.get(kind, {})
 
         def present():
-            return {torch: pg[native][i] for native, torch in names.items()
-                    if native in pg and i < len(pg[native])}
+            return {torch: pg[native][i]
+                    for native, torch in names.items() if native in pg and i < len(pg[native])}
 
         if kind in ("adam", "adamw") and "m" in pg and "values" in pg:
             return _ParamState(self, param, {
-                **present(), "step": float(steps[i])})
+                **present(), "step": steps[i].tensor() if isinstance(steps[i], _AdamStep) else float(steps[i])})
         if kind == "sgd":
             # Present exactly while a buffer exists, like torch: independent
             # of the *current* momentum, so pausing momentum keeps it.

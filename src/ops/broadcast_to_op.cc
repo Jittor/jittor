@@ -152,8 +152,7 @@ void BroadcastToOp::infer_shape() {
         } else {
             USER_CHECKop(xshape,==,yshape) << "Shape not match in broadcast_to at output dim " >> i
                 >> ": cannot broadcast x" << x->shape << "to" << yshapes
-                << "(conflicting sizes " >> xshape >> " vs " >> yshape
-                >> "; bcast_mask=" >> bcast_mask >> ").";
+                << "(conflicting sizes " >> xshape >> " vs " >> yshape >> ").";
             zs = xshape;
         }
         zz[i] = zs;

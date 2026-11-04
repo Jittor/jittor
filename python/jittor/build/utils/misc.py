@@ -133,11 +133,11 @@ def download_url_to_local(url, filename, root_folder, digest):
     try:
         urllib.request.urlretrieve(url, part_path, reporthook=_progress())
     except Exception as e:
-        msg = f"{e}\nDownload File failed, url: {url}, path: {file_path}"
-        print(msg)
         if os.path.isfile(part_path):
             os.remove(part_path)
-        raise RuntimeError(msg)
+        # Raised once, chained: printing it first as well showed every failed
+        # download twice.
+        raise RuntimeError(f"Download failed: {e}\nurl: {url}\npath: {file_path}") from e
     if not check_file_exist(part_path, digest):
         algorithm = digest_algorithm(digest)
         got = calculate_digest(part_path, algorithm)

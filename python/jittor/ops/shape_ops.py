@@ -82,7 +82,7 @@ def repeat_interleave(x,repeats,dim=None,output_size=None):
         # unsqueezing a size-1 axis right after `dim`, broadcasting it to
         # `repeats`, and folding it back into `dim` produces.
         if repeats == 1:
-            return x
+            return x.clone()
         tar_shape = list(x.shape)
         tar_shape[dim] = tar_shape[dim] * repeats
         broadcast_shape = [-1] * (dim + 1) + [repeats] + [-1] * (x.ndim - dim - 1)
@@ -172,6 +172,14 @@ def stack(x, dim=0):
             x[i] = jt.array(x_)
     if len(x) < 2:
         return x[0].unsqueeze(dim)
+    first = list(x[0].shape)
+    for index, value in enumerate(x[1:], 1):
+        if list(value.shape) != first:
+            # Checked here: concat would compare the unsqueezed shapes and
+            # name a dim of those instead.
+            raise jt.JittorShapeError(
+                "stack expects each var to be equal size, but got %s at entry "
+                "0 and %s at entry %d" % (first, list(value.shape), index))
 
     fast = jt.misc._stack_no_grad_cuda_fast(x, dim, _stack_cpu_source)
     if fast is not None:

@@ -152,7 +152,7 @@ def _install_optimizers(g, registry=None):
         Base._torch_backward_step_marker = True
     # torch's Adam/AdamW default lr=1e-3 (jittor makes lr positional-required).
     # 3DGS builds the exposure optimizer as torch.optim.Adam([self._exposure]).
-    for _cls_name in ("Adam", "AdamW", "RMSprop", "Adan"):
+    for _cls_name in ("SGD", "Adam", "AdamW", "RMSprop", "Adan"):
         _cls = getattr(_optim, _cls_name, None)
         if _cls is None or getattr(_cls, "_torch_lr_default", False):
             continue

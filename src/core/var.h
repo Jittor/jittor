@@ -9,6 +9,7 @@
 #include "runtime/tensor_placement.h"
 #include "core/common.h"
 #include "core/node.h"
+#include "core/storage_version.h"
 #include "utils/cstr.h"
 #include "utils/fast_shared_ptr.h"
 
@@ -104,6 +105,22 @@ struct Var : Node {
     // unwritten rule.
     Var* share_src = nullptr;
     size_t share_offset = 0;
+    shared_ptr<StorageMutationVersion> storage_mutation_version;
+    inline shared_ptr<StorageMutationVersion> peek_storage_version() const {
+        return std::atomic_load(&storage_mutation_version);
+    }
+    inline shared_ptr<StorageMutationVersion> storage_version_token() {
+        auto token = peek_storage_version();
+        if (!token) {
+            auto fresh = std::make_shared<StorageMutationVersion>();
+            if (std::atomic_compare_exchange_strong(&storage_mutation_version, &token, fresh))
+                token = move(fresh);
+        }
+        return token;
+    }
+    inline void note_storage_mutation() {
+        storage_version_token()->value.fetch_add(1, std::memory_order_relaxed);
+    }
     int64 size, num;
     VarHolder* holder = nullptr;
     // The CUDA device this Var lives on, or will be computed on; -1 when no
@@ -144,7 +161,7 @@ struct Var : Node {
     inline NanoString dtype() const { CHECK_EXIST; return ns; }
     inline NanoString& dtype() { CHECK_EXIST; return ns; }
     template <typename T>
-    inline T* ptr() { CHECK_EXIST; return (T*)mem_ptr; }
+    inline T* ptr() { CHECK_EXIST; check_backward_storage_read(this); return (T*)mem_ptr; }
     inline Op* input() { CHECK_EXIST; return _inputs.size() ? (Op*)_inputs.front() : (Op*)nullptr; }
     // Whether anything will read this var's value: a downstream op on a path to
     // a requested result, or a holder (a Python reference, a sync target). This
@@ -170,6 +187,7 @@ struct Var : Node {
     bool alloc(Allocator* allocator);
     inline void share_with(Var* x, size_t offset = 0) {
         CHECK_EXIST;
+        std::atomic_store(&storage_mutation_version, x->storage_version_token());
         share_src = x;
         share_offset = offset;
         storage_offset_bytes = x->storage_offset_bytes + offset;

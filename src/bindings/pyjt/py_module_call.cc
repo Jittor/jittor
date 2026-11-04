@@ -564,6 +564,8 @@ PyObject* activation_module(PyTypeObject* type, PyObject* dict, PyObject* x) {
     if (kernel_op_registered(relu ? "nn.relu" : "nn.silu")) return nullptr;
     static auto make_unary_mc = op_constructor<VarPtr, Var*, NanoString>("unary");
     if (relu) return wrap_like_input(x, make_unary_mc(v, ns_relu));
+    // Preserve the functional owner's FP32 intermediates on warmed calls.
+    if (v->dtype() == ns_float16 || v->dtype() == ns_bfloat16) return nullptr;
     // `x.sigmoid()` is the native unary unless a kernel is registered for it.
     if (!v->dtype().is_float() || kernel_op_registered("tensor.sigmoid")) return nullptr;
     PyObjHolder gate(wrap_like_input(x, make_unary_mc(v, ns_sigmoid)));
@@ -768,6 +770,7 @@ PyObject* rms_norm_registered_inference(PyObject* module, PyObject* dict, PyObje
         return nullptr;
     NanoString input_dtype = GET_RAW_PTR(VarHolder, x)->var->dtype();
     NanoString weight_dtype = GET_RAW_PTR(VarHolder, weight)->var->dtype();
+    if (input_dtype != weight_dtype) return nullptr;
     // BF16 has a separately rounded, weight-after-normalization ACL path.
     // Its Python owner stays in charge, as does every gradient-enabled call.
     if ((input_dtype != ns_float16 && input_dtype != ns_float32)
@@ -831,6 +834,8 @@ PyObject* rms_norm_inference(PyObject* module, PyObject* dict, PyObject* x) {
         return nullptr;
     double epsilon = PyFloat_AsDouble(eps);
     if (PyErr_Occurred()) { PyErr_Clear(); return nullptr; }
+    if (GET_RAW_PTR(VarHolder, x)->var->dtype() !=
+            GET_RAW_PTR(VarHolder, weight)->var->dtype()) return nullptr;
     PyObjHolder call_args(PyTuple_Pack(3, x, weight, eps));
     PyObjHolder training(kernel_select(rms_training_name, call_args.obj, nullptr));
     if (!training.obj || training.obj != Py_None) return nullptr;

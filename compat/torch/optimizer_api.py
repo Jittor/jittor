@@ -5,6 +5,7 @@ import weakref as _weakref
 import jittor as jt
 import numpy as np
 from .context import get_install_context
+from .optimizer_adam import _AdamStep, _AdamSteps
 from ..diagnostics import EXPECTED, swallowed
 from typing import Any, Dict, List
 from .. import fsdp_hooks as _fsdp_hooks
@@ -93,6 +94,8 @@ def _init(self, *a, **k):
 def _torch_param_steps(pg):
     if "_adagrad_steps" in pg:
         return pg["_adagrad_steps"]
+    if "m" in pg and "values" in pg:
+        pg.setdefault("_torch_adam_params", tuple(pg.get("params", ())))
     _sync_adam_group_params(pg)
     params = list(pg.get("params", []))
     steps = pg.get("_torch_steps")
@@ -102,6 +105,10 @@ def _torch_param_steps(pg):
         steps.append(0)
     if len(steps) > len(params):
         del steps[len(params):]
+    if '_torch_adam_params' in pg and not isinstance(steps, _AdamSteps):
+        steps = pg['_torch_steps'] = _AdamSteps(pg, steps)
+    elif isinstance(steps, _AdamSteps):
+        steps.configure(pg)
     return steps
 
 
@@ -135,7 +142,7 @@ def _sync_adam_group_params(pg, *, replacements=()):
                 result.append(old_values[old_index])
             else:
                 result.append(0 if key == "_torch_steps" else _state_buffer(parameter))
-        pg[key] = result
+        pg[key] = _AdamSteps(pg, result) if isinstance(old_values, _AdamSteps) else result
     pg["_torch_adam_params"] = current
 
 
@@ -206,7 +213,7 @@ def _state_dict_torch(self):
         steps = _torch_param_steps(pg)
         for i, p in enumerate(pg.get("params", [])):
             pid = param_ids.get(id(p))
-            if pid is None or (kind != "adagrad" and int(steps[i]) <= 0):
+            if pid is None or (kind != "adagrad" and not isinstance(steps[i], _AdamStep) and int(steps[i]) <= 0):
                 continue
             if kind not in _NATIVE_TO_TORCH_STATE:
                 continue
@@ -223,6 +230,7 @@ def _state_dict_torch(self):
                 # exactly as the pre-table branches did.
                 if entry:
                     entry["step"] = (steps[i] if kind == "adagrad" else
+                                     steps[i].tensor() if kind in ("adam", "adamw") and isinstance(steps[i], _AdamStep) else
                                      g.tensor(float(steps[i]), dtype=g.float32))
             if entry:
                 state[pid] = entry
@@ -318,7 +326,7 @@ def _load_state_dict_torch(self, state_dict):
         steps = _torch_param_steps(pg)
         for i in range(len(steps)):
             if kind != "adagrad":
-                steps[i] = 0
+                list.__setitem__(steps, i, 0)
         if kind == "sgd":
             flags = _momentum_initialized_flags(pg)
             for i in range(len(flags)):
@@ -359,6 +367,13 @@ def _load_state_dict_torch(self, state_dict):
                         _momentum_initialized_flags(pg)[i] = True
             if kind == "adagrad":
                 steps[i].update(_adagrad_step_tensor(step))
+            elif kind in ("adam", "adamw") and isinstance(st.get("step"), jt.Var):
+                steps[i] = st["step"]
+            elif kind in ("adam", "adamw") and step == 0 and "exp_avg" in st and "exp_avg_sq" in st:
+                fused = pg.get("fused") or pg.get("capturable")
+                device = pg["params"][i].device if fused else "cpu"
+                dtype = g.float64 if not fused and g.get_default_dtype() == g.float64 else g.float32
+                steps[i] = g.tensor(0., dtype=dtype, device=device)
             else:
                 steps[i] = step
     self.n_step = max_step
@@ -633,6 +648,13 @@ def adagrad_step(self, loss=None, retain_graph=False, closure=None, **kwargs):
 _STEP_APIS = {"sgd": sgd_step, "rmsprop": rmsprop_step, "adan": adan_step,
               "adagrad": adagrad_step}
 
+def sgd_init(self, params, lr=1e-3, momentum=0, dampening=0,
+             weight_decay=0, nesterov=False, **kwargs):
+    return _initialize_default(self, params, lr, (), dict(
+        kwargs, momentum=momentum, dampening=dampening,
+        weight_decay=weight_decay, nesterov=nesterov), 'SGD')
+
+
 def adam_init(self, params, lr=1e-3, *args, **kwargs):
     return _initialize_adam(self, params, lr, args, kwargs, 'Adam')
 
@@ -662,6 +684,7 @@ def adan_init(self, params, lr=1e-3, *args, **kwargs):
 
 
 _INITIALIZER_APIS = {
+    'SGD': sgd_init,
     'Adam': adam_init,
     'AdamW': adamw_init,
     'RMSprop': rmsprop_init,

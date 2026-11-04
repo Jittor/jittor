@@ -343,6 +343,7 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
         if native_shape:
             out = orig(*args)
             out._jittor_torch_ext_mutable = True
+            out.requires_grad_(False)
             return out
     # _invoke_factory already established native construction placement.
     _requires_grad = bool(kwargs.get("requires_grad", False))

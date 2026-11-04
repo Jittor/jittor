@@ -73,6 +73,27 @@ int main() {
     assert(history.report(r.device, true, 21).find("creation.py:123") != string::npos);
     assert(history.report(r.device, true, 22).find("creation.py:123") != string::npos);
     assert(history.report(r.device).find("not proof") != string::npos);
+    // Exit tracking remains available without an active graph owner, a backend
+    // registry, or allocations, and is isolated across devices and backends.
+    forbid_allocation = true;
+    record_active_launch({{BackendId::Cuda, 0}, nullptr});
+    record_active_launch({{BackendId::Cuda, 1}, nullptr});
+    record_active_launch({{BackendId::Acl, 1}, nullptr});
+    assert(launched_device_mask(BackendId::Cuda) == 3);
+    assert(launched_device_mask(BackendId::Acl) == 2);
+    {
+        LaunchErrorScope error({BackendId::Cuda, 0});
+        note_device_context_lost(launch_error_device({BackendId::Cuda, 1}));
+    }
+    assert(device_context_lost({BackendId::Cuda, 0}));
+    assert(!device_context_lost({BackendId::Cuda, 1}));
+    assert(!device_context_lost({BackendId::Acl, 0}));
+    assert(devices_launched_after_loss(BackendId::Cuda) == 0);
+    record_active_launch({{BackendId::Cuda, 1}, nullptr});
+    note_device_context_lost({BackendId::Cuda, 0});
+    assert(devices_launched_after_loss(BackendId::Cuda) == 2);
+    assert(devices_launched_after_loss(BackendId::Acl) == 0);
+    forbid_allocation = false;
     set_launch_origin_capture(+[]() -> uint64 { return 77; });
     assert(capture_launch_origin() == 77);
     {

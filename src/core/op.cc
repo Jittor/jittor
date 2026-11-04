@@ -52,6 +52,24 @@ jit_cache_map<string> jit_key_mapper;
 std::atomic<int64> Op::number_of_lived_ops{0};
 std::atomic<int64> Op::number_of_created_ops{0};
 
+static thread_local const BackwardStorageReadScope* backward_storage_reads = nullptr;
+BackwardStorageReadScope::BackwardStorageReadScope(const Op* op)
+    : op(op), previous(backward_storage_reads) { backward_storage_reads = this; }
+BackwardStorageReadScope::~BackwardStorageReadScope() { backward_storage_reads = previous; }
+
+void check_backward_storage_read(Var* value) {
+    if (!backward_storage_reads || !value) return;
+    auto token = value->peek_storage_version();
+    if (!token) return;
+    for (auto* scope = backward_storage_reads; scope; scope = scope->previous)
+        for (const auto& saved : scope->op->saved_storage_versions)
+            if (saved.token == token || saved.original_id == value->id)
+                USER_CHECK(saved.token == token &&
+                        saved.version == saved.token->value.load(std::memory_order_relaxed))
+                    << "one of the variables needed for gradient computation has been modified by an inplace operation; saved Var"
+                    << saved.original_id << "read by" << scope->op->name();
+}
+
 // Only Ops with disabled inputs have an entry. Node flag bits record whether
 // an Op has already snapshotted and provide the common no-map-lookup fast path.
 struct DisabledGradientEdge {
@@ -435,6 +453,8 @@ void Op::init() {
         }
     }
     infer_shape();
+    if (!flag(OpFlags::_no_input_storage))
+        for (Var* value : inputs()) check_backward_storage_read(value);
     if (first_init && _inputs.size() && !flag(OpFlags::_manual_device))
         propagate_device();
     if (first_init && has_first_order_only_input)
@@ -464,6 +484,20 @@ void Op::init() {
             for (Var* v : outputs()) {
                 v->set_stop_grad();
             }
+        }
+    }
+    // Record values, never owning the saved Vars. The read scope below the
+    // native backward builder decides which of these the derivative uses.
+    // Native assignment/rebinding remains unchanged.
+    if (first_init && !no_grad && !all_inputs_stopped &&
+            autograd_policy.preserve_requires_grad_on_assignment) {
+        for (Var* value : inputs()) {
+            auto token = value->storage_version_token();
+            saved_storage_versions.push_back({token, token->value.load(std::memory_order_relaxed), value->id});
+        }
+        for (Var* value : outputs()) {
+            auto token = value->storage_version_token();
+            saved_storage_versions.push_back({token, token->value.load(std::memory_order_relaxed), value->id});
         }
     }
 }
