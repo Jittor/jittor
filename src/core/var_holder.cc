@@ -282,6 +282,7 @@ static inline bool host_value_ready(Var* var) {
 }
 
 DataView VarHolder::data() {
+    check_backward_storage_read(var);
     note_readback();
     // A host-resident value is read in place: no sync, no GIL release, so the
     // holder cannot change before the view is built.
@@ -372,6 +373,7 @@ void VarHolder::write_inplace(ArrayArgs&& array) {
     // Ordered, not blocking: the bytes have to land before the kernels that
     // read them, which is stream order, not a host-side wait. See the H2D
     // branch in the CUDA backend's copy() for why the difference is 1000x.
+    var->note_storage_mutation();
     backend_copy(var->mem_ptr, dst, array.ptr, {}, size, true);
 }
 
@@ -601,6 +603,7 @@ void VarHolder::set_data(ArrayArgs&& array) {
 #ifdef HAS_ACCELERATOR
     migrate_to_cpu(var, runtime_executor().allocator);
 #endif
+    var->note_storage_mutation();
     if (var->is_contiguous()) {
         std::memcpy(var->mem_ptr, array.ptr, size);
     } else {
@@ -1416,6 +1419,7 @@ VarHolder* VarHolder::check_inplace_autograd() {
 }
 
 void VarHolder::record_inplace_write() {
+    var->note_storage_mutation();
     if (!var->autograd_alias) return;
     ++*var->autograd_alias->version;
 
@@ -1462,6 +1466,8 @@ VarHolder* VarHolder::storage_data_alias() {
     // Tensor.data shares bytes but has an independent version counter and
     // trainability. Detach above shares the counter for its distinct contract.
     alias->var->autograd_alias = std::make_shared<AutogradAliasState>();
+    std::atomic_store(&alias->var->storage_mutation_version,
+        std::make_shared<StorageMutationVersion>());
     return alias;
 }
 
@@ -1660,7 +1666,9 @@ VarHolder* VarHolder::_update(VarHolder* v, bool logical_write) {
         var->storage_strides = replacement->storage_strides;
         var->device_id = replacement->device_id;
         var->placement = replacement->placement;
+        auto version = var->storage_version_token();
         var->share_with(replacement.ptr);
+        std::atomic_store(&var->storage_mutation_version, version);
         CHECK(var->alloc(replacement->allocator));
         return this;
     }
@@ -1696,6 +1704,7 @@ VarHolder* VarHolder::_update(VarHolder* v, bool logical_write) {
 
 
 VarHolder* VarHolder::sync(bool device_sync, bool weak_sync) {
+    check_backward_storage_read(var);
     jittor::sync({this}, device_sync, weak_sync);
     return this;
 }
@@ -1733,6 +1742,7 @@ static bool host_copy_without_migration(Var* var, ArrayArgs& result) {
 #endif
 
 ArrayArgs VarHolder::fetch_sync() {
+    check_backward_storage_read(var);
     note_readback();
     ArrayArgs result;
     // A host-resident value is read in place: no sync, no GIL release, so the

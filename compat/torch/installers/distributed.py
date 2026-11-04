@@ -5,6 +5,7 @@ changing the compatibility semantics.
 """
 
 import atexit
+from dataclasses import dataclass
 import glob
 import os
 import warnings
@@ -833,17 +834,17 @@ class FileSystemWriter:
         self.path = path
 
 
+@dataclass
 class StateDictOptions:
-    def __init__(self, *, full_state_dict=False, cpu_offload=False,
-                 ignore_frozen_params=False, keep_submodule_prefixes=True,
-                 strict=True, broadcast_from_rank0=False, flatten_optimizer_state_dict=False):
-        self.full_state_dict = bool(full_state_dict)
-        self.cpu_offload = bool(cpu_offload)
-        self.ignore_frozen_params = bool(ignore_frozen_params)
-        self.keep_submodule_prefixes = bool(keep_submodule_prefixes)
-        self.strict = bool(strict)
-        self.broadcast_from_rank0 = bool(broadcast_from_rank0)
-        self.flatten_optimizer_state_dict = bool(flatten_optimizer_state_dict)
+    """Public checkpoint options support standard dataclass transformations."""
+    full_state_dict: bool = False
+    cpu_offload: bool = False
+    ignore_frozen_params: bool = False
+    keep_submodule_prefixes: bool = True
+    strict: bool = True
+    broadcast_from_rank0: bool = False
+    flatten_optimizer_state_dict: bool = False
+    dsd_fqn_modifiers: str = "_fqn_modifiers"
 
 
 def _get_model_state_dict(model, submodules=None, *, options=None):

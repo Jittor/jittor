@@ -7,8 +7,78 @@ and an import at module level here would put both on an import-time cycle.
 import jittor as jt
 from jittor.optim.algorithms.adam import adam_update
 from jittor.optim.base import _update_preserve_dtype
+from .context import get_install_context
 from .installers.tensor.method_api import _optimizer_write_scope
 from ..diagnostics import EXPECTED, swallowed
+
+
+class _AdamStep:
+    """Keep native bookkeeping until a caller asks for the tensor state.
+
+    An exposed tensor is authoritative, including writes through aliases or
+    NumPy, which need not advance an autograd version. Do not cache its value.
+    Unobserved counters keep ordinary optimizer capture free of host reads.
+    """
+    def __init__(self, value, *, device=None, dtype=None):
+        self.counter = value if isinstance(value, jt.Var) else None
+        self.value = value if self.counter is None else None
+        self.device = device
+        self.dtype = dtype
+
+    def tensor(self):
+        if self.counter is None:
+            g = get_install_context(jt).target_namespace
+            self.counter = g.tensor(float(self.value), dtype=self.dtype, device=self.device)
+        return self.counter
+
+    def __int__(self):
+        return int(self.value if self.counter is None else self.counter.item())
+
+    def __float__(self):
+        return float(self.value if self.counter is None else self.counter.item())
+
+    def __eq__(self, other):
+        return int(self) == int(other)
+
+    def set(self, value):
+        self.value = value
+        if self.counter is not None:
+            with jt.no_grad():
+                self.counter.fill_(value)
+
+
+class _AdamSteps(list):
+    """Native step bookkeeping backed by Torch's mutable scalar state.
+
+    Uninitialized slots stay integer zero. Once initialized, numeric writes
+    update the existing tensor so references from ``state``/``state_dict``
+    remain live; explicit tensor assignments replace it, just like a dict.
+    Native update and replay code still read the entries with int()/float().
+    """
+    def __init__(self, group, values):
+        super().__init__(values)
+        self.configure(group)
+
+    def configure(self, group):
+        # Do not retain the owning dict: it owns this list, and a cycle would
+        # keep discarded optimizers' parameters and lazy graphs alive.
+        self.fused = group.get("fused", False)
+        self.devices = tuple(parameter.device for parameter in group["params"])
+
+    def __setitem__(self, index, value):
+        old = self[index]
+        if isinstance(value, jt.Var):
+            return super().__setitem__(index, _AdamStep(value))
+        if isinstance(old, _AdamStep):
+            old.set(value)
+            return
+        if value != 0:
+            g = get_install_context(jt).target_namespace
+            fused = self.fused
+            device = self.devices[index] if fused else "cpu"
+            dtype = g.float64 if not fused and g.get_default_dtype() == g.float64 else g.float32
+            value = _AdamStep(value, dtype=dtype, device=device)
+        super().__setitem__(index, value)
 
 
 def _update_in_target_dtype(target, value):
@@ -17,6 +87,8 @@ def _update_in_target_dtype(target, value):
 
 def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay):
     from . import optimizer_api as _api
+    for group in self.param_groups:
+        group.setdefault('fused', getattr(self, 'fused', None))
     native_fsdp_loss = None
     if closure is None and callable(loss):
         closure = loss
