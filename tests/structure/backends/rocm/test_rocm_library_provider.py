@@ -244,3 +244,18 @@ int main() {
                     "-I" + str(ROCM / "libraries"), str(source), "-o", str(executable)],
                    check=True, capture_output=True, text=True, timeout=30)
     subprocess.run([str(executable)], check=True, capture_output=True, timeout=10)
+
+
+def test_inference_kernels_register_without_importing_tensor_implementations(monkeypatch):
+    spec = importlib.util.spec_from_file_location(
+        'rocm_inference_registration_test', ROCM / 'kernels' / '__init__.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    calls = []
+    dispatch = ModuleType('jittor._runtime.dispatch')
+    dispatch.register_kernel = lambda *args, **kwargs: calls.append((args, kwargs))
+    monkeypatch.setitem(sys.modules, dispatch.__name__, dispatch)
+    module.install_kernels()
+    assert [args[0] for args, _ in calls] == ['nn.rms_norm.inference', 'nn.softmax']
+    assert all(args[1] == 'rocm' and kwargs['dtypes'] == {'float32'}
+               for args, kwargs in calls)

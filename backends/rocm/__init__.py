@@ -1,8 +1,7 @@
 """Native HIP/ROCm backend provider.
 
-This provider only declares native HIP runtime and the independently owned
-hipBLAS/rocPRIM/hipRAND libraries. It deliberately does not rewrite Jittor sources or
-pretend that MIOpen/RCCL are available.
+This provider owns the native HIP runtime, hipBLAS/rocPRIM/hipRAND libraries
+and FP32 inference kernels. MIOpen and RCCL are not provided.
 """
 import os
 import shlex

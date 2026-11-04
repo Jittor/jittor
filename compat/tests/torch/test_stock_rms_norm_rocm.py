@@ -60,3 +60,26 @@ def test_explicit_forward_override_retains_ownership():
         module = FixtureRMSNorm(128)
         module.forward = lambda value: value * 3
         np.testing.assert_array_equal(module(x).cpu().numpy(), np.full((2, 128), 3.0))
+
+
+def test_softmax_frontend_reaches_native_hip_provider():
+    before = jt.core.backend_fallback_count()
+    with jt.runtime.scope(use_rocm=1, auto_graph_replay=0), forbid_backend_fallbacks(), torch.no_grad():
+        raw = np.random.RandomState(109).normal(size=(2, 3, 65)).astype('float32')
+        x = torch.tensor(raw, device='cuda')
+        kernel = select_kernel('nn.softmax', x, dim=-1)
+        assert kernel is not None
+        calls = []
+        def tracked(*args, **kwargs):
+            calls.append(True)
+            return kernel(*args, **kwargs)
+        with override_kernel('nn.softmax', 'rocm', tracked):
+            y = torch.nn.functional.softmax(x, dim=-1, dtype=torch.float32)
+        y.sync()
+        assert y.location() == 'device' and y.dtype == torch.float32
+        expected = raw.astype('float64')
+        expected = np.exp(expected - expected.max(-1, keepdims=True))
+        expected /= expected.sum(-1, keepdims=True)
+        np.testing.assert_allclose(y.cpu().numpy(), expected, rtol=2e-5, atol=2e-6)
+        assert len(calls) == 1
+    assert jt.core.backend_fallback_count() == before

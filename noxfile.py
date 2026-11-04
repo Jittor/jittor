@@ -355,6 +355,7 @@ ROCM_TESTS = (
     "tests/backends/rocm/test_rocm_runtime.py",
     "tests/backends/rocm/test_rocm_batched_matmul.py",
     "tests/backends/rocm/test_rocm_rms_norm.py",
+    "tests/backends/rocm/test_rocm_softmax.py",
     "tests/backends/rocm/test_rocm_linear.py",
     "tests/backends/rocm/test_rocm_async_execution.py",
 )
