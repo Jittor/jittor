@@ -358,8 +358,8 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
 
     # torch storage introspection: peft/safetensors call tensor.storage()
     # .data_ptr() / .untyped_storage().nbytes() to detect shared/tied weights.
-    # jittor has no exposed storage object; expose identity-based stand-ins so
-    # save_pretrained's tied-weight detection works (each Var is its own storage).
+    # Expose the native allocation address so detached aliases and offset
+    # views retain their shared storage identity.
     if not hasattr(Var, "storage"):
         Var.storage = _api_storage
     if not hasattr(Var, "untyped_storage"):

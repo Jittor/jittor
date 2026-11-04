@@ -623,7 +623,10 @@ class _Storage:
     def __init__(self, var):
         self._var = var
     def data_ptr(self):
-        return id(self._var)
+        # Tensor.data_ptr() addresses the first element of a view. Storage
+        # addresses its allocation origin, shared by every offset view/alias.
+        pointer = _api_data_ptr(self._var)
+        return pointer - int(self._var._storage_offset()) * _storage_dsize(self._var)
     def size(self):
         return int(self._var.numel())
     def nbytes(self):
