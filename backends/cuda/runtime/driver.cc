@@ -79,6 +79,23 @@ int accelerator_current() {
     return state.current_device;
 }
 
+int accelerator_caller_device() {
+    int device = -1;
+    if (cudaGetDevice(&device) != cudaSuccess) {
+        cudaGetLastError();
+        return -1;
+    }
+    return device;
+}
+
+void accelerator_restore_caller_device(int device) {
+    if (cudaSetDevice(device) != cudaSuccess) {
+        cudaGetLastError();
+        return;
+    }
+    tls_bound_device = -1;
+}
+
 void accelerator_set(int device) {
     int count = accelerator_count();
     CHECK(device >= 0 && device < count)
@@ -711,6 +728,8 @@ BackendOps make_cuda_backend() {
     ops.device_count = accelerator_count;
     ops.current_device = accelerator_current;
     ops.set_device = accelerator_set;
+    ops.caller_device = accelerator_caller_device;
+    ops.restore_caller_device = accelerator_restore_caller_device;
     ops.allocator = accelerator_allocator_for;
     ops.copy = copy;
     ops.copy_async = copy_async;

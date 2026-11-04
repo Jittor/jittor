@@ -33,6 +33,7 @@
 #include "debug/nan_checker.h"
 #include "utils/cache_compile.h"
 #include "core/var_holder.h"
+#include "type/floor_divide_compute.h"
 #include "runtime/rematerialization_scope.h"
 #include "mem/swap.h"
 #include "bindings/pybind/py_var_tracer.h"
@@ -1086,7 +1087,15 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         // _JT_SEH_START2;
         if (execution_backend != BackendId::Cpu)
             record_active_launch(backend_stream({execution_backend, execution_device}, BackendStreamKind::Compute));
+        else
+            int_division_by_zero.store(0, std::memory_order_relaxed);
         op->execute_prepared_on(jkl, execution_backend);
+        // An integer `//`, `%` or fmod by zero in a host kernel (see
+        // type/floor_divide_compute.h): torch's CPU kernels raise
+        // "RuntimeError: ZeroDivisionError" for it.
+        if (execution_backend == BackendId::Cpu
+                && PREDICT_BRANCH_NOT_TAKEN(int_division_by_zero.exchange(0, std::memory_order_relaxed)))
+            throw std::runtime_error("ZeroDivisionError: integer division or modulo by zero");
         // _JT_SEH_END2;
         #ifdef HAS_ACCELERATOR
         // migrate to gpu

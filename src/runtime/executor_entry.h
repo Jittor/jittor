@@ -42,6 +42,12 @@ struct ExecutorEntryScope {
     // Whether this scope is the one that took the lock, as opposed to a nested
     // entry on a thread that already holds it.
     bool owns;
+    // The calling thread's current accelerator device on entry, put back on
+    // the way out (outermost scope only). Running a batch selects whatever
+    // device each operator needs; a library that had set its own -- CuPy
+    // inside `with cupy.cuda.Device(1)` -- found Jittor's afterwards, as if
+    // torch's device guard were missing. -1 when there is nothing to restore.
+    int caller_device = -1;
     ExecutorEntryScope();
     ~ExecutorEntryScope();
     ExecutorEntryScope(const ExecutorEntryScope&) = delete;

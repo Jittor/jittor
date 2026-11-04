@@ -6,6 +6,7 @@
 // ***************************************************************
 #pragma once
 #include <math.h>
+#include <atomic>
 #include <type_traits>
 #include "core/common.h"
 
@@ -15,6 +16,19 @@ namespace jittor {
 #define JT_FLOOR_DIVIDE_HD __host__ __device__
 #else
 #define JT_FLOOR_DIVIDE_HD
+#endif
+
+// An integer division by zero on the host is an error, as in torch's CPU
+// kernels ("RuntimeError: ZeroDivisionError"): the guard below still returns
+// NumPy's 0, so no lane traps, and also raises this flag, which the executor
+// turns into an exception once the operator has run (exec_runner.cc). CUDA
+// kernels leave it alone, again as torch does: there the result is
+// unspecified and nothing is raised.
+#if !defined(JIT_cuda) || defined(IS_ACL)
+EXTERN_LIB std::atomic<int> int_division_by_zero;
+#define JT_INT_ZERO_DIVISOR() int_division_by_zero.store(1, std::memory_order_relaxed)
+#else
+#define JT_INT_ZERO_DIVISOR() ((void)0)
 #endif
 
 // C++ integer division truncates toward zero. Python, NumPy, and Torch floor
@@ -44,7 +58,7 @@ struct _int_division_guard<T, true> {
 
 template <class T>
 JT_FLOOR_DIVIDE_HD inline T _floor_divide(T x, T y) {
-    if (y == T(0)) return T(0);
+    if (y == T(0)) { JT_INT_ZERO_DIVISOR(); return T(0); }
     if (_int_division_guard<T>::minus_one(y)) return _int_division_guard<T>::negate(x);
     T quotient = x / y;
     T remainder = x % y;
@@ -59,7 +73,8 @@ JT_FLOOR_DIVIDE_HD inline T _floor_divide(T x, T y) {
 // never true there, so no adjustment is made.
 template <class T>
 JT_FLOOR_DIVIDE_HD inline T _floor_mod(T x, T y) {
-    if (y == T(0) || _int_division_guard<T>::minus_one(y)) return T(0);
+    if (y == T(0)) { JT_INT_ZERO_DIVISOR(); return T(0); }
+    if (_int_division_guard<T>::minus_one(y)) return T(0);
     T remainder = x % y;
     return remainder + T(remainder != 0 && ((remainder < 0) != (y < 0))) * y;
 }
@@ -108,10 +123,12 @@ JT_FLOOR_DIVIDE_HD inline T _floor_mod_float(T x, T y) {
 // guarded as in _floor_divide.
 template <class T>
 JT_FLOOR_DIVIDE_HD inline T _fmod_int(T x, T y) {
-    if (y == T(0) || _int_division_guard<T>::minus_one(y)) return T(0);
+    if (y == T(0)) { JT_INT_ZERO_DIVISOR(); return T(0); }
+    if (_int_division_guard<T>::minus_one(y)) return T(0);
     return x % y;
 }
 
 #undef JT_FLOOR_DIVIDE_HD
+#undef JT_INT_ZERO_DIVISOR
 
 } // jittor
