@@ -11,5 +11,5 @@ python tools/release/pack_offline.py --dry-run
 python tools/release/pack_offline.py --output-dir /path/to/state
 ```
 
-The `legacy/` directory retains the previous source-polish workflows. Canonical
-Jittor releases use the root release workflow and `python -m build`.
+Jittor releases use the root release workflow and `python -m build`. The old
+source-polish/precompiled-data release pipeline is retired.

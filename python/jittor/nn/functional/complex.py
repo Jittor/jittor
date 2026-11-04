@@ -55,7 +55,7 @@ def _real2_to_complex64_raw(x):
     assert x.shape[-1] == 2, f"view_as_complex expects last dim 2, got shape {x.shape}"
     # The pair this reads is float32, because the complex dtype it builds is
     # complex64 and jittor has no complex128 (KI-COMPLEX-001, and
-    # docs/notes/complex-dtype.md for what registering one would take). A
+    # docs/notes/numerics/complex-dtype.md for what registering one would take). A
     # float64 pair therefore has nowhere to go, and saying so here names the
     # dtype and the operation -- `reinterpret_view` further down could only
     # report the arithmetic: "byte size mismatch, input [8,2] float64 target

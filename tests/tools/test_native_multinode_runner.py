@@ -14,7 +14,7 @@ from _helpers.nox_probe import _FakeSession, _load_noxfile
 
 
 ROOT = Path(__file__).resolve().parents[2]
-DIRECTORY = ROOT / 'agent/skills/jittor-distributed-verification'
+DIRECTORY = ROOT / 'tools/distributed/native_fsdp'
 
 
 @pytest.fixture(scope='module')

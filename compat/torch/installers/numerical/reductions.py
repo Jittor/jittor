@@ -1,16 +1,41 @@
 """Torch numerical reductions operations."""
 
+import operator
+
+from jittor._core.dtypes import dtype_name
+
+
 def _reduce_alias(native, input, dim=None, keepdim=False, *, axis=None,
                   keepdims=None, out=None):
     d = axis if axis is not None else dim
     kd = keepdims if keepdims is not None else keepdim
-    if d is None or d == ():
-        return native(input)
-    result = native(input, d)
-    if kd:
-        dims = (d,) if isinstance(d, int) else tuple(d)
-        for dd in sorted(x % input.ndim for x in dims):
-            result = result.unsqueeze(dd)
+    if d is None:
+        dims = tuple(range(input.ndim))
+    else:
+        requested = d if isinstance(d, (tuple, list)) else (d,)
+        rank = max(input.ndim, 1)
+        dims = []
+        for value in requested:
+            value = operator.index(value)
+            if not -rank <= value < rank:
+                raise IndexError(
+                    "Dimension out of range (expected to be in range of "
+                    "[%d, %d], but got %d)" % (-rank, rank - 1, value))
+            value %= rank
+            if value in dims:
+                raise RuntimeError("dim %d appears multiple times in the list of dims" % value)
+            dims.append(value)
+        dims = tuple(dims)
+    # An empty explicit axis tuple performs no reduction in Torch. Native
+    # Jittor uses () for all axes, so handle this and scalar inputs separately.
+    if input.ndim == 0 or (d is not None and not dims):
+        result = input != 0
+    else:
+        result = native(input, dims, keepdims=kd)
+    # Torch retains the legacy byte-mask result for uint8 inputs; every other
+    # input dtype returns bool. Both the truth conversion and cast stay on device.
+    if dtype_name(input.dtype) == "uint8":
+        result = result.cast("uint8")
     return result
 
 

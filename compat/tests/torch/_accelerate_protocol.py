@@ -17,7 +17,7 @@ import uuid
 
 
 ROOT = Path(__file__).resolve().parents[3]
-CONTROL_SOURCE_FILES = ('agent/skills/torch-compat-repo-runbook/scripts/collect_accelerate_scorecards.py',
+CONTROL_SOURCE_FILES = ('tools/ecosystem/collect_accelerate_scorecards.py',
                         'noxfile.py', 'tools/provision_ecosystem_nightly.py',
                         'compat/torch/installers/nn/module_methods.py')
 
@@ -31,7 +31,7 @@ def command(*args):
 
 
 def _platform_helpers():
-    scripts = str(ROOT / 'agent/skills/torch-compat-repo-runbook/scripts')
+    scripts = str(ROOT / 'tools/ecosystem')
     if scripts not in sys.path:
         sys.path.insert(0, scripts)
     return importlib.import_module('_runtime_platform')
@@ -149,7 +149,7 @@ class Capture:
         actual = {path: digest(package.joinpath(*Path(path).parts[2:])) for path in expected}
         if actual != expected or installed['version'] != self.source['upstream']['version']:
             raise ValueError('Actually imported Accelerate differs from clean pinned upstream')
-        sys.path.insert(0, str(ROOT / 'agent/skills/torch-compat-repo-runbook/scripts'))
+        sys.path.insert(0, str(ROOT / 'tools/ecosystem'))
         from _accelerate_installation import capture
 
         distribution = capture(importlib.import_module('accelerate'), self.source,
@@ -193,11 +193,11 @@ class Capture:
                         'tools/run_accelerate_gate.py')
         if os.environ.get('JITTOR_ACCELERATE_CHECKPOINT_PHASE'):
             source_files += ('compat/tests/torch/_accelerate_fresh_process.py',)
-        source_files += ('agent/skills/torch-compat-repo-runbook/scripts/_accelerate_installation.py',
-                         'agent/skills/torch-compat-repo-runbook/scripts/_installed_source_proof.py',
-                         'agent/skills/torch-compat-repo-runbook/scripts/component_measure.py',
+        source_files += ('tools/ecosystem/_accelerate_installation.py',
+                         'tools/ecosystem/_installed_source_proof.py',
+                         'tools/ecosystem/component_measure.py',
                          'compat/tests/torch/_ecosystem_runner.py',
-                        'agent/skills/torch-compat-repo-runbook/scripts/_runtime_platform.py')
+                        'tools/ecosystem/_runtime_platform.py')
         source_files += CONTROL_SOURCE_FILES
         metadata = {'schema_version': 1, 'case': self.case, 'runtime': 'jittor' if shim else 'torch',
                     'jittor_commit': command('git', '-C', str(ROOT), 'rev-parse', 'HEAD'),

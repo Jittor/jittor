@@ -4,7 +4,7 @@
 `torch + torch_npu` 放在同一组网络上比速度、比数值。它需要真实的昇腾设备和 CANN，
 不会被 pytest 收集，也不进 CI。
 
-按提交索引的留存性能结果属于 [`benchmarks/asv/`](../asv/)（ASV 套件，见
+按提交索引的留存性能结果属于 [`benchmarks/asv/`](../asv)（ASV 套件，见
 [`docs/performance/benchmarking.md`](../../docs/performance/benchmarking.md)）。两者不要
 共用一个 Jittor 编译缓存。
 

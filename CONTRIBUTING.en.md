@@ -40,7 +40,7 @@ export cache_name="${cache_name:-local-dev}"
 ```
 
 For CUDA, set `nvcc_path` when `nvcc` is not already on `PATH`. Backend-specific
-CI requirements are documented in [`agent/manuals/environment.md`](agent/manuals/environment.md).
+CI requirements are documented in [isolated validation](https://github.com/JittorEcosystem/jittor-dev-skills/blob/main/skills/isolated-validation/SKILL.md).
 
 ## Repository map
 
@@ -50,14 +50,13 @@ CI requirements are documented in [`agent/manuals/environment.md`](agent/manuals
 ├── backends/            # one directory per backend: cpu/ cuda/ acl/ rocm/ corex/ comm/
 ├── python/jittor/       # the Python runtime package (pure Python)
 ├── python/jittor_utils/ # bootstrap for the build utilities in jittor/build/utils/
-├── compat/              # the optional `jittor-torch` distribution: torch shim, FSDP2, triton
-├── adapters/            # the optional `jittor-torch-adapters` distribution
+├── compat/              # the optional `jittor-compat` distribution: torch shim, FSDP2, triton
 ├── tests/               # repository pytest suite; not shipped in wheels
 ├── examples/            # runnable examples and MyST notebook sources
 ├── benchmarks/          # ASV regressions, Torch comparisons, and ACL measurements
 ├── tools/               # build, docs, lint, release and maintenance commands
 ├── docs/                # the single user- and contributor-facing documentation tree
-├── agent/               # operational manuals and skills (manuals/ and skills/ only)
+├── agent/               # practical skills and their catalogue
 ├── pyproject.toml       # authoritative package, tool, and pytest configuration
 └── noxfile.py           # reproducible local and CI sessions
 ```
@@ -96,7 +95,7 @@ reviewed change.
 
 ## Tests
 
-The repository suite lives at root [`tests/`](tests/) and is collected by
+The repository suite lives at root [`tests/`](tests) and is collected by
 pytest. Existing `unittest.TestCase` tests are valid pytest tests. Test
 configuration and registered markers are in [`pyproject.toml`](pyproject.toml).
 
@@ -174,20 +173,21 @@ every page belongs to exactly one section:
 
 | Section | Contents |
 | --- | --- |
-| [`docs/guides/`](docs/guides/) | task guides: hardware, debugging, memory, platform support and limitations |
-| [`docs/notes/`](docs/notes/) | long-lived framework mechanisms (precision, placement, async execution) |
-| [`docs/compatibility/`](docs/compatibility/) | the Torch compatibility layer and its acceptance rules |
-| [`docs/development/`](docs/development/) | repository layout, source architecture, test system, known-issue write-ups |
-| [`docs/research/`](docs/research/) | proposals that are not yet decided |
-| [`docs/results/`](docs/results/) | reproducible maintainer conclusions, each with status, commit, scope, maintainer and recheck condition |
-| [`docs/releases/`](docs/releases/) | release notes |
+| [`docs/getting-started/`](docs/getting-started/index.en.md) | installation, first computation and training |
+| [`docs/guides/`](docs/guides/index.en.md) | hardware, distributed training, debugging and limitations |
+| [`docs/compatibility/`](docs/compatibility/index.en.md) | using and deploying the Torch compatibility layer |
+| [`docs/performance/`](docs/performance/index.en.md) | benchmarking, profiling and memory optimization |
+| [`docs/api/`](docs/api/index.en.md) | public API reference |
+| [`docs/notes/`](docs/notes/index.en.md) | numerics, device placement and runtime mechanisms |
+| [`docs/development/`](docs/development/index.en.md) | source architecture, implementation contracts, testing and contributing |
+| [`docs/project/`](docs/project/index.en.md) | release notes, community projects and research proposals |
 
 - Update [`README.md`](README.en.md) for installation or first-use changes. It is
   the single authoritative root README, maintained as `README.md` for Chinese and
   `README.en.md` for English; do not add a third, per-language or generated README.
 - Keep raw logs, caches and benchmark artifacts out of the documentation tree.
 - Use relative links between documentation pages, and a
-  `https://github.com/Jittor/jittor/blob/master/<path>` URL for a repository
+  `https://github.com/Jittor/jittor/blob/2.0-refactor/<path>` URL for a repository
   file outside `docs/`; both forms are checked.
 - Run `python -m nox -s docs` and `python -m nox -s docs_links` after any
   documentation change, and the structure gate after moves.

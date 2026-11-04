@@ -21,7 +21,6 @@ TORCH_MODE_PATHS = (
     # under tests/backends/comm/nccl and tests/nn/test_native_fsdp.py.
     "compat/tests/fsdp2",
     "compat/tests/structure",
-    "adapters/tests/vllm",
     # The OpInfo runner exercises Torch-facing signatures for the shared
     # numerical surface. The rest of tests/ops asserts native Jittor behavior.
     "tests/ops/test_ops.py",

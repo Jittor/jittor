@@ -92,7 +92,7 @@ def chunk(x, chunks, dim=0):
     res = []
     if l <= chunks:
         for i in range(l):
-            res.append(x[(slice(None,),)*dim+([i,],)])
+            res.append(x[(slice(None,),)*dim+(slice(i, i+1),)])
     else:
         # ceil(l/chunks) per chunk, last may be shorter -- matches torch.chunk.
         # NB: iterate by start offset, not `range(chunks-1)`; the latter left `i`

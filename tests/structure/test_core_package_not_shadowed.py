@@ -1,9 +1,9 @@
 """`import jittor` must reach the real core package, not an empty namespace.
 
 The core installs as a regular package (``python/jittor/__init__.py``), while
-``jittor-torch`` is a separate distribution owning ``jittor.compat``. To place a
+``jittor-compat`` is a separate distribution owning ``jittor.compat``. To place a
 subpackage of ``jittor`` from its own distribution, an editable install of
-``jittor-torch`` declares ``jittor`` a *namespace* package and puts a path
+``jittor-compat`` declares ``jittor`` a *namespace* package and puts a path
 placeholder on ``sys.path``. The stdlib ``PathFinder`` precedes both editable
 finders in ``sys.meta_path``, so it answers ``jittor`` with that namespace and
 the core package is never consulted.

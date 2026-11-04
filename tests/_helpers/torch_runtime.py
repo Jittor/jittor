@@ -28,6 +28,21 @@ def _loaded_torch_is_jittor_shim():
     )
 
 
+def torch_shim_loaded():
+    """Whether this process runs jittor's Torch shim rather than native jittor.
+
+    Several native test files assert that they are on jittor's own runtime, and
+    they used to state it as `'torch' not in sys.modules`. That is a different
+    question: a native test may import an independent PyTorch in-process to
+    compare against (``tests/data/test_resize_and_crop.py::test_resize`` and the
+    pooling cases of ``tests/ops/test_arg_pool_op.py`` do), and xdist shares a
+    worker between files, so one such import turned every later file that
+    asserted the invariant red. What those files mean is "the shim is not
+    active", which is what this answers.
+    """
+    return _loaded_torch_is_jittor_shim()
+
+
 def _loaded_module_is_from_site(module_name, site):
     module = sys.modules.get(module_name)
     origin = getattr(module, "__file__", None)

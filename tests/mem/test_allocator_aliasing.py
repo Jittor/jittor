@@ -12,7 +12,7 @@ use it.  Nothing else in the runtime records that a var *is* a sub-range of
 another one, so every piece of code that moves memory around underneath a var
 has to ask.  These tests pin down the places that did not.
 
-See ``agent/skills/jittor-allocator-flag-matrix`` for the flag combinations and
+See ``https://github.com/JittorEcosystem/jittor-dev-skills/blob/main/skills/jittor-allocator-flag-matrix/SKILL.md`` for the flag combinations and
 for the poison-then-read technique used below.
 """
 

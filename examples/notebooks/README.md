@@ -113,7 +113,7 @@ PyTorch 不同，不先弄清楚，后面的性能问题会归因到错误的地
 | --- | --- | --- |
 | [用 PyTorch API 写 Jittor](torch_compat.md) | 怎么激活；激活后张量/模型/自动求导怎么用；设备与混合精度 | 部分小节需要 |
 | [把已有 PyTorch 脚本迁到 Jittor](torch_compat_migration.md) | 同一计算两种写法的数值对照；哪些**不用改**；跨前端存档的静默陷阱；兼容层的实测开销 | 否 |
-| [把真实的生态库跑在 Jittor 上](torch_ecosystem.md) | 别人写的库（transformers/diffusers/PEFT/MMCV）怎么带起来；**哪些库根本带不动**；怎么验证算得对 | 否 |
+| [把真实的生态库跑在 Jittor 上](torch_ecosystem.md) | 别人写的库（transformers/diffusers/PEFT/MMCV）怎么带起来；**哪些库根本带不动**；怎么验证算得对；**15 个生态库各自的仓库与版本 pin** | 否 |
 
 三篇的顺序是「从自己的代码，到别人的代码」：`torch_compat.md` 教你把自己的代码
 改成 `import torch`；`torch_compat_migration.md` 讲迁移时真正要动的那几处（以及哪些
@@ -130,8 +130,10 @@ PyTorch 不同，不先弄清楚，后面的性能问题会归因到错误的地
 | 入口 | `import jittor as jt` | 先 `activate()` 再 `import torch` |
 
 生态库（transformers / diffusers / PEFT 等）的接入方式与「哪些库根本带不动」见
-[把真实的生态库跑在 Jittor 上](torch_ecosystem.md)；完整的已验证模型清单与门禁状态见
-维护者文档 `docs/compatibility/torch.md`。
+[把真实的生态库跑在 Jittor 上](torch_ecosystem.md)；那一篇的第 6 节列出
+[15 个生态库各自的仓库与钉住的版本](torch_ecosystem.md#6-生态库是并列的一个库一个仓库)——
+flash-attention、MiniMax-H3 与 transformers、vllm 是并列关系，布局、pin 规则与验证边界都相同。
+完整的已验证模型清单与门禁状态见维护者文档 `docs/compatibility/torch.md`。
 
 ---
 

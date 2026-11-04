@@ -1,5 +1,7 @@
 # Devices and placement
 
+[Section contents](index.en.md) · [中文](device-placement.md)
+
 This page clarifies three things: which accelerator a tensor is actually on, how to
 move it to another one, and when Jittor will refuse you.
 
@@ -84,7 +86,7 @@ a.cuda(99)         # RuntimeError：超出可见设备数
 (The Torch compatibility layer is slightly more permissive: `Tensor.to(1)` /
 `Module.to(1)` read as `cuda:1` there, because bare indices are common in
 multi-GPU inference stacks, see section 31 of
-`docs/results/2026-09-14-vllm-omni-h3-enablement.md`. Permissiveness is fine;
+[历史记录](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-09-14-vllm-omni-h3-enablement.md). Permissiveness is fine;
 silent loss is not.)
 
 **An unnumbered `cuda` means different things in the two layers**, deliberately:
@@ -222,7 +224,11 @@ there is no separate Torch executor.
   frontend inputs takes precedence over the Runtime default.
 - **Propagation and conflicts.** `Op::propagate_device` makes outputs adopt the
   inputs' explicit placement; an explicit backend or device conflict requires an
-  explicit copy. The Python surface marks native Vars with
+  explicit copy. An input of the same op placed only through its `device_id` (a
+  Python number in native mode) on another card follows the explicit placement
+  when it is a pending scalar and is refused as a different CUDA device
+  otherwise; it used to stay on the current card, and the kernel on the target
+  card read the other card's pointer and faulted with an illegal address. The Python surface marks native Vars with
   `_placement_published`, and a published tensor's placement cannot be changed by
   scalar redirection. Binary/ternary construction allows a 0-D tensor on CPU to
   be used with an accelerator operand: the generated construction adapter inserts

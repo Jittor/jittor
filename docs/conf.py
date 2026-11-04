@@ -6,6 +6,7 @@ except ImportError:  # pragma: no cover - documentation tooling uses Python 3.11
     from importlib_metadata import version
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
+import re
 
 
 project = "Jittor"
@@ -39,7 +40,7 @@ napoleon_numpy_docstring = True
 intersphinx_mapping = {
     "python": ("https://docs.python.org/3", None),
     "numpy": ("https://numpy.org/doc/stable/", None),
-    "pytorch": ("https://pytorch.org/docs/stable/", None),
+    "pytorch": ("https://docs.pytorch.org/docs/stable/", None),
 }
 intersphinx_cache_limit = 7
 intersphinx_timeout = 15
@@ -71,7 +72,7 @@ html_logo = "_static/logo.png"
 html_static_path = ["_static"]
 html_theme_options = {
     "source_repository": "https://github.com/Jittor/jittor/",
-    "source_branch": "master",
+    "source_branch": "2.0-refactor",
     "source_directory": "docs/",
 }
 
@@ -90,6 +91,14 @@ def _sanitize_autodoc_docstring(app, what, name, obj, options, lines):
         ]
 
 
+def _expand_sphinx_only(app, docname, source):
+    """Reveal site navigation comments for Sphinx, leaving GitHub pages readable."""
+    source[0] = re.sub(
+        r"<!-- sphinx-only\n(.*?)\n-->",
+        lambda match: match.group(1), source[0], flags=re.DOTALL,
+    )
+
+
 def setup(app):
     adapter_path = Path(__file__).with_name("_myst_autodoc.py")
     spec = spec_from_file_location("_jittor_myst_autodoc", str(adapter_path))
@@ -98,6 +107,10 @@ def setup(app):
     module = module_from_spec(spec)
     spec.loader.exec_module(module)
 
+    app.connect("source-read", _expand_sphinx_only)
     metadata = module.setup(app)
     app.connect("autodoc-process-docstring", _sanitize_autodoc_docstring)
     return metadata
+
+# Keep section links usable in both Markdown readers and the generated site.
+myst_heading_anchors = 4

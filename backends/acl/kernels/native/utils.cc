@@ -137,7 +137,9 @@ namespace jittor
             layout.storage_dims = &layout.packed_storage;
             layout.storage_rank = 1;
         }
-        layout.format = use_nchw ? aclFormat::ACL_FORMAT_NCHW : aclFormat::ACL_FORMAT_ND;
+        layout.format = use_nchw
+            ? (rank == 5 ? aclFormat::ACL_FORMAT_NCDHW : aclFormat::ACL_FORMAT_NCHW)
+            : aclFormat::ACL_FORMAT_ND;
     }
 
     // The pool lives in the runner's leased scratch, so the launch path costs

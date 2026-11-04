@@ -211,15 +211,17 @@ class TestUniqueOffTheAmbientDevice(unittest.TestCase):
         if jt.get_device_count() < 2:
             self.skipTest("needs a second device to differ from the ambient one")
         raw = np.array([0.75, 0.40, 0.75, 1.0, 0.40, 0.75], dtype="float32")
-        expected, expected_inverse = np.unique(raw, return_inverse=True)
+        expected, expected_inverse, expected_counts = np.unique(raw, return_inverse=True, return_counts=True)
         saved = jt.flags.device_id
         try:
             jt.flags.device_id = 0
             x = jt.array(raw).to_device(1)
             assert x.device_id == 1
-            unique, inverse = jt.unique(x, sorted=True, return_inverse=True)
+            unique, inverse, counts = jt.unique(x, sorted=True, return_inverse=True, return_counts=True)
+            assert counts.device_id == 1
             np.testing.assert_array_equal(unique.numpy(), expected)
             np.testing.assert_array_equal(inverse.numpy(), expected_inverse)
+            np.testing.assert_array_equal(counts.numpy(), expected_counts)
         finally:
             jt.flags.device_id = saved
 

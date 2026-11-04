@@ -1,5 +1,38 @@
 """Torch numerical elementwise operations."""
 
+
+def exp(input):
+    """Preserve Torch's floating output dtype outside explicit autocast."""
+    import jittor as jt
+    from jittor._core.dtypes import dtype_name
+    from ...amp import autocast_dtype
+    from ...context import get_install_context
+    from ...frontend import tensor_frontend
+    context = get_install_context(jt)
+    with tensor_frontend(context.state['Var'], like=input):
+        result = jt.exp(input)
+        name = dtype_name(input.dtype)
+        if name in ('float16', 'bfloat16') and autocast_dtype() is None:
+            result = result.cast(name)
+        return result
+
+
+def pow(input, exponent):
+    """Use the Tensor power's weak-scalar and result-type semantics."""
+    import jittor as jt
+    from ...context import get_install_context
+    from ...frontend import tensor_frontend
+    from ..tensor.method_api import _tensor_pow, _tensor_rpow
+    context = get_install_context(jt)
+    like = input if isinstance(input, jt.Var) else exponent
+    with tensor_frontend(context.state['Var'], like=like):
+        if isinstance(input, jt.Var):
+            return _tensor_pow(input, exponent)
+        if isinstance(exponent, jt.Var):
+            return _tensor_rpow(exponent, input)
+        raise TypeError('pow expects at least one Tensor argument')
+
+
 def log1p(x):
     """Compute ``log(1 + x)`` elementwise."""
     from . import (

@@ -1,5 +1,7 @@
 # 设备与放置
 
+[本栏目目录](index.md) · [English](device-placement.en.md)
+
 这篇讲清楚三件事：一个张量到底在哪张卡上、怎么让它换一张卡、以及什么时候
 Jittor 会拒绝你。
 
@@ -71,7 +73,7 @@ a.cuda(99)         # RuntimeError：超出可见设备数
 
 （torch 兼容层比这里宽一点：`Tensor.to(1)` / `Module.to(1)` 在那边读作
 `cuda:1`，因为在多卡推理栈里裸编号很常见，见
-`docs/results/2026-09-14-vllm-omni-h3-enablement.md` 第 31 节。宽是可以的，
+[历史记录](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-09-14-vllm-omni-h3-enablement.md) 第 31 节。宽是可以的，
 悄悄丢掉不行。）
 
 **不带编号的 `cuda` 在两层里含义不同**，这是有意的：
@@ -182,7 +184,9 @@ Var/Op 图与元算子仍与原生 Jittor 共用，没有单独的 Torch 执行�
   设备，前端绑定作用域在每次 C++ 调用时把它转进原生构造状态并在退出时恢复。没有工厂覆盖
   时，前端输入的放置优先于 Runtime 默认。
 - **传播与冲突。** `Op::propagate_device` 让输出采用输入的显式放置；显式的后端或设备冲突
-  需要显式拷贝。Python 发布会给原生 Var 打上 `_placement_published`，已发布张量的放置不能被
+  需要显式拷贝。同一算子里只靠 `device_id` 放置的输入（原生模式下的 Python 数字）若在别的
+  卡上，待定标量随显式放置一起重定向，其余张量按"不同 CUDA 设备"拒绝；此前它会原样留在
+  当前卡上，目标卡上的 kernel 读到另一张卡的指针而非法访问。Python 发布会给原生 Var 打上 `_placement_published`，已发布张量的放置不能被
   标量重定向改变。二元/三元构造允许 CPU 上的 0 维张量与加速器操作数同用：生成的构造适配器
   在建立成员、广播子图或节点边之前插入可微的 DeviceCopy，源仍留在 CPU、梯度拷回 CPU；判定用
   实际的 0 维形状，原有的 `_is_scalar` 提升位保留而不是凭空制造。显式的加速器标量配 CPU

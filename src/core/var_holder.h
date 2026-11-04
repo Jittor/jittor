@@ -64,15 +64,18 @@ VarPtr device_copy(Var* x, int device);
  * this record would outlive.
  */
 struct VarViewStep {
-    enum Kind { Slice, Transpose, Expand, Reshape } kind;
+    enum Kind { Slice, Transpose, Expand, Reshape, Reinterpret } kind;
     VarSlices slices;
     NanoVector axes;
+    NanoString dtype = ns_void;
     explicit VarViewStep(VarSlices&& value)
         : kind(Slice), slices(move(value)) {}
     explicit VarViewStep(NanoVector value)
         : kind(Transpose), slices(0), axes(move(value)) {}
     VarViewStep(Kind kind, NanoVector value)
         : kind(kind), slices(0), axes(move(value)) {}
+    VarViewStep(NanoVector shape, NanoString dtype)
+        : kind(Reinterpret), slices(0), axes(move(shape)), dtype(dtype) {}
 };
 
 struct VarView {
@@ -809,6 +812,14 @@ struct VarHolder {
     // @pyjt(__get__grad)
     int grad();
 
+    // A second holder of this same Var. `jt.Function` rebinds an input it
+    // saved onto the caller's Var with it once the tape in between has run,
+    // when `_input` can no longer reach across.
+    // @pyjt(_alias)
+    inline VarHolder* _alias() {
+        return new VarHolder(var);
+    }
+
     // @pyjt(_input)
     inline VarHolder* _input(int i) {
         USER_CHECK(!var->is_finished()) << "_input requires an unexecuted tensor";
@@ -870,6 +881,9 @@ struct VarHolder {
     // @pyjt(_set_storage_view_of)
     // @attrs(return_self)
     VarHolder* set_storage_view_of(VarHolder* base, bool expand);
+    // @pyjt(_set_dtype_view_of)
+    // @attrs(return_self)
+    VarHolder* set_dtype_view_of(VarHolder* base);
     // @pyjt(_storage_is_contiguous)
     bool storage_is_contiguous() { return var->is_contiguous(); }
     // Whether a step capture holds this Var as the state it replays; an

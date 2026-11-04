@@ -63,14 +63,18 @@ def normalize(input, p=2, dim=1, eps=1e-12):
         >>> y = nn.normalize(x, dim=1)
     '''
     if p == 2:
-        norm = (input * input).sum(dim, keepdims=True).sqrt()
+        norm = jt.linalg._try_vector_norm(input, p, dim, True)
+        if norm is None:
+            norm = (input * input).sum(dim, keepdims=True).sqrt()
     elif p == 1:
         norm = input.abs().sum(dim, keepdims=True)
     elif p == float("inf"):
         norm = input.abs().max(dim, keepdims=True)
     else:
         norm = (input.abs() ** p).sum(dim, keepdims=True) ** (1.0 / p)
-    return input / norm.maximum(eps)
+    # A scalar clamp retains the norm's dtype, including on ACL where a
+    # mixed-dtype native maximum otherwise widens half + Python float to fp32.
+    return input / norm.clamp(min_v=eps)
 
 
 def cosine_similarity(x1, x2, dim=1, eps=1e-8):

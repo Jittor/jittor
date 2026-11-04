@@ -57,6 +57,21 @@ namespace jittor
         return;
     }
 
+    GatherV2OpRunner::GatherV2OpRunner() : BaseOpRunner("GatherV2")
+    {
+    }
+
+    void GatherV2OpRunner::executeOp(AclOpRegistry::const_iterator &it)
+    {
+        auto attr = dynamic_cast<GatherAttr *>(op_attr.get());
+        USER_CHECK(attr && in_.size() == 2 && inputShapes[1].size() == 1)
+            << "ACL single-axis GatherV2 requires a one-dimensional index";
+        ret = aclnnGatherV2GetWorkspaceSize(
+            inputTensors[0], attr->dim, inputTensors[1], outputTensors[0],
+            &workspaceSize, &executor);
+        launch(ret, aclnnGatherV2, true);
+    }
+
     SliceV2OpRunner::SliceV2OpRunner() : BaseOpRunner("SliceV2")
     {
     }

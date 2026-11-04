@@ -11,8 +11,8 @@ import pytest
 from _helpers.child_process import run_python_child
 
 ROOT = Path(__file__).resolve().parents[2]
-SCRIPTS = ROOT / 'agent/skills/trellis-torch-compat/scripts'
-COMMON = ROOT / 'agent/skills/torch-compat-repo-runbook/scripts'
+SCRIPTS = ROOT / 'tools/ecosystem/trellis'
+COMMON = ROOT / 'tools/ecosystem'
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(COMMON))
 from _source_binding import source_installation, validate_phase  # noqa: E402

@@ -186,7 +186,7 @@ def test_encoded_values_reach_real_cpp_attribute_types(pipeline, tmp_path):
     load, Tensor, calls = pipeline
     encode = load("_attributes").attribute_data
     spec = importlib.util.spec_from_file_location(
-        "attribute_sdk_stub", ROOT / "agent/skills/acl-host-syntax-check/make_cann_stub.py"
+        "attribute_sdk_stub", ROOT / "tools/build/acl/make_cann_stub.py"
     )
     stubber = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(stubber)
@@ -214,6 +214,7 @@ def test_encoded_values_reach_real_cpp_attribute_types(pipeline, tmp_path):
         ),
         ("Cumsum", {"dim": -2}, "dynamic_cast<GatherAttr*>(runner.op_attr.get())->dim == -2"),
         ("Gather", {"dim": 1}, "dynamic_cast<GatherAttr*>(runner.op_attr.get())->dim == 1"),
+        ("GatherV2", {"dim": 2}, 'dynamic_cast<GatherAttr*>(runner.op_attr.get())->dim == 2 && runner.jt_name == "gather_v2"'),
         ("IndexCopy", {"dim": 2},
          'dynamic_cast<GatherAttr*>(runner.op_attr.get())->dim == 2 && runner.jt_name == "indexcopy"'),
         ("PromptFlashAttention", {"headNum": 16, "scale": 0.125},
@@ -229,6 +230,26 @@ def test_encoded_values_reach_real_cpp_attribute_types(pipeline, tmp_path):
     ]
     cases.extend(
         [
+            (
+                "Conv2d",
+                {
+                    "convStrides": [2, 1], "convPads": [1, 0],
+                    "convDilations": [1, 2], "group": 1,
+                    "convOutPads": [0, 0], "cube_math_type": 1,
+                },
+                "!dynamic_cast<ConvAttr*>(runner.op_attr.get())->is_transposed",
+            ),
+            (
+                "Conv2d",
+                {
+                    "convStrides": [2, 1], "convPads": [1, 0],
+                    "convDilations": [1, 2], "group": 1,
+                    "convOutPads": [1, 0], "cube_math_type": 1,
+                    "is_transposed": True,
+                },
+                "dynamic_cast<ConvAttr*>(runner.op_attr.get())->is_transposed && "
+                "dynamic_cast<ConvAttr*>(runner.op_attr.get())->convOutPads[0] == 1",
+            ),
             (
                 "Conv2dBackward",
                 {
@@ -267,6 +288,12 @@ def test_encoded_values_reach_real_cpp_attribute_types(pipeline, tmp_path):
                 "UpsampleNearest2dBackward",
                 {"outputSize": [4, 6], "inputSize": [1, 2, 2, 3]},
                 "dynamic_cast<UpsampleNearest2dAttr*>(runner.op_attr.get())->inputSize[3] == 3",
+            ),
+            (
+                "UpsampleBilinear2d",
+                {"outputSize": [7, 9], "inputSize": [1, 2, 3, 4], "alignCorners": True},
+                "dynamic_cast<UpsampleBilinear2dAttr*>(runner.op_attr.get())->alignCorners && "
+                "dynamic_cast<UpsampleBilinear2dAttr*>(runner.op_attr.get())->outputSize[0] == 7",
             ),
             (
                 "StridedSliceAssignV2",

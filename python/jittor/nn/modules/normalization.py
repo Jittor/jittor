@@ -186,12 +186,12 @@ class LayerNorm(Module):
         self.eps = eps
         self.elementwise_affine = elementwise_affine
         self.weight = (
-            _constant_parameter(normalized_shape, "float32", 1.0) if elementwise_affine else 1.0
+            _constant_parameter(normalized_shape, "float32", 1.0) if elementwise_affine else None
         )
         self.bias = (
             _constant_parameter(normalized_shape, "float32", 0.0)
             if elementwise_affine and bias
-            else 0.0
+            else None
         )
 
     def execute(self, x):

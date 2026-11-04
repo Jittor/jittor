@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[4]
-GUIDE = ROOT / "docs/development/acl-backend-contracts.en.md"
+GUIDE = ROOT / "docs/development/backends/acl-backend-contracts.en.md"
 
 
 def test_acl_structure_boundary_names_atomic_migrations_and_hardware_gate():
@@ -52,7 +52,7 @@ def test_acl_data_schema_contract_for_future_decoder():
 
 
 def test_acl_guides_use_runtime_fallback_evidence_not_log_matching():
-    for path in (GUIDE, ROOT / "docs/guides/ascend-910b.md"):
+    for path in (GUIDE, ROOT / "docs/guides/hardware/ascend-910b.md"):
         text = path.read_text(encoding="utf-8")
         assert "from jittor._runtime.fallback import forbid_backend_fallbacks" in text
         assert "with forbid_backend_fallbacks():" in text

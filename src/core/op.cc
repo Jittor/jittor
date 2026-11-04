@@ -26,6 +26,8 @@
 #include "ops/op_register.h"
 #include "utils/graph_build_profile.h"
 #include "runtime/rematerialization_scope.h"
+#include "runtime/profiler/memory_history.h"
+#include "runtime/profiler/step_trace.h"
 
 namespace jittor {
 
@@ -83,6 +85,10 @@ bool lookup_unrecorded_view_edge(Node* source, Node* target) {
 Op::Op() {
     rematerialization_owner = rematerialization_construction_owner();
     launch_origin = capture_launch_origin();
+    if (PREDICT_BRANCH_NOT_TAKEN(capture_op_stacks))
+        memory_stack = capture_memory_stack();
+    if (PREDICT_BRANCH_NOT_TAKEN(step_trace_mode & st_ops))
+        step_trace_note_op_built(this);
     float32_precision = current_float32_precision_policy();
     flags.set(NodeFlags::_var, 0);
     set_flag(OpFlags::_cpu, 1);
@@ -335,7 +341,20 @@ void Op::propagate_device() {
     if (target.explicit_backend) {
         const int dev = target.device.backend == BackendId::Cpu ? -1 : target.device.index;
         for (Var* v : inputs()) {
-            if (!v->placement.explicit_backend || v->placement == target) continue;
+            if (v->placement == target) continue;
+            if (!v->placement.explicit_backend) {
+                // An implicitly placed input names its device only through
+                // device_id. A Python number in native mode is one, made on
+                // the current device: next to a DLPack import or a `.cuda(1)`
+                // of an explicit tensor on another card it was left there, and
+                // the kernel on the target card read its pointer and faulted
+                // with an illegal address.
+                if (dev < 0 || v->device_id < 0 || v->device_id == dev) continue;
+                if (is_pending_scalar(v) && retarget_pending(v, dev, target)) continue;
+                USER_ERROR << "Expected all inputs to be on the same CUDA device, but found"
+                    << "cuda:" >> dev << "and cuda:" >> v->device_id << "for op" << name() >> "."
+                    << "\nMove one side with Var.to_device() / .to(\"cuda:N\") first.";
+            }
             USER_CHECK(is_pending_scalar(v) && retarget_pending(v, dev, target))
                 << "Expected all tensor inputs on the same backend and device for" << name()
                 << "; use an explicit device copy before mixing CPU and accelerator tensors";
@@ -490,12 +509,16 @@ void order_after_readers(Op* op, const vector<Var*>& written) {
     // (`share_src`) or one already in its share ring -- a broadcast's expand
     // that has run and left the graph, whose consumer has not.
     vector<Var*> aliases;
+    unordered_set<Var*> alias_members;
     auto alias = [&](Var* v) {
-        if (std::find(aliases.begin(), aliases.end(), v) == aliases.end())
-            aliases.push_back(v);
+        if (alias_members.insert(v).second) aliases.push_back(v);
     };
     for (Var* v : written) alias(v);
     vector<Node*> after;
+    unordered_set<Node*> after_members;
+    auto push_after = [&](Node* node) {
+        if (after_members.insert(node).second) after.push_back(node);
+    };
     for (size_t k = 0; k < aliases.size(); k++) {
         Var* v = aliases[k];
         if (v->share_next)
@@ -512,14 +535,12 @@ void order_after_readers(Op* op, const vector<Var*>& written) {
                 // A pending reader: its first unfinished output stands for it.
                 if (stands_for_reader || out->is_finished()) continue;
                 stands_for_reader = true;
-                if (std::find(after.begin(), after.end(), out) == after.end())
-                    after.push_back(out);
+                push_after(out);
             }
         }
     }
     for (Var* saved : saved_storage_readers(written, op))
-        if (std::find(after.begin(), after.end(), saved) == after.end())
-            after.push_back(saved);
+        push_after(saved);
     if (after.empty()) return;
     // A reader upstream of the op -- the forward a gradient is computed
     // from -- is ordered already by the data it feeds it, and an edge would

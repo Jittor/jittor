@@ -165,7 +165,12 @@ def _session_environment(session, serial_compile=False, backend="cpu"):
         environment["JITTOR_TEST_DEVICES"] = "cpu"
         environment.pop("JITTOR_TEST_REQUIRE_CUDA", None)
         environment.pop("JITTOR_TEST_ACCELERATOR_MIN_EXECUTED", None)
-    environment["REAL_TORCH_SITE"] = ""
+    # Native oracle tests preload explicitly configured binary PyTorch before
+    # importing Jittor. Clearing this path makes discovery succeed while the
+    # later oracle import fails. Torch-mode tests must never inherit it:
+    # pytest's oracle precedence would otherwise disable their shim.
+    if session == "torch":
+        environment["REAL_TORCH_SITE"] = ""
     environment["JITTOR_TORCH_SHIM"] = "1" if session == "torch" else "0"
     # Keep the standalone runner fail-closed like both nox gate sessions.  A
     # skip without an explicit environment reason is otherwise reported but
@@ -234,7 +239,7 @@ except ImportError:
 expected = sys.argv[1]
 source_python = sys.argv[2] if len(sys.argv) > 2 else ""
 try:
-    dist = metadata.distribution("jittor-torch")
+    dist = metadata.distribution("jittor-compat")
 except metadata.PackageNotFoundError:
     dist = None
 valid = dist is not None
@@ -253,7 +258,7 @@ if not valid and expected and source_python:
     linked = pathlib.Path(source_python) / "jittor" / "compat"
     valid = linked.is_dir() and linked.resolve() == pathlib.Path(expected).resolve()
 if not valid:
-    target = expected or "jittor-torch"
+    target = expected or "jittor-compat"
     print("Torch suite needs the matching frontend installation. Run:", file=sys.stderr)
     args = [sys.executable, "-m", "pip", "install", "--no-deps", "--no-build-isolation"]
     if expected:

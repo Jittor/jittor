@@ -12,7 +12,7 @@ The ecosystem's optional-dependency idiom is
     except ImportError:
         pass
 
-and a bare RuntimeError walks straight through it. With jittor-torch deployed,
+and a bare RuntimeError walks straight through it. With jittor-compat deployed,
 `import tensorboardX` therefore failed outright -- and it fails that way for any
 package written the same way, *including for programs using only native Jittor*.
 

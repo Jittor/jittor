@@ -9,6 +9,7 @@
 #include "core/var.h"
 #include "core/op.h"
 #include "core/fuser.h"
+#include "runtime/graph_capture.h"
 
 namespace jittor {
 
@@ -59,6 +60,11 @@ static inline vector<T>& refill(vector<T>& v, size_t n, const T& x) {
     return v;
 }
 
+void mark_failed_batch(const ExecPlan& plan) {
+    for (Var* v : plan.all_vars)
+        if (!v->is_finished()) v->set_flag(VarFlags::_execution_failed);
+}
+
 void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan) {
     plan.clear();
     auto& scratch = plan.scratch;
@@ -80,7 +86,7 @@ void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan) {
         batch_epoch.reset(new TraversalEpoch("Executor::run_sync"));
         int64 max_id = 0;
         for (Var* v : vars)
-            if (!v->is_finished() && !batch_epoch->marked(v)) {
+            if (!v->is_finished() && !graph_capture_host_leaf(v) && !batch_epoch->marked(v)) {
                 batch_epoch->mark(v);
                 start_var_num++;
                 bfs_q.push_back(v);
@@ -98,7 +104,8 @@ void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan) {
             // a real data reader (or backward) requests their providers.
             if (node->is_var() || !node->op()->flag(OpFlags::_no_input_storage))
                 for (auto i : node->_inputs)
-                    if (!batch_epoch->marked(i.node) && !i.node->is_finished()) {
+                    if (!batch_epoch->marked(i.node) && !i.node->is_finished()
+                            && !graph_capture_host_leaf(i.node)) {
                         batch_epoch->mark(i.node);
                         need_opt += has_gopt(i.node);
                         bfs_q.push_back(i.node);
@@ -109,7 +116,7 @@ void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan) {
                     // if not in queue and is fetch op
                     if (!batch_epoch->marked(n.node) &&
                         n.node->liveness.pending.active() &&
-                        !n.node->is_finished() &&
+                        !n.node->is_finished() && !graph_capture_host_leaf(n.node) &&
                         (n.node->id <= max_id ||
                             n.node->flags.get(NodeFlags::_fetch))) {
                         batch_epoch->mark(n.node);

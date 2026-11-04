@@ -114,8 +114,15 @@ def providers(monkeypatch):
             for alias in node.names:
                 if alias.name == "ACL_FLOAT_DTYPES":
                     setattr(module, alias.name, ("float16", "bfloat16", "float32"))
+                elif alias.name == "single_axis_gather_acl":
+                    # This host-only recorder has no real310P placement. The
+                    # verified device specialization must decline here.
+                    setattr(module, alias.name, lambda *args, **kwargs: None)
                 else:
                     setattr(module, alias.name, primitive(alias.name))
+    # Conv3d checks a lazily queried SoC capability; load its real host-only
+    # owner before neural.py in this package with an intentionally empty path.
+    load("jittor.backends.acl.kernels._soc", KERNELS / "_soc.py")
     modules = {}
     for name in ("tensor", "normalization", "neural", "install"):
         module = load("jittor.backends.acl.kernels." + name, KERNELS / (name + ".py"))
@@ -137,9 +144,11 @@ def test_acl_install_publishes_real_owners_idempotently_without_facade_writes(pr
     # A literal count is the canary that a new registration was deliberate.
     # The duplicate check above catches a name registered twice, but not a
     # kernel that appears because an import side effect grew the table.
-    # 46: random.multinomial, CANN's single draw.
-    assert len(operations) == 46, "ACL kernel count changed; update deliberately"
+    # 51: Adds the measured 310P last-axis Euclidean inference subset.
+    assert len(operations) == 51, "ACL kernel count changed; update deliberately"
     assert len(first) == len(operations)
+    assert providers.dispatch.registered_kernel("conv3d", "acl") is providers.neural.conv3d_acl
+    assert providers.dispatch.registered_kernel("conv_transpose2d", "acl") is providers.neural.conv_transpose2d_acl
     for operation, implementation in providers.install.KERNELS:
         assert providers.dispatch.registered_kernel(operation, "acl") is implementation
         assert implementation.__module__.startswith("jittor.backends.acl.kernels.") or (

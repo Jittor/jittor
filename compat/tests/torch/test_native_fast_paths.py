@@ -644,9 +644,10 @@ class TestFastBinary(unittest.TestCase):
         self.assertIsNone(jt.core._fast_binary(h, True, 0))
         self.assertEqual((h / 2.0).dtype, torch.float16)
         np.testing.assert_array_equal((h / 2.0).numpy(), np.full(3, 0.5, "float16"))
-        # A float divisor is widened natively as `_true_division` widens it
-        # (bit for bit: test_torch_compat_promotion.py) -- everywhere but ACL,
-        # whose widening stays in Python; an int one is not.
+        # A float divisor is built natively in the same precision
+        # `_true_division` uses (bit for bit: test_torch_compat_promotion.py) --
+        # float32 in float32, half in its float32 opsmath -- everywhere but
+        # ACL, whose path stays in Python; an int one is not.
         if not getattr(jt.compiler, "has_acl", 0):
             self.assertEqual(jt.core._fast_binary(h, 2.0, 6).dtype, torch.float16)
         self.assertIsNone(jt.core._fast_binary(h, 2, 6))

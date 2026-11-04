@@ -74,6 +74,13 @@ struct BackendOps {
     // `aclrtSetDevice` after a failed `aclrtGetDevice`) rather than failing:
     // the async-execution worker and any dataloader thread arrive there.
     void (*set_device)(int) = nullptr;
+    // The device the calling thread's runtime has current -- what a library
+    // that set it itself (CuPy, torch) sees, which `current_device`'s cache
+    // does not know about -- and putting it back after Jittor ran. Restoring
+    // also drops that cache, so Jittor binds its own device again before it
+    // next launches. Optional; the DLPack boundary uses them (dlpack.cc).
+    int (*caller_device)() = nullptr;
+    void (*restore_caller_device)(int) = nullptr;
     // Human-readable accelerator model (CANN SoC name, GPU marketing name,
     // ...). Backends without one leave this null; the binding then reports "".
     const char* (*device_name)(int) = nullptr;

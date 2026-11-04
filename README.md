@@ -10,13 +10,15 @@
 计图（Jittor）是一个基于即时编译和元算子的高性能深度学习框架。前端使用 Python
 动态图接口，后端通过 C++ 和 CUDA 为实际工作负载编译、调优算子。
 
+- [当前分支文档](docs/index.md)
 - [官网](https://cg.cs.tsinghua.edu.cn/jittor/)
 - [教程](https://cg.cs.tsinghua.edu.cn/jittor/tutorial/)
 - [模型库](https://cg.cs.tsinghua.edu.cn/jittor/resources/)
 - [API 文档](https://cg.cs.tsinghua.edu.cn/jittor/assets/docs/index.html)
 - [论坛](https://discuss.jittor.org/)
-- [Awesome Jittor（中文）](docs/community/AWESOME-JITTOR-LIST.md) |
-  [Awesome Jittor（English）](docs/community/AWESOME-JITTOR-LIST.en.md)
+- [生态集成（JittorEcosystem）](https://github.com/JittorEcosystem)
+- [Awesome Jittor（中文）](docs/project/community/projects.md) |
+  [Awesome Jittor（English）](docs/project/community/projects.en.md)
 
 <a id="quickstart"></a>
 ## 快速开始
@@ -235,12 +237,12 @@ uv sync --locked --no-default-groups --extra cuda12
 ```bash
 git clone https://github.com/Jittor/jittor.git
 cd jittor
-python -m pip install -e .
+python -m pip install --config-settings editable_mode=compat -e .
 python -m jittor.selftest
 ```
 
-C++ 与 CUDA 源码与 Python 包并列，不在包内：内核是 [`src/`](src/)，每个后端是
-`backends/<名字>/`（例如 [`backends/cuda/`](backends/cuda/)）。源码 checkout 里
+C++ 与 CUDA 源码与 Python 包并列，不在包内：内核是 [`src/`](src)，每个后端是
+`backends/<名字>/`（例如 [`backends/cuda/`](backends/cuda)）。源码 checkout 里
 Jittor 在 `python/jittor/` 的同级目录查找它们——用 `src/core/common.h` 认出内核，
 用带 `__init__.py` 的目录认出后端；wheel 把同样的目录装成 `jittor/src/` 与
 `jittor/backends/<名字>/`。改动其中任何源码都会在下次使用时重新编译。显式选择 CUDA：

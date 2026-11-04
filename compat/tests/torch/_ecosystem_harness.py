@@ -235,7 +235,8 @@ def _distributions_available(names):
     return True
 
 
-def _run(python, runtime, case, output, weights=None, device="cpu", repeats=None):
+def _run(python, runtime, case, output, weights=None, device="cpu", repeats=None,
+         extra_env=None):
     command = [
         python, str(RUNNER), case, str(output),
         "--runtime", runtime, "--device", device,
@@ -244,12 +245,14 @@ def _run(python, runtime, case, output, weights=None, device="cpu", repeats=None
         command += ["--repeats", str(repeats)]
     if weights is not None:
         command += ["--weights", str(weights)]
-    return _run_command(python, case, command)
+    return _run_command(python, case, command, extra_env=extra_env)
 
 
-def _run_command(python, case, command, result_marker="ECOSYSTEM_RESULT "):
+def _run_command(python, case, command, result_marker="ECOSYSTEM_RESULT ", extra_env=None):
     """Launch an ecosystem probe with the shared oracle-isolation contract."""
     environment = os.environ.copy()
+    if extra_env:
+        environment.update(extra_env)
     package_site = _runner_package_site(python)
     if package_site:
         environment["JITTOR_ECOSYSTEM_PACKAGE_SITE"] = package_site
@@ -308,10 +311,16 @@ def _result_from_stdout(stdout, case, python, result_marker="ECOSYSTEM_RESULT ")
     if result_marker not in ("ECOSYSTEM_RESULT ", "TRAINING_RESULT "):
         raise ValueError("Unknown ecosystem result marker: " + result_marker)
     marker = result_marker
+    decoder = json.JSONDecoder()
     for line in stdout.splitlines():
         position = line.find(marker)
         if position != -1:
-            result = json.loads(line[position + len(marker):])
+            # `raw_decode`, not `loads`: the runner's own logging can land on
+            # the same line *after* the payload when the log buffer flushes
+            # last ("[i ... device.cc:56] CUDA enabled." does exactly that on
+            # this machine), and refusing the measurement for trailing text is
+            # the same false red the marker search above exists to avoid.
+            result, _end = decoder.raw_decode(line[position + len(marker):])
             if not isinstance(result, dict) or result.get("case") != case:
                 raise AssertionError(
                     "runner case mismatch for {} under {}: {}".format(case, python, result)
@@ -358,8 +367,18 @@ class EcosystemComparison(unittest.TestCase):
     device = "cpu"
     repeats = REPEATS
 
-    def _compare(self, case, required_gradients=()):
+    def _compare(self, case, required_gradients=(), tf32=None):
+        """Compare one case against the reference runtime.
+
+        ``tf32`` overrides ``JITTOR_ECOSYSTEM_TF32`` for this case on both
+        sides. A case whose comparison asks "do the two runtimes compute the
+        same numbers" states False when its gradients are cancellation-heavy
+        enough that TF32's ten-bit mantissa, not a kernel, is what the two
+        sides disagree about; the policy switch stays exercised by every case
+        that does not.
+        """
         _builder, requirements = _ecosystem_cases.CASES[case]
+        extra_env = {} if tf32 is None else {"JITTOR_ECOSYSTEM_TF32": "1" if tf32 else "0"}
         missing = [name for name in requirements
                    if not _distributions_available((name,))]
         if missing:
@@ -377,6 +396,7 @@ class EcosystemComparison(unittest.TestCase):
             torch_report, torch_log = _run(
                 REAL_TORCH_PYTHON, "torch", case, torch_output,
                 device=self.device, repeats=self.repeats,
+                extra_env=extra_env,
             )
             weights = root / "torch.weights.npz"
             self.assertTrue(weights.exists(), torch_log[-2000:])
@@ -388,6 +408,7 @@ class EcosystemComparison(unittest.TestCase):
                 weights=weights,
                 device=self.device,
                 repeats=self.repeats,
+                extra_env=extra_env,
             )
 
             # Both runtimes report where they actually ran. Jittor enables CUDA

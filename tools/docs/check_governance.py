@@ -13,31 +13,36 @@ from urllib.parse import unquote, urlsplit
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # Trees of historical evidence that are not authoritative active documentation.
-# None at present: dated docs/results/ reports are kept link-clean like any page.
+# None at present: retained topic documents are checked like every active page.
 EXCLUDED_PREFIXES = ()
 
 REQUIRED_DOCUMENTS = (
     "README.md",
     "CONTRIBUTING.md",
     "AGENTS.md",
-    "agent/manuals/project-context.md",
-    "agent/manuals/environment.md",
-    "agent/manuals/known-issues.md",
+    "docs/index.md",
+    "docs/getting-started/index.md",
+    "docs/getting-started/installation.md",
+    "docs/getting-started/quickstart.md",
+    "docs/guides/index.md",
+    "docs/compatibility/index.md",
+    "docs/performance/index.md",
+    "docs/api/index.md",
+    "docs/notes/index.md",
+    "docs/development/index.md",
+    "docs/project/index.md",
     "docs/development/repository-layout.md",
     "docs/development/source-architecture.md",
-    "docs/development/acl-backend-contracts.md",
-    "docs/development/torch-install-transactions.md",
-    "docs/results/index.md",
-    "agent/manuals/agent-index.md",
-    "agent/manuals/deferred-hardware.md",
+    "docs/development/backends/acl-backend-contracts.md",
+    "docs/development/compatibility/install-transactions.md",
     "benchmarks/asv/asv.conf.json",
-    "docs/compatibility/principles.md",
-    "docs/notes/complex-dtype.md",
-    "docs/development/test-system.md",
+    "docs/development/compatibility/principles.md",
+    "docs/notes/numerics/complex-dtype.md",
+    "docs/development/testing/test-system.md",
     "docs/development/known-issues/parallel-compiler-segfault.md",
     "docs/performance/benchmarking.md",
-    "docs/research/agentic-optimization.md",
-    "docs/releases/2.0.md",
+    "docs/project/research/agentic-optimization.md",
+    "docs/project/releases/2.0.md",
 )
 
 INLINE_LINK = re.compile(r"!?\[[^\]]*\]\(\s*(?:<([^>]+)>|([^\s)]+))(?:\s+[^)]*)?\)")
@@ -45,6 +50,7 @@ REFERENCE_LINK = re.compile(r"^\s*\[[^\]]+\]:\s*(?:<([^>]+)>|(\S+))")
 HTML_LINK = re.compile(r"\b(?:href|src)\s*=\s*[\"']([^\"']+)[\"']", re.IGNORECASE)
 FENCE = re.compile(r"^\s*(`{3,}|~{3,})")
 SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
+DATED_NAME = re.compile(r"(?:^|[-_])\d{4}-\d{2}-\d{2}(?=[-_.]|$)")
 
 
 def _relative(path):
@@ -137,8 +143,21 @@ def check_links(documents):
     return errors
 
 
-def check_contract(documents):
+def check_document_names(documents):
     errors = []
+    for document in documents:
+        relative = _relative(document)
+        if (relative.startswith("docs/") and document.suffix == ".md"
+                and DATED_NAME.search(document.name)):
+            errors.append(
+                "{0}: dated Markdown reports belong in GitHub issues/PRs; "
+                "keep stable topic documentation in docs/".format(relative)
+            )
+    return errors
+
+
+def check_contract(documents):
+    errors = check_document_names(documents)
     for relative in REQUIRED_DOCUMENTS:
         if not (REPO_ROOT / relative).is_file():
             errors.append("missing required document: {0}".format(relative))
@@ -151,12 +170,8 @@ def check_contract(documents):
             )
         )
 
-    if (REPO_ROOT / "agent" / "manuals" / "design").exists():
-        errors.append("retired documentation path still exists: agent/manuals/design")
-    allowed_agent_entries = {"manuals", "skills"}
-    for entry in (REPO_ROOT / "agent").iterdir():
-        if entry.name not in allowed_agent_entries:
-            errors.append("agent only owns manuals/skills; repository commands belong in tools: " + entry.name)
+    if (REPO_ROOT / "agent").exists():
+        errors.append("agent/ moved to JittorEcosystem/jittor-dev-skills; keep AGENTS.md as the entry")
 
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     for token in (
@@ -202,24 +217,10 @@ def check_contract(documents):
         if token in agents:
             errors.append("AGENTS.md contains host/tool-specific rule: {0}".format(token))
 
-    context_path = REPO_ROOT / "agent" / "manuals" / "project-context.md"
-    context = context_path.read_text(encoding="utf-8")
-    context_lines = len(context.splitlines())
-    if context_lines > 180:
-        errors.append(
-            "project-context.md must remain an index (<=180 lines); found {0}".format(context_lines)
-        )
-    if "/home/" in context or re.search(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", context):
-        errors.append("project-context.md contains machine-specific environment details")
-    for token in ("Last reviewed:", "Baseline reviewed:", "Owner:", "Freshness expires:"):
-        if token not in context:
-            errors.append("project-context.md is missing freshness metadata: {0}".format(token))
-
     stale_references = (
         "README.cn.md",
         "README.src.md",
-        "agent/manuals/design/",
-        "manuals/design/",
+            "manuals/design/",
         "doc/source/",
         "build_doc.sh",
         "jittor.test.test_example",

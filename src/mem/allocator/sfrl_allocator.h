@@ -27,6 +27,8 @@ struct CachingBlock {
     // and it must be handed back verbatim when the segment is released.
     size_t allocation;
     size_t share_times;
+    // What the caller asked for, before alignment, while occupied.
+    size_t requested = 0;
     void* memory_ptr;
     CachingBlockPool* blocks;
     CachingBlock* prev;
@@ -116,7 +118,8 @@ struct CachingBlockPool {
     // insert a block, id of this block will be obtanined and returned in this function.
     size_t insert_occupied(CachingBlock* block);
     // free all unsplit unoccupied blocks and recycle id.
-    size_t free_all_cached_blocks(Allocator* underlying, long long free_size = -1);
+    // `device` names the device for the memory history's segment_free events.
+    size_t free_all_cached_blocks(Allocator* underlying, long long free_size = -1, int device = -1);
 };
 
 // Segregate fit range list allocator
@@ -163,6 +166,8 @@ struct SFRLAllocator : Allocator {
     // Allocations served so far, the clock `CachingBlock::freed_at` reads.
     uint64 alloc_count = 0;
     void trim_before_growing(size_t need);
+    // An allocation the driver refused even after the retry, for the memory history.
+    void note_history_oom(size_t requested);
 
     inline SFRLAllocator(float free_ratio = 1, float min_free_size=0) : free_ratio(free_ratio), min_free_size(min_free_size) {
         small_blocks.ids = &id_space;
@@ -221,5 +226,24 @@ int64 sfrl_device_window_peak(int device);
 // peak restarts with `sfrl_reset_device_peak`, like the allocated one.
 int64 sfrl_device_reserved_bytes(int device);
 int64 sfrl_device_reserved_peak_bytes(int device);
+
+// PyTorch's CUDACachingAllocator statistics for one device, as
+// `torch.cuda.memory_stats` reports them: every SfrlStat for pools all, small,
+// large, each as {current, peak, allocated, freed}, then the SfrlCounters.
+// Peaks restart with `sfrl_reset_device_peak`; totals and counters with
+// `sfrl_reset_device_accumulated`.
+enum SfrlStat {
+    sfrl_stat_allocation, sfrl_stat_segment, sfrl_stat_active, sfrl_stat_inactive_split,
+    sfrl_stat_allocated_bytes, sfrl_stat_reserved_bytes, sfrl_stat_active_bytes,
+    sfrl_stat_inactive_split_bytes, sfrl_stat_requested_bytes,
+    sfrl_stat_count
+};
+enum SfrlPool { sfrl_pool_all, sfrl_pool_small, sfrl_pool_large };
+enum SfrlCounter {
+    sfrl_counter_alloc_retries, sfrl_counter_ooms, sfrl_counter_device_alloc,
+    sfrl_counter_device_free, sfrl_counter_count
+};
+vector<int64> sfrl_device_memory_stats(int device);
+void sfrl_reset_device_accumulated(int device);
 
 }//jittor

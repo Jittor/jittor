@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <queue>
 #include <set>
+#include <cstring>
 #include "core/common.h"
 #include "core/op.h"
 #include "acl_jittor.h"
@@ -192,6 +193,15 @@ namespace jittor
 
     void RmsNormOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
+        const auto *input = in_[0];
+        const auto rank = input->shape.size();
+        if (input->dtype() == ns_float16 && rank
+                && input->shape[rank - 1] > 0 && input->shape[rank - 1] < 16
+                && input->num > input->shape[rank - 1]
+                && std::strncmp(acl_soc_name(), "Ascend310P", 10) == 0)
+            LOGf << "RmsNorm on Ascend310P rejects float16 normalized widths below 16"
+                 << "with multiple rows: the vendor kernel can return incorrect rows;"
+                 << "use the portable RMSNorm path";
         auto attr = dynamic_cast<RmsNormAttr *>(op_attr.get());
         ret = aclnnRmsNormGetWorkspaceSize(
             inputTensors[0], inputTensors[1], attr->eps,

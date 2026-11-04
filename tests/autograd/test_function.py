@@ -55,6 +55,27 @@ class TestFunction(unittest.TestCase):
         )
         np.testing.assert_allclose((value * 2).numpy(), [2.0, 4.0])
 
+    def test_a_raising_backward_raises_again_on_retry(self):
+        # The callback used to be released on its first error, so a second
+        # jt.grad over the same loss failed `check failed: callback.deleter`
+        # instead of raising the user's error again.
+        class Reject(Function):
+            def execute(self, x):
+                return x * x
+
+            def grad(self, g):
+                raise RuntimeError("deliberately rejected derivative")
+
+        for use_cuda in ((0, 1) if jt.has_cuda else (0,)):
+            with jt.flag_scope(use_cuda=use_cuda):
+                x = jt.array([2.0])
+                x.sync()
+                loss = Reject.apply(x).sum()
+                for _ in range(3):
+                    with self.assertRaisesRegex(RuntimeError, "deliberately rejected derivative"):
+                        jt.grad(loss, x)
+                np.testing.assert_allclose(loss.numpy(), 4.0)
+
     def test_first_order_only_gradient_rejects_higher_order(self):
         class FirstOrderOnlySquare(Function):
             def execute(self, value):
@@ -424,6 +445,91 @@ class TestFunctionHigherOrder(unittest.TestCase):
         # d2/da2 (ab)^2 = 2 b^2, d2/dadb = 4ab
         haa, hab = jt.grad(ga.sum(), [a, b])
         np.testing.assert_allclose([haa.item(), hab.item()], [50.0, 60.0])
+
+    # Only direct attributes and one level of tuple/list used to be rebound,
+    # so an input saved in a dict or a nested container gave a second
+    # derivative of 0.
+    CONTAINERS = {
+        "dict": (lambda x: {"x": x}, lambda s: s["x"]),
+        "nested tuple": (lambda x: ((x,),), lambda s: s[0][0]),
+        "nested list": (lambda x: [[x]], lambda s: s[0][0]),
+        "nested dict": (lambda x: {"outer": {"x": x}}, lambda s: s["outer"]["x"]),
+        "mixed": (lambda x: {"a": [({"x": x},)]}, lambda s: s["a"][0][0]["x"]),
+    }
+
+    @staticmethod
+    def _cube_saving(save, load):
+        class Cube(Function):
+            def execute(self, x):
+                self.saved = save(x)
+                return x * x * x
+
+            def grad(self, g):
+                x = load(self.saved)
+                return 3 * x * x * g
+        return Cube
+
+    def test_inputs_saved_in_dicts_and_nested_containers(self):
+        for name, (save, load) in self.CONTAINERS.items():
+            cube = self._cube_saving(save, load)
+            with self.subTest(container=name, dtype="float32"):
+                x = jt.array([2.0, -1.5])
+                first = jt.grad(cube.apply(x).sum(), x)
+                with jt.flag_scope(missing_grad_error=1):
+                    second = jt.grad(first.sum(), x)
+                np.testing.assert_allclose(first.numpy(), [12.0, 6.75])
+                np.testing.assert_allclose(second.numpy(), [12.0, -9.0])
+            with self.subTest(container=name, dtype="complex64"):
+                # Conjugate VJP: d/dx Re sum(x^3) = conj(3x^2); its real part's
+                # gradient is conj(6x).
+                x = jt.array(np.array([2 + 1j, -1.5 + 0.5j], dtype="complex64"))
+                first = jt.grad(cube.apply(x).sum().real, x)
+                with jt.flag_scope(missing_grad_error=1):
+                    second = jt.grad(first.real.sum(), x)
+                np.testing.assert_allclose(second.numpy(), [12 - 6j, -9 - 3j], rtol=1e-6)
+
+    def test_a_call_leaves_no_cyclic_garbage(self):
+        # The container walk was a recursive local function, which refers to
+        # itself through its closure: every call left a cycle for the cyclic
+        # GC (eight objects a call), on the path every Function takes.
+        import gc
+        save, load = self.CONTAINERS["mixed"]
+        cube = self._cube_saving(save, load)
+
+        def step():
+            x = jt.array([2.0, -1.5])
+            first = jt.grad(cube.apply(x).sum(), x)
+            jt.grad(first.sum(), x).sync()
+
+        step()
+        gc.collect()
+        gc.disable()
+        try:
+            for _ in range(5):
+                step()
+            self.assertEqual(gc.collect(), 0)
+        finally:
+            gc.enable()
+
+    def test_one_input_saved_in_several_containers_stays_one_var(self):
+        class Saves(Function):
+            def execute(self, x):
+                self.direct = x
+                self.saved = {"a": x, "b": [x, (x,)]}
+                self.saved["self"] = self.saved   # a cycle is walked once
+                return x * x * x
+
+            def grad(self, g):
+                saved = self.saved
+                assert saved["a"] is self.direct and saved["b"][1][0] is self.direct
+                x = saved["b"][0]
+                return 3 * x * x * g
+
+        x = jt.array([2.0])
+        first = jt.grad(Saves.apply(x).sum(), x)
+        with jt.flag_scope(missing_grad_error=1):
+            second = jt.grad(first.sum(), x)
+        np.testing.assert_allclose(second.numpy(), [12.0])
 
 
 class TestFunctionWithEagerExecution(TestFunction):

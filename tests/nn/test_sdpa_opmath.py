@@ -165,3 +165,93 @@ class TestAttentionOpmath(unittest.TestCase):
                     gradients = jt.grad((output * jt.array(cotangent, dtype="float64")).sum(), leaves)
                     for actual, reference in zip([output, *gradients], expected):
                         np.testing.assert_allclose(actual.numpy(), reference, atol=1e-12, rtol=1e-12)
+
+
+class TestCausalMaskRecognition(unittest.TestCase):
+    """A mask that says exactly what ``is_causal`` says runs as ``is_causal``.
+
+    Transformers hands every layer a boolean causal mask; a fused kernel reads
+    ``is_causal`` as one engine call and a mask as a score-sized bias. The
+    rewrite is only allowed when the content is literally ``tril(ones)``, so
+    these two cases pin both sides of that condition.
+    """
+
+    def test_an_exact_causal_mask_and_is_causal_are_the_same_call(self):
+        rng = np.random.RandomState(31)
+        q, k, v = (rng.randn(1, 2, 16, 8).astype("float32") for _ in range(3))
+        dout = rng.randn(1, 2, 16, 8).astype("float32")
+        keep = np.tril(np.ones((16, 16), dtype=bool))
+        with jt.flag_scope(use_cuda=0, amp_reg=0):
+            jq, jk, jv = (jt.array(t) for t in (q, k, v))
+            masked = attention.scaled_dot_product_attention(
+                jq, jk, jv, attn_mask=jt.array(keep)[None, None])
+            causal = attention.scaled_dot_product_attention(jq, jk, jv, is_causal=True)
+            np.testing.assert_array_equal(masked.numpy(), causal.numpy())
+            left = jt.grad((masked * jt.array(dout)).sum(), [jq, jk, jv])
+            right = jt.grad((causal * jt.array(dout)).sum(), [jq, jk, jv])
+            for actual, reference in zip(left, right):
+                np.testing.assert_array_equal(actual.numpy(), reference.numpy())
+
+    def test_a_mask_that_differs_from_causal_keeps_its_own_meaning(self):
+        rng = np.random.RandomState(32)
+        q, k, v = (rng.randn(1, 2, 16, 8).astype("float32") for _ in range(3))
+        dout = rng.randn(1, 2, 16, 8).astype("float32")
+        keep = np.tril(np.ones((16, 16), dtype=bool))
+        keep[9, 4] = False
+        expected = _reference(q, k, v, keep, False, dout)[0]
+        with jt.flag_scope(use_cuda=0, amp_reg=0):
+            jq, jk, jv = (jt.array(t) for t in (q, k, v))
+            actual = attention.scaled_dot_product_attention(
+                jq, jk, jv, attn_mask=jt.array(keep)[None, None]).numpy()
+            causal = attention.scaled_dot_product_attention(
+                jq, jk, jv, is_causal=True).numpy()
+        np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-6)
+        self.assertGreater(float(np.abs(actual - causal).max()), 1e-5)
+
+    def test_a_per_batch_causal_mask_is_recognised_when_every_block_matches(self):
+        rng = np.random.RandomState(33)
+        q, k, v = (rng.randn(2, 2, 16, 8).astype("float32") for _ in range(3))
+        keep = np.broadcast_to(np.tril(np.ones((16, 16), dtype=bool)), (2, 1, 16, 16))
+        with jt.flag_scope(use_cuda=0, amp_reg=0):
+            jq, jk, jv = (jt.array(t) for t in (q, k, v))
+            masked = attention.scaled_dot_product_attention(
+                jq, jk, jv, attn_mask=jt.array(keep))
+            causal = attention.scaled_dot_product_attention(jq, jk, jv, is_causal=True)
+            np.testing.assert_array_equal(masked.numpy(), causal.numpy())
+
+    def test_a_per_batch_mask_with_one_different_block_keeps_its_meaning(self):
+        rng = np.random.RandomState(34)
+        q, k, v = (rng.randn(2, 2, 16, 8).astype("float32") for _ in range(3))
+        dout = rng.randn(2, 2, 16, 8).astype("float32")
+        keep = np.broadcast_to(
+            np.tril(np.ones((16, 16), dtype=bool)), (2, 1, 16, 16)).copy()
+        keep[1, 0, 9, 4] = False
+        expected = _reference(q, k, v, keep, False, dout)[0]
+        with jt.flag_scope(use_cuda=0, amp_reg=0):
+            jq, jk, jv = (jt.array(t) for t in (q, k, v))
+            actual = attention.scaled_dot_product_attention(
+                jq, jk, jv, attn_mask=jt.array(keep)).numpy()
+            causal = attention.scaled_dot_product_attention(
+                jq, jk, jv, is_causal=True).numpy()
+        np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-6)
+        self.assertGreater(float(np.abs(actual - causal).max()), 1e-6)
+
+    def test_ascend_keeps_the_mask_because_the_verdict_reads_back(self):
+        # The 910B3 measurement behind `causal_mask_rewrite`: the verdict's
+        # host read defeats auto_graph_replay there (35.5 -> 84 ms a prefill)
+        # for a 4.5 ms device win, so the backend is excluded by name.
+        from types import SimpleNamespace
+
+        rng = np.random.RandomState(35)
+        q, k, v = (rng.randn(1, 2, 16, 8).astype("float32") for _ in range(3))
+        keep = np.tril(np.ones((16, 16), dtype=bool))
+        with jt.flag_scope(use_cuda=0, amp_reg=0):
+            jq, jk = (jt.array(t) for t in (q, k))
+            mask = jt.array(keep)[None, None]
+            self.assertTrue(attention.causal_mask_rewrite(jq, jk, mask, False))
+            original = attention.dispatch_context
+            attention.dispatch_context = lambda: SimpleNamespace(backend="acl")
+            try:
+                self.assertFalse(attention.causal_mask_rewrite(jq, jk, mask, False))
+            finally:
+                attention.dispatch_context = original

@@ -14,7 +14,7 @@ import pytest
 
 @pytest.fixture
 def proof(monkeypatch):
-    scripts = Path(__file__).resolve().parents[2] / 'agent/skills/torch-compat-repo-runbook/scripts'
+    scripts = Path(__file__).resolve().parents[2] / 'tools/ecosystem'
     monkeypatch.syspath_prepend(str(scripts))
     spec = importlib.util.spec_from_file_location('flash_source_proof_test', scripts / '_flash_attention_scorecard.py')
     module = importlib.util.module_from_spec(spec)

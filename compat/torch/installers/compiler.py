@@ -515,6 +515,13 @@ def _api_dynamo_graph_break(*a, **k):
     return None
 
 
+def _api_inductor_fresh_cache(cache_entries=None, dir=None, delete=True):
+    """Permit guarded imports without pretending Jittor owns Inductor caches."""
+    raise NotImplementedError(
+        "torch._inductor.utils.fresh_cache requires the PyTorch Inductor "
+        "compiler; Jittor does not implement Inductor cache isolation")
+
+
 def _api_dynamo_reset(*a, **k):
     return None
 
@@ -640,6 +647,13 @@ def install(ctx):
     _inductor_config._config = {}
     _inductor_config.triton = _types2.SimpleNamespace(cudagraphs=False)
     _inductor.config = _inductor_config
+    # Upstream test harnesses import this helper even for eager-only cases.
+    # The module is real and narrowly exported: using the unsupported cache
+    # context raises, rather than fabricating a successful no-op context.
+    _inductor_utils = _types2.ModuleType("torch._inductor.utils")
+    _inductor_utils.fresh_cache = _api_inductor_fresh_cache
+    _inductor.utils = _inductor_utils
+    _modules["torch._inductor.utils"] = _inductor_utils
     _modules["torch._inductor"] = _inductor
     _modules["torch._inductor.custom_graph_pass"] = _custom_graph_pass
     _modules["torch._inductor.config"] = _inductor_config

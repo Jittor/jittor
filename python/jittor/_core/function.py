@@ -127,6 +127,8 @@ can also be None)::
             return self.execute(*args, **kw)
         args = list(args)
         taped_inputs = []
+        # The caller's Var behind each tape, for `_rebind_saved_inputs`.
+        input_sources = []
         taped_outputs = []
         input_mask = [-1] * len(args)
         for i,v in enumerate(args):
@@ -135,6 +137,7 @@ can also be None)::
                     # -2 in input_mask represents it is stop_grad
                     input_mask[i] = -2
                     continue
+                input_sources.append(v)
                 v = v.tape()
                 input_mask[i] = len(taped_inputs)
                 args[i] = v
@@ -165,10 +168,10 @@ can also be None)::
         # backward treat them as one operator
         tape_together(taped_inputs, taped_outputs, self._grad)
         if taped_inputs:
-            self._rebind_saved_inputs(taped_inputs)
+            self._rebind_saved_inputs(taped_inputs, input_sources)
         return res if many else res[0]
 
-    def _rebind_saved_inputs(self, taped_inputs):
+    def _rebind_saved_inputs(self, taped_inputs, input_sources=None):
         """Point the inputs this call saved back at the caller's Vars.
 
         ``execute`` sees taped copies of its inputs, and ``tape_together``
@@ -187,23 +190,48 @@ can also be None)::
         computed from the tapes stays as non-differentiable as before.
         ``_taped_input_rebinds`` maps the old Var ids to the new ones for
         anything that recorded them, such as a saved-tensor version check.
+
+        Tuples, lists and dicts are searched to any depth (dict values, not
+        keys), so ``self.saved = {"outer": {"x": x}}`` keeps its second
+        derivative too; it used to be 0. The swap happens on the Var object
+        itself, so the containers keep their structure and an input saved in
+        several places stays one object.
+
+        A tape that ``execute`` already ran -- it synced the input, or an
+        output computed from it -- can no longer name its input, and such a
+        saved input used to be skipped: a second derivative of 0. It is
+        swapped onto ``input_sources``, the caller's Vars in tape order,
+        instead, which is the same Var the tape would have named.
         """
+        if input_sources is None:
+            sources = {}
+        else:
+            sources = {t.id: s for t, s in zip(taped_inputs, input_sources)}
         taped = {t.id for t in taped_inputs}
         rebinds = {}
-
-        def rebind(value):
-            if (isinstance(value, Var) and value.id in taped
-                    and not value.is_finished):
+        # Containers already walked, by id: a container saved twice, or one
+        # that holds itself, is walked once. An explicit stack rather than a
+        # recursive local function: one that calls itself refers to itself
+        # through its closure, so every Function call left a reference cycle
+        # for the cyclic GC.
+        seen = set()
+        pending = list(self.__dict__.values())
+        while pending:
+            value = pending.pop()
+            kind = type(value)
+            if kind is tuple or kind is list or kind is dict:
+                if id(value) not in seen:
+                    seen.add(id(value))
+                    pending.extend(value.values() if kind is dict else value)
+            elif isinstance(value, Var) and value.id in taped:
                 old = value.id
-                value.swap(value._input(0))
+                if not value.is_finished:
+                    value.swap(value._input(0))
+                elif old in sources:
+                    value.swap(sources[old]._alias())
+                else:
+                    continue
                 rebinds[old] = value.id
-
-        for value in tuple(self.__dict__.values()):
-            if type(value) is tuple or type(value) is list:
-                for item in value:
-                    rebind(item)
-            else:
-                rebind(value)
         if rebinds:
             self._taped_input_rebinds = rebinds
 

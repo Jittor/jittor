@@ -550,7 +550,10 @@ namespace jittor
                     // buffer before earlier ACL kernels finish. Queue the H2D
                     // copy on aclstream so reuse stays ordered with consumers.
                     const void *source = aop->ptr<void>();
-                    if (aop->output->flag(VarFlags::_is_scalar))
+                    // ArrayOp force-fuses every one-element tensor, including
+                    // rank-1 integer indices such as chunk's [i]. Their host
+                    // allocation can be recycled before this queued copy runs.
+                    if (aop->output->num == 1)
                         source = persistent_acl_scalar_data(
                             source, aop->output->size);
                     auto ret = aclrtMemcpyAsync(

@@ -1,5 +1,6 @@
 """Stable Torch Tensor method implementations; install only binds these objects."""
 from importlib import import_module
+import contextlib
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from ...context import get_install_context
 from ...types import _PYTHON_SCALAR_DTYPES, _make_cpu_resident, _make_cuda_resident, _var_is_cpu_resident
@@ -254,6 +255,29 @@ def _torch_setitem(self, slices, value):
     return result
 
 
+#: Depth of `_optimizer_write_scope`: readers resolved for a whole group.
+_OPTIMIZER_WRITES = [0]
+
+
+@contextlib.contextmanager
+def _optimizer_write_scope():
+    """Resolve every reader once for a group of optimizer stores.
+
+    Each in-place store otherwise resolves the destination storage's readers
+    with a full `sync_all` -- three stores per parameter for AdamW, which on
+    an Ascend 910B3 was 1.19 s of a 4.7 s ten-step `qwen3_train`. In an
+    optimizer update a parameter's readers are upstream of its new value, so
+    one sweep before the group covers them; the stores then only materialize
+    their own source.
+    """
+    _owner.jt.sync_all()
+    _OPTIMIZER_WRITES[0] += 1
+    try:
+        yield
+    finally:
+        _OPTIMIZER_WRITES[0] -= 1
+
+
 def _copy_detached_storage(self, value):
     # Optimizer buckets retain detached aliases of dense slices. Rebinding a
     # holder would leave those aliases reading the old allocation. Only use
@@ -284,7 +308,13 @@ def _copy_detached_storage(self, value):
             return False
         # Resolve pending readers (including clone snapshots) before changing
         # bytes. _copy_into owns placement, stream ordering and dense copies.
-        _owner.jt.sync_all()
+        # An optimizer group resolves them once for every parameter instead
+        # (see `_optimizer_write_scope`), and here only materializes the value
+        # whose graph contains this tensor's readers.
+        if _OPTIMIZER_WRITES[0]:
+            value.sync()
+        else:
+            _owner.jt.sync_all()
         if not self._mem_ptr_now or not value._mem_ptr_now:
             # Still unbuilt after the sync: a call being captured for replay,
             # where the sync runs nothing. Such a tensor has no storage an
@@ -495,9 +525,38 @@ def _clamp(input, min=None, max=None, min_v=None, max_v=None):
                          max if max is not None else max_v)
 
 
+def _comparison_operand(other):
+    return isinstance(other, (_NativeVar, bool, int, float, complex,
+                              _owner.np.number, _owner.np.bool_))
+
+
+def _torch_eq(input, other):
+    if not _comparison_operand(other):
+        raise TypeError("eq(): other must be a Tensor or Number, not " + type(other).__name__)
+    return _binary_native('__eq__', input, other)
+
+
 def _torch_ne(input, other):
+    if not _comparison_operand(other):
+        raise TypeError("ne(): other must be a Tensor or Number, not " + type(other).__name__)
+    if (input is other and isinstance(input, _NativeVar)
+            and (input.dtype.is_float() or input.dtype.is_int() or input.dtype.is_bool())):
+        # ne(x, x) is exactly isnan(x) for a real tensor, including infinities
+        # and signed zeros. Reuse the canonical device predicate instead of
+        # building subtraction and duplicate NaN-classification graphs.
+        # Storage aliases with different Python holders keep the path below.
+        with _new_scope(input, None):
+            return _owner.jt.isnan(input)
     a = input if isinstance(input, _NativeVar) else _owner.jt.array(input)
-    b = other if isinstance(other, _NativeVar) else _owner.jt.array(other)
+    if isinstance(other, _NativeVar):
+        b = other
+    elif isinstance(input, _NativeVar):
+        # A scalar belongs to this operand, even inside a model running under
+        # another construction device. Keep array's existing dtype inference.
+        with _new_scope(input, None):
+            b = _owner.jt.array(other)
+    else:
+        b = _owner.jt.array(other)
     if _jittor_dtype_name(a.dtype) == "bool":
         a = a.int32()
     if isinstance(b, _NativeVar) and _jittor_dtype_name(b.dtype) == "bool":
@@ -564,7 +623,10 @@ class _Storage:
     def __init__(self, var):
         self._var = var
     def data_ptr(self):
-        return id(self._var)
+        # Tensor.data_ptr() addresses the first element of a view. Storage
+        # addresses its allocation origin, shared by every offset view/alias.
+        pointer = _api_data_ptr(self._var)
+        return pointer - int(self._var._storage_offset()) * _storage_dsize(self._var)
     def size(self):
         return int(self._var.numel())
     def nbytes(self):
@@ -1514,7 +1576,16 @@ def _promoting_binary(self, other, opname, reflected):
                 other = other.cuda() if self_cuda else other.cpu()
         da, db = _own_dtype_name(self, native_api), _own_dtype_name(other, native_api)
         if da == db and not da.startswith("uint"):
-            return _binary_native(opname, self, other, native_api)
+            out = _binary_native(opname, self, other, native_api)
+            if opname in ('__pow__', '__rpow__') and da in ('float16', 'bfloat16'):
+                # Native pow intentionally widens white-listed math. Torch's
+                # public same-dtype power keeps its inputs' dtype; the scalar
+                # base branch below reaches this path too. Repair only the
+                # frontend result, retaining native math and explicit AMP.
+                from ...amp import autocast_dtype
+                if autocast_dtype() is None and _own_dtype_name(out, native_api) != da:
+                    out = out.cast(da)
+            return out
         # `result_type`, not `_promote_pair`: a 0-dim operand promotes only
         # from a higher category, so half_tensor * tensor(2.0) stays half.
         res = _owner._dtype_to_str(g.result_type(self, other))
@@ -1606,24 +1677,46 @@ def _true_division(self, other, opname):
             get_install_context(_owner.jt).target_namespace.result_type(self, other))
         tgt = _truediv_target(rt, rt)
         src_dt = _jittor_dtype_name(self.dtype)
-        # CPU/CUDA widen Python floats for PyTorch 1-ulp parity; torch_npu
-        # stays in the tensor dtype because ACL has no float64 arithmetic.
         acl_active = bool(getattr(_owner.jt.compiler, "has_acl", 0)) and (
             bool(getattr(_owner.jt.flags, "use_acl", 0)) and bool(_owner.jt.flags.use_cuda))
-        # Half precision widens to float32 only: that is PyTorch's opmath for
-        # it, and a float64 division ran every diffusers attention block's
-        # `/ rescale_output_factor` in double -- 15 ms of a 20-step SD1.5
-        # sample on a part with 1/64-rate double -- to round to the same half.
-        wide = "float32" if src_dt in ("float16", "bfloat16") else "float64"
-        use_wide = sd.startswith("float") and src_dt != "float64" and not acl_active
-        calc_dt = wide if use_wide else tgt
+        if (acl_active and opname == '__truediv__' and type(other) is float
+                and other == 1.0 and src_dt in ("float16", "float32")
+                and self.is_contiguous()
+                and _owner.jt.core.dispatch_context([self])[0] in ("acl", "acl_legacy")):
+            # A unit quotient is exact, including NaN/Inf and signed zero.
+            # Copy storage as Torch does; native Var.clone would alias it.
+            # Limit layout to the contiguous case verified on real ACL.
+            from ...frontend import clone
+            return clone(self)
+        # CPU/CUDA used to widen a float32 operand to float64 here "for PyTorch
+        # 1-ulp parity"; measured against torch 2.11 that is the wrong way
+        # round. `x / 0.28209479177387814` for 20000 float32 `x` matches
+        # `x / float32(scale)` bit for bit (0 differ) and differs from the
+        # float64 route on 12615 of them: torch computes a Python float in the
+        # tensor's own dtype (the weak-scalar rule the promotion above already
+        # applies). Half precision still widens to float32, which is its
+        # opmath, and the float64 route also cost 0.55 ms of a diffusers
+        # UNet2D step on a part whose double rate is 1/64.
+        calc_dt = "float32" if src_dt in ("float16", "bfloat16") else tgt
         a = self if src_dt == calc_dt else self.cast(calc_dt)
-        if use_wide or isinstance(other, _owner.np.generic):
+        if sd.startswith("float") or isinstance(other, _owner.np.generic):
             with _owner.jt.no_grad():
                 b = _owner.jt.array(other, dtype=calc_dt)
         else:
             b = other
-        out = _binary_native(opname, a, b)
+        if (opname == "__rtruediv__" and src_dt in ("float32", "float64")
+                and sd.startswith("float")):
+            # torch answers `pyfloat / t` as `t_dtype(scalar) * (1 / t)`, not
+            # as a division: over 20000 values that form matches it bit for
+            # bit in both float32 and float64 (0 differ) while an IEEE
+            # division differs on 5106 and 5109 of them. Half precision does
+            # not follow it, so it keeps the division below.
+            with _owner.jt.no_grad():
+                one = _owner.jt.array(1, dtype=calc_dt).stop_grad()
+            out = _binary_native(
+                "__mul__", b, _binary_native("__truediv__", one, a))
+        else:
+            out = _binary_native(opname, a, b)
         if isinstance(out, _NativeVar) and _jittor_dtype_name(out.dtype) != tgt:
             out = out.cast(tgt)
         return out
@@ -1735,7 +1828,17 @@ def _tensor_rtruediv(self, other):
     return _true_division(self, other, '__rtruediv__')
 
 
+def _tensor_eq(self, other):
+    # Python comparisons must allow the reflected operand's implementation,
+    # including sentinel objects used in ordinary cache/control-flow checks.
+    # The explicit Tensor.eq / torch.eq APIs retain their argument errors.
+    if not _comparison_operand(other):
+        return NotImplemented
+    return _binary_native('__eq__', self, other)
+
+
 _BINARY_APIS = {
+    '__eq__': _tensor_eq,
     '__add__': _tensor_add,
     '__radd__': _tensor_radd,
     '__sub__': _tensor_sub,
@@ -1818,6 +1921,40 @@ def _api_zero(self):
     return _ip(self, zeros, preserve_storage=True)
 
 
+def _api_zero_batch(tensors):
+    """``Tensor.zero_`` for a list, through one reader sync.
+
+    ``_copy_detached_storage`` resolves every pending reader of a tensor's
+    storage before it writes -- that is what keeps a detached alias correct --
+    and doing it once per tensor also drained the device between writes.
+    ``Module.zero_grad(set_to_none=False)`` paid that 199 times for BERT-large
+    and cost 12 ms against PyTorch's 1.5 ms. Nothing in this list reads a
+    parameter, so one sweep ahead of the writes covers all of them; anything
+    the single-tensor path must handle itself (a deferred capture, an unbuilt
+    tensor, a differentiable one) falls back to it.
+    """
+    if not tensors:
+        return
+    _owner.jt.sync_all()
+    cache = {}
+    for tensor in tensors:
+        if (getattr(tensor, "_mem_ptr_now", None) is None
+                or (tensor.requires_grad and not _owner.jt.flags.no_grad
+                    and not tensor.is_leaf)
+                or _fill_captured_state(tensor, 0)):
+            tensor.zero_()
+            continue
+        key = (tuple(tensor.shape), str(tensor.dtype))
+        zeros = cache.get(key)
+        if zeros is None:
+            with _new_scope(tensor, None), _owner.jt.no_grad():
+                zeros = _owner.jt.zeros(tensor.shape, tensor.dtype)
+            cache[key] = zeros
+        with _owner.jt.no_grad():
+            if not tensor._copy_view_into(zeros):
+                tensor._copy_into(zeros)
+
+
 def _api_add(self, o, alpha=1):
     return _ip(self, self + o * alpha, preserve_storage=True)
 
@@ -1855,6 +1992,8 @@ def _api_ne(self, other):
 
 
 def _api_ne_alias(self, other):
+    if not _comparison_operand(other):
+        return NotImplemented
     return _torch_ne(self, other)
 
 
@@ -1995,6 +2134,11 @@ def _api_is_contiguous(self, *a, **k):
 
 def _api_is_leaf(self):
     return bool(self.is_backward_leaf)
+
+
+def _api_is_quantized(self):
+    # Native Var does not represent quantized tensor storage.
+    return False
 
 
 def _api_is_sparse(self):

@@ -202,7 +202,7 @@ def gate(args):
     wheel = getattr(args, 'wheel', None) or os.environ.get('JITTOR_ACCELERATE_WHEEL')
     if not wheel:
         raise ValueError('Gate requires the actual pinned official Accelerate wheel')
-    sys.path.insert(0, str(ROOT / 'agent/skills/torch-compat-repo-runbook/scripts'))
+    sys.path.insert(0, str(ROOT / 'tools/ecosystem'))
     from _accelerate_installation import wheel_artifact
     wheel = Path(wheel_artifact(wheel)['path'])
     state.mkdir(parents=True, exist_ok=True)

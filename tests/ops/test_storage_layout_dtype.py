@@ -7,11 +7,17 @@ import pytest
 
 import jittor as jt
 from jittor._runtime.fallback import forbid_backend_fallbacks
+from _helpers import torch_runtime
 
 
 @pytest.fixture(autouse=True)
 def native_device_only():
-    assert 'torch' not in sys.modules
+    # What this file needs is that jittor's own runtime is under test, which is
+    # what `torch_shim_loaded` answers. `'torch' not in sys.modules` was a
+    # different claim: a native test may import an independent PyTorch to
+    # compare against, and xdist shares a worker between files, so one such
+    # import turned this whole file red in the smoke tier.
+    assert not torch_runtime.torch_shim_loaded()
     assert 'jittor.compat.torch' not in sys.modules
     with forbid_backend_fallbacks():
         yield

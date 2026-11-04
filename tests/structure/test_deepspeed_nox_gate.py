@@ -4,6 +4,15 @@ import pytest
 from _helpers.nox_probe import _FakeSession, _load_noxfile
 
 
+@pytest.fixture(autouse=True)
+def external_adapter_checkout(monkeypatch, tmp_path):
+    source = tmp_path / "jittor-deepspeed"
+    source.mkdir()
+    (source / "pyproject.toml").write_text('[project]\nname = "jittor-deepspeed"\n')
+    monkeypatch.setenv("JITTOR_DEEPSPEED_SOURCE", str(source))
+    return source
+
+
 @pytest.mark.parametrize("device", ("cpu", "cuda"))
 def test_engine_session_isolates_oracle_and_installs_adapter_before_execution(
         monkeypatch, tmp_path, device):
@@ -29,11 +38,12 @@ def test_engine_session_isolates_oracle_and_installs_adapter_before_execution(
     assert not env["PYTHONPATH"] and not env["JITTOR_SOURCE_ROOT"]
     assert env["JITTOR_TORCH_SHIM"] == "0"
     adapter = [i for i, (args, _) in enumerate(session.calls)
-               if "install" in args and any(str(arg).endswith("/adapters") for arg in args)]
+               if "install" in args and any(str(arg) == str(tmp_path / "jittor-deepspeed") for arg in args)]
     executions = [(i, args, kw) for i, (args, kw) in enumerate(session.calls)
                   if "pytest" in args]
     assert len(adapter) == len(executions) == 1
     assert adapter[0] < executions[0][0]
+    assert executions[0][2]["env"]["JITTOR_DEEPSPEED_SOURCE"] == str(tmp_path / "jittor-deepspeed")
     args, env = executions[0][1], executions[0][2]["env"]
     assert {env[name] for name in module["THREAD_POOL_ENV_NAMES"]} == {"6"}
     assert args[0] == "/opt/native/bin/python"

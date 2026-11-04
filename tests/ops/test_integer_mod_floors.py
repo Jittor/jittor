@@ -93,25 +93,61 @@ class _ModContract:
                 a, b, A, B = self._pair((0, 1, 2, 7, 255), (2, 2, 3, 3, 4), dtype)
                 np.testing.assert_array_equal(jt.mod(A, B).numpy(), a % b)
 
-    def test_zero_and_overflowing_divisors_take_numpys_answers(self):
-        # x // 0, x % 0 and fmod(x, 0) killed a CPU process with SIGFPE and
-        # returned an all-ones value on CUDA; MIN // -1, the one overflowing
-        # quotient, traps on x86 too. NumPy's results are 0, 0, 0, MIN and 0.
+    def test_overflowing_divisor_takes_numpys_answers(self):
+        # MIN // -1, the one overflowing quotient, traps on x86 (SIGFPE); it
+        # wraps to MIN, and MIN % -1 is 0, as in NumPy and torch.
         with jt.flag_scope(use_cuda=self.device_flag):
-            for dtype in SIGNED + UNSIGNED + ("uint32",):
+            for dtype in SIGNED:
                 info = np.iinfo(dtype)
-                a = np.array([7, 0, info.max, info.min, info.max, 9], dtype=dtype)
-                b = np.array([0, 0, 0, 0, 2, 4], dtype=dtype)
-                if info.min < 0:
-                    b[3:5] = -1
+                a = np.array([info.max, info.min, info.max, 9], dtype=dtype)
+                b = np.array([-1, -1, 2, 4], dtype=dtype)
                 A, B = jt.array(a, dtype=dtype), jt.array(b, dtype=dtype)
                 with np.errstate(all="ignore"):
                     expect = {"floor_divide": np.floor_divide(a, b),
                               "mod": np.mod(a, b), "fmod": np.fmod(a, b)}
                 for op, ref in expect.items():
                     np.testing.assert_array_equal(
-                        getattr(jt, op)(A, B).numpy(), ref,
-                        err_msg="%s %s by 0 / -1" % (dtype, op))
+                        getattr(jt, op)(A, B).numpy(), ref, err_msg="%s %s by -1" % (dtype, op))
+
+    def test_zero_divisor_follows_torch(self):
+        # torch's CPU kernels raise "RuntimeError: ZeroDivisionError" for an
+        # integer x // 0, x % 0 and fmod(x, 0); its CUDA kernels raise nothing
+        # and leave the value unspecified, where Jittor gives NumPy's 0. It
+        # used to be 0 on the CPU too, and a SIGFPE before that.
+        with jt.flag_scope(use_cuda=self.device_flag):
+            for dtype in SIGNED + UNSIGNED + ("uint32",):
+                a = np.array([7, 0, 9], dtype=dtype)
+                b = np.array([0, 0, 4], dtype=dtype)
+                A, B = jt.array(a, dtype=dtype), jt.array(b, dtype=dtype)
+                for op in ("floor_divide", "mod", "fmod"):
+                    if self.device_flag:
+                        got = getattr(jt, op)(A, B).numpy()
+                        assert got[0] == 0 and got[1] == 0, (dtype, op, got)
+                        continue
+                    with self.assertRaisesRegex(RuntimeError, "ZeroDivisionError"):
+                        getattr(jt, op)(A, B).sync()
+                    with self.assertRaisesRegex(RuntimeError, "ZeroDivisionError"):
+                        getattr(jt, op)(A, 0).sync()
+                # The error does not outlive its operator.
+                np.testing.assert_array_equal(
+                    jt.floor_divide(A, A + 1).numpy(), np.floor_divide(a, a + 1))
+
+    def test_zero_divisor_under_vmap(self):
+        x = jt.array(np.array([[7, 8], [9, 10]], dtype="int64"))
+        y = jt.array(np.array([[2, 0], [3, 5]], dtype="int64"))
+        with jt.flag_scope(use_cuda=self.device_flag):
+            run = lambda: jt.vmap(lambda a, b: a // b)(x, y).numpy()
+            if self.device_flag:
+                np.testing.assert_array_equal(run(), [[3, 0], [3, 2]])
+            else:
+                with self.assertRaisesRegex(RuntimeError, "ZeroDivisionError"):
+                    run()
+
+    def test_true_division_by_integer_zero_is_ieee(self):
+        with jt.flag_scope(use_cuda=self.device_flag):
+            got = (jt.array(np.array([7, -7, 0], dtype="int32"))
+                   / jt.array(np.array([0, 0, 0], dtype="int32"))).numpy()
+            assert np.isposinf(got[0]) and np.isneginf(got[1]) and np.isnan(got[2])
 
     def test_floats_still_floor(self):
         with jt.flag_scope(use_cuda=self.device_flag):

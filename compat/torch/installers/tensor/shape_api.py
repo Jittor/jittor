@@ -105,7 +105,8 @@ def _bitcast(self, dt):
     reinterpret_view = getattr(jt, "reinterpret_view", None)
     npd = _np_view_of.get(ds, _np.uint8)
     if reinterpret_view is not None and ds in _np_view_of:
-        return reinterpret_view(self, shape, ds)
+        result = reinterpret_view(self, shape, ds)
+        return result._set_dtype_view_of(self)
     return jt.array(_np.ascontiguousarray(self.numpy()).view(npd))
 
 
@@ -130,7 +131,8 @@ def _reshape_or_view(self, shape, _kw, *, allow_copy):
             return out
     # torch's `.view(dtype)` / `.view(dtype=...)` REINTERPRETS the bytes as
     # another dtype (bitcast), e.g. weight.view(torch.uint8) for byte-packing
-    # in vLLM weight transfer. jittor has no dtype-view; bitcast via numpy.
+    # in vLLM weight transfer. The native reinterpret_view preserves the byte
+    # storage and rescales valid non-contiguous strides into the new dtype.
     # (NB: 'dtype' the kwarg must not shadow the `dtype` class used below.)
     _context = get_install_context(jt)
     _native = _context.state["tensor_shape_api"]
@@ -271,30 +273,14 @@ def _plain_reduce(name, self, *a, **k):
     return orig(self, *a, **k)
 
 
-def _anyall_reduce(name, self, *a, **k):
+def _anyall_reduce(name, self, dim=None, keepdim=False, *, axis=None,
+                   dims=None, keepdims=None):
+    from ..numerical.reductions import _reduce_alias
+
     orig = get_install_context(jt).state["tensor_shape_api"]["reductions"][name]
-    d = None
-    if "axis" in k:
-        d = k.pop("axis")
-    if "dim" in k:
-        d = k.pop("dim")
-    if "dims" in k:
-        d = k.pop("dims")
-    if d is None and len(a) >= 1 and isinstance(a[0], (tuple, list)):
-        d = a[0]
-        a = a[1:]
-    keep = k.pop("keepdim", k.pop("keepdims", None))
-    if d is None:
-        return orig(self, *a, **k)
-    dims = [int(x) for x in d] if isinstance(d, (tuple, list)) else [int(d)]
-    ndim = self.ndim
-    dims = sorted((x % ndim for x in dims), reverse=True)
-    out = self
-    for ax in dims:
-        out = orig(out, dim=ax)
-        if keep:
-            out = out.unsqueeze(ax)
-    return out
+    if dims is not None:
+        dim = dims
+    return _reduce_alias(orig, self, dim, keepdim, axis=axis, keepdims=keepdims)
 
 
 def _axis_reduce(name, self, *a, **k):

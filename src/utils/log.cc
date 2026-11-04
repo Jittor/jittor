@@ -928,6 +928,8 @@ void throw_same_kind(const std::exception& like, const string& message, bool exe
     if (dynamic_cast<const UserError*>(&like)) throw_kind<UserError>(message, executed);
     if (dynamic_cast<const InternalInvariantError*>(&like))
         throw_kind<InternalInvariantError>(message, executed);
+    if (dynamic_cast<const DeviceOutOfMemoryError*>(&like))
+        throw_kind<DeviceOutOfMemoryError>(message, executed);
     throw_kind<std::runtime_error>(message, executed);
 }
 

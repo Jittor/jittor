@@ -12,7 +12,7 @@ import zipfile
 
 from _helpers.child_process import run_python_child
 
-SCRIPTS = Path(__file__).resolve().parents[2] / 'agent/skills/torch-compat-repo-runbook/scripts'
+SCRIPTS = Path(__file__).resolve().parents[2] / 'tools/ecosystem'
 
 
 class DistributionNamesTests(unittest.TestCase):

@@ -15,7 +15,7 @@ real tree and the real cache and asserts that a real child process really
 recompiles. Four perturbations, one per class of input:
 
 * a ``src/`` source edit          -- the core source walk
-* an ``extern/`` source edit      -- the same walk's second root
+* a ``backends/`` source edit      -- the same walk's second root
 * a compile ingredient change     -- ``nvcc_flags``, via the generator digest
 * a deleted product               -- the ``.so`` the stamp describes
 
@@ -23,7 +23,7 @@ Each one must produce a non-empty compile fan-out. A perturbation that gets
 skipped silently is the bug this script exists to catch, so "no fan-out" is
 reported as a failure rather than as a pleasant surprise.
 
-Usage (the environment matters; see the worktree's handoff notes):
+Usage (use an isolated checkout and cache; do not run beside other writers):
 
     JITTOR_HOME=... TMPDIR=... nvcc_path=... \
     PYTHONPATH=<worktree>/python \
@@ -141,7 +141,7 @@ def edit_generator_flags():
     it: ``compiler.py`` is recorded by content digest precisely because it
     generates the flags and the C++ it compiles.
     """
-    return append_line(os.path.join("python", "jittor", "compiler.py"))
+    return append_line(os.path.join("python", "jittor", "build", "compiler.py"))
 
 
 def delete_product(state):
@@ -188,9 +188,9 @@ def main():
                                             warm["cache_path"]))
 
     perturbations = [
-        append_line(os.path.join("python", "jittor", "src", "lock.cc")),
-        append_line(os.path.join("python", "jittor", "extern", "mkl",
-                                 "ops", "mkl_matmul_op.cc")),
+        append_line(os.path.join("src", "runtime", "lock.cc")),
+        append_line(os.path.join("backends", "cpu", "libraries", "mkl",
+                                 "mkl_matmul_op.cc")),
         edit_generator_flags(),
         delete_product(warm),
     ]

@@ -19,6 +19,16 @@ class TestTorchCompilerFidelity(unittest.TestCase):
                 self.assertTrue(callable(implementation))
                 self.assertEqual(implementation.__name__, name)
 
+    def test_inductor_cache_import_is_explicitly_unsupported_on_use(self):
+        from torch._inductor.utils import fresh_cache
+        compiler = importlib.import_module("jittor.compat.torch.installers.compiler")
+        self.assertIs(fresh_cache, compiler._api_inductor_fresh_cache)
+        with self.assertRaisesRegex(NotImplementedError, "Inductor cache isolation"):
+            with fresh_cache():
+                self.fail("unsupported Inductor context must never enter")
+        utils = importlib.import_module("torch._inductor.utils")
+        self.assertFalse(hasattr(utils, "unimplemented_analysis"))
+
     def test_public_namespaces_publish_the_same_objects(self):
         compiler = importlib.import_module(
             "jittor.compat.torch.installers.compiler")

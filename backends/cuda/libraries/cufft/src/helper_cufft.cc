@@ -25,12 +25,19 @@ const char *_cudaGetErrorEnum(cufftResult error) {
     case CUFFT_SETUP_FAILED: return "CUFFT_SETUP_FAILED";
     case CUFFT_INVALID_SIZE: return "CUFFT_INVALID_SIZE";
     case CUFFT_UNALIGNED_DATA: return "CUFFT_UNALIGNED_DATA";
+#if CUFFT_VERSION < 12000
+    // cuFFT 12 removed these obsolete result enumerators from its headers.
     case CUFFT_INCOMPLETE_PARAMETER_LIST: return "CUFFT_INCOMPLETE_PARAMETER_LIST";
+#endif
     case CUFFT_INVALID_DEVICE: return "CUFFT_INVALID_DEVICE";
+#if CUFFT_VERSION < 12000
     case CUFFT_PARSE_ERROR: return "CUFFT_PARSE_ERROR";
+#endif
     case CUFFT_NO_WORKSPACE: return "CUFFT_NO_WORKSPACE";
     case CUFFT_NOT_IMPLEMENTED: return "CUFFT_NOT_IMPLEMENTED";
+#if CUFFT_VERSION < 12000
     case CUFFT_LICENSE_ERROR: return "CUFFT_LICENSE_ERROR";
+#endif
     case CUFFT_NOT_SUPPORTED: return "CUFFT_NOT_SUPPORTED";
   }
   return "<unknown>";

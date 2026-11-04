@@ -239,7 +239,7 @@ class _DeviceProps:
 #: names were where a torch write landed). Because the tiers are stored rather than
 #: pushed to a flag, "the write was accepted and reads back" is not evidence
 #: that it took effect -- what pins that is the compute type the library call
-#: logs. See docs/notes/float32-precision-policy.md.
+#: logs. See docs/notes/numerics/float32-precision-policy.md.
 #:
 #: compat/tests/torch/test_torch_backends_tf32.py drives this table;
 #: compat/tests/torch/test_torch_compat_cuda_tf32.py pins each spelling to the
@@ -379,8 +379,10 @@ class CUDAGraph:
     """Annotation placeholder; graph capture and replay are unsupported."""
 
 
-class OutOfMemoryError(RuntimeError):
-    pass
+# torch.OutOfMemoryError is jittor's own error for a refused device
+# allocation, so ``except torch.cuda.OutOfMemoryError`` catches what the
+# allocator raises and the traceback still names jittor.
+OutOfMemoryError = jt.JittorOutOfMemoryError
 
 def _cuda_visible_devices_empty():
     import os as _os_cuda
@@ -864,23 +866,11 @@ def _mem_max_reserved(device=None, *a, **k):
 
 
 def _mem_summary(device=None, abbreviated=False):
-    """torch.cuda.memory_summary: jittor's pool counters as a short table."""
+    """torch.cuda.memory_summary: torch's table over jittor's pool statistics,
+    titled as jittor's."""
+    from jittor.profiling import memory_summary
     index = _mem_device_key(device)
-    stats = _api_cuda_memory_stats(device)
-    mib = float(1 << 20)
-    rows = [("Allocated memory (current)", stats["allocated_bytes.all.current"]),
-            ("Allocated memory (peak)", stats["allocated_bytes.all.peak"]),
-            ("Allocated memory (total allocated)", stats.get("allocated_bytes.all.allocated", 0)),
-            ("Reserved memory (current)", stats["reserved_bytes.all.current"]),
-            ("Reserved memory (peak)", stats["reserved_bytes.all.peak"])]
-    width = 75
-    lines = ["|" + "=" * width + "|",
-             "|" + ("jittor pool memory summary, device %d" % index).center(width) + "|",
-             "|" + "-" * width + "|"]
-    for label, value in rows:
-        lines.append("| %-45s %23.1f MiB |" % (label, value / mib))
-    lines.append("|" + "=" * width + "|")
-    return "\n".join(lines) + "\n"
+    return memory_summary(index, abbreviated, stats=_api_cuda_memory_stats(device))
 
 
 def _reset_peak(device=None, *a, **k):
@@ -1210,15 +1200,53 @@ def _api_cuda_default_stream(device=None, *a, **k):
 
 
 def _api_cuda_memory_stats(device=None, *a, **k):
+    """torch.cuda.memory_stats: every key torch's caching allocator reports,
+    from the counters jittor's pools keep (jittor.profiling.memory_stats).
+
+    The four totals memory_allocated/max_memory_allocated/memory_reserved/
+    max_memory_reserved answer are those functions' readings, so the two
+    never disagree -- also when the caching pools are off and the peak is
+    sampled here instead."""
+    from jittor.profiling import memory_stats
     index = _mem_device_key(device)
-    current = _mem_used(device)
-    stats = {'allocated_bytes.all.current': current,
-             'allocated_bytes.all.peak': _mem_max(device),
-             'reserved_bytes.all.current': _mem_bytes(index, reserved=True),
-             'reserved_bytes.all.peak': _mem_max_reserved(device)}
-    if index >= 0:
-        stats['allocated_bytes.all.allocated'] = int(jt.core.device_memory_allocated_total(int(index)))
+    stats = memory_stats(index)
+    stats['allocated_bytes.all.current'] = _mem_used(device)
+    stats['allocated_bytes.all.peak'] = _mem_max(device)
+    stats['reserved_bytes.all.current'] = _mem_bytes(index, reserved=True)
+    stats['reserved_bytes.all.peak'] = _mem_max_reserved(device)
     return stats
+
+
+def _api_cuda_reset_accumulated_memory_stats(device=None):
+    """torch.cuda.reset_accumulated_memory_stats."""
+    from jittor.profiling import reset_accumulated_memory_stats
+    reset_accumulated_memory_stats(_mem_device_key(device))
+
+
+def _api_cuda_memory__record_memory_history(enabled="all", *args, **kwargs):
+    """torch.cuda.memory._record_memory_history, both the string and the older boolean form."""
+    from jittor.profiling import _memory_history
+    if isinstance(enabled, bool):
+        return _memory_history.record_memory_history_legacy(enabled, *args, **kwargs)
+    return _memory_history.record_memory_history(enabled, *args, **kwargs)
+
+
+def _api_cuda_memory__snapshot(device=None):
+    """torch.cuda.memory._snapshot: segments, per-device traces, allocator settings."""
+    from jittor.profiling import memory_snapshot
+    return memory_snapshot()
+
+
+def _api_cuda_memory__dump_snapshot(filename="dump_snapshot.pickle"):
+    """torch.cuda.memory._dump_snapshot: the pickle https://pytorch.org/memory_viz opens."""
+    from jittor.profiling import dump_memory_snapshot
+    return dump_memory_snapshot(filename)
+
+
+def _api_cuda_memory_snapshot(mempool_id=None):
+    """torch.cuda.memory_snapshot: the segments of ``_snapshot()``."""
+    from jittor.profiling import memory_snapshot
+    return memory_snapshot()["segments"]
 
 
 def _api_cuda_ipc_collect(*a, **k):
@@ -1705,9 +1733,14 @@ _CUDA_FIDELITY_DETAILS = {
     _mem_reserved: "Per-device bytes held by jittor's pools (live plus cached); not the driver's view of the card.",
     _mem_max: "Per-device high-water mark the pools record at every allocation; sampled at memory queries only when the caching pools are disabled.",
     _reset_peak: "Restarts one device's live-byte high-water mark at the current live bytes.",
-    _api_cuda_memory_stats: "Current, peak and total allocated bytes and current/peak pool reservation, per device; other PyTorch counters absent.",
+    _api_cuda_memory__record_memory_history: "Records jittor's device pools; Python stacks only, and a tensor's stack is the one that built its operator.",
+    _api_cuda_memory__snapshot: "PyTorch's snapshot format over jittor's SFRL segments (1 MiB small segments); frees complete immediately.",
+    _api_cuda_memory__dump_snapshot: "Pickles the jittor snapshot in PyTorch's format; opens in memory_viz.",
+    _api_cuda_memory_snapshot: "Segments of jittor's device pools in PyTorch's format.",
+    _api_cuda_memory_stats: "Every PyTorch key, from jittor's pool counters; small segments are 1 MiB and nothing is oversize (no max_split_size).",
+    _api_cuda_reset_accumulated_memory_stats: "Restarts the allocated/freed totals and counters of jittor's pool statistics.",
+    _mem_summary: "PyTorch's table layout over jittor's pool statistics, titled Jittor.",
     _mem_max_reserved: "Per-device high-water of what jittor's pools hold from the driver; excludes the CUDA context and library workspaces.",
-    _mem_summary: "A table of jittor's per-device pool counters, not PyTorch's allocator breakdown.",
     _mem_get_info: "cudaMemGetInfo on the device asked about; the fallback reports jittor's pools only, so it excludes other processes.",
     _api_cuda_synchronize: "Waits for every device this run touched, which is stronger than torch's per-device synchronize.",
     _api_cuda_can_device_access_peer: "Answered by the CUDA driver for the named pair; raises where the driver cannot be loaded rather than guessing.",

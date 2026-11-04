@@ -17,7 +17,7 @@ last step, the staged product path after freeing its intermediates).
 
 There is no Ascend card on the development host, so this is a source-level
 contract. What it cannot see is registered in
-``agent/manuals/deferred-hardware.md``.
+``the historical hardware records linked from AGENTS.md``.
 """
 
 import re

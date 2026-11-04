@@ -300,6 +300,9 @@ def grid_sample(
     assert padding_mode in ["zeros", "border", "reflection"], (
         f"grid_sample padding_mode must be zeros, border or reflection, got {padding_mode!r}"
     )
+    kernel = select_kernel("nn.grid_sample", input, grid, mode, padding_mode, align_corners)
+    if kernel is not None:
+        return kernel(input, grid, mode, padding_mode, align_corners)
     return jt.nn.grid_sampler(input, grid, mode, padding_mode, align_corners)
 
 

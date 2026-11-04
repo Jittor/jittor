@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[4]
 
 
 def test_registry_has_one_tu_owner_and_preserves_typed_query_arguments(tmp_path):
-    script = ROOT / "agent/skills/acl-host-syntax-check/make_cann_stub.py"
+    script = ROOT / "tools/build/acl/make_cann_stub.py"
     spec = importlib.util.spec_from_file_location("registry_sdk_stub", script)
     stubber = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(stubber)
@@ -60,13 +60,19 @@ aclnnStatus execute(void* workspace, uint64_t size, aclOpExecutor* exec, aclrtSt
 int main() {
     static_assert(sizeof(AclOpFunctions) <= 64, "registry entries must not regain per-op callable slots");
     assert(from_a() == from_b() && from_a() == &acl_op_registry());
-    assert(acl_op_registry().size() == 131); // 133 rows, two identical duplicate keys (Floor, Sigmoid).
+    assert(acl_op_registry().size() == 137); // 139 rows, two identical duplicate keys (Floor, Sigmoid).
     assert(acl_op_registry().at("AdaptiveAvgPool2d").launcher() == &aclnnAdaptiveAvgPool2d);
     assert(acl_op_registry().at("AdaptiveAvgPool2dBackward").launcher() == &aclnnAdaptiveAvgPool2dBackward);
     assert(acl_op_registry().at("Abs").launcher() == &aclnnAbs);
     assert(acl_op_registry().at("Sort").launcher() == &aclnnSort);
     assert(acl_op_registry().at("Multinomial").launcher() == &aclnnMultinomial);
     assert(acl_op_registry().at("PromptFlashAttention").launcher() == &aclnnPromptFlashAttentionV3);
+    assert(acl_op_registry().at("UpsampleBicubic2d").launcher() == &aclnnUpsampleBicubic2d);
+    assert(acl_op_registry().at("UpsampleBilinear2d").launcher() == &aclnnUpsampleBilinear2d);
+    assert(acl_op_registry().at("GatherV2").launcher() == &aclnnGatherV2);
+    assert(acl_op_registry().at("GridSampler2D").launcher() == &aclnnGridSampler2D);
+    assert(acl_op_registry().at("Topk").launcher() == &aclnnTopk);
+    assert(acl_op_registry().at("LinalgVectorNorm").launcher() == &aclnnLinalgVectorNorm);
     assert(acl_op_registry().at("Cast").supports(AclOpFunctions::QueryKind::Cast));
     assert(acl_op_registry().at("Add").supports(AclOpFunctions::QueryKind::Add));
     assert(acl_op_registry().at("Mul").supports(AclOpFunctions::QueryKind::Binary));

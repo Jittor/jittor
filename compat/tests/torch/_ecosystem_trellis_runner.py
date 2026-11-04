@@ -47,8 +47,8 @@ def main():
     if subprocess.check_output(['git', '-C', str(a.checkout), 'status', '--porcelain', '--untracked-files=no'], text=True):
         raise ValueError('dirty upstream')
     source_hashes = _source_hashes(a.checkout)
-    sys.path.insert(0, str(a.root / 'agent/skills/torch-compat-repo-runbook/scripts'))
-    sys.path.insert(0, str(a.root / 'agent/skills/trellis-torch-compat/scripts'))
+    sys.path.insert(0, str(a.root / 'tools/ecosystem'))
+    sys.path.insert(0, str(a.root / 'tools/ecosystem/trellis'))
     from registry_inventory import inventory
     from _source_binding import source_installation, validate_phase
     source = inventory('trellis', a.checkout)

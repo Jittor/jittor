@@ -15,7 +15,7 @@ A bare python/numpy complex *scalar* narrows to complex64 here, exactly as a
 python float narrows to float32 -- this is the argument converter's literal-
 construction default (see ``py_converter.h``'s ``ArrayArgs`` scalar path), not
 a width limit of jittor's complex support. jittor also has a native complex128
-dtype (``KI-COMPLEX-001`` is closed; see ``docs/notes/complex-dtype.md``):
+dtype (``KI-COMPLEX-001`` is closed; see ``docs/notes/numerics/complex-dtype.md``):
 ``dtype_infer``/``binary_dtype_infer`` promote to complex128 when either
 *Var* operand actually needs double precision (a complex128 Var, or a
 float64/int64-width real Var). That promotion rule is exercised by

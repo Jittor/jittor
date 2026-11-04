@@ -364,6 +364,11 @@ class TestBinaryOpPromotion(Base):
         both_devices(body)
 
     def test_python_float_truediv_preserves_torch_rounding_on_cpu(self):
+        # The expected words are PyTorch 2.11's own answer for this input,
+        # measured on the reference interpreter. They used to be one ulp away
+        # in both directions because this side computed float32 / Python-float
+        # in float64 "for 1-ulp parity": torch divides in the tensor's dtype
+        # (0 of 20000 values follow the float64 route, 12615 differ from it).
         source = mk("float32", (0.12345679, 1.2345679, 3.25))
         scale = 0.28209479177387814
         with jt.flag_scope(use_cuda=0):
@@ -374,11 +379,11 @@ class TestBinaryOpPromotion(Base):
         self.assertEqual(dtn(reflected.dtype), "float32")
         np.testing.assert_array_equal(
             quotient.view(np.uint32),
-            np.array([1054872252, 1082919861, 1094211024], dtype=np.uint32),
+            np.array([1054872251, 1082919861, 1094211023], dtype=np.uint32),
         )
         np.testing.assert_array_equal(
             reflected.view(np.uint32),
-            np.array([1074937066, 1047132944, 1035060060], dtype=np.uint32),
+            np.array([1074937067, 1047132944, 1035060061], dtype=np.uint32),
         )
 
     def test_mixed_values_correct(self):

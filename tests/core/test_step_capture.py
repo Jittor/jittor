@@ -52,6 +52,97 @@ def _make_step(w, b, lr, readback=False):
 @_test_preserve_policy(jt, "keep_graph", "auto_graph_replay")
 class TestStepCapture(unittest.TestCase):
 
+    # A captured or replayed result is a copy out of the recorded step, with
+    # no autograd edge to the call's input or the step's parameters. A grad
+    # through it was 4, 0, 0 for x = 2, 3, 4 with only a missing-gradient
+    # warning; it raises now, while the eager first call stays differentiable.
+    def test_external_grad_through_a_replayed_result_raises(self):
+        step = jt.capture_step(lambda x: (x * x).sum(), record=False)
+        grads = []
+        for value in (2.0, 3.0, 4.0, 5.0):
+            x = jt.array([value])
+            y = step(x)
+            np.testing.assert_allclose(y.numpy(), value * value)
+            if not grads:
+                grads.append(jt.grad(y, x).numpy())
+                continue
+            with self.assertRaisesRegex(RuntimeError, "capture_step call, which has no autograd"):
+                jt.grad(y, x)
+        np.testing.assert_allclose(grads[0], [4.0])
+        self.assertEqual(step.stats["replayed"], 2)
+        self.assertIsNone(step.refused)
+
+    def test_external_grad_to_a_closure_parameter_raises(self):
+        w = jt.array([3.0])
+        step = jt.capture_step(lambda x: (w * x).sum(), record=False)
+        for value in (1.0, 2.0, 3.0):
+            out = step(jt.array([value]).stop_grad())
+        with self.assertRaisesRegex(RuntimeError, "no autograd history"):
+            jt.grad(out, w)
+
+    # The step's part of a grad that also has an ordinary path used to be
+    # dropped without a word: step(x) + x.sum() gave 1 where 2x + 1 is right.
+    def test_a_grad_with_another_path_into_the_target_raises(self):
+        w = jt.array([3.0])
+        step = jt.capture_step(lambda x: ((x * x).sum(), {"scaled": w * x}), record=False)
+        for value in (2.0, 3.0, 4.0):
+            x = jt.array([value])
+            total, parts = step(x)
+            loss = total + x.sum()
+            if step.stats["captured"] == 0:
+                np.testing.assert_allclose(jt.grad(loss, x).numpy(), [2 * value + 1])
+                continue
+            np.testing.assert_allclose(loss.numpy(), value * value + value)
+            for target, grad_of in ((x, loss), (w, parts["scaled"].sum() + w.sum()),
+                                    (x, parts["scaled"].sum() + total)):
+                with self.assertRaisesRegex(RuntimeError, "no autograd history"):
+                    jt.grad(grad_of, target)
+        self.assertEqual(step.stats["replayed"], 1)
+
+    def test_a_grad_that_does_not_reach_the_step_is_untouched(self):
+        # A target the step did not read, the result itself as the target,
+        # and a stop_grad result: none of them loses a gradient to the replay.
+        step = jt.capture_step(lambda x: (x * x).sum(), record=False)
+        y = jt.array([5.0])
+        for value in (2.0, 3.0, 4.0):
+            x = jt.array([value])
+            out = step(x)
+            np.testing.assert_allclose(jt.grad(out * y.sum() + y.sum(), y).numpy(),
+                                       [value * value + 1])
+            np.testing.assert_allclose(jt.grad(out * 3 + y.sum(), out).numpy(), 3.0)
+            frozen = out.stop_grad()
+            np.testing.assert_allclose(jt.grad(frozen * x.sum(), x).numpy(), [value * value])
+        self.assertEqual(step.stats["replayed"], 1)
+
+    def test_constant_results_stay_usable(self):
+        # Nothing the step reads asks for a gradient, or the call is under
+        # no_grad: the result is a constant, and a grad that also reaches a
+        # trainable Var downstream of it is the ordinary one.
+        feature = jt.capture_step(lambda x: x * 2, record=False)
+        head = jt.array([3.0])
+        for value in (1.0, 2.0, 3.0):
+            out = feature(jt.array([value]).stop_grad())
+            np.testing.assert_allclose(jt.grad((out * head).sum(), head).numpy(), [2 * value])
+        w = jt.array([3.0])
+        step = jt.capture_step(lambda x: (w * x).sum(), record=False)
+        with jt.no_grad():
+            for value in (1.0, 2.0, 3.0):
+                out = step(jt.array([value]))
+        np.testing.assert_allclose(out.numpy(), 9.0)
+        self.assertEqual(step.stats["replayed"], 1)
+
+    def test_a_step_with_its_own_backward_still_replays(self):
+        p = jt.array([1.0])
+
+        def train(x):
+            loss = ((p * x) ** 2).sum()
+            p.update(p - 0.1 * jt.grad(loss, p))
+            return loss
+        step = jt.capture_step(train, record=False)
+        losses = [float(step(jt.array([1.0]).stop_grad()).numpy()) for _ in range(4)]
+        np.testing.assert_allclose(losses, [1.0, 0.64, 0.4096, 0.262144], rtol=1e-5)
+        self.assertEqual(step.stats["replayed"], 2)
+
     def test_foreign_operation_refuses_step_replay(self):
         def step(value):
             jt.graph_replay_barrier("external step callback")

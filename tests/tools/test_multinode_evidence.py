@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[2]
 def evidence_module():
     spec = importlib.util.spec_from_file_location(
         'multinode_evidence',
-        ROOT / 'agent/skills/jittor-distributed-verification/recheck_native_fsdp.py')
+        ROOT / 'tools/distributed/native_fsdp/recheck_native_fsdp.py')
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
