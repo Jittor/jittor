@@ -154,7 +154,8 @@ def _attention_probabilities(query, key, attn_mask, is_causal, scale):
     return weights / jt.ternary(total > 0, total, jt.ones_like(total))
 
 
-def _attention_gradients(query, key, value, probabilities, grad_out, scale, *, rounded_output=None):
+def _attention_gradients(query, key, value, probabilities, grad_out, scale, *,
+                         rounded_output=None, return_score_gradients=False):
     """Native attention backward, optionally preserving fused BF16 rounding.
 
     Short fused BF16 attention forms the softmax row term from its rounded
@@ -188,7 +189,21 @@ def _attention_gradients(query, key, value, probabilities, grad_out, scale, *, r
         grad_scores = _softmax_precision(grad_scores.cast(query.dtype))
         grad_query = _product(grad_scores, wide_key) * scale
         grad_key = _product(grad_scores, wide_query, trans_a=True) * scale
-    return (grad_query.cast(query.dtype), grad_key.cast(key.dtype), grad_value.cast(value.dtype))
+    result = (grad_query.cast(query.dtype), grad_key.cast(key.dtype), grad_value.cast(value.dtype))
+    if return_score_gradients:
+        return result, grad_scores
+    return result
+
+
+def _reduce_broadcast_gradient(gradient, shape):
+    """Sum ``gradient`` over the axes a broadcast expanded to reach ``shape``."""
+    shape = tuple(int(size) for size in shape)
+    while len(gradient.shape) > len(shape):
+        gradient = gradient.sum(0)
+    for axis, size in enumerate(shape):
+        if size == 1 and int(gradient.shape[axis]) != 1:
+            gradient = gradient.sum(axis, keepdims=True)
+    return gradient
 
 
 class _MemoryEfficientAttention(jt.Function):
@@ -237,12 +252,19 @@ class _MemoryEfficientAttention(jt.Function):
         query, key, value = self.saved
         with _opmath_scope(query):
             probabilities = self._probabilities(query, key)
-            return _attention_gradients(query, key, value, probabilities, grad_out, self.scale) + (
-                None,
-                None,
-                None,
+            result, score_gradients = _attention_gradients(
+                query, key, value, probabilities, grad_out, self.scale,
+                return_score_gradients=True,
             )
-
+        # An additive floating mask participates in the scores, so its
+        # gradient is the score gradient reduced over the dimensions the
+        # broadcast expanded. A boolean mask selects, not adds, and carries no
+        # gradient (Torch returns None for it as well).
+        grad_mask = None
+        if self.attn_mask is not None and _jittor_dtype_name(self.attn_mask.dtype) != "bool":
+            grad_mask = _reduce_broadcast_gradient(
+                score_gradients, self.attn_mask.shape).cast(self.attn_mask.dtype)
+        return result + (grad_mask, None, None)
 
 def _expand_heads(query, tensor, name):
     """`tensor` with each head repeated to match `query`'s head count."""
