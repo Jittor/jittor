@@ -305,7 +305,7 @@ def is_ninja_available():
     """
     try:
         subprocess.check_output(["ninja", "--version"])
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         return False
     return True
 

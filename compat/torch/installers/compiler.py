@@ -827,7 +827,7 @@ def install(ctx):
     # profilers.graph_profile), so an importable placeholder is not enough:
     # Node/Graph must carry users and operands, symbolic_trace must record
     # operators, and Interpreter must execute them against Jittor tensors.
-    # See compat/torch/fx.py for the supported surface and its limitations.
+    # See compat/torch/fx/ for the supported surface and its limitations.
     _public_graph_module = _adapt_module(GraphModule)
     set_public_graph_module_class(_public_graph_module)
     _fx = _types2.ModuleType("torch.fx")
