@@ -66,6 +66,7 @@ static void setitem_inplace(SetitemOp* op) {
     // return if output is all ready shared
     if (output->allocator || output->is_sharing()) return;
     output->share_with(input);
+    rebase_saved_storage_versions(output);
     
     auto data = op->input(1);
     // if setitem requires type conversion, don't inplace
@@ -145,6 +146,7 @@ static void setitem_inplace(SetitemOp* op) {
     }
     add_dependency(data->input(), input->node());
     data->share_with(input, size);
+    rebase_saved_storage_versions(data);
     op->ns.set(GetitemOp::_inplace);
     // LOGir << input->shape << input->dtype() << data->shape << data->dtype() << vs << data->input();
     // LOGir << output;
@@ -187,6 +189,7 @@ static void getitem_inplace(GetitemOp* op) {
     }
     ASSERT(size>=0 && size<=in->size);
     ou->share_with(in, size);
+    rebase_saved_storage_versions(ou);
     op->ns.set(GetitemOp::_inplace);
     // LOGir << "pass getitem_inplace";
     // LOGir << "inplace getitem" << vs << in->shape << ou->shape;
@@ -272,6 +275,7 @@ static void getitem_contiguous_inplace(GetitemOp* op) {
 
     if (last_non_full < 0) {
         ou->share_with(in, offset_elems * in->dsize());
+        rebase_saved_storage_versions(ou);
         op->ns.set(GetitemOp::_inplace);
         return;
     }
@@ -293,6 +297,7 @@ static void getitem_contiguous_inplace(GetitemOp* op) {
     int64 offset = offset_elems * in->dsize();
     ASSERT(offset>=0 && offset<=in->size);
     ou->share_with(in, offset);
+    rebase_saved_storage_versions(ou);
     op->ns.set(GetitemOp::_inplace);
 }
 

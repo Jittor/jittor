@@ -57,6 +57,24 @@ BackwardStorageReadScope::BackwardStorageReadScope(const Op* op)
     : op(op), previous(backward_storage_reads) { backward_storage_reads = this; }
 BackwardStorageReadScope::~BackwardStorageReadScope() { backward_storage_reads = previous; }
 
+void rebase_saved_storage_versions(Var* value) {
+    if (!value) return;
+    auto token = value->storage_version_token();
+    uint64 version = token->value.load(std::memory_order_relaxed);
+    auto rebase = [&](Op* consumer) {
+        if (!consumer) return;
+        for (auto& saved : consumer->saved_storage_versions)
+            if (saved.original_id == value->id) {
+                saved.token = token;
+                saved.version = version;
+            }
+    };
+    // The entry can belong to a consumer (the value was an op input) or to
+    // the producing op itself (it saved its own output).
+    rebase(value->input());
+    for (Op* consumer : value->outputs()) rebase(consumer);
+}
+
 void check_backward_storage_read(Var* value) {
     if (!backward_storage_reads || !value) return;
     auto token = value->peek_storage_version();
