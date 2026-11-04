@@ -754,7 +754,9 @@ bool rms_selector_unchanged() {
 // both providers declined and dispatch_native must continue to the module's
 // forward, without calling either provider a second time.
 PyObject* rms_norm_registered_inference(PyObject* module, PyObject* dict, PyObject* x) {
-    if ((!acl_possible && runtime_flag_use_cuda()) || !no_grad || !dict || !is_var(x)
+    if ((!acl_possible && runtime_flag_use_cuda()
+             && accelerator_backend_id() != BackendId::Rocm)
+            || !no_grad || !dict || !is_var(x)
             || !rms_selector_unchanged()) return nullptr;
     // A property can present a different weight/epsilon from the instance's
     // stored values. Preserve Python attribute resolution for those modules.

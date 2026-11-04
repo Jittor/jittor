@@ -81,11 +81,12 @@ struct PendingSubmissionScope {
 // good (async_exec.cc), and so do the extra flushes it was taken for -- every
 // flush releases the GIL inside the executor, and two threads building one
 // graph is not something the executor serializes. Nor where the worker does
-// not run at all (anywhere but CUDA and ACL, see `may_run_async`): there the
+// not run at all (anywhere but CUDA, ROCm and ACL, see `may_run_async`): there the
 // extra flushes would only cut fusion.
 static bool worker_admits_accelerator() {
     const BackendId accelerator = accelerator_backend_id();
-    if (accelerator != BackendId::Cuda && accelerator != BackendId::Acl) return false;
+    if (accelerator != BackendId::Cuda && accelerator != BackendId::Rocm
+            && accelerator != BackendId::Acl) return false;
     const auto& policy = backend_ops(accelerator).execution;
     if (policy.async_requires_strict_fallback
             && runtime_backend_fallback().policy != "error")
@@ -530,7 +531,7 @@ shared_ptr<BatchState> acquire_batch_state() {
 // allocator, whose delayed frees go back in the order their stream callbacks
 // fire -- an order that only holds while every free is on one stream.
 static bool may_run_async(const ExecPlan& plan) {
-    // CUDA, and ACL under `backend_fallback=error`: an ACL host fallback
+    // CUDA, plus ROCm and ACL under `backend_fallback=error`: an ACL host fallback
     // flips the process-wide `use_cuda` under the Python thread's feet, and
     // only that policy rules a fallback out entirely
     // (`async_requires_strict_fallback`). The worker needs no device binding

@@ -4,22 +4,12 @@ import numpy as np
 import pytest
 
 import jittor as jt
-from jittor._runtime import forbid_backend_fallbacks
+from _helpers.rocm import native_rocm
 from jittor._runtime.backend_libraries import get_library_ops
 from jittor._runtime.dispatch import select_kernel
 
 
 pytestmark = pytest.mark.skipif(not jt.compiler.has_rocm, reason="ROCm build required")
-
-
-@pytest.fixture(autouse=True)
-def native_rocm():
-    before = jt.core.backend_fallback_count()
-    with jt.runtime.scope(use_rocm=1, use_parallel_op_compiler=0):
-        with forbid_backend_fallbacks():
-            yield
-            jt.sync_all(True)
-    assert jt.core.backend_fallback_count() == before
 
 
 def assert_device(value, expected, dtype):

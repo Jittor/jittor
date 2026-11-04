@@ -149,6 +149,16 @@ entry point 只为选中的后端加载，显式选择 CPU 会跳过 CUDA 发现
 实现。Python 侧的选择消费原生设备上下文；**不存在独立的 Python 分配器或写死的后端能力
 原型**。
 
+### 推理图的异步提交
+
+CUDA、ROCm 和 ACL 可以把自动冲刷的图交给执行器工作线程，让调用线程继续构图。
+ROCm 与 ACL 要求 `backend_fallback="error"`；ROCm 只接纳推理图，训练仍在调用线程提交。
+工作线程必须能放在调用线程所在末级缓存域内的另一个可用 CPU 核上；第二个 Python
+线程开始使用 Jittor 后不再移交。`async_execution=0` 禁用移交，
+`core.async_exec_batches()` 记录实际执行的批次数。性能验证应记录实际 CPU 亲和性与该计数。
+HIP 的当前设备绑定属于线程；ROCm 驱动在新线程首次使用运行时设备时绑定它，并在执行器
+退出时恢复调用方的 HIP 设备，避免把其他设备的工作发到线程默认的设备上。
+
 ## 分布式归属
 
 `jittor.distributed.process_group` 拥有 `ProcessGroup`、`Work`、通信器创建以及实时的原生

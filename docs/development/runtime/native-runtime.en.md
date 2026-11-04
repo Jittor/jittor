@@ -192,6 +192,18 @@ to **the same** native descriptor and Python kernel table, without registering a
 implementation. Python-side selection consumes the native device context; **there is no separate
 Python allocator and no hard-coded backend capability prototype**.
 
+### Asynchronous inference submission
+
+CUDA, ROCm and ACL can hand an auto-flushed graph to an executor worker while the caller keeps
+building. ROCm and ACL require `backend_fallback="error"`; ROCm admits inference graphs only,
+leaving training submission on the caller. The worker needs another available CPU core in the
+caller's last-level cache domain; handovers stop once a second Python thread uses Jittor.
+`async_execution=0` disables handovers, and `core.async_exec_batches()` counts batches actually
+executed there. Performance validation should record the real CPU affinity and this counter.
+HIP current-device bindings belong to threads. The ROCm driver binds the runtime device on a
+thread's first use and restores the caller's HIP device when leaving the executor, so work for
+another device cannot go to the thread's default device.
+
 ## Distributed ownership
 
 `jittor.distributed.process_group` owns `ProcessGroup`, `Work`, communicator creation and live

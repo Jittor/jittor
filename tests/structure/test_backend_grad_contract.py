@@ -242,7 +242,7 @@ BACKEND_GRAD_COVERAGE = (
 
     # ---- ROCm. Hardware routes remain explicit; this inventory is not a run.
     ("backends/rocm/libraries/hipblas/hipblas_matmul_op.cc", "HipblasMatmulOp",
-     "tests/backends/rocm/test_rocm_runtime.py::test_hipblas_transposes_and_gradients",
+     "tests/backends/rocm/test_rocm_linear.py::test_native_values_and_both_nonuniform_gradients",
      "rocm_hardware"),
     ("backends/rocm/libraries/hipblas/hipblas_batched_matmul_op.cc", "HipblasBatchedMatmulOp",
      "tests/backends/rocm/test_rocm_batched_matmul.py::test_native_transposes_and_nonuniform_gradients",

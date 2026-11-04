@@ -60,3 +60,5 @@ def install_extern(context: BuildContext) -> bool:
 def post_process(context: BuildContext) -> None:
     from .libraries.install import install_kernels
     install_kernels()
+    from .kernels import install_kernels as install_native_kernels
+    install_native_kernels()

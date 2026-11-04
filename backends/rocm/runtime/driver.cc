@@ -17,12 +17,20 @@ int device_count() {
     if (count == -1) hip_check(hipGetDeviceCount(&count), "hipGetDeviceCount");
     return count;
 }
+// HIP device bindings are thread-local; the runtime device is shared.
+thread_local int bound_device = -1;
 int current_device() {
     auto& state = runtime_device_state();
     if (state.current_device < 0) {
         if (device_count() <= 0) return -1;
         hip_check(hipGetDevice(&state.current_device), "hipGetDevice");
         state.device_id = state.current_device;
+        bound_device = state.current_device;
+    }
+    if (bound_device != state.current_device) {
+        hip_check(hipSetDevice(state.current_device), "hipSetDevice");
+        bound_device = state.current_device;
+        for (auto hook : state.switch_hooks) hook(state.current_device);
     }
     return state.current_device;
 }
@@ -32,7 +40,17 @@ void set_device(int device) {
     hip_check(hipSetDevice(device), "hipSetDevice");
     auto& state = runtime_device_state();
     state.current_device = state.device_id = device;
+    bound_device = device;
     for (auto hook : state.switch_hooks) hook(device);
+}
+int caller_device() {
+    int device = -1;
+    hip_check(hipGetDevice(&device), "hipGetDevice");
+    return device;
+}
+void restore_caller_device(int device) {
+    hip_check(hipSetDevice(device), "hipSetDevice");
+    bound_device = -1;
 }
 template<class F> auto on_device(int device, F&& f) -> decltype(f()) {
     int previous = current_device();
@@ -120,10 +138,12 @@ void copy(void* dst, Device target, const void* src, Device source, size_t size,
 }
 BackendOps make_rocm_backend() {
     BackendOps ops; ops.id = BackendId::Rocm; ops.name = "rocm"; ops.execution.supports_auto_flush = true;
+    ops.execution.async_requires_strict_fallback = true;
     // Generated CUDA warp reductions require the *_sync shuffle intrinsics.
     // HIP uses its own wavefront primitives; retain device atomics until a
     // native collective implementation is selected for this provider.
     ops.execution.warp_shuffle_width = 0;
+    ops.caller_device = caller_device; ops.restore_caller_device = restore_caller_device;
     ops.device_count = device_count; ops.current_device = current_device; ops.set_device = set_device; ops.allocator = accelerator_allocator_for;
     ops.copy = copy; ops.copy_async = copy_async; ops.synchronize = synchronize; ops.stream = accelerator_backend_stream; ops.enable_peer = enable_peer;
     ops.memory_allocate = allocate; ops.memory_free = release; ops.memory_info = memory_info; ops.check_error = check_error; ops.compute_stream = compute_stream;

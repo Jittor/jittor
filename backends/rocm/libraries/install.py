@@ -28,7 +28,13 @@ def _supports_batched_matmul(a, b, trans_a=False, trans_b=False):
 
 
 def _supports_matmul(a, b, trans_a=False, trans_b=False):
-    return a.ndim == 2 and b.ndim == 2 and a.dtype == b.dtype
+    if b.ndim != 2 or a.dtype != b.dtype:
+        return False
+    if a.ndim == 2:
+        return True
+    from jittor._core.dtypes import dtype_name
+    return (a.ndim > 2 and not trans_a and dtype_name(a.dtype) == "float32"
+            and not _batched_amp_changes_dtype())
 
 
 def _rocprim_scan(x, reverse=False):

@@ -132,8 +132,11 @@ def test_provider_hooks_reach_the_native_library_installer(tmp_path, monkeypatch
     installer = importlib.import_module(name + ".libraries.install")
     calls = []
     monkeypatch.setattr(installer, "install_kernels", lambda: calls.append("registered"))
+    kernels = ModuleType(name + ".kernels")
+    kernels.install_kernels = lambda: calls.append("native")
+    monkeypatch.setitem(sys.modules, kernels.__name__, kernels)
     provider.post_process(context)
-    assert calls == ["registered"]
+    assert calls == ["registered", "native"]
 
 
 def test_compilation_failure_is_not_published_or_swallowed(tmp_path, monkeypatch):
@@ -173,6 +176,11 @@ def test_python_registration_is_narrow_and_uses_native_names(monkeypatch):
     assert installer._supports_matmul(a, a)
     assert not installer._supports_matmul(a, SimpleNamespace(ndim=3, dtype="float32"))
     assert not installer._supports_matmul(a, SimpleNamespace(ndim=2, dtype="float64"))
+    higher = SimpleNamespace(ndim=3, dtype="float32")
+    assert installer._supports_matmul(higher, a)
+    assert not installer._supports_matmul(higher, a, True)
+    assert not installer._supports_matmul(SimpleNamespace(ndim=3, dtype="float64"),
+                                        SimpleNamespace(ndim=2, dtype="float64"))
     for shape in ((3, 4, 5), (2, 3, 4, 5)):
         batch_a = SimpleNamespace(ndim=len(shape), dtype="float32", shape=shape)
         batch_b = SimpleNamespace(ndim=len(shape), dtype="float32", shape=shape[:-2] + (5, 7))
