@@ -64,7 +64,20 @@ def _allocate_where_the_inputs_are(x):
 
     device_id = int(getattr(x, "device_id", -1))
     previous = int(jt.current_device())
-    with _placement_scope(x):
+    # concat has no device= override: its scratch buffer must follow the
+    # inputs even inside a conflicting frontend/module placement scope.
+    # placement_scope_like intentionally honors the ambient request for
+    # factories such as zeros_like(..., device=...), so it is not suitable
+    # here when that request refers to a different device than the inputs.
+    backend = int(x.placement_backend)
+    placement = jt.core._current_tensor_placement()
+    target = (backend, max(device_id, 0))
+    override = backend >= 0 and placement != target
+    token = previous_construction = None
+    if override:
+        token = jt.core._set_tensor_placement(*target)
+        previous_construction = jt.core._set_construction_placement(*target)
+    try:
         if device_id < 0 or device_id == previous:
             yield
             return
@@ -74,6 +87,10 @@ def _allocate_where_the_inputs_are(x):
         finally:
             if previous >= 0:
                 jt.flags.device_id = previous
+    finally:
+        if override:
+            jt.core._restore_construction_placement(previous_construction)
+            jt.core._reset_tensor_placement(token)
 
 
 def _merge_dtypes(dtypes):
@@ -95,7 +112,9 @@ def _empty_where_the_inputs_are(x, shape, dtype):
     jt = _jt()
     core = jt.core
     device_id = int(x.device_id)
-    if ((int(x.placement_backend) < 0 or core._current_tensor_placement() is not None)
+    backend = int(x.placement_backend)
+    target = (backend, max(device_id, 0))
+    if ((backend < 0 or core._current_tensor_placement() == target)
             and (device_id < 0 or device_id == int(jt.current_device()))):
         return jt.empty(shape, dtype=dtype)
     with _allocate_where_the_inputs_are(x):

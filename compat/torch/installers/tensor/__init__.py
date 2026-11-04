@@ -699,7 +699,17 @@ def cat(tensors, dim=0, out=None, axis=None):
 
 def _cat_impl(tensors, dim=0, out=None, axis=None):
     if out is None and axis is None and type(dim) is int:
-        fast = (_FAST_CAT or _bind_fast_cat())(tensors, dim)
+        # The native fast path allocates under the ambient module placement.
+        # A CPU input inside a CUDA module must instead use the generic concat
+        # path, which allocates its scratch buffer alongside the inputs.
+        conflicting_placement = False
+        if isinstance(tensors, (tuple, list)) and tensors and isinstance(tensors[0], jt.Var):
+            placement = jt.core._current_tensor_placement()
+            first = tensors[0]
+            backend = int(first.placement_backend)
+            if backend >= 0 and placement is not None:
+                conflicting_placement = placement != (backend, _builtins.max(int(first.device_id), 0))
+        fast = NotImplemented if conflicting_placement else (_FAST_CAT or _bind_fast_cat())(tensors, dim)
         if fast is not NotImplemented:
             return _cat_grad_result(fast, tensors)
         # The native fast path above declines whenever a backend registers its
