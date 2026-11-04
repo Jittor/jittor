@@ -99,6 +99,35 @@ class TestCrossEntropy(Base):
                         per.sum(), places=2, msg=f"ce sum {dev}")
         both_devices(body)
 
+    def test_an_out_of_range_target_raises(self):
+        """jittor's own loss weights a target outside [0, C) by 0, so a label
+        of 9 among 4 classes, or a -1 meant as ignore_index, silently dropped
+        out of the loss; torch raises. CPU only: on CUDA the same check is a
+        sticky device fault, which would end this process's CUDA context."""
+        with jt.flag_scope(use_cuda=0):
+            logits = t(self.logits)
+            for target, kw in (([0, 1, 9, 3, 2, 1], {}),
+                               ([0, 1, -1, 3, 2, 1], {}),
+                               ([0, 1, 9, 3, 2, 1], {"label_smoothing": 0.1})):
+                with self.subTest(target=target, **kw):
+                    with self.assertRaises(IndexError):
+                        F.cross_entropy(logits, t(np.array(target, "int64")), **kw).numpy()
+            ref = -self.logp[np.arange(6), self.tgt][self.tgt != 2].mean()
+            tgt = np.where(self.tgt == 2, -1, self.tgt)
+            self.scalar(F.cross_entropy(logits, t(tgt), ignore_index=-1).numpy(), ref,
+                        msg="a negative ignore_index is still ignored")
+
+    def test_module_default_ignore_index(self):
+        target = self.tgt.copy()
+        target[0] = -100
+        expected = -self.logp[np.arange(1, 6), self.tgt[1:]].mean()
+        def body(dev):
+            criterion = nn.CrossEntropyLoss()
+            self.assertEqual(criterion.ignore_index, -100)
+            self.scalar(criterion(t(self.logits), t(target)).numpy(), expected,
+                        msg=f"module default ignore_index {dev}")
+        both_devices(body)
+
     def test_ignore_index(self):
         # torch ignores ANY class id >= 0; the index-0 case was the regression.
         logits, tgt, logp = self.logits, self.tgt, self.logp
