@@ -163,14 +163,28 @@ def test_python_registration_is_narrow_and_uses_native_names(monkeypatch):
     dispatch.register_kernel = lambda *args, **kwargs: calls.append((args, kwargs))
     monkeypatch.setitem(sys.modules, dispatch.__name__, dispatch)
     installer.install_kernels()
-    assert [args[0] for args, _ in calls] == ["matmul", "misc.scan_2d"]
+    assert [args[0] for args, _ in calls] == ["matmul", "batched_matmul", "misc.scan_2d"]
     assert all(args[1] == "rocm" for args, _ in calls)
     assert calls[0][1]["dtypes"] == {"float32", "float64"}
-    assert calls[1][1]["dtypes"] == {"float32", "float64", "int32", "int64"}
+    assert calls[1][1]["dtypes"] == {"float32"}
+    assert calls[2][1]["dtypes"] == {"float32", "float64", "int32", "int64"}
+    monkeypatch.setattr(installer, "_batched_amp_changes_dtype", lambda: False)
     a = SimpleNamespace(ndim=2, dtype="float32")
     assert installer._supports_matmul(a, a)
     assert not installer._supports_matmul(a, SimpleNamespace(ndim=3, dtype="float32"))
     assert not installer._supports_matmul(a, SimpleNamespace(ndim=2, dtype="float64"))
+    for shape in ((3, 4, 5), (2, 3, 4, 5)):
+        batch_a = SimpleNamespace(ndim=len(shape), dtype="float32", shape=shape)
+        batch_b = SimpleNamespace(ndim=len(shape), dtype="float32", shape=shape[:-2] + (5, 7))
+        assert installer._supports_batched_matmul(batch_a, batch_b)
+    assert not installer._supports_batched_matmul(a, a)
+    batch_a = SimpleNamespace(ndim=4, dtype="float32", shape=(2, 1, 3, 4))
+    for bad in (SimpleNamespace(ndim=4, dtype="float32", shape=(1, 3, 4, 5)),
+                SimpleNamespace(ndim=3, dtype="float32", shape=(2, 4, 5)),
+                SimpleNamespace(ndim=4, dtype="float64", shape=(2, 1, 4, 5))):
+        assert not installer._supports_batched_matmul(batch_a, bad)
+    monkeypatch.setattr(installer, "_batched_amp_changes_dtype", lambda: True)
+    assert not installer._supports_batched_matmul(batch_a, batch_a)
 
 
 def test_gemm_layout_all_transposes_and_checked_dimensions(tmp_path):

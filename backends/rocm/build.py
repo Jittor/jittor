@@ -32,6 +32,7 @@ _LIBRARIES = {
         "hipblas/hipblas.h", ("hipblas",),
         ("hipblas/hipblas_matmul_op.h", "hipblas/hipblas_matmul_op.cc", "hipblas/gemm_layout.h",
          "hipblas/hipblas_wrapper.h", "hipblas/hipblas_wrapper.cc",
+         "hipblas/hipblas_batched_matmul_op.h", "hipblas/hipblas_batched_matmul_op.cc",
          "hipblas/hipblas_capabilities.cc"),
     ),
     "rocprim": (
