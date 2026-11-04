@@ -40,7 +40,7 @@ export cache_name="${cache_name:-local-dev}"
 ```
 
 For CUDA, set `nvcc_path` when `nvcc` is not already on `PATH`. Backend-specific
-CI requirements are documented in [isolated validation](agent/skills/isolated-validation/SKILL.md).
+CI requirements are documented in [isolated validation](https://github.com/JittorEcosystem/jittor-dev-skills/blob/main/skills/isolated-validation/SKILL.md).
 
 ## Repository map
 

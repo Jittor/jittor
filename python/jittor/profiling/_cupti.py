@@ -117,10 +117,16 @@ class _Cupti:
             kind = u32(a).value
             if kind == KIND_CONCURRENT_KERNEL:
                 name = ctypes.c_char_p.from_address(a + 104).value
+                # CUpti_ActivityKernel: registersPerThread (u16 @6), grid
+                # @52..60, block @64..72, static/dynamic shared memory @76/80.
+                launch = (tuple(u32(a + o).value for o in (52, 56, 60)),
+                          tuple(u32(a + o).value for o in (64, 68, 72)),
+                          ctypes.c_uint16.from_address(a + 6).value,
+                          u32(a + 76).value + u32(a + 80).value)
                 kernels.append((u64(a + 16).value, u64(a + 24).value, u32(a + 40).value,
                                 u32(a + 48).value, u32(a + 92).value,
                                 name.decode("utf-8", "replace") if name else "?",
-                                u32(a + 156).value))
+                                u32(a + 156).value, launch))
             elif kind == KIND_MEMCPY:
                 copies.append((u64(a + 16).value, u64(a + 24).value, u32(a + 32).value,
                                u32(a + 40).value, u32(a + 44).value,

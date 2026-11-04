@@ -508,6 +508,48 @@ class TestGraphReplay(unittest.TestCase):
         state = model.__dict__["_auto_graph_replay"]
         self.assertTrue(all(e.step is None for e in state.entries.values()))
 
+    def test_automatic_replay_waits_for_stable_parameters_and_buffers(self):
+        # Diffusers casts its VAE up and down around every decode. Same-shaped
+        # calls must not pay for a new capture whenever their weights change.
+        for buffered in (False, True):
+            with self.subTest(buffered=buffered):
+                model = _Buffered() if buffered else _Net()
+                leaf = model.scale if buffered else model.l1.weight
+                with jt.flag_scope(auto_graph_replay=1), jt.no_grad():
+                    for step in range(6):
+                        leaf.assign(jt.full(leaf.shape, 0.25 + step * 0.125))
+                        x = self.feed[step % len(self.feed)]
+                        with jt.flag_scope(auto_graph_replay=0):
+                            want = model(x).numpy().copy()
+                        got = model(x).numpy()
+                        np.testing.assert_allclose(got, want, rtol=1e-5, atol=1e-5)
+                        self.assertIsNone(model.__dict__["_auto_graph_replay"].replay)
+                    # Stability restores the optimization, rather than
+                    # permanently opting a converted model out of replay.
+                    model(x).sync()
+                    replay = model.__dict__["_auto_graph_replay"].replay
+                    self.assertIsNotNone(replay)
+                    self.assertGreater(replay.stats["replayed"], 0)
+                    replay.invalidate()
+
+    def test_automatic_replay_rechecks_stability_after_a_weight_update(self):
+        model = _Buffered()
+        x = self.feed[0]
+        with jt.flag_scope(auto_graph_replay=1), jt.no_grad():
+            for _ in range(5):
+                model(x).sync()
+            old = model.__dict__["_auto_graph_replay"].replay
+            self.assertIsNotNone(old)
+            model.scale.assign(jt.full((8,), 3.0))
+            np.testing.assert_allclose(model(x).numpy(), x.numpy() * 3,
+                                       rtol=1e-5, atol=1e-5)
+            self.assertIsNone(model.__dict__["_auto_graph_replay"].replay)
+            self.assertIsNone(old._capture)
+            model(x).sync()
+            replay = model.__dict__["_auto_graph_replay"].replay
+            self.assertIsNotNone(replay)
+            replay.invalidate()
+
     def _decode(self, model, cache, flag, steps=6, reset=False, between=None):
         """Greedy-decode-shaped calls: each output is the next input."""
         before = jt.flags.auto_graph_replay
@@ -832,3 +874,24 @@ class TestGraphReplayCuda(TestGraphReplay):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_cpu_dynamic_ternary_condition_survives_replay_input_writes():
+    class Select(nn.Module):
+        def execute(self, value):
+            return jt.ternary(value > 0, value * 2, value - 3)
+    replay = None
+    with jt.flag_scope(use_cuda=0, use_acl=0, auto_graph_replay=0, check_graph=1), jt.no_grad():
+        source = [np.full((4, 4), n, dtype="float32") for n in (-3, -1, 0, 1, 3, -2, 2)]
+        feed = [jt.array(value) for value in source]
+        for value in feed:
+            value.sync(True, False)
+        replay = GraphReplay(Select())
+        try:
+            answers = [replay(value) for value in feed]
+            jt.sync(answers, True, False)
+            for actual, value in zip(answers, source):
+                np.testing.assert_array_equal(actual.numpy(), np.where(value > 0, value * 2, value - 3))
+            assert replay.stats["replayed"] == len(feed)
+        finally:
+            replay.invalidate()

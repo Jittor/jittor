@@ -27,6 +27,10 @@ def _torch_norm_impl(input, p="fro", dim=None, keepdim=False, dtype=None):
         return jt.array(_np.linalg.norm(arr, ord="nuc", axis=dim))
     else:
         pv = float(p)
+    if pv == 2.0:
+        result = jt.linalg._try_vector_norm(input, pv, dim, keepdim)
+        if result is not None:
+            return result
     if dim is None:
         # full reduction over a flattened view -> 0-dim scalar
         x = input.reshape(-1)

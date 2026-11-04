@@ -94,7 +94,7 @@ known-issues/parallel-compiler-segfault.en
 
 Track tasks, defects, pending hardware acceptance and execution results in GitHub issues/PRs.
 Repository rules live in [AGENTS.md](https://github.com/Jittor/jittor/blob/2.0-refactor/AGENTS.md);
-select a practical method from the [skill catalogue](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/README.md).
+select a practical method from the [skill catalogue](https://github.com/JittorEcosystem/jittor-dev-skills/blob/main/README.md).
 The rules page links immutable historical issue and hardware records. Unverified items remain unresolved.
 
 ## Compatibility architecture and contribution workflow

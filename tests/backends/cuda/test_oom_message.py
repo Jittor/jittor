@@ -15,6 +15,10 @@ By the time this is thrown the caching allocators above have already released
 their cached blocks and retried, so the free figure it reports is the real one
 rather than a snapshot taken before the pool gave anything back.
 
+The sentences are PyTorch's (``CUDA out of memory. Tried to allocate ...``),
+so what reads PyTorch's message reads this one, and the class is
+``jittor.JittorOutOfMemoryError`` -- torch.OutOfMemoryError in Torch mode.
+
 The allocation asked for here is 4 TiB, which no accelerator has, so the case
 does not depend on what else is running on the box.
 """
@@ -43,7 +47,7 @@ try:
     big = jt.empty((1 << 20, 1 << 20), "float32")
     big.sync()
     print("NO_ERROR")
-except Exception as exc:
+except jt.JittorOutOfMemoryError as exc:
     print("MESSAGE", repr(str(exc)))
 """
 
@@ -58,11 +62,12 @@ class TestOutOfMemoryMessage(unittest.TestCase):
         message = completed.stdout
         # Asserting only that it failed would hold nothing down: the old bare
         # message failed too. These are the four facts a reader needs.
-        self.assertIn("out of memory on the accelerator", message)
-        self.assertIn("MiB", message, "the refused size is not reported")
-        self.assertIn("free of", message, "what the device had is not reported")
-        self.assertIn("device", message, "the device is not named")
-        self.assertIn("4.0 TiB", message)
+        self.assertIn("MESSAGE", message, "the refusal was not a JittorOutOfMemoryError")
+        self.assertIn("CUDA out of memory. Tried to allocate 4096.00 GiB.", message)
+        self.assertRegex(message, r"GPU \d+ has a total capacity of [\d.]+ GiB of which [\d.]+ \w+ is free\.",
+                         "what the device had is not reported")
+        self.assertRegex(message, r"Of the allocated memory [\d.]+ \w+ is allocated by Jittor, and "
+                                  r"[\d.]+ \w+ is reserved by Jittor but unallocated\.")
         # 4 TiB is more than any card has: no batch size or flag makes it fit.
         self.assertIn("larger than the whole device", message)
         self.assertNotIn("reduce the batch size", message)

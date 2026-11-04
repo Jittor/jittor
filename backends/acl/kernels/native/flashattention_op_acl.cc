@@ -85,22 +85,33 @@ namespace jittor
     void PromptFlashAttentionOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         auto attr = dynamic_cast<PromptFlashAttentionAttr *>(op_attr.get());
-        CHECK(attr != nullptr && in_.size() == 4 && out_.size() == 1);
+        CHECK(attr != nullptr && (in_.size() == 3 || in_.size() == 4) && out_.size() == 1);
+        const bool has_mask = in_.size() == 4;
+        CHECK(!attr->causal || has_mask);
         CHECK(in_[0]->dtype() == ns_float16 && in_[1]->dtype() == ns_float16
-              && in_[2]->dtype() == ns_float16 && in_[3]->dtype() == ns_bool);
-        CHECK(inputShapes[0].size() == 4 && inputShapes[1] == inputShapes[0]
-              && inputShapes[2] == inputShapes[0] && outputShapes[0] == inputShapes[0]);
+              && in_[2]->dtype() == ns_float16 && (!has_mask || in_[3]->dtype() == ns_bool));
+        CHECK(inputShapes[0].size() == 4 && inputShapes[1].size() == 4
+              && inputShapes[2] == inputShapes[1] && outputShapes[0] == inputShapes[0]);
+        CHECK(inputShapes[0][0] == inputShapes[1][0] && inputShapes[0][1] == inputShapes[1][1]
+              && inputShapes[0][3] == inputShapes[1][3]);
         const int64 length = inputShapes[0][2];
-        CHECK(length > 0 && length % 128 == 0 && attr->headNum == inputShapes[0][1]);
-        CHECK(inputShapes[3] == std::vector<int64_t>({length, length}));
-        // The verified 310P subset uses full BNSD FP16 inputs, equal heads,
-        // and an explicit boolean drop-mask. Precision mode 0 preserves the
+        CHECK(length > 0 && inputShapes[1][2] > 0 && attr->headNum == inputShapes[0][1]);
+        if (has_mask) {
+            CHECK(inputShapes[1] == inputShapes[0] && length % 128 == 0);
+            CHECK(inputShapes[3] == std::vector<int64_t>({length, length}));
+        } else {
+            CHECK(!attr->causal && (inputShapes[0][3] == 64 || inputShapes[0][3] == 128));
+        }
+        // Masked/causal calls retain their padded square contract. Without a
+        // mask, full noncausal attention accepts original Q/K lengths and
+        // equal heads, including rectangular sequences. Mode 0 preserves the
         // high-precision path; unused quantization/sequence-length slots are null.
         char layout[] = "BNSD";
         ret = aclnnPromptFlashAttentionV3GetWorkspaceSize(
-            inputTensors[0], inputTensors[1], inputTensors[2], nullptr, inputTensors[3],
+            inputTensors[0], inputTensors[1], inputTensors[2], nullptr, has_mask ? inputTensors[3] : nullptr,
             nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
-            attr->headNum, attr->scale, 2147483647LL, 0LL, layout, 0LL, 0LL, 0LL,
+            attr->headNum, attr->scale, 2147483647LL,
+            attr->causal ? 0LL : 2147483647LL, layout, 0LL, 0LL, 0LL,
             outputTensors[0], &workspaceSize, &executor);
         launch(ret, aclnnPromptFlashAttentionV3, true);
     }

@@ -20,9 +20,6 @@ REQUIRED_DOCUMENTS = (
     "README.md",
     "CONTRIBUTING.md",
     "AGENTS.md",
-    "agent/README.md",
-    "agent/skills/hccl-on-device-verification/SKILL.md",
-    "agent/skills/isolated-validation/SKILL.md",
     "docs/index.md",
     "docs/getting-started/index.md",
     "docs/getting-started/installation.md",
@@ -159,34 +156,8 @@ def check_document_names(documents):
     return errors
 
 
-def check_skill_catalog(agent_root):
-    """Keep skills discoverable and executable resources in their own folder."""
-    errors = []
-    catalog = (agent_root / "README.md").read_text(encoding="utf-8")
-    indexed = set(re.findall(r"\]\((skills/[^)]+/SKILL\.md)\)", catalog))
-    actual = set()
-    for folder in sorted((agent_root / "skills").iterdir()):
-        if not folder.is_dir():
-            errors.append("skill entry must be a directory: " + folder.name)
-            continue
-        entry = folder / "SKILL.md"
-        if not entry.is_file():
-            errors.append("missing skill entry: " + folder.name)
-            continue
-        actual.add(entry.relative_to(agent_root).as_posix())
-        for resource in folder.iterdir():
-            if resource.is_file() and resource.suffix in {".py", ".sh"}:
-                errors.append("skill executable belongs in scripts/: " + str(resource))
-    for missing in sorted(actual - indexed):
-        errors.append("skill absent from catalog: " + missing)
-    for stale in sorted(indexed - actual):
-        errors.append("stale skill catalog entry: " + stale)
-    return errors
-
-
 def check_contract(documents):
     errors = check_document_names(documents)
-    errors.extend(check_skill_catalog(REPO_ROOT / "agent"))
     for relative in REQUIRED_DOCUMENTS:
         if not (REPO_ROOT / relative).is_file():
             errors.append("missing required document: {0}".format(relative))
@@ -199,10 +170,8 @@ def check_contract(documents):
             )
         )
 
-    allowed_agent_entries = {"README.md", "skills"}
-    for entry in (REPO_ROOT / "agent").iterdir():
-        if entry.name not in allowed_agent_entries:
-            errors.append("agent only owns README.md and skills/; rules belong in AGENTS.md: " + entry.name)
+    if (REPO_ROOT / "agent").exists():
+        errors.append("agent/ moved to JittorEcosystem/jittor-dev-skills; keep AGENTS.md as the entry")
 
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     for token in (
@@ -251,8 +220,7 @@ def check_contract(documents):
     stale_references = (
         "README.cn.md",
         "README.src.md",
-        "agent/manuals/design/",
-        "manuals/design/",
+            "manuals/design/",
         "doc/source/",
         "build_doc.sh",
         "jittor.test.test_example",

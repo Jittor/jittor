@@ -42,7 +42,7 @@ Torch 命名空间都复制进一个模块的许可，也不是在计算已经�
 
 如果多个下游项目需要同一个算子，就把算子提升到原生领域。如果它们只需要同一套补丁
 机制，就提升该机制，同时把每个补丁留在核心之外。新下游库的分流判据在
-`agent/skills/downstream-library-adaptation/SKILL.md`。
+[downstream-library-adaptation](https://github.com/JittorEcosystem/jittor-dev-skills/blob/main/skills/downstream-library-adaptation/SKILL.md)。
 
 ## 激活边界
 

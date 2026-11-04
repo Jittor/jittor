@@ -100,6 +100,10 @@ def _interpolate(input=None, size=None, scale_factor=None,
                  mode="nearest", align_corners=None,
                  recompute_scale_factor=None, antialias=False,
                  **_kw):
+    if antialias:
+        raise NotImplementedError(
+            "torch.nn.functional.interpolate antialias=True is not implemented "
+            "by the Jittor frontend; use antialias=False")
     _context = get_install_context(jt)
     _jt_interpolate = _context.state["nn_functional_native"]['_jt_interpolate']
     if input is None:

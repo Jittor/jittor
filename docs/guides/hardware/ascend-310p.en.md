@@ -110,13 +110,49 @@ separately and not counted in steady-state token throughput.
 Linear weights originally shared with an Embedding get an independent snapshot, so
 conversion may increase device memory usage.
 
+## Public inference dispatch and replay
+
+Generation and vision models select inference paths through public operators and runtime
+policy, without model-specific `forward` changes. Torch programs need the active independent
+compatibility namespace. Admission checks the SoC, dtype, axes, layout and gradient mode;
+unsupported calls retain the prior path or refuse explicitly. Checkpoints and prediction
+ordering are not changed to obtain acceptance.
+
+- Gradient-free 310P routes include approximate GELU, attention, transposed convolution,
+  bilinear resize, restricted GridSampler2D, single-axis integer GatherV2 and final-axis
+  TopK. FP32 cube work still needs the explicit reduced-precision opt-in above. Operator
+  admission does not establish complete-model or training acceptance.
+- Single-final-axis L2 norm can use the standard SDK to avoid half intermediate-square
+  overflow/underflow; required contiguous copies of strided inputs count toward its cost.
+  Multi-axis GRN retains its earlier expression. Half max/min compare in FP32 for indices,
+  then gather values from the original half input. This does not repair existing NaN/signed
+  zero tie-index policy or selected integer values at integer boundaries.
+- Operator/method `x != x` on the same real Tensor object can reuse canonical `isnan`,
+  preserving the frontend type and placement. Scalars are created in the input Tensor's
+  device scope. This shortcut does not establish alias-holder, separate-function or general
+  scalar-precision contracts.
+- Admitted automatic replay recomputes a closed, explicitly placed CPU prefix and its H2D
+  transfers on every call before launching a recorded device suffix. CPU work, waits and
+  transfers remain included. Random draws, opaque operations and pending D2H dependencies
+  still refuse recording; retention budgets and address-validity checks must also pass.
+
+Current evidence and open scope are maintained in
+[PR #18043](https://github.com/Jittor/jittor/pull/18043). The archived
+[known-issues ledger](https://github.com/Jittor/jittor/blob/3cf654e15aea6de02e5c9b0b4064e286ea19b24c/agent/manuals/known-issues.md) and
+[deferred-hardware list](https://github.com/Jittor/jittor/blob/3cf654e15aea6de02e5c9b0b4064e286ea19b24c/agent/manuals/deferred-hardware.md) preserve earlier limits;
+document cleanup does not close them.
+The [performance skill](https://github.com/JittorEcosystem/jittor-dev-skills/blob/main/skills/jittor-performance-profiling/SKILL.md) defines timing
+and complete-output comparisons. The earlier [complete-model/image record](https://github.com/Jittor/jittor/blob/eecff5ce5aa0d02aba3a246fcfb5632596732b44/docs/results/2026-11-02-vision-ascend310p-replay.en.md)
+is pinned to its measured implementation and does not validate later integrations or every
+other device.
+
 ## Known limitations
 
 - The backward pass of `x[i]` (pure integer indexing) may read uninitialized bytes on 310P:
   this is a scheduler-layer defect after the `setitem_inplace` graph optimization packs the
   gradient into a zero base, unrelated to ACL kernels. The public path (`GetItemACL`) has
   been worked around; the native op path is declared as an expected failure in tests, see
-  [historical record](https://github.com/Jittor/jittor/blob/3679de22c02c83b982432a0e1bdb3da148411c50/agent/manuals/known-issues.md) KI-BACKEND-022.
+  [historical record](https://github.com/Jittor/jittor/blob/3cf654e15aea6de02e5c9b0b4064e286ea19b24c/agent/manuals/known-issues.md) KI-BACKEND-022.
 - bool-mask `where`/`masked_fill` silently have no effect on 310P; paths involving
   non-finite values have switched to `nonzero`+`IndexPutImpl`.
 - 310P makes no training claims: missing backward operators are filled in with composite

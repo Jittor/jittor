@@ -470,7 +470,6 @@ class TestCleanupStructure(unittest.TestCase):
             ),
         ]
         roots = (
-            "agent/skills",
             "docs",
             "examples",
             "python",

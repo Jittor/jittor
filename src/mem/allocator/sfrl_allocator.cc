@@ -18,6 +18,7 @@
 #include "runtime/device.h"
 #include "runtime/backend.h"
 #include "runtime/profiler/step_trace.h"
+#include "runtime/profiler/memory_history.h"
 
 namespace jittor {
 
@@ -41,6 +42,67 @@ std::atomic<int64> device_window_peak[kSlots];
 inline int slot(int device) {
     if (device < 0) return kPeakDevices;
     return device < kPeakDevices ? device : -1;
+}
+
+// PyTorch's caching-allocator statistics (`torch.cuda.memory_stats`), per
+// device and per pool: each has a current value, its high-water mark, and the
+// totals ever added and taken away. A block's pool is its segment's: a small
+// segment is the SMALL_BLOCK_SIZE one a request of at most that size gets.
+struct PoolStat {
+    std::atomic<int64> current{0}, peak{0}, allocated{0}, freed{0};
+};
+PoolStat pool_stats[kSlots][sfrl_stat_count][3];
+std::atomic<int64> pool_counters[kSlots][sfrl_counter_count];
+
+inline int pool_of(const CachingBlock* block) {
+    return block->origin_size <= SFRLAllocator::SMALL_BLOCK_SIZE ? sfrl_pool_small : sfrl_pool_large;
+}
+
+void note_stat(int device, int stat, int pool, int64 delta) {
+    int s = slot(device);
+    if (s < 0 || !delta) return;
+    for (int p : {(int)sfrl_pool_all, pool}) {
+        auto& st = pool_stats[s][stat][p];
+        int64 now = st.current.fetch_add(delta) + delta;
+        if (delta > 0) {
+            st.allocated.fetch_add(delta);
+            int64 seen = st.peak.load();
+            while (now > seen && !st.peak.compare_exchange_weak(seen, now)) {}
+        } else {
+            st.freed.fetch_add(-delta);
+        }
+    }
+}
+
+void note_counter(int device, int counter) {
+    int s = slot(device);
+    if (s >= 0) pool_counters[s][counter].fetch_add(1);
+}
+
+// A free block that shares its segment with others: memory PyTorch calls
+// inactive split, which giving back cached memory cannot release.
+inline bool inactive_split(const CachingBlock* b) {
+    return b && !b->occupied && (b->prev || b->next);
+}
+void note_inactive_split(int device, const CachingBlock* b, int sign) {
+    if (!inactive_split(b)) return;
+    note_stat(device, sfrl_stat_inactive_split, pool_of(b), sign);
+    note_stat(device, sfrl_stat_inactive_split_bytes, pool_of(b), sign * (int64)b->size);
+}
+
+void note_block(int device, const CachingBlock* block, int sign) {
+    int pool = pool_of(block);
+    note_stat(device, sfrl_stat_allocation, pool, sign);
+    note_stat(device, sfrl_stat_active, pool, sign);
+    note_stat(device, sfrl_stat_allocated_bytes, pool, sign * (int64)block->size);
+    note_stat(device, sfrl_stat_active_bytes, pool, sign * (int64)block->size);
+    note_stat(device, sfrl_stat_requested_bytes, pool, sign * (int64)block->requested);
+}
+
+void note_segment_released(int device, const CachingBlock* segment) {
+    note_counter(device, sfrl_counter_device_free);
+    note_stat(device, sfrl_stat_segment, pool_of(segment), -1);
+    note_stat(device, sfrl_stat_reserved_bytes, pool_of(segment), -(int64)segment->size);
 }
 
 void note_device_alloc(int device, int64 bytes) {
@@ -83,6 +145,31 @@ void sfrl_reset_device_peak(int device) {
     if (s < 0) return;
     device_peak[s].store(device_live[s].load());
     device_reserved_peak[s].store(device_reserved[s].load());
+    for (auto& stat : pool_stats[s])
+        for (auto& p : stat) p.peak.store(p.current.load());
+}
+
+void sfrl_reset_device_accumulated(int device) {
+    int s = slot(device);
+    if (s < 0) return;
+    for (auto& stat : pool_stats[s])
+        for (auto& p : stat) { p.allocated.store(0); p.freed.store(0); }
+    for (auto& c : pool_counters[s]) c.store(0);
+}
+
+vector<int64> sfrl_device_memory_stats(int device) {
+    vector<int64> out;
+    int s = slot(device);
+    if (s < 0) return out;
+    for (auto& stat : pool_stats[s])
+        for (auto& p : stat) {
+            out.push_back(p.current.load());
+            out.push_back(p.peak.load());
+            out.push_back(p.allocated.load());
+            out.push_back(p.freed.load());
+        }
+    for (auto& c : pool_counters[s]) out.push_back(c.load());
+    return out;
 }
 
 int64 sfrl_device_reserved_bytes(int device) {
@@ -315,7 +402,7 @@ bool SFRLAllocator::should_split(CachingBlock* block, size_t size) {
     return block->size - size >= ALIGN_SIZE;
 }
 
-size_t CachingBlockPool::free_all_cached_blocks(Allocator* underlying, long long free_size) {
+size_t CachingBlockPool::free_all_cached_blocks(Allocator* underlying, long long free_size, int device) {
     auto it = blocks.begin();
     size_t freed_memory = 0;
     while (it != blocks.end()) {
@@ -327,6 +414,9 @@ size_t CachingBlockPool::free_all_cached_blocks(Allocator* underlying, long long
             // a nested caching allocator below would otherwise be asked to
             // release block id 0, which is never a live allocation.
             underlying->free((void*)block->memory_ptr, block->size, block->allocation);
+            if (PREDICT_BRANCH_NOT_TAKEN(memory_history_mode))
+                memory_history_segment(mha_segment_free, device, block->memory_ptr, block->size);
+            note_segment_released(device, block);
             freed_memory += block->size;
             auto cur = it;
             ++it;
@@ -417,6 +507,9 @@ void SFRLAllocator::trim_before_growing(size_t need) {
         if (block->prev || block->next) continue;
         if (alloc_count - block->freed_at < kTrimIdle || block->size * kTrimFraction < need) continue;
         underlying->free((void*)block->memory_ptr, block->size, block->allocation);
+        if (PREDICT_BRANCH_NOT_TAKEN(memory_history_mode))
+            memory_history_segment(mha_segment_free, device(), block->memory_ptr, block->size);
+        note_segment_released(device(), block);
         freed += block->size;
         large_blocks.ids->recycle_block_id(block->id);
         it = cached.erase(it);
@@ -428,11 +521,25 @@ void SFRLAllocator::trim_before_growing(size_t need) {
     step_trace_mem(stm_reserve, device(), -(int64)freed, this, 0);
 }
 
+void SFRLAllocator::note_history_oom(size_t requested) {
+    // PyTorch's "oom" entry carries what the driver still had free.
+    int64 device_free = -1;
+    #ifdef HAS_ACCELERATOR
+    if (is_cuda()) {
+        size_t available = 0, total = 0;
+        auto target = allocation_device(this);
+        backend_ops(target.backend).memory_info(target.index, available, total);
+        device_free = available;
+    }
+    #endif
+    memory_history_oom(device(), requested, device_free);
+}
+
 size_t SFRLAllocator::release_cached(CachingBlockPool& pool, long long free_size) {
     // A segment a recording touched may be free in the pool by now, and the
     // recording still holds its addresses; see `fence_capture`.
     if (capture_held_frees != nullptr) return 0;
-    size_t freed = pool.free_all_cached_blocks(underlying, free_size);
+    size_t freed = pool.free_all_cached_blocks(underlying, free_size, device());
     unused_memory -= freed;
     if (freed) {
         note_device_reserve(device(), -(int64)freed);
@@ -447,6 +554,7 @@ void* SFRLAllocator::alloc(size_t size, size_t& allocation) {
     #ifdef HAS_ACCELERATOR
     padding = backend_ops(accelerator_backend_id()).execution.allocation_padding;
     #endif
+    const size_t requested = size;
     size = align_size(size + padding);
     ++alloc_count;
     CachingBlockPool* blocks = get_blocks(size);
@@ -462,18 +570,31 @@ void* SFRLAllocator::alloc(size_t size, size_t& allocation) {
         try {
             ptr = underlying->alloc(alloc_size, under_allocation);
         } catch (...) {
+            note_counter(device(), sfrl_counter_alloc_retries);
             release_cached(large_blocks);
             release_cached(small_blocks);
             gc_all();
-            ptr = underlying->alloc(alloc_size, under_allocation);
+            try {
+                ptr = underlying->alloc(alloc_size, under_allocation);
+            } catch (...) {
+                note_counter(device(), sfrl_counter_ooms);
+                if (PREDICT_BRANCH_NOT_TAKEN(memory_history_mode)) note_history_oom(requested);
+                throw;
+            }
         }
+        if (PREDICT_BRANCH_NOT_TAKEN(memory_history_mode))
+            memory_history_segment(mha_segment_alloc, device(), ptr, alloc_size);
         note_device_reserve(device(), alloc_size);
         step_trace_mem(stm_reserve, device(), alloc_size, this, 0);
         held_high = std::max(held_high, used_memory + unused_memory + (int64)alloc_size);
         block = new CachingBlock(alloc_size, alloc_size, blocks, ptr);
         block->allocation = under_allocation;
+        note_counter(device(), sfrl_counter_device_alloc);
+        note_stat(device(), sfrl_stat_segment, pool_of(block), 1);
+        note_stat(device(), sfrl_stat_reserved_bytes, pool_of(block), alloc_size);
     } else {
         unused_memory -= block->size;
+        note_inactive_split(device(), block, -1);
     }
     if (should_split(block, size)) {
         CachingBlock* rest = new CachingBlock(block->size - size, block->origin_size,
@@ -489,12 +610,17 @@ void* SFRLAllocator::alloc(size_t size, size_t& allocation) {
         block->next = rest;
         rest->blocks->insert(rest);
         unused_memory += rest->size;
+        note_inactive_split(device(), rest, 1);
     }
     block->occupied = true;
+    block->requested = requested;
+    note_block(device(), block, 1);
     allocation = blocks->insert_occupied(block);
     used_memory += block->size;
     note_device_alloc(device(), block->size);
     step_trace_mem(stm_pool, device(), block->size, this, allocation);
+    if (PREDICT_BRANCH_NOT_TAKEN(memory_history_mode))
+        memory_history_block(mha_alloc, device(), block->memory_ptr, requested, block->size);
     if (PREDICT_BRANCH_NOT_TAKEN(capture_held_frees != nullptr))
         note_capture_touch(block);
     return block->memory_ptr;
@@ -520,10 +646,18 @@ void SFRLAllocator::free(void* mem_ptr, size_t size, const size_t& allocation) {
         used_memory -= block->size;
         note_device_free(device(), block->size);
         step_trace_mem(stm_pool, device(), -(int64)block->size, this, allocation);
+        if (PREDICT_BRANCH_NOT_TAKEN(memory_history_mode))
+            memory_history_block(mha_free_requested, device(), block->memory_ptr, 0, block->size);
         unused_memory += block->size;
+        note_block(device(), block, -1);
         block->occupied = false;
+        // The free neighbours it absorbs stop being separate inactive splits;
+        // what remains is one, unless it is now the whole segment.
+        note_inactive_split(device(), block->prev, -1);
+        note_inactive_split(device(), block->next, -1);
         try_merge_two_blocks(block, block->prev);
         try_merge_two_blocks(block, block->next);
+        note_inactive_split(device(), block, 1);
         block->freed_at = alloc_count;
         block->blocks = get_blocks(block->size);
         block->blocks->insert(block);
@@ -613,8 +747,17 @@ void SFRLAllocator::fence_capture(vector<Allocation>& held) {
         char* begin = (char*)block->memory_ptr;
         auto range = touched(begin, begin + block->size);
         if (!range.first) continue;
+        // The statistics see the free block go and, out of it, a held block
+        // and whatever free remainders the carving split off.
+        note_inactive_split(device(), block, -1);
+        CachingBlock* left = block;
+        CachingBlock* right = block->next;
         block = carve_free(block, range.first, range.second);
         block->occupied = true;
+        if (left != block) note_inactive_split(device(), left, 1);
+        if (block->next != right) note_inactive_split(device(), block->next, 1);
+        block->requested = block->size;
+        note_block(device(), block, 1);
         size_t id = block->blocks->insert_occupied(block);
         used_memory += block->size;
         note_device_alloc(device(), block->size);

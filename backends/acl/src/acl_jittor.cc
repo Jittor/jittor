@@ -9,9 +9,13 @@
 #include <aclnnop/aclnn_adaptive_avg_pool2d.h>
 #include <aclnnop/aclnn_adaptive_avg_pool2d_backward.h>
 #include <aclnnop/aclnn_index_copy.h>
+#include <aclnnop/aclnn_upsample_bicubic_2d.h>
 #include <aclnnop/aclnn_prompt_flash_attention_v3.h>
 #include <aclnnop/level2/aclnn_sort.h>
 #include <aclnnop/level2/aclnn_multinomial.h>
+#include <aclnnop/aclnn_grid_sampler2d.h>
+#include <aclnnop/aclnn_topk.h>
+#include <aclnnop/aclnn_linalg_vector_norm.h>
 
 namespace jittor {
 const AclOpRegistry& acl_op_registry() {
@@ -152,6 +156,12 @@ const AclOpRegistry& acl_op_registry() {
         {"Swish", AclOpFunctions::direct(aclnnSwish)},
         {"SwishBackward", AclOpFunctions::direct(aclnnSwishBackward)},
         {"UpsampleNearest2d", AclOpFunctions::direct(aclnnUpsampleNearest2d)},
+        {"UpsampleBicubic2d", AclOpFunctions::direct(aclnnUpsampleBicubic2d)},
+        {"UpsampleBilinear2d", AclOpFunctions::direct(aclnnUpsampleBilinear2d)},
+        {"GatherV2", AclOpFunctions::direct(aclnnGatherV2)},
+        {"GridSampler2D", AclOpFunctions::direct(aclnnGridSampler2D)},
+        {"Topk", AclOpFunctions::direct(aclnnTopk)},
+        {"LinalgVectorNorm", AclOpFunctions::direct(aclnnLinalgVectorNorm)},
         {"UpsampleNearest2dBackward", AclOpFunctions::direct(aclnnUpsampleNearest2dBackward)},
     };
     return entries;

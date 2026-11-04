@@ -37,6 +37,7 @@
 #include "mem/swap.h"
 #include "bindings/pybind/py_var_tracer.h"
 #include "mem/mem_info.h"
+#include "runtime/profiler/memory_history.h"
 
 namespace jittor {
 
@@ -897,6 +898,7 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         TensorPlacementScope placement_scope(placement);
         Float32PrecisionScope precision_scope(op->float32_precision);
         LaunchOriginScope origin_scope(op->launch_origin);
+        MemoryHistoryOpScope memory_stack_scope(is_fused_op ? ops[root] : op);
         int execution_device = 0;
         #ifdef HAS_ACCELERATOR
         if (requested_backend != BackendId::Cpu) {
@@ -1123,8 +1125,15 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         }
         if (is_fused_op) {
             propergate_needed_flags(fused_op);
-            if (keep_graph)
-                for (Var* var : op->outputs()) rematerialization_mark_kept(var);
+            if (keep_graph) {
+                // An inlined intermediate is still part of the kept graph.
+                // In particular ternary marks its bool condition as saved for
+                // backward. Without _kept, an input copy's saved-reader barrier
+                // materializes/finishes that condition from the PREVIOUS input,
+                // turning every later replay into a stale conditional branch.
+                for (Op* member : fused_op.ops)
+                    for (Var* var : member->outputs()) rematerialization_mark_kept(var);
+            }
             vector<Var*> outputs;
             for (Var* var : op->outputs()) outputs.push_back(var);
             finish_fused_outputs(outputs);

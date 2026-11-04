@@ -307,6 +307,11 @@ def unique_consecutive(input, return_inverse=False, return_counts=False, dim=Non
     return tuple(ret)
 
 
+def _select_topk_kernel(input, k, dim, largest, sorted):
+    """Shared native/frontend selection; each owner keeps its existing fallback."""
+    return select_kernel("tensor.topk", input, k, dim, largest, sorted)
+
+
 def topk(input, k, dim=None, largest=True, sorted=True):
     ''' Top-``k`` values and indices along ``dim``, like ``torch.topk``.
 
@@ -324,6 +329,9 @@ def topk(input, k, dim=None, largest=True, sorted=True):
     if dim<0:
         dim+=input.ndim
 
+    kernel = _select_topk_kernel(input, k, dim, largest, sorted)
+    if kernel is not None:
+        return kernel(input, k, dim, largest, sorted)
     index,values = jt.argsort(input,dim=dim,descending=largest)
     dims = (slice(None),)*dim+(slice(0,k),)
     # int64 like torch, and the same dtype on both branches: the empty case

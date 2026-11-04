@@ -19,7 +19,13 @@ from collections.abc import Sequence, Iterable
 _causal_mask_cache = OrderedDict()
 _causal_mask_cache_limit = 16
 _prompt_causal_mask_cache = OrderedDict()
+_prompt_full_mask_cache = OrderedDict()
 _prompt_attention_programs = {}
+_prompt_padding_cache = OrderedDict()
+_prompt_padding_cache_limit = 128
+_prompt_padding_cache_max_entry_bytes = 8 << 20
+_prompt_padding_cache_max_bytes = 64 << 20
+_prompt_padding_cache_bytes = 0
 
 
 from ._code import acl_code as flashattention_cmd
@@ -137,25 +143,29 @@ class FlashAttentionACL:
 
 
 class PromptFlashAttentionACL:
-    """CANN V3 forward for padded BNSD FP16 inputs and a boolean drop-mask."""
+    """CANN V3 FP16 BNSD inference, with optional boolean drop-mask."""
 
-    def __init__(self, headnum, scale):
+    def __init__(self, headnum, scale, is_causal=True):
         self.headnum = int(headnum)
         self.scale = float(scale)
+        self.is_causal = bool(is_causal)
 
-    def __call__(self, query, key, value, drop_mask):
+    def __call__(self, query, key, value, drop_mask=None):
         if not getattr(jt.flags, "no_grad", 0):
             raise RuntimeError("PromptFlashAttentionACL requires no_grad")
-        cache_key = (self.headnum, scalar_key(self.scale))
+        if self.is_causal and drop_mask is None:
+            raise ValueError("Causal PromptFlashAttentionACL requires its boolean drop-mask")
+        inputs = [query, key, value] if drop_mask is None else [query, key, value, drop_mask]
+        cache_key = (self.headnum, scalar_key(self.scale), self.is_causal, len(inputs))
         program = _prompt_attention_programs.get(cache_key)
         if program is None:
-            program = acl_program("PromptFlashAttention", 4, 1, attributes={
-                "headNum": self.headnum, "scale": self.scale,
-            })
+            program = acl_program("PromptFlashAttention", len(inputs), 1, attributes={
+                "headNum": self.headnum, "scale": self.scale, "causal": self.is_causal,
+            }, attr_header="\n// PFA mode attributes v2: causal controls nextTokens.\n")
             if len(_prompt_attention_programs) >= 128:
                 _prompt_attention_programs.clear()
             _prompt_attention_programs[cache_key] = program
-        return acl_emit(program, [query, key, value, drop_mask],
+        return acl_emit(program, inputs,
                         [query.dtype], [query.shape])[0]
 
 
@@ -331,10 +341,15 @@ _causal_bias_cache = OrderedDict()
 def _supports_prompt_prefill(q_shape, k_shape, dtype_name, training, is_causal, attn_mask):
     """The documented and real-device-tested 310P PFA subset."""
     padded_length = (int(q_shape[-2]) + 127) // 128 * 128
+    padded_source = (int(k_shape[-2]) + 127) // 128 * 128
     return (
-        not training and dtype_name == "float16" and is_causal and attn_mask is None
-        and 1 < int(q_shape[-2]) == int(k_shape[-2])
-        and padded_length <= 65535
+        not training and dtype_name == "float16" and attn_mask is None
+        # Keep the existing causal/GQA contract. The newly verified noncausal
+        # subset has equal Q/K heads and 64- or 128-wide FP16 attention.
+        and (is_causal or (q_shape[1] == k_shape[1] and int(q_shape[-1]) in (64, 128)))
+        and 1 < int(q_shape[-2]) and 1 < int(k_shape[-2])
+        and (not is_causal or int(q_shape[-2]) == int(k_shape[-2]))
+        and max(padded_length, padded_source) <= 65535
         and 0 < int(q_shape[0]) <= 128
         and 0 < int(q_shape[1]) <= 256
         and int(q_shape[-1]) % 16 == 0
@@ -344,14 +359,20 @@ def _supports_prompt_prefill(q_shape, k_shape, dtype_name, training, is_causal, 
 
 
 def _prompt_causal_mask(query, query_length, padded_length):
+    return _prompt_mask(query, query_length, padded_length, True)
+
+
+def _prompt_mask(query, query_length, padded_length, is_causal):
     # These are shape constants, independent of tensor values. Keep a separate
     # device key and restore residency if someone inspected a cached mask on
     # the host; a host read must not leave the next call mixing placements.
     device = int(jt.core.dispatch_context([query])[1])
     key = (device, int(query_length), int(padded_length))
-    mask = _prompt_causal_mask_cache.get(key)
+    cache = _prompt_causal_mask_cache if is_causal else _prompt_full_mask_cache
+    mask = cache.get(key)
     if mask is None:
-        drop = np.triu(np.ones((padded_length, padded_length), dtype=np.bool_), 1)
+        drop = (np.triu(np.ones((padded_length, padded_length), dtype=np.bool_), 1)
+                if is_causal else np.zeros((padded_length, padded_length), dtype=np.bool_))
         drop[:, query_length:] = True
         # Padded query rows retain the real key prefix, so no row is entirely
         # masked. Only the first query_length output rows are returned below.
@@ -363,22 +384,85 @@ def _prompt_causal_mask(query, query_length, padded_length):
         # repeated layers see an unfinished copy and append another to_device
         # node before the first prefill has reached its final synchronization.
         mask.sync(False, False)
-    _prompt_causal_mask_cache[key] = mask
-    _prompt_causal_mask_cache.move_to_end(key)
-    if len(_prompt_causal_mask_cache) > _causal_mask_cache_limit:
-        _prompt_causal_mask_cache.popitem(last=False)
+    cache[key] = mask
+    cache.move_to_end(key)
+    if len(cache) > _causal_mask_cache_limit:
+        cache.popitem(last=False)
     return mask
 
 
-def _prompt_prefill_310p(query, key, value, scale_factor):
+def _prompt_padding_zero(tensor, padding):
+    """A bounded private constant; concatenation still copies the real input.
+
+    Only finished zero tensors enter the cache, so a captured prefill reads a
+    constant rather than replaying its fill/cast/broadcast producers. Entries
+    are never written by prefill. Eviction releases the cache's reference; a
+    graph already using that constant retains its own normal input reference.
+    """
+    global _prompt_padding_cache_bytes
+    if tensor.ndim != 4 or int(padding) <= 0:
+        return None
+    dtype = _jittor_dtype_name(tensor.dtype)
+    itemsize = {"float16": 2, "float32": 4}.get(dtype)
+    if itemsize is None:
+        return None
+    shape = tuple(int(value) if axis != 2 else int(padding)
+                  for axis, value in enumerate(tensor.shape))
+    if any(value <= 0 for value in shape):
+        return None
+    size = itemsize
+    for value in shape:
+        size *= value
+    if (size > _prompt_padding_cache_max_entry_bytes
+            or size > _prompt_padding_cache_max_bytes
+            or _prompt_padding_cache_limit <= 0):
+        return None
+    backend, device = jt.core.dispatch_context([tensor])[:2]
+    if backend not in ("acl", "acl_legacy"):
+        return None
+    device = int(device)
+    key = (device, dtype, shape)
+    entry = _prompt_padding_cache.get(key)
+    if entry is not None:
+        zero, _ = entry
+        if zero.location() != "device" or int(zero.device_id) != device:
+            with jt.runtime.scope(device_id=device, keep_graph=0):
+                zero = zero.to_device(device).stop_grad()
+                zero.sync(False, False)
+            _prompt_padding_cache[key] = (zero, size)
+        _prompt_padding_cache.move_to_end(key)
+        return zero
+    while _prompt_padding_cache and (
+            len(_prompt_padding_cache) >= _prompt_padding_cache_limit
+            or _prompt_padding_cache_bytes + size > _prompt_padding_cache_max_bytes):
+        _, (_, removed) = _prompt_padding_cache.popitem(last=False)
+        _prompt_padding_cache_bytes -= removed
+    # Scalar-only scope: it neither sweeps unrelated work nor waits on the
+    # device. keep_graph=0 matters when the first use happens during capture.
+    with jt.runtime.scope(device_id=device, keep_graph=0):
+        zero = jt.zeros(shape, dtype=dtype).stop_grad()
+        zero.sync(False, False)
+    _prompt_padding_cache[key] = (zero, size)
+    _prompt_padding_cache_bytes += size
+    return zero
+
+
+def _prompt_pad_sequence(tensor, padding):
+    zero = _prompt_padding_zero(tensor, padding)
+    if zero is None:
+        return jt.nn.pad(tensor, (0, 0, 0, padding), value=0)
+    return jt.concat((tensor, zero), dim=-2)
+
+
+def _prompt_prefill_310p(query, key, value, scale_factor, is_causal=True):
     batch, query_heads, length, head_dim = map(int, query.shape)
     key_heads = int(key.shape[1])
     padded_length = (length + 127) // 128 * 128
-    mask = _prompt_causal_mask(query, length, padded_length)
+    mask = _prompt_mask(query, length, padded_length, is_causal)
     padding = padded_length - length
     if padding:
         query, key, value = (
-            jt.nn.pad(tensor, (0, 0, 0, padding), value=0)
+            _prompt_pad_sequence(tensor, padding)
             for tensor in (query, key, value)
         )
     if key_heads != query_heads:
@@ -386,7 +470,7 @@ def _prompt_prefill_310p(query, key, value, scale_factor):
         expanded = (batch, key_heads, group, padded_length, head_dim)
         key = key.unsqueeze(2).broadcast(expanded).reshape(batch, query_heads, padded_length, head_dim)
         value = value.unsqueeze(2).broadcast(expanded).reshape(batch, query_heads, padded_length, head_dim)
-    output = PromptFlashAttentionACL(query_heads, scale_factor)(query, key, value, mask)
+    output = PromptFlashAttentionACL(query_heads, scale_factor, is_causal=is_causal)(query, key, value, mask)
     return output[:, :, :length, :] if padding else output
 
 
@@ -481,7 +565,13 @@ def scaled_dot_product_attention_acl(
     if _supports_prompt_prefill(q_shape, k_shape, dtype_name, training, is_causal, attn_mask):
         scale_factor = 1.0 / math.sqrt(head_dim) if scale is None else float(scale)
         scaled_dot_product_attention_acl.backend_name = "acl_prompt_flash_attention_v3"
-        return _prompt_prefill_310p(query, key, value, scale_factor)
+        if not is_causal:
+            # CANN accepts original, unequal or unaligned sequence lengths
+            # when attenMask is null. All real keys participate, so no source
+            # padding/mask or actual-sequence-length attributes are required.
+            query, key, value = (tensor.contiguous() for tensor in (query, key, value))
+            return PromptFlashAttentionACL(query_heads, scale_factor, is_causal=False)(query, key, value)
+        return _prompt_prefill_310p(query, key, value, scale_factor, is_causal=is_causal)
 
     # 310P has incremental attention even though FlashAttentionScore is absent.
     # Static KV caches carry a head-shared boolean mask on each decode step.

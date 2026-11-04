@@ -113,6 +113,14 @@ struct StepTraceOpScope {
     void allocated();
 };
 
+// Around JIT compilation: charges the time to the operator being launched on
+// this thread, if any, so it can be told apart from the launch itself.
+struct StepTraceCompileScope {
+    int64 seq = -1, t_begin = 0;
+    StepTraceCompileScope();
+    ~StepTraceCompileScope();
+};
+
 struct StepTraceBatchScope {
     int64 batch = -1;
     StepTraceBatchScope();
@@ -127,7 +135,11 @@ void note_graph_launch_begin();
 void note_graph_launch_end();
 
 // Set around `Allocator::alloc` in `Var::alloc`, so a pool event can name the
-// Var it is for.
+// Var it is for (and the memory history, its producer's stack).
+Var* step_trace_current_var();
+// From Op's constructor while a trace is open: remember the record_function
+// range the op was built in.
+void step_trace_note_op_built(Op* op);
 struct StepTraceVarScope {
     Var* saved = nullptr;
     bool on = false;
