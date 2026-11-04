@@ -20,8 +20,50 @@ prof.export_chrome_trace("step.json")   # chrome://tracing 或 Perfetto 打开
 ```
 
 In Torch compatibility mode, `torch.profiler.profile` and
-`torch.autograd.profiler.profile` are exactly this: `key_averages().table()`,
-`export_chrome_trace`, `schedule`/`on_trace_ready` and `record_function` all work.
+`torch.autograd.profiler.profile` are exactly this, and what they produce is what
+PyTorch 2.11 produces (`compat/torch/profiler.py`):
+
+- `events()`/`key_averages()` are PyTorch's `FunctionEvent`/`FunctionEventAvg`:
+  each operator and each `record_function` range is a CPU event, each kernel/copy
+  a CUDA event whose time is also its launching operator's self device time; a
+  range's total is its own time plus its children's. Under lazy execution an
+  operator **built** inside a range often runs after the range closes (at an
+  `.item()`/sync in another range, or outside any); it is still the child of the
+  range that built it (the executor records the range open when the op was built,
+  `op_records[i]["range"]`), and the range it ran in does not count that time as
+  its own. So `forward`'s total is every operator the forward pass built, and the
+  range that syncs keeps only its own time.
+- A new kernel is generated and compiled the first time it is needed: while the
+  executor plans a batch, or when an operator first runs. That time is a
+  `jit_compile` event (under the operator in the second case), not part of the
+  operator's launch; native `jt.profile`'s host split counts it under "JIT compile
+  / kernel lookup" too. With no new kernel it is a short cache lookup.
+- A fused operator has as many members as lines that built it: its stack lists
+  each member's innermost frame first (in member order), then the callers of the
+  last, so Source Location shows every line fused into it.
+- Region edges: entry runs `jt.sync_all(True)`, so a graph built before the
+  profile but not yet run executes on entry and is not in the result; exit syncs
+  too, so what the region built has run before it ends. Native
+  `jt.profile(sync=False)` syncs at neither edge, and a graph built in the region
+  but not synced there runs outside it, unrecorded.
+- `table()` has PyTorch's `_build_table` columns, widths, truncation, units, sort
+  keys and footer; `profile_memory` gives each operator's allocated-minus-freed
+  CPU/CUDA Mem (self and total), `record_shapes` + `group_by_input_shape` give Input
+  Shapes as `[[64, 256], [512, 256]]`, `with_stack` + `group_by_stack_n` give Source
+  Location (the Python stack that built the operator, `file(line): func`, innermost
+  first, without jittor's own frames). Kernel names are demangled.
+- `export_chrome_trace` writes Kineto's format (top-level keys, `cpu_op`/
+  `user_annotation`/`kernel`/`gpu_memcpy`, ac2g flows, `[memory]` instants,
+  `GPU n`/`stream n` metadata, kernel grid/block/registers/shared memory), which
+  TensorBoard's profiler plugin, HTA and Perfetto read as a PyTorch trace;
+  `export_stacks` writes the flame-graph format (a fused operator gives one call
+  stack per member, sharing its value); `export_memory_timeline` writes
+  `[times, sizes]` (json/json.gz) or the matplotlib plot (html) in PyTorch's layout,
+  but jittor does not classify allocations into parameters/gradients/activations,
+  so every byte is "Unknown".
+- Not there: Python function events (`python_function`), CUDA runtime API events,
+  `with_flops`, `with_modules`. Native `jt.profile(stacks=True)` gives the same
+  stacks in `result.stacks`.
 
 ## Read the report and choose the next step
 
@@ -142,9 +184,73 @@ Beyond `prof.summary()`, the structured data is in:
 | `prof.memory` | `MemoryReport`: `peak_allocated`, `peak_with_workspace`, `pool_peak_reserved`, `live_by("op"/"site"/"tensor"/"origin")`, `fragmentation`, `timeline` |
 | `prof.replay` | device graph launches inside the region; count deltas and refusal reasons for registered replay objects |
 | `prof.op_records` / `kernel_records` / `copy_records` | raw records |
+| `prof.stacks` | with `stacks=True`, stack id → frames (indexed by `op_records[i]["stack"]`); otherwise `None` |
 
 `prof.step()` marks a step boundary. `jt.profiling.record_function(name)` marks a
 host interval in the trace.
+
+## Memory over a whole run: snapshots and allocator statistics
+
+`jt.profile` answers one region. To see how memory grows and fragments over a
+whole training run, use PyTorch's tools; the calls and what they produce are
+those of PyTorch 2.11:
+
+```python
+jt.profiling.record_memory_history(max_entries=100000)   # torch.cuda.memory._record_memory_history
+train()
+jt.profiling.dump_memory_snapshot("snap.pickle")          # torch.cuda.memory._dump_snapshot
+jt.profiling.record_memory_history(None)
+print(jt.profiling.memory_summary())                      # torch.cuda.memory_summary's table
+```
+
+In Torch compatibility mode `torch.cuda.memory._record_memory_history/_snapshot/_dump_snapshot`,
+`torch.cuda.memory_snapshot`, `memory_stats`, `memory_summary` and
+`reset_accumulated_memory_stats` are these functions.
+
+- **Snapshot**: the pickle has PyTorch's keys, actions (`segment_alloc`/`alloc`/
+  `free_requested`/`free_completed`/`segment_free`/`oom`/`snapshot`) and nesting, so
+  it opens in <https://pytorch.org/memory_viz> and reads with `torch.cuda._memory_viz`
+  (`segsum`, `trace_plot`, `segment_plot`). The records come from the SFRL pools
+  themselves (`src/runtime/profiler/memory_history.{h,cc}`): a segment is what a pool
+  got from the driver, a block what was split out of it, and addresses are real
+  device addresses. `enabled="state"` keeps only the live blocks, `"all"` the whole
+  trace too; `context` chooses whether stacks are kept; `max_entries` keeps the newest
+  entries per device; stopping discards the records, as in PyTorch.
+  `jt.profiling.record_function` ranges go to `external_annotations`.
+- **Stacks**: under lazy execution a block is allocated when the graph runs, and the
+  Python stack at that moment is the line that forced execution. A tensor's block
+  therefore carries the full Python stack **that built its operator** (innermost
+  frame first); a library workspace is charged to the operator running; a free, and
+  an allocation outside the executor, carry the stack of the moment (when the thread
+  holds the GIL). An operator built before recording started and run after it has
+  no build-time stack, so its blocks carry the line that forced execution. Frames
+  are Python only, no C++ (`stacks="all"` equals `"python"`).
+- **Statistics**: `memory_stats()` has every key of `torch.cuda.memory_stats` --
+  allocation, segment, active and inactive-split counts and bytes, reserved and
+  requested bytes, each for the all/small/large pools as current/peak/allocated/
+  freed, and `num_alloc_retries`, `num_ooms`, `num_device_alloc/free`. They are
+  counted on every pool allocation, free and segment change
+  (`sfrl_device_memory_stats`); `memory_summary()` matches PyTorch's layout
+  character for character, titled Jittor (in Torch mode too).
+
+**When memory runs out**: a device allocation refused after the pools gave back
+their cache and retried raises `jittor.JittorOutOfMemoryError` (a `RuntimeError`;
+in Torch mode `torch.OutOfMemoryError` and `torch.cuda.OutOfMemoryError` are
+this class, so handlers catching the torch names still catch it). The message opens with PyTorch's sentences --
+`CUDA out of memory. Tried to allocate .... GPU n has a total capacity of ... of
+which ... is free. Including non-Jittor memory, this process has ... memory in use.
+Of the allocated memory ... is allocated by Jittor, and ... is reserved by Jittor but
+unallocated.` (Jittor in Torch mode too) -- with numbers from the pools' own counters
+and NVML, then jittor's advice (a request larger than the card points at a shape)
+and where the failing operator was built. PyTorch's closing
+`PYTORCH_CUDA_ALLOC_CONF` hint does not apply here and is not copied. `num_ooms` in
+`memory_stats()` and an `oom` entry in the snapshot each count it once.
+
+Numbers differ from PyTorch's where the allocator does, not the recording: small
+segments are 1 MiB (PyTorch: 2 MiB), blocks are 512-byte aligned and belong to
+their segment's pool; frees do not wait behind a stream, so `free_requested` and
+`free_completed` coincide; with no `max_split_size` nothing is oversize; cuBLAS
+workspaces are not allocated from the pools and do not appear in a snapshot.
 
 ## Graph replay
 

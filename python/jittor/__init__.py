@@ -227,6 +227,7 @@ JittorInternalError = jittor_utils.cc.JittorInternalError
 JittorIndexError = jittor_utils.cc.JittorIndexError
 JittorTypeError = jittor_utils.cc.JittorTypeError
 JittorShapeError = jittor_utils.cc.JittorShapeError
+JittorOutOfMemoryError = jittor_utils.cc.JittorOutOfMemoryError
 
 _ran_post_process = False
 for backend in compiler.backend_modules:
@@ -386,7 +387,7 @@ _ROOT_EXPORTS = (
     "world_size", "config", "capability", "introspection", "graph_replay", "graph_replay_barrier", "capture_step",
     "profile", "profiling",
     "JittorError", "JittorInternalError", "JittorIndexError", "JittorTypeError",
-    "JittorShapeError",
+    "JittorShapeError", "JittorOutOfMemoryError",
 )
 
 __all__ = tuple(sorted(set(

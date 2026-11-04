@@ -37,6 +37,7 @@
 #include "mem/swap.h"
 #include "bindings/pybind/py_var_tracer.h"
 #include "mem/mem_info.h"
+#include "runtime/profiler/memory_history.h"
 
 namespace jittor {
 
@@ -897,6 +898,7 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         TensorPlacementScope placement_scope(placement);
         Float32PrecisionScope precision_scope(op->float32_precision);
         LaunchOriginScope origin_scope(op->launch_origin);
+        MemoryHistoryOpScope memory_stack_scope(is_fused_op ? ops[root] : op);
         int execution_device = 0;
         #ifdef HAS_ACCELERATOR
         if (requested_backend != BackendId::Cpu) {

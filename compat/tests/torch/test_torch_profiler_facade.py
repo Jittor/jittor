@@ -96,7 +96,7 @@ class TestTorchCudaMemoryReadings(unittest.TestCase):
         self.assertGreaterEqual(torch.cuda.max_memory_allocated(), 256 << 20)
         stats = torch.cuda.memory_stats()
         self.assertGreaterEqual(stats["reserved_bytes.all.peak"], reserved)
-        self.assertIn("Reserved memory (peak)", torch.cuda.memory_summary())
+        self.assertIn("| GPU reserved memory   |", torch.cuda.memory_summary())
         del big
 
 
