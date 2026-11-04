@@ -111,6 +111,10 @@ class _ContextParallelState:
         self.local_len = self.seq_len // self.world_size
         self.start = self.rank * self.local_len
         self.seq_dim = int(seq_dim)
+        #: The mask is constant for the whole context; a decoder rebuilds it
+        #: once per layer otherwise, and each build adds graph nodes the JIT
+        #: has to compile.
+        self._causal_mask_cache = None
 
     def shard(self, buffer, seq_dim):
         """One rank's contiguous chunk of ``buffer`` along ``seq_dim``."""
@@ -146,11 +150,16 @@ class _ContextParallelState:
 
     def causal_mask(self):
         """Bool ``[local query, global key]`` keep-mask for this rank's rows."""
-        global_len = self.local_len * self.world_size
-        positions = jt.arange(global_len, dtype="int64").reshape((1, global_len))
-        queries = jt.arange(self.local_len, dtype="int64").reshape(
-            (self.local_len, 1)) + self.start
-        return positions <= queries
+        mask = getattr(self, "_causal_mask_cache", None)
+        if mask is None:
+            global_len = self.local_len * self.world_size
+            positions = jt.arange(global_len, dtype="int64").reshape(
+                (1, global_len))
+            queries = jt.arange(self.local_len, dtype="int64").reshape(
+                (self.local_len, 1)) + self.start
+            mask = positions <= queries
+            self._causal_mask_cache = mask
+        return mask
 
     def scaled_dot_product_attention(self, original, query, key, value, attn_mask,
                                      dropout_p, is_causal, scale, enable_gqa,
