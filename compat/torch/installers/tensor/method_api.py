@@ -576,6 +576,13 @@ def _nonzero(self, as_tuple=False, **kw):
     _context = get_install_context(_owner.jt)
     _native = _context.state["tensor_native_api"]
     _native_nonzero = _native['_native_nonzero']
+    if self.ndim == 0:
+        # PyTorch treats a scalar as a single position for tuple indices, but
+        # the matrix form retains the scalar's zero-dimensional coordinate.
+        flat = _native_nonzero(self.reshape(1)).int64()
+        if as_tuple:
+            return (flat.reshape(-1),)
+        return flat[:, :0]
     idx = _native_nonzero(self)
     if not as_tuple:
         return idx
@@ -731,6 +738,18 @@ def _torch_getitem(self, slices):
 
     slices = normalize(slices)
     slices = _align_advanced_index(self, slices)
+    if (isinstance(slices, _NativeVar) and slices.ndim == 0
+            and _jittor_dtype_name(slices.dtype) == "bool"):
+        # A scalar boolean index adds a leading selection axis in Torch.
+        # Convert it to zero or one integer row indices without reading the
+        # mask back to the host, retaining autograd and the input device.
+        context = get_install_context(_owner.jt)
+        native_getitem = context.state["tensor_native_api"]["_orig_getitem"]
+        indices = _nonzero(slices, as_tuple=True)[0]
+        out = native_getitem(self.unsqueeze(0), indices)
+        if isinstance(out, _NativeVar) and _owner._var_has_cpu_residency_hint(self):
+            out = _owner._mark_cpu_like(out, self)
+        return out
     # A basic index, natively (`src/bindings/pyjt/py_compat_fast.h`).
     fast = _owner.jt.core._fast_getitem(self, slices)
     if fast is not NotImplemented:
