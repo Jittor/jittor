@@ -17,7 +17,10 @@ from ..api_delegates import bind_delegates
 import jittor as jt
 import numpy as np
 
-from ..types import _dtype_to_str
+from ..types import (
+    _device_is_cpu, _device_is_cuda, _dtype_to_str, _make_cpu_resident,
+    _make_cuda_resident,
+)
 from ..nested import _torch_register_leaf
 from ..fidelity import Fidelity, register_fidelity
 from ...diagnostics import EXPECTED, swallowed
@@ -229,6 +232,26 @@ def _copy_like(input):
     return input.clone()
 
 
+def _materialize_meta_like(input, device, **kwargs):
+    """Copy an emulated-meta buffer's values onto the device the call asked for.
+
+    The copy has to be made explicitly: ``input.clone()`` keeps the input's
+    device, so a buffer built under the ``torch.device("meta")`` emulation (real
+    host storage) stayed on CPU even when the factory was called with
+    ``device="cuda"``. transformers materializes Qwen2's non-persistent rotary
+    buffers this way while loading with ``device_map="cuda"``; the parameters
+    moved to CUDA, those buffers did not, and DDP's NCCL broadcast then had no
+    CPU kernel. A fresh allocation under the factory's ambient placement would
+    follow the request, but it holds no values, so copy first and then move.
+    """
+    copied = _constructor_adapter("empty_like", _copy_like, False, input, **kwargs)
+    if _device_is_cpu(device):
+        return _make_cpu_resident(copied)
+    if _device_is_cuda(device):
+        return _make_cuda_resident(copied, force=True, device=device)
+    return copied
+
+
 def _empty_like_implementation(input, **kwargs):
     """Apply the shared factory options to the compiler's empty allocation."""
     if getattr(input, "_jittor_torch_meta_data", False):
@@ -239,8 +262,10 @@ def _empty_like_implementation(input, **kwargs):
         # it lose those values, and the later _init_weights restore is skipped
         # for modules that are already initialized (CLIP position_ids,
         # SpeechT5 sinusoidal weights).  Materializing the emulated meta
-        # storage therefore copies it instead of exposing garbage.
-        return _constructor_adapter("empty_like", _copy_like, False, input, **kwargs)
+        # storage therefore copies it instead of exposing garbage -- onto the
+        # device the factory call requested.
+        device = kwargs.pop("device", None)
+        return _materialize_meta_like(input, device, **kwargs)
     return _constructor_adapter("empty_like", _allocate_empty_like, False, input, **kwargs)
 
 
