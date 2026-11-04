@@ -1157,10 +1157,9 @@ def install_methods(ctx):
         if _ro is not None:
             _native_reductions[_rn] = _ro
             setattr(Var, _rn, _SHAPE_REDUCTION_APIS[_rn])
-    # any/all: jittor's only accept a scalar `dim` (no `dims` tuple, no keepdims).
-    # Support torch's tuple-of-dims and keepdim by reducing one dim at a time
-    # (descending so earlier dim indices stay valid), keeping a length-1 axis when
-    # keepdim is set. Plain scalar/axis use falls through to the native op.
+    # any/all share the module-level Torch argument contract. The native owner
+    # accepts tuple dimensions and keepdims directly; the adapter also preserves
+    # Torch's empty-axis and uint8-result conventions.
     for _rn in ("any", "all"):
         _ro = getattr(Var, _rn, None)
         if _ro is not None:

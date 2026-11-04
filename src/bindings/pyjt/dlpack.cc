@@ -5,10 +5,11 @@
 // ***************************************************************
 // DLPack ownership/device/stream semantics.
 //
-//  - Export (Var -> DLManagedTensor capsule): sync the Var (forces any
-//    pending accelerator work to complete -- Jittor has no non-default-stream
-//    story, so a full device sync IS the producer-side "stream" guarantee),
-//    read its real device/dtype/shape via the already-completed per-tensor
+//  - Export (Var -> DLManagedTensor capsule): run the Var's pending work and
+//    honour the consumer's `__dlpack__(stream=)` (parse_export_stream():
+//    None waits for the device, -1 does not synchronize, a stream handle is
+//    made to wait for Jittor's compute stream through an event), read its
+//    real device/dtype/shape/strides via the already-completed per-tensor
 //    device id infrastructure (VarHolder::location()/device_id()), and stash
 //    a VarPtr in manager_ctx so the underlying storage outlives the capsule
 //    even if the Python VarHolder is immediately dropped.
@@ -25,23 +26,16 @@
 //    exactly once" enforcement (rename "dltensor"->"used_dltensor" on
 //    import; a capsule destructor fires the same deleter exactly once if
 //    the capsule is garbage-collected without ever being imported).
-//  - Contiguity: Vars can carry storage strides, but this DLPack boundary
-//    exports only row-major contiguous storage. Non-contiguous export is
-//    rejected before either aliasing or copy=True's dense memcpy; callers
-//    must explicitly materialize with .contiguous(). Importing a strided
-//    producer still materializes a contiguous copy rather than aliasing its
-//    layout: dlpack_peek() lets from_dlpack()'s
-//    Python wrapper read the producer's shape/strides without consuming the
-//    capsule, decide it is non-contiguous, compute the minimal flat element
-//    span the strides can reach, import THAT span as a genuinely contiguous
-//    1-D foreign buffer via from_dlpack_capsule(capsule, flat_len,
-//    elem_offset) (this function's own low-level entry point, still
-//    zero-copy at this stage), and finally gather the producer's real
-//    (strided) shape out of it with one ordinary jittor advanced-index op
-//    (device-side, never a host round-trip). Calling from_dlpack_capsule()
-//    directly (bypassing the Python wrapper) on a non-contiguous capsule
-//    still fails loud rather than silently misreading -- only
-//    jt.from_dlpack() implements the fallback.
+//  - Layout: a strided Var (a transpose, step slice or broadcast view of a
+//    storage) exports its own element strides over the same bytes; copy=True
+//    exports a dense independent buffer instead. On import, a contiguous or
+//    non-negatively strided producer is aliased zero-copy, as a storage view
+//    when strided. A negative stride, which a Jittor Var cannot express, is
+//    refused here; jt.from_dlpack() then imports the flat element span via
+//    from_dlpack_capsule(capsule, flat_len, elem_offset) and gathers the
+//    logical tensor out of it (device-side, an independent copy).
+//    dlpack_peek() reports shape, strides and aliasability without consuming
+//    the capsule, so the Python wrapper chooses before committing.
 //  - Versioning: both the classic (unversioned) DLManagedTensor and the
 //    DLPack>=0.8 DLManagedTensorVersioned capsule are supported, on export
 //    and import. Export only produces the versioned form when the consumer
@@ -175,6 +169,7 @@ static DLDevice var_to_dldevice(VarHolder* v) {
 struct JittorDLManagerCtx {
     VarPtr vp;                    // keeps the underlying storage alive
     std::vector<int64_t> shape;   // DLTensor.shape points into this
+    std::vector<int64_t> strides; // DLTensor.strides, empty for row-major
     JittorDLManagerCtx(Var* v) : vp(v) {}
 };
 
@@ -252,34 +247,120 @@ struct ResolvedExport {
     DLDataType dtype;
 };
 
-static ResolvedExport resolve_export(VarHolder* v, bool force_copy) {
-    // Forces pending computation AND a device sync -- the producer-side half
-    // of the "stream" contract: by the time this returns, every earlier op
-    // Jittor queued against this Var (on its one and only implicit stream)
-    // is guaranteed complete, so the consumer can safely read the pointer
-    // with no further synchronization needed.
-    v->sync(true, false);
+// The caller's current accelerator device, restored on the way out. Running
+// a Var's pending work selects the device Jittor executes on; a consumer such
+// as CuPy inside `with cupy.cuda.Device(1)` then found device 0 current and
+// refused its own stream ("created on device 1 does not match"). Jittor
+// selects its device again whenever it next runs, so restoring is safe.
+struct CallerDeviceGuard {
+    int device = -1;
+    CallerDeviceGuard() {
+        if (accelerator_backend_id() == BackendId::Cpu) return;
+        const auto& ops = backend_ops(accelerator_backend_id());
+        if (ops.caller_device && ops.restore_caller_device)
+            device = ops.caller_device();
+    }
+    ~CallerDeviceGuard() {
+        if (device < 0) return;
+        const auto& ops = backend_ops(accelerator_backend_id());
+        if (ops.caller_device() != device) ops.restore_caller_device(device);
+    }
+};
+
+// The consumer's `__dlpack__(stream=...)`, per the DLPack / array API
+// contract: None asks for the legacy default stream, so everything Jittor
+// queued is waited for (a device sync, as before); -1 asks for no
+// synchronization at all; any other positive value is the consumer's CUDA
+// stream (1 and 2 being the legacy and per-thread default streams), which is
+// made to wait for Jittor's compute stream without blocking the host. 0 is
+// ambiguous and the protocol disallows it.
+struct ExportStream {
+    enum Mode { Sync, NoSync, Wait } mode = Sync;
+    int64 handle = 0;
+};
+
+static ExportStream parse_export_stream(PyObject* stream) {
+    ExportStream r;
+    if (!stream || stream == Py_None) return r;
+    USER_CHECK(PyLong_Check(stream) && !PyBool_Check(stream))
+        << "dlpack: __dlpack__(stream=...) must be an int or None, got"
+        << Py_TYPE(stream)->tp_name;
+    int overflow = 0;
+    long long value = PyLong_AsLongLongAndOverflow(stream, &overflow);
+    USER_CHECK(!overflow && !(value == -1 && PyErr_Occurred()))
+        << "dlpack: __dlpack__(stream=...) does not fit in int64";
+    USER_CHECK(value != 0)
+        << "dlpack: __dlpack__(stream=0) is ambiguous and disallowed by DLPack; pass 1 "
+           "for the legacy default stream, 2 for the per-thread default stream, or the "
+           "stream handle itself";
+    USER_CHECK(value >= -1) << "dlpack: __dlpack__(stream=" << value << ") is not a stream";
+    r.mode = value == -1 ? ExportStream::NoSync : ExportStream::Wait;
+    r.handle = value;
+    return r;
+}
+
+// Make the consumer's stream wait for everything Jittor queued on `dev`.
+static void order_consumer_stream(Device dev, int64 handle) {
+    const auto& ops = backend_ops(dev.backend);
+    if (!ops.event_create || !ops.event_record || !ops.stream_wait_event
+            || !ops.event_destroy) {
+        backend_synchronize(dev);
+        return;
+    }
+    BackendEvent done = backend_event(dev);
+    ops.event_record(done, backend_stream(dev, BackendStreamKind::Compute));
+    ops.stream_wait_event(BackendStream{dev, (void*)(intptr_t)handle}, done);
+    ops.event_destroy(done);
+}
+
+static ResolvedExport resolve_export(VarHolder* v, bool force_copy, ExportStream stream = {}) {
+    // Runs whatever is pending for this Var. Only the default (stream=None)
+    // also waits for the device; the other two modes order or skip that
+    // below, once the device is known.
+    v->sync(stream.mode == ExportStream::Sync, false);
     Var* var = v->var;
     ASSERT(var->mem_ptr || var->num == 0) << "dlpack: exporting an unmaterialized Var";
-    USER_CHECK(var->is_contiguous())
-        << "dlpack: non-contiguous storage cannot be exported; call .contiguous() explicitly first";
 
     DLDevice dev = var_to_dldevice(v);
     DLDataType dtype = ns_to_dltype(var->dtype());
+    USER_CHECK(dev.device_type != kDLCPU || stream.mode != ExportStream::Wait)
+        << "dlpack: __dlpack__(stream=" << stream.handle << ") names a stream, but this "
+           "tensor is on the CPU; pass stream=None";
 
     // Keeps a materialized-copy Var alive across the ctx construction below;
     // JittorDLManagerCtx takes its own independent reference, so releasing
     // copy_holder at function exit is safe.
     VarPtr copy_holder;
     if (force_copy) {
-        copy_holder = make_materialized_copy(var);
+        if (var->is_contiguous()) {
+            copy_holder = make_materialized_copy(var);
+        } else {
+            // A strided Var's bytes are not its elements in order, so the
+            // copy is a dense materialization rather than a memcpy of them.
+            VarHolder dense(contiguous_storage(var));
+            dense.sync(stream.mode == ExportStream::Sync, false);
+            copy_holder = VarPtr(dense.var);
+        }
         var = copy_holder.ptr;
+        // The copy is stream-ordered; stream=None promises it is complete.
+        if (stream.mode == ExportStream::Sync && dev.device_type != kDLCPU)
+            backend_synchronize(var_to_backend_device(var));
     }
+    if (stream.mode == ExportStream::Wait)
+        order_consumer_stream(var_to_backend_device(var), stream.handle);
 
     auto* ctx = new JittorDLManagerCtx(var);
     ctx->shape.reserve(var->shape.size());
     for (int i = 0; i < var->shape.size(); i++)
         ctx->shape.push_back(var->shape[i]);
+    // A strided Var -- a transpose or channels-last view of a storage --
+    // exports its own element strides over the same bytes, as torch does,
+    // instead of being refused. Row-major storage keeps strides=NULL.
+    if (!var->is_contiguous()) {
+        ctx->strides.reserve(var->shape.size());
+        for (int i = 0; i < var->shape.size(); i++)
+            ctx->strides.push_back(var->storage_stride(i));
+    }
     return {ctx, var, dev, dtype};
 }
 
@@ -289,12 +370,12 @@ static void fill_dl_tensor(DLTensor& t, const ResolvedExport& r) {
     t.ndim = (int32_t)r.ctx->shape.size();
     t.dtype = r.dtype;
     t.shape = r.ctx->shape.empty() ? nullptr : r.ctx->shape.data();
-    t.strides = nullptr;   // resolve_export() requires row-major contiguous storage.
+    t.strides = r.ctx->strides.empty() ? nullptr : r.ctx->strides.data();
     t.byte_offset = 0;
 }
 
-static PyObject* to_dlpack_capsule(VarHolder* v, bool force_copy=false) {
-    auto r = resolve_export(v, force_copy);
+static PyObject* to_dlpack_capsule(VarHolder* v, bool force_copy=false, ExportStream stream={}) {
+    auto r = resolve_export(v, force_copy, stream);
     auto* managed = new DLManagedTensor();
     managed->manager_ctx = r.ctx;
     managed->deleter = jittor_dlpack_deleter;
@@ -314,8 +395,8 @@ static PyObject* to_dlpack_capsule(VarHolder* v, bool force_copy=false) {
 // from_dlpack, and torch.from_dlpack against a raw capsule) still get the
 // classic capsule from to_dlpack_capsule() above; this path only fires when
 // the caller explicitly asked for the versioned ABI.
-static PyObject* to_dlpack_capsule_versioned(VarHolder* v, bool force_copy=false) {
-    auto r = resolve_export(v, force_copy);
+static PyObject* to_dlpack_capsule_versioned(VarHolder* v, bool force_copy=false, ExportStream stream={}) {
+    auto r = resolve_export(v, force_copy, stream);
     auto* managed = new DLManagedTensorVersioned();
     managed->version.major = DLPACK_MAJOR_VERSION;
     managed->version.minor = DLPACK_MINOR_VERSION;
@@ -340,18 +421,15 @@ PyObject* to_dlpack(VarHolder* v) {
 }
 
 PyObject* VarHolder::dlpack(PyObject* stream, PyObject* max_version, PyObject* dl_device, PyObject* copy) {
-    // `stream` (an int stream handle, or None) is accepted for protocol
-    // compatibility with numpy/cupy/torch callers but not otherwise used:
-    // to_dlpack_capsule()'s sync(true,false) below already conservatively
-    // waits for all of Jittor's own (single, default-stream) work to finish
-    // regardless of what stream the consumer intends to use next.
+    CallerDeviceGuard caller_device;
+    // `stream`: see parse_export_stream().
     // `max_version=(major,minor)`: per the DLPack spec, a producer MAY
     // return the versioned DLManagedTensorVersioned capsule once the
     // consumer advertises major>=1 support; otherwise it must fall back to
     // the classic capsule (DLPack's own mandated default -- and what
     // NumPy/CuPy/PyTorch's own from_dlpack() consume when they don't pass
     // max_version at all).
-    (void)stream;
+    ExportStream export_stream = parse_export_stream(stream);
     bool want_versioned = false;
     if (max_version && max_version != Py_None) {
         int req_major = 0, req_minor = 0;
@@ -376,8 +454,8 @@ PyObject* VarHolder::dlpack(PyObject* stream, PyObject* max_version, PyObject* d
                  << "where this Var actually lives is not supported; "
                  << "call .migrate_to_device() explicitly first";
     }
-    return want_versioned ? to_dlpack_capsule_versioned(this, force_copy)
-                          : to_dlpack_capsule(this, force_copy);
+    return want_versioned ? to_dlpack_capsule_versioned(this, force_copy, export_stream)
+                          : to_dlpack_capsule(this, force_copy, export_stream);
 }
 
 PyObject* VarHolder::dlpack_device() {
@@ -430,6 +508,19 @@ static DLTensorSpan validate_dl_tensor(const DLTensor& t, NanoString dtype) {
         contiguous_stride *= t.shape[i];
     }
     return span;
+}
+
+// Whether a non-contiguous layout can be a Jittor storage view of the same
+// bytes: Jittor's strides are non-negative element strides (an offset view
+// would be needed for a negative one) that fit a NanoVector.
+static bool dl_tensor_strides_aliasable(const DLTensor& t) {
+    if (t.strides == nullptr) return true;
+    vector<int64> strides(t.ndim);
+    for (int32_t i = 0; i < t.ndim; i++) {
+        if (t.strides[i] < 0) return false;
+        strides[i] = t.strides[i];
+    }
+    return NanoVector::fits(strides);
 }
 
 static bool dl_tensor_is_contiguous(const DLTensor& t) {
@@ -493,7 +584,10 @@ static DLTensor* unwrap_capsule(PyObject* capsule, bool& versioned,
 PyObject* dlpack_peek(PyObject* capsule) {
     bool versioned; DLManagedTensor* managed; DLManagedTensorVersioned* managed_v;
     DLTensor& t = *unwrap_capsule(capsule, versioned, managed, managed_v, false);
-    USER_CHECK(t.ndim >= 0 && (t.ndim == 0 || t.shape != nullptr))
+    // The same rank bound as the import: an unchecked ndim sized the tuples
+    // below and read that many shape/stride entries.
+    USER_CHECK(t.ndim >= 0 && t.ndim <= NanoVector::max_tensor_rank
+               && (t.ndim == 0 || t.shape != nullptr))
         << "dlpack: malformed DLTensor (ndim=" << t.ndim << ")";
     PyObject* shape_tuple = PyTuple_New(t.ndim);
     for (int32_t i = 0; i < t.ndim; i++)
@@ -507,13 +601,26 @@ PyObject* dlpack_peek(PyObject* capsule) {
         for (int32_t i = 0; i < t.ndim; i++)
             PyTuple_SET_ITEM(strides_obj, i, PyLong_FromLongLong((long long)t.strides[i]));
     }
-    PyObject* result = PyTuple_Pack(2, shape_tuple, strides_obj);
+    PyObject* aliasable = PyBool_FromLong(dl_tensor_strides_aliasable(t));
+    PyObject* result = PyTuple_Pack(3, shape_tuple, strides_obj, aliasable);
     Py_DECREF(shape_tuple);
     Py_DECREF(strides_obj);
+    Py_DECREF(aliasable);
     return result;
 }
 
-VarHolder* from_dlpack_capsule(PyObject* capsule, PyObject* flat_len, int64 elem_offset) {
+int64 dlpack_consumer_stream(int device_id) {
+    CallerDeviceGuard caller_device;
+    USER_CHECK(accelerator_backend_id() != BackendId::Cpu)
+        << "dlpack: this build has no accelerator stream to order a producer before";
+    void* handle = backend_stream(Device{accelerator_backend_id(), device_id},
+                                  BackendStreamKind::Compute).handle;
+    return handle ? (int64)(intptr_t)handle : 1;
+}
+
+VarHolder* from_dlpack_capsule(PyObject* capsule, PyObject* flat_len, int64 elem_offset,
+                               bool producer_ordered) {
+    CallerDeviceGuard caller_device;
     // Accept either capsule flavor a producer might hand back: the classic
     // "dltensor" (still the default from NumPy/CuPy/PyTorch's own
     // __dlpack__() when the caller doesn't opt into a version) or the
@@ -556,12 +663,14 @@ VarHolder* from_dlpack_capsule(PyObject* capsule, PyObject* flat_len, int64 elem
             USER_ERROR << "dlpack: flat_len does not fit in int64";
         }
         USER_CHECK(flat_n >= 0) << "dlpack: flat_len must be non-negative, got" << flat_n;
-    } else if (!dl_tensor_is_contiguous(t)) {
-        LOGf << "dlpack: importing a non-contiguous (strided) tensor directly via "
-             << "from_dlpack_capsule() is not supported -- Jittor's Var has no stride "
-             << "concept, only row-major contiguous storage. Use jt.from_dlpack(), which "
-             << "detects this and materializes a contiguous copy honoring the strides.";
     }
+    // A strided layout is aliased as a storage view of the producer's bytes
+    // (zero-copy, as torch imports one). Only a stride Jittor cannot express
+    // -- a negative one -- is left to jt.from_dlpack(), which gathers a copy.
+    bool strided = !use_flat && span.numel > 0 && !dl_tensor_is_contiguous(t);
+    USER_CHECK(!strided || dl_tensor_strides_aliasable(t))
+        << "dlpack: this tensor has negative strides, which a Jittor Var cannot alias; "
+           "jt.from_dlpack() imports it as a copy";
     if (t.device.device_type != kDLCPU && t.device.device_type != kDLCUDA)
         LOGf << "dlpack: unsupported DLDevice.device_type=" << (int)t.device.device_type
              << " (only kDLCPU and kDLCUDA are supported)";
@@ -625,6 +734,14 @@ VarHolder* from_dlpack_capsule(PyObject* capsule, PyObject* flat_len, int64 elem
         VarPtr vp(shape, dtype);
         vp->finish_pending_liveness();
         void* data = (char*)t.data + offset_bytes;
+        // The bytes the view can reach: the logical size for row-major data,
+        // the stride span (validated above) for a strided one.
+        int64 alias_bytes = vp->size;
+        if (strided) {
+            vector<int64> strides(t.strides, t.strides + t.ndim);
+            vp->set_storage_strides(strides);
+            alias_bytes = (span.max_off + 1) * (int64)dtype.dsize();
+        }
 
         Allocation allocation;
         if (t.data == nullptr) {
@@ -647,17 +764,17 @@ VarHolder* from_dlpack_capsule(PyObject* capsule, PyObject* flat_len, int64 elem
             producer_owned = true;
             release_producer();
         } else if (target_device_id < 0) {
-            make_foreign_allocation(allocation, data, vp->size, std::move(fire_deleter));
+            make_foreign_allocation(allocation, data, alias_bytes, std::move(fire_deleter));
             producer_owned = true;
         } else {
-            make_foreign_allocation(allocation, data, vp->size, std::move(fire_deleter),
+            make_foreign_allocation(allocation, data, alias_bytes, std::move(fire_deleter),
                 &get_foreign_allocator(target_device_id));
             producer_owned = true;
-            // Consumer-side half of the simplified stream contract: make
-            // sure any work the producer queued on ITS device is visible
-            // before Jittor (which only ever reads/writes via the default
-            // stream) touches the memory.
-            backend_synchronize(Device{accelerator_backend_id(), target_device_id});
+            // Consumer-side half of the stream contract. A producer handed
+            // Jittor's compute stream (`dlpack_consumer_stream`) already made
+            // that stream wait for its work; otherwise wait for the device.
+            if (!producer_ordered)
+                backend_synchronize(Device{accelerator_backend_id(), target_device_id});
         }
         vp->mem_ptr = allocation.ptr;
         vp->allocator = allocation.allocator;

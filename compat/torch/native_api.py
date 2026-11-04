@@ -68,29 +68,34 @@ class NativeOperation:
         if self._operation_key in ("fft.fftfreq", "fft.rfftfreq"):
             kwargs = dict(kwargs)
             device = kwargs.pop("device", None)
-        with tensor_frontend(context.state["Var"], device=device):
+        unique_operation = self._operation_key in ("unique", "unique_consecutive")
+        source = (args[0] if args else kwargs.get("input")) if unique_operation else None
+        with tensor_frontend(context.state["Var"], device=device, like=source):
             if isinstance(implementation, type) and issubclass(implementation, context.native_backend.Function):
                 implementation = implementation()
-            if self._operation_key == "unique_consecutive" and args:
-                # The native implementation builds its run mask with
-                # ``jt.concat``, which allocates through the *ambient*
-                # placement. The Torch frontend keeps that on the host, so a
-                # CUDA input mixed placements inside concat/setitem and raised
-                # "Expected all tensor inputs on the same backend and device
-                # for setitem". The frontend scope already holds a placement,
-                # so switch it to the input's own device for this call and
-                # restore it afterwards; a host-placed input keeps behaving as
-                # before.
-                first = args[0]
-                if isinstance(first, context.state["Var"]):
-                    backend = int(first.placement_backend)
+            if unique_operation:
+                if self._operation_key == "unique_consecutive" and args:
+                    # The native implementation builds its run mask with
+                    # ``jt.concat``, which allocates through the *ambient*
+                    # placement. Switch the frontend scope to the input's own
+                    # device for this call and restore it afterwards.
+                    first = args[0]
+                    backend = int(first.placement_backend) if isinstance(first, context.state["Var"]) else -1
                     if backend >= 0:
                         token = jittor.core._set_tensor_placement(
                             backend, max(int(first.device_id), 0))
                         try:
-                            return implementation(*args, **kwargs)
+                            result = implementation(*args, **kwargs)
                         finally:
                             jittor.core._reset_tensor_placement(token)
+                    else:
+                        result = implementation(*args, **kwargs)
+                else:
+                    result = implementation(*args, **kwargs)
+                # Torch always represents inverse indices and counts as int64.
+                if isinstance(result, tuple):
+                    result = (result[0],) + tuple(value.int64() for value in result[1:])
+                return result
             return implementation(*args, **kwargs)
 
     def __reduce__(self):

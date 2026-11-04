@@ -17,6 +17,7 @@ from .method_api import (
     _api_clamp_max,
     _api_clamp,
     _api_clamp_alias,
+    _torch_eq,
     _api_ne,
     _api_ne_alias,
     _api_nonzero,
@@ -39,6 +40,7 @@ from .method_api import (
     _api_is_contiguous,
     _api_is_leaf,
     _api_is_sparse,
+    _api_is_quantized,
     _api_retains_grad,
     _api_is_cpu,
     _api_is_mps,
@@ -330,6 +332,8 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     Var.clip_ = Var.clamp_
 
 
+    g.eq = _torch_eq
+    Var.eq = _torch_eq
     g.ne = _torch_ne
     g.not_equal = _torch_ne
     Var.ne = _api_ne
@@ -401,8 +405,8 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
 
     # torch storage introspection: peft/safetensors call tensor.storage()
     # .data_ptr() / .untyped_storage().nbytes() to detect shared/tied weights.
-    # jittor has no exposed storage object; expose identity-based stand-ins so
-    # save_pretrained's tied-weight detection works (each Var is its own storage).
+    # Expose the native allocation address so detached aliases and offset
+    # views retain their shared storage identity.
     if not hasattr(Var, "storage"):
         Var.storage = _api_storage
     if not hasattr(Var, "untyped_storage"):
@@ -509,6 +513,9 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # of silently calling every intermediate a leaf.
     Var.is_leaf = property(_api_is_leaf)
     Var.is_sparse = property(_api_is_sparse)
+    Var.is_quantized = property(_api_is_quantized)
+    register_api_bindings(Var, 'torch.Tensor', ('is_quantized',), Fidelity.EXACT,
+                          'Native Var has no quantized tensor storage.')
     register_api_bindings(Var, 'torch.Tensor', ('is_sparse',), Fidelity.EXACT,
                           'Native Var has dense storage; sparse construction is unsupported.')
     # torch's nested-tensor flag; jittor has no nested tensors -> always False.
@@ -758,6 +765,16 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     for name, implementation in _BINARY_APIS.items():
         if _native_operators[name] is not None:
             setattr(Var, name, implementation)
+
+    # These native white-listed ops widen half results by design. Keep that
+    # native policy separate from Torch's public Tensor/function boundaries.
+    from ..numerical.elementwise import exp, pow
+    g.exp = Var.exp = exp
+    g.pow = Var.pow = pow
+    register_api_bindings(g, 'torch', ('exp', 'pow'), Fidelity.APPROXIMATE,
+        'Native math with Torch low-precision result dtypes outside explicit autocast; existing device and numerical limitations remain')
+    register_api_bindings(Var, 'torch.Tensor', ('exp', 'pow'), Fidelity.APPROXIMATE,
+        'Shares the public function implementation and preserves native explicit autocast policy')
 
     register_api_bindings(Var, 'torch.Tensor',
         ('T', '__iadd__', '__isub__', '__imul__', '__itruediv__', '__deepcopy__', '__getitem__', '__hash__', '__invert__', '__ne__', '__reduce__', '__reduce_ex__', '__setitem__', 'add_', 'addmm', 'argwhere', 'as_strided', 'backward', 'baddbmm', 'clamp', 'clamp_', 'clip', 'clip_', 'contiguous', 'copy_', 'cpu', 'cuda', 'cumprod', 'cumsum', 'data', 'data_ptr', 'detach', 'device', 'div_', 'dtype', 'element_size', 'exponential_', 'fill_', 'fill_diagonal_', 'get_device', 'grad', 'grad_fn', 'is_complex', 'is_contiguous', 'is_cpu', 'is_cuda', 'is_floating_point', 'is_leaf', 'is_meta', 'is_mps', 'is_nested', 'is_pinned', 'is_signed', 'is_xpu', 'mT', 'mul_', 'narrow', 'ne', 'nelement', 'new_empty', 'new_full', 'new_ones', 'new_tensor', 'new_zeros', 'nonzero', 'norm', 'normal_', 'numpy', 'pin_memory', 'random_', 'requires_grad', 'requires_grad_', 'retain_grad', 'retains_grad', 'set_', 'share_memory_', 'squeeze', 'storage', 'storage_offset', 'stride', 'sub_', 'tile', 'to', 'tolist', 'type', 'type_as', 'uniform_', 'untyped_storage', 'where', 'zero_') + tuple(_BINARY_APIS.keys() | _CAST_APIS.keys() | _UNARY_INPLACE_APIS.keys()),

@@ -58,6 +58,8 @@
 #include "aclnnop/aclnn_batch_matmul.h"
 #include "aclnnop/aclnn_convolution.h"
 #include "aclnnop/aclnn_convolution_backward.h"
+#include "aclnnop/aclnn_gather_v2.h"
+#include "aclnnop/aclnn_upsample_bilinear_2d.h"
 #include "aclnnop/aclnn_reduce_sum.h"
 #include "aclnnop/aclnn_all.h"
 #include "aclnnop/aclnn_any.h"

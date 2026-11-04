@@ -525,9 +525,38 @@ def _clamp(input, min=None, max=None, min_v=None, max_v=None):
                          max if max is not None else max_v)
 
 
+def _comparison_operand(other):
+    return isinstance(other, (_NativeVar, bool, int, float, complex,
+                              _owner.np.number, _owner.np.bool_))
+
+
+def _torch_eq(input, other):
+    if not _comparison_operand(other):
+        raise TypeError("eq(): other must be a Tensor or Number, not " + type(other).__name__)
+    return _binary_native('__eq__', input, other)
+
+
 def _torch_ne(input, other):
+    if not _comparison_operand(other):
+        raise TypeError("ne(): other must be a Tensor or Number, not " + type(other).__name__)
+    if (input is other and isinstance(input, _NativeVar)
+            and (input.dtype.is_float() or input.dtype.is_int() or input.dtype.is_bool())):
+        # ne(x, x) is exactly isnan(x) for a real tensor, including infinities
+        # and signed zeros. Reuse the canonical device predicate instead of
+        # building subtraction and duplicate NaN-classification graphs.
+        # Storage aliases with different Python holders keep the path below.
+        with _new_scope(input, None):
+            return _owner.jt.isnan(input)
     a = input if isinstance(input, _NativeVar) else _owner.jt.array(input)
-    b = other if isinstance(other, _NativeVar) else _owner.jt.array(other)
+    if isinstance(other, _NativeVar):
+        b = other
+    elif isinstance(input, _NativeVar):
+        # A scalar belongs to this operand, even inside a model running under
+        # another construction device. Keep array's existing dtype inference.
+        with _new_scope(input, None):
+            b = _owner.jt.array(other)
+    else:
+        b = _owner.jt.array(other)
     if _jittor_dtype_name(a.dtype) == "bool":
         a = a.int32()
     if isinstance(b, _NativeVar) and _jittor_dtype_name(b.dtype) == "bool":
@@ -606,8 +635,8 @@ class _Storage:
         """
         _owner.jt.graph_replay_barrier(
             "Tensor.storage().data_ptr exposes storage to an external consumer")
-        return (int(self._var._storage_address)
-                - int(self._var._storage_offset()) * _storage_dsize(self._var))
+        pointer = _api_data_ptr(self._var)
+        return pointer - int(self._var._storage_offset()) * _storage_dsize(self._var)
     def size(self):
         return int(self._var.numel())
     def nbytes(self):
@@ -1557,7 +1586,16 @@ def _promoting_binary(self, other, opname, reflected):
                 other = other.cuda() if self_cuda else other.cpu()
         da, db = _own_dtype_name(self, native_api), _own_dtype_name(other, native_api)
         if da == db and not da.startswith("uint"):
-            return _binary_native(opname, self, other, native_api)
+            out = _binary_native(opname, self, other, native_api)
+            if opname in ('__pow__', '__rpow__') and da in ('float16', 'bfloat16'):
+                # Native pow intentionally widens white-listed math. Torch's
+                # public same-dtype power keeps its inputs' dtype; the scalar
+                # base branch below reaches this path too. Repair only the
+                # frontend result, retaining native math and explicit AMP.
+                from ...amp import autocast_dtype
+                if autocast_dtype() is None and _own_dtype_name(out, native_api) != da:
+                    out = out.cast(da)
+            return out
         # `result_type`, not `_promote_pair`: a 0-dim operand promotes only
         # from a higher category, so half_tensor * tensor(2.0) stays half.
         res = _owner._dtype_to_str(g.result_type(self, other))
@@ -1649,6 +1687,17 @@ def _true_division(self, other, opname):
             get_install_context(_owner.jt).target_namespace.result_type(self, other))
         tgt = _truediv_target(rt, rt)
         src_dt = _jittor_dtype_name(self.dtype)
+        acl_active = bool(getattr(_owner.jt.compiler, "has_acl", 0)) and (
+            bool(getattr(_owner.jt.flags, "use_acl", 0)) and bool(_owner.jt.flags.use_cuda))
+        if (acl_active and opname == '__truediv__' and type(other) is float
+                and other == 1.0 and src_dt in ("float16", "float32")
+                and self.is_contiguous()
+                and _owner.jt.core.dispatch_context([self])[0] in ("acl", "acl_legacy")):
+            # A unit quotient is exact, including NaN/Inf and signed zero.
+            # Copy storage as Torch does; native Var.clone would alias it.
+            # Limit layout to the contiguous case verified on real ACL.
+            from ...frontend import clone
+            return clone(self)
         # CPU/CUDA used to widen a float32 operand to float64 here "for PyTorch
         # 1-ulp parity"; measured against torch 2.11 that is the wrong way
         # round. `x / 0.28209479177387814` for 20000 float32 `x` matches
@@ -1789,7 +1838,17 @@ def _tensor_rtruediv(self, other):
     return _true_division(self, other, '__rtruediv__')
 
 
+def _tensor_eq(self, other):
+    # Python comparisons must allow the reflected operand's implementation,
+    # including sentinel objects used in ordinary cache/control-flow checks.
+    # The explicit Tensor.eq / torch.eq APIs retain their argument errors.
+    if not _comparison_operand(other):
+        return NotImplemented
+    return _binary_native('__eq__', self, other)
+
+
 _BINARY_APIS = {
+    '__eq__': _tensor_eq,
     '__add__': _tensor_add,
     '__radd__': _tensor_radd,
     '__sub__': _tensor_sub,
@@ -1951,6 +2010,8 @@ def _api_ne(self, other):
 
 
 def _api_ne_alias(self, other):
+    if not _comparison_operand(other):
+        return NotImplemented
     return _torch_ne(self, other)
 
 
@@ -2097,6 +2158,11 @@ def _api_is_leaf(self):
     if state is not None and state.get("_torch_synthetic_grad_fn") is not None:
         return False
     return bool(self.is_backward_leaf)
+
+
+def _api_is_quantized(self):
+    # Native Var does not represent quantized tensor storage.
+    return False
 
 
 def _api_is_sparse(self):

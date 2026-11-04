@@ -44,6 +44,9 @@ struct HostExecutionScope {
 struct Op : Node {
     Float32PrecisionPolicy float32_precision;
     uint64 launch_origin = 0;
+    // The Python stack that built this op, while the memory history records
+    // stacks (runtime/profiler/memory_history.h); 0 otherwise.
+    uint32 memory_stack = 0;
     // Functional construction provenance; temporary fused wrappers never
     // replace the ownership of their original member producers.
     uint64 rematerialization_owner = 0;

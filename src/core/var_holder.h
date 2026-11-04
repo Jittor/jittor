@@ -812,6 +812,14 @@ struct VarHolder {
     // @pyjt(__get__grad)
     int grad();
 
+    // A second holder of this same Var. `jt.Function` rebinds an input it
+    // saved onto the caller's Var with it once the tape in between has run,
+    // when `_input` can no longer reach across.
+    // @pyjt(_alias)
+    inline VarHolder* _alias() {
+        return new VarHolder(var);
+    }
+
     // @pyjt(_input)
     inline VarHolder* _input(int i) {
         USER_CHECK(!var->is_finished()) << "_input requires an unexecuted tensor";

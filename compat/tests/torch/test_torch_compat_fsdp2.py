@@ -25,7 +25,7 @@ from jittor.compat.torch.tensor_state import get_tensor_state
 #:
 #: These cases patch and read module-scope FSDP2 state and depend on running in
 #: file order, which is the property ``--dist loadfile`` was chosen to preserve
-#: (see agent/skills/gate-tier-budget §4). The smoke tier runs ``loadgroup``
+#: (see https://github.com/JittorEcosystem/jittor-dev-skills/blob/main/skills/gate-tier-budget/SKILL.md §4). The smoke tier runs ``loadgroup``
 #: instead, to stop one long file pinning a worker, and loadgroup distributes
 #: *ungrouped* tests one by one -- so this class was being split across four
 #: workers, each seeing a different subset in a different order.

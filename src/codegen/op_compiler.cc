@@ -22,6 +22,7 @@
 #include "runtime/device_state.h"
 #include "codegen/opt/expr.h"
 #include "bindings/pyjt/py_caller.h"
+#include "runtime/profiler/step_trace.h"
 
 namespace jittor {
 
@@ -1424,6 +1425,8 @@ jit_op_entry_t do_compile_inner(Op* op) {
 jit_op_entry_t compile_registered_source(Op* op) { return do_compile_inner(op); }
 
 jit_op_entry_t OpCompiler::do_compile(Op* op) {
+    // Code generation and compilation (or loading the cached kernel).
+    StepTraceCompileScope trace_compile;
     auto compile = op->implementation().kernel.compile;
     // The build lock used to be taken here, around everything, so a cache hit
     // waited for it exactly as long as a compile would have. Code generation

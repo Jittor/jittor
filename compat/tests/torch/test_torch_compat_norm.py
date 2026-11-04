@@ -166,6 +166,54 @@ class TestBatchNorm(Base):
 # --------------------------------------------------------------------------- LayerNorm
 
 class TestLayerNorm(Base):
+    def test_optional_parameters_fp32_subclass_forward_and_input_gradient(self):
+        """Subclasses may inspect optional parameters before calling F.layer_norm."""
+        class FP32LayerNorm(nn.LayerNorm):
+            def forward(self, inputs):
+                return F.layer_norm(
+                    inputs.float(), self.normalized_shape,
+                    self.weight.float() if self.weight is not None else None,
+                    self.bias.float() if self.bias is not None else None,
+                    self.eps,
+                ).to(inputs.dtype)
+
+        rng = np.random.RandomState(20261020)
+        source = rng.randn(2, 3, 4).astype("float32")
+        seed = rng.randn(2, 3, 4).astype("float32")
+        scale = rng.randn(3, 4).astype("float32")
+        centered = source.astype(np.float64) - source.mean((1, 2), keepdims=True)
+        inv_std = 1 / np.sqrt((centered ** 2).mean((1, 2), keepdims=True) + 1e-5)
+        normalized = centered * inv_std
+
+        def body(dev):
+            for affine in (False, True):
+                with self.subTest(device=dev, elementwise_affine=affine):
+                    layer = FP32LayerNorm((3, 4), elementwise_affine=affine, bias=False)
+                    self.assertIsNone(layer.bias)
+                    if affine:
+                        self.assertEqual(set(layer.state_dict()), {"weight"})
+                        layer.weight.update(t(scale))
+                    else:
+                        self.assertIsNone(layer.weight)
+                        self.assertEqual(list(layer.parameters()), [])
+                        self.assertEqual(dict(layer.state_dict()), {})
+                    layer.reset_parameters()
+                    if affine:
+                        layer.weight.update(t(scale))
+                    x = t(source).requires_grad_(True)
+                    result = layer(x)
+                    grad, = torch.autograd.grad((result * t(seed)).sum(), (x,))
+                    effective_scale = scale if affine else 1.0
+                    incoming = seed * effective_scale
+                    expected_grad = inv_std * (
+                        incoming - incoming.mean((1, 2), keepdims=True)
+                        - normalized * (incoming * normalized).mean((1, 2), keepdims=True)
+                    )
+                    self.ac(result.numpy(), normalized * effective_scale, msg=f"optional LN output {dev}")
+                    self.ac(grad.numpy(), expected_grad, msg=f"optional LN gradient {dev}")
+
+        both_devices(body)
+
     def test_ln_basic(self):
         rng = np.random.RandomState(210)
         x = rng.randn(4, 5).astype("float32")

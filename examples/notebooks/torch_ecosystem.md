@@ -247,7 +247,70 @@ LoRA 这两个都在门禁里有对拍用例（llama 上的 LoRA）。ms-swift �
 `mmcv.cnn.ConvModule` 和 `mmengine.model.BaseModule` 在 CPU / CUDA / NPU 上都对拍过。
 但**只有纯 Python 层可以**，原因见下一节。
 
-## 6. 两条走不通的路
+## 6. 生态库是并列的：一个库一个仓库
+
+前面几节讲的是「怎么把别人的库带起来」。这一节讲**这些库现在放在哪**——因为从
+2026 年 10 月起，主仓库不再携带任何 adapter：`adapters/` 目录已经整体迁出，主仓库里只留
+`jittor` 本体与 `jittor.compat.torch` 这一层共享前端。
+
+每个下游库因此有自己的仓库（都在 [JittorEcosystem](https://github.com/JittorEcosystem) 组织下），
+负责三件主仓库不该承担的事：
+
+1. **pin**：接受哪些上游版本（`compatibility.json`），以及对应的 `jittor-compat` 版本；
+2. **adapter**：需要补的补丁（入口点 `jittor.module_patches`），不需要补的就不带；
+3. **验证记录**：官方测试的子集、示例，以及「哪些在什么设备上真的跑过」。
+
+它们**布局是同一套**：`README.md` + `README.en.md`、`AGENTS.md`、`compatibility.json`、
+`docs/`、`examples/`、`tests/`、`support/`。所以读一个仓库的经验可以平移到下一个——
+**flash-attention 和 MiniMax-H3 不是特例，它们和 transformers、vllm 是并列的**。
+
+| 库 | 仓库 | 钉住的上游 | 备注 |
+| --- | --- | --- | --- |
+| transformers | [jittor-transformers](https://github.com/JittorEcosystem/jittor-transformers) | 5.9.0（准入 4.56.2 / 5.5.3 / 5.9.0 / 5.13.0） | `AutoModel` / `AutoTokenizer`；官方测试子集 |
+| vllm | [jittor-vllm](https://github.com/JittorEcosystem/jittor-vllm) | 2.0.0.dev6 | 推理服务适配；含部署与批处理流程 |
+| torchmetrics | [jittor-torchmetrics](https://github.com/JittorEcosystem/jittor-torchmetrics) | 1.7.4 | 指标库；bounded helper 的补丁 |
+| deepspeed | [jittor-deepspeed](https://github.com/JittorEcosystem/jittor-deepspeed) | 0.19.7 | `deepspeed.initialize` 与 Engine |
+| ms-swift | [jittor-ms-swift](https://github.com/JittorEcosystem/jittor-ms-swift) | 4.5.2 | `swift sft` / `swift rlhf` |
+| verl | [jittor-verl](https://github.com/JittorEcosystem/jittor-verl) | 0.9.1 | RL 训练栈 |
+| trl | [jittor-trl](https://github.com/JittorEcosystem/jittor-trl) | 0.29.1 | 官方 trainer API |
+| tensordict | [jittor-tensordict](https://github.com/JittorEcosystem/jittor-tensordict) | 0.10.0 | `TensorDict` / `tensorclass` |
+| datasets | [jittor-datasets](https://github.com/JittorEcosystem/jittor-datasets) | 5.0.1 | 数据加载 |
+| tokenizers | [jittor-tokenizers](https://github.com/JittorEcosystem/jittor-tokenizers) | 0.22.2 | 分词器 |
+| safetensors | [jittor-safetensors](https://github.com/JittorEcosystem/jittor-safetensors) | 0.8.0 | 序列化格式 |
+| accelerate | [jittor-accelerate](https://github.com/JittorEcosystem/jittor-accelerate) | 1.10.1 | 无需 adapter：官方测试与示例验收 |
+| ray | [jittor-ray](https://github.com/JittorEcosystem/jittor-ray) | 2.48.0 | 无需 adapter：同上 |
+| flash-attention | [jittor-flash-attn](https://github.com/JittorEcosystem/jittor-flash-attn) | 2.7.4.post1（commit `5231d95fe1`） | 官方 CUDA kernel 的桥；**首次使用要编译**，部署时预热 |
+| MiniMax-H3 | [jittor-minimax-h3](https://github.com/JittorEcosystem/jittor-minimax-h3) | vLLM-Omni `v0.29.0rc1-58-g446c2b54` / vLLM 0.29.0 | 服务启动参数与客户端协议；需要 8×H100 级显存 |
+
+不在这个清单里的库（diffusers、PEFT、mmcv/mmengine 等）按前面几节的通用路径走：
+它们的接口落在 `jittor.compat.torch` 的公开 API 上，不需要额外的补丁仓库；这也意味着
+**没有版本 pin 的保证**——跟着 `jittor-compat` 的版本走。
+
+### 装一个生态库
+
+```{code-block} bash
+# 适配类：装的是它自己的包，入口点会自动注册到 jittor
+python -m pip install "jittor-transformers @ git+https://github.com/JittorEcosystem/jittor-transformers"
+
+# 验证类（accelerate / ray）：装的是官方库本身，仓库提供的是测试与示例
+python -m pip install accelerate==1.10.1
+```
+
+装完先看它声明的 pin 与你的环境是否对得上——每个仓库的 `compatibility.json` 都写了
+上游版本、`jittor-compat` 版本，以及哪些结论来自真实设备执行、哪些还没有。
+
+### 出问题该改哪一层
+
+这是接入生态库时最容易走错的一步。判断只有三行：
+
+1. 换个库也错的语义问题（张量、求导、设备、精度）→ `jittor` 本体或 `jittor.compat.torch`；
+2. 只有这个库错、且错在它**依赖的私有 helper** 上 → 该库自己的生态仓库；
+3. 只有在这个库的某个模型上错、换个模型就好 → 先缩成最小复现，再按 1 还是 2 分。
+
+不要为了绕过某个库的问题去改它的源码：那是它下一次升级就会丢掉的补丁，而且会把
+「兼容层没做到」伪装成「已经支持」。
+
+## 7. 两条走不通的路
 
 这两条属于**架构性的**，不是「还没做」。分清楚这一点能省很多时间。
 
@@ -281,7 +344,7 @@ vLLM 内嵌自定义 CUDA kernel，还有自己的显存管理和调度层，**�
 | 带编译好的 torch 扩展 | 不能，需要 Jittor 侧实现 |
 | 自带 kernel + 设备管理 | 不能，需要外部适配器 |
 
-## 7. 怎么知道它算得对
+## 8. 怎么知道它算得对
 
 「跑起来了」和「算对了」是两件事。生态库的正确性验证用的是一个**双跑对拍**的方法：
 同一个用例跑两遍——一次在 `torch` 是真 PyTorch 的解释器里，一次在 shim 解释器里——
@@ -304,7 +367,7 @@ vLLM 内嵌自定义 CUDA kernel，还有自己的显存管理和调度层，**�
 | 速度 | 慢多少 | 交错多次取最小值，别信单次采样 |
 | 模型表 | 覆盖够吗 | 逐架构跑一遍，记录哪些通过 |
 
-## 8. 检查清单
+## 9. 检查清单
 
 ```{code-block} text
 1. 激活要最早           —— 在库 import torch 之前；或直接用 JITTOR_TORCH_SHIM=1

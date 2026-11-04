@@ -95,12 +95,13 @@ class _ManagedProducer:
     """
 
     def __init__(self, versioned, major=1, null_deleter=False, poison_major=False,
-                 shape=(4,), null_data=False):
+                 shape=(4,), null_data=False, strides=None, byte_offset=0):
         self.versioned = versioned
         self.name = b"dltensor_versioned" if versioned else b"dltensor"
         self.used_name = b"used_dltensor_versioned" if versioned else b"used_dltensor"
         self.buffer = (ctypes.c_float * 4)(1.0, 2.0, 3.0, 4.0)
         self.shape = (ctypes.c_int64 * len(shape))(*shape)
+        self.strides = None if strides is None else (ctypes.c_int64 * len(strides))(*strides)
         self.deleter_calls = 0
         self.callback_errors = []
         managed_type = _DLManagedTensorVersioned if versioned else _DLManagedTensor
@@ -114,8 +115,8 @@ class _ManagedProducer:
             len(shape),
             _DLDataType(2, 32, 1),
             self.shape,
-            None,
-            0,
+            self.strides,
+            byte_offset,
         )
 
         def release(pointer):
@@ -213,9 +214,10 @@ def test_version_mismatch_direct_import_caches_major_and_releases_once():
 def test_valid_peek_preserves_unconsumed_capsule_cleanup(versioned):
     producer = _ManagedProducer(versioned)
     capsule = producer.capsule()
-    shape, strides = jt.core.dlpack_peek(capsule)
+    shape, strides, aliasable = jt.core.dlpack_peek(capsule)
     assert tuple(shape) == (4,)
     assert strides is None
+    assert aliasable
     assert producer.is_live(capsule)
     assert producer.deleter_calls == 0
     del capsule
@@ -432,3 +434,87 @@ def test_null_deleter_import_and_release_in_child(versioned):
     )
     assert child.returncode == 0, child.stdout
     assert "DLPACK-NULL-DELETER-OK" in child.stdout
+
+
+# Producer metadata that would overflow Jittor's index arithmetic, or that
+# Jittor cannot alias, is rejected before the capsule is consumed; it stays
+# owned by the producer, and a corrected capsule then imports normally.
+@pytest.mark.parametrize(
+    "kwargs, match",
+    [
+        ({"shape": (2**40, 2**40)}, "element count overflows int64"),
+        ({"shape": (2**61,), "strides": (1,)}, "byte size overflows int64"),
+        ({"strides": (2**62,)}, "stride span overflows int64"),
+        ({"byte_offset": 2**63 + 8}, "byte_offset overflows int64"),
+        ({"shape": (2, 2), "strides": (-2, 1)}, "negative strides"),
+    ],
+    ids=["count", "bytes", "stride-span", "byte-offset", "negative-stride"],
+)
+@pytest.mark.parametrize("versioned", [False, True], ids=["classic", "versioned"])
+def test_overflowing_or_unaliasable_metadata_is_rejected_before_consumption(
+        versioned, kwargs, match):
+    producer = _ManagedProducer(versioned, **kwargs)
+    capsule = producer.capsule()
+    with pytest.raises(RuntimeError, match=match):
+        jt.core.from_dlpack_capsule(capsule)
+    assert producer.is_live(capsule)
+    assert producer.deleter_calls == 0
+    del capsule
+    _collect()
+    # Never consumed: the capsule's own destructor released the producer.
+    assert producer.deleter_calls == 1
+    assert not producer.callback_errors
+
+
+@pytest.mark.parametrize("versioned", [False, True], ids=["classic", "versioned"])
+def test_peek_rejects_an_unbounded_rank(versioned):
+    producer = _ManagedProducer(versioned)
+    producer.managed.dl_tensor.ndim = 2**30
+    capsule = producer.capsule()
+    with pytest.raises(RuntimeError, match="malformed DLTensor"):
+        jt.core.dlpack_peek(capsule)
+    assert producer.is_live(capsule)
+    producer.managed.dl_tensor.ndim = 1
+    del capsule
+    _collect()
+    assert producer.deleter_calls == 1
+
+
+@pytest.mark.parametrize("entrypoint", ["direct", "public"])
+@pytest.mark.parametrize("versioned", [False, True], ids=["classic", "versioned"])
+def test_strided_capsule_is_aliased_and_released_once(versioned, entrypoint):
+    # A (2, 2) column-major view of the four floats: aliased as a storage
+    # view of the producer's own bytes, released once with the last alias.
+    producer = _ManagedProducer(versioned, shape=(2, 2), strides=(1, 2))
+    capsule = producer.capsule()
+    assert jt.core.dlpack_peek(capsule)[2]
+    imported = (jt.core.from_dlpack_capsule(capsule) if entrypoint == "direct"
+                else jt.from_dlpack(capsule))
+    assert producer.is_used(capsule)
+    assert tuple(imported._storage_strides()) == (1, 2)
+    assert imported._storage_address == ctypes.addressof(producer.buffer)
+    np.testing.assert_array_equal(imported.numpy(), [[1.0, 3.0], [2.0, 4.0]])
+    doubled = (imported * 2).numpy()
+    np.testing.assert_array_equal(doubled, [[2.0, 6.0], [4.0, 8.0]])
+    del imported, capsule
+    _collect()
+    assert producer.deleter_calls == 1
+    assert not producer.callback_errors
+
+
+@pytest.mark.parametrize("versioned", [False, True], ids=["classic", "versioned"])
+def test_from_dlpack_copy_flag(versioned):
+    producer = _ManagedProducer(versioned)
+    copied = jt.from_dlpack(producer.capsule(), copy=True)
+    assert copied._storage_address != ctypes.addressof(producer.buffer)
+    _collect()
+    # The copy owns its storage: the producer is already released.
+    assert producer.deleter_calls == 1
+    np.testing.assert_array_equal(copied.numpy(), [1.0, 2.0, 3.0, 4.0])
+    reversed_producer = _ManagedProducer(versioned, strides=(-1,), byte_offset=12)
+    capsule = reversed_producer.capsule()
+    with pytest.raises(BufferError, match="negative strides"):
+        jt.from_dlpack(capsule, copy=False)
+    np.testing.assert_array_equal(jt.from_dlpack(capsule).numpy(), [4.0, 3.0, 2.0, 1.0])
+    with pytest.raises(TypeError, match="copy must be"):
+        jt.from_dlpack(producer.capsule(), copy="yes")

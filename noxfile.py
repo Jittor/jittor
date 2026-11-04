@@ -625,6 +625,7 @@ def _by_process_mode(targets):
 #: fast tier and fails in the full one because a dependency was only in the
 #: latter is a difference nobody can read off the failure.
 CPU_GATE_REQUIREMENTS = (
+    ASV,
     "astunparse==1.6.3",
     IPYKERNEL,
     JUPYTEXT,
@@ -3196,7 +3197,7 @@ def native_multinode(session):
         session.error("native_multinode requires explicit runner arguments; use -- --help")
     session.run(
         _hardware_python(),
-        str(REPO_ROOT / "agent/skills/jittor-distributed-verification/scripts/run_native_multinode.py"),
+        str(REPO_ROOT / "tools/distributed/native_fsdp/run_native_multinode.py"),
         *session.posargs,
         external=True,
     )

@@ -37,6 +37,8 @@ class MemoryReport:
         self.pool_peak_allocated, self.pool_peak_reserved = pool_peaks
         self.nvml = nvml
         self._strings = strings
+        # Every device's raw events, for per-operator accounting elsewhere.
+        self.events = events
         self._analyse(events)
 
     # -- analysis ---------------------------------------------------------

@@ -38,6 +38,10 @@ struct ArrayOp : Op {
     // instead of from the 24-bit narrowing.
     double python_float = 0;
     bool has_python_float = false;
+    // The same for a Python complex, staged as complex64: its exact real part
+    // is `python_float`, its imaginary part this.
+    double python_imag = 0;
+    bool has_python_complex = false;
     // @pybind(None)
     ArrayOp(const void* ptr, NanoVector shape, NanoString dtype=ns_float32);
 

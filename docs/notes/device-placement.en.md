@@ -224,7 +224,11 @@ there is no separate Torch executor.
   frontend inputs takes precedence over the Runtime default.
 - **Propagation and conflicts.** `Op::propagate_device` makes outputs adopt the
   inputs' explicit placement; an explicit backend or device conflict requires an
-  explicit copy. The Python surface marks native Vars with
+  explicit copy. An input of the same op placed only through its `device_id` (a
+  Python number in native mode) on another card follows the explicit placement
+  when it is a pending scalar and is refused as a different CUDA device
+  otherwise; it used to stay on the current card, and the kernel on the target
+  card read the other card's pointer and faulted with an illegal address. The Python surface marks native Vars with
   `_placement_published`, and a published tensor's placement cannot be changed by
   scalar redirection. Binary/ternary construction allows a 0-D tensor on CPU to
   be used with an accelerator operand: the generated construction adapter inserts

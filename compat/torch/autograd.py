@@ -489,7 +489,8 @@ class profile(_profiler.profile):
         if use_cuda or use_device == "cuda":
             activities.add(_profiler.ProfilerActivity.CUDA)
         super().__init__(activities=activities, record_shapes=record_shapes,
-                         profile_memory=profile_memory, enabled=enabled)
+                         profile_memory=profile_memory, with_stack=with_stack,
+                         with_flops=with_flops, enabled=enabled)
 
     @property
     def function_events(self):

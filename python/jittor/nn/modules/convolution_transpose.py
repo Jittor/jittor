@@ -3,6 +3,7 @@
 import math
 
 import jittor as jt
+from jittor._runtime.dispatch import select_kernel
 
 from ..functional._amp import bias_for_compute_dtype
 
@@ -46,6 +47,12 @@ class ConvTranspose(jt.Module):
     def execute(self, x):
         if x.dim() != 4:
             raise jt.JittorShapeError(f'Expected 4D (batched) input to conv_transpose2d, but got input of size: {list(x.shape)}')
+        kernel = select_kernel("conv_transpose2d", x, self.weight, self.bias,
+                               self.stride, self.padding, self.output_padding,
+                               self.dilation, self.groups)
+        if kernel is not None:
+            return kernel(x, self.weight, self.bias, self.stride, self.padding,
+                          self.output_padding, self.dilation, self.groups)
         if self.groups == 1:
             N,C,H,W = x.shape
             i,o,h,w = self.weight.shape

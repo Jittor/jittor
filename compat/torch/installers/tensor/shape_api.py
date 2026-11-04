@@ -289,30 +289,14 @@ def _plain_reduce(name, self, *a, **k):
     return orig(self, *a, **k)
 
 
-def _anyall_reduce(name, self, *a, **k):
+def _anyall_reduce(name, self, dim=None, keepdim=False, *, axis=None,
+                   dims=None, keepdims=None):
+    from ..numerical.reductions import _reduce_alias
+
     orig = get_install_context(jt).state["tensor_shape_api"]["reductions"][name]
-    d = None
-    if "axis" in k:
-        d = k.pop("axis")
-    if "dim" in k:
-        d = k.pop("dim")
-    if "dims" in k:
-        d = k.pop("dims")
-    if d is None and len(a) >= 1 and isinstance(a[0], (tuple, list)):
-        d = a[0]
-        a = a[1:]
-    keep = k.pop("keepdim", k.pop("keepdims", None))
-    if d is None:
-        return orig(self, *a, **k)
-    dims = [int(x) for x in d] if isinstance(d, (tuple, list)) else [int(d)]
-    ndim = self.ndim
-    dims = sorted((x % ndim for x in dims), reverse=True)
-    out = self
-    for ax in dims:
-        out = orig(out, dim=ax)
-        if keep:
-            out = out.unsqueeze(ax)
-    return out
+    if dims is not None:
+        dim = dims
+    return _reduce_alias(orig, self, dim, keepdim, axis=axis, keepdims=keepdims)
 
 
 def _axis_reduce(name, self, *a, **k):

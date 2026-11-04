@@ -3,7 +3,7 @@
 import jittor as jt
 
 from ..base import (
-    Optimizer, _grad_matches_param, _param_requires_grad,
+    Optimizer, _grad_matches_param, _normalize_param_group, _param_requires_grad,
     _state_buffer, _update_preserve_dtype,
 )
 
@@ -35,6 +35,7 @@ class RMSprop(Optimizer):
                 values.append(_state_buffer(p))
 
     def add_param_group(self, group):
+        _normalize_param_group(group)
         values = group["values"] = []
         for p in group["params"]:
             values.append(_state_buffer(p))

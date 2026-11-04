@@ -98,12 +98,40 @@ ACL、无梯度推理，训练调用会报错；普通 Linear 子类保持原样
 再次转换。权重转换耗时应独立记录，不计入稳态 token 吞吐。
 原本与 Embedding 共享的 Linear 权重会保存独立快照，因此转换可能增加设备内存占用。
 
+## 公共推理分派与重放
+
+生成与视觉模型通过公共算子和运行时选择推理路径，不需要按模型修改 `forward`。
+Torch 程序需激活独立兼容命名空间。分派按 SoC、dtype、轴、布局与梯度条件准入，
+不满足条件时保留原路径或明确拒绝，不通过修改 checkpoint 或重排预测结果取得通过。
+
+- 310P 无梯度路径包括近似 GELU、注意力、转置卷积、双线性 resize、限定模式的
+  GridSampler2D、单轴整数 GatherV2 与最后轴 TopK。FP32 cube 运算仍需上述显式
+  降精度 opt-in；算子准入不等于整套模型或训练已经验收。
+- 最后一轴的单轴 L2 norm 可复用标准 SDK，修正 FP16 中间平方的溢出和下溢；
+  strided 输入的连续复制也计入成本。多轴 GRN 保持原路径。FP16 max/min 通过
+  FP32 比较求索引，再从原始半精度输入 Gather 值；这不改变既有 NaN / 正负零
+  并列索引规则，也不修复整数边界的 selected-value 限制。
+- 同一实数 Tensor 对象的 `x != x` 方法 / 运算符可复用 canonical `isnan`，保持
+  frontend 类型和设备。标量在输入 Tensor 的设备作用域构造；不同 holder 的别名、
+  独立函数入口和一般标量精度契约不能由该自比较捷径推断。
+- 已准入的自动重放可每次重新计算封闭的显式 CPU 前缀并执行 H2D，再启动设备
+  后缀的录图。CPU 工作、等待与传输不会被省略。随机、opaque 和待执行 D2H
+  依赖仍拒绝录图；前缀预算和地址有效性检查也必须通过。
+
+当前验证与未完成项在 [PR #18043](https://github.com/Jittor/jittor/pull/18043) 中维护。
+[历史问题总账](https://github.com/Jittor/jittor/blob/3cf654e15aea6de02e5c9b0b4064e286ea19b24c/agent/manuals/known-issues.md)和
+[历史硬件验收清单](https://github.com/Jittor/jittor/blob/3cf654e15aea6de02e5c9b0b4064e286ea19b24c/agent/manuals/deferred-hardware.md)保留此前边界，
+不因文档清理关闭这些条目。
+性能与完整输出对拍方法见[性能 skill](https://github.com/JittorEcosystem/jittor-dev-skills/blob/main/skills/jittor-performance-profiling/SKILL.md)。
+此前的[完整模型与效果记录](https://github.com/Jittor/jittor/blob/eecff5ce5aa0d02aba3a246fcfb5632596732b44/docs/results/2026-11-02-vision-ascend310p-replay.md)
+固定在旧实现提交，不代表后续整合的速度、支持范围或所有设备已经验证。
+
 ## 已知限制
 
 - `x[i]`（纯整数索引）的反向在 310P 上可能读到未初始化字节：这是
   `setitem_inplace` 图优化把梯度打包进零基座后的调度层缺陷，与 ACL 核
   无关。公开路径（`GetItemACL`）已绕行；原生 op 路径在测试中声明为
-  预期失败，详见 [历史记录](https://github.com/Jittor/jittor/blob/3679de22c02c83b982432a0e1bdb3da148411c50/agent/manuals/known-issues.md) KI-BACKEND-022。
+  预期失败，详见 [历史记录](https://github.com/Jittor/jittor/blob/3cf654e15aea6de02e5c9b0b4064e286ea19b24c/agent/manuals/known-issues.md) KI-BACKEND-022。
 - bool mask 的 `where`/`masked_fill` 在 310P 上静默无效；涉及非有限值
   的路径已改用 `nonzero`+`IndexPutImpl`。
 - 310P 不声明训练能力：缺少的反向算子由组合实现补齐并逐一对拍，

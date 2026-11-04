@@ -1,4 +1,4 @@
-"""310P FP16 causal prefill through public SDPA and CANN PFA V3."""
+"""310P FP16 causal and noncausal self-attention through public SDPA/PFA V3."""
 
 import math
 
@@ -24,14 +24,15 @@ def acl_310p_inference():
     assert jt.core.backend_fallback_count() == before
 
 
-def _reference(query, key, value, scale):
+def _reference(query, key, value, scale, is_causal=True):
     group = query.shape[1] // key.shape[1]
     query = query.astype(np.float64)
     key = np.repeat(key.astype(np.float64), group, axis=1)
     value = np.repeat(value.astype(np.float64), group, axis=1)
     scores = query @ key.swapaxes(-1, -2) * scale
-    blocked = np.triu(np.ones(scores.shape[-2:], dtype=bool), 1)
-    scores = np.where(blocked, -np.inf, scores)
+    if is_causal:
+        blocked = np.triu(np.ones(scores.shape[-2:], dtype=bool), 1)
+        scores = np.where(blocked, -np.inf, scores)
     probabilities = np.exp(scores - scores.max(axis=-1, keepdims=True))
     probabilities /= probabilities.sum(axis=-1, keepdims=True)
     return probabilities @ value
@@ -67,7 +68,7 @@ def test_public_sdpa_causal_prefill_matches_independent_reference(
     calls = []
     original_call = attention.PromptFlashAttentionACL.__call__
 
-    def record(self, query, key, value, mask):
+    def record(self, query, key, value, mask=None):
         calls.append((tuple(query.shape), tuple(key.shape), tuple(mask.shape)))
         return original_call(self, query, key, value, mask)
 
@@ -123,3 +124,76 @@ def test_prompt_mask_cache_restores_device_residency_after_host_read():
     assert restored.device_id == device
     np.testing.assert_allclose(
         second.numpy(), _reference(*second_host, 1.0 / math.sqrt(width)), rtol=3e-3, atol=4e-4)
+
+
+@pytest.mark.parametrize("batch,heads,length,width,strided", [
+    (1, 12, 196, 64, False),
+    (1, 12, 1370, 64, True),
+    (1, 10, 4096, 64, False),
+    (1, 24, 800, 128, True),
+    (2, 10, 256, 64, False),
+])
+def test_public_noncausal_self_attention_matches_independent_reference(
+    batch, heads, length, width, strided, monkeypatch,
+):
+    host, tensors = _inputs(batch, heads, heads, length, width, strided)
+    expected = _reference(*host, 1.0 / math.sqrt(width), is_causal=False)
+    calls = []
+    original_call = attention.PromptFlashAttentionACL.__call__
+
+    def record(self, query, key, value, mask=None):
+        calls.append(self.is_causal)
+        return original_call(self, query, key, value, mask)
+
+    monkeypatch.setattr(attention.PromptFlashAttentionACL, "__call__", record)
+    output = jt.nn.scaled_dot_product_attention(*tensors, is_causal=False)
+    output.sync(True)
+    assert calls == [False]
+    assert tuple(output.shape) == host[0].shape
+    assert str(output.dtype) == "float16"
+    assert output.location() == "device"
+    actual = output.numpy()
+    assert np.isfinite(actual).all()
+    np.testing.assert_allclose(actual, expected, rtol=3e-3, atol=4e-4)
+
+
+def test_causal_and_noncausal_programs_and_masks_do_not_cross_pollute():
+    length, width = 17, 64
+    for index, causal in enumerate((True, False, True, False)):
+        host, tensors = _inputs(1, 2, 2, length, width, seed=301 + index)
+        output = attention._prompt_prefill_310p(*tensors, 1.0 / math.sqrt(width), is_causal=causal)
+        output.sync(True)
+        np.testing.assert_allclose(
+            output.numpy(), _reference(*host, 1.0 / math.sqrt(width), is_causal=causal),
+            rtol=3e-3, atol=4e-4)
+    device = int(jt.core.dispatch_context([tensors[0]])[1])
+    key = (device, length, 128)
+    causal_mask = attention._prompt_causal_mask_cache[key]
+    full_mask = attention._prompt_full_mask_cache[key]
+    assert causal_mask is not full_mask
+    actual_full = full_mask.numpy()
+    expected_full = np.zeros((128, 128), dtype=np.bool_)
+    expected_full[:, length:] = True
+    np.testing.assert_array_equal(actual_full, expected_full)
+    # A host read must not poison the next same-mode invocation either.
+    output = attention._prompt_prefill_310p(*tensors, 1.0 / math.sqrt(width), is_causal=False)
+    output.sync(True)
+    assert attention._prompt_full_mask_cache[key].location() == "device"
+    np.testing.assert_allclose(
+        output.numpy(), _reference(*host, 1.0 / math.sqrt(width), is_causal=False),
+        rtol=3e-3, atol=4e-4)
+
+
+def test_noncausal_admission_keeps_training_masks_gqa_and_other_widths_out():
+    q = (1, 2, 128, 64)
+    supports = attention._supports_prompt_prefill
+    assert not supports(q, q, "float16", True, False, None)
+    assert not supports(q, q, "float32", False, False, None)
+    assert not supports(q, q, "float16", False, False, jt.zeros((128, 128), dtype="bool"))
+    assert supports(q, (1, 2, 77, 64), "float16", False, False, None)
+    assert not supports(q, (1, 2, 77, 64), "float16", False, True, None)
+    assert not supports(q, (1, 1, 128, 64), "float16", False, False, None)
+    assert not supports((1, 2, 128, 32), (1, 2, 128, 32), "float16", False, False, None)
+    assert not supports((129, 2, 128, 64), (129, 2, 128, 64), "float16", False, False, None)
+    # The previously verified causal dimensions retain their earlier policy.
+    assert supports((1, 2, 128, 32), (1, 2, 128, 32), "float16", False, True, None)

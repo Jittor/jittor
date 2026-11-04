@@ -24,6 +24,16 @@ captured updates state:
 The Torch frontend wires `torch.compile(..., mode="reduce-overhead")` to these two: a wrapped
 module goes through inference replay, a wrapped function through step capture.
 
+What a captured or replayed `jt.capture_step` call returns is copied out of the recorded step:
+it has no autograd edge to this call's inputs or to the step's parameters, and the backward
+belongs inside the step function. When an input or a parameter asks for a gradient (outside
+`jt.no_grad()`), a gradient outside the step (`jt.grad`, an optimizer's `step(loss)`) that
+would flow through such a result into the step raises instead of dropping that part -- also
+when the target has another path, as in `step(x) + x.sum()`; the result of the first, eager
+call stays differentiable. A gradient that does not reach the step is untouched: to a target
+the step does not read, to the result itself, or through a `stop_grad` result. When nothing
+asks for a gradient the result is a constant and feeds a trainable downstream module as usual.
+
 There is also an **on-by-default** automatic policy (`JT_AUTO_GRAPH_REPLAY=1`): it looks only
 at the outermost module call under `no_grad`, steps in only after the same shape appears twice
 in a row, accepts only calls whose input Vars total less than `auto_graph_replay_bytes`

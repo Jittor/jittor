@@ -794,10 +794,7 @@ PyObject* rms_norm_registered_inference(PyObject* module, PyObject* dict, PyObje
 // takes it, the dispatcher picks `_rms_norm_cuda` for it, and that builds its
 // code operator from `_rms_norm_source`. nullptr for anything else.
 PyObject* rms_norm_inference(PyObject* module, PyObject* dict, PyObject* x) {
-    PyObject* registered = rms_norm_registered_inference(module, dict, x);
-    if (registered || PyErr_Occurred()) return registered;
-    if (!rms_inference_impl || !rms_source_fn || acl_possible || !dict || !is_var(x))
-        return nullptr;
+    if (!dict || !is_var(x)) return nullptr;
     // Match the public contract guard in `_standard_rms_norm` before
     // kernel selection sees even an intentionally unused affine tensor.
     // Resolve attributes normally so class options/descriptors also agree.
@@ -823,6 +820,11 @@ PyObject* rms_norm_inference(PyObject* module, PyObject* dict, PyObject* x) {
         if (!PyErr_ExceptionMatches(PyExc_AttributeError)) return nullptr;
         PyErr_Clear();
     }
+    // These public contract guards apply to backend providers too, before
+    // selection can inspect a weight the module has explicitly disabled.
+    PyObject* registered = rms_norm_registered_inference(module, dict, x);
+    if (registered || PyErr_Occurred()) return registered;
+    if (!rms_inference_impl || !rms_source_fn || acl_possible) return nullptr;
     PyObject* weight = PyDict_GetItemString(dict, "weight");
     PyObject* eps = PyDict_GetItemString(dict, "variance_epsilon");
     if (!weight || !is_var(weight) || !eps || !(PyFloat_Check(eps) || PyLong_Check(eps)))

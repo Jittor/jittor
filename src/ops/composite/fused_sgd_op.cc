@@ -70,7 +70,7 @@ void FusedSgdOp::jit_prepare(JK& jk) {
 //   dp = g + wd * p
 //   v  = first_step ? dp : momentum * v + (1 - dampening) * dp
 //   p  = p - lr * (nesterov ? dp + momentum * v : v)
-// and without momentum or dampening, p = p - lr * dp with v untouched.
+// and without momentum, p = p - lr * dp with v untouched.
 namespace {
 constexpr int kTensors = 48;
 constexpr int kThreads = 256;
@@ -158,7 +158,9 @@ void FusedSgdOp::jit_run() {
     s.dampening = (float)dampening;
     s.nesterov = nesterov;
     s.maximize = maximize;
-    s.plain = momentum == 0 && dampening == 0 && !nesterov;
+    // torch.optim.SGD touches the buffer only while momentum is on: with it
+    // off, dampening and Nesterov do nothing either.
+    s.plain = momentum == 0;
     s.first_step = first_step;
     SgdLaunch launch;
     launch.count = 0;
