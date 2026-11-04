@@ -186,8 +186,20 @@ def _install_expand_shape_adapter(Var):
         return
 
     def expand(self, *shape):
-        if len(shape) == 1 and isinstance(shape[0], (tuple, list)):
-            shape = tuple(shape[0])
+        if len(shape) == 1:
+            head = shape[0]
+            # A size can arrive as ``torch.Size`` (a tuple subclass), as a
+            # plain sequence, or as Jittor's own ``Var.shape`` value -- a
+            # NanoVector that is sequence-like but is neither a tuple nor an
+            # int, so the old tuple/list test left it wrapped and ``int()``
+            # then failed on the vector itself. Scalar dimensions (including
+            # 0-D Vars, which expose ``dtype``) still pass through unchanged.
+            if isinstance(head, (tuple, list)) or (
+                not isinstance(head, (int, float, bool))
+                and hasattr(head, "__len__")
+                and not hasattr(head, "dtype")
+            ):
+                shape = tuple(head)
         normalized = tuple(int(value) for value in shape)
         return _attach_expand_grad_fn(self, native(self, *normalized))
 
