@@ -64,6 +64,45 @@ class _AutocastState(_threading.local):
 
 _autocast_state = _AutocastState()
 
+
+def _preserve_autocast_arithmetic():
+    """Protect Torch's fall-through arithmetic from the native AMP bias.
+
+    Native contractions deliberately set ``keep_reduce`` around their internal
+    multiply/reduce expression. Keep that compute policy intact: it is part of
+    matmul/convolution, rather than a user-visible elementwise operation.
+    Native AMP outside a Torch autocast region remains unchanged.
+    """
+    if not _autocast_state.order:
+        return False
+    register = int(jt.flags.amp_reg)
+    return bool(register & (_AMP_PREFER16 | _AMP_PREFER_BFLOAT16)) \
+        and not bool(register & _AMP_KEEP_REDUCE)
+
+
+def _cuda_autocast_fp32_input(value):
+    """CUDA's FP32-policy inputs; CPU autocast has a different operation list."""
+    if not isinstance(value, jt.Var) or not _autocast_state.enabled.get("cuda"):
+        return value
+    device = getattr(value.device, "type", None) or str(value.device).split(":")[0]
+    if device == "cuda" and _jittor_dtype_name(value.dtype) in ("float16", "bfloat16"):
+        return value.cast("float32")
+    return value
+
+
+def _autocast_fp32_call(function, input, *args, eligible=True, **kwargs):
+    """Apply the public FP32 policy without changing native contraction scopes.
+
+    CUDA widens eligible half inputs; CPU keeps its per-operation input dtype.
+    Explicit dtype/out calls select their input before entering this helper.
+    """
+    if not _preserve_autocast_arithmetic():
+        return function(input, *args, **kwargs)
+    if eligible:
+        input = _cuda_autocast_fp32_input(input)
+    with jt.flag_scope(amp_reg=jt.amp_flags.disabled):
+        return function(input, *args, **kwargs)
+
 # The device types torch's own device parser accepts, in its order: its error
 # message quotes this list, and a string outside it is not a device at all.
 _TORCH_DEVICE_TYPES = (
@@ -312,11 +351,17 @@ class autocast:
     previous register on exit.  It is still BOTH a context manager and a
     decorator -- accelerate does ``new_forward = autocast(model_forward)``.
 
+    Torch Tensor fall-through arithmetic preserves its input/promotion dtype,
+    and pow/rsqrt delegates use the CUDA FP32 input policy. Native contraction
+    scopes retain their low-precision compute policy. This is a partial
+    per-operation bridge, not a complete implementation of Torch's lists.
+
     Known differences from torch, each on the record in the fidelity registry:
 
     * torch's autocast lists are per operator; jittor's register is a global
-      dtype-inference bias, so the fall-through category (``add`` on two float32
-      operands, which torch leaves in float32) also lowers here.
+      dtype-inference bias. Native Vars and operations outside the scoped
+      frontend policies still follow that bias, including native fall-through
+      arithmetic that Torch leaves in float32.
     * one process-wide register serves every device type, so a CPU region and a
       CUDA region are not independent the way torch's dispatch keys are.
     """
@@ -550,9 +595,10 @@ _AMP_FIDELITY = (
      autocast, Fidelity.APPROXIMATE,
      "Sets jittor's global amp register instead of torch's per-operator "
      "autocast lists, so which operators lower is the register's rule and not "
-     "torch's: matmul, linear and convolution lower and reductions stay in "
-     "float32 as torch does, but the fall-through category torch leaves alone "
-     "(float32 add) lowers here too. One register serves every device type, so "
+     "torch's: native contractions lower, while Torch Tensor fall-through "
+     "arithmetic preserves its input/promotion dtype and CUDA pow/rsqrt inputs "
+     "use float32. Other operations and native Vars retain the register's "
+     "policy; this is not a complete per-operator mapping. One register serves every device type, so "
      "a CPU region and a CUDA region are not independent the way torch's "
      "dispatch keys are. Explicit bfloat16 regions select bfloat16 even "
      "when every operand is float32. "

@@ -3,6 +3,7 @@ from importlib import import_module
 import contextlib
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from ...context import get_install_context
+from ...amp import _autocast_state, _preserve_autocast_arithmetic, _cuda_autocast_fp32_input
 from ...types import _PYTHON_SCALAR_DTYPES, _make_cpu_resident, _make_cuda_resident, _var_is_cpu_resident
 from ....stub_policy import degraded as _degraded, unimplemented as _unimplemented
 from ..core import _promote_pair
@@ -1514,7 +1515,11 @@ def _var_norm(self, p="fro", dim=None, keepdims=None, *rest,
 def _binary_native(opname, left, right, native_api=None):
     if native_api is None:
         native_api = get_install_context(_owner.jt).state["tensor_native_api"]
-    result = native_api["operators"][opname](left, right)
+    if _preserve_autocast_arithmetic():
+        with _owner.jt.flag_scope(amp_reg=0):
+            result = native_api["operators"][opname](left, right)
+    else:
+        result = native_api["operators"][opname](left, right)
     return _owner._mark_cpu_like(result, left, right)
 
 
@@ -1731,7 +1736,7 @@ _FAST_BINARY_OPERATORS = ('__add__', '__radd__', '__sub__', '__rsub__',
 
 def _tensor_add(self, other):
     fast = _FAST_BINARY
-    if fast is not None:
+    if fast is not None and not _autocast_state.order:
         out = fast(self, other, 0)
         if out is not None:
             return out
@@ -1740,7 +1745,7 @@ def _tensor_add(self, other):
 
 def _tensor_radd(self, other):
     fast = _FAST_BINARY
-    if fast is not None:
+    if fast is not None and not _autocast_state.order:
         out = fast(self, other, 1)
         if out is not None:
             return out
@@ -1749,7 +1754,7 @@ def _tensor_radd(self, other):
 
 def _tensor_sub(self, other):
     fast = _FAST_BINARY
-    if fast is not None:
+    if fast is not None and not _autocast_state.order:
         out = fast(self, other, 2)
         if out is not None:
             return out
@@ -1758,16 +1763,40 @@ def _tensor_sub(self, other):
 
 def _tensor_rsub(self, other):
     fast = _FAST_BINARY
-    if fast is not None:
+    if fast is not None and not _autocast_state.order:
         out = fast(self, other, 3)
         if out is not None:
             return out
     return _promoting_binary(self, other, '__rsub__', True)
 
 
+def _cuda_scalar_multiply(self, other):
+    """Torch CUDA half scalar opmath, without changing native arithmetic.
+
+    A Python float keeps the Tensor's result dtype, but the CUDA coefficient
+    is FP32. Native mixed-half codegen otherwise narrows that coefficient
+    before multiplying, changing both the output and its input derivative.
+    """
+    if type(other) is not float:
+        return None
+    context = get_install_context(_owner.jt)
+    native_api = context.state["tensor_native_api"]
+    own = _own_dtype_name(self, native_api)
+    if own not in ("float16", "bfloat16") or _device(self).type != "cuda":
+        return None
+    from ...frontend import tensor_frontend
+    with tensor_frontend(context.state["Var"], like=self), _owner.jt.flag_scope(amp_reg=0):
+        wide = self.cast("float32")
+        result = native_api["operators"]["__mul__"](wide, other).cast(own)
+    return _owner._mark_cpu_like(result, self)
+
+
 def _tensor_mul(self, other):
+    scalar_result = _cuda_scalar_multiply(self, other)
+    if scalar_result is not None:
+        return scalar_result
     fast = _FAST_BINARY
-    if fast is not None:
+    if fast is not None and not _autocast_state.order:
         out = fast(self, other, 4)
         if out is not None:
             return out
@@ -1775,8 +1804,11 @@ def _tensor_mul(self, other):
 
 
 def _tensor_rmul(self, other):
+    scalar_result = _cuda_scalar_multiply(self, other)
+    if scalar_result is not None:
+        return scalar_result
     fast = _FAST_BINARY
-    if fast is not None:
+    if fast is not None and not _autocast_state.order:
         out = fast(self, other, 5)
         if out is not None:
             return out
@@ -1800,16 +1832,28 @@ def _tensor_rmod(self, other):
 
 
 def _tensor_pow(self, other):
+    if _preserve_autocast_arithmetic():
+        self, other = _cuda_autocast_fp32_input(self), _cuda_autocast_fp32_input(other)
+        with _owner.jt.flag_scope(amp_reg=0):
+            return _promoting_binary(self, other, '__pow__', False)
     return _promoting_binary(self, other, '__pow__', False)
 
 
+def _api_pow(self, exponent):
+    return _tensor_pow(self, exponent)
+
+
 def _tensor_rpow(self, other):
+    if _preserve_autocast_arithmetic():
+        self, other = _cuda_autocast_fp32_input(self), _cuda_autocast_fp32_input(other)
+        with _owner.jt.flag_scope(amp_reg=0):
+            return _promoting_binary(self, other, '__rpow__', True)
     return _promoting_binary(self, other, '__rpow__', True)
 
 
 def _tensor_truediv(self, other):
     fast = _FAST_BINARY
-    if fast is not None:
+    if fast is not None and not _autocast_state.order:
         out = fast(self, other, 6)
         if out is not None:
             return out
@@ -1818,7 +1862,7 @@ def _tensor_truediv(self, other):
 
 def _tensor_rtruediv(self, other):
     fast = _FAST_BINARY
-    if fast is not None:
+    if fast is not None and not _autocast_state.order:
         out = fast(self, other, 7)
         if out is not None:
             return out
@@ -1842,11 +1886,14 @@ _BINARY_APIS = {
     '__rsub__': _tensor_rsub,
     '__mul__': _tensor_mul,
     '__rmul__': _tensor_rmul,
+    'mul': _tensor_mul,
+    'multiply': _tensor_mul,
     '__floordiv__': _tensor_floordiv,
     '__rfloordiv__': _tensor_rfloordiv,
     '__mod__': _tensor_mod,
     '__rmod__': _tensor_rmod,
     '__pow__': _tensor_pow,
+    'pow': _api_pow,
     '__rpow__': _tensor_rpow,
     '__truediv__': _tensor_truediv,
     '__rtruediv__': _tensor_rtruediv,

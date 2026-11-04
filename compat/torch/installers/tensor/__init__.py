@@ -382,6 +382,8 @@ def _install_reductions(g):
     g.masked_select = Var.masked_select = _numerical_masked_select
     g.softmax = Var.softmax = _numerical_softmax
     g.log_softmax = Var.log_softmax = _numerical_log_softmax
+    from ...native_api import tensor_rsqrt
+    Var.rsqrt = tensor_rsqrt
 
     # Methods with no module-level torch spelling to widen.
     Var.masked_scatter = masked_scatter
