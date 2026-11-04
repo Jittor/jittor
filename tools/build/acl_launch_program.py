@@ -23,13 +23,13 @@ returns or throws first, in which case that one wins.
 
 What this does not compare is the *arguments*: pass the wrong tensor count,
 order, or type and the token stream is unchanged. That layer needs the stub-SDK
-translation units (``agent/skills/acl-host-syntax-check``) and, for the workspace
+translation units (``https://github.com/JittorEcosystem/jittor-dev-skills/blob/main/skills/acl-host-syntax-check/SKILL.md``) and, for the workspace
 query signatures, a real Ascend build. Neither layer is hardware validation.
 
 Usage: ``python acl_launch_program.py <repo> [<repo> ...]``. With two repos it
 prints a unified diff of the two programs and exits non-zero when they differ.
 The method, and the reverse controls that keep it honest, are written up in
-``agent/skills/static-launch-equivalence``.
+``https://github.com/JittorEcosystem/jittor-dev-skills/blob/main/skills/static-launch-equivalence/SKILL.md``.
 """
 import difflib
 import re

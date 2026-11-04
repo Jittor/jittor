@@ -31,7 +31,7 @@ export cache_name="${cache_name:-local-dev}"
 ```
 
 使用 CUDA 时，若 `nvcc` 不在 `PATH` 中，请设置 `nvcc_path`。各后端的 CI 要求见
-[隔离验证环境](agent/skills/isolated-validation/SKILL.md)。
+[隔离验证环境](https://github.com/JittorEcosystem/jittor-dev-skills/blob/main/skills/isolated-validation/SKILL.md)。
 
 ## 仓库结构
 

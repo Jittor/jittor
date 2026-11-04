@@ -21,7 +21,7 @@ Usage:
 
     EXPECT_JITTOR_SRC=<worktree>/python \\
     PYTHONPATH=<worktree>/python JITTOR_HOME=... TMPDIR=... \\
-    python agent/skills/jittor-build-change-verification/scripts/measure_import_cost.py
+    python tools/build/measure_import_cost.py
 
 ``EXPECT_JITTOR_SRC`` is not optional: without it the numbers may well come
 from the *installed* jittor rather than the tree you are changing, and there

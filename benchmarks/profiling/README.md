@@ -52,3 +52,10 @@ JITTOR_HOME="$run_dir/compat-cache" python benchmarks/profiling/benchmark_npu_fr
 - 比较原生 PyTorch 时使用独立进程，确认导入真实 PyTorch；不要将 `jittor` 别名成 `torch`。
 - 每种候选实现先验证数值和所声明的梯度；运行不报错不等于正确。
 - 原始结果留在 lab；复查结论记录到 issue/PR。完整规则见[性能基准规范](../../docs/performance/benchmarking.md)。
+
+## 带宽与冷编译工具
+
+`roofline/` 保存 copy 带宽、Jittor/Torch step 采样和报告分类工具；
+`profile_single_kernel.py` 测量合成 C++ kernel 的编译与加载阶段。
+操作说明由 [Jittor Development Skills](https://github.com/JittorEcosystem/jittor-dev-skills)
+维护；这些工具随主仓源码一起版本管理，不要求运行时安装技能仓库。

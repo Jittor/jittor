@@ -67,7 +67,7 @@ NPU 验证，即使该请求被拒绝并被测试捕获也一样。保留 `execu
 ## 没有 CANN 时对 ACL 源码做语法检查
 
 没有 CANN 的主机仍可以针对生成的 stub SDK 解析 ACL 翻译单元；见
-`agent/skills/acl-host-syntax-check`。该检查能抓到解析错误、未知标识符，以及把 workspace 查询传
+[acl-host-syntax-check](https://github.com/JittorEcosystem/jittor-dev-skills/blob/main/skills/acl-host-syntax-check/SKILL.md)。该检查能抓到解析错误、未知标识符，以及把 workspace 查询传
 到了本该是发射器的位置。它无法检查 `aclnnXxxGetWorkspaceSize` 调用的实参，因为不装 SDK 就无从
 得知那些签名。它不是硬件验证。
 

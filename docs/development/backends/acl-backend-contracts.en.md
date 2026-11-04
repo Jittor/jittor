@@ -86,7 +86,7 @@ changes.
 ## Syntax-checking ACL sources without CANN
 
 A host without CANN can still parse the ACL translation units against a
-generated stub SDK; see `agent/skills/acl-host-syntax-check`. That check catches
+generated stub SDK; see [acl-host-syntax-check](https://github.com/JittorEcosystem/jittor-dev-skills/blob/main/skills/acl-host-syntax-check/SKILL.md). That check catches
 parse errors, unknown identifiers, and a workspace query passed where a launcher
 belongs. It cannot check the arguments of an `aclnnXxxGetWorkspaceSize` call,
 because those signatures are not knowable without the SDK.

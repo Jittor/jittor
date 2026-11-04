@@ -93,7 +93,7 @@ known-issues/parallel-compiler-segfault
 
 任务、缺陷、待硬件验收与实际执行结果在 GitHub issue/PR 维护。
 协作规则见 [AGENTS.md](https://github.com/Jittor/jittor/blob/2.0-refactor/AGENTS.md)，
-按任务使用[技能目录](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/README.md)。
+按任务使用[技能目录](https://github.com/JittorEcosystem/jittor-dev-skills/blob/main/README.md)。
 旧问题和硬件验收记录通过该规则页的固定提交链接查阅，未复验不等于已解决。
 
 ## 兼容架构与贡献流程

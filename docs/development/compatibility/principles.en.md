@@ -49,7 +49,7 @@ Use the lowest reusable layer that correctly owns the behavior:
 If several downstream projects need the same operation, promote the operation to
 the native domain. If they only need the same patching mechanism, promote the
 mechanism while leaving each patch outside core. The triage for a new downstream
-library is in `agent/skills/downstream-library-adaptation/SKILL.md`.
+library is in [downstream-library-adaptation](https://github.com/JittorEcosystem/jittor-dev-skills/blob/main/skills/downstream-library-adaptation/SKILL.md).
 
 ## Activation boundary
 

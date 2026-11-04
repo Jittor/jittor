@@ -186,7 +186,7 @@ def test_encoded_values_reach_real_cpp_attribute_types(pipeline, tmp_path):
     load, Tensor, calls = pipeline
     encode = load("_attributes").attribute_data
     spec = importlib.util.spec_from_file_location(
-        "attribute_sdk_stub", ROOT / "agent/skills/acl-host-syntax-check/scripts/make_cann_stub.py"
+        "attribute_sdk_stub", ROOT / "tools/build/acl/make_cann_stub.py"
     )
     stubber = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(stubber)

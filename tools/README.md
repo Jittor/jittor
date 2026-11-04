@@ -31,3 +31,8 @@ here. Package resources are declared in each distribution's
 After changing those declarations or adding source-only files, run
 `python tools/build/generate_manifest.py`. The structure gate checks the generated
 manifests for drift. Neither build imports Jittor or requires the sibling project.
+
+Development skills are maintained in [Jittor Development Skills](https://github.com/JittorEcosystem/jittor-dev-skills).
+Their executable helpers remain here with the source they verify: ACL syntax and binding/import diagnostics
+in `build/`, native FSDP evidence tools in `distributed/native_fsdp/`, allocator diagnostics in `probes/`,
+and installer inspection in `lint/`. Tests do not need to clone the skills repository.

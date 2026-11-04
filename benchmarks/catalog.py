@@ -70,8 +70,6 @@ SUITES = (
         "purpose": "Find operator, training, kernel bandwidth and cold-build bottlenecks.",
         "entrypoints": [
             "benchmarks/profiling/README.md",
-            "agent/skills/cuda-elementwise-bandwidth-roofline/SKILL.md",
-            "agent/skills/jittor-single-kernel-cold-profile/SKILL.md",
         ],
         "references": [],
         "role": "Manual, individually scoped diagnostic tools; follow each skill's environment protocol.",

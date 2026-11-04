@@ -8,8 +8,8 @@ installer only binds.
 
 Run from the repo root:
 
-    python agent/skills/torch-api-cohort-promotion/scripts/count_installer_closures.py
-    python agent/skills/torch-api-cohort-promotion/scripts/count_installer_closures.py --only module_methods.py methods.py
+    python tools/lint/count_installer_closures.py
+    python tools/lint/count_installer_closures.py --only module_methods.py methods.py
 """
 
 from __future__ import annotations

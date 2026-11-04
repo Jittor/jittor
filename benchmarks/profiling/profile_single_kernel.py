@@ -107,7 +107,7 @@ def main():
         cache_available = False
         if not args.no_cache_compile:
             try:
-                sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "python"))
+                sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "python"))
                 import jittor_utils
 
                 jittor_utils.try_import_jit_utils_core(True)
