@@ -111,6 +111,18 @@ def _invoke_factory(name, args, kwargs):
 
 
 def arange(*args, **kwargs):
+    # Torch infers int64 for all-integer bounds and the current default
+    # floating dtype for any floating bound. Explicit dtype=None has the same
+    # inference semantics as omitting dtype, unlike the size factories.
+    if kwargs.get("dtype") is None:
+        bounds = tuple(args[:3]) + tuple(kwargs[k] for k in ("start", "end", "step") if k in kwargs)
+        def is_floating(value):
+            if isinstance(value, jt.Var):
+                return _jittor_dtype_name(value.dtype).startswith(("float", "bfloat"))
+            return isinstance(value, (float, np.floating))
+        kwargs = dict(kwargs)
+        kwargs["dtype"] = (get_install_context(jt).target_namespace.get_default_dtype()
+                           if any(is_floating(value) for value in bounds) else "int64")
     return _invoke_factory("arange", args, kwargs)
 
 
