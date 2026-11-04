@@ -264,6 +264,24 @@ def _is_no_restore(buffer, no_restore):
     return any(item is buffer for item in no_restore)
 
 
+def _replace_in_place(buffer, value):
+    """Make ``buffer`` hold ``value``'s storage while keeping its Python identity.
+
+    ``Var.assign`` replays writes through a tensor's view metadata, so a shape
+    change can be refused for tensors produced by reshape/slice chains (the
+    upstream example's ``pad(...)[..., 1:].contiguous()`` labels are one).
+    PyTorch's context_parallel does this with ``resize_`` + ``copy_``; the Torch
+    shim's ``Tensor.data`` setter swaps the underlying Var directly, which is
+    the same in-place replacement. Plain jittor Vars have no ``data`` property,
+    so they keep using the native assign.
+    """
+    descriptor = getattr(type(buffer), "data", None)
+    if isinstance(descriptor, property) and descriptor.fset is not None:
+        buffer.data = value
+    else:
+        buffer.assign(value)
+
+
 @contextmanager
 def context_parallel(mesh, *, buffers=None, buffer_seq_dims=None,
                      no_restore_buffers=None):
@@ -309,7 +327,7 @@ def context_parallel(mesh, *, buffers=None, buffer_seq_dims=None,
     patched = None
     try:
         for buffer, shard in zip(buffers_list, shards):
-            buffer.assign(shard.clone())
+            _replace_in_place(buffer, shard.clone())
         patched = _patch_scaled_dot_product_attention()
         _ACTIVE_STATES.append(state)
         yield
@@ -319,7 +337,7 @@ def context_parallel(mesh, *, buffers=None, buffer_seq_dims=None,
         if patched is not None:
             _restore_scaled_dot_product_attention(patched)
         for buffer, original in originals:
-            buffer.assign(original)
+            _replace_in_place(buffer, original)
 
 
 def register_context_parallel_fidelity():

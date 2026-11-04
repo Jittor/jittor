@@ -87,6 +87,20 @@ class TestContextParallelMultiRank(unittest.TestCase):
         self.assertEqual(tuple(buffer.shape), (2, sequence))
         np.testing.assert_allclose(buffer.numpy(), original.numpy())
 
+        # The upstream example's labels are a view chain (pad -> slice ->
+        # contiguous); replacing their storage must still work.
+        import torch.nn.functional as F
+        chain = F.pad(buffer.to(torch.int64), (0, 1), value=-100)[..., 1:].contiguous()
+        chain_original = chain.clone()
+        with context_parallel(
+                self.mesh, buffers=[chain], buffer_seq_dims=[1]):
+            self.assertEqual(tuple(chain.shape), (2, local_len))
+            np.testing.assert_allclose(
+                chain.numpy(),
+                chain_original[:, start:start + local_len].numpy())
+        self.assertEqual(tuple(chain.shape), (2, sequence))
+        np.testing.assert_allclose(chain.numpy(), chain_original.numpy())
+
     def test_attention_forward_and_backward_match_full_sequence(self):
         from torch.distributed.tensor.experimental import context_parallel
 
