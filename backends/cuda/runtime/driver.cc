@@ -112,8 +112,8 @@ void accelerator_set(int device) {
 
 void accelerator_sync(uint64 devices) {
     LaunchErrorScope error_scope({BackendId::Cuda, accelerator_current()});
-    checkCudaErrors(cudaGetLastError());
     if (!devices) {
+        checkCudaErrors(cudaGetLastError());
         checkCudaErrors(cudaDeviceSynchronize());
         return;
     }

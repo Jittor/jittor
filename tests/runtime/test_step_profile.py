@@ -157,6 +157,13 @@ class TestDeviceTime(unittest.TestCase):
                 jt.sync(outs)
         rows = [row for row in prof.op_stats() if row.name == "cublas_matmul"]
         self.assertEqual(rows[0].calls, n)
+        # A memset can be attributed through the runtime even when cuBLAS's
+        # driver-launched kernels are lost. Check the kernels themselves,
+        # independently of host scheduling and wall-clock timing.
+        matmul_seqs = {op["seq"] for op in prof.op_records
+                       if prof.strings[op["name"]] == "cublas_matmul"}
+        self.assertTrue(prof.kernel_records)
+        self.assertTrue(all(k["seq"] in matmul_seqs for k in prof.kernel_records))
         per_call = rows[0].device_ns / n / 1e9
         self.assertGreater(per_call, 0.5 * wall, (per_call, wall))
         self.assertLess(per_call, 1.1 * wall, (per_call, wall))

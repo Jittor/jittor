@@ -32,12 +32,11 @@ KIND_RUNTIME = 5
 KIND_CONCURRENT_KERNEL = 10
 KIND_EXTERNAL_CORRELATION = 39
 EXTERNAL_KIND_CUSTOM0 = 3
-# RUNTIME is on only because CUPTI emits external-correlation records for API
-# records; without it no kernel can be attributed. DRIVER is left off: every
-# launch measured here (jittor kernels, cuBLAS, cuDNN) goes through the
-# runtime, and the report's "attributed" share shows any launch that did not.
+# CUPTI emits external correlation for enabled API activity records. Libraries
+# such as cuBLAS can launch through the driver directly, bypassing the runtime;
+# collect both domains so those kernels retain their issuing operator's id.
 _ENABLED_KINDS = (KIND_CONCURRENT_KERNEL, KIND_MEMCPY, KIND_MEMSET,
-                  KIND_RUNTIME, KIND_EXTERNAL_CORRELATION)
+                  KIND_RUNTIME, KIND_DRIVER, KIND_EXTERNAL_CORRELATION)
 _BUFFER_BYTES = 8 << 20
 
 _MEMCPY_KINDS = {1: "HtoD", 2: "DtoH", 3: "HtoA", 4: "AtoH", 5: "AtoA",

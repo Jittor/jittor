@@ -61,3 +61,16 @@ CUDA 后端里报告计划失败、CUDA/NCCL/CUDNN 状态或测试 harness 失�
 `print_trace_from_signal` 和 `sigquit_callback` 列表。**它们只允许 `write(2)` 和
 `_exit`。** `handle_signal` 是仅限 Windows 的处理器；它不抛异常，但用了 `std::cerr`
 和 `abort()`，两者都不是异步信号安全的，因此与这两档的划分分开跟踪。
+
+## 交叉熵的类别标签
+
+原生 `jittor.nn.cross_entropy_loss` 与 Torch 前端的整数类别标签必须位于
+`[0, C)`，只有 `ignore_index` 指定的值可以例外。非法标签在求值时触发
+`IndexError`；CUDA 上的设备断言可能使该进程的设备 context 失效。
+
+这收紧了原生接口此前静默忽略任意越界标签的行为。需要忽略标签的原生函数调用方必须
+显式传入 `ignore_index`。忽略标签不参与类别权重索引，也不贡献损失或梯度；
+合法标签的损失公式不变。
+
+原生函数默认不忽略标签；`CrossEntropyLoss` 模块及 Torch 函数接口的默认
+`ignore_index` 为 `-100`，与 PyTorch 保持一致。

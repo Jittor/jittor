@@ -271,26 +271,23 @@ def _concat(jt, arr, dim):
         )
 
     dtypes = []
-    for value in arr:
+    for index, value in enumerate(arr):
         shape = value.shape
         if len(shape) != base_dim:
-            raise RuntimeError(
-                "get different number of dimensions of {} and {}".format(
-                    base_dim, len(shape)
-                )
-            )
+            raise jt.JittorShapeError(
+                "concat: expected every var to have {} dims like var 0 {}, but "
+                "var {} has {} dims (shape {})".format(
+                    base_dim, base_shape, index, len(shape), list(shape)))
         for axis in range(base_dim):
             if axis != dim and shape[axis] != base_shape[axis]:
-                raise RuntimeError(
+                # Torch's wording, which the old message had copied with the
+                # dim where the position in the list belongs.
+                raise jt.JittorShapeError(
                     "Sizes of vars must match except in dimension {}. "
-                    "Expected size {} but got size {} for dimension number "
-                    "{} in the list.".format(
-                        dim,
-                        base_shape[axis],
-                        shape[axis],
-                        axis,
-                    )
-                )
+                    "Expected size {} but got size {} for var number {} in "
+                    "the list (shapes {} and {}).".format(
+                        dim, base_shape[axis], shape[axis], index,
+                        base_shape, list(shape)))
         dtypes.append(_jittor_dtype_name(value.dtype))
 
     dtype = _merge_dtypes(dtypes)

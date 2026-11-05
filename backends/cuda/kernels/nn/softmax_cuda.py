@@ -304,3 +304,66 @@ def _softmax_v1(a, log=False, zero_all_neg_inf=False, dim=-1):
 
 def softmax_v1(a, log=False, zero_all_neg_inf=False):
     return _softmax_v1(a, log=log, zero_all_neg_inf=zero_all_neg_inf)
+
+
+def _supports_torch_logsumexp(x):
+    return (x.ndim == 2 and int(x.shape[0]) > 0 and int(x.shape[1]) > 0
+            and x.numel() <= 2147483647 and x._storage_is_contiguous())
+
+
+@optional_kernel("nn.torch_logsumexp_last", "cuda", dtypes=("float32",),
+                 supports=_supports_torch_logsumexp)
+def _torch_logsumexp_last(x):
+    """Fixed-order row LSE with Torch's NaN and infinity behavior.
+
+    This opt-in kernel is selected by the Torch compatibility frontend only;
+    it does not alter native Jittor reductions or the cross-entropy kernel.
+    """
+    threads = 512
+    return jt.code((int(x.shape[0]),), x.dtype, [x], cuda_header=f'''
+#include <{library_resource('cub', 'home')}cub/cub.cuh>
+#include <math.h>
+''', cuda_src=f'''
+__global__ void kernel(in0_type* x, out0_type* y, int len) {{
+    typedef cub::BlockReduce<float, {threads}> FloatReduce;
+    typedef cub::BlockReduce<int, {threads}> IntReduce;
+    __shared__ typename FloatReduce::TempStorage float_storage;
+    __shared__ typename IntReduce::TempStorage int_storage;
+    __shared__ float row_max;
+    __shared__ int row_nan;
+    const int base = blockIdx.x * len;
+    float local_max = -INFINITY;
+    int local_nan = 0;
+    for (int col = threadIdx.x; col < len; col += blockDim.x) {{
+        const float v = float(x[base + col]);
+        if (isnan(v)) local_nan = 1;
+        else local_max = fmaxf(local_max, v);
+    }}
+#if CUB_VERSION >= 300000
+    const float maximum = FloatReduce(float_storage).Reduce(local_max, ::cuda::maximum<>());
+    const int has_nan = IntReduce(int_storage).Reduce(local_nan, ::cuda::maximum<>());
+#else
+    const float maximum = FloatReduce(float_storage).Reduce(local_max, cub::Max());
+    const int has_nan = IntReduce(int_storage).Reduce(local_nan, cub::Max());
+#endif
+    if (threadIdx.x == 0) {{ row_max = maximum; row_nan = has_nan; }}
+    __syncthreads();
+    if (row_nan) {{
+        if (threadIdx.x == 0) y[blockIdx.x] = nanf("");
+        return;
+    }}
+    if (isinf(row_max)) {{
+        if (threadIdx.x == 0) y[blockIdx.x] = row_max;
+        return;
+    }}
+    float local_sum = 0.0f;
+    for (int col = threadIdx.x; col < len; col += blockDim.x)
+        local_sum += expf(float(x[base + col]) - row_max);
+    const float total = FloatReduce(float_storage).Sum(local_sum);
+    if (threadIdx.x == 0) y[blockIdx.x] = row_max + logf(total);
+}}
+int rows = in0->shape[0];
+int len = in0->shape[1];
+kernel<<<rows, {threads}>>>(in0_p, out0_p, len);
+CHECK(0 == cudaGetLastError());
+''')

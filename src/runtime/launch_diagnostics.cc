@@ -232,7 +232,51 @@ LaunchOperationScope::LaunchOperationScope(const LaunchRecord& record) : previou
     active_launch = &record;
 }
 LaunchOperationScope::~LaunchOperationScope() { active_launch = previous; }
+namespace {
+// Trivial process-lifetime storage: teardown may consult it after runtime owners
+// are destroyed. Every backend has its own mask; no device suppresses another.
+std::atomic<uint64> launched_devices[5]{};
+std::atomic<uint64> reported_lost_devices[5]{};
+std::atomic<uint64> launched_after_loss[5]{};
+bool tracked_device(Device device) {
+    return unsigned(device.backend) < 5 && device.index >= 0 && device.index < 64;
+}
+}
+uint64 launched_device_mask(BackendId backend) {
+    return launched_devices[unsigned(backend)].load(std::memory_order_relaxed);
+}
+uint64 lost_device_mask(BackendId backend) {
+    return reported_lost_devices[unsigned(backend)].load(std::memory_order_relaxed);
+}
+uint64 devices_launched_after_loss(BackendId backend) {
+    return launched_after_loss[unsigned(backend)].load(std::memory_order_relaxed);
+}
+Device launch_error_device(Device current) {
+    if (error_device.index >= 0) return error_device;
+    if (current.index < 0) current.index = runtime_device_state().current_device;
+    return current;
+}
+void note_device_context_lost(Device device) {
+    if (tracked_device(device))
+        reported_lost_devices[unsigned(device.backend)].fetch_or(
+            uint64(1) << device.index, std::memory_order_relaxed);
+    // Do not clear new-work bits on repeated errors: an old context reporting
+    // again must not erase another device's work submitted after the first fault.
+}
+bool device_context_lost(Device device) {
+    return tracked_device(device) && (reported_lost_devices[unsigned(device.backend)].load(
+        std::memory_order_relaxed) & (uint64(1) << device.index));
+}
 void record_active_launch(BackendStream stream) {
+    if (stream.device.backend != BackendId::Cpu && tracked_device(stream.device)) {
+        auto& mask = launched_devices[unsigned(stream.device.backend)];
+        auto bit = uint64(1) << stream.device.index;
+        if (!(mask.load(std::memory_order_relaxed) & bit))
+            mask.fetch_or(bit, std::memory_order_relaxed);
+        if (lost_device_mask(stream.device.backend))
+            launched_after_loss[unsigned(stream.device.backend)].fetch_or(
+                bit, std::memory_order_relaxed);
+    }
     if (!active_launch) return;
     runtime_launch_history().record(*active_launch, stream.device,
                                     reinterpret_cast<uintptr_t>(stream.handle));

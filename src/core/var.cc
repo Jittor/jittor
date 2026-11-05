@@ -20,6 +20,12 @@ namespace jittor {
 
 std::atomic<int64> Var::number_of_lived_vars{0};
 
+StorageMutationVersion::StorageMutationVersion() {
+    static std::atomic<uint64> next{1};
+    identity = next.fetch_add(1, std::memory_order_relaxed);
+}
+
+
 void Var::refresh_alias_requires_grad() {
     if (autograd_alias && autograd_alias->inherit_requires_grad)
         set_flag(VarFlags::_requires_grad_disabled,

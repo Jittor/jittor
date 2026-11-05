@@ -281,14 +281,41 @@ class ExitHooks(object):
 hooks = ExitHooks()
 
 def jittor_exit():
-    if hooks.exit_code is not None:
-        pass
-    elif hooks.exception is not None:
-        pass
-    else:
-        pass
-        # core.sync_all(True)
+    # Only on a successful exit: a failing one has already said why, and
+    # waiting on a broken device then would only bury that under a second
+    # report. `jt.sync_all(True)` is not the wait wanted either -- it would run
+    # every lazy Var the program built and never read.
+    if hooks.exception is None and hooks.exit_code in (None, 0):
+        try:
+            core._wait_for_devices()
+        except Exception as error:
+            _exit_on_unreported_device_error(error)
     core.cleanup()
+
+
+def _exit_on_unreported_device_error(error):
+    """A kernel failed after the last read of its results.
+
+    `Var.sync()` and `jt.sync_all()` only hand the work to the device, so
+    nothing raised, and the process was about to exit 0 with every result
+    computed on the device after the fault silently wrong. Say so and exit 1.
+    The teardown that would follow only fails on the lost context, so skip it.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.flush()
+        except (OSError, ValueError):
+            pass
+    sys.stderr.write(
+        "jittor: the program finished, but a device error was still pending "
+        "and is reported only now. `Var.sync()` and `jt.sync_all()` do not "
+        "wait for the device, and no later read of a result did; results "
+        "computed on the device since the failing operator are wrong. Call "
+        "`jt.sync_all(True)` where the work must be finished to see the error "
+        "there.\n%s: %s\n" % (type(error).__qualname__, error))
+    sys.stderr.flush()
+    import os
+    os._exit(1)
 
 # Bootstrap registers hooks.hook() and atexit.register(jittor_exit) only
 # after composing the native API, preserving the original installation order.

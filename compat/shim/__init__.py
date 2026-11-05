@@ -85,7 +85,15 @@ def __getattr__(name):
     target = _PUBLIC.get(name)
     if target is None:
         raise AttributeError("module %r has no attribute %r" % (__name__, name))
-    module = importlib.import_module(target[0])
+    try:
+        module = importlib.import_module(target[0])
+    except AttributeError as error:
+        # `from jittor.compat.shim import X` reads an AttributeError out of
+        # here as "X does not exist" and replaces it with a bare "cannot
+        # import name 'X'", dropping the error that actually stopped the
+        # module from importing.
+        raise ImportError("importing %s for %s.%s failed: %s: %s" % (
+            target[0], __name__, name, type(error).__name__, error)) from error
     value = getattr(module, target[1])
     globals()[name] = value
     return value

@@ -1,3 +1,4 @@
+from jittor.nn.functional.loss import _checked_class_target
 from ...fidelity import Fidelity, register_api_bindings
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import jittor as jt
@@ -142,11 +143,12 @@ def _cross_entropy(input, target, weight=None, size_average=None,
         if reduction == "none":
             return wloss
         return wloss.mean()        # torch divides the soft-target loss by N
+    C = int(input.shape[1]) if input.ndim >= 2 else int(input.shape[-1])
     if not label_smoothing:
         ii = -100 if ignore_index is None else ignore_index
         return _jt_ce(input, target, weight=weight, ignore_index=ii,
                       reduction=reduction)
-    C = int(input.shape[1]) if input.ndim >= 2 else int(input.shape[-1])
+    target = _checked_class_target(target, C, ignore_index)
     if input.ndim > 2:                  # (N,C,d...) -> (M,C)
         perm = [0] + list(range(2, input.ndim)) + [1]
         x = input.transpose(perm).reshape((-1, C))
