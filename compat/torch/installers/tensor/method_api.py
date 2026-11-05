@@ -818,6 +818,9 @@ def _data_get(self):
 
 
 def _data_set(self, value):
+    # A storage swap inside a module call is a Python side effect: replaying
+    # the captured device graph would skip the swap on later calls.
+    _owner.jt.graph_replay_barrier("Tensor.data replaces storage during a module call")
     src = value if isinstance(value, _NativeVar) else _owner.jt.array(value)
     # torch's `x.data = y` *replaces* x's data, shape and dtype; it does not
     # copy elements into x's existing buffer. `assign` is the in-place
