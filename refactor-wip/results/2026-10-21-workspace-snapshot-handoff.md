@@ -1,3 +1,7 @@
+## 2026-11-06 01:54 +0800 续接：build/package 与 serialization 等 16 项完成 wheel/source crosswalk
+
+候选 wheel 中 10 个 build、5 个 contrib/dataset/distributions/init、1 个 serialization 成员都与源码提交 `9a9096bb` 相同；其中 writer 文件与旧测试源码 `35a1a760` 不同，较新版本的锁/异常恢复与 scalar stride 改动有同源 wheel 的部分证据，但 optimizer portable-pickle 的 stock PyTorch 读取失败仍保留。累计 crosswalk 69 additions、180 changes，尚余 125 changes 与两项 ACL removals 未审批。未重装 wheel、未运行测试/构建/cache。GPU2 37,826 MiB、100%，由 qlt/yqa/cgq 多进程共享；Slurm association 空，正式性能/显存窗口未就绪。HEAD `33533b135` ahead 13 / behind 0，未 push；overall **Not complete**。
+
 ## 2026-11-06 01:51 +0800 续接：ops/core/runtime 24 个 wheel 成员完成源码映射
 
 固定候选 wheel 中 12 个 ops、7 个 _core、5 个 _runtime 内容变化成员逐项匹配源码提交 `9a9096bb` 和安装态测试源码 `35a1a760`。已有 matrix/R14/distributed 证据只支持相关路径，不扩展成全部高层 API 或后端发布通过。累计 crosswalk 69 additions、164 content changes，剩 141 changes 与两项 ACL removal 未审阅/批准。本轮不运行测试、GPU 或 cache 工作；GPU2 有 qlt/yqa/cgq 共享进程，cgq association 为空，独占性能窗口仍未就绪。工作树在新增文档前干净，HEAD `f8031f3c7` ahead 12 / behind 0，未 push；overall **Not complete**。

@@ -1,3 +1,7 @@
+## 2026-11-06 01:54 +0800 build/package 与序列化等 16 项 wheel 成员已核对
+
+本轮 10 个 build、5 个 contrib/dataset/distributions/init 与 1 个 serialization 内容变化成员，候选 wheel 均匹配源码提交 `9a9096bb`；除 `serialization/save_pytorch.py` 外，其余 15 项也匹配安装态测试源 `35a1a760`。该 writer 新版本增加临时 pickle target 加锁/恢复和 scalar 空 stride 处理；9a9096b exact-source wheel 有冷构建与 Tensor exporter 跨框架读取通过，但 stock PyTorch 读取 JT portable-pickle optimizer 仍失败，且固定候选 wheel 未重装运行。累计 crosswalk 69 additions、180/305 content changes；125 项变化、两项 ACL 删除仍未审阅/批准。GPU2 当前 100% 共享占用、cgq association 为空；Day4–5 与整体发布保持 **Not complete**。
+
 ## 2026-11-06 01:51 +0800 固定 wheel 的 ops/core/runtime 24 项已做源码身份核对
 
 本轮 12 个 `jittor/ops`、7 个 `jittor/_core`、5 个 `jittor/_runtime` wheel 内容变化成员均与候选 wheel、源码提交 `9a9096bb` 及已测源码提交 `35a1a760` 的 SHA256 相同。现有 55/55 CPU/CUDA backend contract matrix 与 R14/distributed 通过结果只覆盖相关运行路径，不代表这些 façade/core/runtime API 的所有参数边界或 ACL/ROCm/CoreX。累计 crosswalk 为 69 additions、164/305 content changes；141 项变化与两项 ACL 删除仍未审阅/批准，allowlist 未变。GPU2 仍由 qlt/yqa/cgq 共享任务占用，cgq Slurm association 尚为空；Day4–5 独占性能/显存验收和整体发布门保持 **Not complete**。
