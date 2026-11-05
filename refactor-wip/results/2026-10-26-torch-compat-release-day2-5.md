@@ -1,3 +1,11 @@
+## 2026-11-06 01:42 +0800 JIT codegen 与 core execution/gradient 内容变化成员审阅
+
+从 pinned-builder baseline 中选取 17 个 `jittor/src/codegen/**` content changes（jit compiler/key/op compiler、kernel IR、atomic/cache/parallel/reduction/intermediate passes、pass manager、tuners 与 var relay），以及 16 个此前未纳入 crosswalk 的 `jittor/src/core/**` changes（event queue、exec plan/runner、executor、fuser、grad、graph、memory profiler、node、op 与 parallel compiler）。core 集合排除了已在 optimizer 与 storage 子域核过的 fused-op 及 var/var-holder 文件。固定 wheel member bytes 与源码提交 `9a9096bb5588816ca0e090cbcb4c18a6e967ab0e` 逐项 SHA256 匹配；33/33 无差异，这些成员在安装态测试 wheel 源提交 `35a1a7605ec475e9cbc1a9688afc299ee3bd8011` 也逐项相同。
+
+现有功能证据覆盖了部分路径：current-source CUDA/CPU backend contract matrix 55/55，借由真实算子探针实际经过 JIT build/dispatch；graph replay alias/AMP CPU suite 14 passed、6 accelerator-only skipped，step capture suite 9 passed、18 accelerator-only skipped；同源 exact main/compat wheel 双 rank NCCL Trainer full/stop/fresh-resume 到 step 2 也已通过。代码中 `optim/base.py` 调用新增的 `jt.core.grad_with_callback`，原生 DDP 测试也封装该入口；但 `tests/bindings/test_trace_var.py` 对 callback trace/context 的直接断言在现有结果文档中没有单独 pass 收据。特别是更早的 CUDA captured GradScaler overflow 1-pass 测试绑定提交 `e2d450535cad5f3dc9adc02fc11017d5dbf5edae`，该祖先的 16 个 core 变化成员中 `grad.cc/.h` 与最终提交不同，不能把旧结果算作这两个后续 callback 实现的直接通过证据。
+
+此次是包身份与已有覆盖的映射，没有执行测试或 benchmark。内容 crosswalk 由此前 72 项增加 33 项，累计为 105/305；加上 69 个 additions，共有 174 个 wheel 成员完成源码 hash 对照，仍有 200 个 content changes 和 2 个 ACL 删除未审阅/批准。性能优化 pass 是否有效仍须独占 GPU2 下的配对 latency/显存实测；GPU2 01:38 +0800 快照为 37,768 MiB、100%，cgq queue/association 查询仍无输出。整体 Day2–5 release 保持 **Not complete**。
+
 ## 2026-11-06 01:39 +0800 CUDA backend 内容变化成员与 contract/梯度覆盖交叉审阅
 
 固定候选 wheel `18116fb386dd079e46f5b75e352cc84be29b0101912f447de44bd5c997d7c697` 与 pinned-builder baseline 中的 36 个 `jittor/backends/cuda/**` content-change 成员逐项比较；解包 wheel member SHA256 全部匹配源码提交 `9a9096bb5588816ca0e090cbcb4c18a6e967ab0e` 的 root `backends/cuda/**` 文件，0 mismatch。覆盖 CUDA core/indexing/transpose、CUB reduction、cuBLAS matmul 与测试、cuDNN 2D/3D conv 与 wrapper、CURAND、CUTT、misc tensor ops、batch/group/layer/RMS norm 与 softmax、CUDA library wrappers 和 runtime driver。CURAND `curand_random_op.cc` 已列入前述 RNG 的 18 个内容变化 crosswalk，本轮 36 项中它为重复项，因此新增 35 个不同的 source-mapped changes。

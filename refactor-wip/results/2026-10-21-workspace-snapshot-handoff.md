@@ -1,3 +1,9 @@
+## 2026-11-06 01:42 +0800 续接：JIT codegen/core runtime 33 个变化成员已映射
+
+17 个 codegen 和 16 个剩余 core runtime wheel member bytes 全部与固定源码提交及旧 installed-wheel source commit 一致。current-source matrix、CPU graph/step suites、exact-source 双 rank Trainer 提供部分行为证据；gradient-ready callback 的直接测试仍无单独运行收据，较早 GradScaler CUDA test 的 `grad.cc/.h` 版本不同。累计 hash crosswalk 为全部 69 additions 与 105 个 content changes，另 200 个 changes 和两项 ACL removals 仍待审阅/批准。
+
+没有运行测试或 GPU workload；GPU2 100%、cgq queue/association 查询为空。后续仍需继续审阅其余变化成员并等待独占租约，Day4–5 与 broader release 未完成。
+
 ## 2026-11-06 01:39 +0800 续接：CUDA backend 36 项内容变化已完成源码 crosswalk
 
 固定 wheel 中 36 个 CUDA backend content-change 成员均与目标源码提交相同；CURAND 一项此前已经核过，所以净新增 35 项。current-source backend contract matrix 55/55、CUDA stable-gradient suite 8/8 关联覆盖了部分算子与梯度；no-probe、无 CPU counterpart 和 library self-test 空格仍未验证。累计已匹配 69 additions 与 72 个 content changes，仍有 233 个 content changes 和两项 ACL removals 未审阅/批准。

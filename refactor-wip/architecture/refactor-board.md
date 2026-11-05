@@ -1,3 +1,7 @@
+## 2026-11-06 01:42 +0800 JIT codegen 与 core execution/gradient 再核对 33 个变化成员
+
+固定 wheel 的 17 个 `src/codegen` 与 16 个尚未覆盖的 `src/core` content-change 成员均逐项匹配目标源码，且在已安装测试 wheel 的源码提交 `35a1a760` 中相同。core 集合排除了此前已核过的 fused-op 与 Var/VarHolder 文件。现有矩阵、CPU graph/step tests 和 exact-source 双 rank Trainer 提供部分路径证据；`grad.cc/.h` 的 gradient-ready callback 是较晚加入部分，未由更早的 GradScaler capture CUDA pass 单独覆盖。累计 source crosswalk 为 69 additions、105/305 content changes；200 个变化与两项 ACL 删除仍未审批。
+
 ## 2026-11-06 01:39 +0800 36 个 CUDA backend 内容变化成员已与固定 wheel/source 对齐
 
 pinned-builder baseline 中选取的 36 个 CUDA backend content-change 成员全部逐项匹配固定 wheel 与源码提交 `9a9096bb5588816ca0e090cbcb4c18a6e967ab0e`。其中 CURAND 的 `curand_random_op.cc` 已在 RNG 子域核对，新增独立范围为 35 项。现有 CPU/CUDA contract matrix 55/55 和 CUDA stable-gradient 8/8 为相关功能证据，但矩阵仍有 no-probe/no-dependency 单元，不代表全部 36 个文件独立验收。累计 source crosswalk 为 69 additions、72/305 content changes；尚有 233 个变化和 2 个 ACL 删除未审阅。
