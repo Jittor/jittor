@@ -54,7 +54,10 @@ def _supports_layer_norm(*args, **kwargs):
 
 
 def install_kernels():
-    from jittor._runtime.dispatch import register_kernel
+    from jittor._runtime.dispatch import register_kernel, native_rule
+    native_rule('rocm_conv2d')(_supports_conv2d)
+    native_rule('rocm_group_norm')(_supports_group_norm)
+    native_rule('rocm_layer_norm')(_supports_layer_norm)
     register_kernel('nn.rms_norm.inference', 'rocm', _rms_norm,
                     dtypes={'float32'}, supports=_supports_rms_norm, priority=100)
     register_kernel('nn.softmax', 'rocm', _softmax,

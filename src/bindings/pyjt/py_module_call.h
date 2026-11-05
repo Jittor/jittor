@@ -54,4 +54,9 @@ PyObject* module_call_native(PyObject* module, PyObject* args, PyObject* kwargs)
 PyObject* group_norm_nhwc_build(PyObject* source, PyObject* weight, PyObject* bias,
                                 int64 groups, double eps, const string& act);
 
+// The ROCm provider's inference source, with its optional SiLU, using the
+// same source builder and dense-input adaptation as its Python CodeOp.
+// @pyjt(_group_norm_rocm_build)
+PyObject* group_norm_rocm_build(PyObject* source, PyObject* weight, PyObject* bias, int64 groups, double eps, const string& act);
+
 } // namespace jittor

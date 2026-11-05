@@ -361,6 +361,7 @@ ROCM_TESTS = (
     "tests/backends/rocm/test_rocm_pooling.py",
     "tests/backends/rocm/test_rocm_linear.py",
     "tests/backends/rocm/test_rocm_async_execution.py",
+    "compat/tests/torch/test_rocm_vision_module_dispatch.py",
 )
 MPI_TESTS = (
     "tests/backends/comm/mpi/test_mpi.py",

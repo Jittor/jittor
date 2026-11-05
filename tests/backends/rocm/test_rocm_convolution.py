@@ -170,3 +170,22 @@ def test_native_inference_zero_batch_and_reused_workspace():
             expected, _, _ = reference(raw, np.ones((4, 3, 3, 3)), None, (1, 1), (1, 1), (1, 1))
             assert out.location() == 'device'
             np.testing.assert_array_equal(out.numpy(), expected)
+
+
+def test_native_selection_matches_python_convolution_predicate():
+    from jittor.backends.rocm.kernels.convolution import supported
+    with jt.no_grad():
+        x, w, b = jt.ones((2, 4, 7, 9)), jt.ones((6, 4, 3, 3)), jt.zeros(6)
+        for amp in (0, 18):
+            for stride, padding, dilation, groups in [
+                (1, 1, 1, 1), ((2, 1), (1, 0), (1, 1), 1),
+                ([1, 2], [2, 1], [2, 1], 1), (1, 1, 1, 2), (1, 0, 4, 1),
+            ]:
+                with jt.flag_scope(amp_reg=amp):
+                    expected = supported(x, w, b, stride, padding, dilation, groups)
+                    assert (select_kernel('conv2d', x, w, b, stride, padding, dilation, groups) is not None) == expected
+        for shape in [(0, 4, 65536, 65536), (0, 4, 2147483648, 1)]:
+            empty = jt.zeros(shape)
+            pointwise = jt.ones((6, 4, 1, 1))
+            assert not supported(empty, pointwise)
+            assert select_kernel('conv2d', empty, pointwise, None, (1, 1), (0, 0), (1, 1), 1) is None

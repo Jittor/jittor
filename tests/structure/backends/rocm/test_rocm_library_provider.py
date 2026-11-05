@@ -254,6 +254,7 @@ def test_inference_kernels_register_without_importing_tensor_implementations(mon
     calls = []
     dispatch = ModuleType('jittor._runtime.dispatch')
     dispatch.register_kernel = lambda *args, **kwargs: calls.append((args, kwargs))
+    dispatch.native_rule = lambda name: lambda predicate: predicate
     monkeypatch.setitem(sys.modules, dispatch.__name__, dispatch)
     module.install_kernels()
     assert [args[0] for args, _ in calls] == [

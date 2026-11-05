@@ -895,6 +895,9 @@ class TestRegisteredRmsInference(unittest.TestCase):
 
     def test_bfloat16_order_helper_and_module_hooks_stay_in_python(self):
         x_bf16 = self.x.to(torch.bfloat16)
+        # The weighted BF16 contract requires matching operand dtypes. Mixed
+        # input/weight dtypes belong to forward, before this helper is called.
+        self.norm.to(dtype=torch.bfloat16)
         seen = []
 
         def bf16_order(value, weight, epsilon):
@@ -906,6 +909,7 @@ class TestRegisteredRmsInference(unittest.TestCase):
         self.assertEqual(seen, [True])
         self.assertEqual(result.dtype, torch.bfloat16)
         np.testing.assert_array_equal(result.float().numpy(), self.values)
+        self.norm.to(dtype=torch.float32)
         seen.clear()
 
         def provider(value, weight, epsilon):

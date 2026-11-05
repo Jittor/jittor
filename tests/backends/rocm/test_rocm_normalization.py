@@ -199,3 +199,22 @@ def test_empty_shapes_and_precision_policy():
         with jt.flag_scope(amp_reg=18):
             assert select_kernel('nn.group_norm', x, 4, w, b, 1e-5) is None
             assert select_kernel('nn.layer_norm.inference', x, (7,), 1, 0, 1e-5) is None
+
+
+@pytest.mark.parametrize('kind', ['group', 'layer'])
+def test_native_selection_matches_python_predicate(kind):
+    from jittor.backends.rocm.kernels.normalization import supports_group_norm, supports_layer_norm
+    predicate = supports_group_norm if kind == 'group' else supports_layer_norm
+    extent = 2 if kind == 'group' else (5, 7)
+    x = jt.ones((2, 4, 5, 7))
+    shape = (4,) if kind == 'group' else (5, 7)
+    w, b = jt.ones(shape), jt.zeros(shape)
+    for no_grad in (0, 1):
+        for amp in (0, 18):
+            for epsilon in (1e-5, 0.0, -1.0, float('nan'), float('inf')):
+                with jt.flag_scope(no_grad=no_grad, amp_reg=amp):
+                    expected = predicate(x, extent, w, b, epsilon)
+                    assert (select_kernel(operation(kind), x, extent, w, b, epsilon) is not None) == expected
+    with jt.no_grad():
+        for weights, biases in [(w, 0.0), (1.0, b), (1.0, 0.0)]:
+            assert (select_kernel(operation(kind), x, extent, weights, biases, 1e-5) is not None) == predicate(x, extent, weights, biases, 1e-5)
