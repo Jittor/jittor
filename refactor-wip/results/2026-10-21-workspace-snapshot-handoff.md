@@ -1,3 +1,7 @@
+## 2026-11-05 23:50 +0800 续接：修正 generator_randint parity matrix 覆盖声明
+
+backend_contract_matrix.py 新增 generator randint 的 CPU/CUDA parity probe，参数复用当前 runtime 对照测试：seed 99、int64 [-2^63, 1)、129 个值；并移除“无 CUDA kernel”的过期记录。AST/compile 静态检查、git diff --check 与 repo layout guard 通过；本轮没有运行 pytest 或 CUDA matrix。已有安装 wheel 真 CUDA Generator 测试保持为历史设备证据，不代表新矩阵 cell 通过；本轮 cache 预检拒绝触发编译，attempt 记录保留在 /data6/cgq/jittor-lab/_state/release-day23/20261105-installed-wheel-generator-randint-contract-matrix-r1/。检查时所有 GPU 忙，GPU2 为 37,132 MiB/100%。Day4–5 独占性能/显存和更广 Day2–5 发布门仍开放，整体 **Not complete**。
+
 ## 2026-11-03 08:32 +0800：current-main wheel baseline复现并隔离构建器差异
 
 已用当前源码提交9a9096bb5588816ca0e090cbcb4c18a6e967ab0e、固定Python 3.11.3/setuptools 83.0.0/wheel 0.45.1重建main wheel。core wheel结构审计通过；与此前35a1 wheel仅 save_pytorch.py 和 RECORD变化。默认baseline仍有69 additions、305 changes、2 removals、0 approved。两项ACL CodeOp文件是e7bf82046中有意删除并转为native实现；当前没有CANN设备证据，因此不批准相关差异。审计产物与manifest见 /data6/cgq/jittor-lab/_state/release-day23/20261103-current-main-wheel-migration-audit-r1/。

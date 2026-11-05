@@ -1,3 +1,15 @@
+## 2026-11-05 23:50 +0800 Backend contract matrix 将 generator_randint 纳入 CUDA parity probe；设备矩阵尚未运行
+
+检查 tests/backends/parity/backend_contract_matrix.py 时发现旧分类理由已经失效：它称 explicit-generator randint 没有 CUDA kernel，但 backends/cuda/kernels/core/generator_randint_op.cc 存在，且当前源码测试 tests/runtime/test_generator_randint.py 已对 seed 99、范围 [-2^63, 1)、129 个 int64 值执行 CPU/CUDA 精确数组对照。本次只修改合同测试文件：新增 probe，在 CPU/CUDA cell 使用各自同 seed 的 Generator 产生相同样本，并删除错误的 unprobed 声明；不改产品 kernel。
+
+静态验证：Python AST 解析与内存 compile() 通过；AST 断言确认 PROBES["generator_randint"] 指向新 probe，且该 op 不再同时列于 UNPROBED_REASONS。git diff --check 通过；bash tools/check_repo_layout.sh 报 documentation governance 246 active Markdown files、repository layout OK。没有导入 Jittor、没有运行 pytest 或 contract matrix，因此本次没有新 runtime parity 结果。
+
+相关已存设备证据：current-head 安装 wheel 的 CUDA Generator Torch factory 定向测试为 1 passed、0 skipped，fallback 0→0，CUDA core SHA256 0e2fe909d3f33e27c220546693c40f27087357cefe198220f46c97f9a0353a90；测试验证实际 CUDA 输出放置、状态回放及 device mismatch。其 artifact manifest SHA256 832dc7f61cf953129309323aec0fb168e9226e38986131825f39597d5632c599，目录 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-cuda-generator-r4-cache-reuse/。该测试绑定先前 wheel 与测试文件身份，不等同于本次新增矩阵 probe 通过。kernel 源文件在当前工作区、该安装 wheel及另一 fresh install wheel 中 SHA256 相同：aa545869865390dbb6f6a50f8ef456b000cbe3e6f656c8ed9e6b90aa220fa9d0。
+
+为避免隐式重编译，本次在隔离目录尝试复用 CUDA cache，并以 JITTOR_NO_BUILD=1 预检。首次进程报告 jit_utils 更新后要求原命令重跑；按提示重跑后，Jittor 因 cu12.4.99_sm_80 对应 cache 中没有当前配置的 jittor_core 而拒绝导入。两次预检日志及 attempt 原件留在 /data6/cgq/jittor-lab/_state/release-day23/20261105-installed-wheel-generator-randint-contract-matrix-r1/，没有进行冷编译或 CUDA 算子调用。检查时 GPU0–9 均忙，GPU2 使用 37,132 MiB、100%；因此不在共享负载下扩大矩阵运行。
+
+接续建议：找到与安装 wheel build flags 完全匹配且 core current 的 cache 后，在可用真实 CUDA 设备上运行完整 backend contract matrix，确认 CPU/CUDA parity cell 和 fallback 计数。此修正本身只修复发布门的错误缺项，不关闭该运行门。Day4–5 仍需要管理员添加 cgq Slurm association 并获得可核验独占资源，按三轮交替、每轮至少十个热态样本报告耗时分位数、离散度及 allocator/NVML 峰值；held-out generation 指标、真实 activation recompute/显存证据、wheel baseline 未批准差异和 stock PyTorch 对 JT portable-pickle optimizer 的互操作问题也仍开放。整体 Day2–5 继续 **Not complete**。
+
 ## 2026-11-03 08:32 +0800 current-main wheel migration审计按固定构建器复现
 
 ### 源码与构建身份

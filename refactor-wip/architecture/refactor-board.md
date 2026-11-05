@@ -1,3 +1,11 @@
+## 2026-11-05 23:50 +0800 backend contract matrix 修正 generator_randint CUDA 声明；parity cell 仍待运行
+
+tests/backends/parity/backend_contract_matrix.py 曾把 generator_randint 记为无 CUDA kernel；源码实际存在该 CUDA kernel，当前 runtime 测试也包含 seed 99、int64 范围 [-2^63, 1)、129 个元素的 CPU/CUDA 精确对照。本次新增同配置 parity probe，并移除错误的 UNPROBED_REASONS 条目。源码/kernel 未改，kernel SHA256 为 aa545869865390dbb6f6a50f8ef456b000cbe3e6f656c8ed9e6b90aa220fa9d0。
+
+Python AST/内存编译静态核对确认 probe 映射和分类一致；git diff --check 与 bash tools/check_repo_layout.sh 通过。此次没有运行 contract matrix 或新 CUDA 算子测试。此前已归档的安装态 GPU0 CUDA Generator 测试为 1 passed、fallback 0→0，验证 CUDA 放置、状态恢复和 device mismatch；它绑定旧 wheel/测试身份，只作为 kernel 路径的既有设备证据，不代表本次 parity cell 已通过。证据包 /data6/cgq/jittor-lab/_state/release-day23/20261103-installed-wheel-cuda-generator-r4-cache-reuse/，manifest SHA256 832dc7f61cf953129309323aec0fb168e9226e38986131825f39597d5632c599。当前源码及两个已安装 wheel 中该 kernel 文件哈希一致。
+
+尝试复用隔离 CUDA cache 的预检因当前 cu12.4 build key 缺少匹配 core、且设置 JITTOR_NO_BUILD=1 而安全拒绝；没有触发 core build 或算子运行。原始尝试保存在 /data6/cgq/jittor-lab/_state/release-day23/20261105-installed-wheel-generator-randint-contract-matrix-r1/。检查时 GPU0–9 均有其他负载，GPU2 为 37,132 MiB、100% 利用率，因此未启动 CUDA 矩阵。此项只修正合同覆盖声明，实际 parity cell 仍开放。Day4–5 独占性能/显存验收及更广 Day2–5 发布门仍未完成，整体保持 **Not complete**。
+
 ## 2026-11-03 08:32 +0800 current-main wheel migration audit复现：结构合同通过，baseline仍未批准
 
 从源码提交 9a9096bb5588816ca0e090cbcb4c18a6e967ab0e 的不可变 Git archive 使用既有 Python 3.11.3、setuptools 83.0.0、wheel 0.45.1 packaging环境重建 main wheel，产物 SHA256 18116fb386dd079e46f5b75e352cc84be29b0101912f447de44bd5c997d7c697。wheel自比较的core profile检查通过，1100个成员、无增加/变更/删除；与35a1a760旧current-head wheel比较只有 save_pytorch.py 和 RECORD 两个成员变化，源码成员哈希为 843411da94a28a51576c20ed6745f13770aaff0f275fb076475481bc2a515e67。

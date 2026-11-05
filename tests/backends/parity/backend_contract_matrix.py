@@ -381,6 +381,15 @@ def _probe_random(jt_):
     ], dtype="float32")
 
 
+def _probe_generator_randint(jt_):
+    # Explicit generators use the same Philox counter stream on CPU and CUDA.
+    # This range exercises rejection mapping and an odd final counter pair.
+    device = "cuda:0" if jt_.flags.use_cuda else "cpu"
+    generator = jt_.Generator(device).manual_seed(99)
+    return jt_.randint(-(1 << 63), 1, (129,), dtype="int64",
+                       generator=generator).numpy()
+
+
 def _probe_matmul(jt_):
     a = jt_.array(_fixed((16, 24)))
     b = jt_.array(_fixed((24, 12), 5.0))
@@ -445,6 +454,7 @@ PROBES = {
     "mkl_conv_backward_x": _probe_conv2d_backward,
     "mkl_conv_backward_w": _probe_conv2d_backward,
     "curand_random": _probe_random,
+    "generator_randint": _probe_generator_randint,
     "random": _probe_random,
     "cub_where": _probe_where,
     "where": _probe_where,
@@ -519,12 +529,9 @@ UNPROBED_REASONS = {
     # cross-backend cell cannot be formed. Its own coverage is tests/ops/test_fft_op.py.
     "cufft_fft": "no declared CPU FFT to compare against; covered by tests/ops/test_fft_op.py",
     "fused_adamw": "fused optimizer step is compared by tests/optim, not by an op cell",
-    # Explicit-generator operations are stateful and currently have a CPU-only
-    # placement contract. Their accelerator cells cannot be compared here: the
-    # randint accelerator kernel is absent, and randperm/uniform explicitly
-    # reject accelerator JIT compilation. The Torch adapter has separate
-    # generator state/placement coverage.
-    "generator_randint": "explicit-generator randint has no CUDA kernel (`src/ops/composite/generator_randint_op.cc`); CUDA generator placement is separately covered as an explicit rejection",
+    # Explicit-generator operations are stateful. randint uses the same Philox
+    # counter stream on CPU and CUDA and has a parity probe; randperm and uniform
+    # remain CPU-only. The Torch adapter also covers generator state/placement.
     "generator_randperm": "explicit-generator randperm is CPU-only (`src/ops/composite/generator_randperm_op.cc`); CPU generator state and advancement are covered by the Torch factory fidelity tests",
     "generator_uniform": "explicit-generator uniform is CPU-only (`src/ops/composite/generator_uniform_op.cc`); no CUDA cell is in the supported contract",
     # Graph plumbing with no standalone value: `tapes` is only reachable from a
