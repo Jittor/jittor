@@ -1,3 +1,7 @@
+## 2026-11-06 01:46 +0800 distributed Python 层 5 个内容变化成员已完成源码匹配
+
+`jittor/distributed/{__init__,bucket,launch,process_group,store}.py` 五个 pinned-builder content-change 成员均与候选 wheel 和源码提交 `9a9096bb5588816ca0e090cbcb4c18a6e967ab0e` 匹配，也与已安装测试 wheel 的源码提交 `35a1a760` 相同。现有 exact-source 双 rank NCCL Trainer full/stop/fresh-resume 到 step 2 及双 rank DCP toy save/load 证据覆盖部分 distributed 路径，不代表每个模块独立验收或正式性能。累计 crosswalk 为 69 additions、140/305 content changes；165 项变化与两项 ACL 删除仍未批准。
+
 ## 2026-11-06 01:44 +0800 NN 层 34 个 wheel 内容变化成员已与源码身份对齐
 
 固定 wheel 的 34 个 `jittor/nn/**` content-change 成员均逐项匹配源码提交 `9a9096bb5588816ca0e090cbcb4c18a6e967ab0e`，且在安装态测试 wheel 的 `35a1a760` 源码提交中相同；4 项与既有 attention/storage crosswalk 重叠，净新增 30 项。现有 attention、Embedding、稳定梯度、双 rank Trainer 证据分别覆盖有限路径，旧 stable-gradient 测试提交有 6 个相关 NN 文件与最终源码不同。累计 crosswalk 为全部 69 additions 和 135/305 content changes；170 项变化及两项 ACL 删除仍未批准。

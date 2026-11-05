@@ -1,3 +1,11 @@
+## 2026-11-06 01:46 +0800 distributed Python 层 5 个 wheel 内容变化成员审阅
+
+pinned-builder baseline 中 `jittor/distributed/__init__.py`、`bucket.py`、`launch.py`、`process_group.py` 和 `store.py` 五项 content changes 全部逐项通过固定 wheel member/source SHA256 对照，且在 `9a9096bb5588816ca0e090cbcb4c18a6e967ab0e` 与已安装功能 wheel 源提交 `35a1a7605ec475e9cbc1a9688afc299ee3bd8011` 中均相同。
+
+同一 main/compat wheel 源提交 `9a9096bb` 的双 rank NCCL Trainer full、step-1 checkpoint stop、新进程 resume 至 step 2 已通过，fallback 0、梯度有限且 rank 间参数同步；另有两 rank NCCL DCP toy-state save/load 成功。它们说明当前分布式工作流存在端到端通过路径，但 DCP payload 是 CPU-resident 小状态，Trainer fixture 是小型 BERT/PEFT；这两组证据不代表五个 Python 模块都被逐项单测，也不覆盖 FSDP2 的所有状态组合或 Day4–5 性能/显存。
+
+此前累计 crosswalk 为 69 additions、135 个 content changes；本轮增加 5 项，当前为 140/305 个 content changes，总计 209 个 wheel 成员完成源码 hash 对照。仍有 165 个 content changes 与两项 ACL 删除未审阅/批准。没有修改 wheel baseline、没有运行测试或 GPU workload；GPU2 当前仍共享占用，cgq 独占租约未就绪，整体 Day2–5 继续 **Not complete**。
+
 ## 2026-11-06 01:44 +0800 NN 层 34 个内容变化成员与测试范围映射
 
 固定 main wheel 中 `jittor/nn/**` 的 34 个 pinned-builder content changes 全部逐项匹配 wheel member 与源码提交 `9a9096bb5588816ca0e090cbcb4c18a6e967ab0e` 的 Git SHA256，也全部与实际 installed-wheel 测试源码提交 `35a1a7605ec475e9cbc1a9688afc299ee3bd8011` 内容一致。成员涉及 `__init__.py`/bindings/backends、activation/attention/complex/convolution/dropout/fold/grid/interpolation/linear/loss/matrix/normalization/pooling/softmax/tensor functional，以及 activation/attention/container/convolution/depthwise/linear/normalization/parameter modules、serving ops 与 weight norm。其中文件 `functional/attention.py`、`multihead_attention.py`、`modules/attention.py` 和 `functional/tensor.py` 已在之前的 attention/storage crosswalk 核过；本轮净新增 30 个不同变化成员。

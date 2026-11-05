@@ -1,3 +1,7 @@
+## 2026-11-06 01:46 +0800 续接：distributed Python 层五个变化成员已核对
+
+五个 `jittor.distributed` wheel content changes 全部匹配固定源码和已安装测试 wheel 源版本。现有同源双 rank NCCL Trainer full/checkpoint/fresh-resume 与 DCP toy-state 通过提供相关功能路径证据，但不能代替每个 API 独立测试或性能/显存测试。累计已匹配 69 additions、140 content changes；尚有 165 changes 和两项 ACL removals 未审阅/批准。没有运行测试、GPU 或 cache 工作，overall 仍 Not complete。
+
 ## 2026-11-06 01:44 +0800 续接：NN 层 34 个内容变化成员完成 hash/覆盖映射
 
 固定 wheel 的 34 个 NN content-change 成员全部匹配源码提交 `9a9096bb` 与已测 wheel 源码提交 `35a1a760`；4 项前已核，本轮净增 30 项。已有 CUDA GQA 单项与双 rank Trainer tiny-BERT 通过；stable-gradient suite 来自更早提交，其中 6 个相关 NN 文件与最终源码不同，不能外推。累计 hash crosswalk 为 69 additions、135 content changes，尚有 170 changes 与两项 ACL removals 未批准。
