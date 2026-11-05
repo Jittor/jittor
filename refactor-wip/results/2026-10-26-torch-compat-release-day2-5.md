@@ -1,3 +1,23 @@
+## 2026-11-06 01:11 +0800 修正 cuTT 路径后 current-source backend contract matrix 通过
+
+### 配置修正与运行身份
+
+前一轮 `use_cutt=1` 已构建隔离 `libcutt.so`，但传入 `CUTT_PATH` 后 `setup_cutt()` 忽略 `install_cutt()` 返回的源码目录，并在 JITTOR_HOME 默认目录检查 `src`，触发无消息 `AssertionError`。本次不改源码，改用 Jittor 支持的 `cutt_include_path` 与 `cutt_lib_path` 覆盖；源目录 `/home/cgq/.cache/jittor/cutt/cutt-1.2/src` 只读，compiled `libcutt.so` 留在隔离 JITTOR_HOME。`CUTT_PATH` 未设置。
+
+执行时仓库 HEAD 为 `1c498a3baadcdc3af9f1e613b4d85679414e095d`，矩阵源文件与前次一致，SHA256 分别为 `c608cef8fee8e38d32400103e980b9f782fa587c61c5e040009ca68d7e2235b0`、`4b79dace5672c853b6564592d2fd818ff97fd74e8c470ca48531d919c1a1a992`。运行时仍从 `/data6/cgq/jittor-lab/_state/release-day23/20261103-current-head-wheel-gate-r1-prepared/install` 导入 wheel SHA256 `b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69`、源码 HEAD `35a1a7605ec475e9cbc1a9688afc299ee3bd8011`。35a1 是已验证 main wheel 源码 `9a9096bb5588816ca0e090cbcb4c18a6e967ab0e` 的祖先，两者间只有 compat 序列化测试与 `module_methods.py` 改变，native backend 代码未变；当前 repo 与 wheel 的 `python/jittor/build/compile_extern.py` SHA256 均为 `681a8c7409a6f12d92532a07e871cb63e5e106d6c2aa7e8f7a50071efe4b940f`。
+
+### 结果
+
+矩阵 pytest 收集并执行 55 项：**55 passed、0 skipped、0 failed，8.45 秒**。CPU 行 36 个已执行单元通过、5 个 no-probe；CUDA 行 39 个单元通过、1 个 no-dependency、20 个 no-probe。`cutt` 已加载并注册；`cuda/cutt_test` 是 library link self-test，继续显式列为 no-probe。`generator_randint` seed99、int64 `[-2^63,1)`、129 个结果的 CPU/CUDA exact parity 通过。fallback 策略 `error`，计数 0→0。ACL、ROCm、CoreX 仍为 `unverified:not-built`；完整矩阵共有 26 个未验证单元，不能把单机 CPU/CUDA 通过外推到所有后端。
+
+物理 GPU0 UUID `GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5` 单独映射为 `cuda:0`，GPU2 未暴露/访问。测试前后 core SHA256 均为 `851ae2a1495f89b32587f0113ca909174821329fed488460d04b78b5c3435409`，`core_build_is_current()` 前后 true。产品源码、测试矩阵和 shared cuTT source 均未修改。
+
+### 证据与未完成项
+
+当前完整快照 manifest `/data6/cgq/jittor-lab/_state/release-day23/20261106-current-main-backend-contract-cuda-cutt-r1-prepared/artifact-files-after-attempt-03.sha256` 共 7,581 项，SHA256 `60b34a38f71e57041eefee69cd409f97c47c86e14714ea58d0735af52d2f661b`，验证通过。attempt-03 前的 manifest 原件 `artifact-files.sha256`（SHA256 `61e6a040f5fef4e15ff0f54b84b3c3ee25ce8f8b5765111c1c18d14263230281`）及其副本保留；运行使一个动态 `jittor.lock` 的内容更新，旧清单因此仅对该项不匹配，具体差异和完整 post-run 清单均已存档。此前 `use_cutt=0` 与错误 `CUTT_PATH` 的失败原件继续保留。
+
+这次只关闭当前环境的 CPU/CUDA backend contract 文件门，不覆盖其他 CUDA tests、wheel migration audit、held-out generation quality、跨框架 stock-PyTorch optimizer 读取或 ACL/ROCm/CoreX。Day4–5 仍须可验证独占设备下至少三轮 PT/JT 交替，每侧每轮至少十个热态样本，并报告 median/p95/离散度、加载/首步/热态耗时及 allocator/NVML 峰值；GPU2 和 cgq Slurm association 尚未解决。整体 Day2–5 release 仍 **Not complete**。
+
 ## 2026-11-06 01:00 +0800 cuTT-enabled CUDA matrix：libcutt 已生成，wrapper/module loader AssertionError
 
 在前一轮矩阵明确以 `use_cutt=0` 结束后，新建第二个隔离 cache，并改用 `use_cutt=1` 复验。`CUTT_PATH` 指向既有源码缓存 `/home/cgq/.cache/jittor/cutt/cutt-1.2`，本轮只读该源码，所有编译输出落在 `/data6/cgq/jittor-lab/_state/release-day23/20261106-current-main-backend-contract-cuda-cutt-r1-prepared/jittor-home/`。源码样本 SHA256：`src/cutt.cpp` `54e54996a39fa77323e7e6b0b29120a3084178a5bfbf6655beb8e44e1358018c`、`src/cuttkernel.cu` `0f8b4c78110d9a13583fc6f50f509ee35bdf79a2614fb444408f15184f7f1a5c`、`include/cutt.h` `26ffb9297e461fac4fa30cd9592d6500773f120d89e6e42377060bd07c632f39`。隔离 `libcutt.so` 已生成，SHA256 `1ebe2c355ea0118a56026280a903577c32e015b59a6d5bfa2b05d823a0e1906b`。

@@ -1,3 +1,13 @@
+## 2026-11-06 01:11 +0800 current-source CUDA backend contract matrix 55/55 passed；cuTT 已加载
+
+在修正 cuTT 路径配置后，完整 `tests/backends/parity/test_backend_contract_matrix.py` 以 exit 0 结束：55 passed、0 skipped、8.45 秒。测试文件哈希仍为 `backend_contract_matrix.py` `c608cef8fee8e38d32400103e980b9f782fa587c61c5e040009ca68d7e2235b0` 与 `test_backend_contract_matrix.py` `4b79dace5672c853b6564592d2fd818ff97fd74e8c470ca48531d919c1a1a992`。Jittor CPU 行 36 passed / 5 no-probe；CUDA 行 39 passed / 1 no-dependency / 20 no-probe。cuTT optional-library load gate 已通过，未加载的可选项只报告 hccl、mpi、nccl；`cuda/cutt_test` 仍是按设计不做数值对拍的 link self-test。ACL、ROCm、CoreX 仍未构建，26 个矩阵单元保留为未验证。`generator_randint` seed99、int64 `[-2^63,1)`、129 项 CPU/CUDA exact parity 通过。
+
+该通过使用 `use_cutt=1`、`CUTT_PATH` 不设置，并显式提供受支持的 `cutt_include_path=/home/cgq/.cache/jittor/cutt/cutt-1.2/src` 与隔离 cache 中的 `cutt_lib_path`。此前 `CUTT_PATH` 尝试暴露了 `setup_cutt()` 对自定义源目录与默认 include 路径组合不一致；本次路径覆盖后 cuTT wrapper 注册成功。fallback 策略 `error`、计数 0→0；CUDA core 前后 SHA256 `851ae2a1495f89b32587f0113ca909174821329fed488460d04b78b5c3435409`，current-build 检查前后均通过。测试只暴露物理 GPU0 UUID `GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5` 为 `cuda:0`，GPU2 未暴露或访问。
+
+新快照 manifest `artifact-files-after-attempt-03.sha256` 位于 `/data6/cgq/jittor-lab/_state/release-day23/20261106-current-main-backend-contract-cuda-cutt-r1-prepared/`，7,581 项校验通过，SHA256 `60b34a38f71e57041eefee69cd409f97c47c86e14714ea58d0735af52d2f661b`。原 manifest `artifact-files.sha256` SHA256 `61e6a040f5fef4e15ff0f54b84b3c3ee25ce8f8b5765111c1c18d14263230281` 保留未改；attempt-03 后它仅对动态 `jittor.lock` 内容报一项 hash mismatch，锁差异清单、pre-run manifest 副本和 post-run 全量清单均保留。此前 failed attempts 也没有覆盖。
+
+这是 CPU/CUDA 合同矩阵的通过证据，不代表 ACL/ROCm/CoreX 已验证，也不提供性能或显存结论。GPU2 仍由共享作业占用，cgq Slurm association 尚未配置；Day4–5 正式性能/显存窗口和其余更广发布门仍开放，整体 **Not complete**。
+
 ## 2026-11-06 01:00 +0800 CUDA matrix 用 use_cutt=1 复验；cuTT wrapper loader 仍失败
 
 为排除前一轮显式 `use_cutt=0` 的配置影响，在独立新 `JITTOR_HOME` 中设置 `use_cutt=1`，从 `/home/cgq/.cache/jittor/cutt/cutt-1.2` 只读源码构建库；产出的隔离 `libcutt.so` SHA256 `1ebe2c355ea0118a56026280a903577c32e015b59a6d5bfa2b05d823a0e1906b`。完整矩阵 182.04 秒结束：53 passed、1 skipped、1 failed；CPU 行 36 passed/5 no-probe，CUDA 行 38 passed/1 no-dependency/19 no-probe。`generator_randint` seed99、int64 `[-2^63,1)`、129 项 CPU/CUDA 精确 parity 继续通过，fallback 0→0。
