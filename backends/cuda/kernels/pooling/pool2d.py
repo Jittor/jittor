@@ -5,6 +5,9 @@ def pool2d_cuda_options(forward_body, backward_body):
     return {
         "cuda_header": """
                     #include <type/cuda_limits.h>
+                    #ifdef IS_ROCM
+                    #include <hip/hip_runtime.h>
+                    #endif
                 """,
         "cuda_src": f'''
                     __global__ static void kernel1(@ARGS_DEF) {{
@@ -41,7 +44,11 @@ def pool2d_cuda_options(forward_body, backward_body):
                             for (int i2 = p2; i2 < pout_shape2; i2 += s2)
                                 {{ {backward_body} }}
                     }}
+                    #ifdef IS_ROCM
+                    CHECK(hipMemsetAsync(out_p, 0, out->size) == hipSuccess);
+                    #else
                     cudaMemsetAsync(out_p, 0, out->size);
+                    #endif
                     int tx = std::min(1024, pout_shape3);
                     int ty = std::min(1024 / tx, pout_shape2);
                     int bx = (pout_shape2 - 1) / ty + 1;
