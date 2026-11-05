@@ -1,3 +1,9 @@
+## 2026-11-06 01:39 +0800 续接：CUDA backend 36 项内容变化已完成源码 crosswalk
+
+固定 wheel 中 36 个 CUDA backend content-change 成员均与目标源码提交相同；CURAND 一项此前已经核过，所以净新增 35 项。current-source backend contract matrix 55/55、CUDA stable-gradient suite 8/8 关联覆盖了部分算子与梯度；no-probe、无 CPU counterpart 和 library self-test 空格仍未验证。累计已匹配 69 additions 与 72 个 content changes，仍有 233 个 content changes 和两项 ACL removals 未审阅/批准。
+
+GPU2 快照 37,768 MiB、100%，当前 cgq queue/association 无输出；没有启动测量。Day4–5 等待独占租约，overall release 继续 **Not complete**。
+
 ## 2026-11-06 01:37 +0800 续接：Tensor/storage/allocator 19 个变化成员已映射
 
 19 个 Tensor 前端、Var/VarHolder、allocator 与 mem_info wheel members 均与源码提交 `9a9096bb` 和已安装测试 wheel 源提交 `35a1a760` 的 Git blob 一致。已有 installed main wheel CUDA storage/version suite 22/22 pass、checkpoint/state_dict/DCP CPU 17/17 pass、optimizer restore CUDA 14/14 pass；这些只支持功能范围，不提供 allocator/NVML 峰值结论。累计已核对 69 additions 和 37 个 content changes，另 268 changes 与两项 ACL 删除未批准。

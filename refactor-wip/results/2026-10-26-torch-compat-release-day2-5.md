@@ -1,3 +1,11 @@
+## 2026-11-06 01:39 +0800 CUDA backend 内容变化成员与 contract/梯度覆盖交叉审阅
+
+固定候选 wheel `18116fb386dd079e46f5b75e352cc84be29b0101912f447de44bd5c997d7c697` 与 pinned-builder baseline 中的 36 个 `jittor/backends/cuda/**` content-change 成员逐项比较；解包 wheel member SHA256 全部匹配源码提交 `9a9096bb5588816ca0e090cbcb4c18a6e967ab0e` 的 root `backends/cuda/**` 文件，0 mismatch。覆盖 CUDA core/indexing/transpose、CUB reduction、cuBLAS matmul 与测试、cuDNN 2D/3D conv 与 wrapper、CURAND、CUTT、misc tensor ops、batch/group/layer/RMS norm 与 softmax、CUDA library wrappers 和 runtime driver。CURAND `curand_random_op.cc` 已列入前述 RNG 的 18 个内容变化 crosswalk，本轮 36 项中它为重复项，因此新增 35 个不同的 source-mapped changes。
+
+现有运行证据可支持部分路径。current-source `tests/backends/parity/test_backend_contract_matrix.py` 已在 cuTT 正确加载配置下 55 passed、0 skipped、0 failed；CUDA 行统计为 39 个通过单元、1 个 no-dependency、20 个 no-probe，覆盖随机、matmul/batched matmul、卷积与梯度、CUB、转置等被声明的 probe。另有 current-main CUDA `tests/nn/test_cuda_stable_gradients.py` 8/8 通过，覆盖 embedding 与多种梯度稳定性路径。矩阵和高阶梯度 suite 是关联证据，不表示每个 wrapper/kernel 都单独运行；3D conv 因无声明 CPU counterpart、library self-test/部分 op 仍按 no-probe 留白。以上都不是 Day4–5 性能或显存数据。
+
+与此前核对的 69 个 additions、37 个 content changes 合并，累计 source crosswalk 为 141 个成员，即所有 69 additions 与 72 个不同 content changes。pinned-builder 305 个内容变化中另有 233 项未审阅，sigmoid/transpose 两项 ACL 删除仍未批准。GPU2 在 01:38 +0800 只读检查为 37,768 MiB/81,920 MiB、100%；`squeue -u cgq` 与可见 association 查询无条目，本轮未运行 GPU 测试或 cache 操作。正式三轮 PT/JT 交替测量仍需管理员提供 cgq association 和独占 allocation，整体 Day2–5 release 保持 **Not complete**。
+
 ## 2026-11-06 01:37 +0800 Tensor storage、VarHolder、allocator 差异域与安装态证据映射
 
 本轮从 pinned-builder baseline 的 305 项 content changes 中选取 19 个训练状态、storage 与内存分配相关成员：`jittor/nn/functional/tensor.py`；`src/bindings/pybind/py_var_tracer.cc`；`src/bindings/pyjt/py_tensor_frontend.cc/.h`；`src/core/var.cc/.h`、`var_holder.cc/.h`；`src/mem/allocator.cc/.h`、`allocator/cuda_dual_allocator.h`、`foreign_allocator.cc/.h`、`sfrl_allocator.cc/.h`、`temp_allocator.cc/.h`、`mem_info.cc/.h`。固定 wheel 解包 member 与源码提交 `9a9096bb5588816ca0e090cbcb4c18a6e967ab0e` 对应 Git source SHA256 19/19 相同；并确认同一组 Git blob 在已安装 storage 测试 wheel 的源码提交 `35a1a7605ec475e9cbc1a9688afc299ee3bd8011` 也全部相同。因此该 wheel 测试可用于核对这些具体包内代码路径，但没有重新安装固定构建器产物。

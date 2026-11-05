@@ -1,3 +1,9 @@
+## 2026-11-06 01:39 +0800 36 个 CUDA backend 内容变化成员已与固定 wheel/source 对齐
+
+pinned-builder baseline 中选取的 36 个 CUDA backend content-change 成员全部逐项匹配固定 wheel 与源码提交 `9a9096bb5588816ca0e090cbcb4c18a6e967ab0e`。其中 CURAND 的 `curand_random_op.cc` 已在 RNG 子域核对，新增独立范围为 35 项。现有 CPU/CUDA contract matrix 55/55 和 CUDA stable-gradient 8/8 为相关功能证据，但矩阵仍有 no-probe/no-dependency 单元，不代表全部 36 个文件独立验收。累计 source crosswalk 为 69 additions、72/305 content changes；尚有 233 个变化和 2 个 ACL 删除未审阅。
+
+GPU2 读检快照为 37,768/81,920 MiB、100%；cgq queue 与可见 association 输出为空。Day4–5 独占测量继续等待管理员配置。
+
 ## 2026-11-06 01:37 +0800 Tensor storage/VarHolder/allocator 的 19 个 wheel 内容变化成员已核对
 
 固定构建 wheel 的 19 个相关内容变化成员逐项与源码提交 `9a9096bb5588816ca0e090cbcb4c18a6e967ab0e` 的 Git blob 匹配；它们在已安装 storage/version 测试 wheel 的提交 `35a1a7605ec475e9cbc1a9688afc299ee3bd8011` 也未变化。该安装 wheel 的 CUDA storage alias/version suite 为 22/22 通过，支持此功能切片；allocator 与 memory-info 改动仍没有 Day4–5 peak-memory 证据。累计 hash crosswalk 为全部 69 additions 和 37/305 content changes；另 268 项内容变化、2 项 ACL 删除仍未批准。
