@@ -1,3 +1,7 @@
+## 2026-11-06 01:51 +0800 固定 wheel 的 ops/core/runtime 24 项已做源码身份核对
+
+本轮 12 个 `jittor/ops`、7 个 `jittor/_core`、5 个 `jittor/_runtime` wheel 内容变化成员均与候选 wheel、源码提交 `9a9096bb` 及已测源码提交 `35a1a760` 的 SHA256 相同。现有 55/55 CPU/CUDA backend contract matrix 与 R14/distributed 通过结果只覆盖相关运行路径，不代表这些 façade/core/runtime API 的所有参数边界或 ACL/ROCm/CoreX。累计 crosswalk 为 69 additions、164/305 content changes；141 项变化与两项 ACL 删除仍未审阅/批准，allowlist 未变。GPU2 仍由 qlt/yqa/cgq 共享任务占用，cgq Slurm association 尚为空；Day4–5 独占性能/显存验收和整体发布门保持 **Not complete**。
+
 ## 2026-11-06 01:46 +0800 distributed Python 层 5 个内容变化成员已完成源码匹配
 
 `jittor/distributed/{__init__,bucket,launch,process_group,store}.py` 五个 pinned-builder content-change 成员均与候选 wheel 和源码提交 `9a9096bb5588816ca0e090cbcb4c18a6e967ab0e` 匹配，也与已安装测试 wheel 的源码提交 `35a1a760` 相同。现有 exact-source 双 rank NCCL Trainer full/stop/fresh-resume 到 step 2 及双 rank DCP toy save/load 证据覆盖部分 distributed 路径，不代表每个模块独立验收或正式性能。累计 crosswalk 为 69 additions、140/305 content changes；165 项变化与两项 ACL 删除仍未批准。

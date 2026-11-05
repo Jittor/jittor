@@ -1,3 +1,7 @@
+## 2026-11-06 01:51 +0800 续接：ops/core/runtime 24 个 wheel 成员完成源码映射
+
+固定候选 wheel 中 12 个 ops、7 个 _core、5 个 _runtime 内容变化成员逐项匹配源码提交 `9a9096bb` 和安装态测试源码 `35a1a760`。已有 matrix/R14/distributed 证据只支持相关路径，不扩展成全部高层 API 或后端发布通过。累计 crosswalk 69 additions、164 content changes，剩 141 changes 与两项 ACL removal 未审阅/批准。本轮不运行测试、GPU 或 cache 工作；GPU2 有 qlt/yqa/cgq 共享进程，cgq association 为空，独占性能窗口仍未就绪。工作树在新增文档前干净，HEAD `f8031f3c7` ahead 12 / behind 0，未 push；overall **Not complete**。
+
 ## 2026-11-06 01:46 +0800 续接：distributed Python 层五个变化成员已核对
 
 五个 `jittor.distributed` wheel content changes 全部匹配固定源码和已安装测试 wheel 源版本。现有同源双 rank NCCL Trainer full/checkpoint/fresh-resume 与 DCP toy-state 通过提供相关功能路径证据，但不能代替每个 API 独立测试或性能/显存测试。累计已匹配 69 additions、140 content changes；尚有 165 changes 和两项 ACL removals 未审阅/批准。没有运行测试、GPU 或 cache 工作，overall 仍 Not complete。

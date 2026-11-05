@@ -1,3 +1,11 @@
+## 2026-11-06 01:51 +0800 固定 wheel 的 ops/core/runtime 24 项完成源码身份 crosswalk
+
+以固定构建器候选 wheel（SHA256 `18116fb386dd079e46f5b75e352cc84be29b0101912f447de44bd5c997d7c697`）和 pinned-builder baseline（69 additions、305 content changes、2 removals、0 approved）为准。本轮核对 `jittor/ops/` 下 advanced_indexing、concatenation、indexing、numerical、random、reductions、scan、selection、shape_ops、sorting、tensor_ops、tensor_protocol 共 12 项，以及 `jittor/_core/` 的 api、diagnostics、dtypes、flags、function、module、var 七项和 `jittor/_runtime/` 的 backend_libraries、capability、dispatch、flag_policy、import_aliases 五项。24 个 wheel member 的 SHA256 均分别匹配源码提交 `9a9096bb5588816ca0e090cbcb4c18a6e967ab0e` 与安装态测试源码提交 `35a1a7605ec475e9cbc1a9688afc299ee3bd8011`。
+
+现有 CPU/CUDA backend contract matrix 55/55 通过，含 getitem/index/reindex、reduce、reshape/transpose、where、random/generator_randint、argsort/cumsum 等低层 probe；R14 实际训练/恢复及分布式同源测试也提供相关运行路径证据。这些证据不等于上述高层操作 façade、Var/Module/runtime APIs 的所有参数边界均逐项通过，也没有覆盖 ACL、ROCm、CoreX。此处仅核对 wheel 与源码身份、映射已有覆盖，没有运行测试或重新安装 wheel。
+
+累计 crosswalk 为 69 additions、164/305 content changes（共 233 个成员）；仍有 141 个 content changes 和两项 ACL removals 未完成审阅/批准，wheel allowlist 未改。GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 读数为 37,132/81,920 MiB、100%，进程属于 qlt（2517202、2973176）、yqa（3081944）及 cgq（3312445）；cgq 队列与 association 查询仍为空。没有使用 Jittor build cache；仓库根目录 lock 文件不存在，先前 PID 3611049 也不存在。根盘可用 41 GB，`/data6` 可用 4.3 TB。工作树干净，HEAD `f8031f3c7` 对 `origin/cgq_transformers` ahead 12 / behind 0，未 push。独占测量和整体 Day2–5 发布门保持 **Not complete**。
+
 ## 2026-11-06 01:46 +0800 distributed Python 层 5 个 wheel 内容变化成员审阅
 
 pinned-builder baseline 中 `jittor/distributed/__init__.py`、`bucket.py`、`launch.py`、`process_group.py` 和 `store.py` 五项 content changes 全部逐项通过固定 wheel member/source SHA256 对照，且在 `9a9096bb5588816ca0e090cbcb4c18a6e967ab0e` 与已安装功能 wheel 源提交 `35a1a7605ec475e9cbc1a9688afc299ee3bd8011` 中均相同。
