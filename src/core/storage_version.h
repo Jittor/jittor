@@ -18,6 +18,11 @@ struct SavedStorageVersion {
     shared_ptr<StorageMutationVersion> token;
     uint64 version;
     int64 original_id;
+    // A pending setitem may reuse its input's storage when materialized.
+    // Keep that already-existing counter as an alternative to the output's
+    // provisional counter, without accepting writes to either one.
+    shared_ptr<StorageMutationVersion> materialized_token;
+    uint64 materialized_version = 0;
 };
 
 // A native gradient checks a saved value only when its derivative actually

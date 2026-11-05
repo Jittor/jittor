@@ -63,9 +63,13 @@ void check_backward_storage_read(Var* value) {
     if (!token) return;
     for (auto* scope = backward_storage_reads; scope; scope = scope->previous)
         for (const auto& saved : scope->op->saved_storage_versions)
-            if (saved.token == token || saved.original_id == value->id)
-                USER_CHECK(saved.token == token &&
-                        saved.version == saved.token->value.load(std::memory_order_relaxed))
+            if (saved.token == token || saved.materialized_token == token ||
+                    saved.original_id == value->id)
+                USER_CHECK((saved.token == token || saved.materialized_token == token) &&
+                        saved.version == saved.token->value.load(std::memory_order_relaxed) &&
+                        (!saved.materialized_token ||
+                            saved.materialized_version == saved.materialized_token->value.load(
+                                std::memory_order_relaxed)))
                     << "one of the variables needed for gradient computation has been modified by an inplace operation; saved Var"
                     << saved.original_id << "read by" << scope->op->name();
 }
@@ -491,14 +495,22 @@ void Op::init() {
     // Native assignment/rebinding remains unchanged.
     if (first_init && !no_grad && !all_inputs_stopped &&
             autograd_policy.preserve_requires_grad_on_assignment) {
-        for (Var* value : inputs()) {
+        auto save_storage = [&](Var* value) {
             auto token = value->storage_version_token();
-            saved_storage_versions.push_back({token, token->value.load(std::memory_order_relaxed), value->id});
-        }
-        for (Var* value : outputs()) {
-            auto token = value->storage_version_token();
-            saved_storage_versions.push_back({token, token->value.load(std::memory_order_relaxed), value->id});
-        }
+            SavedStorageVersion saved{token, token->value.load(std::memory_order_relaxed), value->id};
+            Op* producer = value->input();
+            if (producer && !value->is_finished() && producer->is_op(op_ids::setitem())
+                    && producer->inputs().size()) {
+                auto candidate = producer->inputs().front()->storage_version_token();
+                if (candidate != token) {
+                    saved.materialized_token = candidate;
+                    saved.materialized_version = candidate->value.load(std::memory_order_relaxed);
+                }
+            }
+            saved_storage_versions.push_back(move(saved));
+        };
+        for (Var* value : inputs()) save_storage(value);
+        for (Var* value : outputs()) save_storage(value);
     }
 }
 
