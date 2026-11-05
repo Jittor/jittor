@@ -1,3 +1,11 @@
+## 2026-11-06 01:00 +0800 CUDA matrix 用 use_cutt=1 复验；cuTT wrapper loader 仍失败
+
+为排除前一轮显式 `use_cutt=0` 的配置影响，在独立新 `JITTOR_HOME` 中设置 `use_cutt=1`，从 `/home/cgq/.cache/jittor/cutt/cutt-1.2` 只读源码构建库；产出的隔离 `libcutt.so` SHA256 `1ebe2c355ea0118a56026280a903577c32e015b59a6d5bfa2b05d823a0e1906b`。完整矩阵 182.04 秒结束：53 passed、1 skipped、1 failed；CPU 行 36 passed/5 no-probe，CUDA 行 38 passed/1 no-dependency/19 no-probe。`generator_randint` seed99、int64 `[-2^63,1)`、129 项 CPU/CUDA 精确 parity 继续通过，fallback 0→0。
+
+唯一失败仍是 `test_optional_libraries_are_loaded_before_the_registry_is_read`，但这次不是关闭开关造成：`setup_cutt()` 在 wrapper/module 加载注册期间抛出无消息 `AssertionError`，`libcutt.so` 已生成却未注册 `cutt` runtime module。attempt-01 的首次 `jit_utils` bootstrap exit 3 未运行产品测试；attempt-02 执行完整矩阵。CUDA core SHA256 测试前后保持 `851ae2a1495f89b32587f0113ca909174821329fed488460d04b78b5c3435409`，current-build 检查通过。完整日志在新证据包；不再重复该配置，也没有改源码。
+
+证据目录 `/data6/cgq/jittor-lab/_state/release-day23/20261106-current-main-backend-contract-cuda-cutt-r1-prepared/`，7,537 项 manifest 校验通过，SHA256 `61e6a040f5fef4e15ff0f54b84b3c3ee25ce8f8b5765111c1c18d14263230281`。测试只暴露 GPU0 UUID `GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5` 为 `cuda:0`，GPU2 未暴露或访问。该结果仍不是整套 CUDA matrix pass，也没有性能/显存结论；Day4–5 和更广 Day2–5 release 保持 **Not complete**。
+
 ## 2026-11-06 00:49 +0800 当前源码 CUDA backend contract matrix 实际运行；generator_randint parity 通过，整套 CUDA 门未关闭
 
 在执行时 checkout HEAD `aa0a59cf0ae66998bd851063f0f28f0c2e273a22` 上运行当前仓库的 backend contract matrix。测试驱动来自该 checkout，`backend_contract_matrix.py` SHA256 `c608cef8fee8e38d32400103e980b9f782fa587c61c5e040009ca68d7e2235b0`，`test_backend_contract_matrix.py` SHA256 `4b79dace5672c853b6564592d2fd818ff97fd74e8c470ca48531d919c1a1a992`。运行时从已安装 wheel 根 `/data6/cgq/jittor-lab/_state/release-day23/20261103-current-head-wheel-gate-r1-prepared/install` 导入，wheel SHA256 `b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69`，源码提交 `35a1a7605ec475e9cbc1a9688afc299ee3bd8011`。它是 exact main wheel 源码 `9a9096bb5588816ca0e090cbcb4c18a6e967ab0e` 的祖先；两者之间仅 `compat/tests/torch/test_torch_compat_serialize.py` 与 `compat/torch/installers/nn/module_methods.py` 有变化，native backend 代码未变。

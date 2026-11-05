@@ -1,3 +1,13 @@
+## 2026-11-06 01:00 +0800 cuTT-enabled CUDA matrix：libcutt 已生成，wrapper/module loader AssertionError
+
+在前一轮矩阵明确以 `use_cutt=0` 结束后，新建第二个隔离 cache，并改用 `use_cutt=1` 复验。`CUTT_PATH` 指向既有源码缓存 `/home/cgq/.cache/jittor/cutt/cutt-1.2`，本轮只读该源码，所有编译输出落在 `/data6/cgq/jittor-lab/_state/release-day23/20261106-current-main-backend-contract-cuda-cutt-r1-prepared/jittor-home/`。源码样本 SHA256：`src/cutt.cpp` `54e54996a39fa77323e7e6b0b29120a3084178a5bfbf6655beb8e44e1358018c`、`src/cuttkernel.cu` `0f8b4c78110d9a13583fc6f50f509ee35bdf79a2614fb444408f15184f7f1a5c`、`include/cutt.h` `26ffb9297e461fac4fa30cd9592d6500773f120d89e6e42377060bd07c632f39`。隔离 `libcutt.so` 已生成，SHA256 `1ebe2c355ea0118a56026280a903577c32e015b59a6d5bfa2b05d823a0e1906b`。
+
+完整 backend contract pytest 用时 182.04 秒：55 项中 53 passed、1 skipped、1 failed。CPU 行 36 passed/5 no-probe；CUDA 行 38 passed/1 no-dependency/19 no-probe；`generator_randint` 的 seed99、int64 `[-2^63,1)`、129 样本精确 CPU/CUDA parity 测试通过。`backend_fallback=error`，计数 0→0。唯一失败仍为 `test_optional_libraries_are_loaded_before_the_registry_is_read`：`setup_cutt()` 在运行时 wrapper/module 加载注册阶段报 `AssertionError`（无错误文本），因此 compiled `libcutt.so` 未变成已注册的 `cutt` module。日志记录 `cutt -- AssertionError:`，没有证据把它归因成数值 kernel 不匹配；也不能把整套 CUDA matrix 标为通过。
+
+attempt-01 只完成 `jit_utils` cache bootstrap 并以 SystemExit 3 退出；attempt-02 才运行产品测试。CUDA core SHA256 测试前后相同 `851ae2a1495f89b32587f0113ca909174821329fed488460d04b78b5c3435409`，`core_build_is_current()` 前后均 true。测试只看到物理 GPU0 UUID `GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5`，逻辑 `cuda:0`；GPU2 未暴露。证据目录 `/data6/cgq/jittor-lab/_state/release-day23/20261106-current-main-backend-contract-cuda-cutt-r1-prepared/`，7,537 项 manifest 校验通过，SHA256 `61e6a040f5fef4e15ff0f54b84b3c3ee25ce8f8b5765111c1c18d14263230281`。没有修改源码、测试矩阵、旧 cache 或共享 cuTT 源码。
+
+下一项功能工作应定位 `setup_cutt()` wrapper/module 注册断言并在本仓库当前源码上修复与复验；正式性能/显存仍须在可验证独占窗口进行至少三轮 PT/JT 交替、每侧每轮至少十个热态样本，报告 median/p95/离散度、加载/首步/热态耗时和 allocator/NVML 峰值。GPU2 仍被共享作业占用，cgq Slurm association 尚未配置。整体 Day2–5 release **Not complete**。
+
 ## 2026-11-06 00:49 +0800 CUDA backend contract matrix：generator_randint parity 通过，cuTT 加载门未通过
 
 ### 执行身份与隔离

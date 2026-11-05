@@ -1,3 +1,9 @@
+## 2026-11-06 01:00 +0800 续接：use_cutt=1 仍未通过 CUDA library loader gate
+
+use_cutt=1 后从现有 cuTT 源码缓存构建出 isolated `libcutt.so`（SHA256 `1ebe2c355ea0118a56026280a903577c32e015b59a6d5bfa2b05d823a0e1906b`），但 Jittor `setup_cutt()` 后续 wrapper/module 注册报无消息 `AssertionError`。完整矩阵仍为 53 passed、1 skipped、1 failed；38 个 CUDA 单元通过，`generator_randint` CUDA parity 通过，fallback 0→0。问题已从“use_cutt 显式关闭”收窄到实际 cuTT runtime loader 集成，详见 Day2–5 报告与主板；本轮不再重试。
+
+新证据目录 `/data6/cgq/jittor-lab/_state/release-day23/20261106-current-main-backend-contract-cuda-cutt-r1-prepared/`，manifest SHA256 `61e6a040f5fef4e15ff0f54b84b3c3ee25ce8f8b5765111c1c18d14263230281`。GPU2 未暴露；Day4–5 性能/显存验收仍等待管理员配置 cgq Slurm association 和独占租约。整体 Day2–5 **Not complete**。
+
 ## 2026-11-06 00:49 +0800 续接：current-source CUDA backend matrix 部分通过
 
 本轮在执行时 HEAD `aa0a59cf0ae66998bd851063f0f28f0c2e273a22` 上运行当前仓库矩阵驱动，CUDA GPU0 UUID `GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5` 映射为 `cuda:0`，GPU2 未暴露/访问，fallback `error` 且 0→0。55 项为 53 passed、1 skipped、1 failed；CPU 行 36 passed，CUDA 行 38 passed。`generator_randint` 的 seed99、int64 `[-2^63,1)`、129 项 CUDA parity 通过。唯一失败是 optional-library 门要求加载 cuTT，而本次沿用缓存时配置显式 `use_cutt=0`；完整 CUDA matrix 仍未通过。详细运行身份、未验证单元、第一次 bootstrap 退出和隔离 core 重建见 Day2–5 报告及主板。
