@@ -1,3 +1,7 @@
+## 2026-11-06 02:05 +0800 固定 wheel additions/content changes 全量身份映射完成
+
+Pinned-builder 候选 wheel 的 69 additions 均已匹配源码；305 content changes 中 301 个代码成员已与 `9a9096bb` 和测试源 `35a1a760` 匹配，4 个 dist-info 成员已核对。候选 ZIP 1,100/1,100 个 RECORD 成员大小与 SHA256 一致，CRC 无错误。这仅关闭包成员身份/完整性盘点，baseline allowlist 仍是 69/305/2、0 approved。ACL 43 项源码匹配但无 CANN 设备；`sigmoid_op.py` 与 `transpose_op.py` 删除仍未批准。GPU2 37,808 MiB、100%，qlt/yqa/cgq 共享，cgq association 为空；正式 Day4–5 和更广发布验收仍 **Not complete**。
+
 ## 2026-11-06 01:59 +0800 dtype/bindings/CPU/native tests 28 项完成 crosswalk
 
 11 个 type、6 个 bindings、6 个 MKL CPU backend、5 个 native tests 成员全部匹配固定 wheel、`9a9096bb` 与 `35a1a760`；其中三个 bindings 成员前已计入 storage，本轮净增 25。既有 55/55 CPU/CUDA matrix 是所选算子与 dtype probe，不等于完整发布矩阵。累计唯一 crosswalk 69 additions、246/305 content changes；剩 59 changes 与两项 ACL 删除未审阅/批准。并已修正前序重复计数：`ops/random.py` 已包含在 RNG 域，故此前 164/180/222 小计依次改为 163/179/221。GPU2 仍 100% 共享占用且 cgq association 为空；overall release **Not complete**。

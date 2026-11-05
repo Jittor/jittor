@@ -1,3 +1,13 @@
+## 2026-11-06 02:05 +0800 固定 wheel 全部 additions/content changes 完成身份审计，ACL 删除仍阻塞
+
+以 pinned-builder 候选 wheel SHA256 `18116fb386dd079e46f5b75e352cc84be29b0101912f447de44bd5c997d7c697` 为准，前述累计已 source-map 246/305 content changes。本轮新增核对 15 个源文件成员：`jittor/__init__.py/.pyi`、6 个 `src/utils`、3 个 `backends/comm` 与 4 个 `backends/rocm`，全部匹配 wheel bytes、源码提交 `9a9096bb5588816ca0e090cbcb4c18a6e967ab0e` 和安装态测试源码 `35a1a7605ec475e9cbc1a9688afc299ee3bd8011`。另将 43 个 ACL content changes 全部做三方 SHA256 对照，43/43 匹配；flash-attention 的 3 项之前已核，本轮净增 40。至此 301/301 个代码 content-change 成员与目标源码身份匹配；另有 4 个 dist-info content changes（METADATA、WHEEL、entry_points、RECORD）完成包内核查。
+
+固定 wheel 的 `RECORD` 共 1,100 行，对应 1,100 个 archive members；除 RECORD 自身按格式留空 digest/size 外，其余所有 member 的 SHA256 与 size 均匹配，0 mismatch；`unzip -t` 的压缩数据 CRC 检查也无错误。可见 metadata 为 jittor 1.3.11.0、`py3-none-any`，入口含 `jtrun` 及 acl/corex/rocm backend 注册。这些结果完成 wheel additions/content changes 的身份与内部一致性审计，不代表运行行为验收或迁移批准；baseline 仍为 69 additions、305 content changes、2 removals、0 approved，未改 allowlist。
+
+ACL 运行证据仍为空：本机无 `ccec`、`ASCEND_TOOLKIT_HOME` 和 `npu-smi`，因此 43 个 ACL 内容变化只证明与源码相同。两项 ACL removals `sigmoid_op.py` 与 `transpose_op.py` 的 native 替代仍需 CANN 设备验证，继续未批准。Day4–5 正式性能/显存也未启动：GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 于 02:05 为 37,808/81,920 MiB、100%，当前五个共享进程属于 qlt/yqa/cgq；cgq queue 与 association 为空。根盘可用 41 GB，`/data6` 可用 4.3 TB；未使用 Jittor cache，仓库 lock 文件及旧 PID 3611049 均不存在。
+
+整体 source/metadata crosswalk 已完成；更广 Day2–5 行为门、ACL/CANN 删除准入、GPU2 独占至少三轮 PT/JT 配对测量（每轮每侧十个热样本及 median/p95/离散度、load/首步/热态时间与 allocator/NVML 峰值）仍未完成，release 继续 **Not complete**。HEAD `3fe30ad26` 对已 fetch 的 `origin/cgq_transformers` ahead 16 / behind 0，文档编辑前工作树干净，未 push。
+
 ## 2026-11-06 01:59 +0800 dtype/bindings/CPU 与 native tests 28 项完成 crosswalk；累计数已去重校正
 
 本轮核对固定 wheel 中 11 个 `jittor/src/type/**` 成员、6 个 `jittor/src/bindings/**`、6 个 MKL CPU backend 成员和 5 个 `jittor/src/tests/**` 成员；28/28 candidate bytes 均匹配源码提交 `9a9096bb5588816ca0e090cbcb4c18a6e967ab0e` 与安装态测试源码 `35a1a7605ec475e9cbc1a9688afc299ee3bd8011`。Bindings 中 `py_var_tracer.cc`、`py_tensor_frontend.cc/.h` 已计入此前 Tensor/storage 的 19 项，本轮净增 25 项。已有 55/55 CPU/CUDA backend contract matrix 含 MKL matmul、conv/backward 与多类 dtype 算子 probe；这只支持矩阵选定输入和当前 CPU/CUDA 构建，不是完整 dtype/API 边界矩阵，也不代表五个随 wheel 打包的 native test 源文件都已执行。

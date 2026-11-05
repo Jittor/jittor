@@ -1,3 +1,7 @@
+## 2026-11-06 02:05 +0800 续接：固定 wheel additions/content-change 身份盘点完成
+
+本轮 15 个 init/utils/comm/ROCm 代码成员和 43 个 ACL 变化成员逐项匹配候选 wheel、`9a9096bb`、`35a1a760`；ACL 中 3 项前已核，新增净 40。305 项内容变化现有 301 个源码成员 crosswalk 完成，4 个 dist-info 成员自校验完成；RECORD 1,100/1,100 个成员大小和 SHA256 正确，ZIP CRC 无错误。尚未批准 allowlist：ACL 的 sigmoid/transpose 删除继续等 CANN 设备验证，性能/显存门仍等管理员加 association 和 GPU2 独占。GPU2 37,808 MiB、100%，qlt/yqa/cgq 共享；HEAD `3fe30ad26` ahead16/behind0，未 push。overall **Not complete**。
+
 ## 2026-11-06 01:59 +0800 续接：type/bindings/CPU/native tests 28 项核对及小计更正
 
 28 个候选 wheel 成员全部匹配源码 `9a9096bb` 与测试源 `35a1a760`；其中三个 Tensor frontend bindings 之前已计入 storage，净新增 25。既有 CPU/CUDA matrix 覆盖部分 MKL/dtype 路径。累计唯一 crosswalk 为 69 additions、246 content changes，剩 59 changes 和两项 ACL removals 未批准。发现 01:51 曾将已归入 RNG 的 `ops/random.py` 重复计入，已把历史累计 164/180/222 更正为 163/179/221。未运行测试、构建、GPU 或 cache；GPU2 37,132 MiB、100%，qlt/yqa/cgq 共享，cgq association 为空。HEAD `eaf377272` ahead15/behind0，未 push；overall **Not complete**。
