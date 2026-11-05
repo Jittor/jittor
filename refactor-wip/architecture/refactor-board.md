@@ -1,3 +1,7 @@
+## 2026-11-06 01:35 +0800 固定构建器 wheel 的 69 个新增成员已完成源码身份映射
+
+已将审计基准纠正为与候选 wheel `18116fb386dd079e46f5b75e352cc84be29b0101912f447de44bd5c997d7c697` 对应的 `current-main-default-baseline-pinned-builder.log`：69 additions、305 content changes、2 removals、0 approved。另一份 namespace-fix wheel 日志为 70/305/3，仅多出顶层 dist-info LICENSE addition 和旧 licenses/LICENSE removal；305 个内容变化与固定构建器清单完全相同，前述代码差异域均在两份清单中。69/69 additions 现已逐项匹配源码提交 `9a9096bb5588816ca0e090cbcb4c18a6e967ab0e`；累计另核对 18 个 content changes。仍有 287 个内容变化和两项 ACL 删除未审阅/批准，overall release 保持 **Not complete**。
+
 ## 2026-11-06 01:26 +0800 current-main wheel attention/AMP/checkpoint/profiling 子集已完成源码与覆盖映射
 
 固定构建器 wheel 中选取 attention、AMP/checkpoint、graph/step 与 profiling 相关的 22 项未批准成员（16 additions、6 content changes）；逐项核对 wheel member 字节与源码提交 `9a9096bb5588816ca0e090cbcb4c18a6e967ab0e` 一致，并确认相同 22 个 Git blob 在已安装测试 wheel 的源码提交 `35a1a7605ec475e9cbc1a9688afc299ee3bd8011` 也未变化。已有覆盖包括 GQA attention CUDA 前反向 1 pass、Embedding CUDA 2 pass、CPU checkpoint recompute 6 pass；graph/step/AMP 的 CPU suites 通过但 accelerator-only 项跳过。flash/CUDNN/SDPA 完整路径与 profiling peak-memory 接受度仍未关闭；候选固定构建 wheel 未重新安装。

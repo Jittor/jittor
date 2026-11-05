@@ -1,3 +1,17 @@
+## 2026-11-06 01:35 +0800 固定构建器 wheel baseline 日志核对与全部 additions 源码映射
+
+### 纠正 baseline 日志身份
+
+固定候选 wheel `18116fb386dd079e46f5b75e352cc84be29b0101912f447de44bd5c997d7c697` 对应审计文件 `/data6/cgq/jittor-lab/_state/release-day23/20261103-current-main-wheel-migration-audit-r1/current-main-default-baseline-pinned-builder.log`，计数为 69 additions、305 content changes、2 removals、0 approved。此前成员查询曾读到同目录的 `current-main-default-baseline.log`；该文件比较的是另一份 namespace-fix wheel，计数为 70/305/3。按成员路径排序比对，两份清单的 305 个 content-change 项相同；非固定 wheel 额外报告 `jittor-1.3.11.0.dist-info/LICENSE.txt` addition，并报告旧路径 `jittor-1.3.11.0.dist-info/licenses/LICENSE.txt` removal。此前已核的 RNG、optimizer、DDP、attention、AMP/checkpoint、graph/runtime 和 native-src 代码路径均在固定构建器清单中，因此这些代码 hash 结果仍适用。以后续审计以 pinned-builder 日志为唯一成员名单。
+
+### 补齐余下 19 个新增成员
+
+前序已逐项比较 50 个新增成员和 18 个内容变化。本轮补齐最后 19 个 pinned-builder additions：ACL 15 个（foreach coefficients、AscendC、cross-entropy、foreach、fused-SGD 和 GELU 的头文件/native kernels/dispatch files）、CUDA 2 个（`cublas/lt_linear_cuda.py`、`nn/linear_bias_cuda.py`），以及 `nn/backends/onednn.py`、`nn/functional/_layout.py`。逐项解包候选 wheel 并与源码提交 `9a9096bb5588816ca0e090cbcb4c18a6e967ab0e` 中对应路径做 SHA256 比较，19/19 完全匹配；它们在已安装测试版本源码提交 `35a1a7605ec475e9cbc1a9688afc299ee3bd8011` 也没有内容变化。加上此前已完成的 50 additions，固定候选的全部 69 additions 现均与源码身份对应；先前所审计的 18 个 content changes 仍只是全体 305 项中的子集，287 项尚未审阅。
+
+行为证据仍按设备与功能范围区分。LT Linear 的 `tests/nn/test_lt_linear_cuda.py` 在真实 CUDA 上 8 passed，测试时源码提交 `304500ea83ce1e1191ee7f3f4d5efc60911529d4` 是候选提交祖先，且 `lt_linear_cuda.py` Git blob 在该提交、`35a1a760` 和 `9a9096bb` 完全相同。linear-bias 组合测试保留超时结果；oneDNN/layout 有测试源，但现有结果文档里没有可绑定到这些新增模块的定向 pass 收据。ACL 测试源存在不代表设备执行；当前无 `ccec`，`ASCEND_TOOLKIT_HOME` 未设置，15 个 ACL additions 仍没有 CANN runtime 证据。pinned-builder 仍有 ACL 的 `sigmoid_op.py` 和 `transpose_op.py` 两项删除，原定 native 替代未经 CANN 验证，未批准。
+
+本轮没有改 baseline 或 allowlist，也没有运行测试、触碰 GPU 或 build cache。固定 wheel 的 69 个 additions 已完成包成员到源码的核对，不等于这些成员都通过运行验收；305 个内容变化中仅 18 项做了同类 hash crosswalk，另 287 项仍待审。GPU2 独占下的正式 Day4–5 性能/显存测量及 broader Day2–5 发布门仍开放。
+
 ## 2026-11-06 01:26 +0800 current-main wheel attention、AMP/checkpoint、graph/step 与 profiling 差异域审阅
 
 固定构建器候选 wheel SHA256 `18116fb386dd079e46f5b75e352cc84be29b0101912f447de44bd5c997d7c697`，源码提交 `9a9096bb5588816ca0e090cbcb4c18a6e967ab0e`。从 default baseline 挑选 22 个成员：16 additions，涉及 `_runtime/graph_replay.py`、`_runtime/step_capture.py`、`amp/__init__.py`、`amp/grad_scaler.py`、`nn/functional/_amp.py`、CUDA CUDNN attention/SDPA、Embedding、Flash Attention、fused FP32 attention 与 profiling 六模块；6 content changes 包括 ACL flashattention 三成员，以及 `nn/functional/attention.py`、`multihead_attention.py`、`nn/modules/attention.py`。逐项比较 wheel 解包 bytes 与提交 `9a9096bb` 中对应 Python/native 源路径 SHA256，22/22 一致；并逐项比较 Git blob，确认相同 22 项在实际 installed-wheel 测试快照 `35a1a7605ec475e9cbc1a9688afc299ee3bd8011` 中未变。这证明被测 package code 与固定候选对应，不证明本轮已安装固定构建 wheel。

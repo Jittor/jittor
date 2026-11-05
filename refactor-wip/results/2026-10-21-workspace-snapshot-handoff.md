@@ -1,3 +1,9 @@
+## 2026-11-06 01:35 +0800 续接：固定构建器 baseline 纠正，69/69 additions 已匹配源码
+
+固定 wheel 必须使用 `current-main-default-baseline-pinned-builder.log`：69 additions、305 changes、2 removals、0 approved。先前误读的普通 default log 对应另一个 namespace-fix wheel，70/305/3；成员差异只在 dist-info LICENSE 路径，内容变化清单相同，已审代码成员仍都属于固定 wheel 清单。固定候选的全部 69 additions 已逐项比对至源提交 `9a9096bb5588816ca0e090cbcb4c18a6e967ab0e` 并匹配；累计核对 18 个内容变化成员，剩余 287 项内容变化和两项 ACL 删除仍未批准。LT Linear 有 8 个 CUDA pass；linear-bias 曾超时，oneDNN/layout 无对应已保存 pass，ACL 缺 CANN 环境。
+
+不运行 GPU 或 cache 任务的情况下继续审阅内容变化项；Day4–5 等待 cgq association 和 GPU2 独占。整体 Day2–5 仍为 **Not complete**。
+
 ## 2026-11-06 01:26 +0800 续接：第二批 22 个 attention/AMP/checkpoint/profiling wheel 成员已核对
 
 第二批 22 个未批准成员（16 additions、6 content changes）逐项匹配 wheel 固定源码提交，且在旧 installed-wheel 测试源码提交中内容相同；对应已有证据是 GQA CUDA 前反向 1 pass、Embedding CUDA 2 pass、checkpoint recompute CPU 6 pass，以及 graph/step/AMP CPU tests。所有 accelerator-only skips、flash 无成功执行断言、checkpoint 无 CUDA memory result 均保留。连同 RNG/optimizer/DDP 已累计核对 53 个成员（35 additions、18 changes），baseline 仍 69/305/2、0 approved；没有重新安装候选 wheel，也没有性能/显存结论。
