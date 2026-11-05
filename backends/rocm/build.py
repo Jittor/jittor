@@ -33,6 +33,8 @@ _LIBRARIES = {
         ("hipblas/hipblas_matmul_op.h", "hipblas/hipblas_matmul_op.cc", "hipblas/gemm_layout.h",
          "hipblas/hipblas_wrapper.h", "hipblas/hipblas_wrapper.cc",
          "hipblas/hipblas_batched_matmul_op.h", "hipblas/hipblas_batched_matmul_op.cc",
+         "hipblas/hipblas_conv_inference_op.h", "hipblas/hipblas_conv_inference_op.cc",
+         "hipblas/convolution.h", "hipblas/convolution.cu",
          "hipblas/hipblas_capabilities.cc"),
     ),
     "rocprim": (

@@ -306,10 +306,14 @@ include backends/cuda/runtime/driver.cc
 include backends/cuda/runtime/nan_checker.cc
 include backends/cuda/src/fp16_emu.cc
 include backends/cuda/src/helper_cuda.cc
+include backends/rocm/libraries/hipblas/convolution.cu
+include backends/rocm/libraries/hipblas/convolution.h
 include backends/rocm/libraries/hipblas/gemm_layout.h
 include backends/rocm/libraries/hipblas/hipblas_batched_matmul_op.cc
 include backends/rocm/libraries/hipblas/hipblas_batched_matmul_op.h
 include backends/rocm/libraries/hipblas/hipblas_capabilities.cc
+include backends/rocm/libraries/hipblas/hipblas_conv_inference_op.cc
+include backends/rocm/libraries/hipblas/hipblas_conv_inference_op.h
 include backends/rocm/libraries/hipblas/hipblas_matmul_op.cc
 include backends/rocm/libraries/hipblas/hipblas_matmul_op.h
 include backends/rocm/libraries/hipblas/hipblas_wrapper.cc

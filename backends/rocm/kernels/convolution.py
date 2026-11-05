@@ -15,6 +15,9 @@ def supported(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1,
         return False
     from jittor.misc import _pair
     stride, padding, dilation = map(_pair, (stride, padding, dilation))
+    if any(size > 2147483647 for sizes in (x.shape, weight.shape, stride, padding, dilation)
+           for size in sizes):
+        return False
     n, channels, height, width = x.shape
     kh, kw = weight.shape[-2:]
     oh = (height + 2*padding[0] - dilation[0]*(kh-1) - 1)//stride[0] + 1
@@ -22,7 +25,7 @@ def supported(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1,
     inner, columns = channels*kh*kw, n*oh*ow
     # The portable contraction can fuse without an im2col allocation. Keep
     # it when this explicit workspace would exceed 256 MiB or BLAS limits.
-    return (oh > 0 and ow > 0 and inner <= 2147483647
+    return (oh > 0 and ow > 0 and oh*ow <= 2147483647 and inner <= 2147483647
             and columns <= 2147483647 and inner*columns*4 <= (256 << 20))
 
 
@@ -31,6 +34,11 @@ def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1,
            *, _depthwise_fast_path=True):
     from jittor.misc import _pair
     stride, padding, dilation = map(_pair, (stride, padding, dilation))
+    from jittor._runtime.core_api import _output_requires_grad, _stop_grad_outputs
+    if not _output_requires_grad(x, weight, bias):
+        from jittor._runtime.backend_libraries import get_library_ops
+        return _stop_grad_outputs(get_library_ops('hipblas').hipblas_conv_inference(
+            x, weight, [] if bias is None else [bias], stride, padding, dilation))
     n, channels, height, width = x.shape
     out_channels, _, kh, kw = weight.shape
     sh, sw = stride

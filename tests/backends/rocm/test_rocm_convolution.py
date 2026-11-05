@@ -123,4 +123,50 @@ def test_workspace_and_blas_limits_decline_without_allocating():
                                _storage_is_contiguous=lambda: True)
     assert not supported(metadata((16,512,256,256)),metadata((512,512,3,3)),padding=1)
     assert not supported(metadata((1,2147483648,1,1)),metadata((1,2147483648,1,1)))
+    assert not supported(metadata((0,3,65536,65536)),metadata((4,3,1,1)))
+    assert not supported(metadata((0,3,2147483648,1)),metadata((4,3,1,1)))
     assert supported(metadata((1,64,32,32)),metadata((64,64,3,3)),padding=1)
+
+
+@pytest.mark.parametrize('batch,kh,stride,padding,dilation', [
+    (1, 3, (1, 1), (1, 1), (1, 1)), (4, 3, (2, 1), (1, 0), (1, 1)),
+    (2, 3, (1, 2), (2, 1), (2, 1)), (4, 1, (1, 1), (0, 0), (2, 3)),
+    (2, 1, (2, 1), (1, 0), (1, 1)),
+])
+@pytest.mark.parametrize('with_bias', [False, True])
+def test_native_inference_batched_nchw_and_pointwise(batch, kh, stride, padding, dilation, with_bias):
+    rng = np.random.RandomState(126)
+    raw = rng.normal(size=(batch, 3, 7, 8)).astype('float32')/4
+    weights = rng.normal(size=(4, 3, kh, kh)).astype('float32')/4
+    biases = rng.normal(size=8).astype('float32')/4
+    expected, _, _ = reference(raw, weights, biases[::2] if with_bias else None,
+                               stride, padding, dilation)
+    with jt.no_grad():
+        base = jt.array(raw.transpose(0, 1, 3, 2).copy())
+        x = base.transpose((0, 1, 3, 2))
+        w, bb = jt.array(weights), jt.array(biases)
+        out = jt.nn.conv2d(x, w, bb[::2] if with_bias else None, stride, padding, dilation)
+        out.sync()
+        assert out.location() == 'device' and out._storage_is_contiguous()
+        assert not out.requires_grad
+        np.testing.assert_allclose(out.numpy(), expected, rtol=3e-5, atol=3e-5)
+        np.testing.assert_array_equal(base.numpy(), raw.transpose(0, 1, 3, 2))
+        np.testing.assert_array_equal(w.numpy(), weights)
+        np.testing.assert_array_equal(bb.numpy(), biases)
+
+
+def test_native_inference_zero_batch_and_reused_workspace():
+    with jt.no_grad():
+        w = jt.ones((4, 3, 3, 3))
+        empty = jt.nn.conv2d(jt.zeros((0, 3, 5, 7)), w, padding=1)
+        empty.sync()
+        assert tuple(empty.shape) == (0, 4, 5, 7)
+        # Keep several outputs alive before syncing, exercising stream-ordered
+        # workspace reuse without one output's columns corrupting another's.
+        inputs = [np.full((2, 3, 5, 7), value, dtype='float32') for value in (1, 3, -2)]
+        outputs = [jt.nn.conv2d(jt.array(x), w, padding=1) for x in inputs]
+        jt.sync_all(True)
+        for raw, out in zip(inputs, outputs):
+            expected, _, _ = reference(raw, np.ones((4, 3, 3, 3)), None, (1, 1), (1, 1), (1, 1))
+            assert out.location() == 'device'
+            np.testing.assert_array_equal(out.numpy(), expected)

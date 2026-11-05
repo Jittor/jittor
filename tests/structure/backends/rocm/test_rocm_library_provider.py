@@ -256,6 +256,8 @@ def test_inference_kernels_register_without_importing_tensor_implementations(mon
     dispatch.register_kernel = lambda *args, **kwargs: calls.append((args, kwargs))
     monkeypatch.setitem(sys.modules, dispatch.__name__, dispatch)
     module.install_kernels()
-    assert [args[0] for args, _ in calls] == ['nn.rms_norm.inference', 'nn.softmax', 'conv2d']
+    assert [args[0] for args, _ in calls] == [
+        'nn.rms_norm.inference', 'nn.softmax', 'conv2d',
+        'nn.group_norm', 'nn.layer_norm.inference']
     assert all(args[1] == 'rocm' and kwargs['dtypes'] == {'float32'}
                for args, kwargs in calls)
