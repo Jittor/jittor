@@ -1,3 +1,13 @@
+## 2026-11-06 01:26 +0800 current-main wheel attention、AMP/checkpoint、graph/step 与 profiling 差异域审阅
+
+固定构建器候选 wheel SHA256 `18116fb386dd079e46f5b75e352cc84be29b0101912f447de44bd5c997d7c697`，源码提交 `9a9096bb5588816ca0e090cbcb4c18a6e967ab0e`。从 default baseline 挑选 22 个成员：16 additions，涉及 `_runtime/graph_replay.py`、`_runtime/step_capture.py`、`amp/__init__.py`、`amp/grad_scaler.py`、`nn/functional/_amp.py`、CUDA CUDNN attention/SDPA、Embedding、Flash Attention、fused FP32 attention 与 profiling 六模块；6 content changes 包括 ACL flashattention 三成员，以及 `nn/functional/attention.py`、`multihead_attention.py`、`nn/modules/attention.py`。逐项比较 wheel 解包 bytes 与提交 `9a9096bb` 中对应 Python/native 源路径 SHA256，22/22 一致；并逐项比较 Git blob，确认相同 22 项在实际 installed-wheel 测试快照 `35a1a7605ec475e9cbc1a9688afc299ee3bd8011` 中未变。这证明被测 package code 与固定候选对应，不证明本轮已安装固定构建 wheel。
+
+已保存的运行证据覆盖了部分功能格。main wheel `b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69` 上的 GQA attention CUDA 前反向用例 1 passed；Embedding 的 signed/repeated indices、确定性、一/二阶梯度与 chunk boundary 用例 2 passed。相同 installed-wheel 源码快照下 checkpoint recompute CPU 用例 6 passed、fallback 0→0，但未验证 CUDA activation recompute 的 RNG 行为或显存收益。当前 main CPU suite 中 graph replay alias warmup、AMP training loop 与 generator stream 合计 14 passed、6 个 accelerator-only skipped；step capture suite 9 passed、18 个 accelerator-only skipped，不能据此关闭 CUDA graph/capture 路径。
+
+余下覆盖有明确边界：既有 wheel-diff 测试源说明 `test_sdpa_cuda_flash_kernel` 主要测试拒绝条件、kernel 注册与发布，没有成功执行断言；GQA 的单一 attention shape/mask 结果也不能外推到全部 CUDNN/SDPA/Flash API。profiling/memory 模块和旧诊断样本不满足 Day4–5 发布门：尚无 GPU2 独占的至少三轮 PT/JT 交替测试、每轮每侧十个以上热样本、median/p95/离散度、load/首步/热态时间和 allocator/NVML 峰值。该 wheel 的 default baseline 仍有 69 additions、305 content changes、2 removals、0 approved；未调整 allowlist，也未把功能子集结果转成性能或显存声明。ACL flashattention 的修改仍需真实 CANN 设备证据。
+
+与前一轮已审阅的 RNG/optimizer/DDP 31 项合计，累计只核对 53 个 wheel 成员（35 additions、18 content changes），所有选定成员均对应固定源码提交。尚有 34 additions、287 content changes 和 2 removals 未完成同类审阅，整体 wheel migration 和 Day2–5 release 保持 **Not complete**。GPU2 的资源快照只引用本轮 01:16 +0800 的只读检查；本次未运行测试、未使用 GPU 或 Jittor build cache。
+
 ## 2026-11-06 01:21 +0800 current-main wheel RNG、optimizer 与 DDP 差异域审阅
 
 ### 审计身份与方法

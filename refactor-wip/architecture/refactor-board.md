@@ -1,3 +1,9 @@
+## 2026-11-06 01:26 +0800 current-main wheel attention/AMP/checkpoint/profiling 子集已完成源码与覆盖映射
+
+固定构建器 wheel 中选取 attention、AMP/checkpoint、graph/step 与 profiling 相关的 22 项未批准成员（16 additions、6 content changes）；逐项核对 wheel member 字节与源码提交 `9a9096bb5588816ca0e090cbcb4c18a6e967ab0e` 一致，并确认相同 22 个 Git blob 在已安装测试 wheel 的源码提交 `35a1a7605ec475e9cbc1a9688afc299ee3bd8011` 也未变化。已有覆盖包括 GQA attention CUDA 前反向 1 pass、Embedding CUDA 2 pass、CPU checkpoint recompute 6 pass；graph/step/AMP 的 CPU suites 通过但 accelerator-only 项跳过。flash/CUDNN/SDPA 完整路径与 profiling peak-memory 接受度仍未关闭；候选固定构建 wheel 未重新安装。
+
+加上前一轮 RNG/optimizer/DDP 的 31 项，本轮共审阅 53 个成员，其中 35 additions、18 content changes，均和固定源码提交相符；默认整体 baseline 仍是 69 additions、305 content changes、2 removals、0 approved。wheel 迁移批准、ACL/CANN 与 Day4–5 正式性能/显存门继续开放。
+
 ## 2026-11-06 01:21 +0800 current-main wheel RNG/optimizer/DDP 三个功能域已映射到源码与覆盖
 
 固定构建器候选 main wheel SHA256 为 `18116fb386dd079e46f5b75e352cc84be29b0101912f447de44bd5c997d7c697`，源码提交 `9a9096bb5588816ca0e090cbcb4c18a6e967ab0e`。从未批准 baseline 中选取 RNG 14 项、optimizer/fused 14 项和 DDP 3 项，共 31 个成员（19 additions、12 content changes）；逐项比较归档成员字节与对应 Git 源文件 SHA256 后 31/31 相同。optimizer 14 项在安装态功能测试来源提交 `35a1a7605ec475e9cbc1a9688afc299ee3bd8011` 与候选源码提交之间也全部为相同 Git blob。相关已有证据包括 current-source backend contract matrix 55/55、fused AdamW CUDA 定向更新、fused SGD 两项 CUDA 用例与一项 option matrix，以及 exact main/compat wheel 双 rank NCCL Trainer full/stop/fresh-resume。

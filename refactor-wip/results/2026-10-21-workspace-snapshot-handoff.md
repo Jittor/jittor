@@ -1,3 +1,9 @@
+## 2026-11-06 01:26 +0800 续接：第二批 22 个 attention/AMP/checkpoint/profiling wheel 成员已核对
+
+第二批 22 个未批准成员（16 additions、6 content changes）逐项匹配 wheel 固定源码提交，且在旧 installed-wheel 测试源码提交中内容相同；对应已有证据是 GQA CUDA 前反向 1 pass、Embedding CUDA 2 pass、checkpoint recompute CPU 6 pass，以及 graph/step/AMP CPU tests。所有 accelerator-only skips、flash 无成功执行断言、checkpoint 无 CUDA memory result 均保留。连同 RNG/optimizer/DDP 已累计核对 53 个成员（35 additions、18 changes），baseline 仍 69/305/2、0 approved；没有重新安装候选 wheel，也没有性能/显存结论。
+
+下一项继续审阅 profiling/native core 之外的剩余未批准成员，并把已有功能覆盖映射到源码及设备；Day4–5 仍等待管理员配置 cgq association 与 GPU2 独占租约。正式测试需按至少三轮 PT/JT 交替、每侧每轮十个以上热样本记录统计和峰值。整体目标保持 **Not complete**。
+
 ## 2026-11-06 01:21 +0800 续接：current-main wheel 三个差异域与测试覆盖完成交叉审阅
 
 固定构建候选 wheel 的 RNG、optimizer/fused、DDP 共 31 个未批准成员逐项与源码提交 `9a9096bb5588816ca0e090cbcb4c18a6e967ab0e` 做字节哈希核对，31/31 一致；已把 matrix 55/55、fused AdamW/SGD 的已通过子项及完整 SGD suite 超时、同源 exact wheel 双 rank NCCL Trainer resume 证据关联起来。范围内共 19 additions 与 12 content changes；整体 69/305/2 baseline 仍为 0 approved，未改 allowlist。候选固定构建 wheel 未在本轮重新安装，ACL native 迁移仍缺 CANN 证据，Day4–5 也没有性能或显存结论。
