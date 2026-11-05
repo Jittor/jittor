@@ -1,3 +1,7 @@
+## 2026-11-06 01:37 +0800 Tensor storage/VarHolder/allocator 的 19 个 wheel 内容变化成员已核对
+
+固定构建 wheel 的 19 个相关内容变化成员逐项与源码提交 `9a9096bb5588816ca0e090cbcb4c18a6e967ab0e` 的 Git blob 匹配；它们在已安装 storage/version 测试 wheel 的提交 `35a1a7605ec475e9cbc1a9688afc299ee3bd8011` 也未变化。该安装 wheel 的 CUDA storage alias/version suite 为 22/22 通过，支持此功能切片；allocator 与 memory-info 改动仍没有 Day4–5 peak-memory 证据。累计 hash crosswalk 为全部 69 additions 和 37/305 content changes；另 268 项内容变化、2 项 ACL 删除仍未批准。
+
 ## 2026-11-06 01:35 +0800 固定构建器 wheel 的 69 个新增成员已完成源码身份映射
 
 已将审计基准纠正为与候选 wheel `18116fb386dd079e46f5b75e352cc84be29b0101912f447de44bd5c997d7c697` 对应的 `current-main-default-baseline-pinned-builder.log`：69 additions、305 content changes、2 removals、0 approved。另一份 namespace-fix wheel 日志为 70/305/3，仅多出顶层 dist-info LICENSE addition 和旧 licenses/LICENSE removal；305 个内容变化与固定构建器清单完全相同，前述代码差异域均在两份清单中。69/69 additions 现已逐项匹配源码提交 `9a9096bb5588816ca0e090cbcb4c18a6e967ab0e`；累计另核对 18 个 content changes。仍有 287 个内容变化和两项 ACL 删除未审阅/批准，overall release 保持 **Not complete**。

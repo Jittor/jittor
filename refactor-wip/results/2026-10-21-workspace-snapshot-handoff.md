@@ -1,3 +1,9 @@
+## 2026-11-06 01:37 +0800 续接：Tensor/storage/allocator 19 个变化成员已映射
+
+19 个 Tensor 前端、Var/VarHolder、allocator 与 mem_info wheel members 均与源码提交 `9a9096bb` 和已安装测试 wheel 源提交 `35a1a760` 的 Git blob 一致。已有 installed main wheel CUDA storage/version suite 22/22 pass、checkpoint/state_dict/DCP CPU 17/17 pass、optimizer restore CUDA 14/14 pass；这些只支持功能范围，不提供 allocator/NVML 峰值结论。累计已核对 69 additions 和 37 个 content changes，另 268 changes 与两项 ACL 删除未批准。
+
+本轮不运行测试或触碰 GPU/cache。下一项继续审阅剩余高风险 content changes；GPU2 正式性能/显存验收仍需 cgq association 和独占租约，整体目标保持 **Not complete**。
+
 ## 2026-11-06 01:35 +0800 续接：固定构建器 baseline 纠正，69/69 additions 已匹配源码
 
 固定 wheel 必须使用 `current-main-default-baseline-pinned-builder.log`：69 additions、305 changes、2 removals、0 approved。先前误读的普通 default log 对应另一个 namespace-fix wheel，70/305/3；成员差异只在 dist-info LICENSE 路径，内容变化清单相同，已审代码成员仍都属于固定 wheel 清单。固定候选的全部 69 additions 已逐项比对至源提交 `9a9096bb5588816ca0e090cbcb4c18a6e967ab0e` 并匹配；累计核对 18 个内容变化成员，剩余 287 项内容变化和两项 ACL 删除仍未批准。LT Linear 有 8 个 CUDA pass；linear-bias 曾超时，oneDNN/layout 无对应已保存 pass，ACL 缺 CANN 环境。

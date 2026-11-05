@@ -1,3 +1,13 @@
+## 2026-11-06 01:37 +0800 Tensor storage、VarHolder、allocator 差异域与安装态证据映射
+
+本轮从 pinned-builder baseline 的 305 项 content changes 中选取 19 个训练状态、storage 与内存分配相关成员：`jittor/nn/functional/tensor.py`；`src/bindings/pybind/py_var_tracer.cc`；`src/bindings/pyjt/py_tensor_frontend.cc/.h`；`src/core/var.cc/.h`、`var_holder.cc/.h`；`src/mem/allocator.cc/.h`、`allocator/cuda_dual_allocator.h`、`foreign_allocator.cc/.h`、`sfrl_allocator.cc/.h`、`temp_allocator.cc/.h`、`mem_info.cc/.h`。固定 wheel 解包 member 与源码提交 `9a9096bb5588816ca0e090cbcb4c18a6e967ab0e` 对应 Git source SHA256 19/19 相同；并确认同一组 Git blob 在已安装 storage 测试 wheel 的源码提交 `35a1a7605ec475e9cbc1a9688afc299ee3bd8011` 也全部相同。因此该 wheel 测试可用于核对这些具体包内代码路径，但没有重新安装固定构建器产物。
+
+此前在 installed main wheel 上执行的 `test_torch_storage_alias_versions.py` CUDA 变体为 22 passed、22 个 CPU 变体 deselected、0 skipped/failure，fallback 0→0。测试覆盖 detach/Parameter 双向 storage alias 写入、saved input 在别名修改后的 backward version guard、materialized/pending forward、view alias 与若干生命周期状态。对应 wheel SHA256 为 `b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69`，源提交 `35a1a760`；相关 19 个成员与本轮固定候选逐项相同。另有 installed main wheel CPU checkpoint/state_dict/DCP 17/17、真实 CUDA optimizer restore 14/14，以及 Qwen checkpoint-51 新进程恢复到 step 102 的既有证据，分别支持状态恢复层，不延伸到 allocator 峰值或设备容量结论。
+
+该功能通过仍不能替代内存验收。当前这 19 项主要涉及 Tensor/storage 生命周期与 allocator/memory-info 实现；没有为它们补跑 allocator 的定向故障/压力用例，也没有把 allocator 计数冒充 NVML 设备峰值。正式 Day4–5 仍须可验证 GPU2 独占、至少三轮 PT/JT 交替、每侧每轮至少十个热样本，以及 median/p95/离散度、加载/首步/热态耗时和 allocator/NVML 峰值。
+
+本轮没有执行测试、GPU workload 或 cache 操作。与此前 69 additions 的完整源码身份映射、18 个 content-change crosswalk 合并后，已核对 106 个成员（69 additions、37 content changes）；pinned-builder baseline 的其余 268 个 content changes 和两项 ACL 删除仍未审阅/批准。整体 Day2–5 release 继续 **Not complete**。
+
 ## 2026-11-06 01:35 +0800 固定构建器 wheel baseline 日志核对与全部 additions 源码映射
 
 ### 纠正 baseline 日志身份
