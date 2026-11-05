@@ -1,3 +1,19 @@
+## 2026-11-06 00:49 +0800 CUDA backend contract matrix：generator_randint parity 通过，cuTT 加载门未通过
+
+### 执行身份与隔离
+
+执行时仓库 `/home/cgq/jittor` 的 HEAD 为 `aa0a59cf0ae66998bd851063f0f28f0c2e273a22`，`origin/cgq_transformers` fetch 后仍为 `8d8ae2d52d5306f62736e49951c0464a10a27840`。当前 checkout 的矩阵驱动文件 SHA256 分别为 `backend_contract_matrix.py` `c608cef8fee8e38d32400103e980b9f782fa587c61c5e040009ca68d7e2235b0`、`test_backend_contract_matrix.py` `4b79dace5672c853b6564592d2fd818ff97fd74e8c470ca48531d919c1a1a992`。运行时使用精确安装根 `/data6/cgq/jittor-lab/_state/release-day23/20261103-current-head-wheel-gate-r1-prepared/install` 中的 Jittor wheel（SHA256 `b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69`，源码 HEAD `35a1a7605ec475e9cbc1a9688afc299ee3bd8011`）。35a1 是已验证 main wheel 源码 HEAD `9a9096bb5588816ca0e090cbcb4c18a6e967ab0e` 的祖先；两者间仅序列化测试与 compat `module_methods.py` 改变，未改 native backend 实现。测试使用 Python 3.11.3、CUDA 12.2.140、A800 GPU0；UUID `GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5` 单独暴露为 `cuda:0`，GPU2 未暴露。
+
+为不写旧 generator 实验 cache，先将 440 MB cache 复制到新隔离 `JITTOR_HOME`。attempt-01 在 import 阶段触发隔离 cache 的 `jit_utils` 一次性重建，runtime 以 `SystemExit 3` 明确要求新进程重试；该 attempt 没有运行任何 probe，原始日志保留。attempt-02 首次加载隔离目录时重建 CUDA core；core `core_build_is_current()` 测试前后都为 true，core SHA256 前后保持 `510920ae3ddede8d7afc89a51c61a532d85f8a91a54c5348742f496cdfbd0d50`。源 cache 的 core SHA256 `0e2fe909d3f33e27c220546693c40f27087357cefe198220f46c97f9a0353a90` 未变。`backend_fallback=error` 且 fallback 计数 0→0。
+
+### 结果与边界
+
+完整矩阵 pytest 在 147.88 秒执行 55 项：53 passed、1 skipped、1 failed。报告中的 CPU 行是 36 个通过单元和 5 个 `unverified:no-probe`；CUDA 行是 38 个通过单元、1 个 `unverified:no-dependency` 和 19 个 `unverified:no-probe`。`generator_randint` 参数化契约测试通过，具体对比 seed 99、int64 范围 `[-2^63, 1)`、129 个输出，CPU 与 CUDA 精确相等。CUDA 构建报告显示 25 个未验证单元；ACL、ROCm、CoreX 仍为 `unverified:not-built`。
+
+唯一失败项 `test_optional_libraries_are_loaded_before_the_registry_is_read` 不是数值对拍错误：这次从 generator cache 沿用 `use_cutt=0`，而测试对 CUDA 构建要求 cuTT loader 成功，因此报 `cutt: loader produced no module`；同次报告还列出 mpi、nccl、hccl 没有模块。不能仅凭此配置错误判定 CUDA 算子坏了，也不能将整套 matrix 算作通过。后续若要关闭完整 CUDA 门，先为 `use_cutt=1` 建立合法、隔离的运行配置并核验 cuTT 是否可加载；若运行环境无 cuTT，则保留明确的 environment prerequisite，不得伪装成通过。本轮没有改产品源码、测试矩阵、allowlist 或旧 cache。
+
+证据目录 `/data6/cgq/jittor-lab/_state/release-day23/20261106-current-main-generator-randint-cuda-r1-prepared/`，包含两个 attempt、运行脚本、配置、GPU 前后快照和完整 cache 文件清单；7,505 项校验通过，manifest SHA256 `cf154653c57c1b82d9a6bea79a15a8a504bd736244f1e4b5731308a297578b9f`。本轮是 correctness 证据，没有运行性能/显存测量。Day4–5 仍需可验证独占窗口下至少三轮 PT/JT 交替、每侧每轮至少十个热态样本，并报告 median/p95/离散度、加载/首步/热态耗时及 allocator/NVML 峰值；GPU2 独占与 Slurm association 未解决。整体 Day2–5 release **Not complete**。
+
 ## 2026-11-06 00:26 +0800 current-main backend contract CPU matrix通过；设备列保持未验证
 
 ### 本次执行与身份

@@ -1,3 +1,9 @@
+## 2026-11-06 00:49 +0800 续接：current-source CUDA backend matrix 部分通过
+
+本轮在执行时 HEAD `aa0a59cf0ae66998bd851063f0f28f0c2e273a22` 上运行当前仓库矩阵驱动，CUDA GPU0 UUID `GPU-2a503ab8-d84d-af1c-62aa-46f15c7977e5` 映射为 `cuda:0`，GPU2 未暴露/访问，fallback `error` 且 0→0。55 项为 53 passed、1 skipped、1 failed；CPU 行 36 passed，CUDA 行 38 passed。`generator_randint` 的 seed99、int64 `[-2^63,1)`、129 项 CUDA parity 通过。唯一失败是 optional-library 门要求加载 cuTT，而本次沿用缓存时配置显式 `use_cutt=0`；完整 CUDA matrix 仍未通过。详细运行身份、未验证单元、第一次 bootstrap 退出和隔离 core 重建见 Day2–5 报告及主板。
+
+证据目录 `/data6/cgq/jittor-lab/_state/release-day23/20261106-current-main-generator-randint-cuda-r1-prepared/`，artifact manifest SHA256 `cf154653c57c1b82d9a6bea79a15a8a504bd736244f1e4b5731308a297578b9f`。GPU2 仍有共享进程，`cgq` Slurm association 尚不可用；没有 Day4–5 性能/显存结论。下一步先确认 cuTT 运行配置，再推进仍能在共享设备上安全执行的 correctness gates；正式性能验收等独占租约。整体 Day2–5 **Not complete**。
+
 ## 2026-11-06 00:26 +0800 续接：当前源码 CPU backend contract matrix 通过
 
 当前 HEAD/origin cgq_transformers 均为 8d8ae2d52d5306f62736e49951c0464a10a27840，本轮只更新三份状态文档。当前源码 backend contract matrix CPU 部分已实际运行：38 passed、17 skipped、18.66 秒；31 个 CPU probe 单元通过，包含新 generator_randint CPU probe。CUDA 36 个单元明确为 no-device，ACL/ROCm/CoreX 明确为 not-built；没有将这些未运行项计作通过。运行使用隔离 /data6 CPU core，SHA256 前后为 e9e773366017a4834e01f382f0ba5ef1ffdf0a512477c05e1c62882d5d6f7955，fallback 策略为 error，未触碰 GPU。
