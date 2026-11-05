@@ -1,3 +1,9 @@
+## 2026-11-06 00:26 +0800 续接：当前源码 CPU backend contract matrix 通过
+
+当前 HEAD/origin cgq_transformers 均为 8d8ae2d52d5306f62736e49951c0464a10a27840，本轮只更新三份状态文档。当前源码 backend contract matrix CPU 部分已实际运行：38 passed、17 skipped、18.66 秒；31 个 CPU probe 单元通过，包含新 generator_randint CPU probe。CUDA 36 个单元明确为 no-device，ACL/ROCm/CoreX 明确为 not-built；没有将这些未运行项计作通过。运行使用隔离 /data6 CPU core，SHA256 前后为 e9e773366017a4834e01f382f0ba5ef1ffdf0a512477c05e1c62882d5d6f7955，fallback 策略为 error，未触碰 GPU。
+
+证据目录 /data6/cgq/jittor-lab/_state/release-day23/20261106-current-main-backend-contract-cpu-r3-prepared/，manifest SHA256 bd2ff7aafd49154a72006869c8958d4245bb6bec6252bb59f8142db1bbfb4eae。当前仍没有 generator_randint CUDA parity、activation recompute 的 CUDA 显存收益或 Day4–5 正式性能数据。GPU2 由外部任务占用 37,132 MiB、100%，cgq Slurm association 仍不可用；正式性能验收需等独占租约并按已定义三轮交替方案运行。held-out generation、wheel baseline、跨框架 optimizer serialization 与广泛设备矩阵仍开放，整体 Day2–5 **Not complete**。
+
 ## 2026-11-05 23:50 +0800 续接：修正 generator_randint parity matrix 覆盖声明
 
 backend_contract_matrix.py 新增 generator randint 的 CPU/CUDA parity probe，参数复用当前 runtime 对照测试：seed 99、int64 [-2^63, 1)、129 个值；并移除“无 CUDA kernel”的过期记录。AST/compile 静态检查、git diff --check 与 repo layout guard 通过；本轮没有运行 pytest 或 CUDA matrix。已有安装 wheel 真 CUDA Generator 测试保持为历史设备证据，不代表新矩阵 cell 通过；本轮 cache 预检拒绝触发编译，attempt 记录保留在 /data6/cgq/jittor-lab/_state/release-day23/20261105-installed-wheel-generator-randint-contract-matrix-r1/。检查时所有 GPU 忙，GPU2 为 37,132 MiB/100%。Day4–5 独占性能/显存和更广 Day2–5 发布门仍开放，整体 **Not complete**。

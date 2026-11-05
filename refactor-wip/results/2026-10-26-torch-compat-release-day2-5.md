@@ -1,3 +1,19 @@
+## 2026-11-06 00:26 +0800 current-main backend contract CPU matrix通过；设备列保持未验证
+
+### 本次执行与身份
+
+在 /home/cgq/jittor 当前 HEAD 8d8ae2d52d5306f62736e49951c0464a10a27840 上执行 tests/backends/parity/test_backend_contract_matrix.py，产品源码自 exact main wheel 源码提交 9a9096bb5588816ca0e090cbcb4c18a6e967ab0e 起没有变化，本次覆盖变化来自当前测试代码。backend_contract_matrix.py SHA256 c608cef8fee8e38d32400103e980b9f782fa587c61c5e040009ca68d7e2235b0；test_backend_contract_matrix.py SHA256 4b79dace5672c853b6564592d2fd818ff97fd74e8c470ca48531d919c1a1a992。Jittor 1.3.11.0 / Python 3.11.3 在独立 /data6 JITTOR_HOME 上完成 CPU core bootstrap；core SHA256 e9e773366017a4834e01f382f0ba5ef1ffdf0a512477c05e1c62882d5d6f7955，matrix 前后不变。
+
+### 结果
+
+pytest 收集并执行 55 项：38 passed、17 skipped，用时 18.66 秒。矩阵 CPU 行 31 个已探测单元通过，包含新增 generator_randint probe 所用的 seed 99、int64 范围 [-2^63, 1)、129 个样本；CPU no-probe 仍有 contiguous、generator_randperm、generator_uniform、tapes 四项。17 个 pytest skip 来自 8 个 accelerator case 与 9 个 backend case。矩阵显式报告 40 个未验证单元：CUDA 36 项 unverified:no-device，ACL/ROCm/CoreX 均 unverified:not-built；CPU-only build 的 CUDA、通信、MKL optional libraries 未加载。运行环境 CUDA_VISIBLE_DEVICES 为空、use_cuda=0、backend_fallback=error，没有访问设备或允许 backend fallback。
+
+完整产物 /data6/cgq/jittor-lab/_state/release-day23/20261106-current-main-backend-contract-cpu-r3-prepared/，artifact-manifest 文件 SHA256 bd2ff7aafd49154a72006869c8958d4245bb6bec6252bb59f8142db1bbfb4eae。r1/r2 缓存复用预检因绝对编译路径/旧 core stamp 未能安全复用，均未进入矩阵；失败日志保留在对应 prepared 目录。r3 使用隔离 current-source CPU cache 完成一次 bootstrap 与一次矩阵，没有改动产品源码，也没有重写旧证据 cache。
+
+### 验收边界与接续
+
+这只证明当前源码 CPU backend contract cells 及 matrix bookkeeping 有执行结果；generator_randint 的 CUDA parity cell 仍未运行。GPU0–9 检查时都被外部任务占用，GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 使用 37,132 MiB、利用率 100%；cgq Slurm association 尚未配置。正式 Day4–5 必须等待可核验独占分配，再完成至少三轮 PT/JT 交替、每侧每轮至少十个热态样本，报告 median/p95/离散度、加载/首步/热态耗时及 allocator/NVML 峰值。实际 CUDA recompute 显存收益、held-out generation 质量分数、wheel baseline 未批准差异、stock PyTorch 读取 JT portable-pickle optimizer，以及 ACL/ROCm/CoreX 与剩余 CUDA matrix 仍未完成。整体 release 继续 **Not complete**。
+
 ## 2026-11-05 23:50 +0800 Backend contract matrix 将 generator_randint 纳入 CUDA parity probe；设备矩阵尚未运行
 
 检查 tests/backends/parity/backend_contract_matrix.py 时发现旧分类理由已经失效：它称 explicit-generator randint 没有 CUDA kernel，但 backends/cuda/kernels/core/generator_randint_op.cc 存在，且当前源码测试 tests/runtime/test_generator_randint.py 已对 seed 99、范围 [-2^63, 1)、129 个 int64 值执行 CPU/CUDA 精确数组对照。本次只修改合同测试文件：新增 probe，在 CPU/CUDA cell 使用各自同 seed 的 Generator 产生相同样本，并删除错误的 unprobed 声明；不改产品 kernel。

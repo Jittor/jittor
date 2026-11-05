@@ -1,3 +1,11 @@
+## 2026-11-06 00:26 +0800 current-main backend contract CPU matrix通过；CUDA parity与Day4–5仍开放
+
+在当前 checkout 8d8ae2d52d5306f62736e49951c0464a10a27840 上运行更新后的 backend contract matrix。CPU-only current-source core SHA256 e9e773366017a4834e01f382f0ba5ef1ffdf0a512477c05e1c62882d5d6f7955 在测试前后相同；测试文件哈希分别为 backend_contract_matrix.py c608cef8fee8e38d32400103e980b9f782fa587c61c5e040009ca68d7e2235b0、test_backend_contract_matrix.py 4b79dace5672c853b6564592d2fd818ff97fd74e8c470ca48531d919c1a1a992。结果 38 passed、17 skipped、18.66 秒；CPU 行 31 个已执行单元通过，其中包含新加入的 generator_randint CPU probe。CPU 仍有 contiguous、generator_randperm、generator_uniform、tapes 四个明确 no-probe 项。
+
+本次通过隔离 /data6 JITTOR_HOME，以 JITTOR_NO_BUILD=1 运行矩阵，CUDA_VISIBLE_DEVICES 为空、use_cuda=0、backend_fallback=error；未访问 GPU，也没有允许 fallback。矩阵将 CUDA 36 个单元标为 unverified:no-device，ACL/ROCm/CoreX 为 unverified:not-built；40 个未验证单元仍留在报表里。CPU-only 环境下 optional CUDA/通信/MKL 库未加载，本结果不覆盖它们。完整证据包 /data6/cgq/jittor-lab/_state/release-day23/20261106-current-main-backend-contract-cpu-r3-prepared/，manifest SHA256 bd2ff7aafd49154a72006869c8958d4245bb6bec6252bb59f8142db1bbfb4eae。先前 r1/r2 只做缓存身份预检、未运行产品矩阵，原件分别保留。
+
+测试期间 GPU0–9 仍由共享任务占用；GPU2 UUID GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0 为 37,132/81,920 MiB、100%，cgq Slurm association 尚不可用。新结果只关闭当前源码的 CPU backend contract 子门，不能证明 CPU/CUDA parity、CUDA checkpoint 显存收益或正式性能。Day4–5 仍需可验证独占设备、三轮 PT/JT 交替且每侧每轮至少十个热态样本；held-out generation、wheel baseline migration、跨框架 JT optimizer 互操作及其余后端矩阵也未完成。整体 **Not complete**。
+
 ## 2026-11-05 23:50 +0800 backend contract matrix 修正 generator_randint CUDA 声明；parity cell 仍待运行
 
 tests/backends/parity/backend_contract_matrix.py 曾把 generator_randint 记为无 CUDA kernel；源码实际存在该 CUDA kernel，当前 runtime 测试也包含 seed 99、int64 范围 [-2^63, 1)、129 个元素的 CPU/CUDA 精确对照。本次新增同配置 parity probe，并移除错误的 UNPROBED_REASONS 条目。源码/kernel 未改，kernel SHA256 为 aa545869865390dbb6f6a50f8ef456b000cbe3e6f656c8ed9e6b90aa220fa9d0。
