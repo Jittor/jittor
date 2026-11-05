@@ -1,3 +1,11 @@
+## 2026-11-06 01:56 +0800 底层 ops 与 C++ runtime 再核对 45 个成员
+
+pinned-builder baseline 中 `jittor/src/ops/**` 的 28 个 content-change 成员全部与固定 wheel 及源码提交 `9a9096bb5588816ca0e090cbcb4c18a6e967ab0e`、安装态测试源码 `35a1a7605ec475e9cbc1a9688afc299ee3bd8011` 的 SHA256 相同。其中 `composite/random_op.cc/.h` 已在 RNG 域核过，`composite/fused_adamw_op.cc` 已在 optimizer 域核过，本轮净增 25 项。17 个 `jittor/src/runtime/**` 变化成员（backend/device/streams/state、dispatch context、executor/init、launch diagnostics、lock、submission/traversal）也全部三方匹配。两域合计净新增 42 项源码身份 crosswalk。
+
+既有 55/55 CPU/CUDA backend contract matrix 含 binary/unary/ternary/reduce、broadcast、getitem/index、reshape/transpose、fetch、random、tape 等低层 probe；另有 transpose 21 pass、cuTT transpose 文件 9 pass、CPU-only fetch 回归等有限路径证据。runtime/graph/step CPU suites 通过，但相应 accelerator-only 项有跳过；这些历史证据不等于每项 native op、CUDA copy/dispatch 与所有 dtype/backend 都通过。本轮只复核成员字节与已有证据范围，没有重新安装固定候选 wheel，也没有运行测试、构建或 GPU/cache 工作。
+
+累计源码身份 crosswalk 为 69 additions、222/305 content changes（291 个成员）；尚余 83 个 content changes 与两项 ACL removals 未完成审阅/批准，allowlist 未变。GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 于 01:56 为 37,132/81,920 MiB、100%，由 qlt（2517202、2973176）、yqa（3081944）和 cgq（3312445）共享；cgq 队列与 Slurm association 仍为空。HEAD `da63d09aa` 对已 fetch 的 `origin/cgq_transformers` ahead 14 / behind 0，工作树在本次文档编辑前干净，未 push。Day4–5 独占性能/显存验收及整体 Day2–5 发布门仍 **Not complete**。
+
 ## 2026-11-06 01:54 +0800 build/package 与 serialization 等 16 个 wheel 内容变化成员完成 crosswalk
 
 固定候选 wheel SHA256 为 `18116fb386dd079e46f5b75e352cc84be29b0101912f447de44bd5c997d7c697`，固定 builder baseline 仍为 69 additions、305 content changes、2 removals、0 approved。本轮核对 build 下 codegen、compilation、compile_extern、compiler、onednn、pyjt_compiler 及 build/utils 四项共 10 个成员，另核对 contrib/math_util/gamma、dataset/dataset、distributions/_utils/discrete、init/scaling 与 serialization/save_pytorch 共 6 项。16 项候选 wheel bytes 均匹配源码提交 `9a9096bb5588816ca0e090cbcb4c18a6e967ab0e`；其中 15 项也匹配安装态测试源码提交 `35a1a7605ec475e9cbc1a9688afc299ee3bd8011`。

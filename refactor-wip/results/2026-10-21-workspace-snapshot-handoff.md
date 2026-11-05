@@ -1,3 +1,7 @@
+## 2026-11-06 01:56 +0800 续接：src/ops 与 src/runtime 45 项成员完成 hash 映射
+
+28 个 `src/ops` 内容变化成员全部匹配候选 wheel、`9a9096bb` 和 `35a1a760` 源版本，其中 3 项与 RNG/optimizer 既有 crosswalk 重叠；17 个 `src/runtime` 成员全部匹配。已有合同矩阵、transpose/cuTT、CPU fetch 和 graph/step CPU 证据只覆盖部分路径，GPU runtime 仍有 accelerator-only skips。本轮未安装 wheel、运行测试/构建/GPU/cache。累计 69 additions、222 content changes，剩 83 changes 与两项 ACL removals 未审阅/批准。GPU2 37,132 MiB、100%，qlt/yqa/cgq 共享；Slurm association 空。HEAD `da63d09aa` ahead14/behind0、未 push；overall **Not complete**。
+
 ## 2026-11-06 01:54 +0800 续接：build/package 与 serialization 等 16 项完成 wheel/source crosswalk
 
 候选 wheel 中 10 个 build、5 个 contrib/dataset/distributions/init、1 个 serialization 成员都与源码提交 `9a9096bb` 相同；其中 writer 文件与旧测试源码 `35a1a760` 不同，较新版本的锁/异常恢复与 scalar stride 改动有同源 wheel 的部分证据，但 optimizer portable-pickle 的 stock PyTorch 读取失败仍保留。累计 crosswalk 69 additions、180 changes，尚余 125 changes 与两项 ACL removals 未审批。未重装 wheel、未运行测试/构建/cache。GPU2 37,826 MiB、100%，由 qlt/yqa/cgq 多进程共享；Slurm association 空，正式性能/显存窗口未就绪。HEAD `33533b135` ahead 13 / behind 0，未 push；overall **Not complete**。

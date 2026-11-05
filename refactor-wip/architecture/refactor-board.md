@@ -1,3 +1,7 @@
+## 2026-11-06 01:56 +0800 底层 ops/runtime 45 项 member hash crosswalk 完成
+
+固定 wheel 中 28 个 `src/ops` 变化成员均匹配目标源码和安装态测试源码；与 RNG/optimizer 既有域重叠 3 项，净增 25。17 个 `src/runtime` 变化成员也全部匹配。matrix、transpose/cuTT 与 CPU fetch 有局部通过证据；runtime graph/step 的 accelerator-only 项仍有跳过，不能外推全部设备路径。累计 crosswalk 69 additions、222/305 content changes，另 83 项变化与两项 ACL 删除仍待审阅/批准。GPU2 为 100% 共享占用，cgq association 尚为空；Day4–5 和 overall release 保持 **Not complete**。
+
 ## 2026-11-06 01:54 +0800 build/package 与序列化等 16 项 wheel 成员已核对
 
 本轮 10 个 build、5 个 contrib/dataset/distributions/init 与 1 个 serialization 内容变化成员，候选 wheel 均匹配源码提交 `9a9096bb`；除 `serialization/save_pytorch.py` 外，其余 15 项也匹配安装态测试源 `35a1a760`。该 writer 新版本增加临时 pickle target 加锁/恢复和 scalar 空 stride 处理；9a9096b exact-source wheel 有冷构建与 Tensor exporter 跨框架读取通过，但 stock PyTorch 读取 JT portable-pickle optimizer 仍失败，且固定候选 wheel 未重装运行。累计 crosswalk 69 additions、180/305 content changes；125 项变化、两项 ACL 删除仍未审阅/批准。GPU2 当前 100% 共享占用、cgq association 为空；Day4–5 与整体发布保持 **Not complete**。
