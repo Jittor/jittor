@@ -1,10 +1,18 @@
+## 2026-11-06 01:59 +0800 dtype/bindings/CPU 与 native tests 28 项完成 crosswalk；累计数已去重校正
+
+本轮核对固定 wheel 中 11 个 `jittor/src/type/**` 成员、6 个 `jittor/src/bindings/**`、6 个 MKL CPU backend 成员和 5 个 `jittor/src/tests/**` 成员；28/28 candidate bytes 均匹配源码提交 `9a9096bb5588816ca0e090cbcb4c18a6e967ab0e` 与安装态测试源码 `35a1a7605ec475e9cbc1a9688afc299ee3bd8011`。Bindings 中 `py_var_tracer.cc`、`py_tensor_frontend.cc/.h` 已计入此前 Tensor/storage 的 19 项，本轮净增 25 项。已有 55/55 CPU/CUDA backend contract matrix 含 MKL matmul、conv/backward 与多类 dtype 算子 probe；这只支持矩阵选定输入和当前 CPU/CUDA 构建，不是完整 dtype/API 边界矩阵，也不代表五个随 wheel 打包的 native test 源文件都已执行。
+
+累计数去重校正：01:51 的 ops/core/runtime 24 项曾把已在 RNG 域记录的 `jittor/ops/random.py` 重复计入，因此该批应净增 23，累计应为 163 而非 164；后续 01:54、01:56 对应累计值也从 180、222 更正为 179、221。三份状态文档里的这些历史小计和剩余数已同步修正。再加上本轮净增 25，当前唯一 crosswalk 为 69 additions、246/305 content changes（315 个 wheel 成员）；剩 59 个 content changes 和两项 ACL removals 未完成审阅/批准，allowlist 未改。
+
+本轮只核对 wheel/source hash 和既有证据范围，没有运行测试、构建、GPU workload 或 cache 操作。GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 于 01:59 为 37,132/81,920 MiB、100%，四个可见进程 PID 2517202、2973176、3081944、3312445 分属 qlt/yqa/cgq；cgq queue 与 association 均无输出。根盘可用 41 GB，`/data6` 可用 4.3 TB；仓库 lock 文件与旧 PID 3611049 均不存在。HEAD `eaf377272` 对已 fetch 的 `origin/cgq_transformers` ahead 15 / behind 0，文档编辑前工作树干净，未 push。Day4–5 独占性能/显存验收与整体 Day2–5 release 继续 **Not complete**。
+
 ## 2026-11-06 01:56 +0800 底层 ops 与 C++ runtime 再核对 45 个成员
 
 pinned-builder baseline 中 `jittor/src/ops/**` 的 28 个 content-change 成员全部与固定 wheel 及源码提交 `9a9096bb5588816ca0e090cbcb4c18a6e967ab0e`、安装态测试源码 `35a1a7605ec475e9cbc1a9688afc299ee3bd8011` 的 SHA256 相同。其中 `composite/random_op.cc/.h` 已在 RNG 域核过，`composite/fused_adamw_op.cc` 已在 optimizer 域核过，本轮净增 25 项。17 个 `jittor/src/runtime/**` 变化成员（backend/device/streams/state、dispatch context、executor/init、launch diagnostics、lock、submission/traversal）也全部三方匹配。两域合计净新增 42 项源码身份 crosswalk。
 
 既有 55/55 CPU/CUDA backend contract matrix 含 binary/unary/ternary/reduce、broadcast、getitem/index、reshape/transpose、fetch、random、tape 等低层 probe；另有 transpose 21 pass、cuTT transpose 文件 9 pass、CPU-only fetch 回归等有限路径证据。runtime/graph/step CPU suites 通过，但相应 accelerator-only 项有跳过；这些历史证据不等于每项 native op、CUDA copy/dispatch 与所有 dtype/backend 都通过。本轮只复核成员字节与已有证据范围，没有重新安装固定候选 wheel，也没有运行测试、构建或 GPU/cache 工作。
 
-累计源码身份 crosswalk 为 69 additions、222/305 content changes（291 个成员）；尚余 83 个 content changes 与两项 ACL removals 未完成审阅/批准，allowlist 未变。GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 于 01:56 为 37,132/81,920 MiB、100%，由 qlt（2517202、2973176）、yqa（3081944）和 cgq（3312445）共享；cgq 队列与 Slurm association 仍为空。HEAD `da63d09aa` 对已 fetch 的 `origin/cgq_transformers` ahead 14 / behind 0，工作树在本次文档编辑前干净，未 push。Day4–5 独占性能/显存验收及整体 Day2–5 发布门仍 **Not complete**。
+累计源码身份 crosswalk 为 69 additions、221/305 content changes（290 个成员）；尚余 84 个 content changes 与两项 ACL removals 未完成审阅/批准，allowlist 未变。GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 于 01:56 为 37,132/81,920 MiB、100%，由 qlt（2517202、2973176）、yqa（3081944）和 cgq（3312445）共享；cgq 队列与 Slurm association 仍为空。HEAD `da63d09aa` 对已 fetch 的 `origin/cgq_transformers` ahead 14 / behind 0，工作树在本次文档编辑前干净，未 push。Day4–5 独占性能/显存验收及整体 Day2–5 发布门仍 **Not complete**。
 
 ## 2026-11-06 01:54 +0800 build/package 与 serialization 等 16 个 wheel 内容变化成员完成 crosswalk
 
@@ -12,7 +20,7 @@ pinned-builder baseline 中 `jittor/src/ops/**` 的 28 个 content-change 成员
 
 例外是 `jittor/serialization/save_pytorch.py`：候选 wheel 与 9a9096b 的 SHA256 均为 `843411da94a28a51576c20ed6745f13770aaff0f275fb076475481bc2a515e67`，而 35a1a760 内容为 `96e46e3471f0ced99a8afd2b15dd79eb98bf4e36b77f67e1f677c386feb5a062`。较新实现把临时 pickle target 修改置于 RLock/context manager 内，并在异常或正常退出时恢复原 namespace 绑定；同时修正 0-D scalar 的空 stride 处理。因此基于 35a1a760 的旧 writer 结果不外推至这些改动。9a9096b 同源 main/compat wheel 已有 CPU 冷构建 227/227 与 Jittor Tensor 导出后由 stock PyTorch 2.6 `weights_only=True` 读取成功的证据，但没有重装运行本次固定候选 wheel，也没有覆盖所有 writer/optimizer payload。stock PyTorch 直接读取 JT portable-pickle `optimizer.pt` 的失败仍独立保留，不被 Tensor 导出成功覆盖。
 
-累计源码身份 crosswalk 为 69 additions、180/305 content changes（249 个成员）；仍有 125 个 content changes 与两项 ACL removals 未审阅/批准，baseline allowlist 未改。此次只做 wheel/source hash 与历史证据映射，没有运行测试、构建或 Jittor cache 工作。GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 当前 37,826/81,920 MiB、100%，可见 qlt 进程 2517202/2973176/3666538、yqa 3081944 与 cgq 3312445；cgq 队列和 association 查询为空。根盘可用 41 GB，`/data6` 可用 4.3 TB；仓库 lock 文件及旧 PID 3611049 均不存在。HEAD `33533b135` 对 `origin/cgq_transformers` ahead 13 / behind 0，未 push。GPU2 独占性能/显存窗口和整体 Day2–5 release 仍 **Not complete**。
+累计源码身份 crosswalk 为 69 additions、179/305 content changes（248 个成员）；仍有 126 个 content changes 与两项 ACL removals 未审阅/批准，baseline allowlist 未改。此次只做 wheel/source hash 与历史证据映射，没有运行测试、构建或 Jittor cache 工作。GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 当前 37,826/81,920 MiB、100%，可见 qlt 进程 2517202/2973176/3666538、yqa 3081944 与 cgq 3312445；cgq 队列和 association 查询为空。根盘可用 41 GB，`/data6` 可用 4.3 TB；仓库 lock 文件及旧 PID 3611049 均不存在。HEAD `33533b135` 对 `origin/cgq_transformers` ahead 13 / behind 0，未 push。GPU2 独占性能/显存窗口和整体 Day2–5 release 仍 **Not complete**。
 
 ## 2026-11-06 01:51 +0800 固定 wheel 的 ops/core/runtime 24 项完成源码身份 crosswalk
 
@@ -20,7 +28,7 @@ pinned-builder baseline 中 `jittor/src/ops/**` 的 28 个 content-change 成员
 
 现有 CPU/CUDA backend contract matrix 55/55 通过，含 getitem/index/reindex、reduce、reshape/transpose、where、random/generator_randint、argsort/cumsum 等低层 probe；R14 实际训练/恢复及分布式同源测试也提供相关运行路径证据。这些证据不等于上述高层操作 façade、Var/Module/runtime APIs 的所有参数边界均逐项通过，也没有覆盖 ACL、ROCm、CoreX。此处仅核对 wheel 与源码身份、映射已有覆盖，没有运行测试或重新安装 wheel。
 
-累计 crosswalk 为 69 additions、164/305 content changes（共 233 个成员）；仍有 141 个 content changes 和两项 ACL removals 未完成审阅/批准，wheel allowlist 未改。GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 读数为 37,132/81,920 MiB、100%，进程属于 qlt（2517202、2973176）、yqa（3081944）及 cgq（3312445）；cgq 队列与 association 查询仍为空。没有使用 Jittor build cache；仓库根目录 lock 文件不存在，先前 PID 3611049 也不存在。根盘可用 41 GB，`/data6` 可用 4.3 TB。工作树干净，HEAD `f8031f3c7` 对 `origin/cgq_transformers` ahead 12 / behind 0，未 push。独占测量和整体 Day2–5 发布门保持 **Not complete**。
+累计 crosswalk 为 69 additions、163/305 content changes（共 232 个成员）；仍有 142 个 content changes 和两项 ACL removals 未完成审阅/批准，wheel allowlist 未改。GPU2 UUID `GPU-261ac14d-3f54-8ca9-ebaf-2830b8992cb0` 读数为 37,132/81,920 MiB、100%，进程属于 qlt（2517202、2973176）、yqa（3081944）及 cgq（3312445）；cgq 队列与 association 查询仍为空。没有使用 Jittor build cache；仓库根目录 lock 文件不存在，先前 PID 3611049 也不存在。根盘可用 41 GB，`/data6` 可用 4.3 TB。工作树干净，HEAD `f8031f3c7` 对 `origin/cgq_transformers` ahead 12 / behind 0，未 push。独占测量和整体 Day2–5 发布门保持 **Not complete**。
 
 ## 2026-11-06 01:46 +0800 distributed Python 层 5 个 wheel 内容变化成员审阅
 
