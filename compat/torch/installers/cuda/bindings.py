@@ -90,6 +90,8 @@ from .api import (
     _api_mp_reductions_rebuild_cuda_tensor,
     _api_mp_reductions_rebuild_tensor,
     _api_mp_reductions_reduce_tensor,
+    _api_mps_current_allocated_memory,
+    _api_mps_driver_allocated_memory,
     _api_mps_is_available,
     _api_overrides_get_default_nowrap_functions,
     _current_stream,
@@ -302,6 +304,11 @@ def _install_cuda(g, registry=None):
         _mod.reset_max_memory_allocated = getattr(_mod, "reset_max_memory_allocated", _api_mod_reset_max_memory_allocated)
         _mod.memory_allocated = getattr(_mod, "memory_allocated", _api_mod_memory_allocated)
         _mod.max_memory_allocated = getattr(_mod, "max_memory_allocated", _api_mod_max_memory_allocated)
+        if _dev_ns == "mps":
+            _mod.current_allocated_memory = getattr(
+                _mod, "current_allocated_memory", _api_mps_current_allocated_memory)
+            _mod.driver_allocated_memory = getattr(
+                _mod, "driver_allocated_memory", _api_mps_driver_allocated_memory)
         setattr(g, _dev_ns, _mod)
 
     if "torch.multiprocessing" not in _modules:

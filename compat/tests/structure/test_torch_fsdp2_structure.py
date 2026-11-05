@@ -426,9 +426,13 @@ assert second is jittor.torch_fsdp2_compat
         # `offload_to_cpu=True` (plain configs stay `False`) and the sharded
         # configs gained `_use_dtensor=False`. Only those dataclass signatures
         # differ from the snapshot this digest replaced; counts are unchanged.
+        # Moved once more when StateDictType, ShardingStrategy and
+        # BackwardPrefetch switched from string-valued Enum members to the
+        # integer member numbers torch publishes; only the enum `members`
+        # entries differ, and the counts are still unchanged.
         self.assertEqual(
             hashlib.sha256(encoded).hexdigest(),
-            "c8153c4b9b9a37064883062117bb1d3acb14cd61322cf801235703dd8bc26e4d",
+            "41dc930fd903edd1741c9d899d6d86fcbbc460fe99240d296e5dc763e2616ccb",
         )
 
     def test_protocol_2_legacy_pickle_fixtures_load_canonical_objects(self):
