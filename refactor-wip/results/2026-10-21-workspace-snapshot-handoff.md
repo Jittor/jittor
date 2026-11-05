@@ -1,3 +1,9 @@
+## 2026-11-06 01:21 +0800 续接：current-main wheel 三个差异域与测试覆盖完成交叉审阅
+
+固定构建候选 wheel 的 RNG、optimizer/fused、DDP 共 31 个未批准成员逐项与源码提交 `9a9096bb5588816ca0e090cbcb4c18a6e967ab0e` 做字节哈希核对，31/31 一致；已把 matrix 55/55、fused AdamW/SGD 的已通过子项及完整 SGD suite 超时、同源 exact wheel 双 rank NCCL Trainer resume 证据关联起来。范围内共 19 additions 与 12 content changes；整体 69/305/2 baseline 仍为 0 approved，未改 allowlist。候选固定构建 wheel 未在本轮重新安装，ACL native 迁移仍缺 CANN 证据，Day4–5 也没有性能或显存结论。
+
+本轮 fetch 后 HEAD `3a2dabd58` 对 `origin/cgq_transformers=8d8ae2d52` 领先 4、无落后；开始时工作区干净。GPU2 约 37,132 MiB、99% 并有共享进程，未运行 GPU 测试；近期 cache lock 的 PID 已退出，本轮未触碰 cache。根盘 41 GB 可用、/data6 4.3 TB。本任务继续保持 **Not complete**；下一项先审阅剩余 attention/AMP/checkpoint/core wheel 差异并绑定现有覆盖，GPU2 独占窗口仍等待管理员添加 cgq association。
+
 ## 2026-11-06 01:11 +0800 续接：CPU/CUDA backend contract matrix 全通过
 
 改用受支持的 `cutt_include_path`/`cutt_lib_path` 加载隔离 `libcutt.so` 后，当前 checkout 的 matrix 55 passed、0 skipped、0 failed；CPU 行 36 passed，CUDA 行 39 passed，fallback `error` 且 0→0。cuTT load gate 通过，`generator_randint` 的 129 项 seed99 CPU/CUDA parity 通过。ACL/ROCm/CoreX 仍 not-built，其余 26 个明确未验证单元仍保留；详细来源身份和 scope 见 Day2–5 报告与主板。

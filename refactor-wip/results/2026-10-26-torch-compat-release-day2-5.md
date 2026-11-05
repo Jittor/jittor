@@ -1,3 +1,27 @@
+## 2026-11-06 01:21 +0800 current-main wheel RNG、optimizer 与 DDP 差异域审阅
+
+### 审计身份与方法
+
+审计对象为固定构建器 wheel `/data6/cgq/jittor-lab/_state/release-day23/20261103-current-main-wheel-migration-audit-r1/wheelhouse/jittor-1.3.11.0-py3-none-any.whl`，SHA256 `18116fb386dd079e46f5b75e352cc84be29b0101912f447de44bd5c997d7c697`，源码提交 `9a9096bb5588816ca0e090cbcb4c18a6e967ab0e`。使用现有 baseline compare log 选取 31 个 RNG、optimizer/fused 与 DDP 成员；按仓库布局将 Python 模块映射到 `python/jittor/`，native `backends/` 和 `src/` 映射到仓库根，逐项比较 wheel member 解包字节与该提交 Git 源文件 SHA256，31/31 完全一致。该 crosswalk 只覆盖所列子集，没有重建或修改 wheel，也没有修改 baseline。
+
+### 本轮哈希核对成员
+
+RNG additions（10）：`jittor/_core/generator.py`、`jittor/_runtime/cuda_rng.py`、`jittor/backends/cuda/kernels/core/generator_randint_op.cc`、`jittor/src/ops/composite/generator_randint_op.cc/.h`、`generator_randperm_op.cc/.h`、`generator_uniform_op.cc/.h`、`jittor/src/utils/philox.h`。RNG content changes（4）：`jittor/backends/cuda/kernels/curand/curand_random_op.cc`、`jittor/ops/random.py`、`jittor/src/ops/composite/random_op.cc/.h`。
+
+optimizer/fused additions（6）：`jittor/backends/cuda/kernels/optim/__init__.py`、`fused_adamw_cuda.py`、`fused_sgd_cuda.py`、`jittor/optim/_state_placement.py`、`jittor/src/ops/composite/fused_sgd_op.cc/.h`。optimizer/fused content changes（8）：`jittor/optim/algorithms/adam.py`、`adan.py`、`rmsprop.py`、`sgd.py`、`jittor/optim/base.py`、`jittor/src/core/fused_op.cc/.h`、`jittor/src/ops/composite/fused_adamw_op.cc`。DDP additions（3）：`jittor/backends/cuda/kernels/misc/ddp_bucket.py`、`jittor/nn/parallel/__init__.py`、`jittor/nn/parallel/distributed_data_parallel.py`。
+
+RNG 域包括新增的 `_core/generator.py`、`_runtime/cuda_rng.py`、CUDA/composite `generator_randint`、`generator_randperm`、`generator_uniform` 与 `philox.h` 成员，以及变化的 `curand_random_op.cc`、`ops/random.py`、`composite/random_op.cc/.h`：10 additions、4 content changes。当前源码 backend contract matrix 为 55 passed、0 skipped、0 failed，其中 seed 99、int64 `[-2^63, 1)`、129 个样本的 generator_randint CPU/CUDA 精确对拍通过；较早安装 wheel 的 CUDA Generator randint 定向测试也有 1 passed，kernel SHA256 `aa545869865390dbb6f6a50f8ef456b000cbe3e6f656c8ed9e6b90aa220fa9d0`。matrix 将 explicit-generator randperm/uniform 保留在 CPU-only 合同，没有 CUDA parity 单元；候选 wheel 本身未在本轮重新安装。这些结果支持 RNG 源码身份及选定行为，不能批准整个 RNG 包迁移域。
+
+optimizer/fused 域有 6 additions（CUDA optim 初始化、fused AdamW/SGD kernels、`_state_placement.py`、composite fused SGD）和 8 content changes（Adam/Adan/RMSprop/SGD/base、fused-op core、fused AdamW op）。这 14 个 Git blob 在源码提交 `9a9096bb` 与实际安装态 fused optimizer 测试所用提交 `35a1a760` 之间完全相同；固定 wheel 候选的 14 个成员也逐项与 `9a9096bb` 相同。现有 SHA `b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69` 安装 wheel 证据中，fused AdamW CUDA 分块更新定向测试 1 passed；fused SGD 的两个 CUDA 方法及补跑的 option matrix 单项通过，完整 SGD suite 曾超时，CPU fused=False selector 边界也通过。完整 suite 超时原件保留，不把部分通过升级成整套通过，也不将这些功能结果写成性能/显存结论。
+
+DDP 域的 `ddp_bucket.py`、`nn/parallel/__init__.py` 和 `distributed_data_parallel.py` 三个新增成员均与源码提交 `9a9096bb` 逐字节匹配。相同源码提交构建的 exact main wheel SHA `bab474943f9c9c45ee59e7582b83bf054c75bc511c2cef585ba5a504d9b7d055` 已有双 rank NCCL Trainer full、step-1 stop checkpoint、新进程 resume 至 step 2 的通过证据：fallback 为 0、梯度有限、6 个可训练张量改变且 rank 间同步。该结果证明该源码身份下的端到端样例，不等于本轮固定构建器 wheel 的重新安装验收，也不替代正式性能窗口。
+
+### 发布门与后续
+
+三域合计审阅了 19 additions 与 12 content changes，但默认 baseline 仍为 69 additions、305 content changes、2 removals、0 approved；未修改任何 allowlist。ACL 两项 CodeOp 删除及迁到 native 的实现仍缺 CANN 设备执行证据，其他未审阅成员继续保持未批准。下一项非 GPU 工作应沿同一方法审阅剩余 CUDA attention/AMP/checkpoint 与 core 差异域并映射已有安装态结果；获得可核验的 GPU2 独占租约后，才能执行至少三轮 PT/JT 交替、每侧每轮十个以上热样本的 Day4–5 测量。
+
+本轮开始前在 `/home/cgq/jittor` 核对工作区干净并 fetch `origin/cgq_transformers`；HEAD `3a2dabd58` 比 origin `8d8ae2d52` 领先 4 个提交、没有落后。GPU2 为 37,132/81,920 MiB、99% 且有多个共享进程；近期 Jittor lock 记录的 PID 已不在进程表，本轮没有使用或修改 Jittor cache。根分区报告 41 GB 可用、/data6 报 4.3 TB 可用。没有运行测试或触碰 GPU。整体 Day2–5 仍为 **Not complete**。
+
 ## 2026-11-06 01:11 +0800 修正 cuTT 路径后 current-source backend contract matrix 通过
 
 ### 配置修正与运行身份
@@ -86,7 +110,7 @@ wheel与自身比较并通过core profile结构审计：1100 paths，0 additions
 
 正式 wheel-contents-final baseline仍未通过：baseline 1033 paths、candidate 1100 paths、69 additions、305 content changes、2 removals、0 approved。没有更改默认baseline、removal list、addition或content-change allowlist。两个ACL移除路径是源码中有意删除，不是构建漏包：提交 e7bf82046 删除了原 sigmoid_op.py 与 transpose_op.py CodeOp wrapper，同时增加 native/sigmoid_op_acl.cc、native/transpose_op_acl.cc 并扩展 tests/backends/acl/test_acl.py。缺少CANN设备运行证据，不能据静态迁移批准ACL功能。
 
-上一个确切源码wheel bab474943f9c9c45ee59c7582b83bf054c75bc511c2cef585ba5a504d9b7d055由系统pip调用 bdist_wheel 0.38.4 构建；它与固定构建器产物相比，LICENSE仍为同一SHA256 8b18f18c9c43b17e6e2bcdefc8df9d423c12e6769d5d13cf6a46fed31e7e1666，但dist-info路径从 licenses/LICENSE.txt 改为 LICENSE.txt，METADATA为2.1对2.4，Generator字段也不同。此构建器噪声单独产生1个addition、1个removal和3个content changes。固定构建器复现的baseline差异为69/305/2，排除了这部分噪声。
+上一个确切源码wheel bab474943f9c9c45ee59e7582b83bf054c75bc511c2cef585ba5a504d9b7d055由系统pip调用 bdist_wheel 0.38.4 构建；它与固定构建器产物相比，LICENSE仍为同一SHA256 8b18f18c9c43b17e6e2bcdefc8df9d423c12e6769d5d13cf6a46fed31e7e1666，但dist-info路径从 licenses/LICENSE.txt 改为 LICENSE.txt，METADATA为2.1对2.4，Generator字段也不同。此构建器噪声单独产生1个addition、1个removal和3个content changes。固定构建器复现的baseline差异为69/305/2，排除了这部分噪声。
 
 ### 结论与边界
 
@@ -114,7 +138,7 @@ attempt-16 在 300 秒内生成 386 个冷 JIT 文件后超时，未形成训练
 
 ## 2026-11-03 07:25 +0800 精确 main+compat wheel CPU checkpoint/state_dict/DCP 安装态复核通过
 
-在精确 main/compat wheel 独立安装根（wheel SHA256 分别为 `bab474943f9c9c45ee59c7582b83bf054c75bc511c2cef585ba5a504d9b7d055` 与 `740a9034c375e70b55ade864f75acbed7e492f09532bcf68ab64ac24a070b975`）运行 `compat/tests/torch/test_checkpoint_state_dict.py`，17 passed、0 failed/skip、fallback 0→0。测试绑定 SHA256 `3fe8e900ffcaf5397c5b746beadfc5c4938f2bef90d26687680cc2cf6ca651d4`，实际模块来自安装根；CPU core current，SHA256 前后相同 `2c8460f5af6e8d33d26b53df8b3f3c047c60851db5138e342cef0a2b7ca788e6`。该套件覆盖命名 state 与 optimizer 恢复、参数组/多 optimizer、保存后继续更新、单 rank DCP planner roundtrip 和错误传播。
+在精确 main/compat wheel 独立安装根（wheel SHA256 分别为 `bab474943f9c9c45ee59e7582b83bf054c75bc511c2cef585ba5a504d9b7d055` 与 `740a9034c375e70b55ade864f75acbed7e492f09532bcf68ab64ac24a070b975`）运行 `compat/tests/torch/test_checkpoint_state_dict.py`，17 passed、0 failed/skip、fallback 0→0。测试绑定 SHA256 `3fe8e900ffcaf5397c5b746beadfc5c4938f2bef90d26687680cc2cf6ca651d4`，实际模块来自安装根；CPU core current，SHA256 前后相同 `2c8460f5af6e8d33d26b53df8b3f3c047c60851db5138e342cef0a2b7ca788e6`。该套件覆盖命名 state 与 optimizer 恢复、参数组/多 optimizer、保存后继续更新、单 rank DCP planner roundtrip 和错误传播。
 
 该次 30.90 秒执行复用同一 exact CPU cache 路径与完整环境 flags，import 时禁止 core build；cache 1465→1561，仅新增 96 项，删除 0，唯一旧文件变化是 `jittor.lock`。主 root 更新 manifest SHA256 `d22e2ca48bbb6e43dfcb4cbf185350736318d7a0d49461fbb50b7e7dfbd3e961`，attempt manifest SHA256 `50690ca1c808ac8c67c21f5c47b10786f029471b4238b1adb582f2a5860e5d6c`。attempt-01–07 的环境/准备失败原件仍保留；只有 attempt-08 是产品测试结果。两条 opt-in sharded-tensor no-op 警告维持已知边界。
 
@@ -130,7 +154,7 @@ attempt-16 在 300 秒内生成 386 个冷 JIT 文件后超时，未形成训练
 
 ## 2026-11-03 06:49 +0800 精确 main+compat wheel fresh target CPU Tensor 往返通过；Day4–5 与整体发布门继续开放
 
-以 main wheel `bab474943f9c9c45ee59c7582b83bf054c75bc511c2cef585ba5a504d9b7d055`（代码提交 `9a9096bb5588816ca0e090cbcb4c18a6e967ab0e`）和 compat wheel `740a9034c375e70b55ade864f75acbed7e492f09532bcf68ab64ac24a070b975`（代码提交 `19a07871932743dae226107fc9403e756d56bdef`）完成独立 pip target 验收。attempt-03 在 CPU 上完成安装态 Jittor core 冷构建（227/227，约 323.5 秒）；首轮 smoke 随后因 harness 读取 `torch.__file__` 停止，而 `TorchNamespace` 有意隐藏此 import metadata。修正后 attempt-05 预检确认加载 attempt-03 的原 core；attempt-06 从同一安装 target 实际导出 Jittor CPU `float32` Tensor `[0.25, -1.5, 3.0]`，独立 stock PyTorch 2.6.0+cu124 以 `weights_only=True` 读回相同 dtype、shape 和数值。JT 与 stock 结果均 PASS，归档 757 bytes、SHA256 `a1227cc1cf746d67608fad1fdfcb1f7757b9f87fcfda9a564b9ceb41adacab36`；fallback 0→0，core build current，core SHA256 前后同为 `2c8460f5af6e8d33d26b53df8b3f3c047c60851db5138e342cef0a2b7ca788e6`。证据目录 `/data6/cgq/jittor-lab/_state/release-day23/20261103-exact-main-compat-wheel-cold-root-r1/`，最终 manifest SHA256 `09267b8673d4429658c4f5ae01ca5a75acf12bbd51b1cbe2f304d213a9699768`，全项校验通过。
+以 main wheel `bab474943f9c9c45ee59e7582b83bf054c75bc511c2cef585ba5a504d9b7d055`（代码提交 `9a9096bb5588816ca0e090cbcb4c18a6e967ab0e`）和 compat wheel `740a9034c375e70b55ade864f75acbed7e492f09532bcf68ab64ac24a070b975`（代码提交 `19a07871932743dae226107fc9403e756d56bdef`）完成独立 pip target 验收。attempt-03 在 CPU 上完成安装态 Jittor core 冷构建（227/227，约 323.5 秒）；首轮 smoke 随后因 harness 读取 `torch.__file__` 停止，而 `TorchNamespace` 有意隐藏此 import metadata。修正后 attempt-05 预检确认加载 attempt-03 的原 core；attempt-06 从同一安装 target 实际导出 Jittor CPU `float32` Tensor `[0.25, -1.5, 3.0]`，独立 stock PyTorch 2.6.0+cu124 以 `weights_only=True` 读回相同 dtype、shape 和数值。JT 与 stock 结果均 PASS，归档 757 bytes、SHA256 `a1227cc1cf746d67608fad1fdfcb1f7757b9f87fcfda9a564b9ceb41adacab36`；fallback 0→0，core build current，core SHA256 前后同为 `2c8460f5af6e8d33d26b53df8b3f3c047c60851db5138e342cef0a2b7ca788e6`。证据目录 `/data6/cgq/jittor-lab/_state/release-day23/20261103-exact-main-compat-wheel-cold-root-r1/`，最终 manifest SHA256 `09267b8673d4429658c4f5ae01ca5a75acf12bbd51b1cbe2f304d213a9699768`，全项校验通过。
 
 执行边界与失败原件一并保留：attempt-01/02 是工作目录与计划生成顺序的 harness 问题；attempt-03 的 `torch.__file__` 检查错误已在 attempt-06 改为检查 `TorchNamespace` 实现模块来源。attempt-04 漏带原 `cache_name` 等设置，在共享 `JITTOR_HOME` 中启动了另一 cache key 的核心编译，300 秒超时（Jittor 124、stock reader 跳过 99），没有产品结果。attempt-03 原始 manifest 文件及其摘要仍保留；attempt-04 后复核只有共享 `jittor.lock` 与 `probe.json` 两项变化，已另行审计，最终 manifest 覆盖后续目录状态并通过。attempt-06 使用与 attempt-03 完全相同的 cache 配置和 core，没有重做冷构建。
 
@@ -150,7 +174,7 @@ attempt-16 在 300 秒内生成 386 个冷 JIT 文件后超时，未形成训练
 
 回归证据分开记录。修复前的真实 shim 运行观察到 `torch.HalfStorage` 留成 serializer stub；修复后在既有 warm CPU Jittor/TorchNamespace runtime（`JITTOR_NO_BUILD=1`、backend fallback=error、跳过第三方扩展构建）强制 pickle 异常，验证 9 个命名空间绑定和 9 项目标列表均恢复，失败归档不存在；同一进程随后成功导出 586-byte 标量归档。stock PyTorch 2.8.0+cu128 从该归档读回 `{"recovered": 7}`。实际 runtime 使用 checkout 模块 SHA256 `843411da94a28a51576c20ed6745f13770aaff0f275fb076475481bc2a515e67`；另有 external-owner 与原本缺失属性两种 9-target 回归通过。
 
-以已推送源码提交 `9a9096bb5588816ca0e090cbcb4c18a6e967ab0e` 的 Git archive 构建 main wheel，SHA256 `bab474943f9c9c45ee59c7582b83bf054c75bc511c2cef585ba5a504d9b7d055`，大小 2,320,073 bytes。fresh pip target 安装成功，core wheel 内容审计通过（1,100 paths）；源码、wheel member、安装态模块 SHA256 均为 `843411da94a28a51576c20ed6745f13770aaff0f275fb076475481bc2a515e67`。从该安装态模块运行选中的异常恢复测试，在 stock PyTorch 2.8.0+cu128 和最小 Jittor 类型 stub 下 3 passed、4 deselected；这些用例在进入 Jittor Tensor/ZipFile 路径前抛错。与上一中间 wheel 比较时 0 additions、0 removals、2 个未批准内容变化（模块本身和 RECORD），compare exit=1；未改 allowlist，也不据此宣称 broader wheel migration 通过。
+以已推送源码提交 `9a9096bb5588816ca0e090cbcb4c18a6e967ab0e` 的 Git archive 构建 main wheel，SHA256 `bab474943f9c9c45ee59e7582b83bf054c75bc511c2cef585ba5a504d9b7d055`，大小 2,320,073 bytes。fresh pip target 安装成功，core wheel 内容审计通过（1,100 paths）；源码、wheel member、安装态模块 SHA256 均为 `843411da94a28a51576c20ed6745f13770aaff0f275fb076475481bc2a515e67`。从该安装态模块运行选中的异常恢复测试，在 stock PyTorch 2.8.0+cu128 和最小 Jittor 类型 stub 下 3 passed、4 deselected；这些用例在进入 Jittor Tensor/ZipFile 路径前抛错。与上一中间 wheel 比较时 0 additions、0 removals、2 个未批准内容变化（模块本身和 RECORD），compare exit=1；未改 allowlist，也不据此宣称 broader wheel migration 通过。
 
 安装态完整 Jittor 启动另有保留的失败 attempt-08：加载新 target 模块前，warm Jittor core import 在 `jittor_core` 内 segfault；该进程未执行本修复代码，cache manifest 前后通过且 core SHA256 保持 `13ee2862304d354a20a9fefbe51dd8daee46066084b6c21f9385ffcfa7adf991`。因此实际 shim 运行证据来自既有 warm runtime 加载 hash 相同的 checkout 文件；新 wheel 的直接证据是安装身份与 stock PyTorch 异常路径回归，不是 fresh target 的完整 Jittor 启动/cold-install 验收。
 

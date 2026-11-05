@@ -1,3 +1,9 @@
+## 2026-11-06 01:21 +0800 current-main wheel RNG/optimizer/DDP 三个功能域已映射到源码与覆盖
+
+固定构建器候选 main wheel SHA256 为 `18116fb386dd079e46f5b75e352cc84be29b0101912f447de44bd5c997d7c697`，源码提交 `9a9096bb5588816ca0e090cbcb4c18a6e967ab0e`。从未批准 baseline 中选取 RNG 14 项、optimizer/fused 14 项和 DDP 3 项，共 31 个成员（19 additions、12 content changes）；逐项比较归档成员字节与对应 Git 源文件 SHA256 后 31/31 相同。optimizer 14 项在安装态功能测试来源提交 `35a1a7605ec475e9cbc1a9688afc299ee3bd8011` 与候选源码提交之间也全部为相同 Git blob。相关已有证据包括 current-source backend contract matrix 55/55、fused AdamW CUDA 定向更新、fused SGD 两项 CUDA 用例与一项 option matrix，以及 exact main/compat wheel 双 rank NCCL Trainer full/stop/fresh-resume。
+
+此次是有限范围的成员与覆盖映射，不批准或放宽 wheel allowlist；默认比较仍为 69 additions、305 content changes、2 removals、0 approved。RNG 的 randperm/uniform 合同仍为 CPU-only，完整 fused SGD suite 有超时记录，固定构建器候选 wheel 未在本轮重新安装运行。ACL 删除迁移仍无 CANN 运行证据。GPU2 检查时为 37,132/81,920 MiB、99% 且有共享进程，根分区显示 100% 使用率（仍有 41 GB 可用），/data6 有 4.3 TB；未运行测试、未进入 Jittor build cache。Day4–5 独占性能/显存窗口和更广 wheel 发布门保持开放。
+
 ## 2026-11-06 01:11 +0800 current-source CUDA backend contract matrix 55/55 passed；cuTT 已加载
 
 在修正 cuTT 路径配置后，完整 `tests/backends/parity/test_backend_contract_matrix.py` 以 exit 0 结束：55 passed、0 skipped、8.45 秒。测试文件哈希仍为 `backend_contract_matrix.py` `c608cef8fee8e38d32400103e980b9f782fa587c61c5e040009ca68d7e2235b0` 与 `test_backend_contract_matrix.py` `4b79dace5672c853b6564592d2fd818ff97fd74e8c470ca48531d919c1a1a992`。Jittor CPU 行 36 passed / 5 no-probe；CUDA 行 39 passed / 1 no-dependency / 20 no-probe。cuTT optional-library load gate 已通过，未加载的可选项只报告 hccl、mpi、nccl；`cuda/cutt_test` 仍是按设计不做数值对拍的 link self-test。ACL、ROCm、CoreX 仍未构建，26 个矩阵单元保留为未验证。`generator_randint` seed99、int64 `[-2^63,1)`、129 项 CPU/CUDA exact parity 通过。
