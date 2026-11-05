@@ -53,6 +53,34 @@ class TestTorchFactoryFidelity(unittest.TestCase):
             value = factories.zeros((2, 3), dtype=torch.float32)
         np.testing.assert_array_equal(value.numpy(), np.zeros((2, 3)))
 
+    def test_randint_defaults_to_long_and_respects_explicit_dtype(self):
+        with jt.flag_scope(use_cuda=0):
+            plain = torch.randint(0, 128, (1, 8))
+            seeded = torch.randint(
+                0, 128, (1, 8),
+                generator=torch.Generator(device="cpu").manual_seed(7))
+            receive = torch.empty((1, 8), dtype=torch.long)
+            explicit = torch.randint(0, 128, (1, 8), dtype=torch.int32)
+            explicit_none = torch.randint(0, 128, (1, 8), dtype=None)
+        for value in (plain, seeded, receive, explicit_none):
+            self.assertEqual(value.dtype, torch.int64)
+            self.assertEqual(tuple(value.shape), (1, 8))
+        self.assertEqual(explicit.dtype, torch.int32)
+
+    def test_randint_defaults_to_long_on_cuda(self):
+        if not jt.has_cuda:
+            self.skipTest("CUDA is unavailable")
+        with jt.flag_scope(use_cuda=1):
+            plain = torch.randint(0, 128, (1, 8), device="cuda")
+            seeded = torch.randint(
+                0, 128, (1, 8), device="cuda",
+                generator=torch.Generator(device="cuda").manual_seed(7))
+            receive = torch.empty((1, 8), dtype=torch.long, device="cuda")
+            for value in (plain, seeded, receive):
+                self.assertEqual(value.dtype, torch.int64)
+                self.assertEqual(value.device.type, "cuda")
+                value.sync()
+
     def test_empty_like_implementation_is_family_owned_and_runs_on_cpu(self):
         factories = importlib.import_module(
             "jittor.compat.torch.installers.factories")
