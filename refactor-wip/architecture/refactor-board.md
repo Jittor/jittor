@@ -1,3 +1,7 @@
+## 2026-11-06 01:44 +0800 NN 层 34 个 wheel 内容变化成员已与源码身份对齐
+
+固定 wheel 的 34 个 `jittor/nn/**` content-change 成员均逐项匹配源码提交 `9a9096bb5588816ca0e090cbcb4c18a6e967ab0e`，且在安装态测试 wheel 的 `35a1a760` 源码提交中相同；4 项与既有 attention/storage crosswalk 重叠，净新增 30 项。现有 attention、Embedding、稳定梯度、双 rank Trainer 证据分别覆盖有限路径，旧 stable-gradient 测试提交有 6 个相关 NN 文件与最终源码不同。累计 crosswalk 为全部 69 additions 和 135/305 content changes；170 项变化及两项 ACL 删除仍未批准。
+
 ## 2026-11-06 01:42 +0800 JIT codegen 与 core execution/gradient 再核对 33 个变化成员
 
 固定 wheel 的 17 个 `src/codegen` 与 16 个尚未覆盖的 `src/core` content-change 成员均逐项匹配目标源码，且在已安装测试 wheel 的源码提交 `35a1a760` 中相同。core 集合排除了此前已核过的 fused-op 与 Var/VarHolder 文件。现有矩阵、CPU graph/step tests 和 exact-source 双 rank Trainer 提供部分路径证据；`grad.cc/.h` 的 gradient-ready callback 是较晚加入部分，未由更早的 GradScaler capture CUDA pass 单独覆盖。累计 source crosswalk 为 69 additions、105/305 content changes；200 个变化与两项 ACL 删除仍未审批。

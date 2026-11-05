@@ -1,3 +1,9 @@
+## 2026-11-06 01:44 +0800 续接：NN 层 34 个内容变化成员完成 hash/覆盖映射
+
+固定 wheel 的 34 个 NN content-change 成员全部匹配源码提交 `9a9096bb` 与已测 wheel 源码提交 `35a1a760`；4 项前已核，本轮净增 30 项。已有 CUDA GQA 单项与双 rank Trainer tiny-BERT 通过；stable-gradient suite 来自更早提交，其中 6 个相关 NN 文件与最终源码不同，不能外推。累计 hash crosswalk 为 69 additions、135 content changes，尚有 170 changes 与两项 ACL removals 未批准。
+
+GPU2 最近检查 100%，cgq queue/association 为空。没有测试或 GPU 工作；整体目标仍未完成。
+
 ## 2026-11-06 01:42 +0800 续接：JIT codegen/core runtime 33 个变化成员已映射
 
 17 个 codegen 和 16 个剩余 core runtime wheel member bytes 全部与固定源码提交及旧 installed-wheel source commit 一致。current-source matrix、CPU graph/step suites、exact-source 双 rank Trainer 提供部分行为证据；gradient-ready callback 的直接测试仍无单独运行收据，较早 GradScaler CUDA test 的 `grad.cc/.h` 版本不同。累计 hash crosswalk 为全部 69 additions 与 105 个 content changes，另 200 个 changes 和两项 ACL removals 仍待审阅/批准。

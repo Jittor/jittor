@@ -1,3 +1,13 @@
+## 2026-11-06 01:44 +0800 NN 层 34 个内容变化成员与测试范围映射
+
+固定 main wheel 中 `jittor/nn/**` 的 34 个 pinned-builder content changes 全部逐项匹配 wheel member 与源码提交 `9a9096bb5588816ca0e090cbcb4c18a6e967ab0e` 的 Git SHA256，也全部与实际 installed-wheel 测试源码提交 `35a1a7605ec475e9cbc1a9688afc299ee3bd8011` 内容一致。成员涉及 `__init__.py`/bindings/backends、activation/attention/complex/convolution/dropout/fold/grid/interpolation/linear/loss/matrix/normalization/pooling/softmax/tensor functional，以及 activation/attention/container/convolution/depthwise/linear/normalization/parameter modules、serving ops 与 weight norm。其中文件 `functional/attention.py`、`multihead_attention.py`、`modules/attention.py` 和 `functional/tensor.py` 已在之前的 attention/storage crosswalk 核过；本轮净新增 30 个不同变化成员。
+
+行为证据的身份和范围有限。已安装 main wheel `b04a73457fda72fc220c76254d93d91c05c1bd821dfe96856b76ded89e639b69` 的 grouped-query attention CUDA 前反向单项 1 passed，源码提交为 `35a1a760`，覆盖特定 shape 与 bool mask；same-source exact main/compat wheel 的双 rank tiny BERT/PEFT Trainer full/stop/fresh-resume 也成功到 step 2。另有 `tests/nn/test_cuda_stable_gradients.py` 8 passed 的真实 CUDA 记录，但它绑定提交 `304500ea83ce1e1191ee7f3f4d5efc60911529d4`；相较最终提交，该测试源码版本有 6 个 NN Git blob 不同：`backends/__init__.py`、`functional/linear.py`、`functional/matrix.py`、`functional/multihead_attention.py`、`modules/attention.py`、`modules/parameter.py`。因此这份记录支持相同文件中的稳定梯度测试范围，不当成对这六个最终成员的直接验收。backend contract matrix 的 55/55 也只覆盖声明 probe 的算子，并非整个 NN API。
+
+NN 内容身份与功能覆盖不能转换成端到端性能声明。旧 R29 attention 计时是不同 HEAD、共享设备下的诊断；没有对最终候选做三轮交替、每侧每轮十个以上热样本，也没有 allocator/NVML 峰值。此前累计 source crosswalk 的 105 个 content changes 加本轮净新增 30 个，为 135/305；另有 170 个内容变化和两项 ACL 删除未审阅/批准。全部 69 additions 已匹配源码，但 wheel migration 与 Day2–5 仍为 **Not complete**。
+
+本轮仅做 wheel/source/test receipt 对照，没有运行 GPU 或 Jittor cache 操作。GPU2 的最新快照仍为 37,768 MiB/100%，cgq queue 与 association 无条目；正式性能/显存测量需等管理员提供 association 与独占租约。
+
 ## 2026-11-06 01:42 +0800 JIT codegen 与 core execution/gradient 内容变化成员审阅
 
 从 pinned-builder baseline 中选取 17 个 `jittor/src/codegen/**` content changes（jit compiler/key/op compiler、kernel IR、atomic/cache/parallel/reduction/intermediate passes、pass manager、tuners 与 var relay），以及 16 个此前未纳入 crosswalk 的 `jittor/src/core/**` changes（event queue、exec plan/runner、executor、fuser、grad、graph、memory profiler、node、op 与 parallel compiler）。core 集合排除了已在 optimizer 与 storage 子域核过的 fused-op 及 var/var-holder 文件。固定 wheel member bytes 与源码提交 `9a9096bb5588816ca0e090cbcb4c18a6e967ab0e` 逐项 SHA256 匹配；33/33 无差异，这些成员在安装态测试 wheel 源提交 `35a1a7605ec475e9cbc1a9688afc299ee3bd8011` 也逐项相同。
