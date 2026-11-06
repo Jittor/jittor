@@ -330,7 +330,11 @@ def _default_collate(batch):
     elem = batch[0]
     if isinstance(elem, jt.Var):
         from ..frontend import tensor_frontend
-        with tensor_frontend(g.Var):
+        # Collation executes an op, not a tensor factory: the result must
+        # follow the batch elements' placement.  An ambient default-device
+        # placement here put concat's destination on the host while the
+        # inputs were on the GPU and the first setitem failed.
+        with tensor_frontend(g.Var, default_placement=False):
             result = jt.stack(list(batch), dim=0)
             if not any(value.requires_grad for value in batch):
                 result.requires_grad_(False)
