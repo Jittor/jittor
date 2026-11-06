@@ -117,3 +117,26 @@ job id 只作命名空间隔离。`--timeout` 约束节点会合与心跳等待�
 
 单机上的多个 agent 只能验证控制协议；实际跨主机连通、网络故障、训练及 fresh-process
 恢复仍需真实多主机验收。不要将 loopback 或两个本地 rank 的结果视为多机通过。
+
+## `torch.distributed.run` 兼容启动器
+
+`python -m torch.distributed.run`、`torchrun` 命令和
+`accelerate launch --multi_gpu` 都解析到同一兼容层：`get_args_parser()` 返回
+torchrun 的参数面（accelerate 用它过滤自己的 namespace），`run(args)` 再把这
+份参数映射到 `jtrun`。
+
+支持单个静态单机 worker 组及其描述所需选项：`--nproc-per-node`（整数、
+`auto`、`cpu` 或 `gpu`）、`--nnodes` 仅限 `1`/`1:1`、`--node-rank 0`、
+`--master-addr`、`--master-port`、`host:port` 形式的 `--rdzv-endpoint`、
+`--standalone`、`--module`、`--no-python`、`--log-dir`，以及训练脚本及其参数。
+`CUDA_VISIBLE_DEVICES` 保持不变，每个 worker 的 `LOCAL_RANK` 是本节点 rank，
+与 torchrun 一致；设备选择仍由 Jittor 负责。
+
+不模拟弹性语义：重启（`--max-restarts`）、非静态 rendezvous、多节点 agent
+编排、`--run-path`、`--redirects`、`--tee`、`--event-log-handler`、
+`--local-ranks-filter`、`--virtual-local-rank`、`--numa-binding`、
+`--logs-specs`、自定义 `--signals-to-handle` 以及非 `spawn` 启动方式都会在
+任何 worker 启动前被拒绝。不会导出 `TORCHELASTIC_*` 变量，因此
+`torch.distributed.is_torchelastic_launched()` 保持 false；worker 输出写入
+`<log-dir>/rank<rank>.log`，而不是 torchrun 带前缀的控制台流。多机 Jittor NCCL
+请在每台节点上使用 `jtrun`；真正的弹性启动请使用 PyTorch。

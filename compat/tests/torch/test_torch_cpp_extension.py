@@ -95,6 +95,16 @@ class TestTorchCppExtensionArchFlags(unittest.TestCase):
 
 
 class TestTorchCppExtensionImportIdentity(unittest.TestCase):
+    def test_ninja_availability_probe_is_published(self):
+        # DeepSpeed's op builders import this pair before their JIT load; the
+        # missing names made even the optional CPU shm op fail at import.
+        import torch
+        backend = torch.utils.cpp_extension
+        available = backend.is_ninja_available()
+        self.assertIsInstance(available, bool)
+        if available:
+            self.assertIsNone(backend.verify_ninja_availability())
+
     def test_invalid_identity_fails_before_build(self):
         from jittor.compat.shim import cpp_extension
         from jittor.compat.shim.cpp_extension import torch_utils

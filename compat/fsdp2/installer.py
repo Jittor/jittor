@@ -3,7 +3,10 @@
 import sys
 import types
 
-from . import api, common, compat_types, config, dtensor, grad_sync, optimizer, shard, public_helpers
+from . import (
+    _context_parallel, api, common, compat_types, config, dtensor, grad_sync,
+    optimizer, shard, public_helpers,
+)
 
 
 _INSTALL_MARKER = "_jittor_fsdp2_install_complete"
@@ -85,6 +88,12 @@ def install_with_registry(dist, torch_module=None, registry=None):
     tensor_spec_mod = module(
         "torch.distributed.tensor._dtensor_spec")
     tensor_utils_mod = module("torch.distributed.tensor._utils")
+    tensor_experimental_mod = module(
+        "torch.distributed.tensor.experimental", tensor_mod, "experimental")
+    tensor_experimental_attention_mod = module(
+        "torch.distributed.tensor.experimental._attention")
+    tensor_experimental_cp_mod = module(
+        "torch.distributed.tensor.experimental._context_parallel")
     tensor_parallel_mod = module("torch.distributed.tensor.parallel")
     tensor_parallel_api_mod = module(
         "torch.distributed.tensor.parallel.api")
@@ -148,7 +157,8 @@ def install_with_registry(dist, torch_module=None, registry=None):
         checkpoint_mod, "checkpoint_wrapper")
 
     dist.__path__ = getattr(dist, "__path__", [])
-    for pkg in (tensor_mod, tensor_legacy_mod, tensor_parallel_mod, fsdp_mod,
+    for pkg in (tensor_mod, tensor_legacy_mod, tensor_experimental_mod,
+                tensor_parallel_mod, fsdp_mod,
                 fsdp_fully_pkg, comp_mod, comp_fsdp_mod, algorithms_mod,
                 checkpoint_mod):
         pkg.__path__ = getattr(pkg, "__path__", [])
@@ -248,6 +258,25 @@ def install_with_registry(dist, torch_module=None, registry=None):
     tensor_mod._dtensor_spec = tensor_spec_mod
     tensor_mod._utils = tensor_utils_mod
     tensor_mod.parallel = tensor_parallel_mod
+    tensor_mod.experimental = tensor_experimental_mod
+    tensor_experimental_mod._attention = tensor_experimental_attention_mod
+    tensor_experimental_mod._context_parallel = tensor_experimental_cp_mod
+    tensor_experimental_mod.context_parallel = (
+        _context_parallel.context_parallel)
+    for context_parallel_mod in (tensor_experimental_attention_mod,
+                                 tensor_experimental_cp_mod):
+        context_parallel_mod.context_parallel = (
+            _context_parallel.context_parallel)
+        context_parallel_mod.set_rotate_method = (
+            _context_parallel.set_rotate_method)
+        context_parallel_mod._cp_options = _context_parallel._cp_options
+        context_parallel_mod._RotateMethod = _context_parallel._RotateMethod
+    # PyTorch publishes the legacy entry point under the experimental package
+    # even though its implementation lives in the private submodule.
+    _context_parallel.context_parallel.__module__ = (
+        "torch.distributed.tensor.experimental")
+    _context_parallel.set_rotate_method.__module__ = (
+        "torch.distributed.tensor.experimental._attention")
     tensor_mod.DeviceMesh = exports["DeviceMesh"]
     tensor_legacy_mod.device_mesh = tensor_legacy_device_mesh_mod
     for mod in (device_mesh_mod, tensor_legacy_device_mesh_mod,
@@ -288,6 +317,7 @@ def install_with_registry(dist, torch_module=None, registry=None):
     fsdp_init_mod._get_mesh_info = compat_types._get_mesh_info
     fsdp_init_mod._get_post_forward_mesh_info = compat_types._get_post_forward_mesh_info
     public_helpers.register_helper_fidelity()
+    _context_parallel.register_context_parallel_fidelity()
     setattr(dist, _INSTALL_MARKER, True)
     setattr(dist, _MODULE_GRAPH_ATTR, tuple(module_graph))
     registry.publish("torch.distributed", dist)

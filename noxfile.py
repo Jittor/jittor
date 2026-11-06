@@ -357,7 +357,9 @@ MPI_TESTS = (
 )
 NCCL_TESTS = (
     "tests/backends/comm/nccl/test_native_collectives.py",
+    "tests/backends/comm/nccl/test_native_p2p.py",
     "compat/tests/fsdp2/test_fsdp2_nccl.py",
+    "compat/tests/torch/test_torch_distributed_p2p.py",
 )
 
 NOX_STATE_ROOT.mkdir(parents=True, exist_ok=True)

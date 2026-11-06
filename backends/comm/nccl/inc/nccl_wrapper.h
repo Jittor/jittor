@@ -68,14 +68,15 @@ cudaStream_t nccl_stream_begin();
 /**
 Close out one collective. Takes the operator's input and output because the
 deferred-join path has to keep both blocks reserved -- see
-`cuda_side_stream_defer_join`.
+`cuda_side_stream_defer_join`. Either may be null for a point-to-point
+operator, which has a buffer on only one side (a send reads, a recv writes).
 
 Outside a bucket scope (and inside a synchronous one) this joins the default
 stream back immediately, which is the conservative behaviour every collective
 had before 8.02: correct, but it also means nothing can overlap with the
 collective.
 */
-void nccl_stream_end(Var* x, Var* y);
+void nccl_stream_end(Var* x=nullptr, Var* y=nullptr);
 
 /**
 Bucket several collectives into one NCCL group, and optionally let the default
@@ -116,6 +117,22 @@ window existed rather than assuming it.
 */
 // @pyjt(nccl_comm_wait)
 bool nccl_comm_wait();
+
+/**
+Wait on the host until every point-to-point operation already issued on this
+device's communication stream has completed.
+
+``ncclSend``/``ncclRecv`` return as soon as the operation is enqueued; the
+GPU stream blocks until the peer posts the matching operation, but the host
+does not. torch's blocking ``send``/``recv`` promise the data is in flight by
+the time they return, so the process-group wrappers call this after the
+operator's flush. It orders the calling thread's default stream behind the
+communication stream first (the same join order a collective uses) and then
+synchronizes that stream, which is what makes it wait for the NCCL work rather
+than only for the host-side launch.
+*/
+// @pyjt(nccl_p2p_sync)
+void nccl_p2p_sync();
 
 /**
 Map a jittor dtype to the NCCL datatype used to send it.

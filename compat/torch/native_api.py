@@ -89,7 +89,24 @@ class NativeOperation:
             if isinstance(implementation, type) and issubclass(implementation, context.native_backend.Function):
                 implementation = implementation()
             if unique_operation:
-                result = implementation(*args, **kwargs)
+                if self._operation_key == "unique_consecutive" and args:
+                    # The native implementation builds its run mask with
+                    # ``jt.concat``, which allocates through the *ambient*
+                    # placement. Switch the frontend scope to the input's own
+                    # device for this call and restore it afterwards.
+                    first = args[0]
+                    backend = int(first.placement_backend) if isinstance(first, context.state["Var"]) else -1
+                    if backend >= 0:
+                        token = jittor.core._set_tensor_placement(
+                            backend, max(int(first.device_id), 0))
+                        try:
+                            result = implementation(*args, **kwargs)
+                        finally:
+                            jittor.core._reset_tensor_placement(token)
+                    else:
+                        result = implementation(*args, **kwargs)
+                else:
+                    result = implementation(*args, **kwargs)
                 # Torch always represents inverse indices and counts as int64.
                 if isinstance(result, tuple):
                     result = (result[0],) + tuple(value.int64() for value in result[1:])

@@ -73,6 +73,19 @@ class TestDeviceMeshGroups(unittest.TestCase):
         np.testing.assert_array_equal(shaped.mesh, [[0, 1], [2, 3]])
         self.assertEqual(shaped["y", "x"]._flatten().mesh.tolist(), [0, 2, 1, 3])
 
+    def test_flattened_mesh_name_resolves_on_the_root(self):
+        # The 3D-parallel example calls
+        # world_mesh["dp", "cp"]._flatten(mesh_dim_name="dp_cp") and later
+        # world_mesh["dp_cp"].get_group(); torch keeps the flattened mesh on
+        # the root so the second lookup finds it.
+        mesh = self.api.DeviceMesh(
+            "cuda", [[0, 1], [2, 3]], mesh_dim_names=("dp", "cp"))
+        flat = mesh["dp", "cp"]._flatten(mesh_dim_name="dp_cp")
+        self.assertIs(mesh["dp_cp"], flat)
+        self.assertEqual(flat.mesh_dim_names, ("dp_cp",))
+        self.assertEqual(flat.size(), 4)
+        self.assertEqual(flat.get_group().size(), 4)
+
     def test_invalid_ranks_names_and_nonmember_fail(self):
         for ranks in ([0, 0], [4], [-1], []):
             with self.assertRaises(ValueError):

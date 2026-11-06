@@ -77,6 +77,34 @@ class TestTrainingAttentionMatchesTheClosedForm(unittest.TestCase):
         mask = (np.random.RandomState(2).randn(2, 3, 7, 9) * 0.5).astype("float32")
         self._check(7, 9, mask=mask)
 
+    def test_additive_mask_receives_its_gradient(self):
+        """dL/dmask is the score gradient, reduced over broadcast axes."""
+        rng = np.random.RandomState(4)
+        b, h, lq, lk, d = 2, 3, 7, 9, 8
+        q = rng.randn(b, h, lq, d).astype("float32")
+        k = rng.randn(b, h, lk, d).astype("float32")
+        v = rng.randn(b, h, lk, d).astype("float32")
+        dout = rng.randn(b, h, lq, d).astype("float32")
+        full_mask = (rng.randn(b, h, lq, lk) * 0.5).astype("float32")
+        # Transformers' Swin reaches SDPA with one bias block for all
+        # batches; its gradient is the score gradient summed over batch.
+        for mask in (full_mask, full_mask[:1]):
+            want = _reference(q, k, v, mask, False, dout, return_mask_gradient=True)
+            want_mask = want[-1] if mask.shape[0] == b else want[-1].sum(0, keepdims=True)
+            for device, use_cuda in _devices():
+                with self.subTest(device=device, mask_shape=mask.shape):
+                    with jt.flag_scope(use_cuda=use_cuda):
+                        jq, jk, jv = jt.array(q), jt.array(k), jt.array(v)
+                        jm = jt.array(mask)
+                        out = scaled_dot_product_attention(jq, jk, jv, attn_mask=jm)
+                        grads = jt.grad((out * jt.array(dout)).sum(),
+                                        [jq, jk, jv, jm])
+                        for got, expected in zip(
+                                [out, grads[0], grads[1], grads[2], grads[3]],
+                                want[:-1] + (want_mask,)):
+                            np.testing.assert_allclose(
+                                got.numpy(), expected, rtol=1e-5, atol=2e-6)
+
     def test_causal(self):
         self._check(9, 9, causal=True)
 

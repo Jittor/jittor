@@ -3,7 +3,7 @@
 import numpy as np
 
 
-def reference(q, k, v, mask, causal, dout):
+def reference(q, k, v, mask, causal, dout, return_mask_gradient=False):
     q, k, v, dout = (t.astype(np.float64) for t in (q, k, v, dout))
     scale = 1 / np.sqrt(q.shape[-1])
     s = q @ np.swapaxes(k, -1, -2) * scale
@@ -20,4 +20,9 @@ def reference(q, k, v, mask, causal, dout):
     dv = np.swapaxes(p, -1, -2) @ dout
     dp = dout @ np.swapaxes(v, -1, -2)
     ds = p * (dp - (dp * p).sum(-1, keepdims=True))
-    return out, ds @ k * scale, np.swapaxes(ds, -1, -2) @ q * scale, dv
+    result = (out, ds @ k * scale, np.swapaxes(ds, -1, -2) @ q * scale, dv)
+    if return_mask_gradient:
+        # An additive floating mask enters the scores, so dL/dmask = dS in
+        # the score layout; callers reduce it when the mask was broadcast.
+        return result + (ds,)
+    return result

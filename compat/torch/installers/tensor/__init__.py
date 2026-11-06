@@ -498,8 +498,12 @@ class _TypedTensorMeta(type):
             else:
                 v = jt.zeros(tuple(int(a) for a in args), dtype=cls._jdtype)
             result = v.cast(cls._jdtype)
+            # torch.FloatTensor()/IntTensor()/... return a leaf with
+            # requires_grad=False. Jittor's cast result is a non-leaf that
+            # reports requires_grad=True, so the leaf-only public setter raises;
+            # stop_grad() is the native way to clear the flag on a fresh result.
             if not tensor_input:
-                result.requires_grad_(False)
+                result = result.stop_grad()
             return result
 
 
@@ -906,6 +910,13 @@ def _check_tensor_all(condition, message=None):
     return _check_condition(condition, message, RuntimeError)
 
 
+def _check_with(error_type, condition, message=None):
+    # torch._check_with(error_type, cond, msg_callable): raise the selected
+    # exception type when cond is false. transformers' torch_compilable_check
+    # uses it for model-level shape assertions (e.g. Mask2Former).
+    return _check_condition(condition, message, error_type)
+
+
 def _check_is_size(i, message=None, **kwargs):
     return _check(int(i) >= 0, message)
 
@@ -1014,6 +1025,7 @@ def install(ctx):
     g._check_type = _check_type
     g._check_not_implemented = _check_not_implemented
     g._check_tensor_all = _check_tensor_all
+    g._check_with = _check_with
     g._assert_async = _assert_async
 
     # torch.cat: tolerate empty tensors (skip zero-numel inputs) like torch,
@@ -1082,6 +1094,7 @@ from .shape_api import (
     _torch_view_base,
     _torch_size,
     _torch_sum,
+    _torch_mean,
     _torch_var_sum,
 )
 from types import MappingProxyType
@@ -1138,6 +1151,12 @@ def install_methods(ctx):
     Var.sum = _torch_var_sum
     if _orig_module_sum is not None:
         g.sum = _torch_sum
+    # The plain-reduction normalization below covers the Tensor methods; the
+    # module-level mean kept the native function, so torch.mean(x, dim=[...])
+    # (torchmetrics SCC) failed on the list spelling.
+    _orig_module_mean = getattr(g, "mean", None)
+    if _orig_module_mean is not None:
+        g.mean = _torch_mean
     # Full dim/dims/keepdim normalization for the plain reductions that map onto
     # jittor's scalar-`dim` / tuple-`dims` overload pair (mean/prod/any/all). mmdet
     # exercises tuple dims here, e.g. yolact_head's loss.mean(dim=(1, 2)).
@@ -1211,6 +1230,7 @@ def install_methods(ctx):
         '_Size': locals().get('_Size'),
         '_orig_index_add_inplace': locals().get('_orig_index_add_inplace'),
         '_orig_module_sum': locals().get('_orig_module_sum'),
+        '_orig_module_mean': locals().get('_orig_module_mean'),
         '_orig_reshape': locals().get('_orig_reshape'),
         '_orig_var_sum': locals().get('_orig_var_sum'),
     })

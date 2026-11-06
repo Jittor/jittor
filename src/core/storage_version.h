@@ -30,4 +30,9 @@ struct BackwardStorageReadScope {
     ~BackwardStorageReadScope();
 };
 void check_backward_storage_read(Var* value);
+// Re-snapshot the saved-version entries that name `value` after a lazy
+// graph optimization adopts a different storage token for it. The
+// adoption is part of producing the value, not a user in-place write; a
+// write after this point still bumps the adopted token and is caught.
+void rebase_saved_storage_versions(Var* value);
 } // namespace jittor

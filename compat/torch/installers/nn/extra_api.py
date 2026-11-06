@@ -121,7 +121,14 @@ class _DistributedDataParallel(_DataParallel):
     def __init__(self, module, *args, **kwargs):
         super().__init__(module, *args, **kwargs)
         state = _types_nn_private.SimpleNamespace(
-            sync_enabled=True, world_size=_ddp_world_size())
+            sync_enabled=True, world_size=_ddp_world_size(),
+            # The native optimizer's step guard (_assert_ddp_step_ready in
+            # jittor/nn/parallel/distributed_data_parallel.py) reads this field
+            # whenever world_size > 1. Compat DDP synchronises gradients at
+            # backward completion, so the marker starts and stays False here;
+            # without the attribute, every two-rank optimizer.step() raised
+            # AttributeError before updating anything.
+            has_unsynced_grads=False)
         object.__setattr__(self, "_jittor_ddp_state", state)
         self._jittor_ddp_broadcast_parameters()
         self._jittor_ddp_mark_parameters()

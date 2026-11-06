@@ -39,6 +39,18 @@ jittor-torch-shim --check
 
 环境变量 `JITTOR_TORCH_SHIM=1` 可选择 Torch 模式，但不会把未安装的包放上 Python 搜索路径。先安装正确的兼容包，再使用环境变量；仅设置它不能修复 `ModuleNotFoundError`。
 
+## 可选的 torch_xla 模拟层
+
+`jittor-compat` 随包提供一个 `torch_xla` 客户端模拟层，使按 PyTorch/XLA 客户端 API 编写的程序可以运行在 Jittor 上。`jittor-torch-shim` 会像部署其它随包 stub 一样部署它。它不是 XLA：`distributed.xla_multiprocessing.spawn` 按可见 CUDA 设备为每个进程分配一张卡，`core.xla_model` 把设备、序号和 rendezvous 调用映射到 Jittor 的 CUDA/CPU 设备，集合通信通过 rendezvous 目录做文件交换。没有 TPU、没有 XLA 编译、没有 SPMD 分片，也不支持 XLA FSDP。
+
+注意：`torch_xla` 一旦可导入，Transformers 与 Accelerate 默认会按 XLA 环境处理（`USE_TORCH_XLA` 默认为真）。运行原生 Jittor CUDA 任务时，应设置 `USE_TORCH_XLA=0`，或不部署该 stub；否则无关的 Trainer 路径也会进入模拟的 XLA 分支。
+
+启动方式与上游一致，`--num_cores` 不得超过本进程可见的 CUDA 设备数；纯 CPU 主机只支持单进程：
+
+```bash
+python examples/pytorch/xla_spawn.py --num_cores 2 train_script.py ...
+```
+
 ## 缓存与项目扩展
 
 需要固定兼容运行时位置时，可在启动应用前设置 `JITTOR_TORCH_RUNTIME_ROOT`。默认运行时位于 `${XDG_CACHE_HOME:-~/.cache}/jittor/torch-shim/`。原生 Jittor 的编译缓存与兼容运行时不是同一个概念，维护多个环境时应分别确认其位置。

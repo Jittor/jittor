@@ -54,12 +54,79 @@ def _to_tensor(array, st_dtype, device):
     return tensor.to(device=target_device)
 
 
+def _read_range(filename, offset, length):
+    with open(filename, "rb") as fh:
+        fh.seek(offset)
+        raw = fh.read(length)
+    if len(raw) != length:
+        raise EOFError("short safetensors payload: expected %d bytes, got %d"
+                       % (length, len(raw)))
+    return raw
+
+
+def _contiguous_span(shape, idx):
+    """Return (start element, element count, result shape) or None.
+
+    ``None`` means the selection cannot be served by one contiguous byte
+    range, so the caller must decode the whole tensor and let NumPy index it.
+    """
+    shape = tuple(int(value) for value in shape)
+    if not shape:
+        return None
+    if idx is Ellipsis:
+        return 0, int(np.prod(shape)), shape
+    if not isinstance(idx, tuple):
+        idx = (idx,)
+    if Ellipsis in idx:
+        position = idx.index(Ellipsis)
+        fill = len(shape) - (len(idx) - 1)
+        idx = idx[:position] + (slice(None),) * fill + idx[position + 1:]
+    idx = idx + (slice(None),) * (len(shape) - len(idx))
+    if any(item != slice(None) for item in idx[1:]):
+        return None
+    rows = shape[0]
+    row = int(np.prod(shape[1:])) if len(shape) > 1 else 1
+    first = idx[0]
+    if isinstance(first, slice):
+        if first.step not in (None, 1):
+            return None
+        start, stop, _ = first.indices(rows)
+        if stop < start:
+            return None
+        return start * row, (stop - start) * row, (stop - start,) + shape[1:]
+    if isinstance(first, (int, np.integer)) and not isinstance(first, bool):
+        index = int(first)
+        if index < 0:
+            index += rows
+        if not 0 <= index < rows:
+            return None
+        return index * row, row, shape[1:]
+    return None
+
+
+def _raw_to_tensor(raw, st_dtype, shape, device):
+    """Build a tensor from file bytes; BF16 keeps its 16-bit payload."""
+    if _jittor_dtype_name(st_dtype) != "BF16":
+        return _to_tensor(_bytes_to_np(raw, st_dtype, shape), st_dtype, device)
+    g = get_install_context(jt).target_namespace
+    array = np.frombuffer(raw, dtype=np.uint16).reshape(tuple(shape))
+    tensor = g.tensor(array, dtype="uint16", device="cpu", requires_grad=False)
+    tensor = tensor.reinterpret_view(tuple(shape), "bfloat16")
+    target_device = "cpu" if device is None else device
+    if isinstance(target_device, (int, np.integer)) and not isinstance(target_device, bool):
+        target_device = "cuda:%d" % int(target_device)
+    return tensor.to(device=target_device)
+
+
 class _PySafeSlice:
-    def __init__(self, raw, st_dtype, shape, device="cpu"):
+    def __init__(self, raw, st_dtype, shape, device="cpu", source=None):
         self._raw = raw
         self._dtype = st_dtype
         self._shape = shape
         self._device = device
+        # ``source`` is (filename, byte offset, byte length). Bytes stay on
+        # disk until a selection needs them, matching the native reader.
+        self._source = source
 
     def get_shape(self):
         return list(self._shape)
@@ -67,10 +134,24 @@ class _PySafeSlice:
     def get_dtype(self):
         return self._dtype
 
+    def _read_all(self):
+        if self._raw is None:
+            filename, offset, length = self._source
+            self._raw = _read_range(filename, offset, length)
+        return self._raw
+
     def __getitem__(self, idx):
-        arr = _bytes_to_np(self._raw, self._dtype, self._shape)
-        if idx is not Ellipsis:
-            arr = arr[idx]
+        span = None if self._raw is not None else _contiguous_span(self._shape, idx)
+        if span is not None:
+            start, count, out_shape = span
+            itemsize = _ST[self._dtype][1]
+            filename, offset, _length = self._source
+            raw = _read_range(filename, offset + start * itemsize, count * itemsize)
+            return _raw_to_tensor(raw, self._dtype, out_shape, self._device)
+        raw = self._read_all()
+        if idx is Ellipsis:
+            return _raw_to_tensor(raw, self._dtype, self._shape, self._device)
+        arr = _bytes_to_np(raw, self._dtype, self._shape)[idx]
         return _to_tensor(arr, self._dtype, self._device)
 
 
@@ -153,12 +234,14 @@ class _PySafeOpen:
         return entry["dtype"], entry["shape"], raw
 
     def get_slice(self, key):
-        st_dtype, shape, raw = self._entry(key)
-        return _PySafeSlice(raw, st_dtype, shape, self._device)
+        entry = self._header[key]
+        start, end = entry["data_offsets"]
+        return _PySafeSlice(None, entry["dtype"], entry["shape"], self._device,
+                            source=(self._filename, self._data_offset + start, end - start))
 
     def get_tensor(self, key):
         st_dtype, shape, raw = self._entry(key)
-        return _to_tensor(_bytes_to_np(raw, st_dtype, shape), st_dtype, self._device)
+        return _raw_to_tensor(raw, st_dtype, shape, self._device)
 
     def get_dtype(self, key):
         return self._header[key]["dtype"]
@@ -177,12 +260,13 @@ def _load_bytes(data):
     out = {}
     for key, entry in header.items():
         start, end = entry["data_offsets"]
-        arr = _bytes_to_np(data[base + start:base + end], entry["dtype"], entry["shape"])
-        out[key] = _to_tensor(arr, entry["dtype"], "cpu")
+        out[key] = _raw_to_tensor(data[base + start:base + end], entry["dtype"], entry["shape"], "cpu")
     return out
 
 
 def _load_file(filename, device="cpu", *, backend="mmap"):
+    # ``safetensors.torch.load_model`` calls ``load_file`` with ``backend=``;
+    # accepting only ``device`` raised TypeError before any weight loaded.
     with _PySafeOpen(filename, device=device, backend=backend) as safe:
         return {key: safe.get_tensor(key) for key in safe.keys()}
 
@@ -230,13 +314,26 @@ def _save_dict(tensors, metadata=None):
     _reject_shared_storage(tensors)
     # A state_dict's entries alias live parameters, and `numpy()` would move
     # their sharing group to the host: fetch them as `torch.save` does.
-    snapshots = _snapshot_tensors(tensors)
+    bf16_views = {}
+    snapshot_input = {}
+    for key, value in tensors.items():
+        if isinstance(value, jt.Var) and _jittor_dtype_name(value.dtype) == "bfloat16":
+            try:
+                if value.is_contiguous():
+                    bf16_views[key] = value.reinterpret_view(value.shape, "uint16")
+                    snapshot_input[key] = bf16_views[key]
+                    continue
+            except EXPECTED:
+                pass
+        snapshot_input[key] = value
+    snapshots = _snapshot_tensors(snapshot_input)
     header = {}
     blobs = []
     offset = 0
     for key, value in tensors.items():
         tensor_dtype = _jittor_dtype_name(value.dtype) if isinstance(value, jt.Var) else None
-        arr = (snapshots[id(value)] if isinstance(value, jt.Var) else
+        snapshot_object = bf16_views.get(key, value)
+        arr = (snapshots[id(snapshot_object)] if isinstance(value, jt.Var) else
                value.numpy() if hasattr(value, "numpy") else np.asarray(value))
         arr = np.asarray(arr)
         shape = list(arr.shape)
@@ -245,10 +342,13 @@ def _save_dict(tensors, metadata=None):
             raise NotImplementedError("safetensors cannot save dtype %s" % _jittor_dtype_name(dtype))
         st_dtype = _NP_TO_ST[dtype]
         if _jittor_dtype_name(st_dtype) == "BF16":
-            # Native BF16 numpy() exposes exact values in float32. Encode
-            # their upper 16 bits, not a float32 payload with a BF16 label.
-            bits = arr.astype(np.float32, copy=False).view(np.uint32)
-            blob = (bits >> 16).astype(np.uint16).tobytes(order="C")
+            if key in bf16_views:
+                blob = arr.astype(np.uint16, copy=False).tobytes(order="C")
+            else:
+                # Native BF16 numpy() exposes exact values in float32. Encode
+                # their upper 16 bits, not a float32 payload with a BF16 label.
+                bits = arr.astype(np.float32, copy=False).view(np.uint32)
+                blob = (bits >> 16).astype(np.uint16).tobytes(order="C")
         else:
             blob = arr.astype(_ST[st_dtype][0], copy=False).tobytes(order="C")
         header[key] = {

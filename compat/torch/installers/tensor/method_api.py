@@ -625,8 +625,18 @@ class _Storage:
     def __init__(self, var):
         self._var = var
     def data_ptr(self):
-        # Tensor.data_ptr() addresses the first element of a view. Storage
-        # addresses its allocation origin, shared by every offset view/alias.
+        """Address of the allocation's first element, as torch reports it.
+
+        torch's contract is ``tensor.data_ptr() == storage().data_ptr() +
+        storage_offset() * element_size``. safetensors' shared-weight
+        detection compares the two pointers (`_is_complete`) and refuses to
+        save a tied model when they disagree, so Python object identity is
+        not a usable stand-in: distinct views of one allocation have
+        different ``id()`` values but must report the same storage address,
+        and a contiguous tensor's two pointers must be equal.
+        """
+        _owner.jt.graph_replay_barrier(
+            "Tensor.storage().data_ptr exposes storage to an external consumer")
         pointer = _api_data_ptr(self._var)
         return pointer - int(self._var._storage_offset()) * _storage_dsize(self._var)
     def size(self):
@@ -2031,6 +2041,14 @@ def _api_add(self, o, alpha=1):
     return _inplace_add_sub(self, o, alpha)
 
 
+def _api_addcmul(self, tensor1, tensor2, *, value=1):
+    return _ip(self, self + value * tensor1 * tensor2, preserve_storage=True)
+
+
+def _api_lerp(self, end, weight):
+    return _ip(self, self + weight * (end - self), preserve_storage=True)
+
+
 def _api_sub(self, o, alpha=1):
     return _inplace_add_sub(self, o, alpha, subtract=True)
 
@@ -2215,6 +2233,12 @@ def _api_is_contiguous(self, *a, **k):
 
 
 def _api_is_leaf(self):
+    # A shape-preserving expand is a forwarded broadcast inside Jittor, but
+    # torch models it as a view: the Python result carries the synthetic
+    # ExpandBackward so is_leaf answers False without touching the source Var.
+    state = getattr(self, "__dict__", None)
+    if state is not None and state.get("_torch_synthetic_grad_fn") is not None:
+        return False
     return bool(self.is_backward_leaf)
 
 
@@ -2343,6 +2367,7 @@ _UNARY_INPLACE_APIS = {
 
 from .autograd_api import (
     _TorchGradFn,
+    _attach_expand_grad_fn,
     _backward,
     _fill_opt_grads,
     _grad_fn,

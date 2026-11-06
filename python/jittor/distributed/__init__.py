@@ -6,11 +6,13 @@ See ``jittor.distributed.launch`` (run as ``python -m jittor.distributed.launch`
 from .bucket import bucket_scope, comm_wait, join_pending
 from .store import FileStore, PrefixStore, Store, TCPStore, rendezvous
 from .process_group import (
+    P2PWork,
     ProcessGroup,
     Work,
     all_gather,
     all_reduce,
     barrier,
+    batch_isend_irecv,
     broadcast,
     destroy_process_group,
     get_backend,
@@ -24,21 +26,28 @@ from .process_group import (
     get_rank,
     get_world_size,
     init_process_group,
+    irecv,
     is_initialized,
+    isend,
     new_group,
+    recv,
     reduce_scatter,
+    send,
 )
 from .backend_status import get_hccl_world_info
 
 
 __all__ = ["FileStore", "PrefixStore", "Store", "TCPStore", "rendezvous",
            "bucket_scope", "comm_wait", "join_pending", "ProcessGroup", "Work",
-           "init_process_group", "destroy_process_group", "is_initialized",
+           "P2PWork", "init_process_group", "destroy_process_group",
+           "is_initialized",
            "get_rank", "get_world_size", "get_backend", "get_default_group",
            "get_default_store", "get_local_rank", "get_local_world_size",
            "get_device", "all_reduce", "broadcast", "all_gather",
            "reduce_scatter", "barrier", "new_group", "get_global_rank",
-           "get_process_group_ranks", "get_hccl_world_info", "ZeroRedundancyOptimizer"]
+           "get_process_group_ranks", "send", "recv", "isend", "irecv",
+           "batch_isend_irecv", "get_hccl_world_info",
+           "ZeroRedundancyOptimizer"]
 
 
 def __getattr__(name):
