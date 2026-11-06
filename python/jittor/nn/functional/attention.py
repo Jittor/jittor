@@ -82,17 +82,23 @@ def causal_mask_rewrite(query, key, attn_mask, is_causal):
     """Whether this call's mask should be handed on as ``is_causal``.
 
     The verdict costs one host read of a mask that a decoder rebuilds every
-    step, and that read lands in the middle of building a step's graph. On
-    Ascend it defeats ``auto_graph_replay``: qwen3_prefill on a 910B3 went from
-    35.5 ms (host 0.5) to 84 ms (host 83) when the rewrite ran there, against a
-    4.5 ms device win. CUDA and the host keep it -- their graph replay is a
-    different mechanism and measured faster with the rewrite in place.
+    step. Outside a capture that is cheap and buys a fused causal kernel.
+    Inside one it is fatal: a capture refuses a trace that read a value back,
+    because the next call's Python path could differ, so this read kept the
+    default-SDPA path from ever being replayed and rebuilt its graph on every
+    call. While tracing, leave the mask on the device and hand it to SDPA
+    unchanged -- the same attention math, and the captured graph stays
+    value-independent because the mask is one of its inputs, copied in on
+    every replay.
     """
     if attn_mask is None or is_causal:
         return False
     if len(query.shape) != 4 or len(key.shape) != 4:
         return False
     if dispatch_context().backend not in ("cuda", "cpu"):
+        return False
+    from jittor._runtime.step_capture import tracing
+    if tracing():
         return False
     return _exactly_causal(attn_mask, int(query.shape[-2]), int(key.shape[-2]),
                            int(query.shape[0]))
