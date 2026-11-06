@@ -127,10 +127,23 @@ def depthwise_backward(x, weight, grad, kernel_size, stride, padding, dilation):
         cuda_header = f"#include <{library_resource('cub', 'home')}cub/cub.cuh>"+"""
     template <typename T>
     __device__ __inline__ void CudaAtomicAddWithWarp(T* sum, T value) {
+    // CCCL 3 (CUDA 13) removed cub::LaneId; a lane is the low five bits of
+    // the linear thread id. WarpReduce also needs every lane of the logical
+    // warp to participate, so a partial warp adds per thread instead of
+    // letting the shuffle reduction read inactive lanes.
+    const unsigned int linear = threadIdx.x + threadIdx.y * blockDim.x
+        + threadIdx.z * blockDim.x * blockDim.y;
+    const unsigned int lane = linear & (unsigned int)(warpSize - 1);
+    const unsigned int warp_start = linear - lane;
+    const unsigned int block_threads = blockDim.x * blockDim.y * blockDim.z;
+    if (block_threads - warp_start < (unsigned int)warpSize) {
+        atomicAdd(sum, value);
+        return;
+    }
     typedef cub::WarpReduce<T> WarpReduce;
     typename WarpReduce::TempStorage temp_storage;
     value = WarpReduce(temp_storage).Sum(value);
-    if (cub::LaneId() == 0)
+    if (lane == 0)
         atomicAdd(sum, value);
     }
 
@@ -273,6 +286,15 @@ def depthwise_backward(x, weight, grad, kernel_size, stride, padding, dilation):
         thread = (input_width - 1) / 2 + 1;
         else if (input_width > 512 && input_width <= 1024)
         thread = input_width;
+        // The input-gradient kernel caches the filter in per-thread registers
+        // (11x11: well above 128 registers), so clamp the block size to the
+        // kernel limit before deriving the y dimension.
+        cudaFuncAttributes input_grad_attributes;
+        if (cudaFuncGetAttributes(&input_grad_attributes,
+                KernelDepthwiseConvInputGradCFilter<input_type, ksize_height,
+                    ksize_width, stride_height, stride_width>) == cudaSuccess
+                && input_grad_attributes.maxThreadsPerBlock > 0)
+            thread = std::min(thread, input_grad_attributes.maxThreadsPerBlock);
         int blocks = std::min(std::max(thread / input_width, 1), input_height);
         dim3 threads(std::min(input_width, thread), blocks, 1);
         dim3 grid(input_channels, batch_size, 1);
@@ -292,6 +314,11 @@ def depthwise_backward(x, weight, grad, kernel_size, stride, padding, dilation):
         block_size = (output_width - 1) / 2 + 1;
         else if (output_width > 512 && output_width <= 1024)
         block_size = output_width;
+        cudaFuncAttributes filter_grad_attributes;
+        if (cudaFuncGetAttributes(&filter_grad_attributes,
+                KernelDepthwiseConvFilterGrad<input_type>) == cudaSuccess
+                && filter_grad_attributes.maxThreadsPerBlock > 0)
+            block_size = std::min(block_size, filter_grad_attributes.maxThreadsPerBlock);
         int crop_output_height =
             std::min(std::max(block_size / output_width, 1), output_height);
 
