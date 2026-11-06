@@ -198,6 +198,35 @@ class TestFusedAttentionF32(unittest.TestCase):
     def test_tiny(self):
         self._check(2, 2, 5, 3, 8, False)
 
+    def test_pending_setitem_inputs_keep_their_backward_storage(self):
+        # A concatenation leaves a pending setitem. Materialization can reuse
+        # its source storage, changing the provisional token after the custom
+        # attention tape has saved the input.
+        from jittor.autograd import EXPLICIT_REQUIRES_GRAD, policy_scope
+
+        arrays = [np.arange(64, dtype=np.float32).reshape(1, 4, 4, 4) / scale
+                  for scale in (100, 110, 120, 130)]
+        value = np.arange(128, dtype=np.float32).reshape(1, 4, 4, 8) / 140
+        query = np.concatenate(arrays[:2], axis=-1)
+        key = np.concatenate(arrays[2:], axis=-1)
+        expected = _reference(query, key, value, True, np.ones_like(value))
+
+        with policy_scope(EXPLICIT_REQUIRES_GRAD):
+            parts = [jt.array(array).requires_grad_(True) for array in arrays]
+            value_var = jt.array(value).requires_grad_(True)
+            query_var = jt.concat(parts[:2], dim=-1)
+            key_var = jt.concat(parts[2:], dim=-1)
+            out = self.kernel._fused_attention_f32(
+                query_var, key_var, value_var, is_causal=True)
+            loss = out.sum()
+            float(loss)  # Run the forward before constructing its backward.
+            grads = jt.grad(loss, parts + [value_var])
+
+        for actual, want in zip(grads, (
+                expected[1][..., :4], expected[1][..., 4:],
+                expected[2][..., :4], expected[2][..., 4:], expected[3])):
+            np.testing.assert_allclose(actual.numpy(), want, rtol=1e-4, atol=1e-5)
+
     # Masks. Transformers passes an explicit one whenever
     # `torch.compiler.is_compiling()`, a padded batch always does, and both
     # used to decline to the path that writes every score out.
