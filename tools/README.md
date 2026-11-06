@@ -11,6 +11,7 @@ Benchmark commands live in the root `benchmarks/` tree (ASV regressions,
 Torch comparisons, graph profiling, and ACL measurements).
 
 - `build/`: explicit source and asset builders.
+- `containers/`: source-development container recipes; build from the repository root.
 - `distributed/`: operator-facing distributed helpers.
 - `docs/`: documentation builders, links and governance checks.
 - `ecosystem/`: live source-binding and oracle tools used by core/compat regression

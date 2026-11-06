@@ -1,5 +1,7 @@
 # Jittor 治理文档
 
+[本栏目目录](index.md) · [English](governance.en.md)
+
 ## 概述
 
 Jittor 是一个基于即时编译和元算子的高性能深度学习框架，由[清华大学计算机图形学组](https://cg.cs.tsinghua.edu.cn/)维护。本文档描述了 Jittor 项目的治理结构，包括角色、职责、决策流程，以及贡献者如何在社区中成长。

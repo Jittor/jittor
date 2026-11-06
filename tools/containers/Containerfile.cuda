@@ -6,7 +6,7 @@
 # both get installed, plus the pytest tooling tools/run_test_suite.py needs.
 #
 # Build (from repo root):
-#   podman build -t jittor-cuda:local -f Containerfile.cuda .
+#   podman build -t jittor-cuda:local -f tools/containers/Containerfile.cuda .
 #
 # Run with GPU access (CDI device, see README/setup notes):
 #   podman run --rm -it --device nvidia.com/gpu=all jittor-cuda:local bash
@@ -43,8 +43,7 @@ WORKDIR /usr/src/jittor
 COPY . .
 
 # Core + compat share the `jittor` import package (compat installs into
-# `jittor.compat` without owning `jittor`; see agent/manuals/environment.md
-# "Editable installs of core and compat"). Editable-installing core in
+# `jittor.compat` without owning `jittor`; see docs/getting-started/installation.md). Editable-installing core in
 # setuptools' *default* mode registers a sys.meta_path finder that a plain
 # `import jittor` never reaches, because compat's PathFinder-registered
 # namespace placeholder wins the race first -- `editable_mode=compat` makes
@@ -53,8 +52,7 @@ COPY . .
 RUN python3 -m pip install --no-cache-dir --no-build-isolation \
         --config-settings editable_mode=compat -e .
 
-# --no-deps: compat declares jittor==1.3.11.0, and we already installed core
-# from source above. --no-build-isolation: reuse the setuptools/wheel already
+# --no-deps: the matching core was already installed from source above. --no-build-isolation: reuse the setuptools/wheel already
 # installed instead of fetching build deps offline.
 RUN python3 -m pip install --no-cache-dir --no-deps --no-build-isolation -e compat
 

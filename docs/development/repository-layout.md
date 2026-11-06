@@ -63,6 +63,10 @@
 
 ## 文档归属
 
+根目录保留双语 README、GitHub 贡献与行为准则入口，以及构建工具要求的配置文件。
+治理规则归入 `docs/project/community/`；额外的开发容器配方归入 `tools/containers/`，
+根 `Dockerfile` 继续作为 notebook 镜像与 CI 的入口。
+
 对外文档只有 `docs/` 一棵树，面向使用者与贡献者：入口、教程、API 参考、使用指南、
 Torch 兼容、机制说明（`docs/notes/`）、性能、发布说明、社区，以及贡献者文档
 （`docs/development/`）。**源语言是中文。** 每篇文档成对维护：`X.md` 是中文默认页，

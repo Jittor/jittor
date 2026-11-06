@@ -467,6 +467,8 @@ include docs/performance/memory-optimization.en.md
 include docs/performance/memory-optimization.md
 include docs/performance/profiling.en.md
 include docs/performance/profiling.md
+include docs/project/community/governance.en.md
+include docs/project/community/governance.md
 include docs/project/community/index.en.md
 include docs/project/community/index.md
 include docs/project/community/projects.en.md
@@ -962,6 +964,8 @@ include tools/build/measure_import_cost.py
 include tools/build/render_bindings.py
 include tools/check_repo_layout.sh
 include tools/check_session_completed.py
+include tools/containers/Containerfile.cuda
+include tools/containers/README.md
 include tools/distributed/README.md
 include tools/distributed/native_fsdp/collective_oracle.py
 include tools/distributed/native_fsdp/native_fsdp_oracle.py

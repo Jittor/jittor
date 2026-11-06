@@ -31,6 +31,8 @@ REQUIRED_DOCUMENTS = (
     "docs/notes/index.md",
     "docs/development/index.md",
     "docs/project/index.md",
+    "docs/project/community/governance.md",
+    "docs/project/community/governance.en.md",
     "docs/development/repository-layout.md",
     "docs/development/source-architecture.md",
     "docs/development/backends/acl-backend-contracts.md",

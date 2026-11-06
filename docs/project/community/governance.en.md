@@ -1,5 +1,7 @@
 # Jittor Governance
 
+[Section index](index.en.md) · [中文](governance.md)
+
 ## Overview
 
 Jittor is a high-performance deep learning framework based on JIT compiling and meta-operators, maintained by the [Tsinghua CSCG Group](https://cg.cs.tsinghua.edu.cn/) (Computer Science and Computer Graphics Group, Tsinghua University). This document describes the governance structure of the Jittor project, including roles, responsibilities, decision-making processes, and how contributors can grow within the community.

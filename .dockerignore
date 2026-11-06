@@ -1,6 +1,6 @@
 # Default-deny context keeps local experiments, worktrees, caches and raw
 # results out even when they use a name that has not appeared in this
-# repository before. Containerfile.cuda installs this repo's two
+# repository before. tools/containers/Containerfile.cuda installs this repo's two
 # distributions from source -- core (pyproject.toml at the root, whose
 # package-dir maps jittor.src -> src/ and jittor.backends.* -> backends/*/)
 # and compat (compat/pyproject.toml) -- plus runs its pytest suite, so both
@@ -26,8 +26,6 @@
 !tests/**
 !tools/
 !tools/**
-!agent/
-!agent/**
 !requirements/
 !requirements/**
 !examples/
