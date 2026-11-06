@@ -87,6 +87,7 @@ from .installers import (
     utilities,
 )
 from . import serialization
+from . import checkpoint_io
 from ..diagnostics import swallowed
 
 

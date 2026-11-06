@@ -20,6 +20,7 @@ from ..checkpoint_state import (
     get_optimizer_state_dict, set_optimizer_state_dict,
     get_model_state_dict, set_model_state_dict, get_state_dict, set_state_dict,
 )
+from .. import checkpoint_io as _checkpoint_io
 from ..ddp_comm_hooks import install_ddp_comm_hooks
 from ..fidelity import Fidelity, register_api_bindings
 from ..gradient_task import (
@@ -1123,29 +1124,9 @@ _dcp_save_effect = ("write no bytes at all while reporting a successful "
                     "save, silently discarding the checkpoint")
 
 
-_dcp_load_effect = ("return the state dict unchanged without reading the "
-                    "checkpoint, silently leaving the model at its current "
-                    "weights")
-
-
-_dcp_hint = ("Use torch.save / Module.state_dict for a single-rank "
-             "checkpoint; sharded dcp is task 8.18.")
-
-
-def _api_checkpoint_load_state_dict(*args, **kwargs):
-    return _stub_unimplemented('torch.distributed.checkpoint.load_state_dict', _dcp_load_effect, _dcp_hint, stub_result=None)
-
-
-def _api_checkpoint_save_state_dict(*args, **kwargs):
-    return _stub_unimplemented('torch.distributed.checkpoint.save_state_dict', _dcp_save_effect, _dcp_hint, stub_result=None)
-
-
-def _api_checkpoint_load(*args, **kwargs):
-    return _stub_unimplemented('torch.distributed.checkpoint.load', _dcp_load_effect, _dcp_hint, stub_result=None)
-
-
-def _api_checkpoint_save(*args, **kwargs):
-    return _stub_unimplemented('torch.distributed.checkpoint.save', _dcp_save_effect, _dcp_hint, stub_result=None)
+_dcp_hint = ("The default filesystem plan lives in jittor.compat.torch."
+             "checkpoint_io; the low-level filesystem writer and planner "
+             "entry points remain unsupported.")
 
 
 class DefaultSavePlanner:
@@ -1168,10 +1149,6 @@ def _api_checkpoint_fs_write_item(*args, **kwargs):
     return _stub_unimplemented('torch.distributed.checkpoint.filesystem._write_item', _dcp_save_effect, _dcp_hint, stub_result=None)
 
 
-_api_checkpoint_load_state_dict._jittor_unimplemented = 'torch.distributed.checkpoint.load_state_dict'
-_api_checkpoint_save_state_dict._jittor_unimplemented = 'torch.distributed.checkpoint.save_state_dict'
-_api_checkpoint_load._jittor_unimplemented = 'torch.distributed.checkpoint.load'
-_api_checkpoint_save._jittor_unimplemented = 'torch.distributed.checkpoint.save'
 _api_checkpoint_fs_write_item._jittor_unimplemented = 'torch.distributed.checkpoint.filesystem._write_item'
 
 def _install_distributed(g, registry=None):
@@ -1361,18 +1338,15 @@ def _install_distributed(g, registry=None):
     checkpoint.__path__ = getattr(checkpoint, "__path__", [])
     checkpoint.FileSystemReader = FileSystemReader
     checkpoint.FileSystemWriter = FileSystemWriter
-    # torch.distributed.checkpoint save/load were the identity: dcp.save()
-    # wrote nothing and returned successfully, so a sharded checkpoint was
-    # silently never persisted and dcp.load() silently left the model at its
-    # current weights. Refuse instead of losing the run.
-    checkpoint.load_state_dict = _api_checkpoint_load_state_dict
-    _record_unimplemented('torch.distributed.checkpoint.load_state_dict', _dcp_load_effect, _dcp_hint)
-    checkpoint.save_state_dict = _api_checkpoint_save_state_dict
-    _record_unimplemented('torch.distributed.checkpoint.save_state_dict', _dcp_save_effect, _dcp_hint)
-    checkpoint.load = _api_checkpoint_load
-    _record_unimplemented('torch.distributed.checkpoint.load', _dcp_load_effect, _dcp_hint)
-    checkpoint.save = _api_checkpoint_save
-    _record_unimplemented('torch.distributed.checkpoint.save', _dcp_save_effect, _dcp_hint)
+    # The default filesystem plan is implemented in checkpoint_io: each rank
+    # writes its own shards under <checkpoint_id>/<rank>/, rank 0 writes the
+    # shared .metadata index, and unsupported options (planner=, storage_*=,
+    # async_staging=, dedup_*=) are refused instead of silently dropping the
+    # checkpoint.
+    checkpoint.load_state_dict = _checkpoint_io.load_state_dict
+    checkpoint.save_state_dict = _checkpoint_io.save_state_dict
+    checkpoint.load = _checkpoint_io.load
+    checkpoint.save = _checkpoint_io.save
     checkpoint_sd = _types.ModuleType("torch.distributed.checkpoint.state_dict")
     checkpoint_sd.StateDictOptions = StateDictOptions
     checkpoint_sd.get_model_state_dict = _get_model_state_dict
@@ -1381,6 +1355,15 @@ def _install_distributed(g, registry=None):
     checkpoint_sd.set_optimizer_state_dict = set_optimizer_state_dict
     checkpoint_sd.get_state_dict = _api_checkpoint_sd_get_state_dict
     checkpoint_sd.set_state_dict = _api_checkpoint_sd_set_state_dict
+    # The deployed Torch tree provides checkpoint/stateful.py; keep that class
+    # when present so user protocols and checkpoint_io._is_stateful agree.
+    checkpoint_stateful = _modules.get("torch.distributed.checkpoint.stateful")
+    if checkpoint_stateful is None:
+        checkpoint_stateful = _types.ModuleType(
+            "torch.distributed.checkpoint.stateful")
+        _modules[checkpoint_stateful.__name__] = checkpoint_stateful
+    if not hasattr(checkpoint_stateful, "Stateful"):
+        checkpoint_stateful.Stateful = _checkpoint_io.Stateful
     checkpoint_planner = _types.ModuleType("torch.distributed.checkpoint.default_planner")
     checkpoint_planner.DefaultSavePlanner = DefaultSavePlanner
     checkpoint_planner.DefaultLoadPlanner = DefaultLoadPlanner
@@ -1395,10 +1378,12 @@ def _install_distributed(g, registry=None):
     _record_unimplemented('torch.distributed.checkpoint.filesystem._write_item', _dcp_save_effect, _dcp_hint)
     _modules["torch.distributed.checkpoint"] = checkpoint
     _modules["torch.distributed.checkpoint.state_dict"] = checkpoint_sd
+    _modules["torch.distributed.checkpoint.stateful"] = checkpoint_stateful
     _modules["torch.distributed.checkpoint.filesystem"] = checkpoint_fs
     _modules["torch.distributed.checkpoint.default_planner"] = checkpoint_planner
     checkpoint.default_planner = checkpoint_planner
     checkpoint.state_dict = checkpoint_sd
+    checkpoint.stateful = checkpoint_stateful
     checkpoint.filesystem = checkpoint_fs
 
     shard = dist._shard
@@ -1486,7 +1471,11 @@ def _install_distributed(g, registry=None):
         "Import-compatible context and hooks do not implement uneven-input communication")
     register_api_bindings(checkpoint, "torch.distributed.checkpoint",
         ("load_state_dict", "save_state_dict", "load", "save", "FileSystemReader", "FileSystemWriter"),
-        Fidelity.UNIMPLEMENTED, "Checkpoint I/O follows the existing explicit unsupported policy")
+        Fidelity.APPROXIMATE,
+        "Default filesystem plan only: each rank writes its own shards with "
+        "torch.save under <checkpoint_id>/<rank>/, rank 0 writes .metadata, "
+        "and load reads the same rank layout; planner=, storage_*=, async "
+        "staging, deduplication and resharding across world sizes are refused")
     register_api_bindings(checkpoint_planner, "torch.distributed.checkpoint.default_planner",
         ("DefaultSavePlanner", "DefaultLoadPlanner"), Fidelity.UNIMPLEMENTED,
         "Import-compatible names; construction refuses unavailable sharded checkpoint planning")

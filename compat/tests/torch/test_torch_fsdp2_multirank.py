@@ -215,6 +215,101 @@ class TestFSDP2InsideMpi(unittest.TestCase):
                       for p in params if p.grad is not None)
         self.assertAlmostEqual(total, float(np.sqrt(squares)), places=3)
 
+    # ---- legacy FSDP1 constructor mapping -------------------------------
+
+    def _world_mesh(self, shape, names):
+        from torch.distributed.device_mesh import DeviceMesh
+        return DeviceMesh("cuda", np.arange(_RANKS).reshape(shape),
+                          mesh_dim_names=names)
+
+    @staticmethod
+    def _spread_default(var):
+        # The default process group, so the assertion works under both the
+        # mpirun and the native NCCL (torchrun) launchers.
+        from jittor.distributed import all_reduce
+        mean = all_reduce(var.reshape((-1,)), op="mean").reshape(var.shape)
+        return float(jt.abs(var - mean).max().item())
+
+    def test_legacy_no_shard_ignores_the_world_for_a_tp_submesh(self):
+        # World shape (dp=1, tp=2): the dp mesh has one rank, so NO_SHARD must
+        # keep the full parameter.  The pre-fix constructor discarded
+        # device_mesh and sharded over the whole world, halving it here.
+        from torch.distributed.fsdp import (
+            FullyShardedDataParallel, ShardingStrategy)
+
+        mesh = self._world_mesh((1, _RANKS), ("dp", "tp"))
+        dp_mesh = mesh["dp"]
+        self.assertEqual(dp_mesh.size(), 1)
+        module = torch.nn.Linear(8, 8, bias=False)
+        wrapped = FullyShardedDataParallel(
+            module, device_mesh=dp_mesh,
+            sharding_strategy=ShardingStrategy.NO_SHARD)
+        state = wrapped._fsdp_state
+
+        self.assertEqual(state.true_fsdp_world_size, 1)
+        self.assertEqual(tuple(wrapped.module.weight.size()), (8, 8))
+        self.assertEqual(state.true_fsdp_params[0].shard_numel,
+                         state.true_fsdp_params[0].numel)
+
+    def test_legacy_no_shard_averages_gradients_over_the_dp_mesh(self):
+        # World shape (dp=2, tp=1): NO_SHARD is DDP -- full parameters, and
+        # each rank's gradient is the mean over the dp group.
+        from torch.distributed.fsdp import (
+            FullyShardedDataParallel, ShardingStrategy)
+
+        mesh = self._world_mesh((_RANKS, 1), ("dp", "tp"))
+        dp_mesh = mesh["dp"]
+        module = torch.nn.Linear(4, 4, bias=False)
+        wrapped = FullyShardedDataParallel(
+            module, device_mesh=dp_mesh,
+            sharding_strategy=ShardingStrategy.NO_SHARD)
+        state = wrapped._fsdp_state
+        self.assertEqual(state.shard_group.size(), 1)
+        self.assertEqual(state.replicate_group.size(), _RANKS)
+        self.assertEqual(tuple(wrapped.module.weight.size()), (4, 4))
+        # Seeded parameter init is not rank-identical on CUDA; the question
+        # here is gradient averaging and the step, so start from one value.
+        wrapped.module.weight.update(jt.ones_like(wrapped.module.weight) * 0.5)
+        jt.sync_all(True)
+        self.assertAlmostEqual(
+            self._spread_default(wrapped.module.weight.detach()), 0.0, places=6)
+
+        optimizer = torch.optim.SGD(wrapped.parameters(), lr=0.25)
+        scale = float(jt.rank + 1)
+        x = jt.array(np.full((2, 4), scale, dtype="float32"))
+        optimizer.zero_grad()
+        ((wrapped(x) ** 2).mean()).backward()
+        jt.sync_all(True)
+
+        grads = [p.grad for p in wrapped.parameters() if p.grad is not None]
+        self.assertTrue(grads, "FSDP did not publish gradients")
+        spread = max(self._spread_default(grad.detach()) for grad in grads)
+        self.assertAlmostEqual(spread, 0.0, places=5)
+
+        before = wrapped.module.weight.numpy().copy()
+        optimizer.step()
+        jt.sync_all(True)
+        after = wrapped.module.weight.numpy()
+        self.assertGreater(float(np.abs(after - before).max()), 0.0)
+        self.assertAlmostEqual(
+            self._spread_default(wrapped.module.weight.detach()), 0.0, places=5)
+
+    def test_legacy_full_shard_still_shards_over_the_dp_mesh(self):
+        from torch.distributed.fsdp import (
+            FullyShardedDataParallel, ShardingStrategy)
+
+        mesh = self._world_mesh((_RANKS, 1), ("dp", "tp"))
+        dp_mesh = mesh["dp"]
+        wrapped = FullyShardedDataParallel(
+            torch.nn.Linear(8, 8, bias=False), device_mesh=dp_mesh,
+            sharding_strategy=ShardingStrategy.FULL_SHARD)
+        state = wrapped._fsdp_state
+
+        self.assertEqual(state.true_fsdp_world_size, _RANKS)
+        self.assertLess(state.true_fsdp_params[0].shard_numel,
+                        state.true_fsdp_params[0].numel)
+        self.assertEqual(tuple(wrapped.module.weight.size()), (8, 8))
+
 
 @_test_capability.library_required("mpi", backend=jt)
 @unittest.skipIf(_INSIDE, "this is the launcher; the ranks run the class above")

@@ -938,28 +938,31 @@ class TestLibraryOpcheck(StubPolicyBase):
 
 
 class TestDistributedStubs(StubPolicyBase):
-    """dcp save/load, subgroups, stores and DTensor were identities."""
+    """Subgroups, stores and DTensor were identities; dcp save/load were too."""
 
     def _dist(self):
         import sys
         return sys.modules["torch.distributed"]
 
-    def test_dcp_save_is_refused(self):
+    def test_dcp_save_writes_a_real_checkpoint(self):
         import sys
+        import tempfile
         dcp = sys.modules["torch.distributed.checkpoint"]
-        self.assertRefuses(lambda: dcp.save({"w": jt.ones(2)}),
-                           "checkpoint.save", "discarding the checkpoint")
+        with tempfile.TemporaryDirectory() as directory:
+            dcp.save({"w": jt.ones(2)}, checkpoint_id=directory)
+            self.assertTrue(os.path.isfile(os.path.join(directory, ".metadata")))
+            target = {"w": jt.zeros(2)}
+            dcp.load(target, checkpoint_id=directory)
+            np.testing.assert_allclose(target["w"].numpy(), np.ones(2))
 
-    def test_dcp_load_is_refused(self):
+    def test_dcp_save_refuses_unimplemented_options(self):
         import sys
+        import tempfile
         dcp = sys.modules["torch.distributed.checkpoint"]
-        self.assertRefuses(lambda: dcp.load({"w": jt.ones(2)}),
-                           "checkpoint.load")
-
-    def test_dcp_save_stub_fallback(self):
-        import sys
-        dcp = sys.modules["torch.distributed.checkpoint"]
-        self.assertStubFallback(lambda: dcp.save({"w": jt.ones(2)}))
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(NotImplementedError, "planner"):
+                dcp.save({"w": jt.ones(2)}, checkpoint_id=directory,
+                         planner=object())
 
     def test_single_rank_store_still_works(self):
         # One rank has nobody to meet, so a per-process dict IS a correct store.
