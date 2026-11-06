@@ -973,6 +973,27 @@ class TorchFunctionMode:
         return func(*args, **(kwargs or {}))
 
 
+#: Per-thread depth of active `torch._C._disabled_torch_function_impl`
+#: calls. While it is positive, no `__torch_function__` override is
+#: consulted, as under torch's `DisableTorchFunctionSubclass`.
+_TORCH_FUNCTION_STATE = threading.local()
+
+
+def _torch_function_override(tp):
+    """The `__torch_function__` that dispatch should call for `tp`, or None.
+
+    None for plain Vars, while dispatch is disabled on this thread, and for
+    a type whose hook is `torch._C._disabled_torch_function_impl`: torch
+    treats such a type (`nn.Parameter` is one) as having no override.
+    """
+    if tp is jt.Var or getattr(_TORCH_FUNCTION_STATE, "depth", 0):
+        return None
+    override = getattr(tp, "__torch_function__", None)
+    if override is None or override is _api_c_mod__disabled_torch_function_impl:
+        return None
+    return override
+
+
 def _has_torch_function(*relevant_args):
     """Truthfully report whether any argument overrides __torch_function__.
 
@@ -983,18 +1004,15 @@ def _has_torch_function(*relevant_args):
     for group in relevant_args:
         items = group if isinstance(group, (tuple, list, set)) else (group,)
         for item in items:
-            tp = type(item)
-            if tp is jt.Var:
-                continue
-            if getattr(tp, "__torch_function__", None) is not None:
+            if _torch_function_override(type(item)) is not None:
                 return True
     return False
 
 
 def _handle_torch_function(public_api, relevant_args, *args, **kwargs):
     for item in (relevant_args or ()):
-        override = getattr(type(item), "__torch_function__", None)
-        if override is None or type(item) is jt.Var:
+        override = _torch_function_override(type(item))
+        if override is None:
             continue
         types_tuple = tuple(type(a) for a in relevant_args)
         return override(public_api, types_tuple, args, kwargs)
@@ -1675,7 +1693,23 @@ def _api_c_mod__cuda_getCurrentRawStream(device_index):
 
 
 def _api_c_mod__disabled_torch_function_impl(func, types, args=(), kwargs=None):
-    return func(*args, **({} if kwargs is None else kwargs))
+    """Call `func(*args, **kwargs)` with `__torch_function__` dispatch off.
+
+    torch disables dispatch on this thread for the duration of the call, so
+    `func` runs as the plain function even when its arguments carry
+    overrides. Without that, a hook that ends by calling this function with
+    its arguments unchanged is dispatched to again, forever.
+    """
+    if isinstance(args, list):
+        args = tuple(args)
+    elif not isinstance(args, tuple):
+        raise TypeError("expected List or Tuple (got %s)" % type(args).__name__)
+    state = _TORCH_FUNCTION_STATE
+    state.depth = getattr(state, "depth", 0) + 1
+    try:
+        return func(*args, **({} if kwargs is None else kwargs))
+    finally:
+        state.depth -= 1
 
 
 def _api_functorch_c_get_unwrapped(x):
