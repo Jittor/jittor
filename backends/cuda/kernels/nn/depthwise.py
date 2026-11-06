@@ -95,6 +95,17 @@ def depthwise_forward(x, weight, output_shape, stride, padding, dilation):
                 thread = (output_width - 1) / 2 + 1;
             else if (output_width > 512 && output_width <= 1024)
                 thread = output_width;
+            // The kernel caches the whole filter in per-thread registers, so a
+            // large filter (11x11: 158 registers) lowers maxThreadsPerBlock
+            // below the 384-512 threads requested above and the launch fails
+            // with cudaErrorLaunchOutOfResources. Clamp the block size to the
+            // kernel's own limit before deriving the y dimension.
+            cudaFuncAttributes attributes;
+            if (cudaFuncGetAttributes(&attributes,
+                    KernelDepthwiseConv<input_type, ksize_height, ksize_width,
+                        stride_height, stride_width>) == cudaSuccess
+                    && attributes.maxThreadsPerBlock > 0)
+                thread = std::min(thread, attributes.maxThreadsPerBlock);
             int blocks = std::min(std::max(thread / output_width, 1), output_height);
             dim3 threads(std::min(output_width, thread), blocks, 1);
             dim3 grid(output_channels, batch_size, 1);

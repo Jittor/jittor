@@ -119,6 +119,27 @@ def compare_parameters(m1, m2):
 class TestDepthwiseConv(unittest.TestCase):
     @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "Cuda not found")
     @jt.flag_scope(use_cuda=1, float32_cudnn_precision="highest")
+    def test_large_kernel_launch_matches_generic_grouped_path(self):
+        # The CUDA kernel keeps the whole filter in per-thread registers. An
+        # 11x11 filter needs 158 registers, so maxThreadsPerBlock is 384 while
+        # the launch asked for 484-512 threads: every such convolution failed
+        # with cudaErrorLaunchOutOfResources before the block-size clamp. The
+        # fast path must match the generic grouped convolution for those sizes.
+        rng = np.random.default_rng(7)
+        for channels, kernel, size, padding in ((3, 11, 32, 0), (3, 11, 32, 5), (2, 7, 32, 0)):
+            x = jt.array(rng.random((1, channels, size, size), dtype=np.float32))
+            weight = jt.array(rng.random((channels, 1, kernel, kernel), dtype=np.float32))
+            fast = jt.nn.conv2d(x, weight, padding=padding, groups=channels)
+            generic = jt.nn.conv2d(
+                x, weight, padding=padding, groups=channels, _depthwise_fast_path=False
+            )
+            np.testing.assert_allclose(
+                fast.numpy(), generic.numpy(), atol=1e-4, rtol=1e-4,
+                err_msg="depthwise %dx%d kernel, padding %d" % (kernel, kernel, padding),
+            )
+
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "Cuda not found")
+    @jt.flag_scope(use_cuda=1, float32_cudnn_precision="highest")
     def test_data(self):
         test_img = np.random.random((64,3,224,224)).astype('float32')
         jittor_test_img = jt.array(test_img)
