@@ -483,10 +483,8 @@ include docs/project/research/index.en.md
 include docs/project/research/index.md
 include examples/README.md
 include examples/distributed/native_ddp.py
-include examples/flash-attention/README.md
 include examples/gan/README.md
 include examples/gan/simple_cgan.py
-include examples/minimax-h3/README.md
 include examples/notebooks/README.md
 include examples/notebooks/autograd_details.md
 include examples/notebooks/basics.md
