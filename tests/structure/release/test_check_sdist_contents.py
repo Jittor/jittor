@@ -3,7 +3,6 @@
 from __future__ import print_function
 
 import contextlib
-import importlib.util
 import io
 from pathlib import Path
 import shutil
@@ -13,10 +12,7 @@ import unittest
 from unittest import mock
 
 
-_SCRIPT = Path(__file__).resolve().with_name("check_sdist_contents.py")
-_SPEC = importlib.util.spec_from_file_location("_check_sdist_contents_test", _SCRIPT)
-checker = importlib.util.module_from_spec(_SPEC)
-_SPEC.loader.exec_module(checker)
+from tools.release import check_sdist_contents as checker
 
 
 class TestSourceDistributionContents(unittest.TestCase):

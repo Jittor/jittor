@@ -176,7 +176,7 @@ FORMAT_FILES = (
     *NN_MIGRATION_FILES,
     "noxfile.py",
     "tools/release/check_sdist_contents.py",
-    "tools/release/test_check_sdist_contents.py",
+    "tests/structure/release/test_check_sdist_contents.py",
     "docs/_myst_autodoc.py",
     "docs/conf.py",
     "python/jittor/selftest.py",
@@ -198,8 +198,6 @@ FORMAT_FILES = (
     "tests/structure/test_stage2_delivery.py",
 )
 STRUCTURE_TESTS = (
-    "tools/release/test_check_sdist_contents.py",
-    "tools/release/test_check_wheel_contents.py",
     "tests/structure",
     "compat/tests/structure",
 )

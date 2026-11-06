@@ -29,7 +29,7 @@ def main():
         parser.error("rows and columns must be positive")
     if args.route == "sdk" and (args.backend != "jittor" or args.device != "npu"):
         parser.error("--route sdk requires --backend jittor --device npu")
-    from benchmark_diffusion_ascend import lab_output_path, resolve_source_root
+    from _paths import lab_output_path, resolve_source_root
     try:
         repo = resolve_source_root(args.source_root)
         args.output = lab_output_path(args.output, repo)

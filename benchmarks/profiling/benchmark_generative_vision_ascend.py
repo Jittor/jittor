@@ -53,7 +53,7 @@ def main():
     p.add_argument('--source-root',help='Source checkout for commit metadata; defaults to this script checkout')
     args=p.parse_args()
     from _generative_vision_cases import create_model,make_inputs,make_inputs_from_npz,invoke,extract_output
-    from benchmark_diffusion_ascend import lab_output_path,resolve_source_root
+    from _paths import lab_output_path, resolve_source_root
     if args.samples < 1 or args.slots < 1 or args.warmups < 0:
         p.error('samples/slots must be positive and warmups must be nonnegative')
     if args.prepare and (args.backend != 'torch' or args.device != 'cpu' or not args.tiny):

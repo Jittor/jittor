@@ -59,7 +59,7 @@ def main():
     parser.add_argument('--output', required=True)
     args = parser.parse_args()
     sys.path.insert(0, str(Path(args.source_root).resolve()/'benchmarks'/'profiling'))
-    from benchmark_diffusion_ascend import lab_output_path, resolve_source_root
+    from _paths import lab_output_path, resolve_source_root
     repo = resolve_source_root(args.source_root)
     output = lab_output_path(args.output, repo)
     output.parent.mkdir(parents=True, exist_ok=True)

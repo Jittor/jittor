@@ -364,7 +364,7 @@ def test_automatic_backend_markers_follow_device_sessions():
     assert "cpu" not in parity | triton
 
 
-def test_the_tier_marker_is_attached_from_the_recorded_list():
+def test_the_tier_marker_is_attached_from_the_recorded_list(tmp_path):
     """`slow` is data, not a decorator: one list decides, and it is auditable.
 
     Asserted here because the device test above now has to subtract it -- if
@@ -376,7 +376,7 @@ def test_the_tier_marker_is_attached_from_the_recorded_list():
     assert "slow" in _automatic_markers(listed, "cpu", "cpu")
     assert "slow" not in _automatic_markers(unlisted, "cpu", "cpu")
 
-    external = REPO_ROOT / "tools" / "release" / "test_check_wheel_contents.py"
+    external = tmp_path / "test_external.py"
     assert _automatic_markers(external) == set()
 
 

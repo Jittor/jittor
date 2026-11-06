@@ -24,7 +24,7 @@ def main():
     a = p.parse_args()
     if a.require_match and a.reference is None:
         p.error('--require-match requires --reference')
-    from benchmark_diffusion_ascend import lab_output_path, resolve_source_root
+    from _paths import lab_output_path, resolve_source_root
     try:
         repo = resolve_source_root(a.source_root)
         a.output = lab_output_path(a.output, repo)

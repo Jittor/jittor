@@ -4,7 +4,6 @@ from __future__ import print_function
 
 import contextlib
 import hashlib
-import importlib.util
 import io
 from pathlib import Path
 import tempfile
@@ -14,10 +13,7 @@ import warnings
 import zipfile
 
 
-_SCRIPT = Path(__file__).resolve().with_name("check_wheel_contents.py")
-_SPEC = importlib.util.spec_from_file_location("_check_wheel_contents_test", _SCRIPT)
-checker = importlib.util.module_from_spec(_SPEC)
-_SPEC.loader.exec_module(checker)
+from tools.release import check_wheel_contents as checker
 
 
 class TestWheelContents(unittest.TestCase):
