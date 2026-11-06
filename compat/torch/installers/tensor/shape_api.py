@@ -300,12 +300,38 @@ def _axis_reduce(name, self, *a, **k):
     return orig(self, *a, **k)
 
 
+def _reduction_dtype(name, requested):
+    if (not isinstance(requested, dtype)
+            and not any(requested is scalar for scalar in (bool, int, float, complex))):
+        raise TypeError("%s(): argument 'dtype' must be torch.dtype" % name)
+    target = 'complex128' if requested is complex else _dtype_to_str(requested)
+    if name == 'mean' and not target.startswith(('float', 'bfloat', 'complex')):
+        raise RuntimeError(
+            'mean(): could not infer output dtype. Optional dtype must be '
+            'either a floating point or complex dtype. Got: %s' % target)
+    return target
+
+
 def _method_mean(self, *a, **k):
+    # torch casts the input before reducing when dtype is supplied. The native
+    # reduction has no dtype keyword, and passing it through raises TypeError.
+    reduce_dtype = k.pop('dtype', None)
+    if reduce_dtype is not None:
+        self = self.cast(_reduction_dtype('mean', reduce_dtype))
     return _plain_reduce('mean', self, *a, **k)
 
 
 def _method_prod(self, *a, **k):
-    return _plain_reduce('prod', self, *a, **k)
+    reduce_dtype = k.pop('dtype', None)
+    if reduce_dtype is not None:
+        reduce_dtype = _reduction_dtype('prod', reduce_dtype)
+        self = self.cast(reduce_dtype)
+    result = _plain_reduce('prod', self, *a, **k)
+    # Native boolean reductions return int32; an explicit Torch dtype owns the
+    # result dtype as well as the input cast.
+    if reduce_dtype is not None and _jittor_dtype_name(result.dtype) != reduce_dtype:
+        result = result.cast(reduce_dtype)
+    return result
 
 
 def _method_any(self, *a, **k):
