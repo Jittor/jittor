@@ -310,7 +310,7 @@ def _reject_shared_storage(tensors):
             % [set(group) for group in shared])
 
 
-def _save_dict(tensors, metadata=None):
+def _serialize_parts(tensors, metadata=None):
     _reject_shared_storage(tensors)
     # A state_dict's entries alias live parameters, and `numpy()` would move
     # their sharing group to the host: fetch them as `torch.save` does.
@@ -328,7 +328,7 @@ def _save_dict(tensors, metadata=None):
         snapshot_input[key] = value
     snapshots = _snapshot_tensors(snapshot_input)
     header = {}
-    blobs = []
+    parts = []
     offset = 0
     for key, value in tensors.items():
         tensor_dtype = _jittor_dtype_name(value.dtype) if isinstance(value, jt.Var) else None
@@ -343,33 +343,40 @@ def _save_dict(tensors, metadata=None):
         st_dtype = _NP_TO_ST[dtype]
         if _jittor_dtype_name(st_dtype) == "BF16":
             if key in bf16_views:
-                blob = arr.astype(np.uint16, copy=False).tobytes(order="C")
+                part = np.ascontiguousarray(arr.astype(np.uint16, copy=False))
             else:
                 # Native BF16 numpy() exposes exact values in float32. Encode
                 # their upper 16 bits, not a float32 payload with a BF16 label.
                 bits = arr.astype(np.float32, copy=False).view(np.uint32)
-                blob = (bits >> 16).astype(np.uint16).tobytes(order="C")
+                part = np.ascontiguousarray((bits >> 16).astype(np.uint16))
         else:
-            blob = arr.astype(_ST[st_dtype][0], copy=False).tobytes(order="C")
+            part = np.ascontiguousarray(arr.astype(_ST[st_dtype][0], copy=False))
         header[key] = {
             "dtype": st_dtype,
             "shape": shape,
-            "data_offsets": [offset, offset + len(blob)],
+            "data_offsets": [offset, offset + int(part.nbytes)],
         }
-        blobs.append(blob)
-        offset += len(blob)
+        parts.append(part)
+        offset += int(part.nbytes)
     if metadata:
         header["__metadata__"] = {str(k): str(v) for k, v in metadata.items()}
     raw_header = json.dumps(header, separators=(",", ":")).encode("utf-8")
     # The format aligns the data buffer to eight bytes with JSON whitespace.
     raw_header += b" " * (-len(raw_header) % 8)
-    return struct.pack("<Q", len(raw_header)) + raw_header + b"".join(blobs)
+    return struct.pack("<Q", len(raw_header)) + raw_header, parts
+
+
+def _save_dict(tensors, metadata=None):
+    prefix, parts = _serialize_parts(tensors, metadata)
+    return prefix + b"".join(memoryview(part) for part in parts)
 
 
 def _save_file(tensors, filename, metadata=None):
-    payload = _save_dict(tensors, metadata)
+    prefix, parts = _serialize_parts(tensors, metadata)
     with open(filename, "wb") as fh:
-        fh.write(payload)
+        fh.write(prefix)
+        for part in parts:
+            fh.write(memoryview(part))
 
 
 def _safe_open(filename, framework="pt", device="cpu", backend="mmap"):
