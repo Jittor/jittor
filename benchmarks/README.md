@@ -57,7 +57,7 @@ python benchmarks/acl/bench_torch.py --hf32
 | --- | --- | --- |
 | 算子与模型 | ASV 的算子、卷积前向/反向、归约、tiny Llama；真实模型套件；ACL MLP/CNN/Transformer | 算子 shape × dtype 的普遍扫描，原生整模与 Torch 前端的统一分层对照 |
 | 稳态与冷启动 | ASV 稳态；真实模型单列首步；single-kernel cold-profile | 端到端安装/导入/首编译的跨提交自动基线 |
-| 设备 | ASV CPU/CUDA；真实模型 CPU/CUDA/NPU 入口；ACL 探针 | ROCm/Corex 的专用周期基线；NPU 的 ASV/CI 留存；跨设备的同规格矩阵 |
+| 设备 | ASV CPU/CUDA；真实模型 CPU/CUDA/NPU 入口；ACL 探针 | ROCm 的专用周期基线；NPU 的 ASV/CI 留存；跨设备的同规格矩阵 |
 | 内存与传输 | ASV allocator/RSS、CUDA D2H；真实模型的设备进程内存采样 | 统一的 H2D/D2H、输入流水与 pinned memory 扫描，以及跨后端一致的峰值口径 |
 | 训练与分布式 | SGD/AdamW；整模训练；opt-in Accelerate 单进程训练 | 多卡 collective、DDP/FSDP 扩展效率与通信重叠基线 |
 | 数据加载 | Accelerate 的 resident TensorDataset 和整模预置输入池 | 文件 I/O、worker、预处理、传输重叠组成的端到端数据流水基线 |

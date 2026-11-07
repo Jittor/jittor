@@ -82,16 +82,12 @@ class NativeOperation:
                     if len(args) == position:
                         args += (kwargs.pop(name),)
             if len(args) == 2 and not kwargs:
-                from .installers.tensor.method_api import _cuda_scalar_multiply
+                from .installers.tensor.method_api import _tensor_mul
                 left, right = args
                 if isinstance(left, context.state["Var"]):
-                    result = _cuda_scalar_multiply(left, right)
-                elif isinstance(right, context.state["Var"]):
-                    result = _cuda_scalar_multiply(right, left)
-                else:
-                    result = None
-                if result is not None:
-                    return result
+                    return _tensor_mul(left, right)
+                if isinstance(right, context.state["Var"]):
+                    return _tensor_mul(right, left)
         defaults = self._TORCH_DEFAULTS.get(self._operation_key)
         if defaults:
             kwargs = dict(kwargs)
@@ -101,7 +97,9 @@ class NativeOperation:
         if self._operation_key in ("fft.fftfreq", "fft.rfftfreq"):
             kwargs = dict(kwargs)
             device = kwargs.pop("device", None)
-        with tensor_frontend(context.state["Var"], device=device):
+        unique_operation = self._operation_key in ("unique", "unique_consecutive")
+        source = (args[0] if args else kwargs.get("input")) if unique_operation else None
+        with tensor_frontend(context.state["Var"], device=device, like=source):
             if isinstance(implementation, type) and issubclass(implementation, context.native_backend.Function):
                 implementation = implementation()
             if self._operation_key in ("pow", "rsqrt", "sqrt", "mul", "multiply", "sub", "subtract") and _preserve_autocast_arithmetic():
@@ -110,6 +108,12 @@ class NativeOperation:
                     kwargs = {name: _cuda_autocast_fp32_input(value) for name, value in kwargs.items()}
                 with jittor.flag_scope(amp_reg=jittor.amp_flags.disabled):
                     return implementation(*args, **kwargs)
+            if unique_operation:
+                result = implementation(*args, **kwargs)
+                # Torch always represents inverse indices and counts as int64.
+                if isinstance(result, tuple):
+                    result = (result[0],) + tuple(value.int64() for value in result[1:])
+                return result
             return implementation(*args, **kwargs)
 
     def __reduce__(self):

@@ -8,9 +8,12 @@
 
 namespace jittor {
 
-// x = a^-1 b for one square a (n, n) and b (n, k), with LU (getrf/getrs).
-// A singular a raises UserLinAlgError once the op has run. No gradient: the
-// linalg frontend differentiates it as a jt.Function.
+// x = a^-1 b for square a (..., n, n) and b (..., n, k) with the same batch
+// dimensions, with LU (getrf/getrs) one matrix after another -- what torch
+// does for a batch of large matrices, where cuBLAS's batched LU is slower. A
+// singular a raises UserLinAlgError once the op has run, after one status read
+// for the batch. No gradient: the linalg frontend differentiates it as a
+// jt.Function.
 struct CusolverSolveOp : Op {
     Var* a, * b, * x;
     CusolverSolveOp(Var* a, Var* b);

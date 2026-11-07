@@ -284,6 +284,10 @@ def _try_flash_scaled_dot_product_attention(query, key, value, attn_mask,
     out = out.permute(*out_axes)
     if cast_back and _jittor_dtype_name(out.dtype) != original_dtype:
         out = out.to(original_dtype)
+    # Materialize the fused inference graph before unrelated lazy graphs run.
+    # Otherwise repeated branched workloads can observe corrupted output.
+    if not training_requested:
+        out.sync()
     return out
 
 

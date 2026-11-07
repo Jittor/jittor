@@ -40,6 +40,12 @@ def test_external_adapters_are_not_owned_by_core_gates():
     assert not (REPO_ROOT / "adapters").exists()
 
 
+def test_tool_unit_tests_live_in_the_collected_test_roots():
+    misplaced = sorted(str(path.relative_to(REPO_ROOT))
+                       for path in (REPO_ROOT / "tools").rglob("test_*.py"))
+    assert not misplaced, "Move tool unit tests into tests/: " + ", ".join(misplaced)
+
+
 def test_moved_backend_paths_keep_device_and_process_contracts():
     assert pytest_policy._backend_markers(None, ("backends", "acl", "test_acl.py")) == ("npu",)
     assert pytest_policy._backend_markers(None, ("backends", "comm", "nccl", "test_nccl.py")) == ("mpi",)

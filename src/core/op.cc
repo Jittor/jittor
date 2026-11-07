@@ -26,6 +26,8 @@
 #include "ops/op_register.h"
 #include "utils/graph_build_profile.h"
 #include "runtime/rematerialization_scope.h"
+#include "runtime/profiler/memory_history.h"
+#include "runtime/profiler/step_trace.h"
 
 namespace jittor {
 
@@ -49,6 +51,24 @@ jit_cache_map<string> jit_key_mapper;
 
 std::atomic<int64> Op::number_of_lived_ops{0};
 std::atomic<int64> Op::number_of_created_ops{0};
+
+static thread_local const BackwardStorageReadScope* backward_storage_reads = nullptr;
+BackwardStorageReadScope::BackwardStorageReadScope(const Op* op)
+    : op(op), previous(backward_storage_reads) { backward_storage_reads = this; }
+BackwardStorageReadScope::~BackwardStorageReadScope() { backward_storage_reads = previous; }
+
+void check_backward_storage_read(Var* value) {
+    if (!backward_storage_reads || !value) return;
+    auto token = value->peek_storage_version();
+    if (!token) return;
+    for (auto* scope = backward_storage_reads; scope; scope = scope->previous)
+        for (const auto& saved : scope->op->saved_storage_versions)
+            if (saved.token == token || saved.original_id == value->id)
+                USER_CHECK(saved.token == token &&
+                        saved.version == saved.token->value.load(std::memory_order_relaxed))
+                    << "one of the variables needed for gradient computation has been modified by an inplace operation; saved Var"
+                    << saved.original_id << "read by" << scope->op->name();
+}
 
 // Only Ops with disabled inputs have an entry. Node flag bits record whether
 // an Op has already snapshotted and provide the common no-map-lookup fast path.
@@ -83,6 +103,10 @@ bool lookup_unrecorded_view_edge(Node* source, Node* target) {
 Op::Op() {
     rematerialization_owner = rematerialization_construction_owner();
     launch_origin = capture_launch_origin();
+    if (PREDICT_BRANCH_NOT_TAKEN(capture_op_stacks))
+        memory_stack = capture_memory_stack();
+    if (PREDICT_BRANCH_NOT_TAKEN(step_trace_mode & st_ops))
+        step_trace_note_op_built(this);
     float32_precision = current_float32_precision_policy();
     flags.set(NodeFlags::_var, 0);
     set_flag(OpFlags::_cpu, 1);
@@ -335,7 +359,20 @@ void Op::propagate_device() {
     if (target.explicit_backend) {
         const int dev = target.device.backend == BackendId::Cpu ? -1 : target.device.index;
         for (Var* v : inputs()) {
-            if (!v->placement.explicit_backend || v->placement == target) continue;
+            if (v->placement == target) continue;
+            if (!v->placement.explicit_backend) {
+                // An implicitly placed input names its device only through
+                // device_id. A Python number in native mode is one, made on
+                // the current device: next to a DLPack import or a `.cuda(1)`
+                // of an explicit tensor on another card it was left there, and
+                // the kernel on the target card read its pointer and faulted
+                // with an illegal address.
+                if (dev < 0 || v->device_id < 0 || v->device_id == dev) continue;
+                if (is_pending_scalar(v) && retarget_pending(v, dev, target)) continue;
+                USER_ERROR << "Expected all inputs to be on the same CUDA device, but found"
+                    << "cuda:" >> dev << "and cuda:" >> v->device_id << "for op" << name() >> "."
+                    << "\nMove one side with Var.to_device() / .to(\"cuda:N\") first.";
+            }
             USER_CHECK(is_pending_scalar(v) && retarget_pending(v, dev, target))
                 << "Expected all tensor inputs on the same backend and device for" << name()
                 << "; use an explicit device copy before mixing CPU and accelerator tensors";
@@ -416,6 +453,8 @@ void Op::init() {
         }
     }
     infer_shape();
+    if (!flag(OpFlags::_no_input_storage))
+        for (Var* value : inputs()) check_backward_storage_read(value);
     if (first_init && _inputs.size() && !flag(OpFlags::_manual_device))
         propagate_device();
     if (first_init && has_first_order_only_input)
@@ -445,6 +484,20 @@ void Op::init() {
             for (Var* v : outputs()) {
                 v->set_stop_grad();
             }
+        }
+    }
+    // Record values, never owning the saved Vars. The read scope below the
+    // native backward builder decides which of these the derivative uses.
+    // Native assignment/rebinding remains unchanged.
+    if (first_init && !no_grad && !all_inputs_stopped &&
+            autograd_policy.preserve_requires_grad_on_assignment) {
+        for (Var* value : inputs()) {
+            auto token = value->storage_version_token();
+            saved_storage_versions.push_back({token, token->value.load(std::memory_order_relaxed), value->id});
+        }
+        for (Var* value : outputs()) {
+            auto token = value->storage_version_token();
+            saved_storage_versions.push_back({token, token->value.load(std::memory_order_relaxed), value->id});
         }
     }
 }

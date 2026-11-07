@@ -8,7 +8,7 @@
 一份。行为准则见
 [`CODE_OF_CONDUCT.md`](https://github.com/Jittor/jittor/blob/2.0-refactor/CODE_OF_CONDUCT.md)，
 角色与决策规则见
-[`GOVERNANCE.md`](https://github.com/Jittor/jittor/blob/2.0-refactor/GOVERNANCE.md)。
+[治理规则](../project/community/governance.md)。
 
 本页只补一件根目录指南没有展开的事：**文档本身怎么改、怎么构建、怎么检查。**
 

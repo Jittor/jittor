@@ -2,6 +2,7 @@
 
 import math
 import jittor as jt
+from ._checks import expect_rank
 from .core_3d import _triple
 
 
@@ -24,6 +25,7 @@ def _max_unpool2d_parameters(kernel_size, stride=None):
 
 
 def _max_unpool2d(x, id, output_size=None, *, kernel_size, stride):
+    expect_rank(x, 4, "max_unpool2d")
     b, c, ph, pw = x.shape
     kh, kw = kernel_size
     sh, sw = stride
@@ -72,6 +74,7 @@ def _max_unpool3d_parameters(kernel_size, stride=None):
 
 
 def _max_unpool3d(x, id, output_size=None, *, kernel_size, stride):
+    expect_rank(x, 5, "max_unpool3d")
     b, c, pd, ph, pw = x.shape
     kd, kh, kw = kernel_size
     sd, sh, sw = stride

@@ -161,6 +161,15 @@ def tile(input, *dims):
 
 def triu_indices(row, col, offset=0, *, dtype=None, device=None, layout=None):
     """Return row-major upper-triangular coordinates on the requested device."""
+    return _triangular_indices(row, col, offset, dtype, device, layout, True)
+
+
+def tril_indices(row, col, offset=0, *, dtype=None, device=None, layout=None):
+    """Return row-major lower-triangular coordinates on the requested device."""
+    return _triangular_indices(row, col, offset, dtype, device, layout, False)
+
+
+def _triangular_indices(row, col, offset, dtype, device, layout, upper):
     import operator
     from . import jt
     from ...context import get_install_context
@@ -178,7 +187,8 @@ def triu_indices(row, col, offset=0, *, dtype=None, device=None, layout=None):
         return g.empty((2, 0), dtype=dtype, device=device)
     rows = g.arange(row, dtype=g.int64, device=device).reshape((-1, 1))
     cols = g.arange(col, dtype=g.int64, device=device).reshape((1, -1))
-    return g.nonzero(cols - rows >= offset, as_tuple=False).transpose(0, 1).to(dtype=dtype)
+    mask = cols - rows >= offset if upper else cols - rows <= offset
+    return g.nonzero(mask, as_tuple=False).transpose(0, 1).to(dtype=dtype)
 
 
 def fliplr(input):

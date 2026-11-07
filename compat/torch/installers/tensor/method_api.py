@@ -1,5 +1,7 @@
 """Stable Torch Tensor method implementations; install only binds these objects."""
 from importlib import import_module
+from collections.abc import Sequence
+import warnings
 import contextlib
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from ...context import get_install_context
@@ -171,19 +173,12 @@ def _set_data_owner(view, slices, value):
 
 
 def _torch_setitem(self, slices, value):
+    slices = _normalize_index_sequence(slices)
     _context = get_install_context(_owner.jt)
     _native = _context.state["tensor_native_api"]
     _orig_setitem = _native['_orig_setitem']
     slices = _align_advanced_index(self, slices)
-    # PyTorch promotes a no-grad destination to a differentiable non-leaf when
-    # an indexed assignment consumes a grad-enabled source. Jittor otherwise
-    # leaves the destination stopped, so even a differentiable replacement
-    # expression cannot reach its source during backward(). Respect no_grad
-    # while enabling the normal training-time promotion.
-    if (isinstance(value, _NativeVar) and bool(value.requires_grad)
-            and not bool(getattr(_owner.jt.flags, "no_grad", 0))
-            and not bool(self.requires_grad)):
-        self.start_grad()
+    self._check_inplace_autograd()
     # Jittor's indexed-assignment backward exposes one gradient row per
     # selected position when a rank-1 parameter is assigned through a lower
     # rank boolean mask (for example Wav2Vec2 SpecAugment's
@@ -199,7 +194,7 @@ def _torch_setitem(self, slices, value):
         mask = slices.unsqueeze(-1).broadcast(self.shape)
         rhs_shape = (1,) * len(slices.shape) + (int(self.shape[-1]),)
         expanded = value.reshape(rhs_shape).broadcast(self.shape)
-        self.assign(self + mask * (expanded - self))
+        _ip(self, self + mask * (expanded - self), preserve_storage=True)
         return self
     # A lower-rank boolean mask with a per-selected-row source (for example
     # SmolVLM's ``image_embeds[image_mask] = image_hidden_states[...]``) must
@@ -218,7 +213,7 @@ def _torch_setitem(self, slices, value):
                 trailing *= int(dimension)
             selected = int(slices.sum().item())
             if selected > 0 and int(value.numel()) == selected * trailing:
-                self.assign(_owner.masked_scatter(self, slices, value))
+                _ip(self, _owner.masked_scatter(self, slices, value), preserve_storage=True)
                 return self
         except _owner.EXPECTED as exc:
             _owner.swallowed(
@@ -252,6 +247,9 @@ def _torch_setitem(self, slices, value):
                 value = value.squeeze(0)
     except _owner.EXPECTED as exc:
         _owner.swallowed("torch/installers/tensor.py _torch_setitem: mask = slices", exc)
+    if (not _owner.jt.flags.no_grad and isinstance(value, _NativeVar)
+            and value.requires_grad and not self.requires_grad):
+        return _ip(self, self.setitem(slices, value), preserve_storage=True)
     result = _orig_setitem(self, slices, value)
     return result
 
@@ -414,6 +412,9 @@ def _copy_(self, other, non_blocking=False):
                 for source, target in zip(reversed(src.shape), reversed(self.shape))):
             raise RuntimeError("copy_ source shape cannot broadcast to destination shape")
         src = src.broadcast(self.shape)
+    # A differentiable copy owns a new edge and must not alias the source.
+    if not _owner.jt.flags.no_grad and src.requires_grad:
+        src = src.clone()
     return _ip(self, src, preserve_storage=True)
 
 
@@ -631,7 +632,10 @@ class _Storage:
     def __init__(self, var):
         self._var = var
     def data_ptr(self):
-        return id(self._var)
+        # Tensor.data_ptr() addresses the first element of a view. Storage
+        # addresses its allocation origin, shared by every offset view/alias.
+        pointer = _api_data_ptr(self._var)
+        return pointer - int(self._var._storage_offset()) * _storage_dsize(self._var)
     def size(self):
         return int(self._var.numel())
     def nbytes(self):
@@ -645,7 +649,13 @@ class _Storage:
         return _storage_reach_elements(self._var) * _storage_dsize(self._var)
 
 
+def _dense_arithmetic_operand(other):
+    from ..numerical.sparse import _SparseCOO
+    return other.to_dense() if isinstance(other, _SparseCOO) else other
+
+
 def _add(input, other, *, alpha=1, out=None):
+    other = _dense_arithmetic_operand(other)
     _context = get_install_context(_owner.jt)
     _native = _context.state["tensor_native_api"]
     _native_add = _native['_native_add']
@@ -709,6 +719,21 @@ def _is_basic_index(index):
     return isinstance(index, _owner.numbers.Integral) and not isinstance(index, (bool, _owner.np.bool_))
 
 
+def _normalize_index_sequence(index):
+    # Matches PyTorch's treatSequenceAsTuple (still present in 2.11).
+    # This interpretation applies only to the outer, short non-array sequence;
+    # lists within an explicit tuple remain individual advanced indices.
+    if (isinstance(index, Sequence)
+            and not isinstance(index, (tuple, str, bytes)) and len(index) < 32):
+        if any(item is None or item is Ellipsis
+               or isinstance(item, (_NativeVar, _owner.np.ndarray, Sequence, slice))
+               for item in index):
+            warnings.warn("Using a non-tuple sequence for multidimensional indexing is deprecated; "
+                          "use x[tuple(seq)] instead of x[seq].", UserWarning, stacklevel=3)
+            return tuple(index)
+    return index
+
+
 def _align_advanced_index(data, index):
     """Move tensor indices beside the indexed tensor before native dispatch."""
     if isinstance(index, _NativeVar):
@@ -725,6 +750,7 @@ def _align_advanced_index(data, index):
 
 
 def _torch_getitem(self, slices):
+    slices = _normalize_index_sequence(slices)
     # PyTorch accepts NumPy integer/bool arrays as advanced indices.
     # Convert them before the native fast path or the dispatcher sees them.
     def normalize(index):
@@ -1811,9 +1837,12 @@ def _cuda_scalar_multiply(self, other):
 
 
 def _tensor_mul(self, other):
-    scalar_result = _cuda_scalar_multiply(self, other)
-    if scalar_result is not None:
-        return scalar_result
+    scalar = _cuda_scalar_multiply(self, other)
+    if scalar is not None:
+        return scalar
+    if type(other) in (int, float) and _preserve_autocast_arithmetic():
+        with _owner.jt.flag_scope(amp_reg=0):
+            return _promoting_binary(self, other, '__mul__', False)
     fast = _FAST_BINARY
     if fast is not None and not _autocast_state.order:
         out = fast(self, other, 4)
@@ -1823,9 +1852,12 @@ def _tensor_mul(self, other):
 
 
 def _tensor_rmul(self, other):
-    scalar_result = _cuda_scalar_multiply(self, other)
-    if scalar_result is not None:
-        return scalar_result
+    scalar = _cuda_scalar_multiply(self, other)
+    if scalar is not None:
+        return scalar
+    if type(other) in (int, float) and _preserve_autocast_arithmetic():
+        with _owner.jt.flag_scope(amp_reg=0):
+            return _promoting_binary(self, other, '__rmul__', True)
     fast = _FAST_BINARY
     if fast is not None and not _autocast_state.order:
         out = fast(self, other, 5)
@@ -1904,9 +1936,9 @@ _BINARY_APIS = {
     '__sub__': _tensor_sub,
     '__rsub__': _tensor_rsub,
     '__mul__': _tensor_mul,
-    '__rmul__': _tensor_rmul,
     'mul': _tensor_mul,
     'multiply': _tensor_mul,
+    '__rmul__': _tensor_rmul,
     '__floordiv__': _tensor_floordiv,
     '__rfloordiv__': _tensor_rfloordiv,
     '__mod__': _tensor_mod,
@@ -2018,20 +2050,43 @@ def _api_zero_batch(tensors):
                 tensor._copy_into(zeros)
 
 
+def _inplace_add_sub(self, other, alpha, subtract=False):
+    other = _dense_arithmetic_operand(other)
+    value = self - other * alpha if subtract else self + other * alpha
+    if tuple(value.shape) != tuple(self.shape):
+        raise RuntimeError("in-place result shape does not match destination shape")
+    namespace = get_install_context(_owner.jt).target_namespace
+    if not namespace.can_cast(value.dtype, self.dtype):
+        raise RuntimeError("result type can't be cast to the destination type")
+    if value.dtype != self.dtype:
+        value = value.cast(_jittor_dtype_name(self.dtype))
+    return _ip(self, value, preserve_storage=True)
+
+
 def _api_add(self, o, alpha=1):
-    return _ip(self, self + o * alpha, preserve_storage=True)
+    return _inplace_add_sub(self, o, alpha)
 
 
 def _api_sub(self, o, alpha=1):
-    return _ip(self, self - o * alpha, preserve_storage=True)
+    return _inplace_add_sub(self, o, alpha, subtract=True)
+
+
+def _inplace_saved_input(self, other):
+    # Multiplication/division backward needs the pre-write destination when
+    # differentiating the RHS. Save independent storage before its version
+    # changes, just as an eager in-place operator saves its old input.
+    if (not _owner.jt.flags.no_grad and isinstance(other, _NativeVar)
+            and other.requires_grad):
+        return self.clone()
+    return self
 
 
 def _api_mul(self, o):
-    return _ip(self, self * o, preserve_storage=True)
+    return _ip(self, _inplace_saved_input(self, o) * o, preserve_storage=True)
 
 
 def _api_div(self, o):
-    return _ip(self, self / o, preserve_storage=True)
+    return _ip(self, _inplace_saved_input(self, o) / o, preserve_storage=True)
 
 
 def _api_clamp_min(input, v):
@@ -2199,6 +2254,11 @@ def _api_is_leaf(self):
     return bool(self.is_backward_leaf)
 
 
+def _api_is_quantized(self):
+    # Native Var does not represent quantized tensor storage.
+    return False
+
+
 def _api_is_sparse(self):
     # Native Var storage is dense; unsupported sparse factories never produce
     # a Var whose storage this capability query could misclassify.
@@ -2304,7 +2364,7 @@ def _api_neg_(self):
 
 
 def _api_reciprocal_(self):
-    return _ip(self, 1.0 / self)
+    return _ip(self, 1.0 / _inplace_saved_input(self, self))
 
 
 def _api_rsqrt_(self):
@@ -2334,7 +2394,7 @@ from .autograd_api import (
 )
 
 def _api_log_(self):
-    return _ip(self, _owner.jt.log(self))
+    return _ip(self, _owner.jt.log(_inplace_saved_input(self, self)))
 
 def _api_exp_(self):
     return _ip(self, _owner.jt.exp(self))
@@ -2342,8 +2402,11 @@ def _api_exp_(self):
 def _api_sqrt_(self):
     return _ip(self, _owner.jt.sqrt(self))
 
+def _api_erf_(self):
+    return _ip(self, _owner.jt.erf(_inplace_saved_input(self, self)))
+
 def _api_abs_(self):
-    return _ip(self, _owner.jt.abs(self))
+    return _ip(self, _owner.jt.abs(_inplace_saved_input(self, self)))
 
 def _api_round_(self):
     return _ip(self, _owner.jt.round(self))
@@ -2368,6 +2431,7 @@ _UNARY_INPLACE_APIS.update({
     'exp_': _api_exp_,
     'sqrt_': _api_sqrt_,
     'abs_': _api_abs_,
+    'erf_': _api_erf_,
     'sigmoid_': _api_sigmoid_,
     'tanh_': _api_tanh_,
     'round_': _api_round_,

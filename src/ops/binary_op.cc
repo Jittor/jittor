@@ -461,22 +461,23 @@ static VarPtr broadcast_binary(Var* x, Var* y, NanoString op) {
     return make_binary(xp, yp, op);
 }
 
-// `ArrayOp(PyObject*)` stages a Python float as float32, which
-// is what `jt.array(0.5)` and every float32/float16 operand should see. In
-// torch a Python float is a weak double, though: the result dtype is already
-// right (a scalar does not take part in promotion), so the defect is only in
-// the value -- against a float64 operand it carries 24 mantissa bits where 53
-// are available. Rebuild the constant from the exact double when promotion
-// asks for float64; `make_binary` re-enters with the wide scalar and the rest
-// of the constructor runs unchanged.
+// `ArrayOp(PyObject*)` stages a Python float as float32, and a Python complex
+// as complex64, which is what `jt.array(0.5)` and every single-precision
+// operand should see. In torch a Python number is a weak double, though: the
+// result dtype is already right (a scalar does not take part in promotion), so
+// the defect is only in the value -- against a float64 or complex128 operand it
+// carries 24 mantissa bits where 53 are available (`z ** 1.2345678901234567`
+// was off by 2e-8 on a complex128 `z`). Rebuild the constant from the exact
+// double(s) when promotion asks for double precision; `make_binary` re-enters
+// with the wide scalar and the rest of the constructor runs unchanged.
 static VarPtr widen_python_float_operand(Var* value, Var* other, NanoString op) {
-    if (!value->flag(VarFlags::_python_number) || value->dtype() != ns_float32
-            || value->shape.size() != 0)
+    if (!value->flag(VarFlags::_python_number) || value->shape.size() != 0
+            || (value->dtype() != ns_float32 && value->dtype() != ns_complex64))
         return nullptr;
     Op* producer = value->input();
     if (!producer || !producer->is_op(op_ids::array())) return nullptr;
     auto* array = static_cast<ArrayOp*>(producer);
-    if (!array->has_python_float) return nullptr;
+    if (!array->has_python_float && !array->has_python_complex) return nullptr;
     bool xs = value->flag(VarFlags::_is_scalar);
     bool ys = other->flag(VarFlags::_is_scalar);
     // A comparison answers bool; ask add for the type its operands are
@@ -484,9 +485,17 @@ static VarPtr widen_python_float_operand(Var* value, Var* other, NanoString op) 
     NanoString target = binary_dtype_infer(op, value->ns, other->ns, xs, ys);
     if (target == ns_bool)
         target = binary_dtype_infer(ns_add, value->ns, other->ns, xs, ys);
-    if (target != ns_float64) return nullptr;
-    double exact = array->python_float;
-    VarPtr rebuilt = make_array(&exact, {}, ns_float64);
+    VarPtr rebuilt;
+    if (array->has_python_complex) {
+        if (target != ns_complex128) return nullptr;
+        double exact[2] = {array->python_float, array->python_imag};
+        rebuilt = make_array(exact, {}, ns_complex128);
+    } else {
+        // A float64 constant goes exactly into a complex128 operation too.
+        if (target != ns_float64 && target != ns_complex128) return nullptr;
+        double exact = array->python_float;
+        rebuilt = make_array(&exact, {}, ns_float64);
+    }
     rebuilt->set_flag(VarFlags::_python_number);
     return rebuilt;
 }

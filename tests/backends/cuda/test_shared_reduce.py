@@ -17,7 +17,7 @@ covers whole reduced dimensions, which is what makes the block-wide fold legal.
 Level 4 uses warp shuffles for local folds and shared memory only for one partial
 per warp. Tests pin the default warp path, the opt-in block path, and its
 one-global-write contract. Measurements live in
-agent/skills/cuda-reduction-strategy-comparison/.
+https://github.com/JittorEcosystem/jittor-dev-skills/blob/main/skills/cuda-reduction-strategy-comparison/SKILL.md.
 """
 
 from _helpers.runtime_policy import preserve_policy as _test_preserve_policy

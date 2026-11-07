@@ -260,6 +260,14 @@ struct InternalInvariantError : JittorError {
     using JittorError::JittorError;
 };
 
+// The device could not supply memory a pool asked for, after the pools gave
+// back everything they had cached and retried. Python sees
+// jittor.JittorOutOfMemoryError -- torch.OutOfMemoryError in Torch mode --
+// so a handler that catches it by name can shrink the batch and go on.
+struct DeviceOutOfMemoryError : JittorError {
+    using JittorError::JittorError;
+};
+
 // Also derived from by an error the executor rethrew after adding where the
 // failing operator came from. The bindings report such an error as it is,
 // never as "wrong arguments" to whichever call happened to trigger execution.

@@ -77,7 +77,7 @@ conda run -n torch-ref pip install "torch==2.11.0+cu128" \
     --index-url https://download.pytorch.org/whl/cu128
 conda run -n torch-ref pip install transformers==4.56.2 diffusers==0.35.1 numpy==1.26.4 nvidia-ml-py
 
-# Jittor 侧：core 用 compat 模式可编辑安装，再装 jittor-compat（见 agent/skills/isolated-validation/SKILL.md）
+# Jittor 侧：core 用 compat 模式可编辑安装，再装 jittor-compat（见根 AGENTS.md 中的隔离验证技能入口）
 pip install -e ".[cuda12]" --group dev --config-settings editable_mode=compat
 pip install --no-deps --no-build-isolation -e compat
 pip install transformers==4.56.2 diffusers==0.35.1 nvidia-ml-py

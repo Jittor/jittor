@@ -4,6 +4,9 @@
 设备与计时口径；源码存在不代表已经通过当前提交的硬件验收。模型或第三方库的完整
 验收应到 [JittorEcosystem](https://github.com/JittorEcosystem) 对应仓库执行。
 
+`_paths.py` 统一提供源码定位和外部输出目录校验，只依赖 Python 标准库。
+通用探针从这里导入路径助手，不依赖任何具体模型的运行脚本。
+
 | 工具 | 用途 | 设备 / 前端 |
 | --- | --- | --- |
 | `benchmark_npu_frontends.py` | 同尺寸矩阵乘的原生/独立 compat 前端延迟与数值校验 | ACL NPU，分别起进程；检查驻留与零回退 |
@@ -52,3 +55,10 @@ JITTOR_HOME="$run_dir/compat-cache" python benchmarks/profiling/benchmark_npu_fr
 - 比较原生 PyTorch 时使用独立进程，确认导入真实 PyTorch；不要将 `jittor` 别名成 `torch`。
 - 每种候选实现先验证数值和所声明的梯度；运行不报错不等于正确。
 - 原始结果留在 lab；复查结论记录到 issue/PR。完整规则见[性能基准规范](../../docs/performance/benchmarking.md)。
+
+## 带宽与冷编译工具
+
+`roofline/` 保存 copy 带宽、Jittor/Torch step 采样和报告分类工具；
+`profile_single_kernel.py` 测量合成 C++ kernel 的编译与加载阶段。
+操作说明由 [Jittor Development Skills](https://github.com/JittorEcosystem/jittor-dev-skills)
+维护；这些工具随主仓源码一起版本管理，不要求运行时安装技能仓库。

@@ -14,6 +14,7 @@ fail() {
 # refactors belong to Git history and structure tests, not to this script.
 required_paths=(
   python/jittor/selftest.py tests examples tools docs/conf.py docs/index.md
+  tools/containers/Containerfile.cuda tools/containers/README.md
   benchmarks/README.md benchmarks/asv/asv.conf.json
   benchmarks/torch_compat/run.py benchmarks/acl/bench_jittor.py benchmarks/acl/probes
   backends/comm/__init__.py backends/acl/include/aclops

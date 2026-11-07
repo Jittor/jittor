@@ -38,6 +38,7 @@ from .method_api import (
     _api_is_contiguous,
     _api_is_leaf,
     _api_is_sparse,
+    _api_is_quantized,
     _api_retains_grad,
     _api_is_cpu,
     _api_is_mps,
@@ -273,9 +274,11 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     Var.fill_ = _api_fill
     Var.fill_diagonal_ = _api_fill_diagonal
     Var.zero_ = _api_zero
+    Var.add = _add
     Var.add_ = _api_add
     Var.sub_ = _api_sub
     Var.mul_ = _api_mul
+    Var.multiply_ = _api_mul
     Var.div_ = _api_div
     # Native augmented assignment preserves a formerly frozen destination's
     # stop-grad policy. Torch instead connects it to a differentiable RHS,
@@ -286,7 +289,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     Var.__itruediv__ = _api_div
     # in-place unary math ops (recurrent_gemma uses x.log_(); common torch idioms)
     for name, implementation in _UNARY_INPLACE_APIS.items():
-        if not hasattr(Var, name):
+        if name in ("abs_", "erf_") or not hasattr(Var, name):
             setattr(Var, name, implementation)
     # torch.clamp(input, min=None, max=None) and Tensor.clamp(min=, max=)
     # accept min/max as keyword args, either of which may be None. jittor's
@@ -358,8 +361,8 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
 
     # torch storage introspection: peft/safetensors call tensor.storage()
     # .data_ptr() / .untyped_storage().nbytes() to detect shared/tied weights.
-    # jittor has no exposed storage object; expose identity-based stand-ins so
-    # save_pretrained's tied-weight detection works (each Var is its own storage).
+    # Expose the native allocation address so detached aliases and offset
+    # views retain their shared storage identity.
     if not hasattr(Var, "storage"):
         Var.storage = _api_storage
     if not hasattr(Var, "untyped_storage"):
@@ -466,6 +469,9 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # of silently calling every intermediate a leaf.
     Var.is_leaf = property(_api_is_leaf)
     Var.is_sparse = property(_api_is_sparse)
+    Var.is_quantized = property(_api_is_quantized)
+    register_api_bindings(Var, 'torch.Tensor', ('is_quantized',), Fidelity.EXACT,
+                          'Native Var has no quantized tensor storage.')
     register_api_bindings(Var, 'torch.Tensor', ('is_sparse',), Fidelity.EXACT,
                           'Native Var has dense storage; sparse construction is unsupported.')
     # torch's nested-tensor flag; jittor has no nested tensors -> always False.
@@ -721,5 +727,5 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         'Shares the public function implementation and preserves native explicit autocast policy')
 
     register_api_bindings(Var, 'torch.Tensor',
-        ('T', '__iadd__', '__isub__', '__imul__', '__itruediv__', '__deepcopy__', '__getitem__', '__hash__', '__invert__', '__ne__', '__reduce__', '__reduce_ex__', '__setitem__', 'add_', 'addmm', 'argwhere', 'as_strided', 'backward', 'baddbmm', 'clamp', 'clamp_', 'clip', 'clip_', 'contiguous', 'copy_', 'cpu', 'cuda', 'cumprod', 'cumsum', 'data', 'data_ptr', 'detach', 'device', 'div_', 'dtype', 'element_size', 'exponential_', 'fill_', 'fill_diagonal_', 'get_device', 'grad', 'grad_fn', 'is_complex', 'is_contiguous', 'is_cpu', 'is_cuda', 'is_floating_point', 'is_leaf', 'is_meta', 'is_mps', 'is_nested', 'is_pinned', 'is_signed', 'is_xpu', 'mT', 'mul_', 'narrow', 'ne', 'nelement', 'new_empty', 'new_full', 'new_ones', 'new_tensor', 'new_zeros', 'nonzero', 'norm', 'normal_', 'numpy', 'pin_memory', 'random_', 'requires_grad', 'requires_grad_', 'retain_grad', 'retains_grad', 'set_', 'squeeze', 'storage', 'storage_offset', 'stride', 'sub_', 'tile', 'to', 'tolist', 'type', 'type_as', 'uniform_', 'untyped_storage', 'where', 'zero_') + tuple(_BINARY_APIS.keys() | _CAST_APIS.keys() | _UNARY_INPLACE_APIS.keys()),
+        ('T', '__iadd__', '__isub__', '__imul__', '__itruediv__', '__deepcopy__', '__getitem__', '__hash__', '__invert__', '__ne__', '__reduce__', '__reduce_ex__', '__setitem__', 'add_', 'addmm', 'argwhere', 'as_strided', 'backward', 'baddbmm', 'clamp', 'clamp_', 'clip', 'clip_', 'contiguous', 'copy_', 'cpu', 'cuda', 'cumprod', 'cumsum', 'data', 'data_ptr', 'detach', 'device', 'div_', 'dtype', 'element_size', 'exponential_', 'fill_', 'fill_diagonal_', 'get_device', 'grad', 'grad_fn', 'is_complex', 'is_contiguous', 'is_cpu', 'is_cuda', 'is_floating_point', 'is_leaf', 'is_meta', 'is_mps', 'is_nested', 'is_pinned', 'is_signed', 'is_xpu', 'mT', 'mul_', 'multiply_', 'narrow', 'ne', 'nelement', 'new_empty', 'new_full', 'new_ones', 'new_tensor', 'new_zeros', 'nonzero', 'norm', 'normal_', 'numpy', 'pin_memory', 'random_', 'requires_grad', 'requires_grad_', 'retain_grad', 'retains_grad', 'set_', 'squeeze', 'storage', 'storage_offset', 'stride', 'sub_', 'tile', 'to', 'tolist', 'type', 'type_as', 'uniform_', 'untyped_storage', 'where', 'zero_') + tuple(_BINARY_APIS.keys() | _CAST_APIS.keys() | _UNARY_INPLACE_APIS.keys()),
         Fidelity.APPROXIMATE, 'Tensor operations share the native Var/Op graph and explicit frontend state; unsupported layouts, device capabilities, and retained compatibility approximations remain restricted')

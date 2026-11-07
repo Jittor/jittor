@@ -1,7 +1,7 @@
 # 为 Jittor 做贡献
 
 Jittor 欢迎缺陷修复、新功能、算子、测试、文档和性能优化。参与项目即表示同意遵守
-[行为准则](CODE_OF_CONDUCT.md)与[治理规则](GOVERNANCE.md)。
+[行为准则](CODE_OF_CONDUCT.md)与[治理规则](docs/project/community/governance.md)。
 
 ## 开始之前
 
@@ -18,7 +18,8 @@ Jittor 欢迎缺陷修复、新功能、算子、测试、文档和性能优化�
 ```bash
 git clone https://github.com/<your-account>/jittor.git
 cd jittor
-python -m pip install -e . -e ./compat
+python -m pip install --config-settings editable_mode=compat -e .
+python -m pip install -e ./compat
 python -m pip install -r requirements/dev-tools.txt
 python -m jittor.selftest
 ```
@@ -31,7 +32,7 @@ export cache_name="${cache_name:-local-dev}"
 ```
 
 使用 CUDA 时，若 `nvcc` 不在 `PATH` 中，请设置 `nvcc_path`。各后端的 CI 要求见
-[隔离验证环境](agent/skills/isolated-validation/SKILL.md)。
+[隔离验证环境](https://github.com/JittorEcosystem/jittor-dev-skills/blob/main/skills/isolated-validation/SKILL.md)。
 
 ## 仓库结构
 
@@ -47,7 +48,6 @@ export cache_name="${cache_name:-local-dev}"
 ├── benchmarks/          # ASV regressions, Torch comparisons, and ACL measurements
 ├── tools/               # build, docs, lint, release and maintenance commands
 ├── docs/                # the single user- and contributor-facing documentation tree
-├── agent/               # practical skills and their catalogue
 ├── pyproject.toml       # authoritative package, tool, and pytest configuration
 └── noxfile.py           # reproducible local and CI sessions
 ```

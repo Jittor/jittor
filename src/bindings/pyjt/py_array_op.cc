@@ -117,8 +117,12 @@ ArrayOp::ArrayOp(PyObject* obj) {
     // ns_complex64 for every complex combination, before it looks at anything
     // else -- so narrow here the same way a python float becomes float32.
     if (PyComplex_Check(obj)) {
-        scalar.c64[0] = (float32)PyComplex_RealAsDouble(obj);
-        scalar.c64[1] = (float32)PyComplex_ImagAsDouble(obj);
+        // The exact value is kept as for a float, for a complex128 operand.
+        python_float = PyComplex_RealAsDouble(obj);
+        python_imag = PyComplex_ImagAsDouble(obj);
+        has_python_complex = true;
+        scalar.c64[0] = (float32)python_float;
+        scalar.c64[1] = (float32)python_imag;
         args = {&scalar, {}, ns_complex64};
     } else
     if (PyObject_TypeCheck(obj, &PyjtVarHolder.ht_type)) {

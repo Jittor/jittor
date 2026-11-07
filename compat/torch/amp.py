@@ -64,9 +64,8 @@ class _AutocastState(_threading.local):
 
 _autocast_state = _AutocastState()
 
-
 def _preserve_autocast_arithmetic():
-    """Protect Torch's fall-through arithmetic from the native AMP bias.
+    """Protect Torch scalar arithmetic from the native AMP bias.
 
     Native contractions deliberately set ``keep_reduce`` around their internal
     multiply/reduce expression. Keep that compute policy intact: it is part of

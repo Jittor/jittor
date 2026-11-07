@@ -44,17 +44,12 @@ class TestDocsStructure(unittest.TestCase):
     def test_one_canonical_documentation_tree_remains(self):
         self.assertTrue((self.docs_root / "conf.py").is_file())
         self.assertTrue((self.docs_root / "index.md").is_file())
-        self.assertTrue((self.repo_root / "agent" / "README.md").is_file())
-        ignored = subprocess.run(
-            ("git", "check-ignore", "--no-index", "--", "agent/README.md"),
-            cwd=str(self.repo_root), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            universal_newlines=True,
-        )
-        self.assertEqual(ignored.returncode, 1, ignored.stdout + ignored.stderr)
+        self.assertTrue((self.repo_root / "AGENTS.md").is_file())
         retired = (
             "doc",
             "docs/results",
             "docs/slides",
+            "agent",
             "agent/design",
             "agent/results",
             "agent/baselines",
@@ -85,35 +80,6 @@ class TestDocsStructure(unittest.TestCase):
         self.assertEqual(tracked.stdout, "")
         self.assertFalse(list(self.repo_root.rglob("*.src.md")))
         self.assertFalse(list(self.repo_root.rglob("*.ipynb")))
-
-    def test_skill_catalog_detects_missing_stale_and_misplaced_resources(self):
-        spec = spec_from_file_location(
-            "skill_governance", self.repo_root / "tools/docs/check_governance.py")
-        governance = module_from_spec(spec)
-        spec.loader.exec_module(governance)
-        self.assertEqual(governance.check_skill_catalog(self.repo_root / "agent"), [])
-        with TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            skill = root / "skills" / "sample"
-            skill.mkdir(parents=True)
-            (skill / "SKILL.md").write_text("# Sample\n")
-            catalog = root / "README.md"
-            catalog.write_text("[sample](skills/sample/SKILL.md)\n")
-            self.assertEqual(governance.check_skill_catalog(root), [])
-            catalog.write_text("[old](skills/old/SKILL.md)\n")
-            errors = governance.check_skill_catalog(root)
-            self.assertTrue(any("absent from catalog" in error for error in errors))
-            self.assertTrue(any("stale skill" in error for error in errors))
-            catalog.write_text("[sample](skills/sample/SKILL.md)\n")
-            (skill / "helper.py").write_text("pass\n")
-            self.assertTrue(any("belongs in scripts/" in error
-                                for error in governance.check_skill_catalog(root)))
-            (skill / "scripts").mkdir()
-            (skill / "helper.py").rename(skill / "scripts" / "helper.py")
-            self.assertEqual(governance.check_skill_catalog(root), [])
-            (skill / "SKILL.md").unlink()
-            self.assertTrue(any("missing skill entry" in error
-                                for error in governance.check_skill_catalog(root)))
 
     def test_sphinx_configuration_is_myst_only_and_import_safe(self):
         path = self.docs_root / "conf.py"

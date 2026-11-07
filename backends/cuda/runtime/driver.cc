@@ -4,10 +4,13 @@
 #include "ops/composite/index_bounds.h"
 #include <cuda_runtime.h>
 #include "helper_cuda.h"
+#include "mem/mem_info.h"
 #include <algorithm>
 #include <atomic>
 #include <cstring>
+#include <dlfcn.h>
 #include <exception>
+#include <unistd.h>
 #include <vector>
 
 namespace jittor {
@@ -76,6 +79,23 @@ int accelerator_current() {
     return state.current_device;
 }
 
+int accelerator_caller_device() {
+    int device = -1;
+    if (cudaGetDevice(&device) != cudaSuccess) {
+        cudaGetLastError();
+        return -1;
+    }
+    return device;
+}
+
+void accelerator_restore_caller_device(int device) {
+    if (cudaSetDevice(device) != cudaSuccess) {
+        cudaGetLastError();
+        return;
+    }
+    tls_bound_device = -1;
+}
+
 void accelerator_set(int device) {
     int count = accelerator_count();
     CHECK(device >= 0 && device < count)
@@ -92,8 +112,8 @@ void accelerator_set(int device) {
 
 void accelerator_sync(uint64 devices) {
     LaunchErrorScope error_scope({BackendId::Cuda, accelerator_current()});
-    checkCudaErrors(cudaGetLastError());
     if (!devices) {
+        checkCudaErrors(cudaGetLastError());
         checkCudaErrors(cudaDeviceSynchronize());
         return;
     }
@@ -176,6 +196,39 @@ static string readable_bytes(size_t size) {
     return out.str();
 }
 
+// What NVML says this process holds on `device` (CUDA context, modules and
+// every allocation, not only the pools'), or -1 when it cannot say: no NVML,
+// or the process is not in the list it returns (another PID namespace).
+// Loaded on demand, as PyTorch's caching allocator does for the same sentence.
+static int64 process_device_memory(int device) {
+    typedef int (*NvmlInit)();
+    typedef int (*NvmlByBusId)(const char*, void**);
+    struct ProcessInfo { unsigned pid; unsigned long long used; unsigned gpu_instance, compute_instance; };
+    typedef int (*NvmlProcesses)(void*, unsigned*, ProcessInfo*);
+    static void* lib = dlopen("libnvidia-ml.so.1", RTLD_NOW | RTLD_LOCAL);
+    if (!lib) return -1;
+    static bool ready = [] {
+        auto init = (NvmlInit)dlsym(lib, "nvmlInit_v2");
+        return init && init() == 0;
+    }();
+    auto by_bus_id = (NvmlByBusId)dlsym(lib, "nvmlDeviceGetHandleByPciBusId_v2");
+    auto processes = (NvmlProcesses)dlsym(lib, "nvmlDeviceGetComputeRunningProcesses_v3");
+    if (!ready || !by_bus_id || !processes) return -1;
+    char bus_id[32];
+    if (cudaDeviceGetPCIBusId(bus_id, sizeof(bus_id), device) != cudaSuccess) {
+        cudaGetLastError();
+        return -1;
+    }
+    void* handle = nullptr;
+    if (by_bus_id(bus_id, &handle) != 0) return -1;
+    ProcessInfo infos[256];
+    unsigned count = 256;
+    if (processes(handle, &count, infos) != 0) return -1;
+    for (unsigned i = 0; i < count; i++)
+        if (infos[i].pid == (unsigned)getpid()) return (int64)infos[i].used;
+    return -1;
+}
+
 void* raw_allocate(int device, BackendMemoryKind kind, size_t size) {
     if (!size) return nullptr;
     return on_device(device, [&]() -> void* {
@@ -212,10 +265,6 @@ void* raw_allocate(int device, BackendMemoryKind kind, size_t size) {
                     size_t device_free = 0, device_total = 0;
                     auto info = cudaMemGetInfo(&device_free, &device_total);
                     if (info != cudaSuccess) cudaGetLastError();
-                    string where = info == cudaSuccess
-                        ? (", device " + S(device) + " has " + S(device_free >> 20) +
-                           " MiB free of " + S(device_total >> 20) + " MiB")
-                        : (", and device " + S(device) + "'s free memory could not be read");
                     // Freeing memory cannot help a request bigger than the
                     // card, and advice about batch sizes sends the reader
                     // after the wrong thing: it is usually a shape bug.
@@ -227,10 +276,14 @@ void* raw_allocate(int device, BackendMemoryKind kind, size_t size) {
                           "batch size, or set auto_flush_ops=0 to let the whole "
                           "graph be scheduled at once, which frees intermediates "
                           "earlier.";
-                    throw std::runtime_error(
-                        "out of memory on the accelerator: could not allocate " +
-                        readable_bytes(size) + " (" + S(size) + " bytes)" + where +
-                        ". CUDA said: " + cudaGetErrorString(error) + ". " + advice);
+                    // PyTorch's sentences first, so that what reads its
+                    // message reads this one; then what to do about it here.
+                    throw DeviceOutOfMemoryError(
+                        device_out_of_memory_message(
+                            device, size, info == cudaSuccess ? (int64)device_free : -1,
+                            info == cudaSuccess ? (int64)device_total : -1,
+                            process_device_memory(device)) +
+                        " " + advice);
                 }
                 LOGw << "Unable to alloc cuda device memory for size" << size
                      << ", falling back to cudaMallocManaged";
@@ -675,6 +728,8 @@ BackendOps make_cuda_backend() {
     ops.device_count = accelerator_count;
     ops.current_device = accelerator_current;
     ops.set_device = accelerator_set;
+    ops.caller_device = accelerator_caller_device;
+    ops.restore_caller_device = accelerator_restore_caller_device;
     ops.allocator = accelerator_allocator_for;
     ops.copy = copy;
     ops.copy_async = copy_async;

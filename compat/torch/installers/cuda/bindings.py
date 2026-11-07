@@ -51,8 +51,13 @@ from .api import (
     _api_cuda_is_initialized,
     _api_cuda_manual_seed,
     _api_cuda_manual_seed_all,
+    _api_cuda_memory__dump_snapshot,
+    _api_cuda_memory__record_memory_history,
     _api_cuda_memory__set_allocator_settings,
+    _api_cuda_memory__snapshot,
+    _api_cuda_memory_snapshot,
     _api_cuda_memory_stats,
+    _api_cuda_reset_accumulated_memory_stats,
     _api_cuda_seed,
     _api_cuda_seed_all,
     _api_cuda_set_rng_state,
@@ -228,6 +233,7 @@ def _install_cuda(g, registry=None):
     cuda.reset_peak_memory_stats = _reset_peak
     cuda.reset_max_memory_allocated = _reset_peak
     cuda.memory_stats = _api_cuda_memory_stats
+    cuda.reset_accumulated_memory_stats = _api_cuda_reset_accumulated_memory_stats
     # torch's mem_get_info is cudaMemGetInfo: the DRIVER's free/total for the whole
     # device, counting other processes, the CUDA context and every byte jittor's
     # pool holds -- not just the bytes currently live in Vars. Serving stacks size
@@ -246,7 +252,13 @@ def _install_cuda(g, registry=None):
     cuda.memory.max_memory_reserved = cuda.max_memory_reserved
     cuda.memory.memory_stats = cuda.memory_stats
     cuda.memory.memory_summary = cuda.memory_summary
+    cuda.memory.reset_accumulated_memory_stats = cuda.reset_accumulated_memory_stats
+    cuda.memory.reset_peak_memory_stats = cuda.reset_peak_memory_stats
     cuda.memory.CUDAPluggableAllocator = CUDAPluggableAllocator
+    cuda.memory._record_memory_history = _api_cuda_memory__record_memory_history
+    cuda.memory._snapshot = _api_cuda_memory__snapshot
+    cuda.memory._dump_snapshot = _api_cuda_memory__dump_snapshot
+    cuda.memory.memory_snapshot = cuda.memory_snapshot = _api_cuda_memory_snapshot
     cuda.CUDAPluggableAllocator = CUDAPluggableAllocator
     # rng state (trainer checkpoints save/restore it). jittor has no portable
     # CUDA rng-state handle, so use a small placeholder Var round-trip.

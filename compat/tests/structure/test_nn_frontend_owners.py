@@ -68,6 +68,7 @@ class TestNNFrontendOwners(unittest.TestCase):
         dtypes.dtype_name = str
         sys.modules[dtypes.__name__] = dtypes
         frontend = types.ModuleType("_nn_owner_probe.frontend")
+        frontend._default_tensor_dtype = lambda backend: "float32"
         frontend.tensor_frontend = lambda tensor_type, **scope: nullcontext()
         frontend.make_parameter_type = lambda backend, tensor_type: Parameter
         sys.modules[frontend.__name__] = frontend

@@ -8,6 +8,7 @@ from ..._runtime.dispatch import dispatch_context, register_kernel, select_kerne
 from ..base import (
     Optimizer,
     _grad_matches_param,
+    _normalize_param_group,
     _param_requires_grad,
     _state_buffer,
     _update_preserve_dtype,
@@ -93,7 +94,9 @@ def sgd_update(
         if low_precision
         else param * weight_decay + grad
     )
-    if momentum == 0 and not nesterov:
+    # Without momentum torch.optim.SGD neither reads nor writes the buffer,
+    # whatever `nesterov` says: pausing momentum keeps it for the resume.
+    if momentum == 0:
         return (
             _torch_scaled_add(param, dp, -lr, round_alpha=cpu_bfloat16)
             if low_precision
@@ -208,6 +211,7 @@ class SGD(Optimizer):
             pg[MOMENTUM_INITIALIZED] = [False] * len(pg["params"])
 
     def add_param_group(self, group):
+        _normalize_param_group(group)
         values = group["values"] = []
         for p in group["params"]:
             values.append(_momentum_buffer(p))
@@ -277,7 +281,7 @@ class SGD(Optimizer):
             if not active_index:
                 continue
             active = [(pg["params"][i], pg["grads"][i], pg["values"][i]) for i in active_index]
-            uses_momentum = not (momentum == 0 and not nesterov)
+            uses_momentum = momentum != 0
             if not uses_momentum:
                 # Dampening only scales momentum's recurrence. The fused ACL
                 # kernel applied it to the plain update as well.

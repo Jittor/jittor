@@ -3,6 +3,7 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <mutex>
@@ -10,6 +11,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include "runtime/profiler/step_trace.h"
+#include "runtime/profiler/memory_history.h"
 #include "runtime/launch_diagnostics.h"
 #include "runtime/executor_entry.h"
 #include "runtime/holder_state.h"
@@ -28,11 +30,12 @@ int step_trace_mode = 0;
 namespace {
 
 constexpr const char* kLayout =
-    "ops:seq,kind,batch,name,t_start,t_alloc,t_end,device,fused,shapes,site,out_bytes;"
+    "ops:seq,kind,batch,name,t_start,t_alloc,t_end,device,fused,shapes,site,out_bytes,stack,range,"
+    "t_compile,compile_ns,stacks;"
     "batches:batch,parent,t_begin,t_planned,t_compiled,t_launched,t_end;"
     "waits:t_begin,t_end,batch;"
     "memory:t,kind,device,bytes,allocator,allocation,op,var,var_desc,producer,site";
-constexpr int kOpFields = 12;
+constexpr int kOpFields = 17;
 constexpr int kBatchFields = 7;
 constexpr int kWaitFields = 3;
 constexpr int kMemFields = 11;
@@ -52,6 +55,8 @@ struct TraceState {
     vector<string> strings;
     unordered_map<string, int64> string_ids;
     unordered_map<uint64, int64> origin_ids;
+    // Op id -> the range open when it was built (step_trace_note_op_built).
+    unordered_map<int64, int64> built_in_range;
     vector<int64> ops, batches, waits, memory;
     int64 next_seq = 0;
     int64 next_batch = 0;
@@ -90,7 +95,7 @@ struct TraceState {
     }
 
     void clear() {
-        strings.clear(); string_ids.clear(); origin_ids.clear();
+        strings.clear(); string_ids.clear(); origin_ids.clear(); built_in_range.clear();
         ops.clear(); batches.clear(); waits.clear(); memory.clear();
         next_seq = next_batch = 0;
         truncated = false;
@@ -108,6 +113,18 @@ std::atomic<int64> graph_launches{0};
 struct PendingOp {
     int64 seq = -1, batch = -1, name = 0, t_start = 0, t_alloc = 0;
     int64 device = -1, fused = 0, shapes = 0, site = -1, out_bytes = 0;
+    // The Python stack that built the op (memory_history.h's stack ids), when
+    // op stacks are captured; 0 otherwise.
+    int64 stack = 0;
+    // The record_function range open on the building thread when the op was
+    // built, -1 for none: under lazy execution it runs later, outside it.
+    int64 range = -1;
+    // JIT compilation (or loading a cached kernel) inside the op: when it
+    // first started and how long it took in all (StepTraceCompileScope).
+    int64 t_compile = 0, compile_ns = 0;
+    // A fused op's members' stacks, distinct and in member order, as an
+    // interned "id,id,..." string; 0 for an unfused op.
+    int64 stacks = 0;
     int kind = ok_op;
 };
 
@@ -209,7 +226,8 @@ void end_record(int64 seq) {
     std::lock_guard<std::mutex> guard(s.mutex);
     if (!s.room(s.ops, kOpFields)) return;
     int64 rec[kOpFields] = {p.seq, p.kind, p.batch, p.name, p.t_start, p.t_alloc,
-                            t_end, p.device, p.fused, p.shapes, p.site, p.out_bytes};
+                            t_end, p.device, p.fused, p.shapes, p.site, p.out_bytes, p.stack,
+                            p.range, p.t_compile, p.compile_ns, p.stacks};
     s.ops.insert(s.ops.end(), rec, rec + kOpFields);
 }
 
@@ -308,7 +326,10 @@ int64 step_trace_range_begin(const string& name) {
         std::lock_guard<std::mutex> guard(s.mutex);
         sid = s.intern(name);
     }
-    return begin_record(ok_range, sid);
+    int64 seq = begin_record(ok_range, sid);
+    if (PREDICT_BRANCH_NOT_TAKEN(capture_op_stacks))
+        if (PendingOp* p = find_pending(seq)) p->stack = capture_memory_stack();
+    return seq;
 }
 
 void step_trace_range_end(int64 id) {
@@ -388,11 +409,45 @@ void StepTraceOpScope::named(Op* op, bool is_fused, int device) {
     }
     auto& s = state();
     std::lock_guard<std::mutex> guard(s.mutex);
+    auto built = s.built_in_range.find(root->id);
+    if (built != s.built_in_range.end()) p->range = built->second;
     p->name = s.intern(name);
     p->shapes = with_shapes ? s.intern(shapes) : 0;
     p->site = s.site(root->launch_origin);
+    p->stack = root->memory_stack;
+    if (is_fused) {
+        // Each member was built on its own line; the root's stack names one.
+        string ids;
+        vector<uint32> seen;
+        for (Op* member : ((FusedOp*)op)->ops) {
+            uint32 id = member->memory_stack;
+            if (!id || std::find(seen.begin(), seen.end(), id) != seen.end()) continue;
+            seen.push_back(id);
+            if (ids.size()) ids += ',';
+            ids += std::to_string(id);
+        }
+        p->stacks = s.intern(ids);
+    }
     p->device = device;
     p->out_bytes = out_bytes;
+}
+
+StepTraceCompileScope::StepTraceCompileScope() {
+    if (!PREDICT_BRANCH_NOT_TAKEN(step_trace_mode & st_ops) || current_op < 0) return;
+    // Only the op's own compile: one a batch nested inside it does while
+    // planning is that batch's compile phase.
+    PendingOp* p = find_pending(current_op);
+    if (!p || p->kind != ok_op || p->batch != current_batch) return;
+    seq = current_op;
+    t_begin = now_ns();
+}
+
+StepTraceCompileScope::~StepTraceCompileScope() {
+    if (seq < 0) return;
+    PendingOp* p = find_pending(seq);
+    if (!p) return;
+    if (!p->t_compile) p->t_compile = t_begin;
+    p->compile_ns += now_ns() - t_begin;
 }
 
 void StepTraceOpScope::allocated() {
@@ -497,8 +552,20 @@ void note_graph_launch_end() {
         if (it->kind == ok_graph_launch) { end_record(it->seq); return; }
 }
 
+Var* step_trace_current_var() { return current_var; }
+
+void step_trace_note_op_built(Op* op) {
+    for (auto it = pending_ops.rbegin(); it != pending_ops.rend(); ++it) {
+        if (it->kind != ok_range) continue;
+        auto& s = state();
+        std::lock_guard<std::mutex> guard(s.mutex);
+        if (s.built_in_range.size() < kMaxRecords) s.built_in_range[op->id] = it->seq;
+        return;
+    }
+}
+
 StepTraceVarScope::StepTraceVarScope(Var* v) {
-    if (PREDICT_BRANCH_NOT_TAKEN(step_trace_mode & st_memory)) {
+    if (PREDICT_BRANCH_NOT_TAKEN((step_trace_mode & st_memory) | memory_history_mode)) {
         on = true;
         saved = current_var;
         current_var = v;

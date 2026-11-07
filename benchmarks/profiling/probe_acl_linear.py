@@ -67,7 +67,7 @@ def main():
     args = parser.parse_args()
     if args.require_match and args.reference is None:
         parser.error('--require-match requires --reference')
-    from benchmark_diffusion_ascend import lab_output_path, resolve_source_root
+    from _paths import lab_output_path, resolve_source_root
     try:
         repo = resolve_source_root(args.source_root)
         args.output = lab_output_path(args.output, repo)

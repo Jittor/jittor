@@ -8,6 +8,7 @@
 #include <atomic>
 #include "core/common.h"
 #include "core/node.h"
+#include "core/storage_version.h"
 #include "core/var.h"  // VarPtr held inline by outputs_holder
 #include "codegen/jit_key.h"
 #include "utils/jit_cache_map.h"
@@ -44,6 +45,9 @@ struct HostExecutionScope {
 struct Op : Node {
     Float32PrecisionPolicy float32_precision;
     uint64 launch_origin = 0;
+    // The Python stack that built this op, while the memory history records
+    // stacks (runtime/profiler/memory_history.h); 0 otherwise.
+    uint32 memory_stack = 0;
     // Functional construction provenance; temporary fused wrappers never
     // replace the ownership of their original member producers.
     uint64 rematerialization_owner = 0;
@@ -57,6 +61,7 @@ struct Op : Node {
     // The outputs until the op maker takes them over. Inline: almost every op
     // has exactly one, and a heap vector here was an allocation per operator.
     SmallVector<VarPtr, 1> outputs_holder;
+    vector<SavedStorageVersion> saved_storage_versions;
     // Atomic: the parallel compiler constructs and destroys ops on its
     // worker threads, and these are read from the main thread.
     static std::atomic<int64> number_of_lived_ops;

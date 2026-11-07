@@ -18,6 +18,7 @@
 #include "core/var.h"
 #include "core/fused_op.h"
 #include "runtime/launch_diagnostics.h"
+#include "runtime/profiler/memory_history.h"
 
 namespace jittor {
 
@@ -299,6 +300,72 @@ struct LaunchOriginRegistration {
     ~LaunchOriginRegistration() { set_launch_origin_capture(nullptr); }
 };
 static LaunchOriginRegistration launch_origin_registration;
+
+// The whole Python stack, innermost frame first, as the memory history records
+// it for PyTorch's memory_viz (runtime/profiler/memory_history.h). Only asked
+// while that history records stacks, once per Op and per free.
+namespace {
+struct MemoryStackCaches {
+    // (code object, instruction) -> frame id. The code objects are held, so
+    // an address cannot come to name another one.
+    std::unordered_map<PyObject*, std::unordered_map<int, uint32>> codes;
+};
+MemoryStackCaches& memory_stack_caches() {
+    static MemoryStackCaches* caches = new MemoryStackCaches();  // outlives the interpreter
+    return *caches;
+}
+} // namespace
+
+static uint32 capture_python_memory_stack() {
+    if (!Py_IsInitialized() || !PyGILState_Check()) return 0;
+    auto& caches = memory_stack_caches();
+    PyObject *error_type=nullptr, *error_value=nullptr, *error_traceback=nullptr;
+    PyErr_Fetch(&error_type, &error_value, &error_traceback);
+    constexpr size_t kMaxFrames = 128;
+    uint32 frames[kMaxFrames];
+    size_t count = 0;
+    PyFrameObject* frame = PyEval_GetFrame(); // borrowed
+    Py_XINCREF(frame);
+    while (frame && count < kMaxFrames) {
+        PyObject* code = frame_code(frame);
+        if (!code) break;
+        auto found = caches.codes.find(code);
+        if (found == caches.codes.end()) {
+            Py_INCREF(code);
+            found = caches.codes.emplace(code, std::unordered_map<int, uint32>()).first;
+        }
+        const int lasti = frame_lasti(frame);
+        auto line = found->second.find(lasti);
+        uint32 id;
+        if (line != found->second.end()) id = line->second;
+        else {
+            PyObject* file = PyObject_GetAttrString(code, "co_filename");
+            PyObject* name = PyObject_GetAttrString(code, "co_name");
+            const char* path = file && PyUnicode_Check(file) ? PyUnicode_AsUTF8(file) : nullptr;
+            const char* func = name && PyUnicode_Check(name) ? PyUnicode_AsUTF8(name) : nullptr;
+            id = memory_history_intern_frame(path ? path : "", PyFrame_GetLineNumber(frame),
+                                             func ? func : "");
+            Py_XDECREF(file);
+            Py_XDECREF(name);
+            found->second.emplace(lasti, id);
+        }
+        frames[count++] = id;
+        Py_DECREF(code);
+        auto* previous = frame;
+        frame = frame_back(frame);
+        Py_DECREF(previous);
+    }
+    Py_XDECREF(frame);
+    PyErr_Clear();
+    PyErr_Restore(error_type, error_value, error_traceback);
+    return memory_history_intern_stack(frames, count);
+}
+
+struct MemoryStackRegistration {
+    MemoryStackRegistration() { set_memory_stack_capture(capture_python_memory_stack); }
+    ~MemoryStackRegistration() { set_memory_stack_capture(nullptr); }
+};
+static MemoryStackRegistration memory_stack_registration;
 
 // Attributed to the user's line, the one an operator's origin names, rather
 // than to whichever jittor frame called into C++.

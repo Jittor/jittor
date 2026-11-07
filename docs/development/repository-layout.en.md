@@ -74,6 +74,11 @@ wheel.
 
 ## Documentation ownership
 
+The root keeps bilingual READMEs, GitHub contribution and conduct entry points, and files
+required by build tools. Governance belongs in `docs/project/community/`; additional development
+container recipes belong in `tools/containers/`. The root `Dockerfile` remains the notebook image
+and CI entry point.
+
 External documentation is a single `docs/` tree, aimed at users and contributors: the entry
 point, tutorials, API reference, user guides, Torch compatibility, mechanism notes
 (`docs/notes/`), performance, release notes, community, and contributor documentation
@@ -98,9 +103,9 @@ Active indexes and inbound links must resolve; archived conclusions and their or
 evidence are **not rewritten into present-day success**. The documentation checks maintain this
 "active/archived" boundary.
 
-`agent/` contains only `README.md` and `skills/`; collaboration rules live in root `AGENTS.md`, and repository check scripts live in
-`tools/`. Choose a practical method from
-[skill catalogue](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/README.md).
+The main repository keeps root `AGENTS.md` for agent rules and navigation. Skills live in
+JittorEcosystem; repository tools remain in `tools/` and performance tools in `benchmarks/`. Choose a practical method from
+[skill catalogue](https://github.com/JittorEcosystem/jittor-dev-skills/blob/main/README.md).
 The community project list is in `docs/project/community/`; the ASV source configuration is
 `benchmarks/asv/asv.conf.json` -- nox derives absolute input and external output paths from
 that configuration and does not move benchmark run state into the working tree.
@@ -156,7 +161,7 @@ preserved only in Git history; the layout itself is guarded by the structural ga
 │   ├── distributed/  contrib/  tools/
 ├── compat/                   # 独立发行物（jittor-compat）：torch shim、fsdp2、triton；downstream integrations live in independent JittorEcosystem repositories
 ├── tools/  tests/  docs/  examples/  benchmarks/
-└── agent/                    # README.md 与 skills/
+└── AGENTS.md                 # Rules and external skill navigation
 ```
 
 Three rules the old tree did not state:

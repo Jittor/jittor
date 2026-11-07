@@ -63,6 +63,10 @@
 
 ## 文档归属
 
+根目录保留双语 README、GitHub 贡献与行为准则入口，以及构建工具要求的配置文件。
+治理规则归入 `docs/project/community/`；额外的开发容器配方归入 `tools/containers/`，
+根 `Dockerfile` 继续作为 notebook 镜像与 CI 的入口。
+
 对外文档只有 `docs/` 一棵树，面向使用者与贡献者：入口、教程、API 参考、使用指南、
 Torch 兼容、机制说明（`docs/notes/`）、性能、发布说明、社区，以及贡献者文档
 （`docs/development/`）。**源语言是中文。** 每篇文档成对维护：`X.md` 是中文默认页，
@@ -80,8 +84,9 @@ Torch 兼容、机制说明（`docs/notes/`）、性能、发布说明、社区�
 活跃索引与入链必须可解析；已归档的结论及其原始测试证据**不被改写成当前的成功**。
 文档检查维持这条"活跃/归档"边界。
 
-`agent/` 只包含 `README.md` 与 `skills/`；协作规则只在根 `AGENTS.md` 维护，仓库检查脚本在 `tools/`。按任务选用
-[技能目录](https://github.com/Jittor/jittor/blob/2.0-refactor/agent/README.md)。社区项目列表在
+主仓只保留根 `AGENTS.md` 作为开发代理规则与导航入口；技能独立维护在 JittorEcosystem，
+仓库检查脚本在 `tools/`，性能工具在 `benchmarks/`。按任务选用
+[技能目录](https://github.com/JittorEcosystem/jittor-dev-skills/blob/main/README.md)。社区项目列表在
 `docs/project/community/`；ASV 源配置在 `benchmarks/asv/asv.conf.json`——nox 从该配置推导绝对的输入
 与外部输出路径，不把基准运行状态搬进工作树。
 所有基准统一归属 [`benchmarks/`](https://github.com/Jittor/jittor/blob/2.0-refactor/benchmarks/README.md)：`asv/` 保存性能回归套件，
@@ -129,7 +134,7 @@ entry point。
 │   ├── distributed/  contrib/  tools/
 ├── compat/                   # 独立发行物（jittor-compat）：torch shim、fsdp2、triton；下游适配位于 JittorEcosystem 独立仓库
 ├── tools/  tests/  docs/  examples/  benchmarks/
-└── agent/                    # README.md 与 skills/
+└── AGENTS.md                 # 规则与外部技能导航
 ```
 
 旧树没有说明的三条规则：

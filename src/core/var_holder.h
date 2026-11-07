@@ -611,6 +611,13 @@ struct VarHolder {
     // @pyjt(__get__data)
     DataView data();
     
+    // Identity of a saved value; reading it never materializes a tensor.
+    // @pyjt(_saved_storage_version)
+    inline vector<uint64> saved_storage_version() {
+        auto token = var->storage_version_token();
+        return {uint64(var->id), token->identity, token->value.load(std::memory_order_relaxed)};
+    }
+
     // @pyjt(__get__raw_ptr)
     uint64 raw_ptr();
 
@@ -811,6 +818,14 @@ struct VarHolder {
      */
     // @pyjt(__get__grad)
     int grad();
+
+    // A second holder of this same Var. `jt.Function` rebinds an input it
+    // saved onto the caller's Var with it once the tape in between has run,
+    // when `_input` can no longer reach across.
+    // @pyjt(_alias)
+    inline VarHolder* _alias() {
+        return new VarHolder(var);
+    }
 
     // @pyjt(_input)
     inline VarHolder* _input(int i) {

@@ -10,7 +10,7 @@ benchmarks and support tables belong to the corresponding
 [JittorEcosystem repository](https://github.com/JittorEcosystem). Add new library
 acceptance workflows there; reduce shared framework bugs to focused main-repo
 regressions. The triage boundary is documented in
-[downstream-library-adaptation](../../agent/skills/downstream-library-adaptation/SKILL.md).
+[downstream-library-adaptation](https://github.com/JittorEcosystem/jittor-dev-skills/blob/main/skills/downstream-library-adaptation/SKILL.md).
 
 ## Entry points
 

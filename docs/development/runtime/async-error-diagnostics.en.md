@@ -70,3 +70,32 @@ Suggested CUDA acceptance command:
 CUDA_VISIBLE_DEVICES=0 JITTOR_TORCH_SHIM=1 JT_SYNC=0 trace_py_var=0 \
   python -m pytest -q -s tests/backends/cuda/test_async_error_location.py
 ```
+
+## Checking unreported device errors at normal exit
+
+On normal exit (including `sys.exit(0)`), Jittor waits for submitted asynchronous
+work and every device with recorded submissions on each backend. It does not
+materialize unsubmitted lazy graphs. Switching the current device does not
+exclude earlier devices. Submission tracking is independent of the bounded
+launch history and survives history eviction.
+
+An unreported device error preserves the original exception and recent launch
+candidates in the exit diagnostic, then terminates the process with status 1.
+An existing uncaught exception or nonzero exit status keeps its original cause.
+
+Reported CUDA sticky errors are tracked per device. Exit does not report the
+same lost context again, but another device's new error must still surface.
+Teardown errors with unknown device ownership remain visible. Catching an
+exception does not recover a lost context; restart the process before reuse.
+
+Regression tests cover clean single-device exit, unread faults, caught faults,
+and actual two-device cases involving a noncurrent device or a fault after
+another device's error was caught. Other backends require separate hardware
+validation.
+
+CUDA sticky faults may propagate to other devices in the same process. Once a
+fault has been reported, exit deduplicates sticky failures on devices with no
+subsequent submissions; non-sticky failures always propagate. Other devices with unreported failures and new
+work must still report failure. New-work tracking starts at the first loss and
+is not cleared by repeated errors from another device. This is an exit-diagnostic
+deduplication policy, not proof of fault origin.

@@ -49,16 +49,6 @@ venv/
 /data/
 extern/mkl/mkldnn_lnx*/*
 
-# Agent deliverables are Markdown; transient state and other generated files stay
-# outside the repository or under the ignored worklog/cache paths below.
-/agent/*
-!/agent/README.md
-!/agent/skills/
-!/agent/skills/**
-/agent/skills/**/.cache/
-/agent/skills/**/__pycache__/
-/agent/worklogs/
-
 # Large experiments and runtime state belong in ../jittor-lab. Do not ignore
 # repository-root copies by project name: layout checks should expose them.
 /core

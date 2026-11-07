@@ -122,7 +122,7 @@ Torch 程序需激活独立兼容命名空间。分派按 SoC、dtype、轴、�
 [历史问题总账](https://github.com/Jittor/jittor/blob/3cf654e15aea6de02e5c9b0b4064e286ea19b24c/agent/manuals/known-issues.md)和
 [历史硬件验收清单](https://github.com/Jittor/jittor/blob/3cf654e15aea6de02e5c9b0b4064e286ea19b24c/agent/manuals/deferred-hardware.md)保留此前边界，
 不因文档清理关闭这些条目。
-性能与完整输出对拍方法见[性能 skill](../../../agent/skills/jittor-performance-profiling/SKILL.md)。
+性能与完整输出对拍方法见[性能 skill](https://github.com/JittorEcosystem/jittor-dev-skills/blob/main/skills/jittor-performance-profiling/SKILL.md)。
 此前的[完整模型与效果记录](https://github.com/Jittor/jittor/blob/eecff5ce5aa0d02aba3a246fcfb5632596732b44/docs/results/2026-11-02-vision-ascend310p-replay.md)
 固定在旧实现提交，不代表后续整合的速度、支持范围或所有设备已经验证。
 
