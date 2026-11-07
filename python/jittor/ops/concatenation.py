@@ -264,7 +264,7 @@ def concat(arr, dim=0):
         # The native destination follows ambient construction placement. A
         # conflicting explicit input must take the scoped Python path, just
         # like an explicitly CPU-placed input already does.
-        conflicting = (placement >= 0 and ambient[0] >= 0
+        conflicting = (placement >= 0 and ambient is not None and ambient[0] >= 0
                        and ambient != (placement, max(int(first.device_id), 0)))
         native_placement = (placement < 0 or placement == 1) and not conflicting
         if isinstance(first, jt.Var) and native_placement \

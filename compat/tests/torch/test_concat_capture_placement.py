@@ -23,3 +23,19 @@ def test_fused_concat_helpers_ignore_conflicting_module_device(input_device, amb
     assert output.device.type == input_device
     assert output.location() == ('device' if input_device=='cuda' else 'cpu')
     np.testing.assert_array_equal(output.cpu().numpy(), [[0,1,2],[0,1,2]])
+
+
+@pytest.mark.parametrize('device', ['cpu', 'cuda'])
+@pytest.mark.parametrize('operation', ['cat', 'stack'])
+def test_explicit_inputs_without_a_module_placement(device, operation):
+    if device == 'cuda' and not jt.has_cuda:
+        pytest.skip('CUDA unavailable')
+    assert jt.core._current_tensor_placement() is None
+    left = torch.arange(3, device=device)
+    right = torch.arange(3, device=device)
+    output = getattr(torch, operation)([left, right], dim=0)
+    output.sync()
+    assert output.device.type == device
+    assert output.location() == ('device' if device == 'cuda' else 'cpu')
+    expected = [0, 1, 2, 0, 1, 2] if operation == 'cat' else [[0, 1, 2], [0, 1, 2]]
+    np.testing.assert_array_equal(output.cpu().numpy(), expected)

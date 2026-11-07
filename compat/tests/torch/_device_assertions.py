@@ -9,5 +9,3 @@ def require_residency(value, device):
         value.sync()
         assert value.location() == ('device' if device == 'cuda' else 'cpu')
         assert jt.core.dispatch_context([value])[0] == device
-
-
