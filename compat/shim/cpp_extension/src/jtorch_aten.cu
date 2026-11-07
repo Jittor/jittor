@@ -330,7 +330,8 @@ static jittor::VarHolder* make_reinterpret_view_vh(jittor::Var* src, const jitto
     jittor::VarPtr vp = maker(src, shape, to_ns(st));
     return new jittor::VarHolder(std::move(vp));
 }
-static jittor::VarHolder* make_var(const jittor::NanoVector& shape, ScalarType st, bool cpu) {
+static jittor::VarHolder* make_var(const jittor::NanoVector& shape, ScalarType st, bool cpu,
+                                    bool requires_grad=false) {
     jittor::VarHolder* vh = make_empty_vh(shape, st);
     if (cpu) {
         sync_for_storage(vh);
@@ -338,6 +339,13 @@ static jittor::VarHolder* make_var(const jittor::NanoVector& shape, ScalarType s
         jittor::migrate_to_cpu(vh->var, jittor::runtime_executor().allocator);
 #endif
     }
+    // Torch factories are frozen unless TensorOptions explicitly asks for a
+    // trainable leaf. Jittor's native empty op has the opposite historical
+    // default, so normalize it at the extension boundary.
+    if (requires_grad)
+        vh->start_grad();
+    else
+        vh->stop_grad();
     return vh;
 }
 static bool opt_is_cpu(const TensorOptions& o) { return o.has_device_ && o.device_ == DeviceType::CPU; }
@@ -695,6 +703,26 @@ Tensor tensor_from_pyvar_readonly(void* obj) {
                 collect_stats ? vh_nbytes_for_stats(vh) : 0);
     return adopt(vh, /*owns=*/false);
 }
+static PyObject* loaded_torch_tensor_type() {
+    // Do not import torch here: extension return conversion can run during an
+    // import. Use the deployed facade only when it is already initialized.
+    PyObject* module = PyDict_GetItemString(PyImport_GetModuleDict(), "torch");
+    if (!module)
+        return nullptr;
+    PyObject* type = PyObject_GetAttrString(module, "Tensor");
+    if (!type) {
+        PyErr_Clear();
+        return nullptr;
+    }
+    if (!PyType_Check(type) ||
+            !PyType_IsSubtype(reinterpret_cast<PyTypeObject*>(type),
+                              &jittor::PyjtVarHolder.ht_type)) {
+        Py_DECREF(type);
+        return nullptr;
+    }
+    return type;  // new reference
+}
+
 void* tensor_to_pyvar(const Tensor& t) {
     // Ext kernels launch on stream 0 through the c10 stream shim. Returning
     // without a global device barrier lets the next Jittor stream-0 op consume
@@ -713,7 +741,53 @@ void* tensor_to_pyvar(const Tensor& t) {
         stat_add_if(collect_stats, torch_ext_stats().output_bytes,
                     (long long)t.numel() * t.element_size());
     }
-    return (void*)jittor::to_py_object<jittor::VarHolder*>(clone_holder(t._vh()));
+    // An extension can return a newly allocated Tensor after the Python
+    // frontend scope which supplied its arguments has ended. Preserve the
+    // already-loaded torch facade for that conversion instead of exposing a
+    // raw jittor_core.Var without torch methods such as data_ptr().
+    PyObject* selected = jittor::current_tensor_frontend_type();
+    bool native_selected = selected ==
+        reinterpret_cast<PyObject*>(&jittor::PyjtVarHolder.ht_type);
+    Py_DECREF(selected);
+    PyObject* frontend = native_selected ? loaded_torch_tensor_type() : nullptr;
+    PyObject* token = nullptr;
+    if (frontend) {
+        try {
+            token = jittor::set_tensor_frontend_type(frontend);
+        } catch (...) {
+            Py_DECREF(frontend);
+            throw;
+        }
+    }
+
+    PyObject* result = nullptr;
+    try {
+        result = jittor::to_py_object<jittor::VarHolder*>(clone_holder(t._vh()));
+    } catch (...) {
+        if (token) {
+            try {
+                jittor::reset_tensor_frontend_type(token);
+            } catch (...) {
+                PyErr_Clear();
+            }
+            Py_DECREF(token);
+        }
+        Py_XDECREF(frontend);
+        throw;
+    }
+    if (token) {
+        try {
+            jittor::reset_tensor_frontend_type(token);
+        } catch (...) {
+            Py_DECREF(result);
+            Py_DECREF(token);
+            Py_DECREF(frontend);
+            throw;
+        }
+        Py_DECREF(token);
+    }
+    Py_XDECREF(frontend);
+    return (void*)result;
 }
 
 } // namespace detail
@@ -816,7 +890,8 @@ Tensor& Tensor::resize_(IntArrayRef shape) {
 // --------- factories (device-aware: CUDA default, CPU honored) --------------
 Tensor empty(IntArrayRef size, TensorOptions opt) {
     ScalarType st = opt.has_dtype_ ? opt.dtype_ : ScalarType::Float;
-    return detail::adopt(make_var(to_nv(size), st, opt_is_cpu(opt)), true);
+    return detail::adopt(make_var(to_nv(size), st, opt_is_cpu(opt),
+                                  opt.has_requires_grad_ && opt.requires_grad_), true);
 }
 Tensor empty_like(const Tensor& t) {
     bool cpu = !detail::vh_is_cuda(t._vh());
@@ -937,6 +1012,19 @@ Tensor full(IntArrayRef size, double value, TensorOptions opt) {
     }
 }
 Tensor ones(IntArrayRef size, TensorOptions opt) { return full(size, 1.0, opt); }
+
+bool Tensor::is_pinned() const {
+    if (!defined() || !is_cpu() || numel() == 0) return false;
+    cudaPointerAttributes attributes{};
+    const cudaError_t status = cudaPointerGetAttributes(&attributes, data_ptr_void());
+    if (status == cudaErrorInvalidValue || status == cudaErrorNoDevice ||
+        status == cudaErrorInsufficientDriver) {
+        cudaGetLastError();
+        return false;
+    }
+    if (status != cudaSuccess) throw std::runtime_error(cudaGetErrorString(status));
+    return attributes.type == cudaMemoryTypeHost;
+}
 
 Tensor from_blob(const void* data, IntArrayRef size, TensorOptions opt) {
     ScalarType st = opt.has_dtype_ ? opt.dtype_ : ScalarType::Float;
@@ -1397,3 +1485,16 @@ Tensor Tensor::ne_scalar(double other) const {
 }
 
 } // namespace jtorch
+
+size_t torch::elementSize(jtorch::ScalarType scalar) {
+    using jtorch::ScalarType;
+    switch (scalar) {
+        case ScalarType::ComplexHalf: return 4;
+        case ScalarType::ComplexFloat: return 8;
+        case ScalarType::ComplexDouble: return 16;
+        default: break;
+    }
+    auto width = jtorch::scalar_size(scalar);
+    if (!width) throw std::runtime_error("elementSize requires a defined scalar type");
+    return static_cast<size_t>(width);
+}

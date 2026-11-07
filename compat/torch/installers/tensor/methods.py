@@ -10,6 +10,10 @@ from .method_api import (
     _api_add,
     _api_sub,
     _api_mul,
+    _api_lerp,
+    _api_lerp_,
+    _api_addcmul_,
+    _api_addcdiv_,
     _api_div,
     _api_clamp_min,
     _api_clamp_max,
@@ -35,6 +39,8 @@ from .method_api import (
     _api_storage,
     _api_untyped_storage,
     _api_data_ptr,
+    _api_share_memory,
+    _api_is_shared,
     _api_is_contiguous,
     _api_is_leaf,
     _api_is_sparse,
@@ -284,6 +290,10 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # stop-grad policy. Torch instead connects it to a differentiable RHS,
     # just as add_/sub_/mul_/div_ already do through the shared _ip owner.
     Var.__iadd__ = _api_add
+    Var.lerp = _api_lerp
+    Var.lerp_ = _api_lerp_
+    Var.addcmul_ = _api_addcmul_
+    Var.addcdiv_ = _api_addcdiv_
     Var.__isub__ = _api_sub
     Var.__imul__ = _api_mul
     Var.__itruediv__ = _api_div
@@ -617,6 +627,10 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         Var.is_pinned = _is_pinned
     if not hasattr(Var, "pin_memory"):
         Var.pin_memory = _pin_memory
+    if not hasattr(Var, "share_memory_"):
+        Var.share_memory_ = _api_share_memory
+    if not hasattr(Var, "is_shared"):
+        Var.is_shared = _api_is_shared
     # These two used to contradict each other -- `pin_memory()` returned
     # `self` (a device tensor, on an accelerator) while `is_pinned()` was a
     # bare `return False` -- so state the one restriction that is left.
@@ -727,5 +741,5 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         'Shares the public function implementation and preserves native explicit autocast policy')
 
     register_api_bindings(Var, 'torch.Tensor',
-        ('T', '__iadd__', '__isub__', '__imul__', '__itruediv__', '__deepcopy__', '__getitem__', '__hash__', '__invert__', '__ne__', '__reduce__', '__reduce_ex__', '__setitem__', 'add_', 'addmm', 'argwhere', 'as_strided', 'backward', 'baddbmm', 'clamp', 'clamp_', 'clip', 'clip_', 'contiguous', 'copy_', 'cpu', 'cuda', 'cumprod', 'cumsum', 'data', 'data_ptr', 'detach', 'device', 'div_', 'dtype', 'element_size', 'exponential_', 'fill_', 'fill_diagonal_', 'get_device', 'grad', 'grad_fn', 'is_complex', 'is_contiguous', 'is_cpu', 'is_cuda', 'is_floating_point', 'is_leaf', 'is_meta', 'is_mps', 'is_nested', 'is_pinned', 'is_signed', 'is_xpu', 'mT', 'mul_', 'multiply_', 'narrow', 'ne', 'nelement', 'new_empty', 'new_full', 'new_ones', 'new_tensor', 'new_zeros', 'nonzero', 'norm', 'normal_', 'numpy', 'pin_memory', 'random_', 'requires_grad', 'requires_grad_', 'retain_grad', 'retains_grad', 'set_', 'squeeze', 'storage', 'storage_offset', 'stride', 'sub_', 'tile', 'to', 'tolist', 'type', 'type_as', 'uniform_', 'untyped_storage', 'where', 'zero_') + tuple(_BINARY_APIS.keys() | _CAST_APIS.keys() | _UNARY_INPLACE_APIS.keys()),
+        ('T', '__iadd__', '__isub__', '__imul__', '__itruediv__', '__deepcopy__', '__getitem__', '__hash__', '__invert__', '__ne__', '__reduce__', '__reduce_ex__', '__setitem__', 'add_', 'addcdiv_', 'addcmul_', 'addmm', 'argwhere', 'as_strided', 'backward', 'baddbmm', 'clamp', 'clamp_', 'clip', 'clip_', 'contiguous', 'copy_', 'cpu', 'cuda', 'cumprod', 'cumsum', 'data', 'data_ptr', 'detach', 'device', 'div_', 'dtype', 'element_size', 'exponential_', 'fill_', 'fill_diagonal_', 'get_device', 'grad', 'grad_fn', 'is_complex', 'is_contiguous', 'is_cpu', 'is_cuda', 'is_floating_point', 'is_leaf', 'is_meta', 'is_mps', 'is_nested', 'is_pinned', 'is_shared', 'is_signed', 'is_xpu', 'lerp', 'lerp_', 'mT', 'mul_', 'multiply_', 'narrow', 'ne', 'nelement', 'new_empty', 'new_full', 'new_ones', 'new_tensor', 'new_zeros', 'nonzero', 'norm', 'normal_', 'numpy', 'pin_memory', 'random_', 'requires_grad', 'requires_grad_', 'retain_grad', 'retains_grad', 'set_', 'share_memory_', 'squeeze', 'storage', 'storage_offset', 'stride', 'sub_', 'tile', 'to', 'tolist', 'type', 'type_as', 'uniform_', 'untyped_storage', 'where', 'zero_') + tuple(_BINARY_APIS.keys() | _CAST_APIS.keys() | _UNARY_INPLACE_APIS.keys()),
         Fidelity.APPROXIMATE, 'Tensor operations share the native Var/Op graph and explicit frontend state; unsupported layouts, device capabilities, and retained compatibility approximations remain restricted')

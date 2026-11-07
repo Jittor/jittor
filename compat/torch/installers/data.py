@@ -541,12 +541,11 @@ def _checkpoint(fn, *args, use_reentrant=None, preserve_rng_state=True,
                 context_fn=None, determinism_check="default", debug=False, **kwargs):
     """Adapt Torch's reentrant checkpoint to native activation replay.
 
-    Nested tensors and keyword arguments are supported. Non-reentrant replay,
-    custom context_fn and debug tracing are deliberately rejected until their
-    distinct contracts have native implementations.
+    Nested tensors and keyword arguments are supported. For the tensor replay
+    subset shared by both Torch checkpoint modes, either ``use_reentrant``
+    selection uses the same native rematerialization path. Custom context_fn and
+    debug tracing remain separate contracts.
     """
-    if use_reentrant is False:
-        raise NotImplementedError("non-reentrant activation checkpointing is not implemented")
     if context_fn is not None or debug or determinism_check != "default":
         raise NotImplementedError("checkpoint supports only default replay contexts and determinism checks")
     from ..amp import autocast, autocast_is_enabled, autocast_configured_dtype, autocast_cache_enabled

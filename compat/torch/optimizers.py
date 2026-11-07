@@ -33,6 +33,13 @@ from .optimizer_api import (
     _torch_optimizer_kind,
     _torch_param_steps,
     _zero_grad_compat,
+    DeviceDict,
+    _default_to_fused_or_foreach,
+    _disable_dynamo_if_unsupported,
+    _get_capturable_supported_devices,
+    _get_value,
+    _stack_if_compiling,
+    _view_as_real,
 )
 from .context import get_install_context
 from .fidelity import Fidelity, register_api_bindings
@@ -118,6 +125,11 @@ def _install_optimizers(g, registry=None):
             _modules["torch.optim.optimizer"] = _optim_sub
         _optim_sub.Optimizer = Base
         _optim_sub.ParamsT = object
+        for _name in ("DeviceDict", "_default_to_fused_or_foreach",
+                      "_disable_dynamo_if_unsupported",
+                      "_get_capturable_supported_devices", "_get_value",
+                      "_stack_if_compiling", "_view_as_real"):
+            _optim_sub.__dict__[_name] = globals()[_name]
         return
     import weakref as _weakref
     _native_steps = {}
@@ -198,6 +210,11 @@ def _install_optimizers(g, registry=None):
         _modules["torch.optim.optimizer"] = _optim_sub
     _optim_sub.Optimizer = Base
     _optim_sub.ParamsT = object
+    for _name in ("DeviceDict", "_default_to_fused_or_foreach",
+                  "_disable_dynamo_if_unsupported",
+                  "_get_capturable_supported_devices", "_get_value",
+                  "_stack_if_compiling", "_view_as_real"):
+        _optim_sub.__dict__[_name] = globals()[_name]
 
     # jittor's load_state_dict runs a dfs that calls .stop_grad() on every Var
     # it meets -- including params nested under param_groups -- freezing all

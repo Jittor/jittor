@@ -109,7 +109,15 @@ def _placement_request(backend, device, like=None, default_placement=True):
             # same backend and device".
             device = default_device()
     numeric_index = isinstance(device, int) and not isinstance(device, bool)
-    name = "cuda" if numeric_index else (getattr(device, "type", None) or str(device).split(":", 1)[0])
+    if numeric_index:
+        name = "cuda"
+    elif isinstance(device, str):
+        # ``str, Enum`` device values (DeepSpeed's OffloadDeviceEnum) compare
+        # and split like their public value even though ``str(value)`` spells
+        # the enum member name on modern Python.
+        name = device.split(":", 1)[0]
+    else:
+        name = getattr(device, "type", None) or str(device).split(":", 1)[0]
     # Jittor has no meta storage backend. Transformers uses ``device='meta'``
     # while inspecting checkpoint shapes; materialize those temporary tensors
     # on host so the subsequent real-weight load can proceed.
@@ -362,21 +370,139 @@ def make_parameter_type(backend, tensor_type):
 #: the tensor must not carry.
 _RUNTIME_CACHES = ("_jittor_conv_filter",)
 
+# A shared-memory tensor keeps the OS mapping alive on its Python holder.  The
+# handle itself is deliberately not pickled; a spawned process reopens the
+# mapping by name in rebuild_shared_tensor below.
+_SHARED_MEMORY_HANDLE = "_torch_shared_memory_handle"
+_SHARED_MEMORY_SPEC = "_torch_shared_memory_spec"
+
 
 def _python_state(value):
     state = value.__dict__.copy()
     for name in _RUNTIME_CACHES:
         state.pop(name, None)
+    state.pop(_SHARED_MEMORY_HANDLE, None)
     return state
 
 
 def reduce_tensor(value):
+    shared = getattr(value, _SHARED_MEMORY_SPEC, None)
+    if shared is not None:
+        # .data aliases carry their parameter owner in Python state.  The
+        # shared allocation already contains all information needed to rebuild
+        # the alias, and serializing the owner would copy the whole parameter
+        # graph into the optimizer process.
+        state = _python_state(value)
+        state.pop("_torch_data_owner", None)
+        state.pop("_torch_data_path", None)
+        return (
+            rebuild_shared_tensor,
+            (type(value), *shared, value.requires_grad),
+            state,
+        )
     return (
         rebuild_tensor,
         (type(value), value.numpy(), _jittor_dtype_name(value.dtype), value.requires_grad,
          str(value.device)),
         _python_state(value),
     )
+
+
+def _shared_numpy_dtype(dtype):
+    import numpy as np
+    return {
+        "bool": np.bool_, "uint8": np.uint8, "int8": np.int8,
+        "uint16": np.uint16, "int16": np.int16,
+        "uint32": np.uint32, "int32": np.int32,
+        "uint64": np.uint64, "int64": np.int64,
+        "float16": np.float16, "float32": np.float32,
+        "float64": np.float64, "complex64": np.complex64,
+        "complex128": np.complex128,
+    }.get(dtype)
+
+
+def _tensor_from_shared_memory(tensor_type, name, shape, dtype):
+    """Open name and make a CPU Var that aliases its bytes without a copy."""
+    import numpy as np
+    from multiprocessing import shared_memory
+
+    backend = tensor_type._frontend_backend
+    np_dtype = _shared_numpy_dtype(dtype)
+    raw_dtype = np.uint16 if dtype == "bfloat16" else np_dtype
+    if raw_dtype is None:
+        raise TypeError("share_memory_ does not support dtype %s" % dtype)
+    handle = shared_memory.SharedMemory(name=name)
+    array = np.ndarray(tuple(shape), dtype=raw_dtype, buffer=handle.buf)
+    # reuse_array makes ArrayOp retain the ndarray allocation instead of
+    # copying it.  Disable the usual 64->32 narrowing and force host placement:
+    # both are required for the reopened Var to address the exact shared bytes.
+    with backend.flag_scope(use_cuda=0, reuse_array=1,
+                            auto_convert_64_to_32=0):
+        value = backend.array(array)
+        if dtype == "bfloat16":
+            value = backend.reinterpret_view(value, tuple(shape), "bfloat16")
+    value = tensor_type(value).detach()
+    setattr(value, _SHARED_MEMORY_HANDLE, handle)
+    setattr(value, _SHARED_MEMORY_SPEC,
+            (name, tuple(int(s) for s in shape), dtype))
+    return value
+
+
+def share_tensor_memory(value):
+    """Move a CPU tensor's storage into named shared memory in place."""
+    if getattr(value, _SHARED_MEMORY_SPEC, None) is not None:
+        return value
+    if bool(getattr(value, "is_cuda", False)):
+        # Matches torch: CUDA tensors do not need share_memory_ because
+        # multiprocessing transports them through the CUDA IPC path.
+        return value
+
+    import numpy as np
+    from multiprocessing import shared_memory
+
+    dtype = _jittor_dtype_name(value.dtype)
+    np_dtype = _shared_numpy_dtype(dtype)
+    raw_dtype = np.uint16 if dtype == "bfloat16" else np_dtype
+    if raw_dtype is None:
+        raise TypeError("share_memory_ does not support dtype %s" % dtype)
+    shape = tuple(int(s) for s in value.shape)
+    nbytes = int(value.numel()) * np.dtype(raw_dtype).itemsize
+    # SharedMemory refuses size=0.  A one-byte mapping still correctly backs a
+    # zero-element ndarray and has no observable tensor element.
+    handle = shared_memory.SharedMemory(create=True, size=max(1, nbytes))
+    shared_array = np.ndarray(shape, dtype=raw_dtype, buffer=handle.buf)
+    source = np.asarray(value.numpy())
+    if dtype == "bfloat16":
+        # Jittor exports bfloat16 through float32.  Preserve the high 16 bits
+        # that form the actual bfloat16 storage representation.
+        shared_array[...] = (source.astype(np.float32).view(np.uint32) >> 16).astype(np.uint16)
+    else:
+        shared_array[...] = source.astype(raw_dtype, copy=False)
+
+    shared = _tensor_from_shared_memory(type(value), handle.name, shape, dtype)
+    # Keep the creating handle as the owner.  The temporary opener is no longer
+    # needed once its ndarray-backed Var has retained the mapping.
+    opener = getattr(shared, _SHARED_MEMORY_HANDLE)
+    handles = (handle, opener)
+    setattr(shared, _SHARED_MEMORY_HANDLE, handles)
+
+    target = getattr(value, "_torch_data_owner", None)
+    if target is None:
+        target = value
+    target._update(shared, logical_write=False)
+    spec = (handle.name, shape, dtype)
+    setattr(target, _SHARED_MEMORY_HANDLE, handles)
+    setattr(target, _SHARED_MEMORY_SPEC, spec)
+    setattr(value, _SHARED_MEMORY_HANDLE, handles)
+    setattr(value, _SHARED_MEMORY_SPEC, spec)
+    return value
+
+
+def rebuild_shared_tensor(tensor_type, name, shape, dtype, requires_grad):
+    value = _tensor_from_shared_memory(tensor_type, name, shape, dtype)
+    if requires_grad:
+        value.requires_grad_(True)
+    return value
 
 
 def rebuild_tensor(tensor_type, array, dtype, requires_grad, device=None):
