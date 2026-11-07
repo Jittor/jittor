@@ -233,7 +233,15 @@ class Module:
         # Hooks are per-INSTANCE and are consulted here, so registering one no
         # longer rewrites the class. See ``_hooks``.
         if self._has_hooks():
-            return self.__hooked_call__(*args, **kw)
+            # Hooked roots are still roots: their children must not start
+            # independent automatic replays. A child replay can skip Python
+            # forward wrappers installed by the parent to collect outputs.
+            depth = Module._call_depth
+            Module._call_depth = depth + 1
+            try:
+                return self.__hooked_call__(*args, **kw)
+            finally:
+                Module._call_depth = depth
         # A submodule of a call already running is part of that call's graph,
         # not a graph of its own, so only the outermost call consults the
         # policy. Ordering matters for cost: this branch is taken by every
