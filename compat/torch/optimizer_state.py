@@ -241,5 +241,23 @@ class _OptState:
         return [self.get(p, {}) for p in self._params()]
     def items(self):
         return [(p, self.get(p, {})) for p in self._params()]
+    def setdefault(self, param, default=None):
+        marker = object()
+        state = self.get(param, marker)
+        if state is not marker:
+            return state
+        if self._find(param)[0] is None:
+            raise KeyError(param)
+        if default is None:
+            default = {}
+        if not isinstance(default, Mapping):
+            raise TypeError("optimizer state must be a mapping")
+        values = dict(default)
+        if values:
+            self[param] = values
+            return self[param]
+        # Return a live empty entry: writes through this object initialize the
+        # optimizer's native buffers exactly as writes through state[param].
+        return _ParamState(self, param, {})
     def get_state_dict_key(self, param):
         return self._find(param)
