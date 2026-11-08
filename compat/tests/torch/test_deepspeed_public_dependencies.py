@@ -25,8 +25,6 @@ class TestDeepSpeedPublicDependencies:
     def test_missing_native_algorithms_reject_construction(self, device):
         # This is an explicit limitation of the compatibility backend, not an
         # optimizer numerical test. Merely importing these names is no support.
-        with pytest.raises(NotImplementedError, match="Adagrad"):
-            torch.optim.Adagrad([torch.nn.Parameter(torch.ones(2, device=device))])
         with pytest.raises(NotImplementedError, match="GradBucket"):
             torch.distributed.GradBucket()
 

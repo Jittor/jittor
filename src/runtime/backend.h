@@ -63,7 +63,7 @@ struct BackendExecutionPolicy {
 // The registry copies this versioned table; callback code and allocator pools
 // must outlive the runtime. Published callbacks retain the serialized contract.
 struct BackendOps {
-    uint32 abi_version = 3;
+    uint32 abi_version = 4;
     uint32 struct_size = sizeof(BackendOps);
     BackendId id = BackendId::Cpu;
     const char* name = nullptr;
@@ -74,6 +74,16 @@ struct BackendOps {
     // `aclrtSetDevice` after a failed `aclrtGetDevice`) rather than failing:
     // the async-execution worker and any dataloader thread arrive there.
     void (*set_device)(int) = nullptr;
+    // The device the calling thread's runtime has current -- what a library
+    // that set it itself (CuPy, torch) sees, which `current_device`'s cache
+    // does not know about -- and putting it back after Jittor ran. Restoring
+    // also drops that cache, so Jittor binds its own device again before it
+    // next launches. Optional; the DLPack boundary uses them (dlpack.cc).
+    int (*caller_device)() = nullptr;
+    void (*restore_caller_device)(int) = nullptr;
+    // Human-readable accelerator model (CANN SoC name, GPU marketing name,
+    // ...). Backends without one leave this null; the binding then reports "".
+    const char* (*device_name)(int) = nullptr;
     Allocator* (*allocator)(int, BackendMemoryKind) = nullptr;
     void (*copy)(void*, Device, const void*, Device, size_t, bool) = nullptr;
     void (*copy_async)(void*, Device, const void*, Device, size_t, BackendStream) = nullptr;
@@ -149,10 +159,10 @@ EXTERN_LIB void backend_copy_async(void* dst, Device dst_device, const void* src
 EXTERN_LIB void backend_synchronize(Device device);
 EXTERN_LIB BackendStream backend_stream(Device device, BackendStreamKind kind);
 EXTERN_LIB BackendEvent backend_event(Device device, bool timing = false);
-// The accelerator's deterministic-algorithm policy. Unlike graph capture
-// below, these throw where the backend has no such control: "deterministic"
-// is a promise about results, and a caller that asked for it has no fallback
-// that would still keep it.
+// The accelerator provider's deterministic-algorithm policy. With neither
+// callback, Jittor enforcement is disabled: querying or setting false is valid,
+// while setting true is refused. Partial providers are invalid. A complete
+// provider owns the actual policy and must confirm every write by readback.
 // @pyjt(backend_set_deterministic_algorithms)
 void backend_set_deterministic_algorithms(bool enabled);
 // @pyjt(backend_get_deterministic_algorithms)
@@ -182,6 +192,10 @@ vector<string> registered_backends();
 vector<string> known_backends();
 // @pyjt(backend_device_count)
 int backend_device_count(const string& name);
+// The accelerator model behind a registered backend name, or "" when the
+// backend is absent or does not expose one (ACL: the CANN SoC name).
+// @pyjt(backend_device_name)
+string backend_device_name(const string& name);
 // @pyjt(initialize_backend_operators)
 void initialize_backend_operators();
 

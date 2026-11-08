@@ -5,6 +5,7 @@ CANN initialization or JIT is needed to prove which owner receives the call.
 """
 
 import ast
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -48,6 +49,15 @@ def namespace(*, acl=True, cuda=True, compiled=True, backend=None):
         if cuda
         else "cpu"
     )
+    flags = SimpleNamespace(use_acl=acl, use_cuda=cuda, amp_reg=89)
+    @contextmanager
+    def flag_scope(**values):
+        old = {key: getattr(flags, key) for key in values}
+        try:
+            for key, value in values.items(): setattr(flags, key, value)
+            yield
+        finally:
+            for key, value in old.items(): setattr(flags, key, value)
     scope = {
         "jt": SimpleNamespace(
             Var=Var,
@@ -55,7 +65,7 @@ def namespace(*, acl=True, cuda=True, compiled=True, backend=None):
             core=SimpleNamespace(
                 dispatch_context=lambda values: (resolved, 0 if resolved != "cpu" else -1)
             ),
-            flags=SimpleNamespace(use_acl=acl, use_cuda=cuda),
+            flags=flags, flag_scope=flag_scope,
         ),
         "_jittor_dtype_name": str,
         "_acl_bfloat16_rms_norm": bfloat16,
@@ -73,6 +83,8 @@ def namespace(*, acl=True, cuda=True, compiled=True, backend=None):
             self.variance_epsilon = 1e-6
 
         def forward(self, value):
+            if resolved == "acl":
+                assert flags.amp_reg == 0
             calls.append("original_hf_forward")
             return ("original", value.dtype)
 
@@ -80,10 +92,11 @@ def namespace(*, acl=True, cuda=True, compiled=True, backend=None):
 
 
 @pytest.mark.parametrize("dtype", ["float32", "bfloat16"])
-def test_active_acl_declines_interception_before_all_fused_providers(dtype):
+def test_active_acl_runs_original_forward_with_amp_suspended(dtype):
     scope, Var, Rms, calls, _ = namespace()
-    assert scope["_standard_rms_norm"](Rms(dtype), (Var(dtype),), {}) is None
-    assert calls == []
+    assert scope["_standard_rms_norm"](Rms(dtype), (Var(dtype),), {}) == ("original", dtype)
+    assert calls == ["original_hf_forward"]
+    assert scope["jt"].flags.amp_reg == 89
 
 
 @pytest.mark.parametrize("dtype", ["float32", "bfloat16"])
@@ -131,6 +144,7 @@ def test_actual_tensor_backend_has_priority_over_default_flags(dtype, backend, a
     scope, Var, Rms, calls, marker = namespace(backend=backend, acl=acl, cuda=cuda)
     result = scope["_standard_rms_norm"](Rms(dtype), (Var(dtype),), {})
     if backend == "acl":
-        assert result is None and calls == []
+        assert result == ("original", dtype) and calls == ["original_hf_forward"]
+        assert scope["jt"].flags.amp_reg == 89
     else:
         assert result is marker and calls == ["bf16_kernel_probe", "training_kernel"]

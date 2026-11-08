@@ -1,2 +1,0 @@
-# Stage 6 moves development tools and examples out of the runtime wheel.
-# No wheel member additions are approved.

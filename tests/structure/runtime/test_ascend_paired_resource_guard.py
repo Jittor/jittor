@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
-PATH = ROOT / "agent/skills/jittor-transformers-perf/scripts/paired_benchmark_control.py"
+PATH = ROOT / "benchmarks/profiling/paired_benchmark_control.py"
 
 
 def load_controller():

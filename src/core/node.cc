@@ -390,14 +390,31 @@ void Node::release_forward_liveness() {
             }
         }
         // b3: a finished output var can no longer produce a gradient for us,
-        // so the backward liveness it contributed goes away too
+        // so the backward liveness it contributed goes away too.
+        //
+        // The contribution is exactly "this output's backward is live": each
+        // output owns one backward liveness on its producer when its own count
+        // crosses 0 -> 1 (own_backward_liveness), and withdraws it when that
+        // count crosses 1 -> 0. So an output whose backward is already zero has
+        // already withdrawn its contribution; releasing it here is a second
+        // release against one owner.
+        //
+        // That is reachable with `tapes` (a multi-output Function whose user
+        // keeps only some outputs): one output's backward dies when the caller
+        // stops the exposed result, the other's is still live, and the op's
+        // count is 1. Measured on that shape: `op_b 1`, one output `out_b 0`,
+        // the other `out_b 1`. The old loop counted both finished non-stop-grad
+        // outputs, so the second release was unmatched. Whether it aborted
+        // depended on whether the first release could free the op on the spot
+        // (`_queued_for_free` then absorbed the second) or `free` was deferred
+        // by a retained output -- hence the environment-dependent report.
         if (liveness.backward.active()) {
             for (int i = 0; i < n; i++) {
                 auto out = outs[i];
-                if (out->is_var() && out->is_finished()) {
-                    if (out->is_stop_grad()) continue;
-                    enqueue_liveness(this, LivenessStep::release_backward);
-                }
+                if (!out->is_var() || !out->is_finished()) continue;
+                if (!out->liveness.backward.active()) continue;
+                if (out->is_stop_grad()) continue;
+                enqueue_liveness(this, LivenessStep::release_backward);
             }
         }
     }

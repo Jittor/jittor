@@ -24,7 +24,7 @@ repos:
         files: ^(noxfile\.py|tools/release/check_(sdist|wheel)_contents\.py|python/jittor/build/utils/cuda_wheel\.py|compat/shim/deploy\.py|tools/release/pack_offline\.py|tests/integration/test_notebooks\.py|tests/structure/test_(cleanup_structure|pytest_contract|selftest_structure|stage2_delivery)\.py)$
       - id: ruff-format
         args: [--no-cache]
-        files: ^tools/release/(check_sdist_contents|test_check_sdist_contents)\.py$
+        files: ^(tools/release/check_sdist_contents|tests/structure/release/test_check_sdist_contents)\.py$
 
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: v1.8.0

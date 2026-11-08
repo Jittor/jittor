@@ -1,3 +1,4 @@
+from jittor.nn.functional.loss import _checked_class_target
 from ...fidelity import Fidelity, register_api_bindings
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import jittor as jt
@@ -97,6 +98,10 @@ def _interpolate(input=None, size=None, scale_factor=None,
                  mode="nearest", align_corners=None,
                  recompute_scale_factor=None, antialias=False,
                  **_kw):
+    if antialias:
+        raise NotImplementedError(
+            "torch.nn.functional.interpolate antialias=True is not implemented "
+            "by the Jittor frontend; use antialias=False")
     _context = get_install_context(jt)
     _jt_interpolate = _context.state["nn_functional_native"]['_jt_interpolate']
     if input is None:
@@ -135,11 +140,12 @@ def _cross_entropy_impl(input, target, weight=None, size_average=None,
         if reduction == "none":
             return wloss
         return wloss.mean()        # torch divides the soft-target loss by N
+    C = int(input.shape[1]) if input.ndim >= 2 else int(input.shape[-1])
     if not label_smoothing:
         ii = -100 if ignore_index is None else ignore_index
         return _jt_ce(input, target, weight=weight, ignore_index=ii,
                       reduction=reduction)
-    C = int(input.shape[1]) if input.ndim >= 2 else int(input.shape[-1])
+    target = _checked_class_target(target, C, ignore_index)
     if input.ndim > 2:                  # (N,C,d...) -> (M,C)
         perm = [0] + list(range(2, input.ndim)) + [1]
         x = input.transpose(perm).reshape((-1, C))

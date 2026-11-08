@@ -16,7 +16,7 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / 'agent/skills/torch-compat-repo-runbook/scripts'))
+sys.path.insert(0, str(ROOT / 'tools/ecosystem'))
 import audit_coverage as audit  # noqa: E402
 import _accelerate_scorecard as accelerate  # noqa: E402
 from _accelerate_scorecard import measurements  # noqa: E402
@@ -575,7 +575,7 @@ def test_separate_process_protocol_accepts_only_its_own_semantic_scope(fresh_pro
 
 @pytest.mark.parametrize('mutation', ('missing', 'changed', 'extra'))
 def test_measured_control_source_map_requires_every_committed_file(fresh_protocol, monkeypatch, mutation):
-    path = 'agent/skills/torch-compat-repo-runbook/scripts/collect_accelerate_scorecards.py'
+    path = 'tools/ecosystem/collect_accelerate_scorecards.py'
     expected = {str(i): 'd' * 64 for i in range(5)}
     expected[path] = 'a' * 64
     monkeypatch.setattr(accelerate, 'measurement_sources', lambda _baseline, fresh=False: expected)

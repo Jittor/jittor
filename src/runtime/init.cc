@@ -16,6 +16,7 @@
 #include <csignal>
 #include "runtime/init.h"
 #include "runtime/async_exec.h"
+#include "runtime/launch_diagnostics.h"
 #include "runtime/rng_state.h"
 #include "runtime/executor_entry.h"
 #include "ops/op_register.h"
@@ -36,10 +37,21 @@ DEFINE_FLAG(vector<int>, cuda_archs, {}, "Cuda arch");
 // runtime/float32_precision.h for the full mapping and for why the three flags
 // below are now overrides on top of it rather than four separate encodings.
 
+// Two policies, one per library, with torch's defaults: matmul at `highest`
+// (torch.backends.cuda.matmul.allow_tf32 = False) and cuDNN -- convolution and
+// RNN -- at `high` (torch.backends.cudnn.allow_tf32 = True).
+//
+// They used to be one flag that wrote both, defaulting to `highest`, so a
+// native float32 convolution ran at CUDNN_FMA_MATH where torch and Jittor
+// 1.3.10 both let cuDNN use tf32 on Ampere and later: a ResNet-50 training
+// step at batch 64 took 128 ms against 1.3.10's 95, all of it in the
+// convolution backward. Separate flags are also what lets each default stand:
+// a scope over one would otherwise restore both on exit and overwrite the
+// other's default.
 DEFINE_FLAG_WITH_SETTER(string, float32_matmul_precision, "highest",
-    "Accumulate precision for float32 matmul and convolution: "
-    "highest (float32), high (tf32), medium (bfloat16). "
-    "float16/bfloat16 inputs always accumulate in float32.");
+    "Accumulate precision for float32 matmul: highest (float32), "
+    "high (tf32), medium (bfloat16). float16/bfloat16 inputs always "
+    "accumulate in float32. Convolution has its own, float32_cudnn_precision.");
 
 void setter_float32_matmul_precision(const string& old_value, const string& value) {
     int tier = parse_float32_precision_tier(value);
@@ -48,9 +60,20 @@ void setter_float32_matmul_precision(const string& old_value, const string& valu
     if (tier < 0)
         LOGf << "float32_matmul_precision must be one of highest, high, medium; got"
             << '"' >> value >> '"';
-    // Native Jittor deliberately offers one convenience setter for both
-    // domains. Frontends may instead capture independent per-op values.
     runtime_jit_policy().float32_matmul_precision_tier = tier;
+}
+
+DEFINE_FLAG_WITH_SETTER(string, float32_cudnn_precision, "high",
+    "Accumulate precision for float32 cuDNN convolution and RNN: highest "
+    "(float32, CUDNN_FMA_MATH), high (tf32, the default, as torch's "
+    "cudnn.allow_tf32), medium (bfloat16). float16/bfloat16 inputs always "
+    "accumulate in float32.");
+
+void setter_float32_cudnn_precision(const string& old_value, const string& value) {
+    int tier = parse_float32_precision_tier(value);
+    if (tier < 0)
+        LOGf << "float32_cudnn_precision must be one of highest, high, medium; got"
+            << '"' >> value >> '"';
     runtime_jit_policy().float32_cudnn_precision_tier = tier;
 }
 
@@ -58,14 +81,25 @@ void setter_float32_matmul_precision(const string& old_value, const string& valu
 // are what `torch.backends.*` maps onto and what existing code sets; prefer
 // float32_matmul_precision, which covers both domains at once.
 DEFINE_FLAG(int, use_tensorcore, 0,
-    "Deprecated, use float32_matmul_precision. Raises the float32 accumulate "
-    "tier for matmul and convolution: 1=high(tf32), 2 and 3=medium(bfloat16).");
+    "Deprecated, use float32_matmul_precision and float32_cudnn_precision. "
+    "Raises the float32 accumulate tier for matmul and convolution: "
+    "1=high(tf32), 2 and 3=medium(bfloat16).");
 DEFINE_FLAG(int, cuda_allow_tf32, 0,
     "Deprecated, use float32_matmul_precision. Raises the float32 matmul "
     "accumulate tier to high (tf32).");
 DEFINE_FLAG(int, cuda_allow_cudnn_tf32, 0,
-    "Deprecated, use float32_matmul_precision. Raises the float32 cuDNN "
+    "Deprecated, use float32_cudnn_precision. Raises the float32 cuDNN "
     "convolution accumulate tier to high (tf32).");
+// Ascend ACL equivalent of torch.npu.matmul.allow_hf32: permits FP32
+// matmul/bmm/conv to run aclnn with ALLOW_FP32_DOWN_PRECISION (fp16 split
+// cube). Required on Ascend310P whose cube has no FP32 KEEP_DTYPE; on chips
+// that support full FP32 it still lowers precision, so it stays opt-in.
+// Defined here (src/) rather than backends/acl/ because the flags binding
+// generator only scans the core source tree.
+DEFINE_FLAG(int, acl_allow_hf32, 0,
+    "Ascend ACL only. Allows FP32 matmul/bmm/convolution to run with "
+    "ALLOW_FP32_DOWN_PRECISION (reduced precision, ~1e-3). Required on "
+    "Ascend310P whose cube unit cannot run FP32 KEEP_DTYPE.");
 
 vector<set_seed_callback> callbacks;
 int current_seed;
@@ -88,6 +122,34 @@ void cleanup() {
     // round of stream destruction.
     for (auto cb : take_cleanup_callbacks())
         cb();
+}
+
+void wait_for_devices() {
+    // Drain submitted work only. Do not evaluate unused lazy graphs at exit.
+    async_exec_wait();
+#ifdef HAS_ACCELERATOR
+    for (unsigned backend = 1; backend <= unsigned(BackendId::Corex); ++backend) {
+        auto id = BackendId(backend);
+        auto mask = launched_device_mask(id);
+        // CUDA may propagate a reported sticky fault through other contexts.
+        // Preserve errors for any work submitted since the first reported loss.
+        bool reported_cuda_loss = id == BackendId::Cuda && lost_device_mask(id);
+        auto new_work = devices_launched_after_loss(id);
+        for (int index = 0; index < 64; ++index) {
+            Device device{id, index};
+            auto bit = uint64(1) << index;
+            if (!(mask & bit) || device_context_lost(device)) continue;
+            try {
+                backend_synchronize(device);
+            } catch (const std::exception&) {
+                // Only deduplicate a sticky fault already reported to the
+                // program, on a device with no subsequent submissions.
+                if (!reported_cuda_loss || (new_work & bit) ||
+                    !device_context_lost(device)) throw;
+            }
+        }
+    }
+#endif
 }
 
 static void init_device_architectures() {

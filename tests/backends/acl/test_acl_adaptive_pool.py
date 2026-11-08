@@ -6,6 +6,22 @@ import jittor as jt
 from _helpers import capability
 
 
+def _acl_supports_bfloat16():
+    try:
+        from jittor.backends.acl.kernels._soc import supports_bfloat16
+        return supports_bfloat16()
+    except Exception:
+        return True
+
+
+def _acl_supports_fp32_cube():
+    try:
+        from jittor.backends.acl.kernels._soc import supports_fp32_cube
+        return supports_fp32_cube()
+    except Exception:
+        return True
+
+
 def reference_pool(source, size, weight):
     height, width = source.shape[-2:]
     output = np.empty(source.shape[:-2] + size, dtype=np.float64)
@@ -33,7 +49,16 @@ class TestACLAdaptiveAveragePool(unittest.TestCase):
             out_shape = shape[:-2] + size
             weight = ((np.arange(np.prod(out_shape)).reshape(out_shape) % 11) - 5).astype(np.float64) / 16
             expected, grad_expected = reference_pool(source, size, weight)
-            for dtype, tolerance in (("float32", 2e-6), ("float16", 5e-4), ("bfloat16", 4e-3)):
+            dtypes = [
+                # On Ascend310P the CANN adaptive-pool kernel accumulates in
+                # reduced precision; the measured forward/backward error is
+                # ~4e-5 instead of the 910B-class 2e-6.
+                ("float32", 2e-6 if _acl_supports_fp32_cube() else 1e-4),
+                ("float16", 5e-4),
+            ]
+            if _acl_supports_bfloat16():
+                dtypes.append(("bfloat16", 4e-3))
+            for dtype, tolerance in dtypes:
                 with self.subTest(shape=shape, output_size=requested_size, dtype=dtype):
                     x = jt.array(source.astype(np.float32)).cast(dtype)
                     out = jt.nn.adaptive_avg_pool2d(x, requested_size)

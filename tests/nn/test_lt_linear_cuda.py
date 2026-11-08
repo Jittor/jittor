@@ -117,6 +117,25 @@ class TestLtLinearCuda(unittest.TestCase):
                 np.testing.assert_allclose(got.numpy().astype("float32"), want,
                                            rtol=5e-3, atol=5e-3)
 
+    def test_it_matches_the_portable_path_in_bfloat16(self):
+        # bf16 shares the float32 accumulator with half: the bias lands in the
+        # epilogue before the single rounding to bf16, which is the order
+        # `linear_bias_accumulator` exists to preserve for a bf16 product.
+        for shape, cin, cout in (((2048, 512), 512, 1536),
+                                 ((8, 256, 512), 512, 1536)):
+            with self.subTest(shape=shape):
+                xn, wn, bn = self._arrays(shape, cin, cout)
+                x = jt.array(xn).cast("bfloat16")
+                w = jt.array(wn).cast("bfloat16")
+                b = jt.array(bn).cast("bfloat16")
+                with jt.no_grad():
+                    got = lt_linear_cuda(x, w, b)
+                self.assertIsNotNone(got, "bfloat16 should be served")
+                self.assertEqual(str(got.dtype), "bfloat16")
+                want = _reference(xn, wn, bn)
+                np.testing.assert_allclose(got.numpy().astype("float32"), want,
+                                           rtol=2e-2, atol=2e-2)
+
     def test_an_autocast_scope_keeps_the_portable_result_dtype(self):
         # `jt.nn.linear` computes float16 under `amp_prefer16` even though both
         # operands are still float32. If this op answers float32 instead, one
@@ -160,10 +179,10 @@ class TestLtLinearCuda(unittest.TestCase):
         xn, wn, bn = self._arrays((512, 512), 512, 512)
         x, w, b = jt.array(xn), jt.array(wn), jt.array(bn)
         with jt.no_grad():
-            # bfloat16 needs its own descriptors and its own accumulate rule
-            self.assertIsNone(lt_linear_cuda(x.cast("bfloat16"),
-                                             w.cast("bfloat16"),
-                                             b.cast("bfloat16")))
+            # float64 has its own accumulate rule, which this op does not carry
+            self.assertIsNone(lt_linear_cuda(x.cast("float64"),
+                                             w.cast("float64"),
+                                             b.cast("float64")))
             # a problem too small to be worth timing
             small = jt.array(self.rs.randn(2, 4).astype("float32"))
             sw = jt.array(self.rs.randn(3, 4).astype("float32"))
@@ -178,6 +197,28 @@ class TestLtLinearCuda(unittest.TestCase):
                 self.assertIsNone(lt_linear_cuda(x, w, b))
         finally:
             jt.flags.use_cuda = 1
+
+    def test_a_host_placed_operand_declines_even_when_use_cuda_is_on(self):
+        # `use_cuda` says where a new tensor would go, not where these live.
+        # The Torch frontend keeps a `torch.tensor(...)` on the host -- with an
+        # explicit placement of its own -- while the flag the shim sets for the
+        # process says CUDA; this op carries no cpu_src, and serving that call
+        # failed in codegen ("code requires source for the selected backend")
+        # instead of falling back. An explicit placement is what the gate reads,
+        # so stamping one on the operands reproduces it without the shim.
+        xn, wn, bn = self._arrays((2048, 512), 512, 1536)
+        token = jt.core._set_construction_placement(0, 0)   # BackendId::Cpu
+        try:
+            x, w, b = jt.array(xn), jt.array(wn), jt.array(bn)
+        finally:
+            jt.core._restore_construction_placement(token)
+        self.assertEqual([int(v.placement_backend) for v in (x, w, b)], [0, 0, 0])
+        with jt.no_grad():
+            self.assertIsNone(lt_linear_cuda(x, w, b))
+            # The portable path still answers the same call.
+            np.testing.assert_allclose(
+                jt.nn.linear(x, w, b).numpy(), _reference(xn, wn, bn),
+                rtol=2e-5, atol=2e-5)
 
     def test_the_module_agrees_with_the_portable_module(self):
         jt.set_global_seed(7)

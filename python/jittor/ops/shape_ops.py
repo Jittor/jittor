@@ -71,13 +71,21 @@ def repeat_interleave(x,repeats,dim=None,output_size=None):
         dim += x.ndim
 
     if isinstance(repeats, int):
+        if repeats == 1:
+            return x.clone()
         result = try_dispatch("tensor.repeat_interleave", x, repeats, dim)
         if result is not None:
-            return result
+            # repeat_interleave owns output storage on every backend.
+            return result.clone()
         tar_shape = list(x.shape)
         tar_shape[dim] = tar_shape[dim] * repeats
         broadcast_shape = [-1] * (dim + 1) + [repeats] + [-1] * (x.ndim - dim - 1)
-        return x.unsqueeze(dim + 1).expand(broadcast_shape).reshape(tar_shape)
+        # Torch's repeat_interleave is a copy. The reshape above can be a
+        # stride-0 view (a size-1 axis expanded then folded back in), which
+        # refused in-place writes and kept aliasing the source; `contiguous`
+        # makes the produced buffer its own without materializing eagerly.
+        return x.unsqueeze(dim + 1).expand(broadcast_shape).reshape(
+            tar_shape).contiguous()
 
     result = _repeat_interleave_dim0_cuda(x, repeats, dim, output_size, _repeat_interleave_cpu_source)
     if result is not None:
@@ -158,6 +166,14 @@ def stack(x, dim=0):
             x[i] = jt.array(x_)
     if len(x) < 2:
         return x[0].unsqueeze(dim)
+    first = list(x[0].shape)
+    for index, value in enumerate(x[1:], 1):
+        if list(value.shape) != first:
+            # Checked here: concat would compare the unsqueezed shapes and
+            # name a dim of those instead.
+            raise jt.JittorShapeError(
+                "stack expects each var to be equal size, but got %s at entry "
+                "0 and %s at entry %d" % (first, list(value.shape), index))
 
     fast = jt.misc._stack_no_grad_cuda_fast(x, dim, _stack_cpu_source)
     if fast is not None:

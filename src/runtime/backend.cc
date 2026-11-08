@@ -99,13 +99,15 @@ BackendEvent backend_event(Device device, bool timing) {
     return {device, backend_ops(device.backend).event_create(device.index, timing)};
 }
 
-// -- graph capture ---------------------------------------------------------
-// All four answer for the accelerator's current device. They are deliberately
-// total: a backend with no capture support, or no accelerator at all, gets a
-// false/nullptr rather than an error, because the caller's fallback (launch
-// the kernels one by one, as always) is always available and always correct.
+// -- deterministic algorithm policy ---------------------------------------
+// A provider with no policy control cannot enable Jittor's deterministic
+// enforcement. Its default is disabled; accepting false makes no promise
+// about external libraries' independent algorithm settings.
 void backend_set_deterministic_algorithms(bool enabled) {
     const auto& backend = backend_ops(accelerator_backend_id());
+    if (!backend.set_deterministic_algorithms && !backend.get_deterministic_algorithms
+            && !enabled)
+        return;
     if (!backend.set_deterministic_algorithms || !backend.get_deterministic_algorithms)
         throw std::runtime_error("Backend does not support deterministic algorithm policy");
     backend.set_deterministic_algorithms(enabled);
@@ -118,11 +120,15 @@ void backend_set_deterministic_algorithms(bool enabled) {
 
 bool backend_get_deterministic_algorithms() {
     const auto& backend = backend_ops(accelerator_backend_id());
-    if (!backend.get_deterministic_algorithms)
+    if (!backend.set_deterministic_algorithms && !backend.get_deterministic_algorithms)
+        return false;
+    if (!backend.set_deterministic_algorithms || !backend.get_deterministic_algorithms)
         throw std::runtime_error("Backend does not support deterministic algorithm policy");
     return backend.get_deterministic_algorithms();
 }
 
+// -- graph capture ---------------------------------------------------------
+// A backend without capture can always execute its kernels individually.
 static const BackendOps* graph_backend() {
     const auto id = accelerator_backend_id();
     if (id == BackendId::Cpu) return nullptr;
@@ -185,6 +191,13 @@ vector<string> known_backends() {
 
 int backend_device_count(const string& name) {
     return backend_registry().get(name).device_count();
+}
+
+string backend_device_name(const string& name) {
+    const auto& ops = backend_registry().get(name);
+    if (!ops.device_name) return "";
+    const char* value = ops.device_name(ops.current_device());
+    return value ? value : "";
 }
 
 void initialize_backend_operators() {

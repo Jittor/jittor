@@ -4,6 +4,7 @@ import jittor as jt
 from jittor._runtime import dispatch as _dispatch_module
 from jittor.nn.backends import hooks as _backend_hooks
 from jittor.nn.functional.attention import (
+    causal_mask_rewrite,
     scaled_dot_product_attention as _native_scaled_dot_product_attention,
     LAST_FUSED_KERNEL as _NATIVE_LAST_FUSED,
 )
@@ -283,6 +284,10 @@ def _try_flash_scaled_dot_product_attention(query, key, value, attn_mask,
     out = out.permute(*out_axes)
     if cast_back and _jittor_dtype_name(out.dtype) != original_dtype:
         out = out.to(original_dtype)
+    # Materialize the fused inference graph before unrelated lazy graphs run.
+    # Otherwise repeated branched workloads can observe corrupted output.
+    if not training_requested:
+        out.sync()
     return out
 
 
@@ -350,16 +355,46 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None,
     from ...amp import _autocast_cast_inputs, _autocast_scope_for_inputs
     query, key, value = _autocast_cast_inputs(query, key, value)
     with _autocast_scope_for_inputs(query, key, value):
+        if causal_mask_rewrite(query, key, attn_mask, is_causal):
+            # The mask states exactly what `is_causal` states, and every backend
+            # runs the latter more cheaply: cuDNN one engine call instead of a
+            # score-sized bias. Decided here, before the flash hook and the native
+            # call, because either can answer first. `causal_mask_rewrite` keeps
+            # Ascend out of it: the verdict's host read defeats that backend's
+            # graph replay (35.5 -> 84 ms a qwen3 prefill, device 4.5 ms better).
+            attn_mask, is_causal = None, True
+        # Torch's default fused attention rounds probability products in BF16.
+        # Ask the native owner for its admitted backend-precision path; its math
+        # fallback and the native public default keep FP32 intermediates.
+        precision_options = (
+            {"allow_reduced_precision": True}
+            if _jittor_dtype_name(query.dtype) == "bfloat16" else {}
+        )
+        route_key = _route_key(query, key, value, attn_mask, dropout_p, is_causal,
+                               scale, enable_gqa)
+        if route_key is not None:
+            route = _ROUTES.get(route_key)
+            if route is not None:
+                miss, kernel = route
+                out = kernel(query, key, value, attn_mask=attn_mask, dropout_p=0.0,
+                             is_causal=is_causal, scale=scale, **precision_options)
+                if out is not None:
+                    _sdpa_flash_miss(miss)
+                    return out
+                del _ROUTES[route_key]
         dimension = int(query.shape[-1])
         scale_factor = (
             1.0 / _math.sqrt(dimension) if scale is None else scale
         )
+        _LAST_MISS[0] = None
         flash = _try_flash_scaled_dot_product_attention(
             query, key, value, attn_mask, dropout_p, is_causal,
             scale_factor, enable_gqa=enable_gqa)
         if flash is not None:
             return flash
-        return _native_scaled_dot_product_attention(
+        miss = _LAST_MISS[0]
+        _NATIVE_LAST_FUSED[0] = None
+        out = _native_scaled_dot_product_attention(
             query,
             key,
             value,
@@ -368,7 +403,18 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None,
             is_causal=is_causal,
             scale=scale,
             enable_gqa=enable_gqa,
+            **precision_options,
         )
+        # Remember the walk only where it ended in a fused kernel and flash had
+        # declined for a reason the key holds: a mask, nothing to load, a dtype
+        # it does not take (float32, with no cast asked for: BERT-base in its
+        # bench precision walked all of it 12 times a step) or a head size it
+        # has no kernel for.
+        kernel = _NATIVE_LAST_FUSED[0]
+        if route_key is not None and kernel is not None \
+                and miss in ("mask", "no_backend", "dtype", "head_dim") and len(_ROUTES) < 256:
+            _ROUTES[route_key] = (miss, kernel)
+        return out
 
 
 register_fidelity("torch.nn.functional.scaled_dot_product_attention", scaled_dot_product_attention, Fidelity.APPROXIMATE, "native attention mathematics with backend selection and GQA expansion; backend capability and precision restrictions apply")

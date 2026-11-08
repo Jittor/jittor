@@ -31,8 +31,9 @@ class LRScheduler:
 
     def __init__(self, optimizer, last_epoch=-1, verbose=False):
         self.optimizer = optimizer
-        if last_epoch == -1:
-            for group in optimizer.param_groups:
+        self.verbose = verbose
+        for index, group in enumerate(optimizer.param_groups):
+            if last_epoch == -1:
                 initial_lr = group["lr"]
                 if isinstance(initial_lr, jt.Var):
                     initial_lr = initial_lr.clone()
@@ -45,15 +46,19 @@ class LRScheduler:
         self.base_lrs = [group["initial_lr"] for group in optimizer.param_groups]
         self.last_epoch = last_epoch
         self._step_count = 0
-        self._get_lr_called_within_step = False
-        self._last_lr = list(self.base_lrs)
-        self.step()                       # torch: apply epoch-0 lr at construction
+        self._is_initial = True
+        try:
+            self.step()
+        finally:
+            del self._is_initial
+
     def get_lr(self):
         return list(self.base_lrs)
     def get_last_lr(self):
         return list(self._last_lr)
     def state_dict(self):
-        return {k: v for k, v in self.__dict__.items() if k != "optimizer"}
+        return {k: v for k, v in self.__dict__.items()
+                if k not in ("optimizer", "_is_initial")}
     def load_state_dict(self, sd):
         self.__dict__.update(sd)
     def step(self, epoch=None):
@@ -79,7 +84,7 @@ class LRScheduler:
 def _lambda_state_dict(scheduler):
     from types import FunctionType
     state = {k: v for k, v in scheduler.__dict__.items()
-             if k not in ("optimizer", "lr_lambdas")}
+             if k not in ("optimizer", "lr_lambdas", "_is_initial")}
     state["lr_lambdas"] = [
         None if isinstance(fn, FunctionType) else fn.__dict__.copy()
         for fn in scheduler.lr_lambdas

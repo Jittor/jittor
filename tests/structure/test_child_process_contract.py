@@ -339,3 +339,56 @@ def test_a_timeout_ends_the_grandchildren_too(tmp_path):
     assert not _still_running(grandchild), (
         "grandchild %d outlived the timeout: killing the direct child leaves "
         "the rest of the tree running (and holding the pipe)" % grandchild)
+
+def test_native_child_drops_only_the_owned_shim_site(tmp_path, monkeypatch):
+    """A native opt-out must undo the shim path injected during activation."""
+    from _helpers.child_process import child_env, run_python_child
+
+    runtime = tmp_path / "runtime"
+    shim_site = runtime / "site-packages"
+    oracle_site = tmp_path / "oracle"
+    other_site = tmp_path / "other" / "site-packages"
+    for site in (shim_site, oracle_site, other_site):
+        (site / "torch").mkdir(parents=True)
+        (site / "torch" / "__init__.py").write_text("", encoding="utf-8")
+    inherited = os.pathsep.join(map(str, (shim_site, oracle_site, other_site)))
+    monkeypatch.setenv("JITTOR_TORCH_RUNTIME_ROOT", str(runtime))
+    monkeypatch.setenv("JITTOR_TORCH_SHIM", "1")
+    monkeypatch.setenv("PYTHONPATH", inherited)
+    native = child_env(without_torch_mode=True)
+    assert str(shim_site) not in native["PYTHONPATH"].split(os.pathsep)
+    assert str(oracle_site) in native["PYTHONPATH"].split(os.pathsep)
+    assert str(other_site) in native["PYTHONPATH"].split(os.pathsep)
+    assert os.environ["PYTHONPATH"] == inherited
+    assert str(shim_site) in child_env()["PYTHONPATH"].split(os.pathsep)
+    complete = child_env(dict(os.environ), inherit=False, without_torch_mode=True)
+    assert complete == native
+    result = run_python_child(
+        ["-c", "import importlib.util; print(importlib.util.find_spec('torch').origin)"],
+        env=native, inherit=False, merge_stderr=True,
+    )
+    assert result.returncode == 0, result.stdout
+    assert result.stdout.strip() == str(oracle_site / "torch" / "__init__.py")
+
+
+def test_native_child_preserves_missing_pythonpath(tmp_path, monkeypatch):
+    from _helpers.child_process import child_env
+
+    monkeypatch.setenv("JITTOR_SOURCE_ROOT", "")
+    env = child_env(
+        {"JITTOR_SOURCE_ROOT": "", "JITTOR_TORCH_RUNTIME_ROOT": str(tmp_path)},
+        inherit=False, without_torch_mode=True,
+    )
+    assert "PYTHONPATH" not in env
+
+
+def test_native_child_preserves_explicit_empty_pythonpath(tmp_path, monkeypatch):
+    from _helpers.child_process import child_env
+
+    monkeypatch.setenv("JITTOR_SOURCE_ROOT", "")
+    env = child_env(
+        {"JITTOR_SOURCE_ROOT": "", "JITTOR_TORCH_RUNTIME_ROOT": str(tmp_path),
+         "PYTHONPATH": ""},
+        inherit=False, without_torch_mode=True,
+    )
+    assert env["PYTHONPATH"] == ""

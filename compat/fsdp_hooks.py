@@ -51,6 +51,7 @@ REQUIRED = (
     # which full params the backward must treat as leaves, and how the
     # resulting grad map is handed back to the sharded optimizers.
     "is_fsdp_managed_param",
+    "_fsdp_norm_grad",
     "collect_fsdp_full_params_for_backward",
     "fill_fsdp_optimizer_grads_from_grad_map",
     # Private backward owner accepts explicit current-shard holders while the

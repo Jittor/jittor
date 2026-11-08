@@ -197,6 +197,26 @@ class TestSGD(Base):
 
 
 class TestAdam(Base):
+    def test_adamw_default_uses_torch_exact_moment_coefficients(self):
+        gradient = np.array([0.1, 1.0, -0.25, 3.0], dtype=np.float32)
+        expected_avg = gradient * np.float32(1.0 - 0.9)
+        expected_sq = (gradient * gradient) * np.float32(1.0 - 0.999)
+
+        def body(dev):
+            parameter = torch.nn.Parameter(
+                torch.tensor(np.array([1.0, -2.0, 0.5, 4.0], dtype=np.float32),
+                             device=dev))
+            optimizer = torch.optim.AdamW([parameter], lr=0.01)
+            parameter.grad = torch.tensor(gradient.copy(), device=dev)
+            optimizer.step()
+            state = optimizer.state[parameter]
+            self.ac(state["exp_avg"].numpy(), expected_avg, atol=0.0, rtol=0.0,
+                    msg=f"default AdamW first moment uses Torch beta complement {dev}")
+            self.ac(state["exp_avg_sq"].numpy(), expected_sq, atol=0.0, rtol=0.0,
+                    msg=f"default AdamW second moment uses Torch beta complement {dev}")
+
+        both_devices(body)
+
     def test_adamw_capturable_false_cpu_npu_matches_default(self):
         def body(dev):
             parameters = [torch.nn.Parameter(torch.tensor([1., -2.], device=dev))

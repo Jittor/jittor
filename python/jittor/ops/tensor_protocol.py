@@ -49,6 +49,22 @@ def tolist(x):
 def contiguous(x): return _native_ops.contiguous(x)
 
 
+def clone(x):
+    """Return a copy of ``x`` with storage of its own, as ``torch.Tensor.clone``.
+
+    The native ``clone`` op is a storage view: ``detach`` and ``start_grad``
+    are built on it and must stay free. A view shares its source's memory, so
+    in-place kernels also rewrote "snapshots" taken with it -- the fused CUDA
+    SGD writes parameters and momentum buffers through raw pointers, and a
+    ``state_dict`` cloned for a checkpoint then restored the state of a later
+    step. Gradients flow through the copy unchanged.
+    """
+    if not x._storage_is_contiguous():
+        # `contiguous` already gathers the view into a new allocation.
+        return _native_ops.contiguous(x)
+    return _native_ops.copy(x)
+
+
 def cpu(x):
     """Return ``x`` in host memory without changing the source Var."""
     if x.location() == "cpu":

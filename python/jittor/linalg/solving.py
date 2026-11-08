@@ -11,12 +11,15 @@
 """Linear solves, inverses, determinants and matrix powers."""
 import numpy as np
 
+from jittor._core.function import Function
 from ._helpers import (
+    _cuda_gesv, _cuda_trsm, _host_lapack, _host_trsm, _is_batched, _is_cupy,
     _batching_aware, _linalg_errors_raise,
     _cn_to_native, _is_native_complex, _matmul, _native_to_cn, _reconnect,
     _transpose,
 )
 from .results import INVEX
+from jittor._runtime.dispatch import select_kernel
 
 
 @_batching_aware("single")
@@ -26,7 +29,6 @@ def inv(x):
     :param x (...,M,M):
     :return:x^-1 (...,M,M).
     """
-    import jittor as jt
     from ..nn import ComplexNumber
     from .complex import complex_inv
     if isinstance(x, ComplexNumber):
@@ -35,42 +37,64 @@ def inv(x):
     # dtypes, and the backward below is written with conjugate transposes.
     # Bridging to the ComplexNumber callback chain instead left its backward
     # an opaque callback, so a second derivative raised.
-    def forward_code(np, data):
-        a = data["inputs"][0]
-        m_a = data["outputs"][0]
-        with _linalg_errors_raise(np):
-            t_a = np.linalg.inv(a)
-        np.copyto(m_a, t_a)
+    return _Inv(x)(x)
 
-    class _Inv(jt.Function):
-        # A plain numpy_code op's analytic backward is built as a SECOND,
-        # opaque numpy_code call with no backward of its own -- so a second
-        # derivative through `inv` raised instead of computing a real answer.
-        # Real higher-order AD instead: express the backward *formula* with
-        # ordinary differentiable jittor ops (matmul/transpose) and recompute
-        # `inv(x)` via a live, non-taped recursive call to this same function.
-        # `jt.Function` tapes and stop-grads its own `execute()` inputs/
-        # outputs (so a value cached as `self.mx` is permanently detached
-        # from x's autograd graph) -- but a value computed by calling
-        # `inv(x)` again, closing over the *outer*, still-live `x`, is not,
-        # so `_reconnect` reconnects the backward expression to x's real
-        # graph. `jt.grad(jt.grad(loss, x), x)` then differentiates straight
-        # through it like any composed op. The one-time cost is recomputing
-        # the inversion during backward (the cached forward value can't be
-        # reused for this) -- the standard trade-off for a recompute-based
-        # higher-order-differentiable op.
-        def execute(self, xt):
-            self.mx = jt.numpy_code([xt.shape], [xt.dtype], [xt], forward_code)[0]
-            return self.mx
 
-        def grad(self, dout):
-            # -A^-H dout A^-H: the conjugate-Wirtinger gradient of A^-1
-            # (.conj() is the identity for real dtypes).
-            mx = _reconnect(self.mx, inv(x))
-            mxH = mx.transpose(-1, -2).conj()
-            return -jt.matmul(jt.matmul(mxH, dout), mxH)
+@_host_lapack
+def _inv_forward(np, data):
+    a = data["inputs"][0]
+    m_a = data["outputs"][0]
+    if _is_cupy(np) and a.ndim == 2 and a.size and a.dtype == m_a.dtype:
+        _cuda_gesv(np, a, np.eye(a.shape[0], dtype=a.dtype), m_a)
+        return
+    with _linalg_errors_raise(np):
+        t_a = np.linalg.inv(a)
+    np.copyto(m_a, t_a)
 
-    return _Inv()(x)
+
+class _Inv(Function):
+    # A plain numpy_code op's analytic backward is built as a SECOND,
+    # opaque numpy_code call with no backward of its own -- so a second
+    # derivative through `inv` raised instead of computing a real answer.
+    # Real higher-order AD instead: express the backward *formula* with
+    # ordinary differentiable jittor ops (matmul/transpose) and recompute
+    # `inv(x)` via a live, non-taped recursive call to this same function.
+    # `jt.Function` tapes and stop-grads its own `execute()` inputs/
+    # outputs (so a value cached as `self.mx` is permanently detached
+    # from x's autograd graph) -- but a value computed by calling
+    # `inv(x)` again on the *outer*, still-live `x`, is not, so
+    # `_reconnect` reconnects the backward expression to x's real
+    # graph. `jt.grad(jt.grad(loss, x), x)` then differentiates straight
+    # through it like any composed op. The one-time cost is recomputing
+    # the inversion during backward (the cached forward value can't be
+    # reused for this) -- the standard trade-off for a recompute-based
+    # higher-order-differentiable op.
+    #
+    # The live `x` reaches `grad` as an attribute set in `__init__`, and
+    # this class (like the others here) is defined once. A class built
+    # inside each call is a reference cycle that only the cyclic GC frees,
+    # and its `grad` closed over `x` -- through which (C++ graph edges the
+    # GC cannot see) it held the previous call's context. A chain of n
+    # calls then took n full collections to free and piled up meanwhile.
+    def __init__(self, x):
+        self.x = x
+
+    def execute(self, xt):
+        import jittor as jt
+        kernel = select_kernel("linalg_inv", xt)
+        if kernel is not None:
+            self.mx = kernel(xt)
+        else:
+            self.mx = jt.numpy_code([xt.shape], [xt.dtype], [xt], _inv_forward)[0]
+        return self.mx
+
+    def grad(self, dout):
+        import jittor as jt
+        # -A^-H dout A^-H: the conjugate-Wirtinger gradient of A^-1
+        # (.conj() is the identity for real dtypes).
+        mx = _reconnect(self.mx, inv(self.x))
+        mxH = mx.transpose(-1, -2).conj()
+        return -jt.matmul(jt.matmul(mxH, dout), mxH)
 
 
 def inv_ex(x, *, check_errors=False, out=None):
@@ -125,6 +149,7 @@ def pinv(x):
         # complex pseudo-inverse on the legacy ComplexNumber type. (The real
         # path below cannot take a ComplexNumber — previously this raised.)
         return complex_pinv(x)
+    @_host_lapack
     def forward_code(np, data):
         a = data["inputs"][0]
         m_a = data["outputs"][0]
@@ -212,43 +237,48 @@ def det(x):
     :param x (...,M,M):
     :return:|x| (...,1)
     """
-    import jittor as jt
-    def forward_code(np, data):
-        a = data["inputs"][0]
-        L = data["outputs"][0]
-        tL = np.linalg.det(a)
-        np.copyto(L, tL)
+    return _Det(x)(x)
 
-    s = x.shape
-    x_s = s[:-2]
-    if len(s) == 2:
-        x_s.append(1)
 
-    class _Det(jt.Function):
-        # See `inv`/`_Inv` above for the general real-higher-order-AD
-        # pattern (live recursive call instead of an opaque numpy_code
-        # backward-of-backward). `d(det)/dx = det(x) * inv(x)^T` is
-        # holomorphic, so the conjugate-Wirtinger gradient is
-        # `dout * conj(det(x)) * inv(x)^H`; without the conjugates a complex
-        # determinant's gradient was silently wrong (identical for real).
-        # Both `det(x)` and `inv(x)` recurse into their own higher-order-
-        # differentiable public functions, closing over the live `x`, so this
-        # composes to any order.
-        def execute(self, xt):
-            self.d = jt.numpy_code([x_s], [xt.dtype], [xt], forward_code)[0]
-            return self.d
+@_host_lapack
+def _det_forward(np, data):
+    a = data["inputs"][0]
+    L = data["outputs"][0]
+    tL = np.linalg.det(a)
+    np.copyto(L, tL)
 
-        def grad(self, dout):
-            d = _reconnect(self.d, det(x))
-            n_d = dout.reshape(list(dout.shape) + [1, 1])
-            n_o = d.reshape(list(d.shape) + [1, 1])
-            # inv(x) was never cached during forward (det's forward never
-            # computes it) -- this recompute is not new, the original numpy
-            # backward_code called np.linalg.inv(inp) fresh every time too.
-            xinvH = inv(x).transpose(-1, -2).conj()
-            return (n_d * n_o.conj() * xinvH).reshape(x.shape)
 
-    return _Det()(x)
+class _Det(Function):
+    # See `inv`/`_Inv` above for the general real-higher-order-AD
+    # pattern (live recursive call instead of an opaque numpy_code
+    # backward-of-backward) and for why the class is defined once.
+    # `d(det)/dx = det(x) * inv(x)^T` is holomorphic, so the
+    # conjugate-Wirtinger gradient is `dout * conj(det(x)) * inv(x)^H`;
+    # without the conjugates a complex determinant's gradient was silently
+    # wrong (identical for real). Both `det(x)` and `inv(x)` recurse into
+    # their own higher-order-differentiable public functions on the live
+    # `x`, so this composes to any order.
+    def __init__(self, x):
+        self.x = x
+
+    def execute(self, xt):
+        import jittor as jt
+        x_s = xt.shape[:-2]
+        if len(xt.shape) == 2:
+            x_s.append(1)
+        self.d = jt.numpy_code([x_s], [xt.dtype], [xt], _det_forward)[0]
+        return self.d
+
+    def grad(self, dout):
+        x = self.x
+        d = _reconnect(self.d, det(x))
+        n_d = dout.reshape(list(dout.shape) + [1, 1])
+        n_o = d.reshape(list(d.shape) + [1, 1])
+        # inv(x) was never cached during forward (det's forward never
+        # computes it) -- this recompute is not new, the original numpy
+        # backward_code called np.linalg.inv(inp) fresh every time too.
+        xinvH = inv(x).transpose(-1, -2).conj()
+        return (n_d * n_o.conj() * xinvH).reshape(x.shape)
 
 
 def slogdet(x):
@@ -259,51 +289,57 @@ def slogdet(x):
     sign array decides the sign of determinant and their values can be -1,0,1.Only Real number now.0 means det is 0 and logdet is -inf.
     logdet in shape (...,1).
     """
-    import jittor as jt
-    def forward_code(np, data):
-        a = data["inputs"][0]
-        sign, m_a = data["outputs"]
-        sign_, t_a = np.linalg.slogdet(a)
-        np.copyto(m_a, t_a)
-        np.copyto(sign, sign_)
-
-    s = x.shape
-    det_s = s[:-2]
-    if len(det_s) == 0:
-        det_s.append(1)
-    complex_input = _is_native_complex(x)
-
-    class _Slogdet(jt.Function):
-        # With l = log det A (holomorphic, dl = tr(A^-1 dA)): logabs = Re l
-        # and sign = exp(i Im l). The conjugate-Wirtinger gradient of l is
-        #   g_l = g_logabs - i Im(conj(g_sign) sign)
-        # and the input gradient g_l * A^-H. For real input sign is +-1 and
-        # the second term vanishes, giving the previous g_logabs * A^-T; the
-        # previous backward also left out both the conjugate and the sign
-        # term, so a complex input's gradient was silently wrong. Written
-        # with differentiable ops around live recursive calls (see `inv`).
-        def execute(self, xt):
-            self.sign, self.logabs = jt.numpy_code(
-                [det_s, det_s], [xt.dtype, xt.dtype], [xt], forward_code)
-            return self.sign, self.logabs
-
-        def grad(self, gsign, glogabs):
-            g = None
-            if glogabs is not None:
-                g = glogabs.real * (1 + 0j) if complex_input else glogabs
-            if complex_input and gsign is not None:
-                sign = _reconnect(self.sign, slogdet(x)[0])
-                term = -(gsign.conj() * sign).imag * 1j
-                g = term if g is None else g + term
-            if g is None:
-                return jt.zeros_like(x)
-            if len(s) == 2:
-                g = g.reshape([])
-            inv_h = inv(x).transpose(-1, -2).conj()
-            return g.unsqueeze(-1).unsqueeze(-1) * inv_h
-
-    sign, mx = _Slogdet()(x)
+    sign, mx = _Slogdet(x)(x)
     return sign, mx
+
+
+@_host_lapack
+def _slogdet_forward(np, data):
+    a = data["inputs"][0]
+    sign, m_a = data["outputs"]
+    sign_, t_a = np.linalg.slogdet(a)
+    np.copyto(m_a, t_a)
+    np.copyto(sign, sign_)
+
+
+class _Slogdet(Function):
+    # With l = log det A (holomorphic, dl = tr(A^-1 dA)): logabs = Re l
+    # and sign = exp(i Im l). The conjugate-Wirtinger gradient of l is
+    #   g_l = g_logabs - i Im(conj(g_sign) sign)
+    # and the input gradient g_l * A^-H. For real input sign is +-1 and
+    # the second term vanishes, giving the previous g_logabs * A^-T; the
+    # previous backward also left out both the conjugate and the sign
+    # term, so a complex input's gradient was silently wrong. Written
+    # with differentiable ops around live recursive calls (see `inv`).
+    def __init__(self, x):
+        self.x = x
+
+    def execute(self, xt):
+        import jittor as jt
+        det_s = xt.shape[:-2]
+        if len(det_s) == 0:
+            det_s.append(1)
+        self.sign, self.logabs = jt.numpy_code(
+            [det_s, det_s], [xt.dtype, xt.dtype], [xt], _slogdet_forward)
+        return self.sign, self.logabs
+
+    def grad(self, gsign, glogabs):
+        import jittor as jt
+        x = self.x
+        complex_input = _is_native_complex(x)
+        g = None
+        if glogabs is not None:
+            g = glogabs.real * (1 + 0j) if complex_input else glogabs
+        if complex_input and gsign is not None:
+            sign = _reconnect(self.sign, slogdet(x)[0])
+            term = -(gsign.conj() * sign).imag * 1j
+            g = term if g is None else g + term
+        if g is None:
+            return jt.zeros_like(x)
+        if len(x.shape) == 2:
+            g = g.reshape([])
+        inv_h = inv(x).transpose(-1, -2).conj()
+        return g.unsqueeze(-1).unsqueeze(-1) * inv_h
 
 
 def _solve_rhs_is_vector(a_shape, b_shape):
@@ -344,37 +380,127 @@ def solve(a,b):
     return x.squeeze(-1) if vector else x
 
 
-def _solve_matrix(a, b):
-    """solve() on (...,M,M) and (...,M,K) operands with identical batch dims."""
-    import jittor as jt
-    def forward_code(np, data):
-        a, b = data["inputs"]
-        L = data["outputs"][0]
-        with _linalg_errors_raise(np):
-            ans = np.linalg.solve(a, b)
-        np.copyto(L, ans)
+def _solve_matrix(a, b, known=None):
+    """solve() on (...,M,M) and (...,M,K) operands with identical batch dims.
 
-    def _T(v):
-        # conjugate (Hermitian) transpose; .conj() is a no-op for real
-        # dtypes, so this also covers the real case unchanged, matching the
-        # Wirtinger-conjugate convention used throughout this module.
-        return v.transpose(-1, -2).conj()
+    ``known`` is the solution when it has been computed already: the result
+    then has that value without solving again, and the gradients of a solve.
+    """
+    return _Solve(a, b, known)(a, b)
 
-    class _Solve(jt.Function):
-        # See `inv`/`_Inv` above for the general real-higher-order-AD
-        # pattern. dL/db = A^-H @ dout = solve(A^H, dout); dL/dA = -db @ x^H
-        # (x = solve(A,b)). The operands already share their batch shape and
-        # `b` is always a matrix, so both gradients have exactly the input
-        # shapes. Both recursive calls close over the live `a`/`b`, so this
-        # composes to any order.
-        def execute(self, at, bt):
-            self.x = jt.numpy_code([bt.shape], [bt.dtype], [at, bt], forward_code)[0]
+
+@_host_lapack
+def _solve_forward(np, data):
+    a, b = data["inputs"]
+    L = data["outputs"][0]
+    if _is_cupy(np) and a.ndim == 2 and b.size and a.dtype == b.dtype == L.dtype:
+        _cuda_gesv(np, a, b, L)
+        return
+    with _linalg_errors_raise(np):
+        ans = np.linalg.solve(a, b)
+    np.copyto(L, ans)
+
+
+def _T(v):
+    # conjugate (Hermitian) transpose; .conj() is a no-op for real
+    # dtypes, so this also covers the real case unchanged, matching the
+    # Wirtinger-conjugate convention used throughout this module.
+    return v.transpose(-1, -2).conj()
+
+
+class _Solve(Function):
+    # See `inv`/`_Inv` above for the general real-higher-order-AD
+    # pattern. dL/db = A^-H @ dout = solve(A^H, dout); dL/dA = -db @ x^H
+    # (x = solve(A,b)). The operands already share their batch shape and
+    # `b` is always a matrix, so both gradients have exactly the input
+    # shapes. Both recursive calls use the live `a`/`b`, so this
+    # composes to any order.
+    def __init__(self, a, b, known=None):
+        self.a, self.b, self.known = a, b, known
+
+    def execute(self, at, bt):
+        import jittor as jt
+        if self.known is not None:
+            self.x = self.known
             return self.x
+        kernel = select_kernel("linalg_solve", at, bt)
+        if kernel is not None:
+            self.x = kernel(at, bt)
+        else:
+            self.x = jt.numpy_code([bt.shape], [bt.dtype], [at, bt], _solve_forward)[0]
+        return self.x
 
-        def grad(self, dout):
-            db = _solve_matrix(_T(a), dout)
-            x = _reconnect(self.x, _solve_matrix(a, b))
-            dA = -jt.matmul(db, _T(x))
-            return dA, db
+    def grad(self, dout):
+        import jittor as jt
+        a, b = self.a, self.b
+        db = _solve_matrix(_T(a), dout)
+        # x itself, as a solve of the live a and b: its value is the one the
+        # forward computed, so the first-order backward does not factorize a a
+        # second time, while every higher order differentiates through it.
+        x = _solve_matrix(a, b, known=self.x)
+        dA = -jt.matmul(db, _T(x))
+        return dA, db
 
-    return _Solve()(a, b)
+
+def _solve_triangular(a, b, upper):
+    """``solve(a, b)`` for an ``a`` that is triangular -- ``upper`` or lower,
+    the other triangle zero -- as the backward of QR and Cholesky has it.
+
+    A 2-D solve is one ``trsm`` rather than an LU and two triangular solves:
+    QR's backward solves against R once per call, 1,368 times in one gradient
+    of a 40-site MPS, and on CUDA each of those went through a general solve
+    and its status reads. The gradient is ``_solve_matrix``'s, unprojected, so
+    every order of derivative is what a general solve gives. A batch, or a
+    host without a CBLAS ``trsm``, takes the general solve.
+    """
+    import jittor as jt
+    if _is_batched(a) or _is_batched(b) or a.ndim != 2 or b.ndim != 2:
+        return jt.linalg.solve(a, b)
+
+    return _SolveTriangular(a, b, upper)(a, b)
+
+
+def _solve_triangular_forward(upper):
+    @_host_lapack
+    def forward(np, data):
+        a, b = data["inputs"]
+        x = data["outputs"][0]
+        if _is_cupy(np):
+            if a.dtype == b.dtype == x.dtype:
+                _cuda_trsm(np, a, b, x, upper)
+                return
+        elif _host_trsm(a, b, x, upper):
+            return
+        with _linalg_errors_raise(np):
+            np.copyto(x, np.linalg.solve(a, b))
+    return forward
+
+
+_SOLVE_TRIANGULAR_FORWARD = {
+    True: _solve_triangular_forward(True),
+    False: _solve_triangular_forward(False),
+}
+
+
+class _SolveTriangular(Function):
+    # `_Solve`'s backward; A^H is triangular the other way up.
+    def __init__(self, a, b, upper):
+        self.a, self.b, self.upper = a, b, upper
+
+    def execute(self, at, bt):
+        import jittor as jt
+        kernel = select_kernel("linalg_solve_triangular", at, bt, self.upper)
+        if kernel is not None:
+            self.x = kernel(at, bt, self.upper)
+        else:
+            self.x = jt.numpy_code([bt.shape], [bt.dtype], [at, bt],
+                                   _SOLVE_TRIANGULAR_FORWARD[self.upper])[0]
+        return self.x
+
+    def grad(self, dout):
+        import jittor as jt
+        a, b, upper = self.a, self.b, self.upper
+        db = _solve_triangular(_T(a), dout, not upper)
+        x = _reconnect(self.x, _solve_triangular(a, b, upper))
+        dA = -jt.matmul(db, _T(x))
+        return dA, db

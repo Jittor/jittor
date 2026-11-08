@@ -31,8 +31,10 @@ ArrayOp::ArrayOp(ArrayArgs&& args) {
         output->set_flag(VarFlags::_force_fuse);
         set_type(OpType::element);
     }
-    if (shape.size() == 0)
+    if (shape.size() == 0) {
         output->set_flag(VarFlags::_is_scalar);
+        output->set_flag(VarFlags::_is_constant);
+    }
     #ifdef HAS_ACCELERATOR
     // Fused scalar values are emitted inside generated kernels on both backends.
     if (requested_backend() != BackendId::Cpu && output->flag(VarFlags::_force_fuse))
@@ -142,7 +144,7 @@ void ArrayOp::run() {
     // then overwrite the three fields -- so between the read and the free the
     // var still named an allocation this thread had already given back, and a
     // release on another thread freed the same id a second time. Pinned by the
-    // id-space event log (KI-EXEC-007): `set_occupied(16 MiB, thread A)`,
+    // id-space event log (the shared-parameter storage race): `set_occupied(16 MiB, thread A)`,
     // `erase_occupied(16 MiB, thread B)`, the id reissued to another block,
     // and then A's free of the same id reporting "allocation not found".
     // `free_var_mem` clears the three fields *before* it calls the allocator,

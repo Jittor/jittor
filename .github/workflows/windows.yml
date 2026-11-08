@@ -46,7 +46,6 @@ jobs:
     runs-on: ${{ needs.baseline.outputs.windows_runner }}
     timeout-minutes: 45
     env:
-      JITTOR_HOME: ${{ runner.temp }}/windows-msvc/home
       JITTOR_TORCH_SHIM: '0'
       JT_BACKEND: cpu
       JT_USE_CUDA: '0'
@@ -66,6 +65,9 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ needs.baseline.outputs.python_version }}
+      - name: Configure isolated runtime home
+        shell: pwsh
+        run: '"JITTOR_HOME=$env:RUNNER_TEMP/windows-msvc/home" >> $env:GITHUB_ENV'
       - name: Install pinned build tools
         run: python -m pip install -r requirements/release.txt
       - name: Build the actual wheel

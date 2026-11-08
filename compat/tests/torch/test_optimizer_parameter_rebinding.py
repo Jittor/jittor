@@ -18,6 +18,25 @@ class TestOptimizerParameterRebinding:
         np.testing.assert_allclose(optimizer.state[flat]["exp_avg"].cpu().numpy(), [.1, -.1, .2, -.2, .3, -.3, .4], rtol=1e-6)
         np.testing.assert_array_equal(old.detach().cpu().numpy(), [[1., 2.], [3., 4.]])
 
+    def test_gradient_assigned_before_temporary_group_rebind(self, device):
+        old = torch.tensor([9., 9.], device=device, requires_grad=True)
+        optimizer = torch.optim.AdamW([old], lr=.1, weight_decay=0, foreach=False)
+        group = optimizer.param_groups[0]
+        group["params"] = []
+        flat = torch.tensor([1., 2.], device=device, requires_grad=True)
+
+        for _ in range(2):
+            flat.grad = torch.tensor([1., -1.], device=device)
+            group["params"] = [flat]
+            optimizer.step()
+            group["params"] = []
+            flat.grad = None
+
+        np.testing.assert_allclose(flat.detach().cpu().numpy(), [.8, 2.2], rtol=1e-6)
+        group["params"] = [flat]
+        assert int(optimizer.state[flat]["step"]) == 2
+        np.testing.assert_array_equal(old.detach().cpu().numpy(), [9., 9.])
+
     def test_reordered_parameters_preserve_their_own_moments(self, device):
         first = torch.tensor([1., 2.], device=device, requires_grad=True)
         second = torch.tensor([3., 4., 5.], device=device, requires_grad=True)

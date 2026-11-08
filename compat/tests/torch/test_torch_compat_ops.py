@@ -96,6 +96,138 @@ class TestReductions(Base):
 
         both_devices(body)
 
+    def test_sum_default_integer_dtype_and_empty(self):
+        values = np.array([[1, 0, 1], [0, 1, 1]])
+        integer_names = ("bool", "uint8", "int8", "uint16", "int16",
+                         "uint32", "int32", "uint64", "int64")
+
+        def body(dev):
+            for name in integer_names:
+                tensor = torch.tensor(values, dtype=getattr(torch, name))
+                for use_function in (False, True):
+                    reduce = torch.sum if use_function else lambda x, **kw: x.sum(**kw)
+                    with self.subTest(device=dev, dtype=name, function=use_function):
+                        total = reduce(tensor)
+                        self.assertEqual(total.dtype, torch.int64)
+                        self.assertEqual(tuple(total.shape), ())
+                        self.ae(total.numpy(), np.array(4, dtype="int64"))
+                        rows = reduce(tensor, dim=1, keepdim=True)
+                        self.assertEqual(rows.dtype, torch.int64)
+                        self.ae(rows.numpy(), np.array([[2], [2]], dtype="int64"))
+                        dims = reduce(tensor, dim=(0, 1))
+                        self.assertEqual(dims.dtype, torch.int64)
+                        self.ae(dims.numpy(), np.array(4, dtype="int64"))
+                        empty = reduce(torch.empty((2, 0), dtype=getattr(torch, name)), dim=1)
+                        self.assertEqual(empty.dtype, torch.int64)
+                        self.ae(empty.numpy(), np.array([0, 0], dtype="int64"))
+                        explicit = reduce(tensor, dtype=torch.int32)
+                        self.assertEqual(explicit.dtype, torch.int32)
+                        self.ae(explicit.numpy(), np.array(4, dtype="int32"))
+                        out = torch.empty((2,), dtype=torch.int32)
+                        returned = torch.sum(tensor, dim=1, dtype=torch.int32, out=out)
+                        self.assertIs(returned, out)
+                        self.assertEqual(out.dtype, torch.int32)
+                        self.ae(out.numpy(), np.array([2, 2], dtype="int32"))
+
+        both_devices(body)
+
+    def test_sum_integer_promotion_precedes_overflow(self):
+        def body(dev):
+            tensor = torch.tensor([2147483647, 1], dtype=torch.int32)
+            for total in (tensor.sum(), torch.sum(tensor)):
+                self.assertEqual(total.dtype, torch.int64)
+                self.ae(total.numpy(), np.array(2147483648, dtype="int64"))
+            explicit = tensor.sum(dtype=torch.int32)
+            self.assertEqual(explicit.dtype, torch.int32)
+            self.ae(explicit.numpy(), np.array(-2147483648, dtype="int32"))
+
+        both_devices(body)
+
+    def test_sum_bool_batch_count_is_int64_scalar(self):
+        def body(dev):
+            labels = [torch.tensor([[1, 2, -100], [3, -100, -100]]),
+                      torch.tensor([[4, 5, 6], [7, -100, -100]])]
+            count = sum(batch.ne(-100).sum() for batch in labels)
+            self.assertEqual(count.dtype, torch.int64)
+            self.assertEqual(tuple(count.shape), ())
+            self.ae(count.numpy(), np.array(7, dtype="int64"))
+
+        both_devices(body)
+
+
+    def test_sum_out_dtype_controls_accumulation_and_none(self):
+        cases = (
+            (torch.int64, [16777217, 1], torch.float32, 16777216),
+            (torch.uint64, [9223372036854775808, 1], torch.float64,
+             9223372036854775808),
+            (torch.int32, [2147483647, 1], torch.int64, 2147483648),
+        )
+
+        def body(dev):
+            for source_dtype, values, out_dtype, expected in cases:
+                tensor = torch.tensor(values, dtype=source_dtype)
+                for mode in ("omitted", "none", "explicit"):
+                    with self.subTest(device=dev, source_dtype=str(source_dtype),
+                                      out_dtype=str(out_dtype), mode=mode):
+                        out = torch.empty((), dtype=out_dtype)
+                        kwargs = {"dim": 0, "out": out}
+                        if mode == "none":
+                            kwargs["dtype"] = None
+                        elif mode == "explicit":
+                            kwargs["dtype"] = out_dtype
+                        returned = torch.sum(tensor, **kwargs)
+                        self.assertIs(returned, out)
+                        self.assertEqual(out.dtype, out_dtype)
+                        self.assertEqual(tuple(out.shape), ())
+                        self.assertEqual(out.item(), expected)
+            tensor = torch.tensor([1, 2], dtype=torch.int64)
+            with self.assertRaises(RuntimeError):
+                torch.sum(tensor, dim=0, dtype=torch.int64,
+                          out=torch.empty((), dtype=torch.float32))
+
+        both_devices(body)
+
+    def test_sum_uint64_default_and_dtype_none_wrap_to_int64(self):
+        cases = (
+            ([9223372036854775808, 1], -9223372036854775807),
+            ([18446744073709551615, 1], 0),
+            ([18446744073709551615, 2], 1),
+        )
+
+        def body(dev):
+            for values, expected in cases:
+                tensor = torch.tensor(values, dtype=torch.uint64)
+                for result in (tensor.sum(), tensor.sum(dtype=None),
+                               torch.sum(tensor), torch.sum(tensor, dtype=None)):
+                    self.assertEqual(result.dtype, torch.int64)
+                    self.assertEqual(tuple(result.shape), ())
+                    self.assertEqual(result.item(), expected)
+
+        both_devices(body)
+
+    def test_sum_out_view_preserves_storage_alias_and_identity(self):
+        def body(dev):
+            for empty in (False, True):
+                source = (torch.empty((2, 0), dtype=torch.int64) if empty
+                          else torch.tensor([[1, 2], [3, 4]], dtype=torch.int64))
+                backing = torch.tensor([-99, -99, -99, -99], dtype=torch.int64)
+                self.assertEqual(tuple(backing.stride()), (1,))
+                alias = backing.detach()
+                out = backing[1:3]
+                self.assertEqual(tuple(out.stride()), (1,))
+                old_pointer = out.data_ptr()
+                returned = torch.sum(source, dim=1, dtype=None, out=out)
+                expected = [0, 0] if empty else [3, 7]
+                self.assertIs(returned, out)
+                self.assertEqual(out.dtype, torch.int64)
+                self.assertEqual(out.data_ptr(), old_pointer)
+                self.ae(out.numpy(), np.asarray(expected, dtype="int64"))
+                expected_backing = np.asarray([-99] + expected + [-99], dtype="int64")
+                self.ae(backing.numpy(), expected_backing)
+                self.ae(alias.numpy(), expected_backing)
+
+        both_devices(body)
+
     def test_mean_dim(self):
         x = self.x
         for dim in [0, -1]:
@@ -209,6 +341,22 @@ class TestShapeOps(Base):
                     msg=f"unsqueeze {dev}")
         both_devices(body)
 
+    def test_cat_out_writes_through_view(self):
+        def body(dev):
+            flat = torch.zeros(8, dtype=torch.float32)
+            out = flat.narrow(0, 2, 4)
+            left = torch.tensor([1.0, 2.0], dtype=torch.float32)
+            right = torch.tensor([3.0, 4.0], dtype=torch.float32)
+            returned = torch.cat([left, right], out=out)
+            self.assertIs(returned, out)
+            self.ae(out.numpy(), np.array([1, 2, 3, 4], dtype=np.float32),
+                    msg=f"cat out view {dev}")
+            self.ae(flat.numpy(), np.array([0, 0, 1, 2, 3, 4, 0, 0], dtype=np.float32),
+                    msg=f"cat out base {dev}")
+
+        both_devices(body)
+
+
     def test_contiguous_materializes_strided_slice_for_view(self):
         def body(dev):
             source = torch.tensor(
@@ -274,6 +422,20 @@ class TestComparisonWhere(Base):
                             f"in-place multiply produced non-finite values {dev}")
             self.ae(value.numpy(), np.zeros((1, 4), dtype=np.float32),
                     msg=f"in-place multiply values {dev}")
+
+        both_devices(body)
+
+    def test_where_frozen_result_grad_flags(self):
+        def body(dev):
+            condition = torch.tensor([[True, False]], device=dev)
+            frozen = torch.tensor(0.0, device=dev)
+            trainable = torch.ones((1, 2), device=dev, requires_grad=True)
+            self.assertFalse(torch.where(condition, frozen, -3.0).requires_grad)
+            self.assertTrue(torch.where(condition, trainable, frozen).requires_grad)
+            with torch.no_grad():
+                self.assertFalse(torch.where(condition, trainable, frozen).requires_grad)
+            self.assertFalse(frozen.requires_grad)
+            self.assertTrue(trainable.requires_grad)
 
         both_devices(body)
 
@@ -479,6 +641,36 @@ class TestNestedTensor(Base):
             self.assertIs(NestedTensor, type(nested))
 
         both_devices(body)
+
+
+class TestTypeAndDeviceSemantics(Base):
+    def test_type_as_inherits_dtype_and_device(self):
+        def body(dev):
+            source = torch.tensor([1, 2], dtype=torch.int32)
+            target = torch.tensor([0, 0], dtype=torch.float32, device=dev)
+            converted = source.type_as(target)
+            self.assertEqual(converted.dtype, target.dtype)
+            self.assertEqual(converted.is_cuda, target.is_cuda)
+            self.ae(converted.detach().cpu().numpy(),
+                    np.array([1, 2], dtype=np.float32),
+                    msg=f"type_as values {dev}")
+
+        both_devices(body)
+
+    def test_reflected_scalar_pow_keeps_tensor_device(self):
+        def body(dev):
+            exponent = torch.arange(0, 8, 2, dtype=torch.float32, device=dev) / 8
+            result = 2.0 ** exponent
+            self.assertEqual(result.is_cuda, dev == "cuda")
+            self.ac(
+                result.detach().cpu().numpy(),
+                np.power(2.0, exponent.detach().cpu().numpy()),
+                msg=f"reflected pow device {dev}",
+            )
+
+        both_devices(body)
+
+
 
 
 if __name__ == "__main__":

@@ -147,6 +147,31 @@ def test_first_and_second_order_match_finite_differences(device, name, kind):
     assert _rel(_hvp(f, x, v), fd_hvp) < 1e-5
 
 
+@pytest.mark.parametrize("kind", ["real", "complex"])
+def test_batched_solve_first_and_second_order(device, kind):
+    # A broadcast batch, both operands differentiated: on CUDA the forward
+    # and both solves of the backward are the native batched op.
+    rng = np.random.default_rng(20261031 + (kind == "complex"))
+    cplx = kind == "complex"
+
+    def sample(*shape):
+        return rng.standard_normal(shape) + (1j * rng.standard_normal(shape) if cplx else 0)
+
+    a = sample(1, 3, 3) + 3 * np.eye(3)
+    rhs = sample(2, 3, 2)
+
+    def f(x):
+        # x packs A (the first 3 columns) and B (the last 2) of each matrix.
+        return _smooth(jt.linalg.solve(x[:1, :, :3], x[:, :, 3:]))
+
+    x = np.concatenate([np.broadcast_to(a, (2, 3, 3)), rhs], axis=-1)
+    v = sample(2, 3, 5)
+    assert _rel(_grad(f, x), _fd_grad(f, x)) < 1e-6
+    eps = 1e-5
+    fd_hvp = (_grad(f, x + eps * v) - _grad(f, x - eps * v)) / (2 * eps)
+    assert _rel(_hvp(f, x, v), fd_hvp) < 1e-5
+
+
 def test_complex_det_first_order_uses_conjugates(device):
     rng = np.random.default_rng(2)
     a = rng.standard_normal((3, 3)) + 1j * rng.standard_normal((3, 3)) + 3 * np.eye(3)

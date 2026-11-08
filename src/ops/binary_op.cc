@@ -10,6 +10,7 @@
 #include "ops/layout_propagation.h"
 #include "ops/broadcast_to_op.h"
 #include "ops/op_register.h"
+#include "ops/composite/array_op.h"
 
 namespace jittor {
 
@@ -460,7 +461,50 @@ static VarPtr broadcast_binary(Var* x, Var* y, NanoString op) {
     return make_binary(xp, yp, op);
 }
 
+// `ArrayOp(PyObject*)` stages a Python float as float32, and a Python complex
+// as complex64, which is what `jt.array(0.5)` and every single-precision
+// operand should see. In torch a Python number is a weak double, though: the
+// result dtype is already right (a scalar does not take part in promotion), so
+// the defect is only in the value -- against a float64 or complex128 operand it
+// carries 24 mantissa bits where 53 are available (`z ** 1.2345678901234567`
+// was off by 2e-8 on a complex128 `z`). Rebuild the constant from the exact
+// double(s) when promotion asks for double precision; `make_binary` re-enters
+// with the wide scalar and the rest of the constructor runs unchanged.
+static VarPtr widen_python_float_operand(Var* value, Var* other, NanoString op) {
+    if (!value->flag(VarFlags::_python_number) || value->shape.size() != 0
+            || (value->dtype() != ns_float32 && value->dtype() != ns_complex64))
+        return nullptr;
+    Op* producer = value->input();
+    if (!producer || !producer->is_op(op_ids::array())) return nullptr;
+    auto* array = static_cast<ArrayOp*>(producer);
+    if (!array->has_python_float && !array->has_python_complex) return nullptr;
+    bool xs = value->flag(VarFlags::_is_scalar);
+    bool ys = other->flag(VarFlags::_is_scalar);
+    // A comparison answers bool; ask add for the type its operands are
+    // compared at, the same way the complex path above does.
+    NanoString target = binary_dtype_infer(op, value->ns, other->ns, xs, ys);
+    if (target == ns_bool)
+        target = binary_dtype_infer(ns_add, value->ns, other->ns, xs, ys);
+    VarPtr rebuilt;
+    if (array->has_python_complex) {
+        if (target != ns_complex128) return nullptr;
+        double exact[2] = {array->python_float, array->python_imag};
+        rebuilt = make_array(exact, {}, ns_complex128);
+    } else {
+        // A float64 constant goes exactly into a complex128 operation too.
+        if (target != ns_float64 && target != ns_complex128) return nullptr;
+        double exact = array->python_float;
+        rebuilt = make_array(&exact, {}, ns_float64);
+    }
+    rebuilt->set_flag(VarFlags::_python_number);
+    return rebuilt;
+}
+
 VarPtr BinaryOp::forward_before_construct(Var* x, Var* y, NanoString op) {
+    if (VarPtr wide = widen_python_float_operand(x, y, op))
+        return make_binary(wide, y, op);
+    if (VarPtr wide = widen_python_float_operand(y, x, op))
+        return make_binary(x, wide, op);
     // The constructor's shape walk, deciding only whether it broadcasts. A
     // mismatch is the constructor's to report, with its message.
     auto xdim = x->shape.size();
@@ -729,6 +773,36 @@ VarPtr BinaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
             return make_ternary(cond, dout, zeros);
         else
             return make_ternary(cond, zeros, dout);
+    }
+    if (ns == ns_pow && z->dtype().is_complex()) {
+        // z = x^y is holomorphic in both (principal branch), so each gradient
+        // is dout * conj(f'), as for multiply/exp/log above. Where f' is a
+        // 0 * inf the derivative is 0, as torch defines it: d/dx at y == 0
+        // (x^-1 at a zero base), and d/dy at a zero base with y real and
+        // >= 0 (0 * log 0).
+        auto zeros = make_number(0, dout);
+        if (v_index == 0) {
+            int number = 1;
+            auto ones = make_array(&number, {}, ns_int32);
+            auto x_y_1 = make_binary(x, make_binary(y, ones, ns_subtract), ns_pow);
+            auto d = make_binary(dout,
+                make_unary(make_binary(y, x_y_1, ns_multiply), ns_conj), ns_multiply);
+            auto y_is_0 = make_binary(y, make_number(0, y), ns_equal);
+            return make_ternary(y_is_0, zeros, d);
+        } else {
+            auto d = make_binary(dout,
+                make_unary(make_binary(z, make_unary(x, ns_log), ns_multiply), ns_conj),
+                ns_multiply);
+            NanoString real = y->dtype() == ns_complex64 ? ns_float32 : ns_float64;
+            auto y_real = make_unary(y, real);
+            auto y_imag = make_unary(y, ns_imag);
+            auto x_is_0 = make_binary(x, make_number(0, x), ns_equal);
+            auto y_real_nonneg = make_binary(
+                make_binary(y_imag, make_number(0, y_imag), ns_equal),
+                make_binary(y_real, make_number(0, y_real), ns_greater_equal),
+                ns_bitwise_and);
+            return make_ternary(make_binary(x_is_0, y_real_nonneg, ns_bitwise_and), zeros, d);
+        }
     }
     if (ns == ns_pow) {
         if (v_index == 0) {

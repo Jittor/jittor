@@ -8,7 +8,9 @@ from jittor._core.var import pow as _native_pow
 
 from .method_api import (
     _CAST_APIS, _UNARY_INPLACE_APIS,
+    _api_tanh,
     _api_fill,
+    _api_fill_diagonal,
     _api_zero,
     _api_add,
     _api_sub,
@@ -18,10 +20,13 @@ from .method_api import (
     _api_clamp_max,
     _api_clamp,
     _api_clamp_alias,
+    _torch_eq,
     _api_ne,
     _api_ne_alias,
     _api_nonzero,
+    _api_exponential,
     _api_normal,
+    _api_random,
     _api_uniform,
     _api_tolist,
     _api_contiguous,
@@ -38,6 +43,7 @@ from .method_api import (
     _api_is_contiguous,
     _api_is_leaf,
     _api_is_sparse,
+    _api_is_quantized,
     _api_retains_grad,
     _api_is_cpu,
     _api_is_mps,
@@ -58,6 +64,7 @@ from .method_api import (
     _TYPENAME_TO_DTYPE,
     _TorchGradFn,
     _add,
+    _add_method,
     _mul,
     _sqrt,
     _rsqrt,
@@ -66,6 +73,7 @@ from .method_api import (
     _is_pinned,
     _pin_memory,
     _set_,
+    _record_stream,
     _assign_data_owner,
     _backward,
     _baddbmm,
@@ -73,6 +81,7 @@ from .method_api import (
     _clamp,
     _complex_scalar_var,
     _copy_,
+    _optimizer_update,
     _data_get,
     _data_owner_uses_device,
     _data_set,
@@ -113,6 +122,7 @@ from .method_api import (
     _stride,
     _tile,
     _to,
+    _type_as,
     _torch_getitem,
     _torch_ne,
     _torch_setitem,
@@ -151,9 +161,45 @@ def _bind_native_fast_paths(jt):
     """
     from jittor._runtime import dispatch
     from jittor._runtime.step_capture import tracing
+    from jittor.ops import concatenation, indexing
     if dispatch._NATIVE_SELECT is None:
         dispatch._bind_native_select()
-    jt.core._compat_fast_bind(tracing)
+    selector_state = None
+    getitem_selector_state = None
+    if dispatch._NATIVE_SELECT is jt.core._kernel_select:
+        selector_state = (
+            vars(concatenation), dispatch.select_kernel, vars(dispatch),
+            dispatch._NATIVE_DISPATCH_CONTEXT, dispatch._NATIVE_SELECT,
+        )
+        getitem_selector_state = (
+            vars(indexing), indexing.try_dispatch, vars(dispatch), dispatch.select_kernel,
+            dispatch._NATIVE_DISPATCH_CONTEXT, dispatch._NATIVE_SELECT,
+        )
+    jt.core._compat_fast_bind(tracing, concatenation._concat_after_kernel,
+                             selector_state, getitem_selector_state)
+
+
+def _install_expand_shape_adapter(Var):
+    """Accept scalar tensor dimensions in ``Tensor.expand`` shape arguments.
+
+    PyTorch permits a 0-D tensor (and SymInt-like scalar) as a dimension. A
+    Jittor ``broadcast`` call receives a Python shape vector and therefore
+    needs those values materialized as integers. Shape conversion is metadata
+    handling; the expanded tensor remains a native view on its original
+    device.
+    """
+    native = getattr(Var, "expand", None)
+    if native is None or getattr(native, "_torch_shape_adapter", False):
+        return
+
+    def expand(self, *shape):
+        if len(shape) == 1 and isinstance(shape[0], (tuple, list)):
+            shape = tuple(shape[0])
+        normalized = tuple(int(value) for value in shape)
+        return native(self, *normalized)
+
+    expand._torch_shape_adapter = True
+    Var.expand = expand
 
 
 def _bind_native_binary(jt, natives, mark_cpu_like):
@@ -192,6 +238,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     _owner = _import_module(__package__)
     _bind_native_fast_paths(_owner.jt)
     _NativeVar = _owner.jt.Var
+    _install_expand_shape_adapter(Var)
     _native_operators = {name: getattr(Var, name, None) for name in _BINARY_APIS}
 
     # Jittor's native pow(2) shortcut expands to x*x. Its two-edge product
@@ -250,6 +297,8 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         _torch_setitem._torch_mask_bcast = True
         Var.__setitem__ = _torch_setitem
 
+    Var._optimizer_update = _optimizer_update
+
     # in-place tensor ops torch code uses heavily (jittor exposes assign()).
     # _ip() preserves grad-tracking: jittor's assign() adopts the source's
     # stop_grad flag, which would freeze a trainable parameter.
@@ -269,10 +318,13 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # inside @torch.no_grad(); Jittor's native bound initializers adopt the
     # constant source's stop-grad flag and permanently freeze the parameter.
     Var.fill_ = _api_fill
+    Var.fill_diagonal_ = _api_fill_diagonal
     Var.zero_ = _api_zero
+    Var.add = _add_method
     Var.add_ = _api_add
     Var.sub_ = _api_sub
     Var.mul_ = _api_mul
+    Var.multiply_ = _api_mul
     Var.div_ = _api_div
     # Native augmented assignment preserves a formerly frozen destination's
     # stop-grad policy. Torch instead connects it to a differentiable RHS,
@@ -281,9 +333,11 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     Var.__isub__ = _api_sub
     Var.__imul__ = _api_mul
     Var.__itruediv__ = _api_div
+    # The method and top-level form share the same native precision delegate.
+    Var.tanh = _api_tanh
     # in-place unary math ops (recurrent_gemma uses x.log_(); common torch idioms)
     for name, implementation in _UNARY_INPLACE_APIS.items():
-        if not hasattr(Var, name):
+        if name in ("abs_", "erf_") or not hasattr(Var, name):
             setattr(Var, name, implementation)
     # torch.clamp(input, min=None, max=None) and Tensor.clamp(min=, max=)
     # accept min/max as keyword args, either of which may be None. jittor's
@@ -303,6 +357,8 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     Var.clip_ = Var.clamp_
 
 
+    g.eq = _torch_eq
+    Var.eq = _torch_eq
     g.ne = _torch_ne
     g.not_equal = _torch_ne
     Var.ne = _api_ne
@@ -321,7 +377,9 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         g.argwhere = _api_argwhere
     if not hasattr(Var, "argwhere"):
         Var.argwhere = _api_argwhere_alias
+    Var.exponential_ = _api_exponential
     Var.normal_ = _api_normal
+    Var.random_ = _api_random
     Var.uniform_ = _api_uniform
 
     # torch tensors are hashable by identity (they define __eq__ elementwise but
@@ -351,12 +409,17 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
 
     # torch storage introspection: peft/safetensors call tensor.storage()
     # .data_ptr() / .untyped_storage().nbytes() to detect shared/tied weights.
-    # jittor has no exposed storage object; expose identity-based stand-ins so
-    # save_pretrained's tied-weight detection works (each Var is its own storage).
+    # Expose the native allocation address so detached aliases and offset
+    # views retain their shared storage identity.
     if not hasattr(Var, "storage"):
         Var.storage = _api_storage
     if not hasattr(Var, "untyped_storage"):
         Var.untyped_storage = _api_untyped_storage
+    Var.record_stream = _record_stream
+    register_fidelity(
+        "torch.Tensor.record_stream", _record_stream, Fidelity.APPROXIMATE,
+        "Synchronizes native work before storage can be reused; logical CUDA "
+        "streams have no independent allocator lifetime.")
     if not hasattr(Var, "data_ptr"):
         # Tensor.data_ptr is the first element address, not Python object
         # identity. The native accessor synchronizes without migrating it.
@@ -460,6 +523,9 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # of silently calling every intermediate a leaf.
     Var.is_leaf = property(_api_is_leaf)
     Var.is_sparse = property(_api_is_sparse)
+    Var.is_quantized = property(_api_is_quantized)
+    register_api_bindings(Var, 'torch.Tensor', ('is_quantized',), Fidelity.EXACT,
+                          'Native Var has no quantized tensor storage.')
     register_api_bindings(Var, 'torch.Tensor', ('is_sparse',), Fidelity.EXACT,
                           'Native Var has dense storage; sparse construction is unsupported.')
     # torch's nested-tensor flag; jittor has no nested tensors -> always False.
@@ -488,6 +554,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     Var.retains_grad = property(_api_retains_grad)
 
     Var.to = _to
+    Var.type_as = _type_as
 
     # Jittor stores torch 0-D scalars as one-element Vars. Preserve a lightweight
     # provenance marker through the copy-like methods used before host export,
@@ -705,8 +772,18 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     for name, implementation in _INPLACE_BINARY_APIS.items():
         setattr(Var, name, implementation)
 
+    # These native white-listed ops widen half results by design. Keep that
+    # native policy separate from Torch's public Tensor/function boundaries.
+    from ..numerical.elementwise import exp, pow
+    g.exp = Var.exp = exp
+    g.pow = Var.pow = pow
+    register_api_bindings(g, 'torch', ('exp', 'pow'), Fidelity.APPROXIMATE,
+        'Native math with Torch low-precision result dtypes outside explicit autocast; existing device and numerical limitations remain')
+    register_api_bindings(Var, 'torch.Tensor', ('exp', 'pow'), Fidelity.APPROXIMATE,
+        'Shares the public function implementation and preserves native explicit autocast policy')
+
     register_api_bindings(Var, 'torch.Tensor',
-        ('T', '__deepcopy__', '__getitem__', '__hash__', '__invert__', '__ne__', '__reduce__', '__reduce_ex__', '__setitem__', 'add_', 'addmm', 'argwhere', 'as_strided', 'backward', 'baddbmm', 'clamp', 'clamp_', 'clip', 'clip_', 'contiguous', 'copy_', 'cuda', 'cumprod', 'cumsum', 'data', 'data_ptr', 'detach', 'device', 'div_', 'dtype', 'element_size', 'fill_', 'get_device', 'grad', 'grad_fn', 'is_complex', 'is_contiguous', 'is_cpu', 'is_cuda', 'is_floating_point', 'is_leaf', 'is_meta', 'is_mps', 'is_nested', 'is_pinned', 'is_signed', 'is_xpu', 'mT', 'mul', 'multiply', 'mul_', 'narrow', 'ne', 'nelement', 'new_empty', 'new_full', 'new_tensor', 'new_zeros', 'nonzero', 'norm', 'normal_', 'numpy', 'pin_memory', 'requires_grad', 'requires_grad_', 'retain_grad', 'retains_grad', 'set_', 'squeeze', 'storage', 'storage_offset', 'stride', 'sub_', 'tile', 'to', 'tolist', 'type', 'uniform_', 'untyped_storage', 'where', 'zero_') + tuple(_BINARY_APIS.keys() | _CAST_APIS.keys() | _UNARY_INPLACE_APIS.keys() | _INPLACE_BINARY_APIS.keys()),
+        ('T', '__iadd__', '__isub__', '__imul__', '__itruediv__', '__deepcopy__', '__getitem__', '__hash__', '__invert__', '__ne__', '__reduce__', '__reduce_ex__', '__setitem__', 'add_', 'addmm', 'argwhere', 'as_strided', 'backward', 'baddbmm', 'clamp', 'clamp_', 'clip', 'clip_', 'contiguous', 'copy_', 'cpu', 'cuda', 'cumprod', 'cumsum', 'data', 'data_ptr', 'detach', 'device', 'div_', 'dtype', 'element_size', 'exponential_', 'fill_', 'fill_diagonal_', 'get_device', 'grad', 'grad_fn', 'is_complex', 'is_contiguous', 'is_cpu', 'is_cuda', 'is_floating_point', 'is_leaf', 'is_meta', 'is_mps', 'is_nested', 'is_pinned', 'is_signed', 'is_xpu', 'mT', 'mul_', 'multiply_', 'narrow', 'ne', 'nelement', 'new_empty', 'new_full', 'new_ones', 'new_tensor', 'new_zeros', 'nonzero', 'norm', 'normal_', 'numpy', 'pin_memory', 'random_', 'requires_grad', 'requires_grad_', 'retain_grad', 'retains_grad', 'set_', 'squeeze', 'storage', 'storage_offset', 'stride', 'sub_', 'tile', 'to', 'tolist', 'type', 'type_as', 'uniform_', 'untyped_storage', 'where', 'zero_', 'add', 'mul', 'multiply', 'tanh') + tuple(_BINARY_APIS.keys() | _CAST_APIS.keys() | _UNARY_INPLACE_APIS.keys() | _INPLACE_BINARY_APIS.keys()),
         Fidelity.APPROXIMATE, 'Tensor operations share the native Var/Op graph and explicit frontend state; unsupported layouts, device capabilities, and retained compatibility approximations remain restricted')
     register_api_bindings(
         Var, 'torch.Tensor', ('cpu', 'mul', 'multiply', 'new_ones'),

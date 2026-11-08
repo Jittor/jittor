@@ -36,12 +36,12 @@ class TestTorchFactoryFidelity(unittest.TestCase):
         self.assertEqual(tuple(actual.shape), (2, 3, 1))
         self.assertTrue(bool(torch.isfinite(actual).all()))
 
-    def test_cpu_generator_randperm_matches_pytorch_26_and_advances(self):
+    def test_cpu_generator_randperm_native_stream_replays_and_advances(self):
         generator = torch.Generator().manual_seed(777)
         first = torch.randperm(256, generator=generator)
         second = torch.randperm(128, generator=generator)
-        np.testing.assert_array_equal(first[:4].numpy(), [103, 15, 197, 254])
-        np.testing.assert_array_equal(second[:4].numpy(), [111, 108, 121, 2])
+        np.testing.assert_array_equal(np.sort(first.numpy()), np.arange(256))
+        np.testing.assert_array_equal(np.sort(second.numpy()), np.arange(128))
         replay = torch.Generator().manual_seed(777)
         np.testing.assert_array_equal(torch.randperm(256, generator=replay).numpy(), first.numpy())
         state = generator.get_state()
@@ -125,9 +125,15 @@ class TestTorchFactoryFidelity(unittest.TestCase):
                 torch.randint(0, 10, (4,), device="cuda:1",
                               generator=generator)
 
-    def test_unimplemented_generator_distribution_fails_closed(self):
-        with self.assertRaisesRegex(NotImplementedError, "Generator"):
-            torch.normal(0.0, 1.0, size=(2,), generator=torch.Generator())
+    def test_supported_generator_normal_replays_and_preserves_global_stream(self):
+        generator = torch.Generator().manual_seed(73)
+        state = generator.get_state()
+        global_state = torch.get_rng_state().numpy().copy()
+        expected = torch.normal(0.0, 1.0, size=(2,), generator=generator).numpy()
+        generator.set_state(state)
+        actual = torch.normal(0.0, 1.0, size=(2,), generator=generator).numpy()
+        np.testing.assert_array_equal(actual, expected)
+        np.testing.assert_array_equal(torch.get_rng_state().numpy(), global_state)
 
     def test_manual_seed_materializes_live_random_graph_before_reset(self):
         torch.manual_seed(41)

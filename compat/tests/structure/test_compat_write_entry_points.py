@@ -272,6 +272,10 @@ CLASSIFIED = {
     (C + "shim/runtime.py", "_activate_once", "sys.modules"): "ledger",
     (C + "torch/installers/core.py", "install_misc", "sys.modules"): "ledger",
     (C + "shim/runtime.py", "_publish_torch_module", "sys.modules"): "ledger",
+    # The in-process shim's process-local torch distribution: publish is
+    # recorded as the activation transaction's undo, which is release.
+    (C + "shim/torch_metadata.py", "publish", "sys.meta_path"): "ledger",
+    (C + "shim/torch_metadata.py", "release", "sys.meta_path"): "ledger",
 
     # ---- runtime requests, not installation steps --------------------------
     # torch.backends.cuda.matmul.allow_tf32 = True and friends.
@@ -284,6 +288,9 @@ CLASSIFIED = {
     # be here for the same reason and is not any more: its __enter__/__exit__
     # delegate to a jt.flag_scope instead of writing the flag themselves.
     (C + "torch/amp.py", "_refresh_amp_register", "flags"): "runtime",
+    # FSDP precision scope saves and restores its caller's register.
+    (C + "torch/amp.py", "__enter__", "flags"): "runtime",
+    (C + "torch/amp.py", "__exit__", "flags"): "runtime",
     # node_order is set and restored inside one optimizer step.
     (C + "torch/optimizer_adam.py", "_adam_step", "flags"): "runtime",
     (C + "torch/optimizer_api.py", "_step_with_closure", "flags"): "runtime",

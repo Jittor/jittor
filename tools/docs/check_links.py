@@ -4,6 +4,7 @@
 from __future__ import print_function
 
 import argparse
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -16,7 +17,6 @@ REFERENCE_LINK = re.compile(r"^\s*\[[^\]]+\]:\s*(\S+)")
 HTML_LINK = re.compile(r"\b(?:href|src)=[\"']([^\"']+)[\"']", re.IGNORECASE)
 DOC_ROLE = re.compile(r"\{(?:doc|download)\}`([^`]+)`")
 SCHEMES = frozenset(("data", "ftp", "http", "https", "mailto", "tel"))
-HISTORICAL_TREES = ("refactor-wip/results/",)
 
 
 def _tracked_markdown(repo_root):
@@ -32,9 +32,6 @@ def _tracked_markdown(repo_root):
     selected = []
     for relative in result.stdout.decode("utf-8").split("\0"):
         if not relative.endswith(".md"):
-            continue
-        if relative != "refactor-wip/results/README.md" and any(
-                relative.startswith(prefix) for prefix in HISTORICAL_TREES):
             continue
         # Cached paths may have been deleted or moved in the working tree.
         if not (repo_root / relative).is_file():
@@ -111,13 +108,38 @@ def _markdown_targets(path):
             yield number, label.group(1) if label else value, "doc"
 
 
-#: A ``blob`` URL into this repository names a path in this working tree, so it
+#: A floating ``blob`` URL into this repository names a working-tree path, so it
 #: can be checked like a relative link -- and it has to be, because the layout
-#: moves. Four links in ``docs/notes/complex-dtype.md`` pointed at
+#: moves. Four links in ``docs/notes/numerics/complex-dtype.md`` pointed at
 #: ``tests/core/test_complex*.py`` long after those files moved to
 #: ``tests/type`` and ``tests/autograd``; nothing noticed, because a link with a
 #: scheme was skipped whether or not it named something local.
 _REPOSITORY_BLOB = re.compile(r"^/Jittor/jittor/(?P<kind>blob|tree)/(?P<ref>[^/]+)/(?P<path>.+)$")
+
+
+def _historical_target(repo_root, revision, path, kind, raw_target):
+    """Validate immutable links against local Git objects, never the network."""
+    environment = dict(os.environ, GIT_NO_LAZY_FETCH="1")
+
+    def object_type(name):
+        result = subprocess.run(
+            ("git", "--no-replace-objects", "cat-file", "-t", name),
+            cwd=str(repo_root), env=environment,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            universal_newlines=True, check=False,
+        )
+        return result.stdout.strip() if result.returncode == 0 else None
+
+    if object_type(revision) != "commit":
+        return ("historical repository commit unavailable locally: {}; "
+                "fetch the referenced history (CI checkout: fetch-depth: 0): {}"
+                .format(revision, raw_target))
+    actual = object_type(revision + ":" + path)
+    if actual is None:
+        return "missing historical repository URL target: {} at {}".format(path, revision)
+    if actual != kind:
+        return "{} URL names a Git {} at {}: {}".format(kind, actual, revision, raw_target)
+    return None
 
 
 def _resolve_repository_url(repo_root, split, raw_target):
@@ -134,6 +156,11 @@ def _resolve_repository_url(repo_root, split, raw_target):
     if not match:
         return None
     clean = match.group("path").replace("\\", "/")
+    if clean.startswith("/") or ".." in clean.split("/"):
+        return "repository URL escapes repository: {}".format(raw_target)
+    revision = match.group("ref")
+    if re.fullmatch(r"[0-9a-fA-F]{40}", revision):
+        return _historical_target(repo_root, revision, clean, match.group("kind"), raw_target)
     if any(character in clean for character in "*?["):
         return None
     candidate = (repo_root / clean).resolve()

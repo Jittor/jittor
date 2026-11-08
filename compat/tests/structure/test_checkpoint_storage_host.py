@@ -340,8 +340,8 @@ def test_actual_provider_model_shards_round_trip_without_gather(runtime):
     storage_nodes = ast.parse((ROOT / "python/jittor/distributed/fsdp/storage.py").read_text()).body
     storage_helpers = [node for node in storage_nodes
                        if isinstance(node, ast.FunctionDef)
-                       and node.name in {"_flat_local_overlap", "_set_module_parameter"}]
-    assert len(storage_helpers) == 2
+                       and node.name in {"_flat_local_overlap", "_set_module_parameter", "_register_parameter_alias"}]
+    assert len(storage_helpers) == 3
     namespace = {}
     exec(compile(ast.Module(body=storage_helpers, type_ignores=[]), "storage.py", "exec"), namespace)
     common = types.SimpleNamespace(

@@ -162,7 +162,7 @@ print(tok.decode(mdl.generate(**tok("你好", return_tensors="pt").to("cuda"),
 ```
 
 已收录进验证报告的生态与对拍结论见
-[用 PyTorch API 写 Jittor](https://github.com/Jittor/jittor/blob/master/docs/compatibility/torch.md)。
+[用 PyTorch API 写 Jittor](https://github.com/Jittor/jittor/blob/2.0-refactor/docs/compatibility/torch.md)。
 
 ## 5. 哪些写法必须改
 

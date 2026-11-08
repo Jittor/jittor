@@ -13,6 +13,16 @@ namespace jittor
     struct Var;
     aclDataType get_dtype(NanoString s);
 
+    // CANN SoC identity, queried once per process. The inference series
+    // (Ascend310*) has a smaller op package: no DT_BFLOAT16 kernels, and a
+    // cube unit that cannot run FP32 with KEEP_DTYPE.
+    const char* acl_soc_name();
+    bool acl_soc_supports_bfloat16();
+    bool acl_soc_supports_fp32_cube();
+    // Fails unless FP32 cube math can run on this SoC or the caller opted
+    // into down-conversion, so matmul/bmm/conv report the opt-in identically.
+    void acl_check_fp32_cube(int cube_math_type, NanoString dtype, const char* op_name);
+
     aclError CreateAclTensor(const std::vector<int64_t> &shape, void *deviceAddr, int64_t size,
                              aclDataType dataType, aclTensor **tensor, bool use_nchw = false, const Var* storage = nullptr);
 

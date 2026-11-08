@@ -5,7 +5,7 @@ from ..._core.dtypes import dtype_name
 from ..._runtime.dispatch import dispatch_context, register_kernel, select_kernel
 
 from ..base import (
-    Optimizer, _grad_matches_param, _param_requires_grad,
+    Optimizer, _grad_matches_param, _normalize_param_group, _param_requires_grad,
     _adaptive_state_buffer, _update_preserve_dtype,
     _optimizer_arithmetic,
 )
@@ -95,10 +95,21 @@ def _adam_update_impl(param, grad, value, momentum, *, lr, eps, weight_decay,
         param = multiply(param, (1 - lr * weight_decay)).cast(param.dtype)
     elif weight_decay != 0 or not torch_math and not decoupled_weight_decay:
         grad = add(grad, multiply(param, weight_decay))
-    _update_preserve_dtype(momentum, add(
-        multiply(b0, momentum), multiply(1 - b0, grad)))
+    if torch_math:
+        # torch.optim.AdamW uses lerp_ for its first moment, including the
+        # NPU foreach path. Preserve that arithmetic order for parity.
+        first_moment = add(
+            momentum, multiply(1 - b0, subtract(grad, momentum)))
+    else:
+        first_moment = add(
+            multiply(b0, momentum), multiply(1 - b0, grad))
+    _update_preserve_dtype(momentum, first_moment)
+    second_moment_increment = (
+        multiply(multiply(grad, grad), 1 - b1) if torch_math
+        else multiply(multiply(1 - b1, grad), grad)
+    )
     _update_preserve_dtype(value, add(
-        multiply(b1, value), multiply(multiply(1 - b1, grad), grad)))
+        multiply(b1, value), second_moment_increment))
     if torch_math or decoupled_weight_decay:
         correction = (1 - b1 ** float(step)) ** 0.5
         scalar = (jt.array(correction, dtype="float32" if dtype_name(value.dtype) == "bfloat16"
@@ -136,6 +147,7 @@ class Adam(Optimizer):
                 m.append(_adaptive_state_buffer(p))
 
     def add_param_group(self, group):
+        _normalize_param_group(group)
         values = group["values"] = []
         m = group["m"] = []
         for p in group["params"]:
@@ -189,6 +201,7 @@ class AdamW(Optimizer):
                 m.append(_adaptive_state_buffer(p))
 
     def add_param_group(self, group):
+        _normalize_param_group(group)
         values = group["values"] = []
         m = group["m"] = []
         for p in group["params"]:

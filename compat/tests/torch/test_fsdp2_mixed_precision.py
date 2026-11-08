@@ -297,3 +297,268 @@ def test_public_singleton_policy_unshards_compute_weights_before_sequential_line
         jt.sync_all(True)
     assert int(jt.flags.amp_reg) == amp_before
     assert jt.core.backend_fallback_count() == fallback_before
+
+
+
+class _FSDPPointwiseFailure(RuntimeError):
+    pass
+
+
+def _assert_fsdp_public_autocast_disabled():
+    assert not torch.is_autocast_enabled()
+    assert not torch.is_autocast_enabled("cpu")
+
+
+def _public_cpu_pointwise_fsdp_model(policy_dtype):
+    from torch.distributed.device_mesh import init_device_mesh
+    from torch.distributed.fsdp import FSDPModule, fully_shard
+
+    child_dtype = (torch.float16 if policy_dtype == torch.bfloat16
+                   else torch.bfloat16)
+    events = []
+
+    class Child(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear = torch.nn.Linear(4, 4, bias=False).to("cpu")
+            with torch.no_grad():
+                self.linear.weight.copy_(torch.tensor(
+                    np.arange(16, dtype=np.float32).reshape(4, 4) / 16 - .5,
+                    dtype=torch.float32, device="cpu"))
+
+        def forward(self, value, fail=False):
+            _assert_fsdp_public_autocast_disabled()
+            assert value.dtype == self.linear.weight.dtype == child_dtype
+            result = self.linear(value)
+            assert result.dtype == child_dtype
+            events.append("child_gemm")
+            if fail:
+                events.append("child_failure")
+                raise _FSDPPointwiseFailure("child")
+            return result
+
+    class Root(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.child = Child()
+            self.weight = torch.nn.Parameter(torch.eye(
+                4, dtype=torch.float32, device="cpu"))
+            self.tanh = torch.nn.Tanh()
+            self.silu = torch.nn.SiLU()
+
+        def forward(self, value, failure=None):
+            _assert_fsdp_public_autocast_disabled()
+            try:
+                result = self.child(
+                    value, fail=failure in ("child", "catch_child"))
+            except _FSDPPointwiseFailure:
+                if failure != "catch_child":
+                    raise
+                events.append("caught_child")
+                result = self.child(value)
+            # This assertion is inside the parent FSDP region: an output cast
+            # after its forward must not conceal a low-precision intermediate.
+            assert result.dtype == torch.float32
+            input_mean = value.mean()
+            top_input_mean = torch.mean(value)
+            assert input_mean.dtype == value.dtype
+            assert top_input_mean.dtype == value.dtype
+            outputs = {
+                "operator_add": result + result,
+                "torch_add": torch.add(result, result),
+                "tensor_add": result.add(result),
+                "tensor_add_alpha": result.add(result, alpha=2),
+                "tensor_mean": result.mean(),
+                "torch_mean": torch.mean(result),
+                "torch_tanh": torch.tanh(result),
+                "tensor_tanh": result.tanh(),
+                "module_tanh": self.tanh(result),
+                "module_silu": self.silu(result),
+                "functional_silu": torch.nn.functional.silu(result),
+                "add_tanh_mean": (result + result).tanh().mean(),
+            }
+            for name, output in outputs.items():
+                assert output.dtype == torch.float32, name
+                assert output.device.type == "cpu", name
+            _assert_fsdp_public_autocast_disabled()
+            # Keeping pointwise FP32 must not disable low-precision GEMM.
+            assert self.weight.dtype == policy_dtype
+            gemm = torch.matmul(result, self.weight)
+            assert gemm.dtype == policy_dtype
+            events.append("root_gemm")
+            if failure == "parent":
+                raise _FSDPPointwiseFailure("parent")
+            return dict(outputs, child=result, gemm=gemm,
+                        input_mean=input_mean, top_input_mean=top_input_mean)
+
+    mesh = init_device_mesh("cpu", (1,))
+    model = Root().to("cpu")
+    fully_shard(model.child, mesh=mesh, mp_policy=MixedPrecisionPolicy(
+        param_dtype=child_dtype, reduce_dtype=torch.float32,
+        output_dtype=torch.float32))
+    fully_shard(model, mesh=mesh, mp_policy=MixedPrecisionPolicy(
+        param_dtype=policy_dtype, reduce_dtype=torch.float32))
+    assert isinstance(model, FSDPModule)
+    assert isinstance(model.child, FSDPModule)
+    assert all(parameter.dtype == torch.float32 for parameter in model.parameters())
+    return model, events
+
+
+def _assert_pointwise_fsdp_output_materializes(output, policy_dtype):
+    assert output["child"].dtype == torch.float32
+    assert output["gemm"].dtype == policy_dtype
+    arrays = {}
+    for name, value in output.items():
+        assert value.device.type == "cpu"
+        arrays[name] = value.detach().float().cpu().numpy().copy()
+        assert np.isfinite(arrays[name]).all(), name
+    np.testing.assert_array_equal(
+        arrays["operator_add"], arrays["child"] + arrays["child"])
+    np.testing.assert_array_equal(
+        arrays["tensor_add"], arrays["child"] + arrays["child"])
+    np.testing.assert_array_equal(
+        arrays["tensor_add_alpha"], arrays["child"] * 3)
+    for name in ("input_mean", "top_input_mean"):
+        np.testing.assert_array_equal(arrays[name], np.array(.109375))
+
+
+def _assert_legacy_amp_outside_fsdp():
+    _assert_fsdp_public_autocast_disabled()
+    value = torch.tensor([.25, -.125], dtype=torch.float32, device="cpu")
+    saved_amp = int(jt.flags.amp_reg)
+    with jt.flag_scope(amp_reg=2):
+        result = value * value
+        assert result.dtype == torch.float16
+        _assert_fsdp_public_autocast_disabled()
+    assert int(jt.flags.amp_reg) == saved_amp
+    np.testing.assert_array_equal(
+        result.float().numpy(), np.array([.0625, .015625], dtype=np.float32))
+
+
+@pytest.mark.parametrize("policy_dtype", [torch.bfloat16, torch.float16])
+@pytest.mark.parametrize("flat", [False, True])
+@pytest.mark.parametrize("catch_child_failure", [False, True])
+def test_public_singleton_fsdp_pointwise_preserves_fp32_without_autocast(
+        policy_dtype, flat, catch_child_failure):
+    from jittor._runtime.fallback import forbid_backend_fallbacks
+
+    saved_amp = int(jt.flags.amp_reg)
+    with jt.flag_scope(use_cuda=0, amp_reg=0), mock.patch.dict(
+            os.environ, {"JITTOR_FSDP2_FLAT": "1" if flat else "0"}), forbid_backend_fallbacks():
+        _assert_fsdp_public_autocast_disabled()
+        fallback_before = jt.core.backend_fallback_count()
+        _assert_legacy_amp_outside_fsdp()
+        model, events = _public_cpu_pointwise_fsdp_model(policy_dtype)
+        value = torch.tensor(
+            np.arange(8, dtype=np.float32).reshape(2, 4) / 32,
+            dtype=torch.float32, device="cpu")
+        failure = "catch_child" if catch_child_failure else None
+        output = model(value, failure=failure)
+        _assert_pointwise_fsdp_output_materializes(output, policy_dtype)
+        assert events.count("child_gemm") == (2 if catch_child_failure else 1)
+        assert events.count("caught_child") == int(catch_child_failure)
+        assert events.count("root_gemm") == 1
+        assert int(jt.flags.amp_reg) == 0
+        _assert_legacy_amp_outside_fsdp()
+        assert all(parameter.dtype == torch.float32 for parameter in model.parameters())
+        assert jt.core.backend_fallback_count() == fallback_before
+    assert int(jt.flags.amp_reg) == saved_amp
+    _assert_fsdp_public_autocast_disabled()
+
+
+@pytest.mark.parametrize("policy_dtype", [torch.bfloat16, torch.float16])
+@pytest.mark.parametrize("failure", ["child", "parent"])
+def test_public_singleton_fsdp_pointwise_restores_after_exception(
+        policy_dtype, failure):
+    from jittor._runtime.fallback import forbid_backend_fallbacks
+
+    saved_amp = int(jt.flags.amp_reg)
+    outer_amp = jt.amp_flags.prefer32 | jt.amp_flags.keep_reduce
+    with jt.flag_scope(use_cuda=0, amp_reg=outer_amp), mock.patch.dict(
+            os.environ, {"JITTOR_FSDP2_FLAT": "0"}), forbid_backend_fallbacks():
+        _assert_fsdp_public_autocast_disabled()
+        fallback_before = jt.core.backend_fallback_count()
+        model, events = _public_cpu_pointwise_fsdp_model(policy_dtype)
+        value = torch.tensor(
+            np.arange(8, dtype=np.float32).reshape(2, 4) / 32,
+            dtype=torch.float32, device="cpu")
+        with pytest.raises(_FSDPPointwiseFailure, match=failure):
+            model(value, failure=failure)
+        assert int(jt.flags.amp_reg) == outer_amp
+        _assert_fsdp_public_autocast_disabled()
+        _assert_legacy_amp_outside_fsdp()
+        # Retry the same genuinely sharded instances after their failed call.
+        output = model(value)
+        _assert_pointwise_fsdp_output_materializes(output, policy_dtype)
+        assert events.count("child_gemm") == 2
+        assert events.count("root_gemm") == (2 if failure == "parent" else 1)
+        assert int(jt.flags.amp_reg) == outer_amp
+        assert all(parameter.dtype == torch.float32 for parameter in model.parameters())
+        _assert_legacy_amp_outside_fsdp()
+        assert jt.core.backend_fallback_count() == fallback_before
+    assert int(jt.flags.amp_reg) == saved_amp
+    _assert_fsdp_public_autocast_disabled()
+
+
+def test_public_singleton_fsdp_linear_keeps_native_fp32_accumulation():
+    from torch.distributed.device_mesh import init_device_mesh
+    from torch.distributed.fsdp import fully_shard
+    from jittor._runtime.fallback import forbid_backend_fallbacks
+
+    saved_amp = int(jt.flags.amp_reg)
+    with jt.flag_scope(use_cuda=0, amp_reg=0), mock.patch.dict(
+            os.environ, {"JT_BUILD_USE_MKL": "0", "JITTOR_FSDP2_FLAT": "0"}), forbid_backend_fallbacks():
+        fallback_before = jt.core.backend_fallback_count()
+        layer = torch.nn.Linear(1, 1, device="cpu")
+        with torch.no_grad():
+            layer.weight.fill_(1.0078125)
+            layer.bias.fill_(.00390625)
+        fully_shard(layer, mesh=init_device_mesh("cpu", (1,)),
+                    mp_policy=MixedPrecisionPolicy(
+                        param_dtype=torch.bfloat16, reduce_dtype=torch.float32,
+                        output_dtype=torch.float32))
+        value = torch.tensor([[1.0078125]], dtype=torch.float32,
+                             device="cpu", requires_grad=True)
+        output = layer(value)
+        assert output.dtype == torch.float32 and output.device.type == "cpu"
+        _assert_fsdp_public_autocast_disabled()
+        # Native Torch 2.7.1 CPU rounds once after adding bias. Rounding the
+        # product first would land on the midpoint and produce 1.015625.
+        np.testing.assert_array_equal(output.detach().numpy(), [[1.0234375]])
+        output.square().sum().backward()
+        for parameter, expected in (
+                (value, [[2.0625]]), (layer.weight, [[2.0625]]),
+                (layer.bias, [2.046875])):
+            gradient = parameter.grad
+            assert gradient is not None
+            if callable(getattr(gradient, "full_tensor", None)):
+                gradient = gradient.full_tensor()
+            assert gradient.dtype == torch.float32
+            assert gradient.device.type == "cpu"
+            np.testing.assert_array_equal(gradient.detach().numpy(), expected)
+        assert layer.weight.dtype == layer.bias.dtype == torch.float32
+        assert int(jt.flags.amp_reg) == 0
+        assert jt.core.backend_fallback_count() == fallback_before
+    assert int(jt.flags.amp_reg) == saved_amp
+
+
+def test_fsdp2_adamw_first_moment_matches_foreach_lerp_rounding():
+    from jittor.optim.algorithms.adam import adam_update
+
+    old_avg_np = np.array([1.2345, -2.3456], dtype=np.float32)
+    grad_np = np.array([-3.14159, 2.71828], dtype=np.float32)
+    expected_np = old_avg_np + np.float32(0.1) * (grad_np - old_avg_np)
+    weighted_sum_np = (np.float32(0.9) * old_avg_np
+                       + np.float32(0.1) * grad_np)
+    assert not np.array_equal(expected_np, weighted_sum_np)
+
+    with jt.flag_scope(use_cuda=0, amp_reg=0):
+        param = jt.array([1.0, -2.0], dtype="float32").stop_grad()
+        grad = jt.array(grad_np).stop_grad()
+        value = jt.zeros_like(param).stop_grad()
+        momentum = jt.array(old_avg_np).stop_grad()
+        adam_update(
+            param, grad, value, momentum, lr=0.01, eps=1e-8,
+            weight_decay=0.0, betas=(0.9, 0.999), step=2,
+            decoupled_weight_decay=True, torch_math=True)
+        np.testing.assert_array_equal(momentum.numpy(), expected_np)

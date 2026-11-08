@@ -83,6 +83,16 @@ def _adamw_skips_step_on_device(self):
         if not active:
             continue
         impl = select_kernel("optim.adamw_fused", active)
+        # CANN's fused AdamW computes 1 - beta in FP32. Torch's default
+        # (foreach) path forms that coefficient from the Python scalar first,
+        # so the ACL fused path cannot preserve Torch optimizer state exactly.
+        # Keep device-side overflow skipping aligned with _adam_step's route:
+        # on ACL, only an explicit fused=True request may use that kernel.
+        is_acl_fused = (
+            impl is not None and jt.core.dispatch_context([active[0][0]])[0] == "acl"
+        )
+        if is_acl_fused and fused is not True:
+            impl = None
         if (impl is None or not getattr(impl, "accepts_live_step", False)
                 or len({entry[4] for entry in active}) != 1):
             return False
@@ -152,7 +162,7 @@ def _install_optimizers(g, registry=None):
         Base._torch_backward_step_marker = True
     # torch's Adam/AdamW default lr=1e-3 (jittor makes lr positional-required).
     # 3DGS builds the exposure optimizer as torch.optim.Adam([self._exposure]).
-    for _cls_name in ("Adam", "AdamW", "RMSprop", "Adan"):
+    for _cls_name in ("SGD", "Adam", "AdamW", "RMSprop", "Adan"):
         _cls = getattr(_optim, _cls_name, None)
         if _cls is None or getattr(_cls, "_torch_lr_default", False):
             continue
@@ -169,7 +179,8 @@ def _install_optimizers(g, registry=None):
         AdamW.step = adamw_step
         AdamW._torch_adamw_step = True
         AdamW._skips_step_on_device = _adamw_skips_step_on_device
-    for _cls_name, _native_kind in (("SGD", "sgd"), ("RMSprop", "rmsprop"), ("Adan", "adan")):
+    for _cls_name, _native_kind in (("SGD", "sgd"), ("RMSprop", "rmsprop"),
+                                    ("Adan", "adan"), ("Adagrad", "adagrad")):
         _cls = getattr(_optim, _cls_name, None)
         if _cls is not None and not getattr(_cls, "_torch_closure_step", False):
             _native_steps[_native_kind] = _cls.step
@@ -225,15 +236,18 @@ def _install_optimizers(g, registry=None):
         Fidelity.APPROXIMATE,
         "State and gradient adapters over native parameter groups; only known "
         "optimizer state layouts and supported restore formats are handled")
-    for name in ("SGD", "Adam", "AdamW", "RMSprop", "Adan"):
+    for name in ("SGD", "Adam", "AdamW", "RMSprop", "Adan", "Adagrad"):
         algorithm = getattr(_optim, name, None)
         if algorithm is not None:
             register_api_bindings(algorithm, "torch.optim." + name,
                 ("__init__", "step"), Fidelity.APPROXIMATE,
                 "Stable native-update adapter preserving per-parameter steps, "
                 "gradient retention and the registered FSDP provider boundary")
-    register_api_bindings(_optim.Adagrad, "torch.optim.Adagrad", ("__init__",),
-        Fidelity.UNIMPLEMENTED, "Importable optimizer type; missing native Adagrad mathematics is explicitly refused")
+    register_api_bindings(_optim, "torch.optim", ("Adagrad",),
+        Fidelity.APPROXIMATE,
+        "Native dense FP32 Adagrad; eager sum/CPU step state and scalar group "
+        "options; sparse, complex, foreach, fused, differentiable and FSDP "
+        "updates explicitly unsupported")
     register_api_bindings(_optim.LBFGS, "torch.optim.LBFGS", ("step",),
         Fidelity.UNIMPLEMENTED, "LBFGS updates explicitly raise NotImplementedError")
 

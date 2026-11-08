@@ -8,7 +8,7 @@ namespace jittor {
 
 #ifndef JIT
 GeneratorRandintOp::GeneratorRandintOp(NanoVector shape, NanoString dtype,
-        int64 low, int64 high, int64 seed, int64 offset)
+        int64 low, int64 high, int64 seed, int64 offset, RandomGenerator* generator)
     : low(low), high(high), seed(seed), offset(offset) {
     USER_CHECK(dtype == ns_int32 || dtype == ns_int64)
         << "generator_randint supports int32 and int64, got " << dtype;
@@ -21,6 +21,24 @@ GeneratorRandintOp::GeneratorRandintOp(NanoVector shape, NanoString dtype,
     }
     USER_CHECK(offset >= 0) << "generator_randint expects non-negative offset, got " << offset;
     output = create_output(shape, dtype);
+    if (generator) {
+        gen = generator->state;
+        const bool cpu = gen->device_id < 0;
+        output->placement = TensorPlacement(Device{cpu ? BackendId::Cpu : BackendId::Cuda,
+                                                   cpu ? 0 : gen->device_id});
+        output->device_id = gen->device_id;
+        if (!cpu) {
+            // Each bounded 64-bit sample owns two raw Philox words.
+            // Align after an odd-sized float draw without reusing its word.
+            const int64 padding = output->num ? (gen->cuda_offset & 1) : 0;
+            USER_CHECK(output->num <= (std::numeric_limits<int64>::max()
+                - gen->cuda_offset - padding) / 2)
+                << "Generator integer stream position overflows int64";
+            const int64 raw = padding + output->num * 2;
+            this->seed = gen->seed_;
+            this->offset = (gen->reserve_cuda(raw) + padding) / 2;
+        }
+    }
     set_flag(OpFlags::_cpu);
     set_flag(OpFlags::_cuda);
 }
@@ -45,6 +63,14 @@ static inline uint64 generator_randint_sample(uint64 seed,
 
 void GeneratorRandintOp::jit_run() {
     auto* out = output->ptr<T>();
+    if (gen && gen->device_id < 0) {
+        // Follow the mainline CPU engine's execution-time advancement,
+        // without routing wide integers through lossy floating arithmetic.
+        std::uniform_int_distribution<int64> distribution(low, high - 1);
+        for (index_t i=0; i<output->num; ++i)
+            out[i] = T(distribution(gen->cpu_engine));
+        return;
+    }
     const uint64 seed_value = uint64(seed);
     const uint64 span = uint64(high) - uint64(low);
     const uint64 threshold = (uint64(0) - span) % span;

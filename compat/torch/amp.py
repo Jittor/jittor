@@ -18,6 +18,7 @@ import functools as _functools
 
 import numpy as np
 import jittor as jt
+from jittor._runtime import amp_context as _amp_context
 
 from .fidelity import Fidelity, register_fidelity
 from .grad_scaler import (          # noqa: F401
@@ -33,6 +34,7 @@ _AMP_KEEP_REDUCE = 4
 _AMP_KEEP_WHITE = 8
 _AMP_ARRAY_PREFER = 16
 _AMP_PREFER_BFLOAT16 = 64
+_AMP_PRECISION_MASK = _AMP_PREFER32 | _AMP_PREFER16 | _AMP_PREFER_BFLOAT16
 
 # ---------------------------------------------------------------------------
 # torch.amp state.
@@ -57,12 +59,29 @@ class _AutocastState(_threading.local):
         self.order = []          # device types in the order they were enabled
         self.cache_enabled = True
         self.nesting = 0
+        self.fsdp_precision = []
         # jt.flags.amp_reg as it was before autocast first took it over, so the
         # last region out puts the process register back exactly.
         self.baseline_reg = None
 
 
 _autocast_state = _AutocastState()
+
+def _preserve_autocast_arithmetic():
+    """Protect Torch scalar arithmetic from the native AMP bias.
+
+    Native contractions deliberately set ``keep_reduce`` around their internal
+    multiply/reduce expression. Keep that compute policy intact: it is part of
+    matmul/convolution, rather than a user-visible elementwise operation.
+    Native AMP outside a Torch autocast region remains unchanged.
+    """
+    if not _autocast_state.order:
+        return False
+    register = int(jt.flags.amp_reg)
+    return bool(register & (_AMP_PREFER16 | _AMP_PREFER_BFLOAT16)) \
+        and not bool(register & _AMP_KEEP_REDUCE)
+
+
 
 # The device types torch's own device parser accepts, in its order: its error
 # message quotes this list, and a string outside it is not a device at all.
@@ -164,6 +183,31 @@ def autocast_any_enabled():
     return any(_autocast_state.enabled.values())
 
 
+@_contextlib.contextmanager
+def _fsdp_mixed_precision_scope(amp_reg):
+    """Track FSDP compute precision without enabling public Torch autocast."""
+    _autocast_state.fsdp_precision.append(int(amp_reg) & _AMP_PRECISION_MASK)
+    try:
+        with jt.flag_scope(amp_reg=amp_reg):
+            yield
+    finally:
+        _autocast_state.fsdp_precision.pop()
+
+
+def _preserve_pointwise_dtype():
+    """Torch pointwise ops preserve inputs under autocast and FSDP precision."""
+    current = int(jt.flags.amp_reg) & _AMP_PRECISION_MASK
+    if autocast_any_enabled():
+        base = _effective_autocast_device()
+        if (base is not None
+                and current == _amp_register_for(autocast_configured_dtype(base))):
+            return True
+    precision = _autocast_state.fsdp_precision
+    # Only suspend the implicit preference owned by an active Torch scope.
+    # Native kernels can request a different precision for their accumulator.
+    return bool(precision) and current == precision[-1]
+
+
 def autocast_dtype(device_type=None):
     """dtype of the innermost enabled autocast region for that device, else None.
 
@@ -252,10 +296,12 @@ def _refresh_amp_register():
         if _autocast_state.baseline_reg is not None:
             jt.flags.amp_reg = _autocast_state.baseline_reg
             _autocast_state.baseline_reg = None
+        _amp_context.set_torch_autocast_active(False)
         return
     if _autocast_state.baseline_reg is None:
         _autocast_state.baseline_reg = int(getattr(jt.flags, "amp_reg", 0))
     jt.flags.amp_reg = _amp_register_for(autocast_configured_dtype(base))
+    _amp_context.set_torch_autocast_active(True)
 
 
 def set_autocast_enabled_state(device_type, enabled):

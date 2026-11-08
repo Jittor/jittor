@@ -1,14 +1,15 @@
 """Dense FP32 embedding gradients with stable, segmented CUDA accumulation."""
 
-import jittor as jt
+from jittor._core import function as _function_owner
 from jittor._core.dtypes import var_dtype_name
 from jittor._runtime.backend_libraries import get_library_ops
 from jittor._runtime.core_api import _output_requires_grad
 from jittor._runtime.dispatch import optional_kernel
 
 
-class _EmbeddingSum(jt.Function):
+class _EmbeddingSum(_function_owner.Function):
     def execute(self, gradient, indices, weight_rows):
+        import jittor as jt
         self.indices = indices
         self.gradient_shape = tuple(gradient.shape)
         channels = int(gradient.shape[-1])
@@ -51,6 +52,7 @@ class _EmbeddingSum(jt.Function):
         # Fixed 64-position chunks bound serial work even for one repeated
         # token. Only segment starts and chunk boundaries write scratch; the
         # finish kernel reads exactly those locations through a graph edge.
+        import jittor as jt
         chunk = 64
         partial = jt.code(
             (count, channels), "float32", [keys, order, gradient.contiguous()],
@@ -107,7 +109,7 @@ class _EmbeddingSum(jt.Function):
         return gradient[self.indices].reshape(self.gradient_shape), None, None
 
 
-class _Embedding(jt.Function):
+class _Embedding(_function_owner.Function):
     def execute(self, indices, weight):
         self.indices = indices
         self.weight_rows = int(weight.shape[0])
@@ -117,6 +119,7 @@ class _Embedding(jt.Function):
         # Validate the ORIGINAL index before normalising negatives. Otherwise
         # -1 and V-1 could write the same row from different segments, or an
         # invalid index below -V could be normalised twice into a legal one.
+        import jittor as jt
         indices = jt.code(
             (int(self.indices.numel()),), "int64",
             [self.indices.contiguous()],
@@ -140,6 +143,7 @@ class _Embedding(jt.Function):
 
 def _supports_embedding(input, weight, padding_idx=None, max_norm=None,
                         norm_type=2.0, scale_grad_by_freq=False, sparse=False):
+    import jittor as jt
     if not (isinstance(input, jt.Var) and isinstance(weight, jt.Var)):
         return False
     return (

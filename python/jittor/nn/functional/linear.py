@@ -3,6 +3,7 @@
 import jittor as jt
 from jittor._runtime.dispatch import register_kernel, select_kernel, try_dispatch
 from jittor.backends.cuda.kernels.cublas.lt_linear_cuda import (
+    lt_linear_cuda as _lt_linear_cuda,
     lt_linear_train_cuda as _lt_linear_train_cuda,
     compute_dtype_name,
 )
@@ -14,8 +15,19 @@ from .matrix import _bfloat16_matmul_accumulator, _check_matmul_shapes
 
 def linear(x, weight, bias=None):
     """Return ``x * weight.T`` with an optional bias."""
-    accumulator_kernel = select_kernel("linear_bias_accumulator", x, weight, bias) \
-        if bias is not None else None
+    if bias is not None:
+        # cuBLASLt folds the bias into the GEMM's epilogue, which is the same
+        # one-rounding order the bf16 accumulator below exists to preserve:
+        # for a bf16 product that path is six operators (a cast of the bias, a
+        # matmul, an add and a cast back, plus contiguity), and this is one.
+        # Diffusers' own Linear reaches this function directly, so the module
+        # below is not where the fold has to live.
+        fast = _lt_linear_cuda(x, weight, bias)
+        if fast is not None:
+            return fast
+    accumulator_kernel = (
+        select_kernel("linear_bias_accumulator", x, weight, bias) if bias is not None else None
+    )
     if accumulator_kernel is not None:
         # The bias belongs to the GEMM's FP32 accumulator. Rounding the product
         # to BF16 before adding it introduces a second rounding, which can
@@ -23,9 +35,14 @@ def linear(x, weight, bias=None):
         # Keep BF16 GEMM operands and the native differentiable backward. The
         # CPU uses the same accumulator boundary with oneDNN or native opmath.
         _check_matmul_shapes(x, weight, trans_b=True, op="linear", names=("input", "weight"))
-        if len(weight.shape) != 2 or len(bias.shape) != 1 \
-                or int(bias.shape[0]) != int(weight.shape[0]):
-            raise jt.JittorShapeError("linear: bias must match the rank-2 weight's output dimension")
+        if (
+            len(weight.shape) != 2
+            or len(bias.shape) != 1
+            or int(bias.shape[0]) != int(weight.shape[0])
+        ):
+            raise jt.JittorShapeError(
+                "linear: bias must match the rank-2 weight's output dimension"
+            )
         return accumulator_kernel(x, weight, bias)
     # A large training product on CUDA: its GEMMs picked by timing, and the
     # bias gradient computed by the weight gradient's where that pays.
@@ -49,13 +66,17 @@ def linear(x, weight, bias=None):
 
 
 def _supports_cpu_bias_accumulator(x, weight, bias):
-    return (isinstance(bias, jt.Var) and x.dtype.is_float() and weight.dtype.is_float()
-            and compute_dtype_name(x, weight) == "bfloat16"
-            and (dtype_name(bias.dtype) == "bfloat16" or jt.flags.amp_reg))
+    return (
+        isinstance(bias, jt.Var)
+        and x.dtype.is_float()
+        and weight.dtype.is_float()
+        and compute_dtype_name(x, weight) == "bfloat16"
+        and (dtype_name(bias.dtype) == "bfloat16" or jt.flags.amp_reg)
+    )
 
 
 def _cpu_bias_accumulator(x, weight, bias):
-    with jt.flag_scope(amp_reg=0):
+    with jt.flag_scope(amp_reg=jt.amp_flags.disabled):
         x, weight, bias = (value.cast("bfloat16") for value in (x, weight, bias))
         shape = x.shape[:-1] + (weight.shape[0],)
         # An inferred dimension beside K=0 loses the known number of rows.
@@ -80,7 +101,7 @@ def _acl_bias_accumulator(x, weight, bias):
     # in FP32, then restore the requested BF16 output. This keeps the graph on
     # ACL and preserves the single-rounding boundary; a fused ACL Addmm can
     # replace this path when its backward is mapped as well.
-    with jt.flag_scope(amp_reg=0):
+    with jt.flag_scope(amp_reg=jt.amp_flags.disabled):
         x, weight, bias = (value.cast("bfloat16") for value in (x, weight, bias))
         product = jt.nn.matmul_transpose(x.cast("float32"), weight.cast("float32"))
         return (product + bias.cast("float32")).cast("bfloat16")
@@ -91,9 +112,13 @@ register_kernel("linear_bias_accumulator", "acl", _acl_bias_accumulator,
                 supports=_supports_acl_bias_accumulator)
 
 
-register_kernel("linear_bias_accumulator", "cpu", _cpu_bias_accumulator,
-                dtypes={"float16", "bfloat16", "float32", "float64"},
-                supports=_supports_cpu_bias_accumulator)
+register_kernel(
+    "linear_bias_accumulator",
+    "cpu",
+    _cpu_bias_accumulator,
+    dtypes={"float16", "bfloat16", "float32", "float64"},
+    supports=_supports_cpu_bias_accumulator,
+)
 
 
 __all__ = ["linear"]

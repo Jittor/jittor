@@ -6,7 +6,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 # Native complex128 dtype (closes KI-COMPLEX-001; see
-# docs/notes/complex-dtype.md). Before this, `NanoString::_dsize_nbits` (2
+# docs/notes/numerics/complex-dtype.md). Before this, `NanoString::_dsize_nbits` (2
 # bits) capped every dtype's size at 8 bytes, so a genuine 16-byte complex128
 # Var could not be represented at all -- `NPY_CDOUBLE` mapped to `ns_void`
 # and any numpy/plain-Python complex128 input raised loudly ("Numpy type not

@@ -228,6 +228,16 @@ def _install_nn_extras(nn, registry=None):
     _u.__path__ = getattr(_u, "__path__", [])
     _modules.setdefault("torch.nn.utils", _u)
     nn.utils = _u
+    _fusion = _types_nn_utils.ModuleType("torch.nn.utils.fusion")
+    _fusion.fuse_conv_bn_weights = _extra_api.fuse_conv_bn_weights
+    _fusion.fuse_conv_bn_eval = _extra_api.fuse_conv_bn_eval
+    _modules["torch.nn.utils.fusion"] = _fusion
+    _u.fusion = _fusion
+    _u.fuse_conv_bn_weights = _fusion.fuse_conv_bn_weights
+    _u.fuse_conv_bn_eval = _fusion.fuse_conv_bn_eval
+    register_api_bindings(_fusion, "torch.nn.utils.fusion",
+        ("fuse_conv_bn_weights", "fuse_conv_bn_eval"), Fidelity.APPROXIMATE,
+        "Inference-only fusion of convolution and BatchNorm parameters.")
     _clip_grad = _types_nn_utils.ModuleType("torch.nn.utils.clip_grad")
 
     _clip_grad._get_total_norm = _get_total_norm

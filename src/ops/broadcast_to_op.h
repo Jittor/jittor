@@ -24,6 +24,8 @@ struct BroadcastToOp : Op {
     NanoVector shape;
     uint32 bcast_mask;
     uint32 keepdims_mask;
+    // Captured at construction, before lazy shape inference.
+    bool preserve_scalar_view = false;
 
     /**
     Broadcast ``x`` to a given shape.

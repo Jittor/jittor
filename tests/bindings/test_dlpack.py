@@ -76,15 +76,24 @@ class TestDLPack(unittest.TestCase):
         y = jt.from_dlpack(e)
         self.assertEqual(tuple(y.shape), (0, 3))
 
-    def test_from_dlpack_capsule_rejects_noncontiguous_directly(self):
-        # jt.from_dlpack() implements the strided fallback; the low-level
-        # core.from_dlpack_capsule() entry point it's built on must still
-        # fail loud on a raw non-contiguous capsule rather than silently
-        # misreading strides Jittor's Var has no way to represent.
+    def test_from_dlpack_capsule_aliases_a_strided_capsule(self):
+        # A non-negative stride is a Jittor storage view of the producer's
+        # bytes: imported zero-copy, as torch does, rather than refused.
         a_np = np.arange(24, dtype="float32").reshape(4, 6)
-        capsule = a_np.T.__dlpack__()
-        with self.assertRaises(Exception):
+        y = jt.core.from_dlpack_capsule(a_np.T.__dlpack__())
+        self.assertEqual(tuple(y.shape), (6, 4))
+        self.assertEqual(tuple(y._storage_strides()), (1, 6))
+        self.assertEqual(y._storage_address, a_np.__array_interface__["data"][0])
+        np.testing.assert_array_equal(y.numpy(), a_np.T)
+
+    def test_from_dlpack_capsule_rejects_a_negative_stride(self):
+        # jt.from_dlpack() copies such a tensor; the low-level entry point
+        # cannot alias it and says so, before consuming the capsule.
+        a_np = np.arange(12, dtype="float32").reshape(3, 4)
+        capsule = a_np[::-1].__dlpack__()
+        with self.assertRaisesRegex(RuntimeError, "negative strides"):
             jt.core.from_dlpack_capsule(capsule)
+        np.testing.assert_array_equal(jt.from_dlpack(capsule).numpy(), a_np[::-1])
 
     def test_export_copy_true_materializes_independent_buffer(self):
         a_np = np.arange(8, dtype="float32")

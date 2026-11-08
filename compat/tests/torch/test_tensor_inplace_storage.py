@@ -75,26 +75,45 @@ class TestTensorInplaceStorage:
             np.testing.assert_array_equal(root.cpu().numpy(), [1., *expected, 8.])
             np.testing.assert_array_equal(snapshot.cpu().numpy(), [1., 2., 4., 8.])
 
-    def test_temporary_base_can_expire_without_losing_storage_alias(self, device):
+    def test_temporary_base_lives_until_last_view_releases_storage_owner(self, device):
         for operation, expected in ((lambda x: x.copy_(torch.tensor([9., 10.], device=device)), [9., 10.]),
                                     (lambda x: x.div_(2), [1., 2.]),
                                     (lambda x: x.mul_(3), [6., 12.]),
                                     (lambda x: x.zero_(), [0., 0.])):
             root = torch.tensor([1., 2., 4., 8.], device=device)
             target = root.view(2, 2).narrow(0, 0, 1).view(2)
-            # Target [1,2] is rewritten to [2,4] before measuring its aliases.
             target.copy_(torch.tensor([2., 4.], device=device))
             alias = target.detach()
             reference = weakref.ref(root)
+            alias_reference = weakref.ref(alias)
+            pointer = root.data_ptr()
+            assert target._is_view() and target._base is root
+            assert not alias._is_view() and alias._base is None
+            assert target.data_ptr() == alias.data_ptr() == pointer
+            assert tuple(target.stride()) == tuple(alias.stride()) == (1,)
             del root
             gc.collect()
-            # Torch retains its tensor base; Jittor's provenance is weak.
+            # Torch owns the real root wrapper while a view exists; a detached
+            # storage alias has no base and must not keep that wrapper alive.
             if hasattr(torch, "_torch_compat_install_context"):
-                assert reference() is None
-            pointers = [x.data_ptr() for x in (target, alias)]
+                assert target._storage_view_is_physical()
+            assert reference() is not None and target._base is reference()
             assert operation(target) is target
-            assert pointers == [x.data_ptr() for x in (target, alias)]
+            assert target.data_ptr() == alias.data_ptr() == reference().data_ptr() == pointer
+            assert tuple(target.stride()) == tuple(alias.stride()) == (1,)
+            np.testing.assert_array_equal(target.cpu().numpy(), expected)
             np.testing.assert_array_equal(alias.cpu().numpy(), expected)
+            np.testing.assert_array_equal(reference().cpu().numpy(), [*expected, 4., 8.])
+            del target
+            gc.collect()
+            assert reference() is None
+            # Allocation ownership outlives the root wrapper independently.
+            assert alias.data_ptr() == pointer and tuple(alias.stride()) == (1,)
+            np.testing.assert_array_equal(alias.cpu().numpy(), expected)
+            del alias
+            gc.collect()
+            assert alias_reference() is None
+
 
     def test_parameter_data_and_detached_aliases_see_no_grad_writes(self, device):
         parameter = torch.nn.Parameter(torch.tensor([2., 4.], device=device))
@@ -181,27 +200,100 @@ class TestTensorInplaceStorage:
     def test_transpose_writeback_retains_logical_axis_order(self, device):
         root = torch.tensor([[1., 2.], [3., 4.]], device=device)
         target = root.transpose(0, 1)
+        alias = target.detach()
+        pointer = root.data_ptr()
+        assert target._is_view() and target._base is root
+        assert target.data_ptr() == alias.data_ptr() == pointer
+        assert tuple(root.stride()) == (2, 1)
+        assert tuple(target.stride()) == tuple(alias.stride()) == (1, 2)
         if hasattr(torch, "_torch_compat_install_context"):
+            assert target._storage_view_is_physical()
+        np.testing.assert_array_equal(target.cpu().numpy(), [[1., 3.], [2., 4.]])
+        target.copy_(torch.tensor([[5., 6.], [7., 8.]], device=device))
+        assert root.data_ptr() == target.data_ptr() == alias.data_ptr() == pointer
+        assert tuple(target.stride()) == tuple(alias.stride()) == (1, 2)
+        np.testing.assert_array_equal(root.cpu().numpy(), [[5., 7.], [6., 8.]])
+        np.testing.assert_array_equal(target.cpu().numpy(), [[5., 6.], [7., 8.]])
+        np.testing.assert_array_equal(alias.cpu().numpy(), [[5., 6.], [7., 8.]])
+        if hasattr(torch, "_torch_compat_install_context"):
+            assert target._storage_view_is_physical()
+
+
+
+    def test_native_transpose_writeback_retains_logical_axis_order(self, device):
+        # Pins the logical representation: the native transpose materialises a
+        # copy (a different allocation) and records write-through provenance,
+        # so a write must reach `root` in the logical axis order.
+        import jittor as jt
+
+        root = torch.tensor([[1., 2.], [3., 4.]], device=device)
+        target = jt.transpose(root, (1, 0))
+        if hasattr(torch, "_torch_compat_install_context"):
+            assert target._has_view_provenance()
             assert not target._storage_view_is_physical()
+            assert target.data_ptr() != root.data_ptr()
         target.copy_(torch.tensor([[5., 6.], [7., 8.]], device=device))
         np.testing.assert_array_equal(root.cpu().numpy(), [[5., 7.], [6., 8.]])
+        np.testing.assert_array_equal(target.cpu().numpy(), [[5., 6.], [7., 8.]])
 
 
 instantiate_device_type_tests(TestTensorInplaceStorage, globals())
 
 
-def test_physical_provenance_distinguishes_pending_and_materialized_transpose():
+def test_physical_provenance_keeps_default_transpose_storage_alias():
     root = torch.tensor([[1., 2.], [3., 4.]])
     physical = root.view(4).narrow(0, 1, 2)
     transpose = root.transpose(0, 1)
-    assert physical._storage_view_is_physical()
-    assert not transpose._storage_view_is_physical()
-    physical.sync()
-    transpose.sync()
-    assert physical._storage_view_is_physical()
-    assert not transpose._storage_view_is_physical()
+    snapshot = root.clone()
+    pointer = root.data_ptr()
+    assert transpose._is_view() and transpose._base is root
+    assert physical._base is root
+    assert physical.data_ptr() == pointer + root.element_size()
+    assert transpose.data_ptr() == pointer
+    assert tuple(physical.stride()) == (1,) and tuple(transpose.stride()) == (1, 2)
+    if hasattr(torch, "_torch_compat_install_context"):
+        assert physical._storage_view_is_physical()
+        assert transpose._storage_view_is_physical()
+        physical.sync()
+        transpose.sync()
+        assert physical._storage_view_is_physical()
+        assert transpose._storage_view_is_physical()
+    np.testing.assert_array_equal(physical.cpu().numpy(), [2., 3.])
+    np.testing.assert_array_equal(transpose.cpu().numpy(), [[1., 3.], [2., 4.]])
     transpose.copy_(torch.tensor([[5., 6.], [7., 8.]]))
+    assert root.data_ptr() == transpose.data_ptr() == pointer
+    assert physical.data_ptr() == pointer + root.element_size()
+    assert tuple(physical.stride()) == (1,) and tuple(transpose.stride()) == (1, 2)
     np.testing.assert_array_equal(root.cpu().numpy(), [[5., 7.], [6., 8.]])
+    np.testing.assert_array_equal(transpose.cpu().numpy(), [[5., 6.], [7., 8.]])
+    np.testing.assert_array_equal(physical.cpu().numpy(), [7., 6.])
+    np.testing.assert_array_equal(snapshot.cpu().numpy(), [[1., 2.], [3., 4.]])
+
+
+
+def test_physical_provenance_distinguishes_pending_and_materialized_transpose():
+    # Pins both representations explicitly: a torch permutation is a pending
+    # physical storage view (share link, then allocation identity after sync),
+    # while the native transpose materialises a copy with logical provenance.
+    import jittor as jt
+
+    root = torch.tensor([[1., 2.], [3., 4.]])
+    physical = root.transpose(0, 1)
+    logical = jt.transpose(root, (1, 0))
+    assert physical._storage_view_is_physical()
+    assert physical._is_view() and physical._base is root
+    assert logical._has_view_provenance()
+    assert not logical._storage_view_is_physical()
+    assert logical.data_ptr() != root.data_ptr()
+    physical.sync()
+    logical.sync()
+    assert physical._storage_view_is_physical()
+    assert physical.data_ptr() == root.data_ptr()
+    assert not logical._storage_view_is_physical()
+    assert logical.data_ptr() != root.data_ptr()
+    logical.copy_(torch.tensor([[5., 6.], [7., 8.]]))
+    np.testing.assert_array_equal(root.cpu().numpy(), [[5., 7.], [6., 8.]])
+    np.testing.assert_array_equal(logical.cpu().numpy(), [[5., 6.], [7., 8.]])
 
 
 class _EmbeddingSum(torch.nn.Module):
@@ -245,3 +337,28 @@ def test_an_inplace_add_inside_a_captured_module_call():
         np.testing.assert_allclose(out, (w + t + position) * 2, rtol=1e-6)
     assert state is not None and state.replay is not None, "the call was never captured"
     assert state.replay.refused is None
+
+
+@pytest.mark.parametrize("operation", ["copy_", "zero_"])
+def test_saved_exp_output_survives_no_grad_write_after_holder_release(operation):
+    # R239's real nonzero, no-intermediate-holder failure. Observe only the
+    # source before the write; materializing exp would mask the saved-output bug.
+    source = torch.tensor([.25, .5, 1., 2.], requires_grad=True)
+    intermediate = torch.exp(source)
+    loss = intermediate.sum()
+    before = source.detach().cpu().numpy().copy()
+    del intermediate
+    with torch.no_grad():
+        if operation == "copy_":
+            source.copy_(torch.zeros_like(source))
+        else:
+            source.zero_()
+    # The real repro observes the scalar only after the write, before backward.
+    observed_loss = loss.detach().cpu().numpy().copy()
+    loss.backward()
+    assert source.grad is not None
+    expected = np.exp(before)
+    np.testing.assert_allclose(source.grad.detach().cpu().numpy(), expected,
+                               rtol=2e-6, atol=2e-7)
+    np.testing.assert_allclose(observed_loss, expected.sum(), rtol=2e-6, atol=2e-7)
+    np.testing.assert_array_equal(source.detach().cpu().numpy(), np.zeros_like(before))

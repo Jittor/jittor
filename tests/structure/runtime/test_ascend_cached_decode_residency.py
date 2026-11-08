@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[3]
 
 @pytest.mark.parametrize('lazy_runtime', [False, True])
 def test_cached_decode_materializes_setup_before_residency_and_timing(lazy_runtime):
-    path = ROOT / 'agent/skills/jittor-transformers-perf/scripts/benchmark_qwen3_ascend.py'
+    path = ROOT / 'benchmarks/profiling/benchmark_qwen3_ascend.py'
     source = ast.parse(path.read_text())
     functions = {node.name: node for node in ast.walk(source)
                  if isinstance(node, ast.FunctionDef)}

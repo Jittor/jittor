@@ -4,7 +4,7 @@ import jittor as jt
 
 
 class CrossEntropyLoss(jt.Module):
-    def __init__(self, weight=None, ignore_index=None, reduction="mean"):
+    def __init__(self, weight=None, ignore_index=-100, reduction="mean"):
         self.weight = weight
         self.ignore_index = ignore_index
         self.reduction = reduction

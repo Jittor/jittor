@@ -16,7 +16,7 @@ The overlap itself is not something a wall clock proves on this class of
 machine -- see the note at the bottom -- so what is asserted here is the
 structure that makes overlap possible and, more importantly, the correctness it
 puts at risk. The timeline evidence is produced separately with a profiler; the
-recipe is in `agent/skills/jittor-distributed-verification/SKILL.md`.
+recipe is in `https://github.com/JittorEcosystem/jittor-dev-skills/blob/main/skills/jittor-distributed-verification/SKILL.md`.
 
 The dependency counter is what distinguishes the three shapes, because each
 `nccl_stream_begin` contributes one compute->comm dependency and each join

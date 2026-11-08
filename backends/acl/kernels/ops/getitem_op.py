@@ -17,10 +17,82 @@ from collections.abc import Sequence, Iterable
 
 
 from ._code import acl_code as getitem_cmd
+from .._soc import kernel_available, soc_name
 from ._code import acl_emit, acl_program, canonical_dtype_name
 
 getitem_forward = getitem_cmd
 _slice_zero_cache = OrderedDict()
+_AXIS_GATHER_PROGRAMS = {}
+
+
+def _single_axis_gather_spec(x, slices):
+    """The verified 310P inference subset, before any new-axis removal."""
+    if (not jt.flags.no_grad or not soc_name().startswith("Ascend310P")
+            or canonical_dtype_name(x.dtype) not in ("float16", "float32")):
+        return None
+    items = list(slices) if isinstance(slices, tuple) else [slices]
+    ellipses = [axis for axis, item in enumerate(items) if item is Ellipsis]
+    if len(ellipses) > 1:
+        return None
+    if ellipses:
+        position = ellipses[0]
+        fill = x.ndim - len(items) + 1
+        if fill < 0:
+            return None
+        items[position:position + 1] = [slice(None)] * fill
+    items.extend([slice(None)] * (x.ndim - len(items)))
+    if len(items) != x.ndim:
+        return None
+    selected = None
+    for axis, item in enumerate(items):
+        if isinstance(item, jt.Var):
+            if (selected is not None or item.ndim != 1 or item.shape[0] <= 0
+                    or canonical_dtype_name(item.dtype) not in ("int32", "int64")):
+                return None
+            selected = (axis, item)
+        elif not (isinstance(item, slice) and item.start is None
+                  and item.stop is None and item.step is None):
+            return None
+    if selected is None or any(int(size) <= 0 for size in x.shape):
+        return None
+    # A mixed-device index keeps the existing path. Reading dispatch placement
+    # is metadata only; it does not materialize or inspect any index values.
+    from jittor._runtime.dispatch import dispatch_context
+    if dispatch_context(x).backend != "acl" or dispatch_context(selected[1]).backend != "acl":
+        return None
+    return selected
+
+
+class GatherV2ACL:
+    """Single-axis inference gather with a one-dimensional integer index.
+
+    GatherV2 preserves the existing 310P advanced-index SDK behavior, including
+    its known failure to raise CPU-style errors for out-of-range indices.
+    Numerical support is validated for legal indices; this adds no bounds
+    checking or new gradient contract.
+    """
+
+    def __call__(self, x, dim, index):
+        if not jt.flags.no_grad:
+            raise RuntimeError("ACL single-axis GatherV2 requires no_grad")
+        dim = int(dim) % x.ndim
+        # Adjust legal negative indices once, as the original Index path does.
+        # A modulo would also wrap invalid positive indices and change behavior.
+        index = jt.where(index < 0, index + x.shape[dim], index)
+        shape = list(x.shape)
+        shape[dim] = index.shape[0]
+        program = _AXIS_GATHER_PROGRAMS.get(dim)
+        if program is None:
+            program = acl_program("GatherV2", 2, 1, attributes={"dim": dim})
+            _AXIS_GATHER_PROGRAMS[dim] = program
+        return acl_emit(program, [x, index], [x.dtype], [tuple(shape)])[0]
+
+
+def single_axis_gather_acl(x, slices):
+    selected = _single_axis_gather_spec(x, slices)
+    if selected is None:
+        return None
+    return GatherV2ACL()(x, selected[0], selected[1])
 
 
 def _cached_slice_zero(shape, dtype):
@@ -78,7 +150,9 @@ def basic_slice_acl(x, slices):
 
     if all(start == 0 and stop == size
            for start, stop, size in zip(begins, ends, shape)):
-        return x.clone()
+        # The independent Torch Tensor overrides clone() to copy storage.
+        # A full slice needs the native identity view and its identity gradient.
+        return jt.core.ops.clone(x)
 
     dtype = canonical_dtype_name(x.dtype)
     key = (dtype, shape, tuple(begins), tuple(ends))
@@ -88,7 +162,11 @@ def basic_slice_acl(x, slices):
         if len(_SLICE_PROGRAMS) >= _SLICE_PROGRAM_LIMIT:
             _SLICE_PROGRAMS.clear()
         _SLICE_PROGRAMS[key] = entry
-    program, output_shape, fill_shapes = entry
+    program, output_shape, fill_shapes, requires_slice_assign = entry
+    # Capability belongs to this invocation's SoC, not the shape-only program
+    # cache. A program cached on another device cannot grant kernel support.
+    if requires_slice_assign and not kernel_available("StridedSliceAssignV2"):
+        return None
     inputs = [x]
     for fill_shape in fill_shapes:
         inputs.append(_cached_slice_zero(fill_shape, x.dtype))
@@ -179,7 +257,7 @@ def _build_slice_program(shape, begins, ends, dtype):
         attr_code=forward_attr,
         cuda_grad_src=[grad_src],
     )
-    return program, output_shape, fill_shapes
+    return program, output_shape, fill_shapes, not contiguous_last_axis
 
 
 def caculate_shape(tensors):
@@ -494,6 +572,8 @@ class GetItemACL(jt.Function):
             return jt.zeros(self.x_shape, dtype=grad_output.dtype), None
         if self.type_ == "index":
             indices = self.indices
+            if not kernel_available("IndexPutImplAccumulate"):
+                return self._grad_index_composite(grad_output), None
             # The C++ runner zeroes the output itself (aclrtMemsetAsync) then
             # scatter-accumulates grad_output at the indices. Previously the base
             # was an externally-created jt.zeros passed as a write-only output;
@@ -518,6 +598,12 @@ class GetItemACL(jt.Function):
             # 注意前向的维数可能会被压缩，所以这里要还原
             for dim in self.squeeze_dims:
                 grad_output = jt.unsqueeze(grad_output, dim)
+            if not kernel_available("StridedSliceAssignV2"):
+                # 310P 缺 StridedSliceAssignV2：零基座 + IndexPutImpl 组合散射
+                from .setitem_op import SetItemACL
+
+                base = jt.zeros(self.x_shape, dtype=grad_output.dtype)
+                return SetItemACL()(base, slices, grad_output), None
             # 适配华为奇怪的要求，最后一个维度的step必须是1
             expand_dim = False
             if isinstance(slices[-1], slice):
@@ -587,3 +673,26 @@ class GetItemACL(jt.Function):
             return self.mask.float()
         else:
             raise NotImplementedError(f"ACL getitem backward does not support {self.type_!r} gradients")
+
+    def _grad_index_composite(self, grad_output):
+        """Fancy-index backward for SoCs where ``IndexPutImplAccumulate`` is
+        absent or broken (Ascend310P): fold the indexed dims into flat row ids
+        and ``scatter_add`` grad rows into a zero base."""
+        x_shape = [int(size) for size in self.x_shape]
+        k = len(self.indices)
+        tail = 1
+        for size in x_shape[k:]:
+            tail *= size
+        row_span = 1
+        for size in x_shape[:k]:
+            row_span *= size
+        rows = grad_output.reshape(-1, tail)
+        flat = None
+        stride = row_span
+        for dim, idx in enumerate(self.indices):
+            stride //= x_shape[dim]
+            term = idx.reshape(-1) * stride
+            flat = term if flat is None else flat + term
+        col_idx = flat.reshape(-1, 1).broadcast(rows.shape).contiguous()
+        base = jt.zeros((row_span, tail), dtype=grad_output.dtype)
+        return base.scatter_add(0, col_idx, rows).reshape(x_shape)

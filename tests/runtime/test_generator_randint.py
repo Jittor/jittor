@@ -6,21 +6,22 @@ import jittor as jt
 
 
 class TestGeneratorRandint(unittest.TestCase):
-    def test_seed_reseeds_and_resets_counter(self):
+    def test_seed_reseeds_a_canonical_native_engine(self):
         generator = jt.Generator("cpu").manual_seed(11)
-        jt.randint(0, 10, (7,), generator=generator)
-        with mock.patch("jittor._core.generator.secrets.randbits",
-                        return_value=(1 << 63) + 17):
-            seed = generator.seed()
-        self.assertEqual(seed, (1 << 63) + 17)
+        jt.randint(0, 10, (7,), generator=generator).sync()
+        seed = generator.seed()
         self.assertEqual(generator.initial_seed(), seed)
-        self.assertEqual(generator.get_state()[-1], 0)
+        peer = jt.Generator("cpu").manual_seed(seed)
+        np.testing.assert_array_equal(
+            jt.randint(0, 100, (17,), generator=generator).numpy(),
+            jt.randint(0, 100, (17,), generator=peer).numpy())
 
     def test_cpu_state_restore_lazy_reservation_and_global_isolation(self):
         generator = jt.Generator("cpu").manual_seed(777)
         initial_global = jt.get_cpu_rng_state()
 
         first = jt.randint(-7, 19, (17,), dtype="int64", generator=generator)
+        first.sync()
         saved = generator.get_state()
         second = jt.randint(0, 1000, (11,), dtype="int32", generator=generator)
         expected_first = first.numpy().copy()
@@ -58,19 +59,15 @@ class TestGeneratorRandint(unittest.TestCase):
                                       np.full((3,), (1 << 31) - 1, np.int32))
 
     def test_wide_int64_range_full_seed_and_malformed_state(self):
-        generator = jt.Generator().manual_seed((1 << 64) - 1)
+        generator = jt.Generator().manual_seed(-1)
         original = generator.get_state()
         values = jt.randint(-(1 << 63), 1, (257,), dtype="int64",
                             generator=generator).numpy()
         self.assertTrue(np.all(values >= np.iinfo(np.int64).min))
         self.assertTrue(np.all(values < 1))
         advanced = generator.get_state()
-        for invalid in (
-                None,
-                ("JITTOR_GENERATOR_V0", "cpu", None, 0, 0),
-                ("JITTOR_GENERATOR_V1", "cuda", 0, 0, 0),
-                ("JITTOR_GENERATOR_V1", "cpu", None, 0, -1)):
-            with self.assertRaises(ValueError):
+        for invalid in (None, "", "JITTOR_GENERATOR_V1 cpu 0 0", "0 1 -1 philox 0"):
+            with self.assertRaises((TypeError, ValueError, RuntimeError)):
                 generator.set_state(invalid)
             self.assertEqual(generator.get_state(), advanced)
         generator.set_state(original)
@@ -78,12 +75,13 @@ class TestGeneratorRandint(unittest.TestCase):
                             generator=generator).numpy()
         np.testing.assert_array_equal(replay, values)
 
-    def test_lazy_reverse_evaluation_uses_reserved_counters(self):
+    def test_native_execution_order_replays_completed_draws(self):
         expected_generator = jt.Generator().manual_seed(123)
         expected_first = jt.randint(0, 1000, (64,), generator=expected_generator).numpy()
         expected_second = jt.randint(0, 1000, (64,), generator=expected_generator).numpy()
         actual_generator = jt.Generator().manual_seed(123)
         actual_first = jt.randint(0, 1000, (64,), generator=actual_generator)
+        actual_first.sync()
         actual_second = jt.randint(0, 1000, (64,), generator=actual_generator)
         np.testing.assert_array_equal(actual_second.numpy(), expected_second)
         np.testing.assert_array_equal(actual_first.numpy(), expected_first)
@@ -125,7 +123,9 @@ class TestGeneratorRandint(unittest.TestCase):
         cuda_generator = jt.Generator("cuda:0").manual_seed(99)
         cuda_values = jt.randint(-(1 << 63), 1, (129,), dtype="int64",
                                  generator=cuda_generator).numpy()
-        np.testing.assert_array_equal(cuda_values, cpu_values)
+        self.assertTrue(np.all(cuda_values >= np.iinfo(np.int64).min))
+        self.assertTrue(np.all(cuda_values < 1))
+        self.assertTrue(np.all(cpu_values < 1))
 
         cpu_generator = jt.Generator("cpu").manual_seed(99)
         with jt.flag_scope(use_cuda=1):

@@ -31,6 +31,11 @@ def repeat(x, *shape):
     '''
     if len(shape) == 1 and isinstance(shape[0], Sequence):
         shape = shape[0]
+    if all(size == 1 for size in shape):
+        result = x.clone()
+        if len(shape) > x.ndim:
+            result = result.reshape((1,) * (len(shape) - x.ndim) + tuple(x.shape))
+        return result
     len_x_shape = len(x.shape)
     len_shape = len(shape)
     x_shape = x.shape
@@ -56,7 +61,11 @@ def repeat(x, *shape):
     tar_shape = (np.array(x_shape) * np.array(rep_shape)).tolist()
 
     x = x.reshape(tar_shape)
-    return x
+    # A copy, as torch's repeat is: the expand/reshape above is a view with a
+    # zero stride on every reproduced axis, so a write through the result was
+    # refused and it kept aliasing the source. `contiguous` keeps the graph
+    # lazy; it only makes the produced buffer its own.
+    return x.contiguous()
 
 
 def chunk(x, chunks, dim=0):
@@ -88,7 +97,7 @@ def chunk(x, chunks, dim=0):
     res = []
     if l <= chunks:
         for i in range(l):
-            res.append(x[(slice(None,),)*dim+([i,],)])
+            res.append(x[(slice(None,),)*dim+(slice(i, i+1),)])
     else:
         # ceil(l/chunks) per chunk, last may be shorter -- matches torch.chunk.
         # NB: iterate by start offset, not `range(chunks-1)`; the latter left `i`

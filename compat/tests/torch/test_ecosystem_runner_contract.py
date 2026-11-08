@@ -361,3 +361,130 @@ def test_npu_trainer_rejects_an_unverified_adapter_version():
     with mock.patch.object(metadata, "version", return_value="99.0.0"):
         with unittest.TestCase().assertRaisesRegex(RuntimeError, "requires.*2.0.0"):
             runner._require_npu_adapter_registration()
+
+
+def test_cpu_trainer_non_acl_shim_uses_build_evidence_without_initializing_npu():
+    import sys
+    from types import SimpleNamespace
+    from unittest import mock
+    import _hf_trainer_e2e_runner as runner
+
+    for backend in ("cpu", "cuda", "rocm", "corex"):
+        npu = SimpleNamespace(device_count=mock.Mock(return_value=0),
+                              is_available=mock.Mock(return_value=False),
+                              is_initialized=mock.Mock(side_effect=NotImplementedError))
+        native = SimpleNamespace(
+            compiler=SimpleNamespace(has_acl=0, build_config=SimpleNamespace(backend=backend, has_acl=False)),
+            flags=SimpleNamespace(use_acl=0, use_cuda=0))
+        frontend = SimpleNamespace(_torch_compat_install_context=object(), npu=npu)
+        with mock.patch.dict(sys.modules, {"jittor": native}):
+            observed = runner._cpu_runtime_evidence(frontend)
+        assert observed["npu_initialized"] is False
+        assert observed["npu_initialization_evidence"] == "non_acl_build"
+        npu.is_initialized.assert_not_called()
+
+
+def test_cpu_trainer_rejects_unproven_shim_before_any_npu_query():
+    import sys
+    from types import SimpleNamespace
+    from unittest import mock
+    import _hf_trainer_e2e_runner as runner
+
+    for backend, has_acl in (("acl", 1), ("acl", 0), ("cpu", 1), (None, 0),
+                             ("unknown", 0), ("cpu", None)):
+        npu = SimpleNamespace(
+            device_count=mock.Mock(side_effect=AssertionError("must not initialize NPU")),
+            is_available=mock.Mock(side_effect=AssertionError("must not initialize NPU")),
+            is_initialized=mock.Mock(side_effect=NotImplementedError))
+        native = SimpleNamespace(
+            compiler=SimpleNamespace(has_acl=has_acl, build_config=SimpleNamespace(backend=backend, has_acl=has_acl)),
+            flags=SimpleNamespace(use_acl=0, use_cuda=0))
+        frontend = SimpleNamespace(_torch_compat_install_context=object(), npu=npu)
+        with mock.patch.dict(sys.modules, {"jittor": native}):
+            with unittest.TestCase().assertRaisesRegex(RuntimeError, "CPU Trainer"):
+                runner._cpu_runtime_evidence(frontend)
+        npu.device_count.assert_not_called()
+        npu.is_available.assert_not_called()
+        npu.is_initialized.assert_not_called()
+
+
+def test_cpu_trainer_rejects_active_shim_accelerator_flags_before_queries():
+    import sys
+    from types import SimpleNamespace
+    from unittest import mock
+    import _hf_trainer_e2e_runner as runner
+
+    for use_acl, use_cuda in ((1, 0), (0, 1)):
+        npu = SimpleNamespace(
+            device_count=mock.Mock(side_effect=AssertionError("must not query NPU")),
+            is_available=mock.Mock(side_effect=AssertionError("must not query NPU")),
+            is_initialized=mock.Mock(side_effect=NotImplementedError))
+        native = SimpleNamespace(
+            compiler=SimpleNamespace(has_acl=0, build_config=SimpleNamespace(backend="cpu", has_acl=False)),
+            flags=SimpleNamespace(use_acl=use_acl, use_cuda=use_cuda))
+        frontend = SimpleNamespace(_torch_compat_install_context=object(), npu=npu)
+        with mock.patch.dict(sys.modules, {"jittor": native}):
+            with unittest.TestCase().assertRaisesRegex(RuntimeError, "CPU Trainer"):
+                runner._cpu_runtime_evidence(frontend)
+        npu.device_count.assert_not_called()
+        npu.is_available.assert_not_called()
+        npu.is_initialized.assert_not_called()
+
+
+def test_cpu_trainer_native_still_queries_initialization_with_zero_devices():
+    from types import SimpleNamespace
+    from unittest import mock
+    import _hf_trainer_e2e_runner as runner
+
+    initialized = mock.Mock(return_value=False)
+    frontend = SimpleNamespace(_C=object(), npu=SimpleNamespace(
+        device_count=lambda: 0, is_available=lambda: False, is_initialized=initialized))
+    observed = runner._cpu_runtime_evidence(frontend)
+    assert observed["npu_initialized"] is False
+    initialized.assert_called_once_with()
+
+
+def test_cpu_trainer_rejects_unproven_shim_with_conflicting_build_capability():
+    import sys
+    from types import SimpleNamespace
+    from unittest import mock
+    import _hf_trainer_e2e_runner as runner
+
+    for configured_acl in (True, None, "0"):
+        npu = SimpleNamespace(device_count=mock.Mock(return_value=0),
+                              is_available=mock.Mock(return_value=False),
+                              is_initialized=mock.Mock(side_effect=NotImplementedError))
+        native = SimpleNamespace(
+            compiler=SimpleNamespace(has_acl=0, build_config=SimpleNamespace(
+                backend="cpu", has_acl=configured_acl)),
+            flags=SimpleNamespace(use_acl=0, use_cuda=0))
+        frontend = SimpleNamespace(_torch_compat_install_context=object(), npu=npu)
+        with mock.patch.dict(sys.modules, {"jittor": native}):
+            with unittest.TestCase().assertRaisesRegex(RuntimeError, "CPU Trainer"):
+                runner._cpu_runtime_evidence(frontend)
+        npu.device_count.assert_not_called()
+        npu.is_available.assert_not_called()
+        npu.is_initialized.assert_not_called()
+
+
+def test_cpu_trainer_rejects_unproven_shim_with_missing_execution_flags():
+    import sys
+    from types import SimpleNamespace
+    from unittest import mock
+    import _hf_trainer_e2e_runner as runner
+
+    for flags in (SimpleNamespace(), SimpleNamespace(use_acl=0),
+                  SimpleNamespace(use_cuda=0)):
+        npu = SimpleNamespace(device_count=mock.Mock(return_value=0),
+                              is_available=mock.Mock(return_value=False),
+                              is_initialized=mock.Mock(side_effect=NotImplementedError))
+        native = SimpleNamespace(
+            compiler=SimpleNamespace(has_acl=0, build_config=SimpleNamespace(
+                backend="cpu", has_acl=False)), flags=flags)
+        frontend = SimpleNamespace(_torch_compat_install_context=object(), npu=npu)
+        with mock.patch.dict(sys.modules, {"jittor": native}):
+            with unittest.TestCase().assertRaisesRegex(RuntimeError, "CPU Trainer"):
+                runner._cpu_runtime_evidence(frontend)
+        npu.device_count.assert_not_called()
+        npu.is_available.assert_not_called()
+        npu.is_initialized.assert_not_called()

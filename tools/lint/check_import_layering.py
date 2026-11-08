@@ -99,10 +99,7 @@ CYCLIC_SUBPACKAGES = frozenset(
 
 #: Ceiling on how many modules sit on an import-time cycle. Catches growth
 #: inside a subpackage that is already on the list above.
-# The integrated 2.0-refactor source surface has 168 members across the same
-# three existing cycles (the separate source lines measured 164 and 165). This
-# records the union at merge time; reduce it as those cycles are trimmed.
-MAX_CYCLIC_MODULES = 168
+MAX_CYCLIC_MODULES = 166  # 165 -> 166 by PR #18038 (native Adagrad joins the existing jittor.optim/algorithms cycle); raised from 164 by #18042 "Refactor 2.0" (659e6a47f) -- reduce when the cycle is trimmed
 
 #: Ceiling on the number of distinct import-time cycles.
 MAX_CYCLES = 3

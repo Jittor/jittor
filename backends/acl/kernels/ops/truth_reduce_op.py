@@ -30,8 +30,13 @@ def _normalize_dims(input, dim):
     return normalized
 
 
-def _truth_reduce_cmd(input, dims, reduce_all):
-    output_shape = [size for axis, size in enumerate(input.shape) if axis not in dims] or [1]
+def _truth_reduce_cmd(input, dims, reduce_all, keepdims):
+    if keepdims:
+        output_shape = [
+            1 if axis in dims else size for axis, size in enumerate(input.shape)
+        ]
+    else:
+        output_shape = [size for axis, size in enumerate(input.shape) if axis not in dims] or [1]
     output = jt.empty(output_shape, dtype="bool")
     return code_with_attributes(
         backend="acl",
@@ -53,7 +58,7 @@ def _truth_reduce_cmd(input, dims, reduce_all):
                 "TruthReduce",
                 {
                     "axes": list(dims),
-                    "keepdims": False,
+                    "keepdims": bool(keepdims),
                     "reduce_all": bool(reduce_all),
                 },
             ),
@@ -64,7 +69,7 @@ def _truth_reduce_cmd(input, dims, reduce_all):
 def truth_reduce(input, dim, reduce_all, keepdims=False):
     dims = _normalize_dims(input, dim)
     truth = input if _jittor_dtype_name(input.dtype) == "bool" else input != 0
-    output = _truth_reduce_cmd(truth, dims, reduce_all)
+    output = _truth_reduce_cmd(truth, dims, reduce_all, keepdims)
     # Keep the working CANN descriptor convention, then expose the canonical
     # scalar/singleton shape promised by the shared any/all API.
     shape = ([1 if axis in dims else size for axis, size in enumerate(input.shape)]

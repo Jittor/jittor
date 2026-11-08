@@ -171,7 +171,7 @@ time.sleep(600)
             2, code, self.tmp.name, timeout=120, job_timeout=2)
         self.assertEqual(done.returncode, 124, done.stdout[-3000:])
         self.assertLess(elapsed, 30, done.stdout[-3000:])
-        self.assertIn("job timed out", done.stdout)
+        self.assertIn("job deadline reached", done.stdout)
         self.assertIn("all rank process groups stopped", done.stdout)
 
         pids = []
@@ -272,7 +272,7 @@ time.sleep(600)
             text = Path(self.tmp.name, "rank%d.log" % rank).read_text()
             expected = {
                 "RANK": str(rank),
-                "LOCAL_RANK": str(rank),
+                "LOCAL_RANK": "0",
                 "WORLD_SIZE": "2",
                 "LOCAL_WORLD_SIZE": "2",
                 "MASTER_ADDR": "127.0.0.1",
@@ -290,7 +290,7 @@ time.sleep(600)
     def test_invalid_device_count_and_duplicate_device_ids_fail_before_start(self):
         too_few = run_python_child(
             [os.fspath(_LAUNCH), "-n", "2", "--backend", "hccl",
-             "--device-ids", "0", "--", PYTHON, "-c", "pass"],
+             "--device-ids", "0", "--log-dir", self.tmp.name, "--", PYTHON, "-c", "pass"],
             cwd=_REPO_ROOT, merge_stderr=True, timeout=120)
         self.assertEqual(too_few.returncode, 2, too_few.stdout)
         self.assertIn("only 1 visible device", too_few.stdout)

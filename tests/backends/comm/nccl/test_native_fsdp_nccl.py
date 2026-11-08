@@ -9,6 +9,7 @@ import jittor as jt
 from jittor import distributed as dist
 import numpy as np
 import pytest
+from _helpers import torch_runtime
 from _helpers.native_fsdp import assert_oracle_tensor, assert_oracle_update, run_cuda_trajectory
 
 _READY = bool(jt.compiler.has_cuda and jt.flags.use_cuda and dist.get_world_size() == 2)
@@ -20,7 +21,7 @@ pytestmark = pytest.mark.skipif(not _READY, reason="requires two actual CUDA NCC
 @pytest.mark.parametrize("kind", ["sgd", "adamw"])
 @pytest.mark.parametrize("dtype", ["float32", "bfloat16"])
 def test_oracle_and_fresh_launcher_resume(kind, dtype):
-    assert "torch" not in sys.modules and not any(
+    assert not torch_runtime.torch_shim_loaded() and not any(
         n.startswith("jittor.compat") for n in sys.modules
     )
     root = Path(os.environ["JITTOR_NATIVE_FSDP_TEST_DIR"])

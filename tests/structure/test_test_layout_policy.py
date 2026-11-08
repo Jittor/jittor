@@ -20,7 +20,7 @@ def test_shared_policy_and_root_adapters_remain_in_lint_and_format_gates():
     namespace = {"NN_MIGRATION_FILES": ()}
     exec(compile(ast.Module(body=assignments, type_ignores=[]), "noxfile.py", "exec"), namespace)
     expected = {"tests/_helpers/pytest_policy.py", "tests/conftest.py",
-                "compat/tests/conftest.py", "adapters/tests/conftest.py"}
+                "compat/tests/conftest.py"}
     for name in ("RATCHET_FILES", "FORMAT_FILES"):
         assert expected <= set(namespace[name])
 
@@ -29,23 +29,21 @@ def test_both_root_adapters_register_the_same_policy_once():
     registered = {}
     manager = SimpleNamespace(hasplugin=registered.__contains__,
                               register=lambda module, name: registered.setdefault(name, module))
-    for root in (REPO_ROOT / "tests", REPO_ROOT / "compat/tests", REPO_ROOT / "adapters/tests"):
+    for root in (REPO_ROOT / "tests", REPO_ROOT / "compat/tests"):
         adapter = runpy.run_path(str(root / "conftest.py"))
         adapter["pytest_addoption"](None, manager)
     assert registered == {"_helpers.pytest_policy": pytest_policy}
 
 
-def test_standalone_adapter_host_tests_do_not_require_monorepo_support(tmp_path):
-    root = tmp_path / "distribution" / "tests"
-    root.mkdir(parents=True)
-    adapter = root / "conftest.py"
-    adapter.write_text((REPO_ROOT / "adapters/tests/conftest.py").read_text())
-    namespace = runpy.run_path(str(adapter))
-    registered = []
-    manager = SimpleNamespace(hasplugin=lambda name: False,
-                              register=lambda *args: registered.append(args))
-    namespace["pytest_addoption"](None, manager)
-    assert not registered
+def test_external_adapters_are_not_owned_by_core_gates():
+    assert gate_scope.TEST_ROOTS == ("tests", "compat/tests")
+    assert not (REPO_ROOT / "adapters").exists()
+
+
+def test_tool_unit_tests_live_in_the_collected_test_roots():
+    misplaced = sorted(str(path.relative_to(REPO_ROOT))
+                       for path in (REPO_ROOT / "tools").rglob("test_*.py"))
+    assert not misplaced, "Move tool unit tests into tests/: " + ", ".join(misplaced)
 
 
 def test_moved_backend_paths_keep_device_and_process_contracts():
@@ -56,7 +54,8 @@ def test_moved_backend_paths_keep_device_and_process_contracts():
         "torch", "test_transaction.py")
     native = gate_scope.selected_files(REPO_ROOT, gate_scope.native_arguments())
     torch = gate_scope.selected_files(REPO_ROOT, gate_scope.torch_arguments())
-    assert "compat/tests/fsdp2/test_fsdp_mesh.py" in native
+    assert "compat/tests/fsdp2/test_fsdp_mesh.py" not in native
+    assert "compat/tests/fsdp2/test_fsdp_mesh.py" in torch
     assert "compat/tests/torch/test_transaction.py" in torch
     native_mock = "tests/structure/backends/acl/test_acl_dtype_preservation.py"
     assert native_mock in native and native_mock not in torch

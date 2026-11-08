@@ -245,6 +245,58 @@ class TestCodeOp(unittest.TestCase):
         assert_rss_growth_bounded(
             exercise, iterations=128, max_growth_bytes=8 << 20,
             cleanup=jt.clean)
+    def test_second_derivative_through_a_numpy_code_gradient_raises(self):
+        def forward(np, data):
+            np.copyto(data["outputs"][0], data["inputs"][0] ** 3)
+
+        def backward(np, data):
+            np.copyto(data["outputs"][0], data["dout"] * 3 * data["inputs"][0] ** 2)
+
+        x = jt.array(numpy.array([2.0, -1.5], dtype="float32"))
+        y = jt.numpy_code(x.shape, x.dtype, [x], forward, [backward])
+        first = jt.grad(y.sum(), x)
+        numpy.testing.assert_allclose(first.numpy(), [12.0, 6.75])
+        with self.assertRaisesRegex(RuntimeError, "cannot differentiate a numpy_code gradient again"):
+            jt.grad(first.sum(), x)
+
+
+    def test_torch_edge_policy_multi_output_and_repeated_input_slots(self):
+        def forward(np, data):
+            first, second = data["inputs"]
+            left, right = data["outputs"]
+            np.copyto(left, 2 * first + 3 * second)
+            np.copyto(right, 5 * first + 7 * second)
+
+        def first_vjp(np, data):
+            factor = 2 if data["out_index"] == 0 else 5
+            np.copyto(data["outputs"][0], data["dout"] * factor)
+
+        def second_vjp(np, data):
+            factor = 3 if data["out_index"] == 0 else 7
+            np.copyto(data["outputs"][0], data["dout"] * factor)
+
+        setter = jt.core._set_torch_grad_edge_dtypes
+        previous = setter(False)
+        try:
+            with jt.flag_scope(use_cuda=0, auto_mixed_precision_level=0, amp_reg=0):
+                for dtype in ("float16", "float32"):
+                    for repeated in (False, True):
+                        for enabled in (False, True):
+                            setter(enabled)
+                            first = jt.array([.25, .5]).cast(dtype).start_grad()
+                            second = first if repeated else jt.array([.75, 1.]).cast(dtype).start_grad()
+                            left, right = jt.numpy_code(
+                                [first.shape, first.shape], ["float32", "float32"],
+                                [first, second], forward, [first_vjp, second_vjp])
+                            targets = [first] if repeated else [first, second]
+                            gradients = jt.grad((left + right).sum(), targets)
+                            expected = (17.,) if repeated else (7., 10.)
+                            for gradient, scalar in zip(gradients, expected):
+                                self.assertEqual(gradient.dtype, dtype)
+                                self.assertEqual(gradient.float32().numpy().tolist(), [scalar, scalar])
+        finally:
+            setter(previous)
+
 
 if __name__ == "__main__":
     unittest.main()

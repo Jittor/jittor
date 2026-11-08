@@ -59,7 +59,7 @@ def test_distribution_metadata_has_explicit_project_and_import_identity():
     )
 
     metadata = distribution_metadata()
-    assert DISTRIBUTION_PROJECT == "jittor-torch"
+    assert DISTRIBUTION_PROJECT == "jittor-compat"
     assert DISTRIBUTION_IMPORT_ROOT == "torch"
     assert DISTRIBUTION_SCHEMA_VERSION == 1
     assert metadata["project"] == DISTRIBUTION_PROJECT
@@ -92,7 +92,7 @@ def test_distribution_boundary_facade_validates_manifest_and_publication():
 
     published, manifest = _small_distribution_fixture()
     assert bootstrap.validate_distribution_boundary(published, manifest)
-    assert bootstrap.DISTRIBUTION_PROJECT == "jittor-torch"
+    assert bootstrap.DISTRIBUTION_PROJECT == "jittor-compat"
     assert bootstrap.DISTRIBUTION_IMPORT_ROOT == "torch"
     assert bootstrap.validate_distribution_metadata()
 

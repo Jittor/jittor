@@ -124,7 +124,7 @@ def test_adamw_group_metadata_and_full_state_roundtrip_preserve_next_update():
     _assert_full_state_and_parameters(source, restored, parameters, restored_parameters)
 
 
-@pytest.mark.parametrize("option", ("amsgrad", "maximize", "differentiable", "capturable", "foreach"))
+@pytest.mark.parametrize("option", ("amsgrad", "maximize", "differentiable", "capturable"))
 def test_adamw_unsupported_variants_reject_ctor_group_add_and_step_before_update(option):
     torch = compatibility_owner(jt)
     parameter = _parameter(torch, [1., -2.])
@@ -151,3 +151,23 @@ def test_adamw_public_defaults_do_not_rewrite_native_optimizer_policy():
     native = jt.optim.AdamW([value], .01)
     assert native.defaults["param_groups"] is native.param_groups
     assert not hasattr(native, "_torch_adamw_defaults")
+
+@pytest.mark.parametrize("entry", ("constructor", "group", "late_group", "step"))
+def test_adamw_foreach_supported_selection_preserves_first_update(entry):
+    torch = compatibility_owner(jt)
+    parameter = _parameter(torch, [1., -2.])
+    if entry == "constructor":
+        optimizer = torch.optim.AdamW([parameter], lr=.01, foreach=True)
+    elif entry == "group":
+        optimizer = torch.optim.AdamW([{"params": [parameter], "foreach": True}], lr=.01)
+    elif entry == "late_group":
+        first = _parameter(torch, [3.])
+        optimizer = torch.optim.AdamW([first], lr=.01)
+        optimizer.add_param_group({"params": [parameter], "foreach": True})
+    else:
+        optimizer = torch.optim.AdamW([parameter], lr=.01)
+        optimizer.param_groups[0]["foreach"] = True
+    parameter.grad = _parameter(torch, [2., -4.]).detach()
+    optimizer.step()
+    np.testing.assert_allclose(_array(parameter), [.9899, -1.9898], atol=2e-7, rtol=0)
+    assert float(optimizer.state[parameter]["step"]) == 1

@@ -1,6 +1,7 @@
 """Public Torch save/load and portable tensor payload conversion."""
 import os as _os_pickle
 import pickle as _pickle
+from threading import Event as _Event
 import numpy as np
 import jittor as jt
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
@@ -118,9 +119,41 @@ def _snapshot_tensors(obj):
     snapshot = _TensorSnapshots()
     snapshot.collect(obj)
     if snapshot.tensors:
+        # Saving an object must not execute unrelated live graphs. Materialize
+        # only its tensors before submitting the host copies; a global sync
+        # would also retry unrelated failed providers, even for metadata saves.
+        #
+        # `contiguous()` forwards a contiguous tensor unchanged and gives a
+        # non-contiguous one a copy this sync runs. Without it the fetch
+        # binding substitutes a *lazy* contiguous copy for a non-contiguous
+        # operand, and `submit_pending_fetches` only runs a fetch whose
+        # operands are already materialized -- a transposed view stayed queued
+        # until some later `sync_all`, leaving its capture slot empty.
+        operands = [tensor.contiguous() for tensor in snapshot.tensors]
+        jt.sync(operands, device_sync=False, weak_sync=False)
         # Fetch copies to host without moving the source sharing group.
-        jt.fetch(*snapshot.tensors, snapshot.capture)
-    jt.sync_all(True)
+        callback_done = _Event()
+        captured_arrays = None
+
+        def capture(*arrays):
+            nonlocal captured_arrays
+            # The native ArrayArgs converter creates owning NumPy arrays.
+            # Keep them alive here; do fallible snapshot processing in the
+            # calling thread so callback errors cannot poison a fetch node.
+            captured_arrays = arrays
+            callback_done.set()
+
+        # Keep the fetch output as a sync root: an empty sync can return
+        # before this fetch runs, even after its operands are materialized.
+        from jittor._core.var import core as _core
+        fetch_op = _core.ops.fetch(operands, capture)
+        _core.submit_pending_fetches()
+        # This root also waits for Copy0 when fetching another GPU's tensors.
+        jt.sync([fetch_op], device_sync=True, weak_sync=False)
+        # Device synchronization can finish before the Python callback has
+        # published its host arrays.
+        callback_done.wait()
+        snapshot.capture(*captured_arrays)
     if len(snapshot.values) != len(snapshot.tensors):
         raise RuntimeError("checkpoint tensor fetch did not complete")
     return snapshot.values

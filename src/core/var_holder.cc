@@ -35,6 +35,7 @@ namespace {
 struct VarDataOwner {
     PyObject* holder;
     Var* var;
+    Allocation allocation;
 };
 }
 
@@ -47,18 +48,59 @@ static void free_var_data_owner(PyObject* capsule) {
 }
 
 PyObject* new_var_data_owner(VarHolder* vh) {
-    auto owner = new VarDataOwner{GET_OBJ_FROM_RAW_PTR(vh), vh->var};
+    auto owner = std::unique_ptr<VarDataOwner>(
+        new VarDataOwner{GET_OBJ_FROM_RAW_PTR(vh), vh->var});
+    auto* var = owner->var;
+    // Keeping the Var alive is not enough: a later CUDA consumer can migrate
+    // it back to the device and release the host block exported by .data.
+    // Hold that exact allocation independently of the Var's current storage.
+    if (var->mem_ptr) {
+        CHECK(var->allocator->share_with(var->storage_span_bytes(),
+            var->allocation, var->storage_offset_bytes))
+            << "Cannot retain storage exported by Var.data";
+        owner->allocation.ptr = var->mem_ptr;
+        owner->allocation.allocation = var->allocation;
+        owner->allocation.size = var->storage_span_bytes();
+        owner->allocation.allocator = var->allocator;
+    }
     owner->var->own_both_liveness();
     Py_INCREF(owner->holder);
-    auto capsule = PyCapsule_New((void*)owner, "jittor.var_data",
+    auto capsule = PyCapsule_New((void*)owner.get(), "jittor.var_data",
         &free_var_data_owner);
     if (!capsule) {
         owner->var->release_both_liveness();
         Py_DECREF(owner->holder);
-        delete owner;
         return nullptr;
     }
+    owner.release();
     return capsule;
+}
+
+VarPtr ready_storage_alias(VarHolder* source) {
+    Var* original = source->var;
+    USER_CHECK(original->num >= 0 && !original->flag(VarFlags::_execution_failed)
+            && original->allocator && (original->mem_ptr || !original->size))
+        << "rematerialization needs successfully materialized output storage";
+
+    VarPtr ready(original->shape, original->dtype());
+    ready->storage_strides = original->storage_strides;
+    ready->device_id = original->device_id;
+    ready->placement = original->placement;
+    ready->set_flag(VarFlags::_host_resident, original->flag(VarFlags::_host_resident));
+    ready->set_stop_grad();
+    ready->share_with(original);
+    USER_CHECK(ready->alloc(original->allocator)
+            && ready->mem_ptr == original->mem_ptr
+            && (!original->size || ready->shares_allocation_with(original)))
+        << "allocator cannot share rematerialized output storage";
+
+    // Share mutation detection, not trainability or the source graph's owner.
+    ready->autograd_alias = std::make_shared<AutogradAliasState>();
+    ready->autograd_alias->version = source->ensure_autograd_alias()->version;
+    ready->autograd_alias->creation_version = *ready->autograd_alias->version;
+    // Complete only this new inputless leaf. Original nodes remain untouched.
+    ready->finish_pending_liveness();
+    return ready;
 }
 
 // Holders rebound while a step is being captured, with the Var each held
@@ -134,12 +176,49 @@ void submit_pending(VarHolder* holder) {
 // uses, and it is where the device-to-host transfer releases the GIL
 // (`DeviceWaitScope` in mem/allocator.cc) -- which it only does while this lock
 // is held, so holding it here is what makes that release reachable at all.
+//
+// A host read must also own the exact Var it syncs and copies. The holder's
+// `var` is a name another Python thread can rebind while this one is inside a
+// sync or a blocking device-to-host copy (both release the GIL). A rebind
+// releases the holder's liveness reference; if that was the last one the old
+// Var is freed and its storage returned to the allocator, and the read then
+// copies from freed memory (the shared-parameter storage race). `VarPtr` owns forward, backward and
+// pending liveness, so the read's reference keeps the Var and its storage
+// alive until the copy is done, whatever the holder does. The snapshot is
+// taken while the GIL is held, so reading `var` cannot interleave with a
+// Python rebind; the ownership is what covers the GIL-releasing wait that
+// follows.
+//
+// It is an owner the structural check in graph.cc does not model -- that check
+// derives expected counts from holders and graph edges only -- so `graph_check`
+// must run before the snapshot is taken and after it is released, never while
+// it is held.
+struct ReadSnapshot {
+    Var* var;
+    VarPtr owner;
+    explicit ReadSnapshot(Var* v) : var(v), owner(v) {}
+};
+
+// Sync Vars the caller has pinned with a ReadSnapshot. Same batch contract as
+// the holder-based `sync` below, but it cannot re-read a holder's `var` and
+// sync a different Var than the one the caller is about to copy. The read pin
+// is visible to graph_check, so the callers check around the pin themselves.
+static void sync_owned_vars(const vector<Var*>& vars, bool device_sync,
+                            bool weak_sync) {
+    runtime_executor().run_sync(vars, device_sync, weak_sync);
+}
+
 VarHolder* VarHolder::migrate_to_cpu_() {
     ExecutorEntryScope entry;
-    sync(true, false);
+    graph_check();
+    {
+        ReadSnapshot snapshot(var);
+        sync_owned_vars({snapshot.var}, true, false);
 #ifdef HAS_ACCELERATOR
-    migrate_to_cpu(var, runtime_executor().allocator);
+        migrate_to_cpu(snapshot.var, runtime_executor().allocator);
 #endif
+    }
+    graph_check();
     return this;
 }
 
@@ -204,26 +283,62 @@ static inline bool host_value_ready(Var* var) {
 }
 
 DataView VarHolder::data() {
+    check_backward_storage_read(var);
     note_readback();
-    if (!host_value_ready(var)) {
-        ExecutorEntryScope entry;
-        sync(readback_waits_for_devices(), false);
-        var->set_flag(VarFlags::_execution_failed, 0);
-#ifdef HAS_ACCELERATOR
-        migrate_to_cpu(var, runtime_executor().allocator);
-#endif
+    // A host-resident value is read in place: no sync, no GIL release, so the
+    // holder cannot change before the view is built.
+    if (host_value_ready(var)) {
+        Var* target = var;
+        return {this, target->mem_ptr, target->shape, target->dtype(),
+                target->storage_strides};
     }
-    return {this, var->mem_ptr, var->shape, var->dtype(), var->storage_strides};
+    // `new_var_data_owner`, which the conversion builds the view's Python base
+    // from, names the holder's current Var. That conversion runs with the GIL
+    // held, so it cannot see a rebind that happens after this returns; but one
+    // may happen during the GIL-releasing sync below. Then the bytes we synced
+    // are not the ones the holder's name refers to, so sync the Var it names
+    // now as well and return that one: a view and its base must describe the
+    // same storage.
+    for (;;) {
+        DataView view;
+        bool stable = false;
+        {
+            ExecutorEntryScope entry;
+            graph_check();
+            {
+                ReadSnapshot snapshot(var);
+                sync_owned_vars({snapshot.var}, readback_waits_for_devices(), false);
+                snapshot.var->set_flag(VarFlags::_execution_failed, 0);
+#ifdef HAS_ACCELERATOR
+                migrate_to_cpu(snapshot.var, runtime_executor().allocator);
+#endif
+                if (snapshot.var == var) {
+                    view = {this, snapshot.var->mem_ptr, snapshot.var->shape,
+                            snapshot.var->dtype(), snapshot.var->storage_strides};
+                    stable = true;
+                }
+            }
+            graph_check();
+        }
+        if (stable) return view;
+    }
 }
 
 uint64 VarHolder::raw_ptr() {
     note_readback();
     ExecutorEntryScope entry;
-    sync(true, false);
+    graph_check();
+    uint64 ptr;
+    {
+        ReadSnapshot snapshot(var);
+        sync_owned_vars({snapshot.var}, true, false);
 #ifdef HAS_ACCELERATOR
-    migrate_to_cpu(var, runtime_executor().allocator);
+        migrate_to_cpu(snapshot.var, runtime_executor().allocator);
 #endif
-    return (uint64)var->mem_ptr;
+        ptr = (uint64)snapshot.var->mem_ptr;
+    }
+    graph_check();
+    return ptr;
 }
 
 // Both Vars, described the same way, so the two entry points refuse the same
@@ -259,6 +374,7 @@ void VarHolder::write_inplace(ArrayArgs&& array) {
     // Ordered, not blocking: the bytes have to land before the kernels that
     // read them, which is stream order, not a host-side wait. See the H2D
     // branch in the CUDA backend's copy() for why the difference is 1000x.
+    var->note_storage_mutation();
     backend_copy(var->mem_ptr, dst, array.ptr, {}, size, true);
 }
 
@@ -354,9 +470,26 @@ static void validate_logical_copy_alias(VarHolder* target, VarHolder* source) {
         << "_copy_into source and destination have overlapping logical view storage";
 }
 
+int preserve_step_readers(const vector<VarHolder*>& storages) {
+    vector<Var*> written;
+    written.reserve(storages.size());
+    for (VarHolder* holder : storages)
+        if (holder && holder->var) written.push_back(holder->var);
+    if (written.empty()) return 0;
+    auto readers = saved_storage_readers(written);
+    if (readers.empty()) return 0;
+    ExecutorEntryScope entry;
+    runtime_executor().run_sync(readers, false, false);
+    return (int)readers.size();
+}
+
 void VarHolder::copy_into(VarHolder* src, bool sync_src) {
     check_inplace_autograd();
     ExecutorEntryScope entry;
+    // Preserve saved values before a physical write can invalidate their
+    // recomputation inputs. Holder sinks may have fused those values away.
+    auto readers = saved_storage_readers({var});
+    if (!readers.empty()) runtime_executor().run_sync(readers, false, false);
     // Neither sync waits on the device; both only resolve what the Var is
     // still pending on. The copy itself is stream-ordered against the work
     // already queued, which is what makes this usable once per step.
@@ -471,6 +604,7 @@ void VarHolder::set_data(ArrayArgs&& array) {
 #ifdef HAS_ACCELERATOR
     migrate_to_cpu(var, runtime_executor().allocator);
 #endif
+    var->note_storage_mutation();
     if (var->is_contiguous()) {
         std::memcpy(var->mem_ptr, array.ptr, size);
     } else {
@@ -541,12 +675,18 @@ static auto make_transpose_view = op_constructor<VarPtr, Var*, NanoVector>("tran
 
 static auto make_storage_reshape = op_constructor<VarPtr, Var*, NanoVector>("reshape");
 static auto make_storage_broadcast = op_constructor<VarPtr, Var*, NanoVector, NanoVector>("broadcast_to");
+static auto make_dtype_view = op_constructor<VarPtr, Var*, NanoVector, NanoString>("reinterpret_view");
 static VarPtr apply_view_step(Var* value, const VarViewStep& step,
                              bool physical = false) {
     if (step.kind == VarViewStep::Expand)
         return make_storage_broadcast(value, NanoVector(step.axes), NanoVector());
     if (step.kind == VarViewStep::Reshape)
         return make_storage_reshape(value, NanoVector(step.axes));
+    if (step.kind == VarViewStep::Reinterpret) {
+        auto result = make_dtype_view(value, NanoVector(step.axes), step.dtype);
+        result.set_stop_grad(true);
+        return result;
+    }
     if (step.kind == VarViewStep::Transpose)
         return physical ? storage_view_transpose(value, NanoVector(step.axes))
                         : make_transpose_view(value, NanoVector(step.axes));
@@ -805,6 +945,27 @@ VarHolder* VarHolder::set_storage_view_of(VarHolder* base, bool expand) {
     return this;
 }
 
+VarHolder* VarHolder::set_dtype_view_of(VarHolder* base) {
+    USER_CHECK(base && shares_physical_storage(var, base->var))
+        << "dtype view requires shared physical storage";
+    drop_view();
+    attach_view(base, VarViewStep(NanoVector(var->shape), var->dtype()));
+    // Tensor.view(dtype) shares the mutation version but has no autograd
+    // relationship, even for a same-dtype view of a trainable source.
+    if (var->autograd_alias) {
+        auto state = var->autograd_alias;
+        state->source.reset();
+        state->inherit_requires_grad = false;
+        state->own_requires_grad = false;
+        state->created_without_grad = false;
+        state->recorded_view_history = false;
+        state->source_edge_enabled = false;
+    }
+    var->set_flag(VarFlags::_unrecorded_view, 0);
+    stop_grad();
+    return this;
+}
+
 VarHolder* VarHolder::storage_permute(NanoVector axes) {
     return new VarHolder(storage_view_transpose(grad_input(), axes));
 }
@@ -870,6 +1031,11 @@ VarHolder* VarHolder::transpose_view_source() {
 // size [x_items(0) == y_items(1152)]"). Slices are left alone: they were
 // already only ever recorded against a compatible shape.
 static bool view_step_fits(Var* value, const VarViewStep& step) {
+    if (step.kind == VarViewStep::Reinterpret) {
+        int64 target = 1;
+        for (int i=0; i<(int)step.axes.size(); ++i) target *= step.axes[i];
+        return target * step.dtype.dsize() == value->num * value->dsize();
+    }
     if (step.kind == VarViewStep::Slice) return true;
     // A transpose step stores the axes permutation, not a shape: it applies to
     // any value of the same rank.
@@ -992,10 +1158,18 @@ static VarPtr view_assignment_value(Var* base, const vector<VarViewStep>& steps,
             for (int j=0; j<axes.size(); ++j) inverse_values[axes[j]] = j;
             NanoVector inverse = NanoVector::make(inverse_values.data(), inverse_values.size());
             updated = make_transpose_view(value, move(inverse));
+        } else if (steps[i].kind == VarViewStep::Reinterpret) {
+            // Invert the byte interpretation, never a numeric cast. This
+            // lets a later slice assignment write through the dtype view and
+            // through any earlier shape/transpose/slice steps to the root.
+            updated = make_dtype_view(value, NanoVector(target->shape), target->dtype());
         } else if (steps[i].kind == VarViewStep::Expand || steps[i].kind == VarViewStep::Reshape) {
             USER_CHECK(value->num == target->num)
                 << "Cannot write to an expanded view with overlapping storage";
-            updated = make_storage_reshape(value, NanoVector(target->shape));
+            // Inverting a later transpose may leave logical values strided.
+            // A writeback reshape may copy; it is not a storage-view request.
+            auto dense = contiguous_storage(value);
+            updated = make_storage_reshape(dense.ptr, NanoVector(target->shape));
         } else {
             updated = make_setitem(target, VarSlices(steps[i].slices), value, ns_void);
         }
@@ -1246,6 +1420,7 @@ VarHolder* VarHolder::check_inplace_autograd() {
 }
 
 void VarHolder::record_inplace_write() {
+    var->note_storage_mutation();
     if (!var->autograd_alias) return;
     ++*var->autograd_alias->version;
 
@@ -1292,6 +1467,8 @@ VarHolder* VarHolder::storage_data_alias() {
     // Tensor.data shares bytes but has an independent version counter and
     // trainability. Detach above shares the counter for its distinct contract.
     alias->var->autograd_alias = std::make_shared<AutogradAliasState>();
+    std::atomic_store(&alias->var->storage_mutation_version,
+        std::make_shared<StorageMutationVersion>());
     return alias;
 }
 
@@ -1490,7 +1667,9 @@ VarHolder* VarHolder::_update(VarHolder* v, bool logical_write) {
         var->storage_strides = replacement->storage_strides;
         var->device_id = replacement->device_id;
         var->placement = replacement->placement;
+        auto version = var->storage_version_token();
         var->share_with(replacement.ptr);
+        std::atomic_store(&var->storage_mutation_version, version);
         CHECK(var->alloc(replacement->allocator));
         return this;
     }
@@ -1526,21 +1705,82 @@ VarHolder* VarHolder::_update(VarHolder* v, bool logical_write) {
 
 
 VarHolder* VarHolder::sync(bool device_sync, bool weak_sync) {
+    check_backward_storage_read(var);
     jittor::sync({this}, device_sync, weak_sync);
     return this;
 }
 
+#ifdef HAS_ACCELERATOR
+// Materialise a host copy of a Var's value without rebinding the Var itself.
+//
+// A read used to call `migrate_to_cpu`, which replaced the Var's storage with
+// a host block. The next device operation then had to copy it back -- measured
+// at 20x the cost of the same operation on a tensor that was never read, with
+// both copies live in between. A read is a query: it hands the
+// caller bytes, it does not move the tensor. So copy into a buffer the
+// returned ArrayArgs owns and leave `var->mem_ptr` where it is.
+//
+// `save_mem` is the exception: there the point of a read is to let go of the
+// device allocation, so it keeps the migrating path. Managed memory is read
+// in place because the host can address it -- also what the old path did.
+static bool host_copy_without_migration(Var* var, ArrayArgs& result) {
+    if (save_mem || use_cuda_managed_allocator || !var->mem_ptr
+            || !var->allocator || !var->allocator->is_cuda())
+        return false;
+    // The full storage span: `ArrayArgs` carries `storage_strides`, and the
+    // converter indexes the buffer with them, so a view needs its gap bytes
+    // too. For a contiguous Var this is exactly its byte size.
+    auto bytes = var->storage_span_bytes();
+    result.buffer.reset(new char[bytes]);
+    if (bytes)
+        // A host destination is readable when backend_copy returns, so this
+        // is the same blocking device-to-host transfer migrate_to_cpu issued.
+        backend_copy(result.buffer.get(), allocation_device(cpu_allocator),
+                     var->mem_ptr, allocation_device(var->allocator), bytes);
+    result.ptr = result.buffer.get();
+    return true;
+}
+#endif
+
 ArrayArgs VarHolder::fetch_sync() {
+    check_backward_storage_read(var);
     note_readback();
-    if (!host_value_ready(var)) {
-        ExecutorEntryScope entry;
-        sync(readback_waits_for_devices());
-        var->set_flag(VarFlags::_execution_failed, 0);
-        if (save_mem || _HAS_ACCELERATOR)
-            migrate_to_cpu(var, runtime_executor().allocator);
+    ArrayArgs result;
+    // A host-resident value is read in place: no sync, no GIL release, so the
+    // holder cannot change before the bytes are copied.
+    if (host_value_ready(var)) {
+        Var* target = var;
+        result.shape = target->shape;
+        result.dtype = target->dtype();
+        result.storage_strides = target->storage_strides;
+        result.ptr = target->mem_ptr;
+        return result;
     }
-    ArrayArgs result{var->mem_ptr, var->shape, var->dtype()};
-    result.storage_strides = var->storage_strides;
+    // Read the holder only after the entry lock is held: the wait may release
+    // the GIL, and the Var pinned below is the one this read then copies.
+    ExecutorEntryScope entry;
+    graph_check();
+    {
+        ReadSnapshot snapshot(var);
+        Var* target = snapshot.var;
+        // Same batch policy `VarHolder::sync()` defaults to: a read may also
+        // flush the pending backlog it did not ask for.
+        const bool weak_sync = true;
+        result.shape = target->shape;
+        result.dtype = target->dtype();
+        result.storage_strides = target->storage_strides;
+        sync_owned_vars({target}, readback_waits_for_devices(), weak_sync);
+        target->set_flag(VarFlags::_execution_failed, 0);
+        #ifdef HAS_ACCELERATOR
+        if (!host_copy_without_migration(target, result))
+        #endif
+        {
+            if (save_mem || _HAS_ACCELERATOR)
+                migrate_to_cpu(target, runtime_executor().allocator);
+            result.ptr = target->mem_ptr;
+        }
+    }
+    graph_check();
     return result;
 }
 
@@ -1578,39 +1818,49 @@ ItemData VarHolder::item() {
     // Keep the entry lock through the final scalar copy, including managed
     // allocations which migrate_to_cpu deliberately leaves on the device.
     ExecutorEntryScope entry;
-    USER_CHECK(var->num==1) << "item() needs a Var with exactly one element, but this one has"
-        << var->num << "(shape" << var->shape >> ")";
-    // Value-initialize: only dsize bytes are written below, and the converter
-    // may read all 8 (unsigned dtypes go through PyLong_FromUnsignedLongLong).
+    graph_check();
     ItemData data{};
-    data.dtype = var->dtype();
-    auto dsize = data.dtype.dsize();
-    if (!host_value_ready(var)) {
-        // A blocking backend host copy waits for its producer stream.
-        sync(false, false);
-        var->set_flag(VarFlags::_execution_failed, 0);
-        // An element that shares its storage is read where it lies, below.
-        // Moving it to the host moves its whole storage group -- for a view
-        // `x[0:1]`, all of `x` -- and the next kernel to read `x` moved it
-        // back, with a blocking copy either way: 18.9 us an `x[0:1].item()`
-        // against 7.7 on 1.3, whose managed memory made the move a no-op.
-        // A var of its own still moves: that is the element alone, and every
-        // later read of it is then a host copy rather than a readback.
-        bool in_place = var->share_next && var->mem_ptr && var->allocator->is_cuda();
-        if (save_mem || (_HAS_ACCELERATOR && !in_place))
-            migrate_to_cpu(var, runtime_executor().allocator);
-    }
-    #ifdef HAS_ACCELERATOR
-    if (var->allocator->is_cuda()) {
-        backend_copy(&data.data, {BackendId::Cpu, 0}, var->mem_ptr,
-                     allocation_device(var->allocator), dsize);
-    } else
-    #endif
     {
-        std::memcpy(&data.data, var->mem_ptr, dsize);
+        ReadSnapshot snapshot(var);
+        // A local with the holder's field name: these checks and copies all
+        // act on the read-owned snapshot, and `graph_check` is scoped outside
+        // the pin so this extra owner is never visible to it (see ReadSnapshot).
+        Var* var = snapshot.var;
+        USER_CHECK(var->num==1) << "item() needs a Var with exactly one element, but this one has"
+            << var->num << "(shape" << var->shape >> ")";
+        // Value-initialize: only dsize bytes are written below, and the
+        // converter may read all 8 (unsigned dtypes go through
+        // PyLong_FromUnsignedLongLong).
+        data.dtype = var->dtype();
+        auto dsize = data.dtype.dsize();
+        if (!host_value_ready(var)) {
+            // A blocking backend host copy waits for its producer stream.
+            sync_owned_vars({var}, false, false);
+            var->set_flag(VarFlags::_execution_failed, 0);
+            // An element that shares its storage is read where it lies, below.
+            // Moving it to the host moves its whole storage group -- for a view
+            // `x[0:1]`, all of `x` -- and the next kernel to read `x` moved it
+            // back, with a blocking copy either way: 18.9 us an `x[0:1].item()`
+            // against 7.7 on 1.3, whose managed memory made the move a no-op.
+            // A var of its own still moves: that is the element alone, and every
+            // later read of it is then a host copy rather than a readback.
+            bool in_place = var->share_next && var->mem_ptr && var->allocator->is_cuda();
+            if (save_mem || (_HAS_ACCELERATOR && !in_place))
+                migrate_to_cpu(var, runtime_executor().allocator);
+        }
+        #ifdef HAS_ACCELERATOR
+        if (var->allocator->is_cuda()) {
+            backend_copy(&data.data, {BackendId::Cpu, 0}, var->mem_ptr,
+                         allocation_device(var->allocator), dsize);
+        } else
+        #endif
+        {
+            std::memcpy(&data.data, var->mem_ptr, dsize);
+        }
+        if (data.dtype == ns_float16 || data.dtype == ns_bfloat16)
+            cast_item_data(data);
     }
-    if (data.dtype == ns_float16 || data.dtype == ns_bfloat16)
-        cast_item_data(data);
+    graph_check();
     return data;
 }
 
@@ -1624,6 +1874,12 @@ void sync_all(bool device_sync) {
         // `keep_graph` is what leaves it pending -- so sweeping it up here
         // only re-runs it, every time anyone asks for everything to complete.
         if (v->var->flag(VarFlags::_kept)) continue;
+        // A failed root belongs to the caller that asked for it: an explicit
+        // sync still retries and re-raises, but sweeping everything up must
+        // not re-run a batch that already reported its error. Without this,
+        // every `sync_all` after one failure re-raised it from an unrelated
+        // caller (a flag scope's exit flush, then every later test).
+        if (v->var->flag(VarFlags::_execution_failed)) continue;
         // Sinks only. Sweeping every holder and forcing weak_sync=false were
         // both tried against MiniMax-H3's uniform-random-byte video: ~70%
         // failure becomes ~17% and ~33% respectively, and ~17% with both. They
@@ -1652,15 +1908,34 @@ vector<ArrayArgs> fetch_sync(const vector<VarHolder*>& vh) {
     note_readback();
     vector<ArrayArgs> ret(vh.size());
     ExecutorEntryScope entry;
-    sync(vh, readback_waits_for_devices());
-    for (uint i=0; i<vh.size(); i++) {
-        if (save_mem || _HAS_ACCELERATOR)
-            migrate_to_cpu(vh[i]->var, runtime_executor().allocator);
-        ret[i].ptr = vh[i]->var->mem_ptr;
-        ret[i].shape = vh[i]->var->shape;
-        ret[i].dtype = vh[i]->var->dtype();
-        ret[i].storage_strides = vh[i]->var->storage_strides;
+    graph_check();
+    {
+        // Pin exactly the Vars this batch syncs and copies: a holder rebind
+        // during the GIL-releasing wait must not release them (the shared-parameter storage race).
+        vector<VarPtr> owners;
+        vector<Var*> vars;
+        owners.reserve(vh.size());
+        vars.reserve(vh.size());
+        for (auto* holder : vh) {
+            owners.emplace_back(holder->var);
+            vars.push_back(owners.back().ptr);
+        }
+        sync_owned_vars(vars, readback_waits_for_devices(), true);
+        for (uint i=0; i<vh.size(); i++) {
+            Var* var = vars[i];
+            ret[i].shape = var->shape;
+            ret[i].dtype = var->dtype();
+            ret[i].storage_strides = var->storage_strides;
+            #ifdef HAS_ACCELERATOR
+            if (host_copy_without_migration(var, ret[i]))
+                continue;
+            #endif
+            if (save_mem || _HAS_ACCELERATOR)
+                migrate_to_cpu(var, runtime_executor().allocator);
+            ret[i].ptr = var->mem_ptr;
+        }
     }
+    graph_check();
     return ret;
 }
 

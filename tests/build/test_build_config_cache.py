@@ -348,7 +348,7 @@ class TestBuildConfigFingerprint(unittest.TestCase):
         """cfg1234abcd is unreadable on its own; the knobs sit beside it."""
         record = os.path.join(jit_utils.cache_path, "build_config.json")
         self.assertTrue(os.path.isfile(record), record)
-        with open(record) as f:
+        with open(record, encoding="utf-8") as f:
             saved = json.load(f)
         self.assertEqual(
             jit_utils.build_config_fingerprint(saved),

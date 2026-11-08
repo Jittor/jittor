@@ -8,6 +8,7 @@
 #include "runtime/executor_entry.h"
 #include "runtime/async_exec.h"
 #include "runtime/profiler/step_trace.h"
+#include "runtime/backend.h"
 
 namespace jittor {
 
@@ -34,12 +35,21 @@ ExecutorEntryScope::ExecutorEntryScope() : owns(entry_depth == 0) {
         // the inversion in the header.
         GILReleaseScope gil_release;
         entry_mutex.lock();
+        if (accelerator_backend_id() != BackendId::Cpu) {
+            const auto& ops = backend_ops(accelerator_backend_id());
+            if (ops.caller_device && ops.restore_caller_device)
+                caller_device = ops.caller_device();
+        }
     }
     entry_depth++;
 }
 
 ExecutorEntryScope::~ExecutorEntryScope() {
     entry_depth--;
+    if (owns && caller_device >= 0) {
+        const auto& ops = backend_ops(accelerator_backend_id());
+        if (ops.caller_device() != caller_device) ops.restore_caller_device(caller_device);
+    }
     if (owns) entry_mutex.unlock();
 }
 

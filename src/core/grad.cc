@@ -6,6 +6,7 @@
 // ***************************************************************
 #include <algorithm>
 #include "bindings/pybind/py_var_tracer.h"
+#include "bindings/pyjt/py_converter.h"
 #include "core/grad.h"
 #include "runtime/launch_diagnostics.h"
 #include "core/var.h"
@@ -15,17 +16,90 @@
 #include "ops/op_register.h"
 #include "core/var_holder.h"
 #include "runtime/submission_pipeline.h"
+#include <atomic>
+#include <algorithm>
 
 namespace jittor {
 
 #define PREVENT_LARGE_FUSED_OP 16
 
+namespace {
+struct StepBackwardProbe {
+    uint64 token;
+    unordered_set<int64> variables;
+    explicit StepBackwardProbe(uint64 token) : token(token) {}
+};
+thread_local vector<StepBackwardProbe> step_backward_probes;
+std::atomic<uint64> next_step_backward_probe{0};
+}
+
+uint64 begin_step_backward_probe() {
+    uint64 token = next_step_backward_probe.fetch_add(1, std::memory_order_relaxed) + 1;
+    step_backward_probes.emplace_back(token);
+    return token;
+}
+
+vector<int64> end_step_backward_probe(uint64 token) {
+    USER_CHECK(!step_backward_probes.empty() && step_backward_probes.back().token == token)
+        << "step backward probes must end on their creating thread in LIFO order";
+    auto variables = move(step_backward_probes.back().variables);
+    step_backward_probes.pop_back();
+    vector<int64> result(variables.begin(), variables.end());
+    std::sort(result.begin(), result.end());
+    return result;
+}
+
+PyObject* step_leaf_holders(const vector<VarHolder*>& roots) {
+    unordered_set<Var*> seen, leaves;
+    vector<Var*> stack;
+    for (auto* holder : roots)
+        if (seen.insert(holder->var).second) stack.push_back(holder->var);
+    while (!stack.empty()) {
+        Var* var = stack.back();
+        stack.pop_back();
+        Op* op = var->input();
+        if (var->is_finished() || !op) {
+            leaves.insert(var);
+            continue;
+        }
+        for (Var* input : op->inputs())
+            if (seen.insert(input).second) stack.push_back(input);
+    }
+    PyObjHolder holders(PyList_New(0));
+    if (!holders.obj) return nullptr;
+    // Use the existing Python owner: a thaw may rebind its holder while the
+    // captured graph still refers to the old, permanently stopped Var.
+    for (VarHolder* holder : runtime_holder_state().holders())
+        if (holder->python_owner && leaves.count(holder->var)
+                && PyList_Append(holders.obj, holder->python_owner) < 0)
+            return nullptr;
+    return holders.release();
+}
+
+VarHolder* snapshot_step_gradient(VarHolder* gradient) {
+    USER_CHECK(gradient && gradient->var) << "cannot snapshot an absent step gradient";
+    return new VarHolder(gradient->var);
+}
+
+VarHolder* ready_step_gradient(VarHolder* source) {
+    return new VarHolder(ready_storage_alias(source));
+}
+
 AutogradPolicyState autograd_policy;
 static thread_local bool torch_grad_accumulation_reverse = false;
+static thread_local bool torch_grad_edge_dtypes = false;
 
 bool set_torch_grad_accumulation_reverse(bool enabled) {
     bool previous = torch_grad_accumulation_reverse;
     torch_grad_accumulation_reverse = enabled;
+    return previous;
+}
+
+bool torch_grad_edge_dtype_policy_enabled() { return torch_grad_edge_dtypes; }
+
+bool set_torch_grad_edge_dtypes(bool enabled) {
+    bool previous = torch_grad_edge_dtypes;
+    torch_grad_edge_dtypes = enabled;
     return previous;
 }
 
@@ -74,6 +148,29 @@ static VarPtr normalize_recorded_gradient(Var* target, VarPtr value) {
     return reduce ? make_reduce(value.ptr, ns_add, reduce, keep) : move(value);
 }
 
+// Edge normalization and fan-in belong to the differentiated input's dtype,
+// not to a forward op's AMP preference. This guard changes only the Torch
+// backward policy; ordinary native Jittor keeps its existing AMP behavior.
+struct GradientEdgePrecisionScope {
+    int previous;
+    GradientEdgePrecisionScope() : previous(amp_reg) { amp_reg = 0; }
+    ~GradientEdgePrecisionScope() { amp_reg = previous; }
+};
+
+static VarPtr normalize_gradient_edge(Var* target, VarPtr value) {
+    if (!torch_grad_edge_dtypes)
+        return normalize_recorded_gradient(target, move(value));
+    GradientEdgePrecisionScope precision;
+    value = normalize_recorded_gradient(target, move(value));
+    if (!value) return value;
+    USER_CHECK(value->is_float()
+        || target->dtype().is_complex() == value->dtype().is_complex())
+        << "invalid gradient dtype for differentiated input";
+    if (value->dtype() != target->dtype())
+        value = make_unary(value, target->dtype());
+    return value;
+}
+
 #ifdef _WIN32
 template<class T> struct StackIniter {
     T* a;
@@ -113,6 +210,12 @@ struct AmpGradGuard {
 // intermediate activation merges in their existing precision: changing those
 // also changes downstream trainable-parameter gradients.
 static VarPtr add_gradients(Op* op, Var* target, Var* accumulated, Var* incoming) {
+    if (torch_grad_edge_dtypes) {
+        GradientEdgePrecisionScope precision;
+        ASSERT(accumulated->dtype() == target->dtype()
+            && incoming->dtype() == target->dtype());
+        return make_binary(accumulated, incoming, ns_add);
+    }
     if (!is_backward_leaf(target) || target->ns != ns_float32)
         return make_binary(accumulated, incoming, ns_add);
     AmpGradGuard agg(op);
@@ -141,7 +244,9 @@ VarPtr make_grad(Op* op, Var* out, Var* dout, Var* x, int x_index) {
     AmpGradGuard agg(op);
     Float32PrecisionScope precision_scope(op->float32_precision);
     LaunchOriginScope origin_scope(op->launch_origin);
+    BackwardStorageReadScope storage_reads(op);
     auto dx = op->grad(out, dout, x, x_index);
+    if (dx) check_backward_storage_read(dx.ptr);
     // A null dx is an ordinary path, not an error: floor/round/ceil, mod,
     // floor_divide, the bitwise ops and the default Op::grad all return one.
     // The guard used to test the input x and then dereference the result.
@@ -438,12 +543,15 @@ static vector<VarPtr> grad_impl(
                     AmpGradGuard agg(op);
                     Float32PrecisionScope precision_scope(op->float32_precision);
                     LaunchOriginScope origin_scope(op->launch_origin);
+                    BackwardStorageReadScope storage_reads(op);
                     op->grads(douts, dins);
+                    for (int j=0; j<n_i; ++j)
+                        if (dins[j]) check_backward_storage_read(dins[j].ptr);
                 }
                 for (int i=0; i<n_i; i++) {
                     int id = snapshot.input_grad_ids[i];
                     if (id>=0) {
-                        auto din = normalize_recorded_gradient(gvars[id], move(dins[i]));
+                        auto din = normalize_gradient_edge(gvars[id], move(dins[i]));
                         auto& grad = grads[id];
                         if (din && grad) {
                             grad = add_gradients(op, gvars[id], grad, din);
@@ -452,6 +560,9 @@ static vector<VarPtr> grad_impl(
                     }
                 }
             } else {
+                // One ordinary op may have multiple differentiable outputs.
+                // Form its complete VJP for this input before edge validation.
+                VarPtr torch_edge;
                 for (const auto& output : snapshot.outputs) {
                     Var* out = output.first;
                     int id = output.second;
@@ -460,7 +571,37 @@ static vector<VarPtr> grad_impl(
                     trace_grad_op = op;
                     VarPtr dvar = make_grad(
                         op, out, dout, var, snapshot.input_index);
+                    if (torch_grad_edge_dtypes) {
+                        if (dvar) {
+                            GradientEdgePrecisionScope precision;
+                            torch_edge = torch_edge
+                                ? make_binary(torch_edge, dvar, ns_add) : move(dvar);
+                        }
+                        continue;
+                    }
                     dvar = normalize_recorded_gradient(var, move(dvar));
+                    if (dvar && dvar->num>=0 && var->num>0 && !var->recorded_gradient_shape)
+                        // var->num == 0 represents a any match var
+                        ASSERT(dvar->num==var->num && dvar->shape.size()==var->shape.size())
+                        << "dvar" << dvar << "var" << var;
+                    if (!grad)
+                        grad = move(dvar);
+                    else if (dvar) {
+                        grad = add_gradients(op, var, grad, dvar);
+                        #ifdef PREVENT_LARGE_FUSED_OP
+                        gsum ++;
+                        if (gsum>=PREVENT_LARGE_FUSED_OP) {
+                            // TODO: this is a dirty fix for
+                            // stopping fuse lots of op together,
+                            // try to find a better solution
+                            grad->set_flag(VarFlags::_stop_fuse);
+                        }
+                        #endif
+                        assign_attrs(grad.ptr, var);
+                    }
+                }
+                if (torch_grad_edge_dtypes) {
+                    auto dvar = normalize_gradient_edge(var, move(torch_edge));
                     if (dvar && dvar->num>=0 && var->num>0 && !var->recorded_gradient_shape)
                         // var->num == 0 represents a any match var
                         ASSERT(dvar->num==var->num && dvar->shape.size()==var->shape.size())
@@ -488,6 +629,16 @@ static vector<VarPtr> grad_impl(
         if (grad && auto_mixed_precision_level == 3 && grad->ns != var->ns) {
             grad = make_unary(grad, var->ns);
         }
+        // A non-leaf input's returned gradient is observed before its node
+        // executes (and before that node's Tensor hooks), if this traversal
+        // also differentiates upstream of it. At a terminal target the hooks
+        // still run, and the returned gradient includes their replacement.
+        if (grad && var->grad_hook && is_target[i]) {
+            auto producer = backward_grad_fn(var);
+            if (producer && grad_nodes.has(producer))
+                observed_target_grads[var] = grad.ptr;
+        }
+        apply_tensor_hook(var, grad);
         if (callback && callback->func && grad) {
             for (int target_index : callback_targets[i]) {
                 {
@@ -524,6 +675,17 @@ static vector<VarPtr> grad_impl(
             callback->func(i, grad.ptr);
         }
     }
+    // Record only producers this backward actually differentiated. Boundary
+    // inputs of a partial grad are not proof that their own graph was consumed.
+    // Snapshot ids before the non-retained graph can release these nodes.
+    vector<int64> completed_backward_vars;
+    if (!retain_graph && !step_backward_probes.empty()) {
+        for (Var* v : gvars) {
+            Op* producer = backward_grad_fn(v);
+            if (producer && grad_nodes.has(producer))
+                completed_backward_vars.push_back(v->id);
+        }
+    }
     if (!retain_graph) {
         unordered_set<Var*> held_vars;
         held_vars.reserve(runtime_holder_state().holders().size());
@@ -546,6 +708,8 @@ static vector<VarPtr> grad_impl(
                 grads[i]->set_stop_grad();
             }
     }
+    for (auto& probe : step_backward_probes)
+        probe.variables.insert(completed_backward_vars.begin(), completed_backward_vars.end());
     return results;
 }
 

@@ -12,7 +12,7 @@
 # forward finiteness + eval-determinism (Dropout off), param.grad populated after
 # loss.backward() (the no-optimizer autograd bridge), buffer/param separation,
 # recursive named_buffers, torch.norm scalar reduction, and Var.T. The configs
-# mirror the validated jittor-torch-diff parity set (all PASS vs real torch ~1e-6).
+# keep these model fixtures explicit; current parity requires an independent Torch run.
 # ***************************************************************
 import os
 os.environ.setdefault('HF_HUB_OFFLINE', '1'); os.environ.setdefault('TRANSFORMERS_OFFLINE', '1')

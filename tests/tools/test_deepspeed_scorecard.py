@@ -11,7 +11,7 @@ import zipfile
 import numpy as np
 import pytest
 
-SCRIPTS = Path(__file__).resolve().parents[2] / 'agent/skills/torch-compat-repo-runbook/scripts'
+SCRIPTS = Path(__file__).resolve().parents[2] / 'tools/ecosystem'
 sys.path.insert(0, str(SCRIPTS))
 validator = importlib.import_module('_deepspeed_scorecard')
 collector = importlib.import_module('collect_deepspeed_scorecard')

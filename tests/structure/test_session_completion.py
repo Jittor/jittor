@@ -121,6 +121,90 @@ class TestTheCheckerFires(unittest.TestCase):
         self.assertIn("collected 40", result.stdout)
 
 
+class TestTheCountsMustAgree(unittest.TestCase):
+    """A finished session whose tests did not all finish is still a loss.
+
+    The marker is the positive evidence that ``pytest_sessionfinish`` ran; the
+    counts are what say whether everything collected actually reached a result.
+    Parsing them matters because the runner compares the two, and a check that
+    only looks for the marker would accept a session that stopped running tests
+    even though pytest itself reached its end.
+    """
+
+    def setUp(self):
+        self._temporary_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self._temporary_directory.cleanup)
+        self.tmp = Path(self._temporary_directory.name)
+
+    def _marker_log(self, collected, executed):
+        log = self.tmp / "marker.log"
+        log.write_text(
+            "tests/ops/test_ops.py::TestCommonCPU::test_one PASSED\n"
+            "%s collected=%d executed=%d\n" % (
+                session_completion.MARKER, collected, executed),
+            encoding="utf-8")
+        return log
+
+    def test_matching_counts_pass(self):
+        result = _run("--log", str(self._marker_log(4, 4)))
+        self.assertEqual(result.returncode, 0, result.stdout)
+
+    def test_a_short_executed_count_fails(self):
+        result = _run("--log", str(self._marker_log(4, 2)))
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("executed 2 of 4 collected", result.stdout)
+
+
+class TestTheRunnerGatesOnCompletion(unittest.TestCase):
+    """The maintained runner must actually call the checker.
+
+    The detector and the checker were both correct while no gate ran either,
+    which is exactly how a dead session kept reading as a short one. These are
+    the runner's own entry point, exercised with a mocked log and sentinel.
+    """
+
+    def setUp(self):
+        self._temporary_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self._temporary_directory.cleanup)
+        self.tmp = Path(self._temporary_directory.name)
+        sys.path.insert(0, str(REPO_ROOT / "tools"))
+        import run_test_suite
+        self.runner = run_test_suite
+
+    def _sentinel(self, collected, executed):
+        sentinel = self.tmp / "session.json"
+        sentinel.write_text(json.dumps({
+            "marker": session_completion.MARKER,
+            "collected": collected,
+            "executed": executed,
+            "exitstatus": 0,
+        }), encoding="utf-8")
+        return sentinel
+
+    def test_a_log_without_the_marker_fails(self):
+        log_text = "tests/ops/test_ops.py::TestCommonCPU::test_one PASSED\n"
+        ok, message = self.runner._check_session_completion(
+            self.tmp / "pytest.log", log_text,
+            self.tmp / "absent.json")
+        self.assertFalse(ok, message)
+        self.assertIn("never wrote its completion sentinel", message)
+
+    def test_a_log_with_the_marker_passes(self):
+        log_text = ("%s collected=3 executed=3\n"
+                    % session_completion.MARKER)
+        ok, message = self.runner._check_session_completion(
+            self.tmp / "pytest.log", log_text, self._sentinel(3, 3))
+        self.assertTrue(ok, message)
+
+    def test_the_runner_fails_an_incomplete_session(self):
+        log_text = ("%s collected=3 executed=1\n"
+                    % session_completion.MARKER)
+        ok, message = self.runner._check_session_completion(
+            self.tmp / "pytest.log", log_text, self._sentinel(3, 1))
+        self.assertFalse(ok, message)
+        self.assertIn("executed 1 of 3 collected", message)
+
+
 class TestThePluginRecordsCompletion(unittest.TestCase):
     """Exercising the recorder must not corrupt what it is recording.
 

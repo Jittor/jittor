@@ -107,6 +107,30 @@ class TestCustomFunctionCompatibility(Base):
         self.ac(grad_value.numpy(), np.ones((2, 3), dtype="float32"))
         self.ac(grad_bias.numpy(), np.full((1, 3), 2.0, dtype="float32"))
 
+    def test_new_style_function_setup_context_reaches_backward(self):
+        class NewStyle(torch.autograd.Function):
+            @staticmethod
+            def forward(value):
+                return value.detach()
+
+            @staticmethod
+            def setup_context(ctx, inputs, output):
+                self.assertEqual(len(inputs), 1)
+                self.assertIsNotNone(output)
+                ctx.scale = 3
+
+            @staticmethod
+            def backward(ctx, grad_output):
+                return grad_output * ctx.scale
+
+        def body(device):
+            value = torch.tensor([1., 2.], device=device, requires_grad=True)
+            result = NewStyle.apply(value)
+            grad = jt.grad(result.sum(), [value])[0]
+            self.ac(grad.numpy(), [3., 3.], msg=device)
+
+        both_devices(body)
+
     def test_an_unused_output_reaches_backward_as_zeros_not_none(self):
         # torch's materialize_grads=True: an output that does not reach the
         # differentiated scalar arrives at backward() as zeros_like(output).

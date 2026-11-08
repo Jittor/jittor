@@ -23,6 +23,26 @@ float32 propagated into the layer norms and linears behind them -- that is the
 import jittor as jt
 
 
+def prefers_half():
+    """Whether the active amp register retypes float operators to a half dtype.
+
+    Read off ``amp_reg``, the register dtype inference actually consults, not
+    off ``auto_mixed_precision_level``: ``torch.autocast`` writes ``amp_reg``
+    directly and never touches the level. Only the float16/bfloat16 bits count;
+    level 3's ``keep_reduce | keep_white`` does not retype anything to a half.
+
+    Both consumers that had their own copy of this test read it for different
+    reasons. oneDNN declines a float32 product under a half policy because its
+    library always returns float32. LayerNorm builds its statistics and affine
+    in float32 (ATen keeps it on the float32 list) and rounds once at the end;
+    letting the register lower it to bfloat16's eight mantissa bits gave ~4e-2
+    relative error in the statistics and a training trajectory that ended 79%
+    off (KI-COMPAT-019).
+    """
+    return bool(jt.flags.amp_reg
+                & (jt.amp_flags.prefer16 | jt.amp_flags.prefer_bfloat16))
+
+
 def bias_for_compute_dtype(product, bias):
     """``bias`` cast to ``product``'s dtype when the amp register asks for it.
 

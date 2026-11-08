@@ -322,7 +322,7 @@ def _automatic_markers(relative, device=None, selected=None):
 
 def test_pytest_owns_collection_and_strict_xfail_policy():
     config = _pytest_config()
-    assert config["testpaths"] == ["tests", "compat/tests", "adapters/tests"]
+    assert config["testpaths"] == ["tests", "compat/tests"]
     assert config["xfail_strict"] is True
     markers = {entry.split(":", 1)[0] for entry in config["markers"]}
     assert markers == {
@@ -364,7 +364,7 @@ def test_automatic_backend_markers_follow_device_sessions():
     assert "cpu" not in parity | triton
 
 
-def test_the_tier_marker_is_attached_from_the_recorded_list():
+def test_the_tier_marker_is_attached_from_the_recorded_list(tmp_path):
     """`slow` is data, not a decorator: one list decides, and it is auditable.
 
     Asserted here because the device test above now has to subtract it -- if
@@ -376,7 +376,7 @@ def test_the_tier_marker_is_attached_from_the_recorded_list():
     assert "slow" in _automatic_markers(listed, "cpu", "cpu")
     assert "slow" not in _automatic_markers(unlisted, "cpu", "cpu")
 
-    external = REPO_ROOT / "tools" / "release" / "test_check_wheel_contents.py"
+    external = tmp_path / "test_external.py"
     assert _automatic_markers(external) == set()
 
 
@@ -427,7 +427,6 @@ def test_complete_suite_runner_owns_cpu_and_process_mode_environment(monkeypatch
     for environment in (native, torch):
         assert environment["nvcc_path"] == ""
         assert environment["JITTOR_TEST_DEVICES"] == "cpu"
-        assert environment["REAL_TORCH_SITE"] == ""
         # Owned, not inherited: the caller exported 1 above and the runner
         # decides. The value is now the gate's own default rather than 0 --
         # this script used to force the parallel op compiler off, which made it
@@ -435,6 +434,9 @@ def test_complete_suite_runner_owns_cpu_and_process_mode_environment(monkeypatch
         assert environment["use_parallel_op_compiler"] == "16"
     # ...and --serial-compile is a stated override, not the inherited value.
     assert serial["use_parallel_op_compiler"] == "0"
+    assert native["REAL_TORCH_SITE"] == "/inherited/torch"
+    assert serial["REAL_TORCH_SITE"] == "/inherited/torch"
+    assert torch["REAL_TORCH_SITE"] == ""
     assert native["JITTOR_TORCH_SHIM"] == "0"
     assert torch["JITTOR_TORCH_SHIM"] == "1"
     assert native["JITTOR_HOME"] != torch["JITTOR_HOME"]
@@ -462,6 +464,26 @@ def test_torch_structure_selection_does_not_report_native_only_files_as_empty(mo
 
     assert "tests/structure/test_pytest_contract.py" in policy._SELECTED_FILES
     assert "tests/structure/backends/acl/test_acl_dtype_preservation.py" not in policy._SELECTED_FILES
+
+
+def test_complete_suite_runner_preserves_oracle_only_for_native_on_each_backend(monkeypatch, tmp_path):
+    module = _load_test_suite_runner()
+    monkeypatch.setattr(module, "_lab_root", lambda: tmp_path)
+    monkeypatch.setattr(module, "_resolve_nvcc", lambda: "/toolkit/bin/nvcc")
+    for configured in (None, "", "/explicit/independent/torch"):
+        if configured is None:
+            monkeypatch.delenv("REAL_TORCH_SITE", raising=False)
+        else:
+            monkeypatch.setenv("REAL_TORCH_SITE", configured)
+        for backend in ("cpu", "cuda"):
+            native = module._session_environment("native", backend=backend)
+            torch = module._session_environment("torch", backend=backend)
+            assert native.get("REAL_TORCH_SITE", "") == (configured or "")
+            assert torch["REAL_TORCH_SITE"] == ""
+            # An inherited oracle path must never turn the Torch session
+            # native through pytest_policy's explicit oracle precedence.
+            assert native["JITTOR_TORCH_SHIM"] == "0"
+            assert torch["JITTOR_TORCH_SHIM"] == "1"
 
 
 def test_complete_suite_runner_retries_a_zero_exit_cold_cache_refresh():

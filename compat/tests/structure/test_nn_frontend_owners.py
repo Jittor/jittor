@@ -68,6 +68,7 @@ class TestNNFrontendOwners(unittest.TestCase):
         dtypes.dtype_name = str
         sys.modules[dtypes.__name__] = dtypes
         frontend = types.ModuleType("_nn_owner_probe.frontend")
+        frontend._default_tensor_dtype = lambda backend: "float32"
         frontend.tensor_frontend = lambda tensor_type, **scope: nullcontext()
         frontend.make_parameter_type = lambda backend, tensor_type: Parameter
         sys.modules[frontend.__name__] = frontend
@@ -152,10 +153,10 @@ class TestNNFrontendOwners(unittest.TestCase):
         self.assertTrue(module.ready)
         self.assertNotIn("shape", vars(module))
         bridge = adapted_linear.__mro__[1]
-        self.assertEqual(bridge.__name__, "_LinearModuleBase")
+        self.assertEqual(bridge.__name__, Linear.__name__)
         self.assertEqual(adapted_linear.__mro__[:4],
                          (adapted_linear, bridge, Linear, self.owner.Module))
-        self.assertIs(vars(bridge)["__init__"], NativeModule.__init__)
+        self.assertIs(vars(bridge)["__init__"], self.frontend.module_init)
         self.assertIs(adapted_linear.execute, Linear.execute)
         self.assertIsInstance(module, Linear)
         self.assertIsInstance(module, self.owner.Module)
@@ -228,6 +229,7 @@ class TestNNFrontendOwners(unittest.TestCase):
 
         BatchNorm.__module__ = "jittor.nn.modules.fake"
         self.backend.nn.BatchNorm = BatchNorm
+        self.backend.array = lambda value, dtype: Counter(value, dtype, ())
         direct = self.owner.adapt_class(BatchNorm)()
         self.assertEqual((direct.num_batches_tracked.dtype, direct.num_batches_tracked.shape),
                          ("int64", ()))

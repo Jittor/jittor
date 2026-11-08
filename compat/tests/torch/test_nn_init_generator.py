@@ -224,3 +224,27 @@ def test_initialization_writes_retained_views_without_freezing(name, rng_device)
     assert parent.is_leaf and parent.requires_grad and view.requires_grad
     (parent * 3).sum().backward()
     np.testing.assert_array_equal(_array(parent.grad), np.full((4, 9), 3.))
+
+
+def test_kaiming_uniform_accepts_an_explicit_generator(rng_device):
+    """The native helper refuses a generator; the shim draws from it.
+
+    RandLoRA initialises its projections through
+    `nn.init.kaiming_uniform_(tensor, generator=...)`, so the bound has to be
+    the Kaiming one and the draw has to come from that generator's stream.
+    """
+
+    def draw(seed):
+        generator = torch.Generator(device=rng_device).manual_seed(seed)
+        tensor = torch.empty(16, 4, device=rng_device)
+        torch.nn.init.kaiming_uniform_(tensor, a=5 ** 0.5, generator=generator)
+        return tensor.numpy()
+
+    first = draw(1234)
+    second = draw(1234)
+    other = draw(4321)
+    np.testing.assert_array_equal(first, second)
+    assert not np.array_equal(first, other)
+    # fan_in = 4, gain = sqrt(2 / (1 + a^2)), bound = sqrt(3) * gain / sqrt(4)
+    assert np.all(np.abs(first) <= 0.5 + 1e-6)
+    assert np.any(first != 0)

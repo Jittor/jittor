@@ -10,13 +10,16 @@ time and never stores the scores. This is that algorithm (FlashAttention-2):
 forward
     A block owns 64 queries. It walks the keys a tile at a time, keeping for
     each query a running maximum, a running sum and the weighted values, all
-    rescaled whenever the maximum moves. It writes the output and one
-    log-sum-exp per query, which is all the backward needs.
+    rescaled whenever the maximum moves. It writes the output, row maximum
+    and inverse exponential sum per query.
 backward
     A block owns a tile of keys. It walks the queries a tile at a time,
-    rebuilds the probabilities from the log-sum-exp, accumulates the key and
+    rebuilds the probabilities from those row statistics, accumulates the key and
     value gradients in registers, and adds its share of each query gradient
-    into global memory.
+    into global memory. Its per-row softmax term, ``sum_k p_k * dP_k``, is the
+    same number as ``dO . O``; only on a row whose mass sits on one key does the
+    float32 rounding of ``O`` swallow the result, so only those rows pay for the
+    reconstruction.
 
 Supports head dimensions up to 128, causal (top-left aligned, as the
 composite path builds it) or not, with an optional boolean or additive float
@@ -35,6 +38,9 @@ from jittor._runtime.dispatch import register_kernel
 _MAX_HEAD_DIM = 128
 #: Below this many blocks a forward grid leaves SMs idle; see `_forward`.
 _SM_BLOCKS = 128
+#: A row recomputes its softmax term when ``1 / sum_k exp(score_k - max)``
+#: exceeds this, i.e. when the row's mass is spread over fewer than two keys.
+_RECOMPUTE_INV_ABOVE = 0.5
 
 _KERNELS = r"""
 #include <cfloat>
@@ -133,6 +139,65 @@ __device__ __forceinline__ void bias4(const Mask& mask, long long row_at, int co
     for (int c = 0; c < 4; c++) out[c] = col + c < lk ? p[c * mask.col_stride] : 0.f;
 }
 
+// The per-row softmax term of the query gradient: sum_k p_k * dP_k, which the
+// caller already has as dO . O. Recomputing it from dP only pays off where
+// that product loses precision -- a row nearly one-hot has p_1 ~ 1 and the
+// remaining mass rounds away inside the float32 output, taking the Q/K
+// gradient with it. Every other row takes the caller's value, so a training
+// step no longer walks the score matrix once per layer just to rebuild a
+// number it already computed; BERT-large's backward was 136 of its 172 ms
+// here. Only one double per query is stored, never a score matrix.
+template <int D, bool CAUSAL, int MASK, bool DROPOUT>
+__global__ void row_delta(const float* q, const float* k, const float* v,
+        const float* dout, const float* normalizer, const double* approximate,
+        double* delta, int lq, int lk, float scale, float recompute_inv,
+        Mask mask, Rows ql, Rows kl, Rows vl, Dropout dropout) {
+    const int row = blockIdx.x, bh = blockIdx.y, tid = threadIdx.x;
+    const RowPtr<const float> qb(q, ql, bh), kb(k, kl, bh), vb(v, vl, bh),
+        dob(dout, ql, bh);
+    const size_t index = ((size_t)bh * lq + row) * 2;
+    const float top = normalizer[index], inv = normalizer[index + 1];
+    if (!(inv > recompute_inv)) {
+        if (tid == 0) delta[(size_t)bh * lq + row] = approximate[(size_t)bh * lq + row];
+        return;
+    }
+    const long long mask_base = MASK ? mask.base(bh) : 0;
+    double weighted = 0., total = 0.;
+    for (int col = tid; col < lk; col += blockDim.x) {
+        if (CAUSAL && col > row) continue;
+        float score = 0.f, dp = 0.f;
+        #pragma unroll 4
+        for (int d = 0; d < D; d++) {
+            score += __fmul_rn(qb[row][d], scale) * kb[col][d];
+            dp += dob[row][d] * vb[col][d];
+        }
+        if (MASK) score = masked<MASK>(score, mask, mask_base
+            + row * mask.row_stride + col * mask.col_stride);
+        const float p = score == -INFINITY ? 0.f : __expf(score - top) * inv;
+        if (DROPOUT) {
+            float z[4];
+            dropout.mask(bh, row, col >> 2, z);
+            dp *= z[col & 3];
+        }
+        weighted += (double)p * (double)dp;
+        total += (double)p;
+    }
+    __shared__ double sums[2][256];
+    sums[0][tid] = weighted;
+    sums[1][tid] = total;
+    __syncthreads();
+    for (int step = 128; step; step >>= 1) {
+        if (tid < step) {
+            sums[0][tid] += sums[0][tid + step];
+            sums[1][tid] += sums[1][tid + step];
+        }
+        __syncthreads();
+    }
+    // Normalize the reconstructed probabilities' small float32 rounding error.
+    if (tid == 0) delta[(size_t)bh * lq + row] = sums[1][0] > 0.
+        ? sums[0][0] / sums[1][0] : 0.;
+}
+
 } // namespace mea
 
 // The forward, register-tiled. 256 threads as 16 row groups x 16 lanes; a
@@ -198,7 +263,7 @@ __device__ __forceinline__ void load_rows(const float* p, float (&out)[RPT]) {
 template <int D, int RPT, bool CAUSAL, int MASK, bool DROPOUT>
 __global__ void __launch_bounds__(THREADS) forward(
         const float* __restrict__ q, const float* __restrict__ k,
-        const float* __restrict__ v, float* __restrict__ o, float* __restrict__ lse,
+        const float* __restrict__ v, float* __restrict__ o, float* __restrict__ normalizer,
         int lq, int lk, float scale, mea::Mask mask, mea::Rows ql, mea::Rows kl,
         mea::Rows vl, mea::Dropout dropout) {
     constexpr int BQ = 16 * RPT, BK = 64;
@@ -330,7 +395,13 @@ __global__ void __launch_bounds__(THREADS) forward(
             const int col = tx + c * 16;
             if (col < D) ob[col] = acc[r][c] * inv;
         }
-        if (tx == 0) lse[(size_t)bh * lq + row] = l[r] > 0.f ? m[r] + __logf(l[r]) : -INFINITY;
+        // Keep the maximum and normalization separate: at finfo.min,
+        // adding log(l) loses it, and exp(score - lse) would return 1.
+        if (tx == 0) {
+            const size_t index = ((size_t)bh * lq + row) * 2;
+            normalizer[index] = m[r];
+            normalizer[index + 1] = inv;
+        }
     }
 }
 
@@ -373,7 +444,7 @@ template <int D, bool CAUSAL, int MASK, bool DROPOUT>
 __global__ void __launch_bounds__(THREADS) backward(
         const float* __restrict__ q, const float* __restrict__ k,
         const float* __restrict__ v, const float* __restrict__ dout,
-        const float* __restrict__ lse, const float* __restrict__ delta,
+        const float* __restrict__ normalizer, const double* __restrict__ delta,
         float* __restrict__ dq, float* __restrict__ dk, float* __restrict__ dv,
         int lq, int lk, float scale, mea::Mask mask, mea::Rows ql, mea::Rows kl,
         mea::Rows vl, mea::Rows dkl, mea::Rows dvl, mea::Dropout dropout) {
@@ -448,32 +519,37 @@ __global__ void __launch_bounds__(THREADS) backward(
             for (int r = 0; r < 2; r++)
                 #pragma unroll
                 for (int c = 0; c < 4; c++) {
-                    s[r][c] += qr[r] * kc[c];
+                    // Match forward's rounded Q scaling without changing the
+                    // unscaled shared Q used by the key-gradient product.
+                    s[r][c] += __fmul_rn(qr[r], scale) * kc[c];
                     dp[r][c] += orr[r] * vc[c];
                 }
         }
         #pragma unroll
         for (int r = 0; r < 2; r++) {
             const int row = q0 + ay * 2 + r;
-            const float row_lse = row < lq ? lse[(size_t)bh * lq + row] : -INFINITY;
-            const float row_delta = row < lq ? delta[(size_t)bh * lq + row] : 0.f;
+            const size_t index = ((size_t)bh * lq + row) * 2;
+            const float row_max = row < lq ? normalizer[index] : -INFINITY;
+            const float row_inv_sum = row < lq ? normalizer[index + 1] : 0.f;
+            const double row_delta = row < lq ? delta[(size_t)bh * lq + row] : 0.;
             float pr[4], dsr[4], z[4] = {1.f, 1.f, 1.f, 1.f};
             if (DROPOUT && row < lq) dropout.mask(bh, row, (k0 >> 2) + ax, z);
             #pragma unroll
             for (int c = 0; c < 4; c++) {
                 const int col = k0 + ax * 4 + c;
                 const bool dead = row >= lq || col >= lk || (CAUSAL && col > row)
-                                  || row_lse == -INFINITY;
-                float score = s[r][c] * scale;
+                                  || row_inv_sum == 0.f;
+                float score = s[r][c];
                 if (MASK == 2 && !dead) score += bias[r][c];
                 if (MASK == 1 && shown == 1 && !dead)
                     score = mea::masked<MASK>(score, mask, mask_base
                         + row * mask.row_stride + col * mask.col_stride);
-                const float p = dead || score == -INFINITY ? 0.f : __expf(score - row_lse);
+                const float p = dead || score == -INFINITY ? 0.f
+                    : __expf(score - row_max) * row_inv_sum;
                 // dV takes the dropped probability; dS the undropped one,
                 // against the gradient that reached it through the mask.
                 pr[c] = p * z[c];
-                dsr[c] = p * (dp[r][c] * z[c] - row_delta);
+                dsr[c] = (float)((double)p * ((double)(dp[r][c] * z[c]) - row_delta));
             }
             const int at = (ay * 2 + r) * PP + ax * 4;
             *reinterpret_cast<float4*>(sp + at) = make_float4(pr[0], pr[1], pr[2], pr[3]);
@@ -591,8 +667,10 @@ def _mask_layout(mask, shape):
 
 
 def _forget_mask(ref):
-    if _LAST_MASK[0] is ref:
-        _LAST_MASK[:] = [None, None, None, None]
+    # A late weakref callback can run after module teardown retired the cache.
+    last = _LAST_MASK
+    if last is not None and last[0] is ref:
+        last[:] = [None, None, None, None]
 
 
 def _new_mask_layout(mask, shape):
@@ -733,11 +811,32 @@ def _forward(query, key, value, call):
                   f"{float(call.scale)!r}f, {call.args(3)}",
             threads="mea_fwd::THREADS")
     return jt.code(
-        [query.shape, (b, h, lq)], ["float32", "float32"], [query, key, value] + call.extras(),
+        [query.shape, (b, h, lq, 2)], ["float32", "float32"], [query, key, value] + call.extras(),
         cuda_header=_KERNELS, cuda_src=src)
 
 
-def _backward(query, key, value, grad_out, lse, delta, call):
+def _row_delta(query, key, value, grad_out, normalizer, approximate, call):
+    b = int(query.shape[0])
+    h = int(query.shape[2] if call.seq[0] else query.shape[1])
+    lq = int(query.shape[1] if call.seq[0] else query.shape[2])
+    d = int(query.shape[3])
+    lq_expr, lk_expr = call.lengths()
+    # `approximate` is dO . O, `call.args(6)` because it is a sixth fixed input
+    # ahead of the mask and dropout the call appends.
+    return jt.code(
+        (b, h, lq), "float64",
+        [query, key, value, grad_out, normalizer, approximate] + call.extras(),
+        cuda_header=_KERNELS,
+        cuda_src=_launch(
+            f"mea::row_delta<{d}, {call.template()}>",
+            f"{lq_expr}, in0->shape[0] * {call.heads_expr()}", 0,
+            f"in0_p, in1_p, in2_p, in3_p, in4_p, in5_p, out0_p, "
+            f"{lq_expr}, {lk_expr}, {float(call.scale)!r}f, "
+            f"{_RECOMPUTE_INV_ABOVE!r}f, {call.args(6)}",
+            threads="256"))
+
+
+def _backward(query, key, value, grad_out, normalizer, delta, call):
     d = int(query.shape[3])
     smem = _smem_register_backward(d)
     kernel = f"mea_bwd::backward<{d}, {call.template()}>"
@@ -751,7 +850,7 @@ def _backward(query, key, value, grad_out, lse, delta, call):
                        for t, seq in ((key, call.seq[1]), (value, call.seq[2]))]
     return jt.code(
         [query.shape] + grad_shapes, ["float32"] * 3,
-        [query, key, value, grad_out, lse, delta] + call.extras(),
+        [query, key, value, grad_out, normalizer, delta] + call.extras(),
         cuda_header=_KERNELS,
         cuda_src="cudaMemsetAsync(out0_p, 0, out0->size, 0);\n" + _launch(
             kernel, f"({lk_expr} + 31) / 32, in0->shape[0] * {call.heads_expr()}",
@@ -772,19 +871,24 @@ class _FusedAttentionF32(jt.Function):
     # gradient comes back in its tensor's own layout, the output in q's.
     def execute(self, query, key, value, call):
         self.call = call
-        out, lse = _forward(query, key, value, call)
-        self.saved = (query, key, value, out, lse)
+        out, normalizer = _forward(query, key, value, call)
+        self.saved = (query, key, value, out, normalizer)
         return out
 
     def grad(self, grad_out):
-        query, key, value, out, lse = self.saved
+        query, key, value, out, normalizer = self.saved
         grad_out = grad_out.float32()
-        delta = (grad_out * out).sum(-1)
+        # dO . O is exactly the row term the kernel reconstructs; it is right
+        # wherever O's float32 rounding is small against the row sum, which
+        # `_row_delta` decides per row.
+        approximate = (grad_out * out).sum(-1)
         if self.call.seq[0]:
-            delta = delta.transpose(0, 2, 1)
+            approximate = approximate.transpose(0, 2, 1)
+        delta = _row_delta(query, key, value, grad_out, normalizer,
+                           approximate.float64().contiguous(), self.call)
         call = self.call
         grad_query, grad_key, grad_value = _backward(
-            query, key, value, grad_out, lse, delta, call)
+            query, key, value, grad_out, normalizer, delta, call)
         if call.group > 1:
             grad_key = _sum_groups(grad_key, key, call.seq[1], call.group)
             grad_value = _sum_groups(grad_value, value, call.seq[2], call.group)

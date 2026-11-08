@@ -58,22 +58,18 @@ void TapeOp::infer_shape() {
     auto x = inputs().front();
     auto y = outputs().front();
     y->set_shape(x->shape);
+    y->storage_strides = x->storage_strides;
     y->share_with(x);
 }
 
 void Tapes::grads(Var** douts, VarPtr* dins) {
     CHECK(callback.deleter);
-    try {
-        callback.func(_outputs.size(), douts, _inputs.size(), dins);
-    } catch (...) {
-        // if error occur in callback, we need to
-        // free it to prevent memory leak, but this is still
-        // not enough, error may occur outside. please
-        // find a better solution
-        callback.deleter();
-        callback.deleter = nullptr;
-        throw;
-    }
+    // A backward that raises keeps its callback. It used to be released here
+    // "to prevent a leak", but `~GradCallback` releases it with this op
+    // anyway, and releasing it early broke the graph that was still alive: a
+    // second `jt.grad` over the same loss failed an internal
+    // `callback.deleter` check instead of raising the user's error again.
+    callback.func(_outputs.size(), douts, _inputs.size(), dins);
 }
 
 Tapes::Tapes(

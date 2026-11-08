@@ -24,6 +24,15 @@ namespace jittor
         IndexOpRunner();
     };
 
+    class GatherV2OpRunner : public BaseOpRunner
+    {
+    protected:
+        void executeOp(AclOpRegistry::const_iterator &it) override;
+
+    public:
+        GatherV2OpRunner();
+    };
+
     class SliceV2OpRunner : public BaseOpRunner
     {
 

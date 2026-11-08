@@ -486,6 +486,64 @@ class TestCodeOp(unittest.TestCase):
                 @out0(0) = data["x"];
             ''').sync()
         assert a.item() == 123
+    def test_second_derivative_through_a_code_gradient_raises(self):
+        # The backward is the user's grad source; nothing says how to
+        # differentiate it again. That used to answer 0 with only a
+        # "does not depend on the loss" warning.
+        x = jt.array(np.array([2.0, -1.5], dtype="float32"))
+        y = jt.code(
+            x.shape, x.dtype, [x],
+            cpu_src="for (int i=0; i<in0_shape0; i++) @out(i) = @in0(i)*@in0(i)*@in0(i);",
+            cpu_grad_src=["for (int i=0; i<in0_shape0; i++) @out(i) = @dout(i)*3*@in0(i)*@in0(i);"],
+        )
+        first = jt.grad(y.sum(), x)
+        np.testing.assert_allclose(first.numpy(), [12.0, 6.75])
+        with self.assertRaisesRegex(RuntimeError, "cannot differentiate a jt.code gradient again"):
+            jt.grad(first.sum(), x)
+
+
+    def test_torch_edge_policy_multi_output_and_repeated_input_slots(self):
+        setter = jt.core._set_torch_grad_edge_dtypes
+        previous = setter(False)
+        try:
+            with jt.flag_scope(use_cuda=0, auto_mixed_precision_level=0, amp_reg=0):
+                for dtype in ("float16", "float32"):
+                    for repeated in (False, True):
+                        for enabled in (False, True):
+                            setter(enabled)
+                            first = jt.array([.25, .5]).cast(dtype).start_grad()
+                            second = first if repeated else jt.array([.75, 1.]).cast(dtype).start_grad()
+                            left, right = jt.code(
+                                [first.shape, first.shape], ["float32", "float32"],
+                                [first, second],
+                                cpu_src="""
+                                    for (int i=0; i<in0_shape0; ++i) {
+                                        @out0(i) = 2.f * @in0(i) + 3.f * @in1(i);
+                                        @out1(i) = 5.f * @in0(i) + 7.f * @in1(i);
+                                    }
+                                """,
+                                cpu_grad_src=[
+                                    """
+                                    const float scale = (&@pout(0) == &@pout0(0)) ? 2.f : 5.f;
+                                    for (int i=0; i<in0_shape0; ++i)
+                                        @out(i) = scale * @dout(i);
+                                    """,
+                                    """
+                                    const float scale = (&@pout(0) == &@pout0(0)) ? 3.f : 7.f;
+                                    for (int i=0; i<in0_shape0; ++i)
+                                        @out(i) = scale * @dout(i);
+                                    """,
+                                ],
+                            )
+                            targets = [first] if repeated else [first, second]
+                            gradients = jt.grad((left + right).sum(), targets)
+                            expected = (17.,) if repeated else (7., 10.)
+                            for gradient, scalar in zip(gradients, expected):
+                                self.assertEqual(gradient.dtype, dtype)
+                                self.assertEqual(gradient.float32().numpy().tolist(), [scalar, scalar])
+        finally:
+            setter(previous)
+
 
 if __name__ == "__main__":
     unittest.main()

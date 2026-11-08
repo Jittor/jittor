@@ -262,6 +262,71 @@ def test_frequency_factories_use_native_placement_for_following_operations():
                 np.testing.assert_array_equal(result.numpy(), reference * 2 + 1)
 
 
+_NUMPY_CODE_ON_EXPLICIT_CUDA = """
+import numpy as np
+import torch
+import jittor as jt
+
+jt.flags.use_cuda = 1
+gpu = torch.tensor([1., 2., 3., 4.], device="cuda")
+gpu.sync()
+
+def forward(np_, data):
+    np_.copyto(data["outputs"][0], data["inputs"][0] * 2)
+
+with jt.flag_scope(use_cuda=0):
+    doubled = jt.numpy_code(gpu.shape, gpu.dtype, [gpu], forward)
+    assert doubled.placement_backend == 1
+    try:
+        got = doubled.numpy()
+    except RuntimeError as error:
+        assert "CuPy" in str(error), error
+        # Still pending: leaving the scope would run it again.
+        del doubled
+        print("REFUSED")
+    else:
+        np.testing.assert_array_equal(got, [2., 4., 6., 8.])
+        print("RAN")
+"""
+
+
+def test_a_numpy_code_operator_on_explicit_cuda_inputs_gets_device_arrays():
+    # The operator follows its explicitly placed inputs onto CUDA under
+    # use_cuda=0, as `gpu + 2` does above, so its callback must be handed
+    # CuPy -- or refuse without it. It used to be chosen by use_cuda: numpy
+    # over device memory, and the first read was a segfault (the torch.linalg
+    # tests after a `set_default_device("cuda")`). In a child, since the
+    # failure is the process.
+    import jittor as jt
+    if not _test_capability.check_accelerator('cuda', backend=jt).enabled:
+        pytest.skip("accelerator prerequisite: CUDA runtime unavailable")
+    finished = run_python_child(["-c", _NUMPY_CODE_ON_EXPLICIT_CUDA],
+                                env={"JITTOR_TORCH_SHIM": "1"}, timeout=900,
+                                merge_stderr=True)
+    tail = finished.stdout[-3000:]
+    assert finished.returncode == 0, tail
+    assert {"REFUSED", "RAN"} & set(finished.stdout.splitlines()), tail
+
+@pytest.mark.parametrize("source,ambient", [("cpu", 1), ("cuda", 0)])
+@pytest.mark.parametrize("by_row", [False, True])
+def test_unique_counts_inherit_explicit_input_placement(source, ambient, by_row):
+    import jittor as jt
+    import torch
+    raw = np.array([[1, 2], [2, 3], [1, 2], [4, 5]], dtype=np.int64)
+    with _cuda_runtime():
+        x = torch.tensor(raw, dtype=torch.int64, device=source)
+        x.sync()
+        with jt.flag_scope(use_cuda=ambient):
+            values, inverse, counts = torch.unique(x, dim=0 if by_row else None, return_inverse=True, return_counts=True)
+            jt.sync_all(True)
+        want = np.unique(raw, return_inverse=True, return_counts=True, axis=0 if by_row else None)
+        for value in (values, inverse, counts):
+            assert value.device.type == source
+        np.testing.assert_array_equal(values.numpy(), want[0])
+        np.testing.assert_array_equal(inverse.numpy().reshape(want[1].shape), want[1])
+        np.testing.assert_array_equal(counts.numpy(), want[2])
+
+
 def test_native_like_factories_and_optimizer_state_follow_explicit_placement():
     import jittor as jt
     import torch

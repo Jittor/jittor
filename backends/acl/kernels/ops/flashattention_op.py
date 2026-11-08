@@ -1,4 +1,4 @@
-from ._code import code_with_attributes
+from ._code import acl_emit, acl_program, code_with_attributes, scalar_key
 from ._attributes import attribute_program, code_program, runner_for_alias
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import os
@@ -18,9 +18,18 @@ from collections.abc import Sequence, Iterable
 
 _causal_mask_cache = OrderedDict()
 _causal_mask_cache_limit = 16
+_prompt_causal_mask_cache = OrderedDict()
+_prompt_full_mask_cache = OrderedDict()
+_prompt_attention_programs = {}
+_prompt_padding_cache = OrderedDict()
+_prompt_padding_cache_limit = 128
+_prompt_padding_cache_max_entry_bytes = 8 << 20
+_prompt_padding_cache_max_bytes = 64 << 20
+_prompt_padding_cache_bytes = 0
 
 
 from ._code import acl_code as flashattention_cmd
+from .._soc import kernel_available, soc_name
 
 
 class FlashAttentionACL:
@@ -133,6 +142,33 @@ class FlashAttentionACL:
         return result[2]
 
 
+class PromptFlashAttentionACL:
+    """CANN V3 FP16 BNSD inference, with optional boolean drop-mask."""
+
+    def __init__(self, headnum, scale, is_causal=True):
+        self.headnum = int(headnum)
+        self.scale = float(scale)
+        self.is_causal = bool(is_causal)
+
+    def __call__(self, query, key, value, drop_mask=None):
+        if not getattr(jt.flags, "no_grad", 0):
+            raise RuntimeError("PromptFlashAttentionACL requires no_grad")
+        if self.is_causal and drop_mask is None:
+            raise ValueError("Causal PromptFlashAttentionACL requires its boolean drop-mask")
+        inputs = [query, key, value] if drop_mask is None else [query, key, value, drop_mask]
+        cache_key = (self.headnum, scalar_key(self.scale), self.is_causal, len(inputs))
+        program = _prompt_attention_programs.get(cache_key)
+        if program is None:
+            program = acl_program("PromptFlashAttention", len(inputs), 1, attributes={
+                "headNum": self.headnum, "scale": self.scale, "causal": self.is_causal,
+            }, attr_header="\n// PFA mode attributes v2: causal controls nextTokens.\n")
+            if len(_prompt_attention_programs) >= 128:
+                _prompt_attention_programs.clear()
+            _prompt_attention_programs[cache_key] = program
+        return acl_emit(program, inputs,
+                        [query.dtype], [query.shape])[0]
+
+
 class IncreFlashAttentionACL(jt.Function):
     def __init__(self, headnum, key_value_headnum, scale, layout="BNSD", innerprecise=0):
         self.headnum = headnum
@@ -141,7 +177,21 @@ class IncreFlashAttentionACL(jt.Function):
         self.layout = layout
         self.innerprecise = innerprecise
 
-    def execute(self, q, k, v):
+    def execute(self, q, k, v, atten_mask=None):
+        """Incremental attention; a boolean atten_mask is True for dropped keys."""
+        inputs = [q, k, v]
+        row_valid = None
+        if atten_mask is not None:
+            if not isinstance(atten_mask, jt.Var) or _jittor_dtype_name(atten_mask.dtype) != "bool":
+                raise TypeError("IncreFlashAttention atten_mask must be a boolean tensor")
+            # CANN's 310P IFA can produce NaNs or fail when a row drops every
+            # key. Let those rows attend temporarily, then zero their outputs.
+            # This stays on the device and leaves errors in valid rows visible.
+            batch = int(q.shape[0])
+            drop_mask = atten_mask.reshape(batch, -1)
+            row_valid = jt.any(jt.logical_not(drop_mask), dim=-1, keepdims=True)
+            safe_drop_mask = jt.logical_and(drop_mask, row_valid)
+            inputs.append(safe_drop_mask.reshape(atten_mask.shape))
         attr_code = code_program(
             [
                 '\n        op.jt_name = "increflashattention";\n        ',
@@ -161,11 +211,17 @@ class IncreFlashAttentionACL(jt.Function):
         )
         result = flashattention_cmd(
             "IncreFlashAttention",
-            [q, k, v],
+            # acl_program keys by input_count, so masked and unmasked calls
+            # cannot reuse a program with a different set of input edges.
+            inputs,
             output_dtypes=[q.dtype],
             output_shapes=[q.shape],
             attr_code=attr_code,
         )
+        if row_valid is not None:
+            return result[0] * row_valid.cast(q.dtype).reshape(
+                [int(q.shape[0])] + [1] * (q.ndim - 1)
+            )
         return result[0]
 
 
@@ -261,6 +317,189 @@ def _compressed_causal_mask():
     return _causal_mask(2048, 2048)
 
 
+def _causal_bias(query_length, source_length):
+    """Additive 0/-inf causal bias; jt.where does not broadcast the leading
+    dims on ACL, while binary add does."""
+    key = (int(query_length), int(source_length))
+    cached = _causal_bias_cache.get(key)
+    if cached is not None:
+        _causal_bias_cache.move_to_end(key)
+        return cached
+    bias = np.where(
+        np.triu(np.ones(key, dtype=np.bool_), 1), -np.inf, 0.0
+    ).astype(np.float32)
+    var = jt.array(bias)
+    _causal_bias_cache[key] = var
+    if len(_causal_bias_cache) > _causal_mask_cache_limit:
+        _causal_bias_cache.popitem(last=False)
+    return var
+
+
+_causal_bias_cache = OrderedDict()
+
+
+def _supports_prompt_prefill(q_shape, k_shape, dtype_name, training, is_causal, attn_mask):
+    """The documented and real-device-tested 310P PFA subset."""
+    padded_length = (int(q_shape[-2]) + 127) // 128 * 128
+    padded_source = (int(k_shape[-2]) + 127) // 128 * 128
+    return (
+        not training and dtype_name == "float16" and attn_mask is None
+        # Keep the existing causal/GQA contract. The newly verified noncausal
+        # subset has equal Q/K heads and 64- or 128-wide FP16 attention.
+        and (is_causal or (q_shape[1] == k_shape[1] and int(q_shape[-1]) in (64, 128)))
+        and 1 < int(q_shape[-2]) and 1 < int(k_shape[-2])
+        and (not is_causal or int(q_shape[-2]) == int(k_shape[-2]))
+        and max(padded_length, padded_source) <= 65535
+        and 0 < int(q_shape[0]) <= 128
+        and 0 < int(q_shape[1]) <= 256
+        and int(q_shape[-1]) % 16 == 0
+        and soc_name().startswith("Ascend310P")
+        and kernel_available("PromptFlashAttention")
+    )
+
+
+def _prompt_causal_mask(query, query_length, padded_length):
+    return _prompt_mask(query, query_length, padded_length, True)
+
+
+def _prompt_mask(query, query_length, padded_length, is_causal):
+    # These are shape constants, independent of tensor values. Keep a separate
+    # device key and restore residency if someone inspected a cached mask on
+    # the host; a host read must not leave the next call mixing placements.
+    device = int(jt.core.dispatch_context([query])[1])
+    key = (device, int(query_length), int(padded_length))
+    cache = _prompt_causal_mask_cache if is_causal else _prompt_full_mask_cache
+    mask = cache.get(key)
+    if mask is None:
+        drop = (np.triu(np.ones((padded_length, padded_length), dtype=np.bool_), 1)
+                if is_causal else np.zeros((padded_length, padded_length), dtype=np.bool_))
+        drop[:, query_length:] = True
+        # Padded query rows retain the real key prefix, so no row is entirely
+        # masked. Only the first query_length output rows are returned below.
+        with jt.runtime.scope(device_id=device):
+            mask = jt.array(drop).stop_grad()
+    mask = mask.to_device(device).stop_grad()
+    if mask.location() != "device":
+        # Materialize only this constant, without a device wait. Otherwise
+        # repeated layers see an unfinished copy and append another to_device
+        # node before the first prefill has reached its final synchronization.
+        mask.sync(False, False)
+    cache[key] = mask
+    cache.move_to_end(key)
+    if len(cache) > _causal_mask_cache_limit:
+        cache.popitem(last=False)
+    return mask
+
+
+def _prompt_padding_zero(tensor, padding):
+    """A bounded private constant; concatenation still copies the real input.
+
+    Only finished zero tensors enter the cache, so a captured prefill reads a
+    constant rather than replaying its fill/cast/broadcast producers. Entries
+    are never written by prefill. Eviction releases the cache's reference; a
+    graph already using that constant retains its own normal input reference.
+    """
+    global _prompt_padding_cache_bytes
+    if tensor.ndim != 4 or int(padding) <= 0:
+        return None
+    dtype = _jittor_dtype_name(tensor.dtype)
+    itemsize = {"float16": 2, "float32": 4}.get(dtype)
+    if itemsize is None:
+        return None
+    shape = tuple(int(value) if axis != 2 else int(padding)
+                  for axis, value in enumerate(tensor.shape))
+    if any(value <= 0 for value in shape):
+        return None
+    size = itemsize
+    for value in shape:
+        size *= value
+    if (size > _prompt_padding_cache_max_entry_bytes
+            or size > _prompt_padding_cache_max_bytes
+            or _prompt_padding_cache_limit <= 0):
+        return None
+    backend, device = jt.core.dispatch_context([tensor])[:2]
+    if backend not in ("acl", "acl_legacy"):
+        return None
+    device = int(device)
+    key = (device, dtype, shape)
+    entry = _prompt_padding_cache.get(key)
+    if entry is not None:
+        zero, _ = entry
+        if zero.location() != "device" or int(zero.device_id) != device:
+            with jt.runtime.scope(device_id=device, keep_graph=0):
+                zero = zero.to_device(device).stop_grad()
+                zero.sync(False, False)
+            _prompt_padding_cache[key] = (zero, size)
+        _prompt_padding_cache.move_to_end(key)
+        return zero
+    while _prompt_padding_cache and (
+            len(_prompt_padding_cache) >= _prompt_padding_cache_limit
+            or _prompt_padding_cache_bytes + size > _prompt_padding_cache_max_bytes):
+        _, (_, removed) = _prompt_padding_cache.popitem(last=False)
+        _prompt_padding_cache_bytes -= removed
+    # Scalar-only scope: it neither sweeps unrelated work nor waits on the
+    # device. keep_graph=0 matters when the first use happens during capture.
+    with jt.runtime.scope(device_id=device, keep_graph=0):
+        zero = jt.zeros(shape, dtype=dtype).stop_grad()
+        zero.sync(False, False)
+    _prompt_padding_cache[key] = (zero, size)
+    _prompt_padding_cache_bytes += size
+    return zero
+
+
+def _prompt_pad_sequence(tensor, padding):
+    zero = _prompt_padding_zero(tensor, padding)
+    if zero is None:
+        return jt.nn.pad(tensor, (0, 0, 0, padding), value=0)
+    return jt.concat((tensor, zero), dim=-2)
+
+
+def _prompt_prefill_310p(query, key, value, scale_factor, is_causal=True):
+    batch, query_heads, length, head_dim = map(int, query.shape)
+    key_heads = int(key.shape[1])
+    padded_length = (length + 127) // 128 * 128
+    mask = _prompt_mask(query, length, padded_length, is_causal)
+    padding = padded_length - length
+    if padding:
+        query, key, value = (
+            _prompt_pad_sequence(tensor, padding)
+            for tensor in (query, key, value)
+        )
+    if key_heads != query_heads:
+        group = query_heads // key_heads
+        expanded = (batch, key_heads, group, padded_length, head_dim)
+        key = key.unsqueeze(2).broadcast(expanded).reshape(batch, query_heads, padded_length, head_dim)
+        value = value.unsqueeze(2).broadcast(expanded).reshape(batch, query_heads, padded_length, head_dim)
+    output = PromptFlashAttentionACL(query_heads, scale_factor, is_causal=is_causal)(query, key, value, mask)
+    return output[:, :, :length, :] if padding else output
+
+
+def _sdpa_composite(query, key, value, attn_bias, is_causal, scale_factor):
+    """Math SDPA from verified ACL ops, for SoCs whose CANN opp has no
+    FlashAttentionScore kernel (Ascend310P prefill)."""
+    query_heads = int(query.shape[-3])
+    key_heads = int(key.shape[-3])
+    if key_heads != query_heads:
+        group = query_heads // key_heads
+        B, KV, S, D = key.shape
+        expand = (B, KV, group, S, D)
+        key = key.unsqueeze(2).broadcast(expand).reshape(B, query_heads, S, D)
+        value = value.unsqueeze(2).broadcast(expand).reshape(B, query_heads, S, D)
+    scores = jt.matmul(query, key.transpose(-1, -2)) * scale_factor
+    if attn_bias is not None:
+        # Keep the product dtype (fp16 attention + fp32 mask must not promote
+        # scores to fp32 -- that would both lose dtype fidelity and, on
+        # Ascend310P, hit the FP32-cube gate on the value matmul).
+        scores = scores + attn_bias.cast(scores.dtype)
+    if is_causal:
+        scores = scores + _causal_bias(
+            int(query.shape[-2]), int(key.shape[-2])
+        ).cast(scores.dtype)
+    probs = jt.nn.softmax(scores, dim=-1)
+    # softmax computes in fp32; the value matmul needs the input dtype back.
+    return jt.matmul(probs.cast(value.dtype), value)
+
+
 def scaled_dot_product_attention_acl(
     query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None, enable_gqa=False
 ):
@@ -288,6 +527,8 @@ def scaled_dot_product_attention_acl(
         query.dtype
     ) != _jittor_dtype_name(value.dtype):
         return None
+    dtype_name = _jittor_dtype_name(query.dtype)
+    flash_available = kernel_available("FlashAttention")
     # aclnnFlashAttentionScoreV2 forwards q's own dtype for its output
     # (FlashAttentionACL.__call__ passes output_dtypes=[..., q.dtype]) and
     # does not reject float16 itself -- verified directly against a numpy
@@ -307,7 +548,10 @@ def scaled_dot_product_attention_acl(
     if query_heads != key_heads:
         if not enable_gqa or query_heads % key_heads != 0:
             return None
-    if training and (_jittor_dtype_name(query.dtype) != "float32" or query_heads != key_heads):
+    # The fused runner's training coverage is float32 with equal head counts;
+    # the composite path is built from differentiable primitives and has no
+    # such restriction.
+    if flash_available and training and (dtype_name != "float32" or query_heads != key_heads):
         return None
     head_dim = int(q_shape[-1])
     if head_dim <= 0 or head_dim > 256 or head_dim % 8 != 0:
@@ -318,16 +562,53 @@ def scaled_dot_product_attention_acl(
     if query_length <= 0 or source_length <= 0:
         return None
 
+    if _supports_prompt_prefill(q_shape, k_shape, dtype_name, training, is_causal, attn_mask):
+        scale_factor = 1.0 / math.sqrt(head_dim) if scale is None else float(scale)
+        scaled_dot_product_attention_acl.backend_name = "acl_prompt_flash_attention_v3"
+        if not is_causal:
+            # CANN accepts original, unequal or unaligned sequence lengths
+            # when attenMask is null. All real keys participate, so no source
+            # padding/mask or actual-sequence-length attributes are required.
+            query, key, value = (tensor.contiguous() for tensor in (query, key, value))
+            return PromptFlashAttentionACL(query_heads, scale_factor, is_causal=False)(query, key, value)
+        return _prompt_prefill_310p(query, key, value, scale_factor, is_causal=is_causal)
+
+    # 310P has incremental attention even though FlashAttentionScore is absent.
+    # Static KV caches carry a head-shared boolean mask on each decode step.
+    # CANN accepts one mask per batch; head-specific masks keep the math path.
+    if (not flash_available and not training and dtype_name == "float16"
+            and query_length == 1 and not is_causal
+            and isinstance(attn_mask, jt.Var)
+            and _jittor_dtype_name(attn_mask.dtype) == "bool"):
+        mask_shape = tuple(attn_mask.shape)
+        batch = int(q_shape[0])
+        if len(mask_shape) == 2 and mask_shape[0] == 1:
+            mask_shape = (1, 1) + mask_shape
+        if (len(mask_shape) == 4 and mask_shape[0] in (1, batch)
+                and mask_shape[1:3] == (1, 1)
+                and mask_shape[3] in (1, source_length)):
+            keep = attn_mask.reshape((mask_shape[0], mask_shape[3]))
+            keep = keep.broadcast((batch, source_length))
+            scale_factor = 1.0 / math.sqrt(head_dim) if scale is None else float(scale)
+            scaled_dot_product_attention_acl.backend_name = "acl_incre_flash_attention_v4"
+            return IncreFlashAttentionACL(query_heads, key_heads, scale_factor)(
+                query, key, value, jt.logical_not(keep))
+
     real_shift = None
     bool_atten_mask = None
     if attn_mask is not None:
         if is_causal or not isinstance(attn_mask, jt.Var):
             return None
         # Explicit requires_grad_(False) preserves graph edges without setting
-        # stop_grad; the fused kernel only needs to reject a trainable mask.
-        if training and attn_mask.requires_grad:
+        # stop_grad; the fused kernel only needs to reject a trainable mask,
+        # while the composite keeps the mask differentiable like any input.
+        if flash_available and training and attn_mask.requires_grad:
             return None
         mask_dtype = _jittor_dtype_name(attn_mask.dtype)
+        # The 310P math branch does not yet implement boolean masks.
+        # Decline so the portable SDPA path preserves mask semantics.
+        if mask_dtype == "bool" and not flash_available:
+            return None
         if mask_dtype not in ("float32", "bool"):
             return None
         # A float (non-bool) mask is the additive "pse" slot, and aclnn
@@ -351,8 +632,6 @@ def scaled_dot_product_attention_acl(
         target_shape = (int(q_shape[0]), query_heads, query_length, source_length)
         if any(actual not in (1, expected) for actual, expected in zip(mask_shape, target_shape)):
             return None
-        if mask_shape != target_shape:
-            reshaped = reshaped.broadcast(target_shape)
         if mask_dtype == "bool":
             # Torch's SDPA boolean mask is True where attention is kept
             # ("the element should take part in attention"). CANN's
@@ -362,8 +641,23 @@ def scaled_dot_product_attention_acl(
             # caller-supplied bool mask lands in the same convention as
             # the causal mask this kernel already builds and passes
             # through the identical attenMask slot.
+            #
+            # The call does not need the mask at score size.
+            # aclnnFlashAttentionScoreV2 reads a [1, 1, s, s] boolean
+            # attenMask for every head and batch itself (checked on a 910B3
+            # against the composite reference), while broadcasting it to
+            # [b, n, s, s] first wrote 64 MiB at 2048 tokens and, on the ACL
+            # backend, cost two score-sized casts on top of the broadcast:
+            # 11.4 + 5.8 + 2.3 ms a step of qwen3-0.6B prefill, whose whole
+            # device step is 55 ms. A mask that still has to grow along the
+            # query or key axis is expanded here as before, and so is the
+            # float "pse" slot below -- aclnn promises neither there.
             bool_atten_mask = jt.logical_not(reshaped)
+            if tuple(mask_shape[-2:]) != target_shape[-2:]:
+                bool_atten_mask = bool_atten_mask.broadcast(target_shape)
         else:
+            if mask_shape != target_shape:
+                reshaped = reshaped.broadcast(target_shape)
             real_shift = reshaped
 
     causal_mask = bool_atten_mask
@@ -375,14 +669,18 @@ def scaled_dot_product_attention_acl(
             causal_mask = _compressed_causal_mask()
             sparse_mode = 2
     scale_factor = 1.0 / math.sqrt(head_dim) if scale is None else float(scale)
-    if (
-        _jittor_dtype_name(query.dtype) == "bfloat16"
-        and query_length == 1
-        and attn_mask is None
-        and not is_causal
-    ):
+    decode_single = query_length == 1 and attn_mask is None and not is_causal
+    if dtype_name == "bfloat16" and decode_single:
         scaled_dot_product_attention_acl.backend_name = "acl_incre_flash_attention_v4"
         return IncreFlashAttentionACL(query_heads, key_heads, scale_factor)(query, key, value)
+    if not flash_available:
+        if decode_single and dtype_name == "float16":
+            # Decode decode-step attention through the kernel the inference
+            # SoC does ship.
+            scaled_dot_product_attention_acl.backend_name = "acl_incre_flash_attention_v4"
+            return IncreFlashAttentionACL(query_heads, key_heads, scale_factor)(query, key, value)
+        scaled_dot_product_attention_acl.backend_name = "acl_composite_sdpa"
+        return _sdpa_composite(query, key, value, real_shift, is_causal, scale_factor)
 
     scaled_dot_product_attention_acl.backend_name = "acl_flash_attention_score_v2"
     return FlashAttentionACL(

@@ -21,6 +21,9 @@ namespace jittor {
 
 struct VarHolder;
 struct GradCallback;
+// A caller with a successful device-synchronous receipt may publish the
+// existing bytes through an inputless, finished storage owner. No sync here.
+VarPtr ready_storage_alias(VarHolder* source);
 // @pyjt(submit_pending_fetches)
 void submit_pending_fetches();
 VarPtr detach(Var* x);
@@ -61,15 +64,18 @@ VarPtr device_copy(Var* x, int device);
  * this record would outlive.
  */
 struct VarViewStep {
-    enum Kind { Slice, Transpose, Expand, Reshape } kind;
+    enum Kind { Slice, Transpose, Expand, Reshape, Reinterpret } kind;
     VarSlices slices;
     NanoVector axes;
+    NanoString dtype = ns_void;
     explicit VarViewStep(VarSlices&& value)
         : kind(Slice), slices(move(value)) {}
     explicit VarViewStep(NanoVector value)
         : kind(Transpose), slices(0), axes(move(value)) {}
     VarViewStep(Kind kind, NanoVector value)
         : kind(kind), slices(0), axes(move(value)) {}
+    VarViewStep(NanoVector shape, NanoString dtype)
+        : kind(Reinterpret), slices(0), axes(move(shape)), dtype(dtype) {}
 };
 
 struct VarView {
@@ -99,10 +105,13 @@ struct DataView {
 
 /** The base object for the numpy array `Var.data` returns.
  *
- * It holds two claims, for two different reasons:
+ * It holds three claims, for different reasons:
  *
- *  - an extra liveness on the Var that was current when `.data` was taken, so
- *    the allocation the view points at cannot be freed.  The base used to be
+ *  - an allocator reference to the exact exported allocation. A later device
+ *    consumer can migrate the Var and replace its storage while the ndarray
+ *    still points at the old host block; Var liveness alone cannot pin it.
+ *  - extra liveness on the Var that was current when `.data` was taken, even
+ *    after the holder is rebound. The base used to be
  *    the VarHolder's PyObject, which pins the python wrapper but not the
  *    memory: `assign` keeps the wrapper and swaps a *different* Var into it,
  *    releasing the old one.  `a = v.data; v.assign(other); a[0]` then read
@@ -214,6 +223,20 @@ struct VarHolder {
         own_holder(); v->own_holder();
         return this; 
     };
+
+    // A factory result (`jt.ones`/`zeros`/`full`) is a tensor, not the Python
+    // number it was built from: leaving `_is_scalar` set made it promote as a
+    // wrapped number, so `jt.ones(4).float16() * 0.1` came back float32
+    // `_is_constant` is set so placement still lets an
+    // unsynced constant follow its operand's device; only dtype promotion
+    // stops seeing the result as a scalar.
+    // @pyjt(_as_tensor)
+    // @attrs(return_self)
+    inline VarHolder* as_tensor() {
+        var->set_flag(VarFlags::_is_constant);
+        var->set_flag(VarFlags::_is_scalar, 0);
+        return this;
+    }
 
     /**
      * The CUDA device index this Var lives on, or will be computed on; -1
@@ -333,6 +356,13 @@ struct VarHolder {
     // @pyjt(__get__id)
     inline int64 id() {
         return var->id;
+    }
+
+    // Tracked in-place aliases share this epoch. Reading it does not create
+    // alias state or execute a graph. Raw external pointer writes are untracked.
+    // @pyjt(_autograd_version)
+    inline uint64 autograd_version() {
+        return var->autograd_alias ? *var->autograd_alias->version : 0;
     }
 
     // @pyjt(__get__var_ptr)
@@ -472,6 +502,17 @@ struct VarHolder {
     // @pyjt(__set__requires_grad)
     void set_requires_grad(bool flag);
     void set_requires_grad_impl(bool flag);
+
+    /**
+     * Reversible flag change for a tensor that only mirrors another's policy.
+     *
+     * The frontend keeps a frozen FSDP parameter's shard views in step with
+     * the parameter; a view is not a backward leaf, so the public setter,
+     * which enforces Torch's leaf rule, refuses it. The mirror is a policy
+     * change on the view, not a new gradient edge.
+     */
+    // @pyjt(_set_requires_grad_mirrored)
+    void set_requires_grad_mirrored(bool flag) { set_requires_grad_impl(flag); }
     std::shared_ptr<AutogradAliasState> ensure_autograd_alias();
     // @pyjt(_check_inplace_autograd)
     // @attrs(return_self)
@@ -570,6 +611,13 @@ struct VarHolder {
     // @pyjt(__get__data)
     DataView data();
     
+    // Identity of a saved value; reading it never materializes a tensor.
+    // @pyjt(_saved_storage_version)
+    inline vector<uint64> saved_storage_version() {
+        auto token = var->storage_version_token();
+        return {uint64(var->id), token->identity, token->value.load(std::memory_order_relaxed)};
+    }
+
     // @pyjt(__get__raw_ptr)
     uint64 raw_ptr();
 
@@ -771,6 +819,14 @@ struct VarHolder {
     // @pyjt(__get__grad)
     int grad();
 
+    // A second holder of this same Var. `jt.Function` rebinds an input it
+    // saved onto the caller's Var with it once the tape in between has run,
+    // when `_input` can no longer reach across.
+    // @pyjt(_alias)
+    inline VarHolder* _alias() {
+        return new VarHolder(var);
+    }
+
     // @pyjt(_input)
     inline VarHolder* _input(int i) {
         USER_CHECK(!var->is_finished()) << "_input requires an unexecuted tensor";
@@ -778,9 +834,10 @@ struct VarHolder {
         return new VarHolder(var->input()->input(i));
     }
 
-    // Every input of the producer, read in one call; empty once the var has
-    // executed. Two `_input` calls are two graph entries, and leaving the first
-    // may submit an auto-flushed batch that executes the var before the second.
+    // Every input of the producer, in `_input` order and including dependency
+    // edges, read in one call; empty once the var has executed. Two `_input`
+    // calls are two graph entries, and leaving the first may submit an
+    // auto-flushed batch that executes the var before the second.
     // @pyjt(_inputs)
     inline vector<VarHolder*> _inputs() {
         vector<VarHolder*> inputs;
@@ -831,6 +888,9 @@ struct VarHolder {
     // @pyjt(_set_storage_view_of)
     // @attrs(return_self)
     VarHolder* set_storage_view_of(VarHolder* base, bool expand);
+    // @pyjt(_set_dtype_view_of)
+    // @attrs(return_self)
+    VarHolder* set_dtype_view_of(VarHolder* base);
     // @pyjt(_storage_is_contiguous)
     bool storage_is_contiguous() { return var->is_contiguous(); }
     // Whether a step capture holds this Var as the state it replays; an
@@ -1013,6 +1073,23 @@ int first_finished(const vector<VarHolder*>& vars);
  */
 // @pyjt(_first_rebound)
 int first_rebound(const vector<VarHolder*>& holders, const vector<VarHolder*>& olds);
+
+/**
+    Execute the backward-saved readers of `storages` before a replay writes
+    them.
+
+    A differentiable graph built while a capture is warm -- an unrelated
+    forward from a parameter, left pending -- saves activations whose inputs
+    are the very storages the captured step updates. Its write-back node
+    ordered itself when the graph was built, before those readers existed, and
+    a kept graph does not rebuild its edges, so a replay wrote the new
+    parameter value underneath them: the old forward's backward then used the
+    forward-time-plus-one value. Running the saved readers here commits them
+    against the forward-time bytes, the same way `copy_into` does for a write
+    it can see (`saved_storage_readers`).
+ */
+// @pyjt(_preserve_step_readers)
+int preserve_step_readers(const vector<VarHolder*>& storages);
 
 // Called after a complete VarHolder has crossed into a Python object.
 void schedule_pending_from_python(VarHolder* holder);

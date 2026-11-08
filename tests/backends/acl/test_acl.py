@@ -8,6 +8,7 @@ from _helpers import capability as _test_capability
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
+import contextlib
 import unittest
 import jittor as jt
 from _helpers.assertions import expect_error
@@ -43,6 +44,48 @@ def _bfloat16_round(values):
     bits = values.view(np.uint32).copy()
     bits += np.uint32(0x7fff) + ((bits >> 16) & np.uint32(1))
     return (bits & np.uint32(0xffff0000)).view(np.float32)
+
+
+def _acl_supports_bfloat16():
+    """SoC capability read at execution time -- collection must not touch
+    the device."""
+    from jittor.backends.acl.kernels._soc import supports_bfloat16
+    return supports_bfloat16()
+
+
+def _skip_if_no_bfloat16():
+    if not _acl_supports_bfloat16():
+        raise unittest.SkipTest(
+            "acl npu has no bfloat16: the CANN opp for this SoC ships no "
+            "DT_BFLOAT16 kernels (Ascend310P)")
+
+
+def _acl_supports_fp32_cube():
+    """Whether aclnn matrix ops run FP32 with KEEP_DTYPE on this SoC."""
+    from jittor.backends.acl.kernels._soc import supports_fp32_cube
+    return supports_fp32_cube()
+
+
+def _acl_kernel_available(runner_name):
+    from jittor.backends.acl.kernels._soc import kernel_available
+    return kernel_available(runner_name)
+
+
+def _fp32_cube_scope():
+    """Run FP32 matrix math under the explicit HF32 opt-in where the SoC
+    lacks a native FP32 cube path (Ascend310P), matching
+    ``torch.npu.matmul.allow_hf32`` semantics."""
+    import contextlib
+    if _acl_supports_fp32_cube():
+        return contextlib.nullcontext()
+    return jt.flag_scope(acl_allow_hf32=1)
+
+
+def _fp32_matmul_tolerance(tight, loose=3e-2):
+    """Tolerance pair for FP32 matmul-class math: tight on SoCs with a
+    native FP32 cube path, loose under the HF32 down-conversion opt-in."""
+    return tight if _acl_supports_fp32_cube() else loose
+
 
 @unittest.skipIf(not _test_capability.check_accelerator('acl', backend=jt).enabled, "No ACL found")
 class TestACL(unittest.TestCase):
@@ -161,7 +204,9 @@ class TestACL(unittest.TestCase):
                 expected_grads.append(gradient)
             for use_cuda in (0, 1):
                 with self.subTest(batch_a=batch_a, batch_b=batch_b, use_cuda=use_cuda):
-                    with jt.flag_scope(use_cuda=use_cuda):
+                    cube_scope = (_fp32_cube_scope() if use_cuda
+                                  else contextlib.nullcontext())
+                    with jt.flag_scope(use_cuda=use_cuda), cube_scope:
                         a, b = jt.array(a_np), jt.array(b_np)
                         output = jt.nn.matmul_transpose(a, b)
                         gradients = jt.grad((output * jt.array(weight)).sum(), [a, b])
@@ -173,9 +218,10 @@ class TestACL(unittest.TestCase):
                                 _assert_acl_device(self, value)
                             else:
                                 self.assertEqual(value.location(), "cpu")
+                        tolerance = _fp32_matmul_tolerance(3e-5)
                         for value, reference in zip(values, [expected] + expected_grads):
                             self.assertEqual(tuple(value.shape), reference.shape)
-                            np.testing.assert_allclose(value.numpy(), reference, atol=3e-5, rtol=3e-5)
+                            np.testing.assert_allclose(value.numpy(), reference, atol=tolerance, rtol=tolerance)
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_clamp_scalar_forward_backward_uses_cann(self):
@@ -202,6 +248,7 @@ class TestACL(unittest.TestCase):
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_native_fused_adamw_bfloat16_two_steps(self):
+        _skip_if_no_bfloat16()
         parameter = jt.array(np.asarray(
             [1.0, -2.0, 0.5, -0.25], dtype=np.float32)).bfloat16()
         optimizer = jt.optim.AdamW(
@@ -262,7 +309,8 @@ class TestACL(unittest.TestCase):
         cache = jt.zeros((2, 2, block_size, kv_heads, head_dim), "float32")
 
         with jt.no_grad(), jt.log_capture_scope(
-                log_v=0, log_vprefix="acl_op_exec.cc=100") as logs:
+                log_v=0, log_vprefix="acl_op_exec.cc=100") as logs, \
+                _fp32_cube_scope():
             jt.nn.reshape_and_cache(
                 jt.array(key[:3]), jt.array(value[:3]), cache,
                 jt.array([0, 1, 2]).int32(), slots=[0, 1, 2])
@@ -288,15 +336,17 @@ class TestACL(unittest.TestCase):
         self.assertEqual(prefill_location, "device")
         self.assertEqual(decode_location, "device")
         self.assertEqual(cache_location, "device")
+        atol = _fp32_matmul_tolerance(1e-5)
         np.testing.assert_allclose(
             prefill.numpy(), self._paged_attention_reference(
-                query, key[:3], value[:3]), atol=1e-5, rtol=0)
+                query, key[:3], value[:3]), atol=atol, rtol=0)
         np.testing.assert_allclose(
             decode.numpy(), self._paged_attention_reference(
-                decode_query, key, value), atol=1e-5, rtol=0)
+                decode_query, key, value), atol=atol, rtol=0)
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_paged_attention_bfloat16_decode_uses_incremental_flash(self):
+        _skip_if_no_bfloat16()
         from jittor.backends.acl.kernels.ops.flashattention_op import (
             scaled_dot_product_attention_acl,
         )
@@ -336,6 +386,7 @@ class TestACL(unittest.TestCase):
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_block128_paged_decode_uses_direct_incremental_flash(self):
+        _skip_if_no_bfloat16()
         from jittor.backends.acl.kernels.kv_cache import _paged_attention_decode_acl
 
         rng = np.random.RandomState(47)
@@ -389,10 +440,13 @@ class TestACL(unittest.TestCase):
 
         with jt.log_capture_scope(
                 log_v=0, log_vprefix="acl_op_exec.cc=100") as logs:
-            output = jt.matmul(jt.array(a_np), jt.array(b_np))
+            with _fp32_cube_scope():
+                output = jt.matmul(jt.array(a_np), jt.array(b_np))
             actual = _fetch_acl(self, [output])[0]
 
-        np.testing.assert_allclose(actual, a_np @ b_np, rtol=1e-5, atol=1e-5)
+        tolerance = _fp32_matmul_tolerance(1e-5)
+        np.testing.assert_allclose(
+            actual, a_np @ b_np, rtol=tolerance, atol=tolerance)
         messages = [log["msg"].lower() for log in logs]
         # A product is a mapped op now (`mapped_matmul` in the backend's
         # `acl_ops` table), not a generated CodeOp, so the marker it leaves is
@@ -426,18 +480,19 @@ class TestACL(unittest.TestCase):
         for label, a_shape, b_shape, transposed in cases:
             a_np = rng.randn(*a_shape).astype(np.float32)
             b_np = rng.randn(*b_shape).astype(np.float32)
-            a, b = jt.array(a_np), jt.array(b_np)
-            if not transposed:
-                product = jt.matmul(a, b)
-            elif a.ndim > 2 and b.ndim > 2:
-                product = jt.nn.bmm_transpose(a, b)
-            else:
-                product = jt.nn.matmul_transpose(a, b)
-            seed_np = rng.randn(*product.shape).astype(np.float32)
-            grad_a, grad_b = jt.grad((product * jt.array(seed_np)).sum(), [a, b])
-            product.sync()
-            grad_a.sync()
-            grad_b.sync()
+            with _fp32_cube_scope():
+                a, b = jt.array(a_np), jt.array(b_np)
+                if not transposed:
+                    product = jt.matmul(a, b)
+                elif a.ndim > 2 and b.ndim > 2:
+                    product = jt.nn.bmm_transpose(a, b)
+                else:
+                    product = jt.nn.matmul_transpose(a, b)
+                seed_np = rng.randn(*product.shape).astype(np.float32)
+                grad_a, grad_b = jt.grad((product * jt.array(seed_np)).sum(), [a, b])
+                product.sync()
+                grad_a.sync()
+                grad_b.sync()
             self.assertEqual(
                 (product.location(), grad_a.location(), grad_b.location()),
                 ("device", "device", "device"), label)
@@ -452,12 +507,16 @@ class TestACL(unittest.TestCase):
                 expected_b = np.swapaxes(expected_b, -1, -2)
             while expected_b.ndim > b64.ndim:
                 expected_b = expected_b.sum(0)
+            tolerance = _fp32_matmul_tolerance(2e-5)
             np.testing.assert_allclose(product.numpy(), expected,
-                                       rtol=2e-5, atol=2e-5, err_msg=label)
+                                       rtol=tolerance, atol=tolerance,
+                                       err_msg=label)
             np.testing.assert_allclose(grad_a.numpy(), expected_a,
-                                       rtol=2e-5, atol=2e-5, err_msg=label)
+                                       rtol=tolerance, atol=tolerance,
+                                       err_msg=label)
             np.testing.assert_allclose(grad_b.numpy(), expected_b,
-                                       rtol=2e-5, atol=2e-5, err_msg=label)
+                                       rtol=tolerance, atol=tolerance,
+                                       err_msg=label)
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_argsort_values_indices_stay_on_acl(self):
@@ -630,6 +689,7 @@ class TestACL(unittest.TestCase):
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_bfloat16_add_sub_run_on_acl(self):
+        _skip_if_no_bfloat16()
         left_np = np.array([1.5, -2.0], dtype=np.float32)
         right_np = np.array([0.5, 4.0], dtype=np.float32)
         left = jt.array(left_np).bfloat16()
@@ -679,11 +739,12 @@ class TestACL(unittest.TestCase):
         x_np = rng.rand(10, 3, 50, 50).astype("float32")
         w_np = rng.rand(4, 3, 3, 3).astype("float32")
         mask_np = rng.rand(10, 4, 48, 48).astype("float32")
-        x, w, mask = map(jt.array, (x_np, w_np, mask_np))
-        y = jt.nn.conv2d(x, w)
-        y1 = y.numpy()
-        dx, dw = jt.grad((y * mask).sum(), [x, w])
-        dx1, dw1 = dx.numpy(), dw.numpy()
+        with _fp32_cube_scope():
+            x, w, mask = map(jt.array, (x_np, w_np, mask_np))
+            y = jt.nn.conv2d(x, w)
+            y1 = y.numpy()
+            dx, dw = jt.grad((y * mask).sum(), [x, w])
+            dx1, dw1 = dx.numpy(), dw.numpy()
 
         with jt.flag_scope(use_acl=0):
             x, w, mask = map(jt.array, (x_np, w_np, mask_np))
@@ -692,9 +753,10 @@ class TestACL(unittest.TestCase):
             dx, dw = jt.grad((y * mask).sum(), [x, w])
             dx2, dw2 = dx.numpy(), dw.numpy()
 
-        np.testing.assert_allclose(y1, y2, rtol=1e-4, atol=1e-5)
-        np.testing.assert_allclose(dx1, dx2, rtol=1e-4, atol=1e-5)
-        np.testing.assert_allclose(dw1, dw2, rtol=1e-4, atol=1e-5)
+        rtol, atol = (1e-4, 1e-5) if _acl_supports_fp32_cube() else (3e-2, 3e-2)
+        np.testing.assert_allclose(y1, y2, rtol=rtol, atol=atol)
+        np.testing.assert_allclose(dx1, dx2, rtol=rtol, atol=atol)
+        np.testing.assert_allclose(dw1, dw2, rtol=rtol, atol=atol)
         print('test_conv pass')
 
     @jt.flag_scope(use_acl=1)
@@ -704,11 +766,12 @@ class TestACL(unittest.TestCase):
         w_np = rng.randn(4, 3, 3, 3).astype("float32")
         b_np = rng.randn(4).astype("float32")
         mask_np = rng.randn(2, 4, 8, 8).astype("float32")
-        x, w, b, mask = map(jt.array, (x_np, w_np, b_np, mask_np))
-        y = jt.nn.conv2d(x, w, b, padding=1)
-        y1 = y.numpy()
-        dx, dw, db = jt.grad((y * mask).sum(), [x, w, b])
-        dx1, dw1, db1 = dx.numpy(), dw.numpy(), db.numpy()
+        with _fp32_cube_scope():
+            x, w, b, mask = map(jt.array, (x_np, w_np, b_np, mask_np))
+            y = jt.nn.conv2d(x, w, b, padding=1)
+            y1 = y.numpy()
+            dx, dw, db = jt.grad((y * mask).sum(), [x, w, b])
+            dx1, dw1, db1 = dx.numpy(), dw.numpy(), db.numpy()
 
         with jt.flag_scope(use_acl=0):
             x, w, b, mask = map(jt.array, (x_np, w_np, b_np, mask_np))
@@ -717,10 +780,11 @@ class TestACL(unittest.TestCase):
             dx, dw, db = jt.grad((y * mask).sum(), [x, w, b])
             dx2, dw2, db2 = dx.numpy(), dw.numpy(), db.numpy()
 
-        np.testing.assert_allclose(y1, y2, rtol=1e-4, atol=1e-5)
-        np.testing.assert_allclose(dx1, dx2, rtol=1e-4, atol=1e-5)
-        np.testing.assert_allclose(dw1, dw2, rtol=1e-4, atol=1e-5)
-        np.testing.assert_allclose(db1, db2, rtol=1e-4, atol=1e-5)
+        rtol, atol = (1e-4, 1e-5) if _acl_supports_fp32_cube() else (3e-2, 3e-2)
+        np.testing.assert_allclose(y1, y2, rtol=rtol, atol=atol)
+        np.testing.assert_allclose(dx1, dx2, rtol=rtol, atol=atol)
+        np.testing.assert_allclose(dw1, dw2, rtol=rtol, atol=atol)
+        np.testing.assert_allclose(db1, db2, rtol=rtol, atol=atol)
 
     @jt.flag_scope(use_acl=1)
     def test_matmul(self):
@@ -728,9 +792,12 @@ class TestACL(unittest.TestCase):
         # w = jt.rand(4,3,3,3)
         x = jt.rand(10, 10)
         w = jt.rand(10, 10)
-        y = jt.matmul(x, w)
+        with _fp32_cube_scope():
+            y = jt.matmul(x, w)
         ny = np.matmul(x.numpy(), w.numpy())
-        np.testing.assert_allclose(y.numpy(), ny, atol=1e-3, rtol=1e-3)
+        tolerance = _fp32_matmul_tolerance(1e-3)
+        np.testing.assert_allclose(
+            y.numpy(), ny, atol=tolerance, rtol=tolerance)
         print('test_matmul pass')
 
     @jt.flag_scope(use_acl=1)
@@ -747,6 +814,8 @@ class TestACL(unittest.TestCase):
             ("float32", 2e-5, 2e-5),
             ("bfloat16", 2e-2, 2e-2),
         ):
+            if dtype == "bfloat16" and not _acl_supports_bfloat16():
+                continue
             x = getattr(jt.array(x_np), dtype)()
             gamma = jt.array(gamma_np)
             with jt.no_grad():
@@ -765,6 +834,7 @@ class TestACL(unittest.TestCase):
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_serving_rms_norm_caches_mixed_dtype_weight(self):
+        _skip_if_no_bfloat16()
         rng = np.random.RandomState(20260831)
         x_np = rng.randn(2, 16).astype("float32")
         weight_np = rng.uniform(0.5, 1.5, size=(16,)).astype("float32")
@@ -796,6 +866,7 @@ class TestACL(unittest.TestCase):
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_serving_silu_and_mul_uses_cann_swiglu(self):
+        _skip_if_no_bfloat16()
         source_np = np.asarray(
             [[-1.28125, -0.63671875, -1.3828125, -1.5]],
             dtype=np.float32,
@@ -817,6 +888,7 @@ class TestACL(unittest.TestCase):
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_inference_split_uses_cann_split_with_size(self):
+        _skip_if_no_bfloat16()
         source_np = np.arange(20, dtype=np.float32).reshape(2, 10)
         source = jt.array(source_np).bfloat16()
 
@@ -896,22 +968,25 @@ class TestACL(unittest.TestCase):
             output, grad_x, grad_gamma = jt.fetch_sync(
                 [output, grad_x, grad_gamma]
             )
-            x_bf = _bfloat16_round(x_np)
-            gamma_bf = _bfloat16_round(gamma_np)
-            cotangent_bf = _bfloat16_round(cotangent_np)
-            x_var_bf = jt.array(x_bf).bfloat16()
-            gamma_var_bf = jt.array(gamma_bf).bfloat16()
-            output_bf = backend_hooks.rms_norm_cuda(
-                x_var_bf, gamma_var_bf, epsilon)
-            self.assertIsNotNone(output_bf)
-            grad_x_bf, grad_gamma_bf = jt.grad(
-                (output_bf * jt.array(cotangent_bf).bfloat16()).sum(),
-                [x_var_bf, gamma_var_bf],
-            )
-            bf_values = jt.fetch_sync([
-                output_bf.float32(), grad_x_bf.float32(),
-                grad_gamma_bf.float32(),
-            ])
+            if _acl_supports_bfloat16():
+                x_bf = _bfloat16_round(x_np)
+                gamma_bf = _bfloat16_round(gamma_np)
+                cotangent_bf = _bfloat16_round(cotangent_np)
+                x_var_bf = jt.array(x_bf).bfloat16()
+                gamma_var_bf = jt.array(gamma_bf).bfloat16()
+                output_bf = backend_hooks.rms_norm_cuda(
+                    x_var_bf, gamma_var_bf, epsilon)
+                self.assertIsNotNone(output_bf)
+                grad_x_bf, grad_gamma_bf = jt.grad(
+                    (output_bf * jt.array(cotangent_bf).bfloat16()).sum(),
+                    [x_var_bf, gamma_var_bf],
+                )
+                bf_values = jt.fetch_sync([
+                    output_bf.float32(), grad_x_bf.float32(),
+                    grad_gamma_bf.float32(),
+                ])
+            else:
+                bf_values = None
 
         np.testing.assert_allclose(
             output, expected_output, atol=2e-5, rtol=2e-5)
@@ -919,22 +994,23 @@ class TestACL(unittest.TestCase):
             grad_x, expected_grad_x, atol=3e-5, rtol=3e-5)
         np.testing.assert_allclose(
             grad_gamma, expected_grad_gamma, atol=3e-5, rtol=3e-5)
-        inverse_rms_bf = 1.0 / np.sqrt(
-            np.mean(x_bf * x_bf, axis=-1, keepdims=True) + epsilon)
-        weighted_bf = cotangent_bf * gamma_bf
-        expected_bf = (
-            _bfloat16_round(x_bf * inverse_rms_bf * gamma_bf),
-            _bfloat16_round(
-                weighted_bf * inverse_rms_bf
-                - x_bf * inverse_rms_bf ** 3
-                * np.mean(weighted_bf * x_bf, axis=-1, keepdims=True)
-            ),
-            _bfloat16_round(np.sum(
-                cotangent_bf * x_bf * inverse_rms_bf, axis=(0, 1))),
-        )
-        for actual, reference in zip(bf_values, expected_bf):
-            np.testing.assert_allclose(
-                actual, reference, atol=3e-2, rtol=3e-2)
+        if bf_values is not None:
+            inverse_rms_bf = 1.0 / np.sqrt(
+                np.mean(x_bf * x_bf, axis=-1, keepdims=True) + epsilon)
+            weighted_bf = cotangent_bf * gamma_bf
+            expected_bf = (
+                _bfloat16_round(x_bf * inverse_rms_bf * gamma_bf),
+                _bfloat16_round(
+                    weighted_bf * inverse_rms_bf
+                    - x_bf * inverse_rms_bf ** 3
+                    * np.mean(weighted_bf * x_bf, axis=-1, keepdims=True)
+                ),
+                _bfloat16_round(np.sum(
+                    cotangent_bf * x_bf * inverse_rms_bf, axis=(0, 1))),
+            )
+            for actual, reference in zip(bf_values, expected_bf):
+                np.testing.assert_allclose(
+                    actual, reference, atol=3e-2, rtol=3e-2)
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_training_embedding(self):
@@ -971,6 +1047,14 @@ class TestACL(unittest.TestCase):
             output_no_padding,
             grad_weight_no_padding,
         ])
+        if not _acl_supports_bfloat16():
+            for actual, expected in zip(
+                    values,
+                    (weight_np[indices_np], expected_grad,
+                     weight_np[indices_np], expected_grad_no_padding)):
+                np.testing.assert_allclose(
+                    actual, expected, atol=2e-5, rtol=2e-5)
+            return
         weight_bf = _bfloat16_round(weight_np)
         cotangent_bf = _bfloat16_round(cotangent_np)
         weight_var_bf = jt.array(weight_bf).bfloat16()
@@ -1013,6 +1097,7 @@ class TestACL(unittest.TestCase):
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_serving_grouped_add_rms_norm_matches_separate_ops(self):
+        _skip_if_no_bfloat16()
         rng = np.random.RandomState(20260902)
         hidden_np = rng.randn(3, 128).astype("float32")
         residual_np = rng.randn(3, 128).astype("float32")
@@ -1043,11 +1128,13 @@ class TestACL(unittest.TestCase):
         angles = rng.randn(1, 1, 7, 128).astype("float32")
         cos_np = np.cos(angles)
         sin_np = np.sin(angles)
-        dtype_cases = (
-            ("float32", 2e-5, 2e-5),
-            ("float16", 3e-3, 3e-3),
-            ("bfloat16", 3e-2, 3e-2),
-        )
+        dtype_cases = tuple(
+            case for case in (
+                ("float32", 2e-5, 2e-5),
+                ("float16", 3e-3, 3e-3),
+                ("bfloat16", 3e-2, 3e-2),
+            )
+            if case[0] != "bfloat16" or _acl_supports_bfloat16())
 
         def expected(x, cos, sin):
             half = x.shape[-1] // 2
@@ -1200,25 +1287,28 @@ class TestACL(unittest.TestCase):
             values = jt.fetch_sync([
                 output_q, output_k, grad_q, grad_k, grad_cos, grad_sin
             ])
-            q_bf, k_bf = _bfloat16_round(q_np), _bfloat16_round(k_np)
-            cos_bf, sin_bf = _bfloat16_round(cos_np), _bfloat16_round(sin_np)
-            grad_q_bf = _bfloat16_round(grad_q_np)
-            grad_k_bf = _bfloat16_round(grad_k_np)
-            q_var_bf = jt.array(q_bf).bfloat16()
-            k_var_bf = jt.array(k_bf).bfloat16()
-            cos_var_bf = jt.array(cos_bf).bfloat16()
-            sin_var_bf = jt.array(sin_bf).bfloat16()
-            output_q_bf, output_k_bf = jt.nn.rotary_emb(
-                q_var_bf, k_var_bf,
-                freq_cos=cos_var_bf, freq_sin=sin_var_bf)
-            bf_grads = jt.grad(
-                (output_q_bf * jt.array(grad_q_bf).bfloat16()).sum()
-                + (output_k_bf * jt.array(grad_k_bf).bfloat16()).sum(),
-                [q_var_bf, k_var_bf, cos_var_bf, sin_var_bf],
-            )
-            bf_values = jt.fetch_sync([
-                output_q_bf.float32(), output_k_bf.float32()
-            ] + [value.float32() for value in bf_grads])
+            if _acl_supports_bfloat16():
+                q_bf, k_bf = _bfloat16_round(q_np), _bfloat16_round(k_np)
+                cos_bf, sin_bf = _bfloat16_round(cos_np), _bfloat16_round(sin_np)
+                grad_q_bf = _bfloat16_round(grad_q_np)
+                grad_k_bf = _bfloat16_round(grad_k_np)
+                q_var_bf = jt.array(q_bf).bfloat16()
+                k_var_bf = jt.array(k_bf).bfloat16()
+                cos_var_bf = jt.array(cos_bf).bfloat16()
+                sin_var_bf = jt.array(sin_bf).bfloat16()
+                output_q_bf, output_k_bf = jt.nn.rotary_emb(
+                    q_var_bf, k_var_bf,
+                    freq_cos=cos_var_bf, freq_sin=sin_var_bf)
+                bf_grads = jt.grad(
+                    (output_q_bf * jt.array(grad_q_bf).bfloat16()).sum()
+                    + (output_k_bf * jt.array(grad_k_bf).bfloat16()).sum(),
+                    [q_var_bf, k_var_bf, cos_var_bf, sin_var_bf],
+                )
+                bf_values = jt.fetch_sync([
+                    output_q_bf.float32(), output_k_bf.float32()
+                ] + [value.float32() for value in bf_grads])
+            else:
+                bf_values = None
 
         expected = (
             expected_q,
@@ -1231,28 +1321,29 @@ class TestACL(unittest.TestCase):
         for actual, reference in zip(values, expected):
             np.testing.assert_allclose(
                 actual, reference, atol=3e-5, rtol=3e-5)
-        rotate_q_bf, rotate_k_bf = rotate_half(q_bf), rotate_half(k_bf)
-        grad_cos_q = _bfloat16_round(np.sum(
-            grad_q_bf * q_bf, axis=1, keepdims=True))
-        grad_cos_k = _bfloat16_round(np.sum(
-            grad_k_bf * k_bf, axis=1, keepdims=True))
-        grad_sin_q = _bfloat16_round(np.sum(
-            grad_q_bf * rotate_q_bf, axis=1, keepdims=True))
-        grad_sin_k = _bfloat16_round(np.sum(
-            grad_k_bf * rotate_k_bf, axis=1, keepdims=True))
-        expected_bf = (
-            _bfloat16_round(q_bf * cos_bf + rotate_q_bf * sin_bf),
-            _bfloat16_round(k_bf * cos_bf + rotate_k_bf * sin_bf),
-            _bfloat16_round(
-                grad_q_bf * cos_bf - rotate_half(grad_q_bf * sin_bf)),
-            _bfloat16_round(
-                grad_k_bf * cos_bf - rotate_half(grad_k_bf * sin_bf)),
-            _bfloat16_round(grad_cos_q + grad_cos_k),
-            _bfloat16_round(grad_sin_q + grad_sin_k),
-        )
-        for actual, reference in zip(bf_values, expected_bf):
-            np.testing.assert_allclose(
-                actual, reference, atol=6e-2, rtol=6e-2)
+        if bf_values is not None:
+            rotate_q_bf, rotate_k_bf = rotate_half(q_bf), rotate_half(k_bf)
+            grad_cos_q = _bfloat16_round(np.sum(
+                grad_q_bf * q_bf, axis=1, keepdims=True))
+            grad_cos_k = _bfloat16_round(np.sum(
+                grad_k_bf * k_bf, axis=1, keepdims=True))
+            grad_sin_q = _bfloat16_round(np.sum(
+                grad_q_bf * rotate_q_bf, axis=1, keepdims=True))
+            grad_sin_k = _bfloat16_round(np.sum(
+                grad_k_bf * rotate_k_bf, axis=1, keepdims=True))
+            expected_bf = (
+                _bfloat16_round(q_bf * cos_bf + rotate_q_bf * sin_bf),
+                _bfloat16_round(k_bf * cos_bf + rotate_k_bf * sin_bf),
+                _bfloat16_round(
+                    grad_q_bf * cos_bf - rotate_half(grad_q_bf * sin_bf)),
+                _bfloat16_round(
+                    grad_k_bf * cos_bf - rotate_half(grad_k_bf * sin_bf)),
+                _bfloat16_round(grad_cos_q + grad_cos_k),
+                _bfloat16_round(grad_sin_q + grad_sin_k),
+            )
+            for actual, reference in zip(bf_values, expected_bf):
+                np.testing.assert_allclose(
+                    actual, reference, atol=6e-2, rtol=6e-2)
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_rotary_embedding_composite_gradient(self):
@@ -1309,45 +1400,64 @@ class TestACL(unittest.TestCase):
             return np.matmul(weights, value)
 
         q, k, v = jt.array(q_np), jt.array(k_np), jt.array(v_np)
-        with jt.no_grad(), jt.log_capture_scope(
-                log_v=0, log_vprefix="acl_op_exec.cc=100") as logs:
-            prefill = backend_hooks.acl_scaled_dot_product_attention(
-                q, k, v, is_causal=True, enable_gqa=True)
-            decode = backend_hooks.acl_scaled_dot_product_attention(
-                q[:, :, :1, :], k, v, enable_gqa=True)
-            additive = backend_hooks.acl_scaled_dot_product_attention(
-                q, k, v, attn_mask=jt.array(additive_np), enable_gqa=True)
-            self.assertIsNotNone(prefill)
-            self.assertIsNotNone(decode)
-            self.assertIsNotNone(additive)
-            prefill, decode, additive = jt.fetch_sync(
-                [prefill, decode, additive])
+        # fp32 prefill needs the FP32 cube path (or its explicit
+        # allow-hf32 opt-in, which is off here); Ascend310P has neither, so
+        # its fp32 coverage lives in the fp16 composite assertions below.
+        if _acl_supports_fp32_cube():
+            with jt.no_grad(), jt.log_capture_scope(
+                    log_v=0, log_vprefix="acl_op_exec.cc=100") as logs:
+                prefill = backend_hooks.acl_scaled_dot_product_attention(
+                    q, k, v, is_causal=True, enable_gqa=True)
+                decode = backend_hooks.acl_scaled_dot_product_attention(
+                    q[:, :, :1, :], k, v, enable_gqa=True)
+                additive = backend_hooks.acl_scaled_dot_product_attention(
+                    q, k, v, attn_mask=jt.array(additive_np), enable_gqa=True)
+                self.assertIsNotNone(prefill)
+                self.assertIsNotNone(decode)
+                self.assertIsNotNone(additive)
+                prefill, decode, additive = jt.fetch_sync(
+                    [prefill, decode, additive])
 
-            q_bf16 = q.bfloat16()
-            k_bf16 = k.bfloat16()
-            v_bf16 = v.bfloat16()
-            prefill_bf16 = backend_hooks.acl_scaled_dot_product_attention(
-                q_bf16, k_bf16, v_bf16,
-                is_causal=True, enable_gqa=True)
-            decode_bf16 = backend_hooks.acl_scaled_dot_product_attention(
-                q_bf16[:, :, :1, :], k_bf16, v_bf16,
-                enable_gqa=True)
-            self.assertIsNotNone(prefill_bf16)
-            self.assertIsNotNone(decode_bf16)
-            self.assertEqual(str(prefill_bf16.dtype), "bfloat16")
-            self.assertEqual(str(decode_bf16.dtype), "bfloat16")
-            self.assertEqual(
-                backend_hooks.acl_scaled_dot_product_attention.backend_name,
-                "acl_incre_flash_attention_v4")
-            prefill_bf16, decode_bf16 = jt.fetch_sync([
-                prefill_bf16.float32(), decode_bf16.float32()])
+            np.testing.assert_allclose(
+                prefill, expected(q_np, k_np, v_np, True), atol=3e-5, rtol=3e-5)
+            np.testing.assert_allclose(
+                decode, expected(q_np[:, :, :1, :], k_np, v_np, False),
+                atol=3e-5, rtol=3e-5)
+            np.testing.assert_allclose(
+                additive, expected(q_np, k_np, v_np, False, additive_np),
+                atol=3e-5, rtol=3e-5)
 
-            # float16: the same fused kernel as float32 (query_length > 1
-            # never qualifies for the bfloat16-only incre-decode path above,
-            # so both prefill and this GQA-decode shape go through
-            # aclnnFlashAttentionScoreV2, which forwards the query's own
-            # dtype and does not reject float16 -- verified against a numpy
-            # reference, see KI-BACKEND-017 cause 6).
+        if _acl_supports_bfloat16():
+            with jt.no_grad(), jt.log_capture_scope(
+                    log_v=0, log_vprefix="acl_op_exec.cc=100") as logs:
+                q_bf16 = q.bfloat16()
+                k_bf16 = k.bfloat16()
+                v_bf16 = v.bfloat16()
+                prefill_bf16 = backend_hooks.acl_scaled_dot_product_attention(
+                    q_bf16, k_bf16, v_bf16,
+                    is_causal=True, enable_gqa=True)
+                decode_bf16 = backend_hooks.acl_scaled_dot_product_attention(
+                    q_bf16[:, :, :1, :], k_bf16, v_bf16,
+                    enable_gqa=True)
+                self.assertIsNotNone(prefill_bf16)
+                self.assertIsNotNone(decode_bf16)
+                self.assertEqual(str(prefill_bf16.dtype), "bfloat16")
+                self.assertEqual(str(decode_bf16.dtype), "bfloat16")
+                self.assertEqual(
+                    backend_hooks.acl_scaled_dot_product_attention.backend_name,
+                    "acl_incre_flash_attention_v4")
+                prefill_bf16, decode_bf16 = jt.fetch_sync([
+                    prefill_bf16.float32(), decode_bf16.float32()])
+
+            np.testing.assert_allclose(
+                prefill_bf16, expected(q_np, k_np, v_np, True),
+                atol=2e-3, rtol=2e-2)
+            np.testing.assert_allclose(
+                decode_bf16,
+                expected(q_np[:, :, :1, :], k_np, v_np, False),
+                atol=2e-3, rtol=2e-2)
+
+        with jt.no_grad():
             q_fp16 = q.float16()
             k_fp16 = k.float16()
             v_fp16 = v.float16()
@@ -1361,51 +1471,95 @@ class TestACL(unittest.TestCase):
             self.assertIsNotNone(decode_fp16)
             self.assertEqual(str(prefill_fp16.dtype), "float16")
             self.assertEqual(str(decode_fp16.dtype), "float16")
-            self.assertEqual(
-                backend_hooks.acl_scaled_dot_product_attention.backend_name,
-                "acl_flash_attention_score_v2")
             prefill_fp16, decode_fp16 = jt.fetch_sync([
                 prefill_fp16.float32(), decode_fp16.float32()])
 
-            # aclnn's additive-mask ("pse") slot has to match the query's own
-            # dtype exactly (AclNN_Parameter_Error EZ1001 otherwise, verified
-            # directly on a 910B3) -- a float32 mask with a non-float32
-            # query must fall back, not crash, whichever of the two dtypes
-            # this build happens to exercise first.
-            additive_bf16 = backend_hooks.acl_scaled_dot_product_attention(
-                q_bf16, k_bf16, v_bf16,
-                attn_mask=jt.array(additive_np), enable_gqa=True)
-            additive_fp16 = backend_hooks.acl_scaled_dot_product_attention(
-                q_fp16, k_fp16, v_fp16,
-                attn_mask=jt.array(additive_np), enable_gqa=True)
-            self.assertIsNone(additive_bf16)
-            self.assertIsNone(additive_fp16)
+        np.testing.assert_allclose(prefill_fp16, expected(q_np, k_np, v_np, True), atol=2e-2, rtol=2e-2)
+        np.testing.assert_allclose(decode_fp16, expected(q_np[:, :, :1, :], k_np, v_np, False), atol=2e-2, rtol=2e-2)
+        with jt.no_grad():
+            self.assertIsNone(backend_hooks.acl_scaled_dot_product_attention(q.float16(), k.float16(), v.float16(), attn_mask=jt.array(additive_np), enable_gqa=True))
+        self.assertIsNone(backend_hooks.acl_scaled_dot_product_attention(q, k, v, dropout_p=0.1, enable_gqa=True))
 
-        np.testing.assert_allclose(
-            prefill, expected(q_np, k_np, v_np, True), atol=3e-5, rtol=3e-5)
-        np.testing.assert_allclose(
-            decode, expected(q_np[:, :, :1, :], k_np, v_np, False),
-            atol=3e-5, rtol=3e-5)
-        np.testing.assert_allclose(
-            additive, expected(q_np, k_np, v_np, False, additive_np),
-            atol=3e-5, rtol=3e-5)
-        np.testing.assert_allclose(
-            prefill_bf16, expected(q_np, k_np, v_np, True),
-            atol=2e-3, rtol=2e-2)
-        np.testing.assert_allclose(
-            decode_bf16,
-            expected(q_np[:, :, :1, :], k_np, v_np, False),
-            atol=2e-3, rtol=2e-2)
-        np.testing.assert_allclose(
-            prefill_fp16, expected(q_np, k_np, v_np, True),
-            atol=2e-2, rtol=2e-2)
-        np.testing.assert_allclose(
-            decode_fp16,
-            expected(q_np[:, :, :1, :], k_np, v_np, False),
-            atol=2e-2, rtol=2e-2)
+    @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_310p_masked_incremental_attention_gqa_and_broadcast(self):
+        from jittor._runtime.fallback import forbid_backend_fallbacks
+        from jittor.backends.acl.kernels._soc import soc_name
 
-        self.assertIsNone(backend_hooks.acl_scaled_dot_product_attention(
-            q, k, v, dropout_p=0.1, enable_gqa=True))
+        if not soc_name().startswith("Ascend310P") or _acl_kernel_available("FlashAttention"):
+            self.skipTest("masked FP16 incremental attention route is scoped to Ascend310P without FlashAttentionScore")
+
+        def reference(query, key, value, keep):
+            batch, heads, _, width = query.shape
+            length = key.shape[-2]
+            group = heads // key.shape[1]
+            keys = np.repeat(key.astype(np.float64), group, axis=1)
+            values = np.repeat(value.astype(np.float64), group, axis=1)
+            scores = np.matmul(query.astype(np.float64), keys.swapaxes(-1, -2))
+            scores *= width ** -0.5
+            keep = (np.ones((batch, 1, 1, length), dtype=bool) if keep is None
+                    else np.broadcast_to(keep, (batch, 1, 1, length)))
+            any_kept = keep.any(axis=-1, keepdims=True)
+            scores = np.where(keep, scores, -np.inf)
+            maxima = np.where(any_kept, scores.max(axis=-1, keepdims=True), 0.0)
+            weights = np.where(keep, np.exp(scores - maxima), 0.0)
+            denominator = weights.sum(axis=-1, keepdims=True)
+            weights = np.divide(weights, denominator, out=np.zeros_like(weights),
+                                where=denominator != 0)
+            return np.matmul(weights, values), ~any_kept.reshape(batch)
+
+        rng = np.random.RandomState(20261012)
+        fallback_before = jt.core.backend_fallback_count()
+        with jt.no_grad(), forbid_backend_fallbacks():
+            for batch in (1, 2):
+                for length in (64, 502):
+                    q_np = (rng.randn(batch, 16, 1, 128) * 0.2).astype(np.float16)
+                    k_np = (rng.randn(batch, 8, length, 128) * 0.2).astype(np.float16)
+                    v_np = (rng.randn(batch, 8, length, 128) * 0.2).astype(np.float16)
+                    q, k, v = (jt.array(array) for array in (q_np, k_np, v_np))
+                    padding = np.zeros((batch, 1, 1, length), dtype=bool)
+                    for row in range(batch):
+                        padding[row, :, :, :length // 2 + row * 7] = True
+                    cases = [
+                        ("unmasked_before", None),
+                        ("per_batch_padding", padding),
+                        ("broadcast_batch_4d", padding[:1]),
+                        ("broadcast_batch_2d", padding[0, 0]),
+                        ("broadcast_keep_all", np.ones((1, 1), dtype=bool)),
+                        ("all_masked", np.zeros_like(padding)),
+                        ("broadcast_all_masked", np.zeros((1, 1, 1, 1), dtype=bool)),
+                    ]
+                    if batch == 2:
+                        mixed = padding.copy()
+                        mixed[1] = False
+                        cases.extend([
+                            ("one_batch_masked", mixed),
+                            ("broadcast_keys_per_batch", np.array([True, False]).reshape(2, 1, 1, 1)),
+                        ])
+                    cases.append(("unmasked_after", None))
+                    unmasked_before = None
+                    for name, keep in cases:
+                        with self.subTest(batch=batch, length=length, mask=name):
+                            mask = None if keep is None else jt.array(keep, dtype="bool")
+                            output = backend_hooks.acl_scaled_dot_product_attention(
+                                q, k, v, attn_mask=mask, enable_gqa=True)
+                            self.assertIsNotNone(output)
+                            self.assertEqual(
+                                backend_hooks.acl_scaled_dot_product_attention.backend_name,
+                                "acl_incre_flash_attention_v4")
+                            self.assertEqual(str(output.dtype), "float16")
+                            _assert_acl_device(self, output)
+                            actual = output.numpy()
+                            expected, all_masked = reference(q_np, k_np, v_np, keep)
+                            self.assertEqual(actual.shape, q_np.shape)
+                            self.assertTrue(np.isfinite(actual).all())
+                            np.testing.assert_allclose(actual, expected, rtol=3e-3, atol=3e-4)
+                            np.testing.assert_array_equal(
+                                actual[all_masked], np.zeros_like(actual[all_masked]))
+                            if name == "unmasked_before":
+                                unmasked_before = actual.copy()
+                            elif name == "unmasked_after":
+                                np.testing.assert_array_equal(actual, unmasked_before)
+        self.assertEqual(jt.core.backend_fallback_count() - fallback_before, 0)
 
     @jt.flag_scope(use_acl=1)
     def test_max(self):
@@ -1596,7 +1750,8 @@ class TestACL(unittest.TestCase):
         from jittor.models import resnet50
         net = resnet50()
         x = jt.rand(2, 3, 224, 224)
-        y = net(x)
+        with _fp32_cube_scope():
+            y = net(x)
         y.sync()
 
 
@@ -1654,21 +1809,22 @@ class TestExample(unittest.TestCase):
         model = Model(input_size=1)
         ps = model.parameters()
 
-        for i, (x, y) in enumerate(get_data(n)):
-            jt.sync_all(True)
-            pred_y = model(x).name("pred_y")
-            loss = ((pred_y - y).sqr()).name("loss")
-            loss_mean = loss.mean()
+        with _fp32_cube_scope():
+            for i, (x, y) in enumerate(get_data(n)):
+                jt.sync_all(True)
+                pred_y = model(x).name("pred_y")
+                loss = ((pred_y - y).sqr()).name("loss")
+                loss_mean = loss.mean()
 
-            gs = jt.grad(loss_mean, ps)
-            for p, g in zip(ps, gs):
-                p -= g * lr
-            if i > 2:
-                assert prev == _test_liveness_snapshot(jt), f"memory leak {prev} {_test_liveness_snapshot(jt)}"
-            prev = _test_liveness_snapshot(jt)
-            print(
-                f"step {i}, loss = {loss_mean.data.sum()} {_test_liveness_snapshot(jt)}"
-            )
+                gs = jt.grad(loss_mean, ps)
+                for p, g in zip(ps, gs):
+                    p -= g * lr
+                if i > 2:
+                    assert prev == _test_liveness_snapshot(jt), f"memory leak {prev} {_test_liveness_snapshot(jt)}"
+                prev = _test_liveness_snapshot(jt)
+                print(
+                    f"step {i}, loss = {loss_mean.data.sum()} {_test_liveness_snapshot(jt)}"
+                )
 
         # The exact converged loss depends on the RNG stream and op
         # execution order, which vary across builds, so an exact-match

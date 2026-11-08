@@ -407,18 +407,19 @@ def _normalize_seed(value, *, integer=False):
 
 def _manual_seed(s):
     ctx = _misc_context()
-    g = ctx.jittor_module
-    s = int(s)
-    if s < -(1 << 63) or s >= 1 << 64:
-        raise RuntimeError("manual_seed expects a seed in the supported 64-bit range")
-    s %= 1 << 64
-    # Flush pending random work before changing the process-owned streams.
-    # This keeps lazy graph construction from running under the new seed.
-    jt.set_cpu_seed(s)
-    if g.cuda.is_available():
-        g.cuda.manual_seed_all(s)
-    ctx.state["core_misc"]["seed"] = s
-    return g
+    value = _normalize_seed(s)
+    # One physical owner resets CPU, accelerator defaults and callbacks. This
+    # never calls the convenience API that also reseeds Python and NumPy.
+    jt.core._set_seed64(value)
+    ctx.state["core_misc"]["seed"] = value
+    return ctx.target_namespace.default_generator
+
+
+def _manual_seed_cpu(s):
+    value = _normalize_seed(s, integer=True)
+    jt.core.rng_manual_seed("cpu", value)
+    _misc_context().state["core_misc"]["seed"] = value
+
 
 
 def _torch_seed():
@@ -442,7 +443,11 @@ def _seed(value=_seed_sentinel):
 
 
 def _get_rng_state():
-    return _encode_rng_state(jt.get_cpu_rng_state())
+    """A CPU ByteTensor holding the native host engine's complete state."""
+    g = _misc_context().target_namespace
+    payload = jt.core.rng_state("cpu").encode("ascii")
+    return g.tensor(_np.frombuffer(payload, dtype=_np.uint8).copy(),
+                    dtype=g.uint8, device="cpu")
 
 
 def _encode_rng_state(state):
@@ -463,8 +468,20 @@ def _decode_rng_state(state):
 
 def _set_rng_state(state):
     ctx = _misc_context()
-    jt.set_cpu_rng_state(_decode_rng_state(state))
-    ctx.state["core_misc"]["seed"] = int(jt.get_cpu_initial_seed())
+    if not isinstance(state, jt.Var):
+        raise TypeError("RNG state must be a CPU ByteTensor")
+    if _jittor_dtype_name(state.dtype) != "uint8" or len(state.shape) != 1:
+        raise TypeError("RNG state must be a one-dimensional ByteTensor; legacy seed-only states cannot restore a stream")
+    if state.device.type != "cpu":
+        raise TypeError("RNG state must be a CPU ByteTensor")
+    try:
+        payload = state.numpy().tobytes().decode("ascii")
+    except UnicodeDecodeError as error:
+        raise ValueError("RNG state is not a native CPU generator snapshot") from error
+    # Native validation is atomic and synchronizes pending random work before
+    # restoring the host engine. Reseeding here would reset CUDA streams too.
+    jt.core.set_rng_state("cpu", payload)
+    ctx.state["core_misc"]["seed"] = int(jt.core.rng_initial_seed("cpu"))
 
 
 class PyTorchFileReader:
@@ -972,8 +989,18 @@ def get_autocast_gpu_dtype(*args, **kwargs):
 
 
 def are_deterministic_algorithms_enabled():
-    """Read the accelerator's own policy, not a flag kept here."""
-    return bool(jt.core.backend_get_deterministic_algorithms())
+    """Read the accelerator's own policy, not a flag kept here.
+
+    Torch's query is answered on every device; only the CPU backend has no
+    runtime knob here, so "not supported" means "not enabled" rather than an
+    error. Libraries such as torchmetrics ask this unconditionally.
+    """
+    try:
+        return bool(jt.core.backend_get_deterministic_algorithms())
+    except RuntimeError as error:
+        if "does not support deterministic algorithm policy" in str(error):
+            return False
+        raise
 
 
 def use_deterministic_algorithms(mode, *, warn_only=False):
@@ -985,7 +1012,14 @@ def use_deterministic_algorithms(mode, *, warn_only=False):
     # Work already built was planned under the old policy; run it before the
     # option changes underneath it.
     jt.sync_all(True)
-    jt.core.backend_set_deterministic_algorithms(mode)
+    try:
+        jt.core.backend_set_deterministic_algorithms(mode)
+    except RuntimeError as error:
+        # Disabling a policy that was never available is already the state the
+        # caller asked for. Enabling it must still fail loudly.
+        if not mode and "does not support deterministic algorithm policy" in str(error):
+            return
+        raise
 
 
 def is_floating_point(value):
@@ -1210,7 +1244,7 @@ _MISC_DETAILS = {
     "clear_autocast_cache": "jittor keeps no cached weight casts, so the postcondition already holds",
     "autocast_increment_nesting": "real thread-local nesting depth, as torch's counter",
     "autocast_decrement_nesting": "real thread-local nesting depth, as torch's counter",
-    "use_deterministic_algorithms": "sets the accelerator runtime's own deterministic option; warn_only is refused",
+    "use_deterministic_algorithms": "sets and reads back the native provider policy; providers without control accept only the default disabled state; warn_only is refused",
     "get_rng_state": "versioned native CPU generator snapshot in a CPU ByteTensor; bytes are not portable to PyTorch",
     "set_rng_state": "restores the native CPU generator seed and exact stream position; foreign or legacy seed-only states are refused",
     "norm": "existing Torch norm adapter; out and extra keyword semantics are not implemented",
@@ -1220,7 +1254,7 @@ _MISC_DETAILS = {
     "finfo": "NumPy limits plus declared metadata-only low-precision specs; this does not enable their computation",
     "iinfo": "NumPy integer-limit metadata for supported dtype names",
     "is_autocast_available": "answers for the backends this build can run -- cpu and cuda always, npu when ACL is built -- so it is False for the xpu/mps/xla/ipu/mtia device types torch answers True for",
-    "are_deterministic_algorithms_enabled": "reads the accelerator runtime's own deterministic option",
+    "are_deterministic_algorithms_enabled": "reads the native provider policy; enforcement is disabled when the provider has no policy control",
     "as_strided": "gather-based view; reads are exact but the result does not alias the input storage",
     "empty_strided": "contiguous allocation; the requested strides are not honored",
 }

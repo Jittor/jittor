@@ -29,6 +29,8 @@
 #include "aclnn/aclnn.h"
 #include <aclnnop/aclnn_cross_entropy_loss.h>
 #include <aclnnop/aclnn_cross_entropy_loss_grad.h>
+#include <aclnnop/aclnn_nll_loss.h>
+#include <aclnnop/aclnn_nll_loss_backward.h>
 #include "cross_entropy_loss_op_acl.h"
 
 namespace jittor
@@ -55,6 +57,16 @@ namespace jittor
 
     void CrossEntropyLossOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
+        if (jt_name == "nll_loss")
+        {
+            constexpr int64_t reduction = 0; // none
+            ret = aclnnNLLLossGetWorkspaceSize(
+                inputTensors[0], inputTensors[1], inputTensors[2], reduction,
+                /*ignoreIndex=*/-100, outputTensors[0], outputTensors[1],
+                &workspaceSize, &executor);
+            launch(ret, aclnnNLLLoss, true);
+            return;
+        }
         // The parameter is a non-const char*, hence the local buffer.
         static char reduction[] = "none";
         // zlossOut and lseForZlossOut are rejected as null even with
@@ -76,6 +88,16 @@ namespace jittor
 
     void CrossEntropyLossBackwardOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
+        if (jt_name == "nll_loss_backward")
+        {
+            constexpr int64_t reduction = 0; // none
+            ret = aclnnNLLLossBackwardGetWorkspaceSize(
+                inputTensors[0], inputTensors[1], inputTensors[2], inputTensors[3],
+                reduction, /*ignoreIndex=*/-100, inputTensors[4], outputTensors[0],
+                &workspaceSize, &executor);
+            launch(ret, aclnnNLLLossBackward, true);
+            return;
+        }
         static char reduction[] = "none";
         ret = aclnnCrossEntropyLossGradGetWorkspaceSize(
             inputTensors[0], inputTensors[1], inputTensors[2], nullptr, nullptr, nullptr,

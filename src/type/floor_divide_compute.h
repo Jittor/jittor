@@ -6,6 +6,8 @@
 // ***************************************************************
 #pragma once
 #include <math.h>
+#include <atomic>
+#include <type_traits>
 #include "core/common.h"
 
 namespace jittor {
@@ -16,11 +18,48 @@ namespace jittor {
 #define JT_FLOOR_DIVIDE_HD
 #endif
 
+// An integer division by zero on the host is an error, as in torch's CPU
+// kernels ("RuntimeError: ZeroDivisionError"): the guard below still returns
+// NumPy's 0, so no lane traps, and also raises this flag, which the executor
+// turns into an exception once the operator has run (exec_runner.cc). CUDA
+// kernels leave it alone, again as torch does: there the result is
+// unspecified and nothing is raised.
+#if !defined(JIT_cuda) || defined(IS_ACL)
+EXTERN_LIB std::atomic<int> int_division_by_zero;
+#define JT_INT_ZERO_DIVISOR() int_division_by_zero.store(1, std::memory_order_relaxed)
+#else
+#define JT_INT_ZERO_DIVISOR() ((void)0)
+#endif
+
 // C++ integer division truncates toward zero. Python, NumPy, and Torch floor
 // toward negative infinity, so subtract one exactly when truncation discarded
 // a remainder and the operands have opposite signs.
+// Integer division by zero, and MIN / -1 -- the one quotient that overflows --
+// are not left to the hardware: x86 traps both (SIGFPE, which killed the
+// process with nothing to catch), and CUDA returned an arbitrary all-ones
+// value. They take NumPy's answers on every device instead: x // 0, x % 0 and
+// fmod(x, 0) are 0, MIN // -1 wraps to MIN, and MIN % -1 is 0. Unsigned types
+// and bool have no -1, so only their zero divisor is guarded.
+template <class T, bool = std::is_integral<T>::value && std::is_signed<T>::value>
+struct _int_division_guard {
+    static JT_FLOOR_DIVIDE_HD inline bool minus_one(T) { return false; }
+    static JT_FLOOR_DIVIDE_HD inline T negate(T x) { return x; }
+};
+
+template <class T>
+struct _int_division_guard<T, true> {
+    static JT_FLOOR_DIVIDE_HD inline bool minus_one(T y) { return y == T(-1); }
+    // -x in the unsigned type, where MIN wraps to itself instead of overflowing.
+    static JT_FLOOR_DIVIDE_HD inline T negate(T x) {
+        typedef typename std::make_unsigned<T>::type U;
+        return T(U(0) - U(x));
+    }
+};
+
 template <class T>
 JT_FLOOR_DIVIDE_HD inline T _floor_divide(T x, T y) {
+    if (y == T(0)) { JT_INT_ZERO_DIVISOR(); return T(0); }
+    if (_int_division_guard<T>::minus_one(y)) return _int_division_guard<T>::negate(x);
     T quotient = x / y;
     T remainder = x % y;
     return quotient - T(remainder != 0 && ((remainder < 0) != (y < 0)));
@@ -34,6 +73,8 @@ JT_FLOOR_DIVIDE_HD inline T _floor_divide(T x, T y) {
 // never true there, so no adjustment is made.
 template <class T>
 JT_FLOOR_DIVIDE_HD inline T _floor_mod(T x, T y) {
+    if (y == T(0)) { JT_INT_ZERO_DIVISOR(); return T(0); }
+    if (_int_division_guard<T>::minus_one(y)) return T(0);
     T remainder = x % y;
     return remainder + T(remainder != 0 && ((remainder < 0) != (y < 0))) * y;
 }
@@ -78,10 +119,16 @@ JT_FLOOR_DIVIDE_HD inline T _floor_mod_float(T x, T y) {
 }
 
 // Truncated remainder (C fmod): the sign of the dividend. Integers use the
-// C `%` operator, which truncates the same way.
+// C `%` operator, which truncates the same way; a zero or -1 divisor is
+// guarded as in _floor_divide.
 template <class T>
-JT_FLOOR_DIVIDE_HD inline T _fmod_int(T x, T y) { return x % y; }
+JT_FLOOR_DIVIDE_HD inline T _fmod_int(T x, T y) {
+    if (y == T(0)) { JT_INT_ZERO_DIVISOR(); return T(0); }
+    if (_int_division_guard<T>::minus_one(y)) return T(0);
+    return x % y;
+}
 
 #undef JT_FLOOR_DIVIDE_HD
+#undef JT_INT_ZERO_DIVISOR
 
 } // jittor

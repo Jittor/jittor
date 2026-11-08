@@ -63,7 +63,9 @@ _FIXTURE_TESTS = {
     "test_two.py": "def test_c():\n    pass\n\n\ndef test_d():\n    pass\n",
 }
 _EXPECTED = 4
-_PARALLEL = ("-n", "2", "--dist", "loadfile")
+# Plugin registration does not travel from a parent pytest process. The
+# fixture children must work with PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 as well.
+_PARALLEL = ("-p", "xdist.plugin", "-n", "2", "--dist", "loadfile")
 
 
 def _write_fixture_suite(directory):

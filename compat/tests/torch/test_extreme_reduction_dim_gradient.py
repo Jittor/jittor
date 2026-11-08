@@ -56,7 +56,7 @@ def _canonical_npu_guard():
     root = Path(
         os.environ.get("JITTOR_SOURCE_ROOT", str(Path(__file__).resolve().parents[3]))
     ).resolve()
-    source = root / "agent/skills/jittor-transformers-perf/scripts/benchmark_qwen3_ascend.py"
+    source = root / "benchmarks/profiling/benchmark_qwen3_ascend.py"
     spec = importlib.util.spec_from_file_location("_public_extrema_npu_placement", source)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

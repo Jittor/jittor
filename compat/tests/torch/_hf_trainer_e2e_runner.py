@@ -69,10 +69,36 @@ def _cpu_runtime_evidence(torch):
             "its optimizer registration can initialize an NPU during a CPU AdamW step"
         )
     npu = getattr(torch, "npu", None)
+    initialization_evidence = "namespace_absent"
+    initialized = False
+    if hasattr(torch, "_torch_compat_install_context"):
+        # A non-ACL build cannot own an initialized ACL runtime. Check the
+        # loaded build before calling any discovery API: on an ACL build even
+        # device_count() initializes the native backend. Visibility masks and
+        # use_acl=0 alone cannot prove that a runtime was never initialized.
+        native = sys.modules.get("jittor")
+        compiler = getattr(native, "compiler", None)
+        config = getattr(compiler, "build_config", None)
+        backend = getattr(config, "backend", None)
+        flags = getattr(native, "flags", None)
+        if (backend not in ("cpu", "cuda", "rocm", "corex")
+                or getattr(compiler, "has_acl", None) != 0
+                or getattr(config, "has_acl", None) != 0 or flags is None
+                or getattr(flags, "use_acl", None) != 0
+                or getattr(flags, "use_cuda", None) != 0):
+            raise RuntimeError(
+                "CPU Trainer requires a proven non-ACL Jittor build with "
+                "accelerator execution disabled before querying NPU state"
+            )
+        initialization_evidence = "non_acl_build"
+    elif npu is not None:
+        initialized = bool(npu.is_initialized())
+        initialization_evidence = "runtime_query"
     state = {
         "npu_device_count": int(npu.device_count()) if npu is not None else 0,
         "npu_available": bool(npu.is_available()) if npu is not None else False,
-        "npu_initialized": bool(npu.is_initialized()) if npu is not None else False,
+        "npu_initialized": initialized,
+        "npu_initialization_evidence": initialization_evidence,
         "ascend_visible_devices": os.environ.get("ASCEND_RT_VISIBLE_DEVICES"),
         "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
     }

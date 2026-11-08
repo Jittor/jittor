@@ -110,7 +110,7 @@ def main(argv=None):
     parser.add_argument("--project", action="append", type=Path)
     args = parser.parse_args(argv)
     failed = False
-    for project in args.project or (ROOT, ROOT / "compat", ROOT / "adapters"):
+    for project in args.project or (ROOT, ROOT / "compat"):
         project = project.resolve()
         expected = manifest_text(project)
         target = project / "MANIFEST.in"

@@ -4,6 +4,7 @@ import jittor as jt
 from jittor import Module, init
 
 from ..functional.normalization import (
+    _check_batch_norm_input,
     _batch_norm_eval,
     _batch_norm_train,
     _unbiased,
@@ -83,12 +84,14 @@ class BatchNorm(Module):
         # differentiated by composite autodiff, without sync they came from the
         # two-pass formula and went through the stable closed-form backward.
         # Whether the job was distributed decided the numbers and the gradient.
+        _check_batch_norm_input(x, self.num_features, type(self).__name__)
         dims = [0] + list(range(2, x.ndim))
         if not self.is_train:
             return _batch_norm_eval(
-                x, dims, self.running_mean, self.running_var,
-                self.weight, self.bias, self.eps)
+                x, dims, self.running_mean, self.running_var, self.weight, self.bias, self.eps
+            )
         from jittor import distributed as dist
+
         sync = self.sync and dist.is_initialized()
         norm_x, xmean, xvar = _batch_norm_train(
             x, dims, self.weight, self.bias, self.eps, sync=sync
@@ -183,12 +186,12 @@ class LayerNorm(Module):
         self.eps = eps
         self.elementwise_affine = elementwise_affine
         self.weight = (
-            _constant_parameter(normalized_shape, "float32", 1.0) if elementwise_affine else 1.0
+            _constant_parameter(normalized_shape, "float32", 1.0) if elementwise_affine else None
         )
         self.bias = (
             _constant_parameter(normalized_shape, "float32", 0.0)
             if elementwise_affine and bias
-            else 0.0
+            else None
         )
 
     def execute(self, x):

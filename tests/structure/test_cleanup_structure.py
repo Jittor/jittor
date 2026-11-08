@@ -343,6 +343,8 @@ class TestCleanupStructure(unittest.TestCase):
             "_device_value": "the scalar half of the same helper",
             "_assert_acl_device": "an ACL device assertion, local to two ACL tests",
             "_fetch_acl": "an ACL handle helper, local to the same two",
+            "_acl_supports_bfloat16": "an ACL SoC capability probe, local to each ACL test file",
+            "_acl_supports_fp32_cube": "the matching cube-capability probe, same pattern",
             "_bfloat16_round": "a reference rounding helper for the dtype tests",
             "bfloat16_round": "its dtype-named alias in the same file",
             "_output_tensor": "a two-line tensor builder in the HF alias tests",
@@ -364,11 +366,12 @@ class TestCleanupStructure(unittest.TestCase):
             "transpose0231": "permutation indices in the fp16/bf16 pair",
             "transpose0231_2": "the second of that pair's permutations",
             "_isolated_state": "Accelerate tests: each file resets its own process-global state",
-            "_oracle_env": "per-file environment builder for isolated native-oracle subprocesses",
-            "device": "per-file pytest device fixture kept local to each backend contract",
-            "complex_device": "device matrix fixture for complex DLPack contracts",
-            "scalar_device": "device fixture for autograd scalar contracts",
-            "scalar_promotion_device": "device fixture for scalar promotion contracts",
+            "_oracle_env": "the real-PyTorch oracle's environment minus the shim, per oracle test",
+            "device": "a cpu/cuda parametrised fixture with the capability guard",
+            "rng_device": "a device fixture shared with public state-contract tests",
+            "complex_device": "the same fixture, named for the complex dtype tests",
+            "scalar_device": "the same fixture, named for the scalar-contract tests",
+            "scalar_promotion_device": "the same fixture, named for the promotion tests",
         }
 
         def in_test_tree(group):
@@ -474,7 +477,6 @@ class TestCleanupStructure(unittest.TestCase):
             ),
         ]
         roots = (
-            "agent/skills",
             "docs",
             "examples",
             "python",
@@ -623,7 +625,7 @@ for forbidden in ('jittor', 'PIL', 'pywebio'):
             self.assertFalse(output.exists(), result.stdout)
 
     def test_vcompiler_retirement_is_documented(self):
-        release_note = self.repo_root / "docs" / "releases" / "2.0.md"
+        release_note = self.repo_root / "docs" / "project" / "releases" / "2.0.md"
         source = release_note.read_text(encoding="utf-8")
         self.assertIn("jittor.vcompiler", source)
         # The release note is written in Chinese; "破坏性变更" is the heading it

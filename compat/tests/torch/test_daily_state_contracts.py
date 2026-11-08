@@ -7,7 +7,6 @@ import os
 import numpy as np
 import pytest
 import torch
-
 from _release_test_helpers import on_device, public_device_scope, values
 
 
@@ -19,6 +18,12 @@ _DEVICES = tuple(name for name in os.environ.get(
 def device(request):
     with public_device_scope(request.param, set_default=True) as name:
         yield name
+
+
+
+
+
+
 
 
 def test_empty_fast_path_defaults_to_a_frozen_leaf(device):
@@ -204,18 +209,6 @@ def test_random_initializer_honors_explicit_generator_and_preserves_global_rng(
     peer = torch.Generator(device=device).manual_seed(73)
     get_global_state = torch.get_rng_state if device == "cpu" else torch.cuda.get_rng_state
     global_state = values(get_global_state())
-    if hasattr(torch, "_torch_compat_install_context") and (
-            operation == "normal_" or device == "cuda"):
-        # The supported explicit stream is CPU uniform. Other combinations
-        # reject before either the destination or generator changes.
-        target = torch.ones(7)
-        state = values(generator.get_state())
-        with pytest.raises(NotImplementedError, match="explicit Generator"):
-            getattr(target, operation)(*args, generator=generator)
-        np.testing.assert_array_equal(values(target), np.ones(7))
-        np.testing.assert_array_equal(values(generator.get_state()), state)
-        np.testing.assert_array_equal(values(get_global_state()), global_state)
-        return
     first, second, advanced, replay = (torch.empty(7) for _ in range(4))
     getattr(first, operation)(*args, generator=generator)
     getattr(second, operation)(*args, generator=peer)
@@ -229,3 +222,16 @@ def test_random_initializer_honors_explicit_generator_and_preserves_global_rng(
     np.testing.assert_array_equal(values(get_global_state()), global_state)
     assert not first.requires_grad
     on_device(first, device)
+
+
+@pytest.mark.parametrize("operation", ["add_", "sub_"])
+def test_invalid_inplace_add_sub_preserves_destination(device, operation):
+    target = torch.tensor([1, 2], dtype=torch.int32, device=device)
+    pointer = target.data_ptr()
+    with pytest.raises(RuntimeError, match="cast"):
+        getattr(target, operation)(torch.tensor([.5, .5], device=device))
+    np.testing.assert_array_equal(values(target), [1, 2])
+    assert target.dtype == torch.int32 and target.data_ptr() == pointer
+    with pytest.raises(RuntimeError, match="shape"):
+        getattr(target, operation)(torch.ones((2, 2), dtype=torch.int32, device=device))
+    np.testing.assert_array_equal(values(target), [1, 2])

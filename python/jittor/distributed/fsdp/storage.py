@@ -9,21 +9,25 @@ from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 
 def _register_parameter_alias(entry, owner, attr):
-    """Record a second registration of one logical parameter, without a Var."""
-    if owner is entry.owner and attr == entry.attr:
-        return
-    aliases = getattr(entry, "parameter_aliases", None)
-    if aliases is None:
-        aliases = entry.parameter_aliases = []
+    """Record registrations using the shared aliases metadata owner."""
+    aliases = list(getattr(entry, "aliases", ((entry.owner, entry.attr),)))
+    for old_owner, old_attr in getattr(entry, "parameter_aliases", ()):
+        if not any(current is old_owner and name == old_attr for current, name in aliases):
+            aliases.append((old_owner, old_attr))
     if not any(current is owner and name == attr for current, name in aliases):
         aliases.append((owner, attr))
+    entry.aliases = tuple(aliases)
 
 
 def _set_module_parameter(entry, parameter):
-    """Publish the exact same holder at every registration of an FSDP entry."""
-    object.__setattr__(entry.owner, entry.attr, parameter)
-    for owner, attr in getattr(entry, "parameter_aliases", ()):
-        object.__setattr__(owner, attr, parameter)
+    """Publish one holder at every registration, including legacy entries."""
+    _register_parameter_alias(entry, entry.owner, entry.attr)
+    for owner, attr in entry.aliases:
+        publisher = getattr(owner, "_set_parameter_alias", None)
+        if publisher is None:
+            object.__setattr__(owner, attr, parameter)
+        else:
+            publisher(attr, parameter)
 
 
 def _parameter_requires_grad(param):
@@ -260,7 +264,12 @@ def _execute_with_true_fsdp(module, orig_execute, *args, api, **kwargs):
             kwargs = _cast_floating_tree(kwargs, target)
         api._unshard_module_params(module)
         try:
-            out = orig_execute(*args, **kwargs)
+            forward_scope = getattr(api, "_fsdp_forward_amp_scope", None)
+            if forward_scope is None:
+                out = orig_execute(*args, **kwargs)
+            else:
+                with forward_scope(policy):
+                    out = orig_execute(*args, **kwargs)
             entries = getattr(state, "true_fsdp_params", ())
             output_dtype = getattr(policy, "output_dtype", None)
             if output_dtype is not None:

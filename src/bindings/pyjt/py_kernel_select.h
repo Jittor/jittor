@@ -36,6 +36,8 @@ bool kernel_op_registered(const char* op);
 // Rules:
 //   "same_float:<op>"     both leading arguments are Vars of one floating
 //                         dtype, and native op <op> is registered
+//   "same_float_or_complex:<op>"  as same_float, and one complex dtype
+//                         shared by both is accepted as well
 //   "rms_norm_inference"  `rms_norm_cuda._rms_norm_contract` holds
 //   "rms_norm_training"   declines under `no_grad`
 //   "layer_norm_inference" `layer_norm_cuda._supports_layer_norm_inference`

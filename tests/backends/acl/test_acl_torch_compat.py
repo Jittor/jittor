@@ -817,6 +817,62 @@ class TestACLTorchCompat(unittest.TestCase):
         np.testing.assert_array_equal(bf_values[1], expected_gradient_bf)
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_silu_float16_forward_backward_stays_on_acl(self):
+        from jittor._runtime.fallback import forbid_backend_fallbacks
+
+        # Half-precision inputs, including saturated sigmoid tails, zero,
+        # and SiLU's negative-slope region. The oracle evaluates the function
+        # and its derivative independently in NumPy, rounding only the result.
+        source_np = np.asarray(
+            [-12.0, -8.0, -4.0, -1.25, -0.125, 0.0,
+             0.125, 0.75, 3.5, 5.9375, 8.0, 12.0],
+            dtype=np.float16,
+        ).reshape(3, 4)
+        cotangent_np = np.asarray(
+            [0.25, -0.5, 1.5, 2.0, -1.0, 0.75,
+             -0.25, 1.25, 0.5, -1.5, 2.0, -0.75],
+            dtype=np.float16,
+        ).reshape(3, 4)
+        source_reference = source_np.astype(np.float32)
+        sigmoid = 1.0 / (1.0 + np.exp(-source_reference))
+        expected_output = (source_reference * sigmoid).astype(np.float16)
+        expected_gradient = (
+            cotangent_np.astype(np.float32)
+            * sigmoid * (1.0 + source_reference * (1.0 - sigmoid))
+        ).astype(np.float16)
+
+        acl_silu = registered_kernel("nn.silu", "acl")
+        self.assertIsNotNone(acl_silu)
+        dispatches = []
+
+        def record_silu(*args, **kwargs):
+            result = acl_silu(*args, **kwargs)
+            dispatches.append(result is not None)
+            return result
+
+        fallback_before = jt.core.backend_fallback_count()
+        with forbid_backend_fallbacks(), override_kernel("nn.silu", "acl", record_silu):
+            source = torch.tensor(
+                source_np, dtype=torch.float16, device="npu", requires_grad=True)
+            cotangent = torch.tensor(cotangent_np, dtype=torch.float16, device="npu")
+            with torch.no_grad():
+                inference = torch.nn.functional.silu(source)
+            output = torch.nn.functional.silu(source)
+            gradient = torch.autograd.grad((output * cotangent).sum(), source)[0]
+            for value in (inference, output, gradient):
+                self.assertIs(type(value), torch.Tensor)
+                self.assertEqual(value.dtype, torch.float16)
+                self.assertEqual(tuple(value.shape), source_np.shape)
+            candidate = _fetch_acl(self, [inference, output, gradient])
+        self.assertEqual(dispatches, [True, True])
+        self.assertEqual(jt.core.backend_fallback_count(), fallback_before)
+        for actual, expected in zip(
+            candidate, [expected_output, expected_output, expected_gradient]
+        ):
+            self.assertTrue(np.isfinite(actual).all())
+            np.testing.assert_allclose(actual, expected, rtol=2e-3, atol=2e-3)
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_sdpa_forward_backward_stays_on_acl(self):
         rng = np.random.RandomState(20260830)
         shape = (2, 1, 64, 32)
@@ -861,6 +917,89 @@ class TestACLTorchCompat(unittest.TestCase):
 
         for actual, expected in zip(candidate, reference):
             np.testing.assert_allclose(actual, expected, rtol=3e-5, atol=3e-5)
+
+    @jt.flag_scope(use_acl=1, use_cuda=1)
+    def test_sdpa_boolean_mask_layouts_stay_on_acl(self):
+        # aclnnFlashAttentionScoreV2 broadcasts a boolean attenMask over batch
+        # and heads itself, so the provider hands it the caller's mask instead
+        # of expanding it to [b, n, s, s] (64 MiB at 2048 tokens, plus two
+        # score-sized casts on the ACL backend). Every layout a caller may pass
+        # still has to select the same keys as the composite path.
+        rng = np.random.RandomState(20261029)
+        shape = (2, 2, 8, 32)
+        query_np, key_np, value_np, loss_weight_np = (
+            rng.randn(*shape).astype("float32") * 0.1 for _ in range(4)
+        )
+        keep = rng.rand(shape[-2], shape[-2]) > 0.15
+        keep[~keep.any(-1), 0] = True
+        per_batch = np.stack([keep, np.roll(keep, 1, axis=0)])
+        key_axis = np.ones(shape[-2], dtype=bool)
+        key_axis[1:3] = False
+        layouts = (
+            keep[None, None],
+            per_batch[:, None],
+            key_axis[None, None, None],
+        )
+        candidates = []
+        from jittor.backends.acl.kernels.ops import flashattention_op as attention
+        provider = attention.scaled_dot_product_attention_acl
+        backends = []
+        for mask_np in layouts:
+            # Place explicitly: under the shim the default device is the host
+            # unless a test says otherwise (KI-TEST-016), and this case is
+            # about where the provider runs, not about the default.
+            inputs = [
+                torch.tensor(value, device="npu")
+                for value in (query_np, key_np, value_np)
+            ]
+            for value in inputs:
+                value.requires_grad_(True)
+            mask = torch.tensor(mask_np, device="npu")
+            mask.requires_grad_(False)
+            # Only the ACL provider writes `backend_name`; the default is the
+            # same string, so start from a sentinel to tell "the provider
+            # answered" from "something else ran".
+            provider.backend_name = "unset"
+            output = torch.nn.functional.scaled_dot_product_attention(
+                *inputs,
+                attn_mask=mask,
+                dropout_p=0.0,
+                is_causal=False,
+            )
+            grads = torch.autograd.grad(
+                (output * torch.tensor(loss_weight_np, device="npu")).sum(), inputs
+            )
+            backends.append(provider.backend_name)
+            for value in [output] + list(grads):
+                _assert_acl_device(self, value)
+            candidates.append(jt.fetch_sync([output] + list(grads)))
+
+        self.assertEqual(backends, ["acl_flash_attention_score_v2"] * len(layouts))
+        references = []
+        with jt.flag_scope(use_acl=0, use_cuda=0):
+            for mask_np in layouts:
+                inputs = [
+                    torch.tensor(value)
+                    for value in (query_np, key_np, value_np)
+                ]
+                for value in inputs:
+                    value.requires_grad_(True)
+                output = torch.nn.functional.scaled_dot_product_attention(
+                    *inputs,
+                    attn_mask=torch.tensor(mask_np),
+                    dropout_p=0.0,
+                    is_causal=False,
+                )
+                grads = torch.autograd.grad(
+                    (output * torch.tensor(loss_weight_np)).sum(), inputs
+                )
+                references.append(jt.fetch_sync([output] + list(grads)))
+
+        for candidate, reference in zip(candidates, references):
+            for actual, expected in zip(candidate, reference):
+                np.testing.assert_allclose(
+                    actual, expected, rtol=3e-5, atol=3e-5
+                )
 
     @jt.flag_scope(use_acl=1, use_cuda=1)
     def test_sdpa_causal_and_additive_backward_stay_on_acl(self):

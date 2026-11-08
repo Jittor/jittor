@@ -23,6 +23,7 @@ _EXPORTS = (
     "_refresh_flat_entry_shards",
     "_mark_fsdp_param_var",
     "_fsdp_param_entry",
+    "_fsdp_norm_grad",
     "is_fsdp_managed_param",
     "_fsdp_var_to_local",
     "_fsdp_var_full_tensor",
@@ -57,7 +58,18 @@ def _refresh_flat_entry_shards(state):
     result = _storage._refresh_flat_entry_shards(state, api=sys.modules[__name__])
     for entry in state.true_fsdp_params:
         get_tensor_state(jt).leaf_params[id(entry.shard)] = entry.shard
+    _bind_parameter_aliases(state, "shard")
     return result
+
+
+def _bind_entry_aliases(entry, value):
+    _storage._set_module_parameter(entry, value)
+
+
+def _bind_parameter_aliases(state, role):
+    for entry in getattr(state, "true_fsdp_params", ()):
+        value = entry.full_param if role == "full" else entry.shard
+        _bind_entry_aliases(entry, value)
 
 
 class _ShardTensorMethod:
@@ -95,6 +107,20 @@ class _ShardTensorMethod:
         return self.function(tensor, *args, **kwargs)
 
 
+def _fsdp_var_size(var, dim=None):
+    """A sharded parameter's Torch-facing size is its global parameter size."""
+    entry = getattr(var, "_jittor_fsdp2_entry", None)
+    shape = tuple(getattr(entry, "shape", tuple(var.shape)))
+    if dim is None:
+        return shape
+    dim = int(dim)
+    if dim < 0:
+        dim += len(shape)
+    if dim < 0 or dim >= len(shape):
+        raise IndexError("dimension out of range")
+    return shape[dim]
+
+
 def _parameter_requires_grad(param):
     return _storage._parameter_requires_grad(param)
 
@@ -105,6 +131,9 @@ def _mark_fsdp_param_var(var, state, entry, role):
         object.__setattr__(var, "_jittor_fsdp2_entry", entry)
         object.__setattr__(var, "_jittor_fsdp2_module", getattr(state, "true_fsdp_module", None))
         object.__setattr__(var, "_jittor_fsdp2_role", role)
+        object.__setattr__(
+            var, "size", _ShardTensorMethod(_fsdp_var_size, state, entry, role)
+        )
         object.__setattr__(
             var,
             "_dtensor_device_mesh",
@@ -155,6 +184,74 @@ def _fsdp_param_entry(param):
 def is_fsdp_managed_param(param):
     state, entry = _fsdp_param_entry(param)
     return state is not None and entry is not None
+
+
+def _fsdp_norm_grad(param, public_gradient=None):
+    """Return this rank's current shard of an FSDP gradient for norm clipping.
+
+    Trainer clipping runs before the optimizer adapter localizes the public
+    full-parameter gradient into shard-shaped optimizer gradients. Prefer that
+    current public gradient, then project it with the same shard slicing helper
+    used by the optimizer adapter. Internal last-gradient slots can be full on
+    one rank and empty on another at this point.
+    """
+    state, entry = _fsdp_param_entry(param)
+    if state is None or entry is None:
+        return None
+
+    if not isinstance(public_gradient, jt.Var):
+        public_gradient = getattr(param, "_torch_grad", None)
+    if not isinstance(public_gradient, jt.Var):
+        full = getattr(entry, "full_param", None)
+        public_gradient = getattr(full, "_torch_grad", None) if full is not None else None
+    if not isinstance(public_gradient, jt.Var):
+        public_gradient = getattr(param, "grad", None)
+
+    local_numel = int(entry.shard.numel())
+    local_shape = list(entry.shard.shape)
+    full_numel = int(entry.numel)
+
+    def as_local_shard(gradient):
+        if not isinstance(gradient, jt.Var):
+            return None
+        if int(gradient.numel()) == local_numel and list(gradient.shape) == local_shape:
+            local = gradient
+        elif int(gradient.numel()) == full_numel:
+            from . import grad_sync
+            local = grad_sync._local_grad_from_visible_full(state, entry, gradient)
+            if int(local.numel()) != local_numel:
+                return None
+            local = local.stop_grad()
+        else:
+            return None
+        object.__setattr__(
+            local, "_fsdp_norm_group", getattr(state, "shard_group", None)
+        )
+        return local
+
+    # The public gradient is the newest value. If it is a full logical
+    # parameter, produce exactly the local slice Torch exposes through
+    # DTensor.grad.to_local().
+    local = as_local_shard(public_gradient)
+    if local is not None:
+        return local
+
+    current_grads = getattr(state, "true_fsdp_last_grads", None)
+    if isinstance(current_grads, (list, tuple)):
+        for current, gradient in zip(state.true_fsdp_params, current_grads):
+            if current is entry:
+                local = as_local_shard(gradient)
+                if local is not None:
+                    return local
+                break
+    for gradient in (
+        getattr(entry, "last_grad", None),
+        getattr(entry.shard, "_torch_grad", None),
+    ):
+        local = as_local_shard(gradient)
+        if local is not None:
+            return local
+    return None
 
 
 def _fsdp_var_to_local(self, *args, **kwargs):
@@ -264,6 +361,38 @@ def _named_parameters_with_owner(module, recurse=True, remove_duplicate=True):
     return out
 
 
+def _parameter_aliases(module, recurse=True):
+    aliases = {}
+    visited = set()
+
+    def visit(mod):
+        if id(mod) in visited:
+            return
+        visited.add(id(mod))
+        for name, value, role in mod._var_roles():
+            if role == "parameter":
+                aliases.setdefault(id(value), []).append((mod, name))
+        if recurse:
+            for _, child in child_items(mod):
+                if isinstance(child, nn.Module):
+                    visit(child)
+
+    def child_items(mod):
+        try:
+            items = mod.named_children()
+            if items is not None:
+                return list(items)
+        except EXPECTED as exc:
+            swallowed("fsdp2/shard.py _parameter_aliases: items = mod.named_children()", exc)
+        modules = getattr(mod, "_modules", None)
+        if callable(modules):
+            modules = modules()
+        return list(modules.items()) if isinstance(modules, dict) else []
+
+    visit(module)
+    return aliases
+
+
 def _iter_modules(module, recurse=True):
     if recurse and hasattr(module, "modules"):
         try:
@@ -311,24 +440,14 @@ def _init_true_fsdp_state_impl(module, state):
         return state
     ws = common._world_size() if group is None else group.size()
     rank = common._rank() if group is None else group.rank()
-    entries = []
-    ignored_ids = {
-        id(param) for param in getattr(state, "ignored_params", ())
-    }
-    registrations = _named_parameters_with_owner(
-        module, recurse=True, remove_duplicate=False)
-    params = []
-    seen = set()
-    for item in registrations:
-        parameter = item[3]
-        if (id(parameter) in seen or is_fsdp_managed_param(parameter)
-                or id(parameter) in ignored_ids):
-            continue
-        seen.add(id(parameter))
-        params.append(item)
-    for _, owner, _, parameter in registrations:
-        if id(parameter) not in seen:
-            continue
+    ignored_ids = {id(param) for param in getattr(state, "ignored_params", ())}
+    params = [
+        item
+        for item in _named_parameters_with_owner(module, recurse=True)
+        if not is_fsdp_managed_param(item[3]) and id(item[3]) not in ignored_ids
+    ]
+    aliases = _parameter_aliases(module, recurse=True)
+    for _, owner, _, _ in params:
         if isinstance(owner, (nn.ParameterList, ParameterListAdapter, ParameterDictAdapter)):
             raise NotImplementedError(
                 "FSDP2 cannot shard ParameterList/ParameterDict: its parameter "
@@ -351,18 +470,9 @@ def _init_true_fsdp_state_impl(module, state):
         # the current holder, with its explicit entry metadata, in the existing
         # weak leaf registry; never retain a full parameter or a retired alias.
         get_tensor_state(jt).leaf_params[id(entry.shard)] = entry.shard
-    # Discovery deduplicates storage, not module registrations. Keep every
-    # registration belonging to this state tied to the same current holder.
-    # Cross-state sharing needs a separate forward-lifetime contract.
-    rebound = {}
-    for _, owner, attr, parameter in registrations:
-        parameter_state, entry = _fsdp_param_entry(parameter)
-        if entry is None or parameter_state is not state:
-            continue
-        _storage._register_parameter_alias(entry, owner, attr)
-        rebound[id(entry)] = entry
-    for entry in rebound.values():
-        _storage._set_module_parameter(entry, entry.shard)
+    for entry, (_, owner, attr, param) in zip(state.true_fsdp_params, params):
+        entry.aliases = aliases.get(id(param), ((owner, attr),))
+    _bind_parameter_aliases(state, "shard")
     return initialized
 
 
@@ -402,51 +512,24 @@ def _fsdp_forward_amp_scope(policy):
     )
     current = int(jt.flags.amp_reg)
     amp_reg = (current & ~precision_mask) | requested
-    return jt.flag_scope(amp_reg=amp_reg)
+    from ..torch.amp import _fsdp_mixed_precision_scope
+    return _fsdp_mixed_precision_scope(amp_reg)
 
 
 def _unshard_module_params_impl(module):
+    result = _storage._unshard_module_params_impl(module, api=sys.modules[__name__])
     state = getattr(module, "_fsdp_state", None)
-    if state is None or not getattr(state, "true_fsdp_initialized", False):
-        return module
-    if getattr(state, "true_fsdp_unsharded", False):
-        return module
-    if getattr(state, "true_fsdp_flat", False):
-        full_flat = common._all_gather_shards(
-            _compute_shard(state, state.true_fsdp_flat_shard),
-            getattr(state, "shard_group", None))
-        state.true_fsdp_flat_full_param = full_flat
-        for entry in state.true_fsdp_params:
-            full = common._slice_flat(full_flat, entry.flat_offset, entry.numel).reshape(entry.shape)
-            entry.full_param = full
-            _mark_fsdp_param_var(full, state, entry, "full")
-            if getattr(entry, "requires_grad", True):
-                if full.is_stop_grad():
-                    full.start_grad()
-            elif not full.is_stop_grad():
-                full.stop_grad()
-            _storage._set_module_parameter(entry, full)
-    else:
-        for entry in state.true_fsdp_params:
-            gathered = common._all_gather_shards(
-                _compute_shard(state, entry.shard),
-                getattr(state, "shard_group", None))
-            full_flat = gathered if entry.padded_numel == entry.numel else common._slice_flat(gathered, 0, entry.numel)
-            full = full_flat.reshape(entry.shape)
-            entry.full_param = full
-            _mark_fsdp_param_var(full, state, entry, "full")
-            if getattr(entry, "requires_grad", True):
-                if full.is_stop_grad():
-                    full.start_grad()
-            elif not full.is_stop_grad():
-                full.stop_grad()
-            _storage._set_module_parameter(entry, full)
-    state.true_fsdp_unsharded = True
-    return module
+    if state is not None and getattr(state, "true_fsdp_unsharded", False):
+        _bind_parameter_aliases(state, "full")
+    return result
 
 
 def _reshard_module_params(module):
-    return _storage._reshard_module_params(module)
+    result = _storage._reshard_module_params(module)
+    state = getattr(module, "_fsdp_state", None)
+    if state is not None and not getattr(state, "true_fsdp_unsharded", False):
+        _bind_parameter_aliases(state, "shard")
+    return result
 
 
 #: Attribute on the FSDP state counting how deep we are inside this module's
@@ -459,78 +542,9 @@ def _release_full_params(state):
 
 
 def _execute_with_true_fsdp(module, orig_execute, *args, **kwargs):
-    """Run one forward with this module's parameters unsharded.
-
-    Two hooks call this for the same forward, and they are both needed because
-    they cover different dispatch paths:
-
-    * ``Module.__call__`` (installed once, in ``compat/torch/installers/nn.py``)
-      is the only one that sees a torch-style ``forward`` override, a
-      per-instance ``self.forward``, or the fused RMSNorm shortcut -- none of
-      which reach ``execute``;
-    * the per-instance ``execute`` wrapper (installed by ``fully_shard`` in
-      :func:`_install_true_fsdp_execute`) is the only one that sees a direct
-      ``module.execute(...)`` call that bypasses ``__call__``.
-
-    On the ordinary jittor-style path both fire, nested. Unsharding and
-    resharding are individually idempotent, so the answer was never wrong, but
-    the inner hook resharded on the way out and the outer one then re-entered
-    the whole guard sequence for a second time on every single forward.
-
-    The depth counter makes the pair behave as one hook: whichever fires first
-    owns the unshard/reshard for that forward, and any nested call is a plain
-    pass-through. That also fixes the case the idempotence was quietly
-    covering: with ``reshard_after_forward`` true, the inner hook used to put
-    the shards back before the outer hook's ``finally`` had run, so the window
-    in which the module's parameters were unsharded ended in the middle of the
-    outer hook rather than at its end.
-    """
-    state = getattr(module, "_fsdp_state", None)
-    if state is None or not getattr(state, "true_fsdp_initialized", False):
-        return orig_execute(*args, **kwargs)
-    depth = getattr(state, _EXECUTE_DEPTH_ATTR, 0)
-    if depth:
-        return orig_execute(*args, **kwargs)
-    setattr(state, _EXECUTE_DEPTH_ATTR, depth + 1)
-    frozen_forward_synced = False
-    try:
-        policy = getattr(state, "mp_policy", None)
-        param_dtype = getattr(policy, "param_dtype", None)
-        if param_dtype is not None and getattr(policy, "cast_forward_inputs", True):
-            target = _jittor_dtype_name(param_dtype)
-            args = _cast_floating_tree(args, target)
-            kwargs = _cast_floating_tree(kwargs, target)
-        _unshard_module_params(module)
-        try:
-            with _fsdp_forward_amp_scope(policy):
-                out = orig_execute(*args, **kwargs)
-            entries = getattr(state, "true_fsdp_params", ())
-            output_dtype = getattr(policy, "output_dtype", None)
-            if output_dtype is not None:
-                out = _cast_floating_tree(out, _jittor_dtype_name(output_dtype))
-            module_parameters = getattr(module, "parameters", None)
-            has_trainable_module_param = bool(
-                module_parameters is not None
-                and any(param.requires_grad for param in module_parameters()))
-            if (entries
-                    and not any(getattr(entry, "requires_grad", True)
-                                for entry in entries)
-                    and not has_trainable_module_param
-                    and getattr(state, "reshard_after_forward", True)):
-                if not common._primary_input_requires_grad(args, kwargs):
-                    out = common._materialize_frozen_output(out)
-                roots = common._tensor_values(out)
-                if roots:
-                    jt.submit_pending(*roots, device_sync=True)
-                frozen_forward_synced = True
-            return out
-        finally:
-            if getattr(state, "reshard_after_forward", True):
-                _reshard_module_params(module)
-                if frozen_forward_synced:
-                    jt.gc()
-    finally:
-        setattr(state, _EXECUTE_DEPTH_ATTR, depth)
+    return _storage._execute_with_true_fsdp(
+        module, orig_execute, *args, api=sys.modules[__name__], **kwargs
+    )
 
 
 def _wrapped_execute(self, *args, **kwargs):

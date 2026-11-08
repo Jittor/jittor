@@ -57,6 +57,7 @@ class TestInstallationOwners(unittest.TestCase):
             def cast(self, dtype):
                 calls.append(("cast", dtype))
                 return self
+        result = Result()
         def native(*args, **kwargs):
             calls.append((args, kwargs))
             return result
@@ -66,9 +67,9 @@ class TestInstallationOwners(unittest.TestCase):
             def __float__(self): return 2.0
         ns = {"jt": SimpleNamespace(), "EXPECTED": (ValueError,),
               "swallowed": lambda *args: None, "_dtype_to_str": str}
-        definitions("installers/factories.py", ["_linspace_adapter", "_seed_from", "_random_adapter"], ns)
+        definitions("installers/factories.py", ["_linspace_adapter", "_random_adapter"], ns)
         ns["_linspace_adapter"](native, Scalar(), Scalar(), Scalar(), dtype="float64")
-        self.assertEqual(calls, [((2.0, 2.0, 2), {}), ("cast", "float64")])
+        self.assertEqual(calls, [((2.0, 2.0, 2), {"dtype": "float64"})])
         # Generator support is owned by the draw helper; its failure must
         # propagate without reseeding or falling through to the native factory.
         draw = ns["_draw_from_generator"] = Mock(
@@ -79,7 +80,7 @@ class TestInstallationOwners(unittest.TestCase):
                 native, 3, generator=generator, _name="rand",
             )
         draw.assert_called_once_with("rand", generator, (3,), {})
-        self.assertEqual(calls, [((2.0, 2.0, 2), {}), ("cast", "float64")])
+        self.assertEqual(calls, [((2.0, 2.0, 2), {"dtype": "float64"})])
 
     def test_removed_handle_cannot_remove_a_later_hook(self):
         ns = {"namedtuple": namedtuple}

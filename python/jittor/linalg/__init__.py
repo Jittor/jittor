@@ -28,6 +28,7 @@ from .solving import (
     solve,
 )
 from .norms import (
+    _try_vector_norm,
     matrix_rank,
     matrix_norm,
     vector_norm,

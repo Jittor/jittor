@@ -31,10 +31,22 @@ void curand_manual_seed(int device, uint64 seed);
 // @pyjt(initial_seed)
 uint64 curand_initial_seed(int device);
 
+// Introspection and restoration use this engine's raw-word cursor units.
+// @pyjt(curand_generator_offset)
+int64 curand_generator_offset(int device);
+// @pyjt(curand_generator_seed)
+uint64 curand_generator_seed(int device=-1);
+// @pyjt(curand_restore_state)
+void curand_restore_state(int device, uint64 seed, int64 offset);
+
 // Reserve a disjoint range of 32-bit Philox words for one random operation.
 // Alignment is used by transforms (normal) that consume a whole block.
 void curand_reserve_philox_words(
     uint64 words, uint64 alignment, uint64& seed, uint64& offset);
+
+// Reserve four-aligned words from the checkpointed global stream.
+// @pyjt(curand_reserve_philox)
+vector<int64> curand_reserve_philox(int64 increment);
 
 // Destroys the generator, reporting a failure instead of raising. Idempotent.
 void curand_shutdown();

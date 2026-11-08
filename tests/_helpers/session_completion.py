@@ -30,12 +30,28 @@ import json
 import os
 import pathlib
 
+import pytest
+
 
 #: Printed on the terminal even when no sentinel path is configured, so a log
 #: kept by hand still carries the evidence.
 MARKER = "JITTOR-SESSION-COMPLETE"
 
 _STATE = {"collected": 0, "executed": 0}
+
+#: Where an xdist worker hands its collected count to the controller. The
+#: controller collects no items itself, so ``pytest_collection_finish`` there
+#: would record zero and the marker would say ``collected=0 executed=N``.
+_XDIST_COLLECTED_KEY = "jittor_session_collected"
+
+
+def _xdist_worker_id(config):
+    return getattr(config, "workerinput", {}).get("workerid")
+
+
+def _xdist_controller(config):
+    return (getattr(config.option, "numprocesses", None) not in (None, 0)
+            and _xdist_worker_id(config) is None)
 
 
 def sentinel_path():
@@ -91,15 +107,49 @@ def marker_line():
 # -- the pytest side ---------------------------------------------------------
 
 def pytest_collection_finish(session):
-    record_collected(len(session.items))
+    count = len(session.items)
+    if _xdist_worker_id(session.config) is not None:
+        # Collection happens in the workers; the controller only receives the
+        # reports. Publish this worker's share so the controller can sum it.
+        record_collected(count)
+        workeroutput = getattr(session.config, "workeroutput", None)
+        if workeroutput is not None:
+            workeroutput[_XDIST_COLLECTED_KEY] = count
+        return
+    if _xdist_controller(session.config):
+        # Nothing was collected here; ``pytest_testnodedown`` fills it in
+        # before the marker is printed.
+        return
+    record_collected(count)
 
 
 def pytest_runtest_logreport(report):
-    if report.when == "call":
+    # A test reaches a terminal outcome at its call phase, or at setup when it
+    # was skipped or errored before the body ran. Counting only ``call`` made a
+    # finished session with setup-level skips look like one that lost tests;
+    # the counts are compared, so they have to mean the same thing.
+    if report.when == "call" or (
+            report.when == "setup" and (report.skipped or report.failed)):
         record_executed()
 
 
+@pytest.hookimpl(optionalhook=True)
+def pytest_testnodedown(node, error):
+    count = (getattr(node, "workeroutput", None) or {}).get(
+        _XDIST_COLLECTED_KEY)
+    if count is not None:
+        # Every xdist worker collects the same selection and then runs its
+        # share, so summing would report N times the tree. The largest count is
+        # the selection size; a worker that collected less saw a narrower one.
+        record_collected(max(_STATE["collected"], int(count)))
+
+
 def pytest_sessionfinish(session, exitstatus):
+    # One sentinel describes one process. Under xdist only the controller has
+    # the merged counts, and a worker writing the shared path would race the
+    # others; a worker's disappearance is xdist's crash to report.
+    if _xdist_worker_id(session.config) is not None:
+        return
     write_sentinel(extra={"exitstatus": int(exitstatus)})
 
 

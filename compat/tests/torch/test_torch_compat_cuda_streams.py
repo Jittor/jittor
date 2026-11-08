@@ -103,6 +103,16 @@ class TestCudaStreams(unittest.TestCase):
         self.assertIsNone(torch.cuda.set_stream(None))
         self.assertIs(torch.cuda.current_stream(), selected)
 
+    def test_record_stream_keeps_tensor_storage_alive(self):
+        value = torch.tensor([1., 2.], device="cpu")
+        self.assertIsNone(value.record_stream(torch.cuda.current_stream()))
+        with self.assertRaisesRegex(TypeError, "torch.cuda.Stream"):
+            value.record_stream(object())
+        if torch.cuda.is_available():
+            device_value = torch.tensor([3., 4.], device="cuda")
+            self.assertIsNone(device_value.record_stream(torch.cuda.current_stream()))
+            self.assertEqual(device_value.cpu().tolist(), [3., 4.])
+
     def test_integer_device_selects_cuda_device(self):
         stream = torch.cuda.Stream(device=0, priority=-1)
         self.assertEqual(stream.device, torch.device("cuda", 0))

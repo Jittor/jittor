@@ -36,7 +36,7 @@ class TestTorchShimDeploy(unittest.TestCase):
         """Both files the torch dist-info needs: a version and an import name.
 
         `top_level.txt` is what maps the `torch` import back to the deployed
-        distribution; without it the mapping falls to jittor-torch and
+        distribution; without it the mapping falls to jittor-compat and
         Transformers reads torch's version as Jittor's.
         """
         metadata_root = source / "torch_dist_info"

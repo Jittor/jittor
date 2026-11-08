@@ -2,7 +2,7 @@
 
 import jittor as jt
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
-from jittor._runtime.dispatch import try_dispatch
+from jittor._runtime.dispatch import dispatch_context, try_dispatch
 
 from .vector import cosine_similarity
 
@@ -75,11 +75,22 @@ class _CrossEntropyRows(jt.Function):
 
     def execute(self, x, target, target_weight):
         rows = x.shape[0]
+        # Torch inputs can arrive as a materialized host target beside a
+        # lazy CUDA output.  The comparison in ``ternary`` requires all
+        # operands to use one backend; make the index and its per-row weight
+        # follow the output's device before composing the row expression.
+        # Ask the shared placement resolver: a lazy CUDA Var may not have a
+        # native device_id yet, and reading the global CUDA flag bypasses the
+        # runtime's device-selection contract.
+        context = dispatch_context(x)
+        if context.backend == "cuda":
+            target = target.to_device(context.device_id)
+            target_weight = target_weight.to_device(context.device_id)
         self.narrow_dtype = (x.dtype if _jittor_dtype_name(x.dtype)
                              in ("float16", "bfloat16") else None)
         if self.narrow_dtype is not None:
             x = x.float32()
-        # An ignored or out-of-range target still has to index somewhere; its
+        # An ignored or zero-weight target still has to index somewhere; its
         # weight is 0, so which column it reads does not matter.
         safe = jt.ternary(target_weight != 0, target, jt.zeros_like(target))
         # Spelled exactly as the composite did: under the Torch frontend
@@ -106,7 +117,29 @@ class _CrossEntropyRows(jt.Function):
         return dx, None, None
 
 
+def _checked_class_target(target, classes, ignore_index):
+    """`target`, made to fail where an entry is neither a class nor ignored.
+
+    The former loss weighted every target outside ``[0, C)`` by 0, so a label
+    of 20 among 10 classes, or a -1 that was meant as ``ignore_index``, was
+    silently left out of the loss. torch raises "Target 20 is out of bounds".
+    Routing the targets through a bounds-checked index gives the same
+    IndexError, lazily, when the loss is computed, without a sync; valid ones
+    pass through unchanged. Negative ones are sent past the end first, since
+    an index wraps them.
+    """
+    probe = jt.ternary(target < 0, jt.full_like(target, classes), target)
+    keep = None
+    if ignore_index is not None:
+        keep = target == ignore_index
+        probe = jt.ternary(keep, jt.zeros_like(target), probe)
+    checked = jt.arange(classes, dtype=target.dtype)[probe]
+    return checked if keep is None else jt.ternary(keep, target, checked)
+
+
 def cross_entropy_loss(output, target, weight=None, ignore_index=None,reduction='mean'):
+    if output.ndim >= 2:
+        target = _checked_class_target(target, int(output.shape[1]), ignore_index)
     fast = try_dispatch("nn.cross_entropy_loss", output, target, weight=weight,
                         ignore_index=ignore_index, reduction=reduction)
     if fast is not None:
@@ -118,9 +151,18 @@ def cross_entropy_loss(output, target, weight=None, ignore_index=None,reduction=
         output = output.reshape((-1, c_dim))
 
     target = target.reshape((-1, ))
+    if target.shape[0] != output.shape[0]:
+        # Otherwise it surfaces as a broadcasting failure of an internal
+        # multiply, naming neither the loss nor the batch sizes.
+        raise jt.JittorShapeError(
+            "cross_entropy_loss: expected one target per input row, but the "
+            "input has %d rows and the target %d elements (target shape %s)."
+            % (output.shape[0], target.shape[0], list(target_shape)))
     target_weight = ((target >= 0) & (target < output.shape[1])).float32()
     if weight is not None:
-        target_weight = target_weight * weight[target]
+        safe_target = target if ignore_index is None else jt.ternary(
+            target == ignore_index, jt.zeros_like(target), target)
+        target_weight = target_weight * weight[safe_target]
     if ignore_index is not None:
         target_weight = jt.ternary(
             target==ignore_index,

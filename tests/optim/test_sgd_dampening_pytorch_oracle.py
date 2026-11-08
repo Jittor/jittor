@@ -16,10 +16,13 @@ import os
 import subprocess
 import sys
 import unittest
+import warnings
 from pathlib import Path
 
 import numpy as np
 import jittor as jt
+
+from _helpers import capability
 
 
 def _oracle_env():
@@ -31,7 +34,7 @@ def _oracle_env():
 
 def _real_torch_python():
     """Locate a Python interpreter with real (non-shim) PyTorch installed,
-    isolated from this repo's own jittor/jittor-torch. Mirrors
+    isolated from this repo's own jittor/jittor-compat. Mirrors
     tests/linalg/test_complex_spectral_gradients.py's helper of the same
     name/contract."""
     candidates = []
@@ -216,10 +219,68 @@ def run():
         opt.zero_grad(); loss.backward(); opt.step()
         yield
 """,
+    # Momentum paused for a step: torch neither reads nor writes the buffer
+    # then, so the resume continues from the buffer of step 1 (buffers 2, 2,
+    # 4.8; parameters 0.8, 0.5, 0.02). The fused ACL kernel seeded the buffer
+    # from the paused step's gradient (2, 3, 5.6).
+    "momentum_paused": """
+p = torch.tensor([1.0], requires_grad=True)
+params = [p]
+opt = torch.optim.SGD(params, lr=0.1, momentum=0.8, dampening=0.2)
+def run():
+    for mom, g in ((0.8, 2.0), (0.0, 3.0), (0.8, 4.0)):
+        opt.param_groups[0]["momentum"] = mom
+        opt.zero_grad(); (p * g).sum().backward(); opt.step()
+        yield
+""",
+    # The same with Nesterov, which acts through the buffer too: paused, the
+    # step is plain SGD and the buffer is kept.
+    "nesterov_paused": """
+p = torch.tensor([1.0, -0.5], requires_grad=True)
+params = [p]
+opt = torch.optim.SGD(params, lr=0.1, momentum=0.9, nesterov=True, weight_decay=0.1)
+def run():
+    for mom, g in ((0.9, 2.0), (0.0, 3.0), (0.9, 4.0), (0.9, 1.0)):
+        opt.param_groups[0]["momentum"] = mom
+        opt.zero_grad(); (p * g).sum().backward(); opt.step()
+        yield
+""",
+    # `b` is not in the first loss: torch leaves its .grad None and skips it
+    # -- no weight decay, no buffer -- so its buffer starts at step 2 from
+    # the raw gradient. jittor used to seed it from a stand-in zero gradient.
+    "absent_from_first_loss": """
+a = torch.tensor([1.0], requires_grad=True)
+b = torch.tensor([1.0], requires_grad=True)
+params = [a, b]
+opt = torch.optim.SGD(params, lr=0.1, momentum=0.8, dampening=0.2, weight_decay=0.1)
+def run():
+    for i in range(3):
+        loss = (a * 2.0).sum()
+        if i >= 1:
+            loss = loss + (b * 2.0).sum()
+        opt.zero_grad(); loss.backward(); opt.step()
+        yield
+""",
 }
 
 
 def _jittor_first_touch(case, fused):
+    if case in ("momentum_paused", "nesterov_paused"):
+        if case == "momentum_paused":
+            p = jt.array([1.0])
+            opt = jt.optim.SGD([p], lr=0.1, momentum=0.8, dampening=0.2, fused=fused)
+            schedule = ((0.8, 2.0), (0.0, 3.0), (0.8, 4.0))
+        else:
+            p = jt.array([1.0, -0.5])
+            opt = jt.optim.SGD([p], lr=0.1, momentum=0.9, nesterov=True, weight_decay=0.1,
+                               fused=fused)
+            schedule = ((0.9, 2.0), (0.0, 3.0), (0.9, 4.0), (0.9, 1.0))
+        rows = []
+        for mom, g in schedule:
+            opt.param_groups[0]["momentum"] = mom
+            opt.step((p * g).sum())
+            rows.append(_jittor_row([p], opt))
+        return rows
     if case == "momentum_turned_on":
         p = jt.array([1.0])
         params = [p]
@@ -228,6 +289,22 @@ def _jittor_first_touch(case, fused):
         for mom in (0.0, 0.8, 0.8, 0.8):
             opt.param_groups[0]["momentum"] = mom
             opt.step((p * 2.0).sum())
+            rows.append(_jittor_row(params, opt))
+        return rows
+    if case == "absent_from_first_loss":
+        a, b = jt.array([1.0]), jt.array([1.0])
+        params = [a, b]
+        opt = jt.optim.SGD(params, lr=0.1, momentum=0.8, dampening=0.2,
+                           weight_decay=0.1, fused=fused)
+        rows = []
+        for i in range(3):
+            loss = (a * 2.0).sum()
+            if i >= 1:
+                loss = loss + (b * 2.0).sum()
+            with warnings.catch_warnings():
+                # The optimizer reports that `b` receives no gradient.
+                warnings.simplefilter("ignore")
+                opt.step(loss)
             rows.append(_jittor_row(params, opt))
         return rows
     a = jt.array([1.0, -1.0])
@@ -246,6 +323,12 @@ def _jittor_first_touch(case, fused):
     return rows
 
 
+def _device_scope(dev):
+    if dev == "acl":
+        return jt.flag_scope(use_acl=1, use_cuda=1)
+    return jt.flag_scope(use_cuda=(dev == "cuda"))
+
+
 class TestSGDMomentumFirstTouchIndependentOracle(unittest.TestCase):
     def setUp(self):
         try:
@@ -258,12 +341,15 @@ class TestSGDMomentumFirstTouchIndependentOracle(unittest.TestCase):
         if jt.has_cuda:
             yield "cuda", False      # portable update on the device
             yield "cuda", None       # CUDA fused kernel (float32)
+        if capability.check_accelerator("acl", backend=jt).enabled:
+            yield "acl", False       # portable update on the NPU
+            yield "acl", True        # ACL fused kernel (float32)
 
     def test_first_touch_matches_real_pytorch(self):
         for case, body in _FIRST_TOUCH_CASES.items():
             expect = _torch_trajectory(body)
             for dev, fused in self._devices():
-                with jt.flag_scope(use_cuda=(dev == "cuda")):
+                with _device_scope(dev):
                     got = _jittor_first_touch(case, fused)
                 _assert_rows(self, got, expect, f"{case} [{dev}, fused={fused}]")
 
@@ -279,7 +365,7 @@ def run():
         yield
 """)
         for dev, fused in self._devices():
-            with jt.flag_scope(use_cuda=(dev == "cuda")):
+            with _device_scope(dev):
                 p = jt.array([1.0, -2.0])
                 opt = jt.optim.SGD([p], lr=0.1, momentum=0.9, dampening=0.1, fused=fused)
                 rows = []

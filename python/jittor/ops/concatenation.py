@@ -103,14 +103,15 @@ def _empty_where_the_inputs_are(x, shape, dtype):
 
 
 def _concat_direct(arr, dim, dtype):
-    jt = _jt()
     output_shape = list(arr[0].shape)
     output_shape[dim] = sum(value.shape[dim] for value in arr)
     # Allocate where the inputs are: `jt.empty` follows the ambient placement
     # and device, so concatenating tensors that are on neither puts the
     # destination on the ambient device and dispatch_context rejects every
     # setitem below.
-    output = _empty_where_the_inputs_are(arr[0], output_shape, dtype)
+    # The destination contributes no gradient; setitem retains the real inputs'
+    # edges and must not inherit a trainable leaf from this scratch allocation.
+    output = _empty_where_the_inputs_are(arr[0], output_shape, dtype).stop_grad()
     slices = [slice(None)] * len(output_shape)
     offset = 0
     for value in arr:
@@ -223,16 +224,21 @@ def concat(arr, dim=0):
     # would treat differently -- mixed dtypes, an empty or unsigned input, a
     # foreign device, a capture in progress, a registered concat kernel -- and
     # is only asked when nothing reroutes the setitems either: no registered
-    # setitem kernel and no explicit placement on the first input, which
-    # `_empty_where_the_inputs_are` would follow. Nor under a mixed-precision
-    # policy: the destination below is created under it and may take another
+    # setitem kernel, and either ambient placement or explicit CUDA placement.
+    # Explicit CPU and other accelerator placements retain the Python scope
+    # that follows the input. Nor is it asked under a mixed-precision policy:
+    # the destination below is created under it and may take another
     # dtype than the inputs', where the native one keeps theirs; with none set,
     # the bit the scope below adds only concerns reductions, and there are none.
     native = getattr(select_kernel, "_native_concat", None)
     if native is not None and type(dim) is int and (type(arr) is list or type(arr) is tuple) \
             and 2 <= len(arr) <= _MAX_DIRECT_INPUTS and not jt.flags.amp_reg:
         first = arr[0]
-        if first.__class__ is jt.Var and int(first.placement_backend) < 0 \
+        placement = int(first.placement_backend)
+        # BackendId::Cuda is 1. The explicit placement is the dispatch
+        # decision itself, so no compiler/backend flag may be consulted here.
+        native_placement = placement < 0 or placement == 1
+        if isinstance(first, jt.Var) and native_placement \
                 and not select_kernel._is_registered("tensor.setitem"):
             out = native(arr, dim)
             if out is not NotImplemented:
@@ -249,7 +255,6 @@ _tracing = None
 
 
 def _concat(jt, arr, dim):
-    global _tracing
     if not isinstance(arr, Sequence):
         raise TypeError("concat arr needs to be a tuple or list")
     if len(arr) == 0:
@@ -266,26 +271,23 @@ def _concat(jt, arr, dim):
         )
 
     dtypes = []
-    for value in arr:
+    for index, value in enumerate(arr):
         shape = value.shape
         if len(shape) != base_dim:
-            raise RuntimeError(
-                "get different number of dimensions of {} and {}".format(
-                    base_dim, len(shape)
-                )
-            )
+            raise jt.JittorShapeError(
+                "concat: expected every var to have {} dims like var 0 {}, but "
+                "var {} has {} dims (shape {})".format(
+                    base_dim, base_shape, index, len(shape), list(shape)))
         for axis in range(base_dim):
             if axis != dim and shape[axis] != base_shape[axis]:
-                raise RuntimeError(
+                # Torch's wording, which the old message had copied with the
+                # dim where the position in the list belongs.
+                raise jt.JittorShapeError(
                     "Sizes of vars must match except in dimension {}. "
-                    "Expected size {} but got size {} for dimension number "
-                    "{} in the list.".format(
-                        dim,
-                        base_shape[axis],
-                        shape[axis],
-                        axis,
-                    )
-                )
+                    "Expected size {} but got size {} for var number {} in "
+                    "the list (shapes {} and {}).".format(
+                        dim, base_shape[axis], shape[axis], index,
+                        base_shape, list(shape)))
         dtypes.append(_jittor_dtype_name(value.dtype))
 
     dtype = _merge_dtypes(dtypes)
@@ -296,6 +298,16 @@ def _concat(jt, arr, dim):
         result = kernel(inputs, dim)
         if result is not None:
             return result
+    return _concat_after_kernel(arr, dim, dtype)
+
+
+def _concat_after_kernel(arr, dim, dtype):
+    """Resume validated concat after kernel selection, without trying it twice.
+
+    The Python owner and the native Torch fast path both enter with normalized
+    dimensions, a resolved dtype, and the caller's AMP policy plus keep_reduce.
+    """
+    global _tracing
     # Only for a graph being captured to replay: the select costs more
     # to build than the slice copies it replaces, which an eager call pays
     # every time -- Qwen3 greedy decoding, host-bound, went 3.80 -> 4.22 s

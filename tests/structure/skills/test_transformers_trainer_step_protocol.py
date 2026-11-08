@@ -11,7 +11,7 @@ def setUpModule():
     global protocol, ReadbackGuard, GateWindow
     protocol_path = (
         Path(__file__).resolve().parents[3]
-        / "agent/skills/jittor-transformers-perf/scripts/_trainer_step_protocol.py"
+        / "benchmarks/profiling/_trainer_step_protocol.py"
     )
     spec = importlib.util.spec_from_file_location("_trainer_step_protocol", protocol_path)
     protocol = importlib.util.module_from_spec(spec)

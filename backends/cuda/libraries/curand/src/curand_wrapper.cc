@@ -12,6 +12,8 @@
 #include "runtime/init.h"
 #include "runtime/rng_state.h"
 #include "runtime/device.h"
+#include "runtime/executor_entry.h"
+#include "runtime/async_exec.h"
 #include <limits>
 #include <mutex>
 #include <sstream>
@@ -145,6 +147,27 @@ uint64 curand_initial_seed(int device) {
     return curand_seeds[device];
 }
 
+int64 curand_generator_offset(int device) {
+    CurandDeviceScope scope(device);
+    std::lock_guard<std::mutex> lock(curand_state_mutex);
+    USER_CHECK(curand_offsets[device] <= uint64(std::numeric_limits<int64>::max()))
+        << "CUDA RNG offset exceeds int64 range";
+    return int64(curand_offsets[device]);
+}
+
+uint64 curand_generator_seed(int device) {
+    if (device < 0) device = current_device();
+    return curand_initial_seed(device);
+}
+
+void curand_restore_state(int device, uint64 seed, int64 offset) {
+    USER_CHECK(offset >= 0) << "CUDA RNG offset must be non-negative";
+    CurandDeviceScope scope(device);
+    std::lock_guard<std::mutex> lock(curand_state_mutex);
+    curand_seeds[device] = seed;
+    curand_offsets[device] = uint64(offset);
+}
+
 vector<int64> curand_reserve_philox(int64 increment) {
     if (!inside_executor() && !on_async_worker()) {
         async_exec_wait();
@@ -155,16 +178,20 @@ vector<int64> curand_reserve_philox(int64 increment) {
         throw std::invalid_argument("Invalid CUDA Philox reservation");
     increment = (increment + 3) / 4 * 4;
     const int device = current_device();
-    if (device < 0) throw std::invalid_argument("CUDA Philox needs a device");
-    const int64 offset = curand_generator_offset(device);
-    if (increment > std::numeric_limits<int64>::max() - offset)
+    std::lock_guard<std::mutex> lock(curand_state_mutex);
+    if (device < 0 || device >= (int)curand_offsets.size())
+        throw std::invalid_argument("CUDA Philox needs an initialized device");
+    const uint64 limit = uint64(std::numeric_limits<int64>::max());
+    const uint64 padding = (-curand_offsets[device]) & uint64(3);
+    if (curand_offsets[device] > limit - padding)
         throw std::overflow_error("CUDA RNG offset exhausted");
-    const uint64 seed = curand_generator_seed(device);
-    // Advance the physical generator as well as its recorded cursor. Merely
-    // adding to curand_offsets would make a subsequent checkpoint lie about
-    // the next native random draw.
-    curand_restore_state(device, seed, offset + increment);
-    return {static_cast<int64>(seed), offset};
+    const uint64 offset = curand_offsets[device] + padding;
+    if (uint64(increment) > limit - offset)
+        throw std::overflow_error("CUDA RNG offset exhausted");
+    const uint64 seed = curand_seeds[device];
+    curand_offsets[device] = offset + uint64(increment);
+    curand_stream_binds[device]++;
+    return {static_cast<int64>(seed), static_cast<int64>(offset)};
 }
 
 // See cublas_shutdown: report, never raise, and idempotent.

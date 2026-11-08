@@ -13,6 +13,8 @@
 #include "runtime/cuda_streams.h"
 #include "runtime/device.h"
 #include "stream_compat.h"
+#include "runtime/random_generator.h"
+#include "runtime/rematerialization_scope.h"
 #include "utils/philox.h"
 
 namespace jittor {
@@ -45,7 +47,7 @@ CurandRandomOp::CurandRandomOp(NanoVector shape, NanoString dtype, NanoString ty
         from_generator = true;
         philox_seed = (uint64)generator->state->seed_;
         philox_offset = (uint64)generator->state->reserve_cuda(raw);
-    }
+    } else rematerialization_preserve_rng = rematerialization_preserves_rng();
 }
 
 void CurandRandomOp::jit_prepare(JK& jk) {
@@ -151,7 +153,17 @@ void CurandRandomOp::jit_run() {
         words = work_items * 4;
     )
     uint64 seed, word_offset;
-    curand_reserve_philox_words(words, alignment, seed, word_offset);
+    if (rematerialization_preserve_rng && rematerialization_rng_saved) {
+        seed = rematerialization_seed;
+        word_offset = rematerialization_offset;
+    } else {
+        curand_reserve_philox_words(words, alignment, seed, word_offset);
+        if (rematerialization_preserve_rng) {
+            rematerialization_seed = seed;
+            rematerialization_offset = word_offset;
+            rematerialization_rng_saved = true;
+        }
+    }
     @if(@strcmp(@R,uniform)==0,
         @if(@strcmp(@T,float32)==0,
             work_items = ((word_offset & 3) + uint64(num) + 3) >> 2;

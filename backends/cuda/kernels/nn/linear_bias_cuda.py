@@ -4,14 +4,15 @@ Each tile owns its partial sums, and each output channel has one final writer.
 There are no floating point atomics whose order depends on block scheduling.
 """
 
-import jittor as jt
+from jittor._core import function as _function_owner
 from jittor._core.dtypes import var_dtype_name
 from jittor._runtime.core_api import _output_requires_grad
 from jittor._runtime.dispatch import optional_kernel
 
 
-class _BiasSum(jt.Function):
+class _BiasSum(_function_owner.Function):
     def execute(self, gradient):
+        import jittor as jt
         self.shape = tuple(gradient.shape)
         dtype = var_dtype_name(gradient)
         channels = int(gradient.shape[-1])
@@ -76,7 +77,7 @@ class _BiasSum(jt.Function):
         return gradient.broadcast(self.shape)
 
 
-class _LinearBias(jt.Function):
+class _LinearBias(_function_owner.Function):
     def execute(self, x, bias):
         return x + bias
 
@@ -85,6 +86,7 @@ class _LinearBias(jt.Function):
 
 
 def _supports_linear_bias(x, bias):
+    import jittor as jt
     if not (isinstance(x, jt.Var) and isinstance(bias, jt.Var)):
         return False
     shape = tuple(int(d) for d in x.shape)

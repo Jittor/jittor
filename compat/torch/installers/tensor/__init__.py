@@ -657,72 +657,6 @@ def frombuffer(buffer, *, dtype, count=-1, offset=0, requires_grad=False):
         return v
 
 
-class Generator(jt.Generator):
-    """Torch-shaped wrapper around Jittor's native seed/counter generator."""
-
-    def __init__(self, device=None):
-        super().__init__(globals()["device"](device or "cpu"))
-        # Keep the established compat path for floating-point factories until
-        # native generator-aware normal is available. Integer draws and
-        # sampler indices always use the native Jittor stream.
-        self._rng = np.random.default_rng(0)
-
-    @property
-    def device(self):
-        return globals()["device"](self.device_type, self.device_index)
-
-    def manual_seed(self, seed):
-        super().manual_seed(seed)
-        self._rng = np.random.default_rng(int(seed))
-        return self
-
-    def _uniform(self, low, high, shape, dtype="float32"):
-        if self.device.type != "cpu":
-            raise RuntimeError("explicit Generator uniform currently supports CPU only")
-        dtype_name = _dtype_to_str(dtype)
-        precision_bits = {"float16": 11, "bfloat16": 8,
-                          "float32": 24, "float64": 53}.get(dtype_name)
-        if precision_bits is None:
-            raise NotImplementedError("explicit Generator uniform requires a floating dtype")
-        count = int(np.prod(tuple(shape)))
-        offset = self._reserve(count * (2 if precision_bits > 32 else 1))
-        quantized_low = float(low)
-        quantized_high = float(high)
-        compute_dtype = "float64" if dtype_name == "float64" else "float32"
-        values = jt.ops.generator_uniform(
-            shape, compute_dtype, quantized_low, quantized_high,
-            self._seed_argument(), offset, precision_bits)
-        return values if dtype_name == compute_dtype else values.cast(dtype_name)
-
-    def get_state(self):
-        version, kind, index, seed, offset = super().get_state()
-        payload = "%s\n%s %s %s %s\n" % (
-            version, kind, "-" if index is None else index, seed, offset)
-        data = np.frombuffer(payload.encode("ascii"), dtype=np.uint8).copy()
-        return from_numpy(data, device="cpu")
-
-    def set_state(self, state):
-        if (not isinstance(state, jt.Var)
-                or _dtype_to_str(state.dtype) != "uint8"
-                or state.ndim != 1 or not _var_is_cpu_resident(state)):
-            raise TypeError("Generator state must be a one-dimensional CPU uint8 tensor")
-        try:
-            text = state.numpy().tobytes().decode("ascii")
-            lines = text.splitlines()
-            if len(lines) != 2:
-                raise ValueError
-            fields = lines[1].split()
-            if len(fields) != 4:
-                raise ValueError
-            kind, index_text, seed_text, offset_text = fields
-            index = None if index_text == "-" else int(index_text)
-            super().set_state((lines[0], kind, index,
-                               int(seed_text), int(offset_text)))
-        except (UnicodeDecodeError, ValueError, OverflowError):
-            raise RuntimeError("invalid Generator state") from None
-        return self
-
-
 class layout:  # torch.layout placeholder
     pass
 
@@ -764,19 +698,18 @@ def _bind_fast_cat():
 
 
 def cat(tensors, dim=0, out=None, axis=None):
-    from ...amp import autocast_any_enabled
-    amp_active = autocast_any_enabled()
+    from ...amp import _effective_autocast_device
+    if _effective_autocast_device() is not None:
+        with jt.flag_scope(amp_reg=0):
+            return _cat_impl(tensors, dim, out, axis)
+    return _cat_impl(tensors, dim, out, axis)
 
-    def _concat_native(values, axis):
-        if amp_active:
-            with jt.flag_scope(amp_reg=0):
-                return _jt_concat(values, axis)
-        return _jt_concat(values, axis)
 
-    if not amp_active and out is None and axis is None and type(dim) is int:
+def _cat_impl(tensors, dim=0, out=None, axis=None):
+    if out is None and axis is None and type(dim) is int:
         fast = (_FAST_CAT or _bind_fast_cat())(tensors, dim)
         if fast is not NotImplemented:
-            return fast
+            return _cat_grad_result(fast, tensors)
         # The native fast path above declines whenever a backend registers its
         # own concat kernel (ACL does), so on ACL every `cat` falls through the
         # whole frontend below -- the `__torch_function__` scan, the `None`
@@ -798,8 +731,14 @@ def cat(tensors, dim=0, out=None, axis=None):
                             or t.numel() <= 0 or _var_dtype_name(t) != name0):
                         uniform = False
                         break
-            if uniform and not amp_active:
-                return _jt_concat(list(seq), dim)
+            if uniform:
+                result = _jt_concat(list(seq), dim)
+                # torch.cat is dtype-preserving; autocast does not cast it.
+                # jittor.concat may compute in the reduced dtype under AMP,
+                # so restore the common input dtype the frontend promises.
+                if _jittor_dtype_name(result.dtype) != name0:
+                    result = result.cast(name0)
+                return _cat_grad_result(result, seq)
     g = compatibility_owner(jt)
     if axis is not None: dim = axis      # torch accepts axis= (mmrotate PSC head)
     # Honor the __torch_function__ protocol: tensordict (and other tensor-likes)
@@ -824,7 +763,7 @@ def cat(tensors, dim=0, out=None, axis=None):
                 )
             assert all(len(_t) == len(_seq[0]) for _t in _seq), "nested cat with dim!=0 requires same batch size"
             return _NestedTensor.from_tensors(
-                [_concat_native([_t.unbind(0)[i] for _t in _seq], dim=dim - 1) for i in range(len(_seq[0]))],
+                [_jt_concat([_t.unbind(0)[i] for _t in _seq], dim=dim - 1) for i in range(len(_seq[0]))],
                 ragged_idx=getattr(_seq[0], "_ragged_idx", _seq[0].dim() - 1),
             )
         for _t in _seq:
@@ -859,7 +798,7 @@ def cat(tensors, dim=0, out=None, axis=None):
     # the values (Qwen's float32 RoPE then contains BF16-rounded halves).
     # Torch autocast leaves cat at the promoted input precision. Suspend the
     # native register before inference and allocation, as for binary ops.
-    out_var = _concat_native(fixed, dim)
+    out_var = _jt_concat(fixed, dim)
     # jittor's concat downcasts a uniform uint8 input to int8 (e.g. mask-rcnn-c4
     # builds a uint8 pos_inds mask via torch.cat of uint8 ones/zeros). torch keeps
     # the common input dtype; restore it so downstream byte-mask indexing works.
@@ -868,7 +807,15 @@ def cat(tensors, dim=0, out=None, axis=None):
         d = in_dtypes.pop()
         if _jittor_dtype_name(out_var.dtype) != d:
             out_var = out_var.cast(d)
-    return _cat_result(out_var, out)
+    return _cat_result(_cat_grad_result(out_var, fixed), out)
+
+
+def _cat_grad_result(value, tensors):
+    # Native concat may mark a new destination trainable for frozen inputs.
+    if isinstance(value, jt.Var) and (jt.flags.no_grad or not any(
+            isinstance(t, jt.Var) and t.requires_grad for t in tensors)):
+        return value.detach()
+    return value
 
 
 def _cat_result(value, out):
@@ -928,6 +875,14 @@ class BoolTensor(metaclass=_TypedTensorMeta):
     _jdtype = 'bool'
 
 
+class ComplexFloatTensor(metaclass=_TypedTensorMeta):
+    _jdtype = 'complex64'
+
+
+class ComplexDoubleTensor(metaclass=_TypedTensorMeta):
+    _jdtype = 'complex128'
+
+
 _TYPED_TENSOR_CLASSES = {
     'FloatTensor': FloatTensor,
     'DoubleTensor': DoubleTensor,
@@ -939,6 +894,8 @@ _TYPED_TENSOR_CLASSES = {
     'CharTensor': CharTensor,
     'ByteTensor': ByteTensor,
     'BoolTensor': BoolTensor,
+    'ComplexFloatTensor': ComplexFloatTensor,
+    'ComplexDoubleTensor': ComplexDoubleTensor,
 }
 
 def _check_condition(condition, message, exception):
@@ -1210,10 +1167,9 @@ def install_methods(ctx):
         if _ro is not None:
             _native_reductions[_rn] = _ro
             setattr(Var, _rn, _SHAPE_REDUCTION_APIS[_rn])
-    # any/all: jittor's only accept a scalar `dim` (no `dims` tuple, no keepdims).
-    # Support torch's tuple-of-dims and keepdim by reducing one dim at a time
-    # (descending so earlier dim indices stay valid), keeping a length-1 axis when
-    # keepdim is set. Plain scalar/axis use falls through to the native op.
+    # any/all share the module-level Torch argument contract. The native owner
+    # accepts tuple dimensions and keepdims directly; the adapter also preserves
+    # Torch's empty-axis and uint8-result conventions.
     for _rn in ("any", "all"):
         _ro = getattr(Var, _rn, None)
         if _ro is not None:
@@ -1244,7 +1200,8 @@ def install_methods(ctx):
     if not hasattr(Var, "neg"):         Var.neg = _shape_neg
     if not hasattr(Var, "reciprocal"):  Var.reciprocal = _shape_reciprocal
     if not hasattr(Var, "expm1"):       Var.expm1 = _shape_expm1
-    if not hasattr(Var, "log1p"):       Var.log1p = _shape_log1p
+    # Keep Torch integer promotion on the frontend Tensor only.
+    Var.log1p = _shape_log1p
     if not hasattr(Var, "square"):      Var.square = _shape_square
     if not hasattr(Var, "square_"):     Var.square_ = _shape_square_
     if not hasattr(Var, "clamp_min"):   Var.clamp_min = _shape_clamp_min

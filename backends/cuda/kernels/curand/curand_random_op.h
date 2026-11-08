@@ -19,10 +19,15 @@ struct CurandRandomOp : Op {
     // Set when a jt.Generator was passed: this draw's key and first position
     // in that generator's counter-based stream, reserved at construction
     // (RandomGeneratorState::reserve_cuda). Without one the op draws from the
-    // global curand host generator.
+    // checkpointed global Philox stream.
     bool from_generator = false;
     uint64 philox_seed = 0;
     uint64 philox_offset = 0;
+    // Default stream state belongs to first actual execution, never issue order.
+    bool rematerialization_preserve_rng = false;
+    bool rematerialization_rng_saved = false;
+    uint64 rematerialization_seed = 0;
+    uint64 rematerialization_offset = 0;
     CurandRandomOp(NanoVector shape, NanoString dtype=ns_float32, NanoString type=ns_uniform, RandomGenerator* generator=nullptr);
 
     const char* name() const override { return "curand_random"; }

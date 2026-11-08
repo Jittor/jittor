@@ -195,7 +195,11 @@ class TestPeftQwenMethods(unittest.TestCase):
                 model.eval()
                 with torch.no_grad():
                     expected = model(input_ids=ids, **extra).logits.detach().clone()
-                with tempfile.TemporaryDirectory() as directory:
+                # The lab TMPDIR can be NFS; a directory removed between rmtree's
+                # scan and its rmdir leaves this cleanup raising after the
+                # assertions have already passed.
+                with tempfile.TemporaryDirectory(
+                        ignore_cleanup_errors=True) as directory:
                     model.save_pretrained(directory, safe_serialization=True)
                     fresh = Qwen2ForCausalLM(_qwen2_config())
                     fresh.load_state_dict(base_state, strict=True)
@@ -206,7 +210,8 @@ class TestPeftQwenMethods(unittest.TestCase):
 
     def test_qwen2_xlora_uses_immutable_base_fixture(self):
         ids = torch.tensor([[1, 3, 5, 7], [2, 4, 6, 8]], dtype=torch.long)
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory(
+                ignore_cleanup_errors=True) as directory:
             adapters = {}
             for index in range(2):
                 torch.manual_seed(1729)

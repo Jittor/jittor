@@ -17,8 +17,8 @@ rather than used:
 
   - the arguments' shapes, dtypes and count,
   - whether the module is in training mode,
-  - whether any parameter has been rebound (an optimizer step, a load, a
-    device move) -- the graph reads the parameter Vars it captured, and an
+  - whether any parameter or registered buffer has been rebound (an optimizer
+    step, a load, a device move) -- the graph reads the Vars it captured, and an
     update replaces them, so it would otherwise quietly answer with the old
     weights,
   - whether the captured graph is still unfinished. This is the one that
@@ -100,9 +100,10 @@ many fell back and why -- because a silent fallback that quietly costs the
 speedup is worse than none.
 """
 
-from contextlib import nullcontext as _nullcontext
+from contextlib import contextmanager, nullcontext as _nullcontext
 import copy as _copy
 import dataclasses as _dataclasses
+import threading
 import time
 import weakref
 
@@ -122,6 +123,27 @@ _RERECORD_LIMIT = 8
 #: replays the values it recorded, so a graph containing one of these is not
 #: re-runnable at all and capture refuses rather than repeating a draw.
 _NONDETERMINISTIC_OPS = ("random", "curand_random")
+
+
+_capture_state = threading.local()
+
+
+def graph_replay_barrier(reason):
+    """Refuse replay capture containing an opaque operation or foreign write."""
+    for reasons in getattr(_capture_state, "stack", ()):
+        if not reasons:
+            reasons.append(str(reason))
+
+
+@contextmanager
+def _capture_barriers():
+    previous = getattr(_capture_state, "stack", ())
+    reasons = []
+    _capture_state.stack = previous + (reasons,)
+    try:
+        yield reasons
+    finally:
+        _capture_state.stack = previous
 
 
 class _no_auto:
@@ -315,15 +337,22 @@ def _empty_like(var):
     """
     token = _core._set_tensor_frontend_type(type(var))
     placement = None
+    construction = None
     try:
         backend = var.placement_backend
         if backend >= 0:
-            placement = _core._set_tensor_placement(backend, max(int(var.device_id), 0))
+            device = max(int(var.device_id), 0)
+            placement = _core._set_tensor_placement(backend, device)
+            # Native constructors do not run inside a frontend binding scope.
+            # Preserve construction placement too: otherwise a private copy
+            # of an explicit CPU input is silently allocated on ambient ACL.
+            construction = _core._set_construction_placement(backend, device)
         try:
             with _device_scope_like(var):
                 result = jt.empty(var.shape, _native_dtype(var))
         finally:
             if placement is not None:
+                _core._restore_construction_placement(construction)
                 _core._reset_tensor_placement(placement)
     finally:
         _core._reset_tensor_frontend_type(token)
@@ -350,6 +379,26 @@ def _training(module):
     if callable(is_training):
         return bool(is_training())
     return bool(getattr(module, "training", False))
+
+
+def _module_vars(module):
+    """Parameter and registered-buffer holders, including child modules.
+
+    A holder shared by the two views is guarded once. Distinct holders can
+    point at the same Var and later be rebound independently, so deduplicate
+    by holder identity rather than ``var_ptr``.
+    """
+    parameters = getattr(module, "parameters", None)
+    leaves = list(parameters()) if callable(parameters) else []
+    buffers = getattr(module, "named_buffers", None)
+    if callable(buffers):
+        leaves.extend(v for _, v in buffers(recurse=True))
+    seen, result = set(), []
+    for leaf in leaves:
+        if id(leaf) not in seen:
+            seen.add(id(leaf))
+            result.append(leaf)
+    return result
 
 
 def _sync_result(output):
@@ -452,6 +501,8 @@ class GraphReplay:
         # operators. A recorded graph pays that once, at capture, and every
         # later call is a single launch: measured 2.24 us for a whole step.
         self._cuda_graph = 0
+        self._graph_has_host_prefix = False
+        self._graph_host_prefix_bytes = 0
         self._graph_out = None
         self._graph_refused = None
         # When to record next (a replay count), and how often a recording has
@@ -482,8 +533,7 @@ class GraphReplay:
 
     # -- capture -------------------------------------------------------
     def _params(self):
-        params = getattr(self._module, "parameters", None)
-        return list(params()) if callable(params) else []
+        return _module_vars(self._module)
 
     def _capture_now(self, args, kwargs=None):
         kwargs = kwargs or {}
@@ -531,8 +581,11 @@ class GraphReplay:
         readbacks = _core._host_readback_count()
         _TRACING[0] += 1
         try:
-            with _no_auto(), jt.no_grad():
+            with _capture_barriers() as barriers, _no_auto(), jt.no_grad():
                 output = self._module(*private_args, **private_kwargs)
+                if barriers:
+                    self._refused = "the traced call contains an opaque operation: " + barriers[0]
+                    return None
                 if _core._host_readback_count() != readbacks:
                     self._refused = ("the traced call read a value back to the host, so its "
                                      "path depends on tensor values and cannot be replayed")
@@ -603,7 +656,7 @@ class GraphReplay:
             return "the module changed training mode"
         for holder, ptr in cap.params:
             if holder.var_ptr != ptr:
-                return "a parameter was replaced since the graph was captured"
+                return "a parameter or buffer was replaced since the graph was captured"
         return None
 
     # -- is it actually faster? ----------------------------------------
@@ -726,9 +779,17 @@ class GraphReplay:
             self._graph_refused = "this build cannot record device graphs"
             return False
         host = _core.graph_host_work(cap.outputs)
-        if host:
-            self._graph_refused = ("part of the graph runs on the host (%s), which a "
-                                   "recording would drop" % host)
+        prefix_bytes = _core.graph_host_prefix_bytes(cap.outputs) if host else 0
+        if host and prefix_bytes < 0:
+            self._graph_refused = ("part of the graph runs on the host (%s), without "
+                                   "an admissible explicit CPU prefix" % host)
+            return False
+        limit = self._max_retained_bytes
+        if host and limit and self._graph_bytes + prefix_bytes > limit:
+            self._graph_refused = (
+                "a recording with its host prefix would keep %.1f MiB alive, "
+                "over the %.1f MiB allowed" %
+                ((self._graph_bytes + prefix_bytes) / 2**20, limit / 2**20))
             return False
         outs = [_empty_like(o) for o in cap.outputs]
         before = jt.flags.keep_graph
@@ -744,7 +805,9 @@ class GraphReplay:
             # Drain first: the recording must contain the step, not the
             # backlog in front of it.
             jt.sync(cap.outputs, True, False)
-            if not _core.graph_capture_begin():
+            began = (_core.graph_capture_begin_host_prefix(cap.outputs) if host
+                     else _core.graph_capture_begin())
+            if not began:
                 self._graph_refused = "the device refused to start recording"
                 return False
             try:
@@ -765,6 +828,8 @@ class GraphReplay:
             self._graph_refused = "the recording contained no device work"
             return False
         self._cuda_graph = handle
+        self._graph_has_host_prefix = bool(host)
+        self._graph_host_prefix_bytes = prefix_bytes if host else 0
         self._graph_out = outs
         _core.graph_bind_leaves(handle, cap.outputs)
         return True
@@ -779,8 +844,14 @@ class GraphReplay:
         """
         if not _core.graph_leaves_moved(self._cuda_graph):
             return True
+        self._drop_recording()
+        return False
+
+    def _drop_recording(self):
         _core.graph_release(self._cuda_graph)
         self._cuda_graph = 0
+        self._graph_has_host_prefix = False
+        self._graph_host_prefix_bytes = 0
         self._graph_out = None
         self._rerecords += 1
         if self._rerecords >= _RERECORD_LIMIT:
@@ -820,8 +891,18 @@ class GraphReplay:
         # A recorded device graph re-issues the whole step with one call. The
         # input copies above are on the same stream, so they are ordered ahead
         # of it without a wait.
+        recorded = False
         if self._cuda_graph and self._recording_still_valid():
-            _core.graph_launch(self._cuda_graph)
+            if self._graph_has_host_prefix:
+                recorded = _core.graph_launch_host_prefix(self._cuda_graph)
+                if not recorded:
+                    # The CPU prefix has already run, but its device destination
+                    # moved. Destroy the stale photograph before ordinary replay.
+                    self._drop_recording()
+            else:
+                _core.graph_launch(self._cuda_graph)
+                recorded = True
+        if recorded:
             # `sync_src=False`: the launch already produced the bytes, and
             # syncing the captured outputs would run the whole graph again
             # through the executor -- which is exactly what the recording is
@@ -848,6 +929,9 @@ class GraphReplay:
             return self._module(*args, **kwargs)
 
     def __call__(self, *args, **kwargs):
+        # The outer device capture owns ordinary lazy operators for this call.
+        if _core.graph_capture_active():
+            return self._eager(args, kwargs)
         if self._refused is not None:
             return self._eager(args, kwargs)
 
@@ -862,10 +946,18 @@ class GraphReplay:
             # One eager call first: it materializes the parameters and any
             # buffer the module builds lazily, so the capture that follows has
             # nothing pending underneath it.
+            argument_state = (_signature(args, kwargs), _host_state((args, kwargs)))
             working = _WorkingSet()
             with _no_auto(), jt.no_grad():
                 result = self._module(*args, **kwargs)
                 _sync_result(result)
+            if argument_state != (_signature(args, kwargs), _host_state((args, kwargs))):
+                # Plain list/dict inputs may be mutable caches or cursors.
+                # Running Python again would apply their side effects twice,
+                # and a later graph replay would omit those effects entirely.
+                self._refused = "the warm-up modified Python argument state, which graph replay cannot reproduce"
+                self.stats["rebuilt"] += 1
+                return result
             # What a device recording of this graph would hold.
             self._graph_bytes = working.bytes()
             cap = self._capture = self._capture_now(args, kwargs)
@@ -923,6 +1015,8 @@ class GraphReplay:
         if self._cuda_graph:
             _core.graph_release(self._cuda_graph)
             self._cuda_graph = 0
+        self._graph_has_host_prefix = False
+        self._graph_host_prefix_bytes = 0
         self._graph_out = None
         self._graph_refused = None
         cap, self._capture = self._capture, None
@@ -1313,6 +1407,8 @@ _MISSING = object()
 def auto_replay_for(module, args, kw):
     """The GraphReplay to use for this call, or None to run normally."""
     flags = jt.flags
+    if _core.graph_capture_active():
+        return None
     if not flags.auto_graph_replay or not flags.no_grad:
         return None
     # PEFT switches LoRA layers on and off in-place for reference-model
@@ -1352,7 +1448,14 @@ def auto_replay_for(module, args, kw):
         return None
     if objects:
         return _stateful_call(module, state, args, kw, objects)
-    signature = _signature(args, kw)
+    # Input shapes alone are not stability: diffusion VAEs cast their weights
+    # around every decode. Capturing again on every rebind executes the eager
+    # warm-up, capture and replay instead of one forward. Wait for unchanged
+    # parameter/buffer holders too. A live capture already owns this list, so
+    # steady calls need no second traversal of the module tree.
+    capture = state.replay._capture if state.replay is not None else None
+    holders = (p for p, _ in capture.params) if capture is not None else _module_vars(module)
+    signature = (_signature(args, kw), tuple((id(p), p.var_ptr) for p in holders))
     if signature != state.signature:
         state.signature = signature
         state.seen = 1

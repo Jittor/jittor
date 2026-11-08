@@ -40,6 +40,7 @@ struct GradCallback {
 };
 
 struct TapeOp final : Op {
+    static constexpr bool accepts_storage_strides = true;
     TapeOp(Var* x);
     
     const char* name() const override { return "tape"; }

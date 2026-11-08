@@ -92,6 +92,12 @@ def routing(monkeypatch):
         "_pair": lambda value: tuple(value) if isinstance(value, (tuple, list)) else (value, value),
         "_arg_policy": SimpleNamespace(ignored=ignored),
         "_INPLACE_CONSEQUENCE": "not performed in place",
+        # SDPA asks `causal_mask_rewrite` before routing. The verdict is a host
+        # read of the mask, so it is cached per mask view in module state, and
+        # the backend it consults is the same `dispatch_context` this fixture
+        # answers "acl" with -- which is why the rewrite declines here.
+        "_EXACT_CAUSAL": [None, False],
+        "dispatch_context": native.core.dispatch_context,
     }
     return SimpleNamespace(namespace=namespace, jt=native, seen=seen,
                            marker=marker, register=register, dispatch=dispatch)
@@ -203,6 +209,10 @@ def test_layer_norm_keeps_affine_parameters_and_validates_before_dispatch(routin
     # dispatch to learn that one of them could never match.
     requires_grad = {"value": True}
     ns["_output_requires_grad"] = lambda *args: requires_grad["value"]
+    # layer_norm asks the shared AMP half predicate (imported from
+    # nn/functional/_amp.py); the routing namespace carries the extracted
+    # definitions only, so bind the non-halving answer here.
+    ns["_amp_prefers_half"] = lambda: False
     _definitions("nn/functional/normalization.py",
                  ["_restore_half_dtype", "layer_norm"], ns)
     routing.jt.nn.layer_norm = ns["layer_norm"]
@@ -234,13 +244,14 @@ def test_layer_norm_keeps_affine_parameters_and_validates_before_dispatch(routin
 
 
 def test_matmul_bmm_and_transpose_reuse_existing_keys(routing):
-    names = ["_operand", "_check_matmul_shapes", "_transpose_base_last2", "_matmul_2d_cublas",
+    names = ["_operand", "_check_matmul_shapes", "_transpose_base_last2", "_keep_operand_grads",
+             "_matmul_2d_cublas",
              "_mixed_float_compute_dtype", "_matmul_kernel_dispatch",
              # The AMP scope the three generic contractions share. It is a
              # module-level helper rather than three copies of the same
              # `flag_scope` call, so it has to be extracted alongside them or
              # every routing call below dies in `NameError`.
-             "_contraction_scope",
+             "_contraction_scope", "_both_half",
              "matmul", "matmul_transpose", "bmm", "bmm_transpose"]
     ns = _definitions("nn/functional/matrix.py", names, routing.namespace)
     routing.jt.nn.matmul = ns["matmul"]
@@ -292,7 +303,8 @@ def test_softmax_uses_existing_key_after_public_axis_validation(routing, monkeyp
 
 def test_sdpa_validates_dtype_and_dropout_before_registered_attention(routing):
     function = _definitions("nn/functional/attention.py",
-                            ["scaled_dot_product_attention", "_shape", "_repeated_heads",
+                            ["causal_mask_rewrite", "_exactly_causal",
+                             "scaled_dot_product_attention", "_shape", "_repeated_heads",
                              "_expand_heads"],
                             routing.namespace)["scaled_dot_product_attention"]
     routing.register("nn.scaled_dot_product_attention")

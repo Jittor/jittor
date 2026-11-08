@@ -6,18 +6,15 @@
 不得用旧本地代码覆盖远端更新。禁止通过丢弃改动或自动 stash 清场来同步。整合期间冻结同一工作树的
 测试与协作者写入；同步前的结果保留原基线，按实际变更复验受影响范围。
 
-## Start Here
+## 按任务查阅
 
-开始任务前依次阅读：
+直接按当前任务查阅[开发文档](docs/development/index.md)或[技能目录](https://github.com/JittorEcosystem/jittor-dev-skills/blob/main/README.md)，
+不再要求依次阅读协作手册和项目上下文。同步、缓存、验证与提交规则只在本文件维护。
 
-1. [`agent/manuals/collaboration.md`](agent/manuals/collaboration.md)：协作、验证和 JIT 并发规则。
-2. [`agent/skills/jittor-dev-context/SKILL.md`](agent/skills/jittor-dev-context/SKILL.md)：上下文入口。
-3. [`agent/manuals/project-context.md`](agent/manuals/project-context.md)：当前状态和主题索引。
-4. 与任务相关的架构文档、已知问题和既有结果报告。
-
-任务、状态与交接记录在 GitHub issue 与 PR 中，验证证据写进 PR 描述；等待硬件验收的事项记在
-[`agent/manuals/deferred-hardware.md`](agent/manuals/deferred-hardware.md)，缺陷与限制记在
-[问题总账](agent/manuals/known-issues.md)。不在 agent/ 下另建看板或结果树。
+任务、缺陷、待硬件验收事项与验证结果记在 GitHub issue/PR。
+既有的[问题记录](https://github.com/Jittor/jittor/blob/3679de22c02c83b982432a0e1bdb3da148411c50/agent/manuals/known-issues.md)和
+[硬件验收记录](https://github.com/Jittor/jittor/blob/3679de22c02c83b982432a0e1bdb3da148411c50/agent/manuals/deferred-hardware.md)保留在固定提交中，
+未因文档清理而关闭或重新验收。涉及其中条目时，按最新源码复现并在 issue/PR 记录后续处置。
 
 ## Working Method
 
@@ -28,14 +25,15 @@
   unittest 与 benchmark 不得共享同一编译缓存。
 - 公共行为变化需要定向回归测试；涉及共享语义时扩大到 CPU 与相关加速后端。
 - 不使用宽泛异常捕获隐藏安装、注册、编译或后端错误。
-- 接入或验证下游 Torch 生态库（新库对拍、生态门禁 case、`adapters/` 新增或修改）
-  按 [`agent/skills/downstream-library-adaptation/SKILL.md`](agent/skills/downstream-library-adaptation/SKILL.md) 执行：先按其三行判据分流到
-  jittor 核心、`jittor.compat.torch` 或 adapter，再按其 device 阶梯和准入清单验收。
-  不在该流程外新增 adapter。
+- 接入或验证下游 Torch 生态库（新库对拍、生态门禁 case、独立 adapter 新增或修改）
+  按 [downstream-library-adaptation](https://github.com/JittorEcosystem/jittor-dev-skills/blob/main/skills/downstream-library-adaptation/SKILL.md) 执行：先按其三行判据分流到
+  jittor 核心、`jittor.compat.torch` 或 adapter，再按所声明的设备与功能范围验证。
+  不在该流程外新增 adapter。下游实现和专属测试在 `JittorEcosystem` 的独立仓库维护；
+  主仓不保留 `adapters/` 目录；生态仓库入口见根 README。
 
 ## Repository Boundary
 
-- 主仓库只保存源码、测试、公开文档、`agent/` 协作文档和可复用工具。
+- 主仓库只保存源码、测试、公开文档、开发技能入口和可复用工具。
 - 独立实验、下游 checkout 和大体积产物放在 `$JITTOR_LAB_ROOT/<topic>/`。
 - `HOME`、`JITTOR_HOME`、`TMPDIR`、模型缓存、编译缓存和原始日志放在
   `$JITTOR_LAB_ROOT/_state/<topic>/<run>/`。
@@ -44,6 +42,16 @@
   写入个人主目录、机器地址或设备编号。
 - 不在主仓库顶层创建 `jittor_fsdp2`、`*_work`、`*_probe` 等实验目录，也不把
   下游兼容文件放进 `python/jittor/` 根目录。
+
+## Agent 文档边界
+
+- 主仓只保留本 `AGENTS.md` 作为开发代理规则与导航入口，不保留 `agent/`。
+- 可复用技能在 [JittorEcosystem/jittor-dev-skills](https://github.com/JittorEcosystem/jittor-dev-skills) 维护；
+  需要本地读取时克隆到 `$JITTOR_LAB_ROOT/jittor-dev-skills`，不要复制回主仓。
+- 技能中的命令从目标 Jittor checkout 根目录执行；主仓测试所需工具继续在 `tools/`、`benchmarks/` 随源码维护。
+- 下游专属流程在 `JittorEcosystem` 对应仓库维护；主仓只保留统一的问题分流规则。
+- 仍被主仓门禁调用的生态验证脚本位于 `tools/ecosystem/`，性能探针位于 `benchmarks/`；不要将它们藏在逐库技能目录中，也不要将工具存在视为支持验收。
+- 协作规则在根 `AGENTS.md` 维护；问题状态与执行记录使用 GitHub issue/PR。
 
 ## 单测分层
 
@@ -87,20 +95,16 @@ JITTOR_TORCH_SHIM=1 PYTHONPATH=python python -m pytest -q tests/structure
 
 ## Documentation Ownership
 
-- 根目录只保留一份双语 [`README.md`](README.md)。不要新增生成版或按语言复制的 README。
-- 面向用户和贡献者的长期文档放在 `docs/` 的现有语义目录中，例如 `docs/notes/`、
-  `docs/development/`、`docs/guides/` 和 `docs/performance/`。
-- 整改期架构、测试、研究和验证材料分别放在 `refactor-wip/architecture/`、
-  `refactor-wip/testing/`、`refactor-wip/research/` 和 `refactor-wip/results/`；整改收口后
-  整棵 `refactor-wip/` 删除，不迁回公开文档树。
+- 根目录保留中文默认 [`README.md`](README.md) 与英文
+  [`README.en.md`](README.en.md)；两份内容保持同步，不新增其它语言或生成版本。
+- `docs/` 下每篇文档成对维护：`X.md` 是中文默认页，`X.en.md` 是同目录英文页；
+  索引页同样成对（`index.md` / `index.en.md`）。英文页的相对链接指向 `X.en.md`，
+  中文页指向 `X.md`。修改一侧时必须同步另一侧。
 - 长期机制说明放在 `docs/notes/`，仓库布局、源码架构、测试体系与已知问题放在
-  `docs/development/`，研究提案放在 `docs/research/`。仓库不保留任务看板、计划或交接
+  `docs/development/`，研究提案放在 `docs/project/research/`。仓库不保留任务看板、计划或交接
   这类过程文档。
-- [`agent/manuals/project-context.md`](agent/manuals/project-context.md) 只做当前状态索引；
-  环境规则与问题总账分别维护在
-  [`agent/manuals/environment.md`](agent/manuals/environment.md) 和
-  [`agent/manuals/known-issues.md`](agent/manuals/known-issues.md)。
-- `refactor-wip/results/` 保存整改期可复现的维护者验证结论，不复制成长篇项目历史。
-  原始日志、缓存、二进制和 benchmark 数据不进入文档树。
+- 执行记录、阶段性验证与测速结论写入 GitHub issue/PR，不在 `docs/` 新建日期命名文档、
+  结果目录或演示产物。历史报告通过固定提交引用；原始日志、缓存、二进制和 benchmark
+  数据留在仓库外。可复用机制与操作说明按主题维护。
 - 稳定结论注明状态、对应提交、验证范围、维护者和复查条件；过期信息应删除或归档，
   不在多个文件中重复维护。

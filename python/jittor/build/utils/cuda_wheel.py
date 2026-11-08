@@ -18,6 +18,7 @@ import collections
 import hashlib
 import os
 import re
+from typing import Tuple
 
 try:
     from importlib import metadata as importlib_metadata
@@ -45,6 +46,9 @@ CUDA12_COMPONENTS = (
     ("cuda_runtime", "nvidia-cuda-runtime-cu12", "==12.2.140", "nvidia/cuda_runtime"),
     ("cublas", "nvidia-cublas-cu12", "==12.2.5.6", "nvidia/cublas"),
     ("cuda_nvrtc", "nvidia-cuda-nvrtc-cu12", "==12.2.140", "nvidia/cuda_nvrtc"),
+    # Accepted at runtime from 8.9.7, but jittor[cuda12] asks for >=9: the
+    # fused attention's frontend (nvidia-cudnn-frontend 1.30) builds no graph
+    # against 8.x, so that path would decline on every call. See pyproject.toml.
     ("cudnn", "nvidia-cudnn-cu12", ">=8.9.7,<10", "nvidia/cudnn"),
     ("cufft", "nvidia-cufft-cu12", "==11.0.8.103", "nvidia/cufft"),
     ("curand", "nvidia-curand-cu12", "==10.3.3.141", "nvidia/curand"),
@@ -211,7 +215,7 @@ class CudaWheelStack:
     """Resolved paths and versions for one supported CUDA wheel stack."""
 
     cuda_version = "12.2"
-    component_specs = CUDA12_COMPONENTS
+    component_specs: Tuple[Tuple[str, str, str, str], ...] = CUDA12_COMPONENTS
 
     def __init__(self, components, versions):
         self.components = dict(components)

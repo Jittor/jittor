@@ -256,7 +256,23 @@ struct UserIndexError : UserError {
     using UserError::UserError;
 };
 
+// A matrix a factorization or solve cannot handle -- singular, not positive
+// definite -- found while the op ran. Python sees an error that is also
+// `numpy.linalg.LinAlgError`, what numpy raises and the numpy_code linalg
+// callbacks raised before the native cuSOLVER ops.
+struct UserLinAlgError : UserError {
+    using UserError::UserError;
+};
+
 struct InternalInvariantError : JittorError {
+    using JittorError::JittorError;
+};
+
+// The device could not supply memory a pool asked for, after the pools gave
+// back everything they had cached and retried. Python sees
+// jittor.JittorOutOfMemoryError -- torch.OutOfMemoryError in Torch mode --
+// so a handler that catches it by name can shrink the batch and go on.
+struct DeviceOutOfMemoryError : JittorError {
     using JittorError::JittorError;
 };
 

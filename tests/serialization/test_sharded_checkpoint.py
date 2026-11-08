@@ -16,6 +16,7 @@ from jittor.serialization.sharded import (
 import numpy as np
 import pytest
 
+from _helpers import torch_runtime
 from _helpers.native_checkpoint import (
     assert_trace, check_bfloat16_training_resume, model_optimizer,
     numpy_trajectory, training_step,
@@ -24,7 +25,7 @@ from _helpers.native_checkpoint import (
 
 @pytest.mark.parametrize("restore_existing", [False, True])
 def test_native_training_resume_and_rng(tmp_path, restore_existing):
-    assert "torch" not in sys.modules
+    assert not torch_runtime.torch_shim_loaded()
     model, optimizer = model_optimizer()
     reference = numpy_trajectory(5)
     for step in range(3):
@@ -53,7 +54,7 @@ def test_native_training_resume_and_rng(tmp_path, restore_existing):
         got = training_step(fresh, resumed)
         assert_trace(got, expected[index], exact=True)
         assert_trace(got, reference[index + 3])
-    assert "torch" not in sys.modules
+    assert not torch_runtime.torch_shim_loaded()
 
 
 @pytest.mark.parametrize("restore_existing", [False, True])

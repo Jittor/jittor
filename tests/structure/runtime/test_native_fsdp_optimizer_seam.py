@@ -89,7 +89,7 @@ def test_fsdp_ids_are_excluded_from_both_legacy_collective_loops():
                    and any(isinstance(target, ast.Name) and target.id == "managed_parameter_ids"
                            for target in item.targets)]
     assert len(assignments) == 1
-    assert ast.unparse(assignments[0].value) == "ddp_parameter_ids | fsdp_parameter_ids"
+    assert ast.unparse(assignments[0].value) == "ddp_parameter_ids | tp_parameter_ids | fsdp_parameter_ids"
     skipped = [item for item in ast.walk(backward) if isinstance(item, ast.If)
                and ast.unparse(item.test) == "id(parameter) in managed_parameter_ids"]
     assert len(skipped) == 2

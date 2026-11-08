@@ -11,7 +11,7 @@ import unittest
 from _helpers.child_process import run_python_child
 
 ROOT = Path(__file__).resolve().parents[2]
-SCRIPTS = ROOT / "agent/skills/torch-compat-repo-runbook/scripts"
+SCRIPTS = ROOT / "tools/ecosystem"
 sys.path.insert(0, str(SCRIPTS))
 import registry_inventory as registry  # noqa: E402
 

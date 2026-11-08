@@ -18,6 +18,9 @@ namespace jittor {
 EXTERN_LIB list<VarPtr>& fetcher();
 EXTERN_LIB list<VarPtr>& fetcher_to_free();
 
+// Devices whose asynchronous fetch callbacks still need a device wait.
+uint64 pending_fetch_device_mask();
+
 struct FetchResult;
 
 struct FetchFunc {

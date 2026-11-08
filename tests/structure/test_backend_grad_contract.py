@@ -23,11 +23,11 @@ covering less than it claimed:
 Device kernels and communication gradients have distinct owners under
 ``backends/``; each owner is scanned independently.
 
-Hardware honesty: this machine has CUDA and nothing else. Entries whose kind
-ends in ``_hardware`` cannot be executed here, and they are not pretended to
-pass; ``agent/manuals/deferred-hardware.md`` carries the prerequisite, the
-command and the pass criterion for each, and a test below checks that every
-such kind is actually described there.
+This is a source inventory, not proof that any backend executed. Hardware
+routes and missing-gradient-test classifications stay explicit in the manifest;
+pending execution and implementation work is tracked in GitHub issues. The
+nodeid checks below verify the named routes exist, without promoting a forward
+or source-only check into gradient acceptance.
 """
 
 import ast
@@ -158,6 +158,9 @@ BACKEND_GRAD_COVERAGE = (
     ("backends/cuda/kernels/nn/group_norm_cuda.py", "GroupNormNHWC",
      "tests/nn/test_channels_last.py::TestChannelsLastCUDA::test_a_training_group_norm_over_channels_last_storage",
      "cuda_cpu_jittor"),
+    ("backends/cuda/kernels/nn/gelu_training_cuda.py", "GeluTrainingCUDA",
+     "compat/tests/torch/test_native_fast_paths.py::TestNativeGelu::test_bfloat16_training_uses_one_kernel_with_matching_gradients",
+     "cuda_cpu_formula"),
     ("backends/cuda/kernels/nn/layer_norm_training_cuda.py", "LayerNormCUDA",
      "tests/nn/test_norm.py::TestLayerNorm::test_cuda_fast_path_forward_and_all_gradients",
      "cuda_cpu_jittor"),
@@ -181,7 +184,11 @@ BACKEND_GRAD_COVERAGE = (
     ("backends/acl/kernels/ops/conv_op.py", "ConvACL",
      "tests/backends/acl/test_acl.py::TestACL::test_conv_with_bias_grad",
      "npu_hardware"),
-    ("backends/acl/kernels/ops/cross_entropy_loss_op.py", "CrossEntropyLossACL",
+    # The maintained CE comparison differentiates the complete composition.
+    ("backends/acl/kernels/ops/cross_entropy_loss_op.py", "NLLLossACL",
+     "tests/backends/acl/test_acl_codeop_gradients.py::TestACLCodeOpGradients::test_cross_entropy_forward_and_gradient",
+     "npu_hardware"),
+    ("backends/acl/kernels/ops/softmax_op.py", "LogSoftmaxACL",
      "tests/backends/acl/test_acl_codeop_gradients.py::TestACLCodeOpGradients::test_cross_entropy_forward_and_gradient",
      "npu_hardware"),
     ("backends/acl/kernels/ops/flashattention_op.py", "FlashAttentionACL",
@@ -230,6 +237,16 @@ BACKEND_GRAD_COVERAGE = (
     ("backends/cpu/libraries/mkl/mkl_matmul_op.cc", "MklMatmulOp",
      "tests/ops/test_matmul_higher_rank.py::TestMatmulHigherRankCpu::test_both_gradients",
      "cpu_formula"),
+    # The CBLAS complex rows (`setup_blas`): checked against the numpy
+    # formula dA = G op(B)^H, dB = op(A)^H G and against the generic path.
+    ("backends/cpu/libraries/blas/blas_matmul_op.cc", "BlasMatmulOp",
+     "tests/ops/test_complex_matmul_relays.py::TestComplexRelaysCPU::"
+     "test_gradients_are_torchs_and_agree_with_the_generic_path",
+     "cpu_formula"),
+    ("backends/cpu/libraries/blas/blas_batched_matmul_op.cc", "BlasBatchedMatmulOp",
+     "tests/ops/test_complex_matmul_relays.py::TestComplexRelaysCPU::"
+     "test_batched_gradients_are_torchs",
+     "cpu_formula"),
     ("backends/cpu/libraries/mkl/mkl_conv_op.cc", "MklConvOp",
      "tests/nn/test_onednn_conv_row.py::test_the_cpu_row_agrees_with_the_generic_path_gradients_included",
      "cpu_jittor"),
@@ -266,6 +283,9 @@ BACKEND_GRAD_COVERAGE = (
     ("backends/acl/kernels/ops/cumsum_op.py", "CumsumACL",
      "tests/backends/acl/test_aclop.py::TestACL::test_cumsum_grad",
      "npu_hardware"),
+    # DropoutACL supplies its gradient as a CodeOp source, which the scanner
+    # counts like any other backend gradient; test_aclop.py::TestACL::
+    # test_dropout_grad still checks its math.
     ("backends/acl/kernels/ops/dropout_op.py", "DropoutACL",
      "tests/backends/acl/test_aclop.py::TestACL::test_dropout_grad",
      "npu_hardware"),
@@ -374,7 +394,7 @@ BACKEND_GRAD_COVERAGE = (
      "mpi_hardware"),
 )
 
-#: Kinds that name a reference which actually executes somewhere in CI.
+#: Kinds that name an executable reference route; inventory checks do not run it.
 EXECUTABLE_KINDS = {
     "cpu_jittor",          # CPU backend against jittor's generic ops
     "cpu_formula",         # CPU backend against the closed-form gradient
@@ -384,7 +404,7 @@ EXECUTABLE_KINDS = {
     "cuda_exact_and_cpu",  # both: float64 NumPy for tightness, CPU for independence
 }
 
-#: Kinds that cannot run here. Each must be described in the deferred manual.
+#: Routes requiring separate hardware acceptance; registration is not a pass.
 DEFERRED_KINDS = {
     "mpi_hardware",
     "nccl_hardware",
@@ -396,7 +416,7 @@ DEFERRED_KINDS = {
 }
 
 #: The kinds whose *gradient* has no test even on the right hardware. These are
-#: the open gaps; the manual lists them one by one.
+#: open gaps are named by source and symbol in BACKEND_GRAD_COVERAGE above.
 NO_GRAD_TEST_KINDS = {"npu_hardware_no_grad_test", "rocm_hardware_no_grad_test",
                       "unsupported_hardware"}
 
@@ -404,8 +424,6 @@ NO_GRAD_TEST_KINDS = {"npu_hardware_no_grad_test", "rocm_hardware_no_grad_test",
 CPU_KINDS = {"cpu_jittor", "cpu_formula"}
 
 REFERENCE_KINDS = EXECUTABLE_KINDS | DEFERRED_KINDS
-
-DEFERRED_MANUAL = ROOT / "agent/manuals/deferred-hardware.md"
 
 
 # --------------------------------------------------------------------------
@@ -633,45 +651,11 @@ def test_the_core_ops_are_scanned_but_hold_no_backend_gradient():
 # Hardware honesty
 # --------------------------------------------------------------------------
 
-def test_deferred_kinds_are_described_in_the_deferred_manual():
-    """No entry may be parked on "hardware" without saying what to run.
-
-    Skipping is not passing. The manual carries the prerequisite, the command
-    and the pass criterion; this checks each deferred kind's sources are named
-    there so hardware day does not start by re-reading the source tree.
-    """
-    manual = DEFERRED_MANUAL.read_text(encoding="utf-8")
-    deferred = {kind for _, _, _, kind in BACKEND_GRAD_COVERAGE
-                if kind in DEFERRED_KINDS}
-    undocumented = sorted(kind for kind in deferred if kind not in manual)
-    assert undocumented == [], (
-        "these kinds defer to hardware but %s never names them: %s"
-        % (DEFERRED_MANUAL.name, undocumented))
-
-
-def test_every_gradient_without_a_gradient_test_is_listed_in_the_manual():
-    """The open gaps are named individually, not summarised.
-
-    ``npu_hardware_no_grad_test`` means the hardware test that exists covers
-    the forward only, so even on an Ascend card the gradient stays unchecked.
-    Those are the rows a reader must be able to find by symbol.
-    """
-    manual = DEFERRED_MANUAL.read_text(encoding="utf-8")
-    gaps = [(source, symbol) for source, symbol, _, kind in BACKEND_GRAD_COVERAGE
-            if kind in NO_GRAD_TEST_KINDS]
-    assert gaps, "NO_GRAD_TEST_KINDS matched nothing; the filter is wrong"
-    missing = sorted(symbol for _, symbol in gaps if symbol not in manual)
-    assert missing == [], (
-        "these gradients have no gradient test on any hardware and are not "
-        "named in %s: %s" % (DEFERRED_MANUAL.name, missing))
-
-
 def test_no_deferred_entry_claims_to_run_here():
-    """CUDA is the only accelerator on this machine.
+    """A CUDA-specific reference kind cannot stand in for another backend.
 
-    A ``cuda_*`` kind means the reference really executes; asserting the
-    deferred backends never carry one keeps a future edit from quietly
-    relabelling an Ascend route as an executed one.
+    Asserting that deferred backends never carry a ``cuda_*`` kind prevents a
+    future edit from silently treating a CUDA route as Ascend/ROCm acceptance.
     """
     for source, symbol, _, kind in BACKEND_GRAD_COVERAGE:
         on_cuda = source.startswith(("backends/cuda", "backends/comm/nccl"))

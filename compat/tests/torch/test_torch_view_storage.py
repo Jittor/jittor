@@ -16,6 +16,8 @@ its input's allocation, which is why a slice writes through today.
 """
 import contextlib
 
+import pytest
+
 import jittor as jt
 import numpy as np
 import torch
@@ -111,3 +113,74 @@ def test_the_flag_is_put_back():
     with storage_view_transpose():
         pass
     assert jt.flags.transpose_storage_view == before
+
+
+@pytest.mark.parametrize("float_dtype, raw_dtype", [
+    (torch.float32, torch.uint32), (torch.float64, torch.uint64)])
+@pytest.mark.parametrize("shape", [(), (2, 3)])
+def test_unsigned_dtype_view_preserves_bits_shape_alias_and_stop_grad(float_dtype, raw_dtype, shape):
+    values = 1.0009765625 if not shape else [
+        [0.0, -0.0, 1.0009765625], [-2.5, 3.25, 65536.0]]
+    source = torch.tensor(values, dtype=float_dtype, requires_grad=True)
+    expected = source.detach().numpy().copy()
+    raw = source.view(raw_dtype)
+    reverse = raw.view(float_dtype)
+    same_dtype = source.view(float_dtype)
+    assert raw.dtype == raw_dtype and tuple(raw.shape) == shape
+    assert reverse.dtype == float_dtype and tuple(reverse.shape) == shape
+    expected_raw_dtype = np.dtype("uint32" if raw_dtype == torch.uint32 else "uint64")
+    assert raw.numpy().dtype == expected_raw_dtype
+    assert raw.numpy().tobytes() == expected.tobytes()
+    assert reverse.numpy().tobytes() == expected.tobytes()
+    assert len({source.data_ptr(), raw.data_ptr(), reverse.data_ptr(),
+                same_dtype.data_ptr()}) == 1
+    for value in (raw, reverse, same_dtype):
+        assert not value.requires_grad and value.grad_fn is None and value.is_leaf
+    assert source.requires_grad and source.grad is None
+    flat_raw = raw.view(-1)
+    assert tuple(flat_raw.shape) == (source.numel(),)
+    assert flat_raw.data_ptr() == source.data_ptr()
+    replacement = torch.tensor(-4.25, dtype=float_dtype).view(raw_dtype)
+    with torch.no_grad():
+        flat_raw[0].copy_(replacement)
+    expected.flat[0] = -4.25
+    assert source.detach().numpy().tobytes() == expected.tobytes()
+    assert reverse.numpy().tobytes() == expected.tobytes()
+    with torch.no_grad():
+        reverse.view(-1)[-1].copy_(torch.tensor(2.75, dtype=float_dtype))
+    expected.flat[-1] = 2.75
+    assert source.detach().numpy().tobytes() == expected.tobytes()
+    assert raw.numpy().tobytes() == expected.tobytes()
+    assert source.requires_grad and source.grad is None
+
+
+def test_zero_stride_same_width_dtype_view_is_an_alias():
+    source = torch.tensor([1.0009765625], dtype=torch.float32, requires_grad=True)
+    expanded = source.expand(2)
+    raw = expanded.view(torch.uint32)
+    reverse = raw.view(torch.float32)
+    assert tuple(expanded.stride()) == tuple(raw.stride()) == tuple(reverse.stride()) == (0,)
+    assert tuple(raw.shape) == tuple(reverse.shape) == (2,)
+    assert raw.dtype == torch.uint32 and reverse.dtype == torch.float32
+    assert raw.data_ptr() == source.data_ptr() == reverse.data_ptr()
+    assert not raw.requires_grad and not reverse.requires_grad
+    assert raw.numpy().dtype == np.dtype("uint32")
+    assert raw.numpy().tobytes() == expanded.detach().numpy().tobytes()
+    with pytest.raises(RuntimeError):
+        expanded.view(torch.uint8)
+    with torch.no_grad():
+        raw[1].copy_(torch.tensor(-4.25, dtype=torch.float32).view(torch.uint32))
+    np.testing.assert_array_equal(source.detach().numpy(), [-4.25])
+    np.testing.assert_array_equal(expanded.detach().numpy(), [-4.25, -4.25])
+    np.testing.assert_array_equal(reverse.numpy(), [-4.25, -4.25])
+
+
+def test_dtype_view_changed_width_rejects_unit_axis_zero_stride():
+    source = torch.tensor([1.0009765625], dtype=torch.float32, requires_grad=True)
+    unit = source.expand(2).narrow(0, 0, 1)
+    assert unit.is_contiguous() and tuple(unit.stride()) == (0,)
+    same_width = unit.view(torch.uint32)
+    assert tuple(same_width.shape) == (1,) and tuple(same_width.stride()) == (0,)
+    assert same_width.data_ptr() == source.data_ptr()
+    with pytest.raises(RuntimeError):
+        unit.view(torch.uint8)

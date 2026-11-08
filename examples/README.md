@@ -10,15 +10,24 @@ download data, initialize a device, open a port, or create a Jittor cache.
 | --- | --- |
 | [`notebooks/`](notebooks/README.md) | 可执行教程。MyST Markdown 是唯一权威来源，notebook 由 Jupytext 生成 |
 | [`gan/`](gan/README.md) | 可直接运行的 Web 应用示例（启动时自训练，不依赖外部权重） |
-| [`minimax-h3/`](minimax-h3/README.md) | 用 compat 层 + 未改动的 vLLM-Omni 跑 MiniMax-H3 文生视频服务的部署说明 |
-| [`flash-attention/`](flash-attention/README.md) | 在 Jittor 上装和用官方 flash-attention 内核，以及怎么确认它真的在用 |
+| [`distributed/`](distributed/) | 原生 Jittor DDP 训练示例 |
 
 **教程的完整阅读顺序在 [`notebooks/README.md`](notebooks/README.md)**，那里有两条主线：
 
 * **原生 Jittor**：从 [`notebooks/getting_started.md`](notebooks/getting_started.md) 起步，
   一路到训练、性能与生成模型。
 * **PyTorch 兼容**：从 [`notebooks/torch_compat.md`](notebooks/torch_compat.md) 起步，
-  让已有的 `torch` 代码不改一行跑在 Jittor 上。
+  学习如何用 Jittor 兼容前端运行 `torch` 代码，并核对 API 与设备的支持范围。
+
+## 下游生态示例
+
+生态仓库入口见[根 README](../README.md)。各库的安装步骤、固定版本、专属示例、
+官方测试与设备支持范围由 [JittorEcosystem](https://github.com/JittorEcosystem)
+中的对应仓库维护，本目录不重复保存版本清单或验收结论。
+
+通用兼容前端的教学仍保留在
+[把真实的生态库跑在 Jittor 上](notebooks/torch_ecosystem.md)；具体库是否可用，
+需要核对对应版本、功能与设备的验证记录，不能仅凭是否需要 adapter 判断。
 
 ## 怎么跑教程
 

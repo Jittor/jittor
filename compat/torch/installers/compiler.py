@@ -39,7 +39,9 @@ def compile(model=None, *args, **kwargs):
     instead of rebuilding it every call, and a function in a
     `jittor._runtime.step_capture.StepCapture`, which replays the whole call
     -- a training step's forward, backward and optimizer update included.
-    Any other mode runs as written.
+    Calls needing an external backward keep the original CUDA autograd graph;
+    function replay requires no_grad inference or a complete backward inside
+    the call, with no differentiable caller inputs. Any other mode runs as written.
     """
     from ...stub_policy import unimplemented
     if kwargs.get("fullgraph"):
@@ -76,7 +78,7 @@ def compile(model=None, *args, **kwargs):
         release_auto_replay(owner)
     # A function -- typically a whole training step, forward, backward and
     # optimizer update -- is captured and replayed as one graph.
-    return StepCapture(model)
+    return StepCapture(model, _guard_external_backward=True)
 
 
 def script(obj=None, **kwargs):
@@ -468,6 +470,12 @@ def _api_jit_attribute(value, type=None):
     return value
 
 
+def _api_jit_annotate(type, value):
+    # Same contract as `annotate`: a static type hint for the compiler, the
+    # value at runtime.
+    return value
+
+
 def _api_fx_wrap(f=None, *a, **k):
     return f if f is not None and callable(f) else _identity
 
@@ -506,6 +514,13 @@ def _api_dynamo_mark_dynamic(*a, **k):
 
 def _api_dynamo_graph_break(*a, **k):
     return None
+
+
+def _api_inductor_fresh_cache(cache_entries=None, dir=None, delete=True):
+    """Permit guarded imports without pretending Jittor owns Inductor caches."""
+    raise NotImplementedError(
+        "torch._inductor.utils.fresh_cache requires the PyTorch Inductor "
+        "compiler; Jittor does not implement Inductor cache isolation")
 
 
 def _api_dynamo_reset(*a, **k):
@@ -633,6 +648,13 @@ def install(ctx):
     _inductor_config._config = {}
     _inductor_config.triton = _types2.SimpleNamespace(cudagraphs=False)
     _inductor.config = _inductor_config
+    # Upstream test harnesses import this helper even for eager-only cases.
+    # The module is real and narrowly exported: using the unsupported cache
+    # context raises, rather than fabricating a successful no-op context.
+    _inductor_utils = _types2.ModuleType("torch._inductor.utils")
+    _inductor_utils.fresh_cache = _api_inductor_fresh_cache
+    _inductor.utils = _inductor_utils
+    _modules["torch._inductor.utils"] = _inductor_utils
     _modules["torch._inductor"] = _inductor
     _modules["torch._inductor.custom_graph_pass"] = _custom_graph_pass
     _modules["torch._inductor.config"] = _inductor_config
@@ -708,6 +730,11 @@ def install(ctx):
     _jit.script = script
     _jit.trace = trace
     _jit.trace_module = trace
+    # TorchScript's annotate() is an eager identity at runtime: it carries a
+    # static type hint for the compiler and must return the supplied value.
+    # The shim does not emit TorchScript, but downstream code still calls this
+    # public helper while defining eager-compatible functions.
+    _jit.annotate = _api_jit_annotate
     register_fidelity(
         "torch.compile", compile, Fidelity.APPROXIMATE,
         "Jittor executes eagerly and does not produce a single compiled graph.")
@@ -727,6 +754,10 @@ def install(ctx):
     # TorchScript's type-only attribute wrapper is a value-preserving helper
     # in eager execution; Jittor has no separate scripting compiler.
     _jit.Attribute = lambda value, _type: value
+    # Eager ``script`` returns the original Python callable; expose the
+    # callable type so libraries using ``isinstance(fn, torch.jit.ScriptFunction)``
+    # retain their structural check without fabricating a compiled artifact.
+    _jit.ScriptFunction = _types2.FunctionType
     _jit.interface = _api_jit_interface
     _jit.Attribute = _api_jit_attribute
     try:

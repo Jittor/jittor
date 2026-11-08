@@ -2,7 +2,7 @@
 
 This module is deliberately separate from :mod:`namespace`: the latter only
 implements a module-shaped view, while this file owns installer registry
-mutation and parent binding.  The split lets a future ``jittor-torch``
+mutation and parent binding.  The split lets a future ``jittor-compat``
 distribution import the view without pulling in the native shim installer.
 """
 

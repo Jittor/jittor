@@ -315,7 +315,7 @@ class TestFsdpOptimizerRebinding:
         assert float(cached["step"]) == 1
         np.testing.assert_array_equal(group["m"][0].detach().cpu().numpy(), [4., 5.])
 
-    def test_new_half_slot_uses_native_dtype_and_device_preserving_buffer(self, device):
+    def test_new_half_slot_preserves_fp32_master_state_and_parameter_device(self, device):
         for values in ([1., -2.], []):
             parameter = torch.tensor(values, device=device, dtype=torch.bfloat16, requires_grad=True)
             group = {"params": [parameter], "_torch_adam_params": (),
@@ -325,7 +325,8 @@ class TestFsdpOptimizerRebinding:
             assert group["_torch_steps"] == [0]
             for key in ("m", "values"):
                 buffer = group[key][0]
-                assert buffer.dtype == parameter.dtype and buffer.device.type == device
+                assert buffer.dtype == torch.float32 and buffer.device.type == device
+                assert parameter.dtype == torch.bfloat16
                 assert tuple(buffer.shape) == tuple(parameter.shape)
                 np.testing.assert_array_equal(buffer.detach().float().cpu().numpy(), np.zeros(len(values)))
 

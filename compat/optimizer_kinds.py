@@ -46,6 +46,7 @@ _KIND_ATTRS = (
     ("sgd", "SGD"),
     ("rmsprop", "RMSprop"),
     ("adan", "Adan"),
+    ("adagrad", "Adagrad"),
 )
 
 KNOWN_KINDS = tuple(kind for kind, _attr in _KIND_ATTRS)

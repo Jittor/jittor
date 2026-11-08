@@ -81,7 +81,7 @@ def fused_source(op, a, tag):
     for row in rep[1:]:
         for cell in row:
             if isinstance(cell, str) and cell.endswith(".cc") and os.path.exists(cell):
-                with open(cell) as f:
+                with open(cell, encoding="utf-8") as f:
                     src += f.read()
     return got, src
 

@@ -46,7 +46,7 @@ ArgsortOp::ArgsortOp(Var* x, int dim, bool descending, NanoString dtype, bool st
         // CANN Sort returns int64 indices. Preserve the requested Jittor
         // index dtype through an accelerator Cast instead of a CPU copy.
         if (backend == BackendId::Acl && dtype != ns_int64) {
-            auto sorted = make_argsort(x, dim, descending, ns_int64, stable);
+            auto sorted = make_argsort(x, dim, descending, ns_int64, false);
             forward(make_unary(sorted[0], dtype));
             forward(sorted[1]);
             return;

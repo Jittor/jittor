@@ -36,14 +36,17 @@ jobs:
     # a cache miss, not just the tests.
     timeout-minutes: 45
     steps:
+      - name: Install native CPU toolchain
+        run: |
+          apt-get update
+          apt-get install --yes --no-install-recommends build-essential libomp-dev git ca-certificates
       - name: Check out source
         uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - name: Install native CPU toolchain
-        run: |
-          apt-get update
-          apt-get install --yes --no-install-recommends build-essential libomp-dev
+          fetch-depth: 0
+      - name: Set the Jittor state root
+        run: echo "JITTOR_LAB_ROOT=${RUNNER_TEMP}/jittor-lab" >> "$GITHUB_ENV"
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -55,8 +58,8 @@ jobs:
       - name: Restore the Jittor build cache
         uses: actions/cache/restore@v4
         with:
-          path: ${{ github.workspace }}/../jittor-lab/_state/nox/cache
-          key: jittor-build-${{ runner.os }}-${{ hashFiles('src/**', 'backends/**', 'python/jittor/build/**', 'requirements/dev-tools.txt') }}
+          path: ${{ runner.temp }}/jittor-lab/_state/nox/cache
+          key: jittor-build-${{ runner.os }}-${{ hashFiles('src/**', 'backends/**', 'python/jittor/build/**', 'requirements/dev-tools.txt') }}-${{ github.run_id }}
           restore-keys: |
             jittor-build-${{ runner.os }}-
       - name: Run the fast CPU tier
@@ -72,14 +75,17 @@ jobs:
     # the manual probes and the independent-PyTorch oracle.
     timeout-minutes: 240
     steps:
+      - name: Install native CPU toolchain
+        run: |
+          apt-get update
+          apt-get install --yes --no-install-recommends build-essential libomp-dev git ca-certificates
       - name: Check out source
         uses: actions/checkout@v6
         with:
           persist-credentials: false
-      - name: Install native CPU toolchain
-        run: |
-          apt-get update
-          apt-get install --yes --no-install-recommends build-essential libomp-dev
+          fetch-depth: 0
+      - name: Set the Jittor state root
+        run: echo "JITTOR_LAB_ROOT=${RUNNER_TEMP}/jittor-lab" >> "$GITHUB_ENV"
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -97,8 +103,8 @@ jobs:
       - name: Restore the Jittor build cache
         uses: actions/cache/restore@v4
         with:
-          path: ${{ github.workspace }}/../jittor-lab/_state/nox/cache
-          key: jittor-build-${{ runner.os }}-${{ hashFiles('src/**', 'backends/**', 'python/jittor/build/**', 'requirements/dev-tools.txt') }}
+          path: ${{ runner.temp }}/jittor-lab/_state/nox/cache
+          key: jittor-build-${{ runner.os }}-${{ hashFiles('src/**', 'backends/**', 'python/jittor/build/**', 'requirements/dev-tools.txt') }}-${{ github.run_id }}
           restore-keys: |
             jittor-build-${{ runner.os }}-
       - name: Install independent CPU PyTorch oracle
@@ -118,8 +124,8 @@ jobs:
         if: always()
         uses: actions/cache/save@v4
         with:
-          path: ${{ github.workspace }}/../jittor-lab/_state/nox/cache
-          key: jittor-build-${{ runner.os }}-${{ hashFiles('src/**', 'backends/**', 'python/jittor/build/**', 'requirements/dev-tools.txt') }}
+          path: ${{ runner.temp }}/jittor-lab/_state/nox/cache
+          key: jittor-build-${{ runner.os }}-${{ hashFiles('src/**', 'backends/**', 'python/jittor/build/**', 'requirements/dev-tools.txt') }}-${{ github.run_id }}
 
   benchmark:
     needs: baseline

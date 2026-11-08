@@ -51,9 +51,6 @@ SLOW_FILES = (
     ("compat/tests/torch/test_einops.py",
      252,
      "einops 的全部重排/归约模式逐个对拍，每个模式一次 JIT 编译"),
-    ("compat/tests/torch/test_torchmetrics_compat.py",
-     134,
-     "torchmetrics 的指标矩阵，逐指标建图"),
     ("tests/models/test_mmdet_ops.py",
      81,
      "mmdetection 的聚合兼容检查脚本，同样整套在一个子进程里跑"),
@@ -592,6 +589,10 @@ def budget_report(workers=None, configured_workers=None):
     actual`` rather than silently relabelling the run as a one-worker gate.
     """
     if workers is None:
+        # Record the requested gate size before applying affinity/cgroup caps.
+        # An explicit workers= remains an already-resolved diagnostic count.
+        if configured_workers is None:
+            configured_workers = SMOKE_WORKERS
         workers = runtime_workers(configured_workers)
     if isinstance(workers, bool) or not isinstance(workers, int) or workers < 1:
         raise ValueError("workers must be a positive integer")

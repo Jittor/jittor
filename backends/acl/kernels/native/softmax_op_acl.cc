@@ -27,6 +27,8 @@
 #include "codegen/opt/tuner_manager.h"
 #include "utils/str_utils.h"
 #include "aclnn/aclnn.h"
+#include <aclnnop/aclnn_logsoftmax.h>
+#include <aclnnop/aclnn_logsoftmax_backward.h>
 #include "softmax_op_acl.h"
 
 namespace jittor
@@ -37,6 +39,12 @@ namespace jittor
 
     void SoftmaxOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
+        if (jt_name == "log_softmax")
+        {
+            ret = aclnnLogSoftmaxGetWorkspaceSize(inputTensors[0], 1, outputTensors[0], &workspaceSize, &executor);
+            launch(ret, aclnnLogSoftmax, true);
+            return;
+        }
         auto attr = dynamic_cast<SoftmaxAttr *>(op_attr.get());
         ret = aclnnSoftmaxGetWorkspaceSize(inputTensors[0], aclDataType(attr->dim), outputTensors[0], &workspaceSize, &executor);
 
@@ -51,6 +59,12 @@ namespace jittor
 
     void SoftmaxBackwardOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
+        if (jt_name == "log_softmax_backward")
+        {
+            ret = aclnnLogSoftmaxBackwardGetWorkspaceSize(inputTensors[0], inputTensors[1], 1, outputTensors[0], &workspaceSize, &executor);
+            launch(ret, aclnnLogSoftmaxBackward, true);
+            return;
+        }
         auto attr = dynamic_cast<SoftmaxAttr *>(op_attr.get());
         ret = aclnnSoftmaxBackwardGetWorkspaceSize(inputTensors[0], inputTensors[1], attr->dim, outputTensors[0], &workspaceSize, &executor);
 

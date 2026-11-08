@@ -12,7 +12,7 @@ import types
 from unittest import mock
 import zipfile
 
-SCRIPTS = Path(__file__).resolve().parents[2] / 'agent/skills/torch-compat-repo-runbook/scripts'
+SCRIPTS = Path(__file__).resolve().parents[2] / 'tools/ecosystem'
 sys.path.insert(0, str(SCRIPTS))
 import _vllm_installation as contract  # noqa: E402
 
@@ -22,15 +22,26 @@ def sha(data):
 
 
 def adapter_binding(root):
-    bootstrap = root / 'adapters/jittor_adapters/vllm/bootstrap.py'
+    adapter_root = root.parent / 'adapter-source'
+    bootstrap = adapter_root / 'jittor_vllm/bootstrap.py'
     bootstrap.parent.mkdir(parents=True)
     bootstrap.write_text('# maintained adapter fixture\n')
-    metadata_root = root / 'candidate-site/jittor_torch_adapters-2.0.0.dist-info'
+    runtime = {
+        '__init__.py': b'# independent adapter package\n',
+        'layers.py': b'# maintained layer integration\n',
+        'ops/buffers.py': b'# nested runtime implementation\n',
+        'ops/kernel.bin': b'compiled payload fixture',
+    }
+    for relative, data in runtime.items():
+        path = bootstrap.parent / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+    metadata_root = root / 'candidate-site/jittor_vllm-2.0.0.dev6.dist-info'
     metadata_root.mkdir(parents=True)
-    payloads = {'metadata': ('METADATA', 'Metadata-Version: 2.1\nName: jittor-torch-adapters\nVersion: 2.0.0\n'),
+    payloads = {'metadata': ('METADATA', 'Metadata-Version: 2.1\nName: jittor-vllm\nVersion: 2.0.0.dev6\n'),
                 'record': ('RECORD', ''),
-                'entry_points': ('entry_points.txt', '[jittor.module_patches]\njittor_vllm = jittor_adapters.vllm:register\n'),
-                'direct_url': ('direct_url.json', json.dumps({'url': (root / 'adapters').as_uri(),
+                'entry_points': ('entry_points.txt', '[jittor.module_patches]\njittor_vllm = jittor_vllm:register\n'),
+                'direct_url': ('direct_url.json', json.dumps({'url': adapter_root.as_uri(),
                                                             'dir_info': {'editable': True}}))}
     paths = {'bootstrap': bootstrap}
     for key, (filename, content) in payloads.items():
@@ -39,6 +50,8 @@ def adapter_binding(root):
         paths[key] = path
     result = {key: str(path) for key, path in paths.items()}
     result.update({key + '_sha256': sha(path.read_bytes()) for key, path in paths.items()})
+    runtime['bootstrap.py'] = bootstrap.read_bytes()
+    result['runtime_files_sha256'] = {'jittor_vllm/' + name: sha(data) for name, data in runtime.items()}
     return result
 
 

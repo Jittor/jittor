@@ -7,8 +7,10 @@ import jittor as jt
 from jittor._runtime.core_api import _output_requires_grad
 
 from ... import _arg_policy
+from ._amp import prefers_half as _amp_prefers_half
 from ..backends import hooks as _backend_hooks
 from jittor._runtime.dispatch import dispatch_context, select_kernel as _select_kernel
+from jittor._runtime.amp_context import torch_autocast_active as _torch_autocast_active
 from jittor.backends.cuda.kernels.nn.batch_norm_training_cuda import (
     _batch_norm_cuda,
     _batch_norm_cuda_statistics,
@@ -79,6 +81,23 @@ def _batch_statistics(x, dims, sync):
     if sync:
         xvar = dist.all_reduce(xvar, op="mean")
     return xmean, xvar
+
+
+def _check_batch_norm_input(x, num_features, name):
+    """Name the channel mismatch before the per-channel reshape trips on it.
+
+    Left to ``_affine`` it surfaced as "shape [1,4,1,1,] is invalid for input
+    of shape [3,]", a reshape the caller never wrote.
+    """
+    if x.ndim < 2:
+        raise jt.JittorShapeError(
+            "%s expected an input of at least 2 dims (N, C, ...), but got a "
+            "%d-D input of shape %s." % (name, x.ndim, list(x.shape)))
+    if num_features is not None and x.shape[1] != num_features:
+        raise jt.JittorShapeError(
+            "%s expected input with %d channels (num_features), but got %d "
+            "channels; input shape %s." % (name, num_features, x.shape[1],
+                                           list(x.shape)))
 
 
 def _affine(xhat, weight, bias, num_features, ndim):
@@ -191,6 +210,9 @@ def batch_norm(x, running_mean, running_var, weight=1, bias=0, training=False,
     were separate transcriptions and this one never reached the fused CUDA
     kernel in training mode.
     """
+    num_features = next((int(v.shape[0]) for v in (running_mean, weight)
+                         if isinstance(v, jt.Var)), None)
+    _check_batch_norm_input(x, num_features, "batch_norm")
     dims = [0] + list(range(2, x.ndim))
     tracking = isinstance(running_mean, jt.Var) and isinstance(running_var, jt.Var)
     if training:
@@ -440,6 +462,25 @@ def layer_norm(
             raise ValueError("layer_norm {} must match normalized_shape".format(name))
     weight = 1.0 if weight is None else weight
     bias = 0.0 if bias is None else bias
+    if (_amp_prefers_half()
+            and _jittor_dtype_name(x.dtype) in ("float16", "bfloat16")):
+        # Widen the whole body, not just the input: every float op built while
+        # the register is set is lowered again, so an fp32-spelled intermediate
+        # does not survive. ATen keeps layer_norm on its float32 autocast list
+        # -- the inputs are cast, the op runs in float32, and the result stays
+        # float32 for the next op to cast -- so a Torch autocast region must
+        # not narrow it back here. Narrowing added one rounding in the middle
+        # of a network: CPU bf16 autocast training ended 29.3% from its
+        # float32 loss, above the 25% gate, and keeping the float32 result
+        # brings it inside (KI-COMPAT-020). Native AMP is a different policy:
+        # it describes itself only through the register, whose inferred result
+        # dtype for a half input is half, so that path keeps the narrowing.
+        with jt.flag_scope(amp_reg=jt.amp_flags.disabled):
+            wide = layer_norm(x.float32(), normalized_shape, weight, bias,
+                              eps, elementwise_affine)
+        if _torch_autocast_active():
+            return wide
+        return wide.cast(_jittor_dtype_name(x.dtype))
     # The two relays are mutually exclusive by construction: the training one
     # requires `_output_requires_grad(x, weight, bias)` and the inference one
     # requires its negation. Trying both meant every layer_norm paid two full

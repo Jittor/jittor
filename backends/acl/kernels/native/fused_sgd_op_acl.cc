@@ -54,6 +54,33 @@ namespace jittor
         // `d_p.add(buf, alpha=momentum)` does not special-case it, since by
         // that point `buf` already holds the correct (seeded-or-recurred) v.
         const float sign = attr->maximize ? -1.0f : 1.0f;
+        if (attr->momentum == 0)
+        {
+            // Without momentum the velocity buffer is not part of the update,
+            // and torch.optim.SGD leaves it as it is (Nesterov and dampening
+            // included: both act through the buffer). It was seeded from dp
+            // here (a momentum-free step goes as a "first step"), so pausing
+            // momentum and resuming it continued from the last gradient
+            // instead of the buffer the earlier steps built:
+            //     p = p * (1 - lr * weight_decay) - lr * sign * grad
+            std::vector<float> coefficients;
+            if (attr->weightDecay != 0)
+                coefficients.push_back(1.0f - float(attr->lr) * float(attr->weightDecay));
+            coefficients.push_back(-float(attr->lr) * sign);
+            stageCoefficients(coefficients);
+            for (int64_t base = 0; base < count; base += list_limit)
+            {
+                const int64_t span = std::min(list_limit, count - base);
+                const bool last = base + span >= count;
+                const aclTensorList *parameters = outputList(base, span);
+                const aclTensorList *gradients = inputList(count * 2 + base, span);
+                size_t next = 0;
+                if (attr->weightDecay != 0)
+                    foreachMulScalar(parameters, coefficient(next++), parameters, false);
+                foreachAddList(parameters, gradients, coefficient(next++), parameters, last);
+            }
+            return;
+        }
         const float retained = attr->isFirstStep ? 1.0f : float(1.0 - attr->dampening);
         const float lr = float(attr->lr);
         const float momentum = float(attr->momentum);

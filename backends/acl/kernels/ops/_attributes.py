@@ -6,6 +6,8 @@ from .acl_data import AclDataInternalError, SCHEMA_VERSION, encode_code_data
 
 
 SCHEMAS = {
+    "Gelu": {"approximate": {"type": "int64"}},
+    "GeluBackward": {"approximate": {"type": "int64"}},
     "Softmax": {"dim": {"type": "int64"}},
     "SoftmaxBackward": {"dim": {"type": "int64"}},
     "SwiGlu": {"dim": {"type": "int64"}},
@@ -14,6 +16,8 @@ SCHEMAS = {
     "Transpose": {"axes": {"type": "int64[]"}},
     "Cumsum": {"dim": {"type": "int64"}},
     "Gather": {"dim": {"type": "int64"}},
+    "GatherV2": {"dim": {"type": "int64"}},
+    "IndexCopy": {"dim": {"type": "int64"}},
     "Scatter": {"axis": {"type": "int64"}, "reduction": {"type": "int64"}},
     "Conv2d": {
         "convStrides": {"type": "int64[]"},
@@ -22,6 +26,7 @@ SCHEMAS = {
         "group": {"type": "int64"},
         "convOutPads": {"type": "int64[]"},
         "cube_math_type": {"type": "int64"},
+        "is_transposed": {"type": "bool", "default": False},
     },
     "Conv2dBackward": {
         "convStrides": {"type": "int64[]"},
@@ -93,6 +98,11 @@ SCHEMAS = {
         "countIncludePad": {"type": "bool"},
     },
     "UpsampleNearest2d": {"outputSize": {"type": "int64[]"}, "inputSize": {"type": "int64[]"}},
+    "UpsampleBicubic2d": {"outputSize": {"type": "int64[]"}, "inputSize": {"type": "int64[]"}},
+    "UpsampleBilinear2d": {
+        "outputSize": {"type": "int64[]"}, "inputSize": {"type": "int64[]"},
+        "alignCorners": {"type": "bool"},
+    },
     "UpsampleNearest2dBackward": {
         "outputSize": {"type": "int64[]"},
         "inputSize": {"type": "int64[]"},
@@ -173,6 +183,10 @@ SCHEMAS = {
         "hasDropmask": {"type": "bool"},
         "hasPaddingmask": {"type": "bool"},
         "hasAttentmask": {"type": "bool"},
+    },
+    "PromptFlashAttention": {
+        "scale": {"type": "float64"}, "headNum": {"type": "int64"},
+        "causal": {"type": "bool", "default": True},
     },
     "IncreFlashAttention": {
         "scale": {"type": "float64"},
@@ -403,6 +417,8 @@ _RUNNER_ALIASES = {
     "transpose": "Transpose",
     "cumsum": "Cumsum",
     "gather": "Gather",
+    "gather_v2": "GatherV2",
+    "indexcopy": "IndexCopy",
     "scatter": "Scatter",
     "conv2d": "Conv2d",
     "conv2dbackward": "Conv2dBackward",
@@ -417,6 +433,8 @@ _RUNNER_ALIASES = {
     "maxpoolbackward": "MaxpoolBackward",
     "avgpoolbackward": "AvgpoolBackward",
     "upsample_nearest2d": "UpsampleNearest2d",
+    "upsample_bicubic2d": "UpsampleBicubic2d",
+    "upsample_bilinear2d": "UpsampleBilinear2d",
     "concat": "Concat",
     "stack": "Stack",
     "splitwithsize": "SplitWithSize",
@@ -432,6 +450,7 @@ _RUNNER_ALIASES = {
     "NanToNum": "NanToNum",
     "flashattention": "FlashAttention",
     "flashattentionbackward": "FlashAttentionBackward",
+    "promptflashattention": "PromptFlashAttention",
     "increflashattention": "IncreFlashAttention",
     "kv_cache_memcpy": "KVCacheMemcpy",
     "roll": "Roll",

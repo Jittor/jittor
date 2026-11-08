@@ -2,6 +2,7 @@
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 from collections.abc import Iterable
+from numbers import Integral
 from typing import Union
 import numpy as np
 import jittor as jt
@@ -19,9 +20,25 @@ from .ops.arg_reduce_op import ArgReduceACL
 from .ops.argsort_op import ArgsortACL
 from .ops.where_op import WhereACL, NonzeroACL
 from .ops.floor_op import FloorIntACL
-from .ops.getitem_op import GetItemACL, basic_slice_acl
+from .ops.getitem_op import GetItemACL, basic_slice_acl, single_axis_gather_acl
 from .ops.setitem_op import SetItemACL
 from .ops.roll_op import RollACL
+from .ops.topk_op import TopkACL
+from ._soc import soc_name
+
+
+def topk_supported(input, k, dim=-1, largest=True, sorted=True):
+    return (bool(jt.flags.no_grad) and soc_name().startswith("Ascend310P")
+            and input.ndim == 2 and all(int(size) > 0 for size in input.shape)
+            and dim in (-1, 1) and largest is True and sorted is True
+            and isinstance(k, Integral) and not isinstance(k, bool)
+            and 0 < k <= input.shape[-1]
+            and _jittor_dtype_name(input.dtype) in ("float16", "float32")
+            and input._storage_is_contiguous())
+
+
+def topk_acl(input, k, dim=-1, largest=True, sorted=True):
+    return TopkACL()(input, k)
 
 
 def _clamp_acl(input, min_value, max_value):
@@ -179,7 +196,24 @@ def argsort_acl(input, dim=-1, descending=False, dtype="int32"):
 
 
 def arg_reduce_acl(input, op, dim, keepdims=False):
-    if _jittor_dtype_name(input.dtype) not in ("float16", "bfloat16", "float32"):
+    dtype = _jittor_dtype_name(input.dtype)
+    if dtype == "float16" and soc_name().startswith("Ascend310P"):
+        # CANN half extrema kernels can return values and indices from different
+        # rows. Use exact FP32 comparisons for both extrema on this SoC.
+        # Gather the original half values instead of narrowing the SDK result:
+        # the device Cast kernel saturates infinities when narrowing to half.
+        indices, _ = ArgReduceACL(jt.ops.arg_reduce)(input.float32(), op, dim, keepdims)
+        gather_shape = list(input.shape)
+        gather_shape[dim] = 1
+        gather_indices = indices.reshape(gather_shape)
+        values = jt.gather(input, dim, gather_indices)
+        return indices, values.reshape(indices.shape)
+    if dtype == "int32":
+        # aclnnMaxDim/MinDim on Ascend A2 does not accept int32 values.
+        # int64 preserves every int32 value exactly across the reduction.
+        indices, values = ArgReduceACL(jt.ops.arg_reduce)(input.cast("int64"), op, dim, keepdims)
+        return indices, values.cast("int32")
+    if dtype not in ("float16", "bfloat16", "float32", "int64"):
         return None
     return ArgReduceACL(jt.ops.arg_reduce)(input, op, dim, keepdims)
 
@@ -206,9 +240,34 @@ _NUMPY_INTS = tuple(
     if hasattr(np, name))
 
 
+def _static_basic_view_index(index):
+    """Indices the native storage view can resolve without tensor values."""
+    items = index if isinstance(index, tuple) else (index,)
+    for item in items:
+        if item is None or item is Ellipsis or type(item) is int:
+            continue
+        if not isinstance(item, slice):
+            return False
+        if any(part is not None and type(part) is not int
+               for part in (item.start, item.stop, item.step)):
+            return False
+        if item.step is not None and item.step <= 0:
+            return False
+    return True
+
+
 def getitem_acl(x, slices, return_x=None):
     if return_x is not None:
         return None
+    if jt.flags.no_grad and _static_basic_view_index(slices):
+        # GetitemOp already carries positive strides and the storage offset.
+        # The public indexing owner records writeback to the base afterwards.
+        # Inference needs neither a SliceV2 copy nor a generated gradient;
+        # training keeps the existing Concat gradient for last-axis slices.
+        return jt.core.ops.getitem(x, slices)
+    selected = single_axis_gather_acl(x, slices)
+    if selected is not None:
+        return selected
     # A tuple of plain slices and ellipses -- `q[..., :64]` in a rotary
     # embedding, `cache[:, :, :n]` in an attention -- is what the decode
     # loop indexes with, and none of the shapes below apply to it.

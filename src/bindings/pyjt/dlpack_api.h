@@ -19,16 +19,25 @@ namespace jittor {
 PyObject* to_dlpack(VarHolder* v);
 
 // `flat_len`/`elem_offset` are an internal detail used by from_dlpack()'s
-// Python wrapper to import a non-contiguous (strided) producer -- see
-// dlpack.cc for the full design. Omitting them (the default) is 100%
-// unchanged, contiguous-only behavior.
+// Python wrapper to import a producer whose strides Jittor's layout cannot
+// alias (a negative stride) -- see dlpack.cc. Without them a contiguous or
+// non-negatively strided producer is aliased. `producer_ordered` says the
+// producer was handed this consumer's stream (`dlpack_consumer_stream`), so
+// its work is already ordered before Jittor's and no device sync is needed.
 // @pyjt(from_dlpack_capsule)
-VarHolder* from_dlpack_capsule(PyObject* capsule, PyObject* flat_len=nullptr, int64 elem_offset=0);
+VarHolder* from_dlpack_capsule(PyObject* capsule, PyObject* flat_len=nullptr, int64 elem_offset=0,
+                               bool producer_ordered=false);
 
-// Read-only inspection of a live (not-yet-consumed) DLPack capsule's shape
-// and strides, without renaming the capsule or touching its deleter -- lets
-// from_dlpack() decide (in Python) whether the contiguous fast path or the
-// strided materialize-a-copy path applies, before committing to consuming
+// The stream a CUDA producer should order its work before, as the int a
+// consumer passes to `__dlpack__(stream=...)`: Jittor's compute stream on
+// `device_id` (1, the legacy default stream, when that is the null stream).
+// @pyjt(dlpack_consumer_stream)
+int64 dlpack_consumer_stream(int device_id);
+
+// Read-only inspection of a live (not-yet-consumed) DLPack capsule: its
+// shape, its strides, and whether from_dlpack_capsule() can alias that
+// layout -- without renaming the capsule or touching its deleter, so
+// from_dlpack() can choose the aliasing import or the copy before consuming
 // the capsule exactly once via from_dlpack_capsule().
 // @pyjt(dlpack_peek)
 PyObject* dlpack_peek(PyObject* capsule);

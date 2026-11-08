@@ -30,6 +30,22 @@
 
 namespace jittor
 {
+    namespace {
+
+    void check_conv_attributes(const ConvAttr* attr, size_t rank)
+    {
+        USER_CHECK(attr && (rank == 4 || rank == 5))
+            << "ACL convolution requires a 4-D or 5-D input and convolution attributes";
+        const auto spatial_rank = rank - 2;
+        USER_CHECK(attr->convStrides.size() == spatial_rank
+                   && attr->convPads.size() == spatial_rank
+                   && attr->convDilations.size() == spatial_rank
+                   && attr->convOutPads.size() == spatial_rank)
+            << "ACL convolution spatial attributes must match the input rank";
+    }
+
+    } // namespace
+
     Conv2dOpRunner::Conv2dOpRunner() : BaseOpRunner("Conv2d")
     {
         use_nchw = true;
@@ -43,10 +59,11 @@ namespace jittor
         aclIntArray *outPads = nullptr;
         aclIntArray *dilations = nullptr;
         auto attr = dynamic_cast<ConvAttr *>(op_attr.get());
-        strides = aclCreateIntArray(attr->convStrides.data(), 2);
-        pads = aclCreateIntArray(attr->convPads.data(), 2);
-        outPads = aclCreateIntArray(attr->convOutPads.data(), 2);
-        dilations = aclCreateIntArray(attr->convDilations.data(), 2);
+        check_conv_attributes(attr, in_[0]->shape.size());
+        strides = aclCreateIntArray(attr->convStrides.data(), attr->convStrides.size());
+        pads = aclCreateIntArray(attr->convPads.data(), attr->convPads.size());
+        outPads = aclCreateIntArray(attr->convOutPads.data(), attr->convOutPads.size());
+        dilations = aclCreateIntArray(attr->convDilations.data(), attr->convDilations.size());
 
         aclTensor *bias = nullptr;
 
@@ -54,7 +71,9 @@ namespace jittor
         if (input_num == 3)
             bias = inputTensors[2];
 
-        ret = aclnnConvolutionGetWorkspaceSize(inputTensors[0], inputTensors[1], bias, strides, pads, dilations, false, outPads, attr->group, outputTensors[0], cube_math_type, &workspaceSize, &executor);
+        acl_check_fp32_cube(cube_math_type, in_[0]->dtype(),
+                            in_[0]->shape.size() == 5 ? "Conv3d" : "Conv2d");
+        ret = aclnnConvolutionGetWorkspaceSize(inputTensors[0], inputTensors[1], bias, strides, pads, dilations, attr->is_transposed, outPads, attr->group, outputTensors[0], cube_math_type, &workspaceSize, &executor);
 
         launch(ret, aclnnConvolution, true);
 
@@ -112,10 +131,11 @@ namespace jittor
         aclIntArray *outPads = nullptr;
         aclIntArray *dilations = nullptr;
         auto attr = dynamic_cast<ConvAttr *>(op_attr.get());
-        strides = aclCreateIntArray(attr->convStrides.data(), 2);
-        pads = aclCreateIntArray(attr->convPads.data(), 2);
-        outPads = aclCreateIntArray(attr->convOutPads.data(), 2);
-        dilations = aclCreateIntArray(attr->convDilations.data(), 2);
+        check_conv_attributes(attr, in_[1]->shape.size());
+        strides = aclCreateIntArray(attr->convStrides.data(), attr->convStrides.size());
+        pads = aclCreateIntArray(attr->convPads.data(), attr->convPads.size());
+        outPads = aclCreateIntArray(attr->convOutPads.data(), attr->convOutPads.size());
+        dilations = aclCreateIntArray(attr->convDilations.data(), attr->convDilations.size());
         // out_[0] is grad_input. A conv backward asked for the weight
         // gradient alone (the common case for a first layer whose input
         // nothing reads, e.g. ViT's patch-embedding conv on the raw image)
@@ -132,6 +152,8 @@ namespace jittor
         auto &biasShape = outputShapes.size() == 3
             ? outputShapes[2] : inputShapes[2];
         auto biasSizes = aclCreateIntArray(&biasShape[0], 1);
+        acl_check_fp32_cube(cube_math_type, in_[0]->dtype(),
+                            in_[1]->shape.size() == 5 ? "Conv3dBackward" : "Conv2dBackward");
         ret = aclnnConvolutionBackwardGetWorkspaceSize(inputTensors[0], inputTensors[1], inputTensors[2], biasSizes, strides, pads, dilations, false, outPads, attr->group, outMask, cube_math_type, outputTensors[0], outputTensors[1], outputTensors[2], &workspaceSize, &executor);
 
         launch(ret, aclnnConvolutionBackward, true);

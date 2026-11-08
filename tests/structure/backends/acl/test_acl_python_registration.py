@@ -114,8 +114,15 @@ def providers(monkeypatch):
             for alias in node.names:
                 if alias.name == "ACL_FLOAT_DTYPES":
                     setattr(module, alias.name, ("float16", "bfloat16", "float32"))
+                elif alias.name == "single_axis_gather_acl":
+                    # This host-only recorder has no real310P placement. The
+                    # verified device specialization must decline here.
+                    setattr(module, alias.name, lambda *args, **kwargs: None)
                 else:
                     setattr(module, alias.name, primitive(alias.name))
+    # Conv3d checks a lazily queried SoC capability; load its real host-only
+    # owner before neural.py in this package with an intentionally empty path.
+    load("jittor.backends.acl.kernels._soc", KERNELS / "_soc.py")
     modules = {}
     for name in ("tensor", "normalization", "neural", "install"):
         module = load("jittor.backends.acl.kernels." + name, KERNELS / (name + ".py"))
@@ -137,7 +144,8 @@ def test_acl_install_publishes_real_owners_idempotently_without_facade_writes(pr
     # A literal count is the canary that a new registration was deliberate.
     # The duplicate check above catches a name registered twice, but not a
     # kernel that appears because an import side effect grew the table.
-    assert len(operations) == 48, "ACL kernel count changed; update deliberately"
+    # Union of the upstream 51 registrations and local repeat_interleave/argsort.
+    assert len(operations) == 53, "ACL kernel count changed; update deliberately"
     assert providers.dispatch.registered_kernel(
         "tensor.repeat_interleave", "acl"
     ) is providers.tensor.repeat_interleave_acl
@@ -145,6 +153,8 @@ def test_acl_install_publishes_real_owners_idempotently_without_facade_writes(pr
         "tensor.argsort", "acl"
     ) is providers.tensor.argsort_acl
     assert len(first) == len(operations)
+    assert providers.dispatch.registered_kernel("conv3d", "acl") is providers.neural.conv3d_acl
+    assert providers.dispatch.registered_kernel("conv_transpose2d", "acl") is providers.neural.conv_transpose2d_acl
     for operation, implementation in providers.install.KERNELS:
         assert providers.dispatch.registered_kernel(operation, "acl") is implementation
         assert implementation.__module__.startswith("jittor.backends.acl.kernels.") or (
@@ -160,13 +170,30 @@ def test_acl_rejection_does_not_reenter_native_dispatch(providers):
     assert providers.tensor._roll_acl(_Tensor(dtype="float64"), 1) is None
     assert providers.tensor._split_acl(x, 0) is None
     assert providers.neural.resize_acl(x, (2, 2), mode="bilinear") is None
-    assert providers.neural._silu_acl(_Tensor(dtype="float16")) is None
+    assert providers.neural._silu_acl(_Tensor(dtype="float64")) is None
     assert providers.neural.softmax_acl(x, zero_all_neg_inf=True) is None
     assert providers.normalization.layer_norm_acl(x, (4,), 1, 0, 1e-5) is None
     assert providers.calls == []
     providers.install.install()
     assert providers.dispatch.select_kernel("nn.softmax", x, dim=-1) is providers.neural.softmax_acl
     assert providers.dispatch.select_kernel("nn.softmax", x, dim=-1, zero_all_neg_inf=True) is None
+
+
+@pytest.mark.parametrize("dtype,runner", [
+    ("float16", "SiLUACL"),
+    ("float32", "SiLUACL"),
+    ("bfloat16", "SwishACL"),
+])
+@pytest.mark.parametrize("no_grad", [0, 1])
+def test_acl_silu_routes_supported_dtypes_with_and_without_grad(providers, dtype, runner, no_grad, monkeypatch):
+    monkeypatch.setattr(providers.native.flags, "no_grad", no_grad)
+    source = _Tensor(dtype=dtype)
+    result = providers.neural._silu_acl(source)
+    assert result is not None
+    assert providers.calls == [
+        (runner, "construct", (), {}),
+        (runner, "execute", (source,), {}),
+    ]
 
 
 def test_acl_setitem_returns_result_and_arg_reduce_uses_unwrapped_kernel(providers):
@@ -280,7 +307,10 @@ def test_acl_pool_uses_canonical_output_geometry(
         return record_pool(program[0], inputs, output_dtypes, output_shapes, program[1])
 
     namespace = {"jt": providers.native, "acl_program": record_program,
-                 "acl_emit": record_emit, "_POOL_PROGRAMS": {}, "_pool_output_size": None}
+                 "acl_emit": record_emit, "_POOL_PROGRAMS": {}, "_pool_output_size": None,
+                 # The stripped AST keeps only PoolACL's geometry path; the
+                 # SoC gate stays open so the canonical launch is what runs.
+                 "kernel_available": lambda *_args, **_kwargs: True}
     exec(compile(pool_tree, "<actual_pool_acl>", "exec"), namespace)
     monkeypatch.setattr(providers.neural, "PoolACL", namespace["PoolACL"])
     value = _Tensor((1, 2, size, size))

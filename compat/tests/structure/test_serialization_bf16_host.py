@@ -8,6 +8,7 @@ from pathlib import Path
 import pickle
 import pickletools
 import struct
+from threading import Event
 import sys
 import tempfile
 import types
@@ -40,6 +41,9 @@ class HostTensor:
     def numpy(self):
         return (np.left_shift(self.array.astype(np.uint32), np.uint32(16)).view(np.float32)
                 if self.dtype == 'bfloat16' else self.array.copy())
+
+    def contiguous(self):
+        return self
 
     def stop_grad(self):
         self.requires_grad = False
@@ -96,6 +100,18 @@ class BF16CodecHostContracts(unittest.TestCase):
             [value.array for value in values], axis=dim), values[0].dtype)
         self.native.fetch = lambda *args: args[-1](*(value.numpy() for value in args[:-1]))
         self.native.sync_all = lambda *args: None
+        self.native.sync = lambda roots, **kwargs: None
+        core_package = types.ModuleType("jittor._core")
+        core_package.__path__ = []
+        core_var = types.ModuleType("jittor._core.var")
+        def fetch(operands, callback):
+            callback(*(value.array.copy() for value in operands))
+            return object()
+        core_var.core = types.SimpleNamespace(
+            ops=types.SimpleNamespace(fetch=fetch),
+            submit_pending_fetches=lambda: None)
+        sys.modules[core_package.__name__] = core_package
+        sys.modules[core_var.__name__] = core_var
 
         def reinterpret(value, shape, dtype):
             self.assertEqual(value.dtype, 'uint16')
@@ -152,7 +168,7 @@ class BF16CodecHostContracts(unittest.TestCase):
         name = 'jittor.compat.torch.' + suffix
         module = types.ModuleType(name)
         module.__package__ = name.rsplit('.', 1)[0]
-        module.__dict__.update(np=np, _np_pt=np, jt=self.native, cast=typing.cast, Any=typing.Any,
+        module.__dict__.update(_Event=Event, np=np, _np_pt=np, jt=self.native, cast=typing.cast, Any=typing.Any,
             get_install_context=self.get_context, _jittor_dtype_name=lambda value: str(value).removeprefix('torch.'),
             _pickle=pickle, _io=io, _zipfile=zipfile, _os_pickle=os, os=os, json=json, struct=struct,
             _SafetensorError=ValueError, EXPECTED=(AttributeError, TypeError, ValueError, OSError), swallowed=lambda *a: None,

@@ -25,6 +25,9 @@
 #include "core/grad.h"
 #include "ops/op_register.h"
 #include "utils/graph_build_profile.h"
+#include "runtime/rematerialization_scope.h"
+#include "runtime/profiler/memory_history.h"
+#include "runtime/profiler/step_trace.h"
 
 namespace jittor {
 
@@ -48,6 +51,24 @@ jit_cache_map<string> jit_key_mapper;
 
 std::atomic<int64> Op::number_of_lived_ops{0};
 std::atomic<int64> Op::number_of_created_ops{0};
+
+static thread_local const BackwardStorageReadScope* backward_storage_reads = nullptr;
+BackwardStorageReadScope::BackwardStorageReadScope(const Op* op)
+    : op(op), previous(backward_storage_reads) { backward_storage_reads = this; }
+BackwardStorageReadScope::~BackwardStorageReadScope() { backward_storage_reads = previous; }
+
+void check_backward_storage_read(Var* value) {
+    if (!backward_storage_reads || !value) return;
+    auto token = value->peek_storage_version();
+    if (!token) return;
+    for (auto* scope = backward_storage_reads; scope; scope = scope->previous)
+        for (const auto& saved : scope->op->saved_storage_versions)
+            if (saved.token == token || saved.original_id == value->id)
+                USER_CHECK(saved.token == token &&
+                        saved.version == saved.token->value.load(std::memory_order_relaxed))
+                    << "one of the variables needed for gradient computation has been modified by an inplace operation; saved Var"
+                    << saved.original_id << "read by" << scope->op->name();
+}
 
 // Only Ops with disabled inputs have an entry. Node flag bits record whether
 // an Op has already snapshotted and provide the common no-map-lookup fast path.
@@ -80,7 +101,12 @@ bool lookup_unrecorded_view_edge(Node* source, Node* target) {
 }
 
 Op::Op() {
+    rematerialization_owner = rematerialization_construction_owner();
     launch_origin = capture_launch_origin();
+    if (PREDICT_BRANCH_NOT_TAKEN(capture_op_stacks))
+        memory_stack = capture_memory_stack();
+    if (PREDICT_BRANCH_NOT_TAKEN(step_trace_mode & st_ops))
+        step_trace_note_op_built(this);
     float32_precision = current_float32_precision_policy();
     flags.set(NodeFlags::_var, 0);
     set_flag(OpFlags::_cpu, 1);
@@ -238,11 +264,12 @@ Var* Op::create_output(NanoVector shape, NanoString dtype) {
     return output;
 }
 
-// A pending Var marked _is_scalar is torch's CPU scalar: it has no data
-// anywhere yet, and it is the `2` in `x * 2`, the `1` a gradient starts from,
-// or a broadcast/unary of one (array_op.cc sets the flag on a rank-zero
-// source; broadcast_to_op.cc and unary_op.cc carry it forward). Such a value
-// follows the operand it meets instead of forcing a device error.
+// A pending Var marked _is_scalar or _is_constant is torch's CPU scalar: it
+// has no data anywhere yet, and it is the `2` in `x * 2`, the `1` a gradient
+// starts from, or a broadcast/unary/device-copy of one. A rank-zero ArrayOp
+// sets both bits (array_op.cc); broadcast_to_op.cc, unary_op.cc and
+// device_copy_op.cc carry them forward. Such a value follows the operand it
+// meets instead of forcing a device error.
 //
 // Both halves of that test are load-bearing, and each has a test:
 // element count alone sweeps in a real one-element user tensor that already
@@ -250,14 +277,17 @@ Var* Op::create_output(NanoVector shape, NanoString dtype) {
 // caller deliberately built on cuda:0 and merely has not synced yet --
 // silently, where torch raises. See tests/backends/cuda/test_cuda_multi_device.py.
 //
-// One edge remains and is accepted: `jt.zeros(n)` is `unary(0).broadcast(n)`,
-// and _is_scalar comes through the broadcast, so an unsynced zeros/ones does
-// follow its operand. It is a constant with no data anywhere, produced
-// bit-identically on either card, so this is constant placement rather than
-// moving something the caller computed. device-placement.md §5 has the
-// reasoning and why a third condition would cost more than it buys.
+// One edge remains and is accepted: `jt.zeros(n)` is `unary(0).broadcast(n)`.
+// A factory result clears `_is_scalar` on the full-shape result so it promotes
+// as a tensor, but `_is_constant` still comes through the
+// broadcast, so an unsynced zeros/ones does follow its operand. It is a
+// constant with no data anywhere, produced bit-identically on either card, so
+// this is constant placement rather than moving something the caller computed.
+// device-placement.md section 5 has the reasoning and why a third condition
+// would cost more than it buys.
 static inline bool is_pending_scalar(Var* v) {
-    return !v->is_finished() && v->flag(VarFlags::_is_scalar)
+    return !v->is_finished()
+        && (v->flag(VarFlags::_is_scalar) || v->flag(VarFlags::_is_constant))
         && !v->flag(VarFlags::_placement_published);
 }
 
@@ -329,7 +359,20 @@ void Op::propagate_device() {
     if (target.explicit_backend) {
         const int dev = target.device.backend == BackendId::Cpu ? -1 : target.device.index;
         for (Var* v : inputs()) {
-            if (!v->placement.explicit_backend || v->placement == target) continue;
+            if (v->placement == target) continue;
+            if (!v->placement.explicit_backend) {
+                // An implicitly placed input names its device only through
+                // device_id. A Python number in native mode is one, made on
+                // the current device: next to a DLPack import or a `.cuda(1)`
+                // of an explicit tensor on another card it was left there, and
+                // the kernel on the target card read its pointer and faulted
+                // with an illegal address.
+                if (dev < 0 || v->device_id < 0 || v->device_id == dev) continue;
+                if (is_pending_scalar(v) && retarget_pending(v, dev, target)) continue;
+                USER_ERROR << "Expected all inputs to be on the same CUDA device, but found"
+                    << "cuda:" >> dev << "and cuda:" >> v->device_id << "for op" << name() >> "."
+                    << "\nMove one side with Var.to_device() / .to(\"cuda:N\") first.";
+            }
             USER_CHECK(is_pending_scalar(v) && retarget_pending(v, dev, target))
                 << "Expected all tensor inputs on the same backend and device for" << name()
                 << "; use an explicit device copy before mixing CPU and accelerator tensors";
@@ -410,6 +453,8 @@ void Op::init() {
         }
     }
     infer_shape();
+    if (!flag(OpFlags::_no_input_storage))
+        for (Var* value : inputs()) check_backward_storage_read(value);
     if (first_init && _inputs.size() && !flag(OpFlags::_manual_device))
         propagate_device();
     if (first_init && has_first_order_only_input)
@@ -441,7 +486,57 @@ void Op::init() {
             }
         }
     }
+    // Record values, never owning the saved Vars. The read scope below the
+    // native backward builder decides which of these the derivative uses.
+    // Native assignment/rebinding remains unchanged.
+    if (first_init && !no_grad && !all_inputs_stopped &&
+            autograd_policy.preserve_requires_grad_on_assignment) {
+        for (Var* value : inputs()) {
+            auto token = value->storage_version_token();
+            saved_storage_versions.push_back({token, token->value.load(std::memory_order_relaxed), value->id});
+        }
+        for (Var* value : outputs()) {
+            auto token = value->storage_version_token();
+            saved_storage_versions.push_back({token, token->value.load(std::memory_order_relaxed), value->id});
+        }
+    }
 }
+
+vector<Var*> saved_storage_readers(const vector<Var*>& written, Op* writer) {
+    vector<Var*> pending(written), saved;
+    auto visit = [&](Var* value) {
+        if (std::find(pending.begin(), pending.end(), value) == pending.end())
+            pending.push_back(value);
+    };
+    for (size_t i=0; i<pending.size(); ++i) {
+        Var* value = pending[i];
+        if (value->share_next)
+            for (Var* member=value->share_next; member!=value; member=member->share_next)
+                visit(member);
+        for (Op* reader : value->outputs()) {
+            if (reader == writer) continue;
+            for (Var* out : reader->outputs()) {
+                // Kept graphs run only through their replay owner, including
+                // when an imperative write commits an already executed step.
+                if (out->flag(VarFlags::_kept)) continue;
+                if (out->share_src == value) {
+                    visit(out);
+                } else if (!out->mem_ptr && out->liveness.backward.active()) {
+                    if (out->flag(VarFlags::_needed_by_backward)) {
+                        if (std::find(saved.begin(), saved.end(), out) == saved.end())
+                            saved.push_back(out);
+                    } else {
+                        // A nonsaved intermediate such as x+1 still connects
+                        // the written allocation to a later saved exp result.
+                        visit(out);
+                    }
+                }
+            }
+        }
+    }
+    return saved;
+}
+
 
 void order_after_readers(Op* op, const vector<Var*>& written) {
     // A view of a written var reads it wherever its own readers do, so their
@@ -449,12 +544,16 @@ void order_after_readers(Op* op, const vector<Var*>& written) {
     // (`share_src`) or one already in its share ring -- a broadcast's expand
     // that has run and left the graph, whose consumer has not.
     vector<Var*> aliases;
+    unordered_set<Var*> alias_members;
     auto alias = [&](Var* v) {
-        if (std::find(aliases.begin(), aliases.end(), v) == aliases.end())
-            aliases.push_back(v);
+        if (alias_members.insert(v).second) aliases.push_back(v);
     };
     for (Var* v : written) alias(v);
     vector<Node*> after;
+    unordered_set<Node*> after_members;
+    auto push_after = [&](Node* node) {
+        if (after_members.insert(node).second) after.push_back(node);
+    };
     for (size_t k = 0; k < aliases.size(); k++) {
         Var* v = aliases[k];
         if (v->share_next)
@@ -471,11 +570,12 @@ void order_after_readers(Op* op, const vector<Var*>& written) {
                 // A pending reader: its first unfinished output stands for it.
                 if (stands_for_reader || out->is_finished()) continue;
                 stands_for_reader = true;
-                if (std::find(after.begin(), after.end(), out) == after.end())
-                    after.push_back(out);
+                push_after(out);
             }
         }
     }
+    for (Var* saved : saved_storage_readers(written, op))
+        push_after(saved);
     if (after.empty()) return;
     // A reader upstream of the op -- the forward a gradient is computed
     // from -- is ordered already by the data it feeds it, and an edge would

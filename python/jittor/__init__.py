@@ -9,7 +9,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 
-__version__ = '2.0.0'
+__version__ = '2.0.2'
 
 import os as _os
 import sys as _sys
@@ -64,7 +64,7 @@ _NATIVE_OP_EXPORTS = (
     "floor_divide", "floor_int", "fmod", "fuse_transpose", "fused_adamw",
     "fused_sgd", "getitem",
     "greater", "greater_equal", "index", "index_var", "int16", "int32",
-    "int64", "int8", "left_shift", "less", "less_equal", "log",
+    "int64", "int8", "left_shift", "less", "less_equal", "log", "log1p",
     "logical_and", "logical_not", "logical_or", "logical_xor", "max",
     "maximum", "mean", "min", "minimum", "mod", "mul", "multiply",
     "negative", "not_equal", "numpy_code", "pow", "prod", "product",
@@ -174,7 +174,7 @@ from .nn import matmul, \
 from .nn.functional.softmax import logsumexp
 from .nn.functional.tensor import kron, tensordot
 from . import numpy2cupy
-from ._runtime.graph_replay import graph_replay
+from ._runtime.graph_replay import graph_replay, graph_replay_barrier
 from ._runtime.step_capture import capture_step
 from . import profiling
 from .profiling import profile
@@ -232,6 +232,7 @@ JittorInternalError = jittor_utils.cc.JittorInternalError
 JittorIndexError = jittor_utils.cc.JittorIndexError
 JittorTypeError = jittor_utils.cc.JittorTypeError
 JittorShapeError = jittor_utils.cc.JittorShapeError
+JittorOutOfMemoryError = jittor_utils.cc.JittorOutOfMemoryError
 
 _ran_post_process = False
 for backend in compiler.backend_modules:
@@ -388,8 +389,10 @@ _ROOT_EXPORTS = (
     "math_util", "matmul", "misc", "mkl_ops", "mpi", "mpi_ops", "nn",
     "numpy2cupy", "optim", "ops", "rank", "sparse", "tensordot", "vmap",
     "amp",
-    "world_size", "config", "capability", "introspection", "graph_replay", "capture_step",
+    "world_size", "config", "capability", "introspection", "graph_replay", "graph_replay_barrier", "capture_step",
     "profile", "profiling",
+    "JittorError", "JittorInternalError", "JittorIndexError", "JittorTypeError",
+    "JittorShapeError", "JittorOutOfMemoryError",
     "get_cuda_rng_state", "get_cuda_rng_state_all", "get_cuda_initial_seed",
     "set_cuda_rng_state", "set_cuda_rng_state_all", "set_cuda_seed",
     "set_cuda_seed_all",

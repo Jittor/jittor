@@ -23,6 +23,7 @@ from .api import (
     _api_accelerator_set_stream,
     _api_c_mod__accelerator_setAllocatorSettings,
     _api_c_mod__cuda_clearCublasWorkspaces,
+    _api_c_mod__cuda_getCurrentRawStream,
     _api_c_mod__cuda_setAllocatorSettings,
     _api_c_mod__disabled_torch_function_impl,
     _api_c_mod__get_tracing_state,
@@ -50,8 +51,13 @@ from .api import (
     _api_cuda_is_initialized,
     _api_cuda_manual_seed,
     _api_cuda_manual_seed_all,
+    _api_cuda_memory__dump_snapshot,
+    _api_cuda_memory__record_memory_history,
     _api_cuda_memory__set_allocator_settings,
+    _api_cuda_memory__snapshot,
+    _api_cuda_memory_snapshot,
     _api_cuda_memory_stats,
+    _api_cuda_reset_accumulated_memory_stats,
     _api_cuda_seed,
     _api_cuda_seed_all,
     _api_cuda_set_rng_state,
@@ -227,6 +233,7 @@ def _install_cuda(g, registry=None):
     cuda.reset_peak_memory_stats = _reset_peak
     cuda.reset_max_memory_allocated = _reset_peak
     cuda.memory_stats = _api_cuda_memory_stats
+    cuda.reset_accumulated_memory_stats = _api_cuda_reset_accumulated_memory_stats
     # torch's mem_get_info is cudaMemGetInfo: the DRIVER's free/total for the whole
     # device, counting other processes, the CUDA context and every byte jittor's
     # pool holds -- not just the bytes currently live in Vars. Serving stacks size
@@ -245,7 +252,13 @@ def _install_cuda(g, registry=None):
     cuda.memory.max_memory_reserved = cuda.max_memory_reserved
     cuda.memory.memory_stats = cuda.memory_stats
     cuda.memory.memory_summary = cuda.memory_summary
+    cuda.memory.reset_accumulated_memory_stats = cuda.reset_accumulated_memory_stats
+    cuda.memory.reset_peak_memory_stats = cuda.reset_peak_memory_stats
     cuda.memory.CUDAPluggableAllocator = CUDAPluggableAllocator
+    cuda.memory._record_memory_history = _api_cuda_memory__record_memory_history
+    cuda.memory._snapshot = _api_cuda_memory__snapshot
+    cuda.memory._dump_snapshot = _api_cuda_memory__dump_snapshot
+    cuda.memory.memory_snapshot = cuda.memory_snapshot = _api_cuda_memory_snapshot
     cuda.CUDAPluggableAllocator = CUDAPluggableAllocator
     # Torch exposes opaque CPU byte tensors. Jittor owns and validates the
     # versioned native state; this layer only encodes/decodes that state.
@@ -369,6 +382,7 @@ def _install_cuda(g, registry=None):
         c_mod._get_tracing_state = _api_c_mod__get_tracing_state
         c_mod._log_api_usage_once = _api_c_mod__log_api_usage_once
         c_mod._cuda_clearCublasWorkspaces = _api_c_mod__cuda_clearCublasWorkspaces
+        c_mod._cuda_getCurrentRawStream = _api_c_mod__cuda_getCurrentRawStream
         c_mod._disabled_torch_function_impl = _api_c_mod__disabled_torch_function_impl
         functorch_c = _types.ModuleType("torch._C._functorch")
         functorch_c.get_unwrapped = _api_functorch_c_get_unwrapped
@@ -544,6 +558,7 @@ def _install_accelerator(g, registry=None):
     accelerator.memory_reserved = cuda.memory_reserved
     accelerator.max_memory_allocated = cuda.max_memory_allocated
     accelerator.memory_stats = cuda.memory_stats
+    accelerator.get_memory_info = cuda.mem_get_info
     accelerator.reset_peak_memory_stats = cuda.reset_peak_memory_stats
     accelerator.current_accelerator = _api_accelerator_current_accelerator
     g.accelerator = accelerator

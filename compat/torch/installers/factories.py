@@ -60,6 +60,21 @@ _EMPTY_LIKE_FIDELITY_DETAIL = (
 )
 
 
+def _is_meta_device_request(value):
+    """Whether a ``device=`` argument names the meta device.
+
+    Jittor has no meta backend; callers that honour the request do so through
+    the observable-meta contract (see ``device.__enter__``), not by silently
+    picking a real device.
+    """
+    if value is None:
+        return False
+    name = getattr(value, "type", None)
+    if name is None:
+        name = str(value).split(":", 1)[0]
+    return name == "meta"
+
+
 def _invoke_factory(name, args, kwargs):
     context = get_install_context(jt)
     implementation = context.state.get("factory_implementations", {}).get(name)
@@ -69,8 +84,31 @@ def _invoke_factory(name, args, kwargs):
     from ..meta import finish
     follows_input = name.endswith("_like") or name in _TENSOR_FIRST_ARGUMENT
     like = (args[0] if args else kwargs.get("input")) if follows_input else None
-    with tensor_frontend(context.target_namespace.Var, device=kwargs.get("device"), like=like):
-        return finish(implementation(*args, **kwargs), kwargs.get("device"), like)
+    if name == "normal":
+        mean = kwargs.get("mean", args[0] if args else None)
+        std = kwargs.get("std", args[1] if len(args) > 1 else None)
+        like = mean if isinstance(mean, jt.Var) else std if isinstance(std, jt.Var) else None
+    requested = kwargs.get("device")
+    # ``torch.arange(tensor_bound)`` inherits the bound tensor's device when no
+    # explicit device is supplied. This matters for CUDA scalar bounds used by
+    # multimodal position-grid construction. Keep the general factory default
+    # for ordinary Python bounds and never let a tensor step decide placement.
+    if requested is None and name == "arange":
+        for value in args[:2]:
+            if isinstance(value, jt.Var):
+                requested = getattr(value, "device", None)
+                if requested is None:
+                    requested = "cuda" if value.is_cuda else "cpu"
+                break
+    meta = _is_meta_device_request(requested)
+    # torch's meta tensors carry shape/dtype only; Jittor has no meta backend,
+    # so the same contract `with torch.device("meta")` uses applies here: the
+    # Var is really allocated (on the host) and reports "meta" via the
+    # `_jittor_torch_meta` mark that `Tensor.device`/`is_meta` read.
+    with tensor_frontend(context.target_namespace.Var,
+                         device="cpu" if meta else requested, like=like):
+        result = implementation(*args, **kwargs)
+    return finish(result, requested, like)
 
 
 def arange(*args, **kwargs):
@@ -243,6 +281,13 @@ def _creates_fresh_leaf(name, args, kwargs):
     return False
 
 
+def _draw_inputs_require_grad(args, kwargs):
+    values = list(args) + [kwargs.get("mean"), kwargs.get("std"),
+                           kwargs.get("input")]
+    return any(isinstance(value, jt.Var) and bool(value.requires_grad)
+               for value in values)
+
+
 def _shape_dim(v):
     if isinstance(v, np.generic):
         return v.item()
@@ -286,6 +331,9 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
     _requires_grad = bool(kwargs.get("requires_grad", False))
     fresh_like = name in ("empty_like", "zeros_like", "ones_like", "full_like")
     fresh_leaf = _creates_fresh_leaf(name, args, kwargs)
+    input_requires_grad = not fresh_leaf and any(
+        isinstance(value, jt.Var) and value.requires_grad
+        for value in tuple(args) + tuple(kwargs.values()))
     for k in _DROP:
         kwargs.pop(k, None)
     if name == "arange":
@@ -312,9 +360,18 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
                  (isinstance(args[0], tuple) and type(args[0]) is not tuple)):
         args = (tuple(int(x) for x in args[0]),) + tuple(args[1:])
     # Torch also allows shape via size=.
-    if "size" in kwargs and not args:
+    if name == "normal" and "size" in kwargs and not args:
+        size = _shape_arg(kwargs.pop("size"))
+        mean = kwargs.pop("mean", 0.0)
+        std = kwargs.pop("std", 1.0)
+        args = (mean, std, size)
+    elif "size" in kwargs and not args:
         sz = kwargs.pop("size")
-        args = (tuple(sz),) if hasattr(sz, "__len__") else (sz,)
+        # Route the keyword spelling through the same scalar-dimension
+        # normalization as the positional spelling. Multimodal audio encoders
+        # commonly compute a padded length as a CUDA 0-D tensor and pass it
+        # through ``torch.full(size=(..., length))``.
+        args = (_shape_arg(sz),)
     # torch.full(size, fill_value=...) / full_like(input, fill_value=...):
     # jittor's full(shape, val) / full_like(x, val) take the value as the 2nd
     # positional. transformers' beam scorer passes fill_value= as a keyword, so
@@ -351,10 +408,46 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
             # ones_like / tril / triu have no dtype param in jittor; torch
             # accepts one. Pop it and cast the result instead.
             _cast_to = _dtype_to_str(kwargs.pop("dtype"))
-    out = orig(*args, **kwargs)
-    if _cast_to is not None:
+    # rand_like/randn_like inherit the input dtype when dtype= is omitted, so
+    # the complex check must see that inherited dtype, not just an explicit one.
+    _draw_dtype = _cast_to
+    if (_draw_dtype is None and name.endswith("_like") and args
+            and isinstance(args[0], jt.Var)):
+        _inherited = _jittor_dtype_name(args[0].dtype)
+        if _inherited in _COMPLEX_COMPONENTS:
+            _draw_dtype = _inherited
+    if _draw_dtype in _COMPLEX_COMPONENTS and name in _COMPLEX_RANDOM_FACTORIES:
+        shape = _complex_random_shape(name, args)
+        if shape is None:
+            raise NotImplementedError(
+                "torch.%s on a complex dtype needs a resolvable shape for the "
+                "two-draw composition" % name)
+        out = _complex_random(name, shape, _draw_dtype)
+    elif _cast_to in _COMPLEX_COMPONENTS and name == "normal":
+        _complex_normal_refusal()
+    else:
+        out = orig(*args, **kwargs)
+    # Typed factories can already return the requested dtype. A final cast
+    # should convert values, rather than repeat frontend dispatch unchanged.
+    if (_cast_to is not None and
+            _jittor_dtype_name(out.dtype) != _jittor_dtype_name(_cast_to)):
         out = out.cast(_cast_to)
-    return _apply_requires_grad(out, _requires_grad)
+    if name in ("zeros", "ones", "full", "zeros_like", "ones_like", "full_like"):
+        # Native fill may be a broadcast scalar view. Public factories own
+        # writable storage, including when installed as an optimizer buffer.
+        out = out.clone()
+    if fresh_leaf:
+        return _apply_requires_grad(out.detach(), _requires_grad)
+    if not (_requires_grad or input_requires_grad):
+        # Internal allocation/cast nodes do not create public history for a
+        # fresh factory, or for an operation whose tensor inputs are stopped.
+        out = out.detach()
+    out._jittor_torch_ext_mutable = True
+    if fresh_leaf or (_requires_grad and not out.requires_grad):
+        out.requires_grad_(_requires_grad)
+        if _requires_grad:
+            _torch_register_leaf(out)
+    return out
 
 
 def _wrap_constructors(g):
@@ -403,6 +496,51 @@ def _linspace_adapter(original, *args, dtype=None, **kwargs):
 #: generator* returns -- jittor's randint is int32 -- because a generator picks
 #: the stream a draw comes from and nothing else.
 _INTEGER_DRAWS = {"randperm": "int64", "randint": "int32"}
+
+#: Native complex dtypes and the real dtype each part is drawn from.
+_COMPLEX_COMPONENTS = {"complex64": "float32", "complex128": "float64"}
+
+#: Random factories defined over a complex dtype. torch draws the real
+#: and imaginary parts independently over the same shape and distribution.
+_COMPLEX_RANDOM_FACTORIES = frozenset({
+    "rand", "randn", "rand_like", "randn_like",
+})
+
+
+def _complex_random_shape(name, args):
+    """The shape a complex random factory would draw (None if unresolvable)."""
+    if name.endswith("_like"):
+        return (tuple(int(s) for s in args[0].shape) if args else None)
+    if len(args) == 1:
+        resolved = _shape_tuple(args[0])
+        if resolved is not None:
+            return resolved
+    if args and all(_is_dim(a) for a in args):
+        return tuple(int(a) for a in args)
+    return None
+
+
+def _complex_random(name, shape, dtype, generator=None):
+    """Draw a complex tensor from two independent real native draws.
+
+    Jittor instantiates its random kernels over real scalar types, so a
+    complex dtype request never compiles. torch defines rand/randn on a
+    complex dtype as two independent draws over the same shape, one for
+    the real part and one for the imaginary part; composing them here
+    keeps the draw on the native real kernels instead of narrowing it to
+    a dtype the core does not compute.
+    """
+    component = _COMPLEX_COMPONENTS[dtype]
+    distribution = "normal" if name.startswith("randn") else "uniform"
+    real = jt.random(list(shape), component, distribution, generator=generator)
+    imag = jt.random(list(shape), component, distribution, generator=generator)
+    return jt.nn.view_as_complex(jt.stack([real, imag], dim=-1))
+
+
+def _complex_normal_refusal():
+    raise NotImplementedError(
+        "torch.normal does not sample complex dtypes: the core has no "
+        "complex normal kernel; use torch.randn for a complex normal draw")
 
 
 def _is_dim(value):
@@ -508,9 +646,14 @@ def _draw_from_generator(name, generator, args, kwargs):
     else:
         cast_to = _dtype_to_str(get_install_context(jt).target_namespace.get_default_dtype())
     if name in ("randn", "randn_like", "rand", "rand_like"):
-        distribution = "normal" if name.startswith("randn") else "uniform"
-        t = jt.random(shape, cast_to, distribution, generator=native)
+        if cast_to in _COMPLEX_COMPONENTS:
+            t = _complex_random(name, shape, cast_to, generator=native)
+        else:
+            distribution = "normal" if name.startswith("randn") else "uniform"
+            t = jt.random(shape, cast_to, distribution, generator=native)
     elif name == "normal":
+        if cast_to in _COMPLEX_COMPONENTS:
+            _complex_normal_refusal()
         t = jt.normal(mean, std, size=shape, dtype=cast_to, generator=native)
     elif name == "randint":
         if "high" in kwargs:
@@ -537,103 +680,32 @@ def _draw_from_generator(name, generator, args, kwargs):
         t = t.detach()
     t._jittor_torch_ext_mutable = True
     requires_grad = bool(kwargs.get("requires_grad", False))
-    t.requires_grad_(requires_grad)
     if requires_grad:
+        if not bool(t.requires_grad):
+            t.requires_grad_(True)
         _torch_register_leaf(t)
+    elif bool(t.requires_grad) and not _draw_inputs_require_grad(args, kwargs):
+        # The native draw flags its result even when no input asks for a
+        # gradient; torch's factory result is a leaf that does not require
+        # one. A non-leaf refuses the flag change, so cut it outright.
+        if t.is_backward_leaf:
+            t.requires_grad_(False)
+        else:
+            t.stop_grad()
     return t
 
 
 def _random_adapter(original, *args, generator=None, _name=None, **kwargs):
-    name = _name
-    if generator is not None and name == "randint":
-        if generator.device.type not in ("cpu", "cuda"):
-            raise RuntimeError("explicit Generator requires a CPU or CUDA device")
-        args = list(args)
-        if len(args) == 3:
-            low, high, size = args
-        elif len(args) == 2 and "size" not in kwargs:
-            low, high, size = 0, args[0], args[1]
-        elif len(args) == 2:
-            low, high = args
-            size = kwargs.pop("size")
-        elif len(args) == 1 and "high" in kwargs:
-            low, high = args[0], kwargs.pop("high")
-            size = kwargs.pop("size", None)
-        elif len(args) == 1:
-            low, high = 0, args[0]
-            size = kwargs.pop("size", None)
-        elif not args:
-            high = kwargs.pop("high", None)
-            low = kwargs.pop("low", 0)
-            size = kwargs.pop("size", None)
-        else:
-            raise TypeError("invalid torch.randint arguments")
-        if high is None or size is None:
-            raise TypeError("torch.randint requires high and size")
-        if isinstance(size, int):
-            size = (size,)
-        else:
-            try:
-                size = tuple(operator.index(dim) for dim in size)
-            except TypeError:
-                raise TypeError("torch.randint size dimensions must be integers") from None
-        # Match the dtype of the shim's plain randint call when Torch omits
-        # dtype; the generator selects a stream and does not change that
-        # frontend default.
-        dtype = _dtype_to_str(kwargs.pop("dtype", None) or jt.int32)
-        requested_device = kwargs.pop("device", None)
-        if requested_device is None:
-            requested_type, requested_index = "cpu", None
-        elif isinstance(requested_device, str):
-            parts = requested_device.split(":", 1)
-            requested_type = parts[0]
-            requested_index = int(parts[1]) if len(parts) == 2 else None
-        else:
-            requested_type = requested_device.type
-            requested_index = requested_device.index
-        if requested_type == "cuda" and requested_index is None:
-            requested_index = max(int(jt.current_device()), 0)
-        if (requested_type != generator.device.type
-                or (requested_type == "cuda"
-                    and requested_index != generator.device.index)):
-            raise RuntimeError("Generator device must match the randint output device")
-        layout = kwargs.pop("layout", None)
-        if layout not in (None, "strided"):
-            raise RuntimeError("torch.randint only supports strided layout")
-        if kwargs.pop("pin_memory", False):
-            raise RuntimeError("torch.randint pin_memory=True is unsupported")
-        if kwargs.pop("requires_grad", False):
-            raise RuntimeError("Only Tensors of floating point and complex dtype can require gradients")
-        if kwargs:
-            raise TypeError("unsupported randint arguments: {}".format(sorted(kwargs)))
-        try:
-            low, high = operator.index(low), operator.index(high)
-        except TypeError:
-            raise TypeError("torch.randint bounds must be integers") from None
-        if high <= low:
-            raise ValueError("from must be less than to")
-        return _native_randint(low, high, size, dtype, generator=generator)
-    if generator is not None and name == "randperm":
-        if generator.device.type != "cpu":
-            raise RuntimeError("torch.randperm with an explicit Generator currently supports CPU only")
-        n = int(args[0] if args else kwargs.pop("n"))
-        dtype = kwargs.pop("dtype", None) or jt.int64
-        requested_device = kwargs.pop("device", None)
-        requested_type = (getattr(requested_device, "type", str(requested_device).split(":", 1)[0])
-                          if requested_device is not None else "cpu")
-        if requested_type != "cpu":
-            raise RuntimeError("Expected a CPU generator for a CPU randperm result")
-        kwargs.pop("layout", None)
-        kwargs.pop("pin_memory", None)
-        if kwargs:
-            raise TypeError("unsupported randperm arguments: {}".format(sorted(kwargs)))
-        offset = generator._reserve(max(0, n - 1))
-        return jt.ops.generator_randperm(n, generator._seed_argument(), offset,
-                                         _dtype_to_str(dtype))
-    drawn = _draw_from_generator(name, generator, args, kwargs) if generator is not None else None
-    if drawn is not None:
-        return drawn
-    return original(*args, **kwargs)
+    if generator is None:
+        return original(*args, **kwargs)
+    if _name in ("randint", "randperm"):
+        namespace = get_install_context(jt).target_namespace
+        if kwargs.get("layout") not in (None, "strided", getattr(namespace, "strided", None)):
+            raise RuntimeError("explicit Generator integer draws require strided layout")
+        if kwargs.get("pin_memory", False):
+            raise RuntimeError("explicit Generator integer draws do not support pin_memory=True")
+    drawn = _draw_from_generator(_name, generator, args, kwargs)
+    return original(*args, **kwargs) if drawn is None else drawn
 
 
 def _install_random_and_linspace(g):

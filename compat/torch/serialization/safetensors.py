@@ -136,23 +136,13 @@ class _PySafeOpen:
         self._filename = filename
         self._device = device
         with open(filename, "rb") as fh:
-            prefix = fh.read(8)
-            if len(prefix) != 8:
-                raise _SafetensorError("Error while deserializing header: header too small")
-            n = struct.unpack("<Q", prefix)[0]
             size = os.fstat(fh.fileno()).st_size
-            if n > size - 8:
-                raise _SafetensorError("Error while deserializing header: header too large")
-            try:
-                self._header = json.loads(fh.read(n).decode("utf-8"))
-            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                raise _SafetensorError("Error while deserializing header: invalid JSON") from exc
-            if not isinstance(self._header, dict):
-                raise _SafetensorError("Error while deserializing header: expected object")
-            self._data_offset = 8 + n
-        # safetensors.safe_open.metadata() returns None when the optional
-        # metadata section is absent. Accelerate relies on that distinction
-        # to default a plain archive to ``{"format": "pt"}``.
+            self._header, n = _parse_header(fh.read(8), fh.read, size)
+        # Tensors are read on demand, as safetensors' mmap reader does: holding
+        # the whole payload doubled peak host memory while a checkpoint loaded.
+        self._data_offset = 8 + n
+        # Absence differs from an explicitly empty metadata dictionary.
+        # Accelerate uses None to recognize an archive without a format tag.
         self._meta = self._header.pop("__metadata__", None)
 
     def keys(self):
@@ -205,8 +195,8 @@ def _load_bytes(data):
     }
 
 
-def _load_file(filename, device="cpu"):
-    with _PySafeOpen(filename, device=device) as safe:
+def _load_file(filename, device="cpu", *, backend="mmap"):
+    with _PySafeOpen(filename, device=device, backend=backend) as safe:
         return {key: safe.get_tensor(key) for key in safe.keys()}
 
 
@@ -220,12 +210,26 @@ def _reject_shared_storage(tensors):
     Storage identity is the frontend's ``untyped_storage().data_ptr()``, the
     same key those libraries deduplicate on.
     """
-    names = {}
+    allocations = {}
     for key, value in tensors.items():
         storage = getattr(value, "untyped_storage", None)
-        if storage is not None:
-            names.setdefault(storage().data_ptr(), []).append(key)
-    shared = [group for group in names.values() if len(group) > 1]
+        if storage is not None and value.numel():
+            pointer = storage().data_ptr()
+            start = value.data_ptr()
+            end = start + value.numel() * value.element_size()
+            allocations.setdefault((str(value.device), pointer), []).append((start, end, key))
+    shared = []
+    for ranges in allocations.values():
+        group, last_end = [], 0
+        for start, end, key in sorted(ranges):
+            if group and start >= last_end:
+                if len(group) > 1:
+                    shared.append(group)
+                group = []
+            group.append(key)
+            last_end = max(last_end, end)
+        if len(group) > 1:
+            shared.append(group)
     if shared:
         raise RuntimeError(
             "Some tensors share memory, this will lead to duplicate memory on disk "
@@ -283,6 +287,8 @@ def _save_dict(tensors, metadata=None):
     if metadata:
         header["__metadata__"] = {str(k): str(v) for k, v in metadata.items()}
     raw_header = json.dumps(header, separators=(",", ":")).encode("utf-8")
+    # The format aligns the data buffer to eight bytes with JSON whitespace.
+    raw_header += b" " * (-len(raw_header) % 8)
     return struct.pack("<Q", len(raw_header)) + raw_header + b"".join(blobs)
 
 

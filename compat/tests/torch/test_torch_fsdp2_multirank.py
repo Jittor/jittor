@@ -100,6 +100,61 @@ class TestFSDP2InsideMpi(unittest.TestCase):
         module = torch.nn.Linear(8, 8, bias=False)
         self.assertIs(fully_shard(module), module)
 
+    def test_tied_parameter_aliases_remain_sharded_after_meta_wrap(self):
+        from torch.distributed.device_mesh import init_device_mesh
+        from torch.distributed.fsdp import fully_shard
+
+        class TiedModel(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.embed_tokens = torch.nn.Embedding(8, 4)
+                self.layers = torch.nn.ModuleList(
+                    [torch.nn.Linear(4, 4, bias=False)])
+                self.lm_head = torch.nn.Linear(4, 8, bias=False)
+                self.lm_head.weight = self.embed_tokens.weight
+
+        mesh = init_device_mesh("cuda", (_RANKS,))
+        model = TiedModel().to(torch.device("meta"))
+        # Accelerate reties weights after moving the model to meta.
+        model.lm_head.weight = model.embed_tokens.weight
+        fully_shard(model.layers[0], mesh=mesh)
+        fully_shard(model, mesh=mesh)
+
+        self.assertIs(model.embed_tokens.weight, model.lm_head.weight)
+        state = model.state_dict()
+        self.assertIs(state["embed_tokens.weight"], state["lm_head.weight"])
+        for value in state.values():
+            self.assertIsNotNone(value.device_mesh)
+            self.assertEqual(tuple(value.placements), (torch.distributed.tensor.Shard(0),))
+        print("FSDP2_TIED_ALIAS_OK rank={}".format(jt.rank), flush=True)
+
+    def test_full_state_distribute_then_assign_loads_local_flat_shard(self):
+        from torch.distributed.device_mesh import init_device_mesh
+        from torch.distributed.fsdp import fully_shard
+        from torch.distributed.tensor import Shard, distribute_tensor
+
+        mesh = init_device_mesh("cuda", (_RANKS,))
+        module = torch.nn.Linear(8, 8, bias=True)
+        full = jt.array(np.arange(64, dtype=np.float32).reshape(8, 8))
+        full_bias = jt.array(np.arange(8, dtype=np.float32) + 100)
+        fully_shard(module, mesh=mesh)
+
+        self.assertEqual(tuple(module.weight.size()), (8, 8))
+        local = distribute_tensor(full, mesh, (Shard(0),))
+        self.assertEqual(tuple(local.size()), (8, 8))
+        self.assertEqual(tuple(local.shape), (4, 8))
+        local_bias = distribute_tensor(full_bias, mesh, (Shard(0),))
+        module.load_state_dict(
+            {"weight": local, "bias": local_bias}, assign=True)
+
+        expected_flat = np.concatenate((full.numpy().reshape(-1), full_bias.numpy()))
+        shard_size = (len(expected_flat) + _RANKS - 1) // _RANKS
+        expected_flat = np.pad(
+            expected_flat, (0, shard_size * _RANKS - len(expected_flat)))
+        expected = expected_flat[jt.rank * shard_size:(jt.rank + 1) * shard_size]
+        np.testing.assert_array_equal(
+            module._fsdp_state.true_fsdp_flat_shard.numpy(), expected)
+
     # ---- clip_grad_norm_ ---------------------------------------------------
 
     def _sharded_model_with_grads(self):
@@ -170,10 +225,12 @@ class TestFSDP2InsideMpi(unittest.TestCase):
 class TestLaunch(unittest.TestCase):
     def test_run_the_rank_tests_under_mpirun(self):
         completed = run_mpi_python(
-            _RANKS, ["-m", "pytest", "-q", "-p", "no:cacheprovider",
+            _RANKS, ["-m", "pytest", "-q", "-s", "-p", "no:cacheprovider",
                      os.path.abspath(__file__)],
             timeout=2400, merge_stderr=True)
         self.assertEqual(completed.returncode, 0, completed.stdout[-8000:])
+        for rank in range(_RANKS):
+            self.assertIn("FSDP2_TIED_ALIAS_OK rank={}".format(rank), completed.stdout)
 
 
 if __name__ == "__main__":

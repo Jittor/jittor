@@ -27,6 +27,10 @@ def _torch_norm_impl(input, p="fro", dim=None, keepdim=False, dtype=None):
         return jt.array(_np.linalg.norm(arr, ord="nuc", axis=dim))
     else:
         pv = float(p)
+    if pv == 2.0:
+        result = jt.linalg._try_vector_norm(input, pv, dim, keepdim)
+        if result is not None:
+            return result
     if dim is None:
         # full reduction over a flattened view -> 0-dim scalar
         x = input.reshape(-1)
@@ -103,7 +107,11 @@ def _torch_where_select(condition, input, other):
             return x
         return x.broadcast(out_shape)
 
-    return jt.ternary(_bcast(cond).bool(), _bcast(a), _bcast(b))
+    result = jt.ternary(_bcast(cond).bool(), _bcast(a), _bcast(b))
+    if jt.flags.no_grad or not any(isinstance(x, jt.Var) and x.requires_grad
+                                   for x in (input, other)):
+        return result.detach()
+    return result
 
 
 def _diff(x, n=1, dim=-1, prepend=None, append=None):

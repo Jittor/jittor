@@ -81,6 +81,21 @@ class NativeOperation:
         import jittor
         context = get_install_context(jittor)
         implementation = context.state["native_torch_operations"][self._operation_key]
+        if self._operation_key in ("mul", "multiply"):
+            kwargs = dict(kwargs)
+            for position, name in enumerate(("input", "other")):
+                if name in kwargs:
+                    if len(args) > position:
+                        raise TypeError("%s received %s more than once" % (self._operation_key, name))
+                    if len(args) == position:
+                        args += (kwargs.pop(name),)
+            if len(args) == 2 and not kwargs:
+                from .installers.tensor.method_api import _tensor_mul
+                left, right = args
+                if isinstance(left, context.state["Var"]):
+                    return _tensor_mul(left, right)
+                if isinstance(right, context.state["Var"]):
+                    return _tensor_mul(right, left)
         defaults = self._TORCH_DEFAULTS.get(self._operation_key)
         if defaults:
             kwargs = dict(kwargs)
@@ -90,7 +105,8 @@ class NativeOperation:
         if self._operation_key in ("fft.fftfreq", "fft.rfftfreq"):
             kwargs = dict(kwargs)
             device = kwargs.pop("device", None)
-        like = self._first_var(args, context.native_backend.Var)
+        unique_operation = self._operation_key in ("unique", "unique_consecutive")
+        like = self._first_var((args, kwargs), context.native_backend.Var)
         with tensor_frontend(context.state["Var"], device=device, like=like,
                              default_placement=False if like is not None else True):
             if self._operation_key == "rsqrt":
@@ -99,6 +115,12 @@ class NativeOperation:
                 return _torch_div(context, *args, **kwargs)
             if isinstance(implementation, type) and issubclass(implementation, context.native_backend.Function):
                 implementation = implementation()
+            if unique_operation:
+                result = implementation(*args, **kwargs)
+                # Torch always represents inverse indices and counts as int64.
+                if isinstance(result, tuple):
+                    result = (result[0],) + tuple(value.int64() for value in result[1:])
+                return result
             if self._operation_key == "baddbmm":
                 from .amp import _autocast_cast_inputs
                 values = list(args) + list(kwargs.values())
@@ -106,9 +128,11 @@ class NativeOperation:
                 args = tuple(cast_values[:len(args)])
                 kwargs = dict(zip(kwargs, cast_values[len(args):]))
             if self._operation_key in self._AUTOMIXED_PASSTHROUGH:
-                from .amp import autocast_any_enabled
-                scope = (jittor.flag_scope(amp_reg=0)
-                         if autocast_any_enabled() else nullcontext())
+                from .amp import _preserve_pointwise_dtype
+                amp_reg = (jittor.amp_flags.keep_reduce
+                           if self._operation_key == "mean" else 0)
+                scope = (jittor.flag_scope(amp_reg=amp_reg)
+                         if _preserve_pointwise_dtype() else nullcontext())
                 with scope:
                     return implementation(*args, **kwargs)
             from .amp import _autocast_scope_for_inputs

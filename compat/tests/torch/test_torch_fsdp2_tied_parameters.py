@@ -97,13 +97,16 @@ def test_same_state_tied_parameter_lifecycle(flat, trainable, root_alias, monkey
         np.testing.assert_array_equal(_array(target.adapter.weight), _array(model.adapter.weight))
 
 
-def test_alias_in_parameter_container_refuses_before_any_holder_changes():
+@pytest.mark.parametrize("kind", ("list", "dict"))
+def test_alias_in_parameter_container_tracks_canonical_holder_replacement(kind):
     model = torch.nn.Module()
     model.weight = torch.nn.Parameter(torch.ones(3))
-    original = model.weight
-    model.aliases = torch.nn.ParameterList([original])
-    with pytest.raises(NotImplementedError, match="container-aware replacement"):
-        fully_shard(model, mesh=init_device_mesh("cpu", (1,)))
-    assert model.weight is original
-    assert model.aliases[0] is original
-    assert not getattr(model._fsdp_state, "true_fsdp_initialized", False)
+    key = 0 if kind == "list" else "tied"
+    model.aliases = (torch.nn.ParameterList([model.weight]) if kind == "list"
+                     else torch.nn.ParameterDict({"tied": model.weight}))
+    fully_shard(model, mesh=init_device_mesh("cpu", (1,)))
+    for action in (model.unshard, model.reshard, model.unshard, model.reshard):
+        action()
+        assert model.weight is model.aliases[key]
+        np.testing.assert_array_equal(_array(model.weight), np.ones(3))
+    assert model._fsdp_state.true_fsdp_initialized

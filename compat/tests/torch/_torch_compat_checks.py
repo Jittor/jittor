@@ -87,7 +87,8 @@ ok(True, "train/eval mode")
 
 # in-place ops preserve grad-tracking
 p = torch.nn.Linear(3,3).weight
-p.normal_(0, 0.02)
+with torch.no_grad():
+    p.normal_(0, 0.02)
 ok(not p.is_stop_grad(), "in-place init keeps grad")
 
 # Var ops

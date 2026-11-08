@@ -49,18 +49,14 @@ def _validate_sgd_options(options):
         value = options.get(name, False)
         if value:
             raise NotImplementedError("torch.optim.SGD(%s=True) is unsupported" % name)
-    if foreach:
-        raise NotImplementedError(
-            "torch.optim.SGD(foreach=True) is unsupported; use foreach=False")
+    if foreach and fused:
+        raise RuntimeError("`fused` and `foreach` cannot be `True` together.")
     lr, momentum = options.get("lr", .001), options.get("momentum", 0)
     dampening, weight_decay = options.get("dampening", 0), options.get("weight_decay", 0)
     if lr < 0 or momentum < 0 or weight_decay < 0:
         raise ValueError("SGD lr, momentum and weight_decay must be non-negative")
     if options.get("nesterov", False) and (momentum <= 0 or dampening != 0):
         raise ValueError("Nesterov momentum requires a momentum and zero dampening")
-    if dampening != 0:
-        raise NotImplementedError(
-            "torch.optim.SGD(dampening!=0) is unsupported; use dampening=0")
 
 
 def initialize_sgd(self, params, lr=0.001, momentum=0, dampening=0,
@@ -71,7 +67,7 @@ def initialize_sgd(self, params, lr=0.001, momentum=0, dampening=0,
                               maximize=maximize, foreach=foreach,
                               differentiable=differentiable, fused=fused))
     result = _initialize_algorithm("SGD", self,
-        (params, lr, momentum, weight_decay, dampening, nesterov), {"fused": fused})
+        (params, lr, momentum, weight_decay, dampening, nesterov), {"fused": fused, "torch_math": True})
     self.foreach, self.maximize, self.differentiable = foreach, maximize, differentiable
     for group in self.param_groups:
         for name in ("momentum", "dampening", "weight_decay", "nesterov",
@@ -106,9 +102,8 @@ def _validate_adamw_options(options):
         if value:
             raise NotImplementedError(
                 "torch.optim.AdamW(%s=True) is unsupported" % name)
-    if options.get("foreach") is True:
-        raise NotImplementedError(
-            "torch.optim.AdamW(foreach=True) is unsupported; use foreach=False")
+    if options.get("foreach") and options.get("fused"):
+        raise RuntimeError("`fused` and `foreach` cannot be `True` together.")
     if options.get("decoupled_weight_decay", True) is not True:
         raise NotImplementedError(
             "torch.optim.AdamW(decoupled_weight_decay=False) is unsupported")
@@ -180,13 +175,23 @@ def initialize_adan(self, *args, **kwargs):
     return _initialize_algorithm("Adan", self, args, kwargs)
 
 
-def initialize_adagrad(self, *args, **kwargs):
-    raise NotImplementedError("torch.optim.Adagrad has no native Jittor update implementation")
+def adagrad_defaults(self):
+    """Torch exposes only the public hyperparameter defaults."""
+    return self._adagrad_defaults
+
+
+def initialize_adagrad(self, params, lr=1e-2, lr_decay=0, weight_decay=0,
+                       initial_accumulator_value=0, eps=1e-10, foreach=None, *,
+                       maximize=False, differentiable=False, fused=None):
+    return _initialize_algorithm("Adagrad", self,
+        (params, lr, lr_decay, weight_decay, initial_accumulator_value, eps, foreach),
+        dict(maximize=maximize, differentiable=differentiable, fused=fused))
 
 
 _ALGORITHM_INITIALIZERS = {
     "SGD": initialize_sgd, "Adam": initialize_adam, "AdamW": initialize_adamw,
     "RMSprop": initialize_rmsprop, "Adan": initialize_adan,
+    "Adagrad": initialize_adagrad,
 }
 
 
@@ -209,24 +214,23 @@ def make_optimizer_frontend(native, tensor_type):
         "__init__": initialize_base,
     })
     setattr(module, "Optimizer", base)
-    for name in ("SGD", "Adam", "AdamW", "RMSprop", "Adan"):
+    for name in ("SGD", "Adam", "AdamW", "RMSprop", "Adan", "Adagrad"):
         algorithm = getattr(native, name, None)
         if algorithm is None:
             continue
         # Native super() calls traverse this MRO through the frontend base,
         # whose state/closure adapters can be installed without changing the
         # original Optimizer or any native algorithm class dictionary.
-        namespace = {"__module__": "torch.optim",
-                     "__init__": _ALGORITHM_INITIALIZERS[name]}
+        attributes = {
+            "__module__": "torch.optim",
+            "__init__": _ALGORITHM_INITIALIZERS[name],
+        }
         if name == "AdamW":
-            namespace.update(defaults=property(_adamw_defaults),
-                             add_param_group=add_adamw_param_group)
-        setattr(module, name, type(name, (algorithm, base), namespace))
-    # Libraries inspect optimizer type lists at import time. A missing native
-    # algorithm remains explicitly unsupported when construction is requested.
-    setattr(module, "Adagrad", type("Adagrad", (base,), {
-        "__module__": "torch.optim", "__init__": initialize_adagrad,
-    }))
+            attributes.update(defaults=property(_adamw_defaults),
+                              add_param_group=add_adamw_param_group)
+        if name == "Adagrad":
+            attributes["defaults"] = property(adagrad_defaults)
+        setattr(module, name, type(name, (algorithm, base), attributes))
     for name in ("opt_grad", "LRScheduler", "LambdaLR"):
         if hasattr(native, name):
             setattr(module, name, getattr(native, name))

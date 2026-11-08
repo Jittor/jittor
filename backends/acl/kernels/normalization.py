@@ -15,6 +15,30 @@ from .ops.norms_op import (
 )
 from .ops.rope_op import ExpandRotaryCacheACL, GroupedQKRmsNormRotaryACL
 from .tensor import embedding_acl
+from ._soc import soc_name
+from .ops.vector_norm_op import VectorNormACL
+
+
+def vector_norm_supported(x, ord=2, dim=None, keepdim=False):
+    # The SDK avoids half intermediate square overflow/underflow. Keep the
+    # measured last-axis scope; production timing did not establish a speedup,
+    # and the multi-axis GRN candidate slowed the full model.
+    from numbers import Integral
+    if isinstance(dim, (tuple, list)):
+        if len(dim) != 1:
+            return False
+        dim = dim[0]
+    return (bool(jt.flags.no_grad) and soc_name().startswith("Ascend310P")
+            and isinstance(x, jt.Var) and x.ndim > 0
+            and all(int(size) > 0 for size in x.shape)
+            and ord == 2 and isinstance(keepdim, bool)
+            and isinstance(dim, Integral) and not isinstance(dim, bool)
+            and dim in (-1, x.ndim - 1)
+            and _jittor_dtype_name(x.dtype) in ("float16", "float32"))
+
+
+def vector_norm_acl(x, ord=2, dim=None, keepdim=False):
+    return VectorNormACL()(x.contiguous(), keepdim)
 
 
 def layer_norm_acl(x, normalized_shape, weight, bias, eps, *, allow_bfloat16=False):
@@ -117,27 +141,48 @@ def _group_norm_cuda_acl(x, num_groups, weight, bias, eps):
     return None
 
 
+def _rms_norm_acl_supported(x, gamma, epsilon, x_dtype):
+    """The existing subset, checked on a fallback or native rejection only."""
+    x_shape = tuple((int(size) for size in x.shape))
+    gamma_shape = tuple((int(size) for size in gamma.shape))
+    gamma_dtype = _jittor_dtype_name(gamma.dtype)
+    supported_gamma_dtypes = {
+        "float32": ("float32",),
+        "float16": ("float16", "float32"),
+        "bfloat16": ("bfloat16", "float32"),
+    }
+    return (
+        x_shape
+        and all((size > 0 for size in x_shape))
+        and (gamma_shape == (x_shape[-1],))
+        and (gamma_dtype in supported_gamma_dtypes.get(x_dtype, ()))
+        and (getattr(jt.flags, "no_grad", 0) or x_dtype in ("float32", "bfloat16"))
+        and math.isfinite(epsilon)
+        and (epsilon > 0)
+    )
+
+
 def _rms_norm_cuda_acl(x, gamma, epsilon=1e-06):
     if isinstance(x, jt.Var) and isinstance(gamma, jt.Var) and isinstance(epsilon, Real):
-        x_shape = tuple((int(size) for size in x.shape))
-        gamma_shape = tuple((int(size) for size in gamma.shape))
         x_dtype = _jittor_dtype_name(x.dtype)
-        gamma_dtype = _jittor_dtype_name(gamma.dtype)
         epsilon_value = float(epsilon)
-        supported_gamma_dtypes = {
-            "float32": ("float32",),
-            "float16": ("float16", "float32"),
-            "bfloat16": ("bfloat16", "float32"),
-        }
-        if (
-            x_shape
-            and all((size > 0 for size in x_shape))
-            and (gamma_shape == (x_shape[-1],))
-            and (gamma_dtype in supported_gamma_dtypes.get(x_dtype, ()))
-            and (getattr(jt.flags, "no_grad", 0) or _jittor_dtype_name(x_dtype) in ("float32", "bfloat16"))
-            and math.isfinite(epsilon_value)
-            and (epsilon_value > 0)
-        ):
+        if (x_dtype == "float16" and x.ndim and x.shape[-1] < 16
+                and soc_name().startswith("Ascend310P")):
+            # The small-width FP16 kernel can return incorrect rows on 310P.
+            # Both mapped and fresh-descriptor CodeOp paths reproduce it;
+            # leave these shapes with device primitives.
+            return None
+        if (jt.flags.no_grad and x_dtype == "float16"
+                and _jittor_dtype_name(gamma.dtype) == "float16"):
+            try:
+                return jt.core.ops.mapped_rms_norm(x, gamma, epsilon_value)
+            except RuntimeError:
+                # Inspect unsupported metadata only on failure. Valid inputs
+                # must expose native/backend failures rather than fall back.
+                if not _rms_norm_acl_supported(x, gamma, epsilon_value, x_dtype):
+                    return None
+                raise
+        if _rms_norm_acl_supported(x, gamma, epsilon_value, x_dtype):
             return RmsNormACL()(x, gamma, epsilon_value)
     return None
 

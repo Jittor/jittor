@@ -5,17 +5,19 @@ from numbers import Integral
 
 import jittor as jt
 from .ops._code import ACL_FLOAT_DTYPES
-from .ops.conv_op import ConvACL
+from .ops.conv_op import ConvACL, ConvTranspose2dACL
 from .ops.bmm_op import BmmACL
 from .ops.cross_entropy_loss_op import CrossEntropyLossACL
 from .ops.gelu_op import GeluACL
+from .ops.grid_sample_op import GridSampler2DACL
 from .ops.matmul_op import MatmulACL
-from .ops.upsample_op import UpsampleNearest2dACL
+from .ops.upsample_op import UpsampleNearest2dACL, UpsampleBicubic2dACL, UpsampleBilinear2dACL
 from .ops.relu_op import ReLUACL, LeakyReLUACL
 from .ops.silu_op import SiLUACL, SwishACL, SwiGluACL
 from .ops.softmax_op import SoftmaxACL
 from .ops.pool_op import PoolACL, AdaptiveAvgPool2dACL
 from .ops.rope_op import RotaryPositionEmbeddingACL
+from ._soc import soc_name, allow_reduced_precision
 
 
 #: Dtype sets the decline guards below test membership in. A Var's dtype is a
@@ -43,10 +45,77 @@ def conv_acl(
     return ConvACL()(x, weight, bias, stride, padding, dilation, groups)
 
 
+def conv3d_acl(x, weight, stride=1, padding=0, dilation=1, groups=1):
+    # nn.functional.conv3d owns its separately rounded bias addition, and its
+    # selected kernel receives no bias argument. Both dimensions use the same
+    # aclnnConvolution runner with rank-sized spatial attributes.
+    if (not jt.flags.no_grad
+            and (not x.is_stop_grad() or not weight.is_stop_grad())
+            and soc_name().startswith("Ascend310P")):
+        # On 310P the forward is supported, but this SDK's 3-D
+        # aclnnConvolutionBackward rejects the architecture with error 161002.
+        # The 2-D backward and a separately added bias are unaffected.
+        raise NotImplementedError(
+            "ACL Conv3d gradients are unavailable on Ascend310P via "
+            "aclnnConvolutionBackward; this path supports inference only "
+            "(use no_grad or stop gradients on both input and weight)")
+    return ConvACL()(x, weight, None, stride, padding, dilation, groups)
+
+
+def conv_transpose2d_supported(x, weight, bias, stride, padding, output_padding,
+                               dilation, groups):
+    # Validated on 310P only. A 910B keeps its existing path until its SDK
+    # transpose forward/precision contract has independent device evidence.
+    if (not soc_name().startswith("Ascend310P") or not jt.flags.no_grad
+            or x.ndim != 4 or weight.ndim != 4
+            or not _dtype_in(x, ("float16", "float32"))
+            or str(weight.dtype) != str(x.dtype)
+            or not x._storage_is_contiguous() or not weight._storage_is_contiguous()
+            or any(int(size) <= 0 for size in tuple(x.shape) + tuple(weight.shape))
+            or not isinstance(groups, Integral) or isinstance(groups, bool)
+            or groups <= 0 or x.shape[1] != weight.shape[0] or x.shape[1] % groups):
+        return False
+    if _dtype_in(x, ("float32",)) and not allow_reduced_precision():
+        return False
+    for values in (stride, padding, output_padding, dilation):
+        if (not isinstance(values, (tuple, list)) or len(values) != 2
+                or any(not isinstance(value, Integral) or isinstance(value, bool) for value in values)):
+            return False
+    for size, kernel, step, pad, out_pad, dil in zip(
+            x.shape[2:], weight.shape[2:], stride, padding, output_padding, dilation):
+        if (step <= 0 or dil <= 0 or pad < 0 or out_pad < 0
+                or out_pad >= max(step, dil)
+                or (size - 1) * step - 2 * pad + dil * (kernel - 1) + out_pad + 1 <= 0):
+            return False
+    return bias is None or (
+        bias.ndim == 1 and bias.shape[0] == weight.shape[1] * groups
+        and str(bias.dtype) == str(x.dtype) and bias._storage_is_contiguous())
+
+
+def conv_transpose2d_acl(x, weight, bias, stride, padding, output_padding,
+                         dilation, groups):
+    return ConvTranspose2dACL()(x, weight, bias, stride, padding,
+                                output_padding, dilation, groups)
+
+
 def bmm_acl(x1, x2, trans_a=False, trans_b=False):
     if trans_a:
         x1 = _transpose_last_two(x1)
     return BmmACL(trans_b)(x1, x2)
+
+
+def grid_sample_supported(input, grid, mode="bilinear", padding_mode="zeros", align_corners=False):
+    return (soc_name().startswith("Ascend310P") and bool(jt.flags.no_grad)
+            and mode == "bilinear" and padding_mode == "zeros" and align_corners is False
+            and input.ndim == 4 and grid.ndim == 4
+            and input.shape[0] == grid.shape[0] and grid.shape[-1] == 2
+            and _dtype_in(input, ("float16", "float32"))
+            and str(input.dtype) == str(grid.dtype)
+            and all(int(size) > 0 for size in tuple(input.shape) + tuple(grid.shape)))
+
+
+def grid_sample_acl(input, grid, mode="bilinear", padding_mode="zeros", align_corners=False):
+    return GridSampler2DACL()(input, grid)
 
 
 def matmul_acl(x1, x2, trans_a=False, trans_b=False):
@@ -75,6 +144,33 @@ def _transpose_last_two(x):
 
 
 def resize_acl(input, size, mode="nearest", align_corners=False, tf_mode=False):
+    if (mode == "bilinear" and soc_name().startswith("Ascend310P")
+            and input.ndim == 4 and _dtype_in(input, ("float16", "float32"))
+            and getattr(jt.flags, "no_grad", 0) and not tf_mode
+            and all(int(value) > 0 for value in input.shape)):
+        if isinstance(size, int):
+            size = (size, size)
+        return UpsampleBilinear2dACL()(input, size, align_corners)
+    if mode == "nearest-exact":
+        if (input.ndim != 4 or not getattr(jt.flags, "no_grad", 0)
+                or not _dtype_in(input, ("float16", "float32"))):
+            return None
+        if isinstance(size, int):
+            size = (size, size)
+        if len(size) != 2 or any(int(source) <= 0 or int(target) % int(source)
+                                 for source, target in zip(input.shape[-2:], size)):
+            return None
+        # For integer upsampling, floor((i+0.5)/scale)==floor(i/scale),
+        # so the existing nearest SDK runner implements nearest-exact too.
+        mode = "nearest"
+    if (mode == "bicubic" and input.ndim == 4
+            and _dtype_in(input, ("float16", "float32"))
+            and getattr(jt.flags, "no_grad", 0)
+            and not align_corners and not tf_mode
+            and all(int(value) > 0 for value in input.shape)):
+        if isinstance(size, int):
+            size = (size, size)
+        return UpsampleBicubic2dACL()(input, size)
     if (
         mode == "nearest"
         and input.ndim == 4
@@ -98,17 +194,21 @@ def leaky_relu(x, scale=0.01, inplace=False):
 
 
 def gelu_acl(x, approximate="none"):
-    """CANN's aclnnGelu covers the exact form only; tanh keeps the generic path."""
-    if approximate != "none":
+    """CANN V2 preserves the requested exact or tanh algorithm and its gradient."""
+    if approximate not in ("none", "tanh"):
         return None
     if isinstance(x, jt.Var) and _dtype_in(x, _F16_F32_BF16):
-        return GeluACL()(x)
+        # Exact BF16 retains its existing path. New tanh admission is bounded
+        # to the FP16/FP32 algorithms verified on the real ACL device.
+        if approximate == "tanh" and _dtype_in(x, ("bfloat16",)):
+            return None
+        return GeluACL()(x, approximate)
     return None
 
 
 def cross_entropy_loss_acl(output, target, weight=None, ignore_index=None,
                            reduction="mean"):
-    """One aclnn launch for the loss and one for its gradient.
+    """Use CANN LogSoftmax and NLLLoss with the Native autograd decomposition.
 
     Everything this declines falls back to the portable definition: a class
     weight vector (CANN applies it inside the reduction this function keeps in
@@ -136,15 +236,17 @@ def cross_entropy_loss_acl(output, target, weight=None, ignore_index=None,
     if int(target.shape[0]) != int(output.shape[0]):
         return None
 
-    # jittor gives an out-of-range label -- and one equal to ignore_index --
-    # weight zero and keeps it out of the mean's denominator. aclnnCrossEntropy
-    # Loss instead gathers with the raw label and faults the AI Core outside
-    # [0, C), ignoreIndex included, so the label reaching it is masked to 0 and
-    # the weighting is applied to the per-sample loss it returns.
+    # Jittor gives out-of-range and ignored labels weight zero and excludes
+    # them from the mean denominator. NLLLoss needs a safe in-range target, so
+    # map invalid labels to 0 here and apply the validity weight to its rows.
     valid = jt.logical_and(target >= 0, target < classes)
     if ignore_index is not None:
         valid = jt.logical_and(valid, target != ignore_index)
-    in_range = target * valid.cast(target.dtype)
+    # jittor's frontend accepts either label width, but aclnn's
+    # CrossEntropyLoss takes DT_INT64 only: CANN 9.0.0 rejects a DT_INT32
+    # target with AclNN_Parameter_Error. The mask is applied in the target's
+    # own width and the result is widened before it reaches the aclnn op.
+    in_range = (target * valid.cast(target.dtype)).cast("int64")
     target_weight = valid.float32()
     loss = CrossEntropyLossACL()(output, in_range) * target_weight
     if reduction == "sum":
@@ -155,7 +257,7 @@ def cross_entropy_loss_acl(output, target, weight=None, ignore_index=None,
 
 
 def _silu_acl(x, inplace=False):
-    if isinstance(x, jt.Var) and _dtype_in(x, _F32_BF16):
+    if isinstance(x, jt.Var) and _dtype_in(x, _F16_F32_BF16):
         if _jittor_dtype_name(x.dtype) == "bfloat16":
             return SwishACL()(x)
         return SiLUACL()(x)

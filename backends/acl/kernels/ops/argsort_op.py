@@ -1,9 +1,9 @@
 """ACL sorting values retain their permutation gradient at the native boundary."""
-import jittor as jt
+from jittor._core import function as _function_owner
 from jittor._core.dtypes import dtype_name
 
 
-class ArgsortACL(jt.Function):
+class ArgsortACL(_function_owner.Function):
     def __init__(self, origin):
         super().__init__()
         self.origin = origin
@@ -22,6 +22,7 @@ class ArgsortACL(jt.Function):
         return indices, values.cast(input.dtype) if bf16 else values
 
     def grad(self, grad_indices, grad_values):
+        import jittor as jt
         if grad_values is None:
             return None, None, None, None
         gradient = jt.scatter(

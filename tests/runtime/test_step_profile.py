@@ -15,6 +15,7 @@ The device-time cases need CUPTI (the ``nvidia-cuda-cupti-cu12`` wheel or
 ``$JITTOR_CUPTI_LIB``); they skip with that reason when it cannot be loaded.
 """
 
+import inspect
 import json
 import os
 import tempfile
@@ -156,6 +157,13 @@ class TestDeviceTime(unittest.TestCase):
                 jt.sync(outs)
         rows = [row for row in prof.op_stats() if row.name == "cublas_matmul"]
         self.assertEqual(rows[0].calls, n)
+        # A memset can be attributed through the runtime even when cuBLAS's
+        # driver-launched kernels are lost. Check the kernels themselves,
+        # independently of host scheduling and wall-clock timing.
+        matmul_seqs = {op["seq"] for op in prof.op_records
+                       if prof.strings[op["name"]] == "cublas_matmul"}
+        self.assertTrue(prof.kernel_records)
+        self.assertTrue(all(k["seq"] in matmul_seqs for k in prof.kernel_records))
         per_call = rows[0].device_ns / n / 1e9
         self.assertGreater(per_call, 0.5 * wall, (per_call, wall))
         self.assertLess(per_call, 1.1 * wall, (per_call, wall))
@@ -167,7 +175,7 @@ class TestDeviceTime(unittest.TestCase):
                 step()
         path = os.path.join(tempfile.mkdtemp(), "step.json")
         prof.export_chrome_trace(path)
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             events = json.load(f)["traceEvents"]
         host = [e for e in events if e.get("ph") == "X" and e["pid"] == 1 and e["tid"] == 2]
         device = [e for e in events if e.get("ph") == "X" and e["pid"] == 2]
@@ -279,6 +287,73 @@ class TestReplay(unittest.TestCase):
                     jt.sync_all(True)
         messages = [str(w.message) for w in caught]
         self.assertTrue(any("device-graph" in m and "jt.profile" in m for m in messages), messages)
+
+
+class TestStacksAndRanges(unittest.TestCase):
+    def test_stacks_name_the_line_that_built_each_operator(self):
+        with jt.flag_scope(use_cuda=0):
+            x = jt.randn(16, 16)
+            x.sync()
+            with jt.profile(stacks=True, memory=False) as prof:
+                y = (x @ x).sum(); line = inspect.currentframe().f_lineno
+                y.sync()
+        records = [r for r in prof.op_records if r["stack"] > 0]
+        self.assertTrue(records, "no operator carried a stack")
+        lines = {f["line"] for r in records for f in prof.result.stacks[r["stack"]]
+                 if f["filename"] == __file__}
+        self.assertIn(line, lines)
+        # Off again after the region: a plain profile records no stacks.
+        with jt.flag_scope(use_cuda=0):
+            with jt.profile(memory=False) as plain:
+                (x + 1).sync()
+        self.assertTrue(all(r["stack"] == 0 for r in plain.op_records))
+        self.assertIsNone(plain.result.stacks)
+
+    def test_an_operator_built_in_a_range_names_it_even_when_it_runs_after(self):
+        with jt.flag_scope(use_cuda=0):
+            x = jt.randn(16, 16)
+            x.sync()
+            with jt.profile(memory=False) as prof:
+                with jt.profiling.record_function("build"):
+                    y = x * 3 + 1          # built here, lazily
+                y.sync()                   # and run here, after the range
+        ranges = [r for r in prof.op_records if r["kind"] == 2]
+        self.assertEqual(len(ranges), 1)
+        built = [r for r in prof.op_records if r["kind"] == 0 and r["range"] == ranges[0]["seq"]]
+        self.assertTrue(built, [(r["kind"], r["range"]) for r in prof.op_records])
+        self.assertTrue(all(r["t_start"] >= ranges[0]["t_end"] for r in built))
+
+    def test_a_fused_operator_names_every_line_fused_into_it(self):
+        with jt.flag_scope(use_cuda=0):
+            x = jt.randn(16, 16)
+            x.sync()
+            with jt.profile(stacks=True, memory=False) as prof:
+                a = x * 2.5; first = inspect.currentframe().f_lineno
+                b = a + 1.5; second = inspect.currentframe().f_lineno
+                b.sync()
+        fused = [r for r in prof.op_records if r["fused"] > 1 and r["stacks"] > 0]
+        self.assertTrue(fused, [(prof.result.strings[r["name"]], r["stacks"]) for r in prof.op_records])
+        ids = [int(i) for i in prof.result.strings[fused[0]["stacks"]].split(",")]
+        lines = {f["line"] for i in ids for f in prof.result.stacks[i] if f["filename"] == __file__}
+        self.assertLessEqual({first, second}, lines)
+
+    def test_a_first_run_compile_is_compilation_not_launch(self):
+        # A new kernel is generated and compiled while the executor plans the
+        # batch, or else when its operator first runs; either way it is
+        # compilation, and the operator's launch time leaves it out.
+        with jt.flag_scope(use_cuda=0):
+            x = jt.randn(37, 41)
+            x.sync()
+            with jt.profile(memory=False) as prof:
+                # A constant no other test uses: this process has not built it.
+                (x * 0.6180339 - 0.2718281).exp().sync()
+        self.assertGreater(prof.result.host["executor_compile"], 0)
+        compiled = [r for r in prof.op_records if r["compile_ns"] > 0]
+        for r in compiled:
+            self.assertGreaterEqual(r["t_compile"], r["t_start"])
+            self.assertLessEqual(r["t_compile"] + r["compile_ns"], r["t_end"])
+        self.assertGreaterEqual(prof.result.host["executor_compile"],
+                                sum(r["compile_ns"] for r in compiled))
 
 
 if __name__ == "__main__":
