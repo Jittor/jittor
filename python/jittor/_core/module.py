@@ -780,10 +780,13 @@ class Module:
             # torch's forward_pre_hook convention:
             #   default:          hook(module, args) -> None | new_args
             #   with_kwargs=True: hook(module, args, kwargs) -> None | (new_args, new_kwargs)
-            # Torch's default pre-hook gets only (module, args), even when
-            # the forward has kwargs. The native register_pre_forward_hook
-            # keeps its older convention of receiving present kwargs.
-            if info.get("with_kwargs") or (info.get("native_kwargs") and len(kw)):
+            # When the hook was registered with_kwargs it must ALWAYS get the kwargs
+            # arg (even if empty) -- ms-swift's VL pre_forward_hook has a 3-arg
+            # signature and injects inputs_embeds via the kwargs dict.
+            # Only the legacy spelling infers its signature from the call.
+            # Torch's default hook always receives (module, args).
+            if (info.get("with_kwargs") or
+                    (info.get("legacy_kwargs") and len(kw))):
                 args_kw_result = func(self, args, kw)
             else:
                 args_kw_result = func(self, args)
@@ -891,7 +894,8 @@ class Module:
 
         Returns a removable handle, like ``register_forward_pre_hook``.
         '''
-        return self._add_hook("_forward_pre_hooks", func, native_kwargs=True)
+        return self._add_hook("_forward_pre_hooks", func, with_kwargs=False,
+                              legacy_kwargs=True)
 
     def register_forward_pre_hook(self, func, *, prepend=False, with_kwargs=False):
         ''' torch-compatible alias of the pre-forward hook.

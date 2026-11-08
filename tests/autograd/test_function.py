@@ -670,5 +670,32 @@ class TestFunctionCallIsIndependent(unittest.TestCase):
         self.assertNotIn("a", f.__dict__)
 
 
+@pytest.mark.parametrize("strided_input", [False, True])
+def test_function_tapes_preserve_strided_storage(strided_input):
+    with jt.flag_scope(transpose_storage_view=1):
+        observed = {}
+
+        class IdentityOrTranspose(Function):
+            def execute(self, value):
+                observed["input_strides"] = tuple(value._storage_strides())
+                return value if strided_input else value.transpose((1, 0))
+
+            def grad(self, incoming):
+                return incoming if strided_input else incoming.transpose((1, 0))
+
+        expected = np.arange(12, dtype="float32").reshape(3, 4)
+        base = jt.array(expected)
+        argument = base.transpose((1, 0)) if strided_input else base
+        output = IdentityOrTranspose()(argument)
+        assert observed["input_strides"] == ((1, 4) if strided_input else (4, 1))
+        assert tuple(output._storage_strides()) == (1, 4)
+        np.testing.assert_array_equal(output.numpy(), expected.T)
+        assert output._mem_ptr_now == base._mem_ptr_now
+        weights = (np.arange(12, dtype="float32").reshape(4, 3) + 1) / 4
+        gradient = jt.grad((output * jt.array(weights)).sum(), base)
+        np.testing.assert_array_equal(gradient.numpy(), weights.T)
+        assert tuple(output._storage_strides()) == (1, 4)
+
+
 if __name__ == "__main__":
     unittest.main()

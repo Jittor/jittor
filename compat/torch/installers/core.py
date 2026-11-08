@@ -449,6 +449,22 @@ def _get_rng_state():
                     dtype=g.uint8, device="cpu")
 
 
+def _encode_rng_state(state):
+    g = _misc_context().target_namespace
+    data = _np.frombuffer(state.encode("ascii"), dtype=_np.uint8).copy()
+    return g.tensor(data, dtype=g.uint8, device="cpu")
+
+
+def _decode_rng_state(state):
+    ctx = _misc_context()
+    if not isinstance(state, ctx.state["Var"]):
+        raise TypeError("RNG state must be a CPU uint8 tensor")
+    if (_jittor_dtype_name(state.dtype) != "uint8" or state.ndim != 1
+            or str(state.device).split(":", 1)[0] != "cpu"):
+        raise TypeError("RNG state must be a one-dimensional CPU uint8 tensor")
+    return state.numpy().tobytes().decode("ascii")
+
+
 def _set_rng_state(state):
     ctx = _misc_context()
     if not isinstance(state, jt.Var):
@@ -1222,12 +1238,12 @@ _MISC_DETAILS = {
     "set_autocast_cpu_dtype": "deprecated spelling of set_autocast_dtype('cpu', dtype)",
     "is_autocast_cpu_enabled": "deprecated spelling of is_autocast_enabled('cpu')",
     "set_autocast_cpu_enabled": "deprecated spelling of set_autocast_enabled('cpu', enabled)",
-    "is_autocast_cache_enabled": "the recorded preference; jittor casts an operand per operator and has no weight cast cache",
-    "set_autocast_cache_enabled": "records the preference; there is no weight cast cache to enable, so disabling it is exact and enabling it asks for an absent optimisation",
-    "clear_autocast_cache": "jittor keeps no cached weight casts, so the postcondition already holds",
+    "is_autocast_cache_enabled": "the recorded preference; NPU Linear shares eligible FP32 leaf casts within the region",
+    "set_autocast_cache_enabled": "records the preference and controls NPU Linear leaf-cast reuse; other operator paths remain uncached",
+    "clear_autocast_cache": "releases the current thread's NPU Linear cast holders",
     "autocast_increment_nesting": "real thread-local nesting depth, as torch's counter",
     "autocast_decrement_nesting": "real thread-local nesting depth, as torch's counter",
-    "use_deterministic_algorithms": "sets the accelerator runtime's own deterministic option; warn_only is refused",
+    "use_deterministic_algorithms": "sets and reads back the native provider policy; providers without control accept only the default disabled state; warn_only is refused",
     "get_rng_state": "versioned native CPU generator snapshot in a CPU ByteTensor; bytes are not portable to PyTorch",
     "set_rng_state": "restores the native CPU generator seed and exact stream position; foreign or legacy seed-only states are refused",
     "norm": "existing Torch norm adapter; out and extra keyword semantics are not implemented",
@@ -1237,7 +1253,7 @@ _MISC_DETAILS = {
     "finfo": "NumPy limits plus declared metadata-only low-precision specs; this does not enable their computation",
     "iinfo": "NumPy integer-limit metadata for supported dtype names",
     "is_autocast_available": "answers for the backends this build can run -- cpu and cuda always, npu when ACL is built -- so it is False for the xpu/mps/xla/ipu/mtia device types torch answers True for",
-    "are_deterministic_algorithms_enabled": "reads the accelerator runtime's own deterministic option",
+    "are_deterministic_algorithms_enabled": "reads the native provider policy; enforcement is disabled when the provider has no policy control",
     "as_strided": "gather-based view; reads are exact but the result does not alias the input storage",
     "empty_strided": "contiguous allocation; the requested strides are not honored",
 }

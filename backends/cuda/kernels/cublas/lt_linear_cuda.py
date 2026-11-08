@@ -71,7 +71,7 @@ import jittor as jt
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from jittor._runtime.core_api import _output_requires_grad
 from jittor._runtime.backend_libraries import get_library_ops
-from jittor._runtime.dispatch import register_kernel
+from jittor._runtime.dispatch import register_kernel, try_dispatch
 
 
 #: Heuristic candidates to time. Beyond this the returns are gone and the
@@ -217,6 +217,13 @@ def _linear_bias_accumulator(x, weight, bias):
         matrix = x.contiguous() if x.ndim >= 2 else x.reshape((1, -1))
         product = get_library_ops("cublas").cublas_matmul(
             matrix, weight.contiguous(), False, True, True).reshape(shape)
+        # Keep add+rounding in one epilogue while making its bias VJP use
+        # the fixed CUDA reduction owner. A generic FP32 sum can use atomics
+        # and produce different residual bits across identical executions.
+        rounded = try_dispatch(
+            "nn.linear_bias", product, bias.float32(), output_dtype="bfloat16")
+        if rounded is not None:
+            return rounded
         return (product + bias.float32()).cast("bfloat16")
 
 

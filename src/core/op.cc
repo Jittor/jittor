@@ -110,7 +110,7 @@ Op::Op() {
     float32_precision = current_float32_precision_policy();
     flags.set(NodeFlags::_var, 0);
     set_flag(OpFlags::_cpu, 1);
-    // The seven amp bits are one field, so they move as one. `set_flag` with a
+    // The AMP bits are one field, so they move as one. `set_flag` with a
     // width also *clears* the field first, which `|=` did not -- identical
     // here (a fresh Op has them at zero) and the honest spelling of "this is
     // the amp field".
@@ -536,6 +536,7 @@ vector<Var*> saved_storage_readers(const vector<Var*>& written, Op* writer) {
     }
     return saved;
 }
+
 
 void order_after_readers(Op* op, const vector<Var*>& written) {
     // A view of a written var reads it wherever its own readers do, so their

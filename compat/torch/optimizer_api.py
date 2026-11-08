@@ -5,6 +5,7 @@ import weakref as _weakref
 import jittor as jt
 import numpy as np
 from .context import get_install_context
+from .optim_frontend import _validate_sgd_groups
 from .optimizer_adam import _AdamStep, _AdamSteps
 from ..diagnostics import EXPECTED, swallowed
 from typing import Any, Dict, List
@@ -86,7 +87,7 @@ def _sync_adam_group_params(pg, *, replacements=()):
     current = tuple(pg.get("params", ()))
     if len(current) == len(previous) and all(a is b for a, b in zip(current, previous)):
         return
-    from jittor.optim.algorithms.adam import _state_buffer
+    from jittor.optim.base import _state_buffer
     rebound = {id(old): (old, new) for old, new in replacements}
     identities = []
     for parameter in previous:
@@ -144,6 +145,7 @@ def _state_dict_torch(self):
             group.setdefault("capturable", False)
             group.setdefault("differentiable", False)
             group.setdefault("fused", getattr(self, "fused", None))
+            group.setdefault("decoupled_weight_decay", kind == "adamw")
         elif kind == "sgd":
             for key, default in (
                     ("momentum", 0), ("dampening", 0),
@@ -170,31 +172,11 @@ def _state_dict_torch(self):
         group["params"] = params
         param_groups.append(group)
     state = {}
-    for pg in self.param_groups:
-        steps = _torch_param_steps(pg)
-        for i, p in enumerate(pg.get("params", [])):
-            pid = param_ids.get(id(p))
-            if pid is None or (kind != "adagrad" and not isinstance(steps[i], _AdamStep) and int(steps[i]) <= 0):
-                continue
-            if kind not in _NATIVE_TO_TORCH_STATE:
-                continue
-            entry = {}
-            if kind == "sgd":
-                if "values" in pg and i < len(pg["values"]) \
-                        and _momentum_initialized_flags(pg)[i]:
-                    entry["momentum_buffer"] = pg["values"][i]
-            else:
-                for native, torch_key in _NATIVE_TO_TORCH_STATE.get(kind, {}).items():
-                    if native in pg and i < len(pg[native]):
-                        entry[torch_key] = pg[native][i]
-                # A parameter with no native buffer keeps no state entry,
-                # exactly as the pre-table branches did.
-                if entry:
-                    entry["step"] = (steps[i] if kind == "adagrad" else
-                                     steps[i].tensor() if kind in ("adam", "adamw") and isinstance(steps[i], _AdamStep) else
-                                     g.tensor(float(steps[i]), dtype=g.float32))
-            if entry:
-                state[pid] = entry
+    for parameter, entry in self.state.items():
+        values = entry.copy()
+        if "step" in values and not isinstance(values["step"], jt.Var):
+            values["step"] = g.tensor(float(values["step"]), dtype=g.float32, device="cpu")
+        state[param_ids[id(parameter)]] = values
     return {"state": state, "param_groups": param_groups}
 
 
@@ -348,7 +330,11 @@ def _lsd(self, state):
 
 
 def _state_getter(self):
-    return get_install_context(jt).target_namespace.optim.Optimizer._OptState(self)
+    view = self.__dict__.get("_torch_state_view")
+    if view is None:
+        view = get_install_context(jt).target_namespace.optim.Optimizer._OptState(self)
+        object.__setattr__(self, "_torch_state_view", view)
+    return view
 
 
 def _lbfgs_type(base):
@@ -509,11 +495,15 @@ def _initialize_adam(self, params, lr, args, kwargs, name):
     # The update selector already consumes this execution option; the native
     # initializer does not take Torch's spelling. Preserve group overrides.
     foreach = kwargs.pop('foreach', None)
+    if name == 'AdamW':
+        # The independent AdamW frontend owns public defaults/validation.
+        kwargs['foreach'] = foreach
     result = _initialize_default(self, params, lr, args, kwargs, name)
     for group in self.param_groups:
         group.setdefault('foreach', foreach)
         group['_torch_adam_params'] = tuple(group['params'])
     return result
+
 
 def adamw_init(self, params, lr=1e-3, *args, **kwargs):
     if len(args) < 3: kwargs.setdefault('weight_decay', 0.01)  # torch's; native (eps, betas, wd): 0

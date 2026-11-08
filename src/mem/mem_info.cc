@@ -332,6 +332,14 @@ MemInfo::MemInfo() {
 
 MemInfo mem_info;
 
+vector<int64> device_memory_info(int device) {
+    USER_CHECK(device >= 0 && device < get_device_count())
+        << "Invalid accelerator device ordinal: " << device;
+    size_t free = 0, total = 0;
+    backend_ops(accelerator_backend_id()).memory_info(device, free, total);
+    return {static_cast<int64>(free), static_cast<int64>(total)};
+}
+
 static void device_pool_bytes(int device, int64& used, int64& reserved) {
     used = reserved = 0;
     const bool host = device < 0;

@@ -119,6 +119,12 @@ def _first_tensor(owner, args, kwargs):
     return None
 
 
+#: Padding modes torch's convolution layers accept. jittor's convolutions only
+#: zero-pad, so every other mode is emulated by padding first and convolving
+#: with no padding.
+_TORCH_CONV_PADDING_MODES = ("zeros", "reflect", "replicate", "circular")
+
+
 def _conv_spatial_rank(native):
     """1/2/3 for ``Conv1d``/``Conv2d``/``Conv3d``; ``None`` for anything else."""
     name = native.__name__
@@ -180,6 +186,11 @@ class LayerInitializer:
             object.__setattr__(module, "_native_parameter_construction", True)
             try:
                 self.original(module, *args, **kwargs)
+                from .meta import requested, mark_placeholder
+                if requested():
+                    for _, value, _ in module._var_roles():
+                        if id(value) not in external:
+                            mark_placeholder(value)
                 if padding_mode is not None:
                     # torch layers expose what they were built with.
                     object.__setattr__(module, "padding_mode", padding_mode)
@@ -209,20 +220,22 @@ class LayerInitializer:
     def _take_torch_only_kwargs(self, kwargs):
         """Remove torch-only keyword arguments the native ``__init__`` lacks.
 
-        Torch's convolution layers take ``padding_mode``. The native
-        Conv1d/Conv2d/Conv3d implement it and receive it unchanged; a native
-        layer without the parameter -- the transposed convolutions, for which
-        torch itself accepts only ``'zeros'`` -- has it removed and recorded
-        on the module, and any other mode is refused rather than ignored.
+        Torch's convolution layers take ``padding_mode``; the native
+        signatures do not. It cannot simply be dropped: the value decides how
+        the input is padded, so it is captured and handed to the execute
+        wrapper installed by :meth:`NNFrontendOwner._conv_padding_members`.
+        Found with MiniMax-H3's video VAE, whose ``BaseConv3d(nn.Conv3d)``
+        forwards the torch default and would not construct without it.
         """
         if "padding_mode" not in kwargs:
             return None
         if "padding_mode" in inspect.signature(self.original).parameters:
             return None
         mode = kwargs.pop("padding_mode")
-        if mode != "zeros":
-            raise ValueError('Only "zeros" padding mode is supported for torch.nn.%s, got %r'
-                             % (self.native.__name__, mode))
+        if mode not in _TORCH_CONV_PADDING_MODES:
+            raise NotImplementedError(
+                "torch.nn.%s(padding_mode=%r): choose one of %s"
+                % (self.native.__name__, mode, ", ".join(_TORCH_CONV_PADDING_MODES)))
         return mode
 
 
@@ -318,6 +331,7 @@ class NNFrontendOwner:
             "__init__": LayerInitializer(self, native),
             "_torch_native_layer": native,
         }
+        namespace.update(self._conv_padding_members(native))
         # `super(nn.Linear, self).__init__()` must reach `nn.Module.__init__`,
         # as it does in torch, where Linear's next base is Module. PEFT's VERA
         # and BoFT adapters write exactly that. The super lookup reads only

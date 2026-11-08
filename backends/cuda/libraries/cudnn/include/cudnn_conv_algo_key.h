@@ -75,14 +75,16 @@ struct ConvAlgoKey {
     // The `float`'s bit pattern, not a rounded value: an algorithm measured
     // under one workspace budget must not be reused under another.
     int64_t workspace_ratio_bits;
+    int64_t benchmark;
+    int64_t deterministic;
     int64_t dim_x[5], stride_x[5];
     int64_t dim_w[5];
     int64_t dim_y[5], stride_y[5];
     int64_t pad[3], conv_stride[3], dilation[3];
 };
 
-// Ten scalars, five 5-wide extents, three 3-wide parameters.
-static_assert(sizeof(ConvAlgoKey) == sizeof(int64_t) * (10 + 5 * 5 + 3 * 3),
+// Twelve scalars, five 5-wide extents, three 3-wide parameters.
+static_assert(sizeof(ConvAlgoKey) == sizeof(int64_t) * (12 + 5 * 5 + 3 * 3),
               "ConvAlgoKey has padding; its bytes are the cache key");
 
 struct ConvAlgoKeyHash {
@@ -120,7 +122,8 @@ inline ConvAlgoKey conv_algo_key(
         const int* dim_x, const int* stride_x,
         const int* dim_w,
         const int* dim_y, const int* stride_y,
-        const int* pad, const int* conv_stride, const int* dilation) {
+        const int* pad, const int* conv_stride, const int* dilation,
+        int64_t benchmark = 0, int64_t deterministic = 0) {
     ConvAlgoKey k;
     memset(&k, 0, sizeof(k));
     k.pass = pass;
@@ -132,6 +135,8 @@ inline ConvAlgoKey conv_algo_key(
     uint32_t bits;
     memcpy(&bits, &workspace_ratio, sizeof(bits));
     k.workspace_ratio_bits = bits;
+    k.benchmark = benchmark;
+    k.deterministic = deterministic;
     int64_t rank = spatial_dims + 2;
     for (int64_t i = 0; i < rank && i < 5; i++) {
         k.dim_x[i] = dim_x[i];  k.stride_x[i] = stride_x[i];

@@ -16,6 +16,8 @@
 #include "runtime/executor_entry.h"
 #include "runtime/async_exec.h"
 #include <limits>
+#include <sstream>
+#include <locale>
 
 namespace jittor {
 
@@ -142,6 +144,68 @@ vector<int64> curand_reserve_philox(int64 increment) {
     // the next native random draw.
     curand_restore_state(device, seed, offset + increment);
     return {static_cast<int64>(seed), offset};
+}
+
+// State strings identify the actual global CUDA algorithm and cursor unit.
+// The previous experimental Philox text format cannot be reinterpreted as
+// this cuRAND host generator's offset.
+static std::pair<uint64, int64> parse_curand_snapshot(const string& state) {
+    USER_CHECK(!state.empty() && state.size() <= 256) << "invalid CUDA RNG state size";
+    std::istringstream input(state);
+    input.imbue(std::locale::classic());
+    string magic, seed_token, offset_token;
+    USER_CHECK(bool(input >> magic >> seed_token >> offset_token)
+        && magic == "JITTOR_CUDA_CURAND_HOST_V1") << "invalid or incompatible CUDA RNG state";
+    input >> std::ws;
+    USER_CHECK(input.eof()) << "trailing data in CUDA RNG state";
+    auto parse = [](const string& token, uint64 limit) {
+        USER_CHECK(!token.empty()) << "invalid CUDA RNG state integer";
+        uint64 value = 0;
+        for (char c : token) {
+            USER_CHECK(c >= '0' && c <= '9') << "invalid CUDA RNG state integer";
+            uint64 digit = c - '0';
+            USER_CHECK(value <= (limit - digit) / 10) << "CUDA RNG state integer out of range";
+            value = value * 10 + digit;
+        }
+        return value;
+    };
+    return {parse(seed_token, std::numeric_limits<uint64>::max()),
+            static_cast<int64>(parse(offset_token, uint64(std::numeric_limits<int64>::max())))};
+}
+
+EXTERN_LIB void sync_all(bool device_sync);
+void curand_validate_rng_state(const string& state) { parse_curand_snapshot(state); }
+
+string curand_get_rng_state(int device) {
+    async_exec_wait();
+    ExecutorEntryScope lock;
+    USER_CHECK(device >= 0 && device < get_device_count()) << "invalid CUDA RNG device";
+    sync_all(true);
+    std::ostringstream output;
+    output.imbue(std::locale::classic());
+    output << "JITTOR_CUDA_CURAND_HOST_V1 " << curand_generator_seed(device)
+           << ' ' << curand_generator_offset(device);
+    return output.str();
+}
+
+void curand_set_rng_state(int device, const string& state) {
+    auto parsed = parse_curand_snapshot(state);
+    async_exec_wait();
+    ExecutorEntryScope lock;
+    sync_all(true);
+    curand_restore_state(device, parsed.first, parsed.second);
+}
+
+void curand_manual_seed(int device, uint64 seed) {
+    async_exec_wait();
+    ExecutorEntryScope lock;
+    sync_all(true);
+    curand_restore_state(device, seed, 0);
+}
+
+uint64 curand_initial_seed(int device) {
+    USER_CHECK(device >= 0 && device < get_device_count()) << "invalid CUDA RNG device";
+    return curand_generator_seed(device);
 }
 
 // See cublas_shutdown: report, never raise, and idempotent.

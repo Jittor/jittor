@@ -124,7 +124,7 @@ ENVIRONMENT_SKIP_PATTERNS = (
     # The library is absent from *this cache* rather than from the machine:
     # `tests/build/test_download_safety.py` loads the real MKL and skips when the
     # cache has none (`use_mkl=0` again).
-    "mkl",
+    "mkl", "onednn",
     # Same shape, for the build stamps of custom op libraries
     # (`tests/build/test_import_bootstrap_laziness.py`): on a CPU-only cache
     # the only such library is MKL's, and a host without cmake (a fresh CI

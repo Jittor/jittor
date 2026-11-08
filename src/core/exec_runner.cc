@@ -4,6 +4,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include <algorithm>
+#include "ops/composite/fetch_op.h"
 #include <cstring>
 #include <unordered_set>
 #ifdef HAS_ACCELERATOR

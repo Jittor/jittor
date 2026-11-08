@@ -13,6 +13,7 @@ namespace jittor {
 
 static auto make_mapped_matmul =
     op_constructor<VarPtr, Var*, Var*, bool, bool, bool>("mapped_matmul");
+static auto make_unary = op_constructor<VarPtr, Var*, NanoString>("unary");
 
 MappedMatmulOp::MappedMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b, bool allow_reduced_precision) : a(a), b(b), trans_a(trans_a), trans_b(trans_b), allow_reduced_precision(allow_reduced_precision) {
     set_flag(OpFlags::_cuda, 1);
@@ -33,7 +34,19 @@ MappedMatmulOp::MappedMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b, bool 
     USER_CHECK(!(trans_a && trans_b))
         << "mapped_matmul transposes at most one operand; transpose the other"
         << "one in the graph instead";
-    c = create_output(nullptr, a->dtype());
+    // The mapped backend receives one dtype for both operands and result.
+    // Use the same AMP inference and explicit cast graph as cuBLAS, so a
+    // float32 model actually computes in the requested reduced precision.
+    auto dtype = dtype_infer(a->ns, b->ns);
+    auto at = cast_operand_to_compute_dtype(a, dtype);
+    auto bt = cast_operand_to_compute_dtype(b, dtype);
+    if (at || bt) {
+        auto cp = make_mapped_matmul(at ? at.ptr : a, bt ? bt.ptr : b,
+            trans_a, trans_b, allow_reduced_precision);
+        forward(cp);
+        return;
+    }
+    c = create_output(nullptr, dtype);
 }
 
 VarPtr MappedMatmulOp::grad(Var* out, Var* dout, Var* v, int v_index) {
@@ -42,11 +55,15 @@ VarPtr MappedMatmulOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     // own gradient. Written back in the pre-transpose layout, so no transpose
     // node is introduced, and with the reduced-precision setting of the
     // forward rather than of whenever the backward is built.
+    // A reduction or an explicit grad_output can widen the cotangent. GEMM
+    // still requires matching operand dtypes, as in the cuBLAS gradient owner.
     if (v_index == 0) {
+        if (dout->dtype() != b->dtype()) dout = make_unary(dout, b->dtype());
         if (trans_a)
             return make_mapped_matmul(b, dout, trans_b, 1, allow_reduced_precision);
         return make_mapped_matmul(dout, b, 0, trans_b^1, allow_reduced_precision);
     }
+    if (dout->dtype() != a->dtype()) dout = make_unary(dout, a->dtype());
     if (trans_b)
         return make_mapped_matmul(dout, a, 1, trans_a, allow_reduced_precision);
     return make_mapped_matmul(a, dout, trans_a^1, 0, allow_reduced_precision);

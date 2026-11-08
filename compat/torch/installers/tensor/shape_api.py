@@ -1,6 +1,6 @@
 """Stable Torch shape and reduction adapters using native Tensor operations."""
 from ...context import get_install_context
-from ...grad import autocast_is_enabled
+from ...amp import _preserve_pointwise_dtype
 from . import jt, np, dtype, _jittor_dtype_name, _dtype_to_str, _diff, _trapz, nn
 from .method_api import _ip
 
@@ -82,19 +82,16 @@ def _dtype_itemsize_name(ds):
 
 
 def _bitcast(self, dt):
-    import numpy as _np
-    if True:
-        _np_view_of = {"bool": _np.bool_, "uint8": _np.uint8, "int8": _np.int8, "uint16": _np.uint16,
-                       "int16": _np.int16, "int32": _np.int32, "int64": _np.int64,
-                       "float16": _np.float16, "bfloat16": _np.uint16,
-                       "float32": _np.float32, "float64": _np.float64}
-    ds = getattr(dt, "name", str(dt)).replace("torch.", "")
-    itemsize = getattr(dt, "itemsize", None)
-    itemsize = itemsize if isinstance(itemsize, int) else _dtype_itemsize_name(ds)
+    if not isinstance(dt, dtype):
+        raise TypeError("view(dtype) expects a torch.dtype")
+    ds = _dtype_to_str(dt)
+    itemsize = _dtype_itemsize_name(ds)
     old_itemsize = getattr(getattr(self, "dtype", None), "itemsize", None)
     if old_itemsize is None:
         old_itemsize = _dtype_itemsize_name(_jittor_dtype_name(self.dtype))
     shape = list(self.shape)
+    if shape and old_itemsize != itemsize and int(self.stride(-1)) != 1:
+        raise RuntimeError("view(dtype) changing itemsize requires last dimension stride 1")
     if len(shape) == 0:
         if old_itemsize != itemsize:
             raise RuntimeError("view(dtype) cannot change itemsize on a scalar tensor")
@@ -104,12 +101,9 @@ def _bitcast(self, dt):
             raise RuntimeError("view(dtype) requires the last dimension to be byte-compatible")
         shape[-1] = last_bytes // int(itemsize)
     reinterpret_view = getattr(jt, "reinterpret_view", None)
-    npd = _np_view_of.get(ds, _np.uint8)
-    if reinterpret_view is not None and ds in _np_view_of:
-        result = reinterpret_view(self, shape, ds)
-        return result._set_dtype_view_of(self)
-    return jt.array(_np.ascontiguousarray(self.numpy()).view(npd))
-
+    if reinterpret_view is None:
+        raise NotImplementedError("view(dtype) requires native reinterpret_view")
+    return reinterpret_view(self, shape, ds)._set_dtype_view_of(self)
 
 #: `src/bindings/pyjt/py_compat_fast.h`'s `_fast_view`, once the tensor
 #: installer has bound it: a dense tensor reshaped by integer sizes, without
@@ -222,10 +216,13 @@ def _torch_var_sum(self, *a, **k):
         dt = a[0]
         a = a[1:]
     if out is not None:
-        if dt is not None and _dtype_to_str(dt) != _jittor_dtype_name(out.dtype):
-            raise RuntimeError("sum(): dtype must match the dtype of out")
+        out_dtype = _dtype_to_str(out.dtype)
         if dt is None:
             dt = out.dtype
+        elif _dtype_to_str(dt) != out_dtype:
+            raise RuntimeError(
+                "Expected out tensor to have dtype %s, but got %s instead"
+                % (_dtype_to_str(dt), out_dtype))
     if dt is None and _jittor_dtype_name(self.dtype) in (
             "bool", "uint8", "int8", "uint16", "int16", "uint32", "int32", "uint64"):
         dt = "int64"
@@ -253,7 +250,8 @@ def _torch_var_sum(self, *a, **k):
     if dt is not None and _jittor_dtype_name(result.dtype) != _dtype_to_str(dt):
         result = result.cast(_dtype_to_str(dt))
     if out is not None:
-        out.assign(result)
+        # Torch out= writes into the supplied storage, including views.
+        out.copy_(result)
         return out
     return result
 
@@ -302,9 +300,10 @@ def _axis_reduce(name, self, *a, **k):
 
 
 def _method_mean(self, *a, **k):
-    if (autocast_is_enabled()
-            and jt.core.dispatch_context([self])[0] in ("cpu", "cuda")):
-        with jt.flag_scope(amp_reg=0):
+    if _preserve_pointwise_dtype():
+        # Keep the input dtype while clearing the lower-precision preference.
+        # Native reductions retain their FP32 intermediate accumulation.
+        with jt.flag_scope(amp_reg=jt.amp_flags.keep_reduce):
             return _plain_reduce('mean', self, *a, **k)
     return _plain_reduce('mean', self, *a, **k)
 

@@ -116,7 +116,6 @@ def test_torch_npu_primitives_match_their_definitions():
 @pytest.mark.skipif(os.environ.get("JITTOR_TEST_DEVICES") != "npu",
                     reason="requires a selected ACL device")
 def test_unsupported_npu_apis_refuse_instead_of_reporting_zero():
-    for name in ("memory_allocated", "max_memory_allocated", "memory_stats",
-                 "get_device_properties", "current_stream", "mem_get_info"):
+    for name in ("get_device_properties", "current_stream", "Stream", "Event"):
         with pytest.raises(NotImplementedError):
             getattr(torch.npu, name)()

@@ -18,6 +18,7 @@ import numpy as np
 import operator
 import warnings
 from copy import deepcopy
+import operator
 from functools import partial
 from ._state_placement import optimizer_state_scope
 
@@ -63,7 +64,6 @@ def _optimizer_arithmetic(tensors, coefficients, *, enabled=True):
     return tuple(partial(_fp32_optimizer_binary, operation) for operation in (
         jt.add, jt.multiply, jt.divide, jt.subtract))
 
-
 def _grad_matches_param(p, g):
     return isinstance(g, jt.Var) and list(g.shape) == list(p.shape)
 
@@ -79,6 +79,8 @@ def _native_ddp_readiness_plan(optimizer, targets, input_params):
         _validate_reducer_state,
     )
 
+    if any(getattr(p, "_jittor_tp_spec", None) is not None for p in targets):
+        return None
     states = set(getattr(optimizer, "_jittor_ddp_states", ()))
     for parameter in targets:
         state = getattr(parameter, "_jittor_ddp_state", None)
@@ -196,7 +198,7 @@ def _state_buffer(param):
     parameter, which is what every other ``*_like`` in jittor does.
     """
     with optimizer_state_scope(param):
-        return jt.zeros_like(param).stop_grad()
+        return jt.zeros_like(param).clone().stop_grad()
 
 
 def _adaptive_state_buffer(param):
@@ -710,8 +712,8 @@ class Optimizer(object):
         if fsdp_parameter_ids and self.__input_params:
             raise NotImplementedError("native FSDP does not support extra optimizer input parameters")
 
-        # Gathered parameters own this forward's graph; native optimizers still
-        # consume only the resulting rank-local gradient and master shards.
+        # Gathered parameters own the forward graph; the canonical FSDP owner
+        # returns local shard gradients before optimizer holders are updated.
         jt.sync(grad_targets)
         # get gradient. `grad_optional` says which parameters the loss does not
         # reach at all (None) instead of handing back a zero indistinguishable

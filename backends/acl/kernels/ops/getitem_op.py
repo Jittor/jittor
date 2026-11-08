@@ -390,6 +390,8 @@ class GetItemACL(jt.Function):
         return tuple(indices)
 
     def execute(self, x, slices, return_x=None):
+        from jittor.ops.indexing import _as_integer_array_index
+
         if isinstance(slices, jt.Var) and _jittor_dtype_name(slices.dtype) == "bool":
             # A boolean mask whose shape only covers the leading dims of x
             # (e.g. a 1-D row mask on a 2-D tensor: x[mask]) is not handled by
@@ -427,7 +429,10 @@ class GetItemACL(jt.Function):
             slices = (slices,)
         slices = list(slices)
         for i, s in enumerate(slices):
-            if isinstance(s, int) and s < 0:
+            integer_index = _as_integer_array_index(s)
+            if integer_index is not None:
+                slices[i] = integer_index
+            elif isinstance(s, int) and s < 0:
                 slices[i] = s + x.shape[i]
             elif isinstance(s, list):
                 # A Python list inside a tuple is an advanced index, including

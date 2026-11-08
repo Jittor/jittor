@@ -41,6 +41,8 @@ def _optimizers(optimizers):
 
 
 def _map_tree(value, function):
+    if getattr(value, "checkpoint_metadata", None) is not None:
+        return value._checkpoint_copy(function(value.to_local()))
     if isinstance(value, jt.Var):
         return function(value)
     if isinstance(value, Mapping):
@@ -81,9 +83,6 @@ def _parameter_names(model):
     names = {}
     for name, parameter in model.named_parameters():
         names.setdefault(id(parameter), name)
-    provider = _fsdp(model)
-    if provider is not None:
-        names.update(provider._optimizer_checkpoint_parameter_names(model))
     return names
 
 
@@ -217,7 +216,8 @@ def get_model_state_dict(model, *, submodules=None, options=None):
     model = _unwrapped_model(model)
     prefixes = _submodule_prefixes(model, submodules)
     provider = _fsdp(model)
-    result = provider._get_full_state_dict(model) if provider is not None and options.full_state_dict else model.state_dict()
+    result = (provider._get_full_state_dict(model) if options.full_state_dict
+              else provider._get_sharded_state_dict(model)) if provider is not None else model.state_dict()
     if options.ignore_frozen_params:
         frozen = {name for name, parameter in model.named_parameters() if not parameter.requires_grad}
         result = {name: value for name, value in result.items() if name not in frozen}
@@ -259,8 +259,11 @@ def set_model_state_dict(model, state_dict, *, options=None):
                                 for name, value in values.items())
         state = expanded
     provider = _fsdp(model)
-    if provider is not None and options.full_state_dict:
-        provider._load_full_state_dict(model, state, strict=options.strict)
+    if provider is not None:
+        if options.full_state_dict:
+            provider._load_full_state_dict(model, state, strict=options.strict)
+        else:
+            provider._load_sharded_state_dict(model, state, strict=options.strict)
         return None
     loader = model.load_state_dict
     if getattr(loader, "__func__", None) is jt.Module.load_state_dict:
@@ -278,9 +281,14 @@ def get_optimizer_state_dict(model, optimizers, *, submodules=None, options=None
     optimizers = _optimizers(optimizers)
     if not optimizers:
         raise RuntimeError("Optimizers are not passed in but optim_only is set to True.")
+    provider = _fsdp(model)
     result = {"state": {}, "param_groups": []}
     for optimizer in optimizers:
         _initialize(optimizer)
+        if provider is not None:
+            # Resolve rotated views through the existing FSDP owner before
+            # public model traversal maps the live optimizer parameters.
+            provider.refresh_optimizer_fsdp_params(optimizer)
         state = optimizer.state_dict()
         # FSDP's initialization step may rotate its public shard views.
         names = _parameter_names(model)
@@ -293,7 +301,6 @@ def get_optimizer_state_dict(model, optimizers, *, submodules=None, options=None
             result["param_groups"].append(dict(saved_group,
                 params=[pid_to_name[pid] for pid in saved_group["params"]]))
         result["state"].update({pid_to_name[pid]: fields for pid, fields in state["state"].items()})
-    provider = _fsdp(model)
     if provider is not None and options.full_state_dict:
         metadata = {}
         for name, fields in result["state"].items():
@@ -302,11 +309,10 @@ def get_optimizer_state_dict(model, optimizers, *, submodules=None, options=None
                                     else ("value", value)) for key, value in fields.items()}
         dist = _torch().distributed
         ranks = [None] * (dist.get_world_size() if dist.is_initialized() else 1)
-        if len(ranks) > 1:
-            dist.all_gather_object(ranks, metadata)
-        else:
-            ranks[0] = metadata
+        dist.all_gather_object(ranks, metadata)
         result = provider._gather_optimizer_state_dict(model, result, ranks)
+    elif provider is not None:
+        result = provider._get_sharded_optimizer_state_dict(model, result)
     if options.flatten_optimizer_state_dict:
         result = _flatten(result)
     if options.cpu_offload:
@@ -315,6 +321,33 @@ def get_optimizer_state_dict(model, optimizers, *, submodules=None, options=None
         if options.full_state_dict and dist.is_initialized() and dist.get_rank() != 0:
             return {}
     return result
+
+
+def _optimizer_group_plan(optimizers, names, saved_groups, strict):
+    """Match each selected live group before applying any optimizer state.
+
+    Combined checkpoints may contain other optimizers' disjoint groups. A
+    selected group must have one unambiguous source; non-strict loading may
+    omit parameters or whole groups while retaining current group defaults.
+    """
+    current = [(optimizer, optimizer.state_dict()) for optimizer in optimizers]
+    groups = [group for optimizer, _ in current for group in optimizer.param_groups]
+    expected = [set(names[id(parameter)] for parameter in group["params"]) for group in groups]
+    matched = {}
+    for saved in saved_groups:
+        loaded = set(saved["params"])
+        overlaps = [index for index, live in enumerate(expected)
+                    if loaded & live or (not loaded and not live)]
+        if not overlaps:
+            continue
+        candidates = [index for index in overlaps if index not in matched
+                      and (loaded == expected[index] if strict else loaded <= expected[index])]
+        if not candidates:
+            raise ValueError("optimizer checkpoint parameter groups do not match the selected optimizer groups")
+        matched[candidates[0]] = saved
+    if strict and len(matched) != len(groups):
+        raise ValueError("optimizer checkpoint is missing a selected parameter group")
+    return current, [matched.get(index) for index in range(len(groups))]
 
 
 def set_optimizer_state_dict(model, optimizers, optim_state_dict, *, options=None):
@@ -335,27 +368,30 @@ def set_optimizer_state_dict(model, optimizers, optim_state_dict, *, options=Non
                 raise ValueError("checkpoint parameter appears in multiple optimizer groups: " + str(name))
             seen_parameters.add(name)
     provider = _fsdp(model)
-    if provider is not None and options.full_state_dict:
-        state = provider._shard_optimizer_state_dict(model, state)
+    if provider is not None:
+        state = (provider._shard_optimizer_state_dict(model, state) if options.full_state_dict
+                 else provider._local_sharded_optimizer_state_dict(model, state))
     if provider is not None:
         # FULL model loading can replace flat-entry shard views. Rebind the
         # live optimizer through its existing owner before resolving FQNs.
         for optimizer in optimizers:
             provider.refresh_optimizer_fsdp_params(optimizer)
     names = _parameter_names(model)
+    current_states, saved_groups = _optimizer_group_plan(optimizers, names, state["param_groups"], options.strict)
+    saved_groups = iter(saved_groups)
     plans = []
-    for optimizer in optimizers:
-        current = optimizer.state_dict()
+    for optimizer, current in current_states:
         groups, values = [], {}
         for group, current_group in zip(optimizer.param_groups, current["param_groups"]):
             fqns = [names[id(parameter)] for parameter in group["params"]]
             loaded_group = dict(current_group)
-            for saved in state["param_groups"]:
-                if (set(saved["params"]) & set(fqns)) or (not saved["params"] and not fqns):
-                    loaded_group.update((key, value) for key, value in saved.items() if key != "params")
+            saved = next(saved_groups)
+            if saved is not None:
+                loaded_group.update((key, value) for key, value in saved.items() if key != "params")
             groups.append(loaded_group)
             for parameter, pid, name in zip(group["params"], current_group["params"], fqns):
-                if options.strict and state["state"] and parameter.requires_grad and name not in state["state"]:
+                if (options.strict and parameter.requires_grad and pid in current["state"]
+                        and name not in state["state"]):
                     raise RuntimeError("Missing optimizer state for parameter '" + name +
                                        "' in checkpoint. To load anyway, use StateDictOptions(strict=False).")
                 if name in state["state"]:

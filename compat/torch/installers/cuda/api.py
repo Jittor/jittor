@@ -1037,6 +1037,10 @@ class _CudnnBackendModule(_types.ModuleType):
     def __getattribute__(self, name):
         if name == "allow_tf32":
             return _tf32_get("cudnn")
+        if name == "deterministic":
+            native = getattr(jt, "cudnn", None)
+            if native is not None:
+                return bool(native.get_deterministic())
         return super().__getattribute__(name)
 
     def __setattr__(self, name, value):
@@ -1055,6 +1059,11 @@ class _CudnnBackendModule(_types.ModuleType):
                 swallowed("torch/installers/cuda/api.py cudnn.__setattr__: "
                           "jt.cudnn.set_benchmark(%r)" % (value,), exc,
                           "cuDNN autotuning stays as it was")
+        if name == "deterministic" and not getattr(self, "_jittor_cudnn_init", False):
+            native = getattr(jt, "cudnn", None)
+            if native is not None:
+                native.set_deterministic(int(bool(value)))
+            value = bool(value)
         if name == "allow_tf32":
             _tf32_set("cudnn", value)
             return None
@@ -1158,7 +1167,19 @@ def _api_cuda_synchronize(device=None, *a, **k):
     return jt.sync_all(True)
 
 
+def _cuda_rng_seed(seed):
+    from ..core import _normalize_seed
+    return _normalize_seed(seed)
+
+
+def _legacy_acl_rng_backend():
+    """The legacy CUDA spelling follows the selected physical backend."""
+    return bool(getattr(jt.compiler, "has_acl", False))
+
+
 def _api_cuda_manual_seed(s):
+    if _legacy_acl_rng_backend():
+        return _npu_manual_seed(s)
     # Torch converts the argument before scheduling its lazy CUDA callback.
     # With no visible device, that callback never touches a CUDA generator.
     seed = int(s)
@@ -1171,6 +1192,8 @@ def _api_cuda_manual_seed(s):
 
 
 def _api_cuda_manual_seed_all(s):
+    if _legacy_acl_rng_backend():
+        return _npu_manual_seed_all(s)
     seed = int(s)
     count = device_count()
     if not count:
@@ -1349,6 +1372,8 @@ def _curand(required=True):
 
 
 def cuda_rng_state_is_supported():
+    if _legacy_acl_rng_backend():
+        return _npu_is_available()
     """Whether this build can save and restore the CUDA RNG position."""
     return _curand(required=False) is not None
 
@@ -1384,6 +1409,8 @@ def _rng_device_index(device):
 
 
 def _api_cuda_get_rng_state(device=None, *a, **k):
+    if _legacy_acl_rng_backend():
+        return _npu_get_rng_state(_rng_device_index(device))
     # Everything queued has to have happened, or the offset describes a
     # position the device has not reached: the saved state would then be ahead
     # of the data the checkpoint was taken with.
@@ -1395,6 +1422,8 @@ def _api_cuda_get_rng_state(device=None, *a, **k):
 
 
 def _api_cuda_get_rng_state_all(*a, **k):
+    if _legacy_acl_rng_backend():
+        return _npu_get_rng_state_all()
     count = device_count()
     if not count:
         return []
@@ -1405,6 +1434,8 @@ def _api_cuda_get_rng_state_all(*a, **k):
 
 
 def _api_cuda_set_rng_state(state, device=None, *a, **k):
+    if _legacy_acl_rng_backend():
+        return _npu_set_rng_state(state, _rng_device_index(device))
     seed, offset = _rng_state_unpack(state)
     # Parsed before anything is touched, so a malformed state leaves the
     # generator where it was rather than half-restored.
@@ -1413,6 +1444,8 @@ def _api_cuda_set_rng_state(state, device=None, *a, **k):
 
 
 def _api_cuda_set_rng_state_all(states, *a, **k):
+    if _legacy_acl_rng_backend():
+        return _npu_set_rng_state_all(states)
     parsed = [_rng_state_unpack(state) for state in states]
     if not parsed:
         return
@@ -1423,6 +1456,8 @@ def _api_cuda_set_rng_state_all(states, *a, **k):
 
 
 def _api_cuda_initial_seed(*a, **k):
+    if _legacy_acl_rng_backend():
+        return _npu_initial_seed()
     return int(_curand().curand_generator_seed(_rng_device_index(None)))
 
 
@@ -1464,12 +1499,10 @@ class _CudnnFlags:
         with torch.backends.cudnn.flags(enabled=False, benchmark=True):
             ...
 
-    **It restores the attributes; it does not change which kernels run.** The
-    module's four switches are already settings nothing acts on -- convolution
-    here picks its own path -- and this does not make them act. What it buys is
-    that the attribute a caller reads back inside the block is the one it set,
-    and that the block is not an AttributeError. MiniMax-H3's reference path
-    wraps work in it, and a missing `flags` killed the request outright.
+    Benchmarking, deterministic convolution selection and TF32 permission
+    reach the native runtime through the module's setters. ``enabled`` remains
+    a stored compatibility attribute. Every changed setting is restored when
+    the context exits, including on exceptions.
 
     A class rather than `@contextlib.contextmanager` so the old values are read
     on `__enter__`, not when the object is built.
@@ -1580,6 +1613,198 @@ def _api_cpu_get_cpu_capability():
 
 def _api_mkldnn_is_available():
     return False
+
+
+def _npu_device_count():
+    """Use the selected ACL provider, independently of CUDA visibility."""
+    if not getattr(jt.compiler, "has_acl", False):
+        return 0
+    return int(jt.get_device_count())
+
+
+def _npu_is_available():
+    return _npu_device_count() > 0
+
+
+def _npu_device_index(value=None):
+    count = _npu_device_count()
+    if not count:
+        raise RuntimeError("NPU is unavailable: this runtime has no visible ACL device")
+    if value is None:
+        index = int(jt.current_device())
+    elif isinstance(value, bool):
+        raise TypeError("NPU device index must not be bool")
+    elif isinstance(value, int):
+        index = value
+    else:
+        parsed = device(value) if isinstance(value, str) else value
+        if getattr(parsed, "type", None) != "npu":
+            raise ValueError("Expected an npu device, but got: %s" % value)
+        index = parsed.index
+        if index is None:
+            index = int(jt.current_device())
+    if not isinstance(index, int) or not 0 <= index < count:
+        raise ValueError("NPU device ordinal out of range: %r (visible devices: %d)" % (index, count))
+    return index
+
+
+def _npu_current_device():
+    return _npu_device_index()
+
+
+def _npu_set_device(device):
+    if isinstance(device, int) and not isinstance(device, bool) and device < 0:
+        return None
+    jt.set_device(_npu_device_index(device))
+
+
+class _NpuDeviceContext:
+    def __init__(self, device):
+        self.index = _npu_device_index(device)
+        self.previous = None
+
+    def __enter__(self):
+        self.previous = _npu_current_device()
+        _npu_set_device(self.index)
+        return self
+
+    def __exit__(self, *exc):
+        _npu_set_device(self.previous)
+        return False
+
+
+def _npu_synchronize(device=None):
+    _npu_device_index(device)
+    # Flush lazy graphs as well as the native stream; failure must propagate.
+    return jt.sync_all(True)
+
+
+def _npu_is_initialized():
+    return bool(_npu_is_available() and int(jt.current_device()) >= 0)
+
+
+def _npu_empty_cache():
+    _npu_device_index()
+    return jt.gc()
+
+
+def _npu_memory_allocated(device=None):
+    return int(jt.core.device_memory_used(_npu_device_index(device)))
+
+
+def _npu_memory_reserved(device=None):
+    return int(jt.core.device_memory_reserved(_npu_device_index(device)))
+
+
+def _npu_max_memory_allocated(device=None):
+    return int(jt.core.device_memory_peak(_npu_device_index(device)))
+
+
+def _npu_max_memory_reserved(device=None):
+    return int(jt.core.device_memory_reserved_peak(_npu_device_index(device)))
+
+
+def _npu_reset_peak_memory_stats(device=None):
+    return jt.core.reset_device_memory_peak(_npu_device_index(device))
+
+
+def _npu_mem_get_info(device=None):
+    # Provider-owned driver values include the context and other processes.
+    return tuple(jt.core.device_memory_info(_npu_device_index(device)))
+
+
+def _npu_memory_stats(device=None):
+    index = _npu_device_index(device)
+    return {
+        "allocated_bytes.all.current": _npu_memory_allocated(index),
+        "allocated_bytes.all.peak": _npu_max_memory_allocated(index),
+        "allocated_bytes.all.allocated": int(jt.core.device_memory_allocated_total(index)),
+        "reserved_bytes.all.current": _npu_memory_reserved(index),
+        "reserved_bytes.all.peak": _npu_max_memory_reserved(index),
+    }
+
+
+def _npu_get_device_name(device=None, *, device_name=None):
+    if device_name is not None:
+        if device is not None:
+            raise TypeError("pass only device or device_name")
+        device = device_name
+    from jittor._runtime.dispatch import registered_kernel
+    query = registered_kernel("runtime.device_name", "acl")
+    if query is None:
+        raise RuntimeError("ACL provider did not publish its device-name query")
+    with _NpuDeviceContext(device):
+        return str(query())
+
+
+def _npu_is_bf16_supported():
+    if not _npu_is_available():
+        return False
+    from jittor._runtime.dispatch import registered_kernel
+    query = registered_kernel("runtime.supports_bfloat16", "acl")
+    if query is None:
+        raise RuntimeError("ACL provider did not publish its BF16 capability query")
+    return bool(query())
+
+
+def _npu_get_amp_supported_dtype():
+    target = _cuda_target()
+    return [target.float16, target.bfloat16] if _npu_is_bf16_supported() else [target.float16]
+
+
+def _npu_get_rng_state(device="npu"):
+    from ..core import _encode_rng_state
+    state = jt.core.get_device_rng_state("acl", _npu_device_index(device))
+    return _encode_rng_state(state)
+
+
+def _npu_get_rng_state_all():
+    return [_npu_get_rng_state(index) for index in range(_npu_device_count())]
+
+
+def _npu_set_rng_state(new_state, device="npu"):
+    from ..core import _decode_rng_state
+    text = _decode_rng_state(new_state)
+    jt.core.set_device_rng_state("acl", _npu_device_index(device), text)
+
+
+def _npu_set_rng_state_all(new_states):
+    from ..core import _decode_rng_state
+    states = list(new_states)
+    if len(states) != _npu_device_count():
+        raise ValueError("NPU RNG states must match the visible device count")
+    texts = [_decode_rng_state(state) for state in states]
+    # Check the complete batch before mutating the first device.
+    for text in texts:
+        jt.core.validate_device_rng_state("acl", text)
+    for index, text in enumerate(texts):
+        jt.core.set_device_rng_state("acl", index, text)
+
+
+def _npu_manual_seed(seed):
+    seed = _cuda_rng_seed(seed)
+    if _npu_is_available():
+        jt.core.set_device_seed("acl", _npu_current_device(), seed)
+
+
+def _npu_manual_seed_all(seed):
+    seed = _cuda_rng_seed(seed)
+    for index in range(_npu_device_count()):
+        jt.core.set_device_seed("acl", index, seed)
+
+
+def _npu_seed():
+    import secrets
+    _npu_manual_seed(secrets.randbits(64))
+
+
+def _npu_seed_all():
+    import secrets
+    _npu_manual_seed_all(secrets.randbits(64))
+
+
+def _npu_initial_seed():
+    return int(jt.core.get_device_initial_seed("acl", _npu_current_device()))
 
 
 def _api_mod_is_available(*a, **k):
@@ -1723,6 +1948,21 @@ def _api_accelerator_current_accelerator(*a, **k):
 
 
 _CUDA_FIDELITY_DETAILS = {
+    _npu_get_rng_state: "Opaque CPU uint8 encoding of Jittor ACL per-device seed/offset state, not torch_npu byte format.",
+    _npu_get_rng_state_all: "Snapshots every visible device through the canonical native ACL RNG owner.",
+    _npu_set_rng_state: "Restores one ACL device RNG without replacing the CPU generator or another device.",
+    _npu_set_rng_state_all: "Decodes and validates the entire state list before changing any ACL device.",
+    _npu_synchronize: "Flushes lazy ACL work and waits for every touched device; stronger than a per-device wait.",
+    _npu_mem_get_info: "ACL provider driver free/total bytes for the selected device, including other processes.",
+    _npu_memory_allocated: "Per-device live bytes owned by Jittor pools; excludes runtime, libraries and other processes.",
+    _npu_memory_reserved: "Per-device bytes reserved by Jittor pools; separate from driver memory consumption.",
+    _npu_max_memory_allocated: "Native allocator-pool peak on the selected device; zero when caching pools are disabled.",
+    _npu_max_memory_reserved: "Native allocator-pool reserved peak on the selected device.",
+    _npu_get_device_name: "CANN runtime SoC name for the selected device; query failures propagate.",
+    _api_cuda_get_rng_state: "Opaque native backend RNG state: cuRAND seed/offset on CUDA and ACL streams for the legacy ACL alias; not Torch bytes.",
+    _api_cuda_get_rng_state_all: "One native cuRAND seed/offset state per visible CUDA device; mixed histories are restorable.",
+    _api_cuda_set_rng_state: "Restores one Jittor CUDA RNG stream through the native state owner.",
+    _api_cuda_set_rng_state_all: "Validates and restores all Jittor CUDA RNG states through the native owner.",
     _Stream: "Logical streams share native execution; no independent CUDA stream handle.",
     _StreamContext: "Thread-local logical stream selection; native execution remains serialized.",
     _current_stream: "Thread-local logical stream identity, one logical stream per device; native execution remains serialized.",
@@ -1774,7 +2014,7 @@ def _register_cuda_fidelity(ctx):
     """Describe the APIs this owner actually published, including old stubs."""
     modules = ctx.registry.module_map
     namespaces = [("torch", ctx.target_namespace)]
-    prefixes = ("torch.cuda", "torch.backends", "torch.accelerator", "torch._C")
+    prefixes = ("torch.cuda", "torch.npu", "torch.backends", "torch.accelerator", "torch._C")
     ancillary = {"torch.overrides", "torch.multiprocessing.reductions",
                  "torch.mps", "torch.cpu", "torch.npu", "torch.xpu", "torch.mtia"}
     namespaces.extend((name, module) for name, module in modules.items()

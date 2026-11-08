@@ -4,10 +4,12 @@ Update arithmetic stays in native optimizer algorithms. Public optimizer API
 bindings stay in optimizer_api; this module owns their state-view helpers.
 """
 from collections.abc import Mapping
+import weakref as _weakref
 import jittor as jt
 from .context import get_install_context
 from .optimizer_adam import _AdamStep
 from .. import optimizer_kinds as _optimizer_kinds
+from jittor.optim.base import _state_buffer
 from jittor.optim.algorithms.sgd import (
     momentum_initialized_flags as _momentum_initialized_flags,
 )
@@ -93,34 +95,110 @@ def _torch_optimizer_kind(opt):
 
 
 class _ParamState(dict):
+    """A stable public dictionary reflecting the canonical native state lists."""
     def __init__(self, owner, param, values):
         dict.__init__(self, values)
         self._owner = owner
         self._param = param
+    @property
+    def _owner(self):
+        return self._owner_ref() if self._owner_ref is not None else None
+    @_owner.setter
+    def _owner(self, value):
+        # The view caches its entries. An entry must not retain that view,
+        # or an observed counter keeps discarded parameters in a cycle.
+        self._owner_ref = _weakref.ref(value) if value is not None else None
+    def _refresh(self):
+        if self._owner is not None:
+            if self._owner._opt is None:
+                self._owner = None
+            else:
+                values = self._owner._native_values(self._param)
+                if values is not None:
+                    dict.update(self, values)
+        return self
+    def _detach(self):
+        self._refresh()
+        self._owner = None
+    def __getitem__(self, key):
+        self._refresh()
+        return dict.__getitem__(self, key)
+    def get(self, key, default=None):
+        self._refresh()
+        return dict.get(self, key, default)
+    def __contains__(self, key):
+        self._refresh()
+        return dict.__contains__(self, key)
+    def __iter__(self):
+        self._refresh()
+        return dict.__iter__(self)
+    def __len__(self):
+        self._refresh()
+        return dict.__len__(self)
+    def keys(self):
+        self._refresh()
+        return dict.keys(self)
+    def values(self):
+        self._refresh()
+        return dict.values(self)
+    def items(self):
+        self._refresh()
+        return dict.items(self)
+    def copy(self):
+        self._refresh()
+        return dict.copy(self)
+    def __repr__(self):
+        self._refresh()
+        return dict.__repr__(self)
+    def __eq__(self, other):
+        self._refresh()
+        if isinstance(other, _ParamState):
+            other._refresh()
+        return dict.__eq__(self, other)
+    def __ne__(self, other):
+        result = self.__eq__(other)
+        return NotImplemented if result is NotImplemented else not result
     def __setitem__(self, key, value):
-        self._owner._set_field(self._param, key, value)
+        self._refresh()
+        if self._owner is not None:
+            self._owner._set_field(self._param, key, value)
         dict.__setitem__(self, key, value)
     def update(self, *args, **kwargs):
-        values = dict(*args, **kwargs)
-        for key, value in values.items():
+        for key, value in dict(*args, **kwargs).items():
             self[key] = value
+    def setdefault(self, key, default=None):
+        if key not in self:
+            self[key] = default
+        return self[key]
+    def clear(self):
+        if self._owner is not None:
+            pg, index = self._owner._find(self._param)
+            if pg is not None:
+                self._owner._reset_slot(pg, index)
+                self._owner._sync_n_step()
+        dict.clear(self)
 
 
 class _OptState:
     def __init__(self, opt):
-        self._opt = opt
+        # The optimizer caches this view. Avoid making that cache a strong cycle.
+        self._opt_ref = _weakref.ref(opt)
+        self._entries = {}
     def _find(self, param):
-        for pg in self._opt.param_groups:
-            for i, p in enumerate(pg.get("params", [])):
-                if p is param:
-                    return pg, i
+        opt = self._opt
+        if opt is not None:
+            for pg in opt.param_groups:
+                for i, p in enumerate(pg.get("params", [])):
+                    if p is param:
+                        return pg, i
         return None, None
     def _params(self):
-        for pg in self._opt.param_groups:
-            for p in pg.get("params", []):
-                marker = object()
-                if self.get(p, marker) is not marker:
-                    yield p
+        opt = self._opt
+        if opt is not None:
+            for pg in opt.param_groups:
+                for p in pg.get("params", []):
+                    if self.get(p, None) is not None:
+                        yield p
     def _reset_slot(self, pg, i):
         steps = _param_steps(pg)
         if "_adagrad_steps" in pg:
@@ -134,7 +212,7 @@ class _OptState:
             if not isinstance(buffers, list) or i >= len(buffers):
                 continue
             buffer = buffers[i]
-            buffers[i] = (jt.zeros_like(buffer).stop_grad()
+            buffers[i] = (_state_buffer(buffer)
                           if isinstance(buffer, jt.Var) else None)
     def _sync_n_step(self):
         self._opt.n_step = max(
@@ -161,7 +239,7 @@ class _OptState:
             # torch's "no buffer yet": the next momentum update seeds it.
             if isinstance(buffers, list) and i < len(buffers) \
                     and isinstance(buffers[i], jt.Var):
-                buffers[i] = jt.zeros_like(buffers[i]).stop_grad()
+                buffers[i] = _state_buffer(buffers[i])
             _momentum_initialized_flags(pg)[i] = False
             return
         if isinstance(buffers, list) and i < len(buffers):
@@ -172,65 +250,49 @@ class _OptState:
             if kind == "sgd" and key == "momentum_buffer":
                 _momentum_initialized_flags(pg)[i] = True
     def get(self, param, default=None):
-        pg, i = self._find(param)
-        if pg is None:
-            return default
-        steps = _param_steps(pg)
-        kind = _torch_optimizer_kind(self._opt)
-        if kind == "adagrad":
-            return _ParamState(self, param, {
-                "sum": pg["values"][i], "step": steps[i]})
-        if not isinstance(steps[i], _AdamStep) and int(steps[i]) <= 0:
-            return default
-        names = _NATIVE_TO_TORCH_STATE.get(kind, {})
-
-        def present():
-            return {torch: pg[native][i]
-                    for native, torch in names.items() if native in pg and i < len(pg[native])}
-
-        if kind in ("adam", "adamw") and "m" in pg and "values" in pg:
-            return _ParamState(self, param, {
-                **present(), "step": steps[i].tensor() if isinstance(steps[i], _AdamStep) else float(steps[i])})
-        if kind == "sgd":
-            # Present exactly while a buffer exists, like torch: independent
-            # of the *current* momentum, so pausing momentum keeps it.
-            if "values" in pg and _momentum_initialized_flags(pg)[i]:
-                return _ParamState(self, param, present())
-            return default
-        if kind == "rmsprop" and "values" in pg:
-            return _ParamState(self, param, {
-                **present(), "step": float(steps[i])})
-        if kind == "adan":
-            return _ParamState(self, param, {
-                **present(), "step": float(steps[i])})
-        return default
+        entry = self._entry(param)
+        return default if entry is None else entry
     def __getitem__(self, param):
-        r = self.get(param, None)
-        if r is None:
+        entry = self._entry(param, create=True)
+        if entry is None:
             raise KeyError(param)
-        return r
-    def __setitem__(self, param, d):
+        return entry
+    def __setitem__(self, param, values):
         pg, i = self._find(param)
         if pg is None:
             raise KeyError(param)
-        if not isinstance(d, Mapping):
+        if not isinstance(values, Mapping):
             raise TypeError("optimizer state must be a mapping")
-        values = dict(d)
+        values = dict(values)
+        previous = self._entries.pop(id(param), None)
+        if previous is not None:
+            previous._detach()
         self._reset_slot(pg, i)
-        for key, value in values.items():
-            if key != "step":
-                self._set_field(param, key, value)
-        self._set_field(param, "step", values.get("step", 1 if values else 0))
+        entry = self._record(param, {})
+        entry.update(values)
+        if (_torch_optimizer_kind(self._opt) == "sgd"
+                and set(values) == {"momentum_buffer"}
+                and values["momentum_buffer"] is None):
+            # Mainline's explicit buffer reset removes initialized state;
+            # the next real momentum update seeds from its gradient.
+            entry._detach()
+            self._entries.pop(id(param), None)
+            self._sync_n_step()
+            return
+        if values and "step" not in values:
+            self._set_field(param, "step", 1)
+        self._sync_n_step()
     def __delitem__(self, param):
         pg, i = self._find(param)
-        marker = object()
-        if pg is None or self.get(param, marker) is marker:
+        entry = self._entry(param)
+        if pg is None or entry is None:
             raise KeyError(param)
+        entry._detach()
+        self._entries.pop(id(param), None)
         self._reset_slot(pg, i)
         self._sync_n_step()
     def __contains__(self, param):
-        marker = object()
-        return self.get(param, marker) is not marker
+        return self._entry(param) is not None
     def __iter__(self):
         return self._params()
     def __len__(self):
@@ -238,8 +300,57 @@ class _OptState:
     def keys(self):
         return list(self._params())
     def values(self):
-        return [self.get(p, {}) for p in self._params()]
+        return [self[p] for p in self._params()]
     def items(self):
-        return [(p, self.get(p, {})) for p in self._params()]
+        return [(p, self[p]) for p in self._params()]
     def get_state_dict_key(self, param):
         return self._find(param)
+    @property
+    def _opt(self):
+        return self._opt_ref()
+    def _record(self, param, values):
+        entry = _ParamState(self, param, values)
+        self._entries[id(param)] = entry
+        return entry
+    def _entry(self, param, create=False):
+        pg, _ = self._find(param)
+        if pg is None:
+            return None
+        entry = self._entries.get(id(param))
+        if entry is None:
+            values = self._native_values(param)
+            if values is not None or create:
+                entry = self._record(param, values or {})
+        return entry
+    def clear(self):
+        for param in list(self._params()):
+            del self[param]
+    def _detach_all(self):
+        for entry in self._entries.values():
+            entry._detach()
+        self._entries.clear()
+    def _native_values(self, param, default=None):
+        pg, i = self._find(param)
+        if pg is None:
+            return default
+        steps = _param_steps(pg)
+        kind = _torch_optimizer_kind(self._opt)
+        if kind == 'adagrad':
+            return {'sum': pg['values'][i], 'step': steps[i]}
+        if not isinstance(steps[i], _AdamStep) and int(steps[i]) <= 0:
+            return default
+        names = _NATIVE_TO_TORCH_STATE.get(kind, {})
+
+        def present():
+            return {torch: pg[native][i] for native, torch in names.items() if native in pg and i < len(pg[native])}
+        if kind in ('adam', 'adamw') and 'm' in pg and ('values' in pg):
+            return {**present(), 'step': steps[i].tensor() if isinstance(steps[i], _AdamStep) else float(steps[i])}
+        if kind == 'sgd':
+            if 'values' in pg and _momentum_initialized_flags(pg)[i]:
+                return present()
+            return default
+        if kind == 'rmsprop' and 'values' in pg:
+            return {**present(), 'step': float(steps[i])}
+        if kind == 'adan':
+            return {**present(), 'step': float(steps[i])}
+        return default

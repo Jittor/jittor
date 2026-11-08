@@ -20,6 +20,7 @@ class Group:
         self.global_rank = rank
         self.created = 0
         self.reductions = []
+        self.broadcasts = []
 
     def size(self):
         return len(self.ranks)
@@ -38,14 +39,14 @@ class Group:
         return Tensor(tensor.values + 100)
 
     def broadcast(self, tensor, root):
-        return tensor.mpi_broadcast(root)
+        self.broadcasts.append((tensor, root))
+        return Tensor(tensor.values + root)
 
 
 class Tensor:
     def __init__(self, values):
         self.values = np.asarray(values)
         self.shape = self.values.shape
-        self.roots = []
 
     def update(self, other):
         self.values = other.values.copy()
@@ -58,8 +59,7 @@ class Tensor:
         return Tensor(self.values[index])
 
     def mpi_broadcast(self, root):
-        self.roots.append(root)
-        return Tensor(self.values + root)
+        raise AssertionError("WORLD broadcast must use the canonical ProcessGroup")
 
 
 @pytest.fixture
@@ -75,6 +75,7 @@ def distributed_state(monkeypatch):
     monkeypatch.setattr(owner, "_distributed_rank", lambda: 2)
     monkeypatch.setattr(owner, "_distributed_world_size", lambda: 4)
     monkeypatch.setattr(owner, "_native_distributed_active", lambda: False)
+    monkeypatch.setattr(owner._process_group, "get_default_group", lambda: world)
     return state, world, groups
 
 
@@ -144,7 +145,8 @@ def test_gather_and_broadcast_argument_routes(distributed_state, monkeypatch):
     np.testing.assert_array_equal(combined.values, np.arange(8).reshape(4, 2))
     assert calls == [(source, group), (source, group)]
     owner._broadcast(source, src=3, group=group, group_src=1)
-    assert source.roots == [1]
+    assert group.broadcasts == [(source, 1)]
+    np.testing.assert_array_equal(source.values, [8, 9])
     with pytest.raises(ValueError, match="shorter"):
         owner._all_gather([], source, group)
 
@@ -163,19 +165,21 @@ def test_flat_gather_consumes_the_explicit_native_group(distributed_state, monke
 
 
 def test_init_destroy_store_and_backend_validation(distributed_state, monkeypatch):
-    state, _, _ = distributed_state
+    state, world, _ = distributed_state
+    monkeypatch.setattr(world, "_get_backend_name", lambda: "gloo")
     class Store:
         closed = 0
         def close(self):
             self.closed += 1
     store = Store()
     owner._init_process_group(backend="gloo", rank=0, world_size=1, store=store)
-    assert state == {"initialized": True, "store": store, "backend": "gloo"}
+    assert state == {"initialized": True, "store": store}
     assert owner._api_dist_get_backend() == "gloo"
     assert owner._api_dist_get_backend(get_install_context(jt).state["distributed_api"]["world_group"]) == "gloo"
     assert owner._api_c10d_get_default_store() is store
     owner._destroy_process_group()
-    assert store.closed == 1 and state == {"initialized": False, "store": None, "backend": None}
+    assert store.closed == 1 and state == {"initialized": False, "store": None}
+    monkeypatch.setattr(world, "_get_backend_name", lambda: "nccl")
     monkeypatch.setattr(owner, "_native_distributed_active", lambda: True)
     with pytest.raises(RuntimeError, match="does not match"):
         owner._init_process_group(backend="hccl", rank=2, world_size=4)
@@ -183,17 +187,20 @@ def test_init_destroy_store_and_backend_validation(distributed_state, monkeypatc
     assert state["initialized"] and state["backend"] == "cpu:gloo,cuda:nccl"
 
 
-def test_checkpoint_stubs_keep_policy_and_importable_owner(monkeypatch):
+def test_checkpoint_default_io_keeps_importable_canonical_owner(monkeypatch):
     from jittor.compat import stub_policy
+    from jittor.compat.torch import checkpoint_storage
     dist = compatibility_owner(jt).distributed
     monkeypatch.setattr(stub_policy, "allow_stub", lambda: False)
     for name in ("load", "save", "load_state_dict", "save_state_dict"):
         function = getattr(dist.checkpoint, name)
+        assert function is getattr(checkpoint_storage, name)
         assert "<locals>" not in function.__qualname__
         assert pickle.loads(pickle.dumps(function)) is function
-        assert function._jittor_unimplemented.endswith("." + name)
-        with pytest.raises(NotImplementedError, match="checkpoint"):
-            function({})
+        assert not hasattr(function, "_jittor_unimplemented")
+    with pytest.raises(ValueError, match="checkpoint_id"):
+        dist.checkpoint.save({})
+
 
 def test_single_rank_gloo_backend_public_api_roundtrip(tmp_path):
     import datetime

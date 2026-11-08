@@ -6,6 +6,7 @@ import numpy as np
 import jittor as jt
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from ..context import get_install_context
+from ..nested import _numpy_bfloat16_storage, _rebuild_var_from_numpy
 from ..types import (
     _make_cpu_resident,
     _make_cuda_resident,
@@ -30,8 +31,12 @@ def _to_portable(obj, snapshots):
         # Batched fetch supplies a host copy without moving live tensors.
         # Persist the native name, not the frontend object's torch-prefixed
         # display string or an importable Python dtype class reference.
-        return {_VAR_TAG: True, "data": snapshots[id(obj)],
-                "dtype": _jittor_dtype_name(obj.dtype),
+        dtype = _jittor_dtype_name(obj.dtype)
+        data = snapshots[id(obj)]
+        if dtype == "bfloat16":
+            data = _numpy_bfloat16_storage(data)
+        return {_VAR_TAG: True, "data": data,
+                "dtype": dtype,
                 "requires_grad": bool(obj.requires_grad),
                 "parameter": isinstance(obj, g.nn.Parameter),
                 "device": str(getattr(obj, "device", "cpu"))}
@@ -66,9 +71,13 @@ def _from_portable(obj, source_devices):
         if obj.get(_VAR_TAG):
             # from_numpy preserves wide dtypes (float64/int64); jt.array narrows
             # them to float32/int32 -> torch.save/load silently downcast checkpoints.
-            value = g.tensor(obj["data"], dtype=obj.get("dtype"),
-                             device="cpu",
-                             requires_grad=bool(obj.get("requires_grad", False)))
+            if obj.get("dtype") == "bfloat16":
+                value = _rebuild_var_from_numpy(obj["data"], "bfloat16", device="cpu")
+                value.requires_grad_(bool(obj.get("requires_grad", False)))
+            else:
+                value = g.tensor(obj["data"], dtype=obj.get("dtype"),
+                                 device="cpu",
+                                 requires_grad=bool(obj.get("requires_grad", False)))
             if obj.get("parameter", False):
                 value = g.nn.Parameter(value, requires_grad=value.requires_grad)
             source_devices[id(value)] = obj.get("device", "cpu")

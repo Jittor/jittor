@@ -5,6 +5,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include <unordered_set>
+#include "ops/composite/fetch_op.h"
 #include <unordered_map>
 #include <algorithm>
 #include <sstream>
@@ -1969,7 +1970,7 @@ void sync_all(bool device_sync) {
         if (!v->var->_outputs.size())
             vars.push_back(v->var);
     }
-    for (auto& v :fetcher())
+    for (auto& v : fetcher())
         vars.push_back(v.ptr);
     graph_check();
     runtime_executor().run_sync(vars, device_sync); //need sync at last

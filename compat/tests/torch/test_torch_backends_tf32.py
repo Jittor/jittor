@@ -243,5 +243,23 @@ class TestInstallDoesNotDisturbWhatItFinds(Base):
                           torch.backends.cudnn.allow_tf32), before)
 
 
+@unittest.skipUnless(jt.compiler.build_config.backend == "cpu", "CPU-only policy is unavailable in an accelerator build")
+class TestCpuDeterministicPolicy(unittest.TestCase):
+    def test_disabling_policy_is_idempotent_and_does_not_claim_enforcement(self):
+        with jt.flag_scope(use_cuda=0):
+            self.assertFalse(torch.are_deterministic_algorithms_enabled())
+            for _ in range(3):
+                torch.use_deterministic_algorithms(False)
+                self.assertFalse(torch.are_deterministic_algorithms_enabled())
+                self.assertFalse(jt.core.backend_get_deterministic_algorithms())
+            with self.assertRaisesRegex(RuntimeError, "does not support deterministic"):
+                torch.use_deterministic_algorithms(True)
+            self.assertFalse(torch.are_deterministic_algorithms_enabled())
+            with self.assertRaisesRegex(NotImplementedError, "warn_only"):
+                torch.use_deterministic_algorithms(False, warn_only=True)
+            with self.assertRaises(TypeError):
+                torch.use_deterministic_algorithms(0)
+
+
 if __name__ == "__main__":
     unittest.main()

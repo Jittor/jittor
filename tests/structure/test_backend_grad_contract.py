@@ -187,7 +187,11 @@ BACKEND_GRAD_COVERAGE = (
     ("backends/acl/kernels/ops/conv_op.py", "ConvACL",
      "tests/backends/acl/test_acl.py::TestACL::test_conv_with_bias_grad",
      "npu_hardware"),
-    ("backends/acl/kernels/ops/cross_entropy_loss_op.py", "CrossEntropyLossACL",
+    # The maintained CE comparison differentiates the complete composition.
+    ("backends/acl/kernels/ops/cross_entropy_loss_op.py", "NLLLossACL",
+     "tests/backends/acl/test_acl_codeop_gradients.py::TestACLCodeOpGradients::test_cross_entropy_forward_and_gradient",
+     "npu_hardware"),
+    ("backends/acl/kernels/ops/softmax_op.py", "LogSoftmaxACL",
      "tests/backends/acl/test_acl_codeop_gradients.py::TestACLCodeOpGradients::test_cross_entropy_forward_and_gradient",
      "npu_hardware"),
     ("backends/acl/kernels/ops/flashattention_op.py", "FlashAttentionACL",
@@ -264,6 +268,9 @@ BACKEND_GRAD_COVERAGE = (
      "rocm_hardware_no_grad_test"),
 
     # ---- ACL / Ascend. No NPU on this machine. ----------------------------
+    ("backends/acl/kernels/ops/argsort_op.py", "ArgsortACL",
+     "tests/backends/acl/test_acl_argsort.py::test_argsort_full_values_indices_and_gradient",
+     "npu_hardware"),
     ("backends/acl/kernels/ops/arg_reduce_op.py", "ArgReduceACL",
      "tests/backends/acl/test_acl.py::TestACL::test_float_arg_reduce_backward_runs_on_acl",
      "npu_hardware"),

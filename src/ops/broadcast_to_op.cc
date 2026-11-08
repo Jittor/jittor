@@ -1,6 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2023 Jittor. All Rights Reserved. 
-// Maintainers: Dun Liang <randonlang@gmail.com>. 
+// Copyright (c) 2023 Jittor. All Rights Reserved.
+// Maintainers: Dun Liang <randonlang@gmail.com>.
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -9,6 +9,9 @@
 #include "core/var.h"
 #include "ops/broadcast_to_op.h"
 #include "ops/op_register.h"
+#ifndef JIT
+#include "core/grad.h"
+#endif
 
 namespace jittor {
 
@@ -16,8 +19,24 @@ namespace jittor {
 static auto make_reduce = op_constructor<VarPtr, Var*, NanoString, uint, uint>("reduce");
 static auto make_broadcast = op_constructor<VarPtr, Var*, Var*, uint, uint>("broadcast_to");
 static auto make_broadcast2 = op_constructor<VarPtr, Var*, NanoVector, uint, uint>("broadcast_to");
-    
-BroadcastToOp::BroadcastToOp(Var* x, Var* y, NanoVector dims) : x(x), y(y) {
+
+// Native scalar constants keep their computed/fused default; Torch views alias.
+static thread_local int duplicate_storage_view = -1;
+struct DuplicateBroadcastViewScope {
+    int previous;
+    explicit DuplicateBroadcastViewScope(bool enabled) : previous(duplicate_storage_view) {
+        duplicate_storage_view = enabled ? 1 : 0;
+    }
+    ~DuplicateBroadcastViewScope() { duplicate_storage_view = previous; }
+};
+static bool torch_broadcast_view_requested(Var* x) {
+    if (duplicate_storage_view >= 0) return duplicate_storage_view != 0;
+    return (get_autograd_policy() == 3 || torch_grad_edge_dtype_policy_enabled())
+        && !x->flag(VarFlags::_python_number);
+}
+
+BroadcastToOp::BroadcastToOp(Var* x, Var* y, NanoVector dims)
+    : x(x), y(y), preserve_scalar_view(torch_broadcast_view_requested(x)) {
     auto count = dims.size();
     // forward x if don't need broadcast
     if (y->num>=0 && !count && !need_broadcast(x, y->shape)) {
@@ -35,11 +54,12 @@ BroadcastToOp::BroadcastToOp(Var* x, Var* y, NanoVector dims) : x(x), y(y) {
     for (auto dim : dims) {
         if (dim<0) dim += ydim;
         USER_CHECK(dim>=0 && dim<ydim) << "Wrong dims number:" << dims;
-        bcast_mask |= 1u << dim; 
+        bcast_mask |= 1u << dim;
     }
 }
 
-BroadcastToOp::BroadcastToOp(Var* x, Var* y, uint dims_mask, uint keepdims_mask) : x(x), y(y) {
+BroadcastToOp::BroadcastToOp(Var* x, Var* y, uint dims_mask, uint keepdims_mask)
+    : x(x), y(y), preserve_scalar_view(torch_broadcast_view_requested(x)) {
     auto count = __builtin_popcount(dims_mask);
     // forward x if don't need broadcast
     if (y->num>=0 && !count && !need_broadcast(x, y->shape)) {
@@ -54,7 +74,8 @@ BroadcastToOp::BroadcastToOp(Var* x, Var* y, uint dims_mask, uint keepdims_mask)
     this->keepdims_mask = keepdims_mask;
 }
 
-BroadcastToOp::BroadcastToOp(Var* x, NanoVector shape, uint dims_mask, uint keepdims_mask) : x(x), y(nullptr), shape(shape) {
+BroadcastToOp::BroadcastToOp(Var* x, NanoVector shape, uint dims_mask, uint keepdims_mask)
+    : x(x), y(nullptr), shape(shape), preserve_scalar_view(torch_broadcast_view_requested(x)) {
     auto count = __builtin_popcount(dims_mask);
     if (!count) {
         forward(x);
@@ -68,7 +89,8 @@ BroadcastToOp::BroadcastToOp(Var* x, NanoVector shape, uint dims_mask, uint keep
     this->keepdims_mask = keepdims_mask;
 }
 
-BroadcastToOp::BroadcastToOp(Var* x, NanoVector shape, NanoVector dims) : x(x), y(nullptr), shape(shape) {
+BroadcastToOp::BroadcastToOp(Var* x, NanoVector shape, NanoVector dims)
+    : x(x), y(nullptr), shape(shape), preserve_scalar_view(torch_broadcast_view_requested(x)) {
     auto count = dims.size();
     // forward x if don't need broadcast
     if (!count && !need_broadcast(x, shape)) {
@@ -100,6 +122,7 @@ bool BroadcastToOp::need_broadcast(const Var* x, const NanoVector& shape) {
 }
 
 VarPtr BroadcastToOp::duplicate() {
+    DuplicateBroadcastViewScope preserve(preserve_scalar_view);
     if (y)
         return make_broadcast(x, y, bcast_mask, keepdims_mask);
     else
@@ -126,7 +149,7 @@ void BroadcastToOp::infer_shape() {
     auto ydim = yshapes.size();
     auto count = __builtin_popcount(bcast_mask&~keepdims_mask);
     auto zdim = std::max(uint64(xdim), uint64(ydim-count)) + count;
-    
+
     #ifdef _WIN32
     int64 zz[NanoVector::max_tensor_rank];
     #else
@@ -178,7 +201,8 @@ void BroadcastToOp::infer_shape() {
     // There is nothing to save by sharing four bytes, so a one-element source
     // keeps the computed form, whose output the fuser folds into the consumer
     // (`var_fused = 3` for a broadcast producer) instead of materializing.
-    expand_is_view = x->num != 1;
+    // Keep Native fusion by default; Torch requires the physical view.
+    expand_is_view = preserve_scalar_view || x->num != 1;
     if (expand_is_view) {
         vector<int64> strides(zdim);
         for (int i=int(zdim)-1, xi=int(xdim)-1; i>=0; --i) {
@@ -199,7 +223,7 @@ void BroadcastToOp::infer_shape() {
     // Placement only: a broadcast of a constant is still a constant with no
     // data anywhere. Promotion deliberately does not look at this bit.
     z->set_flag(VarFlags::_is_constant, x->flag(VarFlags::_is_constant));
-    LOGvvv << "Broadcast x(" >> x >> ") shape" << yshapes << "-> z(" >> z >> ")"; 
+    LOGvvv << "Broadcast x(" >> x >> ") shape" << yshapes << "-> z(" >> z >> ")";
 }
 
 void BroadcastToOp::jit_prepare(JK& jk) {

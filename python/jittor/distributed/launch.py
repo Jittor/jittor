@@ -164,34 +164,55 @@ def _exit_code(returncode):
 
 
 def _signal_rank_group(process, signum):
-    if process.poll() is not None:
-        return
-    try:
-        if os.name == "posix":
-            os.killpg(process.pid, signum)
-        else:
-            process.send_signal(signum)
-    except ProcessLookupError:
-        pass
-
-
-def _stop_all(procs, keep=()):
-    """Terminate every rank still running. SIGTERM first, then SIGKILL."""
-    alive = [(rank, p) for rank, (p, _) in enumerate(procs)
-             if rank not in keep and p.poll() is None]
-    for _, process in alive:
-        _signal_rank_group(process, signal.SIGTERM)
-    deadline = time.time() + _TERM_GRACE_S
-    for _, process in alive:
+    """Signal a rank and its workers, which share the rank's process group."""
+    if os.name == "posix":
         try:
-            process.wait(timeout=max(0.0, deadline - time.time()))
-        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signum)
+            return
+        except ProcessLookupError:
+            return
+    if process.poll() is None:
+        process.send_signal(signum)
+
+
+def _rank_group_alive(process):
+    if os.name != "posix":
+        return process.poll() is None
+    try:
+        os.killpg(process.pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+
+
+def _stop_all(procs):
+    """Stop each rank process group, including DataLoader worker children."""
+    for process, _ in procs:
+        _signal_rank_group(process, signal.SIGTERM)
+
+    deadline = time.monotonic() + _TERM_GRACE_S
+    while time.monotonic() < deadline:
+        for process, _ in procs:
+            if process.poll() is None:
+                try:
+                    process.wait(timeout=0)
+                except subprocess.TimeoutExpired:
+                    pass
+        if not any(_rank_group_alive(process) for process, _ in procs):
+            break
+        time.sleep(min(_POLL_S, max(0.0, deadline - time.monotonic())))
+
+    for process, _ in procs:
+        if _rank_group_alive(process):
             _signal_rank_group(process, signal.SIGKILL)
+        if process.poll() is None:
+            process.kill()
+        try:
+            process.wait(timeout=_TERM_GRACE_S)
+        except subprocess.TimeoutExpired:
+            process.kill()
             process.wait()
     for process, logf in procs:
-        if process.poll() is None:
-            _signal_rank_group(process, signal.SIGKILL)
-            process.wait()
         if not logf.closed:
             logf.close()
 
@@ -493,7 +514,7 @@ def main(argv=None):
                       file=sys.stderr, flush=True)
         rc = 1
     finally:
-        _stop_all(procs, keep=() if first_failure is None else (first_failure[0],))
+        _stop_all(procs)
         if control is not None:
             control.close()
         _cleanup(rootinfo)

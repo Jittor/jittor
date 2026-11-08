@@ -49,9 +49,8 @@ def _validate_sgd_options(options):
         value = options.get(name, False)
         if value:
             raise NotImplementedError("torch.optim.SGD(%s=True) is unsupported" % name)
-    if foreach:
-        raise NotImplementedError(
-            "torch.optim.SGD(foreach=True) is unsupported; use foreach=False")
+    if foreach and fused:
+        raise RuntimeError("`fused` and `foreach` cannot be `True` together.")
     lr, momentum = options.get("lr", .001), options.get("momentum", 0)
     dampening, weight_decay = options.get("dampening", 0), options.get("weight_decay", 0)
     if lr < 0 or momentum < 0 or weight_decay < 0:
@@ -94,10 +93,40 @@ def _validate_adam_groups(self):
         _validate_adam_options(dict(defaults, **group))
 
 
+def _restore_torch_moment_dtypes(groups):
+    """Torch moments follow parameter dtype; native adaptive state stays FP32."""
+    from jittor._core.dtypes import dtype_name
+    with jt.flag_scope(amp_reg=0):
+        for group in groups:
+            for key in ("m", "values"):
+                for index, parameter in enumerate(group["params"]):
+                    buffer = group[key][index]
+                    if dtype_name(buffer.dtype) != dtype_name(parameter.dtype):
+                        group[key][index] = buffer.cast(parameter.dtype).stop_grad()
+
+
+def add_adam_param_group(self, group):
+    if not isinstance(group, Mapping):
+        raise TypeError("param_group must be a mapping")
+    group = dict(group)
+    for name in ("foreach", "fused"):
+        group.setdefault(name, getattr(self, name, None))
+    _validate_adam_options(group)
+    state = get_install_context(jt).state["optimizer_frontend_native"]
+    var_type = state["tensor_type"]._frontend_backend.Var
+    group["params"] = ([group["params"]] if isinstance(group["params"], var_type)
+                       else list(group["params"]))
+    with tensor_frontend(state["tensor_type"]):
+        result = state["adam_add_param_group"](self, group)
+        _restore_torch_moment_dtypes(self.param_groups[-1:])
+        return result
+
+
 def initialize_adam(self, *args, **kwargs):
     options = {name: kwargs.pop(name, None) for name in ("foreach", "fused")}
     _validate_adam_options(options)
     result = _initialize_algorithm("Adam", self, args, kwargs)
+    _restore_torch_moment_dtypes(self.param_groups)
     self.foreach, self.fused = options["foreach"], options["fused"]
     for group in self.param_groups:
         for name, value in options.items():
@@ -106,22 +135,92 @@ def initialize_adam(self, *args, **kwargs):
     return result
 
 
-def initialize_adamw(self, *args, **kwargs):
-    # The public Torch signature's fifth positional argument is weight_decay.
-    foreach = kwargs.pop("foreach", None)
-    if foreach is not None and not isinstance(foreach, bool):
-        raise TypeError("foreach must be bool or None")
-    if foreach is True:
+def _validate_adamw_capturable(value):
+    if not isinstance(value, bool):
+        raise TypeError("capturable must be bool")
+    if value:
         raise NotImplementedError(
-            "torch.optim.AdamW(foreach=True) is not supported; use foreach=False"
-        )
-    if len(args) < 5 and "weight_decay" not in kwargs:
-        kwargs["weight_decay"] = 0.01
-    result = _initialize_algorithm("AdamW", self, args, kwargs)
-    if foreach is not None:
-        self.foreach = foreach
-        for group in self.param_groups:
-            group.setdefault("foreach", foreach)
+            "torch.optim.AdamW(capturable=True) is unsupported; use capturable=False")
+
+
+def _validate_adamw_options(options):
+    _validate_adamw_capturable(options.get("capturable", False))
+    for name in ("foreach", "fused"):
+        value = options.get(name)
+        if value is not None and not isinstance(value, bool):
+            raise TypeError("%s must be bool or None" % name)
+    for name in ("amsgrad", "maximize", "differentiable"):
+        value = options.get(name, False)
+        if not isinstance(value, bool):
+            raise TypeError("%s must be bool" % name)
+        if value:
+            raise NotImplementedError(
+                "torch.optim.AdamW(%s=True) is unsupported" % name)
+    if options.get("foreach") and options.get("fused"):
+        raise RuntimeError("`fused` and `foreach` cannot be `True` together.")
+    if options.get("decoupled_weight_decay", True) is not True:
+        raise NotImplementedError(
+            "torch.optim.AdamW(decoupled_weight_decay=False) is unsupported")
+
+
+def _validate_adamw_capturable_groups(self):
+    # Keep the step adapter's single preflight before any state or parameter
+    # update, including after callers mutate public options or restore groups.
+    _validate_adamw_capturable(getattr(self, "capturable", False))
+    for group in self.param_groups:
+        _validate_adamw_options(group)
+
+
+def _adamw_defaults(self):
+    return self._torch_adamw_defaults
+
+
+def _adamw_complete_group(group, defaults):
+    group = dict(group)
+    for name, value in defaults.items():
+        group.setdefault(name, value)
+    _validate_adamw_options(group)
+    return group
+
+
+def add_adamw_param_group(self, group):
+    if not isinstance(group, Mapping):
+        raise TypeError("param_group must be a mapping")
+    group = _adamw_complete_group(group, self.defaults)
+    state = get_install_context(jt).state["optimizer_frontend_native"]
+    var_type = state["tensor_type"]._frontend_backend.Var
+    group["params"] = ([group["params"]] if isinstance(group["params"], var_type)
+                       else list(group["params"]))
+    with tensor_frontend(state["tensor_type"]):
+        result = state["adamw_add_param_group"](self, group)
+        _restore_torch_moment_dtypes(self.param_groups[-1:])
+        return result
+
+
+def initialize_adamw(self, params, lr=1e-3, betas=(.9, .999), eps=1e-8,
+                     weight_decay=.01, amsgrad=False, *, maximize=False,
+                     foreach=None, capturable=False, differentiable=False,
+                     fused=None):
+    defaults = dict(lr=lr, betas=betas, eps=eps, weight_decay=weight_decay,
+                    amsgrad=amsgrad, maximize=maximize, foreach=foreach,
+                    capturable=capturable, differentiable=differentiable,
+                    fused=fused, decoupled_weight_decay=True)
+    _validate_adamw_options(defaults)
+    state = get_install_context(jt).state["optimizer_frontend_native"]
+    if isinstance(params, state["tensor_type"]._frontend_backend.Var):
+        raise TypeError("optimizer params must be an iterable of tensors or parameter groups")
+    params = [_adamw_complete_group(group, defaults)
+              if isinstance(group, Mapping) else group for group in params]
+    self._torch_adamw_defaults = defaults
+    # Native AdamW orders eps before betas; use names at this boundary.
+    result = _initialize_algorithm("AdamW", self, (params, lr),
+                                  dict(eps=eps, betas=betas,
+                                       weight_decay=weight_decay, fused=fused))
+    _restore_torch_moment_dtypes(self.param_groups)
+    self.capturable, self.foreach = capturable, foreach
+    for group in self.param_groups:
+        for name, value in defaults.items():
+            group.setdefault(name, value)
     return result
 
 
@@ -161,6 +260,9 @@ def make_optimizer_frontend(native, tensor_type):
     get_install_context(tensor_type._frontend_backend).state["optimizer_frontend_native"] = MappingProxyType({
         "tensor_type": tensor_type,
         "base_init": native.Optimizer.__init__,
+        "adam_add_param_group": native.Adam.add_param_group,
+        "adamw_add_param_group": (native.AdamW.add_param_group
+                                 if hasattr(native, "AdamW") else None),
         "algorithms": MappingProxyType({name: getattr(native, name).__init__
                                        for name in _ALGORITHM_INITIALIZERS if hasattr(native, name)}),
     })
@@ -181,6 +283,11 @@ def make_optimizer_frontend(native, tensor_type):
             "__module__": "torch.optim",
             "__init__": _ALGORITHM_INITIALIZERS[name],
         }
+        if name == "Adam":
+            attributes["add_param_group"] = add_adam_param_group
+        if name == "AdamW":
+            attributes.update(defaults=property(_adamw_defaults),
+                              add_param_group=add_adamw_param_group)
         if name == "Adagrad":
             attributes["defaults"] = property(adagrad_defaults)
         setattr(module, name, type(name, (algorithm, base), attributes))

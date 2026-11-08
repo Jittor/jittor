@@ -398,9 +398,115 @@ def test_acl_rfft_keeps_lazy_dft_constants_alive():
             )
 
 
+@pytest.mark.parametrize(
+    "shape,index",
+    [
+        ((3, 5), (slice(None), [0, 3, 1])),
+        ((3, 5), (slice(None), [-1, 0, -3])),
+        ((3, 5), (slice(None), [2, 2, -1, 2])),
+        ((5, 3), ([-1, 0, 0], slice(None))),
+        ((2, 5, 3), (slice(None), [4, 1, 1, -5], slice(None))),
+        ((2, 3, 5), (Ellipsis, [-1, 0, -1])),
+        ((3, 5), (slice(None), np.array([4, 0, 4], dtype=np.int64))),
+        ((3, 5), ([1, 1, 0], [2, 2, 4])),
+    ],
+    ids=["positive", "negative", "repeated", "rows", "middle", "ellipsis",
+         "numpy", "paired"],
+)
+def test_acl_integer_sequence_getitem_forward_and_backward(shape, index):
+    if not _test_capability.check_accelerator("acl", backend=jt).enabled:
+        pytest.skip("ACL backend is unavailable")
+    from jittor._runtime.fallback import forbid_backend_fallbacks
+
+    source = np.arange(np.prod(shape), dtype=np.float32).reshape(shape)
+    source = (source - source.size // 2) / np.float32(8)
+    expected = source[index]
+    weights = ((np.arange(expected.size).reshape(expected.shape) % 7 + 1)
+               .astype(np.float32) / np.float32(8))
+    coordinates = np.arange(source.size).reshape(shape)[index]
+    expected_gradient = np.zeros(source.size, dtype=np.float32)
+    np.add.at(expected_gradient, coordinates.reshape(-1), weights.reshape(-1))
+    expected_gradient = expected_gradient.reshape(shape)
+    before = jt.core.backend_fallback_count()
+
+    with jt.flag_scope(use_acl=1, use_cuda=1), jt.runtime.scope(
+            backend_fallback="error"), forbid_backend_fallbacks():
+        x = jt.array(source).start_grad()
+        output = x[index]
+        gradient = jt.grad((output * jt.array(weights)).sum(), x)
+        backend, device = jt.core.dispatch_context([x])
+        assert backend == "acl"
+        for value in (x, output, gradient):
+            assert tuple(jt.core.dispatch_context([value])) == ("acl", device)
+            assert str(value.dtype) == "float32"
+        actual, actual_gradient = jt.fetch_sync([output, gradient])
+
+    assert jt.core.backend_fallback_count() - before == 0
+    np.testing.assert_array_equal(actual, expected)
+    np.testing.assert_array_equal(actual_gradient, expected_gradient)
+
+
+def test_acl_integer_sequence_getitem_preserves_integer_values():
+    if not _test_capability.check_accelerator("acl", backend=jt).enabled:
+        pytest.skip("ACL backend is unavailable")
+    from jittor._runtime.fallback import forbid_backend_fallbacks
+
+    source = np.arange(10, dtype=np.int64).reshape(2, 5)
+    before = jt.core.backend_fallback_count()
+    with jt.flag_scope(use_acl=1, use_cuda=1), jt.runtime.scope(
+            backend_fallback="error"), forbid_backend_fallbacks():
+        x = jt.array(source, dtype="int64")
+        output = x[:, [-1, 0]]
+        backend, device = jt.core.dispatch_context([x])
+        assert backend == "acl"
+        assert tuple(jt.core.dispatch_context([output])) == ("acl", device)
+        assert str(output.dtype) == "int64"
+        actual = output.numpy()
+    assert jt.core.backend_fallback_count() - before == 0
+    np.testing.assert_array_equal(actual, source[:, [-1, 0]])
+
+
 if __name__ == "__main__":
     test_acl_indexing()
     raise SystemExit(1 if FAIL else 0)
+
+
+@pytest.mark.parametrize("index,dtype", [
+    (None, np.float32),
+    ((None,), np.float32),
+    ((None, slice(None), slice(None)), np.float32),
+    ((Ellipsis, None), np.float32),
+    ((None, None, Ellipsis), np.float32),
+    (([1, 0, 1], None, slice(None)), np.float32),
+    (None, np.int64),
+    ((None,), np.int64),
+], ids=["none", "tuple-none", "none-full", "trailing-none", "multiple-none",
+        "integer-list-none", "shape-metadata-none", "shape-metadata-tuple-none"])
+def test_acl_getitem_none_axes_preserve_values_dtype_and_full_gradient(index, dtype):
+    if not _test_capability.check_accelerator('acl', backend=jt).enabled:
+        pytest.skip("ACL backend is unavailable")
+    from jittor._runtime.fallback import forbid_backend_fallbacks
+
+    source = (np.arange(6, dtype=np.float32).reshape(2, 3) / 8
+              if dtype == np.float32 else np.array([2, 3], dtype=np.int64))
+    with jt.flag_scope(use_acl=1, use_cuda=1), forbid_backend_fallbacks():
+        fallback_before = jt.core.backend_fallback_count()
+        value = jt.array(source)
+        output = value[index]
+        assert output.dtype == value.dtype
+        assert tuple(jt.core.dispatch_context([output])) == tuple(jt.core.dispatch_context([value]))
+        assert jt.core.dispatch_context([output])[0] == "acl"
+        np.testing.assert_array_equal(output.numpy(), source[index])
+        if dtype == np.float32:
+            weights = ((np.arange(output.numel(), dtype=np.float32) % 8) / 8 - .5).reshape(output.shape)
+            gradient = jt.grad((output * jt.array(weights)).sum(), value)
+            expected = np.zeros(source.size, dtype=np.float32)
+            selected = np.arange(source.size).reshape(source.shape)[index]
+            np.add.at(expected, selected.reshape(-1), weights.reshape(-1))
+            assert gradient.dtype == value.dtype
+            assert tuple(jt.core.dispatch_context([gradient])) == tuple(jt.core.dispatch_context([value]))
+            np.testing.assert_array_equal(gradient.numpy(), expected.reshape(source.shape))
+        assert jt.core.backend_fallback_count() == fallback_before
 
 
 def test_acl_bool_slice_assignment_matches_numpy():

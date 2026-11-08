@@ -128,6 +128,30 @@ class EcosystemParityNPU(EcosystemComparison):
     forward_tolerance = 5e-3
     backward_tolerance = 2e-2
 
+    def test_transformers_gpt2(self):
+        self._compare("transformers_gpt2")
+
+    def test_transformers_llama(self):
+        self._compare("transformers_llama")
+
+    def test_transformers_bert(self):
+        self._compare("transformers_bert")
+
+    def test_transformers_vit(self):
+        self._compare("transformers_vit")
+
+    def test_transformers_t5(self):
+        self._compare("transformers_t5")
+
+    def test_transformers_whisper(self):
+        self._compare("transformers_whisper")
+
+    def test_peft_lora_llama(self):
+        self._compare("peft_lora_llama")
+
+    def test_peft_lora_qwen2(self):
+        self._compare("peft_lora_qwen2")
+
     def test_diffusers_unet2d(self):
         self._compare("diffusers_unet2d")
 

@@ -281,7 +281,7 @@ void CudnnConvOp::jit_run() {
         conv_compute_type, conv_math_key,
         filterFormat_@WFORMAT, groups, max_workspace_ratio,
         dimX, strideX, dimW, dimY, strideY,
-        padA, convstrideA, dilationA);
+        padA, convstrideA, dilationA, benchmark, cudnn_deterministic);
     auto iter = fwd_algo_cache.find(algo_key);
     
     if (iter!=fwd_algo_cache.end()) algo = iter->second;
@@ -324,11 +324,13 @@ void CudnnConvOp::jit_run() {
         }
         int best_algo_idx=-1;
         for (int i = 0; i < perf_count; i++) 
-            if (perf_results[i].status == CUDNN_STATUS_SUCCESS){
+            if (cudnn_conv_algorithm_allowed(perf_results[i])){
                 best_algo_idx=i;
                 break;
             }
-        ASSERT(best_algo_idx!=-1);
+        ASSERT(best_algo_idx!=-1)
+            << "No supported cuDNN convolution algorithm satisfies the requested policy;"
+            << "deterministic=" << cudnn_deterministic << "benchmark=" << benchmark;
         algo=perf_results[best_algo_idx].algo;
         // Cache the choice whether it was measured or merely predicted.
         // cudnnGet*Algorithm_v7 is deterministic for a descriptor set, so its

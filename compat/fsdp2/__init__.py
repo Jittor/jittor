@@ -101,7 +101,9 @@ from jittor.compat import fsdp_hooks as _fsdp_hooks
 # plumbing, so it stays underscore-prefixed and out of that surface.
 from ._state_dict import (_get_full_state_dict, _load_full_state_dict,
                          _gather_optimizer_state_dict, _shard_optimizer_state_dict,
-                         _optimizer_checkpoint_parameter_names)
+                         _optimizer_checkpoint_parameter_names,
+                         _get_sharded_state_dict, _load_sharded_state_dict,
+                         _get_sharded_optimizer_state_dict, _local_sharded_optimizer_state_dict)
 
 _fsdp_hooks.register(sys.modules[__name__])
 

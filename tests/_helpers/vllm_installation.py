@@ -93,5 +93,3 @@ def installation(tmp_path):
     with mock.patch.object(contract.metadata, 'distribution', return_value=dist), \
             mock.patch.object(contract, 'WHEEL_SHA256', sha(wheel.read_bytes())):
         yield source, module, wheel, binding, dist, rows, record
-
-

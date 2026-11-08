@@ -1,14 +1,4 @@
-"""`torch.backends.cudnn.flags(...)`: set the switches, then put them back.
-
-Missing entirely, so MiniMax-H3's reference path died with
-`module 'torch.backends.cudnn' has no attribute 'flags'`.
-
-What it does and does not do: it restores the attributes, it does **not**
-change which kernels run. cudnn's four switches here are already settings
-nothing acts on -- convolution picks its own path -- and this does not make
-them act. What it buys is that the value read back inside the block is the one
-that was set, and that the block is not an AttributeError.
-"""
+"""cuDNN contexts restore settings; determinism reaches native convolution policy."""
 import unittest
 
 import jittor as jt
@@ -24,6 +14,36 @@ class TestCudnnFlags(unittest.TestCase):
     def tearDown(self):
         (self.cudnn.enabled, self.cudnn.benchmark,
          self.cudnn.deterministic) = self.before
+
+    def test_deterministic_write_reaches_native_policy(self):
+        native = getattr(jt, "cudnn", None)
+        if native is None:
+            self.skipTest("cuDNN unavailable")
+        before = native.get_deterministic()
+        self.addCleanup(native.set_deterministic, before)
+        for enabled in (True, False, True):
+            self.cudnn.deterministic = enabled
+            self.assertEqual(native.get_deterministic(), int(enabled))
+            self.assertIs(self.cudnn.deterministic, enabled)
+
+    def test_native_deterministic_changes_are_visible(self):
+        native = getattr(jt, "cudnn", None)
+        if native is None:
+            self.skipTest("cuDNN unavailable")
+        before = native.get_deterministic()
+        self.addCleanup(native.set_deterministic, before)
+        for enabled in (1, 0, 1):
+            native.set_deterministic(enabled)
+            self.assertEqual(self.cudnn.deterministic, bool(enabled))
+
+    def test_flags_restore_native_deterministic_policy(self):
+        native = getattr(jt, "cudnn", None)
+        if native is None:
+            self.skipTest("cuDNN unavailable")
+        before = native.get_deterministic()
+        with self.cudnn.flags(deterministic=not bool(before), benchmark=False):
+            self.assertEqual(native.get_deterministic(), int(not bool(before)))
+        self.assertEqual(native.get_deterministic(), before)
 
     def test_it_exists(self):
         self.assertTrue(callable(self.cudnn.flags))

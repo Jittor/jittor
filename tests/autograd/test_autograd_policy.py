@@ -68,5 +68,43 @@ class TestAutogradPolicy(unittest.TestCase):
             jt.autograd.NATIVE.stop_outputs_when_inputs_stopped = True
 
 
+    def test_torch_edge_dtype_policy_is_opt_in_and_native_default_is_unchanged(self):
+        class RawVJP(jt.Function):
+            def execute(self, value, coefficient):
+                self.coefficient = coefficient
+                return value.cast("float32") * coefficient
+
+            def grad(self, upstream):
+                return upstream * self.coefficient, None
+
+        setter = jt.core._set_torch_grad_edge_dtypes
+        original = setter(False)
+        try:
+            with jt.flag_scope(auto_mixed_precision_level=0, amp_reg=0):
+                def compute(dtype, half_ulp):
+                    value = jt.array([.25]).cast(dtype).start_grad()
+                    positive = jt.array([1. + half_ulp]).cast("float32").stop_grad()
+                    negative = jt.array([-1.]).cast("float32").stop_grad()
+                    loss = (RawVJP()(value, positive) + RawVJP()(value, negative)).sum()
+                    return jt.grad(loss, [value])[0]
+                for dtype, half_ulp in (("bfloat16", 2. ** -8),
+                                        ("float16", 2. ** -11)):
+                    baseline = compute(dtype, half_ulp)
+                    self.assertEqual(baseline.dtype, "float32")
+                    self.assertEqual(float(baseline.numpy()[0]), half_ulp)
+                    self.assertFalse(setter(True))
+                    try:
+                        normalized = compute(dtype, half_ulp)
+                        self.assertEqual(normalized.dtype, dtype)
+                        self.assertEqual(float(normalized.float32().numpy()[0]), 0.)
+                    finally:
+                        self.assertTrue(setter(False))
+                    restored = compute(dtype, half_ulp)
+                    self.assertEqual(restored.dtype, "float32")
+                    self.assertEqual(float(restored.numpy()[0]), half_ulp)
+        finally:
+            setter(original)
+
+
 if __name__ == "__main__":
     unittest.main()

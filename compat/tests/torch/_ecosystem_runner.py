@@ -134,17 +134,16 @@ def _import_torch(runtime):
     return torch
 
 
-def _to_device_callable():
-    """Move a host-backed tensor onto Jittor's selected accelerator.
-
-    Jittor's global device flag covers tensors it creates itself; a tensor built
-    from a host array keeps its host residency, so it must be moved explicitly
-    before it can take part in a device-resident graph. Real PyTorch's
-    ``from_numpy`` is host-resident for the same reason and the caller moves it.
-    """
+def _to_device_callable(device="cuda"):
+    """Explicitly relocate host-backed values to the requested device."""
     def move(tensor):
-        cuda = getattr(tensor, "cuda", None)
-        return cuda() if callable(cuda) else tensor
+        transfer = getattr(tensor, "to", None)
+        if callable(transfer):
+            return transfer(device)
+        transfer = getattr(tensor, device, None)
+        if not callable(transfer):
+            raise RuntimeError("tensor cannot be placed on {}".format(device))
+        return transfer()
 
     return move
 
@@ -171,12 +170,10 @@ def _select_device(torch, runtime, device, *, policy_stack=None):
             if not _test_capability.check_accelerator("acl", backend=jt).enabled:
                 raise SystemExit("ACL is unavailable in this Jittor build")
             policy_stack.enter_context(jt.runtime.scope(use_cuda=1, use_acl=1))
-            # Same residency issue as CUDA, but the ACL path is verified on the
-            # NPU gate rather than here; leave it identity until it can be run.
-            return lambda tensor: tensor
+            return _to_device_callable("npu")
         else:
             policy_stack.enter_context(jt.runtime.scope(use_cuda=0))
-        return lambda tensor: tensor
+        return _to_device_callable("cpu")
     if device == "cuda":
         if not torch.cuda.is_available():
             raise SystemExit("CUDA is unavailable in this PyTorch build")
@@ -202,22 +199,52 @@ def _device_in_use(torch, runtime, device, output):
     if runtime == "jittor":
         import jittor as jt
 
-        return jt.core.dispatch_context([output])[0]
+        backend = jt.core.dispatch_context([output])[0]
+        return "npu" if backend == "acl" else backend
     return output.device.type
 
 
-def _assert_jittor_cuda_placement(torch, values, label):
+def _assert_jittor_placement(torch, values, label, device):
+    """Check each real Var dispatch, including the selected accelerator index."""
     import jittor as jt
 
-    expected_index = int(torch.cuda.current_device())
+    expected_backend = "acl" if device == "npu" else device
+    expected_index = None
+    if device != "cpu":
+        expected_index = int(getattr(torch, device).current_device())
     for name, value in values:
         backend, index = jt.core.dispatch_context([value])
-        if backend != "cuda" or index != expected_index:
+        if backend != expected_backend or (expected_index is not None and index != expected_index):
             raise RuntimeError(
-                "{} {} ran on {}:{}, expected cuda:{}".format(
-                    label, name, backend, index, expected_index
+                "{} {} ran on {}:{}, expected {}:{}".format(
+                    label, name, backend, index, expected_backend, expected_index
                 )
             )
+
+
+def _assert_jittor_cuda_placement(torch, values, label):
+    """Retain the existing CUDA test helper while sharing the device contract."""
+    _assert_jittor_placement(torch, values, label, "cuda")
+
+
+def _parameter_grad_state(model):
+    entries = list(model.named_parameters())
+    return {
+        "trainable": sorted(name for name, value in entries if bool(value.requires_grad)),
+        "frozen": sorted(name for name, value in entries if not bool(value.requires_grad)),
+    }
+
+
+def _evaluate_preserving_parameter_grads(model):
+    """Evaluation disables dropout while preserving PEFT's exact freeze set."""
+    expected = _parameter_grad_state(model)
+    model.eval()
+    trainable = set(expected["trainable"])
+    for name, parameter in model.named_parameters():
+        parameter.requires_grad_(name in trainable)
+    if _parameter_grad_state(model) != expected:
+        raise AssertionError("model.eval() changed the parameter trainability contract")
+    return expected
 
 
 def _backend_report(runtime):
@@ -364,14 +391,9 @@ def _run(policy_stack):
             name: bool(parameter.requires_grad)
             for name, parameter in model.named_parameters()
         }
-        model.eval()
-        # Keep module parameters and generated inputs on the same real device.
-        # Jittor normally creates Vars on the scoped accelerator, but modules
-        # assembled by downstream tuners can retain host-backed parameters;
-        # an explicit migration also matches the native Torch runner path.
-        if options.device != "cpu":
-            model.to(options.device)
-        model.eval()
+        # Initializers and from_numpy can retain host residency independently
+        # of the default backend, so both runtimes explicitly move the model.
+        model.to(options.device)
 
         # ``state_dict`` is not always complete: ms-swift's tuner deliberately
         # reports only its adapter, so transferring it would leave the two runtimes
@@ -411,41 +433,21 @@ def _run(policy_stack):
                 },
             )
 
-        # Jittor's ``eval()`` stops gradients on every parameter. Restore each
-        # parameter's original state so PEFT's frozen base remains frozen.
-        for name, parameter in model.named_parameters():
-            trainable = initial_trainability[name]
-            if options.runtime == "jittor":
-                transition = getattr(
-                    parameter, "start_grad" if trainable else "stop_grad", None
-                )
-                if callable(transition):
-                    transition()
-                elif trainable:
-                    parameter.requires_grad_(True)
-                else:
-                    parameter.requires_grad_(False)
-            else:
-                parameter.requires_grad_(trainable)
-
+        _evaluate_preserving_parameter_grads(model)
         actual_trainability = {
             name: bool(parameter.requires_grad)
             for name, parameter in model.named_parameters()
         }
         if actual_trainability != initial_trainability:
-            raise AssertionError(
-                "model.eval() changed the parameter trainability contract"
-            )
+            raise AssertionError("model transfer changed the parameter trainability contract")
 
         inputs = _make_inputs(torch, input_spec, options.seed + 1, to_device)
-        if options.runtime == "jittor" and options.device == "cuda":
-            _assert_jittor_cuda_placement(
-                torch, list(model.named_parameters()), "parameter"
-            )
-            _assert_jittor_cuda_placement(torch, list(inputs.items()), "input")
+        if options.runtime == "jittor":
+            _assert_jittor_placement(torch, transferable(), "model tensor", options.device)
+            _assert_jittor_placement(torch, list(inputs.items()), "input", options.device)
         output = _primary_output(model(**inputs))
-        if options.runtime == "jittor" and options.device == "cuda":
-            _assert_jittor_cuda_placement(torch, [("output", output)], "output")
+        if options.runtime == "jittor":
+            _assert_jittor_placement(torch, [("output", output)], "output", options.device)
 
         weights = np.random.RandomState(options.seed + 2)
         loss_weights = weights.randn(*tuple(output.shape)).astype("float32")
@@ -459,11 +461,15 @@ def _run(policy_stack):
             grad = getattr(parameter, "grad", None)
             if grad is None:
                 continue
+            if options.runtime == "jittor":
+                _assert_jittor_placement(torch, [(name, grad)], "parameter gradient", options.device)
             parameter_grads.append(name)
             arrays["grad::" + name] = _numpy_snapshot(grad)
         for name, tensor in inputs.items():
             grad = getattr(tensor, "grad", None)
             if grad is not None:
+                if options.runtime == "jittor":
+                    _assert_jittor_placement(torch, [(name, grad)], "input gradient", options.device)
                 arrays["ingrad::" + name] = _numpy_snapshot(grad)
 
         # Timing runs after correctness capture. Inputs and loss weights are already

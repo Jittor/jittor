@@ -159,10 +159,10 @@ EXTERN_LIB void backend_copy_async(void* dst, Device dst_device, const void* src
 EXTERN_LIB void backend_synchronize(Device device);
 EXTERN_LIB BackendStream backend_stream(Device device, BackendStreamKind kind);
 EXTERN_LIB BackendEvent backend_event(Device device, bool timing = false);
-// The accelerator's deterministic-algorithm policy. Unlike graph capture
-// below, these throw where the backend has no such control: "deterministic"
-// is a promise about results, and a caller that asked for it has no fallback
-// that would still keep it.
+// The accelerator provider's deterministic-algorithm policy. With neither
+// callback, Jittor enforcement is disabled: querying or setting false is valid,
+// while setting true is refused. Partial providers are invalid. A complete
+// provider owns the actual policy and must confirm every write by readback.
 // @pyjt(backend_set_deterministic_algorithms)
 void backend_set_deterministic_algorithms(bool enabled);
 // @pyjt(backend_get_deterministic_algorithms)

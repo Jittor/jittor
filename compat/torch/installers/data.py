@@ -459,6 +459,15 @@ def _default_collate(batch):
     return batch
 
 
+def _fetch_loader_batch(loader, batch_indices):
+    batch = _tensor_dataset_batch(loader, batch_indices)
+    if batch is not None:
+        return batch
+    values = (batch_indices if loader._iterable_dataset else
+              [loader.dataset[i] for i in batch_indices])
+    return loader.collate_fn(values[0] if loader.batch_size is None else values)
+
+
 class _BaseDataLoaderIter:
     def __iter__(self):
         return self
@@ -488,12 +497,7 @@ class _SingleProcessDataLoaderIter(_BaseDataLoaderIter):
 
     def __next__(self):
         batch_indices = next(self._batch_iter)
-        batch = _tensor_dataset_batch(self._loader, batch_indices)
-        if batch is None:
-            values = (batch_indices if self._loader._iterable_dataset else
-                      [self._loader.dataset[i] for i in batch_indices])
-            batch = self._loader.collate_fn(
-                values[0] if self._loader.batch_size is None else values)
+        batch = _fetch_loader_batch(self._loader, batch_indices)
         self._cursor += 1
         return batch
 
@@ -621,13 +625,6 @@ class _MultiProcessingDataLoaderIter(_BaseDataLoaderIter):
 
     def _fetch(self, batch_indices, worker_info, task_state):
         loader = self._loader
-        def fetch_batch():
-            batch = _tensor_dataset_batch(loader, batch_indices)
-            if batch is not None:
-                return batch
-            values = (batch_indices if loader._iterable_dataset else
-                      [loader.dataset[i] for i in batch_indices])
-            return loader.collate_fn(values[0] if loader.batch_size is None else values)
         previous_info = getattr(_worker_state, "info", None)
         previous_task_state = getattr(_worker_state, "task_state", None)
         _worker_state.info = worker_info
@@ -635,7 +632,7 @@ class _MultiProcessingDataLoaderIter(_BaseDataLoaderIter):
         try:
             return _run_with_worker_rng(
                 worker_info,
-                fetch_batch,
+                lambda: _fetch_loader_batch(loader, batch_indices),
             )
         finally:
             if previous_info is None:

@@ -178,6 +178,33 @@ class SetItemACL(jt.Function):
         self.input_slice = slices
         if not isinstance(value, jt.Var):
             self.value_var = False
+        # New axes affect the logical assignment shape, not base storage.
+        # Keep this normalization within bool basic assignment; other existing
+        # indexing and dtype paths retain their established owner unchanged.
+        basic = slices if isinstance(slices, tuple) else (slices,)
+        if (_jittor_dtype_name(x.dtype) == "bool" and any(item is None for item in basic)
+                and all(item is None or item is Ellipsis or isinstance(item, (int, slice)) for item in basic)):
+            original_shape = tuple(x.shape)
+            consumed = sum(item is not None and item is not Ellipsis for item in basic)
+            missing = x.ndim - consumed
+            if missing < 0 or sum(item is Ellipsis for item in basic) > 1:
+                raise IndexError("too many indices for boolean assignment")
+            expanded = []
+            for item in basic:
+                expanded.extend([slice(None)] * missing if item is Ellipsis else [item])
+            if not any(item is Ellipsis for item in basic):
+                expanded.extend([slice(None)] * missing)
+            shape, normalized, axis = [], [], 0
+            for item in expanded:
+                if item is None:
+                    shape.append(1)
+                    normalized.append(slice(None))
+                else:
+                    shape.append(x.shape[axis])
+                    normalized.append(item)
+                    axis += 1
+            result = SetItemACL()(x.reshape(shape), tuple(normalized), value)
+            return result.reshape(original_shape)
         if isinstance(slices, jt.Var):
             if _jittor_dtype_name(slices.dtype) == "bool":
                 scalar_value = isinstance(value, (int, float)) or (
@@ -436,23 +463,21 @@ class SetItemACL(jt.Function):
         )
         # A partial writer must depend on the entire initialized base. A
         # write-only clone output loses this dependency and may be zero-strided.
-        # CANN's StridedSliceAssignV2 takes int8 but refuses bool, so a boolean
-        # assignment goes through int8 and comes back. The value is normalized
-        # to bool first: narrowing 256 straight to int8 would store a 0.
-        bool_payload = _jittor_dtype_name(x.dtype) == "bool"
-        base = x
-        if bool_payload:
-            base = x.cast("int8")
-            value = value.cast("bool").cast("int8")
-        inputs = [value, base.contiguous()]
+        # CANN StridedSliceAssignV2 accepts INT8 but rejects BOOL. The exact
+        # 0/1 lowering preserves assignment and broadcast semantics without a
+        # host fallback, then restores the public bool result.
+        boolean_storage = _jittor_dtype_name(x.dtype) == "bool"
+        base = x.int8() if boolean_storage else x
+        assigned = value.cast("bool").int8() if boolean_storage else value
+        inputs = [assigned, base.contiguous()]
         outputs = [jt.empty(base.shape, base.dtype)]
         result = setitem_forward(
             "StridedSliceAssignV2", inputs=inputs, outputs=outputs, attr_code=attr_code
         )[0]
+        if boolean_storage:
+            result = result.cast("bool")
         if expand_dim:
             result = result.squeeze(-1)
-        if bool_payload:
-            result = result.cast("bool")
         # result.sync()
         return result
 

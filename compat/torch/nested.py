@@ -234,7 +234,14 @@ class _NestedTensor:
         return [cast(Any, t).tolist() for t in self._tensors]
 
     def __reduce__(self):
-        return (_rebuild_nested_tensor, ([(t.numpy(), _jittor_dtype_name(t.dtype)) for t in self._tensors], self._ragged_idx))
+        encoded = []
+        for tensor in self._tensors:
+            dtype = _jittor_dtype_name(tensor.dtype)
+            array = tensor.numpy()
+            if dtype == "bfloat16":
+                array = _numpy_bfloat16_storage(array)
+            encoded.append((array, dtype))
+        return (_rebuild_nested_tensor, (encoded, self._ragged_idx))
 
     def __repr__(self):
         return f"NestedTensor(values={self._values}, offsets={self._offsets})"
@@ -267,7 +274,20 @@ def nested_tensor_rebuild(template, values, offsets, *, lengths=None,
         values, offsets, ragged_idx=template._ragged_idx, lengths=lengths)
 
 
-def _rebuild_var_from_numpy(np_arr, dtype_str=None):
+def _numpy_bfloat16_storage(array):
+    """Return BF16 storage words, accepting legacy widened FP32 payloads."""
+    array = np.asarray(array)
+    if array.dtype == np.dtype("float32"):
+        # Native BF16 numpy/fetch widens by shifting bits, with no rounding.
+        # Reversing that representation preserves signed zero and NaN payloads;
+        # a numeric FP32->BF16 cast may canonicalize those payloads.
+        array = (array.view(np.uint32) >> 16).astype(np.uint16)
+    elif array.dtype != np.dtype("uint16"):
+        raise TypeError("BF16 checkpoint storage must be uint16 or legacy float32")
+    return np.array(array, dtype=np.uint16, copy=True, order="C")
+
+
+def _rebuild_var_from_numpy(np_arr, dtype_str=None, device=None):
     """Reconstruct a jittor Var from a (numpy array, dtype string) pair.
 
     Module-level so pickle can reference it by qualified name. Used as the
@@ -279,13 +299,19 @@ def _rebuild_var_from_numpy(np_arr, dtype_str=None):
     of token tensors to a reward actor)."""
     from .tensor_state import compatibility_owner
     target = compatibility_owner(jt)
+    if dtype_str is not None and _jittor_dtype_name(dtype_str) == "bfloat16":
+        from .frontend import tensor_frontend
+        storage = _numpy_bfloat16_storage(np_arr)
+        # Reuse the native UInt16 storage/reinterpret owner used by sharded
+        # checkpoints. Do not round the already encoded BF16 words again.
+        with tensor_frontend(target.Var, device=device):
+            carrier = jt.array(storage, dtype="uint16").stop_grad()
+            return jt.reinterpret_view(carrier, tuple(storage.shape), "bfloat16").stop_grad()
     if target is not jt:
-        return target.tensor(np_arr, dtype=dtype_str)
+        return target.tensor(np_arr, dtype=dtype_str, device=device)
     v = jt.array(np_arr)
     if dtype_str is not None and _jittor_dtype_name(v.dtype) != dtype_str:
-        # numpy can't represent bfloat16 (.numpy() upcasts to float32); restore
-        # the original dtype. Values are preserved (bf16->fp32 is lossless and
-        # the original was already bf16-representable).
+        # Other legacy payloads retain the original numeric conversion route.
         try:
             v = cast(Any, v).astype(_jittor_dtype_name(dtype_str))
         except EXPECTED as exc:

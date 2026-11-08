@@ -71,18 +71,12 @@ def repeat_interleave(x,repeats,dim=None,output_size=None):
         dim += x.ndim
 
     if isinstance(repeats, int):
-        # Built as expand + reshape rather than a `reindex` with a divided
-        # index expression (``i{dim}/{repeats}``): that specific reindex
-        # shape is a fused-kernel variant no backend registers natively (it
-        # surfaced on ACL running Qwen's GQA head repeat, "unregistered
-        # fused operator variant: reindex/void"), while expand + reshape is
-        # built from ops every backend already has. Same result on every
-        # backend, not an ACL-only branch: `x[..., k, ...]` repeated
-        # `repeats` times consecutively along `dim` is exactly what
-        # unsqueezing a size-1 axis right after `dim`, broadcasting it to
-        # `repeats`, and folding it back into `dim` produces.
         if repeats == 1:
             return x.clone()
+        result = try_dispatch("tensor.repeat_interleave", x, repeats, dim)
+        if result is not None:
+            # repeat_interleave owns output storage on every backend.
+            return result.clone()
         tar_shape = list(x.shape)
         tar_shape[dim] = tar_shape[dim] * repeats
         broadcast_shape = [-1] * (dim + 1) + [repeats] + [-1] * (x.ndim - dim - 1)

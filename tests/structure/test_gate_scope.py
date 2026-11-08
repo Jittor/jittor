@@ -387,6 +387,10 @@ def test_skip_reason_buckets_are_stable_and_other_is_counted(monkeypatch):
             "at least 2 devices are required") == "insufficient-devices"
         assert policy.classify_skip_reason_bucket("No CUDA found") == "accelerator"
         assert policy.classify_skip_reason_bucket("cuda is required") == "accelerator"
+        assert policy.classify_skip_reason_bucket(
+            "optional oneDNN library is unavailable") == "environment"
+        assert policy.classify_skip_reason_bucket(
+            "optional mystery library is unavailable") == "other"
         assert (
             policy.classify_skip_reason_bucket("needs /dev/nvidia* nodes to be meaningful")
             == "environment"

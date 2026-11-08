@@ -24,6 +24,7 @@ unordered_map<string,string> common_op_type_cuda_map = {
     {"log1p", "@if(@strcmp($1,float32)==0,(($1)::log1pf(($1)($2))),(($1)::log1p(($1)($2))))"},
     {"exp", "@if(@strcmp($1,float32)==0,::expf(($1)($2)),::exp(($1)($2)))"},
     {"sqrt", "@if(@strcmp($1,float32)==0,::sqrtf(($1)($2)),::sqrt(($1)($2)))"},
+    {"rsqrt", "@if(@strcmp($1,float32)==0,jittor::_rsqrtf((float)($2)),::rsqrt((double)($2)))"},
     // numpy and torch round halves to even (round(0.5)==0, round(2.5)==2);
     // ::roundf rounds halves away from zero. ::rint follows the current
     // rounding mode, which is to-nearest-even and is never changed here.
@@ -105,6 +106,7 @@ struct CommonOpType : OpByType {
             {"log1p", "(($1)std::log1p(($1)($2)))"},
             {"exp", "std::exp(($1)($2))"},
             {"sqrt", "std::sqrt(($1)($2))"},
+            {"rsqrt", "(($1)(1) / std::sqrt(($1)($2)))"},
             // half-to-even, matching numpy/torch -- see the CUDA table.
             // std::nearbyint keeps std::round's integral overload, so an
             // integer input still widens to double instead of going
@@ -222,6 +224,12 @@ struct CommonOpType : OpByType {
 
     void post_pass(OpCompiler* oc) {
         string& src = oc->src;
+        if (src.find("jittor::_rsqrtf") != string::npos &&
+            src.find("type/rsqrt_compute.h") == string::npos) {
+            auto include = src.rfind("#include");
+            auto begin = include == string::npos ? 0 : src.find('\n', include) + 1;
+            src.insert(begin, "#include \"type/rsqrt_compute.h\"\n");
+        }
         string includes;
         if ((src.find("_floor_divide") != string::npos ||
              src.find("_floor_mod") != string::npos ||

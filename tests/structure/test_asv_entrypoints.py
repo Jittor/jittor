@@ -137,6 +137,7 @@ class TestAsvEntryPoints(unittest.TestCase):
                 "_session_env": lambda *args: (Path(directory), environment),
                 "_hardware_python": lambda: "benchmark-python",
                 "_set_hardware_python_config": mock.Mock(),
+                "_install_compat_source": mock.Mock(),
                 "_record_asv": record,
             }
             exec(compile(ast.Module(body=[entry], type_ignores=[]), "noxfile.py", "exec"), namespace)

@@ -307,10 +307,16 @@ import jittor as jt
 native_data = jt.ones(2).data
 before = dict(vars(jt.Var))
 import torch
-torch_data = torch.ones(2).data
+torch_value = torch.ones(2)
+torch_data = torch_value.data
+torch_grad_value = torch.ones(2, requires_grad=True)
 print("RESULT=" + json.dumps({
     "native_data_is_numpy": isinstance(native_data, np.ndarray),
     "torch_data_is_var": isinstance(torch_data, jt.Var),
+    "torch_factory_is_leaf": torch_value.is_leaf and torch_value.grad_fn is None,
+    "torch_factory_grad_disabled": not torch_value.requires_grad,
+    "torch_grad_factory_is_leaf": torch_grad_value.is_leaf and torch_grad_value.grad_fn is None,
+    "torch_grad_factory_enabled": torch_grad_value.requires_grad,
     "torch_is_jittor": torch is jt and sys.modules.get("torch") is jt,
     "native_still_numpy": isinstance(jt.ones(2).data, np.ndarray),
     "native_type_unchanged": dict(vars(jt.Var)) == before,
@@ -326,6 +332,10 @@ print("RESULT=" + json.dumps({
                 {
                     "native_data_is_numpy": True,
                     "torch_data_is_var": True,
+                    "torch_factory_is_leaf": True,
+                    "torch_factory_grad_disabled": True,
+                    "torch_grad_factory_is_leaf": True,
+                    "torch_grad_factory_enabled": True,
                     "torch_is_jittor": False,
                     "native_still_numpy": True,
                     "native_type_unchanged": True,

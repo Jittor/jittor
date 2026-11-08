@@ -82,7 +82,15 @@ class Conv(jt.Module):
     padding_mode = 'zeros'
 
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True, padding_mode='zeros', device=None, dtype=None):
-        # device/dtype accepted for torch.nn.Conv2d compatibility.
+        # Accept sequence-valued model configs before shared validation.
+        if isinstance(kernel_size, list):
+            kernel_size = tuple(kernel_size)
+        if isinstance(stride, list):
+            stride = tuple(stride)
+        if isinstance(padding, list):
+            padding = tuple(padding)
+        if isinstance(dilation, list):
+            dilation = tuple(dilation)
         _check_padding_options(padding, padding_mode, _pair(stride))
         self.padding_mode = padding_mode
         if in_channels <= 0:

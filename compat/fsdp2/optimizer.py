@@ -53,20 +53,109 @@ def _assign_preserve_trainability(target, value, was_trainable=None):
     return target
 
 
+def _localize_optimizer_buffer(value, parameter, state, entry):
+    """Project an existing full slot into this entry's actual local interval."""
+    if not isinstance(value, jt.Var):
+        return value
+    local_shape = tuple(entry.shard.shape)
+    role = getattr(parameter, "_jittor_fsdp2_role", None)
+    if role not in ("retired", "full"):
+        if tuple(value.shape) != local_shape:
+            raise ValueError("FSDP optimizer buffer does not match its shard shape")
+        return value
+    if common._param_numel(value) != int(entry.numel):
+        raise ValueError("FSDP optimizer full buffer does not match its parameter size")
+    if int(state.true_fsdp_world_size) == 1 and tuple(value.shape) == local_shape:
+        return value
+    flat = common._flatten_var(value)
+    if getattr(state, "true_fsdp_flat", False):
+        _, count = shard._flat_local_overlap(state, entry)
+        rank_start = int(state.true_fsdp_rank) * int(state.true_fsdp_flat_shard_numel)
+        offset = max(rank_start - int(entry.flat_offset), 0) if count else 0
+        local = common._slice_flat(flat, offset, count)
+    else:
+        padded = common._pad_flat(flat, int(entry.padded_numel))
+        local = common._slice_flat(
+            padded, int(state.true_fsdp_rank) * int(entry.shard_numel), int(entry.shard_numel))
+    if common._param_numel(local) != common._param_numel(entry.shard):
+        raise ValueError("FSDP optimizer buffer partition does not match its shard")
+    return jt.Var.copy(local.reshape(local_shape)).stop_grad()
+
+
 def refresh_optimizer_fsdp_params(opt, state_ids=None):
+    plans = []
+    all_replacements = []
     for pg in getattr(opt, "param_groups", []):
-        params = pg.get("params", [])
+        planned = dict(pg, params=list(pg.get("params", [])))
         replacements = []
-        for i, param in enumerate(list(params)):
+        sources = {}
+        selected = False
+        for i, param in enumerate(planned["params"]):
             state, entry = shard._fsdp_param_entry(param)
             if state is None or state_ids is not None and id(state) not in state_ids:
                 continue
+            selected = True
             if param is not entry.shard:
                 replacements.append((param, entry.shard))
-                params[i] = entry.shard
-        # A new shard view represents the same parameter, not a fresh Adam
-        # slot. Reuse ordinary reordering logic while releasing the old views.
-        _sync_adam_group_params(pg, replacements=replacements)
+                planned["params"][i] = entry.shard
+                sources[i] = (param, state, entry)
+        if not selected:
+            continue
+        # Reordering and fresh user parameters remain owned by the generic
+        # identity mapper; only explicit FSDP aliases inherit the preceding slot.
+        _sync_adam_group_params(planned, replacements=replacements)
+        if isinstance(pg.get("grads"), list):
+            missing = object()
+            previous = pg.get("_torch_adam_params", tuple(pg.get("params", ())))
+            previous_positions = {id(param): i for i, param in enumerate(previous)}
+            gradients = []
+            for param in pg.get("params", ()):
+                gradient = getattr(param, "_torch_grad", missing)
+                if gradient is missing:
+                    gradient = getattr(opt, "_grad_map", {}).get(id(param), missing)
+                if gradient is missing:
+                    position = previous_positions.get(id(param))
+                    gradient = (pg["grads"][position] if position is not None
+                                and position < len(pg["grads"]) else None)
+                gradients.append(gradient)
+            planned["grads"] = gradients
+        for key in ("m", "values", "v", "d", "pre_grad", "grads"):
+            buffers = planned.get(key)
+            if not isinstance(buffers, list):
+                continue
+            updated = list(buffers)
+            for i, (param, state, entry) in sources.items():
+                if i < len(updated):
+                    updated[i] = _localize_optimizer_buffer(updated[i], param, state, entry)
+            planned[key] = updated
+        _realign_state_buffers([planned])
+        if isinstance(planned.get("grads"), list):
+            _realign_state_buffers([{"params": planned["params"], "values": planned["grads"]}])
+        plans.append((pg, planned, sources))
+        all_replacements.extend(replacements)
+    # Validate/project every selected buffer before publishing any new group.
+    for pg, planned, sources in plans:
+        if isinstance(pg.get("params"), list):
+            pg["params"][:] = planned["params"]
+            planned["params"] = pg["params"]
+        pg.update(planned)
+        for i, (_, state, entry) in sources.items():
+            grads = pg.get("grads") or []
+            if i < len(grads) and isinstance(grads[i], jt.Var):
+                gradient = shard._mark_fsdp_param_var(grads[i], state, entry, "grad_shard")
+                object.__setattr__(gradient, "_fsdp_norm_group", getattr(state, "shard_group", None))
+                object.__setattr__(entry.shard, "_torch_grad", gradient)
+    if all_replacements:
+        view = getattr(opt, "_torch_state_view", None)
+        entries = getattr(view, "_entries", None)
+        if entries is not None:
+            for old, new in all_replacements:
+                cached = entries.pop(id(old), None)
+                if cached is not None:
+                    cached._param = new
+                    entries[id(new)] = cached
+        if hasattr(opt, "_grad_map"):
+            opt._grad_map.clear()
 
 
 def _refresh_all_optimizer_fsdp_params(states, current=None):
@@ -285,7 +374,7 @@ def optimizer_step(opt, loss=None, retain_graph=False, *, native_kind=None):
                     entry.shard, new_param,
                     entry_trainable[(id(state), id(entry))])
                 object.__setattr__(entry.shard, "_torch_grad", grad)
-                object.__setattr__(entry.owner, entry.attr, entry.shard)
+                shard._storage._set_module_parameter(entry, entry.shard)
                 entry.full_param = None
 
     for state in states:
@@ -322,7 +411,7 @@ def optimizer_step(opt, loss=None, retain_graph=False, *, native_kind=None):
             grad = flat_public_grads.get(key)
             if isinstance(grad, jt.Var):
                 object.__setattr__(entry.shard, "_torch_grad", grad)
-            object.__setattr__(entry.owner, entry.attr, entry.shard)
+            shard._storage._set_module_parameter(entry, entry.shard)
             entry.full_param = None
         state.true_fsdp_unsharded = False
 
@@ -361,14 +450,14 @@ def sharded_sgd_step(module, loss, lr=1e-4, *, divide_by_world_size=True):
         for entry, was_trainable in zip(state.true_fsdp_params, entry_trainable):
             if was_trainable and entry.shard.is_stop_grad():
                 entry.shard.start_grad()
-            object.__setattr__(entry.owner, entry.attr, entry.shard)
+            shard._storage._set_module_parameter(entry, entry.shard)
             entry.full_param = None
         state.true_fsdp_unsharded = False
         return grads
     for entry, grad in zip(state.true_fsdp_params, grads):
         _assign_preserve_trainability(
             entry.shard, (entry.shard - grad * lr).stop_grad())
-        object.__setattr__(entry.owner, entry.attr, entry.shard)
+        shard._storage._set_module_parameter(entry, entry.shard)
         entry.full_param = None
     state.true_fsdp_unsharded = False
     return grads

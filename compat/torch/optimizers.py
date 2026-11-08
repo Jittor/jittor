@@ -92,6 +92,16 @@ def _adamw_skips_step_on_device(self):
         if previous_indices is not None and tuple(previous_indices) != active_indices:
             return False
         impl = select_kernel("optim.adamw_fused", active)
+        # CANN's fused AdamW computes 1 - beta in FP32. Torch's default
+        # (foreach) path forms that coefficient from the Python scalar first,
+        # so the ACL fused path cannot preserve Torch optimizer state exactly.
+        # Keep device-side overflow skipping aligned with _adam_step's route:
+        # on ACL, only an explicit fused=True request may use that kernel.
+        is_acl_fused = (
+            impl is not None and jt.core.dispatch_context([active[0][0]])[0] == "acl"
+        )
+        if is_acl_fused and fused is not True:
+            impl = None
         if (impl is None or not getattr(impl, "accepts_live_step", False)
                 or len({entry[4] for entry in active}) != 1):
             return False

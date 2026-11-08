@@ -254,7 +254,7 @@ static_assert((int)VarFlags::_force_fuse == (int)NodeFlags::_n
     && (int)OpFlags::_cpu == (int)NodeFlags::_n,
     "the private layouts must both start where the shared range ends");
 static_assert((int)OpFlags::_custom_flag == (int)OpFlags::_prefer_32 + OpFlags::_amp_nbits,
-    "the seven amp bits op.cc and grad.cc move as one field are no longer contiguous");
+    "the AMP bits op.cc and grad.cc move as one field are no longer contiguous");
 static_assert((int)OpFlags::_op_type_high == (int)OpFlags::_op_type + 1,
     "OpType is read as two bits and they are no longer adjacent");
 static_assert((int)NodeFlags::_node_order_high == (int)NodeFlags::_node_order_low + 1,

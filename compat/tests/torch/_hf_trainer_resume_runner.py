@@ -1,7 +1,7 @@
 """Exercise Trainer's own checkpoint resume and data cursor in fresh processes."""
 
 import argparse
-from contextlib import nullcontext
+from contextlib import ExitStack
 import hashlib
 import json
 import random
@@ -12,6 +12,11 @@ import numpy as np
 
 from _hf_trainer_e2e_runner import (
     _array,
+    _cpu_runtime_evidence,
+    _assert_model_device,
+    _assert_values_device,
+    _select_runtime_device,
+    _synchronize_device,
     _attach_peft,
     _load_initial,
     _make_base_model,
@@ -150,6 +155,27 @@ def _record_step_state(model, optimizer, scheduler, step, arrays):
     )
 
 
+def _record_rng_state(torch, device, step, arrays):
+    """Record the framework-visible RNG streams at an optimizer boundary."""
+    prefix = "step/%04d/rng" % step
+    arrays[prefix + "/cpu"] = _array(torch.get_rng_state())
+    if device == "npu":
+        owner = getattr(torch, "npu", None)
+        if owner is None or not callable(getattr(owner, "get_rng_state_all", None)):
+            raise AssertionError("NPU training must expose get_rng_state_all")
+        states = owner.get_rng_state_all()
+        if len(states) != int(owner.device_count()):
+            raise AssertionError("NPU RNG state count differs from visible device count")
+        for index, state in enumerate(states):
+            arrays["%s/npu/%04d" % (prefix, index)] = _array(state)
+    elif device == "cuda":
+        states = torch.cuda.get_rng_state_all()
+        if len(states) != int(torch.cuda.device_count()):
+            raise AssertionError("CUDA RNG state count differs from visible device count")
+        for index, state in enumerate(states):
+            arrays["%s/cuda/%04d" % (prefix, index)] = _array(state)
+
+
 def _initialize(torch, path, seed):
     torch.manual_seed(seed)
     base = _make_base_model(torch)
@@ -159,16 +185,13 @@ def _initialize(torch, path, seed):
 
 
 def _run(args):
-    jt, torch = _runtime(args.runtime)
-    from transformers import Trainer, TrainerCallback, TrainingArguments
+    jt, torch = _runtime(args.runtime, device=args.device)
+    with ExitStack() as scope:
+        _select_runtime_device(jt, torch, args.device, scope)
+        from transformers import Trainer, TrainerCallback, TrainingArguments
 
-    scope = (
-        jt.runtime.scope(use_cuda=int(args.device == "cuda"), backend_fallback="error")
-        if jt is not None else nullcontext()
-    )
-    with scope:
-        if args.device == "cuda" and not torch.cuda.is_available():
-            raise RuntimeError("CUDA was requested but is unavailable")
+        if jt is not None:
+            scope.enter_context(jt.runtime.scope(backend_fallback="error"))
         if args.runtime == "jittor":
             from jittor._runtime.fallback import forbid_backend_fallbacks
 
@@ -298,7 +321,10 @@ def _run(args):
                         for field in ("input_ids", "attention_mask", "labels"):
                             if field in inputs:
                                 self.trace_arrays[prefix + field] = _array(inputs[field])
+                    _assert_values_device(jt, torch, list(inputs.items()), args.device, "Trainer input")
                     loss = super().training_step(current_model, inputs, num_items_in_batch)
+                    _assert_values_device(jt, torch, [("loss", loss)], args.device, "Trainer output")
+                    self.trace_arrays["step/%04d/loss/%02d" % (upcoming_step, microbatch)] = _array(loss)
                     gradients = {}
                     for name, parameter in current_model.named_parameters():
                         if not bool(parameter.requires_grad):
@@ -306,6 +332,7 @@ def _run(args):
                         gradient = getattr(parameter, "grad", None)
                         if gradient is None:
                             raise AssertionError("missing trainable gradient: %s" % name)
+                        _assert_values_device(jt, torch, [(name, gradient)], args.device, "Trainer gradient")
                         value = _array(gradient)
                         if not np.all(np.isfinite(value)):
                             raise AssertionError("non-finite trainable gradient: %s" % name)
@@ -361,15 +388,15 @@ def _run(args):
                     if live_model is None or optimizer is None or scheduler is None:
                         raise AssertionError("Trainer did not expose model/optimizer/scheduler at step end")
                     _record_step_state(live_model, optimizer, scheduler, step, trainer.trace_arrays)
+                    _record_rng_state(torch, args.device, step, trainer.trace_arrays)
                     return control
 
             trainer.add_callback(CaptureTrainerState())
-            if args.device == "cuda":
-                torch.cuda.synchronize()
+            _assert_model_device(jt, torch, trainer.model, args.device)
+            _synchronize_device(jt, torch, args.device)
             start = time.perf_counter()
             train_output = trainer.train(resume_from_checkpoint=args.resume_checkpoint)
-            if args.device == "cuda":
-                torch.cuda.synchronize()
+            _synchronize_device(jt, torch, args.device)
             elapsed = time.perf_counter() - start
 
             expected_step = args.stop_after if args.stop_after is not None else args.max_steps
@@ -416,6 +443,7 @@ def _run(args):
                 "stop_after": args.stop_after,
                 "sampler": args.sampler,
                 "model_dropout": args.dropout,
+                "rng_state_recorded_at_each_optimizer_boundary": True,
                 "dataset_size": len(train_dataset),
                 "dataloader_num_workers": args.dataloader_num_workers,
                 "dataloader_prefetch_factor": (
@@ -447,6 +475,7 @@ def _run(args):
                 "microbatches": len(trainer.gradients),
                 "trainable_parameter_tensors": len(final_parameters),
                 "fallback_count": fallback_count,
+                "cpu_accelerator_state": _cpu_runtime_evidence(torch) if args.device == "cpu" else None,
                 "elapsed_seconds": elapsed,
                 "train_loss": train_output.metrics.get("train_loss"),
                 "artifact": str(artifact),
@@ -533,7 +562,7 @@ def main():
     initialize.add_argument("--seed", type=int, default=20261014)
     run = subparsers.add_parser("run")
     run.add_argument("--runtime", choices=("pytorch", "jittor"), required=True)
-    run.add_argument("--device", choices=("cpu", "cuda"), required=True)
+    run.add_argument("--device", choices=("cpu", "cuda", "npu"), required=True)
     run.add_argument("--output-dir", required=True)
     run.add_argument("--weights", required=True)
     run.add_argument("--resume-checkpoint", default=None)
@@ -570,7 +599,7 @@ def main():
     if args.command == "initialize":
         if args.runtime != "pytorch":
             parser.error("initial fixtures must be produced by independent PyTorch")
-        _, torch = _runtime("pytorch")
+        _, torch = _runtime("pytorch", device="cpu")
         _initialize(torch, args.weights_out, args.seed)
     elif args.command == "run":
         if args.start_step < 0 or args.max_steps <= 0:

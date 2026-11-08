@@ -37,6 +37,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SKIPPED_SUFFIXES = (".json",)
 SKIPPED_NAMES = frozenset(["uv.lock"])
 
+#: Historical run reports retain the machine paths that identify their evidence.
+SKIPPED_ARCHIVE_PREFIXES = ("refactor-wip/",)
+
 #: Home-directory names that are obviously placeholders, not people.
 PLACEHOLDER_HOMES = frozenset(["x", "user", "username", "you", "name", "runner"])
 
@@ -92,6 +95,8 @@ def _tracked_text_files():
         if not name or name.endswith(SKIPPED_SUFFIXES):
             continue
         if name.rsplit("/", 1)[-1] in SKIPPED_NAMES:
+            continue
+        if name.startswith(SKIPPED_ARCHIVE_PREFIXES):
             continue
         path = REPO_ROOT / name
         if not path.is_file():  # deleted in the working tree, not yet staged

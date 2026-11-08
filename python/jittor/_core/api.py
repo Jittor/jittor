@@ -2,6 +2,17 @@
 
 import atexit
 
+from .._runtime.cuda_rng import (
+    get_cuda_rng_state,
+    get_cuda_rng_state_all,
+    get_cuda_initial_seed,
+    set_cuda_rng_state,
+    set_cuda_rng_state_all,
+    set_cuda_seed,
+    set_cuda_seed_all,
+)
+
+
 from jittor._runtime.state import RuntimeContext, RuntimeState
 from . import diagnostics as _diagnostics
 
@@ -23,6 +34,7 @@ from .var import (
     arg_reduce,
     argmax,
     argmin,
+    argsort,
     array,
     array64,
     attrs,
@@ -151,6 +163,14 @@ def __getattr__(name):
 
 
 __all__ = (
+    "get_cuda_rng_state",
+    "get_cuda_rng_state_all",
+    "get_cuda_initial_seed",
+    "set_cuda_rng_state",
+    "set_cuda_rng_state_all",
+    "set_cuda_seed",
+    "set_cuda_seed_all",
+
     "ExitHooks",
     "Function",
     "submit_pending",
@@ -162,6 +182,7 @@ __all__ = (
     "arg_reduce",
     "argmax",
     "argmin",
+    "argsort",
     "array",
     "array64",
     "attrs",

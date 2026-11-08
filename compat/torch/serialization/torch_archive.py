@@ -6,6 +6,7 @@ import numpy as _np_pt
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import jittor as jt
 from ..context import get_install_context
+from ..nested import _rebuild_var_from_numpy
 from .security import _resolve_global
 
 _TORCH_STORAGE_DTYPE = {
@@ -120,7 +121,11 @@ class _ArchiveUnpickler(_pickle.Unpickler):
         size = tuple(int(s) for s in size)
         stride = None if stride is None else tuple(int(s) for s in stride)
         sub = _restore_strided(arr, int(storage_offset), size, stride, key)
-        value = g.tensor(sub, dtype=dtype_str, device="cpu", requires_grad=bool(requires_grad))
+        if dtype_str == "bfloat16":
+            value = _rebuild_var_from_numpy(sub, dtype_str, device="cpu")
+            value.requires_grad_(bool(requires_grad))
+        else:
+            value = g.tensor(sub, dtype=dtype_str, device="cpu", requires_grad=bool(requires_grad))
         if self.source_devices is not None:
             self.source_devices[id(value)] = source_device
         return value

@@ -11,7 +11,7 @@ from ..fidelity import Fidelity, register_api_bindings, register_fidelity
 from .. import profiler as _torch_profiler
 from .._placeholder_context import _PlaceholderContext
 
-from ..grad_scaler import _GradScaler
+from ..grad_scaler import _GradScaler, _NpuGradScaler
 from ..amp import (
     autocast as _autocast,
     autocast_decorator as _autocast_decorator,
@@ -22,7 +22,7 @@ from ..amp import (
     is_autocast_available as _is_autocast_available,
     amp_definitely_not_available as _amp_definitely_not_available,
     _amp_cast,
-    _CudaAutocast, _CpuAutocast, _CudaGradScaler, _CpuGradScaler,
+    _CudaAutocast, _CpuAutocast, _NpuAutocast, _CudaGradScaler, _CpuGradScaler,
     OptState as _OptState,
 )
 from ..library import Tag
@@ -801,7 +801,8 @@ def _install_amp_namespace(g, _modules):
 
     for device_name, autocast_class, scaler_class in (
             ("cuda", _CudaAutocast, _CudaGradScaler),
-            ("cpu", _CpuAutocast, _CpuGradScaler)):
+            ("cpu", _CpuAutocast, _CpuGradScaler),
+            ("npu", _NpuAutocast, _NpuGradScaler)):
         root = getattr(g, device_name, None)
         if root is None:
             continue

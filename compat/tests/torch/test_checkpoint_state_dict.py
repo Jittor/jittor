@@ -382,7 +382,7 @@ def test_dcp_single_rank_stage_preserves_local_exception():
 
 
 @pytest.mark.skipif(not hasattr(torch, "_torch_compat_install_context"), reason="Jittor unsupported-boundary policy")
-def test_sharded_dcp_values_remain_explicitly_unsupported(tmp_path):
+def test_legacy_sharded_tensor_construction_remains_explicitly_unsupported(tmp_path):
     import torch.distributed.checkpoint as dcp
     from torch.distributed.checkpoint.default_planner import DefaultLoadPlanner, DefaultSavePlanner
     from torch.distributed._shard.sharded_tensor import ShardedTensor, empty, init_from_local_shards
@@ -451,3 +451,83 @@ def test_sharded_tensor_stub_opt_in_keeps_legacy_local_results(monkeypatch):
         assert owner._api_sharded_tensor_empty((2,), dtype=np.float32) is sentinel
     finally:
         stub_policy.set_allow_stub(previous)
+
+
+@pytest.mark.skipif(not hasattr(torch, "_torch_compat_install_context"), reason="Jittor singleton FSDP checkpoint route")
+def test_fsdp_singleton_full_checkpoint_uses_public_object_collective():
+    from torch.distributed.device_mesh import init_device_mesh
+    from torch.distributed.fsdp import fully_shard
+
+    model, optimizer = model_and_optimizer()
+    update(model, optimizer)
+    fully_shard(model, mesh=init_device_mesh("cpu", (1,)))
+    options = StateDictOptions(full_state_dict=True)
+    saved_model, saved_optimizer = clone_tree(get_state_dict(model, optimizer, options=options))
+    assert set(saved_model) == set(saved_optimizer["state"]) == {"weight", "bias"}
+    assert [group["params"] for group in saved_optimizer["param_groups"]] == [["weight"], ["bias"]]
+    restored, restored_optimizer = model_and_optimizer()
+    fully_shard(restored, mesh=init_device_mesh("cpu", (1,)))
+    set_state_dict(restored, restored_optimizer, model_state_dict=saved_model,
+                   optim_state_dict=saved_optimizer, options=options)
+    actual_model, actual_optimizer = get_state_dict(restored, restored_optimizer, options=options)
+    for name in saved_model:
+        np.testing.assert_array_equal(array(actual_model[name]), array(saved_model[name]))
+        for field in ("step", "exp_avg", "exp_avg_sq"):
+            np.testing.assert_array_equal(array(actual_optimizer["state"][name][field]),
+                                          array(saved_optimizer["state"][name][field]))
+
+
+def test_default_dcp_named_state_persists_and_restores_optimizer_continuation(tmp_path):
+    import torch.distributed.checkpoint as dcp
+    model, optimizer = model_and_optimizer()
+    update(model, optimizer)
+    state = dict(zip(("model", "optimizer"), get_state_dict(model, optimizer)))
+    dcp.save(state, checkpoint_id=tmp_path / "checkpoint")
+    assert (tmp_path / "checkpoint").is_dir()
+    update(model, optimizer)
+    expected_model, expected_optimizer = clone_tree(get_state_dict(model, optimizer))
+    restored = dict(zip(("model", "optimizer"), get_state_dict(model, optimizer)))
+    dcp.load(restored, checkpoint_id=tmp_path / "checkpoint")
+    set_state_dict(model, optimizer, model_state_dict=restored["model"], optim_state_dict=restored["optimizer"])
+    update(model, optimizer)
+    actual_model, actual_optimizer = get_state_dict(model, optimizer)
+    for name in expected_model:
+        np.testing.assert_array_equal(array(actual_model[name]), array(expected_model[name]))
+    for name in expected_optimizer["state"]:
+        for field in ("step", "exp_avg", "exp_avg_sq"):
+            np.testing.assert_array_equal(array(actual_optimizer["state"][name][field]),
+                                          array(expected_optimizer["state"][name][field]))
+
+
+@pytest.mark.skipif(not hasattr(torch, "_torch_compat_install_context"), reason="Jittor native DCP leaf storage")
+def test_default_dcp_load_preserves_native_and_frontend_leaf_storage(tmp_path):
+    import jittor as jt
+    import torch.distributed.checkpoint as dcp
+
+    saved = {"frontend": torch.tensor([4., 5.]), "native": jt.array([6., 7.])}
+    dcp.save(saved, checkpoint_id=tmp_path / "checkpoint")
+    targets = {"frontend": torch.nn.Parameter(torch.tensor([1., 2.])),
+               "native": jt.array([2., 3.]).start_grad()}
+    identities = {name: value for name, value in targets.items()}
+    aliases = {name: value.detach() for name, value in targets.items()}
+    snapshots = {name: jt.Var.copy(value) for name, value in targets.items()}
+    # Inspect the tensor's real allocation without migrating logical CPU
+    # tensors to CUDA just to obtain a device pointer.
+    for value in targets.values():
+        value.sync()
+    pointers = {name: value._mem_ptr_now for name, value in targets.items()}
+    dcp.load(targets, checkpoint_id=tmp_path / "checkpoint")
+    for name, expected in (("frontend", [4., 5.]), ("native", [6., 7.])):
+        value = targets[name]
+        assert value is identities[name]
+        assert value._mem_ptr_now == pointers[name]
+        assert value.requires_grad and value.is_backward_leaf
+        np.testing.assert_array_equal(value.numpy(), expected)
+        np.testing.assert_array_equal(aliases[name].numpy(), expected)
+    np.testing.assert_array_equal(snapshots["frontend"].numpy(), [1., 2.])
+    np.testing.assert_array_equal(snapshots["native"].numpy(), [2., 3.])
+    result = (targets["frontend"] * jt.array([2., 3.])).sum()
+    result = result + (targets["native"] * jt.array([4., 5.])).sum()
+    gradients = jt.grad(result, [targets["frontend"], targets["native"]])
+    np.testing.assert_array_equal(gradients[0].numpy(), [2., 3.])
+    np.testing.assert_array_equal(gradients[1].numpy(), [4., 5.])

@@ -317,6 +317,10 @@ class _CudaGradScaler(_LegacyDeviceGradScaler):
     _device_name = "cuda"
 
 
+class _NpuGradScaler(_LegacyDeviceGradScaler):
+    _device_name = "npu"
+
+
 class _CpuGradScaler(_LegacyDeviceGradScaler):
     _device_name = "cpu"
 
@@ -337,6 +341,9 @@ _GRAD_SCALER_FIDELITY = (
      "single-optimizer path and multi-device replication is not implemented"),
     (("torch.cuda.amp.GradScaler",), _CudaGradScaler, Fidelity.APPROXIMATE,
      "Legacy cuda-pinned subclass of torch.amp.GradScaler (init_scale first)"),
+    (("torch.npu.amp.GradScaler", "torch.npu.amp.grad_scaler.GradScaler"),
+     _NpuGradScaler, Fidelity.APPROXIMATE,
+     "NPU-pinned subclass of the shared GradScaler owner; no separate native Torch dependency"),
     (("torch.cpu.amp.GradScaler",), _CpuGradScaler, Fidelity.APPROXIMATE,
      "Legacy cpu-pinned subclass of torch.amp.GradScaler (init_scale first)"),
 )

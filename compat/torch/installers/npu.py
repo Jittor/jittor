@@ -1,24 +1,14 @@
-"""A Torch NPU device facade over the native ACL runtime.
+"""Install Torch NPU primitives over the shared native device facade.
 
-``torch.npu`` is one of the device namespaces the CUDA installer creates, and
-until now every one of them got the same placeholders: ``is_available()``
-answered False and ``device_count()`` answered 0 on a machine with eight
-910Bs. A downstream library that asks before choosing a device -- which is
-what Transformers, ms-swift and DeepSpeed all do -- was told there was no NPU
-and went to the host.
-
-What is published here is discovery, selection and synchronization, plus the
-three ``torch_npu`` primitives a Torch model reaches for directly. It is not
-the torch_npu extension: streams, RNG state and the memory statistics have
-their own contracts and are left refusing rather than answered with a zero.
+The shared CUDA/device installer already publishes ACL-backed discovery,
+selection, memory, capability and RNG APIs. Keep those owners and add the
+torch_npu primitive namespace without replacing working queries with stubs.
 """
-import contextlib
 import types
 
 import jittor as jt
 
 from ..fidelity import Fidelity, register_api_bindings
-from ..types import device as TorchDevice
 
 
 def _acl_build():
@@ -27,81 +17,12 @@ def _acl_build():
         getattr(jt.compiler, "build_config", None), "backend", None) == "acl"
 
 
-def device_count():
-    if not _acl_build():
-        return 0
-    # Ask the runtime, not the environment: a CANN or driver failure has to
-    # surface, never be rounded down to "no devices".
-    return int(jt.core.backend_device_count("acl"))
-
-
-def is_available():
-    return device_count() > 0
-
-
 def _require_acl():
-    if not is_available():
+    # The shared device facade owns discovery, selection, memory and RNG.
+    # Do not replace its implemented APIs with this installer's former stubs.
+    from .cuda.api import _npu_is_available
+    if not _npu_is_available():
         raise RuntimeError("The Jittor ACL/NPU backend has no available devices")
-
-
-def current_device():
-    _require_acl()
-    return int(jt.core.current_device())
-
-
-def _index(value=None):
-    _require_acl()
-    if value is None:
-        return current_device()
-    if isinstance(value, bool):
-        raise TypeError("NPU device index must not be bool")
-    if isinstance(value, int):
-        index = value
-    else:
-        parsed = TorchDevice(value)
-        if parsed.type != "npu":
-            raise ValueError("Expected an npu device, got {}".format(value))
-        index = current_device() if parsed.index is None else parsed.index
-    if index < 0 or index >= device_count():
-        raise ValueError("NPU device index out of range: {}".format(index))
-    return int(index)
-
-
-def set_device(value):
-    # The native setter owns the ACL context and the device-switch hooks.
-    jt.core.set_device(_index(value))
-
-
-@contextlib.contextmanager
-def device(value=None):
-    previous = current_device()
-    selected = _index(value)
-    if selected != previous:
-        set_device(selected)
-    try:
-        yield
-    finally:
-        if selected != previous:
-            set_device(previous)
-
-
-def synchronize(value=None):
-    _index(value)
-    # Jittor's work is lazy, so a device wait alone would wait for nothing.
-    # This submits what is pending and waits for every device it touched,
-    # which is stronger than the per-device wait torch documents.
-    jt.sync_all(True)
-
-
-def empty_cache():
-    _require_acl()
-    jt.sync_all(True)
-    jt.gc()
-
-
-def is_bf16_supported():
-    _require_acl()
-    return True
 
 
 def npu_rms_norm(input, weight, epsilon=1e-6):
@@ -133,26 +54,26 @@ def _unsupported(*args, **kw):
         "This NPU API is outside the Jittor ACL device facade")
 
 
-#: Published as refusals rather than left to the shared placeholders, which
-#: answer a question they cannot answer: a zero peak or an absent stream reads
-#: as a measurement, and a caller cannot tell it from one.
+#: These stream/property APIs still lack a native implementation. Memory,
+#: capability and RNG queries retain the real shared-device implementations.
 _REFUSED = (
-    "is_initialized", "get_device_name", "get_device_properties",
-    "reset_max_memory_allocated", "reset_peak_memory_stats", "memory_stats",
-    "memory_allocated", "max_memory_allocated", "memory_reserved",
-    "max_memory_reserved", "mem_get_info",
-    "current_stream", "default_stream", "set_stream", "Stream", "Event",
-    "set_compile_mode", "ipc_collect",
+    "get_device_properties", "current_stream", "default_stream", "set_stream",
+    "Stream", "Event", "set_compile_mode", "ipc_collect",
 )
 
-_SUPPORTED = ("is_available", "device_count", "current_device", "set_device",
-              "device", "synchronize", "empty_cache", "is_bf16_supported",
-              "npu_rms_norm", "npu_rotary_mul", "npu_swiglu")
+# Device and RNG APIs already have one implementation in the shared facade.
+# This installer adds only the torch_npu primitive adapters and strict refusals.
+_SUPPORTED = ("npu_rms_norm", "npu_rotary_mul", "npu_swiglu")
 
 
 def install(ctx):
     target, registry = ctx.target_namespace, ctx.registry
-    npu = types.ModuleType("torch.npu")
+    # Keep the NPU namespace created by the CUDA installer: it owns the
+    # device-scoped RNG and random submodule APIs used by Transformers. This
+    # installer adds primitive adapters without overriding those device APIs.
+    npu = registry.get("torch.npu")
+    if npu is None:
+        npu = types.ModuleType("torch.npu")
     npu.__path__ = []
     for name in _SUPPORTED:
         setattr(npu, name, globals()[name])

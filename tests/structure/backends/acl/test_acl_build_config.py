@@ -51,8 +51,12 @@ def setup(acl, monkeypatch, tmp_path):
     monkeypatch.setattr(acl.shutil, "which", lambda name: "/cann/bin/" + name)
     calls = []
     library = object()
-    converter = SimpleNamespace(process=lambda *args: "converted",
-                                init_acl_ops=lambda: calls.append(("init",)))
+    converter = SimpleNamespace(
+        process=lambda *args: "converted",
+        init_acl_ops=lambda: calls.append(("init",)),
+        acl_bfloat16_supported=lambda: True,
+        acl_device_name=lambda: "FAKE_ONLY_SOC",
+    )
     base = api.BuildConfig(
         cc_path="/host/bin/c++", kernel_flags=" -O2 ",
         cc_flags="-std=c++14 -I/source/src", jittor_path="/source",
@@ -108,7 +112,8 @@ def test_configure_returns_complete_value_without_global_writes(acl, setup):
     assert config.kernel_source_roots == config.kernel_flag_filter == ()
     assert config.convert_nvcc_flags is None
     assert config.environment == {"existing_env": "yes", "use_mkl": "0"}
-    assert config.resources["acl_initializer"] is setup.converter
+    assert "acl_initializer" not in config.resources
+    assert "acl_device_name" in config.resources["acl_binding_source"]
     assert config.resources["acl_library"] is setup.library
     assert config.resources["existing_resource"] == 3
     assert config.extra_core_files[0] == "existing.cc"
@@ -118,22 +123,20 @@ def test_configure_returns_complete_value_without_global_writes(acl, setup):
         (SOURCE.parent / "kernels/native").glob("*.cc")))
     converter_sources = [str(SOURCE.parent / "src" / name) for name in (
         "acl_error_code.cc", "acl_jittor.cc", "aclnn.cc")]
-    # Includes the measured last-axis vector-norm native unit.
-    assert len(expected_extra) == 52
-    assert {"grid_sample_op_acl.cc", "topk_op_acl.cc", "vector_norm_op_acl.cc"} <= {
+    # Local argsort and upstream grid-sample, top-k and vector-norm units.
+    assert len(expected_extra) == 53
+    assert {"argsort_op_acl.cc", "grid_sample_op_acl.cc", "topk_op_acl.cc",
+            "vector_norm_op_acl.cc"} <= {
         os.path.basename(path) for path in expected_extra}
     assert len(converter_sources) == 3
-    assert len(config.extra_core_files) == len(expected_extra) + 1
-    assert set(config.extra_core_files) == {"existing.cc", *expected_extra}
-    assert [call[0] for call in setup.calls] == ["load", "compile"]
+    assert len(config.extra_core_files) == len(expected_extra) + 4
+    assert set(config.extra_core_files) == {"existing.cc", *expected_extra, *converter_sources}
+    # No generated binding may load before the native core supplies the dtype
+    # table, GraphEntryScope and registry symbols used by current pyjt output.
+    assert [call[0] for call in setup.calls] == ["load"]
     assert setup.calls[0][1:] == ("libascendcl.so", os.RTLD_NOW | os.RTLD_GLOBAL)
-    converter_flags = setup.calls[1][2]
-    assert "-DHAS_ACCELERATOR" in converter_flags.split()
-    assert "-I/source/src" in converter_flags
-    assert all(name in converter_flags for name in converter_sources)
-    assert all(name not in converter_flags for name in expected_extra)
     for name in ("backend.cc", "workspace.cc"):
-        assert str(SOURCE.parent / "src" / name) not in converter_flags
+        assert str(SOURCE.parent / "src" / name) not in config.cc_flags
         assert str(SOURCE.parent / "src" / name) not in config.extra_core_files
     assert {source.path for source in config.backend_sources} == {
         str(SOURCE.parent / "src" / name)
@@ -209,7 +212,7 @@ def test_missing_toolkit_fails_before_work(acl, setup, monkeypatch, toolkit):
     assert not setup.calls
 
 
-@pytest.mark.parametrize("service", ["load_library", "compile_module"])
+@pytest.mark.parametrize("service", ["load_library"])
 def test_configuration_failures_propagate(acl, setup, service):
     from dataclasses import replace
     def failure(*args, **kwargs):
@@ -230,18 +233,48 @@ def test_post_process_uses_returned_converter(acl, setup, monkeypatch):
         pool=pool, flags=flags,
         amp_flags=SimpleNamespace(reduce16_no_fp32_acc=2, keep_reduce=4),
     )
+    published = []
+    def register_kernel(*args):
+        setup.calls.append(("register", args[0]))
+        published.append(args)
+    dispatch = SimpleNamespace(register_kernel=register_kernel)
+    monkeypatch.setitem(sys.modules, "jittor._runtime.dispatch", dispatch)
     monkeypatch.setitem(sys.modules, "jittor", fake_jittor)
-    acl.post_process(setup.context.with_config(config))
+    from dataclasses import replace
+    context = replace(setup.context.with_config(config), native_core=object())
+    acl.post_process(context)
+    assert setup.calls[-4][0] == "compile"
+    assert setup.calls[-4][1] == config.resources["acl_binding_source"]
+    assert setup.calls[-4][2] == config.cc_flags
     # These defaults are native BackendOps.execution policies now, not
     # mutations of CPU/Torch state during ACL bootstrap.
     assert pool.pool_use_code_op is True
     assert flags.use_cuda_host_allocator == 0
     assert flags.use_parallel_op_compiler == 1
     assert flags.amp_reg == 8
-    assert setup.calls[-1] == ("init",)
+    assert setup.calls[-3:] == [
+        ("init",),
+        ("register", "runtime.supports_bfloat16"),
+        ("register", "runtime.device_name"),
+    ]
+    assert published == [
+        ("runtime.supports_bfloat16", "acl", setup.converter.acl_bfloat16_supported),
+        ("runtime.device_name", "acl", setup.converter.acl_device_name),
+    ]
     before = list(setup.calls)
+    before_published = list(published)
     acl.post_process(setup.context)
     assert setup.calls == before
+    assert published == before_published
+
+
+def test_post_process_refuses_to_load_bindings_before_core(acl, setup, monkeypatch):
+    config = acl.configure(setup.context)
+    monkeypatch.setitem(sys.modules, "jittor._runtime.dispatch",
+                        SimpleNamespace(register_kernel=lambda *args: None))
+    with pytest.raises(RuntimeError, match="loaded native core"):
+        acl.post_process(setup.context.with_config(config))
+    assert [call[0] for call in setup.calls] == ["load"]
 
 
 def test_backend_has_no_mutable_configuration_or_compiler_imports(acl):
@@ -258,7 +291,8 @@ def test_backend_has_no_mutable_configuration_or_compiler_imports(acl):
 
 def test_provider_source_inventory_is_explicit_and_complete(acl):
     sources = acl.REGISTRATION_SOURCES + acl.CORE_SOURCES
-    assert len(sources) == len(set(sources)) == 55
+    assert len(sources) == len(set(sources)) == 56
+    assert "kernels/native/argsort_op_acl.cc" in sources
     assert all((SOURCE.parent / name).is_file() for name in sources)
     actual = {str(path.relative_to(SOURCE.parent))
               for path in SOURCE.parent.rglob("*.cc")}

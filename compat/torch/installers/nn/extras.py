@@ -51,6 +51,7 @@ from .extra_api import (
     clip_grad_value_,
     embedding_init,
     linear_init,
+    linear_execute,
     pad_sequence,
     remove_weight_norm,
     spectral_norm,
@@ -496,6 +497,8 @@ def _install_nn_extras(nn, registry=None):
 
 
         linear_cls.__init__ = linear_init
+        if getattr(jt.compiler, "has_acl", False):
+            linear_cls.execute = linear_execute
         linear_cls._torch_dtype_patched = True
 
     embedding_cls = getattr(nn, "Embedding", None)

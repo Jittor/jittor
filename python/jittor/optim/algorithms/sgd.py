@@ -14,6 +14,7 @@ from ..base import (
     _param_requires_grad,
     _state_buffer,
     _update_preserve_dtype,
+    _optimizer_arithmetic,
 )
 
 #: Per-parameter list, parallel to ``params``: whether that parameter's
@@ -85,6 +86,18 @@ def sgd_update(
     does not change native defaults, CPU arithmetic or float32 fused kernels.
     """
     backend = dispatch_context(param).backend
+    if torch_math and backend == "acl":
+        add, multiply, _, subtract = _optimizer_arithmetic(
+            (param, grad) if momentum == 0 else (param, grad, velocity),
+            (lr, momentum, weight_decay, dampening), enabled=True)
+        dp = grad if weight_decay == 0 else add(multiply(param, weight_decay), grad)
+        if momentum == 0:
+            return subtract(param, multiply(dp, lr))
+        value = (add(multiply(momentum, velocity), multiply(dp, 1 - dampening))
+                 if momentum_initialized else dp)
+        _update_preserve_dtype(velocity, value)
+        direction = add(dp, multiply(momentum, velocity)) if nesterov else velocity
+        return subtract(param, multiply(direction, lr))
     cpu_bfloat16 = dtype_name(param.dtype) == "bfloat16" and backend == "cpu"
     low_precision = cpu_bfloat16 or (
         torch_math and dtype_name(param.dtype) in ("float16", "bfloat16") and backend == "cuda"

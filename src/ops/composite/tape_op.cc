@@ -58,6 +58,7 @@ void TapeOp::infer_shape() {
     auto x = inputs().front();
     auto y = outputs().front();
     y->set_shape(x->shape);
+    y->storage_strides = x->storage_strides;
     y->share_with(x);
 }
 

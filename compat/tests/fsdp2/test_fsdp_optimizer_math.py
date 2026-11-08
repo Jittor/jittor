@@ -81,5 +81,33 @@ class TestSharedOptimizerMath(unittest.TestCase):
         np.testing.assert_allclose(value.numpy(), new_v, rtol=2e-6, atol=2e-7)
 
 
+    def test_fsdp_shard_sgd_uses_per_buffer_momentum_flags(self):
+        from types import SimpleNamespace
+        import jittor as jt
+        from jittor.compat.fsdp2.optimizer import _sgd_update_for_param
+
+        parameter = jt.array(np.array([1.0, -2.0], dtype=np.float32))
+        gradient = jt.array(np.array([0.1, -0.3], dtype=np.float32))
+        group = {
+            "params": [parameter],
+            "lr": 0.02,
+            "momentum": 0.9,
+            "weight_decay": 0.05,
+            "dampening": 0.5,
+            "nesterov": False,
+        }
+        updated, velocity = _sgd_update_for_param(
+            SimpleNamespace(torch_math=False), group, None, None,
+            parameter, gradient, None, index=0,
+        )
+        direction = np.array([0.15, -0.4], dtype=np.float32)
+        np.testing.assert_allclose(
+            updated.numpy(), np.array([1.0, -2.0], dtype=np.float32) - 0.02 * direction,
+            rtol=2e-6, atol=2e-7,
+        )
+        np.testing.assert_allclose(velocity.numpy(), direction, rtol=2e-6, atol=2e-7)
+        self.assertEqual(group["momentum_initialized"], [True])
+
+
 if __name__ == "__main__":
     unittest.main()

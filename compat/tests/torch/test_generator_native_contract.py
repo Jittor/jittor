@@ -113,6 +113,12 @@ def test_explicit_factories_use_native_owner_without_numpy_draws(monkeypatch, rn
         seen.append(handle)
         return original(*args, **kwargs)
     monkeypatch.setattr(jt.core.ops, "random", observe)
+    original_integer = jt.core.ops.generator_randint
+    def observe_integer(*args, **kwargs):
+        handle = args[6] if len(args) > 6 else kwargs.get("generator")
+        seen.append(handle)
+        return original_integer(*args, **kwargs)
+    monkeypatch.setattr(jt.core.ops, "generator_randint", observe_integer)
     with forbid_backend_fallbacks():
         source = torch.full((19,), 0.5, device=rng_device)
         draws = [torch.rand(19, generator=generator, device=rng_device),

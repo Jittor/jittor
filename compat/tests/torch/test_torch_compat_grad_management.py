@@ -4,6 +4,7 @@ from _helpers import capability as _test_capability
 
 import math
 import unittest
+from unittest import mock
 
 import numpy as np
 import jittor as jt
@@ -67,6 +68,55 @@ class TestGradientManagement(unittest.TestCase):
             materialize_grads=True)
         self.assertTrue(grads[1].requires_grad)
 
+    def test_sharded_clip_reduces_rank_local_total_norm_power(self):
+        from jittor.compat.torch import grad as grad_compat
+
+        class _Group:
+            def __init__(self):
+                self.ranks = (0, 1)
+                self._backend_kind = "hccl"
+
+            def size(self):
+                return 2
+
+            def rank(self):
+                return 0
+
+        with jt.flag_scope(use_cuda=0):
+            grads = [jt.array([3.0]), jt.array([4.0])]
+            object.__setattr__(grads[0], "_fsdp_norm_group", _Group())
+            object.__setattr__(grads[1], "_fsdp_norm_group", _Group())
+            reduced_shapes = []
+            reduced_values = []
+
+            def fake_reduce(value, how, group):
+                self.assertEqual(how, "sum")
+                reduced_shapes.append(tuple(value.shape))
+                reduced_values.append(float(np.asarray(jt.fetch_sync([value])[0]).reshape(-1)[0]))
+                return value * 2
+
+            with mock.patch.object(
+                grad_compat, "_reduce_norm_group", side_effect=fake_reduce
+            ):
+                total, denominator = grad_compat._get_total_norm_device(
+                    grads, 2.0, shard_reduce=True,
+                    return_shard_clip_denominator=True,
+                )
+                total_value, denominator_value = jt.fetch_sync([total, denominator])
+
+        self.assertEqual(reduced_shapes, [(1,)])
+        self.assertEqual(reduced_values, [25.0])
+        self.assertAlmostEqual(
+            float(total_value.reshape(-1)[0]), math.sqrt(50.0), places=5
+        )
+        expected_denominator = np.float32(
+            np.float32(total_value.reshape(-1)[0]) + np.float32(1e-6)
+        )
+        self.assertEqual(
+            float(denominator_value.reshape(-1)[0]),
+            float(expected_denominator),
+        )
+
     def test_clip_grad_norm_values_and_no_item(self):
         def body(dev):
             for p, expected in ((1.0, 10.0), (2.0, math.sqrt(34.0)),
@@ -94,6 +144,21 @@ class TestGradientManagement(unittest.TestCase):
                 else:
                     got_norm = np.linalg.norm(clipped, ord=p)
                 self.assertLessEqual(float(got_norm), 1.00001)
+
+        both_devices(body)
+
+    def test_clip_grad_norm_scalar_scale_for_wide_gradient(self):
+        def body(dev):
+            gradient = jt.array(np.ones((4096,), dtype="float32"))
+            total = _clip_grad_norm_device([gradient], 1.0, 2.0)
+            total_value, clipped = jt.fetch_sync([total, gradient])
+            self.assertAlmostEqual(
+                float(total_value.reshape(-1)[0]), 64.0, places=4,
+                msg=f"wide gradient norm on {dev}")
+            np.testing.assert_allclose(
+                clipped, np.full((4096,), 1.0 / 64.0, dtype="float32"),
+                rtol=1e-5, atol=1e-6,
+                err_msg=f"wide gradient clipping on {dev}")
 
         both_devices(body)
 

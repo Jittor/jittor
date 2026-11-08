@@ -225,7 +225,7 @@ def fully_shard(module, *, mesh=None, reshard_after_forward=True,
         st = common.StateRecord()
         object.__setattr__(module, "_fsdp_state", st)
     st.mesh = mesh or getattr(st, "mesh", None) or dtensor.init_device_mesh(
-        "cuda" if getattr(jt, "has_cuda", 0) else "cpu", (common._world_size(),))
+        mesh_shape=(common._world_size(),))
     shard_group, replicate_group = _mesh_groups(st.mesh, dp_mesh_dims)
     if getattr(st, "true_fsdp_initialized", False):
         previous_shard = st.shard_group
@@ -243,7 +243,7 @@ def fully_shard(module, *, mesh=None, reshard_after_forward=True,
     st.ignored_params = tuple(ignored_params or ())
     st.dp_mesh_dims = dp_mesh_dims
     st.kwargs = dict(kwargs)
-    if common._in_true_distributed() and not getattr(st, "true_fsdp_initialized", False):
+    if common._can_initialize_fsdp(shard_group) and not getattr(st, "true_fsdp_initialized", False):
         target_type = st.mesh.device_type
         cuda_index = int(jt.current_device()) if target_type == "cuda" else None
         target_device = ("cuda:%d" % cuda_index
@@ -291,6 +291,8 @@ def fully_shard(module, *, mesh=None, reshard_after_forward=True,
     _inject_fsdp_methods(module)
     shard._init_true_fsdp_state(module, st)
     shard._install_true_fsdp_execute(module)
+    if getattr(st, "true_fsdp_initialized", False):
+        optimizer._refresh_all_optimizer_fsdp_params((st,))
     return module
 
 

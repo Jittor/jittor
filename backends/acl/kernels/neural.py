@@ -207,19 +207,21 @@ def gelu_acl(x, approximate="none"):
 
 
 def cross_entropy_loss_acl(output, target, weight=None, ignore_index=None,
-                           reduction="mean"):
-    """One aclnn launch for the loss and one for its gradient.
+                           reduction="mean", *, torch_math=False, promote_loss=False):
+    """Use CANN LogSoftmax and NLLLoss with the Native autograd decomposition.
 
     Everything this declines falls back to the portable definition: a class
     weight vector (CANN applies it inside the reduction this function keeps in
-    Python), a non-float32 logit tensor, and any rank the portable code does
-    not itself flatten to ``[N, C]``.
+    Python), narrow native logits, and any rank the portable code does not
+    itself flatten to ``[N, C]``. Torch mode explicitly enables its narrow
+    log-softmax/NLL rounding and autocast promotion policy.
     """
     if weight is not None or reduction not in ("none", "mean", "sum"):
         return None
     if not isinstance(output, jt.Var) or not isinstance(target, jt.Var):
         return None
-    if str(output.dtype) != "float32" and _jittor_dtype_name(output.dtype) != "float32":
+    dtype = _jittor_dtype_name(output.dtype)
+    if dtype != "float32" and not (torch_math and dtype in ("float16", "bfloat16")):
         return None
     if not _dtype_in(target, _INT32_INT64):
         return None
@@ -236,11 +238,9 @@ def cross_entropy_loss_acl(output, target, weight=None, ignore_index=None,
     if int(target.shape[0]) != int(output.shape[0]):
         return None
 
-    # jittor gives an out-of-range label -- and one equal to ignore_index --
-    # weight zero and keeps it out of the mean's denominator. aclnnCrossEntropy
-    # Loss instead gathers with the raw label and faults the AI Core outside
-    # [0, C), ignoreIndex included, so the label reaching it is masked to 0 and
-    # the weighting is applied to the per-sample loss it returns.
+    # Jittor gives out-of-range and ignored labels weight zero and excludes
+    # them from the mean denominator. NLLLoss needs a safe in-range target, so
+    # map invalid labels to 0 here and apply the validity weight to its rows.
     valid = jt.logical_and(target >= 0, target < classes)
     if ignore_index is not None:
         valid = jt.logical_and(valid, target != ignore_index)
@@ -249,8 +249,9 @@ def cross_entropy_loss_acl(output, target, weight=None, ignore_index=None,
     # target with AclNN_Parameter_Error. The mask is applied in the target's
     # own width and the result is widened before it reaches the aclnn op.
     in_range = (target * valid.cast(target.dtype)).cast("int64")
-    target_weight = valid.float32()
-    loss = CrossEntropyLossACL()(output, in_range) * target_weight
+    loss = CrossEntropyLossACL()(output, in_range, promote_loss=promote_loss)
+    target_weight = valid.cast(loss.dtype) if torch_math else valid.float32()
+    loss = loss * target_weight
     if reduction == "sum":
         return loss.sum()
     if reduction == "mean":

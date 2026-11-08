@@ -193,7 +193,12 @@ def _restore_optimizer_state(self, state_dict):
         load_plan.append((dict(saved_group), prepared_slots, resets))
 
     # Commit only after every group's metadata, transfers, clones and zero
-    # buffers have been prepared successfully.
+    # buffers have been prepared successfully. Detach observed dictionaries
+    # while their old buffers/counters are still authoritative; restored empty
+    # slots must not retain stale entries in the cached public state view.
+    view = self.__dict__.get("_torch_state_view")
+    if view is not None:
+        view._detach_all()
     for group_index, (saved_group, slots, resets) in enumerate(load_plan):
         group = self.param_groups[group_index]
         steps = _torch_param_steps(group)

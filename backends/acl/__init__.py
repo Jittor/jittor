@@ -9,9 +9,9 @@ import shutil
 from jittor_utils.env_config import build_env
 from jittor_utils.build_config import BuildConfig, BuildContext, BuildSource
 
-# Preserve the previous provider's sorted source order and compilation split.
-# The provider runtime in src/backend.cc and src/workspace.cc is compiled by
-# BuildConfig separately; it must never enter this registration module.
+# All operator and registry implementations link into the one native core.
+# The small Python query module is built only after that core has loaded;
+# generated bindings depend on its dtype table and graph-entry helpers.
 REGISTRATION_SOURCES = (
     "src/acl_error_code.cc",
     "src/acl_jittor.cc",
@@ -27,6 +27,7 @@ CORE_SOURCES = (
     "src/acl_fused_ascendc.cc",
     "kernels/native/adamw_op_acl.cc",
     "kernels/native/arg_reduce_op_acl.cc",
+    "kernels/native/argsort_op_acl.cc",
     "kernels/native/base_op_acl.cc",
     "kernels/native/binary_op_acl.cc",
     "kernels/native/bmm_op_acl.cc",
@@ -96,10 +97,8 @@ def configure(context: BuildContext) -> BuildConfig:
     if context.load_library is None:
         raise RuntimeError("ACL configuration requires a load_library service")
     acl_compiler_home = os.path.dirname(__file__)
-    cc_files = [os.path.join(acl_compiler_home, name)
-                for name in REGISTRATION_SOURCES]
     extra_core_files = list(config.extra_core_files) + [
-        os.path.join(acl_compiler_home, name) for name in CORE_SOURCES
+        os.path.join(acl_compiler_home, name) for name in REGISTRATION_SOURCES + CORE_SOURCES
     ]
     cc_flags = f" -MD -DHAS_ACCELERATOR -DHAS_CUDA -DIS_ACL  \
     -I{ascend_toolkit_home}/include/ \
@@ -116,18 +115,33 @@ def configure(context: BuildContext) -> BuildConfig:
     cc_flags += " -llibopapi "
 
     library = context.load_library("libascendcl.so", os.RTLD_NOW | os.RTLD_GLOBAL)
-    # Compile the registration entry point as a normal backend module.  ACL
-    # kernels are native provider sources; no whole-tree source rewriting is
-    # performed here.  In particular, do not expose a converter resource:
-    # generated CUDA source is either handled by a registered ACL operation or
-    # rejected explicitly by the provider.
-    mod = context.compile_module(
-        '''
+    # Keep the query binding source as immutable build data. Compiling a pyjt
+    # module here would load it before the core that owns its required symbols.
+    binding_source = '''
 #include "core/common.h"
+#include <acl/acl.h>
 namespace jittor {
 // @pyjt(init_acl_ops)
 void init_acl_ops();
-}''', config.cc_flags + " " + " ".join(cc_files) + cc_flags)
+// @pyjt(acl_device_name)
+string acl_device_name() {
+    const char* name = aclrtGetSocName();
+    USER_CHECK(name && *name) << "aclrtGetSocName returned no device name";
+    return name;
+}
+// @pyjt(acl_bfloat16_supported)
+bool acl_bfloat16_supported() {
+    // CANN defines this as current-environment availability, not a blanket
+    // claim for every ACL device. Do not cache it across device/environment changes.
+    int32_t supported = 0;
+    aclError status = aclGetCannAttribute(ACL_CANN_ATTR_BF16, &supported);
+    USER_CHECK(status == ACL_SUCCESS)
+        << "aclGetCannAttribute(BF16) failed, ACL status: " << status;
+    USER_CHECK(supported == 0 || supported == 1)
+        << "aclGetCannAttribute(BF16) returned invalid availability: " << supported;
+    return supported == 1;
+}
+}'''
     final_flags = config.cc_flags + cc_flags
     provider_sources = tuple(
         BuildSource(os.path.join(acl_compiler_home, name), flags=cc_flags)
@@ -155,7 +169,8 @@ void init_acl_ops();
         # publishes its own conv/matmul kernels from kernels/install.py.
         setup_fake_cuda_lib=False, extra_core_files=tuple(extra_core_files),
         environment={**config.environment, "use_mkl": "0"},
-        resources={**config.resources, "acl_initializer": mod, "acl_library": library},
+        resources={**config.resources, "acl_binding_source": binding_source,
+                   "acl_library": library},
     )
 
 
@@ -169,4 +184,11 @@ def install_extern(context: BuildContext) -> bool:
 
 def post_process(context: BuildContext) -> None:
     if context.config.has_acl:
-        context.config.resources["acl_initializer"].init_acl_ops()
+        from jittor._runtime.dispatch import register_kernel
+        if context.native_core is None or context.compile_module is None:
+            raise RuntimeError("ACL post_process requires the loaded native core")
+        runtime = context.compile_module(
+            context.config.resources["acl_binding_source"], context.config.cc_flags)
+        runtime.init_acl_ops()
+        register_kernel("runtime.supports_bfloat16", "acl", runtime.acl_bfloat16_supported)
+        register_kernel("runtime.device_name", "acl", runtime.acl_device_name)

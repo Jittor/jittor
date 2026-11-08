@@ -19,7 +19,7 @@ struct CurandRandomOp : Op {
     // Set when a jt.Generator was passed: this draw's key and first position
     // in that generator's counter-based stream, reserved at construction
     // (RandomGeneratorState::reserve_cuda). Without one the op draws from the
-    // global curand host generator.
+    // checkpointed global Philox stream.
     bool from_generator = false;
     uint64 philox_seed = 0;
     uint64 philox_offset = 0;

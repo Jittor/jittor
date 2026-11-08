@@ -107,4 +107,3 @@ class Generator:
 
     def __reduce__(self):
         return type(self), (str(self.device),), self.get_state()
-

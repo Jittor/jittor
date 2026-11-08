@@ -39,6 +39,16 @@ void set_autograd_policy(
 // @pyjt(_get_autograd_policy)
 int get_autograd_policy();
 
+// @pyjt(_set_torch_grad_accumulation_reverse)
+bool set_torch_grad_accumulation_reverse(bool enabled);
+
+// Each VJP is normalized before fan-in, as required by Torch edge metadata.
+// Thread-local and opt-in: callers must restore the returned previous value.
+// @pyjt(_set_torch_grad_edge_dtypes)
+bool set_torch_grad_edge_dtypes(bool enabled);
+// Layout producers share the already scoped Torch backward contract.
+bool torch_grad_edge_dtype_policy_enabled();
+
 // Private, scoped metadata used to admit complete Torch training steps for
 // replay. No graph objects or tensor allocations are retained by a probe.
 // @pyjt(_begin_step_backward_probe)

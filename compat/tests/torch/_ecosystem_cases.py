@@ -415,6 +415,14 @@ CASES = {
 # this case's loss graph. Cases absent from this mapping retain the historical
 # comparison-only behavior until their upstream contract is audited.
 EXPECTED_MISSING_TRAINABLE_GRADS = {
+    "transformers_gpt2": (),
+    "transformers_llama": (),
+    # The primary output is last_hidden_state; pooling is deliberately outside
+    # its graph. Independent PyTorch with Transformers 4.56.2 establishes this set.
+    "transformers_bert": ("pooler.dense.bias", "pooler.dense.weight"),
+    "transformers_vit": ("pooler.dense.bias", "pooler.dense.weight"),
+    "transformers_t5": (),
+    "transformers_whisper": (),
     "peft_lora_llama": (),
     "peft_lora_qwen2": (),
 }

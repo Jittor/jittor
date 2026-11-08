@@ -71,17 +71,16 @@ def test_initial_lr_resume_and_live_context_flags():
     events = []
     class Observed(torch.optim.lr_scheduler.LambdaLR):
         def get_lr(self):
-            events.append((self._is_initial, self._get_lr_called_within_step,
-                           self.last_epoch))
+            events.append((self._get_lr_called_within_step, self.last_epoch))
             return super().get_lr()
     opt = MetadataOptimizer([{"lr": 0.03125, "initial_lr": 0.125}])
     scheduler = Observed(opt, lambda epoch: 0.5 ** epoch, last_epoch=2)
-    assert events == [(True, True, 3)]
+    assert events == [(True, 3)]
     assert scheduler.base_lrs == [0.125]
     assert opt.param_groups[0]["lr"] == 0.015625
     opt.step(); scheduler.step()
-    assert events[-1] == (False, True, 4)
-    assert not scheduler._is_initial and not scheduler._get_lr_called_within_step
+    assert events[-1] == (True, 4)
+    assert not scheduler._get_lr_called_within_step
 
 
 def test_scheduler_state_dict_keeps_verbose_and_omits_transient_initial_flag():
@@ -98,20 +97,22 @@ def test_context_flags_reset_when_get_lr_raises():
     class Broken(torch.optim.lr_scheduler.LambdaLR):
         def get_lr(self):
             objects.append(self)
-            assert self._is_initial and self._get_lr_called_within_step
+            assert self._get_lr_called_within_step
             raise ValueError("scheduler failure")
     with pytest.raises(ValueError, match="scheduler failure"):
         Broken(MetadataOptimizer(), lambda epoch: 1.0)
-    assert objects[0]._is_initial is False
+    assert "_is_initial" not in objects[0].__dict__
     assert objects[0]._get_lr_called_within_step is False
 
 
-def test_multiplicative_resume_initial_call_and_external_lr():
+def test_multiplicative_resume_applies_factor_and_tracks_external_lr():
     opt = MetadataOptimizer([{"lr": 0.03125, "initial_lr": 0.125}])
     scheduler = torch.optim.lr_scheduler.MultiplicativeLR(opt, lambda epoch: 0.5,
                                                          last_epoch=2)
+    assert scheduler.last_epoch == 3
     assert scheduler.base_lrs == [0.125]
-    assert scheduler.get_last_lr() == [0.03125]
+    assert scheduler.get_last_lr() == [0.015625]
     opt.param_groups[0]["lr"] = 0.0625
     opt.step(); scheduler.step()
+    assert scheduler.last_epoch == 4
     assert scheduler.get_last_lr() == [0.03125]

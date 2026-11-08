@@ -66,7 +66,7 @@ HEADER = ROOT / "backends/cuda/libraries/cudnn/include/cudnn_conv_algo_key.h"
 
 #: How many configurations ``matrix()`` builds.  Asserted, so that a matrix that
 #: silently shrank could not report zero collisions out of nothing.
-CONFIG_COUNT = 40
+CONFIG_COUNT = 42
 
 #: Configurations that differ in exactly one field, written once in C++ and
 #: shared by all three cases, so the real key, the text key it replaced and the
@@ -94,6 +94,8 @@ struct Config {
     int compute_type, math_type;
     int filter_format, groups;
     float workspace_ratio;
+    int benchmark;
+    int deterministic;
     int dim_x[5], stride_x[5];
     int dim_w[5];
     int dim_y[5], stride_y[5];
@@ -164,6 +166,8 @@ static std::vector<Config> matrix() {
     Config c;
 
     v.push_back(base_2d());
+    c = base_2d(); c.label = "benchmark=1"; c.benchmark = 1; v.push_back(c);
+    c = base_2d(); c.label = "deterministic=1"; c.deterministic = 1; v.push_back(c);
 
     // There is a table per pass, so the pass has to be in the key for the 2-D
     // and 3-D entries of one table not to reach each other.
@@ -243,7 +247,7 @@ static ConvAlgoKey key_of(const Config& c) {
         c.compute_type, c.math_type,
         c.filter_format, c.groups, c.workspace_ratio,
         c.dim_x, c.stride_x, c.dim_w, c.dim_y, c.stride_y,
-        c.pad, c.conv_stride, c.dilation);
+        c.pad, c.conv_stride, c.dilation, c.benchmark, c.deterministic);
 }
 """
 

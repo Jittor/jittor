@@ -9,8 +9,12 @@ import warnings
 import contextlib
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from ...context import get_install_context
+from ...frontend import tensor_frontend
+from ...types import (
+    _PYTHON_SCALAR_DTYPES, _make_cpu_resident,
+    _make_cuda_resident, _var_is_cpu_resident,
+)
 from ...amp import _preserve_autocast_arithmetic
-from ...types import _PYTHON_SCALAR_DTYPES, _make_cpu_resident, _make_cuda_resident, _var_is_cpu_resident
 from ....stub_policy import degraded as _degraded, unimplemented as _unimplemented
 from ..core import _promote_pair
 from ..numerical.sparse import _SparseCOO
@@ -466,6 +470,8 @@ def _copy_(self, other, non_blocking=False):
                 for source, target in zip(reversed(src.shape), reversed(self.shape))):
             raise RuntimeError("copy_ source shape cannot broadcast to destination shape")
         src = src.broadcast(self.shape)
+    if _owner.jt.flags.no_grad:
+        src = src.detach()
     # A differentiable copy owns a new edge and must not alias the source.
     if not _owner.jt.flags.no_grad and src.requires_grad:
         src = src.clone()
@@ -542,7 +548,7 @@ def _new_full(self, size, fill_value, dtype=None, device=None, requires_grad=Fal
     # x.new_full(x.shape, v)); both are iterable with __len__.
     shp = tuple(int(s) for s in size) if hasattr(size, "__len__") else (int(size),)
     with _new_scope(self, device):
-        return _new_finish(_owner.jt.full(shp, fill_value).cast(dt), device, requires_grad, self)
+        return _new_finish(_owner.jt.full(shp, fill_value, dt), device, requires_grad, self)
 
 
 def _new_empty(self, *size, dtype=None, device=None, requires_grad=False, **kw):
@@ -707,7 +713,7 @@ def _add(input, other, *, alpha=1, out=None):
     _context = get_install_context(_owner.jt)
     _native = _context.state["tensor_native_api"]
     _native_add = _native['_native_add']
-    from ...amp import autocast_any_enabled
+    from ...amp import _preserve_pointwise_dtype
     tensor_operands = [value for value in (input, other)
                        if isinstance(value, _NativeVar)]
     result_dtype = _owner._dtype_to_str(
@@ -723,7 +729,7 @@ def _add(input, other, *, alpha=1, out=None):
         input = input.cast(result_dtype)
     if isinstance(other, _NativeVar) and _jittor_dtype_name(other.dtype) != result_dtype:
         other = other.cast(result_dtype)
-    if autocast_any_enabled():
+    if _preserve_pointwise_dtype():
         with _owner.jt.flag_scope(amp_reg=0):
             if alpha != 1:
                 other = other * alpha
@@ -735,6 +741,10 @@ def _add(input, other, *, alpha=1, out=None):
     if out is not None:
         return _owner._assign_out(out, result)
     return result
+
+
+def _add_method(self, other, *, alpha=1):
+    return _add(self, other, alpha=alpha)
 
 
 def _mul(input, other, *, out=None):
@@ -749,6 +759,11 @@ def _mul(input, other, *, out=None):
     if out is not None:
         return _owner._assign_out(out, result)
     return result
+
+
+def _rsqrt(self):
+    context = get_install_context(_owner.jt)
+    return context.target_namespace.rsqrt(self)
 
 
 def _sqrt(self):
@@ -773,11 +788,6 @@ def _device(self):
             return _owner.device("cpu")
         name = "npu" if self.placement_backend == 2 else "cuda"
         return _owner.device(name, int(self.device_id))
-    # Inside a `with torch.device("meta")` block (transformers'
-    # from_pretrained), report "meta" so its meta-context detection
-    # fires and eager weight init is skipped. See device.__enter__.
-    if _owner._DEVICE_CTX_STACK:
-        return _owner._DEVICE_CTX_STACK[-1]
     # Report the Var's ACTUAL memory residency (matches jtorch's C++
     # is_cpu()/device()): a Var built/migrated to host -- e.g. via
     # torch.zeros(device='cpu') or .cpu() -- is "cpu" even while the
@@ -1046,7 +1056,7 @@ def _to(self, *args, **kwargs):
         out = _owner._make_cpu_resident(out)
     elif _owner._device_is_cuda(dev):
         if out.placement_backend >= 0:
-            return _owner._make_cuda_resident(out, force=True, device=dev)
+            return mark_placeholder(_owner._make_cuda_resident(out, force=True, device=dev), False)
         out = _owner._make_cuda_resident(out, force=True)
         # .to("cuda:N") copies across devices when N is not where the Var
         # already is; a bare .to("cuda") names the *current* device, as in
@@ -1059,7 +1069,7 @@ def _to(self, *args, **kwargs):
     out = mark_placeholder(out, False)
     if getattr(self, "_torch_0d", False):
         out._torch_0d = True
-    return out
+    return mark_placeholder(out, False)
 
 
 
@@ -1203,7 +1213,7 @@ def _typed_float64_scalar(self, value):
         context = get_install_context(_owner.jt)
         with tensor_frontend(context.state["Var"], like=self,
                              default_placement=False):
-            return _owner.jt.array(float(value), dtype="float64")
+            return _owner.jt.array(float(value), dtype="float64").stop_grad()
     return value
 
 
@@ -1678,8 +1688,8 @@ def _var_norm(self, p="fro", dim=None, keepdims=None, *rest,
 def _binary_native(opname, left, right, native_api=None):
     if native_api is None:
         native_api = get_install_context(_owner.jt).state["tensor_native_api"]
-    from ...amp import autocast_any_enabled
-    if autocast_any_enabled():
+    from ...amp import _preserve_pointwise_dtype
+    if _preserve_pointwise_dtype():
         with _owner.jt.flag_scope(amp_reg=0):
             result = native_api["operators"][opname](left, right)
     else:
@@ -1724,6 +1734,7 @@ def _promoting_binary(self, other, opname, reflected):
                     "only integer tensors of a single element can be converted to an index")
             return other * int(self.item())
         return NotImplemented
+    other = _typed_float64_scalar(self, other)
     if isinstance(other, (complex, _owner.np.complexfloating)):
         other = _complex_scalar_var(other)
     if isinstance(other, _NativeVar):
@@ -1924,12 +1935,24 @@ _FAST_BINARY_OPERATORS = ('__add__', '__radd__', '__sub__', '__rsub__',
                           '__mul__', '__rmul__', '__truediv__', '__rtruediv__')
 
 
+def _call_fast_binary(fast, left, right, code):
+    from ...amp import _preserve_pointwise_dtype
+    if _preserve_pointwise_dtype():
+        # Torch autocast keeps pointwise operators in their input dtype. The
+        # native fast path creates its Var without passing through
+        # _binary_native, so suspend Jittor's process-wide AMP register here
+        # just as that path does for the promoting implementation.
+        with _owner.jt.flag_scope(amp_reg=0):
+            return fast(left, right, code)
+    return fast(left, right, code)
+
+
 def _tensor_add(self, other):
     if isinstance(other, _SparseCOO):
         other = other.to_dense()
     fast = _FAST_BINARY
     if fast is not None:
-        out = fast(self, other, 0)
+        out = _call_fast_binary(fast, self, other, 0)
         if out is not None:
             return out
     return _promoting_binary(self, other, '__add__', False)
@@ -1938,7 +1961,7 @@ def _tensor_add(self, other):
 def _tensor_radd(self, other):
     fast = _FAST_BINARY
     if fast is not None:
-        out = fast(self, other, 1)
+        out = _call_fast_binary(fast, self, other, 1)
         if out is not None:
             return out
     return _promoting_binary(self, other, '__radd__', True)
@@ -1947,7 +1970,7 @@ def _tensor_radd(self, other):
 def _tensor_sub(self, other):
     fast = _FAST_BINARY
     if fast is not None:
-        out = fast(self, other, 2)
+        out = _call_fast_binary(fast, self, other, 2)
         if out is not None:
             return out
     return _promoting_binary(self, other, '__sub__', False)
@@ -1956,10 +1979,17 @@ def _tensor_sub(self, other):
 def _tensor_rsub(self, other):
     fast = _FAST_BINARY
     if fast is not None:
-        out = fast(self, other, 3)
+        out = _call_fast_binary(fast, self, other, 3)
         if out is not None:
             return out
     return _promoting_binary(self, other, '__rsub__', True)
+
+
+def _weak_scalar_uses_low_precision_opmath(self, other):
+    if type(other) not in (int, float):
+        return False
+    native_api = get_install_context(_owner.jt).state["tensor_native_api"]
+    return _own_dtype_name(self, native_api) in ("float16", "bfloat16")
 
 
 def _cuda_scalar_multiply(self, other):
@@ -1991,8 +2021,11 @@ def _tensor_mul(self, other):
         with _owner.jt.flag_scope(amp_reg=0):
             return _promoting_binary(self, other, '__mul__', False)
     fast = _FAST_BINARY
-    if fast is not None:
-        out = fast(self, other, 4)
+    # The C++ fast path builds a Python scalar in the tensor's dtype. Torch's
+    # weak-scalar path instead multiplies half/bfloat16 values in float32 and
+    # rounds only the result, so let the promoting implementation do that math.
+    if fast is not None and not _weak_scalar_uses_low_precision_opmath(self, other):
+        out = _call_fast_binary(fast, self, other, 4)
         if out is not None:
             return out
     return _promoting_binary(self, other, '__mul__', False)
@@ -2006,8 +2039,8 @@ def _tensor_rmul(self, other):
         with _owner.jt.flag_scope(amp_reg=0):
             return _promoting_binary(self, other, '__rmul__', True)
     fast = _FAST_BINARY
-    if fast is not None:
-        out = fast(self, other, 5)
+    if fast is not None and not _weak_scalar_uses_low_precision_opmath(self, other):
+        out = _call_fast_binary(fast, self, other, 5)
         if out is not None:
             return out
     return _promoting_binary(self, other, '__rmul__', True)
@@ -2040,7 +2073,7 @@ def _tensor_rpow(self, other):
 def _tensor_truediv(self, other):
     fast = _FAST_BINARY
     if fast is not None:
-        out = fast(self, other, 6)
+        out = _call_fast_binary(fast, self, other, 6)
         if out is not None:
             return out
     return _true_division(self, other, '__truediv__')
@@ -2049,7 +2082,7 @@ def _tensor_truediv(self, other):
 def _tensor_rtruediv(self, other):
     fast = _FAST_BINARY
     if fast is not None:
-        out = fast(self, other, 7)
+        out = _call_fast_binary(fast, self, other, 7)
         if out is not None:
             return out
     return _true_division(self, other, '__rtruediv__')
@@ -2504,7 +2537,7 @@ def _api_reciprocal_(self):
 
 
 def _api_rsqrt_(self):
-    return _ip(self, 1.0 / _owner.jt.sqrt(self))
+    return _ip(self, _owner.jt.rsqrt(self))
 
 
 _UNARY_INPLACE_APIS = {
@@ -2558,6 +2591,11 @@ def _api_ceil_(self):
 
 def _api_sigmoid_(self):
     return _ip(self, _owner.jt.sigmoid(self))
+
+def _api_tanh(self):
+    from ...native_api import operation
+    return operation("tanh")(self)
+
 
 def _api_tanh_(self):
     return _ip(self, _owner.jt.tanh(self))

@@ -61,6 +61,14 @@ Jittor's device execution model is not identical to PyTorch's. The compatibility
 
 Autocast uses Jittor precision controls rather than PyTorch's per-operator allowlist. Some operators and nested device contexts differ. Keep a float32 baseline while checking mixed-precision outputs, gradients and training curves. Memory usage alone does not prove where an operator executed.
 
+## State and resuming
+
+CUDA and ACL retain random state in their respective native generators. In an ACL build, the compatibility `torch.cuda` RNG spelling and `torch.npu` delegate to the same ACL device stream; actual CUDA uses cuRAND seed/offset state. The returned CPU `uint8` tensors are opaque snapshots to save and return to the same backend. They cannot be exchanged between CUDA, ACL or native PyTorch. CPU state and individual device streams are saved and restored separately.
+
+SGD and AdamW retain `foreach`/`fused` constructor settings, group overrides, added groups and checkpoint metadata, then select available native optimizer update implementations. Setting both options to `True` raises an error. Unsupported differentiable optimizer and AdamW capture options remain explicit refusals. Native `jt.optim` keeps its own default arithmetic policy.
+
+Torch DCP retains per-rank snapshots (`metadata.json`) for ordinary state trees and uses native sharded manifests (`manifest.json`) for local DTensor intervals. Loading detects existing formats and preserves destination tensor device, dtype and storage identity. Native PyTorch `.metadata/.distcp` files and custom planners are outside these formats. Device, world-size and sharding support still follow the relevant API boundaries; see [native sharded checkpoints](../guides/distributed/native-sharded-checkpoint.en.md).
+
 ## Use a downstream library
 
 Each [JittorEcosystem](https://github.com/JittorEcosystem) repository maintains its installation combination, official example entry points, tests and feature/device support table. Check the features needed by your task before following the corresponding version's official tutorial.
@@ -68,3 +76,6 @@ Each [JittorEcosystem](https://github.com/JittorEcosystem) repository maintains 
 For a problem report, keep a minimal script, package versions, device details and the complete error log. Import failures, compilation errors, numerical differences and performance problems need different evidence. See the [compatibility principles](../development/compatibility/principles.en.md) for acceptance criteria.
 
 Continue with the [Torch API tutorial](https://github.com/Jittor/jittor/blob/2.0-refactor/examples/notebooks/torch_compat.md) and [script migration tutorial](https://github.com/Jittor/jittor/blob/2.0-refactor/examples/notebooks/torch_compat_migration.md).
+
+
+Torch NPU Linear reuses low-precision casts of trainable FP32 leaf tensors within an autocast region. Branch gradients therefore accumulate at the shared compute dtype before conversion back to FP32. Cache keys include dtype, device and the native storage version; leaving the outermost autocast region or calling `torch.clear_autocast_cache()` releases the holders. `cache_enabled=False` uses independent casts. This mechanism belongs to the Torch NPU Linear boundary; native Jittor operators own their native precision policy.

@@ -527,7 +527,7 @@ def tensor(data, dtype=None, device=None, requires_grad=False, **kw):
     from ...meta import finish, is_placeholder, requested
     from ...frontend import data_constructor_device
     device = data_constructor_device(device)
-    if is_placeholder(data) and not requested(device):
+    if is_placeholder(data) and not requested(device, data):
         raise NotImplementedError("Cannot copy out of meta tensor; no data!")
     g = compatibility_owner(jt)
     Var = g.Var
@@ -602,6 +602,8 @@ def as_tensor(data, dtype=None, device=None):
             if dtype is not None and _jittor_dtype_name(r.dtype) != _dtype_to_str(dtype):
                 r = r.cast(_dtype_to_str(dtype))
             if r is data and device is not None and requested(device) != is_placeholder(r):
+                # A device conversion returns a distinct holder. Relabeling
+                # the input would also change aliases held by the caller.
                 from ...frontend import clone
                 r = clone(r)
             if _device_is_cpu(device):
@@ -796,8 +798,8 @@ def _cat_impl(tensors, dim=0, out=None, axis=None):
     # the values (Qwen's float32 RoPE then contains BF16-rounded halves).
     # Torch autocast leaves cat at the promoted input precision. Suspend the
     # native register before inference and allocation, as for binary ops.
-    from ...amp import autocast_any_enabled
-    if autocast_any_enabled():
+    from ...amp import _preserve_pointwise_dtype
+    if _preserve_pointwise_dtype():
         with jt.flag_scope(amp_reg=0):
             out_var = _jt_concat(fixed, dim)
     else:

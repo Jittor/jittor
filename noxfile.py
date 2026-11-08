@@ -1483,7 +1483,8 @@ def _asv_run_arguments(arguments, default_pattern=None):
 
 
 def _record_asv(
-    session, root, env, asv_command, default_machine, external=False, benchmark_filter=None, default_pattern=None
+    session, root, env, asv_command, default_machine, external=False,
+    benchmark_filter=None, default_pattern=None
 ):
     asv_home = root / "jittor-asv-home"
     asv_home.mkdir(parents=True, exist_ok=True)
@@ -1699,15 +1700,18 @@ def benchmark_cuda(session):
 
 @nox.session(python=False)
 def benchmark_accelerate(session):
-    """Opt-in Accelerate training, in its own Torch frontend and JIT cache."""
+    """Report isolated Accelerate direct/full ASV results, without a hard threshold."""
     device = os.environ.get("ASV_ACCELERATE_DEVICE", "cpu")
     if device not in ("cpu", "cuda"):
         session.error("ASV_ACCELERATE_DEVICE must be cpu or cuda")
-    root, env = _session_env(session, "asv-accelerate-" + device)
+    root, env = _session_env(session, "asv-accelerate" if device == "cpu"
+                             else "asv-accelerate-" + device)
     python = _hardware_python()
     _set_hardware_python_config(session, python, env)
+    _install_compat_source(session, env, python)
     env["cache_name"] = "asv-accelerate"
     env["JITTOR_TORCH_SHIM"] = "1"
+    env["backend_fallback"] = "error"
     if device == "cuda":
         nvcc = (
             os.environ.get("JT_BUILD_NVCC_PATH")
@@ -1723,24 +1727,22 @@ def benchmark_accelerate(session):
         env["nvcc_path"] = ""
         env["JT_BUILD_NVCC_PATH"] = ""
     session.run(
-        python,
-        "-c",
-        "from importlib.util import find_spec; "
-        "from importlib.metadata import version; "
-        "assert all(find_spec(name) is not None for name in ('asv', 'numpy', 'accelerate')), "
-        "'install ASV, NumPy and Accelerate in JITTOR_CI_PYTHON first'; "
-        "print('Accelerate benchmark dependencies:', version('accelerate'))",
-        external=True,
-        env=env,
+        python, "-c",
+        "import importlib.util, importlib.metadata; "
+        "assert all(importlib.util.find_spec(name) is not None "
+        "for name in ('asv', 'accelerate', 'numpy')); "
+        "assert importlib.metadata.version('accelerate') == '1.10.1'",
+        external=True, env=env,
     )
+    arguments = getattr(session, "posargs", ())
+    if any(arg in ("--bench", "-b") or arg.startswith(("--bench=", "-b"))
+           for arg in arguments):
+        session.error("benchmark_accelerate fixes --bench; use ASV parameter options to select cases")
+    pattern = r"^accelerate_training\."
     _record_asv(
-        session,
-        root,
-        env,
-        (python, "-m", "asv"),
-        "jittor-accelerate-" + device,
-        external=True,
-        default_pattern=r"^accelerate_training\.",
+        session, root, env, (python, "-m", "asv"),
+        "jittor-accelerate" if device == "cpu" else "jittor-accelerate-" + device,
+        external=True, benchmark_filter=pattern, default_pattern=pattern,
     )
 
 
@@ -2774,25 +2776,6 @@ def ecosystem_flash_attention(session):
     )
 
 
-@nox.session(python=False)
-def trainer_stateful(session):
-    """Fail-closed CPU Trainer fresh-process resume with two prepared runtimes."""
-    env = dict(os.environ)
-    for name in ("REAL_TORCH_PYTHON", "JITTOR_STATEFUL_PYTHON"):
-        value = env.get(name, "").strip()
-        if not value or not Path(value).is_file():
-            session.error("%s must name a separately prepared interpreter" % name)
-    env.update({
-        "JITTOR_REQUIRE_TRAINER_STATEFUL": "1",
-        "JITTOR_REQUIRE_REAL_TORCH": "1",
-        "JITTOR_TEST_REQUIRE_EXECUTION": "1",
-        "JITTOR_TORCH_SHIM": "0",
-    })
-    session.run(
-        sys.executable, "-m", "pytest", "-q", "-s",
-        "adapters/tests/test_trainer_stateful_integration.py",
-        external=True, env=env,
-    )
 
 
 @nox.session(python=False)

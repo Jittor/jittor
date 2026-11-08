@@ -65,19 +65,26 @@ def default_device():
     return _DEFAULT_DEVICE or "cpu"
 
 
+def data_constructor_device(device):
+    """tensor/as_tensor honor an explicit ambient device before data's device.
+
+    Keep unset separate from explicit CPU: meta input stays meta when no
+    device is chosen, but requesting real data from it must fail closed.
+    Like/new factories have their own source-first precedence.
+    """
+    if device is not None:
+        return device
+    from .types import active_device_context
+    contextual = active_device_context()
+    return contextual if contextual is not None else _DEFAULT_DEVICE
+
+
 def set_default_device_spelling(device):
     """Record what `torch.set_default_device` chose; None clears it to CPU."""
     global _DEFAULT_DEVICE
     _DEFAULT_DEVICE = device
 
 
-def data_constructor_device(device):
-    """Resolve tensor/as_tensor placement before considering source placement."""
-    if device is not None:
-        return device
-    from .types import active_device_context
-    contextual = active_device_context()
-    return contextual if contextual is not None else _DEFAULT_DEVICE
 
 
 def _placement_request(backend, device, like=None, default_placement=True):
@@ -127,6 +134,8 @@ def _placement_request(backend, device, like=None, default_placement=True):
     if name == "cpu":
         return 0, 0
     if name == "meta":
+        # The bounded compatibility representation owns real CPU storage;
+        # its logical meta marker is applied by the constructor owner.
         return 0, 0
     if name not in ("cuda", "npu"):
         raise NotImplementedError("native Tensor placement does not support device %r" % str(device))
@@ -315,6 +324,7 @@ def clone(input, *, memory_format=None):
     import jittor as backend
     from .tensor_state import compatibility_owner
     from .types import _var_is_cpu_resident
+    from .meta import finish
     if not isinstance(input, backend.Var):
         raise TypeError("clone expects a tensor")
     if memory_format not in (None, "preserve_format", "contiguous_format"):
@@ -445,4 +455,6 @@ def deepcopy_tensor(value, memo):
         result if original_state.rms_norm_unit_weight is value
         else deepcopy(original_state.rms_norm_unit_weight, memo))
     result.__dict__["_torch_object_state"] = copied
+    result.__dict__.pop("_torch_data_owner", None)
+    result.__dict__.pop("_torch_data_path", None)
     return result

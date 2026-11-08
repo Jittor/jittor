@@ -1,4 +1,4 @@
-"""Run a CPU-only Transformers Trainer + PEFT + Tokenizers lifecycle case.
+"""Run a device-checked Transformers Trainer + PEFT + Tokenizers lifecycle case.
 
 The runner is invoked in separate real-PyTorch and Jittor-shim processes. The
 first process writes the complete initialized model fixture; the second loads
@@ -61,7 +61,96 @@ VOCAB = {
 }
 
 
-def _runtime(name):
+def _cpu_runtime_evidence(torch):
+    """CPU Trainer checkpoints must not initialize an otherwise visible NPU."""
+    if "torch_npu" in sys.modules:
+        raise RuntimeError(
+            "CPU Trainer requires an independent oracle without torch_npu: "
+            "its optimizer registration can initialize an NPU during a CPU AdamW step"
+        )
+    npu = getattr(torch, "npu", None)
+    initialization_evidence = "namespace_absent"
+    initialized = False
+    if hasattr(torch, "_torch_compat_install_context"):
+        # A non-ACL build cannot own an initialized ACL runtime. Check the
+        # loaded build before calling any discovery API: on an ACL build even
+        # device_count() initializes the native backend. Visibility masks and
+        # use_acl=0 alone cannot prove that a runtime was never initialized.
+        native = sys.modules.get("jittor")
+        compiler = getattr(native, "compiler", None)
+        config = getattr(compiler, "build_config", None)
+        backend = getattr(config, "backend", None)
+        flags = getattr(native, "flags", None)
+        if (backend not in ("cpu", "cuda", "rocm", "corex")
+                or getattr(compiler, "has_acl", None) != 0
+                or getattr(config, "has_acl", None) != 0 or flags is None
+                or getattr(flags, "use_acl", None) != 0
+                or getattr(flags, "use_cuda", None) != 0):
+            raise RuntimeError(
+                "CPU Trainer requires a proven non-ACL Jittor build with "
+                "accelerator execution disabled before querying NPU state"
+            )
+        initialization_evidence = "non_acl_build"
+    elif npu is not None:
+        initialized = bool(npu.is_initialized())
+        initialization_evidence = "runtime_query"
+    state = {
+        "npu_device_count": int(npu.device_count()) if npu is not None else 0,
+        "npu_available": bool(npu.is_available()) if npu is not None else False,
+        "npu_initialized": initialized,
+        "npu_initialization_evidence": initialization_evidence,
+        "ascend_visible_devices": os.environ.get("ASCEND_RT_VISIBLE_DEVICES"),
+        "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
+    }
+    if state["npu_device_count"] or state["npu_available"] or state["npu_initialized"]:
+        raise RuntimeError("CPU Trainer must have zero visible and uninitialized NPUs: %s" % state)
+    return state
+
+
+def _require_npu_adapter_registration():
+    """Fail before Trainer setup when the optional NPU detector owner is absent."""
+    from importlib import metadata
+
+    package = "jittor-torch-adapters"
+    try:
+        version = metadata.version(package)
+    except metadata.PackageNotFoundError as error:
+        raise RuntimeError(
+            "NPU Trainer requires installed jittor-torch-adapters metadata; expose "
+            "its installation site before importing Jittor (a source PYTHONPATH alone is insufficient)"
+        ) from error
+    if version != "2.0.0":
+        raise RuntimeError("NPU Trainer requires jittor-torch-adapters==2.0.0, found " + version)
+    entries = [entry for entry in metadata.entry_points(group="jittor.module_patches")
+               if entry.name == "jittor_transformers"]
+    if len(entries) != 1 or entries[0].value != "jittor_adapters.transformers:register":
+        raise RuntimeError("NPU Trainer requires the owned jittor_transformers adapter entry point")
+
+    from jittor.compat.module_patcher import registered_module_patches
+    from jittor_adapters import transformers as adapter
+
+    registered = registered_module_patches()
+    expected = {
+        "transformers.utils.import_utils": adapter.patch_import_utils,
+        "transformers.modeling_flash_attention_utils": adapter.patch_flash_attention_utils,
+        "transformers.trainer": adapter.patch_trainer,
+        "accelerate.utils.imports": adapter.patch_accelerate_imports,
+        "accelerate": adapter.patch_accelerate,
+    }
+    missing = [path for path, callback in expected.items()
+               if not any(value is callback for value in registered.get(path, ()))]
+    if missing:
+        raise RuntimeError("NPU Trainer adapter callbacks were not registered before import: " + ", ".join(missing))
+    return {"distribution": package, "version": version,
+            "entry_point": entries[0].value, "registered_paths": sorted(expected)}
+
+
+def _runtime(name, device=None):
+    if device == "cpu":
+        # Trainer 4.56.2 saves accelerator RNG whenever it detects hardware,
+        # even with use_cpu=True. Hide devices before importing either runtime.
+        os.environ["ASCEND_RT_VISIBLE_DEVICES"] = ""
+        os.environ["CUDA_VISIBLE_DEVICES"] = ""
     if name == "jittor":
         os.environ["JITTOR_TORCH_SHIM"] = "1"
         import jittor as jt
@@ -69,13 +158,50 @@ def _runtime(name):
 
         if not hasattr(torch, "_torch_compat_install_context"):
             raise RuntimeError("torch did not resolve to Jittor compatibility shim")
+        if device == "cpu":
+            _cpu_runtime_evidence(torch)
+        elif device == "npu":
+            _require_npu_adapter_registration()
         return jt, torch
     os.environ.pop("JITTOR_TORCH_SHIM", None)
     import torch
 
     if not hasattr(torch, "_C") or hasattr(torch, "_torch_compat_install_context"):
         raise RuntimeError("torch did not resolve to independent PyTorch")
+    if device == "cpu":
+        _cpu_runtime_evidence(torch)
     return None, torch
+
+
+def _select_runtime_device(jt, torch, device, stack):
+    from _ecosystem_runner import _select_device
+
+    return _select_device(torch, "jittor" if jt is not None else "torch", device,
+                          policy_stack=stack)
+
+
+def _synchronize_device(jt, torch, device):
+    from _ecosystem_runner import _synchronize
+
+    _synchronize(torch, "jittor" if jt is not None else "torch", device)
+
+
+def _assert_values_device(jt, torch, values, device, label):
+    misplaced = [(name, str(value.device)) for name, value in values
+                 if value.device.type != device]
+    if misplaced:
+        raise AssertionError("%s landed on the wrong device: %s" % (label, misplaced))
+    if jt is not None:
+        from _ecosystem_runner import _assert_jittor_placement
+
+        _assert_jittor_placement(torch, values, label, device)
+
+
+def _assert_model_device(jt, torch, model, device):
+    values = list(model.named_parameters()) + list(model.named_buffers())
+    if not values:
+        raise AssertionError("model has no parameter or buffer device evidence")
+    _assert_values_device(jt, torch, values, device, "model tensor")
 
 
 def _array(value):
@@ -178,14 +304,13 @@ def _tokenizer_and_data(torch):
 
 
 def _run(args):
-    jt, torch = _runtime(args.runtime)
+    jt, torch = _runtime(args.runtime, device=args.device)
+    stack = ExitStack()
+    _select_runtime_device(jt, torch, args.device, stack)
     from transformers import Trainer, TrainingArguments, TrainerCallback
 
-    stack = ExitStack()
     if jt is not None:
-        stack.enter_context(jt.runtime.scope(
-            use_cuda=int(args.device == "cuda"), backend_fallback="error"
-        ))
+        stack.enter_context(jt.runtime.scope(backend_fallback="error"))
         from jittor._runtime.fallback import forbid_backend_fallbacks
 
         stack.enter_context(forbid_backend_fallbacks())
@@ -291,7 +416,9 @@ def _run(args):
                 self.sample_order.extend(int(value) for value in _array(sample_ids).reshape(-1))
                 if inputs["input_ids"].device.type != args.device:
                     raise AssertionError("Trainer input_ids were not placed on the requested device")
+                _assert_values_device(jt, torch, list(inputs.items()), args.device, "Trainer input")
                 loss = super().training_step(model, inputs, num_items_in_batch)
+                _assert_values_device(jt, torch, [("loss", loss)], args.device, "Trainer output")
                 gradients = {}
                 for name, parameter in model.named_parameters():
                     if not bool(parameter.requires_grad):
@@ -301,6 +428,7 @@ def _run(args):
                         raise AssertionError(
                             "trainable parameter has no gradient during training: %s" % name
                         )
+                    _assert_values_device(jt, torch, [(name, grad)], args.device, "Trainer gradient")
                     value = _array(grad)
                     if not np.all(np.isfinite(value)):
                         raise AssertionError("non-finite trainable gradient: %s" % name)
@@ -325,22 +453,13 @@ def _run(args):
                 "model parameters landed on %s, requested %s"
                 % (parameter_device, args.device)
             )
-        if jt is not None:
-            for parameter in trainer.model.parameters():
-                backend, _ = jt.core.dispatch_context([parameter])
-                if backend != args.device:
-                    raise AssertionError(
-                        "Jittor parameter backend is %s, requested %s"
-                        % (backend, args.device)
-                    )
-        if args.device == "cuda":
-            torch.cuda.synchronize()
+        _assert_model_device(jt, torch, trainer.model, args.device)
+        _synchronize_device(jt, torch, args.device)
         start = time.perf_counter()
         train_result = trainer.train()
         eval_metrics = trainer.evaluate()
         prediction_output = trainer.predict(eval_dataset)
-        if args.device == "cuda":
-            torch.cuda.synchronize()
+        _synchronize_device(jt, torch, args.device)
         elapsed = time.perf_counter() - start
         if int(trainer.state.global_step) != 4:
             raise AssertionError("Trainer completed %d steps, expected 4" % trainer.state.global_step)
@@ -393,6 +512,7 @@ def _run(args):
             EVAL_TEXTS, padding=True, truncation=True, return_tensors="pt"
         ).to(args.device)
         reloaded.to(args.device)
+        _assert_model_device(jt, torch, reloaded, args.device)
         with torch.no_grad():
             reload_logits = reloaded(**tokenized).logits
         original_logits = np.asarray(prediction_output.predictions)
@@ -444,6 +564,7 @@ def _run(args):
             "safetensors_keys": safe_keys,
             "safetensors_sha256": safetensors_sha256,
             "fallback_count": fallback_count,
+            "cpu_accelerator_state": _cpu_runtime_evidence(torch) if args.device == "cpu" else None,
             "elapsed_seconds": elapsed,
             "artifact": str(artifact),
             "output_dir": str(output_dir),
@@ -500,7 +621,7 @@ def main():
     subparsers = parser.add_subparsers(dest="command", required=True)
     run = subparsers.add_parser("run")
     run.add_argument("--runtime", choices=("torch", "jittor"), required=True)
-    run.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
+    run.add_argument("--device", choices=("cpu", "cuda", "npu"), default="cpu")
     run.add_argument("--output-dir", required=True)
     run.add_argument("--weights")
     run.add_argument("--weights-out")

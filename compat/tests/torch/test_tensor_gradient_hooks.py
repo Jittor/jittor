@@ -166,4 +166,55 @@ class TestTensorGradientHooks:
         assert value.grad is None
 
 
+    def test_grouped_and_ordinary_fan_in_hook_runs_once_before_upstream(self, device):
+        class Pair(torch.autograd.Function):
+            @staticmethod
+            def forward(ctx, value):
+                return value * 2, value * 3
+
+            @staticmethod
+            def backward(ctx, first, second):
+                return first * 2 + second * 3
+
+        value = torch.tensor([2.], device=device, requires_grad=True)
+        middle = value * 3
+        first, second = Pair.apply(middle)
+        events = []
+        middle.register_hook(
+            lambda gradient: (events.append(float(gradient.item())), gradient * 2)[1])
+        gx, gm = torch.autograd.grad(
+            (first + second + middle.square()).sum(), (value, middle))
+        assert events == [17.]
+        np.testing.assert_array_equal(gm.cpu().numpy(), [17.])
+        np.testing.assert_array_equal(gx.cpu().numpy(), [102.])
+        assert value.grad is None
+
+    def test_requested_loss_hook_raw_capture_and_terminal_replacement(self, device):
+        for request_upstream in (True, False):
+            value = torch.tensor([2.], device=device, requires_grad=True)
+            loss = value.square().sum()
+            events = []
+            loss.register_hook(
+                lambda gradient: (events.append(float(gradient.item())), gradient * 3)[1])
+            if request_upstream:
+                gx, gl = torch.autograd.grad(loss, (value, loss))
+                assert float(gx.item()) == 12. and float(gl.item()) == 1.
+            else:
+                gl, = torch.autograd.grad(loss, (loss,))
+                assert float(gl.item()) == 3.
+            assert events == [1.]
+
+    def test_low_precision_hook_observes_complete_leaf_gradient_once(self, device):
+        for dtype in (torch.bfloat16, torch.float16):
+            value = torch.tensor([.25], dtype=dtype, device=device, requires_grad=True)
+            events = []
+            def hook(gradient):
+                events.append((gradient.dtype, float(gradient.float().item())))
+                return None
+            value.register_hook(hook)
+            gradient, = torch.autograd.grad((value * 2 + value * 3).sum(), (value,))
+            assert events == [(dtype, 5.)] and gradient.dtype == dtype
+            assert float(gradient.float().item()) == 5.
+
+
 instantiate_device_type_tests(TestTensorGradientHooks, globals(), only_for=("cpu", "cuda"))

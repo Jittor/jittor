@@ -5,6 +5,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include "runtime/device.h"
+#include "ops/composite/fetch_op.h"
 #include "runtime/backend.h"
 #include <random>
 #include <dlfcn.h>
@@ -189,7 +190,7 @@ static void apply_global_seed(uint64 seed) {
     rng.host_engine.seed(seed);
     rng.acl_streams.clear();
     // Legacy callbacks retain their ABI. Seed-aware backends read the full
-    // value from the shared owner; callbacks such as dropout reset ignore it.
+    // value from the shared owner; reset-only callbacks ignore it.
     for (auto cb : callbacks)
         cb(static_cast<int>(seed));
 }
@@ -213,6 +214,22 @@ int get_seed() {
     return static_cast<int>(runtime_rng_state().host_seed);
 }
 
+void set_cpu_seed(uint64 seed) {
+    rng_manual_seed("cpu", seed, 0);
+}
+
+uint64 get_cpu_initial_seed() {
+    return rng_initial_seed("cpu", 0);
+}
+
+string get_cpu_rng_state() {
+    return rng_state("cpu", 0);
+}
+
+void set_cpu_rng_state(const string& state) {
+    set_rng_state("cpu", state, 0);
+}
+
 int get_cpu_num_threads() {
     using Getter = int (*)();
     auto getter = reinterpret_cast<Getter>(dlsym(RTLD_DEFAULT, "omp_get_max_threads"));
@@ -226,6 +243,63 @@ void set_cpu_num_threads(int threads) {
     auto setter = reinterpret_cast<Setter>(dlsym(RTLD_DEFAULT, "omp_set_num_threads"));
     USER_CHECK(setter || threads == 1) << "this Jittor build has no OpenMP support";
     if (setter) setter(threads);
+}
+
+namespace {
+std::map<string, DeviceRngOps>& device_rng_providers() {
+    // Device providers register during lazy backend construction, after dlopen.
+    static auto* providers = new std::map<string, DeviceRngOps>();
+    return *providers;
+}
+const DeviceRngOps& device_rng_ops(const string& name) {
+    (void)backend_registry().get(name);
+    auto& providers = device_rng_providers();
+    auto found = providers.find(name);
+    USER_CHECK(found != providers.end()) << "Backend has no native device RNG state owner:" << name;
+    return found->second;
+}
+const DeviceRngOps& checked_device_rng_ops(const string& name, int device) {
+    const auto& ops = device_rng_ops(name);
+    const auto& backend = backend_registry().get(name);
+    USER_CHECK(device >= 0 && backend.device_count && device < backend.device_count())
+        << "Invalid RNG device ordinal:" << device << "backend:" << name;
+    return ops;
+}
+} // namespace
+
+void register_device_rng_backend(const string& name, const DeviceRngOps& ops) {
+    CHECK(ops.get_state && ops.validate_state && ops.set_state && ops.manual_seed && ops.initial_seed)
+        << "Incomplete native device RNG provider:" << name;
+    auto& providers = device_rng_providers();
+    CHECK(providers.find(name) == providers.end()) << "Duplicate device RNG provider:" << name;
+    providers.emplace(name, ops);
+}
+
+string get_device_rng_state(const string& name, int device) {
+    const auto& ops = checked_device_rng_ops(name, device);
+    sync_all(true);
+    return ops.get_state(device);
+}
+
+void validate_device_rng_state(const string& name, const string& state) {
+    device_rng_ops(name).validate_state(state);
+}
+
+void set_device_rng_state(const string& name, int device, const string& state) {
+    const auto& ops = checked_device_rng_ops(name, device);
+    ops.validate_state(state);  // Reject malformed state before executing/mutating.
+    sync_all(true);
+    ops.set_state(device, state);
+}
+
+void set_device_seed(const string& name, int device, uint64 seed) {
+    const auto& ops = checked_device_rng_ops(name, device);
+    sync_all(true);
+    ops.manual_seed(device, seed);
+}
+
+uint64 get_device_initial_seed(const string& name, int device) {
+    return checked_device_rng_ops(name, device).initial_seed(device);
 }
 
 void add_set_seed_callback(set_seed_callback callback) {

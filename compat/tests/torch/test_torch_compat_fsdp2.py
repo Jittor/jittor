@@ -1182,6 +1182,10 @@ class TestFSDP2Compat(unittest.TestCase):
         self.assertTrue(isinstance(Shard(0), Placement))
         self.assertTrue(Partial().is_partial())
         self.assertEqual(np.asarray(DTensor(jt.array([1, 2, 3]))).tolist(), [1, 2, 3])
+        converted = np.asarray(DTensor(jt.array([1, 2, 3])), dtype=np.float64)
+        self.assertEqual(converted.dtype, np.dtype("float64"))
+        np.testing.assert_array_equal(converted, [1., 2., 3.])
+        self.assertIs(canonical_fsdp._np_dtype(np.float64), np.float64)
         self.assertIsInstance(DTensorSpec(mesh=mesh, placements=[Replicate()]), DTensorSpec)
 
         self.assertIsInstance(FSDPMeshInfo(mesh=mesh), FSDPMeshInfo)

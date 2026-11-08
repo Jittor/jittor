@@ -40,7 +40,7 @@ _NATIVE_CORE_EXPORTS = (
     "RingBuffer", "Var", "ZipFile", "binary_dtype_infer", "clean_graph",
     "cleanup", "clear_trace_data", "current_device", "display_max_memory_info",
     "display_memory_info", "dump_all_graphs", "dump_trace_data", "fetch_sync",
-    "gc", "get_cpu_num_threads", "get_device_count", "get_max_memory_info", "get_mem_info",
+    "gc", "get_cpu_rng_state", "set_cpu_rng_state", "get_cpu_initial_seed", "set_cpu_seed", "get_cpu_num_threads", "get_device_count", "get_max_memory_info", "get_mem_info",
     "get_seed", "grad", "grad_optional", "graph_check", "hash",
     "jt_init_subprocess", "lock_acquire", "lock_is_held", "lock_release",
     "migrate_all_to_cpu", "number_of_hold_vars", "number_of_lived_ops",
@@ -388,6 +388,9 @@ _ROOT_EXPORTS = (
     "profile", "profiling",
     "JittorError", "JittorInternalError", "JittorIndexError", "JittorTypeError",
     "JittorShapeError", "JittorOutOfMemoryError",
+    "get_cuda_rng_state", "get_cuda_rng_state_all", "get_cuda_initial_seed",
+    "set_cuda_rng_state", "set_cuda_rng_state_all", "set_cuda_seed",
+    "set_cuda_seed_all",
 )
 
 __all__ = tuple(sorted(set(

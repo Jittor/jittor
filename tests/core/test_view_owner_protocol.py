@@ -146,6 +146,55 @@ class TestViewOwnerProtocol:
         copied._copy_into(jt.ones((3, 2)))
         np.testing.assert_array_equal(physical(source, device), np.arange(6).reshape(2, 3))
 
+    def test_native_materialized_transpose_copy_keeps_real_root_and_siblings(self, device):
+        # Explicitly use the existing Native materialized owner. Public Torch
+        # permutations keep their physical default and are tested separately.
+        assert jt.flags.transpose_storage_view == 0
+        axes = jt.NanoVector([1, 0])
+        source = OwningTensor(np.arange(1, 7, dtype="float32").reshape(2, 3))
+        logical = jt.origin_transpose(source, axes)
+        sibling = jt.origin_transpose(source, axes)
+        # These are genuine native transpose results; register their actual
+        # transformation through the same provenance owner as Native transpose.
+        logical._set_transpose_view_of(source, axes)
+        sibling._set_transpose_view_of(source, axes)
+        shared = view(source)
+        values = (source, logical, sibling, shared)
+        jt.sync_all()
+        pointers = tuple(value._mem_ptr_now for value in values)
+        strides = tuple(tuple(value._storage_strides()) for value in values)
+        assert all(pointers)
+        assert pointers[0] == pointers[3]
+        assert pointers[1] != pointers[0] and pointers[2] != pointers[0]
+        assert strides == ((3, 1), (2, 1), (2, 1), (1, 3))
+        assert logical._has_view_provenance() and sibling._has_view_provenance()
+        assert logical._view_base_object() is source and sibling._view_base_object() is source
+        assert not logical._storage_view_is_physical()
+        assert not sibling._storage_view_is_physical() and shared._storage_view_is_physical()
+        np.testing.assert_array_equal(physical(logical, device), [[1., 4.], [2., 5.], [3., 6.]])
+        replacement = jt.array([[10., 20.], [30., 40.], [50., 60.]])
+        jt.sync_all()  # The imperative native owner requires pending readers drained.
+        with jt.no_grad():
+            assert logical._copy_view_into(replacement) is True
+        assert tuple(value._mem_ptr_now for value in values) == pointers
+        assert tuple(tuple(value._storage_strides()) for value in values) == strides
+        np.testing.assert_array_equal(physical(source, device), [[10., 30., 50.], [20., 40., 60.]])
+        for value in (logical, sibling, shared):
+            np.testing.assert_array_equal(physical(value, device), [[10., 20.], [30., 40.], [50., 60.]])
+        # A root write must refresh both retained materialized siblings too.
+        replacement = jt.array([[7., 8., 9.], [10., 11., 12.]])
+        jt.sync_all()
+        with jt.no_grad():
+            assert source._copy_view_into(replacement) is True
+        assert tuple(value._mem_ptr_now for value in values) == pointers
+        assert tuple(tuple(value._storage_strides()) for value in values) == strides
+        np.testing.assert_array_equal(physical(source, device), [[7., 8., 9.], [10., 11., 12.]])
+        for value in (logical, sibling, shared):
+            np.testing.assert_array_equal(physical(value, device), [[7., 10.], [8., 11.], [9., 12.]])
+        assert not logical._storage_view_is_physical()
+        assert not sibling._storage_view_is_physical() and shared._storage_view_is_physical()
+        assert jt.flags.transpose_storage_view == 0
+
     def test_per_call_view_request_restores_native_default_on_error_and_threads(self, device):
         source = jt.array(np.arange(6, dtype='float32').reshape(2, 3))
         with pytest.raises(RuntimeError):

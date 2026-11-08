@@ -88,6 +88,30 @@ def _cpu_bias_accumulator(x, weight, bias):
         return (product + bias.float32()).cast("bfloat16")
 
 
+def _supports_acl_bias_accumulator(x, weight, bias):
+    return (isinstance(bias, jt.Var) and x.dtype.is_float() and weight.dtype.is_float()
+            and compute_dtype_name(x, weight) == "bfloat16"
+            and (dtype_name(bias.dtype) == "bfloat16" or jt.flags.amp_reg))
+
+
+def _acl_bias_accumulator(x, weight, bias):
+    # aclnnMatmul returns a BF16 result before the following bias add. Torch's
+    # NPU Linear keeps the product in its FP32 accumulator through that add and
+    # rounds once. Promote the BF16 operands for the mapped ACL GEMM, add bias
+    # in FP32, then restore the requested BF16 output. This keeps the graph on
+    # ACL and preserves the single-rounding boundary; a fused ACL Addmm can
+    # replace this path when its backward is mapped as well.
+    with jt.flag_scope(amp_reg=jt.amp_flags.disabled):
+        x, weight, bias = (value.cast("bfloat16") for value in (x, weight, bias))
+        product = jt.nn.matmul_transpose(x.cast("float32"), weight.cast("float32"))
+        return (product + bias.cast("float32")).cast("bfloat16")
+
+
+register_kernel("linear_bias_accumulator", "acl", _acl_bias_accumulator,
+                dtypes={"float16", "bfloat16", "float32", "float64"},
+                supports=_supports_acl_bias_accumulator)
+
+
 register_kernel(
     "linear_bias_accumulator",
     "cpu",

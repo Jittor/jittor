@@ -155,7 +155,7 @@ class TestACLTorchCompat(unittest.TestCase):
     def test_fused_adamw_bfloat16_matches_cann_two_steps(self):
         initial = [1.0, -2.0, 0.5, -0.25, 4.0, -8.0, 0.125, -0.0625]
         parameters = [
-            torch.tensor(initial, dtype=torch.bfloat16).requires_grad_(True)
+            torch.tensor(initial, dtype=torch.bfloat16, device="npu").requires_grad_(True)
             for _ in range(2)
         ]
         optimizer = torch.optim.AdamW(
@@ -178,9 +178,13 @@ class TestACLTorchCompat(unittest.TestCase):
             for gradient, expected in zip(gradients, expected_parameters):
                 for parameter in parameters:
                     parameter.grad = torch.tensor(
-                        gradient, dtype=torch.bfloat16)
+                        gradient, dtype=torch.bfloat16, device="npu")
+                for parameter in parameters:
+                    _assert_acl_device(self, parameter)
+                    _assert_acl_device(self, parameter.grad)
                 optimizer.step()
                 for parameter in parameters:
+                    _assert_acl_device(self, parameter)
                     np.testing.assert_array_equal(
                         parameter.float().numpy(),
                         np.asarray(expected, dtype=np.float32),
@@ -200,6 +204,8 @@ class TestACLTorchCompat(unittest.TestCase):
         for parameter in parameters:
             state = optimizer.state[parameter]
             self.assertEqual(state["step"], 2.0)
+            _assert_acl_device(self, state["exp_avg"])
+            _assert_acl_device(self, state["exp_avg_sq"])
             np.testing.assert_array_equal(
                 state["exp_avg"].float().numpy(), expected_moment)
             np.testing.assert_array_equal(
@@ -1022,15 +1028,17 @@ class TestACLTorchCompat(unittest.TestCase):
                     (False, additive_np),
                 ):
                     inputs = [
-                        torch.tensor(value)
+                        torch.tensor(value, device="npu")
                         for value in (query_np, key_np, value_np)
                     ]
                     for value in inputs:
                         value.requires_grad_(True)
                     mask = (
                         None if mask_np is None
-                        else torch.tensor(mask_np).requires_grad_(False)
+                        else torch.tensor(mask_np, device="npu").requires_grad_(False)
                     )
+                    for value in inputs + ([] if mask is None else [mask]):
+                        _assert_acl_device(self, value)
                     output = torch.nn.functional.scaled_dot_product_attention(
                         *inputs,
                         attn_mask=mask,
@@ -1038,16 +1046,16 @@ class TestACLTorchCompat(unittest.TestCase):
                         is_causal=is_causal,
                     )
                     grads = torch.autograd.grad(
-                        (output * torch.tensor(loss_weight_np)).sum(), inputs
+                        (output * torch.tensor(loss_weight_np, device="npu")).sum(), inputs
                     )
-                    candidates.append(jt.fetch_sync([output] + list(grads)))
+                    candidates.append(_fetch_acl(self, [output] + list(grads)))
 
         self.assertEqual(native_dispatches, [True, True])
-        trainable_mask = torch.tensor(additive_np)
+        trainable_mask = torch.tensor(additive_np, device="npu")
         trainable_mask.requires_grad_(True)
         self.assertIsNone(
             acl_attention(
-                *(torch.tensor(value) for value in (
+                *(torch.tensor(value, device="npu") for value in (
                     query_np, key_np, value_np
                 )),
                 attn_mask=trainable_mask,
@@ -1060,12 +1068,12 @@ class TestACLTorchCompat(unittest.TestCase):
                 (False, additive_np),
             ):
                 inputs = [
-                    torch.tensor(value)
+                    torch.tensor(value, device="cpu")
                     for value in (query_np, key_np, value_np)
                 ]
                 for value in inputs:
                     value.requires_grad_(True)
-                mask = None if mask_np is None else torch.tensor(mask_np)
+                mask = None if mask_np is None else torch.tensor(mask_np, device="cpu")
                 output = torch.nn.functional.scaled_dot_product_attention(
                     *inputs,
                     attn_mask=mask,
@@ -1073,7 +1081,7 @@ class TestACLTorchCompat(unittest.TestCase):
                     is_causal=is_causal,
                 )
                 grads = torch.autograd.grad(
-                    (output * torch.tensor(loss_weight_np)).sum(), inputs
+                    (output * torch.tensor(loss_weight_np, device="cpu")).sum(), inputs
                 )
                 references.append(jt.fetch_sync([output] + list(grads)))
 

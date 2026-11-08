@@ -110,7 +110,7 @@ class TestEcosystemDeviceSelection(unittest.TestCase):
             _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=1 if _test_capability.check_accelerator('cuda', backend=jt).enabled else 0))
             _ecosystem_runner._select_device(_StubTorch(), "jittor", "cpu", policy_stack=_test_policy_stack)
             self.assertEqual(
-                _ecosystem_runner._device_in_use(_StubTorch(), "jittor", "cpu"), "cpu"
+                _ecosystem_runner._device_in_use(_StubTorch(), "jittor", "cpu", jt.array([1])), "cpu"
             )
 
     @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled, "CUDA is unavailable")
@@ -121,7 +121,7 @@ class TestEcosystemDeviceSelection(unittest.TestCase):
             _ecosystem_runner._select_device(_StubTorch(), "jittor", "cuda", policy_stack=_test_policy_stack)
             self.assertEqual(jt.introspection.policy.runtime.use_cuda, 1)
             self.assertEqual(
-                _ecosystem_runner._device_in_use(_StubTorch(), "jittor", "cuda"), "cuda"
+                _ecosystem_runner._device_in_use(_StubTorch(), "jittor", "cuda", jt.array([1])), "cuda"
             )
 
     def test_npu_request_requires_acl_and_is_reported_separately(self):
@@ -132,12 +132,15 @@ class TestEcosystemDeviceSelection(unittest.TestCase):
                 _ecosystem_runner._select_device(_StubTorch(), "jittor", "npu", policy_stack=self._policy_stack)
                 self.assertEqual(flags.use_cuda, 1)
                 self.assertEqual(flags.use_acl, 1)
-                self.assertEqual(
-                    _ecosystem_runner._device_in_use(
-                        _StubTorch(), "jittor", "npu"
-                    ),
-                    "npu",
-                )
+                output = object()
+                with mock.patch.object(jt.core, "dispatch_context", return_value=("acl", 0)) as dispatch:
+                    self.assertEqual(
+                        _ecosystem_runner._device_in_use(
+                            _StubTorch(), "jittor", "npu", output
+                        ),
+                        "npu",
+                    )
+                    dispatch.assert_called_once_with([output])
 
     def test_npu_request_fails_without_acl(self):
         runtime, observation = _stub_observation_runtime(_StubFlags(), False)

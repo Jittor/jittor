@@ -93,9 +93,17 @@ def _adam_update_impl(param, grad, value, momentum, *, lr, eps, weight_decay,
     if weight_decay != 0 and decoupled_weight_decay:
         param = multiply(param, (1 - lr * weight_decay)).cast(param.dtype)
     elif weight_decay != 0 or not torch_math and not decoupled_weight_decay:
-        grad = grad + param * weight_decay
+        grad = add(grad, multiply(param, weight_decay))
     stable_state = torch_math and dispatch_context(param).backend == "cpu"
-    if stable_state:
+    if torch_math and dispatch_context(param).backend in ("acl", "cuda"):
+        # Torch's device scalar path uses lerp for the first moment and
+        # square-then-scale addcmul for the second. Keep CPU's materialization
+        # boundaries below and native fused-list arithmetic independently owned.
+        first_moment = add(momentum, multiply(1 - b0, subtract(grad, momentum)))
+        _update_preserve_dtype(momentum, first_moment)
+        _update_preserve_dtype(value, add(
+            multiply(b1, value), multiply(multiply(grad, grad), 1 - b1)))
+    elif stable_state:
         # Checkpointed states and a live state's views can give the CPU fuser
         # different intermediate outputs. Prevent contraction across the state
         # summands, so identical gradients/state round alike in both graphs.

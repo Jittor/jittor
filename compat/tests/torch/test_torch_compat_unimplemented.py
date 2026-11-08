@@ -951,25 +951,36 @@ class TestDistributedDataParallel(StubPolicyBase):
         self.assertTrue(wrapped.require_backward_grad_sync)
 
     def test_a_build_without_the_collectives_says_so(self):
-        # If a multi-rank job ever reaches the collectives on a build that has
-        # none, it has to stop and say why -- continuing would train every rank
-        # on its own gradients, which is the failure 7.02 exists to remove.
+        # A missing native backend must fail, without asking the tensor for
+        # deprecated mpi_* aliases or silently treating WORLD as one rank.
+        from unittest.mock import patch
         from jittor.compat import collectives
+        from jittor.distributed import process_group
 
         class NoCollectives:
             pass
 
-        saved = collectives._world_size
-        collectives._world_size = lambda: 4
-        try:
+        class MissingBackendGroup(process_group.ProcessGroup):
+            def size(self):
+                return 4
+
+            def rank(self):
+                return 0
+
+            def _collective_backend(self):
+                return "unavailable"
+
+            def _collective_handle(self):
+                return 0
+
+        group = MissingBackendGroup()
+        with patch.object(collectives, "_world_size", return_value=4), patch.object(
+                process_group, "get_default_group", return_value=group):
             for call in (collectives._all_reduce_mean,
                          collectives._broadcast_from_rank0):
                 with self.subTest(call=call.__name__):
-                    with self.assertRaises(RuntimeError) as caught:
+                    with self.assertRaisesRegex(RuntimeError, "unavailable"):
                         call(NoCollectives())
-                    self.assertIn("4 ranks", str(caught.exception))
-        finally:
-            collectives._world_size = saved
 
 
 class TestBackwardGradient(StubPolicyBase):
@@ -1324,17 +1335,28 @@ class TestDistributedStubs(StubPolicyBase):
         import sys
         return sys.modules["torch.distributed"]
 
-    def test_dcp_save_requires_storage_destination(self):
+    def test_dcp_save_requires_an_explicit_destination(self):
         import sys
         dcp = sys.modules["torch.distributed.checkpoint"]
-        with self.assertRaisesRegex(ValueError, "checkpoint_id or a filesystem"):
+        with self.assertRaisesRegex(ValueError, "checkpoint_id"):
             dcp.save({"w": jt.ones(2)})
 
-    def test_dcp_load_requires_checkpoint_source(self):
+    def test_dcp_load_requires_an_explicit_source(self):
         import sys
         dcp = sys.modules["torch.distributed.checkpoint"]
-        with self.assertRaisesRegex(ValueError, "checkpoint_id or a filesystem"):
+        with self.assertRaisesRegex(ValueError, "checkpoint_id"):
             dcp.load({"w": jt.ones(2)})
+
+    def test_dcp_custom_storage_cannot_opt_into_a_stub(self):
+        import sys
+        from jittor.compat import stub_policy
+        dcp = sys.modules["torch.distributed.checkpoint"]
+        previous = stub_policy.set_allow_stub(True)
+        try:
+            with self.assertRaisesRegex(NotImplementedError, "custom DCP storage"):
+                dcp.save({"w": jt.ones(2)}, storage_writer=object())
+        finally:
+            stub_policy.set_allow_stub(previous)
 
     def test_single_rank_store_still_works(self):
         # One rank has nobody to meet, so a per-process dict IS a correct store.

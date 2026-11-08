@@ -286,6 +286,20 @@ def test_safetensors_dtype_bytes_reader_and_numpy_delegate(tmp_path):
         safe_owner._bytes_to_np(b"\x00", "F8_E4M3", [1])
 
 
+def test_safetensors_save_file_snapshots_frontend_vars(tmp_path):
+    st = pytest.importorskip("safetensors.torch")
+    torch = compatibility_owner(jt)
+    value = torch.tensor([1.25, -2.5, 8.0], dtype=torch.float32)
+    assert isinstance(value, jt.Var)
+    expected = np.array(value.numpy(), copy=True)
+    path = tmp_path / "frontend.safetensors"
+
+    st.save_file({"weight": value}, path)
+
+    restored = st.load_file(path)
+    np.testing.assert_array_equal(restored["weight"].numpy(), expected)
+
+
 def test_safetensors_load_bytes_rejects_malformed_archives():
     safetensors = pytest.importorskip("safetensors")
     st = pytest.importorskip("safetensors.torch")

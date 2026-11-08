@@ -53,8 +53,8 @@ _FACTORY_FIDELITY_DETAIL = (
     "some Torch layout, pin-memory, out, or generator-state semantics"
 )
 _EMPTY_LIKE_FIDELITY_DETAIL = (
-    "preserves input shape, dtype, device and leaf-gradient options but "
-    "approximates or omits Torch layout, pin-memory and memory-format semantics"
+    "preserves input shape/dtype and explicit device/requires_grad through "
+    "Jittor allocation but omits Torch layout, pin-memory, and memory-format semantics"
 )
 
 
@@ -79,7 +79,9 @@ def _invoke_factory(name, args, kwargs):
     if implementation is None:
         raise RuntimeError("torch.%s is not installed" % name)
     from ..frontend import tensor_frontend
-    like = args[0] if args and (name.endswith("_like") or name in _TENSOR_FIRST_ARGUMENT) else None
+    from ..meta import finish
+    follows_input = name.endswith("_like") or name in _TENSOR_FIRST_ARGUMENT
+    like = (args[0] if args else kwargs.get("input")) if follows_input else None
     if name == "normal":
         mean = kwargs.get("mean", args[0] if args else None)
         std = kwargs.get("std", args[1] if len(args) > 1 else None)
@@ -92,7 +94,9 @@ def _invoke_factory(name, args, kwargs):
     if requested is None and name == "arange":
         for value in args[:2]:
             if isinstance(value, jt.Var):
-                requested = "cuda" if value.is_cuda else "cpu"
+                requested = getattr(value, "device", None)
+                if requested is None:
+                    requested = "cuda" if value.is_cuda else "cpu"
                 break
     meta = _is_meta_device_request(requested)
     # torch's meta tensors carry shape/dtype only; Jittor has no meta backend,
@@ -102,12 +106,7 @@ def _invoke_factory(name, args, kwargs):
     with tensor_frontend(context.target_namespace.Var,
                          device="cpu" if meta else requested, like=like):
         result = implementation(*args, **kwargs)
-    if meta:
-        try:
-            result._jittor_torch_meta = True
-        except (AttributeError, TypeError) as exc:
-            swallowed("torch/installers/factories.py _invoke_factory: meta mark", exc)
-    return result
+    return finish(result, requested, like)
 
 
 def arange(*args, **kwargs):
@@ -226,8 +225,24 @@ def _allocate_empty_like(input):
 
 
 def _empty_like_implementation(input, **kwargs):
-    """Apply the shared factory options to the compiler's empty allocation."""
-    return _constructor_adapter("empty_like", _allocate_empty_like, False, input, **kwargs)
+    """Preserve the historical compiler fallback for ``torch.empty_like``."""
+    selected = kwargs.get("dtype")
+    result = jt.empty(input.shape, dtype=input.dtype if selected is None else _dtype_to_str(selected))
+    return _apply_requires_grad(result, kwargs.get("requires_grad", False))
+
+
+def _apply_requires_grad(value, enabled):
+    """Factories own gradient recording independently of their inputs."""
+    # A constructor routed through a separate deployed frontend can arrive as
+    # a view of its scalar seed. Torch factories are fresh leaves, so cut that
+    # implementation-only edge before applying the requested grad flag.
+    if not value.is_backward_leaf:
+        value = value.detach()
+    value._jittor_torch_ext_mutable = True
+    value.requires_grad_(bool(enabled))
+    if enabled:
+        _torch_register_leaf(value)
+    return value
 
 
 def _install_empty_like(root):
@@ -292,6 +307,8 @@ def _shape_arg(v):
 
 
 def _arange_scalar(value):
+    # A range bound/step is a scalar, not a dimension: int(value.item())
+    # would silently truncate floating Tensor steps.
     return value.item() if isinstance(value, (np.generic, jt.Var)) else value
 
 
@@ -307,9 +324,7 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
             native_shape = all(type(dim) is int for dim in shape)
         if native_shape:
             out = orig(*args)
-            out._jittor_torch_ext_mutable = True
-            out.requires_grad_(False)
-            return out
+            return _apply_requires_grad(out, False)
     # _invoke_factory already established native construction placement.
     _requires_grad = bool(kwargs.get("requires_grad", False))
     fresh_like = name in ("empty_like", "zeros_like", "ones_like", "full_like")
@@ -334,14 +349,9 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
     # Only for the factories that really take a shape: tril/triu take
     # the matrix to transform, and a 1x1 matrix holds a single element,
     # so shape conversion would collapse it into an integer dimension.
-    _takes_shape = not (name.endswith("_like") or name in _TENSOR_ARGUMENT)
-    if args and name == "arange":
-        # arange takes bounds and a step, not dimensions: a 0-D float tensor
-        # step (`1 / count`) must stay fractional, which `_shape_arg` would
-        # truncate to 0. Only numpy scalars need unwrapping; Vars are read by
-        # the native arange itself.
-        args = tuple(a.item() if isinstance(a, np.generic) else a for a in args)
-    elif args and _takes_shape:
+    _takes_shape = not (name == "arange" or name.endswith("_like")
+                        or name in _TENSOR_ARGUMENT)
+    if args and _takes_shape:
         args = tuple(_shape_arg(a) for a in args)
     # Jittor factories reject Size/NanoVector tuple subclasses.
     if _takes_shape and args and (isinstance(args[0], jt.NanoVector) or
@@ -420,7 +430,13 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
     if (_cast_to is not None and
             _jittor_dtype_name(out.dtype) != _jittor_dtype_name(_cast_to)):
         out = out.cast(_cast_to)
-    if fresh_leaf or not (_requires_grad or input_requires_grad):
+    if name in ("zeros", "ones", "full", "zeros_like", "ones_like", "full_like"):
+        # Native fill may be a broadcast scalar view. Public factories own
+        # writable storage, including when installed as an optimizer buffer.
+        out = out.clone()
+    if fresh_leaf:
+        return _apply_requires_grad(out.detach(), _requires_grad)
+    if not (_requires_grad or input_requires_grad):
         # Internal allocation/cast nodes do not create public history for a
         # fresh factory, or for an operation whose tensor inputs are stopped.
         out = out.detach()
@@ -680,6 +696,12 @@ def _draw_from_generator(name, generator, args, kwargs):
 def _random_adapter(original, *args, generator=None, _name=None, **kwargs):
     if generator is None:
         return original(*args, **kwargs)
+    if _name in ("randint", "randperm"):
+        namespace = get_install_context(jt).target_namespace
+        if kwargs.get("layout") not in (None, "strided", getattr(namespace, "strided", None)):
+            raise RuntimeError("explicit Generator integer draws require strided layout")
+        if kwargs.get("pin_memory", False):
+            raise RuntimeError("explicit Generator integer draws do not support pin_memory=True")
     drawn = _draw_from_generator(_name, generator, args, kwargs)
     return original(*args, **kwargs) if drawn is None else drawn
 

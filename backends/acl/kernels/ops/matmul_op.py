@@ -23,6 +23,7 @@ The three branches the CodeOp path carried are all still here:
 """
 
 import jittor as jt
+from jittor._core.dtypes import dtype_name as _dtype_name
 
 from .._soc import allow_reduced_precision
 
@@ -38,6 +39,17 @@ def _allow_reduced_precision():
 
 
 def mapped_matmul(x1, x2, trans_a=False, trans_b=False):
+    # ACL's relay is selected before the shared mixed-dtype retry. A previous
+    # autocast linear may already return half while its next master weight is
+    # float32; normalize only AMP-eligible operands before the strict core op.
+    # Cast nodes preserve the original FP32 parameter's gradient dtype.
+    if x1.dtype != x2.dtype and int(jt.flags.amp_reg) & (
+            jt.amp_flags.prefer16 | jt.amp_flags.prefer_bfloat16):
+        eligible = ("float16", "bfloat16", "float32")
+        if _dtype_name(x1.dtype) in eligible and _dtype_name(x2.dtype) in eligible:
+            from jittor.nn.functional.matrix import _mixed_float_compute_dtype
+            dtype = _mixed_float_compute_dtype(x1, x2)
+            x1, x2 = x1.cast(dtype), x2.cast(dtype)
     return jt.core.ops.mapped_matmul(x1, x2, trans_a, trans_b,
                                      _allow_reduced_precision())
 

@@ -243,17 +243,19 @@ class TestBudget(unittest.TestCase):
     def test_budget_report_default_uses_runtime_worker_cap(self):
         original = tiers.effective_cpu_count
         try:
-            tiers.effective_cpu_count = lambda: 1
-            reports = (tiers.budget_report(),
-                       tiers.budget_report(configured_workers=4))
+            for available in (1, 3):
+                tiers.effective_cpu_count = lambda: available
+                for arguments in ({}, {"configured_workers": 4}):
+                    report = tiers.budget_report(**arguments)
+                    self.assertEqual(report["configured_workers"], 4)
+                    self.assertEqual(report["workers"], available)
+                    self.assertEqual(report["effective_cpus"], available)
+                    self.assertEqual(report["threads_per_worker"], 1)
+                    self.assertAlmostEqual(
+                        report["predicted_seconds"],
+                        tiers.predicted_smoke_seconds(workers=available))
         finally:
             tiers.effective_cpu_count = original
-        for report in reports:
-            self.assertEqual(report["configured_workers"], 4)
-            self.assertEqual(report["workers"], 1)
-            self.assertAlmostEqual(
-                report["predicted_seconds"],
-                tiers.predicted_smoke_seconds(workers=1))
 
     def test_runtime_workers_validates_and_caps_configuration(self):
         self.assertEqual(tiers.runtime_workers(4, available=2), 2)

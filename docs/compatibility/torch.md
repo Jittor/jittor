@@ -61,6 +61,14 @@ Jittor 的设备执行方式与原生 PyTorch 不完全相同。当前兼容层�
 
 autocast 基于 Jittor 的精度控制，不是 PyTorch 的逐算子白名单；某些算子和嵌套设备上下文的行为存在差异。迁移时先保留 float32 基线，再逐项检查混合精度输出、梯度和训练曲线。不要根据显存占用大小判断算子是否在目标设备执行。
 
+## 状态与续跑
+
+CUDA 与 ACL 的随机状态由各自的原生生成器持有。ACL 构建中的兼容 `torch.cuda` RNG 接口与 `torch.npu` 委派给同一条 ACL 设备流；真实 CUDA 使用 cuRAND 的 seed/offset 状态。返回的 CPU `uint8` 张量是不透明状态，保存后交回同一后端的接口，不可在 CUDA、ACL 或原生 PyTorch 之间交换。CPU 状态与各设备流分别保存和恢复。
+
+SGD 与 AdamW 保留构造参数、分组覆盖、后加分组及 checkpoint 中的 `foreach`/`fused` 选项，并交给原生优化器的可用更新实现。`foreach=True` 与 `fused=True` 同时使用会报错；未实现的可微优化器和 AdamW capture 选项仍显式拒绝。原生 `jt.optim` 的默认数学策略保持独立。
+
+Torch DCP 的普通状态树沿用逐 rank 快照格式（`metadata.json`）；带本地 DTensor 区间的状态使用原生分片 manifest（`manifest.json`）。读取时识别已有格式，恢复张量时保留目标的设备、dtype 与存储身份。原生 PyTorch 的 `.metadata/.distcp` 文件和自定义 planner 不属于这两个格式。设备、world-size 与分片能力仍按各接口的边界验证，详见[原生分片 checkpoint](../guides/distributed/native-sharded-checkpoint.md)。
+
 ## 使用下游库
 
 [JittorEcosystem](https://github.com/JittorEcosystem) 的每个集成仓库维护自己的安装组合、官方用例入口、测试与功能/芯片支持表。优先查明目标任务所需的功能是否已验证，再复用该版本的官方教程。
@@ -68,3 +76,6 @@ autocast 基于 Jittor 的精度控制，不是 PyTorch 的逐算子白名单；
 发现问题时保留最小脚本、包版本、芯片与完整错误日志。导入、编译、数值不一致和性能问题需要不同的复现材料；验收标准见[兼容原则](../development/compatibility/principles.md)。
 
 继续学习：[Torch API 教程](https://github.com/Jittor/jittor/blob/2.0-refactor/examples/notebooks/torch_compat.md)、[脚本迁移教程](https://github.com/Jittor/jittor/blob/2.0-refactor/examples/notebooks/torch_compat_migration.md)。
+
+
+Torch NPU Linear 的 autocast 会在区域内复用可训练 FP32 叶子张量的低精度转换，使多分支输入的梯度先在同一计算精度下累加，再转换回 FP32。缓存按 dtype、设备和原生存储版本区分；退出最外层 autocast 或调用 `torch.clear_autocast_cache()` 会释放缓存。`cache_enabled=False` 使用独立转换。这个机制位于 Torch NPU Linear 入口，原生 Jittor 的精度策略仍由原生算子负责。

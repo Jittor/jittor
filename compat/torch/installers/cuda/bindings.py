@@ -125,6 +125,7 @@ from .api import (
     set_device,
     swallowed,
 )
+from . import api as _device_api
 from ...context import InstallContext, registry_for
 
 
@@ -303,6 +304,49 @@ def _install_cuda(g, registry=None):
         _mod.memory_allocated = getattr(_mod, "memory_allocated", _api_mod_memory_allocated)
         _mod.max_memory_allocated = getattr(_mod, "max_memory_allocated", _api_mod_max_memory_allocated)
         setattr(g, _dev_ns, _mod)
+
+    # ACL has an actual device provider; do not publish the generic no-op
+    # ancillary namespace on it. Keep CUDA compatibility aliases unchanged.
+    npu = g.npu
+    for name, implementation in {
+            "is_available": _device_api._npu_is_available,
+            "device_count": _device_api._npu_device_count,
+            "current_device": _device_api._npu_current_device,
+            "set_device": _device_api._npu_set_device,
+            "device": _device_api._NpuDeviceContext,
+            "is_initialized": _device_api._npu_is_initialized,
+            "synchronize": _device_api._npu_synchronize,
+            "empty_cache": _device_api._npu_empty_cache,
+            "memory_allocated": _device_api._npu_memory_allocated,
+            "max_memory_allocated": _device_api._npu_max_memory_allocated,
+            "memory_reserved": _device_api._npu_memory_reserved,
+            "max_memory_reserved": _device_api._npu_max_memory_reserved,
+            "reset_peak_memory_stats": _device_api._npu_reset_peak_memory_stats,
+            "reset_max_memory_allocated": _device_api._npu_reset_peak_memory_stats,
+            "mem_get_info": _device_api._npu_mem_get_info,
+            "memory_stats": _device_api._npu_memory_stats,
+            "get_device_name": _device_api._npu_get_device_name,
+            "is_bf16_supported": _device_api._npu_is_bf16_supported,
+            "get_amp_supported_dtype": _device_api._npu_get_amp_supported_dtype,
+            "get_rng_state": _device_api._npu_get_rng_state,
+            "get_rng_state_all": _device_api._npu_get_rng_state_all,
+            "set_rng_state": _device_api._npu_set_rng_state,
+            "set_rng_state_all": _device_api._npu_set_rng_state_all,
+            "manual_seed": _device_api._npu_manual_seed,
+            "manual_seed_all": _device_api._npu_manual_seed_all,
+            "seed": _device_api._npu_seed,
+            "seed_all": _device_api._npu_seed_all,
+            "initial_seed": _device_api._npu_initial_seed,
+    }.items():
+        setattr(npu, name, implementation)
+    npu.random = _types.ModuleType("torch.npu.random")
+    npu.random.__all__ = [
+        "get_rng_state", "get_rng_state_all", "set_rng_state", "set_rng_state_all",
+        "manual_seed", "manual_seed_all", "seed", "seed_all", "initial_seed",
+    ]
+    for name in npu.random.__all__:
+        setattr(npu.random, name, getattr(npu, name))
+    _modules["torch.npu.random"] = npu.random
 
     if "torch.multiprocessing" not in _modules:
         import multiprocessing as _mp

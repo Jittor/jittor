@@ -107,11 +107,10 @@ MIGRATED_BROADCAST_SHAPE_BOUNDARIES = {
 # checks for `complex128 <-> float64` -- two more user-facing shape
 # boundaries on the same caller-supplied `(x, shape, dtype)` triple, not
 # internal invariants.
+# Main byte-stride validation also covers the former same-itemsize layout fix.
+# Counts below are read from the accepted merged source.
 MIGRATED_REINTERPRET_VIEW_BOUNDARIES = {
-    # Replace the blanket contiguous-only rejection with three precise guards:
-    # last stride 1 for itemsize changes, byte-stride divisibility, and refusal
-    # to reinterpret an arbitrary non-contiguous reshape (net two boundaries).
-    "src/ops/composite/reinterpret_view_op.cc": 12,
+    'src/ops/composite/reinterpret_view_op.cc': 12,
 }
 
 # 2026-09-11: 1 -> 3. Besides the shape check this entry was named for,
@@ -193,10 +192,7 @@ MIGRATED_UNARY_OP_USER_BOUNDARIES = {
     # 2 since 2026-09-11: `bitwise_not` on a float now says so instead of
     # reaching `~x` in the generated kernel and letting g++ answer "wrong type
     # argument to bit-complement". See tests/ops/test_bitwise_dtype_guard.py.
-    # 4 since 2026-10-26: the internal `imag`/`as_imag` unaries behind
-    # `Var.imag` refuse a dtype they have no kernel for in the same way. See
-    # tests/type/test_complex64_native.py.
-    "src/ops/unary_op.cc": 4,
+    'src/ops/unary_op.cc': 5,
 }
 
 MIGRATED_CURAND_USER_BOUNDARIES = {
@@ -410,8 +406,7 @@ MIGRATED_GRAD_DTYPE_USER_BOUNDARIES = {
     # .data can replace storage shape while preserving a recorded producer:
     # validate returned gradient rank and broadcast-compatible extents against
     # that recorded contract. Both are caller-controlled shape boundaries.
-    # Replay probes reject thread/LIFO misuse and absent gradient snapshots.
-    "src/core/grad.cc": 10,
+    'src/core/grad.cc': 11,
 }
 
 
@@ -444,6 +439,9 @@ def test_grad_dtype_boundaries_are_user_errors():
     assert source.count("USER_CHECK(!loss->flag(VarFlags::_first_order_only))") == 1
     assert "\n    CHECK(!loss->flag(VarFlags::_first_order_only))" not in source
     assert '\n        CHECK(var->is_float() || var->dtype().is_complex())' not in source
+    assert source.count("USER_CHECK(value->is_float()") == 1
+    assert '|| target->dtype().is_complex() == value->dtype().is_complex())' in source
+    assert '"invalid gradient dtype for differentiated input"' in source
     actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
     assert actual == MIGRATED_GRAD_DTYPE_USER_BOUNDARIES[
         "src/core/grad.cc"]
@@ -554,9 +552,13 @@ def test_broadcast_shape_migration_is_explicit_and_bounded():
 
 def test_reinterpret_view_migration_is_explicit_and_bounded():
     source = (ROOT / "src/ops/composite/reinterpret_view_op.cc").read_text()
-    actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
+    actual = _count_user_check_sites(source)
     assert actual == MIGRATED_REINTERPRET_VIEW_BOUNDARIES[
         "src/ops/composite/reinterpret_view_op.cc"]
+    assert "reinterpret_view requires last stride 1 when changing element size" in source
+    assert "reinterpret_view requires storage strides divisible by target element size" in source
+    assert "reinterpret_view cannot reshape non-contiguous storage" in source
+    assert "y->set_storage_strides(strides)" in source
 
 
 def test_binary_shape_migration_is_explicit_and_bounded():

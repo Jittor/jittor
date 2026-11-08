@@ -247,7 +247,7 @@ void CudnnConv3dBackwardXOp::jit_run() {
         conv_compute_type, conv_math_key,
         filterFormat_oihw, groups, max_workspace_ratio,
         dimX, strideX, dimW, dimY, strideY,
-        padA, convstrideA, dilationA);
+        padA, convstrideA, dilationA, benchmark, cudnn_deterministic);
     // A description of that key, for debugging. LOGvvv does not evaluate its
     // operands unless the level asks for them, so this is free when off.
     // The hash is in the line because
@@ -301,11 +301,13 @@ void CudnnConv3dBackwardXOp::jit_run() {
         }
         int best_algo_idx=-1;
         for (int i = 0; i < perf_count; i++) 
-            if (perf_results[i].status == CUDNN_STATUS_SUCCESS){
+            if (cudnn_conv_algorithm_allowed(perf_results[i])){
                 best_algo_idx=i;
                 break;
         }
-        ASSERT(best_algo_idx!=-1);
+        ASSERT(best_algo_idx!=-1)
+            << "No supported cuDNN convolution algorithm satisfies the requested policy;"
+            << "deterministic=" << cudnn_deterministic << "benchmark=" << benchmark;
         algo=perf_results[best_algo_idx].algo;
         if (cache_algo) {
             bwdx_algo_cache[algo_key] = algo;

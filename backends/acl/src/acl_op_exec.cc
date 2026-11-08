@@ -49,6 +49,7 @@
 #include "utils/str_utils.h"
 #include "aclnn/aclnn.h"
 #include "aclops/aclops.h"
+#include "aclops/argsort_op_acl.h"
 #include "aclops/native_indexing_op_acl.h"
 #include "acl_fused_ascendc.h"
 namespace jittor
@@ -410,6 +411,24 @@ namespace jittor
         for (auto *op : ops)
         {
             if (op->name() == string("array")) continue;
+            // Structural reindex uses the shared byte-copy owner, not an
+            // arithmetic variant named by Op::ns (which is legitimately void).
+            if (op->name() == string("reindex"))
+            {
+                auto reason = acl_reindex_unsupported_reason(op);
+                if (!reason.empty()) return "reindex: " + reason;
+                for (auto *input : op->inputs())
+                    if (!acl_has_dtype(input->dtype())) return "reindex unsupported input dtype";
+                for (auto *output : op->outputs())
+                    if (!acl_has_dtype(output->dtype())) return "reindex unsupported output dtype";
+                continue;
+            }
+            if (op->name() == string("broadcast_to") && acl_broadcast_uses_byte_copy(op))
+            {
+                auto reason = acl_broadcast_unsupported_reason(op);
+                if (!reason.empty()) return "broadcast_to: " + reason;
+                continue;
+            }
             const auto name = fused_acl_name(op);
             if (name.empty()) return string("unregistered fused operator variant: ") + op->name() + "/" + string(op->ns.to_cstring());
             auto found = acl_op_registry().find(name);
@@ -502,7 +521,16 @@ namespace jittor
                     if (op_indeg[out] == 0)
                         queue.push(out);
                 }
-                if (current_op->name() == string("contiguous"))
+                if (current_op->name() == string("reindex"))
+                {
+                    exec_native_acl_reindex(current_op);
+                }
+                else if (current_op->name() == string("broadcast_to") &&
+                         acl_broadcast_uses_byte_copy(current_op))
+                {
+                    exec_native_acl_broadcast(current_op);
+                }
+                else if (current_op->name() == string("contiguous"))
                 {
                     AclExecutionRunner<UnaryOpRunner> runner;
                     runner.add(current_op->inputs().front(), true);
@@ -719,8 +747,13 @@ namespace jittor
         auto out = op->output(0);
         const auto rng = reserve_acl_random(out->device_id, out->numel());
         RandomAttr *attr = new RandomAttr();
-        attr->seed = rng.seed;
-        attr->offset = rng.offset;
+        uint64 seed, offset;
+        reserve_acl_random(acl_runtime_current_device(), out->numel(), seed, offset);
+        // CANN takes int64 arguments; preserve every seed bit without a
+        // narrowing numeric conversion of the public uint64 seed.
+        static_assert(sizeof(seed) == sizeof(attr->seed), "ACL seed width");
+        std::memcpy(&attr->seed, &seed, sizeof(seed));
+        attr->offset = static_cast<int64>(offset);
         runner.jt_name = "random";
         runner.op_attr.reset(attr);
 
@@ -730,6 +763,7 @@ namespace jittor
 
     static unordered_map<string, std::function<void(Op *)>> acl_ops = {
         {"getitem", exec_native_acl_getitem},
+        {"reindex", exec_native_acl_reindex},
         {"setitem", exec_native_acl_setitem},
         // jittor's own transpose op is one aclnnPermute -- exactly what the ACL
         // CodeOp override used to build, but through jt.code: several us of
@@ -897,14 +931,12 @@ namespace jittor
          }},
         {"argsort", [](Op *op)
          {
-             // CANN Sort writes (values, indices); ArgsortOp holds the
-             // indices in y and the sorted values in y_key.
-             auto *_op = static_cast<ArgsortOp *>(op);
-             AclExecutionRunner<SortOpRunner, false> runner(false, _op->dim, _op->descending);
+             auto *sort = static_cast<ArgsortOp *>(op);
+             AclExecutionRunner<ArgsortOpRunner, false> runner(sort->dim, sort->descending);
              runner.jt_name = "argsort";
-             runner.add(_op->x, true);
-             runner.add(_op->y_key, false);
-             runner.add(_op->y, false);
+             runner.add(sort->x, true);
+             runner.add(sort->y, false);
+             runner.add(sort->y_key, false);
              runner.run();
          }},
         {"arg_reduce", [](Op *op)
@@ -973,18 +1005,19 @@ namespace jittor
                     unsupported = string(op->name()) + " does not support output dtype " + string(output->dtype().to_cstring());
             if (unsupported.empty() && op->name() == string("getitem"))
                 unsupported = acl_getitem_unsupported_reason(op);
+            if (unsupported.empty() && op->name() == string("reindex"))
+                unsupported = acl_reindex_unsupported_reason(op);
             if (unsupported.empty() && op->name() == string("setitem"))
                 unsupported = acl_setitem_unsupported_reason(op);
             if (op->name() == string("argsort"))
             {
                 auto *sort = static_cast<ArgsortOp *>(op);
                 const auto dtype = sort->x->dtype();
-                if (dtype != ns_float16 && dtype != ns_float32 &&
-                    dtype != ns_int8 && dtype != ns_int16 &&
-                    dtype != ns_int32 && dtype != ns_int64 && dtype != ns_uint8)
-                    unsupported = "argsort requires a CANN Sort input dtype";
-                if (sort->y->dtype() != ns_int64)
-                    unsupported = "argsort ACL indices must be int64 before output cast";
+                if (dtype != ns_float16 && dtype != ns_float32)
+                    unsupported = "raw ACL argsort requires float16 or float32 keys; "
+                        "the public wrapper preserves bfloat16 through exact float32 keys";
+                if (sort->y->dtype() != ns_int32 && sort->y->dtype() != ns_int64)
+                    unsupported = "ACL argsort indices require int32 or int64";
             }
             if (op->name() == string("arg_reduce"))
             {
@@ -1118,6 +1151,14 @@ namespace jittor
         implementation.kernel.fallback_only = false;
         register_op_implementation("random", BackendId::Acl, implementation,
             "acl-native-random-v1");
+        // Argsort's core definition advertises CPU only. Publish the existing
+        // constructor on ACL with the canonical provider's native forward.
+        auto sort = get_op_definition("argsort")->implementations.at(BackendId::Cpu);
+        sort.kernel.native = exec_mapped_acl_ops;
+        sort.kernel.compile = compile_acl_mapped;
+        sort.kernel.fallback_only = false;
+        register_op_implementation("argsort", BackendId::Acl, sort,
+            "acl-native-argsort-v1");
     }
 
 } // jittor

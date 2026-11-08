@@ -1,16 +1,17 @@
-"""FP32 linear bias with a fixed CUDA reduction order in backward.
+"""Linear bias with a fixed CUDA reduction order in backward.
 
 Each tile owns its partial sums, and each output channel has one final writer.
-There are no floating point atomics whose order depends on block scheduling.
-"""
-
+There are no floating point atomics whose order depends on block scheduling."""
 
 def _install_linear_bias_cuda(jt, _output_requires_grad, optional_kernel):
-    """Register against the owning native frontend without a root import."""
+    """Register using the owning native frontend and shared dispatch registry."""
     global _BiasSum, _LinearBias, _linear_bias_cuda
+    from jittor._core.dtypes import var_dtype_name
+
     class _BiasSum(jt.Function):
         def execute(self, gradient):
             self.shape = tuple(gradient.shape)
+            dtype = var_dtype_name(gradient)
             channels = int(gradient.shape[-1])
             rows = int(gradient.numel()) // channels
             chunks = (rows + 255) // 256
@@ -29,7 +30,7 @@ def _install_linear_bias_cuda(jt, _output_requires_grad, optional_kernel):
                     if (c < {channels})
                         for (int r = begin + threadIdx.y;
                              r < begin + 256 && r < {rows}; r += 8)
-                            value += g[(int64_t)r * {channels} + c];
+                            value += (float)g[(int64_t)r * {channels} + c];
                     tile[threadIdx.y][threadIdx.x] = value;
                     __syncthreads();
                     for (int stride = 4; stride; stride /= 2) {{
@@ -47,8 +48,8 @@ def _install_linear_bias_cuda(jt, _output_requires_grad, optional_kernel):
                 """,
             )
             if chunks == 1:
-                return partial.reshape((channels,))
-            return jt.code(
+                return partial.reshape((channels,)).cast(dtype)
+            result = jt.code(
                 (channels,), "float32", [partial],
                 cuda_src=f"""
                 __global__ static void linear_bias_finish(
@@ -64,6 +65,9 @@ def _install_linear_bias_cuda(jt, _output_requires_grad, optional_kernel):
                 CHECK(0 == cudaGetLastError());
                 """,
             )
+            # Accumulate reduced precision cotangents in FP32, then return the
+            # input dtype. Autograd's outer cast restores FP32 master parameters.
+            return result.cast(dtype)
 
         def grad(self, gradient):
             # Keep the reduction differentiable, including mixed second derivatives.
@@ -71,14 +75,28 @@ def _install_linear_bias_cuda(jt, _output_requires_grad, optional_kernel):
 
 
     class _LinearBias(jt.Function):
-        def execute(self, x, bias):
-            return x + bias
+        def execute(self, x, bias, output_dtype=None):
+            self.input_dtype = var_dtype_name(x)
+            self.bias_dtype = var_dtype_name(bias)
+            self.round_output = output_dtype is not None
+            result = x + bias
+            return result.cast(output_dtype) if self.round_output else result
 
         def grad(self, gradient):
-            return gradient, _BiasSum.apply(gradient)
+            # A BF16 accumulator epilogue rounds only its final output. Its
+            # FP32 inputs still receive FP32 adjoints, and the bias uses the
+            # same fixed reduction tree as the ordinary bias route.
+            input_gradient = gradient
+            if var_dtype_name(input_gradient) != self.input_dtype:
+                input_gradient = input_gradient.cast(self.input_dtype)
+            bias_gradient = _BiasSum.apply(input_gradient)
+            if var_dtype_name(bias_gradient) != self.bias_dtype:
+                bias_gradient = bias_gradient.cast(self.bias_dtype)
+            result = (input_gradient, bias_gradient)
+            return result + (None,) if self.round_output else result
 
 
-    def _supports_linear_bias(x, bias):
+    def _supports_linear_bias(x, bias, output_dtype=None):
         if not (isinstance(x, jt.Var) and isinstance(bias, jt.Var)):
             return False
         shape = tuple(int(d) for d in x.shape)
@@ -86,6 +104,8 @@ def _install_linear_bias_cuda(jt, _output_requires_grad, optional_kernel):
         # the portable implementation; no shape-dependent compiler flag is used.
         return (
             _output_requires_grad(x, bias)
+            and output_dtype in (None, "float16", "bfloat16", "float32")
+            and var_dtype_name(x) == var_dtype_name(bias)
             and len(shape) >= 2 and all(d > 0 for d in shape)
             and tuple(bias.shape) == (shape[-1],)
             and shape[-1] <= 2147483647
@@ -93,8 +113,11 @@ def _install_linear_bias_cuda(jt, _output_requires_grad, optional_kernel):
         )
 
 
-    @optional_kernel("nn.linear_bias", "cuda", dtypes=("float32",),
+    @optional_kernel("nn.linear_bias", "cuda", dtypes=("float16", "bfloat16", "float32"),
                      supports=_supports_linear_bias)
-    def _linear_bias_cuda(x, bias):
-        return _LinearBias.apply(x, bias)
+    def _linear_bias_cuda(x, bias, output_dtype=None):
+        if output_dtype is None:
+            return _LinearBias.apply(x, bias)
+        return _LinearBias.apply(x, bias, output_dtype)
+
     return _linear_bias_cuda

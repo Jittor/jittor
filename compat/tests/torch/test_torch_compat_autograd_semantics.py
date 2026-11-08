@@ -587,5 +587,217 @@ class TestMismatchedBackwardGrad(unittest.TestCase):
         np.testing.assert_allclose(g.numpy(), np.zeros(3), atol=1e-6)
 
 
+class TestTorchGradientEdgeDtypes(unittest.TestCase):
+    """Maintenance cases; R248's immutable full-array protocol is separate."""
+
+    def test_low_raw_sum_to_precedes_fp32_input_dtype_cast(self):
+        for dtype, half in ((torch.bfloat16, 2. ** -8),
+                            (torch.float16, 2. ** -11)):
+            returned = []
+            class Expanded(torch.autograd.Function):
+                @staticmethod
+                def forward(ctx, value):
+                    return value.expand(2)
+
+                @staticmethod
+                def backward(ctx, incoming):
+                    raw = torch.tensor([1., half], dtype=dtype)
+                    returned.append(raw)
+                    return raw
+
+            value = torch.tensor([.25], dtype=torch.float32, requires_grad=True)
+            gradient, = torch.autograd.grad(Expanded.apply(value).sum(), (value,))
+            self.assertEqual(len(returned), 1)
+            self.assertEqual(returned[0].dtype, dtype)
+            np.testing.assert_array_equal(returned[0].float().cpu().numpy(), [1., half])
+            self.assertEqual(gradient.dtype, torch.float32)
+            np.testing.assert_array_equal(gradient.cpu().numpy(), [1.])
+            self.assertEqual(float(returned[0].float().sum().item()), 1. + half)
+            self.assertIsNone(value.grad)
+
+    def test_multi_axis_sum_to_does_not_round_between_axis_groups(self):
+        for dtype, half in ((torch.bfloat16, 2. ** -8),
+                            (torch.float16, 2. ** -11)):
+            for control in (False, True):
+                small = half * (2 if control else 1)
+                returned = []
+                class Expanded(torch.autograd.Function):
+                    @staticmethod
+                    def forward(ctx, value):
+                        return value.expand(2, 2, 1)
+
+                    @staticmethod
+                    def backward(ctx, incoming):
+                        raw = torch.tensor(
+                            [[[1.], [-1.]], [[small], [0.]]], dtype=dtype)
+                        returned.append(raw)
+                        return raw
+
+                value = torch.tensor([[.25]], dtype=torch.float32, requires_grad=True)
+                gradient, = torch.autograd.grad(Expanded.apply(value).sum(), (value,))
+                self.assertEqual(len(returned), 1)
+                self.assertEqual(returned[0].dtype, dtype)
+                np.testing.assert_array_equal(
+                    returned[0].float().cpu().numpy(),
+                    np.array([[[1.], [-1.]], [[small], [0.]]], dtype=np.float32))
+                self.assertEqual(gradient.dtype, torch.float32)
+                np.testing.assert_array_equal(
+                    gradient.cpu().numpy(), np.full((1, 1), small, dtype=np.float32))
+                staged = returned[0].sum(dim=0).sum(dim=0, keepdim=True).float()
+                self.assertEqual(float(staged.item()), small if control else 0.)
+                self.assertIsNone(value.grad)
+
+    def test_one_node_two_outputs_complete_vjp_is_cast_once(self):
+        class Pair(torch.autograd.Function):
+            @staticmethod
+            def forward(ctx, value, positive, negative):
+                ctx.save_for_backward(positive, negative)
+                return value.float() * positive, value.float() * negative
+
+            @staticmethod
+            def backward(ctx, first, second):
+                positive, negative = ctx.saved_tensors
+                return first * positive + second * negative, None, None
+
+        for dtype, half in ((torch.bfloat16, 2. ** -8),
+                            (torch.float16, 2. ** -11)):
+            value = torch.tensor([.25, .5], dtype=dtype, requires_grad=True)
+            positive = torch.tensor([1. + half], dtype=torch.float32)
+            negative = torch.tensor([-1.], dtype=torch.float32)
+            first, second = Pair.apply(value, positive, negative)
+            gradient, = torch.autograd.grad((first + second).sum(), (value,))
+            self.assertEqual(gradient.dtype, dtype)
+            np.testing.assert_array_equal(gradient.float().cpu().numpy(), [half, half])
+
+    def test_each_edge_cast_and_shared_wide_cast_have_distinct_results(self):
+        class FP32VJP(torch.autograd.Function):
+            @staticmethod
+            def forward(ctx, value, coefficient):
+                ctx.save_for_backward(coefficient)
+                return value.float() * coefficient
+
+            @staticmethod
+            def backward(ctx, upstream):
+                coefficient, = ctx.saved_tensors
+                return upstream * coefficient, None
+
+        for dtype, half_ulp in ((torch.bfloat16, 2. ** -8),
+                                (torch.float16, 2. ** -11)):
+            for family in ("custom", "ordinary_mixed",
+                           "ordinary_separate_cast", "ordinary_shared_cast"):
+                for reverse in (False, True):
+                    with self.subTest(dtype=dtype, family=family, reverse=reverse):
+                        value = torch.tensor([.25], dtype=dtype, requires_grad=True)
+                        positive = torch.tensor([1. + half_ulp], dtype=torch.float32)
+                        negative = torch.tensor([-1.], dtype=torch.float32)
+                        if family == "custom":
+                            left = FP32VJP.apply(value, positive)
+                            right = FP32VJP.apply(value, negative)
+                        elif family == "ordinary_mixed":
+                            left, right = value * positive, value * negative
+                        elif family == "ordinary_separate_cast":
+                            left, right = value.float() * positive, value.float() * negative
+                        else:
+                            wide = value.float()
+                            left, right = wide * positive, wide * negative
+                        loss = (right + left).sum() if reverse else (left + right).sum()
+                        gradient, = torch.autograd.grad(loss, (value,))
+                        expected = half_ulp if family == "ordinary_shared_cast" else 0.
+                        self.assertEqual(gradient.dtype, dtype)
+                        self.assertEqual(float(gradient.float().item()), expected)
+
+    def test_grouped_multiple_outputs_and_inputs_normalize_each_edge(self):
+        class PairVJP(torch.autograd.Function):
+            @staticmethod
+            def forward(ctx, first, second, coefficient):
+                ctx.save_for_backward(coefficient)
+                return first.float() * coefficient, second.float() * coefficient
+
+            @staticmethod
+            def backward(ctx, first_gradient, second_gradient):
+                coefficient, = ctx.saved_tensors
+                return first_gradient * coefficient, second_gradient * coefficient, None
+
+        for dtype, half_ulp in ((torch.bfloat16, 2. ** -8),
+                                (torch.float16, 2. ** -11)):
+            with self.subTest(dtype=dtype):
+                first = torch.tensor([.25], dtype=dtype, requires_grad=True)
+                second = torch.tensor([.5], dtype=dtype, requires_grad=True)
+                positive = torch.tensor([1. + half_ulp], dtype=torch.float32)
+                negative = torch.tensor([-1.], dtype=torch.float32)
+                lp, rp = PairVJP.apply(first, second, positive)
+                ln, rn = PairVJP.apply(first, second, negative)
+                gradients = torch.autograd.grad((lp + rp + ln + rn).sum(), (first, second))
+                for gradient in gradients:
+                    self.assertEqual(gradient.dtype, dtype)
+                    self.assertEqual(float(gradient.float().item()), 0.)
+
+    def test_repeated_input_slots_are_distinct_dtype_edges(self):
+        class RepeatedInput(torch.autograd.Function):
+            @staticmethod
+            def forward(ctx, first, second, positive, negative):
+                ctx.save_for_backward(positive, negative)
+                return first.float() * positive + second.float() * negative
+
+            @staticmethod
+            def backward(ctx, upstream):
+                positive, negative = ctx.saved_tensors
+                return upstream * positive, upstream * negative, None, None
+
+        for dtype, half_ulp in ((torch.bfloat16, 2. ** -8),
+                                (torch.float16, 2. ** -11)):
+            with self.subTest(dtype=dtype):
+                value = torch.tensor([.25], dtype=dtype, requires_grad=True)
+                positive = torch.tensor([1. + half_ulp], dtype=torch.float32)
+                negative = torch.tensor([-1.], dtype=torch.float32)
+                gradient, = torch.autograd.grad(
+                    RepeatedInput.apply(value, value, positive, negative).sum(), (value,))
+                self.assertEqual(gradient.dtype, dtype)
+                self.assertEqual(float(gradient.float().item()), 0.)
+
+    def test_fp32_leaf_fan_in_is_not_reduced_to_forward_amp_dtype(self):
+        for dtype, half_ulp in ((torch.bfloat16, 2. ** -8),
+                                (torch.float16, 2. ** -11)):
+            with self.subTest(dtype=dtype):
+                weight = torch.eye(2, dtype=torch.float32, requires_grad=True)
+                unit = torch.eye(2, dtype=torch.float32)
+                small = unit * half_ulp
+                # Two distinct cast edges into the FP32 leaf are required.
+                with torch.autocast("cpu", dtype=dtype, cache_enabled=False):
+                    loss = (weight @ unit + weight @ small).sum()
+                gradient, = torch.autograd.grad(loss, (weight,))
+                self.assertEqual(gradient.dtype, torch.float32)
+                np.testing.assert_array_equal(
+                    gradient.cpu().numpy(), np.full((2, 2), 1. + half_ulp, dtype=np.float32))
+
+    def test_policy_restores_on_nested_scope_and_backward_exception(self):
+        owner = inspect.getmodule(torch.autograd.grad)
+        setter = jt.core._set_torch_grad_edge_dtypes
+        original = setter(False)
+        try:
+            with owner._torch_grad_edge_dtypes():
+                self.assertTrue(setter(True))
+                with self.assertRaisesRegex(RuntimeError, "nested-edge-sentinel"):
+                    with owner._torch_grad_edge_dtypes():
+                        raise RuntimeError("nested-edge-sentinel")
+                self.assertTrue(setter(True))
+            self.assertFalse(setter(False))
+            class Reject(torch.autograd.Function):
+                @staticmethod
+                def forward(ctx, value):
+                    return value * 2
+
+                @staticmethod
+                def backward(ctx, gradient):
+                    raise RuntimeError("backward-edge-sentinel")
+
+            value = torch.tensor([2.], requires_grad=True)
+            with self.assertRaisesRegex(RuntimeError, "backward-edge-sentinel"):
+                torch.autograd.grad(Reject.apply(value).sum(), (value,))
+            self.assertFalse(setter(False))
+        finally:
+            setter(original)
+
+
 if __name__ == "__main__":
     unittest.main()

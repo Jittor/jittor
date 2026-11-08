@@ -5,6 +5,9 @@
 #include "runtime/backend.h"
 #include "runtime/backend_streams.h"
 #include "runtime/device_state.h"
+#include "runtime/init.h"
+#include <limits>
+#include <sstream>
 #include "mem/allocator.h"
 #include <atomic>
 #include <chrono>
@@ -681,6 +684,93 @@ Allocator* acl_allocator(int device, BackendMemoryKind kind) {
     return found->second.get();
 }
 
+struct AclRngState { uint64 seed, offset; };
+struct AclRngStore {
+    std::mutex mutex;
+    uint64 default_seed = 0;
+    std::map<int, AclRngState> devices;
+};
+AclRngStore& rng_store() {
+    static auto* value = new AclRngStore();
+    return *value;
+}
+AclRngState& rng_for(AclRngStore& owner, int device) {
+    auto found = owner.devices.find(device);
+    if (found == owner.devices.end())
+        found = owner.devices.emplace(device, AclRngState{owner.default_seed, 0}).first;
+    return found->second;
+}
+uint64 parse_rng_number(const string& token) {
+    USER_CHECK(!token.empty()) << "Invalid ACL RNG state number";
+    uint64 result = 0;
+    for (char ch : token) {
+        USER_CHECK(ch >= '0' && ch <= '9') << "Invalid ACL RNG state number";
+        uint64 digit = uint64(ch - '0');
+        USER_CHECK(result <= (std::numeric_limits<uint64>::max() - digit) / 10)
+            << "ACL RNG state number exceeds uint64 range";
+        result = result * 10 + digit;
+    }
+    return result;
+}
+AclRngState parse_rng_state(const string& text) {
+    USER_CHECK(!text.empty() && text.size() <= 128) << "Invalid ACL RNG state size";
+    std::istringstream input(text);
+    string version, seed, offset;
+    USER_CHECK(bool(input >> version >> seed >> offset) && version == "JITTOR_ACL_RNG_V1")
+        << "Invalid ACL RNG state version or fields";
+    input >> std::ws;
+    USER_CHECK(input.eof()) << "Trailing data in ACL RNG state";
+    AclRngState result{parse_rng_number(seed), parse_rng_number(offset)};
+    USER_CHECK(result.offset <= uint64(std::numeric_limits<int64>::max()))
+        << "ACL RNG offset exceeds the native signed counter range";
+    return result;
+}
+void validate_rng_state(const string& text) { (void)parse_rng_state(text); }
+string get_rng_state(int device) {
+    auto& owner = rng_store();
+    std::lock_guard<std::mutex> guard(owner.mutex);
+    auto value = rng_for(owner, device);
+    return "JITTOR_ACL_RNG_V1\n" + std::to_string(value.seed) + " "
+        + std::to_string(value.offset) + "\n";
+}
+void set_rng_state(int device, const string& text) {
+    auto value = parse_rng_state(text);
+    auto& owner = rng_store();
+    std::lock_guard<std::mutex> guard(owner.mutex);
+    owner.devices[device] = value;
+}
+void manual_seed(int device, uint64 seed) {
+    auto& owner = rng_store();
+    std::lock_guard<std::mutex> guard(owner.mutex);
+    owner.devices[device] = AclRngState{seed, 0};
+}
+uint64 initial_seed(int device) {
+    auto& owner = rng_store();
+    std::lock_guard<std::mutex> guard(owner.mutex);
+    return rng_for(owner, device).seed;
+}
+void legacy_seed(int seed) {
+    auto& owner = rng_store();
+    std::lock_guard<std::mutex> guard(owner.mutex);
+    owner.default_seed = static_cast<uint64>(static_cast<int64>(seed));
+    for (auto& item : owner.devices)
+        item.second = AclRngState{owner.default_seed, 0};
+}
+void register_acl_rng() {
+    static const bool registered = [] {
+        DeviceRngOps rng;
+        rng.get_state = get_rng_state;
+        rng.validate_state = validate_rng_state;
+        rng.set_state = set_rng_state;
+        rng.manual_seed = manual_seed;
+        rng.initial_seed = initial_seed;
+        register_device_rng_backend("acl", rng);
+        add_set_seed_callback(legacy_seed);
+        return true;
+    }();
+    (void)registered;
+}
+
 void memory_info(int device, size_t& free, size_t& total) {
     on_device(device, [&] { check_acl(aclrtGetMemInfo(ACL_DDR_MEM, &free, &total), "aclrtGetMemInfo"); });
 }
@@ -900,7 +990,20 @@ void shutdown_acl_backend() noexcept {
     }
 }
 
+void reserve_acl_random(int device, int64 count, uint64& seed, uint64& offset) {
+    USER_CHECK(count >= 0) << "ACL RNG reservation must be nonnegative";
+    auto& owner = rng_store();
+    std::lock_guard<std::mutex> guard(owner.mutex);
+    auto& value = rng_for(owner, device);
+    USER_CHECK(uint64(count) <= uint64(std::numeric_limits<int64>::max()) - value.offset)
+        << "ACL RNG stream counter exhausted";
+    seed = value.seed;
+    offset = value.offset;
+    value.offset += uint64(count);
+}
+
 BackendOps make_acl_backend() {
+    register_acl_rng();
     BackendOps ops;
     ops.id = BackendId::Acl;
     ops.name = "acl";

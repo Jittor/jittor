@@ -356,7 +356,7 @@ def silu(x, inplace=False):     # inplace: accepted for torch/mmcv compat, ignor
         # SiLU uses fp32 intermediates for reduced inputs and rounds only its
         # output. Rounding sigmoid(x) first changes both SiLU and its gradient.
         # Disable AMP inference here so the widened graph stays in fp32.
-        with jt.flag_scope(amp_reg=0):
+        with jt.flag_scope(amp_reg=jt.amp_flags.disabled):
             wide = x.float32()
             return (wide * wide.sigmoid()).cast(input_dtype)
     return x * x.sigmoid()

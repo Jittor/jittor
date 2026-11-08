@@ -13,6 +13,11 @@
 
 namespace jittor {
 
+// These queues may be touched by runtime flag initialization and by late
+// cleanup. Their containers live for the process; cleanup() releases entries.
+EXTERN_LIB list<VarPtr>& fetcher();
+EXTERN_LIB list<VarPtr>& fetcher_to_free();
+
 // Devices whose asynchronous fetch callbacks still need a device wait.
 uint64 pending_fetch_device_mask();
 

@@ -34,6 +34,7 @@ _AMP_KEEP_REDUCE = 4
 _AMP_KEEP_WHITE = 8
 _AMP_ARRAY_PREFER = 16
 _AMP_PREFER_BFLOAT16 = 64
+_AMP_PRECISION_MASK = _AMP_PREFER32 | _AMP_PREFER16 | _AMP_PREFER_BFLOAT16
 
 # ---------------------------------------------------------------------------
 # torch.amp state.
@@ -58,6 +59,8 @@ class _AutocastState(_threading.local):
         self.order = []          # device types in the order they were enabled
         self.cache_enabled = True
         self.nesting = 0
+        self.fsdp_precision = []
+        self.acl_linear_casts = {}
         # jt.flags.amp_reg as it was before autocast first took it over, so the
         # last region out puts the process register back exactly.
         self.baseline_reg = None
@@ -181,6 +184,31 @@ def autocast_any_enabled():
     return any(_autocast_state.enabled.values())
 
 
+@_contextlib.contextmanager
+def _fsdp_mixed_precision_scope(amp_reg):
+    """Track FSDP compute precision without enabling public Torch autocast."""
+    _autocast_state.fsdp_precision.append(int(amp_reg) & _AMP_PRECISION_MASK)
+    try:
+        with jt.flag_scope(amp_reg=amp_reg):
+            yield
+    finally:
+        _autocast_state.fsdp_precision.pop()
+
+
+def _preserve_pointwise_dtype():
+    """Torch pointwise ops preserve inputs under autocast and FSDP precision."""
+    current = int(jt.flags.amp_reg) & _AMP_PRECISION_MASK
+    if autocast_any_enabled():
+        base = _effective_autocast_device()
+        if (base is not None
+                and current == _amp_register_for(autocast_configured_dtype(base))):
+            return True
+    precision = _autocast_state.fsdp_precision
+    # Only suspend the implicit preference owned by an active Torch scope.
+    # Native kernels can request a different precision for their accumulator.
+    return bool(precision) and current == precision[-1]
+
+
 def autocast_dtype(device_type=None):
     """dtype of the innermost enabled autocast region for that device, else None.
 
@@ -220,6 +248,44 @@ def _autocast_cast_inputs(*values):
         else value
         for value in values
     )
+
+
+def _acl_linear_autocast_inputs(*values):
+    """Share eligible FP32 leaf casts in a Torch NPU linear region.
+
+    Reusing a cast also reuses its backward edge: branch gradients accumulate
+    in the compute dtype before the one conversion back to their FP32 leaf.
+    Native Jittor and other frontend backends keep their existing paths.
+    """
+    if not getattr(jt.compiler, "has_acl", False):
+        return values
+    dtype = _autocast_dtype_for_inputs(*values)
+    if dtype not in ("float16", "bfloat16"):
+        return values
+    result = []
+    for value in values:
+        if not isinstance(value, jt.Var):
+            result.append(value)
+            continue
+        source_dtype = _jittor_dtype_name(value.dtype)
+        if source_dtype not in ("float16", "bfloat16", "float32") or source_dtype == dtype:
+            result.append(value)
+            continue
+        cacheable = (source_dtype == "float32" and value.requires_grad
+                     and value.is_backward_leaf and not jt.flags.no_grad
+                     and autocast_cache_enabled())
+        key = (id(value), tuple(value._saved_storage_version()), dtype,
+               int(value.placement_backend), int(value.device_id)) if cacheable else None
+        entry = _autocast_state.acl_linear_casts.get(key) if cacheable else None
+        if entry is not None and entry[0] is value:
+            result.append(entry[1])
+            continue
+        with jt.flag_scope(amp_reg=0):
+            lowered = value.cast(dtype)
+        if cacheable:
+            _autocast_state.acl_linear_casts[key] = (value, lowered)
+        result.append(lowered)
+    return tuple(result)
 
 
 def _autocast_scope_for_inputs(*values):
@@ -316,26 +382,14 @@ def autocast_cache_enabled():
 
 
 def set_autocast_cache_enabled_state(enabled):
-    """torch.set_autocast_cache_enabled.
-
-    The flag round-trips, which is the whole observable contract, but it governs
-    a cache jittor does not have: torch caches the low-precision cast of a
-    weight for the duration of a region, while jittor casts an operand per
-    operator.  Turning it off is therefore exactly honoured; turning it on asks
-    for an optimisation that is absent, and the numbers are the same either way.
-    """
+    """Record the preference; Torch NPU Linear shares eligible leaf casts."""
     _autocast_state.cache_enabled = bool(enabled)
     return None
 
 
 def clear_autocast_cache():
-    """torch.clear_autocast_cache.
-
-    Torch drops the cached low-precision weight casts here.  Jittor keeps no
-    such cache, so the postcondition -- no cached cast survives this call --
-    already holds.  That is a complete implementation of an empty cache, not a
-    stub standing in for a missing one.
-    """
+    """Release the current thread's NPU Linear cast holders."""
+    _autocast_state.acl_linear_casts.clear()
     return None
 
 
@@ -418,24 +472,33 @@ class autocast:
         return self._cache_enabled
 
     def __enter__(self):
+        previous_amp_reg = int(getattr(jt.flags, 'amp_reg', 0))
         self._saved.append((autocast_is_enabled(self.device),
                             autocast_configured_dtype(self.device),
-                            autocast_cache_enabled()))
+                            autocast_cache_enabled(), previous_amp_reg))
         set_autocast_dtype_state(self.device, self.fast_dtype)
         set_autocast_enabled_state(self.device, self._enabled)
         autocast_increment_nesting()
         set_autocast_cache_enabled_state(self._cache_enabled)
+        # amp_reg is process-wide, and FSDP may set a compute preference
+        # without opening an autocast region. An explicit disabled region must
+        # still suppress that preference when no other device's autocast is
+        # active, then restore the exact register value on exit.
+        if not self._enabled and not autocast_any_enabled():
+            jt.flags.amp_reg = 0
         return self
 
     def __exit__(self, *exc):
         if not self._saved:
             return False
-        prev_enabled, prev_dtype, prev_cache = self._saved.pop()
+        prev_enabled, prev_dtype, prev_cache, previous_amp_reg = self._saved.pop()
         if autocast_decrement_nesting() == 0:
             clear_autocast_cache()
         set_autocast_dtype_state(self.device, prev_dtype)
         set_autocast_enabled_state(self.device, prev_enabled)
         set_autocast_cache_enabled_state(prev_cache)
+        if not autocast_any_enabled():
+            jt.flags.amp_reg = previous_amp_reg
         return False
 
     def _fresh(self):
@@ -488,6 +551,11 @@ class _DeviceAutocast(autocast):
 
 class _CudaAutocast(_DeviceAutocast):
     _device = "cuda"
+    _device_default_dtype = "float16"
+
+
+class _NpuAutocast(_DeviceAutocast):
+    _device = "npu"
     _device_default_dtype = "float16"
 
 
@@ -613,10 +681,14 @@ _AMP_FIDELITY = (
      "a CPU region and a CUDA region are not independent the way torch's "
      "dispatch keys are. Explicit bfloat16 regions select bfloat16 even "
      "when every operand is float32. "
-     "cache_enabled is recorded; there is no weight cast cache to enable"),
+     "NPU Linear shares eligible FP32 leaf casts while cache_enabled is true; "
+     "other operators and backends retain their existing cast paths"),
     (("torch.cuda.amp.autocast",), _CudaAutocast, Fidelity.APPROXIMATE,
      "Legacy cuda-pinned subclass of torch.autocast with the same register "
      "behaviour and limitations"),
+    (("torch.npu.amp.autocast", "torch.npu.amp.autocast_mode.autocast"),
+     _NpuAutocast, Fidelity.APPROXIMATE,
+     "NPU-pinned subclass of the shared autocast owner; dtype policy uses the ACL backend"),
     (("torch.cpu.amp.autocast",), _CpuAutocast, Fidelity.APPROXIMATE,
      "Legacy cpu-pinned subclass of torch.autocast with a bfloat16 default "
      "and the same register behaviour and limitations"),

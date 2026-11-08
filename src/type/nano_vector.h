@@ -1,6 +1,6 @@
 // ***************************************************************
-// Copyright (c) 2023 Jittor. All Rights Reserved. 
-// Maintainers: Dun Liang <randonlang@gmail.com>. 
+// Copyright (c) 2023 Jittor. All Rights Reserved.
+// Maintainers: Dun Liang <randonlang@gmail.com>.
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
@@ -170,7 +170,7 @@ struct NanoVector {
     // An entry ends at bit 1..64, and 64 does not fit the 6-bit field: it is
     // stored as 0, which no existing entry can otherwise end at.
     inline int get_offset(int i) const {
-        int o = (offset >> (size_nbits+i*offset_nbits)) 
+        int o = (offset >> (size_nbits+i*offset_nbits))
             & ((1<<offset_nbits)-1);
         return o ? o : 64;
     }
@@ -512,4 +512,4 @@ inline std::size_t operator()(jittor::NanoVector const& s) const noexcept {
 }
 };
 }
- 
+

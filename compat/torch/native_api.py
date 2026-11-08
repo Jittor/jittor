@@ -107,9 +107,11 @@ class NativeOperation:
             device = kwargs.pop("device", None)
         unique_operation = self._operation_key in ("unique", "unique_consecutive")
         source = (args[0] if args else kwargs.get("input")) if unique_operation else None
-        like = source if source is not None else self._first_var(args, context.native_backend.Var)
+        like = source if source is not None else self._first_var((args, kwargs), context.native_backend.Var)
         with tensor_frontend(context.state["Var"], device=device, like=like,
                              default_placement=False if like is not None else True):
+            if self._operation_key == "rsqrt":
+                return _torch_rsqrt(context, implementation, *args, **kwargs)
             if self._operation_key in ("div", "divide"):
                 return _torch_div(context, *args, **kwargs)
             if isinstance(implementation, type) and issubclass(implementation, context.native_backend.Function):
@@ -125,10 +127,18 @@ class NativeOperation:
                 if isinstance(result, tuple):
                     result = (result[0],) + tuple(value.int64() for value in result[1:])
                 return result
+            if self._operation_key == "baddbmm":
+                from .amp import _autocast_cast_inputs
+                values = list(args) + list(kwargs.values())
+                cast_values = _autocast_cast_inputs(*values)
+                args = tuple(cast_values[:len(args)])
+                kwargs = dict(zip(kwargs, cast_values[len(args):]))
             if self._operation_key in self._AUTOMIXED_PASSTHROUGH:
-                from .amp import autocast_any_enabled
-                scope = (jittor.flag_scope(amp_reg=0)
-                         if autocast_any_enabled() else nullcontext())
+                from .amp import _preserve_pointwise_dtype
+                amp_reg = (jittor.amp_flags.keep_reduce
+                           if self._operation_key == "mean" else 0)
+                scope = (jittor.flag_scope(amp_reg=amp_reg)
+                         if _preserve_pointwise_dtype() else nullcontext())
                 with scope:
                     return implementation(*args, **kwargs)
             from .amp import _autocast_scope_for_inputs
@@ -137,6 +147,52 @@ class NativeOperation:
 
     def __reduce__(self):
         return operation, (self._operation_key,)
+
+
+_TORCH_RSQRT_ACL_FUNCTIONS = {}
+
+
+def _torch_rsqrt_acl(context, implementation, input):
+    """Use the ACL composition for forward and Torch's rsqrt VJP order."""
+    native = context.native_backend
+    key = (native, implementation)
+    function_type = _TORCH_RSQRT_ACL_FUNCTIONS.get(key)
+    if function_type is None:
+        class _TorchRsqrtACL(native.Function):
+            def execute(self, value):
+                self.input_dtype = value.dtype
+                self.output = implementation(value)
+                return self.output
+
+            def grad(self, upstream):
+                with native.flag_scope(amp_reg=0):
+                    cube = self.output.pow(3).cast(self.input_dtype)
+                    return (-0.5 * upstream) * cube
+
+        function_type = _TorchRsqrtACL
+        _TORCH_RSQRT_ACL_FUNCTIONS[key] = function_type
+    return function_type.apply(input)
+
+
+def _torch_rsqrt(context, implementation, input):
+    """Preserve Torch's CUDA autocast and ACL rsqrt backward contracts."""
+    from jittor._core.dtypes import dtype_name
+    from .amp import autocast_is_enabled
+    native = context.native_backend
+    if (isinstance(input, native.Var)
+            and native.core.dispatch_context([input])[0] == "acl"
+            and dtype_name(input.dtype) in (
+                "float16", "bfloat16", "float32", "float64")):
+        with native.flag_scope(amp_reg=0):
+            return _torch_rsqrt_acl(context, implementation, input)
+    if (hasattr(input, "dtype")
+            and dtype_name(input.dtype) in ("float16", "bfloat16")
+            and isinstance(input, native.Var)
+            and native.core.dispatch_context([input])[0] == "cuda"
+            and autocast_is_enabled("cuda")):
+        input = input.float32()
+    with native.flag_scope(amp_reg=0):
+        return implementation(input)
 
 
 def _integral_operand(value, var_type):

@@ -1,5 +1,6 @@
 #pragma once
 #include <algorithm>
+#include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -11,8 +12,13 @@ struct Op;
 
 std::string acl_getitem_unsupported_reason(Op* op);
 std::string acl_setitem_unsupported_reason(Op* op);
+std::string acl_reindex_unsupported_reason(Op* op);
+bool acl_broadcast_uses_byte_copy(Op* op);
+std::string acl_broadcast_unsupported_reason(Op* op);
 void exec_native_acl_getitem(Op* op);
 void exec_native_acl_setitem(Op* op);
+void exec_native_acl_reindex(Op* op);
+void exec_native_acl_broadcast(Op* op);
 
 namespace acl_indexing {
 
@@ -184,6 +190,174 @@ inline std::string finish_plan(CopyPlan& plan, size_t source_bytes, size_t targe
     return {};
 }
 
+// Affine structural reindex maps output coordinates to input coordinates.
+// These plans move storage bytes, independent of arithmetic dtype: BF16 NaN
+// payloads, signed zero and integer high bits must never pass through a Cast.
+struct AffineIndex {
+    size_t constant = 0;
+    std::vector<size_t> coefficients;
+};
+
+class AffineIndexParser {
+    const std::string& text_;
+    size_t rank_, position_ = 0, depth_ = 0;
+    std::string error_;
+
+    void spaces() {
+        while (position_ < text_.size() &&
+               std::isspace(static_cast<unsigned char>(text_[position_]))) ++position_;
+    }
+    bool number(size_t& value) {
+        value = 0;
+        const size_t start = position_;
+        while (position_ < text_.size() && text_[position_] >= '0' && text_[position_] <= '9') {
+            size_t next;
+            if (!multiply(value, 10, next) ||
+                !add(next, static_cast<size_t>(text_[position_] - '0'), value)) {
+                error_ = "reindex integer overflow";
+                return false;
+            }
+            ++position_;
+        }
+        return position_ != start;
+    }
+    bool is_constant(const AffineIndex& value) const {
+        return std::all_of(value.coefficients.begin(), value.coefficients.end(),
+                           [](size_t coefficient) { return coefficient == 0; });
+    }
+    bool factor(AffineIndex& value) {
+        spaces();
+        value = AffineIndex{};
+        value.coefficients.assign(rank_, 0);
+        if (position_ == text_.size()) return false;
+        if (text_[position_] == '(') {
+            if (++depth_ > 64) {
+                error_ = "reindex expression nesting exceeds 64";
+                return false;
+            }
+            ++position_;
+            if (!expression(value)) return false;
+            spaces();
+            if (position_ == text_.size() || text_[position_++] != ')') return false;
+            --depth_;
+            return true;
+        }
+        if (text_[position_] == 'i') {
+            ++position_;
+            size_t axis;
+            if (!number(axis) || axis >= rank_) {
+                if (error_.empty()) error_ = "reindex output index axis is out of range";
+                return false;
+            }
+            value.coefficients[axis] = 1;
+            return true;
+        }
+        return number(value.constant);
+    }
+    bool term(AffineIndex& value) {
+        if (!factor(value)) return false;
+        while (true) {
+            spaces();
+            if (position_ == text_.size() || text_[position_] != '*') return true;
+            ++position_;
+            AffineIndex right;
+            if (!factor(right)) return false;
+            if (!is_constant(value) && !is_constant(right)) {
+                error_ = "reindex index products are not affine";
+                return false;
+            }
+            if (is_constant(value)) std::swap(value, right);
+            const size_t scale = right.constant;
+            if (!multiply(value.constant, scale, value.constant)) {
+                error_ = "reindex constant overflow";
+                return false;
+            }
+            for (auto& coefficient : value.coefficients)
+                if (!multiply(coefficient, scale, coefficient)) {
+                    error_ = "reindex coefficient overflow";
+                    return false;
+                }
+        }
+    }
+    bool expression(AffineIndex& value) {
+        if (!term(value)) return false;
+        while (true) {
+            spaces();
+            if (position_ == text_.size() || text_[position_] != '+') return true;
+            ++position_;
+            AffineIndex right;
+            if (!term(right)) return false;
+            if (!add(value.constant, right.constant, value.constant)) {
+                error_ = "reindex constant overflow";
+                return false;
+            }
+            for (size_t axis = 0; axis < rank_; ++axis)
+                if (!add(value.coefficients[axis], right.coefficients[axis], value.coefficients[axis])) {
+                    error_ = "reindex coefficient overflow";
+                    return false;
+                }
+        }
+    }
+public:
+    AffineIndexParser(const std::string& text, size_t rank) : text_(text), rank_(rank) {}
+    std::string parse(AffineIndex& value) {
+        const bool parsed = expression(value);
+        spaces();
+        if (!parsed || position_ != text_.size())
+            return error_.empty() ? "reindex requires nonnegative affine indices using integers, iN, + and *" : error_;
+        return {};
+    }
+};
+
+inline std::string make_reindex_plan(const std::vector<size_t>& input_shape,
+                                     const std::vector<size_t>& output_shape,
+                                     const std::vector<std::string>& indexes,
+                                     size_t element_bytes, CopyPlan& plan) {
+    if (!element_bytes) return "zero dtype width";
+    if (indexes.size() != input_shape.size()) return "reindex input/index rank mismatch";
+    if (output_shape.empty()) return "reindex requires a nonempty output rank";
+    plan = CopyPlan{};
+    plan.shape = output_shape;
+    plan.block_bytes = element_bytes;
+    plan.source_strides.assign(output_shape.size(), 0);
+    size_t input_elements, input_bytes, output_bytes;
+    if (!product(input_shape, input_elements) ||
+        !multiply(input_elements, element_bytes, input_bytes) ||
+        !product(output_shape, plan.elements) ||
+        !multiply(plan.elements, element_bytes, output_bytes))
+        return "reindex byte size overflow";
+    std::vector<AffineIndex> mappings(indexes.size());
+    for (size_t axis = 0; axis < indexes.size(); ++axis) {
+        auto reason = AffineIndexParser(indexes[axis], output_shape.size()).parse(mappings[axis]);
+        if (!reason.empty()) return reason;
+    }
+    if (!plan.elements) return {};
+    std::vector<size_t> input_strides;
+    if (!dense_strides(input_shape, element_bytes, input_strides) ||
+        !dense_strides(output_shape, element_bytes, plan.target_strides))
+        return "reindex stride overflow";
+    for (size_t axis = 0; axis < input_shape.size(); ++axis) {
+        const auto& mapping = mappings[axis];
+        size_t maximum = mapping.constant, increment;
+        for (size_t output_axis = 0; output_axis < output_shape.size(); ++output_axis) {
+            if (!multiply(output_shape[output_axis] - 1, mapping.coefficients[output_axis], increment) ||
+                !add(maximum, increment, maximum))
+                return "reindex index bound overflow";
+        }
+        // Overflow/padding would require a typed fill. Only prove the byte
+        // copy when every output coordinate is within the original storage.
+        if (maximum >= input_shape[axis]) return "reindex index may be out of bounds; overflow fill is not implemented";
+        if (!multiply(mapping.constant, input_strides[axis], increment) ||
+            !add(plan.source_offset, increment, plan.source_offset))
+            return "reindex source offset overflow";
+        for (size_t output_axis = 0; output_axis < output_shape.size(); ++output_axis)
+            if (!multiply(mapping.coefficients[output_axis], input_strides[axis], increment) ||
+                !add(plan.source_strides[output_axis], increment, plan.source_strides[output_axis]))
+                return "reindex source stride overflow";
+    }
+    return finish_plan(plan, input_bytes, output_bytes);
+}
+
 inline std::string make_get_plan(const Selection& selection,
                                  const std::vector<size_t>& output_shape, CopyPlan& plan) {
     if (selection.shape != output_shape) return "getitem output shape differs from its selection";
@@ -223,6 +397,44 @@ inline std::string make_set_plan(const Selection& selection,
         if (plan.elements && value_shape[i] != 1) plan.source_strides[leading + i] = value_strides[i];
     }
     return finish_plan(plan, value_bytes, selection.storage_bytes);
+}
+
+// Align the native broadcast masks before using the existing assignment plan.
+// A bcast bit with no keepdims bit inserts a new output axis (explicit dims);
+// a bit in both masks consumes an existing one-element input axis.
+inline std::string make_broadcast_plan(const std::vector<size_t>& input_shape,
+                                       const std::vector<size_t>& output_shape,
+                                       uint32_t bcast_mask, uint32_t keepdims_mask,
+                                       size_t element_bytes, CopyPlan& plan) {
+    if (!element_bytes) return "zero dtype width";
+    if (output_shape.empty() || output_shape.size() > 32)
+        return "broadcast requires an output rank between 1 and 32";
+    if (keepdims_mask & ~bcast_mask) return "broadcast keepdims mask is not a subset of bcast mask";
+    if (output_shape.size() < 32 &&
+        ((bcast_mask | keepdims_mask) >> output_shape.size()))
+        return "broadcast mask exceeds output rank";
+    std::vector<size_t> aligned(output_shape.size(), 1);
+    size_t input_axis = 0;
+    for (size_t axis = 0; axis < output_shape.size(); ++axis) {
+        const bool broadcast = (bcast_mask >> axis) & 1u;
+        if (broadcast) {
+            if ((keepdims_mask >> axis) & 1u) {
+                if (input_axis >= input_shape.size() || input_shape[input_axis] != 1)
+                    return "broadcast kept axis requires a one-element input dimension";
+                ++input_axis;
+            }
+        } else {
+            if (input_axis >= input_shape.size()) return "broadcast input rank is too small";
+            aligned[axis] = input_shape[input_axis++];
+            if (aligned[axis] != output_shape[axis])
+                return "broadcast nonexpanded dimension differs from input";
+        }
+    }
+    if (input_axis != input_shape.size()) return "broadcast input dimensions are not fully consumed";
+    Selection selection;
+    auto reason = make_selection(output_shape, {}, element_bytes, selection);
+    if (!reason.empty()) return reason;
+    return make_set_plan(selection, aligned, plan);
 }
 
 inline bool address_end(uintptr_t base, size_t offset, uintptr_t& result) {

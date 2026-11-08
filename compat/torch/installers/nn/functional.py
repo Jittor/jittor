@@ -115,7 +115,7 @@ def _interpolate(input=None, size=None, scale_factor=None,
                            align_corners=ac)
 
 
-def _cross_entropy(input, target, weight=None, size_average=None,
+def _cross_entropy_impl(input, target, weight=None, size_average=None,
                    ignore_index=-100, reduce=None, reduction="mean",
                    label_smoothing=0.0):
     # torch: a floating-point target with the SAME shape as input is a
@@ -178,6 +178,48 @@ def _cross_entropy(input, target, weight=None, size_average=None,
     if reduction == "none":
         return loss.reshape(target.shape) if input.ndim > 2 else loss
     return loss.sum() / norm
+
+
+def _cross_entropy(input, target, weight=None, size_average=None,
+                   ignore_index=-100, reduce=None, reduction="mean",
+                   label_smoothing=0.0):
+    # torch_npu keeps narrow log-softmax rounding; autocast promotes its NLL
+    # stage. Reuse the registered provider rather than the portable reindex
+    # gather, which ACL cannot execute with extra tensor indices.
+    narrow = _jittor_dtype_name(input.dtype) in ("float16", "bfloat16")
+    hard = isinstance(target, jt.Var) and _jittor_dtype_name(target.dtype) in ("int32", "int64")
+    if (narrow and hard and weight is None and not label_smoothing
+            and jt.core.dispatch_context([input])[0] == "acl"):
+        from ...amp import _autocast_dtype_for_inputs
+        from jittor._runtime.dispatch import try_dispatch
+        promoted = _autocast_dtype_for_inputs(input) is not None
+        with jt.flag_scope(amp_reg=0):
+            target = _checked_class_target(target, int(input.shape[1]), ignore_index)
+            result = try_dispatch(
+                "nn.cross_entropy_loss", input, target, weight=weight,
+                ignore_index=ignore_index, reduction=reduction,
+                torch_math=True, promote_loss=promoted)
+            if result is None:
+                raise NotImplementedError("ACL narrow hard-label cross entropy is unsupported for this shape")
+            return result
+    # Torch keeps cross_entropy in FP32. Jittor's amp_reg is global and can
+    # remain active after an accelerator model-forward autocast wrapper exits,
+    # so the CE implementation must inspect the register itself.
+    if (_jittor_dtype_name(input.dtype) == "float32"
+            and int(getattr(jt.flags, "amp_reg", 0)) != 0):
+        with jt.flag_scope(amp_reg=0):
+            return _cross_entropy_impl(
+                input, target, weight, size_average, ignore_index, reduce,
+                reduction, label_smoothing)
+    return _cross_entropy_impl(
+        input, target, weight, size_average, ignore_index, reduce,
+        reduction, label_smoothing)
+
+
+def _cross_entropy_execute(module, input, target):
+    return _cross_entropy(
+        input, target, weight=module.weight, ignore_index=module.ignore_index,
+        reduction=module.reduction)
 
 
 def _ctc_loss(log_probs, targets, input_lengths, target_lengths, blank=0,
@@ -327,6 +369,8 @@ def _install_functional(ctx):
         _loss_functions[template.functional_name] = getattr(F, template.functional_name)
         if not hasattr(nn, template.__name__):
             setattr(nn, template.__name__, _adapt_extra(template, ctx.registry))
+    if getattr(jt.compiler, "has_acl", False):
+        nn.CrossEntropyLoss.execute = _cross_entropy_execute
     # pixel_shuffle / pixel_unshuffle (super-resolution, some VAE decoders): jittor's
     # functional lacks them. (N, C*r^2, H, W) <-> (N, C, H*r, W*r). Verified vs torch.
     if not hasattr(F, "pixel_shuffle"):

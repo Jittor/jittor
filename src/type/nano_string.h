@@ -106,6 +106,8 @@ constexpr int ns_max_len = 16;
     \
     m(uniform) \
     m(normal) \
+    /* Append new names: existing indices are serialized in native state. */ \
+    m(rsqrt) \
 
 struct NanoString;
 #define DECLEAR_NS(T) EXTERN_LIB NanoString ns_##T;
@@ -460,6 +462,11 @@ inline NanoString binary_dtype_infer(NanoString op, NanoString x, NanoString y, 
 }
 
 inline NanoString unary_dtype_infer(NanoString op, NanoString x) {
+    // Reciprocal square root is an elementwise floating operation. Like the
+    // public Torch operation, autocast must not narrow a float32/float64 input;
+    // reduced inputs retain their dtype, with float32 opmath in the type table.
+    if (op == ns_rsqrt && !x.is_complex())
+        return x.is_float() ? x : ns_float32;
     if (op.is_bool()) return ns_bool;
     if (op == ns_as_imag) return x == ns_float64 ? ns_complex128 : ns_complex64;  // x -> x*i
     if (x.is_complex()) {
@@ -501,7 +508,10 @@ inline NanoString reduce_dtype_infer(NanoString op, NanoString x, bool preserve_
     bool is_float = x.is_float() || op.is_float();
     int dsize_ = x.dsize_();
     if (is_float) {
-        if ((amp_reg & amp_keep_reduce) || preserve_type)
+        // A backend that promises dtype-preserving reductions must retain an
+        // explicit float32/float64 cast even inside a reduced-precision region.
+        if (preserve_type && x.is_float()) return x;
+        if (amp_reg & amp_keep_reduce)
             return float_dtype(dsize_, false, x==ns_bfloat16);
         // A float16/bfloat16 *input* keeps its own dtype. The widening below
         // is the identity for every other float width -- float32 gives

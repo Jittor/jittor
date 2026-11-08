@@ -217,7 +217,8 @@ class TestTorchAmpNamespace(unittest.TestCase):
         self.assertIs(record.implementation, torch.amp.GradScaler)
         self.assertEqual(record.level, Fidelity.APPROXIMATE)
         self.assertIn("state_dict", record.detail)
-        self.assertIn("_check_inf_per_device", record.detail)
+        self.assertIn("flat host-visible reduction per optimizer", record.detail)
+        self.assertIn("per-device _found_inf tensors", record.detail)
 
     def test_custom_fwd_fidelity_names_the_cast_rule(self):
         record = fidelity_of("torch.amp.custom_fwd")
@@ -307,6 +308,17 @@ class TestTorchAutocastState(_AutocastStateCase):
             self.assertEqual(str(torch.get_autocast_dtype("cuda")), "torch.bfloat16")
         self.assertFalse(torch.is_autocast_enabled("cuda"))
         self.assertEqual(str(torch.get_autocast_dtype("cuda")), "torch.float16")
+
+    def test_disabled_region_suspends_and_restores_external_amp_register(self):
+        original_amp = int(jt.flags.amp_reg)
+        external_amp = int(jt.amp_flags.prefer_bfloat16)
+        try:
+            with jt.flag_scope(amp_reg=external_amp):
+                with torch.autocast('cuda', dtype=torch.bfloat16, enabled=False):
+                    self.assertEqual(int(jt.flags.amp_reg), 0)
+                self.assertEqual(int(jt.flags.amp_reg), external_amp)
+        finally:
+            jt.flags.amp_reg = original_amp
 
     def test_nesting_counter_tracks_open_regions(self):
         owner = _owner()
@@ -406,14 +418,16 @@ class TestTorchAmpCustomFunction(_AutocastStateCase):
         ran inside the enabled region, so an op that documents "I need float32"
         reduced in float16 and nothing said so.
 
-        The region has to name a device type the operand can be *on*: torch's
-        eligibility rule is "floating, not float64, and on the region's device"
-        (``_amp_cast``), and a CPU-only core cannot put a tensor on ``cuda``. So
-        the name follows availability -- asserting the cuda spelling on a CPU
-        core would be asserting a cast the rule correctly refuses.
+        The region has to name the device type the operand is resident on.
+        Jittor exposes ACL accelerator Vars as ``npu``, even though
+        ``jt.has_cuda`` is also true for that backend.
         """
         seen = {}
-        device_type = "cuda" if jt.has_cuda else "cpu"
+        device_type = (
+            "npu" if getattr(jt.compiler, "has_acl", 0)
+            else "cuda" if jt.has_cuda
+            else "cpu"
+        )
 
         @torch.amp.custom_fwd(device_type=device_type, cast_inputs=torch.float32)
         def forward(ctx, value):
@@ -623,6 +637,56 @@ class TestTorchAutocastNumerics(cu.JittorTestCase):
             self.assertEqual(dtype_name(a.sum()), "float32")
             self.assertEqual(dtype_name(jt.exp(a)), "float32")
 
+    def test_cross_entropy_float32_policy_survives_autocast(self, device):
+        logits_np = np.array([[3.0, -2.0, 1.0], [0.5, 2.0, -3.0]],
+                             dtype=np.float32)
+        targets_np = np.array([0, 2], dtype=np.int64)
+        logits = torch.tensor(logits_np, dtype=torch.float32, requires_grad=True)
+        targets = torch.tensor(targets_np, dtype=torch.long)
+        fallback_before = int(jt.core.backend_fallback_count())
+        with torch.autocast(region_device(device), dtype=torch.bfloat16):
+            loss = torch.nn.functional.cross_entropy(
+                logits, targets, reduction="sum")
+        gradient = jt.grad(loss, [logits])[0].numpy()
+        self.assertEqual(int(jt.core.backend_fallback_count()), fallback_before)
+        shifted = logits_np - logits_np.max(axis=1, keepdims=True)
+        probabilities = np.exp(shifted)
+        probabilities /= probabilities.sum(axis=1, keepdims=True)
+        expected_loss = -np.log(probabilities[
+            np.arange(targets_np.size), targets_np]).sum()
+        expected_gradient = probabilities.copy()
+        expected_gradient[np.arange(targets_np.size), targets_np] -= 1.0
+        self.assertEqual(dtype_name(loss), "float32")
+        np.testing.assert_allclose(float(loss.item()), expected_loss,
+                                   rtol=1e-6, atol=1e-6)
+        np.testing.assert_allclose(gradient, expected_gradient,
+                                   rtol=1e-6, atol=1e-6)
+
+    def test_cross_entropy_fp32_policy_honors_global_amp_register(self, device):
+        logits_np = np.array([[3.0, -2.0, 1.0], [0.5, 2.0, -3.0]],
+                             dtype=np.float32)
+        targets_np = np.array([0, 2], dtype=np.int64)
+        logits = torch.tensor(logits_np, dtype=torch.float32, requires_grad=True)
+        targets = torch.tensor(targets_np, dtype=torch.long)
+        fallback_before = int(jt.core.backend_fallback_count())
+        with jt.flag_scope(amp_reg=jt.amp_flags.prefer_bfloat16):
+            self.assertFalse(torch.is_autocast_enabled(region_device(device)))
+            loss = torch.nn.functional.cross_entropy(logits, targets, reduction="sum")
+        gradient = jt.grad(loss, [logits])[0].numpy()
+        self.assertEqual(int(jt.core.backend_fallback_count()), fallback_before)
+        shifted = logits_np - logits_np.max(axis=1, keepdims=True)
+        probabilities = np.exp(shifted)
+        probabilities /= probabilities.sum(axis=1, keepdims=True)
+        expected_loss = -np.log(probabilities[
+            np.arange(targets_np.size), targets_np]).sum()
+        expected_gradient = probabilities.copy()
+        expected_gradient[np.arange(targets_np.size), targets_np] -= 1.0
+        self.assertEqual(dtype_name(loss), "float32")
+        np.testing.assert_allclose(float(loss.item()), expected_loss,
+                                   rtol=1e-6, atol=1e-6)
+        np.testing.assert_allclose(gradient, expected_gradient,
+                                   rtol=1e-6, atol=1e-6)
+
     def test_a_float32_region_forces_float32(self, device):
         a = jt.random((8, 8), dtype="float32").cast("float16")
         with torch.autocast(region_device(device), dtype=torch.float32):
@@ -649,7 +713,7 @@ class TestTorchAutocastNumerics(cu.JittorTestCase):
         try:
             self.assertTrue(torch.is_autocast_enabled(region))
             self.assertEqual(dtype_name(a * a),
-                             "bfloat16" if device == "cpu" else "float16")
+                             str(torch.get_autocast_dtype(region)).rsplit(".", 1)[-1])
         finally:
             torch.set_autocast_enabled(region, False)
         self.assertFalse(torch.is_autocast_enabled(region))
@@ -663,7 +727,9 @@ class TestTorchAutocastNumerics(cu.JittorTestCase):
         scaler = torch.amp.GradScaler(device if device == "cpu" else "cuda",
                                       init_scale=128.0, growth_interval=1000)
 
-        scaler.scale(finite)
+        # The injected grads represent an already-scaled backward; initialise
+        # the public scale lifecycle as a real training iteration does.
+        scaler.scale(finite.sum())
         infinite = jt.array(np.full(4, np.inf, dtype="float32"))
         optimizer.param_groups[0]["grads"] = [infinite]
         self.assertIsNone(scaler.step(optimizer))
@@ -671,6 +737,7 @@ class TestTorchAutocastNumerics(cu.JittorTestCase):
         self.assertEqual(optimizer.steps, 0)
         self.assertEqual(scaler.get_scale(), 64.0)
 
+        scaler.scale(finite.sum())
         optimizer.param_groups[0]["grads"] = [jt.ones((4,), dtype="float32")]
         self.assertEqual(scaler.step(optimizer), 1)
         scaler.update()
@@ -686,6 +753,7 @@ class TestTorchAutocastNumerics(cu.JittorTestCase):
         scaler.update()
         self.assertEqual(scaler.get_scale(), 128.0)
         self.assertEqual(scaler.state_dict()["_growth_tracker"], 1)
+        scaler.scale(jt.ones((1,), dtype="float32"))
         optimizer.param_groups[0]["grads"] = [jt.ones((4,), dtype="float32")]
         scaler.step(optimizer)
         scaler.update()

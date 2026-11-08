@@ -30,4 +30,3 @@ def multinomial_acl(weights, num_samples=1, replacement=False):
             }),
         ),
     )[0]
-

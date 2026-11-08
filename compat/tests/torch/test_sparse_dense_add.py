@@ -222,3 +222,23 @@ def test_no_grad_sparse_write_preserves_allocation_and_alias(device, operation, 
         np.testing.assert_array_equal(actual.cpu().numpy(), expected)
         np.testing.assert_array_equal(alias.cpu().numpy(), expected)
     assert jt.core.backend_fallback_count() == before
+@_cpu_test
+def test_tensor_uniform_honors_generator_stream():
+    first_generator = torch.Generator(device="cpu").manual_seed(73)
+    second_generator = torch.Generator(device="cpu").manual_seed(73)
+    first = torch.empty(7).uniform_(-2.0, 3.0, generator=first_generator)
+    second = torch.empty(7).uniform_(-2.0, 3.0, generator=second_generator)
+    advanced = torch.empty(7).uniform_(-2.0, 3.0, generator=first_generator)
+
+    np.testing.assert_array_equal(first.numpy(), second.numpy())
+    assert not np.array_equal(first.numpy(), advanced.numpy())
+    # The public state is now a versioned CPU uint8 payload; verify the same
+    # native counters instead of assuming the obsolete two-int encoding.
+    assert first_generator.get_state().dtype == torch.uint8
+    assert not np.array_equal(first_generator.get_state().numpy(),
+                              second_generator.get_state().numpy())
+    saved = first_generator.get_state()
+    expected = torch.empty(7).uniform_(-2.0, 3.0, generator=first_generator)
+    first_generator.set_state(saved)
+    replay = torch.empty(7).uniform_(-2.0, 3.0, generator=first_generator)
+    np.testing.assert_array_equal(expected.numpy(), replay.numpy())

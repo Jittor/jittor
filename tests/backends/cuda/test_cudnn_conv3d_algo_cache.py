@@ -96,6 +96,31 @@ class TestCudnnConv3dAlgoCache(unittest.TestCase):
                      .randn(4, 3, 3, 3, 3).astype("float32")).cast(dtype)
         return x, w
 
+    def test_deterministic_cold_cache_repeated_forward_and_gradients(self):
+        native = jt.cudnn
+        before = (native.get_benchmark(), native.get_deterministic())
+        self.addCleanup(native.set_benchmark, before[0])
+        self.addCleanup(native.set_deterministic, before[1])
+        native.set_benchmark(0)
+        native.set_deterministic(1)
+        for dtype in ("float32", "float16"):
+            expected = None
+            for repeat in range(3):
+                native.cudnn_clear_plan_cache()
+                native.cudnn_clear_algorithm_cache()
+                x, w = self._inputs(dtype)
+                y = jt.nn.conv3d(x, w)
+                seed = jt.array(np.random.RandomState(82)
+                    .randn(*y.shape).astype("float32")).cast(dtype)
+                dx, dw = jt.grad((y * seed).sum(), [x, w])
+                got = tuple(value.float64().numpy() for value in (y, dx, dw))
+                if expected is None:
+                    expected = got
+                else:
+                    for name, actual, reference in zip(("y", "dx", "dw"), got, expected):
+                        np.testing.assert_array_equal(actual, reference,
+                            err_msg="dtype=%s repeat=%s %s" % (dtype, repeat, name))
+
     def test_keys_are_namespaced_and_carry_the_dtypes(self):
         keys = _forward_keys(*self._inputs("float32"))
         self.assertTrue(keys, "no conv3d cache key logged")

@@ -17,6 +17,7 @@ from .ops.truth_reduce_op import truth_reduce
 from .ops.cumsum_op import CumsumACL
 from .ops.index_op import IndexACL
 from .ops.arg_reduce_op import ArgReduceACL
+from .ops.argsort_op import ArgsortACL
 from .ops.where_op import WhereACL, NonzeroACL
 from .ops.floor_op import FloorIntACL
 from .ops.getitem_op import GetItemACL, basic_slice_acl, single_axis_gather_acl
@@ -95,6 +96,22 @@ def constant_pad_acl(x, amounts, value):
     return result
 
 
+def repeat_interleave_acl(value, repeats, dim):
+    """Lower uniform repetition to ACL-native broadcast and its sum gradient."""
+    if not isinstance(value, jt.Var) or repeats <= 0 or not 0 <= dim < value.ndim:
+        return None
+    if repeats == 1:
+        # Uniform repetition returns independent storage, including this case.
+        return jt.ops.copy(value)
+    shape = list(value.shape)
+    reshaped = shape[: dim + 1] + [1] + shape[dim + 1 :]
+    expanded = list(reshaped)
+    expanded[dim + 1] = repeats
+    output = list(shape)
+    output[dim] *= repeats
+    return value.reshape(reshaped).broadcast(expanded).reshape(output)
+
+
 def gather_acl(input, dim, index):
     return GatherACL()(input, dim, index)
 
@@ -137,22 +154,12 @@ def embedding_acl(
     return EmbeddingACL(padding_idx, scale_grad_by_freq)(input, weight)
 
 
-def _truth_reduce_keepdims(input, dim, reduce_all, keepdims):
-    result = truth_reduce(input, dim, reduce_all=reduce_all)
-    if not keepdims:
-        return result
-    dims = {axis % input.ndim for axis in range(input.ndim)} if dim is None or (
-        isinstance(dim, (list, tuple)) and not dim
-    ) else {axis % input.ndim for axis in ([dim] if isinstance(dim, int) else dim)}
-    return result.reshape([1 if axis in dims else size for axis, size in enumerate(input.shape)])
-
-
 def any_acl(input, dim=None, keepdims=False):
-    return _truth_reduce_keepdims(input, dim, False, keepdims)
-
+    return truth_reduce(input, dim, reduce_all=False, keepdims=keepdims)
 
 def all_acl(input, dim=(), keepdims=False):
-    return _truth_reduce_keepdims(input, dim, True, keepdims)
+    return truth_reduce(input, dim, reduce_all=True, keepdims=keepdims)
+
 
 
 def multinomial_single_draw_acl(weights, num_samples=1, replacement=False):
@@ -182,6 +189,12 @@ def scatter_acl(input, dim, index, src, reduce="void"):
     return ScatterACL()(input, dim, index, src, reduce)
 
 
+def argsort_acl(input, dim=-1, descending=False, dtype="int32"):
+    if _jittor_dtype_name(input.dtype) not in ("float16", "bfloat16", "float32"):
+        return None
+    return ArgsortACL(jt.ops.argsort)(input, dim, descending, dtype)
+
+
 def arg_reduce_acl(input, op, dim, keepdims=False):
     dtype = _jittor_dtype_name(input.dtype)
     if dtype == "float16" and soc_name().startswith("Ascend310P"):
@@ -200,7 +213,7 @@ def arg_reduce_acl(input, op, dim, keepdims=False):
         # int64 preserves every int32 value exactly across the reduction.
         indices, values = ArgReduceACL(jt.ops.arg_reduce)(input.cast("int64"), op, dim, keepdims)
         return indices, values.cast("int32")
-    if dtype not in ("float16", "float32", "int64"):
+    if dtype not in ("float16", "bfloat16", "float32", "int64"):
         return None
     return ArgReduceACL(jt.ops.arg_reduce)(input, op, dim, keepdims)
 
@@ -286,9 +299,7 @@ def getitem_acl(x, slices, return_x=None):
 
     if slices is not None and (not isinstance(slices, Iterable) or isinstance(slices, str)):
         return _getitem_without_none(x, slices)
-    # `x[None]` is a bare None, which is neither Iterable nor a tuple; without
-    # this it reached the TypeError below instead of adding an axis.
-    if slices is None or isinstance(slices, (int, slice)):
+    if slices is None or isinstance(slices, int) or isinstance(slices, slice):
         slices = (slices,)
     if not isinstance(slices, tuple):
         raise TypeError("ACL getitem slices must be a tuple, integer, slice, or tensor")

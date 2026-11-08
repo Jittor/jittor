@@ -4,7 +4,7 @@
 class TensorObjectState:
     __slots__ = (
         "grad", "data_owner", "data_path", "scalar_marker",
-        "force_cpu", "force_cuda", "rms_norm_unit_weight", "retains_grad",
+        "force_cpu", "force_cuda", "rms_norm_unit_weight", "retains_grad", "meta_placeholder",
     )
 
     def __init__(self):
@@ -16,6 +16,7 @@ class TensorObjectState:
         self.force_cuda = False
         self.rms_norm_unit_weight = None
         self.retains_grad = False
+        self.meta_placeholder = False
 
 
 _FIELDS = (
@@ -27,6 +28,7 @@ _FIELDS = (
     ("_jittor_torch_force_cuda", "force_cuda", False),
     ("_torch_acl_rms_norm_unit_weight", "rms_norm_unit_weight", None),
     ("_torch_retains_grad", "retains_grad", False),
+    ("_jittor_torch_meta", "meta_placeholder", False),
 )
 _STATE_KEY = "_torch_object_state"
 

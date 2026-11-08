@@ -36,15 +36,18 @@ class TestTorchFactoryFidelity(unittest.TestCase):
         self.assertEqual(tuple(actual.shape), (2, 3, 1))
         self.assertTrue(bool(torch.isfinite(actual).all()))
 
-    def test_cpu_generator_randperm_is_native_and_reproducible(self):
-        left = torch.Generator(device="cpu").manual_seed(777)
-        right = torch.Generator(device="cpu").manual_seed(777)
-        first = torch.randperm(256, generator=left)
-        second = torch.randperm(128, generator=left)
-        np.testing.assert_array_equal(
-            first.numpy(), torch.randperm(256, generator=right).numpy())
-        np.testing.assert_array_equal(
-            second.numpy(), torch.randperm(128, generator=right).numpy())
+    def test_cpu_generator_randperm_native_stream_replays_and_advances(self):
+        generator = torch.Generator().manual_seed(777)
+        first = torch.randperm(256, generator=generator)
+        second = torch.randperm(128, generator=generator)
+        np.testing.assert_array_equal(np.sort(first.numpy()), np.arange(256))
+        np.testing.assert_array_equal(np.sort(second.numpy()), np.arange(128))
+        replay = torch.Generator().manual_seed(777)
+        np.testing.assert_array_equal(torch.randperm(256, generator=replay).numpy(), first.numpy())
+        state = generator.get_state()
+        expected = torch.randperm(16, generator=generator)
+        restored = torch.Generator().set_state(state)
+        np.testing.assert_array_equal(torch.randperm(16, generator=restored).numpy(), expected.numpy())
 
     def test_generator_randperm_lazy_reverse_evaluation_keeps_reserved_states(self):
         forward_generator = torch.Generator().manual_seed(91)
@@ -79,9 +82,8 @@ class TestTorchFactoryFidelity(unittest.TestCase):
             mixed.numpy())
         # Legal overload and replay coverage follows the selected main RNG owner.
 
-    @unittest.expectedFailure
     def test_randint_rejects_invalid_options_without_changing_state(self):
-        """Known main boundary: bound coercion and ignored allocation options."""
+        """Invalid bounds/options are refused before consuming native RNG state."""
         generator = torch.Generator(device="cpu").manual_seed(777)
         unchanged = generator.get_state()
         with self.assertRaises(TypeError):
@@ -133,21 +135,22 @@ class TestTorchFactoryFidelity(unittest.TestCase):
                               generator=generator)
 
     @unittest.skipUnless(torch.cuda.is_available(), "CUDA is unavailable")
-    @unittest.expectedFailure
     def test_native_cpu_generator_keeps_cpu_output_under_cuda_default(self):
-        """Known main native boundary: compound randint follows ambient placement."""
         generator = jt.Generator("cpu").manual_seed(19)
         with torch.device("cuda:0"):
             value = jt.randint(0, 10, (4,), generator=generator)
         value.sync()
         self.assertEqual(value.location(), "cpu")
 
-    def test_generator_normal_draw_is_reproducible(self):
-        left = torch.Generator(device="cpu").manual_seed(313)
-        right = torch.Generator(device="cpu").manual_seed(313)
-        first = torch.normal(0.0, 1.0, size=(19,), generator=left)
-        second = torch.normal(0.0, 1.0, size=(19,), generator=right)
-        np.testing.assert_array_equal(first.numpy(), second.numpy())
+    def test_supported_generator_normal_replays_and_preserves_global_stream(self):
+        generator = torch.Generator().manual_seed(73)
+        state = generator.get_state()
+        global_state = torch.get_rng_state().numpy().copy()
+        expected = torch.normal(0.0, 1.0, size=(2,), generator=generator).numpy()
+        generator.set_state(state)
+        actual = torch.normal(0.0, 1.0, size=(2,), generator=generator).numpy()
+        np.testing.assert_array_equal(actual, expected)
+        np.testing.assert_array_equal(torch.get_rng_state().numpy(), global_state)
 
     def test_manual_seed_materializes_live_random_graph_before_reset(self):
         torch.manual_seed(41)
@@ -168,6 +171,18 @@ class TestTorchFactoryFidelity(unittest.TestCase):
         torch.set_rng_state(state)
         replay = torch.rand(8)
         np.testing.assert_array_equal(pending.numpy(), replay.numpy())
+
+    def test_multinomial_without_generator_uses_seeded_global_stream(self):
+        weights = torch.tensor([0.1, 0.2, 0.3, 0.4], dtype=torch.float32)
+        torch.manual_seed(1729)
+        first = torch.multinomial(weights, 32, replacement=True).numpy()
+        second = torch.multinomial(weights, 32, replacement=True).numpy()
+
+        torch.manual_seed(1729)
+        replay = torch.multinomial(weights, 32, replacement=True).numpy()
+
+        np.testing.assert_array_equal(first, replay)
+        self.assertFalse(np.array_equal(first, second))
 
     def test_factory_objects_are_module_level_and_keep_public_identity(self):
         factories = importlib.import_module(

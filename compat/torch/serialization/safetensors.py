@@ -15,6 +15,7 @@ except ImportError:
             pass
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from ..context import get_install_context, registry_for
+from ..nested import _numpy_bfloat16_storage, _rebuild_var_from_numpy
 from .portable import _snapshot_tensors
 from ..fidelity import Fidelity, register_api_bindings
 from ...diagnostics import EXPECTED, swallowed
@@ -55,7 +56,8 @@ def _to_tensor(array, st_dtype, device):
     if not array.flags.c_contiguous:
         array = np.ascontiguousarray(array)
     dtype = "bfloat16" if _jittor_dtype_name(st_dtype) == "BF16" else array.dtype.name
-    tensor = g.tensor(array, dtype=dtype, device="cpu", requires_grad=False)
+    tensor = (_rebuild_var_from_numpy(array, dtype, device="cpu") if dtype == "bfloat16"
+              else g.tensor(array, dtype=dtype, device="cpu", requires_grad=False))
     target_device = "cpu" if device is None else device
     if isinstance(target_device, (int, np.integer)) and not isinstance(target_device, bool):
         target_device = "cuda:%d" % int(target_device)
@@ -281,10 +283,7 @@ def _save_dict(tensors, metadata=None):
             raise NotImplementedError("safetensors cannot save dtype %s" % _jittor_dtype_name(dtype))
         st_dtype = _NP_TO_ST[dtype]
         if _jittor_dtype_name(st_dtype) == "BF16":
-            # Native BF16 numpy() exposes exact values in float32. Encode
-            # their upper 16 bits, not a float32 payload with a BF16 label.
-            bits = arr.astype(np.float32, copy=False).view(np.uint32)
-            blob = (bits >> 16).astype(np.uint16).tobytes(order="C")
+            blob = _numpy_bfloat16_storage(arr).tobytes(order="C")
         else:
             blob = arr.astype(_ST[st_dtype][0], copy=False).tobytes(order="C")
         header[key] = {

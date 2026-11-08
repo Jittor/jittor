@@ -144,14 +144,11 @@ def test_explicit_copy_between_cuda_ordinals_preserves_values_and_gradient(
 
 
 def test_a_device_var_parked_on_the_host_is_moved_back_by_to_device():
-    """Asking for the device must not accept host storage for a device Var.
+    """Explicit migration back to the device restores parked tensor storage.
 
-    jittor parks a device Var in host memory when a CPU op consumes it -- one
-    host read of a slice is enough -- while ``device_id`` keeps naming the
-    device it belongs to. Such a Var is not on its device: an extension handed
-    it reads a host pointer and fails its own ``is_cuda()`` check, so
-    ``.to("cuda:N")``/``.cuda()`` have to move it back rather than trust the
-    matching index.
+    Scalar reads may use a temporary slice without migrating the whole base.
+    Export the native host data view to establish the parked-base condition
+    independently of that extraction detail.
     """
     import jittor as jt
     import torch
@@ -160,8 +157,9 @@ def test_a_device_var_parked_on_the_host_is_moved_back_by_to_device():
         jt.sync_all(True)
         assert bounds.device_id == 0 and bounds.location() == "device"
 
-        # The host read a packed-attention layout needs, which parks the Var.
         assert int(bounds[1]) == 4
+        host_view = jt.Var.data.__get__(bounds, jt.Var)
+        np.testing.assert_array_equal(host_view, [0, 4, 8])
         assert bounds.device_id == 0 and bounds.location() == "cpu"
 
         back = bounds.to("cuda:0")
@@ -170,6 +168,8 @@ def test_a_device_var_parked_on_the_host_is_moved_back_by_to_device():
         np.testing.assert_array_equal(back.numpy(), [0, 4, 8])
 
         assert int(bounds[1]) == 4
+        host_view = jt.Var.data.__get__(bounds, jt.Var)
+        np.testing.assert_array_equal(host_view, [0, 4, 8])
         assert bounds.location() == "cpu"
         shown = bounds.cuda()
         shown.sync()

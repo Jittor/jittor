@@ -1240,6 +1240,8 @@ _native_index = index
 
 _native_arg_reduce = arg_reduce
 
+_native_argsort = ops.argsort
+
 _native_where = where
 
 _native_floor_int = floor_int
@@ -1261,6 +1263,13 @@ def index(inshape=None, dim=None, dtype="int32", **kwargs):
     if dim is None:
         return _native_index(inshape, dtype=dtype)
     return _native_index(inshape, dim, dtype)
+
+def argsort(x, dim=-1, descending=False, dtype="int32"):
+    result = _try_dispatch("tensor.argsort", x, dim, descending, dtype)
+    if result is not None:
+        return result
+    return _native_argsort(x, dim, descending, dtype)
+
 
 def arg_reduce(x, op, dim, keepdims=False):
     result = _try_dispatch("tensor.arg_reduce", x, op, dim, keepdims)
@@ -1301,6 +1310,8 @@ def sigmoid(x):
 
 index.__doc__ = _native_index.__doc__
 
+argsort.__doc__ = _native_argsort.__doc__
+
 arg_reduce.__doc__ = _native_arg_reduce.__doc__
 
 where.__doc__ = _native_where.__doc__
@@ -1310,6 +1321,8 @@ floor_int.__doc__ = _native_floor_int.__doc__
 sigmoid.__doc__ = _native_sigmoid.__doc__
 
 Var.index = index
+
+Var.argsort = argsort
 
 Var.arg_reduce = arg_reduce
 
@@ -1642,6 +1655,38 @@ def randint(low, high=None, shape=(1,), dtype="int32", generator=None) -> Var:
     '''
     import jittor as jt
     if high is None: low, high = 0, low
+    if generator is not None:
+        from jittor_core import Generator
+        if not isinstance(generator, Generator):
+            raise TypeError("generator must be a jittor.Generator")
+        try:
+            low, high = _operator.index(low), _operator.index(high)
+        except TypeError:
+            raise TypeError("randint bounds must be integers") from None
+        if high <= low:
+            raise ValueError("randint requires high > low")
+        raw_shape = (shape,) if isinstance(shape, ori_int) else tuple(shape)
+        try:
+            shape = tuple(_operator.index(dim) for dim in raw_shape)
+        except TypeError:
+            raise TypeError("randint shape dimensions must be integers") from None
+        if any(dim < 0 for dim in shape):
+            raise ValueError("randint shape dimensions must be non-negative")
+        dtype_name = _jittor_dtype_name(dtype)
+        limits = {"int32": (-(1 << 31), 1 << 31),
+                  "int64": (-(1 << 63), (1 << 63) - 1)}
+        if dtype_name not in limits:
+            raise TypeError("generator-aware randint supports int32 and int64")
+        minimum, maximum_exclusive = limits[dtype_name]
+        # The native constructor takes signed int64 bounds; keep the exclusive
+        # high bound representable as well as every possible output value.
+        if low < minimum or high > maximum_exclusive:
+            raise ValueError("randint bounds do not fit dtype %s" % dtype_name)
+        count = 1
+        for dim in shape:
+            count *= dim
+        return ops.generator_randint(
+            shape, dtype_name, low, high, 0, 0, generator)
     for dim in shape:
         if dim < 0:
             raise RuntimeError(f"Trying to create tensor with negative dimension {dim}: {shape}")

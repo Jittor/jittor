@@ -13,7 +13,8 @@ import numpy as np
 import torch
 import jittor as jt
 
-_DEVICES = [("cpu", 0)] + ([("cuda", 1)] if _test_capability.any_accelerator_enabled(backend=jt) else [])
+_ACCELERATOR = "npu" if getattr(jt.compiler, "has_acl", False) else "cuda"
+_DEVICES = [("cpu", 0)] + ([(_ACCELERATOR, 1)] if _test_capability.any_accelerator_enabled(backend=jt) else [])
 
 
 def both_devices(fn):
@@ -44,8 +45,7 @@ class Base(unittest.TestCase):
 class TestSGD(Base):
     def test_unsupported_sgd_options_reject_top_level_and_parameter_groups(self):
         def body(dev):
-            for option, value in (("dampening", .5), ("maximize", True),
-                                  ("foreach", True), ("differentiable", True)):
+            for option, value in (("maximize", True), ("differentiable", True)):
                 parameter = torch.nn.Parameter(torch.tensor([1.]))
                 with self.assertRaisesRegex(NotImplementedError, option):
                     torch.optim.SGD([parameter], **{option: value})
@@ -55,8 +55,7 @@ class TestSGD(Base):
 
     def test_sgd_revalidates_modified_groups_before_updating_parameters(self):
         def body(dev):
-            for option, value in (("dampening", .5), ("maximize", True),
-                                  ("foreach", True), ("differentiable", True)):
+            for option, value in (("maximize", True), ("differentiable", True)):
                 parameter = torch.nn.Parameter(torch.tensor([1.]))
                 optimizer = torch.optim.SGD([parameter])
                 (parameter * parameter).sum().backward()
@@ -206,6 +205,100 @@ class TestSGD(Base):
 
 
 class TestAdam(Base):
+    def test_adamw_scalar_uses_torch_exact_moment_coefficients(self):
+        gradient = np.array([0.1, 1.0, -0.25, 3.0], dtype=np.float32)
+        expected_avg = gradient * np.float32(1.0 - 0.9)
+        def body(dev):
+            # Recorded from independent Torch 2.7.1 CPU: addcmul rounds the
+            # coefficient product before multiplying by the second gradient.
+            expected_sq = ((np.float32(1.0 - 0.999) * gradient) * gradient
+                           if dev == "cpu" else
+                           (gradient * gradient) * np.float32(1.0 - 0.999))
+            parameter = torch.nn.Parameter(
+                torch.tensor(np.array([1.0, -2.0, 0.5, 4.0], dtype=np.float32),
+                             device=dev))
+            # Exact scalar-path arithmetic is distinct from CUDA's native
+            # fused list kernel; its default fast path has separate parity tests.
+            optimizer = torch.optim.AdamW(
+                [parameter], lr=0.01, foreach=False, fused=False)
+            parameter.grad = torch.tensor(gradient.copy(), device=dev)
+            optimizer.step()
+            state = optimizer.state[parameter]
+            self.ac(state["exp_avg"].numpy(), expected_avg, atol=0.0, rtol=0.0,
+                    msg=f"default AdamW first moment uses Torch beta complement {dev}")
+            self.ac(state["exp_avg_sq"].numpy(), expected_sq, atol=0.0, rtol=0.0,
+                    msg=f"default AdamW second moment uses Torch beta complement {dev}")
+
+        both_devices(body)
+
+    def test_adamw_capturable_false_cpu_npu_matches_default(self):
+        def body(dev):
+            parameters = [torch.nn.Parameter(torch.tensor([1., -2.], device=dev))
+                          for _ in range(2)]
+            optimizers = [torch.optim.AdamW([parameters[0]], lr=.01, foreach=False, fused=False),
+                          torch.optim.AdamW([parameters[1]], lr=.01, foreach=False,
+                                            fused=False, capturable=False)]
+            for _ in range(2):
+                for parameter, optimizer in zip(parameters, optimizers):
+                    optimizer.zero_grad()
+                    parameter.square().sum().backward()
+                    optimizer.step()
+                self.ac(parameters[0].numpy(), parameters[1].numpy(), atol=0., rtol=0.)
+                left, right = [optimizer.state[parameter]
+                               for parameter, optimizer in zip(parameters, optimizers)]
+                for key in ("exp_avg", "exp_avg_sq"):
+                    self.ac(left[key].numpy(), right[key].numpy(), atol=0., rtol=0.)
+            self.assertIs(optimizers[1].param_groups[0]["capturable"], False)
+            self.assertIs(optimizers[1].state_dict()["param_groups"][0]["capturable"], False)
+        both_devices(body)
+
+    def test_adamw_capturable_true_rejects_before_parameter_update(self):
+        def body(dev):
+            parameter = torch.nn.Parameter(torch.tensor([1.], device=dev))
+            with self.assertRaisesRegex(NotImplementedError, "capturable=True"):
+                torch.optim.AdamW([parameter], capturable=True)
+            with self.assertRaisesRegex(NotImplementedError, "capturable=True"):
+                torch.optim.AdamW([{"params": [parameter], "capturable": True}])
+            with self.assertRaisesRegex(TypeError, "capturable"):
+                torch.optim.AdamW([parameter], capturable="false")
+            optimizer = torch.optim.AdamW([parameter], capturable=False)
+            parameter.square().sum().backward()
+            optimizer.param_groups[0]["capturable"] = True
+            with self.assertRaisesRegex(NotImplementedError, "capturable=True"):
+                optimizer.step()
+            self.ac(parameter.numpy(), [1.], atol=0., rtol=0.)
+            self.assertFalse(optimizer.state_dict()["state"])
+        both_devices(body)
+
+    def test_low_precision_moments_follow_torch_parameter_dtype(self):
+        def body(dev):
+            for dtype in (torch.float16, torch.bfloat16):
+                for constructor in (torch.optim.Adam, torch.optim.AdamW):
+                    with self.subTest(device=dev, dtype=str(dtype), optimizer=constructor.__name__):
+                        first = torch.tensor([1., -2.], device=dev, dtype=dtype, requires_grad=True)
+                        late = torch.tensor([.5, -1.], device=dev, dtype=dtype, requires_grad=True)
+                        optimizer = constructor([first], lr=.01)
+                        first.grad = torch.tensor([.25, -.5], device=dev, dtype=dtype)
+                        optimizer.step()
+                        optimizer.add_param_group({"params": [late]})
+                        late.grad = torch.tensor([.125, -.25], device=dev, dtype=dtype)
+                        optimizer.step()
+                        for parameter in (first, late):
+                            state = optimizer.state[parameter]
+                            for key in ("exp_avg", "exp_avg_sq"):
+                                self.assertEqual(state[key].dtype, dtype)
+                                self.assertEqual(state[key].device, parameter.device)
+                                self.assertTrue(np.isfinite(state[key].float().cpu().numpy()).all())
+        both_devices(body)
+
+    def test_native_low_precision_moments_keep_fp32_policy(self):
+        for dtype in ("float16", "bfloat16"):
+            parameter = jt.array([1., -2.], dtype=dtype)
+            for constructor in (jt.optim.Adam, jt.optim.AdamW):
+                optimizer = constructor([parameter], lr=.01)
+                for key in ("m", "values"):
+                    self.assertEqual(str(optimizer.param_groups[0][key][0].dtype), "float32")
+
     def test_adam_first_step(self):
         w0 = np.array([1., 2., 3.], "float32")
         lr, eps = 0.1, 1e-8
@@ -297,11 +390,21 @@ class TestAdam(Base):
             self.assertIs(
                 optimizer.state_dict()["param_groups"][0]["foreach"], False)
 
-    def test_adamw_foreach_true_is_explicitly_unsupported(self):
+    def test_adamw_foreach_true_uses_native_owner_and_preserves_state(self):
         with jt.flag_scope(use_cuda=0):
             value = jt.array(np.array([1.0, -2.0], dtype=np.float32))
-            with self.assertRaisesRegex(NotImplementedError, "foreach=True"):
-                torch.optim.AdamW([value], lr=0.01, foreach=True)
+            optimizer = torch.optim.AdamW([value], lr=0.01, foreach=True)
+            optimizer.step((value * value).sum())
+            # Independent PyTorch 2.7 CPU foreach=True, default AdamW options.
+            np.testing.assert_allclose(value.numpy(), [.9899, -1.9898],
+                                       atol=2e-7, rtol=0)
+            self.assertIs(optimizer.param_groups[0]["foreach"], True)
+            state = optimizer.state[value]
+            np.testing.assert_allclose(state["exp_avg"].numpy(), [.2, -.4],
+                                       atol=1e-7, rtol=0)
+            np.testing.assert_allclose(state["exp_avg_sq"].numpy(), [.004, .016],
+                                       atol=1e-7, rtol=0)
+            self.assertEqual(float(state["step"]), 1.)
 
     def test_adam_step_inside_no_grad_keeps_param_trainable(self):
         def body(dev):

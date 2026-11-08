@@ -123,6 +123,3 @@ class TestAdamLiveState:
             del p, optimizer
             assert parameter_ref() is None
             assert counter.item() == 1
-
-
-

@@ -48,6 +48,7 @@ class TestDeviceMeshGroups(unittest.TestCase):
             self.addCleanup(sys.modules.pop, name, None)
             return module
         load("jittor.distributed.process_group", "python/jittor/distributed/process_group.py")
+        load("jittor._core.dtypes", "python/jittor/_core/dtypes.py")
         self.api = load("mesh_test.fsdp2.dtensor", "compat/fsdp2/dtensor.py")
         self.runtime = runtime
 

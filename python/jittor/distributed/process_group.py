@@ -252,16 +252,6 @@ class ProcessGroup:
                 continue
             from jittor_utils import lock as _jit_lock
             if kind == "nccl":
-                with _jit_lock.unlock_scope():
-                    unique_id = _launcher_group_unique_id(module, self.ranks)
-                    if unique_id is not None:
-                        create_with_id = getattr(module, 'nccl_create_process_group_with_unique_id', None)
-                        if not callable(create_with_id):
-                            raise NotImplementedError('NCCL backend lacks launcher Store subgroup initialization')
-                        handle = create_with_id(list(self.ranks), unique_id)
-                        self._backend_kind = kind
-                        self._backend_handle = int(handle)
-                        return
                 _ensure_nccl_rootinfo_env()
             with _jit_lock.unlock_scope():
                 handle = create(list(self.ranks))

@@ -8,7 +8,7 @@ resolving to the same objects.
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import numpy as np
-from typing import Any, Dict, List, cast
+from typing import Any, cast
 import jittor as jt
 from .. import collectives as _collectives
 
@@ -65,10 +65,16 @@ class _GradDecoratorCtx:
 def _reduce_norm_group(value, how, group):
     if group is None or group.size() == 1:
         return value
-    if group.ranks is None:
-        return _collectives._reduce_scalar(value, how)
+    # Match DTensor NormPartial: pack each gradient's p-power contribution
+    # into a vector all-reduce, then root each entry locally. Materialize first
+    # so every rank reduces the same completed shard values.
+    value.sync()
     if group.rank() < 0:
         raise RuntimeError("gradient norm called by a process-group nonmember")
+    if how == "sum":
+        return group.all_reduce(value, "sum")
+    if group.ranks is None:
+        return _collectives._reduce_scalar(value, how)
     kind = group._get_backend_name()
     ops = getattr(jt.compile_extern, kind + "_ops", None)
     gather = getattr(ops, kind + "_all_gather", None)
@@ -79,18 +85,17 @@ def _reduce_norm_group(value, how, group):
 
 
 def _get_total_norm_device(grads, norm_type=2.0, error_if_nonfinite=False,
-                           shard_reduce=False):
-    """Compute the total norm for a list of gradient Vars on device.
+                           shard_reduce=False,
+                           return_shard_clip_denominator=False):
+    """Compute the total norm for gradient Vars on device.
 
-    ``shard_reduce`` says these gradients are *shards*: each rank holds a
-    different slice of the same logical gradient, so the norm has to be
-    combined across ranks before the root is taken. Without it every rank
-    clipped by its own slice's norm -- always smaller than the true one -- so
-    each rank scaled by a different, too-large coefficient and the training
-    trajectory silently diverged from torch's.
+    Match PyTorch's FSDP2 DTensor reduction order: compute each local
+    gradient norm, take the p-norm of the rank-local vector, then reduce that
+    rank-local total's p-th power once per shard group and take the root.
 
-    It must stay off for DDP, where every rank already holds the *same*
-    averaged gradient: reducing there would count the same norm N times.
+    FSDP may mix sharded and replicated gradients. Tagged gradients are grouped
+    by their owning shard mesh; untagged gradients are counted once. Without
+    tags, shard_reduce=True keeps its legacy meaning as a world reduction.
     """
     import math as _math
 
@@ -98,70 +103,167 @@ def _get_total_norm_device(grads, norm_type=2.0, error_if_nonfinite=False,
     if not grads:
         return jt.array(0.0)
 
-    # Each shard set has its own communicator. Replicated gradients and
-    # ordinary parameters are counted once; combining all through WORLD
-    # would duplicate the replica axis and mix independent meshes.
-    if shard_reduce is True and any(hasattr(g, "_fsdp_norm_group") for g in grads):
-        groups: Dict[Any, List[Any]] = {}
-        for grad in grads:
-            group = getattr(grad, "_fsdp_norm_group", None)
-            groups.setdefault(group, []).append(grad)
-        norms = [_get_total_norm_device(values, norm_type, False,
-                                       shard_reduce=group if group is not None else False)
-                 for group, values in groups.items()]
-        values = jt.concat([norm.reshape((1,)) for norm in norms])
-        p = float(norm_type)
-        if p == float("inf"):
-            total = values.max()
-        elif p == float("-inf"):
-            total = values.min()
-        elif p == 0:
-            total = values.sum()
-        else:
-            total = (values ** p).sum() ** (1 / p)
-        if error_if_nonfinite and not _math.isfinite(float(total.item())):
-            raise RuntimeError("The total norm for gradients is non-finite")
-        return total
-
-    def _across(value, how):
-        if not shard_reduce:
-            return value
-        if shard_reduce is not True:
-            return _reduce_norm_group(value, how, shard_reduce)
-        return _collectives._reduce_scalar(value, how)
     p = float(norm_type)
-    acc_dtype = "float64" if any(_jittor_dtype_name(g.dtype) == "float64" for g in grads) else "float32"
+    acc_dtype = "float64" if any(
+        _jittor_dtype_name(g.dtype) == "float64" for g in grads
+    ) else "float32"
 
-    if p == 0.0:
-        # torch first computes each tensor's zero-norm, then the zero-norm of
-        # those scalars: this counts tensors containing at least one nonzero.
-        nonempty = []
-        for g in grads:
-            x = g.abs() if "complex" in _jittor_dtype_name(g.dtype) else g
-            nonempty.append((_across((x != 0).sum(), "max") != 0).reshape((1,)))
-        total = jt.concat(nonempty).sum().cast(acc_dtype)
-    else:
-        parts = []
-        for g in grads:
-            x = g.abs() if "complex" in _jittor_dtype_name(g.dtype) else g
-            parts.append(x.cast(acc_dtype).reshape((-1,)))
-        flat = jt.concat(parts)
-        ax = flat.abs()
+    tagged_shards = shard_reduce is True and any(
+        hasattr(g, "_fsdp_norm_group") for g in grads
+    )
+
+    def _reducer_for(grad):
+        if tagged_shards:
+            group = getattr(grad, "_fsdp_norm_group", None)
+            return group if group is not None else False
+        return shard_reduce
+
+    def _reducer_key(reducer):
+        # FSDP2 can create a distinct ProcessGroup wrapper for each fully_shard
+        # unit. Gradients sharded over the same ranks still belong to one norm
+        # bucket even when their wrapper and HCCL handle identities differ.
+        if reducer is True:
+            return ("world",)
+        if reducer is False or reducer is None:
+            return ("local",)
+        if hasattr(reducer, "ranks"):
+            try:
+                ranks = getattr(reducer, "ranks")
+                ranks = None if ranks is None else tuple(int(rank) for rank in ranks)
+                if ranks is None:
+                    world_size = int(getattr(jt, "world_size", 1))
+                    if int(reducer.size()) != world_size:
+                        return ("identity", id(reducer))
+                    ranks = tuple(range(world_size))
+            except (AttributeError, TypeError, ValueError):
+                return ("identity", id(reducer))
+            reducer_type = type(reducer)
+            return ("group", reducer_type.__module__, reducer_type.__qualname__,
+                    getattr(reducer, "_backend_kind", None), ranks)
+        return ("identity", id(reducer))
+
+    def _across(value, how, reducer):
+        if not reducer:
+            return value
+        if reducer is not True:
+            return _reduce_norm_group(value, how, reducer)
+        return _collectives._reduce_scalar(value, how)
+
+    def _vector_norm(values):
+        values = jt.concat([value.reshape((1,)) for value in values]).cast(acc_dtype)
         if p == float("inf"):
-            local = ax.max() if int(flat.numel()) else jt.array(float("-inf")).cast(acc_dtype)
-            total = _across(local, "max")
-        elif p == float("-inf"):
-            local = ax.min() if int(flat.numel()) else jt.array(float("inf")).cast(acc_dtype)
-            total = _across(local, "min")
-        elif p == 1.0:
-            total = _across(ax.sum(), "sum")
-        elif p == 2.0:
-            # The cross-rank sum has to happen on the sum of squares, before
-            # the square root -- combining per-rank norms afterwards would be
-            # a different (and wrong) quantity.
-            total = jt.sqrt(_across((flat * flat).sum(), "sum"))
+            return values.max()
+        if p == float("-inf"):
+            return values.min()
+        if p == 0.0 or p == 1.0:
+            return values.sum()
+        if p == 2.0:
+            return jt.sqrt((values * values).sum())
+        return (values ** p).sum() ** (1.0 / p)
+
+    # Keep p=0 and infinity-norm semantics per logical tensor.
+    if p == 0.0:
+        tensor_norms = []
+        for grad in grads:
+            reducer = _reducer_for(grad)
+            x = grad.abs() if "complex" in _jittor_dtype_name(grad.dtype) else grad
+            local = (x.cast(acc_dtype).abs() != 0).sum()
+            tensor_norms.append(
+                (_across(local, "max", reducer) != 0).reshape((1,)).cast(acc_dtype)
+            )
+        total = jt.concat(tensor_norms).sum().cast(acc_dtype)
+    elif p == float("inf") or p == float("-inf"):
+        tensor_norms = []
+        how = "max" if p == float("inf") else "min"
+        empty_value = float("-inf") if p == float("inf") else float("inf")
+        for grad in grads:
+            reducer = _reducer_for(grad)
+            x = grad.abs() if "complex" in _jittor_dtype_name(grad.dtype) else grad
+            ax = x.cast(acc_dtype).abs()
+            local = ((ax.max() if p == float("inf") else ax.min())
+                     if int(grad.numel()) else
+                     jt.array(empty_value).cast(acc_dtype))
+            tensor_norms.append(
+                _across(local, how, reducer).reshape((1,))
+            )
+        values = jt.concat(tensor_norms).cast(acc_dtype)
+        total = values.max() if p == float("inf") else values.min()
+    else:
+        # DTensor keeps each local parameter norm partial until the outer
+        # vector norm has run. Materializing that NormPartial then reduces the
+        # p-th power of the rank-local total once per shard group. Reducing
+        # each parameter's p-th power first is mathematically equivalent but
+        # changes FP32 rounding and does not follow Torch's operation order.
+        local_norms = [None] * len(grads)
+        groups = []
+        group_keys = []
+        for index, grad in enumerate(grads):
+            reducer = _reducer_for(grad)
+            x = grad.abs() if "complex" in _jittor_dtype_name(grad.dtype) else grad
+            ax = x.cast(acc_dtype).abs()
+            if p == 2.0:
+                local_norm = jt.sqrt((ax * ax).sum())
+            else:
+                local_norm = (ax ** p).sum() ** (1.0 / p)
+
+            if not reducer:
+                local_norms[index] = local_norm
+                continue
+
+            reducer_key = _reducer_key(reducer)
+            try:
+                group_index = group_keys.index(reducer_key)
+                bucket = groups[group_index][1]
+            except ValueError:
+                bucket = []
+                group_keys.append(reducer_key)
+                groups.append((reducer, bucket))
+            bucket.append(local_norm)
+
+        group_norms = []
+        for reducer, bucket in groups:
+            local_components = list(bucket)
+            # A replicated gradient converted to NormPartial is partitioned
+            # by Torch as x / mesh_size**(1/p) before joining the local vector
+            # norm. With one shard mesh, include such gradients in that same
+            # local vector so the collective still happens only once.
+            if len(groups) == 1:
+                if reducer is True:
+                    mesh_size = max(int(getattr(jt, "world_size", 1)), 1)
+                else:
+                    mesh_size = max(int(reducer.size()), 1)
+                if local_norms and mesh_size > 1:
+                    partition_scale = _math.pow(mesh_size, -1.0 / p)
+                    local_components.extend(
+                        local_norm * partition_scale
+                        for local_norm in local_norms if local_norm is not None
+                    )
+            local_group_norm = _vector_norm(local_components)
+            local_group_power = (
+                local_group_norm ** p
+            ).reshape((1,)).cast(acc_dtype)
+            if reducer is True:
+                global_group_power = _collectives._reduce_scalar(
+                    local_group_power, "sum"
+                )
+            else:
+                global_group_power = _reduce_norm_group(
+                    local_group_power, "sum", reducer
+                )
+            group_norms.append(
+                (global_group_power.reshape((-1,))[0] ** (1.0 / p)).reshape((1,))
+            )
+
+        total_components = list(group_norms)
+        if len(groups) != 1:
+            total_components.extend(
+                local_norm.reshape((1,))
+                for local_norm in local_norms if local_norm is not None
+            )
+        if len(total_components) == 1 and groups:
+            total = total_components[0].reshape(())
         else:
-            total = _across((ax ** p).sum(), "sum") ** (1.0 / p)
+            total = _vector_norm(total_components)
 
     if error_if_nonfinite:
         total_value = float(total.item())
@@ -171,10 +273,14 @@ def _get_total_norm_device(grads, norm_type=2.0, error_if_nonfinite=False,
                 "cannot be clipped. To disable this error set "
                 "error_if_nonfinite=False." % norm_type
             )
+    if return_shard_clip_denominator:
+        epsilon = np.float64(1e-6) if acc_dtype == "float64" else np.float32(1e-6)
+        return total, total + epsilon
     return total
 
 
-def _clip_grads_with_norm_device(grads, max_norm, total_norm):
+def _clip_grads_with_norm_device(grads, max_norm, total_norm,
+                                 add_epsilon=True):
     """Scale gradient Vars using an already-computed total norm."""
     grads = [g for g in grads if isinstance(g, jt.Var)]
     if not grads:
@@ -185,29 +291,54 @@ def _clip_grads_with_norm_device(grads, max_norm, total_norm):
     if limit == float("inf"):
         return
     scalar_type = np.float64 if _jittor_dtype_name(acc_dtype) == "float64" else np.float32
-    raw_coef = scalar_type(limit) / (total_norm + scalar_type(1e-6))
+    denominator = (
+        total_norm + scalar_type(1e-6) if add_epsilon else total_norm
+    )
+    raw_coef = scalar_type(limit) / denominator
     coef = jt.minimum(cast(Any, raw_coef), jt.array(float(scalar_type(1.0))).cast(acc_dtype))
     # CUDA fmin-style minimum may select the finite operand for NaN. Torch
     # propagates a NaN total norm into every gradient when errors are disabled.
     coef = jt.ternary(jt.isnan(raw_coef), raw_coef, coef)
     for g in grads:
-        g.update(g * coef.cast(_jittor_dtype_name(g.dtype)))
+        # The fast binary path on ACL does not infer a broadcast mask for a
+        # typed 0-d Var. Materialize the scalar view at each local gradient
+        # shape before multiplying (FSDP2 can expose 1-D parameter shards).
+        scale = coef.cast(_jittor_dtype_name(g.dtype)).broadcast(g.shape)
+        g.update(g * scale)
 
 
 def _clip_grad_norm_device(grads, max_norm, norm_type=2.0,
-                           error_if_nonfinite=False, shard_reduce=False):
-    """Clip a list of gradient Vars without a host-side coefficient branch.
+                           error_if_nonfinite=False, shard_reduce=False,
+                           norm_grads=None):
+    """Clip gradient Vars with a device-resident clipping coefficient.
 
-    A per-gradient reduction is mathematically equivalent for finite p-norms,
-    but it creates one small CUDA reduction per parameter tensor. Transformers
-    commonly have hundreds of tensors, making those launches much more costly
-    than the single flat reduction used here. The device coefficient removes
-    the per-step D2H sync previously caused by ``total.item()``.
+    The norm helper preserves PyTorch's DTensor reduction order. It reduces
+    one rank-local vector norm per shard group, matching NormPartial without a
+    collective per parameter tensor.
+    The device coefficient avoids a per-step host read unless non-finite errors
+    are explicitly requested.
     """
     grads = [g for g in grads if isinstance(g, jt.Var)]
-    total = _get_total_norm_device(grads, norm_type, error_if_nonfinite,
-                                   shard_reduce=shard_reduce)
-    _clip_grads_with_norm_device(grads, max_norm, total)
+    if not grads:
+        return jt.array(0.0)
+    norm_grads = grads if norm_grads is None else [
+        g for g in norm_grads if isinstance(g, jt.Var)
+    ]
+    norm_result = _get_total_norm_device(
+        norm_grads, norm_type, error_if_nonfinite,
+        shard_reduce=shard_reduce,
+        return_shard_clip_denominator=bool(shard_reduce),
+    )
+    if isinstance(norm_result, tuple):
+        total, clip_denominator = norm_result
+    else:
+        total, clip_denominator = norm_result, None
+    if clip_denominator is None:
+        _clip_grads_with_norm_device(grads, max_norm, total)
+    else:
+        _clip_grads_with_norm_device(
+            grads, max_norm, clip_denominator, add_epsilon=False
+        )
     return total
 
 

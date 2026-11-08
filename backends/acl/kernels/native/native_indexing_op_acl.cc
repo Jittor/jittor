@@ -2,6 +2,8 @@
 #include "acl_jittor.h"
 #include "ops/composite/getitem_op.h"
 #include "ops/composite/setitem_op.h"
+#include "ops/reindex_op.h"
+#include "ops/broadcast_to_op.h"
 #include "runtime/backend.h"
 #include "runtime/device_state.h"
 
@@ -192,6 +194,66 @@ string prepare_setitem(SetitemOp* op, PreparedIndex& prepared) {
     return {};
 }
 
+string prepare_broadcast(BroadcastToOp* op, PreparedIndex& prepared, bool check_storage) {
+    if (op->inputs().size() == 0 || op->inputs().size() > 2 || op->outputs().size() != 1)
+        return "invalid broadcast arity";
+    auto* input = op->x;
+    auto* output = op->z;
+    if (input->dtype() != output->dtype()) return "broadcast dtype mismatch";
+    std::vector<size_t> input_shape, output_shape;
+    auto reason = shape_of(input, input_shape);
+    if (!reason.empty()) return reason;
+    reason = shape_of(output, output_shape);
+    if (!reason.empty()) return reason;
+    reason = acl_indexing::make_broadcast_plan(input_shape, output_shape,
+        op->bcast_mask, op->keepdims_mask, input->dtype().dsize(), prepared.copies);
+    if (!reason.empty() || !check_storage || !prepared.copies.elements) return reason;
+    int device = -1;
+    for (auto* value : {input, output}) {
+        reason = acl_storage(value, device);
+        if (!reason.empty()) return reason;
+    }
+    const auto& plan = prepared.copies;
+    prepared.skip_selection = input->shares_allocation_with(output) &&
+        acl_indexing::identical_mapping(plan, address(input), address(output));
+    if (!prepared.skip_selection && acl_indexing::overlaps(
+            address(input), plan.source_offset, plan.source_end,
+            address(output), 0, output->size))
+        return "broadcast output overlaps unread input storage";
+    return {};
+}
+
+string prepare_reindex(ReindexOp* op, PreparedIndex& prepared, bool check_storage) {
+    if (op->inputs().size() != 1 || op->outputs().size() != 1 || !op->extras.empty())
+        return "native ACL reindex does not implement extra tensor indices";
+    if (!op->overflow_conditions.empty())
+        return "native ACL reindex does not implement overflow conditions";
+    auto* input = op->x;
+    auto* output = op->y;
+    if (input->dtype() != output->dtype()) return "reindex dtype mismatch";
+    std::vector<size_t> input_shape, output_shape;
+    auto reason = shape_of(input, input_shape);
+    if (!reason.empty()) return reason;
+    reason = shape_of(output, output_shape);
+    if (!reason.empty()) return reason;
+    reason = acl_indexing::make_reindex_plan(input_shape, output_shape,
+                                            op->indexes, input->dtype().dsize(), prepared.copies);
+    if (!reason.empty() || !check_storage || !prepared.copies.elements) return reason;
+    int device = -1;
+    for (auto* value : {input, output}) {
+        reason = acl_storage(value, device);
+        if (!reason.empty()) return reason;
+    }
+    const auto& plan = prepared.copies;
+    prepared.skip_selection = input->shares_allocation_with(output) &&
+        acl_indexing::identical_mapping(plan, address(input), address(output));
+    if (!prepared.skip_selection && acl_indexing::overlaps(
+            address(input), plan.source_offset, plan.source_end,
+            address(output), 0, output->size))
+        return "reindex output overlaps unread input storage";
+    return {};
+}
+
 void copy_region(Var* source, Var* target, size_t source_offset, size_t target_offset, size_t bytes) {
     if (!bytes) return;
     const auto device = allocation_device(target->allocator);
@@ -218,6 +280,53 @@ std::string acl_getitem_unsupported_reason(Op* op) {
 std::string acl_setitem_unsupported_reason(Op* op) {
     PreparedIndex prepared;
     return prepare_setitem(static_cast<SetitemOp*>(op), prepared);
+}
+
+std::string acl_reindex_unsupported_reason(Op* op) {
+    PreparedIndex prepared;
+    return prepare_reindex(static_cast<ReindexOp*>(op), prepared, false);
+}
+
+void exec_native_acl_reindex(Op* base) {
+    auto* op = static_cast<ReindexOp*>(base);
+    PreparedIndex prepared;
+    auto reason = prepare_reindex(op, prepared, true);
+    USER_CHECK(reason.empty()) << "Unsupported native ACL reindex:" << reason;
+    bool copied = false;
+    if (!prepared.skip_selection)
+        acl_indexing::for_each_copy(prepared.copies, [&](size_t source, size_t target, size_t bytes) {
+            copy_region(op->x, op->y, source, target, bytes);
+            copied = true;
+        });
+    finish_copies(op->y, copied);
+}
+
+bool acl_broadcast_uses_byte_copy(Op* base) {
+    // CANN Expand does not implement these native storage dtypes. Preserve its
+    // fast launcher for its supported arithmetic dtypes; raw copies cover the
+    // remaining registered storage widths without a numeric conversion.
+    const auto dtype = static_cast<BroadcastToOp*>(base)->x->dtype();
+    return dtype == ns_uint16 || dtype == ns_uint32 ||
+           dtype == ns_int16 || dtype == ns_complex64;
+}
+
+std::string acl_broadcast_unsupported_reason(Op* op) {
+    PreparedIndex prepared;
+    return prepare_broadcast(static_cast<BroadcastToOp*>(op), prepared, false);
+}
+
+void exec_native_acl_broadcast(Op* base) {
+    auto* op = static_cast<BroadcastToOp*>(base);
+    PreparedIndex prepared;
+    auto reason = prepare_broadcast(op, prepared, true);
+    USER_CHECK(reason.empty()) << "Unsupported native ACL broadcast:" << reason;
+    bool copied = false;
+    if (!prepared.skip_selection)
+        acl_indexing::for_each_copy(prepared.copies, [&](size_t source, size_t target, size_t bytes) {
+            copy_region(op->x, op->z, source, target, bytes);
+            copied = true;
+        });
+    finish_copies(op->z, copied);
 }
 
 void exec_native_acl_getitem(Op* base) {

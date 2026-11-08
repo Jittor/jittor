@@ -85,23 +85,6 @@ def normal_(tensor, mean=0.0, std=1.0, generator=None):
     return _assign(tensor, _normal_values(tensor, mean, std, generator))
 
 
-def _uniform_values(tensor, a=0.0, b=1.0, generator=None):
-    """Sample with target dtype/device, before the caller writes any storage."""
-    a, b = float(a), float(b)
-    dtype, compute_dtype = _initialization_dtype(tensor)
-    target = get_install_context(jt).target_namespace
-    limits = target.finfo(tensor.dtype)
-    if not (limits.min <= a <= limits.max and limits.min <= b <= limits.max):
-        raise RuntimeError("uniform_ bounds are out of range for the tensor dtype")
-    if a > b or b - a > limits.max:
-        raise RuntimeError("uniform_ requires an ordered range within the tensor dtype limit")
-    with jt.no_grad():
-        draw = target.rand(tuple(tensor.shape), dtype=compute_dtype,
-                           device=tensor.device, generator=generator)
-        value = (draw * (b - a) + a).cast(dtype)
-    return value
-
-
 def _exponential_values(tensor, lambd=1.0, generator=None):
     """Inverse-CDF exponential draw on the tensor's device.
 
@@ -123,6 +106,23 @@ def _exponential_values(tensor, lambd=1.0, generator=None):
     uniform = jt.ternary(uniform < tiny, tiny, uniform)
     uniform = jt.ternary(uniform > upper, upper, uniform)
     return (-jt.log(uniform) / rate).cast(dtype)
+
+
+def _uniform_values(tensor, a=0.0, b=1.0, generator=None):
+    """Sample with target dtype/device, before the caller writes any storage."""
+    a, b = float(a), float(b)
+    dtype, compute_dtype = _initialization_dtype(tensor)
+    target = get_install_context(jt).target_namespace
+    limits = target.finfo(tensor.dtype)
+    if not (limits.min <= a <= limits.max and limits.min <= b <= limits.max):
+        raise RuntimeError("uniform_ bounds are out of range for the tensor dtype")
+    if a > b or b - a > limits.max:
+        raise RuntimeError("uniform_ requires an ordered range within the tensor dtype limit")
+    with jt.no_grad():
+        draw = target.rand(tuple(tensor.shape), dtype=compute_dtype,
+                           device=tensor.device, generator=generator)
+        value = (draw * (b - a) + a).cast(dtype)
+    return value
 
 
 def uniform_(tensor, a=0.0, b=1.0, generator=None, *, low=None, high=None):

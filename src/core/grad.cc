@@ -4,6 +4,7 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
+#include <algorithm>
 #include "bindings/pybind/py_var_tracer.h"
 #include "bindings/pyjt/py_converter.h"
 #include "core/grad.h"
@@ -85,6 +86,22 @@ VarHolder* ready_step_gradient(VarHolder* source) {
 }
 
 AutogradPolicyState autograd_policy;
+static thread_local bool torch_grad_accumulation_reverse = false;
+static thread_local bool torch_grad_edge_dtypes = false;
+
+bool set_torch_grad_accumulation_reverse(bool enabled) {
+    bool previous = torch_grad_accumulation_reverse;
+    torch_grad_accumulation_reverse = enabled;
+    return previous;
+}
+
+bool torch_grad_edge_dtype_policy_enabled() { return torch_grad_edge_dtypes; }
+
+bool set_torch_grad_edge_dtypes(bool enabled) {
+    bool previous = torch_grad_edge_dtypes;
+    torch_grad_edge_dtypes = enabled;
+    return previous;
+}
 
 void set_autograd_policy(
     bool stop_outputs_when_inputs_stopped,
@@ -131,6 +148,29 @@ static VarPtr normalize_recorded_gradient(Var* target, VarPtr value) {
     return reduce ? make_reduce(value.ptr, ns_add, reduce, keep) : move(value);
 }
 
+// Edge normalization and fan-in belong to the differentiated input's dtype,
+// not to a forward op's AMP preference. This guard changes only the Torch
+// backward policy; ordinary native Jittor keeps its existing AMP behavior.
+struct GradientEdgePrecisionScope {
+    int previous;
+    GradientEdgePrecisionScope() : previous(amp_reg) { amp_reg = 0; }
+    ~GradientEdgePrecisionScope() { amp_reg = previous; }
+};
+
+static VarPtr normalize_gradient_edge(Var* target, VarPtr value) {
+    if (!torch_grad_edge_dtypes)
+        return normalize_recorded_gradient(target, move(value));
+    GradientEdgePrecisionScope precision;
+    value = normalize_recorded_gradient(target, move(value));
+    if (!value) return value;
+    USER_CHECK(value->is_float()
+        || target->dtype().is_complex() == value->dtype().is_complex())
+        << "invalid gradient dtype for differentiated input";
+    if (value->dtype() != target->dtype())
+        value = make_unary(value, target->dtype());
+    return value;
+}
+
 #ifdef _WIN32
 template<class T> struct StackIniter {
     T* a;
@@ -165,6 +205,22 @@ struct AmpGradGuard {
         amp_reg = amp_reg_bk;
     }
 };
+
+// Match low-precision accumulation for explicit FP32 input leaves. Keep
+// intermediate activation merges in their existing precision: changing those
+// also changes downstream trainable-parameter gradients.
+static VarPtr add_gradients(Op* op, Var* target, Var* accumulated, Var* incoming) {
+    if (torch_grad_edge_dtypes) {
+        GradientEdgePrecisionScope precision;
+        ASSERT(accumulated->dtype() == target->dtype()
+            && incoming->dtype() == target->dtype());
+        return make_binary(accumulated, incoming, ns_add);
+    }
+    if (!is_backward_leaf(target) || target->ns != ns_float32)
+        return make_binary(accumulated, incoming, ns_add);
+    AmpGradGuard agg(op);
+    return make_binary(accumulated, incoming, ns_add);
+}
 
 struct TraceGradOpRestore {
     Op* previous;
@@ -452,6 +508,17 @@ static vector<VarPtr> grad_impl(
             outgoing.push_back(move(snapshot));
         }
 
+        // For the Torch compatibility policy, consume independent shared-Var
+        // contributions in reverse forward-op creation order. Keep edges from
+        // one op stable because repeated inputs belong to the same node.
+        if (torch_grad_accumulation_reverse) {
+            std::stable_sort(
+                outgoing.begin(), outgoing.end(),
+                [](const GradOpSnapshot& left, const GradOpSnapshot& right) {
+                    return left.op->id > right.op->id;
+                });
+        }
+
         auto& grad = grads[i];
         #ifdef PREVENT_LARGE_FUSED_OP
         int gsum = 0;
@@ -484,15 +551,18 @@ static vector<VarPtr> grad_impl(
                 for (int i=0; i<n_i; i++) {
                     int id = snapshot.input_grad_ids[i];
                     if (id>=0) {
-                        auto din = normalize_recorded_gradient(gvars[id], move(dins[i]));
+                        auto din = normalize_gradient_edge(gvars[id], move(dins[i]));
                         auto& grad = grads[id];
                         if (din && grad) {
-                            grad = make_binary(grad, din, ns_add);
+                            grad = add_gradients(op, gvars[id], grad, din);
                         } else
                             grad = move(din);
                     }
                 }
             } else {
+                // One ordinary op may have multiple differentiable outputs.
+                // Form its complete VJP for this input before edge validation.
+                VarPtr torch_edge;
                 for (const auto& output : snapshot.outputs) {
                     Var* out = output.first;
                     int id = output.second;
@@ -501,6 +571,14 @@ static vector<VarPtr> grad_impl(
                     trace_grad_op = op;
                     VarPtr dvar = make_grad(
                         op, out, dout, var, snapshot.input_index);
+                    if (torch_grad_edge_dtypes) {
+                        if (dvar) {
+                            GradientEdgePrecisionScope precision;
+                            torch_edge = torch_edge
+                                ? make_binary(torch_edge, dvar, ns_add) : move(dvar);
+                        }
+                        continue;
+                    }
                     dvar = normalize_recorded_gradient(var, move(dvar));
                     if (dvar && dvar->num>=0 && var->num>0 && !var->recorded_gradient_shape)
                         // var->num == 0 represents a any match var
@@ -509,7 +587,29 @@ static vector<VarPtr> grad_impl(
                     if (!grad)
                         grad = move(dvar);
                     else if (dvar) {
-                        grad = make_binary(grad, dvar, ns_add);
+                        grad = add_gradients(op, var, grad, dvar);
+                        #ifdef PREVENT_LARGE_FUSED_OP
+                        gsum ++;
+                        if (gsum>=PREVENT_LARGE_FUSED_OP) {
+                            // TODO: this is a dirty fix for
+                            // stopping fuse lots of op together,
+                            // try to find a better solution
+                            grad->set_flag(VarFlags::_stop_fuse);
+                        }
+                        #endif
+                        assign_attrs(grad.ptr, var);
+                    }
+                }
+                if (torch_grad_edge_dtypes) {
+                    auto dvar = normalize_gradient_edge(var, move(torch_edge));
+                    if (dvar && dvar->num>=0 && var->num>0 && !var->recorded_gradient_shape)
+                        // var->num == 0 represents a any match var
+                        ASSERT(dvar->num==var->num && dvar->shape.size()==var->shape.size())
+                        << "dvar" << dvar << "var" << var;
+                    if (!grad)
+                        grad = move(dvar);
+                    else if (dvar) {
+                        grad = add_gradients(op, var, grad, dvar);
                         #ifdef PREVENT_LARGE_FUSED_OP
                         gsum ++;
                         if (gsum>=PREVENT_LARGE_FUSED_OP) {
@@ -541,8 +641,13 @@ static vector<VarPtr> grad_impl(
         apply_tensor_hook(var, grad);
         if (callback && callback->func && grad) {
             for (int target_index : callback_targets[i]) {
-                TraceGradOpCallbackScope callback_trace_scope;
-                callback->func(target_index, grad.ptr);
+                {
+                    // The callback may build its own Jittor graph. Those nodes
+                    // belong to the callback's Python call site, not to the
+                    // backward op that happened to produce this gradient.
+                    TraceGradOpCallbackScope callback_trace_scope;
+                    callback->func(target_index, grad.ptr);
+                }
                 callback_called[target_index] = true;
             }
         }

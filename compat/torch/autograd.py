@@ -35,6 +35,34 @@ def _state():
     return get_install_context(jt).state["autograd_api"]
 
 
+@contextlib.contextmanager
+def _torch_grad_edge_dtypes():
+    setter = getattr(jt.core, "_set_torch_grad_edge_dtypes", None)
+    if setter is None:
+        raise RuntimeError(
+            "Torch per-edge gradient dtype policy requires a rebuilt Jittor core")
+    previous = setter(True)
+    try:
+        yield
+    finally:
+        setter(previous)
+
+
+@contextlib.contextmanager
+def _torch_grad_accumulation_order():
+    # Shared by public autograd.grad and Tensor.backward, including optimizers.
+    with _torch_grad_edge_dtypes():
+        setter = getattr(jt.core, "_set_torch_grad_accumulation_reverse", None)
+        if setter is None:
+            yield
+            return
+        previous = setter(True)
+        try:
+            yield
+        finally:
+            setter(previous)
+
+
 def save_for_backward(self, *tensors):
     origins = getattr(self, "_torch_saved_input_origins", {})
     self._saved_tensors = tuple(origins.get(id(t), t) for t in tensors)
@@ -92,14 +120,14 @@ def _sum_grad_to(grad, shape):
             % (tuple(gshape), tuple(shape), g_items, tgt_items),
             RuntimeWarning, stacklevel=3)
         return jt.zeros([int(s) for s in shape], dtype=grad.dtype)
-    # drop leading dims that the input doesn't have (broadcast prepended them)
+    # Shape metadata is validated in the raw VJP dtype before the core casts
+    # that complete edge to its input dtype. One sum also avoids rounding
+    # between leading dimensions and the input's broadcast dimensions.
     extra = len(gshape) - len(shape)
-    if extra > 0:
-        grad = grad.sum(dims=tuple(range(extra)))
-        gshape = grad.shape
-    # sum over dims where the input was size-1 but grad is larger (keepdim)
-    reduce_dims = [i for i in range(len(shape))
-                   if int(shape[i]) == 1 and int(gshape[i]) != 1]
+    reduce_dims = list(range(max(extra, 0)))
+    reduce_dims.extend(
+        extra + i for i in range(len(shape))
+        if int(shape[i]) == 1 and int(gshape[extra + i]) != 1)
     if reduce_dims:
         grad = grad.sum(dims=tuple(reduce_dims), keepdims=True)
     if list(grad.shape) != list(shape):
@@ -289,7 +317,7 @@ def grad(outputs, inputs, grad_outputs=None, retain_graph=None,
     allow_unused = bool(materialize_grads) if allow_unused is None \
         else bool(allow_unused)
     with _create_graph_scope(create_graph):
-        with _backward_callbacks():
+        with _backward_callbacks(), _torch_grad_accumulation_order():
             gs = list(jt.core.grad_optional(loss, ins, rg))
     missing = [i for i, value in enumerate(gs) if value is None]
     if missing and materialize_grads:

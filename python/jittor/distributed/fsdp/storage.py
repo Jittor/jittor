@@ -8,6 +8,28 @@ import jittor as jt
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 
+def _register_parameter_alias(entry, owner, attr):
+    """Record registrations using the shared aliases metadata owner."""
+    aliases = list(getattr(entry, "aliases", ((entry.owner, entry.attr),)))
+    for old_owner, old_attr in getattr(entry, "parameter_aliases", ()):
+        if not any(current is old_owner and name == old_attr for current, name in aliases):
+            aliases.append((old_owner, old_attr))
+    if not any(current is owner and name == attr for current, name in aliases):
+        aliases.append((owner, attr))
+    entry.aliases = tuple(aliases)
+
+
+def _set_module_parameter(entry, parameter):
+    """Publish one holder at every registration, including legacy entries."""
+    _register_parameter_alias(entry, entry.owner, entry.attr)
+    for owner, attr in entry.aliases:
+        publisher = getattr(owner, "_set_parameter_alias", None)
+        if publisher is None:
+            object.__setattr__(owner, attr, parameter)
+        else:
+            publisher(attr, parameter)
+
+
 def _parameter_requires_grad(param):
     """Read torch-facing trainability without conflating it with graph stop."""
     try:
@@ -73,7 +95,7 @@ def _reshard_module_params(module):
     if not getattr(state, "true_fsdp_unsharded", False):
         return module
     for entry in state.true_fsdp_params:
-        object.__setattr__(entry.owner, entry.attr, entry.shard)
+        _set_module_parameter(entry, entry.shard)
         if not getattr(entry, "requires_grad", True):
             # A frozen parameter is not a sync_sharded_grads() target. Drop the
             # state's explicit full reference after forward so an entirely
@@ -173,7 +195,7 @@ def _unshard_module_params_impl(module, *, api):
                     full.start_grad()
             elif not full.is_stop_grad():
                 full.stop_grad()
-            object.__setattr__(entry.owner, entry.attr, full)
+            _set_module_parameter(entry, full)
     else:
         for entry in state.true_fsdp_params:
             gathered = common._all_gather_shards(
@@ -192,7 +214,7 @@ def _unshard_module_params_impl(module, *, api):
                     full.start_grad()
             elif not full.is_stop_grad():
                 full.stop_grad()
-            object.__setattr__(entry.owner, entry.attr, full)
+            _set_module_parameter(entry, full)
     state.true_fsdp_unsharded = True
     return module
 
@@ -242,7 +264,12 @@ def _execute_with_true_fsdp(module, orig_execute, *args, api, **kwargs):
             kwargs = _cast_floating_tree(kwargs, target)
         api._unshard_module_params(module)
         try:
-            out = orig_execute(*args, **kwargs)
+            forward_scope = getattr(api, "_fsdp_forward_amp_scope", None)
+            if forward_scope is None:
+                out = orig_execute(*args, **kwargs)
+            else:
+                with forward_scope(policy):
+                    out = orig_execute(*args, **kwargs)
             entries = getattr(state, "true_fsdp_params", ())
             output_dtype = getattr(policy, "output_dtype", None)
             if output_dtype is not None:
@@ -330,7 +357,7 @@ def _init_true_fsdp_state_impl(module, state, params, *, world_size, rank, flat,
             state.true_fsdp_flat_shard.stop_grad()
         api._refresh_flat_entry_shards(state)
         for entry in entries:
-            object.__setattr__(entry.owner, entry.attr, entry.shard)
+            _set_module_parameter(entry, entry.shard)
         state.true_fsdp_unsharded = False
         return state
 
@@ -364,7 +391,7 @@ def _init_true_fsdp_state_impl(module, state, params, *, world_size, rank, flat,
                 local.start_grad()
         elif not local.is_stop_grad():
             local.stop_grad()
-        object.__setattr__(owner, attr, local)
+        _set_module_parameter(entries[-1], local)
     state.true_fsdp_initialized = True
     state.true_fsdp_rank = rank
     state.true_fsdp_world_size = ws

@@ -632,25 +632,19 @@ PyObject* jt_setitem(PyObject* self, PyObject* index, PyObject* value) {
         Var* x = holder->var;
         Var* cond = GET_RAW_PTR(VarHolder, index)->var;
         if (cond->shape == x->shape) {
-            // `x.assign(mask.ternary(jt.array(value).broadcast(x.shape), x))`,
-            // and for a one-element Var value `jt.broadcast(value, x.shape)`.
-            VarPtr filled;
-            if (!value_var) {
-                unique_ptr<VarHolder> number(jit_op_maker::array__(value));
-                // Torch casts the assigned scalar to the destination dtype;
-                // `ternary` would instead promote the whole tensor (int32 x
-                // with 0.25 became float32). The Python path performs that
-                // cast, so decline here and let it own the assignment.
-                if (number->var->dtype() != x->dtype()) return not_implemented();
-                filled = make_broadcast_to_op(number->var, x->shape, NanoVector());
-            } else {
-                auto* v = GET_RAW_PTR(VarHolder, value);
-                if (v->var->shape.size() == 1 && v->var->shape[0] == 1)
-                    filled = make_broadcast_to_op(v->grad_input(), x->shape, NanoVector());
-            }
-            if (filled) {
+            // Python's scalar-mask branch creates its value with x.dtype and
+            // the active frontend scope. The binding cannot reproduce that
+            // construction for an exact Python number without changing dtype
+            // promotion, so let the Python path handle it.
+            if (!value_var) return not_implemented();
+            // A one-element Var uses the same broadcast and ternary path.
+            auto* v = GET_RAW_PTR(VarHolder, value);
+            if (v->var->shape.size() == 1 && v->var->shape[0] == 1) {
+                VarPtr filled = make_broadcast_to_op(
+                    v->grad_input(), x->shape, NanoVector());
                 Var* c = GET_RAW_PTR(VarHolder, index)->grad_input();
-                return assign_result(self, make_ternary_op(c, filled.ptr, holder->grad_input()));
+                return assign_result(self, make_ternary_op(
+                    c, filled.ptr, holder->grad_input()));
             }
         }
     }
@@ -856,7 +850,15 @@ PyObject* scalar_division(PyObject* self, PyObject* other, NanoString own) {
     PyTensorFrontendScope scope(self, nullptr, 0, false);
     PyObject* out;
     if (own == ns_float64) {
-        out = binary_slots[B_TRUEDIV](self, other);
+        // The Python operator converts this literal through Jittor's generic
+        // scalar binding, which narrows it before float64 division. The
+        // `_true_division` path materializes a float64 0-d Var instead, so
+        // mirror that operand here to keep the native shortcut bit-identical.
+        double value = PyFloat_AS_DOUBLE(other);
+        PyObjHolder b(wrap_like(self, new VarHolder(make_array(
+            &value, {}, ns_float64))));
+        GET_RAW_PTR(VarHolder, b.obj)->stop_grad();
+        out = binary_slots[B_TRUEDIV](self, b.obj);
     } else {
         // float32 divides in float32: that is what torch does with a Python
         // float, measured -- `x / 0.28209479177387814` over 20000 float32 `x`

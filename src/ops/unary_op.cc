@@ -430,6 +430,10 @@ static unordered_set<string> unary_ops = {
      */
     "sqrt",
 
+    /** Return the reciprocal square root, evaluated in float32 for reduced
+        floating dtypes and float64 for float64. */
+    "rsqrt",
+
     /**
     Returns the closest integer of the input ``x``. 
 
@@ -950,6 +954,9 @@ UnaryOp::UnaryOp(Var* x, NanoString op) : x(x) {
     set_type(OpType::element);
     ns = op;
     USER_CHECK(ns.is_unary() | ns.is_dtype());
+    USER_CHECK(ns != ns_rsqrt || !x->dtype().is_complex())
+        << "unary(complex, 'rsqrt') is unsupported; use public jt.rsqrt(x),"
+           " which preserves the existing complex sqrt/divide composition.";
     if (ns == ns_log1p) {
         // Complex log and ACL already support this same-device graph. Keep
         // that existing behavior where a precise log1p kernel is unavailable;
@@ -1099,6 +1106,23 @@ VarPtr UnaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     }
     if (ns == ns_exp)
         return make_binary(dout, y, ns_multiply);
+    if (ns == ns_rsqrt) {
+        // -0.5 * dout * y^3; saved output suffices. Do not round each
+        // multiplication to half/bfloat16 while constructing the derivative.
+        struct PrecisionScope {
+            int saved;
+            PrecisionScope() : saved(amp_reg) { amp_reg = 0; }
+            ~PrecisionScope() { amp_reg = saved; }
+        } precision_scope;
+        bool reduced = x->dtype() == ns_float16 || x->dtype() == ns_bfloat16;
+        VarPtr value = reduced ? make_unary(out, ns_float32) : VarPtr(out);
+        VarPtr upstream = reduced ? make_unary(dout, ns_float32) : VarPtr(dout);
+        auto square = make_binary(value, value, ns_multiply);
+        auto cube = make_binary(square, value, ns_multiply);
+        auto scaled = make_binary(make_number(-0.5f, upstream), upstream, ns_multiply);
+        auto result = make_binary(scaled, cube, ns_multiply);
+        return reduced ? make_unary(result, x->dtype()) : result;
+    }
     if (ns == ns_sqrt){
         auto two = make_number(2, x);
         auto twoy = make_binary(two, y, ns_multiply);
@@ -1149,12 +1173,13 @@ VarPtr UnaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
         return make_binary(dout, make_unary(x, ns_sinh), ns_multiply);
     // Differentiate the saved, rounded output. Recomputing cosh(x) both
     // changes the low-precision derivative and overflows for saturated FP16
-    // inputs. CPU low-precision kernels use FP32 opmath; CUDA follows the
-    // low-precision scalar arithmetic at each operation. The ordinary graph
-    // through out preserves higher-order derivatives on both backends.
+    // inputs. CPU and ACL use FP32 opmath for reduced-precision tanh backward;
+    // CUDA retains its existing low-precision scalar arithmetic. The ordinary
+    // graph through out preserves higher-order derivatives on both backends.
     if (ns == ns_tanh) {
         bool low_precision = x->dtype() == ns_float16 || x->dtype() == ns_bfloat16;
-        bool promote = low_precision && execution_backend() == BackendId::Cpu;
+        bool promote = low_precision && (execution_backend() == BackendId::Cpu
+                                         || execution_backend() == BackendId::Acl);
         VarPtr value = promote ? make_unary(out, ns_float32) : VarPtr(out);
         VarPtr incoming = promote ? make_unary(dout, ns_float32) : VarPtr(dout);
         auto square = make_binary(value, value, ns_multiply);

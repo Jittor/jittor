@@ -6,7 +6,7 @@ from jittor._core.dtypes import dtype_name
 
 from ...context import get_install_context
 from ..numerical.sparse import _SparseCOO
-from .method_api import _ip
+from .method_api import _ip, _inplace_saved_input
 
 
 def _inplace_binary(self, other, operation):
@@ -16,7 +16,9 @@ def _inplace_binary(self, other, operation):
             "a leaf Variable that requires grad is being used in an in-place operation")
     if isinstance(other, _SparseCOO):
         other = other.to_dense()
-    result = operation(self, other)
+    value = (_inplace_saved_input(self, other)
+             if operation in (operator.mul, operator.truediv) else self)
+    result = operation(value, other)
     if tuple(result.shape) != tuple(self.shape):
         raise RuntimeError(
             "output with shape %s doesn't match the broadcast shape %s"
@@ -28,7 +30,7 @@ def _inplace_binary(self, other, operation):
             % (result.dtype, self.dtype))
     if result.dtype != self.dtype:
         result = result.cast(dtype_name(self.dtype))
-    return _ip(self, result)
+    return _ip(self, result, preserve_storage=True)
 
 
 def _tensor_iadd(self, other):

@@ -213,7 +213,6 @@ def _bootstrap_native_distributed(rank, world_size, backend=None, store=None):
     jt.compile_extern.in_mpi = True
 
 
-
     jt.core.Var.mpi_all_reduce = _bootstrap_var_all_reduce
     jt.core.Var.mpi_broadcast = _bootstrap_var_broadcast
     return True
@@ -520,7 +519,7 @@ def _all_reduce(tensor, op=None, group=None, async_op=False):
         return _collective_result(tensor, async_op, issued=True)
     if size > 1:
         if reduce_name in ("sum", "mean"):
-            result = tensor.mpi_all_reduce(reduce_name)
+            result = _process_group.get_default_group().all_reduce(tensor, reduce_name)
         else:
             gathered = _native_all_gather_flat(tensor).reshape(
                 (size,) + tuple(tensor.shape))
@@ -592,9 +591,7 @@ def _broadcast(tensor, src=0, group=None, async_op=False, group_src=None):
     root = int(src if group_src is None else
                _api_dist_get_global_rank(group, group_src))
     if size > 1:
-        result = (_process_group.broadcast(tensor, src=root, group=group)
-                  if group is not None else tensor.mpi_broadcast(root))
-        _copy_tensor(tensor, result)
+        _copy_tensor(tensor, _process_group.get_default_group().broadcast(tensor, root))
     return _collective_result(tensor, async_op, issued=size > 1)
 
 
@@ -603,8 +600,9 @@ def _barrier(group=None, async_op=False, device_ids=None):
     marker = None
     if size > 1:
         marker = jt.array(np.asarray([_distributed_rank()], dtype=np.int32))
-        marker = marker.mpi_all_reduce("sum")
-        marker.sync()
+        marker = _process_group.get_default_group().all_reduce(marker, "sum")
+        marker.sync(device_sync=True)
+    # The marker was synchronized above; do not flush it a second time.
     return _collective_result(marker, async_op, issued=False)
 
 
@@ -674,6 +672,7 @@ def _new_group(ranks=None, *args, **kwargs):
 class Backend(str):
     GLOO = "gloo"
     NCCL = "nccl"
+    HCCL = "hccl"
     MPI = "mpi"
     UCC = "ucc"
     UNDEFINED = "undefined"
@@ -830,36 +829,14 @@ class Future:
         return callback(self)
 
 
-class FileSystemReader:
-    def __init__(self, path, *a, **k):
-        self.path = path
+def _checkpoint_sharded_unavailable(api):
+    _stub_unimplemented(
+        api, "treat local tensors as persisted distributed shards",
+        _dcp_hint)
 
 
-class FileSystemWriter:
-    def __init__(self, path, *a, **k):
-        self.path = path
 
 
-class DefaultSavePlanner:
-    """Planner marker for the supported same-world-size DCP snapshot path."""
-
-    def __init__(self, flatten_state_dict=True, flatten_sharded_tensors=True,
-                 dedup_replicated_tensors=True, storage_meta=None):
-        self.flatten_state_dict = bool(flatten_state_dict)
-        self.flatten_sharded_tensors = bool(flatten_sharded_tensors)
-        self.dedup_replicated_tensors = bool(dedup_replicated_tensors)
-        self.storage_meta = storage_meta
-
-
-class DefaultLoadPlanner:
-    """Planner marker for the supported same-world-size DCP snapshot path."""
-
-    def __init__(self, flatten_state_dict=True, flatten_sharded_tensors=True,
-                 allow_partial_load=False, dedup_replicated_tensors=True):
-        self.flatten_state_dict = bool(flatten_state_dict)
-        self.flatten_sharded_tensors = bool(flatten_sharded_tensors)
-        self.allow_partial_load = bool(allow_partial_load)
-        self.dedup_replicated_tensors = bool(dedup_replicated_tensors)
 
 
 _DCP_FORMAT = "jittor-rank-local-dcp-v1"
@@ -1048,38 +1025,42 @@ def _make_dcp_save(g):
 
 
 def _copy_dcp_state(target, source, path="state_dict"):
-    if isinstance(target, dict) and isinstance(source, Mapping):
-        if not target:
-            target.update(source)
-            return target
-        if set(target) != set(source):
-            raise ValueError("DCP key mismatch at %s" % path)
-        for key in list(target):
-            target[key] = _copy_dcp_state(target[key], source[key],
-                                           "%s[%r]" % (path, key))
+    copies = []
+    def plan(current, saved, key):
+        if isinstance(current, dict) and isinstance(saved, Mapping):
+            if not current:
+                return dict(saved)
+            if set(current) != set(saved):
+                raise ValueError("DCP key mismatch at %s" % key)
+            return {name: plan(value, saved[name], "%s[%r]" % (key, name))
+                    for name, value in current.items()}
+        if isinstance(current, jt.Var) and isinstance(saved, jt.Var):
+            if tuple(current.shape) != tuple(saved.shape):
+                raise ValueError("DCP tensor shape mismatch at %s" % key)
+            if current.dtype != saved.dtype:
+                raise TypeError("DCP tensor dtype mismatch at %s" % key)
+            from .tensor.method_api import _to
+            value = _to(saved, device=current.device, dtype=current.dtype).detach().clone()
+            value.sync()
+            copies.append((current, value))
+            return current
+        if isinstance(current, (list, tuple)) and isinstance(saved, (list, tuple)):
+            if len(current) != len(saved):
+                raise ValueError("DCP sequence length mismatch at %s" % key)
+            return type(current)(plan(left, right, "%s[%d]" % (key, index))
+                                 for index, (left, right) in enumerate(zip(current, saved)))
+        return saved
+    planned = plan(target, source, path)
+    from .tensor.method_api import _copy_, _copy_detached_storage
+    with jt.no_grad():
+        for current, value in copies:
+            if not _copy_detached_storage(current, value):
+                _copy_(current, value)
+    if isinstance(target, dict) and isinstance(planned, dict):
+        target.clear()
+        target.update(planned)
         return target
-    if isinstance(target, jt.Var) and isinstance(source, jt.Var):
-        if tuple(target.shape) != tuple(source.shape):
-            raise ValueError("DCP tensor shape mismatch at %s" % path)
-        if target.dtype != source.dtype:
-            raise TypeError("DCP tensor dtype mismatch at %s" % path)
-        if target.device != source.device:
-            source = source.to(target.device)
-        target.copy_(source)
-        return target
-    if isinstance(target, list) and isinstance(source, (list, tuple)):
-        if len(target) != len(source):
-            raise ValueError("DCP sequence length mismatch at %s" % path)
-        for index, item in enumerate(source):
-            target[index] = _copy_dcp_state(target[index], item,
-                                             "%s[%d]" % (path, index))
-        return target
-    if isinstance(target, tuple) and isinstance(source, (list, tuple)):
-        if len(target) != len(source):
-            raise ValueError("DCP sequence length mismatch at %s" % path)
-        return tuple(_copy_dcp_state(left, right, "%s[%d]" % (path, index))
-                     for index, (left, right) in enumerate(zip(target, source)))
-    return source
+    return planned
 
 
 def _make_dcp_load(g):
@@ -1147,14 +1128,13 @@ class StateDictOptions:
     dsd_fqn_modifiers: str = "_fqn_modifiers"
 
 
-def _get_model_state_dict(model, submodules=None, *, options=None):
-    return get_model_state_dict(model, submodules=submodules, options=options)
-
-
-def _set_model_state_dict(model, state_dict, *a, options=None, **k):
-    if a or k:
-        raise NotImplementedError("checkpoint model submodule selection is not supported")
-    return set_model_state_dict(model, state_dict, options=options)
+# Legacy private spellings retain the canonical state owner identity.
+_get_model_state_dict = get_model_state_dict
+_set_model_state_dict = set_model_state_dict
+_get_optimizer_state_dict = get_optimizer_state_dict
+_set_optimizer_state_dict = set_optimizer_state_dict
+_api_checkpoint_sd_get_state_dict = get_state_dict
+_api_checkpoint_sd_set_state_dict = set_state_dict
 
 
 class GradBucket:
@@ -1202,7 +1182,14 @@ def _api_dist_is_available(*a, **k):
 
 
 def _api_dist_is_backend_available(backend):
-    return bool(getattr(jt, 'has_cuda', False)) if str(backend).lower() == 'nccl' else bool(getattr(jt.compile_extern, 'has_mpi', False)) if str(backend).lower() == 'mpi' else False
+    name = str(backend).lower()
+    if name == "hccl":
+        return bool(getattr(getattr(jt, "compiler", None), "has_acl", False))
+    if name == "nccl":
+        return bool(getattr(jt, "has_cuda", False))
+    if name == "mpi":
+        return bool(getattr(jt.compile_extern, "has_mpi", False))
+    return False
 
 
 def _api_dist_is_nccl_available():
@@ -1301,15 +1288,6 @@ def _api_symmetric_memory_is_symm_mem_enabled_for_group(*a, **k):
     return False
 
 
-def _api_checkpoint_sd_get_state_dict(model, optimizers=None, *a, **k):
-    return get_state_dict(model, optimizers, *a, **k)
-
-
-def _api_checkpoint_sd_set_state_dict(model, optimizers=None, model_state_dict=None, optim_state_dict=None, *a, **k):
-    return set_state_dict(model, optimizers, *a, model_state_dict=model_state_dict or {},
-                          optim_state_dict=optim_state_dict or {}, **k)
-
-
 def _api_sharded_tensor_init_from_local_shards(shards, *a, **k):
     if not _allow_stub():
         raise NotImplementedError("DTensor chunk metadata and resharding are not supported")
@@ -1348,34 +1326,22 @@ _dcp_load_effect = ("return the state dict unchanged without reading the "
                     "weights")
 
 
-_dcp_hint = ("Use torch.save / Module.state_dict for a single-rank "
-             "checkpoint; sharded dcp is task 8.18.")
+_dcp_hint = ("Legacy ShardedTensor constructors require DTensor chunk metadata not supplied by this API. "
+             "Default named DTensor checkpoints use the native manifest filesystem path.")
 
 
-def _api_checkpoint_load_state_dict(*args, **kwargs):
-    return _stub_unimplemented('torch.distributed.checkpoint.load_state_dict', _dcp_load_effect, _dcp_hint, stub_result=None)
-
-
-def _api_checkpoint_save_state_dict(*args, **kwargs):
-    return _stub_unimplemented('torch.distributed.checkpoint.save_state_dict', _dcp_save_effect, _dcp_hint, stub_result=None)
-
-
-def _api_checkpoint_load(*args, **kwargs):
-    return _stub_unimplemented('torch.distributed.checkpoint.load', _dcp_load_effect, _dcp_hint, stub_result=None)
-
-
-def _api_checkpoint_save(*args, **kwargs):
-    return _stub_unimplemented('torch.distributed.checkpoint.save', _dcp_save_effect, _dcp_hint, stub_result=None)
+from ..checkpoint_storage import (
+    FileSystemReader, FileSystemWriter, DefaultSavePlanner, DefaultLoadPlanner,
+    load as _api_checkpoint_load, save as _api_checkpoint_save,
+    load_state_dict as _api_checkpoint_load_state_dict,
+    save_state_dict as _api_checkpoint_save_state_dict,
+)
 
 
 def _api_checkpoint_fs_write_item(*args, **kwargs):
     return _stub_unimplemented('torch.distributed.checkpoint.filesystem._write_item', _dcp_save_effect, _dcp_hint, stub_result=None)
 
 
-_api_checkpoint_load_state_dict._jittor_unimplemented = 'torch.distributed.checkpoint.load_state_dict'
-_api_checkpoint_save_state_dict._jittor_unimplemented = 'torch.distributed.checkpoint.save_state_dict'
-_api_checkpoint_load._jittor_unimplemented = 'torch.distributed.checkpoint.load'
-_api_checkpoint_save._jittor_unimplemented = 'torch.distributed.checkpoint.save'
 _api_checkpoint_fs_write_item._jittor_unimplemented = 'torch.distributed.checkpoint.filesystem._write_item'
 
 def _install_distributed(g, registry=None):
@@ -1564,10 +1530,11 @@ def _install_distributed(g, registry=None):
     checkpoint.__path__ = getattr(checkpoint, "__path__", [])
     checkpoint.FileSystemReader = FileSystemReader
     checkpoint.FileSystemWriter = FileSystemWriter
-    # This bounded rank-local format writes every rank payload atomically and
-    # publishes the generation only after all rank writes have succeeded.
-    dcp_load = _make_dcp_load(g)
-    dcp_save = _make_dcp_save(g)
+    # Keep the established rank-local CUDA format for ordinary state and
+    # native interval manifests for DTensor shards; readers detect the format.
+    from ..checkpoint_storage import make_checkpoint_io
+    dcp_load, dcp_save = make_checkpoint_io(
+        _make_dcp_load(g), _make_dcp_save(g))
     checkpoint.load_state_dict = lambda state_dict, storage_reader=None, **kwargs: dcp_load(
         state_dict, storage_reader, **kwargs)
     checkpoint.save_state_dict = lambda state_dict, storage_writer=None, **kwargs: dcp_save(
@@ -1576,12 +1543,12 @@ def _install_distributed(g, registry=None):
     checkpoint.save = dcp_save
     checkpoint_sd = _types.ModuleType("torch.distributed.checkpoint.state_dict")
     checkpoint_sd.StateDictOptions = StateDictOptions
-    checkpoint_sd.get_model_state_dict = _get_model_state_dict
-    checkpoint_sd.set_model_state_dict = _set_model_state_dict
+    checkpoint_sd.get_model_state_dict = get_model_state_dict
+    checkpoint_sd.set_model_state_dict = set_model_state_dict
     checkpoint_sd.get_optimizer_state_dict = get_optimizer_state_dict
     checkpoint_sd.set_optimizer_state_dict = set_optimizer_state_dict
-    checkpoint_sd.get_state_dict = _api_checkpoint_sd_get_state_dict
-    checkpoint_sd.set_state_dict = _api_checkpoint_sd_set_state_dict
+    checkpoint_sd.get_state_dict = get_state_dict
+    checkpoint_sd.set_state_dict = set_state_dict
     checkpoint_planner = _types.ModuleType("torch.distributed.checkpoint.default_planner")
     checkpoint_planner.DefaultSavePlanner = DefaultSavePlanner
     checkpoint_planner.DefaultLoadPlanner = DefaultLoadPlanner
@@ -1595,9 +1562,9 @@ def _install_distributed(g, registry=None):
     _modules["torch.distributed.checkpoint.state_dict"] = checkpoint_sd
     _modules["torch.distributed.checkpoint.filesystem"] = checkpoint_fs
     _modules["torch.distributed.checkpoint.default_planner"] = checkpoint_planner
-    checkpoint.default_planner = checkpoint_planner
     checkpoint.state_dict = checkpoint_sd
     checkpoint.filesystem = checkpoint_fs
+    checkpoint.default_planner = checkpoint_planner
 
     shard = dist._shard
     shard.__path__ = getattr(shard, "__path__", [])
@@ -1676,16 +1643,14 @@ def _install_distributed(g, registry=None):
         "Import-compatible context and hooks do not implement uneven-input communication")
     register_api_bindings(checkpoint, "torch.distributed.checkpoint",
         ("load_state_dict", "save_state_dict", "load", "save", "FileSystemReader", "FileSystemWriter"),
-        Fidelity.APPROXIMATE, "Atomic per-rank tensor snapshots support same-world-size save/load; default WORLD only, no cross-world resharding or standard Torch DCP file layout")
+        Fidelity.APPROXIMATE, "Atomic same-world-size rank-local snapshots and native DTensor interval manifests; existing formats are read explicitly, Torch .distcp and cross-world resharding remain unsupported")
     register_api_bindings(checkpoint_planner, "torch.distributed.checkpoint.default_planner",
         ("DefaultSavePlanner", "DefaultLoadPlanner"), Fidelity.APPROXIMATE,
         "Planner import compatibility for same-world-size rank-local tensor snapshots")
     register_api_bindings(checkpoint_sd, "torch.distributed.checkpoint.state_dict",
-        ("StateDictOptions", "get_model_state_dict", "set_model_state_dict", "get_state_dict", "set_state_dict",
-         "get_optimizer_state_dict", "set_optimizer_state_dict"),
-        Fidelity.APPROXIMATE, "FQN optimizer state and parameter groups, FULL FSDP provider transforms, "
-        "CPU offload, flatten, rank-zero broadcast, strict optimizer loading and submodule selection; "
-        "FULL plus flatten loading is explicitly unsupported")
+        ("StateDictOptions", "get_model_state_dict", "set_model_state_dict",
+         "get_optimizer_state_dict", "set_optimizer_state_dict", "get_state_dict", "set_state_dict"),
+        Fidelity.APPROXIMATE, "Canonical named model/optimizer transforms with registered FULL and local-interval FSDP providers")
     register_api_bindings(rendezvous_mod, "torch.distributed.rendezvous", ("rendezvous",),
         Fidelity.APPROXIMATE, "Delegates supported URL, rank, world-size and timeout handling to native stores")
     register_api_bindings(c10d, "torch.distributed.distributed_c10d",
@@ -1702,7 +1667,7 @@ def _install_distributed(g, registry=None):
         Fidelity.UNIMPLEMENTED, "Symmetric memory allocation and rendezvous are unavailable")
     register_api_bindings(sharded_tensor, "torch.distributed._shard.sharded_tensor",
         ("ShardedTensor", "init_from_local_shards", "empty"), Fidelity.UNIMPLEMENTED,
-        "Placeholder type and local tensor/first-shard returns do not implement sharded storage")
+        "DTensor chunk metadata and sharded storage are unavailable; local stub results require opt-in")
     register_api_bindings(dist, "torch.distributed", ("DeviceMesh", "init_device_mesh"),
         Fidelity.UNIMPLEMENTED if dist.DeviceMesh is _DeviceMesh else Fidelity.APPROXIMATE,
         "Uses the installed mesh owner; the fallback only describes a singleton mesh")

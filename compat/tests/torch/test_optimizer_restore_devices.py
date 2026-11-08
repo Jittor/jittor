@@ -94,8 +94,8 @@ def test_map_cpu_restore_to_per_parameter_device_and_next_step(tmp_path, device,
         if kind == "adamw":
             assert float(target_state["step"]) == float(source_state["step"]) == 1
             if target.dtype == torch.bfloat16:
-                assert target_state["exp_avg"].dtype == torch.float32
-                assert target_state["exp_avg_sq"].dtype == torch.float32
+                assert target_state["exp_avg"].dtype == target.dtype
+                assert target_state["exp_avg_sq"].dtype == target.dtype
     assert [group["lr"] for group in restored.param_groups] == [.01, .03]
 
     _step(reference, reference_params)

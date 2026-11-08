@@ -8,7 +8,6 @@ import jittor as _jt
 import jittor as _jtm
 import copy as _copy
 import copy as _copy2
-import types as _types_nn_private
 from ...context import get_install_context
 from ...types import _dtype_to_str
 from jittor._runtime.dispatch import try_dispatch as _try_dispatch
@@ -84,6 +83,14 @@ class _DataParallel(nn.Module):
         return self.module(*args, **kwargs)
 
 
+class _DDPState:
+    """Mutable DDP metadata with the identity keys used by native optimizers."""
+
+    def __init__(self, *, sync_enabled, world_size):
+        self.sync_enabled = sync_enabled
+        self.world_size = world_size
+
+
 class _DistributedDataParallel(_DataParallel):
     """DDP that really synchronises: broadcast at construction, all-reduce
     at the backward completion point.
@@ -120,7 +127,7 @@ class _DistributedDataParallel(_DataParallel):
 
     def __init__(self, module, *args, **kwargs):
         super().__init__(module, *args, **kwargs)
-        state = _types_nn_private.SimpleNamespace(
+        state = _DDPState(
             sync_enabled=True, world_size=_ddp_world_size())
         object.__setattr__(self, "_jittor_ddp_state", state)
         # Native DDP uses a separate reducer and optimizer-backward owner.
@@ -230,6 +237,36 @@ def _grads_of(params):
     return out
 
 
+def _grads_and_norm_sources(params):
+    """Pair public gradients with local FSDP shards for norm computation."""
+    _context = get_install_context(jt)
+    _torch_target = _context.target_namespace
+    opt = latest_optimizer(_torch_target)
+    fsdp = _fsdp_hooks.provider()
+    grads, norm_grads = [], []
+    for p in params:
+        grad = None
+        if opt is not None:
+            try:
+                grad = opt.find_grad(p)
+            except EXPECTED as exc:
+                swallowed("torch/installers/nn.py _grads_and_norm_sources: opt.find_grad(p)", exc)
+        if grad is None:
+            grad = getattr(p, "grad", None)
+        if grad is None:
+            continue
+        norm_grad = grad
+        if fsdp is not None and fsdp.is_fsdp_managed_param(p):
+            norm_grad = fsdp._fsdp_norm_grad(p, grad)
+            if not isinstance(norm_grad, _jt.Var):
+                raise RuntimeError(
+                    "FSDP-managed gradient has no current local shard for norm computation"
+                )
+        grads.append(grad)
+        norm_grads.append(norm_grad)
+    return grads, norm_grads
+
+
 def _parameters_are_sharded(parameters):
     """True when these gradients are FSDP *shards*.
 
@@ -258,10 +295,11 @@ def clip_grad_norm_(parameters, max_norm, norm_type=2.0,
     if isinstance(parameters, _jt.Var):
         parameters = [parameters]
     parameters = list(parameters)
-    grads = _grads_of(parameters)
+    grads, norm_grads = _grads_and_norm_sources(parameters)
     return _clip_grad_norm_device(
         grads, max_norm, norm_type, error_if_nonfinite,
-        shard_reduce=_parameters_are_sharded(parameters))
+        shard_reduce=_parameters_are_sharded(parameters),
+        norm_grads=norm_grads)
 
 
 def clip_grad_value_(parameters, clip_value, **k):
@@ -821,7 +859,14 @@ def _linear(input, weight, bias=None):
     if hasattr(weight, "ndim") and weight.ndim == 1:
         out = (input * weight).sum(-1)
         return out if bias is None else out + bias
+    if getattr(jt.compiler, "has_acl", False):
+        from ...amp import _acl_linear_autocast_inputs
+        input, weight, bias = _acl_linear_autocast_inputs(input, weight, bias)
     return _jt_linear(input, weight, bias)
+
+
+def linear_execute(module, input):
+    return _linear(input, module.weight, module.bias)
 
 
 def _upsample_bilinear(input, size=None, scale_factor=None):

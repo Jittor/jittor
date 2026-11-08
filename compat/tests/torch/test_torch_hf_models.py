@@ -2,7 +2,8 @@
 # torch-level regression test (#6): run real transformers models
 # through `import torch` -> jittor, on the torch-compat layer.
 #
-# REQUIRES an env with the torch_shim deployed + transformers:
+# REQUIRES an isolated environment with the torch shim deployed and a pinned
+# Transformers installation:
 #   export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_DEACTIVATE_ASYNC_LOAD=1
 #   JITTOR_TORCH_SHIM=1 python -m pytest compat/tests/torch/test_torch_hf_models.py
 # Skips cleanly if torch_shim/transformers are unavailable.

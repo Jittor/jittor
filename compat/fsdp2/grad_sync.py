@@ -24,6 +24,8 @@ _EXPORTS = (
     "optimizer_has_non_fsdp_params",
     "collect_fsdp_full_params_for_backward",
     "fill_fsdp_optimizer_grads_from_grad_map",
+    "_collect_fsdp_full_params_for_backward",
+    "_fill_fsdp_grads_from_grad_map",
 )
 
 
@@ -224,20 +226,43 @@ def refresh_visible_full_grads(opt):
                 entry.full_public_grad = full_grad
 
 
-def _fsdp_states_from_optimizers(optimizers):
+def _backward_state_ready(state):
+    """Accept only a canonical live module and its actual forward parameters."""
+    module = getattr(state, "true_fsdp_module", None)
+    entries = getattr(state, "true_fsdp_params", None)
+    if (not getattr(state, "true_fsdp_initialized", False)
+            or module is None or getattr(module, "_fsdp_state", None) is not state
+            or entries is None):
+        return False
+    trainable = [entry for entry in entries if getattr(entry, "requires_grad", True)]
+    return bool(trainable) and all(
+        getattr(entry, "full_param", None) is not None for entry in trainable)
+
+
+def _fsdp_states_from_optimizers(optimizers, *, parameters=()):
     states = []
     seen = set()
+    candidates = []
     for opt in optimizers or ():
         for pg in getattr(opt, "param_groups", []):
-            for param in pg.get("params", []):
-                state, _ = shard._fsdp_param_entry(param)
-                if state is None:
-                    continue
-                sid = id(state)
-                if sid in seen:
-                    continue
-                seen.add(sid)
-                states.append(state)
+            candidates.extend(pg.get("params", ()))
+    for param in parameters:
+        state, entry = shard._fsdp_param_entry(param)
+        if (not _backward_state_ready(state) or entry is None
+                or getattr(param, "_jittor_fsdp2_role", None) != "shard"
+                or param is not getattr(entry, "shard", None)
+                or not any(current is entry for current in state.true_fsdp_params)):
+            continue
+        candidates.append(param)
+    for param in candidates:
+        state, _ = shard._fsdp_param_entry(param)
+        if state is None:
+            continue
+        sid = id(state)
+        if sid in seen:
+            continue
+        seen.add(sid)
+        states.append(state)
     return states
 
 
@@ -254,8 +279,14 @@ def optimizer_has_non_fsdp_params(opt):
 
 
 def collect_fsdp_full_params_for_backward(optimizers):
+    return _collect_fsdp_full_params_for_backward(optimizers, active_only=False)
+
+
+def _collect_fsdp_full_params_for_backward(optimizers, *, parameters=(), active_only=True):
     targets = []
-    for state in _fsdp_states_from_optimizers(optimizers):
+    for state in _fsdp_states_from_optimizers(optimizers, parameters=parameters):
+        if active_only and not _backward_state_ready(state):
+            continue
         has_forward_params = all(getattr(entry, "full_param", None) is not None
                                  for entry in state.true_fsdp_params
                                  if getattr(entry, "requires_grad", True))
@@ -274,10 +305,21 @@ def collect_fsdp_full_params_for_backward(optimizers):
 
 def fill_fsdp_optimizer_grads_from_grad_map(optimizers, grad_by_id, *,
                                             divide_by_world_size=True):
-    states = _fsdp_states_from_optimizers(optimizers)
+    return _fill_fsdp_grads_from_grad_map(
+        optimizers, grad_by_id, divide_by_world_size=divide_by_world_size,
+        active_only=False)
+
+
+def _fill_fsdp_grads_from_grad_map(optimizers, grad_by_id, *,
+                                   divide_by_world_size=True, parameters=(),
+                                   active_only=True):
+    states = _fsdp_states_from_optimizers(optimizers, parameters=parameters)
+    if active_only:
+        states = [state for state in states if _backward_state_ready(state)]
     if not states:
         return False
     entry_grad = {}
+    participating_states = set()
     for state in states:
         pending = getattr(state, "true_fsdp_pending_full_grads", None)
         if pending is not None:
@@ -297,8 +339,9 @@ def fill_fsdp_optimizer_grads_from_grad_map(optimizers, grad_by_id, *,
                 # Keep the full-gradient list aligned with the parameter
                 # entries. The zero is only a collective placeholder;
                 # ``local_used`` still prevents an optimizer update/state slot.
-                full_grads.append(common._zeros_like_shape(
-                    entry.shard, entry.shape, dtype=entry.dtype))
+                # None skips the nonflat collective; flat packing already
+                # creates its aligned zero placeholder in the shared owner.
+                full_grads.append(None)
                 continue
             full = getattr(entry, "full_param", None)
             if full is not None:
@@ -315,17 +358,13 @@ def fill_fsdp_optimizer_grads_from_grad_map(optimizers, grad_by_id, *,
                 grad = common._zeros_like_shape(
                     reference, entry.shape, dtype=entry.dtype)
             full_grads.append(grad)
+        if not any(local_used) and common._world_size() <= 1:
+            continue
+        participating_states.add(id(state))
         if not getattr(state, "requires_gradient_sync", True):
             _sync_sharded_grads_from_full_grads(
                 state, full_grads, divide_by_world_size=divide_by_world_size)
             shard._release_full_params(state)
-            continue
-        if not any(local_used) and common._world_size() <= 1:
-            # This backward pass never reached the state's parameters -- a second
-            # optimizer's loss, say, while a sharded model sits idle in the same
-            # process. On one rank there is no peer waiting on a collective, so
-            # skip it rather than reduce zeros over the shards and overwrite the
-            # gradients a previous pass left in the state.
             continue
         globally_used = _globally_used_grads(local_used, state)
         sharded = _sync_sharded_grads_from_full_grads(
@@ -341,7 +380,14 @@ def fill_fsdp_optimizer_grads_from_grad_map(optimizers, grad_by_id, *,
         shard._release_full_params(state)
 
     filled_entries = set()
+    active_optimizers = []
     for opt in optimizers or ():
+        if not any(id(state) in participating_states
+                   for pg in getattr(opt, "param_groups", ())
+                   for param in pg.get("params", ())
+                   for state, _ in (shard._fsdp_param_entry(param),)):
+            continue
+        active_optimizers.append(opt)
         zero = getattr(opt, "_Optimizer__zero_grad", True)
         for pg in getattr(opt, "param_groups", []):
             grads_list = pg.get("grads")
@@ -383,6 +429,39 @@ def fill_fsdp_optimizer_grads_from_grad_map(optimizers, grad_by_id, *,
             opt._build_grad_map()
         except EXPECTED as exc:
             swallowed("fsdp2/grad_sync.py fill_fsdp_optimizer_grads_from_grad_map: opt._build_grad_map()", exc)
-    for opt in optimizers or ():
+    # Entries not owned by an optimizer still have public .grad slots. Reuse
+    # the same reduced shards and accumulate in place, as ordinary backward
+    # does; unused/frozen entries never materialize a synthetic zero gradient.
+    for state in states:
+        if id(state) not in participating_states:
+            continue
+        published = list(getattr(state, "true_fsdp_last_grads", ()) or ())
+        for index, entry in enumerate(state.true_fsdp_params):
+            key = (id(state), id(entry))
+            grad = entry_grad.get(key)
+            if key in filled_entries:
+                # full_tensor()/to_local() resolve through this list. Publish
+                # the accumulated optimizer slot, not only this micro's shard.
+                stored = entry.shard._torch_grad
+                entry.last_grad = stored
+                if index < len(published):
+                    published[index] = stored
+                continue
+            if grad is None:
+                continue
+            existing = getattr(entry.shard, "_torch_grad", None)
+            if isinstance(existing, jt.Var) and list(existing.shape) == list(grad.shape):
+                existing.update(existing + grad)
+                stored = existing.stop_grad()
+            else:
+                stored = grad.stop_grad()
+            object.__setattr__(stored, "_fsdp_norm_group", getattr(state, "shard_group", None))
+            object.__setattr__(entry.shard, "_torch_grad", stored)
+            entry.last_grad = stored
+            if index < len(published):
+                published[index] = stored
+        if published:
+            state.true_fsdp_last_grads = published
+    for opt in active_optimizers:
         refresh_visible_full_grads(opt)
     return True

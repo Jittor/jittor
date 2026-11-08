@@ -39,7 +39,8 @@ def test_generator_rejects_unknown_backend_before_reading_headers():
 
 
 @pytest.mark.parametrize("relative", ["src/ops", "src/ops/composite", "backends/cuda/kernels/cublas",
-                                      "backends/cpu/libraries/mkl"])
+                                      "backends/cpu/libraries/mkl", "backends/comm/nccl/ops",
+                                      "backends/comm/hccl/ops"])
 def test_generator_preserves_every_operator_definition(relative, tmp_path):
     headers = sorted((ROOT / relative).glob("*_op.h"))
     assert headers

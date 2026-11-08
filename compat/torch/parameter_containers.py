@@ -23,6 +23,11 @@ class ParameterListAdapter:
         if values is not None:
             self.extend(values)
 
+    def _set_parameter_alias(self, name, value):
+        # FSDP has already constructed the canonical holder. Wrapping it as
+        # a new Parameter would break identity with its other registrations.
+        self._values[int(name)] = value
+
     def _var_attrs(self):
         return [(str(index), value) for index, value in enumerate(self._values)
                 if isinstance(value, cast(Any, type(self))._tensor_base)]
@@ -82,6 +87,9 @@ class ParameterDictAdapter:
         self._values = OrderedDict()
         if values is not None:
             self.update(values)
+
+    def _set_parameter_alias(self, name, value):
+        self._values[name] = value
 
     def _var_attrs(self):
         return [(key, value) for key, value in self._values.items()

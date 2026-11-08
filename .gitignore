@@ -49,18 +49,6 @@ venv/
 /data/
 extern/mkl/mkldnn_lnx*/*
 
-# Agent deliverables are Markdown; transient state and other generated files stay
-# outside the repository or under the ignored worklog/cache paths below.
-/agent/*
-!/agent/manuals/
-!/agent/manuals/**/
-!/agent/manuals/**/*.md
-!/agent/skills/
-!/agent/skills/**
-/agent/skills/**/.cache/
-/agent/skills/**/__pycache__/
-/agent/worklogs/
-
 # Local downstream compatibility handoff; keep this developer-only document
 # out of commits while retaining the tracked handoff in jittor-lab.
 /TRANSFORMERS_COMPAT_DEVELOPMENT.md

@@ -991,6 +991,33 @@ class TestNativeModuleDispatch(unittest.TestCase):
         torch.nn.Sequential(layer)(x).sum().backward()
         np.testing.assert_allclose(layer.bias.grad.numpy(), np.full(1024, 8.0), rtol=1e-5)
 
+    @unittest.skipUnless(_CUDA_KERNELS, "the cuBLASLt training route is CUDA's")
+    def test_a_linear_training_product_matches_reference_gradients(self):
+        from jittor.backends.cuda.kernels.cublas.lt_linear_cuda import lt_linear_train_cuda
+
+        torch.manual_seed(19)
+        layer = torch.nn.Linear(512, 512, bias=True).cuda()
+        x = torch.randn(2, 512, 512, device="cuda", requires_grad=True)
+        out = lt_linear_train_cuda(x, layer.weight, layer.bias)
+        self.assertIsNotNone(out, "the shape must select _LtLinearProduct")
+        x_np = x.numpy()
+        weight_np = layer.weight.numpy()
+        bias_np = layer.bias.numpy()
+        expected = x_np.reshape(-1, 512) @ weight_np.T + bias_np
+        np.testing.assert_allclose(out.numpy().reshape(-1, 512), expected,
+                                   rtol=2e-4, atol=2e-4)
+
+        out.sum().backward()
+        rows = x_np.reshape(-1, 512)
+        expected_weight_grad = np.broadcast_to(rows.sum(axis=0), (512, 512))
+        expected_input_grad = np.broadcast_to(weight_np.sum(axis=0), x_np.shape)
+        np.testing.assert_allclose(layer.weight.grad.numpy(), expected_weight_grad,
+                                   rtol=2e-4, atol=2e-4)
+        np.testing.assert_allclose(layer.bias.grad.numpy(), np.full(512, 1024.0),
+                                   rtol=1e-6, atol=1e-6)
+        np.testing.assert_allclose(x.grad.numpy(), expected_input_grad,
+                                   rtol=2e-4, atol=2e-4)
+
     def test_a_dropout_that_does_not_train_hands_back_its_input(self):
         x = torch.randn(4, 8, device=_cuda())
         drop = torch.nn.Dropout(0.5)

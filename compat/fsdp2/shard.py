@@ -1,5 +1,6 @@
 """FSDP2 parameter metadata, sharding, and forward lifecycle."""
 
+import contextlib
 import types
 import sys
 
@@ -7,10 +8,12 @@ from jittor.distributed.fsdp import storage as _storage
 import weakref
 
 import jittor as jt
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from jittor import nn
 
 from . import common, dtensor
 from ..torch.parameter_containers import ParameterDictAdapter, ParameterListAdapter
+from ..torch.tensor_state import get_tensor_state
 from ..diagnostics import EXPECTED, swallowed
 
 
@@ -20,6 +23,7 @@ _EXPORTS = (
     "_refresh_flat_entry_shards",
     "_mark_fsdp_param_var",
     "_fsdp_param_entry",
+    "_fsdp_norm_grad",
     "is_fsdp_managed_param",
     "_fsdp_var_to_local",
     "_fsdp_var_full_tensor",
@@ -52,13 +56,14 @@ def _flat_entry_slices(state, flat_var):
 @common._state_frontend
 def _refresh_flat_entry_shards(state):
     result = _storage._refresh_flat_entry_shards(state, api=sys.modules[__name__])
+    for entry in state.true_fsdp_params:
+        get_tensor_state(jt).leaf_params[id(entry.shard)] = entry.shard
     _bind_parameter_aliases(state, "shard")
     return result
 
 
 def _bind_entry_aliases(entry, value):
-    for owner, attr in getattr(entry, "aliases", ((entry.owner, entry.attr),)):
-        object.__setattr__(owner, attr, value)
+    _storage._set_module_parameter(entry, value)
 
 
 def _bind_parameter_aliases(state, role):
@@ -181,6 +186,74 @@ def is_fsdp_managed_param(param):
     return state is not None and entry is not None
 
 
+def _fsdp_norm_grad(param, public_gradient=None):
+    """Return this rank's current shard of an FSDP gradient for norm clipping.
+
+    Trainer clipping runs before the optimizer adapter localizes the public
+    full-parameter gradient into shard-shaped optimizer gradients. Prefer that
+    current public gradient, then project it with the same shard slicing helper
+    used by the optimizer adapter. Internal last-gradient slots can be full on
+    one rank and empty on another at this point.
+    """
+    state, entry = _fsdp_param_entry(param)
+    if state is None or entry is None:
+        return None
+
+    if not isinstance(public_gradient, jt.Var):
+        public_gradient = getattr(param, "_torch_grad", None)
+    if not isinstance(public_gradient, jt.Var):
+        full = getattr(entry, "full_param", None)
+        public_gradient = getattr(full, "_torch_grad", None) if full is not None else None
+    if not isinstance(public_gradient, jt.Var):
+        public_gradient = getattr(param, "grad", None)
+
+    local_numel = int(entry.shard.numel())
+    local_shape = list(entry.shard.shape)
+    full_numel = int(entry.numel)
+
+    def as_local_shard(gradient):
+        if not isinstance(gradient, jt.Var):
+            return None
+        if int(gradient.numel()) == local_numel and list(gradient.shape) == local_shape:
+            local = gradient
+        elif int(gradient.numel()) == full_numel:
+            from . import grad_sync
+            local = grad_sync._local_grad_from_visible_full(state, entry, gradient)
+            if int(local.numel()) != local_numel:
+                return None
+            local = local.stop_grad()
+        else:
+            return None
+        object.__setattr__(
+            local, "_fsdp_norm_group", getattr(state, "shard_group", None)
+        )
+        return local
+
+    # The public gradient is the newest value. If it is a full logical
+    # parameter, produce exactly the local slice Torch exposes through
+    # DTensor.grad.to_local().
+    local = as_local_shard(public_gradient)
+    if local is not None:
+        return local
+
+    current_grads = getattr(state, "true_fsdp_last_grads", None)
+    if isinstance(current_grads, (list, tuple)):
+        for current, gradient in zip(state.true_fsdp_params, current_grads):
+            if current is entry:
+                local = as_local_shard(gradient)
+                if local is not None:
+                    return local
+                break
+    for gradient in (
+        getattr(entry, "last_grad", None),
+        getattr(entry.shard, "_torch_grad", None),
+    ):
+        local = as_local_shard(gradient)
+        if local is not None:
+            return local
+    return None
+
+
 def _fsdp_var_to_local(self, *args, **kwargs):
     state, entry = _fsdp_param_entry(self)
     if state is None or entry is None:
@@ -245,7 +318,7 @@ def _fsdp_var_redistribute(self, device_mesh=None, placements=None, **kwargs):
     return self
 
 
-def _named_parameters_with_owner(module, recurse=True):
+def _named_parameters_with_owner(module, recurse=True, remove_duplicate=True):
     out = []
     seen = set()
 
@@ -268,7 +341,7 @@ def _named_parameters_with_owner(module, recurse=True):
 
     def visit(mod, prefix=""):
         for name, value, role in mod._var_roles():
-            if role != "parameter" or id(value) in seen:
+            if role != "parameter" or (remove_duplicate and id(value) in seen):
                 continue
             seen.add(id(value))
             pname = f"{prefix}.{name}" if prefix else str(name)
@@ -279,7 +352,12 @@ def _named_parameters_with_owner(module, recurse=True):
                     child_prefix = f"{prefix}.{name}" if prefix else str(name)
                     visit(value, child_prefix)
 
-    visit(module)
+    try:
+        visit(module)
+    finally:
+        # The recursive visitor captures itself and out. Break that cycle now
+        # so superseded Parameters do not wait for cyclic GC to be released.
+        visit = None
     return out
 
 
@@ -356,10 +434,10 @@ def _init_true_fsdp_state_impl(module, state):
     if getattr(state, "true_fsdp_initialized", False):
         return state
     state.true_fsdp_module = module
-    if not common._in_true_distributed():
+    group = getattr(state, "shard_group", None)
+    if not common._can_initialize_fsdp(group):
         state.true_fsdp_initialized = False
         return state
-    group = getattr(state, "shard_group", None)
     ws = common._world_size() if group is None else group.size()
     rank = common._rank() if group is None else group.rank()
     ignored_ids = {id(param) for param in getattr(state, "ignored_params", ())}
@@ -385,6 +463,14 @@ def _init_true_fsdp_state_impl(module, state):
         flat=common._fsdp2_flat_enabled(ws, total_numel),
         api=sys.modules[__name__],
     )
+    # Optimizers may already own the full parameters. Give those exact objects
+    # the same entry identity as the new shard, without retaining them in state.
+    for (_, _, _, original), entry in zip(params, state.true_fsdp_params):
+        _mark_fsdp_param_var(original, state, entry, "retired")
+        # Public backward is independent of whether an optimizer exists. Index
+        # the current holder, with its explicit entry metadata, in the existing
+        # weak leaf registry; never retain a full parameter or a retired alias.
+        get_tensor_state(jt).leaf_params[id(entry.shard)] = entry.shard
     for entry, (_, owner, attr, param) in zip(state.true_fsdp_params, params):
         entry.aliases = aliases.get(id(param), ((owner, attr),))
     _bind_parameter_aliases(state, "shard")
@@ -402,6 +488,37 @@ def _compute_shard(state, master_shard):
 
 def _cast_floating_tree(value, target):
     return _storage._cast_floating_tree(value, target)
+
+
+
+def _fsdp_forward_amp_scope(policy):
+    """Apply the FSDP compute dtype to floating ops inside its forward.
+
+    Parameters that are outside this FSDP state (for example, root-owned
+    weights around an auto-wrapped transformer layer) can remain FP32 while
+    their inputs have already been cast to the policy dtype. Mirror the
+    forward compute preference for those mixed operands, without changing the
+    optimizer's FP32 master shards or leaking the flag past this module call.
+    """
+    if not getattr(policy, "cast_forward_inputs", True):
+        return contextlib.nullcontext()
+    param_dtype = getattr(policy, "param_dtype", None)
+    target = _jittor_dtype_name(param_dtype) if param_dtype is not None else None
+    if target == "bfloat16":
+        requested = jt.amp_flags.prefer_bfloat16
+    elif target == "float16":
+        requested = jt.amp_flags.prefer16
+    else:
+        return contextlib.nullcontext()
+    precision_mask = (
+        jt.amp_flags.prefer32
+        | jt.amp_flags.prefer16
+        | jt.amp_flags.prefer_bfloat16
+    )
+    current = int(jt.flags.amp_reg)
+    amp_reg = (current & ~precision_mask) | requested
+    from ..torch.amp import _fsdp_mixed_precision_scope
+    return _fsdp_mixed_precision_scope(amp_reg)
 
 
 def _unshard_module_params_impl(module):

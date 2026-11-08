@@ -69,4 +69,10 @@ def _truth_reduce_cmd(input, dims, reduce_all, keepdims):
 def truth_reduce(input, dim, reduce_all, keepdims=False):
     dims = _normalize_dims(input, dim)
     truth = input if _jittor_dtype_name(input.dtype) == "bool" else input != 0
-    return _truth_reduce_cmd(truth, dims, reduce_all, keepdims)
+    output = _truth_reduce_cmd(truth, dims, reduce_all, keepdims)
+    # Keep the working CANN descriptor convention, then expose the canonical
+    # scalar/singleton shape promised by the shared any/all API.
+    shape = ([1 if axis in dims else size for axis, size in enumerate(input.shape)]
+             if keepdims else
+             [size for axis, size in enumerate(input.shape) if axis not in dims])
+    return output.reshape(shape)

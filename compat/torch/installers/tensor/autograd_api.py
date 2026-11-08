@@ -187,8 +187,9 @@ def _optimizer_maybe_has_fsdp_params(opt):
 
 
 def _backward(self, gradient=None, retain_graph=None, create_graph=False, **kw):
-    from ...autograd import _backward_callbacks
-    with _backward_callbacks():
+    from ...autograd import (
+        _backward_callbacks, _torch_grad_accumulation_order)
+    with _backward_callbacks(), _torch_grad_accumulation_order():
         return _backward_impl(self, gradient, retain_graph, create_graph, **kw)
 
 
@@ -259,13 +260,23 @@ def _backward_impl(self, gradient=None, retain_graph=None, create_graph=False, *
     # torch code such as 3DGS replaces parameters during densification, and
     # stale strong refs in the registry would otherwise keep old params and
     # their Jittor graphs alive until OOM.
+    tensor_state = _owner.get_tensor_state(_owner.jt)
+    # FSDP leaves carry an explicit state/entry identity. They must participate
+    # even before an optimizer is created, just like ordinary Tensor leaves.
+    # This reuses the weak holder registry, not a search of live AD nodes.
+    fsdp_params = [
+        p for p in list(tensor_state.leaf_params.values())
+        if isinstance(p, _NativeVar) and p.requires_grad
+        and getattr(p, "_jittor_fsdp2_state", None) is not None
+        and getattr(p, "_jittor_fsdp2_entry", None) is not None
+    ]
     fsdp_opts = [o for o in opts if _optimizer_maybe_has_fsdp_params(o)]
     # Ask the seam rather than importing fsdp2: this file is *below* fsdp2
     # in the dependency order (see jittor/compat/fsdp_hooks.py). The guard
     # above already proves the answer cannot be None when it matters --
     # `_optimizer_maybe_has_fsdp_params` looks for `_jittor_fsdp2_state`,
     # a marker only fsdp2 sets, and fsdp2 registers when it is imported.
-    _fsdp2_backward = _owner._fsdp_hooks.provider() if fsdp_opts else None
+    _fsdp2_backward = _owner._fsdp_hooks.provider() if fsdp_opts or fsdp_params else None
     fsdp_opt_ids = {id(o) for o in fsdp_opts} if _fsdp2_backward is not None else set()
     leaf_map = {}
     opt_ids = set()
@@ -280,12 +291,12 @@ def _backward_impl(self, gradient=None, retain_graph=None, create_graph=False, *
                     continue
                 leaf_map.setdefault(id(p), p)
                 opt_ids.add(id(p))
-    if _fsdp2_backward is not None and fsdp_opts:
-        for p in _fsdp2_backward.collect_fsdp_full_params_for_backward(fsdp_opts):
+    if _fsdp2_backward is not None:
+        for p in _fsdp2_backward._collect_fsdp_full_params_for_backward(
+                fsdp_opts, parameters=fsdp_params):
             if isinstance(p, _NativeVar) and p.requires_grad:
                 leaf_map.setdefault(id(p), p)
                 opt_ids.add(id(p))
-    tensor_state = _owner.get_tensor_state(_owner.jt)
     retained = tensor_state.retained
     retained_ids = set()
     if retained:
@@ -303,11 +314,15 @@ def _backward_impl(self, gradient=None, retain_graph=None, create_graph=False, *
         )
         for v in list(tensor_state.leaf_params.values()):
             if isinstance(v, _NativeVar) and v.requires_grad and v.is_backward_leaf:
+                if _fsdp2_backward is not None and _fsdp2_backward.is_fsdp_managed_param(v):
+                    continue
                 leaf_map.setdefault(id(v), v)
     else:
         _owner._torch_prune_leaf_registry()
         for v in list(tensor_state.leaf_params.values()):
             if isinstance(v, _NativeVar) and v.requires_grad and v.is_backward_leaf:
+                if _fsdp2_backward is not None and _fsdp2_backward.is_fsdp_managed_param(v):
+                    continue
                 leaf_map.setdefault(id(v), v)
     if not leaf_map:
         return None
@@ -352,8 +367,9 @@ def _backward_impl(self, gradient=None, retain_graph=None, create_graph=False, *
             else:
                 prev.add_(gr)
     # fill each optimizer's pg["grads"] so its step(loss=None) consumes them
-    if _fsdp2_backward is not None and fsdp_opts:
-        _fsdp2_backward.fill_fsdp_optimizer_grads_from_grad_map(fsdp_opts, grad_by_id)
+    if _fsdp2_backward is not None:
+        _fsdp2_backward._fill_fsdp_grads_from_grad_map(
+            fsdp_opts, grad_by_id, parameters=fsdp_params)
     for o in opts:
         if _fsdp2_backward is not None and id(o) in fsdp_opt_ids \
                 and not _fsdp2_backward.optimizer_has_non_fsdp_params(o):
@@ -382,6 +398,14 @@ def _backward_impl(self, gradient=None, retain_graph=None, create_graph=False, *
 
 
 def _grad_get(self):
+    entry = getattr(self, "_jittor_fsdp2_entry", None)
+    state = getattr(self, "_jittor_fsdp2_state", None)
+    if (entry is not None and getattr(state, "true_fsdp_initialized", False)
+            and getattr(self, "_jittor_fsdp2_role", None) in ("retired", "shard")):
+        # Match the existing grad setter and optimizer entry routing. A caller
+        # retaining a replaced shard must read the current slot, including None,
+        # rather than an old object's cached gradient or optimizer identity.
+        self = entry.shard
     # _backward publishes _torch_grad on every leaf (for optimizer params it
     # points AT pg["grads"][i], so in-place grad clipping mutates the very Var
     # step() consumes). Fall back to any live optimizer's grad map if a param
@@ -445,6 +469,7 @@ def _grad_set(self, value):
                     object.__setattr__(full, "_torch_grad", None)
             elif fsdp_role != "full":
                 fsdp_entry.last_grad = value
+                object.__setattr__(fsdp_entry.shard, "_torch_grad", value)
                 full = getattr(fsdp_entry, "full_param", None)
                 if full is not None and full is not self:
                     object.__setattr__(full, "_torch_grad", None)

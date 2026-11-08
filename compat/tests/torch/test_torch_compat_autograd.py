@@ -302,6 +302,24 @@ class TestAutogradGradAPI(Base):
             self.ac(gb.numpy(), a0, atol=1e-5, msg=f"gb {dev}")
         both_devices(body)
 
+    def test_bfloat16_shared_gradient_uses_torch_accumulation_order(self):
+        # These three edge contributions distinguish BF16 accumulation trees:
+        # (q + k) + v rounds to v, while (k + v) + q rounds to zero.
+        with jt.flag_scope(use_cuda=0):
+            x = torch.ones((1,), dtype=torch.bfloat16, requires_grad=True)
+            loss = ((x * 1.0).sum()
+                    + (x * -1.0).sum()
+                    + (x * 0.001953125).sum())
+            (grad,) = torch.autograd.grad(loss, x)
+            self.assertEqual(float(grad.numpy()[0]), 0.0)
+
+            x = torch.ones((1,), dtype=torch.bfloat16, requires_grad=True)
+            loss = ((x * 1.0).sum()
+                    + (x * -1.0).sum()
+                    + (x * 0.001953125).sum())
+            loss.backward()
+            self.assertEqual(float(x.grad.numpy()[0]), 0.0)
+
     def test_autograd_grad_with_grad_outputs(self):
         # vector-Jacobian product: grad_outputs weights each output element.
         rng = np.random.RandomState(12)
