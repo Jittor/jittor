@@ -3,6 +3,8 @@ import json
 import os
 import struct
 from types import MappingProxyType
+import mmap as _mmap
+
 import numpy as np
 import jittor as jt
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
@@ -202,9 +204,10 @@ def _parse_header(prefix, read_header, total_size):
 
 
 class _PySafeOpen:
-    def __init__(self, filename, framework="pt", device="cpu", backend="mmap"):
+    def __init__(self, filename, framework="pt", device="cpu", backend="mmap", mmap_handle=None):
         self._filename = filename
         self._device = device
+        self._mmap = mmap_handle
         with open(filename, "rb") as fh:
             size = os.fstat(fh.fileno()).st_size
             self._header, n = _parse_header(fh.read(8), fh.read, size)
@@ -224,9 +227,13 @@ class _PySafeOpen:
     def _entry(self, key):
         entry = self._header[key]
         start, end = entry["data_offsets"]
-        with open(self._filename, "rb") as fh:
-            fh.seek(self._data_offset + start)
-            raw = fh.read(end - start)
+        absolute = self._data_offset + start
+        if self._mmap is not None:
+            raw = memoryview(self._mmap)[absolute:absolute + end - start]
+        else:
+            with open(self._filename, "rb") as fh:
+                fh.seek(absolute)
+                raw = fh.read(end - start)
         if len(raw) != end - start:
             # The header was checked against the file at open; it shrank since.
             raise EOFError("short safetensors payload for %r: expected %d bytes, got %d"
@@ -267,8 +274,20 @@ def _load_bytes(data):
 def _load_file(filename, device="cpu", *, backend="mmap"):
     # ``safetensors.torch.load_model`` calls ``load_file`` with ``backend=``;
     # accepting only ``device`` raised TypeError before any weight loaded.
-    with _PySafeOpen(filename, device=device, backend=backend) as safe:
-        return {key: safe.get_tensor(key) for key in safe.keys()}
+    # The whole checkpoint is being read, so one read-only mapping avoids a
+    # separate host copy per tensor while keeping peak RSS at the tensors.
+    with open(filename, "rb") as fh:
+        try:
+            handle = _mmap.mmap(fh.fileno(), 0, access=_mmap.ACCESS_READ)
+        except (OSError, ValueError):
+            handle = None
+        try:
+            with _PySafeOpen(filename, device=device, backend=backend,
+                             mmap_handle=handle) as safe:
+                return {key: safe.get_tensor(key) for key in safe.keys()}
+        finally:
+            if handle is not None:
+                handle.close()
 
 
 def _reject_shared_storage(tensors):
