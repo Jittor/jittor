@@ -366,14 +366,7 @@ class _SingleProcessDataLoaderIter(_BaseDataLoaderIter):
         self._batch_iter = iter(loader.batch_sampler)
 
     def __next__(self):
-        batch_indices = next(self._batch_iter)
-        batch = _tensor_dataset_batch(self._loader, batch_indices)
-        if batch is not None:
-            return batch
-        values = (batch_indices if self._loader._iterable_dataset else
-                  [self._loader.dataset[i] for i in batch_indices])
-        return self._loader.collate_fn(
-            values[0] if self._loader.batch_size is None else values)
+        return _fetch_batch(self._loader, next(self._batch_iter))
 
 
 class _WorkerInfo:
@@ -408,6 +401,49 @@ def _contains_jittor_var(value):
     if isinstance(value, (list, tuple)):
         return any(_contains_jittor_var(item) for item in value)
     return False
+
+
+def _fetch_batch(loader, batch_indices):
+    """Fetch one batch, using a formatted dataset's column batch when present."""
+    batch = _tensor_dataset_batch(loader, batch_indices)
+    if batch is not None:
+        return batch
+    if (not loader._iterable_dataset
+            and loader.batch_size is not None
+            and loader.collate_fn is _default_collate
+            and getattr(loader.dataset, "_format_type", None) == "torch"
+            and isinstance(batch_indices, (list, tuple)) and batch_indices):
+        # A formatted ``datasets`` Dataset indexes a list of rows as one
+        # column batch; asking it per row rebuilds the formatter for every
+        # sample.  The result already has the collated layout, so it must not
+        # be fed through default_collate again.
+        try:
+            columns = loader.dataset[batch_indices]
+        except EXPECTED as exc:
+            swallowed("torch/installers/data.py _fetch_batch: formatted batch index", exc)
+        else:
+            batch = _column_batch(columns, len(batch_indices))
+            if batch is not None:
+                return batch
+    values = (batch_indices if loader._iterable_dataset else
+              [loader.dataset[i] for i in batch_indices])
+    return loader.collate_fn(values[0] if loader.batch_size is None else values)
+
+
+def _column_batch(value, size):
+    """A per-column batch from a formatted dataset, or None.
+
+    The formatted ``datasets`` Dataset returns a mapping whose values already
+    have the batch as their leading dimension.  Any other shape (a row dict, a
+    list of rows, a scalar column) is left to the normal per-row collate.
+    """
+    if not isinstance(value, dict) or not value:
+        return None
+    for column in value.values():
+        shape = getattr(column, "shape", None)
+        if shape is None or len(shape) == 0 or int(shape[0]) != size:
+            return None
+    return value
 
 
 class _MultiProcessingDataLoaderIter(_BaseDataLoaderIter):
@@ -470,13 +506,7 @@ class _MultiProcessingDataLoaderIter(_BaseDataLoaderIter):
         self._fill()
 
     def _fetch(self, batch_indices):
-        loader = self._loader
-        batch = _tensor_dataset_batch(loader, batch_indices)
-        if batch is not None:
-            return batch
-        values = (batch_indices if loader._iterable_dataset else
-                  [loader.dataset[i] for i in batch_indices])
-        return loader.collate_fn(values[0] if loader.batch_size is None else values)
+        return _fetch_batch(self._loader, batch_indices)
 
     def _decide(self):
         """Make the first batch on this thread and pick the fetch mode.
