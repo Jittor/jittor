@@ -13,12 +13,20 @@ namespace jittor {
 struct UnaryOp : Op {
     static constexpr bool accepts_storage_strides = true;
     Var* x, * y;
+    VarPtr layout_value;
     // @pybind(unary,cast)
     UnaryOp(Var* x, NanoString op);
+    // A cast to the dtype `x` already has is `x` itself: the constructor
+    // forwards it. Answered before an op is built (see var.h), because that
+    // cast is everywhere -- `.bool()` after a logical reduce, `.float32()` on a
+    // float32 -- and building an op only to discard it cost as much as a real
+    // one.
+    static VarPtr forward_before_construct(Var* x, NanoString op);
     
     const char* name() const override { return "unary"; }
     VarPtr grad(Var* out, Var* dout, Var* v, int v_index) override;
     void infer_shape() override;
+    void run() override;
     DECLARE_jit_run;
 };
 

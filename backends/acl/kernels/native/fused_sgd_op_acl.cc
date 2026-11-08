@@ -37,20 +37,58 @@ namespace jittor
 
         // The portable update is
         //     dp = sign * grad + weight_decay * param
-        //     v  = momentum * v + (1 - dampening) * dp
+        //     v  = first_step ? dp : momentum * v + (1 - dampening) * dp
         //     p  = p - lr * (nesterov ? dp + momentum * v : v)
         // and every coefficient below is one term of it folded so that no
         // temporary the size of the parameter list is needed: `dp` never
         // materialises, its two halves are accumulated into `v` (and, for
         // Nesterov, into `p`) separately.
+        //
+        // On the velocity buffer's first real touch (jittor-core-gaps.md
+        // §3.3) it must be SEEDED from the raw, undampened dp rather than
+        // folded via the recurrence into whatever the zero-initialized
+        // buffer already held -- expressed here by zeroing only the v <-
+        // momentum*v term's own coefficient and un-damping dp's own
+        // contribution to v. The Nesterov correction (`-lr*momentum` below)
+        // always uses the REAL momentum, first step or not: PyTorch's own
+        // `d_p.add(buf, alpha=momentum)` does not special-case it, since by
+        // that point `buf` already holds the correct (seeded-or-recurred) v.
         const float sign = attr->maximize ? -1.0f : 1.0f;
-        const float retained = float(1.0 - attr->dampening);
+        if (attr->momentum == 0)
+        {
+            // Without momentum the velocity buffer is not part of the update,
+            // and torch.optim.SGD leaves it as it is (Nesterov and dampening
+            // included: both act through the buffer). It was seeded from dp
+            // here (a momentum-free step goes as a "first step"), so pausing
+            // momentum and resuming it continued from the last gradient
+            // instead of the buffer the earlier steps built:
+            //     p = p * (1 - lr * weight_decay) - lr * sign * grad
+            std::vector<float> coefficients;
+            if (attr->weightDecay != 0)
+                coefficients.push_back(1.0f - float(attr->lr) * float(attr->weightDecay));
+            coefficients.push_back(-float(attr->lr) * sign);
+            stageCoefficients(coefficients);
+            for (int64_t base = 0; base < count; base += list_limit)
+            {
+                const int64_t span = std::min(list_limit, count - base);
+                const bool last = base + span >= count;
+                const aclTensorList *parameters = outputList(base, span);
+                const aclTensorList *gradients = inputList(count * 2 + base, span);
+                size_t next = 0;
+                if (attr->weightDecay != 0)
+                    foreachMulScalar(parameters, coefficient(next++), parameters, false);
+                foreachAddList(parameters, gradients, coefficient(next++), parameters, last);
+            }
+            return;
+        }
+        const float retained = attr->isFirstStep ? 1.0f : float(1.0 - attr->dampening);
         const float lr = float(attr->lr);
         const float momentum = float(attr->momentum);
+        const float momentum_for_v = attr->isFirstStep ? 0.0f : momentum;
         const bool decays = attr->weightDecay != 0;
 
         std::vector<float> coefficients;
-        coefficients.push_back(momentum);                              // v <- momentum * v
+        coefficients.push_back(momentum_for_v);                         // v <- momentum * v
         coefficients.push_back(retained * sign);                       // v += . * grad
         if (decays)
             coefficients.push_back(retained * float(attr->weightDecay)); // v += . * param

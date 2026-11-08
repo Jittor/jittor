@@ -22,12 +22,16 @@ struct GradCallback {
     typedef jittor::VarPtr VarPtr;
     std::function<void(int,Var**,int,VarPtr*)> func;
     std::function<void()> deleter;
+    // Non-owning metadata for the binding's GC traversal. Ownership remains
+    // in the converter's deleter, exactly as for ordinary taped callbacks.
+    void* python_callable = nullptr;
     inline ~GradCallback() { if (deleter) deleter(); }
     GradCallback(const GradCallback&) = delete;
     GradCallback() = default;
-    GradCallback(GradCallback&& other) : func(other.func), deleter(other.deleter) {
+    GradCallback(GradCallback&& other) : func(other.func), deleter(other.deleter), python_callable(other.python_callable) {
         other.func = nullptr;
         other.deleter = nullptr;
+        other.python_callable = nullptr;
     };
     GradCallback(std::function<void(int,Var**,int,VarPtr*)> && func, std::function<void()>&& deleter)
     : func(move(func)), deleter(move(deleter)) {};

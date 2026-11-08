@@ -1,6 +1,7 @@
-from ...fidelity import Fidelity, register_api_bindings
+from ...fidelity import register_api_bindings
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import collections as _collections
+from collections.abc import MutableMapping as _MutableMapping
 import functools as _functools
 import weakref
 import os
@@ -8,7 +9,7 @@ import jittor as jt
 from jittor import nn
 from jittor.nn.backends import hooks as _backend_hooks
 from jittor.backends.cuda.kernels.nn.rms_norm_training_cuda import _rms_norm_training_cuda
-from jittor.backends.cuda.kernels.nn.rms_norm_cuda import _rms_norm_cuda
+from jittor.backends.cuda.kernels.nn.rms_norm_cuda import _rms_norm_cuda, _rms_norm_source
 from ...context import registry_for
 from ...fidelity import Fidelity, register_fidelity
 from ...nested import _torch_register_leaf
@@ -44,6 +45,7 @@ _ORIG_MODULE_NAMED_BUFFERS = nn.Module.named_buffers
 _ORIG_MODULE_NAMED_MODULES = nn.Module.named_modules
 _ORIG_MODULE_LOAD_STATE_DICT = nn.Module.load_state_dict
 _ORIG_MODULE_PARAMETERS = nn.Module.parameters
+_ORIG_MODULE_PARAMETER_MAP = nn.Module.__dict__["_parameters"].fget
 
 
 # torch models define forward(); jittor calls execute(). Make the base
@@ -62,8 +64,9 @@ def _forward_alias(self, *args, **kwargs):
 
 
 #: Per-class answer from ``_prefer_forward``. Module level so the answer is
-#: computed once per class per process rather than once per install.
-_dispatch_cache = {}
+#: computed once per class per process rather than once per install; weak, so
+#: a class made at run time (a module defined in a function) can be collected.
+_dispatch_cache = weakref.WeakKeyDictionary()
 
 
 # Central dispatch fix: an HF module may SUBCLASS a jittor builtin (e.g.
@@ -134,6 +137,14 @@ def _standard_rms_norm(self, args, kwargs):
         or len(args) != 1
         or kwargs
         or "variance_epsilon" not in self.__dict__
+        # Optional affine weights and partial variance are different public
+        # forward contracts. Leave their computation with the module owner.
+        or getattr(self, "has_weight", True) is False
+        or getattr(self, "pass_weight", True) is False
+        or getattr(self, "variance_size_override", None) is not None
+        # Public native/accelerator dispatch belongs to the module. A class
+        # name alone does not establish our weighted RMS precision contract.
+        or callable(getattr(self, "forward_native", None))
     ):
         return None
     value = args[0]
@@ -143,6 +154,7 @@ def _standard_rms_norm(self, args, kwargs):
     # A standard HF forward casts the normalized value back to input dtype
     # before multiplying the weight. Mixed operands may therefore promote the
     # output, while the native inference kernel returns the input dtype.
+    # Mixed input/weight dtypes have promotion semantics owned by forward.
     if _jittor_dtype_name(value.dtype) != _jittor_dtype_name(weight.dtype):
         return None
     epsilon = self.__dict__["variance_epsilon"]
@@ -216,6 +228,9 @@ def _maybe_pipeline(result):
 #: outside the instance so it cannot show up in ``__dict__`` -- a module's
 #: field set is part of its published shape, and tests pin it exactly.
 _leaves_published = weakref.WeakSet()
+#: The same modules by id, for the native module call's shortcut to ask
+#: without a weak reference per call; an entry goes with its module.
+_published_ids = set()
 
 
 def _dispatch_module_call(self, *args, **kwargs):
@@ -255,6 +270,8 @@ def _call(self, *args, **kwargs):
     if self not in _leaves_published:
         try:
             _leaves_published.add(self)
+            _published_ids.add(id(self))
+            weakref.finalize(self, _published_ids.discard, id(self))
         except TypeError as exc:
             swallowed("torch/installers/nn.py _call: _leaves_published.add(self)", exc)
         try:
@@ -287,7 +304,8 @@ def _named_parameters(self, prefix="", recurse=True, remove_duplicate=True):
     """Torch's ``named_parameters``: an iterator, with prefix/dedup."""
     reg = get_tensor_state(jt).leaf_params
     seen = set()
-    for name, v in self._iter_named_vars("parameters", recurse, remove_duplicate):
+    for name, v in self._iter_named_vars(
+            "parameters", recurse, remove_duplicate=False):
         if remove_duplicate and id(v) in seen:
             continue
         seen.add(id(v))
@@ -303,13 +321,23 @@ def _named_parameters(self, prefix="", recurse=True, remove_duplicate=True):
 
 def _named_buffers(self, prefix="", recurse=True, remove_duplicate=True):
     """Torch's ``named_buffers``, which defaults ``recurse=True``."""
-    for name, v in self._iter_named_vars("buffers", recurse, remove_duplicate):
+    seen = set()
+    native_named_vars = getattr(self, "_named_vars", None)
+    if callable(native_named_vars):
+        items = native_named_vars("buffers", recurse=recurse, remove_duplicate=False)
+    else:
+        items = _ORIG_MODULE_NAMED_BUFFERS(self, recurse=recurse)
+    for name, v in items:
+        if remove_duplicate and id(v) in seen:
+            continue
+        seen.add(id(v))
         yield (prefix + ("." if prefix else "") + name, v)
 
 
 def _named_modules(self, memo=None, prefix="", remove_duplicate=True):
     """Torch's ``named_modules``, accepting memo/prefix/remove_duplicate."""
-    for item in self._iter_named_modules():
+    seen = set() if memo is None else memo
+    for item in self._iter_named_modules(memo=seen if remove_duplicate else None):
         # jittor yields (name, module) pairs
         if isinstance(item, tuple) and len(item) == 2:
             name, mod = item
@@ -410,13 +438,7 @@ def _assign_state_value(root, key, source):
 
 
 def _preserve_target_dtypes_for_load(root, state_dict):
-    """Cast and move source values to the live destination metadata."""
-    # torch.load_state_dict(assign=False), the default used by TRELLIS.2,
-    # copies checkpoint values into existing parameters/buffers and keeps
-    # the destination dtype.  Jittor's native load replaces through update(),
-    # so a bf16 target can be widened to fp32 when the loader had to widen a
-    # BF16 safetensor through numpy. Cast the source to the live target dtype
-    # before delegating to native load_state_dict.
+    """Normalize source dtype and placement while retaining independent ownership."""
     if not isinstance(state_dict, dict):
         return state_dict
     converted = None
@@ -424,33 +446,67 @@ def _preserve_target_dtypes_for_load(root, state_dict):
         target = _find_state_target(root, key)
         if not isinstance(target, jt.Var):
             continue
-        # NumPy checkpoint values carry no device. Build them in the target's
-        # frontend placement so loading into a CUDA module does not create a
-        # FollowRuntime host tensor.
         from ...frontend import tensor_frontend
         with tensor_frontend(type(target), like=target):
             src = _state_source_to_var(value)
-        if not isinstance(src, jt.Var):
-            continue
-        if src.shape != target.shape:
+        if not isinstance(src, jt.Var) or src.shape != target.shape:
             continue
         target_dtype = _jittor_dtype_name(target.dtype)
-        if _jittor_dtype_name(src.dtype) == target_dtype:
-            casted = src
-        else:
-            casted = src.cast(target_dtype)
-        target_device = target.device
-        if casted.device != target_device:
-            casted = casted.to(target_device)
-        # assign=False copies checkpoint values, including same-dtype/device
-        # tensors. Rebinding the source Var aliases CUDA optimizer storage and
-        # makes an EMA/reference model follow updates of the loaded model.
+        if _jittor_dtype_name(src.dtype) != target_dtype:
+            src = src.cast(target_dtype)
+        target_backend = int(target.placement_backend)
+        target_index = int(target.device_id)
+        source_backend = int(src.placement_backend)
+        source_index = int(src.device_id)
+        if target_backend >= 0 and (
+                source_backend != target_backend
+                or (target_backend > 0 and source_index != target_index)):
+            if target_backend == 0:
+                src = _make_cpu_resident(src)
+            else:
+                src = _make_cuda_resident(src, force=True, device=target.device)
+        # assign=False copies values; a clone prevents checkpoint/EMA tensors
+        # from sharing storage with live parameters after the native loader.
         from ...frontend import clone
         if converted is None:
             converted = dict(state_dict)
-        converted[key] = clone(casted.detach())
+        converted[key] = clone(src.detach())
     return state_dict if converted is None else converted
 
+
+def _load_fsdp_assigned_dtensor_state(root, state_dict, strict):
+    """Gather DTensor values, then load them into FSDP's flat local shards."""
+    if not isinstance(state_dict, dict):
+        return None
+    from jittor.compat import fsdp_hooks
+    provider = fsdp_hooks.provider()
+    if provider is None:
+        return None
+    owns_fsdp_parameter = any(
+        getattr(_find_state_target(root, key), "_jittor_fsdp2_entry", None)
+        is not None for key in state_dict)
+    if not owns_fsdp_parameter or not any(
+            getattr(value, "_dtensor_global_shape", None) is not None
+            for value in state_dict.values()):
+        return None
+
+    full_state = dict(state_dict)
+    for key, value in state_dict.items():
+        global_shape = getattr(value, "_dtensor_global_shape", None)
+        if global_shape is None:
+            continue
+        mesh = getattr(value, "_dtensor_device_mesh")
+        local = value.to_local()
+        if mesh.size() > 1:
+            from jittor.distributed import all_gather
+            local = all_gather(local, group=mesh.get_group())
+        if tuple(local.shape) != tuple(global_shape):
+            local = local.reshape(global_shape)
+        full_state[key] = local
+
+    provider._load_full_state_dict(
+        root, full_state, strict=strict, already_replicated=True)
+    return _IncompatibleKeys([], [])
 
 def _state_dict_key_diff(root, state_dict):
     """(missing, unexpected, mismatched) between a module and a state dict.
@@ -463,8 +519,11 @@ def _state_dict_key_diff(root, state_dict):
     """
     own = {}
     try:
-        for name, value in root.state_dict().items():
-            own[str(name)] = value
+        # Loading validates the registered namespace after pre-hooks. Export
+        # hooks may intentionally present different, portable checkpoint keys.
+        with root._state_dict_hook_scope(False):
+            for name, value in root.state_dict().items():
+                own[str(name)] = value
     except EXPECTED as exc:
         swallowed("torch/installers/nn.py _state_dict_key_diff: for name, value in root.state_dict().items():", exc)
         return [], [], []
@@ -492,7 +551,19 @@ def _state_dict_key_diff(root, state_dict):
 
 def _load_state_dict(self, state_dict, strict=True, assign=False):
     """Torch's ``load_state_dict``: honours ``strict`` and returns the keys."""
+    if assign:
+        fsdp_result = _load_fsdp_assigned_dtensor_state(
+            self, state_dict, strict)
+        if fsdp_result is not None:
+            return fsdp_result
+    state_dict, hook_missing, hook_unexpected, hook_errors = (
+        self._prepare_load_state_dict(state_dict, strict))
+    if hook_errors:
+        raise RuntimeError("Error(s) in loading state_dict:\n\t" +
+                           "\n\t".join(hook_errors))
     missing, unexpected, mismatched = _state_dict_key_diff(self, state_dict)
+    missing = hook_missing + missing
+    unexpected = hook_unexpected + unexpected
     # torch raises on a shape mismatch whatever `strict` says: the value
     # cannot be copied at all.  jittor's load_parameters only LOG.e'd it.
     if mismatched:
@@ -555,8 +626,21 @@ def _load_state_dict(self, state_dict, strict=True, assign=False):
         # here so a strict=False load stays quiet, exactly like torch.
         load_state = {k: v for k, v in load_state.items()
                       if str(k) not in set(unexpected)}
+    if not assign:
+        jt.sync_all()
+        remaining = {}
+        for key, value in load_state.items():
+            target = _find_state_target(self, key)
+            if isinstance(target, jt.Var) and isinstance(value, jt.Var):
+                with jt.no_grad():
+                    if not target._copy_view_into(value):
+                        target._copy_into(value)
+            else:
+                remaining[key] = value
+        load_state = remaining
     if load_state:
-        _ORIG_MODULE_LOAD_STATE_DICT(self, load_state)
+        with self._state_dict_hook_scope(False):
+            _ORIG_MODULE_LOAD_STATE_DICT(self, load_state)
     try:
         for n, p in self.named_parameters():
             if n in trainable and p.is_stop_grad():
@@ -605,7 +689,7 @@ class _ParamList:
             try:
                 self._produce()
             except StopIteration:
-                return self._items
+                break  # the walk is done; `_produce` has dropped the source
         return self._items
 
     def __iter__(self):
@@ -685,6 +769,18 @@ def _register_leaf_params(params):
                   "these parameters will not receive .grad from a "
                   "loss.backward() that runs without an optimizer")
 
+
+def _parameter_map_get(self):
+    override = vars(self).get("_torch_parameter_mapping_override")
+    if override is not None:
+        return override
+    return _ORIG_MODULE_PARAMETER_MAP(self)
+
+
+def _parameter_map_set(self, value):
+    if not isinstance(value, _MutableMapping):
+        raise TypeError("Module._parameters must be assigned a mutable mapping")
+    object.__setattr__(self, "_torch_parameter_mapping_override", value)
 
 def _parameters(self, recurse=True):
     """Torch's ``parameters()``: iterable *and* indexable. See `_ParamList`."""
@@ -769,8 +865,8 @@ def _module_cast_var_if_needed(v, ds, copy=False):
 def _module_cast_float_dtype(self, ds):
     """Cast every floating parameter of this module in place."""
     if getattr(type(self), "_frontend_tensor_type", None) is not None:
-        return _module_replace_vars(
-            self, _functools.partial(_module_to_conversion, ds, None, False))
+        return self._apply(
+            _functools.partial(_module_to_conversion, ds, None, False))
     if ds is not None and ds in _MODULE_FLOAT_DTYPES:
         for p in self.parameters():
             if p.dtype.is_float() if hasattr(p.dtype, "is_float") else ("float" in _jittor_dtype_name(p.dtype)):
@@ -780,11 +876,26 @@ def _module_cast_float_dtype(self, ds):
     return self
 
 
-def _module_replace_vars(self, convert):
-    """Run ``convert`` over every parameter/buffer this module tree holds."""
+def _module_apply(self, convert, recurse=True):
+    """Convert registered tensors through each child's overridable protocol.
+
+    Subclasses can own non-buffer state in ``_apply`` (for example metric
+    accumulators). A flat modules() walk bypasses that state entirely.
+    """
+    if recurse:
+        seen = set()
+        for child in self.children():
+            if id(child) not in seen:
+                seen.add(id(child))
+                child._apply(convert)
+    return _module_replace_vars(self, convert, recurse=False)
+
+
+def _module_replace_vars(self, convert, recurse=True):
+    """Convert registered tensors, preserving parameter objects and gradients."""
     converted = {}
     try:
-        modules = list(self.modules()) if hasattr(self, "modules") else [self]
+        modules = list(self.modules()) if recurse and hasattr(self, "modules") else [self]
     except EXPECTED as exc:
         swallowed("torch/installers/nn.py _module_replace_vars: modules = list(self.modules()) if hasattr(self, 'module...", exc)
         modules = [self]
@@ -890,6 +1001,21 @@ def _module_to_conversion(ds, dev, copy, v):
     Split out of ``_module_to`` so this file holds no closures; ``_module_to``
     hands the decoded (dtype, device, copy) triple over with a partial.
     """
+    frontend_base = next(
+        (base for base in reversed(type(v).__mro__)
+         if "_frontend_backend" in vars(base)), jt.Var)
+    if type(v).to is not frontend_base.to:
+        # Module.to applies each parameter's own Tensor.to protocol. Parameter
+        # subtypes can convert their storage (for example, quantize it) there;
+        # a direct native residency move would bypass that conversion.
+        requested = {}
+        if dev is not None:
+            requested["device"] = dev
+        if ds is not None:
+            requested["dtype"] = dtype._registry[ds]
+        if copy:
+            requested["copy"] = True
+        return v.to(**requested)
     out = v
     if ds is not None and ds in _MODULE_FLOAT_DTYPES:
         is_float = v.dtype.is_float() if hasattr(v.dtype, "is_float") else ("float" in _jittor_dtype_name(v.dtype))
@@ -970,8 +1096,8 @@ def _module_to(self, *args, **kwargs):
     if _device_is_cuda(dev):
         jt.flags.use_cuda = 1
     if dev is not None or ds is not None:
-        return _module_replace_vars(
-            self, _functools.partial(_module_to_conversion, ds, dev, copy))
+        return self._apply(
+            _functools.partial(_module_to_conversion, ds, dev, copy))
     return self
 
 
@@ -1065,6 +1191,7 @@ def _zero_grad(self, set_to_none=True):
         except EXPECTED as exc:
             swallowed("torch/installers/nn.py _zero_grad: opt.zero_grad()", exc)
     try:
+        pending = []
         for p in self.parameters():
             grad = getattr(p, "_torch_grad", None)
             if set_to_none:
@@ -1080,7 +1207,14 @@ def _zero_grad(self, set_to_none=True):
                 # the ``jt.zeros`` trap recorded here before: that built a native
                 # Var, whose dtype prints as "float32" where the parameter's
                 # prints as "torch.float32", and which loses every Tensor method.
-                grad.zero_()
+                #
+                # The whole list is zeroed after the loop: each ``zero_``
+                # resolves the storage's pending readers first, and doing that
+                # per parameter drained the device between 199 writes.
+                pending.append(grad)
+        if pending:
+            from ..tensor.method_api import _api_zero_batch
+            _api_zero_batch(pending)
     except EXPECTED as exc:
         swallowed("torch/installers/nn.py _zero_grad: for p in self.parameters():", exc)
     return None
@@ -1114,11 +1248,12 @@ def _get_parameter(self, target):
     # `requires_grad` cannot classify it -- a buffer registered from a torch
     # factory is not stop_grad either, so asking that question returned
     # buffers from `get_parameter`, which torch answers with AttributeError.
-    # The module's own parameter listing is the authority; buffers are tracked
-    # separately, by name (see Module.register_buffer).
-    if isinstance(v, jt.Var) and target in {
-        n for n, _ in self.named_parameters(remove_duplicate=False)
-    }:
+    # The leaf module's own registry is authoritative. A global
+    # named_parameters() lookup deduplicates tied weights, so a valid alias
+    # such as lm_head.weight disappears behind embed_tokens.weight.
+    parameters = getattr(mod, "_parameters", {})
+    if (isinstance(v, jt.Var) and leaf in parameters
+            and parameters[leaf] is v):
         return v
     raise AttributeError(f"`{target}` is not a parameter")
 
@@ -1134,8 +1269,9 @@ def _get_buffer(self, target):
     if not hasattr(mod, leaf):
         raise AttributeError(f"`{target}` is not a buffer")
     v = getattr(mod, leaf)
-    names = {n for n, _ in self.named_buffers(remove_duplicate=False)}
-    if isinstance(v, jt.Var) and target in names:
+    buffers = getattr(mod, "_buffers", {})
+    if (isinstance(v, jt.Var) and leaf in buffers
+            and buffers[leaf] is v):
         return v
     raise AttributeError(f"`{target}` is not a buffer")
 
@@ -1194,6 +1330,8 @@ register_fidelity(
     "Yields (name, Var) for trainable Vars reachable by attribute walk. "
     "recurse= and prefix= honored; remove_duplicate= controls whether tied "
     "aliases are retained. Order follows attribute definition order, which matches "
+    "recurse=, prefix= and remove_duplicate= honored. Order follows attribute "
+    "definition order, which matches "
     "torch for modules built in __init__ but is not guaranteed for modules "
     "assembled dynamically.")
 register_fidelity(
@@ -1228,6 +1366,11 @@ register_fidelity(
     "torch.nn.Module.eval", _eval, Fidelity.APPROXIMATE,
     "Equivalent to train(False); returns self. Same caveat as train().")
 register_fidelity(
+    "torch.nn.Module._apply", _module_apply, Fidelity.APPROXIMATE,
+    "Recursively invokes child _apply overrides and converts registered "
+    "parameters, their gradients and buffers while preserving parameter "
+    "identity. Does not implement Torch future swap/set-data policies.")
+register_fidelity(
     "torch.nn.Module.to", _module_to, Fidelity.APPROXIMATE,
     "In place like torch: casts only floating-point Vars (integer buffers "
     "survive to(float64)) and migrates residency for cpu/cuda/npu, keeping "
@@ -1250,6 +1393,11 @@ register_fidelity(
     "bridged optimizer's zero_grad when one is active. Returns None.")
 
 
+def _module_extra_repr(self):
+    """Return Torch Module's empty default without inspecting its initializer."""
+    return ""
+
+
 def _install_module_methods(nn, registry=None):
     """Bind the torch-compatible ``nn.Module`` methods; all are module level.
 
@@ -1269,18 +1417,90 @@ def _install_module_methods(nn, registry=None):
     _pipeline_state["mark"] = 0
 
     M.execute = _execute
+    M.extra_repr = _module_extra_repr
     if not hasattr(M, "forward"):
         M.forward = _forward_alias
     M._dispatch_call = _call
+    from ... import nn_frontend as _nn_frontend
+    from ...types import active_device_context as _active_device_context
+    from jittor.nn.functional import matrix as _matrix
+    from jittor.nn.modules.linear import Linear as _NativeLinear
+    from jittor.nn.modules.dropout import Dropout as _NativeDropout
+    from jittor.nn.modules.convolution import Conv as _NativeConv
+    from jittor.nn.modules.normalization import BatchNorm as _NativeBatchNorm
+    from jittor.nn.backends import cudnn as _cudnn_backend
+    from jittor.nn.functional import normalization as _normalization
+    from jittor.backends.cuda.kernels.cublas import lt_linear_cuda as _lt_linear
+    from jittor.backends.cuda.kernels.nn import layer_norm_cuda as _layer_norm_cuda
+    from jittor.nn.modules.normalization import LayerNorm as _NativeLayerNorm
+    from jittor.nn.modules.activation import _FunctionModule as _NativeFunctionModule
+    from jittor.nn.functional import activation as _activation
+    from jittor._core import arg_policy as _arg_policy
+    from jittor.nn.modules.normalization import GroupNorm as _NativeGroupNorm
+    from jittor.backends.cuda.kernels.nn import group_norm_cuda as _group_norm_cuda
+    from jittor._runtime import dispatch as _kernel_dispatch
+    if _kernel_dispatch._NATIVE_SELECT is None:
+        _kernel_dispatch._bind_native_select()
+    _rms_selector_state = None
+    if _kernel_dispatch._NATIVE_SELECT is jt.core._kernel_select:
+        _rms_selector_state = (
+            globals(), _acl_bfloat16_rms_norm, _backend_hooks,
+            _rms_norm_training_cuda, _rms_norm_cuda, vars(_kernel_dispatch),
+            _kernel_dispatch.select_kernel, _kernel_dispatch._NATIVE_DISPATCH_CONTEXT,
+            _kernel_dispatch._NATIVE_SELECT,
+        )
+    # What `_dispatch_module_call` consults, so the native call can run it:
+    # see `module_call_bind` in src/bindings/pyjt/py_module_call.h.
+    _dispatch_parts = {
+        "prefer_forward": _prefer_forward,
+        "standard_rms_norm": _standard_rms_norm,
+        "rms_selector_state": _rms_selector_state,
+        "linear_execute": _NativeLinear.execute,
+        "matmul_kernel": _matrix._cublas_matmul,
+        "rms_norm_inference": _rms_norm_cuda.__wrapped__,
+        "rms_norm_source": _rms_norm_source,
+        "dropout_execute": _NativeDropout.execute,
+        "function_module_execute": _NativeFunctionModule.execute,
+        "nn_namespace": jt.nn,
+        "relu_function": _activation.relu,
+        "silu_function": _activation.silu,
+        "group_norm_execute": _NativeGroupNorm.execute,
+        "group_norm_function": _normalization.group_norm,
+        "group_norm_kernel": getattr(_group_norm_cuda._group_norm_cuda, "__wrapped__", None),
+        "group_norm_nhwc_source": _group_norm_cuda._group_norm_nhwc_source,
+        "group_norm_activations": _group_norm_cuda._ACTIVATIONS,
+        "group_norm_nhwc_build": jt.core._group_norm_nhwc_build,
+        "partial": _functools.partial,
+        "residual_offers": _activation._RESIDUAL_OFFERS,
+        "arg_policy_warned": _arg_policy._warned,
+        "conv_execute": _NativeConv.execute,
+        "conv_cudnn_kernel": getattr(_cudnn_backend._try_cudnn_conv2d, "__wrapped__", None),
+        "cudnn_backend": _cudnn_backend,
+        "conv_filter_key": _cudnn_backend._FILTER_OHWI,
+        "batch_norm_execute": _NativeBatchNorm.execute,
+        "bn_coefficients_key": _normalization._EVAL_COEFFICIENTS,
+        "lt_linear_header": _lt_linear._HEADER,
+        "lt_linear_source": _lt_linear._source,
+        "layer_norm_execute": _NativeLayerNorm.execute,
+        "layer_norm_inference": _layer_norm_cuda._layer_norm_no_grad_cuda.__wrapped__,
+        "layer_norm_source": _layer_norm_cuda._affine_source,
+        "acl_possible": bool(getattr(jt.compiler, "has_acl", 0)),
+    }
+    jt.core._module_call_bind(M, _call, _dispatch_module_call, _published_ids,
+                              _pipeline_state, _active_device_context,
+                              _nn_frontend.python_module_call, _dispatch_parts)
+    _nn_frontend._NATIVE_CALL = jt.core._module_call
     M.set_execution_pipelining = staticmethod(set_execution_pipelining)
     M.get_execution_pipelining = staticmethod(get_execution_pipelining)
     M.named_parameters = _named_parameters
     M.named_buffers = _named_buffers
     M.named_modules = _named_modules
     M.load_state_dict = _load_state_dict
+    M._parameters = property(_parameter_map_get, _parameter_map_set)
     M.parameters = _parameters
     M.train = _train
     M.eval = _eval
+    M._apply = _module_apply
     M.to = _module_to
     M.to_empty = _module_to_empty
     M.cuda = _module_cuda
@@ -1313,3 +1533,8 @@ def _install_module_methods(nn, registry=None):
     register_api_bindings(M, 'torch.nn.Module',
         ('__setattr__', 'buffers', 'cpu', 'cuda', 'double', 'eval', 'execute', 'float', 'forward', 'get_buffer', 'get_execution_pipelining', 'get_parameter', 'get_submodule', 'half', 'load_state_dict', 'named_buffers', 'named_modules', 'named_parameters', 'npu', 'parameters', 'register_parameter', 'set_execution_pipelining', 'to', 'to_empty', 'train', 'type', 'zero_grad') + tuple(()),
         Fidelity.APPROXIMATE, 'Module state and parameter management over native holders; Torch lazy iterator, meta, and layout semantics are approximate')
+    register_api_bindings(M, 'torch.nn.Module', ('extra_repr',),
+        Fidelity.EXACT, 'Torch Module default extra_repr is empty; explicit subclass overrides retain normal MRO precedence')
+    register_api_bindings(M, 'torch.nn.Module',
+        ('register_state_dict_post_hook', 'register_load_state_dict_pre_hook'),
+        Fidelity.APPROXIMATE, 'State export hooks and load pre-hooks over native module traversal; metadata is limited to available module versions')

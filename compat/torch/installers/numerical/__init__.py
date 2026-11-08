@@ -300,6 +300,17 @@ _RECIPROCAL_FIDELITY_DETAIL = (
 
 from .elementwise import reciprocal
 
+from .elementwise import remainder
+
+register_fidelity(
+    "torch.remainder",
+    remainder,
+    Fidelity.APPROXIMATE,
+    "matches Torch floored-remainder values (sign of the divisor) for supported "
+    "real tensors but omits out, device, layout, and dtype keyword semantics; "
+    "Tensor.remainder is the same operation"
+)
+
 register_fidelity(
     "torch.reciprocal",
     reciprocal,
@@ -1103,9 +1114,9 @@ register_fidelity(
     "torch.stft",
     stft,
     Fidelity.APPROXIMATE,
-    "matches Torch CPU NumPy STFT values for supported real waveforms; "
-    "gradient, device, window dtype, and return_complex=False semantics are "
-    "not implemented",
+    "native STFT on the input's device with waveform/window gradients and "
+    "complex64 or real/imag output; CPU and CUDA verified; float16, bfloat16 "
+    "and float64 inputs are transformed in float32 and return complex64",
 )
 
 def _bind_missing(target, name, implementation):
@@ -1133,6 +1144,17 @@ def _vinv(self):
 
 
 def install(ctx):
+    from .shape import fliplr
+    ctx.jittor_module.fliplr = fliplr
+    register_api_bindings(ctx.jittor_module, "torch", ("fliplr",),
+                          Fidelity.APPROXIMATE,
+                          "Dense tensor column reversal using native flip; sparse layouts are unsupported")
+    from .shape import triu_indices, tril_indices
+    ctx.jittor_module.triu_indices = triu_indices
+    ctx.jittor_module.tril_indices = tril_indices
+    register_api_bindings(ctx.jittor_module, "torch", ("triu_indices", "tril_indices"),
+                          Fidelity.APPROXIMATE,
+                          "Dense integer triangular coordinates; sparse layouts are unsupported")
     _modules = ctx.registry.module_map
     g = ctx.jittor_module
     Var = ctx.state["Var"]
@@ -1173,7 +1195,8 @@ def install(ctx):
     _bind_missing(g, "log_softmax", log_softmax)
     _bind_missing(g, "relu", relu)
     # elementwise / functional top-level forms missing from jittor's top level
-    _bind_missing(g, "log1p", log1p)
+    # Native log1p owns the computation; Torch owns integer promotion.
+    g.log1p = log1p
     _bind_missing(g, "reciprocal", reciprocal)
     _bind_missing(g, "lerp", lerp)
     # torch.div/divide take a `rounding_mode`, which the native op does not, so
@@ -1232,7 +1255,7 @@ def install(ctx):
     _bind_missing(g, "eye", eye)
     register_fidelity(
         "torch.eye", eye, Fidelity.APPROXIMATE,
-        "Values, dtype, device and requires_grad are supported; layout, out "
+        "Values, dtype, device, out and requires_grad are supported; layout "
         "and pin_memory arguments are not implemented.")
     # torch.narrow(input, dim, start, length) / torch.tile(input, dims) --
     # function forms mirroring the Var methods (added in _install_tensor_methods).
@@ -1245,6 +1268,7 @@ def install(ctx):
     _bind_missing(g, "diff", diff)
     _bind_missing(g, "trapz", trapz)
     _bind_missing(g, "trapezoid", trapezoid)
+    _bind_missing(g, "remainder", remainder)
     g.repeat_interleave = repeat_interleave
     _bind_missing(g, "autocast", autocast)
     # Real loop-based torch.vmap. The old no-op stub (`lambda fn,*a,**k: fn`)
@@ -1350,6 +1374,9 @@ def install_parity(ctx):
     import jittor.linalg as linalg
     from ...namespace import native_module_facade
     linalg = native_module_facade(linalg, "torch.linalg")
+    # torch's solve takes `left=`/`out=`; the native one is the left solve.
+    from .linalg import solve
+    linalg.solve = solve
     registry.publish("torch.linalg", linalg)
     g.linalg = linalg
 

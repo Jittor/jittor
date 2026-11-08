@@ -26,8 +26,8 @@ def _cuda_rng(func):
     def inner(*args, **kwargs):
         if not jt.has_cuda:
             pytest.skip("no CUDA device")
-        if not hasattr(jt, "get_cuda_rng_state") or not hasattr(jt, "set_cuda_rng_state"):
-            pytest.skip("this build has no native CUDA RNG state API")
+        assert callable(jt.core.rng_state)
+        assert callable(jt.core.set_rng_state)
         with jt.flag_scope(use_cuda=1):
             return func(*args, **kwargs)
     return inner

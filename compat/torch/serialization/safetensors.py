@@ -1,7 +1,7 @@
 """SafeTensor codecs, readers and transactional optional frontend bindings."""
 import json
-import struct
 import os
+import struct
 from types import MappingProxyType
 import numpy as np
 import jittor as jt
@@ -15,6 +15,7 @@ except ImportError:
             pass
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from ..context import get_install_context, registry_for
+from .portable import _snapshot_tensors
 from ..fidelity import Fidelity, register_api_bindings
 from ...diagnostics import EXPECTED, swallowed
 from ...transaction import runtime_hook, set_attr, _MISSING
@@ -81,28 +82,91 @@ class _PySafeSlice:
         return _to_tensor(arr, self._dtype, self._device)
 
 
+def _header_error(message):
+    """The error safetensors' own reader raises for an unusable header."""
+    try:
+        from safetensors import SafetensorError as error_type
+    except ImportError:
+        error_type = ValueError
+    return error_type("Error while deserializing header: " + message)
+
+
+def _parse_header(prefix, read_header, total_size):
+    """Validate the index without reading or materializing the tensor payload."""
+    if len(prefix) != 8:
+        raise _header_error("header too small")
+    n = struct.unpack("<Q", prefix)[0]
+    if n > 100_000_000 or n > total_size - 8:
+        raise _header_error("header too large")
+    raw = read_header(n)
+    if len(raw) != n:
+        raise _header_error("incomplete header")
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise _header_error("duplicate key %r" % key)
+            result[key] = value
+        return result
+    try:
+        text = raw.decode("utf-8")
+        if not text.startswith("{"):
+            raise _header_error("header must begin with an object")
+        header = json.loads(text, object_pairs_hook=unique_object)
+    except UnicodeDecodeError as exc:
+        raise _header_error("invalid UTF-8 in header: %s" % exc) from None
+    except json.JSONDecodeError as exc:
+        raise _header_error("invalid JSON in header: %s" % exc) from None
+    if not isinstance(header, dict):
+        raise _header_error("invalid JSON in header: expected an object")
+    metadata = header.get("__metadata__")
+    if "__metadata__" in header and (not isinstance(metadata, dict) or
+            any(not isinstance(k, str) or not isinstance(v, str)
+                for k, v in metadata.items())):
+        raise _header_error("metadata must map strings to strings")
+    data_size = total_size - 8 - n
+    spans = []
+    for key, entry in header.items():
+        if key == "__metadata__":
+            continue
+        if not isinstance(entry, dict) or entry.get("dtype") not in _ST:
+            raise _header_error("invalid tensor dtype for %r" % key)
+        shape = entry.get("shape")
+        if not isinstance(shape, list) or any(type(v) is not int or v < 0 for v in shape):
+            raise _header_error("invalid tensor shape for %r" % key)
+        offsets = entry.get("data_offsets")
+        if (not isinstance(offsets, list) or len(offsets) != 2
+                or not all(type(v) is int for v in offsets)
+                or not 0 <= offsets[0] <= offsets[1] <= data_size):
+            raise _header_error("invalid tensor offsets for %r" % key)
+        count = 1
+        for dimension in shape:
+            count *= dimension
+        if offsets[1] - offsets[0] != count * _ST[entry["dtype"]][1]:
+            raise _header_error("tensor size does not match shape for %r" % key)
+        spans.append(tuple(offsets))
+    end = 0
+    for start, stop in sorted(spans):
+        if start != end:
+            raise _header_error("tensor offsets overlap or leave a gap")
+        end = stop
+    if end != data_size:
+        raise _header_error("incomplete metadata, file not fully covered")
+    return header, n
+
+
 class _PySafeOpen:
     def __init__(self, filename, framework="pt", device="cpu", backend="mmap"):
         self._filename = filename
         self._device = device
         with open(filename, "rb") as fh:
-            prefix = fh.read(8)
-            if len(prefix) != 8:
-                raise _SafetensorError("Error while deserializing header: header too small")
-            n = struct.unpack("<Q", prefix)[0]
             size = os.fstat(fh.fileno()).st_size
-            if n > size - 8:
-                raise _SafetensorError("Error while deserializing header: header too large")
-            try:
-                self._header = json.loads(fh.read(n).decode("utf-8"))
-            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                raise _SafetensorError("Error while deserializing header: invalid JSON") from exc
-            if not isinstance(self._header, dict):
-                raise _SafetensorError("Error while deserializing header: expected object")
-            self._data_offset = 8 + n
-        # safetensors.safe_open.metadata() returns None when the optional
-        # metadata section is absent. Accelerate relies on that distinction
-        # to default a plain archive to ``{"format": "pt"}``.
+            self._header, n = _parse_header(fh.read(8), fh.read, size)
+        # Tensors are read on demand, as safetensors' mmap reader does: holding
+        # the whole payload doubled peak host memory while a checkpoint loaded.
+        self._data_offset = 8 + n
+        # Absence differs from an explicitly empty metadata dictionary.
+        # Accelerate uses None to recognize an archive without a format tag.
         self._meta = self._header.pop("__metadata__", None)
 
     def keys(self):
@@ -114,14 +178,13 @@ class _PySafeOpen:
     def _entry(self, key):
         entry = self._header[key]
         start, end = entry["data_offsets"]
-        expected = end - start
         with open(self._filename, "rb") as fh:
             fh.seek(self._data_offset + start)
-            raw = fh.read(expected)
-        if len(raw) != expected:
-            raise EOFError(
-                "short safetensors payload for {!r}: expected {}, got {}".format(
-                    key, expected, len(raw)))
+            raw = fh.read(end - start)
+        if len(raw) != end - start:
+            # The header was checked against the file at open; it shrank since.
+            raise EOFError("short safetensors payload for %r: expected %d bytes, got %d"
+                           % (key, end - start, len(raw)))
         return entry["dtype"], entry["shape"], raw
 
     def get_slice(self, key):
@@ -155,37 +218,62 @@ def _load_bytes(data):
     }
 
 
-def _load_file(filename, device="cpu"):
-    with _PySafeOpen(filename, device=device) as safe:
+def _load_file(filename, device="cpu", *, backend="mmap"):
+    with _PySafeOpen(filename, device=device, backend=backend) as safe:
         return {key: safe.get_tensor(key) for key in safe.keys()}
 
 
-def _save_dict(tensors, metadata=None):
-    # Match safetensors.torch's dense/unique storage contract before flattening
-    # Jittor variables to NumPy (which would otherwise erase stride/alias data).
-    seen = {}
+def _reject_shared_storage(tensors):
+    """Refuse tensors that share storage, as ``safetensors.torch`` does.
+
+    The format has no aliasing: two names for one storage would be written as
+    two copies and come back as two independent tensors, silently untying
+    weights. safetensors raises instead and points at ``save_model``, and
+    Transformers/PEFT remove the aliases before saving for exactly that reason.
+    Storage identity is the frontend's ``untyped_storage().data_ptr()``, the
+    same key those libraries deduplicate on.
+    """
+    allocations = {}
     for key, value in tensors.items():
-        if hasattr(value, "untyped_storage"):
-            try:
-                storage = value.untyped_storage()
-                ptr = storage.data_ptr()
-                if ptr in seen:
-                    raise RuntimeError("Some tensors share memory: {!r} and {!r}".format(seen[ptr], key))
-                seen[ptr] = key
-            except AttributeError:
-                # Jittor-backed shim storage exposes the canonical address on
-                # the tensor, while older storage wrappers may omit data_ptr.
-                ptr = getattr(value, "_storage_address", None)
-                if ptr is not None:
-                    if ptr in seen:
-                        raise RuntimeError("Some tensors share memory: {!r} and {!r}".format(seen[ptr], key))
-                    seen[ptr] = key
+        storage = getattr(value, "untyped_storage", None)
+        if storage is not None and value.numel():
+            pointer = storage().data_ptr()
+            start = value.data_ptr()
+            end = start + value.numel() * value.element_size()
+            allocations.setdefault((str(value.device), pointer), []).append((start, end, key))
+    shared = []
+    for ranges in allocations.values():
+        group, last_end = [], 0
+        for start, end, key in sorted(ranges):
+            if group and start >= last_end:
+                if len(group) > 1:
+                    shared.append(group)
+                group = []
+            group.append(key)
+            last_end = max(last_end, end)
+        if len(group) > 1:
+            shared.append(group)
+    if shared:
+        raise RuntimeError(
+            "Some tensors share memory, this will lead to duplicate memory on disk "
+            "and potential differences when loading them again: %s.\n"
+            "A potential way to correctly save your model is to use `save_model`.\n"
+            "More information at https://huggingface.co/docs/safetensors/torch_shared_tensors"
+            % [set(group) for group in shared])
+
+
+def _save_dict(tensors, metadata=None):
+    _reject_shared_storage(tensors)
+    # A state_dict's entries alias live parameters, and `numpy()` would move
+    # their sharing group to the host: fetch them as `torch.save` does.
+    snapshots = _snapshot_tensors(tensors)
     header = {}
     blobs = []
     offset = 0
     for key, value in tensors.items():
         tensor_dtype = _jittor_dtype_name(value.dtype) if isinstance(value, jt.Var) else None
-        arr = value.numpy() if hasattr(value, "numpy") else np.asarray(value)
+        arr = (snapshots[id(value)] if isinstance(value, jt.Var) else
+               value.numpy() if hasattr(value, "numpy") else np.asarray(value))
         arr = np.asarray(arr)
         shape = list(arr.shape)
         dtype = tensor_dtype or arr.dtype.name
@@ -209,6 +297,8 @@ def _save_dict(tensors, metadata=None):
     if metadata:
         header["__metadata__"] = {str(k): str(v) for k, v in metadata.items()}
     raw_header = json.dumps(header, separators=(",", ":")).encode("utf-8")
+    # The format aligns the data buffer to eight bytes with JSON whitespace.
+    raw_header += b" " * (-len(raw_header) % 8)
     return struct.pack("<Q", len(raw_header)) + raw_header + b"".join(blobs)
 
 

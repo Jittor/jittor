@@ -16,6 +16,11 @@ from _helpers.assertions import expect_error
 from _helpers.numerical_grad import ngrad
 
 class TestSlice(unittest.TestCase):
+    def test_large_positive_slice_start(self):
+        x = jt.array([3.0, 4.0])
+        self.assertEqual(x[10**14:0].shape, [0])
+        self.assertEqual(x[10**14::-1].numpy().tolist(), [4.0, 3.0])
+
     def test_string_slice_overflow_is_a_catchable_user_error(self):
         value = jt.ones((2,))
         expect_error(
@@ -54,15 +59,15 @@ class TestSlice(unittest.TestCase):
     def test_integer_index_overflow_is_a_catchable_user_error(self):
         expect_error(
             lambda: jt.ones((2, 3))[5],
-            exc_type=RuntimeError,
-            match="slice overflow",
+            exc_type=IndexError,
+            match="index 5 is out of bounds for dimension 0 with size 2",
         )
 
     def test_too_many_slices_is_a_catchable_user_error(self):
         expect_error(
             lambda: jt.ones((2, 3))[0, 1, 2],
-            exc_type=RuntimeError,
-            match="Too many slices",
+            exc_type=IndexError,
+            match="too many indices for tensor of dimension 2",
         )
 
     def test_slice_bool(self):

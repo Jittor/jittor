@@ -24,9 +24,14 @@ optional flash backend and expand grouped-query heads before delegating to it. T
 native implementation masks with a large finite ``-1e30`` rather than ``-inf``; in float64 the
 masked softmax entries underflow to exactly 0.0, so the ``-inf`` numpy reference here
 matches it to tolerance. The mask is a constant additive bias (independent of Q/K/V),
-so it is held fixed under finite differencing -- backward is smooth and twice
-differentiable (matmul -> softmax -> matmul), hence both gradcheck and gradgradcheck
-are exercised.
+so it is held fixed under finite differencing, and gradcheck is exercised.
+
+gradgradcheck is not: a call that needs a backward runs
+``_MemoryEfficientAttention``, a ``jt.Function`` that recomputes the probabilities
+in its backward instead of keeping them, and a ``jt.Function``'s backward is not
+itself differentiable -- the same reason ``layer_norm`` / ``group_norm`` declare
+``supports_gradgrad=False`` (core_ops.py), and the same limit torch's
+memory-efficient attention kernel has.
 
 Sizes are kept tiny (each differentiated tensor <= ~24-32 float64 elements) because
 gradcheck is O(numel) forward passes: an unbatched (4, 6) L x E sample and a batched
@@ -121,13 +126,14 @@ def _sdpa_op(query, key, value, attn_mask=None, dropout_p=0.0,
 
 
 op_db = [
-    # Smooth all the way through (matmul -> softmax -> matmul); full fwd + gradcheck
-    # + gradgradcheck. The causal/explicit-scale knobs are constants held fixed under
-    # differentiation, so they do not break smoothness.
+    # Smooth all the way through (matmul -> softmax -> matmul); full fwd + gradcheck.
+    # The causal/explicit-scale knobs are constants held fixed under
+    # differentiation, so they do not break smoothness. No gradgrad: see the
+    # module docstring.
     OpInfo("scaled_dot_product_attention",
            op=_sdpa_op, ref=scaled_dot_product_attention_ref,
-           sample_inputs_func=sample_sdpa),
+           sample_inputs_func=sample_sdpa, supports_gradgrad=False),
     OpInfo("scaled_dot_product_attention", variant_test_name="causal",
            op=_sdpa_op, ref=scaled_dot_product_attention_ref,
-           sample_inputs_func=sample_sdpa_causal),
+           sample_inputs_func=sample_sdpa_causal, supports_gradgrad=False),
 ]

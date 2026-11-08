@@ -4,6 +4,10 @@ Installation publishes these objects. Native delegates belong to InstallContext;
 Function input/output bookkeeping belongs to each native one-shot call context.
 """
 import contextlib
+from contextvars import ContextVar
+from typing import Callable, Deque, Optional
+import threading
+from collections import deque
 import jittor as jt
 import numpy as np
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
@@ -13,24 +17,30 @@ from . import profiler as _profiler
 from ..diagnostics import EXPECTED, swallowed
 
 
+# Keep the Torch create_graph mode visible to custom Function backward calls.
+# Native jt.grad behavior remains unchanged outside a Torch autograd call.
+_backward_create_graph: ContextVar[Optional[bool]] = ContextVar("torch_backward_create_graph", default=None)
+
+
+@contextlib.contextmanager
+def _create_graph_scope(create_graph):
+    token = _backward_create_graph.set(bool(create_graph))
+    try:
+        yield
+    finally:
+        _backward_create_graph.reset(token)
+
+
 def _state():
     return get_install_context(jt).state["autograd_api"]
 
 
 def save_for_backward(self, *tensors):
-    # torch stores a tuple; a single un-tupled call still yields a tuple
-    self._saved_tensors = tuple(tensors)
-    # torch also records each saved tensor's version counter and raises
-    # if the tensor was modified in place before backward reads it.
-    # Without that, an in-place edit between forward and backward is
-    # used silently: the backward computes with the NEW values and
-    # returns a gradient for a forward that never happened.
-    # The native identity includes the holder's Var id and a storage counter
-    # shared by pending and materialized detach/view aliases. A caller edit
-    # therefore invalidates a taped input too, without a Python alias map.
+    origins = getattr(self, "_torch_saved_input_origins", {})
+    self._saved_tensors = tuple(origins.get(id(t), t) for t in tensors)
     self._saved_versions = tuple(
         (tuple(t._saved_storage_version()) if isinstance(t, jt.Var) else None)
-        for t in tensors)
+        for t in self._saved_tensors)
 
 
 def _saved_tensors(self):
@@ -143,7 +153,41 @@ def _call_record_inputs(self, *args, **kw):
     except EXPECTED as exc:
         swallowed("torch/installers/autograd.py _call_record_inputs: ctx.needs_input_grad = tuple(", exc)
         ctx.needs_input_grad = tuple(isinstance(v, jt.Var) for v in args)
-    out = ctx._run_call(*args, **kw)
+    # Torch custom Functions own their backward edge even when forward()
+    # returns input.detach(). Clear the stop-grad bit before Jittor tapes the
+    # output, or DeepSpeed ZeRO-3's backward-hook wrapper loses that edge.
+    wrap_execute = any(ctx.needs_input_grad) and not jt.flags.no_grad
+    if wrap_execute:
+        execute = ctx.execute
+
+        def execute_with_grad(*forward_args, **forward_kw):
+            result = execute(*forward_args, **forward_kw)
+            values = result if isinstance(result, (tuple, list)) else (result,)
+            for value in values:
+                if isinstance(value, jt.Var) and _jittor_dtype_name(
+                        value.dtype).startswith(("float", "bfloat", "complex")):
+                    value.start_grad()
+            return result
+
+        ctx.execute = execute_with_grad
+    ctx._torch_caller_inputs = args
+    try:
+        out = ctx._run_call(*args, **kw)
+    finally:
+        # The temporary closure holds a bound execute(ctx). Leaving it on ctx
+        # forms a Python cycle and prolongs saved device allocations until GC.
+        if wrap_execute:
+            ctx.__dict__.pop("execute", None)
+        ctx.__dict__.pop("_torch_caller_inputs", None)
+    # jittor's Function swaps the saved taped inputs onto the caller's Vars
+    # after forward (so backward stays differentiable, see
+    # `Function._rebind_saved_inputs`); that is not an in-place edit.
+    rebinds = getattr(ctx, "_taped_input_rebinds", None)
+    versions = getattr(ctx, "_saved_versions", None)
+    if rebinds and versions:
+        ctx._saved_versions = tuple(
+            (rebinds.get(v[0], v[0]), *v[1:]) if v is not None else None
+            for v in versions)
     # Capture each forward OUTPUT's (shape, dtype) so the grad bridge can
     # materialize a zeros grad for outputs that don't reach the backward'd
     # scalar (torch's materialize_grads=True; see grad() below).
@@ -184,7 +228,11 @@ def function_grad(self, *grad_outputs):
                     if not any(t in dt for t in ("int", "bool", "uint")):
                         go[i] = jt.zeros(shp, dtype=dt)
             grad_outputs = tuple(go)
-    ret = bw(self, *grad_outputs)
+    requested = _backward_create_graph.get()
+    grad_scope = (contextlib.nullcontext() if requested is None else
+                  (jt.enable_grad() if requested else jt.no_grad()))
+    with grad_scope:
+        ret = bw(self, *grad_outputs)
     shapes = getattr(self, "_fwd_input_shapes", None)
     if shapes is None:
         return ret
@@ -211,6 +259,8 @@ def grad(outputs, inputs, grad_outputs=None, retain_graph=None,
     # via sum(grad_outputs * output), matching torch's vector-Jacobian product.
     outs = _as_list(outputs)
     ins = _as_list(inputs)
+    if any(not o._has_gradient_edge() for o in outs):
+        raise RuntimeError("Tensor does not require grad and does not have a grad_fn")
     if grad_outputs is None:
         # torch: "grad can be implicitly created only for scalar outputs".
         # This used to sum every output element, i.e. silently assume a
@@ -238,7 +288,9 @@ def grad(outputs, inputs, grad_outputs=None, retain_graph=None,
             "materialize_grads=True, but got: allow_unused=False.")
     allow_unused = bool(materialize_grads) if allow_unused is None \
         else bool(allow_unused)
-    gs = list(jt.core.grad_optional(loss, ins, rg))
+    with _create_graph_scope(create_graph):
+        with _backward_callbacks():
+            gs = list(jt.core.grad_optional(loss, ins, rg))
     missing = [i for i, value in enumerate(gs) if value is None]
     if missing and materialize_grads:
         for i in missing:
@@ -284,7 +336,8 @@ def backward(tensors, grad_tensors=None, retain_graph=None,
     gts = None if grad_tensors is None else _as_list(grad_tensors)
     for i, t in enumerate(ts):
         gt = None if gts is None else gts[i]
-        t.backward(gradient=gt, retain_graph=retain_graph)
+        t.backward(gradient=gt, retain_graph=retain_graph,
+                    create_graph=create_graph)
     return None
 
 
@@ -304,7 +357,8 @@ class profile(_profiler.profile):
         if use_cuda or use_device == "cuda":
             activities.add(_profiler.ProfilerActivity.CUDA)
         super().__init__(activities=activities, record_shapes=record_shapes,
-                         profile_memory=profile_memory, enabled=enabled)
+                         profile_memory=profile_memory, with_stack=with_stack,
+                         with_flops=with_flops, enabled=enabled)
 
     @property
     def function_events(self):
@@ -358,7 +412,24 @@ class Function(jt.Function):
     """Torch-style callbacks with native per-call tape and context ownership."""
 
     def execute(self, *args, **kwargs):
-        return type(self).forward(self, *args, **kwargs)
+        callers = self.__dict__.pop("_torch_caller_inputs", ())
+        self._torch_saved_input_origins = {
+            id(taped): caller for taped, caller in zip(args, callers)
+            if isinstance(taped, jt.Var) and isinstance(caller, jt.Var)
+        }
+        try:
+            # Only the custom backward edge is recorded. Input requires_grad
+            # metadata remains available to kernels preparing backward buffers.
+            with jt.no_grad():
+                setup_context = getattr(type(self), "setup_context", None)
+                if setup_context is not None:
+                    result = type(self).forward(*args, **kwargs)
+                    setup_context(self, args, result)
+                    return result
+                return type(self).forward(self, *args, **kwargs)
+        finally:
+            # Retain only explicitly saved tensors, not every call argument.
+            self.__dict__.pop("_torch_saved_input_origins", None)
 
     __call__ = _call_record_inputs
     save_for_backward = save_for_backward
@@ -401,10 +472,35 @@ def kineto_available():
     return False
 
 
+_callback_tasks = threading.local()
+
+
+@contextlib.contextmanager
+def _backward_callbacks():
+    """Drain successful graph-task callbacks after gradients are published."""
+    stack = getattr(_callback_tasks, "stack", None)
+    if stack is None:
+        stack = _callback_tasks.stack = []
+    callbacks: Deque[Callable[[], None]] = deque()
+    stack.append(callbacks)
+    try:
+        yield
+        while callbacks:
+            callbacks.popleft()()
+    finally:
+        stack.pop()
+        callbacks.clear()
+
+
 class _Engine:
     @staticmethod
-    def queue_callback(*args, **kwargs):
-        return None
+    def queue_callback(callback):
+        stack = getattr(_callback_tasks, "stack", ())
+        if not stack:
+            raise RuntimeError("Final callbacks can only be installed during backward pass.")
+        if not callable(callback):
+            raise TypeError("backward callback must be callable")
+        stack[-1].append(callback)
 
 
 class Variable:

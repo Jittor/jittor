@@ -10,7 +10,9 @@
 
 namespace jittor {
 
-template<class T=int64, int N=10>
+// Fixed-capacity vector for per-axis scratch data; the default capacity is
+// the maximum tensor rank.
+template<class T=int64, int N=NanoVector::max_tensor_rank>
 struct StackVector {
     int n;
     T a[N+1];
@@ -18,12 +20,12 @@ struct StackVector {
     inline T& back() { return a[n-1]; }
     inline int size() { return n;}
     inline T* data() { return a;}
-    inline StackVector(int n=0) : n(n) {}
+    inline StackVector(int n=0) : n(n) { ASSERT(n>=0 && n<=N) << n; }
 
     struct Iter {
         const StackVector<T,N>* self;
         int index;
-        inline T operator*() { return self->at(index); }
+        inline T operator*() { return (*self)[index]; }
         inline Iter& operator++() { index++; return *this; }
         inline Iter operator+(int i) { return {self, i+index}; }
         inline bool operator!=(Iter& other) { return index != other.index; }
@@ -32,10 +34,11 @@ struct StackVector {
     inline Iter begin() { return {this, 0}; }
     inline Iter end() { return {this, size()}; }
     inline T& operator[](int i) { return a[i]; }
+    inline const T& operator[](int i) const { return a[i]; }
 
     inline void pop_back() { n--; }
-    inline void push_back(T v) { if (n<N) a[n++] = v; }
-    inline void check() { ASSERT(n<N); }
+    inline void push_back(T v) { ASSERT(n<N) << n; a[n++] = v; }
+    inline void check() { ASSERT(n<=N); }
     inline NanoVector to_nano_vector() {
         check();
         NanoVector nv;

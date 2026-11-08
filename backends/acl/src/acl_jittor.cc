@@ -8,6 +8,14 @@
 #include "acl_op_registry.h"
 #include <aclnnop/aclnn_adaptive_avg_pool2d.h>
 #include <aclnnop/aclnn_adaptive_avg_pool2d_backward.h>
+#include <aclnnop/aclnn_index_copy.h>
+#include <aclnnop/aclnn_upsample_bicubic_2d.h>
+#include <aclnnop/aclnn_prompt_flash_attention_v3.h>
+#include <aclnnop/level2/aclnn_sort.h>
+#include <aclnnop/level2/aclnn_multinomial.h>
+#include <aclnnop/aclnn_grid_sampler2d.h>
+#include <aclnnop/aclnn_topk.h>
+#include <aclnnop/aclnn_linalg_vector_norm.h>
 
 namespace jittor {
 const AclOpRegistry& acl_op_registry() {
@@ -60,6 +68,7 @@ const AclOpRegistry& acl_op_registry() {
         {"Pow", AclOpFunctions::binary(aclnnPowTensorTensorGetWorkspaceSize, aclnnPowTensorTensor)},
         {"Expand", AclOpFunctions::direct(aclnnExpand)},
         {"MatMul", AclOpFunctions::direct(aclnnMatmul)},
+        {"PackedMatMul", AclOpFunctions::direct(aclnnMatmul)},
         {"BatchMatMul", AclOpFunctions::direct(aclnnBatchMatMul)},
         {"ReduceMax", AclOpFunctions::direct(aclnnAmax)},
         {"ReduceMin", AclOpFunctions::direct(aclnnAmin)},
@@ -82,6 +91,7 @@ const AclOpRegistry& acl_op_registry() {
         {"Flip", AclOpFunctions::direct(aclnnFlip)},
         {"Concat", AclOpFunctions::direct(aclnnCat)},
         {"Gather", AclOpFunctions::direct(aclnnGather)},
+        {"IndexCopy", AclOpFunctions::direct(aclnnInplaceIndexCopy)},
         {"Cumsum", AclOpFunctions::direct(aclnnCumsum)},
         {"Index", AclOpFunctions::direct(aclnnIndex)},
         {"Scatter", AclOpFunctions::direct(aclnnScatter)},
@@ -110,6 +120,7 @@ const AclOpRegistry& acl_op_registry() {
         {"Softmax", AclOpFunctions::direct(aclnnSoftmax)},
         {"SoftmaxBackward", AclOpFunctions::direct(aclnnSoftmaxBackward)},
         {"FlashAttention", AclOpFunctions::direct(aclnnFlashAttentionScoreV2)},
+        {"PromptFlashAttention", AclOpFunctions::direct(aclnnPromptFlashAttentionV3)},
         {"FlashAttentionBackward", AclOpFunctions::direct(aclnnFlashAttentionScoreGradV2)},
         {"BatchNorm", AclOpFunctions::direct(aclnnBatchNorm)},
         {"BatchNormBackward", AclOpFunctions::direct(aclnnBatchNormBackward)},
@@ -127,6 +138,8 @@ const AclOpRegistry& acl_op_registry() {
         {"CrossEntropyLossGrad", AclOpFunctions::direct(aclnnCrossEntropyLossGrad)},
         {"All", AclOpFunctions::direct(aclnnAll)},
         {"Any", AclOpFunctions::direct(aclnnAny)},
+        {"Sort", AclOpFunctions::direct(aclnnSort)},
+        {"Multinomial", AclOpFunctions::direct(aclnnMultinomial)},
         {"AdamWList", AclOpFunctions::direct(aclnnApplyAdamWV2)},
         {"FusedSgd", AclOpFunctions::direct(aclnnForeachAddList)},
         {"ClampTensor", AclOpFunctions::direct(aclnnClampTensor)},
@@ -143,6 +156,12 @@ const AclOpRegistry& acl_op_registry() {
         {"Swish", AclOpFunctions::direct(aclnnSwish)},
         {"SwishBackward", AclOpFunctions::direct(aclnnSwishBackward)},
         {"UpsampleNearest2d", AclOpFunctions::direct(aclnnUpsampleNearest2d)},
+        {"UpsampleBicubic2d", AclOpFunctions::direct(aclnnUpsampleBicubic2d)},
+        {"UpsampleBilinear2d", AclOpFunctions::direct(aclnnUpsampleBilinear2d)},
+        {"GatherV2", AclOpFunctions::direct(aclnnGatherV2)},
+        {"GridSampler2D", AclOpFunctions::direct(aclnnGridSampler2D)},
+        {"Topk", AclOpFunctions::direct(aclnnTopk)},
+        {"LinalgVectorNorm", AclOpFunctions::direct(aclnnLinalgVectorNorm)},
         {"UpsampleNearest2dBackward", AclOpFunctions::direct(aclnnUpsampleNearest2dBackward)},
     };
     return entries;

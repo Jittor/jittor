@@ -1,5 +1,7 @@
 """Module-owned Torch neural-network implementations and layer templates."""
 import collections.abc as _collections_abc
+import math as _math
+from numbers import Real as _Real
 import jittor as jt
 from jittor import nn
 import jittor as _jt
@@ -9,6 +11,7 @@ import copy as _copy2
 import types as _types_nn_private
 from ...context import get_install_context
 from ...types import _dtype_to_str
+from jittor._runtime.dispatch import try_dispatch as _try_dispatch
 from ...tensor_state import latest_optimizer
 from ...grad import _clip_grad_norm_device
 from ....diagnostics import EXPECTED, swallowed
@@ -25,6 +28,37 @@ def _adapt_extra(template, registry):
     if not issubclass(template, jt.Module):
         return template
     return get_install_context(registry.target_namespace).state["nn_class_adapter"](template)
+
+def fuse_conv_bn_weights(conv_w, conv_b, bn_rm, bn_rv, bn_eps, bn_w, bn_b, transpose=False):
+    """Fuse inference BatchNorm statistics into convolution parameters."""
+    w_dtype = conv_w.dtype
+    b_dtype = conv_b.dtype if conv_b is not None else w_dtype
+    bias_requires_grad = conv_b.requires_grad if conv_b is not None else False
+    if conv_b is None:
+        conv_b = bn_rm.new_zeros(bn_rm.shape, requires_grad=False)
+    if bn_w is None:
+        bn_w = bn_rm.new_ones(bn_rm.shape)
+    if bn_b is None:
+        bn_b = bn_rm.new_zeros(bn_rm.shape)
+    inv_std = (bn_rv + bn_eps).rsqrt()
+    shape = ([1, -1] if transpose else [-1, 1]) + [1] * (len(conv_w.shape) - 2)
+    weight = (conv_w * (bn_w * inv_std).reshape(shape)).to(dtype=w_dtype)
+    bias = ((conv_b - bn_rm) * inv_std * bn_w + bn_b).to(dtype=b_dtype)
+    parameter = get_install_context(jt).target_namespace.nn.Parameter
+    return parameter(weight, conv_w.requires_grad), parameter(bias, bias_requires_grad)
+
+
+def fuse_conv_bn_eval(conv, bn, transpose=False):
+    if conv.training or bn.training:
+        raise AssertionError("Fusion only for eval!")
+    if bn.running_mean is None or bn.running_var is None:
+        raise AssertionError("BatchNorm running statistics are required")
+    fused = _copy.deepcopy(conv)
+    fused.weight, fused.bias = fuse_conv_bn_weights(
+        fused.weight, fused.bias, bn.running_mean, bn.running_var,
+        bn.eps, bn.weight, bn.bias, transpose)
+    return fused
+
 
 class UninitializedTensorMixin:
     pass
@@ -428,7 +462,12 @@ class ModuleDict(nn.Module):
         if key not in self._keys:
             self._keys.append(key)
     def __getitem__(self, key):
-        return getattr(self, key)
+        try:
+            return getattr(self, key)
+        except AttributeError:
+            # torch's ModuleDict is a mapping: a missing key is a KeyError,
+            # which is also what ItemsView membership expects.
+            raise KeyError(key) from None
     def __delitem__(self, key):
         delattr(self, key)
         if key in self._keys:
@@ -439,6 +478,8 @@ class ModuleDict(nn.Module):
         return len(self._keys)
     def __iter__(self):
         return iter(self._keys)
+    # torch returns the live dict views of ``_modules``: they support set
+    # operations (``keys() & other``) and follow later insertions/deletions.
     def keys(self):
         return _collections_abc.KeysView(self)
     def values(self):
@@ -513,6 +554,29 @@ class RMSNorm(nn.Module):
         # attention off the flash backend. The reduction also covers all of
         # `normalized_shape`, not just the trailing dim.
         name = _dtype_to_str(x.dtype)
+        if (
+            _jt2.flags.no_grad
+            and getattr(_jt2.flags, "use_acl", 0)
+            and name == "float16"
+            and self.weight is not None
+            and _dtype_to_str(self.weight.dtype) == "float16"
+            and len(self.normalized_shape) == 1
+            and self.normalized_shape[0] >= 16
+            and tuple(x.shape[-1:]) == self.normalized_shape
+            and tuple(self.weight.shape) == self.normalized_shape
+            and x._storage_is_contiguous()
+            and self.weight._storage_is_contiguous()
+            and isinstance(self.eps, _Real)
+            and _math.isfinite(float(self.eps))
+            and self.eps > 0
+        ):
+            # Stock RMSNorm multiplies its weight before the final half cast.
+            # The ACL kernel preserves that contract with FP32 statistics.
+            # Keep CUDA's separately rounded RMS kernel and every unverified
+            # boundary with this module's original portable computation.
+            fast = _try_dispatch("nn.rms_norm.inference", x, self.weight, float(self.eps))
+            if fast is not None:
+                return fast
         wide = "float32" if name in ("float16", "bfloat16") else name
         ndn = len(self.normalized_shape)
         dims = tuple(range(x.ndim - ndn, x.ndim))

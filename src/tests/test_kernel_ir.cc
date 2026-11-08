@@ -471,4 +471,51 @@ void func() {
     CHECK(source.find(directive, first+1) != string::npos) << source;
 }
 
+// A custom operator's jit_run body is caller text: `jt.compile_custom_op` takes
+// it as a public argument, and the JIT half of that source is compiled only
+// after this parser has read it. Every malformed construct below must
+// therefore raise UserError -- a catchable caller error carrying a sentence
+// about the construct -- and never InternalInvariantError asking the author to
+// report a framework bug.
+JIT_TEST(kernel_ir_source_errors_are_user_errors) {
+    struct Case {
+        const char* source;
+        const char* sentence;
+    };
+    const Case cases[] = {
+        {R"(int x = "abc;)", "unterminated C++ quoted literal"},
+        {R"(_Pragma omp)", "_Pragma in JIT source must be followed by a parenthesized string"},
+        {R"(_Pragma("omp")", "unmatched _Pragma parentheses"},
+        {R"(for (int i=1; i<4; i++) { x[i]=0; })", "not start at 0"},
+        {R"(for (int i=0; j<4; i++) { x[i]=0; })", "condition does not use"},
+        {R"(for (int i=0; i<4; j++) { x[i]=0; })", "increment does not update"},
+        {R"(for (int i=0; i<4; i+=1) { x[i]=0; })", "not this loop"},
+        {R"(for (int i=0; i<4 i++) { x[i]=0; })", "must have two semicolons"},
+        {"void f() {\n#endif\nint x=1;\n}", "unsupported preprocessor line"},
+        {"int x = 1));", "unbalanced parentheses or braces"},
+        {"if (1 }", "the for/if header in JIT source has no closing"},
+        {"int x = }", "unexpected '}' without a matching '{'"},
+        {"int x = foo) { }", "brace-delimited statement as a function definition"},
+        {"while (i<4) { i++; }", "as a function definition"},
+        {"void f() { int x=1; _Pragma(\"omp\")}", "_Pragma in JIT source must be followed by a statement"},
+    };
+    for (const auto& c : cases) {
+        bool caught_user = false;
+        try {
+            KernelIR ir(c.source);
+            (void)ir;
+            CHECK(false) << "expected a user error for:" << c.source;
+        } catch (const UserError& e) {
+            caught_user = true;
+            CHECK(string(e.what()).find(c.sentence) != string::npos)
+                << c.source << "\nexpected sentence:" << c.sentence
+                << "\ngot:" << e.what();
+        } catch (const InternalInvariantError& e) {
+            CHECK(false) << "parse failure stayed an internal invariant:"
+                << c.source << e.what();
+        }
+        CHECK(caught_user) << c.source;
+    }
+}
+
 } // jittor

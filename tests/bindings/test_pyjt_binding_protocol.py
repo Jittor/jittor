@@ -410,7 +410,7 @@ class TestNanoStringOverloadMatching(unittest.TestCase):
 
         with self.assertRaises(Exception) as ctx:
             jt.ops.unary(self.x, not_a_dtype)
-        self.assertIn("Wrong inputs arguments", str(ctx.exception))
+        self.assertIn("match none of its signatures", str(ctx.exception))
 
     def test_object_with_a_type_attribute_is_not_a_dtype(self):
         class HasType:
@@ -418,12 +418,18 @@ class TestNanoStringOverloadMatching(unittest.TestCase):
 
         with self.assertRaises(Exception) as ctx:
             jt.ops.unary(self.x, HasType())
-        self.assertIn("Wrong inputs arguments", str(ctx.exception))
+        self.assertIn("match none of its signatures", str(ctx.exception))
 
     def test_unknown_dtype_string_reports_the_argument(self):
-        with self.assertRaises(Exception) as ctx:
+        """The value, a Python-spelled signature, and no generated-file noise."""
+        with self.assertRaises(TypeError) as ctx:
             jt.ops.unary(self.x, "not_a_real_dtype")
-        self.assertIn("Wrong inputs arguments", str(ctx.exception))
+        text = str(ctx.exception)
+        self.assertIn("match none of its signatures", text)
+        self.assertIn("str 'not_a_real_dtype'", text)
+        self.assertIn("unary(x: Var, op: dtype|str)", text)
+        for noise in ("Not a valid call", "VarHolder*", "self\t= module", "pyjt_"):
+            self.assertNotIn(noise, text)
 
     def test_getattr_is_not_run_on_arbitrary_objects(self):
         # ``PyObject_HasAttrString(obj, "type")`` ran a user ``__getattr__`` on

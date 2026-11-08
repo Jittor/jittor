@@ -35,6 +35,7 @@ register_library_resources("cub", home="")
 use_mkl = build_flag("use_mkl", True, os.environ)
 use_cutt = build_flag("use_cutt", True, os.environ)
 use_nccl = build_flag("use_nccl", True, os.environ)
+use_blas = build_flag("use_blas", True, os.environ)
 
 def search_file(dirs, name, prefer_version=()):
     if os.name == 'nt':
@@ -140,10 +141,46 @@ from .onednn import (  # noqa: F401 - compatibility aliases are public here
 from . import onednn as _onednn_provider
 
 
+def _mkl_root():
+    return os.path.join(jit_utils.home(), ".cache", "jittor", "mkl")
+
+
 def install_mkl(root_folder):
     return _onednn_provider.install_source(
         root_folder, manifest.mkl_asset(), manifest.ONEDNN_VERSION, cc_path,
         download_url_to_local, safe_tar_extractall, allow_build=build_is_allowed())
+
+
+# Settled once per process: the policy is consulted on every library lookup
+# that misses the registry's memo, and a disabled library is never memoized.
+_mkl_obtainable_answer = None
+
+
+def _mkl_obtainable():
+    """Whether oneDNN can be had at all: given explicitly, built, or buildable.
+
+    ``use_mkl`` is on by default, and the default install builds oneDNN from
+    source on first use, which needs cmake. Without cmake (and without an
+    existing build or explicit paths) that build cannot even start, so the
+    library is reported as unavailable -- the CPU products then take the
+    generic kernels -- instead of failing every first CPU matmul. A build that
+    starts and fails still raises; ``JITTOR_NO_BUILD=1`` keeps its own error.
+    """
+    global _mkl_obtainable_answer
+    if _mkl_obtainable_answer is None:
+        _mkl_obtainable_answer = (
+            bool(build_env("mkl_include_path", environ=os.environ))
+            or bool(build_env("mkl_lib_path", environ=os.environ))
+            or not build_is_allowed()
+            or _onednn_provider.source_build_available(
+                _mkl_root(), manifest.mkl_asset(), manifest.ONEDNN_VERSION, cc_path))
+        if not _mkl_obtainable_answer:
+            LOG.w("use_mkl is on, but oneDNN v3 is not installed and cannot be built "
+                  "here: building it requires cmake, which is not on PATH. CPU matmul "
+                  "and convolution use Jittor's generic kernels. Install cmake, or set "
+                  "JT_BUILD_MKL_INCLUDE_PATH/JT_BUILD_MKL_LIB_PATH, to enable oneDNN; "
+                  "set use_mkl=0 to silence this warning.")
+    return _mkl_obtainable_answer
 
 
 def check_mkl_usable(dirname):
@@ -154,7 +191,7 @@ def check_mkl_usable(dirname):
 
 
 def _mkl_library_enabled():
-    return bool(use_mkl) and build_flag("use_mkl", True, os.environ)
+    return bool(use_mkl) and build_flag("use_mkl", True, os.environ) and _mkl_obtainable()
 
 
 def setup_mkl():
@@ -168,8 +205,7 @@ def setup_mkl():
         include = os.path.abspath(include)
         library_file, linker = _onednn_provider.explicit_library(library)
     else:
-        root = os.path.join(jit_utils.home(), ".cache", "jittor", "mkl")
-        prefix = install_mkl(root)
+        prefix = install_mkl(_mkl_root())
         include = os.path.join(prefix, "include")
         library_file, linker = mkl_library_layout(prefix)
     _onednn_provider.check_usable(library_file, include)
@@ -186,6 +222,119 @@ def setup_mkl():
     mkl = compile_custom_ops(mkl_op_files, extra_flags=extra_flags,
                              backend="cpu", return_module=True)
     register_library("mkl", mkl)
+
+
+#: Symbol spellings a CBLAS exports ``cgemm`` under, and whether that spelling
+#: means 64-bit integers. numpy's wheels bundle an ILP64 OpenBLAS with a
+#: ``64_`` suffix (numpy 1.x) or a ``scipy_`` prefix as well (numpy 2.x); a
+#: plain OpenBLAS or MKL's ``mkl_rt`` exports the unsuffixed LP64 name.
+_CBLAS_SPELLINGS = (("", "64_", True), ("scipy_", "64_", True), ("scipy_", "", False),
+                    ("", "", False))
+
+
+def _blas_candidates():
+    """CBLAS libraries to try, most specific first.
+
+    ``JT_BUILD_BLAS_LIB_PATH`` if set -- and then only it -- otherwise the
+    OpenBLAS numpy ships inside its wheel, which every jittor install already
+    has and which measured on par with torch's MKL for complex GEMM, then the
+    BLAS of the active environment.
+    """
+    import glob
+    explicit = build_env("blas_lib_path", environ=os.environ)
+    if explicit:
+        return [os.path.abspath(explicit)]
+    import numpy
+    numpy_dir = os.path.dirname(numpy.__file__)
+    site = os.path.dirname(numpy_dir)
+    found = []
+    for pattern in (os.path.join(site, "numpy.libs", "*openblas*.so*"),
+                    os.path.join(numpy_dir, ".libs", "*openblas*.so*"),
+                    os.path.join(numpy_dir, ".dylibs", "*openblas*.dylib"),
+                    os.path.join(site, "scipy_openblas*", "lib", "*openblas*.so*"),
+                    os.path.join(sys.prefix, "lib", "libopenblas*.so*"),
+                    os.path.join(sys.prefix, "lib", "libmkl_rt.so*"),
+                    os.path.join(sys.prefix, "lib", "libcblas.so*")):
+        found.extend(sorted(glob.glob(pattern)))
+    return found
+
+
+def find_blas():
+    """``(found, reasons)``: ``found`` is ``(path, gemms, ilp64, threads)`` of
+    the CBLAS to link -- ``gemms`` the ``sgemm, dgemm, cgemm, zgemm`` symbol
+    names -- or ``None``; ``reasons`` says why each
+    candidate before it was declined. ``threads`` is the library's
+    ``(set_num_threads, get_num_threads)`` pair when it is an OpenBLAS, which
+    lets the relays run it on Jittor's own OpenMP team (``blas_runtime.cc``),
+    else ``None``.
+
+    The symbols are looked up in the library itself rather than assumed, so a
+    numpy that renames its OpenBLAS is declined, not linked against a name that
+    is not there. An explicit library that exports unsuffixed names is LP64
+    unless ``JT_BUILD_BLAS_ILP64`` says otherwise -- the names alone cannot
+    tell the two apart.
+    """
+    import ctypes
+    reasons = []
+    for path in _blas_candidates():
+        try:
+            library = ctypes.CDLL(path)
+        except OSError as error:
+            reasons.append(f"{path}: {error}")
+            continue
+        for prefix, suffix, ilp64 in _CBLAS_SPELLINGS:
+            gemms = tuple(f"{prefix}cblas_{t}gemm{suffix}" for t in "sdcz")
+            if all(hasattr(library, gemm) for gemm in gemms):
+                if not suffix:
+                    ilp64 = build_flag("blas_ilp64", False, os.environ)
+                threads = None
+                stem = "scipy_openblas" if prefix else "openblas"
+                setter = f"{stem}_set_num_threads{suffix}"
+                getter = f"{stem}_get_num_threads{suffix}"
+                if hasattr(library, setter) and hasattr(library, getter):
+                    threads = (setter, getter)
+                return (path, gemms, ilp64, threads), reasons
+        reasons.append(f"{path}: exports no cblas_sgemm/dgemm/cgemm/zgemm")
+    return None, reasons
+
+
+def _blas_library_enabled():
+    return bool(use_blas) and build_flag("use_blas", True, os.environ)
+
+
+def setup_blas():
+    """Compile the CPU GEMM relays against a CBLAS and register them.
+
+    Without one the complex and float64 products -- and float32 ones when
+    oneDNN is absent too -- keep the generic broadcast-multiply-reduce path,
+    which is correct but two orders of magnitude slower; say so once.
+    """
+    if not _blas_library_enabled():
+        return
+    found, reasons = find_blas()
+    if found is None:
+        detail = "; ".join(reasons) or "no candidate library"
+        LOG.w("use_blas is on, but no CBLAS with s/d/c/z GEMM was found (" + detail + "). "
+              "CPU matmul uses Jittor's generic kernels. Set "
+              "JT_BUILD_BLAS_LIB_PATH to an OpenBLAS or MKL library, or use_blas=0 "
+              "to silence this warning.")
+        return
+    path, gemms, ilp64, threads = found
+    library_dir = os.path.dirname(path)
+    extra_flags = (' -fopenmp ' + "".join(f'-DJT_BLAS_{t}GEMM={gemm} ' for t, gemm in zip("SDCZ", gemms))
+                   + f'-DJT_BLAS_INT={"int64_t" if ilp64 else "int"} '
+                   f'"{path}" -Wl,-rpath,"{library_dir}" ')
+    if threads is not None:
+        extra_flags += f' -DJT_BLAS_SET_THREADS={threads[0]} -DJT_BLAS_GET_THREADS={threads[1]} '
+
+    blas_op_dir = os.path.join(backend_root(jittor_path, "cpu"), "libraries", "blas")
+    blas_op_files = [os.path.join(blas_op_dir, name) for name in sorted(os.listdir(blas_op_dir))
+                     if name.endswith((".cc", ".h"))]
+    blas = compile_custom_ops(blas_op_files, extra_flags=extra_flags,
+                              backend="cpu", return_module=True)
+    register_library_resources("blas", path=path, cgemm=gemms[2], ilp64=ilp64,
+                               shares_jittor_threads=threads is not None)
+    register_library("blas", blas)
 
 
 def install_cub(root_folder):
@@ -282,19 +431,17 @@ def setup_cuda_extern():
         try:
             setup_cuda_lib(lib_name, extra_flags=link_cuda_extern)
         except Exception as e:
-            msg = f"CUDA found but {lib_name} is not loaded:\n"
+            msg = f"CUDA found but {lib_name} could not be loaded: {e}"
             if lib_name == "cudnn":
-                msg += """Develop version of CUDNN not found,
-please refer to CUDA offical tar file installation:
-https://docs.nvidia.com/deeplearning/cudnn/install-guide/index.html#installlinux-tar"""
-            if lib_name == "cusparse":
-                msg += """CUSPARSE library is not loaded,
-please ensure it is installed along with the CUDA toolkit."""
-            if platform.machine() in ["x86_64", "AMD64"]:
-                msg += f"""
-or you can let jittor install cuda and cudnn for you:
->>> python3.{sys.version_info.minor} -m jittor_utils.install_cuda
-"""
+                msg += ("\nThe cuDNN headers and library were not found. Install "
+                        "them with `pip install nvidia-cudnn-cu12` (included in "
+                        "`pip install jittor[cuda12]`), or follow "
+                        "https://docs.nvidia.com/deeplearning/cudnn/install-guide/index.html. "
+                        "To run without cuDNN, set JT_BUILD_CONV_OPT=1: convolutions "
+                        "then use Jittor's own kernels.")
+            else:
+                msg += (f"\n{lib_name} ships with the CUDA toolkit; check that "
+                        "the toolkit that nvcc belongs to is complete.")
             raise RuntimeError(msg) from e
 
 def _cuda_library_sources(lib_name):
@@ -330,6 +477,10 @@ def cuda_library_search_dirs(component_dirs, cuda_bin, cuda_lib,
     ]
 
 
+#: The header a CUDA library is found by, where it is not ``<name>.h``.
+_CUDA_LIBRARY_HEADERS = {"cusolver": "cusolverDn.h"}
+
+
 def setup_cuda_lib(lib_name, link=True, extra_flags=""):
     arch_key = "x86_64"
     if platform.machine() not in ["x86_64", "AMD64"]:
@@ -349,14 +500,16 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
         extra_lib_path = os.path.abspath(os.path.join(cuda_lib, "..", f"targets/{arch_key}-linux/lib"))
         component_include_dirs = []
         component_lib_dirs = []
-        if cuda_wheel_stack:
+        component_wheel = cuda_wheel_stack and cuda_wheel_stack.component_dir(lib_name)
+        if component_wheel:
             component_include_dirs = cuda_wheel_stack.include_dirs(lib_name)
             component_lib_dirs = cuda_wheel_stack.lib_dirs(lib_name)
         include_search_dirs = cuda_include_search_dirs(
             component_include_dirs, cuda_include, extra_include_path)
         library_search_dirs = cuda_library_search_dirs(
             component_lib_dirs, cuda_bin, cuda_lib, extra_lib_path, arch_key)
-        cuda_include_name = search_file(include_search_dirs, lib_name+".h")
+        cuda_include_name = search_file(include_search_dirs,
+                                        _CUDA_LIBRARY_HEADERS.get(lib_name, lib_name + ".h"))
         extra_flags = f' -I"{os.path.dirname(cuda_include_name)}" ' + extra_flags
         # cuda11 prefer cudnn 8
         nvcc_version = get_int_version(nvcc_path)
@@ -366,7 +519,7 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
         if nvcc_version[0] == 11:
             prefer_version = ("8",)
         culib_path = search_file(library_search_dirs, f"lib{lib_name}.so", prefer_version)
-        if cuda_wheel_stack:
+        if component_wheel:
             preload_cuda_library(lib_name, required=True)
 
         if lib_name == "cublas" and nvcc_version[0] >= 10:
@@ -374,7 +527,7 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
             try:
                 cublas_lt_lib_path = search_file(library_search_dirs, "libcublasLt.so", nvcc_version)
                 ctypes.CDLL(cublas_lt_lib_path, dlopen_flags)
-            except:
+            except (RuntimeError, OSError):
                 # some aarch64 os, such as uos with FT2000 cpu,
                 # it's cuda 10 doesn't have libcublasLt.so
                 pass
@@ -391,13 +544,13 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
             # cuDNN wheels contain only versioned split libraries. Load them
             # before the public library so RNN and convolution symbols are
             # available without relying on LD_LIBRARY_PATH.
-            if nvcc_version >= (11,0,0) and not cuda_wheel_stack:
+            if nvcc_version >= (11,0,0) and not component_wheel:
                 prefer = (str(cudnn_major),) if cudnn_major else ()
                 for library in cudnn_split_libraries(cudnn_major):
                     ex_cudnn_path = search_file(library_search_dirs, library, prefer)
                     ctypes.CDLL(ex_cudnn_path, dlopen_flags)
 
-        if not cuda_wheel_stack:
+        if not component_wheel:
             ctypes.CDLL(culib_path, dlopen_flags)
         link_flags = cuda_library_link_flags(lib_name, culib_path)
         # print("link_flags", link_flags, culib_path)
@@ -406,8 +559,8 @@ def setup_cuda_lib(lib_name, link=True, extra_flags=""):
             try:
                 cusparse_spmv_path = search_file(library_search_dirs, "libcusparse.so")
                 ctypes.CDLL(cusparse_spmv_path, dlopen_flags)
-            except:
-                LOG.w("Failed to load cusparse-specific shared libraries.")
+            except (RuntimeError, OSError) as error:
+                LOG.w(f"Failed to load cusparse-specific shared libraries: {error}")
 
     # find all source files
     culib_src_files = _cuda_library_sources(lib_name)
@@ -682,6 +835,11 @@ def _init_nccl_from_store(nccl_module, store=None):
     description = "the provided Store"
     try:
         if store is None:
+            from jittor.distributed.store import external_launcher_store
+            store = external_launcher_store(timeout)
+            if store is not None:
+                description = 'the external launcher TCPStore'
+        if store is None:
             address = os.environ.get("MASTER_ADDR", "").strip()
             port = os.environ.get("MASTER_PORT", "").strip()
             rootinfo = os.environ.get("JT_NCCL_ROOTINFO_FILE", "").strip()
@@ -854,19 +1012,21 @@ def setup_nccl(store=None):
     nccl_include_path = build_env("nccl_include_path", environ=os.environ)
     nccl_lib_path = build_env("nccl_lib_path", environ=os.environ)
     nccl_lib_name = None
+    nccl_from_wheel = False
 
     if nccl_lib_path is None or nccl_include_path is None:
-        if cuda_wheel_stack:
+        if cuda_wheel_stack and cuda_wheel_stack.component_dir("nccl"):
             nccl_include_path = cuda_wheel_stack.include_dirs("nccl")[0]
             nccl_lib_path = cuda_wheel_stack.lib_dirs("nccl")[0]
             nccl_lib_name = cuda_wheel_stack.find_library("nccl")
+            nccl_from_wheel = True
         else:
             found = find_system_nccl()
             if found:
                 nccl_include_path, nccl_lib_path, nccl_lib_name = found
                 LOG.v(f"using the system NCCL at {nccl_lib_name}")
     if nccl_lib_path is None or nccl_include_path is None:
-        if not cuda_wheel_stack:
+        if not (cuda_wheel_stack and cuda_wheel_stack.component_dir("nccl")):
             LOG.v("setup nccl...")
             # nccl_path decouple with cc_path
             nccl_path = os.path.join(jit_utils.home(), ".cache", "jittor", "nccl")
@@ -894,8 +1054,9 @@ def setup_nccl(store=None):
     LOG.v(f"nccl_include_path: {nccl_include_path}")
     LOG.v(f"nccl_lib_path: {nccl_lib_path}")
     LOG.v(f"nccl_lib_name: {nccl_lib_name}")
-    # We do not link manualy, link in custom ops
-    if cuda_wheel_stack:
+    # Load the same NCCL selected for headers and linking. An installed
+    # wheel must not override an explicit include/lib pair at runtime.
+    if nccl_from_wheel:
         preload_cuda_library("nccl", required=True)
     else:
         ctypes.CDLL(nccl_lib_name, dlopen_flags)
@@ -1396,12 +1557,31 @@ def _load_cuda_library(name):
     setup_cuda_lib(name, extra_flags=link_flags)
 
 
+def setup_cusolver():
+    """The dense cuSOLVER ops behind CUDA ``linalg.solve``/``inv``/``qr``.
+
+    Loaded on first use, not with the libraries ``setup_cuda_extern`` loads:
+    only linear algebra needs it. Declined, not failed, where cuSOLVER is not
+    part of the toolchain: the NVIDIA wheel stack (``cuda_wheel``) does not
+    carry it, and Corex is not known to. The linalg frontend then keeps its
+    CuPy callbacks.
+    """
+    if not has_cuda or not is_cuda or has_corex:
+        return
+    if cuda_wheel_stack:
+        LOG.v("cuSOLVER is not part of the CUDA wheel stack; linalg keeps its CuPy path")
+        return
+    _load_cuda_library("cusolver")
+
+
 for _library_name in ("cublas", "cudnn", "curand", "cufft", "cusparse"):
     register_library_loader(
         _library_name, lambda name=_library_name: _load_cuda_library(name))
+register_library_loader("cusolver", lambda: setup_cusolver())
 register_library_loader("cub", lambda: setup_cub() if has_cuda and (is_cuda or has_corex) else None)
 register_library_loader("cutt", lambda: setup_cutt())
 register_library_loader("mkl", lambda: setup_mkl(), enabled=_mkl_library_enabled)
+register_library_loader("blas", lambda: setup_blas(), enabled=_blas_library_enabled)
 register_library_loader("mpi", lambda: setup_mpi())
 register_library_loader("nccl", lambda: setup_nccl())
 register_library_loader(

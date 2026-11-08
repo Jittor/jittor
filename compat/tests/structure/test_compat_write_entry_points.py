@@ -1,10 +1,10 @@
 """Every process-global write in ``jittor/compat`` is classified, or the run fails.
 
-7.05 asks for an install that is either fully reversible or an explicit hard
-failure. The obstacle was never the ledger -- it was not knowing what still had
-to go into it. Eleven waves of the board recorded "some other installer's write
-entry points remain", each time from a fresh grep, each time with a different
-answer, because a grep says what matched and not what is left.
+The install contract is that an install is either fully reversible or an
+explicit hard failure. The obstacle was never the ledger -- it was not knowing
+what still had to go into it. Status notes kept recording "some other
+installer's write entry points remain", each time from a fresh grep, each time
+with a different answer, because a grep says what matched and not what is left.
 
 So the inventory lives here as a closed set. The scanner finds every statement in
 ``compat`` that writes ``os.environ``, ``sys.modules``,
@@ -272,6 +272,10 @@ CLASSIFIED = {
     (C + "shim/runtime.py", "_activate_once", "sys.modules"): "ledger",
     (C + "torch/installers/core.py", "install_misc", "sys.modules"): "ledger",
     (C + "shim/runtime.py", "_publish_torch_module", "sys.modules"): "ledger",
+    # The in-process shim's process-local torch distribution: publish is
+    # recorded as the activation transaction's undo, which is release.
+    (C + "shim/torch_metadata.py", "publish", "sys.meta_path"): "ledger",
+    (C + "shim/torch_metadata.py", "release", "sys.meta_path"): "ledger",
 
     # ---- runtime requests, not installation steps --------------------------
     # torch.backends.cuda.matmul.allow_tf32 = True and friends.
@@ -285,7 +289,7 @@ CLASSIFIED = {
     # delegate to a jt.flag_scope instead of writing the flag themselves.
     (C + "torch/amp.py", "_refresh_amp_register", "flags"): "runtime",
     # node_order is set and restored inside one optimizer step.
-    (C + "torch/optimizer_api.py", "_adam_step", "flags"): "runtime",
+    (C + "torch/optimizer_adam.py", "_adam_step", "flags"): "runtime",
     (C + "torch/optimizer_api.py", "_step_with_closure", "flags"): "runtime",
     (C + "torch/optimizer_api.py", "_torch_post_step", "flags"): "runtime",
     (C + "torch/serialization/portable.py", "_apply_map_location", "flags"): "runtime",

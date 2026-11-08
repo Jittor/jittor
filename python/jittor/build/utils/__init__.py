@@ -5,6 +5,7 @@
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 from multiprocessing import Pool
+from multiprocessing.pool import RemoteTraceback  # type: ignore[attr-defined]  # missing from typeshed
 import builtins
 import multiprocessing as mp
 import subprocess as sp
@@ -248,7 +249,9 @@ class Logwrapper:
         return cc.log_capture_read()
 
     def _log(self, level, verbose, *msg):
-        if self.log_silent or verbose > self.log_v:
+        # Same rule as send_log in log.cc: log_silent hides info and warnings,
+        # never an error -- some errors are followed by sys.exit.
+        if (self.log_silent and level in "iw") or verbose > self.log_v:
             return
         text = ""
         for m in msg:
@@ -256,8 +259,12 @@ class Logwrapper:
                 m = m()
             text += str(m)
         f = inspect.currentframe()
-        fileline = inspect.getframeinfo(f.f_back.f_back)
-        fileline = f"{os.path.basename(fileline.filename)}:{fileline.lineno}"
+        caller = f.f_back.f_back if f is not None and f.f_back is not None else None
+        if caller is not None:
+            info = inspect.getframeinfo(caller)
+            fileline = f"{os.path.basename(info.filename)}:{info.lineno}"
+        else:
+            fileline = "?"
         if cc and hasattr(cc, "log"):
             cc.log(fileline, level, verbose, text)
         else:
@@ -282,14 +289,33 @@ class DelayProgress:
         self.n = n
         self.time = time.time()
 
+    # Without a terminal to redraw in, every `\r` update is kept: a log or CI
+    # transcript of one core build carried 242 of them. There it is a line at
+    # most this often, and one at the end.
+    _PIPE_INTERVAL = 10.0
+
     def update(self, i):
         if LOG.log_silent:
             return
         used = time.time() - self.time
         if used > 2:
             eta = used / (i+1) * (self.n-i-1)
-            print(f"{self.msg}({i+1}/{self.n}) used: {used:.3f}s eta: {eta:.3f}s", end='\r')
-            if i==self.n-1: print()
+            line = f"{self.msg}({i+1}/{self.n}) used: {used:.3f}s eta: {eta:.3f}s"
+            last = i == self.n-1
+            if _redraws_in_place():
+                print(line, end='\r')
+                if last: print()
+            elif last or used - getattr(self, "_printed", 0.0) >= self._PIPE_INTERVAL:
+                self._printed = used
+                print(line)
+
+
+def _redraws_in_place():
+    """Whether stdout shows a `\r` progress line as one line redrawn."""
+    try:
+        return sys.stdout.isatty() or in_ipynb()
+    except (AttributeError, ValueError):
+        return False
 
 # check is in jupyter notebook
 def in_ipynb():
@@ -391,7 +417,7 @@ def run_cmd(cmd, cwd=None, err_msg=None, print_error=True, env=None):
         r = sp.run(cmd, shell=True, stdout=sp.PIPE, stderr=sp.STDOUT, env=env)
     try:
         s = r.stdout.decode('utf8')
-    except:
+    except UnicodeDecodeError:
         s = r.stdout.decode('gbk')
     if r.returncode != 0:
         if print_error:
@@ -409,7 +435,14 @@ def do_compile(args):
     cmd, cache_path, jittor_path = args
     try_import_jit_utils_core(True)
     if cc:
-        return cc.cache_compile(cmd, cache_path, jittor_path)
+        try:
+            return cc.cache_compile(cmd, cache_path, jittor_path)
+        except RuntimeError as error:
+            # The pool pickles the exception back to the parent, and pickling
+            # jittor.JittorError looks it up as `jittor.JittorError`: in a
+            # worker that is half way through `import jittor`, or (forkserver)
+            # never imported it and would start to, under the parent's lock.
+            raise RuntimeError(str(error)) from None
     else:
         run_cmd(cmd)
         return True
@@ -500,6 +533,19 @@ def _main_module_not_reexecuted():
         main.__spec__ = spec
 
 
+def compile_pool_size(mem_bytes, cpus):
+    """Compiler processes for `run_cmds`: one per 3 GiB of memory, at most 16,
+    and no more than the CPUs this process may run on.
+
+    The CPU bound is the affinity's, as the native parallel compiler's is
+    (`parallel_compile_worker_count`). Without it a worker pinned to one CPU
+    started 16 compilers that all shared that CPU, each holding a compiler's
+    memory and none finishing sooner.
+    """
+    by_memory = min(16, max(int(mem_bytes / (1024.**3) // 3), 1))
+    return min(by_memory, max(int(cpus), 1)) if cpus else by_memory
+
+
 def run_cmds(cmds, cache_path, jittor_path, msg="run_cmds"):
     global pool_size, p
     # Under MPI (mpirun), the OpenMPI runtime installs atfork handlers and a
@@ -514,15 +560,17 @@ def run_cmds(cmds, cache_path, jittor_path, msg="run_cmds"):
             do_compile([cmd, cache_path, jittor_path])
             dp.update(i)
         return
-    bk = mp.current_process()._config.get('daemon')
-    mp.current_process()._config['daemon'] = False
+    # `_config` is multiprocessing's private process state: the daemon flag is
+    # lifted so this (possibly daemonic) process may start the compile pool.
+    process: Any = mp.current_process()
+    bk = process._config.get('daemon')
+    process._config['daemon'] = False
     with _main_module_not_reexecuted():
         if pool_size == 0:
             try:
                 mem_bytes = get_total_mem()
-                mem_gib = mem_bytes/(1024.**3)
-                pool_size = min(16,max(int(mem_gib // 3), 1))
-                LOG.i(f"Total mem: {mem_gib:.2f}GB, using {pool_size} procs for compiling.")
+                pool_size = compile_pool_size(mem_bytes, len(_available_cpu_ids()))
+                LOG.i(f"Total mem: {mem_bytes/(1024.**3):.2f}GB, using {pool_size} procs for compiling.")
             except ValueError:
                 # On macOS, python with version lower than 3.9 do not support SC_PHYS_PAGES.
                 # Use hard coded pool size instead.
@@ -538,8 +586,15 @@ def run_cmds(cmds, cache_path, jittor_path, msg="run_cmds"):
             dp = DelayProgress(msg, n)
             for i,_ in enumerate(p.imap_unordered(do_compile, cmds)):
                 dp.update(i)
+        except Exception as error:
+            # The pool chains the worker's traceback as the cause, and it ends
+            # in this same message: the compiler diagnostic was printed twice.
+            if isinstance(error.__cause__, RemoteTraceback):
+                error.__cause__ = None
+                error.__suppress_context__ = True
+            raise
         finally:
-            mp.current_process()._config['daemon'] = bk
+            process._config['daemon'] = bk
 
 if os.name=='nt' and getattr(mp.current_process(), '_inheriting', False):
     # when windows spawn multiprocess, disable sub-subprocess
@@ -601,7 +656,7 @@ def get_str_hash(s):
 def get_cpu_version():
     v = platform.processor()
     try:
-        if os.name == 'nt':
+        if sys.platform == "win32":
             import winreg
             key_name = r"Hardware\Description\System\CentralProcessor\0"
             field_name = "ProcessorNameString"
@@ -619,7 +674,7 @@ def get_cpu_version():
                     if cpu_line.startswith("model name"):
                         v = cpu_line.split(':')[-1].strip()
                         break
-    except:
+    except OSError:
         pass
     return v
 
@@ -797,33 +852,6 @@ def check_cache_disk_space(path, minimum_mb=None):
 lock_path: Optional[str] = None
 
 
-def _git_head_file(path):
-    """The file whose change can change the branch name, or None.
-
-    In a linked worktree ``.git`` is a *file* naming the real git directory,
-    and HEAD lives there, not next to the sources.
-    """
-    path = os.path.abspath(path)
-    while True:
-        candidate = os.path.join(path, ".git")
-        if os.path.isdir(candidate):
-            return os.path.join(candidate, "HEAD")
-        if os.path.isfile(candidate):
-            try:
-                with open(candidate) as f:
-                    line = f.readline().strip()
-            except OSError:
-                return None
-            if not line.startswith("gitdir:"):
-                return None
-            gitdir = line[len("gitdir:"):].strip()
-            if not os.path.isabs(gitdir):
-                gitdir = os.path.join(path, gitdir)
-            return os.path.join(gitdir, "HEAD")
-        parent = os.path.dirname(path)
-        if parent == path:
-            return None
-        path = parent
 
 
 def cache_root():
@@ -940,6 +968,33 @@ def _read_target_arch(cc):
     raise RuntimeError("could not read the -march=native expansion from " + cc)
 
 
+def _cpu_fingerprint():
+    """What identifies this CPU cheaply enough to check on every import.
+
+    The ``-march=native`` expansion is memoised in the home's probe.json, and a
+    home is routinely shared between machines -- a cluster's shared filesystem,
+    a CI build cache restored onto whichever runner picked the job up. Keyed on
+    the compiler alone, the first machine's answer was handed to every other
+    one: they all landed in its cache directory and loaded products built for
+    its instruction set, which is SIGILL on a CPU without (say) AVX-512.
+    """
+    model = flags = ""
+    try:
+        with open("/proc/cpuinfo", "r") as f:
+            for line in f:
+                if not model and line.startswith("model name"):
+                    model = line.split(":", 1)[-1].strip()
+                elif not flags and line.startswith("flags"):
+                    flags = line.split(":", 1)[-1].strip()
+                if model and flags:
+                    break
+    except OSError:
+        pass
+    import hashlib
+    text = (model or get_cpu_version()) + "\n" + flags
+    return hashlib.sha256(text.encode("utf8")).hexdigest()[:16]
+
+
 def target_arch_key(cc=None):
     """A short, stable directory component for this machine's instruction set.
 
@@ -959,7 +1014,8 @@ def target_arch_key(cc=None):
         # on the same key.
         expansion = probe.cached("target_arch:c-locale:" + resolve_exe(cc),
                                  [resolve_exe(cc)],
-                                 lambda: _read_target_arch(cc))
+                                 lambda: _read_target_arch(cc),
+                                 extra=_cpu_fingerprint())
     except Exception as error:
         LOG.v(f"could not read the -march=native expansion: {error}")
         return short(get_cpu_version())
@@ -1114,10 +1170,28 @@ def find_exe(name, check_version=True, silent=False):
 _UNSET = object()
 
 
+def check_configured_exe(name, path, bname):
+    """Raise, naming the variable, when a configured tool path cannot run.
+
+    Running it anyway fails as ``Run cmd failed: "<path>" --version`` after a
+    shell's "not found", which names neither the variable nor the fix.
+    """
+    if shutil.which(path):
+        return
+    variable = env_config.resolved().get(
+        name, (env_config.prefixed_name(name, "build"),))[0]
+    problem = ("is not an executable file" if os.path.isfile(path)
+               else "does not exist")
+    raise RuntimeError(
+        f"{variable}={path} {problem}. Point it at {bname}, or unset it to let "
+        f"Jittor search for one.")
+
+
 def env_or_find(name, bname, silent=False):
     path = build_env(name, _UNSET)
     if path is not _UNSET:
         if path != "":
+            check_configured_exe(name, path, bname)
             version = get_version(path)
             if not silent:
                 LOG.i(f"Found {bname}{version} at {path}")
@@ -1128,6 +1202,7 @@ def env_or_try_find(name, bname):
     path = build_env(name, _UNSET)
     if path is not _UNSET:
         if path != "":
+            check_configured_exe(name, path, bname)
             version = get_version(path)
             LOG.i(f"Found {bname}{version} at {path}")
         return path
@@ -1136,7 +1211,7 @@ def env_or_try_find(name, bname):
 def try_find_exe(*args):
     try:
         return find_exe(*args)
-    except:
+    except RuntimeError:
         LOG.v(f"{args[0]} not found.")
         return ""
 
@@ -1222,7 +1297,7 @@ def get_py3_config_path():
         else:
             raise RuntimeError(f"python3.{sys.version_info.minor}-config "
                 f"not found in {py3_config_paths}, please specify "
-                f"enviroment variable 'JT_BUILD_PYTHON_CONFIG_PATH',"
+                f"environment variable 'JT_BUILD_PYTHON_CONFIG_PATH',"
                 f" or install python3.{sys.version_info.minor}-dev")
         _py3_config_path = py3_config_path
         return py3_config_path
@@ -1280,7 +1355,7 @@ def get_py3_extension_suffix():
     return _py3_extension_suffix
 
 def get_total_mem():
-    if os.name == 'nt':
+    if sys.platform == "win32":
         from ctypes import Structure, c_int32, c_uint64, sizeof, byref, windll
         class MemoryStatusEx(Structure):
             _fields_ = [
@@ -1299,7 +1374,11 @@ def get_total_mem():
         assert windll.kernel32.GlobalMemoryStatusEx(byref(m))
         return m.totalPhys
     else:
-        return os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
+        memory = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
+        if platform.system() == 'Linux':
+            from .cgroup import limit_memory
+            memory = limit_memory(memory)
+        return memory
 
 def dirty_fix_pytorch_runtime_error():
     ''' This funtion should be called before pytorch.
@@ -1325,8 +1404,10 @@ def dirty_fix_pytorch_runtime_error():
 is_in_ipynb = in_ipynb()
 #: The compiled jit_utils_core extension, or None until it is imported.
 #: Any rather than ModuleType: callers reach for attributes that only exist
-#: on the compiled module.
-cc: Any = None
+#: on the compiled module. A type comment, not an annotation: Python 3.7
+#: rejects annotating a module name after a function above declared it
+#: ``global`` ("annotated name 'cc' can't be global").
+cc = None  # type: Any
 LOG = Logwrapper()
 
 check_msvc_install = False
@@ -1346,9 +1427,10 @@ else:
 cc_type = get_cc_type(cc_path)
 cache_path = find_cache_path()
 
-_py3_config_path: Optional[str] = None
-_py3_include_path: Optional[str] = None
-_py3_extension_suffix: Optional[str] = None
+# Type comments for the reason given at ``cc`` above.
+_py3_config_path = None  # type: Optional[str]
+_py3_include_path = None  # type: Optional[str]
+_py3_extension_suffix = None  # type: Optional[str]
 # NOTE: this used to be
 #     ssl._create_default_https_context = ssl._create_unverified_context
 # with no condition and no way to turn it off. That statement does not affect
@@ -1365,7 +1447,8 @@ try:
     if os.name != 'nt':
         import resource
         resource.setrlimit(resource.RLIMIT_STACK, (2**29,-1))
-except:
+except (ValueError, OSError):
+    # A hard limit below the request; the default stack is used.
     pass
 
 if os.name == 'nt':

@@ -42,8 +42,8 @@ class dtype:
         _is_fp: bool
     _registry: typing.ClassVar[typing.Dict[str, "dtype"]] = {}
     _supported = frozenset({
-        "bool", "uint8", "uint16", "uint32", "uint64", "int8", "int16",
-        "int32", "int64", "float16", "bfloat16", "float32", "float64", "complex64",
+        "bool", "uint8", "uint16", "uint32", "uint64", "int8", "int16", "int32",
+        "int64", "float16", "bfloat16", "float32", "float64", "complex64", "complex128",
     })
 
     def __new__(cls, name, is_floating_point=False):
@@ -140,7 +140,7 @@ def _make_dtypes(ns):
         ("int8", False), ("int16", False), ("int32", False), ("int64", False),
         ("uint8", False), ("uint16", False), ("uint32", False), ("uint64", False),
         ("bool", False),
-        # complex64 is native; complex32/complex128 remain metadata-only.
+        # complex64/complex128 are native; complex32 remains metadata-only.
         ("complex64", False), ("complex128", False), ("complex32", False),
         # quantized dtypes -- no compute support, but tensordict/torch index
         # dtype tables by them so the objects must exist + be distinct.
@@ -174,6 +174,12 @@ def _make_dtypes(ns):
     return objs
 
 
+#: What torch reads a Python scalar type as where it takes a dtype
+#: (``torch.zeros(3, dtype=int)``, ``x.to(float)``): the 64-bit types, not
+#: jittor's default ``int``/``float``, which are 32-bit.
+_PYTHON_SCALAR_DTYPES = {bool: "bool", int: "int64", float: "float64"}
+
+
 def _dtype_to_str(d, *, require_compute=True):
     """The dtype's canonical Jittor name.
 
@@ -194,6 +200,8 @@ def _dtype_to_str(d, *, require_compute=True):
         if registered is None:
             return name
         return registered._jittor_compute_name if require_compute else registered.name
+    if type(d) is type and d in _PYTHON_SCALAR_DTYPES:
+        return _PYTHON_SCALAR_DTYPES[d]
     if callable(d) and hasattr(d, "__name__"):
         return d.__name__
     return str(d)

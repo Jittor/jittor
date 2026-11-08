@@ -628,7 +628,7 @@ class TestNativeDistributedDataParallel(unittest.TestCase):
 
     def test_added_ddp_group_remains_known_after_its_parameters_are_removed(self):
         algorithms = (jt.optim.SGD, jt.optim.Adam, jt.optim.AdamW,
-                      jt.optim.RMSprop, jt.optim.Adan)
+                      jt.optim.RMSprop, jt.optim.Adan, jt.optim.Adagrad)
         for algorithm in algorithms:
             for world_size in (1, 2):
                 for remove in ("clear_parameters", "remove_group"):
@@ -640,6 +640,9 @@ class TestNativeDistributedDataParallel(unittest.TestCase):
                         second = DistributedDataParallel(_OneWeight())
                         group = {"params": second.parameters()}
                         optimizer.add_param_group(group)
+                        # Adagrad owns a copy of the supplied dictionary.
+                        # Mutate the optimizer's actual group for every algorithm.
+                        group = optimizer.param_groups[-1]
                         self.assertEqual(
                             set(optimizer._jittor_ddp_states),
                             {first._jittor_ddp_state, second._jittor_ddp_state})

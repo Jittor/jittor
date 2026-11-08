@@ -12,6 +12,10 @@
 
 namespace jittor {
 
-void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vector<Var*>& vars, vector<int> &father, vector<int> &var_fused);
+struct PlanScratch;
+
+// `scratch`, when given, holds the working vectors between batches (see
+// `PlanScratch`); without it they are allocated for this call.
+void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vector<Var*>& vars, vector<int> &father, vector<int> &var_fused, PlanScratch* scratch = nullptr);
 
 } // jittor

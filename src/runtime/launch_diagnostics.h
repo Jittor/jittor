@@ -19,7 +19,9 @@ struct LaunchRecord {
     char name[96] = {};
     uint32 fused_ids[8] = {};
     uint32 fused_count = 0;
-    LaunchOrigin location;
+    // The Python call site is `origin`, an interned id; the report resolves
+    // it. Copying the resolved path into every record -- 392 bytes, under
+    // the history's lock -- was most of what recording a launch cost.
 };
 
 class LaunchHistory {
@@ -34,10 +36,12 @@ public:
     LaunchHistory(const LaunchHistory&) = delete;
     LaunchHistory& operator=(const LaunchHistory&) = delete;
     uint64 intern_origin(const char* file, int line);
+    // `record(base)` with the device and stream the launch went to.
+    void record(const LaunchRecord& base, Device device, uintptr_t stream);
     // The location an `intern_origin` id stands for; false for 0 or an
     // unknown id. Used by the step tracer to name call sites.
     bool origin(uint64 id, LaunchOrigin& out);
-    void record(LaunchRecord record);
+    void record(const LaunchRecord& record);
     string report(Device device, bool exact_stream=false, uintptr_t stream=0);
 };
 
@@ -45,6 +49,18 @@ EXTERN_LIB LaunchHistory& runtime_launch_history();
 using LaunchOriginCapture = uint64 (*)();
 EXTERN_LIB void set_launch_origin_capture(LaunchOriginCapture capture);
 EXTERN_LIB uint64 capture_launch_origin();
+// One native entry from Python -- a `GraphEntryScope` -- captures its origin
+// once. Inside an entry the Python stack the capture walks cannot change: a
+// callback into Python returns to the same frame, and an op built from inside
+// such a callback goes through a binding, and so an entry, of its own. So every
+// op an entry builds (`x * 2.0` alone is three) has the origin of the first,
+// and the walk -- GIL check, error save/restore, frame chain, two table
+// lookups -- ran once per op for the same answer. `enter` saves the enclosing
+// entry's state into the two values the scope keeps; `leave` restores it. Only
+// a real id is kept: 0 means the table was full, and asking again is what
+// counts the unrecorded capture.
+EXTERN_LIB void enter_launch_origin_entry(bool& outer_active, uint64& outer_origin);
+EXTERN_LIB void leave_launch_origin_entry(bool outer_active, uint64 outer_origin);
 struct LaunchOriginScope {
     uint64 previous;
     explicit LaunchOriginScope(uint64 origin);
@@ -53,13 +69,26 @@ struct LaunchOriginScope {
 
 // Stack-scoped launch ownership is copied before dispatch. A side-stream
 // operation can record the same owner against its actual stream.
+// The record is the caller's, which must outlive the scope: the executor
+// fills one per operator and launches inside it, and copying 176 bytes into
+// the scope -- and out again for every launch -- was a copy per operator for
+// nothing.
 struct LaunchOperationScope {
     const LaunchRecord* previous;
-    LaunchRecord record;
-    explicit LaunchOperationScope(LaunchRecord value);
+    explicit LaunchOperationScope(const LaunchRecord& record);
     ~LaunchOperationScope();
 };
 EXTERN_LIB void record_active_launch(BackendStream stream);
+// Whether this process has launched anything on an accelerator. A device fault
+// only surfaces when something waits for the device, and only then is there a
+// device worth waiting for at exit; a CPU-only run must not create a context.
+// Device masks are independent of the bounded diagnostic history.
+EXTERN_LIB uint64 launched_device_mask(BackendId backend);
+EXTERN_LIB Device launch_error_device(Device current);
+EXTERN_LIB void note_device_context_lost(Device device);
+EXTERN_LIB uint64 lost_device_mask(BackendId backend);
+EXTERN_LIB uint64 devices_launched_after_loss(BackendId backend);
+EXTERN_LIB bool device_context_lost(Device device);
 
 struct LaunchErrorScope {
     Device previous_device;
@@ -69,6 +98,10 @@ struct LaunchErrorScope {
     ~LaunchErrorScope();
 };
 EXTERN_LIB string cuda_launch_error_context();
+// "\nindex 10 is out of bounds ..." if an indexing kernel recorded a fault in
+// `device_index_fault()` (ops/composite/index_bounds.h) since the last call,
+// otherwise "". Clears the record.
+EXTERN_LIB string take_device_index_fault();
 
 // Read-only diagnostics. A device-wide error cannot identify a guilty stream;
 // these are recent candidates, never a claim of exact fault attribution.

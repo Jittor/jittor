@@ -166,3 +166,23 @@ def test_independent_clone_write_does_not_invalidate_saved_source(device):
     np.testing.assert_array_equal(values(source), [2., 3.])
     grad, = torch.autograd.grad(loss, source)
     np.testing.assert_array_equal(values(grad), [4., 6.])
+
+
+@pytest.mark.parametrize("materialized", [False, True])
+def test_data_alias_keeps_an_independent_version_counter(device, materialized):
+    source = torch.tensor([2., 3.], device=device, requires_grad=True)
+    loss = (source * source).sum()
+    if materialized:
+        assert loss.item() == 13.
+    source.data.add_(1.)
+    gradient, = torch.autograd.grad(loss, source)
+    np.testing.assert_array_equal(values(source), [3., 4.])
+    np.testing.assert_array_equal(values(gradient), [6., 8.])
+
+
+def test_data_replacement_preserves_saved_version(device):
+    source = torch.tensor([2., 3.], device=device, requires_grad=True)
+    loss = (source * source).sum()
+    source.data = torch.tensor([4., 5.], device=device)
+    gradient, = torch.autograd.grad(loss, source)
+    np.testing.assert_array_equal(values(gradient), [8., 10.])

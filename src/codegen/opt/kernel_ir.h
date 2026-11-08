@@ -215,6 +215,11 @@ struct KernelIR {
     // level: indent level
     // debug: output type, attrs, scope in comments, check father
     string to_string(int level=0, bool debug=false);
+    // number of enclosing loops
+    int loop_depth() const;
+    // a loop with at least this many enclosing loops declares its variable in
+    // an enclosing block rather than in the for-init (see to_string)
+    static constexpr int hoist_loop_var_depth = 8;
 
     // move all loop back(exclude raw loop)
     void move_loop_back();
@@ -331,10 +336,10 @@ std::ostream& operator<<(std::ostream& os, KernelIR& ir);
 //     defined `if (!find_define(...))`, so a name that already exists is reused
 //     instead of defined, and the merged loop silently inherits the wrong trip
 //     count and still compiles.
-// Neither is reachable today: NanoVector caps a tensor at 10 dimensions, so
-// base ranges stop at range9, and a split loop can never take part in a merge
+// The first became reachable once tensors could exceed 10 dimensions (base
+// ranges now go past range9). A split loop still can never take part in a merge
 // (its parent's `inner` holds the split range's definition, which fails
-// MergeLoopVarPass's `inner.size()==3` test).  Both of those are accidents of
+// MergeLoopVarPass's `inner.size()==3` test), but that is an accident of
 // unrelated code.  These functions are what makes the naming safe on its own.
 //
 // parse_loop_id returns an empty vector if the text is not a loop id at all.

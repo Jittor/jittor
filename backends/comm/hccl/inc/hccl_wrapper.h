@@ -83,6 +83,12 @@ nothing (which used to be a confusing compile error inside generated code).
     EXTERN_LIB HcclRootInfo root_info;
     EXTERN_LIB uint32_t hccl_device_id;
 
+    // Whether the WORLD communicator is live, without creating one. A caller
+    // that only wants to know whether it is in a distributed run must not be
+    // the thing that starts it.
+    // @pyjt(hccl_is_initialized)
+    bool hccl_is_initialized();
+
     // Group 0 is WORLD; later ids own independent HCCL communicators.
     // @pyjt(hccl_create_process_group)
     int hccl_create_process_group(vector<int> ranks);
@@ -118,7 +124,7 @@ hardware, so the removal cannot be run even once here. Deleting the syncs
 outright would ship an unverified change to the one code path whose failure
 mode is a silently wrong gradient on someone else's cluster. Behind a switch,
 the on-machine step is one environment variable and an A/B comparison rather
-than a code edit -- see `agent/manuals/hccl-on-device-verification.md`.
+than a code edit -- see `agent/skills/hccl-on-device-verification/SKILL.md`.
 
 Flip the default to `stream-order` once that document's checklist passes on a
 real multi-card Ascend node; the switch (and this comment) can go with it.

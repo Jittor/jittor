@@ -23,6 +23,7 @@ and receive zero gradient as the fast softmax's ``zero_all_neg_inf`` does.
 """
 
 from _helpers import capability as _test_capability
+from _helpers.sdpa_reference import reference as _reference
 
 import unittest
 
@@ -41,26 +42,6 @@ def _devices():
     # Asked when a test runs, not at collection: collection must not probe
     # the backend (tests/structure/test_pytest_contract.py).
     return [("cpu", 0)] + ([("cuda", 1)] if _has_cuda() else [])
-
-
-def _reference(q, k, v, mask, causal, dout):
-    q, k, v, dout = (t.astype(np.float64) for t in (q, k, v, dout))
-    scale = 1 / np.sqrt(q.shape[-1])
-    s = q @ np.swapaxes(k, -1, -2) * scale
-    if causal:
-        s = np.where(np.triu(np.ones(s.shape[-2:], bool), 1), -np.inf, s)
-    if mask is not None:
-        s = np.where(mask, s, -np.inf) if mask.dtype == bool else s + mask
-    top = s.max(-1, keepdims=True)
-    top = np.where(np.isfinite(top), top, 0)
-    e = np.exp(s - top)
-    total = e.sum(-1, keepdims=True)
-    p = np.where(total > 0, e / np.where(total > 0, total, 1), 0)
-    out = p @ v
-    dv = np.swapaxes(p, -1, -2) @ dout
-    dp = dout @ np.swapaxes(v, -1, -2)
-    ds = p * (dp - (dp * p).sum(-1, keepdims=True))
-    return out, ds @ k * scale, np.swapaxes(ds, -1, -2) @ q * scale, dv
 
 
 class TestTrainingAttentionMatchesTheClosedForm(unittest.TestCase):
@@ -158,7 +139,7 @@ class TestInferenceAttentionInBlocks(unittest.TestCase):
         self._check(np.random.RandomState(6).rand(2, 1, 1, 9) > 0.2)
 
 
-@unittest.skipIf(not _has_cuda(), "the pools count device memory only")
+@unittest.skipIf(not _has_cuda(), "the pools count CUDA device memory only")
 class TestTrainingAttentionKeepsNoScores(unittest.TestCase):
     def test_the_forward_retains_far_less_than_one_score_matrix(self):
         tokens, heads, width = 2048, 8, 40
@@ -180,7 +161,7 @@ class TestTrainingAttentionKeepsNoScores(unittest.TestCase):
 
 
 
-@unittest.skipIf(not _has_cuda(), "the pools count device memory only")
+@unittest.skipIf(not _has_cuda(), "the pools count CUDA device memory only")
 class TestInferenceAttentionBuildsNoFullScores(unittest.TestCase):
     def test_the_peak_is_a_fraction_of_one_score_matrix(self):
         heads, tokens, width = 8, 4096, 40

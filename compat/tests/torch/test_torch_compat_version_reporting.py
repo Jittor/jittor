@@ -21,6 +21,11 @@ class TestTorchApiVersionReporting(unittest.TestCase):
     #: jittor's version; on the jittor module itself it is ``__version__``.
     def setUp(self):
         self._saved = torch.__version__
+        # xdist shares a worker between files, and another test may have opted
+        # into reporting the Torch API level without restoring it. This class
+        # pins the *default*, so state it instead of inheriting whatever the
+        # process happens to hold; the toggle is documented as reversible.
+        torch.compat_report_torch_api_version(False)
 
     def tearDown(self):
         torch.__version__ = self._saved

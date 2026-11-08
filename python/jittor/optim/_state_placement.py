@@ -1,12 +1,12 @@
 """Per-parameter placement for internal optimizer state."""
 from contextlib import contextmanager
 
-import jittor as jt
 
 
 @contextmanager
 def optimizer_state_scope(param):
     """Shadow ambient placement and restore it after creating state."""
+    import jittor as jt
     from jittor._core.var import device_scope_like
 
     backend = int(param.placement_backend)

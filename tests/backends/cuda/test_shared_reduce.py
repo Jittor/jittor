@@ -17,7 +17,7 @@ covers whole reduced dimensions, which is what makes the block-wide fold legal.
 Level 4 uses warp shuffles for local folds and shared memory only for one partial
 per warp. Tests pin the default warp path, the opt-in block path, and its
 one-global-write contract. Measurements live in
-agent/skills/cuda-reduction-strategy-comparison/.
+https://github.com/JittorEcosystem/jittor-dev-skills/blob/main/skills/cuda-reduction-strategy-comparison/SKILL.md.
 """
 
 from _helpers.runtime_policy import preserve_policy as _test_preserve_policy
@@ -65,7 +65,7 @@ class TestSharedReduce(unittest.TestCase):
         expected = value.sum(axis=tuple(dims))
         scale = max(1.0, float(np.abs(expected).max()))
         error = float(np.abs(got.reshape(expected.shape) - expected).max()) / scale
-        source = open(rep[1][1]).read()
+        source = open(rep[1][1], encoding="utf-8").read()
         return source, error
 
     def test_off_at_the_default_level(self):
@@ -141,6 +141,14 @@ vector<int> check_plan(VarHolder* holder, bool all_eliminated) {
                     actual = jt.reduce(jt.array(value), "add", dims).numpy()
                     np.testing.assert_allclose(actual.reshape(expected.shape), expected,
                                                rtol=1e-5, atol=1e-6)
+    def test_explicit_block_fold_at_default_level(self):
+        self.assertEqual(jt.introspection.policy.runtime.para_opt_level, 3)
+        source, error = self._reduce((257, 257), (1,), 51, use_shared_reduce=2)
+        self.assertLess(error, 1e-5)
+        self.assertIn("shared_reduce<", source)
+        self.assertIn("if (threadIdx.x == 0)", source)
+        self.assertNotIn("_wr_mask", source)
+        self.assertEqual(jt.introspection.policy.runtime.para_opt_level, 3)
 
     def test_level_4_uses_one_block_write(self):
         from contextlib import ExitStack as _TestPolicyStack
@@ -160,7 +168,7 @@ vector<int> check_plan(VarHolder* holder, bool all_eliminated) {
         # rather than spelling a path, so the next move fails loudly instead.
         path = os.path.join(backend_root(jt.compiler.jittor_path, "cuda"),
                             "kernels", "core", "cuda_atomic.h")
-        source = open(path).read()
+        source = open(path, encoding="utf-8").read()
         self.assertIn("inline static T shared_reduce(T u)", source)
         body = source.split("inline static T shared_reduce(T u)", 1)[1]
         body = body.split("\n}\n", 1)[0]

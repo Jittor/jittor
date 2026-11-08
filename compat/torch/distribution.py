@@ -2,7 +2,7 @@
 
 The compatibility installer still supplies the implementation, but package
 layout is a publication concern.  Keeping the names here makes a future
-``jittor-torch`` distribution able to build the same import graph without
+``jittor-compat`` distribution able to build the same import graph without
 importing CUDA/NCCL, FSDP, or the native Jittor runtime.
 """
 
@@ -12,10 +12,10 @@ from __future__ import annotations
 
 DISTRIBUTION_ROOT = "torch.distributed"
 # Packaging identity is deliberately separate from the import root.  The
-# future wheel is named ``jittor-torch`` but publishes a ``torch`` namespace;
+# future wheel is named ``jittor-compat`` but publishes a ``torch`` namespace;
 # keeping both values here prevents a builder from deriving one from the
 # other (and accidentally naming the wheel ``torch``).
-DISTRIBUTION_PROJECT = "jittor-torch"
+DISTRIBUTION_PROJECT = "jittor-compat"
 DISTRIBUTION_SCHEMA_VERSION = 1
 DISTRIBUTION_IMPORT_ROOT = "torch"
 

@@ -1,15 +1,18 @@
 """Python frontend types sharing the native VarHolder payload and graph."""
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
+from jittor_core import ops as _native_ops
 
 from functools import update_wrapper
 from types import MethodType
+import weakref
+from typing import Any, Callable, Optional
 
 #: Resolved on first use, then reused. These two helpers sit on the per-op path
 #: (`torch.cat` alone re-imported them 91 times, ~110 us of its 340 us), and a
 #: function-local `import` pays the import machinery on every call. The import
 #: stays lazy so this module is still importable before the install context
 #: exists.
-_get_install_context = None
+_get_install_context: Optional[Callable[..., Any]] = None
 
 #: The two accumulation tiers, as the state object spells them.
 _TIERS = {"highest": 0, "high": 1, "medium": 2}
@@ -19,8 +22,9 @@ _TIERS = {"highest": 0, "high": 1, "medium": 2}
 #: settable at runtime (`torch.backends.cuda.matmul.allow_tf32`, the H3 VAE's
 #: determinism scope) and a cached tuple would answer with a stale policy.
 #: The type is created by the installer, so a reinstallation makes a new type and
-#: a new entry rather than reusing an old one.
-_precision_state = {}
+#: a new entry rather than reusing an old one. Weak: subclasses made at run time
+#: (a Parameter subclass) ask too and must stay collectable.
+_precision_state: "weakref.WeakKeyDictionary[Any, Any]" = weakref.WeakKeyDictionary()
 
 
 def _frontend_precision_policy(cls):
@@ -30,8 +34,8 @@ def _frontend_precision_policy(cls):
     if state is None:
         get_install_context = _get_install_context
         if get_install_context is None:
-            from .context import get_install_context as get_install_context
-            _get_install_context = get_install_context
+            from .context import get_install_context as _resolve
+            get_install_context = _get_install_context = _resolve
         state = get_install_context(cls._frontend_backend).state.get("cuda_runtime")
         if state is None:
             # Type creation precedes CUDA facade publication during installation.
@@ -115,6 +119,11 @@ def _placement_request(backend, device, like=None, default_placement=True):
             device = default_device()
     numeric_index = isinstance(device, int) and not isinstance(device, bool)
     name = "cuda" if numeric_index else (getattr(device, "type", None) or str(device).split(":", 1)[0])
+    # Jittor has no meta storage backend. Transformers uses ``device='meta'``
+    # while inspecting checkpoint shapes; materialize those temporary tensors
+    # on host so the subsequent real-weight load can proceed.
+    if name == "meta":
+        return 0, 0
     if name == "cpu":
         return 0, 0
     if name == "meta":
@@ -189,7 +198,10 @@ class tensor_frontend:
         return False
 
     def _restore(self):
-        core = self._backend.core
+        backend = self._backend
+        if backend is None:
+            return
+        core = backend.core
         bits = self._policy_bits
         if bits is not None:
             core._set_autograd_policy(bool(bits & 1), bool(bits & 2))
@@ -227,6 +239,13 @@ class _TensorMeta(type):
     def __call__(cls, *args, **kwargs):
         backend = vars(cls).get("_frontend_backend")
         if backend is None:
+            # A Tensor subtype may be rebuilt from another holder's __dict__.
+            # Keep its public constructor metadata, but never pass our holder's
+            # private autograd/residency state into the new subtype constructor.
+            from .tensor_object_state import TensorObjectState
+            if isinstance(kwargs.get("_torch_object_state"), TensorObjectState):
+                kwargs = dict(kwargs)
+                kwargs.pop("_torch_object_state")
             return super().__call__(*args, **kwargs)
         # torch's Tensor constructor spells dtype/device/requires_grad/pin_memory
         # as keywords, and downstream code builds tensors that way -- `accelerate`
@@ -235,7 +254,8 @@ class _TensorMeta(type):
         # four still raises.
         requested_dtype = kwargs.pop("dtype", None)
         device = kwargs.pop("device", None)
-        requires_grad = bool(kwargs.pop("requires_grad", False))
+        requested_requires_grad = kwargs.pop("requires_grad", None)
+        requires_grad = bool(requested_requires_grad)
         kwargs.pop("pin_memory", None)
         if kwargs:
             raise TypeError(
@@ -258,16 +278,15 @@ class _TensorMeta(type):
             elif isinstance(args[0], (backend.NanoVector, _TorchSize)):
                 result = backend.empty(tuple(args[0]), dtype=dtype)
             elif isinstance(args[0], backend.Var):
+                # Native view ownership supplies aliasing and graph policy.
+                # An explicit device requests a separate allocation.
                 if device is None:
-                    # Tensor(existing) aliases the source storage. A clone
-                    # followed by _set_view_of only records write-through
-                    # metadata; it does not make the allocation an alias.
-                    result = args[0].view(tuple(args[0].shape))
-                    result._torch_data_owner = args[0]
-                    result._torch_data_path = ()
+                    result = _native_ops.clone(args[0])
+                    result._set_view_of(args[0], Ellipsis, requested_requires_grad is None)
                 else:
                     result = args[0].clone()
-                result.requires_grad = requires_grad
+                if requested_requires_grad is not None:
+                    result.requires_grad = requires_grad
                 return finish(result, device, args[0])
             else:
                 result = backend.array(args[0], dtype=dtype)
@@ -283,7 +302,9 @@ def make_tensor_type(backend):
         "__slots__": ("__weakref__",),
         "_frontend_backend": backend,
         "_frontend_autograd_policy": 3,
+        "_frontend_view_base_ownership": True,
         "_frontend_precision_policy": classmethod(_frontend_precision_policy),
+        "_make_subclass": staticmethod(tensor_make_subclass),
         "clone": clone,
         **tensor_object_properties(),
     })
@@ -302,13 +323,27 @@ def clone(input, *, memory_format=None):
     with tensor_frontend(target.Var, like=input):
         if input.placement_backend < 0 and backend.flags.use_cuda and _var_is_cpu_resident(input):
             with backend.flag_scope(use_cuda=0):
-                result = backend.Var.copy(input)
+                result = backend.Var.copy(input, memory_format != "contiguous_format")
                 result.sync()
                 setattr(result, "_jittor_torch_force_cpu", True)
             from .meta import finish
             return finish(result, like=input)
         from .meta import finish
-        return finish(backend.Var.copy(input), like=input)
+        return finish(backend.Var.copy(input, memory_format != "contiguous_format"),
+                      like=input)
+
+
+def tensor_make_subclass(cls, data, requires_grad=False):
+    """Make an independent autograd leaf of ``cls`` over existing storage."""
+    backend = getattr(cls, "_frontend_backend", None)
+    if backend is None or not issubclass(cls, backend.Var):
+        raise TypeError("_make_subclass expects a Torch Tensor subclass")
+    if not isinstance(data, backend.Var):
+        raise TypeError("_make_subclass expects Tensor data")
+    with tensor_frontend(cls, like=data):
+        value = backend.Var.detach(data)
+    value.requires_grad = bool(requires_grad)
+    return value
 
 
 def parameter_new(cls, data=None, requires_grad=True):
@@ -324,9 +359,11 @@ def parameter_new(cls, data=None, requires_grad=True):
     return finish(value, like=data)
 
 
-def parameter_init(self, data=None, requires_grad=True):
+def parameter_init(self, *args, **kwargs):
     # The conversion boundary already initialized the native holder. Python
     # subclasses still receive their real __init__ through normal dispatch.
+    # A subtype may consume more __new__ keywords than Parameter itself; its
+    # inherited no-op initializer must accept those same constructor inputs.
     return None
 
 
@@ -374,17 +411,38 @@ def rebuild_tensor(tensor_type, array, dtype, requires_grad, device=None):
 
 def deepcopy_tensor(value, memo):
     from copy import deepcopy
-    from .tensor_object_state import get_tensor_object_state
+    from .tensor_object_state import TensorObjectState, get_tensor_object_state
     result = rebuild_tensor(type(value), value.numpy(), _jittor_dtype_name(value.dtype),
                             value.requires_grad, str(value.device))
     memo[id(value)] = result
-    result.__dict__.update(deepcopy(_python_state(value), memo))
-    # Rebuilt storage is independent. View write-through metadata must not
-    # redirect mutations to the old view's owner, including legacy holders.
-    state = get_tensor_object_state(result)
-    if state is not None:
-        state.data_owner = None
-        state.data_path = ()
-    result.__dict__.pop("_torch_data_owner", None)
-    result.__dict__.pop("_torch_data_path", None)
+    state = _python_state(value)
+    original_state = get_tensor_object_state(value)
+    state.pop("_torch_object_state", None)
+    # Legacy aliases carry write-through paths in the holder dictionary.
+    # A rebuilt copy owns independent storage and must not inherit those paths.
+    state.pop("_torch_data_owner", None)
+    state.pop("_torch_data_path", None)
+    result.__dict__.update(deepcopy(state, memo))
+    if original_state is None:
+        return result
+    # The copy owns new storage, as torch's does. A `.data` alias must not
+    # survive pointing at the *original* holder -- `weight = deepcopy(
+    # base.weight.data); weight += delta` then wrote through `base` and dropped
+    # delta's gradient edge, which is how PEFT's SHiRA adapter builds its
+    # dense weight -- while an alias that named this tensor itself follows into
+    # the copy, which is the state contract the frontend publishes.
+    copied = TensorObjectState()
+    self_owner = original_state.data_owner is value
+    copied.data_owner = result if self_owner else None
+    copied.data_path = (deepcopy(original_state.data_path, memo)
+                        if self_owner else ())
+    copied.grad = deepcopy(original_state.grad, memo)
+    copied.scalar_marker = original_state.scalar_marker
+    copied.force_cpu = original_state.force_cpu
+    copied.force_cuda = original_state.force_cuda
+    copied.retains_grad = original_state.retains_grad
+    copied.rms_norm_unit_weight = (
+        result if original_state.rms_norm_unit_weight is value
+        else deepcopy(original_state.rms_norm_unit_weight, memo))
+    result.__dict__["_torch_object_state"] = copied
     return result

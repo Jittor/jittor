@@ -26,19 +26,18 @@ class TestCheckpointRecompute(unittest.TestCase):
             hidden = value * weight + scale + sample
             return hidden, {"square": value * value}
 
-        jt.set_cpu_seed(821)
+        jt.set_seed(821)
         hidden, aux = checkpoint(layer, x, scale=2.0, use_reentrant=False)
         self.assertIsInstance(aux, dict)
         self.assertEqual(tuple(aux), ("square",))
         hidden.numpy()
         jt.rand((5,)).numpy()
-        state_before_backward = jt.get_cpu_rng_state()
-
+        state_before_backward = jt.core.rng_state("cpu")
         gx, gweight = jt.grad(hidden.sum() + aux["square"].sum(), [x, weight])
 
         self.assertEqual(calls, [1, 0])
         self.assertEqual(random_values[0], random_values[1])
-        self.assertEqual(state_before_backward, jt.get_cpu_rng_state())
+        self.assertEqual(state_before_backward, jt.core.rng_state("cpu"))
         np.testing.assert_allclose(gx.numpy(), [4.0, 6.0, 8.0], atol=1e-6)
         np.testing.assert_allclose(gweight.numpy(), [6.0], atol=1e-6)
 

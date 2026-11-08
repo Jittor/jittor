@@ -75,7 +75,7 @@ class TestBackwardPeakDoesNotDependOnTheFlush(unittest.TestCase):
 
 @unittest.skipUnless(
     _test_capability.check_accelerator("cuda", backend=jt).enabled,
-    "the pools count device memory only")
+    "the pools count CUDA device memory only")
 class TestMaxMemoryAllocatedSeesInsideABatch(unittest.TestCase):
     """``max_memory_allocated`` is a high-water mark, not a sample.
 

@@ -1,4 +1,5 @@
 """Affine-grid construction and grid-sampling operations."""
+
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import jittor as jt
@@ -294,10 +295,14 @@ def grid_sample(
     align_corners=False,
 ):
     assert mode in ["bilinear", "nearest"], (
-        f"grid_sample mode must be bilinear or nearest, got {mode!r}")
+        f"grid_sample mode must be bilinear or nearest, got {mode!r}"
+    )
     assert padding_mode in ["zeros", "border", "reflection"], (
-        f"grid_sample padding_mode must be zeros, border or reflection, "
-        f"got {padding_mode!r}")
+        f"grid_sample padding_mode must be zeros, border or reflection, got {padding_mode!r}"
+    )
+    kernel = select_kernel("nn.grid_sample", input, grid, mode, padding_mode, align_corners)
+    if kernel is not None:
+        return kernel(input, grid, mode, padding_mode, align_corners)
     return jt.nn.grid_sampler(input, grid, mode, padding_mode, align_corners)
 
 

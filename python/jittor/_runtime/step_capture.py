@@ -54,10 +54,15 @@ built state, such as optimizer moments); the second is captured; later calls
 replay. `stats` says what happened.
 """
 
+import weakref
+
+import numpy as np
+
 import jittor as jt
 import jittor_core as _core
 
-from .graph_replay import (_RERECORD_LIMIT, _Unreplayable, _dense, _empty_like, _native_dtype, _object_ids,
+from .graph_replay import (_capture_barriers, _RERECORD_LIMIT, _Unreplayable, _WorkingSet, _dense, _empty_like,
+                           _host_state, _module_vars, _native_dtype, _object_ids, _training,
                            _graph_has_nondeterministic_op,
                            _input_vars, _map_inputs, _no_auto, _output_template,
                            _rebuild, _signature)
@@ -106,7 +111,19 @@ def live_array(value, refresh, dtype="float32"):
         var.sync(False, False)
     finally:
         jt.flags.keep_graph = before
-    cap.prologue.append(lambda: var._copy_into(jt.array(refresh(), dtype)))
+    # Written only when it changed, and straight into the Var's memory: a
+    # learning rate is the same from one step to the next, and building an
+    # array and copying it in was most of a ResNet-50 replay's host time
+    # before its graph could launch.
+    last = [value]
+
+    def refill():
+        now = refresh()
+        if now == last[0]:
+            return
+        last[0] = now
+        var._write_inplace(np.asarray(now, dtype=dtype))
+    cap.prologue.append(refill)
     return var
 
 
@@ -114,6 +131,12 @@ def on_replay(hook):
     """Run `hook()` before every replay of the step being captured."""
     if _ACTIVE is not None:
         _ACTIVE.prologue.append(hook)
+
+
+def publish_gradients(leaves):
+    """Remember holders whose final public gradients a captured backward wrote."""
+    if _ACTIVE is not None:
+        _ACTIVE.published_gradients.extend(leaves)
 
 
 def guard(read):
@@ -274,6 +297,13 @@ class _StepRandom:
         return [self._seed, self.base]
 
 
+#: The Philox kernels below are CUDA source. `use_cuda` is set on ACL and ROCm
+#: builds as well; there a step's draws stay the runtime's own random ops,
+#: which a capture refuses (`_graph_has_nondeterministic_op`), so the step
+#: runs as written instead of failing to compile.
+_CUDA_BUILD = bool(getattr(jt.compiler, "is_cuda", False))
+
+
 def random_draw(shape, dtype, type):
     """A random Var for a step being captured on the device, or None.
 
@@ -285,7 +315,9 @@ def random_draw(shape, dtype, type):
     distribution, a different stream.
     """
     cap = _ACTIVE
-    if cap is None or dtype not in ("float32", "float64") or type not in ("uniform", "normal"):
+    if cap is None or not _CUDA_BUILD or _exact_refuses(cap):
+        return None
+    if dtype not in ("float32", "float64") or type not in ("uniform", "normal"):
         return None
     if cap.random is None:
         seed = int(jt.get_seed()) * 1000003 + id(cap) % 1000003
@@ -315,7 +347,7 @@ def random_keep(shape, p):
     BERT-base training step.
     """
     cap = _ACTIVE
-    if cap is None:
+    if cap is None or not _CUDA_BUILD or _exact_refuses(cap):
         return None
     if cap.random is None:
         seed = int(jt.get_seed()) * 1000003 + id(cap) % 1000003
@@ -332,6 +364,21 @@ def random_keep(shape, p):
         if (n) jt_step_capture_keep<<<((n + 3) / 4 + 255) / 256, 256>>>(
             out0_p, n, (const long long*)in0_p, {draw}LL, {float(p)!r}f);
         """).stop_grad()
+
+
+def _exact_refuses(cap):
+    """Whether `cap` must not change a draw, and is refused instead.
+
+    A capture draws through Philox, a different stream from the one the call
+    would have drawn from as written. Someone who asked for the capture
+    accepted that; the automatic policy has nobody's word for it.
+    """
+    if not cap.exact:
+        return False
+    if cap.refused is None:
+        cap.refused = ("the call draws random numbers, which a replay would draw "
+                       "from a different stream than running it as written")
+    return True
 
 
 def live_rate(impl, read_lr, frozen):
@@ -355,16 +402,50 @@ def refuse(reason):
         _ACTIVE.refused = reason
 
 
+_REPLAYED_RESULT_GRADIENT = (
+    "jt.grad: the loss depends on the result of a captured or replayed "
+    "jt.capture_step call, which has no autograd history: its values were "
+    "copied out of the recorded step, so the gradient that flows into the step "
+    "would silently be dropped. Compute the gradient inside the step function, "
+    "or call the step under jt.no_grad() (or with stop_grad inputs and "
+    "parameters) to use its result as a constant.")
+
+_ReplayedResult = None
+
+
+def _replayed_result(value, sources):
+    """``value``, a replayed step's result, as an output of ``sources`` -- what
+    the step read that asks for a gradient -- whose backward raises."""
+    global _ReplayedResult
+    if _ReplayedResult is None:
+        class _ReplayedResult(jt.Function):
+            def __init__(self, value):
+                self.value = value
+
+            def execute(self, *sources):
+                return self.value
+
+            def grad(self, *grads):
+                raise RuntimeError(_REPLAYED_RESULT_GRADIENT)
+    return _ReplayedResult(value)(*sources)
+
+
 class _Capture:
     __slots__ = ("inputs", "host_inputs", "outputs", "template", "roots", "state",
                  "state_lists", "prologue", "guards", "signature", "refused", "random",
-                 "frozen_random")
+                 "frozen_random", "exact", "graph_bytes", "published_gradients",
+                 "gradient_leaves", "differentiable_leaves")
 
     def __init__(self):
         self.prologue = []
         self.guards = []
         self.refused = None
         self.random = None
+        self.exact = False
+        self.graph_bytes = 0
+        self.published_gradients = []
+        self.gradient_leaves = []
+        self.differentiable_leaves = []
 
 
 def _finish_normally(roots):
@@ -395,9 +476,23 @@ def _adopt(holder, old):
     if (tuple(holder.shape) != tuple(old.shape)
             or str(_native_dtype(holder)) != str(_native_dtype(old))):
         return False
-    old._copy_into(holder)
-    holder._update(old)
+    with jt.no_grad():
+        old._copy_into(holder)
+        holder._update(old)
     return True
+
+
+def _commit_captured_state(records):
+    """Commit graph writes into the storage read by the captured step."""
+    state = []
+    with jt.no_grad():
+        for holder, old, new in records:
+            inplace = old._mem_ptr_now == new._mem_ptr_now
+            if not inplace:
+                old._copy_into(new, False)
+            holder._update(old)
+            state.append((holder, old, new, inplace))
+    return state
 
 
 def _unique(vars_):
@@ -409,11 +504,58 @@ def _unique(vars_):
     return result
 
 
+def _write_back_in_graph(state, roots):
+    """Take a captured step's write-backs into its graph, as one op.
+
+    A replay copied every piece of state the step updates out of place into
+    the buffer it lives in, one copy each: 159 for a ResNet-50 step's batch
+    norm statistics and counters, each its own node of the device recording.
+    `write_back` writes them all in one launch, as part of the graph, which
+    then leaves nothing to copy after it. Entries it takes are marked as
+    written in place.
+    """
+    pending = [i for i, (_, _, _, inplace) in enumerate(state) if not inplace]
+    if len(pending) < 2 or not hasattr(jt, "write_back"):
+        return state
+    targets = [state[i][1] for i in pending]
+    values = [state[i][2] for i in pending]
+    # The op has a device kernel only. `device_id` does not say where a Var
+    # lives -- a host Var in a CUDA build reports device 0 -- so ask the
+    # allocator, through the targets: they are executed, the values may not be.
+    if any(v.location() != "device" for v in targets) or any(
+            not v._storage_is_contiguous() for v in targets + values):
+        return state
+    before = jt.flags.keep_graph
+    jt.flags.keep_graph = 2
+    try:
+        written = jt.write_back(targets, values)
+    finally:
+        jt.flags.keep_graph = before
+    written = list(written) if isinstance(written, (list, tuple)) else [written]
+    for var in written:
+        # Added after the capture's run, so that run did not mark it kept.
+        var._mark_kept()
+    roots.extend(written)
+    state = list(state)
+    for i in pending:
+        holder, old, new, _ = state[i]
+        state[i] = (holder, old, new, True)
+    return state
+
+
 class StepCapture:
     """A callable that replays `fn`'s captured step. See the module docstring."""
 
-    def __init__(self, fn, *, record=True):
+    def __init__(self, fn, *, record=True, exact_random=False, max_retained_bytes=None,
+                 _guard_external_backward=False):
+        """`exact_random` refuses a step that draws random numbers rather than
+        drawing them from a capture's own stream; `max_retained_bytes` bounds
+        what a device recording may keep allocated (see `_record_cuda_graph`).
+        """
         self._fn = fn
+        self._guard_external_backward = _guard_external_backward
+        self._exact_random = exact_random
+        self._max_retained_bytes = max_retained_bytes
         self._capture = None
         self._refused = None
         self._seen = None
@@ -441,10 +583,44 @@ class StepCapture:
         """Why the step is not replayed, or None."""
         return self._refused
 
+    def _call_signature(self, args, kwargs):
+        signature = _signature(args, kwargs)
+        if self._guard_external_backward:
+            return signature, bool(jt.flags.no_grad)
+        return signature
+
     def _eager(self, args, kwargs):
         self.stats["eager"] += 1
         with _no_auto():
-            return self._fn(*args, **kwargs)
+            if not self._guard_external_backward or self._refused is not None:
+                return self._fn(*args, **kwargs)
+            grad_enabled = not bool(jt.flags.no_grad)
+            token = _core._begin_step_backward_probe()
+            completed = False
+            try:
+                result = self._fn(*args, **kwargs)
+                completed = True
+            finally:
+                consumed = set(_core._end_step_backward_probe(token))
+                if not completed:
+                    # The failed warmup cannot establish capture eligibility.
+                    self._seen = None
+            outputs = []
+            try:
+                _output_template(result, outputs, {}, _object_ids((args, kwargs)))
+            except _Unreplayable as exc:
+                self._refused = str(exc)
+            if grad_enabled and not consumed:
+                # Frozen or detached outputs do not establish a permanent
+                # no-autograd contract: closure parameters may be unfrozen.
+                self._refused = (
+                    "a grad-enabled call must complete backward for whole-step replay; "
+                    "inference replay requires a no_grad scope")
+            if any(v.requires_grad and int(v.id) not in consumed for v in outputs):
+                self._refused = (
+                    "the call returns differentiable outputs for an external backward; "
+                    "whole-step replay has no external autograd boundary")
+            return result
 
     # -- capture -------------------------------------------------------
     def _capture_now(self, args, kwargs):
@@ -456,11 +632,14 @@ class StepCapture:
 
         def private_copy(value):
             copy = _empty_like(value)
-            copy._copy_into(value)
+            with jt.no_grad():
+                copy._copy_into(value)
             return copy
         private_args, private_kwargs = _map_inputs((args, kwargs), private_copy)
 
         cap = _Capture()
+        cap.exact = self._exact_random
+        working = _WorkingSet()
         before = jt.flags.keep_graph
         # The step is built whole, as a replay runs it. CUDA's auto-flush
         # otherwise launches what is pending every `auto_flush_ops` operators,
@@ -475,8 +654,11 @@ class StepCapture:
         records = []
         readbacks = _core._host_readback_count()
         try:
-            with _no_auto():
+            with _capture_barriers() as barriers, _no_auto():
                 result = self._fn(*private_args, **private_kwargs)
+                if barriers:
+                    cap.refused = cap.refused or (
+                        "the step contains an opaque operation: " + barriers[0])
         finally:
             records = _core._state_capture_end()
             jt.flags.auto_flush_ops = flush_before
@@ -497,7 +679,15 @@ class StepCapture:
         # (see `_dense`).
         outputs[:] = [_dense(o) for o in outputs]
         records = [(holder, old, _dense(new)) for holder, old, new in records]
-        roots = _unique(outputs + [new for _, _, new in records])
+        published = {}
+        for parameter in cap.published_gradients:
+            gradient = getattr(parameter, "_torch_grad", None)
+            if isinstance(gradient, jt.Var):
+                published[id(gradient)] = gradient
+        gradient_sources = [(holder, _core._snapshot_step_gradient(holder))
+                            for holder in published.values()]
+        roots = _unique([source for _, source in gradient_sources]
+                        + outputs + [new for _, _, new in records])
         # Everything that can refuse is decided before the graph runs: a
         # refused step then runs exactly once, as written. Deciding after --
         # running it kept, then putting the state back and running it again --
@@ -508,32 +698,73 @@ class StepCapture:
         # A host-generator draw left in the graph re-runs, and so draws again,
         # on every executor replay; only a device recording would freeze it.
         cap.frozen_random = _graph_has_nondeterministic_op()
+        if cap.frozen_random and cap.exact and cap.refused is None:
+            cap.refused = ("the call draws random numbers, which a replay would draw "
+                           "again on every run")
         if cap.refused is not None:
             self._refused = cap.refused
             _finish_normally(roots)
+            _commit_captured_state(records)
             return None, result
+
+        # The optimizer update is still pending. Resolve published readouts
+        # against pre-update parameter bytes before the stateful roots run.
+        if gradient_sources:
+            jt.flags.keep_graph = 2
+            try:
+                jt.sync([source for _, source in gradient_sources], True, False)
+            finally:
+                jt.flags.keep_graph = before
 
         # A step that synced its own results has run already; running the
         # kept graph again would take it twice.
-        if any(not r._mem_ptr_now for r in roots):
+        if gradient_sources or any(not r._mem_ptr_now for r in roots):
             jt.flags.keep_graph = 2
             try:
-                jt.sync(roots, False, False)
+                # The ready owners below require completed gradient bytes.
+                # The first strong batch above ordered these readouts before
+                # the optimizer; this batch executes the whole step once.
+                jt.sync(roots, bool(gradient_sources), False)
             finally:
                 jt.flags.keep_graph = before
 
         # Point every rebound holder back at its old Var, which the graph
         # reads, and give it the new value. The step has run once, so this is
         # its update; every replay repeats it.
-        state = []
-        for holder, old, new in records:
-            inplace = old._mem_ptr_now == new._mem_ptr_now
-            if not inplace:
-                old._copy_into(new, False)
-            holder._update(old)
-            state.append((holder, old, new, inplace))
+        #
+        # Committing is part of the capture, not a normal batch: `old` is a
+        # storage the backward saved, so the copy resolves those readers
+        # first (`VarHolder::copy_into`) -- which is the backward, and with it
+        # the forward whose activations it saved. Outside `keep_graph` that
+        # batch finishes those nodes, so the replay no longer has a forward to
+        # run and reuses the captured one for every later input: an SGD step
+        # replayed against a new batch returned the loss of the batch it was
+        # captured on, and its update used that step's gradients.
+        jt.flags.keep_graph = 2
+        try:
+            state = _commit_captured_state(records)
+        finally:
+            jt.flags.keep_graph = before
+        with jt.no_grad():
+            state = _write_back_in_graph(state, roots)
+
+        recorded_holders = {id(holder) for holder, _, _ in records}
+        with jt.no_grad():
+            for holder, source in gradient_sources:
+                if id(holder) not in recorded_holders:
+                    # `holder` is also the optimizer's gradient slot. The
+                    # source remains a replay root; only the public holder
+                    # changes to an inputless view of its storage.
+                    holder._update(_core._ready_step_gradient(source))
 
         cap.inputs = _input_vars((private_args, private_kwargs), [])
+        # What the step reads that asks for a gradient besides its inputs --
+        # a parameter, a closure tensor. Its result then has gradients a
+        # replay cannot give; see `_results`.
+        private = {id(v) for v in cap.inputs}
+        cap.differentiable_leaves = [
+            v for v in _core._step_leaf_holders(roots)
+            if id(v) not in private and bool(v.requires_grad)]
         cap.host_inputs = any(int(v.device_id) < 0 for v in cap.inputs)
         cap.outputs = outputs
         cap.template = template
@@ -541,21 +772,44 @@ class StepCapture:
         cap.state = state
         cap.state_lists = ([holder for holder, _, _, _ in state],
                            [old for _, old, _, _ in state])
-        cap.signature = _signature(args, kwargs)
-        return cap, self._results(cap, outputs)
+        if self._guard_external_backward:
+            cap.gradient_leaves = [
+                (v, v.var_ptr, bool(v.requires_grad))
+                for v in _core._step_leaf_holders(roots)]
+        cap.signature = self._call_signature(args, kwargs)
+        # What a device recording of this step would hold.
+        cap.graph_bytes = working.bytes()
+        return cap, self._results(cap, outputs, (args, kwargs))
 
-    def _results(self, cap, sources):
+    def _results(self, cap, sources, call_inputs):
         outs = [_empty_like(o) for o in cap.outputs]
-        for out, src in zip(outs, sources):
-            out._copy_into(src, False)
+        with jt.no_grad():
+            for out, src in zip(outs, sources):
+                out._copy_into(src, False)
+        # The values are copies out of the recorded step, with no autograd
+        # edge to this call's inputs or to the step's parameters: a grad
+        # through them used to answer zero (`jt.grad(step(x), x)` was 4, 0,
+        # 0 for x = 2, 3, 4), and the step's part of a grad that also had
+        # another path was dropped without a word (`step(x) + x.sum()` gave
+        # 1, where 7 is right). Each result is given that edge back through
+        # `_ReplayedResult`, whose backward raises: a grad that would flow
+        # into the step fails, one that does not is untouched.
+        if not jt.flags.no_grad:
+            differentiable = cap.differentiable_leaves + [
+                v for v in _input_vars(call_inputs, []) if bool(v.requires_grad)]
+            if differentiable:
+                outs = [_replayed_result(out, differentiable) for out in outs]
         return _rebuild(cap.template, outs)
 
     # -- guards --------------------------------------------------------
     def _stale(self, cap, args, kwargs):
         if _core._first_finished(cap.roots) >= 0:
             return "the captured graph was finished, most likely by a read"
-        if _signature(args, kwargs) != cap.signature:
-            return "the inputs changed shape or dtype"
+        if self._call_signature(args, kwargs) != cap.signature:
+            return "the inputs changed shape or dtype, or the gradient mode changed"
+        for holder, var_ptr, requires_grad in cap.gradient_leaves:
+            if holder.var_ptr != var_ptr or bool(holder.requires_grad) != requires_grad:
+                return "a captured leaf was rebound or changed its gradient policy"
         # One native pass over the holders; `_adopt` only for those rebound.
         holders, olds = cap.state_lists
         start = 0
@@ -574,12 +828,21 @@ class StepCapture:
 
     # -- replay --------------------------------------------------------
     def _write_back(self, cap):
-        for _, old, new, inplace in cap.state:
-            if not inplace:
-                old._copy_into(new, False)
+        with jt.no_grad():
+            for _, old, new, inplace in cap.state:
+                if not inplace:
+                    old._copy_into(new, False)
 
     def _record_cuda_graph(self, cap):
         """Record one replay -- the step and its write-backs -- as a device graph."""
+        limit = self._max_retained_bytes
+        if limit and cap.graph_bytes > limit:
+            # Replays through the executor free as they go; a recording would
+            # keep all of it, for as long as the capture lives.
+            self._graph_refused = (
+                "a recording would keep %.1f MiB alive, over the %.1f MiB allowed"
+                % (cap.graph_bytes / 2**20, limit / 2**20))
+            return
         if not _core.graph_capture_supported():
             self._graph_refused = "this build cannot record device graphs"
             return
@@ -603,8 +866,9 @@ class StepCapture:
             try:
                 jt.sync(cap.roots, False, False)
                 self._write_back(cap)
-                for out, src in zip(outs, cap.outputs):
-                    out._copy_into(src, False)
+                with jt.no_grad():
+                    for out, src in zip(outs, cap.outputs):
+                        out._copy_into(src, False)
             finally:
                 handle = _core.graph_capture_end()
         except Exception as exc:            # a capture poisons its stream
@@ -626,34 +890,71 @@ class StepCapture:
             hook()
         if self._cuda_graph and cap.host_inputs:
             _core.graph_wait()
-        for captured, given in zip(cap.inputs, _input_vars((args, kwargs), [])):
-            captured._copy_into(given)
-        if self._cuda_graph and not _core.graph_leaves_moved(self._cuda_graph):
-            _core.graph_launch(self._cuda_graph)
-            self.stats["graph"] += 1
-            return self._results(cap, self._graph_out)
-        if self._cuda_graph:
-            # A leaf the recording reads has moved -- a parameter read back to
-            # the host migrates -- so its addresses are stale; this step goes
-            # through the executor and a later one records again.
-            _core.graph_release(self._cuda_graph)
-            self._cuda_graph = 0
-            self._graph_out = None
-            self._rerecords += 1
-            if self._rerecords >= _RERECORD_LIMIT:
-                self._graph_refused = "the leaves a recording reads kept moving"
-            else:
-                self._record_at = self.stats["replayed"] + 2
+        # The copies into the captured leaves are part of the kept graph's
+        # lifetime, not work the caller asked for. Outside `keep_graph` the
+        # executor treats them as an ordinary batch and frees what it thinks
+        # is dead behind them -- including the captured intermediate that the
+        # replay is about to read. A failed replay then returned the value
+        # that intermediate was captured with (a cast+scalar-multiply step
+        # kept answering with the first feed's query), while intermediates
+        # that happened to survive made the same step look correct. Retain
+        # the graph from the first copy through the replay and its outputs.
         before = jt.flags.keep_graph
         jt.flags.keep_graph = 2
         try:
+            # A graph built after the capture -- an unrelated forward from a
+            # parameter, left pending -- saves activations whose inputs are
+            # the storages this replay is about to write. Its readers did not
+            # exist when the captured write-back ordered itself, and a kept
+            # graph does not rebuild edges, so run them against the
+            # forward-time bytes first. This batch is not part of the kept
+            # graph: its finished values are what that backward will read, so
+            # their memory must be retained as an ordinary batch retains it
+            # (`keep_graph=2` would free it after the batch, and the backward
+            # would recompute the reader from the value the replay then wrote).
+            outer_keep = jt.flags.keep_graph
+            jt.flags.keep_graph = 0
+            try:
+                preserved = _core._preserve_step_readers(cap.state_lists[1])
+            finally:
+                jt.flags.keep_graph = outer_keep
+            if preserved:
+                self.stats["preserved"] = self.stats.get("preserved", 0) + 1
+            with jt.no_grad():
+                for captured, given in zip(cap.inputs, _input_vars((args, kwargs), [])):
+                    captured._copy_into(given)
+            if self._cuda_graph and not _core.graph_leaves_moved(self._cuda_graph):
+                _core.graph_launch(self._cuda_graph)
+                self.stats["graph"] += 1
+                return self._results(cap, self._graph_out, (args, kwargs))
+            if self._cuda_graph:
+                # A leaf the recording reads has moved -- a parameter read back
+                # to the host migrates -- so its addresses are stale; this step
+                # goes through the executor and a later one records again.
+                _core.graph_release(self._cuda_graph)
+                self._cuda_graph = 0
+                self._graph_out = None
+                self._rerecords += 1
+                if self._rerecords >= _RERECORD_LIMIT:
+                    self._graph_refused = "the leaves a recording reads kept moving"
+                else:
+                    self._record_at = self.stats["replayed"] + 2
             jt.sync(cap.roots, False, False)
             self._write_back(cap)
+            return self._results(cap, cap.outputs, (args, kwargs))
         finally:
             jt.flags.keep_graph = before
-        return self._results(cap, cap.outputs)
 
     def __call__(self, *args, **kwargs):
+        if _core.graph_capture_active():
+            # Leave leaf synchronization and graph recording to the caller.
+            return self._eager(args, kwargs)
+        if self._guard_external_backward and any(
+                v.requires_grad for v in _input_vars((args, kwargs), [])):
+            # A private byte copy is not an autograd edge to the caller's input.
+            # Keep the original CUDA graph rather than publishing missing grads.
+            self.invalidate()
+            self._refused = "whole-step replay cannot preserve differentiable input gradients"
         if self._refused is not None:
             return self._eager(args, kwargs)
         cap = self._capture
@@ -667,7 +968,7 @@ class StepCapture:
                 self._refused = "the step kept changing, so it was re-captured too often"
                 return self._eager(args, kwargs)
         if cap is None:
-            signature = _signature(args, kwargs)
+            signature = self._call_signature(args, kwargs)
             if signature != self._seen:
                 # The first call of a signature runs as written: it builds
                 # whatever the step creates lazily, which must exist -- and
@@ -717,6 +1018,62 @@ class StepCapture:
         for root in cap.roots:
             if not root.is_finished:
                 root._release_kept()
+
+
+class _PolicyStep(StepCapture):
+    """A module call the automatic replay policy captures, state included.
+
+    See the policy in `graph_replay`. Nobody asked for this capture, so it
+    guards what an explicit one leaves to its caller, and re-captures when
+    any of it changes:
+
+      - the host-side state of the objects the call was given (`_host_state`),
+        which the capture run must also have left as it found it;
+      - which Var every parameter and registered buffer of the module, and
+        every Var those objects hold, is: a load or an assignment outside the
+        call rebinds one, and
+        the graph would go on reading the old one. State the step updates is
+        put back first (`_adopt`), so a cache reset between two `generate`
+        calls is taken over rather than re-captured;
+      - the module's training mode.
+
+    And it refuses a call that draws random numbers (`exact_random`).
+    """
+
+    def __init__(self, module, objects, signature, max_retained_bytes):
+        ref = weakref.ref(module)
+
+        def call(*args, **kwargs):
+            return ref()(*args, **kwargs)
+        super().__init__(call, exact_random=True, max_retained_bytes=max_retained_bytes)
+        self._module_ref = ref
+        self._objects = objects
+        # The policy has run this signature as written already, which is what
+        # the first call of a signature is for.
+        self._seen = signature
+
+    def _capture_now(self, args, kwargs):
+        objects = self._objects
+        before = _host_state(objects)
+        cap, result = super()._capture_now(args, kwargs)
+        if cap is None:
+            return cap, result
+        leaves = []
+        after = _host_state(objects, leaves)
+        module = self._module_ref()
+        if after is None or after != before or module is None:
+            # What the capture baked in is out of date already.
+            self._refused = "the call changes the host-side state of what it was given"
+            for root in cap.roots:
+                if not root.is_finished:
+                    root._release_kept()
+            return None, result
+        leaves.extend(v for v in _module_vars(module) if isinstance(v, jt.Var))
+        ref = self._module_ref
+        cap.guards.append((lambda: _host_state(objects), after))
+        cap.guards.append((lambda: [v.var_ptr for v in leaves], [v.var_ptr for v in leaves]))
+        cap.guards.append((lambda: _training(ref()), _training(module)))
+        return cap, result
 
 
 def capture_step(fn, *, record=True):

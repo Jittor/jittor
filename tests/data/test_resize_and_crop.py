@@ -27,9 +27,6 @@ def setUpModule():
     if not skip_this_test:
         torch, tnn = import_torch_modules("torch", "torch.nn")
 
-mid = 0
-if hasattr(os, "uname") and "jittor" in os.uname()[1]:
-    mid = 1
 
 def resize_and_crop(x, bbox, interpolation="nearest", out_size=[224,224]):
     N, k = bbox.shape
@@ -102,8 +99,10 @@ class TestResizeAndCrop(unittest.TestCase):
     def test(self):
         check_case(100, [224, 224], 0.45)
         check_case(100, [180, 224], 0.3)
-        check_case(20, [1024, 1024], [1.2, 1.8][mid])
-        check_case(20, [1024, 666], [0.8,1.0][mid])
+        # Time limits are asserted only under performance_test=1; use the
+        # looser of the two bounds this test once picked by host name.
+        check_case(20, [1024, 1024], 1.8)
+        check_case(20, [1024, 666], 1.0)
 
     @unittest.skipIf(skip_this_test, "no torch found")
     def test_resize(self):

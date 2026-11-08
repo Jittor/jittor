@@ -1,5 +1,7 @@
 # 调试 Jittor 程序
 
+[本栏目目录](index.md) · [English](debugging.en.md)
+
 Jittor 惰性执行、运行时编译算子。下面这些诊断手段都是**用性能换更准确的失败信息**，
 只在复现问题时打开。
 
@@ -9,11 +11,11 @@ Jittor 惰性执行、运行时编译算子。下面这些诊断手段都是**�
 
 ```bash
 export JT_CHECK_NAN=1
-export trace_py_var=3
+export JT_TRACE_PY_VAR=3
 python reproduce.py
 ```
 
-`JT_CHECK_NAN=1` 会在算子产生非法浮点值时停下；`trace_py_var=3` 记录生成算子对应的
+`JT_CHECK_NAN=1` 会在算子产生非法浮点值时停下；`JT_TRACE_PY_VAR=3` 记录生成算子对应的
 Python 调用位置。**两者都会触发重新编译并显著拖慢速度。**
 
 ## 让异步失败变成本地失败
@@ -35,7 +37,7 @@ jt.flags.lazy_execution = 0
 ## 诊断显存耗尽
 
 单次迭代就超出显存时，先用 `jt.profile()` 看峰值那一刻谁活着（见
-[性能与显存画像](../notes/profiling.md)），再减小模型或批次。显式同步加回收有助于判断是不是临时图被
+[性能与显存画像](../performance/profiling.md)），再减小模型或批次。显式同步加回收有助于判断是不是临时图被
 留住了：
 
 ```python

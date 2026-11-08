@@ -19,6 +19,7 @@ import os
 import unittest
 import warnings
 
+import numpy as np
 import jittor as jt
 import torch
 from jittor.compat import permissive, stub_policy
@@ -190,6 +191,63 @@ class TestPermissiveFinderScope(unittest.TestCase):
         self.assertIn("JITTOR_TORCH_PERMISSIVE_AUDIT",
                       permissive._audit_mode.__doc__ or
                       permissive.install_permissive_package.__doc__ or "")
+
+
+class TestQuantizationAndScriptStubs(unittest.TestCase):
+    """Eager models import ``torch.ao`` quantization stubs and ``jit.Attribute``.
+
+    Remote Transformers code builds ``QuantStub``/``DeQuantStub`` and
+    ``FloatFunctional`` without ever quantizing; they must import and act as
+    the identity / plain float ops, as torch's do before ``convert``. Imported
+    modules are dropped again, as in ``TestPermissiveFinderScope``.
+    """
+
+    def setUp(self):
+        import sys
+        self._modules_before = set(sys.modules)
+
+    def tearDown(self):
+        import sys
+        for name in set(sys.modules) - self._modules_before:
+            if name == "torch" or name.startswith("torch."):
+                sys.modules.pop(name, None)
+
+    def test_jit_attribute_is_the_value_outside_scripting(self):
+        value = [1, 2]
+        self.assertIs(torch.jit.Attribute(value, list), value)
+
+    def test_ao_quantization_stubs_are_identity_modules(self):
+        import torch.ao.quantization as quantization
+        from torch.ao.nn.quantized import FloatFunctional
+        from torch.ao.quantization import DeQuantStub, QuantStub
+        self.assertIs(torch.ao.quantization, quantization)
+        devices = ["cpu"] + (["cuda"] if jt.has_cuda else [])
+        for device in devices:
+            with self.subTest(device=device), jt.flag_scope(use_cuda=device == "cuda"):
+                class Model(torch.nn.Module):
+                    def __init__(self):
+                        super().__init__()
+                        self.quant = QuantStub()
+                        self.linear = torch.nn.Linear(2, 2)
+                        self.dequant = DeQuantStub()
+                        self.ops = FloatFunctional()
+
+                    def forward(self, x):
+                        y = self.dequant(self.linear(self.quant(x)))
+                        return self.ops.add_relu(self.ops.mul(y, 2.0), x)
+
+                model = Model().to(device)
+                self.assertIsInstance(model.quant, torch.nn.Module)
+                self.assertEqual([name for name, _ in model.named_modules()],
+                                 ["", "quant", "linear", "dequant", "ops"])
+                x = torch.tensor([[1.0, -2.0]], device=device)
+                expected = torch.relu(model.linear(x) * 2.0 + x)
+                got = model(x)
+                self.assertEqual(got.device.type, device)
+                np.testing.assert_allclose(got.numpy(), expected.numpy(), rtol=1e-6)
+                self.assertEqual(model.ops.add(x, x).numpy().tolist(), [[2.0, -4.0]])
+                with self.assertRaises(RuntimeError):
+                    model.ops(x)
 
 
 if __name__ == "__main__":

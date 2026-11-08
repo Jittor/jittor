@@ -184,7 +184,9 @@ class TestNetworkTrainingParityCPU(NetworkTrainingParity):
 
 
 @unittest.skipIf(skip_this_test, "independent PyTorch is unavailable")
-@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "CUDA is unavailable")
+@unittest.skipIf(
+    not _test_capability.check_accelerator("cuda", backend=jt).enabled, "CUDA is unavailable"
+)
 class TestNetworkTrainingParityCUDA(NetworkTrainingParity):
     loss_tolerance = 1e-2
     buffer_absolute_tolerance = 5e-5

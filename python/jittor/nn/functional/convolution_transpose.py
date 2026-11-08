@@ -9,7 +9,7 @@ def conv_transpose(input, weight, bias=None, stride=1, padding=0, output_padding
     if groups == 1:
         x = input
         if x.dim() != 4:
-            raise RuntimeError(f'Expected 4D input to conv_transpose, but got input of size: {x.shape}')
+            raise jt.JittorShapeError(f'Expected 4D input to conv_transpose, but got input of size: {list(x.shape)}')
         N,C,H,W = x.shape
         i,o,h,w = weight.shape
         assert C==i
@@ -52,7 +52,7 @@ def conv_transpose(input, weight, bias=None, stride=1, padding=0, output_padding
         return y
     else:
         if input.dim() != 4:
-            raise RuntimeError(f'Expected 4D input to conv_transpose, but got input of size: {input.shape}')
+            raise jt.JittorShapeError(f'Expected 4D input to conv_transpose, but got input of size: {list(input.shape)}')
         N,C,H,W = input.shape
         i,o,h,w = weight.shape
         G = groups
@@ -124,7 +124,7 @@ def conv_transpose(input, weight, bias=None, stride=1, padding=0, output_padding
 def conv_transpose3d(input, weight, bias=None, stride=1, padding=0, output_padding=0, groups=1, dilation=1):
     x = input
     if x.dim() != 5:
-        raise RuntimeError(f'Expected 5D input to conv_transpose3d, but got input of size: {x.shape}')
+        raise jt.JittorShapeError(f'Expected 5D input to conv_transpose3d, but got input of size: {list(x.shape)}')
     N,C,D,H,W = x.shape
     i,o,d,h,w = weight.shape
     assert C==i
@@ -196,9 +196,9 @@ def conv_transpose1d(input, weight, bias=None, stride=1, padding=0, output_paddi
         >>> y = nn.conv_transpose1d(x, w, stride=2)
     '''
     if input.dim() != 3:
-        raise RuntimeError(f'Expected 3D input to conv_transpose1d, but got input of size: {input.shape}')
+        raise jt.JittorShapeError(f'Expected 3D input to conv_transpose1d, but got input of size: {list(input.shape)}')
     if weight.dim() != 3:
-        raise RuntimeError(f'Expected 3D weight to conv_transpose1d, but got weight of size: {weight.shape}')
+        raise jt.JittorShapeError(f'Expected 3D weight to conv_transpose1d, but got weight of size: {list(weight.shape)}')
     stride = stride[0] if isinstance(stride, (tuple, list)) else stride
     padding = padding[0] if isinstance(padding, (tuple, list)) else padding
     output_padding = output_padding[0] if isinstance(output_padding, (tuple, list)) else output_padding

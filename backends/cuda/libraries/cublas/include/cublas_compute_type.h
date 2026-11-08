@@ -17,6 +17,11 @@
 // Now: fp64 accumulates in fp64, float16/bfloat16 accumulate in float32
 // (torch's rule, and what two of the three already did by default), and
 // float32 follows `float32_matmul_precision` -- see runtime/float32_precision.h.
+//
+// Complex operands take the compute type of their component: complex128 is a
+// pair of float64 and accumulates in fp64 (pass it as `has_fp64`), complex64 a
+// pair of float32 and follows the same float32 tier -- cuBLAS accepts
+// CUDA_C_32F with COMPUTE_32F and both FAST variants.
 #include "cublas_wrapper.h"
 #include "runtime/float32_precision.h"
 
@@ -33,14 +38,17 @@ struct CublasGemmMode {
     cublasGemmAlgo_t algo;
     // cublasGemmEx reads alpha/beta *in the compute type*. Only float64 (and,
     // before this, float16) needs the typed constants; every other compute
-    // type here is a 32-bit float one and wants the float pair.
+    // type here is a 32-bit float one and wants the float pair. A complex
+    // GEMM reads them as cuComplex/cuDoubleComplex, so it always wants the
+    // operand-typed `{1, 0}` / `{0, 0}`.
     bool typed_alpha;
     // The tier the float32 path resolved to, for the log line. Reduced-
     // precision and float64 operands do not consult it.
     int tier;
 };
 
-inline CublasGemmMode cublas_gemm_mode(bool has_fp16, bool has_bf16, bool has_fp64) {
+inline CublasGemmMode cublas_gemm_mode(bool has_fp16, bool has_bf16, bool has_fp64,
+                                       bool is_complex = false) {
     CublasGemmMode m;
     m.tier = float32_matmul_tier();
 #if CUDART_VERSION >= 11000
@@ -64,7 +72,7 @@ inline CublasGemmMode cublas_gemm_mode(bool has_fp16, bool has_bf16, bool has_fp
         m.algo = m.compute == CUBLAS_COMPUTE_32F
             ? CUBLAS_GEMM_DEFAULT : CUBLAS_GEMM_DEFAULT_TENSOR_OP;
     }
-    m.typed_alpha = m.compute == CUBLAS_COMPUTE_64F
+    m.typed_alpha = is_complex || m.compute == CUBLAS_COMPUTE_64F
         || m.compute == CUBLAS_COMPUTE_16F;
 #else
     // CUDA 10 and ROCm: cublasGemmEx takes a data type, not a compute type,
@@ -80,7 +88,7 @@ inline CublasGemmMode cublas_gemm_mode(bool has_fp16, bool has_bf16, bool has_fp
         m.algo = m.tier == F32_HIGHEST
             ? CUBLAS_GEMM_DEFAULT : CUBLAS_GEMM_DEFAULT_TENSOR_OP;
     }
-    m.typed_alpha = m.compute == CUDA_R_64F || m.compute == CUDA_R_16F;
+    m.typed_alpha = is_complex || m.compute == CUDA_R_64F || m.compute == CUDA_R_16F;
 #endif
     return m;
 }

@@ -17,6 +17,35 @@ namespace jittor {
 
 constexpr size_t alignment = 32;
 struct VarHolder;
+struct GradCallback;
+
+// Autograd view provenance is independent of both graph-node liveness and the
+// weak storage writeback owner. Keeping only small policy objects here lets an
+// alias outlive its source's Python wrapper without keeping any Var alive.
+struct AutogradAliasState {
+    std::shared_ptr<AutogradAliasState> source;
+    std::shared_ptr<uint64> version = std::make_shared<uint64>(0);
+    // Creation epoch for unrecorded views; last observed history epoch for
+    // recorded views. Physical refresh never consumes this epoch.
+    uint64 creation_version = 0;
+    bool own_requires_grad = false;
+    bool inherit_requires_grad = false;
+    bool created_without_grad = false;
+    bool recorded_view_history = false;
+    // Source eligibility of the real producer built by the latest refresh.
+    bool source_edge_enabled = false;
+    bool requires_grad() const {
+        for (auto* state = this; state; state = state->source.get()) {
+            if (state->own_requires_grad) return true;
+            if (!state->inherit_requires_grad) return false;
+        }
+        return false;
+    }
+    bool stale_unrecorded_view() const {
+        return created_without_grad && source && source->requires_grad()
+            && *version != creation_version;
+    }
+};
 
 struct Var : Node {
     NanoVector shape;
@@ -32,11 +61,21 @@ struct Var : Node {
     // needs neither the modulo nor the division belonging to a cleared bit, so
     // this belongs in the JIT key: it is the shape of the index arithmetic, and
     // unlike the stride values themselves it takes only a handful of values.
-    int stride_pattern() const;
+    uint stride_pattern() const;
     void set_storage_strides(NanoVector strides);
     void set_storage_strides(const vector<int64>& strides);
     cstr name;
     fast_shared_ptr<loop_options_t> loop_options;
+    // Tensor hooks act on the complete gradient of this node, including
+    // when the node itself is a requested differentiation target.
+    std::shared_ptr<GradCallback> grad_hook;
+    std::shared_ptr<AutogradAliasState> autograd_alias;
+    // A .data storage replacement may change visible shape without changing
+    // the recorded producer/accumulator's gradient contract. Allocated only
+    // on that exceptional transition; ordinary Vars carry no shape copy.
+    std::shared_ptr<const NanoVector> recorded_gradient_shape;
+    void refresh_alias_requires_grad();
+    void check_alias_history() const;
     // Atomic: constructed and released from the compile workers too.
     static std::atomic<int64> number_of_lived_vars;
 
@@ -90,6 +129,14 @@ struct Var : Node {
     // current device. Host residency is a different axis -- a Var migrated to
     // the CPU keeps its device_id and goes back to that device.
     int device_id = -1;
+    // How many of the holders owning this Var are a step capture's record of
+    // it as state (`state_capture_end`): the Var the captured graph reads, put
+    // back under its holder after every replay. Such a record adopts whatever
+    // the holder holds before the graph runs again (`_adopt` in
+    // step_capture.py), so it does not need the bytes to stay as they are --
+    // an in-place update may write them (see setitem_inplace). Maintained by
+    // VarHolder::capture_record.
+    uint16_t capture_owners = 0;
     TensorPlacement placement;
     // Circular list of the vars that currently point into one allocation.
     // `share_src` above is only the *request*, and alloc() clears it once it
@@ -116,6 +163,17 @@ struct Var : Node {
     template <typename T>
     inline T* ptr() { CHECK_EXIST; check_backward_storage_read(this); return (T*)mem_ptr; }
     inline Op* input() { CHECK_EXIST; return _inputs.size() ? (Op*)_inputs.front() : (Op*)nullptr; }
+    // Whether anything will read this var's value: a downstream op on a path to
+    // a requested result, or a holder (a Python reference, a sync target). This
+    // is the backward liveness the executor already tracks (node.h, b2 var
+    // holder / b3 output with b>0), valid while the producing op runs -- the var
+    // is not freed until its last reader has. A multi-output op whose k-th output
+    // is not wanted (a conv backward asked for the weight gradient only, its input
+    // gradient discarded) reads false here and can skip that output's work; one
+    // output being wanted is why the op runs at all. A result the caller keeps --
+    // `jt.grad(loss, [x])` held in Python -- is wanted through its holder, so this
+    // stays true for it.
+    inline bool is_result_needed() const { CHECK_EXIST; return liveness.backward.active(); }
     inline Caster<Op*, Node::output_t> outputs()  { CHECK_EXIST; return &_outputs; }
     inline Caster<Node::var_output_t, Node::output_t> outputs_with_index() { CHECK_EXIST; return &_outputs; }
     inline Op* input(uint i) { return Node::input(i)->op(); }
@@ -129,6 +187,7 @@ struct Var : Node {
     bool alloc(Allocator* allocator);
     inline void share_with(Var* x, size_t offset = 0) {
         CHECK_EXIST;
+        std::atomic_store(&storage_mutation_version, x->storage_version_token());
         share_src = x;
         share_offset = offset;
         storage_offset_bytes = x->storage_offset_bytes + offset;
@@ -154,6 +213,10 @@ struct Var : Node {
 // happens wherever a var stops pointing at that allocation.
 void share_group_link(Var* parent, Var* child);
 void share_group_unlink(Var* v);
+// Held by every change to and walk of a share ring (see var.cc).
+std::mutex& share_ring_mutex();
+// share_group_unlink for a caller that holds share_ring_mutex().
+void share_group_unlink_locked(Var* v);
 
 struct VarPtr {
     Var* ptr;
@@ -207,6 +270,22 @@ struct VarPtr {
     void set_stop_grad(bool stop_grad);
 };
 
+// Some constructors only decide to forward: from their arguments alone they
+// build another value and hand it on (`Op::forward`), and the op itself is
+// deleted unused -- one operator in seven in a DeepMill detect loop, each paying
+// for a full construction. An operator type that can make that decision first
+// declares `static VarPtr forward_before_construct(...)` taking its
+// constructor's arguments, returning the value it would forward to, or null
+// when it has to be constructed after all. Its op maker asks before `new`;
+// for any other operator type this is a null VarPtr and costs nothing.
+template<class OpT, class... Args>
+inline auto forward_before_construct(int, Args&&... args)
+    -> decltype(OpT::forward_before_construct(std::forward<Args>(args)...)) {
+    return OpT::forward_before_construct(std::forward<Args>(args)...);
+}
+template<class OpT, class... Args>
+inline VarPtr forward_before_construct(long, Args&&...) { return VarPtr(); }
+
 std::ostream& operator<<(std::ostream& os, const Var& var);
 std::ostream& operator<<(std::ostream& os, const Var* var);
 std::ostream& operator<<(std::ostream& os, const VarPtr& v);
@@ -231,9 +310,14 @@ VarPtr contiguous_storage(Var* value);
  * it as an input -- the ``forward``ed-op pattern does this.
  */
 VarPtr cast_operand_to_compute_dtype(Var* value, NanoString dtype);
-void adapt_cpu_scalar_operands(const vector<Var**>& inputs, vector<VarPtr>& owners);
-inline void collect_placement_inputs(Var*& value, vector<Var**>& inputs) { inputs.push_back(&value); }
-inline void collect_placement_inputs(vector<Var*>& values, vector<Var**>& inputs) {
+// The constructor arguments a CPU-scalar adaptation may replace. Every
+// construction of an operator that accepts such operands builds one -- every
+// binary op does -- so its usual handful of slots stays inline rather than
+// costing a heap allocation and a free per op.
+using PlacementInputs = SmallVector<Var**, 4>;
+void adapt_cpu_scalar_operands(const PlacementInputs& inputs, vector<VarPtr>& owners);
+inline void collect_placement_inputs(Var*& value, PlacementInputs& inputs) { inputs.push_back(&value); }
+inline void collect_placement_inputs(vector<Var*>& values, PlacementInputs& inputs) {
     for (auto*& value : values) inputs.push_back(&value);
 }
 template<class Operator>
@@ -262,7 +346,7 @@ EXTERN_LIB vector<Var*>* batch_released_vars;
 // Release a var's storage: unlink it from any share ring, clear `mem_ptr`,
 // `allocator` and `allocation`, and only then hand the block back. Clearing
 // first is what makes a concurrent second release a no-op instead of a double
-// free (KI-EXEC-007), so every path that drops a var's storage goes through
+// free (the shared-parameter storage race), so every path that drops a var's storage goes through
 // here rather than calling `allocator->free` itself.
 void free_var_mem(Var* v);
 

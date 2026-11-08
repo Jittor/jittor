@@ -2,17 +2,16 @@
 # torch-level regression test (#6): run real transformers models
 # through `import torch` -> jittor, on the torch-compat layer.
 #
-# REQUIRES an isolated environment with the torch shim deployed and a pinned
-# Transformers installation:
+# REQUIRES an env with the torch_shim deployed + transformers:
 #   export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_DEACTIVATE_ASYNC_LOAD=1
-#   python -m pytest compat/tests/torch/test_torch_hf_models.py
+#   JITTOR_TORCH_SHIM=1 python -m pytest compat/tests/torch/test_torch_hf_models.py
 # Skips cleanly if torch_shim/transformers are unavailable.
 #
 # Covers ~30 architectures (decoder / encoder / encoder-decoder / vision):
 # forward finiteness + eval-determinism (Dropout off), param.grad populated after
 # loss.backward() (the no-optimizer autograd bridge), buffer/param separation,
 # recursive named_buffers, torch.norm scalar reduction, and Var.T. The configs
-# mirror the validated jittor-torch-diff parity set (all PASS vs real torch ~1e-6).
+# keep these model fixtures explicit; current parity requires an independent Torch run.
 # ***************************************************************
 import os
 os.environ.setdefault('HF_HUB_OFFLINE', '1'); os.environ.setdefault('TRANSFORMERS_OFFLINE', '1')

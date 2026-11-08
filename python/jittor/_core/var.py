@@ -9,11 +9,12 @@ import operator as _operator
 import numbers
 from contextlib import contextmanager as _contextmanager
 from collections.abc import Sequence
-from builtins import bool as ori_bool, float as ori_float, int as ori_int
+from builtins import bool as ori_bool, complex as ori_complex, float as ori_float, int as ori_int
 
 import numpy as np
 import jittor_core as core
 from jittor_core import NanoString, NanoVector, Var, ops
+from jittor_core import _fast_permute, _fast_transpose, _fast_unsqueeze, _fast_view
 from .flags import flag_scope, flags as _runtime_flags
 from .._runtime.acl_clamp import dispatch_acl_clamp
 from .._runtime.backend_libraries import get_library as _get_library
@@ -68,7 +69,10 @@ def array(data, dtype=None):
         data = list(data)                       # NB: `int` is shadowed by the dtype here
     if isinstance(data, core.Var):
         if dtype is None:
-            ret = data.clone()
+            # A new Var over the same storage, as before `Var.clone()` started
+            # copying: `torch.as_tensor` in the compatibility layer aliases
+            # through here.
+            ret = ops.clone(data)
         else:
             ret = cast(data, dtype)
     elif dtype is not None:
@@ -98,6 +102,8 @@ class amp_flags:
     fails if they drift.
     """
 
+    #: disable every automatic mixed-precision preference in a scoped opmath path
+    disabled = 0
     #: force float32 for ops whose inputs are all non-scalar floats
     prefer32 = 1
     #: force float16 (bfloat16 if an input is bfloat16) for the same
@@ -146,7 +152,7 @@ def _amp_array_preference(ret):
         return ret if _jittor_dtype_name(ret.dtype) == "float16" else ret.float16()
     return ret
 
-def random(shape, dtype="float32", type="uniform"):
+def random(shape, dtype="float32", type="uniform", generator=None):
     ''' Constructs a random jittor Var.
 
     :param shape: The shape of the random Var.
@@ -155,6 +161,12 @@ def random(shape, dtype="float32", type="uniform"):
     :type dtype: str, jittor type-cast function, or None.
     :param type: The random distribution, can be 'uniform' or 'normal'.
     :type type: str
+    :param generator: an optional jt.Generator: when given, draws consume
+        (and advance) that generator's own independent, device-native RNG
+        state instead of the global one -- two generators seeded identically
+        produce identical sequences, and interleaved draws from different
+        generators never share state.
+    :type generator: jt.Generator, optional
 
     ----------------
 
@@ -170,9 +182,11 @@ def random(shape, dtype="float32", type="uniform"):
     dtype = _dtype_for_compute(dtype)
     name = _jittor_dtype_name(dtype)
     draw = "float32" if name in ("float16", "bfloat16") else name
-    ret = _captured_draw(shape, draw, type)
+    # A captured step replays its own Philox stream, which knows nothing of an
+    # explicit generator's state: only the global stream is captured.
+    ret = _captured_draw(shape, draw, type) if generator is None else None
     if ret is None:
-        ret = ops.random(shape, draw, type)
+        ret = ops.random(shape, draw, type, generator)
     if draw != name:
         # The CPU and accelerator random engines generate standard floating
         # types; low-precision outputs use their regular cast kernels.
@@ -285,9 +299,9 @@ Var.device = property(_device)
 
 def float_auto(x):
     import jittor as jt
+    if jt.flags.amp_reg & amp_flags.prefer32:
+        return x.float32()
     if jt.flags.amp_reg & amp_flags.prefer_bfloat16:
-        if jt.flags.amp_reg & amp_flags.prefer32:
-            return x.float32()
         return x if _jittor_dtype_name(x.dtype) == "float64" else x.bfloat16()
     if jt.flags.amp_reg & amp_flags.prefer16:
         return x.float16()
@@ -365,6 +379,53 @@ def _constant_scalar(value, dtype):
     return array(native)
 
 
+def _creation_shape(fn, shape, dtype):
+    '''(shape, dtype) from the ``*shape`` arguments of ones/zeros/empty, which
+    accept ``(2, 3)``, ``((2, 3),)`` and a trailing dtype.'''
+    for dim in shape:
+        if dim.__class__ is not ori_int:     # this module's `int` is int32
+            break
+    else:
+        # `ones(2, 3)`: nothing below applies to plain ints but the dtype check.
+        if dtype.__class__ is str and dtype not in _KNOWN_DTYPE_STRINGS:
+            _check_dtype_string(fn, dtype)
+        return shape, dtype
+    # is_dtype accepts any str, so a lone string would become the dtype of a
+    # 0-d result instead of being reported as a bad shape.
+    if len(shape) == 1 and isinstance(shape[0], str):
+        raise TypeError(f"{fn}(): shape must be a sequence of ints, "
+                        f"but got str {shape[0]!r}")
+    if shape and _is_dtype(shape[-1]):
+        dtype = shape[-1]
+        shape = shape[:-1]
+    if len(shape) == 1 and isinstance(shape[0], (Sequence, NanoVector)):
+        shape = shape[0]
+    for dim in shape:
+        if isinstance(dim, str):
+            raise TypeError(f"{fn}(): shape must be a sequence of ints, "
+                            f"but found element of type str: {dim!r}")
+    if dtype.__class__ is str and dtype not in _KNOWN_DTYPE_STRINGS:
+        _check_dtype_string(fn, dtype)
+    return shape, dtype
+
+
+#: dtype strings already accepted by the native converter. Only valid names
+#: are added, so it stays as small as the set of dtypes.
+_KNOWN_DTYPE_STRINGS = set()
+
+
+def _check_dtype_string(fn, dtype):
+    '''Name ``fn`` when ``dtype`` is not a dtype. Otherwise the error came from
+    the internal op the value is built with, ``unary()``, listing its C++
+    signature.'''
+    import jittor_utils
+    try:
+        _dtype_for_compute(dtype)
+    except jittor_utils.cc.JittorTypeError:
+        raise TypeError(f"{fn}(): unknown dtype {dtype!r}; expected a jittor "
+                        f"dtype such as 'float32', 'int64' or 'bool'") from None
+    _KNOWN_DTYPE_STRINGS.add(dtype)
+
 def ones(*shape, dtype="float32"):
     ''' Constructs a jittor Var with all elements set to 1.
 
@@ -375,15 +436,16 @@ def ones(*shape, dtype="float32"):
     :return: The output Var.
     :rtype: jittor.Var
     '''
-    if isinstance(shape, tuple) and _is_dtype(shape[-1]):
-        dtype = shape[-1]
-        shape = shape[:-1]
-    if isinstance(shape, tuple) and isinstance(shape[0], (Sequence, NanoVector)):
-        shape = shape[0]
+    shape, dtype = _creation_shape("ones", shape, dtype)
     for dim in shape:
         if dim < 0:
             raise RuntimeError(f"Trying to create tensor with negative dimension {dim}: {shape}")
-    return _constant_scalar(1, dtype).broadcast(shape)
+    # A factory result is a tensor, not the wrapped number it was built from:
+    # without `_as_tensor` the rank-zero constant's `_is_scalar` survives the
+    # broadcast and `jt.ones(4) * 0.1` promotes like the Python `1`.
+    # Placement still follows the operand's device because
+    # `_is_constant` carries through the broadcast.
+    return _constant_scalar(1, dtype).broadcast(shape)._as_tensor()
 
 @contextmanager
 def placement_scope_like(x):
@@ -408,10 +470,16 @@ def placement_scope_like(x):
     if backend < 0 or jt.core._current_tensor_placement() is not None:
         yield
         return
-    token = jt.core._set_tensor_placement(backend, max(ori_int(x.device_id), 0))
+    device = max(ori_int(x.device_id), 0)
+    token = jt.core._set_tensor_placement(backend, device)
+    # The request alone reaches only bindings inside a frontend scope; a
+    # native constructor (`zeros` is `array(0).broadcast`) stamps the
+    # construction placement, so set that too.
+    previous = jt.core._set_construction_placement(backend, device)
     try:
         yield
     finally:
+        jt.core._restore_construction_placement(previous)
         jt.core._reset_tensor_placement(token)
 
 
@@ -506,15 +574,12 @@ def zeros(*shape, dtype="float32"):
     :return: The output Var.
     :rtype: jittor.Var
     '''
-    if isinstance(shape, tuple) and _is_dtype(shape[-1]):
-        dtype = shape[-1]
-        shape = shape[:-1]
-    if isinstance(shape, tuple) and isinstance(shape[0], (Sequence, NanoVector)):
-        shape = shape[0]
+    shape, dtype = _creation_shape("zeros", shape, dtype)
     for dim in shape:
         if dim < 0:
             raise RuntimeError(f"Trying to create tensor with negative dimension {dim}: {shape}")
-    return _constant_scalar(0, dtype).broadcast(shape)
+    # See `ones`: the result is a tensor, not a wrapped number.
+    return _constant_scalar(0, dtype).broadcast(shape)._as_tensor()
 
 def new_zeros(x, size):
     with _factory_scope_like(x):
@@ -523,11 +588,7 @@ def new_zeros(x, size):
 Var.new_zeros = new_zeros
 
 def empty(*shape, dtype="float32"):
-    if isinstance(shape, tuple) and _is_dtype(shape[-1]):
-        dtype = shape[-1]
-        shape = shape[:-1]
-    if isinstance(shape, tuple) and isinstance(shape[0], (Sequence, NanoVector)):
-        shape = shape[0]
+    shape, dtype = _creation_shape("empty", shape, dtype)
     return ops.empty(shape, dtype)
 
 def new_empty(x, size):
@@ -553,7 +614,8 @@ def full(shape,val,dtype="float32"):
     for dim in shape:
         if dim < 0:
             raise RuntimeError(f"Trying to create tensor with negative dimension {dim}: {shape}")
-    return _constant_scalar(val, dtype).broadcast(shape)
+    # See `ones`: the result is a tensor, not a wrapped number.
+    return _constant_scalar(val, dtype).broadcast(shape)._as_tensor()
 
 def new_full(x, size, val):
     with _factory_scope_like(x):
@@ -687,7 +749,13 @@ def norm(x, p=2, dim=-1, keepdims=False, eps=1e-30, keepdim=False):
     if p==1:
         return x.abs().sum(dim, keepdim)
     if p==2:
-        return (x.sqr()).sum(dim, keepdim).maximum(eps).sqrt()
+        # |x|**2, not x*x: for a complex x the square is complex and has no
+        # order to clamp with `maximum`. The norm is real either way.
+        # Re(x * conj x), not |x|**2 through `abs`: abs's backward is z/|z|,
+        # NaN at an exact zero, which a state vector is mostly made of. Three
+        # native ops that fuse into one kernel.
+        sq = (x * x.conj()).real if x.dtype.is_complex() else x.sqr()
+        return sq.sum(dim, keepdim).maximum(eps).sqrt()
 
 Var.norm = norm
 
@@ -701,6 +769,15 @@ _pyint = (0).__class__
 
 
 def view(x, *shape):
+    # A contiguous plain Var to a shape of exact ints is built natively
+    # (`_fast_view`, src/bindings/pyjt/py_compat_fast.h): the reshape below and
+    # its storage-view record, without these frames. It answers None for
+    # anything else -- a strided Var, a coerced or empty shape -- which the
+    # code below handles.
+    if x.__class__ is Var:
+        out = _fast_view(x, shape)
+        if out is not None:
+            return out
     # `type(...) is tuple or list` before the abstract check: `Sequence` is an
     # ABC, and an `isinstance` against an ABC goes through `_abc_instancecheck`
     # -- an order of magnitude dearer than an identity test, on a path every
@@ -774,6 +851,20 @@ def _with_accelerator_kernel_loaded(func):
     """
     @_functools.wraps(func)
     def transpose_with_accelerator_kernel(x, *dim):
+        # Two axes, once cuTT has been asked for: the native transpose
+        # (`_fast_transpose` in src/bindings/pyjt/py_compat_fast.h) builds
+        # what `transpose` below does, without its frames.
+        if _accelerator_transpose_tried:
+            if len(dim) == 2 and type(dim[0]) is _pyint and type(dim[1]) is _pyint:
+                out = _fast_transpose(x, dim[0], dim[1])
+            elif len(dim) > 2:
+                out = _fast_permute(x, dim)
+            elif len(dim) == 1 and type(dim[0]) in (tuple, list):
+                out = _fast_permute(x, dim[0])
+            else:
+                out = None
+            if out is not None:
+                return out
         _load_accelerator_transpose()
         return func(x, *dim)
     return transpose_with_accelerator_kernel
@@ -915,9 +1006,11 @@ def transpose(x, *dim):
     # otherwise ran two copies to put the heads back where they started.
     # The view record keeps writes reaching the root; where it is gone with
     # the root's holder, the graph still says what the Var is a transpose of.
+    # Not when `x` tracks a gradient: the result would then no longer depend
+    # on `x`, and `jt.grad(loss, x)` came back zero.
     source = None
     view_axes = getattr(x, "_transpose_view_axes", None)
-    if view_axes is not None:
+    if view_axes is not None and (_runtime_flags.no_grad or x.is_stop_grad()):
         prior = view_axes()
         if prior:
             source = x._transpose_view_source
@@ -973,6 +1066,10 @@ def detach(x):
     return x.detach()
 
 def unsqueeze(x, dim):
+    if type(dim) is _pyint:
+        out = _fast_unsqueeze(x, dim)
+        if out is not None:
+            return out
     shape = list(x.shape)
     if dim < 0: dim += len(shape) + 1
     if dim < 0 or dim > len(shape):
@@ -1001,10 +1098,28 @@ def squeeze(x, dim=None):
 
 Var.squeeze = squeeze
 
+_CLAMP_INT_DTYPES = frozenset(("int8", "int16", "int32", "int64",
+                               "uint8", "uint16", "uint32", "uint64"))
+
 def _clamp_cpu(x, min_v=None, max_v=None):
     import jittor as jt
     if x.numel() == 0:
         return x
+    # An integer tensor between two Python ints in order -- index clamping,
+    # the common call -- needs none of the promotion below. The bounds still
+    # go through `jt.unary` at x's dtype exactly as `prepare_bound` sends
+    # them, and for an integer there is no NaN to carry, so the two selects
+    # are maximum and minimum: the same values and dtype from two ops fewer
+    # per bound. Anything else -- a bool or float tensor, a Var or numpy
+    # bound, reversed bounds -- takes the general path.
+    if type(min_v) is ori_int and type(max_v) is ori_int and min_v <= max_v \
+            and _jittor_dtype_name(x.dtype) in _CLAMP_INT_DTYPES:
+        min_v = jt.unary(min_v, x.dtype).stop_grad()
+        max_v = jt.unary(max_v, x.dtype).stop_grad()
+        result = dispatch_acl_clamp(x, min_v, max_v)
+        if result is not None:
+            return result
+        return jt.minimum(jt.maximum(x, min_v), max_v)
     # Torch allows tensor bounds and reversed scalar bounds. Applying the lower
     # then upper bound also gives Torch's all-max result when min_v > max_v.
 
@@ -1046,7 +1161,7 @@ def _clamp_cpu(x, min_v=None, max_v=None):
         keep = value >= bound if lower else value <= bound
         result = jt.ternary(keep, value, bound)
         if "float" in _jittor_dtype_name(value.dtype):
-            nan_value = value.clone().stop_grad()
+            nan_value = ops.clone(value).stop_grad()  # read-only: a view is enough
             result = jt.ternary(value != value, nan_value, result)
         return result
 
@@ -1059,6 +1174,15 @@ def _clamp_cpu(x, min_v=None, max_v=None):
 _register_kernel("clamp", "*", _clamp_cpu)
 
 def clamp(x, min_v=None, max_v=None):
+    # `_clamp_cpu`'s graph built natively, when nothing but `_clamp_cpu` could
+    # be dispatched to. The native path declines (NotImplemented) for any
+    # input it does not render exactly -- a Var or numpy bound, a bool, an
+    # empty Var -- and a replaced `_try_dispatch` has no shortcut to skip.
+    native = getattr(_try_dispatch, "_native_clamp", None)
+    if native is not None and _try_dispatch._sole_default("clamp", _clamp_cpu):
+        out = native(x, min_v, max_v)
+        if out is not NotImplemented:
+            return out
     return _try_dispatch("clamp", x, min_v, max_v)
 
 Var.clamp = clamp
@@ -1271,11 +1395,21 @@ def pow(x, y):
     :param y: the second input.
     :type y: a python number or jt.Var.
     '''
-    if isinstance(x,Var) and isinstance(y, (ori_int, ori_float)):
+    if isinstance(x,Var) and isinstance(y, (ori_int, ori_float, ori_complex)):
         if y == 2:
             return x.sqr()
         if y == 3 and _jittor_dtype_name(x.dtype) == "float32":
             return x*x*x
+        if (y == 0 or y == 1) and _jittor_dtype_name(x.dtype).startswith("complex"):
+            # torch special-cases these two Python-scalar exponents of a
+            # complex tensor: x ** 0 is ones (with a zero gradient) and
+            # x ** 1 is x. A tensor exponent goes through the kernel, where a
+            # zero base gives 0 ** 0 = nan+nanj and a NaN gradient at 0 ** 1,
+            # as torch's tensor pow does.
+            if y == 1:
+                return x.clone()
+            import jittor as jt
+            return jt.ternary(jt.ones(x.shape, "bool"), jt.ones(x.shape, x.dtype), x)
     return core.ops.pow(x, y)
 
 Var.pow = Var.__pow__ = pow
@@ -1508,44 +1642,10 @@ def randint(low, high=None, shape=(1,), dtype="int32", generator=None) -> Var:
     '''
     import jittor as jt
     if high is None: low, high = 0, low
-    if generator is not None:
-        from .generator import Generator
-        if not isinstance(generator, Generator):
-            raise TypeError("generator must be a jittor.Generator")
-        try:
-            low, high = _operator.index(low), _operator.index(high)
-        except TypeError:
-            raise TypeError("randint bounds must be integers") from None
-        if high <= low:
-            raise ValueError("randint requires high > low")
-        raw_shape = (shape,) if isinstance(shape, ori_int) else tuple(shape)
-        try:
-            shape = tuple(_operator.index(dim) for dim in raw_shape)
-        except TypeError:
-            raise TypeError("randint shape dimensions must be integers") from None
-        if any(dim < 0 for dim in shape):
-            raise ValueError("randint shape dimensions must be non-negative")
-        dtype_name = _jittor_dtype_name(dtype)
-        limits = {"int32": (-(1 << 31), 1 << 31),
-                  "int64": (-(1 << 63), (1 << 63) - 1)}
-        if dtype_name not in limits:
-            raise TypeError("generator-aware randint supports int32 and int64")
-        minimum, maximum_exclusive = limits[dtype_name]
-        # The native constructor takes signed int64 bounds; keep the exclusive
-        # high bound representable as well as every possible output value.
-        if low < minimum or high > maximum_exclusive:
-            raise ValueError("randint bounds do not fit dtype %s" % dtype_name)
-        count = 1
-        for dim in shape:
-            count *= dim
-        offset = generator._reserve(count)
-        with generator._placement_scope():
-            return ops.generator_randint(shape, dtype_name, low, high,
-                                         generator._seed_argument(), offset)
     for dim in shape:
         if dim < 0:
             raise RuntimeError(f"Trying to create tensor with negative dimension {dim}: {shape}")
-    v = (jt.random(shape) * (high - low) + low).clamp(low, high-0.5)
+    v = (jt.random(shape, generator=generator) * (high - low) + low).clamp(low, high-0.5)
     v = jt.floor_int(v)
     return v.astype(_jittor_dtype_name(dtype))
 
@@ -1575,7 +1675,7 @@ def randint_like(x, low, high=None) -> Var:
     with device_scope_like(x):
         return randint(low, high, x.shape, x.dtype)
 
-def normal(mean, std, size=None, dtype="float32") -> Var:
+def normal(mean, std, size=None, dtype="float32", generator=None) -> Var:
     ''' samples random values from a normal distribution.
 
     :param mean: means of the normal distributions.
@@ -1612,7 +1712,7 @@ def normal(mean, std, size=None, dtype="float32") -> Var:
         else:
             if isinstance(mean, Var): size = mean.shape
             if isinstance(std, Var): size = std.shape
-    return jt.init.gauss(size, dtype, mean, std)
+    return jt.init.gauss(size, dtype, mean, std, generator=generator)
 
 def attrs(var):
     return {
@@ -1700,6 +1800,12 @@ def to_int(v):
 def to_float(v):
     return ori_float(v.item())
 
+def to_complex(v):
+    # Without this `complex(v)` fell back to __float__, which rejects a
+    # complex value -- and NumPy builds an array from a list of 0-d complex
+    # Vars through exactly that call.
+    return ori_complex(v.item())
+
 def to_bool(v):
     if not (v.dtype.is_int() or v.dtype.is_bool()):
         raise TypeError("bool conversion requires an integer or boolean Var")
@@ -1708,6 +1814,8 @@ def to_bool(v):
 Var.__int__ = to_int
 
 Var.__float__ = to_float
+
+Var.__complex__ = to_complex
 
 Var.__bool__ = to_bool
 
@@ -1768,6 +1876,136 @@ def _var__reduce__(self):
 
 Var.__reduce__ = _var__reduce__
 
+# DLPack. Var.dlpack()/dlpack_device() are the real pyjt-bound C++ methods
+# (bindings/pyjt/dlpack.cc); aliased to the protocol's actual dunder names
+# here rather than binding them directly, because pyjt_compiler.py treats
+# any "__xxx__" @pyjt name as a CPython type slot and only recognizes a
+# fixed whitelist (__init__, __repr__, __len__, __getitem__, ...) -- an
+# unrecognized one is a hard compile error, not a fallback to a plain method.
+Var.__dlpack__ = Var.dlpack
+Var.__dlpack_device__ = Var.dlpack_device
+to_dlpack = core.to_dlpack
+
+
+def _dlpack_flat_span(shape, strides):
+    # The minimum and maximum ELEMENT offset (relative to the DLTensor's own
+    # byte_offset) reachable by any legal index into `shape` under `strides`
+    # -- i.e. the inclusive [min_off, max_off] range of flat positions a
+    # producer's strided view can touch. Handles negative strides (a
+    # reversed/flipped view) correctly, not just the common "all strides >=
+    # 0" case. Zero-length axes are excluded from both min and max: an axis
+    # with shape[i]==0 contributes no actual index (0..shape[i]-1 is empty),
+    # so its stride must not be allowed to inflate/deflate the span -- a
+    # wholly empty tensor is aliasable (dlpack_peek) and never reaches this
+    # function for exactly this reason.
+    min_off = 0
+    max_off = 0
+    for s, st in zip(shape, strides):
+        if s <= 1:
+            continue
+        term = st * (s - 1)
+        if term < 0:
+            min_off += term
+        else:
+            max_off += term
+    return min_off, max_off
+
+
+def from_dlpack(obj, *, copy=None):
+    ''' Import a tensor from another array library via the DLPack protocol.
+    Accepts either a raw DLPack capsule (the legacy
+    torch.utils.dlpack.from_dlpack(capsule) style) or any object
+    implementing __dlpack__/__dlpack_device__ (numpy/cupy ndarrays, torch
+    tensors, ...), matching numpy.from_dlpack/torch.from_dlpack's own dual
+    calling convention, on CPU or an accelerator device.
+
+    A contiguous source, and a strided one with non-negative strides (a
+    transposed, permuted or step-sliced torch tensor), is imported zero-copy:
+    the result aliases the producer's memory, as a storage view when it is
+    strided, and the producer's DLPack deleter runs once this Var's storage
+    is no longer referenced. A source with a negative stride, which a Jittor
+    Var cannot alias, is gathered into an independent contiguous copy.
+
+    `copy` follows the array API: True always returns an independent copy,
+    False requires an alias and raises BufferError when there can be none, and
+    None (the default) aliases whenever it can.
+
+    A CUDA producer is handed Jittor's compute stream (`__dlpack__(stream=)`),
+    so its pending work is ordered before Jittor's without waiting for the
+    whole device; a producer that does not take the argument is waited for.
+
+    The returned Var is explicitly pinned to the source's physical device
+    (see Var.to_device) when that device is a GPU. '''
+    if copy not in (None, True, False):
+        raise TypeError("from_dlpack: copy must be None, True or False")
+    ordered = False
+    if hasattr(obj, "__dlpack__"):
+        kwargs = {"max_version": (1, 0)}
+        device = getattr(obj, "__dlpack_device__", None)
+        if device is not None:
+            device_type, device_id = device()
+            if device_type == 2:  # kDLCUDA
+                kwargs["stream"] = core.dlpack_consumer_stream(ori_int(device_id))
+        if copy is not None:
+            kwargs["copy"] = copy
+        # A producer older than the array API takes fewer keywords; drop them
+        # one at a time, `copy` first, and remember what it did honour.
+        capsule = None
+        for drop in ((), ("copy",), ("copy", "max_version"),
+                     ("copy", "max_version", "stream")):
+            attempt = {k: v for k, v in kwargs.items() if k not in drop}
+            try:
+                capsule = obj.__dlpack__(**attempt)
+            except TypeError:
+                continue
+            ordered = "stream" in attempt
+            copied = "copy" in attempt and copy is True
+            break
+        if capsule is None:
+            capsule = obj.__dlpack__()
+            ordered = copied = False
+    else:
+        capsule = obj
+        copied = False
+
+    shape, strides, aliasable = core.dlpack_peek(capsule)
+    if aliasable:
+        result = core.from_dlpack_capsule(capsule, None, 0, ordered)
+        if copy is True and not copied:
+            result = result.clone()
+            result.sync()
+        return result
+    if copy is False:
+        raise BufferError(
+            "from_dlpack(copy=False): the tensor has negative strides %s, which a "
+            "Jittor Var cannot alias" % (tuple(strides),))
+
+    # A negative stride: import the flat element span the strides reach,
+    # zero-copy, and gather the logical tensor out of it with one
+    # device-side advanced-index op.
+    min_off, max_off = _dlpack_flat_span(shape, strides)
+    flat_len = max_off - min_off + 1
+    flat = core.from_dlpack_capsule(capsule, flat_len, min_off, ordered)
+
+    idx = None
+    for d, st in enumerate(strides):
+        if st == 0:
+            continue
+        term = index(shape, d, dtype="int64") * st
+        idx = term if idx is None else idx + term
+    if idx is None:
+        # Every stride is 0 -- a fully broadcast/degenerate view where every
+        # logical element aliases the same single underlying element.
+        idx = zeros(shape, dtype="int64")
+    else:
+        idx = idx - min_off
+    result = flat[idx]
+    # Lazy execution would run the gather whenever the caller first reads
+    # the result, by which time the producer may have reused its memory.
+    # Run it now, so the copy is a copy when from_dlpack() returns.
+    result.sync()
+    return result
+
 __all__ = (
     'abs_',
     'add_',
@@ -1792,6 +2030,7 @@ __all__ = (
     'float_auto',
     'floor_int',
     'format',
+    'from_dlpack',
     'full',
     'full_like',
     'get_len',
@@ -1833,6 +2072,7 @@ __all__ = (
     'std',
     'to_bool',
     'to_device',
+    'to_dlpack',
     'to_float',
     'to_int',
     'transpose',

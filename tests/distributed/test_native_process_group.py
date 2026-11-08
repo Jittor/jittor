@@ -48,7 +48,7 @@ class TestNativeProcessGroup(unittest.TestCase):
 
     def test_missing_communicator_is_not_silent(self):
         group = self.module.ProcessGroup([0, 2])
-        with self.assertRaisesRegex(NotImplementedError, "require NCCL or HCCL"):
+        with self.assertRaisesRegex(NotImplementedError, "require NCCL, HCCL or MPI"):
             group._create_backend_communicator()
         with self.assertRaisesRegex(RuntimeError, "no backend communicator"):
             group._all_reduce(4, "sum")
@@ -59,6 +59,28 @@ class TestNativeProcessGroup(unittest.TestCase):
             mpi_all_reduce=lambda op: calls.append(op) or 12)
         self.assertEqual(self.module.ProcessGroup()._all_reduce(tensor, "sum"), 12)
         self.assertEqual(calls, ["sum"])
+
+    def test_mpi_groups_keep_their_communicator_for_collectives(self):
+        from contextlib import nullcontext
+
+        calls = []
+        handles = iter((7, 8))
+        provider = types.SimpleNamespace(mpi_create_process_group=lambda ranks: next(handles))
+        operations = types.SimpleNamespace(
+            mpi_all_reduce=lambda *args: calls.append(("reduce", args)) or 13,
+            mpi_broadcast=lambda *args: calls.append(("broadcast", args)) or 17)
+        self.runtime.compile_extern = types.SimpleNamespace(mpi=provider, mpi_ops=operations)
+        fake_utils = types.ModuleType("jittor_utils")
+        fake_utils.lock = types.SimpleNamespace(unlock_scope=nullcontext)
+        with patch.dict("sys.modules", {"jittor_utils": fake_utils}):
+            first = self.module.new_group([2, 0])
+            second = self.module.new_group([2, 0])
+        self.assertNotEqual(first._backend_handle, second._backend_handle)
+        self.assertEqual(first._backend_kind, "mpi")
+        self.assertEqual(first.all_reduce(6, "sum"), 13)
+        self.assertEqual(second.broadcast(6, src=0), 17)
+        self.assertEqual(calls, [("reduce", (6, "sum", 7)),
+                                 ("broadcast", (6, 1, 8))])
 
     def test_backend_handle_and_collectives(self):
         from contextlib import nullcontext
@@ -86,8 +108,12 @@ class TestNativeProcessGroup(unittest.TestCase):
                 self.assertEqual(calls[0], (0, 2))
                 self.assertEqual(calls[1], (6, 7) if kind == "nccl" else (6, "sum", 7))
                 if kind == "nccl":
-                    with self.assertRaisesRegex(NotImplementedError, "sum and mean"):
-                        group._all_reduce(6, "max")
+                    # Non-SUM composites must not masquerade as the SUM
+                    # provider's backward formula for differentiable inputs.
+                    differentiable = types.SimpleNamespace(requires_grad=True)
+                    with self.assertRaisesRegex(NotImplementedError, "autograd"):
+                        group._all_reduce(differentiable, "max")
+                    self.assertEqual(len(calls), 2)
 
     def test_work_retains_completion_value(self):
         value = object()

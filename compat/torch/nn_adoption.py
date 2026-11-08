@@ -28,7 +28,12 @@ class ChildAdoption:
             result: Any = object.__new__(owner.adapt_class(native_type))
             self.memo[id(value)] = result
             for name, item in vars(value).items():
+                if name == "_modules":
+                    continue
                 setattr(result, name, self.adapt_value(item))
+            # A persistent child view belongs to its containing instance.
+            # Rebind a copied view while keeping all actual children shared.
+            result._modules
             return result
         if isinstance(value, dict):
             rebuilt: Any = value.copy()

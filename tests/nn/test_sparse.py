@@ -145,6 +145,148 @@ class TestSparseCOODuplicates(unittest.TestCase):
             self._scipy_dense(indices, values, shape).T, rtol=1e-6, atol=1e-6)
 
 
+class TestSparseCSR(unittest.TestCase):
+    """CSR support (jittor.sparse.csr): COO<->CSR conversion is a pure
+    row-sort permutation expressed with jt.argsort/jt.searchsorted (native,
+    lazy, differentiable -- see csr.py's module docstring), unlike
+    coalesce() which needs a real host sync because nnz can shrink."""
+
+    def _scipy_csr(self, indices, values, shape):
+        from scipy.sparse import coo_matrix
+        return coo_matrix((values, (indices[0], indices[1])),
+                          shape=tuple(shape)).tocsr()
+
+    def _coo(self, indices, values, shape):
+        return jt.sparse.sparse_array(
+            jt.array(indices), jt.array(values), jt.NanoVector(list(shape)))
+
+    def test_to_csr_then_to_dense_matches_coo(self):
+        indices = np.array([[0, 1, 1, 0], [2, 0, 2, 2]], dtype=np.int32)
+        values = np.array([3., 4., 5., 7.], dtype=np.float32)
+        shape = [2, 3]
+        coo = self._coo(indices, values, shape)
+        csr = coo.to_csr()
+        np.testing.assert_allclose(csr.to_dense().numpy(), coo.to_dense().numpy())
+
+    def test_to_csr_matches_scipy_structure(self):
+        # scipy's coo_matrix.tocsr() coalesces duplicates by default, but
+        # to_csr() deliberately does not (duplicates are kept, only
+        # row-sorted -- see csr.py). Coalesce first so both sides agree on
+        # what "structure" means before comparing row pointers.
+        indices = np.array([[0, 1, 1, 0, 1], [2, 0, 2, 2, 0]], dtype=np.int32)
+        values = np.array([3., 4., 5., 7., 11.], dtype=np.float32)
+        shape = [2, 3]
+        csr = self._coo(indices, values, shape).to_csr().coalesce()
+        ref = self._scipy_csr(indices, values, shape)
+        np.testing.assert_array_equal(csr.crow_indices.numpy(), ref.indptr)
+        np.testing.assert_allclose(csr.to_dense().numpy(), ref.toarray())
+
+    def test_to_csr_keeps_duplicates_uncoalesced(self):
+        indices = np.array([[0, 1, 1, 0, 1], [2, 0, 2, 2, 0]], dtype=np.int32)
+        values = np.array([3., 4., 5., 7., 11.], dtype=np.float32)
+        shape = [2, 3]
+        csr = self._coo(indices, values, shape).to_csr()
+        self.assertEqual(csr.nnz, 5, "to_csr() must not coalesce duplicates")
+
+    def test_to_csr_handles_empty_rows(self):
+        # row 1 has no nonzeros at all -- the searchsorted-based row
+        # expansion (to_coo) must skip it, not misattribute its neighbors.
+        indices = np.array([[0, 0, 2, 2, 2], [0, 1, 0, 1, 2]], dtype=np.int32)
+        values = np.array([1., 2., 3., 4., 5.], dtype=np.float32)
+        shape = [3, 3]
+        coo = self._coo(indices, values, shape)
+        csr = coo.to_csr()
+        self.assertEqual(csr.crow_indices.numpy().tolist(), [0, 2, 2, 5])
+        np.testing.assert_allclose(csr.to_dense().numpy(), coo.to_dense().numpy())
+        np.testing.assert_allclose(csr.to_coo().to_dense().numpy(), coo.to_dense().numpy())
+
+    def test_csr_roundtrip_empty_matrix(self):
+        indices = np.zeros((2, 0), dtype=np.int32)
+        values = np.zeros((0,), dtype=np.float32)
+        shape = [3, 4]
+        coo = self._coo(indices, values, shape)
+        csr = coo.to_csr()
+        self.assertEqual(csr.nnz, 0)
+        self.assertEqual(csr.crow_indices.numpy().tolist(), [0, 0, 0, 0])
+        np.testing.assert_allclose(csr.to_dense().numpy(), np.zeros(shape))
+
+    def test_csr_transpose(self):
+        indices = np.array([[0, 1, 1, 0], [2, 0, 2, 2]], dtype=np.int32)
+        values = np.array([3., 4., 5., 7.], dtype=np.float32)
+        shape = [2, 3]
+        csr = self._coo(indices, values, shape).to_csr()
+        expected = self._scipy_csr(indices, values, shape).toarray().T
+        np.testing.assert_allclose(csr.t().to_dense().numpy(), expected)
+
+    def test_csr_coalesce_matches_coo_coalesce(self):
+        indices = np.array([[0, 1, 1, 0, 1], [2, 0, 2, 2, 0]], dtype=np.int32)
+        values = np.array([3., 4., 5., 7., 11.], dtype=np.float32)
+        shape = [2, 3]
+        coo = self._coo(indices, values, shape)
+        csr_coalesced = coo.to_csr().coalesce()
+        coo_coalesced = coo.coalesce()
+        self.assertEqual(csr_coalesced.nnz, coo_coalesced.indices.shape[1])
+        np.testing.assert_allclose(csr_coalesced.to_dense().numpy(),
+                                    coo_coalesced.to_dense().numpy())
+
+    def test_csr_spmm_matches_coo_spmm(self):
+        indices = np.array([[0, 1, 1, 0], [2, 0, 2, 2]], dtype=np.int32)
+        values = np.array([3., 4., 5., 7.], dtype=np.float32)
+        shape = [2, 3]
+        rhs = (np.arange(6, dtype=np.float32).reshape(3, 2) / 5)
+        coo = self._coo(indices, values, shape)
+        csr = coo.to_csr()
+        expected = jt.sparse.spmm(coo, jt.array(rhs)).numpy()
+        got = jt.sparse.spmm(csr, jt.array(rhs)).numpy()
+        np.testing.assert_allclose(got, expected, rtol=1e-6, atol=1e-6)
+
+    def test_csr_spmm_gradients_flow_to_values_and_rhs(self):
+        indices = np.array([[0, 1, 1, 0], [2, 0, 2, 2]], dtype=np.int32)
+        values = np.array([3., 4., 5., 7.], dtype=np.float32)
+        rhs = (np.arange(6, dtype=np.float32).reshape(3, 2) / 5)
+        value_var = jt.array(values)
+        rhs_var = jt.array(rhs)
+        coo = jt.sparse.sparse_array(jt.array(indices), value_var,
+                                      jt.NanoVector([2, 3]))
+        csr = coo.to_csr()
+        out = jt.sparse.spmm(csr, rhs_var)
+        gv_csr, gy_csr = jt.grad(out.sum(), [value_var, rhs_var])
+
+        value_var2 = jt.array(values)
+        rhs_var2 = jt.array(rhs)
+        coo2 = jt.sparse.sparse_array(jt.array(indices), value_var2,
+                                       jt.NanoVector([2, 3]))
+        out2 = jt.sparse.spmm(coo2, rhs_var2)
+        gv_coo, gy_coo = jt.grad(out2.sum(), [value_var2, rhs_var2])
+
+        np.testing.assert_allclose(gv_csr.numpy(), gv_coo.numpy(), rtol=1e-6, atol=1e-6)
+        np.testing.assert_allclose(gy_csr.numpy(), gy_coo.numpy(), rtol=1e-6, atol=1e-6)
+
+    def test_sparse_csr_array_helper(self):
+        crow = jt.array([0, 2, 3], dtype="int32")
+        col = jt.array([0, 2, 1], dtype="int32")
+        values = jt.array([1., 2., 3.], dtype="float32")
+        csr = jt.sparse.sparse_csr_array(crow, col, values, jt.NanoVector([2, 3]))
+        expected = np.zeros((2, 3), dtype=np.float32)
+        expected[0, 0] = 1.
+        expected[0, 2] = 2.
+        expected[1, 1] = 3.
+        np.testing.assert_allclose(csr.to_dense().numpy(), expected)
+
+
+@unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
+class TestSparseCSRCuda(TestSparseCSR):
+    """Same contract on CUDA -- the row-index expansion (searchsorted) and
+    the coalesce/spmm paths it feeds must agree with the CPU backend."""
+
+    def setUp(self):
+        self._scope = jt.flag_scope(use_cuda=1)
+        self._scope.__enter__()
+
+    def tearDown(self):
+        self._scope.__exit__(None, None, None)
+
+
 def _reference_first_occurrence_neighbors(coords, kernel, dilation):
     """Neighbor table with the documented rule: a repeated coordinate resolves
     to its first occurrence."""

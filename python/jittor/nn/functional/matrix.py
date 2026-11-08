@@ -1,9 +1,11 @@
 """Matrix multiplication and bilinear neural-network operations."""
+
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import jittor as jt
-from jittor._runtime.dispatch import register_kernel, select_kernel
+from jittor._runtime.dispatch import native_rule, register_kernel, select_kernel
 from jittor._runtime.backend_libraries import get_library_ops
+from ._amp import prefers_half as _amp_retypes_output_to_half
 
 
 #: The AMP register the generic ``(a * b).sum(axis)`` contraction runs under.
@@ -27,9 +29,29 @@ from jittor._runtime.backend_libraries import get_library_ops
 #:
 #: Dropping the bit costs a float32 buffer for the contracted operand. That is
 #: the already-slow fallback path; the accelerated relays never reach here.
-def _contraction_scope():
+def _contraction_scope(fp32_output=False, half_operands=False):
     """``flag_scope`` for the generic contraction. One spelling, three callers."""
-    return jt.flag_scope(amp_reg=jt.flags.amp_reg | jt.amp_flags.keep_reduce)
+    if fp32_output:
+        # Keep the BF16 operands in the native Binary graph. Widening them
+        # before multiplication also widens its backward and changes second
+        # derivatives. prefer32 widens the accumulator's result instead.
+        return jt.flag_scope(amp_reg=jt.amp_flags.prefer32)
+    amp_reg = jt.flags.amp_reg
+    if half_operands:
+        # A half preference plus keep_reduce made the explicit float32 cast
+        # inside the reduce constructor come back as a half Var, so the
+        # contraction accumulated at the half width: at K=256 the error against
+        # the bf16-input reference grew to 3.3%, and a CPU autocast training run
+        # drifted far beyond torch's bf16 spread. keep_reduce alone still hands
+        # back the input dtype (the reduce constructor rounds once at the end)
+        # while the cast and the accumulator stay float32.
+        amp_reg &= ~(jt.amp_flags.prefer16 | jt.amp_flags.prefer_bfloat16)
+    return jt.flag_scope(amp_reg=amp_reg | jt.amp_flags.keep_reduce)
+
+
+def _both_half(a, b):
+    names = (_jittor_dtype_name(a.dtype), _jittor_dtype_name(b.dtype))
+    return names[0] in ("float16", "bfloat16") and names[1] in ("float16", "bfloat16")
 
 
 def _broadcast_batch_dims(a, b):
@@ -60,13 +82,28 @@ def _broadcast_batch_dims(a, b):
 
 #: Every accelerated relay a matrix product can be sent to, and what it takes.
 #:
-#: | relay                     | device | dtypes                             |
-#: | ------------------------- | ------ | ---------------------------------- |
-#: | cublas_matmul (2-D)       | CUDA   | both operands the same float dtype |
-#: | cublas_batched_matmul     | CUDA   | both operands the same float dtype |
-#: | mkl_matmul (2-D)          | CPU    | both operands float32, both dense  |
-#: | mkl_batched_matmul        | CPU    | both operands float32              |
-#: | broadcast * mul + reduce  | any    | everything else, complex included  |
+#: | relay                     | device | dtypes                                  |
+#: | ------------------------- | ------ | --------------------------------------- |
+#: | cublas_matmul (2-D)       | CUDA   | both operands the same float or complex |
+#: | cublas_batched_matmul     | CUDA   | both operands the same float or complex |
+#: | cublas_matmul (2-D)       | ROCm*  | both operands the same float dtype      |
+#: | cublas_batched_matmul     | ROCm*  | both operands the same float dtype      |
+#: | mkl_matmul (2-D)          | CPU    | both operands float32, both dense       |
+#: | mkl_batched_matmul        | CPU    | both operands float32                   |
+#: | blas_matmul (2-D)         | CPU    | both the same float32/64 or complex     |
+#: | blas_batched_matmul       | CPU    | both the same float32/64 or complex     |
+#: | broadcast * mul + reduce  | any    | everything else                         |
+#:
+#: Complex on CUDA is ``cublasGemmEx`` with ``CUDA_C_32F``/``CUDA_C_64F``: the
+#: generic row it replaces ran a complex64 2048-cube product 43x slower than
+#: torch's cgemm. ``ROCm*`` is the ``rocm_legacy`` and ``corex_legacy`` rows,
+#: which keep float only until complex is verified on that hardware. Complex on
+#: CPU is CBLAS ``cgemm``/``zgemm`` -- numpy's bundled OpenBLAS unless
+#: ``JT_BUILD_BLAS_LIB_PATH`` names another (``setup_blas`` in
+#: ``build/compile_extern.py``); the generic row was 110x slower than torch.
+#: The same library's ``sgemm``/``dgemm`` take float64, which oneDNN never
+#: did, and float32 behind oneDNN: without cmake oneDNN does not build, and a
+#: float32 2048-cube product fell to the generic row at 5.5 s (torch 13 ms).
 #:
 #: Four call sites used to spell the cuBLAS row four different ways -- see
 #: ``_cublas_can_take``.
@@ -106,8 +143,22 @@ def _cublas_can_take(a, b):
     return select_kernel("matmul", a, b, False, False) is _cublas_matmul
 
 
+@native_rule("same_float:cublas_matmul")
 def _supports_cublas(a, b, trans_a=False, trans_b=False):
     return _same_floating_dtype(a, b) and get_library_ops("cublas") is not None
+
+
+def _same_gemm_dtype(a, b):
+    """Both operands carry one dtype that CUDA's cuBLAS relays take: a float
+    dtype, or complex64/complex128. Mixed pairs -- complex64 with float64 is
+    as wide as complex64 with complex64 -- are not, and the C++ relays assert
+    on them."""
+    return a.dtype == b.dtype and (a.dtype.is_float() or a.dtype.is_complex())
+
+
+@native_rule("same_float_or_complex:cublas_matmul")
+def _supports_cublas_complex(a, b, trans_a=False, trans_b=False):
+    return _same_gemm_dtype(a, b) and get_library_ops("cublas") is not None
 
 
 def _cublas_matmul(a, b, trans_a=False, trans_b=False):
@@ -117,26 +168,6 @@ def _cublas_matmul(a, b, trans_a=False, trans_b=False):
 def _cublas_batched_matmul(a, b, trans_a=False, trans_b=False):
     a, b = _broadcast_batch_dims(a, b)
     return get_library_ops("cublas").cublas_batched_matmul(a, b, trans_a, trans_b)
-
-
-def _amp_retypes_output_to_half():
-    """True when AMP will retype this product to a low-precision output.
-
-    Read off ``amp_reg``, which is the register dtype inference actually
-    consults, and not off ``auto_mixed_precision_level``, which is only one of
-    the two ways that register gets written. ``torch.autocast`` sets ``amp_reg``
-    directly -- ``compat/torch/grad.py::_refresh_amp_register`` -- and never
-    touches the level, so a guard on the level was blind to every autocast
-    region: a ``torch.autocast("cpu")`` training step died in the *backward*
-    with ``mkl_matmul_op.cc:30: support float32 only now``, which is precisely
-    the failure the comment in ``_supports_mkl`` predicts.
-
-    ``prefer16``, not "any non-zero register". Level 3 sets
-    ``keep_reduce | keep_white``, which does not retype anything to a half, and
-    declining oneDNN there was a 99x slowdown bought for nothing.
-    """
-    return bool(int(jt.flags.amp_reg) &
-                (jt.amp_flags.prefer16 | jt.amp_flags.prefer_bfloat16))
 
 
 def _supports_mkl(a, b, trans_a=False, trans_b=False):
@@ -206,13 +237,60 @@ def _mkl_batched_matmul(a, b, trans_a=False, trans_b=False):
     return get_library_ops("mkl").mkl_batched_matmul(a, b, trans_a, trans_b)
 
 
-def _check_matmul_shapes(a, b, trans_a=False, trans_b=False, op="matmul"):
+_BLAS_DTYPES = {"float32", "float64", "complex64", "complex128"}
+
+
+def _same_blas_dtype(a, b):
+    """One dtype CBLAS has a GEMM for. A float32 pair is declined when AMP
+    would retype the output to a half, for the reason ``_supports_mkl`` gives:
+    the relay's backward would rebuild itself from a half cotangent."""
+    if a.dtype != b.dtype or _jittor_dtype_name(a.dtype) not in _BLAS_DTYPES:
+        return False
+    return a.dtype.is_complex() or not _amp_retypes_output_to_half()
+
+
+@native_rule("same_blas:blas_matmul")
+def _supports_blas(a, b, trans_a=False, trans_b=False):
+    """CBLAS's 2-D relay: one float32/float64/complex dtype, rank 2.
+
+    Rank is the relay's own requirement, as for oneDNN: ``BlasMatmulOp``
+    asserts rank 2, so a rank>2 operand is declined here and its caller takes
+    the reshape route back to a rank-2 product.
+    """
+    if not _same_blas_dtype(a, b) or len(a.shape) != 2 or len(b.shape) != 2:
+        return False
+    return get_library_ops("blas", load=True) is not None
+
+
+def _blas_matmul(a, b, trans_a=False, trans_b=False):
+    return get_library_ops("blas").blas_matmul(a, b, trans_a, trans_b)
+
+
+@native_rule("same_blas:blas_batched_matmul")
+def _supports_blas_batched(a, b, trans_a=False, trans_b=False):
+    if not _same_blas_dtype(a, b):
+        return False
+    return get_library_ops("blas", load=True) is not None
+
+
+def _blas_batched_matmul(a, b, trans_a=False, trans_b=False):
+    a, b = _broadcast_batch_dims(a, b)
+    return get_library_ops("blas").blas_batched_matmul(a, b, trans_a, trans_b)
+
+
+def _operand(name, x):
+    """`a:float32[2, 3]` -- an operand as a shape error names it."""
+    return "%s:%s%s" % (name, x.dtype, list(x.shape))
+
+
+def _check_matmul_shapes(a, b, trans_a=False, trans_b=False, op="matmul", names=("a", "b")):
     """Reject a product the two shapes cannot form, and say which dims disagree.
 
     This is the operand boundary of every matrix product in the frontend, so it
     is where the C++ standard applies: a caller mistake raises a catchable
-    ``RuntimeError`` -- the type torch raises for the same mistake and the type
-    ``USER_CHECK`` raises across the border in C++ -- and the message names the
+    ``jt.JittorShapeError`` -- a ``RuntimeError``, the type torch raises for the
+    same mistake and the type ``USER_CHECK`` raises across the border in C++,
+    and a ``ValueError``, the type conv raises -- and the message names the
     operation, both operands with their dtype and shape, and *which* dim of
     which operand is wrong.
 
@@ -233,52 +311,57 @@ def _check_matmul_shapes(a, b, trans_a=False, trans_b=False, op="matmul"):
     # model. It is now inlined into the two error paths; the text is unchanged.
     a_ndim = a.ndim
     b_ndim = b.ndim
+    a_name, b_name = names
     if a_ndim == 0 or b_ndim == 0:
-        raise RuntimeError(
-            "%s: both operands need at least 1 dim, but got a:%s%s (%d-D) and "
-            "b:%s%s (%d-D)" % (op, a.dtype, list(a.shape), a_ndim,
-                               b.dtype, list(b.shape), b_ndim))
+        raise jt.JittorShapeError(
+            "%s: both operands need at least 1 dim, but got %s (%d-D) and %s (%d-D)"
+            % (op, _operand(a_name, a), a_ndim, _operand(b_name, b), b_ndim)
+        )
     a_axis = 0 if a_ndim == 1 else (-2 if trans_a else -1)
     b_axis = 0 if b_ndim == 1 else (-1 if trans_b else -2)
     inner_a = a.shape[a_axis]
     inner_b = b.shape[b_axis]
     if inner_a != inner_b:
-        raise RuntimeError(
-            "%s: shapes cannot be multiplied, a:%s%s and b:%s%s: dim %d of a is "
-            "%d but dim %d of b is %d, and the two contracted dims must be equal"
-            % (op, a.dtype, list(a.shape), b.dtype, list(b.shape),
-               a_axis, inner_a, b_axis, inner_b))
+        lhs, rhs = _operand(a_name, a), _operand(b_name, b)
+        raise jt.JittorShapeError(
+            "%s: shapes cannot be multiplied, %s and %s: dim %d of %s is "
+            "%d but dim %d of %s is %d, and the two contracted dims must be equal"
+            % (op, lhs, rhs, a_axis, a_name, inner_a, b_axis, b_name, inner_b)
+        )
     # `shape[:-2]` is empty as soon as either operand has 2 dims or fewer, so
     # the loop below cannot run then -- but it still built two slices, two
     # reversed views, a zip and an enumerate to discover that, on every matrix
     # product in every model. `nn.Linear` is exactly that shape.
     if a_ndim <= 2 or b_ndim <= 2:
         return
-    for offset, (left, right) in enumerate(
-            zip(reversed(a.shape[:-2]), reversed(b.shape[:-2]))):
+    for offset, (left, right) in enumerate(zip(reversed(a.shape[:-2]), reversed(b.shape[:-2]))):
         if left != right and left != 1 and right != 1:
-            raise RuntimeError(
-                "%s: batch dims do not broadcast, a:%s%s and b:%s%s: dim %d is "
-                "%d in a and %d in b, which must be equal or 1 in one of them"
-                % (op, a.dtype, list(a.shape), b.dtype, list(b.shape),
-                   -3 - offset, left, right))
+            lhs, rhs = _operand(a_name, a), _operand(b_name, b)
+            raise jt.JittorShapeError(
+                "%s: batch dims do not broadcast, %s and %s: dim %d is "
+                "%d in %s and %d in %s, which must be equal or 1 in one of them"
+                % (op, lhs, rhs, -3 - offset, left, a_name, right, b_name)
+            )
 
 
-def matmul_transpose(a, b):
+def matmul_transpose(a, b, *, _op="matmul_transpose", _names=("a", "b")):
     """
     returns a * b^T
+
+    ``_op`` and ``_names`` name the call and operands in a shape error, for a
+    caller that is not itself spelled ``matmul_transpose(a, b)`` -- ``linear``.
     """
-    _check_matmul_shapes(a, b, trans_b=True, op="matmul_transpose")
+    _check_matmul_shapes(a, b, trans_b=True, op=_op, names=_names)
     if b.ndim > 2:
         # Preserve batch axes and let the shared matmul route broadcast them.
         axes = list(range(b.ndim))
         axes[-1], axes[-2] = axes[-2], axes[-1]
         return jt.nn.matmul(a, b.transpose(axes))
     if len(b.shape) != 2:
-        raise RuntimeError(
+        raise jt.JittorShapeError(
             "matmul_transpose: b must be 2-D once a is, but got "
-            "a:%s%s and b:%s%s" % (a.dtype, list(a.shape),
-                                   b.dtype, list(b.shape)))
+            "a:%s%s and b:%s%s" % (a.dtype, list(a.shape), b.dtype, list(b.shape))
+        )
     # A batched `a` is flattened and the result un-flattened, but by falling
     # through rather than recursing into this function. A recursive branch for
     # exactly this case used to sit above the `b` rank check, and it undid the
@@ -307,12 +390,49 @@ def matmul_transpose(a, b):
     if fast is not None:
         return fast if restore is None else fast.reshape(restore)
 
+    out = _matmul_transpose_contraction(a, b)
+    return out if restore is None else out.reshape(restore)
+
+
+def _matmul_transpose_contraction(a, b, fp32_output=False):
     shape = list(a.shape)[:-1] + list(b.shape)
-    with _contraction_scope():
+    with _contraction_scope(fp32_output, _both_half(a, b)):
         a = a.broadcast(shape, [len(shape) - 2])
         b = b.broadcast(shape)
-        out = (a * b).sum(len(shape) - 1)
-    return out if restore is None else out.reshape(restore)
+        return (a * b).sum(len(shape) - 1)
+
+
+class _BFloat16MatmulAccumulator(jt.Function):
+    """Keep the GEMM gradient's accumulation before its BF16 rounding."""
+
+    def _run_call(self, a, b):
+        # The default Function inputs are taped for first derivatives. Keep
+        # independent holders of the original graph for higher derivatives;
+        # caller assign must not change the values saved by this invocation.
+        self.a, self.b = (jt.ops.reshape(value, value.shape) for value in (a, b))
+        return super()._run_call(a, b)
+
+    def execute(self, a, b):
+        return _matmul_transpose_contraction(a, b, fp32_output=True)
+
+    def grad(self, g):
+        g = g.cast(self.a.dtype)
+        # A generic elementwise backward rounds each broadcast contribution
+        # before reducing it. A GEMM rounds its completed gradient instead.
+        # Reuse exactly the same contraction and retain this boundary at every
+        # derivative order, as the native GEMM providers do.
+        da = _BFloat16MatmulAccumulator.apply(g, self.b.transpose()).cast(self.a.dtype)
+        db = _BFloat16MatmulAccumulator.apply(g.transpose(), self.a.transpose()).cast(self.b.dtype)
+        return da, db
+
+
+def _bfloat16_matmul_accumulator(a, b):
+    """CPU BF16 operands with a FP32 result, before Linear's bias rounding."""
+    ops = get_library_ops("mkl", load=True)
+    if ops is not None:
+        return ops.mkl_matmul(a, b, False, True, True)
+    # use_mkl=0 is a real native opmath route, sharing the existing contraction.
+    return _BFloat16MatmulAccumulator.apply(a, b)
 
 
 def bmm_transpose(a, b):
@@ -320,16 +440,17 @@ def bmm_transpose(a, b):
     returns a * b^T
     """
     if a.ndim <= 2 or b.ndim <= 2:
-        raise RuntimeError(
+        raise jt.JittorShapeError(
             "bmm_transpose: both operands must have more than 2 dims (a batch "
             "dim and a matrix), but got a:%s%s and b:%s%s"
-            % (a.dtype, list(a.shape), b.dtype, list(b.shape)))
+            % (a.dtype, list(a.shape), b.dtype, list(b.shape))
+        )
     _check_matmul_shapes(a, b, trans_b=True, op="bmm_transpose")
     # The same scope as `matmul` and `matmul_transpose`. It is what tells the
     # reduce in the generic path below to hand back the operands' dtype rather
     # than the float32 it accumulates in, so leaving it off here made the same
     # product depend on which of the three names the caller reached for.
-    with _contraction_scope():
+    with _contraction_scope(half_operands=_both_half(a, b)):
         kernel = select_kernel("batched_matmul", a, b, 0, 1)
         if kernel is not None:
             return kernel(a, b, 0, 1)
@@ -356,10 +477,10 @@ def bmm(a, b):
         c = nn.bmm(a, b)
     """
     if len(a.shape) <= 2 or len(b.shape) <= 2:
-        raise RuntimeError(
+        raise jt.JittorShapeError(
             "bmm: both operands must have more than 2 dims (a batch dim and a "
-            "matrix), but got a:%s%s and b:%s%s"
-            % (a.dtype, list(a.shape), b.dtype, list(b.shape)))
+            "matrix), but got a:%s%s and b:%s%s" % (a.dtype, list(a.shape), b.dtype, list(b.shape))
+        )
     return jt.nn.matmul(a, b)
 
 
@@ -394,8 +515,8 @@ def _mixed_float_compute_dtype(a, b):
     Which dtype to resolve to:
 
     * inside an autocast/AMP region, the precision that region asked for --
-      float16, or bfloat16 when an operand already is (that is what
-      ``amp_prefer16`` means in ``src/type/nano_string.h``). This reproduces
+      an explicit bfloat16 preference, or the legacy float16 preference
+      (which keeps bfloat16 operands). This reproduces
       torch: autocast casts a float32 activation to the autocast dtype before
       the product, so a float16 result is what the model expects to get back,
       and the H3 VAE's bit-exact residual kernel requires it;
@@ -412,12 +533,12 @@ def _mixed_float_compute_dtype(a, b):
         return None
     names = (_jittor_dtype_name(a.dtype), _jittor_dtype_name(b.dtype))
     amp_reg = int(jt.flags.amp_reg)
+    if amp_reg & jt.amp_flags.prefer32:
+        return "float32"
     if amp_reg & jt.amp_flags.prefer_bfloat16:
         return "bfloat16"
     if amp_reg & jt.amp_flags.prefer16:
         return "bfloat16" if "bfloat16" in names else "float16"
-    if amp_reg & jt.amp_flags.prefer32:
-        return "float32"
     for wider in ("float64", "float32"):
         if wider in names:
             return wider
@@ -458,11 +579,71 @@ def _transpose_base_last2(x):
     return None
 
 
+def _conj_last2(x):
+    axes = list(range(x.ndim))
+    axes[-1], axes[-2] = axes[-2], axes[-1]
+    return x.transpose(axes).conj()
+
+
+def _sum_to_shape(x, shape):
+    """Sum ``x`` over the leading and size-1 axes it was broadcast along."""
+    shape = list(shape)
+    lead = x.ndim - len(shape)
+    if lead > 0:
+        x = x.sum(list(range(lead)))
+    axes = [i for i, (have, want) in enumerate(zip(x.shape, shape)) if want == 1 and have != 1]
+    if axes:
+        x = x.sum(axes, keepdims=True)
+    return x
+
+
+class _ProductOfOperands(jt.Function):
+    """Hand the gradient of a GEMM to the operands the caller passed.
+
+    A transposed operand reaches the GEMM as its untransposed base and a
+    transpose flag, so the copy the transpose would make never runs. The
+    product then depends on the base and not on the transposed Var: a
+    gradient taken with respect to that Var -- ``jt.grad(loss, base.T)`` --
+    found no path and came back zero, with a missing-gradient warning, while
+    the base's own gradient was right.
+
+    The product is built outside, exactly as before, and returned from
+    ``execute``. Taping cuts its own graph and connects the caller's operands
+    instead; they stay lazy in the forward (a Tapes input is not executed for
+    its data), so the transpose copy is still skipped. ``grad`` is the GEMM
+    adjoint on the live operands, ``dA = G B^H`` and ``dB = A^H G``, summed
+    back over broadcast batch axes, so it differentiates again.
+    """
+
+    def __init__(self, a, b, product):
+        self.a, self.b, self.product = a, b, product
+
+    def execute(self, a, b):
+        return self.product
+
+    def grad(self, g):
+        a, b = self.a, self.b
+        g = g.cast(self.product.dtype)
+        da = _sum_to_shape(matmul(g, _conj_last2(b)), a.shape).cast(a.dtype)
+        db = _sum_to_shape(matmul(_conj_last2(a), g), b.shape).cast(b.dtype)
+        return da, db
+
+
+def _keep_operand_grads(a, b, aa, bb, product):
+    """``product`` (a GEMM of ``aa``/``bb``) with its gradient routed to
+    ``a``/``b`` when an operand was replaced by its transpose base."""
+    if product is None or (aa is a and bb is b) or jt.flags.no_grad:
+        return product
+    if ((aa is a or a.is_stop_grad()) and (bb is b or b.is_stop_grad())):
+        return product
+    return _ProductOfOperands(a, b, product)(a, b)
+
+
 def _mkl_batched_matmul_is_available(a, b):
     """The CPU row of the table above: oneDNN's batched relay is float32-only.
 
-    Anything else -- float64, float16, and the complex dtypes the native
-    reindex kernels do support -- keeps the generic path.
+    float64 and float16 keep the generic path; the complex dtypes have their
+    own CBLAS row (``_blas_batched_matmul``).
     """
     return select_kernel("batched_matmul", a, b, False, False) is _mkl_batched_matmul
 
@@ -503,7 +684,7 @@ def matmul(a, b):
         assert c.shape == [8, 10, 3, 5]
     """
     _check_matmul_shapes(a, b)
-    with _contraction_scope():
+    with _contraction_scope(half_operands=_both_half(a, b)):
         len_a = len(a.shape)
         len_b = len(b.shape)
         if len_b == 1:
@@ -525,7 +706,7 @@ def matmul(a, b):
                 1 if b_base is not None else 0,
             )
             if fast is not None:
-                return fast
+                return _keep_operand_grads(a, b, aa, bb, fast)
         if len_a >= 3 and len_a == len_b:
             # bmm
             # a: [..., n, m], b: [..., m, k], c:[..., n, k]
@@ -536,7 +717,7 @@ def matmul(a, b):
             trans_a, trans_b = a_base is not None, b_base is not None
             fast = _matmul_kernel_dispatch("batched_matmul", aa, bb, trans_a, trans_b)
             if fast is not None:
-                return fast
+                return _keep_operand_grads(a, b, aa, bb, fast)
         shape = []
         len_c = max(len_a, len_b)
         (n, m), (m_, k) = a.shape[-2:], b.shape[-2:]
@@ -560,7 +741,7 @@ def matmul(a, b):
                 bb = b_base if b_base is not None else b
                 fast = _matmul_2d_cublas(a, bb, 0, 1 if b_base is not None else 0)
                 if fast is not None:
-                    return fast
+                    return _keep_operand_grads(a, b, a, bb, fast)
             # TODO:ugly implementation for tuner
             aa = a.reshape((-1, m))
             cc = jt.nn.matmul(aa, b)
@@ -583,12 +764,12 @@ def matmul(a, b):
 
 def bilinear(in1, in2, weight, bias):
     if weight.shape[1] != in1.shape[1]:
-        raise RuntimeError(
-            f"bilinear(): input1 size deos not match weight size: got {in1.shape[1]} but expected {weight.shape[1]}"
+        raise jt.JittorShapeError(
+            f"bilinear(): input1 size does not match weight size: got {in1.shape[1]} but expected {weight.shape[1]}"
         )
     if weight.shape[2] != in2.shape[1]:
-        raise RuntimeError(
-            f"bilinear(): input2 size deos not match weight size: got {in2.shape[1]} but expected {weight.shape[2]}"
+        raise jt.JittorShapeError(
+            f"bilinear(): input2 size does not match weight size: got {in2.shape[1]} but expected {weight.shape[2]}"
         )
     w = weight.transpose((1, 0, 2))
     w = w.reshape((w.shape[0], -1))
@@ -602,16 +783,26 @@ def bilinear(in1, in2, weight, bias):
 
 
 _FLOAT_DTYPES = {"float16", "bfloat16", "float32", "float64"}
+_COMPLEX_DTYPES = {"complex64", "complex128"}
 for _backend in ("cuda", "rocm_legacy", "corex_legacy"):
-    register_kernel("matmul", _backend, _cublas_matmul,
-                    dtypes=_FLOAT_DTYPES, supports=_supports_cublas)
-    register_kernel("batched_matmul", _backend, _cublas_batched_matmul,
-                    dtypes=_FLOAT_DTYPES, supports=_supports_cublas)
-register_kernel("matmul", "cpu", _mkl_matmul,
-                dtypes={"float32"}, supports=_supports_mkl)
-register_kernel("batched_matmul", "cpu", _mkl_batched_matmul,
-                dtypes={"float32"}, supports=_supports_mkl_batched)
-del _backend
+    _complex = _backend == "cuda"
+    _dtypes = _FLOAT_DTYPES | _COMPLEX_DTYPES if _complex else _FLOAT_DTYPES
+    _supports = _supports_cublas_complex if _complex else _supports_cublas
+    register_kernel("matmul", _backend, _cublas_matmul, dtypes=_dtypes, supports=_supports)
+    register_kernel(
+        "batched_matmul", _backend, _cublas_batched_matmul, dtypes=_dtypes, supports=_supports
+    )
+register_kernel("matmul", "cpu", _mkl_matmul, dtypes={"float32"}, supports=_supports_mkl)
+register_kernel(
+    "batched_matmul", "cpu", _mkl_batched_matmul, dtypes={"float32"}, supports=_supports_mkl_batched
+)
+# After oneDNN: float32 takes it where it is built, CBLAS otherwise.
+register_kernel("matmul", "cpu", _blas_matmul, dtypes=_BLAS_DTYPES, supports=_supports_blas)
+register_kernel(
+    "batched_matmul", "cpu", _blas_batched_matmul, dtypes=_BLAS_DTYPES,
+    supports=_supports_blas_batched,
+)
+del _backend, _complex, _dtypes, _supports
 
 
 __all__ = [

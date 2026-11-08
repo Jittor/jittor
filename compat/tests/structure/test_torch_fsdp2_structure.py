@@ -18,6 +18,7 @@ from unittest import mock
 
 import jittor as jt
 from jittor.compat import fsdp2 as fsdp
+from jittor.distributed.fsdp import common as native_fsdp_common
 from jittor.compat.fsdp2 import api
 from jittor.compat.fsdp2 import common
 from jittor.compat.fsdp2 import compat_types
@@ -74,8 +75,7 @@ _OWNERSHIP = {
         # The frozen-forward and gradient-shape helpers `shard` calls around
         # `_execute_with_true_fsdp`, which arrived with PR 18031's memory and
         # lifecycle group.
-        "_primary_input_requires_grad", "_materialize_frozen_output",
-        "_tensor_values", "_full_gradient_from_shard",
+        "_full_gradient_from_shard",
     },
     dtensor: {
         "DeviceMesh", "init_device_mesh", "Placement", "Replicate", "Shard",
@@ -349,6 +349,12 @@ assert second is jittor.torch_fsdp2_compat
 
     def test_implementation_ownership_and_real_origins(self):
         reexports = {
+            common: {
+                name: (native_fsdp_common.__name__, name)
+                for name in ("_flatten_var", "_ceil_div", "_pad_flat", "_param_numel",
+                             "_primary_input_requires_grad", "_materialize_frozen_output",
+                             "_tensor_values")
+            },
             optimizer: {
                 "_optimizer_param_steps": (
                     "jittor.compat.torch.optimizer_api", "_torch_param_steps"),

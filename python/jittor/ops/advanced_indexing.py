@@ -2,7 +2,7 @@
 
 import numbers as _numbers
 from jittor_core import Var
-from .._core.dtypes import dtype_name as _dtype_name
+from .._core.dtypes import dtype_name as _jittor_dtype_name
 from .._runtime.dispatch import try_dispatch
 
 def index_add_(x, dim, index, tensor):
@@ -84,8 +84,16 @@ def index_fill(x, dim, index, val):
     ar = jt.arange(size).cast(idx.dtype)
     mask1d = (ar.reshape((-1, 1)) == idx.reshape((1, -1))).any(1)      # (size,) bool
     shp = [1] * x.ndim; shp[d] = size
-    mask_f = mask1d.reshape(shp).broadcast(x.shape).float32()
-    return x * (1 - mask_f) + float(val) * mask_f
+    mask = mask1d.reshape(shp).broadcast(x.shape)
+    # Selection must not convert untouched integers through floating point or
+    # multiply overwritten NaN/Inf values by zero. The fill shares x's dtype
+    # and placement, so both branches preserve their exact stored values.
+    from .._core.var import device_scope_like
+    with device_scope_like(x):
+        # Supply dtype at construction: full_like's scalar fast path can
+        # first narrow a Python int to int32 before casting it to int64.
+        fill = jt.array(val, dtype=x.dtype).broadcast(x.shape)
+    return jt.ternary(mask, fill, x)
 
 
 def _indexing_dim(op, x, dim):
@@ -128,7 +136,7 @@ def _indexing_index(op, x, dim, index, bounded):
     # callable flags.  Use the canonical name at this shared boundary so both
     # process modes reject floating/complex indices without a shape-dependent
     # ``bool object is not callable`` failure.
-    index_dtype = _dtype_name(index.dtype)
+    index_dtype = _jittor_dtype_name(index.dtype)
     if index_dtype.startswith(("float", "bfloat", "complex")):
         raise TypeError("%s: index must have an integer dtype, got %s"
                         % (op, index.dtype))

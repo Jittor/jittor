@@ -18,9 +18,11 @@
 #include "core/common.h"
 #include "core/op.h"
 #include "acl_jittor.h"
+#include "acl_runtime.h"
 #include "ops/composite/random_op.h"
 #include "ops/reduce_op.h"
 #include "ops/composite/arg_reduce_op.h"
+#include "ops/composite/argsort_op.h"
 #include "ops/binary_op.h"
 #include "ops/broadcast_to_op.h"
 #include "ops/composite/transpose_op.h"
@@ -29,11 +31,16 @@
 #include "ops/composite/fused_adamw_op.h"
 #include "ops/composite/fused_sgd_op.h"
 #include "ops/composite/mapped_matmul_op.h"
+#include "ops/composite/mapped_concat_op.h"
+#include "ops/composite/mapped_packed_matmul_op.h"
+#include "ops/composite/mapped_rms_norm_op.h"
+#include "ops/composite/write_back_op.h"
 #include "core/fused_op.h"
 #include "ops/unary_op.h"
 #include "ops/ternary_op.h"
 #include "core/executor.h"
 #include "runtime/device.h"
+#include "runtime/rng_state.h"
 #include "runtime/backend_fallback.h"
 #include "mem/allocator.h"
 #include "codegen/op_compiler.h"
@@ -46,6 +53,15 @@
 #include "acl_fused_ascendc.h"
 namespace jittor
 {
+    // FP32 cube ops (matmul/bmm/conv) down-convert through aclnn
+    // ALLOW_FP32_DOWN_PRECISION only when explicitly enabled. Inference SoCs
+    // (Ascend310P) have no FP32 cube path at all, so there KEEP_DTYPE fails;
+    // this flag is the opt-in, mirroring torch.npu.matmul.allow_hf32. The
+    // storage lives in src/runtime/init.cc: the flags binding generator only
+    // scans the core source tree, and a DEFINE here would leave
+    // `jt.flags.acl_allow_hf32` unbound.
+    DECLARE_FLAG(int, acl_allow_hf32);
+
     void free_var_mem(Var *v);
 
     class AclScalarHostCache
@@ -56,6 +72,9 @@ namespace jittor
         void *storage = nullptr;
         size_t storage_size = 0;
         size_t offset = 0;
+        // Storage replaced while a recorded graph lived: its copies read
+        // from here. Freed with the last graph (acl_live_graphs).
+        std::vector<void *> retired;
 
         void reset()
         {
@@ -79,11 +98,32 @@ namespace jittor
     public:
         ~AclScalarHostCache()
         {
-            if (storage != nullptr)
-            {
+            if (storage != nullptr || !retired.empty())
                 aclrtSynchronizeStream(aclstream);
+            if (storage != nullptr)
                 aclrtFreeHost(storage);
+            for (auto *block : retired)
+                aclrtFreeHost(block);
+        }
+
+        void release_retired()
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            if (retired.empty())
+                return;
+            auto ret = aclrtSynchronizeStream(aclstream);
+            if (ret != ACL_SUCCESS)
+                throw std::runtime_error(
+                    "aclrtSynchronizeStream failed: " +
+                    acl_error_to_string(ret));
+            for (auto *block : retired)
+            {
+                ret = aclrtFreeHost(block);
+                if (ret != ACL_SUCCESS)
+                    throw std::runtime_error(
+                        "aclrtFreeHost failed: " + acl_error_to_string(ret));
             }
+            retired.clear();
         }
 
         const void *get(const void *data, size_t size)
@@ -97,6 +137,16 @@ namespace jittor
             size_t aligned_size = (size + 63) / 64 * 64;
             if (storage == nullptr || offset + aligned_size > storage_size)
             {
+                if (storage != nullptr && acl_live_graphs() > 0)
+                {
+                    // Kept, and nothing waited on: the stream may be the
+                    // one recording.
+                    retired.push_back(storage);
+                    storage = nullptr;
+                    storage_size = 0;
+                    offset = 0;
+                    values.clear();
+                }
                 reset();
                 storage_size = std::max(capacity(), aligned_size);
                 auto ret = aclrtMallocHost(&storage, storage_size);
@@ -113,11 +163,21 @@ namespace jittor
         }
     };
 
-    static const void *persistent_acl_scalar_data(const void *data, size_t size)
+    static AclScalarHostCache &scalar_host_cache()
     {
         // Async H2D copies may outlive temporary scalar buffers owned by an op.
         static AclScalarHostCache cache;
-        return cache.get(data, size);
+        return cache;
+    }
+
+    static const void *persistent_acl_scalar_data(const void *data, size_t size)
+    {
+        return scalar_host_cache().get(data, size);
+    }
+
+    void acl_scalar_cache_release_retired()
+    {
+        scalar_host_cache().release_retired();
     }
 
     unordered_map<uint32, string> opname_map = {
@@ -180,6 +240,7 @@ namespace jittor
     class AclCpuFallbackScope
     {
         ExecutionBackendScope execution_scope{BackendId::Cpu};
+        HostExecutionScope host_execution;
         int previous_mode;
         FusedOp *fused = nullptr;
         FusedOpContext *context = nullptr;
@@ -350,7 +411,7 @@ namespace jittor
         {
             if (op->name() == string("array")) continue;
             const auto name = fused_acl_name(op);
-            if (name.empty()) return string("unregistered fused operator variant: ") + op->name() + "/" + S(op->ns);
+            if (name.empty()) return string("unregistered fused operator variant: ") + op->name() + "/" + string(op->ns.to_cstring());
             auto found = acl_op_registry().find(name);
             if (found == acl_op_registry().end()) return "unregistered ACL launcher: " + name;
             INTERNAL_ASSERT(found->second.launcher()) << "Empty registered ACL launcher:" << name;
@@ -363,9 +424,9 @@ namespace jittor
                     ? AclOpFunctions::QueryKind::Add : AclOpFunctions::QueryKind::Binary))
                     << "Wrong registered binary launcher signature:" << name;
             for (auto *input : op->inputs())
-                if (!acl_has_dtype(input->dtype())) return name + " does not support input dtype " + S(input->dtype());
+                if (!acl_has_dtype(input->dtype())) return name + " does not support input dtype " + string(input->dtype().to_cstring());
             for (auto *output : op->outputs())
-                if (!acl_has_dtype(output->dtype())) return name + " does not support output dtype " + S(output->dtype());
+                if (!acl_has_dtype(output->dtype())) return name + " does not support output dtype " + string(output->dtype().to_cstring());
             if ((name == "Add" || name == "Sub") && op->input(0)->dtype() == ns_complex64)
                 return name + " has no complex alpha-scalar implementation";
         }
@@ -489,7 +550,10 @@ namespace jittor
                     // buffer before earlier ACL kernels finish. Queue the H2D
                     // copy on aclstream so reuse stays ordered with consumers.
                     const void *source = aop->ptr<void>();
-                    if (aop->output->flag(VarFlags::_is_scalar))
+                    // ArrayOp force-fuses every one-element tensor, including
+                    // rank-1 integer indices such as chunk's [i]. Their host
+                    // allocation can be recycled before this queued copy runs.
+                    if (aop->output->num == 1)
                         source = persistent_acl_scalar_data(
                             source, aop->output->size);
                     auto ret = aclrtMemcpyAsync(
@@ -647,24 +711,21 @@ namespace jittor
         exec_acl_sequence(op, {op});
     }
 
-    extern int current_seed;
-    extern int64 current_offset;
-
     static void exec_acl_random(Op *op)
     {
         auto _op = (RandomOp *)op;
         AclExecutionRunner<RandomOpRunner> runner(
             _op->type == ns_uniform ? "RandomUniform" : "RandomNormal");
         auto out = op->output(0);
+        const auto rng = reserve_acl_random(out->device_id, out->numel());
         RandomAttr *attr = new RandomAttr();
-        attr->seed = current_seed;
-        attr->offset = current_offset;
+        attr->seed = rng.seed;
+        attr->offset = rng.offset;
         runner.jt_name = "random";
         runner.op_attr.reset(attr);
 
         runner.add(out, false);
         runner.run();
-        current_offset += out->numel();
     }
 
     static unordered_map<string, std::function<void(Op *)>> acl_ops = {
@@ -726,9 +787,14 @@ namespace jittor
              attr->dampening = _op->dampening;
              attr->nesterov = _op->nesterov;
              attr->maximize = _op->maximize;
-             // The velocity buffers jittor hands over already hold the running
-             // momentum, so the kernel must never re-seed them from the grad.
-             attr->isFirstStep = false;
+             // jittor-core-gaps.md §3.3: the velocity buffer is zero-
+             // initialized at optimizer construction and only holds real
+             // running momentum from its SECOND touch onward -- the caller
+             // (fused_sgd_acl, from SGD.step()'s per-group step counter)
+             // says whether this call is the first, and the kernel below
+             // must seed from the raw gradient then, not fold a dampened
+             // recurrence into the zero buffer.
+             attr->isFirstStep = _op->first_step;
              runner.jt_name = "fused_sgd";
              runner.op_attr.reset(attr);
              for (auto value : _op->parameters) runner.add(value, true);
@@ -774,6 +840,73 @@ namespace jittor
                  runner.run();
              }
          }},
+        {"mapped_rms_norm", [](Op *op)
+         {
+             auto *_op = static_cast<MappedRmsNormOp *>(op);
+             AclExecutionRunner<RmsNormOpRunner, false> runner;
+             runner.jt_name = "rmsnorm";
+             auto attr = std::unique_ptr<RmsNormAttr>(new RmsNormAttr());
+             // Preserve the existing CodeOp bridge's float epsilon rounding.
+             attr->eps = _op->eps;
+             runner.op_attr = std::move(attr);
+             runner.add(_op->x, true);
+             runner.add(_op->weight, true);
+             runner.add(_op->y, false);
+             auto *scratch = _op->rstd_scratch.ptr;
+             scratch->device_id = _op->y->device_id;
+             scratch->placement = _op->y->placement;
+             // The op owns this allocation for its whole lifetime, including
+             // device-graph replay. It must not come from a per-launch pool.
+             INTERNAL_ASSERT(scratch->alloc(runtime_executor().allocator))
+                 << "Unable to allocate RMSNorm auxiliary scratch";
+             runner.add(scratch, false);
+             runner.run();
+         }},
+        {"mapped_packed_matmul", [](Op *op)
+         {
+             auto *_op = static_cast<MappedPackedMatmulOp *>(op);
+             // Empty leading dimensions still have a valid ND output shape,
+             // but CANN need not construct or launch a zero-row matrix product.
+             if (!_op->c->num) return;
+             AclExecutionRunner<PackedMatMulOpRunner, false> runner;
+             runner.jt_name = "mapped_packed_matmul";
+             runner.add(_op->a, true);
+             runner.add(_op->b, true);
+             runner.add(_op->c, false);
+             runner.run();
+         }},
+        {"mapped_concat", [](Op *op)
+         {
+             auto *_op = static_cast<MappedConcatOp *>(op);
+             if (!_op->y->num) return;
+             AclExecutionRunner<ConcatOpRunner, false> runner;
+             auto *attr = new ConcatAttr();
+             attr->dim = _op->dim;
+             attr->tensorNum = 0;
+             runner.jt_name = "mapped_concat";
+             runner.op_attr.reset(attr);
+             // Empty extents contribute no elements. Omitting them also keeps
+             // the vendor descriptor list valid when only one input is nonempty.
+             for (auto *value : _op->tensors) {
+                 if (!value->num) continue;
+                 runner.add(value, true);
+                 ++attr->tensorNum;
+             }
+             runner.add(_op->y, false);
+             runner.run();
+         }},
+        {"argsort", [](Op *op)
+         {
+             // CANN Sort writes (values, indices); ArgsortOp holds the
+             // indices in y and the sorted values in y_key.
+             auto *_op = static_cast<ArgsortOp *>(op);
+             AclExecutionRunner<SortOpRunner, false> runner(false, _op->dim, _op->descending);
+             runner.jt_name = "argsort";
+             runner.add(_op->x, true);
+             runner.add(_op->y_key, false);
+             runner.add(_op->y, false);
+             runner.run();
+         }},
         {"arg_reduce", [](Op *op)
          {
              auto _op = (ArgReduceOp *)op;
@@ -790,6 +923,32 @@ namespace jittor
         // backends publish. ACL has no separate capability op, so the core
         // `random` op reaches the same launcher under its own name.
         {"random", exec_acl_random},
+        {"write_back", [](Op *op)
+         {
+             // Each entry is a plain device-to-device copy: `values[i]` into
+             // the storage `written[i]` shares with `targets[i]` (set up in
+             // WriteBackOp::infer_shape, backend-agnostic). CUDA batches all
+             // entries into one fused kernel; ACL has no such primitive, so
+             // each entry is its own aclrtMemcpyAsync on the current ACL
+             // stream -- ordered with the rest of a captured step the same
+             // way every other op here is. dtype/shape were already
+             // USER_CHECKed at construction.
+             auto *_op = (WriteBackOp *)op;
+             for (uint i = 0; i < _op->targets.size(); ++i)
+             {
+                 const int64 bytes = _op->targets[i]->size;
+                 if (!bytes || _op->written[i]->mem_ptr == _op->values[i]->mem_ptr)
+                     continue;
+                 auto ret = aclrtMemcpyAsync(
+                     _op->written[i]->mem_ptr, bytes,
+                     _op->values[i]->mem_ptr, bytes,
+                     ACL_MEMCPY_DEVICE_TO_DEVICE, aclstream);
+                 if (ret != ACL_SUCCESS)
+                     throw std::runtime_error(
+                         "aclrtMemcpyAsync failed: " +
+                         acl_error_to_string(ret));
+             }
+         }},
     };
 
     static bool is_acl_random(const string &name)
@@ -808,14 +967,25 @@ namespace jittor
             INTERNAL_ASSERT(iter->second) << "Empty ACL implementation for" << op->name();
             for (auto *input : op->inputs())
                 if (!acl_has_dtype(input->dtype()))
-                    unsupported = string(op->name()) + " does not support input dtype " + S(input->dtype());
+                    unsupported = string(op->name()) + " does not support input dtype " + string(input->dtype().to_cstring());
             for (auto *output : op->outputs())
                 if (!acl_has_dtype(output->dtype()))
-                    unsupported = string(op->name()) + " does not support output dtype " + S(output->dtype());
+                    unsupported = string(op->name()) + " does not support output dtype " + string(output->dtype().to_cstring());
             if (unsupported.empty() && op->name() == string("getitem"))
                 unsupported = acl_getitem_unsupported_reason(op);
             if (unsupported.empty() && op->name() == string("setitem"))
                 unsupported = acl_setitem_unsupported_reason(op);
+            if (op->name() == string("argsort"))
+            {
+                auto *sort = static_cast<ArgsortOp *>(op);
+                const auto dtype = sort->x->dtype();
+                if (dtype != ns_float16 && dtype != ns_float32 &&
+                    dtype != ns_int8 && dtype != ns_int16 &&
+                    dtype != ns_int32 && dtype != ns_int64 && dtype != ns_uint8)
+                    unsupported = "argsort requires a CANN Sort input dtype";
+                if (sort->y->dtype() != ns_int64)
+                    unsupported = "argsort ACL indices must be int64 before output cast";
+            }
             if (op->name() == string("arg_reduce"))
             {
                 auto *reduce = static_cast<ArgReduceOp *>(op);

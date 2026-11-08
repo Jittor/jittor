@@ -276,6 +276,21 @@ class TestBinaryOpPromotion(Base):
                              "int16", dev)
         both_devices(body)
 
+    def test_integer_modulo_scalar_follows_divisor_sign(self):
+        def body(dev):
+            for dtype in ("int32", "int64"):
+                values = np.array([-7, -5, -1, 0, 1, 5, 7],
+                                  dtype=_NPDT[dtype])
+                for divisor in (3, -3):
+                    result = torch.tensor(values) % divisor
+                    self.ae(result.numpy(), np.mod(values, divisor),
+                            f"{dtype} % {divisor} {dev}")
+                    self.assertEqual(dts(result), dtype)
+            large = np.array([2**40 + 7, -(2**40 + 7)], dtype="int64")
+            self.ae((torch.tensor(large) % 151936).numpy(),
+                    np.mod(large, 151936), f"large int64 modulo {dev}")
+        both_devices(body)
+
     def test_truediv_is_float(self):
         # torch '/' ALWAYS yields float (the documented special case). For an
         # integral result_type it lands on the DEFAULT float (float32) regardless of
@@ -326,7 +341,34 @@ class TestBinaryOpPromotion(Base):
             self.assertEqual(dts(mk("int64", (2, 4)) / 2), "float32", dev)
         both_devices(body)
 
+    def test_python_float_truediv_is_native_and_bit_identical(self):
+        # `_fast_binary` builds the widened division `_true_division` builds
+        # -- float32 math for half precision, float64 for float32 -- without
+        # its Python; the answer has to be the same to the bit.
+        from jittor.compat.torch.installers.tensor import method_api
+        if getattr(jt.compiler, "has_acl", 0):
+            self.skipTest("ACL keeps the divisor in the tensor dtype, on the Python path")
+        values = np.random.RandomState(7).randn(257).astype("float32") * 100
+
+        def body(dev):
+            for name in ("float16", "bfloat16", "float32", "float64"):
+                t = torch.tensor(values, dtype=getattr(torch, name))
+                for scale in (1.0, 0.28209479177387814, 3.0, -7.5e-3):
+                    fast = jt.core._fast_binary(t, scale, 6)
+                    self.assertIsNotNone(fast, f"{name} / {scale} {dev}")
+                    slow = method_api._true_division(t, scale, "__truediv__")
+                    self.assertEqual(dts(fast), name, f"{name} {dev}")
+                    np.testing.assert_array_equal(
+                        fast.double().numpy(), slow.double().numpy(),
+                        err_msg=f"{name} / {scale} {dev}")
+        both_devices(body)
+
     def test_python_float_truediv_preserves_torch_rounding_on_cpu(self):
+        # The expected words are PyTorch 2.11's own answer for this input,
+        # measured on the reference interpreter. They used to be one ulp away
+        # in both directions because this side computed float32 / Python-float
+        # in float64 "for 1-ulp parity": torch divides in the tensor's dtype
+        # (0 of 20000 values follow the float64 route, 12615 differ from it).
         source = mk("float32", (0.12345679, 1.2345679, 3.25))
         scale = 0.28209479177387814
         with jt.flag_scope(use_cuda=0):
@@ -337,11 +379,11 @@ class TestBinaryOpPromotion(Base):
         self.assertEqual(dtn(reflected.dtype), "float32")
         np.testing.assert_array_equal(
             quotient.view(np.uint32),
-            np.array([1054872252, 1082919861, 1094211024], dtype=np.uint32),
+            np.array([1054872251, 1082919861, 1094211023], dtype=np.uint32),
         )
         np.testing.assert_array_equal(
             reflected.view(np.uint32),
-            np.array([1074937066, 1047132944, 1035060060], dtype=np.uint32),
+            np.array([1074937067, 1047132944, 1035060061], dtype=np.uint32),
         )
 
     def test_mixed_values_correct(self):
@@ -487,6 +529,15 @@ class TestToAndType(Base):
             self.assertEqual(mk("uint8").type(), "torch.ByteTensor", dev)
             self.assertEqual(mk("bool").type(), "torch.BoolTensor", dev)
         both_devices(body)
+
+
+class TestStringRepetition(unittest.TestCase):
+    def test_string_repetition_uses_a_singleton_integer_tensor(self):
+        self.assertEqual("ab" * torch.tensor(3), "ababab")
+        with self.assertRaisesRegex(TypeError, "single element"):
+            "ab" * torch.tensor([1, 2])
+        with self.assertRaisesRegex(TypeError, "single element"):
+            "ab" * torch.tensor(2.0)
 
 
 if __name__ == "__main__":

@@ -40,7 +40,7 @@ os.environ["JITTOR_TORCH_SHIM"] = "1"
 try:
     import jittor
 except ModuleNotFoundError as error:
-    assert "install the jittor-torch distribution" in str(error), error
+    assert "install the jittor-compat distribution" in str(error), error
 else:
     raise AssertionError("missing requested compatibility was ignored")
 print("MISSING_COMPAT_REPORTED")

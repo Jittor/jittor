@@ -1,5 +1,7 @@
 # 设备与放置
 
+[本栏目目录](index.md) · [English](device-placement.en.md)
+
 这篇讲清楚三件事：一个张量到底在哪张卡上、怎么让它换一张卡、以及什么时候
 Jittor 会拒绝你。
 
@@ -71,7 +73,7 @@ a.cuda(99)         # RuntimeError：超出可见设备数
 
 （torch 兼容层比这里宽一点：`Tensor.to(1)` / `Module.to(1)` 在那边读作
 `cuda:1`，因为在多卡推理栈里裸编号很常见，见
-`docs/results/2026-09-14-vllm-omni-h3-enablement.md` 第 31 节。宽是可以的，
+[历史记录](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-09-14-vllm-omni-h3-enablement.md) 第 31 节。宽是可以的，
 悄悄丢掉不行。）
 
 **不带编号的 `cuda` 在两层里含义不同**，这是有意的：
@@ -96,17 +98,21 @@ Expected all inputs to be on the same CUDA device
 这条检查在 `Op::init` 里，所以 `jt.grad` 新建的反向算子走同一条规则——**前向被拒绝
 的组合，不会出现一个悄悄混设备的反向**。
 
-唯一的例外对应 torch 的 CPU 标量：**既未完成计算、又带 `_is_scalar` 标记**的 Var
-（`x * 2` 里的 `2`、梯度起始的 `1`）会跟随它遇到的操作数，连同它背后那一小段待定
-子图一起走。两个条件缺一不可——只看元素个数会放过用户真实存放在某张卡上的单元素
-张量；只看"未完成"会把用户特意建在 `cuda:0` 上、只是还没同步的 `jt.array` 悄悄
-挪走，而 torch 在这里是报错的。
+唯一的例外对应 torch 的 CPU 标量：**既未完成计算、又带 `_is_scalar` 或
+`_is_constant` 标记**的 Var（`x * 2` 里的 `2`、梯度起始的 `1`）会跟随它遇到的
+操作数，连同它背后那一小段待定子图一起走。`_is_scalar` 是"按标量参与 dtype 提升"
+的位，`_is_constant` 是只给放置用的位：工厂结果在完整形状上清掉前者、保留后者，
+所以 `jt.ones(4)` 按张量提升，未同步时仍然可以跟随操作数。两个
+条件缺一不可——只看元素个数会放过用户真实存放在某张卡上的单元素张量；只看
+"未完成"会把用户特意建在 `cuda:0` 上、只是还没同步的 `jt.array` 悄悄挪走，而
+torch 在这里是报错的。
 
-已知边界：`jt.zeros(n)` / `jt.ones(n)` 实现为 `unary(0).broadcast(n)`，`_is_scalar`
-会穿过 broadcast，因此一个未同步的 `jt.zeros(1000)` **会**跟随另一张卡上的操作数，
-而 torch 会报错。这一条是**接受**而非修补：它是编译期常量，任何一张卡上按位一致地
-产生，没有用户算出来的数据被搬动。凡是真正携带数据的路径（多于一个元素的
-`jt.array`，或任何已经算出来的值）仍然被拒绝。
+已知边界：`jt.zeros(n)` / `jt.ones(n)` 实现为 `unary(0).broadcast(n)`。工厂结果在
+广播上清掉 `_is_scalar`，但 `_is_constant` 穿过 broadcast，因此一个未同步的
+`jt.zeros(1000)` **仍然会**跟随另一张卡上的操作数，而 torch 会报错。这一条是
+**接受**而非修补：它是编译期常量，任何一张卡上按位一致地产生，没有用户算出来的
+数据被搬动。凡是真正携带数据的路径（多于一个元素的 `jt.array`，或任何已经算出来
+的值）仍然被拒绝。
 
 这条豁免**不越过一次显式的 `device_copy`**。`device_copy` 的输出带
 `_placement_published`：调用者已经点名了它的设备，它就不再是"可以跟着别人走"的
@@ -163,6 +169,50 @@ a = jt.ones(3).cuda(1); b = jt.ones(3).cuda(2)   # 两个都没同步
   torch 上跑得好好的暂存代码。缓冲区不是 page-locked，所以 `non_blocking` 的
   H2D 仍是同步的；`is_pinned()` 与之一致地返回 True。
 
+## 张量的后端放置
+
+上面讲的是"在哪张卡上"；Torch 独立前端还要回答"在哪个后端上"——一个显式的 `cpu`
+张量在全局 `use_cuda=1` 时也必须留在 CPU。这是**原生图约束**，不是 Python 侧的标记：
+Var/Op 图与元算子仍与原生 Jittor 共用，没有单独的 Torch 执行器。
+
+- **两种放置状态。** `Var::placement` 要么是 `FollowRuntime`（原生构造的默认，沿用原生
+  Jittor 现有的后端策略），要么是显式放置（`BackendId` 加设备号）。显式放置在主机暂存、
+  实体化和 Runtime 默认后端变化之后依然保留。`Var::device_id` 仍表示原生的加速器亲和，
+  显式放在 CPU 上的 Var 为 `-1`。物理驻留以**分配**为准。
+- **构图期的作用域。** `TensorPlacementScope` 只改线程局部的构图元数据：不调用 Runtime 的
+  flag setter、不同步、不分配、不执行 kernel。Python 绑定的放置 ContextVar 携带显式的工厂
+  设备，前端绑定作用域在每次 C++ 调用时把它转进原生构造状态并在退出时恢复。没有工厂覆盖
+  时，前端输入的放置优先于 Runtime 默认。
+- **传播与冲突。** `Op::propagate_device` 让输出采用输入的显式放置；显式的后端或设备冲突
+  需要显式拷贝。同一算子里只靠 `device_id` 放置的输入（原生模式下的 Python 数字）若在别的
+  卡上，待定标量随显式放置一起重定向，其余张量按"不同 CUDA 设备"拒绝；此前它会原样留在
+  当前卡上，目标卡上的 kernel 读到另一张卡的指针而非法访问。Python 发布会给原生 Var 打上 `_placement_published`，已发布张量的放置不能被
+  标量重定向改变。二元/三元构造允许 CPU 上的 0 维张量与加速器操作数同用：生成的构造适配器
+  在建立成员、广播子图或节点边之前插入可微的 DeviceCopy，源仍留在 CPU、梯度拷回 CPU；判定用
+  实际的 0 维形状，原有的 `_is_scalar` 提升位保留而不是凭空制造。显式的加速器标量配 CPU
+  向量被拒绝。
+- **选择与执行。** 原生分派查询与构造期的能力选择先看放置、再看 Runtime 默认（Random、
+  Array、Where、Transpose、Argsort、ArgReduce 与归约 dtype 策略都如此）。融合**不合并**请求了
+  不同后端的算子，每个段的编译、图优化与 runner 作用域使用它的图放置；runner 按段选择
+  后端/设备分配器。显式 CPU 输出永远不会被旧的 CPU 回退尾部上传；真正的加速器回退保留原有
+  的回退策略。DeviceCopy 自己负责传输，不在 runner 里迁移源，它的梯度拷回输入的显式放置。
+- **前端入口。** `tensor_frontend(type, device=..., like=...)` 在不改 Runtime 默认的情况下
+  限定构造。工厂函数、`Tensor`/`new_*` 构造、clone/deepcopy/pickle、`to`/`cpu`/`cuda`、
+  序列化的 `map_location` 都走这条边界；设备报告与数据 owner 路由读的是原生放置。
+- **模块 forward。** 放置参考是第一个带显式放置的张量参数；没有这样的参数时，用它自己
+  显式放置的张量（参数/缓冲区）而不是 Runtime 默认（`nn_frontend._placement_reference`，
+  原生快路径同名逻辑在 `first_placed_module_var`）。默认 CPU 放置的模块配未放置的加速器
+  输入时，forward 因此留在参数所在的 CPU；否则中间结果会落在加速器而参数留在主机，便携
+  卷积路径（autocast 下会走它）的第一个二元算子就拒绝混放置。显式放置
+  冲突仍按上面的规则报错，这条只决定"没有任何输入放置时"的默认。
+
+`BackendId` 让 ACL、ROCm、Corex 构建也有同样的 CPU/加速器划分，但运行时每个构建/进程仍只
+选一种加速器，**不提供跨加速器族的拷贝**，也不声称缺失硬件上的验证。定向用例在
+`compat/tests/torch/test_native_tensor_placement.py`、
+`compat/tests/torch/test_kernel_select_frontend_placement.py` 与
+`tests/structure/runtime/test_tensor_placement_scope.py`；主机侧作用域嵌套/线程隔离与翻译
+单元语法检查只是前提，不证明张量在所请求的硬件上执行。
+
 ## 不在范围内
 
 - **流与事件**：只有每设备的默认流。`torch.cuda.Stream` 有设备身份并且
@@ -171,5 +221,6 @@ a = jt.ones(3).cuda(1); b = jt.ones(3).cuda(2)   # 两个都没同步
 - **异构架构**：kernel 按 `query_cuda_cc` 探测到的计算能力编译，同一进程里混用不同
   架构的卡未做处理。
 - **显存换出**（`save_mem`）仍假定 0 号卡。
-- **非 CUDA 后端**：设备放置与后端选择是两个维度，见
-  [多后端设计](../../refactor-wip/architecture/multi-backend-design.md)。
+- **非 CUDA 后端**：设备放置与后端选择是两个维度；后端一侧见上文
+  "张量的后端放置"一节，构建时如何选择后端见
+  [源码架构](../development/source-architecture.md)的"后端构建配置"。

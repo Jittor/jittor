@@ -8,7 +8,7 @@ import unittest
 import jittor as jt
 import numpy as np
 
-from _helpers.common import JittorTestCase
+from _helpers.common import JittorTestCase, kernel_launches
 from _helpers.device_types import instantiate_device_type_tests
 
 
@@ -180,6 +180,39 @@ class TestFuseIntoReduce(JittorTestCase):
         if jt.flags.use_cuda:
             self.assertEqual(_fused_kernels(build, 1), _fused_kernels(build, 0) - 1)
 
+    def test_the_reduction_reads_what_it_stores_from_a_register(self, device):
+        # The kernel writes `y` out for the matmul and sums it; the sum reads
+        # the value it just computed rather than loading it back, which every
+        # iteration used to wait on behind its own store.
+        import re
+        rng = np.random.RandomState(2)
+        x = jt.array(rng.randn(256, 96).astype("float32"))
+        g = jt.array(rng.randn(256, 96).astype("float32"))
+        w = jt.array(rng.randn(96, 32).astype("float32"))
+        jt.sync([x, g, w])
+        with jt.flag_scope(fuse_into_reduce=1), jt.profile_scope() as rep:
+            y = (x * 0.5 + 1.0) * g
+            s = y.sum(0)
+            jt.sync([s, jt.matmul(y, w)])
+        sources = []
+        for record in rep[1:]:
+            try:
+                with open(record[1], encoding="utf-8") as f:
+                    sources.append(f.read())
+            except (OSError, TypeError, IndexError):
+                continue
+        fused = [src for src in sources if re.search(r"(op\d+_z)p\[\w+\] = \1d;", src)]
+        self.assertEqual(len(fused), 1, "no kernel stores a forwarded value")
+        stored = re.search(r"(op\d+_z)p\[\w+\] = \1d;", fused[0]).group(1)
+        body = fused[0].split("__global__", 1)[-1]
+        self.assertNotRegex(body, r"=[^;]*\b" + stored + r"p\[")
+        # The register is declared at the var's own type, spelled as a type:
+        # an op's type macros are named after its template parameters, and
+        # `broadcast_to` stores its `z` as `Tx`, so `opN_Tz` did not compile.
+        self.assertRegex(body, r"\bfloat32 " + stored + r"d = ")
+        ref = ((x.numpy() * 0.5 + 1.0) * g.numpy()).sum(0)
+        np.testing.assert_allclose(s.numpy(), ref, rtol=1e-4, atol=1e-3)
+
     def test_a_reduction_whose_input_needs_the_matmul_stays_ordered(self, device):
         # The reduction reads the matmul's result too: merging it with the
         # elementwise group that feeds the matmul would be a cycle.
@@ -196,8 +229,79 @@ class TestFuseIntoReduce(JittorTestCase):
         for a, b in zip(on, off):
             np.testing.assert_allclose(a, b, rtol=1e-5, atol=1e-3)
 
+    def test_a_slice_written_in_place_keeps_the_reduction_that_fills_it(self, device):
+        # The in-place setitem computes the value straight into the target's
+        # storage and orders it after the target's own fill with a control
+        # edge. That edge was read as a data input here, so the `zeros` fill
+        # joined the reduction's kernel and overwrote the slice's first
+        # element. Without MKL every CPU matmul gradient through `x[t]` (an
+        # RNN's backward) took this route.
+        rng = np.random.RandomState(3)
+        p = rng.randn(2, 4, 5).astype("float32")
+        q = rng.randn(2, 4, 5).astype("float32")
+        ref = (p * q).sum(-1)
+        for k in range(3):
+            with self.subTest(k=k), jt.flag_scope(fuse_into_reduce=1):
+                z = jt.zeros((3, 2, 4))
+                z[k] = (jt.array(p) * jt.array(q)).sum(-1)
+                got = z.numpy()
+                np.testing.assert_allclose(got[k], ref, rtol=1e-5, atol=1e-5)
+                np.testing.assert_array_equal(np.delete(got, k, 0), 0)
+
 
 instantiate_device_type_tests(TestFuseIntoReduce, globals())
+
+class TestScalarChainsFuse(JittorTestCase):
+    """A Python number fuses into a consumer that is one element too.
+
+    `count_fuse` keeps a one-element var in memory unless a broadcast reads
+    it, so a scalar is not recomputed for every element of a large consumer.
+    A one-element consumer reads a number once, and the number was a kernel
+    of its own that wrote the constant out.
+    """
+
+    def test_a_number_in_scalar_arithmetic_is_not_a_kernel(self, device):
+        s = jt.array(np.array([3.0], "float32"))
+        s.sync()
+        # `s * 2` and `> 1`, each with its number; four kernels before.
+        count, value = kernel_launches(lambda: bool(s * 2 > 1))
+        self.assertTrue(value)
+        self.assertEqual(count, 2)
+        count, value = kernel_launches(lambda: (s - 1).item())
+        self.assertEqual(value, 2.0)
+        self.assertEqual(count, 1)
+
+    def test_scalar_ops_do_not_chain(self, device):
+        # Only numbers fuse: scalar ops stay one kernel each, so a loop that
+        # accumulates scalars cannot grow a kernel per chain length -- and a
+        # scalar Var someone holds is still computed (`test_for_fuse`).
+        s = jt.array(np.array([3.0], "float32"))
+        t = jt.array(np.array([4.0], "float32"))
+        jt.sync([s, t])
+        count, value = kernel_launches(lambda: ((s * t) * t).item())
+        self.assertEqual(value, 48.0)
+        self.assertEqual(count, 2)
+
+    def test_a_reduction_still_writes_its_scalar_out(self, device):
+        u = jt.array(np.arange(240).astype("int32"))
+        u.sync()
+        # The reduction is one kernel, the constant and the subtraction one.
+        count, value = kernel_launches(lambda: (u.min() - 5).item())
+        self.assertEqual(value, -5)
+        self.assertEqual(count, 2)
+
+    def test_a_scalar_read_by_a_large_op_is_computed_once(self, device):
+        s = jt.array(np.array([3.0], "float32"))
+        x = jt.array(np.arange(1000).astype("float32"))
+        jt.sync([s, x])
+        # `s * 2` is one element and its consumer a thousand: it stays a
+        # kernel of its own rather than being recomputed per element.
+        count, value = kernel_launches(lambda: (x + s * 2).numpy())
+        np.testing.assert_array_equal(value, np.arange(1000, dtype="float32") + 6)
+        self.assertEqual(count, 2)
+
+
+instantiate_device_type_tests(TestScalarChainsFuse, globals())
 
 
 if __name__ == "__main__":

@@ -1,12 +1,14 @@
 """NN owner routing and graph isolation without a native build."""
 import ast
 from contextlib import nullcontext
+from collections.abc import MutableMapping
 import importlib.util
 import inspect
 from pathlib import Path
 import sys
 import types
 import unittest
+import weakref
 from unittest.mock import patch
 
 
@@ -45,6 +47,21 @@ class TestNNFrontendOwners(unittest.TestCase):
         replaced = patch.dict(sys.modules)
         replaced.start()
         self.addCleanup(replaced.stop)
+        # Exercise the real native child-view descriptor without importing
+        # the tensor runtime; the minimal stand-in must expose that protocol.
+        native_source = SOURCE.parents[1] / "python/jittor/_core/module.py"
+        tree = ast.parse(native_source.read_text())
+        children = next(node for node in tree.body
+                        if isinstance(node, ast.ClassDef) and node.name == "_ModuleChildren")
+        module = next(node for node in tree.body
+                      if isinstance(node, ast.ClassDef) and node.name == "Module")
+        descriptor = next(node for node in module.body
+                          if isinstance(node, ast.FunctionDef) and node.name == "_modules")
+        namespace = {"Module": NativeModule, "MutableMapping": MutableMapping, "weakref": weakref}
+        exec(compile(ast.Module(body=[children, descriptor], type_ignores=[]),
+                     str(native_source), "exec"), namespace)
+        NativeModule._modules = namespace["_modules"]
+        self.addCleanup(delattr, NativeModule, "_modules")
         package = types.ModuleType("_nn_owner_probe")
         package.__path__ = [str(SOURCE)]
         sys.modules[package.__name__] = package
@@ -52,6 +69,7 @@ class TestNNFrontendOwners(unittest.TestCase):
         dtypes.dtype_name = str
         sys.modules[dtypes.__name__] = dtypes
         frontend = types.ModuleType("_nn_owner_probe.frontend")
+        frontend._default_tensor_dtype = lambda backend: "float32"
         frontend.tensor_frontend = lambda tensor_type, **scope: nullcontext()
         frontend.make_parameter_type = lambda backend, tensor_type: Parameter
         sys.modules[frontend.__name__] = frontend
@@ -140,6 +158,7 @@ class TestNNFrontendOwners(unittest.TestCase):
                 self.weight = Tensor()
         Child.__module__ = "jittor.nn.modules.fake"
         shared = Child()
+        original_view = shared._modules
         external = [Tensor()]
         class Parent(NativeModule):
             def __init__(self, supplied):
@@ -154,6 +173,8 @@ class TestNNFrontendOwners(unittest.TestCase):
         self.assertIs(module.alias, shared.weight)
         self.assertIs(type(shared.weight), Tensor)
         self.assertIs(type(external[0]), Tensor)
+        self.assertIs(original_view._owner(), shared)
+        self.assertIs(module.child._modules._owner(), module.child)
 
     def test_embedding_freeze_and_initializer_failure_restore_construction_scope(self):
         class Embedding(NativeModule):

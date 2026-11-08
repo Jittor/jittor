@@ -26,13 +26,15 @@ import sys
 import zipfile
 
 
-BASELINE_ROOT = Path(__file__).resolve().parents[2] / "refactor-wip" / "results" / "baselines"
+BASELINE_ROOT = Path(__file__).resolve().parent / "baselines"
 DEFAULT_BASELINE = BASELINE_ROOT / "wheel-contents-final.txt"
 DEFAULT_ADDITION_ALLOWLIST = BASELINE_ROOT / "wheel-additions-final.txt"
 DEFAULT_CONTENT_CHANGE_ALLOWLIST = BASELINE_ROOT / "wheel-content-changes-final.txt"
 
 REQUIRED_MEMBERS = (
     "jittor/src/core/common.h",
+    "jittor/src/utils/cgroup_memory.h",
+    "jittor/build/utils/cgroup.py",
     "jittor/src/bindings/pyjt/py_converter.h",
     "jittor/src/codegen/op_compiler.cc",
     "jittor/backends/cuda/__init__.py",
@@ -155,6 +157,7 @@ RUNTIME_BUILD_HELPERS = frozenset((
     "jittor/build/utils/backend_resources.py",
     "jittor/build/utils/bootstrap.py",
     "jittor/build/utils/build_config.py",
+    "jittor/build/utils/cgroup.py",
     "jittor/build/utils/clean_cache.py",
     "jittor/build/utils/compiler_flags.py",
     "jittor/build/utils/config.py",
@@ -174,10 +177,6 @@ RUNTIME_BUILD_HELPERS = frozenset((
     "jittor/build/utils/ring_buffer.py",
     "jittor/build/utils/runtime_services.py",
     "jittor/build/utils/save_pytorch.py",
-    "jittor/build/utils/student_queue.py",
-    "jittor/build/utils/class/motd",
-    "jittor/build/utils/class/setup.py",
-    "jittor/build/utils/class/setup_env.py",
 ))
 
 

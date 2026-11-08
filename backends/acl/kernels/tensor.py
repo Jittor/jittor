@@ -2,9 +2,11 @@
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 from collections.abc import Iterable
+from numbers import Integral
 from typing import Union
 import numpy as np
 import jittor as jt
+from .ops.multinomial_op import multinomial_acl
 from .ops.clamp_op import ClampACL
 from .ops.triu_op import TriuACL
 from .ops.flip_op import FlipACL
@@ -17,9 +19,25 @@ from .ops.index_op import IndexACL
 from .ops.arg_reduce_op import ArgReduceACL
 from .ops.where_op import WhereACL, NonzeroACL
 from .ops.floor_op import FloorIntACL
-from .ops.getitem_op import GetItemACL, basic_slice_acl
+from .ops.getitem_op import GetItemACL, basic_slice_acl, single_axis_gather_acl
 from .ops.setitem_op import SetItemACL
 from .ops.roll_op import RollACL
+from .ops.topk_op import TopkACL
+from ._soc import soc_name
+
+
+def topk_supported(input, k, dim=-1, largest=True, sorted=True):
+    return (bool(jt.flags.no_grad) and soc_name().startswith("Ascend310P")
+            and input.ndim == 2 and all(int(size) > 0 for size in input.shape)
+            and dim in (-1, 1) and largest is True and sorted is True
+            and isinstance(k, Integral) and not isinstance(k, bool)
+            and 0 < k <= input.shape[-1]
+            and _jittor_dtype_name(input.dtype) in ("float16", "float32")
+            and input._storage_is_contiguous())
+
+
+def topk_acl(input, k, dim=-1, largest=True, sorted=True):
+    return TopkACL()(input, k)
 
 
 def _clamp_acl(input, min_value, max_value):
@@ -119,12 +137,33 @@ def embedding_acl(
     return EmbeddingACL(padding_idx, scale_grad_by_freq)(input, weight)
 
 
-def any_acl(input, dim=None):
-    return truth_reduce(input, dim, reduce_all=False)
+def _truth_reduce_keepdims(input, dim, reduce_all, keepdims):
+    result = truth_reduce(input, dim, reduce_all=reduce_all)
+    if not keepdims:
+        return result
+    dims = {axis % input.ndim for axis in range(input.ndim)} if dim is None or (
+        isinstance(dim, (list, tuple)) and not dim
+    ) else {axis % input.ndim for axis in ([dim] if isinstance(dim, int) else dim)}
+    return result.reshape([1 if axis in dims else size for axis, size in enumerate(input.shape)])
 
 
-def all_acl(input, dim=()):
-    return truth_reduce(input, dim, reduce_all=True)
+def any_acl(input, dim=None, keepdims=False):
+    return _truth_reduce_keepdims(input, dim, False, keepdims)
+
+
+def all_acl(input, dim=(), keepdims=False):
+    return _truth_reduce_keepdims(input, dim, True, keepdims)
+
+
+def multinomial_single_draw_acl(weights, num_samples=1, replacement=False):
+    """``jt.multinomial`` on ACL for the one draw CANN serves, or None.
+
+    Registered as ``random.multinomial``: a None answer leaves the call to the
+    portable sampler, as any other draw goes.
+    """
+    if num_samples != 1 or replacement or weights.ndim not in (1, 2):
+        return None
+    return multinomial_acl(weights, num_samples, replacement)
 
 
 def cumsum_acl(input, dim=-1):
@@ -144,7 +183,24 @@ def scatter_acl(input, dim, index, src, reduce="void"):
 
 
 def arg_reduce_acl(input, op, dim, keepdims=False):
-    if _jittor_dtype_name(input.dtype) not in ("float16", "float32"):
+    dtype = _jittor_dtype_name(input.dtype)
+    if dtype == "float16" and soc_name().startswith("Ascend310P"):
+        # CANN half extrema kernels can return values and indices from different
+        # rows. Use exact FP32 comparisons for both extrema on this SoC.
+        # Gather the original half values instead of narrowing the SDK result:
+        # the device Cast kernel saturates infinities when narrowing to half.
+        indices, _ = ArgReduceACL(jt.ops.arg_reduce)(input.float32(), op, dim, keepdims)
+        gather_shape = list(input.shape)
+        gather_shape[dim] = 1
+        gather_indices = indices.reshape(gather_shape)
+        values = jt.gather(input, dim, gather_indices)
+        return indices, values.reshape(indices.shape)
+    if dtype == "int32":
+        # aclnnMaxDim/MinDim on Ascend A2 does not accept int32 values.
+        # int64 preserves every int32 value exactly across the reduction.
+        indices, values = ArgReduceACL(jt.ops.arg_reduce)(input.cast("int64"), op, dim, keepdims)
+        return indices, values.cast("int32")
+    if dtype not in ("float16", "float32", "int64"):
         return None
     return ArgReduceACL(jt.ops.arg_reduce)(input, op, dim, keepdims)
 
@@ -161,23 +217,78 @@ def floor_int_acl(x):
     return FloorIntACL()(x)
 
 
+#: The numpy integer scalar types that reach an index, resolved once. Asking
+#: `hasattr(np, "int128")` per call goes through numpy's module `__getattr__`
+#: and raises -- twice an index, 5710 times a Qwen3 decode step -- to learn
+#: something that is fixed for the process.
+_NUMPY_INTS = tuple(
+    getattr(np, name) for name in
+    ("int8", "int16", "int32", "int64", "int128", "int256")
+    if hasattr(np, name))
+
+
+def _static_basic_view_index(index):
+    """Indices the native storage view can resolve without tensor values."""
+    items = index if isinstance(index, tuple) else (index,)
+    for item in items:
+        if item is None or item is Ellipsis or type(item) is int:
+            continue
+        if not isinstance(item, slice):
+            return False
+        if any(part is not None and type(part) is not int
+               for part in (item.start, item.stop, item.step)):
+            return False
+        if item.step is not None and item.step <= 0:
+            return False
+    return True
+
+
 def getitem_acl(x, slices, return_x=None):
     if return_x is not None:
+        return None
+    if jt.flags.no_grad and _static_basic_view_index(slices):
+        # GetitemOp already carries positive strides and the storage offset.
+        # The public indexing owner records writeback to the base afterwards.
+        # Inference needs neither a SliceV2 copy nor a generated gradient;
+        # training keeps the existing Concat gradient for last-axis slices.
+        return jt.core.ops.getitem(x, slices)
+    selected = single_axis_gather_acl(x, slices)
+    if selected is not None:
+        return selected
+    # A tuple of plain slices and ellipses -- `q[..., :64]` in a rotary
+    # embedding, `cache[:, :, :n]` in an attention -- is what the decode
+    # loop indexes with, and none of the shapes below apply to it.
+    if type(slices) is tuple and x.ndim > 1:
+        for item in slices:
+            if item is not Ellipsis and item.__class__ is not slice:
+                break
+        else:
+            return _getitem_without_none(x, slices)
+    # ZeRO unflattens one dense 1-D parameter buffer with unit-stride slices.
+    # The native getitem represents those slices as storage views, while the
+    # ACL SliceV2 lowering materializes every result.  Materializing hundreds
+    # of views multiplies the full flat-buffer footprint and can OOM before the
+    # first training step.  Leave this exact view-safe case to native getitem;
+    # ACL still handles tensor indices, masks and multi-dimensional slices.
+    flat_slice = None
+    if x.ndim == 1 and isinstance(slices, slice):
+        flat_slice = slices
+    elif x.ndim == 1 and isinstance(slices, tuple) and len(slices) == 1:
+        flat_slice = slices[0]
+    if isinstance(flat_slice, slice) and flat_slice.step in (None, 1):
         return None
     if isinstance(slices, jt.Var):
         return GetItemACL()(x, slices, return_x)
     if isinstance(slices, list):
         return GetItemACL()(x, jt.array(slices), return_x)
-    if isinstance(slices, (np.int8, np.int16, np.int32, np.int64)):
-        slices = int(slices)
-    if hasattr(np, "int128") and isinstance(slices, np.int128):
-        slices = int(slices)
-    if hasattr(np, "int256") and isinstance(slices, np.int256):
+    if isinstance(slices, _NUMPY_INTS):
         slices = int(slices)
 
     if slices is not None and (not isinstance(slices, Iterable) or isinstance(slices, str)):
         return _getitem_without_none(x, slices)
-    if isinstance(slices, int) or isinstance(slices, slice):
+    # `x[None]` is a bare None, which is neither Iterable nor a tuple; without
+    # this it reached the TypeError below instead of adding an axis.
+    if slices is None or isinstance(slices, (int, slice)):
         slices = (slices,)
     if not isinstance(slices, tuple):
         raise TypeError("ACL getitem slices must be a tuple, integer, slice, or tensor")
@@ -226,7 +337,8 @@ def _roll_acl(x, shifts, dims=None):
     if not (
         isinstance(x, jt.Var)
         and _jittor_dtype_name(x.dtype)
-        in ("bfloat16", "float16", "float32", "int8", "uint8", "int32", "uint32", "bool")
+        in ("bfloat16", "float16", "float32", "int8", "uint8",
+            "int32", "int64", "uint32", "bool")
     ):
         return None
     if dims is None:

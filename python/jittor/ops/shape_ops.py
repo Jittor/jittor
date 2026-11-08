@@ -71,15 +71,27 @@ def repeat_interleave(x,repeats,dim=None,output_size=None):
         dim += x.ndim
 
     if isinstance(repeats, int):
+        # Built as expand + reshape rather than a `reindex` with a divided
+        # index expression (``i{dim}/{repeats}``): that specific reindex
+        # shape is a fused-kernel variant no backend registers natively (it
+        # surfaced on ACL running Qwen's GQA head repeat, "unregistered
+        # fused operator variant: reindex/void"), while expand + reshape is
+        # built from ops every backend already has. Same result on every
+        # backend, not an ACL-only branch: `x[..., k, ...]` repeated
+        # `repeats` times consecutively along `dim` is exactly what
+        # unsqueezing a size-1 axis right after `dim`, broadcasting it to
+        # `repeats`, and folding it back into `dim` produces.
+        if repeats == 1:
+            return x.clone()
         tar_shape = list(x.shape)
-        tar_shape[dim] = tar_shape[dim]*repeats
-        dims = []
-        for i in range(len(tar_shape)):
-            if dim==i:
-                dims.append(f"i{i}/{repeats}")
-            else:
-                dims.append(f"i{i}")
-        return x.reindex(tar_shape,dims)
+        tar_shape[dim] = tar_shape[dim] * repeats
+        broadcast_shape = [-1] * (dim + 1) + [repeats] + [-1] * (x.ndim - dim - 1)
+        # Torch's repeat_interleave is a copy. The reshape above can be a
+        # stride-0 view (a size-1 axis expanded then folded back in), which
+        # refused in-place writes and kept aliasing the source; `contiguous`
+        # makes the produced buffer its own without materializing eagerly.
+        return x.unsqueeze(dim + 1).expand(broadcast_shape).reshape(
+            tar_shape).contiguous()
 
     result = _repeat_interleave_dim0_cuda(x, repeats, dim, output_size, _repeat_interleave_cpu_source)
     if result is not None:
@@ -111,10 +123,7 @@ def repeat_interleave(x,repeats,dim=None,output_size=None):
     ):
         value = int(x.item())
         out = jt.full((index.shape[0],), value, x.dtype)
-        try:
-            out._jittor_constant_index_value = value
-        except Exception:
-            pass
+        out._jittor_constant_index_value = value
         return out
     return x.getitem(tuple(slice(None) if d != dim else index for d in range(x.ndim)))
 
@@ -152,10 +161,25 @@ def stack(x, dim=0):
         raise TypeError("stack: expected a sequence of tensors")
     if isinstance(x, tuple):
         x = list(x)
+    # Two or more inputs are copied into the result anyway, so a plain Var is
+    # taken as it is rather than cloned first: the clone was an op to build
+    # and run per input of every stack. A lone input keeps the jt.array call
+    # it always had, since the result is then just an unsqueeze of it, and so
+    # does a Var subclass, which may carry attributes the paths below read.
+    copy_plain = len(x) < 2
     for i,x_ in enumerate(x):
+        if copy_plain or x_.__class__ is not jt.Var:
             x[i] = jt.array(x_)
     if len(x) < 2:
         return x[0].unsqueeze(dim)
+    first = list(x[0].shape)
+    for index, value in enumerate(x[1:], 1):
+        if list(value.shape) != first:
+            # Checked here: concat would compare the unsqueezed shapes and
+            # name a dim of those instead.
+            raise jt.JittorShapeError(
+                "stack expects each var to be equal size, but got %s at entry "
+                "0 and %s at entry %d" % (first, list(value.shape), index))
 
     fast = jt.misc._stack_no_grad_cuda_fast(x, dim, _stack_cpu_source)
     if fast is not None:

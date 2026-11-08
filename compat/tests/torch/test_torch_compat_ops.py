@@ -222,6 +222,21 @@ class TestShapeOps(Base):
 
         both_devices(body)
 
+    def test_cat_out_writes_through_view(self):
+        def body(dev):
+            flat = torch.zeros(8, dtype=torch.float32)
+            out = flat.narrow(0, 2, 4)
+            left = torch.tensor([1.0, 2.0], dtype=torch.float32)
+            right = torch.tensor([3.0, 4.0], dtype=torch.float32)
+            returned = torch.cat([left, right], out=out)
+            self.assertIs(returned, out)
+            self.ae(out.numpy(), np.array([1, 2, 3, 4], dtype=np.float32),
+                    msg=f"cat out view {dev}")
+            self.ae(flat.numpy(), np.array([0, 0, 1, 2, 3, 4, 0, 0], dtype=np.float32),
+                    msg=f"cat out base {dev}")
+
+        both_devices(body)
+
     def test_cat_stack(self):
         a = np.random.RandomState(4).randn(2, 3).astype("float32")
         b = np.random.RandomState(5).randn(2, 3).astype("float32")
@@ -291,6 +306,20 @@ class TestComparisonWhere(Base):
                             f"in-place multiply produced non-finite values {dev}")
             self.ae(value.numpy(), np.zeros((1, 4), dtype=np.float32),
                     msg=f"in-place multiply values {dev}")
+
+        both_devices(body)
+
+    def test_where_frozen_result_grad_flags(self):
+        def body(dev):
+            condition = torch.tensor([[True, False]], device=dev)
+            frozen = torch.tensor(0.0, device=dev)
+            trainable = torch.ones((1, 2), device=dev, requires_grad=True)
+            self.assertFalse(torch.where(condition, frozen, -3.0).requires_grad)
+            self.assertTrue(torch.where(condition, trainable, frozen).requires_grad)
+            with torch.no_grad():
+                self.assertFalse(torch.where(condition, trainable, frozen).requires_grad)
+            self.assertFalse(frozen.requires_grad)
+            self.assertTrue(trainable.requires_grad)
 
         both_devices(body)
 
@@ -439,23 +468,6 @@ class TestGather(Base):
         both_devices(body)
 
 
-class TestShapeMetadata(Base):
-    def test_expand_accepts_scalar_tensor_dimensions(self):
-        """Scalar tensor dimensions are valid metadata in ``Tensor.expand``."""
-        def body(dev):
-            source = torch.tensor([[1, 2, 3]], dtype=torch.int64, device=dev)
-            width = torch.tensor([3], dtype=torch.int64, device=dev)[0]
-            expanded = source.expand(-1, width)
-            self.assertEqual(tuple(expanded.shape), (1, 3))
-            self.ae(expanded.numpy(), np.array([[1, 2, 3]], dtype=np.int64), msg=f"expand {dev}")
-            grid = torch.arange(width)
-            self.assertEqual(grid.device.type, dev, f"arange scalar placement {dev}")
-            self.ae(grid.numpy(), np.arange(3, dtype=np.int64), msg=f"arange scalar {dev}")
-            rounded = torch.tensor([-1.2, 0.1, 2.9], device=dev)
-            self.assertIs(rounded.floor_(), rounded)
-            self.ac(rounded.numpy(), np.floor([-1.2, 0.1, 2.9]), msg=f"floor_ {dev}")
-
-        both_devices(body)
 
 
 class TestNestedTensor(Base):
@@ -494,6 +506,54 @@ class TestNestedTensor(Base):
             self.assertTrue(torch.equal(nested, via_nested_tensor))
             from torch.nested._internal.nested_tensor import NestedTensor
             self.assertIs(NestedTensor, type(nested))
+
+        both_devices(body)
+
+
+class TestTypeAndDeviceSemantics(Base):
+    def test_type_as_inherits_dtype_and_device(self):
+        def body(dev):
+            source = torch.tensor([1, 2], dtype=torch.int32)
+            target = torch.tensor([0, 0], dtype=torch.float32, device=dev)
+            converted = source.type_as(target)
+            self.assertEqual(converted.dtype, target.dtype)
+            self.assertEqual(converted.is_cuda, target.is_cuda)
+            self.ae(converted.detach().cpu().numpy(),
+                    np.array([1, 2], dtype=np.float32),
+                    msg=f"type_as values {dev}")
+
+        both_devices(body)
+
+    def test_reflected_scalar_pow_keeps_tensor_device(self):
+        def body(dev):
+            exponent = torch.arange(0, 8, 2, dtype=torch.float32, device=dev) / 8
+            result = 2.0 ** exponent
+            self.assertEqual(result.is_cuda, dev == "cuda")
+            self.ac(
+                result.detach().cpu().numpy(),
+                np.power(2.0, exponent.detach().cpu().numpy()),
+                msg=f"reflected pow device {dev}",
+            )
+
+        both_devices(body)
+
+
+class TestShapeMetadata(Base):
+    def test_expand_accepts_scalar_tensor_dimensions(self):
+        """Scalar tensor dimensions are valid metadata in ``Tensor.expand``."""
+        def body(dev):
+            source = torch.tensor([[1, 2, 3]], dtype=torch.int64, device=dev)
+            width = torch.tensor([3], dtype=torch.int64, device=dev)[0]
+            expanded = source.expand(-1, width)
+            self.assertEqual(tuple(expanded.shape), (1, 3))
+            self.ae(expanded.numpy(),
+                    np.array([[1, 2, 3]], dtype=np.int64), msg=f"expand {dev}")
+            grid = torch.arange(width)
+            self.assertEqual(grid.device.type, dev, f"arange scalar placement {dev}")
+            self.ae(grid.numpy(), np.arange(3, dtype=np.int64), msg=f"arange scalar {dev}")
+            rounded = torch.tensor([-1.2, 0.1, 2.9], device=dev)
+            self.assertIs(rounded.floor_(), rounded)
+            self.ac(rounded.numpy(), np.floor([-1.2, 0.1, 2.9]), msg=f"floor_ {dev}")
 
         both_devices(body)
 

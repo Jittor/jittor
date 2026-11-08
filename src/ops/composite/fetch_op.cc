@@ -27,6 +27,8 @@ namespace jittor {
 #pragma GCC visibility push(hidden)
 namespace fetcher_local {
 
+constexpr int fetch_copy_device = 0;
+
 volatile int64 n_to_fetch;
 std::mutex m;
 list<FetchResult> fetch_tasks;
@@ -43,7 +45,7 @@ static void to_fetch(void* user_data) {
 struct Init {
 Init() {
     if (!get_device_count()) return;
-    backend_stream({accelerator_backend_id(), 0}, BackendStreamKind::Copy);
+    backend_stream({accelerator_backend_id(), fetch_copy_device}, BackendStreamKind::Copy);
 }
 ~Init() {
     if (!get_device_count()) return;
@@ -63,21 +65,23 @@ using namespace fetcher_local;
 
 #endif
 
-// The use_cuda flag may synchronize during another translation unit's static
-// initialization. Keep both queues constructed before their first use and
-// alive through late cleanup, like the core-owned NativeRuntime.
-namespace {
-struct FetchQueues {
-    list<VarPtr> pending;
-    list<VarPtr> to_free;
-};
-
-FetchQueues& fetch_queues() {
-    static auto* queues = new FetchQueues();
-    return *queues;
+uint64 pending_fetch_device_mask() {
+    #ifdef HAS_ACCELERATOR
+    // A fetch may read another device, but its staging copies and callback
+    // run on this copy stream. A wait on the source device alone is not enough.
+    return fetcher_local::fetch_tasks.empty() ? 0
+        : 1ull << fetcher_local::fetch_copy_device;
+    #else
+    return 0;
+    #endif
 }
-} // namespace
 
+// Keep fetch queues initialized before static setup can synchronize and alive
+// through late cleanup.
+namespace {
+struct FetchQueues { list<VarPtr> pending; list<VarPtr> to_free; };
+FetchQueues& fetch_queues() { static auto* queues = new FetchQueues(); return *queues; }
+}
 list<VarPtr>& fetcher() { return fetch_queues().pending; }
 list<VarPtr>& fetcher_to_free() { return fetch_queues().to_free; }
 
@@ -137,7 +141,7 @@ void FetchOp::run() {
     // Devices this fetch read from, and the device to come back to.
     uint64 src_devices = 0;
     int entry_device = -1;
-    int copy_device = 0;
+    const int copy_device = fetch_copy_device;
     BackendStream copy_stream{};
     bool copy_stream_initialized = false;
     event_queue.flush();

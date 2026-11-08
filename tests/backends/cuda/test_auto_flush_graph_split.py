@@ -10,7 +10,7 @@ built, so the device computes while Python keeps building. A batch formed that
 way can contain a `Tapes` op whose inputs the forward has already finished and
 released -- correctly released, since `Tapes` computes nothing and marks none of
 them needed. The runner applied the rule for a *compute* op to it anyway, read
-`v->allocator->is_cuda()` on a freed Var, and segfaulted (KI-EXEC-001).
+`v->allocator->is_cuda()` on a freed Var, and segfaulted.
 
 Five bottleneck blocks crashed at `auto_flush_ops` 1, 16, 32 and **128, the
 shipping default**, while 64 and 256 happened not to. That is what made it read
@@ -119,7 +119,7 @@ def _run(flush, blocks):
     if line is None:
         raise AssertionError(
             "auto_flush_ops=%d produced no result (return code %s). Before "
-            "KI-EXEC-001 was fixed this was a segfault in run_exec_plan, "
+            "the fix this was a segfault in run_exec_plan, "
             "reading a freed allocator on an input of a `tapes` op.\n%s"
             % (flush, result.returncode, (result.stderr or stdout)[-2000:]))
     return json.loads(line[len("RESULT "):])

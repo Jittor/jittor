@@ -206,12 +206,32 @@ class TestAutocast(StubPolicyBase):
         self.assertEqual(str(out.dtype), "float16")
 
     def test_autocast_conv2d_module_keeps_the_compute_dtype_through_a_bias(self):
-        module = torch.nn.Conv2d(4, 8, 3, padding=1, bias=True)
-        x = jt.random((1, 4, 8, 8), dtype="float32")
-        with torch.autocast("cuda", dtype=torch.float16):
-            out = module(x)
-        # The module hands back a shim tensor, whose dtype prints torch-style.
-        self.assertEqual(str(out.dtype).replace("torch.", ""), "float16")
+        """A module's bias add follows the autocast dtype.
+
+        A torch module left at its default CPU placement, called with an
+        unplaced accelerator tensor, used to put the forward's intermediates
+        on the accelerator while its parameters stayed on the host; the
+        portable convolution then refused the mixed placement. The forward
+        follows the module's own placement now, so the contraction and the
+        bias add it performs run in the autocast dtype, as torch's does.
+        """
+        for use_cuda in (0, 1):
+            if use_cuda and not _test_capability.any_accelerator_enabled(backend=jt):
+                continue
+            with jt.flag_scope(use_cuda=use_cuda):
+                x = jt.random((1, 4, 8, 8), dtype="float32")
+                # The module at torch's default CPU placement.
+                module = torch.nn.Conv2d(4, 8, 3, padding=1, bias=True)
+                with torch.autocast("cuda", dtype=torch.float16):
+                    out = module(x)
+                # The module hands back a shim tensor, whose dtype prints torch-style.
+                self.assertEqual(str(out.dtype).replace("torch.", ""), "float16")
+                if use_cuda:
+                    # And on the accelerator, where cuDNN takes the convolution.
+                    module = torch.nn.Conv2d(4, 8, 3, padding=1, bias=True).cuda()
+                    with torch.autocast("cuda", dtype=torch.float16):
+                        out = module(x)
+                    self.assertEqual(str(out.dtype).replace("torch.", ""), "float16")
 
     def test_autocast_conv_is_not_changed_without_amp(self):
         """No register, no cast: the bias add stays float32."""
@@ -1073,7 +1093,9 @@ class TestInitAndSwa(StubPolicyBase):
         swa = sys.modules["torch.optim.swa_utils"]
         model = torch.nn.BatchNorm(4)
         model.running_mean.assign(jt.ones(4) * 99.0)
-        batches = [jt.ones((8, 4)) * 5.0 for _ in range(3)]
+        # Built where the module is: a native `jt.ones` follows `use_cuda`,
+        # while a module with no `device=` is on the CPU, as in torch.
+        batches = [torch.ones((8, 4)) * 5.0 for _ in range(3)]
         swa.update_bn(batches, model)
         np.testing.assert_allclose(model.running_mean.numpy(),
                                    np.full(4, 5.0), atol=1e-4)
@@ -1086,9 +1108,16 @@ class TestOverridesAndDefaults(StubPolicyBase):
     def setUp(self):
         super().setUp()
         self._use_cuda = jt.introspection.policy.runtime.use_cuda
+        # `set_default_device` also records where a `device=`-less tensor
+        # goes, and restoring use_cuda does not undo that: left at "cuda", the
+        # files after this one built every plain `torch.tensor` on the device.
+        from jittor.compat.torch import frontend
+        self._default_device = frontend._DEFAULT_DEVICE
 
     def tearDown(self):
         from contextlib import ExitStack as _TestPolicyStack
+        from jittor.compat.torch import frontend
+        frontend.set_default_device_spelling(self._default_device)
         with _TestPolicyStack() as _test_policy_stack:
             _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=self._use_cuda))
             super().tearDown()
@@ -1186,22 +1215,27 @@ class TestOverridesAndDefaults(StubPolicyBase):
     def test_device_context_moves_the_allocation_default(self):
         if not _test_capability.check_accelerator('cuda', backend=jt).enabled:
             self.skipTest("no accelerator on this box")
-        self.assertEqual(torch.ones(2).device.type, "cuda")
-        with torch.device("cpu"):
-            self.assertEqual(torch.ones(2).device.type, "cpu")
-            self.assertEqual(torch.empty(2).device.type, "cpu")
-            self.assertEqual(torch.tensor([1.0]).device.type, "cpu")
+        # The default is the CPU (test_default_device_is_cpu.py); the context
+        # moves it for the block and gives it back.
+        self.assertEqual(torch.ones(2).device.type, "cpu")
+        with torch.device("cuda"):
+            self.assertEqual(torch.ones(2).device.type, "cuda")
+            self.assertEqual(torch.empty(2).device.type, "cuda")
+            self.assertEqual(torch.tensor([1.0]).device.type, "cuda")
             # `empty_like` follows its input, not the ambient context.
             self.assertEqual(
-                torch.empty_like(torch.ones(2, device="cuda")).device.type,
-                "cuda")
-        self.assertEqual(torch.ones(2).device.type, "cuda")
+                torch.empty_like(torch.ones(2, device="cpu")).device.type,
+                "cpu")
+        self.assertEqual(torch.ones(2).device.type, "cpu")
 
     def test_device_context_is_thread_local(self):
         """One thread's `with torch.device(...)` must not move another's default."""
-        ambient = "cuda" if jt.flags.use_cuda else "cpu"
+        # The default is the CPU whatever `use_cuda` says, so the block names
+        # the accelerator where there is one: otherwise it would not move
+        # anything a leak could show.
+        ambient = "cpu"
         seen = {}
-        with torch.device("cpu"):
+        with torch.device("cuda" if jt.flags.use_cuda else "cpu"):
             thread = threading.Thread(
                 target=lambda: seen.setdefault("device", torch.ones(2).device.type))
             thread.start()

@@ -19,6 +19,8 @@
 
 namespace jittor {
 
+std::atomic<uint64> op_definition_generation{1};
+
 //: The one key the map is read and written by.
 //:
 //: `op_registe` used to insert under `op_info.name` while `has_op` and
@@ -123,6 +125,7 @@ void NativeOpRegistry::register_backend_implementation_composer(
     implementation_composers.emplace(backend, BackendImplementationComposer{composer, bootstrap_identity});
     for (auto& replacement : pending)
         entries.find(replacement.first)->second = move(replacement.second);
+        op_definition_generation.fetch_add(1, std::memory_order_release);
 }
 
 void register_backend_implementation_composer(BackendId backend,
@@ -145,10 +148,14 @@ void NativeOpRegistry::register_op(const OpInfo& op_info) {
             replacement.compile_identity = replacement_compile_identity();
             compose_backend_implementations(replacement);
             iter->second = std::make_shared<const OpDef>(move(replacement));
+            op_definition_generation.fetch_add(1, std::memory_order_release);
             return;
         }
-        ASSERT(false) << "Op" << op_info.name << "is already registed, "
-            << "source_path:" << op_info.codegen.source_path << "extra_flags" << op_info.codegen.extra_flags;
+        USER_CHECK(false)
+            << "Op `" << op_info.name << "` is already registered from a "
+            << "different source path (" << op_info.codegen.source_path
+            << " vs " << iter->second->codegen.source_path
+            << "); give one of the definitions a different name";
     }
     LOGvv << "registe op" << op_info.name
         << "\nsource_path:" << op_info.codegen.source_path
@@ -164,6 +171,7 @@ void NativeOpRegistry::register_op(const OpInfo& op_info) {
     compose_backend_implementations(registered);
     const auto registered_id = registered.id;
     entries[op_file_name] = std::make_shared<const OpDef>(move(registered));
+    op_definition_generation.fetch_add(1, std::memory_order_release);
     registered_names.emplace(op_file_name);
     op_keys_by_id.emplace(registered_id, op_file_name);
 }
@@ -186,6 +194,7 @@ void NativeOpRegistry::register_op_implementation(
     }
     compose_backend_implementations(replacement);
     found->second = std::make_shared<const OpDef>(move(replacement));
+    op_definition_generation.fetch_add(1, std::memory_order_release);
 }
 
 void register_op_implementation(const string& name, BackendId backend,
@@ -230,6 +239,41 @@ shared_ptr<const OpDef> get_op_definition(const string& name, bool required) {
     return op_registry().definition(name, required);
 }
 
+// Every operator construction asks for its definition by name, and the
+// registry answers under its lock, after cutting the name at '.' into a fresh
+// string and hashing it. `Op::name()` is a literal per operator class, so
+// entries keyed by that pointer -- the text compared too, and dropped whenever
+// the registry changes -- answer nearly all of them.
+//
+// Sized for a real graph's mix of operator kinds, not a handful: with 16 slots
+// indexed by the pointer's low bits, DeepMill's detect loop missed one lookup
+// in five -- names sharing a slot evicted each other -- and every miss took the
+// registry lock. The pointer is mixed before it is masked for the same reason.
+shared_ptr<const OpDef> get_op_definition(const char* name, bool required) {
+    struct Entry {
+        const char* pointer = nullptr;
+        string text;
+        uint64 generation = 0;
+        shared_ptr<const OpDef> definition;
+    };
+    static constexpr int slots = 128;
+    static thread_local Entry cache[slots];
+    uint64 generation = op_definition_generation.load(std::memory_order_acquire);
+    uint64 mixed = (uint64)reinterpret_cast<uintptr_t>(name) * 0x9E3779B97F4A7C15ull;
+    Entry& entry = cache[mixed >> (64 - 7)];
+    if (entry.pointer == name && entry.generation == generation && entry.definition
+            && entry.text == name)
+        return entry.definition;
+    auto definition = op_registry().definition(name, required);
+    if (definition) {
+        entry.pointer = name;
+        entry.text = name;
+        entry.generation = generation;
+        entry.definition = definition;
+    }
+    return definition;
+}
+
 OpId NativeOpRegistry::id(const string& name) const {
     return get(name).id;
 }
@@ -269,6 +313,7 @@ bool NativeOpRegistry::unregister(const string& name) {
     }
     op_keys_by_id.erase(op_iter->second->id);
     entries.erase(op_iter);
+    op_definition_generation.fetch_add(1, std::memory_order_release);
     observer = lifecycle_observer;
     removed = true;
     }
@@ -281,12 +326,17 @@ bool NativeOpRegistry::unregister(const string& name) {
     return removed;
 }
 
+// The registration and binding entry points take caller-supplied op and
+// provider names, so an unknown or conflicting one is USER_CHECK. The ASSERTs
+// that follow a successful lookup -- the id/registration maps agreeing with
+// `provider_bindings` -- guard registry invariants and stay internal.
 void NativeOpRegistry::register_provider(
         const NativeProviderRegistration& registration, bool replace) {
-    ASSERT(registration.valid())
-        << "invalid native provider registration for" << registration.name
-        << "abi_version:" << registration.abi_version
-        << "struct_size:" << registration.struct_size;
+    USER_CHECK(registration.valid())
+        << "native provider registration for `" << registration.name
+        << "` is incomplete (abi_version " << registration.abi_version
+        << ", struct_size " << registration.struct_size
+        << "); fill in the NativeProviderRegistration fields";
     const string& provider = registration.name;
     NativeProviderLifecycleObserver* observer = nullptr;
     uint32 provider_instance = 0;
@@ -300,7 +350,9 @@ void NativeOpRegistry::register_provider(
     auto iter = provider_bindings.find(provider);
     if (iter != provider_bindings.end()) {
         if (!replace)
-            ASSERT(false) << "provider" << provider << "is already registered";
+            USER_CHECK(false)
+                << "provider `" << provider << "` is already registered; "
+                << "pass replace=true to replace it";
         auto old_id = provider_ids.at(provider);
         old_provider_instance = old_id;
         old_registration = provider_registrations.at(provider);
@@ -488,10 +540,13 @@ void NativeOpRegistry::bind_provider(const string& name, const string& provider)
     {
     std::lock_guard<std::recursive_mutex> guard(mutex);
     string op_file_name = key(name);
-    ASSERT(entries.count(op_file_name)) << "Op" << name << "not found.";
+    USER_CHECK(entries.count(op_file_name))
+        << "cannot bind provider `" << provider << "` to op `" << name
+        << "`: no such op is registered";
     auto iter = provider_bindings.find(provider);
-    ASSERT(iter != provider_bindings.end())
-        << "provider" << provider << "is not registered";
+    USER_CHECK(iter != provider_bindings.end())
+        << "cannot bind op `" << name << "` to provider `" << provider
+        << "`: the provider is not registered";
     auto inserted = iter->second.insert(op_file_name);
     if (!inserted.second)
         return;
@@ -562,10 +617,10 @@ NativeOpDispatchKey NativeOpRegistry::resolve_provider(
     std::lock_guard<std::recursive_mutex> guard(mutex);
     string op_file_name = key(name);
     auto provider_iter = provider_bindings.find(provider);
-    ASSERT(provider_iter != provider_bindings.end())
-        << "provider" << provider << "is not registered";
-    ASSERT(provider_iter->second.count(op_file_name))
-        << "Op" << name << "has no provider binding for" << provider;
+    USER_CHECK(provider_iter != provider_bindings.end())
+        << "provider `" << provider << "` is not registered";
+    USER_CHECK(provider_iter->second.count(op_file_name))
+        << "op `" << name << "` is not bound to provider `" << provider << "`";
     auto op_iter = entries.find(op_file_name);
     ASSERT(op_iter != entries.end()) << "Op" << name << "not found.";
     auto id_iter = provider_ids.find(provider);
@@ -696,6 +751,7 @@ bool unregister_op(const string& name) {
 DEFINE_BUILTIN_OP_ID(array)
 DEFINE_BUILTIN_OP_ID(binary)
 DEFINE_BUILTIN_OP_ID(broadcast_to)
+DEFINE_BUILTIN_OP_ID(code)
 DEFINE_BUILTIN_OP_ID(contiguous)
 DEFINE_BUILTIN_OP_ID(empty)
 DEFINE_BUILTIN_OP_ID(fused)

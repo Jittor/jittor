@@ -26,6 +26,7 @@ import numpy as np
 
 import jittor as jt
 from jittor import nn
+from jittor.backends.cuda.kernels.cublas import lt_linear_cuda as _lt
 from jittor.backends.cuda.kernels.cublas.lt_linear_cuda import lt_linear_cuda
 
 
@@ -116,6 +117,25 @@ class TestLtLinearCuda(unittest.TestCase):
                 np.testing.assert_allclose(got.numpy().astype("float32"), want,
                                            rtol=5e-3, atol=5e-3)
 
+    def test_it_matches_the_portable_path_in_bfloat16(self):
+        # bf16 shares the float32 accumulator with half: the bias lands in the
+        # epilogue before the single rounding to bf16, which is the order
+        # `linear_bias_accumulator` exists to preserve for a bf16 product.
+        for shape, cin, cout in (((2048, 512), 512, 1536),
+                                 ((8, 256, 512), 512, 1536)):
+            with self.subTest(shape=shape):
+                xn, wn, bn = self._arrays(shape, cin, cout)
+                x = jt.array(xn).cast("bfloat16")
+                w = jt.array(wn).cast("bfloat16")
+                b = jt.array(bn).cast("bfloat16")
+                with jt.no_grad():
+                    got = lt_linear_cuda(x, w, b)
+                self.assertIsNotNone(got, "bfloat16 should be served")
+                self.assertEqual(str(got.dtype), "bfloat16")
+                want = _reference(xn, wn, bn)
+                np.testing.assert_allclose(got.numpy().astype("float32"), want,
+                                           rtol=2e-2, atol=2e-2)
+
     def test_an_autocast_scope_keeps_the_portable_result_dtype(self):
         # `jt.nn.linear` computes float16 under `amp_prefer16` even though both
         # operands are still float32. If this op answers float32 instead, one
@@ -159,10 +179,10 @@ class TestLtLinearCuda(unittest.TestCase):
         xn, wn, bn = self._arrays((512, 512), 512, 512)
         x, w, b = jt.array(xn), jt.array(wn), jt.array(bn)
         with jt.no_grad():
-            # bfloat16 needs its own descriptors and its own accumulate rule
-            self.assertIsNone(lt_linear_cuda(x.cast("bfloat16"),
-                                             w.cast("bfloat16"),
-                                             b.cast("bfloat16")))
+            # float64 has its own accumulate rule, which this op does not carry
+            self.assertIsNone(lt_linear_cuda(x.cast("float64"),
+                                             w.cast("float64"),
+                                             b.cast("float64")))
             # a problem too small to be worth timing
             small = jt.array(self.rs.randn(2, 4).astype("float32"))
             sw = jt.array(self.rs.randn(3, 4).astype("float32"))
@@ -178,6 +198,28 @@ class TestLtLinearCuda(unittest.TestCase):
         finally:
             jt.flags.use_cuda = 1
 
+    def test_a_host_placed_operand_declines_even_when_use_cuda_is_on(self):
+        # `use_cuda` says where a new tensor would go, not where these live.
+        # The Torch frontend keeps a `torch.tensor(...)` on the host -- with an
+        # explicit placement of its own -- while the flag the shim sets for the
+        # process says CUDA; this op carries no cpu_src, and serving that call
+        # failed in codegen ("code requires source for the selected backend")
+        # instead of falling back. An explicit placement is what the gate reads,
+        # so stamping one on the operands reproduces it without the shim.
+        xn, wn, bn = self._arrays((2048, 512), 512, 1536)
+        token = jt.core._set_construction_placement(0, 0)   # BackendId::Cpu
+        try:
+            x, w, b = jt.array(xn), jt.array(wn), jt.array(bn)
+        finally:
+            jt.core._restore_construction_placement(token)
+        self.assertEqual([int(v.placement_backend) for v in (x, w, b)], [0, 0, 0])
+        with jt.no_grad():
+            self.assertIsNone(lt_linear_cuda(x, w, b))
+            # The portable path still answers the same call.
+            np.testing.assert_allclose(
+                jt.nn.linear(x, w, b).numpy(), _reference(xn, wn, bn),
+                rtol=2e-5, atol=2e-5)
+
     def test_the_module_agrees_with_the_portable_module(self):
         jt.set_global_seed(7)
         model = nn.Linear(512, 256)
@@ -187,6 +229,158 @@ class TestLtLinearCuda(unittest.TestCase):
         w, b = model.weight.numpy(), model.bias.numpy()
         np.testing.assert_allclose(fast, x.numpy() @ w.T + b, rtol=2e-5, atol=2e-5)
 
+
+@unittest.skipIf(not _test_capability.check_accelerator("cuda", backend=jt).enabled,
+                 "no usable CUDA in this build")
+class TestLtLinearTraining(unittest.TestCase):
+    """The training route: the portable forward, and a backward whose bias
+    gradient comes out of the weight gradient's GEMM (cuBLASLt's BGRADB).
+    Checked against the same step on the CPU in float64."""
+
+    def setUp(self):
+        self.rs = np.random.RandomState(1)
+        self.calls = []
+        self.accumulator_calls = []
+        from jittor._runtime.backend_libraries import get_library_ops
+        ops = get_library_ops("cublas")
+        original_cublas = ops.cublas_matmul
+
+        def observed_cublas(a, b, *args, **kwargs):
+            fp32_output = args[2] if len(args) > 2 else kwargs.get("fp32_output", False)
+            if fp32_output:
+                self.assertEqual(str(a.dtype), "bfloat16")
+                self.assertEqual(str(b.dtype), "bfloat16")
+                for value in (a, b):
+                    value.sync()
+                    self.assertEqual(value.location(), "device")
+                self.accumulator_calls.append((tuple(a.shape), tuple(b.shape)))
+            return original_cublas(a, b, *args, **kwargs)
+
+        ops.cublas_matmul = observed_cublas
+        self.addCleanup(setattr, ops, "cublas_matmul", original_cublas)
+        # Small problems keep the float64 CPU reference cheap; the size floor
+        # the route applies is its own case below.
+        for name, value in (("_MIN_ROWS", 1), ("_MIN_PRODUCT", 1)):
+            self.addCleanup(setattr, _lt, name, getattr(_lt, name))
+            setattr(_lt, name, value)
+        original = _lt._LtLinearProduct.grad
+
+        def counted(ctx, grad):
+            self.calls.append(1)
+            return original(ctx, grad)
+
+        _lt._LtLinearProduct.grad = counted
+        self.addCleanup(setattr, _lt._LtLinearProduct, "grad", original)
+
+    def _arrays(self, shape, cin, cout):
+        x = (self.rs.randn(*shape, cin) * 0.5).astype("float32")
+        w = (self.rs.randn(cout, cin) * 0.5).astype("float32")
+        b = (self.rs.randn(cout) * 0.5).astype("float32")
+        return x, w, b
+
+    def _step(self, use_cuda, x, w, b, dout, dtype, x_grad=True, bias_grad=True,
+              transposed=False, no_bias=False):
+        with jt.flag_scope(use_cuda=use_cuda, cuda_allow_tf32=0):
+            jx, jw, jb = (jt.array(t).cast(dtype) for t in (x, w, b))
+            if not x_grad:
+                jx = jx.stop_grad()
+            if not bias_grad:
+                jb = jb.stop_grad()
+            out = nn.linear(jx, jw, None if no_bias else jb)
+            jd = jt.array(dout).cast(dtype)
+            # A transposed product hands the backward a strided gradient.
+            loss = (out.transpose() * jd.transpose()).sum() if transposed else (out * jd).sum()
+            wants = [v for v, keep in ((jx, x_grad), (jw, True), (jb, bias_grad and not no_bias))
+                     if keep]
+            grads = jt.grad(loss, wants)
+            return [out.float64().numpy()] + [g.float64().numpy() for g in grads]
+
+    def _check(self, shape, cin, cout, dtype, tol, **kw):
+        x, w, b = self._arrays(shape, cin, cout)
+        dout = self.rs.randn(*shape, cout).astype("float32")
+        want = self._step(0, x, w, b, dout, "float64", **kw)
+        self.calls.clear()
+        self.accumulator_calls.clear()
+        from jittor._runtime import forbid_backend_fallbacks
+        initial = jt.core.backend_fallback_count()
+        with forbid_backend_fallbacks():
+            got = self._step(1, x, w, b, dout, dtype, **kw)
+        self.assertEqual(jt.core.backend_fallback_count(), initial)
+        # BF16 with a bias uses the native FP32 accumulator output so its bias
+        # is added before rounding. The timed Function rounds the product
+        # first and would also sever higher-order derivatives on this route.
+        expected_calls = [] if dtype == "bfloat16" and not kw.get("no_bias") else [1]
+        self.assertEqual(self.calls, expected_calls, "unexpected Linear backward provider")
+        expected_accumulators = [(tuple(x.shape), tuple(w.shape))] if not expected_calls else []
+        self.assertEqual(self.accumulator_calls, expected_accumulators,
+                         "BF16 Linear must use the native FP32 accumulator output")
+        self.assertEqual(len(got), len(want))
+        for i, (g, r) in enumerate(zip(got, want)):
+            np.testing.assert_allclose(g, r, rtol=tol, atol=tol * np.abs(r).max(),
+                                       err_msg=f"{dtype} {shape}: output, then gradients; #{i}")
+
+    def test_gradients_match_the_cpu_in_every_dtype(self):
+        for dtype, tol in (("float32", 1e-4), ("float16", 2e-2), ("bfloat16", 6e-2)):
+            for shape, cin, cout in (((96,), 64, 160), ((3, 40), 72, 48)):
+                with self.subTest(dtype=dtype, shape=shape):
+                    self._check(shape, cin, cout, dtype, tol)
+
+    def test_without_a_bias(self):
+        for dtype, tol in (("float32", 1e-4), ("float16", 2e-2)):
+            with self.subTest(dtype=dtype):
+                self._check((3, 40), 72, 48, dtype, tol, no_bias=True)
+        self._check((96,), 64, 160, "float32", 1e-4, no_bias=True, transposed=True)
+
+    def test_a_module_without_a_bias_takes_the_route(self):
+        # `nn.Linear(bias=False)` has a native fast path; a large product that
+        # records gradients leaves it for the timed GEMMs.
+        _lt._MIN_ROWS, _lt._MIN_PRODUCT = 1024, 1 << 28
+        with jt.flag_scope(use_cuda=1):
+            model = nn.Linear(768, 768, bias=False)
+            x = jt.array(self.rs.randn(2048, 768).astype("float32"))
+            out = model(x)
+            grad = jt.grad((out * out).sum(), [model.weight])[0]
+            grad.sync()
+        self.assertEqual(self.calls, [1])
+
+    def test_without_an_input_or_a_bias_gradient(self):
+        self._check((3, 40), 72, 48, "float32", 1e-4, x_grad=False)
+        self._check((3, 40), 72, 48, "float32", 1e-4, bias_grad=False)
+
+    def test_a_gradient_too_large_to_fold_sums_the_bias_gradient(self):
+        # The fold is taken for a gradient the L2 cache holds; with none to
+        # hold it, dW still comes from cuBLASLt and db from a plain sum.
+        saved = dict(_lt._L2_BYTES)
+        self.addCleanup(lambda: (_lt._L2_BYTES.clear(), _lt._L2_BYTES.update(saved)))
+        with jt.flag_scope(use_cuda=1):
+            _lt._L2_BYTES[int(jt.core.current_device())] = 0
+        self._check((3, 40), 72, 48, "float32", 1e-4)
+        self._check((96,), 64, 160, "float16", 2e-2)
+
+    def test_a_strided_output_gradient_takes_the_portable_products(self):
+        self._check((96,), 64, 160, "float32", 1e-4, transposed=True)
+
+    def test_what_it_leaves_to_the_portable_route(self):
+        with jt.flag_scope(use_cuda=1):
+            x, w, b = (jt.array(t) for t in self._arrays((64,), 96, 80))
+            self.assertIsNone(_lt.lt_linear_train_cuda(x, w.stop_grad(), b))
+            with jt.no_grad():
+                self.assertIsNone(_lt.lt_linear_train_cuda(x, w, b))
+            self.assertIsNone(_lt.lt_linear_train_cuda(x.float64(), w.float64(), b.float64()))
+            self.assertIsNone(_lt.lt_linear_train_cuda(x[:, ::2], w[:, ::2], b))
+            # Too small for a better GEMM to repay the Function's host time:
+            # a diffusion UNet's 16-row time-embedding projection.
+            _lt._MIN_ROWS, _lt._MIN_PRODUCT = 1024, 1 << 28
+            self.assertIsNone(_lt.lt_linear_train_cuda(
+                jt.array(self.rs.randn(16, 512).astype("float32")),
+                jt.array(self.rs.randn(512, 512).astype("float32")),
+                jt.array(self.rs.randn(512).astype("float32"))))
+            self.assertIsNotNone(_lt.lt_linear_train_cuda(
+                jt.array(self.rs.randn(4096, 768).astype("float32")),
+                jt.array(self.rs.randn(768, 768).astype("float32")),
+                jt.array(self.rs.randn(768).astype("float32"))))
+        with jt.flag_scope(use_cuda=0):
+            self.assertIsNone(_lt.lt_linear_train_cuda(x, w, b))
 
 if __name__ == "__main__":
     unittest.main()

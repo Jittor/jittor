@@ -377,6 +377,17 @@ reg = re.compile(
     #        attrs    args $5
 , re.DOTALL)
 
+def _unknown_name_hint(args):
+    """The PyUnknownNameHint for a wrapper whose parameters are `args`."""
+    names = [arg.strip().split(" ")[-1] for arg in args]
+    if "PyObject**" in " ".join(args):
+        fast = next(n for arg, n in zip(args, names) if arg.strip().startswith("PyObject** "))
+        return "PyUnknownNameHint{%s, n, kw, nullptr, nullptr}" % fast
+    tuple_arg = next((n for n in names if n in ("args", "_args")), "nullptr")
+    dict_arg = "kw" if "kw" in names else "nullptr"
+    return "PyUnknownNameHint{nullptr, 0, nullptr, %s, %s}" % (tuple_arg, dict_arg)
+
+
 def generate_error_code_from_func_header(func_head, target_scope_name, name, dfs, basename, h, class_info):
     # func_head is a string like:
     # (PyObject* self, PyObject** args, int64 n, PyObject* kw) -> PyObject*
@@ -396,8 +407,11 @@ def generate_error_code_from_func_header(func_head, target_scope_name, name, dfs
 
     LOG.vvv("gen err from func_head", func_head)
     args = func_head[1:].split(")")[0].split(",")
-    error_code = f" << \"Wrong inputs arguments, Please refer to examples({help_cmd}).\""
-    error_code += r' << "\n\nTypes of your inputs are:\n"'
+    error_code = (f" << \"{name}() got arguments that match none of its signatures "
+                  f"(see {help_cmd}).\"")
+    if any("NanoString" in str(arg) for df in dfs for arg in df["args"]):
+        error_code += " << " + _unknown_name_hint(args)
+    error_code += r' << "\n\nYour arguments:\n"'
     for arg in args:
         arg = arg.strip()
         if arg.startswith("PyObject* "):
@@ -416,6 +430,59 @@ def generate_error_code_from_func_header(func_head, target_scope_name, name, dfs
             LOG.vvv("Unhandled arg", arg)
     LOG.vvv("gen err from func_head", func_head, " -> ", error_code)
     return error_code
+
+_PYTHON_SPELLING = (
+    (r"\bvector\s*<\s*VarHolder\s*\*\s*>", "list[Var]"),
+    (r"\bVarHolder\s*\*", "Var"),
+    (r"\bvector\s*<\s*NanoVector\s*>", "list[shape]"),
+    (r"\bNanoVector\b", "shape"),
+    (r"\bNanoString\b", "dtype|str"),
+    (r"\b(?:std::)?string\b", "str"),
+    (r"\bu?int(?:8|16|32|64)?(?:_t)?\b", "int"),
+    (r"\b(?:float32|float64|double|float)\b", "float"),
+)
+
+
+def python_signature(dec):
+    """A C++ binding declaration as a Python caller reads it.
+
+    `VarHolder* unary(VarHolder* x, NanoString op)` -> `unary(x: Var, op: dtype|str)`.
+    Types without a Python spelling here are left as they are; a declaration
+    this does not parse is returned unchanged.
+    """
+    head, paren, rest = dec.partition("(")
+    if not paren or not rest.rstrip().endswith(")"):
+        return dec
+    name = head.split()[-1] if head.split() else ""
+    params = []
+    for param in shsplit_params(rest.rstrip()[:-1]):
+        param, eq, default = param.partition("=")
+        param = re.sub(r"\bconst\b|&", " ", param).split()
+        if not param:
+            continue
+        kind, pname = " ".join(param[:-1]), param[-1]
+        for pattern, spelled in _PYTHON_SPELLING:
+            kind = re.sub(pattern, spelled, kind)
+        text = "%s: %s" % (pname, kind) if kind else pname
+        params.append(text + ("=" + default.strip() if eq else ""))
+    return "%s(%s)" % (name, ", ".join(params))
+
+
+def shsplit_params(text):
+    """Split a parameter list on the commas that are not inside <>, () or {}."""
+    parts, depth, start = [], 0, 0
+    for i, c in enumerate(text):
+        if c in "<({":
+            depth += 1
+        elif c in ">)}":
+            depth -= 1
+        elif c == "," and depth == 0:
+            parts.append(text[start:i])
+            start = i + 1
+    if text[start:].strip():
+        parts.append(text[start:])
+    return [p.strip() for p in parts if p.strip()]
+
 
 def compile_src(src, h, basename):
     # `reg.finditer(src, re.S)` passed the flag where `pos` goes, so scanning
@@ -718,6 +785,8 @@ def compile_src(src, h, basename):
                 pass
             if has_dealloc:
                 init_success_mark = f"{inited_flag} = 1, "
+                if class_name == "VarHolder":
+                    init_success_mark += "bind_python_tensor_owner(self), "
 
         elif name == "__repr__":
             slot_name = "tp_repr"
@@ -871,7 +940,7 @@ def compile_src(src, h, basename):
 
         arr_func_return = []
         doc_all = ""
-        decs = "The function declarations are:\n"
+        decs = "Signatures:\n"
         for did, has_return in enumerate(arr_has_return):
             df = dfs[did]
             func_call = arr_func_call[did]
@@ -880,7 +949,7 @@ def compile_src(src, h, basename):
                 doc_all += df["doc"]+'\n'
             doc_all += "Declaration:\n"
             doc_all += df["dec"]+'\n\n'
-            decs += " " + df["dec"]+'\n'
+            decs += "  " + python_signature(df["dec"]) + '\n'
             if has_return:
                 assert "-> int" not in func_head
                 if "-> PyObject*" in func_head:
@@ -920,6 +989,11 @@ def compile_src(src, h, basename):
         # that asked for the counts, and a reset would not read back as clean.
         gbp_entry_scope = ("" if name.startswith("graph_build_profile")
                            else "JT_GBP_SCOPE(gbp_pyjt_entry);")
+        # Every binding holds the graph lock while a batch runs on the worker
+        # thread (runtime/async_exec.h); a deallocator too, since releasing a
+        # Var releases liveness.
+        gbp_entry_scope = ("GraphEntryScope _jt_graph_entry{%s};\n            "
+                           % ("false" if name == "__dealloc__" else "true")) + gbp_entry_scope
         # A frontend subtype keeps the native VarHolder payload and graph.
         # Carry its Python allocation type across the complete conversion and
         # call, including tuple/vector results. Never enter a scope in dealloc.
@@ -953,10 +1027,19 @@ def compile_src(src, h, basename):
                 f"PyTensorFrontendScope tensor_frontend(self, args, {count}, {sequences});"
                 if has_args else
                 "PyTensorFrontendScope tensor_frontend(self);")
+        # A binary number slot that matches no overload has to hand the
+        # operation back with NotImplemented: that is what makes Python try
+        # the other operand's reflected method (`Var * obj` reaching
+        # `obj.__rmul__`), and raise the usual TypeError when there is none.
+        if name in binary_number_slots:
+            no_overload_code = "Py_INCREF(Py_NotImplemented); return Py_NotImplemented;"
+        else:
+            no_overload_code = 'no_overload=true; LOGf << "Not a valid call.";'
         func = f"""
         {func_cast}[]{func_head} {{
             {gbp_entry_scope}
             bool matched_overload=false;
+            bool no_overload=false;
             try {{
                 {func_fill};
                 {frontend_scope}
@@ -981,28 +1064,28 @@ def compile_src(src, h, basename):
                 '''
                 for did in range(len(arr_func_return))
                 ])}
-                LOGf << "Not a valid call.";
+                {no_overload_code}
             }} catch (const std::exception& e) {{
                 if (!PyErr_Occurred()) {{
                     std::stringstream ss;
                     if (check_async_executor_error(e, ss)) {{
-                        PyErr_Format(PyExc_RuntimeError,
-                            "%s",
-                            ss.str().c_str()
-                        );
+                        PyErr_SetString(python_error_class(e), ss.str().c_str());
                     }} else if (matched_overload) {{
                         // An overload matched the argument types and its body threw
                         // at runtime -> this is a real op error, NOT bad arguments.
                         // Surface jittor's actual message (carries [OP TYPE]/[Input]/
                         // [Reason]) instead of the misleading "Wrong inputs arguments".
-                        PyErr_Format(PyExc_RuntimeError, "%s", e.what());
+                        PyErr_SetString(python_error_class(e), e.what());
                     }} else {{
                         ss {error_log_code};
-                        PyErr_Format(PyExc_RuntimeError,
-                            "%s\\n%s\\nFailed reason:%s",
+                        // No overload took the types: the signatures are the
+                        // reason. Otherwise a conversion threw, and says why.
+                        PyErr_Format(python_type_error_class(),
+                            "%s\\n%s%s%s",
                             ss.str().c_str(),
                             R""({decs})"",
-                            e.what()
+                            no_overload ? "" : "\\nReason: ",
+                            no_overload ? "" : e.what()
                         );
                     }}
                 }}
@@ -1138,10 +1221,14 @@ def compile_src(src, h, basename):
         tp.tp_flags |= Py_TPFLAGS_HAVE_GC;
         tp.tp_traverse = [](PyObject* self, visitproc visit, void* arg) -> int {{
             Py_VISIT({dict_slot});
+            {"if (GET_INITED_FLAG(VarHolder, 1, self)) { Py_VISIT(GET_RAW_PTR(VarHolder, self)->collectable_grad_hook()); }" if class_name == "VarHolder" else ""}
+            {"if (GET_INITED_FLAG(VarHolder, 1, self)) { Py_VISIT(GET_RAW_PTR(VarHolder, self)->collectable_view_base()); }" if class_name == "VarHolder" else ""}
             {"if (Py_TYPE(self) != &PyjtVarHolder.ht_type) { Py_VISIT(Py_TYPE(self)); }" if class_name == "VarHolder" else ""}
             return 0;
         }};
         tp.tp_clear = [](PyObject* self) -> int {{
+            {"if (GET_INITED_FLAG(VarHolder, 1, self)) GET_RAW_PTR(VarHolder, self)->clear_collectable_grad_hook();" if class_name == "VarHolder" else ""}
+            {"if (GET_INITED_FLAG(VarHolder, 1, self)) GET_RAW_PTR(VarHolder, self)->clear_collectable_view_base();" if class_name == "VarHolder" else ""}
             Py_CLEAR({dict_slot});
             return 0;
         }};
@@ -1156,6 +1243,7 @@ def compile_src(src, h, basename):
     #include "bindings/pyjt/py_arg_printer.h"
     #include "core/common.h"
     #include "utils/graph_build_profile.h"
+    #include "runtime/async_exec.h"
     #include "{include_name}"
 
     namespace jittor {{

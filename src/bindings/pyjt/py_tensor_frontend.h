@@ -10,6 +10,10 @@ namespace jittor {
 // Returns a new reference; absent an explicit frontend, this is native Var.
 EXTERN_LIB PyObject* current_tensor_frontend_type();
 
+// Register an actual wrapper, including optional GC-visible view-root
+// ownership explicitly requested by its frontend type.
+EXTERN_LIB void bind_python_tensor_owner(PyObject* object);
+
 // @pyjt(_set_tensor_frontend_type)
 PyObject* set_tensor_frontend_type(PyObject* type, PyObject* candidate=nullptr);
 
@@ -23,11 +27,27 @@ PyObject* set_tensor_placement_context(int backend, int device=0);
 PyObject* get_tensor_placement_context();
 // @pyjt(_reset_tensor_placement)
 void reset_tensor_placement_context(PyObject* token);
+// The placement native constructors (`jt.empty`, `jt.array`, `jt.zeros`)
+// stamp on the Vars they build. `_set_tensor_placement` only reaches Vars
+// built by a binding inside a frontend scope; outside one -- a native
+// `zeros_like` of an explicitly placed tensor -- a constructor read this and
+// nothing else, so the result followed the Runtime instead of the reference.
+// Returns the previous placement for `_restore_construction_placement`.
+// @pyjt(_set_construction_placement)
+PyObject* set_construction_placement(int backend, int device=0);
+// @pyjt(_restore_construction_placement)
+void restore_construction_placement(PyObject* previous);
 // The placement the caller asked for, as (backend, index), or None when the
 // caller asked for nothing. A `*_like` default reads it so that an explicit
 // request outranks the reference tensor's own device.
 // @pyjt(_current_tensor_placement)
 PyObject* current_tensor_placement_request();
+
+// The same request for native code, not explicit when there is none. A
+// binding applies it only inside the frontend scope it enters, which only a
+// binding that takes or returns a Var does; one that takes neither (the
+// native kernel selector) reads it here.
+TensorPlacement frontend_placement_request();
 
 // A frontend type's policies -- its autograd bits and its float32 precision
 // tiers -- are read from Python once and kept until this is called. The
@@ -35,6 +55,10 @@ PyObject* current_tensor_placement_request();
 // precision fields); see apply_policy.
 // @pyjt(_invalidate_frontend_policies)
 void invalidate_frontend_policies();
+
+// The float32 precision tiers of a frontend type, from the same cache the
+// scopes below read; false when the type publishes none.
+bool frontend_precision_tiers(PyObject* type, int& matmul, int& cudnn);
 
 // Direct native construction scope for Jittor-owned no-input factories.
 // @pyjt(_push_native_tensor_placement)

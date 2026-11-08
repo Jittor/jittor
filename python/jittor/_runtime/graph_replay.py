@@ -17,8 +17,8 @@ rather than used:
 
   - the arguments' shapes, dtypes and count,
   - whether the module is in training mode,
-  - whether any parameter has been rebound (an optimizer step, a load, a
-    device move) -- the graph reads the parameter Vars it captured, and an
+  - whether any parameter or registered buffer has been rebound (an optimizer
+    step, a load, a device move) -- the graph reads the Vars it captured, and an
     update replaces them, so it would otherwise quietly answer with the old
     weights,
   - whether the captured graph is still unfinished. This is the one that
@@ -100,10 +100,11 @@ many fell back and why -- because a silent fallback that quietly costs the
 speedup is worse than none.
 """
 
-from contextlib import nullcontext as _nullcontext
+from contextlib import contextmanager, nullcontext as _nullcontext
 from contextvars import ContextVar as _ContextVar
 import copy as _copy
 import dataclasses as _dataclasses
+import threading
 import time
 import weakref
 
@@ -135,6 +136,27 @@ _RERECORD_LIMIT = 8
 #: replays the values it recorded, so a graph containing one of these is not
 #: re-runnable at all and capture refuses rather than repeating a draw.
 _NONDETERMINISTIC_OPS = ("random", "curand_random")
+
+
+_capture_state = threading.local()
+
+
+def graph_replay_barrier(reason):
+    """Refuse replay capture containing an opaque operation or foreign write."""
+    for reasons in getattr(_capture_state, "stack", ()):
+        if not reasons:
+            reasons.append(str(reason))
+
+
+@contextmanager
+def _capture_barriers():
+    previous = getattr(_capture_state, "stack", ())
+    reasons = []
+    _capture_state.stack = previous + (reasons,)
+    try:
+        yield reasons
+    finally:
+        _capture_state.stack = previous
 
 
 class _no_auto:
@@ -328,15 +350,22 @@ def _empty_like(var):
     """
     token = _core._set_tensor_frontend_type(type(var))
     placement = None
+    construction = None
     try:
         backend = var.placement_backend
         if backend >= 0:
-            placement = _core._set_tensor_placement(backend, max(int(var.device_id), 0))
+            device = max(int(var.device_id), 0)
+            placement = _core._set_tensor_placement(backend, device)
+            # Native constructors do not run inside a frontend binding scope.
+            # Preserve construction placement too: otherwise a private copy
+            # of an explicit CPU input is silently allocated on ambient ACL.
+            construction = _core._set_construction_placement(backend, device)
         try:
             with _device_scope_like(var):
                 result = jt.empty(var.shape, _native_dtype(var))
         finally:
             if placement is not None:
+                _core._restore_construction_placement(construction)
                 _core._reset_tensor_placement(placement)
     finally:
         _core._reset_tensor_frontend_type(token)
@@ -365,6 +394,34 @@ def _training(module):
     return bool(getattr(module, "training", False))
 
 
+def _module_vars(module):
+    """Parameter and registered-buffer holders, including child modules.
+
+    A holder shared by the two views is guarded once. Distinct holders can
+    point at the same Var and later be rebound independently, so deduplicate
+    by holder identity rather than ``var_ptr``.
+    """
+    parameters = getattr(module, "parameters", None)
+    leaves = list(parameters()) if callable(parameters) else []
+    buffers = getattr(module, "named_buffers", None)
+    if callable(buffers):
+        leaves.extend(v for _, v in buffers(recurse=True))
+    seen, result = set(), []
+    for leaf in leaves:
+        if id(leaf) not in seen:
+            seen.add(id(leaf))
+            result.append(leaf)
+    return result
+
+
+def _allocated_bytes():
+    """Every byte the pools have handed out so far, host and devices together."""
+    total = _core.device_memory_allocated_total(-1)
+    for device in range(_core.get_device_count()):
+        total += _core.device_memory_allocated_total(device)
+    return total
+
+
 def _sync_result(output):
     """Finish whatever a module returned, whatever its structure.
 
@@ -382,12 +439,27 @@ def _sync_result(output):
         jt.sync(leaves)
 
 
-def _allocated_bytes():
-    """Every byte the pools have handed out so far, host and devices together."""
-    total = _core.device_memory_allocated_total(-1)
-    for device in range(_core.get_device_count()):
-        total += _core.device_memory_allocated_total(device)
-    return total
+class _WorkingSet:
+    """What a call holds at its most, beyond what was live when it started.
+
+    What a device recording of it keeps: while recording, a block the call
+    frees is handed to a later allocation of the same recording, so the
+    recording holds one call's peak, not every buffer the call touched. The
+    bound used to count the latter, every byte the pools handed out: 640 MiB
+    for BERT-base inference at batch 1, whose recording holds 12 MiB, and
+    3.5 GiB for a Qwen3-0.6B 2048-token prefill holding 47 MiB -- both refused
+    a recording they could well afford.
+    """
+
+    __slots__ = ("start",)
+
+    def __init__(self):
+        self.start = [(device, _core._device_memory_window_start(device))
+                      for device in range(-1, _core.get_device_count())]
+
+    def bytes(self):
+        return sum(_core._device_memory_window_peak(device) - live
+                   for device, live in self.start)
 
 
 def _graph_has_nondeterministic_op():
@@ -450,6 +522,8 @@ class GraphReplay:
         # operators. A recorded graph pays that once, at capture, and every
         # later call is a single launch: measured 2.24 us for a whole step.
         self._cuda_graph = 0
+        self._graph_has_host_prefix = False
+        self._graph_host_prefix_bytes = 0
         self._graph_out = None
         self._graph_refused = None
         # When to record next (a replay count), and how often a recording has
@@ -480,8 +554,7 @@ class GraphReplay:
 
     # -- capture -------------------------------------------------------
     def _params(self):
-        params = getattr(self._module, "parameters", None)
-        return list(params()) if callable(params) else []
+        return _module_vars(self._module)
 
     def _capture_now(self, args, kwargs=None):
         kwargs = kwargs or {}
@@ -529,8 +602,11 @@ class GraphReplay:
         readbacks = _core._host_readback_count()
         _TRACING[0] += 1
         try:
-            with _no_auto(), jt.no_grad():
+            with _capture_barriers() as barriers, _no_auto(), jt.no_grad():
                 output = self._module(*private_args, **private_kwargs)
+                if barriers:
+                    self._refused = "the traced call contains an opaque operation: " + barriers[0]
+                    return None
                 if _core._host_readback_count() != readbacks:
                     self._refused = ("the traced call read a value back to the host, so its "
                                      "path depends on tensor values and cannot be replayed")
@@ -601,7 +677,7 @@ class GraphReplay:
             return "the module changed training mode"
         for holder, ptr in cap.params:
             if holder.var_ptr != ptr:
-                return "a parameter was replaced since the graph was captured"
+                return "a parameter or buffer was replaced since the graph was captured"
         return None
 
     # -- is it actually faster? ----------------------------------------
@@ -698,8 +774,6 @@ class GraphReplay:
         try:
             jt.sync_all(True)
             jt.gc()
-        except Exception:
-            pass
         finally:
             jt.flags.keep_graph = before
 
@@ -726,9 +800,17 @@ class GraphReplay:
             self._graph_refused = "this build cannot record device graphs"
             return False
         host = _core.graph_host_work(cap.outputs)
-        if host:
-            self._graph_refused = ("part of the graph runs on the host (%s), which a "
-                                   "recording would drop" % host)
+        prefix_bytes = _core.graph_host_prefix_bytes(cap.outputs) if host else 0
+        if host and prefix_bytes < 0:
+            self._graph_refused = ("part of the graph runs on the host (%s), without "
+                                   "an admissible explicit CPU prefix" % host)
+            return False
+        limit = self._max_retained_bytes
+        if host and limit and self._graph_bytes + prefix_bytes > limit:
+            self._graph_refused = (
+                "a recording with its host prefix would keep %.1f MiB alive, "
+                "over the %.1f MiB allowed" %
+                ((self._graph_bytes + prefix_bytes) / 2**20, limit / 2**20))
             return False
         outs = [_empty_like(o) for o in cap.outputs]
         before = jt.flags.keep_graph
@@ -744,7 +826,9 @@ class GraphReplay:
             # Drain first: the recording must contain the step, not the
             # backlog in front of it.
             jt.sync(cap.outputs, True, False)
-            if not _core.graph_capture_begin():
+            began = (_core.graph_capture_begin_host_prefix(cap.outputs) if host
+                     else _core.graph_capture_begin())
+            if not began:
                 self._graph_refused = "the device refused to start recording"
                 return False
             try:
@@ -765,6 +849,8 @@ class GraphReplay:
             self._graph_refused = "the recording contained no device work"
             return False
         self._cuda_graph = handle
+        self._graph_has_host_prefix = bool(host)
+        self._graph_host_prefix_bytes = prefix_bytes if host else 0
         self._graph_out = outs
         _core.graph_bind_leaves(handle, cap.outputs)
         return True
@@ -779,8 +865,14 @@ class GraphReplay:
         """
         if not _core.graph_leaves_moved(self._cuda_graph):
             return True
+        self._drop_recording()
+        return False
+
+    def _drop_recording(self):
         _core.graph_release(self._cuda_graph)
         self._cuda_graph = 0
+        self._graph_has_host_prefix = False
+        self._graph_host_prefix_bytes = 0
         self._graph_out = None
         self._rerecords += 1
         if self._rerecords >= _RERECORD_LIMIT:
@@ -820,8 +912,18 @@ class GraphReplay:
         # A recorded device graph re-issues the whole step with one call. The
         # input copies above are on the same stream, so they are ordered ahead
         # of it without a wait.
+        recorded = False
         if self._cuda_graph and self._recording_still_valid():
-            _core.graph_launch(self._cuda_graph)
+            if self._graph_has_host_prefix:
+                recorded = _core.graph_launch_host_prefix(self._cuda_graph)
+                if not recorded:
+                    # The CPU prefix has already run, but its device destination
+                    # moved. Destroy the stale photograph before ordinary replay.
+                    self._drop_recording()
+            else:
+                _core.graph_launch(self._cuda_graph)
+                recorded = True
+        if recorded:
             # `sync_src=False`: the launch already produced the bytes, and
             # syncing the captured outputs would run the whole graph again
             # through the executor -- which is exactly what the recording is
@@ -848,6 +950,9 @@ class GraphReplay:
             return self._module(*args, **kwargs)
 
     def __call__(self, *args, **kwargs):
+        # The outer device capture owns ordinary lazy operators for this call.
+        if _core.graph_capture_active():
+            return self._eager(args, kwargs)
         if self._refused is not None:
             return self._eager(args, kwargs)
 
@@ -862,6 +967,7 @@ class GraphReplay:
             # One eager call first: it materializes the parameters and any
             # buffer the module builds lazily, so the capture that follows has
             # nothing pending underneath it.
+            argument_state = (_signature(args, kwargs), _host_state((args, kwargs)))
             allocated = _allocated_bytes()
             observed_alias_writes = []
             token = _ALIAS_WRITE_WARMUPS.set(
@@ -873,15 +979,18 @@ class GraphReplay:
             finally:
                 _ALIAS_WRITE_WARMUPS.reset(token)
             if observed_alias_writes:
-                # This write is an eager side effect, not a replayable graph
-                # node. Return the already-computed answer without tracing a
-                # second call; subsequent calls take the existing eager path.
                 self._refused = ("the eager warmup performed an alias-preserving "
                                  "in-place write that graph replay cannot capture")
                 self.stats["rebuilt"] += 1
                 return result
-            # What a device recording of this graph would hold: every buffer
-            # the call allocates, since a recording re-issues fixed pointers.
+            if argument_state != (_signature(args, kwargs), _host_state((args, kwargs))):
+                # Plain list/dict inputs may be mutable caches or cursors.
+                # Running Python again would apply their side effects twice,
+                # and a later graph replay would omit those effects entirely.
+                self._refused = "the warm-up modified Python argument state, which graph replay cannot reproduce"
+                self.stats["rebuilt"] += 1
+                return result
+            # What a device recording of this graph would hold.
             self._graph_bytes = _allocated_bytes() - allocated
             cap = self._capture = self._capture_now(args, kwargs)
             self.stats["captured"] += 1
@@ -938,6 +1047,8 @@ class GraphReplay:
         if self._cuda_graph:
             _core.graph_release(self._cuda_graph)
             self._cuda_graph = 0
+        self._graph_has_host_prefix = False
+        self._graph_host_prefix_bytes = 0
         self._graph_out = None
         self._graph_refused = None
         cap, self._capture = self._capture, None
@@ -967,6 +1078,119 @@ class GraphReplay:
     def refused(self):
         """Why capture was refused, or None. Falls back to eager when set."""
         return self._refused
+
+
+def release_auto_replay(module):
+    """Take `module` away from the automatic policy, captures included.
+
+    For an explicit capture of it -- `torch.compile` of the module or of one
+    of its methods -- which replays it from then on. What the policy captured
+    before stays alive otherwise, unused, with its device recording: Transformers
+    runs a `generate` as written before compiling its decode step, and the
+    decode step it captured held 46 MiB beside the compiled one, which also
+    captures the same KV cache a second time.
+    """
+    state = module.__dict__.get("_auto_graph_replay")
+    if state is None:
+        state = module.__dict__["_auto_graph_replay"] = _AutoState()
+    for entry in state.entries.values():
+        if entry.step is not None:
+            entry.step.invalidate()
+    state.entries.clear()
+    if state.replay is not None:
+        state.replay.invalidate()
+        state.replay = None
+    state.give_up = True
+
+
+def _stateful_call(module, state, args, kw, objects):
+    """The `_StatefulCall` for a call that passes objects, or None."""
+    if state.unstable >= _UNSTABLE_LIMIT:
+        state.entries.clear()
+        return None
+    signature = _signature(args, kw)
+    entries = state.entries
+    entry = entries.pop(signature, None)
+    if entry is not None and not entry.holds(objects):
+        # The signature names objects by id, and these are new ones that
+        # happen to have the old ones' ids.
+        entry = None
+    if entry is None:
+        if len(entries) >= _AUTO_ENTRIES:
+            evicted = entries.pop(next(iter(entries)))
+            if evicted.step is not None:
+                evicted.step.invalidate()
+                state.recaptures += 1
+                if state.recaptures >= _GIVE_UP_AFTER:
+                    state.give_up = True
+                    entries.clear()
+                    return None
+        try:
+            entry = _StatefulCall(module, state, signature, objects)
+        except TypeError:
+            # An object without weak references: nothing to tell it apart by
+            # once it is gone.
+            return None
+    elif signature != state.previous:
+        # Another signature came in between: start counting again.
+        entry.last = None
+    entries[signature] = entry
+    state.previous = signature
+    if entry.step is not None and entry.step.refused is not None:
+        # Refused for good; running it as written needs no wrapper.
+        return None
+    entry.objects = objects
+    return entry
+
+
+class _StatefulCall:
+    """One signature of a module called with objects (see the policy comment).
+
+    Runs the call as written, comparing the objects' host-side state around
+    it, until two consecutive calls of this signature left it as they found
+    it; the next one is captured by a `_PolicyStep`, which replays from then
+    on. Until then the objects are only referenced weakly: a dynamic cache
+    that is never captured must not outlive its `generate`.
+    """
+
+    __slots__ = ("module_ref", "auto", "signature", "refs", "objects", "last", "step")
+
+    def __init__(self, module, auto, signature, objects):
+        self.module_ref = weakref.ref(module)
+        self.auto = auto
+        self.signature = signature
+        self.refs = [weakref.ref(o) for o in objects]
+        # This call's objects, for its duration only.
+        self.objects = None
+        self.last = None
+        self.step = None
+
+    def holds(self, objects):
+        refs = self.refs
+        return len(refs) == len(objects) and all(r() is o for r, o in zip(refs, objects))
+
+    def __call__(self, *args, **kw):
+        objects, self.objects = self.objects, None
+        step = self.step
+        if step is not None:
+            return step(*args, **kw)
+        module = self.module_ref()
+        before = _host_state(objects)
+        result = module._dispatch_call(*args, **kw)
+        after = _host_state(objects)
+        if before is None or before != after:
+            self.auto.unstable += 1
+            self.last = None
+            return result
+        self.auto.unstable = 0
+        if before == self.last:
+            from .step_capture import _PolicyStep
+            # The step holds them strongly: its guards read them, and the id
+            # in the signature must not pass to another object.
+            self.step = _PolicyStep(module, objects, self.signature,
+                                    jt.flags.auto_graph_replay_retain_bytes)
+        self.last = after
+        return result
 
 
 def graph_replay(module, *example_inputs, measure=False):
@@ -1002,6 +1226,31 @@ def graph_replay(module, *example_inputs, measure=False):
 # lists, dicts or dataclasses) falls back and is not tried again for that
 # module. So does a module whose shapes keep changing, after enough
 # re-captures to show it.
+#
+# A call may also pass objects: Transformers hands every decode step its KV
+# cache, ``model(input_ids=..., past_key_values=cache, ...)``, and the step
+# writes the new keys into the cache's tensors in place. Matched by identity
+# alone a capture would keep answering for the first step, so such a call
+# goes through a step capture (`step_capture._PolicyStep`) instead, which
+# replays the in-place updates as state, and only when the objects keep still
+# on the host side:
+#
+#   - their host-side state -- every attribute and container entry reachable
+#     from them, a scalar by value and anything else by identity (`_host_state`)
+#     -- is the same after a call as before it, and as after the previous
+#     call. A dynamic cache that appends a new tensor every step never is;
+#   - a replay first checks that state again, and that no parameter and no
+#     Var those objects hold was rebound from outside, and re-captures if one
+#     was;
+#   - a call that draws random numbers is refused, rather than replayed from a
+#     different random stream.
+#
+# Like a call of Vars, such a call is captured only once it repeats: the same
+# signature in consecutive calls. A model alternates between signatures here
+# -- the prompt, then one token at a time, on every `generate` -- so the policy
+# keeps track of the last `_AUTO_ENTRIES` signatures rather than only the
+# latest; otherwise every prompt would throw the decode step's capture away.
+# The prompt itself, once per run, is not captured.
 
 
 #: Re-captures tolerated for one module before the policy leaves it alone. A
@@ -1010,8 +1259,23 @@ def graph_replay(module, *example_inputs, measure=False):
 _GIVE_UP_AFTER = 8
 
 
+#: Signatures of calls with objects a module keeps track of (see above).
+_AUTO_ENTRIES = 2
+
+#: Calls in a row that changed their objects' host-side state before the
+#: policy stops looking at a module's object arguments -- each look walks them
+#: twice.
+_UNSTABLE_LIMIT = 8
+
+#: The most host-side state the objects of one call may carry, in entries of
+#: `_host_state`. Transformers' static cache for Qwen3-0.6B (28 layers) is 657,
+#: which takes 0.13 ms to walk -- once a replayed decode step, 3.5% of it.
+_HOST_STATE_LIMIT = 4096
+
+
 class _AutoState:
-    __slots__ = ("signature", "seen", "replay", "recaptures", "give_up")
+    __slots__ = ("signature", "seen", "replay", "recaptures", "give_up",
+                 "entries", "unstable", "previous", "retain_bytes")
 
     def __init__(self):
         self.signature = None
@@ -1019,6 +1283,12 @@ class _AutoState:
         self.replay = None
         self.recaptures = 0
         self.give_up = False
+        # signature -> _StatefulCall, least recently used first.
+        self.entries = {}
+        self.unstable = 0
+        # The signature of the last call that passed objects.
+        self.previous = None
+        self.retain_bytes = None
 
 
 def _element_size(dtype):
@@ -1052,33 +1322,139 @@ def _element_size(dtype):
 _AUTO_SCALARS = (int, float, bool, str)
 
 
+def _auto_inputs(value, found, objects):
+    """Bytes of the Vars in `value`'s plain containers.
+
+    `found` counts them; any other object is appended to `objects`.
+    """
+    if isinstance(value, jt.Var):
+        found[0] += 1
+        return value.numel() * _element_size(value.dtype)
+    kind = type(value)
+    if value is None or kind in _AUTO_SCALARS:
+        return 0
+    if kind is tuple or kind is list:
+        return sum(_auto_inputs(v, found, objects) for v in value)
+    if kind is dict:
+        return sum(_auto_inputs(v, found, objects) for v in value.values())
+    objects.append(value)
+    return 0
+
+
 def _auto_arguments(args, kw):
-    """Total bytes of the Vars among the arguments, or None if not eligible.
+    """(total bytes of the Vars among the arguments, the other objects), or None.
 
     Keyword arguments count like positional ones. Transformers calls every
     model by keyword -- ``model(input_ids=..., attention_mask=...)`` -- and
-    leaving those out meant no Hugging Face model was ever replayed.
+    leaving those out meant no Hugging Face model was ever replayed. Plain
+    tuples, lists and dicts are looked into, as `_spec` does: a Transformers
+    decode step passes its attention masks as a dict. A call with no Var at
+    all is not eligible.
     """
-    total = 0
-    found = False
-    for values in (args, kw.values()):
-        for a in values:
-            if isinstance(a, jt.Var):
-                total += a.numel() * _element_size(a.dtype)
-                found = True
-            elif a is not None and type(a) not in _AUTO_SCALARS:
-                return None
-    return total if found else None
+    found = [0]
+    objects = []
+    total = _auto_inputs(args, found, objects)
+    if kw:
+        total += _auto_inputs(kw, found, objects)
+    return (total, objects) if found[0] else None
+
+
+class _TooMuchState(Exception):
+    pass
+
+
+def _host_state(objects, vars_out=None):
+    """How `objects` look from the host, as a list to compare, or None.
+
+    Every attribute and container entry reachable from them: a scalar by
+    value, anything else by identity -- a Var too, which `vars_out` collects.
+    What a Var holds is the capture's business: state it updates, or a leaf
+    whose rebinding the replay checks. Classes, functions and other callables
+    are not looked into. None when there is more than `_HOST_STATE_LIMIT` of
+    it, or an object that cannot be read.
+    """
+    out = []
+    try:
+        for value in objects:
+            _walk_host_state(value, out, {}, vars_out)
+    except _TooMuchState:
+        return None
+    return out
+
+
+def _walk_host_state(value, out, seen, vars_out):
+    if len(out) > _HOST_STATE_LIMIT:
+        raise _TooMuchState
+    kind = type(value)
+    if value is None or kind in _AUTO_SCALARS:
+        out.append(value)
+        return
+    if isinstance(value, jt.Var):
+        out.append(id(value))
+        if vars_out is not None:
+            vars_out.append(value)
+        return
+    key = id(value)
+    index = seen.get(key)
+    if index is not None:
+        out.append(("seen", index))
+        return
+    seen[key] = len(seen)
+    out.append(kind)
+    if kind is tuple or kind is list:
+        out.append(len(value))
+        for v in value:
+            _walk_host_state(v, out, seen, vars_out)
+        return
+    if kind is dict:
+        out.append(len(value))
+        for k, v in value.items():
+            _walk_host_state(k, out, seen, vars_out)
+            _walk_host_state(v, out, seen, vars_out)
+        return
+    if isinstance(value, type) or callable(value):
+        out.append(key)
+        return
+    attrs = getattr(value, "__dict__", None)
+    slots = [name for cls in kind.__mro__ for name in getattr(cls, "__slots__", ())
+             if name not in ("__dict__", "__weakref__")]
+    if attrs is None and not slots:
+        # Opaque: a number type, a dtype, a device. Identity is all there is.
+        out.append(key)
+        return
+    if attrs is not None:
+        out.append(len(attrs))
+        for k, v in attrs.items():
+            out.append(k)
+            _walk_host_state(v, out, seen, vars_out)
+    for name in slots:
+        out.append(name)
+        _walk_host_state(getattr(value, name, _MISSING), out, seen, vars_out)
+
+
+#: An unset slot, for `_walk_host_state`.
+_MISSING = object()
 
 
 def auto_replay_for(module, args, kw):
     """The GraphReplay to use for this call, or None to run normally."""
     flags = jt.flags
+    if _core.graph_capture_active():
+        return None
     if not flags.auto_graph_replay or not flags.no_grad:
         return None
-    nbytes = _auto_arguments(args, kw)
-    if nbytes is None:
+    # PEFT switches LoRA layers on and off in-place for reference-model
+    # forwards.  No parameter is rebound and training mode stays unchanged,
+    # so a captured student graph would silently stand in for the base model.
+    # Automatic replay cannot observe this host-side control state.  Keep
+    # explicit graph_replay/torch.compile opt-in available to the caller.
+    attributes = module.__dict__
+    if "base_model" in attributes and "_peft_config" in attributes:
         return None
+    found = _auto_arguments(args, kw)
+    if found is None:
+        return None
+    nbytes, objects = found
     state = module.__dict__.get("_auto_graph_replay")
     if state is None:
         # Written through __dict__: Module.__setattr__ classifies assignments
@@ -1086,9 +1462,32 @@ def auto_replay_for(module, args, kw):
         state = module.__dict__["_auto_graph_replay"] = _AutoState()
     if state.give_up:
         return None
+    retain_bytes = flags.auto_graph_replay_retain_bytes
+    if state.retain_bytes != retain_bytes:
+        # A runtime scope must also constrain graphs captured before it.
+        # Release every signature's recording through its existing owner;
+        # replacing the budget on a wrapper would leave fixed buffers alive.
+        if state.replay is not None:
+            state.replay.invalidate()
+            state.replay = None
+        for entry in state.entries.values():
+            if entry.step is not None:
+                entry.step.invalidate()
+        state.entries.clear()
+        state.previous = None
+        state.retain_bytes = retain_bytes
     if nbytes > flags.auto_graph_replay_bytes:
         return None
-    signature = _signature(args, kw)
+    if objects:
+        return _stateful_call(module, state, args, kw, objects)
+    # Input shapes alone are not stability: diffusion VAEs cast their weights
+    # around every decode. Capturing again on every rebind executes the eager
+    # warm-up, capture and replay instead of one forward. Wait for unchanged
+    # parameter/buffer holders too. A live capture already owns this list, so
+    # steady calls need no second traversal of the module tree.
+    capture = state.replay._capture if state.replay is not None else None
+    holders = (p for p, _ in capture.params) if capture is not None else _module_vars(module)
+    signature = (_signature(args, kw), tuple((id(p), p.var_ptr) for p in holders))
     if signature != state.signature:
         state.signature = signature
         state.seen = 1
@@ -1108,7 +1507,7 @@ def auto_replay_for(module, args, kw):
         # the shape of step where replay wins.
         state.replay = GraphReplay(
             module, measure=False, weak=True,
-            max_retained_bytes=flags.auto_graph_replay_retain_bytes)
+            max_retained_bytes=retain_bytes)
     if state.replay.refused is not None:
         state.give_up = True
         state.replay = None

@@ -4,6 +4,38 @@ import math
 
 import jittor as jt
 from jittor.misc import _pair
+from jittor.nn.functional.convolution import same_padding_pairs
+
+#: torch's ``padding_mode`` values. ``'zeros'`` is the kernels' own padding;
+#: the others pad the input explicitly and convolve with none, as torch does.
+_PADDING_MODES = ('zeros', 'reflect', 'replicate', 'circular')
+
+
+def _check_padding_options(padding, padding_mode, stride):
+    """Validate torch's ``padding_mode`` and string ``padding`` at construction."""
+    if padding_mode not in _PADDING_MODES:
+        raise ValueError("padding_mode must be one of {}, but got padding_mode='{}'"
+                         .format(_PADDING_MODES, padding_mode))
+    if isinstance(padding, str):
+        if padding not in ('same', 'valid'):
+            raise ValueError("Invalid padding string {!r}, should be one of "
+                             "{{'valid', 'same'}}".format(padding))
+        if padding == 'same' and any(int(value) != 1 for value in stride):
+            raise ValueError("padding='same' is not supported for strided convolutions")
+
+
+def _reversed_padding_repeated_twice(padding, kernel_size, dilation):
+    """``F.pad`` widths (last dimension first) for an explicit ``padding_mode``."""
+    if padding == 'same':
+        pairs = same_padding_pairs(kernel_size, dilation)
+    elif padding == 'valid':
+        pairs = [(0, 0)] * len(kernel_size)
+    else:
+        pairs = [(int(value), int(value)) for value in padding]
+    widths = []
+    for before, after in reversed(pairs):
+        widths.extend((before, after))
+    return tuple(widths)
 
 
 class Conv(jt.Module):
@@ -21,8 +53,9 @@ class Conv(jt.Module):
     :param stride: Stride of the convolution. Default: 1
     :type stride: int or tuple, optional
 
-    :param padding: Padding added to all four sides of the input. Default: 0
-    :type padding: int or tuple, optional
+    :param padding: Padding added to all four sides of the input, or torch's
+        ``'valid'`` / ``'same'`` (stride 1 only). Default: 0
+    :type padding: int, tuple or str, optional
 
     :param dilation: Spacing between kernel elements. Default: 1
     :type dilation: int or tuple, optional
@@ -33,6 +66,9 @@ class Conv(jt.Module):
     :param bias: If True, adds a learnable bias to the output. Default: True
     :type bias: bool, optional
 
+    :param padding_mode: ``'zeros'``, ``'reflect'``, ``'replicate'`` or ``'circular'``. Default: ``'zeros'``
+    :type padding_mode: str, optional
+
     Example:
 
     >>> conv = nn.Conv2d(24, 32, 3)
@@ -42,44 +78,13 @@ class Conv(jt.Module):
     >>> input = jt.randn(4, 24, 100, 100)
     >>> output = conv(input)
     '''
+    #: Class default, so a subclass that skips ``__init__`` still convolves.
+    padding_mode = 'zeros'
+
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True, padding_mode='zeros', device=None, dtype=None):
-        # Torch accepts lists as well as tuples for spatial convolution
-        # arguments. Normalize them before validation so a model config such as
-        # InternVL's ``patch_size=[14, 14]`` does not enter scalar comparisons.
-        if isinstance(kernel_size, list):
-            kernel_size = tuple(kernel_size)
-        if isinstance(stride, list):
-            stride = tuple(stride)
-        if isinstance(padding, list):
-            padding = tuple(padding)
-        if isinstance(dilation, list):
-            dilation = tuple(dilation)
-        # Keep PyTorch's padding modes at the module boundary.  The convolution
-        # kernel itself implements zero padding; the other modes are applied
-        # explicitly in _conv_forward.
+        # device/dtype accepted for torch.nn.Conv2d compatibility.
+        _check_padding_options(padding, padding_mode, _pair(stride))
         self.padding_mode = padding_mode
-        if padding_mode not in ('zeros', 'reflect', 'replicate', 'circular'):
-            raise ValueError(
-                "padding_mode must be one of 'zeros', 'reflect', "
-                f"'replicate', or 'circular', got {padding_mode!r}")
-        if isinstance(padding, str):
-            # Transformers' SigLIP patch embed uses the case-insensitive Torch
-            # spelling ``padding='SAME'``.  Jittor's convolution kernel takes
-            # an explicit integer/tuple, while Torch supports ``same`` only
-            # for unit stride.  ``valid`` is the same explicit zero padding.
-            # Reject unsupported spellings and strides instead of silently
-            # changing convolution geometry.
-            padding_name = padding.lower()
-            if padding_name not in ('same', 'valid'):
-                raise ValueError("padding must be an integer, tuple, 'same', or 'valid'")
-            if padding_name == 'valid':
-                padding = 0
-            else:
-                stride_pair = _pair(stride)
-                if any(int(value) != 1 for value in stride_pair):
-                    raise ValueError("padding='same' is not supported for strided convolutions")
-                kernel_pair = _pair(kernel_size)
-                padding = tuple((int(value) - 1) // 2 for value in kernel_pair)
         if in_channels <= 0:
             raise ValueError(f"in_channels must be greater than zero, got {in_channels}")
         if out_channels <= 0:
@@ -88,21 +93,23 @@ class Conv(jt.Module):
             raise ValueError(f"groups must must be greater than zero, got {groups}")
         assert in_channels % groups == 0, 'in_channels must be divisible by groups'
         assert out_channels % groups == 0, 'out_channels must be divisible by groups'
-        if isinstance(kernel_size, tuple):
+        if isinstance(kernel_size, (tuple, list)):
             for size in kernel_size:
                 if size <= 0:
                     raise ValueError(f"kernel_size must be greater than zero, got {kernel_size}")
         else:
             if kernel_size <= 0:
                 raise ValueError(f"kernel_size must be greater than zero, got {kernel_size}")
-        if isinstance(stride, tuple):
+        if isinstance(stride, (tuple, list)):
             for size in stride:
                 if size <= 0:
                     raise ValueError(f"stride must be greater than zero, got {stride}")
         else:
             if stride <= 0:
                 raise ValueError(f"stride must be greater than zero, got {stride}")
-        if isinstance(padding, (tuple, list)):
+        if isinstance(padding, str):
+            pass                      # validated above
+        elif isinstance(padding, (tuple, list)):
             for size in padding:
                 if size < 0:
                     raise ValueError(f"padding must be nonnegative, got {padding}")
@@ -123,8 +130,12 @@ class Conv(jt.Module):
         # the scalar branch (which produced nested ([k,k],[k,k]) and crashed init).
         self.kernel_size = _pair(kernel_size)
         self.stride = _pair(stride)
-        self.padding = _pair(padding)
+        # A string stays a string, as on torch's layers; nn.conv2d resolves it.
+        self.padding = padding if isinstance(padding, str) else _pair(padding)
         self.dilation = _pair(dilation)
+        # torch's name and layout for the widths an explicit padding_mode uses.
+        self._reversed_padding_repeated_twice = _reversed_padding_repeated_twice(
+            self.padding, self.kernel_size, self.dilation)
         self.groups = groups
         # Descriptive only. The depthwise CUDA kernel is selected per call by
         # jt.nn.conv2d, not decided here: deciding it in __init__ meant a layer
@@ -156,13 +167,12 @@ class Conv(jt.Module):
         # already drifted apart in compile options, validation and the CUDA
         # depthwise path -- and _conv_forward called the functional one, so the
         # same layer computed different things depending on the entry point.
-        padding = self.padding
         if self.padding_mode != 'zeros':
-            ph, pw = padding
-            input = jt.nn.pad(
-                input, (pw, pw, ph, ph), mode=self.padding_mode)
-            padding = (0, 0)
-        return jt.nn.conv2d(input, weight, bias, self.stride, padding,
+            input = jt.nn.pad(input, self._reversed_padding_repeated_twice,
+                              mode=self.padding_mode)
+            return jt.nn.conv2d(input, weight, bias, self.stride, 0,
+                                self.dilation, self.groups)
+        return jt.nn.conv2d(input, weight, bias, self.stride, self.padding,
                             self.dilation, self.groups)
 
 
@@ -205,42 +215,29 @@ class Conv1d(jt.Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0,
                  dilation=1, groups=1, bias=True, padding_mode='zeros',
                  device=None, dtype=None):
-        # Torch Conv1d accepts a one-element list/tuple and the same optional
-        # construction keywords as Conv2d. Jittor stores this layer as a
-        # height-wise Conv2d, so reduce those values to scalars first.
+        # Conv1d stores its spatial axis as the height of an inner Conv2d.
+        # Normalize one-element sequences before adding that inner width axis.
+        values = []
         for name, value in (("kernel_size", kernel_size), ("stride", stride),
                             ("padding", padding), ("dilation", dilation)):
             if isinstance(value, (list, tuple)):
                 if len(value) != 1:
-                    raise ValueError(f"Conv1d {name} must be an int or one-element sequence")
+                    raise ValueError("Conv1d %s must be an int or one-element sequence" % name)
                 value = value[0]
-            if name == "kernel_size":
-                kernel_size = value
-            elif name == "stride":
-                stride = value
-            elif name == "padding":
-                padding = value
-            else:
-                dilation = value
-        if isinstance(padding, str):
-            padding_name = padding.lower()
-            if padding_name == 'valid':
-                padding = 0
-            elif padding_name == 'same':
-                if stride != 1:
-                    raise ValueError("padding='same' is not supported for strided convolutions")
-                effective_kernel = dilation * (kernel_size - 1) + 1
-                padding = (effective_kernel - 1) // 2
-            else:
-                raise ValueError("padding must be an integer, one-element sequence, 'same', or 'valid'")
+            values.append(value)
+        kernel_size, stride, padding, dilation = values
         assert in_channels > 0, 'in_channels must be positive'
         assert out_channels > 0, 'out_channels must be positive'
+        _check_padding_options(padding, padding_mode, _pair(stride))
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.kernel_size = (kernel_size, 1)
         self.stride = (stride, 1)
-        self.padding = (padding, 0)
+        # The inner height-wise Conv resolves a string itself: the width axis
+        # has kernel 1, so 'same' adds nothing there.
+        self.padding = padding if isinstance(padding, str) else (padding, 0)
         self.dilation = (dilation, 1)
+        self.padding_mode = padding_mode
         self.groups = groups
         self.bias = bias
         if groups <= 0:

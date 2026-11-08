@@ -7,6 +7,7 @@
 #pragma once
 #include <mutex>
 #include <atomic>
+#include <thread>
 #include "core/common.h"
 #include "type/nano_string.h"
 #include "type/nano_vector.h"
@@ -108,6 +109,24 @@ struct VarFlags {
         // from a tensor anyone holds. Under torch's rule it never asks for a
         // gradient; see `is_constant_scalar` in op.cc.
         _python_number,
+        // The op producing this var threw after its output was allocated, so
+        // the memory may hold a partial or clamped result. A read must go
+        // back through the executor (and fail again) instead of returning it.
+        // Cleared by the next read that syncs without throwing.
+        _execution_failed,
+        // A view created without recording may inherit requires_grad from its
+        // base without acquiring a gradient edge of its own. An explicit
+        // requires_grad setter activates that edge, even when the value is
+        // already true. Kept separate from reversible freezing/stop_grad.
+        _unrecorded_view,
+        // A pending value built only from constants -- a Python number, an
+        // ArrayOp source, and the broadcasts/casts/views of one. `_is_scalar`
+        // used to be the only marker a constant had, but a factory now clears
+        // it on its full-shape result so that `jt.ones(4)` promotes as the
+        // tensor it is. Placement still has to let the same
+        // unsynced constant follow its operand's device (op.cc
+        // `is_pending_scalar`), so that fact gets its own bit.
+        _is_constant,
         _end,
     };
 };
@@ -135,9 +154,8 @@ struct OpFlags {
         // their control edges. TapeOp uses this while Tapes is assembled.
         _must_stay_pending,
         // Seven consecutive bits mirroring amp_reg; op.cc writes them and
-        // grad.cc reads them back as one field. The first three and BF16 bit
-        // have names; all seven belong to amp -- hence the placeholders, which
-        // are what stops the next flag from landing inside the field.
+        // grad.cc reads them back as one field. Reserved bits still belong
+        // to amp, so the next private flag must follow the complete field.
         _prefer_32,
         _prefer_16,
         _reduce_keep,
@@ -151,6 +169,8 @@ struct OpFlags {
         // of the same name, which is why they are in different enums now.
         _requires_grad_disabled,
         _requires_grad_snapshot,
+        // Grouping/gradient-only inputs: forward needs neither their bytes,
+        // their extents nor execution of their providers (currently Tapes).
         _no_input_storage,
         _end,
     };
@@ -234,7 +254,7 @@ static_assert((int)VarFlags::_force_fuse == (int)NodeFlags::_n
     && (int)OpFlags::_cpu == (int)NodeFlags::_n,
     "the private layouts must both start where the shared range ends");
 static_assert((int)OpFlags::_custom_flag == (int)OpFlags::_prefer_32 + OpFlags::_amp_nbits,
-    "the AMP bits op.cc and grad.cc move as one field are no longer contiguous");
+    "the seven amp bits op.cc and grad.cc move as one field are no longer contiguous");
 static_assert((int)OpFlags::_op_type_high == (int)OpFlags::_op_type + 1,
     "OpType is read as two bits and they are no longer adjacent");
 static_assert((int)NodeFlags::_node_order_high == (int)NodeFlags::_node_order_low + 1,
@@ -282,17 +302,33 @@ public:
 
     // Return true exactly on the transition across zero; propagation belongs
     // at those boundaries, not at every additional owner.
-    bool own() {
-        ASSERT(value_ >= 0 && value_ < std::numeric_limits<int>::max())
-            << kind_name() << "liveness own overflow";
+    // Inlined: every liveness step moves a counter, and with the failure
+    // report written in place the steps were calls. The report -- the same
+    // assertion, condition and message -- runs out of line, only when the
+    // condition has already failed.
+    __attribute__((always_inline)) bool own() {
+        if (PREDICT_BRANCH_NOT_TAKEN(!(value_ >= 0 && value_ < std::numeric_limits<int>::max())))
+            report_own();
         return ++value_ == 1;
     }
 
-    bool release() {
-        ASSERT(value_ > 0) << kind_name()
-            << "liveness release without a matching owner";
+    __attribute__((always_inline)) bool release() {
+        if (PREDICT_BRANCH_NOT_TAKEN(!(value_ > 0))) report_release();
         return --value_ == 0;
     }
+
+private:
+    __attribute__((noinline, cold)) void report_own() const {
+        ASSERT(value_ >= 0 && value_ < std::numeric_limits<int>::max())
+            << kind_name() << "liveness own overflow";
+    }
+
+    __attribute__((noinline, cold)) void report_release() const {
+        ASSERT(value_ > 0) << kind_name()
+            << "liveness release without a matching owner";
+    }
+
+public:
 
     void assert_expected(int expected, const void* owner) const {
         ASSERTop(count(),==,expected) << kind_name()
@@ -397,6 +433,10 @@ struct Node {
             batch_index_mismatch(stamp);
         return batch_index;
     }
+    // The same read for a node that may not be of the batch: -1 then.
+    inline int batch_index_in(int64 stamp) const {
+        return batch_stamp == stamp ? batch_index : -1;
+    }
 
     int64 tflag = 0;
     int64 id; 
@@ -468,7 +508,21 @@ struct Node {
     void release_inputs();
     void erase_input(uint index);
     void erase_output(uint index);
-    void set_inputs(list<Node*> nodes);
+    // Replaces this node's input edges with `nodes`, in order. The core takes
+    // a pointer range: the parameter used to be a std::list taken by value, so
+    // every op maker's `set_inputs({a, b})` -- and every output var's
+    // `set_inputs({op})` -- built and freed one heap node per input, on every
+    // operator constructed.
+    void set_inputs(Node* const* nodes, size_t count);
+    inline void set_inputs(std::initializer_list<Node*> nodes) {
+        set_inputs(nodes.begin(), nodes.size());
+    }
+    template <class Nodes>
+    inline void set_inputs(const Nodes& nodes) {
+        SmallVector<Node*, 4> flat;
+        for (Node* node : nodes) flat.emplace_back(node);
+        set_inputs(flat.begin(), flat.size());
+    }
     void add_inputs(const vector<Node*>& nodes);
     void add_inputs(const vector<Var*>& nodes);
     void release_forward_liveness();
@@ -499,7 +553,64 @@ inline Node::input_t& Node::output_t::reverse() {
 // later, at exit, as "corrupted double-linked list". Recursive because a
 // propagation step re-enters these same functions; nothing here waits on
 // another thread, so there is no lock order to get wrong.
-EXTERN_LIB std::recursive_mutex& graph_mutation_mutex();
+//
+// Taken several times per operator by the executor and by every op
+// constructor, almost always by the thread that already holds it or with
+// nobody else waiting, so the uncontended path is one compare-and-swap rather
+// than a pthread recursive mutex's lock and unlock.
+class GraphMutationMutex {
+    std::atomic<const void*> owner_{nullptr};
+    int depth_ = 0;  // written by the owner only
+    static const void* thread_token() {
+        thread_local char token;
+        return &token;
+    }
+public:
+    void lock() {
+        const void* self = thread_token();
+        if (owner_.load(std::memory_order_relaxed) == self) {
+            depth_++;
+            return;
+        }
+        const void* expected = nullptr;
+        for (int spins = 0; !owner_.compare_exchange_weak(
+                expected, self, std::memory_order_acquire, std::memory_order_relaxed); ) {
+            expected = nullptr;
+            if (++spins > 64) std::this_thread::yield();
+        }
+        depth_ = 1;
+    }
+    void unlock() {
+        if (--depth_ == 0) owner_.store(nullptr, std::memory_order_release);
+    }
+    bool try_lock() {
+        const void* self = thread_token();
+        if (owner_.load(std::memory_order_relaxed) == self) {
+            depth_++;
+            return true;
+        }
+        const void* expected = nullptr;
+        if (!owner_.compare_exchange_strong(
+                expected, self, std::memory_order_acquire, std::memory_order_relaxed))
+            return false;
+        depth_ = 1;
+        return true;
+    }
+    // Let go of it entirely, however deep this thread holds it, and say how
+    // deep that was; 0 when this thread does not hold it. For a wait on
+    // another thread that needs it (see runtime/async_exec.h).
+    int release_all() {
+        if (owner_.load(std::memory_order_relaxed) != thread_token()) return 0;
+        int depth = depth_;
+        depth_ = 0;
+        owner_.store(nullptr, std::memory_order_release);
+        return depth;
+    }
+    // After `lock()` or a successful `try_lock()`: hold it `depth` deep --
+    // what `release_all` returned, to take it back.
+    void deepen(int depth) { depth_ += depth - 1; }
+};
+EXTERN_LIB GraphMutationMutex& graph_mutation_mutex();
 
 struct SetupFreeBuffer {
 
@@ -513,7 +624,7 @@ inline ~SetupFreeBuffer() {
         // Held across the delete round: another thread must not be walking a
         // node that this round is destroying, nor appending to the buffer
         // while it is being drained.
-        std::lock_guard<std::recursive_mutex> guard(graph_mutation_mutex());
+        std::lock_guard<GraphMutationMutex> guard(graph_mutation_mutex());
         for (int i=0; i<free_buffer().size(); i++)
             delete free_buffer()[i];
         free_buffer().clear();

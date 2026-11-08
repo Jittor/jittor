@@ -37,7 +37,11 @@ before the report is made. Pass ``sync=False`` to leave both edges alone.
 The older tools remain: ``jt.profile_scope``/``jt.profiler`` is a per-operator
 kernel micro-benchmark (it synchronizes and optionally re-runs each operator),
 and ``profile_memory_enable`` with ``jt.get_max_memory_treemap`` a
-``trace_py_var``-based memory tree. See ``docs/notes/profiling.md``.
+``trace_py_var``-based memory tree. See ``docs/performance/profiling.md``.
+
+For a whole run rather than a region, ``record_memory_history`` keeps every
+device allocation and free with its Python stack, and ``dump_memory_snapshot``
+writes them as the pickle PyTorch's memory_viz opens.
 """
 
 import time
@@ -47,13 +51,19 @@ import jittor_core as _core
 
 from . import _cupti
 from ._memory import MemoryReport
+from ._memory_history import (_stack_table, dump_memory_snapshot, memory_snapshot,
+                              note_annotation, record_memory_history)
+from ._memory_stats import memory_stats, memory_summary, reset_accumulated_memory_stats
 from ._report import ProfileResult
 from ._sampler import NvmlSampler, PythonSampler
 
 __all__ = ["profile", "Profile", "ProfileResult", "MemoryReport", "record_function",
-           "register_replay_source"]
+           "register_replay_source", "record_memory_history", "memory_snapshot",
+           "dump_memory_snapshot", "memory_stats", "memory_summary",
+           "reset_accumulated_memory_stats"]
 
 _ST_OPS, _ST_MEMORY, _ST_SHAPES = 1, 2, 4
+_STACKS_FOR_PROFILE = 2   # this profile's bit in the native capture_op_stacks
 _replay_sources = weakref.WeakSet()
 _active = []
 
@@ -91,7 +101,7 @@ class Profile:
     """A profiling session; use :func:`profile` to make one."""
 
     def __init__(self, device="auto", memory=True, python=False, shapes=True, sync=True,
-                 sample_interval=0.001, nvml=True):
+                 sample_interval=0.001, nvml=True, stacks=False):
         if device not in ("auto", True, False):
             raise ValueError("device must be 'auto', True or False, not %r" % (device,))
         self.want_device = device
@@ -101,6 +111,7 @@ class Profile:
         self.sync = bool(sync)
         self.sample_interval = sample_interval
         self.want_nvml = bool(nvml)
+        self.want_stacks = bool(stacks)
         self.result = None
         self._steps = []
 
@@ -137,6 +148,8 @@ class Profile:
             _core.step_trace_set_correlation(self._cupti.push, self._cupti.pop)
             self._offset = self._clock_offset()
         mode = _ST_OPS | (_ST_MEMORY if self.want_memory else 0) | (_ST_SHAPES if self.want_shapes else 0)
+        if self.want_stacks:
+            _core.set_op_stack_capture(_STACKS_FOR_PROFILE, True)
         _core.step_trace_start(mode)
         self._sampler = PythonSampler(self.sample_interval).start() if self.want_python else None
         _active.append(self)
@@ -157,6 +170,8 @@ class Profile:
                 self._sampler.armed = False
                 self._sampler.stop()
             _core.step_trace_stop()
+            if self.want_stacks:
+                _core.set_op_stack_capture(_STACKS_FOR_PROFILE, False)
             if self._cupti is not None:
                 _core.step_trace_set_correlation(0, 0)
                 kernels, copies, correlation = self._cupti.stop()
@@ -194,8 +209,9 @@ class Profile:
         off = getattr(self, "_offset", 0)
         kernel_records = [
             {"start": s + off, "end": e + off, "device": d, "stream": st, "correlation": c,
-             "name": n, "graph": g}
-            for s, e, d, st, c, n, g in kernels if e + off >= t0 and s + off <= t1]
+             "name": n, "graph": g, "grid": launch[0], "block": launch[1],
+             "registers": launch[2], "shared_memory": launch[3]}
+            for s, e, d, st, c, n, g, launch in kernels if e + off >= t0 and s + off <= t1]
         copy_records = [
             {"start": s + off, "end": e + off, "device": d, "stream": st, "correlation": c,
              "name": n, "bytes": nb}
@@ -230,7 +246,8 @@ class Profile:
             kernels=kernel_records, copies=copy_records, correlation=correlation,
             device_note=self._device_note, memory=memory, python=self._sampler,
             replay=replay, steps=list(self._steps), truncated=truncated,
-            on_host=self._device_index < 0)
+            on_host=self._device_index < 0,
+            stacks=_stack_table() if self.want_stacks else None)
 
     def _require(self):
         if self.result is None:
@@ -254,7 +271,7 @@ class Profile:
 
 
 def profile(device="auto", memory=True, python=False, shapes=True, sync=True,
-            sample_interval=0.001, nvml=True):
+            sample_interval=0.001, nvml=True, stacks=False):
     """Profile a region: ``with jt.profile() as prof: ...; print(prof.summary())``.
 
     Args:
@@ -267,9 +284,11 @@ def profile(device="auto", memory=True, python=False, shapes=True, sync=True,
         sync: bracket the region with ``jt.sync_all(True)``.
         sample_interval: seconds between Python samples.
         nvml: also read the process's device memory from NVML.
+        stacks: record the full Python stack that built each operator
+            (``op_records[i]["stack"]`` indexes ``result.stacks``).
     """
     return Profile(device=device, memory=memory, python=python, shapes=shapes, sync=sync,
-                   sample_interval=sample_interval, nvml=nvml)
+                   sample_interval=sample_interval, nvml=nvml, stacks=stacks)
 
 
 class record_function:
@@ -287,11 +306,13 @@ class record_function:
 
     def __enter__(self):
         self._id = _core.step_trace_range_begin(self.name)
+        note_annotation("START", self.name)
         return self
 
     def __exit__(self, *exc):
         _core.step_trace_range_end(self._id)
         self._id = -1
+        note_annotation("END", self.name)
         return False
 
     def __call__(self, fn):

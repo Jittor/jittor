@@ -1,4 +1,5 @@
 #include "bindings/pyjt/py_tensor_frontend.h"
+#include "bindings/pyjt/py_type_lifetime.h"
 #include "core/grad.h"
 #include "core/var_holder.h"
 #include "bindings/pyjt/py_converter.h"
@@ -9,11 +10,38 @@ namespace jittor {
 
 extern PyHeapTypeObject PyjtVarHolder;
 
+void bind_python_tensor_owner(PyObject* object) {
+    bool retain = false;
+    if (Py_TYPE(object) != &PyjtVarHolder.ht_type) {
+        PyObjHolder requested;
+        requested.obj = PyObject_GetAttrString(
+            reinterpret_cast<PyObject*>(Py_TYPE(object)),
+            "_frontend_view_base_ownership");
+        if (!requested.obj) {
+            if (!PyErr_ExceptionMatches(PyExc_AttributeError))
+                throw std::runtime_error("cannot read frontend view ownership");
+            PyErr_Clear();
+        } else {
+            if (!PyBool_Check(requested.obj))
+                throw std::runtime_error("frontend view ownership must be a bool");
+            retain = requested.obj == Py_True;
+        }
+    }
+    GET_RAW_PTR(VarHolder, object)->bind_python_owner(object, retain);
+}
+
 namespace {
 // One shared symbol owner across the core and all loaded JIT extensions.
 // Access occurs with the GIL held, just like the Python conversion boundary.
 PyObject* frontend_context = nullptr;
 PyObject* placement_context = nullptr;
+// Whether either variable has ever been given a value in this process. Every
+// binding call reads both -- the result type, the construction placement --
+// and a program that never selects a frontend or a placement (plain Jittor)
+// paid two context lookups per operator for an answer that cannot be anything
+// but "unset": until one of the setters below runs, no context holds a value.
+bool frontend_context_set = false;
+bool placement_context_set = false;
 
 PyObject* placement_variable() {
     if (!placement_context) {
@@ -25,6 +53,7 @@ PyObject* placement_variable() {
 }
 
 TensorPlacement selected_placement() {
+    if (!placement_context_set) return {};
     PyObject* value = nullptr;
     if (PyContextVar_Get(placement_variable(), nullptr, &value) < 0)
         throw std::runtime_error("cannot read tensor placement context");
@@ -45,6 +74,7 @@ PyObject* context_variable() {
 }
 
 PyObject* selected_type() {
+    if (!frontend_context_set) return nullptr;
     PyObject* value = nullptr;
     if (PyContextVar_Get(context_variable(), nullptr, &value) < 0)
         throw std::runtime_error("cannot read tensor frontend context");
@@ -109,14 +139,13 @@ PyObject* set_tensor_frontend_type(PyObject* type, PyObject* candidate) {
         && PyType_IsSubtype(reinterpret_cast<PyTypeObject*>(type),
                             &PyjtVarHolder.ht_type))
         << "tensor frontend must be a real Var type or subtype";
+    frontend_context_set = true;
     PyObject* value = type;
     PyObject* owned_tuple = nullptr;
     if (candidate && candidate != Py_None) {
         owned_tuple = PyTuple_New(2);
-        if (!owned_tuple)
-            throw std::runtime_error("cannot create tensor frontend context value");
-        Py_INCREF(type);
-        Py_INCREF(candidate);
+        if (!owned_tuple) throw std::runtime_error("cannot create tensor frontend context value");
+        Py_INCREF(type); Py_INCREF(candidate);
         PyTuple_SET_ITEM(owned_tuple, 0, type);
         PyTuple_SET_ITEM(owned_tuple, 1, candidate);
         value = owned_tuple;
@@ -138,6 +167,7 @@ PyObject* set_tensor_placement_context(int backend, int device) {
         << "tensor placement requires a registered backend id and a non-negative device index";
     PyObject* value = Py_BuildValue("(ii)", backend, backend == 0 ? 0 : device);
     if (!value) throw std::runtime_error("cannot create tensor placement value");
+    placement_context_set = true;
     PyObject* token = PyContextVar_Set(placement_variable(), value);
     Py_DECREF(value);
     if (!token) throw std::runtime_error("cannot set tensor placement context");
@@ -156,6 +186,31 @@ void reset_tensor_placement_context(PyObject* token) {
     if (PyContextVar_Reset(placement_variable(), token) < 0)
         throw std::runtime_error("cannot reset tensor placement context");
 }
+
+PyObject* set_construction_placement(int backend, int device) {
+    USER_CHECK(backend >= 0 && backend <= int(BackendId::Corex) && device >= 0)
+        << "construction placement requires a registered backend id and a non-negative device index";
+    TensorPlacement previous = current_tensor_placement();
+    PyObject* token = Py_BuildValue("(iii)", int(previous.explicit_backend),
+                                    int(previous.device.backend), previous.device.index);
+    if (!token) throw std::runtime_error("cannot create construction placement token");
+    set_tensor_placement(TensorPlacement({static_cast<BackendId>(backend), backend == 0 ? 0 : device}));
+    return token;
+}
+
+void restore_construction_placement(PyObject* previous) {
+    USER_CHECK(PyTuple_Check(previous) && PyTuple_GET_SIZE(previous) == 3)
+        << "_restore_construction_placement takes the token _set_construction_placement returned";
+    if (!PyLong_AsLong(PyTuple_GET_ITEM(previous, 0))) {
+        set_tensor_placement(TensorPlacement());
+        return;
+    }
+    set_tensor_placement(TensorPlacement({
+        static_cast<BackendId>(PyLong_AsLong(PyTuple_GET_ITEM(previous, 1))),
+        int(PyLong_AsLong(PyTuple_GET_ITEM(previous, 2)))}));
+}
+
+TensorPlacement frontend_placement_request() { return selected_placement(); }
 
 PyObject* current_tensor_placement_request() {
     TensorPlacement placement = selected_placement();
@@ -206,6 +261,10 @@ void reset_float32_precision_context(PyObject* token) {
     set_float32_precision_policy({matmul, cudnn});
 }
 
+namespace {
+PyObject* frontend_result_type(PyObject* actual_type);
+} // namespace
+
 void PyTensorFrontendScope::select(
     PyObject* self, PyObject** args, int64 count, bool scan_sequences) {
     // Factories may have no tensor inputs. Their explicit context still owns
@@ -230,15 +289,7 @@ void PyTensorFrontendScope::select(
         return;
     }
     if (!candidate) return;
-    PyObject* actual_type = reinterpret_cast<PyObject*>(Py_TYPE(candidate));
-    PyObject* result_type = PyObject_GetAttrString(actual_type, "_frontend_result_type");
-    if (!result_type) {
-        if (!PyErr_ExceptionMatches(PyExc_AttributeError))
-            throw std::runtime_error("cannot read tensor frontend result type");
-        PyErr_Clear();
-        result_type = actual_type;
-        Py_INCREF(result_type);
-    }
+    PyObject* result_type = frontend_result_type(reinterpret_cast<PyObject*>(Py_TYPE(candidate)));
     try {
         // Parameters retain their Python identity when explicitly constructed,
         // while their operations may request ordinary frontend Tensor results.
@@ -269,8 +320,11 @@ struct FrontendPolicy {
     uint64 epoch = 0;
 };
 // Guarded by the GIL: apply_policy runs with it held (it may call Python).
+// Dropped when the type is collected.
 unordered_map<PyObject*, FrontendPolicy> frontend_policies;
 uint64 frontend_policy_epoch = 1;
+
+void forget_frontend_policy(PyObject* type) { frontend_policies.erase(type); }
 
 FrontendPolicy read_frontend_policy(PyObject* type) {
     FrontendPolicy policy;
@@ -328,16 +382,75 @@ const FrontendPolicy& frontend_policy(PyObject* type) {
         return found->second;
     FrontendPolicy policy = read_frontend_policy(type);
     if (found == frontend_policies.end()) {
-        // Held so the address cannot be reused by another type.
-        Py_INCREF(type);
+        on_type_collected(type, forget_frontend_policy);
         return frontend_policies.emplace(type, policy).first->second;
     }
     found->second = policy;
     return found->second;
 }
+
+// `type._frontend_result_type`, or `type` itself, as a new reference. Asked
+// for every native call made through a frontend tensor outside a frontend
+// scope -- and a type without the attribute answered with an AttributeError
+// whose message was formatted each time -- so it is kept per type, under the
+// same epoch as the policies, until the type is collected. A type that is its
+// own result type is not held by its entry (`type` is null).
+struct ResultType {
+    PyObject* type = nullptr;
+    uint64 epoch = 0;
+};
+unordered_map<PyObject*, ResultType> result_types;
+
+void forget_result_type(PyObject* type) {
+    auto found = result_types.find(type);
+    if (found == result_types.end()) return;
+    PyObject* held = found->second.type;
+    result_types.erase(found);
+    Py_XDECREF(held);
+}
+
+PyObject* frontend_result_type(PyObject* actual_type) {
+    auto found = result_types.find(actual_type);
+    if (found != result_types.end() && found->second.epoch == frontend_policy_epoch) {
+        PyObject* result_type = found->second.type ? found->second.type : actual_type;
+        Py_INCREF(result_type);
+        return result_type;
+    }
+    PyObject* result_type = PyObject_GetAttrString(actual_type, "_frontend_result_type");
+    if (!result_type) {
+        if (!PyErr_ExceptionMatches(PyExc_AttributeError))
+            throw std::runtime_error("cannot read tensor frontend result type");
+        PyErr_Clear();
+        result_type = actual_type;
+        Py_INCREF(result_type);
+    }
+    if (found == result_types.end()) {
+        try {
+            on_type_collected(actual_type, forget_result_type);
+        } catch (...) {
+            Py_DECREF(result_type);
+            throw;
+        }
+        found = result_types.emplace(actual_type, ResultType()).first;
+    }
+    PyObject* previous = found->second.type;
+    PyObject* held = result_type == actual_type ? nullptr : result_type;
+    Py_XINCREF(held);
+    found->second = {held, frontend_policy_epoch};
+    Py_XDECREF(previous);
+    return result_type;
+}
 } // namespace
 
 void invalidate_frontend_policies() { frontend_policy_epoch++; }
+
+bool frontend_precision_tiers(PyObject* type, int& matmul, int& cudnn) {
+    const FrontendPolicy& policy = frontend_policy(type);
+    if (!policy.has_precision) return false;
+    matmul = int(policy.matmul);
+    cudnn = int(policy.cudnn);
+    return true;
+}
 
 void PyTensorFrontendScope::apply_policy(PyObject* type, PyObject* candidate) {
     const FrontendPolicy policy = frontend_policy(type);

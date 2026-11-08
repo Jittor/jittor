@@ -35,7 +35,7 @@ BroadcastToOp::BroadcastToOp(Var* x, Var* y, NanoVector dims) : x(x), y(y) {
     for (auto dim : dims) {
         if (dim<0) dim += ydim;
         USER_CHECK(dim>=0 && dim<ydim) << "Wrong dims number:" << dims;
-        bcast_mask |= 1 << dim; 
+        bcast_mask |= 1u << dim; 
     }
 }
 
@@ -88,7 +88,7 @@ BroadcastToOp::BroadcastToOp(Var* x, NanoVector shape, NanoVector dims) : x(x), 
     for (auto dim : dims) {
         if (dim<0) dim += ydim;
         USER_CHECK(dim>=0 && dim<ydim) << "Wrong dims number:" << dims;
-        bcast_mask |= 1 << dim;
+        bcast_mask |= 1u << dim;
     }
 }
 
@@ -128,7 +128,7 @@ void BroadcastToOp::infer_shape() {
     auto zdim = std::max(uint64(xdim), uint64(ydim-count)) + count;
     
     #ifdef _WIN32
-    int64 zz[10];
+    int64 zz[NanoVector::max_tensor_rank];
     #else
     int64 zz[zdim];
     #endif
@@ -152,8 +152,7 @@ void BroadcastToOp::infer_shape() {
         } else {
             USER_CHECKop(xshape,==,yshape) << "Shape not match in broadcast_to at output dim " >> i
                 >> ": cannot broadcast x" << x->shape << "to" << yshapes
-                << "(conflicting sizes " >> xshape >> " vs " >> yshape
-                >> "; bcast_mask=" >> bcast_mask >> ").";
+                << "(conflicting sizes " >> xshape >> " vs " >> yshape >> ").";
             zs = xshape;
         }
         zz[i] = zs;
@@ -197,6 +196,9 @@ void BroadcastToOp::infer_shape() {
         set_type(OpType::broadcast);
     }
     z->set_flag(VarFlags::_is_scalar, x->flag(VarFlags::_is_scalar));
+    // Placement only: a broadcast of a constant is still a constant with no
+    // data anywhere. Promotion deliberately does not look at this bit.
+    z->set_flag(VarFlags::_is_constant, x->flag(VarFlags::_is_constant));
     LOGvvv << "Broadcast x(" >> x >> ") shape" << yshapes << "-> z(" >> z >> ")"; 
 }
 
@@ -206,7 +208,7 @@ void BroadcastToOp::jit_prepare(JK& jk) {
     // one-element form does generate code, and needs its key.
     if (!expand_is_view)
         jk << "«Tx:" << x->dtype()
-            << "«DIM=" << JK::hex1(z->shape.size())
+            << "«DIM=" << JK::hex(z->shape.size())
             << "«BCAST=" << JK::hex(bcast_mask);
 }
 

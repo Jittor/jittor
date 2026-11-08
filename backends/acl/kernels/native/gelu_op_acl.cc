@@ -35,20 +35,18 @@
 
 namespace jittor
 {
-    // The exact (erf) GELU. Jittor's portable definition is five elementwise
-    // ops -- half * x * (1 + erf(x * inv_sqrt2)) -- and the ACL fused path
-    // issues one aclnn launch per elementwise node, so a model that uses GELU
-    // paid five launches plus their gradients per activation.
+    // V2 names both public GELU algorithms explicitly. The portable formulas
+    // issue an ACL launch for each elementwise node rather than one GELU.
     GeluOpRunner::GeluOpRunner() : BaseOpRunner("Gelu")
     {
     }
 
     void GeluOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
-        // approximate 0 is the exact erf form, which is what jittor's
-        // approximate="none" means; aclnnGelu (v1) is the tanh approximation
-        // and disagrees with it by ~5e-4. aclnnGeluBackward is already exact.
-        ret = aclnnGeluV2GetWorkspaceSize(inputTensors[0], 0, outputTensors[0],
+        auto *attr = dynamic_cast<GeluAttr *>(op_attr.get());
+        const int64_t approximate = attr ? attr->approximate : 0;
+        CHECK(approximate == 0 || approximate == 1);
+        ret = aclnnGeluV2GetWorkspaceSize(inputTensors[0], approximate, outputTensors[0],
                                           &workspaceSize, &executor);
         launch(ret, aclnnGeluV2, true);
         return;
@@ -60,10 +58,14 @@ namespace jittor
 
     void GeluBackwardOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
-        // Same story as the forward: the v1 backward computes the tanh
-        // approximation, so name the exact form explicitly. The parameter is a
-        // non-const char*, hence the local buffer.
-        static char approximate[] = "none";
+        auto *attr = dynamic_cast<GeluAttr *>(op_attr.get());
+        const int64_t mode = attr ? attr->approximate : 0;
+        CHECK(mode == 0 || mode == 1);
+        // CANN's backward API takes a non-const string, unlike the integer
+        // enum used by its forward API. Each runner receives the same mode.
+        static char exact[] = "none";
+        static char tanh[] = "tanh";
+        char *approximate = mode ? tanh : exact;
         ret = aclnnGeluBackwardV2GetWorkspaceSize(inputTensors[0], inputTensors[1], approximate,
                                                   outputTensors[0], &workspaceSize, &executor);
         launch(ret, aclnnGeluBackwardV2, true);

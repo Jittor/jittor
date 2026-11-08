@@ -13,6 +13,7 @@ def _install_autograd(g, registry=None):
     autograd.no_grad = g.no_grad
     autograd.enable_grad = g.enable_grad
     autograd.Variable = g.Tensor
+    g.Tensor._execution_engine = api._Engine()
     for name in ("grad", "backward", "set_detect_anomaly", "detect_anomaly"):
         setattr(autograd, name, getattr(api, name))
     g.autograd = autograd
@@ -87,7 +88,7 @@ def install_parity(ctx):
         setattr(graph, name, getattr(api, name))
     autograd.graph = graph
     variable = ctx.registry.ensure("torch.autograd.variable")
-    variable.Variable = api.Variable
+    variable.Variable = ctx.jittor_module.Tensor
     autograd.variable = variable
     register_api_bindings(function, "torch.autograd.function", ("FunctionCtx",),
                           Fidelity.APPROXIMATE, "Saved tensor metadata shares native Function context semantics.")
@@ -96,4 +97,6 @@ def install_parity(ctx):
     register_api_bindings(graph, "torch.autograd.graph", ("saved_tensors_hooks", "save_on_cpu", "Node"),
                           Fidelity.UNIMPLEMENTED, "Metadata-only scopes; no saved-tensor packing or offload.")
     register_api_bindings(variable, "torch.autograd.variable", ("Variable",),
-                          Fidelity.UNIMPLEMENTED, "Legacy engine placeholder; queue_callback does not schedule work.")
+                          Fidelity.APPROXIMATE,
+                          "Tensor alias with graph-task final callbacks after native gradients "
+                          "are accumulated; no PyTorch worker-engine internals.")

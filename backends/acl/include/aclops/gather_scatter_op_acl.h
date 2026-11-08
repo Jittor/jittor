@@ -14,6 +14,16 @@ namespace jittor
         GatherOpRunner();
     };
 
+    class IndexCopyOpRunner : public BaseOpRunner
+    {
+
+    protected:
+        void executeOp(AclOpRegistry::const_iterator &it) override;
+
+    public:
+        IndexCopyOpRunner();
+    };
+
     class ScatterOpRunner : public BaseOpRunner
     {
 

@@ -215,6 +215,9 @@ print(matmul_transpose(a, b))
         assert out.shape == [2,1000]
 
     def test_argmax_memleak(self):
+        # Other tests can retain unrelated ops; this regression checks that
+        # argmax and its backward add no live ops after their references die.
+        live_ops_before = jt.introspection.counters.live_ops
         a = jt.random([10])
         _, m = jt.argmax(a, 0)
         del _
@@ -223,7 +226,7 @@ print(matmul_transpose(a, b))
         g.sync()
         del a, g, m
         jt.display_memory_info()
-        assert jt.introspection.counters.live_ops == 0
+        assert jt.introspection.counters.live_ops == live_ops_before
 
 
 if __name__ == "__main__":

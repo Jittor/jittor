@@ -1,6 +1,30 @@
 """Configured CPU bootstrap must never invoke CUDA discovery or installation."""
 
+from unittest import mock
+
 from _helpers.child_process import run_child_script
+
+
+def test_user_nvcc_flags_reach_backend_cuda_sources(tmp_path, monkeypatch):
+    """JT_BUILD_NVCC_FLAGS applies to a backend's .cu files as to the core's.
+
+    `compile_backend_sources` passed only the common flags on, so a flag the
+    user set for nvcc silently missed `nan_checker.cu` and the like.
+    """
+    import jittor as jt
+    from jittor_utils.build_config import BuildConfig, BuildSource
+    source = tmp_path / "probe.cu"
+    source.write_text("")
+    config = BuildConfig(cache_path=str(tmp_path), nvcc_path="nvcc",
+                         backend_sources=(BuildSource(str(source), language="cuda"),
+                                          BuildSource(str(source), language="cxx")))
+    monkeypatch.setenv("JT_BUILD_NVCC_FLAGS", "-DUSER_NVCC_FLAG_PROBE")
+    with mock.patch.object(jt.compiler.jit_utils, "run_cmds") as run_cmds:
+        jt.compiler.compile_backend_sources(config, "-DCOMMON")
+    cuda_command, cxx_command = run_cmds.call_args[0][0]
+    assert "-DUSER_NVCC_FLAG_PROBE" in cuda_command, cuda_command
+    assert "-DCOMMON" in cuda_command
+    assert "-DUSER_NVCC_FLAG_PROBE" not in cxx_command, cxx_command
 
 
 def test_explicit_cpu_import_skips_cuda_services(tmp_path):

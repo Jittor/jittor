@@ -4,12 +4,16 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
+#include <algorithm>
 #include <cmath>
 #include "core/var.h"
 #include "ops/composite/code_op.h"
+#include "ops/composite/code_source.h"
 #include "ops/op_register.h"
 #include "runtime/device.h"
 #include <mutex>
+#include <sstream>
+#include <cstring>
 #include <unordered_map>
 
 #define __inline_static__ inline static
@@ -110,7 +114,23 @@ void CodeOp::configure_grad() {
 }
 
 
+// Marks an op built by CodeOp::grad(s): its source is a user's gradient, and
+// nothing says how to differentiate that again.
+static const char* code_backward_key = "code_backward";
+
+static void reject_second_derivative(const DataMap& data) {
+    USER_CHECK(!data.count(code_backward_key))
+        << "jt.code: cannot differentiate a jt.code gradient again. Its "
+           "backward is the cpu_grad_src/cuda_grad_src source, and no rule "
+           "says how that source changes with its inputs, so a second "
+           "derivative through it (a Hessian, a gradient penalty, "
+           "jacfwd(grad(f))) used to come back as 0. Write the op as a "
+           "jt.Function whose grad() uses differentiable jittor ops to "
+           "differentiate it twice.";
+}
+
 VarPtr CodeOp::grad(Var* out, Var* dout, Var* v, int v_index) {
+    reject_second_derivative(data);
     // Do not have grad to extras input
     string cpu_src = v_index < cpu_grad_src.size() ? cpu_grad_src[v_index] : "";
     string cuda_src = v_index < cuda_grad_src.size() ? cuda_grad_src[v_index] : "";
@@ -129,17 +149,20 @@ VarPtr CodeOp::grad(Var* out, Var* dout, Var* v, int v_index) {
         inputs.push_back(_outputs[i]);
     }
     auto alias = new_alias.str();
+    DataMap gradient_data(data);
+    gradient_data[code_backward_key] = 1;
     return make_code(
         _inputs[v_index]->shape,
         _inputs[v_index]->dtype(),
         move(inputs),
         move(cpu_src), {}, alias+cpu_header,
         move(cuda_src), {}, alias+cuda_header,
-        DataMap(data), string(backend)
+        move(gradient_data), string(backend)
     );
 }
 
 void CodeOp::grads(Var** douts, VarPtr* dins) {
+    reject_second_derivative(data);
     string cpu_src = cpu_grad_src.size() ? cpu_grad_src[0] : "";
     string cuda_src = cuda_grad_src.size() ? cuda_grad_src[0] : "";
     if (!cpu_src.size() && !cuda_src.size())
@@ -195,6 +218,7 @@ void CodeOp::grads(Var** douts, VarPtr* dins) {
     gradient_data.erase("multi_grad");
     gradient_data.erase("multi_grad_output");
     gradient_data.erase("multi_grad_input_count");
+    gradient_data[code_backward_key] = 1;
     auto outputs = make_code_multi(
         move(shapes), move(dtypes), move(inputs),
         move(cpu_src), {}, alias+cpu_header,
@@ -214,22 +238,16 @@ void CodeOp::grads(Var** douts, VarPtr* dins) {
 // microsecond. The distinct sources are few (one per specialised kernel), so
 // remember the result. References into an unordered_map stay valid across
 // rehashes, and the lock only guards the map, not the walk's cost.
-static const string& code_op_key_tail(const string& header, const string& src) {
-    static std::mutex tail_lock;
-    static unordered_map<string, string> tails;
-    string key;
-    key.reserve(header.size() + src.size() + 1);
-    key += header;
-    key += '\1';
-    key += src;
-    std::lock_guard<std::mutex> guard(tail_lock);
-    auto found = tails.find(key);
-    if (found != tails.end())
-        return found->second;
+// The user's text is spliced into this file's template, so without a #line the
+// compiler reports its errors at a line of code_op.cc. Lines are counted from
+// the start of the string the user passed; the template text that follows each
+// piece is named as generated, not left to inherit the user's numbering.
+static string code_op_build_tail(const string& header, const string& src) {
     string tail;
-    tail.reserve(header.size() + src.size() + 32);
+    tail.reserve(header.size() + src.size() + 160);
+    tail += "#line 1 \"jt.code header\"\n";
     tail += header;
-    tail += "\nnamespace jittor {\n";
+    tail += "\nnamespace jittor {\n#line 1 \"jt.code source\"\n";
     size_t i = 0;
     // move cuda kernel function into header
     for (; i<src.size(); i++) {
@@ -250,9 +268,103 @@ static const string& code_op_key_tail(const string& header, const string& src) {
             }
         } else break;
     }
-    tail += "}«CODE:";
+    size_t code_line = 1 + std::count(src.begin(), src.begin() + i, '\n');
+    tail += "\n}\n#line 1 \"jt.code generated wrapper\"\n";
+    tail += "«CODE:#line " + S(code_line) + " \"jt.code source\"\n";
     for (; i<src.size(); i++) tail += src[i];
-    return tails.emplace(std::move(key), std::move(tail)).first->second;
+    return tail;
+}
+
+namespace {
+// The full digest names a source; it is computed once, the first time the
+// source is seen. Every launch after that finds its entry by a sampled key --
+// the two sizes and a few words spread over the text -- and confirms it with a
+// full comparison, which costs a fraction of digesting the text again: a 7.5 KB
+// cuBLASLt Linear source took ~1.3 us to digest on every launch, as much as the
+// rest of the launch. Sources that differ only between the samples share a key
+// and are told apart by the comparison, never mistaken for each other.
+inline void source_digest(const string& text, uint64& a, uint64& b) {
+    const unsigned char* p = (const unsigned char*)text.data();
+    size_t n = text.size(), i = 0;
+    uint64 l0 = a, l1 = b, l2 = a ^ 0x452821E638D01377ull, l3 = b ^ 0xBE5466CF34E90C6Cull;
+    for (; i + 32 <= n; i += 32) {
+        uint64 w0, w1, w2, w3;
+        memcpy(&w0, p + i, 8);
+        memcpy(&w1, p + i + 8, 8);
+        memcpy(&w2, p + i + 16, 8);
+        memcpy(&w3, p + i + 24, 8);
+        l0 = (l0 ^ w0) * 0x9E3779B97F4A7C15ull; l0 ^= l0 >> 29;
+        l1 = (l1 ^ w1) * 0xC2B2AE3D27D4EB4Full; l1 ^= l1 >> 31;
+        l2 = (l2 ^ w2) * 0x165667B19E3779F9ull; l2 ^= l2 >> 27;
+        l3 = (l3 ^ w3) * 0xD6E8FEB86659FD93ull; l3 ^= l3 >> 33;
+    }
+    for (; i + 8 <= n; i += 8) {
+        uint64 w;
+        memcpy(&w, p + i, 8);
+        l0 = (l0 ^ w) * 0x9E3779B97F4A7C15ull; l0 ^= l0 >> 29;
+    }
+    for (; i < n; i++)
+        l1 = (l1 ^ p[i]) * 0x100000001B3ull;
+    a = (l0 ^ (l2 >> 7) ^ (l3 << 11)) * 0x9E3779B97F4A7C15ull;
+    b = (l1 ^ (l3 >> 13) ^ (l2 << 5)) * 0xC2B2AE3D27D4EB4Full;
+    a ^= a >> 32; b ^= b >> 29;
+}
+
+inline uint64 sampled_key(const string& header, const string& src) {
+    uint64 key = header.size() * 0x9E3779B97F4A7C15ull ^ src.size();
+    for (const string* text : {&header, &src}) {
+        size_t n = text->size();
+        if (n < 8) {
+            for (unsigned char c : *text) key = (key ^ c) * 0x100000001B3ull;
+            continue;
+        }
+        const char* p = text->data();
+        for (int k = 0; k < 16; k++) {
+            uint64 w;
+            memcpy(&w, p + (n - 8) * k / 15, 8);
+            key = (key ^ w) * 0xC2B2AE3D27D4EB4Full;
+            key ^= key >> 31;
+        }
+    }
+    return key;
+}
+
+struct InternedSource {
+    string header, src, token, tail;
+};
+
+std::mutex interned_lock;
+std::unordered_multimap<uint64, InternedSource*> by_sample;
+unordered_map<string, InternedSource*> by_token;
+} // namespace
+
+const string& code_source_token(const string& header, const string& src) {
+    uint64 sample = sampled_key(header, src);
+    std::lock_guard<std::mutex> guard(interned_lock);
+    auto range = by_sample.equal_range(sample);
+    for (auto it = range.first; it != range.second; ++it)
+        if (it->second->src == src && it->second->header == header)
+            return it->second->token;
+    // First sight of this text: name it by its full digest and build its tail.
+    uint64 a = 0x243F6A8885A308D3ull ^ header.size(), b = 0x13198A2E03707344ull ^ src.size();
+    source_digest(header, a, b);
+    a ^= 0x1; b += 0x1;
+    source_digest(src, a, b);
+    auto* entry = new InternedSource{header, src, "", code_op_build_tail(header, src)};
+    std::stringstream token;
+    token << code_source_prefix << std::hex << a << '_' << b << '_' << std::dec << entry->tail.size();
+    entry->token = token.str();
+    int dup = 0;
+    while (by_token.count(entry->token)) entry->token = token.str() + "_" + std::to_string(++dup);
+    by_sample.emplace(sample, entry);
+    by_token.emplace(entry->token, entry);
+    return entry->token;
+}
+
+const string* code_source_tail(const string& token) {
+    std::lock_guard<std::mutex> guard(interned_lock);
+    auto found = by_token.find(token);
+    return found == by_token.end() ? nullptr : &found->second->tail;
 }
 
 void CodeOp::jit_prepare(JK& jk) {
@@ -277,14 +389,14 @@ void CodeOp::jit_prepare(JK& jk) {
     for (uint i=0; i<_inputs.size(); i++) {
         //LOGir<<JK::dec3(i);
         jk << "«in" << JK::dec3(i) << "_dim:"
-            << JK::hex1(_inputs[i]->shape.size());
+            << JK::dec(_inputs[i]->shape.size());
         jk << "«in" << JK::dec3(i) << "_type:"
             << _inputs[i]->dtype();
     }
     jk << "«OUT_SIZE:" << JK::dec3(_outputs.size());
     for (uint i=0; i<_outputs.size(); i++) {
         jk << "«out" << JK::dec3(i) << "_dim:"
-            << JK::hex1(_outputs[i]->shape.size());
+            << JK::dec(_outputs[i]->shape.size());
         jk << "«out" << JK::dec3(i) << "_type:"
             << _outputs[i]->dtype();
     }
@@ -294,7 +406,7 @@ void CodeOp::jit_prepare(JK& jk) {
         cuda_src : cpu_src;
 
     USER_CHECK(src.size()) << "code requires source for the selected backend";
-    jk << "«HEADER:" << code_op_key_tail(header, src);
+    jk << "«HEADER:" << code_source_token(header, src);
 }
 
 } // jittor
@@ -310,38 +422,13 @@ void CodeOp::jit_prepare(JK& jk) {
     @define(out@i@@_stride@{out@i@@_dim-1},1)
 )
 
-@define(ARGS_DEF, 
-@for(i, 0, IN_SIZE, @(
-    in@i@@_type* __restrict__ in@i@@_p,
-    @for(j, 0, in@i@@_dim, @(index_t in@i@@_shape@j,))
-))
-@for(i, 0, OUT_SIZE, @(
-    out@i@@_type* __restrict__ out@i@@_p,
-    @for(j, 0, out@i@@_dim, @(index_t out@i@@_shape@j,))
-))
-int __tmp
-)
+// One line each: they expand inside the user's source, and a newline in an
+// expansion would shift every line number reported after it.
+@define(ARGS_DEF, @for(i, 0, IN_SIZE, @( in@i@@_type* __restrict__ in@i@@_p, @for(j, 0, in@i@@_dim, @(index_t in@i@@_shape@j,)))) @for(i, 0, OUT_SIZE, @( out@i@@_type* __restrict__ out@i@@_p, @for(j, 0, out@i@@_dim, @(index_t out@i@@_shape@j,)))) int __tmp)
 
-@define(ARGS, 
-@for(i, 0, IN_SIZE, @(
-    in@i@@_p,
-    @for(j, 0, in@i@@_dim, @(in@i@@_shape@j,))
-))
-@for(i, 0, OUT_SIZE, @(
-    out@i@@_p,
-    @for(j, 0, out@i@@_dim, @(out@i@@_shape@j,))
-))
-0
-)
+@define(ARGS, @for(i, 0, IN_SIZE, @( in@i@@_p, @for(j, 0, in@i@@_dim, @(in@i@@_shape@j,)))) @for(i, 0, OUT_SIZE, @( out@i@@_p, @for(j, 0, out@i@@_dim, @(out@i@@_shape@j,)))) 0)
 
-@define(PRECALC,
-@for(i, 0, IN_SIZE,
-    @for(j, in@i@@_dim-2, -1, -1, auto in@i@@_stride@j = in@i@@_stride@{j+1} * in@i@@_shape@{j+1};)
-)
-@for(i, 0, OUT_SIZE,
-    @for(j, out@i@@_dim-2, -1, -1, auto out@i@@_stride@j = out@i@@_stride@{j+1} * out@i@@_shape@{j+1};)
-)
-)
+@define(PRECALC, @for(i, 0, IN_SIZE, @for(j, in@i@@_dim-2, -1, -1, auto in@i@@_stride@j = in@i@@_stride@{j+1} * in@i@@_shape@{j+1};)) @for(i, 0, OUT_SIZE, @for(j, out@i@@_dim-2, -1, -1, auto out@i@@_stride@j = out@i@@_stride@{j+1} * out@i@@_shape@{j+1};)))
 
 @alias(out, out0)
 #undef out

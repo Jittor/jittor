@@ -7,7 +7,9 @@ namespace jittor {
 namespace {
 
 bool pending_scalar(Var* value) {
-    return !value->is_finished() && value->flag(VarFlags::_is_scalar)
+    return !value->is_finished()
+        && (value->flag(VarFlags::_is_scalar)
+            || value->flag(VarFlags::_is_constant))
         && !value->flag(VarFlags::_placement_published);
 }
 

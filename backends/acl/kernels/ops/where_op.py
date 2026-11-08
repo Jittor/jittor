@@ -25,7 +25,14 @@ class NonzeroACL(jt.Function):
         attr_code = f"""
         op.jt_name = "nonzero";
         """
-        nonzero_cnt = (x != 0.0).sum().item()
+        # Count in int32: a bool sum keeps the bool dtype, so a tensor with
+        # more than one nonzero saturates at True and the output is shaped
+        # for a single row.
+        nonzero_cnt = (x != 0.0).int32().sum().item()
+        # CANN's Nonzero rejects a zero-row output, and there is nothing for
+        # it to write anyway.
+        if nonzero_cnt == 0:
+            return jt.empty((0, x.ndim), dtype="int64")
 
         result = where_cmd(
             "Nonzero",

@@ -1,8 +1,12 @@
 # 性能基准测试
 
+[本栏目目录](index.md) · [English](benchmarking.en.md)
+
 Jittor 用 ASV 0.6.6 保存按提交索引的耗时与内存结果。套件**刻意使用当前 Python 环境**
 （`--python=same`）：为每个历史提交新建环境的话，测到的主要是 Jittor 的编译与安装
 成本，而不是稳态运行性能。
+
+运行 ASV 前，先按[性能对比方法](comparison.md)对齐正确性、设备和精度。下文依次说明本地计时、缓存隔离、结果留存与 CI；需要定位开销来源时使用[性能分析](profiling.md)。
 
 ## 可靠的本地计时
 
@@ -66,24 +70,37 @@ ASV 启动一个已有环境时会清掉普通的 `PYTHONPATH`，所以 `ASV_PYT
 ```bash
 python -m pip install -r requirements/dev-tools.txt
 python -m nox -s benchmark -- \
-  --bench '^(operators|optimizer_step)\.'
+  --bench '^(operators|optimizer_step|convolution)\.'
 ```
 
 在打了标签、装好钉住版本 CUDA 基准依赖的 CUDA 主机上：
 
 ```bash
 python -m nox -s benchmark_cuda -- \
-  --bench '^(tiny_llama|optimizer_step)\.'
+  --bench '^(operators|optimizer_step|convolution|reductions|transfer|tiny_llama)\.'
 ```
 
 两个会话都执行完整的 ASV 流程：`check`、注册机器、对**确切的当前提交** `run` 并采样、
 与最近的缓存祖先（或显式的 `ASV_COMPARE_BASE`）`compare`，然后 `publish` HTML 报告。
 `ASV_COMPARE_FACTOR` 控制回归倍数，必须大于 1。首次运行会以自身为基线自举。
+
+Accelerate 的包装开销使用独立进程与缓存，按需运行：
+
+```bash
+# JITTOR_CI_PYTHON 指向已安装 ASV、NumPy 和 Accelerate 的解释器
+python -m nox -s benchmark_accelerate
+# 使用 CUDA 编译环境时，额外要求真实设备及 nvcc
+ASV_ACCELERATE_DEVICE=cuda python -m nox -s benchmark_accelerate
+```
+
+此入口默认仅选择 `accelerate_training`，比较同一 Jittor Torch 前端的直接训练与
+`Accelerator.prepare/backward` 包装；它不是与真实 PyTorch 的速度对照，不进入默认 CI。
+未安装依赖、前端激活失败或实际计算失败会直接报错。
 **只有结果 JSON 与 `index.html` 都存在，这次运行才算成功。**
 
 ## 生态对比
 
-`tests/compat/torch/test_ecosystem_parity.py` 与 `test_ecosystem_speed.py` 对比**两个
+`compat/tests/torch/test_ecosystem_parity.py` 与 `test_ecosystem_speed.py` 对比**两个
 独立进程**——Jittor 的和二进制 PyTorch 的。两个进程都必须在加载下游库之前拿到各自的
 `torch` 命名空间。
 
@@ -114,36 +131,26 @@ CUDA 参数抛出显式的 ASV skip。真实 PyTorch 是**可选的 oracle**，�
 ## 昇腾 NPU 的手工对照
 
 ASV 套件不覆盖昇腾。ACL 后端与同机 `torch + torch_npu` 的速度和数值对照放在
-[`bench/`](../../bench/README.md)：`bench_jittor.py` / `bench_torch.py` 跑同一组网络
-（规格见 [`bench/models.md`](../../bench/models.md)），`bench/xval/` 把 Jittor 的权重和
-输入灌进 torch 逐步比对 loss 与梯度，`bench/aclprobe/` 是绕开 Jittor 直接调 aclnn 的
+[`benchmarks/acl/`](https://github.com/Jittor/jittor/blob/2.0-refactor/benchmarks/acl/README.md)：`bench_jittor.py` / `bench_torch.py` 跑同一组网络
+（规格见 [`benchmarks/acl/models.md`](https://github.com/Jittor/jittor/blob/2.0-refactor/benchmarks/acl/models.md)），`benchmarks/acl/xval/` 把 Jittor 的权重和
+输入灌进 torch 逐步比对 loss 与梯度，`benchmarks/acl/probes/` 是绕开 Jittor 直接调 aclnn 的
 探针。这些都需要真实设备，**手工运行**，不进 CI，并且要与 ASV 用不同的编译缓存。
 
 那份 README 记录了在这台机器上量出来的三条陷阱：逐次 `sync()` 会把发射和执行串起来、
 A/B 之间重新编译会让先跑的一方系统性占优、`jt.profiler` 的 `TotalTime` 对小算子不可
-相加。长轨迹的数值偏离要先跑 `bench/xval/control_th.py` 的对照再下结论。
+相加。长轨迹的数值偏离要先跑 `benchmarks/acl/xval/control_th.py` 的对照再下结论。
 
 ## CPU 线程绑核
 
-任何 CPU 对比都要绑核。Jittor 与 PyTorch 默认都不设置 OpenMP affinity，在多核主机上
-调度器会在两次测量之间迁移线程：同一个 Jittor ViT 步在六次运行里测出
-`0.5555`~`0.7074s`——那是**相差 25% 的两个簇，不是一段离散**。设置
+两侧使用相同的线程数、亲和性和 CPU 配额。OpenMP 线程迁移会在代码不变时改变耗时，例如可以设置：
 
 ```bash
 export OMP_PROC_BIND=close
 export OMP_PLACES=cores
 ```
 
-后，四次运行收敛到 `0.5165`~`0.5195s`。绑核对**两个运行时**都值 `10`–`30%`，所以
-不绑核的对比可以把结论倒过来：某个扩散 UNet 不绑核读作 `0.90x`、绑核读作 `1.16x`，
-因为在那个模型上 PyTorch 从绑核中获益比 Jittor 更多。
+重复测量，报告中位数、离散度和亲和性设置。`/proc/stat` 表示实际活跃程度，不是可用配额；排查容器限制时查看 `/sys/fs/cgroup/cpu.max`。
 
-读 CPU 数字的人要记住两条推论：
-
-- **不绑核测出的比值不构成证据。** 两边都绑核、多次运行取中位数，并说明是哪种配置
-  产生的这个数字。
-- 用 `/proc/stat` 观察到的"核在忙"是负载**实际达到**的并行度，不是上限。在断言配额
-  限制了什么之前，先看 `/sys/fs/cgroup/cpu.max`。
 
 ## 记录选定的修订
 
@@ -152,16 +159,18 @@ export OMP_PLACES=cores
 
 ```bash
 commit=$(git rev-parse HEAD)
-asv --config benchmarks/asv.conf.json run --python=same --set-commit-hash "$commit"
+asv --config benchmarks/asv/asv.conf.json run --python=same --set-commit-hash "$commit"
 ```
 
 做对比时，建**一个专用的基准 worktree**，只把这个 worktree 切到那两三个被评审的修订，
 每次切换后运行上面的命令。保持相同的编译器、加速器、依赖版本、缓存预热策略和 ASV
 结果目录。**不要跑 `ALL` 或无界的修订区间。** 两个选定提交都有结果之后，用
-`asv --config benchmarks/asv.conf.json compare <base> <candidate>`。
+`asv --config benchmarks/asv/asv.conf.json compare <base> <candidate>`。
 
-这些直接命令要从仓库根目录运行。配置由 `benchmarks/` 拥有，其 `repo: ".."` 相对于
-配置文件解析，而 `benchmark_dir` 和输出目录相对于工作目录解析。维护中的
+这些直接命令要从仓库根目录运行。配置由 `benchmarks/asv/` 拥有，其 `repo: "../.."` 相对于
+配置文件解析；`benchmark_dir: "."` 与输出目录也相对于配置目录解析。源配置把默认
+输出放到仓库同级的 `jittor-lab/_state/asv/`；自定义 `JITTOR_LAB_ROOT` 时使用 nox 入口，
+由它生成相应的绝对状态路径。维护中的
 `nox -s benchmark` 入口会生成一份使用绝对仓库、基准和外部状态路径的配置，因此移动
 源配置不会把 CI 产物重定向进 checkout。
 
@@ -171,18 +180,31 @@ CPU 工作流在基线 CPU 容器里跑 `nox -s benchmark`：可用时恢复先�
 当前提交，比较并发布，然后保存更新后的结果缓存。原始 JSON 与生成的 HTML 作为留存的
 CI 产物一起上传。
 
+PR 与普通 push 选择 `operators`、`optimizer_step`、`convolution`；定时及手动运行还会选择
+`reductions`。大尺寸归约不增加每个 PR 的等待时间。
+
 **CUDA 基准刻意不作为 PR 门禁。** CUDA 工作流在其真实设备测试门禁之后，按周计划与
 手动触发运行 `nox -s benchmark_cuda`。它使用打了标签的 CUDA 12.2 RTX 4090 runner、
 独立的结果缓存，上传独立的 CUDA JSON/HTML 产物。这个节奏让加速器回归可见，又不必为
 每次源码推送占用专用硬件。
+CUDA 定时选择包括算子、卷积、优化器、归约、传输和 Tiny Llama。
 
-## 初始基准集
+## 当前基准集
 
 | ASV 模块 | 覆盖 | 参数 |
 | --- | --- | --- |
 | `operators` | matmul、softmax、LayerNorm、GELU | Jittor / 可选 torch；CPU/CUDA |
+| `convolution` | 标准 3×3、步长 2 的 1×1、depthwise 3×3；前向与前向+反向 | Jittor / 可选 torch；CPU/CUDA；严格 FP32 |
 | `tiny_llama` | LlamaModel 前向、前向+反向 | Jittor / 可选 torch；CUDA |
 | `optimizer_step` | 就绪梯度下 SGD 与 AdamW 步的规模伸缩 | 32/128/512 个张量；CPU/CUDA |
+| `reductions` | sum/max/min，含顺序敏感的输入模式 | 1M/16M/64M 元素；CPU/CUDA |
+| `transfer` | 主机↔设备拷贝、读取后的设备操作及峰值内存 | Jittor / 可选 torch；CUDA |
+| `accelerate_training` | 直接训练与 Accelerate 包装，8 步训练 | SGD/AdamW；CPU/CUDA；独立 opt-in 入口 |
+
+卷积 setup 在计时外，以独立 NumPy float64 参考验证整个前向张量，以及训练模式的输入、
+权重和 bias 梯度；计时包含实际计算与设备同步。卷积关闭 TF32，其他套件仍按其既有精度
+协议运行。设备不存在或可选 PyTorch 未安装可以 skip；已声明可用的设备发生编译、
+注册、执行错误，以及损坏的 PyTorch 安装，均属于失败，不能被转换成 skip。
 
 Tiny Llama 沿用既定配置：2 层、hidden 256、intermediate 768、8 个注意力头 / 4 个 KV
 头、batch 2、序列 128。它的 setup 会检查输出和每一个被请求的梯度是否有限且非零。

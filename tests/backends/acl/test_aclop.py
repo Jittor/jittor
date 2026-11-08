@@ -1,9 +1,34 @@
 
 from _helpers import capability as _test_capability
+import contextlib
+import functools
 import unittest
 import jittor as jt
 import numpy as np
 import time
+
+
+def _acl_supports_fp32_cube():
+    from jittor.backends.acl.kernels._soc import supports_fp32_cube
+    return supports_fp32_cube()
+
+
+def _fp32_cube_opt_in(func):
+    """Run FP32 matrix math under the explicit HF32 opt-in where the SoC
+    lacks a native FP32 cube path (Ascend310P), matching
+    ``torch.npu.matmul.allow_hf32`` semantics."""
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        scope = (
+            contextlib.nullcontext()
+            if _acl_supports_fp32_cube()
+            else jt.flag_scope(acl_allow_hf32=1)
+        )
+        with scope:
+            return func(*args, **kwargs)
+
+    return wrapper
 
 
 @unittest.skipIf(not _test_capability.check_accelerator('acl', backend=jt).enabled, "No ACL found")
@@ -288,6 +313,7 @@ class TestACL(unittest.TestCase):
         print("test transpose grad success")
 
     @jt.flag_scope(use_acl=1)
+    @_fp32_cube_opt_in
     def test_matmul_1(self):
         a = jt.arange(16).reshape(1, 4, 4).float()
         b = jt.arange(8).reshape(4, 2).float()
@@ -297,6 +323,7 @@ class TestACL(unittest.TestCase):
         print("test matmul_1 success")
 
     @jt.flag_scope(use_acl=1)
+    @_fp32_cube_opt_in
     def test_matmul_2(self):
         a = jt.arange(16).reshape(1, 4, 4).float()
         c = jt.arange(8).reshape(2, 4).float()
@@ -306,6 +333,7 @@ class TestACL(unittest.TestCase):
         print("test matmul_2 success")
 
     @jt.flag_scope(use_acl=1)
+    @_fp32_cube_opt_in
     def test_matmul_3(self):
         a = jt.arange(16).reshape(1, 4, 4).float()
         d = jt.arange(8).reshape(1, 2, 4).float()
@@ -315,6 +343,7 @@ class TestACL(unittest.TestCase):
         print("test matmul_3 success")
 
     @jt.flag_scope(use_acl=1)
+    @_fp32_cube_opt_in
     def test_matmul_4(self):
         a = jt.arange(16).reshape(1, 4, 4).float()
         e = jt.arange(8).reshape(1, 4, 2).float()
@@ -324,6 +353,7 @@ class TestACL(unittest.TestCase):
         print("test matmul_4 success")
 
     @jt.flag_scope(use_acl=1)
+    @_fp32_cube_opt_in
     def test_matmul_5(self):
         b = jt.arange(8).reshape(4, 2).float()
         c = jt.arange(8).reshape(2, 4).float()
@@ -334,6 +364,7 @@ class TestACL(unittest.TestCase):
         print("test matmul_5 success")
 
     @jt.flag_scope(use_acl=1)
+    @_fp32_cube_opt_in
     def test_matmul_6(self):
         b = jt.arange(8).reshape(4, 2).float()
         bb = jt.arange(8).reshape(4, 2).float()
@@ -344,6 +375,7 @@ class TestACL(unittest.TestCase):
         print("test matmul_6 success")
 
     @jt.flag_scope(use_acl=1)
+    @_fp32_cube_opt_in
     def test_grad_f_a(self):
         a = jt.arange(16).reshape(1, 4, 4).float()
         b = jt.arange(8).reshape(4, 2).float()
@@ -355,6 +387,7 @@ class TestACL(unittest.TestCase):
         print("test grad_f_a success")
 
     @jt.flag_scope(use_acl=1)
+    @_fp32_cube_opt_in
     def test_grad_f_b(self):
         a = jt.arange(16).reshape(1, 4, 4).float()
         b = jt.arange(8).reshape(4, 2).float()
@@ -365,6 +398,7 @@ class TestACL(unittest.TestCase):
         print("test grad_f_b success")
 
     @jt.flag_scope(use_acl=1)
+    @_fp32_cube_opt_in
     def test_grad_g_a(self):
         a = jt.arange(16).reshape(1, 4, 4).float()
         c = jt.arange(8).reshape(2, 4).float()
@@ -376,6 +410,7 @@ class TestACL(unittest.TestCase):
         print("test grad_g_a success")
 
     @jt.flag_scope(use_acl=1)
+    @_fp32_cube_opt_in
     def test_grad_g_c(self):
         a = jt.arange(16).reshape(1, 4, 4).float()
         c = jt.arange(8).reshape(2, 4).float()
@@ -386,6 +421,7 @@ class TestACL(unittest.TestCase):
         print("test grad_g_c success")
 
     @jt.flag_scope(use_acl=1)
+    @_fp32_cube_opt_in
     def test_grad_h_a(self):
         a = jt.arange(16).reshape(1, 4, 4).float()
         d = jt.arange(8).reshape(1, 2, 4).float()
@@ -397,6 +433,7 @@ class TestACL(unittest.TestCase):
         print("test grad_h_a success")
 
     @jt.flag_scope(use_acl=1)
+    @_fp32_cube_opt_in
     def test_grad_h_d(self):
         a = jt.arange(16).reshape(1, 4, 4).float()
         d = jt.arange(8).reshape(1, 2, 4).float()
@@ -407,6 +444,7 @@ class TestACL(unittest.TestCase):
         print("test grad_h_d success")
 
     @jt.flag_scope(use_acl=1)
+    @_fp32_cube_opt_in
     def test_grad_i_a(self):
         a = jt.arange(16).reshape(1, 4, 4).float()
         e = jt.arange(8).reshape(1, 4, 2).float()
@@ -418,6 +456,7 @@ class TestACL(unittest.TestCase):
         print("test grad_i_a success")
 
     @jt.flag_scope(use_acl=1)
+    @_fp32_cube_opt_in
     def test_grad_i_e(self):
         a = jt.arange(16).reshape(1, 4, 4).float()
         e = jt.arange(8).reshape(1, 4, 2).float()
@@ -428,6 +467,7 @@ class TestACL(unittest.TestCase):
         print("test grad_i_e success")
 
     @jt.flag_scope(use_acl=1)
+    @_fp32_cube_opt_in
     def test_grad_j_b(self):
         b = jt.arange(8).reshape(4, 2).float()
         c = jt.arange(8).reshape(2, 4).float()
@@ -438,6 +478,7 @@ class TestACL(unittest.TestCase):
         print("test grad_j_b success")
 
     @jt.flag_scope(use_acl=1)
+    @_fp32_cube_opt_in
     def test_grad_j_c(self):
         b = jt.arange(8).reshape(4, 2).float()
         c = jt.arange(8).reshape(2, 4).float()
@@ -448,6 +489,7 @@ class TestACL(unittest.TestCase):
         print("test grad_j_c success")
 
     @jt.flag_scope(use_acl=1)
+    @_fp32_cube_opt_in
     def test_grad_k_b(self):
         b = jt.arange(8).reshape(4, 2).float()
         bb = jt.arange(8).reshape(4, 2).float()
@@ -459,6 +501,7 @@ class TestACL(unittest.TestCase):
         print("test grad_k_b success")
 
     @jt.flag_scope(use_acl=1)
+    @_fp32_cube_opt_in
     def test_grad_k_bb(self):
         b = jt.arange(8).reshape(4, 2).float()
         bb = jt.arange(8).reshape(4, 2).float()
@@ -469,6 +512,7 @@ class TestACL(unittest.TestCase):
         print("test grad_k_bb success")
 
     @jt.flag_scope(use_acl=1)
+    @_fp32_cube_opt_in
     def test_bmm_matmul(self):
         a = jt.arange(16).reshape(1, 4, 4).float()
         b = jt.arange(8).reshape(1, 4, 2).float()
@@ -480,6 +524,7 @@ class TestACL(unittest.TestCase):
         print("test bmm_matmul success")
 
     @jt.flag_scope(use_acl=1)
+    @_fp32_cube_opt_in
     def test_bmm_transpose(self):
         a = jt.arange(16).reshape(1, 4, 4).float()
         c = jt.arange(8).reshape(1, 2, 4).float()
@@ -491,6 +536,7 @@ class TestACL(unittest.TestCase):
         print("test bmm_transpose success")
 
     @jt.flag_scope(use_acl=1)
+    @_fp32_cube_opt_in
     def test_bmm_grad_a(self):
         a = jt.arange(16).reshape(1, 4, 4).float()
         b = jt.arange(8).reshape(1, 4, 2).float()
@@ -503,6 +549,7 @@ class TestACL(unittest.TestCase):
         print("test bmm_grad_a success")
 
     @jt.flag_scope(use_acl=1)
+    @_fp32_cube_opt_in
     def test_bmm_grad_b(self):
         a = jt.arange(16).reshape(1, 4, 4).float()
         b = jt.arange(8).reshape(1, 4, 2).float()
@@ -515,6 +562,7 @@ class TestACL(unittest.TestCase):
         print("test bmm_grad_b success")
 
     @jt.flag_scope(use_acl=1)
+    @_fp32_cube_opt_in
     def test_bmm_transpose_grad_a(self):
         a = jt.arange(16).reshape(1, 4, 4).float()
         c = jt.arange(8).reshape(1, 2, 4).float()
@@ -527,6 +575,7 @@ class TestACL(unittest.TestCase):
         print("test bmm_transpose_grad_a success")
 
     @jt.flag_scope(use_acl=1)
+    @_fp32_cube_opt_in
     def test_bmm_transpose_grad_c(self):
         a = jt.arange(16).reshape(1, 4, 4).float()
         c = jt.arange(8).reshape(1, 2, 4).float()

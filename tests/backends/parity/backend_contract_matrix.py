@@ -95,7 +95,8 @@ def load_optional_libraries():
     stated cause".
     """
     outcome = {}
-    for name in LIBRARY_NAMES:
+    # BLAS is registered lazily but is not part of the legacy library aliases.
+    for name in (*LIBRARY_NAMES, "blas"):
         try:
             module = get_library(name, load=True)
         except BaseException as error:            # noqa: BLE001 - recorded below
@@ -381,15 +382,6 @@ def _probe_random(jt_):
     ], dtype="float32")
 
 
-def _probe_generator_randint(jt_):
-    # Explicit generators use the same Philox counter stream on CPU and CUDA.
-    # This range exercises rejection mapping and an odd final counter pair.
-    device = "cuda:0" if jt_.flags.use_cuda else "cpu"
-    generator = jt_.Generator(device).manual_seed(99)
-    return jt_.randint(-(1 << 63), 1, (129,), dtype="int64",
-                       generator=generator).numpy()
-
-
 def _probe_matmul(jt_):
     a = jt_.array(_fixed((16, 24)))
     b = jt_.array(_fixed((24, 12), 5.0))
@@ -400,6 +392,30 @@ def _probe_batched_matmul(jt_):
     a = jt_.array(_fixed((3, 16, 24)))
     b = jt_.array(_fixed((3, 24, 12), 5.0))
     return jt_.matmul(a, b).numpy()
+
+
+def _probe_blas_product(jt_, name, batch_shape):
+    import numpy as np
+
+    left = _fixed((*batch_shape, 16, 24)).astype("float64")
+    right = _fixed((*batch_shape, 24, 12), 5.0).astype("float64")
+    # Call the named CPU implementation, not dispatch that could select oneDNN
+    # or a generic product. Check an independent numerical reference because
+    # the CPU cell otherwise only checks that its oracle is finite.
+    ops = get_library("blas", load=True).ops
+    actual = getattr(ops, name)(
+        jt_.array(left, dtype="float64"), jt_.array(right, dtype="float64"),
+        False, False).numpy()
+    np.testing.assert_allclose(actual, np.matmul(left, right), rtol=1e-10, atol=1e-10)
+    return actual
+
+
+def _probe_blas_matmul(jt_):
+    return _probe_blas_product(jt_, "blas_matmul", ())
+
+
+def _probe_blas_batched_matmul(jt_):
+    return _probe_blas_product(jt_, "blas_batched_matmul", (3,))
 
 
 def _probe_conv2d(jt_):
@@ -443,6 +459,8 @@ PROBES = {
     "code": _probe_code,
     "copy": _probe_copy,
     "cub_cumsum": _probe_cumsum,
+    "blas_matmul": _probe_blas_matmul,
+    "blas_batched_matmul": _probe_blas_batched_matmul,
     "cublas_matmul": _probe_matmul,
     "mkl_matmul": _probe_matmul,
     "cublas_batched_matmul": _probe_batched_matmul,
@@ -454,7 +472,6 @@ PROBES = {
     "mkl_conv_backward_x": _probe_conv2d_backward,
     "mkl_conv_backward_w": _probe_conv2d_backward,
     "curand_random": _probe_random,
-    "generator_randint": _probe_generator_randint,
     "random": _probe_random,
     "cub_where": _probe_where,
     "where": _probe_where,
@@ -488,6 +505,14 @@ PROBES = {
 #: ``test_backend_contract_matrix.py`` fails on a declared operator that is in
 #: neither. "Not probed" is then a decision somebody wrote down, not the
 #: default state of anything new.
+#: Not part of the build: custom ops that tests/backends/cuda/test_cuda.py and
+#: tests/backends/rocm/test_rocm.py compile with ``jt.compile_custom_op``. They
+#: stay registered for the rest of the process, and the CUDA gate runs those
+#: files before the matrix in one process, so they appear only in that order.
+#: Kept out of UNPROBED_REASONS on purpose: an excuse must name an operator the
+#: registry always declares (``test_no_probe_or_excuse_is_dead_weight``).
+TEST_COMPILED_OPS = frozenset({"my_cuda", "no_cuda"})
+
 UNPROBED_REASONS = {
     # Multi-rank: a single-process matrix cannot form a communicator, and the
     # collectives have their own launcher-based gate (`nox -s mpi` / `nccl`).
@@ -506,6 +531,15 @@ UNPROBED_REASONS = {
     "mapped_matmul": "declared for the accelerator only "
                      "(`backend_mask = OpBackendAccelerator`) and executed by "
                      "the ACL backend's own op table; no ACL device here",
+    "mapped_concat": "declared for the accelerator only "
+                     "(`backend_mask = OpBackendAccelerator`) and executed by "
+                     "the ACL backend's own op table; no ACL device here",
+    "mapped_packed_matmul": "declared for the accelerator only "
+                            "(`backend_mask = OpBackendAccelerator`) and executed by "
+                            "the ACL backend's own op table; no ACL device here",
+    "mapped_rms_norm": "declared for the accelerator only "
+                       "(`backend_mask = OpBackendAccelerator`) and executed by "
+                       "the ACL backend's own op table; no ACL device here",
     # Library self-tests: these exist to prove a library links and are not
     # numerical contracts, so there is no cross-backend result to compare.
     "cub_test": "library link self-test, not a numerical contract",
@@ -529,11 +563,8 @@ UNPROBED_REASONS = {
     # cross-backend cell cannot be formed. Its own coverage is tests/ops/test_fft_op.py.
     "cufft_fft": "no declared CPU FFT to compare against; covered by tests/ops/test_fft_op.py",
     "fused_adamw": "fused optimizer step is compared by tests/optim, not by an op cell",
-    # Explicit-generator operations are stateful. randint uses the same Philox
-    # counter stream on CPU and CUDA and has a parity probe; randperm and uniform
-    # remain CPU-only. The Torch adapter also covers generator state/placement.
-    "generator_randperm": "explicit-generator randperm is CPU-only (`src/ops/composite/generator_randperm_op.cc`); CPU generator state and advancement are covered by the Torch factory fidelity tests",
-    "generator_uniform": "explicit-generator uniform is CPU-only (`src/ops/composite/generator_uniform_op.cc`); no CUDA cell is in the supported contract",
+    "write_back": "an in-place write into existing storage, stateful like fused_sgd; "
+                  "covered by compat/tests/torch/test_torch_compile_replay.py",
     # Graph plumbing with no standalone value: `tapes` is only reachable from a
     # multi-output custom gradient, which `tape` already exercises.
     "tapes": "only reachable through a multi-output custom gradient; `tape` covers the mechanism",

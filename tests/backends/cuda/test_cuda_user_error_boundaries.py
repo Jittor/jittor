@@ -264,7 +264,7 @@ class TestCurandBoundaries(CudaBoundaryCase):
         inside nvcc, at compile time, naming a generated file."""
         error = self.rejects(
             lambda: self.curand.curand_random((4, 4), "int32", "uniform"),
-            r"dtype == ns_float32 \|\| dtype == ns_float64")
+            r"curand_random supports float32 and float64 only, got int32")
         self.assertIn("Draw float32 and cast", str(error))
 
 

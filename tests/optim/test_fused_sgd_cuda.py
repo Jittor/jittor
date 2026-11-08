@@ -88,10 +88,10 @@ class TestFusedSgdCuda(unittest.TestCase):
                 np.testing.assert_array_equal(u, v)
 
     def test_a_parameter_list_longer_than_one_chunk(self):
-        # The argument struct bounds a launch, so a long list is split; the
+        # The argument table bounds a launch (`kTensors`, 48, in
+        # src/ops/composite/fused_sgd_op.cc), so a long list is split; the
         # split must not change the answer.
-        from jittor.backends.cuda.kernels.optim import fused_sgd_cuda
-        chunk = fused_sgd_cuda._CHUNK
+        chunk = 48
         model = nn.Sequential(*[nn.Linear(4, 4) for _ in range(chunk // 2 + 4)])
         self.assertGreater(len(list(model.parameters())), chunk)
         x = jt.array(np.ones((2, 4), dtype="float32"))
@@ -102,6 +102,42 @@ class TestFusedSgdCuda(unittest.TestCase):
         opt_f.step(loss)
         for p, s, g in zip(model.parameters(), start, grads):
             np.testing.assert_allclose(p.numpy(), s - 0.01 * g, rtol=1e-4, atol=1e-6)
+
+    def test_a_restored_optimizer_does_not_share_state_with_its_source(self):
+        # `load_state_dict` used to `clone()` the buffers, and a clone is a
+        # view of the same storage: the kernel writes velocities in place, so
+        # B, restored from A, and A then stepped each other's momentum.
+        def loss(w):
+            return ((w - 0.2) ** 2).sum()
+
+        def reference(x, steps):
+            buf = None
+            for _ in range(steps):
+                g = 2 * (x - 0.2)
+                buf = g.copy() if buf is None else 0.8 * buf + g
+                x = x - 0.06 * buf
+            return x, buf
+
+        a = jt.array(np.array([1.0, -0.5], "float32"))
+        opt_a = nn.SGD([a], lr=0.06, momentum=0.8)
+        for _ in range(2):
+            opt_a.step(loss(a))
+        b = jt.array(np.array([3.0, 2.0], "float32"))
+        opt_b = nn.SGD([b], lr=0.06, momentum=0.8)
+        opt_b.load_state_dict(opt_a.state_dict())
+        for _ in range(2):
+            opt_a.step(loss(a))
+            opt_b.step(loss(b))
+
+        _, buf_a = reference(np.array([1.0, -0.5]), 2)
+        expect_a, _ = reference(np.array([1.0, -0.5]), 4)
+        # B continues A's buffer from step 2 on its own parameter.
+        x, buf = np.array([3.0, 2.0]), buf_a
+        for _ in range(2):
+            buf = 0.8 * buf + 2 * (x - 0.2)
+            x = x - 0.06 * buf
+        np.testing.assert_allclose(a.numpy(), expect_a, rtol=1e-5, atol=1e-6)
+        np.testing.assert_allclose(b.numpy(), x, rtol=1e-5, atol=1e-6)
 
 
 if __name__ == "__main__":

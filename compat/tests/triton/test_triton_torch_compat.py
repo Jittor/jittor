@@ -72,12 +72,24 @@ def _define_kernels():
         num = tl.exp(x)
         tl.store(out_ptr + row * out_stride + cols, num / tl.sum(num, axis=0), mask=mask)
 
-    return add_kernel, matmul_kernel, softmax_kernel
+    @triton.jit
+    def increment_alias(out_ptr, x_ptr, n: tl.constexpr, BLOCK: tl.constexpr):
+        offsets = tl.arange(0, BLOCK)
+        value = tl.load(x_ptr + offsets, offsets < n, other=0)
+        tl.store(out_ptr + offsets, value + .25, offsets < n)
+
+    @triton.jit
+    def increment_unnamed(c_ptr, x_ptr, n: tl.constexpr, BLOCK: tl.constexpr):
+        offsets = tl.arange(0, BLOCK)
+        value = tl.load(x_ptr + offsets, offsets < n, other=0)
+        tl.store(c_ptr + offsets, value + .25, offsets < n)
+
+    return add_kernel, matmul_kernel, softmax_kernel, increment_alias, increment_unnamed
 
 
 def setUpModule():
     global _shim, torch, triton, tl
-    global add_kernel, matmul_kernel, softmax_kernel
+    global add_kernel, matmul_kernel, softmax_kernel, increment_alias, increment_unnamed
     if not _HAVE:
         return
     try:
@@ -94,7 +106,8 @@ def setUpModule():
     torch = torch_module
     triton = triton_module
     tl = language_module
-    add_kernel, matmul_kernel, softmax_kernel = _define_kernels()
+    (add_kernel, matmul_kernel, softmax_kernel,
+     increment_alias, increment_unnamed) = _define_kernels()
 
 
 def _cuda(t):
@@ -172,6 +185,36 @@ class TestTritonTorchCompat(unittest.TestCase):
         matmul_kernel[grid](a, b, c, M, N, K, K, 1, N, 1, N, 1,
                             BLOCK_M=BM, BLOCK_N=BN, BLOCK_K=BK)
         self.ac(c.numpy(), an @ bn, atol=1e-2, rtol=1e-3, msg="torch matmul")
+
+    def test_pointer_alias_preserves_inplace_writes(self):
+        from unittest.mock import patch
+        import os
+
+        # Exercise real guarded launches, regardless of a developer's guard
+        # opt-out. Both recognized and unknown output names must preserve aliasing.
+        with patch.dict(os.environ, {"JITTOR_TRITON_GUARD_ENABLE": "1",
+                                    "JITTOR_TRITON_COPY_BOUNCED_INPUTS_BACK": "1"}):
+            for dtype in (torch.float32, torch.bfloat16):
+                for kernel in (increment_alias, increment_unnamed):
+                    for mode in ("separate", "same-object", "same-storage-view", "offset-view"):
+                        with self.subTest(dtype=str(dtype), kernel=kernel.__name__, mode=mode):
+                            source = np.arange(17, dtype="float32") / 16
+                            parent = torch.tensor(source, device="cuda", dtype=dtype)
+                            value = parent[:16]
+                            if mode == "separate":
+                                output = torch.empty_like(value)
+                            elif mode == "same-object":
+                                output = value
+                            elif mode == "same-storage-view":
+                                output = value.view(16)
+                            else:
+                                output = parent[1:]
+                            kernel[(1,)](output, value, 16, BLOCK=32)
+                            torch.cuda.synchronize()
+                            np.testing.assert_array_equal(
+                                output.float().cpu().numpy(), source[:16] + .25)
+                            if mode == "separate":
+                                np.testing.assert_array_equal(value.float().cpu().numpy(), source[:16])
 
     def test_torch_softmax_2d(self):
         M, Ncols = 48, 333

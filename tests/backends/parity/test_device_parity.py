@@ -44,7 +44,9 @@ def _maybe_np(x):
 
 
 def _is_float_np(a):
-    return isinstance(a, np.ndarray) and a.dtype.kind == "f"
+    # Complex is floating point too: compared exactly, an FFT whose two
+    # backends round the last ulp differently read as a wrong kernel.
+    return isinstance(a, np.ndarray) and a.dtype.kind in "fc"
 
 
 def _normalize_outputs(out):
@@ -71,7 +73,7 @@ def _cuda_linalg_works():
     ``cupy unavailable`` skip is dishonest when cupy DOES work (it hides ops that pass
     AND would mask a real future CPU/CUDA linalg divergence) -- so probe once and skip
     only on a genuine failure, surfacing the real error as the reason. Probe CuPy
-    directly: a failed Jittor async op would remain queued and poison the next test.
+    directly: a failed Jittor async op would stay queued and keep failing when read.
     Materializing the result is required because ``jt.numpy_code`` is not executed by
     a plain Var ``sync()`` on this path."""
     if _ACCEL != "cuda":
@@ -239,6 +241,18 @@ class TestDeviceParity(JittorTestCase):
     # order leaves ~1e-6 -- legitimate reorder, not a kernel bug). PE_ATOL=1e-3 absorbs
     # that (floor = GRAD_PE_TOL*PE_ATOL = 5e-6 absolute, ~3x over the worst observed noise)
     # while still catching any drop/corruption of a coordinate above ~1e-3 in magnitude.
+    # One operator used to exceed GRAD_PE_TOL here and was a real kernel defect,
+    # not reorder noise: the fused float32 CUDA backward rebuilt the softmax row
+    # term as sum(dO * O) from the ROUNDED output, which loses the small Q/K
+    # gradient of a near-one-hot row (the max per-element rel was 6.80e-3
+    # before the backward reconstructed the row term from dP in float64).
+    # Recomputing that term from dP in float64, and scaling Q once as the forward
+    # does (4c722fee0), leaves the CUDA gradients ~1e-7 from a float64 oracle; the
+    # remaining CPU-vs-CUDA per-element difference on these samples (7.5e-4
+    # non-causal, 2.0e-3 causal) is the CPU composite's own float32 error, so no
+    # per-operator budget is needed.
+    # tests/backends/cuda/test_fused_attention_f32.py::
+    # test_nearly_saturated_probabilities_backward pins the fused kernel on them.
     FWD_TOL = 2e-4
     GRAD_TOL = 2e-3
     FWD_PE_TOL = 2e-3      # per-element relative, forward
@@ -257,13 +271,15 @@ class TestDeviceParity(JittorTestCase):
         # concurrency one.
         #
         # The mechanism, measured rather than assumed: a Var whose op failed to compile
-        # stays in the graph for as long as anything references it, and every later
-        # ``sync_all(True)`` re-raises that same failure. What holds the reference after
-        # a failed test is the exception's traceback -- the failing frame's locals. So
-        # the next operator's test really is blamed for this operator's kernel, and
-        # serialising the compiler never addressed that: it only made the first report
-        # arrive with a smaller fused op in it. ``_check`` below drops those frames, so
-        # the failure stays where it happened whether or not the compiler is parallel.
+        # stays in the graph for as long as anything references it, and *reading it*
+        # raises that same failure every time. A later whole-graph sync does not: it
+        # skips a failed bystander instead of retrying it ("Exclude failed bystanders
+        # from implicit execution", src/core/executor.cc), so the next operator's test
+        # is no longer blamed for this operator's kernel. The parallel compiler was
+        # never the cause; it only made the first report arrive with a smaller fused op
+        # in it. What holds the reference after a failed test is the exception's
+        # traceback -- the failing frame's locals -- and ``_check`` below drops those
+        # frames so the failed graph and its memory are released between operators.
         # ``tests/codegen/test_parallel_compile_attribution.py`` is the proof, on CPU.
         #
         # Probe only when this accelerator class actually runs. Collection must not
@@ -273,10 +289,12 @@ class TestDeviceParity(JittorTestCase):
     def _check(self, op, dtype="float32"):
         """One operator's parity check, with its runtime state contained.
 
-        A failure here must not travel: see ``setUpClass``. ``clear_frames`` releases
-        the Vars the failing frames hold (pytest keeps the traceback for the report),
-        so the poisoned op is collectable before the next test builds a graph. The
-        report keeps its message and line numbers; only ``--showlocals`` gets less.
+        A failure here must not leave a failed graph behind: see ``setUpClass``.
+        ``clear_frames`` releases the Vars the failing frames hold (pytest keeps the
+        traceback for the report), so the poisoned op and its memory are collectable
+        before the next operator builds a graph -- later syncs are already clean, this
+        is about not carrying the graph. The report keeps its message and line
+        numbers; only ``--showlocals`` gets less.
         """
         try:
             self._compare(op, dtype)

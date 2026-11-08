@@ -11,7 +11,6 @@
 namespace jittor {
 
 CudaManagedAllocator cuda_managed_allocator;
-DEFINE_FLAG(int, use_cuda_managed_allocator, 0, "Enable cuda_managed_allocator");
 
 const char* CudaManagedAllocator::name() const {return "cuda_managed";}
 

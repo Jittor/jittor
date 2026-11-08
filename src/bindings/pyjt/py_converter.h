@@ -19,6 +19,7 @@
 #include "utils/fast_shared_ptr.h"
 #include "runtime/profiler/simple_profiler.h"
 #include "runtime/dispatch_context.h"
+#include "runtime/async_exec.h"
 #ifdef HAS_ACCELERATOR
 #include "runtime/device.h"
 #include "runtime/backend.h"
@@ -432,6 +433,8 @@ DEF_IS(NanoVector, PyObject*) to_py_object(T a) {
     PyObjHolder obj(_PyObject_New(&PyjtNanoVector));
     auto ptr = GET_RAW_PTR(T, obj.obj);
     new (ptr) T(a);
+    // NanoVector declares __dealloc__ (a spilled vector owns heap storage).
+    GET_INITED_FLAG(T, 0, obj.obj) = 1;
     return obj.release();
 }
 
@@ -650,6 +653,7 @@ DEF_IS(VarHolder*, PyObject*) to_py_object(T a) {
     // will move and delete a
     new (ptr) typename std::remove_pointer<T>::type (a);
     GET_INITED_FLAG(typename std::remove_pointer<T>::type, 1, obj.obj) = 1;
+    bind_python_tensor_owner(obj.obj);
     schedule_pending_from_python(
         reinterpret_cast<typename std::remove_pointer<T>::type*>(ptr));
     return obj.release();
@@ -672,6 +676,30 @@ DEF_IS(VarHolder*, T) from_py_object(PyObject* obj, unique_ptr<VarHolder>& holde
             || PyComplex_Check(obj))
         mark_python_number(holder.get());
     return holder.get();
+}
+
+// RandomGenerator: lets RandomOp/CurandRandomOp accept a `jt.Generator`
+// instance directly as a constructor argument, the same way ops already
+// accept Var*/VarHolder* -- mirrors the VarHolder* converter immediately
+// above (a PyHeapTypeObject-backed heaptype whose C++ payload sits right
+// after the PyObject header, per GET_RAW_PTR), minus the array-coercion
+// fallback VarHolder's second overload provides (a Generator argument is
+// never optional/coercible from other Python types: either the caller
+// passed a real jt.Generator or they didn't).
+struct RandomGenerator;
+EXTERN_LIB PyHeapTypeObject PyjtRandomGenerator;
+
+DEF_IS(RandomGenerator*, bool) is_type(PyObject* obj) {
+    // None is accepted (and converts to nullptr below) so `generator=None`,
+    // the default at every Python call site, can be passed through
+    // explicitly rather than requiring the caller to omit the argument.
+    return obj == Py_None || PyObject_TypeCheck(obj, &PyjtRandomGenerator.ht_type);
+}
+
+DEF_IS(RandomGenerator*, T) from_py_object(PyObject* obj) {
+    if (obj == Py_None) return nullptr;
+    CHECK(PyObject_TypeCheck(obj, &PyjtRandomGenerator.ht_type));
+    return GET_RAW_PTR(RandomGenerator, obj);
 }
 
 struct DataView;
@@ -730,6 +758,10 @@ DEF_IS(ItemData, PyObject*) to_py_object(T a) {
         return PyLong_FromLongLong(a.data);
     if (a.dtype == ns_float64)
         return PyFloat_FromDouble(*(float64*)&a.data);
+    if (a.dtype == ns_complex64) {
+        const float32* parts = (const float32*)&a.data;
+        return PyComplex_FromDoubles(parts[0], parts[1]);
+    }
     if (a.dtype == ns_int16)
         return PyLong_FromLongLong((int64)*(int16*)&a.data);
     if (a.dtype == ns_int8)
@@ -744,6 +776,17 @@ DEF_IS(ItemData, PyObject*) to_py_object(T a) {
         return PyLong_FromUnsignedLongLong((uint64)*(uint32*)&a.data);
     if (a.dtype == ns_uint64)
         return PyLong_FromUnsignedLongLong(*(uint64*)&a.data);
+    // complex64/complex128 are a (real, imag) float32/float64 pair (see
+    // type/complex_compute.h); read the raw bytes directly rather than
+    // pulling in that codegen-only header here.
+    if (a.dtype == ns_complex64) {
+        auto* p = (float32*)&a.data;
+        return PyComplex_FromDoubles((float64)p[0], (float64)p[1]);
+    }
+    if (a.dtype == ns_complex128) {
+        auto* p = (float64*)a.bytes;
+        return PyComplex_FromDoubles(p[0], p[1]);
+    }
     ASSERT(a.dtype == ns_int64) << "Unhandled dtype in item():" << a.dtype;
     return PyLong_FromLongLong(a.data);
 }
@@ -1007,7 +1050,10 @@ DEF_IS(NumpyFunc, T) from_py_object(PyObject* obj) {
             #ifdef HAS_ACCELERATOR
             // CuPy is a CUDA interop detail, not a property of every
             // accelerator backend (ACL and ROCm use their own array bridges).
-            if (runtime_use_cuda() && accelerator_backend_id() == BackendId::Cuda)
+            // Where the operator runs, not the ambient `use_cuda`: a torch
+            // tensor placed on CUDA keeps its operators there under
+            // `use_cuda=0`, and numpy over its device memory is a segfault.
+            if (result->on_accelerator && accelerator_backend_id() == BackendId::Cuda)
                 npstr="cupy";
             #endif
 
@@ -1028,8 +1074,9 @@ DEF_IS(NumpyFunc, T) from_py_object(PyObject* obj) {
                     PyErr_Clear();
                     LOGf << "a numpy_code operator on CUDA needs CuPy, which is"
                          << "not installed. Install it, or run this operator"
-                         << "with use_cuda=0 -- the CPU path uses numpy and"
-                         << "needs nothing extra.";
+                         << "on the host (use_cuda=0, inputs not placed on"
+                         << "CUDA) -- the CPU path uses numpy and needs"
+                         << "nothing extra.";
                 }
             } else {
                 np.assign(PyImport_ImportModule(npstr.data()));
@@ -1122,11 +1169,18 @@ DEF_IS(GradCallback, T) from_py_object(PyObject* obj) {
         },
         // deleter
         [obj, frontend_type]() {
-            Py_DECREF(obj); 
-            Py_DECREF(frontend_type);
+            // The last owner of this callable may be a batch the
+            // async-execution worker is winding down, and that thread has no
+            // GIL; hand the two references back to the Python thread.
+            auto drop = [obj, frontend_type]() {
+                Py_DECREF(obj);
+                Py_DECREF(frontend_type);
+            };
+            if (!async_exec_defer_python_release(drop)) drop();
         }
     );
     frontend_owner.release();
+    func.python_callable = obj;
     return func;
 }
 
@@ -1241,5 +1295,10 @@ DEF_IS(VarSlices, T) from_py_object(PyObject* obj, vector<unique_ptr<VarHolder>>
 }
 
 EXTERN_LIB bool check_async_executor_error(const std::exception& e, std::ostream& os);
+// The Python exception class for a C++ exception, chosen by its type
+// (jittor.JittorIndexError for UserIndexError, ...). Defined in jit_utils.cc.
+EXTERN_LIB PyObject* python_error_class(const std::exception& e);
+// jittor.JittorTypeError: no overload accepts the arguments.
+EXTERN_LIB PyObject* python_type_error_class();
 
 } // jittor

@@ -43,6 +43,7 @@ struct FP16OpType : OpByType {
             {"abs", "::__habs($2)"},
             {"conj", "($2)"},   // conj(real) is identity (torch parity)
             {"log", "::hlog(($1)($2))"},
+            {"log1p", "(($1)::log1pf(float32($2)))"},
             {"exp", "::hexp(($1)($2))"},
             {"sqrt", "::hsqrt(($1)($2))"},
             // half-to-even, matching numpy/torch and the float32/float64
@@ -76,11 +77,13 @@ struct FP16OpType : OpByType {
             {"pow", "::pow(($2),($4))"},
             {"maximum", "::max($1($2), $1($4))"},
             {"minimum", "::min($1($2), $1($4))"},
-            {"mod", "$1(($2)-::hfloor(($2)/($4))*($4))"},
-            // Half floor division: divide, then floor. KI-OPS-003.
-            {"floor_divide", "$1(::hfloor(($1($2))/($1($4))))"},
-            {"init_maximum", "@if(@strcmp($1,float16)==0,-65000.0f,-1e38)"},
-            {"init_minimum", "@if(@strcmp($1,float16)==0,65000.0f,1e38)"},
+            // Half operands go through the float32 divmod
+            // (type/floor_divide_compute.h), then round once to half.
+            {"mod", "$1(jittor::_floor_mod_float((float)($2), (float)($4)))"},
+            {"fmod", "$1(jittor::_fmod_ieee((float)($2), (float)($4)))"},
+            {"floor_divide", "$1(jittor::_floor_divide_float((float)($2), (float)($4)))"},
+            {"init_maximum", "::numeric_min<float>()"},
+            {"init_minimum", "::numeric_max<float>()"},
             {"equal", "(($2)==($4))"},
         };
 
@@ -91,6 +94,7 @@ struct FP16OpType : OpByType {
             {"abs", "std::abs($2)"},
             {"conj", "($2)"},   // conj(real) is identity (torch parity)
             {"log", "std::log(($1)($2))"},
+            {"log1p", "(($1)std::log1p(float32($2)))"},
             {"exp", "std::exp(($1)($2))"},
             {"sqrt", "std::sqrt(($1)($2))"},
             {"round", "(($1)std::nearbyint(($2)))"},
@@ -128,9 +132,10 @@ struct FP16OpType : OpByType {
             // `jittor::max(float16, float16)` in `type/fp16_compute.h`.
             {"maximum", "jittor::_max<float32>(float32($2), float32($4))"},
             {"minimum", "jittor::_min<float32>(float32($2), float32($4))"},
-            {"mod", "$1(($2)-std::floor(($2)/($4))*($4))"},
-            {"floor_divide", "$1(std::floor(($1($2))/($1($4))))"},
-            // KI-OPS-012: an infinity, not a finite literal. `-32768.0f` is
+            {"mod", "$1(jittor::_floor_mod_float((float)($2), (float)($4)))"},
+            {"fmod", "$1(jittor::_fmod_ieee((float)($2), (float)($4)))"},
+            {"floor_divide", "$1(jittor::_floor_divide_float((float)($2), (float)($4)))"},
+            // An infinity, not a finite literal. `-32768.0f` is
             // *above* float16's lowest finite value (-65504), so `max` of a
             // tensor that is entirely -65504 -- an ordinary number, the edge of
             // the format -- answered -32768, a value that was not in its input.
@@ -179,6 +184,10 @@ struct FP16OpType : OpByType {
             {"init_bitwise_or", "$1(0)"},
             {"init_bitwise_xor", "$1(0)"},
             {"init_mean", "$1(0)"},
+            // Widened to float inside the helper; see type/fp_class_compute.h.
+            {"isnan", "jittor::_fp_isnan($2)"},
+            {"isinf", "jittor::_fp_isinf($2)"},
+            {"isfinite", "jittor::_fp_isfinite($2)"},
         };
 
         auto lookup = [](const unordered_map<string, string>& table,
@@ -197,22 +206,37 @@ struct FP16OpType : OpByType {
             if (args[1] == "float32" && !both_map.count(args.at(0))) {
                 ret = common_op_type_cuda_map[args.at(0)];
             }
-            if (args[1] == "float16" || 
-                args[1] == "bfloat16" || 
-                args[1] == "float32") 
-            {
-                for (int i=3; i<args.size(); i+=2) {
-                    if (args[i] != args[1]) {
-                        ret = replace(ret, "$"+S(i-1),
-                            args[1]+"($"+S(i-1)+")");
+            // A logical operation is defined on its operands' truth value, so
+            // neither the half conversion below nor a cast of the accumulator
+            // is needed: `&&`/`||`/`!=` already convert both sides to bool.
+            // Skipping this matters for a *bool* result (a floating-point
+            // logical reduction): the loop below compares each
+            // argument dtype with the result dtype and, because bool is not a
+            // half type, would rewrite the bool accumulator as
+            // `float16(yp)` -- which then no longer matches the reduction
+            // pattern in the parallel pass.
+            const bool logical_result =
+                args[1] == "bool" && (args.at(0) == "logical_and" ||
+                                      args.at(0) == "logical_or" ||
+                                      args.at(0) == "logical_xor");
+            if (!logical_result) {
+                if (args[1] == "float16" ||
+                    args[1] == "bfloat16" ||
+                    args[1] == "float32")
+                {
+                    for (int i=3; i<args.size(); i+=2) {
+                        if (args[i] != args[1]) {
+                            ret = replace(ret, "$"+S(i-1),
+                                args[1]+"($"+S(i-1)+")");
+                        }
                     }
-                }
-            } else {
-                string target = found_bf16 ? "bfloat16" : "float16";
-                for (int i=3; i<args.size(); i+=2) {
-                    if (args[i] != target) {
-                        ret = replace(ret, "$"+S(i-1),
-                            target+"($"+S(i-1)+")");
+                } else {
+                    string target = found_bf16 ? "bfloat16" : "float16";
+                    for (int i=3; i<args.size(); i+=2) {
+                        if (args[i] != target) {
+                            ret = replace(ret, "$"+S(i-1),
+                                target+"($"+S(i-1)+")");
+                        }
                     }
                 }
             }
@@ -243,8 +267,12 @@ struct FP16OpType : OpByType {
         // ever built, and the half kernel that would have been built instead
         // did not exist. The header is `#pragma once` and declares two
         // function templates.
+        // Half mod/fmod/floor_divide compute in float32 through
+        // type/floor_divide_compute.h (see this table's entries).
+        string divmod = src.find("jittor::_f") != string::npos
+            ? "#include \"type/floor_divide_compute.h\"\n" : "";
         src = src.substr(0, i) + "#include \"type/fp16_compute.h\"\n"
-            "#include \"type/minmax_compute.h\"\n" + 
+            "#include \"type/minmax_compute.h\"\n" + divmod +
             src.substr(i);
         return;
     }

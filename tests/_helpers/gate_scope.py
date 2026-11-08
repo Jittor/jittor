@@ -33,7 +33,7 @@ from _helpers.process_modes import TORCH_MODE_PATHS, NATIVE_MODE_PATHS
 
 #: The root every gate starts from.
 TEST_ROOT = "tests"
-TEST_ROOTS = (TEST_ROOT, "compat/tests", "adapters/tests")
+TEST_ROOTS = (TEST_ROOT, "compat/tests")
 
 #: ``(path, reason)`` -- a path no CPU gate runs, and why it cannot.
 #:
@@ -76,13 +76,13 @@ ENVIRONMENT_SKIP_PATTERNS = (
     # names around it).
     "cuda", "cudnn", "cublas", "cutt", "cusparse", "cufft", "curand",
     "nvcc",
-    "gpu", "accelerator", "acl", "npu", "ascend", "cann", "rocm", "hip",
+    "gpu", "nvidia", "accelerator", "acl", "npu", "ascend", "cann", "rocm", "hip",
     "triton",
     # an independent PyTorch build, which only the oracle sessions have.
     # Withdrawn when JITTOR_REQUIRE_REAL_TORCH=1 -- see REAL_TORCH_PATTERNS.
     "torch",
     # multi-rank launchers
-    "mpi", "nccl", "world size",
+    "mpi", "nccl", "world size", "launcher-owned store subgroup",
     # opt-in assets and probes
     "download", "dataset", "network", "manual probe",
     # Optional third-party libraries the shim is validated against. Absence is a
@@ -92,11 +92,20 @@ ENVIRONMENT_SKIP_PATTERNS = (
     # covered by accident; these did not, so a CPU-only session reported the
     # files as unexplained and the whole selection exited non-zero with every
     # test passing.
-    "tensordict", "mmcv", "mmengine",
+    "tensordict", "mmcv", "mmengine", "deepspeed", "trellis", "datatrove",
+    # The vLLM adapter tests bind the installed package when it is present and
+    # skip when it is not; the harness-only cases run without it either way.
+    "vllm",
+    # The safetensors format tests: the optional package is not installed.
+    "safetensors",
     # Facts about the *runner* rather than the machine's hardware: a case that
     # asserts directory permissions cannot hold when the suite runs as root,
     # because root bypasses them.
     "root ignores",
+    # A CPU without simultaneous multithreading: the OpenMP cases that limit a
+    # run to one thread per physical core have nothing to limit there
+    # (`tests/runtime/test_openmp_threads.py`).
+    "no smt",
     # A backend library the build has *switched off* -- `use_mkl=0`, or any other
     # policy that says no. The wording is jittor's own and templated over the
     # library (`python/jittor/_runtime/backend_libraries.py`: "%s has an
@@ -116,6 +125,11 @@ ENVIRONMENT_SKIP_PATTERNS = (
     # `tests/build/test_download_safety.py` loads the real MKL and skips when the
     # cache has none (`use_mkl=0` again).
     "mkl",
+    # Same shape, for the build stamps of custom op libraries
+    # (`tests/build/test_import_bootstrap_laziness.py`): on a CPU-only cache
+    # the only such library is MKL's, and a host without cmake (a fresh CI
+    # container, a compute node) cannot build oneDNN, so there is none.
+    "builds no custom op library",
     # The runner turns the crash handler's debugger off on purpose -- forking gdb
     # ptrace-stops the child, and a gdb that then dies leaves it stopped forever,
     # so `tests/_helpers/child_process.py` and `tools/run_test_suite.py` both
@@ -175,7 +189,7 @@ def _ignores(paths):
 #: Named through `python/jittor/compat`, the symlink a source checkout already
 #: relies on, the same files run: pytest finds `compat/pyproject.toml` as the
 #: inifile and the package is imported as `jittor.compat`, which is its name.
-#: `docs/development/test-system.md` has told people this for a while; the gate
+#: `docs/development/testing/test-system.md` has told people this for a while; the gate
 #: arguments themselves did not follow it.
 _COMPAT_LINK = "python/jittor/"
 
@@ -212,8 +226,12 @@ def native_arguments():
                            if child.name != "__pycache__")
         else:
             ignored.append(path)
-    return tuple(runnable(path) for path in TEST_ROOTS) \
-        + _ignores(tuple(sorted(ignored)) + excluded_paths())
+    # A root that owns Torch mode is named by that session, not this one: the
+    # mode is a property of the process, and pytest's policy refuses a path
+    # argument it owns even when an --ignore for the same path follows. Naming
+    roots = tuple(runnable(path) for path in TEST_ROOTS
+                  if path not in TORCH_MODE_PATHS)
+    return roots + _ignores(tuple(sorted(ignored)) + excluded_paths())
 
 
 def torch_arguments():

@@ -29,6 +29,7 @@ import jittor
 import jittor.nn as nn
 
 from _helpers.child_process import run_python_child
+from _helpers import vmap_state
 
 
 NN_ROOT = Path(nn.__file__).resolve().parent
@@ -222,6 +223,7 @@ _MODULE_API = (
     "LeakyReLU",
     "Leaky_relu",
     "Linear",
+    "LogSoftmax",
     "MSELoss",
     "MaxPool1d",
     "MaxPool2d",
@@ -477,13 +479,18 @@ class TestPublicBindings(unittest.TestCase):
     """Contracts users write against directly, none of which name a file."""
 
     def test_tensor_method_bindings_stay_on_public_functions(self):
+        if vmap_state.batching_patches_installed():
+            raise unittest.SkipTest(vmap_state.skip_reason())
         for name in ("matmul", "prelu", "hardswish", "hardsigmoid", "rrelu", "log_sigmoid"):
             with self.subTest(name=name):
                 self.assertIs(getattr(jittor.Var, name), getattr(nn, name))
         for name in ("softmax", "log_softmax", "logsumexp", "backward"):
             with self.subTest(compatibility_override=name):
                 self.assertTrue(callable(getattr(jittor.Var, name)))
-        self.assertIs(jittor.Var.__matmul__, nn.matmul)
+        # The operator is a thin guard over `nn.matmul`: it returns
+        # NotImplemented for a non-Var operand so the reflected method runs.
+        from jittor.nn import _bindings
+        self.assertIs(jittor.Var.__matmul__, _bindings._var_matmul)
         for name in ("real", "imag"):
             with self.subTest(complex_accessor=name):
                 self.assertIsInstance(getattr(jittor.Var, name), property)

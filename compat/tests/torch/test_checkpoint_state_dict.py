@@ -103,7 +103,7 @@ def test_adamw_initialized_optimizer_keeps_missing_parameter_state():
     assert set(saved["state"]) == {"weight"}
     if not hasattr(torch, "_torch_compat_install_context"):
         return  # Torch 2.6 DCP setter raises KeyError for its own missing state.
-    set_optimizer_state_dict(model, optimizer, saved)
+    set_optimizer_state_dict(model, optimizer, saved, options=StateDictOptions(strict=False))
     assert set(get_optimizer_state_dict(model, optimizer)["state"]) == {"weight"}
 
 
@@ -136,10 +136,21 @@ def test_non_strict_model_restore_reports_real_missing_and_unexpected_keys():
 @pytest.mark.skipif(not hasattr(torch, "_torch_compat_install_context"), reason="Jittor unsupported-boundary policy")
 def test_unimplemented_state_dict_options_are_not_silently_accepted():
     model, optimizer = model_and_optimizer()
-    with pytest.raises(NotImplementedError, match="flatten_optimizer_state_dict"):
-        get_optimizer_state_dict(model, optimizer, options=StateDictOptions(flatten_optimizer_state_dict=True))
-    with pytest.raises(NotImplementedError, match="prefix removal"):
-        get_model_state_dict(model, options=StateDictOptions(keep_submodule_prefixes=False))
+    update(model, optimizer)
+    before = clone_tree(get_optimizer_state_dict(model, optimizer))
+    flat = get_optimizer_state_dict(model, optimizer,
+        options=StateDictOptions(flatten_optimizer_state_dict=True))
+    assert "state" not in flat and any(key.startswith("state.") for key in flat)
+    optimizer.param_groups[0]["lr"] = .9
+    set_optimizer_state_dict(model, optimizer, flat)
+    restored = get_optimizer_state_dict(model, optimizer)
+    assert optimizer.param_groups[0]["lr"] == .01
+    np.testing.assert_array_equal(array(restored["state"]["weight"]["exp_avg"]),
+                                  array(before["state"]["weight"]["exp_avg"]))
+    parent = torch.nn.Sequential(model)
+    selected = get_model_state_dict(parent, submodules={model},
+        options=StateDictOptions(keep_submodule_prefixes=False))
+    assert set(selected) == {"weight", "bias"}
     with pytest.raises(ValueError, match="requires full_state_dict"):
         get_model_state_dict(model, options=StateDictOptions(broadcast_from_rank0=True))
 

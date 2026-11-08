@@ -79,6 +79,14 @@ struct HcclProcessGroupState {
 
 static vector<HcclProcessGroupState> hccl_process_groups;
 
+bool hccl_is_initialized() {
+    if (!hccl_inited || !world_comm || hccl_process_groups.empty())
+        return false;
+    const auto& group = hccl_process_groups[0];
+    return group.communicator == world_comm && group.local_rank >= 0
+        && group.local_rank < (int)group.ranks.size();
+}
+
 static HcclProcessGroupState& hccl_process_group(int group_id) {
     if (group_id < 0 || group_id >= (int)hccl_process_groups.size())
         LOGf << "HCCL process group" << group_id << "does not exist";

@@ -380,7 +380,10 @@ JIT_TEST(exec_plan_building_executes_nothing) {
         CHECK(var->mem_ptr == nullptr);
         CHECK(!var->is_finished());
     }
-    CHECKop(Op::number_of_lived_ops,==,ops_before);
+    // .load(): CHECKop streams both operands on failure, and streaming a
+    // std::atomic<int64> directly is ambiguous under libstdc++ 11 (see
+    // mem_info.cc's display_memory_info for the same fix).
+    CHECKop(Op::number_of_lived_ops.load(),==,ops_before);
     plan.epoch.reset();
 }
 
@@ -421,6 +424,66 @@ JIT_TEST(exec_plan_is_deterministic_for_the_same_graph) {
     CHECK(second.range == first_range);
     CHECK(second.var_fused == first_var_fused);
     second.epoch.reset();
+}
+
+// A batch of one operator skips the fusion phases (`build_exec_plan`), so its
+// plan is written out directly; it must still be the plan those phases make:
+// one segment holding the op, its output kept in memory.
+JIT_TEST(exec_plan_of_one_op_is_one_segment) {
+    NanoVector shape{64};
+    auto a = make_probe({}, shape, OpType::element);
+    vector<Var*> vars{a.ptr};
+    ExecPlan plan;
+    build_exec_plan(vars, false, plan);
+    check_all_properties(plan);
+    CHECKop(plan.op_num,==,1);
+    CHECK(plan.queue == vector<int>({0}));
+    CHECK(plan.fuse_ops == vector<int>({0}));
+    CHECK(plan.range == vector<int>({1}));
+    CHECKop(plan.var_fused.size(),==,plan.all_vars.size());
+    for (size_t i=0; i<plan.all_vars.size(); i++)
+        CHECKop(plan.var_fused[i],==,1);
+    plan.epoch.reset();
+}
+
+// The executor reuses a finished batch's plan, scratch and all, for the next
+// one (`ExecPlan::clear`). Planning a graph into a plan that held another
+// must decide exactly what a fresh plan decides.
+JIT_TEST(exec_plan_reused_for_another_graph_decides_the_same) {
+    NanoVector wide{64}, narrow{1};
+    auto a = make_probe({}, wide, OpType::element);
+    auto left = make_probe({a.ptr}, wide, OpType::element);
+    auto right = make_probe({a.ptr}, wide, OpType::element);
+    auto join = make_probe({left.ptr, right.ptr}, wide, OpType::element);
+    auto s = make_probe({}, wide, OpType::element);
+    auto reduced = make_probe({s.ptr}, narrow, OpType::reduce);
+    auto broadcast = make_probe({reduced.ptr}, wide, OpType::broadcast);
+    auto out = make_probe({broadcast.ptr, s.ptr}, wide, OpType::element);
+
+    vector<Var*> diamond{join.ptr}, reduce_graph{out.ptr};
+    ExecPlan fresh;
+    build_exec_plan(reduce_graph, false, fresh);
+    check_all_properties(fresh);
+    auto queue = fresh.queue;
+    auto fuse_ops = fresh.fuse_ops;
+    auto range = fresh.range;
+    auto var_fused = fresh.var_fused;
+    auto op_num = fresh.op_num;
+    fresh.epoch.reset();
+
+    ExecPlan reused;
+    build_exec_plan(diamond, false, reused);
+    check_all_properties(reused);
+    reused.epoch.reset();
+    reused.clear();
+    build_exec_plan(reduce_graph, false, reused);
+    check_all_properties(reused);
+    CHECKop(reused.op_num,==,op_num);
+    CHECK(reused.queue == queue);
+    CHECK(reused.fuse_ops == fuse_ops);
+    CHECK(reused.range == range);
+    CHECK(reused.var_fused == var_fused);
+    reused.epoch.reset();
 }
 
 // `start_var_num` is a claim about the *head* of `all_vars`: the vars the

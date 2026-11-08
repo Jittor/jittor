@@ -69,6 +69,16 @@ class _FamilyChecks(object):
         tensor = self._tensor(_DIVIDENDS)
         self._check(torch.remainder(tensor, -2.0), np.mod(_DIVIDENDS, -2.0),
                     "torch.remainder")
+    def test_remainder_function_form_takes_the_sign_of_the_divisor(self):
+        # PEFT's CPT prompt encoder calls the functional spelling
+        # (`torch.remainder(tensor, 4)`), which the shim only published as a
+        # Tensor method.
+        tensor = self._tensor(_DIVIDENDS)
+        reference = _DIVIDENDS.astype("float64")
+        for divisor in _DIVISORS:
+            self._check(torch.remainder(tensor, divisor),
+                        np.mod(reference, divisor),
+                        "torch.remainder({0})".format(divisor))
 
     def test_fmod_and_remainder_disagree_on_mixed_signs(self):
         """The guard against implementing one as the other."""
@@ -105,7 +115,7 @@ class _FamilyChecks(object):
                         "int floor_divide({0})".format(divisor))
 
     def test_float_floor_divide_matches_numpy(self):
-        """Float operands divide at full precision -- KI-OPS-003, fixed.
+        """Float operands divide at full precision (they used to be truncated first).
 
         This was a strict expected failure: `floor_divide` cast both operands
         to the integer output dtype before dividing, so `-2.7 // 2.0` was
@@ -138,7 +148,7 @@ class _FamilyChecks(object):
     def test_reducing_a_scalar_tensor(self):
         """Reducing over no dimensions returns the value, as PyTorch does.
 
-        This was a strict expected failure until 2026-09-10 (KI-OPS-004). The
+        This was a strict expected failure until 2026-09-10. The
         reduce kernel emitted `index_t ystride-1 = 1;` for a rank-0 input --
         `@{DIM-1}` with `DIM` zero -- so the generated source did not compile
         and `loss.sum()` on an already-scalar loss died on both devices.

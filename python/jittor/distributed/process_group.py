@@ -6,6 +6,16 @@ import re
 import jittor as jt
 
 
+def _jittor_error():
+    # process_group loads during jittor's own import, before jittor.JittorError
+    # is bound; resolve the typed error at call time, fall back to RuntimeError.
+    return getattr(jt, "JittorError", RuntimeError)
+
+
+def _jittor_type_error():
+    return getattr(jt, "JittorTypeError", TypeError)
+
+
 _STATE = {
     "initialized": False,
     "destroyed": False,
@@ -19,6 +29,33 @@ _STATE = {
     "default_group": None,
     "pg_map": {},
 }
+_STORE_GROUP_SEQUENCE = 0
+
+
+def _launcher_group_unique_id(module, ranks):
+    """Exchange subgroup identity without a shared filesystem or worker server."""
+    if os.environ.get('JITTOR_LAUNCHER_EXTERNAL_STORE', '0') == '0':
+        return None
+    from .store import external_launcher_store
+    store = external_launcher_store(timeout=float(os.environ.get('JT_RENDEZVOUS_TIMEOUT_S', '120')))
+    if store is None:
+        return None
+    global _STORE_GROUP_SEQUENCE
+    _STORE_GROUP_SEQUENCE += 1
+    prefix = 'jittor/nccl/groups/{}/'.format(_STORE_GROUP_SEQUENCE)
+    rank, world = _runtime_rank(), _runtime_world_size()
+    descriptor = ','.join(str(value) for value in ranks).encode('ascii')
+    try:
+        store.set(prefix + 'spec/{}'.format(rank), descriptor)
+        keys = [prefix + 'spec/{}'.format(peer) for peer in range(world)]
+        store.wait(keys)
+        if any(store.get(key) != descriptor for key in keys):
+            raise ValueError('NCCL subgroup rank order differs between WORLD participants')
+        if rank == ranks[0]:
+            store.set(prefix + 'unique_id', bytes(module.nccl_get_unique_id()))
+        return list(store.get(prefix + 'unique_id'))
+    finally:
+        store.close()
 
 
 def _ensure_nccl_rootinfo_env():
@@ -34,7 +71,7 @@ def _ensure_nccl_rootinfo_env():
         world_size = int(os.environ.get(
             "JT_NCCL_WORLD_SIZE", os.environ.get("WORLD_SIZE", "1")))
         if local_world_size != world_size:
-            raise RuntimeError(
+            raise _jittor_error()(
                 "multi-node NCCL process groups require "
                 "JITTOR_DIST_RENDEZVOUS_DIR or JT_NCCL_ROOTINFO_FILE")
         rendezvous_dir = "/tmp"
@@ -158,13 +195,13 @@ def get_device():
 def get_backend(group=None):
     """Return the active backend name, or fail before backend initialization."""
     if not is_initialized():
-        raise RuntimeError("distributed process group is not initialized")
+        raise _jittor_error()("distributed process group is not initialized")
     if group is not None:
         backend = getattr(group, "_backend_kind", None) or _default_backend_name()
     else:
         backend = _default_backend_name()
     if backend is None:
-        raise RuntimeError("distributed process group has no active backend")
+        raise _jittor_error()("distributed process group has no active backend")
     return str(backend).lower()
 
 
@@ -204,6 +241,8 @@ class ProcessGroup:
              getattr(compile_extern, "nccl_ops", None)),
             ("hccl", getattr(compile_extern, "hccl_mod", None),
              getattr(compile_extern, "hccl_ops", None)),
+            ("mpi", getattr(compile_extern, "mpi", None),
+             getattr(compile_extern, "mpi_ops", None)),
         )
         for kind, module, ops in choices:
             create = getattr(
@@ -213,6 +252,16 @@ class ProcessGroup:
                 continue
             from jittor_utils import lock as _jit_lock
             if kind == "nccl":
+                with _jit_lock.unlock_scope():
+                    unique_id = _launcher_group_unique_id(module, self.ranks)
+                    if unique_id is not None:
+                        create_with_id = getattr(module, 'nccl_create_process_group_with_unique_id', None)
+                        if not callable(create_with_id):
+                            raise NotImplementedError('NCCL backend lacks launcher Store subgroup initialization')
+                        handle = create_with_id(list(self.ranks), unique_id)
+                        self._backend_kind = kind
+                        self._backend_handle = int(handle)
+                        return
                 _ensure_nccl_rootinfo_env()
             with _jit_lock.unlock_scope():
                 handle = create(list(self.ranks))
@@ -221,7 +270,7 @@ class ProcessGroup:
             return
         if self.size() > 1:
             raise NotImplementedError(
-                "Jittor process-group subgroups require NCCL or HCCL"
+                "Jittor process-group subgroups require NCCL, HCCL or MPI"
             )
 
     def _collective_backend(self):
@@ -229,7 +278,7 @@ class ProcessGroup:
 
     def _collective_handle(self):
         if _STATE["destroyed"]:
-            raise RuntimeError(
+            raise _jittor_error()(
                 "distributed process group was destroyed; its backend "
                 "communicator remains owned by the worker until process exit")
         if self.rank() < 0:
@@ -237,7 +286,7 @@ class ProcessGroup:
         if self.size() <= 1:
             return self._backend_handle
         if self._backend_handle is None:
-            raise RuntimeError("process group has no backend communicator")
+            raise _jittor_error()("process group has no backend communicator")
         return self._backend_handle
 
     def all_reduce(self, tensor, op="mean"):
@@ -254,33 +303,55 @@ class ProcessGroup:
         backend = self._collective_backend()
         handle = self._collective_handle()
         if backend == "nccl":
-            if operation not in ("sum", "mean"):
-                raise NotImplementedError(
-                    "NCCL process-group all_reduce supports sum and mean only")
             ops = getattr(jt.compile_extern, "nccl_ops", None)
             if ops is None:
-                raise RuntimeError("NCCL process-group backend is unavailable")
-            result = ops.nccl_all_reduce(tensor, handle or 0)
-            return result / self.size() if operation == "mean" else result
+                raise _jittor_error()("NCCL process-group backend is unavailable")
+            if operation in ("sum", "mean"):
+                result = ops.nccl_all_reduce(tensor, handle or 0)
+                return result / self.size() if operation == "mean" else result
+            return self._all_reduce_from_gather(tensor, operation)
         if backend == "hccl":
             ops = getattr(jt.compile_extern, "hccl_ops", None)
             if ops is None:
-                raise RuntimeError("HCCL process-group backend is unavailable")
+                raise _jittor_error()("HCCL process-group backend is unavailable")
             reduce_op = {"mean": "sum", "product": "prod"}.get(
                 operation, operation)
             result = ops.hccl_all_reduce(tensor, reduce_op, handle or 0)
             return result / self.size() if operation == "mean" else result
-        if backend == "mpi" and self.ranks is None:
+        if backend == "mpi":
             if operation not in ("sum", "mean"):
-                raise NotImplementedError(
-                    "MPI process-group all_reduce supports sum and mean only")
+                return self._all_reduce_from_gather(tensor, operation)
+            if self.ranks is not None:
+                ops = getattr(jt.compile_extern, "mpi_ops", None)
+                if ops is None:
+                    raise _jittor_error()("MPI process-group backend is unavailable")
+                return ops.mpi_all_reduce(tensor, operation, handle)
             reducer = getattr(tensor, "mpi_all_reduce", None)
             if not callable(reducer):
-                raise RuntimeError("MPI all_reduce is unavailable for this tensor")
+                raise _jittor_error()("MPI all_reduce is unavailable for this tensor")
             return reducer(operation)
-        raise RuntimeError(
+        raise _jittor_error()(
             "process group has no {} all_reduce implementation".format(
                 backend or "active backend"))
+
+    def _all_reduce_from_gather(self, tensor, operation):
+        if tensor.requires_grad:
+            raise NotImplementedError(
+                "{} non-sum process-group reductions do not support autograd".format(
+                    self._collective_backend().upper()))
+        # NCCL/MPI provide SUM here. Their real group gather plus native
+        # elementwise operators implement an explicit non-SUM composite.
+        gathered = self.all_gather(tensor.reshape((-1,)))
+        gathered = gathered.reshape((self.size(),) + tuple(tensor.shape))
+        result = gathered[0]
+        for rank in range(1, self.size()):
+            if operation == "max":
+                result = jt.maximum(result, gathered[rank])
+            elif operation == "min":
+                result = jt.minimum(result, gathered[rank])
+            else:
+                result = result * gathered[rank]
+        return result
 
     def _all_reduce(self, tensor, reduce_name):
         """Backward-compatible private spelling used by the Torch installer."""
@@ -303,19 +374,24 @@ class ProcessGroup:
         if backend == "nccl":
             ops = getattr(jt.compile_extern, "nccl_ops", None)
             if ops is None:
-                raise RuntimeError("NCCL process-group backend is unavailable")
+                raise _jittor_error()("NCCL process-group backend is unavailable")
             return ops.nccl_broadcast(tensor, root, handle or 0)
         if backend == "hccl":
             ops = getattr(jt.compile_extern, "hccl_ops", None)
             if ops is None:
-                raise RuntimeError("HCCL process-group backend is unavailable")
+                raise _jittor_error()("HCCL process-group backend is unavailable")
             return ops.hccl_broadcast(tensor, root, handle or 0)
-        if backend == "mpi" and self.ranks is None:
+        if backend == "mpi":
+            if self.ranks is not None:
+                ops = getattr(jt.compile_extern, "mpi_ops", None)
+                if ops is None:
+                    raise _jittor_error()("MPI process-group backend is unavailable")
+                return ops.mpi_broadcast(tensor, root, handle)
             broadcaster = getattr(tensor, "mpi_broadcast", None)
             if not callable(broadcaster):
-                raise RuntimeError("MPI broadcast is unavailable for this tensor")
+                raise _jittor_error()("MPI broadcast is unavailable for this tensor")
             return broadcaster(source)
-        raise RuntimeError(
+        raise _jittor_error()(
             "process group has no {} broadcast implementation".format(
                 backend or "active backend"))
 
@@ -337,10 +413,13 @@ class ProcessGroup:
             gather = getattr(ops, "hccl_all_gather", None)
             if callable(gather):
                 return gather(tensor, handle or 0)
-        elif backend == "mpi" and self.ranks is None:
-            gather = getattr(tensor, "mpi_all_gather", None)
-            if callable(gather):
-                return gather()
+        elif backend == "mpi":
+            if self.ranks is None:
+                gather = getattr(tensor, "mpi_all_gather", None)
+                if callable(gather):
+                    return gather()
+            ranks = (range(get_world_size()) if self.ranks is None else self.ranks)
+            return jt.concat([self.broadcast(tensor, src=rank) for rank in ranks], dim=0)
         raise NotImplementedError(
             "{} process-group all_gather is unavailable".format(
                 backend or "active backend"))
@@ -374,17 +453,10 @@ class ProcessGroup:
             "{} process-group reduce_scatter is unavailable".format(
                 backend or "active backend"))
 
-    def barrier(self, device_id=None):
+    def barrier(self):
         if self.rank() < 0 or self.size() <= 1:
             return None
         marker = jt.array([self.rank()], dtype="int32")
-        backend = self._collective_backend()
-        if backend == "nccl":
-            marker = (marker.cuda(device_id) if device_id is not None
-                      else marker.cuda())
-        elif backend == "hccl":
-            marker = (marker.npu(device_id) if device_id is not None
-                      else marker.npu())
         self.all_reduce(marker, "sum").sync(device_sync=True)
         return None
 
@@ -481,7 +553,7 @@ def init_process_group(backend=None, init_method=None, timeout=None,
     its state through one native owner.
     """
     if _STATE["initialized"] and not _STATE["destroyed"]:
-        raise RuntimeError("distributed process group is already initialized")
+        raise _jittor_error()("distributed process group is already initialized")
     if store is not None and init_method is not None:
         raise ValueError("init_process_group accepts store or init_method, not both")
     if init_method is not None:
@@ -501,7 +573,7 @@ def init_process_group(backend=None, init_method=None, timeout=None,
         raise ValueError("rank {} is outside world size {}".format(
             requested_rank, requested_world))
     if requested_world > 1 and not _runtime_distributed():
-        raise RuntimeError(
+        raise _jittor_error()(
             "multi-rank initialization requires an active Jittor MPI, NCCL, "
             "or HCCL communicator; refusing to fall back to a singleton")
     active_backend = _runtime_backend()
@@ -510,26 +582,26 @@ def init_process_group(backend=None, init_method=None, timeout=None,
         backend_name = "mpi"
     if requested_world > 1:
         if active_backend is None:
-            raise RuntimeError(
+            raise _jittor_error()(
                 "distributed was requested but no collective backend is active")
         if backend_name is None:
-            raise RuntimeError("distributed process group has no selected backend")
+            raise _jittor_error()("distributed process group has no selected backend")
         ops_name = {"nccl": "nccl_ops", "hccl": "hccl_ops", "mpi": "mpi_ops"}.get(
             active_backend)
         if ops_name is None or getattr(jt.compile_extern, ops_name, None) is None:
-            raise RuntimeError(
+            raise _jittor_error()(
                 "distributed was requested with {} but its collective operators "
                 "are unavailable; refusing to fall back to a singleton".format(
                     active_backend))
     if (requested_world > 1 and active_backend is not None and backend_name is not None
             and not _backend_matches(backend_name, active_backend)):
-        raise RuntimeError(
+        raise _jittor_error()(
             "requested backend {} does not match active Jittor backend {}".format(
                 backend_name, active_backend))
     runtime_rank = _runtime_rank() if _runtime_distributed() else requested_rank
     runtime_world = _runtime_world_size() if _runtime_distributed() else requested_world
     if (runtime_world != requested_world or runtime_rank != requested_rank):
-        raise RuntimeError(
+        raise _jittor_error()(
             "requested rank/world {}/{} does not match active Jittor rank/world "
             "{}/{}".format(requested_rank, requested_world,
                            runtime_rank, runtime_world))
@@ -594,6 +666,23 @@ def all_reduce(tensor, op="mean", group=None, async_op=False):
     group = get_default_group() if group is None else group
     value = group.all_reduce(tensor, op)
     return Work(value) if async_op else value
+
+
+def _optimizer_legacy_collectives():
+    """Preserve MPI methods; route MPI-free optimizer sync to native owners.
+
+    Bootstrap selection belongs to this communication domain, rather than
+    optimizer arithmetic. Resolve the facade at call time so DDP and legacy
+    callers observe the same public collective instrumentation.
+    """
+    native = bool(jt.compile_extern._jt_nccl_no_mpi
+                  or jt.compile_extern._jt_hccl_no_mpi)
+    if native:
+        from jittor import distributed
+        return (lambda value: distributed.all_reduce(value, op="mean"),
+                lambda value: distributed.broadcast(value, src=0))
+    return (lambda value: value.mpi_all_reduce("mean"),
+            lambda value: value.mpi_broadcast())
 
 
 def broadcast(tensor, src=0, group=None, async_op=False):

@@ -17,24 +17,30 @@
 
 namespace jittor {
 
+EXTERN_LIB curandGenerator_t gen;
+curandGenerator_t curand_bind_stream();
 // @pyjt(curand_stream_bind_count)
 uint64 curand_stream_bind_count(int device);
 
-// @pyjt(get_rng_state)
-string curand_get_rng_state(int device);
-// @pyjt(validate_rng_state)
-void curand_validate_rng_state(const string& state);
-// @pyjt(set_rng_state)
-void curand_set_rng_state(int device, const string& state);
-// @pyjt(manual_seed)
-void curand_manual_seed(int device, uint64 seed);
-// @pyjt(initial_seed)
-uint64 curand_initial_seed(int device);
+// How far this device's generator has advanced since its last seed or restore,
+// in `curandSetGeneratorOffset` units. cuRAND will set an offset but not report
+// one, so a checkpoint has nothing to save unless jittor counts -- and a resume
+// that cannot restore the position restarts the sequence silently.
+void curand_advance(int device, int64 cost);
+// @pyjt(curand_generator_offset)
+int64 curand_generator_offset(int device);
+// @pyjt(curand_generator_seed)
+uint64 curand_generator_seed(int device=-1);
+// Seed *and* position, which is what a resume needs: seeding alone rewinds.
+// @pyjt(curand_restore_state)
+void curand_restore_state(int device, uint64 seed, int64 offset);
 
-// Reserve a disjoint range of 32-bit Philox words for one random operation.
-// Alignment is used by transforms (normal) that consume a whole block.
-void curand_reserve_philox_words(
-    uint64 words, uint64 alignment, uint64& seed, uint64& offset);
+// Reserve Philox positions for a CUDA extension from the checkpointed device
+// cursor. The host cuRAND generator is moved to the same resulting cursor, so
+// mixed native/extension histories can be restored with the existing state.
+// Returns [seed, first_offset]. The increment is rounded up to four positions.
+// @pyjt(curand_reserve_philox)
+vector<int64> curand_reserve_philox(int64 increment);
 
 // Destroys the generator, reporting a failure instead of raising. Idempotent.
 void curand_shutdown();

@@ -4,6 +4,69 @@ from ...grad import autocast_is_enabled
 from . import jt, np, dtype, _jittor_dtype_name, _dtype_to_str, _diff, _trapz, nn
 from .method_api import _ip
 
+
+def _torch_view_base(self):
+    return self._view_base_object()
+
+
+def _permutation_view(input, axes):
+    # This primitive asks for a physical view while constructing the native
+    # op under the GIL. No Python flag scope spans dispatch or lazy loading,
+    # and no intermediate AD target is removed by transpose composition.
+    result = input._storage_permute(jt.NanoVector(axes))
+    result._set_transpose_view_of(input, jt.NanoVector(axes))
+    return result
+
+
+def _torch_permute(input, *dims, **kwargs):
+    from jittor._core.var import _transpose_permutation
+    if kwargs:
+        if set(kwargs) != {'dims'} or dims:
+            raise TypeError('permute expects one dims sequence or positional dimensions')
+        dims = kwargs['dims']
+    elif len(dims) == 1 and isinstance(dims[0], (tuple, list, jt.NanoVector)):
+        dims = dims[0]
+    axes = _transpose_permutation(dims, input.ndim, input.shape)
+    return _permutation_view(input, axes)
+
+
+def _torch_transpose(input, *dims, **kwargs):
+    from jittor._core.var import _transpose_axis
+    if kwargs:
+        if set(kwargs) - {'dim0', 'dim1'} or len(dims) > 2:
+            raise TypeError('transpose expects dim0 and dim1')
+        values = dict(zip(('dim0', 'dim1'), dims))
+        if values.keys() & kwargs.keys():
+            raise TypeError('transpose received a dimension more than once')
+        values.update(kwargs)
+        if set(values) != {'dim0', 'dim1'}:
+            raise TypeError('transpose expects dim0 and dim1')
+        dims = (values['dim0'], values['dim1'])
+    # Native NN implementations also use the permutation spelling on Tensor
+    # inputs. Preserve that existing extension, through the same native view.
+    if not dims:
+        return _torch_permute(input, tuple(reversed(range(input.ndim))))
+    if len(dims) == 1 and isinstance(dims[0], (tuple, list, jt.NanoVector)):
+        return _torch_permute(input, dims[0])
+    if len(dims) > 2:
+        return _torch_permute(input, dims)
+    if len(dims) != 2:
+        raise TypeError('transpose expects dim0 and dim1')
+    ndim = input.ndim
+    first = _transpose_axis(dims[0], max(ndim, 1), 1)
+    second = _transpose_axis(dims[1], max(ndim, 1), 2)
+    axes = list(range(ndim))
+    if ndim:
+        axes[first], axes[second] = axes[second], axes[first]
+    return _permutation_view(input, axes)
+
+
+def _torch_t(input):
+    if input.ndim > 2:
+        raise RuntimeError('t() expects a tensor with <= 2 dimensions')
+    axes = (1, 0) if input.ndim == 2 else tuple(range(input.ndim))
+    return _permutation_view(input, axes)
+
 def _torch_size(self, dim=None):
     _context = get_install_context(jt)
     _native = _context.state["tensor_shape_api"]
@@ -43,14 +106,34 @@ def _bitcast(self, dt):
     reinterpret_view = getattr(jt, "reinterpret_view", None)
     npd = _np_view_of.get(ds, _np.uint8)
     if reinterpret_view is not None and ds in _np_view_of:
-        return reinterpret_view(self, shape, ds)
+        result = reinterpret_view(self, shape, ds)
+        return result._set_dtype_view_of(self)
     return jt.array(_np.ascontiguousarray(self.numpy()).view(npd))
 
 
+#: `src/bindings/pyjt/py_compat_fast.h`'s `_fast_view`, once the tensor
+#: installer has bound it: a dense tensor reshaped by integer sizes, without
+#: the frames. None answers for everything else.
+_FAST_VIEW = None
+
+
 def _torch_reshape(self, *shape, **_kw):
+    return _reshape_or_view(self, shape, _kw, allow_copy=True)
+
+
+def _torch_view(self, *shape, **_kw):
+    return _reshape_or_view(self, shape, _kw, allow_copy=False)
+
+
+def _reshape_or_view(self, shape, _kw, *, allow_copy):
+    if not _kw and _FAST_VIEW is not None:
+        out = _FAST_VIEW(self, shape)
+        if out is not None:
+            return out
     # torch's `.view(dtype)` / `.view(dtype=...)` REINTERPRETS the bytes as
     # another dtype (bitcast), e.g. weight.view(torch.uint8) for byte-packing
-    # in vLLM weight transfer. jittor has no dtype-view; bitcast via numpy.
+    # in vLLM weight transfer. The native reinterpret_view preserves the byte
+    # storage and rescales valid non-contiguous strides into the new dtype.
     # (NB: 'dtype' the kwarg must not shadow the `dtype` class used below.)
     _context = get_install_context(jt)
     _native = _context.state["tensor_shape_api"]
@@ -77,9 +160,16 @@ def _torch_reshape(self, *shape, **_kw):
         # native reshape implements only the view half, so a non-contiguous
         # input -- a permuted tensor, or the transposed layout `repeat` builds
         # -- has to be materialized before the view can be taken.
-        if "call contiguous() first" not in str(error):
+        if not allow_copy or "call contiguous() first" not in str(error):
             raise
-    return _orig_reshape(self.contiguous(), *shape)
+    # This allocation is a copy boundary, not a public view of a hidden
+    # Python temporary. Build the same native reshape producer directly;
+    # the graph owns the contiguous input and its real backward edge.
+    target = shape
+    if len(target) == 1 and isinstance(target[0], (tuple, list, jt.NanoVector)):
+        target = target[0]
+    target = tuple(int(s.item()) if isinstance(s, jt.Var) else int(s) for s in target)
+    return jt.ops.reshape(self.contiguous(), target)
 
 
 def _norm_reduce_kw(a, k):
@@ -131,11 +221,37 @@ def _torch_var_sum(self, *a, **k):
     if dt is None and len(a) >= 1 and _looks_like_dtype(a[0]):
         dt = a[0]
         a = a[1:]
+    if out is not None:
+        if dt is not None and _dtype_to_str(dt) != _jittor_dtype_name(out.dtype):
+            raise RuntimeError("sum(): dtype must match the dtype of out")
+        if dt is None:
+            dt = out.dtype
+    if dt is None and _jittor_dtype_name(self.dtype) in (
+            "bool", "uint8", "int8", "uint16", "int16", "uint32", "int32", "uint64"):
+        dt = "int64"
     if dt is not None:
         self = self.cast(_dtype_to_str(dt))
     elif _jittor_dtype_name(self.dtype) in ("uint8", "int8", "uint16"):
         self = self.int32()
+    if self.ndim == 0 and ("dim" in k or "dims" in k):
+        # Torch accepts dim 0/-1 on a scalar (it is the only axis); jittor's
+        # reduce rejects every dim on a 0-D Var. torchmetrics reduces 0-D
+        # statistics this way.
+        requested = k.get("dim", k.get("dims"))
+        dims = (requested if isinstance(requested, (tuple, list))
+                else (requested,))
+        if all(int(dim) in (0, -1) for dim in dims):
+            result = self.reshape((1,)) if k.get("keepdims") else self
+            if out is not None:
+                out.assign(result)
+                return out
+            return result
+        raise IndexError(
+            "Dimension out of range (expected to be in range of [-1, 0], "
+            "but got %d)" % int(dims[0]))
     result = _orig_var_sum(self, *a, **k)
+    if dt is not None and _jittor_dtype_name(result.dtype) != _dtype_to_str(dt):
+        result = result.cast(_dtype_to_str(dt))
     if out is not None:
         out.assign(result)
         return out
@@ -153,6 +269,9 @@ def _torch_sum(input, *a, **k):
 
 
 def _index_add_inplace(self, dim, index, source, *, alpha=1):
+    # Through the Tensor in-place owner, not the native `index_add_`: that one
+    # assigns without the requires-grad bookkeeping, so the written sources
+    # dropped out of the graph whenever the target did not already require grad.
     if alpha != 1:
         source = source * alpha
     return _ip(self, self.index_add(dim, index, source))
@@ -165,30 +284,14 @@ def _plain_reduce(name, self, *a, **k):
     return orig(self, *a, **k)
 
 
-def _anyall_reduce(name, self, *a, **k):
+def _anyall_reduce(name, self, dim=None, keepdim=False, *, axis=None,
+                   dims=None, keepdims=None):
+    from ..numerical.reductions import _reduce_alias
+
     orig = get_install_context(jt).state["tensor_shape_api"]["reductions"][name]
-    d = None
-    if "axis" in k:
-        d = k.pop("axis")
-    if "dim" in k:
-        d = k.pop("dim")
-    if "dims" in k:
-        d = k.pop("dims")
-    if d is None and len(a) >= 1 and isinstance(a[0], (tuple, list)):
-        d = a[0]
-        a = a[1:]
-    keep = k.pop("keepdim", k.pop("keepdims", None))
-    if d is None:
-        return orig(self, *a, **k)
-    dims = [int(x) for x in d] if isinstance(d, (tuple, list)) else [int(d)]
-    ndim = self.ndim
-    dims = sorted((x % ndim for x in dims), reverse=True)
-    out = self
-    for ax in dims:
-        out = orig(out, dim=ax)
-        if keep:
-            out = out.unsqueeze(ax)
-    return out
+    if dims is not None:
+        dim = dims
+    return _reduce_alias(orig, self, dim, keepdim, axis=axis, keepdims=keepdims)
 
 
 def _axis_reduce(name, self, *a, **k):
@@ -320,7 +423,8 @@ def _shape_expm1(self):
 
 
 def _shape_log1p(self):
-    return jt.log(self + 1)
+    from ..numerical.elementwise import log1p
+    return log1p(self)
 
 
 def _shape_square(self):
@@ -375,19 +479,17 @@ def _shape_trapezoid(self, x=None, dx=1, dim=-1):
 def _shape_fmod(self, other):
     # Truncated remainder: the result takes the sign of the dividend, which is
     # what separates `fmod` from `remainder` (floored, sign of the divisor).
-    #
-    # `jt.trunc` does not exist -- `trunc` is installed onto the Torch namespace
-    # by `core.install_misc`, not onto the Jittor one -- so calling it raised
-    # `AttributeError: trunc` for every input and `fmod` never worked. Build the
-    # truncation from primitives Jittor does own instead of reaching for a name
-    # whose owner is a different namespace.
-    quotient = self / other
-    truncated = jt.ternary(quotient >= 0, jt.floor(quotient), jt.ceil(quotient))
-    return self - truncated * other
+    # Only reached when the native `Var.fmod` binding is absent; jittor's own
+    # `fmod` computes it exactly (C fmod), where `self - trunc(self / other) *
+    # other` rounded the quotient first (fmod(1, 0.1) came out 0) and turned a
+    # finite dividend over an infinite divisor into 0 * inf = NaN.
+    return jt.fmod(self, other)
 
 
 def _shape_remainder(self, other):
-    return self - jt.floor(self / other) * other
+    # jittor's `%` is the floored remainder with the corrected quotient,
+    # signed zeros and infinite divisors of torch.remainder / numpy.mod.
+    return self % other
 
 
 def _shape_softplus(self, beta=1, threshold=20):

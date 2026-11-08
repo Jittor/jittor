@@ -17,16 +17,18 @@ ReinterpretViewOp::ReinterpretViewOp(Var* x, NanoVector shape, NanoString dtype)
     set_flag(OpFlags::_cuda);
     set_flag(OpFlags::_manual_set_vnbb);
     USER_CHECK(dtype.is_dtype()) << "reinterpret_view expects dtype, got" << dtype;
-    USER_CHECK(x->is_contiguous())
-        << "reinterpret_view requires contiguous storage; call contiguous() explicitly";
     USER_CHECK(x->storage_offset_bytes % dtype.dsize() == 0)
         << "reinterpret_view requires an aligned storage offset";
     y = create_output(nullptr, dtype);
 }
 
 VarPtr ReinterpretViewOp::grad(Var* out, Var* dout, Var* v, int v_index) {
-    if (!((x->dtype() == ns_complex64 && dtype == ns_float32) ||
-          (x->dtype() == ns_float32 && dtype == ns_complex64)))
+    bool is_complex_pair =
+        (x->dtype() == ns_complex64 && dtype == ns_float32) ||
+        (x->dtype() == ns_float32 && dtype == ns_complex64) ||
+        (x->dtype() == ns_complex128 && dtype == ns_float64) ||
+        (x->dtype() == ns_float64 && dtype == ns_complex128);
+    if (!is_complex_pair)
         return nullptr;
     auto dense = contiguous_storage(dout);
     return make_reinterpret_view(dense.ptr, x->shape, x->dtype());
@@ -61,9 +63,48 @@ void ReinterpretViewOp::infer_shape() {
     if (x->dtype() == ns_complex64) {
         USER_CHECK(dtype == ns_float32 && yshape.size() && yshape[yshape.size()-1] == 2)
             << "complex64 -> float32 reinterpret_view requires target shape [..., 2]";
+    } else if (x->dtype() == ns_complex128) {
+        USER_CHECK(dtype == ns_float64 && yshape.size() && yshape[yshape.size()-1] == 2)
+            << "complex128 -> float64 reinterpret_view requires target shape [..., 2]";
     } else if (dtype == ns_complex64) {
         USER_CHECK(x->dtype() == ns_float32 && x->shape.size() && x->shape[x->shape.size()-1] == 2)
             << "float32 -> complex64 reinterpret_view requires input shape [..., 2]";
+    } else if (dtype == ns_complex128) {
+        USER_CHECK(x->dtype() == ns_float64 && x->shape.size() && x->shape[x->shape.size()-1] == 2)
+            << "float64 -> complex128 reinterpret_view requires input shape [..., 2]";
+    }
+    // A dtype view preserves byte addresses, not dense element strides. Only
+    // its last dimension changes size; preceding strides change their units.
+    // Keep the existing contiguous arbitrary-shape/complex-pair contracts,
+    // without treating an arbitrary non-contiguous reshape as a dtype view.
+    bool dtype_view_shape = yshape.size() == x->shape.size();
+    if (dtype_view_shape && yshape.size()) {
+        for (uint i=0; i+1<yshape.size(); ++i)
+            dtype_view_shape &= yshape[i] == x->shape[i];
+        uint last = yshape.size()-1;
+        dtype_view_shape &= yshape[last] * ydsize == x->shape[last] * x->dsize();
+    }
+    if (dtype_view_shape) {
+        const bool changes_itemsize = x->dsize() != ydsize;
+        if (changes_itemsize) {
+            USER_CHECK(x->shape.size() && x->storage_stride(x->shape.size()-1) == 1)
+                << "reinterpret_view requires last stride 1 when changing element size";
+        }
+        vector<int64> strides(yshape.size());
+        for (uint i=0; i<yshape.size(); ++i) {
+            if (changes_itemsize && i+1 == yshape.size()) {
+                strides[i] = 1;
+            } else {
+                int64 byte_stride = x->storage_stride(i) * x->dsize();
+                USER_CHECK(byte_stride % ydsize == 0)
+                    << "reinterpret_view requires storage strides divisible by target element size";
+                strides[i] = byte_stride / ydsize;
+            }
+        }
+        y->set_storage_strides(strides);
+    } else {
+        USER_CHECK(x->is_contiguous())
+            << "reinterpret_view cannot reshape non-contiguous storage; call contiguous() explicitly";
     }
     y->share_with(x);
 }

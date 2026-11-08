@@ -25,6 +25,21 @@ StorageMutationVersion::StorageMutationVersion() {
     identity = next.fetch_add(1, std::memory_order_relaxed);
 }
 
+
+void Var::refresh_alias_requires_grad() {
+    if (autograd_alias && autograd_alias->inherit_requires_grad)
+        set_flag(VarFlags::_requires_grad_disabled,
+                 !autograd_alias->requires_grad());
+}
+
+void Var::check_alias_history() const {
+    USER_CHECK(!autograd_alias || !autograd_alias->stale_unrecorded_view())
+        << "A view was created in no_grad mode and its base or another view "
+           "of its base has been modified inplace. This use of the view is "
+           "ambiguous; create the view and perform the inplace operation "
+           "in the same grad mode.";
+}
+
 VarPtr contiguous_storage(Var* value) {
     if (value->is_contiguous()) return value;
     static auto make_contiguous = op_constructor<VarPtr, Var*>("contiguous");
@@ -48,7 +63,7 @@ DEFINE_FLAG(bool, no_fuse, 0,
     "No fusion optimization for all jittor Var creation");
 DEFINE_FLAG(uint8, node_order, 0, "id prior");
 // TODO: fuse multiple flags
-DEFINE_FLAG(int, amp_reg, 0, "Auto mixed-precision control registers, bit 0: prefer 32; bit 1: prefer 16; bit 2: keep reduce type; bit 3 keep white list type; bit 4: array like op prefer too; bit 5: reduce16 intermediate not use 32; bit 6: prefer bfloat16 explicitly, retaining float64");
+DEFINE_FLAG(int, amp_reg, 0, "Auto mixed-precision control registers, bit 0: prefer 32; bit 1: prefer 16; bit 2: keep reduce type; bit 3 keep white list type; bit 4: array like op prefer too; bit 5, reduce16 intermediate not use 32; bit 6: prefer bfloat16 explicitly, retaining float64");
 
 DEFINE_FLAG_WITH_SETTER(int, auto_mixed_precision_level, 0, "Auto mixed-precision optimization level, 0: not use fp16, 1-3: preserve level, not use fp16 for now; 4: perfer fp16, but some ops use fp32 e.g. sum,exp; 5: simular with 4, and array op will automatically convert to fp16; 6: all ops prefer fp16");
 
@@ -57,9 +72,25 @@ void (*_var_free_hook)(Var*);
 // A var joins its parent's ring the moment the allocator agrees to share, and
 // leaves it the moment it stops pointing into that allocation. A ring never
 // holds a single var: the last two leave together.
+// The rings are changed from two threads at once: the async worker allocates
+// a batch's outputs -- linking a child into its parent's ring -- without the
+// graph lock, while the Python thread frees vars, which unlinks them, under
+// it. A link and an unlink in one ring rewrite the same neighbours' pointers,
+// and the race left a dangling neighbour that a later unlink followed
+// (signal 11 in share_group_unlink, from DeferredGraphWork::apply on the
+// worker, about one pure-eager qwen3_decode_static run in three). Every ring
+// change and walk holds this lock. It is only taken for vars that share an
+// allocation, and is never held while taking another lock except the
+// allocator's, by migrate_group.
+std::mutex& share_ring_mutex() {
+    static std::mutex* mutex = new std::mutex();
+    return *mutex;
+}
+
 void share_group_link(Var* parent, Var* child) {
+    std::lock_guard<std::mutex> guard(share_ring_mutex());
     if (PREDICT_BRANCH_NOT_TAKEN(child->share_next != nullptr))
-        share_group_unlink(child);
+        share_group_unlink_locked(child);
     if (!parent->share_next)
         parent->share_next = parent->share_prev = parent;
     child->share_prev = parent;
@@ -69,6 +100,18 @@ void share_group_link(Var* parent, Var* child) {
 }
 
 void share_group_unlink(Var* v) {
+    // Only short bookkeeping is under this lock: the one operation that can
+    // block for a long time -- the device copy in migrate_group -- runs
+    // outside it (see mem/allocator.cc), so a waiter here is not held up by a
+    // GIL-releasing transfer. The GIL must stay held: `Node::free` holds the
+    // graph mutation lock across free_var, and dropping the GIL here would let
+    // a Python thread that holds the GIL wait for that lock while this one
+    // waits for the GIL back -- the inversion the readback probe hit.
+    std::lock_guard<std::mutex> guard(share_ring_mutex());
+    share_group_unlink_locked(v);
+}
+
+void share_group_unlink_locked(Var* v) {
     if (!v->share_next) return;
     Var* nxt = v->share_next;
     Var* prv = v->share_prev;
@@ -129,9 +172,17 @@ void setter_auto_mixed_precision_level(const int& old_value, const int& value) {
     if (value == 6) amp_reg = amp_prefer16 | amp_array_prefer | amp_keep_reduce | amp_keep_white;
 }
 
+// Per-axis masks (reduce, broadcast, strided-input patterns) are 32-bit.
+static inline void check_tensor_rank(const NanoVector& shape) {
+    USER_CHECK(shape.size() <= NanoVector::max_tensor_rank)
+        << "Jittor tensors support at most" << (int)NanoVector::max_tensor_rank
+        << "dimensions, got shape" << shape;
+}
+
 Var::Var(NanoVector shape, NanoString dtype)
     : shape(shape), 
       loop_options(compile_options) {
+    check_tensor_rank(shape);
     flags.set(NodeFlags::_var, 1);
     device_id = current_device();
     placement = current_tensor_placement();
@@ -171,6 +222,7 @@ int64 Var::numel() {
 }
 
 void Var::set_shape(NanoVector shape) {
+    check_tensor_rank(shape);
     this->shape = shape;
     storage_strides.clear();
     numel();
@@ -201,22 +253,21 @@ bool Var::is_contiguous() const {
     return true;
 }
 
-int Var::stride_pattern() const {
-    int mask = 0;
+uint Var::stride_pattern() const {
+    uint mask = 0;
     for (uint i=0; i<shape.size(); ++i)
-        if (storage_stride(i) != 0) mask |= 1 << i;
+        if (storage_stride(i) != 0) mask |= 1u << i;
     return mask;
 }
 
 // A view whose strides are exactly the contiguous ones needs no vector:
 // `storage_stride` derives those from the shape, and the empty vector is
 // already the "contiguous" sentinel every reader tests for. Storing them anyway
-// is not just redundant, it is impossible past a point -- the packed NanoVector
-// holds 64 bits, while the strides of a 5-D view of a large tensor (the video
-// VAE decodes into `[1, 3, 28, 288, 512]`) need 75, and the overflow check
-// rejects that outright with "NanoVector exceeds its ten-entry or 64-bit value
-// capacity". Every value is identical either way, so dropping the vector
-// changes no layout, only whether it is materialized.
+// is redundant and, past a point, costs a heap block -- the packed NanoVector
+// holds 64 value bits, while the strides of a 5-D view of a large tensor (the
+// video VAE decodes into `[1, 3, 28, 288, 512]`) need 75 and spill. Every
+// value is identical either way, so dropping the vector changes no layout,
+// only whether it is materialized.
 static bool is_contiguous_strides(const NanoVector& shape, const int64* strides, int n) {
     int64 expected = 1;
     for (int i = n - 1; i >= 0; --i) {
@@ -230,9 +281,6 @@ void Var::set_storage_strides(const vector<int64>& strides) {
     USER_CHECK((int)strides.size() == shape.size()) << "Storage stride rank must match shape";
     for (auto stride : strides)
         USER_CHECK(stride >= 0) << "Negative storage strides require an explicit offset view";
-    // The check has to happen before the packing: `NanoVector::make` rejects an
-    // over-long vector, so a caller that builds one first never reaches this
-    // function at all.
     if (is_contiguous_strides(shape, strides.data(), strides.size())) {
         storage_strides.clear();
         return;

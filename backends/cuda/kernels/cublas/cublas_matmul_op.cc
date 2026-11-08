@@ -19,10 +19,10 @@ namespace jittor {
 
 #ifndef JIT
 
-static auto make_cublas_matmul = op_constructor<VarPtr, Var*, Var*, bool, bool>("cublas_matmul");
+static auto make_cublas_matmul = op_constructor<VarPtr, Var*, Var*, bool, bool, bool>("cublas_matmul");
 static auto make_unary = op_constructor<VarPtr, Var*, NanoString>("unary");
 
-CublasMatmulOp::CublasMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b)
+CublasMatmulOp::CublasMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b, bool fp32_output)
     : a(a), b(b), trans_a(trans_a), trans_b(trans_b) {
     set_flag(OpFlags::_cuda, 1);
     set_flag(OpFlags::_cpu, 0);
@@ -30,8 +30,11 @@ CublasMatmulOp::CublasMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b)
     a->set_flag(VarFlags::_needed_by_backward);
     b->set_flag(VarFlags::_needed_by_backward);
     // TODO: support int8 * int8
-    USER_CHECK(a->dtype().is_float() && b->dtype().is_float())
-        << "cublas matmul requires floating-point inputs (float16/float32/float64), but got a:"
+    bool complex_pair = a->dtype().is_complex() || b->dtype().is_complex();
+    USER_CHECK((a->dtype().is_float() && b->dtype().is_float())
+               || (complex_pair && a->dtype() == b->dtype()))
+        << "cublas matmul requires floating-point inputs (float16/float32/float64) or two operands"
+           " of one complex dtype (complex64/complex128), but got a:"
         << a->dtype() << "b:" << b->dtype();
     // TODO: support diffrent input type
     USER_CHECK(a->dtype().dsize() == b->dtype().dsize())
@@ -44,36 +47,48 @@ CublasMatmulOp::CublasMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b)
     // dtype from the same inference every other op uses and cast the operands
     // to it, mirroring the cuDNN convolution ops.
     auto dtype = dtype_infer(a->ns, b->ns);
+    USER_CHECK(!fp32_output || dtype == ns_bfloat16)
+        << "FP32 accumulator output requires BF16 compute operands, got" << dtype;
     auto at = cast_operand_to_compute_dtype(a, dtype);
     auto bt = cast_operand_to_compute_dtype(b, dtype);
     if (at || bt) {
-        auto cp = make_cublas_matmul(at ? at.ptr : a, bt ? bt.ptr : b, trans_a, trans_b);
+        auto cp = make_cublas_matmul(at ? at.ptr : a, bt ? bt.ptr : b, trans_a, trans_b, fp32_output);
         forward(cp);
         return;
     }
-    c = create_output(nullptr, dtype);
+    c = create_output(nullptr, fp32_output ? ns_float32 : dtype);
 }
 
 VarPtr CublasMatmulOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     // c = op(a) @ op(b). Return gradients in the original, pre-transpose
     // layouts so explicit cuBLAS fast paths remain differentiable.
-    // Autocast may keep the GEMM output (and therefore ``dout``) in fp16 while
-    // the saved module weights remain fp32. cuBLAS requires equal operand
-    // dtypes, so promote the incoming gradient to the saved operand's dtype
-    // before constructing each gradient GEMM. The resulting gradient already
-    // has the dtype expected by the corresponding input variable.
+    //
+    // The cotangent need not have the GEMM's dtype: a consumer that promoted
+    // a half/bf16 product (`y + w_fp32`) hands back a float32 gradient, and a
+    // gradient GEMM of float32 with the half operand failed the same-dtype
+    // check. Bring it to the saved operand's dtype, which is also the dtype
+    // the input's gradient must have.
+    VarPtr dout_cast = cast_operand_to_compute_dtype(dout, (v_index == 0 ? b : a)->dtype());
+    if (dout_cast) dout = dout_cast.ptr;
+    // Complex: dA = dC op(B)^H and dB = op(A)^H dC -- torch's convention, and
+    // the one the elementwise multiply's grad already follows
+    // (ops/binary_op.cc). Conjugation commutes with transposition, so the
+    // branches below stay as they are with the other operand conjugated.
+    Var* other = v_index == 0 ? b : a;
+    VarPtr other_conj;
+    if (other->dtype().is_complex()) {
+        other_conj = make_unary(other, ns_conj);
+        other = other_conj.ptr;
+    }
     if (v_index == 0) {
-        if (trans_a) {
-            if (dout->dtype() != b->dtype()) dout = make_unary(dout, b->dtype());
-            return make_cublas_matmul(b, dout, trans_b, 1);
-        }
-        if (dout->dtype() != b->dtype()) dout = make_unary(dout, b->dtype());
-        return make_cublas_matmul(dout, b, 0, trans_b^1);
+        if (trans_a)
+            return make_cublas_matmul(other, dout, trans_b, 1, false);
+        return make_cublas_matmul(dout, other, 0, trans_b^1, false);
     }
     if (dout->dtype() != a->dtype()) dout = make_unary(dout, a->dtype());
     if (trans_b)
-        return make_cublas_matmul(dout, a, 1, trans_a);
-    return make_cublas_matmul(a, dout, trans_a^1, 0);
+        return make_cublas_matmul(dout, other, 1, trans_a, false);
+    return make_cublas_matmul(other, dout, trans_a^1, 0, false);
 }
 
 // An operand of rank > 2 is the same buffer as its rank-2 flattening: a dense
@@ -139,6 +154,7 @@ void CublasMatmulOp::infer_shape() {
 
 void CublasMatmulOp::jit_prepare(JK& jk) {
     jk << "«T:" << a->dtype();
+    if (c->dtype() != a->dtype()) jk << "«Tc:" << c->dtype();
     jk << "«Trans_a:" << (trans_a ? 'T' : 'N');
     jk << "«Trans_b:" << (trans_b ? 'T' : 'N');
     jk << "«op:" << (a->dtype().dsize() == 2? 'H' : (a->dtype().dsize() == 4 ? 'S' : 'D'));
@@ -180,9 +196,10 @@ void CublasMatmulOp::jit_run() {
     bool has_bf16 = a->dtype() == ns_bfloat16
         || b->dtype() == ns_bfloat16 || c->dtype() == ns_bfloat16;
     bool has_fp64 = a->dtype() == ns_float64
-        || b->dtype() == ns_float64 || c->dtype() == ns_float64;
+        || b->dtype() == ns_float64 || c->dtype() == ns_float64
+        || c->dtype() == ns_complex128;
     // a: [n,m], b: [m,k], c: [n,k]
-    CublasGemmMode mode = cublas_gemm_mode(has_fp16, has_bf16, has_fp64);
+    CublasGemmMode mode = cublas_gemm_mode(has_fp16, has_bf16, has_fp64, c->dtype().is_complex());
     auto computeType = mode.compute;
     auto algo = mode.algo;
     if (mode.typed_alpha) {

@@ -1,5 +1,6 @@
 #include "acl_foreach_coefficients.h"
 #include "acl_runtime.h"
+#include "acl_jittor.h"
 #include "acl_workspace.h"
 #include "runtime/backend.h"
 #include "runtime/backend_streams.h"
@@ -62,6 +63,8 @@ struct AclState {
     std::map<aclrtStream, StreamRecord> streams;
     std::map<aclrtEvent, EventRecord> events;
     std::map<void*, MemoryRecord> memory;
+    // Device pairs peer access has been enabled for, each way once.
+    std::set<std::pair<int, int>> peer_access;
     std::map<int, std::unique_ptr<ReportThread>> reporters;
     std::exception_ptr callback_failure;
 };
@@ -214,7 +217,13 @@ int device_count() { initialize(); return ready_device_count.load(std::memory_or
 void set_device(int device) {
     validate_device(device);
     int32_t previous = -1;
-    check_acl(aclrtGetDevice(&previous), "aclrtGetDevice");
+    // A thread that has never bound a device has no context, and asking which
+    // device it is on fails (107002) instead of answering "none". That is the
+    // state every fresh thread starts in -- the async-execution worker among
+    // them -- and binding is exactly what it is here to do, so the question
+    // not having an answer is not an error. A device that cannot be bound is
+    // still reported, by `aclrtSetDevice` below.
+    if (aclrtGetDevice(&previous) != ACL_SUCCESS) previous = -1;
     if (previous != device) check_acl(aclrtSetDevice(device), "aclrtSetDevice");
     auto& runtime = runtime_device_state();
     runtime.current_device = runtime.device_id = device;
@@ -227,7 +236,8 @@ void set_device(int device) {
         for (auto callback : runtime.switch_hooks) callback(device);
     } catch (...) {
         auto failure = std::current_exception();
-        if (aclrtSetDevice(previous) == ACL_SUCCESS) {
+        // Nothing to restore on a thread that had no device to begin with.
+        if (previous >= 0 && aclrtSetDevice(previous) == ACL_SUCCESS) {
             runtime.current_device = runtime.device_id = previous;
             try { for (auto callback : runtime.switch_hooks) callback(previous); }
             catch (...) { std::fprintf(stderr, "ACL device-hook rollback failed\n"); }
@@ -287,6 +297,70 @@ void* compute_stream(int device) {
     return found->second;
 }
 
+// -- graph capture ---------------------------------------------------------
+// CANN's model-run-instance capture records what is issued on a stream into
+// a replayable aclmdlRI, as cudaStreamBeginCapture does for CUDA, and the
+// replay is one aclmdlRIExecuteAsync: an aclnn operator's host time (the
+// workspace query, the descriptors, the launch) is paid once, at recording.
+// Relaxed mode, as on CUDA: a pool that has to grow mid-recording allocates.
+// A capture that cannot start or close is not an error: the caller keeps
+// launching operator by operator, as it did before.
+std::atomic<int> live_graphs{0};
+
+// The last graph gone: what was kept for the recordings can go too.
+void graph_gone() {
+    if (live_graphs.fetch_sub(1) != 1) return;
+    acl_workspace_release_retired();
+    acl_scalar_cache_release_retired();
+}
+
+bool graph_capture_begin(int device) {
+    bool started = false;
+    on_device(device, [&] {
+        auto stream = static_cast<aclrtStream>(compute_stream(device));
+        const aclError status = aclmdlRICaptureBegin(stream, ACL_MODEL_RI_CAPTURE_MODE_RELAXED);
+        if (status != ACL_SUCCESS) {
+            LOGvv << "ACL graph capture could not start:" << acl_error_to_string(status);
+            return;
+        }
+        started = true;
+    });
+    // Counted from the start of the recording: what the recording reads has
+    // to be kept from then on.
+    if (started) live_graphs.fetch_add(1);
+    return started;
+}
+
+void* graph_capture_end(int device) {
+    aclmdlRI model = nullptr;
+    on_device(device, [&] {
+        auto stream = static_cast<aclrtStream>(compute_stream(device));
+        const aclError status = aclmdlRICaptureEnd(stream, &model);
+        if (status != ACL_SUCCESS || !model) {
+            LOGvv << "ACL graph capture did not close:" << acl_error_to_string(status);
+            if (model) report_acl(aclmdlRIDestroy(model), "aclmdlRIDestroy");
+            model = nullptr;
+        }
+    });
+    if (!model) graph_gone();
+    return reinterpret_cast<void*>(model);
+}
+
+void graph_launch(void* graph, int device) {
+    on_device(device, [&] {
+        auto stream = static_cast<aclrtStream>(compute_stream(device));
+        check_acl(aclmdlRIExecuteAsync(reinterpret_cast<aclmdlRI>(graph), stream),
+                  "aclmdlRIExecuteAsync");
+    });
+}
+
+void graph_release(void* graph, int device) {
+    on_device(device, [&] {
+        report_acl(aclmdlRIDestroy(reinterpret_cast<aclmdlRI>(graph)), "aclmdlRIDestroy");
+    });
+    graph_gone();
+}
+
 void synchronize_stream(BackendStream stream) {
     validate_stream(stream);
     on_device(stream.device.index, [&] {
@@ -316,8 +390,14 @@ void destroy_stream(BackendStream stream) {
 void* create_event(int device, bool timing) {
     aclrtEvent event = nullptr;
     on_device(device, [&] {
+        // `...ExWithFlag` for the plain event because the caller records it
+        // again every time it needs it -- the compute-stream handoff keeps
+        // one event per device and records it once per batch -- and only
+        // that constructor gives an event that "can be reused naturally".
+        // An `aclrtCreateEvent` event fails the second record with
+        // ACL_ERROR_RT_FEATURE_NOT_SUPPORT (207000).
         auto status = timing ? aclrtCreateEventWithFlag(&event, ACL_EVENT_TIME_LINE)
-                             : aclrtCreateEvent(&event);
+                             : aclrtCreateEventExWithFlag(&event, ACL_EVENT_SYNC);
         check_acl(status, "create ACL event");
         try {
             std::lock_guard<std::recursive_mutex> guard(state().mutex);
@@ -412,8 +492,33 @@ aclrtMemcpyKind copy_kind(Device destination, Device source) {
         << "ACL copy requires an ACL endpoint";
     if (source.backend == BackendId::Cpu) return ACL_MEMCPY_HOST_TO_DEVICE;
     if (destination.backend == BackendId::Cpu) return ACL_MEMCPY_DEVICE_TO_HOST;
-    USER_CHECK(destination.index == source.index) << "ACL peer copy is not supported";
     return ACL_MEMCPY_DEVICE_TO_DEVICE;
+}
+
+void enable_peer_copy(int destination, int source) {
+    auto& owner = state();
+    std::lock_guard<std::recursive_mutex> guard(owner.mutex);
+    if (owner.peer_access.count({destination, source})) return;
+    int32_t supported = 0;
+    check_acl(aclrtDeviceCanAccessPeer(&supported, destination, source),
+              "aclrtDeviceCanAccessPeer");
+    USER_CHECK(supported) << "ACL devices do not support peer access:"
+                          << destination << "<-" << source;
+    check_acl(aclrtDeviceCanAccessPeer(&supported, source, destination),
+              "aclrtDeviceCanAccessPeer");
+    USER_CHECK(supported) << "ACL devices do not support peer access:"
+                          << source << "<-" << destination;
+    // Both directions at once: ACL enables access one way per call, and the
+    // tensor that just came over is as likely to go back.
+    for (auto pair : {std::make_pair(destination, source),
+                      std::make_pair(source, destination)}) {
+        if (owner.peer_access.count(pair)) continue;
+        on_device(pair.first, [&] {
+            check_acl(aclrtDeviceEnablePeerAccess(pair.second, 0),
+                      "aclrtDeviceEnablePeerAccess");
+        });
+        owner.peer_access.insert(pair);
+    }
 }
 
 void copy_async(void* destination, Device destination_device, const void* source,
@@ -424,6 +529,15 @@ void copy_async(void* destination, Device destination_device, const void* source
     const int device = destination_device.backend == BackendId::Acl
         ? destination_device.index : source_device.index;
     USER_CHECK(device == stream.device.index) << "ACL copy stream belongs to another device";
+    if (source_device.backend == BackendId::Acl
+            && destination_device.backend == BackendId::Acl
+            && source_device.index != destination_device.index) {
+        enable_peer_copy(destination_device.index, source_device.index);
+        // The destination stream cannot wait on an event of the source
+        // device, so the producers there are finished before this copy is
+        // queued rather than ordered against.
+        synchronize(1ull << source_device.index);
+    }
     on_device(device, [&] {
         check_acl(aclrtMemcpyAsync(destination, size, source, size, kind,
                                    static_cast<aclrtStream>(stream.handle)), "aclrtMemcpyAsync");
@@ -457,8 +571,13 @@ void* allocate_memory(int device, BackendMemoryKind kind, size_t size) {
     USER_CHECK(kind != BackendMemoryKind::Managed) << "ACL has no managed-memory allocator";
     void* pointer = nullptr;
     on_device(device, [&] {
+        // Storage that may later be read from a peer has to be reachable
+        // through the peer link from its first allocation, and which tensors
+        // those are is not known here.
+        auto policy = ready_device_count.load(std::memory_order_relaxed) > 1
+            ? ACL_MEM_MALLOC_HUGE_FIRST_P2P : ACL_MEM_MALLOC_HUGE_FIRST;
         check_acl(kind == BackendMemoryKind::Pinned ? aclrtMallocHost(&pointer, size)
-            : aclrtMalloc(&pointer, size, ACL_MEM_MALLOC_HUGE_FIRST), "allocate ACL memory");
+            : aclrtMalloc(&pointer, size, policy), "allocate ACL memory");
         try {
             std::lock_guard<std::recursive_mutex> guard(state().mutex);
             state().memory.emplace(pointer, MemoryRecord{device, kind});
@@ -473,18 +592,43 @@ void* allocate_memory(int device, BackendMemoryKind kind, size_t size) {
 void free_memory(int device, BackendMemoryKind kind, void* pointer) {
     if (!pointer) return;
     auto& owner = state();
+    std::vector<int> users{device};
     {
         std::lock_guard<std::recursive_mutex> guard(owner.mutex);
         auto found = owner.memory.find(pointer);
         USER_CHECK(found != owner.memory.end() && found->second.device == device && found->second.kind == kind)
             << "ACL allocation does not belong to this device and memory kind";
         if (owner.shutdown && !owner.drained) return;
+        // Pinned host storage can be the endpoint of copies on any device,
+        // independently of which device owned its allocation request.
+        if (kind == BackendMemoryKind::Pinned)
+            for (int touched : owner.touched)
+                if (touched != device) users.push_back(touched);
     }
     int32_t previous = -1;
     check_acl(aclrtGetDevice(&previous), "aclrtGetDevice before free");
-    if (previous != device) check_acl(aclrtSetDevice(device), "aclrtSetDevice before free");
-    auto status = kind == BackendMemoryKind::Pinned ? aclrtFreeHost(pointer) : aclrtFree(pointer);
-    if (previous >= 0 && previous != device) report_acl(aclrtSetDevice(previous), "restore ACL device after free");
+    // Returning a block to the caching allocator is stream-ordered reuse;
+    // releasing its underlying allocation is different. ACL's raw free does
+    // not wait for queued kernels or copies. Pool trimming, GC and allocation
+    // retries can reach here while those tasks still use the allocation.
+    // Synchronize only at this SDK release boundary, including pinned sources
+    // of asynchronous copies, before making the address inaccessible.
+    int32_t selected = previous;
+    aclError sync_status = ACL_SUCCESS;
+    for (int user : users) {
+        if (selected != user) {
+            sync_status = aclrtSetDevice(user);
+            if (sync_status != ACL_SUCCESS) break;
+            selected = user;
+        }
+        sync_status = aclrtSynchronizeDevice();
+        if (sync_status != ACL_SUCCESS) break;
+    }
+    auto status = sync_status == ACL_SUCCESS
+        ? (kind == BackendMemoryKind::Pinned ? aclrtFreeHost(pointer) : aclrtFree(pointer))
+        : sync_status;
+    if (previous >= 0 && previous != selected) report_acl(aclrtSetDevice(previous), "restore ACL device after free");
+    check_acl(sync_status, "synchronize ACL memory before free");
     check_acl(status, "free ACL memory");
     {
         std::lock_guard<std::recursive_mutex> guard(owner.mutex);
@@ -539,6 +683,27 @@ Allocator* acl_allocator(int device, BackendMemoryKind kind) {
 
 void memory_info(int device, size_t& free, size_t& total) {
     on_device(device, [&] { check_acl(aclrtGetMemInfo(ACL_DDR_MEM, &free, &total), "aclrtGetMemInfo"); });
+}
+
+// ACL documents these as process-wide runtime options. Nothing is shadowed
+// in a flag here: every query reads the option back out of the runtime, and
+// every failure escapes rather than being reported as "not deterministic".
+bool get_deterministic_algorithms() {
+    initialize();
+    std::lock_guard<std::recursive_mutex> guard(state().mutex);
+    int64_t value = -1;
+    check_acl(aclrtGetSysParamOpt(ACL_OPT_DETERMINISTIC, &value),
+              "aclrtGetSysParamOpt(DETERMINISTIC)");
+    if (value != 0 && value != 1)
+        throw std::runtime_error("ACL returned an unknown deterministic algorithm policy value");
+    return value == 1;
+}
+
+void set_deterministic_algorithms(bool enabled) {
+    initialize();
+    std::lock_guard<std::recursive_mutex> guard(state().mutex);
+    check_acl(aclrtSetSysParamOpt(ACL_OPT_DETERMINISTIC, enabled ? 1 : 0),
+              "aclrtSetSysParamOpt(DETERMINISTIC)");
 }
 
 struct Callback { void (*function)(void*); void* argument; };
@@ -623,7 +788,14 @@ void host_callback(BackendStream stream, void (*function)(void*), void* argument
 void peer_access(int from, int to) {
     validate_device(from);
     validate_device(to);
-    USER_CHECK(from == to) << "ACL peer access is not supported";
+    if (from == to) return;
+    enable_peer_copy(from, to);
+}
+
+const char* acl_device_name(int device) {
+    const char* name = nullptr;
+    on_device(device, [&] { name = aclrtGetSocName(); });
+    return name;
 }
 
 struct Finalizer { ~Finalizer() { shutdown_acl_backend(); } } finalizer;
@@ -642,7 +814,17 @@ int acl_runtime_current_device() {
     const int count = ready_device_count.load(std::memory_order_relaxed);
     if (!count) return -1;
     int32_t device = -1;
-    check_acl(aclrtGetDevice(&device), "aclrtGetDevice");
+    if (aclrtGetDevice(&device) != ACL_SUCCESS) {
+        // A thread that has never bound a device has no context, and ACL
+        // answers "which device am I on" with a failure (107002) rather than
+        // "none". Every thread but the first starts there -- a dataloader
+        // thread, the async-execution worker -- and the answer it is owed is
+        // the device the process is using, so bind that one here instead of
+        // making a second thread's first operator an error.
+        device = runtime_device_state().device_id;
+        if (device < 0) device = 0;
+        check_acl(aclrtSetDevice(device), "aclrtSetDevice");
+    }
     if (count == 1) {
         cache.device = device;
         cache.epoch = epoch;
@@ -653,6 +835,8 @@ int acl_runtime_current_device() {
 aclrtStream acl_current_stream() {
     return static_cast<aclrtStream>(compute_stream(acl_runtime_current_device()));
 }
+
+int acl_live_graphs() { return live_graphs.load(std::memory_order_acquire); }
 
 void shutdown_acl_backend() noexcept {
     try {
@@ -723,6 +907,7 @@ BackendOps make_acl_backend() {
     ops.device_count = device_count;
     ops.current_device = acl_runtime_current_device;
     ops.set_device = set_device;
+    ops.device_name = acl_device_name;
     ops.allocator = acl_allocator;
     ops.copy = copy;
     ops.copy_async = copy_async;
@@ -732,8 +917,14 @@ BackendOps make_acl_backend() {
     ops.memory_allocate = allocate_memory;
     ops.memory_free = free_memory;
     ops.memory_info = memory_info;
+    ops.set_deterministic_algorithms = set_deterministic_algorithms;
+    ops.get_deterministic_algorithms = get_deterministic_algorithms;
     ops.check_error = check_callback_failure;
     ops.compute_stream = compute_stream;
+    ops.graph_capture_begin = graph_capture_begin;
+    ops.graph_capture_end = graph_capture_end;
+    ops.graph_launch = graph_launch;
+    ops.graph_release = graph_release;
     ops.stream_create = create_stream;
     ops.stream_destroy = destroy_stream;
     ops.stream_synchronize = synchronize_stream;
@@ -748,6 +939,21 @@ BackendOps make_acl_backend() {
     ops.execution.allocation_padding = 32;
     ops.execution.supports_parallel_compile = false;
     ops.execution.requires_pinned_host_storage = true;
+    // Measured on a Qwen3 decode step: every inline flush (128/64/256 ops)
+    // was slower than none, an extra batch costing the Python thread more
+    // than the device time it hides.
+    ops.execution.async_auto_flush_only = true;
+    // AclCpuFallbackScope flips `runtime_device_state().use_cuda`.
+    ops.execution.async_requires_strict_fallback = true;
+    // Measured: the worker is worth a third of a Qwen3 decode step and a
+    // fifth of a ResNet50 batch-32 inference, and costs 2-5% on the steps
+    // short enough that the caller waits right after handing over.
+    ops.execution.async_handover_must_pay = true;
+    // ACL fuses nothing (`supports_generated_device_kernels` is false), so a
+    // flush in the middle of a training forward cuts no fusion the backward
+    // was relying on: measured over the four training workloads, the peak
+    // moved between -4.6% and +3.7% while the step got 8-18% faster.
+    ops.execution.async_admits_grad = true;
     ops.execution.preserve_reduction_dtype = true;
     ops.execution.native_low_precision_reduction = true;
     ops.execution.supports_generated_device_kernels = false;

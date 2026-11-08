@@ -67,10 +67,10 @@ class TestSelftestStructure(unittest.TestCase):
         source = self.selftest_path.read_text(encoding="utf-8")
         for needle in ("Conv2d", "BatchNorm2d", "optim.SGD", "optimizer.step"):
             self.assertIn(needle, source)
-        namespace = {}
         tree = ast.parse(source)
         assignment = next(
-            node for node in tree.body
+            node
+            for node in tree.body
             if isinstance(node, ast.Assign)
             and getattr(node.targets[0], "id", None) == "KEY_MODULES"
         )
@@ -89,8 +89,9 @@ class TestSelftestStructure(unittest.TestCase):
         archive: version, member list, three resource files. None of them
         imports it.
         """
-        workflow = (self.repo_root / ".github" / "workflows"
-                    / "release.yml").read_text(encoding="utf-8")
+        workflow = (self.repo_root / ".github" / "workflows" / "release.yml").read_text(
+            encoding="utf-8"
+        )
         self.assertIn("jittor.selftest", workflow)
         validation = workflow.split("platform-validation:", 1)
         self.assertEqual(len(validation), 2, "no platform-validation job")
@@ -128,14 +129,8 @@ class TestSelftestStructure(unittest.TestCase):
             self.repo_root / "Dockerfile",
             self.repo_root / "README.md",
             self.repo_root / "CONTRIBUTING.md",
-            self.repo_root / "tools" / "install" / "legacy" / "install.sh",
             self.repo_root / "tests" / "runtime" / "test_lock.py",
-            self.repo_root / "tools" / "release" / "legacy" / "polish_centos.py",
-            self.repo_root / "python" / "jittor" / "build" / "utils" / "class" / "setup_env.py",
         ]
-        expected_callers.extend(
-            sorted((self.repo_root / "tests" / "system" / "legacy").glob("test_*ubuntu*.sh"))
-        )
 
         missing = []
         for path in expected_callers:

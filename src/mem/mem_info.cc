@@ -5,6 +5,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include <iomanip>
+#include <sstream>
 #include <algorithm>
 #if defined(__linux__)
 #include <sys/sysinfo.h>
@@ -68,6 +69,11 @@ void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
         FloatOutput{(double)mem_info.total_cpu_ram, " KMG", 1024, "B"};
     log << "total_device_ram:" << 
         FloatOutput{(double)mem_info.total_cuda_ram, " KMG", 1024, "B"} >> "\n";
+    // .load(): streaming a std::atomic<int64> directly is ambiguous under
+    // libstdc++ 11 -- atomic<T>'s implicit conversion to T (here, long long)
+    // ties between ostream's built-in operator<<(long) and operator<<(unsigned
+    // long) overloads (same width, neither a better match), so this needs the
+    // conversion to int64 spelled out rather than left to happen implicitly.
     log << "hold_vars:" << runtime_holder_state().holders().size()
         << "lived_vars:" << Var::number_of_lived_vars.load()
         << "lived_ops:" << Op::number_of_lived_ops.load() >> '\n';
@@ -158,7 +164,7 @@ void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
             if (a->large_blocks.blocks.size()) {
                 size_t largest_block = 0;
                 auto block = a->large_blocks.blocks.rbegin()->second;
-                largest_block = a->large_blocks.blocks.rbegin()->first.first;
+                largest_block = std::get<0>(a->large_blocks.blocks.rbegin()->first);
                 // unused largest block
                 log << "ULB:" << FloatOutput{(double)largest_block, " KMG", 1024, "B"};
                 log << "ULBO:" << FloatOutput{(double)block->origin_size, " KMG", 1024, "B"};
@@ -272,10 +278,12 @@ void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
             double used = gpu_overflow ? (double)gpu_total : (double)cpu_total;
             double total = gpu_overflow ? (double)mem_info.total_cuda_ram : (double)mem_info.total_cpu_ram;
             log.end();
-            LOGf << "\n*******************\n"
+            // LOGe, not LOGf: this runs while another error is being reported,
+            // and throwing here would replace it.
+            LOGe << "\n*******************\n"
                 >> (gpu_overflow?"GPU":"CPU") << "memory is overflow, please reduce your batch_size or data size!\nTotal:" << FloatOutput{(double)total, " KMG", 1024, "B"} << "Used:" << FloatOutput{(double)used, " KMG", 1024, "B"};
-        } else
-            return;
+        }
+        return;
     }
 
     log.end();
@@ -358,6 +366,53 @@ int64 device_memory_reserved_peak(int device) {
 
 void reset_device_memory_peak(int device) {
     sfrl_reset_device_peak(device);
+}
+
+// c10's format_size, so the numbers read as PyTorch's do.
+static string oom_size(int64 size) {
+    std::ostringstream os;
+    os.precision(2);
+    os << std::fixed;
+    if (size <= 1024) os << size << " bytes";
+    else if (size <= 1048576) os << (size / 1024.0) << " KiB";
+    else if (size <= 1073741824LL) os << (size / 1048576.0) << " MiB";
+    else os << (size / 1073741824.0) << " GiB";
+    return os.str();
+}
+
+string device_out_of_memory_message(int device, int64 requested, int64 free_bytes,
+                                    int64 total_bytes, int64 process_bytes) {
+    const char* fw = "Jittor";
+    std::ostringstream os;
+    os << "CUDA out of memory. Tried to allocate " << oom_size(requested) << ".";
+    if (total_bytes >= 0)
+        os << " GPU " << device << " has a total capacity of " << oom_size(total_bytes)
+           << " of which " << oom_size(free_bytes) << " is free.";
+    if (process_bytes >= 0)
+        os << " Including non-" << fw << " memory, this process has " << oom_size(process_bytes)
+           << " memory in use.";
+    int64 allocated = sfrl_device_live_bytes(device);
+    int64 reserved = sfrl_device_reserved_bytes(device);
+    os << " Of the allocated memory " << oom_size(allocated) << " is allocated by " << fw
+       << ", and " << oom_size(std::max<int64>(reserved - allocated, 0)) << " is reserved by "
+       << fw << " but unallocated.";
+    return os.str();
+}
+
+vector<int64> device_memory_stats(int device) {
+    return sfrl_device_memory_stats(device);
+}
+
+void reset_device_memory_accumulated(int device) {
+    sfrl_reset_device_accumulated(device);
+}
+
+int64 device_memory_window_start(int device) {
+    return sfrl_device_window_start(device);
+}
+
+int64 device_memory_window_peak(int device) {
+    return sfrl_device_window_peak(device);
 }
 
 int64 device_memory_allocated_total(int device) {

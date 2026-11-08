@@ -465,10 +465,10 @@ assert converted_cpu.dtype is torch.float64 and converted_cpu.is_cpu
 converted_cpu.sync()
 assert converted_cpu.location() == "cpu"
 assert alias is not original and alias.dtype is torch.float64
-# In torch ``Tensor(other)`` aliases storage and the graph. Storage now
-# aliases here too; the default requires_grad=False still loses the graph link
-# (KI-COMPAT-004), so this assertion records that remaining gap.
-assert not alias.requires_grad and alias.is_leaf
+# Tensor(other) keeps its storage alias and the graph back to the source.
+assert alias.requires_grad and not alias.is_leaf
+alias_gradient, = torch.autograd.grad(alias.sum(), original)
+np.testing.assert_array_equal(alias_gradient.numpy(), [1., 1.])
 assert alias.data_ptr() == original.data_ptr()
 if jt.introspection.policy.runtime.use_cuda:
     assert alias.location() == original.location() == "device"
@@ -521,7 +521,8 @@ assert object_state.force_cpu and object_state.rms_norm_unit_weight is fresh
 assert "_jittor_torch_force_cpu" not in vars(fresh)
 assert "_torch_acl_rms_norm_unit_weight" not in vars(fresh)
 copied_state = copy.deepcopy(fresh)
-assert copied_state._torch_data_owner is None
+# A self-owned modern alias is rebound to the independently copied holder.
+assert copied_state._torch_data_owner is copied_state
 assert copied_state._torch_data_path == ()
 assert copied_state._torch_acl_rms_norm_unit_weight is copied_state
 assert copied_state._jittor_torch_force_cpu

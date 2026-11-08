@@ -637,6 +637,41 @@ def _tensor_nbytes(v, ptr_sig):
         return 0
 
 
+def _tensor_byte_range(value, pointer, signature):
+    """Conservative addressed bytes, including holes in a strided view."""
+    itemsize = _TCODE_BYTES.get(signature[1:], 0)
+    if not itemsize:
+        return None
+    shape = tuple(int(size) for size in value.shape)
+    if any(size == 0 for size in shape):
+        return pointer, pointer
+    accessor = getattr(value, "_storage_strides" if _is_var(value) else "stride", None)
+    if not callable(accessor):
+        if _tensor_is_contiguous(value):
+            return pointer, pointer + _tensor_nbytes(value, signature)
+        return None
+    strides = tuple(int(stride) for stride in accessor())
+    if len(strides) != len(shape):
+        return None
+    extents = [(size - 1) * stride * itemsize for size, stride in zip(shape, strides)]
+    return (pointer + sum(min(0, extent) for extent in extents),
+            pointer + sum(max(0, extent) for extent in extents) + itemsize)
+
+
+def _overlapping_argument_names(ranges):
+    """Bouncing overlapping arguments independently changes pointer semantics."""
+    if any(bounds is None for bounds in ranges.values()):
+        # Unknown layouts cannot establish that another argument is disjoint.
+        return set(ranges)
+    overlaps = set()
+    entries = list(ranges.items())
+    for index, (name, (start, end)) in enumerate(entries):
+        for other, (other_start, other_end) in entries[index + 1:]:
+            if start < end and other_start < other_end and start < other_end and other_start < end:
+                overlaps.update((name, other))
+    return overlaps
+
+
 def _tensor_is_cuda(v):
     ic = getattr(v, "is_cuda", None)
     if ic is not None:
@@ -989,6 +1024,8 @@ def _compile(jitfn, signature, constants, options=None, device=0):
     device 0 in a rank that uses another device and may not be allowed near
     that one.
     """
+    if {name for name, kind in signature.items() if kind == "constexpr"} != set(constants):
+        raise JittorTritonError("Triton constants must match the constexpr signature slots")
     triton = real_triton()
     from triton.compiler import ASTSource
 
@@ -1124,6 +1161,8 @@ def run(jitfn, args, kwargs, grid):
     failed launch leaves the switch behind exactly like a successful one, hence
     the ``finally``.
     """
+    from jittor._runtime.graph_replay import graph_replay_barrier
+    graph_replay_barrier("Triton launch is not recorded in the native graph")
     rt = _ambient_runtime()
     before = _current_device(rt)
     try:
@@ -1196,8 +1235,8 @@ def _run(jitfn, args, kwargs, grid):
         raise JittorTritonError(
             "could not bind args for triton kernel %r: %s" % (kname, e))
 
-    signature = {}        # runtime param name -> triton type code
-    constants = {}        # constexpr param name -> python value
+    signature = {}        # every param name -> runtime type or "constexpr"
+    constants = {}        # explicit constexpr or implicit None -> python value
     runtime_vals = []     # (name, sig, value) in param order, runtime only
     out_vars = []         # jittor Vars touched (kept alive across launch)
 
@@ -1207,7 +1246,15 @@ def _run(jitfn, args, kwargs, grid):
         return val
 
     for name, val in bound.arguments.items():
-        if name in constexpr_names:
+        if name in constexpr_names or val is None:
+            # Upstream specializes an unannotated Python None as constexpr
+            # None. A null runtime pointer is different: `ptr is not None`
+            # then retains a branch which can load/store address zero. Keep
+            # Keep the constexpr slot in ASTSource's complete signature, but
+            # out of runtime_vals/argument packing. Upstream's disk-cache hash
+            # sorts signature *values*: dropping names lets (ptr, None) and
+            # (None, ptr) collide and reuse a cubin with a different ABI.
+            signature[name] = "constexpr"
             constants[name] = _unwrap_constexpr(val)
             continue
         if _is_tensor(val):
@@ -1269,10 +1316,6 @@ def _run(jitfn, args, kwargs, grid):
             signature[name] = _ptr_sig(val)
             runtime_vals.append((name, signature[name], val))
             out_vars.append(val)
-        elif val is None:
-            # triton models a None pointer arg as *i8; pass null
-            signature[name] = "*i8"
-            runtime_vals.append((name, "*i8", None))
         else:
             val = _unwrap_constexpr(val)
             sig = _scalar_sig(val)
@@ -1395,19 +1438,30 @@ def _run(jitfn, args, kwargs, grid):
     # bounced tensors to copy back + guard buffers to recycle after the launch:
     #   (orig_ptr, bounce_ptr, payload_bytes, bounce_cap)
     bounced = []
+    pointers = {name: _tensor_ptr(value) for name, signature, value in runtime_vals
+                if signature.startswith("*") and value is not None}
+    guard_enabled = _guard_enabled()
+    overlapping = _overlapping_argument_names({
+        name: _tensor_byte_range(value, pointers[name], signature)
+        for name, signature, value in runtime_vals if name in pointers
+    }) if guard_enabled else set()
     for (name, sig, val) in runtime_vals:
         if sig.startswith("*"):
             if val is None:
-                cv = ctypes.c_uint64(0)
+                raise JittorTritonError(
+                    "None argument %r escaped constexpr specialization" % name)
             else:
-                ptr = _tensor_ptr(val)
-                nbytes = _tensor_nbytes(val, sig) if _guard_enabled() else 0
+                ptr = pointers[name]
+                nbytes = _tensor_nbytes(val, sig) if guard_enabled else 0
                 # Only a contiguous operand can be bounced: the copy is a flat
                 # memcpy of the payload and the kernel keeps the caller's
                 # strides, so a strided view would be copied wrongly and then
                 # read out of the copied buffer (see `_tensor_is_contiguous`).
-                if (not _looks_like_output_arg(name)) and 0 < nbytes <= _guard_max_payload() \
-                        and _tensor_is_contiguous(val):
+                # Shared storage must retain its actual pointer relationship.
+                # Otherwise a bounced input's copy-back can overwrite an in-place
+                # output with its pre-launch value, even after a correct kernel.
+                if name not in overlapping and (not _looks_like_output_arg(name)) \
+                        and 0 < nbytes <= _guard_max_payload() and _tensor_is_contiguous(val):
                     # bounce through a guarded buffer so a masked over-read past the
                     # operand's end hits zeroed slack instead of an unmapped page.
                     try:

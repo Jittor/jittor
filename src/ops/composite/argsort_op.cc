@@ -21,6 +21,10 @@ namespace jittor {
 
 static auto make_index = op_constructor<VarPtr, NanoVector, int64, NanoString>("index");
 static auto make_reindex_reduce = op_constructor<VarPtr, Var*, NanoString, NanoVector, vector<string>&&, vector<string>&&, vector<Var*>&&>("reindex_reduce");
+#ifdef IS_ACL
+static auto make_argsort = op_constructor<vector<VarPtr>, Var*, int, bool, NanoString, bool>("argsort");
+static auto make_unary = op_constructor<VarPtr, Var*, NanoString>("unary");
+#endif
 
 #ifdef HAS_ACCELERATOR
 static auto make_array = op_constructor<VarPtr, const void*, NanoVector, NanoString>("array");
@@ -28,14 +32,26 @@ static auto make_binary = op_constructor<VarPtr, Var*, Var*, NanoString>("binary
 static auto make_transpose = op_constructor<VarPtr, Var*, NanoVector>("transpose");
 #endif
 
-ArgsortOp::ArgsortOp(Var* x, int dim, bool descending, NanoString dtype)
-    : x(x), dim(dim), descending(descending) {
+ArgsortOp::ArgsortOp(Var* x, int dim, bool descending, NanoString dtype, bool stable)
+    : x(x), dim(dim), descending(descending), stable(stable) {
     if  (this->dim == -1)
         this->dim = x->shape.size() - 1;
     dim = this->dim;
     #ifdef HAS_ACCELERATOR
     const auto backend = construction_target_backend(x);
+    USER_CHECK(!stable || backend == BackendId::Cpu || backend == BackendId::Cuda)
+        << "stable argsort is only supported on CPU and CUDA";
     if (backend != BackendId::Cpu) {
+#ifdef IS_ACL
+        // CANN Sort returns int64 indices. Preserve the requested Jittor
+        // index dtype through an accelerator Cast instead of a CPU copy.
+        if (backend == BackendId::Acl && dtype != ns_int64) {
+            auto sorted = make_argsort(x, dim, descending, ns_int64, false);
+            forward(make_unary(sorted[0], dtype));
+            forward(sorted[1]);
+            return;
+        }
+#endif
         if (has_op_capability(backend, OpCapability::SegmentedArgsort)) {
             int dims = x->shape.size();
             vector<int64> axes;
@@ -76,6 +92,15 @@ ArgsortOp::ArgsortOp(Var* x, int dim, bool descending, NanoString dtype)
     #endif
     y = create_output(nullptr, dtype);
     y_key = create_output(nullptr, x->dtype());
+#ifdef IS_ACL
+    const auto input_dtype = x->dtype();
+    if (dtype == ns_int64 &&
+        (input_dtype == ns_float16 || input_dtype == ns_float32 ||
+         input_dtype == ns_int8 || input_dtype == ns_int16 ||
+         input_dtype == ns_int32 || input_dtype == ns_int64 ||
+         input_dtype == ns_uint8))
+        set_flag(OpFlags::_cuda);
+#endif
     set_flag(OpFlags::_manual_set_vnbb);
     y->set_flag(VarFlags::_needed_by_backward);
 }
@@ -96,19 +121,17 @@ VarPtr ArgsortOp::get_grad(Var* out, Var* dout, Var* v, int v_index, int dim, Va
         indexes_.push_back(indexes.back());
     }
 
-    string temp;
-    temp.reserve(6+3*shape.size()); // @e0(i0,i1)
-    temp += "@e0(";
+    // "(i0,i1,...)": the argument list of every @e{i}(...) below.
+    string args = "(";
     for (uint i=0; i<shape.size(); i++) {
-        if (i) temp += ',';
-        temp += 'i';
-        temp += '0'+i;
-    };
-    temp += ')';
+        if (i) args += ',';
+        args += 'i';
+        args += S(i);
+    }
+    args += ')';
     indexes__.reserve(indexes.size());
     for (uint i=0; i<indexes.size(); i++) {
-        temp[2] = '0'+i; // @ei
-        indexes__.emplace_back(temp);
+        indexes__.emplace_back("@e"+S(i)+args);
     }
     
     return make_reindex_reduce(dout, ns_add, v->shape, move(indexes__), {}, move(indexes_));
@@ -132,9 +155,10 @@ void ArgsortOp::infer_shape() {
 void ArgsortOp::jit_prepare(JK& jk) {
     jk << "«Tx:" << x->dtype();
     jk << "«Ty:" << y->dtype();
-    jk << "«XDIM=" << JK::hex1(x->shape.size());
-    jk << "«DIM=" << JK::hex1(dim);
+    jk << "«XDIM=" << JK::hex(x->shape.size());
+    jk << "«DIM=" << JK::hex(dim);
     jk << "«CMP:" << (descending ? '>' : '<');
+    jk << "«STABLE:" << (stable ? '1' : '0');
 }
 
 #else // JIT
@@ -160,7 +184,7 @@ void ArgsortOp::jit_run() {
             tempx[i@DIM] = xp[xid];
             tempy[i@DIM] = i@DIM;
         }
-        std::sort(tempy.begin(), tempy.end(), [&](Ty i, Ty j) -> bool { return tempx[i]@CMP@@tempx[j]; });
+        @if(STABLE,std::stable_sort,std::sort)(tempy.begin(), tempy.end(), [&](Ty i, Ty j) -> bool { return tempx[i]@CMP@@tempx[j]; });
 
         for (index_t i@DIM=0; i@DIM < xshape@DIM; i@DIM++){
             auto xid = @for(d, 0, XDIM, + i@d * xstride@d);

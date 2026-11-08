@@ -139,10 +139,8 @@ def build_jobs():
     return max(1, min(cores, by_memory, 32))
 
 
-def install_source(root, asset, version, compiler, download, safe_extract, allow_build=True):
-    """Return the exact installed prefix; never choose a sibling by directory order."""
-    root = Path(root)
-    root.mkdir(parents=True, exist_ok=True)
+def _source_build(root, asset, version, compiler):
+    """The prefix and metadata a source build for this compiler is keyed by."""
     compiler = shutil.which(compiler) or os.path.abspath(compiler)
     stat = os.stat(compiler)
     cpu_runtime = "SEQ" if platform.system() == "Darwin" else "OMP"
@@ -154,7 +152,34 @@ def install_source(root, asset, version, compiler, download, safe_extract, allow
                     compiler_size=stat.st_size, compiler_mtime_ns=stat.st_mtime_ns,
                     platform=platform.system(), machine=platform.machine(), options=options)
     fingerprint = hashlib.sha256(json.dumps(metadata, sort_keys=True).encode()).hexdigest()[:20]
-    prefix = root / ("onednn-" + version + "-" + fingerprint)
+    prefix = Path(root) / ("onednn-" + version + "-" + fingerprint)
+    return prefix, metadata, fingerprint, compiler, options
+
+
+def source_build_available(root, asset, version, compiler):
+    """Whether ``install_source`` can produce a library without failing up front.
+
+    True when a matching build is already installed, or when one can be made
+    (cmake is on PATH). The build itself can still fail; this only answers
+    whether attempting it is meaningful at all.
+    """
+    if shutil.which("cmake") is not None:
+        return True
+    prefix, metadata, _, _, _ = _source_build(root, asset, version, compiler)
+    marker = prefix / "jittor-build.json"
+    if not marker.is_file() or library_layout(prefix) is None:
+        return False
+    try:
+        return json.loads(marker.read_text(encoding="utf-8")) == metadata
+    except ValueError:
+        return False
+
+
+def install_source(root, asset, version, compiler, download, safe_extract, allow_build=True):
+    """Return the exact installed prefix; never choose a sibling by directory order."""
+    root = Path(root)
+    root.mkdir(parents=True, exist_ok=True)
+    prefix, metadata, fingerprint, compiler, options = _source_build(root, asset, version, compiler)
     with _install_lock(root / "onednn-source.lock"):
         marker = prefix / "jittor-build.json"
         layout = library_layout(prefix)

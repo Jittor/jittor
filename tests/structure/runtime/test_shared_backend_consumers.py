@@ -36,8 +36,21 @@ def test_shared_device_consumers_have_no_vendor_sdk_dependency():
 def test_auto_flush_requires_backend_support_and_nan_diagnostics_dispatch():
     executor = (SRC / "core/executor.cc").read_text(encoding="utf-8")
     diagnostics = (SRC / "debug/nan_checker.cc").read_text(encoding="utf-8")
-    assert "execution.supports_auto_flush" in executor
+    assert "backend_ops(accelerator_backend_id()).execution" in executor
+    assert ("!policy.supports_auto_flush && "
+            "!(policy.async_auto_flush_only && deferrable)") in executor
     assert "CHECK(backend.check_nan)" in diagnostics
     assert "backend.check_nan(v, op)" in diagnostics
     assert "allocation_device(v->allocator)" in diagnostics
     assert (ROOT / "backends/cuda/runtime/nan_checker.cc").is_file()
+
+
+def test_log1p_keeps_existing_complex_and_acl_graphs_on_the_operand_device():
+    source = (SRC / "ops/unary_op.cc").read_text(encoding="utf-8")
+    block = source.split("if (ns == ns_log1p) {", 1)[1].split("// `bitwise_not`", 1)[0]
+    assert "query_dispatch_context({x}).backend" in block
+    assert "x->dtype().is_complex()" in block
+    assert 'backend == "acl"' in block and 'backend == "acl_legacy"' in block
+    assert "forward(make_unary(make_binary(make_number(1, x), x, ns_add), ns_log))" in block
+    assert '"cpu"' not in block and "fallback" not in block
+    assert not re.search(r"#\s*include\s*[<\"](?:cuda|hip|acl/)", source)

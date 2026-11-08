@@ -5,6 +5,7 @@ changing the compatibility semantics.
 """
 from ...fidelity import Fidelity, register_api_bindings
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
+from jittor._core.dtypes import var_dtype_name as _var_dtype_name
 
 import builtins as _builtins
 
@@ -14,9 +15,10 @@ from jittor import nn
 
 import numbers
 
-import numpy as np
+import numpy as _numpy
 
 from ...functional import _diff, _torch_norm_impl, _torch_where_select, _trapz
+from ...generator import Generator
 
 from ...grad import _GradDecoratorCtx
 
@@ -41,6 +43,9 @@ from .... import fsdp_hooks as _fsdp_hooks
 from .... import collectives as _collectives
 
 from .reductions import corrcoef
+
+# Shared shape helpers import this module's NumPy binding.
+np = _numpy
 
 register_fidelity(
     "torch.corrcoef", corrcoef, Fidelity.APPROXIMATE,
@@ -105,7 +110,13 @@ _LOGADDEXP_FIDELITY_DETAIL = (
     "layout, dtype, and out keyword semantics are not implemented"
 )
 
-from .arithmetic import nan_to_num
+from .arithmetic import foreach_zero_, nan_to_num
+
+register_fidelity(
+    "torch._foreach_zero_", foreach_zero_, Fidelity.APPROXIMATE,
+    "Existing Tensor.zero_ clears contiguous detached or no-grad lists in place, including physical storage views. "
+    "Differentiable non-leaf, materialized logical views and non-contiguous lists are explicitly unsupported; fused batching is not provided.",
+)
 
 from .arithmetic import logaddexp
 
@@ -456,6 +467,19 @@ def _index_select(input, dim, index, *, out=None):
     return result
 
 
+def _byte_tensor_constructor_data(data, *, nested=False):
+    """Match torch.ByteTensor for bytes nested in sequence inputs."""
+    if isinstance(data, bytes):
+        if not nested:
+            raise TypeError("new(): invalid data type 'bytes'")
+        return list(data)
+    if isinstance(data, bytearray):
+        return list(data)
+    if isinstance(data, (list, tuple)):
+        return [_byte_tensor_constructor_data(item, nested=True) for item in data]
+    return data
+
+
 class _TypedTensorMeta(type):
     def __instancecheck__(cls, obj):
         return isinstance(obj, compatibility_owner(jt).Var) and _jittor_dtype_name(obj.dtype) == cls._jdtype
@@ -465,7 +489,10 @@ class _TypedTensorMeta(type):
             if tensor_input:
                 v = args[0]
             elif len(args) == 1 and not isinstance(args[0], int):
-                v = jt.array(args[0], dtype=cls._jdtype)
+                data = args[0]
+                if cls._jdtype == "uint8":
+                    data = _byte_tensor_constructor_data(data)
+                v = jt.array(data, dtype=cls._jdtype)
             elif len(args) == 0:
                 v = jt.zeros((0,), dtype=cls._jdtype)
             else:
@@ -551,6 +578,9 @@ def tensor(data, dtype=None, device=None, requires_grad=False, **kw):
         elif _device_is_cuda(device):
             v = _make_cuda_resident(v, force=True, device=device)
             v = _move_to_cuda_index(v, g.device(device))
+        # torch.tensor always creates a leaf, including dtype conversion from
+        # the float32 host representation needed for bfloat16 construction.
+        v = v.detach()
         v.requires_grad_(bool(requires_grad))
         if requires_grad:
             v.requires_grad_(True)
@@ -625,72 +655,6 @@ def frombuffer(buffer, *, dtype, count=-1, offset=0, requires_grad=False):
         return v
 
 
-class Generator(jt.Generator):
-    """Torch-shaped wrapper around Jittor's native seed/counter generator."""
-
-    def __init__(self, device=None):
-        super().__init__(globals()["device"](device or "cpu"))
-        # Keep the established compat path for floating-point factories until
-        # native generator-aware normal is available. Integer draws and
-        # sampler indices always use the native Jittor stream.
-        self._rng = np.random.default_rng(0)
-
-    @property
-    def device(self):
-        return globals()["device"](self.device_type, self.device_index)
-
-    def manual_seed(self, seed):
-        super().manual_seed(seed)
-        self._rng = np.random.default_rng(int(seed))
-        return self
-
-    def _uniform(self, low, high, shape, dtype="float32"):
-        if self.device.type != "cpu":
-            raise RuntimeError("explicit Generator uniform currently supports CPU only")
-        dtype_name = _dtype_to_str(dtype)
-        precision_bits = {"float16": 11, "bfloat16": 8,
-                          "float32": 24, "float64": 53}.get(dtype_name)
-        if precision_bits is None:
-            raise NotImplementedError("explicit Generator uniform requires a floating dtype")
-        count = int(np.prod(tuple(shape)))
-        offset = self._reserve(count * (2 if precision_bits > 32 else 1))
-        quantized_low = float(low)
-        quantized_high = float(high)
-        compute_dtype = "float64" if dtype_name == "float64" else "float32"
-        values = jt.ops.generator_uniform(
-            shape, compute_dtype, quantized_low, quantized_high,
-            self._seed_argument(), offset, precision_bits)
-        return values if dtype_name == compute_dtype else values.cast(dtype_name)
-
-    def get_state(self):
-        version, kind, index, seed, offset = super().get_state()
-        payload = "%s\n%s %s %s %s\n" % (
-            version, kind, "-" if index is None else index, seed, offset)
-        data = np.frombuffer(payload.encode("ascii"), dtype=np.uint8).copy()
-        return from_numpy(data, device="cpu")
-
-    def set_state(self, state):
-        if (not isinstance(state, jt.Var)
-                or _dtype_to_str(state.dtype) != "uint8"
-                or state.ndim != 1 or not _var_is_cpu_resident(state)):
-            raise TypeError("Generator state must be a one-dimensional CPU uint8 tensor")
-        try:
-            text = state.numpy().tobytes().decode("ascii")
-            lines = text.splitlines()
-            if len(lines) != 2:
-                raise ValueError
-            fields = lines[1].split()
-            if len(fields) != 4:
-                raise ValueError
-            kind, index_text, seed_text, offset_text = fields
-            index = None if index_text == "-" else int(index_text)
-            super().set_state((lines[0], kind, index,
-                               int(seed_text), int(offset_text)))
-        except (UnicodeDecodeError, ValueError, OverflowError):
-            raise RuntimeError("invalid Generator state") from None
-        return self
-
-
 class layout:  # torch.layout placeholder
     pass
 
@@ -717,7 +681,62 @@ def _check_to_pybool(cond):
     return bool(cond)
 
 
+#: The native `cat` fast path (`src/bindings/pyjt/py_compat_fast.h`), bound
+#: on first use: a KV-cache update or a RoPE half swap, a hundred a decode
+#: token, built without the eight Python frames between here and the ops.
+_FAST_CAT = None
+
+
+def _bind_fast_cat():
+    global _FAST_CAT
+    from .methods import _bind_native_fast_paths
+    _bind_native_fast_paths(jt)
+    _FAST_CAT = jt.core._fast_cat
+    return _FAST_CAT
+
+
 def cat(tensors, dim=0, out=None, axis=None):
+    from ...amp import _effective_autocast_device
+    if _effective_autocast_device() is not None:
+        with jt.flag_scope(amp_reg=0):
+            return _cat_impl(tensors, dim, out, axis)
+    return _cat_impl(tensors, dim, out, axis)
+
+
+def _cat_impl(tensors, dim=0, out=None, axis=None):
+    if out is None and axis is None and type(dim) is int:
+        fast = (_FAST_CAT or _bind_fast_cat())(tensors, dim)
+        if fast is not NotImplemented:
+            return _cat_grad_result(fast, tensors)
+        # The native fast path above declines whenever a backend registers its
+        # own concat kernel (ACL does), so on ACL every `cat` falls through the
+        # whole frontend below -- the `__torch_function__` scan, the `None`
+        # filter, the scalar-ndim squeeze and the uint8-restore setcomp -- only
+        # to reach that kernel. For plain Vars of one signed dtype and one rank,
+        # none empty, every one of those steps is a no-op and `jittor.concat`
+        # (which dispatches to the kernel) is exactly what the frontend ends up
+        # calling. A Qwen3 decode step pays this ~100 us a hundred times.
+        seq = tensors if tensors.__class__ in (list, tuple) else None
+        if seq is not None and len(seq) >= 2 and isinstance(seq[0], jt.Var):
+            ndim0 = seq[0].ndim
+            name0 = _var_dtype_name(seq[0])
+            # 'u' is every unsigned name (`uint8`..); jittor's concat downcasts a
+            # uniform uint8 input, which the slow path restores and this does not.
+            uniform = ndim0 >= 1 and name0[0] != 'u'
+            if uniform:
+                for t in seq:
+                    if (not isinstance(t, jt.Var) or t.ndim != ndim0
+                            or t.numel() <= 0 or _var_dtype_name(t) != name0):
+                        uniform = False
+                        break
+            if uniform:
+                result = _jt_concat(list(seq), dim)
+                # torch.cat is dtype-preserving; autocast does not cast it.
+                # jittor.concat may compute in the reduced dtype under AMP,
+                # so restore the common input dtype the frontend promises.
+                if _jittor_dtype_name(result.dtype) != name0:
+                    result = result.cast(name0)
+                return _cat_grad_result(result, seq)
     g = compatibility_owner(jt)
     if axis is not None: dim = axis      # torch accepts axis= (mmrotate PSC head)
     # Honor the __torch_function__ protocol: tensordict (and other tensor-likes)
@@ -755,9 +774,9 @@ def cat(tensors, dim=0, out=None, axis=None):
     tensors = [t for t in tensors if t is not None]
     nonempty = [t for t in tensors if t.numel() > 0]
     if len(nonempty) == 0:
-        return tensors[0]
+        return _cat_result(tensors[0], out)
     if len(nonempty) == 1:
-        return nonempty[0]
+        return _cat_result(nonempty[0], out)
     # torch requires all tensors to share ndim. jittor has no 0-d scalars, so
     # a torch-scalar `s` (0-d) becomes a [1] Var and `s.unsqueeze(0)` yields
     # [1,1] instead of torch's [1] -- mixing 2-D and 1-D entries that torch
@@ -791,7 +810,23 @@ def cat(tensors, dim=0, out=None, axis=None):
         d = in_dtypes.pop()
         if _jittor_dtype_name(out_var.dtype) != d:
             out_var = out_var.cast(d)
-    return out_var
+    return _cat_result(_cat_grad_result(out_var, fixed), out)
+
+
+def _cat_grad_result(value, tensors):
+    # Native concat may mark a new destination trainable for frozen inputs.
+    if isinstance(value, jt.Var) and (jt.flags.no_grad or not any(
+            isinstance(t, jt.Var) and t.requires_grad for t in tensors)):
+        return value.detach()
+    return value
+
+
+def _cat_result(value, out):
+    # ``out=`` may be a view (``flat.narrow(...)``): write through it.
+    if out is None:
+        return value
+    out.copy_(value)
+    return out
 
 
 def stack(tensors, dim=0, *, axis=None, out=None):
@@ -843,6 +878,14 @@ class BoolTensor(metaclass=_TypedTensorMeta):
     _jdtype = 'bool'
 
 
+class ComplexFloatTensor(metaclass=_TypedTensorMeta):
+    _jdtype = 'complex64'
+
+
+class ComplexDoubleTensor(metaclass=_TypedTensorMeta):
+    _jdtype = 'complex128'
+
+
 _TYPED_TENSOR_CLASSES = {
     'FloatTensor': FloatTensor,
     'DoubleTensor': DoubleTensor,
@@ -854,6 +897,8 @@ _TYPED_TENSOR_CLASSES = {
     'CharTensor': CharTensor,
     'ByteTensor': ByteTensor,
     'BoolTensor': BoolTensor,
+    'ComplexFloatTensor': ComplexFloatTensor,
+    'ComplexDoubleTensor': ComplexDoubleTensor,
 }
 
 def _check_condition(condition, message, exception):
@@ -933,6 +978,8 @@ def install(ctx):
 
     g.tensor = tensor
 
+    g._foreach_zero_ = foreach_zero_
+
     g.as_tensor = as_tensor
 
     g.from_numpy = from_numpy
@@ -946,9 +993,7 @@ def install(ctx):
 
     g.corrcoef = corrcoef
 
-    # torch.Generator (RNG handle) -- jittor uses a global seed; provide a
-    # lightweight stand-in that supports manual_seed and is accepted where a
-    # generator is passed (it is otherwise ignored).
+    # Keep the Torch spelling over the native independent generator owner.
     g.Generator = Generator
 
     # numeric / misc top-level constants and small types
@@ -1054,6 +1099,11 @@ from .shape_api import (
     _looks_like_dtype,
     _norm_reduce_kw,
     _torch_reshape,
+    _torch_permute,
+    _torch_transpose,
+    _torch_t,
+    _torch_view,
+    _torch_view_base,
     _torch_size,
     _torch_sum,
     _torch_var_sum,
@@ -1070,6 +1120,10 @@ def install_methods(ctx):
     # which breaks torch idioms like `(n,) + data.size()[1:]` (mmdet's unmap()).
     _Size = getattr(g, "Size", tuple)
     Var.size = _torch_size
+    Var.permute = g.permute = _torch_permute
+    Var.transpose = g.transpose = _torch_transpose
+    Var.t = g.t = _torch_t
+    Var._base = property(_torch_view_base)
 
     # jittor's core reshape/view reject a torch.Size (a tuple SUBCLASS) -> normalize
     # a single Size/tuple-subclass arg to a plain tuple so `x.reshape(other.size())`
@@ -1078,7 +1132,17 @@ def install_methods(ctx):
     _orig_reshape = Var.reshape
     _np_view_of = None
     Var.reshape = _torch_reshape
-    Var.view = _torch_reshape
+    Var.view = _torch_view
+    # The native view builds what jittor's own reshape does, so only while
+    # that is what `_torch_reshape` would delegate to.
+    from . import shape_api as _shape_api
+    from jittor._core import var as _native_var
+    _shape_api._FAST_VIEW = (getattr(jt.core, "_fast_view", None)
+                             if _orig_reshape is _native_var.reshape else None)
+    if _orig_reshape is _native_var.reshape:
+        # Torch first tries a genuine strided view; the wrapper below copies
+        # only when the native view explicitly rejects this target shape.
+        _orig_reshape = _native_var.view
 
     # Keep the existing Torch-facing promotion for narrow integer sums
     # (yolox/rtmdet SimOTA assigners do mask.sum() on a uint8 match matrix).
@@ -1106,10 +1170,9 @@ def install_methods(ctx):
         if _ro is not None:
             _native_reductions[_rn] = _ro
             setattr(Var, _rn, _SHAPE_REDUCTION_APIS[_rn])
-    # any/all: jittor's only accept a scalar `dim` (no `dims` tuple, no keepdims).
-    # Support torch's tuple-of-dims and keepdim by reducing one dim at a time
-    # (descending so earlier dim indices stay valid), keeping a length-1 axis when
-    # keepdim is set. Plain scalar/axis use falls through to the native op.
+    # any/all share the module-level Torch argument contract. The native owner
+    # accepts tuple dimensions and keepdims directly; the adapter also preserves
+    # Torch's empty-axis and uint8-result conventions.
     for _rn in ("any", "all"):
         _ro = getattr(Var, _rn, None)
         if _ro is not None:
@@ -1140,7 +1203,8 @@ def install_methods(ctx):
     if not hasattr(Var, "neg"):         Var.neg = _shape_neg
     if not hasattr(Var, "reciprocal"):  Var.reciprocal = _shape_reciprocal
     if not hasattr(Var, "expm1"):       Var.expm1 = _shape_expm1
-    if not hasattr(Var, "log1p"):       Var.log1p = _shape_log1p
+    # Keep Torch integer promotion on the frontend Tensor only.
+    Var.log1p = _shape_log1p
     if not hasattr(Var, "square"):      Var.square = _shape_square
     if not hasattr(Var, "square_"):     Var.square_ = _shape_square_
     if not hasattr(Var, "clamp_min"):   Var.clamp_min = _shape_clamp_min

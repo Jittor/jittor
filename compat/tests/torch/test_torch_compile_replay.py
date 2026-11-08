@@ -86,6 +86,62 @@ class _Case:
         self.assertEqual(replay.stats["captured"], 1)
         self.assertEqual(replay.stats["replayed"], len(feeds))
 
+    def test_compiling_takes_the_module_from_the_automatic_policy(self):
+        # Run as written first, the module was captured by the automatic
+        # policy; compiled, that capture would be a second one, never used.
+        model = _Net().to(self.device).eval()
+        x, t = self._feeds(1)[0]
+        flag = jt.flags.auto_graph_replay
+        jt.flags.auto_graph_replay = 1
+        try:
+            with torch.no_grad():
+                for _ in range(4):
+                    model(x, t, context=self.context)
+            self.assertIsNotNone(model.__dict__["_auto_graph_replay"].replay)
+            call = torch.compile(model.__call__, mode="reduce-overhead")
+            state = model.__dict__["_auto_graph_replay"]
+            self.assertTrue(state.give_up)
+            self.assertIsNone(state.replay)
+            with torch.no_grad():
+                got = [call(x, t, context=self.context)["out"].sample.cpu().numpy()
+                       for _ in range(3)]
+            jt.flags.auto_graph_replay = 0
+            with torch.no_grad():
+                want = model(x, t, context=self.context)["out"].sample.cpu().numpy()
+        finally:
+            jt.flags.auto_graph_replay = flag
+        for g in got:
+            np.testing.assert_allclose(g, want, rtol=1e-5, atol=1e-6)
+
+    def test_auto_replay_does_not_reuse_a_peft_adapter_path(self):
+        class AdapterModel(nn.Module):
+            def __init__(self):
+                super().__init__()
+                # The same structural markers PeftModel sets before its first
+                # forward, without importing PEFT into this runtime test.
+                self._peft_config = None
+                self.base_model = nn.Linear(2, 2, bias=False)
+                self.adapter_enabled = True
+
+            def forward(self, x):
+                out = self.base_model(x)
+                return out + 1 if self.adapter_enabled else out
+
+        model = AdapterModel().to(self.device).eval()
+        x = torch.ones(1, 2, device=self.device)
+        flag = jt.flags.auto_graph_replay
+        jt.flags.auto_graph_replay = 1
+        try:
+            with torch.no_grad():
+                for _ in range(3):
+                    enabled = model(x).detach().cpu().numpy()
+                model.adapter_enabled = False
+                disabled = model(x).detach().cpu().numpy()
+            np.testing.assert_allclose(enabled - disabled, np.ones_like(enabled), rtol=0, atol=0)
+            self.assertNotIn("_auto_graph_replay", model.__dict__)
+        finally:
+            jt.flags.auto_graph_replay = flag
+
     def test_a_call_that_records_gradients_runs_the_module(self):
         x = torch.randn(4, 8, device=self.device, requires_grad=True)
         t = torch.tensor(3)
@@ -258,6 +314,44 @@ class _Training:
 class TestCompileTrainingCpu(_Training, unittest.TestCase):
     device = "cpu"
 
+    def test_each_replayed_step_runs_on_the_batch_it_was_given(self):
+        # The capture's last act is to commit the state writes, which first
+        # resolves the backward's saved readers -- the forward. Run outside
+        # `keep_graph`, that batch finishes the forward, and every replay then
+        # reuses the captured batch's activations: the loss and the gradients
+        # belong to the batch the capture saw. No schedule and no momentum are
+        # involved here, so a divergence can only be the batch itself.
+        def run(compiled):
+            torch.manual_seed(0)
+            model = nn.Sequential(nn.Linear(8, 32), nn.ReLU(), nn.Linear(32, 4))
+            opt = torch.optim.SGD(model.parameters(), lr=1e-2)
+            rng = np.random.RandomState(0)
+            data = [(torch.tensor(rng.randn(16, 8).astype("float32")),
+                     torch.tensor(rng.randn(16, 4).astype("float32")))
+                    for _ in range(4)]
+
+            def step(x, y):
+                opt.zero_grad(set_to_none=True)
+                loss = ((model(x) - y) ** 2).mean()
+                loss.backward()
+                opt.step()
+                return loss
+
+            f = torch.compile(step, mode="reduce-overhead") if compiled else step
+            losses = [float(f(x, y)) for x, y in data]
+            return losses, [p.detach().cpu().numpy() for p in model.parameters()], f
+
+        want_losses, want_params, _ = run(False)
+        got_losses, got_params, f = run(True)
+        np.testing.assert_allclose(got_losses, want_losses, rtol=1e-5, atol=1e-6)
+        for g, w in zip(got_params, want_params):
+            np.testing.assert_allclose(g, w, rtol=1e-5, atol=1e-6)
+        # One eager call establishes the signature, the next is captured, and
+        # both after that replay -- otherwise the comparison above proves
+        # nothing about replay.
+        self.assertEqual(f.stats["captured"], 1)
+        self.assertEqual(f.stats["replayed"], 2)
+
 
 @unittest.skipIf(not _test_capability.check_accelerator("cuda", backend=jt).enabled,
                  "no usable CUDA in this build")
@@ -311,6 +405,54 @@ class TestCompileTrainingCuda(_Training, unittest.TestCase):
         _, _, run = self._compare(steps=12)
         self.assertIsNone(run._graph_refused)
         self.assertGreater(run.stats["graph"], 0)
+
+    def test_batch_norm_statistics_are_written_back_in_the_graph(self):
+        # The running statistics are rebound every step, out of place; the
+        # replay writes all of them back with one `write_back` op in its
+        # graph rather than one copy each.
+        def run(compiled):
+            torch.manual_seed(0)
+            model = nn.Sequential(nn.Conv2d(3, 8, 3, padding=1), nn.BatchNorm2d(8), nn.ReLU(),
+                                  nn.Conv2d(8, 8, 3, padding=1), nn.BatchNorm2d(8), nn.ReLU(),
+                                  nn.AdaptiveAvgPool2d(1), nn.Flatten(), nn.Linear(8, 4)).cuda()
+            opt = torch.optim.SGD(model.parameters(), lr=1e-2, momentum=0.9)
+            rng = np.random.RandomState(0)
+
+            def step(x):
+                opt.zero_grad(set_to_none=True)
+                loss = model(x).square().mean()
+                loss.backward()
+                opt.step()
+                return loss
+
+            fn = torch.compile(step, mode="reduce-overhead") if compiled else step
+            losses = []
+            for _ in range(8):
+                losses.append(float(fn(torch.tensor(rng.randn(4, 3, 8, 8).astype("float32")).cuda())))
+                # A device-wide sync between steps must not run -- and so
+                # finish -- the write-back the capture added to its graph.
+                torch.cuda.synchronize()
+            state = [t.detach().cpu().numpy() for t in model.state_dict().values()
+                     if t.dtype == torch.float32]
+            return losses, state, fn
+        want = run(False)
+        got = run(True)
+        np.testing.assert_allclose(got[0], want[0], rtol=1e-4, atol=1e-6)
+        for g, w in zip(got[1], want[1]):
+            np.testing.assert_allclose(g, w, rtol=1e-4, atol=1e-5)
+        fn = got[2]
+        self.assertIsNone(fn._graph_refused)
+        self.assertEqual(fn.stats["captured"], 1)
+        self.assertGreater(fn.stats["graph"], 0)
+        self.assertTrue(all(inplace for *_, inplace in fn._capture.state))
+
+    def test_an_sgd_step_updates_its_parameters_in_place(self):
+        # The fused SGD writes the parameters where they are, as the fused
+        # AdamW does, so a replay has nothing to copy back into them: a
+        # ResNet-50 step used to end in 320 copies.
+        _, _, run = self._compare(optimizer="sgd")
+        self.assertTrue(run._capture.state)
+        self.assertTrue(all(inplace for *_, inplace in run._capture.state))
 
 
 

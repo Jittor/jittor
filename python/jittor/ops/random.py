@@ -3,10 +3,11 @@
 import numpy as np
 import time
 from jittor_core import Var
+from .._core.dtypes import dtype_name as _dtype_name
 
-def bernoulli(input):
+def bernoulli(input, generator=None):
     import jittor as jt
-    return (input>jt.rand_like(input)).cast(input.dtype)
+    return (input > jt.random(input.shape, input.dtype, generator=generator)).cast(input.dtype)
 
 
 def arange(start=0, end=None, step=1, dtype=None):
@@ -85,7 +86,7 @@ def linspace(start, end, steps):
     return res
 
 
-def randperm(n, dtype="int64"):
+def randperm(n, dtype="int64", generator=None):
     ''' A random permutation of ``range(n)``, int64 like ``torch.randperm``.
 
     int64 because a permutation *is* an index: int32 stops naming an element at
@@ -93,7 +94,7 @@ def randperm(n, dtype="int64"):
     arithmetic done with it (a flat offset, say) in int32 too.
     '''
     import jittor as jt
-    key = jt.random((n,))
+    key = jt.random((n,), generator=generator)
     res = jt.argsort(key)
     # jt.argsort may return either the index Var directly or a
     # (index, value) tuple depending on the build; handle both.
@@ -124,9 +125,17 @@ def set_global_seed(seed, different_seed_for_mpi=True):
     np.random.seed(seed)
     try:
         import cupy
+    except ImportError:
+        return
+    try:
         cupy.random.seed(seed)
-    except:
-        pass
+    except Exception as error:
+        # Installed but unusable here, e.g. no CUDA device: the caller still
+        # gets every other RNG seeded, and is told this one was not.
+        import warnings
+        warnings.warn(f"set_global_seed: cupy is installed but could not be "
+                      f"seeded ({type(error).__name__}: {error}); its random "
+                      f"numbers will not be reproducible.", stacklevel=2)
 
 
 def _seed_jittor_at_import():
@@ -153,7 +162,7 @@ def _seed_jittor_at_import():
     jt.set_seed(int(time.time() * 1000000) % 100000007 + jt.rank * 2591)
 
 
-def multinomial(weights: Var, num_samples: int, replacement: bool=False) -> Var:
+def multinomial(weights: Var, num_samples: int, replacement: bool=False, generator=None) -> Var:
     ''' Returns a var where each row contains num_samples indices sampled from the multinomial probability distribution located in the corresponding row of input weights.
 
     :param weights: the input probability.
@@ -180,11 +189,19 @@ def multinomial(weights: Var, num_samples: int, replacement: bool=False) -> Var:
         cum_probs_l = cum_probs[..., :-1]
         cum_probs_r = cum_probs[..., 1:]
         shape = weights.shape[:-1] + (num_samples, 1)
-        rand = jt.rand(shape) * cum_probs[..., :1, -1:]
+        rand = jt.random(shape, generator=generator) * cum_probs[..., :1, -1:]
         one_hot = jt.logical_and(cum_probs_l < rand, rand <= cum_probs_r)
         index = one_hot.index(one_hot.ndim - 1) + 1
         return (one_hot * index).sum(-1)
     else:
+        # A backend's own sampler for a single draw -- CANN's on ACL, which
+        # keeps the device generator's stream as torch_npu does; None leaves
+        # it to the A-Res sampler below.
+        if num_samples == 1 and generator is None:
+            from .._runtime.dispatch import try_dispatch
+            drawn = try_dispatch("random.multinomial", weights, num_samples, replacement)
+            if drawn is not None:
+                return drawn
         # A-Res algorithm
         # Pavlos S. Efraimidis and Paul G. Spirakis, 2006, Weighted random sampling with a reservoir
         if num_samples > weights.shape[-1]:
@@ -195,7 +212,7 @@ def multinomial(weights: Var, num_samples: int, replacement: bool=False) -> Var:
         # category to win ``topk``.  Positive keys are in (0, 1), so -1 is a
         # stable sentinel for masked entries.
         safe_weights = weights.maximum(1e-20)
-        a = jt.rand(weights.shape).minimum(0.999999).maximum(1e-7)
+        a = jt.random(weights.shape, generator=generator).minimum(0.999999).maximum(1e-7)
         rand = a ** (1 / safe_weights)
         rand = jt.ternary(weights > 0, rand, jt.full_like(rand, -1.0))
         _, indices = jt.topk(rand, num_samples)

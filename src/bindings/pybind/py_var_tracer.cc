@@ -18,6 +18,7 @@
 #include "core/var.h"
 #include "core/fused_op.h"
 #include "runtime/launch_diagnostics.h"
+#include "runtime/profiler/memory_history.h"
 
 namespace jittor {
 
@@ -104,7 +105,30 @@ static PyFrameObject* frame_back(PyFrameObject* f) {
     #endif
 }
 
-#if PY_VERSION_HEX >= 0x030B0000
+// A per-instruction key within a code object, for the origin cache only: the
+// bytecode offset, which PyFrame_GetLasti returns on 3.11+ and the public
+// f_lasti field holds before that. Not the source line: PyFrame_GetLineNumber
+// walks the line table on every call, and this runs once per Op. A miss still
+// interns the origin by (file, line), so ids are the same at either key.
+static int frame_lasti(PyFrameObject* f) {
+    #if PY_VERSION_HEX >= 0x030B0000
+    return PyFrame_GetLasti(f);
+    #else
+    return f->f_lasti;
+    #endif
+}
+
+// New reference to the frame's globals. PyFrame_GetGlobals is 3.11+, so before
+// that the attribute does the same lookup (also a new reference).
+static PyObject* frame_globals(PyFrameObject* f) {
+    #if PY_VERSION_HEX >= 0x030B0000
+    return PyFrame_GetGlobals(f);
+    #else
+    return PyObject_GetAttrString((PyObject*)f, "f_globals");
+    #endif
+}
+
+#if PY_VERSION_HEX >= 0x03090000
 // Every Op construction lands here, so the walk has to be cheap. It used to
 // look each frame's globals up by attribute name and its `__name__` by a C
 // string -- a new str, a UTF-8 decode and a hash per frame -- and then compute
@@ -114,29 +138,84 @@ static PyFrameObject* frame_back(PyFrameObject* f) {
 // object, and the origin of a (code object, instruction) pair never changes.
 // The GIL guards both tables; the code objects are held so their addresses
 // cannot be reused by another.
+//
+// Both answers live in one record per code object, so a frame costs one table
+// lookup. A record is held (and its code object with it) from the first time
+// the code object is seen.
 namespace {
+struct CodeOrigin {
+    bool internal = false;
+    std::unordered_map<int, uint64> lines;
+};
 struct OriginCaches {
-    std::unordered_map<PyObject*, bool> internal;
-    std::unordered_map<PyObject*, std::unordered_map<int, uint64>> origin;
+    std::unordered_map<PyObject*, CodeOrigin> codes;
     PyObject* name_key = nullptr;
+    // The last answer for a caller that is itself user code: a loop building
+    // operators asks from the same instruction again and again. Code objects
+    // in `codes` are held, so the pointer cannot name a different code later.
+    PyObject* hot_code = nullptr;
+    int hot_lasti = -1;
+    uint64 hot_result = 0;
 };
 OriginCaches& origin_caches() {
     static OriginCaches* caches = new OriginCaches();  // never freed: outlives the interpreter
     return *caches;
 }
-bool code_is_internal(OriginCaches& caches, PyFrameObject* frame, PyObject* code) {
-    auto found = caches.internal.find(code);
-    if (found != caches.internal.end()) return found->second;
+CodeOrigin& code_origin(OriginCaches& caches, PyFrameObject* frame, PyObject* code) {
+    auto found = caches.codes.find(code);
+    if (found != caches.codes.end()) return found->second;
     if (!caches.name_key) caches.name_key = PyUnicode_InternFromString("__name__");
-    PyObject* globals = PyFrame_GetGlobals(frame);
+    PyObject* globals = frame_globals(frame);
     PyObject* module = globals && PyDict_Check(globals) ? PyDict_GetItem(globals, caches.name_key) : nullptr;
     const char* name = module && PyUnicode_Check(module) ? PyUnicode_AsUTF8(module) : nullptr;
     bool internal = name && (!strcmp(name, "jittor") || !strncmp(name, "jittor.", 7)
                              || !strcmp(name, "torch") || !strncmp(name, "torch.", 6));
     Py_XDECREF(globals);
     Py_INCREF(code);
-    caches.internal.emplace(code, internal);
-    return internal;
+    auto& record = caches.codes[code];
+    record.internal = internal;
+    return record;
+}
+
+// The walk over frames the tables already know: it reads frames and looks
+// codes and instructions up, and none of that can raise, so unlike the full
+// walk below it has no error state to save around it. Gives up -- returns
+// false -- at the first code object or instruction not seen before, which the
+// full walk then answers and records.
+bool known_launch_origin(OriginCaches& caches, uint64& result) {
+    PyFrameObject* frame = PyEval_GetFrame(); // borrowed
+    Py_XINCREF(frame);
+    bool known = true;
+    result = 0;
+    for (int depth=0; frame && depth<64; ++depth) {
+        PyObject* code = (PyObject*)PyFrame_GetCode(frame);
+        Py_DECREF(code);
+        if (depth == 0 && code == caches.hot_code && frame_lasti(frame) == caches.hot_lasti) {
+            result = caches.hot_result;
+            break;
+        }
+        auto found = caches.codes.find(code);
+        if (found == caches.codes.end()) { known = false; break; }
+        if (!found->second.internal) {
+            const int lasti = frame_lasti(frame);
+            auto line = found->second.lines.find(lasti);
+            if (line == found->second.lines.end()) known = false;
+            else {
+                result = line->second;
+                if (depth == 0) {
+                    caches.hot_code = code;
+                    caches.hot_lasti = lasti;
+                    caches.hot_result = result;
+                }
+            }
+            break;
+        }
+        auto* previous = frame;
+        frame = frame_back(frame);
+        Py_DECREF(previous);
+    }
+    Py_XDECREF(frame);
+    return known;
 }
 } // namespace
 #endif
@@ -145,20 +224,21 @@ bool code_is_internal(OriginCaches& caches, PyFrameObject* frame, PyObject* code
 // construction while the GIL is held; launch and error paths use native data.
 static uint64 capture_python_launch_origin() {
     if (!Py_IsInitialized() || !PyGILState_Check()) return 0;
-#if PY_VERSION_HEX >= 0x030B0000
+#if PY_VERSION_HEX >= 0x03090000
     {
         auto& caches = origin_caches();
+        uint64 result = 0;
+        if (known_launch_origin(caches, result)) return result;
         PyObject *error_type=nullptr, *error_value=nullptr, *error_traceback=nullptr;
         PyErr_Fetch(&error_type, &error_value, &error_traceback);
-        uint64 result = 0;
         PyFrameObject* frame = PyEval_GetFrame(); // borrowed
         Py_XINCREF(frame);
         for (int depth=0; frame && depth<64; ++depth) {
             PyObject* code = (PyObject*)PyFrame_GetCode(frame);
-            if (!code_is_internal(caches, frame, code)) {
-                auto& lines = caches.origin[code];
-                if (lines.empty()) Py_INCREF(code);
-                const int lasti = PyFrame_GetLasti(frame);
+            auto& record = code_origin(caches, frame, code);
+            if (!record.internal) {
+                auto& lines = record.lines;
+                const int lasti = frame_lasti(frame);
                 auto found = lines.find(lasti);
                 if (found != lines.end()) {
                     result = found->second;
@@ -220,6 +300,92 @@ struct LaunchOriginRegistration {
     ~LaunchOriginRegistration() { set_launch_origin_capture(nullptr); }
 };
 static LaunchOriginRegistration launch_origin_registration;
+
+// The whole Python stack, innermost frame first, as the memory history records
+// it for PyTorch's memory_viz (runtime/profiler/memory_history.h). Only asked
+// while that history records stacks, once per Op and per free.
+namespace {
+struct MemoryStackCaches {
+    // (code object, instruction) -> frame id. The code objects are held, so
+    // an address cannot come to name another one.
+    std::unordered_map<PyObject*, std::unordered_map<int, uint32>> codes;
+};
+MemoryStackCaches& memory_stack_caches() {
+    static MemoryStackCaches* caches = new MemoryStackCaches();  // outlives the interpreter
+    return *caches;
+}
+} // namespace
+
+static uint32 capture_python_memory_stack() {
+    if (!Py_IsInitialized() || !PyGILState_Check()) return 0;
+    auto& caches = memory_stack_caches();
+    PyObject *error_type=nullptr, *error_value=nullptr, *error_traceback=nullptr;
+    PyErr_Fetch(&error_type, &error_value, &error_traceback);
+    constexpr size_t kMaxFrames = 128;
+    uint32 frames[kMaxFrames];
+    size_t count = 0;
+    PyFrameObject* frame = PyEval_GetFrame(); // borrowed
+    Py_XINCREF(frame);
+    while (frame && count < kMaxFrames) {
+        PyObject* code = frame_code(frame);
+        if (!code) break;
+        auto found = caches.codes.find(code);
+        if (found == caches.codes.end()) {
+            Py_INCREF(code);
+            found = caches.codes.emplace(code, std::unordered_map<int, uint32>()).first;
+        }
+        const int lasti = frame_lasti(frame);
+        auto line = found->second.find(lasti);
+        uint32 id;
+        if (line != found->second.end()) id = line->second;
+        else {
+            PyObject* file = PyObject_GetAttrString(code, "co_filename");
+            PyObject* name = PyObject_GetAttrString(code, "co_name");
+            const char* path = file && PyUnicode_Check(file) ? PyUnicode_AsUTF8(file) : nullptr;
+            const char* func = name && PyUnicode_Check(name) ? PyUnicode_AsUTF8(name) : nullptr;
+            id = memory_history_intern_frame(path ? path : "", PyFrame_GetLineNumber(frame),
+                                             func ? func : "");
+            Py_XDECREF(file);
+            Py_XDECREF(name);
+            found->second.emplace(lasti, id);
+        }
+        frames[count++] = id;
+        Py_DECREF(code);
+        auto* previous = frame;
+        frame = frame_back(frame);
+        Py_DECREF(previous);
+    }
+    Py_XDECREF(frame);
+    PyErr_Clear();
+    PyErr_Restore(error_type, error_value, error_traceback);
+    return memory_history_intern_stack(frames, count);
+}
+
+struct MemoryStackRegistration {
+    MemoryStackRegistration() { set_memory_stack_capture(capture_python_memory_stack); }
+    ~MemoryStackRegistration() { set_memory_stack_capture(nullptr); }
+};
+static MemoryStackRegistration memory_stack_registration;
+
+// Attributed to the user's line, the one an operator's origin names, rather
+// than to whichever jittor frame called into C++.
+static bool warn_through_python(const string& message) {
+    if (!Py_IsInitialized() || !PyGILState_Check() || PyErr_Occurred()) return false;
+    LaunchOrigin where;
+    bool located = runtime_launch_history().origin(capture_python_launch_origin(), where);
+    int failed = located
+        ? PyErr_WarnExplicit(PyExc_UserWarning, message.c_str(), where.file, where.line,
+                             nullptr, nullptr)
+        : PyErr_WarnEx(PyExc_UserWarning, message.c_str(), 1);
+    if (failed) throw std::runtime_error(message);
+    return true;
+}
+
+struct UserWarningRegistration {
+    UserWarningRegistration() { set_user_warning_hook(warn_through_python); }
+    ~UserWarningRegistration() { set_user_warning_hook(nullptr); }
+};
+static UserWarningRegistration user_warning_registration;
 
 // New reference to an attribute of the frame's code object, or nullptr.
 static PyObject* code_attr(PyFrameObject* f, const char* name) {

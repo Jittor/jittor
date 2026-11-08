@@ -21,6 +21,7 @@ unordered_map<string,string> common_op_type_cuda_map = {
     {"abs", "::abs($2)"},
     {"conj", "($2)"},   // conj(real) is identity (torch parity)
     {"log", "@if(@strcmp($1,float32)==0,::logf(($1)($2)),::log(($1)($2)))"},
+    {"log1p", "@if(@strcmp($1,float32)==0,(($1)::log1pf(($1)($2))),(($1)::log1p(($1)($2))))"},
     {"exp", "@if(@strcmp($1,float32)==0,::expf(($1)($2)),::exp(($1)($2)))"},
     {"sqrt", "@if(@strcmp($1,float32)==0,::sqrtf(($1)($2)),::sqrt(($1)($2)))"},
     // numpy and torch round halves to even (round(0.5)==0, round(2.5)==2);
@@ -48,7 +49,10 @@ unordered_map<string,string> common_op_type_cuda_map = {
     {"atan", "@if(@strcmp($1,float32)==0,(($1) ::atanf(($2))),(($1) ::atan(($2))))"},
     {"tanh", "@if(@strcmp($1,float32)==0,(($1) ::tanhf(($2))),(($1) ::tanh(($2))))"},
     {"atanh", "@if(@strcmp($1,float32)==0,(($1) ::atanhf(($2))),(($1) ::atanh(($2))))"},
-    {"sigmoid", "(($1) (1.0f/(1.0f+::expf((::min($1(-($2)), $1(@if(@strcmp($1,float32)==0,30,300))))))))"},
+    // Double inputs must reach double exp; expf silently narrows their
+    // forward values and every derivative that reuses the sigmoid output.
+    // Do not clamp the negative tail: valid small results must stay small.
+    {"sigmoid", "(($1) (1.0f/(1.0f+@if(@strcmp($1,float64)==0,::exp,::expf)(-($1)($2)))))"},
     {"relu", "((($1)($2)>($1)(0.0f))?($1)($2):($1)(0.0f))"},
     {"erf", "@if(@strcmp($1,float32)==0,(($1) ::erff(($2))),(($1) ::erf(($2))))"},
     {"erfinv", "@if(@strcmp($1,float32)==0,(($1) ::erfinvf(($1)($2))),(($1) ::erfinv(($1)($2))))"},
@@ -59,11 +63,10 @@ unordered_map<string,string> common_op_type_cuda_map = {
     {"pow", "(($1)jittor::_signed_pow(($2),($4)))"},
     {"maximum", "jittor::_max($1($2), $1($4))"},
     {"minimum", "jittor::_min($1($2), $1($4))"},
-    {"mod", "@if(@strcmp($1,float32)==0,(($2)-::floorf(($2)/($4))*($4)),@if(@strcmp(@Tx,float64)==0,(($2)-::floor(($2)/($4))*($4)),jittor::_floor_mod($1($2), $1($4))))"},
-    // See the CPU table. The width is dispatched the way the rest of this
-    // table dispatches it, so a float64 quotient is not narrowed to float
-    // before flooring.
-    {"floor_divide", "@if(@strcmp($1,float32)==0,(($1) ::floorf(($1($2))/($1($4)))),@if(@strcmp($1,float64)==0,(($1) ::floor(($1($2))/($1($4)))),jittor::_floor_divide($1($2), $1($4))))"},
+    // See the CPU table.
+    {"mod", "@if(@strcmp($1,float32)==0,jittor::_floor_mod_float($1($2), $1($4)),@if(@strcmp($1,float64)==0,jittor::_floor_mod_float($1($2), $1($4)),jittor::_floor_mod($1($2), $1($4))))"},
+    {"fmod", "@if(@strcmp($1,float32)==0,jittor::_fmod_ieee($1($2), $1($4)),@if(@strcmp($1,float64)==0,jittor::_fmod_ieee($1($2), $1($4)),jittor::_fmod_int($1($2), $1($4))))"},
+    {"floor_divide", "@if(@strcmp($1,float32)==0,jittor::_floor_divide_float($1($2), $1($4)),@if(@strcmp($1,float64)==0,jittor::_floor_divide_float($1($2), $1($4)),jittor::_floor_divide($1($2), $1($4))))"},
     {"init_maximum", "::numeric_min<$1>()"},
     {"init_minimum", "::numeric_max<$1>()"},
 };
@@ -99,6 +102,7 @@ struct CommonOpType : OpByType {
             {"abs", "std::abs($2)"},
             {"conj", "($2)"},   // conj(real) is identity (torch parity)
             {"log", "std::log(($1)($2))"},
+            {"log1p", "(($1)std::log1p(($1)($2)))"},
             {"exp", "std::exp(($1)($2))"},
             {"sqrt", "std::sqrt(($1)($2))"},
             // half-to-even, matching numpy/torch -- see the CUDA table.
@@ -123,7 +127,7 @@ struct CommonOpType : OpByType {
             {"atan", "(($1) std::atan(($2)))"},
             {"tanh", "(($1) std::tanh(($2)))"},
             {"atanh", "(($1) std::atanh(($2)))"},
-            {"sigmoid", "(($1) (1.0f/(1.0f+std::exp(std::min($1(-($2)), $1(@if(@strcmp($1,float32)==0,30,300)))))))"},
+            {"sigmoid", "(($1)(($1)(1)/(($1)(1)+std::exp(-($1)($2)))))"},
             {"relu", "((($1)($2)>($1)(0.0f))?($1)($2):($1)(0.0f))"},
             {"erf", "(($1) std::erf(($2)))"},
             {"erfinv", "(jittor::_erfinv($2))"},
@@ -134,13 +138,15 @@ struct CommonOpType : OpByType {
             {"pow", "(($1)std::pow(($2),($4)))"},
             {"maximum", "jittor::_max($1($2), $1($4))"},
             {"minimum", "jittor::_min($1($2), $1($4))"},
-            {"mod", "@if(@strcmp($1,float32)==0,(($2)-std::floor(($2)/($4))*($4)),@if(@strcmp(@Tx,float64)==0,(($2)-std::floor(($2)/($4))*($4)),jittor::_floor_mod($1($2), $1($4))))"},
-            // Floats divide at full precision and floor the quotient; integers
-            // keep the truncate-and-correct helper, which is what `%` is for.
-            // Casting the operands to the output type first discarded the
-            // fraction of the *inputs*: KI-OPS-003.
-            {"floor_divide", "@if(@strcmp($1,float32)==0,(($1)std::floor(($1($2))/($1($4)))),@if(@strcmp($1,float64)==0,(($1)std::floor(($1($2))/($1($4)))),jittor::_floor_divide($1($2), $1($4))))"},
-            // KI-OPS-008: the identity a float reduction folds *from* has to be
+            // Floats go through NumPy's divmod (type/floor_divide_compute.h):
+            // the quotient is corrected by the exact fmod remainder and signed
+            // zeros and infinite divisors follow IEEE; integers keep the
+            // truncate-and-correct helper. The operands are converted to the
+            // output type, never truncated to an integer first: KI-OPS-003.
+            {"mod", "@if(@strcmp($1,float32)==0,jittor::_floor_mod_float($1($2), $1($4)),@if(@strcmp($1,float64)==0,jittor::_floor_mod_float($1($2), $1($4)),jittor::_floor_mod($1($2), $1($4))))"},
+            {"fmod", "@if(@strcmp($1,float32)==0,jittor::_fmod_ieee($1($2), $1($4)),@if(@strcmp($1,float64)==0,jittor::_fmod_ieee($1($2), $1($4)),jittor::_fmod_int($1($2), $1($4))))"},
+            {"floor_divide", "@if(@strcmp($1,float32)==0,jittor::_floor_divide_float($1($2), $1($4)),@if(@strcmp($1,float64)==0,jittor::_floor_divide_float($1($2), $1($4)),jittor::_floor_divide($1($2), $1($4))))"},
+            // The identity a float reduction folds *from* has to be
             // an infinity, not the lowest finite value. `max(lowest(), -inf)`
             // keeps `lowest()`, so a float32 tensor whose maximum really is
             // -inf reported -3.4e38 here while CUDA reported -inf -- reachable
@@ -186,6 +192,10 @@ struct CommonOpType : OpByType {
             {"init_bitwise_or", "$1(0)"},
             {"init_bitwise_xor", "$1(0)"},
             {"init_mean", "$1(0)"},
+            // Bit tests, not float comparisons: see type/fp_class_compute.h.
+            {"isnan", "jittor::_fp_isnan($2)"},
+            {"isinf", "jittor::_fp_isinf($2)"},
+            {"isfinite", "jittor::_fp_isfinite($2)"},
         };
 
         auto lookup = [](const unordered_map<string, string>& table,
@@ -214,7 +224,8 @@ struct CommonOpType : OpByType {
         string& src = oc->src;
         string includes;
         if ((src.find("_floor_divide") != string::npos ||
-             src.find("_floor_mod") != string::npos) &&
+             src.find("_floor_mod") != string::npos ||
+             src.find("jittor::_fmod_") != string::npos) &&
             src.find("type/floor_divide_compute.h") == string::npos)
             includes += "#include \"type/floor_divide_compute.h\"\n";
         if (src.find("_signed_pow") != string::npos &&
@@ -224,6 +235,9 @@ struct CommonOpType : OpByType {
              src.find("jittor::_min") != string::npos) &&
             src.find("type/minmax_compute.h") == string::npos)
             includes += "#include \"type/minmax_compute.h\"\n";
+        if (src.find("jittor::_fp_is") != string::npos &&
+            src.find("type/fp_class_compute.h") == string::npos)
+            includes += "#include \"type/fp_class_compute.h\"\n";
         if (includes.empty()) return;
         int i = src.rfind("#include");
         if (i<0) i=0;

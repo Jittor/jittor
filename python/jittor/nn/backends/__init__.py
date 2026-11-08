@@ -8,10 +8,25 @@ from .cudnn import (
 from .onednn import _try_onednn_conv2d, _try_onednn_conv_transpose2d
 from jittor.backends.cuda.kernels.nn.batch_norm_training_cuda import _batch_norm_cuda, _batch_norm_eval_cuda
 from jittor.backends.cuda.kernels.nn.channel_bias_cuda import _channel_bias_add_cuda
-from jittor.backends.cuda.kernels.nn.embedding_cuda import _embedding_cuda
-from jittor.backends.cuda.kernels.nn.linear_bias_cuda import _linear_bias_cuda
+from jittor.backends.cuda.kernels.nn import embedding_cuda as _embedding_training_module
+from jittor.backends.cuda.kernels.nn import linear_bias_cuda as _linear_bias_training_module
 from jittor.backends.cuda.kernels.nn.layer_norm_cuda import _layer_norm_no_grad_cuda
 from jittor.backends.cuda.kernels.nn.layer_norm_training_cuda import _layer_norm_cuda
+import jittor as _jt
+from jittor._runtime.core_api import _output_requires_grad as _gelu_output_requires_grad
+from jittor._runtime.dispatch import optional_kernel as _gelu_optional_kernel
+from jittor.backends.cuda.kernels.nn import gelu_training_cuda as _gelu_training_module
+
+_gelu_training_cuda = _gelu_training_module._install_gelu_training_cuda(
+    _jt, _gelu_output_requires_grad, _gelu_optional_kernel
+)
+_embedding_cuda = _embedding_training_module._install_embedding_cuda(
+    _jt, _gelu_output_requires_grad, _gelu_optional_kernel
+)
+_linear_bias_cuda = _linear_bias_training_module._install_linear_bias_cuda(
+    _jt, _gelu_output_requires_grad, _gelu_optional_kernel
+)
+
 from jittor.backends.cuda.kernels.nn.group_norm_cuda import _group_norm_cuda as _group_norm_cuda
 from jittor.backends.cuda.kernels.nn.rms_norm_training_cuda import _rms_norm_training_cuda
 from jittor.backends.cuda.kernels.nn import softmax_cuda as softmax_cuda

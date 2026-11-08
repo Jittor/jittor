@@ -18,6 +18,8 @@ takes the path it took before.
 import ctypes
 import hashlib
 import importlib.util
+import math
+import functools
 import os
 import subprocess
 import threading
@@ -94,7 +96,33 @@ def _library():
                     _state["library"] = None
                 else:
                     _state["library"] = _build(frontend)
-        return _state["library"]
+        library = _state["library"]
+    if library is not None and not _state.get("checked"):
+        _state["checked"] = True
+        _warn_if_unusable()
+    return library
+
+
+def _warn_if_unusable():
+    """Say so when cuDNN answers no to a shape it always supports.
+
+    A frontend and a runtime from different majors -- 1.30 against cuDNN 8.9,
+    say -- build no graph at all. Every call then declines and attention
+    silently runs as matmuls, which measured 2.4x slower on Qwen3-0.6B prefill
+    (36.4 against 88.4 ms) with nothing in the log to connect cause and effect.
+    """
+    try:
+        with jt.no_grad():
+            query = jt.randn((1, 2, 16, 64)).bfloat16().cuda()
+            key = jt.randn((1, 2, 16, 64)).bfloat16().cuda()
+            usable = _supported(query, key, 0.125, False, False, None, 0)
+    except Exception:
+        return
+    if usable:
+        return
+    jt.LOG.w("cuDNN fused attention answered no to a shape it always supports; "
+             "the cuDNN runtime and nvidia-cudnn-frontend are probably from "
+             "different major versions. Attention runs as matmuls instead.")
 
 
 _HEADER = """
@@ -109,10 +137,10 @@ int jt_cudnn_sdpa_forward(cudnnHandle_t, int, int64_t, int64_t, int64_t, int64_t
     int64_t, float, int, int, int, int64_t, int64_t,
     void*, void*, void*, void*, void*, void*, void*);
 int64_t jt_cudnn_sdpa_backward_workspace(cudnnHandle_t, int, int64_t, int64_t, int64_t,
-    int64_t, int64_t, int64_t, float, int, int);
+    int64_t, int64_t, int64_t, float, int, int, int64_t, int64_t);
 int jt_cudnn_sdpa_backward(cudnnHandle_t, int, int64_t, int64_t, int64_t, int64_t, int64_t,
-    int64_t, float, int, int, void*, void*, void*, void*, void*, void*, void*, void*, void*,
-    void*);
+    int64_t, float, int, int, int64_t, int64_t, void*, void*, void*, void*, void*, void*,
+    void*, void*, void*, void*, void*);
 }}
 """
 
@@ -189,44 +217,60 @@ def _forward(query, key, value, scale, causal, training, bias=None, layout=0):
     bias_b, bias_h = _bias_dims(bias)
     b, h, sq, _ = _logical(query, layout & _Q)
     stats_shape = (b, h, sq, 1)
-    dims = _dims(layout)
+    if _HEADER_TEXT[0] is None:
+        _HEADER_TEXT[0] = _header()
     outputs = jt.code(
         [query.shape, stats_shape] if training else [query.shape],
         [query.dtype, "float32"] if training else [query.dtype],
         [query, key, value] + ([] if bias is None else [bias]),
-        cuda_header=_header(),
-        cuda_src=f"""
-        cudnnHandle_t handle = jittor::cudnn_bind_stream();
-        int64_t size = jt_cudnn_sdpa_forward_workspace(handle, {dtype}, {dims},
-            {float(scale)!r}f, {int(causal)}, {int(training)}, {layout}, {bias_b}, {bias_h});
-        if (size < 0) LOGf << "cuDNN attention forward:" << jt_cudnn_sdpa_last_error();
-        jittor::CudnnWorkspace workspace(size);
-        if (jt_cudnn_sdpa_forward(handle, {dtype}, {dims}, {float(scale)!r}f,
-                {int(causal)}, {int(training)}, {layout}, {bias_b}, {bias_h},
-                in0_p, in1_p, in2_p, {"nullptr" if bias is None else "in3_p"}, out0_p,
-                {"out1_p" if training else "nullptr"}, workspace.ptr))
-            LOGf << "cuDNN attention forward:" << jt_cudnn_sdpa_last_error();
-        """)
+        cuda_header=_HEADER_TEXT[0],
+        cuda_src=_forward_source(dtype, layout, float(scale), bool(causal), bool(training),
+                                 bias is not None, bias_b, bias_h))
     return outputs[0], (outputs[1] if training else None)
 
 
-def _backward(query, key, value, out, grad_out, stats, scale, causal, layout=0):
+#: `_header()`, formatted once: the descriptor's path does not move.
+_HEADER_TEXT = [None]
+
+
+@functools.lru_cache(maxsize=256)
+def _forward_source(dtype, layout, scale, causal, training, has_bias, bias_b, bias_h):
+    # A model calls attention with the same settings in every layer, and
+    # formatting this was a third of building the operator.
+    dims = _dims(layout)
+    return f"""
+        cudnnHandle_t handle = jittor::cudnn_bind_stream();
+        int64_t size = jt_cudnn_sdpa_forward_workspace(handle, {dtype}, {dims},
+            {scale!r}f, {int(causal)}, {int(training)}, {layout}, {bias_b}, {bias_h});
+        if (size < 0) LOGf << "cuDNN attention forward:" << jt_cudnn_sdpa_last_error();
+        jittor::CudnnWorkspace workspace(size);
+        if (jt_cudnn_sdpa_forward(handle, {dtype}, {dims}, {scale!r}f,
+                {int(causal)}, {int(training)}, {layout}, {bias_b}, {bias_h},
+                in0_p, in1_p, in2_p, {"in3_p" if has_bias else "nullptr"}, out0_p,
+                {"out1_p" if training else "nullptr"}, workspace.ptr))
+            LOGf << "cuDNN attention forward:" << jt_cudnn_sdpa_last_error();
+        """
+
+
+def _backward(query, key, value, out, grad_out, stats, scale, causal, layout=0, bias=None):
     dtype = _DTYPES[_jittor_dtype_name(query.dtype)]
     dims = _dims(layout)
+    bias_b, bias_h = _bias_dims(bias)
     return jt.code(
         [query.shape, key.shape, value.shape],
         [query.dtype, key.dtype, value.dtype],
-        [query, key, value, out, grad_out, stats],
+        [query, key, value, out, grad_out, stats] + ([] if bias is None else [bias]),
         cuda_header=_header(),
         cuda_src=f"""
         cudnnHandle_t handle = jittor::cudnn_bind_stream();
         int64_t size = jt_cudnn_sdpa_backward_workspace(handle, {dtype}, {dims},
-            {float(scale)!r}f, {int(causal)}, {layout});
+            {float(scale)!r}f, {int(causal)}, {layout}, {bias_b}, {bias_h});
         if (size < 0) LOGf << "cuDNN attention backward:" << jt_cudnn_sdpa_last_error();
         jittor::CudnnWorkspace workspace(size);
         if (jt_cudnn_sdpa_backward(handle, {dtype}, {dims}, {float(scale)!r}f, {int(causal)},
-                {layout},
-                in0_p, in1_p, in2_p, in3_p, in4_p, in5_p, out0_p, out1_p, out2_p,
+                {layout}, {bias_b}, {bias_h},
+                in0_p, in1_p, in2_p, in3_p, in4_p, in5_p,
+                {"in6_p" if bias is not None else "nullptr"}, out0_p, out1_p, out2_p,
                 workspace.ptr))
             LOGf << "cuDNN attention backward:" << jt_cudnn_sdpa_last_error();
         """)
@@ -237,59 +281,145 @@ class _CudnnAttention(jt.Function):
 
     # The tensors are the physical ones (see `_physical`); every gradient
     # comes back in its tensor's own layout, and the output in the query's.
-    def execute(self, query, key, value, scale, causal, layout):
+    def execute(self, query, key, value, bias, scale, causal, layout):
         self.scale, self.causal, self.layout = scale, causal, layout
-        out, stats = _forward(query, key, value, scale, causal, True, layout=layout)
-        self.saved = (query, key, value, out, stats)
+        out, stats = _forward(query, key, value, scale, causal, True, bias, layout)
+        self.saved = (query, key, value, out, stats, bias)
         return out
 
     def grad(self, grad_out):
-        query, key, value, out, stats = self.saved
+        query, key, value, out, stats, bias = self.saved
         grad_out = grad_out.cast(query.dtype)
         grad_query, grad_key, grad_value = _backward(
-            query, key, value, out, grad_out, stats, self.scale, self.causal, self.layout)
-        return grad_query, grad_key, grad_value, None, None, None
+            query, key, value, out, grad_out, stats, self.scale, self.causal, self.layout, bias)
+        return grad_query, grad_key, grad_value, None, None, None, None
+
+
+class _CudnnRoundedAttention(_CudnnAttention):
+    """CuDNN forward with a native composite backward for short BF16 calls.
+
+    CuDNN rounds the scaled dS before its GEMMs; Torch Flash rounds dS first
+    and scales the FP32 GEMM results. Reuse the canonical native attention
+    gradient with that rounding boundary, rather than claiming the CuDNN
+    fused backward satisfies the stricter Torch gradient budget.
+    """
+
+    def _run_call(self, query, key, value, *args, **kw):
+        # Keep the original graph and values when a caller rebinds its holder.
+        self.inputs = tuple(jt.ops.reshape(tensor, tensor.shape)
+                            for tensor in (query, key, value))
+        return super()._run_call(query, key, value, *args, **kw)
+
+    def grad(self, grad_out):
+        from jittor.nn.functional.attention import (
+            _attention_gradients, _attention_probabilities,
+        )
+
+        def logical(tensor, flag):
+            return tensor.transpose(0, 2, 1, 3) if self.layout & flag else tensor
+
+        query, key, value = (logical(tensor, flag)
+                             for tensor, flag in zip(self.inputs, (_Q, _K, _V)))
+        out = logical(self.saved[3], _Q)
+        with jt.flag_scope(amp_reg=0):
+            probabilities = _attention_probabilities(query, key, None, False, self.scale)
+            gradients = _attention_gradients(
+                query, key, value, probabilities, logical(grad_out, _Q), self.scale,
+                rounded_output=out)
+        return tuple(logical(tensor, flag) for tensor, flag in
+                     zip(gradients, (_Q, _K, _V))) + (None, None, None, None)
 
 
 def _mask_bias(attn_mask, query_dims, key_dims, dtype):
-    """The mask as an additive [b or 1, h or 1, Lq, Lk] bias, or None if it is not one.
+    """The mask as a float32 [b or 1, h or 1, Lq, Lk] bias, or None to decline.
 
     `query_dims` and `key_dims` are the logical [b, h, s, d] shapes.
     """
     shape = tuple(int(size) for size in attn_mask.shape)
-    if len(shape) < 2 or len(shape) > 4:
+    if len(shape) < 1 or len(shape) > 4:
         return None
     shape = (1,) * (4 - len(shape)) + shape
     batch, heads, query_length = query_dims[:3]
-    if shape[2:] != (query_length, key_dims[2]) \
-            or shape[0] not in (1, batch) or shape[1] not in (1, heads):
+    target = (batch, heads, query_length, key_dims[2])
+    if any(size not in (1, full) for size, full in zip(shape, target)):
         return None
-    mask = attn_mask.reshape(shape)
+    shape = shape[:2] + target[2:]
+    original = (1,) * (4 - len(attn_mask.shape)) + tuple(attn_mask.shape)
+    mask = attn_mask.reshape(original).broadcast(shape)
     if _jittor_dtype_name(mask.dtype) == "bool":
-        negative = jt.array(float("-inf")).cast(dtype).broadcast(shape)
-        return jt.ternary(mask, jt.zeros(shape, dtype), negative)
+        negative = jt.array(float("-inf")).float32().broadcast(shape)
+        return jt.ternary(mask, jt.zeros(shape, "float32"), negative)
     if "float" not in _jittor_dtype_name(mask.dtype):
         return None
-    return mask.cast(dtype)
+    # Match the softmax compute domain. Casting a float32 -1e9 padding
+    # bias to half would turn a finite value into an infinity.
+    return mask.float32()
+
+
+def _accuracy_admitted(query):
+    # Executable cuDNN graphs are not necessarily accurate enough: BF16
+    # small-head attention exceeded the public output/gradient budgets.
+    # Keep that whole head-width domain on FP32 opmath, including inference
+    # and GQA. This is an accuracy policy, not a cuDNN hardware limitation.
+    return not (_jittor_dtype_name(query.dtype) == "bfloat16"
+                and len(query.shape) == 4 and int(query.shape[-1]) < 32)
+
+
+def _reduced_precision_admitted(query, key, value, attn_mask, dropout_p, is_causal):
+    # Match the native probability rounding of fused Torch SDPA for short,
+    # unmasked BF16 attention. Native callers retain FP32 opmath by default.
+    # A single key has exactly zero Q/K derivatives; keep that exact math
+    # path rather than introducing fused cancellation residuals.
+    shapes = [tuple(t.shape) for t in (query, key, value)]
+    return (
+        attn_mask is None and float(dropout_p or 0.0) == 0.0 and not is_causal
+        and all(len(shape) == 4 for shape in shapes)
+        and all(_jittor_dtype_name(t.dtype) == "bfloat16" for t in (query, key, value))
+        and shapes[0][:2] == shapes[1][:2] == shapes[2][:2]
+        and shapes[0][0] > 0 and shapes[0][1] > 0
+        and shapes[1] == shapes[2]
+        and shapes[0][-1] == shapes[1][-1] in (8, 16, 24)
+        and 0 < shapes[0][-2] <= 64 and 1 < shapes[1][-2] <= 64
+    )
 
 
 def _cudnn_fused_attention(query, key, value, attn_mask=None, dropout_p=0.0,
-                           is_causal=False, scale=None):
-    """Run attention through cuDNN, or return None to decline."""
+                           is_causal=False, scale=None, *, grouped=False,
+                           allow_reduced_precision=False):
+    """Run attention through cuDNN, or return None to decline.
+
+    ``grouped``: `key` and `value` may have fewer heads than `query`, each
+    shared by a group of query heads, which cuDNN reads in place.
+    """
     if float(dropout_p or 0.0) != 0.0:
         return None
     if len(query.shape) != 4 or len(key.shape) != 4 or len(value.shape) != 4:
         return None
-    # Equal head counts: `nn.scaled_dot_product_attention` has no enable_gqa,
-    # so a mismatch is the caller's error to raise on the path below (the Torch
-    # frontend expands grouped heads before it gets here).
     if tuple(key.shape) != tuple(value.shape) or query.shape[0] != key.shape[0] \
-            or query.shape[1] != key.shape[1] or query.shape[3] != key.shape[3]:
+            or query.shape[3] != key.shape[3]:
+        return None
+    # Equal head counts through `nn.fused_attention`: it has no enable_gqa, so
+    # a mismatch there is the caller's error to raise on the path below.
+    heads, key_heads = int(query.shape[1]), int(key.shape[1])
+    if key_heads != heads and not (grouped and key_heads > 0 and heads % key_heads == 0):
         return None
     dtype = _jittor_dtype_name(query.dtype)
     if dtype not in _DTYPES or _jittor_dtype_name(key.dtype) != dtype \
             or _jittor_dtype_name(value.dtype) != dtype:
         return None
+    reduced_precision = (allow_reduced_precision and _reduced_precision_admitted(
+        query, key, value, attn_mask, dropout_p, is_causal))
+    if not (_accuracy_admitted(query) or reduced_precision):
+        return None
+    if attn_mask is not None:
+        if _output_requires_grad(attn_mask):
+            return None
+        from jittor._runtime import step_capture
+        # Mask admission depends on device values. Preserve replay by using
+        # the graph-only attention path while tracing rather than reading a
+        # fresh mask back to the host during capture.
+        if step_capture.tracing():
+            return None
     if _library() is None:
         return None
     scale = float(scale) if scale is not None else float(query.shape[3]) ** -0.5
@@ -306,21 +436,23 @@ def _cudnn_fused_attention(query, key, value, attn_mask=None, dropout_p=0.0,
         if not _supported(query, key, scale, is_causal, training, layout=layout):
             return None
         if training:
-            return logical(_CudnnAttention.apply(query, key, value, scale, bool(is_causal),
-                                                 layout))
+            implementation = _CudnnRoundedAttention if reduced_precision else _CudnnAttention
+            return logical(implementation.apply(
+                query, key, value, None, scale, bool(is_causal), layout))
         return logical(_forward(query, key, value, scale, bool(is_causal), False,
                                 layout=layout)[0])
-    # A mask only without a backward: a row every key is masked out of has no
-    # softmax, which the composite answers with 0 and zero gradient; cuDNN's
-    # backward would carry the NaN instead.
-    if training:
-        return None
+    # Constant masks can use cuDNN's biased backward.
     bias, live = _mask_terms(attn_mask, _logical(query, q_seq), _logical(key, k_seq),
-                             query.dtype)
-    if bias is None or not _supported(query, key, scale, is_causal, False, bias, layout):
+                             query.dtype, bool(is_causal))
+    if bias is None or not _supported(query, key, scale, is_causal, training, bias, layout):
         return None
-    out = logical(_forward(query, key, value, scale, bool(is_causal), False, bias, layout)[0])
-    # The same 0 for a fully masked row as the composite gives.
+    if training:
+        out = logical(_CudnnAttention.apply(
+            query, key, value, bias, scale, bool(is_causal), layout))
+    else:
+        out = logical(_forward(query, key, value, scale, bool(is_causal), False, bias, layout)[0])
+    # Empty rows were made safe before cuDNN computes statistics. This masks
+    # their outputs and upstream gradients to zero, so its backward stays finite.
     return jt.ternary(live.broadcast(out.shape), out, jt.zeros_like(out))
 
 
@@ -330,7 +462,7 @@ def _cudnn_fused_attention(query, key, value, attn_mask=None, dropout_p=0.0,
 _MASK_TERMS = []
 
 
-def _mask_terms(attn_mask, query_dims, key_dims, dtype):
+def _mask_terms(attn_mask, query_dims, key_dims, dtype, causal=False):
     """The additive bias for `attn_mask` and which query rows keep a key.
 
     Built once per mask, not once per layer. A decoder hands every layer the
@@ -343,27 +475,62 @@ def _mask_terms(attn_mask, query_dims, key_dims, dtype):
     it looks; anything else only by being the same object.
     """
     base = attn_mask._view_base_id() if attn_mask._is_view() else -1
-    key = (base, tuple(attn_mask.shape), attn_mask._storage_offset(),
+    key = (base, attn_mask.var_ptr if base < 0 else 0, bool(causal),
+           tuple(attn_mask.shape), attn_mask._storage_offset(),
            tuple(attn_mask._storage_strides()), _jittor_dtype_name(attn_mask.dtype),
            _jittor_dtype_name(dtype), tuple(query_dims), tuple(key_dims))
     for entry in _MASK_TERMS:
         if entry[0] == key and (base >= 0 or entry[1] is attn_mask):
             return entry[2], entry[3]
     _MASK_TERMS.clear()
-    bias = _mask_bias(attn_mask, query_dims, key_dims, dtype)
-    if bias is None:
-        return None, None
-    top = bias.max([-1], keepdims=True)
-    live = jt.logical_not(jt.isinf(top) & (top < 0))
+    # Bias and saved statistics have a float32 ABI, independent of an
+    # outer autocast preference.
+    with jt.flag_scope(amp_reg=0):
+        bias = _mask_bias(attn_mask, query_dims, key_dims, dtype)
+        if bias is None:
+            return None, None
+        effective = bias
+        if causal:
+            hidden = jt.triu(jt.ones((query_dims[2], key_dims[2]), dtype="bool"), diagonal=1)
+            negative = jt.array(float("-inf")).float32().broadcast(bias.shape)
+            effective = jt.ternary(hidden, negative, bias)
+        top = effective.max([-1], keepdims=True)
+        live = jt.logical_not(jt.isinf(top) & (top < 0))
+        if key_dims[2] > 1:
+            # The fused backward reconstructs exp(score - logsumexp). If a
+            # finite row offset absorbs log(Lk) in float32, that subtraction
+            # loses its normalizer. Keep the explicit-softmax path for these
+            # rows; -inf rows are handled separately below.
+            absorbed = jt.isfinite(top) & (top + math.log(key_dims[2]) == top)
+            if bool(absorbed.any().item()):
+                _MASK_TERMS.append((key, attn_mask if base < 0 else None, None, None))
+                return None, None
+        # cuDNN does not define an all -inf row. Give it valid probabilities,
+        # then zero that row outside the custom function (including its gradient).
+        bias = jt.ternary(live, bias, jt.zeros_like(bias))
     _MASK_TERMS.append((key, attn_mask if base < 0 else None, bias, live))
     return bias, live
 
 
-def _supports(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None):
-    return _jittor_dtype_name(query.dtype) in _DTYPES
+def _supports(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False,
+              scale=None, allow_reduced_precision=False):
+    return _jittor_dtype_name(query.dtype) in _DTYPES and (
+        _accuracy_admitted(query) or (allow_reduced_precision and _reduced_precision_admitted(
+            query, key, value, attn_mask, dropout_p, is_causal)))
 
 
 # Not `dtypes=`: the registry filters on every tensor argument, and a bool mask
 # would take a float16 call off this kernel. `supports` looks at the query
 # only, which also keeps float32 for `fused_attention_f32_cuda.py`.
 register_kernel("nn.fused_attention", "cuda", _cudnn_fused_attention, supports=_supports)
+
+
+def _cudnn_fused_attention_gqa(query, key, value, **kwargs):
+    return _cudnn_fused_attention(query, key, value, grouped=True, **kwargs)
+
+
+# Grouped-query attention without repeating the key and value heads first: a
+# copy of every key and value head per query head, two operators and two
+# kernels per layer of every decoded token.
+register_kernel("nn.fused_attention_gqa", "cuda", _cudnn_fused_attention_gqa,
+                supports=_supports)

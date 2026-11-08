@@ -108,8 +108,21 @@ class TestLayerNorm(_NormBase):
 
     @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled, "CUDA LayerNorm fast path needs CUDA")
     def test_cuda_fast_path_forward_and_all_gradients(self):
+        self._check_cuda_layer_norm((3, 5, 1024))
+
+    @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled, "CUDA LayerNorm fast path needs CUDA")
+    def test_cuda_warp_per_row_forward_and_all_gradients(self):
+        # Rows enough for a warp each, on widths off the warp size, and the
+        # parameter gradients summed from many row segments.
+        from jittor.backends.cuda.kernels.nn import layer_norm_training_cuda as ln
+        for shape in ((4, 300, 768), (1100, 100), (2, 613, 320)):
+            rows = int(np.prod(shape[:-1]))
+            self.assertTrue(shape[-1] <= ln._WARP_ROW_LIMIT and rows >= ln._WARP_ROWS_MIN)
+            with self.subTest(shape=shape):
+                self._check_cuda_layer_norm(shape)
+
+    def _check_cuda_layer_norm(self, shape):
         rng = np.random.RandomState(20260826)
-        shape = (3, 5, 1024)
         weight_np = rng.randn(shape[-1]).astype("float32")
         bias_np = rng.randn(shape[-1]).astype("float32")
         cot_np = rng.randn(*shape).astype("float32")
@@ -161,6 +174,17 @@ class TestRMSNorm(_NormBase):
         # 4096 rows cut into segments, a width that is not a multiple of the
         # 32-channel blocks the gamma gradient is summed in.
         self._check_cuda_training((8, 512, 100))
+
+    @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled, "CUDA RMSNorm fast path needs CUDA")
+    def test_cuda_warp_per_row_forward_and_all_gradients(self):
+        # A warp a row and one fused backward pass: Qwen3's hidden width and
+        # its per-head query/key width, on rows enough for that kernel.
+        from jittor.backends.cuda.kernels.nn import rms_norm_training_cuda as rms
+        for shape in ((2, 600, 1024), (1300, 128)):
+            rows = int(np.prod(shape[:-1]))
+            self.assertTrue(shape[-1] <= rms._WARP_ROW_LIMIT and rows >= rms._WARP_ROWS_MIN)
+            with self.subTest(shape=shape):
+                self._check_cuda_training(shape)
 
     def _check_cuda_training(self, shape):
         rng = np.random.RandomState(20260827)
@@ -478,6 +502,72 @@ class TestActivationAfterInPlaceResidual(unittest.TestCase):
                                            rtol=1e-4, atol=1e-4)
 
 
+class TestResidualActivationAcrossAnAutoFlush(unittest.TestCase):
+    """``relu(bn(conv(x)) + identity)`` while the auto-flush is cutting the graph.
+
+    Finding the residual meant reading the add's two operands with two
+    ``_input`` calls. Each call is a graph entry, and leaving one may submit
+    the auto-flushed batch the add is in -- which executes it, so the second
+    read raised "_input requires an unexecuted tensor". A native ResNet
+    training step hit it at batch 64; ``auto_flush_bytes=0`` takes every
+    flush, which reaches it at a size a test can afford.
+    """
+
+    @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled,
+                         "the residual offer comes from the CUDA training batch norm")
+    def test_a_flushed_add_falls_back_to_a_plain_activation(self):
+        from jittor import models
+        rng = np.random.RandomState(17)
+        x_np = rng.rand(2, 3, 32, 32).astype("float32")
+        with jt.flag_scope(use_cuda=1):
+            net = models.resnet18()
+            net.train()
+            # Gradients tracked for the parameters is part of what reaches it.
+            nn.SGD(net.parameters(), lr=0.01)
+            with jt.flag_scope(auto_flush_bytes=0):
+                got = net(jt.array(x_np)).numpy()
+            with jt.flag_scope(auto_flush_ops=0):
+                expected = net(jt.array(x_np)).numpy()
+        np.testing.assert_allclose(got, expected, rtol=1e-4, atol=1e-4)
+
+
+class TestResidualActivationThroughADependency(unittest.TestCase):
+    """The residual is the add's first two inputs, whatever follows them.
+
+    An in-place ``out += identity`` -- every torchvision block under the Torch
+    frontend -- leaves a dependency edge on the add after its two operands.
+    Asking for exactly two inputs turned every such block's activation into a
+    kernel of its own: the frontend's ResNet-50 training step went from 80.8
+    to 88.0 ms.
+    """
+
+    @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled,
+                         "the residual offer comes from the CUDA training batch norm")
+    def test_a_dependency_edge_does_not_stop_the_fusion(self):
+        from _helpers.common import kernel_launches
+        rng = np.random.RandomState(19)
+        x_np = rng.randn(4, 8, 6, 6).astype("float32")
+        r_np = rng.randn(4, 8, 6, 6).astype("float32")
+        with jt.flag_scope(use_cuda=1):
+            bn = nn.BatchNorm2d(8)
+            bn.train()
+            x, r, dep = jt.array(x_np), jt.array(r_np), jt.array(r_np)
+            x.sync(); r.sync(); dep.sync()
+
+            def block(with_dependency):
+                # The offer lives as long as the object it was made on.
+                y = bn(x)
+                s = y + r
+                if with_dependency:
+                    s._add_dependency([dep])
+                return nn.relu(s).numpy()
+
+            plain, expected = kernel_launches(lambda: block(False))
+            count, got = kernel_launches(lambda: block(True))
+        self.assertEqual(count, plain)
+        np.testing.assert_allclose(got, expected, rtol=1e-5, atol=1e-5)
+
+
 class TestBatchNormActivation(unittest.TestCase):
     """`relu(batch_norm(x))` in training runs the activation in the norm's pass.
 
@@ -523,6 +613,71 @@ class TestBatchNormActivation(unittest.TestCase):
                 jt.sync_all(True)
                 with jt.profile() as p:
                     jt.sync([nn.relu(bn(x) if fused else bn(x) + 0.0)])
+                    jt.sync_all(True)
+            return len(p.result.kernel_records)
+        self.assertLess(kernels(True), kernels(False))
+
+
+class TestBatchNormResidualActivation(unittest.TestCase):
+    """`relu(batch_norm(x) + r)` in training: the add goes into the norm's pass.
+
+    However the add is spelled -- a new Var, or `+=` rebinding the norm's own
+    output -- and with the residual on either side of it.
+    """
+
+    @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled,
+                         "CUDA batch norm fast path needs CUDA")
+    def test_values_and_gradients(self):
+        rng = np.random.RandomState(21)
+        for shape in ((4, 8, 6, 6), (3, 5, 7, 7)):    # float4 path, scalar path
+            x_np = rng.randn(*shape).astype("float32")
+            r_np = rng.randn(*shape).astype("float32")
+            cot_np = rng.randn(*shape).astype("float32")
+
+            def run(use_cuda, spelling):
+                with jt.flag_scope(use_cuda=use_cuda):
+                    bn = nn.BatchNorm2d(shape[1])
+                    bn.train()
+                    x, r = jt.array(x_np), jt.array(r_np)
+                    y = bn(x)
+                    if spelling == "in place":
+                        y += r
+                    elif spelling == "residual first":
+                        y = r + y
+                    elif spelling == "unfused":
+                        y = y + r + 0.0
+                    else:
+                        y = y + r
+                    out = nn.relu(y)
+                    grads = jt.grad((out * jt.array(cot_np)).sum(),
+                                    [x, r, bn.weight, bn.bias])
+                    return [out] + grads + [bn.running_mean, bn.running_var]
+
+            expected = jt.fetch_sync(run(0, "unfused"))
+            for spelling in ("new var", "in place", "residual first"):
+                with self.subTest(shape=shape, spelling=spelling):
+                    for got, want in zip(jt.fetch_sync(run(1, spelling)), expected):
+                        np.testing.assert_allclose(got, want, rtol=2e-3, atol=2e-3)
+
+    @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled,
+                         "CUDA batch norm fast path needs CUDA")
+    def test_the_add_and_relu_are_not_kernels(self):
+        rng = np.random.RandomState(22)
+        x = jt.array(rng.randn(4, 8, 6, 6).astype("float32"))
+        r = jt.array(rng.randn(4, 8, 6, 6).astype("float32"))
+
+        def kernels(fused):
+            with jt.flag_scope(use_cuda=1):
+                bn = nn.BatchNorm2d(8)
+                bn.train()
+                def build():
+                    # the offer lives as long as the object it was made on
+                    y = bn(x)
+                    return [nn.relu(y + r if fused else y + r + 0.0)]
+                jt.sync(build())
+                jt.sync_all(True)
+                with jt.profile() as p:
+                    jt.sync(build())
                     jt.sync_all(True)
             return len(p.result.kernel_records)
         self.assertLess(kernels(True), kernels(False))
@@ -765,7 +920,9 @@ class TestConvBiasFuses(unittest.TestCase):
         e_np = rng.randn(2, 16, 1, 1).astype("float32")
 
         def run(use_cuda):
-            with jt.flag_scope(use_cuda=use_cuda):
+            # Compared with the CPU at 2e-3, so the convolution is true
+            # float32: cuDNN's default lets it use tf32, as torch's does.
+            with jt.flag_scope(use_cuda=use_cuda, float32_cudnn_precision="highest"):
                 x, w, b, e = (jt.array(t) for t in (x_np, w_np, b_np, e_np))
                 y = jt.nn.conv2d(x, w, b, padding=1) + e
                 grads = jt.grad((y * y).sum(), [x, w, b])

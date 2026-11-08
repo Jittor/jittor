@@ -334,9 +334,8 @@ inline ConvPlanRequest conv_plan_request(
     // difference is most of what the layout is for -- a ResNet-50 batch-64
     // inference ran its NHWC convolutions in 6.6 ms on the first plan and in
     // 5.0 ms on the fastest of six, the same as PyTorch's.
-    bool half = dtype_x == CUDNN_DATA_HALF || dtype_x == CUDNN_DATA_BFLOAT16;
     bool channels_last = dimX[1] > 1 && strideX[1] == 1;
-    r.benchmark = cudnn_benchmark != 0 || (half && channels_last);
+    r.benchmark = cudnn_benchmark != 0 || channels_last;
     return r;
 }
 

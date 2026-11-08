@@ -43,7 +43,64 @@
 inline const char *_cudaGetErrorEnum(cudaError_t error) {
   return cudaGetErrorName(error);
 }
+
+// Whether `error` leaves the CUDA context unusable for the rest of the process.
+inline bool cuda_error_is_sticky(cudaError_t error) {
+  switch (error) {
+    case cudaErrorIllegalAddress:
+    case cudaErrorLaunchFailure:
+    case cudaErrorAssert:
+    case cudaErrorHardwareStackError:
+    case cudaErrorIllegalInstruction:
+    case cudaErrorMisalignedAddress:
+    case cudaErrorInvalidAddressSpace:
+    case cudaErrorInvalidPc:
+    case cudaErrorLaunchTimeout:
+      return true;
+    default:
+      return false;
+  }
+}
+
+// What a reader needs to know about `error` beyond its name, or "".
+inline const char *cuda_error_note(cudaError_t error) {
+  switch (error) {
+    case cudaErrorIllegalAddress:
+    case cudaErrorLaunchFailure:
+    case cudaErrorAssert:
+      return "\nA kernel faulted. When it indexes a tensor, an out-of-range "
+             "index is the usual cause; Jittor's indexing kernels name the "
+             "offending index above, or print it to stdout as "
+             "`[jittor] index ... is out of bounds` when more than one faulted."
+             "\nThis error is sticky: the CUDA context of this process can no "
+             "longer be used, and every later CUDA call fails with it. Restart "
+             "the process.";
+    default:
+      return cuda_error_is_sticky(error)
+          ? "\nThis error is sticky: the CUDA context of this process can no "
+            "longer be used, and every later CUDA call fails with it. Restart "
+            "the process."
+          : "";
+  }
+}
+inline jittor::Device cuda_error_device() {
+  int index = -1;
+  if (cudaGetDevice(&index) != cudaSuccess) index = -1;
+  return jittor::launch_error_device({jittor::accelerator_backend_id(), index});
+}
+inline void note_if_sticky(cudaError_t error) {
+  if (cuda_error_is_sticky(error)) jittor::note_device_context_lost(cuda_error_device());
+}
+#else
+inline jittor::Device cuda_error_device() {
+  return jittor::launch_error_device({jittor::accelerator_backend_id(), -1});
+}
 #endif
+// The other libraries' status codes carry no such note.
+template <typename T>
+inline const char *cuda_error_note(T) { return ""; }
+template <typename T>
+inline void note_if_sticky(T) {}
 
 // CUDA Driver API errors
 #ifdef CUDA_DRIVER_API
@@ -132,9 +189,22 @@ void check(T result, char const *const func, const char *const file,
            int const line) {
   if (result) {
     // DEVICE_RESET
+    note_if_sticky(result);
+    std::string index_fault = jittor::take_device_index_fault();
+    if (index_fault.size()) {
+      // An indexing kernel named the bad index: that sentence leads, and the
+      // error is the IndexError the same index raises on the CPU. The CUDA
+      // error it caused follows as the detail it is.
+      jittor::LogErrorVoidify<jittor::UserIndexError>() &&
+        jittor::Log(__FILELINE__, 'f', 0) << index_fault.substr(1)
+          >> "\nCUDA error at" << file >> ":" >> line << " code="
+          >> static_cast<unsigned int>(result) >> "(" << _cudaGetErrorEnum(result) << ")"
+          << func >> cuda_error_note(result) << jittor::cuda_launch_error_context();
+    }
     LOGf << "CUDA error at" << file >> ":" >> line << " code="
       >> static_cast<unsigned int>(result) >> "(" << _cudaGetErrorEnum(result) << ")"
-      << func << jittor::cuda_launch_error_context();
+      << func >> cuda_error_note(result)
+      << jittor::cuda_launch_error_context();
   }
 }
 
@@ -150,6 +220,7 @@ template <typename T>
 void peek_always(T result, char const *const func, const char *const file,
                  int const line) {
   if (result) {
+    if (jittor::device_context_lost(cuda_error_device())) return;
     LOGe << "CUDA teardown error at" << file >> ":" >> line << " code="
       >> static_cast<unsigned int>(result) >> "(" << _cudaGetErrorEnum(result) << ")"
       << func;
@@ -178,7 +249,7 @@ inline void __getLastCudaError(const char *errorMessage, const char *file,
     // DEVICE_RESET
     LOGf << "CUDA error at" << file >> ":" >> line << " code="
       >> static_cast<unsigned int>(err) >> "(" << _cudaGetErrorEnum(err) << ")"
-      << errorMessage;
+      << errorMessage >> jittor::take_device_index_fault() >> cuda_error_note(err);
   }
 }
 
@@ -194,7 +265,7 @@ inline void __printLastCudaError(const char *errorMessage, const char *file,
     // DEVICE_RESET
     LOGf << "CUDA error at" << file >> ":" >> line << " code="
       >> static_cast<unsigned int>(err) >> "(" << _cudaGetErrorEnum(err) << ")"
-      << errorMessage;
+      << errorMessage >> jittor::take_device_index_fault() >> cuda_error_note(err);
   }
 }
 #endif
@@ -287,7 +358,11 @@ inline int gpuDeviceInit(int devID) {
   cudaDeviceProp deviceProp;
   checkCudaErrors(cudaGetDeviceProperties(&deviceProp, devID));
 
-  if (deviceProp.computeMode == cudaComputeModeProhibited) {
+  // CUDA 13 removed computeMode/clockRate from cudaDeviceProp. Their
+  // attribute queries are available in both the older and newer runtimes.
+  int computeMode;
+  checkCudaErrors(cudaDeviceGetAttribute(&computeMode, cudaDevAttrComputeMode, devID));
+  if (computeMode == cudaComputeModeProhibited) {
     fprintf(stderr,
             "Error: device is running in <Compute Mode "
             "Prohibited>, no threads can use cudaSetDevice().\n");
@@ -328,10 +403,13 @@ inline int gpuGetMaxGflopsDeviceId() {
 
   while (current_device < device_count) {
     cudaGetDeviceProperties(&deviceProp, current_device);
+    int computeMode, clockRate;
+    checkCudaErrors(cudaDeviceGetAttribute(&computeMode, cudaDevAttrComputeMode, current_device));
+    checkCudaErrors(cudaDeviceGetAttribute(&clockRate, cudaDevAttrClockRate, current_device));
 
     // If this GPU is not running on Compute Mode prohibited,
     // then we can add it to the list
-    if (deviceProp.computeMode != cudaComputeModeProhibited) {
+    if (computeMode != cudaComputeModeProhibited) {
       if (deviceProp.major == 9999 && deviceProp.minor == 9999) {
         sm_per_multiproc = 1;
       } else {
@@ -340,7 +418,7 @@ inline int gpuGetMaxGflopsDeviceId() {
       }
 
       uint64_t compute_perf = (uint64_t)deviceProp.multiProcessorCount *
-                              sm_per_multiproc * deviceProp.clockRate;
+                              sm_per_multiproc * clockRate;
 
       if (compute_perf > max_compute_perf) {
         max_compute_perf = compute_perf;
@@ -411,11 +489,13 @@ inline int findIntegratedGPU() {
   // Find the integrated GPU which is compute capable
   while (current_device < device_count) {
     cudaGetDeviceProperties(&deviceProp, current_device);
+    int computeMode;
+    checkCudaErrors(cudaDeviceGetAttribute(&computeMode, cudaDevAttrComputeMode, current_device));
 
     // If GPU is integrated and is not running on Compute Mode prohibited,
     // then cuda can map to GLES resource
     if (deviceProp.integrated &&
-        (deviceProp.computeMode != cudaComputeModeProhibited)) {
+        (computeMode != cudaComputeModeProhibited)) {
       checkCudaErrors(cudaSetDevice(current_device));
       checkCudaErrors(cudaGetDeviceProperties(&deviceProp, current_device));
       printf("GPU Device %d: \"%s\" with compute capability %d.%d\n\n",

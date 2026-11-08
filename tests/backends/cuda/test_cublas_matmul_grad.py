@@ -177,6 +177,67 @@ class TestCublasMatmulGrad(unittest.TestCase):
         np.testing.assert_allclose(got_db, flat_go.sum(axis=0),
                                    atol=2e-5, rtol=2e-5)
 
+    def test_half_gradients_from_a_float32_consumer(self):
+        """A float32 cotangent for a half/bf16 product gives half/bf16 gradients.
+
+        `y + w_fp32` promotes the product, so the gradient reaching the GEMM is
+        float32 while its saved operands are half; the gradient GEMM used to
+        fail the same-dtype check. Every transpose combination of the 2-D op
+        and the batched op must answer gradients in the operands' dtype.
+        """
+        cublas = jt.compile_extern.cublas_ops
+        rng = np.random.RandomState(20261006)
+        m, k, n = 3, 4, 5
+        with jt.flag_scope(use_cuda=1):
+            for dtype, tol in (("float16", 2e-2), ("bfloat16", 1e-1)):
+                for trans_a in (False, True):
+                    for trans_b in (False, True):
+                        label = f"{dtype} trans_a={trans_a} trans_b={trans_b}"
+                        a_np = rng.randn(*((k, m) if trans_a else (m, k))).astype("float32")
+                        b_np = rng.randn(*((n, k) if trans_b else (k, n))).astype("float32")
+                        go_np = rng.randn(m, n).astype("float32")
+                        a = jt.array(a_np).cast(dtype)
+                        b = jt.array(b_np).cast(dtype)
+                        out = cublas.cublas_matmul(a, b, trans_a, trans_b)
+                        shift = jt.array(rng.randn(m, n).astype("float32"))
+                        loss = ((out + shift) * jt.array(go_np)).sum()
+                        da, db = jt.grad(loss, [a, b])
+                        self.assertEqual(str(da.dtype), dtype, label)
+                        self.assertEqual(str(db.dtype), dtype, label)
+                        a_ref = a.float32().numpy()
+                        b_ref = b.float32().numpy()
+                        op_a = a_ref.T if trans_a else a_ref
+                        op_b = b_ref.T if trans_b else b_ref
+                        ref_da = go_np @ op_b.T
+                        ref_db = op_a.T @ go_np
+                        np.testing.assert_allclose(
+                            da.float32().numpy(), ref_da.T if trans_a else ref_da,
+                            atol=tol, rtol=tol, err_msg=label)
+                        np.testing.assert_allclose(
+                            db.float32().numpy(), ref_db.T if trans_b else ref_db,
+                            atol=tol, rtol=tol, err_msg=label)
+
+                a = jt.array(rng.randn(2, m, k).astype("float32")).cast(dtype)
+                b = jt.array(rng.randn(2, k, n).astype("float32")).cast(dtype)
+                go_np = rng.randn(2, m, n).astype("float32")
+                out = cublas.cublas_batched_matmul(a, b, False, False)
+                shift = jt.array(rng.randn(2, m, n).astype("float32"))
+                da, db = jt.grad(((out + shift) * jt.array(go_np)).sum(), [a, b])
+                self.assertEqual(str(da.dtype), dtype, f"{dtype} batched")
+                self.assertEqual(str(db.dtype), dtype, f"{dtype} batched")
+                a_ref, b_ref = a.float32().numpy(), b.float32().numpy()
+                np.testing.assert_allclose(da.float32().numpy(), go_np @ b_ref.transpose(0, 2, 1),
+                                           atol=tol, rtol=tol, err_msg=f"{dtype} batched da")
+                np.testing.assert_allclose(db.float32().numpy(), a_ref.transpose(0, 2, 1) @ go_np,
+                                           atol=tol, rtol=tol, err_msg=f"{dtype} batched db")
+
+                # The public spelling reaches the same ops.
+                x = jt.array(rng.randn(2, m, k).astype("float32")).cast(dtype)
+                w = jt.array(rng.randn(n, k).astype("float32")).cast(dtype)
+                bias = jt.array(rng.randn(n).astype("float32"))
+                dx, dw = jt.grad((nn.linear(x, w) + bias).sum(), [x, w])
+                self.assertEqual((str(dx.dtype), str(dw.dtype)), (dtype, dtype))
+
     def test_float64_2d_and_batched_precision(self):
         expected = np.array([[100000001.0]], dtype=np.float64)
         with jt.flag_scope(use_cuda=1):

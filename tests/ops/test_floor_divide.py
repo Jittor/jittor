@@ -50,7 +50,7 @@ class _FloorDivideMixin:
         )
 
     #: Float dividends chosen so the three plausible wrong answers all differ
-    #: from the right one. Truncating the *operands* (the KI-OPS-003 defect)
+    #: from the right one. Truncating the *operands* (the old defect)
     #: turns -2.7 into -2 and -0.5 into 0; truncating the quotient toward zero
     #: turns -1.35 into -1; flooring an integer quotient that already truncated
     #: is the same mistake one step later. -5.0 and 6.0 are exact multiples of
@@ -61,7 +61,7 @@ class _FloorDivideMixin:
     FLOAT_DIVISORS = (2.0, -2.0, 3.0, 0.75)
 
     def test_float_operands_divide_before_flooring(self):
-        """KI-OPS-003: the fraction of the inputs must survive the division.
+        """The fraction of the inputs must survive the division.
 
         Asserts the **dtype** as well as the values. Returning int32 satisfies
         a value-only check for every whole-number case and still breaks callers

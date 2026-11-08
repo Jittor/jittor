@@ -2,6 +2,8 @@
 
 from _helpers import capability as _test_capability
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -28,6 +30,15 @@ def _assert_executed(report, implementation):
     matching = [row for row in report[1:] if implementation in row[0]]
     assert matching, (implementation, report)
     assert sum(float(row[count_column]) for row in matching) >= 1, matching
+
+
+def _assert_relay_executed(report, implementation):
+    _assert_executed(report, implementation)
+    filename_column = report[0].index("FileName")
+    sources = [Path(row[filename_column]) for row in report[1:]
+               if "opkey0:" in row[0]]
+    assert any(path.is_file() and "relay_groups[" in path.read_text(encoding="utf-8")
+               for path in sources), report
 
 
 def test_cuda_library_capabilities_are_queryable(cuda_runtime):
@@ -60,7 +71,10 @@ def test_cuda_capability_dtypes_are_declared_and_wider_than_the_cpu_backend(cuda
                        "conv2d_backward_weight"):
         accelerator = set(jt.core.backend_capability_dtypes("cuda", capability))
         cpu = set(jt.core.backend_capability_dtypes("cpu", capability))
-        assert accelerator == wide, (capability, sorted(accelerator))
+        # cuBLAS also has the complex GEMMs (CUDA_C_32F/CUDA_C_64F); cuDNN's
+        # convolutions do not.
+        expected = wide | {"complex64", "complex128"} if capability == "matmul" else wide
+        assert accelerator == expected, (capability, sorted(accelerator))
         # The CPU row is empty only when oneDNN has not loaded in this
         # process; when it has, it must be a strict subset rather than equal,
         # because that gap is the thing being declared.
@@ -136,3 +150,39 @@ def test_cuda_conv_capability_executes_public_conv2d(cuda_runtime):
         actual = _device_array(jt.nn.conv2d(x, weight, stride=1, padding=0))
     np.testing.assert_allclose(actual, expected, rtol=1e-4, atol=1e-5)
     _assert_executed(report, "cudnn_conv")
+
+
+@pytest.mark.xfail(strict=True, reason="KI-TUNER-001: the hand-written meta-op graph is never relayed to cublas_matmul")
+def test_cuda_matmul_capability_relays_meta_operator_graph(cuda_runtime):
+    jt = cuda_runtime
+    a_data = (np.arange(24, dtype=np.float32).reshape(4, 6) - 9) / 16
+    b_data = (np.arange(30, dtype=np.float32).reshape(6, 5) - 12) / 32
+    a, b = jt.array(a_data), jt.array(b_data)
+    jt.sync([a, b])
+    with jt.profile_scope(compile_options={"_capability_matmul": 1}) as report:
+        products = a.broadcast([4, 6, 5], [2]) * b.broadcast([4, 6, 5], [0])
+        actual = _device_array(products.sum(1))
+    np.testing.assert_allclose(actual, a_data @ b_data, rtol=1e-5, atol=1e-6)
+    _assert_relay_executed(report, "cublas_matmul")
+
+
+
+@pytest.mark.xfail(strict=True, reason="KI-TUNER-001: the hand-written meta-op graph is never relayed to cudnn_conv")
+def test_cuda_conv_capability_relays_meta_operator_graph(cuda_runtime):
+    jt = cuda_runtime
+    x_data = (np.arange(60, dtype=np.float32).reshape(1, 2, 5, 6) - 25) / 32
+    w_data = (np.arange(54, dtype=np.float32).reshape(3, 2, 3, 3) - 23) / 64
+    expected = np.zeros((1, 3, 3, 4), dtype=np.float32)
+    for kh in range(3):
+        for kw in range(3):
+            expected += np.einsum("nchw,oc->nohw", x_data[:, :, kh:kh + 3, kw:kw + 4],
+                                  w_data[:, :, kh, kw])
+    x, weight = jt.array(x_data), jt.array(w_data)
+    jt.sync([x, weight])
+    with jt.profile_scope(compile_options={"_capability_conv": 1}) as report:
+        patches = x.reindex([1, 3, 2, 3, 4, 3, 3],
+                            ["i0", "i2", "i3*1-0+i5*1", "i4*1-0+i6*1"])
+        products = patches * weight.broadcast(patches.shape, [0, 3, 4])
+        actual = _device_array(products.sum([2, 5, 6]))
+    np.testing.assert_allclose(actual, expected, rtol=1e-4, atol=1e-5)
+    _assert_relay_executed(report, "cudnn_conv")

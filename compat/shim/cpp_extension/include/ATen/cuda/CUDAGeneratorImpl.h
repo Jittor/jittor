@@ -3,11 +3,13 @@
 #include <mutex>
 #include <optional>
 #include <tuple>
+#include <vector>
+#include <limits>
+#include <stdexcept>
 #include <ATen/cuda/CUDAContext.h>
 
 namespace jittor {
-int get_seed();
-extern int64_t current_offset;
+std::vector<long long> curand_reserve_philox(long long increment);
 }
 
 namespace at {
@@ -24,11 +26,11 @@ struct Generator {};
 struct CUDAGeneratorImpl : public Generator {
     std::mutex mutex_;
     PhiloxCudaState philox_cuda_state(uint64_t increment) {
-        auto state = PhiloxCudaState(
-            static_cast<uint64_t>(jittor::get_seed()),
-            static_cast<uint64_t>(jittor::current_offset));
-        jittor::current_offset += static_cast<int64_t>(increment);
-        return state;
+        if (increment > static_cast<uint64_t>(std::numeric_limits<long long>::max()))
+            throw std::overflow_error("CUDA Philox increment is too large");
+        auto span = jittor::curand_reserve_philox(static_cast<long long>(increment));
+        return PhiloxCudaState(static_cast<uint64_t>(span.at(0)),
+                               static_cast<uint64_t>(span.at(1)));
     }
 };
 

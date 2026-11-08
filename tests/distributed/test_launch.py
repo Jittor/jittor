@@ -20,6 +20,7 @@ reported anything, and the launcher printed nothing until someone killed it by
 hand. Every extra rank makes this more likely, which is the wrong direction.
 """
 import json
+import ast
 import os
 from pathlib import Path
 import signal
@@ -45,6 +46,27 @@ if rank == 1:
 time.sleep(600)
 """
 
+_PRINT_TORCH_ENV = """
+import os
+print("env=" + ",".join(os.environ.get(k, "-") for k in
+      ("RANK", "WORLD_SIZE", "LOCAL_RANK", "MASTER_ADDR", "MASTER_PORT")), flush=True)
+"""
+
+# The store env:// rendezvous a Torch-style `init_process_group()` performs:
+# with WORLD_SIZE > 1 it needs MASTER_ADDR/MASTER_PORT, and every rank must
+# reach rank 0's store. `store.py` is loaded straight off disk: importing
+# jittor in a rank would start NCCL, which needs a GPU per rank.
+_ENV_RENDEZVOUS = """
+import importlib.util
+spec = importlib.util.spec_from_file_location("store", STORE_PATH)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+store, rank, world = next(module.rendezvous("env://"))
+store.set("rank%d" % rank, str(rank))
+store.wait(["rank%d" % r for r in range(world)])
+print("rendezvous %d/%d" % (rank, world), flush=True)
+"""
+
 _PRINT_CACHE_NAME = """
 import os
 print("cache_name=%r" % os.environ.get("cache_name"), flush=True)
@@ -56,6 +78,12 @@ print("use_nccl=%s use_mpi=%s" %
       (os.environ.get("JT_BUILD_USE_NCCL"),
        os.environ.get("JT_BUILD_USE_MPI")), flush=True)
 """
+_PRINT_TORCHRUN_RANKS = """
+import os
+keys = ("RANK", "LOCAL_RANK", "WORLD_SIZE", "JT_NCCL_RANK", "JT_NCCL_LOCAL_RANK", "JT_NCCL_WORLD_SIZE")
+print("ranks=" + repr({k: os.environ.get(k) for k in keys}), flush=True)
+"""
+
 
 _PRINT_NCCL_P2P = """
 import os
@@ -251,7 +279,7 @@ time.sleep(600)
             text = Path(self.tmp.name, "rank%d.log" % rank).read_text()
             expected = {
                 "RANK": str(rank),
-                "LOCAL_RANK": str(rank),
+                "LOCAL_RANK": "0",
                 "WORLD_SIZE": "2",
                 "LOCAL_WORLD_SIZE": "2",
                 "MASTER_ADDR": "127.0.0.1",
@@ -268,7 +296,7 @@ time.sleep(600)
 
     def test_invalid_device_count_and_duplicate_device_ids_fail_before_start(self):
         too_few = run_python_child(
-            [os.fspath(_LAUNCH), "-n", "2", "--backend", "hccl",
+            [os.fspath(_LAUNCH), "-n", "2", "--backend", "hccl", "--strict-device-count",
              "--device-ids", "0", "--", PYTHON, "-c", "pass"],
             cwd=_REPO_ROOT, merge_stderr=True, timeout=120)
         self.assertEqual(too_few.returncode, 2, too_few.stdout)
@@ -384,6 +412,51 @@ time.sleep(600)
         project = (_REPO_ROOT / "pyproject.toml").read_text()
         self.assertIn("[project.scripts]", project)
         self.assertIn('jtrun = "jittor.distributed.launch:main"', project)
+    def test_torchrun_rank_aliases_are_exported(self):
+        """Torch-compatible children see the same rank as Jittor children.
+
+        Downstream torch shims inspect the conventional variables before they
+        import their distributed module. The Jittor-specific variables remain
+        the launcher contract; these aliases make the launcher a drop-in
+        replacement for torchrun.
+        """
+        done, _ = _launch(2, _PRINT_TORCHRUN_RANKS, self.tmp.name, timeout=120)
+        self.assertEqual(done.returncode, 0, done.stdout[-3000:])
+        for rank in range(2):
+            text = Path(self.tmp.name, "rank%d.log" % rank).read_text()
+            ranks = ast.literal_eval(text.strip().split("ranks=", 1)[1])
+            self.assertEqual(ranks["RANK"], str(rank), text)
+            self.assertEqual(ranks["WORLD_SIZE"], "2", text)
+            self.assertEqual(ranks["JT_NCCL_RANK"], str(rank), text)
+            # The alias, not a fixed value: a rank pinned to one device by
+            # CUDA_VISIBLE_DEVICES has local rank 0, and one that is not (a
+            # CPU-only run) has its global rank, single node.
+            self.assertEqual(ranks["LOCAL_RANK"], ranks["JT_NCCL_LOCAL_RANK"], text)
+            self.assertIsNotNone(ranks["LOCAL_RANK"], text)
+
+
+    def test_ranks_get_torchrun_variables(self):
+        """RANK/WORLD_SIZE/LOCAL_RANK and one MASTER_ADDR/MASTER_PORT for all."""
+        done, _ = _launch(2, _PRINT_TORCH_ENV, self.tmp.name, timeout=120)
+        self.assertEqual(done.returncode, 0, done.stdout[-3000:])
+        masters = set()
+        for rank in range(2):
+            text = Path(self.tmp.name, "rank%d.log" % rank).read_text()
+            values = text.strip().split("env=", 1)[1].split(",")
+            self.assertEqual(values[:2], [str(rank), "2"], text)
+            self.assertNotEqual(values[2], "-", text)
+            self.assertTrue(values[4].isdigit(), text)
+            masters.add(tuple(values[3:]))
+        self.assertEqual(len(masters), 1, masters)
+
+    def test_env_rendezvous_reaches_every_rank(self):
+        store = _REPO_ROOT / "python" / "jittor" / "distributed" / "store.py"
+        done, _ = _launch(2, _ENV_RENDEZVOUS.replace("STORE_PATH", repr(os.fspath(store))),
+                          self.tmp.name, timeout=120)
+        self.assertEqual(done.returncode, 0, done.stdout[-3000:])
+        for rank in range(2):
+            text = Path(self.tmp.name, "rank%d.log" % rank).read_text()
+            self.assertIn("rendezvous %d/2" % rank, text)
 
 
 if __name__ == "__main__":

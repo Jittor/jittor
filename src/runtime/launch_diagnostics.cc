@@ -1,10 +1,12 @@
 #include "runtime/launch_diagnostics.h"
 #include "runtime/device_state.h"
+#include "ops/composite/index_bounds.h"
 #include <array>
 #include <atomic>
 #include <cstring>
 #include <map>
 #include <mutex>
+#include <new>
 #include <sstream>
 #include <algorithm>
 
@@ -13,11 +15,49 @@ namespace {
 // All-ones means no override. Zero is an explicit unavailable source and must
 // not be replaced with a later synchronization/backward caller's location.
 thread_local uint64 active_origin = ~uint64(0);
+// The origin captured in the innermost native entry, 0 until its first
+// capture; see enter_launch_origin_entry.
+thread_local bool entry_active = false;
+thread_local uint64 entry_origin = 0;
 thread_local const LaunchRecord* active_launch = nullptr;
 thread_local Device error_device{BackendId::Cuda, -1};
 thread_local uintptr_t error_stream = 0;
 thread_local bool error_stream_known = false;
 std::atomic<LaunchOriginCapture> origin_capture{nullptr};
+std::atomic<DeviceIndexFaultAllocator> index_fault_allocator{nullptr};
+// Set once the record exists, so reporting an error never allocates one.
+std::atomic<IndexFault*> index_fault_host{nullptr};
+}
+
+void set_device_index_fault_allocator(DeviceIndexFaultAllocator allocator) {
+    index_fault_allocator.store(allocator);
+}
+
+IndexFault* device_index_fault() {
+    static IndexFault* device = [] () -> IndexFault* {
+        auto allocator = index_fault_allocator.load();
+        IndexFault* host = nullptr;
+        IndexFault* device = nullptr;
+        if (!allocator || !allocator(&host, &device)) return nullptr;
+        new (host) IndexFault();
+        index_fault_host.store(host);
+        return device;
+    }();
+    return device;
+}
+
+string take_device_index_fault() {
+    auto* host = index_fault_host.load();
+    if (!host) return "";
+    volatile IndexFault* record = host;
+    if (record->dim < 0) return "";
+    std::ostringstream out;
+    out << "\nindex " << record->index << " is out of bounds for dimension "
+        << record->dim << " with size " << record->size
+        << " (reported by the indexing kernel).";
+    record->dim = -1;
+    record->claimed = 0;
+    return out.str();
 }
 
 struct LaunchHistory::Impl {
@@ -88,7 +128,11 @@ bool LaunchHistory::origin(uint64 id, LaunchOrigin& out) {
     return true;
 }
 
-void LaunchHistory::record(LaunchRecord record) {
+void LaunchHistory::record(const LaunchRecord& record) {
+    this->record(record, record.device, record.stream);
+}
+
+void LaunchHistory::record(const LaunchRecord& record, Device device, uintptr_t stream) {
     auto& lease = Impl::lease;
     if (lease.owner.get() != impl.get()) {
         lease.release();
@@ -104,15 +148,13 @@ void LaunchHistory::record(LaunchRecord record) {
         if (!lease.slot) ++impl->unavailable_threads;
     }
     if (!lease.slot) return;
-    {
-        std::lock_guard<std::mutex> guard(impl->mutex);
-        if (record.origin < impl->origins.size())
-            record.location = impl->origins[record.origin];
-    }
-    record.sequence = ++impl->sequence;
     auto& ring = *lease.slot;
     std::lock_guard<std::mutex> guard(ring.mutex);
-    ring.records[ring.written++ % capacity] = record;
+    auto& slot = ring.records[ring.written++ % capacity];
+    slot = record;
+    slot.device = device;
+    slot.stream = stream;
+    slot.sequence = ++impl->sequence;
 }
 
 string LaunchHistory::report(Device device, bool exact_stream, uintptr_t stream) {
@@ -154,9 +196,11 @@ string LaunchHistory::report(Device device, bool exact_stream, uintptr_t stream)
             out << ']';
         }
         out << " python=";
-        if (record.location.line)
-            out << record.location.file << ':' << record.location.line
-                << (record.location.truncated ? " (path truncated)" : "");
+        const LaunchOrigin* location = record.origin && record.origin < impl->origins.size()
+            ? &impl->origins[record.origin] : nullptr;
+        if (location && location->line)
+            out << location->file << ':' << location->line
+                << (location->truncated ? " (path truncated)" : "");
         else out << "not-found";
     }
     if (matching.size() > 16) out << "\n  older matching candidates omitted=" << matching.size()-16;
@@ -166,21 +210,76 @@ string LaunchHistory::report(Device device, bool exact_stream, uintptr_t stream)
 void set_launch_origin_capture(LaunchOriginCapture capture) { origin_capture.store(capture); }
 uint64 capture_launch_origin() {
     if (active_origin != ~uint64(0)) return active_origin;
+    if (entry_origin) return entry_origin;
     auto capture = origin_capture.load();
-    return capture ? capture() : 0;
+    uint64 origin = capture ? capture() : 0;
+    if (entry_active) entry_origin = origin;
+    return origin;
+}
+void enter_launch_origin_entry(bool& outer_active, uint64& outer_origin) {
+    outer_active = entry_active;
+    outer_origin = entry_origin;
+    entry_active = true;
+    entry_origin = 0;
+}
+void leave_launch_origin_entry(bool outer_active, uint64 outer_origin) {
+    entry_active = outer_active;
+    entry_origin = outer_origin;
 }
 LaunchOriginScope::LaunchOriginScope(uint64 origin) : previous(active_origin) { active_origin = origin; }
 LaunchOriginScope::~LaunchOriginScope() { active_origin = previous; }
-LaunchOperationScope::LaunchOperationScope(LaunchRecord value) : previous(active_launch), record(value) {
+LaunchOperationScope::LaunchOperationScope(const LaunchRecord& record) : previous(active_launch) {
     active_launch = &record;
 }
 LaunchOperationScope::~LaunchOperationScope() { active_launch = previous; }
+namespace {
+// Trivial process-lifetime storage: teardown may consult it after runtime owners
+// are destroyed. Every backend has its own mask; no device suppresses another.
+std::atomic<uint64> launched_devices[5]{};
+std::atomic<uint64> reported_lost_devices[5]{};
+std::atomic<uint64> launched_after_loss[5]{};
+bool tracked_device(Device device) {
+    return unsigned(device.backend) < 5 && device.index >= 0 && device.index < 64;
+}
+}
+uint64 launched_device_mask(BackendId backend) {
+    return launched_devices[unsigned(backend)].load(std::memory_order_relaxed);
+}
+uint64 lost_device_mask(BackendId backend) {
+    return reported_lost_devices[unsigned(backend)].load(std::memory_order_relaxed);
+}
+uint64 devices_launched_after_loss(BackendId backend) {
+    return launched_after_loss[unsigned(backend)].load(std::memory_order_relaxed);
+}
+Device launch_error_device(Device current) {
+    if (error_device.index >= 0) return error_device;
+    if (current.index < 0) current.index = runtime_device_state().current_device;
+    return current;
+}
+void note_device_context_lost(Device device) {
+    if (tracked_device(device))
+        reported_lost_devices[unsigned(device.backend)].fetch_or(
+            uint64(1) << device.index, std::memory_order_relaxed);
+    // Do not clear new-work bits on repeated errors: an old context reporting
+    // again must not erase another device's work submitted after the first fault.
+}
+bool device_context_lost(Device device) {
+    return tracked_device(device) && (reported_lost_devices[unsigned(device.backend)].load(
+        std::memory_order_relaxed) & (uint64(1) << device.index));
+}
 void record_active_launch(BackendStream stream) {
+    if (stream.device.backend != BackendId::Cpu && tracked_device(stream.device)) {
+        auto& mask = launched_devices[unsigned(stream.device.backend)];
+        auto bit = uint64(1) << stream.device.index;
+        if (!(mask.load(std::memory_order_relaxed) & bit))
+            mask.fetch_or(bit, std::memory_order_relaxed);
+        if (lost_device_mask(stream.device.backend))
+            launched_after_loss[unsigned(stream.device.backend)].fetch_or(
+                bit, std::memory_order_relaxed);
+    }
     if (!active_launch) return;
-    auto record = *active_launch;
-    record.device = stream.device;
-    record.stream = reinterpret_cast<uintptr_t>(stream.handle);
-    runtime_launch_history().record(record);
+    runtime_launch_history().record(*active_launch, stream.device,
+                                    reinterpret_cast<uintptr_t>(stream.handle));
 }
 
 LaunchErrorScope::LaunchErrorScope(Device device, bool exact_stream, uintptr_t stream)

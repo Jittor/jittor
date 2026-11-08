@@ -29,7 +29,9 @@ def make_distribution_frontend(native, target):
             value = state.adapt(value)
         elif isinstance(value, ModuleType):
             child = ModuleType("torch.distributions." + name)
-            for attribute in dir(value):
+            # ModuleType.__dir__ lists instance attributes only. Native module
+            # subclasses also own class-level constraints and static factories.
+            for attribute in sorted(set(dir(value)) | set(dir(type(value)))):
                 if not attribute.startswith("__"):
                     setattr(child, attribute, getattr(value, attribute))
             value = child

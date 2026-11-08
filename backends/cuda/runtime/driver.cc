@@ -1,9 +1,17 @@
 #include "runtime/backend.h"
 #include "runtime/backend_streams.h"
 #include "runtime/device_state.h"
+#include "ops/composite/index_bounds.h"
 #include <cuda_runtime.h>
 #include "helper_cuda.h"
+#include "mem/mem_info.h"
+#include <algorithm>
+#include <atomic>
+#include <cstring>
+#include <dlfcn.h>
 #include <exception>
+#include <unistd.h>
+#include <vector>
 
 namespace jittor {
 DECLARE_FLAG(int, cuda_device_allocator_managed_fallback);
@@ -71,6 +79,23 @@ int accelerator_current() {
     return state.current_device;
 }
 
+int accelerator_caller_device() {
+    int device = -1;
+    if (cudaGetDevice(&device) != cudaSuccess) {
+        cudaGetLastError();
+        return -1;
+    }
+    return device;
+}
+
+void accelerator_restore_caller_device(int device) {
+    if (cudaSetDevice(device) != cudaSuccess) {
+        cudaGetLastError();
+        return;
+    }
+    tls_bound_device = -1;
+}
+
 void accelerator_set(int device) {
     int count = accelerator_count();
     CHECK(device >= 0 && device < count)
@@ -87,8 +112,8 @@ void accelerator_set(int device) {
 
 void accelerator_sync(uint64 devices) {
     LaunchErrorScope error_scope({BackendId::Cuda, accelerator_current()});
-    checkCudaErrors(cudaGetLastError());
     if (!devices) {
+        checkCudaErrors(cudaGetLastError());
         checkCudaErrors(cudaDeviceSynchronize());
         return;
     }
@@ -160,14 +185,70 @@ void on_device_void(int device, Func&& func) {
     on_device(device, [&] { func(); return 0; });
 }
 
+static string readable_bytes(size_t size) {
+    const char* units[] = {"bytes", "KiB", "MiB", "GiB", "TiB", "PiB"};
+    double value = (double)size;
+    int unit = 0;
+    while (value >= 1024 && unit < 5) { value /= 1024; unit++; }
+    std::ostringstream out;
+    out.precision(unit ? 1 : 0);
+    out << std::fixed << value << ' ' << units[unit];
+    return out.str();
+}
+
+// What NVML says this process holds on `device` (CUDA context, modules and
+// every allocation, not only the pools'), or -1 when it cannot say: no NVML,
+// or the process is not in the list it returns (another PID namespace).
+// Loaded on demand, as PyTorch's caching allocator does for the same sentence.
+static int64 process_device_memory(int device) {
+    typedef int (*NvmlInit)();
+    typedef int (*NvmlByBusId)(const char*, void**);
+    struct ProcessInfo { unsigned pid; unsigned long long used; unsigned gpu_instance, compute_instance; };
+    typedef int (*NvmlProcesses)(void*, unsigned*, ProcessInfo*);
+    static void* lib = dlopen("libnvidia-ml.so.1", RTLD_NOW | RTLD_LOCAL);
+    if (!lib) return -1;
+    static bool ready = [] {
+        auto init = (NvmlInit)dlsym(lib, "nvmlInit_v2");
+        return init && init() == 0;
+    }();
+    auto by_bus_id = (NvmlByBusId)dlsym(lib, "nvmlDeviceGetHandleByPciBusId_v2");
+    auto processes = (NvmlProcesses)dlsym(lib, "nvmlDeviceGetComputeRunningProcesses_v3");
+    if (!ready || !by_bus_id || !processes) return -1;
+    char bus_id[32];
+    if (cudaDeviceGetPCIBusId(bus_id, sizeof(bus_id), device) != cudaSuccess) {
+        cudaGetLastError();
+        return -1;
+    }
+    void* handle = nullptr;
+    if (by_bus_id(bus_id, &handle) != 0) return -1;
+    ProcessInfo infos[256];
+    unsigned count = 256;
+    if (processes(handle, &count, infos) != 0) return -1;
+    for (unsigned i = 0; i < count; i++)
+        if (infos[i].pid == (unsigned)getpid()) return (int64)infos[i].used;
+    return -1;
+}
+
 void* raw_allocate(int device, BackendMemoryKind kind, size_t size) {
     if (!size) return nullptr;
     return on_device(device, [&]() -> void* {
         void* ptr = nullptr;
-        if (kind == BackendMemoryKind::Pinned) {
-            checkCudaErrors(cudaMallocHost(&ptr, size));
-        } else if (kind == BackendMemoryKind::Managed) {
-            checkCudaErrors(cudaMallocManaged(&ptr, size));
+        if (kind == BackendMemoryKind::Pinned || kind == BackendMemoryKind::Managed) {
+            bool pinned = kind == BackendMemoryKind::Pinned;
+            auto error = pinned ? cudaMallocHost(&ptr, size) : cudaMallocManaged(&ptr, size);
+            if (error == cudaErrorMemoryAllocation) {
+                // Not the generic CUDA error report: "code=2(cudaErrorMemoryAllocation)
+                // cudaMallocHost" does not say how much was asked for, and the
+                // launch history it appends has nothing to do with an allocation.
+                cudaGetLastError();
+                throw std::runtime_error(
+                    "out of memory: could not allocate " + readable_bytes(size) + " (" +
+                    S(size) + " bytes) of " +
+                    (pinned ? "page-locked host memory" : "CUDA managed memory") +
+                    ". CUDA said: " + cudaGetErrorString(error) + ".");
+            }
+            check(error, pinned ? "cudaMallocHost(&ptr, size)" : "cudaMallocManaged(&ptr, size)",
+                  __FILE__, __LINE__);
         } else {
             auto error = cudaMalloc(&ptr, size);
             if (error != cudaSuccess) {
@@ -184,18 +265,25 @@ void* raw_allocate(int device, BackendMemoryKind kind, size_t size) {
                     size_t device_free = 0, device_total = 0;
                     auto info = cudaMemGetInfo(&device_free, &device_total);
                     if (info != cudaSuccess) cudaGetLastError();
-                    string where = info == cudaSuccess
-                        ? (", device " + S(device) + " has " + S(device_free >> 20) +
-                           " MiB free of " + S(device_total >> 20) + " MiB")
-                        : (", and device " + S(device) + "'s free memory could not be read");
-                    throw std::runtime_error(
-                        "out of memory on the accelerator: could not allocate " +
-                        S(size >> 20) + " MiB (" + S(size) + " bytes)" + where +
-                        ". CUDA said: " + cudaGetErrorString(error) +
-                        ". Another process may be holding the device; reduce the "
-                        "batch size, or set auto_flush_ops=0 to let the whole "
-                        "graph be scheduled at once, which frees intermediates "
-                        "earlier.");
+                    // Freeing memory cannot help a request bigger than the
+                    // card, and advice about batch sizes sends the reader
+                    // after the wrong thing: it is usually a shape bug.
+                    string advice = info == cudaSuccess && size > device_total
+                        ? "This one allocation is larger than the whole device, "
+                          "so freeing memory will not help; check the shape of "
+                          "the operator that requested it."
+                        : "Another process may be holding the device; reduce the "
+                          "batch size, or set auto_flush_ops=0 to let the whole "
+                          "graph be scheduled at once, which frees intermediates "
+                          "earlier.";
+                    // PyTorch's sentences first, so that what reads its
+                    // message reads this one; then what to do about it here.
+                    throw DeviceOutOfMemoryError(
+                        device_out_of_memory_message(
+                            device, size, info == cudaSuccess ? (int64)device_free : -1,
+                            info == cudaSuccess ? (int64)device_total : -1,
+                            process_device_memory(device)) +
+                        " " + advice);
                 }
                 LOGw << "Unable to alloc cuda device memory for size" << size
                      << ", falling back to cudaMallocManaged";
@@ -452,6 +540,46 @@ void copy_async(void* dst, Device target, const void* src, Device source, size_t
                                        reinterpret_cast<cudaStream_t>(stream.handle)));
     });
 }
+// Pinned staging for small device-to-host readbacks; see `copy`. A few
+// slots, so that readbacks from several host threads need not wait for each
+// other -- one that finds them all taken copies straight into its destination,
+// as before. Allocated on first use as portable pinned memory (any device's
+// context may copy into it) and kept for the life of the process.
+struct ReadbackSlot {
+    static constexpr size_t capacity = 16u << 10;
+    static constexpr int count = 4;
+    char* data = nullptr;
+    explicit ReadbackSlot(size_t size) {
+        static std::atomic<char*> buffers[count];
+        static std::atomic<bool> taken[count];
+        // No capture check: a readback cannot be recorded, with a slot or without.
+        if (size > capacity) return;
+        for (int i = 0; i < count; i++) {
+            if (taken[i].exchange(true, std::memory_order_acquire)) continue;
+            char* buffer = buffers[i].load(std::memory_order_relaxed);
+            if (!buffer) {
+                void* pinned = nullptr;
+                if (cudaHostAlloc(&pinned, capacity, cudaHostAllocPortable) != cudaSuccess) {
+                    cudaGetLastError();
+                    taken[i].store(false, std::memory_order_release);
+                    return;
+                }
+                buffer = static_cast<char*>(pinned);
+                buffers[i].store(buffer, std::memory_order_relaxed);
+            }
+            data = buffer;
+            release_ = &taken[i];
+            return;
+        }
+    }
+    ~ReadbackSlot() { if (release_) release_->store(false, std::memory_order_release); }
+    explicit operator bool() const { return data != nullptr; }
+    ReadbackSlot(const ReadbackSlot&) = delete;
+    ReadbackSlot& operator=(const ReadbackSlot&) = delete;
+private:
+    std::atomic<bool>* release_ = nullptr;
+};
+
 void copy(void* dst, Device target, const void* src, Device source, size_t size, bool ordered) {
     if (!size) return;
     int device = target.backend == BackendId::Cpu ? source.index : target.index;
@@ -483,9 +611,26 @@ void copy(void* dst, Device target, const void* src, Device source, size_t size,
             // An unregistered pointer is the ordinary case, not a failure;
             // older drivers report it as an error, so clear the sticky flag.
             if (query != cudaSuccess) cudaGetLastError();
-            const bool pageable = query != cudaSuccess
+            bool pageable = query != cudaSuccess
                 || attr.type == cudaMemoryTypeUnregistered;
-            checkCudaErrors(cudaMemcpyAsync(dst, src, size, cudaMemcpyHostToDevice,
+            // A small pinned source goes through a pageable bounce buffer
+            // instead, which the driver stages before returning. Host Vars are
+            // pinned whenever CUDA is in use, so this is every 0-d CPU operand
+            // of a CUDA op -- `cuda_x / cpu_scalar`, a scheduler's
+            // `alphas_cumprod[t] ** 0.5 * sample` -- and the wait below made
+            // each one block the host until the GPU drained its queue: 54 ms
+            // behind 20 queued 4096^2 matmuls, 2.35 ms twice per DDIM step.
+            // Not while recording a graph: the node would read the bounce
+            // buffer on every launch.
+            const void* from = src;
+            thread_local vector<char> bounce;
+            if (!pageable && !capturing() && size <= (64u << 10)) {
+                bounce.resize(std::max(bounce.size(), size));
+                std::memcpy(bounce.data(), src, size);
+                from = bounce.data();
+                pageable = true;
+            }
+            checkCudaErrors(cudaMemcpyAsync(dst, from, size, cudaMemcpyHostToDevice,
                                             cudaStreamPerThread));
             // Except while recording a graph, where a wait is illegal and the
             // copy becomes a node that reads `src` each time the graph runs;
@@ -499,22 +644,37 @@ void copy(void* dst, Device target, const void* src, Device source, size_t size,
         } else if (target.backend == BackendId::Cpu && source.backend != BackendId::Cpu) {
             LaunchErrorScope error_scope(
                 source, true, reinterpret_cast<uintptr_t>(cudaStreamPerThread));
-            // Readback waits for its producer stream's event, not the device.
-            // This also serves data-dependent shape counts and scalar item().
-            cudaEvent_t done;
-            checkCudaErrors(cudaEventCreateWithFlags(&done, cudaEventDisableTiming));
-            try {
-                checkCudaErrors(cudaMemcpyAsync(dst, src, size, cudaMemcpyDeviceToHost,
+            // Readback waits for its producer stream, not the device. This
+            // also serves data-dependent shape counts and scalar item(), some
+            // seven thousand times per shape in a sort/unique-heavy loop.
+            //
+            // It used to record an event and wait for that, from when the copy
+            // went to the legacy stream 0: synchronizing stream 0 itself would
+            // also have waited for every other blocking stream. The per-thread
+            // stream has no such implicit wait, so synchronizing it waits for
+            // exactly what the event did -- the copy and everything queued
+            // before it -- without creating, recording and destroying an event
+            // on every readback.
+            //
+            // A small readback lands in a pinned slot and is copied out from
+            // there. Into pageable memory the driver stages the bytes itself
+            // and cudaMemcpyAsync returns only once they are there, so the
+            // stream wait after it waits for nothing -- and the pair costs a
+            // microsecond more than a pinned copy and its wait (4 bytes:
+            // 5.4 us against 4.9; 16 KB: 7.6 against 7.0; beyond 64 KB the
+            // extra host copy loses). Count readbacks for `nonzero`, `item()`
+            // and a Var's truth value are this size, thousands per second in
+            // a mask-driven loop.
+            if (ReadbackSlot slot{size}) {
+                checkCudaErrors(cudaMemcpyAsync(slot.data, src, size, cudaMemcpyDeviceToHost,
                                                 cudaStreamPerThread));
-                checkCudaErrors(cudaEventRecord(done, cudaStreamPerThread));
-                checkCudaErrors(cudaEventSynchronize(done));
-            } catch (...) {
-                const auto cleanup = cudaEventDestroy(done);
-                if (cleanup != cudaSuccess)
-                    LOGe << "Readback event cleanup failed:" << cudaGetErrorString(cleanup);
-                throw;
+                checkCudaErrors(cudaStreamSynchronize(cudaStreamPerThread));
+                std::memcpy(dst, slot.data, size);
+                return;
             }
-            checkCudaErrors(cudaEventDestroy(done));
+            checkCudaErrors(cudaMemcpyAsync(dst, src, size, cudaMemcpyDeviceToHost,
+                                            cudaStreamPerThread));
+            checkCudaErrors(cudaStreamSynchronize(cudaStreamPerThread));
         } else if (capturing()) {
             // A blocking copy is impossible while the stream is being
             // recorded -- `cudaMemcpy` reports cudaErrorStreamCaptureImplicit
@@ -533,6 +693,31 @@ void copy(void* dst, Device target, const void* src, Device source, size_t size,
         }
     });
 }
+
+// Page-locked and mapped, so an indexing kernel can write it and the host can
+// still read it after the kernel has trapped (index_bounds.h). Portable,
+// because the faulting kernel may run on any device. Kept for the life of the
+// process.
+bool allocate_index_fault(IndexFault** host, IndexFault** device) {
+    void* host_ptr = nullptr;
+    auto error = cudaHostAlloc(&host_ptr, sizeof(IndexFault),
+                               cudaHostAllocMapped | cudaHostAllocPortable);
+    void* device_ptr = nullptr;
+    if (error == cudaSuccess) {
+        error = cudaHostGetDevicePointer(&device_ptr, host_ptr, 0);
+        if (error != cudaSuccess) cudaFreeHost(host_ptr);
+    }
+    if (error != cudaSuccess) {
+        cudaGetLastError();
+        LOGw << "Could not allocate the device index-fault record:"
+            << cudaGetErrorString(error) >> "; indexing kernels will print an"
+            << "out-of-range index to stdout instead of naming it in the error.";
+        return false;
+    }
+    *host = static_cast<IndexFault*>(host_ptr);
+    *device = static_cast<IndexFault*>(device_ptr);
+    return true;
+}
 } // namespace
 
 BackendOps make_cuda_backend() {
@@ -543,6 +728,8 @@ BackendOps make_cuda_backend() {
     ops.device_count = accelerator_count;
     ops.current_device = accelerator_current;
     ops.set_device = accelerator_set;
+    ops.caller_device = accelerator_caller_device;
+    ops.restore_caller_device = accelerator_restore_caller_device;
     ops.allocator = accelerator_allocator_for;
     ops.copy = copy;
     ops.copy_async = copy_async;
@@ -570,6 +757,7 @@ BackendOps make_cuda_backend() {
     ops.host_callback = host_callback;
     ops.architectures = architectures;
     ops.check_nan = cuda_backend_check_nan;
+    set_device_index_fault_allocator(allocate_index_fault);
     return ops;
 }
 } // namespace jittor

@@ -21,6 +21,10 @@ from .preflight import (
     jittor_python_root, prepare_import_environment, prepend_sys_path,
     require_independent_frontend as _require_independent_frontend,
 )
+from .torch_metadata import (
+    is_published as _is_distribution_metadata_published,
+    publish as _publish_torch_metadata, release as _release_torch_metadata,
+)
 from jittor.compat._aliases import torch_namespace_claimable, torch_namespace_owned
 from jittor.compat.torch.publication import (
     bind_published_namespace, independent_torch_namespace,
@@ -28,7 +32,7 @@ from jittor.compat.torch.publication import (
     namespace_owner,
 )
 from ..diagnostics import EXPECTED, swallowed
-from ..transaction import ActivationTransaction, _MISSING
+from ..transaction import ActivationTransaction, _MISSING, set_env
 
 
 class ActivationStatus(NamedTuple):
@@ -71,15 +75,51 @@ def _installation_target(owner):
     return target
 
 
+_ENTRY_SOURCE = pathlib.Path(__file__).resolve().parent / "resources" / "torch" / "__init__.py"
+
+
+def _adopt_entry_file(module):
+    """Give the published namespace the ``__file__`` of the entry it replaces.
+
+    Libraries locate an installation through ``torch.__file__`` (for example
+    ``os.path.dirname(torch.__file__)``), and the deploy hint prints it. A
+    detached namespace has no file of its own, so it takes the deployed
+    ``torch/__init__.py`` that is importing it, or the source that file is
+    copied from when activation did not come through a deployed entry point.
+    """
+    if "__file__" in vars(module):
+        return
+    current = sys.modules.get("torch")
+    source = None
+    if getattr(current, "_jittor_torch_shim_placeholder", False):
+        source = getattr(current, "__file__", None)
+    module.__file__ = os.fspath(source or _ENTRY_SOURCE)
+
+
 def _publish_torch_module(transaction, module, owner):
     """Publish an opt-in namespace while retaining transaction rollback."""
 
+    _adopt_entry_file(module)
     current = sys.modules.get("torch")
     if current is owner and module is not owner:
         sys.modules["torch"] = module
         transaction.record(sys.modules, "torch", owner, module)
         return
     transaction.publish_module(sys.modules, "torch", module)
+
+
+def _publish_distribution_metadata(transaction):
+    """Make ``importlib.metadata`` answer ``version("torch")`` after activation.
+
+    Libraries such as Transformers decide from distribution metadata, not from
+    an import, whether PyTorch is installed. Registration is process-local and
+    reversible: the activation transaction records its removal, so a failed
+    install publishes nothing.
+    """
+    existing = _is_distribution_metadata_published()
+    finder = _publish_torch_metadata()
+    if transaction is not None and not existing:
+        transaction.record_undo(lambda: _release_torch_metadata(finder))
 
 
 def _publish_registry_root(transaction, registry, module):
@@ -186,6 +226,20 @@ def _activate_once(
                 transaction=transaction,
             )
             _publish_torch_module(transaction, published, jt)
+            # A subprocess cannot inherit the in-memory ``sys.modules['torch']``
+            # publication.  Give it the same deployed shim package that an
+            # explicit ``enable`` call uses, so child processes do not import
+            # the real PyTorch wheel before the shim has a chance to claim it.
+            runtime_root = getattr(_preflight_result, "runtime_root", "")
+            if runtime_root:
+                shim_site = _ensure_dir(pathlib.Path(runtime_root) / "site-packages",
+                                        "the torch shim's child-process site")
+                _deploy_torch_shim(shim_site)
+                _write_build_sitecustomize(shim_site)
+                project_dir = pathlib.Path.cwd()
+                set_env("PYTHONPATH", _pythonpath_for_child(
+                    [shim_site, jittor_python_root(), project_dir]))
+            _publish_distribution_metadata(transaction)
             if _transaction is not None:
                 _transaction.adopt(transaction)
             transaction.commit()
@@ -264,9 +318,11 @@ def _activate_once(
         transaction=_transaction,
     )
     if _transaction is None:
+        _adopt_entry_file(published)
         sys.modules["torch"] = published
     else:
         _publish_torch_module(_transaction, published, jt)
+    _publish_distribution_metadata(_transaction)
     try:
         from jittor.compat.shim.cpp_extension.torch_utils import install_cpp_extension
         install_cpp_extension(

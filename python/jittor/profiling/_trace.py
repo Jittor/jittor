@@ -36,6 +36,8 @@ def write_chrome_trace(result, path):
             args["site"] = s[o["site"]]
         if o["out_bytes"]:
             args["out_bytes"] = o["out_bytes"]
+        if o["compile_ns"]:
+            args["compile_us"] = o["compile_ns"] / 1e3
         events.append({"ph": "X", "pid": _HOST_PID, "tid": 2, "name": s[o["name"]],
                        "ts": _us(o["t_start"], t0), "dur": (o["t_end"] - o["t_start"]) / 1e3,
                        "args": args})

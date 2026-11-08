@@ -64,6 +64,27 @@ int VarRelayManager::add_relay_group(FusedOp* fop, const vector<pair<Var*, Var*>
     });
     // currently, we only support single op relay
     ASSERT(q.size()==2*group.size());
+    // A relayed op's members other than the relayed output are read through
+    // the fused op's node ids, so each of them has to be a member of the fused
+    // op. A convolution whose operand stayed outside the fusion -- ConvBERT's
+    // depthwise span conv, whose product carries a broadcast view -- leaves one
+    // out, and the assert in the OpRelayContext loop below aborted on it, after
+    // this group's inputs had already been removed from its ops. Decline the
+    // relay instead: the product then runs inside the fused op as an ordinary
+    // node, which is slower than a library kernel and correct.
+    for (const auto& p : group) {
+        Op* op = p.first->input();
+        const auto& op_info = op->codegen();
+        for (uint i=0; i<op_info.var_members.size(); i++) {
+            Var* v = GET_VAR_MEMBER(op, op_info.var_members[i].second);
+            if (v && v != p.first && !fnodes.count(v)) {
+                LOGvvv << "Decline relay of" << op << ": member" << v
+                    << "is outside the fused op";
+                relay_groups.pop_back();
+                return -1;
+            }
+        }
+    }
     for (Node* node : q) {
         node->__release();
         if (node->is_var())

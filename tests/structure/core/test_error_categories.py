@@ -8,14 +8,16 @@ _LINE_COMMENT = re.compile(r"//.*")
 
 
 def _count_user_check_sites(source):
-    """``USER_CHECK``/``USER_CHECKop`` call sites in *source*, prose excluded.
+    """``USER_CHECK``/``USER_CHECKop``/``USER_INDEX_CHECK`` call sites in *source*, prose excluded.
 
     A ledger counts boundaries, and a comment that quotes a check by name is
     documentation of one, not another one: counting it would make every
     ledger grow the moment someone explains why a check is there.
+    ``USER_INDEX_CHECK`` raises a ``UserError`` too, of the index kind.
     """
     code = "\n".join(_LINE_COMMENT.sub("", line) for line in source.splitlines())
-    return code.count("USER_CHECK(") + code.count("USER_CHECKop(")
+    return (code.count("USER_CHECK(") + code.count("USER_CHECKop(")
+            + code.count("USER_INDEX_CHECK("))
 # 2026-09-11, two changes landing together. `0f5eab25e` had reclassified
 # `ASSERT(ns.is_binary())` to `USER_CHECK` in both `ReduceOp` constructors;
 # that is right for the public `ReduceOp(x, op, dims, keepdims)`, where `op` is
@@ -66,7 +68,10 @@ MIGRATED_SHAPE_CARDINALITY_BOUNDARIES = {
     # of them reading `jt.reindex`'s `indexes`/`shape` arguments. It also
     # reclassified `ASSERT(extras.size())` (reindex without an explicit shape
     # needs the caller to pass an overflow extras tensor).
-    "src/ops/reindex_op.cc": 8,
+    # 2026-10-05: 8 -> 7. The "at most ten dimensions" check is gone: tensors
+    # go up to 32 dimensions and the rank limit is checked once, where every
+    # Var's shape is set (`Var::set_shape`).
+    "src/ops/reindex_op.cc": 7,
     # 2026-09-11: 3 -> 4. `0f5eab25e` reclassified
     # `ASSERT((ns.is_binary() && ns!=ns_mean) || ns == ns_void)`: `op` is the
     # reduction name the caller passed to `jt.reindex_reduce`.
@@ -95,8 +100,18 @@ MIGRATED_BROADCAST_SHAPE_BOUNDARIES = {
 # caller handed in. The two `CHECK`s further down (`x->num >= 0`,
 # `ydsize > 0`) stay internal: they restate what `is_dtype()` and the Var
 # invariants already guarantee.
+#
+# 2026-09-22: 8 -> 10. Native complex128 dtype support (KI-COMPLEX-001)
+# extended `infer_shape`'s two complex<->real pairing checks
+# (`complex64 -> float32 requires [..., 2]` / vice versa) with the same
+# checks for `complex128 <-> float64` -- two more user-facing shape
+# boundaries on the same caller-supplied `(x, shape, dtype)` triple, not
+# internal invariants.
 MIGRATED_REINTERPRET_VIEW_BOUNDARIES = {
-    "src/ops/composite/reinterpret_view_op.cc": 8,
+    # Replace the blanket contiguous-only rejection with three precise guards:
+    # last stride 1 for itemsize changes, byte-stride divisibility, and refusal
+    # to reinterpret an arbitrary non-contiguous reshape (net two boundaries).
+    "src/ops/composite/reinterpret_view_op.cc": 12,
 }
 
 # 2026-09-11: 1 -> 3. Besides the shape check this entry was named for,
@@ -105,7 +120,9 @@ MIGRATED_REINTERPRET_VIEW_BOUNDARIES = {
 # passed to `jt.binary`) and `CHECK(x_ok && y_ok)` -> `USER_CHECK` (a bitwise
 # or shift op on float dtypes).
 MIGRATED_BINARY_SHAPE_BOUNDARIES = {
-    "src/ops/binary_op.cc": 3,
+    # 2026-10-05: 3 -> 4. `maximum`/`minimum` of a complex operand is a caller
+    # error (complex numbers have no order); it used to fail in the compiler.
+    "src/ops/binary_op.cc": 4,
 }
 
 # 2026-09-10: both counts were one short of the source before the index bounds
@@ -114,7 +131,7 @@ MIGRATED_BINARY_SHAPE_BOUNDARIES = {
 # -- a shape that does not match, an ellipsis with too many indices after it, a
 # `int` index outside the dimension, too many slices, a setitem operation that
 # is neither void nor binary, a data dimension larger than the target. The new
-# one is the Var index the kernel now range-checks (KI-OPS-010); it is
+# one is the Var index the kernel now range-checks; it is
 # `USER_CHECK` rather than `CHECK` because an out-of-range index is exactly the
 # case `USER_ERROR` in `src/utils/log.h` describes -- "a caller supplied an
 # unsupported value, shape, dtype, or index" -- and callers should be able to
@@ -176,7 +193,10 @@ MIGRATED_UNARY_OP_USER_BOUNDARIES = {
     # 2 since 2026-09-11: `bitwise_not` on a float now says so instead of
     # reaching `~x` in the generated kernel and letting g++ answer "wrong type
     # argument to bit-complement". See tests/ops/test_bitwise_dtype_guard.py.
-    "src/ops/unary_op.cc": 2,
+    # 4 since 2026-10-26: the internal `imag`/`as_imag` unaries behind
+    # `Var.imag` refuse a dtype they have no kernel for in the same way. See
+    # tests/type/test_complex64_native.py.
+    "src/ops/unary_op.cc": 4,
 }
 
 MIGRATED_CURAND_USER_BOUNDARIES = {
@@ -224,7 +244,8 @@ MIGRATED_CUTT_TRANSPOSE_RANK_USER_BOUNDARIES = {
 # 2"). 2 dtype + 2 contiguity + the a-rank check + the inner-dimension check
 # = 6. Behaviour gate: tests/ops/test_matmul_higher_rank.py.
 MIGRATED_CUBLAS_MATMUL_DTYPE_USER_BOUNDARIES = {
-    "backends/cuda/kernels/cublas/cublas_matmul_op.cc": 6,
+    # Includes the BF16-only FP32 accumulator-output argument boundary.
+    "backends/cuda/kernels/cublas/cublas_matmul_op.cc": 7,
 }
 
 MIGRATED_CUBLAS_MATMUL_RANK_USER_BOUNDARIES = {
@@ -384,7 +405,13 @@ MIGRATED_ITEM_USER_BOUNDARIES = {
 # program did, and the message already tells them so. The same commit moved
 # two `LOGf` in this file to `USER_ERROR`, which this count does not see.
 MIGRATED_GRAD_DTYPE_USER_BOUNDARIES = {
-    "src/core/grad.cc": 3,
+    # Loss/target/higher-order checks plus caller-controlled hook replacement
+    # shape, dtype and device. Invalid hooks must raise catchable user errors.
+    # .data can replace storage shape while preserving a recorded producer:
+    # validate returned gradient rank and broadcast-compatible extents against
+    # that recorded contract. Both are caller-controlled shape boundaries.
+    # Replay probes reject thread/LIFO misuse and absent gradient snapshots.
+    "src/core/grad.cc": 10,
 }
 
 
@@ -408,6 +435,9 @@ def test_item_size_boundary_is_a_user_error():
 
 def test_grad_dtype_boundaries_are_user_errors():
     source = (ROOT / "src/core/grad.cc").read_text()
+    assert 'USER_CHECK(!step_backward_probes.empty()' in source
+    assert 'step backward probes must end on their creating thread in LIFO order' in source
+    assert 'cannot snapshot an absent step gradient' in source
     assert 'USER_CHECK(loss->is_float())' in source
     assert 'USER_CHECK(var->is_float() || var->dtype().is_complex())' in source
     assert '\n    CHECK(loss->is_float())' not in source
@@ -430,7 +460,20 @@ def test_public_dimension_boundary_migration_is_explicit_and_bounded():
         if relative == "src/ops/broadcast_to_op.cc":
             actual = source.count('USER_CHECK(dim>=0 && dim<ydim)')
         else:
-            actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
+            # USER_INDEX_CHECK is the same migration, typed as IndexError
+            # (reduce_op.cc's out-of-range dim).
+            actual = (source.count("USER_CHECK(") + source.count("USER_CHECKop(")
+                      + source.count("USER_INDEX_CHECK("))
+        if relative == "src/ops/composite/argsort_op.cc":
+            # Stable-sort backend support is not a dimension boundary. Pin
+            # that guard separately instead of enlarging the dimension ledger.
+            backend_guard = (
+                "USER_CHECK(!stable || backend == BackendId::Cpu || "
+                "backend == BackendId::Cuda)"
+            )
+            assert source.count(backend_guard) == 1
+            assert "stable argsort is only supported on CPU and CUDA" in source
+            actual -= 1
         counts[relative] = actual
     # Report every disagreement, not just the first. Three entries went stale
     # behind one that failed earlier in iteration order and stayed invisible
@@ -460,17 +503,24 @@ def test_public_shape_cardinality_migration_is_explicit_and_bounded():
     for relative in _LEDGER:
         source = (ROOT / relative).read_text()
         actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
-        if relative == "src/ops/composite/code_op.cc":
-            # Backend provenance is independent of the shape/cardinality ledger.
-            for guard in ("USER_CHECK(backend.empty()", "USER_CHECK(execution_backend() == expected)"):
-                assert source.count(guard) == 1
-                actual -= 1
+        # Backend provenance, and refusing to differentiate a callback's
+        # gradient again, are independent of the shape/cardinality ledger.
+        other_guards = {
+            "src/ops/composite/code_op.cc": (
+                "USER_CHECK(backend.empty()", "USER_CHECK(execution_backend() == expected)",
+                "USER_CHECK(!data.count(code_backward_key))"),
+            "src/ops/composite/numpy_code_op.cc": (
+                "USER_CHECK(!_results.ints.count(dout_input_index_key))",),
+        }
+        for guard in other_guards.get(relative, ()):
+            assert source.count(guard) == 1
+            actual -= 1
         counts[relative] = actual
     # Report every disagreement, not just the first. Three entries went stale
     # behind one that failed earlier in iteration order and stayed invisible
     # until that earlier one was fixed (2026-09-11).
     assert counts == dict(_LEDGER), (counts, dict(_LEDGER))
-    assert sum(counts.values()) == 43
+    assert sum(counts.values()) == 42
 
 
 def test_public_view_shape_migration_is_explicit_and_bounded():
@@ -519,18 +569,19 @@ def test_binary_shape_migration_is_explicit_and_bounded():
     assert source.count("USER_CHECK(ns.is_binary())") == 1
     assert "ASSERT(ns.is_binary())" not in source
     assert source.count("USER_CHECK(x_ok && y_ok)") == 1
+    assert source.count("USER_CHECK(!x->dtype().is_complex() && !y->dtype().is_complex())") == 1
 
 
 def test_setitem_shape_migration_is_explicit_and_bounded():
     source = (ROOT / "src/ops/composite/setitem_op.cc").read_text()
-    actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
+    actual = _count_user_check_sites(source)
     assert actual == MIGRATED_SETITEM_SHAPE_BOUNDARIES[
         "src/ops/composite/setitem_op.cc"]
 
 
 def test_getitem_shape_migration_is_explicit_and_bounded():
     source = (ROOT / "src/ops/composite/getitem_op.cc").read_text()
-    actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
+    actual = _count_user_check_sites(source)
     assert actual == MIGRATED_GETITEM_SHAPE_BOUNDARIES[
         "src/ops/composite/getitem_op.cc"]
 
@@ -718,6 +769,9 @@ def test_cublas_matmul_dtype_user_boundary_migration_is_explicit_and_bounded():
     negative = (ROOT / "tests/backends/cuda/test_cublas_matmul_grad.py").read_text()
     assert "test_non_float_inputs_are_rejected_clearly" in negative
     assert "test_mixed_input_dtypes_are_rejected_clearly" in negative
+    accumulator_negative = (
+        ROOT / "tests/backends/cuda/test_cublas_matmul_amp_dtype.py").read_text()
+    assert "test_fp32_accumulator_option_rejects_other_compute_dtypes" in accumulator_negative
 
 
 def test_cublas_matmul_b_rank_is_a_catchable_user_error():
@@ -1097,3 +1151,64 @@ def test_mpi_reduction_op_name_is_a_catchable_user_error():
         assert source.count("USER_CHECK(op == ns_add)") == 1, relative
         assert "ASSERT(op == ns_add)" not in source, relative
         assert "Not supported MPI op" in source, relative
+
+
+def test_jit_source_parser_user_boundaries_are_explicit():
+    """A custom op's ``jit_run`` body is caller text, not a framework invariant.
+
+    ``jt.compile_custom_op`` takes that text as a public argument, and the JIT
+    half of the source is not compiled by g++ until after the fused-kernel
+    parser and the compiler-command scanner have read it. A source-scanning
+    failure there is therefore ``USER_CHECK``/``USER_ERROR`` with a sentence
+    naming the construct. The parsers' own preconditions and IR-shape checks
+    stay ``ASSERT``; the filesystem/compiler failures and the ``TEST``-only
+    self-test are not caller input and stay internal.
+    """
+    kernel_ir = (ROOT / "src/codegen/opt/kernel_ir.cc").read_text()
+    for marker in (
+        'USER_ERROR << "unterminated C++ quoted literal',
+        "USER_CHECK(pos<end && src[pos]=='(')",
+        'USER_ERROR << "unmatched _Pragma parentheses',
+        'USER_CHECK(startswith(s, "0", i))',
+        'USER_CHECKop(count,==,7)',
+        'USER_CHECKop(vs.size(),==,3)',
+        'USER_CHECK(v.size()>1)',
+        'USER_CHECK(presum == -1)',
+        'USER_CHECK(l<s.size() && presum==0)',
+        'USER_CHECK(l != string::npos)',
+        'USER_CHECK(l>=0 && ll>=0 && rr>=0 && ll<rr && rr<l)',
+        'USER_CHECK(0<y && y<x && x<ll)',
+        'USER_CHECK(pending_pragmas.empty())',
+    ):
+        assert marker in kernel_ir, marker
+    assert kernel_ir.count('USER_CHECK(startswith(s, lvalue, i))') == 2
+    assert 'ASSERT(startswith(s, "for", i));' in kernel_ir
+    assert "ASSERT(l<r);" in kernel_ir
+    assert "ASSERT(s[k-1] == '}');" in kernel_ir
+    assert 'LOGf << "KernelIR parse error' not in kernel_ir
+
+    cache = (ROOT / "src/utils/cache_compile.cc").read_text()
+    for marker in (
+        "USER_CHECK(j<cmd.size())",
+        "USER_CHECK(j<k && output_name.size()==0)",
+        "USER_CHECK(j<k)",
+        "USER_CHECK(output_name.size() && input_names.size())",
+    ):
+        assert marker in cache, marker
+    assert cache.count("USER_CHECK(j<cmd.size())") == 3
+    assert 'CHECK(!dependency_required) << "Compiler produced no dependency file:"' in cache
+    assert 'CHECK(output) << "Could not open temporary file:"' in cache
+    assert "CHECKop(oname,==,output_name);" in cache
+
+    registry = (ROOT / "src/ops/op_register.cc").read_text()
+    for marker in (
+        "USER_CHECK(registration.valid())",
+        "USER_CHECK(entries.count(op_file_name))",
+        "USER_CHECK(iter != provider_bindings.end())",
+        "USER_CHECK(provider_iter != provider_bindings.end())",
+        "USER_CHECK(provider_iter->second.count(op_file_name))",
+    ):
+        assert marker in registry, marker
+    assert registry.count("USER_CHECK(false)") == 2
+    assert "ASSERT(id_iter != provider_ids.end());" in registry
+    assert "ASSERT(registration_iter != provider_registrations.end());" in registry

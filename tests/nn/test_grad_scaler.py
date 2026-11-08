@@ -78,22 +78,17 @@ class TestGradScalerPolicy(unittest.TestCase):
         scaler.update()
         self.assertEqual(scaler.get_scale(), 4.0)
 
-    def test_backoff_resets_the_run_and_never_goes_below_one(self):
+    def test_backoff_may_go_below_one_and_resets_the_clean_run(self):
         scaler = jt.amp.GradScaler(init_scale=2.0, backoff_factor=0.5,
                                    growth_interval=2)
-        scaler._found_inf = True
+        for expected in (1.0, 0.5):
+            scaler._found_inf = True
+            scaler.update()
+            self.assertEqual(scaler.get_scale(), expected)
+        scaler.update()
+        self.assertEqual(scaler.get_scale(), 0.5)
         scaler.update()
         self.assertEqual(scaler.get_scale(), 1.0)
-        # and again: a scale below 1 would shrink the gradients, which is the
-        # opposite of what the scaler is for.
-        scaler._found_inf = True
-        scaler.update()
-        self.assertEqual(scaler.get_scale(), 1.0)
-        # the clean-run counter restarted, so one clean update is not enough
-        scaler.update()
-        self.assertEqual(scaler.get_scale(), 1.0)
-        scaler.update()
-        self.assertEqual(scaler.get_scale(), 2.0)
 
     def test_state_dict_round_trips_and_carries_the_policy(self):
         a = jt.amp.GradScaler(init_scale=512.0, growth_factor=4.0,
@@ -107,6 +102,53 @@ class TestGradScalerPolicy(unittest.TestCase):
         self.assertEqual(b.get_growth_interval(), 7)
         with self.assertRaises(RuntimeError):
             jt.amp.GradScaler().load_state_dict({})
+
+
+class _BoundaryOptimizer:
+    def __init__(self, gradient):
+        self.param_groups = [{"grads": [gradient]}]
+        self.steps = 0
+
+    def step(self):
+        self.steps += 1
+
+    def zero_grad(self):
+        self.param_groups[0]["grads"] = []
+
+
+class TestGradScalerBoundaryArithmetic(unittest.TestCase):
+    def test_host_and_device_state_use_the_same_ieee_policy(self):
+        from jittor._runtime import forbid_backend_fallbacks
+        cases = ((0., 0., 1, 0.), (0.25, np.inf, 0, 0.125),
+                 (1e-10, 1e38, 1, float(np.float32(1e-10)) * 4),
+                 (float(np.float32(1e38)), 1., 1, float(np.float32(1e38))))
+        for name, use_cuda in _DEVICES:
+            for device_state in (False, True):
+                for scale, value, steps, updated in cases:
+                    with self.subTest(device=name, device_state=device_state, scale=scale), \
+                            jt.flag_scope(use_cuda=use_cuda), forbid_backend_fallbacks():
+                        grad = jt.array(np.array([value], np.float32))
+                        optimizer = _BoundaryOptimizer(grad)
+                        scaler = jt.amp.GradScaler(init_scale=scale, growth_factor=4.,
+                                                   growth_interval=1)
+                        if device_state:
+                            scaler._device_state(grad)
+                        scaler.scale(jt.ones(1))
+                        scaler.step(optimizer)
+                        scaler.update()
+                        self.assertEqual(optimizer.steps, steps)
+                        if updated:
+                            self.assertAlmostEqual(scaler.get_scale() / updated, 1., places=6)
+                        else:
+                            self.assertEqual(scaler.get_scale(), 0.)
+                        grad.sync()
+                        self.assertEqual(grad.location(), "device" if use_cuda else "cpu")
+                        if scale == 0.:
+                            self.assertTrue(np.isnan(grad.numpy()).all())
+                        elif value == np.inf or scale < 1e-9:
+                            self.assertTrue(np.isinf(grad.numpy()).all())
+                        else:
+                            self.assertTrue(np.isfinite(grad.numpy()).all())
 
 
 class TestGradScalerStep(unittest.TestCase):

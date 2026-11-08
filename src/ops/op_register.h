@@ -638,6 +638,7 @@ namespace op_ids {
 OpId array();
 OpId binary();
 OpId broadcast_to();
+OpId code();
 OpId contiguous();
 OpId empty();
 OpId fused();

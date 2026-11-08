@@ -21,25 +21,21 @@ from .nn.functional.softmax import logsumexp as logsumexp
 from .nn.functional.tensor import kron as kron, tensordot as tensordot
 from .optim import legacy_schedulers as lr_scheduler
 from .ops.numerical import sinc as sinc
-from ._core.var import submit_pending as submit_pending
-from ._core.generator import Generator as Generator
-from ._runtime.cuda_rng import (get_cuda_initial_seed as get_cuda_initial_seed,
-    get_cuda_rng_state as get_cuda_rng_state,
-    get_cuda_rng_state_all as get_cuda_rng_state_all,
-    set_cuda_rng_state as set_cuda_rng_state,
-    set_cuda_rng_state_all as set_cuda_rng_state_all,
-    set_cuda_seed as set_cuda_seed, set_cuda_seed_all as set_cuda_seed_all)
+from ._core.var import from_dlpack as from_dlpack, submit_pending as submit_pending
+from .vmap import vmap as vmap
 
-__all__ = ['CTCLoss', 'DumpGraphs', 'ExitHooks', 'Finfo', 'Flags', 'Function', 'GradHooker', 'LOG', 'MemInfo', 'Module', 'NanoString', 'NanoVector', 'RingBuffer', 'Var', 'ZipFile', '__version__', 'abs', 'abs_', 'acos', 'acosh', 'add', 'add_', 'all', 'all_', 'all_equal', 'amax', 'amin', 'amp', 'amp_flags', 'any', 'any_', 'arange', 'arccos', 'arccosh', 'arcsin', 'arcsinh', 'arctan', 'arctan2', 'arctanh', 'arg_reduce', 'argmax', 'argmin', 'argsort', 'array', 'array64', 'array_', 'asin', 'asinh', 'atan', 'atan2', 'atanh', 'atleast_1d', 'atleast_2d', 'atleast_3d', 'attention', 'attrs', 'auto_parallel', 'autograd', 'baddbmm', 'bernoulli', 'bfloat16', 'bfloat16_finfo', 'binary', 'binary_dtype_infer', 'bitwise_and', 'bitwise_not', 'bitwise_or', 'bitwise_xor', 'block_diag', 'bmm', 'bmm_transpose', 'bool', 'broadcast', 'broadcast_var', 'candidate', 'capability', 'capture_step', 'cartesian_prod', 'cast', 'cat', 'ceil', 'ceil_int', 'chunk', 'clamp', 'clamp_', 'clean', 'clean_graph', 'cleanup', 'clear_trace_data', 'clone', 'code', 'compile_custom_op', 'compile_custom_ops', 'compile_extern', 'compiler', 'concat', 'config', 'conj', 'contiguous', 'contrib', 'copy', 'core', 'cos', 'cosh', 'count_nonzero', 'cpu', 'cross', 'ctc_loss', 'cub_cumsum', 'cublas', 'cuda', 'cudnn', 'cufft', 'cummax', 'cummin', 'cumprod', 'cumsum', 'curand', 'current_device', 'cusparse', 'dataset', 'deg2rad', 'detach', 'device_copy', 'dfs_to_numpy', 'diag', 'diagonal', 'digamma', 'dirty_fix_pytorch_runtime_error', 'display_max_memory_info', 'display_memory_info', 'distributions', 'div', 'divide', 'double', 'dtype', 'dump_all_graphs', 'dump_trace_data', 'einsum', 'empty', 'enable_grad', 'equal', 'erf', 'erf_', 'erfinv', 'erfinv_', 'exp', 'expand', 'expm1', 'fetch', 'fetch_sync', 'fft', 'finfo', 'flag_scope', 'flags', 'flatten', 'flip', 'float', 'float16', 'float32', 'float64', 'float_auto', 'floor', 'floor_divide', 'floor_int', 'format', 'from_torch', 'full', 'full_like', 'fuse_transpose', 'fused_adamw', 'fused_sgd', 'gather', 'gc', 'get_device_count', 'get_len', 'get_max_memory_info', 'get_max_memory_treemap', 'get_mem_info', 'get_seed', 'getitem', 'grad', 'grad_hooker', 'grad_optional', 'gradfunctional', 'graph_capture_begin', 'graph_capture_end', 'graph_capture_supported', 'graph_check', 'graph_launch', 'graph_release', 'graph_replay', 'greater', 'greater_equal', 'half', 'has_cuda', 'hash', 'histc', 'hooks', 'hypot', 'igamma', 'iinfo', 'in_mpi', 'index', 'index_add', 'index_add_', 'index_fill', 'index_fill_', 'index_select', 'index_var', 'init', 'int', 'int16', 'int32', 'int64', 'int8', 'introspection', 'is_var', 'isfinite', 'isin', 'isinf', 'isnan', 'isneginf', 'isposinf', 'jittor_core', 'jittor_exit', 'jt_init_subprocess', 'knn', 'kron', 'kthvalue', 'left_shift', 'less', 'less_equal', 'lgamma', 'linalg', 'linspace', 'liveness_info', 'load', 'lock_acquire', 'lock_is_held', 'lock_release', 'log', 'log2', 'log_capture_scope', 'logical_and', 'logical_not', 'logical_or', 'logical_xor', 'logsumexp', 'lr_scheduler', 'make_grid', 'make_module', 'masked_fill', 'math_util', 'matmul', 'max', 'maximum', 'mean', 'median', 'meshgrid', 'migrate_all_to_cpu', 'min', 'minimum', 'misc', 'mkl_ops', 'mod', 'mpi', 'mpi_ops', 'mul', 'multinomial', 'multiply', 'multiply_', 'ne', 'negative', 'new', 'new_empty', 'new_full', 'new_ones', 'new_zeros', 'nms', 'nn', 'no_grad', 'nonzero', 'norm', 'normal', 'normalize', 'not_equal', 'number_of_hold_vars', 'number_of_lived_ops', 'number_of_lived_vars', 'numpy2cupy', 'numpy_code', 'numpy_cumprod', 'numpy_cumsum', 'ones', 'ones_like', 'op_compiler', 'ops', 'optim', 'origin_reshape', 'origin_transpose', 'outer', 'peek', 'peek_s', 'permute', 'pow', 'print_trace', 'print_tree', 'prod', 'product', 'profile', 'profile_mark', 'profile_scope', 'profiler', 'profiling', 'python_pass_wrapper', 'rad2deg', 'rand', 'rand_like', 'randint', 'randint_like', 'randn', 'randn_like', 'random', 'randperm', 'rank', 'reduce', 'reduce_add', 'reduce_bitwise_and', 'reduce_bitwise_or', 'reduce_bitwise_xor', 'reduce_logical_and', 'reduce_logical_or', 'reduce_logical_xor', 'reduce_maximum', 'reduce_minimum', 'reduce_multiply', 'register_hook', 'reindex', 'reindex_reduce', 'reindex_var', 'reinterpret_view', 'repeat', 'repeat_interleave', 'reshape', 'reuse_np_array', 'right_shift', 'roll', 'round', 'round_int', 'rsqrt', 'runtime', 'safe_clip', 'safe_log', 'safepickle', 'safeunpickle', 'save', 'save_image', 'scatter', 'scatter_', 'scatter_add', 'scatter_add_', 'scatter_reduce', 'searchsorted', 'seed', 'set_device', 'set_global_seed', 'set_lock_fd', 'set_seed', 'setitem', 'sigmoid', 'sigmoid_', 'sin', 'sinc', 'single_log_capture', 'single_process_scope', 'sinh', 'size', 'sort', 'sparse', 'split', 'sqr', 'sqrt', 'sqrt_', 'squeeze', 'stack', 'std', 'sub', 'submit_pending', 'subtract', 'sum', 'sync', 'sync_all', 't', 'tan', 'tanh', 'tape', 'tape_together', 'tensordot', 'ternary', 'ternary_out_hint', 'tests', 'to', 'to_bool', 'to_device', 'to_float', 'to_int', 'tolist', 'topk', 'transpose', 'tril', 'triu', 'type_as', 'uint16', 'uint32', 'uint64', 'uint8', 'unary', 'unbind', 'unique', 'unique_consecutive', 'unsqueeze', 'var', 'view', 'view_as', 'vtos', 'where', 'world_size', 'wrap_var_addr', 'zeros', 'zeros_like']
+__all__ = ['CTCLoss', 'DumpGraphs', 'ExitHooks', 'Finfo', 'Flags', 'Function', 'Generator', 'GradHooker', 'JittorError', 'JittorIndexError', 'JittorInternalError', 'JittorOutOfMemoryError', 'JittorShapeError', 'JittorTypeError', 'LOG', 'MemInfo', 'Module', 'NanoString', 'NanoVector', 'RingBuffer', 'Var', 'ZipFile', '__version__', 'abs', 'abs_', 'acos', 'acosh', 'add', 'add_', 'all', 'all_', 'all_equal', 'amax', 'amin', 'amp', 'amp_flags', 'any', 'any_', 'arange', 'arccos', 'arccosh', 'arcsin', 'arcsinh', 'arctan', 'arctan2', 'arctanh', 'arg_reduce', 'argmax', 'argmin', 'argsort', 'array', 'array64', 'array_', 'asin', 'asinh', 'atan', 'atan2', 'atanh', 'atleast_1d', 'atleast_2d', 'atleast_3d', 'attention', 'attrs', 'auto_parallel', 'autograd', 'baddbmm', 'bernoulli', 'bfloat16', 'bfloat16_finfo', 'binary', 'binary_dtype_infer', 'bitwise_and', 'bitwise_not', 'bitwise_or', 'bitwise_xor', 'block_diag', 'bmm', 'bmm_transpose', 'bool', 'broadcast', 'broadcast_var', 'candidate', 'capability', 'capture_step', 'cartesian_prod', 'cast', 'cat', 'ceil', 'ceil_int', 'chunk', 'clamp', 'clamp_', 'clean', 'clean_graph', 'cleanup', 'clear_trace_data', 'clone', 'code', 'compile_custom_op', 'compile_custom_ops', 'compile_extern', 'compiler', 'concat', 'config', 'conj', 'contiguous', 'contrib', 'copy', 'core', 'cos', 'cosh', 'count_nonzero', 'cpu', 'cross', 'ctc_loss', 'cub_cumsum', 'cublas', 'cuda', 'cudnn', 'cufft', 'cummax', 'cummin', 'cumprod', 'cumsum', 'curand', 'current_device', 'cusparse', 'dataset', 'deg2rad', 'detach', 'device_copy', 'dfs_to_numpy', 'diag', 'diagonal', 'digamma', 'dirty_fix_pytorch_runtime_error', 'display_max_memory_info', 'display_memory_info', 'distributions', 'div', 'divide', 'double', 'dtype', 'dump_all_graphs', 'dump_trace_data', 'einsum', 'empty', 'enable_grad', 'equal', 'erf', 'erf_', 'erfinv', 'erfinv_', 'exp', 'expand', 'expm1', 'fetch', 'fetch_sync', 'fft', 'finfo', 'flag_scope', 'flags', 'flatten', 'flip', 'float', 'float16', 'float32', 'float64', 'float_auto', 'floor', 'floor_divide', 'floor_int', 'fmod', 'format', 'from_dlpack', 'from_torch', 'full', 'full_like', 'fuse_transpose', 'fused_adamw', 'fused_sgd', 'gather', 'gc', 'get_device_count', 'get_len', 'get_max_memory_info', 'get_max_memory_treemap', 'get_mem_info', 'get_seed', 'getitem', 'grad', 'grad_hooker', 'grad_optional', 'gradfunctional', 'graph_capture_begin', 'graph_capture_end', 'graph_capture_supported', 'graph_check', 'graph_launch', 'graph_release', 'graph_replay', 'graph_replay_barrier', 'greater', 'greater_equal', 'half', 'has_cuda', 'hash', 'histc', 'hooks', 'hypot', 'igamma', 'iinfo', 'in_mpi', 'index', 'index_add', 'index_add_', 'index_fill', 'index_fill_', 'index_select', 'index_var', 'init', 'int', 'int16', 'int32', 'int64', 'int8', 'introspection', 'is_var', 'isfinite', 'isin', 'isinf', 'isnan', 'isneginf', 'isposinf', 'jittor_core', 'jittor_exit', 'jt_init_subprocess', 'knn', 'kron', 'kthvalue', 'left_shift', 'less', 'less_equal', 'lgamma', 'linalg', 'linspace', 'liveness_info', 'load', 'lock_acquire', 'lock_is_held', 'lock_release', 'log', 'log1p', 'log2', 'log_capture_scope', 'logical_and', 'logical_not', 'logical_or', 'logical_xor', 'logsumexp', 'lr_scheduler', 'make_grid', 'make_module', 'masked_fill', 'math_util', 'matmul', 'max', 'maximum', 'mean', 'median', 'meshgrid', 'migrate_all_to_cpu', 'min', 'minimum', 'misc', 'mkl_ops', 'mod', 'mpi', 'mpi_ops', 'mul', 'multinomial', 'multiply', 'multiply_', 'ne', 'negative', 'new', 'new_empty', 'new_full', 'new_ones', 'new_zeros', 'nms', 'nn', 'no_grad', 'nonzero', 'norm', 'normal', 'normalize', 'not_equal', 'number_of_hold_vars', 'number_of_lived_ops', 'number_of_lived_vars', 'numpy2cupy', 'numpy_code', 'numpy_cumprod', 'numpy_cumsum', 'ones', 'ones_like', 'op_compiler', 'ops', 'optim', 'origin_reshape', 'origin_transpose', 'outer', 'peek', 'peek_s', 'permute', 'pow', 'print_trace', 'print_tree', 'prod', 'product', 'profile', 'profile_mark', 'profile_scope', 'profiler', 'profiling', 'python_pass_wrapper', 'rad2deg', 'rand', 'rand_like', 'randint', 'randint_like', 'randn', 'randn_like', 'random', 'randperm', 'rank', 'reduce', 'reduce_add', 'reduce_bitwise_and', 'reduce_bitwise_or', 'reduce_bitwise_xor', 'reduce_logical_and', 'reduce_logical_or', 'reduce_logical_xor', 'reduce_maximum', 'reduce_minimum', 'reduce_multiply', 'register_hook', 'reindex', 'reindex_reduce', 'reindex_var', 'reinterpret_view', 'repeat', 'repeat_interleave', 'reshape', 'reuse_np_array', 'right_shift', 'roll', 'round', 'round_int', 'rsqrt', 'runtime', 'safe_clip', 'safe_log', 'safepickle', 'safeunpickle', 'save', 'save_image', 'scatter', 'scatter_', 'scatter_add', 'scatter_add_', 'scatter_reduce', 'searchsorted', 'seed', 'set_device', 'set_global_seed', 'set_lock_fd', 'set_seed', 'setitem', 'sigmoid', 'sigmoid_', 'sin', 'sinc', 'single_log_capture', 'single_process_scope', 'sinh', 'size', 'sort', 'sparse', 'split', 'sqr', 'sqrt', 'sqrt_', 'squeeze', 'stack', 'std', 'sub', 'submit_pending', 'subtract', 'sum', 'sync', 'sync_all', 't', 'tan', 'tanh', 'tape', 'tape_together', 'tensordot', 'ternary', 'ternary_out_hint', 'tests', 'to', 'to_bool', 'to_device', 'to_dlpack', 'to_float', 'to_int', 'tolist', 'topk', 'transpose', 'tril', 'triu', 'type_as', 'uint16', 'uint32', 'uint64', 'uint8', 'unary', 'unbind', 'unique', 'unique_consecutive', 'unsqueeze', 'var', 'view', 'view_as', 'vmap', 'vtos', 'where', 'world_size', 'wrap_var_addr', 'write_back', 'zeros', 'zeros_like']
 
-__all__ = [*__all__, 'Generator', 'get_cuda_initial_seed',
-           'get_cuda_rng_state', 'get_cuda_rng_state_all',
-           'set_cuda_rng_state', 'set_cuda_rng_state_all', 'set_cuda_seed',
-           'set_cuda_seed_all']
 
 __version__: str
 gradfunctional = autograd
 dtype = NanoString
+class JittorError(_builtins.RuntimeError): ...
+class JittorInternalError(JittorError): ...
+class JittorIndexError(JittorError, _builtins.IndexError): ...
+class JittorTypeError(JittorError, _builtins.TypeError): ...
+class JittorShapeError(JittorError, _builtins.ValueError): ...
+class JittorOutOfMemoryError(JittorError): ...
 
 # Names in __all__ with no definition:
 #   CTCLoss
@@ -48,6 +44,7 @@ dtype = NanoString
 #   Finfo
 #   Flags
 #   Function
+#   Generator
 #   GradHooker
 #   MemInfo
 #   Module
@@ -387,6 +384,7 @@ dtype = NanoString
 #   to
 #   to_bool
 #   to_device
+#   to_dlpack
 #   to_float
 #   to_int
 #   tolist
@@ -631,6 +629,30 @@ def mod(x: Var, y: Var)-> Var:
 	        >>> a % b
 	        jt.Var([0.19774088 0.20159635 0.22973768], dtype=float32)'''
 	...
+def fmod(x: Var, y: Var)-> Var:
+	'''Document:
+	*
+	    Returns the element-wise truncated remainder of division (C ``fmod``).
+
+	    The result has the sign of ``x`` and magnitude below ``|y|``: it is
+	    ``x - trunc(x / y) * y`` computed exactly, where :func:`mod` (``%``) uses
+	    the floored quotient and takes the sign of ``y``. A finite ``x`` over an
+	    infinite ``y`` is ``x``; ``y == 0`` gives NaN for floats.
+
+	    ----------------
+
+	    * [in] x: the first input,  a python number or jt.Var.
+
+	    * [in] y: the second input, a python number or jt.Var.
+
+	    ----------------
+
+	    Example-1::
+	        >>> jt.fmod(jt.array([-3.0, 3.0]), 2.0)
+	        jt.Var([-1.  1.], dtype=float32)
+	        >>> jt.array([-3.0, 3.0]) % 2.0
+	        jt.Var([1. 1.], dtype=float32)'''
+	...
 def less(x: Var, y: Var)-> Var:
 	'''Document:
 	*
@@ -828,7 +850,7 @@ def bitwise_xor(x: Var, y: Var)-> Var:
 
 	    * [in] y: the second input, jt.Var (integal or boolean).'''
 	...
-def argsort(x: Var, dim: _builtins.int=-1, descending: _builtins.bool=False, dtype: str="int32")-> Tuple[Var, ...]:
+def argsort(x: Var, dim: _builtins.int=-1, descending: _builtins.bool=False, dtype: str="int32", stable: _builtins.bool=False)-> Tuple[Var, ...]:
 	'''Document:
 	*
 	    Argsort Operator Perform an indirect sort by given key or compare function.
@@ -852,6 +874,9 @@ def argsort(x: Var, dim: _builtins.int=-1, descending: _builtins.bool=False, dty
 	    * [in] descending:  the elements are sorted in descending order or not(default False).
 
 	    * [in] dtype: type of return indexes
+
+	    * [in] stable: preserve the input order of equal keys (default False).
+	      CPU uses std::stable_sort; CUDA segmented radix sort is already stable.
 
 	    * [out] index: index have the same size with sorted dim
 
@@ -3731,6 +3756,11 @@ def log(x: Var)-> Var:
 	        >>> x.log()
 	        jt.Var([-3.5530574   0.26330233  0.47304606  0.13125724], dtype=float32)'''
 	...
+def log1p(x: Var)-> Var:
+	'''Document:
+	*
+	    Computes log(1+x) with native log1p accuracy for real inputs.'''
+	...
 def exp(x: Var)-> Var:
 	'''Document:
 	*
@@ -4615,7 +4645,11 @@ def reindex_reduce(y: Var, op: str, shape: Tuple[_builtins.int, ...], indexes: L
 	                "i3", # Cid
 	            ])'''
 	...
+@overload
 def copy(x: Var)-> Var:
+ ...
+@overload
+def copy(x: Var, preserve_format: _builtins.bool = False)-> Var:
  ...
 @overload
 def reindex(x: Var, shape: Tuple[_builtins.int, ...], indexes: List[str], overflow_value: _builtins.float=0, overflow_conditions: List[str]=[], extras: List[Var]=[])-> Var:
@@ -4707,6 +4741,8 @@ def graph_capture_begin()-> _builtins.bool: ...
 def graph_capture_end()-> _builtins.int: ...
 def graph_launch(graph: _builtins.int)-> None: ...
 def graph_release(graph: _builtins.int)-> None: ...
+def write_back(targets: List[Var], values: List[Var])-> Tuple[Var, ...]: ...
+
 def fused_sgd(parameters: List[Var], velocities: List[Var], gradients: List[Var], lr: _builtins.float, momentum: _builtins.float, weight_decay: _builtins.float, dampening: _builtins.float, nesterov: _builtins.bool, maximize: _builtins.bool)-> Tuple[Var, ...]: ...
 class Var:
 	'''Variable that stores multi-dimensional data.'''
@@ -4938,6 +4974,30 @@ class Var:
 		        >>> a % b
 		        jt.Var([0.19774088 0.20159635 0.22973768], dtype=float32)'''
 		...
+	def fmod(self, y: Var)-> Var:
+		'''Document:
+		*
+		    Returns the element-wise truncated remainder of division (C ``fmod``).
+
+		    The result has the sign of ``x`` and magnitude below ``|y|``: it is
+		    ``x - trunc(x / y) * y`` computed exactly, where :func:`mod` (``%``) uses
+		    the floored quotient and takes the sign of ``y``. A finite ``x`` over an
+		    infinite ``y`` is ``x``; ``y == 0`` gives NaN for floats.
+
+		    ----------------
+
+		    * [in] x: the first input,  a python number or jt.Var.
+
+		    * [in] y: the second input, a python number or jt.Var.
+
+		    ----------------
+
+		    Example-1::
+		        >>> jt.fmod(jt.array([-3.0, 3.0]), 2.0)
+		        jt.Var([-1.  1.], dtype=float32)
+		        >>> jt.array([-3.0, 3.0]) % 2.0
+		        jt.Var([1. 1.], dtype=float32)'''
+		...
 	def less(self, y: Var)-> Var:
 		'''Document:
 		*
@@ -5135,7 +5195,7 @@ class Var:
 
 		    * [in] y: the second input, jt.Var (integal or boolean).'''
 		...
-	def argsort(self, dim: _builtins.int=-1, descending: _builtins.bool=False, dtype: str="int32")-> Tuple[Var, ...]:
+	def argsort(self, dim: _builtins.int=-1, descending: _builtins.bool=False, dtype: str="int32", stable: _builtins.bool=False)-> Tuple[Var, ...]:
 		'''Document:
 		*
 		    Argsort Operator Perform an indirect sort by given key or compare function.
@@ -5159,6 +5219,9 @@ class Var:
 		    * [in] descending:  the elements are sorted in descending order or not(default False).
 
 		    * [in] dtype: type of return indexes
+
+		    * [in] stable: preserve the input order of equal keys (default False).
+		      CPU uses std::stable_sort; CUDA segmented radix sort is already stable.
 
 		    * [out] index: index have the same size with sorted dim
 
@@ -7176,6 +7239,11 @@ class Var:
 		        >>> x.log()
 		        jt.Var([-3.5530574   0.26330233  0.47304606  0.13125724], dtype=float32)'''
 		...
+	def log1p(self)-> Var:
+		'''Document:
+		*
+		    Computes log(1+x) with native log1p accuracy for real inputs.'''
+		...
 	def exp(self)-> Var:
 		'''Document:
 		*
@@ -8054,7 +8122,11 @@ class Var:
 		                "i3", # Cid
 		            ])'''
 		...
+	@overload
 	def copy(self)-> Var: ...
+	@overload
+	def copy(self, preserve_format: _builtins.bool = False)-> Var: ...
+	def _has_leaf_accumulator(self)-> _builtins.bool: ...
 	@overload
 	def reindex(self, shape: Tuple[_builtins.int, ...], indexes: List[str], overflow_value: _builtins.float=0, overflow_conditions: List[str]=[], extras: List[Var]=[])-> Var:
 		'''Document:
@@ -8580,7 +8652,7 @@ class Flags:
 	l1_cache_size: _builtins.int
 	'''size of level 1 cache (byte). Default: 32768): size of level 1 cache (byte'''
 	lazy_execution: _builtins.int
-	'''Default enabled, if disable, use immediately eager execution rather than lazy execution, This flag makes error message and traceback infomation better. But this flag will raise memory consumption and lower the performance. Default: 1'''
+	'''Default enabled, if disable, use immediately eager execution rather than lazy execution, This flag makes error message and traceback information better. But this flag will raise memory consumption and lower the performance. Default: 1'''
 	log_file: str
 	'''log to file, mpi env will add $OMPI_COMM_WORLD_RANK suffix. Default: ""'''
 	log_op_hash: str
@@ -8977,6 +9049,7 @@ DumpGraphs: Any
 ExitHooks: Any
 Finfo: Any
 Function: Any
+Generator: Any
 GradHooker: Any
 MemInfo: Any
 Module: Any
@@ -9194,6 +9267,7 @@ tests: Any
 to: Any
 to_bool: Any
 to_device: Any
+to_dlpack: Any
 to_float: Any
 to_int: Any
 tolist: Any
@@ -9223,4 +9297,9 @@ def graph_replay(module, *example_inputs):
 
 def capture_step(fn, *, record=True):
     """Replay a whole captured step -- forward, backward, state update -- each call."""
+    ...
+
+
+def graph_replay_barrier(reason: str) -> None:
+    """Refuse capture when work cannot be represented in the native graph."""
     ...

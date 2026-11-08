@@ -71,9 +71,34 @@ int64 device_memory_peak(int device);
 int64 device_memory_reserved_peak(int device);
 
 /// Restart both high-water marks (allocated and reserved) at their current
-/// values, like torch's ``reset_peak_memory_stats``.
+/// values, like torch's ``reset_peak_memory_stats``; the peaks of
+/// :func:`device_memory_stats` restart with them.
 // @pyjt(reset_device_memory_peak)
 void reset_device_memory_peak(int device);
+
+/**
+ * The statistics torch's caching allocator keeps, for one device's pools:
+ * allocations, segments, active and inactive-split blocks and their bytes,
+ * reserved and requested bytes, each for all/small/large pools as current,
+ * peak, allocated and freed; then alloc retries, OOMs, segment allocations and
+ * segment frees. Flat, in the order of `SfrlStat`/`SfrlCounter`
+ * (mem/allocator/sfrl_allocator.h); `torch.cuda.memory_stats` names them.
+ */
+// @pyjt(device_memory_stats)
+vector<int64> device_memory_stats(int device);
+/// Restart the allocated/freed totals and the counters, like torch's
+/// ``reset_accumulated_memory_stats``.
+// @pyjt(reset_device_memory_accumulated)
+void reset_device_memory_accumulated(int device);
+
+/**
+ * PyTorch's out-of-memory sentences for a refused device allocation: what was
+ * asked for, the card's capacity and free memory, what this process holds
+ * (``process_bytes``, -1 when NVML cannot say) and how much of the pools is
+ * allocated and how much reserved but unallocated.
+ */
+string device_out_of_memory_message(int device, int64 requested, int64 free_bytes,
+                                    int64 total_bytes, int64 process_bytes);
 
 /**
  * Every byte the pools have handed out for Vars on one device since the
@@ -83,5 +108,15 @@ void reset_device_memory_peak(int device);
  */
 // @pyjt(device_memory_allocated_total)
 int64 device_memory_allocated_total(int device);
+
+/**
+ * Restart a measurement window at the bytes live on ``device`` now and return
+ * them; :func:`_device_memory_window_peak` then reads the most live since.
+ * Separate from :func:`device_memory_peak`, which it leaves alone.
+ */
+// @pyjt(_device_memory_window_start)
+int64 device_memory_window_start(int device);
+// @pyjt(_device_memory_window_peak)
+int64 device_memory_window_peak(int device);
 
 } // jittor

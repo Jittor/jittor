@@ -31,20 +31,20 @@ import os
 import sys
 import time
 
-try:
-    import fcntl
-except ImportError:
+if sys.platform == "win32":
     fcntl = None
     try:
         import msvcrt
         import win32file
         import pywintypes
         _OVERLAPPED = pywintypes.OVERLAPPED()
-    except:
-        raise Exception("""pywin32 package not found, please install it.
+    except ImportError:
+        raise ImportError("""pywin32 package not found, please install it.
 >>> python3.x -m pip install pywin32
 If conda is used, please install with command:
 >>> conda install pywin32""")
+else:
+    import fcntl
 
 import jittor_utils
 from jittor_utils import cache_path, LOG
@@ -148,7 +148,7 @@ def _acquire(fd, path):
     things a blocking wait could never give: a message naming the holder, and
     an error instead of an unbounded hang.
     '''
-    if fcntl is None:
+    if sys.platform == "win32":
         hfile = win32file._get_osfhandle(fd)
         win32file.LockFileEx(hfile, 2, 0, -0x10000, _OVERLAPPED)
         return
@@ -177,7 +177,7 @@ def _acquire(fd, path):
 
 
 def _release(fd):
-    if fcntl is None:
+    if sys.platform == "win32":
         hfile = win32file._get_osfhandle(fd)
         win32file.UnlockFileEx(hfile, 0, -0x10000, _OVERLAPPED)
         return
@@ -195,9 +195,12 @@ class Lock:
         self.fd = os.open(filename, os.O_RDWR | os.O_CREAT, 0o666)
         LOG.v(f'OPEN LOCK path: {filename} PID: {os.getpid()}')
         self._py_is_locked = False
+        self._fork_rebind_error = None
         # jittor_core, once compiler.py has handed it this descriptor. From
         # then on it owns the state and both languages go through it.
         self.core = None
+        if os.name != "nt" and hasattr(os, "register_at_fork"):
+            os.register_at_fork(after_in_child=self._reopen_after_fork)
 
     def fileno(self):
         return self.fd
@@ -210,10 +213,32 @@ class Lock:
         holder to disagree with.
         '''
         handle = self.fd
-        if fcntl is None:
+        if sys.platform == "win32":
             handle = msvcrt.get_osfhandle(self.fd)
         core.set_lock_fd(handle, self._py_is_locked)
         self.core = core
+
+    def _reopen_after_fork(self):
+        """Give a fork child its own open-file description for the build lock."""
+        old_fd = self.fd
+        try:
+            new_fd = os.open(self.filename, os.O_RDWR | os.O_CREAT, 0o666)
+        except OSError as error:
+            self._fork_rebind_error = error
+            return
+
+        self.fd = new_fd
+        self._py_is_locked = False
+        if self.core is not None:
+            try:
+                self.bind_core(self.core)
+            except Exception as error:
+                self.fd = old_fd
+                os.close(new_fd)
+                self._fork_rebind_error = error
+                return
+        self._fork_rebind_error = None
+        os.close(old_fd)
 
     @property
     def is_locked(self):
@@ -222,6 +247,9 @@ class Lock:
         return self._py_is_locked
 
     def lock(self):
+        if self._fork_rebind_error is not None:
+            raise RuntimeError("could not reopen the build lock after fork") from \
+                self._fork_rebind_error
         if disable_lock:
             return
         if self.core is not None:
@@ -235,6 +263,9 @@ class Lock:
         LOG.vv(f'LOCK PID: {os.getpid()}')
 
     def unlock(self):
+        if self._fork_rebind_error is not None:
+            raise RuntimeError("could not reopen the build lock after fork") from \
+                self._fork_rebind_error
         if disable_lock:
             return
         if self.core is not None:

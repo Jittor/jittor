@@ -145,6 +145,10 @@ class Softmax(_FunctionModule):
     _function_name = "softmax"
 
 
+class LogSoftmax(_FunctionModule):
+    _function_name = "log_softmax"
+
+
 class GELU(_FunctionModule):
     _function_name = "gelu"
 
@@ -161,6 +165,7 @@ __all__ = [
     "Hardswish",
     "LeakyReLU",
     "Leaky_relu",
+    "LogSoftmax",
     "Mish",
     "PReLU",
     "RReLU",

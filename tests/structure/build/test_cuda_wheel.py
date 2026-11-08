@@ -292,7 +292,7 @@ class TestCudaWheel(unittest.TestCase):
         ))
         with self.assertRaisesRegex(
                 cuda_wheel.CudaWheelError,
-                r"requires nvcc 12\.2, found 11\.8\.89"):
+                r"require nvcc 12\.2 or 13\.0, found 11\.8\.89"):
             cuda_wheel.discover_cuda_wheel_stack(
                 nvcc_version="11.8.89",
                 distribution=unexpected_distribution,
@@ -401,6 +401,81 @@ class TestCudnnMajorDecidesTheLayout(unittest.TestCase):
         self.assertIsNone(report.stack)
         self.assertIn("nvidia-cudnn-cu12>=8.9.7,<10 is required, found 10.0.0.1",
                       report.reason)
+
+
+class TestCuda13Toolchain(unittest.TestCase):
+    def setUp(self):
+        _TEMP_ROOT.mkdir(parents=True, exist_ok=True)
+        self.directory = tempfile.TemporaryDirectory(dir=str(_TEMP_ROOT))
+        self.addCleanup(self.directory.cleanup)
+        self.site = Path(self.directory.name) / "site-packages"
+        self.root = self.site / "nvidia/cu13"
+        # Actual CUDA 13.0 wheel layout, including the separate CCCL prefix.
+        for file in ("bin/nvcc", "include/cuda_runtime.h", "include/crt/host_config.h",
+                     "nvvm/bin/cicc", "nvvm/libdevice/libdevice.10.bc", "lib/libcudadevrt.a",
+                     "include/cccl/cub/cub.cuh", "include/cccl/thrust/version.h",
+                     "include/cccl/cuda/std/version", "lib/libcudart.so.13"):
+            path = self.root / file
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.touch()
+        (self.root / "bin/nvcc").chmod(0o755)
+        self.distributions = {
+            name: _FakeDistribution(cuda_wheel.reference_version(spec), self.site)
+            for _, name, spec, _ in cuda_wheel.CUDA13_COMPONENTS
+        }
+        self.registry = _DistributionRegistry(self.distributions)
+
+    def resolve(self):
+        return cuda_wheel.discover_cuda_wheel_stack("13.0.88", self.registry)
+
+    def test_compiler_runtime_and_cccl_resolve_without_math_libraries(self):
+        stack = self.resolve()
+        self.assertEqual(stack.include_dirs(), [str(self.root / "include"), str(self.root / "include/cccl")])
+        self.assertEqual(stack.lib_dirs(), [str(self.root / "lib")])
+        self.assertEqual(stack.find_library("cudart"), str(self.root / "lib/libcudart.so.13"))
+        self.assertEqual(cuda_wheel.discover_wheel_nvcc(self.registry), str(self.root / "bin/nvcc"))
+        self.assertIsNone(stack.component_dir("cudnn"))
+        self.assertIsNone(stack.find_library("cublas"))
+        self.assertEqual(stack.preload_paths("cudnn"), [])
+
+    def test_missing_cccl_or_nvvm_is_a_fatal_installation_error(self):
+        for relative in ("include/cccl/cub/cub.cuh", "nvvm/libdevice/libdevice.10.bc"):
+            path = self.root / relative
+            path.unlink()
+            with self.assertRaisesRegex(cuda_wheel.CudaWheelError, relative):
+                self.resolve()
+            path.touch()
+
+    def test_newer_unbounded_transitive_dependency_is_rejected(self):
+        self.distributions["nvidia-nvvm"].version = "13.4.92"
+        with self.assertRaisesRegex(cuda_wheel.CudaWheelError, r"nvidia-nvvm==13.0.88 is required, found 13.4.92"):
+            self.resolve()
+
+    def test_components_in_different_environments_cannot_be_combined(self):
+        other = self.site.parent / "other/site-packages"
+        (other / "nvidia/cu13").mkdir(parents=True)
+        self.distributions["nvidia-nvvm"].site_packages = other
+        with self.assertRaisesRegex(cuda_wheel.CudaWheelError, "must share one"):
+            self.resolve()
+
+    def test_empty_system_cuda13_does_not_raise_but_partial_wheels_do(self):
+        empty = _DistributionRegistry({})
+        self.assertIsNone(cuda_wheel.discover_cuda_wheel_stack("13.0.88", empty))
+        self.assertIsNone(cuda_wheel.discover_wheel_nvcc(empty))
+        del self.distributions["nvidia-cuda-crt"]
+        with self.assertRaisesRegex(cuda_wheel.CudaWheelError, "nvidia-cuda-crt is not installed"):
+            self.resolve()
+
+    def test_unexecutable_compiler_is_not_discovered(self):
+        (self.root / "bin/nvcc").chmod(0o644)
+        with self.assertRaisesRegex(cuda_wheel.CudaWheelError, "executable"):
+            cuda_wheel.discover_wheel_nvcc(self.registry)
+
+    def test_broken_metadata_is_propagated(self):
+        def broken(_):
+            raise OSError("unreadable metadata")
+        with self.assertRaisesRegex(OSError, "unreadable metadata"):
+            cuda_wheel.inspect_cuda_wheel_stack("13.0.88", broken)
 
 
 if __name__ == "__main__":

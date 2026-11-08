@@ -41,7 +41,9 @@ def _load_pkl(s, path):
         if "trunc" in msg:
             msg += "\nThis file maybe corrupted, please consider remove it" \
                  " and re-download."
-        raise RuntimeError(msg)
+        # Chained, so what pickle actually raised -- an EOFError for a cut-off
+        # file, an AttributeError for a class that moved -- stays visible.
+        raise RuntimeError(msg) from e
 
 def _upload(path, url, jk, tdir=""):
     from jittor._core.flags import flags
@@ -100,7 +102,7 @@ def save(params_dict, path: str):
     ''' saves the parameter dictionary to a file.
 
     :param params_dict: parameters to be saved
-    :type params_dict: list or dictionary
+    :type params_dict: list or dict
     :param path: file path
     :type path: str
     '''

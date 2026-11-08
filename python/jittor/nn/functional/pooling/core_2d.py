@@ -6,32 +6,64 @@ from jittor._runtime.dispatch import try_dispatch
 from jittor.backends.cuda.kernels.pooling.pool2d import pool2d_cuda_options
 from .average import avg_pool2d
 from . import _state
-from .._layout import channels_last_source, channels_last_view, records_no_grad
+from .._layout import channels_last_source, channels_last_view
 
 
 def _max_pool2d_nhwc(source, op, kernel_size, stride, padding, h, w):
     """Max/min pooling of dense NHWC storage, answered in NHWC.
 
     Channels are the fastest axis of both tensors, so a warp reads and
-    writes consecutive channels of one window position.
+    writes consecutive channels of one window position. The backward, as the
+    NCHW one: the gradient goes to the first position of the window that
+    holds the pooled value.
     """
     N, H, W, C = source.shape
-    body = f'''
+    window = f'''
         int k1 = i1*{stride[0]}-{padding[0]};
         int k2 = i2*{stride[1]}-{padding[1]};
         int k1_ = min(k1 + {kernel_size[0]}, in0_shape1);
         int k2_ = min(k2 + {kernel_size[1]}, in0_shape2);
         k1 = max(0, k1);
         k2 = max(0, k2);
+    '''
+    backward_body = window + '''
+        int bo=1;
+        for (int p = k1; p < k1_ && bo; ++p)
+            for (int q = k2; q < k2_ && bo; ++q) {
+                if (@pout(i0,i1,i2,i3) == @in0(i0,p,q,i3)) {
+                    atomicAdd(&@out(i0,p,q,i3), @dout(i0,i1,i2,i3)),
+                    bo=0;
+                }
+            }
+    '''
+    body = window + f'''
         @out(i0, i1, i2, i3) = @expand_op(init_{op}, @out_type);
         for (int p = k1; p < k1_; ++p)
             for (int q = k2; q < k2_; ++q)
                 @out(i0, i1, i2, i3) = @expand_op({op}, @out_type, @out(i0, i1, i2, i3), @out_type, @in0(i0, p, q, i3), @in0_type);
     '''
-    options = pool2d_cuda_options(body, "")
-    options.pop("cuda_grad_src", None)  # nothing records a gradient here
-    out = jt.code([N, h, w, C], source.dtype, [source],
-                  cuda_header=options["cuda_header"], cuda_src=options["cuda_src"])
+    options = pool2d_cuda_options(body, backward_body)
+    out = jt.code(
+        [N, h, w, C], source.dtype, [source], **options,
+        cpu_src=f'''
+            using namespace std;
+            for (int i0=0; i0<out_shape0; i0++)
+            for (int i1=0; i1<out_shape1; i1++)
+            for (int i2=0; i2<out_shape2; i2++)
+            for (int i3=0; i3<out_shape3; i3++)
+                {{ {body} }}
+        ''',
+        cpu_grad_src=[f'''
+            using namespace std;
+            std::memset(out_p, 0, out->size);
+            #define atomicAdd(a,b) (*a) += b
+            for (int i0=0; i0<pout_shape0; i0++)
+            for (int i1=0; i1<pout_shape1; i1++)
+            for (int i2=0; i2<pout_shape2; i2++)
+            for (int i3=0; i3<pout_shape3; i3++)
+                {{ {backward_body} }}
+        '''],
+    )
     return channels_last_view(out)
 
 
@@ -39,11 +71,11 @@ def _pool2d_parameters(kernel_size, stride=None, padding=0, dilation=None, retur
     assert dilation == None
     assert return_indices == None or op == "maximum"
     p_return_indices = return_indices
-    p_kernel_size = kernel_size if isinstance(kernel_size, tuple) else (kernel_size, kernel_size)
+    p_kernel_size = tuple(kernel_size) if isinstance(kernel_size, (tuple, list)) else (kernel_size, kernel_size)
     p_op = op
     stride = stride if stride else kernel_size
-    p_stride = stride if isinstance(stride, tuple) else (stride, stride)
-    p_padding = padding if isinstance(padding, tuple) else (padding, padding)
+    p_stride = tuple(stride) if isinstance(stride, (tuple, list)) else (stride, stride)
+    p_padding = tuple(padding) if isinstance(padding, (tuple, list)) else (padding, padding)
     p_ceil_mode = ceil_mode
     # torch's count_include_pad selects the averaging *divisor*; it is not
     # conditional on the padding being non-zero. The old
@@ -81,6 +113,12 @@ def _pool2d(x, *, ceil_mode, count_include_pad, kernel_size, op, padding, return
         return avg_pool2d(
             x, kernel_size, stride, padding,
             ceil_mode, count_include_pad)
+    # Spelled out rather than `_checks.expect_rank`: the ACL routing test runs
+    # this function's source alone, without the module's imports.
+    if len(x.shape) != 4:
+        raise jt.JittorShapeError(
+            "%s expected a 4-D input (N, C, H, W), but got a %d-D input of shape %s."
+            % ("max_pool2d" if op == "maximum" else "min_pool2d", len(x.shape), list(x.shape)))
     N,C,H,W = x.shape
     # torch only requires the *padded* input to be at least the kernel size
     # (so the output has size >= 1). The original guard ignored padding, which
@@ -105,8 +143,7 @@ def _pool2d(x, *, ceil_mode, count_include_pad, kernel_size, op, padding, return
         None, return_indices, ceil_mode, count_include_pad, op)
     if fast is not None:
         return fast
-    if use_code_op and _state.pool_use_code_op and not return_indices \
-            and records_no_grad(x):
+    if use_code_op and _state.pool_use_code_op and not return_indices:
         source = channels_last_source(x)
         if source is not None:
             return _max_pool2d_nhwc(source, op, kernel_size, stride, padding, h, w)

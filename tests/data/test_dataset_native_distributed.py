@@ -241,6 +241,7 @@ faulthandler.cancel_dump_traceback_later()
 print('FAILURE_REPORTED')
 '''
     if failure == "error":
+        source = source.replace("except RuntimeError as error:", "except ValueError as error:")
         source = source.replace("            FAILURE\n", '            raise ValueError("reset data error")\n')
         source = source.replace("EXPECTED", '"ValueError: reset data error"')
     else:

@@ -160,29 +160,33 @@ class TestMklCheckedByLoadingIt(unittest.TestCase):
 
     def test_a_library_without_the_symbol_is_rejected(self):
         from jittor.compile_extern import check_mkl_usable
-        with tempfile.TemporaryDirectory() as d:
-            lib = os.path.join(d, "lib")
-            os.makedirs(lib)
-            # A real, loadable shared object that simply is not oneDNN.
-            import ctypes.util
-            source = ctypes.util.find_library("m")
-            self.assertIsNotNone(source, "libm not found")
-            import shutil
-            found = None
-            for root in ("/lib/x86_64-linux-gnu", "/usr/lib/x86_64-linux-gnu",
-                         "/lib64", "/usr/lib"):
-                candidate = os.path.join(root, source)
-                if os.path.isfile(candidate):
-                    found = candidate
-                    break
-            if found is None:
-                self.skipTest("no plain shared object to stand in for oneDNN")
-            shutil.copy(found, os.path.join(lib, "libmkldnn.so"))
-            with self.assertRaises(RuntimeError) as caught:
-                check_mkl_usable(d)
-            # The probe reads the library's own version entry point first.
-            self.assertIn("is not a usable oneDNN library", str(caught.exception))
-            self.assertIn("missing dnnl_version", str(caught.exception))
+        import shutil
+        # Removed leniently: the probe loads the copy, a loaded object stays
+        # mapped for the life of the process, and on NFS deleting it leaves a
+        # `.nfs*` placeholder that makes the directory "not empty".
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        lib = os.path.join(d, "lib")
+        os.makedirs(lib)
+        # A real, loadable shared object that simply is not oneDNN.
+        import ctypes.util
+        source = ctypes.util.find_library("m")
+        self.assertIsNotNone(source, "libm not found")
+        found = None
+        for root in ("/lib/x86_64-linux-gnu", "/usr/lib/x86_64-linux-gnu",
+                     "/lib64", "/usr/lib"):
+            candidate = os.path.join(root, source)
+            if os.path.isfile(candidate):
+                found = candidate
+                break
+        if found is None:
+            self.skipTest("no plain shared object to stand in for oneDNN")
+        shutil.copy(found, os.path.join(lib, "libmkldnn.so"))
+        with self.assertRaises(RuntimeError) as caught:
+            check_mkl_usable(d)
+        # The probe reads the library's own version entry point first.
+        self.assertIn("is not a usable oneDNN library", str(caught.exception))
+        self.assertIn("missing dnnl_version", str(caught.exception))
 
     def test_the_real_one_passes(self):
         from jittor.compile_extern import check_mkl_usable

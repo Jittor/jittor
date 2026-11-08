@@ -44,7 +44,7 @@ def kernel_source(op, n=N):
             out = jt.reduce(a, op, (0,))
             out.sync()
         assert len(rep) == 2, rep
-        with open(rep[1][1]) as f:
+        with open(rep[1][1], encoding="utf-8") as f:
             return f.read(), out.numpy()
 
 

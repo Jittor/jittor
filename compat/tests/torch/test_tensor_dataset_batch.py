@@ -32,7 +32,10 @@ class TestTensorDatasetBatch(unittest.TestCase):
         calls = []
 
         def observed_getitem(source, index):
-            calls.append(tuple(index.shape))
+            # The Torch-facing getitem re-enters the native one for its own
+            # scalar slices; only the batch gather carries an index tensor.
+            if hasattr(index, "shape"):
+                calls.append(tuple(index.shape))
             return native_getitem(source, index)
 
         with mock.patch.object(torch.Tensor, "getitem", observed_getitem), \

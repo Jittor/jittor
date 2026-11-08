@@ -1,0 +1,451 @@
+"""Standard-library tests for the wheel contents gate."""
+
+from __future__ import print_function
+
+import contextlib
+import hashlib
+import io
+from pathlib import Path
+import tempfile
+import unittest
+from unittest import mock
+import warnings
+import zipfile
+
+
+from tools.release import check_wheel_contents as checker
+
+
+class TestWheelContents(unittest.TestCase):
+    def setUp(self):
+        temporary_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary_directory.cleanup)
+        self.root = Path(temporary_directory.name)
+        self.base_members = {
+            member: ("required %d\n" % index).encode("ascii")
+            for index, member in enumerate(checker.REQUIRED_MEMBERS)
+        }
+        self.base_members["jittor/base.py"] = b"BASE = 1\n"
+
+    @staticmethod
+    def _digest(content):
+        return hashlib.sha256(content).hexdigest()
+
+    def _wheel(self, name, members):
+        path = self.root / name
+        items = members.items() if isinstance(members, dict) else members
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            with zipfile.ZipFile(str(path), "w", zipfile.ZIP_DEFLATED) as archive:
+                for member, content in items:
+                    archive.writestr(member, content)
+        return path
+
+    def _hashed_list(self, name, members):
+        path = self.root / name
+        lines = ["# candidate SHA-256 and exact wheel path"]
+        lines.extend(
+            "{}  {}".format(self._digest(content), member)
+            for member, content in sorted(members.items())
+        )
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return path
+
+    def _run(self, arguments):
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            status = checker.main([str(argument) for argument in arguments])
+        return status, stdout.getvalue(), stderr.getvalue()
+
+    def test_distribution_profiles_reject_cross_owned_payloads(self):
+        core = self._wheel("core.whl", self.base_members)
+        self.assertEqual(self._run(["audit", core])[0], 0)
+        compat_members = dict.fromkeys(checker.COMPAT_REQUIRED_MEMBERS, b"resource\n")
+        compat = self._wheel("compat.whl", compat_members)
+        self.assertEqual(self._run(["audit", compat, "--profile", "compat"])[0], 0)
+        self.assertEqual(self._run(["audit", compat])[0], 1)
+        self.assertEqual(self._run(["audit", core, "--profile", "compat"])[0], 1)
+        mixed = self._wheel("mixed.whl", dict(self.base_members, **compat_members))
+        for profile in ("core", "compat"):
+            self.assertEqual(self._run(["audit", mixed, "--profile", profile])[0], 1)
+
+    def test_compat_profile_requires_torch_entry_and_explicit_comparison_reference(self):
+        members = dict.fromkeys(checker.COMPAT_REQUIRED_MEMBERS, b"resource\n")
+        wheel = self._wheel("compat.whl", members)
+        self.assertEqual(self._run(["compare", wheel, "--profile", "compat"])[0], 2)
+        del members["torch/__init__.py"]
+        broken = self._wheel("broken.whl", members)
+        status, _, errors = self._run(["audit", broken, "--profile", "compat"])
+        self.assertEqual(status, 1)
+        self.assertIn("torch/__init__.py", errors)
+
+    def test_repository_default_policy_is_the_clean_final_baseline(self):
+        self.assertEqual(
+            checker.BASELINE_ROOT,
+            Path(__file__).resolve().parents[3] / "tools" / "release" / "baselines",
+        )
+        self.assertEqual(checker.DEFAULT_BASELINE.name, "wheel-contents-final.txt")
+        self.assertEqual(
+            checker.DEFAULT_ADDITION_ALLOWLIST.name,
+            "wheel-additions-final.txt",
+        )
+        self.assertEqual(
+            checker.DEFAULT_CONTENT_CHANGE_ALLOWLIST.name,
+            "wheel-content-changes-final.txt",
+        )
+
+        baseline = checker._read_hashed_path_list(
+            checker.DEFAULT_BASELINE, "default baseline"
+        )
+        # Not a hand-maintained count: every module anybody adds changes it,
+        # so the literal went stale and reported a legitimate addition as a
+        # gate failure (`817 != 793`) instead of catching anything. What the
+        # baseline has to be internally consistent about is its own header --
+        # that catches a truncated or hand-edited file, which is the failure
+        # this assertion was really standing in for. The review of *which*
+        # paths belong in the wheel happens on the diff of the baseline, and
+        # is enforced against a real wheel by `check_wheel_contents.py
+        # compare` in the release workflow.
+        header = [
+            line
+            for line in checker.DEFAULT_BASELINE.read_text(
+                encoding="utf-8"
+            ).splitlines()
+            if line.startswith("# entries:")
+        ]
+        self.assertEqual(len(header), 1, "baseline has no '# entries:' header")
+        self.assertEqual(int(header[0].split(":")[1]), len(baseline))
+        self.assertTrue(set(checker.REQUIRED_MEMBERS).issubset(baseline))
+        pollution = {
+            name: checker._pollution_reason(name)
+            for name in baseline
+            if checker._pollution_reason(name) is not None
+        }
+        self.assertEqual(pollution, {})
+        self.assertEqual(
+            checker._read_hashed_path_list(
+                checker.DEFAULT_ADDITION_ALLOWLIST,
+                "default addition allowlist",
+            ),
+            {},
+        )
+        self.assertEqual(
+            checker._read_hashed_path_list(
+                checker.DEFAULT_CONTENT_CHANGE_ALLOWLIST,
+                "default content-change allowlist",
+            ),
+            {},
+        )
+
+    def test_hash_manifest_accepts_an_unchanged_wheel(self):
+        old_wheel = self._wheel("old.whl", self.base_members)
+        candidate = self._wheel("candidate.whl", self.base_members)
+        baseline = self.root / "baseline.txt"
+
+        status, _stdout, stderr = self._run(
+            ["manifest", old_wheel, "--output", baseline]
+        )
+        self.assertEqual(status, 0, stderr)
+
+        entries = checker._read_hashed_path_list(baseline, "test baseline")
+        self.assertEqual(len(entries), len(self.base_members))
+
+        status, stdout, stderr = self._run(
+            ["compare", candidate, "--baseline", baseline]
+        )
+        self.assertEqual(status, 0, stderr)
+
+        self.assertIn("content changed: 0", stdout)
+
+    def test_default_stage_allowlists_pin_candidate_hashes(self):
+        old_wheel = self._wheel("old.whl", self.base_members)
+        baseline = self.root / "baseline.txt"
+        self.assertEqual(
+            self._run(["manifest", old_wheel, "--output", baseline])[0], 0
+        )
+
+        changed_members = dict(self.base_members)
+        changed_members["jittor/base.py"] = b"BASE = 2\n"
+        changed_members["jittor/new.py"] = b"NEW = True\n"
+        candidate = self._wheel("candidate.whl", changed_members)
+        additions = self._hashed_list(
+            "additions.txt", {"jittor/new.py": changed_members["jittor/new.py"]}
+        )
+        content_changes = self._hashed_list(
+            "content-changes.txt",
+            {"jittor/base.py": changed_members["jittor/base.py"]},
+        )
+
+        patches = (
+            mock.patch.object(checker, "DEFAULT_BASELINE", baseline),
+            mock.patch.object(checker, "DEFAULT_ADDITION_ALLOWLIST", additions),
+            mock.patch.object(
+                checker, "DEFAULT_CONTENT_CHANGE_ALLOWLIST", content_changes
+            ),
+        )
+        with patches[0], patches[1], patches[2]:
+            status, stdout, stderr = self._run(["compare", candidate])
+            self.assertEqual(status, 0, stderr)
+            self.assertIn("added: 1 (approved: 1, unexpected: 0)", stdout)
+            self.assertIn("content changed: 1 (approved: 1, unexpected: 0)", stdout)
+
+            reverted = self._wheel("reverted.whl", self.base_members)
+            status, _stdout, stderr = self._run(["compare", reverted])
+            self.assertEqual(status, 1)
+            self.assertIn("approved wheel addition is absent", stderr)
+            self.assertIn("approved wheel content change is not present", stderr)
+
+            tampered_members = dict(changed_members)
+            tampered_members["jittor/new.py"] = b"tampered addition\n"
+            tampered = self._wheel("tampered-addition.whl", tampered_members)
+            status, _stdout, stderr = self._run(["compare", tampered])
+            self.assertEqual(status, 1)
+            self.assertIn("addition hash does not match approval", stderr)
+
+            tampered_members = dict(changed_members)
+            tampered_members["jittor/base.py"] = b"tampered change\n"
+            tampered = self._wheel("tampered-change.whl", tampered_members)
+            status, _stdout, stderr = self._run(["compare", tampered])
+            self.assertEqual(status, 1)
+            self.assertIn("content-change hash does not match approval", stderr)
+
+    def test_custom_old_wheel_supports_explicit_hashed_allowlists(self):
+        old_wheel = self._wheel("old.whl", self.base_members)
+        changed_members = dict(self.base_members)
+        changed_members["jittor/base.py"] = b"BASE = approved\n"
+        changed_members["jittor/approved.py"] = b"APPROVED = True\n"
+        candidate = self._wheel("candidate.whl", changed_members)
+        additions = self._hashed_list(
+            "additions.txt",
+            {"jittor/approved.py": changed_members["jittor/approved.py"]},
+        )
+        content_changes = self._hashed_list(
+            "content.txt", {"jittor/base.py": changed_members["jittor/base.py"]}
+        )
+
+        status, _stdout, stderr = self._run(
+            [
+                "compare",
+                candidate,
+                "--old-wheel",
+                old_wheel,
+                "--addition-allowlist",
+                additions,
+                "--content-change-allowlist",
+                content_changes,
+            ]
+        )
+        self.assertEqual(status, 0, stderr)
+
+    def test_explicit_stage_hash_supersedes_the_default_stage_hash(self):
+        old_wheel = self._wheel("old.whl", self.base_members)
+        baseline = self.root / "baseline.txt"
+        self.assertEqual(
+            self._run(["manifest", old_wheel, "--output", baseline])[0], 0
+        )
+
+        stage_one = self._hashed_list(
+            "stage-one.txt", {"jittor/base.py": b"BASE = stage_one\n"}
+        )
+        stage_two_members = dict(self.base_members)
+        stage_two_members["jittor/base.py"] = b"BASE = stage_two\n"
+        stage_two = self._hashed_list(
+            "stage-two.txt", {"jittor/base.py": stage_two_members["jittor/base.py"]}
+        )
+        candidate = self._wheel("candidate.whl", stage_two_members)
+
+        patches = (
+            mock.patch.object(checker, "DEFAULT_BASELINE", baseline),
+            mock.patch.object(checker, "DEFAULT_ADDITION_ALLOWLIST", self._hashed_list(
+                "empty-additions.txt", {}
+            )),
+            mock.patch.object(checker, "DEFAULT_CONTENT_CHANGE_ALLOWLIST", stage_one),
+        )
+        with patches[0], patches[1], patches[2]:
+            status, stdout, stderr = self._run(
+                ["compare", candidate, "--content-change-allowlist", stage_two]
+            )
+        self.assertEqual(status, 0, stderr)
+        self.assertIn("content changed: 1 (approved: 1, unexpected: 0)", stdout)
+
+    def test_unreviewed_secret_env_addition_fails(self):
+        old_wheel = self._wheel("old.whl", self.base_members)
+        members = dict(self.base_members)
+        members["jittor/secret.env"] = b"TOKEN=not-secret-test-data\n"
+        candidate = self._wheel("candidate.whl", members)
+
+        status, _stdout, stderr = self._run(
+            ["compare", candidate, "--old-wheel", old_wheel]
+        )
+        self.assertEqual(status, 1)
+        self.assertIn("added without approval: jittor/secret.env", stderr)
+
+    def test_retired_runtime_members_are_always_rejected(self):
+        old_wheel = self._wheel("old.whl", self.base_members)
+        retired = (
+            "jittor/_nn",
+            "jittor/_misc/legacy.py",
+            "jittor/_nn/legacy.py",
+            "jittor/_pool/legacy.py",
+            "jittor/_torch_compat/legacy.py",
+            "jittor/_torch_fsdp2/legacy.py",
+            "jittor/demo/example.py",
+            "jittor/notebook/example.ipynb",
+            "jittor/script/install.sh",
+            "jittor/test/test_core.py",
+            "jittor/torch_fsdp2_compat/__init__.py",
+            "jittor/torch_shim/__init__.py",
+            "jittor/triton_shim/__init__.py",
+            "jittor/vcompiler/__init__.py",
+            "jittor/depthwise_conv.py",
+            "jittor/extern/llvm/jt_alignment_from_assumptions.cc",
+            "jittor/misc.py",
+            "jittor/monkeypatch_ops.py",
+            "jittor/nn.py",
+            "jittor/optim.py",
+            "jittor/pool.py",
+            "jittor/torch_compat.py",
+            "jittor/torch_fsdp2_compat.py",
+            "jittor/utils/polish.py",
+            "jittor/utils/polish_centos.py",
+            "jittor/version",
+            "jittor_utils/pack_offline.py",
+            "jittor_utils/translator.py",
+        )
+        for index, member in enumerate(retired):
+            with self.subTest(member=member):
+                members = dict(self.base_members)
+                members[member] = b"retired\n"
+                candidate = self._wheel("retired-{}.whl".format(index), members)
+                status, _stdout, stderr = self._run(
+                    ["compare", candidate, "--old-wheel", old_wheel]
+                )
+                self.assertEqual(status, 1)
+                self.assertIn("retired runtime-wheel", stderr)
+
+    def test_notebook_products_are_always_rejected(self):
+        old_wheel = self._wheel("old.whl", self.base_members)
+        for index, member in enumerate(
+            ("jittor/tutorial.ipynb", "jittor/tutorial.src.md")
+        ):
+            with self.subTest(member=member):
+                members = dict(self.base_members)
+                members[member] = b"generated\n"
+                candidate = self._wheel("notebook-{}.whl".format(index), members)
+                status, _stdout, stderr = self._run(
+                    ["compare", candidate, "--old-wheel", old_wheel]
+                )
+                self.assertEqual(status, 1)
+                self.assertIn("forbidden generated file suffix", stderr)
+
+    def test_unpack_content_tampering_fails(self):
+        old_wheel = self._wheel("old.whl", self.base_members)
+        members = dict(self.base_members)
+        members[checker.REQUIRED_MEMBERS[0]] = b"tampered\n"
+        candidate = self._wheel("candidate.whl", members)
+
+        status, _stdout, stderr = self._run(
+            ["compare", candidate, "--old-wheel", old_wheel]
+        )
+        self.assertEqual(status, 1)
+        self.assertIn("content changed without approval", stderr)
+        self.assertIn(checker.REQUIRED_MEMBERS[0], stderr)
+
+    def test_removal_requires_an_explicit_allowance(self):
+        old_wheel = self._wheel("old.whl", self.base_members)
+        members = dict(self.base_members)
+        del members["jittor/base.py"]
+        candidate = self._wheel("candidate.whl", members)
+
+        status, _stdout, stderr = self._run(
+            ["compare", candidate, "--old-wheel", old_wheel]
+        )
+        self.assertEqual(status, 1)
+        self.assertIn("removed without approval", stderr)
+
+        status, _stdout, stderr = self._run(
+            [
+                "compare",
+                candidate,
+                "--old-wheel",
+                old_wheel,
+                "--allow-removal",
+                "jittor/base.py",
+            ]
+        )
+        self.assertEqual(status, 0, stderr)
+
+        unchanged = self._wheel("unchanged.whl", self.base_members)
+        status, _stdout, stderr = self._run(
+            [
+                "compare",
+                unchanged,
+                "--old-wheel",
+                old_wheel,
+                "--allow-removal",
+                "jittor/base.py",
+            ]
+        )
+        self.assertEqual(status, 1)
+        self.assertIn("approved wheel removal is not present", stderr)
+
+    def test_cgroup_runtime_helper_is_not_a_build_artifact(self):
+        self.assertIsNone(checker._pollution_reason("jittor/build/utils/cgroup.py"))
+        self.assertIsNotNone(checker._pollution_reason("jittor/build/utils/cgroup.pyc"))
+        self.assertIsNotNone(checker._pollution_reason("jittor/build/utils/cgroup_extra.py"))
+
+    def test_cgroup_compiler_resources_are_required(self):
+        for resource in ("jittor/build/utils/cgroup.py", "jittor/src/utils/cgroup_memory.h"):
+            with self.subTest(resource=resource):
+                members = dict(self.base_members)
+                members.pop(resource, None)
+                candidate = self._wheel("missing-cgroup.whl", members)
+                status, _, errors = self._run(["audit", candidate])
+                self.assertEqual(status, 1)
+                self.assertIn("required wheel member is missing: " + resource, errors)
+
+    def test_missing_required_member_fails(self):
+        members = dict(self.base_members)
+        del members[checker.REQUIRED_MEMBERS[0]]
+        candidate = self._wheel("candidate.whl", members)
+        reference = self._wheel("reference.whl", members)
+
+        status, _stdout, stderr = self._run(
+            ["compare", candidate, "--old-wheel", reference]
+        )
+        self.assertEqual(status, 1)
+        self.assertIn("required wheel member is missing", stderr)
+
+    def test_duplicate_traversal_and_pollution_are_rejected(self):
+        cases = (
+            (
+                "duplicate.whl",
+                list(self.base_members.items()) + [("jittor/base.py", b"again\n")],
+                "duplicate member",
+            ),
+            (
+                "traversal.whl",
+                list(self.base_members.items()) + [("../escape.py", b"escape\n")],
+                "parent traversal member",
+            ),
+            (
+                "pollution.whl",
+                list(self.base_members.items())
+                + [("jittor/__pycache__/bad.pyc", b"bytecode\n")],
+                "polluting wheel member",
+            ),
+        )
+        reference = self._wheel("reference.whl", self.base_members)
+        for name, members, message in cases:
+            with self.subTest(name=name):
+                candidate = self._wheel(name, members)
+                status, _stdout, stderr = self._run(
+                    ["compare", candidate, "--old-wheel", reference]
+                )
+                self.assertEqual(status, 1)
+                self.assertIn(message, stderr)
+
+
+if __name__ == "__main__":
+    unittest.main()

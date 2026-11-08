@@ -325,8 +325,13 @@ op_db = [
            sample_inputs_func=sample_huber, supports_gradgrad=False),
 
     # ---- classification losses (int64 target held fixed; only logits differentiated) ----
+    # supports_gradgrad=False: the loss is `_CrossEntropyRows`
+    # (nn/functional/loss.py), a jt.Function with a closed-form backward that
+    # keeps the [N, C] intermediates out of memory, and a jt.Function's
+    # backward is not itself differentiable -- the same declaration as
+    # layer_norm / group_norm in core_ops.py.
     OpInfo("cross_entropy", op=F.cross_entropy, ref=cross_entropy_ref,
-           sample_inputs_func=sample_cross_entropy),
+           sample_inputs_func=sample_cross_entropy, supports_gradgrad=False),
     # `label_smoothing` is deliberately not a parameter of the native op: see
     # the note under `cross_entropy_loss` in python/jittor/nn/functional/loss.py
     # ("Torch mode may wrap this object for extra keyword features such as

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Single-node, MPI-free multi-device launcher for Jittor.
+"""MPI-free multi-device launcher for Jittor.
 
-The ``jtrun`` command starts one process per rank and assigns one visible device
-to each process. It exports the standard rendezvous environment and uses
-Jittor's shared root-info file to exchange the NCCL unique ID. The older
+The ``jtrun`` command starts one process per rank and by default assigns one
+visible device to each process. It exports the standard rendezvous environment. Multi-node
+agents use Jittor's TCPStore for NCCL world/subgroup identity and node liveness;
+single-node launches retain the existing root-info transport. The older
 ``python -m jittor.distributed.launch`` entry point remains equivalent.
 
 Examples::
@@ -13,6 +14,7 @@ Examples::
 """
 import argparse
 import glob
+import importlib.util
 import math
 import os
 import shutil
@@ -50,12 +52,15 @@ def _visible_device_ids(backend, explicit_ids):
         return devices
 
     visible = os.environ.get(env_name)
-    if visible is not None:
+    if visible is not None and visible.strip():
         return _parse_device_ids(visible, env_name)
 
-    # Without an explicit visibility list, query the selected Jittor backend.
-    # Let import, build, and driver errors propagate so auto-detection cannot
-    # silently turn a broken backend into a different one.
+    # An empty visibility string ("" masks every device) or an unset one: ask
+    # the backend how many devices it actually sees. Import, build and driver
+    # errors propagate so a broken backend cannot be silently retargeted.
+    # Returns [] on a host that exposes none -- a CPU-only gate, or a dummy
+    # multi-rank launch that needs no accelerator -- which the caller treats as
+    # "run the ranks unmasked" rather than a hard error.
     import jittor as jt
 
     count = int(jt.get_device_count())
@@ -80,7 +85,19 @@ def _detect_backend():
     if any(os.environ.get(name) for name in acl_hints):
         return "hccl"
     ccec = "/usr/local/Ascend/ascend-toolkit/latest/compiler/ccec_compiler/bin/ccec"
-    return "hccl" if os.path.isfile(ccec) else "nccl"
+    if os.path.isfile(ccec):
+        return "hccl"
+    # Our tree's reliable signal is the built backend itself: import jittor and
+    # ask jittor.compiler.has_acl. The env/file hints above stay the fast path
+    # and the answer for when jittor cannot be imported from the launcher.
+    try:
+        import jittor
+    except Exception as error:
+        print("warning: could not import jittor to detect the backend "
+              "({}: {}); assuming nccl. Pass --backend to choose.".format(
+                  type(error).__name__, error), file=sys.stderr)
+        return "nccl"
+    return "hccl" if getattr(jittor.compiler, "has_acl", 0) else "nccl"
 
 
 def _find_free_port(address):
@@ -117,6 +134,16 @@ def _resolve_rendezvous(args):
 
     if port < 0 or port > 65535:
         raise ValueError("--master-port must be between 0 and 65535")
+    if getattr(args, 'nnodes', 1) > 1:
+        if not address or address in ('127.0.0.1', 'localhost', '::1'):
+            # Explicit loopback is useful for host protocol tests; it is never
+            # evidence of actual multi-host connectivity.
+            if not args.master_addr:
+                raise ValueError('multi-node launch requires an explicit --master-addr')
+        if port == 0:
+            raise ValueError('multi-node launch requires a shared nonzero --master-port')
+        if args.node_rank != 0:
+            return address, port  # A client must never bind a remote host address.
     if port == 0:
         port = _find_free_port(address)
     else:
@@ -125,10 +152,10 @@ def _resolve_rendezvous(args):
 
 
 def _visible_devices_for_rank(rank, devices):
-    if devices is None:
+    # No visible devices (CPU-only gate or dummy launch): run the rank unmasked,
+    # exactly as the pre-upgrade launcher did, instead of failing.
+    if not devices or rank < 0 or rank >= len(devices):
         return None
-    if rank < 0 or rank >= len(devices):
-        raise ValueError("rank {} has no visible device".format(rank))
     return devices[rank]
 
 
@@ -137,55 +164,34 @@ def _exit_code(returncode):
 
 
 def _signal_rank_group(process, signum):
-    """Signal a rank and its workers, which share the rank's process group."""
-    if os.name == "posix":
-        try:
-            os.killpg(process.pid, signum)
-            return
-        except ProcessLookupError:
-            return
-    if process.poll() is None:
-        process.send_signal(signum)
-
-
-def _rank_group_alive(process):
-    if os.name != "posix":
-        return process.poll() is None
+    if process.poll() is not None:
+        return
     try:
-        os.killpg(process.pid, 0)
-        return True
+        if os.name == "posix":
+            os.killpg(process.pid, signum)
+        else:
+            process.send_signal(signum)
     except ProcessLookupError:
-        return False
+        pass
 
 
-def _stop_all(procs):
-    """Stop each rank process group, including DataLoader worker children."""
-    for process, _ in procs:
+def _stop_all(procs, keep=()):
+    """Terminate every rank still running. SIGTERM first, then SIGKILL."""
+    alive = [(rank, p) for rank, (p, _) in enumerate(procs)
+             if rank not in keep and p.poll() is None]
+    for _, process in alive:
         _signal_rank_group(process, signal.SIGTERM)
-
-    deadline = time.monotonic() + _TERM_GRACE_S
-    while time.monotonic() < deadline:
-        for process, _ in procs:
-            if process.poll() is None:
-                try:
-                    process.wait(timeout=0)
-                except subprocess.TimeoutExpired:
-                    pass
-        if not any(_rank_group_alive(process) for process, _ in procs):
-            break
-        time.sleep(min(_POLL_S, max(0.0, deadline - time.monotonic())))
-
-    for process, _ in procs:
-        if _rank_group_alive(process):
-            _signal_rank_group(process, signal.SIGKILL)
-        if process.poll() is None:
-            process.kill()
+    deadline = time.time() + _TERM_GRACE_S
+    for _, process in alive:
         try:
-            process.wait(timeout=_TERM_GRACE_S)
+            process.wait(timeout=max(0.0, deadline - time.time()))
         except subprocess.TimeoutExpired:
-            process.kill()
+            _signal_rank_group(process, signal.SIGKILL)
             process.wait()
     for process, logf in procs:
+        if process.poll() is None:
+            _signal_rank_group(process, signal.SIGKILL)
+            process.wait()
         if not logf.closed:
             logf.close()
 
@@ -210,6 +216,9 @@ def _build_parser():
         "-n", "--nproc", "--nproc-per-node", dest="nproc", type=int,
         required=True, help="number of local ranks (one process per device)",
     )
+    parser.add_argument('--nnodes', type=int, default=1, help='fixed number of node agents')
+    parser.add_argument('--node-rank', type=int, default=0, help='this node agent rank')
+    parser.add_argument('--rdzv-id', help='shared job identity for a multi-node launch')
     parser.add_argument("--backend", choices=["nccl", "hccl", "auto"], default="auto")
     parser.add_argument(
         "--standalone", action="store_true",
@@ -219,14 +228,21 @@ def _build_parser():
         "--device-ids", default=None,
         help="comma-separated device IDs; overrides the backend visibility variable",
     )
+    parser.add_argument(
+        "--keep-visible-devices", action="store_true",
+        help="keep all CUDA devices visible and select each rank's local device (NCCL only)",
+    )
     parser.add_argument("--master-addr", default=None, help="local rendezvous address")
     parser.add_argument("--master-port", type=int, default=None,
                         help="rendezvous port; 0 selects an available local port")
     parser.add_argument("--timeout", type=float, default=120.0,
                         help="communicator rendezvous timeout in seconds (default: 120)")
     parser.add_argument("--job-timeout", type=float, default=None,
-                        help="stop all rank processes after this many seconds; "
-                             "default: no job deadline")
+                        help="stop all rank process groups after this many seconds")
+    parser.add_argument("--strict-device-count", action="store_true",
+                        help="fail when visible devices are fewer than local ranks")
+    parser.add_argument("--auto-p2p", action="store_true",
+                        help="probe peer access and set NCCL P2P policy when no value is inherited")
     parser.add_argument("--log-dir", "--logdir", dest="logdir", default="./jt_dist_logs")
     parser.add_argument("--log-level", choices=["debug", "info", "warning", "error"],
                         default="info")
@@ -242,11 +258,16 @@ def _parse_args(argv=None):
     args = parser.parse_args(argv)
     if args.nproc < 1:
         parser.error("--nproc-per-node must be at least 1")
-    if args.timeout <= 0:
+    if not math.isfinite(args.timeout) or args.timeout <= 0:
         parser.error("--timeout must be positive")
-    if (args.job_timeout is not None and
-            (not math.isfinite(args.job_timeout) or args.job_timeout <= 0)):
+    if args.job_timeout is not None and (not math.isfinite(args.job_timeout) or args.job_timeout <= 0):
         parser.error("--job-timeout must be a finite positive number")
+    if args.nnodes < 1 or not 0 <= args.node_rank < args.nnodes:
+        parser.error('--node-rank must be in [0, --nnodes)')
+    if args.nnodes > 1 and (args.standalone or not args.rdzv_id):
+        parser.error('multi-node launch requires --rdzv-id and cannot use --standalone')
+    if args.nnodes > 1 and sys.platform != 'linux':
+        parser.error('multi-node worker lifetime control currently requires Linux')
     explicit_executable = bool(args.cmd and args.cmd[0] == "--")
     cmd = args.cmd[1:] if explicit_executable else args.cmd
     if not cmd:
@@ -264,35 +285,45 @@ def _rank_environment(args, rank, backend, devices, rootinfo, master_addr, maste
     backend_local_rank = rank
     if backend == "nccl":
         device = _visible_devices_for_rank(rank, devices)
-        if device is not None:
+        if device is not None and not getattr(args, "keep_visible_devices", False):
             env["CUDA_VISIBLE_DEVICES"] = device
             # Each NCCL child sees exactly one logical device after masking.
             backend_local_rank = 0
-    elif devices is not None:
+    elif devices:
         device = _visible_devices_for_rank(rank, devices)
         env["ASCEND_RT_VISIBLE_DEVICES"] = device
         backend_local_rank = 0
     else:
         device = str(rank)
 
+    nodes, node = getattr(args, 'nnodes', 1), getattr(args, 'node_rank', 0)
+    global_rank = node * args.nproc + rank
+    world = nodes * args.nproc
     env.update({
-        "RANK": str(rank),
-        # Keep torchrun local rank separate from Jittor's masked-device rank.
-        "LOCAL_RANK": str(rank),
-        "WORLD_SIZE": str(args.nproc),
+        "RANK": str(global_rank),
+        # Each child is masked to one visible device, so its local device index
+        # is 0 whatever its global rank; a torch child does set_device(LOCAL_RANK)
+        # and would address a nonexistent card if this were the global rank.
+        "LOCAL_RANK": str(backend_local_rank),
+        "WORLD_SIZE": str(world),
         "LOCAL_WORLD_SIZE": str(args.nproc),
+        "GROUP_RANK": str(node),
+        "GROUP_WORLD_SIZE": str(nodes),
         "MASTER_ADDR": master_addr,
         "MASTER_PORT": str(master_port),
         "JT_RENDEZVOUS_TIMEOUT_S": str(args.timeout),
         "JITTOR_DIST_RENDEZVOUS_DIR": os.path.abspath(args.logdir),
-        "{}_WORLD_SIZE".format(prefix): str(args.nproc),
-        "{}_RANK".format(prefix): str(rank),
+        "{}_WORLD_SIZE".format(prefix): str(world),
+        "{}_RANK".format(prefix): str(global_rank),
+        "{}_LOCAL_WORLD_SIZE".format(prefix): str(args.nproc),
         "{}_LOCAL_RANK".format(prefix): str(backend_local_rank),
         "{}_ROOTINFO_FILE".format(prefix): rootinfo,
     })
-    # Preserve the caller's NCCL transport policy verbatim.  In particular,
-    # an explicit NCCL_P2P_DISABLE value is copied to every rank through the
-    # environment above, while an unset value lets NCCL choose its transport.
+    for name in ('JITTOR_LAUNCHER_EXTERNAL_STORE', 'JITTOR_LAUNCHER_RUN_ID', 'JT_NCCL_LOCAL_WORLD_RANKS'):
+        env.pop(name, None)
+    if nodes > 1:
+        env.update({'JITTOR_LAUNCHER_EXTERNAL_STORE': '1', 'JITTOR_LAUNCHER_RUN_ID': args.rdzv_id,
+                    'JT_NCCL_LOCAL_WORLD_RANKS': ','.join(str(node * args.nproc + index) for index in range(args.nproc))})
     return env, backend_local_rank, device
 
 
@@ -305,16 +336,30 @@ def main(argv=None):
 
     try:
         backend = args.backend if args.backend != "auto" else _detect_backend()
+        if args.keep_visible_devices and backend != "nccl":
+            raise ValueError('--keep-visible-devices requires NCCL')
+        if args.nnodes > 1 and backend != 'nccl':
+            raise ValueError('multi-node HCCL root-info transport needs real-device validation; only NCCL is enabled')
         if backend == "nccl":
             # Set these before querying Jittor so its optional NCCL build is
             # enabled for an explicit MPI-free launch.
             os.environ.update(child_env(use_nccl=(1, "build"), use_mpi=(0, "build")))
         devices = _visible_device_ids(backend, args.device_ids)
-        if len(devices) < args.nproc:
+        if devices and len(devices) < args.nproc and args.strict_device_count:
             raise ValueError(
                 "requested {} rank(s), but {} exposes only {} visible device(s)".format(
                     args.nproc, backend, len(devices))
             )
+        if devices and len(devices) < args.nproc:
+            # Fewer visible devices than ranks. The pre-upgrade launcher allowed
+            # this -- ranks past the device list run unmasked -- and the launcher
+            # mechanics tests oversubscribe on purpose (4 dummy ranks on 2 cards)
+            # to stay cheap, so warn rather than refuse. A real NCCL job that
+            # needs one card per rank still fails clearly at init; dummy and
+            # CPU-only ranks keep working.
+            print("[jtrun] warning: requested {} rank(s) but {} exposes only {} "
+                  "visible device(s); ranks past the list run unmasked".format(
+                      args.nproc, backend, len(devices)), file=sys.stderr, flush=True)
         master_addr, master_port = _resolve_rendezvous(args)
     except ValueError as error:
         print("[jtrun] error: {}".format(error), file=sys.stderr, flush=True)
@@ -326,10 +371,22 @@ def main(argv=None):
     if os.path.exists(rootinfo):
         os.remove(rootinfo)
 
-    job_deadline = (time.monotonic() + args.job_timeout
-                    if args.job_timeout is not None else None)
-    job_timed_out = False
+    if backend == "nccl" and args.auto_p2p and "NCCL_P2P_DISABLE" not in os.environ:
+        # Decide NCCL peer-to-peer once in the launcher so every rank inherits
+        # one transport: enable it where the GPUs support peer access and
+        # disable it only where they do not, instead of a blanket
+        # NCCL_P2P_DISABLE that leaves throughput on the table.
+        try:
+            from jittor.compile_extern import _skip_nccl_p2p_without_peer_access
+            _skip_nccl_p2p_without_peer_access()
+        except Exception as error:
+            print("warning: could not check GPU peer access ({}: {}); NCCL will "
+                  "try peer-to-peer, which can hang on hosts without it. Set "
+                  "NCCL_P2P_DISABLE=1 if the ranks stall.".format(
+                      type(error).__name__, error), file=sys.stderr)
+
     procs = []
+    control = None
     first_failure = None
     startup_error = None
     stop_signal = None
@@ -347,21 +404,32 @@ def main(argv=None):
         old_handlers[signum] = signal.signal(signum, forward_signal)
 
     try:
+        if args.nnodes > 1:
+            spec = importlib.util.spec_from_file_location(
+                '_jittor_launcher_control', os.path.join(os.path.dirname(__file__), '_launcher_control.py'))
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            control = module.AgentControl(args, backend, master_addr, master_port, rootinfo)
         for rank in range(args.nproc):
             if stop_signal is not None:
                 break
             env, backend_local_rank, device = _rank_environment(
                 args, rank, backend, devices, rootinfo, master_addr, master_port)
-            log_path = os.path.join(args.logdir, "rank{}.log".format(rank))
+            global_rank = args.node_rank * args.nproc + rank
+            log_path = os.path.join(args.logdir, "rank{}.log".format(global_rank))
             logf = open(log_path, "w")
+            command = args.cmd
+            if args.nnodes > 1:
+                command = [sys.executable, os.path.join(os.path.dirname(__file__), '_launch_worker.py'),
+                           str(os.getpid()), *args.cmd]
             try:
                 process = subprocess.Popen(
-                    args.cmd, env=env, stdout=logf, stderr=subprocess.STDOUT,
+                    command, env=env, stdout=logf, stderr=subprocess.STDOUT,
                     start_new_session=(os.name == "posix"))
             except OSError as error:
                 logf.close()
                 startup_error = error
-                print("[jtrun] could not start rank {} command: {}".format(rank, error),
+                print("[jtrun] could not start rank {} command: {}".format(global_rank, error),
                       file=sys.stderr, flush=True)
                 break
             procs.append((process, logf))
@@ -369,11 +437,14 @@ def main(argv=None):
                 print(
                     "[jtrun] backend={} rank={}/{} local_rank={} device={} "
                     "backend_local_rank={} master={}:{} command={} log={}".format(
-                        backend, rank, args.nproc, rank, device, backend_local_rank,
+                        backend, global_rank, args.nnodes * args.nproc, rank, device, backend_local_rank,
                         master_addr, master_port, " ".join(args.cmd), log_path),
                     flush=True,
                 )
 
+        job_deadline = (time.monotonic() + args.job_timeout
+                        if args.job_timeout is not None else None)
+        job_timed_out = False
         if startup_error is not None:
             rc = 127
         elif stop_signal is not None:
@@ -381,10 +452,19 @@ def main(argv=None):
         else:
             pending = list(range(len(procs)))
             while pending and first_failure is None and stop_signal is None:
+                if job_deadline is not None and time.monotonic() >= job_deadline:
+                    job_timed_out = True
+                    rc = 124
+                    print("[jtrun] job timed out after {}s; stopping all ranks".format(
+                        args.job_timeout), file=sys.stderr, flush=True)
+                    break
+                if control is not None:
+                    control.tick(args.node_rank * args.nproc + rank for rank in pending)
                 for rank in list(pending):
                     process, logf = procs[rank]
-                    result = process.poll()
-                    if result is None:
+                    try:
+                        result = process.wait(timeout=_POLL_S)
+                    except subprocess.TimeoutExpired:
                         continue
                     pending.remove(rank)
                     logf.close()
@@ -392,25 +472,30 @@ def main(argv=None):
                         first_failure = (rank, result)
                         rc = _exit_code(result)
                         print("[jtrun] rank {} exited with code {}; stopping other ranks".format(
-                            rank, rc), file=sys.stderr, flush=True)
+                            args.node_rank * args.nproc + rank, rc), file=sys.stderr, flush=True)
                         break
-                if (pending and first_failure is None and stop_signal is None
-                        and job_deadline is not None
-                        and time.monotonic() >= job_deadline):
-                    job_timed_out = True
-                    rc = 124
-                    print("[jtrun] job timed out after {}s; stopping all ranks".format(
-                        args.job_timeout), file=sys.stderr, flush=True)
-                    break
-                if pending and first_failure is None and stop_signal is None:
-                    delay = _POLL_S
-                    if job_deadline is not None:
-                        delay = min(delay, max(0.0, job_deadline - time.monotonic()))
-                    time.sleep(delay)
             if stop_signal is not None:
                 rc = 128 + stop_signal
+        if job_timed_out:
+            pass
+        if control is not None:
+            if rc:
+                control.fail('node {} worker/signal failure, exit {}'.format(args.node_rank, rc))
+            else:
+                control.finish()
+    except (OSError, RuntimeError, ValueError, TimeoutError) as error:
+        print('[jtrun] control plane failed: {}'.format(error), file=sys.stderr, flush=True)
+        if control is not None:
+            try:
+                control.fail(str(error))
+            except (OSError, RuntimeError) as publication_error:
+                print('[jtrun] could not publish control-plane failure: {}'.format(publication_error),
+                      file=sys.stderr, flush=True)
+        rc = 1
     finally:
-        _stop_all(procs)
+        _stop_all(procs, keep=() if first_failure is None else (first_failure[0],))
+        if control is not None:
+            control.close()
         _cleanup(rootinfo)
         for signum, handler in old_handlers.items():
             signal.signal(signum, handler)
@@ -418,13 +503,14 @@ def main(argv=None):
     if stop_signal is not None:
         print("[jtrun] received {}; ranks stopped".format(signal.Signals(stop_signal).name),
               file=sys.stderr, flush=True)
-    elif job_timed_out:
+    elif "job_timed_out" in locals() and job_timed_out:
         print("[jtrun] job deadline reached; all rank process groups stopped",
               file=sys.stderr, flush=True)
-    elif first_failure is None and startup_error is None:
+    elif rc == 0 and first_failure is None and startup_error is None:
         print("[jtrun] all ranks done, rc=0", flush=True)
     elif first_failure is not None:
         rank, result = first_failure
+        rank += args.node_rank * args.nproc
         print("[jtrun] rank {} failed with code {}; see {} for its log".format(
             rank, _exit_code(result), os.path.join(args.logdir, "rank{}.log".format(rank))),
             file=sys.stderr, flush=True)

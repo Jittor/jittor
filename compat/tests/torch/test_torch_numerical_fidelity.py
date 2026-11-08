@@ -2,6 +2,10 @@ import importlib
 import unittest
 
 import numpy as np
+
+#: NumPy 2 renamed `trapz` to `trapezoid`; the dev pins NumPy 1.26.4, which
+#: has only the old name. Same function, same arguments.
+_np_trapezoid = getattr(np, "trapezoid", None) or np.trapz
 import torch
 import jittor as _native_jittor
 
@@ -100,6 +104,12 @@ class TestTorchNumericalFidelity(unittest.TestCase):
                 self.assertIs(record.implementation, implementation)
                 self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
                 self.assertIn("CPU", record.detail)
+
+    def test_kaiser_window_rejects_negative_lengths(self):
+        for length in (-1, -3):
+            with self.subTest(length=length):
+                with self.assertRaisesRegex(RuntimeError, "non-negative window_length"):
+                    torch.kaiser_window(length)
 
     def test_hann_window_cpu_values_match_numpy(self):
         with _native_jittor.flag_scope(use_cuda=0):
@@ -1410,8 +1420,8 @@ class TestTorchNumericalFidelity(unittest.TestCase):
     def test_trapz_cpu_dx_coordinate_and_var_delegate_match_numpy(self):
         values = np.array([[0.0, 1.0, 4.0], [2.0, 3.0, 8.0]], dtype="float32")
         coord = np.array([0.0, 0.5, 2.0], dtype="float32")
-        expected_dx = np.trapezoid(values, dx=2.0, axis=1)
-        expected_x = np.trapezoid(values, coord, axis=1)
+        expected_dx = _np_trapezoid(values, dx=2.0, axis=1)
+        expected_x = _np_trapezoid(values, coord, axis=1)
         with _native_jittor.flag_scope(use_cuda=0):
             values_tensor = torch.tensor(values)
             coord_tensor = torch.tensor(coord)
@@ -1424,7 +1434,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
 
     def test_trapz_cpu_out_identity(self):
         values = np.array([1.0, 2.0, 5.0], dtype="float32")
-        expected = np.trapezoid(values, dx=0.5)
+        expected = _np_trapezoid(values, dx=0.5)
         with _native_jittor.flag_scope(use_cuda=0):
             values_tensor = torch.tensor(values)
             out = torch.zeros(1)
@@ -1773,6 +1783,26 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         self.assertIs(record.level, fidelity.Fidelity.APPROXIMATE)
         self.assertIn("sparse", record.detail)
         self.assertIn("device", record.detail)
+
+    def test_dense_arithmetic_with_a_sparse_coo_value(self):
+        """Torch's sparse tensors take elementwise scalar/arithmetic operators.
+
+        PEFT's SHiRA adapter adds its sparse delta to a dense weight
+        (`weight += torch.sparse_coo_tensor(...)`); the storage here is dense,
+        so the answers are the dense ones.
+        """
+        indices = torch.tensor([[0, 1], [1, 0]])
+        values = torch.tensor([2.0, 3.0])
+        delta = torch.sparse_coo_tensor(indices, values, (2, 2))
+        weight = torch.zeros(2, 2)
+        weight += delta
+        np.testing.assert_array_equal(weight.numpy(), [[0., 2.], [3., 0.]])
+        np.testing.assert_array_equal((delta * 2).to_dense().numpy(),
+                                      [[0., 4.], [6., 0.]])
+        np.testing.assert_array_equal((delta + delta).numpy(),
+                                      [[0., 4.], [6., 0.]])
+        np.testing.assert_array_equal((weight - delta).numpy(),
+                                      np.zeros((2, 2), dtype=np.float32))
 
     def test_randint_like_is_a_stable_module_level_object(self):
         numerical = importlib.import_module(

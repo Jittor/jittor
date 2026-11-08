@@ -4,7 +4,8 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
-#include <regex>
+#include "ops/composite/code_source.h"
+#include <cctype>
 #include <algorithm>
 #include <iomanip>
 #include <sstream>
@@ -21,6 +22,7 @@
 #include "runtime/device_state.h"
 #include "codegen/opt/expr.h"
 #include "bindings/pyjt/py_caller.h"
+#include "runtime/profiler/step_trace.h"
 
 namespace jittor {
 
@@ -88,6 +90,23 @@ static string annotate_jit_run_lines(const string& src, const string& path) {
         if (!mapped_line) line++;
     }
     return annotated;
+}
+
+// A `#line` that restores the numbering in force at `pos`, for text spliced in
+// there; empty when no directive precedes `pos` and the file's own numbering
+// is the right one anyway.
+static string line_directive_at(const string& src, size_t pos) {
+    if (!pos) return "";
+    size_t marker = src.rfind("#line ", pos-1);
+    if (marker == string::npos) return "";
+    size_t directive_end = src.find('\n', marker);
+    if (directive_end == string::npos || directive_end >= pos) return "";
+    std::istringstream directive(src.substr(marker + 6, directive_end - marker - 6));
+    size_t line = 0;
+    string path;
+    if (!(directive >> line) || !(directive >> std::quoted(path))) return "";
+    line += std::count(src.begin() + directive_end + 1, src.begin() + pos, '\n');
+    return "#line " + S(line) + " \"" + line_directive_path(path) + "\"\n";
 }
 
 DECLARE_FLAG(string, jittor_path);
@@ -209,7 +228,7 @@ int64 OpCompiler::eval(const string& expr, const unordered_map<string,string>& v
                             presum++;
                         k++;
                     }
-                    CHECK(presum==0) << "Jit error: braces are not matched.";
+                    USER_CHECK(presum == 0) << "Unbalanced braces in JIT source";
                     new_expr += S(eval(expr.substr(j+1, k-j-2), vars));
                     i = k-1;
                     continue;
@@ -241,7 +260,8 @@ int64 OpCompiler::eval(const string& expr, const unordered_map<string,string>& v
                     }
                     string var = expr.substr(j, k-j);
                     auto iter = vars.find(var);
-                    ASSERT(iter!=vars.end()) << "Jit var " << var << " not found." << vars;
+                    USER_CHECK(iter != vars.end())
+                        << "JIT variable " << var << " is not defined";
                     new_expr += iter->second;
                     i = k-1;
                 }
@@ -253,7 +273,8 @@ int64 OpCompiler::eval(const string& expr, const unordered_map<string,string>& v
     e->dfs([&](expr::Expr* s) {
         if (s->is_sym()) {
             auto iter = vars.find(s->str);
-            ASSERT(iter!=vars.end()) << "Jit var " << s->str << " not found.";
+            USER_CHECK(iter != vars.end())
+                << "JIT variable " << s->str << " is not defined";
             auto e = expr::make(iter->second);
             s->swap(e.get());
         }
@@ -275,10 +296,10 @@ void load_macros(const string& src, unordered_map<string,string>& macros) {
                 i = j;
                 continue;
             }
-            ASSERT(j<src.size());
+            USER_CHECK(j < src.size()) << "Incomplete # directive in JIT source";
             auto k=j+1;
             while (k<src.size() && src[k] == ' ') k++;
-            ASSERT(k<src.size());
+            USER_CHECK(k < src.size()) << "Incomplete # directive in JIT source";
             auto l=k+1;
             while (l<src.size() && (src[l] != '\n' && src[l-1] != ')')) l++;
             auto p=l;
@@ -420,10 +441,10 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
                 i = j-1;
                 continue;
             }
-            ASSERT(j<src.size());
+            USER_CHECK(j < src.size()) << "Incomplete # directive in JIT source";
             auto k=j+1;
             while (k<src.size() && src[k] == ' ' && src[k] != '\n') k++;
-            ASSERT(k<src.size());
+            USER_CHECK(k < src.size()) << "Incomplete # directive in JIT source";
             auto l=k+1;
             while (l<src.size() && (src[l] != '\n')) l++;
             if (src[k] == '"' && src[l-1] == '"' && j-i==8 && src.substr(i,j-i) == "#include") {
@@ -491,7 +512,7 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
                     }
                     ii++;
                 }
-                ASSERT(presum==0);
+                USER_CHECK(presum == 0) << "Unbalanced #if/#else in JIT source";
                 if (is_ifndef) block.swap(else_block);
                 if (defs.count(key) || macros.count(key)) {
                     new_src += precompile(defs, block, macros);
@@ -519,7 +540,7 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
                         presum++;
                     k++;
                 }
-                CHECK(presum==0) << "Jit error: braces are not matched.";
+                USER_CHECK(presum == 0) << "Unbalanced braces in JIT source";
                 new_src += S(OpCompiler::eval(src.substr(j+1, k-j-2), defs));
                 i = k-1;
                 continue;
@@ -535,7 +556,7 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
                         presum++;
                     k++;
                 }
-                CHECK(presum==0) << "Jit error: braces are not matched.";
+                USER_CHECK(presum == 0) << "Unbalanced braces in JIT source";
                 new_src += precompile(defs, src.substr(j+1, k-j-2), macros);
                 i = k-1;
                 continue;
@@ -570,7 +591,7 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
                             comma.push_back(l);
                         l++;
                     }
-                    CHECK(presum==0) << "Jit error: braces are not matched.";
+                    USER_CHECK(presum == 0) << "Unbalanced braces in JIT source";
                     comma.push_back(l-1);
                     for (uint i=0; i+1<comma.size(); i++)
                         args.push_back(src.substr(comma[i]+1, comma[i+1]-comma[i]-1));
@@ -589,7 +610,7 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
                             break;
                         l++;
                     }
-                    CHECK(l<src.size()) << "Jit error: braces are not matched.";
+                    USER_CHECK(l < src.size()) << "Unbalanced braces in JIT source";
                     auto full_src = src.substr(ll, l+1-ll);
                     i = l;
                     full_src = py_caller(
@@ -602,7 +623,7 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
                 // syntax @for(i, l, r, ...)
                 //        ij  k             l
                 if (expr == "for") {
-                    CHECKop(args.size(),>=,4u) << "Jit error: for missing arguments.";
+                    USER_CHECK(args.size() >= 4u) << "@for takes at least 4 arguments";
                     string vi = args[0];
                     string vl = args[1];
                     string vr = args[2];
@@ -619,7 +640,7 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
                     }
                     auto new_defs = defs;
                     LOGvvv << "Expand for" << expr >> "[" >> vil >> "," >> vir >> "," >> step >> "]";
-                    CHECK(step!=0) << "Jit error: for step must not be zero.";
+                    USER_CHECK(step != 0) << "@for step must not be zero";
                     int total_step = 0;
                     // Stop on the bound being reached *in the step's direction*, not on
                     // equality: a 0-d input makes the stride templates spell
@@ -629,7 +650,8 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
                     // range() would give.
                     for (auto vii=vil; step>0 ? vii<vir : vii>vir; vii+=step) {
                         total_step ++;
-                        ASSERT(total_step < 1000) << "Too much step.";
+                        USER_CHECK(total_step < 1000)
+                            << "JIT macro range expands to more than 1000 steps";
                         new_defs[vi] = S(vii);
                         new_src += precompile(new_defs, vs, macros);
                     }
@@ -639,8 +661,8 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
                 if (expr == "if") {
                     // syntax: @if(cond, true[, false])
                     //         ij k                    l
-                    ASSERT(args.size()>=2u && args.size()<=3u)
-                        << "Jit error: if wrong arguments.";
+                    USER_CHECK(args.size() >= 2u && args.size() <= 3u)
+                        << "@if takes 2 or 3 arguments";
                     string vcond = args[0];
                     string vtrue = args[1];
                     string vfalse = args.size() == 3u ? args[2] : "";
@@ -650,8 +672,8 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
                     continue;
                 } else
                 if (expr == "is_def") {
-                    ASSERT(args.size()==1)
-                        << "Jit error: is_def wrong arguments.";
+                    USER_CHECK(args.size() == 1)
+                        << "@is_def takes exactly one argument";
                     string vdef = args[0];
                     vdef = precompile(defs, vdef, macros);
                     if (defs.count(vdef) || macros.count(vdef))
@@ -677,7 +699,7 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
                         if (defs.count(vmacro))
                             ns = defs[vmacro];
                         else
-                            LOGf << "Macro" << vmacro << "not found.";
+                            USER_ERROR << "JIT macro " << vmacro << " is not defined";
                     } else {
                         expand_macro(iter->second, args, ns);
                     }
@@ -700,8 +722,8 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
                 if (expr == "define") {
                     // syntax: @define(macro, value)
                     //         ij     k             l
-                    ASSERT(args.size()>=1u)
-                        << "Jit error: define wrong arguments.";
+                    USER_CHECK(args.size() >= 1u)
+                        << "@define needs at least a macro name";
                     new_src += "#define ";
                     auto key = precompile(defs, args[0], macros);
                     string value, src;
@@ -721,7 +743,8 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
                         }
                         new_src += value;
                     }
-                    ASSERT(macros.count(key)==0) << "Macro" << key << "redefined.";
+                    USER_CHECK(macros.count(key) == 0)
+                        << "JIT macro " << key << " is already defined";
                     defs[key] = src;
                     macros[key] = value;
                     i = l-1;
@@ -730,8 +753,8 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
                 if (expr == "strcmp") {
                     // syntax: @strcmp(s1,s2)
                     //         ij     k      l
-                    CHECK(args.size()==2u)
-                        << "Jit error: strcmp wrong arguments.";
+                    USER_CHECK(args.size() == 2u)
+                        << "@strcmp takes exactly two arguments";
                     auto s1 = precompile(defs, args[0], macros);
                     auto s2 = precompile(defs, args[1], macros);
                     if (s1<s2) new_src += "-1"; else
@@ -751,11 +774,12 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
                     // for i in a_dim:
                     //   a_shapei -> b_shapei
                     //   a_stridei -> b_stridei
-                    CHECK(args.size()==2u)
-                        << "Jit error: alias wrong arguments.";
+                    USER_CHECK(args.size() == 2u)
+                        << "@alias takes exactly two arguments";
                     auto key = strip(precompile(defs, args[0], macros));
                     auto value = strip(precompile(defs, args[1], macros));
-                    CHECK(defs.count(value+"_dim")) << '"' >> value >> '"' << "not exsit";
+                    USER_CHECK(defs.count(value + "_dim"))
+                        << "JIT variable " << value << " is not defined";
                     int dim = std::stoi(defs.at(value+"_dim"));
                     vector<string> keys = {"", "p", "dim", "type"};
                     for (int i=0; i<dim; i++) {
@@ -783,7 +807,7 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
                 } else
                 if (args.size()) {
                     // syntax: @e0(i0,i1,...,in) -> e0_p[i0*e0_stride0+i1*e0_stride1+...]
-                    ASSERT(expr.size());
+                    USER_CHECK(expr.size()) << "@ call has an empty expression before '('";
 
                     int nid=(int)expr.size();
                     while (nid && isdigit(expr[nid-1])) nid--;
@@ -802,8 +826,10 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
                         prefix = expr+"_";
                         dim = prefix + "dim";
                     }
-                    CHECK(macros.count(dim)) << expr << "not exsit" << macros;
-                    CHECKop(macros.at(dim),==,S(args.size())) << expr << "dimension not matched";
+                    USER_CHECK(macros.count(dim))
+                        << expr << " is not a JIT variable or macro";
+                    USER_CHECKop(macros.at(dim), ==, S(args.size()))
+                        << expr << " dimension does not match its argument count";
                     std::stringstream ss;
                     ss << prefix << "p[";
                     for (uint ii=0; ii<args.size(); ii++) {
@@ -818,7 +844,8 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
                 }
                 // syntax: @x
                 auto iter = defs.find(expr);
-                ASSERT(iter!=defs.end()) << "Jit var " << expr << " not found.";
+                USER_CHECK(iter != defs.end())
+                    << "JIT variable " << expr << " is not defined";
                 new_src += precompile(defs, iter->second, macros);
                 i = k-1;
                 continue;
@@ -827,7 +854,7 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
                 i++;
                 continue;
             } else
-                LOGf << "Jit error: Invalid syntax.";
+                USER_ERROR << "Invalid @-syntax in JIT source; expected @var, @@, or a known @macro";
         } else
             new_src += src[i];
         } catch (std::exception& e) {
@@ -835,7 +862,7 @@ string precompile(unordered_map<string,string> defs, string src, unordered_map<s
             while (il>0 && src[il-1] != '\n') il--;
             while (ir+1<src.size() && src[ir+1] != '\n') ir++;
             string this_line = src.substr(il, ir-il+1);
-            LOGf << e.what() << "\nJit compiler error:\n" << this_line;
+            throw_same_kind(e, string(e.what()) + "\nJit compiler error:\n" + this_line);
         }
     }
     return new_src;
@@ -861,6 +888,19 @@ string OpCompiler::get_jit_src(Op* op) {
     // source that need to be added after the last #include statement
     string after_include_src = "";
     auto jit_define = op->get_jit_define();
+    // An interned code source: the key names it by token, the source is the
+    // header and code it stands for (see ops/composite/code_source.h).
+    for (size_t k = 0; k < jit_define.size(); k++) {
+        if (jit_define[k].first != "HEADER" || !is_code_source_token(jit_define[k].second))
+            continue;
+        const string* tail = code_source_tail(jit_define[k].second);
+        ASSERT(tail) << "code source token not interned in this process:" << jit_define[k].second;
+        auto cut = tail->find("«CODE:");
+        ASSERT(cut != string::npos) << "malformed interned code source";
+        jit_define[k].second = tail->substr(0, cut);
+        jit_define.emplace_back("CODE", tail->substr(cut + string("«CODE:").size()));
+        break;
+    }
     for (auto &t : jit_define) {
         // don't add CODE in define
         // this allowed comment exsit in CODE
@@ -900,7 +940,7 @@ string OpCompiler::get_jit_src(Op* op) {
     }
     
     string new_src = begin_src + src.substr(0, pos) +
-        after_include_src + src.substr(pos) + "\n" + end_src;
+        after_include_src + line_directive_at(src, pos) + src.substr(pos) + "\n" + end_src;
     return new_src;
 }
 
@@ -958,7 +998,7 @@ static void fix_op_member(
                 << "vars in its jit source but has" << op->inputs().size()
                 << "inputs and" << op->outputs().size() << "outputs."
                 << "An op cannot be kept with only some of its outputs;"
-                << "see KI-EXEC-006. members:" << member;
+                << "members:" << member;
         while (member.size() < var_num) {
             member.insert(member.end() - op->outputs().size(), "__fill__");
         }
@@ -1077,8 +1117,24 @@ string OpCompiler::__get_fused_src(
                 return true;
         return (s.find("::") != string::npos) || (s.find("LOG") != string::npos);
     };
-    // regex find XxxXxxOp::jit_run
-    std::regex e(R"([^]*\s(\S*)Op::jit_run[^]*)");
+    // The XxxXxx of the last `XxxXxxOp::jit_run` in an op's source: the
+    // whitespace-delimited token in front of it. This was
+    // `std::regex_match(src, R"([^]*\s(\S*)Op::jit_run[^]*)")`, and
+    // libstdc++'s matcher recurses once per character it consumes, so the
+    // depth grew with the generated source: a rank-13 reduction (the generic
+    // CPU matmul of two rank-12 tensors) is ~17,800 frames, which overflows a
+    // compile thread's stack where threads get glibc's 2 MB default -- any
+    // host whose `ulimit -s` is unlimited. A segfault, with no backtrace.
+    auto jit_run_class_prefix = [](const string& src, string& name) {
+        static const string marker = "Op::jit_run";
+        auto end = src.rfind(marker);
+        if (end == string::npos) return false;
+        auto begin = end;
+        while (begin > 0 && !std::isspace((unsigned char)src[begin-1])) begin--;
+        if (begin == 0) return false;
+        name = src.substr(begin, end - begin);
+        return true;
+    };
     for (uint oi=0; oi<op_srcs.size(); oi++) {
         const string& src = op_srcs[oi];
         if (src.size()==0) continue;
@@ -1113,10 +1169,8 @@ string OpCompiler::__get_fused_src(
             // opi_outputp[0] = ((T*)(opi->buffer.get()))[0];
             continue;
         }
-        std::smatch cm;
-        std::regex_match(src, cm, e);
-        ASSERT(cm.size()>=2) << src;
-        string name3 = cm[1];
+        string name3;
+        ASSERT(jit_run_class_prefix(src, name3)) << src;
         const string& source_path = ops[oi]->codegen().source_path;
         // macros this op defines, and the last identifier we renamed, both used
         // by check_rename_conflict below
@@ -1221,8 +1275,8 @@ string OpCompiler::__get_fused_src(
                     presum++;
                 k++;
             }
-            CHECK(presum==0) << source_path >> ':' >> source_line_at(src, j)
-                << ": Jit error: braces are not matched.";
+            USER_CHECK(presum == 0) << source_path << ':' << source_line_at(src, j)
+                << ": unbalanced braces in JIT source";
             uint body_line = source_line_at(src, j);
             auto marker = src.rfind("#line ", i);
             if (marker != string::npos) {
@@ -1371,6 +1425,8 @@ jit_op_entry_t do_compile_inner(Op* op) {
 jit_op_entry_t compile_registered_source(Op* op) { return do_compile_inner(op); }
 
 jit_op_entry_t OpCompiler::do_compile(Op* op) {
+    // Code generation and compilation (or loading the cached kernel).
+    StepTraceCompileScope trace_compile;
     auto compile = op->implementation().kernel.compile;
     // The build lock used to be taken here, around everything, so a cache hit
     // waited for it exactly as long as a compile would have. Code generation

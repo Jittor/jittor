@@ -109,25 +109,36 @@ def resize(img, size, mode="nearest", align_corners=False, tf_mode=False):
             f"Input and output sizes should be greater than 0, but got input "
             f"(H: {h}, W: {w}) output (H: {H}, W: {W})"
         )
-    if mode not in ("nearest", "bilinear", "bicubic", "area"):
+    if mode not in ("nearest", "nearest-exact", "bilinear", "bicubic", "area"):
         raise ValueError("unsupported interpolation mode: {}".format(mode))
+    if mode == "nearest-exact" and (align_corners or tf_mode):
+        raise ValueError("nearest-exact requires align_corners=False and tf_mode=False")
     fast = try_dispatch("nn.resize", img, (H, W), mode, align_corners, tf_mode)
     if fast is not None:
         return fast
     # A channels-last input is sampled from its NHWC storage and answered in
     # it; the indices are then laid out [N, H, W, C] for the same reason.
     source = None
-    if mode in ("nearest", "bilinear", "bicubic") and records_no_grad(img):
+    if mode in ("nearest", "nearest-exact", "bilinear", "bicubic") and records_no_grad(img):
         source = channels_last_source(img)
-    if mode == "nearest" and not align_corners:
+    if mode in ("nearest", "nearest-exact") and not align_corners:
         # Index expressions, not index tensors: `floor(i * h / H)` is the
         # integer quotient. Tensors held here are what an auto-flush inside
         # this call computes in full -- four int32/float maps of the output's
         # size, 1 GB at an SD1.5 VAE's last upsample -- instead of fusing them.
+        if mode == "nearest-exact":
+            # floor((i+0.5)*input/output), expressed as an integer quotient
+            # to preserve the half-pixel tie rule without float rounding.
+            if source is None:
+                return img.reindex([n, c, H, W], [
+                    "i0", "i1", f"(2LL*i2+1)*{h}/(2LL*{H})", f"(2LL*i3+1)*{w}/(2LL*{W})"])
+            return channels_last_view(source.reindex([n, H, W, c], [
+                "i0", f"(2LL*i1+1)*{h}/(2LL*{H})", f"(2LL*i2+1)*{w}/(2LL*{W})", "i3"]))
         if source is None:
             return img.reindex([n, c, H, W], ["i0", "i1", f"i2*{h}/{H}", f"i3*{w}/{W}"])
-        return channels_last_view(source.reindex(
-            [n, H, W, c], ["i0", f"i1*{h}/{H}", f"i2*{w}/{W}", "i3"]))
+        return channels_last_view(
+            source.reindex([n, H, W, c], ["i0", f"i1*{h}/{H}", f"i2*{w}/{W}", "i3"])
+        )
     if source is None:
         nid, cid, hid, wid = jt.index((n, c, H, W))
     else:
@@ -207,6 +218,19 @@ def resize(img, size, mode="nearest", align_corners=False, tf_mode=False):
     return _interpolate(img, x, y, (nid, cid), mode)
 
 
+def _nearest_exact_scaled_size(x, scale_factor):
+    factors = tuple(scale_factor) if isinstance(scale_factor, (tuple, list)) else (scale_factor, scale_factor)
+    if len(factors) != 2:
+        raise ValueError("nearest-exact scale_factor must have two spatial factors")
+    factors = tuple(float(value) for value in factors)
+    if any(value <= 0 or not value.is_integer() for value in factors):
+        # Replacing an explicit fractional scale by floor(input*scale) changes
+        # its coordinate mapping. Admit only exact integer scales here until
+        # the scale itself can be carried through the resize kernel contract.
+        raise NotImplementedError("nearest-exact supports positive integer scale_factor only; use size= for other output sizes")
+    return tuple(int(size) * int(factor) for size, factor in zip(x.shape[-2:], factors))
+
+
 def interpolate(
     X,
     size=None,
@@ -215,6 +239,9 @@ def interpolate(
     align_corners=False,
     tf_mode=False,
 ):
+    if mode == "nearest-exact" and scale_factor is not None:
+        size = _nearest_exact_scaled_size(X, scale_factor)
+        return jt.nn.resize(X, size, mode, align_corners, tf_mode)
     if scale_factor is not None:
         size = [int(X.shape[-2] * scale_factor), int(X.shape[-1] * scale_factor)]
     if isinstance(size, int):

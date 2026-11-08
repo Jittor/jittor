@@ -27,69 +27,119 @@ def _set_lrs(opt, lrs):
 
 
 class LRScheduler:
+    _get_lr_called_within_step = False
+    _is_initial = False
+
     def __init__(self, optimizer, last_epoch=-1, verbose=False):
         self.optimizer = optimizer
-        if not hasattr(self, "base_lrs"):
-            self.base_lrs = _base_lrs(optimizer)
+        self.verbose = verbose
+        for index, group in enumerate(optimizer.param_groups):
+            if last_epoch == -1:
+                initial_lr = group["lr"]
+                if isinstance(initial_lr, jt.Var):
+                    initial_lr = initial_lr.clone()
+                group.setdefault("initial_lr", initial_lr)
+            elif "initial_lr" not in group:
+                raise KeyError(
+                    f"param 'initial_lr' is not specified in param_groups[{index}] "
+                    "when resuming scheduler with last_epoch >= 0"
+                )
+        self.base_lrs = [
+            group["initial_lr"].clone() if isinstance(group["initial_lr"], jt.Var)
+            else group["initial_lr"] for group in optimizer.param_groups
+        ]
         self.last_epoch = last_epoch
+        self._initial_step()
+
+    def _initial_step(self):
         self._step_count = 0
-        self._last_lr = list(self.base_lrs)
-        self.step()                       # torch: apply epoch-0 lr at construction
+        self._is_initial = True
+        try:
+            self.step()
+        finally:
+            del self._is_initial
+
     def get_lr(self):
         return list(self.base_lrs)
     def get_last_lr(self):
         return list(self._last_lr)
     def state_dict(self):
         return {k: v for k, v in self.__dict__.items()
-                if k not in ("optimizer",) and not callable(v)}
+                if k not in ("optimizer", "_is_initial")}
     def load_state_dict(self, sd):
         self.__dict__.update(sd)
     def step(self, epoch=None):
-        self.last_epoch = self.last_epoch + 1 if epoch is None else epoch
         self._step_count += 1
-        lrs = self.get_lr()
-        self._last_lr = list(lrs)
+        self._get_lr_called_within_step = True
+        try:
+            self.last_epoch = self.last_epoch + 1 if epoch is None else epoch
+            lrs = self.get_lr()
+        finally:
+            self._get_lr_called_within_step = False
         _set_lrs(self.optimizer, lrs)
+        self._last_lr = _base_lrs(self.optimizer)
+
+
+def _lambda_state_dict(scheduler):
+    from types import FunctionType
+    state = {k: v for k, v in scheduler.__dict__.items()
+             if k not in ("optimizer", "lr_lambdas", "_is_initial")}
+    state["lr_lambdas"] = [
+        None if isinstance(fn, FunctionType) else getattr(fn, "__dict__", {}).copy()
+        for fn in scheduler.lr_lambdas
+    ]
+    return state
+
+
+def _load_lambda_state_dict(scheduler, state):
+    # Keep the receiving callables and the caller's checkpoint dictionary intact.
+    lambda_states = state["lr_lambdas"]
+    scheduler.__dict__.update({k: v for k, v in state.items() if k != "lr_lambdas"})
+    for index, attrs in enumerate(lambda_states):
+        if attrs is not None:
+            scheduler.lr_lambdas[index].__dict__.update(attrs)
+
+
+def _lr_lambdas(optimizer, lr_lambda):
+    n = len(optimizer.param_groups)
+    if isinstance(lr_lambda, (list, tuple)):
+        if len(lr_lambda) != n:
+            raise ValueError(f"Expected {n} lr_lambdas, but got {len(lr_lambda)}")
+        return list(lr_lambda)
+    return [lr_lambda] * n
 
 
 class LambdaLR(LRScheduler):
     def __init__(self, optimizer, lr_lambda, last_epoch=-1, verbose=False):
         self.base_lrs = lambda_base_lrs(optimizer, last_epoch)
-        n = len(self.base_lrs)
-        self.lr_lambdas = list(lr_lambda) if isinstance(lr_lambda, (list, tuple)) else [lr_lambda]*n
+        self.lr_lambdas = _lr_lambdas(optimizer, lr_lambda)
         super().__init__(optimizer, last_epoch, verbose)
-    def get_lr(self):
-        e = max(self.last_epoch, 0)
-        return [b * fn(e) for b, fn in zip(self.base_lrs, self.lr_lambdas)]
-
     def state_dict(self):
-        state = super().state_dict()
-        state["lr_lambdas"] = [None] * len(self.lr_lambdas)
-        for index, function in enumerate(self.lr_lambdas):
-            if not isinstance(function, _types.FunctionType):
-                state["lr_lambdas"][index] = getattr(function, "__dict__", {}).copy()
-        return state
+        return _lambda_state_dict(self)
+    def load_state_dict(self, sd):
+        _load_lambda_state_dict(self, sd)
+    def get_lr(self):
+        return [b * fn(self.last_epoch) for b, fn in zip(self.base_lrs, self.lr_lambdas)]
 
-    def load_state_dict(self, state_dict):
-        state = state_dict.copy()
-        lambda_states = state.pop("lr_lambdas")
-        super().load_state_dict(state)
-        state_dict["lr_lambdas"] = lambda_states
-        for function, function_state in zip(self.lr_lambdas, lambda_states):
-            if function_state is not None:
-                function.__dict__.update(function_state)
+
 
 
 class MultiplicativeLR(LRScheduler):
     def __init__(self, optimizer, lr_lambda, last_epoch=-1, verbose=False):
-        self.base_lrs = _base_lrs(optimizer)
-        n = len(self.base_lrs)
-        self.lr_lambdas = list(lr_lambda) if isinstance(lr_lambda, (list, tuple)) else [lr_lambda]*n
+        self.lr_lambdas = _lr_lambdas(optimizer, lr_lambda)
+        for fn in self.lr_lambdas:
+            if not callable(fn):
+                raise TypeError(f"lr_lambda should be a function, but got {type(fn).__name__}")
         super().__init__(optimizer, last_epoch, verbose)
+    def state_dict(self):
+        return _lambda_state_dict(self)
+    def load_state_dict(self, sd):
+        _load_lambda_state_dict(self, sd)
     def get_lr(self):
-        if self.last_epoch <= 0:
-            return list(self.base_lrs)
-        return [lr * fn(self.last_epoch) for lr, fn in zip(self._last_lr, self.lr_lambdas)]
+        current_lrs = _base_lrs(self.optimizer)
+        if self._is_initial:
+            return current_lrs
+        return [lr * fn(self.last_epoch) for lr, fn in zip(current_lrs, self.lr_lambdas)]
 
 
 class ConstantLR(LRScheduler):
@@ -121,7 +171,18 @@ class StepLR(LRScheduler):
         self.base_lrs = _base_lrs(optimizer)
         super().__init__(optimizer, last_epoch, verbose)
     def get_lr(self):
-        return [b * self.gamma ** (max(self.last_epoch, 0) // self.step_size) for b in self.base_lrs]
+        if self.last_epoch == 0 or self.last_epoch % self.step_size:
+            return _base_lrs(self.optimizer)
+        return [lr * self.gamma for lr in _base_lrs(self.optimizer)]
+
+    def step(self, epoch=None):
+        if epoch is None:
+            return super().step()
+        self.last_epoch = epoch
+        self._step_count += 1
+        self._last_lr = [
+            lr * self.gamma ** (epoch // self.step_size) for lr in self.base_lrs]
+        _set_lrs(self.optimizer, self._last_lr)
 
 
 class MultiStepLR(LRScheduler):

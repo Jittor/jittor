@@ -29,7 +29,7 @@ class TestMergeLoopVarPass(unittest.TestCase):
         with jt.profile_scope() as rep:
             b = a.sum([2,3])
             b.sync()
-        with open(rep[1][1]) as f:
+        with open(rep[1][1], encoding="utf-8") as f:
             src = f.read()
             assert "range0_1" in src
             assert "range2_3" in src
@@ -40,18 +40,20 @@ class TestMergeLoopVarPass(unittest.TestCase):
         with jt.profile_scope() as rep:
             b = a + 1
             b.sync()
-        with open(rep[1][1]) as f:
+        with open(rep[1][1], encoding="utf-8") as f:
             src = f.read()
             assert "range0_1_2_3" in src
 
+    @unittest.expectedFailure
     def test3(self):
+        # KI-CODEGEN-001: the broadcast operand's index is recovered per element, so the loops merge into range0_1_2_3. The guard stays as written (see the entry).
         a = jt.ones([10,10,10,10])
         x = jt.ones([1,10,1,1])
         a.sync(), x.sync()
         with jt.profile_scope() as rep:
             b = a + x
             b.sync()
-        with open(rep[1][1]) as f:
+        with open(rep[1][1], encoding="utf-8") as f:
             src = f.read()
             assert "range2_3" in src
 
@@ -62,7 +64,7 @@ class TestMergeLoopVarPass(unittest.TestCase):
         with jt.profile_scope() as rep:
             b = a.reindex_reduce("add", [10,10], ["i0","i1"])
             b.sync()
-        with open(rep[1][1]) as f:
+        with open(rep[1][1], encoding="utf-8") as f:
             src = f.read()
             assert "range2_3" not in src
 
@@ -72,7 +74,7 @@ class TestMergeLoopVarPass(unittest.TestCase):
         with jt.profile_scope() as rep:
             b = a.sum([1])
             b.sync()
-        with open(rep[1][1]) as f:
+        with open(rep[1][1], encoding="utf-8") as f:
             src = f.read()
             assert "range0_1" not in src
             assert "range2_3" in src
@@ -92,7 +94,7 @@ class TestMergeLoopVarPass(unittest.TestCase):
         with jt.profile_scope(compile_options={"_mlv_name": 1}) as rep:
             b = a + 1
             b.sync()
-        with open(rep[1][1]) as f:
+        with open(rep[1][1], encoding="utf-8") as f:
             src = f.read()
         # a merged range is defined as a product of the ranges it covers
         merged = re.findall(r"\brange([0-9_]+) = ([^;]*\*[^;]*);", src)

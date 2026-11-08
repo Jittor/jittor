@@ -133,7 +133,7 @@ namespace jittor
 
         // ---- what the AscendC vector API can reproduce exactly -----------
         // Every entry was measured against the aclnn op the generic path runs
-        // (bench/aclprobe/asc_numerics.cc): add/sub/mul/maximum/minimum/abs/neg
+        // (benchmarks/acl/probes/asc_numerics.cc): add/sub/mul/maximum/minimum/abs/neg
         // are bit-identical over 1e6 mixed values including signed zeros and
         // denormals; div differs by at most 1 ulp.
         const char *binary_intrinsic(NanoString ns)
@@ -487,7 +487,7 @@ namespace jittor
         }
 
         // How many vector cores to spread a kernel over. Measured on
-        // Ascend950PR (bench/aclprobe/asc_fuse_bench.cc): using all 56 rather
+        // Ascend950PR (benchmarks/acl/probes/asc_fuse_bench.cc): using all 56 rather
         // than 48 is worth ~10% at 4M elements and neutral below that; using
         // half of them costs ~80%.
         int vector_cores()

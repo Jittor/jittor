@@ -224,29 +224,16 @@ class TestBF16(unittest.TestCase):
         c = a.maximum(b)
         c.sync()
 
-    @unittest.expectedFailure
     def test_reduce_dtype_infer(self):
-        # KI-TEST-001: reduction dtype inference is not yet consistent.
-        with jt.flag_scope(amp_reg=1):
-            a = jt.random((3,4,5,5)).bfloat16()
-            b = a.sum()
-            b.sync()
-            assert b.dtype == "float32", b.dtype
-        with jt.flag_scope(amp_reg=2):
-            a = jt.random((3,4,5,5)).bfloat16()
-            b = a.sum()
-            b.sync()
-            assert b.dtype == "float32"
-        with jt.flag_scope(amp_reg=0):
-            a = jt.random((3,4,5,5)).bfloat16()
-            b = a.sum()
-            b.sync()
-            assert b.dtype == "float32"
-        with jt.flag_scope(amp_reg=2+4):
-            a = jt.random((3,4,5,5)).bfloat16()
-            b = a.sum()
-            b.sync()
-            assert b.dtype == "bfloat16", b.dtype
+        # sum/mean accumulate through float32 internally and hand back the
+        # input dtype, as torch does for bf16. keep_reduce preserves the same
+        # public dtype rather than widening to float32.
+        for amp in (1, 2, 0, 2 + 4):
+            with jt.flag_scope(amp_reg=amp):
+                a = jt.random((3,4,5,5)).bfloat16()
+                b = a.sum()
+                b.sync()
+                assert b.dtype == "bfloat16", (amp, b.dtype)
 
     def test_white_dtype_infer(self):
         with jt.flag_scope(amp_reg=1):

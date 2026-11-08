@@ -23,7 +23,7 @@ __global__ static void transpose_kernel(
             index_t yi@i = t / ystride@i;
             t -= yi@i * ystride@i;
         )
-        index_t xid = @for(d, 0, DIM, + yi@{AXES@d} * xstride@d);
+        index_t xid = @for(d, 0, DIM, + yi@d * xstride@d);
         yp[yid] = xp[xid];
     }
 }
@@ -82,9 +82,9 @@ void TransposeOp::jit_run() {
     @for(i, 0, DIM, index_t yshape@i = y->shape[@i];)
     index_t ystride@{DIM-1} = 1;
     @for(i, DIM-2, -1, -1, auto ystride@i = ystride@{i+1} * yshape@{i+1};)
-    @for(i, 0, DIM, index_t xshape@i = yshape@{AXES@i};)
-    index_t xstride@{DIM-1} = 1;
-    @for(i, DIM-2, -1, -1, auto xstride@i = xstride@{i+1} * xshape@{i+1};)
+    // xstride{i}: the stride in x of the axis that output axis i reads. The
+    // permutation is a runtime value (see TransposeOp::jit_prepare).
+    @for(i, 0, DIM, index_t xstride@i = x->storage_stride(axes[@i]);)
     int block = 256;
     int grid = (num + block - 1) / block;
     if (grid > 65535)

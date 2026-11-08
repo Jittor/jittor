@@ -23,17 +23,11 @@ import pytest
 from _helpers.child_process import run_child_script as _run_child_script
 from _helpers.child_process import run_mpi_python
 
-pass_this_test = False
-msg = ""
-mid = 0
-if hasattr(os, "uname") and os.uname()[1] == "jittor-ce":
-    mid = 1
-try:
-    traindir = ["/data1/cjld/imagenet/train/","/home/cjld/imagenet/train/"][mid]
-    assert os.path.isdir(traindir)
-except Exception as e:
-    pass_this_test = True
-    msg = str(e)
+# An ImageNet-layout training directory (one subdirectory per class). The
+# multi-worker test only runs where a maintainer points this at one.
+traindir = os.environ.get("JITTOR_TEST_IMAGENET_TRAIN", "")
+pass_this_test = not os.path.isdir(traindir)
+msg = "set JITTOR_TEST_IMAGENET_TRAIN to an ImageNet-layout train directory"
 
 @unittest.skipIf(pass_this_test, f"can not run imagenet dataset test: {msg}")
 class TestDataset(unittest.TestCase):
@@ -133,6 +127,22 @@ class YourDataset5(Dataset):
     def __getitem__(self, k):
         return { "a":np.array([1,2,3]) }
 
+
+def _delay_dataset_worker_init(worker_id):
+    # Keep the parent waiting longer than one native queue poll, without
+    # depending on model-sized JIT compilation to reproduce the delay.
+    import time
+    time.sleep(5.5)
+
+
+class DelayedWorkerDataset(Dataset):
+    def __init__(self):
+        super().__init__(worker_init_fn=_delay_dataset_worker_init)
+        self.set_attrs(total_len=2)
+
+    def __getitem__(self, k):
+        return np.asarray([k], dtype=np.int32)
+
 class TestDataset2(unittest.TestCase):
     def test_dataset_use_jittor(self):
         dataset = YourDataset().set_attrs(batch_size=256, shuffle=True, num_workers=4)
@@ -148,7 +158,35 @@ class TestDataset2(unittest.TestCase):
     def test_dataset_use_jittor_cuda(self):
         self.test_dataset_use_jittor()
 
+    def _assert_delayed_workers_deliver_batches(self):
+        dataset = DelayedWorkerDataset().set_attrs(
+            batch_size=1, shuffle=False, num_workers=2)
+        batches = [batch[0].numpy().copy() for batch in dataset]
+        np.testing.assert_array_equal(batches, [[0], [1]])
+
+    @jt.flag_scope(use_cuda=0)
+    def test_live_worker_can_exceed_queue_poll_interval(self):
+        self._assert_delayed_workers_deliver_batches()
+
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
+    @jt.flag_scope(use_cuda=1)
+    def test_live_worker_can_exceed_queue_poll_interval_cuda(self):
+        self._assert_delayed_workers_deliver_batches()
+
 class TestDatasetSeed(unittest.TestCase):
+    def test_derived_worker_seed_fits_jittor_seed_binding(self):
+        from jittor.dataset.dataset import _dataset_worker_seed
+
+        maximum = 0x7fffffff
+        seeds = [
+            _dataset_worker_seed(2**63 - 1, 3, 0, 0),
+            _dataset_worker_seed(2**63 - 1, 3, 7, 0),
+            _dataset_worker_seed(2**63 - 1, 3, 0, 1),
+        ]
+        assert all(0 <= seed <= maximum for seed in seeds)
+        assert seeds[0] != seeds[1]
+        assert seeds[0] != seeds[2]
+
     def test_np(self):
 
         dataset = YourDataset2().set_attrs(batch_size=1, shuffle=True, num_workers=4)
@@ -232,17 +270,9 @@ class TestDatasetSeed(unittest.TestCase):
             assert y[i] == b
             assert z[i] == c
 
-    # A real, reproducible defect, not a flake: when a worker process is killed
-    # the parent is supposed to notice (SIGCHLD) and quick-exit. It does not --
-    # it blocks waiting for data from the dead worker until something times it
-    # out. Measured alone on an idle box: fails at the child timeout, every
-    # time, and it failed the same way at the branch point (9eb696d9), so it is
-    # nobody's regression. Registered in the A list on the board.
-    #
-    # `xfail(strict=True)` rather than a bare red or a skip: a red that is
-    # expected teaches people to read past the whole gate, and a skip would let
-    # the day someone fixes this pass unnoticed. Strict means the fix turns the
-    # gate red until this marker is deleted -- which is the correct next event.
+    # When a worker process is killed the parent must not block forever on
+    # data from the dead worker. The ring-buffer wait is bounded, so the child
+    # fails promptly with a timeout message instead of hanging the gate.
     def test_children_died(self):
         if os.name == 'nt':
             # TODO: windows cannot pass this test now
@@ -272,12 +302,16 @@ if __name__ == "__main__":
         dataset.workers[0].p.kill()
         pass
 """
-        # The ring wait is bounded, so a killed worker must fail promptly.
-        r = run_child_script(src, timeout=20)
+        # The ring wait is bounded (5 s, `pop_for(5000)` in dataset.py), so a
+        # killed worker must fail promptly rather than hang. The child's own
+        # limit also pays for starting Python and importing jittor, which on a
+        # loaded gate machine took it past 20 s before the 5 s wait began.
+        r = run_child_script(src, timeout=120)
         s = r.stderr.decode()
         print(s)
         assert r.returncode != 0
-        assert "ring buffer pop timed out" in s
+        assert "dataset worker(s)" in s
+        assert "exit code" in s
 
 
     @_test_capability.library_required('mpi', backend=jt)
@@ -503,9 +537,10 @@ class TestDatasetDeepcopy(unittest.TestCase):
 
 class TestWorkerExceptionPropagation(unittest.TestCase):
     """An exception raised inside a worker must come back to the caller as an
-    exception. It used to be delivered as SIGINT to the parent, which jittor's
-    handler turns into an immediate process exit -- indistinguishable from the
-    user pressing Ctrl-C, and impossible to catch."""
+    exception of the same class. It used to be delivered as SIGINT to the
+    parent, which jittor's handler then turned into an immediate process exit
+    -- indistinguishable from the user pressing Ctrl-C, and impossible to
+    catch."""
 
     SRC = """
 import numpy as np
@@ -531,6 +566,7 @@ if __name__ == "__main__":
         print("HAS_MESSAGE=%s" % ("boom in worker" in str(e)))
         print("HAS_TRACEBACK=%s" % ("__getitem__" in str(e)))
         print("HAS_VALUEERROR=%s" % ("ValueError" in str(e)))
+        print("DETAIL=%s" % str(e))
     else:
         print("NO_EXCEPTION")
     print("STILL_ALIVE")
@@ -545,10 +581,13 @@ if __name__ == "__main__":
             % (r.returncode, out[-2000:], err[-3000:]))
         assert "STILL_ALIVE" in out, out[-2000:] + err[-2000:]
         assert "NO_EXCEPTION" not in out, out[-2000:]
-        assert "RAISED=RuntimeError" in out, out[-2000:]
+        # The worker's own class, so `except ValueError` around the loop works.
+        assert "RAISED=ValueError" in out, out[-2000:]
         assert "HAS_MESSAGE=True" in out, out[-2000:]
         assert "HAS_TRACEBACK=True" in out, out[-2000:]
         assert "HAS_VALUEERROR=True" in out, out[-2000:]
+        # The traceback is in the exception; the worker does not print it too.
+        assert "boom in worker" not in err, err[-2000:]
         # and nothing pretends the user pressed Ctrl-C
         assert "Caught SIGINT" not in err, err[-2000:]
 
@@ -573,11 +612,12 @@ if __name__ == "__main__":
             % (r.returncode, out[-2000:], err[-3000:]))
         assert "STILL_ALIVE" in out, out[-2000:] + err[-2000:]
         assert "NO_EXCEPTION" not in out, out[-2000:]
-        assert "RAISED=RuntimeError" in out, out[-2000:]
+        assert "RAISED=ValueError" in out, out[-2000:]
         assert "HAS_MESSAGE=True" in out, out[-2000:]
         assert "HAS_TRACEBACK=True" in out, out[-2000:]
         assert "HAS_VALUEERROR=True" in out, out[-2000:]
         assert "Caught SIGINT" not in err, err[-2000:]
+        assert "boom in worker_init_fn" not in err, err[-2000:]
 
 
 class TestWorkerDeathWakesTheParent(unittest.TestCase):
@@ -644,7 +684,7 @@ if __name__ == "__main__":
             "was stuck.\n%s\n%s" % (r.returncode, out[-2000:], err[-4000:]))
         assert "STILL_ALIVE" in out, out[-2000:] + err[-2000:]
         assert "NO_EXCEPTION" not in out, out[-2000:]
-        assert "RAISED=RuntimeError" in out, out[-2000:]
+        assert "RAISED=ValueError" in out, out[-2000:]
         assert "HAS_MESSAGE=True" in out, out[-2000:]
 
 

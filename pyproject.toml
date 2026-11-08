@@ -34,18 +34,32 @@ dependencies = [
 jtrun = "jittor.distributed.launch:main"
 
 [project.optional-dependencies]
+# Compiler/runtime/CCCL only. Math libraries (cuBLAS, cuDNN, etc.) must also
+# be present in the selected toolkit. Exact transitive pins prevent nvcc's
+# unbounded dependencies from silently upgrading to an unvalidated minor.
+cuda13 = [
+    "nvidia-cuda-nvcc==13.0.88; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.8'",
+    "nvidia-cuda-runtime==13.0.96; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.8'",
+    "nvidia-cuda-crt==13.0.88; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.8'",
+    "nvidia-nvvm==13.0.88; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.8'",
+    "nvidia-cuda-cccl==13.0.85; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.8'",
+]
 cuda12 = [
     "cuda-toolkit[cublas,cudart,cufft,curand,cusparse,nvjitlink,nvrtc,nvtx]==12.2.2; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.8'",
     # A range, not a pin: every modern torch pins its own exact
     # nvidia-cudnn-cu12, and pip reads two different exact pins on one
     # distribution as a conflict. Pinning here made jittor[cuda12] and torch
-    # uninstallable together. Keep in sync with jittor_utils/cuda_wheel.py.
-    "nvidia-cudnn-cu12>=8.9.7,<10; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.8'",
+    # uninstallable together. The floor is 9, not the 8.9.7 the wheel stack
+    # accepts (jittor_utils/cuda_wheel.py): cuDNN's fused attention needs
+    # nvidia-cudnn-frontend 1.30, which builds no graph against 8.x -- every
+    # call declines silently and attention runs as matmuls, 2.4x slower on a
+    # Qwen3 prefill. Torch 2.5 and older pin cuDNN 8.9 and cannot co-install.
+    "nvidia-cudnn-cu12>=9,<10; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.8'",
     "nvidia-nccl-cu12==2.18.3; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.8'",
     # Headers for cuDNN's fused attention (backends/cuda/kernels/nn/
     # cudnn_attention_cuda.py). Without them that kernel declines and
     # attention takes the matmul-and-softmax path.
-    "nvidia-cudnn-frontend>=1.30,<2; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.9'",
+    "nvidia-cudnn-frontend>=1.30,<2; sys_platform == 'linux' and platform_machine == 'x86_64' and python_version >= '3.10'",
 ]
 # Device time in `jt.profile` (python/jittor/profiling/_cupti.py): CUPTI for
 # the CUDA 12.2 runtime `cuda12` installs. Without it a profile reports device
@@ -107,7 +121,7 @@ include-package-data = true
 # Single source of runtime resources. MANIFEST.in is generated from these
 # declarations plus the sdist-only selections below; setup.py has no inventory.
 [tool.setuptools.package-data]
-"jittor" = ["__init__.pyi", "contrib/math_util/src/*", "build/utils/class/*"]
+"jittor" = ["__init__.pyi", "contrib/math_util/src/*"]
 "jittor_utils" = ["__init__.pyi"]
 "jittor.src" = ["**/*.cc", "**/*.h"]
 "jittor.backends.cpu" = ["**/*.cc", "**/*.h", "**/*.cpp", "**/*.cu", "**/*.cuh"]
@@ -121,8 +135,8 @@ include-package-data = true
 "*" = ["**/__pycache__/**", "**/.pytest_cache/**", "**/*.py[cod]"]
 
 [tool.jittor.sdist]
-include = ["examples/**", "tools/**", "docs/**", "requirements/examples.txt", "requirements/docs.in", "requirements/docs.txt"]
-exclude = ["compat/**", "python/jittor/compat/**", "adapters/**", "build/**", "dist/**"]
+include = ["examples/**", "tools/**", "docs/**", "README.en.md", "requirements/examples.txt", "requirements/docs.in", "requirements/docs.txt"]
+exclude = ["compat/**", "python/jittor/compat/**", "adapters/**", "build/**", "dist/**", "docs/slides/**"]
 
 [tool.setuptools.dynamic]
 version = { attr = "jittor.__version__" }
@@ -229,7 +243,7 @@ notebook_metadata_filter = "jupytext,kernelspec"
 cell_metadata_filter = "tags"
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "compat/tests", "adapters/tests"]
+testpaths = ["tests", "compat/tests"]
 # build is a maintained test domain; pytest's default excludes it recursively.
 norecursedirs = ["*.egg", ".*", "_darcs", "CVS", "dist", "node_modules", "venv", "{arch}"]
 # No `pythonpath` here: tests/conftest.py decides which checkout to import,

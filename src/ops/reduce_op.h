@@ -12,8 +12,8 @@ namespace jittor {
 struct ReduceOp : Op {
     static constexpr bool accepts_storage_strides = true;
     Var* x, * y;
-    uint16 reduce_mask; // i-th bit is 1 of dim-i is reduced
-    uint16 keepdims_mask;
+    uint32 reduce_mask; // i-th bit is 1 of dim-i is reduced
+    uint32 keepdims_mask;
     ReduceOp(Var* x, NanoString op, int dim, bool keepdims=false);
     ReduceOp(Var* x, NanoString op, NanoVector dims=NanoVector(), bool keepdims=false);
     // @pybind(None)

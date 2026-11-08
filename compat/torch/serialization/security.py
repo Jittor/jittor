@@ -1,6 +1,65 @@
 """Restricted pickle globals shared by portable and Torch archive readers."""
 import pickle as _pickle
 
+import jittor as jt
+
+from ..context import get_install_context
+
+
+def _user_globals():
+    return get_install_context(jt).state.setdefault("serialization_safe_globals", [])
+
+
+def add_safe_globals(safe_globals):
+    entries = list(safe_globals)
+    for entry in entries:
+        value, path = entry if isinstance(entry, tuple) else (entry, None)
+        if path is not None and not isinstance(path, str):
+            raise TypeError("safe global alias must be a fully qualified string")
+        if not hasattr(value, "__module__") or not hasattr(value, "__qualname__"):
+            raise TypeError("safe globals must be functions or classes")
+    registered = _user_globals()
+    for entry in entries:
+        if entry not in registered:
+            registered.append(entry)
+
+
+def get_safe_globals():
+    return list(_user_globals())
+
+
+def clear_safe_globals():
+    _user_globals().clear()
+
+
+class safe_globals:
+    """Temporarily allow explicitly trusted classes/functions when loading."""
+
+    def __init__(self, globals):
+        self.globals = list(globals)
+
+    def __enter__(self):
+        previous = get_safe_globals()
+        add_safe_globals(self.globals)
+        self.added = [entry for entry in get_safe_globals() if entry not in previous]
+
+    def __exit__(self, *exc):
+        registered = _user_globals()
+        for entry in self.added:
+            if entry in registered:
+                registered.remove(entry)
+        return False
+
+
+def _registered_global(module, name):
+    path = module + "." + name
+    for entry in _user_globals():
+        value, alias = entry if isinstance(entry, tuple) else (entry, None)
+        if path == (alias or value.__module__ + "." + value.__qualname__):
+            return value
+    return None
+
+
 _SAFE_NUMPY_NAMES = frozenset((
     # ``_frombuffer`` is how numpy pickles an array that views a buffer, which
     # is what this layer's own ``torch.save`` writes -- without it the shim
@@ -25,6 +84,10 @@ _SAFE_GLOBALS = frozenset((
     ("_codecs", "encode"),
     ("jittor.compat.torch.nested", "_rebuild_var_from_numpy"),
     ("jittor.compat.torch.nested", "_rebuild_nested_tensor"),
+    # ``torch.Size`` is implemented by the immutable tuple subclass
+    # ``_TorchSize``. Portable checkpoints pickle the concrete class name,
+    # so permit that exact value type as well as its public alias below.
+    ("jittor.compat.torch.nested", "_TorchSize"),
     # torch.dtype/torch.device are plain value objects here (an immutable dtype
     # and a name/index pair); older checkpoints reference them by name.
     ("jittor.compat.torch.types", "dtype"),
@@ -45,6 +108,9 @@ def _is_safe_global(module, name):
 
 def _resolve_global(module, name, weights_only):
     """Import module.name, or refuse -- never fabricate an empty class."""
+    registered = _registered_global(module, name) if weights_only else None
+    if registered is not None:
+        return registered
     if weights_only and not _is_safe_global(module, name):
         raise _pickle.UnpicklingError(
             "Weights only load failed: %s.%s is not an allowed global. "

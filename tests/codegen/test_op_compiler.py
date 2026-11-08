@@ -133,27 +133,27 @@ class TestOpCompiler(unittest.TestCase):
         check("@{(a^b) == 7}", "1")
         check("@{b<<a == 5*4}", "1")
         expect_error(lambda: jit_precompile(vars, "@{a"),
-                     exc_type=RuntimeError, match="braces are not matched")
+                     exc_type=RuntimeError, match="Unbalanced braces in JIT source")
         expect_error(lambda: jit_precompile(vars, "@for(a"),
-                     exc_type=RuntimeError, match="braces are not matched")
+                     exc_type=RuntimeError, match="Unbalanced braces in JIT source")
         expect_error(lambda: jit_precompile(vars, "@for(i,l,r)"),
-                     exc_type=RuntimeError, match="for missing arguments")
+                     exc_type=RuntimeError, match="@for takes at least 4 arguments")
         expect_error(lambda: jit_precompile(vars, "@for(i,l,(@i,,,,))"),
-                     exc_type=RuntimeError, match="for missing arguments")
+                     exc_type=RuntimeError, match="@for takes at least 4 arguments")
         expect_error(lambda: jit_precompile(vars, "@for(i,0,10000,@i)"),
-                     exc_type=RuntimeError, match="Too much step")
+                     exc_type=RuntimeError, match="JIT macro range expands to more than 1000 steps")
         expect_error(lambda: jit_precompile(vars, "@for(i,0,5,0,@i)"),
-                     exc_type=RuntimeError, match="step must not be zero")
+                     exc_type=RuntimeError, match="@for step must not be zero")
         expect_error(lambda: jit_precompile(vars, "@asd"),
-                     exc_type=RuntimeError, match=r"Jit var\s+asd\s+not found")
+                     exc_type=RuntimeError, match=r"JIT variable\s+asd\s+is not defined")
         expect_error(lambda: jit_precompile(vars, "@if"),
                      # The log joins streamed pieces with a space, so the
                      # echoed line may carry one.
                      exc_type=RuntimeError, match=r"Jit compiler error:\n\s*@if$")
         expect_error(lambda: jit_precompile(vars, "@if(1,1,1,1)"),
-                     exc_type=RuntimeError, match="if wrong arguments")
+                     exc_type=RuntimeError, match="@if takes 2 or 3 arguments")
         expect_error(lambda: jit_precompile(vars, "@if(1)"),
-                     exc_type=RuntimeError, match="if wrong arguments")
+                     exc_type=RuntimeError, match="@if takes 2 or 3 arguments")
         expect_error(
             lambda: jit_precompile(vars, "#define OP1(a,b) a+b\n@expand_macro(OP1,1)"),
             exc_type=RuntimeError,
@@ -198,9 +198,9 @@ class TestOpCompiler(unittest.TestCase):
 
         # the runaway guard still has to fire on a genuinely huge expansion
         expect_error(lambda: jit_precompile(vars, "@for(i,0,10000,@i)"),
-                     exc_type=RuntimeError, match="Too much step")
+                     exc_type=RuntimeError, match="JIT macro range expands to more than 1000 steps")
         expect_error(lambda: jit_precompile(vars, "@for(i,10000,0,-1,@i)"),
-                     exc_type=RuntimeError, match="Too much step")
+                     exc_type=RuntimeError, match="JIT macro range expands to more than 1000 steps")
 
     def test_strcmp(self):
         vars = {"Tx":"float"}

@@ -333,6 +333,23 @@ class TestAutocastTraining(unittest.TestCase):
                     "bfloat16 autocast reached %.5f against float32's %.5f on %s"
                     % (losses[-1], base[-1], device))
 
+    def test_layer_norm_output_stays_float32_under_autocast(self):
+        # ATen keeps layer_norm on the float32 autocast list: inputs are cast,
+        # the op runs in float32, and the result stays float32 for the next op
+        # to cast. Narrowing it here rounded twice and pushed CPU bf16 autocast
+        # training 29.3% from float32, outside the suite's 25% gate.
+        for device in _DEVICES:
+            for dtype in (torch.float16, torch.bfloat16):
+                with self.subTest(device=device, dtype=dtype):
+                    x = torch.randn(4, 8, device=device).to(dtype)
+                    with torch.autocast(device_type=device, dtype=dtype):
+                        out = torch.nn.functional.layer_norm(x, (8,))
+                    self.assertEqual(str(out.dtype), "torch.float32")
+                    # Leaving the region restores the ordinary half-in,
+                    # half-out contract.
+                    after = torch.nn.functional.layer_norm(x, (8,))
+                    self.assertEqual(str(after.dtype), "torch." + str(dtype).split(".")[-1])
+
     def test_float16_autocast_with_grad_scaler(self):
         for device in _DEVICES:
             with self.subTest(device=device):

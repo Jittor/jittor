@@ -106,7 +106,7 @@ class TestOutputStoresStayOrdinary(unittest.TestCase):
             source = library.replace("_op.so", "_op.cc")
             if not os.path.exists(source):
                 continue
-            text = open(source).read()
+            text = open(source, encoding="utf-8").read()
             if "#define op2_OP subtract" in text:
                 sources.append((source, text))
         self.assertTrue(sources, "no fused subtract kernel, so nothing was checked")

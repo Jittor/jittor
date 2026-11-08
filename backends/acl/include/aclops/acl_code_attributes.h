@@ -37,6 +37,7 @@ inline acl_data::AclAttrSchema acl_code_attribute_schema(const string& name) {
     auto defaulted = [](acl_data::AclDataValue value) { acl_data::AclAttrField field; field.type=value.type;
         field.required=false; field.has_default=true; field.default_value=std::move(value); return field; };
 
+    if (name == "Gelu" || name == "GeluBackward") return {{"approximate", required(Type::int64)}};
     if (name == "Softmax") return {{"dim", required(Type::int64)}};
     if (name == "SwiGlu") return {{"dim", required(Type::int64)}};
     if (name == "SoftmaxBackward") return {{"dim", required(Type::int64)}};
@@ -45,8 +46,10 @@ inline acl_data::AclAttrSchema acl_code_attribute_schema(const string& name) {
     if (name == "Transpose") return {{"axes", required(Type::int64_vector)}};
     if (name == "Cumsum") return {{"dim", required(Type::int64)}};
     if (name == "Gather") return {{"dim", required(Type::int64)}};
+    if (name == "GatherV2") return {{"dim", required(Type::int64)}};
+    if (name == "IndexCopy") return {{"dim", required(Type::int64)}};
     if (name == "Scatter") return {{"axis", required(Type::int64)}, {"reduction", required(Type::int64)}};
-    if (name == "Conv2d") return {{"convStrides", required(Type::int64_vector)}, {"convPads", required(Type::int64_vector)}, {"convDilations", required(Type::int64_vector)}, {"group", required(Type::int64)}, {"convOutPads", required(Type::int64_vector)}, {"cube_math_type", required(Type::int64)}};
+    if (name == "Conv2d") return {{"convStrides", required(Type::int64_vector)}, {"convPads", required(Type::int64_vector)}, {"convDilations", required(Type::int64_vector)}, {"group", required(Type::int64)}, {"convOutPads", required(Type::int64_vector)}, {"cube_math_type", required(Type::int64)}, {"is_transposed", defaulted(acl_data::AclDataValue::bool_value_of(false))}};
     if (name == "Conv2dBackward") return {{"convStrides", required(Type::int64_vector)}, {"convPads", required(Type::int64_vector)}, {"convDilations", required(Type::int64_vector)}, {"group", required(Type::int64)}, {"convOutPads", required(Type::int64_vector)}, {"cube_math_type", required(Type::int64)}};
     if (name == "BatchNorm") return {{"is_train", required(Type::boolean)}, {"momentum", required(Type::float64)}, {"eps", required(Type::float64)}};
     if (name == "BatchNormBackward") return {{"is_train", required(Type::boolean)}, {"momentum", required(Type::float64)}, {"eps", required(Type::float64)}};
@@ -62,6 +65,8 @@ inline acl_data::AclAttrSchema acl_code_attribute_schema(const string& name) {
     if (name == "MaxpoolBackward") return {{"kernel_size", required(Type::int64_vector)}, {"poolStrides", required(Type::int64_vector)}, {"poolPads", required(Type::int64_vector)}, {"poolDilations", required(Type::int64_vector)}, {"poolCeil", required(Type::boolean)}, {"countIncludePad", required(Type::boolean)}};
     if (name == "AvgpoolBackward") return {{"kernel_size", required(Type::int64_vector)}, {"poolStrides", required(Type::int64_vector)}, {"poolPads", required(Type::int64_vector)}, {"poolDilations", required(Type::int64_vector)}, {"poolCeil", required(Type::boolean)}, {"countIncludePad", required(Type::boolean)}};
     if (name == "UpsampleNearest2d") return {{"outputSize", required(Type::int64_vector)}, {"inputSize", required(Type::int64_vector)}};
+    if (name == "UpsampleBicubic2d") return {{"outputSize", required(Type::int64_vector)}, {"inputSize", required(Type::int64_vector)}};
+    if (name == "UpsampleBilinear2d") return {{"outputSize", required(Type::int64_vector)}, {"inputSize", required(Type::int64_vector)}, {"alignCorners", required(Type::boolean)}};
     if (name == "UpsampleNearest2dBackward") return {{"outputSize", required(Type::int64_vector)}, {"inputSize", required(Type::int64_vector)}};
     if (name == "Concat") return {{"tensorNum", required(Type::int64)}, {"dim", required(Type::int64)}};
     if (name == "Stack") return {{"tensorNum", required(Type::int64)}, {"dim", required(Type::int64)}};
@@ -78,6 +83,7 @@ inline acl_data::AclAttrSchema acl_code_attribute_schema(const string& name) {
     if (name == "NanToNum") return {{"nan", required(Type::float64)}, {"posinf", required(Type::float64)}, {"neginf", required(Type::float64)}};
     if (name == "FlashAttention") return {{"scale", required(Type::float64)}, {"keepProb", required(Type::float64)}, {"preToken", required(Type::int64)}, {"nextToken", required(Type::int64)}, {"headNum", required(Type::int64)}, {"inputLayout", required(Type::int64_vector)}, {"innerPrecise", required(Type::int64)}, {"sparseMode", required(Type::int64)}, {"psetype", required(Type::int64)}, {"prefix", required(Type::int64_vector)}, {"qStartIdx", required(Type::int64_vector)}, {"kvStartIdx", required(Type::int64_vector)}, {"hasRealshift", required(Type::boolean)}, {"hasDropmask", required(Type::boolean)}, {"hasPaddingmask", required(Type::boolean)}, {"hasAttentmask", required(Type::boolean)}};
     if (name == "FlashAttentionBackward") return {{"scale", required(Type::float64)}, {"keepProb", required(Type::float64)}, {"preToken", required(Type::int64)}, {"nextToken", required(Type::int64)}, {"headNum", required(Type::int64)}, {"inputLayout", required(Type::int64_vector)}, {"innerPrecise", required(Type::int64)}, {"sparseMode", required(Type::int64)}, {"psetype", required(Type::int64)}, {"prefix", required(Type::int64_vector)}, {"qStartIdx", required(Type::int64_vector)}, {"kvStartIdx", required(Type::int64_vector)}, {"hasRealshift", required(Type::boolean)}, {"hasDropmask", required(Type::boolean)}, {"hasPaddingmask", required(Type::boolean)}, {"hasAttentmask", required(Type::boolean)}};
+    if (name == "PromptFlashAttention") return {{"scale", required(Type::float64)}, {"headNum", required(Type::int64)}, {"causal", defaulted(acl_data::AclDataValue::bool_value_of(true))}};
     if (name == "IncreFlashAttention") return {{"scale", required(Type::float64)}, {"headNum", required(Type::int64)}, {"keyValueHeadNum", required(Type::int64)}, {"inputLayout", required(Type::int64_vector)}, {"innerPrecise", required(Type::int64)}, {"blockSize", defaulted(acl_data::AclDataValue::int64_value(0))}, {"hasBlockTable", defaulted(acl_data::AclDataValue::bool_value_of(false))}, {"actualSeqLengths", defaulted(acl_data::AclDataValue::int64_vector({}))}};
     if (name == "KVCacheMemcpy") return {{"blockSize", required(Type::int64)}, {"slots", required(Type::int64_vector)}};
     if (name == "Roll") return {{"shifts", required(Type::int64_vector)}, {"dims", required(Type::int64_vector)}};
@@ -85,6 +91,8 @@ inline acl_data::AclAttrSchema acl_code_attribute_schema(const string& name) {
     if (name == "BatchMatMul") return {{"mode", required(Type::int64)}, {"cube_math_type", required(Type::int64)}};
     if (name == "Unary") return {{"operation", required(Type::int64_vector)}};
     if (name == "TruthReduce") return {{"axes", required(Type::int64_vector)}, {"keepdims", required(Type::boolean)}, {"reduce_all", required(Type::boolean)}};
+    if (name == "Sort") return {{"stable", required(Type::boolean)}, {"dim", required(Type::int64)}, {"descending", required(Type::boolean)}};
+    if (name == "Multinomial") return {{"num_samples", required(Type::int64)}, {"replacement", required(Type::boolean)}};
     acl_data::internal_error("ACL runner has no attribute schema: " + name); return {};
 }
 template<class Runner>
@@ -95,6 +103,16 @@ void assign_acl_code_attributes(Runner& op, const acl_data::AclDecodedData& deco
         !(name == "TruthReduce" && (op.name == "All" || op.name == "Any")))
         acl_data::internal_error("attribute schema does not belong to actual runner: " + op.name + " / " + name);
 
+    if (name == "Gelu" || name == "GeluBackward") {
+        const auto approximate = fields.at("approximate").int_value;
+        if (approximate != 0 && approximate != 1)
+            acl_data::user_error("GELU approximation must be 0 (none) or 1 (tanh)");
+        auto attr=std::unique_ptr<GeluAttr>(new GeluAttr());
+        attr->approximate=approximate;
+        op.op_attr=std::move(attr);
+        op.jt_name=name == "Gelu" ? "gelu" : "gelubackward";
+        return;
+    }
     if (name == "SwiGlu") {
         acl_set_swiglu_dim(op, fields.at("dim").int_value, 0);
         op.jt_name="swiglu";
@@ -153,6 +171,20 @@ void assign_acl_code_attributes(Runner& op, const acl_data::AclDecodedData& deco
         op.jt_name="gather";
         return;
     }
+    if (name == "GatherV2") {
+        auto attr=std::unique_ptr<GatherAttr>(new GatherAttr());
+        attr->dim = fields.at("dim").int_value;
+        op.op_attr=std::move(attr);
+        op.jt_name="gather_v2";
+        return;
+    }
+    if (name == "IndexCopy") {
+        auto attr=std::unique_ptr<GatherAttr>(new GatherAttr());
+        attr->dim = fields.at("dim").int_value;
+        op.op_attr=std::move(attr);
+        op.jt_name="indexcopy";
+        return;
+    }
     if (name == "Scatter") {
         auto attr=std::unique_ptr<ScatterAttr>(new ScatterAttr());
         attr->axis = fields.at("axis").int_value;
@@ -168,6 +200,7 @@ void assign_acl_code_attributes(Runner& op, const acl_data::AclDecodedData& deco
         attr->convDilations = fields.at("convDilations").int_values;
         attr->group = fields.at("group").int_value;
         attr->convOutPads = fields.at("convOutPads").int_values;
+        attr->is_transposed = fields.at("is_transposed").bool_value;
         acl_set_cube(op, fields.at("cube_math_type").int_value, 0);
         op.op_attr=std::move(attr);
         op.jt_name="conv2d";
@@ -317,6 +350,23 @@ void assign_acl_code_attributes(Runner& op, const acl_data::AclDecodedData& deco
         attr->inputSize = fields.at("inputSize").int_values;
         op.op_attr=std::move(attr);
         op.jt_name="upsample_nearest2d";
+        return;
+    }
+    if (name == "UpsampleBicubic2d") {
+        auto attr=std::unique_ptr<UpsampleNearest2dAttr>(new UpsampleNearest2dAttr());
+        attr->outputSize = fields.at("outputSize").int_values;
+        attr->inputSize = fields.at("inputSize").int_values;
+        op.op_attr=std::move(attr);
+        op.jt_name="upsample_bicubic2d";
+        return;
+    }
+    if (name == "UpsampleBilinear2d") {
+        auto attr=std::unique_ptr<UpsampleBilinear2dAttr>(new UpsampleBilinear2dAttr());
+        attr->outputSize = fields.at("outputSize").int_values;
+        attr->inputSize = fields.at("inputSize").int_values;
+        attr->alignCorners = fields.at("alignCorners").bool_value;
+        op.op_attr=std::move(attr);
+        op.jt_name="upsample_bilinear2d";
         return;
     }
     if (name == "UpsampleNearest2dBackward") {
@@ -486,6 +536,15 @@ void assign_acl_code_attributes(Runner& op, const acl_data::AclDecodedData& deco
         attr->hasAttentmask = fields.at("hasAttentmask").bool_value;
         op.op_attr=std::move(attr);
         op.jt_name="flashattentionbackward";
+        return;
+    }
+    if (name == "PromptFlashAttention") {
+        auto attr=std::unique_ptr<PromptFlashAttentionAttr>(new PromptFlashAttentionAttr());
+        attr->scale = fields.at("scale").float_value;
+        attr->headNum = fields.at("headNum").int_value;
+        attr->causal = fields.at("causal").bool_value;
+        op.op_attr=std::move(attr);
+        op.jt_name="promptflashattention";
         return;
     }
     if (name == "IncreFlashAttention") {

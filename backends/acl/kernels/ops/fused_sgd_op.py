@@ -18,7 +18,7 @@ def _with_storage(tensor):
 
 
 def fused_sgd_acl(parameters, velocities, gradients, lr, momentum,
-                  weight_decay, dampening, nesterov):
+                  weight_decay, dampening, nesterov, step=1):
     count = len(parameters)
     if count == 0 or any(len(values) != count for values in (velocities, gradients)):
         raise ValueError("fused SGD TensorLists must have one or more entries")
@@ -38,8 +38,12 @@ def fused_sgd_acl(parameters, velocities, gradients, lr, momentum,
         [_with_storage(value) for value in velocities],
         [_with_storage(value) for value in gradients],
         float(lr), float(momentum), float(weight_decay), float(dampening),
-        bool(nesterov), False,
+        bool(nesterov), False, bool(step <= 1),
     )
+    if momentum == 0:
+        # The kernel leaves the velocities alone; hand them back as they are,
+        # as the CUDA kernel does, so nothing rebinds them.
+        return result[:count], list(velocities)
     return result[:count], result[count:]
 
 

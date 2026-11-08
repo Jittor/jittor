@@ -35,6 +35,33 @@ bool graph_capture_supported();
 // @pyjt(graph_capture_begin)
 bool graph_capture_begin();
 
+/** Retained bytes for an admissible explicit CPU-prefix/H2D boundary, or -1.
+ * Every CPU op is still executed on every launch. This is not constant folding.
+ */
+// @pyjt(graph_host_prefix_bytes)
+int64 graph_host_prefix_bytes(const vector<VarHolder*>& roots);
+
+/** Recompute an admissible CPU prefix/H2D, then capture its device suffix. */
+// @pyjt(graph_capture_begin_host_prefix)
+bool graph_capture_begin_host_prefix(const vector<VarHolder*>& roots);
+
+/** Recompute CPU/H2D and launch, or false if its leaves moved after recompute.
+ * On false the caller must release the recording before executor fallback.
+ */
+// @pyjt(graph_launch_host_prefix)
+bool graph_launch_host_prefix(int64 graph);
+
+// Recording-only batch boundary; does not alter Node::_finished or liveness.
+bool graph_capture_host_leaf(Node* node);
+
+// Exact native VarPtr claims for graph_check, with one entry for every pin.
+// Analysis snapshots contain no pins and are intentionally absent here.
+vector<Var*> graph_capture_held_vars();
+
+/** Whether a native device graph capture is currently recording. */
+// @pyjt(graph_capture_active)
+bool graph_capture_active();
+
 /**
     Stop recording and hand back the executable graph as an opaque handle, or
     0 if the recording could not be turned into one (which is not an error:

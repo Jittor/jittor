@@ -17,9 +17,82 @@ from collections.abc import Sequence, Iterable
 
 
 from ._code import acl_code as getitem_cmd
+from .._soc import kernel_available, soc_name
+from ._code import acl_emit, acl_program, canonical_dtype_name
 
 getitem_forward = getitem_cmd
 _slice_zero_cache = OrderedDict()
+_AXIS_GATHER_PROGRAMS = {}
+
+
+def _single_axis_gather_spec(x, slices):
+    """The verified 310P inference subset, before any new-axis removal."""
+    if (not jt.flags.no_grad or not soc_name().startswith("Ascend310P")
+            or canonical_dtype_name(x.dtype) not in ("float16", "float32")):
+        return None
+    items = list(slices) if isinstance(slices, tuple) else [slices]
+    ellipses = [axis for axis, item in enumerate(items) if item is Ellipsis]
+    if len(ellipses) > 1:
+        return None
+    if ellipses:
+        position = ellipses[0]
+        fill = x.ndim - len(items) + 1
+        if fill < 0:
+            return None
+        items[position:position + 1] = [slice(None)] * fill
+    items.extend([slice(None)] * (x.ndim - len(items)))
+    if len(items) != x.ndim:
+        return None
+    selected = None
+    for axis, item in enumerate(items):
+        if isinstance(item, jt.Var):
+            if (selected is not None or item.ndim != 1 or item.shape[0] <= 0
+                    or canonical_dtype_name(item.dtype) not in ("int32", "int64")):
+                return None
+            selected = (axis, item)
+        elif not (isinstance(item, slice) and item.start is None
+                  and item.stop is None and item.step is None):
+            return None
+    if selected is None or any(int(size) <= 0 for size in x.shape):
+        return None
+    # A mixed-device index keeps the existing path. Reading dispatch placement
+    # is metadata only; it does not materialize or inspect any index values.
+    from jittor._runtime.dispatch import dispatch_context
+    if dispatch_context(x).backend != "acl" or dispatch_context(selected[1]).backend != "acl":
+        return None
+    return selected
+
+
+class GatherV2ACL:
+    """Single-axis inference gather with a one-dimensional integer index.
+
+    GatherV2 preserves the existing 310P advanced-index SDK behavior, including
+    its known failure to raise CPU-style errors for out-of-range indices.
+    Numerical support is validated for legal indices; this adds no bounds
+    checking or new gradient contract.
+    """
+
+    def __call__(self, x, dim, index):
+        if not jt.flags.no_grad:
+            raise RuntimeError("ACL single-axis GatherV2 requires no_grad")
+        dim = int(dim) % x.ndim
+        # Adjust legal negative indices once, as the original Index path does.
+        # A modulo would also wrap invalid positive indices and change behavior.
+        index = jt.where(index < 0, index + x.shape[dim], index)
+        shape = list(x.shape)
+        shape[dim] = index.shape[0]
+        program = _AXIS_GATHER_PROGRAMS.get(dim)
+        if program is None:
+            program = acl_program("GatherV2", 2, 1, attributes={"dim": dim})
+            _AXIS_GATHER_PROGRAMS[dim] = program
+        return acl_emit(program, [x, index], [x.dtype], [tuple(shape)])[0]
+
+
+def single_axis_gather_acl(x, slices):
+    selected = _single_axis_gather_spec(x, slices)
+    if selected is None:
+        return None
+    return GatherV2ACL()(x, selected[0], selected[1])
 
 
 def _cached_slice_zero(shape, dtype):
@@ -34,6 +107,16 @@ def _cached_slice_zero(shape, dtype):
     if len(_slice_zero_cache) > 32:
         _slice_zero_cache.popitem(last=False)
     return value
+
+
+#: Assembled slice programs by everything they are derived from: the dtype,
+#: the input shape and the bounds. A decode step slices the same q/k heads on
+#: every layer of every token, and deriving the program again -- a key per
+#: attribute dict, sorted and walked value by value, three times over -- cost
+#: more than everything else the slice does. Bounded like `_ACL_PROGRAMS`,
+#: since a slice tracking a growing cache has a new bound every step.
+_SLICE_PROGRAMS = {}
+_SLICE_PROGRAM_LIMIT = 4096
 
 
 def basic_slice_acl(x, slices):
@@ -57,24 +140,44 @@ def basic_slice_acl(x, slices):
         return None
     slices += (slice(None),) * (x.ndim - len(slices))
 
+    shape = tuple(int(size) for size in x.shape)
     begins = []
     ends = []
-    steps = []
-    axes = []
-    output_shape = []
     for dim, item in enumerate(slices):
-        start, stop, step = item.indices(x.shape[dim])
+        start, stop, _step = item.indices(shape[dim])
         begins.append(start)
         ends.append(stop)
-        steps.append(step)
-        axes.append(dim)
-        output_shape.append(max(0, stop - start))
 
-    if all(
-        start == 0 and stop == int(size) and step == 1
-        for start, stop, step, size in zip(begins, ends, steps, x.shape)
-    ):
-        return x.clone()
+    if all(start == 0 and stop == size
+           for start, stop, size in zip(begins, ends, shape)):
+        # The independent Torch Tensor overrides clone() to copy storage.
+        # A full slice needs the native identity view and its identity gradient.
+        return jt.core.ops.clone(x)
+
+    dtype = canonical_dtype_name(x.dtype)
+    key = (dtype, shape, tuple(begins), tuple(ends))
+    entry = _SLICE_PROGRAMS.get(key)
+    if entry is None:
+        entry = _build_slice_program(shape, begins, ends, dtype)
+        if len(_SLICE_PROGRAMS) >= _SLICE_PROGRAM_LIMIT:
+            _SLICE_PROGRAMS.clear()
+        _SLICE_PROGRAMS[key] = entry
+    program, output_shape, fill_shapes, requires_slice_assign = entry
+    # Capability belongs to this invocation's SoC, not the shape-only program
+    # cache. A program cached on another device cannot grant kernel support.
+    if requires_slice_assign and not kernel_available("StridedSliceAssignV2"):
+        return None
+    inputs = [x]
+    for fill_shape in fill_shapes:
+        inputs.append(_cached_slice_zero(fill_shape, x.dtype))
+    return acl_emit(program, inputs, [x.dtype], [output_shape])[0]
+
+
+def _build_slice_program(shape, begins, ends, dtype):
+    """The program, output shape and gradient zero-fills one slice needs."""
+    steps = [1] * len(shape)
+    axes = list(range(len(shape)))
+    output_shape = [max(0, stop - start) for start, stop in zip(begins, ends)]
 
     forward_attr = code_program(
         [
@@ -94,29 +197,28 @@ def basic_slice_acl(x, slices):
     )
 
     contiguous_last_axis = (
-        _jittor_dtype_name(x.dtype) in ("float16", "bfloat16", "float32")
+        dtype in ("float16", "bfloat16", "float32")
         and all(
-            begin == 0 and end == int(size) and step == 1
-            for begin, end, step, size in zip(begins[:-1], ends[:-1], steps[:-1], x.shape[:-1])
+            begin == 0 and end == size
+            for begin, end, size in zip(begins[:-1], ends[:-1], shape[:-1])
         )
-        and steps[-1] == 1
         and output_shape[-1] > 0
     )
-    inputs = [x]
+    fill_shapes = []
     if contiguous_last_axis:
         before = begins[-1]
-        after = int(x.shape[-1]) - ends[-1]
+        after = shape[-1] - ends[-1]
         concat_inputs = []
         fill_shape = list(output_shape)
         if before:
             fill_shape[-1] = before
-            inputs.append(_cached_slice_zero(fill_shape, x.dtype))
+            fill_shapes.append(list(fill_shape))
             concat_inputs.append("in1")
         concat_inputs.append("dout")
         if after:
             fill_shape[-1] = after
-            inputs.append(_cached_slice_zero(fill_shape, x.dtype))
-            concat_inputs.append("in{}".format(len(inputs) - 1))
+            fill_shapes.append(list(fill_shape))
+            concat_inputs.append("in{}".format(len(fill_shapes)))
         grad_inputs = "\n".join("op.add({}, true);".format(name) for name in concat_inputs)
         grad_src = code_program(
             [
@@ -148,14 +250,14 @@ def basic_slice_acl(x, slices):
                 "\nop.run();\n",
             ]
         )
-    return getitem_forward(
+    program = acl_program(
         "SliceV2",
-        inputs,
-        output_dtypes=[x.dtype],
-        output_shapes=[output_shape],
+        1 + len(fill_shapes),
+        1,
         attr_code=forward_attr,
         cuda_grad_src=[grad_src],
-    )[0]
+    )
+    return program, output_shape, fill_shapes, not contiguous_last_axis
 
 
 def caculate_shape(tensors):
@@ -215,6 +317,7 @@ def can_broadcast_and_shape(shape1, shape2):
 class GetItemACL(jt.Function):
     def __init__(self):
         self.type_ = "notype"
+        self.empty_index_shape = None
 
     def stride(self, x, dim):
         stride = 1
@@ -232,6 +335,7 @@ class GetItemACL(jt.Function):
         if tensor_index.ndim != 1 or _jittor_dtype_name(tensor_index.dtype) not in (
             "int32",
             "int64",
+            "bool",
         ):
             return None
 
@@ -263,8 +367,20 @@ class GetItemACL(jt.Function):
             ):
                 return None
 
+        if _jittor_dtype_name(tensor_index.dtype) == "bool":
+            if tensor_index.shape[0] != x.shape[tensor_dim]:
+                raise IndexError("boolean index length does not match indexed dimension")
+            # Nonzero produces the coordinates on the device; only their count
+            # comes back to the host, to size the output.
+            tensor_index = tensor_index.nonzero().reshape((-1,))
+
         output_shape = list(x.shape)
         output_shape[tensor_dim] = int(tensor_index.shape[0])
+        if output_shape[tensor_dim] == 0:
+            # Nothing selected: there is no gather to lower, and CANN's Index
+            # rejects a zero-length index.
+            self.empty_index_shape = tuple(output_shape)
+            return ()
         indices = []
         for dim, size in enumerate(output_shape):
             index = tensor_index if dim == tensor_dim else jt.arange(int(x.shape[dim]))
@@ -313,8 +429,18 @@ class GetItemACL(jt.Function):
         for i, s in enumerate(slices):
             if isinstance(s, int) and s < 0:
                 slices[i] = s + x.shape[i]
+            elif isinstance(s, list):
+                # A Python list inside a tuple is an advanced index, including
+                # x[[rows], ...]. Lower it through the same device-side Index
+                # path as a tensor index, rather than treating it as a slice.
+                if not all(isinstance(v, (int, np.integer)) for v in s):
+                    raise TypeError("ACL getitem list indices must contain integers")
+                slices[i] = jt.array(s, dtype="int32")
         slices = tuple(slices)
         expanded_indices = self.expand_single_tensor_index(x, slices)
+        if self.empty_index_shape is not None:
+            self.type_ = "empty_index"
+            return jt.empty(self.empty_index_shape, dtype=x.dtype)
         if expanded_indices is not None:
             slices = expanded_indices
         slices_list = list(slices)
@@ -437,8 +563,12 @@ class GetItemACL(jt.Function):
         return result
 
     def grad(self, grad_output):
+        if self.type_ == "empty_index":
+            return jt.zeros(self.x_shape, dtype=grad_output.dtype), None
         if self.type_ == "index":
             indices = self.indices
+            if not kernel_available("IndexPutImplAccumulate"):
+                return self._grad_index_composite(grad_output), None
             # The C++ runner zeroes the output itself (aclrtMemsetAsync) then
             # scatter-accumulates grad_output at the indices. Previously the base
             # was an externally-created jt.zeros passed as a write-only output;
@@ -463,6 +593,12 @@ class GetItemACL(jt.Function):
             # 注意前向的维数可能会被压缩，所以这里要还原
             for dim in self.squeeze_dims:
                 grad_output = jt.unsqueeze(grad_output, dim)
+            if not kernel_available("StridedSliceAssignV2"):
+                # 310P 缺 StridedSliceAssignV2：零基座 + IndexPutImpl 组合散射
+                from .setitem_op import SetItemACL
+
+                base = jt.zeros(self.x_shape, dtype=grad_output.dtype)
+                return SetItemACL()(base, slices, grad_output), None
             # 适配华为奇怪的要求，最后一个维度的step必须是1
             expand_dim = False
             if isinstance(slices[-1], slice):
@@ -532,3 +668,26 @@ class GetItemACL(jt.Function):
             return self.mask.float()
         else:
             raise NotImplementedError(f"ACL getitem backward does not support {self.type_!r} gradients")
+
+    def _grad_index_composite(self, grad_output):
+        """Fancy-index backward for SoCs where ``IndexPutImplAccumulate`` is
+        absent or broken (Ascend310P): fold the indexed dims into flat row ids
+        and ``scatter_add`` grad rows into a zero base."""
+        x_shape = [int(size) for size in self.x_shape]
+        k = len(self.indices)
+        tail = 1
+        for size in x_shape[k:]:
+            tail *= size
+        row_span = 1
+        for size in x_shape[:k]:
+            row_span *= size
+        rows = grad_output.reshape(-1, tail)
+        flat = None
+        stride = row_span
+        for dim, idx in enumerate(self.indices):
+            stride //= x_shape[dim]
+            term = idx.reshape(-1) * stride
+            flat = term if flat is None else flat + term
+        col_idx = flat.reshape(-1, 1).broadcast(rows.shape).contiguous()
+        base = jt.zeros((row_span, tail), dtype=grad_output.dtype)
+        return base.scatter_add(0, col_idx, rows).reshape(x_shape)

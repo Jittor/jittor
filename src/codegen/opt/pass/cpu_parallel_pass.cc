@@ -114,12 +114,42 @@ static bool is_identifier(const string& s) {
     return true;
 }
 
+// Iterations of the loops below `node`, as an expression: the trip counts
+// along each path multiplied, sibling loops added. Every inner bound used to be
+// multiplied together, so a reduction's two sibling loops -- one zeroing the
+// output row, one accumulating into it -- counted as their product, and a
+// [4, 4, 64] complex product (1K multiply-adds) passed the 65536 guard and
+// opened a 128-thread team per call: ~50 ms of fork/join on a loaded host,
+// thirty times the whole computation. A bound that cannot be pasted into the
+// guard, or that `skip` already accounts for, counts as one, which only makes
+// the estimate smaller.
+static string nest_work(KernelIR* node, const vector<string>& skip,
+                        const unordered_map<string,string>& defines) {
+    vector<string> terms;
+    for (auto& c : node->children) {
+        if (c->type != KernelIRType::loop) continue;
+        string term;
+        if (c->has_attr(kir::rvalue)) {
+            const string& b = c->get_attr(kir::rvalue);
+            bool usable = is_identifier(b) && !defines.count(b);
+            for (auto& used : skip) if (used == b) usable = false;
+            if (usable) term = b;
+        }
+        string sub = nest_work(c.get(), skip, defines);
+        if (sub != "1") term = term.empty() ? sub : term + " * " + sub;
+        terms.push_back(term.empty() ? "1" : term);
+    }
+    if (terms.empty()) return "1";
+    if (terms.size() == 1) return terms[0];
+    string sum = "(" + terms[0];
+    for (uint i=1; i<terms.size(); i++) sum += " + " + terms[i];
+    return sum + ")";
+}
+
 struct LoopScan {
     bool usable = true;
     // Every store target's index, so the caller can test them together.
     vector<string> store_indices;
-    // Trip counts of the nest below the outermost loop, for the work estimate.
-    vector<string> inner_bounds;
 };
 
 static void scan(KernelIR* node, LoopScan& out,
@@ -131,8 +161,6 @@ static void scan(KernelIR* node, LoopScan& out,
             continue;
         }
         if (c->type == KernelIRType::loop) {
-            if (c->has_attr(kir::rvalue))
-                out.inner_bounds.push_back(c->get_attr(kir::rvalue));
             // A split loop keeps its tile-size define in `inner`, not among the
             // children, and that name is only in scope inside the loop.
             for (auto& s : c->inner)
@@ -219,6 +247,7 @@ void CpuParallelPass::run() {
             // definition, makes the nest imperfect and OpenMP reject it.
             vector<string> indices({index}), bounds({bound});
             KernelIR* level = loop.get();
+            vector<KernelIR*> levels({level});
             while (!split && indices.size() < 3
                     && level->children.size() == 1
                     && level->children[0]->type == KernelIRType::loop
@@ -228,6 +257,7 @@ void CpuParallelPass::run() {
                     && level->children[0]->before.size() == 0
                     && level->children[0]->after.size() == 0) {
                 level = level->children[0].get();
+                levels.push_back(level);
                 indices.push_back(level->get_attr(kir::lvalue));
                 bounds.push_back(level->get_attr(kir::rvalue));
             }
@@ -264,6 +294,7 @@ void CpuParallelPass::run() {
             while (!disjoint && indices.size() > 1) {
                 indices.pop_back();
                 bounds.pop_back();
+                levels.pop_back();
                 disjoint = true;
                 for (auto& idx : info.store_indices) {
                     string expr = idx;
@@ -296,17 +327,12 @@ void CpuParallelPass::run() {
             string bound_product = bounds[0];
             for (uint b=1; b<bounds.size(); b++)
                 bound_product += " * " + bounds[b];
-            string work = bound_product;
-            for (auto& b : info.inner_bounds) {
-                bool collapsed = false;
-                for (auto& used : bounds)
-                    if (used == b) collapsed = true;
-                // A bound declared inside the loop is not in scope where the
-                // guard sits, and a split loop's inner bound is the tile size,
-                // which would double-count the dimension the outer already has.
-                if (collapsed || !is_identifier(b) || defines.count(b)) continue;
-                work += " * " + b;
-            }
+            // A bound declared inside the loop is not in scope where the guard
+            // sits, and a split loop's inner bound is the tile size, which would
+            // double-count the dimension the outer already has: nest_work
+            // leaves both out.
+            string inner = nest_work(levels.back(), bounds, defines);
+            string work = inner == "1" ? bound_product : bound_product + " * " + inner;
             bound = bound_product;
             depths.push_back((int)indices.size());
             // ... but the collapsed levels still have to hold enough

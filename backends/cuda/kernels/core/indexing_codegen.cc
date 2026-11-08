@@ -129,7 +129,7 @@ static void append_cuda_indexing_key(NanoVector shape, JK& key) {
     int dimensions[6];
     cuda_loop_schedule(shape, masks, dimensions);
     for (int i = 0; i < count; ++i)
-        key << "«LO" << JK::hex1(i) << '=' << JK::hex(masks[i]);
+        key << "«LO" << JK::dec(i) << '=' << JK::hex(masks[i]);
 }
 
 void GetitemOp::configure_accelerator_codegen(Codegen& codegen) {

@@ -7,7 +7,6 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
-import inspect
 import math
 from jittor import _arg_policy
 from .basic import uniform, uniform_, gauss, gauss_
@@ -43,7 +42,7 @@ def invariant_uniform_(var, mode="fan_in"):
     ''' Inplace initialize Jittor Var by invariant_uniform.
 
     Args:
-        var (Jittor Var):
+        var (jittor.Var):
             Var to be initialized by random invariant_uniform
         mode (string):
             mode selection, should be fan_in or fan_out.
@@ -91,7 +90,7 @@ def relu_invariant_gauss_(var, mode="fan_in"):
     ''' Inplace initialize Jittor Var by relu_invariant_gauss.
 
     Args:
-        var (Jittor Var):
+        var (jittor.Var):
             Var to be initialized by random relu_invariant_gauss
         mode (string):
             mode selection, should be fan_in or fan_out.
@@ -114,7 +113,7 @@ def kaiming_uniform_(var, a=0, mode='fan_in', nonlinearity='leaky_relu', generat
     ''' Inplace initialize Jittor Var by kaiming_uniform.
 
     Args:
-        var (Jittor Var):
+        var (jittor.Var):
             Var to be initialized by random kaiming_uniform
         a (float):
             the negative slope of the rectifier used after this layer (only used with 'leaky_relu')
@@ -142,22 +141,34 @@ def kaiming_uniform_(var, a=0, mode='fan_in', nonlinearity='leaky_relu', generat
 def _kaiming_uniform_(var, uniform_impl, a=0, mode='fan_in',
                       nonlinearity='leaky_relu', generator=None):
     """Shared Kaiming math with an explicitly selected random/writeback owner."""
-    std = calculate_std(var,mode,nonlinearity,a)
-    bound = math.sqrt(3.0) * std
-    if generator is None:
-        return uniform_impl(var, -bound, bound)
-    if "generator" not in inspect.signature(uniform_impl).parameters:
+    if generator is not None:
+        # `unsupported`, not `ignored`: a seeded generator asks for one specific
+        # tensor, and jittor draws a different one from its global RNG. That is
+        # a changed observable value, not a missed optimisation.
+        #
+        # Not implemented by reseeding the global RNG from the generator (the
+        # shortcut jittor.compat.torch.installers.factories uses for randn):
+        # torch ADVANCES a generator per draw, so reseeding on every call would
+        # make N layers initialised from the same generator come out with
+        # IDENTICAL weights wherever their shapes match -- trading a visible
+        # error for a much worse silent one. Real support needs a per-generator
+        # RNG stream in the core, which jittor does not have (only the process-
+        # wide jt.set_global_seed).
         _arg_policy.unsupported(
             "jittor.init.kaiming_uniform_", "generator", generator,
-            "the selected uniform implementation has no independent generator stream")
-    return uniform_impl(var, -bound, bound, generator=generator)
+            "jittor has only a process-wide RNG, so the draw cannot come from "
+            "the supplied generator's stream: the values differ from torch's "
+            "and the generator is neither read nor advanced")
+    std = calculate_std(var,mode,nonlinearity,a)
+    bound = math.sqrt(3.0) * std
+    return uniform_impl(var,-bound, bound)
 
 
 def kaiming_normal_(var, a=0, mode='fan_in', nonlinearity='leaky_relu', generator=None):
     ''' Inplace initialize Jittor Var by kaiming_normal.
 
     Args:
-        var (Jittor Var):
+        var (jittor.Var):
             Var to be initialized by random kaiming_normal
         a (float):
             the negative slope of the rectifier used after this layer (only used with 'leaky_relu')
@@ -239,7 +250,7 @@ def xavier_uniform_(var, gain=1.0):
         a = \text{gain} \times \sqrt{\frac{6}{\text{fan\_in} + \text{fan\_out}}}
 
     Args:
-        var (Jittor Var):
+        var (jittor.Var):
             Var to be initialized by random xavier_uniform
         gain (float):
             an optional scaling factor.
@@ -298,7 +309,7 @@ def xavier_gauss_(var, gain=1.0):
         \text{std} = \text{gain} \times \sqrt{\frac{2}{\text{fan\_in} + \text{fan\_out}}}
 
     Args:
-        var (Jittor Var):
+        var (jittor.Var):
             Var to be initialized by random xavier_gauss
         gain (float):
             an optional scaling factor.

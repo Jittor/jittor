@@ -186,6 +186,11 @@ class TestComplexLinalg(unittest.TestCase, TestResultAndGrad):
         if jt.flags.use_cuda and not cuda_numpy_code_available():
             raise unittest.SkipTest(
                 "CUDA numpy-code operators need CuPy; it is not installed")
+        # Seeded: the inputs came from whatever state the global generator was
+        # left in by the files before this one, and `svd`'s complex64 result
+        # misses `allclose`'s absolute tolerance on some draws (the "Unstable"
+        # note on test_complex_svd_batch) -- passing alone, failing in the tree.
+        np.random.seed(0)
 
     def random_complex_matrix(self, shape):
         r = np.random.randn(*shape)

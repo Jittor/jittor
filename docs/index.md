@@ -1,56 +1,75 @@
 # Jittor 文档
 
-Jittor（计图）是一个基于即时编译和元算子的深度学习框架。前端使用 Python 动态图
-接口，后端把算子编译成针对实际负载调优的 C++ 与 CUDA 代码。
+[English](index.en.md)
 
-本站包含安装与上手、教程、API 参考、使用指南、Torch 兼容说明、框架机制说明，
-以及面向贡献者的开发文档。
+Jittor 是一个基于即时编译的深度学习框架。你可以使用原生 Jittor API，
+或通过 `jittor-compat` 运行符合其支持范围的 PyTorch 代码。
 
+## 开始使用
+
+第一次使用请按顺序阅读：
+
+1. [安装与环境](getting-started/installation.md)：选择安装方式，确认解释器与编译器。
+2. [第一个训练示例](getting-started/quickstart.md)：在 CPU 上完成前向、反向和参数更新。
+3. [继续学习](getting-started/index.md)：选择原生 Jittor 或 Torch 兼容教程。
+
+已有 PyTorch 项目，请从 [Torch 兼容](compatibility/index.md) 开始；
+接入 vLLM、Transformers 等库时，还需核对 [JittorEcosystem](https://github.com/JittorEcosystem)
+中对应项目的版本和设备支持。
+
+## 按任务查找
+
+| 你要做什么 | 阅读入口 |
+| --- | --- |
+| 配置硬件、分布式训练或排查运行问题 | [使用指南](guides/index.md) |
+| 查看函数、类和参数 | [API 参考](api/index.md) |
+| 理解设备、精度和惰性执行 | [核心概念](notes/index.md) |
+| 分析耗时、显存或对比性能 | [性能优化](performance/index.md) |
+| 修改框架、添加功能或运行测试 | [开发指南](development/index.md) |
+| 了解升级变化、社区项目和研究方向 | [项目资料](project/index.md) |
+
+## 使用前确认
+
+[平台支持](guides/hardware/platform-support.md) 区分持续测试与历史验证；
+[已知限制](guides/known-limitations.md) 列出使用时需要注意的边界。
+历史测量只适用于原记录的提交与环境，不代表当前版本已经重新验收。
+
+<!-- sphinx-only
 ```{toctree}
+:hidden:
 :maxdepth: 2
-:caption: 开始使用
+:caption: 使用 Jittor
 
+getting-started/index
 guides/index
-tutorials/index
+compatibility/index
+performance/index
 ```
+-->
 
+<!-- sphinx-only
 ```{toctree}
+:hidden:
 :maxdepth: 2
-:caption: 参考
+:caption: 参考与开发
 
 api/index
-compatibility/index
 notes/index
-performance/index
-results/index
-```
-
-```{toctree}
-:maxdepth: 2
-:caption: 项目
-
 development/index
-releases/index
-community/index
-contributing
+project/index
 ```
+-->
 
-## 从哪里开始
+<!-- sphinx-only
+```{toctree}
+:hidden:
+:maxdepth: 1
+:caption: Language
 
-| 你想做的事 | 去哪里 |
-| --- | --- |
-| 装好并跑通第一个模型 | [安装与快速开始](https://github.com/Jittor/jittor#install)、[教程](tutorials/index.md) |
-| 查某个函数怎么用 | [API 参考](api/index.md) |
-| 把 PyTorch 代码跑在 Jittor 上 | [Torch 兼容](compatibility/index.md) |
-| 在昇腾、天数或多卡上运行 | [使用指南](guides/index.md) |
-| 弄清显存、精度或异步执行的行为 | [机制说明](notes/index.md) |
-| 调查一个报错或性能问题 | [调试指南](guides/debugging.md)、[性能](performance/index.md) |
-| 看别人已经查过的现象和结论 | [验证结论](results/index.md) |
-| 给 Jittor 提交代码 | [贡献指南](contributing.md)、[开发文档](development/index.md) |
+index.en
+```
+-->
 
-## 项目链接
-
-- [官网](https://cg.cs.tsinghua.edu.cn/jittor/)
-- [源码仓库](https://github.com/Jittor/jittor)
-- [问题追踪](https://github.com/Jittor/jittor/issues)
-- [论坛](https://discuss.jittor.org/)
+[源码](https://github.com/Jittor/jittor/tree/2.0-refactor) ·
+[问题反馈](https://github.com/Jittor/jittor/issues) ·
+[社区论坛](https://discuss.jittor.org/)

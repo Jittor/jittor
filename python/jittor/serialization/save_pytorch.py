@@ -4,20 +4,35 @@ import io
 import pickle
 import sys
 import threading
+from types import ModuleType
 
 import jittor as jt
 from jittor import nn
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
-import torch
 
-class HalfStorage: pass
-class BFloat16Storage: pass
-class FloatStorage: pass
-class LongStorage: pass
-class IntStorage: pass
-class ShortStorage: pass
-class CharStorage: pass
-class BoolStorage: pass
+class HalfStorage:
+    pass
+
+class BFloat16Storage:
+    pass
+
+class FloatStorage:
+    pass
+
+class LongStorage:
+    pass
+
+class IntStorage:
+    pass
+
+class ShortStorage:
+    pass
+
+class CharStorage:
+    pass
+
+class BoolStorage:
+    pass
 HalfStorage.__module__ = "torch"
 BFloat16Storage.__module__ = "torch"
 FloatStorage.__module__ = "torch"
@@ -31,28 +46,36 @@ _rebuild_tensor_v2.__module__ = "torch._utils"
 
 targets = [HalfStorage, BFloat16Storage, FloatStorage, LongStorage, IntStorage, ShortStorage, CharStorage, BoolStorage, _rebuild_tensor_v2]
 
+_MISSING = object()
 _TARGET_PATCH_LOCK = threading.RLock()
 
 
 @contextmanager
-def _temporary_torch_pickle_targets(targets):
+def _pickle_targets():
+    """Expose archive globals only while pickle resolves their module names."""
     with _TARGET_PATCH_LOCK:
-        bindings = []
+        originals = []
+        created_modules = []
         try:
             for target in targets:
-                namespace = sys.modules[target.__module__].__dict__
-                name = target.__name__
-                existed = name in namespace
-                original = namespace.get(name)
-                bindings.append((namespace, name, existed, original))
-                namespace[name] = target
+                module_name = target.__module__
+                module = sys.modules.get(module_name)
+                if module is None:
+                    module = ModuleType(module_name)
+                    sys.modules[module_name] = module
+                    created_modules.append(module_name)
+                original = module.__dict__.get(target.__name__, _MISSING)
+                originals.append((module, target.__name__, original))
+                module.__dict__[target.__name__] = target
             yield
         finally:
-            for namespace, name, existed, original in reversed(bindings):
-                if existed:
-                    namespace[name] = original
+            for module, name, original in reversed(originals):
+                if original is _MISSING:
+                    module.__dict__.pop(name, None)
                 else:
-                    namespace.pop(name, None)
+                    module.__dict__[name] = original
+            for module_name in reversed(created_modules):
+                sys.modules.pop(module_name, None)
 
 class TensorStorage:
     def __init__(self, data):
@@ -123,7 +146,7 @@ def save_pytorch(path, obj):
     pickle_protocol = 2
     pickler = pickle.Pickler(data_buf, protocol=pickle_protocol)
     pickler.persistent_id = persistent_id
-    with _temporary_torch_pickle_targets(tuple(targets)):
+    with _pickle_targets():
         pickler.dump(obj)
     data_value = data_buf.getvalue()
 
@@ -140,22 +163,22 @@ def save_pytorch(path, obj):
     import os
     path_base_name = os.path.basename(path).split(".")[0]
     contents = jt.ZipFile(path, "w")
-    def write(name, data):
+    def write(name, data, archive):
         if isinstance(data, str):
-            write(name, data.encode())
+            write(name, data.encode(), archive)
         elif isinstance(data, bytes):
             import ctypes
             pointer = ctypes.cast(data, ctypes.c_void_p).value
-            contents.write(path_base_name+'/'+name, pointer, len(data))
+            archive.write(path_base_name+'/'+name, pointer, len(data))
         elif isinstance(data, jt.Var):
-            contents.write(path_base_name+'/'+name, data.raw_ptr, data.nbytes)
+            archive.write(path_base_name+'/'+name, data.raw_ptr, data.nbytes)
         else:
             raise TypeError(f"unsupported type {type(data)}")
-    write("data.pkl", data_value)
-    write("byteorder", sys.byteorder)
+    write("data.pkl", data_value, contents)
+    write("byteorder", sys.byteorder, contents)
     for i, v in enumerate(serialized_storages):
-        write(f"data/{i}", v)
-    write("version", "3")
+        write(f"data/{i}", v, contents)
+    write("version", "3", contents)
     del contents
 
 

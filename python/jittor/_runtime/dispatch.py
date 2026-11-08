@@ -58,11 +58,19 @@ def _entry_priority(entry):
     return entry.priority
 
 
+#: Moves on every registration change, for a caller that remembers what a
+#: selection answered.
+generation = 0
+
+
 def _invalidate():
     """Drop the resolved candidate lists; callers must hold `_lock`."""
-    global _resolved
+    global _resolved, generation
     _resolved = {}
+    generation += 1
     _rebuild_op_names()
+    if _NATIVE_SELECT:
+        sys.modules["jittor"].core._kernel_select_invalidate(_registered_ops)
 
 
 def _candidates(op, backend):
@@ -172,6 +180,10 @@ def _collect_tensors(values, var_type, tensors, active_containers):
 #: hundred.
 _VAR_TYPE = None
 _DISPATCH_CONTEXT_NATIVE = None
+#: The native selection loop (`src/bindings/pyjt/py_kernel_select.h`), once
+#: bound: the same walk over the arguments, placement query and candidate
+#: loop as `select_kernel` below, without a frame per step.
+_NATIVE_SELECT = None
 #: The native Var's own `dtype` getter. A frontend tensor type overrides
 #: `dtype` with a Python property returning its framework's dtype object; the
 #: dispatcher only needs the name, and reading it here skips that property --
@@ -189,6 +201,47 @@ def _bind_core():
     _VAR_TYPE = core.Var
     _DISPATCH_CONTEXT_NATIVE = core.dispatch_context
     _NATIVE_DTYPE = core.Var.__dict__.get("dtype")
+
+
+#: `supports` predicates the native selector may evaluate itself, by the rule
+#: that answers the same question (`src/bindings/pyjt/py_kernel_select.h`).
+_NATIVE_RULES: Dict[Callable[..., bool], str] = {}
+
+
+def native_rule(rule):
+    """Declare that a ``supports`` predicate answers what native ``rule`` does.
+
+    A dispatch evaluates a registered predicate for every candidate it tries,
+    and for the relays every matrix product and every fused norm takes, that
+    Python call was most of the selection's cost. The rule may still answer
+    "cannot tell" -- then the predicate is called as before.
+    """
+    def mark(predicate):
+        _NATIVE_RULES[predicate] = rule
+        if _NATIVE_SELECT:
+            sys.modules["jittor"].core._kernel_select_native_rule(predicate, rule)
+        return predicate
+    return mark
+
+
+def _bind_native_select():
+    """Hand the registry's resolver to the native selection loop."""
+    global _NATIVE_SELECT
+    if _VAR_TYPE is None:
+        _bind_core()
+    core = sys.modules["jittor"].core
+    if not hasattr(core, "_kernel_select"):
+        # A core without it -- a stand-in built by a test -- keeps the loop
+        # below.
+        _NATIVE_SELECT = False
+        return False
+    with _lock:
+        core._kernel_select_bind(_candidates, canonical_dtype_name)
+        core._kernel_select_invalidate(_registered_ops)
+        for predicate, rule in _NATIVE_RULES.items():
+            core._kernel_select_native_rule(predicate, rule)
+        _NATIVE_SELECT = core._kernel_select
+    return _NATIVE_SELECT
 
 
 def _walk_container(container, var_type, tensors):
@@ -251,6 +304,28 @@ def _dispatch_backend(args, kwargs):
 
 def dispatch_context(*args, **kwargs):
     return DispatchContext(*_dispatch_backend(args, kwargs))
+
+
+def _backend_of(value):
+    """``dispatch_context(value).backend`` for a single argument.
+
+    The backend is all some callers read (assignment asks it of every target),
+    and for one Var it is a single native query; the dtype names and the tuple
+    the full context builds around it are skipped. Published as an attribute of
+    the native ``dispatch_context`` only, so a stand-in that replaces it -- the
+    way a caller states the device -- is never bypassed.
+    """
+    var_type = _VAR_TYPE
+    if var_type is None:
+        _bind_core()
+        var_type = _VAR_TYPE
+    if not isinstance(value, var_type):
+        return dispatch_context(value).backend
+    backend = _DISPATCH_CONTEXT_NATIVE([value])[0]
+    return "acl" if backend == "acl_legacy" else backend
+
+
+dispatch_context._backend_of = _backend_of
 
 
 #: The function `select_kernel` reads placement through unless a caller has
@@ -320,26 +395,25 @@ def registered_kernel(op, backend):
 
 
 def select_kernel(op, *args, **kwargs):
-    # Through the module-level name, not `_dispatch_backend`: replacing
-    # `dispatch_context` is how a caller states which device the arguments are
-    # on, and the ACL clamp facade's CPU contract is tested that way. Only when
-    # nobody has replaced it does this read placement directly, which lets the
-    # dtype names wait until a candidate actually filters on them. Not one ACL
-    # registration declares `dtypes`, and the CUDA softmax entry that does is
-    # only a candidate on a CUDA backend, so on ACL the names were built --
-    # a `str` and a memo lookup per argument -- and then never read.
     # Nothing is registered under this name on any backend, so no argument
     # walk and no placement query can change the answer.
     if op not in _registered_ops:
         return None
+    # Through the module-level name: replacing `dispatch_context` is how a
+    # caller states which device the arguments are on, and the ACL clamp
+    # facade's CPU contract is tested that way. Only when nobody has replaced
+    # it does the native loop read placement itself.
+    tensors = dtypes = None
     if dispatch_context is _NATIVE_DISPATCH_CONTEXT:
+        native = _NATIVE_SELECT
+        if native is None:
+            native = _bind_native_select()
+        if native:
+            return native(op, args, kwargs)
         tensors, backend, _device_id = _dispatch_placement(args, kwargs)
-        dtypes = None
     else:
         context = dispatch_context(*args, **kwargs)
-        tensors, backend, dtypes = None, context.backend, context.dtypes
-    # `_candidates` resolves and memoizes; once it has, the answer is a plain
-    # dict read, so take it here rather than through another frame.
+        backend, dtypes = context.backend, context.dtypes
     entries = _resolved.get((op, backend))
     if entries is None:
         entries = _candidates(op, backend)
@@ -352,10 +426,8 @@ def select_kernel(op, *args, **kwargs):
             if selected_mode not in entry.runtime_modes:
                 continue
         if entry.dtypes is not None:
-            if dtypes is None and tensors is not None:
+            if dtypes is None:
                 dtypes = _dtype_names(tensors)
-            # A set test, not a generator: `entry.dtypes` is a frozenset and
-            # this runs per candidate of every dtype-filtered operator.
             if not entry.dtypes.issuperset(dtypes):
                 continue
         if entry.supports is not None and not entry.supports(*args, **kwargs):
@@ -365,8 +437,80 @@ def select_kernel(op, *args, **kwargs):
 
 
 def try_dispatch(op, *args, **kwargs):
+    # Fast path: nothing is registered under this op on any backend, so no
+    # argument walk or placement query can change the answer. This spares the
+    # `select_kernel` frame on the hot path of every wrapped operator
+    # (`where`, `getitem`, `arg_reduce`, ...) in a pure-jittor run.
+    if op not in _registered_ops:
+        return None
     implementation = select_kernel(op, *args, **kwargs)
     return None if implementation is None else implementation(*args, **kwargs)
+
+
+def _is_registered(op):
+    """Whether anything is registered under ``op`` on any backend."""
+    return op in _registered_ops
+
+
+# On the native `try_dispatch` only: a caller that replaces it -- to observe or
+# route calls -- has no shortcut to skip it with.
+try_dispatch._is_registered = _is_registered
+
+
+#: `_sole_default`'s answers, by operator, for the registry generation they were
+#: computed in.
+_sole_default_answers = {}
+
+
+def _sole_default(op, implementation):
+    """Whether ``implementation`` is the only kernel registered for ``op``.
+
+    Then `try_dispatch(op, ...)` can only ever call it, on any backend, and a
+    native rendering of that implementation may be called instead. Recomputed
+    after any registration change.
+    """
+    answer = _sole_default_answers.get(op)
+    if answer is not None and answer[0] == generation and answer[1] is implementation:
+        return answer[2]
+    with _lock:
+        entries = [entry for (name, _backend), current in _kernels.items()
+                   if name == op for entry in current]
+        result = len(entries) == 1 and entries[0].implementation is implementation \
+            and entries[0].supports is None and entries[0].dtypes is None \
+            and entries[0].runtime_modes is None
+        _sole_default_answers[op] = (generation, implementation, result)
+    return result
+
+
+def _bind_native_entries():
+    """Publish the native indexing and concatenation paths to the Python layer.
+
+    `src/bindings/pyjt/py_compat_fast.h` builds a basic-index getitem (with its
+    view record) and the direct concatenation natively; the Torch frontend has
+    used them since they were written. Jittor's own `getitem` and `concat` reach
+    them through these attributes -- on the native `try_dispatch` and
+    `select_kernel`, not module globals, so a stand-in for either (a test that
+    routes or observes calls) has no shortcut to bypass it with. Called once
+    the core is up; the paths need the native selector bound and the capture
+    query, which is what the frontend binds as well.
+    """
+    core = sys.modules["jittor"].core
+    if not hasattr(core, "_jt_basic_getitem") or not hasattr(core, "_jt_concat"):
+        return
+    if _NATIVE_SELECT is None:
+        _bind_native_select()
+    if not _NATIVE_SELECT:
+        return
+    from .step_capture import tracing
+    core._compat_fast_bind(tracing)
+    try_dispatch._native_basic_getitem = core._jt_basic_getitem
+    if hasattr(core, "_jt_setitem"):
+        try_dispatch._native_setitem = core._jt_setitem
+    if hasattr(core, "_fast_clamp"):
+        try_dispatch._native_clamp = core._fast_clamp
+        try_dispatch._sole_default = _sole_default
+    select_kernel._native_concat = core._jt_concat
+    select_kernel._is_registered = _is_registered
 
 
 def optional_kernel(op, backend, *, dtypes=None, supports=None, priority=0,

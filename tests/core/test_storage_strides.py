@@ -173,3 +173,21 @@ def test_split_transpose_views_are_dense_at_batched_matmul_boundary():
     np.testing.assert_allclose(first, expected, rtol=1e-5, atol=1e-5)
     np.testing.assert_allclose(second, expected, rtol=1e-5, atol=1e-5)
     np.testing.assert_array_equal(first, second)
+def test_split_last_axis_preserves_multidimensional_prefix():
+    # A getitem copy collapsed consecutive implicit dims into one loop that
+    # walked the first dim's stride, so splitting the last axis of a
+    # transposed (non-contiguous) storage read the wrong elements.
+    values = np.arange(2 * 8 * 192, dtype=np.float32).reshape(2, 8, 192)
+    with jt.flag_scope(transpose_storage_view=1):
+        dense = jt.array(values) * 0.5 + 3
+        strided = jt.array(values.transpose(0, 2, 1)).transpose(1, 2)
+        assert list(strided._storage_strides()) == [1536, 1, 8]
+        for source, expected_source in (
+            (dense, values * 0.5 + 3),
+            (strided, values),
+        ):
+            parts = source.split(64, dim=2)
+            expected_parts = np.split(expected_source, [64, 128], axis=2)
+            assert [tuple(part.shape) for part in parts] == [(2, 8, 64)] * 3
+            for part, expected in zip(parts, expected_parts):
+                np.testing.assert_array_equal(part.numpy(), expected)

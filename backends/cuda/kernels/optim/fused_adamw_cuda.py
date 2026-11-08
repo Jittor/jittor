@@ -17,6 +17,13 @@ from jittor._core.dtypes import var_dtype_name
 from jittor._runtime.dispatch import register_kernel
 
 _DTYPES = ("float32", "float16", "bfloat16")
+# Keep each mapped op small enough for nvcc and the JIT argument table.  The
+# CUDA kernel can process up to 36 tensors, but a transformer optimizer group
+# contains hundreds of differently shaped tensors; passing the whole group in
+# one graph node makes the generated wrapper exceed the compiler's memory
+# budget.  Several smaller launches retain the fused update while keeping
+# compilation bounded.
+_MAX_FUSED_ENTRIES = 16
 
 
 def _supports(entries, *args, **kwargs):
@@ -56,13 +63,15 @@ def _cuda_fused_adamw_updates(entries, lr, beta1, beta2, weight_decay, eps):
             step, lr = hyper, 0.0
         else:
             step = jt.array(float(steps + 1), dtype="float32").stop_grad()
-        count = len(indices)
-        out = jt.fused_adamw(
-            [entries[i][0] for i in indices], [entries[i][1] for i in indices],
-            [entries[i][2] for i in indices], [entries[i][3] for i in indices],
-            step, float(lr), float(beta1), float(beta2), float(weight_decay), float(eps))
-        for position, index in enumerate(indices):
-            results[index] = (out[position], out[count + position], out[2 * count + position])
+        for start in range(0, len(indices), _MAX_FUSED_ENTRIES):
+            batch = indices[start:start + _MAX_FUSED_ENTRIES]
+            count = len(batch)
+            out = jt.fused_adamw(
+                [entries[i][0] for i in batch], [entries[i][1] for i in batch],
+                [entries[i][2] for i in batch], [entries[i][3] for i in batch],
+                step, float(lr), float(beta1), float(beta2), float(weight_decay), float(eps))
+            for position, index in enumerate(batch):
+                results[index] = (out[position], out[count + position], out[2 * count + position])
     return results
 
 

@@ -21,7 +21,7 @@ _NATIVE_NAMES = (
     "cartesian_prod", "ceil", "chunk", "cos", "cosh", "cross", "ctc_loss",
     "cummax", "cummin", "deg2rad", "detach", "diag", "digamma",
     "einsum", "erf", "erfinv", "exp", "expm1", "flatten", "flip",
-    "floor", "floor_divide", "gather", "greater", "greater_equal", "histc",
+    "floor", "floor_divide", "fmod", "gather", "greater", "greater_equal", "histc",
     "hypot", "igamma", "index_add", "index_fill", "isfinite", "isinf",
     "isnan", "isneginf", "isposinf", "kthvalue", "less", "less_equal",
     "lgamma", "log", "log2", "logical_and", "logical_not", "logical_or",
@@ -81,6 +81,21 @@ class NativeOperation:
         import jittor
         context = get_install_context(jittor)
         implementation = context.state["native_torch_operations"][self._operation_key]
+        if self._operation_key in ("mul", "multiply"):
+            kwargs = dict(kwargs)
+            for position, name in enumerate(("input", "other")):
+                if name in kwargs:
+                    if len(args) > position:
+                        raise TypeError("%s received %s more than once" % (self._operation_key, name))
+                    if len(args) == position:
+                        args += (kwargs.pop(name),)
+            if len(args) == 2 and not kwargs:
+                from .installers.tensor.method_api import _tensor_mul
+                left, right = args
+                if isinstance(left, context.state["Var"]):
+                    return _tensor_mul(left, right)
+                if isinstance(right, context.state["Var"]):
+                    return _tensor_mul(right, left)
         defaults = self._TORCH_DEFAULTS.get(self._operation_key)
         if defaults:
             kwargs = dict(kwargs)
@@ -90,7 +105,9 @@ class NativeOperation:
         if self._operation_key in ("fft.fftfreq", "fft.rfftfreq"):
             kwargs = dict(kwargs)
             device = kwargs.pop("device", None)
-        like = self._first_var(args, context.native_backend.Var)
+        unique_operation = self._operation_key in ("unique", "unique_consecutive")
+        source = (args[0] if args else kwargs.get("input")) if unique_operation else None
+        like = source if source is not None else self._first_var(args, context.native_backend.Var)
         with tensor_frontend(context.state["Var"], device=device, like=like,
                              default_placement=False if like is not None else True):
             if self._operation_key in ("div", "divide"):
@@ -103,6 +120,11 @@ class NativeOperation:
                 cast_values = _autocast_cast_inputs(*values)
                 args = tuple(cast_values[:len(args)])
                 kwargs = dict(zip(kwargs, cast_values[len(args):]))
+            if unique_operation:
+                result = implementation(*args, **kwargs)
+                if isinstance(result, tuple):
+                    result = (result[0],) + tuple(value.int64() for value in result[1:])
+                return result
             if self._operation_key in self._AUTOMIXED_PASSTHROUGH:
                 from .amp import autocast_any_enabled
                 scope = (jittor.flag_scope(amp_reg=0)

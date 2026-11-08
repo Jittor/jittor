@@ -11,6 +11,11 @@ import warnings as _warnings
 
 import numpy as _np
 
+import numpy as np
+
+import jittor as jt
+from jittor._core.dtypes import dtype_name
+
 from jittor.amp import GradScaler as _NativeGradScaler
 from jittor._core.dtypes import dtype_name as _dtype_name
 
@@ -46,9 +51,20 @@ class GradScaler(_NativeGradScaler):
                     "order and has no slot left for `enabled`; pass the "
                     "remaining arguments by keyword, or use "
                     "torch.cuda.amp.GradScaler")
-            device, init_scale, growth_factor, backoff_factor, growth_interval = (
-                "cuda", device, init_scale, growth_factor, backoff_factor)
-        self._torch_device = (getattr(device, "type", None) or str(device)).split(":", 1)[0]
+            if (init_scale, growth_factor, backoff_factor) == (2.0 ** 16, 2.0, 0.5):
+                # A lone legacy scale has no supplied tail to shift. Shifting
+                # defaults would turn backoff_factor into the default 2.0.
+                device, init_scale = "cuda", device
+            else:
+                device, init_scale, growth_factor, backoff_factor, growth_interval = (
+                    "cuda", device, init_scale, growth_factor, backoff_factor)
+        self._device_type = getattr(device, "type", None) or str(device)
+        self._torch_device = self._device_type.split(":", 1)[0]
+        if enabled:
+            if growth_factor <= 1.0:
+                raise AssertionError("The growth factor must be > 1.0.")
+            if backoff_factor >= 1.0:
+                raise AssertionError("The backoff factor must be < 1.0.")
         super().__init__(init_scale=init_scale, growth_factor=growth_factor,
                          backoff_factor=backoff_factor,
                          growth_interval=growth_interval, enabled=enabled)
@@ -96,6 +112,12 @@ class GradScaler(_NativeGradScaler):
         zero_grad = getattr(optimizer, "zero_grad", None)
         if callable(zero_grad):
             zero_grad()
+
+    def _check_initialized(self, operation):
+        assert self._scale_initialized, (
+            "Attempted %s but _scale is None. This may indicate your script did "
+            "not use scaler.scale(loss or outputs) earlier in the iteration."
+            % operation)
 
     def scale(self, outputs):
         output_device = getattr(getattr(outputs, "device", None), "type", None)
@@ -309,7 +331,7 @@ _GRAD_SCALER_FIDELITY = (
       "torch.amp.grad_scaler.GradScaler"),
      GradScaler, Fidelity.APPROXIMATE,
      "Dynamic loss scaling over the jittor optimizer bridge: scale/unscale_/"
-     "step/update and the five state_dict keys match torch, the inf check is "
+     "step/update and the five state_dict keys match torch, _check_inf_per_device uses "
      "one flat host-visible reduction per optimizer rather than torch's "
      "per-device _found_inf tensors; step capture retains the native "
      "single-optimizer path and multi-device replication is not implemented"),

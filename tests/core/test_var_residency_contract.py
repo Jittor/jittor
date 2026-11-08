@@ -19,8 +19,9 @@ The contracts pinned here are the ones that surprised a reader at the REPL:
 
 * a Var that has not been computed yet has no residency at all (``"none"``), and
   ``device`` answers with where it *will* land;
-* reading a device Var's data moves its storage to the host -- ``location()``
-  then reports ``"cpu"`` and is telling the truth, not going stale;
+* reading a device Var's data -- ``numpy()``, ``repr()``, ``tolist()`` -- copies
+  it to the host and leaves the Var where it lies; ``location()`` keeps
+  reporting ``"device"`` because the storage never moved;
 * ``device_id`` keeps the source device across ``cpu()`` while ``device`` and
   ``location()`` follow the data.
 """
@@ -71,89 +72,100 @@ class TestLazyResidency(unittest.TestCase):
             self.assertEqual(a.device, promised)
 
 
-class TestHostReadMovesStorage(unittest.TestCase):
-    """Reading the data of a device Var moves it, and says so."""
-
-    def setUp(self):
-        _test_capability.require_accelerator("cuda")
-
-    def test_numpy_migrates_a_device_var_to_the_host(self):
-        with jt.flag_scope(use_cuda=1):
-            a = jt.ones((64, 64)).cuda()
-            a.sync()
-            self.assertEqual(a.location(), "device")
-            a.numpy()
-            # Not a stale reading: location() reports var->allocator, so the
-            # storage really is on the host now.
-            self.assertEqual(a.location(), "cpu")
-            self.assertEqual(a.device, "cpu")
-
-    def test_a_device_op_brings_a_read_var_back(self):
-        with jt.flag_scope(use_cuda=1):
-            a = jt.ones((64, 64)).cuda()
-            a.sync()
-            a.numpy()
-            self.assertEqual(a.location(), "cpu")
-            total = (a * 2).sum().item()
-            self.assertEqual(total, 2 * 64 * 64)
-            self.assertEqual(a.location(), "device")
-
-    def test_repr_moves_the_storage_the_same_way_numpy_does(self):
-        # repr() reaches the data through the same path, so a debugging print
-        # costs what an explicit read costs. Pinned so the two spellings cannot
-        # drift apart silently.
-        with jt.flag_scope(use_cuda=1):
-            a = jt.ones((64, 64)).cuda()
-            a.sync()
-            repr(a)
-            self.assertEqual(a.location(), "cpu")
-
-
 class TestReadingDoesNotRelocate(unittest.TestCase):
-    """A read is a query. These say what it currently does instead.
+    """A read is a query: it must not rebind the source's storage.
 
-    ``numpy()``, ``repr()`` and an element read all move a device Var's storage
-    to the host; the next device operation then migrates it back, measured at
-    215x the cost of the same operation without the read, with both copies live
-    in device memory meanwhile. Filed as KI-MEM-002 and pinned here as strict
-    xfail so the fix produces XPASS and forces the ledger entry closed.
+    ``numpy()``, ``repr()`` and ``tolist()`` all reach the data through the
+    native fetch primitive, which used to call ``migrate_to_cpu`` and replace
+    the Var's device storage with a host block. The next device
+    operation then copied it back -- measured at 20x the cost of the same
+    operation on a tensor that was never read, with both copies live in device
+    memory meanwhile. The primitive now materialises a host copy and leaves the
+    source where it is.
 
-    The reduction case is *not* xfail: ``u.sum().item()`` leaves ``u`` alone,
-    because the scalar is a new Var rather than a view. It is asserted
-    positively so a future fix cannot regress the one spelling that already
-    behaves, and so the defect is never restated as "reading anything moves it".
+    Placement alone is a weak assertion: a fix that migrated and then migrated
+    back would pass it. So each spelling also pins the storage address, which a
+    rebind cannot preserve, and the live device bytes, which a migration
+    releases. Element and reduction reads are asserted alongside because they
+    were never broken, and the defect must not be restated as "reading
+    anything moves it".
     """
 
     def setUp(self):
         _test_capability.require_accelerator("cuda")
 
-    @unittest.expectedFailure
+    def _resident_tensor(self):
+        a = jt.ones((256, 256)).cuda() * 2
+        a.sync()
+        self.assertEqual(a.location(), "device")
+        return a
+
+    def _assert_still_resident(self, a, address, used_before):
+        self.assertEqual(a.location(), "device")
+        self.assertEqual(a.device, "cuda:%d" % a.device_id)
+        self.assertEqual(a._storage_address, address)
+        self.assertGreaterEqual(
+            jt.core.device_memory_used(a.device_id), used_before)
+
     def test_numpy_leaves_the_source_on_the_device(self):
         with jt.flag_scope(use_cuda=1):
-            a = jt.ones((256, 256)).cuda()
-            a.sync()
-            a.numpy()
-            self.assertEqual(a.location(), "device")
+            a = self._resident_tensor()
+            address = a._storage_address
+            used = jt.core.device_memory_used(a.device_id)
+            host = a.numpy()
+            self._assert_still_resident(a, address, used)
+            np.testing.assert_array_equal(
+                host, np.full((256, 256), 2.0, "float32"))
 
-    @unittest.expectedFailure
     def test_repr_leaves_the_source_on_the_device(self):
+        # Printing a tensor at a REPL must not relocate it.
         with jt.flag_scope(use_cuda=1):
-            a = jt.ones((256, 256)).cuda()
-            a.sync()
-            repr(a)
-            self.assertEqual(a.location(), "device")
+            a = self._resident_tensor()
+            address = a._storage_address
+            used = jt.core.device_memory_used(a.device_id)
+            text = repr(a)
+            self._assert_still_resident(a, address, used)
+            self.assertIn("2.", text)
 
-    @unittest.expectedFailure
+    def test_tolist_leaves_the_source_on_the_device(self):
+        with jt.flag_scope(use_cuda=1):
+            a = self._resident_tensor()
+            address = a._storage_address
+            used = jt.core.device_memory_used(a.device_id)
+            values = a.tolist()
+            self._assert_still_resident(a, address, used)
+            self.assertEqual(values[0][0], 2.0)
+            self.assertEqual(len(values), 256)
+            self.assertEqual(len(values[0]), 256)
+
+    def test_a_device_op_after_a_read_uses_the_resident_source(self):
+        # The cost of the read was never the transfer itself: it was that the
+        # next device operation had to bring the storage back. The source must
+        # still hold the same device allocation after the read and the op.
+        with jt.flag_scope(use_cuda=1):
+            for read in (lambda a: a.numpy(), repr, lambda a: a.tolist()):
+                a = self._resident_tensor()
+                address = a._storage_address
+                used = jt.core.device_memory_used(a.device_id)
+                read(a)
+                self.assertEqual((a * 2).sum().item(), 4 * 256 * 256)
+                self._assert_still_resident(a, address, used)
+
     def test_reading_one_element_does_not_move_the_whole_tensor(self):
         with jt.flag_scope(use_cuda=1):
             a = jt.ones((256, 256)).cuda()
             a.sync()
-            a[0][0].item()
+            self.assertEqual(a[0][0].item(), 1.0)
             self.assertEqual(a.location(), "device")
+            # A slice view's element too, and the base keeps working on the
+            # device afterwards.
+            self.assertEqual(a[3, 4:5].item(), 1.0)
+            self.assertEqual(a.location(), "device")
+            self.assertEqual((a * 2).sum().item(), 2 * 256 * 256)
 
     def test_a_reduction_read_leaves_the_source_alone(self):
-        # The spelling every training loop uses. Not broken, and asserted so it
-        # cannot become broken while the three above are being fixed.
+        # The spelling every training loop uses. It was never broken, and is
+        # asserted so it cannot become broken while the reads above were fixed.
         with jt.flag_scope(use_cuda=1):
             a = jt.ones((256, 256)).cuda()
             a.sync()

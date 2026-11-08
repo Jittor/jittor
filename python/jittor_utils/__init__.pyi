@@ -96,7 +96,6 @@ from jittor.build.utils import (
     ring_buffer as ring_buffer,
     runtime_services as runtime_services,
     save_pytorch as save_pytorch,
-    student_queue as student_queue,
 )
 import jittor.build.utils.install_msvc as _install_msvc
 install_msvc = _install_msvc

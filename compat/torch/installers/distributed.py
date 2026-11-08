@@ -5,8 +5,9 @@ changing the compatibility semantics.
 """
 
 import atexit
-import glob
 import json
+from dataclasses import dataclass
+import glob
 import os
 import warnings
 import pickle
@@ -18,6 +19,11 @@ import numpy as np
 import jittor as jt
 
 from ..context import registry_for
+from ..checkpoint_state import (
+    get_optimizer_state_dict, set_optimizer_state_dict,
+    get_model_state_dict, set_model_state_dict, get_state_dict, set_state_dict,
+)
+from ..ddp_comm_hooks import install_ddp_comm_hooks
 from ..fidelity import Fidelity, register_api_bindings
 from ...diagnostics import EXPECTED, swallowed
 from ...transaction import set_env, set_flag
@@ -238,12 +244,21 @@ def _require_supported_group(group, allow_subgroup=False):
 
 
 def _copy_tensor(dst, src):
-    if hasattr(dst, "update"):
-        dst.update(src)
-    elif hasattr(dst, "assign"):
-        dst.assign(src)
-    else:
-        dst[:] = src
+    # Collective output buffers are mutated, never rebound: Parameters and
+    # detached aliases may share their allocation (for example ZeRO's flat
+    # bf16 model buffer). Keep that allocation through the native copy owner.
+    # A reduction may write into a leaf gradient buffer, so the storage copy
+    # must not create an autograd in-place operation.
+    with jt.no_grad():
+        if isinstance(dst, jt.Var) and dst._storage_is_contiguous():
+            jt.sync_all()
+            dst._copy_into(src)
+        elif hasattr(dst, "update"):
+            dst.update(src)
+        elif hasattr(dst, "assign"):
+            dst.assign(src)
+        else:
+            dst[:] = src
 
 
 def _sync_collective(value):
@@ -302,8 +317,27 @@ def _reduce_name(op, reduce_op):
     )
 
 
-def _native_all_gather_flat(tensor):
-    return _collectives._all_gather_shards(tensor.reshape((-1,)))
+def _native_all_gather_flat(tensor, group=None):
+    flat = tensor.reshape((-1,))
+    if group is not None:
+        return _process_group.all_gather(flat, group=group)
+    return _collectives._all_gather_shards(flat)
+
+
+# Bound temporary Jittor buffers while object collectives carry large FULL
+# model state dictionaries. Payload lengths use int64, so the serialized size
+# itself is not limited by the int32 element buffers used for byte transport.
+_OBJECT_COLLECTIVE_CHUNK_BYTES = 64 * 1024 * 1024
+
+
+def _encode_object_length(length):
+    return np.asarray([length], dtype=np.uint64).view(np.int32)
+
+
+def _decode_object_lengths(words, size):
+    words = np.asarray(words, dtype=np.int32).reshape(size, 2).view(np.uint32)
+    return (words[:, 0].astype(np.uint64)
+            | (words[:, 1].astype(np.uint64) << np.uint64(32)))
 
 
 def _native_all_gather_object(object_list, obj, group=None):
@@ -316,20 +350,35 @@ def _native_all_gather_object(object_list, obj, group=None):
         return None
 
     payload = pickle.dumps(obj, protocol=pickle.HIGHEST_PROTOCOL)
-    local_length = jt.array(np.asarray([len(payload)], dtype=np.int32))
-    lengths = np.asarray(
-        _native_all_gather_flat(local_length).numpy(), dtype=np.int32
-    ).reshape(-1)
+    # Jittor's NCCL path can corrupt int64 values gathered as a tiny tensor
+    # (the 2.52 GB Swift checkpoint length arrived negative). Transport each
+    # uint64 length as two int32 words, whose byte patterns NCCL preserves.
+    local_words = _encode_object_length(len(payload))
+    lengths = _decode_object_lengths(
+        _native_all_gather_flat(jt.array(local_words), group=group).numpy(), size
+    )
     max_length = int(lengths.max()) if lengths.size else 0
-    encoded = np.zeros((max_length,), dtype=np.int32)
-    if payload:
-        encoded[:len(payload)] = np.frombuffer(payload, dtype=np.uint8).astype(np.int32)
-    gathered = np.asarray(
-        _native_all_gather_flat(jt.array(encoded)).numpy(), dtype=np.int32
-    ).reshape(size, max_length)
+    chunk_bytes = int(_OBJECT_COLLECTIVE_CHUNK_BYTES)
+    if chunk_bytes <= 0:
+        raise ValueError("object collective chunk size must be positive")
+    received = [bytearray(int(length)) for length in lengths]
+    for offset in range(0, max_length, chunk_bytes):
+        width = min(chunk_bytes, max_length - offset)
+        encoded = np.zeros((width,), dtype=np.int32)
+        chunk = payload[offset:offset + width]
+        if chunk:
+            encoded[:len(chunk)] = np.frombuffer(chunk, dtype=np.uint8).astype(np.int32)
+        gathered = np.asarray(
+            _native_all_gather_flat(jt.array(encoded), group=group).numpy(),
+            dtype=np.int32,
+        ).reshape(size, width)
+        for rank, length in enumerate(lengths):
+            count = min(width, max(0, int(length) - offset))
+            if count:
+                received[rank][offset:offset + count] = gathered[
+                    rank, :count].astype(np.uint8).tobytes()
     for rank, length in enumerate(lengths):
-        raw = gathered[rank, :int(length)].astype(np.uint8).tobytes()
-        object_list[rank] = pickle.loads(raw)
+        object_list[rank] = pickle.loads(received[rank])
     return None
 
 
@@ -413,7 +462,6 @@ def _init_process_group(*args, **kwargs):
             raise RuntimeError("torch/Jittor distributed rank mismatch")
     state["initialized"] = True
     state["store"] = store
-    state["backend"] = backend_name
     return None
 
 
@@ -425,7 +473,6 @@ def _destroy_process_group(*args, **kwargs):
     if callable(close):
         close()
     state["store"] = None
-    state["backend"] = None
     state["initialized"] = False
     return None
 
@@ -439,6 +486,12 @@ def _get_rank(group=None):
 
 def _get_world_size(group=None):
     return _group_size(group)
+
+
+def _current_graph_task_id():
+    # Jittor has no PyTorch reentrant graph-task identifier. DeepSpeed uses
+    # -1 to mean an ordinary forward, distinct from checkpoint recomputation.
+    return -1
 
 
 class _ReduceOp:
@@ -490,7 +543,7 @@ def _all_gather(tensor_list, tensor, group=None, async_op=False):
     if size == 1:
         _copy_tensor(tensor_list[0], tensor)
     else:
-        gathered = _native_all_gather_flat(tensor)
+        gathered = _native_all_gather_flat(tensor, group=group)
         numel = int(np.prod(tuple(int(dim) for dim in tensor.shape)))
         for rank in range(size):
             part = gathered[rank * numel:(rank + 1) * numel].reshape(
@@ -504,32 +557,55 @@ def _all_gather_into_tensor(output_tensor, input_tensor, group=None,
     size = _require_supported_group(group)
     gathered = (
         input_tensor.reshape((-1,)) if size == 1
-        else _native_all_gather_flat(input_tensor)
+        else _native_all_gather_flat(input_tensor, group=group)
     )
     _copy_tensor(output_tensor, gathered.reshape(output_tensor.shape))
     return _collective_result(output_tensor, async_op, issued=size > 1)
 
 
+def _reduce_scatter_tensor(output, input, op=None, group=None, async_op=False):
+    size = _require_supported_group(group, allow_subgroup=True)
+    if _reduce_name(op, _ReduceOp) != "sum":
+        raise NotImplementedError("reduce_scatter supports SUM only")
+    if int(input.numel()) != int(output.numel()) * size:
+        raise ValueError("reduce_scatter input size must match the output and group")
+    world = get_install_context(jt).state["distributed_api"]["world_group"]
+    active_group = world if group is None else group
+    flat = input.reshape((-1,))
+    result = (flat if size == 1 else active_group.reduce_scatter(flat))
+    _copy_tensor(output, result.reshape(output.shape))
+    return _collective_result(output, async_op, issued=size > 1)
+
+
+def _reduce_scatter(output, input_list, op=None, group=None, async_op=False):
+    size = _require_supported_group(group, allow_subgroup=True)
+    if len(input_list) != size:
+        raise ValueError("reduce_scatter needs one input tensor per group rank")
+    if any(int(value.numel()) != int(output.numel()) for value in input_list):
+        raise ValueError("reduce_scatter input tensors must match the output size")
+    flattened = jt.concat([value.reshape((-1,)) for value in input_list], dim=0)
+    return _reduce_scatter_tensor(output, flattened, op, group, async_op)
+
+
 def _broadcast(tensor, src=0, group=None, async_op=False, group_src=None):
     size = _require_supported_group(group)
-    root = int(src if group_src is None else group_src)
+    root = int(src if group_src is None else
+               _api_dist_get_global_rank(group, group_src))
     if size > 1:
-        _copy_tensor(tensor, tensor.mpi_broadcast(root))
+        result = (_process_group.broadcast(tensor, src=root, group=group)
+                  if group is not None else tensor.mpi_broadcast(root))
+        _copy_tensor(tensor, result)
     return _collective_result(tensor, async_op, issued=size > 1)
 
 
 def _barrier(group=None, async_op=False, device_ids=None):
     size = _require_supported_group(group)
+    marker = None
     if size > 1:
-        process_group = (
-            _process_group.get_default_group() if group is None else group
-        )
-        device_id = device_ids[0] if device_ids else None
-        process_group.barrier(device_id=device_id)
-    # ProcessGroup.barrier synchronizes the selected device before returning.
-    # The compatibility Work is consequently already complete, matching the
-    # synchronous ProcessGroup implementation used by the other collectives.
-    return _collective_result(None, async_op, issued=False)
+        marker = jt.array(np.asarray([_distributed_rank()], dtype=np.int32))
+        marker = marker.mpi_all_reduce("sum")
+        marker.sync()
+    return _collective_result(marker, async_op, issued=False)
 
 
 def _broadcast_object_list(object_list, src=0, group=None, device=None):
@@ -1058,369 +1134,35 @@ def _make_dcp_load(g):
     return load
 
 
+@dataclass
 class StateDictOptions:
-    def __init__(self, *, full_state_dict=False, cpu_offload=False,
-                 ignore_frozen_params=False, keep_submodule_prefixes=True,
-                 strict=True, broadcast_from_rank0=False, flatten_optimizer_state_dict=False):
-        self.full_state_dict = bool(full_state_dict)
-        self.cpu_offload = bool(cpu_offload)
-        self.ignore_frozen_params = bool(ignore_frozen_params)
-        self.keep_submodule_prefixes = bool(keep_submodule_prefixes)
-        self.strict = bool(strict)
-        self.broadcast_from_rank0 = bool(broadcast_from_rank0)
-        self.flatten_optimizer_state_dict = bool(flatten_optimizer_state_dict)
+    """Public checkpoint options support standard dataclass transformations."""
+    full_state_dict: bool = False
+    cpu_offload: bool = False
+    ignore_frozen_params: bool = False
+    keep_submodule_prefixes: bool = True
+    strict: bool = True
+    broadcast_from_rank0: bool = False
+    flatten_optimizer_state_dict: bool = False
+    dsd_fqn_modifiers: str = "_fqn_modifiers"
 
 
-def _state_dict_options(options=None, submodules=None, *, optimizer=False):
-    if options is None:
-        options = StateDictOptions()
-    if not isinstance(options, StateDictOptions):
-        raise TypeError("options must be a StateDictOptions instance")
-    if submodules is not None:
-        raise NotImplementedError("submodule-filtered state dictionaries are not supported")
-    if options.broadcast_from_rank0 and not options.full_state_dict:
-        raise ValueError("broadcast_from_rank0 requires full_state_dict")
-    if not options.keep_submodule_prefixes:
-        raise NotImplementedError("state-dict prefix removal is not supported")
-    if optimizer and options.flatten_optimizer_state_dict:
-        raise NotImplementedError("flatten_optimizer_state_dict is not supported")
-    return options
+def _get_model_state_dict(model, submodules=None, *, options=None):
+    return get_model_state_dict(model, submodules=submodules, options=options)
 
 
-def _map_state_dict_values(value, transform):
-    if isinstance(value, jt.Var):
-        return transform(value)
-    if isinstance(value, Mapping):
-        return {key: _map_state_dict_values(item, transform)
-                for key, item in value.items()}
-    if isinstance(value, list):
-        return [_map_state_dict_values(item, transform) for item in value]
-    if isinstance(value, tuple):
-        return tuple(_map_state_dict_values(item, transform) for item in value)
-    return value
+def _set_model_state_dict(model, state_dict, *a, options=None, **k):
+    if a or k:
+        raise NotImplementedError("checkpoint model submodule selection is not supported")
+    return set_model_state_dict(model, state_dict, options=options)
 
 
-def _broadcast_state_dict_values(value):
-    if not _native_distributed_active() or int(_distributed_world_size()) <= 1:
-        return value
-    backend = str(_process_group.get_backend()).lower()
+class GradBucket:
+    """Importable DDP bucket type; native bucket communication is not exposed."""
 
-    def broadcast(tensor):
-        original_device = str(tensor.device)
-        result = tensor.detach().clone()
-        if backend == "nccl" and not original_device.startswith("cuda"):
-            result = result.cuda()
-            _broadcast(result, src=0)
-            return result.cpu() if original_device == "cpu" else result.to(original_device)
-        if backend == "hccl" and not original_device.startswith("npu"):
-            result = result.npu()
-            _broadcast(result, src=0)
-            return result.cpu() if original_device == "cpu" else result.to(original_device)
-        _broadcast(result, src=0)
-        return result
-
-    return _map_state_dict_values(value, broadcast)
-
-
-def _normalize_optimizers(optimizers):
-    if optimizers is None:
-        return []
-    if hasattr(optimizers, "param_groups") and hasattr(optimizers, "state_dict"):
-        return [optimizers]
-    try:
-        result = list(optimizers)
-    except TypeError as error:
-        raise TypeError("optimizers must be an optimizer or an iterable of optimizers") from error
-    if any(not hasattr(optimizer, "param_groups") or not hasattr(optimizer, "state_dict")
-           for optimizer in result):
-        raise TypeError("every optimizer must provide param_groups and state_dict")
-    return result
-
-
-def _model_parameter_names(model):
-    names = {}
-    trainable = {}
-    named_parameters = getattr(model, "named_parameters", None)
-    if not callable(named_parameters):
-        return names, trainable
-    try:
-        parameters = named_parameters(remove_duplicate=False)
-    except TypeError:
-        parameters = named_parameters()
-    for name, parameter in parameters:
-        names.setdefault(id(parameter), name)
-        trainable[name] = bool(getattr(parameter, "requires_grad", True))
-    return names, trainable
-
-
-def _get_model_state_dict(model, *a, options=None, submodules=None, **k):
-    options = _state_dict_options(options, submodules)
-    if options.full_state_dict and getattr(model, "_is_fsdp_module", False):
-        fsdp = _fsdp_hooks.provider()
-        if fsdp is None:
-            raise RuntimeError("FSDP2 model checkpoint requires the registered state provider")
-        state_dict = fsdp._get_full_state_dict(model)
-    else:
-        state_dict = model.state_dict(*a, **k) if hasattr(model, "state_dict") else {}
-    if options.ignore_frozen_params:
-        _, trainable = _model_parameter_names(model)
-        state_dict = {key: value for key, value in state_dict.items()
-                      if key not in trainable or trainable[key]}
-    if options.broadcast_from_rank0:
-        state_dict = _broadcast_state_dict_values(state_dict)
-    if options.cpu_offload:
-        state_dict = _map_state_dict_values(state_dict, lambda value: value.cpu())
-    return state_dict
-
-
-def _set_model_state_dict(model, state_dict, *a, options=None, submodules=None, **k):
-    options = _state_dict_options(options, submodules)
-    # Non-coordinator ranks can receive an empty dictionary for a full-state
-    # load. Use the local model as a shape/device template before broadcasting.
-    if options.broadcast_from_rank0 and _native_distributed_active() and int(_distributed_world_size()) > 1:
-        payload = [list(state_dict) if _distributed_rank() == 0 else None]
-        _broadcast_object_list(payload, src=0)
-        incoming_keys = payload[0]
-        template = model.state_dict()
-        if options.full_state_dict and getattr(model, "_is_fsdp_module", False):
-            fsdp = _fsdp_hooks.provider()
-            if fsdp is None:
-                raise RuntimeError("FSDP2 model checkpoint requires the registered state provider")
-            template = fsdp._get_full_state_dict(model)
-        received = {}
-        for key in incoming_keys:
-            if key in template and isinstance(template[key], jt.Var):
-                destination = template[key].detach().clone()
-                if _distributed_rank() == 0 and key in state_dict:
-                    source = state_dict[key]
-                    if isinstance(source, jt.Var):
-                        source = source.to(destination.device)
-                    _copy_tensor(destination, source)
-                _broadcast(destination, src=0)
-                received[key] = destination
-            else:
-                object_payload = [state_dict[key] if _distributed_rank() == 0 and key in state_dict else None]
-                _broadcast_object_list(object_payload, src=0)
-                received[key] = object_payload[0]
-        state_dict = received
-    # The FSDP2 load provider is registered by fsdp2; this installer must not
-    # import that module directly.
-    if getattr(model, "_is_fsdp_module", False):
-        _fsdp = _fsdp_hooks.provider()
-        if _fsdp is not None:
-            _fsdp._load_full_state_dict(model, state_dict)
-            return None
-    if hasattr(model, "load_state_dict"):
-        return model.load_state_dict(state_dict, strict=options.strict)
-    return None
-
-
-def _initialize_optimizer_state(optimizer):
-    if getattr(optimizer, "state", None):
-        return
-    parameters = [parameter for group in optimizer.param_groups
-                  for parameter in group.get("params", [])]
-    if any(getattr(parameter, "grad", None) is not None for parameter in parameters):
-        return
-    original_grads = [(parameter, getattr(parameter, "grad", None))
-                      for parameter in parameters]
-    original_lrs = [(group, group.get("lr")) for group in optimizer.param_groups
-                    if "lr" in group]
-    try:
-        for parameter in parameters:
-            if getattr(parameter, "requires_grad", True):
-                parameter.grad = jt.zeros_like(parameter)
-        for group, _ in original_lrs:
-            group["lr"] = 0.0
-        optimizer.step()
-    finally:
-        for group, learning_rate in original_lrs:
-            group["lr"] = learning_rate
-        for parameter, gradient in original_grads:
-            parameter.grad = gradient
-
-
-def _fsdp_optimizer_rank_metadata(state):
-    """Describe rank-local optimizer values without moving tensor payloads."""
-    from jittor._core.dtypes import dtype_name
-
-    metadata = {}
-    for name, fields in state.items():
-        described = {}
-        for field, value in fields.items():
-            if field == "step":
-                if isinstance(value, jt.Var):
-                    value = value.numpy()
-                if isinstance(value, np.ndarray):
-                    if value.ndim != 0:
-                        raise ValueError("FSDP optimizer step must be scalar: %s" % name)
-                    value = value.item()
-                elif isinstance(value, np.generic):
-                    value = value.item()
-                if not np.isscalar(value):
-                    raise TypeError("FSDP optimizer step must be numeric: %s" % name)
-                described[field] = ("step", value)
-            elif isinstance(value, jt.Var):
-                described[field] = ("tensor", dtype_name(value.dtype))
-            elif isinstance(value, np.ndarray):
-                if value.ndim == 0:
-                    described[field] = ("value", value.item())
-                else:
-                    described[field] = ("tensor", value.dtype.name)
-            elif isinstance(value, np.generic):
-                described[field] = ("value", value.item())
-            else:
-                described[field] = ("value", value)
-        metadata[name] = described
-    return metadata
-
-
-def _get_optimizer_state_dict(model, optimizers, *, submodules=None, options=None):
-    options = _state_dict_options(options, submodules, optimizer=True)
-    optimizers = _normalize_optimizers(optimizers)
-    parameter_names, trainable = _model_parameter_names(model)
-    result = {"state": {}, "param_groups": []}
-    for optimizer in optimizers:
-        _initialize_optimizer_state(optimizer)
-        saved = optimizer.state_dict()
-        live_groups = optimizer.param_groups
-        saved_groups = saved.get("param_groups", [])
-        if len(live_groups) != len(saved_groups):
-            raise ValueError("optimizer state_dict parameter-group count mismatch")
-        local_ids = {}
-        for live_group, saved_group in zip(live_groups, saved_groups):
-            live_params = live_group.get("params", [])
-            saved_params = saved_group.get("params", [])
-            if len(live_params) != len(saved_params):
-                raise ValueError("optimizer state_dict parameter count mismatch")
-            names = []
-            for parameter, parameter_id in zip(live_params, saved_params):
-                name = parameter_names.get(id(parameter))
-                if name is None:
-                    raise ValueError("optimizer parameter is not present in model.named_parameters()")
-                local_ids[parameter_id] = name
-                if not options.ignore_frozen_params or trainable.get(name, True):
-                    names.append(name)
-            group = dict(saved_group)
-            group["params"] = names
-            result["param_groups"].append(group)
-        for parameter_id, state in saved.get("state", {}).items():
-            name = local_ids.get(parameter_id)
-            if name is None:
-                raise ValueError("optimizer state references a parameter outside its parameter groups")
-            if options.ignore_frozen_params and not trainable.get(name, True):
-                continue
-            if name in result["state"]:
-                raise ValueError("multiple optimizers contain state for parameter %s" % name)
-            result["state"][name] = state
-    if options.full_state_dict and getattr(model, "_is_fsdp_module", False):
-        fsdp = _fsdp_hooks.provider()
-        if fsdp is None:
-            raise RuntimeError("FSDP2 optimizer checkpoint requires the registered state provider")
-        local_metadata = _fsdp_optimizer_rank_metadata(result["state"])
-        if _native_distributed_active() and int(_distributed_world_size()) > 1:
-            rank_metadata = [None] * int(_distributed_world_size())
-            _native_all_gather_object(rank_metadata, local_metadata)
-        else:
-            rank_metadata = [local_metadata]
-        # FSDP optimizer moments are rank-local shards. Reassemble those shards
-        # before any full-state broadcast; broadcasting local tensors directly
-        # assumes identical shapes and can hang when shard sizes differ.
-        result = fsdp._gather_optimizer_state_dict(model, result, rank_metadata)
-    if options.broadcast_from_rank0:
-        result = _broadcast_state_dict_values(result)
-    if options.cpu_offload:
-        result = _map_state_dict_values(result, lambda value: value.cpu())
-    return result
-
-
-def _set_optimizer_state_dict(model, optimizers, optim_state_dict, *,
-                              submodules=None, options=None):
-    options = _state_dict_options(options, submodules, optimizer=True)
-    optimizers = _normalize_optimizers(optimizers)
-    if getattr(model, "_is_fsdp_module", False):
-        fsdp = _fsdp_hooks.provider()
-        if fsdp is None:
-            raise RuntimeError("FSDP2 optimizer checkpoint requires the registered state provider")
-        if options.full_state_dict:
-            shard_state = getattr(fsdp, "_shard_optimizer_state_dict", None)
-            if not callable(shard_state):
-                raise RuntimeError("FSDP2 state provider cannot shard full optimizer state")
-            optim_state_dict = shard_state(model, optim_state_dict)
-        refresh = getattr(fsdp, "refresh_optimizer_fsdp_params", None)
-        if not callable(refresh):
-            raise RuntimeError("FSDP2 state provider cannot refresh optimizer parameter shards")
-        for optimizer in optimizers:
-            refresh(optimizer)
-    if not isinstance(optim_state_dict, Mapping):
-        raise TypeError("optimizer state_dict must be a mapping")
-    saved_state = optim_state_dict.get("state", {})
-    saved_groups = optim_state_dict.get("param_groups", [])
-    if not isinstance(saved_state, Mapping) or not isinstance(saved_groups, (list, tuple)):
-        raise TypeError("optimizer state_dict must contain state and param_groups")
-    parameter_names, _ = _model_parameter_names(model)
-    group_count = sum(len(optimizer.param_groups) for optimizer in optimizers)
-    if len(saved_groups) != group_count:
-        raise ValueError("optimizer state_dict parameter-group count mismatch")
-    prepared = []
-    group_index = 0
-    known_names = set()
-    for optimizer in optimizers:
-        template = optimizer.state_dict()
-        current_groups = optimizer.param_groups
-        template_groups = template.get("param_groups", [])
-        converted_groups = []
-        local_name_to_id = {}
-        if len(current_groups) != len(template_groups):
-            raise ValueError("optimizer state_dict parameter-group count mismatch")
-        for current, template_group in zip(current_groups, template_groups):
-            saved_group = saved_groups[group_index]
-            group_index += 1
-            current_params = current.get("params", [])
-            template_ids = template_group.get("params", [])
-            expected_names = [parameter_names.get(id(parameter)) for parameter in current_params]
-            if any(name is None for name in expected_names):
-                raise ValueError("optimizer parameter is not present in model.named_parameters()")
-            saved_names = list(saved_group.get("params", []))
-            if saved_names != expected_names:
-                raise ValueError("optimizer checkpoint parameter groups do not match the current optimizer")
-            if len(template_ids) != len(expected_names):
-                raise ValueError("optimizer state_dict parameter count mismatch")
-            for name, parameter_id in zip(expected_names, template_ids):
-                local_name_to_id[name] = parameter_id
-                known_names.add(name)
-            converted = dict(saved_group)
-            converted["params"] = list(template_ids)
-            converted_groups.append(converted)
-        converted_state = {}
-        for name, state in saved_state.items():
-            if name in local_name_to_id:
-                converted_state[local_name_to_id[name]] = state
-        prepared.append({"state": converted_state, "param_groups": converted_groups})
-    unknown = set(saved_state) - known_names
-    if unknown:
-        raise ValueError("optimizer checkpoint contains unknown parameter names: %s"
-                         % sorted(unknown))
-    # Validate all groups before changing any optimizer.
-    for optimizer, converted in zip(optimizers, prepared):
-        optimizer.load_state_dict(converted)
-    return None
-
-
-def _get_checkpoint_state_dict(model, optimizers=None, *, submodules=None, options=None):
-    return (_get_model_state_dict(model, options=options, submodules=submodules),
-            _get_optimizer_state_dict(model, optimizers,
-                                      options=options, submodules=submodules))
-
-
-def _set_checkpoint_state_dict(model, optimizers=None, *, model_state_dict=None,
-                               optim_state_dict=None, options=None):
-    result = None
-    if model_state_dict is not None:
-        result = _set_model_state_dict(model, model_state_dict, options=options)
-    if optim_state_dict is not None and optimizers is not None:
-        _set_optimizer_state_dict(model, optimizers, optim_state_dict, options=options)
-    return result
+    def __init__(self, *args, **kwargs):
+        _stub_unimplemented("torch.distributed.GradBucket",
+                            "invent a gradient bucket with no native storage or reduction")
 
 
 class ShardedTensor:
@@ -1494,9 +1236,6 @@ def _api_dist_is_initialized(*a, **k):
 def _api_dist_get_backend(group=None):
     _context = get_install_context(jt).state["distributed_api"]
     world_group = _context['world_group']
-    state = _context["state"]
-    if (group is None or group is world_group) and state.get("backend") is not None:
-        return state["backend"]
     return group._get_backend_name() if group is not None and hasattr(group, '_get_backend_name') else world_group._get_backend_name()
 
 
@@ -1563,13 +1302,12 @@ def _api_symmetric_memory_is_symm_mem_enabled_for_group(*a, **k):
 
 
 def _api_checkpoint_sd_get_state_dict(model, optimizers=None, *a, **k):
-    return _get_checkpoint_state_dict(model, optimizers, *a, **k)
+    return get_state_dict(model, optimizers, *a, **k)
 
 
 def _api_checkpoint_sd_set_state_dict(model, optimizers=None, model_state_dict=None, optim_state_dict=None, *a, **k):
-    return _set_checkpoint_state_dict(
-        model, optimizers, model_state_dict=model_state_dict,
-        optim_state_dict=optim_state_dict, *a, **k)
+    return set_state_dict(model, optimizers, *a, model_state_dict=model_state_dict or {},
+                          optim_state_dict=optim_state_dict or {}, **k)
 
 
 def _api_sharded_tensor_init_from_local_shards(shards, *a, **k):
@@ -1594,9 +1332,8 @@ def _api_sharded_tensor_empty(*a, **k):
         stub_result=stub_result)
 
 
-from ...stub_policy import (allow_stub as _allow_stub,
-                            unimplemented as _stub_unimplemented,
-                            record_unimplemented as _record_unimplemented)
+from ...stub_policy import (unimplemented as _stub_unimplemented,
+    record_unimplemented as _record_unimplemented, allow_stub as _allow_stub)
 
 class SerializationFormat:
     TORCH_SAVE = "torch_save"
@@ -1656,11 +1393,10 @@ def _install_distributed(g, registry=None):
     if dist is None:
         dist = _types.ModuleType("torch.distributed")
         _modules["torch.distributed"] = dist
-    state = {
-        "initialized": _native_distributed_active(),
-        "store": None,
-        "backend": None,
-    }
+    # Executable leaves need a filesystem spec for ``python -m``; publishing
+    # a synthetic module in the registry alone cannot provide that entry point.
+    dist.__path__ = [os.path.join(os.path.dirname(__file__), "..", "distributed_cli")]
+    state = {"initialized": _native_distributed_active(), "store": None}
     world_group = _JittorProcessGroup(name="world")
     pg_map = {world_group: (world_group._get_backend_name(),)}
     get_install_context(g).state["distributed_api"] = MappingProxyType({
@@ -1690,6 +1426,8 @@ def _install_distributed(g, registry=None):
     dist.all_reduce = _all_reduce
     dist.all_gather = _all_gather
     dist.all_gather_into_tensor = _all_gather_into_tensor
+    dist.reduce_scatter = _reduce_scatter
+    dist.reduce_scatter_tensor = _reduce_scatter_tensor
     dist.broadcast = _broadcast
     dist.all_gather_object = _native_all_gather_object
     dist.broadcast_object_list = _broadcast_object_list
@@ -1717,7 +1455,6 @@ def _install_distributed(g, registry=None):
         setattr(dist, sub, mod)
 
     dist.algorithms.__path__ = getattr(dist.algorithms, "__path__", [])
-    from ..ddp_comm_hooks import install_ddp_comm_hooks
     install_ddp_comm_hooks(_modules, dist.algorithms)
     const_mod = _modules.get("torch.distributed.constants")
     if const_mod is None:
@@ -1746,6 +1483,9 @@ def _install_distributed(g, registry=None):
     dist.DeviceMesh = getattr(dist, "DeviceMesh", _DeviceMesh)
     dist.init_device_mesh = getattr(dist, "init_device_mesh", _init_device_mesh)
     dist.ProcessGroup = _JittorProcessGroup
+    dist.GradBucket = GradBucket
+    _record_unimplemented("torch.distributed.GradBucket",
+                          "invent a gradient bucket with no native storage or reduction")
 
     c10d = _modules.get("torch.distributed.distributed_c10d")
     if c10d is None:
@@ -1824,36 +1564,40 @@ def _install_distributed(g, registry=None):
     checkpoint.__path__ = getattr(checkpoint, "__path__", [])
     checkpoint.FileSystemReader = FileSystemReader
     checkpoint.FileSystemWriter = FileSystemWriter
-    checkpoint_load = _make_dcp_load(g)
-    checkpoint_save = _make_dcp_save(g)
-    checkpoint.load_state_dict = checkpoint_load
-    checkpoint.save_state_dict = checkpoint_save
-    checkpoint.load = checkpoint_load
-    checkpoint.save = checkpoint_save
+    # This bounded rank-local format writes every rank payload atomically and
+    # publishes the generation only after all rank writes have succeeded.
+    dcp_load = _make_dcp_load(g)
+    dcp_save = _make_dcp_save(g)
+    checkpoint.load_state_dict = lambda state_dict, storage_reader=None, **kwargs: dcp_load(
+        state_dict, storage_reader, **kwargs)
+    checkpoint.save_state_dict = lambda state_dict, storage_writer=None, **kwargs: dcp_save(
+        state_dict, storage_writer, **kwargs)
+    checkpoint.load = dcp_load
+    checkpoint.save = dcp_save
     checkpoint_sd = _types.ModuleType("torch.distributed.checkpoint.state_dict")
     checkpoint_sd.StateDictOptions = StateDictOptions
     checkpoint_sd.get_model_state_dict = _get_model_state_dict
     checkpoint_sd.set_model_state_dict = _set_model_state_dict
-    checkpoint_sd.get_optimizer_state_dict = _get_optimizer_state_dict
-    checkpoint_sd.set_optimizer_state_dict = _set_optimizer_state_dict
+    checkpoint_sd.get_optimizer_state_dict = get_optimizer_state_dict
+    checkpoint_sd.set_optimizer_state_dict = set_optimizer_state_dict
     checkpoint_sd.get_state_dict = _api_checkpoint_sd_get_state_dict
     checkpoint_sd.set_state_dict = _api_checkpoint_sd_set_state_dict
+    checkpoint_planner = _types.ModuleType("torch.distributed.checkpoint.default_planner")
+    checkpoint_planner.DefaultSavePlanner = DefaultSavePlanner
+    checkpoint_planner.DefaultLoadPlanner = DefaultLoadPlanner
     checkpoint_fs = _types.ModuleType("torch.distributed.checkpoint.filesystem")
     checkpoint_fs.FileSystemReader = FileSystemReader
     checkpoint_fs.FileSystemWriter = FileSystemWriter
     checkpoint_fs.SerializationFormat = SerializationFormat
     checkpoint_fs._write_item = _api_checkpoint_fs_write_item
     _record_unimplemented('torch.distributed.checkpoint.filesystem._write_item', _dcp_save_effect, _dcp_hint)
-    checkpoint_dp = _types.ModuleType("torch.distributed.checkpoint.default_planner")
-    checkpoint_dp.DefaultSavePlanner = DefaultSavePlanner
-    checkpoint_dp.DefaultLoadPlanner = DefaultLoadPlanner
     _modules["torch.distributed.checkpoint"] = checkpoint
     _modules["torch.distributed.checkpoint.state_dict"] = checkpoint_sd
     _modules["torch.distributed.checkpoint.filesystem"] = checkpoint_fs
-    _modules["torch.distributed.checkpoint.default_planner"] = checkpoint_dp
+    _modules["torch.distributed.checkpoint.default_planner"] = checkpoint_planner
+    checkpoint.default_planner = checkpoint_planner
     checkpoint.state_dict = checkpoint_sd
     checkpoint.filesystem = checkpoint_fs
-    checkpoint.default_planner = checkpoint_dp
 
     shard = dist._shard
     shard.__path__ = getattr(shard, "__path__", [])
@@ -1902,6 +1646,7 @@ def _install_distributed(g, registry=None):
 
     if not hasattr(g, "_C"):
         g._C = _CNS()
+    g._C._current_graph_task_id = _current_graph_task_id
     _install_fsdp2_distributed(dist, g, registry=registry)
     g.distributed = dist
     register_api_bindings(dist, "torch.distributed",
@@ -1909,13 +1654,16 @@ def _install_distributed(g, registry=None):
          "is_mpi_available", "is_ucc_available", "is_initialized", "get_rank",
          "get_world_size", "init_process_group", "destroy_process_group", "get_backend",
          "Backend", "P2POp", "ReduceOp", "ProcessGroup", "barrier", "all_reduce",
-         "all_gather", "all_gather_into_tensor", "broadcast", "all_gather_object",
+         "all_gather", "all_gather_into_tensor", "reduce_scatter",
+         "reduce_scatter_tensor", "broadcast", "all_gather_object",
          "broadcast_object_list", "gather_object", "new_group",
          "new_subgroups_by_enumeration", "get_global_rank", "get_process_group_ranks",
          "Store", "TCPStore", "FileStore", "PrefixStore"),
         Fidelity.APPROXIMATE,
         "Reuses native ProcessGroup, store and collective owners; group, reduction "
         "and backend capability limits and existing Work semantics apply")
+    register_api_bindings(dist, "torch.distributed", ("GradBucket",),
+        Fidelity.UNIMPLEMENTED, "Importable type; construction refuses unavailable native DDP buckets")
     register_api_bindings(dist, "torch.distributed",
         ("send", "recv", "isend", "irecv", "batch_isend_irecv"),
         Fidelity.UNIMPLEMENTED, "Point-to-point communication explicitly rejects nonempty work")
@@ -1929,15 +1677,15 @@ def _install_distributed(g, registry=None):
     register_api_bindings(checkpoint, "torch.distributed.checkpoint",
         ("load_state_dict", "save_state_dict", "load", "save", "FileSystemReader", "FileSystemWriter"),
         Fidelity.APPROXIMATE, "Atomic per-rank tensor snapshots support same-world-size save/load; default WORLD only, no cross-world resharding or standard Torch DCP file layout")
-    register_api_bindings(checkpoint_dp, "torch.distributed.checkpoint.default_planner",
+    register_api_bindings(checkpoint_planner, "torch.distributed.checkpoint.default_planner",
         ("DefaultSavePlanner", "DefaultLoadPlanner"), Fidelity.APPROXIMATE,
         "Planner import compatibility for same-world-size rank-local tensor snapshots")
     register_api_bindings(checkpoint_sd, "torch.distributed.checkpoint.state_dict",
-        ("StateDictOptions", "get_model_state_dict", "set_model_state_dict",
-         "get_optimizer_state_dict", "set_optimizer_state_dict",
-         "get_state_dict", "set_state_dict"),
-        Fidelity.APPROXIMATE, "Local module state and registered FSDP load provider; "
-        "full distributed checkpoint/options semantics are not implemented")
+        ("StateDictOptions", "get_model_state_dict", "set_model_state_dict", "get_state_dict", "set_state_dict",
+         "get_optimizer_state_dict", "set_optimizer_state_dict"),
+        Fidelity.APPROXIMATE, "FQN optimizer state and parameter groups, FULL FSDP provider transforms, "
+        "CPU offload, flatten, rank-zero broadcast, strict optimizer loading and submodule selection; "
+        "FULL plus flatten loading is explicitly unsupported")
     register_api_bindings(rendezvous_mod, "torch.distributed.rendezvous", ("rendezvous",),
         Fidelity.APPROXIMATE, "Delegates supported URL, rank, world-size and timeout handling to native stores")
     register_api_bindings(c10d, "torch.distributed.distributed_c10d",

@@ -111,7 +111,8 @@ class RNGStateContract:
             self.restore(state)
         current = self.capture()
         for invalid in (-(1 << 63) - 1, 1 << 64):
-            with self.assertRaises(RuntimeError):
+            # Main normalizes overflow as ValueError; binary Torch uses RuntimeError.
+            with self.assertRaises((ValueError, RuntimeError)):
                 self.seed(invalid)
             np.testing.assert_array_equal(values(self.capture()), values(current))
 

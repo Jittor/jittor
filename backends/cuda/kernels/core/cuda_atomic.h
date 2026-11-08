@@ -88,6 +88,81 @@ __device__ inline signed char atomicAnd(signed char* a, signed char b) {
 __device__ inline signed char atomicXor(signed char* a, signed char b) {
     return cuda_atomic_narrow_rmw<signed char, 6>(a, b);
 }
+// A bool result of `any`/`all` (parallel_pass.cc: `a=bool(a||b)`). Every
+// thread of the reduction meets at the one output, so the CAS loop above would
+// serialise all of them on its word. A bool is stored as 0 or 1, which turns
+// both into one 32-bit atomic on the word holding it: OR true sets the
+// byte's low bit, AND false clears the byte, and the neighbouring bytes see
+// an OR with 0 or an AND with ones. OR false and AND true change nothing, and
+// a value that is already the answer needs no write.
+__device__ inline bool atomicOr(bool* a, bool b) {
+    bool current = *(volatile bool*)a;
+    if (!b || current) return current;
+    unsigned int* base = (unsigned int*)((size_t)a & ~(size_t)0x3);
+    unsigned int shift = (((size_t)a) & 0x3) * 8;
+    return (atomicOr(base, 1u << shift) >> shift) & 0xffu;
+}
+__device__ inline bool atomicAnd(bool* a, bool b) {
+    bool current = *(volatile bool*)a;
+    if (b || !current) return current;
+    unsigned int* base = (unsigned int*)((size_t)a & ~(size_t)0x3);
+    unsigned int shift = (((size_t)a) & 0x3) * 8;
+    return (atomicAnd(base, ~(0xffu << shift)) >> shift) & 0xffu;
+}
+// XOR with bool semantics. Only called when `b` is true -- an XOR with false
+// changes nothing -- and then it toggles the byte's low bit, which is the same
+// packed-word trick the other two use. A bool is stored 0 or 1, so toggling
+// that bit is `a ^ b`.
+__device__ inline bool atomicXor(bool* a, bool b) {
+    if (!b) return *(volatile bool*)a;
+    unsigned int* base = (unsigned int*)((size_t)a & ~(size_t)0x3);
+    unsigned int shift = (((size_t)a) & 0x3) * 8;
+    return (atomicXor(base, 1u << shift) >> shift) & 0xffu;
+}
+
+// 16-bit words. short and unsigned short reach the same `a = a && b` /
+// `a = a & b` lowerings as the 8-bit forms above, and CUDA has no
+// `atomicAnd(short*, short)` either, so int16/uint16 logical and bitwise
+// reductions failed to COMPILE. `cuda_atomic_narrow_rmw` already handles a
+// 2-byte field.
+__device__ inline short atomicOr(short* a, short b) {
+    return cuda_atomic_narrow_rmw<short, 4>(a, b);
+}
+__device__ inline short atomicAnd(short* a, short b) {
+    return cuda_atomic_narrow_rmw<short, 5>(a, b);
+}
+__device__ inline short atomicXor(short* a, short b) {
+    return cuda_atomic_narrow_rmw<short, 6>(a, b);
+}
+__device__ inline unsigned short atomicOr(unsigned short* a, unsigned short b) {
+    return cuda_atomic_narrow_rmw<unsigned short, 4>(a, b);
+}
+__device__ inline unsigned short atomicAnd(unsigned short* a, unsigned short b) {
+    return cuda_atomic_narrow_rmw<unsigned short, 5>(a, b);
+}
+__device__ inline unsigned short atomicXor(unsigned short* a, unsigned short b) {
+    return cuda_atomic_narrow_rmw<unsigned short, 6>(a, b);
+}
+
+// `uint64` is `unsigned long` on LP64, which is a different type from the
+// `unsigned long long` CUDA's 64-bit atomics take. The pointer does not
+// convert, so a uint64 logical or bitwise reduction failed to COMPILE while
+// int64 (`long long`) worked. Delegate to the 64-bit word atomic; the LP64
+// guard keeps the delegation from applying where `unsigned long` is 32-bit.
+#if defined(__LP64__) || defined(_LP64)
+__device__ inline unsigned long atomicOr(unsigned long* a, unsigned long b) {
+    return (unsigned long)atomicOr((unsigned long long*)a,
+                                   (unsigned long long)b);
+}
+__device__ inline unsigned long atomicAnd(unsigned long* a, unsigned long b) {
+    return (unsigned long)atomicAnd((unsigned long long*)a,
+                                    (unsigned long long)b);
+}
+__device__ inline unsigned long atomicXor(unsigned long* a, unsigned long b) {
+    return (unsigned long)atomicXor((unsigned long long*)a,
+                                    (unsigned long long)b);
+}
+#endif
 #endif
 
 namespace jittor {

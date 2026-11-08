@@ -11,8 +11,9 @@ import copy as _copy_data
 import functools as _functools_checkpoint
 import itertools as _itertools_data
 import operator as _operator_data
+import numbers as _numbers_data
 import threading as _threading_data
-import types as _types_checkpoint
+import typing as _typing_data
 
 import jittor as jt
 
@@ -76,6 +77,49 @@ class _TensorDataset(_TorchDataset):
         return len(self.tensors[0]) if self.tensors else 0
 
 
+def _tensor_dataset_batch(loader, batch_indices):
+    """Gather a TensorDataset batch in one indexing op when that is exact.
+
+    Equivalent to stacking individual rows for repeated and negative indices,
+    including scatter-add gradients, without the per-row view/unsqueeze/setitem
+    graph that default collation builds.
+    """
+    dataset = loader.dataset
+    if not (type(dataset) is _TensorDataset
+            and loader.collate_fn is _default_collate
+            and isinstance(batch_indices, (list, tuple)) and batch_indices
+            and all(isinstance(index, _numbers_data.Integral)
+                    and not isinstance(index, bool) for index in batch_indices)):
+        return None
+    from ..tensor_state import compatibility_owner
+    g = compatibility_owner(jt)
+    tensor_types = (g.Tensor, g.nn.Parameter)
+    size = len(dataset)
+    if not all(type(tensor) in tensor_types and len(tensor) == size
+               and tensor.device.type != "meta"
+               and jt.core.dispatch_context([tensor])[0] in ("cpu", "cuda")
+               for tensor in dataset.tensors):
+        return None
+    if not all(-size <= index < size for index in batch_indices):
+        return None
+    from ..frontend import tensor_frontend
+    indices_by_device = {}
+    result = []
+    for tensor in dataset.tensors:
+        device = tensor.device
+        key = (device.type, device.index)
+        if key not in indices_by_device:
+            indices_by_device[key] = g.tensor(
+                batch_indices, dtype=g.int64, device=device)
+        index = indices_by_device[key]
+        if tensor._storage_is_contiguous():
+            with tensor_frontend(g.Var, like=tensor):
+                result.append(tensor.getitem(index))
+        else:
+            result.append(tensor[index])
+    return result
+
+
 class _ConcatDataset(_TorchDataset):
     def __init__(self, datasets):
         self.datasets = list(datasets)
@@ -103,7 +147,10 @@ class _Subset(_TorchDataset):
         return self.dataset[self.indices[idx]]
 
 
-class _Sampler:
+_SamplerT = _typing_data.TypeVar("_SamplerT", covariant=True)
+
+
+class _Sampler(_typing_data.Generic[_SamplerT]):
     def __init__(self, data_source=None):
         self.data_source = data_source
     def __iter__(self):
@@ -319,6 +366,36 @@ class _BatchSampler(_Sampler):
         return n // self.batch_size if self.drop_last else (n + self.batch_size - 1) // self.batch_size
 
 
+class _UnbatchedSampler(_Sampler):
+    """Yield one index at a time for ``DataLoader(batch_size=None)``."""
+    def __init__(self, sampler):
+        self.sampler = sampler
+
+    def __iter__(self):
+        return iter(([index] for index in self.sampler))
+
+    def __len__(self):
+        return len(self.sampler)
+
+
+class _IterableBatchSampler(_Sampler):
+    """Batch values from an IterableDataset for the shared loader iterator."""
+    def __init__(self, dataset, batch_size=1, drop_last=False):
+        self.dataset = dataset
+        self.batch_size = 1 if batch_size is None else int(batch_size)
+        self.drop_last = bool(drop_last)
+
+    def __iter__(self):
+        batch = []
+        for value in self.dataset:
+            batch.append(value)
+            if len(batch) == self.batch_size:
+                yield batch
+                batch = []
+        if batch and not self.drop_last:
+            yield batch
+
+
 class _DistributedSampler(_Sampler):
     def __init__(self, dataset, num_replicas=None, rank=None, shuffle=True,
                  seed=0, drop_last=False):
@@ -411,7 +488,12 @@ class _SingleProcessDataLoaderIter(_BaseDataLoaderIter):
 
     def __next__(self):
         batch_indices = next(self._batch_iter)
-        batch = self._loader.collate_fn([self._loader.dataset[i] for i in batch_indices])
+        batch = _tensor_dataset_batch(self._loader, batch_indices)
+        if batch is None:
+            values = (batch_indices if self._loader._iterable_dataset else
+                      [self._loader.dataset[i] for i in batch_indices])
+            batch = self._loader.collate_fn(
+                values[0] if self._loader.batch_size is None else values)
         self._cursor += 1
         return batch
 
@@ -419,13 +501,9 @@ class _SingleProcessDataLoaderIter(_BaseDataLoaderIter):
         if not self._loader._stateful_enabled:
             raise RuntimeError("checkpoint state requires explicit StatefulDataLoader")
         return {
-            "version": 1,
-            "active": True,
-            "num_workers": 0,
+            "version": 1, "active": True, "num_workers": 0,
             "batches": _copy_data.deepcopy(self._batch_plan),
-            "cursor": self._cursor,
-            "workers": [],
-            "worker_ids": [],
+            "cursor": self._cursor, "workers": [], "worker_ids": [],
             "generators": _save_generator_states(self._loader),
         }
 
@@ -543,6 +621,13 @@ class _MultiProcessingDataLoaderIter(_BaseDataLoaderIter):
 
     def _fetch(self, batch_indices, worker_info, task_state):
         loader = self._loader
+        def fetch_batch():
+            batch = _tensor_dataset_batch(loader, batch_indices)
+            if batch is not None:
+                return batch
+            values = (batch_indices if loader._iterable_dataset else
+                      [loader.dataset[i] for i in batch_indices])
+            return loader.collate_fn(values[0] if loader.batch_size is None else values)
         previous_info = getattr(_worker_state, "info", None)
         previous_task_state = getattr(_worker_state, "task_state", None)
         _worker_state.info = worker_info
@@ -550,9 +635,7 @@ class _MultiProcessingDataLoaderIter(_BaseDataLoaderIter):
         try:
             return _run_with_worker_rng(
                 worker_info,
-                lambda: loader.collate_fn(
-                    [loader.dataset[i] for i in batch_indices]
-                ),
+                fetch_batch,
             )
         finally:
             if previous_info is None:
@@ -741,6 +824,8 @@ class _DataLoader:
                  worker_init_fn=None, generator=None, prefetch_factor=None,
                  persistent_workers=False, **kwargs):
         self.dataset = dataset
+        self._iterable_dataset = (isinstance(dataset, _IterableDataset)
+                                  or not hasattr(dataset, "__len__"))
         self.batch_size = batch_size
         self.drop_last = drop_last
         self.num_workers = num_workers
@@ -750,7 +835,8 @@ class _DataLoader:
         self.persistent_workers = persistent_workers
         self.multiprocessing_context = kwargs.get("multiprocessing_context", None)
         self.shuffle = shuffle
-        self.collate_fn = collate_fn if collate_fn is not None else _default_collate
+        self.collate_fn = (collate_fn if collate_fn is not None else
+                           (_default_convert if batch_size is None else _default_collate))
         self.worker_init_fn = worker_init_fn
         self.generator = generator
         self._resume_state = None
@@ -759,9 +845,11 @@ class _DataLoader:
             self.sampler = None
         else:
             self.sampler = sampler if sampler is not None else (
-                _RandomSampler(dataset, generator=generator) if shuffle else _SequentialSampler(dataset)
-            )
-            self.batch_sampler = _BatchSampler(self.sampler, batch_size, drop_last)
+                _IterableBatchSampler(dataset, batch_size, drop_last) if self._iterable_dataset else
+                (_RandomSampler(dataset, generator=generator) if shuffle else _SequentialSampler(dataset)))
+            self.batch_sampler = (_IterableBatchSampler(dataset, batch_size, drop_last) if self._iterable_dataset else
+                                  (_UnbatchedSampler(self.sampler) if batch_size is None
+                                  else _BatchSampler(self.sampler, batch_size, drop_last)))
         self._iterator = None
     def __iter__(self):
         if int(self.num_workers or 0) > 0:
@@ -878,339 +966,30 @@ def _generate_state(base_seed, worker_id):
     return [rng.randrange(0, 2**32) for _ in range(4)]
 
 
-_checkpoint_default_context = object()
+def _checkpoint(fn, *args, use_reentrant=None, preserve_rng_state=True,
+                context_fn=None, determinism_check="default", debug=False, **kwargs):
+    """Adapt Torch checkpoint calls to native activation replay.
+
+    Both use_reentrant spellings share Jittor's native replay engine; PyTorch's
+    distinct scheduling and early-stop semantics are not reproduced. Nested
+    inputs, captured parameters and RNG/context replay use the native owner.
+    Custom contexts and debug tracing remain explicitly unsupported.
+    """
+    if context_fn is not None or debug or determinism_check != "default":
+        raise NotImplementedError("checkpoint supports only default replay contexts and determinism checks")
+    from ..amp import autocast, autocast_is_enabled, autocast_configured_dtype, autocast_cache_enabled
+    device = "npu" if jt.flags.use_cuda and jt.compiler.has_acl else "cuda" if jt.flags.use_cuda else "cpu"
+    enabled = autocast_is_enabled(device)
+    dtype = autocast_configured_dtype(device)
+    cache_enabled = autocast_cache_enabled()
+
+    def replay_context():
+        return autocast(device_type=device, enabled=enabled, dtype=dtype, cache_enabled=cache_enabled)
+
+    return jt.autograd.checkpoint(fn, *args, preserve_rng_state=preserve_rng_state,
+                                  context_fn=replay_context, **kwargs)
 
 
-class _CheckpointRef:
-    __slots__ = ("index",)
-
-    def __init__(self, index):
-        self.index = index
-
-
-class _CheckpointTree:
-    __slots__ = ("kind", "container_type", "items")
-
-    def __init__(self, kind, container_type, items):
-        self.kind = kind
-        self.container_type = container_type
-        self.items = tuple(items)
-
-
-def _checkpoint_tree_map(value, leaf_fn):
-    if isinstance(value, dict):
-        return _CheckpointTree(
-            "dict", type(value),
-            ((key, _checkpoint_tree_map(child, leaf_fn))
-             for key, child in value.items()),
-        )
-    if isinstance(value, list):
-        return _CheckpointTree(
-            "list", type(value),
-            (_checkpoint_tree_map(child, leaf_fn) for child in value),
-        )
-    if isinstance(value, tuple):
-        return _CheckpointTree(
-            "tuple", type(value),
-            (_checkpoint_tree_map(child, leaf_fn) for child in value),
-        )
-    return leaf_fn(value)
-
-
-def _checkpoint_rebuild_container(kind, container_type, items):
-    if kind == "dict":
-        if container_type is dict:
-            return dict(items)
-        try:
-            return container_type(items)
-        except TypeError:
-            return dict(items)
-    if kind == "list":
-        if container_type is list:
-            return list(items)
-        try:
-            return container_type(items)
-        except TypeError:
-            return list(items)
-    if container_type is tuple:
-        return tuple(items)
-    if hasattr(container_type, "_fields"):
-        return container_type(*items)
-    try:
-        return container_type(items)
-    except TypeError:
-        return tuple(items)
-
-
-def _checkpoint_tree_unmap(spec, leaves):
-    if isinstance(spec, _CheckpointRef):
-        return leaves[spec.index]
-    if not isinstance(spec, _CheckpointTree):
-        return spec
-    if spec.kind == "dict":
-        items = ((key, _checkpoint_tree_unmap(child, leaves))
-                 for key, child in spec.items)
-    else:
-        items = (_checkpoint_tree_unmap(child, leaves)
-                 for child in spec.items)
-    return _checkpoint_rebuild_container(
-        spec.kind, spec.container_type, items)
-
-
-def _checkpoint_flatten(value, leaves):
-    def store(leaf):
-        index = len(leaves)
-        leaves.append(leaf)
-        return _CheckpointRef(index)
-    return _checkpoint_tree_map(value, store)
-
-
-def _checkpoint_signature(spec, leaves):
-    if isinstance(spec, _CheckpointRef):
-        value = leaves[spec.index]
-        if isinstance(value, jt.Var):
-            return ("var", tuple(value.shape), str(value.dtype))
-        return ("value", type(value))
-    if not isinstance(spec, _CheckpointTree):
-        return ("value", type(spec))
-    if spec.kind == "dict":
-        children = tuple(
-            (key, _checkpoint_signature(child, leaves))
-            for key, child in spec.items
-        )
-    else:
-        children = tuple(
-            _checkpoint_signature(child, leaves) for child in spec.items
-        )
-    return (spec.kind, spec.container_type, children)
-
-
-def _checkpoint_collect_hidden(value, variables, index_by_id,
-                              hidden_indices, seen_objects):
-    if isinstance(value, jt.Var):
-        if value.is_stop_grad():
-            return
-        index = index_by_id.get(id(value))
-        if index is None:
-            index = len(variables)
-            index_by_id[id(value)] = index
-            variables.append(value)
-        if index not in hidden_indices:
-            hidden_indices.append(index)
-        return
-    object_id = id(value)
-    if object_id in seen_objects:
-        return
-    seen_objects.add(object_id)
-
-    parameters = getattr(value, "parameters", None)
-    if not isinstance(value, type) and callable(parameters):
-        for parameter in parameters():
-            _checkpoint_collect_hidden(
-                parameter, variables, index_by_id,
-                hidden_indices, seen_objects)
-    if isinstance(value, type):
-        return
-
-    if isinstance(value, _functools_checkpoint.partial):
-        children = (value.func, value.args, value.keywords or {})
-    elif isinstance(value, super):
-        children = (value.__self__,)
-    elif isinstance(value, _types_checkpoint.MethodType):
-        children = (value.__self__, value.__func__)
-    elif isinstance(value, _types_checkpoint.FunctionType):
-        closure = []
-        for cell in value.__closure__ or ():
-            try:
-                closure.append(cell.cell_contents)
-            except ValueError as exc:
-                swallowed(
-                    "torch/installers/data.py _checkpoint_collect_hidden: "
-                    "empty closure cell", exc)
-        globals_used = (
-            value.__globals__[name] for name in value.__code__.co_names
-            if name in value.__globals__
-        )
-        children = (
-            tuple(closure), value.__defaults__ or (),
-            value.__kwdefaults__ or {}, tuple(globals_used),
-        )
-    elif callable(value) and getattr(value, "__self__", None) is not None:
-        children = (value.__self__, getattr(value, "__func__", None))
-    elif isinstance(value, dict):
-        children = tuple(value.values())
-    elif isinstance(value, (tuple, list)):
-        children = value
-    else:
-        children = ()
-    for child in children:
-        _checkpoint_collect_hidden(
-            child, variables, index_by_id, hidden_indices, seen_objects)
-
-
-def _checkpoint_rng_snapshot():
-    cpu_state = jt.get_cpu_rng_state()
-    cuda_states = None
-    if int(jt.flags.use_cuda) and getattr(jt, "has_cuda", False):
-        cuda_states = jt.get_cuda_rng_state_all()
-    return cpu_state, cuda_states
-
-
-def _checkpoint_rng_restore(state):
-    cpu_state, cuda_states = state
-    if cuda_states is not None:
-        jt.set_cuda_rng_state_all(cuda_states)
-    jt.set_cpu_rng_state(cpu_state)
-
-
-class _CheckpointRecompute(jt.Function):
-    def __init__(self, fn, args_template, kwargs_template,
-                 original_variables, user_indices, hidden_indices,
-                 preserve_rng_state):
-        super().__init__()
-        self.fn = fn
-        self.args_template = args_template
-        self.kwargs_template = kwargs_template
-        self.original_variables = original_variables
-        self.user_indices = tuple(user_indices)
-        self.hidden_indices = tuple(hidden_indices)
-        self.preserve_rng_state = preserve_rng_state
-
-    def _call_and_flatten(self, inputs):
-        args = _checkpoint_tree_unmap(self.args_template, inputs)
-        kwargs = _checkpoint_tree_unmap(self.kwargs_template, inputs)
-        leaves = []
-        spec = _checkpoint_flatten(self.fn(*args, **kwargs), leaves)
-        return tuple(leaves), spec
-
-    def execute(self, *inputs):
-        if jt.flags.no_grad:
-            leaves, self.output_spec = self._call_and_flatten(inputs)
-            self.output_signature = _checkpoint_signature(self.output_spec, leaves)
-            return leaves
-
-        with jt.flag_scope(no_grad=0):
-            self.boundary_inputs = {
-                index: inputs[index].detach().start_grad()
-                for index in self.user_indices
-            }
-            self.forward_rng_state = (
-                _checkpoint_rng_snapshot() if self.preserve_rng_state else None
-            )
-        with jt.no_grad():
-            leaves, self.output_spec = self._call_and_flatten(inputs)
-        jt.sync_all()
-        for output in leaves:
-            if (isinstance(output, jt.Var)
-                    and getattr(type(output), "_frontend_backend", None)
-                    is not None and output.is_stop_grad()):
-                output.start_grad()
-        self.output_signature = _checkpoint_signature(self.output_spec, leaves)
-        return leaves
-
-    def grad(self, *grad_outputs):
-        caller_rng_state = (
-            _checkpoint_rng_snapshot() if self.preserve_rng_state else None
-        )
-        try:
-            if self.preserve_rng_state:
-                _checkpoint_rng_restore(self.forward_rng_state)
-            with jt.flag_scope(no_grad=0):
-                recompute_inputs = tuple(
-                    self.boundary_inputs.get(index, original)
-                    for index, original in enumerate(self.original_variables)
-                )
-                recomputed, output_spec = self._call_and_flatten(recompute_inputs)
-                signature = _checkpoint_signature(output_spec, recomputed)
-                if signature != self.output_signature:
-                    raise RuntimeError(
-                        "torch.utils.checkpoint recomputation changed output "
-                        "structure, shape, or dtype"
-                    )
-                terms = [
-                    (output * grad_output.detach()).sum()
-                    for output, grad_output in zip(recomputed, grad_outputs)
-                    if isinstance(output, jt.Var) and grad_output is not None
-                ]
-                if not terms:
-                    return (None,) * len(self.original_variables)
-                objective = terms[0]
-                for term in terms[1:]:
-                    objective = objective + term
-
-                target_refs = []
-                target_indices = []
-                for index in self.user_indices:
-                    target_refs.append(self.boundary_inputs[index])
-                    target_indices.append(index)
-                for index in self.hidden_indices:
-                    target_refs.append(self.original_variables[index])
-                    target_indices.append(index)
-                if not target_refs:
-                    return (None,) * len(self.original_variables)
-                target_grads = jt.grad(objective, target_refs)
-                jt.sync_all()
-                input_grads = [None] * len(self.original_variables)
-                for index, grad in zip(target_indices, target_grads):
-                    if grad is not None:
-                        input_grads[index] = (
-                            grad if input_grads[index] is None
-                            else input_grads[index] + grad
-                        )
-                return tuple(input_grads)
-        finally:
-            if caller_rng_state is not None:
-                _checkpoint_rng_restore(caller_rng_state)
-
-
-def _checkpoint(fn, *args, use_reentrant=None,
-                context_fn=_checkpoint_default_context,
-                determinism_check="default", debug=False, **kwargs):
-    """Drop forward activations and recompute the wrapped function in backward."""
-    preserve_rng_state = kwargs.pop("preserve_rng_state", True)
-    if use_reentrant is not None and type(use_reentrant) is not bool:
-        raise TypeError("checkpoint use_reentrant must be bool or None")
-    if type(preserve_rng_state) is not bool:
-        raise TypeError("checkpoint preserve_rng_state must be bool")
-    if context_fn is not _checkpoint_default_context:
-        raise NotImplementedError("checkpoint context_fn is not implemented")
-    if determinism_check != "default":
-        raise NotImplementedError("checkpoint determinism_check is not implemented")
-    if debug is not False:
-        raise NotImplementedError("checkpoint debug is not implemented")
-    if jt.flags.no_grad:
-        return fn(*args, **kwargs)
-
-    variables = []
-    index_by_id = {}
-
-    def add_user_variable(value):
-        if not isinstance(value, jt.Var) or value.is_stop_grad():
-            return value
-        index = index_by_id.get(id(value))
-        if index is None:
-            index = len(variables)
-            index_by_id[id(value)] = index
-            variables.append(value)
-        return _CheckpointRef(index)
-
-    args_template = _checkpoint_tree_map(args, add_user_variable)
-    kwargs_template = _checkpoint_tree_map(kwargs, add_user_variable)
-    user_indices = tuple(range(len(variables)))
-    hidden_indices = []
-    _checkpoint_collect_hidden(
-        fn, variables, index_by_id, hidden_indices, set())
-    if not variables:
-        return fn(*args, **kwargs)
-
-    context = _CheckpointRecompute(
-        fn, args_template, kwargs_template, tuple(variables),
-        user_indices, hidden_indices, preserve_rng_state,
-    )._new_call_context()
-    leaves = context._run_call(*variables)
-    if not isinstance(leaves, (tuple, list)):
-        leaves = (leaves,)
-    return _checkpoint_tree_unmap(context.output_spec, leaves)
 
 def _default_convert(value):
     return value
@@ -1285,8 +1064,9 @@ for _name, _implementation in _DATA_APIS.items():
     )
 register_fidelity(
     "torch.utils.checkpoint.checkpoint", _checkpoint, Fidelity.APPROXIMATE,
-    "recomputes activations in backward and preserves Jittor CPU/CUDA RNG; "
-    "custom context_fn, debug, and non-default determinism checks are unsupported",
+    "native first-order activation replay with RNG and captured parameter gradients; "
+    "both use_reentrant flags share this engine without separate PyTorch reentrant/non-reentrant "
+    "scheduling; debug/context_fn variants are not implemented",
 )
 register_fidelity(
     "torchdata.stateful_dataloader.StatefulDataLoader", StatefulDataLoader,
@@ -1347,7 +1127,9 @@ def install(ctx):
         g.utils.data = _modules["torch.utils.data"]
     if "torch.utils.checkpoint" not in _modules:
         _ckpt = _types2.ModuleType("torch.utils.checkpoint")
-        _ckpt.checkpoint = _checkpoint
         _modules["torch.utils.checkpoint"] = _ckpt
-        g.utils.checkpoint = _ckpt
+    else:
+        _ckpt = _modules["torch.utils.checkpoint"]
+    _ckpt.checkpoint = _checkpoint
+    g.utils.checkpoint = _ckpt
     _install_torchdata_stateful_dataloader(g, ctx.registry)

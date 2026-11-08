@@ -255,6 +255,22 @@ class TestAdam(Base):
 
         both_devices(body)
 
+    def test_adamw_decays_by_torch_s_default(self):
+        # torch.optim.AdamW's weight_decay defaults to 0.01 (decoupled): with
+        # a zero gradient a step only decays, w -= lr * 0.01 * w.
+        def body(dev):
+            w = torch.tensor(np.array([1.0, -2.0], "float32"), requires_grad=True)
+            optimizer = torch.optim.AdamW([w], lr=0.1)
+            self.assertEqual(optimizer.weight_decay, 0.01)
+            (w * 0).sum().backward()
+            optimizer.step()
+            self.ac(w.detach().numpy(), np.array([1.0, -2.0]) * (1 - 0.1 * 0.01), msg=dev)
+            explicit = torch.optim.AdamW([torch.ones(1, requires_grad=True)], lr=0.1,
+                                         weight_decay=0.0)
+            self.assertEqual(explicit.weight_decay, 0.0)
+
+        both_devices(body)
+
     def test_adamw_accepts_and_serializes_fused_option(self):
         value = jt.array(np.array([1.0, -2.0], dtype=np.float32))
         optimizer = torch.optim.AdamW(
@@ -356,7 +372,8 @@ class TestAdam(Base):
             self.ac(retained_data.numpy(), setitem_parent.numpy(), atol=0.0, rtol=0.0,
                     msg=f"retained data alias observes mutation {dev}")
 
-            parent[1].add_(2.0)
+            with torch.no_grad():
+                parent[1].add_(2.0)
             self.ac(parent.numpy()[1], np.full(3, 3.0, dtype=np.float32),
                     atol=0.0, rtol=0.0, msg=f"view add_ writes parent {dev}")
 
@@ -383,13 +400,31 @@ class TestAdam(Base):
                     atol=0.0, rtol=0.0,
                     msg=f"deep chained view writes root parent {dev}")
 
-            frozen = torch.ones(2, 3).stop_grad()
-            frozen.normal_(0.0, 0.1)
-            frozen[0].add_(1.0)
-            self.assertTrue(frozen.is_stop_grad(),
-                            f"in-place ops keep frozen tensor frozen {dev}")
+            for name, initialize in operations[:2]:
+                for through_view in (False, True):
+                    frozen = torch.ones(2, 3).stop_grad()
+                    target = frozen[0] if through_view else frozen
+                    # Exercise the bound initializer itself, without a data
+                    # alias or no_grad masking an accidental random RHS edge.
+                    if name == "normal_":
+                        target.normal_(0.0, 0.1)
+                    else:
+                        target.uniform_(-0.2, 0.2)
+                    self.assertTrue(frozen.is_stop_grad(),
+                                    f"{name} keeps root frozen {dev}/{through_view}")
+                    self.assertFalse(target.requires_grad)
+                    frozen[0].add_(1.0)
+                    assert_stays_on_device(frozen, "frozen initializer")
+                    self.assertTrue(frozen.is_stop_grad(),
+                                    f"in-place ops keep frozen tensor frozen {dev}")
 
-        both_devices(body)
+        def on_device(dev):
+            # A tensor with no ``device=`` is built on the CPU, as in torch;
+            # the CUDA round asks for CUDA the way torch code does.
+            with torch.device(dev):
+                body(dev)
+
+        both_devices(on_device)
 
     def test_adamw_step_without_gradients_is_noop(self):
         def body(dev):

@@ -19,9 +19,13 @@ SEH_HOOK;
 EXTERN_LIB void pyjt_def_all(PyObject* m);
 
 vector<VarHolder*> _grad(VarHolder* loss, const vector<VarHolder*>& targets, bool retain_graph) {
+   loss->observe_alias_history();
    vector<Var*> vs;
    vs.reserve(targets.size());
-   for (auto* v : targets) vs.push_back(v->var);
+   for (auto* v : targets) {
+       v->observe_alias_history();
+       vs.push_back(v->var);
+   }
    auto grads = grad(loss->var, vs, retain_graph);
    vector<VarHolder*> grads_hold;
    grads_hold.reserve(targets.size());
@@ -35,9 +39,13 @@ vector<Maybe<VarHolder>> _grad_optional(
     const vector<VarHolder*>& targets,
     bool retain_graph
 ) {
+   loss->observe_alias_history();
    vector<Var*> vs;
    vs.reserve(targets.size());
-   for (auto* v : targets) vs.push_back(v->var);
+   for (auto* v : targets) {
+       v->observe_alias_history();
+       vs.push_back(v->var);
+   }
    auto grads = grad(loss->var, vs, retain_graph, false);
    vector<Maybe<VarHolder>> grads_hold;
    grads_hold.reserve(targets.size());

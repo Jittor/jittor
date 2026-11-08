@@ -17,7 +17,7 @@ alone, which makes the operators *order dependent* on signed zeros:
 NumPy is the oracle for both, and it is queried on the same operands here
 rather than quoted from memory.
 
-What used to happen (KI-BACKEND-004, KI-OPS-006):
+What used to happen (the remaining reduction throughput cost is KI-OPS-006):
 
 * CPU lowered ``maximum`` to ``std::max(a, b)``, which is ``a < b ? b : a``.
   Every comparison against NaN is false, so the *first* operand came back --
@@ -268,7 +268,7 @@ class TestMinMaxNanPropagationCuda(_NanPropagationContract, unittest.TestCase):
 
 @unittest.skipUnless(_has_cuda(), "a CUDA device is required")
 class TestMinMaxDeviceParity(unittest.TestCase):
-    """The device-parity case KI-BACKEND-004 asked for.
+    """The device-parity case the NaN fix asked for.
 
     The two backends lowered ``maximum`` through different functions and the
     disagreement was invisible because no parity case fed a NaN. This is that

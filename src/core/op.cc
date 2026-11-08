@@ -8,6 +8,8 @@
 
 #include "core/node.h"
 #include "core/op.h"
+#include <algorithm>
+#include <unordered_set>
 #include "core/var.h"
 #include "codegen/op_compiler.h"
 #include "runtime/profiler/profiler.h"
@@ -23,11 +25,15 @@
 #include "core/grad.h"
 #include "ops/op_register.h"
 #include "utils/graph_build_profile.h"
+#include "runtime/rematerialization_scope.h"
+#include "runtime/profiler/memory_history.h"
+#include "runtime/profiler/step_trace.h"
 
 namespace jittor {
 
-DECLARE_FLAG(string, cache_path);
 DECLARE_FLAG(bool, no_grad);
+
+DECLARE_FLAG(string, cache_path);
 
 DEFINE_FLAG(int, try_use_32bit_index, 0,
     "If not overflow, try to use 32 bit type as index type.");
@@ -66,8 +72,13 @@ void check_backward_storage_read(Var* value) {
 
 // Only Ops with disabled inputs have an entry. Node flag bits record whether
 // an Op has already snapshotted and provide the common no-map-lookup fast path.
-static unordered_map<int64, vector<int64>>& requires_grad_disabled_edges() {
-    static auto* edges = new unordered_map<int64, vector<int64>>();
+struct DisabledGradientEdge {
+    int64 source_id;
+    bool unrecorded_view;
+};
+
+static unordered_map<int64, vector<DisabledGradientEdge>>& requires_grad_disabled_edges() {
+    static auto* edges = new unordered_map<int64, vector<DisabledGradientEdge>>();
     return *edges;
 }
 
@@ -75,17 +86,31 @@ bool lookup_requires_grad_disabled_edge(Node* source, Node* target) {
     auto& edges = requires_grad_disabled_edges();
     auto found = edges.find(target->id);
     if (found == edges.end()) return false;
-    for (int64 source_id : found->second)
-        if (source_id == source->id) return true;
+    for (const auto& edge : found->second)
+        if (edge.source_id == source->id) return true;
+    return false;
+}
+
+bool lookup_unrecorded_view_edge(Node* source, Node* target) {
+    auto& edges = requires_grad_disabled_edges();
+    auto found = edges.find(target->id);
+    if (found == edges.end()) return false;
+    for (const auto& edge : found->second)
+        if (edge.source_id == source->id && edge.unrecorded_view) return true;
     return false;
 }
 
 Op::Op() {
+    rematerialization_owner = rematerialization_construction_owner();
     launch_origin = capture_launch_origin();
+    if (PREDICT_BRANCH_NOT_TAKEN(capture_op_stacks))
+        memory_stack = capture_memory_stack();
+    if (PREDICT_BRANCH_NOT_TAKEN(step_trace_mode & st_ops))
+        step_trace_note_op_built(this);
     float32_precision = current_float32_precision_policy();
     flags.set(NodeFlags::_var, 0);
     set_flag(OpFlags::_cpu, 1);
-    // The AMP bits are one field, so they move as one. `set_flag` with a
+    // The seven amp bits are one field, so they move as one. `set_flag` with a
     // width also *clears* the field first, which `|=` did not -- identical
     // here (a fresh Op has them at zero) and the honest spelling of "this is
     // the amp field".
@@ -120,6 +145,7 @@ const OpDef& Op::definition() const {
 }
 
 static thread_local int execution_target_override = -1;
+static thread_local bool host_execution_forced = false;
 
 BackendId execution_target_backend() {
     return execution_target_override < 0
@@ -140,7 +166,18 @@ ExecutionBackendScope::ExecutionBackendScope(BackendId backend)
 
 ExecutionBackendScope::~ExecutionBackendScope() { execution_target_override = previous; }
 
+HostExecutionScope::HostExecutionScope() : previous(host_execution_forced) {
+    host_execution_forced = true;
+}
+
+HostExecutionScope::~HostExecutionScope() { host_execution_forced = previous; }
+
 TensorPlacement Op::graph_placement() const {
+    // An op asks this several times per execution (requested and execution
+    // backend, the placement scope, the implementation lookup), and each walk
+    // reads every output var: a cache miss per output, for an answer that is
+    // "none" in any program that never placed a tensor explicitly.
+    if (!explicit_tensor_placement_made.load(std::memory_order_relaxed)) return {};
     for (const auto& edge : _outputs) {
         Var* output = edge.node->var();
         if (output->placement.explicit_backend)
@@ -155,24 +192,43 @@ BackendId Op::requested_backend() const {
 }
 
 BackendId Op::execution_backend() const {
-    const auto requested = requested_backend();
+    if (PREDICT_BRANCH_NOT_TAKEN(host_execution_forced)) return BackendId::Cpu;
+    return execution_backend_for(requested_backend());
+}
+
+BackendId Op::execution_backend_for(BackendId requested) const {
+    if (PREDICT_BRANCH_NOT_TAKEN(host_execution_forced)) return BackendId::Cpu;
     return flag(OpFlags::_cuda) && requested != BackendId::Cpu
         ? requested : BackendId::Cpu;
 }
 
 const OpImplementation& Op::implementation() const {
+    return implementation_on(execution_backend());
+}
+
+const OpImplementation& Op::implementation_on(BackendId backend) const {
+    static_assert(alignof(OpImplementation) >= 8, "the backend id is kept in the low bits");
+    const uintptr_t cached = implementation_cache.load(std::memory_order_relaxed);
+    if (cached && (cached & 7) == (uintptr_t)backend)
+        return *reinterpret_cast<const OpImplementation*>(cached & ~uintptr_t(7));
     const auto& owner = definition();
-    const auto backend = execution_backend();
     auto found = owner.implementations.find(backend);
     USER_CHECK(found != owner.implementations.end())
         << "No kernel registered for" << owner.name << "on" << backend_ops(backend).name;
+    static_assert((uintptr_t)BackendId::Corex < 8, "backend ids fit the low three bits");
+    implementation_cache.store(reinterpret_cast<uintptr_t>(&found->second) | (uintptr_t)backend,
+                               std::memory_order_relaxed);
     return found->second;
 }
 
 const Codegen& Op::codegen() const { return implementation().codegen; }
 
 void Op::prepare_fragment(JK& key) {
-    auto callback = codegen().fragment;
+    prepare_fragment_on(key, execution_backend());
+}
+
+void Op::prepare_fragment_on(JK& key, BackendId backend) {
+    auto callback = implementation_on(backend).codegen.fragment;
     USER_CHECK(callback) << "Missing codegen fragment for" << name();
     callback(this, key);
 }
@@ -208,11 +264,12 @@ Var* Op::create_output(NanoVector shape, NanoString dtype) {
     return output;
 }
 
-// A pending Var marked _is_scalar is torch's CPU scalar: it has no data
-// anywhere yet, and it is the `2` in `x * 2`, the `1` a gradient starts from,
-// or a broadcast/unary of one (array_op.cc sets the flag on a rank-zero
-// source; broadcast_to_op.cc and unary_op.cc carry it forward). Such a value
-// follows the operand it meets instead of forcing a device error.
+// A pending Var marked _is_scalar or _is_constant is torch's CPU scalar: it
+// has no data anywhere yet, and it is the `2` in `x * 2`, the `1` a gradient
+// starts from, or a broadcast/unary/device-copy of one. A rank-zero ArrayOp
+// sets both bits (array_op.cc); broadcast_to_op.cc, unary_op.cc and
+// device_copy_op.cc carry them forward. Such a value follows the operand it
+// meets instead of forcing a device error.
 //
 // Both halves of that test are load-bearing, and each has a test:
 // element count alone sweeps in a real one-element user tensor that already
@@ -220,14 +277,17 @@ Var* Op::create_output(NanoVector shape, NanoString dtype) {
 // caller deliberately built on cuda:0 and merely has not synced yet --
 // silently, where torch raises. See tests/backends/cuda/test_cuda_multi_device.py.
 //
-// One edge remains and is accepted: `jt.zeros(n)` is `unary(0).broadcast(n)`,
-// and _is_scalar comes through the broadcast, so an unsynced zeros/ones does
-// follow its operand. It is a constant with no data anywhere, produced
-// bit-identically on either card, so this is constant placement rather than
-// moving something the caller computed. device-placement.md §5 has the
-// reasoning and why a third condition would cost more than it buys.
+// One edge remains and is accepted: `jt.zeros(n)` is `unary(0).broadcast(n)`.
+// A factory result clears `_is_scalar` on the full-shape result so it promotes
+// as a tensor, but `_is_constant` still comes through the
+// broadcast, so an unsynced zeros/ones does follow its operand. It is a
+// constant with no data anywhere, produced bit-identically on either card, so
+// this is constant placement rather than moving something the caller computed.
+// device-placement.md section 5 has the reasoning and why a third condition
+// would cost more than it buys.
 static inline bool is_pending_scalar(Var* v) {
-    return !v->is_finished() && v->flag(VarFlags::_is_scalar)
+    return !v->is_finished()
+        && (v->flag(VarFlags::_is_scalar) || v->flag(VarFlags::_is_constant))
         && !v->flag(VarFlags::_placement_published);
 }
 
@@ -299,7 +359,20 @@ void Op::propagate_device() {
     if (target.explicit_backend) {
         const int dev = target.device.backend == BackendId::Cpu ? -1 : target.device.index;
         for (Var* v : inputs()) {
-            if (!v->placement.explicit_backend || v->placement == target) continue;
+            if (v->placement == target) continue;
+            if (!v->placement.explicit_backend) {
+                // An implicitly placed input names its device only through
+                // device_id. A Python number in native mode is one, made on
+                // the current device: next to a DLPack import or a `.cuda(1)`
+                // of an explicit tensor on another card it was left there, and
+                // the kernel on the target card read its pointer and faulted
+                // with an illegal address.
+                if (dev < 0 || v->device_id < 0 || v->device_id == dev) continue;
+                if (is_pending_scalar(v) && retarget_pending(v, dev, target)) continue;
+                USER_ERROR << "Expected all inputs to be on the same CUDA device, but found"
+                    << "cuda:" >> dev << "and cuda:" >> v->device_id << "for op" << name() >> "."
+                    << "\nMove one side with Var.to_device() / .to(\"cuda:N\") first.";
+            }
             USER_CHECK(is_pending_scalar(v) && retarget_pending(v, dev, target))
                 << "Expected all tensor inputs on the same backend and device for" << name()
                 << "; use an explicit device copy before mixing CPU and accelerator tensors";
@@ -348,13 +421,17 @@ void Op::init() {
     bind_definition(false);
     bool first_init = !flag(OpFlags::_requires_grad_snapshot);
     bool has_disabled_input = false;
+    bool has_unrecorded_view_input = false;
     bool has_first_order_only_input = false;
     bool all_inputs_stopped = _inputs.size() != 0;
     if (first_init) {
         set_flag(OpFlags::_requires_grad_snapshot);
         for (Var* v : inputs()) {
+            v->refresh_alias_requires_grad();
+            if (!no_grad && !is_stop_grad()) v->check_alias_history();
             bool disabled = v->flag(VarFlags::_requires_grad_disabled);
             has_disabled_input |= disabled;
+            has_unrecorded_view_input |= v->flag(VarFlags::_unrecorded_view);
             has_first_order_only_input |=
                 v->flag(VarFlags::_first_order_only);
             // Under torch's rule a Python scalar never asks for a gradient,
@@ -366,17 +443,16 @@ void Op::init() {
                 || (autograd_policy.stop_outputs_when_inputs_stopped
                     && is_constant_scalar(v));
         }
-        if (has_disabled_input) {
+        if (has_disabled_input || has_unrecorded_view_input) {
             set_flag(OpFlags::_requires_grad_disabled);
             auto& sources = requires_grad_disabled_edges()[id];
             for (Var* v : inputs())
-                if (v->flag(VarFlags::_requires_grad_disabled))
-                    sources.push_back(v->id);
+                if (v->flag(VarFlags::_requires_grad_disabled)
+                        || v->flag(VarFlags::_unrecorded_view))
+                    sources.push_back({v->id, bool(v->flag(VarFlags::_unrecorded_view))});
         }
     }
     infer_shape();
-    // Shape-only edges (for example broadcast_to(dout, old_input)) are
-    // removed by infer_shape. They do not read the old input's bytes.
     if (!flag(OpFlags::_no_input_storage))
         for (Var* value : inputs()) check_backward_storage_read(value);
     if (first_init && _inputs.size() && !flag(OpFlags::_manual_device))
@@ -426,6 +502,110 @@ void Op::init() {
     }
 }
 
+vector<Var*> saved_storage_readers(const vector<Var*>& written, Op* writer) {
+    vector<Var*> pending(written), saved;
+    auto visit = [&](Var* value) {
+        if (std::find(pending.begin(), pending.end(), value) == pending.end())
+            pending.push_back(value);
+    };
+    for (size_t i=0; i<pending.size(); ++i) {
+        Var* value = pending[i];
+        if (value->share_next)
+            for (Var* member=value->share_next; member!=value; member=member->share_next)
+                visit(member);
+        for (Op* reader : value->outputs()) {
+            if (reader == writer) continue;
+            for (Var* out : reader->outputs()) {
+                // Kept graphs run only through their replay owner, including
+                // when an imperative write commits an already executed step.
+                if (out->flag(VarFlags::_kept)) continue;
+                if (out->share_src == value) {
+                    visit(out);
+                } else if (!out->mem_ptr && out->liveness.backward.active()) {
+                    if (out->flag(VarFlags::_needed_by_backward)) {
+                        if (std::find(saved.begin(), saved.end(), out) == saved.end())
+                            saved.push_back(out);
+                    } else {
+                        // A nonsaved intermediate such as x+1 still connects
+                        // the written allocation to a later saved exp result.
+                        visit(out);
+                    }
+                }
+            }
+        }
+    }
+    return saved;
+}
+
+void order_after_readers(Op* op, const vector<Var*>& written) {
+    // A view of a written var reads it wherever its own readers do, so their
+    // readers count too: an output still asking to share its storage
+    // (`share_src`) or one already in its share ring -- a broadcast's expand
+    // that has run and left the graph, whose consumer has not.
+    vector<Var*> aliases;
+    unordered_set<Var*> alias_members;
+    auto alias = [&](Var* v) {
+        if (alias_members.insert(v).second) aliases.push_back(v);
+    };
+    for (Var* v : written) alias(v);
+    vector<Node*> after;
+    unordered_set<Node*> after_members;
+    auto push_after = [&](Node* node) {
+        if (after_members.insert(node).second) after.push_back(node);
+    };
+    for (size_t k = 0; k < aliases.size(); k++) {
+        Var* v = aliases[k];
+        if (v->share_next)
+            for (Var* member = v->share_next; member != v; member = member->share_next)
+                alias(member);
+        for (Op* reader : v->outputs()) {
+            if (reader == op) continue;
+            bool stands_for_reader = false;
+            for (Var* out : reader->outputs()) {
+                if (out->share_src == v) {
+                    alias(out);
+                    continue;
+                }
+                // A pending reader: its first unfinished output stands for it.
+                if (stands_for_reader || out->is_finished()) continue;
+                stands_for_reader = true;
+                push_after(out);
+            }
+        }
+    }
+    for (Var* saved : saved_storage_readers(written, op))
+        push_after(saved);
+    if (after.empty()) return;
+    // A reader upstream of the op -- the forward a gradient is computed
+    // from -- is ordered already by the data it feeds it, and an edge would
+    // only keep its output alive until the update: a captured step, whose
+    // whole forward is pending when the optimizer is built, held every
+    // activation to the end, half as much memory again.
+    std::unordered_set<Op*> upstream;
+    vector<Node*> stack;
+    for (auto& edge : op->_inputs) stack.push_back(edge.node);
+    while (!stack.empty()) {
+        Node* v = stack.back();
+        stack.pop_back();
+        if (v->is_finished()) continue;
+        Op* producer = ((Var*)v)->input();
+        if (!producer || !upstream.insert(producer).second) continue;
+        for (auto& edge : producer->_inputs) stack.push_back(edge.node);
+    }
+    size_t kept = 0;
+    for (Node* out : after)
+        if (!upstream.count(((Var*)out)->input())) after[kept++] = out;
+    after.resize(kept);
+    if (after.empty()) return;
+    op->add_inputs(after);
+    // Control edges: they order the two ops and carry no data.
+    auto edge = op->_inputs.end();
+    for (size_t i = 0; i < after.size(); i++) {
+        edge = std::prev(edge);
+        edge->reverse().index = -1;
+    }
+}
+
 void Op::compile_optimize(string& src) {}
 
 void Op::infer_shape() {}
@@ -469,7 +649,8 @@ void Op::prepare_codegen_key(JK& jk) {
     memcheck_all_exist();
     jk << name();
     auto pre_size = jk.size;
-    prepare_fragment(jk);
+    const auto backend = execution_backend();
+    prepare_fragment_on(jk, backend);
     if (jk.size == pre_size) {
         // not a jit op
         bool has_cuda = flag(OpFlags::_cuda);
@@ -480,7 +661,7 @@ void Op::prepare_codegen_key(JK& jk) {
         bool use_int64_t = false;
         // TODO: fused op do not have inputs,
         //   check use_cuda_op from outputs may not be enough
-        bool use_cuda_op = executes_on_accelerator();
+        bool use_cuda_op = backend != BackendId::Cpu;
         for (Var* var : inputs()) {
             if (var->num >= std::numeric_limits<int32_t>::max()
                     || var->storage_span_bytes() / var->dsize() >= std::numeric_limits<int32_t>::max())
@@ -518,11 +699,15 @@ void Op::prepare_codegen_key(JK& jk) {
 }
 
 void Op::prepare_execution(JK& jk) {
+    prepare_execution_on(jk, execution_backend());
+}
+
+void Op::prepare_execution_on(JK& jk, BackendId backend) {
     Float32PrecisionScope precision_scope(float32_precision);
     JT_GBP_SCOPE(gbp_jit_key);
     jk.clear();
     if (is_storage_view()) return;
-    auto callback = codegen().prepare;
+    auto callback = implementation_on(backend).codegen.prepare;
     USER_CHECK(callback) << "Missing codegen preparation for" << name();
     callback(this, jk);
     const auto& identity = definition().compile_identity;
@@ -533,9 +718,13 @@ void Op::prepare_execution(JK& jk) {
 }
 
 void Op::execute_prepared(JK& jk) {
+    execute_prepared_on(jk, execution_backend());
+}
+
+void Op::execute_prepared_on(JK& jk, BackendId backend) {
     Float32PrecisionScope precision_scope(float32_precision);
     if (is_storage_view()) return;
-    const auto& kernel = implementation().kernel;
+    const auto& kernel = implementation_on(backend).kernel;
     if (!jk.empty()) {
         USER_CHECK(kernel.jit) << "Missing JIT kernel for" << name();
         kernel.jit(this, jk);

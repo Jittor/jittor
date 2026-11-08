@@ -491,6 +491,7 @@ class TestTorchCompatStructure(unittest.TestCase):
             "optim",
             "autograd",
             "cuda",
+            "npu",
             "distributed",
             "core.extended",
             "serialization",
@@ -552,7 +553,7 @@ class TestTorchCompatStructure(unittest.TestCase):
         installers = package_root / "installers"
         expected = {
             "core.py", "tensor", "factories.py", "autograd.py", "nn",
-            "nn_init.py", "cuda", "distributed.py", "data.py",
+            "nn_init.py", "cuda", "npu.py", "distributed.py", "data.py",
             "distributions.py", "numerical", "compiler.py", "utilities.py",
         }
         self.assertEqual(

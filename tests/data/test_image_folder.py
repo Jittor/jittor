@@ -13,15 +13,13 @@ import numpy as np
 import random
 from _helpers.torch_runtime import import_torch_modules, modules_available
 
-mid = 0
-if hasattr(os, "uname") and os.uname()[1] == "jittor-ce":
-    mid = 1
-traindir = ["/data1/cjld/imagenet/train/", "/home/cjld/imagenet/train/"][mid]
+# Same fixture as tests/data/test_dataset.py: an ImageNet-layout train directory.
+traindir = os.environ.get("JITTOR_TEST_IMAGENET_TRAIN", "")
 check_num_batch = 5
 pass_this_test = not modules_available("torch", "torchvision") or not os.path.isdir(
     traindir
 )
-msg = "optional Torch runtime or ImageNet fixture is unavailable"
+msg = "optional Torch runtime or JITTOR_TEST_IMAGENET_TRAIN fixture is unavailable"
 torch = None
 train_dataset = None
 

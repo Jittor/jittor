@@ -21,23 +21,31 @@ Run:  python -m pytest compat/tests/triton/test_triton_backend.py
 from _helpers import capability as _test_capability
 import ctypes
 import importlib.util
+import importlib.machinery
 import os
+import sys
+import types
 import unittest
+from contextlib import ExitStack
 from unittest import mock
 import numpy as np
 
 import jittor as jt
 
 
-#: A genuine upstream triton, not the shim this repo deploys under the name.
-#:
-#: ``find_spec("triton")`` answers yes for the shim as well, and ``setUpModule``
-#: then skips the *whole module* when ``import triton.language`` fails -- which
-#: took the launch-device tests at the bottom, the ones that need no triton at
-#: all, down with it. Written inline rather than as a helper call: collection
-#: may not run this file's own functions (tests/structure/test_pytest_contract).
+#: Inspect package structure without importing a candidate module graph.
+#: The Jittor shim also supplies triton.language, but has no upstream compiler.
+#: Real compiler/runtime import errors remain failures in the tests below.
 try:
-    _HAVE_REAL_TRITON = importlib.util.find_spec("triton.language") is not None
+    _triton_spec = importlib.util.find_spec("triton")
+    _triton_paths = getattr(_triton_spec, "submodule_search_locations", None)
+    _HAVE_REAL_TRITON = bool(
+        _triton_paths
+        and getattr(_triton_spec, "loader", None) is not None
+        and not getattr(sys.modules.get("triton"), "__triton_shim__", False)
+        and not getattr(sys.modules.get("triton"), "__jittor_triton_shim__", False)
+        and importlib.machinery.PathFinder.find_spec("triton.compiler", _triton_paths) is not None
+    )
 except (ImportError, ValueError):
     _HAVE_REAL_TRITON = False
 
@@ -178,6 +186,19 @@ def _define_kernels():
         y = xmean * rstd * w + b
         tl.store(Y + cols, y, mask=mask)
 
+    @triton.jit
+    def optional_pointer_kernel(x_ptr, optional_ptr, scale, out_ptr, n, bias,
+                                optional_tail_ptr=None, BLOCK: tl.constexpr = 64):
+        offsets = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+        mask = offsets < n
+        value = tl.load(x_ptr + offsets, mask=mask, other=0)
+        if optional_ptr is not None:
+            value += tl.load(optional_ptr + offsets, mask=mask, other=0)
+        value = value * scale + bias
+        if optional_tail_ptr is not None:
+            value += tl.load(optional_tail_ptr + offsets, mask=mask, other=0)
+        tl.store(out_ptr + offsets, value, mask=mask)
+
     return (
         add_kernel,
         fma_kernel,
@@ -187,6 +208,7 @@ def _define_kernels():
         add_autotuned,
         attn_fwd,
         layernorm_kernel,
+        optional_pointer_kernel,
     )
 
 
@@ -194,6 +216,7 @@ def setUpModule():
     global _shim, triton, tl
     global add_kernel, fma_kernel, matmul_kernel, softmax_kernel
     global mul2_kernel, add_autotuned, attn_fwd, layernorm_kernel
+    global optional_pointer_kernel
     if not _HAVE:
         return
     try:
@@ -217,6 +240,7 @@ def setUpModule():
         add_autotuned,
         attn_fwd,
         layernorm_kernel,
+        optional_pointer_kernel,
     ) = _define_kernels()
 
 
@@ -262,6 +286,30 @@ class TestTritonBackend(unittest.TestCase):
             out = jt.zeros(n, dtype="float32")
             add_kernel[(triton.cdiv(n, BLOCK),)](x, y, out, n, BLOCK=BLOCK)
             self.ac(out.numpy(), xn + yn, atol=1e-6, msg=f"add n={n}")
+
+    def test_optional_pointers_preserve_branches_abi_and_cached_variants(self):
+        from jittor.compat.triton import backend as bridge
+        values = np.arange(97, dtype=np.float32) + 0.25
+        extra = np.arange(97, dtype=np.float32) * 0.125
+        x, addend = jt.array(values), jt.array(extra)
+        # None occurs before scalar/output arguments and at the tail. Alternate
+        # all specializations, then revisit cached ones in a different order.
+        variants = [(False, False), (True, False), (False, True), (True, True)]
+        for first, tail in variants + list(reversed(variants)):
+            out = jt.full((97,), -123., dtype="float32")
+            optional_pointer_kernel[(2,)](
+                x, addend if first else None, 3, out, 97, 7,
+                optional_tail_ptr=addend if tail else None, BLOCK=64)
+            expected = (values + (extra if first else 0)) * 3 + 7 + (extra if tail else 0)
+            self.ac(out.numpy(), expected, atol=0, rtol=0)
+        keys = [key for key in bridge._COMPILE_CACHE if key[0] == id(optional_pointer_kernel)]
+        self.assertEqual(len(keys), 4)
+        for key in keys:
+            signature, constants = dict(key[1]), dict(key[2])
+            for name in ("optional_ptr", "optional_tail_ptr"):
+                self.assertEqual(signature[name] == "constexpr", name in constants)
+                if name in constants:
+                    self.assertIsNone(constants[name])
 
     def test_fused_mul_add(self):
         n, BLOCK = 777, 128
@@ -365,6 +413,192 @@ class TestTritonBackend(unittest.TestCase):
         BLOCK = triton.next_power_of_2(N)
         layernorm_kernel[(M,)](X, Y, W, B, N, N, eps, BLOCK=BLOCK)
         self.ac(Y.numpy(), ref, atol=1e-3, rtol=1e-3, msg="layernorm")
+
+
+class TestOptionalPointerPacking(unittest.TestCase):
+    """Run actual binding/cache/packing code with a compiler and driver recorder."""
+
+    def test_upstream_prerequisite_rejects_shim_without_importing_candidates(self):
+        import ast
+        from pathlib import Path
+        import tempfile
+
+        # Execute the actual collection probe against a source-only fixture.
+        # Its imports deliberately fail: discovery must not execute them or
+        # swallow a genuine upstream import failure during the later test.
+        tree = ast.parse(Path(__file__).read_text())
+        probe = next(node for node in tree.body if isinstance(node, ast.Try)
+                     and any(isinstance(child, ast.Name) and child.id == "_triton_spec"
+                             for child in ast.walk(node)))
+        code = compile(ast.Module(body=[probe], type_ignores=[]), __file__, "exec")
+        with tempfile.TemporaryDirectory() as folder:
+            package = Path(folder) / "triton"
+            package.mkdir()
+            (package / "__init__.py").write_text("raise RuntimeError('upstream import failed')\n")
+            spec = importlib.util.spec_from_file_location("triton", package / "__init__.py")
+            with mock.patch.object(importlib.util, "find_spec", return_value=spec):
+                for compiler, marker, expected in ((False, False, False),
+                                                   (True, False, True),
+                                                   (True, True, False)):
+                    if compiler:
+                        (package / "compiler").mkdir(exist_ok=True)
+                        (package / "compiler/__init__.py").write_text("raise RuntimeError('compiler failed')\n")
+                    owner = types.SimpleNamespace(__triton_shim__=marker)
+                    with mock.patch.dict(sys.modules, {"triton": owner}):
+                        scope = dict(importlib=importlib, sys=sys)
+                        exec(code, scope)
+                    self.assertEqual(scope["_HAVE_REAL_TRITON"], expected)
+            candidate = importlib.util.module_from_spec(spec)
+            with self.assertRaisesRegex(RuntimeError, "upstream import failed"):
+                spec.loader.exec_module(candidate)
+
+    def test_none_constants_and_runtime_arguments_stay_disjoint(self):
+        from jittor.compat.triton import backend as bridge
+
+        class Tensor:
+            dtype, shape, is_cuda, device_id = "float32", (8,), True, 0
+
+            def __init__(self, pointer):
+                self.pointer = pointer
+
+            def data_ptr(self):
+                return self.pointer
+
+        def function(src, optional, scale, out, n, bias, tail=None, BLOCK=64):
+            pass
+
+        names = ("src", "optional", "scale", "out", "n", "bias", "tail", "BLOCK")
+        kernel = types.SimpleNamespace(
+            fn=function, __name__="optional_fixture",
+            params=[types.SimpleNamespace(name=name, is_constexpr=name == "BLOCK") for name in names])
+        compiled, launches = {}, []
+
+        class ASTSource:
+            def __init__(self, fn, signature, constants, attrs=None):
+                self.signature, self.constants = dict(signature), dict(constants)
+
+        def compile_source(source, target, options=None):
+            name = "optional_fixture_%d" % len(compiled)
+            compiled[name] = source
+            # Match modern upstream's two trailing scratch pointer parameters,
+            # including their declared-but-zero-size case.
+            runtime_count = sum(kind != "constexpr" for kind in source.signature.values())
+            parameters = ",\n".join(".param .u64 p%d" % i for i in range(runtime_count + 2))
+            return types.SimpleNamespace(
+                metadata=types.SimpleNamespace(name=name, num_warps=1, shared=0,
+                                               global_scratch_size=0, profile_scratch_size=0),
+                asm={"cubin": b"recorded", "ptx": ".visible .entry %s(\n%s\n) {}" % (name, parameters)})
+
+        class Driver:
+            arch = 89
+
+            def ensure_ctx(self):
+                pass
+
+            def ensure_dynamic_shared(self, function, shared):
+                pass
+
+            def get_function(self, cubin, name):
+                return name
+
+            def launch(self, function, grid, block, shared, params):
+                source = compiled[function]
+                values = []
+                runtime_signature = [(name, kind) for name, kind in source.signature.items()
+                                     if kind != "constexpr"]
+                for index, (name, signature) in enumerate(runtime_signature):
+                    scalar = ctypes.c_uint64 if signature.startswith("*") else ctypes.c_int32
+                    values.append((name, ctypes.cast(params[index], ctypes.POINTER(scalar)).contents.value))
+                scratch = [ctypes.cast(params[i], ctypes.POINTER(ctypes.c_uint64)).contents.value
+                           for i in range(len(runtime_signature), len(params))]
+                launches.append((source, values, scratch))
+
+        triton_module = types.ModuleType("triton")
+        triton_module.__path__ = []
+        compiler_module = types.ModuleType("triton.compiler")
+        compiler_module.ASTSource = ASTSource
+        backends_module = types.ModuleType("triton.backends")
+        backends_module.__path__ = []
+        backend_compiler_module = types.ModuleType("triton.backends.compiler")
+        backend_compiler_module.GPUTarget = lambda *values: values
+        modules = {"triton": triton_module, "triton.compiler": compiler_module,
+                   "triton.backends": backends_module,
+                   "triton.backends.compiler": backend_compiler_module}
+        with ExitStack() as stack:
+            stack.enter_context(mock.patch.dict(sys.modules, modules))
+            stack.enter_context(mock.patch.object(bridge, "real_triton", return_value=types.SimpleNamespace(compile=compile_source)))
+            stack.enter_context(mock.patch.object(bridge._Driver, "get", return_value=Driver()))
+            stack.enter_context(mock.patch.object(bridge, "_COMPILE_CACHE", {}))
+            stack.enter_context(mock.patch.object(bridge, "_is_var", return_value=False))
+            stack.enter_context(mock.patch.object(jt, "sync_all"))
+            for name, result in (("_stats_on", False), ("_guard_enabled", False),
+                                 ("_fast_sync_enabled", True), ("_sync_before_launch_enabled", False),
+                                 ("_sync_after_launch_enabled", False)):
+                stack.enter_context(mock.patch.object(bridge, name, return_value=result))
+            src, addend, out = Tensor(0x1000), Tensor(0x2000), Tensor(0x3000)
+            variants = [(None, None), (addend, None), (None, addend), (addend, addend)]
+            for optional, tail in variants + list(reversed(variants)):
+                bridge._run(kernel, (src, optional, 3, out, 8, 7), {"tail": tail, "BLOCK": 64}, (1,))
+                source, values, scratch = launches[-1]
+                expected = [("src", 0x1000)]
+                if optional is not None:
+                    expected.append(("optional", 0x2000))
+                expected.extend((("scale", 3), ("out", 0x3000), ("n", 8), ("bias", 7)))
+                if tail is not None:
+                    expected.append(("tail", 0x2000))
+                self.assertEqual(values, expected)
+                self.assertEqual(scratch, [0, 0])
+                for name, value in (("optional", optional), ("tail", tail)):
+                    self.assertEqual(name in source.constants, value is None)
+                    self.assertEqual(source.signature[name] == "constexpr", value is None)
+                    if value is None:
+                        self.assertIsNone(source.constants[name])
+            self.assertEqual(len(compiled), 4)
+            self.assertEqual(len(bridge._COMPILE_CACHE), 4)
+            # bind.apply_defaults must specialize an omitted optional value,
+            # too, and reuse the already compiled None/None variant.
+            bridge._run(kernel, (src, None, 3, out, 8, 7), {"BLOCK": 64}, (1,))
+            self.assertEqual(len(compiled), 4)
+            self.assertIsNone(launches[-1][0].constants["tail"])
+
+    def test_inconsistent_runtime_and_constant_signature_is_rejected(self):
+        from jittor.compat.triton import backend as bridge
+        for signature, constants in (({"optional": "*i8"}, {"optional": None}),
+                                     ({}, {"optional": None}),
+                                     ({"optional": "constexpr"}, {})):
+            with self.assertRaisesRegex(bridge.JittorTritonError, "constexpr signature slots"):
+                bridge._compile(object(), signature, constants)
+
+    @unittest.skipUnless(_HAVE_REAL_TRITON, "real upstream Triton is unavailable")
+    def test_modern_native_specialization_treats_none_as_constexpr(self):
+        # Older supported Triton releases do not expose the native helper.
+        # That does not exempt their ASTSource cache identity from testing.
+        jit_module = importlib.import_module("triton.runtime.jit")
+        specialize = getattr(jit_module, "native_specialize_impl", None)
+        backend = getattr(jit_module, "BaseBackend", None)
+        if specialize is None or backend is None:
+            self.skipTest("this Triton release has no native specialization helper")
+        self.assertEqual(specialize(backend, None, False, True, True),
+                         ("constexpr", None))
+
+    @unittest.skipUnless(_HAVE_REAL_TRITON, "real upstream Triton is unavailable")
+    def test_disk_cache_distinguishes_optional_positions(self):
+        # No compilation or device lookup: exercise the upstream cache identity
+        # on both older and current releases, independently of native helpers.
+        from triton.compiler import ASTSource
+        names = ["src", "optional", "scale", "out", "tail", "BLOCK"]
+        function = types.SimpleNamespace(__name__="optional_cache_contract", arg_names=names,
+                                         cache_key="fixed-function-source")
+        hashes = set()
+        for first, tail in ((False, False), (True, False), (False, True), (True, True)):
+            signature = dict(zip(names, ("*fp32", "*fp32", "i32", "*fp32", "*fp32", "constexpr")))
+            constants = {"BLOCK": 64}
+            for name, present in (("optional", first), ("tail", tail)):
+                if not present:
+                    signature[name] = "constexpr"
+                    constants[name] = None
+            hashes.add(ASTSource(function, signature, constants).hash())
+        self.assertEqual(len(hashes), 4)
 
 
 @unittest.skipUnless(_HAVE, "real upstream triton + CUDA not available")
@@ -621,6 +855,40 @@ class TestGuardedBounceRequiresContiguous(unittest.TestCase):
                 self.assertEqual(tb._tensor_is_contiguous(candidate), expected)
 
 
+
+class TestPointerRangeAliasing(unittest.TestCase):
+    """Unknown or overlapping storage must not be copied as independent args."""
+
+    def test_aliases_include_offsets_but_not_adjacent_or_empty_ranges(self):
+        from jittor.compat.triton import backend as bridge
+        ranges = {"input": (100, 164), "same": (100, 164), "offset": (160, 200),
+                  "neighbor": (200, 216), "empty": (150, 150)}
+        self.assertEqual(bridge._overlapping_argument_names(ranges),
+                         {"input", "same", "offset"})
+
+    def test_unknown_layout_disables_independent_bounces(self):
+        from jittor.compat.triton import backend as bridge
+        self.assertEqual(bridge._overlapping_argument_names({"known": (100, 164), "unknown": None}),
+                         {"known", "unknown"})
+
+    def test_byte_range_includes_strided_holes_and_negative_strides(self):
+        from jittor.compat.triton import backend as bridge
+
+        class View:
+            shape = (2, 4)
+
+            def stride(self):
+                return (12, 2)
+
+        self.assertEqual(bridge._tensor_byte_range(View(), 100, "*fp32"), (100, 176))
+
+        class Reversed(View):
+            def stride(self):
+                return (-12, 2)
+
+        self.assertEqual(bridge._tensor_byte_range(Reversed(), 148, "*fp32"), (100, 176))
+
+
 class TestLaunchFollowsItsProducers(unittest.TestCase):
     """Operands produced immediately before a launch must be the ones it reads.
 
@@ -647,6 +915,11 @@ class TestLaunchFollowsItsProducers(unittest.TestCase):
             self.skipTest("real upstream triton + CUDA not available")
         if triton is None or tl is None:
             setUpModule()
+        # The operands are made here with `jt.array`, so they are only on the
+        # device if CUDA is on -- and a CUDA session does not turn it on for a
+        # test; `TestTritonBackend` enters the same scope in setUpClass.
+        from _helpers.runtime_policy import fixture_stack
+        fixture_stack(self).enter_context(jt.runtime.scope(use_cuda=1))
         if _shim is None or not _shim.activate_bridge():
             self.skipTest("jittor Triton bridge is unavailable")
 
@@ -706,6 +979,11 @@ class TestTheLaunchBarrierNamesItsOperands(unittest.TestCase):
             self.skipTest("real upstream triton + CUDA not available")
         if triton is None or tl is None:
             setUpModule()
+        # The operands are made here with `jt.array`, so they are only on the
+        # device if CUDA is on -- and a CUDA session does not turn it on for a
+        # test; `TestTritonBackend` enters the same scope in setUpClass.
+        from _helpers.runtime_policy import fixture_stack
+        fixture_stack(self).enter_context(jt.runtime.scope(use_cuda=1))
         if _shim is None or not _shim.activate_bridge():
             self.skipTest("jittor Triton bridge is unavailable")
 

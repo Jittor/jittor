@@ -7,6 +7,7 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
+#include <mutex>
 #include <algorithm>
 #include <functional>
 #include <queue>
@@ -15,6 +16,9 @@
 #endif
 #include "runtime/device.h"
 #include "runtime/executor_entry.h"
+#include "runtime/rematerialization_scope.h"
+#include "runtime/async_exec.h"
+#include "runtime/graph_capture.h"
 #include "runtime/submission_pipeline.h"
 #include "runtime/backend.h"
 #include "runtime/backend_fallback.h"
@@ -44,7 +48,7 @@
 namespace jittor {
 
 EXTERN_LIB MemoryProfiler memory_profiler;
-DEFINE_FLAG(int, lazy_execution, 1, "Default enabled, if disable, use immediately eager execution rather than lazy execution, This flag makes error message and traceback infomation better. But this flag will raise memory consumption and lower the performance.");
+DEFINE_FLAG(int, lazy_execution, 1, "Default enabled, if disable, use immediately eager execution rather than lazy execution, This flag makes error message and traceback information better. But this flag will raise memory consumption and lower the performance.");
 DEFINE_FLAG(int, auto_flush_ops, 128, "Pipeline graph construction with device execution on CUDA. Once this many operators have been created since the executor last ran, launch everything pending -- IF that pending work is also worth at least `auto_flush_bytes` (see there). 0 keeps fully lazy execution. Fusion and dead-code elimination still apply within each launched segment; CPU execution is synchronous and never flushes early.");
 DEFINE_FLAG(int64, auto_flush_bytes, 8<<20, "How much pending output a flush must be carrying before it is worth taking. A flush CUTS the step's graph into two batches, and fusion is decided within a batch -- so an elementwise chain that straddles the cut becomes two kernels and the second batch pays planning again. That is only worth paying when there is real device work to overlap with. Counting operators cannot tell the two apart: a batch-1 decode step and a batch-8 sequence-256 step build the SAME ~100 operators, but the first has 200 KB of pending output and the second has tens of MB. Measured: gating on operators alone cost 1.09-1.16x on every host-bound case, while removing the flush entirely cost 1.11x on Resnet50 training and 1.16x on a batched transformer. 0 disables the size gate.");
 DECLARE_FLAG(int, profile_memory_enable);
@@ -52,6 +56,13 @@ DEFINE_FLAG(int, gopt_disable, 0, "Disable graph optimizer.");
 DEFINE_FLAG(int, use_threading, 0, "Allow to use python threading with jittor.");
 
 DEFINE_FLAG(int, exec_called, 0, "exec sync called");
+DEFINE_FLAG(int, async_execution, 1, "Run an auto-flushed batch (of an inference graph on CUDA; on ACL, with `backend_fallback=error`, of a training forward too) on a worker thread while Python keeps building the graph; every executor entry, and so every read of a Var's data, waits for it first. See runtime/async_exec.h. 0 executes every batch on the calling thread. Without the worker such a flush also has to carry `auto_flush_bytes` of output to be taken; with it, any auto-flush is. On ACL nothing is auto-flushed at all unless the worker takes it (`async_auto_flush_only`): an inline flush there was measured slower at every batch size.");
+DEFINE_FLAG(int, async_flush_ops, 64, "With `async_execution`, such a graph is also flushed to the worker when a module call returns and this many operators have been created since the last flush (`auto_flush_ops` still applies between). 0 flushes at `auto_flush_ops` only.");
+DECLARE_FLAG(int, async_min_caller_us);
+DECLARE_FLAG(bool, no_grad);
+DECLARE_FLAG(int, keep_graph);
+DECLARE_FLAG(int, profiler_enable);
+DECLARE_FLAG(int, trace_py_var);
 
 struct PendingSubmissionScope {
     SubmissionPipeline& pipeline;
@@ -61,6 +72,108 @@ struct PendingSubmissionScope {
     }
     ~PendingSubmissionScope() { pipeline.flush_active = false; }
 };
+
+// Whether an auto-flush may hand its batch to the worker thread
+// (runtime/async_exec.h): then it costs this thread only the planning, and is
+// taken without the size gate below and, at module boundaries, sooner.
+//
+// Not once a second Python thread has used jittor: the worker stands down for
+// good (async_exec.cc), and so do the extra flushes it was taken for -- every
+// flush releases the GIL inside the executor, and two threads building one
+// graph is not something the executor serializes. Nor where the worker does
+// not run at all (anywhere but CUDA and ACL, see `may_run_async`): there the
+// extra flushes would only cut fusion.
+static bool worker_admits_accelerator() {
+    const BackendId accelerator = accelerator_backend_id();
+    if (accelerator != BackendId::Cuda && accelerator != BackendId::Acl) return false;
+    const auto& policy = backend_ops(accelerator).execution;
+    if (policy.async_requires_strict_fallback
+            && runtime_backend_fallback().policy != "error")
+        return false;
+    // Asked here rather than in `may_run_async` alone so that a backend which
+    // only flushes for the worker (`async_auto_flush_only`) stops flushing
+    // too, instead of paying for a cut nobody takes.
+    return !policy.async_handover_must_pay || !async_min_caller_us
+        || async_exec_handover_pays();
+}
+
+// Whether the graph being built is one the worker may take. An inference
+// graph always; a training forward's only where the backend's policy says a
+// flush costs it nothing (`async_admits_grad`). The backward's own
+// construction window is excluded either way, in `auto_flush`.
+static bool worker_admits_grad() {
+    return no_grad
+        || backend_ops(accelerator_backend_id()).execution.async_admits_grad;
+}
+
+static bool deferrable_flush() {
+    return async_execution && worker_admits_grad() && async_flush_ops > 0
+        && async_exec_single_thread() && worker_admits_accelerator();
+}
+
+void Executor::auto_flush() {
+#ifdef HAS_ACCELERATOR
+    auto& pipeline = runtime_submission_pipeline();
+    if (pipeline.flush_active || !runtime_use_cuda() || pipeline.grad_construction_depth)
+        return;
+    const auto& policy = backend_ops(accelerator_backend_id()).execution;
+    const bool deferrable = deferrable_flush();
+    if (!policy.supports_auto_flush && !(policy.async_auto_flush_only && deferrable))
+        return;
+    vector<Var*> vars;
+    int64 pending_bytes = 0;
+    for (auto holder : runtime_holder_state().holders()) {
+        auto var = holder->var;
+        if (var->_outputs.size() || var->is_finished()) continue;
+        // Recovery work must not implicitly retry a failed, unrelated graph.
+        // Explicit roots and their data dependencies still run normally.
+        if (var->flag(VarFlags::_execution_failed)) continue;
+        // The third place a kept graph must not be picked up as a
+        // bystander (see `top_weak_sync` and `sync_all`), and the easiest
+        // to miss: this fires in the middle of the NEXT call's
+        // construction, so the kept graph is re-executed while the caller
+        // is still building the work that was going to replace it.
+        if (var->flag(VarFlags::_kept)) continue;
+        auto op = var->input();
+        if (op && op->flag(OpFlags::_must_stay_pending)) continue;
+        // Nor a var an elementwise op is still to compute. Launched now it
+        // is written out, and a training forward keeps it for the backward,
+        // where it would otherwise have fused into its readers and never
+        // existed: where the cut fell decided how many of them a ViT-B/16
+        // step kept, and its peak moved by 0.33 GB between
+        // `auto_flush_ops` 120 and 136. What such a var reads is launched
+        // when something that must be written out -- a matmul, a
+        // convolution, a reduction -- needs it.
+        if (op && (op->type() == OpType::element || op->type() == OpType::broadcast))
+            continue;
+        vars.push_back(var);
+        pending_bytes += var->size;
+    }
+    // Enough operators, but is there enough work? Cutting the graph costs
+    // a fusion boundary and a second planning pass; that only pays for
+    // itself when the device has something substantial to chew on
+    // meanwhile. Re-arm rather than flush when it does not, so the next
+    // decision is another `auto_flush_ops` away instead of every op.
+    if (vars.size() && (auto_flush_bytes <= 0 || pending_bytes >= auto_flush_bytes
+                        || deferrable)) {
+        PendingSubmissionScope scope(pipeline);
+        run_sync(vars, false, false, deferrable);
+    } else {
+        pipeline.last_run_ops = Op::number_of_created_ops;
+    }
+#endif
+}
+
+void Executor::flush_at_module_boundary() {
+    // Counted in operators, never timed: the cut points have to repeat
+    // identically from step to step (see `SubmissionPipeline::last_run_ops`).
+    // At a module's return rather than mid-module, so a block -- a residual
+    // unit, a transformer layer -- stays in one batch where it can.
+    auto& pipeline = runtime_submission_pipeline();
+    if (deferrable_flush()
+            && Op::number_of_created_ops - pipeline.last_run_ops >= async_flush_ops)
+        auto_flush();
+}
 
 void Executor::submit_pending(Var* target, bool force) {
     auto& pipeline = runtime_submission_pipeline();
@@ -74,48 +187,8 @@ void Executor::submit_pending(Var* target, bool force) {
     }
 
 #ifdef HAS_ACCELERATOR
-    if (auto_flush_ops > 0 && runtime_use_cuda()
-            && pipeline.grad_construction_depth == 0
-            && backend_ops(accelerator_backend_id()).execution.supports_auto_flush
-            && Op::number_of_created_ops - pipeline.last_run_ops >= auto_flush_ops) {
-        vector<Var*> vars;
-        int64 pending_bytes = 0;
-        for (auto holder : runtime_holder_state().holders()) {
-            auto var = holder->var;
-            if (var->_outputs.size() || var->is_finished()) continue;
-            // The third place a kept graph must not be picked up as a
-            // bystander (see `top_weak_sync` and `sync_all`), and the easiest
-            // to miss: this fires in the middle of the NEXT call's
-            // construction, so the kept graph is re-executed while the caller
-            // is still building the work that was going to replace it.
-            if (var->flag(VarFlags::_kept)) continue;
-            auto op = var->input();
-            if (op && op->flag(OpFlags::_must_stay_pending)) continue;
-            // Nor a var an elementwise op is still to compute. Launched now it
-            // is written out, and a training forward keeps it for the backward,
-            // where it would otherwise have fused into its readers and never
-            // existed: where the cut fell decided how many of them a ViT-B/16
-            // step kept, and its peak moved by 0.33 GB between
-            // `auto_flush_ops` 120 and 136. What such a var reads is launched
-            // when something that must be written out -- a matmul, a
-            // convolution, a reduction -- needs it.
-            if (op && (op->type() == OpType::element || op->type() == OpType::broadcast))
-                continue;
-            vars.push_back(var);
-            pending_bytes += var->size;
-        }
-        // Enough operators, but is there enough work? Cutting the graph costs
-        // a fusion boundary and a second planning pass; that only pays for
-        // itself when the device has something substantial to chew on
-        // meanwhile. Re-arm rather than flush when it does not, so the next
-        // decision is another `auto_flush_ops` away instead of every op.
-        if (vars.size() && (auto_flush_bytes <= 0 || pending_bytes >= auto_flush_bytes)) {
-            PendingSubmissionScope scope(pipeline);
-            run_sync(vars, false, false);
-        } else {
-            pipeline.last_run_ops = Op::number_of_created_ops;
-        }
-    }
+    if (auto_flush_ops > 0 && Op::number_of_created_ops - pipeline.last_run_ops >= auto_flush_ops)
+        auto_flush();
 #endif
 
     if (target->is_finished()
@@ -138,17 +211,18 @@ void Executor::submit_pending(Var* target, bool force) {
 void load_fused_op(FusedOp& fused_op, vector<int>& fuse_ops, vector<Op*>& ops, int ll, int rr, int64 tt) {
     fused_op.ops.clear();
     fused_op.edges.clear();
-    TraversalEpoch fused_epoch("load_fused_op");
+    // Membership through the segment's own index rather than a traversal
+    // mark: a mark writes every node's `tflag`, and on the async worker this
+    // runs while the Python thread builds the graph, outside the graph lock.
     for (int i=ll; i<rr; i++) {
         int opid = fuse_ops[i];
         Op* op = ops[opid];
-        fused_epoch.mark(op);
         fused_op.ops.push_back(op);
     }
     LOGvvv << "Prepare fused_op" << fused_op.ops;
     fused_op.update_ops();
     for (Op* op : fused_op.ops) {
-        uint fid1 = fused_op.op_index.at(op);
+        uint fid1 = fused_op.op_index.get(op);
         int iid = 0;
         for (auto& edge : fused_op.snapshot_inputs(op)) {
             Var* v = edge.first;
@@ -158,11 +232,13 @@ void load_fused_op(FusedOp& fused_op, vector<int>& fuse_ops, vector<Op*>& ops, i
             int iop_id;
             int iv_id;
             pair<Op*, int> producer = fused_op.snapshot_producer(v);
-            if (producer.first && fused_epoch.marked(producer.first)) {
-                iop_id = fused_op.op_index.at(producer.first);
+            int producer_id = producer.first ? fused_op.op_index.get(producer.first) : -1;
+            if (producer_id >= 0) {
+                iop_id = producer_id;
                 iv_id = producer.second;
             } else {
-                iv_id = fused_op.var_index.at(v);
+                iv_id = fused_op.var_index.get(v);
+                ASSERT(iv_id >= 0) << "input var of a fused op was not indexed by update_ops";
                 // add iv_id, prevent iv_id jit key overflow
                 iop_id = fused_op.ops.size() + iv_id;
             }
@@ -208,6 +284,8 @@ static void top_weak_sync(vector<Var*>& vars) {
         if (epoch.marked(v)) continue;
         if (v->_outputs.size()) continue;
         if (v->is_finished()) continue;
+        // A failed root belongs to its explicit caller, not this batch.
+        if (v->flag(VarFlags::_execution_failed)) continue;
         // A kept graph is run on purpose, by whoever kept it, and never as a
         // bystander of somebody else's sync. Widening a batch with one costs a
         // full re-execution of a graph nobody asked for -- traced on a
@@ -225,6 +303,11 @@ static void top_weak_sync(vector<Var*>& vars) {
         // still collects any unfinished input of what was actually requested,
         // kept or not.
         if (v->flag(VarFlags::_kept)) continue;
+        // A custom backward can hold an input tape only for its gradient.
+        // Like auto_flush, weak sync must not turn that saved holder into a
+        // forward data request. Explicit roots and real input edges still run.
+        Op* producer = v->input();
+        if (producer && producer->flag(OpFlags::_must_stay_pending)) continue;
         vars.push_back(v);
     }
 }
@@ -258,10 +341,41 @@ static void top_weak_sync(vector<Var*>& vars) {
 //               launch, then release the liveness the batch held.
 //   7 finish    assert the requested Vars are backed, wait for every device
 //               the batch launched on if asked, restore the entry device.
+// Whether the walk below would find anything to resolve: an op it visits that
+// reads a var of unknown shape. Same ops, same test, but no order and no
+// containers of its own -- a stamp on each node and a stack reused across
+// calls. Almost no batch has such an input, and building the ordered walk's
+// hash set and vectors for every one of them was a cost on every sync. The
+// stack can be shared because nothing here re-enters the executor.
+static bool has_dynamic_inputs(const vector<Var*>& roots) {
+    thread_local vector<Op*> stack;
+    TraversalEpoch epoch("resolve_dynamic_inputs");
+    stack.clear();
+    for (auto* var : roots)
+        if (!var->is_finished() && var->input() && !epoch.marked(var->input())) {
+            epoch.mark(var->input());
+            stack.push_back(var->input());
+        }
+    while (!stack.empty()) {
+        Op* op = stack.back();
+        stack.pop_back();
+        if (op->flag(OpFlags::_no_input_storage)) continue;
+        for (auto* input : op->inputs()) {
+            if (input->num < 0) return true;
+            if (!input->is_finished() && input->input() && !epoch.marked(input->input())) {
+                epoch.mark(input->input());
+                stack.push_back(input->input());
+            }
+        }
+    }
+    return false;
+}
+
 static void resolve_dynamic_inputs(Executor& executor, const vector<Var*>& roots) {
     // Native C++ callers can compose operators before any Python conversion.
     // Resolve their internal data-dependent extents at this explicit execution
     // boundary, in dependency order, before fusion or kernel compilation.
+    if (!has_dynamic_inputs(roots)) return;
     vector<std::pair<Op*, bool>> pending;
     unordered_set<Op*> seen;
     vector<Op*> ordered;
@@ -277,12 +391,14 @@ static void resolve_dynamic_inputs(Executor& executor, const vector<Var*>& roots
         }
         if (!seen.insert(op).second) continue;
         pending.emplace_back(op, true);
+        if (op->flag(OpFlags::_no_input_storage)) continue;
         for (auto* input : op->inputs())
             if (!input->is_finished() && input->input())
                 pending.emplace_back(input->input(), false);
     }
     bool changed = false;
     for (auto* op : ordered) {
+        if (op->flag(OpFlags::_no_input_storage)) continue;
         for (auto* input : op->inputs()) {
             if (input->num >= 0) continue;
             executor.run_sync({input}, false, false);
@@ -303,19 +419,23 @@ static void resolve_dynamic_inputs(Executor& executor, const vector<Var*>& roots
 // to the end, as does anything no segment names.
 static void schedule_hold_release(ExecPlan& plan) {
     const int n = plan.queue.size();
-    vector<int> last_use(plan.all_vars.size(), -1);
-    unordered_map<Var*, int> index;
-    index.reserve(plan.all_vars.size());
-    for (int i = plan.start_var_num; i < (int)plan.all_vars.size(); i++)
-        index[plan.all_vars[i]] = i;
+    vector<int>& last_use = plan.scratch.last_use;
+    last_use.assign(plan.all_vars.size(), -1);
+    // A var's batch index is its position in `all_vars`; one that is not of
+    // this batch, or among the vars the caller asked for, is not scheduled.
+    auto index_of = [&](Var* v) {
+        int i = v->batch_index_in(plan.stamp);
+        return i >= plan.start_var_num && i < (int)plan.all_vars.size()
+            && plan.all_vars[i] == v ? i : -1;
+    };
     auto touch = [&](int op_index, int rid) {
-        for (auto& in : plan.op_inputs[op_index]) {
-            auto it = index.find(in.first);
-            if (it != index.end()) last_use[it->second] = rid;
+        for (int k = plan.op_inputs_begin[op_index]; k < plan.op_inputs_begin[op_index + 1]; k++) {
+            int i = index_of(plan.op_inputs[k].first);
+            if (i >= 0) last_use[i] = rid;
         }
-        for (Var* out : plan.op_outputs[op_index]) {
-            auto it = index.find(out);
-            if (it != index.end()) last_use[it->second] = rid;
+        for (int k = plan.op_outputs_begin[op_index]; k < plan.op_outputs_begin[op_index + 1]; k++) {
+            int i = index_of(plan.op_outputs[k]);
+            if (i >= 0) last_use[i] = rid;
         }
     };
     for (int rid = 0; rid < n; rid++) {
@@ -324,12 +444,119 @@ static void schedule_hold_release(ExecPlan& plan) {
         int rr = plan.range[n - rid - 1];
         for (int k = ll; k < rr; k++) touch(plan.fuse_ops[k], rid);
     }
-    plan.release_after.assign(n, {});
+    // `ExecPlan::clear` emptied each segment's list and kept its storage.
+    plan.release_after.resize(n);
     for (int i = 0; i < (int)last_use.size(); i++)
         if (last_use[i] >= 0) plan.release_after[last_use[i]].push_back(i);
 }
 
-void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
+// Everything a batch is, kept together so that its execution can be handed
+// to the worker thread (runtime/async_exec.h) as one object.
+//
+// Recycled rather than freed (see `acquire_batch_state`): a plan is some
+// twenty vectors and its scratch twenty more, and a batch that reuses a
+// finished one's plans without allocating any of them. The fusion is not
+// recycled -- it is an op, built afresh for every batch as it always was.
+struct BatchState {
+    ExecPlan plan;
+    vector<VarPtr> batch_hold;
+    unique_ptr<FusedOp> fused_op;
+    vector<Var*> vars;
+};
+
+namespace {
+// Finished batches whose storage the next ones reuse. Returned from whichever
+// thread drops the last reference -- the worker, for a batch that ran there.
+// A batch past `pooled_ops_limit` operators goes back to the heap instead: a
+// backward pass would otherwise leave its megabytes of plan behind for the
+// rest of the process.
+struct BatchStatePool {
+    static constexpr size_t capacity = 4;
+    static constexpr size_t pooled_ops_limit = 16384;
+    std::mutex mutex;
+    vector<BatchState*> free;
+};
+
+BatchStatePool& batch_state_pool() {
+    // Never destroyed: a batch may still be finishing on the worker while the
+    // process exits.
+    static auto* pool = new BatchStatePool();
+    return *pool;
+}
+
+void recycle_batch_state(BatchState* state) {
+    state->fused_op.reset();
+    state->vars.clear();
+    state->batch_hold.clear();
+    bool keep = state->plan.ops.capacity() <= BatchStatePool::pooled_ops_limit
+        && state->plan.all_vars.capacity() <= 2 * BatchStatePool::pooled_ops_limit;
+    if (keep) {
+        state->plan.clear();
+        auto& pool = batch_state_pool();
+        std::lock_guard<std::mutex> lock(pool.mutex);
+        if (pool.free.size() < BatchStatePool::capacity) {
+            pool.free.push_back(state);
+            return;
+        }
+    }
+    delete state;
+}
+
+shared_ptr<BatchState> acquire_batch_state() {
+    BatchState* state = nullptr;
+    {
+        auto& pool = batch_state_pool();
+        std::lock_guard<std::mutex> lock(pool.mutex);
+        if (!pool.free.empty()) {
+            state = pool.free.back();
+            pool.free.pop_back();
+        }
+    }
+    if (!state) state = new BatchState();
+    state->fused_op.reset(new FusedOp());
+    return shared_ptr<BatchState>(state, recycle_batch_state);
+}
+} // namespace
+
+// Whether a planned batch may run on the worker: an auto-flushed batch of a
+// graph the worker is allowed to take (`worker_admits_grad`), every operator
+// of it on the accelerator, and nothing
+// watching the executor that expects it on this thread -- step traces,
+// profilers, recordings, kept graphs, swapping. A dynamic shape is resolved
+// before planning (`resolve_dynamic_inputs`), so none is left to sync from
+// inside the batch.
+//
+// Nor without pinned host memory: then `jt.array` stages through the dual
+// allocator, whose delayed frees go back in the order their stream callbacks
+// fire -- an order that only holds while every free is on one stream.
+static bool may_run_async(const ExecPlan& plan) {
+    // CUDA, and ACL under `backend_fallback=error`: an ACL host fallback
+    // flips the process-wide `use_cuda` under the Python thread's feet, and
+    // only that policy rules a fallback out entirely
+    // (`async_requires_strict_fallback`). The worker needs no device binding
+    // of its own; `BackendOps::set_device` says why. `use_cuda` alone is set
+    // on every accelerator.
+    if (!async_execution || !worker_admits_grad() || keep_graph || save_mem || use_threading
+            || !runtime_use_cuda() || !worker_admits_accelerator()
+            || graph_capture_recording || profiler_enable
+            || profile_memory_enable || trace_py_var || step_trace_active()
+            || !use_pinned_host_memory())
+        return false;
+    static const OpId numpy_code = get_op_id("numpy_code");
+    static const OpId fetch = get_op_id("fetch");
+    for (Op* op : plan.ops) {
+        if (!op->executes_on_accelerator() || op->is_op(numpy_code) || op->is_op(fetch))
+            return false;
+        for (Var* out : op->outputs())
+            if (out->num < 0) return false;
+    }
+    return plan.ops.size() > 0 && async_exec_single_thread() && async_exec_placed();
+}
+
+void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync, bool may_defer) {
+    // The batch on the worker, if one is in flight, comes first: this one may
+    // need what it produces, and only one runs at a time.
+    async_exec_wait();
     // == phase 1: setup ==
     // One batch at a time. Until the device waits inside started releasing the
     // GIL, the GIL *was* this exclusion for Python threads; now that another
@@ -337,6 +564,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
     // has to be a lock. Explicit dynamic-input prerequisite submissions are
     // on this thread and pass straight through; constructors never submit.
     ExecutorEntryScope entry;
+    RematerializationExecutionScope rematerialization;
     StepTraceBatchScope trace_batch;
     exec_called ++;
     auto& pipeline = runtime_submission_pipeline();
@@ -354,7 +582,8 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
     entry_device = current_device();
     #endif
     // == phases 2-5: graph -> execution plan ==
-    ExecPlan plan;
+    auto state = acquire_batch_state();
+    ExecPlan& plan = state->plan;
     build_exec_plan(vars, weak_sync, plan);
     trace_batch.mark(stb_planned);
     // Hold the batch's vars for its duration -- and with them the ops that
@@ -379,7 +608,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
     // use. The edge snapshot stays because a *live* var can still have its
     // edges released (`release_inputs`, which the shim uses to park tensors),
     // and the planner reads them.
-    vector<VarPtr> batch_hold;
+    vector<VarPtr>& batch_hold = state->batch_hold;
     batch_hold.reserve(plan.all_vars.size());
     for (Var* v : plan.all_vars) batch_hold.emplace_back(v);
     // What phase 7 has to discount: this hold is bookkeeping, not a consumer.
@@ -391,18 +620,22 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
     // The fusion verdict goes to FusedOp as the vector it already is, instead
     // of being written into bit 0 of every var's custom_data for update_ops()
     // to read back out of the field it packs its own indices into.
-    FusedOp fused_op;
+    FusedOp& fused_op = *state->fused_op;
     fused_op.batch_var_fused = &plan.var_fused;
     fused_op.batch_stamp_wanted = plan.stamp;
     // The batch's own record of the edges it was collected from; see
     // `ExecPlan::op_outputs`.
-    fused_op.batch_op_outputs = &plan.op_outputs;
-    fused_op.batch_op_inputs = &plan.op_inputs;
-    fused_op.batch_var_producer = &plan.var_producer;
+    fused_op.batch_plan = &plan;
 
     // compile all ops, prevent compiling during running
-    parallel_compile_all_ops(plan.queue, plan.range, fused_op,
-                             plan.fuse_ops, plan.ops, plan.stamp);
+    try {
+        parallel_compile_all_ops(plan.queue, plan.range, fused_op,
+                                 plan.fuse_ops, plan.ops, plan.stamp);
+    } catch (...) {
+        // A compile failure is a failed batch too: none of its ops ran.
+        mark_failed_batch(plan);
+        throw;
+    }
     trace_batch.mark(stb_compiled);
 
     // Planning is the last consumer of the batch tflags. Restore any outer
@@ -410,6 +643,24 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync) {
     plan.epoch.reset();
 
     // == phases 6-7: execution plan -> executed kernels ==
+    if (may_defer && !device_sync && may_run_async(plan)) {
+        // On the worker, while this thread returns to building the graph. The
+        // bindings this thread is inside of keep running C++ after it returns,
+        // so they take the graph lock first.
+        state->vars = move(vars);
+        async_exec_hold_active_bindings();
+        async_exec_submit([state, entry_device]() mutable {
+            #ifdef HAS_ACCELERATOR
+            if (entry_device >= 0 && entry_device != current_device())
+                set_current_device(entry_device);
+            #endif
+            run_exec_plan(runtime_executor(), state->plan, *state->fused_op, state->vars,
+                          false, entry_device);
+            state.reset();
+        });
+        pipeline.last_run_ops = Op::number_of_created_ops;
+        return;
+    }
     run_exec_plan(*this, plan, fused_op, vars, device_sync, entry_device);
 
     pipeline.last_run_ops = Op::number_of_created_ops;

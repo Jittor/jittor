@@ -86,8 +86,10 @@ class TestLinalg(Base):
     def test_solve_left_right_batch_and_out(self):
         A = np.stack([self.spd(3, 20), self.spd(3, 21)])
         B = np.random.RandomState(22).randn(2, 3, 3).astype("float32")
+
         def body(dev):
-            matrix, rhs = torch.tensor(A), torch.tensor(B)
+            matrix = torch.tensor(A, device=dev)
+            rhs = torch.tensor(B, device=dev, requires_grad=True)
             left = torch.linalg.solve(matrix, rhs, left=True)
             right = torch.linalg.solve(matrix, rhs, left=False)
             self.ac(torch.matmul(matrix, left).numpy(), B, atol=1e-3,
@@ -96,8 +98,12 @@ class TestLinalg(Base):
                     msg=f"batched X@A==B {dev}")
             out = torch.empty_like(right)
             self.assertIs(torch.linalg.solve(matrix, rhs, left=False, out=out), out)
-            self.ac(out.numpy(), right.numpy(), atol=1e-4,
+            self.ac(out.numpy(), right.numpy(), atol=1e-5,
                     msg=f"right solve out {dev}")
+            grad = jt.grad(torch.linalg.solve(matrix, rhs, left=False).sum(), rhs)
+            ref = np.ones((2, 3, 3), "float32") @ np.linalg.inv(A).transpose(0, 2, 1)
+            self.ac(grad.numpy(), ref, atol=1e-3, msg=f"right solve grad {dev}")
+
         both_devices(body)
 
     def test_cholesky(self):

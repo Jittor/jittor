@@ -48,11 +48,13 @@ class TestReduceTuner(unittest.TestCase):
 
 
 class TestReduceTunerCuda(unittest.TestCase):
-    """Why ReduceTuner offers a CUDA reduction nothing.
+    """Why ReduceTuner still offers a CUDA reduction nothing, and that it could.
 
-    ``ReduceTuner::run`` returns before adding any candidate when the fused op is
-    a CUDA op. These two tests pin the reason, so that the day the reason stops
-    holding, one of them fails and points at the comment to revisit.
+    ``ReduceTuner::run`` returns before adding any candidate when the fused op
+    is a CUDA op. That is a policy choice about the candidate set -- a CPU L1
+    tile size and loop reorderings measured slower on a 4090 -- not a workaround
+    for a compile error any more: ``split{i}`` and ``parallel`` compile
+    together, as the second test pins.
     """
 
     @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No cuda found")
@@ -73,37 +75,43 @@ class TestReduceTunerCuda(unittest.TestCase):
             # the empty candidate map prints as "{}"
             self.assertEqual(candidates, "{}", found)
 
-    def test_a_split_candidate_would_not_compile_under_parallel(self):
-        """``split{i}`` and ``parallel`` cannot be combined -- today.
+    def test_a_split_candidate_compiles_under_parallel(self):
+        """A split-off loop is sized from its bound, so CUDA can compile it.
 
         SplitLoopPass gives the split-off loop the range
         ``::min(range{i}-id{i}, stride{i})``, defined inside the outer loop and
-        varying with it. ParallelPass evaluates every range at the call site to
-        size the thread grid, does not find the definition, and aborts. CUDA
-        always runs ParallelPass, so offering ``split1`` -- the main candidate
-        this tuner has -- would break every CUDA reduction. Shown here on CPU
-        because it is not a CUDA property.
+        varying with it. ParallelPass sizes the thread grid at the call site, so
+        it uses that range's upper bound, ``stride{i}``, which is visible there;
+        a thread handed an id past the live range fails the unchanged
+        ``id < range`` loop condition. That keeps the tail of a range that is
+        not a multiple of the stride exact.
 
-        If this stops raising, the blocker named in reduce_tuner.cc is gone and
-        the CUDA guard there should be revisited.
+        CUDA always runs ParallelPass (``parallel`` is forced on), so the CUDA
+        rows are exactly the case the reduce tuner used to be unable to offer.
         """
-        a = jt.random([64, 384, 8, 8])
-        a.sync()
-        expected = a.numpy().sum(axis=(0, 2, 3))
-        with jt.flag_scope(use_cuda=0):
-            # parallel alone is fine
-            with jt.flag_scope(compile_options={"parallel": 1, "test_rt_split": 1}):
-                got = jt.reduce(a, "add", (0, 2, 3)).numpy()
-            np.testing.assert_allclose(got, expected, rtol=1e-4)
-            # split alone is fine
-            with jt.flag_scope(compile_options={"split1": 64, "test_rt_split": 2}):
-                got = jt.reduce(a, "add", (0, 2, 3)).numpy()
-            np.testing.assert_allclose(got, expected, rtol=1e-4)
-            # together they are not
-            with self.assertRaises(RuntimeError):
-                with jt.flag_scope(compile_options={
-                        "parallel": 1, "split1": 64, "test_rt_split": 3}):
-                    jt.reduce(a, "add", (0, 2, 3)).sync()
+        cases = (
+            # shape, reduction axes, split option, split size
+            ([64, 384, 8, 8], (0, 2, 3), "split1", 64),   # exact multiple
+            ([64, 100, 8, 8], (0, 2, 3), "split1", 64),   # 36-element tail
+            ([100, 384, 8, 8], (0, 2, 3), "split0", 64),  # a reduction axis
+        )
+        for use_cuda in (0, 1):
+            if use_cuda and not _test_capability.check_accelerator(
+                    'cuda', backend=jt).enabled:
+                continue
+            for index, (shape, dims, split, n) in enumerate(cases):
+                # A distinct value per row forces a fresh compilation, so a
+                # cached kernel from another backend cannot stand in.
+                key = 100 + index + 10 * use_cuda
+                with self.subTest(use_cuda=use_cuda, shape=shape, split=split), \
+                        jt.flag_scope(use_cuda=use_cuda, enable_tuner=0):
+                    a = jt.random(shape)
+                    a.sync()
+                    expected = a.numpy().astype("float64").sum(axis=dims)
+                    with jt.flag_scope(compile_options={
+                            "parallel": 1, split: n, "test_rt_split": key}):
+                        got = jt.reduce(a, "add", dims).numpy()
+                    np.testing.assert_allclose(got, expected, rtol=1e-4, atol=1e-3)
 
 
 if __name__ == "__main__":

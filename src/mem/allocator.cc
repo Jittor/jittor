@@ -17,8 +17,10 @@
 #include "mem/allocator/nfef_allocator.h"
 #include "mem/allocator/temp_allocator.h"
 #include "mem/swap.h"
+#include "runtime/async_exec.h"
 #include "runtime/traversal_epoch.h"
 #include <mutex>
+#include <algorithm>
 
 #include "core/var.h"
 
@@ -66,7 +68,7 @@ Allocator* setup_allocator(Allocator* underlying) {
 Allocator* cpu_allocator = setup_allocator<SFRLAllocator>(
     backend_raw_allocator({BackendId::Cpu, 0}, BackendMemoryKind::Device));
 
-DECLARE_FLAG(int, use_cuda_managed_allocator);
+DEFINE_FLAG(int, use_cuda_managed_allocator, 0, "Enable cuda_managed_allocator");
 
 DEFINE_FLAG_WITH_SETTER(int, use_cuda_host_allocator, 1, "use cuda host allocator for cpu memory globally");
 
@@ -173,12 +175,13 @@ Allocator* get_allocator(int device, bool temp_allocator) {
     return get_allocator(target, temp_allocator);
 }
 
-Allocator* get_allocator(Device device, bool temp_allocator) {
+// The allocator a device's memory comes from before any policy layer: the
+// backend's own, device or managed or pinned as the flags say.
+static Allocator* raw_allocator(Device device, bool& temp_allocator) {
 #ifndef HAS_ACCELERATOR
     USER_CHECK(device.backend == BackendId::Cpu)
         << "Accelerator tensor placement requires a registered accelerator backend";
 #endif
-    Allocator* allocator = nullptr;
     if (device.backend != BackendId::Cpu) {
         // A device workspace -- cuDNN's, cuBLASLt's, a sort's -- comes out of
         // the same pool as the tensors, as PyTorch's does. A separate caching
@@ -189,16 +192,18 @@ Allocator* get_allocator(Device device, bool temp_allocator) {
         temp_allocator = false;
     }
 #ifdef HAS_ACCELERATOR
-    if (device.backend != BackendId::Cpu && !allocator) {
+    if (device.backend != BackendId::Cpu) {
         LOGvv << "Using accelerator allocator of device" << device.index;
-        allocator = backend_raw_allocator(device,
+        return backend_raw_allocator(device,
             use_cuda_managed_allocator ? BackendMemoryKind::Managed : BackendMemoryKind::Device);
-    } else
-#endif
-    {
-        allocator = backend_raw_allocator({BackendId::Cpu, 0},
-            use_pinned_host_memory() ? BackendMemoryKind::Pinned : BackendMemoryKind::Device);
     }
+#endif
+    return backend_raw_allocator({BackendId::Cpu, 0},
+        use_pinned_host_memory() ? BackendMemoryKind::Pinned : BackendMemoryKind::Device);
+}
+
+// The policy layers the flags ask for, on top of `allocator`.
+static Allocator* layered_allocator(Allocator* allocator, bool temp_allocator) {
     if (use_stat_allocator==1) {
         LOGvv << "Using stat_allocator";
         allocator = setup_allocator<StatAllocator>(allocator);
@@ -226,7 +231,42 @@ Allocator* get_allocator(Device device, bool temp_allocator) {
     return allocator;
 }
 
+// The executor asks this twice per operator. The layers on top of the
+// backend's allocator depend only on it, the kind and the allocator flags,
+// and a chain once built is never torn down, so the last few chains are kept
+// per thread, each with the flag values it was built under. Building one took
+// a lock and a lookup keyed by a string for every layer. The backend's own
+// allocator is asked every time: a backend table can be replaced (the
+// registry tests install a probe), and that has to take effect at once.
+Allocator* get_allocator(Device device, bool temp_allocator) {
+    Allocator* raw = raw_allocator(device, temp_allocator);
+    struct Entry {
+        Allocator* raw = nullptr;
+        Allocator* allocator = nullptr;
+        int temp = 0, flags[4];
+    };
+    thread_local Entry cache[4];
+    thread_local int next = 0;
+    int flags[4] = {use_stat_allocator, use_nfef_allocator, use_temp_allocator,
+                    use_sfrl_allocator};
+    for (auto& e : cache)
+        if (e.allocator && e.raw == raw && e.temp == (int)temp_allocator
+                && std::equal(flags, flags + 4, e.flags))
+            return e.allocator;
+    Allocator* allocator = layered_allocator(raw, temp_allocator);
+    auto& e = cache[next];
+    next = (next + 1) % 4;
+    e.raw = raw;
+    e.allocator = allocator;
+    e.temp = temp_allocator;
+    std::copy(flags, flags + 4, e.flags);
+    return allocator;
+}
+
 void gc_all() {
+    // After the batch on the worker thread, if any (runtime/async_exec.h): it
+    // allocates and frees as it goes.
+    async_exec_wait();
     // Copy under the lock, collect outside it: `gc()` walks and releases memory
     // and must not hold up every other thread's allocations while it does.
     vector<Allocator*> all;
@@ -262,84 +302,169 @@ static void migrate_empty_var(Var* var, Allocator* allocator) {
 // other. The ring built in var.cc is what makes the group visible here; the
 // group moves into one new block that keeps every member's relative offset.
 static bool migrate_group(Var* var, Allocator* allocator, bool to_gpu) {
-    auto* old_allocator = var->allocator;
-    auto old_allocation = var->allocation;
-    vector<Var*> members;
-    {
-        // Collect the ring before pruning it: unlinking rewires what we walk.
-        vector<Var*> ring;
-        Var* p = var;
-        do { ring.push_back(p); p = p->share_next; } while (p != var);
-        for (auto* v : ring) {
-            if (v->mem_ptr && v->allocator == old_allocator
-                    && v->allocation == old_allocation) {
-                members.push_back(v);
-                continue;
+    // The caller hands us a live Var; pin it for the ring walks below. Taking
+    // the pin here, outside the ring lock, keeps the documented order: the
+    // ring lock never waits for the graph mutation lock.
+    VarPtr var_hold(var);
+    for (;;) {
+        Allocator* old_allocator;
+        size_t old_allocation;
+        char* base;
+        size_t total;
+        {
+            // The whole decision is taken under the lock: no member may join,
+            // leave or change storage between collecting the ring and
+            // snapshotting the block that is about to be copied.
+            std::lock_guard<std::mutex> ring_guard(share_ring_mutex());
+            if (!var->share_next) return false;
+            old_allocator = var->allocator;
+            old_allocation = var->allocation;
+            vector<Var*> members;
+            {
+                // Collect the ring before pruning it: unlinking rewires what
+                // we walk.
+                vector<Var*> ring;
+                Var* p = var;
+                do { ring.push_back(p); p = p->share_next; } while (p != var);
+                for (auto* v : ring) {
+                    if (v->mem_ptr && v->allocator == old_allocator
+                            && v->allocation == old_allocation) {
+                        members.push_back(v);
+                        continue;
+                    }
+                    // A var's memory can be replaced without going through
+                    // free_var_mem -- ArrayOp::run does exactly that -- and
+                    // such a var left the group when that happened; only the
+                    // ring still says otherwise. It is not an alias any more,
+                    // so drop it.
+                    LOGvvvv << "share ring: dropping stale member" << v;
+                    share_group_unlink_locked(v);
+                }
             }
-            // A var's memory can be replaced without going through
-            // free_var_mem -- ArrayOp::run does exactly that -- and such a var
-            // left the group when that happened; only the ring still says
-            // otherwise. It is not an alias any more, so drop it.
-            LOGvvvv << "share ring: dropping stale member" << v;
-            share_group_unlink(v);
+            if (members.size() < 2) {
+                // nothing is actually aliased: let the caller take the plain path
+                share_group_unlink_locked(var);
+                return false;
+            }
+            if (!allocator->can_share()) {
+                // The target cannot express one block held by several vars, so
+                // this group cannot survive the move at all. That is what has
+                // always happened here; the difference is that it no longer
+                // happens quietly. Only the debug allocator configurations
+                // reach this (use_sfrl_allocator=0, use_nfef_allocator=1): the
+                // default stack and cpu_allocator are both SFRL, which can share.
+                static bool warned = false;
+                if (!warned) {
+                    warned = true;
+                    LOGw << "allocator" << allocator->name() << "cannot hold a share"
+                        << "group, so migrating an aliased var breaks the alias:"
+                        << "this allocator configuration cannot represent"
+                        << "Var::share_with. Writes through one alias will not be"
+                        << "visible through the other.";
+                }
+                share_group_unlink_locked(var);
+                return false;
+            }
+            base = (char*)var->mem_ptr;
+            char* end = base + var->storage_span_bytes();
+            for (auto* v : members) {
+                char* vp = (char*)v->mem_ptr;
+                if (vp < base) base = vp;
+                if (vp + v->storage_span_bytes() > end) end = vp + v->storage_span_bytes();
+            }
+            total = end - base;
+            // Pin the old block's bytes across the unlocked copy below. One
+            // reference on the block covers every member: they all point into
+            // it, and a pool with share_times > 0 keeps the block occupied and
+            // its bytes in place. Var liveness alone would not do it --
+            // `_update` frees a var's memory directly and a holder rebind
+            // drops the last reference -- so the two releases at commit and on
+            // retry below are what let the block go.
+            CHECK(old_allocator->share_with(var->storage_span_bytes(), old_allocation))
+                << "allocator" << old_allocator->name()
+                << "cannot pin a share group for migration";
         }
-    }
-    if (members.size() < 2) {
-        // nothing is actually aliased: let the caller take the plain path
-        share_group_unlink(var);
-        return false;
-    }
-    if (!allocator->can_share()) {
-        // The target cannot express one block held by several vars, so this
-        // group cannot survive the move at all. That is what has always
-        // happened here; the difference is that it no longer happens quietly.
-        // Only the debug allocator configurations reach this
-        // (use_sfrl_allocator=0, use_nfef_allocator=1): the default stack and
-        // cpu_allocator are both SFRL, which can share.
-        static bool warned = false;
-        if (!warned) {
-            warned = true;
-            LOGw << "allocator" << allocator->name() << "cannot hold a share"
-                << "group, so migrating an aliased var breaks the alias:"
-                << "this allocator configuration cannot represent"
-                << "Var::share_with. Writes through one alias will not be"
-                << "visible through the other.";
+
+        // The blocking copy, outside the ring lock. `backend_copy` releases the
+        // GIL while it waits for the device, and a writer that holds the GIL on
+        // its way out of a freed alias takes the ring lock in
+        // `share_group_unlink`; holding the ring lock here is that inversion.
+        Allocation a(allocator, total);
+        backend_copy(a.ptr, allocation_device(allocator), base,
+                     allocation_device(old_allocator), total);
+
+        // Revalidate under the lock. A concurrent free may have removed a
+        // member while the copy ran; any member the ring names now has to lie
+        // inside the range just copied, or the copy does not describe the
+        // group and has to be redone.
+        std::lock_guard<std::mutex> ring_guard(share_ring_mutex());
+        bool alive = var->share_next != nullptr;
+        bool valid = alive && var->mem_ptr && var->allocator == old_allocator
+            && var->allocation == old_allocation;
+        vector<Var*> members;
+        if (alive) {
+            vector<Var*> ring;
+            Var* p = var;
+            do { ring.push_back(p); p = p->share_next; } while (p != var);
+            for (auto* v : ring) {
+                if (v->mem_ptr && v->allocator == old_allocator
+                        && v->allocation == old_allocation) {
+                    char* vp = (char*)v->mem_ptr;
+                    if (vp < base || vp + v->storage_span_bytes() > base + total) {
+                        // The ring grew past the block that was copied (or a
+                        // member moved): the copy cannot describe it.
+                        valid = false;
+                    } else {
+                        members.push_back(v);
+                    }
+                    continue;
+                }
+                if (v == var) {
+                    // The Var we were asked to migrate no longer points into
+                    // that block; start again from its current state.
+                    valid = false;
+                    continue;
+                }
+                LOGvvvv << "share ring: dropping stale member" << v;
+                share_group_unlink_locked(v);
+            }
         }
-        share_group_unlink(var);
-        return false;
+        if (!alive || !valid || members.size() < 2) {
+            // Drop the pin and, unless the group is simply gone, let the next
+            // iteration collect whatever the ring is now.
+            old_allocator->free(base, var->storage_span_bytes(), old_allocation);
+            if (!alive) return false;
+            if (!valid) continue;
+            // Only one span is left: nothing is aliased any more.
+            if (var->share_next) share_group_unlink_locked(var);
+            return false;
+        }
+        // Commit. Every member still points into the block that was copied, so
+        // the offsets are the ones the copy used.
+        vector<size_t> offsets(members.size());
+        for (size_t i=0; i<members.size(); i++)
+            offsets[i] = (char*)members[i]->mem_ptr - base;
+        // Take one reference per extra member before touching any var, so a
+        // target that cannot express sharing fails with the group still intact.
+        for (size_t i=1; i<members.size(); i++)
+            CHECK(allocator->share_with(members[i]->storage_span_bytes(), a.allocation))
+                << "allocator" << allocator->name()
+                << "cannot hold a share group; migrating one var of an aliased "
+                   "group would silently unshare it";
+        for (size_t i=0; i<members.size(); i++) {
+            auto* v = members[i];
+            v->mem_ptr = (char*)a.ptr + offsets[i];
+            v->storage_offset_bytes = offsets[i];
+            v->allocation = a.allocation;
+            v->allocator = allocator;
+        }
+        for (size_t i=0; i<members.size(); i++)
+            old_allocator->free(base + offsets[i], members[i]->storage_span_bytes(), old_allocation);
+        // Drop the copy's pin on the old block.
+        old_allocator->free(base, var->storage_span_bytes(), old_allocation);
+        a.ptr = nullptr;
+        return true;
     }
-    char* base = (char*)var->mem_ptr;
-    char* end = base + var->storage_span_bytes();
-    for (auto* v : members) {
-        char* vp = (char*)v->mem_ptr;
-        if (vp < base) base = vp;
-        if (vp + v->storage_span_bytes() > end) end = vp + v->storage_span_bytes();
-    }
-    size_t total = end - base;
-    vector<size_t> offsets(members.size());
-    for (size_t i=0; i<members.size(); i++)
-        offsets[i] = (char*)members[i]->mem_ptr - base;
-    Allocation a(allocator, total);
-    backend_copy(a.ptr, allocation_device(allocator), base,
-                 allocation_device(old_allocator), total);
-    // Take one reference per extra member before touching any var, so a target
-    // that cannot express sharing fails with the group still intact.
-    for (size_t i=1; i<members.size(); i++)
-        CHECK(allocator->share_with(members[i]->storage_span_bytes(), a.allocation))
-            << "allocator" << allocator->name()
-            << "cannot hold a share group; migrating one var of an aliased "
-               "group would silently unshare it";
-    for (size_t i=0; i<members.size(); i++) {
-        auto* v = members[i];
-        v->mem_ptr = (char*)a.ptr + offsets[i];
-        v->storage_offset_bytes = offsets[i];
-        v->allocation = a.allocation;
-        v->allocator = allocator;
-    }
-    for (size_t i=0; i<members.size(); i++)
-        old_allocator->free(base + offsets[i], members[i]->storage_span_bytes(), old_allocation);
-    a.ptr = nullptr;
-    return true;
 }
 #endif
 

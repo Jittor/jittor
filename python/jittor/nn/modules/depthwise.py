@@ -11,7 +11,7 @@
 import jittor as jt
 from jittor import nn
 from jittor import Function
-from jittor._runtime.dispatch import register_kernel, select_kernel
+from jittor._runtime.dispatch import native_rule, register_kernel, select_kernel
 from jittor.nn.functional._amp import bias_for_compute_dtype
 from jittor.backends.cuda.kernels.nn.depthwise import depthwise_forward, depthwise_backward
 
@@ -60,6 +60,7 @@ def _supports_depthwise(x, weight, operator):
     return x.dtype == weight.dtype
 
 
+@native_rule("depthwise_conv2d")
 def _supports_depthwise_conv2d(x, weight, bias, stride, padding, dilation, groups,
                               *, _depthwise_fast_path=True):
     return (_depthwise_fast_path and groups == weight.shape[0] == x.shape[1]

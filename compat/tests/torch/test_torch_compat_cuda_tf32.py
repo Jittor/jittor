@@ -6,8 +6,7 @@ deliberately *not* views of the deprecated native overrides
 ``cuda_allow_tf32`` / ``cuda_allow_cudnn_tf32``: an independent Torch frontend
 carries its own (matmul, cuDNN) pair into the ops it builds, and native
 Runtime-following calls keep following the native policy. See
-``docs/notes/float32-precision-policy.md`` and
-``refactor-wip/results/2026-09-08-frontend-precision-isolation.md``.
+``docs/notes/numerics/float32-precision-policy.md``.
 
 That makes "did this write take effect?" a question about the library call, not
 about a flag. These tests answer it the only way a stored value cannot fake:
@@ -71,8 +70,8 @@ _CUDNN_SPELLINGS = (
                         "tf32" if on else "ieee")),
 )
 
-_NATIVE_OVERRIDES = ("float32_matmul_precision", "use_tensorcore",
-                     "cuda_allow_tf32", "cuda_allow_cudnn_tf32")
+_NATIVE_OVERRIDES = ("float32_matmul_precision", "float32_cudnn_precision",
+                     "use_tensorcore", "cuda_allow_tf32", "cuda_allow_cudnn_tf32")
 
 
 def _cuda_devices():
@@ -94,7 +93,8 @@ class TestTorchTf32ReachesTheLibraryCall(unittest.TestCase):
         # Every native override is off, so nothing but this frontend's own
         # policy can raise the tier of the calls below.
         stack.enter_context(jt.runtime.scope(
-            use_cuda=1, float32_matmul_precision="highest", use_tensorcore=0,
+            use_cuda=1, float32_matmul_precision="highest",
+            float32_cudnn_precision="highest", use_tensorcore=0,
             cuda_allow_tf32=0, cuda_allow_cudnn_tf32=0))
 
         def _restore():

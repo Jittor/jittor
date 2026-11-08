@@ -18,6 +18,8 @@
 #ifdef __linux__
 #include <sched.h>
 #include <unistd.h>
+#include "mem/mem_info.h"
+#include "utils/cgroup_memory.h"
 #endif
 #include "core/parallel_compiler.h"
 #include "runtime/launch_diagnostics.h"
@@ -94,6 +96,14 @@ int parallel_compile_worker_count(int requested) {
     if (hardware) available = std::min(available, (int)hardware);
 #endif
     available = std::min(available, cgroup_cpu_limit());
+#ifdef __linux__
+    // Keep CPU affinity, quota and user caps, and apply the same three-GiB
+    // compilation budget as the Python compiler pool. Re-read limits for
+    // each batch: a process can move cgroups or receive a new limit.
+    auto memory = cgroup_memory::limit_memory(mem_info.total_cpu_ram);
+    auto memory_workers = std::max<uint64_t>(1, memory / (3ull*1024*1024*1024));
+    available = (int)std::min<uint64_t>(available, memory_workers);
+#endif
     return std::max(available, 1);
 }
 
@@ -131,14 +141,28 @@ struct CompileResult {
 
 static int last_compiled_op_num = 0;
 static int not_compile_window = 0;
+// Queued segments in a row with no new kernel, after which the up-front check
+// is skipped. Every check loads each segment and builds its jit key only to
+// find it compiled -- in a warm loop, every segment of every batch. 100000 took
+// a DeepMill run about four shapes to reach. The skip no longer lasts for the
+// rest of the process, so it can come sooner: a kernel compiled meanwhile on
+// the execution path grows `jit_key_mapper`, and the next batch checks again.
+static const int quiet_window = 10000;
 
 void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& fused_op, vector<int>& fuse_ops, vector<Op*>& ops, int64 tt, int force_compile) {
     if (!backend_ops(accelerator_backend_id()).execution.supports_parallel_compile)
         return;
     // jit_search_kernel require compile at runtime
-    if (!force_compile)
-        if (jit_search_kernel || !use_parallel_op_compiler || not_compile_window > 100000)
+    if (!force_compile) {
+        if (jit_search_kernel || !use_parallel_op_compiler)
             return;
+        if (not_compile_window > quiet_window) {
+            // Still quiet: nothing has been compiled since the window filled.
+            if (last_compiled_op_num == (int)jit_key_mapper.size())
+                return;
+            not_compile_window = 0;
+        }
+    }
 
     // try not use parallel compile if no op needs compile
     if (last_compiled_op_num != jit_key_mapper.size()) {
@@ -165,6 +189,9 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
         // inside the try -- empty means we failed before there was anything to
         // name, which the handler says rather than guesses.
         string op_desc;
+        // Its kind, which costs nothing to take: what the handler names when
+        // the full description was never formatted.
+        const char* op_kind = nullptr;
         try {
         if (op->type() != OpType::other) {
             op = &fused_op;
@@ -173,30 +200,43 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
             root = fuse_ops[rr-1];
             load_fused_op(fused_op, fuse_ops, ops, ll, rr, tt);
         }
-        {
-            // `op`, never `fused_op.ops`. Printing the sub-operator list walks
-            // every `Op*` in it, and that is exactly what was crashing in both
-            // failure handlers. Hoisting the walk to here did not make it safe:
-            // with the handlers fixed the crash moved to this line -- normal
-            // path, no exception in sight -- which is the finding rather than a
-            // setback. The sub-Op pointers are already dead by the time
-            // `load_fused_op` has filled the batch, so *no* placement of this
-            // walk is safe while their liveness is not guaranteed.
-            //
-            // The fused operator itself is a local and always valid, so its own
-            // name costs nothing and cannot fault. It is less detail than the
-            // sub-operator list; it is also a description that survives being
-            // printed.
-            std::stringstream desc_ss;
-            desc_ss << op;
-            op_desc = desc_ss.str();
-        }
+        // `op`, never `fused_op.ops`. Printing the sub-operator list walks
+        // every `Op*` in it, and that is exactly what was crashing in both
+        // failure handlers. Hoisting the walk to here did not make it safe:
+        // with the handlers fixed the crash moved to this line -- normal
+        // path, no exception in sight -- which is the finding rather than a
+        // setback. The sub-Op pointers are already dead by the time
+        // `load_fused_op` has filled the batch, so *no* placement of this
+        // walk is safe while their liveness is not guaranteed.
+        //
+        // The fused operator itself is a local and always valid, so its own
+        // name cannot fault. It is less detail than the sub-operator list; it
+        // is also a description that survives being printed. Formatted only
+        // for an operator that needs compiling or failed: formatting it for
+        // every operator of every batch was a fifth of this pass.
+        op_kind = op->name();
+        // The operator's name is what the user can act on; its internal
+        // representation (`Op(1:0:1:1:i0:o1:s0:g1,code->2)`) only at log_v>=1.
+        auto describe = [&]() {
+            if (op_desc.empty()) {
+                std::stringstream desc_ss;
+                if (log_v >= 1) desc_ss << op;
+                else desc_ss << op->name();
+                op_desc = desc_ss.str();
+            }
+            return op_desc;
+        };
         LOGvvv << "Check op needs compile:" << op;
-        ExecutionBackendScope operation_backend_scope(op->requested_backend());
-        TensorPlacementScope placement_scope(op->graph_placement());
+        // One read of the placement for the scopes and the lookup, as in
+        // `run_exec_plan`.
+        const auto placement = op->graph_placement();
+        const auto requested_backend = placement.explicit_backend
+            ? placement.device.backend : execution_target_backend();
+        ExecutionBackendScope operation_backend_scope(requested_backend);
+        TensorPlacementScope placement_scope(placement);
         Float32PrecisionScope precision_scope(op->float32_precision);
         LaunchOriginScope origin_scope(op->launch_origin);
-        op->prepare_execution(jkl);
+        op->prepare_execution_on(jkl, op->execution_backend_for(requested_backend));
         if (jkl.empty()) continue;
 
         // Copy the key before consulting caches; JK is reusable scratch
@@ -213,7 +253,7 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
         } else {
             task_rid = rid;
         }
-        tasks.push_back({task_rid, string(jit_key), op_desc});
+        tasks.push_back({task_rid, string(jit_key), describe()});
 
 
         LOGvv << "Op needs compile:" << op;
@@ -237,11 +277,18 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
             // Op::name_ex (op.cc:379). prepare_execution can release the GIL,
             // so another Python thread gets to free nodes between the load and
             // the throw.
+            if (op_desc.empty() && is_fused_op) {
+                // The local fused operator: see `describe` above.
+                std::stringstream desc_ss;
+                if (log_v >= 1) desc_ss << (Op*)&fused_op;
+                else desc_ss << fused_op.name();
+                op_desc = desc_ss.str();
+            }
             const char* named = op_desc.size() ? op_desc.c_str()
-                                               : "(operator not yet identified)";
-            LOGf << (is_fused_op ? "Compile fused operator(" : "Compile operator(")
-                >> rid >> '/' >> queue.size() >> ")"
-                << "failed:" << named << "\n\nReason: " >> e.what() >> source_note;
+                : op_kind ? op_kind : "(operator not yet identified)";
+            LOGf << "Compiling" << (is_fused_op ? "fused operator" : "operator")
+                << named << "(" >> rid+1 << "of" << queue.size() >> ") failed."
+                << "\n\nReason: " >> e.what() >> source_note;
         }
     }
     if (tasks.empty()) return;
@@ -352,9 +399,9 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
                 // `task.description`, not the Op pointers: see CompileTask.
                 // Dereferencing them here is what turned a reportable compile
                 // error into a segfault.
-                ss << (is_fused_op ? "Compile fused operator(" : "Compile operator(")
-                    << i << '/' << n << ")"
-                    << "failed:" << task.description << "\n\nReason: " << e.what();
+                ss << "Compiling " << (is_fused_op ? "fused operator " : "operator ")
+                    << task.description << " (" << i+1 << " of " << n << ") failed."
+                    << "\n\nReason: " << e.what();
                 if (prepared_key.size())
                     ss << "\n\ngenerated source: "
                         << Op::get_filename_from_jit_key(prepared_key, ".cc");
@@ -390,11 +437,10 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
     } // end GILReleaseScope: GIL reacquired on the main thread here
 
     if (worker_error) {
-        try {
-            std::rethrow_exception(worker_error);
-        } catch (const std::exception& e) {
-            LOGf << "Error happened during compilation:\n" << e.what();
-        }
+        // As thrown: it already says which operator failed and why, and a
+        // wrapper here only put "parallel_compiler.cc:410: Error happened
+        // during compilation:" in front of that.
+        std::rethrow_exception(worker_error);
     }
 
     // fill all op entry

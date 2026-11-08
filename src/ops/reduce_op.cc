@@ -283,15 +283,15 @@ ReduceOp::ReduceOp(Var* x, NanoString op, NanoVector dims, bool keepdims)
     auto xdim = x->shape.size();
     keepdims_mask = keepdims ? (int)-1 : (int)0;
     if (!dims.size()) {
-        reduce_mask = (1<<xdim)-1;
+        reduce_mask = xdim >= 32 ? ~0u : (1u<<xdim)-1;
     } else {
         reduce_mask = 0;
         for (auto dim : dims) {
             if (dim<0) dim += xdim;
-            USER_CHECK(dim>=0 && dim<xdim) << "Reduce dim out of range: requested dims" << dims
+            USER_INDEX_CHECK(dim>=0 && dim<xdim) << "Reduce dim out of range: requested dims" << dims
                 << "for a" << (int)xdim >> "-D var; valid dims are" << -(int)xdim
                 << "to" << ((int)xdim-1) >> ".";
-            reduce_mask |= 1<<dim;
+            reduce_mask |= 1u<<dim;
         }
     }
     // if (x->dtype() == ns_bool && ns == ns_add)
@@ -352,7 +352,7 @@ void ReduceOp::infer_shape() {
     // an empty var are well defined and stay legal; maximum and minimum have
     // no answer to give, and the kernel's seed was being returned as if it were
     // data, so `jt.zeros((0,3)).max(0)` answered [-3.4e38, -3.4e38, -3.4e38].
-    // That seed is now +-inf for the float dtypes (KI-OPS-008) and the dtype's
+    // That seed is now +-inf for the float dtypes and the dtype's
     // lowest/highest for the integers, which changes the value but not the
     // decision: a fold's identity is where the fold starts, never an element of
     // an empty input, and numpy raises ValueError for this reduction while
@@ -424,14 +424,14 @@ void ReduceOp::jit_prepare(JK& jk) {
         << "«Ty:" << y->dtype()
         << "«Tz:" << y->dtype()
         << "«OP:" << ns
-        << "«DIM=" << JK::hex1(x->shape.size())
+        << "«DIM=" << JK::hex(x->shape.size())
         << "«REDUCE=" << JK::hex(reduce_mask)
-        << "«EMPTY_MEAN=" << JK::hex1(x->num == 0 && ns == ns_mean)
+        << "«EMPTY_MEAN=" << JK::hex(x->num == 0 && ns == ns_mean)
         // Which of the two xstride forms jit_run emits, so a strided input and
         // a contiguous one of the same rank never share a compiled kernel.
         // Always in the key, even for 0: the two forms are different code, and
         // the key is the only thing that decides which one runs.
-        << "«XSTRIDED=" << JK::hex1(!x->is_contiguous());
+        << "«XSTRIDED=" << JK::hex(!x->is_contiguous());
 }
 
 #else // JIT
@@ -445,7 +445,7 @@ void ReduceOp::jit_run() {
     // then `-1`: this line used to emit `index_t ystride-1 = 1;`, which does
     // not compile. `loss.sum()` where the loss is already a scalar is ordinary
     // code -- PyTorch returns the value unchanged -- and it died here on both
-    // devices (KI-OPS-004). With the guard, every `@for` below produces an
+    // devices. With the guard, every `@for` below produces an
     // empty nest, the body runs once with `yid == xid == 0`, and the result is
     // the input value, which is what the reduction of a single element is.
     @if(DIM>0, index_t ystride@{DIM-1} = 1;)

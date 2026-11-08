@@ -55,6 +55,9 @@ static unordered_set<string> is_bool = {
     "logical_and",
     "logical_or",
     "logical_xor",
+    "isnan",
+    "isinf",
+    "isfinite",
 };
 
 static unordered_set<string> unary_ops = {
@@ -64,6 +67,7 @@ static unordered_set<string> unary_ops = {
     "logical_not",
     "bitwise_not",
     "log",
+    "log1p",
     "exp",
     "sqrt",
     "round",
@@ -88,11 +92,21 @@ static unordered_set<string> unary_ops = {
     "sigmoid",
     "erf",
     "erfinv",
-    "relu"
+    "relu",
+    // Internal, reached as `unary(x, "imag")`: not in unary_op.cc's table, so
+    // no `jt.imag`/`jt.as_imag` is generated. `imag` reads the imaginary part
+    // of a complex Var; `as_imag` makes x*i of a real one. Each is the
+    // other's adjoint, which is what lets `Var.imag` differentiate in C++.
+    "imag",
+    "as_imag",
+    "isnan",
+    "isinf",
+    "isfinite",
 };
 
 static unordered_set<string> float_ops = {
     "log",
+    "log1p",
     "exp",
     "sqrt",
     "mean",
@@ -119,7 +133,7 @@ static unordered_set<string> float_ops = {
 // both answer a float for float operands. Listing it here forced the output to
 // int32, and the expansion casts both operands to the *output* type before
 // dividing, so `-2.7 // 2.0` divided `int(-2.7) == -2` by 2 and answered -1
-// where numpy answers -2: the truncation landed on the operands. KI-OPS-003.
+// where numpy answers -2: the truncation landed on the operands.
 static unordered_set<string> int_ops = {
     "round_int",
     "floor_int",
@@ -136,6 +150,7 @@ static unordered_set<string> binary_ops = {
     "divide",
     "floor_divide",
     "mod",
+    "fmod",
     "less",
     "less_equal",
     "greater",
@@ -165,7 +180,8 @@ static unordered_set<string> white_ops = {
 // `UnaryOp::grad`, and relu's gradient `dy * (y > 0)` does too. For relu
 // that is the difference between keeping one extra mask or input per
 // activation and keeping nothing -- the output is saved anyway by the
-// convolution or linear layer that reads it.
+// convolution or linear layer that reads it. The float class predicates are
+// in both lists for the opposite reason: they have no gradient at all.
 static unordered_set<string> no_need_back_in = {
     "void",
     "cast",
@@ -177,9 +193,13 @@ static unordered_set<string> no_need_back_in = {
     "sqrt",
     "sigmoid",
     "relu",
+    "isnan",
+    "isinf",
+    "isfinite",
 };
 
 static unordered_set<string> no_need_back_out = {
+    "log1p",
     "void",
     "cast",
     "negative",
@@ -187,6 +207,9 @@ static unordered_set<string> no_need_back_out = {
     "subtract",
     "multiply",
     "divide",
+    "isnan",
+    "isinf",
+    "isfinite",
 };
 
 #define DEFINE_NS(T) NanoString ns_##T;
@@ -221,6 +244,9 @@ static void init_ns() {
     dsize_map["complex64"] = 3;     // 8 bytes = 2^3 (float32 real + float32 imag)
     is_float_map["complex64"] = 0;  // complex is neither float nor int
     is_unsigned["complex64"] = 0;
+    dsize_map["complex128"] = 4;    // 16 bytes = 2^4 (float64 real + float64 imag)
+    is_float_map["complex128"] = 0;
+    is_unsigned["complex128"] = 0;
     NanoString::ns_t i=0;
     auto func = [&](const char* name, NanoString& ns) {
         // Before anything is written: both tables below are indexed without a

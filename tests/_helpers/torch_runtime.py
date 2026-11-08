@@ -28,6 +28,21 @@ def _loaded_torch_is_jittor_shim():
     )
 
 
+def torch_shim_loaded():
+    """Whether this process runs jittor's Torch shim rather than native jittor.
+
+    Several native test files assert that they are on jittor's own runtime, and
+    they used to state it as `'torch' not in sys.modules`. That is a different
+    question: a native test may import an independent PyTorch in-process to
+    compare against (``tests/data/test_resize_and_crop.py::test_resize`` and the
+    pooling cases of ``tests/ops/test_arg_pool_op.py`` do), and xdist shares a
+    worker between files, so one such import turned every later file that
+    asserted the invariant red. What those files mean is "the shim is not
+    active", which is what this answers.
+    """
+    return _loaded_torch_is_jittor_shim()
+
+
 def _loaded_module_is_from_site(module_name, site):
     module = sys.modules.get(module_name)
     origin = getattr(module, "__file__", None)
@@ -51,8 +66,43 @@ def _loaded_torch_has_binary_core(site):
         return False
 
 
+def _is_namespace_spec(spec):
+    """A directory with no ``__init__.py`` that merely shares the name.
+
+    No dependency probed here is a namespace package -- PyTorch, torchvision
+    and the rest are regular packages -- but the test tree has directories
+    named after them: ``compat/tests/torch`` and ``compat/tests/triton``. The
+    native gate also collects some of ``compat/tests``, and loading its
+    conftest puts that directory on ``sys.path``; from then on ``torch``
+    resolved to the test directory as a namespace package, every oracle test
+    collected afterwards decided an independent PyTorch was installed, and the
+    CPU gate reported them as setup errors ("independent Torch was not
+    preloaded", "No module named 'torch.nn'") instead of skipping them.
+    """
+    return (
+        spec is not None
+        and getattr(spec, "origin", "") is None
+        and getattr(spec, "loader", "") is None
+    )
+
+
+def installed_spec(module_name):
+    """``find_spec(module_name)``, or None for a same-named test directory.
+
+    For a probe that has to tell "something importable is installed" from
+    "nothing is": see `_is_namespace_spec` for the directory that answered
+    instead.
+    """
+    try:
+        spec = importlib.util.find_spec(module_name)
+    except (ImportError, ValueError):
+        return None
+    return None if _is_namespace_spec(spec) else spec
+
+
 def _site_spec(module_name, site):
-    return importlib.machinery.PathFinder.find_spec(module_name, [str(site)])
+    spec = importlib.machinery.PathFinder.find_spec(module_name, [str(site)])
+    return None if _is_namespace_spec(spec) else spec
 
 
 def _spec_is_deployed_torch_shim(spec):
@@ -75,8 +125,7 @@ def _spec_is_deployed_torch_shim(spec):
             continue
         targets = node.targets if isinstance(node, ast.Assign) else (node.target,)
         if any(
-            isinstance(target, ast.Attribute)
-            and target.attr == "_jittor_torch_shim_placeholder"
+            isinstance(target, ast.Attribute) and target.attr == "_jittor_torch_shim_placeholder"
             for target in targets
         ):
             return True
@@ -110,7 +159,7 @@ def modules_available(*module_names):
                     return False
             elif module_name == "torch":
                 spec = importlib.util.find_spec(module_name)
-                if spec is None or _spec_is_deployed_torch_shim(spec):
+                if spec is None or _is_namespace_spec(spec) or _spec_is_deployed_torch_shim(spec):
                     return False
             elif module_name == "torchvision":
                 module = sys.modules.get(module_name)
@@ -118,10 +167,12 @@ def modules_available(*module_names):
                     return False
                 spec = importlib.util.find_spec(module_name)
                 origin = str(getattr(spec, "origin", "")) if spec else ""
-                if spec is None or "jittor" in origin:
+                if spec is None or _is_namespace_spec(spec) or "jittor" in origin:
                     return False
-            elif importlib.util.find_spec(module_name) is None:
-                return False
+            else:
+                spec = importlib.util.find_spec(module_name)
+                if spec is None or _is_namespace_spec(spec):
+                    return False
         except (ImportError, ValueError):
             return False
     return True

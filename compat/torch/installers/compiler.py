@@ -39,7 +39,9 @@ def compile(model=None, *args, **kwargs):
     instead of rebuilding it every call, and a function in a
     `jittor._runtime.step_capture.StepCapture`, which replays the whole call
     -- a training step's forward, backward and optimizer update included.
-    Any other mode runs as written.
+    Calls needing an external backward keep the original CUDA autograd graph;
+    function replay requires no_grad inference or a complete backward inside
+    the call, with no differentiable caller inputs. Any other mode runs as written.
     """
     from ...stub_policy import unimplemented
     if kwargs.get("fullgraph"):
@@ -60,17 +62,23 @@ def compile(model=None, *args, **kwargs):
         return lambda value: compile(value, *args, **kwargs)
     if not _wants_replay(kwargs.get("mode"), kwargs.get("options")):
         return model
+    from jittor._runtime.graph_replay import release_auto_replay
     if isinstance(model, jt.nn.Module):
         if isinstance(model, OptimizedModule):
             return model
+        release_auto_replay(model)
         cls = _compiler_context().state.get("nn_class_adapter", _identity)(OptimizedModule)
         return cls(model)
     from jittor._runtime.step_capture import StepCapture
     if isinstance(model, StepCapture) or not callable(model):
         return model
+    owner = getattr(model, "__self__", None)
+    if isinstance(owner, jt.nn.Module):
+        # A method of a module -- Transformers compiles `model.__call__`.
+        release_auto_replay(owner)
     # A function -- typically a whole training step, forward, backward and
     # optimizer update -- is captured and replayed as one graph.
-    return StepCapture(model)
+    return StepCapture(model, _guard_external_backward=True)
 
 
 def script(obj=None, **kwargs):
@@ -167,6 +175,66 @@ class OptimizedModule(jt.nn.Module):
         if orig is None or name.startswith("__"):
             raise AttributeError(name)
         return getattr(orig, name)
+
+
+class QuantStub(jt.nn.Module):
+    """``torch.ao.quantization.QuantStub``: identity until a model is converted.
+
+    Eager models (and remote Transformers code) build these stubs whether or
+    not quantization is requested. Jittor ships no AO observers, fake-quant or
+    convert pass, so the stubs stay what torch's are before ``convert``: the
+    identity. Nothing here pretends to quantize.
+    """
+
+    def __init__(self, qconfig=None):
+        super().__init__()
+        self.qconfig = qconfig
+
+    def execute(self, x):
+        return x
+
+    def forward(self, x):
+        return self.execute(x)
+
+
+class DeQuantStub(QuantStub):
+    """``torch.ao.quantization.DeQuantStub``: identity until converted."""
+
+
+class FloatFunctional(jt.nn.Module):
+    """``torch.ao.nn.quantized.FloatFunctional``: float ops behind named methods.
+
+    Used in place of operators so a quantization pass can attach observers;
+    before any such pass the methods are the plain float operations.
+    """
+
+    def forward(self, x):
+        raise RuntimeError("FloatFunctional is not intended to use the 'forward'. "
+                           "Please use the underlying operation")
+
+    def execute(self, x):
+        return self.forward(x)
+
+    def add(self, x, y):
+        return x + y
+
+    def add_scalar(self, x, y):
+        return x + y
+
+    def mul(self, x, y):
+        return x * y
+
+    def mul_scalar(self, x, y):
+        return x * y
+
+    def cat(self, x, dim=0):
+        return jt.concat(list(x), dim=dim)
+
+    def add_relu(self, x, y):
+        return jt.nn.relu(x + y)
+
+    def matmul(self, x, y):
+        return jt.matmul(x, y)
 
 
 class OperatorExportTypes:
@@ -396,6 +464,17 @@ def _api_jit_interface(c):
     return c
 
 
+def _api_jit_attribute(value, type=None):
+    # TorchScript's attribute annotation; outside scripting it is the value.
+    return value
+
+
+def _api_jit_annotate(type, value):
+    # Same contract as `annotate`: a static type hint for the compiler, the
+    # value at runtime.
+    return value
+
+
 def _api_fx_wrap(f=None, *a, **k):
     return f if f is not None and callable(f) else _identity
 
@@ -434,6 +513,13 @@ def _api_dynamo_mark_dynamic(*a, **k):
 
 def _api_dynamo_graph_break(*a, **k):
     return None
+
+
+def _api_inductor_fresh_cache(cache_entries=None, dir=None, delete=True):
+    """Permit guarded imports without pretending Jittor owns Inductor caches."""
+    raise NotImplementedError(
+        "torch._inductor.utils.fresh_cache requires the PyTorch Inductor "
+        "compiler; Jittor does not implement Inductor cache isolation")
 
 
 def _api_dynamo_reset(*a, **k):
@@ -561,6 +647,13 @@ def install(ctx):
     _inductor_config._config = {}
     _inductor_config.triton = _types2.SimpleNamespace(cudagraphs=False)
     _inductor.config = _inductor_config
+    # Upstream test harnesses import this helper even for eager-only cases.
+    # The module is real and narrowly exported: using the unsupported cache
+    # context raises, rather than fabricating a successful no-op context.
+    _inductor_utils = _types2.ModuleType("torch._inductor.utils")
+    _inductor_utils.fresh_cache = _api_inductor_fresh_cache
+    _inductor.utils = _inductor_utils
+    _modules["torch._inductor.utils"] = _inductor_utils
     _modules["torch._inductor"] = _inductor
     _modules["torch._inductor.custom_graph_pass"] = _custom_graph_pass
     _modules["torch._inductor.config"] = _inductor_config
@@ -636,6 +729,11 @@ def install(ctx):
     _jit.script = script
     _jit.trace = trace
     _jit.trace_module = trace
+    # TorchScript's annotate() is an eager identity at runtime: it carries a
+    # static type hint for the compiler and must return the supplied value.
+    # The shim does not emit TorchScript, but downstream code still calls this
+    # public helper while defining eager-compatible functions.
+    _jit.annotate = _api_jit_annotate
     register_fidelity(
         "torch.compile", compile, Fidelity.APPROXIMATE,
         "Jittor executes eagerly and does not produce a single compiled graph.")
@@ -654,8 +752,12 @@ def install(ctx):
     _jit.ScriptModule = g.nn.Module
     # TorchScript's type-only attribute wrapper is a value-preserving helper
     # in eager execution; Jittor has no separate scripting compiler.
-    _jit.Attribute = lambda value, _type: value
+    # Eager ``script`` returns the original Python callable; expose the
+    # callable type so libraries using ``isinstance(fn, torch.jit.ScriptFunction)``
+    # retain their structural check without fabricating a compiled artifact.
+    _jit.ScriptFunction = _types2.FunctionType
     _jit.interface = _api_jit_interface
+    _jit.Attribute = _api_jit_attribute
     try:
         from typing import Final as _Final
     except ImportError:  # Python 3.7
@@ -664,36 +766,24 @@ def install(ctx):
     _bind_missing(g, "jit", _jit)
     _bind_missing(g, "ScriptModule", _jit.ScriptModule)
     _modules.setdefault("torch.jit", _jit)
-
-    # Eager-only remote models occasionally construct quantization stubs even
-    # when no quantized execution is requested.  Keep those modules as explicit
-    # identity layers; Jittor does not ship Torch AO observers or fake-quant
-    # kernels, so silently pretending to quantize would be misleading.
+    # torch.ao: the quantization stubs eager models construct unconditionally.
+    _adapt_module = ctx.state.get("nn_class_adapter", _identity)
     _ao = _types2.ModuleType("torch.ao")
+    _ao.__path__ = []
     _ao_quantization = _types2.ModuleType("torch.ao.quantization")
-    class _QuantIdentity(g.nn.Module):
-        def execute(self, input):
-            return input
-    _ao_quantization.QuantStub = _QuantIdentity
-    _ao_quantization.DeQuantStub = _QuantIdentity
+    _ao_quantization.QuantStub = _adapt_module(QuantStub)
+    _ao_quantization.DeQuantStub = _adapt_module(DeQuantStub)
     _ao_nn = _types2.ModuleType("torch.ao.nn")
+    _ao_nn.__path__ = []
     _ao_quantized = _types2.ModuleType("torch.ao.nn.quantized")
-    class _FloatFunctional:
-        def add(self, input, other):
-            return input + other
-        def add_relu(self, input, other):
-            return g.nn.relu(input + other)
-        def mul(self, input, other):
-            return input * other
-    _ao_quantized.FloatFunctional = _FloatFunctional
-    _ao_nn.quantized = _ao_quantized
+    _ao_quantized.FloatFunctional = _adapt_module(FloatFunctional)
     _ao.quantization = _ao_quantization
     _ao.nn = _ao_nn
-    _modules["torch.ao"] = _ao
-    _modules["torch.ao.quantization"] = _ao_quantization
-    _modules["torch.ao.nn"] = _ao_nn
-    _modules["torch.ao.nn.quantized"] = _ao_quantized
-    g.ao = _ao
+    _ao_nn.quantized = _ao_quantized
+    for _name, _module in (("torch.ao", _ao), ("torch.ao.quantization", _ao_quantization),
+                           ("torch.ao.nn", _ao_nn), ("torch.ao.nn.quantized", _ao_quantized)):
+        _modules.setdefault(_name, _module)
+    _bind_missing(g, "ao", _modules["torch.ao"])
     _fx = _types2.ModuleType("torch.fx")
     # A package, so its submodules can be imported and answered below.
     _fx.__path__ = []
