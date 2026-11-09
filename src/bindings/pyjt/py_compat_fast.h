@@ -73,6 +73,11 @@ PyObject* fast_gelu(PyObject* x);
 // @pyjt(_fast_view)
 PyObject* fast_view(PyObject* self, PyObject* shape);
 
+// Materialize a CPU/CUDA storage view under its frontend owner's type and
+// its own explicit placement. None for legacy placement or other backends.
+// @pyjt(_fast_contiguous)
+PyObject* fast_contiguous(PyObject* self, PyObject* tensor_type);
+
 // Torch's two-axis transpose as a physical storage view, retaining the
 // immediate input's autograd history. Exact integer axes only; other spellings
 // and invalid axes return None for the Python API's validation.

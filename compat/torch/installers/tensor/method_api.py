@@ -2272,6 +2272,10 @@ def _api_tolist(self):
     return self.item() if getattr(self, '_torch_0d', False) else self.numpy().tolist()
 
 
+_FAST_CONTIGUOUS = None
+_NATIVE_CONTIGUOUS = None
+
+
 def _api_contiguous(self, memory_format="contiguous_format"):
     """Torch's ``contiguous``: the same tensor when already contiguous, else a copy.
 
@@ -2292,6 +2296,12 @@ def _api_contiguous(self, memory_format="contiguous_format"):
         raise NotImplementedError("contiguous supports contiguous_format")
     if self._storage_is_contiguous():
         return self
+    fast = _FAST_CONTIGUOUS
+    if fast is not None and _owner.jt.contiguous is _NATIVE_CONTIGUOUS:
+        context = get_install_context(_owner.jt)
+        result = fast(self, context.state["Var"])
+        if result is not None:
+            return result
     with _new_scope(self, None):
         return _owner.jt.contiguous(self)
 

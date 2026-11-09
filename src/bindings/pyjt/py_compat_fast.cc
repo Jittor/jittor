@@ -1067,6 +1067,19 @@ PyObject* fast_view(PyObject* self, PyObject* shape) {
     return storage_view(self, target);
 }
 
+PyObject* fast_contiguous(PyObject* self, PyObject* tensor_type) {
+    if (!is_var(self) || !PyType_Check(tensor_type)) return none();
+    auto* holder = GET_RAW_PTR(VarHolder, self);
+    TensorPlacement placement = holder->var->placement;
+    if (!placement.explicit_backend || (placement.device.backend != BackendId::Cpu
+            && placement.device.backend != BackendId::Cuda)) return none();
+    // As tensor_frontend(..., like=self): the owner selects the result type
+    // and AD policy, while the input outranks any ambient construction device.
+    PyTensorFrontendScope frontend(reinterpret_cast<PyTypeObject*>(tensor_type));
+    TensorPlacementScope input_placement(placement);
+    return to_py_object<VarHolder*>(new VarHolder(contiguous_storage(holder->grad_input())));
+}
+
 PyObject* fast_unsqueeze(PyObject* self, int64 dim) {
     if (!is_var(self)) return none();
     Var* var = GET_RAW_PTR(VarHolder, self)->var;
