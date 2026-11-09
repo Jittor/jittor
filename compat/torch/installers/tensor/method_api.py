@@ -824,6 +824,12 @@ def _data_get(self):
         view._torch_0d = True
     view._torch_data_owner = self
     view._torch_data_path = ()
+    # A fresh .data alias must retain the shared-memory descriptor so its
+    # multiprocessing reduction reopens the same allocation in the child.
+    for name in ("_torch_shared_memory_handle", "_torch_shared_memory_spec"):
+        marker = getattr(self, name, None)
+        if marker is not None:
+            setattr(view, name, marker)
     return view
 
 
@@ -2074,6 +2080,27 @@ def _api_div(self, o):
     return _ip(self, _inplace_saved_input(self, o) / o, preserve_storage=True)
 
 
+def _api_lerp(self, end, weight):
+    return self + weight * (end - self)
+
+
+def _api_lerp_(self, end, weight):
+    source = _inplace_saved_input(self, end)
+    return _ip(self, source + weight * (end - source), preserve_storage=True)
+
+
+def _api_addcmul_(self, tensor1, tensor2, *, value=1):
+    return _ip(
+        self, self + value * (tensor1 * tensor2), preserve_storage=True
+    )
+
+
+def _api_addcdiv_(self, tensor1, tensor2, *, value=1):
+    return _ip(
+        self, self + value * (tensor1 / tensor2), preserve_storage=True
+    )
+
+
 def _api_clamp_min(input, v):
     return _clamp(input, min=v)
 
@@ -2127,29 +2154,61 @@ def _api_normal(self, mean=0.0, std=1.0, generator=None):
     return _random_inplace(self, _normal_values, mean, std, generator=generator)
 
 
-def _random_integer_values(tensor, generator=None):
+def _random_integer_values(tensor, low=None, high=None, generator=None):
     """Draw Torch random_ integers on the destination tensor's device."""
     dtype = _jittor_dtype_name(tensor.dtype)
-    bits = {"bool": 1, "uint8": 8, "int8": 7, "int16": 15,
-            "int32": 31, "int64": 63, "float16": 11,
-            "bfloat16": 8, "float32": 24, "float64": 53}.get(dtype)
-    if bits is None:
-        raise TypeError("torch.Tensor.random_ requires a real or integral tensor")
     from jittor._core.var import device_scope_like
     with device_scope_like(tensor), _owner.jt.no_grad():
+        if high is not None:
+            return _owner.jt.randint(
+                low, high, tensor.shape, "int64", generator=generator
+            ).cast(dtype)
+        bits = {"bool": 1, "uint8": 8, "int8": 7, "int16": 15,
+                "int32": 31, "int64": 63, "float16": 11,
+                "bfloat16": 8, "float32": 24, "float64": 53}.get(dtype)
+        if bits is None:
+            raise TypeError("torch.Tensor.random_ requires a real or integral tensor")
         # Keep each piece exactly representable in the native random sampler.
         remaining = bits
         value = None
         while remaining:
             width = min(remaining, 21)
-            piece = _owner.jt.randint(0, 1 << width, tensor.shape, "int64")
+            piece = _owner.jt.randint(
+                0, 1 << width, tensor.shape, "int64", generator=generator
+            )
             value = piece if value is None else value * (1 << width) + piece
             remaining -= width
         return value.cast(dtype)
 
 
-def _api_random(self):
-    return _random_inplace(self, _random_integer_values)
+def _api_random(self, *args, generator=None, **kwargs):
+    """Fill with integers using Torch's random_(to) / random_(from, to) forms."""
+    unexpected = set(kwargs) - {"from", "to"}
+    if unexpected:
+        name = sorted(unexpected)[0]
+        raise TypeError(f"random_() got an unexpected keyword argument '{name}'")
+    if len(args) > 2:
+        raise TypeError(f"random_() takes from 0 to 2 positional arguments but {len(args)} were given")
+    if args and ("from" in kwargs or "to" in kwargs):
+        raise TypeError("random_() received both positional and keyword bounds")
+    if len(args) == 1:
+        bounds = (0, int(args[0]))
+    elif len(args) == 2:
+        bounds = (int(args[0]), int(args[1]))
+    elif "to" in kwargs:
+        bounds = (int(kwargs.get("from", 0)), int(kwargs["to"]))
+    elif "from" in kwargs:
+        raise TypeError("random_() missing required argument 'to'")
+    else:
+        bounds = (None, None)
+    if bounds[1] is not None and bounds[0] >= bounds[1]:
+        raise RuntimeError(
+            "random_ expects 'from' to be less than 'to', "
+            f"but got from={bounds[0]} >= to={bounds[1]}"
+        )
+    return _random_inplace(
+        self, _random_integer_values, *bounds, generator=generator
+    )
 
 
 def _api_uniform(self, a=0.0, b=1.0, generator=None):
@@ -2229,6 +2288,15 @@ def _api_untyped_storage(self):
 def _api_data_ptr(self):
     _owner.jt.graph_replay_barrier("Tensor.data_ptr exposes storage to an external consumer")
     return int(self._storage_address)
+
+
+def _api_share_memory(self):
+    from ...frontend import share_tensor_memory
+    return share_tensor_memory(self)
+
+
+def _api_is_shared(self):
+    return getattr(self, "_torch_shared_memory_spec", None) is not None
 
 
 def _api_is_contiguous(self, *a, **k):

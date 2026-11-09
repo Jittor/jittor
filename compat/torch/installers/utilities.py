@@ -36,6 +36,12 @@ _TORCH_PROFILER_NAMES = ("ProfilerActivity", "ProfilerAction", "profile", "sched
                          "tensorboard_trace_handler", "record_function", "kineto_available")
 
 
+def _is_compiling():
+    """Whether a Jittor step capture is currently tracing executable work."""
+    from jittor._runtime.step_capture import tracing
+    return tracing()
+
+
 def _install_external_adapter(ctx, entry_point):
     from ...module_patcher import install_module_patches
     from ...transaction import active_transaction
@@ -833,7 +839,16 @@ def install(ctx):
     _tutils._rebuild_parameter = _api_tutils__rebuild_parameter
     _tutils._rebuild_parameter_with_state = _api_tutils__rebuild_parameter_with_state
     _modules["torch._utils"] = _tutils
+    _tutils.is_compiling = _is_compiling
     g._utils = _tutils
+
+    # PyTorch also publishes these helpers through the private C namespace.
+    # DeepSpeed ZenFlow uses that spelling directly. Keep both owners pointed
+    # at the same implementation so flatten/unflatten semantics cannot drift.
+    _c_nn = _modules.get("torch._C._nn")
+    if _c_nn is not None:
+        _c_nn.flatten_dense_tensors = _flatten_dense_tensors
+        _c_nn.unflatten_dense_tensors = _unflatten_dense_tensors
 
     # ---- torch.hub ----
     import types as _types_hub

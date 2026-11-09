@@ -329,7 +329,7 @@ torch::Tensor zeros_like_with_options(torch::Tensor x) {
         self.assertTrue(mod.empty_byte_data_ptr_is_null())
         byte_buf = mod.resize_byte_buffer()
         self.assertEqual(tuple(byte_buf.shape), (16,))
-        self.assertEqual(str(byte_buf.dtype), "uint8")
+        self.assertEqual(byte_buf.dtype, torch.uint8)
 
         x = torch.tensor([3.0, 1.0, 2.0])
         idx = torch.tensor([2, 0], dtype=torch.int64)
@@ -340,12 +340,18 @@ torch::Tensor zeros_like_with_options(torch::Tensor x) {
 
         b = mod.view_as_bytes(torch.tensor([1.0], dtype=torch.float32))
         self.assertEqual(tuple(b.shape), (4,))
-        self.assertEqual(str(b.dtype), "uint8")
+        self.assertEqual(b.dtype, torch.uint8)
 
         z = mod.zeros_like_with_options(x)
+        self.assertIsInstance(z, torch.Tensor)
+        self.assertTrue(hasattr(z, "data_ptr"))
+        self.assertNotEqual(z.data_ptr(), 0)
         self.assertEqual(tuple(z.shape), (3,))
-        self.assertEqual(str(z.dtype), "float32")
+        self.assertEqual(z.dtype, torch.float32)
+        self.assertFalse(z.requires_grad)
         self.assertEqual(float(z.sum().item()), 0.0)
+        z[:].copy_(torch.ones_like(z))
+        self.assertEqual(float(z.sum().item()), 3.0)
 
 
 class TestShimHeadersInvalidateTheBuildCache(unittest.TestCase):

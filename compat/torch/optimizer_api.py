@@ -22,6 +22,45 @@ from .installers.tensor.autograd_api import _optimizer_maybe_has_fsdp_params
 from jittor.optim.algorithms.adam import adam_update
 
 
+DeviceDict = dict
+
+
+def _get_value(value):
+    """Return an eager optimizer scalar without compiler-only graph handling."""
+    return value.item() if isinstance(value, jt.Var) else value
+
+
+def _stack_if_compiling(values):
+    """Mirror Torch eager behavior; the compatibility frontend is not Dynamo."""
+    return values
+
+
+def _disable_dynamo_if_unsupported(single_tensor_fn=None):
+    """Keep optimizer callables unchanged when Dynamo is unavailable."""
+    def decorate(function):
+        return function
+    return decorate
+
+
+def _default_to_fused_or_foreach(params, differentiable, use_fused=False):
+    """Select the single-tensor optimizer path implemented by this frontend."""
+    return False, False
+
+
+def _view_as_real(params, *state_and_grads):
+    """Convert complex optimizer tensors to their real views in place."""
+    for index, parameter in enumerate(params):
+        if _jittor_dtype_name(parameter.dtype).startswith("complex"):
+            params[index] = jt.nn.view_as_real(parameter)
+            for values in state_and_grads:
+                values[index] = jt.nn.view_as_real(values[index])
+
+
+def _get_capturable_supported_devices(supports_xla=True):
+    """Return accelerator kinds supported by Jittor's capturable path."""
+    return ["cuda"]
+
+
 def _init(self, *a, **k):
     params = a[0] if a else k.get('params')
     defaults = k.get('defaults')
@@ -680,13 +719,38 @@ def adam_init(self, params, lr=1e-3, *args, **kwargs):
 
 
 def _initialize_adam(self, params, lr, args, kwargs, name):
-    # The update selector already consumes this execution option; the native
-    # initializer does not take Torch's spelling. Preserve group overrides.
-    foreach = kwargs.pop('foreach', None)
+    # These are execution-policy options in Torch. Native Jittor's initializer
+    # does not accept them, but downstream optimizers inspect the group values.
+    foreach = kwargs.pop("foreach", None)
+    options = {
+        "amsgrad": kwargs.pop("amsgrad", False),
+        "maximize": kwargs.pop("maximize", False),
+        "capturable": kwargs.pop("capturable", False),
+        "differentiable": kwargs.pop("differentiable", False),
+    }
+    if name == "Adam":
+        fused = kwargs.pop("fused", None)
+    else:
+        fused = kwargs.get("fused", None)
     result = _initialize_default(self, params, lr, args, kwargs, name)
+    options.update(
+        foreach=foreach,
+        fused=fused,
+        decoupled_weight_decay=(name == "AdamW"),
+    )
+    for key, value in options.items():
+        setattr(self, key, value)
+    defaults = {
+        "lr": self.lr,
+        "betas": self.betas,
+        "eps": self.eps,
+        "weight_decay": self.weight_decay,
+        **options,
+    }
     for group in self.param_groups:
-        group.setdefault('foreach', foreach)
-        group['_torch_adam_params'] = tuple(group['params'])
+        for key, value in defaults.items():
+            group.setdefault(key, value)
+        group["_torch_adam_params"] = tuple(group["params"])
     return result
 
 

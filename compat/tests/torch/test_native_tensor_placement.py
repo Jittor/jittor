@@ -21,6 +21,19 @@ def _cpu(value):
     assert not getattr(value, "_jittor_torch_force_cpu", False)
 
 
+def test_str_enum_device_uses_its_public_value():
+    from enum import Enum
+    import torch
+
+    class OffloadDeviceEnum(str, Enum):
+        cpu = "cpu"
+
+    value = torch.tensor([1.0, 2.0], device=OffloadDeviceEnum.cpu)
+    value.sync()
+    _cpu(value)
+    np.testing.assert_array_equal(value.numpy(), [1.0, 2.0])
+
+
 def test_lazy_cpu_factories_views_reductions_and_native_selection():
     import jittor as jt
     import torch
