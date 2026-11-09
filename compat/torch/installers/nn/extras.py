@@ -17,6 +17,25 @@ from .module_methods import _install_module_methods
 from .rnn import _rnn_pad_sequence, PackedSequence, pack_padded_sequence, pad_packed_sequence
 from .norm_utils import _get_total_norm, _clip_grads_with_norm_
 
+class SDPBackend(enum.Enum):
+    ERROR = -1
+    MATH = 0
+    FLASH_ATTENTION = 1
+    EFFICIENT_ATTENTION = 2
+    CUDNN_ATTENTION = 3
+    OVERRIDEABLE = 4
+
+@contextlib.contextmanager
+def sdpa_kernel(backends, set_priority=False):
+    if isinstance(backends, (SDPBackend, str)):
+        backends = [backends]
+    invalid = [backend for backend in backends if not isinstance(backend, SDPBackend)]
+    if invalid:
+        raise ValueError(
+            "sdpa_kernel expects torch.nn.attention.SDPBackend values, got {!r}".format(invalid))
+    yield
+
+
 def _api_fuse_conv_bn_weights(conv_w, conv_b, bn_rm, bn_rv, bn_eps, bn_w, bn_b):
     """torch.nn.utils.fusion.fuse_conv_bn_weights for jittor tensors."""
     if conv_b is None:
@@ -218,24 +237,6 @@ def _install_nn_extras(nn, registry=None):
     # computation. transformers imports SDPBackend and sdpa_kernel from
     # torch.nn.attention while collecting its generation tests.
     if not hasattr(attn_mod, "SDPBackend"):
-        class SDPBackend(enum.Enum):
-            ERROR = -1
-            MATH = 0
-            FLASH_ATTENTION = 1
-            EFFICIENT_ATTENTION = 2
-            CUDNN_ATTENTION = 3
-            OVERRIDEABLE = 4
-
-        @contextlib.contextmanager
-        def sdpa_kernel(backends, set_priority=False):
-            if isinstance(backends, (SDPBackend, str)):
-                backends = [backends]
-            invalid = [backend for backend in backends if not isinstance(backend, SDPBackend)]
-            if invalid:
-                raise ValueError(
-                    "sdpa_kernel expects torch.nn.attention.SDPBackend values, got {!r}".format(invalid))
-            yield
-
         attn_mod.SDPBackend = SDPBackend
         attn_mod.sdpa_kernel = sdpa_kernel
     nn.attention = attn_mod

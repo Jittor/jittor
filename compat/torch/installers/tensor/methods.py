@@ -5,6 +5,7 @@ from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from .method_api import (
     _CAST_APIS, _UNARY_INPLACE_APIS,
     _api_fill,
+    _api_share_memory,
     _api_fill_diagonal,
     _api_zero,
     _api_add,
@@ -658,7 +659,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # (Jittor Vars cannot be forked), so every worker already sees the same
     # tensor and there is no shared-memory copy to make.
     if not hasattr(Var, "share_memory_"):
-        Var.share_memory_ = lambda self: self
+        Var.share_memory_ = _api_share_memory
     # These two used to contradict each other -- `pin_memory()` returned
     # `self` (a device tensor, on an accelerator) while `is_pinned()` was a
     # bare `return False` -- so state the one restriction that is left.

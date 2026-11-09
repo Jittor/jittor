@@ -2427,3 +2427,7 @@ _UNARY_INPLACE_APIS.update({
     'floor_': _api_floor_,
     'ceil_': _api_ceil_,
 })
+
+def _api_share_memory(self):
+    """Retain identity for the thread-based DataLoader's shared epoch marker."""
+    return self

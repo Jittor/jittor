@@ -48,7 +48,7 @@ class TestFSDPPublicOwners(unittest.TestCase):
             package.__path__ = []
             sys.modules[name] = package
         self.owners = {}
-        for name in ("api", "common", "compat_types", "config", "dtensor", "grad_sync", "optimizer", "shard"):
+        for name in ("_context_parallel", "api", "common", "compat_types", "config", "dtensor", "grad_sync", "optimizer", "shard"):
             module = _Owner("_fsdp_owner_probe.fsdp2." + name)
             sys.modules[module.__name__] = module
             self.owners[name] = module

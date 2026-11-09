@@ -210,11 +210,8 @@ def _visible_device_count():
         import torch
     except ImportError:
         return 0
-    try:
-        if torch.cuda.is_available():
-            return int(torch.cuda.device_count())
-    except Exception:
-        return 0
+    if torch.cuda.is_available():
+        return int(torch.cuda.device_count())
     return 0
 
 
