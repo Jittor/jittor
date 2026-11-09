@@ -994,6 +994,10 @@ struct VarHolder {
     // @pyjt(_is_view,_has_view_provenance)
     inline bool has_view_provenance() { return view != nullptr; }
 
+    // Read-only storage migration precondition, including pending views.
+    // @pyjt(_has_storage_aliases)
+    bool has_storage_aliases();
+
     // @pyjt(_storage_view_is_physical)
     bool storage_view_is_physical();
 

@@ -1,3 +1,4 @@
+import pickle
 import multiprocessing as mp
 import unittest
 
@@ -21,6 +22,27 @@ class TensorShareMemoryTest(unittest.TestCase):
         import torch
         epoch = torch.tensor(0).share_memory_()
         self.assertEqual(int(epoch.item()), 0)
+
+    def test_existing_aliases_are_rejected_without_breaking_storage(self):
+        import torch
+        for alias_kind in (lambda x: x[1:], lambda x: x.detach()):
+            value = torch.tensor([1., 2., 3.])
+            alias = alias_kind(value)
+            with self.assertRaisesRegex(NotImplementedError, "independent CPU"):
+                value.share_memory_()
+            alias.add_(5)
+            self.assertEqual(value[-1].item(), 8.)
+
+    def test_shared_views_fail_serialization_instead_of_copying(self):
+        import torch
+        value = torch.tensor([1., 2., 3.]).share_memory_()
+        for view in (value[1:], value[1:].detach(), value[1:].data, value.reshape(3, 1).T):
+            self.assertTrue(view.is_shared())
+            with self.assertRaisesRegex(NotImplementedError, "shared-memory views"):
+                pickle.dumps(view)
+        detached = pickle.loads(pickle.dumps(value.detach()))
+        detached.add_(2)
+        np.testing.assert_array_equal(value.numpy(), [3., 4., 5.])
 
     def test_spawned_process_writes_are_visible(self):
         import torch

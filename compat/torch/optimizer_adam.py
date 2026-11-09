@@ -88,6 +88,10 @@ def _update_in_target_dtype(target, value):
 def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay):
     from . import optimizer_api as _api
     for group in self.param_groups:
+        _api._validate_adam_execution_options(group)
+        _api._sync_adam_group_params(group, validate_shapes=True)
+        if group.get('maximize') and _api._optimizer_maybe_has_fsdp_params(self):
+            raise NotImplementedError('FSDP Adam/AdamW maximize=True is not supported')
         group.setdefault('fused', getattr(self, 'fused', None))
     native_fsdp_loss = None
     if closure is None and callable(loss):
@@ -124,7 +128,8 @@ def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay
         # optimizer group. The tensor owns the current grad; an old group slot
         # can be empty or refer to the preceding subgroup/step.
         for pg in self.param_groups:
-            _api._sync_adam_group_params(pg)
+            _api._validate_adam_execution_options(pg)
+            _api._sync_adam_group_params(pg, validate_shapes=True)
             pg["grads"] = [
                 None if (_fsdp2_step is not None
                          and _fsdp2_step.is_fsdp_managed_param(param))
@@ -217,7 +222,8 @@ def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay
                     continue
                 param_steps[i] = int(param_steps[i]) + 1
                 _update_in_target_dtype(p, adam_update(
-                    p, g, v, m, lr=lr, eps=eps, weight_decay=weight_decay,
+                    p, -g if pg.get("maximize", False) else g, v, m,
+                    lr=lr, eps=eps, weight_decay=weight_decay,
                     betas=(b0, b1), step=param_steps[i],
                     decoupled_weight_decay=decoupled_weight_decay,
                     torch_math=True,
@@ -236,3 +242,49 @@ def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay
         jt.flags.node_order = 0
     object.__setattr__(self, "_torch_backward_advanced_n_step", False)
     return native_fsdp_loss if native_fsdp_loss is not None else loss
+
+
+def _validate_adam_execution_options(options):
+    for name in ("amsgrad", "differentiable", "capturable"):
+        if options.get(name, False):
+            raise NotImplementedError(
+                "Adam/AdamW %s=True is not supported by this frontend" % name)
+
+
+def _initialize_adam(self, params, lr, args, kwargs, name):
+    from . import optimizer_api as _api
+    # These are execution-policy options in Torch. Native Jittor's initializer
+    # does not accept them, but downstream optimizers inspect the group values.
+    foreach = kwargs.pop("foreach", None)
+    options = {
+        "amsgrad": kwargs.pop("amsgrad", False),
+        "maximize": kwargs.pop("maximize", False),
+        "capturable": kwargs.pop("capturable", False),
+        "differentiable": kwargs.pop("differentiable", False),
+    }
+    _validate_adam_execution_options(options)
+    if name == "Adam":
+        fused = kwargs.pop("fused", None)
+    else:
+        fused = kwargs.get("fused", None)
+    result = _api._initialize_default(self, params, lr, args, kwargs, name)
+    options.update(
+        foreach=foreach,
+        fused=fused,
+        decoupled_weight_decay=(name == "AdamW"),
+    )
+    for key, value in options.items():
+        setattr(self, key, value)
+    defaults = {
+        "lr": self.lr,
+        "betas": self.betas,
+        "eps": self.eps,
+        "weight_decay": self.weight_decay,
+        **options,
+    }
+    for group in self.param_groups:
+        for key, value in defaults.items():
+            group.setdefault(key, value)
+        _validate_adam_execution_options(group)
+        group["_torch_adam_params"] = tuple(group["params"])
+    return result

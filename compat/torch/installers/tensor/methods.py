@@ -8,8 +8,6 @@ from .method_api import (
     _api_fill_diagonal,
     _api_zero,
     _api_add,
-    _api_addcmul,
-    _api_lerp,
     _api_sub,
     _api_mul,
     _api_lerp,
@@ -317,8 +315,6 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     Var.zero_ = _api_zero
     Var.add = _add
     Var.add_ = _api_add
-    Var.addcmul_ = _api_addcmul
-    Var.lerp_ = _api_lerp
     Var.sub_ = _api_sub
     Var.mul_ = _api_mul
     Var.multiply_ = _api_mul

@@ -849,6 +849,10 @@ def _data_get(self):
         marker = getattr(self, name, None)
         if marker is not None:
             setattr(view, name, marker)
+    from ...frontend import shared_memory_owner
+    shared = shared_memory_owner(self)
+    if shared is not None and shared is not self:
+        view._torch_shared_memory_view_owner = shared
     return view
 
 
@@ -1026,6 +1030,13 @@ def _var_detach(self):
         out = out.stop_grad()
     if getattr(self, "_torch_0d", False):
         out._torch_0d = True
+    from ...frontend import shared_memory_owner
+    shared = shared_memory_owner(self)
+    if shared is self:
+        for name in ("_torch_shared_memory_handle", "_torch_shared_memory_spec"):
+            setattr(out, name, getattr(self, name))
+    elif shared is not None:
+        out._torch_shared_memory_view_owner = shared
     return out
 
 
@@ -2086,14 +2097,6 @@ def _api_add(self, o, alpha=1):
     return _inplace_add_sub(self, o, alpha)
 
 
-def _api_addcmul(self, tensor1, tensor2, *, value=1):
-    return _ip(self, self + value * tensor1 * tensor2, preserve_storage=True)
-
-
-def _api_lerp(self, end, weight):
-    return _ip(self, self + weight * (end - self), preserve_storage=True)
-
-
 def _api_sub(self, o, alpha=1):
     return _inplace_add_sub(self, o, alpha, subtract=True)
 
@@ -2332,7 +2335,8 @@ def _api_share_memory(self):
 
 
 def _api_is_shared(self):
-    return getattr(self, "_torch_shared_memory_spec", None) is not None
+    from ...frontend import shared_memory_owner
+    return bool(self.is_cuda) or shared_memory_owner(self) is not None
 
 
 def _api_is_contiguous(self, *a, **k):

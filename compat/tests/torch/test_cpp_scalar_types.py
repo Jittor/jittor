@@ -1,5 +1,6 @@
 """Numeric and dtype contract for C++ extension half/bfloat16 scalars."""
 from pathlib import Path
+from _helpers.child_process import PYTHON
 import shutil
 import subprocess
 import sys
@@ -36,20 +37,31 @@ int main() {
     }
 }
 """
-        libname = sysconfig.get_config_var("LDLIBRARY")
+        configured = sysconfig.get_config_var("LDLIBRARY")
+        # Static-linked Python builds may still ship the embedding shared
+        # library. LDLIBRARY alone can name an absent .a archive.
+        version = "%d.%d" % sys.version_info[:2]
+        libnames = [configured, "libpython%s.so" % version, "libpython%s.dylib" % version]
         libdirs = [Path(sysconfig.get_config_var("LIBDIR") or ""),
-                   Path(sys.base_prefix) / "lib"]
-        libpython = next((d / libname for d in libdirs if (d / libname).is_file()), None)
+                   Path(sys.base_prefix) / "lib",
+                   Path(PYTHON).resolve().parents[1] / "lib"]
+        libpython = next((d / name for d in libdirs for name in libnames
+                          if name and (d / name).is_file()), None)
         if libpython is None:
             self.skipTest("requires the Python shared library")
         libdir = libpython.parent
+        include_candidates = [Path(sysconfig.get_path('include')),
+                              libdir.parent / "include" / ("python%d.%d" % sys.version_info[:2])]
+        python_include = next((p for p in include_candidates if (p / "Python.h").is_file()), None)
+        if python_include is None:
+            self.skipTest("requires Python development headers")
         with tempfile.TemporaryDirectory(prefix="jt-cpp-scalar-") as temp:
             cpp = Path(temp) / "probe.cpp"
             binary = Path(temp) / "probe"
             cpp.write_text(source)
             result = subprocess.run(
                 [compiler, "-std=c++17", "-O1", f"-I{includes}",
-                 f"-I{pybind_include}", f"-I{sysconfig.get_path('include')}",
+                 f"-I{pybind_include}", f"-I{python_include}",
                  str(cpp), str(libpython), f"-Wl,-rpath,{libdir}",
                  "-o", str(binary)],
                 capture_output=True, text=True, timeout=120,

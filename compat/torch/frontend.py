@@ -385,6 +385,18 @@ def _python_state(value):
     return state
 
 
+def shared_memory_owner(value):
+    """Find the mapping retained by a shared tensor or a derived view."""
+    seen = set()
+    while value is not None and id(value) not in seen:
+        seen.add(id(value))
+        if getattr(value, _SHARED_MEMORY_SPEC, None) is not None:
+            return value
+        owner = getattr(value, "_torch_shared_memory_view_owner", None)
+        value = owner if owner is not None else value._view_base_object()
+    return None
+
+
 def reduce_tensor(value):
     shared = getattr(value, _SHARED_MEMORY_SPEC, None)
     if shared is not None:
@@ -400,6 +412,10 @@ def reduce_tensor(value):
             (type(value), *shared, value.requires_grad),
             state,
         )
+    if shared_memory_owner(value) is not None:
+        raise NotImplementedError(
+            "multiprocessing shared-memory views are not supported; "
+            "send the shared base tensor and create the view in the child")
     return (
         rebuild_tensor,
         (type(value), value.numpy(), _jittor_dtype_name(value.dtype), value.requires_grad,
@@ -449,13 +465,21 @@ def _tensor_from_shared_memory(tensor_type, name, shape, dtype):
 
 
 def share_tensor_memory(value):
-    """Move a CPU tensor's storage into named shared memory in place."""
+    """Share an independent CPU tensor before creating views or aliases.
+
+    Shared base tensors and full detached aliases support spawn transport.
+    Derived views must be recreated in the child from the shared base.
+    """
     if getattr(value, _SHARED_MEMORY_SPEC, None) is not None:
         return value
     if bool(getattr(value, "is_cuda", False)):
-        # Matches torch: CUDA tensors do not need share_memory_ because
-        # multiprocessing transports them through the CUDA IPC path.
+        # Matches Torch's no-op for CUDA; this does not provide CUDA IPC.
         return value
+
+    if value._is_view() or value._has_storage_aliases():
+        raise NotImplementedError(
+            "share_memory_ requires an independent CPU tensor; "
+            "call it before creating views or detached aliases")
 
     import numpy as np
     from multiprocessing import shared_memory

@@ -151,7 +151,7 @@ def _torch_param_steps(pg):
     return steps
 
 
-def _sync_adam_group_params(pg, *, replacements=()):
+def _sync_adam_group_params(pg, *, replacements=(), validate_shapes=False):
     """Realign state by identity, including explicit same-parameter view changes.
 
     FSDP supplies old/new views of the same logical parameter. Ordinary user
@@ -163,6 +163,8 @@ def _sync_adam_group_params(pg, *, replacements=()):
         return
     current = tuple(pg.get("params", ()))
     if len(current) == len(previous) and all(a is b for a, b in zip(current, previous)):
+        if not validate_shapes:
+            return
         # AutoTP can shard a Parameter through param.data = shard after the
         # client constructed AdamW. Identity stays the same, but eager zero
         # moments still have the original shape.
@@ -662,7 +664,10 @@ def _torch_post_step():
 
 # The Adam/AdamW update lives in its own module (it is most of the file's
 # implementation); bound here under the names the rest of the package uses.
-from .optimizer_adam import _adam_step, _update_in_target_dtype  # noqa: E402
+from .optimizer_adam import (  # noqa: E402
+    _adam_step, _update_in_target_dtype, _initialize_adam,
+    _validate_adam_execution_options,
+)
 
 
 def adam_step(self, loss=None, retain_graph=False, closure=None, **kwargs):
@@ -718,40 +723,8 @@ def adam_init(self, params, lr=1e-3, *args, **kwargs):
     return _initialize_adam(self, params, lr, args, kwargs, 'Adam')
 
 
-def _initialize_adam(self, params, lr, args, kwargs, name):
-    # These are execution-policy options in Torch. Native Jittor's initializer
-    # does not accept them, but downstream optimizers inspect the group values.
-    foreach = kwargs.pop("foreach", None)
-    options = {
-        "amsgrad": kwargs.pop("amsgrad", False),
-        "maximize": kwargs.pop("maximize", False),
-        "capturable": kwargs.pop("capturable", False),
-        "differentiable": kwargs.pop("differentiable", False),
-    }
-    if name == "Adam":
-        fused = kwargs.pop("fused", None)
-    else:
-        fused = kwargs.get("fused", None)
-    result = _initialize_default(self, params, lr, args, kwargs, name)
-    options.update(
-        foreach=foreach,
-        fused=fused,
-        decoupled_weight_decay=(name == "AdamW"),
-    )
-    for key, value in options.items():
-        setattr(self, key, value)
-    defaults = {
-        "lr": self.lr,
-        "betas": self.betas,
-        "eps": self.eps,
-        "weight_decay": self.weight_decay,
-        **options,
-    }
-    for group in self.param_groups:
-        for key, value in defaults.items():
-            group.setdefault(key, value)
-        group["_torch_adam_params"] = tuple(group["params"])
-    return result
+
+
 
 
 def adamw_init(self, params, lr=1e-3, *args, **kwargs):

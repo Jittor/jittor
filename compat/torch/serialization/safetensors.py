@@ -337,13 +337,10 @@ def _serialize_parts(tensors, metadata=None):
     snapshot_input = {}
     for key, value in tensors.items():
         if isinstance(value, jt.Var) and _jittor_dtype_name(value.dtype) == "bfloat16":
-            try:
-                if value.is_contiguous():
-                    bf16_views[key] = value.reinterpret_view(value.shape, "uint16")
-                    snapshot_input[key] = bf16_views[key]
-                    continue
-            except EXPECTED:
-                pass
+            if value.is_contiguous():
+                bf16_views[key] = value.reinterpret_view(value.shape, "uint16")
+                snapshot_input[key] = bf16_views[key]
+                continue
         snapshot_input[key] = value
     snapshots = _snapshot_tensors(snapshot_input)
     header = {}

@@ -912,6 +912,9 @@ class TestRegisteredRmsInference(unittest.TestCase):
         np.testing.assert_array_equal(self.x.grad.numpy(), np.ones_like(self.values))
 
     def test_bfloat16_order_helper_and_module_hooks_stay_in_python(self):
+        # RMS fast paths require matching input/weight precision. Mixed
+        # precision is tested separately and must retain the model forward.
+        self.norm.to(torch.bfloat16)
         x_bf16 = self.x.to(torch.bfloat16)
         seen = []
 
@@ -924,6 +927,7 @@ class TestRegisteredRmsInference(unittest.TestCase):
         self.assertEqual(seen, [True])
         self.assertEqual(result.dtype, torch.bfloat16)
         np.testing.assert_array_equal(result.float().numpy(), self.values)
+        self.norm.float()
         seen.clear()
 
         def provider(value, weight, epsilon):
