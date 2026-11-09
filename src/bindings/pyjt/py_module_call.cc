@@ -111,6 +111,23 @@ PyObject* layer_norm_source_fn = nullptr;
 PyObject* layer_norm_name = nullptr;
 std::map<std::tuple<int64, double, bool>, string> layer_norm_sources;
 
+// Keep fixed dictionary keys, never the values: hooks and module attributes
+// may change between calls and must be read from the live dictionary.
+PyObject* hook_keys[4] = {};
+PyObject* fsdp_state_key = nullptr;
+PyObject* threshold_key = nullptr;
+PyObject* call_depth_key = nullptr;
+PyObject* weight_key = nullptr;
+PyObject* bias_key = nullptr;
+
+PyObject* interned(PyObject*& slot, const char* text) {
+    if (!slot) slot = PyUnicode_InternFromString(text);
+    return slot;
+}
+
+PyObject* name_weight() { return interned(weight_key, "weight"); }
+PyObject* name_bias() { return interned(bias_key, "bias"); }
+
 struct TypeInfo {
     PyObject* tensor_type = nullptr;
     PyObject* native_call = nullptr;
@@ -199,18 +216,19 @@ bool shortcut(PyObject* module, const TypeInfo& info) {
     PyObject* dict = PyObject_GenericGetDict(module, nullptr);
     if (!dict) { PyErr_Clear(); return false; }
     PyObjHolder dict_holder(dict);
-    for (const char* hook : {"_forward_pre_hooks", "_forward_hooks",
-                             "_input_backward_hooks", "_output_backward_hooks"}) {
-        PyObject* table = PyDict_GetItemString(dict, hook);
+    const char* hooks[] = {"_forward_pre_hooks", "_forward_hooks",
+                          "_input_backward_hooks", "_output_backward_hooks"};
+    for (int i = 0; i < 4; ++i) {
+        PyObject* table = PyDict_GetItem(dict, interned(hook_keys[i], hooks[i]));
         if (table && PyObject_IsTrue(table)) return false;
     }
-    if (PyDict_GetItemString(dict, "_fsdp_state")) return false;
-    PyObjHolder depth(PyObject_GetAttrString(module_cls, "_call_depth"));
+    if (PyDict_GetItem(dict, interned(fsdp_state_key, "_fsdp_state"))) return false;
+    PyObjHolder depth(PyObject_GetAttr(module_cls, interned(call_depth_key, "_call_depth")));
     if (!PyObject_IsTrue(depth.obj)) return false;
     PyObjHolder id(PyLong_FromVoidPtr(module));
     int done = PySet_Contains(published, id.obj);
     if (done <= 0) { PyErr_Clear(); return false; }
-    PyObject* threshold = PyDict_GetItemString(pipeline, "threshold");
+    PyObject* threshold = PyDict_GetItem(pipeline, interned(threshold_key, "threshold"));
     if (!threshold || !PyLong_Check(threshold) || PyLong_AsLong(threshold) > 0) return false;
     return true;
 }
@@ -271,10 +289,6 @@ Var* first_placed_module_var(PyObject* module) {
     return nullptr;
 }
 
-PyObject* interned(PyObject*& slot, const char* text) {
-    if (!slot) slot = PyUnicode_InternFromString(text);
-    return slot;
-}
 PyObject* forward_key = nullptr;
 PyObject* execute_key = nullptr;
 PyObject* name_forward() { return interned(forward_key, "forward"); }
@@ -285,8 +299,8 @@ PyObject* name_execute() { return interned(execute_key, "execute"); }
 // would pick that relay. nullptr when anything else would happen.
 PyObject* linear_without_bias(PyObject* module, PyObject* dict, PyObject* x) {
     if (!matmul_kernel || !dict || !is_var(x)) return nullptr;
-    PyObject* weight = PyDict_GetItemString(dict, "weight");
-    PyObject* bias = PyDict_GetItemString(dict, "bias");
+    PyObject* weight = PyDict_GetItem(dict, name_weight());
+    PyObject* bias = PyDict_GetItem(dict, name_bias());
     if (!weight || !is_var(weight) || (bias && bias != Py_None)) return nullptr;
     Var* a = GET_RAW_PTR(VarHolder, x)->var;
     Var* w = GET_RAW_PTR(VarHolder, weight)->var;
@@ -354,8 +368,8 @@ PyObject* conv2d_inference(PyObject* dict, PyObject* x) {
     if (!conv_cudnn_kernel || !cudnn_backend || !conv_filter_key || !no_grad || amp_reg
             || !runtime_flag_use_cuda() || !dict || !is_var(x))
         return nullptr;
-    PyObject* weight = PyDict_GetItemString(dict, "weight");
-    PyObject* bias = PyDict_GetItemString(dict, "bias");
+    PyObject* weight = PyDict_GetItem(dict, name_weight());
+    PyObject* bias = PyDict_GetItem(dict, name_bias());
     PyObject* groups = PyDict_GetItemString(dict, "groups");
     PyObject* mode = PyDict_GetItemString(dict, "padding_mode");
     if (!weight || !is_var(weight) || !bias || !groups || !PyLong_Check(groups)
@@ -448,7 +462,7 @@ PyObject* batch_norm_eval_channels_last(PyObject* dict, PyObject* x) {
     if (!train || PyObject_IsTrue(train) != 0) { PyErr_Clear(); return nullptr; }
     Var* a = GET_RAW_PTR(VarHolder, x)->var;
     if (a->shape.size() != 4 || a->is_contiguous()) return nullptr;
-    PyObject* names[4] = {PyDict_GetItemString(dict, "weight"), PyDict_GetItemString(dict, "bias"),
+    PyObject* names[4] = {PyDict_GetItem(dict, name_weight()), PyDict_GetItem(dict, name_bias()),
                           PyDict_GetItemString(dict, "running_mean"),
                           PyDict_GetItemString(dict, "running_var")};
     for (auto* v : names) if (!v || !is_var(v)) return nullptr;
@@ -649,8 +663,8 @@ PyObject* group_norm_inference(PyObject* dict, PyObject* x) {
     PyObject* groups_obj = PyDict_GetItemString(dict, "num_groups");
     PyObject* channels_obj = PyDict_GetItemString(dict, "num_channels");
     PyObject* eps_obj = PyDict_GetItemString(dict, "eps");
-    PyObject* weight = PyDict_GetItemString(dict, "weight");
-    PyObject* bias = PyDict_GetItemString(dict, "bias");
+    PyObject* weight = PyDict_GetItem(dict, name_weight());
+    PyObject* bias = PyDict_GetItem(dict, name_bias());
     if (!groups_obj || !channels_obj || !eps_obj || !weight || !bias || !is_var(weight) || !is_var(bias)
             || !PyLong_CheckExact(groups_obj) || !PyLong_CheckExact(channels_obj)
             || !(PyFloat_CheckExact(eps_obj) || PyLong_CheckExact(eps_obj)))
@@ -705,8 +719,8 @@ PyObject* linear_with_bias_inference(PyObject* dict, PyObject* x) {
     if (!lt_linear_source_fn || lt_linear_header_text.empty() || !no_grad || amp_reg
             || !runtime_flag_use_cuda() || accelerator_backend_id() != BackendId::Cuda
             || !dict || !is_var(x))
-        return nullptr;    PyObject* weight = PyDict_GetItemString(dict, "weight");
-    PyObject* bias = PyDict_GetItemString(dict, "bias");
+        return nullptr;    PyObject* weight = PyDict_GetItem(dict, name_weight());
+    PyObject* bias = PyDict_GetItem(dict, name_bias());
     if (!weight || !is_var(weight) || !bias || !is_var(bias)) return nullptr;
     Var* a = GET_RAW_PTR(VarHolder, x)->var;
     Var* w = GET_RAW_PTR(VarHolder, weight)->var;
@@ -783,7 +797,7 @@ PyObject* rms_norm_registered_inference(PyObject* module, PyObject* dict, PyObje
     PyObjHolder epsilon_name(PyUnicode_FromString("variance_epsilon"));
     if (_PyType_Lookup(Py_TYPE(module), weight_name.obj)
             || _PyType_Lookup(Py_TYPE(module), epsilon_name.obj)) return nullptr;
-    PyObject* weight = PyDict_GetItemString(dict, "weight");
+    PyObject* weight = PyDict_GetItem(dict, name_weight());
     PyObject* eps = PyDict_GetItemString(dict, "variance_epsilon");
     if (!weight || !is_var(weight) || !eps || !(PyFloat_Check(eps) || PyLong_Check(eps)))
         return nullptr;
@@ -847,7 +861,7 @@ PyObject* rms_norm_inference(PyObject* module, PyObject* dict, PyObject* x) {
     PyObject* registered = rms_norm_registered_inference(module, dict, x);
     if (registered || PyErr_Occurred()) return registered;
     if (!rms_inference_impl || !rms_source_fn || acl_possible) return nullptr;
-    PyObject* weight = PyDict_GetItemString(dict, "weight");
+    PyObject* weight = PyDict_GetItem(dict, name_weight());
     PyObject* eps = PyDict_GetItemString(dict, "variance_epsilon");
     if (!weight || !is_var(weight) || !eps || !(PyFloat_Check(eps) || PyLong_Check(eps)))
         return nullptr;
@@ -895,8 +909,8 @@ PyObject* layer_norm_inference(PyObject* dict, PyObject* x) {
     PyObject* shape = PyDict_GetItemString(dict, "normalized_shape");
     PyObject* eps = PyDict_GetItemString(dict, "eps");
     PyObject* affine = PyDict_GetItemString(dict, "elementwise_affine");
-    PyObject* weight = PyDict_GetItemString(dict, "weight");
-    PyObject* bias = PyDict_GetItemString(dict, "bias");
+    PyObject* weight = PyDict_GetItem(dict, name_weight());
+    PyObject* bias = PyDict_GetItem(dict, name_bias());
     if (!shape || !PyTuple_Check(shape) || PyTuple_GET_SIZE(shape) != 1 || affine != Py_True
             || !eps || !PyFloat_Check(eps) || !weight || !is_var(weight)
             || !bias || !is_var(bias))
@@ -946,7 +960,7 @@ PyObject* dispatch_native(PyObject* module, const TypeInfo& info, PyObject* args
     PyObject** dict_ptr = _PyObject_GetDictPtr(module);
     PyObject* dict = dict_ptr ? *dict_ptr : nullptr;
     if (dict) {
-        PyObject* own = PyDict_GetItemString(dict, "forward");
+        PyObject* own = PyDict_GetItem(dict, name_forward());
         if (own && PyCallable_Check(own)) {
             GraphLockSuspend python_call;
             return PyObject_Call(own, args, kwargs);
@@ -985,7 +999,7 @@ PyObject* dispatch_native(PyObject* module, const TypeInfo& info, PyObject* args
     }
     if (!kwargs && PyTuple_GET_SIZE(args) == 1 && linear_execute
             && _PyType_Lookup(type, name_execute()) == linear_execute
-            && !(dict && PyDict_GetItemString(dict, "execute"))) {
+            && !(dict && PyDict_GetItem(dict, name_execute()))) {
         PyObject* fast = linear_without_bias(module, dict, PyTuple_GET_ITEM(args, 0));
         if (fast || PyErr_Occurred()) return fast;
         fast = linear_with_bias_inference(dict, PyTuple_GET_ITEM(args, 0));
@@ -993,37 +1007,37 @@ PyObject* dispatch_native(PyObject* module, const TypeInfo& info, PyObject* args
     }
     if (!kwargs && PyTuple_GET_SIZE(args) == 1 && conv_execute
             && _PyType_Lookup(type, name_execute()) == conv_execute
-            && !(dict && PyDict_GetItemString(dict, "execute"))) {
+            && !(dict && PyDict_GetItem(dict, name_execute()))) {
         PyObject* fast = conv2d_inference(dict, PyTuple_GET_ITEM(args, 0));
         if (fast || PyErr_Occurred()) return fast;
     }
     if (!kwargs && PyTuple_GET_SIZE(args) == 1 && batch_norm_execute
             && _PyType_Lookup(type, name_execute()) == batch_norm_execute
-            && !(dict && PyDict_GetItemString(dict, "execute"))) {
+            && !(dict && PyDict_GetItem(dict, name_execute()))) {
         PyObject* fast = batch_norm_eval_channels_last(dict, PyTuple_GET_ITEM(args, 0));
         if (fast || PyErr_Occurred()) return fast;
     }
     if (!kwargs && PyTuple_GET_SIZE(args) == 1 && layer_norm_execute
             && _PyType_Lookup(type, name_execute()) == layer_norm_execute
-            && !(dict && PyDict_GetItemString(dict, "execute"))) {
+            && !(dict && PyDict_GetItem(dict, name_execute()))) {
         PyObject* fast = layer_norm_inference(dict, PyTuple_GET_ITEM(args, 0));
         if (fast || PyErr_Occurred()) return fast;
     }
     if (!kwargs && PyTuple_GET_SIZE(args) == 1 && dropout_execute
             && _PyType_Lookup(type, name_execute()) == dropout_execute
-            && !(dict && PyDict_GetItemString(dict, "execute"))) {
+            && !(dict && PyDict_GetItem(dict, name_execute()))) {
         PyObject* same = dropout_passthrough(dict, PyTuple_GET_ITEM(args, 0));
         if (same) return same;
     }
     if (!kwargs && PyTuple_GET_SIZE(args) == 1 && function_module_execute
             && _PyType_Lookup(type, name_execute()) == function_module_execute
-            && !(dict && PyDict_GetItemString(dict, "execute"))) {
+            && !(dict && PyDict_GetItem(dict, name_execute()))) {
         PyObject* fast = activation_module(type, dict, PyTuple_GET_ITEM(args, 0));
         if (fast || PyErr_Occurred()) return fast;
     }
     if (!kwargs && PyTuple_GET_SIZE(args) == 1 && group_norm_execute
             && _PyType_Lookup(type, name_execute()) == group_norm_execute
-            && !(dict && PyDict_GetItemString(dict, "execute"))) {
+            && !(dict && PyDict_GetItem(dict, name_execute()))) {
         PyObject* fast = group_norm_inference(dict, PyTuple_GET_ITEM(args, 0));
         if (fast || PyErr_Occurred()) return fast;
     }
