@@ -46,9 +46,37 @@ def _rms_norm(input, normalized_shape, weight=None, eps=None):
     return out.cast(name)
 
 def _selu(input, inplace=False):
+    _check_activation_input(input, "selu")
     a = 1.6732632423543772848170429916717
     s = 1.0507009873554804934193349852946
-    return s * (jt.maximum(input, 0.0) + jt.minimum(0.0, a * (jt.exp(input) - 1)))
+    negative_input = jt.ternary(input > 0, 0.0, input)
+    negative = a * _stable_expm1(negative_input)
+    output = jt.ternary(input > 0, s * input, s * negative)
+    return _activation_result(input, output, inplace)
+
+
+def _check_activation_input(input, name):
+    if not isinstance(input, jt.Var):
+        raise TypeError("{}(): argument 'input' must be Tensor".format(name))
+
+
+def _activation_result(input, output, inplace):
+    if inplace:
+        from ..tensor.method_api import _ip
+        return _ip(input, output, preserve_storage=True)
+    return output
+
+
+def _stable_expm1(input):
+    # Keep sinh(x) unhalved so the smallest subnormal survives near zero.
+    # The tail avoids cancellation between large negative sinh terms.
+    tail_input = jt.ternary(input < -1.0, input, -2.0)
+    near_input = jt.ternary(input < -1.0, -1.0, input)
+    half_sinh = jt.sinh(near_input * 0.5)
+    near = jt.sinh(near_input) + 2.0 * half_sinh * half_sinh
+    tail = jt.exp(tail_input) - 1.0
+    return jt.ternary(input < -1.0, tail, near)
+
 
 def _threshold(input, threshold, value, inplace=False):
     m = (input > threshold).float32()
@@ -251,7 +279,13 @@ def _api_F_tanhshrink(input):
 
 
 def _api_F_celu(input, alpha=1.0, inplace=False):
-    return jt.maximum(input, 0.0) + jt.minimum(0.0, alpha * (jt.exp(input / alpha) - 1))
+    _check_activation_input(input, "celu")
+    if alpha == 0:
+        raise RuntimeError("ZeroDivisionError: alpha cannot be 0 for CELU")
+    negative_input = jt.ternary(input > 0, 0.0, input)
+    negative = alpha * _stable_expm1(negative_input / alpha)
+    output = jt.ternary(input > 0, input, negative)
+    return _activation_result(input, output, inplace)
 
 
 def _install_functional(ctx):
