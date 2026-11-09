@@ -620,8 +620,9 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # Preserve identity for dense storage; actual transpose/broadcast views
     # materialize through the native contiguous op and retain their gradient.
     from . import method_api
+    from jittor.ops.tensor_protocol import contiguous as native_contiguous
     method_api._FAST_CONTIGUOUS = getattr(_owner.jt.core, "_fast_contiguous", None)
-    method_api._NATIVE_CONTIGUOUS = _owner.jt.core.ops.contiguous
+    method_api._NATIVE_CONTIGUOUS = native_contiguous
     Var.contiguous = _api_contiguous
     # torch's Tensor.is_cuda / .is_cpu report the tensor's ACTUAL residency.
     # A Var built/migrated to host (torch.zeros(device='cpu'), .cpu()) is on the
