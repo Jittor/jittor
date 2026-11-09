@@ -30,8 +30,10 @@ def arange(start=0, end=None, step=1,dtype=None):
         # A Python scalar operand is folded as a float32 constant; keep
         # start and step in double for a double range, as torch does.
         x = x.float64()
-        step = jt.array(float(step), dtype="float64")
-        start = jt.array(float(start), dtype="float64")
+        if step != 1:
+            step = jt.array(float(step), dtype="float64")
+        if start != 0:
+            start = jt.array(float(start), dtype="float64")
     elif (dtype is not None and _dtype_name(dtype) in ("float16", "bfloat16", "float32")) or any(
             isinstance(value, (float, np.floating)) for value in (start, end, step)):
         x = x.float32()
@@ -41,9 +43,16 @@ def arange(start=0, end=None, step=1,dtype=None):
         # Cast before integer arithmetic. Casting after an int32 add wraps
         # large starts or steps before the requested int64 result exists.
         x = x.int64()
-        step = jt.array(step, dtype="int64")
-        start = jt.array(start, dtype="int64")
-    x = x*step+start
+        if step != 1:
+            step = jt.array(step, dtype="int64")
+        if start != 0:
+            start = jt.array(start, dtype="int64")
+    # The index already is the zero-based unit range. Avoid constructing
+    # scalar tensors and arithmetic nodes for those identity operations.
+    if not isinstance(step, (int, float, np.number)) or step != 1:
+        x = x*step
+    if not isinstance(start, (int, float, np.number)) or start != 0:
+        x = x+start
     if dtype is not None:
         x= x.cast(dtype)
     return x

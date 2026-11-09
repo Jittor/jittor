@@ -187,6 +187,22 @@ class TestRandomOp(unittest.TestCase):
         self.assertEqual(str(exact.dtype), "float64")
         self.assertEqual(exact.numpy()[3], 3 * 0.1)
         self.assertEqual(str(jt.arange(5).dtype), "int32")
+        # Zero-based unit ranges must retain their requested dtype, including
+        # the empty case; floating bounds still infer float32 without dtype.
+        for size in (0, 1, 17):
+            for dtype in ("int32", "int64", "float16", "float32", "float64"):
+                with self.subTest(size=size, dtype=dtype):
+                    value = jt.arange(size, dtype=dtype)
+                    self.assertEqual(str(value.dtype), dtype)
+                    value.sync()
+                    if size and jt.flags.use_cuda:
+                        self.assertEqual(value.location(), "device")
+                    np.testing.assert_array_equal(
+                        value.numpy(), np.arange(size, dtype=dtype))
+        for args in ((0., 5.), (0, 5, 1.)):
+            value = jt.arange(*args)
+            self.assertEqual(str(value.dtype), "float32")
+            np.testing.assert_array_equal(value.numpy(), np.arange(*args))
 
     def test_arange_float_arguments(self):
         self._check_arange_float_arguments()
