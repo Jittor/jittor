@@ -3,6 +3,8 @@ import jittor as jt
 import pytest
 import torch
 
+from _rng_init_support import preserve_random_streams, require_rng_device
+
 
 @pytest.mark.parametrize("count", [0, 1, 7, 8, 32])
 def test_forward_argument_identity_and_keyword_order(count):
@@ -45,3 +47,27 @@ def test_nested_exception_restores_native_construction_type():
     with pytest.raises(TypeError):
         model(value, value=value)
     assert type(jt.zeros(1)) is before
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_dispatch_reads_live_weights_hooks_and_forward(device):
+    require_rng_device(device)
+    with preserve_random_streams(), torch.no_grad(), jt.flag_scope(auto_graph_replay=0):
+        layer = torch.nn.Linear(2, 1, bias=False).to(device)
+        model = torch.nn.Sequential(layer).eval()
+        value = torch.tensor([[2., 3.]], device=device)
+
+        def check(expected):
+            result = model(value)
+            assert result.device.type == device
+            assert result.item() == expected
+
+        layer.weight.fill_(1)
+        check(5)
+        handle = layer.register_forward_hook(lambda module, args, result: result + 7)
+        check(12)
+        handle.remove()
+        layer.weight.fill_(2)
+        check(10)
+        layer.forward = lambda x: x.sum(dim=-1, keepdim=True) * 3
+        check(15)
