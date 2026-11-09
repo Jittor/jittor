@@ -8,7 +8,7 @@ import jittor as jt
 from jittor.optim.algorithms.adam import adam_update
 from jittor.optim.base import _update_preserve_dtype
 from .context import get_install_context
-from .installers.tensor.method_api import _optimizer_write_scope
+from .installers.tensor.method_api import _optimizer_write_scope, _optimizer_update_many
 from ..diagnostics import EXPECTED, swallowed
 
 
@@ -205,11 +205,15 @@ def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay
             updates = fused_impl(
                 active, lr_arg, b0, b1, weight_decay, eps)
             with _optimizer_write_scope():
+                batched = _optimizer_update_many(
+                    [tensor for entry in active for tensor in entry[:3]],
+                    [tensor for update in updates for tensor in update])
                 for (p, m, v, _, _), (new_p, new_m, new_v) in zip(
                         active, updates):  # fused_adamw keeps each input's dtype
-                    _update_preserve_dtype(p, new_p)
-                    _update_preserve_dtype(m, new_m)
-                    _update_preserve_dtype(v, new_v)
+                    if not batched:
+                        _update_preserve_dtype(p, new_p)
+                        _update_preserve_dtype(m, new_m)
+                        _update_preserve_dtype(v, new_v)
                     if p.is_stop_grad():
                         p.start_grad()
             continue

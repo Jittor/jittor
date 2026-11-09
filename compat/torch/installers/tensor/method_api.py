@@ -403,6 +403,23 @@ def _optimizer_update(self, value):
         return _ip(self, value, preserve_storage=True)
 
 
+def _optimizer_update_many(targets, values):
+    """Commit a fused update with one Python/native boundary and grad scope.
+
+    Keep custom tensor writers and capture on their ordinary path. The native
+    helper accepts only already-materialized aliases, and still performs the
+    same reader preservation, alias checks and version writes as _copy_into.
+    """
+    from jittor._runtime import step_capture
+    if not _OPTIMIZER_WRITES[0] or step_capture.active():
+        return False
+    if any(getattr(type(target), '_optimizer_update', None) is not _optimizer_update
+           for target in targets):
+        return False
+    with _owner.jt.no_grad():
+        return _owner.jt.core._commit_shared_updates(targets, values)
+
+
 def _copy_(self, other, non_blocking=False):
     src = other if isinstance(other, _NativeVar) else _owner.jt.array(other)
     if hasattr(self, "dtype") and _jittor_dtype_name(src.dtype) != _jittor_dtype_name(self.dtype):

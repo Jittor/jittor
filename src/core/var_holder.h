@@ -1095,6 +1095,16 @@ int first_rebound(const vector<VarHolder*>& holders, const vector<VarHolder*>& o
 // @pyjt(_preserve_step_readers)
 int preserve_step_readers(const vector<VarHolder*>& storages);
 
+/**
+    Commit already-executed, dense updates that alias their destinations.
+    Return false, without writing or advancing versions, if any pair needs
+    the ordinary frontend write path. Successful batches use copy_into's
+    reader, alias and mutation checks for every pair, in the supplied order.
+ */
+// @pyjt(_commit_shared_updates)
+bool commit_shared_updates(const vector<VarHolder*>& targets,
+                           const vector<VarHolder*>& sources);
+
 // Called after a complete VarHolder has crossed into a Python object.
 void schedule_pending_from_python(VarHolder* holder);
 

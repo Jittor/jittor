@@ -673,12 +673,17 @@ def _supports_training(x, weight, bias):
     # bias sum to matter pays that for nothing: a DDPM UNet's forty-odd
     # 16-row time-embedding projections made its eager step 64.0 -> 68.3 ms
     # at an unchanged device time.
-    return rows >= _MIN_ROWS and rows * cin * cout >= _MIN_PRODUCT
+    minimum_product = max(_MIN_PRODUCT, _MIN_PRODUCT_FP32) if dtype == "float32" else _MIN_PRODUCT
+    return rows >= _MIN_ROWS and rows * cin * cout >= minimum_product
 
 
 #: The smallest problem the training route takes: rows, and rows x cin x cout.
 _MIN_ROWS = 1024
 _MIN_PRODUCT = 1 << 28
+# Modest FP32 square products do not repay the Function/tape overhead even
+# after reaching the row floor. Keep the timed route for larger products;
+# the low-precision policy is independent.
+_MIN_PRODUCT_FP32 = 1 << 30
 
 
 def lt_linear_train_cuda(x, weight, bias=None):

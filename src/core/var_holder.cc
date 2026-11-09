@@ -482,6 +482,28 @@ int preserve_step_readers(const vector<VarHolder*>& storages) {
     return (int)readers.size();
 }
 
+bool commit_shared_updates(const vector<VarHolder*>& targets,
+                           const vector<VarHolder*>& sources) {
+    USER_CHECK(targets.size() == sources.size())
+        << "shared updates need equal target and source counts";
+    // Check the whole batch before committing any mutation. A mixed batch
+    // can then fall back without writing an earlier pair twice.
+    for (size_t i=0; i<targets.size(); ++i) {
+        Var* target = targets[i]->var;
+        Var* source = sources[i]->var;
+        if (!target->mem_ptr || target->mem_ptr != source->mem_ptr
+                || target->allocator != source->allocator
+                || target->allocation != source->allocation
+                || target->shape != source->shape
+                || target->dtype() != source->dtype()
+                || !target->is_contiguous() || !source->is_contiguous())
+            return false;
+    }
+    for (size_t i=0; i<targets.size(); ++i)
+        targets[i]->copy_into(sources[i], false);
+    return true;
+}
+
 void VarHolder::copy_into(VarHolder* src, bool sync_src) {
     check_inplace_autograd();
     ExecutorEntryScope entry;
