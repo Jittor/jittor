@@ -182,9 +182,16 @@ class TestTorchXlaEmulationSingleProcess(unittest.TestCase):
     def test_rng_state_round_trip(self):
         previous = xm.get_rng_state()
         self.assertIsInstance(previous, int)
-        xm.set_rng_state(12345)
-        self.assertEqual(xm.get_rng_state(), 12345)
-        xm.set_rng_state(previous)
+        try:
+            xm.set_rng_state(12345)
+            saved = xm.get_rng_state()
+            self.assertIsInstance(saved, int)
+            expected = torch.rand(8).tolist()
+            xm.set_rng_state(saved)
+            self.assertEqual(torch.rand(8).tolist(), expected)
+            self.assertEqual(torch.initial_seed(), 12345)
+        finally:
+            xm.set_rng_state(previous)
 
     def test_parallel_loader_places_batches(self):
         device = xm.xla_device()
