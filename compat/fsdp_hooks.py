@@ -69,6 +69,10 @@ REQUIRED = (
     "refresh_optimizer_fsdp_params",
     "_gather_optimizer_state_dict",
     "_shard_optimizer_state_dict",
+    # torch/checkpoint_io.py, when a saved entry carries DTensor mesh and
+    # placement metadata. The DTensor types live in fsdp2; the seam is how a
+    # layer below it names them without importing the package.
+    "DeviceMesh", "DTensor", "Shard", "Replicate",
 )
 
 _provider = None

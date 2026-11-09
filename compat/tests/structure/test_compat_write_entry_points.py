@@ -335,6 +335,15 @@ CLASSIFIED = {
      "<module>", "sys.meta_path"): "deployed-payload",
     (C + "shim/resources/stubs/torchdata/__init__.py",
      "__getattr__", "sys.modules"): "deployed-payload",
+    # torch_xla emulation: the launch environment is inherited by the spawned
+    # rank processes. It is process state of a deployment payload, not install
+    # state; each spawn restores the parent environment in a finally block.
+    (C + "shim/resources/stubs/torch_xla/distributed/xla_multiprocessing.py",
+     "_apply_launch_env", "env"): "deployed-payload",
+    (C + "shim/resources/stubs/torch_xla/distributed/xla_multiprocessing.py",
+     "_restore_env", "env"): "deployed-payload",
+    (C + "shim/resources/stubs/torch_xla/distributed/xla_multiprocessing.py",
+     "spawn", "env"): "deployed-payload",
 
     # Resolver-owned path tokens and current-thread loader publications only.
     # Untracked publications remain intact and cause a hard conflict.

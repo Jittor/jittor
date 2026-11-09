@@ -17,7 +17,10 @@ from ..api_delegates import bind_delegates
 import jittor as jt
 import numpy as np
 
-from ..types import _dtype_to_str
+from ..types import (
+    _device_is_cpu, _device_is_cuda, _dtype_to_str, _make_cpu_resident,
+    _make_cuda_resident,
+)
 from ..nested import _torch_register_leaf
 from ..fidelity import Fidelity, register_fidelity
 from ...diagnostics import EXPECTED, swallowed
@@ -225,8 +228,44 @@ def _allocate_empty_like(input):
     return jt.empty(input.shape, dtype=input.dtype)
 
 
+def _copy_like(input):
+    return input.clone()
+
+
+def _materialize_meta_like(input, device, **kwargs):
+    """Copy an emulated-meta buffer's values onto the device the call asked for.
+
+    The copy has to be made explicitly: ``input.clone()`` keeps the input's
+    device, so a buffer built under the ``torch.device("meta")`` emulation (real
+    host storage) stayed on CPU even when the factory was called with
+    ``device="cuda"``. transformers materializes Qwen2's non-persistent rotary
+    buffers this way while loading with ``device_map="cuda"``; the parameters
+    moved to CUDA, those buffers did not, and DDP's NCCL broadcast then had no
+    CPU kernel. A fresh allocation under the factory's ambient placement would
+    follow the request, but it holds no values, so copy first and then move.
+    """
+    copied = _constructor_adapter("empty_like", _copy_like, False, input, **kwargs)
+    if _device_is_cpu(device):
+        return _make_cpu_resident(copied)
+    if _device_is_cuda(device):
+        return _make_cuda_resident(copied, force=True, device=device)
+    return copied
+
+
 def _empty_like_implementation(input, **kwargs):
     """Apply the shared factory options to the compiler's empty allocation."""
+    if getattr(input, "_jittor_torch_meta_data", False):
+        # The shim's meta context allocates real host storage, so a buffer
+        # built there already holds the values from __init__.  transformers'
+        # _move_missing_keys_from_meta_to_device materializes non-persistent
+        # buffers with torch.empty_like; returning uninitialized memory makes
+        # it lose those values, and the later _init_weights restore is skipped
+        # for modules that are already initialized (CLIP position_ids,
+        # SpeechT5 sinusoidal weights).  Materializing the emulated meta
+        # storage therefore copies it instead of exposing garbage -- onto the
+        # device the factory call requested.
+        device = kwargs.pop("device", None)
+        return _materialize_meta_like(input, device, **kwargs)
     return _constructor_adapter("empty_like", _allocate_empty_like, False, input, **kwargs)
 
 
@@ -662,7 +701,74 @@ def _draw_from_generator(name, generator, args, kwargs):
     return t
 
 
+def _bernoulli_adapter(original, *args, generator=None, **kwargs):
+    """torch.bernoulli(input, p=...): sample with one constant probability.
+
+    jittor's bernoulli draws each element with the probability stored in that
+    element and takes no ``p``; transformers' SpeechT5 decoder calls the scalar
+    torch form ``torch.bernoulli(inputs_embeds[0], p=p)``.
+    """
+    p = kwargs.pop("p", None)
+    if p is not None:
+        reference = args[0] if args else kwargs.pop("input", None)
+        if reference is None:
+            raise TypeError("bernoulli() missing required argument: 'input'")
+        probs = jt.full_like(reference, float(p))
+        return jt.bernoulli(probs) if generator is None else jt.bernoulli(probs, generator=generator)
+    if generator is None:
+        return original(*args, **kwargs)
+    drawn = _draw_from_generator("bernoulli", generator, args, kwargs)
+    return original(*args, **kwargs) if drawn is None else drawn
+
+
+def _randint_adapter(original, *args, generator=None, **kwargs):
+    """Accept torch.randint's (low[, high], size) spellings.
+
+    torch accepts ``randint(high, size)``, ``randint(low, high, size)`` and the
+    keyword spellings ``high=``/``low=``/``size=`` with size positional or a
+    keyword; jittor's sampler is ``randint(low, high, shape)``.  The generic
+    constructor adapter routes a keyword ``size`` into the first positional
+    slot, which jittor reads as ``low`` and fails with ``high - low`` TypeError.
+    torchmetrics' classification fixtures and transformers' DETR determinism
+    test use exactly that keyword form.
+    """
+    size = kwargs.pop("size", None)
+    low = kwargs.pop("low", None)
+    high = kwargs.pop("high", None)
+    positional = list(args)
+    if size is None and len(positional) >= 2:
+        size = positional.pop()
+    if high is None:
+        if len(positional) == 1:
+            high = positional.pop()
+        elif len(positional) == 2:
+            low, high = positional[0], positional[1]
+            positional.clear()
+        elif len(positional) > 2:
+            raise TypeError("randint() takes at most 3 positional arguments")
+    elif positional:
+        if len(positional) == 1 and low is None:
+            low = positional.pop()
+        else:
+            raise TypeError("randint() got multiple values for an argument")
+    if high is None:
+        raise TypeError("randint() missing required argument 'high'")
+    if size is None:
+        raise TypeError("randint() missing required argument 'size'")
+    if low is None:
+        low = 0
+
+    def _scalar(value):
+        return value.item() if isinstance(value, jt.Var) else int(value)
+
+    shape = tuple(int(dim) for dim in size) if isinstance(size, (tuple, list)) else (int(size),)
+    return _random_adapter(original, _scalar(low), _scalar(high), shape,
+                           generator=generator, _name="randint", **kwargs)
+
+
 def _random_adapter(original, *args, generator=None, _name=None, **kwargs):
+    if _name == "bernoulli":
+        return _bernoulli_adapter(original, *args, generator=generator, **kwargs)
     if generator is None:
         return original(*args, **kwargs)
     drawn = _draw_from_generator(_name, generator, args, kwargs)
@@ -676,6 +782,12 @@ def _install_random_and_linspace(g):
     for name in ("randn", "rand", "randint", "randperm", "normal",
                  "randn_like", "rand_like", "multinomial", "bernoulli"):
         original = _factory_implementation(getattr(g, name, None))
-        if original is not None:
+        if original is None:
+            continue
+        if name == "randint":
+            # torch's size=/high= spellings need their own normalization before
+            # the constructor adapter sees a shape in the low slot.
+            _publish_factory(g, name, functools.partial(_randint_adapter, original))
+        else:
             _publish_factory(g, name,
                              functools.partial(_random_adapter, original, _name=name))

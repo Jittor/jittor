@@ -20,8 +20,13 @@ from ..checkpoint_state import (
     get_optimizer_state_dict, set_optimizer_state_dict,
     get_model_state_dict, set_model_state_dict, get_state_dict, set_state_dict,
 )
+from .. import checkpoint_io as _checkpoint_io
 from ..ddp_comm_hooks import install_ddp_comm_hooks
 from ..fidelity import Fidelity, register_api_bindings
+from ..gradient_task import (
+    current_graph_task_id as _current_graph_task_id_state,
+    will_engine_execute_node as _will_engine_execute_node_state,
+)
 from ...diagnostics import EXPECTED, swallowed
 from ...transaction import set_env, set_flag
 from ... import collectives as _collectives
@@ -486,9 +491,21 @@ def _get_world_size(group=None):
 
 
 def _current_graph_task_id():
-    # Jittor has no PyTorch reentrant graph-task identifier. DeepSpeed uses
-    # -1 to mean an ordinary forward, distinct from checkpoint recomputation.
-    return -1
+    # torch's graph-task id is live while backward hooks run. The shim's
+    # post-accumulate participation scope is that window (see gradient_task);
+    # outside it the answer stays -1, torch's "ordinary forward" value.
+    return _current_graph_task_id_state()
+
+
+def _api_will_engine_execute_node(node):
+    """``torch._C._will_engine_execute_node`` over the shim's accumulators.
+
+    DeepSpeed's ``count_used_parameters_in_backward`` sums this over the
+    objects ``torch.autograd.graph._get_grad_fn_or_grad_acc`` returns; for a
+    leaf that object exposes ``variable`` and participation is known while the
+    post-accumulate phase runs.
+    """
+    return _will_engine_execute_node_state(node)
 
 
 class _ReduceOp:
@@ -685,16 +702,87 @@ class P2POp:
         self.tag = int(tag)
 
 
-def _unsupported_p2p(*args, **kwargs):
-    raise NotImplementedError(
-        "Jittor torch.distributed point-to-point communication is unavailable"
-    )
+def _p2p_group(group):
+    _context = get_install_context(jt).state["distributed_api"]
+    return _context['world_group'] if group is None else group
+
+
+def _p2p_peer_argument(rank, group_rank, group, role):
+    """Resolve torch's WORLD-rank-or-group-rank argument to a WORLD rank.
+
+    torch documents ``dst``/``src`` as a WORLD rank "regardless of group
+    argument", and added ``group_dst``/``group_src`` for the group-local
+    spelling. Passing both is an error there, so it is here too.
+    """
+    if group_rank is not None:
+        if rank is not None:
+            raise ValueError(
+                "{} and group_{} cannot both be specified".format(role, role))
+        return _api_dist_get_global_rank(group, group_rank)
+    if rank is None:
+        raise ValueError("{} must be specified".format(role))
+    return int(rank)
+
+
+def _send(tensor, dst=None, group=None, tag=0, group_dst=None):
+    """torch.distributed.send -- blocking point-to-point send."""
+    active_group = _p2p_group(group)
+    peer = _p2p_peer_argument(dst, group_dst, active_group, "dst")
+    return active_group.send(tensor, peer, tag)
+
+
+def _recv(tensor, src=None, group=None, tag=0, group_src=None):
+    """torch.distributed.recv -- blocking point-to-point receive."""
+    active_group = _p2p_group(group)
+    peer = _p2p_peer_argument(src, group_src, active_group, "src")
+    return active_group.recv(tensor, peer, tag)
+
+
+def _isend(tensor, dst=None, group=None, tag=0, group_dst=None):
+    """torch.distributed.isend -- send, returning a work handle."""
+    active_group = _p2p_group(group)
+    peer = _p2p_peer_argument(dst, group_dst, active_group, "dst")
+    return active_group.isend(tensor, peer, tag)
+
+
+def _irecv(tensor, src=None, group=None, tag=0, group_src=None):
+    """torch.distributed.irecv -- receive, returning a work handle."""
+    active_group = _p2p_group(group)
+    peer = _p2p_peer_argument(src, group_src, active_group, "src")
+    return active_group.irecv(tensor, peer, tag)
 
 
 def _batch_isend_irecv(p2p_ops):
-    if p2p_ops:
-        _unsupported_p2p()
-    return []
+    """Issue every P2POp in one NCCL group (torch's documented exchange form)."""
+    ops = list(p2p_ops)
+    if not ops:
+        return []
+    _context = get_install_context(jt).state["distributed_api"]
+    dist = _context['dist']
+    isend_fn = getattr(dist, "isend", None)
+    irecv_fn = getattr(dist, "irecv", None)
+    group = None
+    entries = []
+    for item in ops:
+        op = getattr(item, "op", item)
+        if op is isend_fn or op is _isend:
+            is_send = True
+        elif op is irecv_fn or op is _irecv:
+            is_send = False
+        else:
+            raise ValueError(
+                "batch_isend_irecv accepts only torch.distributed.isend/irecv "
+                "P2POp entries, got {!r}".format(op))
+        # `None` and `dist.group.WORLD` name the same group; compare the
+        # resolved owner rather than the spelling the caller used.
+        item_group = _p2p_group(getattr(item, "group", None))
+        if group is None:
+            group = item_group
+        elif item_group is not group:
+            raise ValueError(
+                "batch_isend_irecv entries must all use the same process group")
+        entries.append((is_send, item.tensor, int(item.peer), int(item.tag)))
+    return group.batch_isend_irecv(entries)
 
 
 def _new_subgroups_by_enumeration(ranks_per_subgroup_list=None, *a, **k):
@@ -937,6 +1025,20 @@ def _api_dist_get_global_rank(group=None, group_rank=0):
     return int(group_rank) if group is None or getattr(group, 'ranks', None) is None else int(group.ranks[int(group_rank)])
 
 
+def _api_get_node_local_rank(fallback_rank=0):
+    """Torch's ``get_node_local_rank``: LOCAL_RANK, then the caller's fallback.
+
+    ``fallback_rank=None`` asks for the global rank, which is what torch does
+    when a launcher sets no ``LOCAL_RANK``.
+    """
+    local_rank = os.environ.get("LOCAL_RANK")
+    if local_rank is not None and str(local_rank).strip() != "":
+        return int(local_rank)
+    if fallback_rank is None:
+        return int(_distributed_rank())
+    return int(fallback_rank)
+
+
 def _api_dist_get_process_group_ranks(group=None):
     return list(range(_distributed_world_size())) if group is None or getattr(group, 'ranks', None) is None else list(group.ranks)
 
@@ -1022,29 +1124,9 @@ _dcp_save_effect = ("write no bytes at all while reporting a successful "
                     "save, silently discarding the checkpoint")
 
 
-_dcp_load_effect = ("return the state dict unchanged without reading the "
-                    "checkpoint, silently leaving the model at its current "
-                    "weights")
-
-
-_dcp_hint = ("Use torch.save / Module.state_dict for a single-rank "
-             "checkpoint; sharded dcp is task 8.18.")
-
-
-def _api_checkpoint_load_state_dict(*args, **kwargs):
-    return _stub_unimplemented('torch.distributed.checkpoint.load_state_dict', _dcp_load_effect, _dcp_hint, stub_result=None)
-
-
-def _api_checkpoint_save_state_dict(*args, **kwargs):
-    return _stub_unimplemented('torch.distributed.checkpoint.save_state_dict', _dcp_save_effect, _dcp_hint, stub_result=None)
-
-
-def _api_checkpoint_load(*args, **kwargs):
-    return _stub_unimplemented('torch.distributed.checkpoint.load', _dcp_load_effect, _dcp_hint, stub_result=None)
-
-
-def _api_checkpoint_save(*args, **kwargs):
-    return _stub_unimplemented('torch.distributed.checkpoint.save', _dcp_save_effect, _dcp_hint, stub_result=None)
+_dcp_hint = ("The default filesystem plan lives in jittor.compat.torch."
+             "checkpoint_io; the low-level filesystem writer and planner "
+             "entry points remain unsupported.")
 
 
 class DefaultSavePlanner:
@@ -1067,10 +1149,6 @@ def _api_checkpoint_fs_write_item(*args, **kwargs):
     return _stub_unimplemented('torch.distributed.checkpoint.filesystem._write_item', _dcp_save_effect, _dcp_hint, stub_result=None)
 
 
-_api_checkpoint_load_state_dict._jittor_unimplemented = 'torch.distributed.checkpoint.load_state_dict'
-_api_checkpoint_save_state_dict._jittor_unimplemented = 'torch.distributed.checkpoint.save_state_dict'
-_api_checkpoint_load._jittor_unimplemented = 'torch.distributed.checkpoint.load'
-_api_checkpoint_save._jittor_unimplemented = 'torch.distributed.checkpoint.save'
 _api_checkpoint_fs_write_item._jittor_unimplemented = 'torch.distributed.checkpoint.filesystem._write_item'
 
 def _install_distributed(g, registry=None):
@@ -1111,10 +1189,10 @@ def _install_distributed(g, registry=None):
     dist.destroy_process_group = _destroy_process_group
     dist.Backend = Backend
     dist.P2POp = P2POp
-    dist.isend = _unsupported_p2p
-    dist.irecv = _unsupported_p2p
-    dist.send = _unsupported_p2p
-    dist.recv = _unsupported_p2p
+    dist.isend = _isend
+    dist.irecv = _irecv
+    dist.send = _send
+    dist.recv = _recv
     dist.batch_isend_irecv = _batch_isend_irecv
     dist.get_backend = _api_dist_get_backend
     dist.barrier = _barrier
@@ -1132,6 +1210,7 @@ def _install_distributed(g, registry=None):
     dist.new_subgroups_by_enumeration = _new_subgroups_by_enumeration
     dist.get_global_rank = _api_dist_get_global_rank
     dist.get_process_group_ranks = _api_dist_get_process_group_ranks
+    dist.get_node_local_rank = _api_get_node_local_rank
     dist.is_torchelastic_launched = _api_dist_is_torchelastic_launched
     dist.ReduceOp = getattr(dist, "ReduceOp", _ReduceOp)
     if not hasattr(dist.ReduceOp, "RedOpType"):
@@ -1259,18 +1338,15 @@ def _install_distributed(g, registry=None):
     checkpoint.__path__ = getattr(checkpoint, "__path__", [])
     checkpoint.FileSystemReader = FileSystemReader
     checkpoint.FileSystemWriter = FileSystemWriter
-    # torch.distributed.checkpoint save/load were the identity: dcp.save()
-    # wrote nothing and returned successfully, so a sharded checkpoint was
-    # silently never persisted and dcp.load() silently left the model at its
-    # current weights. Refuse instead of losing the run.
-    checkpoint.load_state_dict = _api_checkpoint_load_state_dict
-    _record_unimplemented('torch.distributed.checkpoint.load_state_dict', _dcp_load_effect, _dcp_hint)
-    checkpoint.save_state_dict = _api_checkpoint_save_state_dict
-    _record_unimplemented('torch.distributed.checkpoint.save_state_dict', _dcp_save_effect, _dcp_hint)
-    checkpoint.load = _api_checkpoint_load
-    _record_unimplemented('torch.distributed.checkpoint.load', _dcp_load_effect, _dcp_hint)
-    checkpoint.save = _api_checkpoint_save
-    _record_unimplemented('torch.distributed.checkpoint.save', _dcp_save_effect, _dcp_hint)
+    # The default filesystem plan is implemented in checkpoint_io: each rank
+    # writes its own shards under <checkpoint_id>/<rank>/, rank 0 writes the
+    # shared .metadata index, and unsupported options (planner=, storage_*=,
+    # async_staging=, dedup_*=) are refused instead of silently dropping the
+    # checkpoint.
+    checkpoint.load_state_dict = _checkpoint_io.load_state_dict
+    checkpoint.save_state_dict = _checkpoint_io.save_state_dict
+    checkpoint.load = _checkpoint_io.load
+    checkpoint.save = _checkpoint_io.save
     checkpoint_sd = _types.ModuleType("torch.distributed.checkpoint.state_dict")
     checkpoint_sd.StateDictOptions = StateDictOptions
     checkpoint_sd.get_model_state_dict = _get_model_state_dict
@@ -1279,6 +1355,15 @@ def _install_distributed(g, registry=None):
     checkpoint_sd.set_optimizer_state_dict = set_optimizer_state_dict
     checkpoint_sd.get_state_dict = _api_checkpoint_sd_get_state_dict
     checkpoint_sd.set_state_dict = _api_checkpoint_sd_set_state_dict
+    # The deployed Torch tree provides checkpoint/stateful.py; keep that class
+    # when present so user protocols and checkpoint_io._is_stateful agree.
+    checkpoint_stateful = _modules.get("torch.distributed.checkpoint.stateful")
+    if checkpoint_stateful is None:
+        checkpoint_stateful = _types.ModuleType(
+            "torch.distributed.checkpoint.stateful")
+        _modules[checkpoint_stateful.__name__] = checkpoint_stateful
+    if not hasattr(checkpoint_stateful, "Stateful"):
+        checkpoint_stateful.Stateful = _checkpoint_io.Stateful
     checkpoint_planner = _types.ModuleType("torch.distributed.checkpoint.default_planner")
     checkpoint_planner.DefaultSavePlanner = DefaultSavePlanner
     checkpoint_planner.DefaultLoadPlanner = DefaultLoadPlanner
@@ -1293,10 +1378,12 @@ def _install_distributed(g, registry=None):
     _record_unimplemented('torch.distributed.checkpoint.filesystem._write_item', _dcp_save_effect, _dcp_hint)
     _modules["torch.distributed.checkpoint"] = checkpoint
     _modules["torch.distributed.checkpoint.state_dict"] = checkpoint_sd
+    _modules["torch.distributed.checkpoint.stateful"] = checkpoint_stateful
     _modules["torch.distributed.checkpoint.filesystem"] = checkpoint_fs
     _modules["torch.distributed.checkpoint.default_planner"] = checkpoint_planner
     checkpoint.default_planner = checkpoint_planner
     checkpoint.state_dict = checkpoint_sd
+    checkpoint.stateful = checkpoint_stateful
     checkpoint.filesystem = checkpoint_fs
 
     shard = dist._shard
@@ -1347,6 +1434,7 @@ def _install_distributed(g, registry=None):
     if not hasattr(g, "_C"):
         g._C = _CNS()
     g._C._current_graph_task_id = _current_graph_task_id
+    g._C._will_engine_execute_node = _api_will_engine_execute_node
     _install_fsdp2_distributed(dist, g, registry=registry)
     g.distributed = dist
     register_api_bindings(dist, "torch.distributed",
@@ -1358,6 +1446,7 @@ def _install_distributed(g, registry=None):
          "reduce_scatter_tensor", "broadcast", "all_gather_object",
          "broadcast_object_list", "gather_object", "new_group",
          "new_subgroups_by_enumeration", "get_global_rank", "get_process_group_ranks",
+         "get_node_local_rank",
          "Store", "TCPStore", "FileStore", "PrefixStore"),
         Fidelity.APPROXIMATE,
         "Reuses native ProcessGroup, store and collective owners; group, reduction "
@@ -1366,7 +1455,13 @@ def _install_distributed(g, registry=None):
         Fidelity.UNIMPLEMENTED, "Importable type; construction refuses unavailable native DDP buckets")
     register_api_bindings(dist, "torch.distributed",
         ("send", "recv", "isend", "irecv", "batch_isend_irecv"),
-        Fidelity.UNIMPLEMENTED, "Point-to-point communication explicitly rejects nonempty work")
+        Fidelity.APPROXIMATE,
+        "NCCL point-to-point on contiguous CUDA tensors: blocking send/recv "
+        "fill or read the caller's tensor, isend/irecv return a work handle "
+        "whose wait blocks, and batch_isend_irecv issues all entries in one "
+        "NCCL group; NCCL has no message tags, so tag is accepted and, as in "
+        "torch's NCCL backend, matching is by peer and per-direction issue "
+        "order")
     register_api_bindings(dist.nn, "torch.distributed.nn", ("all_reduce",),
         Fidelity.APPROXIMATE, "Native differentiable sum/mean or selected group's native reduction")
     register_api_bindings(futures, "torch.futures", ("Future",),
@@ -1376,7 +1471,11 @@ def _install_distributed(g, registry=None):
         "Import-compatible context and hooks do not implement uneven-input communication")
     register_api_bindings(checkpoint, "torch.distributed.checkpoint",
         ("load_state_dict", "save_state_dict", "load", "save", "FileSystemReader", "FileSystemWriter"),
-        Fidelity.UNIMPLEMENTED, "Checkpoint I/O follows the existing explicit unsupported policy")
+        Fidelity.APPROXIMATE,
+        "Default filesystem plan only: each rank writes its own shards with "
+        "torch.save under <checkpoint_id>/<rank>/, rank 0 writes .metadata, "
+        "and load reads the same rank layout; planner=, storage_*=, async "
+        "staging, deduplication and resharding across world sizes are refused")
     register_api_bindings(checkpoint_planner, "torch.distributed.checkpoint.default_planner",
         ("DefaultSavePlanner", "DefaultLoadPlanner"), Fidelity.UNIMPLEMENTED,
         "Import-compatible names; construction refuses unavailable sharded checkpoint planning")

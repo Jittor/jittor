@@ -39,6 +39,25 @@ cast = unary
 
 Var.cast = Var.cast
 
+
+def _is_floating_point(self):
+    return _jittor_dtype_name(self.dtype) in ("float16", "bfloat16", "float32", "float64")
+
+
+def _is_complex(self):
+    return _jittor_dtype_name(self.dtype) in ("complex64", "complex128")
+
+
+def _is_signed(self):
+    return _jittor_dtype_name(self.dtype) not in ("bool", "uint8", "uint16", "uint32", "uint64")
+
+
+# Dtype queries belong to the native tensor; installing another frontend must
+# not mutate its class or change the identity of these methods.
+Var.is_floating_point = _is_floating_point
+Var.is_complex = _is_complex
+Var.is_signed = _is_signed
+
 def array(data, dtype=None):
     ''' Constructs a jittor Var from a number, List, numpy array or another jittor Var.
 

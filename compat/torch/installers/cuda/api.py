@@ -1574,6 +1574,20 @@ def _api_mps_is_available():
     return False
 
 
+def _api_mps_current_allocated_memory(*a, **k):
+    # Native torch raises this on builds without the MPS backend. Returning 0
+    # instead would make DeepSpeed's MPS probe select accelerator_name="mps".
+    raise RuntimeError(
+        "Cannot execute getCurrentAllocatedMemory() without MPS backend."
+    )
+
+
+def _api_mps_driver_allocated_memory(*a, **k):
+    raise RuntimeError(
+        "Cannot execute getDriverAllocatedMemory() without MPS backend."
+    )
+
+
 def _api_cpu_get_cpu_capability():
     return 'DEFAULT'
 

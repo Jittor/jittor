@@ -1,3 +1,6 @@
+import contextlib
+import enum
+
 from ...fidelity import Fidelity, register_api_bindings
 import jittor as jt
 from ...context import registry_for
@@ -13,6 +16,32 @@ from .... import collectives as _collectives
 from .module_methods import _install_module_methods
 from .rnn import _rnn_pad_sequence, PackedSequence, pack_padded_sequence, pad_packed_sequence
 from .norm_utils import _get_total_norm, _clip_grads_with_norm_
+
+def _api_fuse_conv_bn_weights(conv_w, conv_b, bn_rm, bn_rv, bn_eps, bn_w, bn_b):
+    """torch.nn.utils.fusion.fuse_conv_bn_weights for jittor tensors."""
+    if conv_b is None:
+        conv_b = jt.zeros(conv_w.shape[0], dtype=conv_w.dtype)
+    if bn_w is None:
+        bn_w = jt.ones(bn_rm.shape, dtype=conv_w.dtype)
+    if bn_b is None:
+        bn_b = jt.zeros(bn_rm.shape, dtype=conv_w.dtype)
+    bn_var_rsqrt = jt.rsqrt(bn_rv + bn_eps)
+    weight = conv_w * (bn_w * bn_var_rsqrt).reshape(-1, 1, 1, 1)
+    bias = (conv_b - bn_rm) * bn_var_rsqrt * bn_w + bn_b
+    return weight, bias
+
+
+def _api_fuse_conv_bn_eval(conv, bn, transpose=False):
+    """torch.nn.utils.fusion.fuse_conv_bn_eval: return an eval-fused conv copy."""
+    if transpose:
+        raise NotImplementedError("fuse_conv_bn_eval(transpose=True) is not provided")
+    import copy as _copy
+    fused = _copy.deepcopy(conv)
+    fused.weight, fused.bias = _api_fuse_conv_bn_weights(
+        conv.weight, conv.bias, bn.running_mean, bn.running_var, bn.eps,
+        bn.weight, bn.bias)
+    return fused
+
 
 def _ddp_world_size():
     """This rank's view of the world. See collectives._world_size."""
@@ -183,6 +212,32 @@ def _install_nn_extras(nn, registry=None):
         flex_mod.noop_mask = _api_flex_mod_noop_mask
         _modules["torch.nn.attention.flex_attention"] = flex_mod
     attn_mod.flex_attention = flex_mod
+    # PyTorch's scaled-dot-product-attention backend selection API. Jittor
+    # dispatches every SDPA request to its single native implementation, so the
+    # backend choice is accepted for API compatibility but never changes the
+    # computation. transformers imports SDPBackend and sdpa_kernel from
+    # torch.nn.attention while collecting its generation tests.
+    if not hasattr(attn_mod, "SDPBackend"):
+        class SDPBackend(enum.Enum):
+            ERROR = -1
+            MATH = 0
+            FLASH_ATTENTION = 1
+            EFFICIENT_ATTENTION = 2
+            CUDNN_ATTENTION = 3
+            OVERRIDEABLE = 4
+
+        @contextlib.contextmanager
+        def sdpa_kernel(backends, set_priority=False):
+            if isinstance(backends, (SDPBackend, str)):
+                backends = [backends]
+            invalid = [backend for backend in backends if not isinstance(backend, SDPBackend)]
+            if invalid:
+                raise ValueError(
+                    "sdpa_kernel expects torch.nn.attention.SDPBackend values, got {!r}".format(invalid))
+            yield
+
+        attn_mod.SDPBackend = SDPBackend
+        attn_mod.sdpa_kernel = sdpa_kernel
     nn.attention = attn_mod
 
     # nn.utils.clip_grad_norm_/clip_grad_value_ (also provided by torch_shim,
@@ -256,6 +311,14 @@ def _install_nn_extras(nn, registry=None):
         _modules["torch.nn.utils.parametrize"] = _parametrize
     else:
         _modules.setdefault("torch.nn.utils.parametrize", _u.parametrize)
+    if not hasattr(_u, "fusion"):
+        _fusion = _types_nn_utils.ModuleType("torch.nn.utils.fusion")
+        _fusion.fuse_conv_bn_eval = _api_fuse_conv_bn_eval
+        _fusion.fuse_conv_bn_weights = _api_fuse_conv_bn_weights
+        _u.fusion = _fusion
+        _modules["torch.nn.utils.fusion"] = _fusion
+    else:
+        _modules.setdefault("torch.nn.utils.fusion", _u.fusion)
     if not hasattr(_u, "parametrizations"):
         _parametrizations = _types_nn_utils.ModuleType("torch.nn.utils.parametrizations")
         _parametrizations.weight_norm = getattr(_u, "weight_norm", _api_parametrizations_weight_norm)
@@ -526,6 +589,10 @@ def _install_nn_extras(nn, registry=None):
         parallel_mod, "torch.nn.parallel", ("DataParallel", "DistributedDataParallel"),
         Fidelity.APPROXIMATE, "Native module wrapper and registered collectives; "
         "the complete Torch process-group and bucket interface is not supported")
+    register_api_bindings(
+        attn_mod, "torch.nn.attention", ("SDPBackend", "sdpa_kernel"),
+        Fidelity.APPROXIMATE, "Backend selection is accepted for import and call "
+        "compatibility; Jittor dispatches one native SDPA implementation regardless of backend")
     for _path, _names in (
         ("torch.nn.attention.flex_attention", ("flex_attention", "create_block_mask",
          "and_masks", "or_masks", "noop_mask")),

@@ -40,6 +40,20 @@ def _rotate(img, angle, *a, **k):                    # 90-multiple fast path; el
 # through torchvision.transforms.functional on tensors. The stub made tvF.X a
 # dummy class -> `pil_to_tensor(img)` returned a class with no .ndim and crashed.
 # Implement the handful of ops the VL image pipeline uses, on jittor Vars / PIL.
+def _frontend_tensor(value):
+    # Return the torch-facing Tensor type when jittor-torch-shim is deployed.
+    # A bare native Var shares the storage but is not an instance of
+    # torch.Tensor, and datasets' torch formatting (and callers like
+    # Dataset.set_transform) expect the facade type.
+    try:
+        import torch as _torch
+        if hasattr(_torch, "_torch_compat_install_context"):
+            return _torch.tensor(value)
+    except Exception:
+        pass
+    return value
+
+
 def _pil_to_tensor(pic):
     # PIL image -> uint8 CHW Var (torchvision.pil_to_tensor semantics)
     import numpy as _np
@@ -47,7 +61,7 @@ def _pil_to_tensor(pic):
     if arr.ndim == 2:
         arr = arr[:, :, None]
     t = _jt.array(arr.copy())           # HWC
-    return t.permute(2, 0, 1)           # CHW
+    return _frontend_tensor(t.permute(2, 0, 1))   # CHW
 
 def _to_tensor(pic):
     # torchvision.transforms.functional.to_tensor semantics:
@@ -55,7 +69,8 @@ def _to_tensor(pic):
     import numpy as _np
     from PIL import Image as _Im
     if isinstance(pic, _jt.Var):
-        return pic.float32() / 255.0 if "uint8" in _jittor_dtype_name(pic.dtype) else pic.float32()
+        t = pic.float32() / 255.0 if "uint8" in _jittor_dtype_name(pic.dtype) else pic.float32()
+        return _frontend_tensor(t)
     if isinstance(pic, _Im.Image):
         arr = _np.asarray(pic)
     else:
@@ -68,7 +83,7 @@ def _to_tensor(pic):
         arr = arr.astype(_np.float32)
     if arr.ndim == 3:
         arr = arr.transpose(2, 0, 1)
-    return _jt.array(arr.copy())
+    return _frontend_tensor(_jt.array(arr.copy()))
 
 def _resize(img, size, interpolation="bilinear", antialias=True, **k):
     # img: CHW (or NCHW) Var. size: int or (h,w). Route through jittor interpolate.
@@ -261,6 +276,43 @@ class Resize:
         return f"Resize(size={self.size}, interpolation={self.interpolation})"
 
 
+class RandomResizedCrop:
+    """torchvision.transforms.RandomResizedCrop for PIL images and Vars."""
+
+    def __init__(self, size, scale=(0.08, 1.0), ratio=(3.0 / 4.0, 4.0 / 3.0),
+                 interpolation=InterpolationMode.BILINEAR, antialias=True, **kw):
+        self.size = (size, size) if isinstance(size, int) else tuple(size)
+        self.scale = tuple(scale)
+        self.ratio = tuple(ratio)
+        self.interpolation = interpolation
+        self.antialias = antialias
+
+    def _crop_box(self, h, w):
+        import random
+        area = h * w
+        for _ in range(10):
+            target = random.uniform(*self.scale) * area
+            aspect = random.uniform(*self.ratio)
+            cw = int(round((target * aspect) ** 0.5))
+            ch = int(round((target / aspect) ** 0.5))
+            if 0 < cw <= w and 0 < ch <= h:
+                return random.randint(0, h - ch), random.randint(0, w - cw), ch, cw
+        side = min(h, w)
+        return (h - side) // 2, (w - side) // 2, side, side
+
+    def __call__(self, pic):
+        from PIL import Image as _Im
+        if isinstance(pic, _Im.Image):
+            i, j, ch, cw = self._crop_box(pic.height, pic.width)
+            cropped = pic.crop((j, i, j + cw, i + ch))
+            return cropped.resize((self.size[1], self.size[0]), _pil_resample(self.interpolation))
+        i, j, ch, cw = self._crop_box(pic.shape[-2], pic.shape[-1])
+        return Resize(self.size, self.interpolation, antialias=self.antialias)(pic[..., i:i + ch, j:j + cw])
+
+    def __repr__(self):
+        return f"RandomResizedCrop(size={self.size}, scale={self.scale}, ratio={self.ratio})"
+
+
 class ToPILImage:
     def __init__(self, mode=None):
         self.mode = mode
@@ -314,6 +366,119 @@ class CenterCrop:
 
     def __repr__(self):
         return f"CenterCrop(size={self.size})"
+
+
+class ColorJitter:
+    """torchvision.transforms.ColorJitter on PIL images and jittor Vars.
+
+    Scalar parameters expand to torchvision's random factor ranges; a tuple is
+    sampled directly.  PIL images use ImageEnhance (hue as an HSV H-channel
+    shift); tensors are adjusted in float RGB space with the torchvision YIQ
+    hue rotation.
+    """
+
+    def __init__(self, brightness=0, contrast=0, saturation=0, hue=0):
+        self.brightness = self._check_input(brightness, "brightness")
+        self.contrast = self._check_input(contrast, "contrast")
+        self.saturation = self._check_input(saturation, "saturation")
+        self.hue = self._check_input(hue, "hue")
+
+    @staticmethod
+    def _check_input(value, name):
+        if isinstance(value, bool):
+            raise TypeError(f"{name} must be a number or a sequence of two numbers")
+        if isinstance(value, (int, float)):
+            if value < 0:
+                raise ValueError(f"{name} must be non-negative")
+            if name == "hue":
+                if value > 0.5:
+                    raise ValueError("hue values must be in [-0.5, 0.5]")
+                bounds = (-float(value), float(value))
+            else:
+                bounds = (max(0.0, 1.0 - float(value)), 1.0 + float(value))
+        elif isinstance(value, (list, tuple)) and len(value) == 2:
+            bounds = (float(value[0]), float(value[1]))
+            if bounds[0] < 0 or bounds[1] < 0:
+                raise ValueError(f"{name} values must be non-negative")
+            if bounds[0] > bounds[1]:
+                raise ValueError(f"{name} values must be in increasing order")
+            if name == "hue" and (bounds[0] < -0.5 or bounds[1] > 0.5):
+                raise ValueError("hue values must be in [-0.5, 0.5]")
+        else:
+            raise TypeError(f"{name} must be a number or a sequence of two numbers")
+        center = 0.0 if name == "hue" else 1.0
+        return None if bounds[0] == bounds[1] == center else bounds
+
+    def __call__(self, img):
+        import random
+        import numpy as _np
+        from PIL import Image as _Im
+
+        operations = []
+        for name in ("brightness", "contrast", "saturation", "hue"):
+            bounds = getattr(self, name)
+            if bounds is not None:
+                operations.append((name, random.uniform(*bounds)))
+        random.shuffle(operations)
+        if not operations:
+            return img  # identity, as in torchvision
+        if isinstance(img, _Im.Image):
+            from PIL import ImageEnhance
+            for name, factor in operations:
+                if name == "brightness":
+                    img = ImageEnhance.Brightness(img).enhance(factor)
+                elif name == "contrast":
+                    img = ImageEnhance.Contrast(img).enhance(factor)
+                elif name == "saturation":
+                    img = ImageEnhance.Color(img).enhance(factor)
+                else:
+                    mode = img.mode
+                    bands = list(img.convert("HSV").split())
+                    shift = int(round(factor * 255))
+                    bands[0] = bands[0].point(lambda pixel: (pixel + shift) % 256)
+                    img = _Im.merge("HSV", bands).convert(mode)
+            return img
+        t = img if isinstance(img, _jt.Var) else _jt.array(_np.asarray(img))
+        t = t.float32()
+        squeezed = []
+        while t.ndim < 4:
+            t = t.unsqueeze(0)
+            squeezed.append(0)
+        for name, factor in operations:
+            if name == "brightness":
+                t = t * float(factor)
+            elif name == "contrast":
+                mean = t.mean(dim=2, keepdim=True).mean(dim=3, keepdim=True)
+                t = (t - mean) * float(factor) + mean
+            elif name == "saturation":
+                gray = t.mean(dim=1, keepdim=True)
+                t = gray + (t - gray) * float(factor)
+            else:
+                t = self._adjust_hue(t, float(factor))
+        for _ in squeezed:
+            t = t.squeeze(0)
+        return t
+
+    @staticmethod
+    def _adjust_hue(t, factor):
+        import math
+        r, g, b = t[:, 0:1], t[:, 1:2], t[:, 2:3]
+        y = 0.299 * r + 0.587 * g + 0.114 * b
+        i = 0.596 * r - 0.274 * g - 0.322 * b
+        q = 0.211 * r - 0.523 * g + 0.312 * b
+        angle = factor * 2.0 * math.pi
+        cosine, sine = math.cos(angle), math.sin(angle)
+        i_rot = i * cosine - q * sine
+        q_rot = i * sine + q * cosine
+        r_new = y + 0.956 * i_rot + 0.621 * q_rot
+        g_new = y - 0.272 * i_rot - 0.647 * q_rot
+        b_new = y - 1.106 * i_rot + 1.703 * q_rot
+        return _jt.stack([r_new, g_new, b_new], dim=1)
+
+    def __repr__(self):
+        return (f"ColorJitter(brightness={self.brightness}, "
+                f"contrast={self.contrast}, saturation={self.saturation}, "
+                f"hue={self.hue})")
 
 
 def _make_grid(tensor, nrow=8, padding=2, normalize=False, value_range=None,
@@ -371,7 +536,70 @@ class _WeightEnum(metaclass=_IRMMeta):
     IMAGENET1K_V1 = "imagenet1k_v1"
 
 
+def _box_convert(boxes, in_fmt="xyxy", out_fmt="xyxy"):
+    """torchvision.ops.box_convert on jittor Vars."""
+    import numpy as _np
+    t = boxes if isinstance(boxes, _jt.Var) else _jt.array(_np.asarray(boxes, dtype=_np.float32))
+    if t.ndim == 1:
+        t = t.unsqueeze(0)
+    t = t.float32()
+    a, b, c, d = t[:, 0], t[:, 1], t[:, 2], t[:, 3]
+    src, dst = str(in_fmt).lower(), str(out_fmt).lower()
+    if src == "xyxy":
+        x1, y1, x2, y2 = a, b, c, d
+    elif src == "xywh":
+        x1, y1, x2, y2 = a, b, a + c, b + d
+    elif src == "cxcywh":
+        x1, y1, x2, y2 = a - c / 2, b - d / 2, a + c / 2, b + d / 2
+    else:
+        raise ValueError(f"Unsupported box format: {in_fmt}")
+    if dst == "xyxy":
+        return _jt.stack([x1, y1, x2, y2], dim=1)
+    if dst == "xywh":
+        return _jt.stack([x1, y1, x2 - x1, y2 - y1], dim=1)
+    if dst == "cxcywh":
+        return _jt.stack([(x1 + x2) / 2, (y1 + y2) / 2, x2 - x1, y2 - y1], dim=1)
+    raise ValueError(f"Unsupported box format: {out_fmt}")
+
+
+def _draw_bounding_boxes(image, boxes, labels=None, colors=None, fill=False,
+                         width=1, font=None, font_size=None):
+    """torchvision.utils.draw_bounding_boxes on a uint8 CHW tensor."""
+    import numpy as _np
+    from PIL import Image as _Im, ImageDraw as _ImageDraw
+    arr = image.numpy() if isinstance(image, _jt.Var) else _np.asarray(image)
+    if arr.ndim == 2:
+        arr = _np.repeat(arr[:, :, None], 3, axis=2)
+    elif arr.ndim == 3 and arr.shape[0] in (1, 3, 4):
+        arr = _np.transpose(arr, (1, 2, 0))
+    if arr.ndim == 3 and arr.shape[2] == 1:
+        arr = _np.repeat(arr, 3, axis=2)
+    if arr.ndim == 3 and arr.shape[2] >= 3:
+        arr = arr[:, :, :3]
+    if arr.dtype != _np.uint8:
+        arr = _np.clip(arr, 0, 255).astype(_np.uint8)
+    pil = _Im.fromarray(arr)
+    draw = _ImageDraw.Draw(pil)
+    b = boxes.numpy() if isinstance(boxes, _jt.Var) else _np.asarray(boxes)
+    color_list = list(colors) if isinstance(colors, (list, tuple)) else None
+    for index, box in enumerate(_np.asarray(b)):
+        x1, y1, x2, y2 = (float(v) for v in box[:4])
+        color = color_list[index % len(color_list)] if color_list else (colors or "red")
+        draw.rectangle([x1, y1, x2, y2], outline=color, width=int(width),
+                       fill=color if fill else None)
+        if labels is not None and index < len(labels):
+            draw.text((x1 + 2, y1 + 2), str(labels[index]), fill=color)
+    out = _np.transpose(_np.asarray(pil), (2, 0, 1)).astype(_np.uint8)
+    return _frontend_tensor(_jt.array(out))
+
+
+class _OpsModule(types.ModuleType):
+    __path__ = []   # package marker so torchvision.<ns>.<sub> imports descend
+    box_convert = staticmethod(_box_convert)
+
+
 class _ModelsModule(types.ModuleType):
+    __path__ = []   # package marker so torchvision.<ns>.<sub> imports descend
     VGG16_Weights = type("VGG16_Weights", (_WeightEnum,), {})
     AlexNet_Weights = type("AlexNet_Weights", (_WeightEnum,), {})
     SqueezeNet1_1_Weights = type("SqueezeNet1_1_Weights", (_WeightEnum,), {})
@@ -383,8 +611,10 @@ class _ModelsModule(types.ModuleType):
 
 
 class _UtilsModule(types.ModuleType):
+    __path__ = []   # package marker so torchvision.<ns>.<sub> imports descend
     make_grid = staticmethod(_make_grid)
     save_image = staticmethod(_save_image)
+    draw_bounding_boxes = staticmethod(_draw_bounding_boxes)
 
 
 _CONCRETE = {"InterpolationMode": InterpolationMode, "ImageReadMode": ImageReadMode,
@@ -396,10 +626,12 @@ _CONCRETE = {"InterpolationMode": InterpolationMode, "ImageReadMode": ImageReadM
              "center_crop": _center_crop, "rgb_to_grayscale": _rgb_to_grayscale,
              "grayscale_to_rgb": _grayscale_to_rgb,
              "make_grid": _make_grid, "save_image": _save_image,
+             "draw_bounding_boxes": _draw_bounding_boxes,
              # real class-based transforms (torchvision.transforms.*)
              "Compose": Compose, "Normalize": Normalize, "ToTensor": ToTensor,
              "Resize": Resize, "ToPILImage": ToPILImage, "Lambda": Lambda,
-             "CenterCrop": CenterCrop}
+             "CenterCrop": CenterCrop, "ColorJitter": ColorJitter,
+             "RandomResizedCrop": RandomResizedCrop}
 
 
 class _AnyModule(types.ModuleType):
@@ -440,11 +672,13 @@ class _Finder(importlib.abc.MetaPathFinder, importlib.abc.Loader):
 sys.meta_path.insert(0, _Finder())
 _models = _ModelsModule("torchvision.models")
 _utils = _UtilsModule("torchvision.utils")
+_ops = _OpsModule("torchvision.ops")
 models = _models
 utils = _utils
 transforms = _module_for_name("torchvision.transforms")
 sys.modules.setdefault("torchvision.models", _models)
 sys.modules.setdefault("torchvision.utils", _utils)
+sys.modules.setdefault("torchvision.ops", _ops)
 sys.modules.setdefault("torchvision.transforms", transforms)
 sys.modules.setdefault("torchvision.transforms.functional",
                        _module_for_name("torchvision.transforms.functional"))
@@ -457,6 +691,8 @@ def __getattr__(name):
         return _models
     if name == "utils":
         return _utils
+    if name == "ops":
+        return _ops
     if name in ("transforms", "functional", "v2", "F"):
         return _module_for_name("torchvision." + name)
     raise AttributeError(name)

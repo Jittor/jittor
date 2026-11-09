@@ -2,23 +2,59 @@
 
 import enum
 
-class StateDictType(enum.Enum):
-    FULL_STATE_DICT = "full"
-    LOCAL_STATE_DICT = "local"
-    SHARDED_STATE_DICT = "sharded"
+
+# torch's FSDP public enums carry integer values (1, 2, ...). Accelerate and
+# other callers convert plugin arguments with ``ShardingStrategy(int(v))`` and
+# ``BackwardPrefetch(int(v))``, and compare the members by identity, so the
+# values must be the integer member numbers. IntEnum keeps those conversions
+# working and additionally allows ``int(member)``.
+#
+# The ``_missing_`` hooks retain the lowercase strings this shim published
+# before the values were corrected, so state-dict snapshots pickled with the
+# old enum (see the legacy-pickle contract in the FSDP2 structure tests)
+# keep loading.
+class StateDictType(enum.IntEnum):
+    FULL_STATE_DICT = 1
+    LOCAL_STATE_DICT = 2
+    SHARDED_STATE_DICT = 3
+
+    @classmethod
+    def _missing_(cls, value):
+        legacy = {
+            "full": cls.FULL_STATE_DICT,
+            "local": cls.LOCAL_STATE_DICT,
+            "sharded": cls.SHARDED_STATE_DICT,
+        }
+        return legacy.get(value.lower()) if isinstance(value, str) else None
 
 
-class ShardingStrategy(enum.Enum):
-    FULL_SHARD = "full_shard"
-    SHARD_GRAD_OP = "shard_grad_op"
-    NO_SHARD = "no_shard"
-    HYBRID_SHARD = "hybrid_shard"
-    _HYBRID_SHARD_ZERO2 = "hybrid_shard_zero2"
+class ShardingStrategy(enum.IntEnum):
+    FULL_SHARD = 1
+    SHARD_GRAD_OP = 2
+    NO_SHARD = 3
+    HYBRID_SHARD = 4
+    _HYBRID_SHARD_ZERO2 = 5
+
+    @classmethod
+    def _missing_(cls, value):
+        legacy = {
+            "full_shard": cls.FULL_SHARD,
+            "shard_grad_op": cls.SHARD_GRAD_OP,
+            "no_shard": cls.NO_SHARD,
+            "hybrid_shard": cls.HYBRID_SHARD,
+            "hybrid_shard_zero2": cls._HYBRID_SHARD_ZERO2,
+        }
+        return legacy.get(value.lower()) if isinstance(value, str) else None
 
 
-class BackwardPrefetch(enum.Enum):
-    BACKWARD_PRE = "backward_pre"
-    BACKWARD_POST = "backward_post"
+class BackwardPrefetch(enum.IntEnum):
+    BACKWARD_PRE = 1
+    BACKWARD_POST = 2
+
+    @classmethod
+    def _missing_(cls, value):
+        legacy = {"backward_pre": cls.BACKWARD_PRE, "backward_post": cls.BACKWARD_POST}
+        return legacy.get(value.lower()) if isinstance(value, str) else None
 
 
 class CPUOffload:

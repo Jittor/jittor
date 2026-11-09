@@ -186,3 +186,36 @@ def test_data_replacement_preserves_saved_version(device):
     source.data = torch.tensor([4., 5.], device=device)
     gradient, = torch.autograd.grad(loss, source)
     np.testing.assert_array_equal(values(gradient), [8., 10.])
+
+
+def test_lazy_setitem_storage_adoption_does_not_reject_saved_backward(device):
+    """The setitem graph optimization adopts its input's storage during execution.
+
+    That adoption is part of producing the value, not a user write. It must not
+    invalidate a version snapshot taken when the graph was built, while a write
+    after the value materializes must still be caught (next test).
+    """
+    mask = torch.zeros(2, 3, dtype=torch.bool, device=device)
+    mask[0, 0] = True
+    mask[1, 2] = True
+    source = torch.arange(6, dtype=torch.float32, device=device).reshape(2, 3)
+    source.requires_grad_(True)
+    value = source + 1.0
+    value[mask] = 0.5
+    (value * value).sum().backward()
+    np.testing.assert_allclose(values(source.grad), [[0., 4., 6.], [8., 10., 0.]], rtol=1e-6)
+
+
+def test_lazy_setitem_then_materialized_write_still_rejects(device):
+    mask = torch.zeros(2, 3, dtype=torch.bool, device=device)
+    mask[0, 0] = True
+    source = torch.tensor([[1., 2., 3.], [4., 5., 6.]], dtype=torch.float32,
+                          device=device, requires_grad=True)
+    value = source + 1.0
+    value[mask] = 0.5
+    loss = (value * value).sum()
+    loss.item()
+    with torch.no_grad():
+        value.add_(1.0)
+    with pytest.raises(RuntimeError, match="inplace operation"):
+        torch.autograd.grad(loss, source)

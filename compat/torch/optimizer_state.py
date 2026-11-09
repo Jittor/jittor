@@ -109,6 +109,7 @@ class _ParamState(dict):
 class _OptState:
     def __init__(self, opt):
         self._opt = opt
+        self._external = {}
     def _find(self, param):
         for pg in self._opt.param_groups:
             for i, p in enumerate(pg.get("params", [])):
@@ -145,6 +146,13 @@ class _OptState:
         if pg is None:
             raise KeyError(param)
         kind = _torch_optimizer_kind(self._opt)
+        if kind not in _TORCH_TO_NATIVE_STATE and kind != "lbfgs":
+            store = getattr(self._opt, "_torch_external_state", None)
+            if store is None:
+                store = {}
+                object.__setattr__(self._opt, "_torch_external_state", store)
+            store.setdefault(id(param), {})[key] = value
+            return
         if key == "step":
             if isinstance(value, jt.Var) and kind not in ("adam", "adamw"):
                 value = value.item()
@@ -175,8 +183,18 @@ class _OptState:
         pg, i = self._find(param)
         if pg is None:
             return default
-        steps = _param_steps(pg)
         kind = _torch_optimizer_kind(self._opt)
+        if kind not in _TORCH_TO_NATIVE_STATE and kind != "lbfgs":
+            # A third-party optimizer defines its own state layout; keep the
+            # Torch contract (state[p] is a mutable mapping) without guessing
+            # a native buffer name. `state` builds a fresh _OptState per
+            # access, so the storage must live on the optimizer itself.
+            store = getattr(self._opt, "_torch_external_state", None)
+            if store is None:
+                store = {}
+                object.__setattr__(self._opt, "_torch_external_state", store)
+            return store.setdefault(id(param), {})
+        steps = _param_steps(pg)
         if kind == "adagrad":
             return _ParamState(self, param, {
                 "sum": pg["values"][i], "step": steps[i]})
@@ -207,7 +225,15 @@ class _OptState:
     def __getitem__(self, param):
         r = self.get(param, None)
         if r is None:
-            raise KeyError(param)
+            # torch's Optimizer.state is a defaultdict(dict): reading the
+            # state of a parameter that has not been updated yet creates an
+            # empty entry instead of raising. DeepSpeed's ZeRO-2 mixed
+            # precision linkage reads every optimizer group's entry right
+            # after stepping only the first group, so this read has to answer.
+            pg, i = self._find(param)
+            if pg is None:
+                raise KeyError(param)
+            return _ParamState(self, param, {})
         return r
     def __setitem__(self, param, d):
         pg, i = self._find(param)

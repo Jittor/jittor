@@ -491,6 +491,40 @@ class TestDataLoaderWorkers(StubPolicyBase):
             list(loader)
         self.assertTrue(any("THREADS" in str(w.message) for w in caught))
 
+    def test_pipeline_that_builds_jittor_vars_stays_serial(self):
+        # jittor's graph is single-threaded: a worker that builds Vars races
+        # the training thread inside the executor and segfaults (the
+        # known-failing tests/core/test_executor_python_threads.py documents
+        # it). The first batch is made on the calling thread, so a pipeline
+        # that builds Vars is recognised before any worker exists.
+        main = threading.get_ident()
+        data = torch.utils.data
+
+        class _VarDataset(data.Dataset):
+            def __len__(self):
+                return 8
+
+            def __getitem__(self, i):
+                return (jt.array([float(i)]), threading.get_ident())
+
+        loader = data.DataLoader(_VarDataset(), batch_size=2, num_workers=2,
+                                 collate_fn=lambda batch: batch)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            it = iter(loader)
+            batches = list(it)
+        self.assertEqual(type(it).__name__, "_MultiProcessingDataLoaderIter")
+        self.assertTrue(it._serial)
+        self.assertIsNone(it._pool)
+        built_on = [tid for batch in batches for _, tid in batch]
+        self.assertTrue(built_on)
+        self.assertEqual(set(built_on), {main},
+                         "a Var-building pipeline must not fetch off-thread")
+        values = [float(value.item()) for batch in batches for value, _ in batch]
+        self.assertEqual(values, [float(i) for i in range(8)])
+        self.assertTrue(any("background fetching is disabled" in str(w.message)
+                            for w in caught))
+
 
 class TestDistributedDataParallel(StubPolicyBase):
     """DDP synchronises for real now (7.02); it is no longer a stub.
@@ -904,28 +938,31 @@ class TestLibraryOpcheck(StubPolicyBase):
 
 
 class TestDistributedStubs(StubPolicyBase):
-    """dcp save/load, subgroups, stores and DTensor were identities."""
+    """Subgroups, stores and DTensor were identities; dcp save/load were too."""
 
     def _dist(self):
         import sys
         return sys.modules["torch.distributed"]
 
-    def test_dcp_save_is_refused(self):
+    def test_dcp_save_writes_a_real_checkpoint(self):
         import sys
+        import tempfile
         dcp = sys.modules["torch.distributed.checkpoint"]
-        self.assertRefuses(lambda: dcp.save({"w": jt.ones(2)}),
-                           "checkpoint.save", "discarding the checkpoint")
+        with tempfile.TemporaryDirectory() as directory:
+            dcp.save({"w": jt.ones(2)}, checkpoint_id=directory)
+            self.assertTrue(os.path.isfile(os.path.join(directory, ".metadata")))
+            target = {"w": jt.zeros(2)}
+            dcp.load(target, checkpoint_id=directory)
+            np.testing.assert_allclose(target["w"].numpy(), np.ones(2))
 
-    def test_dcp_load_is_refused(self):
+    def test_dcp_save_refuses_unimplemented_options(self):
         import sys
+        import tempfile
         dcp = sys.modules["torch.distributed.checkpoint"]
-        self.assertRefuses(lambda: dcp.load({"w": jt.ones(2)}),
-                           "checkpoint.load")
-
-    def test_dcp_save_stub_fallback(self):
-        import sys
-        dcp = sys.modules["torch.distributed.checkpoint"]
-        self.assertStubFallback(lambda: dcp.save({"w": jt.ones(2)}))
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(NotImplementedError, "planner"):
+                dcp.save({"w": jt.ones(2)}, checkpoint_id=directory,
+                         planner=object())
 
     def test_single_rank_store_still_works(self):
         # One rank has nobody to meet, so a per-process dict IS a correct store.

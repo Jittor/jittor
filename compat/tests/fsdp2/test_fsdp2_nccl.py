@@ -162,7 +162,7 @@ class TestFSDP2Nccl(unittest.TestCase):
             {"rank": int(jt.rank)}, gathered_objects, dst=0)
         if int(jt.rank) == 0:
             self.assertEqual(
-                gathered_objects, expected_objects)
+                gathered_objects, [{"rank": rank} for rank in range(world_size)])
         dist.barrier()
 
     @jt.flag_scope(use_cuda=1, use_parallel_op_compiler=0)
@@ -226,7 +226,7 @@ class TestFSDP2Nccl(unittest.TestCase):
 
         world = int(jt.world_size)
         if world < 4 or world % 2:
-            self.skipTest("requires an even world of at least four ranks")
+            self.skipTest("requires multiple devices: an even world of at least four ranks")
         mesh = init_device_mesh("cuda", (world // 2, 2), mesh_dim_names=("replicate", "shard"))
         jt.seed(932)
         model = nn.Linear(4, 3)

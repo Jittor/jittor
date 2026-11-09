@@ -223,6 +223,32 @@ class Work:
         return True
 
 
+class P2PWork(Work):
+    """Completion handle for ``isend``/``irecv``.
+
+    Unlike a collective's ``Work``, the point-to-point operator is flushed when
+    the call returns (that is what makes the NCCL call pair with the peer);
+    what is left for ``wait`` is the device wait, and for a receive the copy
+    into the caller's tensor. ``is_completed`` reports whether this handle has
+    been waited on -- Jittor has no non-blocking device query for a single
+    operation, so "not yet waited" is the honest answer.
+    """
+
+    def __init__(self, finish=None):
+        super().__init__(None)
+        self._finish = finish
+        self._completed = finish is None
+
+    def wait(self, *args, **kwargs):
+        if not self._completed:
+            self._finish()
+            self._completed = True
+        return self._value
+
+    def is_completed(self):
+        return self._completed
+
+
 class ProcessGroup:
     """A WORLD or subgroup view over Jittor's collective communicator."""
 
@@ -452,6 +478,190 @@ class ProcessGroup:
         raise NotImplementedError(
             "{} process-group reduce_scatter is unavailable".format(
                 backend or "active backend"))
+
+    def _p2p_module(self):
+        """The NCCL ops and wrapper module, or a refusal naming the backend.
+
+        Point-to-point is NCCL-only here: the MPI/HCCL backends expose no send
+        or receive operators, and silently emulating a send with a broadcast
+        would change its semantics (a broadcast is collective; a send is not).
+        """
+        if not is_initialized():
+            raise _jittor_error()(
+                "distributed process group is not initialized")
+        backend = self._collective_backend()
+        if backend != "nccl":
+            raise NotImplementedError(
+                "Jittor point-to-point communication requires the NCCL backend; "
+                "the active backend is {}".format(backend or "undefined"))
+        ops = getattr(jt.compile_extern, "nccl_ops", None)
+        module = getattr(jt.compile_extern, "nccl", None)
+        if ops is None or module is None:
+            raise _jittor_error()("NCCL process-group backend is unavailable")
+        return ops, module
+
+    def _p2p_handle(self):
+        return self._collective_handle() or 0
+
+    def _p2p_peer(self, peer):
+        """Translate a WORLD rank into this group's local rank."""
+        if self.rank() < 0:
+            raise _jittor_error()(
+                "calling rank is not a member of this process group")
+        peer = int(peer)
+        ranks = (tuple(range(get_world_size())) if self.ranks is None
+                 else self.ranks)
+        if peer not in ranks:
+            raise ValueError(
+                "point-to-point peer rank {} is outside the process group"
+                .format(peer))
+        local = ranks.index(peer)
+        if local == self.rank():
+            raise ValueError(
+                "point-to-point peer cannot be the calling rank {}".format(peer))
+        return local
+
+    @staticmethod
+    def _require_p2p_tensor(tensor):
+        """Reject tensors NCCL point-to-point cannot transfer.
+
+        NCCL reads and writes raw device pointers, so the buffer has to be
+        allocated on CUDA and dense. A host-resident tensor under a CUDA build
+        is the easy mistake (`torch.zeros(...)` without `.to(device)`), and
+        NCCL would dereference a host pointer if we let it through.
+        """
+        if not hasattr(tensor, "sync") or not hasattr(tensor, "dtype"):
+            raise TypeError(
+                "point-to-point communication requires a Jittor tensor")
+        is_cuda = getattr(tensor, "is_cuda", None)
+        if is_cuda is None:
+            # Native Var: flush the producer graph so location() reports the
+            # device the tensor actually runs on rather than "none".
+            tensor.sync()
+            is_cuda = tensor.location() == "device"
+        if not bool(is_cuda):
+            raise ValueError(
+                "NCCL point-to-point communication requires CUDA tensors")
+        if not tensor._storage_is_contiguous():
+            raise ValueError(
+                "NCCL point-to-point communication requires contiguous tensors")
+        return tensor
+
+    def _p2p_send_var(self, tensor, peer, tag):
+        ops, _ = self._p2p_module()
+        return ops.nccl_send(tensor, peer, int(tag), self._p2p_handle())
+
+    def _p2p_recv_var(self, tensor, peer, tag):
+        ops, _ = self._p2p_module()
+        return ops.nccl_recv(
+            tuple(int(dim) for dim in tensor.shape), tensor.dtype,
+            peer, int(tag), self._p2p_handle())
+
+    @staticmethod
+    def _p2p_copy_into(destination, received):
+        # Same contract as the collective shim's copy: mutate the destination's
+        # storage rather than rebinding it, so parameters and detached aliases
+        # keep sharing their allocation. A receive writes bytes, it is not a
+        # differentiable operation, hence no_grad.
+        with jt.no_grad():
+            jt.sync_all()
+            destination._copy_into(received)
+
+    def send(self, tensor, dst=0, tag=0):
+        """Blocking send of ``tensor`` to WORLD rank ``dst``.
+
+        NCCL has no message tags: as in torch's NCCL backend, matching is by
+        peer and per-direction issue order, and ``tag`` is accepted but not
+        transmitted. The call returns once the transfer has completed.
+        """
+        _, module = self._p2p_module()
+        self._require_p2p_tensor(tensor)
+        peer = self._p2p_peer(dst)
+        marker = self._p2p_send_var(tensor, peer, tag)
+        marker.sync()
+        module.nccl_p2p_sync()
+        return None
+
+    def recv(self, tensor, src=0, tag=0):
+        """Blocking receive from WORLD rank ``src`` into ``tensor``.
+
+        Torch's contract is that ``recv`` fills the tensor it is given, so the
+        transfer lands in a fresh buffer first and is copied into ``tensor``
+        once it has completed.
+        """
+        _, module = self._p2p_module()
+        self._require_p2p_tensor(tensor)
+        peer = self._p2p_peer(src)
+        received = self._p2p_recv_var(tensor, peer, tag)
+        received.sync()
+        module.nccl_p2p_sync()
+        self._p2p_copy_into(tensor, received)
+        return None
+
+    def isend(self, tensor, dst=0, tag=0):
+        """Flush a send and return a ``P2PWork``; ``wait`` waits for it."""
+        _, module = self._p2p_module()
+        self._require_p2p_tensor(tensor)
+        peer = self._p2p_peer(dst)
+        marker = self._p2p_send_var(tensor, peer, tag)
+        marker.sync()
+        return P2PWork(lambda: module.nccl_p2p_sync())
+
+    def irecv(self, tensor, src=0, tag=0):
+        """Flush a receive; ``wait`` waits and fills ``tensor``."""
+        _, module = self._p2p_module()
+        self._require_p2p_tensor(tensor)
+        peer = self._p2p_peer(src)
+        received = self._p2p_recv_var(tensor, peer, tag)
+        received.sync()
+
+        def finish():
+            module.nccl_p2p_sync()
+            self._p2p_copy_into(tensor, received)
+
+        return P2PWork(finish)
+
+    def batch_isend_irecv(self, ops):
+        """Issue ``(is_send, tensor, WORLD peer, tag)`` tuples as one group.
+
+        NCCL requires point-to-point operations that have to progress
+        concurrently to sit inside one ``ncclGroupStart``/``ncclGroupEnd``.
+        Issuing a bidirectional exchange as separate ``isend``/``irecv`` calls
+        does not: each rank's communication stream stalls on its own send, and
+        the receive queued behind it on that stream can never start. The bucket
+        scope is the existing owner of that grouping, so a batch is submitted
+        the same way a bucket of collectives is.
+        """
+        ops = list(ops)
+        if not ops:
+            return []
+        _, module = self._p2p_module()
+        # Validate and flush the operands before the group opens: a producer
+        # executed inside the scope would be submitted as part of the NCCL
+        # group, and the bucket contract is that the scope contains only the
+        # point-to-point operators and their sync.
+        entries = []
+        for is_send, tensor, peer, tag in ops:
+            self._require_p2p_tensor(tensor)
+            entries.append((is_send, tensor, self._p2p_peer(peer), tag))
+        from .bucket import bucket_scope
+        received = []
+        flushed = []
+        with bucket_scope(defer_join=False):
+            for is_send, tensor, local, tag in entries:
+                if is_send:
+                    flushed.append(self._p2p_send_var(tensor, local, tag))
+                else:
+                    var = self._p2p_recv_var(tensor, local, tag)
+                    flushed.append(var)
+                    received.append((tensor, var))
+            # Only the point-to-point operators are launched here; their
+            # outputs must not be consumed until the group is submitted.
+            jt.sync(flushed)
+        module.nccl_p2p_sync()
+        for destination, var in received:
+            self._p2p_copy_into(destination, var)
+        return [P2PWork() for _ in ops]
 
     def barrier(self):
         if self.rank() < 0 or self.size() <= 1:
@@ -701,6 +911,31 @@ def reduce_scatter(tensor, group=None, async_op=False):
     group = get_default_group() if group is None else group
     value = group.reduce_scatter(tensor)
     return Work(value) if async_op else value
+
+
+def send(tensor, dst=0, group=None, tag=0):
+    group = get_default_group() if group is None else group
+    return group.send(tensor, dst, tag)
+
+
+def recv(tensor, src=0, group=None, tag=0):
+    group = get_default_group() if group is None else group
+    return group.recv(tensor, src, tag)
+
+
+def isend(tensor, dst=0, group=None, tag=0):
+    group = get_default_group() if group is None else group
+    return group.isend(tensor, dst, tag)
+
+
+def irecv(tensor, src=0, group=None, tag=0):
+    group = get_default_group() if group is None else group
+    return group.irecv(tensor, src, tag)
+
+
+def batch_isend_irecv(ops, group=None):
+    group = get_default_group() if group is None else group
+    return group.batch_isend_irecv(ops)
 
 
 def barrier(group=None, async_op=False):

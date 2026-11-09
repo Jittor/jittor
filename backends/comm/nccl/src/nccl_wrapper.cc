@@ -126,11 +126,16 @@ void nccl_stream_end(Var* x, Var* y) {
     // first version of this did: the profiler showed compute overlapping the
     // collective even with defer_join=False, which should be impossible.
     //
-    // Grouping also means both buffers have to stay reserved until
+    // Grouping also means the buffers have to stay reserved until
     // ncclGroupEnd(), whatever the join policy: NCCL captured the pointers,
     // and the default stream is free to run ahead and have the allocator hand
-    // those blocks to something else in the meantime.
-    if (nccl_hold(device, x) && nccl_hold(device, y))
+    // those blocks to something else in the meantime. A point-to-point
+    // operator may have only one of the two (a send has no output buffer, a
+    // recv has no input), which is why either argument may be null.
+    bool held = true;
+    if (x) held = held && nccl_hold(device, x);
+    if (y) held = held && nccl_hold(device, y);
+    if (held)
         return;
     // An allocator that cannot hand one block to two owners leaves no way to
     // keep the default stream off it. Submit what the group has so far and
@@ -193,6 +198,18 @@ void nccl_bucket_end() {
 
 bool nccl_comm_wait() {
     return cuda_side_stream_resolve_join(CUDA_COMMUNICATION_STREAM) > 0;
+}
+
+void nccl_p2p_sync() {
+    // Same-fate as the collectives' join: the side stream is process-global
+    // per device but the default stream is `cudaStreamPerThread`, so the wait
+    // has to be recorded on the calling thread's stream, and the caller has
+    // to sync that same stream. Point-to-point callers run on the Python
+    // thread -- `Var::sync` never hands a batch to the async worker -- so the
+    // two are the same thread here.
+    int device = current_device();
+    cuda_default_stream_wait_side(CUDA_COMMUNICATION_STREAM, device, device);
+    checkCudaErrors(cudaStreamSynchronize(cudaStreamPerThread));
 }
 #ifdef JT_NCCL_NO_MPI
 // Normally defined by mpi_wrapper.cc; provide them for the MPI-free build (the
