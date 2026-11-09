@@ -55,3 +55,36 @@ def test_ordinary_torch_module_still_replays_after_foreign_pointer_export():
             np.testing.assert_array_equal(run(value).numpy(), [start * 3.0 + 2.0])
         assert run.refused is None
         assert run.stats["replayed"] >= 2
+
+
+@pytest.mark.parametrize("mode", ["automatic", "explicit"])
+def test_parameter_data_rebind_runs_once_per_call_without_replay(mode):
+    import os
+    import jittor as jt
+    import torch
+
+    device = "cuda" if os.environ.get("JITTOR_TEST_DEVICES") == "cuda" else "cpu"
+
+    class RebindState(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.state = torch.nn.Parameter(torch.zeros(1, device=device), requires_grad=False)
+
+        def forward(self, value):
+            self.state.data = self.state.data + value
+            return self.state * 2
+
+    with jt.flag_scope(use_cuda=int(device == "cuda"), auto_graph_replay=1):
+        module = RebindState().eval()
+        run = jt.graph_replay(module) if mode == "explicit" else module
+        with torch.no_grad():
+            for step in range(1, 5):
+                value = torch.ones(1, device=device)
+                np.testing.assert_array_equal(run(value).numpy(), [2.0 * step])
+                np.testing.assert_array_equal(module.state.data.numpy(), [float(step)])
+        if mode == "explicit":
+            assert "Tensor.data replaces storage" in run.refused
+            assert run.stats["captured"] == 0
+        else:
+            state = module.__dict__["_auto_graph_replay"]
+            assert state.replay is None or state.replay.refused is not None

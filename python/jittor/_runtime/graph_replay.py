@@ -948,9 +948,13 @@ class GraphReplay:
             # nothing pending underneath it.
             argument_state = (_signature(args, kwargs), _host_state((args, kwargs)))
             working = _WorkingSet()
-            with _no_auto(), jt.no_grad():
+            with _capture_barriers() as barriers, _no_auto(), jt.no_grad():
                 result = self._module(*args, **kwargs)
                 _sync_result(result)
+            if barriers:
+                self._refused = "the warm-up contains an opaque operation: " + barriers[0]
+                self.stats["rebuilt"] += 1
+                return result
             if argument_state != (_signature(args, kwargs), _host_state((args, kwargs))):
                 # Plain list/dict inputs may be mutable caches or cursors.
                 # Running Python again would apply their side effects twice,
