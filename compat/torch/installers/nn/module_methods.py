@@ -740,7 +740,7 @@ def _set_is_train(self, mode):
         mods = [self]
     for m in mods:
         try:
-            m.is_train = mode
+            m._set_training_mode(mode)
         except (AttributeError, TypeError) as exc:
             swallowed("torch/installers/nn.py _set_is_train: m.is_train = mode", exc)
 
@@ -755,7 +755,7 @@ def _train(self, mode=True):
     # behaviourally identical to the old flat sweep.
     mode = bool(mode)
     try:
-        self.is_train = mode
+        self._set_training_mode(mode)
     except (AttributeError, TypeError) as exc:
         swallowed("torch/installers/nn.py _train: self.is_train = mode", exc)
     kids = None

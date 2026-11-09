@@ -59,6 +59,30 @@ class TestAdamwFusedByDefault(unittest.TestCase):
         for want, got in zip(reference, fused):
             np.testing.assert_allclose(got, want, rtol=1e-5, atol=1e-7)
 
+    def test_fused_write_keeps_aliases_versions_and_pending_snapshots(self):
+        p = torch.nn.Parameter(torch.tensor([1., 2.], device='cuda'))
+        alias = p.detach()
+        optimizer = torch.optim.AdamW([p], lr=.1)
+        state_alias = None
+        for _ in range(3):
+            before = p.detach().cpu().numpy().copy()
+            snapshot = p.detach().clone()
+            version = p._autograd_version()
+            pointer = p.data_ptr()
+            p.grad = torch.ones_like(p)
+            optimizer.step()
+            assert p.data_ptr() == pointer == alias.data_ptr()
+            assert p._autograd_version() > version
+            assert alias._autograd_version() == p._autograd_version()
+            assert p.is_leaf and p.requires_grad
+            np.testing.assert_array_equal(snapshot.cpu().numpy(), before)
+            np.testing.assert_array_equal(alias.cpu().numpy(), p.detach().cpu().numpy())
+            moment = optimizer.state[p]['exp_avg']
+            if state_alias is None:
+                state_alias = moment.detach()
+            assert state_alias.data_ptr() == moment.data_ptr()
+            np.testing.assert_array_equal(state_alias.cpu().numpy(), moment.cpu().numpy())
+
 
 if __name__ == "__main__":
     unittest.main()

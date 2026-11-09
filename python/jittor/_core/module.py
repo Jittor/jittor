@@ -1174,9 +1174,16 @@ Returns a handle that removes both halves.
         """
         def callback(parents, k, v, n):
             if isinstance(v, Module):
-                v.is_train = is_train
+                v._set_training_mode(is_train)
         self.dfs([], None, callback, None)
         return self
+
+    def _set_training_mode(self, mode):
+        if (self.__dict__.get("is_train", True) != mode
+                and "_auto_graph_replay" in self.__dict__):
+            from jittor._runtime.graph_replay import reset_auto_replay
+            reset_auto_replay(self)
+        self.is_train = mode
 
     def eval(self):
         ''' Sets the module in evaluation mode.
@@ -1209,7 +1216,7 @@ Returns a handle that removes both halves.
 
     @training.setter
     def training(self, value):
-        self.is_train = value
+        self._set_training_mode(value)
 
     def mpi_param_broadcast(self, root=0):
         # Read through to the owner, never a module-level snapshot. 6.B15.

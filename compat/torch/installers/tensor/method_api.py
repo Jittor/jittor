@@ -387,6 +387,19 @@ def _optimizer_update(self, value):
     # Optimizers write values without building an autograd edge. Reuse the
     # same storage, pending-reader and version rules as public in-place ops.
     with _owner.jt.no_grad():
+        if (_OPTIMIZER_WRITES[0] and isinstance(value, _NativeVar)
+                and self._mem_ptr_now and self._mem_ptr_now == value._mem_ptr_now
+                and self.shape == value.shape and self.dtype == value.dtype
+                and self._storage_is_contiguous() and value._storage_is_contiguous()):
+            from jittor._runtime import step_capture
+            if not step_capture.active():
+                # Fused optimizers have already written into these buffers.
+                # The group scope resolved their readers and all RHS outputs;
+                # do not materialize each output again through the generic
+                # view-write path. The native store still validates aliases
+                # and advances their shared mutation/version bookkeeping.
+                self._copy_into(value, False)
+                return self
         return _ip(self, value, preserve_storage=True)
 
 
