@@ -900,6 +900,14 @@ def _data_set(self, value):
 
 
 def _to(self, *args, **kwargs):
+    # A dtype-only no-op is common between model layers. Explicit placement
+    # already names this tensor's device, so there is no target to resolve.
+    # A device tensor parked on the host must still take the migration path.
+    if (len(args) == 1 and not kwargs and isinstance(args[0], _owner.dtype)
+            and _jittor_dtype_name(self.dtype) == args[0].name):
+        placement = self.placement_backend
+        if placement == 0 or (placement > 0 and self.location() != "cpu"):
+            return self
     ds = None
     dev = None
     copy = bool(kwargs.get("copy", False))
