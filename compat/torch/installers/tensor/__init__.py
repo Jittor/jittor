@@ -533,6 +533,20 @@ def tensor(data, dtype=None, device=None, requires_grad=False, **kw):
     g = compatibility_owner(jt)
     Var = g.Var
     with tensor_frontend(Var, device=device, like=data):
+        if type(data) in (list, tuple) and not data and not kw:
+            # There are no host bytes to convert or migrate. Construct fresh
+            # storage metadata directly in the requested frontend/device scope.
+            # A fresh input-free native allocation is already a leaf; it has
+            # no view or autograd history to detach.
+            ds = _dtype_to_str(dtype if dtype is not None else g.get_default_dtype())
+            if requires_grad and ds not in (
+                    "float16", "bfloat16", "float32", "float64", "complex64", "complex128"):
+                raise RuntimeError("Only Tensors of floating point and complex dtype can require gradients")
+            v = jt.ops.empty((0,), ds)
+            v.requires_grad_(bool(requires_grad))
+            if requires_grad:
+                _torch_register_leaf(v)
+            return v
         import numpy as _np
         ds = _dtype_to_str(dtype)
         numpy_dtypes = {"bool", "uint8", "int8", "int16", "int32", "int64",
