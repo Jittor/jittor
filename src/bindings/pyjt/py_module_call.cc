@@ -217,6 +217,24 @@ bool shortcut(PyObject* module, const TypeInfo& info) {
 
 PyObject* call_with(PyObject* fn, PyObject* module, PyObject* args, PyObject* kwargs) {
     Py_ssize_t n = PyTuple_GET_SIZE(args);
+#if PY_VERSION_HEX >= 0x03090000
+    // The caller owns module and args throughout this call. Borrow their
+    // references instead of allocating a tuple and refcounting every argument
+    // again at each nested module boundary. VectorcallDict also supports
+    // arbitrary callables through CPython's ordinary call fallback.
+    PyObject* local[8];
+    vector<PyObject*> large;
+    PyObject** values = local;
+    if (n + 1 > 8) {
+        large.resize(n + 1);
+        values = large.data();
+    }
+    values[0] = module;
+    for (Py_ssize_t i = 0; i < n; ++i)
+        values[i + 1] = PyTuple_GET_ITEM(args, i);
+    GraphLockSuspend python_call;
+    return PyObject_VectorcallDict(fn, values, size_t(n + 1), kwargs);
+#else
     PyObjHolder full(PyTuple_New(n + 1));
     Py_INCREF(module);
     PyTuple_SET_ITEM(full.obj, 0, module);
@@ -229,6 +247,7 @@ PyObject* call_with(PyObject* fn, PyObject* module, PyObject* args, PyObject* kw
     // the worker thread, if any, may take the graph lock meanwhile.
     GraphLockSuspend python_call;
     return PyObject_Call(fn, full.obj, kwargs);
+#endif
 }
 
 bool is_var(PyObject* value) {

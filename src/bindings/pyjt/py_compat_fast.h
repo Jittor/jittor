@@ -73,6 +73,12 @@ PyObject* fast_gelu(PyObject* x);
 // @pyjt(_fast_view)
 PyObject* fast_view(PyObject* self, PyObject* shape);
 
+// Torch's two-axis transpose as a physical storage view, retaining the
+// immediate input's autograd history. Exact integer axes only; other spellings
+// and invalid axes return None for the Python API's validation.
+// @pyjt(_fast_storage_transpose)
+PyObject* fast_storage_transpose(PyObject* self, PyObject* dims);
+
 // `tensor.unsqueeze(dim)` of a dense tensor, as the reshape above.
 // @pyjt(_fast_unsqueeze)
 PyObject* fast_unsqueeze(PyObject* self, int64 dim);

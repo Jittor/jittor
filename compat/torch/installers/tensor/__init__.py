@@ -1146,6 +1146,7 @@ def install_methods(ctx):
     from jittor._core import var as _native_var
     _shape_api._FAST_VIEW = (getattr(jt.core, "_fast_view", None)
                              if _orig_reshape is _native_var.reshape else None)
+    _shape_api._FAST_STORAGE_TRANSPOSE = getattr(jt.core, "_fast_storage_transpose", None)
     if _orig_reshape is _native_var.reshape:
         # Torch first tries a genuine strided view; the wrapper below copies
         # only when the native view explicitly rejects this target shape.

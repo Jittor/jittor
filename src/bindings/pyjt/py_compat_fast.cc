@@ -1082,6 +1082,30 @@ PyObject* fast_unsqueeze(PyObject* self, int64 dim) {
     return storage_view(self, target);
 }
 
+PyObject* fast_storage_transpose(PyObject* self, PyObject* dims) {
+    if (!is_var(self) || !PyTuple_Check(dims) || PyTuple_GET_SIZE(dims) != 2)
+        return none();
+    int64 first, second;
+    if (!exact_int(PyTuple_GET_ITEM(dims, 0), first)
+            || !exact_int(PyTuple_GET_ITEM(dims, 1), second)) {
+        PyErr_Clear();
+        return none();
+    }
+    auto* holder = GET_RAW_PTR(VarHolder, self);
+    int ndim = holder->var->shape.size();
+    if (!ndim || first < -ndim || first >= ndim || second < -ndim || second >= ndim)
+        return none();
+    if (first < 0) first += ndim;
+    if (second < 0) second += ndim;
+    NanoVector axes;
+    for (int i = 0; i < ndim; ++i)
+        axes.push_back(i == first ? second : i == second ? first : i);
+    PyTensorFrontendScope scope(self, nullptr, 0, false);
+    unique_ptr<VarHolder> out(holder->storage_permute(axes));
+    out->set_transpose_view_of(holder, axes);
+    return to_py_object<VarHolder*>(out.release());
+}
+
 namespace {
 // `jittor.transpose(self, axes)` for a valid permutation.
 PyObject* transpose_by(PyObject* self, VarHolder* holder, NanoVector axes) {
