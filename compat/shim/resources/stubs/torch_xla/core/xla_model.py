@@ -10,8 +10,8 @@ APPROXIMATE and are stated per function:
   with ``torch.save``), which is correct but slow and single-host;
 * there is no cross-replica gradient synchronization beyond what
   ``all_reduce``/``reduce_gradients`` implement through those exchanges;
-* ``get_rng_state``/``set_rng_state`` expose the Jittor host seed as an
-  integer, not an XLA device stream position.
+* ``get_rng_state``/``set_rng_state`` encode the Jittor host RNG snapshot as
+  an integer, not an XLA device stream position; small integers still seed it.
 """
 
 from __future__ import absolute_import
@@ -141,16 +141,26 @@ def wait_device_ops(devices=[]):
     return None
 
 
+_RNG_SNAPSHOT_PREFIX = b"JITTOR_XLA_HOST_RNG_V1:"
+
+
 def get_rng_state(device=None):
-    """Current Jittor host seed as an integer (approximate XLA RNG state)."""
+    """Encode the host stream position without consuming or reseeding it."""
     del device
-    return int(torch.initial_seed())
+    state = torch.get_rng_state().cpu().numpy().tobytes()
+    return int.from_bytes(_RNG_SNAPSHOT_PREFIX + state, "big")
 
 
 def set_rng_state(seed, device=None):
-    """Reseed the Jittor host generator from an integer (approximate)."""
+    """Restore a host snapshot, or seed the host generator with an integer."""
     del device
-    torch.manual_seed(int(seed))
+    seed = int(seed)
+    data = seed.to_bytes(max(1, (seed.bit_length() + 7) // 8), "big") if seed >= 0 else b""
+    if data.startswith(_RNG_SNAPSHOT_PREFIX):
+        state = torch.tensor(list(data[len(_RNG_SNAPSHOT_PREFIX):]), dtype=torch.uint8, device="cpu")
+        torch.set_rng_state(state)
+    else:
+        torch.manual_seed(seed)
 
 
 def save(data, file_or_path, master_only=True, global_master=False):
