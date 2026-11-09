@@ -4,6 +4,8 @@ from .safetensors import _install_safetensors_shim as _install_safetensors_shim
 from ..fidelity import Fidelity, register_api_bindings
 from .security import add_safe_globals, get_safe_globals, clear_safe_globals, safe_globals
 
+DEFAULT_PROTOCOL = 2
+
 
 def install(ctx):
     g = ctx.target_namespace
@@ -16,6 +18,7 @@ def install(ctx):
     module.get_safe_globals = get_safe_globals
     module.clear_safe_globals = clear_safe_globals
     module.safe_globals = safe_globals
+    module.DEFAULT_PROTOCOL = DEFAULT_PROTOCOL
     module.load = load
     module.save = save
     register_api_bindings(module, "torch.serialization",
@@ -26,4 +29,4 @@ def install(ctx):
         "unpickling is the default, native-only formats require explicit unsafe opt-in")
 
 
-__all__ = ["load", "save", "install"]
+__all__ = ["load", "save", "install", "DEFAULT_PROTOCOL"]
