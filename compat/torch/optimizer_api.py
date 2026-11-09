@@ -124,6 +124,26 @@ def _sync_adam_group_params(pg, *, replacements=()):
         return
     current = tuple(pg.get("params", ()))
     if len(current) == len(previous) and all(a is b for a, b in zip(current, previous)):
+        # AutoTP can shard a Parameter through param.data = shard after the
+        # client constructed AdamW. Identity stays the same, but eager zero
+        # moments still have the original shape.
+        moments, variances = pg.get("m", ()), pg.get("values", ())
+        resized = [
+            index for index, param in enumerate(current)
+            if index < len(moments) and index < len(variances)
+            and (tuple(moments[index].shape) != tuple(param.shape)
+                 or tuple(variances[index].shape) != tuple(param.shape))
+        ]
+        if resized:
+            steps = pg.get("_torch_steps", ())
+            if any(index < len(steps) and int(steps[index]) != 0 for index in resized):
+                raise RuntimeError(
+                    "Adam parameter shape changed after optimizer state was populated; "
+                    "rebuild the optimizer or restore state for the new parameter layout")
+            from jittor.optim.algorithms.adam import _state_buffer
+            for index in resized:
+                moments[index] = _state_buffer(current[index])
+                variances[index] = _state_buffer(current[index])
         return
     from jittor.optim.algorithms.adam import _state_buffer
     rebound = {id(old): (old, new) for old, new in replacements}

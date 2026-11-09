@@ -391,6 +391,10 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
     if "fill_value" in kwargs:
         args = tuple(args) + (kwargs.pop("fill_value"),)
     _cast_to = None  # cast after construction when needed for torch dtype semantics
+    # PyTorch's integer sampler defaults to long, while jt.randint defaults
+    # to int32. Distributed peers may allocate torch.long receive buffers.
+    if name == "randint" and kwargs.get("dtype") is None:
+        kwargs["dtype"] = "int64"
     if "dtype" not in kwargs and name in _DEFAULT_FLOAT_FACTORIES:
         default_dtype = _dtype_to_str(g.get_default_dtype())
         if _jittor_dtype_name(default_dtype) != "float32":
@@ -497,11 +501,8 @@ def _linspace_adapter(original, *args, dtype=None, **kwargs):
     return original(*args, **kwargs)
 
 
-#: What a seeded draw of an integer factory must come back as. torch's own
-#: default is int64, but these have to match what the *same call without a
-#: generator* returns -- jittor's randint is int32 -- because a generator picks
-#: the stream a draw comes from and nothing else.
-_INTEGER_DRAWS = {"randperm": "int64", "randint": "int32"}
+#: A generator changes the random stream, not the public default dtype.
+_INTEGER_DRAWS = {"randperm": "int64", "randint": "int64"}
 
 #: Native complex dtypes and the real dtype each part is drawn from.
 _COMPLEX_COMPONENTS = {"complex64": "float32", "complex128": "float64"}
