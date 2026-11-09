@@ -56,7 +56,8 @@ class TestNcclLibraryOverride(unittest.TestCase):
         (root / "lib/libnccl.so").write_bytes(b"fixture, never loaded")
         return root
 
-    def _run(self, explicit=None, wheel=True, load_error=None, extra_environment=None):
+    def _run(self, explicit=None, wheel=True, load_error=None, extra_environment=None,
+             has_mpi=False, mpi_flags=""):
         def cdll(path, flags):
             self.calls.append(("cdll", path))
             if load_error:
@@ -68,7 +69,7 @@ class TestNcclLibraryOverride(unittest.TestCase):
         def reject_fallback(*args, **kwargs):
             raise AssertionError("Explicit NCCL selection unexpectedly fell back")
         namespace = {
-            "os": os, "has_cuda": True, "is_cuda": True, "has_mpi": False,
+            "os": os, "has_cuda": True, "is_cuda": True, "has_mpi": has_mpi,
             "build_flag": self.env_config.build_flag,
             "build_env": self.env_config.build_env,
             "cuda_wheel_stack": self.stack if wheel else None,
@@ -79,7 +80,7 @@ class TestNcclLibraryOverride(unittest.TestCase):
             "LOG": types.SimpleNamespace(v=lambda *args: None, vv=lambda *args: None),
             "jittor_path": str(ROOT / "python/jittor"),
             "backend_root": lambda path, backend: str(ROOT / "backends" / backend),
-            "cuda_sdk_flags": "", "cuda_link_flags": "", "mpi_compile_flags": "",
+            "cuda_sdk_flags": "", "cuda_link_flags": "", "mpi_compile_flags": mpi_flags,
             "compile_custom_ops": compile_ops,
             "lock": types.SimpleNamespace(unlock_scope=nullcontext),
             "_init_nccl_from_store": lambda nccl, store: self.calls.append(("init", store)),
@@ -88,6 +89,11 @@ class TestNcclLibraryOverride(unittest.TestCase):
         }
         namespace["cuda_library_link_flags"] = _function(
             COMPILER, "cuda_library_link_flags", {"os": os})
+        if mpi_flags is None:
+            namespace.pop("mpi_compile_flags")
+        launcher = {"os": os, "_MPI_LAUNCHER_VARS": (),
+                    "_MPI_LAUNCHER_SIZE_VARS": ("SLURM_NTASKS", "SLURM_NPROCS")}
+        namespace["inside_mpi"] = _function(EXTERN, "inside_mpi", launcher)
         setup = _function(EXTERN, "setup_nccl", namespace)
         environment = {"JT_NCCL_WORLD_SIZE": "2", "JT_BUILD_USE_NCCL": "1"}
         if explicit is not None:
@@ -143,3 +149,19 @@ class TestNcclLibraryOverride(unittest.TestCase):
         with self.assertRaisesRegex(OSError, "selected NCCL failed"):
             self._run(explicit=self.override_root, load_error=OSError("selected NCCL failed"))
         self.assertEqual(self.calls, [("cdll", str(self.override_root / "lib/libnccl.so"))])
+
+    def test_slurm_without_mpi_uses_mpi_free_nccl_build(self):
+        self._run(has_mpi=False, mpi_flags=None,
+                  extra_environment={"SLURM_NTASKS": "2", "JT_BUILD_USE_MPI": "0"})
+        flags = next(value for kind, value in self.calls if kind == "compile")
+        self.assertIn("-DJT_NCCL_NO_MPI", flags)
+        self.assertIn("nompi_inc", flags)
+        self._assert_linked(self.wheel_root)
+
+    def test_slurm_with_mpi_preserves_mpi_compile_flags(self):
+        self._run(has_mpi=True, mpi_flags=" -DMPI_ENABLED ",
+                  extra_environment={"SLURM_NTASKS": "2"})
+        flags = next(value for kind, value in self.calls if kind == "compile")
+        self.assertIn("-DMPI_ENABLED", flags)
+        self.assertNotIn("-DJT_NCCL_NO_MPI", flags)
+        self._assert_linked(self.wheel_root)
