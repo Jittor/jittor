@@ -115,6 +115,7 @@ def test_explicit_copy_roundtrip_and_gradient_keep_source_placement():
             np.testing.assert_array_equal(copied_grad.numpy(), [4., 6.])
 
 
+@pytest.mark.cuda
 def test_a_device_var_parked_on_the_host_is_moved_back_by_to_device():
     """Asking for the device must not accept host storage for a device Var.
 
