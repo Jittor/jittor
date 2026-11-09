@@ -1,7 +1,8 @@
 """Stable Torch shape and reduction adapters using native Tensor operations."""
 from ...context import get_install_context
 from . import jt, np, dtype, _jittor_dtype_name, _dtype_to_str, _diff, _trapz, nn
-from .method_api import _ip
+from .method_api import _ip, _tensor_pow
+from ...amp import _autocast_fp32_call
 
 
 def _torch_view_base(self):
@@ -220,6 +221,8 @@ def _torch_var_sum(self, *a, **k):
     if dt is None and len(a) >= 1 and _looks_like_dtype(a[0]):
         dt = a[0]
         a = a[1:]
+    # Match Torch's accumulation dtype, including values large enough to
+    # overflow int32; native Jittor reductions keep their own policy.
     if out is not None:
         if dt is not None and _dtype_to_str(dt) != _jittor_dtype_name(out.dtype):
             raise RuntimeError("sum(): dtype must match the dtype of out")
@@ -230,8 +233,6 @@ def _torch_var_sum(self, *a, **k):
         dt = "int64"
     if dt is not None:
         self = self.cast(_dtype_to_str(dt))
-    elif _jittor_dtype_name(self.dtype) in ("uint8", "int8", "uint16"):
-        self = self.int32()
     if self.ndim == 0 and ("dim" in k or "dims" in k):
         # Torch accepts dim 0/-1 on a scalar (it is the only axis); jittor's
         # reduce rejects every dim on a 0-D Var. torchmetrics reduces 0-D
@@ -248,7 +249,7 @@ def _torch_var_sum(self, *a, **k):
         raise IndexError(
             "Dimension out of range (expected to be in range of [-1, 0], "
             "but got %d)" % int(dims[0]))
-    result = _orig_var_sum(self, *a, **k)
+    result = _autocast_fp32_call(_orig_var_sum, self, *a, eligible=dt is None and out is None, **k)
     if dt is not None and _jittor_dtype_name(result.dtype) != _dtype_to_str(dt):
         result = result.cast(_dtype_to_str(dt))
     if out is not None:
@@ -465,7 +466,7 @@ def _shape_log1p(self):
 
 
 def _shape_square(self):
-    return self * self
+    return _tensor_pow(self, 2)
 
 
 def _shape_square_(self):

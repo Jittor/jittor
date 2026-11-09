@@ -36,14 +36,17 @@ def conv_transpose(input, weight, bias=None, stride=1, padding=0, output_padding
         if kernel is not None:
             return kernel(x, weight, bias, stride, padding, output_padding, dilation, 1)
         shape = (N, i, o, H, W, h, w)
-        xx = x.broadcast(shape, (2, 5, 6)) # i,h,w
-        ww = weight.broadcast(shape, (0, 3, 4)) # N,H,W
-        y = (ww*xx).reindex_reduce("add", out_shape, [
-            'i0', # N
-            'i2', # o
-            f'i3*{stride_h}-{padding_h}+i5*{dilation_h}', # Hid+Khid
-            f'i4*{stride_w}-{padding_w}+i6*{dilation_w}', # Wid+KWid
-        ])
+        # Match the other native contractions: internal multiply/reduce
+        # obeys the contraction AMP policy, not public scalar arithmetic.
+        with jt.flag_scope(amp_reg=jt.flags.amp_reg | jt.amp_flags.keep_reduce):
+            xx = x.broadcast(shape, (2, 5, 6)) # i,h,w
+            ww = weight.broadcast(shape, (0, 3, 4)) # N,H,W
+            y = (ww*xx).reindex_reduce("add", out_shape, [
+                'i0', # N
+                'i2', # o
+                f'i3*{stride_h}-{padding_h}+i5*{dilation_h}', # Hid+Khid
+                f'i4*{stride_w}-{padding_w}+i6*{dilation_w}', # Wid+KWid
+            ])
         if isinstance(bias, jt.Var):
             b = bias_for_compute_dtype(y, bias).broadcast(y.shape, [0,2,3])
             y = y + b
@@ -96,25 +99,28 @@ def conv_transpose(input, weight, bias=None, stride=1, padding=0, output_padding
             return kernel(input, weight, bias, stride, padding, output_padding,
                           dilation, groups)
         shape = [N,G,oc//G,CpG,oh,ow,h,w]
-        xx = input.reindex(shape, [
-            'i0',
-            f'i1*{oc//G}+i2',
-            'i4',
-            'i5'
-        ])
-        ww = weight.reindex(shape, [
-            f'i1*{oc//G}+i2',
-            'i3',
-            'i6',
-            'i7'
-        ])
-        ww.compile_options = xx.compile_options = {"G":G,"C":C}
-        y = (ww*xx).reindex_reduce("add", out_shape, [
-            'i0', # Nid
-            f'i1*{CpG}+i3', # Gid
-            f'i4*{stride[0]}-{padding[0]}+i6*{dilation[0]}', # Hid+Khid
-            f'i5*{stride[1]}-{padding[1]}+i7*{dilation[1]}', # Wid+KWid
-        ])
+        # Match the other native contractions: internal multiply/reduce
+        # obeys the contraction AMP policy, not public scalar arithmetic.
+        with jt.flag_scope(amp_reg=jt.flags.amp_reg | jt.amp_flags.keep_reduce):
+            xx = input.reindex(shape, [
+                'i0',
+                f'i1*{oc//G}+i2',
+                'i4',
+                'i5'
+            ])
+            ww = weight.reindex(shape, [
+                f'i1*{oc//G}+i2',
+                'i3',
+                'i6',
+                'i7'
+            ])
+            ww.compile_options = xx.compile_options = {"G":G,"C":C}
+            y = (ww*xx).reindex_reduce("add", out_shape, [
+                'i0', # Nid
+                f'i1*{CpG}+i3', # Gid
+                f'i4*{stride[0]}-{padding[0]}+i6*{dilation[0]}', # Hid+Khid
+                f'i5*{stride[1]}-{padding[1]}+i7*{dilation[1]}', # Wid+KWid
+            ])
         if bias is not None:
             b = bias_for_compute_dtype(y, bias).broadcast(y.shape, [0,2,3])
             y = y + b

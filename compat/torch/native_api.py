@@ -8,6 +8,7 @@ from .api_delegates import bind_delegates
 from .context import get_install_context
 from .frontend import tensor_frontend
 from .fidelity import Fidelity, register_fidelity
+from .amp import _preserve_autocast_arithmetic, _cuda_autocast_fp32_input
 
 
 _NATIVE_NAMES = (
@@ -59,6 +60,19 @@ class NativeOperation:
         import jittor
         context = get_install_context(jittor)
         implementation = context.state["native_torch_operations"][self._operation_key]
+        if self._operation_key in ("pow", "rsqrt", "sqrt") and "input" in kwargs:
+            if args or "x" in kwargs:
+                raise TypeError("%s received input more than once" % self._operation_key)
+            kwargs = dict(kwargs)
+            args = (kwargs.pop("input"),)
+        if self._operation_key == "pow" and "exponent" in kwargs:
+            if len(args) > 1 or "y" in kwargs:
+                raise TypeError("pow received exponent more than once")
+            kwargs = dict(kwargs)
+            if args:
+                args += (kwargs.pop("exponent"),)
+            else:
+                kwargs["y"] = kwargs.pop("exponent")
         if self._operation_key in ("mul", "multiply"):
             kwargs = dict(kwargs)
             for position, name in enumerate(("input", "other")):
@@ -88,6 +102,12 @@ class NativeOperation:
         with tensor_frontend(context.state["Var"], device=device, like=source):
             if isinstance(implementation, type) and issubclass(implementation, context.native_backend.Function):
                 implementation = implementation()
+            if self._operation_key in ("pow", "rsqrt", "sqrt", "mul", "multiply", "sub", "subtract") and _preserve_autocast_arithmetic():
+                if self._operation_key in ("pow", "rsqrt"):
+                    args = tuple(_cuda_autocast_fp32_input(value) for value in args)
+                    kwargs = {name: _cuda_autocast_fp32_input(value) for name, value in kwargs.items()}
+                with jittor.flag_scope(amp_reg=jittor.amp_flags.disabled):
+                    return implementation(*args, **kwargs)
             if unique_operation:
                 if self._operation_key == "unique_consecutive" and args:
                     # The native implementation builds its run mask with
@@ -115,6 +135,10 @@ class NativeOperation:
 
     def __reduce__(self):
         return operation, (self._operation_key,)
+
+
+def tensor_rsqrt(input):
+    return operation("rsqrt")(input)
 
 
 _OPERATIONS = {name: NativeOperation(name) for name in _NATIVE_NAMES}

@@ -56,6 +56,29 @@ def will_engine_execute_node(node):
     return 1 if id(variable) in participants else 0
 
 
+@contextmanager
+def leaf_gradient_layout_scope(resolver):
+    """Temporarily resolve changed leaf layouts for an owning integration.
+
+    The resolver receives the leaf and the gradient computed for its original
+    graph. It must return a matching gradient tensor or None to keep the
+    ordinary Torch path. Scope is thread-local and restores correctly on error.
+    """
+    if not callable(resolver):
+        raise TypeError("leaf gradient layout resolver must be callable")
+    previous = getattr(_local, "leaf_gradient_layout_resolver", None)
+    _local.leaf_gradient_layout_resolver = resolver
+    try:
+        yield
+    finally:
+        _local.leaf_gradient_layout_resolver = previous
+
+
+def _resolve_leaf_gradient_layout(parameter, gradient):
+    resolver = getattr(_local, "leaf_gradient_layout_resolver", None)
+    return None if resolver is None else resolver(parameter, gradient)
+
+
 def participating_tensors(tensors):
     """Return distinct requested tensors receiving a gradient this backward.
 

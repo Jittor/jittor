@@ -64,7 +64,20 @@ def _allocate_where_the_inputs_are(x):
 
     device_id = int(getattr(x, "device_id", -1))
     previous = int(jt.current_device())
-    with _placement_scope(x):
+    # concat has no device= override: its scratch buffer must follow the
+    # inputs even inside a conflicting frontend/module placement scope.
+    # placement_scope_like intentionally honors the ambient request for
+    # factories such as zeros_like(..., device=...), so it is not suitable
+    # here when that request refers to a different device than the inputs.
+    backend = int(x.placement_backend)
+    placement = jt.core._current_tensor_placement()
+    target = (backend, max(device_id, 0))
+    override = backend >= 0 and placement != target
+    token = previous_construction = None
+    if override:
+        token = jt.core._set_tensor_placement(*target)
+        previous_construction = jt.core._set_construction_placement(*target)
+    try:
         if device_id < 0 or device_id == previous:
             yield
             return
@@ -74,6 +87,10 @@ def _allocate_where_the_inputs_are(x):
         finally:
             if previous >= 0:
                 jt.flags.device_id = previous
+    finally:
+        if override:
+            jt.core._restore_construction_placement(previous_construction)
+            jt.core._reset_tensor_placement(token)
 
 
 def _merge_dtypes(dtypes):
@@ -95,7 +112,9 @@ def _empty_where_the_inputs_are(x, shape, dtype):
     jt = _jt()
     core = jt.core
     device_id = int(x.device_id)
-    if ((int(x.placement_backend) < 0 or core._current_tensor_placement() is not None)
+    backend = int(x.placement_backend)
+    target = (backend, max(device_id, 0))
+    if ((backend < 0 or core._current_tensor_placement() == target)
             and (device_id < 0 or device_id == int(jt.current_device()))):
         return jt.empty(shape, dtype=dtype)
     with _allocate_where_the_inputs_are(x):
@@ -142,51 +161,55 @@ def _concat_fused(arr, dim, dtype):
     there is never used. Anything heavier stays with `_concat_bounded`, where
     each input is computed straight into its slice.
     """
-    jt = _jt()
-    if not 2 <= len(arr) <= _MAX_FUSED_INPUTS:
-        return None
-    sources = []
-    for value in arr:
-        if not isinstance(value, jt.Var) or value.shape[dim] == 0:
+    # Capture uses auxiliary bounds and index tensors. Like the eager
+    # destination, these must follow the inputs even under a conflicting
+    # module/frontend placement scope (e.g. host position IDs in a CUDA VLM).
+    with _allocate_where_the_inputs_are(arr[0]):
+        jt = _jt()
+        if not 2 <= len(arr) <= _MAX_FUSED_INPUTS:
             return None
-        ops = []
-        base = value
-        while True:
-            name = base._producer_unary()
-            if not name:
-                break
-            ops.append(name)
-            base = base._input(0)
-        if not base._producer_is_view():
-            return None
-        sources.append((base, ops[::-1], int(value.shape[dim])))
-    out_shape = list(arr[0].shape)
-    out_shape[dim] = sum(size for _, _, size in sources)
-    rank = len(out_shape)
-    pieces, starts = [], []
-    offset = 0
-    for base, ops, size in sources:
-        # The bounds are read from a small array rather than spelled into
-        # the index expressions: those are part of the kernel's key, and a
-        # concatenation whose sizes move every call -- `generate` appending a
-        # token to `input_ids` -- compiled a new kernel for every token.
-        bounds = jt.array(np.array([offset, offset + size], dtype="int32"))
-        index = ["i%d" % d for d in range(rank)]
-        index[dim] = "i%d-@e0(0)" % dim
-        piece = base.reindex(out_shape, index, overflow_conditions=[
-            "i%d<@e0(0)" % dim, "i%d>=@e0(1)" % dim], extras=[bounds])
-        for name in ops:
-            piece = jt.unary(piece, name)
-        if _jittor_dtype_name(piece.dtype) != _jittor_dtype_name(dtype):
-            piece = piece.cast(dtype)
-        pieces.append(piece)
-        starts.append(offset)
-        offset += size
-    position = jt.index(out_shape, dim)
-    result = pieces[-1]
-    for k in range(len(pieces) - 2, -1, -1):
-        result = jt.ternary(position < starts[k + 1], pieces[k], result)
-    return result
+        sources = []
+        for value in arr:
+            if not isinstance(value, jt.Var) or value.shape[dim] == 0:
+                return None
+            ops = []
+            base = value
+            while True:
+                name = base._producer_unary()
+                if not name:
+                    break
+                ops.append(name)
+                base = base._input(0)
+            if not base._producer_is_view():
+                return None
+            sources.append((base, ops[::-1], int(value.shape[dim])))
+        out_shape = list(arr[0].shape)
+        out_shape[dim] = sum(size for _, _, size in sources)
+        rank = len(out_shape)
+        pieces, starts = [], []
+        offset = 0
+        for base, ops, size in sources:
+            # The bounds are read from a small array rather than spelled into
+            # the index expressions: those are part of the kernel's key, and a
+            # concatenation whose sizes move every call -- `generate` appending a
+            # token to `input_ids` -- compiled a new kernel for every token.
+            bounds = jt.array(np.array([offset, offset + size], dtype="int32"))
+            index = ["i%d" % d for d in range(rank)]
+            index[dim] = "i%d-@e0(0)" % dim
+            piece = base.reindex(out_shape, index, overflow_conditions=[
+                "i%d<@e0(0)" % dim, "i%d>=@e0(1)" % dim], extras=[bounds])
+            for name in ops:
+                piece = jt.unary(piece, name)
+            if _jittor_dtype_name(piece.dtype) != _jittor_dtype_name(dtype):
+                piece = piece.cast(dtype)
+            pieces.append(piece)
+            starts.append(offset)
+            offset += size
+        position = jt.index(out_shape, dim)
+        result = pieces[-1]
+        for k in range(len(pieces) - 2, -1, -1):
+            result = jt.ternary(position < starts[k + 1], pieces[k], result)
+        return result
 
 
 def _concat_bounded(arr, dim, dtype):
@@ -237,7 +260,13 @@ def concat(arr, dim=0):
         placement = int(first.placement_backend)
         # BackendId::Cuda is 1. The explicit placement is the dispatch
         # decision itself, so no compiler/backend flag may be consulted here.
-        native_placement = placement < 0 or placement == 1
+        ambient = jt.core._current_tensor_placement()
+        # The native destination follows ambient construction placement. A
+        # conflicting explicit input must take the scoped Python path, just
+        # like an explicitly CPU-placed input already does.
+        conflicting = (placement >= 0 and ambient is not None and ambient[0] >= 0
+                       and ambient != (placement, max(int(first.device_id), 0)))
+        native_placement = (placement < 0 or placement == 1) and not conflicting
         if isinstance(first, jt.Var) and native_placement \
                 and not select_kernel._is_registered("tensor.setitem"):
             out = native(arr, dim)

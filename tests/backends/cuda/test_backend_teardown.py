@@ -3,29 +3,11 @@
 # This file is subject to the terms and conditions defined in
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
-"""Library handle teardown reports failures; it never aborts the process.
+"""Library handle teardown must report independent failures without aborting.
 
-Every ``*_wrapper.cc`` destroyed its library handle from a static destructor
-using ``checkCudaErrors``, which ``LOGf``s, which throws.  Destructors are
-noexcept, so a teardown the library refuses called ``std::terminate`` and the
-process died on SIGABRT.
-
-That matters because of *when* a teardown gets refused: after a CUDA error has
-already made the context sticky-invalid.  So the run that has something to say
-is exactly the run that aborts on the way out, and the last thing it prints is
-``terminate called after throwing an instance of 'std::runtime_error' ...
-CUDNN_STATUS_INTERNAL_ERROR cudnnDestroy`` -- a message about the cleanup,
-standing in for the message about the fault.  The test below reproduces that
-sequence and asserts the real error is the one that survives.
-
-Note when re-checking this against the old code: the child's SIGABRT used to
-take the *runner* with it.  jittor's SIGCHLD handler quick_exit(1)ed the parent
-whenever a direct child died other than by a clean exit or SIGTERM
-(``utils/log.cc``), so a pre-fix run of this file ended as ``pytest`` exiting 1
-after one dot, not as a reported failure (6.C31).  That branch reports and
-returns since ``64350894`` (2026-09-03), but ``crash_isolated=True`` below is
-what leaves the abort assertable as ``returncode == 134`` instead of a negative
-status, which is the shape this file checks.
+A previously reported sticky CUDA fault is not logged again during teardown;
+the original fault remains visible. An independent teardown error on a healthy
+context must still be reported without throwing from a destructor.
 """
 
 from _helpers import capability as _test_capability
@@ -118,7 +100,7 @@ class TestBackendTeardown(unittest.TestCase):
         self.assertNotIn("teardown error", proc.stderr)
         self.assertNotIn("terminate called", proc.stderr)
 
-    def test_failing_teardown_is_reported_not_fatal(self):
+    def test_reported_sticky_fault_exits_without_duplicate_teardown(self):
         proc = _run_child(_TOUCH_BACKENDS + _POISON_CONTEXT)
         self.assertIn("POISONED", proc.stdout)
         tail = proc.stderr[-8000:]
@@ -128,19 +110,35 @@ class TestBackendTeardown(unittest.TestCase):
         self.assertNotIn("terminate called", proc.stderr)
         self.assertEqual(proc.returncode, 0, tail)
 
-        # Not throwing is only half of it: the refused teardown must still be
-        # on the record rather than swallowed.
-        self.assertIn("CUDA teardown error", proc.stderr)
-        self.assertIn("cudnnDestroy", proc.stderr)
-
-        # ... and the point of the whole exercise: the fault that actually
-        # broke the run outlives the cleanup noise instead of being replaced
-        # by it. Both orderings are on the record -- the fault while the
-        # process was still running, the teardown error after it.
+        # Once reported, a sticky context error is not duplicated as a
+        # teardown error. The original fault must remain visible instead.
         self.assertIn("cudaErrorIllegalAddress", proc.stderr)
-        self.assertLess(proc.stderr.index("cudaErrorIllegalAddress"),
-                        proc.stderr.index("CUDA teardown error"),
-                        tail)
+        self.assertNotIn("CUDA teardown error", proc.stderr)
+
+    def test_independent_teardown_error_is_reported_without_throwing(self):
+        # Inject a nonzero status without poisoning the CUDA context. This
+        # exercises the actual production macro and must log and continue.
+        body = r'''
+        a = jt.zeros((1,), "float32")
+        b = jt.code([1], a.dtype, [a],
+            cuda_header="#include \"helper_cuda.h\"",
+            cuda_src="""
+        __global__ void kernel(float32* a, float32* b) { b[0] = a[0]; }
+        kernel<<<1,1>>>(in0_p, out0_p);
+        peekCudaErrorsAlways(cudaErrorInvalidValue);
+        """)
+        b.sync()
+        print("HEALTHY-TEARDOWN-PEEK", flush=True)
+        '''
+        # _TOUCH_BACKENDS has no indentation, so dedent the appended block
+        # separately, as with _POISON_CONTEXT.
+        proc = _run_child(_TOUCH_BACKENDS + textwrap.dedent(body))
+        self.assertEqual(proc.returncode, 0, proc.stderr[-4000:])
+        self.assertIn("HEALTHY-TEARDOWN-PEEK", proc.stdout)
+        self.assertIn("CUDA teardown error", proc.stderr)
+        self.assertIn("cudaErrorInvalidValue", proc.stderr)
+        self.assertNotIn("terminate called", proc.stderr)
+
 
 
 if __name__ == "__main__":

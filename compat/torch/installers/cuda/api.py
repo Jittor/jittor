@@ -169,6 +169,45 @@ def _cuda_total_memory(device=None):
     return total
 
 
+class _CUuuid:
+    """CUDA's 16-byte identifier, with the PyTorch bytes/string interface."""
+
+    def __init__(self, raw):
+        self._raw = bytes(raw)
+        if len(self._raw) != 16:
+            raise ValueError("CUDA UUID must contain 16 bytes")
+
+    @property
+    def bytes(self):
+        return list(self._raw)
+
+    def __str__(self):
+        import uuid
+        return str(uuid.UUID(bytes=self._raw))
+
+
+def _cuda_device_uuid(device=None):
+    """Read a real visible-device UUID; never invent an identity on failure."""
+    index = _cuda_device_index(device)
+    lib, ctypes = _cuda_driver()
+    if lib is None:
+        raise RuntimeError("CUDA driver is required to query a device UUID")
+    dev = ctypes.c_int()
+    status = lib.cuDeviceGet(ctypes.byref(dev), index)
+    if status:
+        raise RuntimeError("cuDeviceGet failed with CUDA error %s" % status)
+    raw = (ctypes.c_ubyte * 16)()
+    query = getattr(lib, "cuDeviceGetUuid_v2", None)
+    if query is None:
+        query = getattr(lib, "cuDeviceGetUuid", None)
+    if query is None:
+        raise RuntimeError("CUDA driver does not expose a device UUID query")
+    status = query(ctypes.byref(raw), dev)
+    if status:
+        raise RuntimeError("cuDeviceGetUuid failed with CUDA error %s" % status)
+    return _CUuuid(raw)
+
+
 class _DeviceProps:
     """torch.cuda.get_device_properties(...) result.
 
@@ -196,6 +235,10 @@ class _DeviceProps:
         self.regs_per_multiprocessor = 65536
         self.shared_memory_per_block = 49152
         self.shared_memory_per_multiprocessor = 102400
+
+    @property
+    def uuid(self):
+        return _cuda_device_uuid(self.index)
 
     def __repr__(self):
         return (f"_DeviceProps(name='{self.name}', major={self.major}, "
@@ -1794,7 +1837,7 @@ _CUDA_FIDELITY_DETAILS = {
     _api_cuda_can_device_access_peer: "Answered by the CUDA driver for the named pair; raises where the driver cannot be loaded rather than guessing.",
     _device_name: "Queried per device ordinal from the CUDA driver, cached per ordinal.",
     _api_cuda_get_device_capability: "Queried per device ordinal from the CUDA driver; falls back to (8, 0) where the driver query is unavailable.",
-    _api_cuda_get_device_properties: "Name, compute capability, total memory and SM count are real and per ordinal; the remaining fields are class defaults.",
+    _api_cuda_get_device_properties: "Name, compute capability, total memory, SM count and UUID are real and per ordinal; the remaining fields are class defaults.",
     _empty_cache: "Environment-selected no-op, GC or synchronized GC; default is a memory hint.",
     _get_float32_matmul_precision: "Frontend-owned CUDA matmul policy; native Jittor and cuDNN policies are independent.",
     _set_float32_matmul_precision: "Frontend-owned highest/high/medium CUDA matmul accumulation; does not change cuDNN or native Jittor.",

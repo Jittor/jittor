@@ -12,6 +12,19 @@ def _register_leaf(v):
 def _initial_leaf_gradient(parameter, gradient):
     """Apply AccumulateGrad's dense layout contract without changing AD edges."""
     sizes, strides = tuple(parameter.shape), parameter.stride()
+    if sizes != tuple(gradient.shape):
+        # An integration may temporarily release a parameter's visible data
+        # after forward. It must opt in only for its own managed leaves; an
+        # ordinary .data shape change still follows Torch's error path.
+        from ...gradient_task import _resolve_leaf_gradient_layout
+        resolved = _resolve_leaf_gradient_layout(parameter, gradient)
+        if resolved is not None:
+            if not isinstance(resolved, _NativeVar):
+                raise TypeError("leaf gradient layout resolver must return a Tensor or None")
+            if (tuple(resolved.shape) != tuple(gradient.shape) or resolved.dtype != gradient.dtype
+                    or resolved.device != gradient.device):
+                raise RuntimeError("leaf gradient layout resolver changed gradient shape, dtype or device")
+            return resolved
     extent = 1
     dense = True
     for axis in sorted(range(len(sizes)), key=lambda i: strides[i]):

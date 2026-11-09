@@ -77,6 +77,33 @@ class TestCudnnConvPlan(unittest.TestCase):
                 err = float(np.abs(got - ref).max()) / scale
                 self.assertLess(err, tol, "%s mismatch %.3g (nhwc=%s tf32=%s dtype=%s)" % (name, err, nhwc, tf32, dtype))
 
+    def test_benchmark_setting_selects_plan_cache_key_for_all_layouts_and_dtypes(self):
+        # A real cuDNN call makes the internal request key observable: the
+        # default and explicit 1 share a key, while explicit 0 must not.
+        # The old channels-last override wrongly reused the benchmark-on key.
+        import jittor.compile_extern as ce
+        cudnn = ce.cudnn
+        saved = cudnn.get_benchmark()
+        self.addCleanup(cudnn.set_benchmark, saved)
+        self.addCleanup(cudnn.cudnn_clear_plan_cache)
+        for dtype in ("float32", "float16"):
+            for nhwc in (False, True):
+                with self.subTest(dtype=dtype, nhwc=nhwc):
+                    cudnn.cudnn_clear_plan_cache()
+                    x = jt.array(np.ones((2, 8, 8, 8), dtype=np.float32)).cast(dtype)
+                    w = jt.array(np.ones((4, 8, 3, 3), dtype=np.float32)).cast(dtype)
+                    if nhwc:
+                        x = x.transpose(0, 2, 3, 1)
+                        w = w.transpose(0, 2, 3, 1)
+                    fmt, wfmt = ("acdb", "ohwi") if nhwc else ("abcd", "oihw")
+                    sizes = []
+                    for setting in (-1, 0, 1):
+                        cudnn.set_benchmark(setting)
+                        jt.cudnn.ops.cudnn_conv(x, w, 1, 1, 1, 1, 1, 1, 1, fmt, wfmt, "").sync()
+                        jt.sync_all(True)
+                        sizes.append(cudnn.cudnn_plan_cache_size())
+                    self.assertEqual(sizes, [1, 2, 2], (dtype, nhwc, sizes))
+
     def test_plain_fp32(self):
         self._check(2, 8, 16, 4, 3, padding=1)
 

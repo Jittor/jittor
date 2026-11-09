@@ -5,7 +5,7 @@ import warnings
 import contextlib
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from ...context import get_install_context
-from ...amp import _preserve_autocast_arithmetic
+from ...amp import _autocast_state, _preserve_autocast_arithmetic, _cuda_autocast_fp32_input
 from ...types import _PYTHON_SCALAR_DTYPES, _make_cpu_resident, _make_cuda_resident, _var_is_cpu_resident
 from ....stub_policy import degraded as _degraded, unimplemented as _unimplemented
 from ..core import _promote_pair
@@ -577,6 +577,13 @@ def _nonzero(self, as_tuple=False, **kw):
     _context = get_install_context(_owner.jt)
     _native = _context.state["tensor_native_api"]
     _native_nonzero = _native['_native_nonzero']
+    if self.ndim == 0:
+        # PyTorch treats a scalar as a single position for tuple indices, but
+        # the matrix form retains the scalar's zero-dimensional coordinate.
+        flat = _native_nonzero(self.reshape(1)).int64()
+        if as_tuple:
+            return (flat.reshape(-1),)
+        return flat[:, :0]
     idx = _native_nonzero(self)
     if not as_tuple:
         return idx
@@ -767,6 +774,18 @@ def _torch_getitem(self, slices):
 
     slices = normalize(slices)
     slices = _align_advanced_index(self, slices)
+    if (isinstance(slices, _NativeVar) and slices.ndim == 0
+            and _jittor_dtype_name(slices.dtype) == "bool"):
+        # A scalar boolean index adds a leading selection axis in Torch.
+        # Convert it to zero or one integer row indices without reading the
+        # mask back to the host, retaining autograd and the input device.
+        context = get_install_context(_owner.jt)
+        native_getitem = context.state["tensor_native_api"]["_orig_getitem"]
+        indices = _nonzero(slices, as_tuple=True)[0]
+        out = native_getitem(self.unsqueeze(0), indices)
+        if isinstance(out, _NativeVar) and _owner._var_has_cpu_residency_hint(self):
+            out = _owner._mark_cpu_like(out, self)
+        return out
     # A basic index, natively (`src/bindings/pyjt/py_compat_fast.h`).
     fast = _owner.jt.core._fast_getitem(self, slices)
     if fast is not NotImplemented:
@@ -1560,7 +1579,11 @@ def _var_norm(self, p="fro", dim=None, keepdims=None, *rest,
 def _binary_native(opname, left, right, native_api=None):
     if native_api is None:
         native_api = get_install_context(_owner.jt).state["tensor_native_api"]
-    result = native_api["operators"][opname](left, right)
+    if _preserve_autocast_arithmetic():
+        with _owner.jt.flag_scope(amp_reg=0):
+            result = native_api["operators"][opname](left, right)
+    else:
+        result = native_api["operators"][opname](left, right)
     return _owner._mark_cpu_like(result, left, right)
 
 
@@ -1777,7 +1800,7 @@ _FAST_BINARY_OPERATORS = ('__add__', '__radd__', '__sub__', '__rsub__',
 
 def _tensor_add(self, other):
     fast = _FAST_BINARY
-    if fast is not None:
+    if fast is not None and not _autocast_state.order:
         out = fast(self, other, 0)
         if out is not None:
             return out
@@ -1786,7 +1809,7 @@ def _tensor_add(self, other):
 
 def _tensor_radd(self, other):
     fast = _FAST_BINARY
-    if fast is not None:
+    if fast is not None and not _autocast_state.order:
         out = fast(self, other, 1)
         if out is not None:
             return out
@@ -1795,7 +1818,7 @@ def _tensor_radd(self, other):
 
 def _tensor_sub(self, other):
     fast = _FAST_BINARY
-    if fast is not None:
+    if fast is not None and not _autocast_state.order:
         out = fast(self, other, 2)
         if out is not None:
             return out
@@ -1804,7 +1827,7 @@ def _tensor_sub(self, other):
 
 def _tensor_rsub(self, other):
     fast = _FAST_BINARY
-    if fast is not None:
+    if fast is not None and not _autocast_state.order:
         out = fast(self, other, 3)
         if out is not None:
             return out
@@ -1840,7 +1863,7 @@ def _tensor_mul(self, other):
         with _owner.jt.flag_scope(amp_reg=0):
             return _promoting_binary(self, other, '__mul__', False)
     fast = _FAST_BINARY
-    if fast is not None:
+    if fast is not None and not _autocast_state.order:
         out = fast(self, other, 4)
         if out is not None:
             return out
@@ -1855,7 +1878,7 @@ def _tensor_rmul(self, other):
         with _owner.jt.flag_scope(amp_reg=0):
             return _promoting_binary(self, other, '__rmul__', True)
     fast = _FAST_BINARY
-    if fast is not None:
+    if fast is not None and not _autocast_state.order:
         out = fast(self, other, 5)
         if out is not None:
             return out
@@ -1879,16 +1902,28 @@ def _tensor_rmod(self, other):
 
 
 def _tensor_pow(self, other):
+    if _preserve_autocast_arithmetic():
+        self, other = _cuda_autocast_fp32_input(self), _cuda_autocast_fp32_input(other)
+        with _owner.jt.flag_scope(amp_reg=0):
+            return _promoting_binary(self, other, '__pow__', False)
     return _promoting_binary(self, other, '__pow__', False)
 
 
+def _api_pow(self, exponent):
+    return _tensor_pow(self, exponent)
+
+
 def _tensor_rpow(self, other):
+    if _preserve_autocast_arithmetic():
+        self, other = _cuda_autocast_fp32_input(self), _cuda_autocast_fp32_input(other)
+        with _owner.jt.flag_scope(amp_reg=0):
+            return _promoting_binary(self, other, '__rpow__', True)
     return _promoting_binary(self, other, '__rpow__', True)
 
 
 def _tensor_truediv(self, other):
     fast = _FAST_BINARY
-    if fast is not None:
+    if fast is not None and not _autocast_state.order:
         out = fast(self, other, 6)
         if out is not None:
             return out
@@ -1897,7 +1932,7 @@ def _tensor_truediv(self, other):
 
 def _tensor_rtruediv(self, other):
     fast = _FAST_BINARY
-    if fast is not None:
+    if fast is not None and not _autocast_state.order:
         out = fast(self, other, 7)
         if out is not None:
             return out
@@ -1928,6 +1963,7 @@ _BINARY_APIS = {
     '__mod__': _tensor_mod,
     '__rmod__': _tensor_rmod,
     '__pow__': _tensor_pow,
+    'pow': _api_pow,
     '__rpow__': _tensor_rpow,
     '__truediv__': _tensor_truediv,
     '__rtruediv__': _tensor_rtruediv,
