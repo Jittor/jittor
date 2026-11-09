@@ -757,6 +757,12 @@ def _cat_impl(tensors, dim=0, out=None, axis=None):
         for _t in _seq:
             _tf = getattr(type(_t), "__torch_function__", None)
             if _tf is not None and not isinstance(_t, jt.Var):
+                # torch.overrides' rules: no dispatch inside
+                # torch._C._disabled_torch_function_impl, and none for a type
+                # whose hook is that function.
+                from ..cuda.api import _torch_function_override
+                if _torch_function_override(type(_t)) is None:
+                    continue
                 _kw = {}
                 if dim != 0: _kw["dim"] = dim
                 if out is not None: _kw["out"] = out
