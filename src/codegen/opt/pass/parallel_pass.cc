@@ -430,7 +430,9 @@ void ParallelPass::run() {
     }
     int block_num = round_down_pow2(op->get_loop_option("cuda_block_num", default_block_num));
     int cuda_thread_num = cuda_block_width(op);
+    bool has_cpu_thread_num = op->loop_options->count("cpu_thread_num");
     int cpu_thread_num = round_down_pow2(op->get_loop_option("cpu_thread_num", omp_get_max_threads()));
+    string cpu_thread_expr = has_cpu_thread_num ? S(cpu_thread_num) : "omp_get_max_threads()";
     int max_parallel_depth;
     if (!is_cuda) {
         ir->push_front("#include \"type/cpu_atomic.h\"", &ir->before);
@@ -516,7 +518,7 @@ void ParallelPass::run() {
             loop = loop->children[0].get();
         }
         auto& call_code = new_call->attrs[kir::code];
-        int total_thread_num = is_cuda ? block_num * cuda_thread_num : cpu_thread_num;
+        string total_thread_num = is_cuda ? S(block_num * cuda_thread_num) : cpu_thread_expr;
         // a range may be a variable; use its definition so the expression is
         // valid at the call site
         for (auto& range : ranges) {
@@ -532,7 +534,7 @@ void ParallelPass::run() {
 
         // Thread range setup, from the innermost dimension outwards, so the
         // innermost loop gets the low bits of the thread id.
-        new_block.push_back("int thread_num=" + S(total_thread_num) + ";");
+        new_block.push_back("int thread_num=" + total_thread_num + ";");
         new_block.push_back("int thread_num_left=thread_num;");
         for (int d = new_loops.size() - 1; d >= 0; d--) {
             auto& range = ranges[d];
@@ -634,7 +636,7 @@ void ParallelPass::run() {
         bool has_atomic = code.find("atomic") != string::npos;
         if (!fix_thread_num) {
             if (para_opt_level) {
-                auto n_thread = total_thread_num;
+                string n_thread = total_thread_num;
                 // a reduction-dominated kernel contends on its atomics, so
                 // give it fewer threads
                 if (has_atomic) {
@@ -642,9 +644,9 @@ void ParallelPass::run() {
                     for (auto o : op->ops)
                         if (o->type() == OpType::reduce) n_reduce++;
                     if ((int)op->ops.size() <= n_reduce * 2)
-                        n_thread = std::max(n_thread / 4, 32);
+                        n_thread = "std::max((" + n_thread + ")/4, 32)";
                     else if ((int)op->ops.size() <= n_reduce * 3)
-                        n_thread = std::max(n_thread / 2, 32);
+                        n_thread = "std::max((" + n_thread + ")/2, 32)";
                 } else if (is_cuda && new_loops.size() == 1 && unit_step) {
                     // One flat loop over the elements: launch a thread per
                     // element, in order, and no more -- the grid is sized to
@@ -666,14 +668,19 @@ void ParallelPass::run() {
                     if (vectorize_flat_loops)
                         vectorize_flat_loop(ir, func.get(), call.get(), total_range, pm);
                 }
-                call->find_define("thread_num")->attrs[kir::rvalue] = S(n_thread);
+                if (!is_cuda) {
+                    // The atomic heuristic's minimum must not exceed the CPU
+                    // budget, including an explicit cpu_thread_num override.
+                    n_thread = "std::min(" + n_thread + ", " + total_thread_num + ")";
+                }
+                call->find_define("thread_num")->attrs[kir::rvalue] = n_thread;
             } else {
                 if (has_atomic) {
                     total_range += "/16";
                 }
                 call->find_define("thread_num")->attrs[kir::rvalue] =
                     "min(max(1<<(NanoVector::get_nbits(" + total_range + ")-2),32)," +
-                    S(total_thread_num) + ")";
+                    total_thread_num + ")";
             }
         }
     }
