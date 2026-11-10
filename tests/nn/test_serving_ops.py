@@ -42,6 +42,62 @@ class TestSiluAndMul(unittest.TestCase):
 
 
 class TestRmsNorm(unittest.TestCase):
+    @unittest.skipIf(not jt.compiler.has_cuda, "CUDA is required")
+    def test_cuda_result_uses_device_storage(self):
+        raw = np.array([[0.5, 1., -2., 3.]], dtype="float32")
+        with jt.flag_scope(use_cuda=1), jt.no_grad():
+            result = jt.nn.rms_norm(jt.array(raw), jt.ones(4), 1e-6)
+            result.sync()
+            self.assertEqual(result.location(), "device")
+            expected = raw / np.sqrt((raw*raw).mean(-1, keepdims=True) + 1e-6)
+            np.testing.assert_allclose(result.numpy(), expected, rtol=1e-5, atol=1e-6)
+
+    def test_live_registered_provider_is_called_once(self):
+        x = jt.array([[1., 2., 3., 4.]])
+        weight = jt.ones(4)
+        backend = dispatch_context(x, weight).backend
+        calls = []
+        for scale in (2., 3.):
+            result = x * scale
+
+            def provider(value, gamma, epsilon):
+                self.assertIs(value, x)
+                self.assertIs(gamma, weight)
+                self.assertEqual(epsilon, 1e-6)
+                calls.append(scale)
+                return result
+
+            with override_kernel("nn.rms_norm.inference", backend, provider):
+                self.assertIs(jt.nn.rms_norm(x, weight, 1e-6), result)
+                np.testing.assert_array_equal(result.numpy(), [[scale, 2*scale, 3*scale, 4*scale]])
+        self.assertEqual(calls, [2., 3.])
+        np.testing.assert_array_equal(x.numpy(), [[1., 2., 3., 4.]])
+
+    def test_ineligible_registered_provider_keeps_portable_fallback(self):
+        raw = np.array([[1., 2., 3., 4.]], dtype="float32")
+        x, weight = jt.array(raw), jt.ones(4)
+        backend = dispatch_context(x, weight).backend
+
+        def unavailable(*args):
+            raise AssertionError("an ineligible provider must not execute")
+
+        with override_kernel("nn.rms_norm.inference", backend, unavailable,
+                             supports=lambda *args: False):
+            result = jt.nn.rms_norm(x, weight, 1e-6)
+            expected = raw / np.sqrt((raw*raw).mean(-1, keepdims=True) + 1e-6)
+            np.testing.assert_allclose(result.numpy(), expected, rtol=1e-5, atol=1e-6)
+
+    def test_registered_provider_errors_are_not_hidden(self):
+        x, weight = jt.ones((2, 4)), jt.ones(4)
+        backend = dispatch_context(x, weight).backend
+
+        def failing(*args):
+            raise RuntimeError("RMS provider failure")
+
+        with override_kernel("nn.rms_norm.inference", backend, failing):
+            with self.assertRaisesRegex(RuntimeError, "RMS provider failure"):
+                jt.nn.rms_norm(x, weight, 1e-6)
+
     def test_dual_rms_norm_matches_independent_calls(self):
         rng = np.random.RandomState(20260902)
         first = jt.array(rng.randn(2, 3, 8).astype("float32"))

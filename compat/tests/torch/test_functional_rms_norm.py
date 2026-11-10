@@ -13,8 +13,8 @@ import torch
     ((2, 3, 17), (17,), True),
 ])
 @pytest.mark.parametrize("training", [False, True])
-def test_functional_rms_values_and_derivatives(shape, axes, weighted, training):
-    device = os.environ.get("JITTOR_TEST_DEVICES", "cpu").split(",")[0]
+@pytest.mark.parametrize("device", os.environ.get("JITTOR_TEST_DEVICES", "cpu").split(","))
+def test_functional_rms_values_and_derivatives(shape, axes, weighted, training, device):
     rng = np.random.default_rng(123)
     source = rng.standard_normal(shape).astype("float32")
     weights = rng.uniform(.5, 1.5, axes).astype("float32")

@@ -18,7 +18,7 @@ from jittor._core.flags import _output_requires_grad, _stop_grad_outputs
 from jittor._runtime.dispatch import dispatch_context, optional_kernel, try_dispatch
 
 from .backends import hooks as _backend_hooks
-from jittor.backends.cuda.kernels.nn.rms_norm_cuda import _fused_add_rms_norm_cuda, _rms_norm_cuda
+from jittor.backends.cuda.kernels.nn.rms_norm_cuda import _fused_add_rms_norm_cuda
 from jittor.backends.cuda.kernels.nn.rope_cuda import _rotary_embedding_cuda
 from jittor.backends.cuda.kernels.nn.swiglu_cuda import _silu_and_mul_cuda
 
@@ -70,7 +70,6 @@ def silu_and_mul(x):
 
 def rms_norm(x, weight, eps=1e-6):
     """Root-mean-square normalise ``x`` over its last axis and scale."""
-    backend = _backend_hooks.rms_norm_cuda or _rms_norm_cuda
     backend_weight = weight
     if (
         dispatch_context(x, weight).backend == "acl"
@@ -82,7 +81,10 @@ def rms_norm(x, weight, eps=1e-6):
         if backend_weight is None:
             backend_weight = weight.float32()
             weight.__dict__["_serving_float32_weight"] = backend_weight
-    fused = backend(x, backend_weight, eps)
+    # The legacy hook facade resolves the ambient backend before calling this
+    # same registry. Select once from the actual operands; live overrides and
+    # eligibility predicates remain owned by the canonical dispatcher.
+    fused = try_dispatch("nn.rms_norm.inference", x, backend_weight, eps)
     if fused is not None:
         return fused
     dtype = x.dtype
