@@ -57,6 +57,17 @@ python examples/pytorch/xla_spawn.py --num_cores 2 train_script.py ...
 
 兼容引导可以发现项目的源码扩展并通过 Jittor 支撑的构建接口处理；这并不意味着任意 PyTorch 二进制扩展都能直接加载。遇到构建失败，应保留编译器输出并核对集成仓库的扩展要求。
 
+## CPU NumPy 视图
+
+需要将 CPU Tensor 传给 NumPy `out=` 参数的集成，可以使用公开接口 `jittor.compat.torch.numpy_interop.numpy_view(tensor)`。它返回当前 CPU allocation 的可写视图，不复制数据；返回数组持有该 allocation 的所有权。传入加速设备 Tensor 或需要梯度的 Tensor 会报错，不会隐式搬运或 detach。Tensor 换存储后，旧视图仍指向旧 allocation，调用方必须重新获取视图。此接口不承诺视图持续跟踪未来的 Tensor 写入或存储替换。
+
+```python
+from jittor.compat.torch.numpy_interop import numpy_view
+
+out = numpy_view(cpu_tensor)
+numpy_operation(..., out=out)
+```
+
 ## 下游适配器
 
 按 [JittorEcosystem](https://github.com/JittorEcosystem) 中目标仓库的安装说明添加所需集成。每个仓库单独维护版本限制与芯片支持；安装一个适配器不会自动证明该库的所有功能受支持。
