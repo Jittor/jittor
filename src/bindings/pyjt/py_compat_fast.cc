@@ -731,7 +731,9 @@ auto make_reduce_mask = op_constructor<VarPtr, Var*, NanoString, uint, uint>("re
 } // namespace
 
 PyObject* logical_reduce(PyObject* self, PyObject* dims_obj, bool keepdims, bool is_and) {
-    if (Py_TYPE(self) != &PyjtVarHolder.ht_type) return not_implemented();
+    // Frontend tensors share the native payload. Infer their result type in
+    // the same scope as the general reduction binding below.
+    if (!PyObject_TypeCheck(self, &PyjtVarHolder.ht_type)) return not_implemented();
     // Read as the generated `any_` binding would read it.
     Var* x = GET_RAW_PTR(VarHolder, self)->grad_input();
     if (x->dtype() != ns_bool) return not_implemented();
