@@ -228,10 +228,9 @@ static inline Allocator* output_allocator(Var* v, Allocator* op_allocator) {
 // the next kernel that reads it faults with an illegal address.
 static inline Allocator* var_allocator(Var* v, Allocator* op_allocator) {
     if (v->placement.explicit_backend)
-        return get_allocator(v->placement.device, false);
-    if (v->device_id >= 0 && v->device_id != op_allocator->device())
-        return get_allocator(v->device_id, false);
-    return op_allocator;
+        return get_regular_allocator(v->placement.device, false);
+    return get_regular_allocator({accelerator_backend_id(),
+        v->device_id >= 0 ? v->device_id : op_allocator->device()}, false);
 }
 
 static inline int op_target_device(Op* op) {

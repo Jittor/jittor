@@ -7,7 +7,7 @@ name = "jittor-compat"
 version = "2.0.2"
 description = "Independent Torch frontend using Jittor's native Var/Op graph"
 requires-python = ">=3.7"
-dependencies = ["jittor==2.0.2"]
+dependencies = ["jittor==2.0.2", "cloudpickle>=2.2"]
 
 [project.scripts]
 jittor-triton-shim = "jittor.compat.triton.deploy:main"

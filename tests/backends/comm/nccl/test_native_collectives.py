@@ -59,3 +59,68 @@ class TestNativeCollectives(unittest.TestCase):
                     # device execution. numpy readback may move host residency.
                     np.testing.assert_array_equal(output.float32().numpy(), expected)
         self.assertEqual(jt.core.backend_fallback_count(), before)
+
+    @jt.flag_scope(use_cuda=1, use_parallel_op_compiler=0, backend_fallback="error")
+    def _grouped_replay(self):
+        ops = jt.compile_extern.nccl_ops
+        world, rank = int(jt.world_size), int(jt.rank)
+        types = ('float32', 'float64', 'float16', 'bfloat16', 'int32', 'int64', 'uint8')
+
+        def step(*inputs):
+            produced = [value + 1 for value in inputs]
+            reduced = ops.nccl_all_reduce_many(produced)
+            return tuple(value * 2 for value in reduced)
+
+        runner = jt.capture_step(step)
+        retained = []
+        before = jt.core.backend_fallback_count()
+        for iteration in range(12):
+            inputs = [jt.full((2+i % 3, 4), rank+iteration+i, dtype=dtype).cuda(0).stop_grad()
+                      for i, dtype in enumerate(types)]
+            # Include an empty operand in the same native group.
+            inputs.append(jt.empty((0,), dtype='float32').cuda(0).stop_grad())
+            retained.append((iteration, runner(*inputs)))
+        # Reading after the sequence exposes reuse and missing stream joins;
+        # per-iteration host synchronization would conceal those races.
+        for iteration, outputs in retained:
+            for index, output in enumerate(outputs[:-1]):
+                expected = 2 * (world*(iteration+index+1) + world*(world-1)//2)
+                np.testing.assert_array_equal(output.float32().numpy(), np.full(output.shape, expected))
+            self.assertEqual(outputs[-1].numel(), 0)
+        self.assertIsNone(runner.refused)
+        self.assertIsNone(runner._graph_refused)
+        self.assertGreater(runner.stats['graph'], 0)
+        self.assertEqual(jt.core.backend_fallback_count(), before)
+
+    @jt.flag_scope(use_cuda=1, use_parallel_op_compiler=0, backend_fallback="error")
+    def test_grouped_all_reduce_producers_consumers_and_graph_replay(self):
+        self._grouped_replay()
+
+    @jt.flag_scope(use_cuda=1, use_parallel_op_compiler=0, backend_fallback="error")
+    def test_grouped_native_mean_and_its_gradient(self):
+        base = np.array([1e30, -1e30, 2, -2, 0, np.finfo(np.float32).max], dtype='float32')
+        value = jt.array(base + int(jt.rank)).cuda(0).start_grad()
+        output, = jt.compile_extern.nccl_ops.nccl_all_reduce_many([value], mean=True)
+        gradient = jt.grad(output.sum()*3, value)
+        reference = sum((base+peer).astype('float64') for peer in range(int(jt.world_size))) / int(jt.world_size)
+        np.testing.assert_allclose(output.numpy(), reference, rtol=1e-6, atol=0)
+        np.testing.assert_array_equal(gradient.numpy(), np.full(base.shape, 3))
+
+    @jt.flag_scope(use_cuda=1, use_parallel_op_compiler=0, backend_fallback="error")
+    def test_grouped_all_reduce_preserves_each_input_gradient(self):
+        ops = jt.compile_extern.nccl_ops
+        a = jt.full((3, 4), int(jt.rank)+1., dtype='float32').cuda(0).start_grad()
+        b = jt.full((5,), int(jt.rank)+2., dtype='float32').cuda(0).start_grad()
+        x, y = ops.nccl_all_reduce_many([a, b])
+        gradients = jt.grad(x.sum()*2 + y.sum()*3, [a, b])
+        for gradient, coefficient in zip(gradients, (2, 3)):
+            np.testing.assert_array_equal(gradient.numpy(), np.full(gradient.shape, coefficient*int(jt.world_size)))
+
+    @jt.flag_scope(use_cuda=1, use_parallel_op_compiler=0, backend_fallback="error")
+    def test_grouped_all_reduce_uses_the_declared_subgroup(self):
+        from jittor import distributed as dist
+        group = dist.new_group(list(reversed(range(int(jt.world_size)))))
+        value = jt.full((16,), int(jt.rank)+1., dtype='float32').cuda(0)
+        output, = jt.compile_extern.nccl_ops.nccl_all_reduce_many([value], group._backend_handle)
+        total = int(jt.world_size)*(int(jt.world_size)+1)//2
+        np.testing.assert_array_equal(output.numpy(), np.full((16,), total))

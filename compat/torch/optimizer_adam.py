@@ -63,7 +63,8 @@ class _AdamSteps(list):
         # Do not retain the owning dict: it owns this list, and a cycle would
         # keep discarded optimizers' parameters and lazy graphs alive.
         self.fused = group.get("fused", False)
-        self.devices = tuple(parameter.device for parameter in group["params"])
+        self.devices = (tuple(parameter.device for parameter in group["params"])
+                        if self.fused else ())
 
     def __setitem__(self, index, value):
         old = self[index]
@@ -172,7 +173,7 @@ def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay
         # So the fused list update is taken unless the caller turned both
         # off, or asked for a variant it does not compute.
         fused = pg.get("fused", getattr(self, "fused", None))
-        want_fused = (decoupled_weight_decay and fused is not False
+        want_fused = ((decoupled_weight_decay or weight_decay == 0) and fused is not False
                       and (fused is True or pg.get("foreach") is not False)
                       and not pg.get("amsgrad") and not pg.get("maximize"))
         active = []
@@ -184,8 +185,11 @@ def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay
                     continue
                 active.append((p, m, v, g, int(param_steps[i])))
             if active:
-                from jittor._runtime.dispatch import select_kernel
-                fused_impl = select_kernel("optim.adamw_fused", active)
+                from jittor._runtime.dispatch import dispatch_context, select_kernel
+                # With zero decay Adam and AdamW have the same update. The
+                # CUDA provider also accepts Adam's live step/LR accounting.
+                if decoupled_weight_decay or dispatch_context(active[0][0]).backend == "cuda":
+                    fused_impl = select_kernel("optim.adamw_fused", active)
         if fused_impl is not None:
             stepped = []
             for i, (p, g, v, m) in enumerate(zip(

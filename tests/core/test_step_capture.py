@@ -52,6 +52,54 @@ def _make_step(w, b, lr, readback=False):
 @_test_preserve_policy(jt, "keep_graph", "auto_graph_replay")
 class TestStepCapture(unittest.TestCase):
 
+    def test_mixed_readouts_keep_only_the_differentiable_replay_boundary(self):
+        parameter = jt.array([2., 3.])
+
+        def step(x):
+            value = parameter * x
+            # Native detach creates a new trainable leaf; stop_grad marks
+            # the constant readout explicitly (Torch detach does both).
+            return value, value.detach().stop_grad()
+
+        captured = jt.capture_step(step)
+        for index in range(6):
+            x = jt.array([1. + index, 2.]).stop_grad()
+            live, detached = captured(x)
+            np.testing.assert_allclose(detached.numpy(), [2. * (1. + index), 6.])
+            self.assertFalse(detached.requires_grad)
+            outside = detached.sum() + (parameter * 3).sum()
+            np.testing.assert_allclose(jt.grad(outside, parameter).numpy(), [3., 3.])
+            if index:
+                with self.assertRaisesRegex(RuntimeError, 'no autograd'):
+                    jt.grad(live.sum(), parameter)
+        self.assertGreater(captured.stats['replayed'], 0)
+
+    def test_alternating_executor_captures_keep_state_and_readout_order(self):
+        def trajectory(captured):
+            weight = jt.array([1., 2.])
+            bias = jt.array([.5])
+
+            def step(x):
+                loss = (weight * x).sum() + bias.sum()
+                dw, db = jt.grad(loss, [weight, bias])
+                weight.update(weight - .01 * dw)
+                bias.update(bias - .01 * db)
+                jt.sync_all()
+                return loss.detach(), (weight * 2).sum().detach()
+
+            runners = [jt.capture_step(step, record=False) for _ in range(2)] if captured else [step, step]
+            values = []
+            for index in range(10):
+                x = jt.array(np.full((2 + index % 2, 2), 1. + .1 * index, dtype='float32')).stop_grad()
+                result = runners[index % 2](x)
+                values.append([*(float(value.numpy().item()) for value in result),
+                               *weight.numpy().tolist(), *bias.numpy().tolist()])
+            if captured:
+                self.assertTrue(all(r.stats['replayed'] >= 3 for r in runners))
+            return values
+
+        np.testing.assert_allclose(trajectory(True), trajectory(False), rtol=2e-6, atol=1e-6)
+
     # A captured or replayed result is a copy out of the recorded step, with
     # no autograd edge to the call's input or the step's parameters. A grad
     # through it was 4, 0, 0 for x = 2, 3, 4 with only a missing-gradient

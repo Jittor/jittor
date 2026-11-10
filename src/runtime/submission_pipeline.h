@@ -8,6 +8,8 @@
 
 namespace jittor {
 
+struct Node;
+
 // Bookkeeping for *when* a graph gets submitted, as opposed to *how* it runs.
 //
 // Deciding to flush early is a scheduling policy layered on top of the
@@ -38,6 +40,9 @@ struct SubmissionPipeline {
     // grew with depth instead of staying one layer wide. The whole backward is
     // submitted as one batch once construction returns.
     int grad_construction_depth = 0;
+    // Capture finalization consumes already-produced bytes without replaying
+    // stateful ancestors. Ordinary execution and replay never set this.
+    int step_readout_depth = 0;
 };
 
 // Suspends auto-flush for the lifetime of the scope. See
@@ -52,5 +57,6 @@ struct GradConstructionScope {
 };
 
 EXTERN_LIB SubmissionPipeline& runtime_submission_pipeline();
+EXTERN_LIB bool step_readout_ready(Node* node);
 
 } // namespace jittor

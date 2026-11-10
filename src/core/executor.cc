@@ -111,10 +111,21 @@ static bool deferrable_flush() {
         && async_exec_single_thread() && worker_admits_accelerator();
 }
 
+bool step_readout_ready(Node* node) {
+    if (!runtime_submission_pipeline().step_readout_depth || !node->is_var()) return false;
+    auto* value = node->var();
+    // Allocation alone is not proof of execution (e.g. a preallocated CodeOp
+    // output). _kept is set by the runner after successful execution.
+    return value->flag(VarFlags::_kept) && value->num >= 0
+        && (value->mem_ptr || !value->size)
+        && !value->flag(VarFlags::_execution_failed);
+}
+
 void Executor::auto_flush() {
 #ifdef HAS_ACCELERATOR
     auto& pipeline = runtime_submission_pipeline();
-    if (pipeline.flush_active || !runtime_use_cuda() || pipeline.grad_construction_depth)
+    if (pipeline.flush_active || !runtime_use_cuda() || pipeline.grad_construction_depth
+            || pipeline.step_readout_depth)
         return;
     const auto& policy = backend_ops(accelerator_backend_id()).execution;
     const bool deferrable = deferrable_flush();
@@ -352,7 +363,8 @@ static bool has_dynamic_inputs(const vector<Var*>& roots) {
     TraversalEpoch epoch("resolve_dynamic_inputs");
     stack.clear();
     for (auto* var : roots)
-        if (!var->is_finished() && var->input() && !epoch.marked(var->input())) {
+        if (!var->is_finished() && !step_readout_ready(var)
+                && var->input() && !epoch.marked(var->input())) {
             epoch.mark(var->input());
             stack.push_back(var->input());
         }
@@ -362,7 +374,8 @@ static bool has_dynamic_inputs(const vector<Var*>& roots) {
         if (op->flag(OpFlags::_no_input_storage)) continue;
         for (auto* input : op->inputs()) {
             if (input->num < 0) return true;
-            if (!input->is_finished() && input->input() && !epoch.marked(input->input())) {
+            if (!input->is_finished() && !step_readout_ready(input)
+                    && input->input() && !epoch.marked(input->input())) {
                 epoch.mark(input->input());
                 stack.push_back(input->input());
             }
@@ -380,7 +393,8 @@ static void resolve_dynamic_inputs(Executor& executor, const vector<Var*>& roots
     unordered_set<Op*> seen;
     vector<Op*> ordered;
     for (auto* var : roots)
-        if (!var->is_finished() && var->input()) pending.emplace_back(var->input(), false);
+        if (!var->is_finished() && !step_readout_ready(var) && var->input())
+            pending.emplace_back(var->input(), false);
     while (!pending.empty()) {
         auto entry = pending.back();
         pending.pop_back();
@@ -393,7 +407,7 @@ static void resolve_dynamic_inputs(Executor& executor, const vector<Var*>& roots
         pending.emplace_back(op, true);
         if (op->flag(OpFlags::_no_input_storage)) continue;
         for (auto* input : op->inputs())
-            if (!input->is_finished() && input->input())
+            if (!input->is_finished() && !step_readout_ready(input) && input->input())
                 pending.emplace_back(input->input(), false);
     }
     bool changed = false;

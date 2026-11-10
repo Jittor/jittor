@@ -5,7 +5,7 @@
 Use this page when adding or changing a Torch API to check argument adaptation, installation order and return types. Read the [architecture](torch-architecture.en.md) first and use the [compatibility principles](principles.en.md) for acceptance criteria.
 
 - Status: current implementation description
-- Last reviewed: 2026-09-11
+- Last reviewed: 2026-11-11
 - Owner: Torch compatibility maintainers
 - Review trigger: a new torch API, a change to installer orchestration or the
   lowering mechanism
@@ -322,7 +322,49 @@ shim. The translator **builds no IR** and does not participate in
 - Treating CPU fallback as device support—after lowering, execution must happen
   on the declared real device.
 
-## 15. Related documents
+## 15. Training input and state update boundaries
+
+`DataLoader(num_workers>0)` builds its first batch on the calling thread to
+select a safe prefetch path. On Linux CPU / CUDA builds, contiguous detached CPU Tensor batches
+with the default or `spawn` context use isolated CPU processes. Workers disable
+accelerators and distributed initialization, preserve sample order, and send
+exceptions to the parent. Shared memory carries NumPy buffers; receiver threads
+only receive frames and prefault pages. The training thread constructs Tensors
+through native DLPack. A pool retains mappings and reuses a slot only after
+the last NumPy or Tensor alias releases its lease. Retained batches keep their storage alive. Exhaustion,
+errors, timeouts and explicitly closing an iterator reclaim the workers.
+
+Pure Python / NumPy batches keep thread prefetch. CUDA, differentiable, subclass
+and other ineligible Tensor batches stay serial. First-batch placement, full
+worker RNG / context semantics, pinned memory and process `persistent_workers`
+are not fully Torch-equivalent, so fidelity remains approximate. This CPU input
+path is separate from compute fallback; model training must still be verified
+on the declared device.
+
+Ordinary Torch `BatchNorm` defaults to rank-local statistics; explicit
+`SyncBatchNorm` retains synchronization. Native Jittor's BatchNorm default is
+unchanged. DDP broadcasts parameters at initialization and, according to
+`broadcast_buffers`, broadcasts buffers at initialization and before each
+forward. Writeback preserves Var and storage identities so aliases and device
+graphs read the same updated allocation.
+
+CUDA gradient synchronization uses native `nccl_all_reduce_many` to submit
+independent tensors in one NCCL group. Opening, submitting and joining the
+group belong to operator execution, preserving their order in device replay.
+Consumers read results after submission and the stream join. Each gradient
+keeps its shape, dtype and storage; FP32 means use native NCCL average, while
+other gradient types retain sum followed by scaling. CPU and other backends
+keep per-gradient synchronization. Grouping reduces launches and joins; it
+does not itself establish communication/compute overlap.
+
+On CUDA, Adam with zero weight decay can reuse the fused AdamW update because
+their formulas coincide in this case. The update still reads the current
+learning rate, betas and per-parameter counters. Explicit `fused=False` /
+`foreach=False` disable default fusion; Adam with coupled weight decay keeps
+its own computation path. Default Adam's public step Tensor stays on CPU;
+explicit fused counters retain parameter-device placement.
+
+## 16. Related documents
 
 - [Layered architecture](torch-architecture.en.md): the overall design of the
   unified computation graph, lowering, and optimization;

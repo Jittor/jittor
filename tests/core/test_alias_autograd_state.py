@@ -346,3 +346,26 @@ def test_native_store_preserves_unmaterialized_saved_output(derived, strided):
         np.testing.assert_allclose(gradient.numpy(), np.full((2, 2), np.e if derived else 1),
                                    rtol=2e-6, atol=2e-7)
         np.testing.assert_array_equal(source.numpy(), np.full((2, 2), .5))
+
+
+@pytest.mark.parametrize('alias_count', [8, 300])
+def test_step_reader_preservation_crosses_large_alias_sets(alias_count):
+    with policy_scope(EXPLICIT_REQUIRES_GRAD):
+        source = jt.array(np.array([.1, .2], dtype='float32'))
+        source.requires_grad = True
+        aliases = [alias_of(source) for _ in range(alias_count)]
+        jt.sync(aliases, True, False)
+        # The saved output is reached through the final alias and an unsaved
+        # intermediate. Membership indexing must not truncate that traversal.
+        loss = (aliases[-1] + 1).exp().sum()
+        loss.sync(False, False)
+        unrelated = jt.array([3.]).exp()
+        assert not unrelated._mem_ptr_now
+        assert jt.core._preserve_step_readers([source]) > 0
+        assert not unrelated._mem_ptr_now
+        with jt.no_grad():
+            source._copy_into(jt.array([.5, .5]))
+        gradient, = jt.core.grad_optional(loss, [source], True)
+        assert_device(gradient)
+        np.testing.assert_allclose(gradient.numpy(), np.exp([1.1, 1.2]),
+                                   rtol=2e-6, atol=2e-7)

@@ -140,6 +140,21 @@ def _all_reduce_mean(var):
     return var.mpi_all_reduce("mean")
 
 
+def _all_reduce_mean_many(variables):
+    """Group CUDA averages in one replayable op, retaining dtype semantics."""
+    variables = list(variables)
+    if not variables or _world_size() <= 1:
+        return variables
+    ops = _nccl_ops()
+    grouped = getattr(ops, 'nccl_all_reduce_many', None) if ops is not None else None
+    if callable(grouped):
+        if all(str(value.dtype).rsplit('.', 1)[-1] == 'float32' for value in variables):
+            return grouped([value.contiguous() for value in variables], mean=True)
+        reduced = grouped([value.contiguous() for value in variables])
+        return [value / _world_size() for value in reduced]
+    return [_all_reduce_mean(value) for value in variables]
+
+
 def _broadcast_from_rank0(var):
     """Replace ``var`` with rank 0's copy in place. The identity on one rank."""
     if _world_size() <= 1:
@@ -148,7 +163,10 @@ def _broadcast_from_rank0(var):
         raise RuntimeError(
             "this Jittor build has no mpi_broadcast, so parameters cannot be "
             "broadcast to the %d ranks it was launched with." % _world_size())
-    var.assign(var.mpi_broadcast())
+    with jt.no_grad():
+        # Preserve the allocation: detached aliases and captured readers keep
+        # referring to this storage after a broadcast, just as in Torch.
+        var._copy_into(var.mpi_broadcast())
     return var
 
 def _reduce_scalar(var, how):

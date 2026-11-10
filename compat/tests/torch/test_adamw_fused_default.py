@@ -126,6 +126,41 @@ class TestAdamwFusedByDefault(unittest.TestCase):
             optimizer.step()
         assert any(target is p for target in calls)
 
+    def test_zero_decay_adam_preserves_dynamic_onecycle_and_live_state(self):
+        def run(**options):
+            p = torch.nn.Parameter(torch.tensor([1., -2., .3], device='cuda'))
+            frozen = torch.nn.Parameter(torch.ones((3,), device='cuda'), requires_grad=False)
+            optimizer = torch.optim.Adam([frozen, p], lr=.01, **options)
+            scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=.03, total_steps=12)
+            observations = []
+            for index in range(12):
+                p.grad = torch.tensor([index/10 + .1, -.2, .5], device='cuda')
+                optimizer.step()
+                state = optimizer.state[p]
+                assert state['step'].device.type == 'cpu'
+                observations.extend(value.detach().cpu().numpy().copy()
+                                    for value in (p, state['exp_avg'], state['exp_avg_sq'], state['step']))
+                scheduler.step()
+            np.testing.assert_array_equal(frozen.detach().cpu().numpy(), np.ones(3))
+            return observations
+
+        reference = run(fused=False)
+        assert not self.calls
+        for actual, expected in zip(run(), reference):
+            np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-7)
+        assert len(self.calls) == 12
+        self.calls.clear()
+        run(foreach=False)
+        assert not self.calls
+
+    def test_adam_coupled_decay_stays_on_the_coupled_update(self):
+        p = torch.nn.Parameter(torch.tensor([1., 2.], device='cuda'))
+        optimizer = torch.optim.Adam([p], lr=.1, weight_decay=.2)
+        p.grad = torch.zeros_like(p)
+        optimizer.step()
+        assert not self.calls
+        np.testing.assert_allclose(p.detach().cpu().numpy(), [.9, 1.9], rtol=1e-6, atol=1e-7)
+
 
 if __name__ == "__main__":
     unittest.main()

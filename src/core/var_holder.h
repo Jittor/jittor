@@ -1078,6 +1078,12 @@ int first_finished(const vector<VarHolder*>& vars);
 // @pyjt(_first_rebound)
 int first_rebound(const vector<VarHolder*>& holders, const vector<VarHolder*>& olds);
 
+// Check the same holder identity and native requires_grad descriptor used by
+// Python, without crossing that boundary once for every captured leaf.
+// @pyjt(_first_changed_step_leaf)
+int first_changed_step_leaf(const vector<VarHolder*>& holders,
+                           const vector<int64>& pointers, const vector<bool>& gradients);
+
 /**
     Execute the backward-saved readers of `storages` before a replay writes
     them.
@@ -1094,6 +1100,11 @@ int first_rebound(const vector<VarHolder*>& holders, const vector<VarHolder*>& o
  */
 // @pyjt(_preserve_step_readers)
 int preserve_step_readers(const vector<VarHolder*>& storages);
+
+// Complete new readouts against this call's already-executed kept values.
+// Does not finish or alter the original graph needed by later replays.
+// @pyjt(_materialize_step_readouts)
+void materialize_step_readouts(const vector<VarHolder*>& roots, bool device_sync=false);
 
 /**
     Commit already-executed, dense updates that alias their destinations.

@@ -5,7 +5,7 @@
 新增或调整 Torch API 时，沿本页检查参数适配、安装顺序与返回类型。先理解[分层架构](torch-architecture.md)，验收要求见[兼容原则](principles.md)。
 
 - 状态：现行实现说明
-- 上次复查：2026-09-11
+- 上次复查：2026-11-11
 - Owner：Torch 兼容维护者
 - 复查触发：新增 torch API、安装器编排或下沉机制变化
 
@@ -266,7 +266,38 @@ FSDP2 真路径与流水线逻辑都挂在 `_call` 里。
 - 用宽泛 `except` 吞掉安装失败，把一个半装好的兼容层变成表面成功；
 - 把 CPU 回退当成设备支持——下沉后必须在所声明的真实 device 上执行。
 
-## 15. 相关文档
+## 15. 训练输入与状态更新的边界
+
+`DataLoader(num_workers>0)` 先在调用线程构造首个 batch，确定返回对象是否允许
+安全预取。CPU / CUDA 构建的 Linux 上，默认或 `spawn` context 下的连续、无梯度 CPU Tensor batch
+使用独立 CPU 进程；worker 禁用加速器与分布式初始化，顺序取样，异常传回主进程。
+共享内存承载 NumPy buffer，接收线程只接收和预取内存页，训练线程通过原生 DLPack
+构造 Tensor。内存池保留映射，最后一个 NumPy 或 Tensor 别名释放后，worker 才能复用
+相应槽位。被调用方保留 batch 时，其存储仍然有效。迭代结束、异常、超时或主动
+关闭迭代器均回收 worker。
+
+纯 Python / NumPy batch 继续使用线程预取；CUDA、有梯度、子类或其它不适用的
+Tensor batch 保持串行。首个 batch 的线程归属、完整 worker RNG / context 语义、
+固定内存与进程 `persistent_workers` 尚未完全对齐 Torch，保真度仍为 approximate。
+这条 CPU 数据通路不是计算向 CPU 的 fallback；模型与训练计算仍必须在声明设备验证。
+
+Torch 普通 `BatchNorm` 默认使用 rank 本地统计量；显式 `SyncBatchNorm` 保持同步。
+原生 Jittor `BatchNorm` 的默认设置不变。DDP 在初始化时广播参数，并按
+`broadcast_buffers` 在初始化和每次前向前广播 buffer。写回保留 Var 与底层存储身份，
+使别名和设备图读取同一块更新后的存储。
+
+CUDA 梯度同步通过原生 `nccl_all_reduce_many` 将多个独立张量放进同一 NCCL group。
+group 的打开、提交和流等待属于算子执行，因此设备图回放也保留该顺序；消费者在
+group 提交和 join 后读取结果。各梯度保持自己的形状、dtype 与存储，FP32 均值使用
+NCCL 的原生 average，其它梯度类型保留求和再缩放的通路。CPU 与其它后端保留原来的
+逐梯度同步路径。分组减少发射和等待次数，本身不表示通信与计算已经重叠。
+
+CUDA 上零 weight decay 的 Adam 可以复用 AdamW 的融合更新，因为此时两者公式相同。
+更新仍读取当前学习率、betas 与每参数计数；显式 `fused=False` / `foreach=False`
+可以禁用默认融合，带耦合 weight decay 的 Adam 保持自身计算路径。默认 Adam 的公开
+step Tensor 仍在 CPU，显式 fused 计数保持参数设备位置。
+
+## 16. 相关文档
 
 - [分层架构](torch-architecture.md)：统一计算图、下沉与优化的整体设计；
 - [Torch 兼容 API](../../compatibility/torch.md)：支持范围与验证覆盖；
