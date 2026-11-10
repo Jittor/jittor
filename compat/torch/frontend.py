@@ -14,6 +14,11 @@ from typing import Any, Callable, Optional
 #: exists.
 _get_install_context: Optional[Callable[..., Any]] = None
 
+# Resolve this helper once; an import in _placement_request otherwise runs for
+# every factory and module scope. Its result must stay live: device contexts
+# are thread-local and set_default_device can change between calls.
+_active_device_context: Optional[Callable[..., Any]] = None
+
 #: The two accumulation tiers, as the state object spells them.
 _TIERS = {"highest": 0, "high": 1, "medium": 2}
 
@@ -90,7 +95,11 @@ def _placement_request(backend, device, like=None, default_placement=True):
         # `with torch.device(d):` -- torch builds new tensors on `d`. `like`
         # keeps priority above because `torch.empty_like(x)` inherits x's
         # device rather than the ambient context's.
-        from .types import active_device_context
+        global _active_device_context
+        active_device_context = _active_device_context
+        if active_device_context is None:
+            from .types import active_device_context
+            _active_device_context = active_device_context
         device = active_device_context()
         if device is None and not default_placement:
             return None
