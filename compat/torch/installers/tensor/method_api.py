@@ -914,6 +914,19 @@ def _to(self, *args, **kwargs):
         placement = self.placement_backend
         if placement == 0 or (placement > 0 and self.location() != "cpu"):
             return self
+    # Matching another tensor need not turn its explicit placement into a
+    # Python device and resolve it again. Keep copies, casts, meta tensors and
+    # accelerator storage parked on the host on the ordinary conversion path.
+    if len(args) == 1 and not kwargs and isinstance(args[0], _NativeVar):
+        other = args[0]
+        placement = self.placement_backend
+        if (placement >= 0 and placement == other.placement_backend
+                and self.device_id == other.device_id
+                and _jittor_dtype_name(self.dtype) == _jittor_dtype_name(other.dtype)
+                and not getattr(self, "_jittor_torch_meta", False)
+                and not getattr(other, "_jittor_torch_meta", False)
+                and (placement == 0 or self.location() != "cpu")):
+            return self
     ds = None
     dev = None
     copy = bool(kwargs.get("copy", False))

@@ -66,6 +66,65 @@ def test_dtype_only_noop_keeps_autograd_and_checks_other_arguments(device):
             source.to(torch.float32, memory_format="channels_last")
 
 
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+@pytest.mark.parametrize("method", ["to", "type_as"])
+@pytest.mark.parametrize("shape", [(), (0,), (2, 2)])
+def test_tensor_target_noop_preserves_identity_and_layout(device, method, shape):
+    require_rng_device(device)
+    source = torch.ones(shape, device=device)
+    if shape == (2, 2):
+        source = source.t()
+    target = torch.zeros(1, device=device)
+    assert getattr(source, method)(target) is source
+    source.sync()
+    assert source.location() == ("cpu" if device == "cpu" else "device")
+    assert getattr(source, method)(target) is source
+    if shape == (2, 2):
+        assert not source.is_contiguous()
+    copied = source.to(target, copy=True)
+    assert copied is not source
+    copied.fill_(3)
+    np.testing.assert_array_equal(source.numpy(), np.ones(shape))
+    np.testing.assert_array_equal(copied.numpy(), np.full(shape, 3))
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+@pytest.mark.parametrize("method", ["to", "type_as"])
+def test_tensor_target_conversion_preserves_gradient_and_argument_checks(device, method):
+    require_rng_device(device)
+    source = torch.tensor([1., 2., 3.], device=device, requires_grad=True)
+    target = torch.zeros(1, device=device)
+    same = getattr(source, method)(target)
+    assert same is source
+    converted = getattr(same, method)(target.to(torch.float64))
+    assert converted is not source and converted.dtype == torch.float64
+    assert converted.device.type == device
+    converted.square().sum().backward()
+    np.testing.assert_array_equal(source.grad.numpy(), [2., 4., 6.])
+    with pytest.raises(TypeError, match="unexpected keyword"):
+        source.to(target, unknown=True)
+    with pytest.raises(NotImplementedError, match="contiguous_format"):
+        source.to(target, memory_format="channels_last")
+
+
+@pytest.mark.parametrize("method", ["to", "type_as"])
+def test_tensor_target_still_migrates_and_restores_host_parked_cuda_storage(method):
+    require_rng_device("cuda")
+    source = torch.tensor([2., 3.], device="cpu", requires_grad=True)
+    target = torch.zeros(1, device="cuda")
+    moved = getattr(source, method)(target)
+    assert moved is not source and moved.device.type == "cuda"
+    moved.square().sum().backward()
+    np.testing.assert_array_equal(source.grad.numpy(), [4., 6.])
+    moved.sync()
+    moved.migrate_to_cpu()
+    assert moved.placement_backend > 0 and moved.location() == "cpu"
+    restored = getattr(moved, method)(target)
+    restored.sync()
+    assert restored.location() == "device"
+    np.testing.assert_array_equal(restored.numpy(), [2., 3.])
+
+
 class TestToAcceptsTorchDtypes(unittest.TestCase):
     def setUp(self):
         self.x = jt.ones((2, 2))
