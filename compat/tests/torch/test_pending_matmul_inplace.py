@@ -120,3 +120,40 @@ def test_pending_updates_while_auto_flush_submits_work(device):
     for value, expected in values:
         np.testing.assert_array_equal(value.numpy(), expected)
         _physical(value, device)
+
+
+@pytest.mark.parametrize("async_execution", [0, 1])
+def test_empty_module_boundary_keeps_pending_work_for_the_next_matmul(device, async_execution):
+    if device != "cuda":
+        pytest.skip("module-boundary asynchronous submission is a CUDA policy")
+
+    class Pointwise(torch.nn.Module):
+        def forward(self, value):
+            for _ in range(40):
+                value = value + 1
+            return value
+
+    class Projection(torch.nn.Module):
+        def forward(self, value, weight):
+            return torch.matmul(value, weight)
+
+    with torch.no_grad(), jt.flag_scope(auto_flush_ops=128, async_flush_ops=64,
+                                        async_execution=async_execution):
+        value = torch.ones((8, 16), device=device)
+        weight = torch.ones((16, 16), device=device)
+        torch.matmul(value, weight).sync()
+        for _ in range(2):
+            jt.sync_all(True)
+            before = jt.flags.exec_called
+            pending = Pointwise()(value)
+            # A pointwise-only root stays available for fusion. Returning
+            # from its module must not spend the pending submission budget.
+            assert jt.flags.exec_called == before
+            assert not pending._mem_ptr_now
+            result = Projection()(pending, weight)
+            if async_execution:
+                assert jt.flags.exec_called > before
+            else:
+                assert jt.flags.exec_called == before
+            np.testing.assert_array_equal(result.numpy(), np.full((8, 16), 656.))
+            _physical(result, device)

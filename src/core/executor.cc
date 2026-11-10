@@ -171,8 +171,17 @@ void Executor::flush_at_module_boundary() {
     // unit, a transformer layer -- stays in one batch where it can.
     auto& pipeline = runtime_submission_pipeline();
     if (deferrable_flush()
-            && Op::number_of_created_ops - pipeline.last_run_ops >= async_flush_ops)
+            && Op::number_of_created_ops - pipeline.last_run_ops >= async_flush_ops) {
+        const auto previous = pipeline.last_run_ops;
+        const int calls = exec_called;
         auto_flush();
+        // An elementwise-only module has no eligible root to submit. Keep
+        // its pending work in the CUDA budget so the next module's matmul
+        // can hand it off. Per-op auto_flush still re-arms empty scans;
+        // module boundaries must not pretend that such a scan ran a batch.
+        if (exec_called == calls && accelerator_backend_id() == BackendId::Cuda)
+            pipeline.last_run_ops = previous;
+    }
 }
 
 void Executor::submit_pending(Var* target, bool force) {

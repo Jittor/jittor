@@ -10,6 +10,63 @@ from _helpers.device_types import instantiate_device_type_tests
 
 
 class TestTensorInplaceStorage:
+    def test_add_sub_unit_alpha_keeps_nonleaf_view_gradients(self, device):
+        for operation, sign in (("add_", 1), ("sub_", -1)):
+            source = torch.tensor([1., 2., 3., 4.], device=device, requires_grad=True)
+            root = source * 2
+            target = root[1::2]
+            rhs = torch.tensor([3., 4.], device=device, requires_grad=True)
+            assert getattr(target, operation)(rhs) is target
+            target.sum().backward()
+            np.testing.assert_array_equal(root.detach().cpu().numpy(),
+                                          [2., 4. + sign * 3., 6., 8. + sign * 4.])
+            np.testing.assert_array_equal(source.grad.cpu().numpy(), [0., 2., 0., 2.])
+            np.testing.assert_array_equal(rhs.grad.cpu().numpy(), [sign, sign])
+
+    def test_bool_add_alpha_keeps_aliases_and_snapshots(self, device):
+        for scalar in (False, True):
+            for alpha in (0, 1, 2, -2, True, False, 1 << 63, (1 << 64) - 1):
+                root = torch.tensor([False, False, True, True], device=device)
+                target = root[1::2]
+                alias, snapshot = target.detach(), root.clone()
+                pointer = target.data_ptr()
+                rhs = True if scalar else torch.tensor([True, False], device=device)
+                assert target.add_(rhs, alpha=alpha) is target
+                assert target.dtype == alias.dtype == torch.bool
+                assert target.data_ptr() == alias.data_ptr() == pointer
+                np.testing.assert_array_equal(alias.cpu().numpy(), [bool(alpha), True])
+                np.testing.assert_array_equal(root.cpu().numpy(), [False, bool(alpha), True, True])
+                np.testing.assert_array_equal(snapshot.cpu().numpy(), [False, False, True, True])
+                if hasattr(torch, "_torch_compat_install_context"):
+                    target.sync()
+                    assert target.location() == ("device" if device == "cuda" else "cpu")
+
+    def test_bool_subtraction_rejects_before_mutation(self, device):
+        for dtype, operand in ((torch.bool, True), (torch.bool, 1),
+                               (torch.float32, True), (torch.int64, True)):
+            for scalar in (False, True):
+                target = torch.tensor([0, 1], dtype=dtype, device=device)
+                alias = target.detach()
+                pointer = target.data_ptr()
+                rhs = operand if scalar else torch.tensor([operand, operand], device=device)
+                with pytest.raises(RuntimeError, match="bool"):
+                    target.sub_(rhs)
+                assert target.data_ptr() == alias.data_ptr() == pointer
+                np.testing.assert_array_equal(alias.cpu().numpy(), [0, 1])
+
+    def test_bool_alpha_errors_preserve_destination(self, device):
+        for operation, alpha, error in (("add_", 1.0, RuntimeError),
+                                        ("add_", 1 << 64, OverflowError),
+                                        ("add_", -(1 << 63) - 1, OverflowError),
+                                        ("sub_", -(1 << 63) - 1, OverflowError)):
+            target = torch.tensor([False, True], device=device)
+            alias = target.detach()
+            pointer = target.data_ptr()
+            with pytest.raises(error):
+                getattr(target, operation)(True, alpha=alpha)
+            assert target.data_ptr() == alias.data_ptr() == pointer
+            np.testing.assert_array_equal(alias.cpu().numpy(), [False, True])
+
     def test_add_sub_casts_keep_destination_aliases_and_old_snapshots(self, device):
         for target_dtype, rhs_dtype in (
                 (torch.float32, torch.float32),

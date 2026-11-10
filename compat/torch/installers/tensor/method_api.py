@@ -2109,7 +2109,30 @@ def _api_zero_batch(tensors):
 
 def _inplace_add_sub(self, other, alpha, subtract=False):
     other = _dense_arithmetic_operand(other)
-    value = self - other * alpha if subtract else self + other * alpha
+    if subtract and (
+            _jittor_dtype_name(self.dtype) == "bool"
+            or isinstance(other, bool)
+            or (isinstance(other, _NativeVar)
+                and _jittor_dtype_name(other.dtype) == "bool")):
+        if type(alpha) is int and not -(1 << 63) <= alpha < (1 << 64):
+            raise OverflowError("alpha is outside the integer scalar range")
+        self._check_inplace_autograd()
+        raise RuntimeError("Subtraction with bool tensors is not supported")
+    if type(alpha) is int and alpha == 1:
+        # The default does not need a scale operator or an intermediate
+        # tensor. In particular, multiplying a bool RHS by 1 promotes it.
+        value = self - other if subtract else self + other
+    elif (not subtract and type(alpha) in (int, bool)
+            and _jittor_dtype_name(self.dtype) == "bool"
+            and (isinstance(other, bool)
+                 or (isinstance(other, _NativeVar)
+                     and _jittor_dtype_name(other.dtype) == "bool"))):
+        # Boolean alpha is logical, after the scalar integer-range check.
+        if not -(1 << 63) <= alpha < (1 << 64):
+            raise OverflowError("alpha is outside the integer scalar range")
+        value = self + (other if alpha else False)
+    else:
+        value = self - other * alpha if subtract else self + other * alpha
     if tuple(value.shape) != tuple(self.shape):
         raise RuntimeError("in-place result shape does not match destination shape")
     result_dtype, target_dtype = value.dtype, self.dtype
