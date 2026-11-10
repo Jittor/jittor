@@ -40,3 +40,28 @@ def test_functional_rms_values_and_derivatives(shape, axes, weighted, training, 
         if weighted:
             dw = (upstream*x*inv).sum(axis=tuple(range(len(shape)-len(axes))))
             np.testing.assert_allclose(weight.grad.cpu().numpy(), dw, rtol=2e-5, atol=2e-6)
+
+
+@pytest.mark.parametrize("device", os.environ.get("JITTOR_TEST_DEVICES", "cpu").split(","))
+def test_rms_norm_strided_inputs_use_live_weights_and_epsilon(device):
+    rng = np.random.default_rng(914)
+    source = rng.standard_normal((17, 3)).astype("float32")
+    weights = rng.uniform(.5, 1.5, 34).astype("float32")
+    with torch.no_grad():
+        value = torch.tensor(source, device=device).transpose(0, 1)
+        weight = torch.tensor(weights, device=device)[::2]
+        assert not value.is_contiguous()
+        assert not weight.is_contiguous()
+        first = torch.nn.functional.rms_norm(value, (17,), weight, eps=1e-6)
+        saved = first.cpu().numpy().copy()
+        weight.copy_(torch.full_like(weight, 2.))
+        second = torch.nn.functional.rms_norm(value, (17,), weight, eps=.1)
+        assert first is not second
+        assert first.device.type == second.device.type == device
+        assert not first.requires_grad and not second.requires_grad
+        raw = source.T.astype("float64")
+        expected_first = raw / np.sqrt(np.mean(raw*raw, -1, keepdims=True) + 1e-6) * weights[::2]
+        expected_second = raw / np.sqrt(np.mean(raw*raw, -1, keepdims=True) + .1) * 2.
+        np.testing.assert_allclose(saved, expected_first, rtol=2e-5, atol=2e-6)
+        np.testing.assert_allclose(second.cpu().numpy(), expected_second, rtol=2e-5, atol=2e-6)
+        np.testing.assert_array_equal(first.cpu().numpy(), saved)
