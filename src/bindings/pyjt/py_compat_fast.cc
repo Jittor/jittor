@@ -12,6 +12,7 @@
 #include "runtime/device.h"
 #include "runtime/backend.h"
 #include "runtime/dispatch_context.h"
+#include "runtime/graph_capture.h"
 #include <stdexcept>
 #include <descrobject.h>
 
@@ -1065,6 +1066,55 @@ PyObject* fast_view(PyObject* self, PyObject* shape) {
     Var* var = GET_RAW_PTR(VarHolder, self)->var;
     if (!var->is_contiguous()) return none();
     return storage_view(self, target);
+}
+
+bool try_defer_unaliased_inplace(PyObject* self, PyObject* value) {
+    if (!no_grad || graph_capture_active() || !runtime_use_cuda()
+            || accelerator_backend_id() != BackendId::Cuda
+            || !is_var(self) || !is_var(value)) return false;
+    PyTensorFrontendScope frontend(self, nullptr, 0, false);
+    // The generated binding holds GraphEntryScope, as assign does. This
+    // only constructs/rebinds nodes; entering the executor here would release
+    // that graph lock and allow queued work to allocate the pending result.
+    auto* target = GET_RAW_PTR(VarHolder, self);
+    auto* replacement = GET_RAW_PTR(VarHolder, value);
+    Var* a = target->var;
+    Var* b = replacement->var;
+    NanoString dtype = a->dtype();
+    if (dtype != ns_float32 && dtype != ns_float16 && dtype != ns_bfloat16) return false;
+    if (a == b || a->mem_ptr || a->is_finished() || target->view || target->views
+            || a->share_src || a->share_next || a->liveness.forward.count() != 1
+            || !a->is_stop_grad() || !b->is_stop_grad() || !a->is_contiguous()
+            || a->shape != b->shape || a->dtype() != b->dtype()
+            || a->placement != b->placement || a->device_id != b->device_id)
+        return false;
+    if (a->placement.explicit_backend && a->placement.device.backend != BackendId::Cuda)
+        return false;
+    // These providers allocate a fresh result, rather than a view or an
+    // output aliased with an input. Broader producers retain the store path.
+    Op* producer = a->input();
+    if (!producer || !((has_op("cublas_matmul")
+                && producer->is_op(get_op_id("cublas_matmul")))
+            || (has_op("cublas_batched_matmul")
+                && producer->is_op(get_op_id("cublas_batched_matmul"))))) return false;
+    Op* update = b->input();
+    if (!update || !update->is_op(op_ids::binary())) return false;
+    int readers = 0;
+    for (auto* consumer : a->outputs())
+        if (consumer != update || ++readers > 1) return false;
+    if (readers != 1) return false;
+    auto version = a->peek_storage_version();
+    if (version && version.use_count() != 2) return false;
+    if (a->autograd_alias && (a->autograd_alias.use_count() != 1
+            || a->autograd_alias->version.use_count() != 1)) return false;
+    // Copy also covers copy_(rhs) when the caller still owns rhs: assigning
+    // rhs itself would make the two tensors share mutable storage.
+    static auto make_copy = op_constructor<VarPtr, Var*>("copy");
+    VarHolder copied(make_copy(b));
+    if (!version) version = a->storage_version_token();
+    target->assign(&copied);
+    std::atomic_store(&target->var->storage_mutation_version, version);
+    return true;
 }
 
 PyObject* fast_contiguous(PyObject* self, PyObject* tensor_type) {

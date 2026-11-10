@@ -300,6 +300,9 @@ def _copy_detached_storage(self, value):
         # pending view may already alias a materialized base; graph rebinding
         # would lose that storage, its overlap guards and its gradient history.
         if not self._mem_ptr_now:
+            if (not _OPTIMIZER_WRITES[0] and not step_capture.tracing()
+                    and _owner.jt.core._try_defer_unaliased_inplace(self, value)):
+                return True
             self.sync(False, False)
         if not self._mem_ptr_now:
             # A deferred capture may still have no backing storage. Retain its

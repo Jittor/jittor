@@ -14,6 +14,12 @@ namespace jittor {
 // @pyjt(_frontend_dtype)
 PyObject* frontend_dtype(PyObject* self);
 
+// A fresh, unallocated cuBLAS result with no aliases or other readers can be
+// replaced by an independent copy of its binary update. False retains the
+// imperative store. No tensor, graph or execution plan is cached.
+// @pyjt(_try_defer_unaliased_inplace)
+bool try_defer_unaliased_inplace(PyObject* self, PyObject* value);
+
 // What the fast paths below call back to decide: `tracing()`, whether a
 // step is being captured (`jittor._runtime.step_capture.tracing`). The optional
 // concat continuation resumes after provider selection; selector_state keeps
