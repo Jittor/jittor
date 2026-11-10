@@ -626,6 +626,7 @@ struct VarHolder {
         // Materialize the tensor in its current placement without migrating
         // it merely to observe the first element's address.
         sync(true, false);
+        var->storage_version_token()->externally_visible.store(true, std::memory_order_relaxed);
         return (uint64)var->mem_ptr;
     }
 
@@ -655,6 +656,7 @@ struct VarHolder {
         if (!var->allocator->is_cuda())
             migrate_to_gpu(var, get_allocator(migration_device(), false));
         #endif
+        var->storage_version_token()->externally_visible.store(true, std::memory_order_relaxed);
         return (uint64)var->mem_ptr;
     }
 
@@ -689,6 +691,7 @@ struct VarHolder {
         if (!var->allocator->is_cuda())
             migrate_to_gpu(var, get_allocator(migration_device(), false));
         #endif
+        var->storage_version_token()->externally_visible.store(true, std::memory_order_relaxed);
         return (uint64)var->mem_ptr;
     }
 

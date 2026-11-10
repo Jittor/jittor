@@ -20,6 +20,12 @@ PyObject* frontend_dtype(PyObject* self);
 // @pyjt(_try_defer_unaliased_inplace)
 bool try_defer_unaliased_inplace(PyObject* self, PyObject* value);
 
+// An already allocated, unaliased CUDA destination can be updated by a fresh
+// write_back op. Its reader dependencies preserve snapshots without draining
+// unrelated pending work; its output retains the original storage.
+// @pyjt(_try_ordered_unaliased_inplace)
+bool try_ordered_unaliased_inplace(PyObject* self, PyObject* value);
+
 // What the fast paths below call back to decide: `tracing()`, whether a
 // step is being captured (`jittor._runtime.step_capture.tracing`). The optional
 // concat continuation resumes after provider selection; selector_state keeps

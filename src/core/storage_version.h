@@ -11,6 +11,9 @@ struct Op;
 struct StorageMutationVersion {
     uint64 identity;
     std::atomic<uint64> value{0};
+    // Raw pointer consumers are outside graph dependency tracking. Once an
+    // address escapes, storage-preserving writes must keep their eager store.
+    std::atomic<bool> externally_visible{false};
     StorageMutationVersion();
 };
 

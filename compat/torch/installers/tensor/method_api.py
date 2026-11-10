@@ -308,6 +308,9 @@ def _copy_detached_storage(self, value):
             # A deferred capture may still have no backing storage. Retain its
             # graph write instead of calling the imperative primitive on null.
             return False
+        if (not _OPTIMIZER_WRITES[0] and not step_capture.tracing()
+                and _owner.jt.core._try_ordered_unaliased_inplace(self, value)):
+            return True
         # Resolve pending readers (including clone snapshots) before changing
         # bytes. _copy_into owns placement, stream ordering and dense copies.
         # An optimizer group resolves them once for every parameter instead

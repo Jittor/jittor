@@ -8,6 +8,7 @@
 #include "ops/op_register.h"
 #include "core/op.h"
 #include "ops/composite/code_op.h"
+#include "mem/allocator.h"
 #include <cstring>
 #include "runtime/device.h"
 #include "runtime/backend.h"
@@ -1066,6 +1067,64 @@ PyObject* fast_view(PyObject* self, PyObject* shape) {
     Var* var = GET_RAW_PTR(VarHolder, self)->var;
     if (!var->is_contiguous()) return none();
     return storage_view(self, target);
+}
+
+bool try_ordered_unaliased_inplace(PyObject* self, PyObject* value) {
+    if (!no_grad || graph_capture_active() || !runtime_use_cuda()
+            || accelerator_backend_id() != BackendId::Cuda
+            || !is_var(self) || !is_var(value)) return false;
+    PyTensorFrontendScope frontend(self, nullptr, 0, false);
+    // Stay under the generated binding's graph lock, as assign does. This
+    // builds new dependencies; it neither enters nor drains the executor.
+    auto* target = GET_RAW_PTR(VarHolder, self);
+    Var* a = target->var;
+    Var* b = GET_RAW_PTR(VarHolder, value)->var;
+    NanoString dtype = a->dtype();
+    if (dtype != ns_float32 && dtype != ns_float16 && dtype != ns_bfloat16) return false;
+    if (a == b || !a->mem_ptr || !a->is_finished() || !a->allocator
+            || !a->allocator->is_cuda() || target->view || target->views
+            || a->share_src || a->liveness.forward.count() != 1
+            || a->capture_owners || a->flag(VarFlags::_kept) || b->flag(VarFlags::_kept)
+            || !a->is_stop_grad() || !b->is_stop_grad()
+            || !a->is_contiguous() || !b->is_contiguous()
+            || a->shape != b->shape || a->dtype() != b->dtype()
+            || a->placement != b->placement || a->device_id != b->device_id)
+        return false;
+    if (a->placement.explicit_backend && a->placement.device.backend != BackendId::Cuda)
+        return false;
+    // Foreign/DLPack allocations may still have consumers in another runtime.
+    // Admit only storage from this device's current ordinary allocator stack.
+    if (a->allocator != get_allocator(Device{BackendId::Cuda, a->device_id}, false))
+        return false;
+    Op* update = b->input();
+    if (!update || !update->is_op(op_ids::binary())) return false;
+    bool consumes_target = false;
+    for (Var* input : update->inputs())
+        consumes_target = consumes_target || input == a;
+    if (!consumes_target) return false;
+    // An unexecuted native view has no physical share ring yet. Future reads
+    // through that alias would not depend on the replacement holder.
+    for (Op* reader : a->outputs())
+        for (Var* output : reader->outputs())
+            if (output->share_src == a) return false;
+    auto version = a->peek_storage_version();
+    if (version && (version.use_count() != 2
+            || version->externally_visible.load(std::memory_order_relaxed))) return false;
+    if (a->autograd_alias && (a->autograd_alias.use_count() != 1
+            || a->autograd_alias->version.use_count() != 1)) return false;
+    {
+        // The async executor links allocated aliases under this mutex.
+        // Pending aliases were excluded above before their allocation.
+        std::lock_guard<std::mutex> guard(share_ring_mutex());
+        if (a->share_next) return false;
+    }
+    static auto make_write_back = op_constructor<vector<VarPtr>, vector<Var*>&&, vector<Var*>&&>("write_back");
+    auto written = make_write_back(vector<Var*>{a}, vector<Var*>{b});
+    VarHolder result(move(written[0]));
+    // WriteBackOp orders earlier readers and shares the destination's storage
+    // and mutation token. assign advances that token exactly once.
+    target->assign(&result);
+    return true;
 }
 
 bool try_defer_unaliased_inplace(PyObject* self, PyObject* value) {
