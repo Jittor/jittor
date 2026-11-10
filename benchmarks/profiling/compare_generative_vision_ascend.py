@@ -5,7 +5,7 @@ from pathlib import Path
 
 import numpy as np
 
-from benchmark_diffusion_ascend import lab_output_path, resolve_source_root
+from _paths import lab_output_path, resolve_source_root
 
 
 def main():

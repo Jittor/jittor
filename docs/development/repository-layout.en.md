@@ -74,6 +74,11 @@ wheel.
 
 ## Documentation ownership
 
+The root keeps bilingual READMEs, GitHub contribution and conduct entry points, and files
+required by build tools. Governance belongs in `docs/project/community/`; additional development
+container recipes belong in `tools/containers/`. The root `Dockerfile` remains the notebook image
+and CI entry point.
+
 External documentation is a single `docs/` tree, aimed at users and contributors: the entry
 point, tutorials, API reference, user guides, Torch compatibility, mechanism notes
 (`docs/notes/`), performance, release notes, community, and contributor documentation

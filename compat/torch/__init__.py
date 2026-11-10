@@ -77,13 +77,17 @@ from .installers import (
     data,
     distributed,
     distributions,
+    export as export_installer,
     nn,
     npu,
     numerical,
+    package as package_installer,
+    pipelining as pipelining_installer,
     tensor,
     utilities,
 )
 from . import serialization
+from . import checkpoint_io
 from ..diagnostics import swallowed
 
 
@@ -165,11 +169,14 @@ _REQUIRED_STEPS: Tuple[InstallStep, ...] = (
     ("distributed", distributed.install),
     ("core.extended", core.install_misc),
     ("serialization", _install_serialization),
+    ("package", package_installer.install),
     ("utilities", utilities.install),
     ("utilities.runtime-knobs", utilities.install_runtime_knobs),
     ("data", data.install),
     ("distributions", distributions.install),
     ("compiler", compiler.install),
+    ("export", export_installer.install),
+    ("pipelining", pipelining_installer.install),
     ("numerical", numerical.install),
     ("numerical.signal", numerical.install_signal),
     ("autograd.module-keys", autograd_installer.install_parity),

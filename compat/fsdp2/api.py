@@ -4,6 +4,8 @@ import abc
 import contextlib
 import types
 
+import numpy as np
+
 import jittor as jt
 from jittor import nn
 
@@ -311,12 +313,215 @@ def share_comm_ctx(modules=None):
     yield
 
 
+# FSDP1 arguments that this wrapper accepts but cannot change the FSDP2 plan.
+# use_orig_params is unconditional in FSDP2; prefetch/limit_all_gathers are
+# scheduling knobs of the FSDP1 collectives, which this implementation does
+# not have; device_id selects the device fully_shard already moves to.
+_LEGACY_FSDP_NOOP = (
+    "use_orig_params", "forward_prefetch", "limit_all_gathers",
+    "backward_prefetch", "device_id", "_use_expandable_segments",
+    "_device_handle",
+)
+
+
+def _legacy_strategy(value):
+    if value is None:
+        return config.ShardingStrategy.FULL_SHARD
+    if isinstance(value, config.ShardingStrategy):
+        return value
+    try:
+        return config.ShardingStrategy(value)
+    except (ValueError, TypeError) as error:
+        raise ValueError("unknown FSDP sharding_strategy %r" % (value,)) from error
+
+
+def _legacy_mesh(device_mesh, process_group):
+    if device_mesh is not None and process_group is not None:
+        raise ValueError(
+            "FullyShardedDataParallel accepts either device_mesh= or "
+            "process_group=, not both")
+    if device_mesh is not None:
+        if not isinstance(device_mesh, dtensor.DeviceMesh):
+            raise TypeError("FullyShardedDataParallel device_mesh must be a DeviceMesh")
+        return device_mesh
+    if process_group is None:
+        return None
+    return dtensor.DeviceMesh.from_group(
+        process_group, "cuda" if getattr(jt, "has_cuda", 0) else "cpu")
+
+
+def _legacy_ignored_params(module, ignored_states, ignored_modules):
+    ordered = []
+    seen = set()
+
+    def add(parameter):
+        if parameter is not None and id(parameter) not in seen:
+            seen.add(id(parameter))
+            ordered.append(parameter)
+
+    for parameter in ignored_states or ():
+        add(parameter)
+    for ignored in ignored_modules or ():
+        if ignored is None:
+            continue
+        for parameter in ignored.parameters(recurse=True):
+            add(parameter)
+    return tuple(ordered)
+
+
+def _legacy_sync_module_states(module, mesh, enabled):
+    """FSDP1's sync_module_states: rank 0's initial weights reach every rank."""
+    if not enabled or not common._in_true_distributed():
+        return
+    from jittor.distributed import broadcast
+
+    if mesh is None:
+        group, ranks = None, list(range(common._world_size()))
+    elif mesh.ndim == 1:
+        group = mesh.get_group()
+        ranks = [int(rank) for rank in mesh.mesh]
+    else:
+        flat = mesh._flatten()
+        group = flat.get_group()
+        ranks = [int(rank) for rank in flat.mesh]
+    if len(ranks) <= 1:
+        return
+    source = ranks[0]
+    for value in list(module.parameters(recurse=True)) + list(module.buffers(recurse=True)):
+        value.update(broadcast(value, src=source, group=group))
+
+
+def _legacy_fsdp_plan(module, args, kwargs):
+    """Translate FSDP1 constructor arguments into a fully_shard plan.
+
+    The two names that change the plan are ``device_mesh`` (which axis to
+    shard) and ``sharding_strategy`` (whether to shard at all).  Before this
+    translation both landed in ``fully_shard(**kwargs)`` and were silently
+    ignored: a NO_SHARD wrap with ``device_mesh=dp_mesh`` sharded the model
+    over the *world* instead of not sharding it.
+    """
+    if len(args) > 1:
+        raise TypeError(
+            "FullyShardedDataParallel accepts at most one positional argument "
+            "(process_group); use keyword arguments for the rest")
+    process_group = kwargs.pop("process_group", args[0] if args else None)
+    device_mesh = kwargs.pop("device_mesh", None)
+    strategy = _legacy_strategy(kwargs.pop("sharding_strategy", None))
+    cpu_offload = kwargs.pop("cpu_offload", None)
+    auto_wrap_policy = kwargs.pop("auto_wrap_policy", None)
+    mixed_precision = kwargs.pop("mixed_precision", None)
+    ignored_states = kwargs.pop("ignored_states", None)
+    ignored_modules = kwargs.pop("ignored_modules", None)
+    param_init_fn = kwargs.pop("param_init_fn", None)
+    sync_module_states = bool(kwargs.pop("sync_module_states", False))
+    for name in _LEGACY_FSDP_NOOP:
+        kwargs.pop(name, None)
+    if kwargs:
+        raise TypeError(
+            "FullyShardedDataParallel got unexpected keyword argument(s): %s"
+            % ", ".join(sorted(kwargs)))
+    if auto_wrap_policy is not None:
+        raise NotImplementedError(
+            "FullyShardedDataParallel auto_wrap_policy= would create nested "
+            "FSDP units; this compat wraps the module passed to it as one "
+            "unit, so accepting the policy would silently change the plan")
+    if param_init_fn is not None:
+        raise NotImplementedError(
+            "FullyShardedDataParallel param_init_fn= is not implemented")
+    if cpu_offload is not None and getattr(cpu_offload, "offload_params", False):
+        raise NotImplementedError(
+            "FullyShardedDataParallel cpu_offload(offload_params=True) is not implemented")
+    mp_policy = None
+    if mixed_precision is not None:
+        buffer_dtype = getattr(mixed_precision, "buffer_dtype", None)
+        if buffer_dtype is not None:
+            raise NotImplementedError(
+                "FullyShardedDataParallel mixed_precision buffer_dtype= is not implemented")
+        mp_policy = config.MixedPrecisionPolicy(
+            param_dtype=getattr(mixed_precision, "param_dtype", None),
+            reduce_dtype=getattr(mixed_precision, "reduce_dtype", None),
+            cast_forward_inputs=getattr(mixed_precision, "cast_forward_inputs", True),
+        )
+    mesh = _legacy_mesh(device_mesh, process_group)
+    _legacy_sync_module_states(module, mesh, sync_module_states)
+    if mesh is None and strategy is config.ShardingStrategy.NO_SHARD:
+        # FSDP1's default process group is the whole world, and NO_SHARD
+        # replicates over it.  Without this the fallthrough would shard over
+        # the world, which is exactly the bug this translation removes.
+        mesh = dtensor.init_device_mesh(
+            "cuda" if getattr(jt, "has_cuda", 0) else "cpu",
+            (common._world_size(),), mesh_dim_names=("dp",))
+    plan = {
+        "mesh": mesh,
+        "strategy": strategy,
+        "mp_policy": mp_policy,
+        "ignored_params": _legacy_ignored_params(
+            module, ignored_states, ignored_modules),
+        "reshard_after_forward": True,
+        "dp_mesh_dims": None,
+    }
+    if strategy is config.ShardingStrategy.NO_SHARD:
+        # NO_SHARD means every rank keeps the full parameters and only
+        # gradients are synchronized over the data-parallel mesh.  Sharding
+        # over a one-rank shard group expresses that without a second code
+        # path: the shards ARE the full parameters, and the replicate group
+        # performs the DDP-style mean the FSDP1 strategy promises.
+        plan["replicate_mesh"] = mesh
+    elif strategy is config.ShardingStrategy.SHARD_GRAD_OP:
+        # FSDP1 keeps parameters unsharded after the forward pass.
+        plan["reshard_after_forward"] = False
+    elif strategy in (config.ShardingStrategy.HYBRID_SHARD,
+                      config.ShardingStrategy._HYBRID_SHARD_ZERO2):
+        names = tuple(getattr(mesh, "mesh_dim_names", None) or ())
+        if mesh is None or mesh.ndim != 2 or set(names) != {"shard", "replicate"}:
+            raise NotImplementedError(
+                "FullyShardedDataParallel HYBRID_SHARD needs a 2-D device_mesh "
+                "with mesh_dim_names=('shard', 'replicate') so the sharding "
+                "and replication axes are unambiguous")
+        plan["dp_mesh_dims"] = config.DataParallelMeshDims(
+            shard="shard", replicate="replicate")
+        if strategy is config.ShardingStrategy._HYBRID_SHARD_ZERO2:
+            plan["reshard_after_forward"] = False
+    return plan
+
+
 class FullyShardedDataParallel(nn.Module, FSDPModule):
     def __init__(self, module, *args, **kwargs):
         nn.Module.__init__(self)
-        self.module = fully_shard(module, **kwargs)
+        plan = _legacy_fsdp_plan(module, args, kwargs)
+        replicate_mesh = plan.pop("replicate_mesh", None)
+        strategy = plan.pop("strategy")
+        mesh = plan.pop("mesh")
+        if replicate_mesh is not None:
+            # One-rank shard group + the data-parallel mesh as replication.
+            # The singleton mesh is local to this rank, so it needs no
+            # communicator (a size-1 group short-circuits every collective).
+            mesh = dtensor.DeviceMesh(
+                replicate_mesh.device_type,
+                np.asarray([common._rank()], dtype=np.int64),
+                _init_backend=False)
+        wrapped = fully_shard(module, mesh=mesh, **plan)
+        state = getattr(wrapped, "_fsdp_state", None)
+        if state is not None:
+            state.legacy_sharding_strategy = strategy
+            if replicate_mesh is not None:
+                state.replicate_group = (
+                    replicate_mesh.get_group() if replicate_mesh.size() > 1 else None)
+                state.mesh = replicate_mesh
+        self.module = wrapped
         object.__setattr__(self, "_is_fsdp_module", True)
         object.__setattr__(self, "_fsdp_state", getattr(self.module, "_fsdp_state", None))
+
+    def __getattr__(self, name):
+        # FSDP1 forwards unknown attributes to the wrapped module; the example
+        # reads model.config and model.loss_function after wrapping.
+        try:
+            return super().__getattr__(name)
+        except AttributeError:
+            module = self.__dict__.get("_modules", {}).get("module")
+            if module is None:
+                raise
+            return getattr(module, name)
 
     def execute(self, *args, **kwargs):
         return self.module(*args, **kwargs)

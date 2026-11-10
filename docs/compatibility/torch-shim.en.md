@@ -39,6 +39,18 @@ This command comes from `jittor-compat` and also deploys bundled third-party stu
 
 `JITTOR_TORCH_SHIM=1` selects Torch mode but does not add uninstalled packages to Python's search path. Install the compatibility package first; setting the variable alone cannot fix `ModuleNotFoundError`.
 
+## Optional torch_xla emulation
+
+`jittor-compat` bundles a `torch_xla` client emulation so programs written against the PyTorch/XLA client API can run on Jittor. `jittor-torch-shim` deploys it with the other bundled stubs. It is not XLA: `distributed.xla_multiprocessing.spawn` gives each process one visible CUDA device, `core.xla_model` maps device/ordinal/rendezvous calls onto Jittor CUDA or CPU devices, and collectives exchange files through the rendezvous directory. There is no TPU, no XLA compilation, no SPMD sharding and no XLA FSDP.
+
+Note that once `torch_xla` is importable, Transformers and Accelerate treat the environment as an XLA one by default (`USE_TORCH_XLA` defaults to true). Set `USE_TORCH_XLA=0`, or leave this stub undeployed, when running native Jittor CUDA work; otherwise unrelated Trainer paths enter the emulated XLA branches.
+
+Launching matches upstream; `--num_cores` must not exceed the CUDA devices visible to the process, and a CPU-only host supports one process:
+
+```bash
+python examples/pytorch/xla_spawn.py --num_cores 2 train_script.py ...
+```
+
 ## Caches and project extensions
 
 Set `JITTOR_TORCH_RUNTIME_ROOT` before starting the application when you need a fixed runtime location. The default is `${XDG_CACHE_HOME:-~/.cache}/jittor/torch-shim/`. Native Jittor's compilation cache and the compatibility runtime are separate concepts; check their locations when maintaining multiple environments.

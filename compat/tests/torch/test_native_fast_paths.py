@@ -47,6 +47,24 @@ _CUDA_KERNELS = torch.cuda.is_available() and bool(getattr(jt.compiler, "is_cuda
 
 
 class TestFastCat(unittest.TestCase):
+    def test_torch_autocast_cat_preserves_float32_values_and_gradients(self):
+        values = np.array([1.00123, -3.14159, 0.12345, -2.71828], dtype=np.float32)
+        for device in ("cpu", _cuda()):
+            for dtype in (torch.float16, torch.bfloat16):
+                if device == "cpu" and dtype == torch.float16:
+                    continue
+                for axis in (False, True):
+                    with self.subTest(device=device, dtype=dtype, axis=axis):
+                        x = torch.tensor(values, dtype=torch.float32, device=device).requires_grad_(True)
+                        with torch.autocast(device_type=device, dtype=dtype):
+                            prior = jt.flags.amp_reg
+                            result = torch.cat((x[2:], x[:2]), **({"axis": 0} if axis else {"dim": 0}))
+                            self.assertEqual(jt.flags.amp_reg, prior)
+                        self.assertEqual(result.dtype, torch.float32)
+                        np.testing.assert_array_equal(result.detach().cpu().numpy(), values[[2, 3, 0, 1]])
+                        result.sum().backward()
+                        np.testing.assert_array_equal(x.grad.cpu().numpy(), np.ones(4, dtype=np.float32))
+
     def test_frozen_inputs_and_grad_mode(self):
         for device in ("cpu", _cuda()):
             with self.subTest(device=device):
@@ -894,10 +912,10 @@ class TestRegisteredRmsInference(unittest.TestCase):
         np.testing.assert_array_equal(self.x.grad.numpy(), np.ones_like(self.values))
 
     def test_bfloat16_order_helper_and_module_hooks_stay_in_python(self):
+        # RMS fast paths require matching input/weight precision. Mixed
+        # precision is tested separately and must retain the model forward.
+        self.norm.to(torch.bfloat16)
         x_bf16 = self.x.to(torch.bfloat16)
-        # The weighted BF16 contract requires matching operand dtypes. Mixed
-        # input/weight dtypes belong to forward, before this helper is called.
-        self.norm.to(dtype=torch.bfloat16)
         seen = []
 
         def bf16_order(value, weight, epsilon):
@@ -909,7 +927,7 @@ class TestRegisteredRmsInference(unittest.TestCase):
         self.assertEqual(seen, [True])
         self.assertEqual(result.dtype, torch.bfloat16)
         np.testing.assert_array_equal(result.float().numpy(), self.values)
-        self.norm.to(dtype=torch.float32)
+        self.norm.float()
         seen.clear()
 
         def provider(value, weight, epsilon):

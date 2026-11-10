@@ -26,15 +26,23 @@ def arange(start=0, end=None, step=1,dtype=None):
     # int32, and with only `end` fractional -- `arange(1.5)` -- the integer
     # product made an int32 range; a fractional step that reached the integer
     # path through a frontend's scalar conversion collapsed to zero.
-    if any(isinstance(value, (float, np.floating)) for value in (start, end, step)):
-        if dtype is not None and _dtype_name(dtype) == "float64":
-            # A Python scalar operand is folded as a float32 constant; keep
-            # start and step in double for a double range, as torch does.
-            x = x.float64()
-            step = jt.array(float(step), dtype="float64")
-            start = jt.array(float(start), dtype="float64")
-        else:
-            x = x.float32()
+    if dtype is not None and _dtype_name(dtype) == "float64":
+        # A Python scalar operand is folded as a float32 constant; keep
+        # start and step in double for a double range, as torch does.
+        x = x.float64()
+        step = jt.array(float(step), dtype="float64")
+        start = jt.array(float(start), dtype="float64")
+    elif (dtype is not None and _dtype_name(dtype) in ("float16", "bfloat16", "float32")) or any(
+            isinstance(value, (float, np.floating)) for value in (start, end, step)):
+        x = x.float32()
+        step = float(step)
+        start = float(start)
+    elif dtype is not None and _dtype_name(dtype) == "int64":
+        # Cast before integer arithmetic. Casting after an int32 add wraps
+        # large starts or steps before the requested int64 result exists.
+        x = x.int64()
+        step = jt.array(step, dtype="int64")
+        start = jt.array(start, dtype="int64")
     x = x*step+start
     if dtype is not None:
         x= x.cast(dtype)

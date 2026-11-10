@@ -21,6 +21,19 @@ def _cpu(value):
     assert not getattr(value, "_jittor_torch_force_cpu", False)
 
 
+def test_str_enum_device_uses_its_public_value():
+    from enum import Enum
+    import torch
+
+    class OffloadDeviceEnum(str, Enum):
+        cpu = "cpu"
+
+    value = torch.tensor([1.0, 2.0], device=OffloadDeviceEnum.cpu)
+    value.sync()
+    _cpu(value)
+    np.testing.assert_array_equal(value.numpy(), [1.0, 2.0])
+
+
 def test_lazy_cpu_factories_views_reductions_and_native_selection():
     import jittor as jt
     import torch
@@ -102,12 +115,13 @@ def test_explicit_copy_roundtrip_and_gradient_keep_source_placement():
             np.testing.assert_array_equal(copied_grad.numpy(), [4., 6.])
 
 
+@pytest.mark.cuda
 def test_a_device_var_parked_on_the_host_is_moved_back_by_to_device():
     """Asking for the device must not accept host storage for a device Var.
 
-    jittor parks a device Var in host memory when a CPU op consumes it -- one
-    host read of a slice is enough -- while ``device_id`` keeps naming the
-    device it belongs to. Such a Var is not on its device: an extension handed
+    Explicit host migration parks a device Var in host memory while
+    ``device_id`` keeps naming the device it belongs to. Scalar reads now
+    preserve device storage, so they cannot establish this precondition. Such a Var is not on its device: an extension handed
     it reads a host pointer and fails its own ``is_cuda()`` check, so
     ``.to("cuda:N")``/``.cuda()`` have to move it back rather than trust the
     matching index.
@@ -119,8 +133,9 @@ def test_a_device_var_parked_on_the_host_is_moved_back_by_to_device():
         jt.sync_all(True)
         assert bounds.device_id == 0 and bounds.location() == "device"
 
-        # The host read a packed-attention layout needs, which parks the Var.
+        # Explicitly establish host storage without changing logical placement.
         assert int(bounds[1]) == 4
+        bounds.migrate_to_cpu()
         assert bounds.device_id == 0 and bounds.location() == "cpu"
 
         back = bounds.to("cuda:0")
@@ -129,6 +144,7 @@ def test_a_device_var_parked_on_the_host_is_moved_back_by_to_device():
         np.testing.assert_array_equal(back.numpy(), [0, 4, 8])
 
         assert int(bounds[1]) == 4
+        bounds.migrate_to_cpu()
         assert bounds.location() == "cpu"
         shown = bounds.cuda()
         shown.sync()

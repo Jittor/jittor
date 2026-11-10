@@ -327,7 +327,11 @@ def _default_collate(batch):
     elem = batch[0]
     if isinstance(elem, jt.Var):
         from ..frontend import tensor_frontend
-        with tensor_frontend(g.Var):
+        # Collation executes an op, not a tensor factory: the result must
+        # follow the batch elements' placement.  An ambient default-device
+        # placement here put concat's destination on the host while the
+        # inputs were on the GPU and the first setitem failed.
+        with tensor_frontend(g.Var, default_placement=False):
             result = jt.stack(list(batch), dim=0)
             if not any(value.requires_grad for value in batch):
                 result.requires_grad_(False)
@@ -359,14 +363,7 @@ class _SingleProcessDataLoaderIter(_BaseDataLoaderIter):
         self._batch_iter = iter(loader.batch_sampler)
 
     def __next__(self):
-        batch_indices = next(self._batch_iter)
-        batch = _tensor_dataset_batch(self._loader, batch_indices)
-        if batch is not None:
-            return batch
-        values = (batch_indices if self._loader._iterable_dataset else
-                  [self._loader.dataset[i] for i in batch_indices])
-        return self._loader.collate_fn(
-            values[0] if self._loader.batch_size is None else values)
+        return _fetch_batch(self._loader, next(self._batch_iter))
 
 
 class _WorkerInfo:
@@ -384,8 +381,70 @@ def _get_worker_info():
     return getattr(_worker_state, "info", None)
 
 
+def _contains_jittor_var(value):
+    """Whether a fetched batch holds jittor Vars anywhere.
+
+    A pipeline that builds Vars cannot run on the background workers: jittor's
+    graph is not thread safe, and the known-failing
+    ``tests/core/test_executor_python_threads.py`` documents the segfault that
+    concurrent graph building produces. Vars are what the check has to see --
+    the dataset's ``ToTensor`` or the default collate create them, not the
+    loader.
+    """
+    if isinstance(value, jt.Var):
+        return True
+    if isinstance(value, dict):
+        return any(_contains_jittor_var(item) for item in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_contains_jittor_var(item) for item in value)
+    return False
+
+
+def _fetch_batch(loader, batch_indices):
+    """Fetch one batch, using a formatted dataset's column batch when present."""
+    batch = _tensor_dataset_batch(loader, batch_indices)
+    if batch is not None:
+        return batch
+    if (not loader._iterable_dataset
+            and loader.batch_size is not None
+            and loader.collate_fn is _default_collate
+            and getattr(loader.dataset, "_format_type", None) == "torch"
+            and isinstance(batch_indices, (list, tuple)) and batch_indices):
+        # A formatted ``datasets`` Dataset indexes a list of rows as one
+        # column batch; asking it per row rebuilds the formatter for every
+        # sample.  The result already has the collated layout, so it must not
+        # be fed through default_collate again.
+        try:
+            columns = loader.dataset[batch_indices]
+        except EXPECTED as exc:
+            swallowed("torch/installers/data.py _fetch_batch: formatted batch index", exc)
+        else:
+            batch = _column_batch(columns, len(batch_indices))
+            if batch is not None:
+                return batch
+    values = (batch_indices if loader._iterable_dataset else
+              [loader.dataset[i] for i in batch_indices])
+    return loader.collate_fn(values[0] if loader.batch_size is None else values)
+
+
+def _column_batch(value, size):
+    """A per-column batch from a formatted dataset, or None.
+
+    The formatted ``datasets`` Dataset returns a mapping whose values already
+    have the batch as their leading dimension.  Any other shape (a row dict, a
+    list of rows, a scalar column) is left to the normal per-row collate.
+    """
+    if not isinstance(value, dict) or not value:
+        return None
+    for column in value.values():
+        shape = getattr(column, "shape", None)
+        if shape is None or len(shape) == 0 or int(shape[0]) != size:
+            return None
+    return value
+
+
 class _MultiProcessingDataLoaderIter(_BaseDataLoaderIter):
-    """Real background fetching for DataLoader(num_workers>0).
+    """Background fetching for DataLoader(num_workers>0), when it is safe.
 
     This class used to be ``pass``: DataLoader recorded num_workers,
     prefetch_factor, worker_init_fn and persistent_workers and then
@@ -393,12 +452,22 @@ class _MultiProcessingDataLoaderIter(_BaseDataLoaderIter):
     silently ran serially in the training thread -- which reads as "the
     framework is slow" rather than "the flag did nothing".
 
-    Batches are now prepared by ``num_workers`` background workers with
-    a bounded look-ahead of ``prefetch_factor`` batches each, delivered
-    strictly in order.  The workers are threads, not processes (see the
-    one-time warning): datasets here hold jittor Vars, which do not
-    survive a fork, and the win being bought -- overlapping file IO and
-    decode with compute -- is available to threads.
+    When the pipeline produces no jittor Vars, batches are prepared by
+    ``num_workers`` background workers with a bounded look-ahead of
+    ``prefetch_factor`` batches each, delivered strictly in order.  The
+    workers are threads, not processes (see the one-time warning): datasets
+    here hold jittor Vars, which do not survive a fork, and the win being
+    bought -- overlapping file IO and decode with compute -- is available to
+    threads.
+
+    When the pipeline does produce Vars (a ``ToTensor`` in ``__getitem__``, or
+    the default collate), background fetching is refused and the iterator
+    stays serial.  Building jittor's graph is not thread safe: a worker
+    constructing Vars races the training thread inside the executor, and the
+    known-failing ``tests/core/test_executor_python_threads.py`` documents the
+    resulting segfault.  The first batch -- made on the calling thread, as the
+    serial iterator would make it -- decides which mode the iterator runs in,
+    before any worker exists.
     """
 
     def __init__(self, loader):
@@ -409,17 +478,22 @@ class _MultiProcessingDataLoaderIter(_BaseDataLoaderIter):
         self._prefetch = max(1, int(prefetch if prefetch else 2))
         self._timeout = float(loader.timeout or 0) or None
         self._pending = _collections_data.deque()
-        base_seed = 0
+        self._pool = None
+        # None until the first batch decides between background and serial.
+        self._serial = None
+        self._base_seed = 0
         try:
-            base_seed = int(jt.get_seed())
+            self._base_seed = int(jt.get_seed())
         except EXPECTED as exc:
             swallowed("torch/installers/data.py __init__: base_seed = int(jt.get_seed())", exc)
-            base_seed = 0
+            self._base_seed = 0
+
+    def _start_pool(self):
         self._pool = _futures_data.ThreadPoolExecutor(
             max_workers=self._num_workers,
             thread_name_prefix="jt-dataloader",
             initializer=_init_worker,
-            initargs=(loader, base_seed))
+            initargs=(self._loader, self._base_seed))
         _stub_policy_data.degraded(
             "torch.utils.data.DataLoader(num_workers>0)",
             "batches are prefetched by %d worker THREADS rather than "
@@ -429,13 +503,33 @@ class _MultiProcessingDataLoaderIter(_BaseDataLoaderIter):
         self._fill()
 
     def _fetch(self, batch_indices):
-        loader = self._loader
-        batch = _tensor_dataset_batch(loader, batch_indices)
-        if batch is not None:
+        return _fetch_batch(self._loader, batch_indices)
+
+    def _decide(self):
+        """Make the first batch on this thread and pick the fetch mode.
+
+        The fetch itself must not move to a worker: what decides the mode is
+        whether making it built Vars, and the first place that can be observed
+        is the batch it returns.
+        """
+        try:
+            batch_indices = next(self._batch_iter)
+        except StopIteration:
+            self._serial = True
+            raise
+        batch = self._fetch(batch_indices)
+        if _contains_jittor_var(batch):
+            self._serial = True
+            _stub_policy_data.degraded(
+                "torch.utils.data.DataLoader(num_workers>0)",
+                "background fetching is disabled because the pipeline builds "
+                "jittor Vars, and jittor's graph is single-threaded",
+                "fetch and collate on the training thread; jittor does not "
+                "support building its graph on more than one Python thread.")
             return batch
-        values = (batch_indices if loader._iterable_dataset else
-                  [loader.dataset[i] for i in batch_indices])
-        return loader.collate_fn(values[0] if loader.batch_size is None else values)
+        self._serial = False
+        self._start_pool()
+        return batch
 
     def _fill(self):
         want = self._num_workers * self._prefetch
@@ -447,6 +541,10 @@ class _MultiProcessingDataLoaderIter(_BaseDataLoaderIter):
             self._pending.append(self._pool.submit(self._fetch, batch_indices))
 
     def __next__(self):
+        if self._serial is None:
+            return self._decide()
+        if self._serial:
+            return self._fetch(next(self._batch_iter))
         if not self._pending:
             self._shutdown()
             raise StopIteration
@@ -541,12 +639,11 @@ def _checkpoint(fn, *args, use_reentrant=None, preserve_rng_state=True,
                 context_fn=None, determinism_check="default", debug=False, **kwargs):
     """Adapt Torch's reentrant checkpoint to native activation replay.
 
-    Nested tensors and keyword arguments are supported. Non-reentrant replay,
-    custom context_fn and debug tracing are deliberately rejected until their
-    distinct contracts have native implementations.
+    Nested tensors and keyword arguments are supported. For the tensor replay
+    subset shared by both Torch checkpoint modes, either ``use_reentrant``
+    selection uses the same native rematerialization path. Custom context_fn and
+    debug tracing remain separate contracts.
     """
-    if use_reentrant is False:
-        raise NotImplementedError("non-reentrant activation checkpointing is not implemented")
     if context_fn is not None or debug or determinism_check != "default":
         raise NotImplementedError("checkpoint supports only default replay contexts and determinism checks")
     from ..amp import autocast, autocast_is_enabled, autocast_configured_dtype, autocast_cache_enabled

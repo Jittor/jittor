@@ -169,6 +169,45 @@ def _cuda_total_memory(device=None):
     return total
 
 
+class _CUuuid:
+    """CUDA's 16-byte identifier, with the PyTorch bytes/string interface."""
+
+    def __init__(self, raw):
+        self._raw = bytes(raw)
+        if len(self._raw) != 16:
+            raise ValueError("CUDA UUID must contain 16 bytes")
+
+    @property
+    def bytes(self):
+        return list(self._raw)
+
+    def __str__(self):
+        import uuid
+        return str(uuid.UUID(bytes=self._raw))
+
+
+def _cuda_device_uuid(device=None):
+    """Read a real visible-device UUID; never invent an identity on failure."""
+    index = _cuda_device_index(device)
+    lib, ctypes = _cuda_driver()
+    if lib is None:
+        raise RuntimeError("CUDA driver is required to query a device UUID")
+    dev = ctypes.c_int()
+    status = lib.cuDeviceGet(ctypes.byref(dev), index)
+    if status:
+        raise RuntimeError("cuDeviceGet failed with CUDA error %s" % status)
+    raw = (ctypes.c_ubyte * 16)()
+    query = getattr(lib, "cuDeviceGetUuid_v2", None)
+    if query is None:
+        query = getattr(lib, "cuDeviceGetUuid", None)
+    if query is None:
+        raise RuntimeError("CUDA driver does not expose a device UUID query")
+    status = query(ctypes.byref(raw), dev)
+    if status:
+        raise RuntimeError("cuDeviceGetUuid failed with CUDA error %s" % status)
+    return _CUuuid(raw)
+
+
 class _DeviceProps:
     """torch.cuda.get_device_properties(...) result.
 
@@ -196,6 +235,10 @@ class _DeviceProps:
         self.regs_per_multiprocessor = 65536
         self.shared_memory_per_block = 49152
         self.shared_memory_per_multiprocessor = 102400
+
+    @property
+    def uuid(self):
+        return _cuda_device_uuid(self.index)
 
     def __repr__(self):
         return (f"_DeviceProps(name='{self.name}', major={self.major}, "
@@ -973,6 +1016,27 @@ class TorchFunctionMode:
         return func(*args, **(kwargs or {}))
 
 
+#: Per-thread depth of active `torch._C._disabled_torch_function_impl`
+#: calls. While it is positive, no `__torch_function__` override is
+#: consulted, as under torch's `DisableTorchFunctionSubclass`.
+_TORCH_FUNCTION_STATE = threading.local()
+
+
+def _torch_function_override(tp):
+    """The `__torch_function__` that dispatch should call for `tp`, or None.
+
+    None for plain Vars, while dispatch is disabled on this thread, and for
+    a type whose hook is `torch._C._disabled_torch_function_impl`: torch
+    treats such a type (`nn.Parameter` is one) as having no override.
+    """
+    if tp is jt.Var or getattr(_TORCH_FUNCTION_STATE, "depth", 0):
+        return None
+    override = getattr(tp, "__torch_function__", None)
+    if override is None or override is _api_c_mod__disabled_torch_function_impl:
+        return None
+    return override
+
+
 def _has_torch_function(*relevant_args):
     """Truthfully report whether any argument overrides __torch_function__.
 
@@ -983,18 +1047,15 @@ def _has_torch_function(*relevant_args):
     for group in relevant_args:
         items = group if isinstance(group, (tuple, list, set)) else (group,)
         for item in items:
-            tp = type(item)
-            if tp is jt.Var:
-                continue
-            if getattr(tp, "__torch_function__", None) is not None:
+            if _torch_function_override(type(item)) is not None:
                 return True
     return False
 
 
 def _handle_torch_function(public_api, relevant_args, *args, **kwargs):
     for item in (relevant_args or ()):
-        override = getattr(type(item), "__torch_function__", None)
-        if override is None or type(item) is jt.Var:
+        override = _torch_function_override(type(item))
+        if override is None:
             continue
         types_tuple = tuple(type(a) for a in relevant_args)
         return override(public_api, types_tuple, args, kwargs)
@@ -1574,6 +1635,20 @@ def _api_mps_is_available():
     return False
 
 
+def _api_mps_current_allocated_memory(*a, **k):
+    # Native torch raises this on builds without the MPS backend. Returning 0
+    # instead would make DeepSpeed's MPS probe select accelerator_name="mps".
+    raise RuntimeError(
+        "Cannot execute getCurrentAllocatedMemory() without MPS backend."
+    )
+
+
+def _api_mps_driver_allocated_memory(*a, **k):
+    raise RuntimeError(
+        "Cannot execute getDriverAllocatedMemory() without MPS backend."
+    )
+
+
 def _api_cpu_get_cpu_capability():
     return 'DEFAULT'
 
@@ -1674,8 +1749,24 @@ def _api_c_mod__cuda_getCurrentRawStream(device_index):
     return 0x2
 
 
-def _api_c_mod__disabled_torch_function_impl(*a, **k):
-    return NotImplemented
+def _api_c_mod__disabled_torch_function_impl(func, types, args=(), kwargs=None):
+    """Call `func(*args, **kwargs)` with `__torch_function__` dispatch off.
+
+    torch disables dispatch on this thread for the duration of the call, so
+    `func` runs as the plain function even when its arguments carry
+    overrides. Without that, a hook that ends by calling this function with
+    its arguments unchanged is dispatched to again, forever.
+    """
+    if isinstance(args, list):
+        args = tuple(args)
+    elif not isinstance(args, tuple):
+        raise TypeError("expected List or Tuple (got %s)" % type(args).__name__)
+    state = _TORCH_FUNCTION_STATE
+    state.depth = getattr(state, "depth", 0) + 1
+    try:
+        return func(*args, **({} if kwargs is None else kwargs))
+    finally:
+        state.depth -= 1
 
 
 def _api_functorch_c_get_unwrapped(x):
@@ -1746,7 +1837,7 @@ _CUDA_FIDELITY_DETAILS = {
     _api_cuda_can_device_access_peer: "Answered by the CUDA driver for the named pair; raises where the driver cannot be loaded rather than guessing.",
     _device_name: "Queried per device ordinal from the CUDA driver, cached per ordinal.",
     _api_cuda_get_device_capability: "Queried per device ordinal from the CUDA driver; falls back to (8, 0) where the driver query is unavailable.",
-    _api_cuda_get_device_properties: "Name, compute capability, total memory and SM count are real and per ordinal; the remaining fields are class defaults.",
+    _api_cuda_get_device_properties: "Name, compute capability, total memory, SM count and UUID are real and per ordinal; the remaining fields are class defaults.",
     _empty_cache: "Environment-selected no-op, GC or synchronized GC; default is a memory hint.",
     _get_float32_matmul_precision: "Frontend-owned CUDA matmul policy; native Jittor and cuDNN policies are independent.",
     _set_float32_matmul_precision: "Frontend-owned highest/high/medium CUDA matmul accumulation; does not change cuDNN or native Jittor.",

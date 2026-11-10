@@ -326,6 +326,145 @@ def grad(outputs, inputs, grad_outputs=None, retain_graph=None,
     return tuple(gs)
 
 
+def _gradcheck_outputs(value):
+    if isinstance(value, jt.Var):
+        return [value]
+    if isinstance(value, (tuple, list)) and value and all(
+            isinstance(item, jt.Var) for item in value):
+        return list(value)
+    raise TypeError("gradcheck expects func to return a Tensor or a tuple of Tensors")
+
+
+def _gradcheck_numpy(tensor):
+    return np.array(tensor.detach().numpy(), dtype=np.float64, copy=True)
+
+
+def _gradcheck_var(array, like):
+    # jt.array infers and, without an explicit dtype, converts float64 data to
+    # float32; pass the target dtype so central differences keep the input's
+    # precision (a float32 round-trip makes eps=1e-6 meaningless).
+    name = _jittor_dtype_name(like.dtype)
+    out = jt.array(array, dtype=name)
+    if _jittor_dtype_name(out.dtype) != name:
+        out = out.cast(name)
+    return out
+
+
+def _gradcheck_perturbed(inputs, positions, column, element, delta):
+    perturbed = list(inputs)
+    position = positions[column]
+    array = _gradcheck_numpy(inputs[position])
+    array.reshape(-1)[element] += delta
+    perturbed[position] = _gradcheck_var(array, inputs[position])
+    return tuple(perturbed)
+
+
+def _gradcheck_evaluate(func, inputs):
+    with jt.no_grad():
+        output = func(*inputs)
+    arrays = [_gradcheck_numpy(item).reshape(-1) for item in _gradcheck_outputs(output)]
+    return np.concatenate(arrays)
+
+
+def gradcheck(func, inputs, eps=1e-6, atol=1e-5, rtol=1e-3, raise_exception=True,
+              check_undefined_grad=True, nondet_tol=0.0, check_grad_dtypes=False,
+              check_batched_grad=False, check_forward_ad=False, check_backward_ad=True,
+              fast_mode=False, masked=None):
+    """Finite-difference gradient check against torch.autograd.grad.
+
+    Supported surface: real floating-point CPU inputs, a ``func`` returning one
+    Tensor or a tuple of Tensors, central differences with the given ``eps``,
+    analytic Jacobians from :func:`torch.autograd.grad`, ``atol + rtol *
+    |numeric|`` comparison, ``RuntimeError`` on mismatch (``False`` when
+    ``raise_exception=False``) and ``True`` otherwise.  Only inputs that are
+    floating point and require grad are checked; other inputs are constants.
+
+    Not implemented (raises ``NotImplementedError`` when requested): complex
+    inputs, forward-mode AD, batched gradients, sparse outputs and ``masked``.
+    ``nondet_tol`` treats differences at or below it as equal.
+    """
+    if masked is not None:
+        raise NotImplementedError("gradcheck(masked=...) is not implemented")
+    if check_forward_ad:
+        raise NotImplementedError("gradcheck(check_forward_ad=True) is not implemented")
+    if check_batched_grad:
+        raise NotImplementedError("gradcheck(check_batched_grad=True) is not implemented")
+    if not check_backward_ad:
+        raise NotImplementedError("gradcheck(check_backward_ad=False) is not implemented")
+    if not isinstance(inputs, (tuple, list)):
+        inputs = (inputs,)
+    inputs = tuple(inputs)
+    if not all(isinstance(item, jt.Var) or np.isscalar(item) for item in inputs):
+        raise TypeError("gradcheck inputs must be tensors or scalars")
+    positions = [index for index, tensor in enumerate(inputs)
+                 if isinstance(tensor, jt.Var) and bool(tensor.requires_grad)
+                 and "float" in _jittor_dtype_name(tensor.dtype)]
+    if not positions:
+        raise RuntimeError("gradcheck expects at least one floating-point input that requires grad")
+    outputs = _gradcheck_outputs(func(*inputs))
+    total = sum(int(output.numel()) for output in outputs)
+    if total == 0:
+        raise RuntimeError("gradcheck requires a non-empty output")
+    checked = tuple(inputs[index] for index in positions)
+    analytic = []
+    for output in outputs:
+        if int(output.numel()) == 1:
+            weights = [jt.ones(output.shape, _jittor_dtype_name(output.dtype))]
+        else:
+            weights = []
+            for flat_index in range(int(output.numel())):
+                flat = jt.zeros(int(output.numel()), dtype=_jittor_dtype_name(output.dtype))
+                flat[flat_index] = 1.0
+                weights.append(flat.reshape(tuple(output.shape)))
+        for weight in weights:
+            grads = grad(output, checked, grad_outputs=weight,
+                         retain_graph=True, allow_unused=True)
+            row = []
+            for index, gradient in zip(positions, grads):
+                size = int(inputs[index].numel())
+                row.append(np.zeros(size) if gradient is None
+                           else _gradcheck_numpy(gradient).reshape(-1))
+            analytic.append(row)
+    numeric = [[np.zeros(int(inputs[index].numel())) for index in positions]
+               for _ in range(total)]
+    for column, index in enumerate(positions):
+        size = int(inputs[index].numel())
+        for element in range(size):
+            plus = _gradcheck_evaluate(
+                func, _gradcheck_perturbed(inputs, positions, column, element, eps))
+            minus = _gradcheck_evaluate(
+                func, _gradcheck_perturbed(inputs, positions, column, element, -eps))
+            difference = (plus - minus) / (2.0 * eps)
+            for row in range(total):
+                numeric[row][column][element] = difference[row]
+    mismatches = []
+    for row in range(total):
+        for column in range(len(positions)):
+            for element in range(int(inputs[positions[column]].numel())):
+                actual = analytic[row][column][element]
+                expected = numeric[row][column][element]
+                # NaNs must fail even when both Jacobians contain them;
+                # subtract-and-compare alone accepts NaN because NaN > tol
+                # is false. isclose also rejects finite-vs-infinite entries.
+                if np.isclose(actual, expected, atol=atol, rtol=rtol, equal_nan=False):
+                    continue
+                difference = abs(actual - expected)
+                if np.isfinite(difference) and nondet_tol and difference <= nondet_tol:
+                    continue
+                tolerance = atol + rtol * abs(expected)
+                mismatches.append((row, column, element, actual, expected,
+                                   difference, tolerance))
+
+    if mismatches:
+        detail = "; ".join(
+            "output %d input %d element %d: analytic %r vs numeric %r (diff %r > %r)"
+            % item for item in mismatches[:5])
+        if raise_exception:
+            raise RuntimeError("Jacobian mismatch for gradcheck: " + detail)
+        return False
+    return True
+
+
 def backward(tensors, grad_tensors=None, retain_graph=None,
              create_graph=False, inputs=None, **kw):
     # torch.autograd.backward(tensors, ...) accumulates grads into leaf

@@ -1071,7 +1071,9 @@ def setup_nccl(store=None):
     # not #ifdef-aware, so it still must LOCATE mpi_wrapper.h (in the compiled-out
     # #else) and the <mpi.h> it includes; add their dirs + a stub mpi.h WITHOUT
     # any libmpi link, so no MPI install is required (#15).
-    if _nccl_envfile and not inside_mpi():
+    # Launcher metadata (for example SLURM_NTASKS) does not imply MPI was
+    # built. A disabled/unavailable MPI backend must use the no-MPI recipe.
+    if _nccl_envfile and (not has_mpi or not inside_mpi()):
         _mpi_inc = os.path.join(backend_root(jittor_path, "comm"), "mpi", "inc")
         _stub_inc = os.path.join(backend_root(jittor_path, "comm"), "nccl", "nompi_inc")
         _mpi_flags = f' -DJT_NCCL_NO_MPI -I"{_mpi_inc}" -I"{_stub_inc}" '

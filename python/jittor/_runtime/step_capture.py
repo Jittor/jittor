@@ -703,9 +703,13 @@ class StepCapture:
             finally:
                 jt.flags.keep_graph = before
 
-        # A step that synced its own results has run already; running the
-        # kept graph again would take it twice.
-        if gradient_sources or any(not r._mem_ptr_now for r in roots):
+        # A step that has already materialized every root has run; the
+        # gradient readouts it publishes were resolved above, and running the
+        # kept graph again would take the step twice.  This is how the fused
+        # optimizer updates run (their state roots are materialized inside
+        # the traced call), so the presence of published gradients alone must
+        # not force a re-run.
+        if any(not r._mem_ptr_now for r in roots):
             jt.flags.keep_graph = 2
             try:
                 # The ready owners below require completed gradient bytes.

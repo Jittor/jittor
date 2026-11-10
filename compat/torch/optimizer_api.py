@@ -22,7 +22,86 @@ from .installers.tensor.autograd_api import _optimizer_maybe_has_fsdp_params
 from jittor.optim.algorithms.adam import adam_update
 
 
+DeviceDict = dict
+
+
+def _get_value(value):
+    """Return an eager optimizer scalar without compiler-only graph handling."""
+    return value.item() if isinstance(value, jt.Var) else value
+
+
+def _stack_if_compiling(values):
+    """Mirror Torch eager behavior; the compatibility frontend is not Dynamo."""
+    return values
+
+
+def _disable_dynamo_if_unsupported(single_tensor_fn=None):
+    """Keep optimizer callables unchanged when Dynamo is unavailable."""
+    def decorate(function):
+        return function
+    return decorate
+
+
+def _default_to_fused_or_foreach(params, differentiable, use_fused=False):
+    """Select the single-tensor optimizer path implemented by this frontend."""
+    return False, False
+
+
+def _view_as_real(params, *state_and_grads):
+    """Convert complex optimizer tensors to their real views in place."""
+    for index, parameter in enumerate(params):
+        if _jittor_dtype_name(parameter.dtype).startswith("complex"):
+            params[index] = jt.nn.view_as_real(parameter)
+            for values in state_and_grads:
+                values[index] = jt.nn.view_as_real(values[index])
+
+
+def _get_capturable_supported_devices(supports_xla=True):
+    """Return accelerator kinds supported by Jittor's capturable path."""
+    return ["cuda"]
+
+
 def _init(self, *a, **k):
+    params = a[0] if a else k.get('params')
+    defaults = k.get('defaults')
+    if len(a) >= 2 and isinstance(a[1], Mapping):
+        defaults = a[1]
+    if isinstance(defaults, Mapping):
+        # Torch's Optimizer.__init__(params, defaults): third-party optimizers
+        # (schedulefree and friends) subclass this and rely on their custom
+        # defaults being copied into every parameter group and on state[p]
+        # being a mutable mapping. Jittor's native signature is (params, lr),
+        # so installing it directly would drop the custom keys.
+        values = dict(defaults)
+        groups = list(params)
+        if not groups:
+            raise ValueError("optimizer got an empty parameter list")
+        if not isinstance(groups[0], Mapping):
+            groups = [{'params': groups}]
+        # The native Optimizer exposes `defaults` as a read-only property
+        # derived from the non-underscore instance attributes, so seed the
+        # individual keys instead of assigning the mapping itself.
+        for key, value in values.items():
+            if key not in ('param_groups', 'params', 'defaults'):
+                setattr(self, key, value)
+        self.param_groups = []
+        self.lr = values.get('lr')
+        self.param_sync_iter = 10000
+        self.n_step = 0
+        self._grad_map = {}
+        self._absent_grads = set()
+        object.__setattr__(self, '_Optimizer__zero_grad', True)
+        object.__setattr__(self, '_Optimizer__input_params', [])
+        for group in groups:
+            group = dict(group)
+            group['params'] = list(group['params'])
+            for key, value in values.items():
+                group.setdefault(key, value)
+            self.param_groups.append(group)
+        reg = get_tensor_state(jt).active_optimizers
+        reg[:] = [r for r in reg if r() is not None and r() is not self]
+        reg.append(_weakref.ref(self))
+        return
     _context = get_install_context(jt)
     _orig_init = _context.state["optimizer_native_api"]['_orig_init']
     _orig_init(self, *a, **k)
@@ -72,7 +151,7 @@ def _torch_param_steps(pg):
     return steps
 
 
-def _sync_adam_group_params(pg, *, replacements=()):
+def _sync_adam_group_params(pg, *, replacements=(), validate_shapes=False):
     """Realign state by identity, including explicit same-parameter view changes.
 
     FSDP supplies old/new views of the same logical parameter. Ordinary user
@@ -84,6 +163,28 @@ def _sync_adam_group_params(pg, *, replacements=()):
         return
     current = tuple(pg.get("params", ()))
     if len(current) == len(previous) and all(a is b for a, b in zip(current, previous)):
+        if not validate_shapes:
+            return
+        # AutoTP can shard a Parameter through param.data = shard after the
+        # client constructed AdamW. Identity stays the same, but eager zero
+        # moments still have the original shape.
+        moments, variances = pg.get("m", ()), pg.get("values", ())
+        resized = [
+            index for index, param in enumerate(current)
+            if index < len(moments) and index < len(variances)
+            and (tuple(moments[index].shape) != tuple(param.shape)
+                 or tuple(variances[index].shape) != tuple(param.shape))
+        ]
+        if resized:
+            steps = pg.get("_torch_steps", ())
+            if any(index < len(steps) and int(steps[index]) != 0 for index in resized):
+                raise RuntimeError(
+                    "Adam parameter shape changed after optimizer state was populated; "
+                    "rebuild the optimizer or restore state for the new parameter layout")
+            from jittor.optim.algorithms.adam import _state_buffer
+            for index in resized:
+                moments[index] = _state_buffer(current[index])
+                variances[index] = _state_buffer(current[index])
         return
     from jittor.optim.algorithms.adam import _state_buffer
     rebound = {id(old): (old, new) for old, new in replacements}
@@ -563,7 +664,10 @@ def _torch_post_step():
 
 # The Adam/AdamW update lives in its own module (it is most of the file's
 # implementation); bound here under the names the rest of the package uses.
-from .optimizer_adam import _adam_step, _update_in_target_dtype  # noqa: E402
+from .optimizer_adam import (  # noqa: E402
+    _adam_step, _update_in_target_dtype, _initialize_adam,
+    _validate_adam_execution_options,
+)
 
 
 def adam_step(self, loss=None, retain_graph=False, closure=None, **kwargs):
@@ -619,15 +723,8 @@ def adam_init(self, params, lr=1e-3, *args, **kwargs):
     return _initialize_adam(self, params, lr, args, kwargs, 'Adam')
 
 
-def _initialize_adam(self, params, lr, args, kwargs, name):
-    # The update selector already consumes this execution option; the native
-    # initializer does not take Torch's spelling. Preserve group overrides.
-    foreach = kwargs.pop('foreach', None)
-    result = _initialize_default(self, params, lr, args, kwargs, name)
-    for group in self.param_groups:
-        group.setdefault('foreach', foreach)
-        group['_torch_adam_params'] = tuple(group['params'])
-    return result
+
+
 
 
 def adamw_init(self, params, lr=1e-3, *args, **kwargs):

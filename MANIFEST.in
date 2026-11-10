@@ -150,10 +150,14 @@ include backends/comm/nccl/ops/nccl_all_reduce_op.cc
 include backends/comm/nccl/ops/nccl_all_reduce_op.h
 include backends/comm/nccl/ops/nccl_broadcast_op.cc
 include backends/comm/nccl/ops/nccl_broadcast_op.h
+include backends/comm/nccl/ops/nccl_recv_op.cc
+include backends/comm/nccl/ops/nccl_recv_op.h
 include backends/comm/nccl/ops/nccl_reduce_op.cc
 include backends/comm/nccl/ops/nccl_reduce_op.h
 include backends/comm/nccl/ops/nccl_reduce_scatter_op.cc
 include backends/comm/nccl/ops/nccl_reduce_scatter_op.h
+include backends/comm/nccl/ops/nccl_send_op.cc
+include backends/comm/nccl/ops/nccl_send_op.h
 include backends/comm/nccl/ops/nccl_test_op.cc
 include backends/comm/nccl/ops/nccl_test_op.h
 include backends/comm/nccl/src/nccl_wrapper.cc
@@ -482,6 +486,8 @@ include docs/performance/memory-optimization.en.md
 include docs/performance/memory-optimization.md
 include docs/performance/profiling.en.md
 include docs/performance/profiling.md
+include docs/project/community/governance.en.md
+include docs/project/community/governance.md
 include docs/project/community/index.en.md
 include docs/project/community/index.md
 include docs/project/community/projects.en.md
@@ -498,10 +504,8 @@ include docs/project/research/index.en.md
 include docs/project/research/index.md
 include examples/README.md
 include examples/distributed/native_ddp.py
-include examples/flash-attention/README.md
 include examples/gan/README.md
 include examples/gan/simple_cgan.py
-include examples/minimax-h3/README.md
 include examples/notebooks/README.md
 include examples/notebooks/autograd_details.md
 include examples/notebooks/basics.md
@@ -569,6 +573,7 @@ include src/bindings/pyjt/py_ring_buffer.cc
 include src/bindings/pyjt/py_ring_buffer.h
 include src/bindings/pyjt/py_tensor_frontend.cc
 include src/bindings/pyjt/py_tensor_frontend.h
+include src/bindings/pyjt/py_thread_runtime.h
 include src/bindings/pyjt/py_type_lifetime.cc
 include src/bindings/pyjt/py_type_lifetime.h
 include src/bindings/pyjt/pyjt_console.h
@@ -979,6 +984,8 @@ include tools/build/measure_import_cost.py
 include tools/build/render_bindings.py
 include tools/check_repo_layout.sh
 include tools/check_session_completed.py
+include tools/containers/Containerfile.cuda
+include tools/containers/README.md
 include tools/distributed/README.md
 include tools/distributed/native_fsdp/collective_oracle.py
 include tools/distributed/native_fsdp/native_fsdp_oracle.py
@@ -1062,14 +1069,11 @@ include tools/release/README.md
 include tools/release/baselines/torch-shim-resources-stage7.txt
 include tools/release/baselines/wheel-additions-final.txt
 include tools/release/baselines/wheel-content-changes-final.txt
-include tools/release/baselines/wheel-contents-compat-final.txt
 include tools/release/baselines/wheel-contents-final.txt
 include tools/release/check_sdist_contents.py
 include tools/release/check_wheel_contents.py
 include tools/release/check_windows_msvc.py
 include tools/release/pack_offline.py
-include tools/release/test_check_sdist_contents.py
-include tools/release/test_check_wheel_contents.py
 include tools/run_accelerate_gate.py
 include tools/run_diffusers_gate.py
 include tools/run_peft_gate.py

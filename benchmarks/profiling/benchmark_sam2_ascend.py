@@ -26,8 +26,9 @@ import time
 import traceback
 
 import numpy as np
+from _paths import lab_output_path, resolve_source_root
 from benchmark_diffusion_ascend import (
-    array_metrics, lab_output_path, model_selection, resolve_source_root, write_json,
+    array_metrics, model_selection, write_json,
 )
 
 

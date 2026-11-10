@@ -19,6 +19,7 @@ from unittest import mock
 import jittor as jt
 from jittor.compat import fsdp2 as fsdp
 from jittor.distributed.fsdp import common as native_fsdp_common
+from jittor.compat.fsdp2 import _context_parallel
 from jittor.compat.fsdp2 import api
 from jittor.compat.fsdp2 import common
 from jittor.compat.fsdp2 import compat_types
@@ -138,12 +139,16 @@ _OWNERSHIP = {
         "_ensure_module", "_install_wrap_helpers", "install",
         "_install_fsdp2_distributed",
     },
+    _context_parallel: set(),
 }
 
 _REGISTERED_MODULES = (
     "torch.distributed.tensor", "torch.distributed._tensor",
     "torch.distributed.tensor._api", "torch.distributed.tensor.placement_types",
     "torch.distributed.tensor._dtensor_spec", "torch.distributed.tensor._utils",
+    "torch.distributed.tensor.experimental",
+    "torch.distributed.tensor.experimental._attention",
+    "torch.distributed.tensor.experimental._context_parallel",
     "torch.distributed.tensor.parallel", "torch.distributed.tensor.parallel.api",
     "torch.distributed.tensor.parallel.style", "torch.distributed.tensor.parallel.loss",
     "torch.distributed.device_mesh", "torch.distributed._tensor.device_mesh",
@@ -421,9 +426,13 @@ assert second is jittor.torch_fsdp2_compat
         # `offload_to_cpu=True` (plain configs stay `False`) and the sharded
         # configs gained `_use_dtensor=False`. Only those dataclass signatures
         # differ from the snapshot this digest replaced; counts are unchanged.
+        # Moved once more when StateDictType, ShardingStrategy and
+        # BackwardPrefetch switched from string-valued Enum members to the
+        # integer member numbers torch publishes; only the enum `members`
+        # entries differ, and the counts are still unchanged.
         self.assertEqual(
             hashlib.sha256(encoded).hexdigest(),
-            "c8153c4b9b9a37064883062117bb1d3acb14cd61322cf801235703dd8bc26e4d",
+            "41dc930fd903edd1741c9d899d6d86fcbbc460fe99240d296e5dc763e2616ccb",
         )
 
     def test_protocol_2_legacy_pickle_fixtures_load_canonical_objects(self):
@@ -488,7 +497,7 @@ assert value is fsdp2.DeviceMesh
             path: getattr(importlib.import_module(path[0]), path[1])
             for path in symbol_paths
         }
-        self.assertEqual(len(before), 37)
+        self.assertEqual(len(before), len(_REGISTERED_MODULES))
         for name in _REGISTERED_MODULES:
             with self.subTest(module=name):
                 self.assertIs(before[name], after[name])
@@ -583,8 +592,9 @@ assert value is fsdp2.DeviceMesh
                 }
                 if module is installer:
                     self.assertEqual(relative_imports, {
-                        "api", "common", "compat_types", "config", "dtensor",
-                        "grad_sync", "optimizer", "shard", "public_helpers",
+                        "_context_parallel", "api", "common", "compat_types",
+                        "config", "dtensor", "grad_sync", "optimizer", "shard",
+                        "public_helpers",
                     })
 
         compat_root = package_path.parents[1]

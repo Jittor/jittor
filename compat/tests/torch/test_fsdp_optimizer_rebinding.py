@@ -70,6 +70,41 @@ class TestFsdpOptimizerRebinding:
         get_optimizer_state_dict(model, optimizer)
         assert len(rotations) == 1
 
+    def test_data_shard_before_first_step_rebuilds_adam_slots(self, device):
+        for algorithm in (torch.optim.Adam, torch.optim.AdamW):
+            parameter = _parameter([[1., 2.], [3., 4.], [5., 6.], [7., 8.]], device)
+            optimizer = algorithm([parameter], lr=.1, weight_decay=0, foreach=False)
+            group = optimizer.param_groups[0]
+            assert tuple(group["m"][0].shape) == (4, 2)
+            parameter.data = parameter.data[:2].contiguous()
+            parameter.grad = torch.ones_like(parameter)
+            optimizer.step()
+            assert tuple(parameter.shape) == (2, 2)
+            assert tuple(group["m"][0].shape) == (2, 2)
+            assert tuple(group["values"][0].shape) == (2, 2)
+            assert group["_torch_steps"] == [1]
+            np.testing.assert_allclose(
+                group["m"][0].cpu().numpy(), np.full((2, 2), .1), rtol=1e-6)
+
+    def test_data_shard_after_step_rejects_stale_adam_slots(self, device):
+        for algorithm in (torch.optim.Adam, torch.optim.AdamW):
+            parameter = _parameter([[1., 2.], [3., 4.]], device)
+            optimizer = algorithm([parameter], lr=.1, weight_decay=0, foreach=False)
+            parameter.grad = torch.ones_like(parameter)
+            optimizer.step()
+            group = optimizer.param_groups[0]
+            original_moment = group["m"][0]
+            parameter.data = parameter.data[:1].contiguous()
+            parameter.grad = torch.ones_like(parameter)
+            try:
+                optimizer.step()
+            except RuntimeError as error:
+                assert "shape changed after optimizer state" in str(error)
+            else:
+                raise AssertionError("populated Adam state must not be discarded")
+            assert group["m"][0] is original_moment
+            assert group["_torch_steps"] == [1]
+
     def test_refresh_releases_old_view_and_preserves_state(self, device):
         for algorithm in (torch.optim.Adam, torch.optim.AdamW):
             old = _parameter([1., 2.], device)

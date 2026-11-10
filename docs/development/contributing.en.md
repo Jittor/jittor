@@ -3,12 +3,12 @@
 [Section contents](index.en.md) · [中文](contributing.md)
 
 **The authoritative document for the contribution process is
-[`CONTRIBUTING.md`](https://github.com/Jittor/jittor/blob/2.0-refactor/CONTRIBUTING.md) at the repository root**:
+[`CONTRIBUTING.en.md`](https://github.com/Jittor/jittor/blob/2.0-refactor/CONTRIBUTING.en.md) at the repository root**:
 the development environment, repository structure, code style, test tiers, nox gates, and pull request
 requirements are all written there, and this page does not duplicate them. For the code of conduct see
-[`CODE_OF_CONDUCT.md`](https://github.com/Jittor/jittor/blob/2.0-refactor/CODE_OF_CONDUCT.md), and for roles and
+[`CODE_OF_CONDUCT.en.md`](https://github.com/Jittor/jittor/blob/2.0-refactor/CODE_OF_CONDUCT.en.md), and for roles and
 decision rules see
-[`GOVERNANCE.md`](https://github.com/Jittor/jittor/blob/2.0-refactor/GOVERNANCE.md).
+[Governance rules](../project/community/governance.en.md).
 
 This page fills in just one thing the root guide does not expand on: **how the documentation itself is changed,
 built, and checked.**

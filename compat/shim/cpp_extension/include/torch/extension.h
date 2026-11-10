@@ -83,6 +83,7 @@ struct TensorOptions {
     ScalarType dtype_ = ScalarType::Float;
     DeviceType device_ = DeviceType::CUDA;
     bool has_dtype_ = false, has_device_ = false;
+    bool requires_grad_ = false, has_requires_grad_ = false;
     TensorOptions() {}
     TensorOptions(ScalarType s) : dtype_(s), has_dtype_(true) {}
     TensorOptions(Dtype d) : dtype_(d.st), has_dtype_(true) {}
@@ -92,10 +93,13 @@ struct TensorOptions {
     TensorOptions dtype(Dtype d) const { return dtype(d.st); }
     TensorOptions device(DeviceType d, int=0) const { TensorOptions o=*this; o.device_=d; o.has_device_=true; return o; }
     TensorOptions device(Device d) const { return device(d.type_); }
-    TensorOptions requires_grad(bool) const { return *this; }
+    TensorOptions requires_grad(bool value) const {
+        TensorOptions o=*this; o.requires_grad_=value; o.has_requires_grad_=true; return o;
+    }
     TensorOptions pinned_memory(bool) const { return *this; }
     ScalarType dtype() const { return dtype_; }
     DeviceType device() const { return device_; }
+    bool requires_grad() const { return has_requires_grad_ && requires_grad_; }
 };
 inline TensorOptions dtype(ScalarType s) { return TensorOptions(s); }
 inline TensorOptions dtype(Dtype d) { return TensorOptions(d.st); }
@@ -245,6 +249,7 @@ public:
     // xatlas) check host-residency this way. Mirrors device().is_cpu(): reads the
     // Var's actual allocator residency (0=CPU) without force-migrating.
     bool is_cpu() const { return detail::vh_device_type(vh_.get()) == 0; }
+    bool is_pinned() const;
     bool is_contiguous() const { return true; }
     Tensor contiguous() const { return *this; }
     Tensor detach() const { return *this; }   // no autograd graph in this shim
@@ -352,7 +357,130 @@ inline int FLAGS_caffe2_log_level = 1;
 // ============================================================================
 // expose under torch:: / at:: / c10::
 // ============================================================================
+#ifdef __CUDACC__
+#define JTORCH_HOST_DEVICE __host__ __device__
+#else
+#define JTORCH_HOST_DEVICE
+#endif
 namespace c10 {
+    JTORCH_HOST_DEVICE inline uint32_t scalar_float_bits(float value) {
+#ifdef __CUDA_ARCH__
+        return __float_as_uint(value);
+#else
+        uint32_t bits;
+        std::memcpy(&bits, &value, sizeof(bits));
+        return bits;
+#endif
+    }
+    JTORCH_HOST_DEVICE inline float scalar_bits_float(uint32_t bits) {
+#ifdef __CUDA_ARCH__
+        return __uint_as_float(bits);
+#else
+        float value;
+        std::memcpy(&value, &bits, sizeof(value));
+        return value;
+#endif
+    }
+    // CPU extensions use these as value types in data_ptr<T>(), not dtype tags.
+    // Keep the public header independent of Jittor/CUDA headers (see above).
+    struct Half {
+        uint16_t x;
+        JTORCH_HOST_DEVICE Half() = default;
+        JTORCH_HOST_DEVICE Half(float value) {
+            uint32_t bits = scalar_float_bits(value);
+            const uint32_t abs_bits = bits & 0x7fffffffu;
+            const uint16_t sign = static_cast<uint16_t>((bits >> 16) & 0x8000u);
+            if (abs_bits > 0x7f800000u) {
+                x = static_cast<uint16_t>(sign | 0x7e00u);
+            } else if (abs_bits >= 0x7f800000u) {
+                x = static_cast<uint16_t>(sign | 0x7c00u);
+            } else if (abs_bits > 0x477fefffu) {
+                x = static_cast<uint16_t>(sign | 0x7c00u);
+            } else if (abs_bits < 0x33000001u) {
+                x = sign;
+            } else {
+                uint32_t exponent = (abs_bits >> 23) & 0xffu;
+                uint32_t mantissa = abs_bits & 0x7fffffu;
+                uint32_t shift;
+                if (exponent > 0x70u) {
+                    shift = 13;
+                    exponent -= 0x70u;
+                } else {
+                    shift = 0x7eu - exponent;
+                    exponent = 0;
+                    mantissa |= 0x800000u;
+                }
+                const uint32_t half = 1u << (shift - 1);
+                const uint32_t remainder = mantissa & ((1u << shift) - 1u);
+                mantissa >>= shift;
+                if (remainder > half || (remainder == half && (mantissa & 1u))) {
+                    ++mantissa;
+                    if (!(mantissa & 0x3ffu)) {
+                        ++exponent;
+                        mantissa = 0;
+                    }
+                }
+                x = static_cast<uint16_t>(sign | (exponent << 10) | mantissa);
+            }
+        }
+        JTORCH_HOST_DEVICE operator float() const {
+            const uint32_t sign = (static_cast<uint32_t>(x & 0x8000u)) << 16;
+            uint32_t exponent = (x >> 10) & 0x1fu;
+            uint32_t mantissa = x & 0x3ffu;
+            uint32_t bits;
+            if (exponent == 0x1fu) {
+                bits = sign | 0x7f800000u | (mantissa ? 0x00400000u : 0u);
+            } else if (exponent == 0) {
+                if (!mantissa) {
+                    bits = sign;
+                } else {
+                    int e = -14;
+                    while (!(mantissa & 0x400u)) { mantissa <<= 1; --e; }
+                    bits = sign | (static_cast<uint32_t>(e + 127) << 23)
+                         | ((mantissa & 0x3ffu) << 13);
+                }
+            } else {
+                bits = sign | ((exponent + 112u) << 23) | (mantissa << 13);
+            }
+            return scalar_bits_float(bits);
+        }
+    };
+
+    struct BFloat16 {
+        uint16_t x;
+        JTORCH_HOST_DEVICE BFloat16() = default;
+        JTORCH_HOST_DEVICE BFloat16(float value) {
+            uint32_t bits = scalar_float_bits(value);
+            if ((bits & 0x7fffffffu) > 0x7f800000u) {
+                x = static_cast<uint16_t>((bits >> 16) | 0x0040u);
+            } else {
+                x = static_cast<uint16_t>((bits + 0x7fffu + ((bits >> 16) & 1u)) >> 16);
+            }
+        }
+        JTORCH_HOST_DEVICE operator float() const {
+            const uint32_t bits = static_cast<uint32_t>(x) << 16;
+            return scalar_bits_float(bits);
+        }
+    };
+    static_assert(sizeof(Half) == 2 && sizeof(BFloat16) == 2, "16-bit scalar ABI");
+
+    using ScalarType = jtorch::ScalarType;
+    template <typename T> constexpr ScalarType CppTypeToScalarType() {
+        if constexpr (std::is_same_v<T, Half>) return ScalarType::Half;
+        else if constexpr (std::is_same_v<T, BFloat16>) return ScalarType::BFloat16;
+        else if constexpr (std::is_same_v<T, float>) return ScalarType::Float;
+        else if constexpr (std::is_same_v<T, double>) return ScalarType::Double;
+        else if constexpr (std::is_same_v<T, uint8_t>) return ScalarType::Byte;
+        else if constexpr (std::is_same_v<T, int8_t>) return ScalarType::Char;
+        else if constexpr (std::is_same_v<T, int16_t>) return ScalarType::Short;
+        else if constexpr (std::is_same_v<T, int32_t>) return ScalarType::Int;
+        else if constexpr (std::is_same_v<T, int64_t>) return ScalarType::Long;
+        else if constexpr (std::is_same_v<T, bool>) return ScalarType::Bool;
+        else {
+            static_assert(!std::is_same_v<T, T>, "unsupported C++ scalar type");
+            return ScalarType::Undefined;
+        }
+    }
     using ScalarType = jtorch::ScalarType; using Device = jtorch::Device; using DeviceType = jtorch::DeviceType;
     template <typename T> using optional = jtorch::optional<T>;
     using jtorch::nullopt;
@@ -363,6 +491,8 @@ namespace c10 {
     };
 }
 namespace at {
+    inline jtorch::ScalarType typeMetaToScalarType(jtorch::ScalarType type) { return type; }
+    using Half = c10::Half; using BFloat16 = c10::BFloat16;
     using Tensor = jtorch::Tensor; using jtorch::IntArrayRef; using jtorch::TensorOptions;
     template <typename T> using ArrayRef = jtorch::ArrayRef<T>;
     using ScalarType = jtorch::ScalarType; using Device = jtorch::Device; using DeviceType = jtorch::DeviceType;
@@ -382,6 +512,8 @@ namespace at {
     constexpr DeviceType kCUDA=DeviceType::CUDA, kCPU=DeviceType::CPU;
 }
 namespace torch {
+    using at::typeMetaToScalarType;
+    size_t elementSize(jtorch::ScalarType scalar);
     using jtorch::Tensor; using jtorch::IntArrayRef; using jtorch::TensorOptions;
     template <typename T> using ArrayRef = jtorch::ArrayRef<T>;
     using jtorch::Device; using jtorch::Dtype;

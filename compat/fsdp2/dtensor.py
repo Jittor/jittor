@@ -38,6 +38,11 @@ class DeviceMesh:
         self._root = self
         self._root_axes = tuple(range(self.ndim))
         self._group_cache = {}
+        #: Flattened submeshes registered by ``_flatten(mesh_dim_name=...)``.
+        #: Torch's DeviceMesh keeps these on the root so a later
+        #: ``world_mesh["dp_cp"]`` resolves the mesh the caller built earlier;
+        #: the 3D-parallel example uses exactly that pattern.
+        self._flatten_meshes = {}
         self._init_backend = bool(_init_backend)
         # All world ranks create every group in the same order, including
         # nonmembers. Native NCCL/HCCL creation shares this ordering contract.
@@ -82,6 +87,10 @@ class DeviceMesh:
             self.device_type, self.mesh.tolist(), self.mesh_dim_names)
 
     def __getitem__(self, key):
+        if isinstance(key, str):
+            flattened = getattr(self._root, "_flatten_meshes", {}).get(key)
+            if flattened is not None:
+                return flattened
         keys = key if isinstance(key, (tuple, list)) else (key,)
         dims = tuple(self._dim(k) for k in keys)
         if not dims or len(set(dims)) != len(dims):
@@ -148,6 +157,12 @@ class DeviceMesh:
             next(group for ranks, group in groups if rank in ranks),
             self.device_type, mesh=selected,
             mesh_dim_names=(mesh_dim_name,) if mesh_dim_name else None)
+        if mesh_dim_name:
+            root = self._root
+            flattened = getattr(root, "_flatten_meshes", None)
+            if flattened is None:
+                flattened = root._flatten_meshes = {}
+            flattened[mesh_dim_name] = result
         return result
 
     @classmethod
@@ -338,7 +353,7 @@ def distribute_tensor(tensor, device_mesh=None, placements=None, src_data_rank=0
         mesh_ranks = np.asarray(mesh.mesh).reshape(-1)
         if common._rank() not in mesh_ranks:
             raise RuntimeError("current rank is not a member of the DTensor mesh")
-        if mesh_ranks.size > 1:
+        if mesh_ranks.size > 1 and src_data_rank is not None:
             from jittor.distributed import broadcast
             tensor = broadcast(
                 tensor, src=int(mesh_ranks[0]), group=mesh.get_group())
@@ -356,11 +371,16 @@ def distribute_tensor(tensor, device_mesh=None, placements=None, src_data_rank=0
         raise RuntimeError("current rank is not a member of the DTensor mesh")
     world_size = int(mesh_ranks.size)
     local_rank = int(rank_positions[0])
-    if int(src_data_rank) not in set(int(rank) for rank in mesh_ranks):
-        raise ValueError("src_data_rank must belong to the DeviceMesh")
-    if world_size > 1:
-        from jittor.distributed import broadcast
-        tensor = broadcast(tensor, src=int(src_data_rank), group=mesh.get_group())
+    # PyTorch's ``src_data_rank=None`` means "the data is already replicated
+    # on every rank, slice it locally". Context parallelism relies on that: the
+    # caller broadcast the full sequence before sharding, and a second broadcast
+    # here would overwrite a deliberately per-rank buffer with rank 0's copy.
+    if src_data_rank is not None:
+        if int(src_data_rank) not in set(int(rank) for rank in mesh_ranks):
+            raise ValueError("src_data_rank must belong to the DeviceMesh")
+        if world_size > 1:
+            from jittor.distributed import broadcast
+            tensor = broadcast(tensor, src=int(src_data_rank), group=mesh.get_group())
     dim_size = global_shape[dim]
     if dim_size % world_size:
         raise NotImplementedError(

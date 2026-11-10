@@ -137,3 +137,29 @@ checkpoint files automatically.
 Multiple agents on a single machine can only verify the control protocol; actual cross-host
 connectivity, network failures, training, and fresh-process recovery still need real
 multi-host acceptance. Do not treat loopback or two local ranks as multi-machine success.
+
+## The `torch.distributed.run` compatibility launcher
+
+`python -m torch.distributed.run`, the `torchrun` console script and
+`accelerate launch --multi_gpu` resolve to the same facade. Its
+`get_args_parser()` returns the torchrun option surface that accelerate filters
+its namespace through, and `run(args)` maps the result onto `jtrun`.
+
+Supported are one static single-node worker group and the options needed to
+describe it: `--nproc-per-node` (an integer, `auto`, `cpu` or `gpu`), `--nnodes`
+limited to `1`/`1:1`, `--node-rank 0`, `--master-addr`, `--master-port`,
+`--rdzv-endpoint` in `host:port` form, `--standalone`, `--module`,
+`--no-python`, `--log-dir`, and the training script with its arguments.
+`CUDA_VISIBLE_DEVICES` is left intact and every worker receives `LOCAL_RANK` as
+its local rank, matching torchrun; device selection stays with Jittor.
+
+Elastic semantics are not emulated: restarts (`--max-restarts`), non-static
+rendezvous, multi-node agent orchestration, `--run-path`, `--redirects`,
+`--tee`, `--event-log-handler`, `--local-ranks-filter`,
+`--virtual-local-rank`, `--numa-binding`, `--logs-specs`, custom
+`--signals-to-handle` values and non-`spawn` start methods are rejected before
+any worker starts. `TORCHELASTIC_*` variables are not exported, so
+`torch.distributed.is_torchelastic_launched()` stays false, and worker output is
+written to `<log-dir>/rank<rank>.log` instead of torchrun's prefixed console
+stream. For multi-node Jittor NCCL use `jtrun` on each node; for real elastic
+launching use PyTorch.

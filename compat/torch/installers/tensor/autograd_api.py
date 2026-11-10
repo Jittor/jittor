@@ -12,6 +12,19 @@ def _register_leaf(v):
 def _initial_leaf_gradient(parameter, gradient):
     """Apply AccumulateGrad's dense layout contract without changing AD edges."""
     sizes, strides = tuple(parameter.shape), parameter.stride()
+    if sizes != tuple(gradient.shape):
+        # An integration may temporarily release a parameter's visible data
+        # after forward. It must opt in only for its own managed leaves; an
+        # ordinary .data shape change still follows Torch's error path.
+        from ...gradient_task import _resolve_leaf_gradient_layout
+        resolved = _resolve_leaf_gradient_layout(parameter, gradient)
+        if resolved is not None:
+            if not isinstance(resolved, _NativeVar):
+                raise TypeError("leaf gradient layout resolver must return a Tensor or None")
+            if (tuple(resolved.shape) != tuple(gradient.shape) or resolved.dtype != gradient.dtype
+                    or resolved.device != gradient.device):
+                raise RuntimeError("leaf gradient layout resolver changed gradient shape, dtype or device")
+            return resolved
     extent = 1
     dense = True
     for axis in sorted(range(len(sizes)), key=lambda i: strides[i]):
@@ -515,7 +528,114 @@ class _TorchGradFn:
         return hash(self.node_id)
 
 
+class _ExpandBackward:
+    """``torch``'s ExpandBackward for a shape-preserving expand.
+
+    Jittor forwards a broadcast that does not change the shape, so the result
+    shares its source's Var and reports the source's leaf identity. torch's
+    expand is a view instead: a non-leaf whose ``grad_fn`` is ExpandBackward
+    and whose first next function is the source parameter's AccumulateGrad.
+    DeepSpeed's ZeRO-1/2 hook registration (its torch < 2.1 branch) reads
+    exactly ``grad_fn.next_functions[0][0]`` to attach a per-parameter
+    gradient hook, so the distinction is kept on the Python tensor object the
+    call returned. The source Var is untouched and stays a leaf.
+    """
+
+    __slots__ = ("source", "next_functions", "name")
+
+    def __init__(self, source):
+        self.source = source
+        self.next_functions = ((_accumulate_grad_node(source), 0),)
+        self.name = "ExpandBackward"
+
+    def __repr__(self):
+        return self.name
+
+
+class _AccumulateGrad:
+    """The leaf accumulator torch exposes through ``next_functions``.
+
+    torch runs these hooks as a gradient reaches the leaf and lets a returned
+    tensor replace it before accumulation. The shim's post-accumulate hook is
+    the matching seam: it runs once the parameter's gradient is published, so
+    a returned tensor is written back to ``parameter.grad``. With one
+    accumulation slot per step that is the same result as torch's ordering.
+    """
+
+    __slots__ = ("variable",)
+
+    def __init__(self, variable):
+        self.variable = variable
+
+    def __repr__(self):
+        return "AccumulateGrad"
+
+    def register_hook(self, hook):
+        if not callable(hook):
+            raise TypeError("gradient hook must be callable")
+        variable = self.variable
+
+        def fire(parameter):
+            replacement = hook(parameter.grad)
+            if replacement is not None:
+                parameter.grad = replacement
+
+        return _register_post_accumulate_grad_hook(variable, fire)
+
+
+def _accumulate_grad_node(variable):
+    """The one AccumulateGrad object torch code sees for a leaf variable.
+
+    torch keeps one per leaf; callers compare and set-membership it. Cache it
+    on the tensor object so repeated lookups answer the same node.
+    """
+    state = getattr(variable, "__dict__", None)
+    node = state.get("_torch_accumulate_grad_node") if state is not None else None
+    if node is None:
+        node = _AccumulateGrad(variable)
+        if state is not None:
+            state["_torch_accumulate_grad_node"] = node
+    return node
+
+
+def _get_grad_fn_or_grad_acc(t):
+    """``torch.autograd.graph._get_grad_fn_or_grad_acc`` for the shim.
+
+    DeepSpeed's ``count_used_parameters_in_backward`` calls this for model
+    parameters, which are leaves here: answer with their accumulator. Non-leaf
+    tensors answer with the producer identity ``.grad_fn`` already reports.
+    """
+    if t.requires_grad and t.grad_fn is None:
+        return _accumulate_grad_node(t)
+    node = t.grad_fn
+    if node is None:
+        raise AssertionError("Expected gradient function to be set")
+    return node
+
+
+def _attach_expand_grad_fn(source, result):
+    """Mark a forwarded, shape-preserving expand with torch's view identity.
+
+    Only the identity case needs it: an expand that actually widens shapes
+    creates a native ``broadcast_to`` producer and reports its own grad_fn.
+    """
+    if not isinstance(source, _NativeVar) or not source.requires_grad:
+        return result
+    if int(result.grad_fn_node_id) != -1:
+        return result
+    state = getattr(result, "__dict__", None)
+    if state is None:
+        return result
+    if state.get("_torch_synthetic_grad_fn") is None:
+        state["_torch_synthetic_grad_fn"] = _ExpandBackward(source)
+    return result
+
+
 def _grad_fn(self):
+    state = getattr(self, "__dict__", None)
+    synthetic = state.get("_torch_synthetic_grad_fn") if state is not None else None
+    if synthetic is not None:
+        return synthetic
     node_id = int(self.grad_fn_node_id)
     if node_id == -1:
         return None

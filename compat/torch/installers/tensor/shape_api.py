@@ -1,7 +1,8 @@
 """Stable Torch shape and reduction adapters using native Tensor operations."""
 from ...context import get_install_context
 from . import jt, np, dtype, _jittor_dtype_name, _dtype_to_str, _diff, _trapz, nn
-from .method_api import _ip
+from .method_api import _ip, _tensor_pow
+from ...amp import _autocast_fp32_call
 
 
 def _torch_view_base(self):
@@ -220,6 +221,8 @@ def _torch_var_sum(self, *a, **k):
     if dt is None and len(a) >= 1 and _looks_like_dtype(a[0]):
         dt = a[0]
         a = a[1:]
+    # Match Torch's accumulation dtype, including values large enough to
+    # overflow int32; native Jittor reductions keep their own policy.
     if out is not None:
         if dt is not None and _dtype_to_str(dt) != _jittor_dtype_name(out.dtype):
             raise RuntimeError("sum(): dtype must match the dtype of out")
@@ -230,8 +233,6 @@ def _torch_var_sum(self, *a, **k):
         dt = "int64"
     if dt is not None:
         self = self.cast(_dtype_to_str(dt))
-    elif _jittor_dtype_name(self.dtype) in ("uint8", "int8", "uint16"):
-        self = self.int32()
     if self.ndim == 0 and ("dim" in k or "dims" in k):
         # Torch accepts dim 0/-1 on a scalar (it is the only axis); jittor's
         # reduce rejects every dim on a 0-D Var. torchmetrics reduces 0-D
@@ -248,7 +249,7 @@ def _torch_var_sum(self, *a, **k):
         raise IndexError(
             "Dimension out of range (expected to be in range of [-1, 0], "
             "but got %d)" % int(dims[0]))
-    result = _orig_var_sum(self, *a, **k)
+    result = _autocast_fp32_call(_orig_var_sum, self, *a, eligible=dt is None and out is None, **k)
     if dt is not None and _jittor_dtype_name(result.dtype) != _dtype_to_str(dt):
         result = result.cast(_dtype_to_str(dt))
     if out is not None:
@@ -262,9 +263,25 @@ def _torch_sum(input, *a, **k):
     Var = _context.state["Var"]
     _native = _context.state["tensor_shape_api"]
     _orig_module_sum = _native['_orig_module_sum']
-    if isinstance(input, Var):
+    if isinstance(input, (Var, jt.Var)):
         return _torch_var_sum(input, *a, **k)
     return _orig_module_sum(input, *a, **k)
+
+
+def _torch_mean(input, *a, **k):
+    """torch.mean with torch's dim spellings.
+
+    The Tensor method normalizes a tuple/list of dims onto jittor's ``dims``
+    overload, but the module-level spelling still referred to the native
+    function, which rejects ``torch.mean(x, dim=[1, 2, 3])`` (torchmetrics'
+    SpatialCorrelationCoefficient reduces four axes this way).
+    """
+    _context = get_install_context(jt)
+    Var = _context.state["Var"]
+    _orig_module_mean = _context.state["tensor_shape_api"]['_orig_module_mean']
+    if isinstance(input, (Var, jt.Var)):
+        a, k = _norm_reduce_kw(a, k)
+    return _orig_module_mean(input, *a, **k)
 
 
 def _index_add_inplace(self, dim, index, source, *, alpha=1):
@@ -300,12 +317,38 @@ def _axis_reduce(name, self, *a, **k):
     return orig(self, *a, **k)
 
 
+def _reduction_dtype(name, requested):
+    if (not isinstance(requested, dtype)
+            and not any(requested is scalar for scalar in (bool, int, float, complex))):
+        raise TypeError("%s(): argument 'dtype' must be torch.dtype" % name)
+    target = 'complex128' if requested is complex else _dtype_to_str(requested)
+    if name == 'mean' and not target.startswith(('float', 'bfloat', 'complex')):
+        raise RuntimeError(
+            'mean(): could not infer output dtype. Optional dtype must be '
+            'either a floating point or complex dtype. Got: %s' % target)
+    return target
+
+
 def _method_mean(self, *a, **k):
+    # torch casts the input before reducing when dtype is supplied. The native
+    # reduction has no dtype keyword, and passing it through raises TypeError.
+    reduce_dtype = k.pop('dtype', None)
+    if reduce_dtype is not None:
+        self = self.cast(_reduction_dtype('mean', reduce_dtype))
     return _plain_reduce('mean', self, *a, **k)
 
 
 def _method_prod(self, *a, **k):
-    return _plain_reduce('prod', self, *a, **k)
+    reduce_dtype = k.pop('dtype', None)
+    if reduce_dtype is not None:
+        reduce_dtype = _reduction_dtype('prod', reduce_dtype)
+        self = self.cast(reduce_dtype)
+    result = _plain_reduce('prod', self, *a, **k)
+    # Native boolean reductions return int32; an explicit Torch dtype owns the
+    # result dtype as well as the input cast.
+    if reduce_dtype is not None and _jittor_dtype_name(result.dtype) != reduce_dtype:
+        result = result.cast(reduce_dtype)
+    return result
 
 
 def _method_any(self, *a, **k):
@@ -423,7 +466,7 @@ def _shape_log1p(self):
 
 
 def _shape_square(self):
-    return self * self
+    return _tensor_pow(self, 2)
 
 
 def _shape_square_(self):

@@ -10,6 +10,10 @@ from .method_api import (
     _api_add,
     _api_sub,
     _api_mul,
+    _api_lerp,
+    _api_lerp_,
+    _api_addcmul_,
+    _api_addcdiv_,
     _api_div,
     _api_clamp_min,
     _api_clamp_max,
@@ -35,6 +39,8 @@ from .method_api import (
     _api_storage,
     _api_untyped_storage,
     _api_data_ptr,
+    _api_share_memory,
+    _api_is_shared,
     _api_is_contiguous,
     _api_is_leaf,
     _api_is_sparse,
@@ -66,6 +72,7 @@ from .method_api import (
     _set_,
     _record_stream,
     _assign_data_owner,
+    _attach_expand_grad_fn,
     _backward,
     _baddbmm,
     _cast_if_needed,
@@ -183,13 +190,44 @@ def _install_expand_shape_adapter(Var):
         return
 
     def expand(self, *shape):
-        if len(shape) == 1 and isinstance(shape[0], (tuple, list)):
-            shape = tuple(shape[0])
+        if len(shape) == 1:
+            head = shape[0]
+            # A size can arrive as ``torch.Size`` (a tuple subclass), as a
+            # plain sequence, or as Jittor's own ``Var.shape`` value -- a
+            # NanoVector that is sequence-like but is neither a tuple nor an
+            # int, so the old tuple/list test left it wrapped and ``int()``
+            # then failed on the vector itself. Scalar dimensions (including
+            # 0-D Vars, which expose ``dtype``) still pass through unchanged.
+            if isinstance(head, (tuple, list)) or (
+                not isinstance(head, (int, float, bool))
+                and hasattr(head, "__len__")
+                and not hasattr(head, "dtype")
+            ):
+                shape = tuple(head)
         normalized = tuple(int(value) for value in shape)
-        return native(self, *normalized)
+        return _attach_expand_grad_fn(self, native(self, *normalized))
 
     expand._torch_shape_adapter = True
     Var.expand = expand
+
+
+def _install_expand_as_grad_adapter(Var):
+    """Give ``Tensor.expand_as`` torch's view identity when it is a no-op.
+
+    ``Var.expand_as`` is the native ``broadcast_var``; a target shape equal to
+    the source forwards the source itself. torch returns a non-leaf view, and
+    DeepSpeed's ZeRO hook registration reads ``grad_fn.next_functions`` from
+    it. Widen the Python surface here; the native var is untouched.
+    """
+    native = getattr(Var, "expand_as", None)
+    if native is None or getattr(native, "_torch_expand_grad_adapter", False):
+        return
+
+    def expand_as(self, other):
+        return _attach_expand_grad_fn(self, native(self, other))
+
+    expand_as._torch_expand_grad_adapter = True
+    Var.expand_as = expand_as
 
 
 def _bind_native_binary(jt, natives, mark_cpu_like):
@@ -218,6 +256,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     _bind_native_fast_paths(_owner.jt)
     _NativeVar = _owner.jt.Var
     _install_expand_shape_adapter(Var)
+    _install_expand_as_grad_adapter(Var)
     _native_operators = {name: getattr(Var, name, None) for name in _BINARY_APIS}
     _bind_native_binary(_owner.jt, _native_operators, _owner._mark_cpu_like)
 
@@ -284,6 +323,10 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # stop-grad policy. Torch instead connects it to a differentiable RHS,
     # just as add_/sub_/mul_/div_ already do through the shared _ip owner.
     Var.__iadd__ = _api_add
+    Var.lerp = _api_lerp
+    Var.lerp_ = _api_lerp_
+    Var.addcmul_ = _api_addcmul_
+    Var.addcdiv_ = _api_addcdiv_
     Var.__isub__ = _api_sub
     Var.__imul__ = _api_mul
     Var.__itruediv__ = _api_div
@@ -350,8 +393,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
 
     # torch dtype predicates on the tensor itself. transformers computes
     # model.dtype via `next(p.dtype for p in params if p.is_floating_point())`,
-    # so save_pretrained needs these. jittor has no native complex, so
-    # is_complex is always False here.
+    # so save_pretrained needs these.
     if not hasattr(Var, "is_floating_point"):
         Var.is_floating_point = _api_is_floating_point
     if not hasattr(Var, "is_complex"):
@@ -617,6 +659,10 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         Var.is_pinned = _is_pinned
     if not hasattr(Var, "pin_memory"):
         Var.pin_memory = _pin_memory
+    if not hasattr(Var, "share_memory_"):
+        Var.share_memory_ = _api_share_memory
+    if not hasattr(Var, "is_shared"):
+        Var.is_shared = _api_is_shared
     # These two used to contradict each other -- `pin_memory()` returned
     # `self` (a device tensor, on an accelerator) while `is_pinned()` was a
     # bare `return False` -- so state the one restriction that is left.
@@ -727,5 +773,5 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         'Shares the public function implementation and preserves native explicit autocast policy')
 
     register_api_bindings(Var, 'torch.Tensor',
-        ('T', '__iadd__', '__isub__', '__imul__', '__itruediv__', '__deepcopy__', '__getitem__', '__hash__', '__invert__', '__ne__', '__reduce__', '__reduce_ex__', '__setitem__', 'add_', 'addmm', 'argwhere', 'as_strided', 'backward', 'baddbmm', 'clamp', 'clamp_', 'clip', 'clip_', 'contiguous', 'copy_', 'cpu', 'cuda', 'cumprod', 'cumsum', 'data', 'data_ptr', 'detach', 'device', 'div_', 'dtype', 'element_size', 'exponential_', 'fill_', 'fill_diagonal_', 'get_device', 'grad', 'grad_fn', 'is_complex', 'is_contiguous', 'is_cpu', 'is_cuda', 'is_floating_point', 'is_leaf', 'is_meta', 'is_mps', 'is_nested', 'is_pinned', 'is_signed', 'is_xpu', 'mT', 'mul_', 'multiply_', 'narrow', 'ne', 'nelement', 'new_empty', 'new_full', 'new_ones', 'new_tensor', 'new_zeros', 'nonzero', 'norm', 'normal_', 'numpy', 'pin_memory', 'random_', 'requires_grad', 'requires_grad_', 'retain_grad', 'retains_grad', 'set_', 'squeeze', 'storage', 'storage_offset', 'stride', 'sub_', 'tile', 'to', 'tolist', 'type', 'type_as', 'uniform_', 'untyped_storage', 'where', 'zero_') + tuple(_BINARY_APIS.keys() | _CAST_APIS.keys() | _UNARY_INPLACE_APIS.keys()),
+        ('T', '__iadd__', '__isub__', '__imul__', '__itruediv__', '__deepcopy__', '__getitem__', '__hash__', '__invert__', '__ne__', '__reduce__', '__reduce_ex__', '__setitem__', 'add_', 'addcdiv_', 'addcmul_', 'addmm', 'argwhere', 'as_strided', 'backward', 'baddbmm', 'clamp', 'clamp_', 'clip', 'clip_', 'contiguous', 'copy_', 'cpu', 'cuda', 'cumprod', 'cumsum', 'data', 'data_ptr', 'detach', 'device', 'div_', 'dtype', 'element_size', 'exponential_', 'fill_', 'fill_diagonal_', 'get_device', 'grad', 'grad_fn', 'is_complex', 'is_contiguous', 'is_cpu', 'is_cuda', 'is_floating_point', 'is_leaf', 'is_meta', 'is_mps', 'is_nested', 'is_pinned', 'is_shared', 'is_signed', 'is_xpu', 'lerp', 'lerp_', 'mT', 'mul_', 'multiply_', 'narrow', 'ne', 'nelement', 'new_empty', 'new_full', 'new_ones', 'new_tensor', 'new_zeros', 'nonzero', 'norm', 'normal_', 'numpy', 'pin_memory', 'random_', 'requires_grad', 'requires_grad_', 'retain_grad', 'retains_grad', 'set_', 'share_memory_', 'squeeze', 'storage', 'storage_offset', 'stride', 'sub_', 'tile', 'to', 'tolist', 'type', 'type_as', 'uniform_', 'untyped_storage', 'where', 'zero_') + tuple(_BINARY_APIS.keys() | _CAST_APIS.keys() | _UNARY_INPLACE_APIS.keys()),
         Fidelity.APPROXIMATE, 'Tensor operations share the native Var/Op graph and explicit frontend state; unsupported layouts, device capabilities, and retained compatibility approximations remain restricted')

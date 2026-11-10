@@ -15,7 +15,7 @@ python3 -m venv "$STATE/venv"
 . "$STATE/venv/bin/activate"
 ```
 
-macOS 需要 clang 和 OpenMP（可通过 `brew install libomp` 安装）；其它平台要求见[根 README](https://github.com/Jittor/jittor/blob/2.0-refactor/README.md#install)。上面的 Linux 命令不能直接用于 Windows。
+macOS 需要 clang 和 OpenMP（可通过 `brew install libomp` 安装）；其它平台的验证范围见[平台支持](../guides/hardware/platform-support.md)。上面的 Linux 命令不能直接用于 Windows。
 
 ## 选择安装来源
 

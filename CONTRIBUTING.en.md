@@ -3,7 +3,7 @@
 Jittor accepts bug fixes, features, operators, tests, documentation, and
 performance work. By participating, you agree to follow the
 [Code of Conduct](CODE_OF_CONDUCT.en.md) and the project's
-[governance rules](GOVERNANCE.en.md).
+[governance rules](docs/project/community/governance.en.md).
 
 ## Before you start
 
@@ -26,7 +26,8 @@ environments and also compiles the tree with a real Python 3.7 interpreter.
 ```bash
 git clone https://github.com/<your-account>/jittor.git
 cd jittor
-python -m pip install -e . -e ./compat
+python -m pip install --config-settings editable_mode=compat -e .
+python -m pip install -e ./compat
 python -m pip install -r requirements/dev-tools.txt
 python -m jittor.selftest
 ```
@@ -56,7 +57,6 @@ CI requirements are documented in [isolated validation](https://github.com/Jitto
 ├── benchmarks/          # ASV regressions, Torch comparisons, and ACL measurements
 ├── tools/               # build, docs, lint, release and maintenance commands
 ├── docs/                # the single user- and contributor-facing documentation tree
-├── agent/               # practical skills and their catalogue
 ├── pyproject.toml       # authoritative package, tool, and pytest configuration
 └── noxfile.py           # reproducible local and CI sessions
 ```

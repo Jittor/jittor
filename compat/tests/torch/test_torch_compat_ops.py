@@ -467,6 +467,21 @@ class TestShapeMetadata(Base):
 
         both_devices(body)
 
+    def test_expand_accepts_size_like_shape_argument(self):
+        """``Tensor.shape`` itself is a valid single ``expand`` argument."""
+        def body(dev):
+            source = torch.zeros(6, 3, 4, device=dev)
+            mask = torch.zeros(2, 3, dtype=torch.bool, device=dev)
+            view = mask.flatten()[:, None, None]
+            expanded = view.expand(source.shape)
+            self.assertEqual(tuple(expanded.shape), (6, 3, 4))
+            self.ae(expanded.numpy(), np.zeros((6, 3, 4), dtype=bool),
+                    msg=f"size-like expand {dev}")
+            self.assertEqual(tuple(view.expand(tuple(source.shape)).shape), (6, 3, 4))
+            self.assertEqual(tuple(view.expand(6, 3, 4).shape), (6, 3, 4))
+
+        both_devices(body)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

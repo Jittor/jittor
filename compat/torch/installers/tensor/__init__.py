@@ -382,6 +382,8 @@ def _install_reductions(g):
     g.masked_select = Var.masked_select = _numerical_masked_select
     g.softmax = Var.softmax = _numerical_softmax
     g.log_softmax = Var.log_softmax = _numerical_log_softmax
+    from ...native_api import tensor_rsqrt
+    Var.rsqrt = tensor_rsqrt
 
     # Methods with no module-level torch spelling to widen.
     Var.masked_scatter = masked_scatter
@@ -498,8 +500,12 @@ class _TypedTensorMeta(type):
             else:
                 v = jt.zeros(tuple(int(a) for a in args), dtype=cls._jdtype)
             result = v.cast(cls._jdtype)
+            # torch.FloatTensor()/IntTensor()/... return a leaf with
+            # requires_grad=False. Jittor's cast result is a non-leaf that
+            # reports requires_grad=True, so the leaf-only public setter raises;
+            # stop_grad() is the native way to clear the flag on a fresh result.
             if not tensor_input:
-                result.requires_grad_(False)
+                result = result.stop_grad()
             return result
 
 
@@ -691,7 +697,17 @@ def cat(tensors, dim=0, out=None, axis=None):
 
 def _cat_impl(tensors, dim=0, out=None, axis=None):
     if out is None and axis is None and type(dim) is int:
-        fast = (_FAST_CAT or _bind_fast_cat())(tensors, dim)
+        # The native fast path allocates under the ambient module placement.
+        # A CPU input inside a CUDA module must instead use the generic concat
+        # path, which allocates its scratch buffer alongside the inputs.
+        conflicting_placement = False
+        if isinstance(tensors, (tuple, list)) and tensors and isinstance(tensors[0], jt.Var):
+            placement = jt.core._current_tensor_placement()
+            first = tensors[0]
+            backend = int(first.placement_backend)
+            if backend >= 0 and placement is not None:
+                conflicting_placement = placement != (backend, _builtins.max(int(first.device_id), 0))
+        fast = NotImplemented if conflicting_placement else (_FAST_CAT or _bind_fast_cat())(tensors, dim)
         if fast is not NotImplemented:
             return _cat_grad_result(fast, tensors)
         # The native fast path above declines whenever a backend registers its
@@ -753,6 +769,12 @@ def _cat_impl(tensors, dim=0, out=None, axis=None):
         for _t in _seq:
             _tf = getattr(type(_t), "__torch_function__", None)
             if _tf is not None and not isinstance(_t, jt.Var):
+                # torch.overrides' rules: no dispatch inside
+                # torch._C._disabled_torch_function_impl, and none for a type
+                # whose hook is that function.
+                from ..cuda.api import _torch_function_override
+                if _torch_function_override(type(_t)) is None:
+                    continue
                 _kw = {}
                 if dim != 0: _kw["dim"] = dim
                 if out is not None: _kw["out"] = out
@@ -906,6 +928,13 @@ def _check_tensor_all(condition, message=None):
     return _check_condition(condition, message, RuntimeError)
 
 
+def _check_with(error_type, condition, message=None):
+    # torch._check_with(error_type, cond, msg_callable): raise the selected
+    # exception type when cond is false. transformers' torch_compilable_check
+    # uses it for model-level shape assertions (e.g. Mask2Former).
+    return _check_condition(condition, message, error_type)
+
+
 def _check_is_size(i, message=None, **kwargs):
     return _check(int(i) >= 0, message)
 
@@ -1014,6 +1043,7 @@ def install(ctx):
     g._check_type = _check_type
     g._check_not_implemented = _check_not_implemented
     g._check_tensor_all = _check_tensor_all
+    g._check_with = _check_with
     g._assert_async = _assert_async
 
     # torch.cat: tolerate empty tensors (skip zero-numel inputs) like torch,
@@ -1082,6 +1112,7 @@ from .shape_api import (
     _torch_view_base,
     _torch_size,
     _torch_sum,
+    _torch_mean,
     _torch_var_sum,
 )
 from types import MappingProxyType
@@ -1138,6 +1169,12 @@ def install_methods(ctx):
     Var.sum = _torch_var_sum
     if _orig_module_sum is not None:
         g.sum = _torch_sum
+    # The plain-reduction normalization below covers the Tensor methods; the
+    # module-level mean kept the native function, so torch.mean(x, dim=[...])
+    # (torchmetrics SCC) failed on the list spelling.
+    _orig_module_mean = getattr(g, "mean", None)
+    if _orig_module_mean is not None:
+        g.mean = _torch_mean
     # Full dim/dims/keepdim normalization for the plain reductions that map onto
     # jittor's scalar-`dim` / tuple-`dims` overload pair (mean/prod/any/all). mmdet
     # exercises tuple dims here, e.g. yolact_head's loss.mean(dim=(1, 2)).
@@ -1211,6 +1248,7 @@ def install_methods(ctx):
         '_Size': locals().get('_Size'),
         '_orig_index_add_inplace': locals().get('_orig_index_add_inplace'),
         '_orig_module_sum': locals().get('_orig_module_sum'),
+        '_orig_module_mean': locals().get('_orig_module_mean'),
         '_orig_reshape': locals().get('_orig_reshape'),
         '_orig_var_sum': locals().get('_orig_var_sum'),
     })

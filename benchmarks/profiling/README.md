@@ -4,6 +4,9 @@
 设备与计时口径；源码存在不代表已经通过当前提交的硬件验收。模型或第三方库的完整
 验收应到 [JittorEcosystem](https://github.com/JittorEcosystem) 对应仓库执行。
 
+`_paths.py` 统一提供源码定位和外部输出目录校验，只依赖 Python 标准库。
+通用探针从这里导入路径助手，不依赖任何具体模型的运行脚本。
+
 | 工具 | 用途 | 设备 / 前端 |
 | --- | --- | --- |
 | `benchmark_npu_frontends.py` | 同尺寸矩阵乘的原生/独立 compat 前端延迟与数值校验 | ACL NPU，分别起进程；检查驻留与零回退 |

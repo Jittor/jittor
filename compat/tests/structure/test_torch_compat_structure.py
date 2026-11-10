@@ -206,6 +206,12 @@ class TestTorchCompatStructure(unittest.TestCase):
                 "shim/resources/stubs/torchvision/__init__.py",
                 "<module>",
                 "setdefault",
+                (repr("torchvision.ops"), "_ops"),
+            ),
+            (
+                "shim/resources/stubs/torchvision/__init__.py",
+                "<module>",
+                "setdefault",
                 (repr("torchvision.transforms"), "transforms"),
             ),
             (
@@ -480,6 +486,7 @@ class TestTorchCompatStructure(unittest.TestCase):
         self.assertIn("jittor.compat", packages)
         self.assertIn("jittor.compat.torch", packages)
         self.assertIn("jittor.compat.torch.serialization", packages)
+        self.assertIn("jittor.compat.torch.package", packages)
         self.assertNotIn("jittor._torch_compat", packages)
 
     def test_installation_order_remains_stable(self):
@@ -495,11 +502,14 @@ class TestTorchCompatStructure(unittest.TestCase):
             "distributed",
             "core.extended",
             "serialization",
+            "package",
             "utilities",
             "utilities.runtime-knobs",
             "data",
             "distributions",
             "compiler",
+            "export",
+            "pipelining",
             "numerical",
             "numerical.signal",
             "autograd.module-keys",
@@ -554,7 +564,8 @@ class TestTorchCompatStructure(unittest.TestCase):
         expected = {
             "core.py", "tensor", "factories.py", "autograd.py", "nn",
             "nn_init.py", "cuda", "npu.py", "distributed.py", "data.py",
-            "distributions.py", "numerical", "compiler.py", "utilities.py",
+            "distributions.py", "numerical", "compiler.py", "package.py",
+            "export.py", "pipelining.py", "utilities.py",
         }
         self.assertEqual(
             {path.name for path in installers.iterdir()

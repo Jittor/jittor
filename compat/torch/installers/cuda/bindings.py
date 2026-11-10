@@ -90,6 +90,8 @@ from .api import (
     _api_mp_reductions_rebuild_cuda_tensor,
     _api_mp_reductions_rebuild_tensor,
     _api_mp_reductions_reduce_tensor,
+    _api_mps_current_allocated_memory,
+    _api_mps_driver_allocated_memory,
     _api_mps_is_available,
     _api_overrides_get_default_nowrap_functions,
     _current_stream,
@@ -287,6 +289,9 @@ def _install_cuda(g, registry=None):
         if _mod is None:
             _mod = _types.ModuleType("torch." + _dev_ns)
             _modules["torch." + _dev_ns] = _mod
+        if _dev_ns == "mps":
+            _mod.current_allocated_memory = getattr(
+                _mod, "current_allocated_memory", _api_mps_current_allocated_memory)
         _mod.is_available = getattr(_mod, "is_available", _api_mod_is_available)
         _mod.is_initialized = getattr(_mod, "is_initialized", _api_mod_is_initialized)
         _mod.device_count = getattr(_mod, "device_count", _api_mod_device_count)
@@ -302,12 +307,29 @@ def _install_cuda(g, registry=None):
         _mod.reset_max_memory_allocated = getattr(_mod, "reset_max_memory_allocated", _api_mod_reset_max_memory_allocated)
         _mod.memory_allocated = getattr(_mod, "memory_allocated", _api_mod_memory_allocated)
         _mod.max_memory_allocated = getattr(_mod, "max_memory_allocated", _api_mod_max_memory_allocated)
+        if _dev_ns == "mps":
+            _mod.current_allocated_memory = getattr(
+                _mod, "current_allocated_memory", _api_mps_current_allocated_memory)
+            _mod.driver_allocated_memory = getattr(
+                _mod, "driver_allocated_memory", _api_mps_driver_allocated_memory)
         setattr(g, _dev_ns, _mod)
 
     if "torch.multiprocessing" not in _modules:
         import multiprocessing as _mp
         _modules["torch.multiprocessing"] = _mp
     g.multiprocessing = _modules["torch.multiprocessing"]
+    # PyTorch's torch.multiprocessing.spawn reports worker failures with these
+    # exceptions; the stdlib spawn module Jittor aliases does not define them.
+    # transformers.test_tensor_parallel_mixin imports them at module load, and
+    # causal-LM test modules import that mixin. The alias can be imported under
+    # either name, and an import performed before this one would create a
+    # second module object, so publish one patched module under both names.
+    import importlib as _importlib
+    _mp_spawn = _importlib.import_module("multiprocessing.spawn")
+    _modules["torch.multiprocessing.spawn"] = _mp_spawn
+    for _spawn_exception in ("ProcessRaisedException", "ProcessExitedException"):
+        if not hasattr(_mp_spawn, _spawn_exception):
+            setattr(_mp_spawn, _spawn_exception, type(_spawn_exception, (RuntimeError,), {}))
     _mp_reductions = _types.ModuleType("torch.multiprocessing.reductions")
     _mp_reductions.reduce_tensor = _api_mp_reductions_reduce_tensor
     _mp_reductions.rebuild_cuda_tensor = _api_mp_reductions_rebuild_cuda_tensor
@@ -335,6 +357,13 @@ def _install_cuda(g, registry=None):
     if "torch._C" not in _modules:
         c_mod = _types.ModuleType("torch._C")
         c_mod._TensorMeta = type(getattr(g, "Tensor", jt.Var))
+        # TorchScript/ONNX symbolic functions annotate their arguments and
+        # return values with these C++ types. Several transformers models
+        # define such annotations at class-creation time (for example
+        # sew_d.modeling_sew_d.XDropout.symbolic), so the names must resolve
+        # even though Jittor has no TorchScript or ONNX graph exporter.
+        c_mod.Graph = type("Graph", (), {})
+        c_mod.Value = type("Value", (), {})
         c_mod._get_tracing_state = _api_c_mod__get_tracing_state
         c_mod._log_api_usage_once = _api_c_mod__log_api_usage_once
         c_mod._cuda_clearCublasWorkspaces = _api_c_mod__cuda_clearCublasWorkspaces

@@ -1,4 +1,5 @@
 """A library backward must reject changes through aliases of saved inputs."""
+import numpy as np
 import pytest
 import torch
 
@@ -28,3 +29,32 @@ def test_library_saved_input_mutated_through_detached_alias_rejects_backward():
         alias.fill_(7.0)
     with pytest.raises(RuntimeError, match="modified by an inplace"):
         torch.autograd.grad(result.sum(), x)
+
+def test_pending_setitem_attention_keeps_mutation_guard_on_cuda():
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is required for fused float32 attention")
+
+    def make_loss():
+        arrays = [np.arange(64, dtype=np.float32).reshape(1, 4, 4, 4) / scale
+                  for scale in (100, 110, 120, 130)]
+        parts = [torch.tensor(array, device="cuda:0", requires_grad=True)
+                 for array in arrays]
+        query = torch.cat(parts[:2], dim=-1)
+        key = torch.cat(parts[2:], dim=-1)
+        value = torch.tensor(
+            np.arange(128, dtype=np.float32).reshape(1, 4, 4, 8) / 140,
+            device="cuda:0", requires_grad=True)
+        loss = torch.nn.functional.scaled_dot_product_attention(
+            query, key, value, is_causal=True).sum()
+        float(loss)  # Materialize the pending setitem before backward.
+        return query, loss, parts[0]
+
+    query, loss, first = make_loss()
+    loss.backward()
+    assert float(first.grad.sum()) == pytest.approx(0.1866113, abs=1e-5)
+
+    query, loss, _ = make_loss()
+    with torch.no_grad():
+        query.detach().fill_(7.0)
+    with pytest.raises(RuntimeError, match="modified by an inplace"):
+        loss.backward()

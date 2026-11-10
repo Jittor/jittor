@@ -5,7 +5,7 @@ import warnings
 import contextlib
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from ...context import get_install_context
-from ...amp import _preserve_autocast_arithmetic
+from ...amp import _autocast_state, _preserve_autocast_arithmetic, _cuda_autocast_fp32_input
 from ...types import _PYTHON_SCALAR_DTYPES, _make_cpu_resident, _make_cuda_resident, _var_is_cpu_resident
 from ....stub_policy import degraded as _degraded, unimplemented as _unimplemented
 from ..core import _promote_pair
@@ -577,6 +577,13 @@ def _nonzero(self, as_tuple=False, **kw):
     _context = get_install_context(_owner.jt)
     _native = _context.state["tensor_native_api"]
     _native_nonzero = _native['_native_nonzero']
+    if self.ndim == 0:
+        # PyTorch treats a scalar as a single position for tuple indices, but
+        # the matrix form retains the scalar's zero-dimensional coordinate.
+        flat = _native_nonzero(self.reshape(1)).int64()
+        if as_tuple:
+            return (flat.reshape(-1),)
+        return flat[:, :0]
     idx = _native_nonzero(self)
     if not as_tuple:
         return idx
@@ -625,8 +632,18 @@ class _Storage:
     def __init__(self, var):
         self._var = var
     def data_ptr(self):
-        # Tensor.data_ptr() addresses the first element of a view. Storage
-        # addresses its allocation origin, shared by every offset view/alias.
+        """Address of the allocation's first element, as torch reports it.
+
+        torch's contract is ``tensor.data_ptr() == storage().data_ptr() +
+        storage_offset() * element_size``. safetensors' shared-weight
+        detection compares the two pointers (`_is_complete`) and refuses to
+        save a tied model when they disagree, so Python object identity is
+        not a usable stand-in: distinct views of one allocation have
+        different ``id()`` values but must report the same storage address,
+        and a contiguous tensor's two pointers must be equal.
+        """
+        _owner.jt.graph_replay_barrier(
+            "Tensor.storage().data_ptr exposes storage to an external consumer")
         pointer = _api_data_ptr(self._var)
         return pointer - int(self._var._storage_offset()) * _storage_dsize(self._var)
     def size(self):
@@ -757,6 +774,18 @@ def _torch_getitem(self, slices):
 
     slices = normalize(slices)
     slices = _align_advanced_index(self, slices)
+    if (isinstance(slices, _NativeVar) and slices.ndim == 0
+            and _jittor_dtype_name(slices.dtype) == "bool"):
+        # A scalar boolean index adds a leading selection axis in Torch.
+        # Convert it to zero or one integer row indices without reading the
+        # mask back to the host, retaining autograd and the input device.
+        context = get_install_context(_owner.jt)
+        native_getitem = context.state["tensor_native_api"]["_orig_getitem"]
+        indices = _nonzero(slices, as_tuple=True)[0]
+        out = native_getitem(self.unsqueeze(0), indices)
+        if isinstance(out, _NativeVar) and _owner._var_has_cpu_residency_hint(self):
+            out = _owner._mark_cpu_like(out, self)
+        return out
     # A basic index, natively (`src/bindings/pyjt/py_compat_fast.h`).
     fast = _owner.jt.core._fast_getitem(self, slices)
     if fast is not NotImplemented:
@@ -814,10 +843,23 @@ def _data_get(self):
         view._torch_0d = True
     view._torch_data_owner = self
     view._torch_data_path = ()
+    # A fresh .data alias must retain the shared-memory descriptor so its
+    # multiprocessing reduction reopens the same allocation in the child.
+    for name in ("_torch_shared_memory_handle", "_torch_shared_memory_spec"):
+        marker = getattr(self, name, None)
+        if marker is not None:
+            setattr(view, name, marker)
+    from ...frontend import shared_memory_owner
+    shared = shared_memory_owner(self)
+    if shared is not None and shared is not self:
+        view._torch_shared_memory_view_owner = shared
     return view
 
 
 def _data_set(self, value):
+    # A storage swap inside a module call is a Python side effect: replaying
+    # the captured device graph would skip the swap on later calls.
+    _owner.jt.graph_replay_barrier("Tensor.data replaces storage during a module call")
     src = value if isinstance(value, _NativeVar) else _owner.jt.array(value)
     # torch's `x.data = y` *replaces* x's data, shape and dtype; it does not
     # copy elements into x's existing buffer. `assign` is the in-place
@@ -988,6 +1030,13 @@ def _var_detach(self):
         out = out.stop_grad()
     if getattr(self, "_torch_0d", False):
         out._torch_0d = True
+    from ...frontend import shared_memory_owner
+    shared = shared_memory_owner(self)
+    if shared is self:
+        for name in ("_torch_shared_memory_handle", "_torch_shared_memory_spec"):
+            setattr(out, name, getattr(self, name))
+    elif shared is not None:
+        out._torch_shared_memory_view_owner = shared
     return out
 
 
@@ -1541,7 +1590,11 @@ def _var_norm(self, p="fro", dim=None, keepdims=None, *rest,
 def _binary_native(opname, left, right, native_api=None):
     if native_api is None:
         native_api = get_install_context(_owner.jt).state["tensor_native_api"]
-    result = native_api["operators"][opname](left, right)
+    if _preserve_autocast_arithmetic():
+        with _owner.jt.flag_scope(amp_reg=0):
+            result = native_api["operators"][opname](left, right)
+    else:
+        result = native_api["operators"][opname](left, right)
     return _owner._mark_cpu_like(result, left, right)
 
 
@@ -1758,7 +1811,7 @@ _FAST_BINARY_OPERATORS = ('__add__', '__radd__', '__sub__', '__rsub__',
 
 def _tensor_add(self, other):
     fast = _FAST_BINARY
-    if fast is not None:
+    if fast is not None and not _autocast_state.order:
         out = fast(self, other, 0)
         if out is not None:
             return out
@@ -1767,7 +1820,7 @@ def _tensor_add(self, other):
 
 def _tensor_radd(self, other):
     fast = _FAST_BINARY
-    if fast is not None:
+    if fast is not None and not _autocast_state.order:
         out = fast(self, other, 1)
         if out is not None:
             return out
@@ -1776,7 +1829,7 @@ def _tensor_radd(self, other):
 
 def _tensor_sub(self, other):
     fast = _FAST_BINARY
-    if fast is not None:
+    if fast is not None and not _autocast_state.order:
         out = fast(self, other, 2)
         if out is not None:
             return out
@@ -1785,7 +1838,7 @@ def _tensor_sub(self, other):
 
 def _tensor_rsub(self, other):
     fast = _FAST_BINARY
-    if fast is not None:
+    if fast is not None and not _autocast_state.order:
         out = fast(self, other, 3)
         if out is not None:
             return out
@@ -1821,7 +1874,7 @@ def _tensor_mul(self, other):
         with _owner.jt.flag_scope(amp_reg=0):
             return _promoting_binary(self, other, '__mul__', False)
     fast = _FAST_BINARY
-    if fast is not None:
+    if fast is not None and not _autocast_state.order:
         out = fast(self, other, 4)
         if out is not None:
             return out
@@ -1836,7 +1889,7 @@ def _tensor_rmul(self, other):
         with _owner.jt.flag_scope(amp_reg=0):
             return _promoting_binary(self, other, '__rmul__', True)
     fast = _FAST_BINARY
-    if fast is not None:
+    if fast is not None and not _autocast_state.order:
         out = fast(self, other, 5)
         if out is not None:
             return out
@@ -1860,16 +1913,28 @@ def _tensor_rmod(self, other):
 
 
 def _tensor_pow(self, other):
+    if _preserve_autocast_arithmetic():
+        self, other = _cuda_autocast_fp32_input(self), _cuda_autocast_fp32_input(other)
+        with _owner.jt.flag_scope(amp_reg=0):
+            return _promoting_binary(self, other, '__pow__', False)
     return _promoting_binary(self, other, '__pow__', False)
 
 
+def _api_pow(self, exponent):
+    return _tensor_pow(self, exponent)
+
+
 def _tensor_rpow(self, other):
+    if _preserve_autocast_arithmetic():
+        self, other = _cuda_autocast_fp32_input(self), _cuda_autocast_fp32_input(other)
+        with _owner.jt.flag_scope(amp_reg=0):
+            return _promoting_binary(self, other, '__rpow__', True)
     return _promoting_binary(self, other, '__rpow__', True)
 
 
 def _tensor_truediv(self, other):
     fast = _FAST_BINARY
-    if fast is not None:
+    if fast is not None and not _autocast_state.order:
         out = fast(self, other, 6)
         if out is not None:
             return out
@@ -1878,7 +1943,7 @@ def _tensor_truediv(self, other):
 
 def _tensor_rtruediv(self, other):
     fast = _FAST_BINARY
-    if fast is not None:
+    if fast is not None and not _autocast_state.order:
         out = fast(self, other, 7)
         if out is not None:
             return out
@@ -1909,6 +1974,7 @@ _BINARY_APIS = {
     '__mod__': _tensor_mod,
     '__rmod__': _tensor_rmod,
     '__pow__': _tensor_pow,
+    'pow': _api_pow,
     '__rpow__': _tensor_rpow,
     '__truediv__': _tensor_truediv,
     '__rtruediv__': _tensor_rtruediv,
@@ -2053,6 +2119,27 @@ def _api_div(self, o):
     return _ip(self, _inplace_saved_input(self, o) / o, preserve_storage=True)
 
 
+def _api_lerp(self, end, weight):
+    return self + weight * (end - self)
+
+
+def _api_lerp_(self, end, weight):
+    source = _inplace_saved_input(self, end)
+    return _ip(self, source + weight * (end - source), preserve_storage=True)
+
+
+def _api_addcmul_(self, tensor1, tensor2, *, value=1):
+    return _ip(
+        self, self + value * (tensor1 * tensor2), preserve_storage=True
+    )
+
+
+def _api_addcdiv_(self, tensor1, tensor2, *, value=1):
+    return _ip(
+        self, self + value * (tensor1 / tensor2), preserve_storage=True
+    )
+
+
 def _api_clamp_min(input, v):
     return _clamp(input, min=v)
 
@@ -2106,29 +2193,61 @@ def _api_normal(self, mean=0.0, std=1.0, generator=None):
     return _random_inplace(self, _normal_values, mean, std, generator=generator)
 
 
-def _random_integer_values(tensor, generator=None):
+def _random_integer_values(tensor, low=None, high=None, generator=None):
     """Draw Torch random_ integers on the destination tensor's device."""
     dtype = _jittor_dtype_name(tensor.dtype)
-    bits = {"bool": 1, "uint8": 8, "int8": 7, "int16": 15,
-            "int32": 31, "int64": 63, "float16": 11,
-            "bfloat16": 8, "float32": 24, "float64": 53}.get(dtype)
-    if bits is None:
-        raise TypeError("torch.Tensor.random_ requires a real or integral tensor")
     from jittor._core.var import device_scope_like
     with device_scope_like(tensor), _owner.jt.no_grad():
+        if high is not None:
+            return _owner.jt.randint(
+                low, high, tensor.shape, "int64", generator=generator
+            ).cast(dtype)
+        bits = {"bool": 1, "uint8": 8, "int8": 7, "int16": 15,
+                "int32": 31, "int64": 63, "float16": 11,
+                "bfloat16": 8, "float32": 24, "float64": 53}.get(dtype)
+        if bits is None:
+            raise TypeError("torch.Tensor.random_ requires a real or integral tensor")
         # Keep each piece exactly representable in the native random sampler.
         remaining = bits
         value = None
         while remaining:
             width = min(remaining, 21)
-            piece = _owner.jt.randint(0, 1 << width, tensor.shape, "int64")
+            piece = _owner.jt.randint(
+                0, 1 << width, tensor.shape, "int64", generator=generator
+            )
             value = piece if value is None else value * (1 << width) + piece
             remaining -= width
         return value.cast(dtype)
 
 
-def _api_random(self):
-    return _random_inplace(self, _random_integer_values)
+def _api_random(self, *args, generator=None, **kwargs):
+    """Fill with integers using Torch's random_(to) / random_(from, to) forms."""
+    unexpected = set(kwargs) - {"from", "to"}
+    if unexpected:
+        name = sorted(unexpected)[0]
+        raise TypeError(f"random_() got an unexpected keyword argument '{name}'")
+    if len(args) > 2:
+        raise TypeError(f"random_() takes from 0 to 2 positional arguments but {len(args)} were given")
+    if args and ("from" in kwargs or "to" in kwargs):
+        raise TypeError("random_() received both positional and keyword bounds")
+    if len(args) == 1:
+        bounds = (0, int(args[0]))
+    elif len(args) == 2:
+        bounds = (int(args[0]), int(args[1]))
+    elif "to" in kwargs:
+        bounds = (int(kwargs.get("from", 0)), int(kwargs["to"]))
+    elif "from" in kwargs:
+        raise TypeError("random_() missing required argument 'to'")
+    else:
+        bounds = (None, None)
+    if bounds[1] is not None and bounds[0] >= bounds[1]:
+        raise RuntimeError(
+            "random_ expects 'from' to be less than 'to', "
+            f"but got from={bounds[0]} >= to={bounds[1]}"
+        )
+    return _random_inplace(
+        self, _random_integer_values, *bounds, generator=generator
+    )
 
 
 def _api_uniform(self, a=0.0, b=1.0, generator=None):
@@ -2210,11 +2329,27 @@ def _api_data_ptr(self):
     return int(self._storage_address)
 
 
+def _api_share_memory(self):
+    from ...frontend import share_tensor_memory
+    return share_tensor_memory(self)
+
+
+def _api_is_shared(self):
+    from ...frontend import shared_memory_owner
+    return bool(self.is_cuda) or shared_memory_owner(self) is not None
+
+
 def _api_is_contiguous(self, *a, **k):
     return self._storage_is_contiguous()
 
 
 def _api_is_leaf(self):
+    # A shape-preserving expand is a forwarded broadcast inside Jittor, but
+    # torch models it as a view: the Python result carries the synthetic
+    # ExpandBackward so is_leaf answers False without touching the source Var.
+    state = getattr(self, "__dict__", None)
+    if state is not None and state.get("_torch_synthetic_grad_fn") is not None:
+        return False
     return bool(self.is_backward_leaf)
 
 
@@ -2343,6 +2478,7 @@ _UNARY_INPLACE_APIS = {
 
 from .autograd_api import (
     _TorchGradFn,
+    _attach_expand_grad_fn,
     _backward,
     _fill_opt_grads,
     _grad_fn,

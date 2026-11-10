@@ -1638,6 +1638,14 @@ VarHolder* VarHolder::update(VarHolder* v) {
     return assign(v);
 }
 
+bool VarHolder::has_storage_aliases() {
+    ExecutorEntryScope entry;
+    sync_all(false);
+    runtime_executor().run_sync({var}, false, false);
+    std::lock_guard<std::mutex> guard(share_ring_mutex());
+    return views != nullptr || var->share_next != nullptr;
+}
+
 VarHolder* VarHolder::_update(VarHolder* v, bool logical_write) {
     if (!logical_write) {
         ExecutorEntryScope entry;
