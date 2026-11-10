@@ -21,7 +21,12 @@ def arange(start=0, end=None, step=1,dtype=None):
     last = (l-1)*step+start
     if (step > 0 and last >= end) or (step < 0 and last <= end):
         l-=1
-    x = jt.index((l,),0)
+    # Integer ranges can be born in their requested dtype. A temporary int32
+    # index plus casts adds nodes and frontend calls to every position range.
+    # Floating bounds retain their existing intermediate arithmetic below.
+    direct_integer_index = (dtype is not None and _dtype_name(dtype) == "int64"
+                            and all(type(value) is int for value in (start, end, step)))
+    x = jt.index((l,), 0, dtype="int64" if direct_integer_index else "int32")
     # A float bound or step makes a floating range (torch and numpy both): do
     # the arithmetic in floating point before any requested cast. `index` is
     # int32, and with only `end` fractional -- `arange(1.5)` -- the integer
@@ -43,7 +48,8 @@ def arange(start=0, end=None, step=1,dtype=None):
     elif dtype is not None and _dtype_name(dtype) == "int64":
         # Cast before integer arithmetic. Casting after an int32 add wraps
         # large starts or steps before the requested int64 result exists.
-        x = x.int64()
+        if not direct_integer_index:
+            x = x.int64()
         if step != 1:
             step = jt.array(step, dtype="int64")
         if start != 0:
@@ -54,7 +60,7 @@ def arange(start=0, end=None, step=1,dtype=None):
         x = x*step
     if not isinstance(start, (int, float, np.number)) or start != 0:
         x = x+start
-    if dtype is not None:
+    if dtype is not None and not direct_integer_index:
         x= x.cast(dtype)
     return x
 
