@@ -15,7 +15,9 @@ from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import jittor as jt
 from jittor._core.flags import _output_requires_grad, _stop_grad_outputs
-from jittor._runtime.dispatch import dispatch_context, optional_kernel, try_dispatch
+from jittor._runtime.dispatch import (
+    _query_backend, dispatch_context, optional_kernel, try_dispatch,
+)
 
 from .backends import hooks as _backend_hooks
 from jittor.backends.cuda.kernels.nn.rms_norm_cuda import _fused_add_rms_norm_cuda
@@ -72,7 +74,7 @@ def rms_norm(x, weight, eps=1e-6):
     """Root-mean-square normalise ``x`` over its last axis and scale."""
     backend_weight = weight
     if (
-        dispatch_context(x, weight).backend == "acl"
+        _query_backend(dispatch_context, x, weight) == "acl"
         and not _output_requires_grad(x, weight)
         and _jittor_dtype_name(x.dtype) == "float32"
         and _jittor_dtype_name(weight.dtype) in ("float16", "bfloat16")

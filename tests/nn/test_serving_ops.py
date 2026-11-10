@@ -2,6 +2,7 @@
 
 import unittest
 from unittest import mock
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -42,6 +43,17 @@ class TestSiluAndMul(unittest.TestCase):
 
 
 class TestRmsNorm(unittest.TestCase):
+    def test_replaced_placement_query_is_observed(self):
+        x, weight = jt.ones((2, 4)), jt.ones(4)
+        backend = dispatch_context(x, weight).backend
+        result = jt.ones((2, 4))
+        context_query = mock.Mock(return_value=SimpleNamespace(backend=backend))
+        with mock.patch.object(serving_ops, "dispatch_context", context_query), \
+                override_kernel("nn.rms_norm.inference", backend,
+                                lambda *args: result):
+            self.assertIs(jt.nn.rms_norm(x, weight), result)
+        context_query.assert_called_once_with(x, weight)
+
     @unittest.skipIf(not jt.compiler.has_cuda, "CUDA is required")
     def test_cuda_result_uses_device_storage(self):
         raw = np.array([[0.5, 1., -2., 3.]], dtype="float32")
