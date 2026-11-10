@@ -63,20 +63,21 @@ def _broadcast_batch_dims(a, b):
     here before dispatch."""
     if a.ndim != b.ndim or a.ndim < 3:
         return a, b
+    # Snapshot metadata for this call: each shape read builds a Python value.
+    # Equal batch dimensions are already broadcast and need no per-axis work.
+    a_shape, b_shape = a.shape, b.shape
+    a_batch, b_batch = list(a_shape[:-2]), list(b_shape[:-2])
+    if a_batch == b_batch:
+        return a, b
     bshape = []
-    need = False
-    for i in range(a.ndim - 2):
-        an, bn = a.shape[i], b.shape[i]
+    for an, bn in zip(a_batch, b_batch):
         if an != bn:
             assert an == 1 or bn == 1, f"dimension not match, a.shape:{a.shape}, b.shape:{b.shape}"
-            need = True
         bshape.append(max(an, bn))
-    if not need:
-        return a, b
-    if list(a.shape[:-2]) != bshape:
-        a = a.expand(bshape + list(a.shape[-2:]))
-    if list(b.shape[:-2]) != bshape:
-        b = b.expand(bshape + list(b.shape[-2:]))
+    if a_batch != bshape:
+        a = a.expand(bshape + list(a_shape[-2:]))
+    if b_batch != bshape:
+        b = b.expand(bshape + list(b_shape[-2:]))
     return a, b
 
 
@@ -319,8 +320,9 @@ def _check_matmul_shapes(a, b, trans_a=False, trans_b=False, op="matmul", names=
         )
     a_axis = 0 if a_ndim == 1 else (-2 if trans_a else -1)
     b_axis = 0 if b_ndim == 1 else (-1 if trans_b else -2)
-    inner_a = a.shape[a_axis]
-    inner_b = b.shape[b_axis]
+    a_shape, b_shape = a.shape, b.shape
+    inner_a = a_shape[a_axis]
+    inner_b = b_shape[b_axis]
     if inner_a != inner_b:
         lhs, rhs = _operand(a_name, a), _operand(b_name, b)
         raise jt.JittorShapeError(
@@ -334,7 +336,10 @@ def _check_matmul_shapes(a, b, trans_a=False, trans_b=False, op="matmul", names=
     # product in every model. `nn.Linear` is exactly that shape.
     if a_ndim <= 2 or b_ndim <= 2:
         return
-    for offset, (left, right) in enumerate(zip(reversed(a.shape[:-2]), reversed(b.shape[:-2]))):
+    a_batch, b_batch = a_shape[:-2], b_shape[:-2]
+    if a_batch == b_batch:
+        return
+    for offset, (left, right) in enumerate(zip(reversed(a_batch), reversed(b_batch))):
         if left != right and left != 1 and right != 1:
             lhs, rhs = _operand(a_name, a), _operand(b_name, b)
             raise jt.JittorShapeError(
@@ -685,8 +690,8 @@ def matmul(a, b):
     """
     _check_matmul_shapes(a, b)
     with _contraction_scope(half_operands=_both_half(a, b)):
-        len_a = len(a.shape)
-        len_b = len(b.shape)
+        len_a = a.ndim
+        len_b = b.ndim
         if len_b == 1:
             # a: [n, m], b:[m], c:[n]
             return (a * b).sum(-1)
