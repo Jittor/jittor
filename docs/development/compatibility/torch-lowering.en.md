@@ -331,13 +331,17 @@ accelerators and distributed initialization, preserve sample order, and send
 exceptions to the parent. Shared memory carries NumPy buffers; receiver threads
 only receive frames and prefault pages. The training thread constructs Tensors
 through native DLPack. A pool retains mappings and reuses a slot only after
-the last NumPy or Tensor alias releases its lease. Retained batches keep their storage alive. Exhaustion,
-errors, timeouts and explicitly closing an iterator reclaim the workers.
+the last NumPy or Tensor alias releases its lease. Retained batches keep their
+storage alive. With `persistent_workers=True`, a fully consumed pass keeps the
+processes, worker RNG and shared memory leases. The next pass uses a fresh
+sampler and fetches its first batch in the workers. Abandoned passes do not
+reuse outstanding results. Errors, timeouts and closing an iterator reclaim
+the workers, as does exhaustion when persistence is disabled.
 
 Pure Python / NumPy batches keep thread prefetch. CUDA, differentiable, subclass
 and other ineligible Tensor batches stay serial. First-batch placement, full
-worker RNG / context semantics, pinned memory and process `persistent_workers`
-are not fully Torch-equivalent, so fidelity remains approximate. This CPU input
+worker RNG / context semantics and pinned memory are not fully Torch-equivalent,
+so fidelity remains approximate. This CPU input
 path is separate from compute fallback; model training must still be verified
 on the declared device.
 
@@ -356,6 +360,20 @@ keeps its shape, dtype and storage; FP32 means use native NCCL average, while
 other gradient types retain sum followed by scaling. CPU and other backends
 keep per-gradient synchronization. Grouping reduces launches and joins; it
 does not itself establish communication/compute overlap.
+
+For one captured CUDA DDP instance with at least `bucket_cap_mb` of FP32
+gradients (25 MiB by default), contiguous buckets follow reverse parameter
+order. `nccl_all_reduce_deferred` submits on the communication stream and pins
+both allocations, allowing later compute to continue. `nccl_wait_many` joins
+after every bucket has been submitted; only its returned aliases may be read
+or updated. Low-level deferred results must pass through this join before use.
+Ordinary alias clones publish as soon as their source is ready, so detaches
+created after backward construction do not hold up ready buckets. CUDA buffer
+broadcasts use `nccl_broadcast_many`: the same executor thread opens, submits
+and joins the group before preserving storage during writeback. A Python scope
+must not pair NCCL group calls across executor threads. These paths retain real
+communication and full FP32 computation; establish overlap using interval
+intersections on the same device and context.
 
 On CUDA, Adam with zero weight decay can reuse the fused AdamW update because
 their formulas coincide in this case. The update still reads the current

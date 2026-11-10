@@ -45,3 +45,24 @@ def test_single_rank_and_older_backend_keep_the_existing_semantics(monkeypatch):
     monkeypatch.setattr(collectives, '_all_reduce_mean', lambda value: value+3)
     for value in collectives._all_reduce_mean_many(values):
         np.testing.assert_array_equal(value.numpy(), np.full(value.shape, 4))
+
+
+def test_bucketed_means_join_every_bucket_and_preserve_each_shape(monkeypatch):
+    gradients = [torch.arange(n, dtype=torch.float32).reshape(shape)
+                 for n, shape in [(4, (2, 2)), (5, (5,)), (2, (1, 2))]]
+    calls = []
+    def start(value, mean=False):
+        assert mean
+        calls.append(tuple(value.shape))
+        return value + 3
+    def wait(values):
+        assert len(values) == 2
+        return [value + 10 for value in values]
+    monkeypatch.setattr(collectives, '_world_size', lambda: 2)
+    monkeypatch.setattr(collectives, '_nccl_ops', lambda: SimpleNamespace(
+        nccl_all_reduce_deferred=start, nccl_wait_many=wait))
+    results = collectives._all_reduce_mean_bucketed(gradients, 32)
+    assert calls == [(9,), (2,)]
+    for value, original in zip(results, gradients):
+        assert value.shape == original.shape and value.dtype == original.dtype
+        np.testing.assert_array_equal(value.numpy(), original.numpy()+13)

@@ -155,6 +155,66 @@ def _all_reduce_mean_many(variables):
     return [_all_reduce_mean(value) for value in variables]
 
 
+def _all_reduce_mean_bucketed(variables, bucket_bytes):
+    """Overlap ordered FP32 CUDA buckets, then publish only joined results."""
+    variables = list(variables)
+    if not variables or _world_size() <= 1:
+        return variables
+    ops = _nccl_ops()
+    buckets, bucket, size = [], [], 0
+    for value in variables:
+        bucket.append(value)
+        size += value.numel() * value.element_size()
+        if size >= bucket_bytes:
+            buckets.append(bucket)
+            bucket, size = [], 0
+    if bucket:
+        buckets.append(bucket)
+    futures = []
+    for bucket in buckets:
+        # Reverse parameter order is supplied by DDP. Start each bucket as
+        # soon as its local gradients are ready, in the same order per rank.
+        with jt.flag_scope(node_order=1):
+            flat = (bucket[0].reshape((-1,)) if len(bucket) == 1 else
+                    jt.concat([value.reshape((-1,)) for value in bucket]))
+            future = ops.nccl_all_reduce_deferred(flat, mean=True)
+            if futures:
+                future._add_dependency([futures[-1]])
+            futures.append(future)
+    # Every published gradient depends on every collective. Clipping or
+    # reading only one gradient must still issue the full rank-stable sequence.
+    with jt.flag_scope(node_order=2):
+        reduced = ops.nccl_wait_many(futures)
+    results = []
+    for bucket, flat in zip(buckets, reduced):
+        offset = 0
+        for value in bucket:
+            count = value.numel()
+            results.append(flat[offset:offset+count].reshape(value.shape))
+            offset += count
+    return results
+
+
+def _broadcast_from_rank0_many(variables):
+    """Broadcast CUDA storages together, preserving holders and aliases."""
+    variables = list(variables)
+    if not variables or _world_size() <= 1:
+        return variables
+    from jittor._runtime import step_capture
+    ops = _nccl_ops()
+    grouped = getattr(ops, 'nccl_broadcast_many', None) if ops is not None else None
+    if (step_capture.active() or not callable(grouped)
+            or any(value.device.type != 'cuda' for value in variables)):
+        return [_broadcast_from_rank0(value) for value in variables]
+    with jt.no_grad():
+        jt.core._preserve_step_readers(variables)
+        reduced = grouped([value.contiguous() for value in variables])
+        jt.sync(reduced, False, False)
+        for target, source in zip(variables, reduced):
+            target._copy_into(source, False)
+    return variables
+
+
 def _broadcast_from_rank0(var):
     """Replace ``var`` with rank 0's copy in place. The identity on one rank."""
     if _world_size() <= 1:

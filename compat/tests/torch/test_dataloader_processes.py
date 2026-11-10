@@ -171,3 +171,47 @@ def test_process_tensor_leases_survive_reuse_and_iterator_shutdown():
     gc.collect()
     for value, expected in retained:
         np.testing.assert_array_equal(value.numpy(), [[expected, expected + 1]])
+
+
+def test_persistent_process_workers_reuse_pids_and_preserve_retained_batches():
+    batches = [[3], [1], [8], [2], [6]]
+    loader = torch.utils.data.DataLoader(ProcessSamples(), batch_sampler=batches,
+                                         num_workers=2, persistent_workers=True)
+    iterator = iter(loader)
+    retained = [next(iterator)]
+    actors = [process for _, process in iterator._process_pool.actors]
+    try:
+        retained.extend(iterator)
+        assert all(process.poll() is None for process in actors)
+        batches[:] = [[6], [3], [1], [8], [2]]
+        later = list(loader)
+        for i, batch in enumerate(later):
+            assert batch['pid'].item() == actors[i % len(actors)].pid
+            index, = batches[i]
+            np.testing.assert_array_equal(batch['value'].numpy(), [[index, index+1]])
+        if torch.cuda.is_available():
+            transferred = later[0]['value'].to('cuda') + 1
+            assert transferred.device.type == 'cuda'
+            np.testing.assert_array_equal(transferred.cpu().numpy(), [[7, 8]])
+        for index, batch in zip((3, 1, 8, 2, 6), retained):
+            np.testing.assert_array_equal(batch['value'].numpy(), [[index, index+1]])
+    finally:
+        del iterator, loader
+        gc.collect()
+    assert all(process.poll() is not None for process in actors)
+
+
+def test_persistent_workers_retire_an_abandoned_pass_before_restart():
+    batches = [[3], [1], [8], [2], [6]]
+    loader = torch.utils.data.DataLoader(ProcessSamples(), batch_sampler=batches,
+                                         num_workers=2, persistent_workers=True)
+    iterator = iter(loader)
+    next(iterator)
+    actors = [process for _, process in iterator._process_pool.actors]
+    try:
+        batches[:] = [[6], [2], [4]]
+        later = list(loader)
+        assert all(process.poll() is not None for process in actors)
+        assert [batch['value'].numpy()[0, 0] for batch in later] == [6, 2, 4]
+    finally:
+        loader._iterator._shutdown()

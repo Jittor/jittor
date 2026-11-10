@@ -559,6 +559,10 @@ class _MultiProcessingDataLoaderIter(_BaseDataLoaderIter):
         if self._process_pool is not None:
             try:
                 return next(self._process_pool)
+            except StopIteration:
+                if not self._process_pool.persistent:
+                    self._shutdown()
+                raise
             except BaseException:
                 self._shutdown()
                 raise
@@ -577,6 +581,22 @@ class _MultiProcessingDataLoaderIter(_BaseDataLoaderIter):
                 "worker batch" % self._timeout)
         self._fill()
         return batch
+
+    def _reset_process_epoch(self):
+        pool = self._process_pool
+        if pool is None or not pool.persistent:
+            return False
+        try:
+            if pool.reset(self._loader.batch_sampler):
+                self._batch_iter = pool.indices
+                return True
+        except BaseException:
+            self._shutdown()
+            raise
+        # An abandoned pass still has outstanding responses. Retire its
+        # workers instead of interpreting those responses as a new epoch.
+        self._shutdown()
+        return False
 
     def _shutdown(self):
         processes = getattr(self, '_process_pool', None)
@@ -647,6 +667,9 @@ class _DataLoader:
         self._iterator = None
     def __iter__(self):
         if int(self.num_workers or 0) > 0:
+            if (self.persistent_workers and isinstance(self._iterator, _MultiProcessingDataLoaderIter)
+                    and self._iterator._reset_process_epoch()):
+                return self._iterator
             self._iterator = _MultiProcessingDataLoaderIter(self)
         else:
             self._iterator = _SingleProcessDataLoaderIter(self)

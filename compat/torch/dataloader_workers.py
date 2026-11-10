@@ -58,6 +58,7 @@ class ProcessPrefetch:
         self.indices = indices
         self.maximum = max(1, int(loader.num_workers)) * max(1, int(loader.prefetch_factor or 2))
         self.timeout = float(loader.timeout or 0)
+        self.persistent = bool(loader.persistent_workers)
         self.results = queue.Queue()
         self.pending = {}
         self.current = self.sent = self.active = 0
@@ -125,9 +126,25 @@ class ProcessPrefetch:
     def __iter__(self):
         return self
 
+    def reset(self, batch_sampler):
+        """Reuse drained workers and their RNG state for a new sampler pass."""
+        if self.closed or self.active:
+            return False
+        dead = [(process.pid, process.returncode) for _, process in self.actors
+                if process.poll() is not None]
+        if dead:
+            raise RuntimeError('DataLoader worker processes exited: %s' % (dead,))
+        self.indices = iter(batch_sampler)
+        self.current = self.sent = 0
+        # Batch indices can restart after a drain. Shared-memory slot IDs are
+        # independent and retain their leases across epochs.
+        self._fill()
+        return True
+
     def __next__(self):
         if self.active == 0:
-            self.close()
+            if not self.persistent:
+                self.close()
             raise StopIteration
         deadline = time.monotonic() + self.timeout if self.timeout else None
         try:

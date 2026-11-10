@@ -64,6 +64,21 @@ def _ddp_all_reduce_grads(leaves):
 def _ddp_all_reduce_grouped(pending):
     from importlib import import_module
     owner = import_module(__package__)
+    from jittor._runtime import step_capture
+    state = pending[0][2]
+    cap = getattr(state, 'bucket_cap_bytes', 25 * 1024**2)
+    ops = getattr(owner.jt.compile_extern, 'nccl_ops', None)
+    if (state is not None and step_capture.active()
+            and all(item[2] is state for item in pending)
+            and all(str(item[1].dtype).rsplit('.', 1)[-1] == 'float32' for item in pending)
+            and sum(grad.numel()*grad.element_size() for _, grad, _ in pending) >= cap
+            and callable(getattr(ops, 'nccl_all_reduce_deferred', None))
+            and callable(getattr(ops, 'nccl_wait_many', None))):
+        gradients = [grad for _, grad, _ in reversed(pending)]
+        reduced = owner._collectives._all_reduce_mean_bucketed(gradients, cap)
+        for grad, value in zip(gradients, reduced):
+            grad.assign(value)
+        return
     gradients = [grad for _, grad, _ in pending]
     reduced = owner._collectives._all_reduce_mean_many(gradients)
     for grad, value in zip(gradients, reduced):

@@ -26,13 +26,14 @@ def test_ddp_broadcasts_buffers_before_forward_and_honors_the_option(monkeypatch
     monkeypatch.setitem(namespace, '_ddp_world_size', lambda: 2)
     calls = []
 
-    def broadcast(value):
-        calls.append(value)
-        with torch.no_grad():
-            value.fill_(7.)
-        return value
+    def broadcast(values):
+        for value in values:
+            calls.append(value)
+            with torch.no_grad():
+                value.fill_(7.)
+        return values
 
-    monkeypatch.setattr(namespace['_collectives'], '_broadcast_from_rank0', broadcast)
+    monkeypatch.setattr(namespace['_collectives'], '_broadcast_from_rank0_many', broadcast)
     ddp = torch.nn.parallel.DistributedDataParallel(module, broadcast_buffers=broadcast_buffers)
     buffer_count = len(list(module.buffers()))
     assert len(calls) == len(list(module.parameters())) + (buffer_count if broadcast_buffers else 0)

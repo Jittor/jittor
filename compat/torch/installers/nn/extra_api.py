@@ -121,8 +121,13 @@ class _DistributedDataParallel(_DataParallel):
         super().__init__(module, *args, **kwargs)
         self.broadcast_buffers = bool(kwargs.get(
             "broadcast_buffers", args[3] if len(args) > 3 else True))
+        bucket_mb = kwargs.get('bucket_cap_mb', args[5] if len(args) > 5 else None)
+        bucket_mb = 25 if bucket_mb is None else float(bucket_mb)
+        if not _math.isfinite(bucket_mb) or bucket_mb <= 0:
+            raise ValueError('bucket_cap_mb must be finite and positive')
         state = _types_nn_private.SimpleNamespace(
             sync_enabled=True, world_size=_ddp_world_size(),
+            bucket_cap_bytes=max(1, int(bucket_mb * 1024**2)),
             # The native optimizer's step guard (_assert_ddp_step_ready in
             # jittor/nn/parallel/distributed_data_parallel.py) reads this field
             # whenever world_size > 1. Compat DDP synchronises gradients at
@@ -145,10 +150,12 @@ class _DistributedDataParallel(_DataParallel):
             return
         buffers = getattr(self.module, "buffers", None)
         if callable(buffers):
+            values = []
             for buffer in buffers():
                 buffer = buffer[1] if isinstance(buffer, tuple) else buffer
                 if isinstance(buffer, _jt.Var):
-                    _collectives._broadcast_from_rank0(buffer)
+                    values.append(buffer)
+            _collectives._broadcast_from_rank0_many(values)
 
     def _jittor_ddp_named_parameters(self):
         named = getattr(self.module, "named_parameters", None)
@@ -163,15 +170,14 @@ class _DistributedDataParallel(_DataParallel):
         """Make every rank start from rank 0's weights."""
         if _ddp_world_size() <= 1:
             return
-        for p in self._jittor_ddp_named_parameters():
-            if isinstance(p, _jt.Var):
-                _collectives._broadcast_from_rank0(p)
+        values = [p for p in self._jittor_ddp_named_parameters() if isinstance(p, _jt.Var)]
         buffers = getattr(self.module, "buffers", None)
         if self.broadcast_buffers and callable(buffers):
             for b in buffers():
                 b = b[1] if isinstance(b, tuple) else b
                 if isinstance(b, _jt.Var):
-                    _collectives._broadcast_from_rank0(b)
+                    values.append(b)
+        _collectives._broadcast_from_rank0_many(values)
         _jt.sync_all()
 
     def _jittor_ddp_mark_parameters(self):
