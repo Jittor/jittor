@@ -332,9 +332,17 @@ class Module:
         The one place that says where a module keeps its Vars. ``ParameterList``
         keeps them in ``self.params`` and overrides this; every traversal used to
         carry its own ``if isinstance(v, ParameterList): dc = v.params``.
+
+        Private Vars are normally implementation caches. An explicitly
+        registered buffer or parameter is state even when its name starts with
+        an underscore (for example, vLLM's attention scale buffers).
         '''
+        buffer_names = self.__dict__.get("_buffer_names", ())
+        parameter_names = self.__dict__.get("_parameter_names", ())
         return [(k, v) for k, v in self.__dict__.items()
-                if isinstance(v, Var) and not (type(k) is str and k[:1] == "_")]
+                if isinstance(v, Var) and
+                (type(k) is not str or k[:1] != "_" or
+                 k in buffer_names or k in parameter_names)]
 
     def _var_roles(self):
         ''' Classify every Var this module owns: ``[(key, var, role)]``.
