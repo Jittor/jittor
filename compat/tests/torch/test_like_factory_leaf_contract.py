@@ -1,5 +1,6 @@
 """Like factories allocate independent leaves and honor explicit gradient options."""
 import contextlib
+import functools
 import os
 import unittest
 
@@ -76,6 +77,69 @@ def _check(test, native, execution_device, name, kind, requested, **options):
 
 
 class TestLikeFactoryLeaves(unittest.TestCase):
+    def test_default_constant_like_can_later_become_a_gradient_leaf(self, device=None):
+        device = device or os.environ.get('JITTOR_TEST_DEVICE', 'cpu')
+        with _device_scope(device) as native:
+            for name in ('ones_like', 'zeros_like', 'full_like'):
+                for stopped in (False, True):
+                    for transposed in (False, True):
+                        source = torch.ones((2, 3), device=device, requires_grad=True)
+                        reference = source.T if transposed else source
+                        args = (reference, 3.) if name == 'full_like' else (reference,)
+                        with torch.no_grad() if stopped else contextlib.nullcontext():
+                            result = getattr(torch, name)(*args)
+                        self.assertFalse(result.requires_grad)
+                        self.assertTrue(result.is_leaf)
+                        self.assertIsNone(result.grad_fn)
+                        self.assertIsNone(result._base)
+                        result.requires_grad_(True)
+                        (result * 2).sum().backward()
+                        (result * 3).sum().backward()
+                        self.assertTrue(result.is_leaf)
+                        self.assertIsNone(source.grad)
+                        self.assertNotEqual(result.data_ptr(), reference.data_ptr())
+                        np.testing.assert_array_equal(result.grad.cpu().numpy(),
+                                                      np.full(tuple(result.shape), 5.))
+                        if native is not None:
+                            result.sync()
+                            self.assertEqual(result.location(), 'device' if device == 'cuda' else 'cpu')
+
+    def test_replaced_native_like_factory_does_not_freeze_its_returned_input(self, device=None):
+        if not hasattr(torch, '_torch_compat_install_context'):
+            self.skipTest('Jittor native-factory delegate contract')
+        from jittor.compat.torch.installers import factories
+        device = device or os.environ.get('JITTOR_TEST_DEVICE', 'cpu')
+        with _device_scope(device) as native:
+            context = factories.get_install_context(native)
+            saved = context.state['factory_implementations']
+            for name in ('ones_like', 'zeros_like', 'full_like'):
+                original_native = getattr(native, name)
+                delegate = saved[name]
+
+                def existing_tensor(*args, **kwargs):
+                    return args[0]
+
+                replacement = functools.partial(delegate.func, name, existing_tensor,
+                                                *delegate.args[2:], **delegate.keywords)
+                try:
+                    setattr(native, name, existing_tensor)
+                    factories.bind_delegates(context, 'factory_implementations',
+                                             dict(saved, **{name: replacement}))
+                    source = torch.ones((2, 3), device=device, requires_grad=True)
+                    args = (source, 3.) if name == 'full_like' else (source,)
+                    result = getattr(torch, name)(*args)
+                    self.assertIsNot(result, source)
+                    self.assertTrue(source.requires_grad)
+                    self.assertFalse(result.requires_grad)
+                    self.assertTrue(result.is_leaf)
+                    # Restore the native helper before exercising backward.
+                    setattr(native, name, original_native)
+                    source.sum().backward()
+                    np.testing.assert_array_equal(source.grad.cpu().numpy(), np.ones((2, 3)))
+                finally:
+                    setattr(native, name, original_native)
+                    factories.bind_delegates(context, 'factory_implementations', saved)
+
     def test_four_factories_leaf_and_nonleaf_default_and_explicit_grad(self, device=None):
         device = device or os.environ.get('JITTOR_TEST_DEVICE', 'cpu')
         with _device_scope(device) as native:

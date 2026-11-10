@@ -8,6 +8,7 @@ the random samplers, whose torch signatures carry a ``generator=``.
 Split out of the tensor installer, which it runs as part of.
 """
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
+from jittor._core import var as _native_creation
 
 import functools
 import inspect
@@ -294,6 +295,13 @@ _FRESH_LEAF_FACTORIES = frozenset({
     "empty_like", "zeros_like", "ones_like", "full_like",
     "rand", "randn", "randint", "randperm", "rand_like", "randn_like",
 })
+# Identity proves that these allocate from shape/scalar metadata only. A
+# replaced factory may return an existing tensor, which still needs detach.
+_FRESH_CONSTANT_LIKE = {
+    "zeros_like": _native_creation.zeros_like,
+    "ones_like": _native_creation.ones_like,
+    "full_like": _native_creation.full_like,
+}
 _TENSOR_ARGUMENT = ("tril", "triu")
 #: Factories whose first positional argument is the tensor the result should
 #: follow, so it is the placement reference when no `device=` is given. The
@@ -359,6 +367,19 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
             out._jittor_torch_ext_mutable = True
             out.requires_grad_(False)
             return out
+    if (orig is _FRESH_CONSTANT_LIKE.get(name)
+            and len(args) == (2 if name == "full_like" else 1)
+            and isinstance(args[0], jt.Var)
+            and (name != "full_like" or type(args[1]) in (int, float, bool))
+            and kwargs.get("dtype") is None and kwargs.get("device") is None
+            and kwargs.get("requires_grad", False) is False
+            and kwargs.keys() <= {"dtype", "device", "requires_grad"}):
+        # Placement is already scoped; native like factories inherit dtype.
+        # Stop the fresh result's internal constant/broadcast history without
+        # creating a second holder through detach or changing the input leaf.
+        out = orig(*args).stop_grad()
+        out._jittor_torch_ext_mutable = True
+        return out
     g = get_install_context(jt).target_namespace
     # ACL adapters call jt.empty thousands of times; keep the FP32 fast path.
     if (name == "empty" and not kwargs and args and
