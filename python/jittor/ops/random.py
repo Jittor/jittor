@@ -18,7 +18,8 @@ def arange(start=0, end=None, step=1,dtype=None):
     if end is None:
         end,start = start,0
     l = round((end-start)//step)+1
-    if (l-1)*step+start>=end:
+    last = (l-1)*step+start
+    if (step > 0 and last >= end) or (step < 0 and last <= end):
         l-=1
     x = jt.index((l,),0)
     # A float bound or step makes a floating range (torch and numpy both): do

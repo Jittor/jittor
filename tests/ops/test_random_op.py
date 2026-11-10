@@ -204,6 +204,31 @@ class TestRandomOp(unittest.TestCase):
             self.assertEqual(str(value.dtype), "float32")
             np.testing.assert_array_equal(value.numpy(), np.arange(*args))
 
+    def _check_descending_arange(self):
+        for bounds in ((5, 0, -2), (5, -1, -2), (3, 0, -1),
+                       (2**40 + 5, 2**40, -2), (0, 0, -1)):
+            with self.subTest(bounds=bounds):
+                value = jt.arange(*bounds, dtype="int64")
+                value.sync()
+                if value.numel() and jt.flags.use_cuda:
+                    self.assertEqual(value.location(), "device")
+                np.testing.assert_array_equal(value.numpy(), np.arange(*bounds, dtype="int64"))
+        for bounds in ((1., 0., -.3), (1., 0., -.25), (-.5, -2., -.5)):
+            with self.subTest(bounds=bounds):
+                value = jt.arange(*bounds, dtype="float64")
+                value.sync()
+                if jt.flags.use_cuda:
+                    self.assertEqual(value.location(), "device")
+                np.testing.assert_allclose(value.numpy(), np.arange(*bounds), rtol=0, atol=1e-14)
+
+    def test_descending_arange(self):
+        self._check_descending_arange()
+
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "Cuda not found")
+    @jt.flag_scope(use_cuda=1)
+    def test_descending_arange_cuda(self):
+        self._check_descending_arange()
+
     def test_arange_float_arguments(self):
         self._check_arange_float_arguments()
 

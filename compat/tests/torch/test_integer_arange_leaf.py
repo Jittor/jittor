@@ -29,7 +29,8 @@ def _assert_device(value, device):
 
 
 @pytest.mark.parametrize("bounds", [(6,), (2, 8), (2, 10, 3), (0,),
-                                    (2**40, 2**40 + 9, 3)])
+                                    (2**40, 2**40 + 9, 3), (5, 0, -2),
+                                    (5, -1, -2), (3, 0, -1)])
 @pytest.mark.parametrize("options", [{}, {"dtype": None},
                                     {"dtype": torch.int64, "requires_grad": False}])
 def test_integer_arange_fresh_leaf_and_independent_mutation(device, bounds, options):
