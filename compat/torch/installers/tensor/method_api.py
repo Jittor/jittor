@@ -2112,11 +2112,12 @@ def _inplace_add_sub(self, other, alpha, subtract=False):
     value = self - other * alpha if subtract else self + other * alpha
     if tuple(value.shape) != tuple(self.shape):
         raise RuntimeError("in-place result shape does not match destination shape")
-    namespace = get_install_context(_owner.jt).target_namespace
-    if not namespace.can_cast(value.dtype, self.dtype):
-        raise RuntimeError("result type can't be cast to the destination type")
-    if value.dtype != self.dtype:
-        value = value.cast(_jittor_dtype_name(self.dtype))
+    result_dtype, target_dtype = value.dtype, self.dtype
+    if result_dtype != target_dtype:
+        namespace = get_install_context(_owner.jt).target_namespace
+        if not namespace.can_cast(result_dtype, target_dtype):
+            raise RuntimeError("result type can't be cast to the destination type")
+        value = value.cast(_jittor_dtype_name(target_dtype))
     return _ip(self, value, preserve_storage=True)
 
 

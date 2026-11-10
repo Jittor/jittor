@@ -10,6 +10,45 @@ from _helpers.device_types import instantiate_device_type_tests
 
 
 class TestTensorInplaceStorage:
+    def test_add_sub_casts_keep_destination_aliases_and_old_snapshots(self, device):
+        for target_dtype, rhs_dtype in (
+                (torch.float32, torch.float32),
+                (torch.float32, torch.float64),
+                (torch.float16, torch.float32),
+                (torch.bfloat16, torch.float32),
+                (torch.int32, torch.int64)):
+            for operation, sign in (("add_", 1), ("sub_", -1)):
+                root = torch.tensor([1, 2, 3, 4], dtype=target_dtype, device=device)
+                target = root[1::2]
+                alias, snapshot = target.detach(), root.clone()
+                pointer = target.data_ptr()
+                rhs = torch.tensor([2, 3], dtype=rhs_dtype, device=device)
+                assert getattr(target, operation)(rhs, alpha=2) is target
+                expected = [2 + sign * 4, 4 + sign * 6]
+                assert target.dtype == alias.dtype == target_dtype
+                assert target.data_ptr() == alias.data_ptr() == pointer
+                assert target.device.type == alias.device.type == device
+                np.testing.assert_array_equal(alias.float().cpu().numpy(), expected)
+                np.testing.assert_array_equal(root.float().cpu().numpy(),
+                                              [1, expected[0], 3, expected[1]])
+                np.testing.assert_array_equal(snapshot.float().cpu().numpy(), [1, 2, 3, 4])
+                if hasattr(torch, "_torch_compat_install_context"):
+                    target.sync()
+                    assert target.location() == ("device" if device == "cuda" else "cpu")
+
+    def test_add_sub_reject_float_to_integer_before_storage_changes(self, device):
+        for operation in ("add_", "sub_"):
+            root = torch.tensor([1, 2, 3, 4], dtype=torch.int64, device=device)
+            target = root[1::2]
+            alias = target.detach()
+            pointer = target.data_ptr()
+            rhs = torch.tensor([.5, 1.5], device=device)
+            with pytest.raises(RuntimeError, match="cast"):
+                getattr(target, operation)(rhs)
+            assert target.data_ptr() == alias.data_ptr() == pointer
+            np.testing.assert_array_equal(root.cpu().numpy(), [1, 2, 3, 4])
+            np.testing.assert_array_equal(alias.cpu().numpy(), [2, 4])
+
     def test_low_precision_slice_mutations_preserve_aliases(self, device):
         for dtype in (torch.float16, torch.bfloat16):
             for operation, expected in ((lambda x: x.copy_(torch.tensor([6., 8.], device=device)), [6., 8.]),
