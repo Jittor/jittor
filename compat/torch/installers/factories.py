@@ -343,6 +343,22 @@ def _shape_arg(v):
 
 
 def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
+    # Native integer arange already constructs a fresh, stopped int64 Var.
+    # Placement is established by _invoke_factory; no input normalization,
+    # dtype conversion or detach is needed for this common position-ID case.
+    # An overridden factory may return an existing tensor, so it must retain
+    # the general constructor's conversion and leaf handling below.
+    if (name == "arange" and orig is jt.arange and _accepts_dtype and
+            1 <= len(args) <= 3 and all(type(value) is int for value in args) and
+            kwargs.get("requires_grad", False) is False and
+            kwargs.keys() <= {"dtype", "device", "requires_grad"}):
+        dtype = kwargs.get("dtype")
+        if ((type(dtype) is str and dtype == "int64") or
+                dtype is get_install_context(jt).target_namespace.int64):
+            out = orig(*args, dtype="int64")
+            out._jittor_torch_ext_mutable = True
+            out.requires_grad_(False)
+            return out
     g = get_install_context(jt).target_namespace
     # ACL adapters call jt.empty thousands of times; keep the FP32 fast path.
     if (name == "empty" and not kwargs and args and
