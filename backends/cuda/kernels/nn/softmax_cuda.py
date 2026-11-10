@@ -77,7 +77,8 @@ def _softmax_v1_cls(length, log=False, zero_all_neg_inf=False):
     # length and log mode. Building both inside every softmax call added tens of
     # microseconds of Python graph-construction overhead even after the kernel
     # was compiled, which is material for transformer attention. Cache the
-    # immutable class while still creating a fresh Function instance per call.
+    # immutable class and its formatted sources while still creating a fresh
+    # Function instance per call. Include paths remain resolved at execution.
     _, tnum = _softmax_schedule(length)
     per_thread = (length-1) // tnum + 1
     ILP = 1
@@ -93,12 +94,7 @@ def _softmax_v1_cls(length, log=False, zero_all_neg_inf=False):
     if length % tnum != 0:
         for_loop += f"if ((i*{tnum}+threadIdx.x)*{ILP} < len)\n"
 
-    class CodeSoftmax(jt.Function):
-        def execute(self, x):
-            self.save_vars = jt.code(x.shape, x.dtype, [x], cuda_header=f'''
-#include <{library_resource('cub', 'home')}cub/cub.cuh>
-#include <type/fp16_compute.h>
-''', cuda_src=f'''
+    execute_source = f'''
 __global__ void kernel(in0_type* x, out0_type* y, int len) {{
     typedef cub::BlockReduce<float, {tnum}> BlockReduce;
     constexpr int need_log = {int(log)};
@@ -165,23 +161,8 @@ int bnum = in0->numel() / len;
 cudaGetLastError();
 kernel<<<bnum, {tnum}>>>(in0_p, out0_p, len);
 CHECK(0 == cudaGetLastError());
-''')
-            return self.save_vars
-
-        def grad(self, grad_x):
-            x = self.save_vars
-            # Non-vectorized register kernels above roughly 48K columns spill
-            # heavily in backward (for example, 255 registers at 65535). Keep
-            # their faster register-resident forward, but use the bounded
-            # streaming reduction for backward. Aligned ILP paths such as
-            # 65536 remain faster with the register kernel.
-            if length > 49152 and ILP == 1:
-                return _softmax_streaming_grad(x, grad_x, 512, log)
-            return jt.code(x.shape, x.dtype, [x, grad_x], cuda_header=f'''
-#include <{library_resource('cub', 'home')}cub/cub.cuh>
-#include <type/fp16_compute.h>
-''', 
-                cuda_src=f"""
+'''
+    grad_source = f"""
 __global__ void kernel(in0_type* x, in1_type* y, out0_type* z, int len) {{
     int id = blockIdx.x * len;
     in0_type vx[{per_thread}][{ILP}];
@@ -221,7 +202,29 @@ int bnum = in0->numel() / len;
 cudaGetLastError();
 kernel<<<bnum, {tnum}>>>(in0_p, in1_p, out0_p, len);
 CHECK(0 == cudaGetLastError());
-""")
+"""
+
+    class CodeSoftmax(jt.Function):
+        def execute(self, x):
+            self.save_vars = jt.code(x.shape, x.dtype, [x], cuda_header=f'''
+#include <{library_resource('cub', 'home')}cub/cub.cuh>
+#include <type/fp16_compute.h>
+''', cuda_src=execute_source)
+            return self.save_vars
+
+        def grad(self, grad_x):
+            x = self.save_vars
+            # Non-vectorized register kernels above roughly 48K columns spill
+            # heavily in backward (for example, 255 registers at 65535). Keep
+            # their faster register-resident forward, but use the bounded
+            # streaming reduction for backward. Aligned ILP paths such as
+            # 65536 remain faster with the register kernel.
+            if length > 49152 and ILP == 1:
+                return _softmax_streaming_grad(x, grad_x, 512, log)
+            return jt.code(x.shape, x.dtype, [x, grad_x], cuda_header=f'''
+#include <{library_resource('cub', 'home')}cub/cub.cuh>
+#include <type/fp16_compute.h>
+''', cuda_src=grad_source)
     return CodeSoftmax
 
 
@@ -231,17 +234,7 @@ def _softmax_streaming_cls(threads, log=False, zero_all_neg_inf=False):
     # spilling or exceeding the per-block register limit. Re-read logits for
     # max, exp-sum and output instead; this remains one launch and bounds
     # register use independently of vocabulary size.
-    class CodeSoftmaxStreaming(jt.Function):
-        def execute(self, x):
-            self.save_vars = jt.code(
-                x.shape,
-                x.dtype,
-                [x],
-                cuda_header=f'''
-#include <{library_resource('cub', 'home')}cub/cub.cuh>
-#include <type/fp16_compute.h>
-''',
-                cuda_src=f'''
+    execute_source = f'''
 __global__ void kernel(in0_type* x, out0_type* y, int len) {{
     typedef cub::BlockReduce<float, {threads}> BlockReduce;
     constexpr int need_log = {int(log)};
@@ -282,7 +275,19 @@ int len = in0->shape[in0->shape.size()-1];
 int rows = in0->numel() / len;
 kernel<<<rows, {threads}>>>(in0_p, out0_p, len);
 CHECK(0 == cudaGetLastError());
-''')
+'''
+
+    class CodeSoftmaxStreaming(jt.Function):
+        def execute(self, x):
+            self.save_vars = jt.code(
+                x.shape,
+                x.dtype,
+                [x],
+                cuda_header=f'''
+#include <{library_resource('cub', 'home')}cub/cub.cuh>
+#include <type/fp16_compute.h>
+''',
+                cuda_src=execute_source)
             return self.save_vars
 
         def grad(self, grad_x):
