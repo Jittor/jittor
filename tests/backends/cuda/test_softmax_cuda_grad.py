@@ -130,6 +130,64 @@ class TestSoftmaxCudaGrad(unittest.TestCase):
             grad = jt.grad((y * jt.array(cot_np)).sum(), x)
             return jt.fetch_sync([y, grad])
 
+    def test_many_short_rows_match_float64_forward_and_backward(self):
+        # Include partial warps, partial blocks, and both sides of the row
+        # count/width boundaries. Positive cotangents expose reduction errors.
+        rng = np.random.RandomState(175)
+        shapes = ((4096, 1), (4096, 3), (4097, 31), (4097, 32),
+                  (4097, 33), (8192, 64), (4096, 125), (4096, 128),
+                  (4097, 255), (4096, 256), (4096, 257), (4095, 128))
+        for rows, length in shapes:
+            x_np = (rng.randn(rows, length) * 3).astype("float32")
+            cot_np = (rng.rand(rows, length) + 0.5).astype("float32")
+            for log in (False, True):
+                with self.subTest(rows=rows, length=length, log=log):
+                    y_ref, grad_ref = _exact(x_np, cot_np, log)
+                    prob = np.exp(y_ref) if log else y_ref
+                    with jt.flag_scope(use_cuda=1):
+                        x = jt.array(x_np)
+                        y = softmax_v1(x, log=log)
+                        grad = jt.grad((y * jt.array(cot_np)).sum(), x)
+                        y_got, grad_got = jt.fetch_sync([y, grad])
+                        self.assertEqual(y.location(), "device")
+                        self.assertEqual(grad.location(), "device")
+                    forward_tol = ((np.log2(max(length, 2)) + 2) * EPS32
+                                   * max(1.0, float(np.abs(y_ref).max())))
+                    self.assertLess(float(np.abs(y_got - y_ref).max()),
+                                    forward_tol)
+                    grad_tol = _grad_tolerance(prob, cot_np, grad_ref, log,
+                                               _tree_sum_error)
+                    self.assertLessEqual(float(np.abs(grad_got - grad_ref).max()),
+                                         grad_tol)
+
+    def test_short_rows_preserve_nan_and_masked_row_semantics(self):
+        x_np = np.zeros((4097, 33), dtype="float32")
+        x_np[0] = -np.inf
+        x_np[1, 5] = np.nan
+        x_np[2, 5] = np.inf
+        x_np[3] = -np.inf
+        x_np[3, 7] = 0
+        for log in (False, True):
+            for zero in (False, True):
+                with self.subTest(log=log, zero_all_neg_inf=zero):
+                    with jt.flag_scope(use_cuda=1):
+                        y = softmax_v1(jt.array(x_np), log=log,
+                                       zero_all_neg_inf=zero)
+                        got = y.numpy()
+                        self.assertEqual(y.location(), "device")
+                    if zero and not log:
+                        np.testing.assert_array_equal(got[0], 0)
+                    else:
+                        self.assertTrue(np.isnan(got[0]).all())
+                    self.assertTrue(np.isnan(got[1:3]).all())
+                    expected = np.full(33, -np.inf if log else 0,
+                                       dtype="float32")
+                    expected[7] = 0 if log else 1
+                    np.testing.assert_array_equal(got[3], expected)
+                    expected_uniform = -np.log(33) if log else 1 / 33
+                    np.testing.assert_allclose(got[4:], expected_uniform,
+                                               rtol=2 * EPS32, atol=EPS32)
+
     def test_every_schedule_matches_an_exact_float64_reference(self):
         rng = np.random.RandomState(20260907)
         for length, kind, route in CASES:
