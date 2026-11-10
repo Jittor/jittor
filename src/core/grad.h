@@ -6,6 +6,7 @@
 // ***************************************************************
 #include "ops/composite/tape_op.h"
 #include "core/common.h"
+#include "core/var.h"
 
 namespace jittor {
 
@@ -89,7 +90,14 @@ VarHolder* ready_step_gradient(VarHolder* source);
 Op* backward_grad_fn(Var* v);
 
 /** Whether `v` is a leaf of the backward graph. See backward_grad_fn. */
-inline bool is_backward_leaf(Var* v) { return backward_grad_fn(v) == nullptr; }
+inline bool is_backward_leaf(Var* v) {
+    if (backward_grad_fn(v)) return false;
+    // The producer is gone but existed with a backward edge (see
+    // VarFlags::_had_backward_producer); while the var still requires grad it
+    // is an op output, not a leaf.
+    return !(v->flag(VarFlags::_had_backward_producer) && !v->is_stop_grad()
+             && !v->flag(VarFlags::_requires_grad_disabled));
+}
 
 vector<VarPtr> grad(
     Var* loss,

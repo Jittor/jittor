@@ -264,7 +264,7 @@ def grad(outputs, inputs, grad_outputs=None, retain_graph=None,
     outs = _as_list(outputs)
     ins = _as_list(inputs)
     if any(not o._has_gradient_edge() for o in outs):
-        raise RuntimeError("Tensor does not require grad and does not have a grad_fn")
+        raise RuntimeError("element 0 of tensors does not require grad and does not have a grad_fn")
     if grad_outputs is None:
         # torch: "grad can be implicitly created only for scalar outputs".
         # This used to sum every output element, i.e. silently assume a

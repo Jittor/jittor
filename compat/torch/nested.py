@@ -12,6 +12,12 @@ class _TorchSize(tuple):
     """torch.Size stand-in (a tuple with .numel()). MODULE-LEVEL so it pickles by
     qualified name -- a local class breaks plain pickle of any TensorDict whose
     batch_size is a torch.Size (e.g. verl's DataProto over the Ray boundary)."""
+    def __new__(cls, sizes=()):
+        # torch.Size stores plain ints read through __index__, so
+        # torch.Size((2, np.int64(1))) compares equal to a tensor's shape.
+        import operator
+        return super().__new__(cls, (operator.index(d) for d in sizes))
+
     def numel(self):
         n = 1
         for d in self:

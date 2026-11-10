@@ -1572,7 +1572,10 @@ void VarHolder::clear_collectable_grad_hook() {
 int64 VarHolder::grad_fn_node_id() {
     observe_alias_history();
     Op* op = backward_grad_fn(var);
-    return op ? op->id : -1;
+    if (op) return op->id;
+    // A freed producer has no node id left; keep is_leaf == (grad_fn is None)
+    // with a stable per-var stand-in that cannot collide with a live id.
+    return jittor::is_backward_leaf(var) ? -1 : -2 - (int64)var->id;
 }
 
 int64 VarHolder::grad_fn_op_id() {
@@ -1589,7 +1592,8 @@ int64 VarHolder::grad_fn_op_id() {
 string VarHolder::grad_fn_name() {
     observe_alias_history();
     Op* op = backward_grad_fn(var);
-    return op ? op->name_ex() : string();
+    if (op) return op->name_ex();
+    return jittor::is_backward_leaf(var) ? string() : string("released");
 }
 
 string VarHolder::to_string() {

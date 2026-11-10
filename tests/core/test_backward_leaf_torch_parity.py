@@ -25,9 +25,10 @@ delivers.
 
 So the cases below are in three groups, and the groups are assertions:
 
-* **agree** -- all three values identical. 14 of 17 cases, including every
-  intermediate, every reduction, in-place, and a held intermediate after a
-  `retain_graph=False` backward.
+* **agree** -- all three values identical. 15 of 18 cases, including every
+  intermediate, every reduction, in-place, a held intermediate after a
+  `retain_graph=False` backward, and a held output whose intermediate that
+  backward released.
 * **requires_grad_only** -- the graph shape agrees, `requires_grad` does not.
   Recorded with the reason and the owner.
 * **shape_follows_requires_grad** -- the one case where the `requires_grad`
@@ -94,6 +95,7 @@ TORCH_REFERENCE = {
     "mixed_frozen_and_live_inputs": (True, False, False),
     "in_place_on_intermediate": (True, False, False),
     "held_intermediate_after_backward": (True, False, False),
+    "held_output_over_released_intermediate": (True, False, False),
 }
 
 #: Cases whose graph shape agrees with torch while ``requires_grad`` does not,
@@ -180,6 +182,12 @@ def jittor_answers():
     held = source * 2
     jt.grad(held.sum(), [source], retain_graph=False)
     answers["held_intermediate_after_backward"] = jittor_triple(held)
+    # The intermediate is not held, so the backward releases it; the held loss
+    # keeps its producer (``running_loss += loss`` after ``loss.backward()``).
+    source = leaf()
+    loss = (source * 2).sum()
+    jt.grad(loss, [source], retain_graph=False)
+    answers["held_output_over_released_intermediate"] = jittor_triple(loss)
     return answers
 
 
@@ -227,6 +235,10 @@ def torch_answers(torch):
     held = source * 2
     held.sum().backward()
     answers["held_intermediate_after_backward"] = triple(held)
+    source = torch_leaf()
+    loss = (source * 2).sum()
+    loss.backward()
+    answers["held_output_over_released_intermediate"] = triple(loss)
     return answers
 
 

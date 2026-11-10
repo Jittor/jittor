@@ -134,6 +134,14 @@ struct complex128 {
     JT_CPLX_HD complex128() : real(0), imag(0) {}
     JT_CPLX_HD complex128(double r) : real(r), imag(0) {}
     JT_CPLX_HD complex128(double r, double i) : real(r), imag(i) {}
+    // Widening, like float -> double: a complex64 value stored into a
+    // complex128 tensor (setitem) needs it to compile at all.
+    JT_CPLX_HD complex128(complex64 c) : real(c.real), imag(c.imag) {}
+    // Narrowing only on request, the way torch casts an assigned value to
+    // the target dtype.
+    JT_CPLX_HD explicit operator complex64() const {
+        return complex64((float)real, (float)imag);
+    }
 };
 
 inline JT_CPLX_HD complex128 operator+(complex128 a, complex128 b) { return complex128(a.real+b.real, a.imag+b.imag); }

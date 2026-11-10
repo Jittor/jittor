@@ -137,8 +137,13 @@ void FetchOp::run() {
     uint64 src_devices = 0;
     int entry_device = current_device();
     const int copy_device = fetch_copy_device;
-    auto copy_stream = backend_stream(
-        {accelerator_backend_id(), copy_device}, BackendStreamKind::Copy);
+    // A CUDA build can run with no visible device (CUDA_VISIBLE_DEVICES=""):
+    // every source is then host memory and no copy stream may be created,
+    // as Init above already knows. Asking for one aborted every CPU fetch.
+    BackendStream copy_stream;
+    if (get_device_count())
+        copy_stream = backend_stream(
+            {accelerator_backend_id(), copy_device}, BackendStreamKind::Copy);
     event_queue.flush();
     #endif
     LOGvvvv << "fetch" << fetch_vars.size() << "vars" << fetch_vars;

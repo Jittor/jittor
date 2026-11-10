@@ -1812,7 +1812,13 @@ Var.__complex__ = to_complex
 Var.__bool__ = to_bool
 
 def format(v, spec):
-    return v.item().__format__(spec)
+    if v.numel() == 1:
+        return v.item().__format__(spec)
+    # A multi-element Var has no scalar to format; behave like
+    # object.__format__ (and torch): f"{v}" is str(v), a spec is an error.
+    if spec:
+        raise TypeError("unsupported format string passed to Var.__format__")
+    return str(v)
 
 Var.__format__ = format
 

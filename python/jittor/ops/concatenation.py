@@ -228,6 +228,10 @@ def _concat_bounded(arr, dim, dtype):
 def concat(arr, dim=0):
     """Concatenate a sequence of Vars along ``dim``."""
     jt = _jt()
+    # Any integer, NumPy's included (``np.stack(..., axis=np.int64(0))``
+    # spelled through torch): NanoVector indexing accepts only Python ints.
+    import operator
+    dim = operator.index(dim)
 
     # `amp_reg=4` here was an ASSIGNMENT, not a bit set: for the whole body it
     # replaced whatever AMP policy the caller had configured with "keep_reduce

@@ -127,6 +127,12 @@ struct VarFlags {
         // unsynced constant follow its operand's device (op.cc
         // `is_pending_scalar`), so that fact gets its own bit.
         _is_constant,
+        // An output of a graph that a non-retained backward consumed (grad.cc),
+        // or a var later computed from one (Node::release_inputs / free). Once
+        // the producer is released such a var is still not a leaf -- torch
+        // keeps its grad_fn -- unlike a user source, a parameter or a
+        // detach()/no_grad output.
+        _had_backward_producer,
         _end,
     };
 };
