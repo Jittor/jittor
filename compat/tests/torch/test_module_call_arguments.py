@@ -71,3 +71,56 @@ def test_dispatch_reads_live_weights_hooks_and_forward(device):
         check(10)
         layer.forward = lambda x: x.sum(dim=-1, keepdim=True) * 3
         check(15)
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+@pytest.mark.parametrize("failure", ["pre", "forward", "post"])
+def test_nested_hook_failure_restores_outer_call_depth(device, failure):
+    from jittor._core.module import Module
+
+    require_rng_device(device)
+    seen = []
+
+    class Inner(torch.nn.Module):
+        def forward(self, x):
+            seen.append(("forward", Module._call_depth))
+            if failure == "forward":
+                raise ValueError("nested failure")
+            return x * 2
+
+    class Outer(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.inner = Inner()
+
+        def forward(self, x):
+            assert Module._call_depth == 1
+            try:
+                self.inner(x)
+            except ValueError as error:
+                assert str(error) == "nested failure"
+                # The failed child must restore the enclosing call, not zero.
+                assert Module._call_depth == 1
+            else:
+                raise AssertionError("missing child error")
+            return x + 3
+
+    def pre(module, args):
+        seen.append(("pre", Module._call_depth))
+        if failure == "pre":
+            raise ValueError("nested failure")
+
+    def post(module, args, output):
+        seen.append(("post", Module._call_depth))
+        if failure == "post":
+            raise ValueError("nested failure")
+
+    model = Outer()
+    model.inner.register_forward_pre_hook(pre)
+    model.inner.register_forward_hook(post)
+    with jt.flag_scope(auto_graph_replay=0), torch.no_grad():
+        for value in (1., 2.):
+            result = model(torch.tensor([value], device=device))
+            assert result.device.type == device and result.item() == value + 3
+            assert Module._call_depth == 0
+    assert seen and all(depth == 2 for _, depth in seen)
