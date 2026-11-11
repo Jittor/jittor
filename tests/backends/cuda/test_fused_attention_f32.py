@@ -17,6 +17,7 @@ from _helpers import capability as _test_capability
 import gc
 import sys
 import unittest
+from unittest.mock import patch
 import weakref
 
 import numpy as np
@@ -53,6 +54,29 @@ class TestFusedAttentionF32(unittest.TestCase):
         self.scope = jt.flag_scope(use_cuda=1)
         self.scope.__enter__()
         self.addCleanup(self.scope.__exit__, None, None, None)
+
+    def test_native_gradient_owner_uses_fresh_inputs_and_cotangents(self):
+        rng = np.random.RandomState(247)
+        shape = (2, 2, 33, 8)
+        before = jt.core.backend_fallback_count()
+        with jt.flag_scope(keep_graph=0, backend_fallback="error"), \
+                patch.object(self.kernel._FusedAttentionF32, "apply",
+                             side_effect=AssertionError("Python gradient owner used")):
+            for _ in range(2):
+                q, k, v, cotangent = [rng.randn(*shape).astype("float32") for _ in range(4)]
+                expected = _reference(q, k, v, False, cotangent)
+                inputs = [jt.array(a) for a in (q, k, v)]
+                for tensor in inputs:
+                    tensor.start_grad()
+                output = self.kernel._fused_attention_f32(*inputs)
+                gradients = jt.grad((output * jt.array(cotangent)).sum(), inputs)
+                for actual, reference in zip([output] + list(gradients), expected):
+                    actual.sync()
+                    self.assertEqual(actual.location(), "device")
+                    self.assertGreaterEqual(actual.device_id, 0)
+                    np.testing.assert_allclose(actual.numpy(), reference, rtol=1e-4,
+                                               atol=1e-5 * np.abs(reference).max())
+        self.assertEqual(jt.core.backend_fallback_count(), before)
 
     def test_mask_callback_handles_retired_owner_and_stale_reference(self):
         cache = self.kernel._LAST_MASK
@@ -291,12 +315,31 @@ class TestFusedAttentionF32(unittest.TestCase):
         q, k, v, dout = (rng.randn(b, h, s, d).astype("float32") for _ in range(4))
         want = _reference(q, k, v, True, dout)
         sources = [jt.array(np.ascontiguousarray(t.transpose(0, 2, 1, 3))) for t in (q, k, v)]
-        out = scaled_dot_product_attention(*(t.transpose(1, 2) for t in sources), is_causal=True)
+        out = scaled_dot_product_attention(
+            *(t._storage_permute((0, 2, 1, 3)) for t in sources), is_causal=True)
         grads = jt.grad((out * jt.array(dout)).sum(), sources)
         np.testing.assert_allclose(out.numpy(), want[0], rtol=1e-4, atol=1e-5)
         for name, got, expected in zip("qkv", grads, want[1:]):
             np.testing.assert_allclose(got.numpy(), expected.transpose(0, 2, 1, 3), rtol=1e-4,
                                        atol=1e-5 * np.abs(expected).max(), err_msg="d" + name)
+
+    def test_materialized_transpose_keeps_its_gradient_target(self):
+        rng = np.random.RandomState(311)
+        q = rng.randn(2, 2, 5, 8).astype("float32")
+        k, v = (rng.randn(2, 2, 7, 8).astype("float32") for _ in range(2))
+        cotangent = rng.randn(*q.shape).astype("float32")
+        expected = _reference(q, k, v, False, cotangent)
+        sources = [jt.array(array.transpose(0, 2, 1, 3).copy()) for array in (q, k, v)]
+        for source in sources:
+            source.start_grad()
+        with jt.flag_scope(transpose_storage_view=0, missing_grad_error=1):
+            inputs = [jt.ops.transpose(source, (0, 2, 1, 3)) for source in sources]
+            self.assertTrue(all(value._storage_is_contiguous() for value in inputs))
+            output = scaled_dot_product_attention(*inputs)
+            gradients = jt.grad((output * jt.array(cotangent)).sum(), inputs)
+            for actual, reference in zip([output, *gradients], expected):
+                np.testing.assert_allclose(actual.numpy(), reference, rtol=1e-4,
+                                           atol=1e-5 * np.abs(reference).max())
 
     def _check_grouped(self, b, hq, hk, s, d, causal, mask=None, seq_major=False):
         """Grouped-query attention against the closed form on repeated heads."""

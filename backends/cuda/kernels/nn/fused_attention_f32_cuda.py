@@ -28,6 +28,8 @@ accepts it, and dropout drawn inside the kernels (the backward draws it
 again). A mask that needs a gradient declines.
 """
 
+from functools import lru_cache
+from pathlib import Path
 import weakref
 
 import jittor as jt
@@ -789,7 +791,70 @@ def _rows_args(t, seq, heads, group):
 _FORWARD_SOURCES = {}
 
 
-def _forward(query, key, value, call):
+@lru_cache(maxsize=1)
+def _native_vjp_factory():
+    """Load the backend's native graph builder, with no saved tensor values."""
+    import jittor_utils
+    source = Path(__file__).with_name("fused_attention_f32_vjp.cc").read_text()
+    module = jittor_utils.compile_module(source, jt.compiler.cc_flags)
+    # Swapping is a build switch, not a runtime flag. Read the compiled
+    # constant once, with the same compiler flags as the native builder.
+    module.native_vjp_enabled = module.attention_f32_native_vjp_enabled()
+    return module
+
+
+@lru_cache(maxsize=256)
+def _native_vjp_programs(d, rpt, causal, mask_kind, mask_strides, seq, scale,
+                         keep, seeded):
+    """Immutable launch programs shared by newly constructed attention Ops."""
+    call = object.__new__(_Call)
+    call.scale, call.causal = scale, causal
+    call.mask = (mask_kind, None, mask_strides)
+    call.seq, call.group, call.keep = seq, 1, keep
+    # Only the presence of dropout enters source generation. The actual seed
+    # remains a fresh tensor input of each forward and its backward.
+    call.seed = True if seeded else None
+    lq, lk = call.lengths()
+    bq = 16 * rpt
+    forward = _launch(
+        f"mea_fwd::forward<{d}, {rpt}, {call.template()}>",
+        f"({lq} + {bq} - 1) / {bq}, in0->shape[0] * {call.heads_expr()}",
+        _smem_register_forward(d, rpt),
+        f"in0_p, in1_p, in2_p, out0_p, out1_p, {lq}, {lk}, "
+        f"{scale!r}f, {call.args(3)}", threads="mea_fwd::THREADS")
+    row = _launch(
+        f"mea::row_delta<{d}, {call.template()}>",
+        f"{lq}, in0->shape[0] * {call.heads_expr()}", 0,
+        f"in0_p, in1_p, in2_p, in3_p, in4_p, in5_p, out0_p, {lq}, {lk}, "
+        f"{scale!r}f, {_RECOMPUTE_INV_ABOVE!r}f, {call.args(6)}", threads="256")
+    backward = "cudaMemsetAsync(out0_p, 0, out0->size, 0);\n" + _launch(
+        f"mea_bwd::backward<{d}, {call.template()}>",
+        f"({lk} + 31) / 32, in0->shape[0] * {call.heads_expr()}",
+        _smem_register_backward(d),
+        f"in0_p, in1_p, in2_p, in3_p, in4_p, in5_p, out0_p, out1_p, out2_p, "
+        f"{lq}, {lk}, {scale!r}f, {call.args(6, grads=True)}",
+        threads="mea_bwd::THREADS")
+    return forward, row, backward
+
+
+def _native_forward(query, key, value, call):
+    factory = _native_vjp_factory()
+    b, h, lq, d = (int(size) for size in query.shape)
+    if call.seq[0]:
+        h, lq = lq, h
+    rpt = 4 if -(-lq // 64) * b * h >= _SM_BLOCKS else 1
+    sources = _native_vjp_programs(
+        d, rpt, call.causal, call.mask[0], tuple(call.mask[2]), tuple(call.seq),
+        float(call.scale), call.keep, call.seed is not None)
+    output = factory.attention_f32_with_native_vjp(
+        [query, key, value] + call.extras(), [query.shape, (b, h, lq, 2)],
+        _KERNELS, *sources, bool(call.seq[0]))
+    return output, None  # the native Op owns its saved normalizer
+
+
+def _forward(query, key, value, call, native_vjp=False):
+    if native_vjp:
+        return _native_forward(query, key, value, call)
     if call.seq[0]:
         b, lq, h, d = (int(size) for size in query.shape)
     else:
@@ -895,7 +960,7 @@ class _FusedAttentionF32(jt.Function):
         return grad_query, grad_key, grad_value, None
 
 
-def _physical(t):
+def _physical(t, preserve_gradient_edge=False):
     """(tensor, seq_major): the [b, s, h, d] source of a [b, h, s, d] transpose
     view, which the kernels read in place, or `t` itself."""
     if not isinstance(t, jt.Var):
@@ -903,11 +968,16 @@ def _physical(t):
     axes = getattr(t, "_transpose_view_axes", None)
     if axes is None:
         return t, False
-    if tuple(axes()) == (0, 2, 1, 3):
-        return t._transpose_view_source(), True
-    if tuple(t._producer_transpose_axes()) == (0, 2, 1, 3):
-        return t._input(0), True
-    return t, False
+    is_view = tuple(axes()) == (0, 2, 1, 3)
+    if not is_view and tuple(t._producer_transpose_axes()) != (0, 2, 1, 3):
+        return t, False
+    if preserve_gradient_edge:
+        # Reading the old source bypasses the logical input as an AD target.
+        # This inverse storage view keeps that edge and moves no data. A
+        # copying transpose instead stays in its own dense logical layout.
+        restored = t._storage_permute((0, 2, 1, 3))
+        return (restored, True) if restored._storage_is_contiguous() else (t, False)
+    return (t._transpose_view_source() if is_view else t._input(0)), True
 
 
 def _supports(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False,
@@ -946,10 +1016,20 @@ def _fused_attention_f32(query, key, value, attn_mask=None, dropout_p=0.0,
     if mask is None:
         return None
     scale = float(scale) if scale is not None else float(query.shape[3]) ** -0.5
-    (query, q_seq), (key, k_seq), (value, v_seq) = (_physical(t) for t in (query, key, value))
+    (query, q_seq), (key, k_seq), (value, v_seq) = (
+        _physical(t, preserve_gradient_edge=training) for t in (query, key, value))
     call = _Call(scale, bool(is_causal), mask, (q_seq, k_seq, v_seq), dropout_p, group)
     if training:
-        out = _FusedAttentionF32.apply(query, key, value, call)
+        # Ordinary non-grouped training builds the same backward with native
+        # graph operations. Kept/captured graphs retain their existing owner.
+        from jittor._runtime import step_capture
+        native_vjp = (group == 1 and not jt.flags.keep_graph
+                      and not step_capture.active() and not step_capture.tracing()
+                      and _native_vjp_factory().native_vjp_enabled)
+        if native_vjp:
+            out = _forward(query, key, value, call, True)[0]
+        else:
+            out = _FusedAttentionF32.apply(query, key, value, call)
     else:
         out = _forward(query, key, value, call)[0]
     return out.transpose(0, 2, 1, 3) if q_seq else out
