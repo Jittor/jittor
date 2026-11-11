@@ -17,7 +17,7 @@ def device(request):
 @pytest.mark.parametrize('precision', ['float16', 'bfloat16'])
 def test_autocast_fp32_arithmetic_and_rsqrt(device, precision):
     if device == 'cpu' and precision == 'float16':
-        pytest.skip('CPU FP16 autocast is outside this check')
+        pytest.skip('harness-limited: CPU FP16 autocast is outside this check')
     values = np.array([1.00123, 2.34567, 4.12345], dtype=np.float32)
     x = torch.tensor(values, dtype=torch.float32, device=device).requires_grad_(True)
     with torch.autocast(device_type=device, dtype=getattr(torch, precision)):
@@ -41,7 +41,7 @@ def test_autocast_fp32_arithmetic_and_rsqrt(device, precision):
 @pytest.mark.parametrize('precision', ['float16', 'bfloat16'])
 def test_autocast_rsqrt_half_input_and_matmul_policy(device, precision):
     if device == 'cpu' and precision == 'float16':
-        pytest.skip('CPU FP16 autocast is outside this check')
+        pytest.skip('harness-limited: CPU FP16 autocast is outside this check')
     dtype = getattr(torch, precision)
     half = torch.tensor([1.25, 2.5], dtype=dtype, device=device)
     matrix = torch.tensor([[1.0, 2.0], [3.0, 4.0]], dtype=torch.float32, device=device)

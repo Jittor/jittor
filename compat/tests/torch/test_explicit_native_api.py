@@ -33,9 +33,12 @@ def test_completed_namespace_does_not_inherit_backend_attributes(frontend, monke
 def test_native_operations_have_stable_objects_and_frontend_results(frontend):
     owner = importlib.import_module("jittor.compat.torch.native_api")
     from jittor.compat.torch.fidelity import fidelity_of
-    for name in ("sin", "cos", "exp", "matmul"):
+    # exp's dtype-preserving implementation has its own stable owner.
+    elementwise = importlib.import_module("jittor.compat.torch.installers.numerical.elementwise")
+    owners = {"sin": owner, "cos": owner, "exp": elementwise, "matmul": owner}
+    for name, implementation_owner in owners.items():
         function = getattr(frontend, name)
-        assert function is getattr(owner, name)
+        assert function is getattr(implementation_owner, name)
         assert pickle.loads(pickle.dumps(function)) is function
         assert fidelity_of("torch." + name).implementation is function
     value = frontend.tensor([0., 1.], requires_grad=True)

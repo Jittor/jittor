@@ -551,6 +551,8 @@ include src/bindings/pyjt/py_dtype.cc
 include src/bindings/pyjt/py_dtype.h
 include src/bindings/pyjt/py_kernel_select.cc
 include src/bindings/pyjt/py_kernel_select.h
+include src/bindings/pyjt/py_matmul.cc
+include src/bindings/pyjt/py_matmul.h
 include src/bindings/pyjt/py_module_call.cc
 include src/bindings/pyjt/py_module_call.h
 include src/bindings/pyjt/py_obj_holder.h
