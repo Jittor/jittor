@@ -2,12 +2,14 @@ import importlib
 import unittest
 
 import numpy as np
+import torch
+import jittor as _native_jittor
+from _helpers.common import get_all_device_types
+
 
 #: NumPy 2 renamed `trapz` to `trapezoid`; the dev pins NumPy 1.26.4, which
 #: has only the old name. Same function, same arguments.
 _np_trapezoid = getattr(np, "trapezoid", None) or np.trapz
-import torch
-import jittor as _native_jittor
 
 
 STACKING_NAMES = (
@@ -947,20 +949,34 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             actual_p2, np.sqrt((delta * delta).sum(axis=-1)), rtol=1e-6)
 
     def test_pairwise_search_family_cpu_bucketize_sides_match_numpy(self):
-        values = np.array([0.0, 1.0, 3.0, 5.0], dtype="float32")
-        boundaries = np.array([1.0, 3.0, 4.0], dtype="float32")
         with _native_jittor.flag_scope(use_cuda=0):
-            actual_left = torch.bucketize(
-                torch.tensor(values), torch.tensor(boundaries), right=False)
-            actual_right = torch.bucketize(
-                torch.tensor(values), torch.tensor(boundaries), right=True,
-                out_int32=True)
-        np.testing.assert_array_equal(
-            actual_left.numpy(), np.searchsorted(boundaries, values, side="left"))
-        np.testing.assert_array_equal(
-            actual_right.numpy(), np.searchsorted(boundaries, values, side="right"))
-        self.assertEqual(str(actual_left.dtype), "torch.int64")
-        self.assertEqual(str(actual_right.dtype), "torch.int32")
+            self._assert_bucketize_sides_and_widths('cpu')
+
+    def test_pairwise_search_family_cuda_bucketize_sides_match_numpy(self):
+        if 'cuda' not in get_all_device_types():
+            self.skipTest('CUDA is not selected or unavailable')
+        with _native_jittor.flag_scope(use_cuda=1):
+            self._assert_bucketize_sides_and_widths('cuda')
+
+    def _assert_bucketize_sides_and_widths(self, device):
+        boundaries = np.array([1.0, 3.0, 4.0], dtype="float32")
+        for dtype in ("float32", "float64", "int64"):
+            for shape in ((4,), (2, 2)):
+                values = np.array([0, 1, 3, 5], dtype=dtype).reshape(shape)
+                for right in (False, True):
+                    for out_int32 in (False, True):
+                        with self.subTest(dtype=dtype, shape=shape,
+                                          right=right, out_int32=out_int32):
+                            actual = torch.bucketize(
+                                torch.tensor(values, device=device),
+                                torch.tensor(boundaries, device=device),
+                                right=right, out_int32=out_int32)
+                            expected = np.searchsorted(
+                                boundaries, values, side="right" if right else "left")
+                            self.assertEqual(actual.device.type, device)
+                            np.testing.assert_array_equal(actual.cpu().numpy(), expected)
+                            self.assertEqual(
+                                actual.dtype, torch.int32 if out_int32 else torch.int64)
 
     def test_nan_reduction_family_is_stable_module_level_objects(self):
         numerical = importlib.import_module(
