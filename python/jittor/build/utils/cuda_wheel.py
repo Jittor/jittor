@@ -318,6 +318,16 @@ class Cuda13WheelStack(CudaWheelStack):
     cuda_version = "13.0"
     component_specs = CUDA13_COMPONENTS
 
+    def component_dir(self, component):
+        root = super(Cuda13WheelStack, self).component_dir(component)
+        if root is not None or component != "cudnn":
+            return root
+        # NVIDIA's CUDA 13 wheels share nvidia/cu13, but cuDNN still ships
+        # under its sibling nvidia/cudnn. Keep this tied to the selected
+        # toolchain prefix instead of mixing libraries from another env.
+        sibling = os.path.join(os.path.dirname(self.components["cuda_nvcc"]), "cudnn")
+        return sibling if os.path.isdir(sibling) else None
+
     def include_dirs(self, component=None):
         paths = super(Cuda13WheelStack, self).include_dirs(component)
         if component is None or component == "cccl":
