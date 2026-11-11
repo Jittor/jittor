@@ -2,6 +2,7 @@
 
 #include <Python.h>
 #include "core/common.h"
+#include "core/var_holder.h"
 
 namespace jittor {
 
@@ -13,6 +14,14 @@ namespace jittor {
 // the native name where the table has none (`method_api._dtype_get`).
 // @pyjt(_frontend_dtype)
 PyObject* frontend_dtype(PyObject* self);
+
+// Differentiate once, preserving missing targets. If every result already
+// has its target's dtype, prepare ordinary stopped gradients in native code;
+// otherwise return the untouched results for the frontend's normalization.
+// The tuple is (gradients, prepared); create_graph keeps derivative edges.
+// @pyjt(_grad_optional_prepare)
+PyObject* grad_optional_prepare(VarHolder* loss,
+    const vector<VarHolder*>& targets, bool retain_graph, bool create_graph);
 
 // Batch the existing imperative storage writes after the optimizer has
 // resolved its group readers. False leaves every destination untouched.

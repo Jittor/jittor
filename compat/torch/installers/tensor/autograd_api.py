@@ -329,7 +329,12 @@ def _backward_impl(self, gradient=None, retain_graph=None, create_graph=False, *
     # core entry point that preserves missing gradients explicitly.
     from ...autograd import _create_graph_scope
     with _create_graph_scope(create_graph):
-        grads = _owner.jt.core.grad_optional(self, leaves, retain_graph)
+        if _step_capture.active() or _step_capture.tracing():
+            grads = _owner.jt.core.grad_optional(self, leaves, retain_graph)
+            prepared = False
+        else:
+            grads, prepared = _owner.jt.core._grad_optional_prepare(
+                self, leaves, retain_graph, create_graph)
     grad_by_id = {}
     for p, gr in zip(leaves, grads):
         if gr is None:
@@ -342,10 +347,11 @@ def _backward_impl(self, gradient=None, retain_graph=None, create_graph=False, *
         # float16 op comes back with a float16 grad, and AdamW's
         # (1 - beta2) * g * g then underflows in float16 -- an lr / eps step,
         # NaN on the next forward (test_torch_amp_training_loop.py).
-        if gr.dtype != p.dtype:
-            gr = gr.cast(p.dtype)
-        if not create_graph:
-            gr = gr.detach()
+        if not prepared:
+            if gr.dtype != p.dtype:
+                gr = gr.cast(p.dtype)
+            if not create_graph:
+                gr = gr.detach()
         grad_by_id[id(p)] = gr
         if id(p) not in opt_ids:
             # non-optimizer leaf (retain_grad screenspace etc.): accumulate

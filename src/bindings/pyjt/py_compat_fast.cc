@@ -1,6 +1,7 @@
 #include "bindings/pyjt/py_compat_fast.h"
 #include "bindings/pyjt/py_converter.h"
 #include "core/var_holder.h"
+#include "core/grad.h"
 #include "core/var_slices.h"
 #include "bindings/pyjt/py_kernel_select.h"
 #include "bindings/pyjt/py_tensor_frontend.h"
@@ -14,6 +15,7 @@
 #include "runtime/backend.h"
 #include "runtime/dispatch_context.h"
 #include "runtime/graph_capture.h"
+#include "runtime/tensor_placement.h"
 #include <stdexcept>
 #include <descrobject.h>
 
@@ -21,6 +23,44 @@ namespace jittor {
 
 DECLARE_FLAG(bool, no_grad);
 DECLARE_FLAG(int, amp_reg);
+
+PyObject* grad_optional_prepare(VarHolder* loss,
+    const vector<VarHolder*>& targets, bool retain_graph, bool create_graph) {
+    loss->observe_alias_history();
+    vector<Var*> inputs;
+    inputs.reserve(targets.size());
+    for (auto* target : targets) {
+        target->observe_alias_history();
+        inputs.push_back(target->var);
+    }
+    // Use the same differentiation and alias observation as grad_optional.
+    // No forward, backward graph or gradient value survives between calls.
+    auto grads = grad(loss->var, inputs, retain_graph, false);
+    bool prepared = !graph_capture_active();
+    for (size_t i = 0; i < grads.size(); ++i)
+        if (grads[i] && grads[i]->dtype() != inputs[i]->dtype()) prepared = false;
+    vector<Maybe<VarHolder>> holders;
+    holders.reserve(grads.size());
+    for (auto& value : grads) {
+        if (!value) {
+            holders.emplace_back(nullptr);
+            continue;
+        }
+        if (prepared && !create_graph) {
+            auto placement = value->placement;
+            TensorPlacementScope scope(placement.explicit_backend
+                ? placement : current_tensor_placement());
+            value = detach(value);
+        }
+        auto* holder = new VarHolder(move(value));
+        // Torch detach stops the output holder, including its alias policy;
+        // stopping just the clone operator is insufficient.
+        if (prepared && !create_graph) holder->stop_grad();
+        holders.emplace_back(holder);
+    }
+    PyObjHolder result(to_py_object(holders));
+    return PyTuple_Pack(2, result.obj, prepared ? Py_True : Py_False);
+}
 
 bool try_optimizer_copies(PyObject* targets, PyObject* values) {
     if (!no_grad || graph_capture_active() || !runtime_use_cuda()
