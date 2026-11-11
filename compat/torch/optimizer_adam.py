@@ -63,7 +63,10 @@ class _AdamSteps(list):
         # Do not retain the owning dict: it owns this list, and a cycle would
         # keep discarded optimizers' parameters and lazy graphs alive.
         self.fused = group.get("fused", False)
-        self.devices = tuple(parameter.device for parameter in group["params"])
+        # Only fused counters live on the parameter device. Read current
+        # placements when that policy is selected, including after a move.
+        self.devices = (tuple(parameter.device for parameter in group["params"])
+                        if self.fused else ())
 
     def __setitem__(self, index, value):
         old = self[index]
