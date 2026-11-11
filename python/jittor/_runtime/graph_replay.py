@@ -28,12 +28,16 @@ rather than used:
     so a long-lived capture does get retaken from time to time. `stats` says
     how often.
 
-Two things make a graph unreplayable rather than merely stale, and capture
-refuses both rather than answering wrongly: a graph that draws random numbers
-(a replay would repeat the same draw), and a traced call that reads a value
-back to the host, because then the python path taken depends on tensor values
-and the next call's path may differ. The runtime counts the host's reads
-(`_host_readback_count`), and a traced call that moved the count is refused.
+Three things make a graph unreplayable rather than merely stale, and capture
+refuses all of them rather than answering wrongly: a graph that draws random
+numbers (a replay would repeat the same draw), a traced call that reads a
+value back to the host (then the python path taken depends on tensor values
+and the next call's path may differ), and a traced call that writes state it
+did not create -- a KV cache, a running buffer. The runtime counts the host's
+reads (`_host_readback_count`), and a traced call that moved the count is
+refused. The state check compares the storage version of every Var the
+warm-up graph reads against the same Var in the capture: an in-place write
+bumps it, and replay would repeat that write once per capture and replay.
 
 This is inference, and only inference. The call runs under `no_grad` and the
 result carries no gradient -- wrapping a module you are training does not
@@ -210,6 +214,53 @@ def _input_vars(value, out):
         for v in value.values():
             _input_vars(v, out)
     return out
+
+
+def _pre_existing_state(roots):
+    """Snapshot the storage versions of every Var the warm-up graph touches.
+
+    The capture rebuilds the same python path; the Vars it shares with this
+    graph -- parameters, caches, anything the caller holds -- are the same
+    objects, and an in-place write bumps their storage version when the op is
+    built. A shared Var whose version changed between the two builds is state
+    the call rewrites, which inference replay cannot reproduce: it runs the
+    call for a warm-up, for the capture, and once per replay, so those writes
+    would be repeated at times the caller did not choose.
+    """
+    state, seen, stack = {}, set(), list(roots)
+    while stack:
+        var = stack.pop()
+        key = int(var.var_ptr)
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            inputs = var._inputs()
+        except Exception:
+            inputs = ()
+        state[key] = (var, var._saved_storage_version())
+        stack.extend(inputs)
+    return state
+
+
+def _state_is_written(roots, state):
+    """Whether this graph writes any of the Vars recorded in `state`."""
+    seen, stack = set(), list(roots)
+    while stack:
+        var = stack.pop()
+        key = int(var.var_ptr)
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            inputs = var._inputs()
+        except Exception:
+            inputs = ()
+        hit = state.get(key)
+        if hit is not None and hit[1] != var._saved_storage_version():
+            return True
+        stack.extend(inputs)
+    return False
 
 
 def _map_inputs(value, fn):
@@ -461,7 +512,7 @@ class GraphReplay:
     """A callable that re-runs `module`'s captured graph. See the module docstring."""
 
     def __init__(self, module, *example_inputs, measure=False, weak=False,
-                 max_retained_bytes=None):
+                 max_retained_bytes=None, allow_state=False):
         """`measure=True` times replay against eager once and refuses if it loses.
 
         Off by default, because the measurement does not leave the process as
@@ -488,6 +539,11 @@ class GraphReplay:
             self._module_held = module
         self._capture = None
         self._refused = None
+        # A call that rewrites state is normally refused (see `_capture_now`).
+        # A caller that knows where the step boundary is -- and that the writes
+        # are meant to be replayed, as a KV cache update is -- can take that
+        # responsibility explicitly.
+        self._allow_state = allow_state
         self._worth_it = None if measure else True
         # What a device recording may keep allocated; None for no bound. The
         # automatic policy sets one (`auto_graph_replay_retain_bytes`): it
@@ -535,7 +591,7 @@ class GraphReplay:
     def _params(self):
         return _module_vars(self._module)
 
-    def _capture_now(self, args, kwargs=None):
+    def _capture_now(self, args, kwargs=None, state_versions=None):
         kwargs = kwargs or {}
         params = self._params()
         given = _input_vars((args, kwargs), [])
@@ -583,6 +639,12 @@ class GraphReplay:
         try:
             with _capture_barriers() as barriers, _no_auto(), jt.no_grad():
                 output = self._module(*private_args, **private_kwargs)
+                if state_versions and _state_is_written(
+                        _input_vars(output, []), state_versions):
+                    self._refused = ("the traced call writes a Var it did not "
+                                     "create, so a replay would repeat its side "
+                                     "effects at times the caller did not choose")
+                    return None
                 if barriers:
                     self._refused = "the traced call contains an opaque operation: " + barriers[0]
                     return None
@@ -950,6 +1012,8 @@ class GraphReplay:
             working = _WorkingSet()
             with _capture_barriers() as barriers, _no_auto(), jt.no_grad():
                 result = self._module(*args, **kwargs)
+                state_versions = (None if self._allow_state else
+                                  _pre_existing_state(_input_vars(result, [])))
                 _sync_result(result)
             if barriers:
                 self._refused = "the warm-up contains an opaque operation: " + barriers[0]
@@ -964,7 +1028,8 @@ class GraphReplay:
                 return result
             # What a device recording of this graph would hold.
             self._graph_bytes = working.bytes()
-            cap = self._capture = self._capture_now(args, kwargs)
+            cap = self._capture = self._capture_now(args, kwargs,
+                                                     state_versions)
             self.stats["captured"] += 1
             if cap is None:
                 # The warm-up already computed this call's answer.
@@ -1165,9 +1230,18 @@ class _StatefulCall:
         return result
 
 
-def graph_replay(module, *example_inputs, measure=False):
-    """Wrap `module` so repeated inference re-runs its graph. See the module docstring."""
-    return GraphReplay(module, *example_inputs, measure=measure)
+def graph_replay(module, *example_inputs, measure=False, allow_state=False):
+    """Wrap `module` so repeated inference re-runs its graph. See the module docstring.
+
+    ``allow_state=True`` keeps the capture for a call that writes state it did
+    not create (a KV cache, a running buffer) instead of refusing it. Only the
+    caller can know that the writes belong to the step and that captures are
+    taken at a boundary where replaying them is what should happen; with that
+    promise, the state Vars are captured like any other constant and a device
+    recording re-issues their updates at fixed addresses.
+    """
+    return GraphReplay(module, *example_inputs, measure=measure,
+                       allow_state=allow_state)
 
 
 # ---------------------------------------------------------------------------

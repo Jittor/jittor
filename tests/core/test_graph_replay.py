@@ -872,6 +872,34 @@ class TestGraphReplayCuda(TestGraphReplay):
         jt.flags.use_cuda = self._use_cuda
 
 
+class TestStatefulCallRefused(unittest.TestCase):
+    """A call that rewrites state must not be replayed.
+
+    Inference replay runs the call for a warm-up, for the capture and once
+    per replay, so a call that leaves state behind would apply those writes
+    several times, at moments the caller did not choose. The guard compares
+    the storage version of every Var the warm-up graph reads against the same
+    Var in the capture build: an in-place write bumps it, and the capture is
+    refused rather than silently repeating the side effects.
+    """
+
+    def test_a_call_that_writes_a_captured_buffer_is_refused(self):
+        state = jt.zeros((4, 8))
+        def step(x):
+            state[2:3] = x.reshape((1, 8))
+            return state * 1.0
+        replay = graph_replay(step, jt.array(np.zeros(8, dtype="float32")))
+        self.assertIsNotNone(replay.refused)
+        self.assertIn("writes a Var", replay.refused)
+        for value in (1.0, 2.0, 3.0):
+            out = replay(jt.array(np.full(8, value, dtype="float32")))
+            np.testing.assert_array_equal(
+                state.numpy()[2], np.full(8, value))
+            np.testing.assert_array_equal(
+                out.numpy()[2], np.full(8, value))
+        self.assertEqual(replay.stats["replayed"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()
 
@@ -895,3 +923,16 @@ def test_cpu_dynamic_ternary_condition_survives_replay_input_writes():
             assert replay.stats["replayed"] == len(feed)
         finally:
             replay.invalidate()
+
+    def test_allow_state_keeps_a_stateful_capture(self):
+        state = jt.zeros((4, 8))
+        def step(x):
+            state[2:3] = x.reshape((1, 8))
+            return state * 1.0
+        replay = graph_replay(step, jt.array(np.zeros(8, dtype="float32")),
+                              allow_state=True)
+        self.assertIsNone(replay.refused)
+        out = replay(jt.array(np.ones(8, dtype="float32")))
+        np.testing.assert_array_equal(state.numpy()[2], np.ones(8))
+        np.testing.assert_array_equal(out.numpy()[2], np.ones(8))
+        self.assertGreaterEqual(replay.stats["captured"], 1)
