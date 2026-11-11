@@ -8,7 +8,7 @@ import jittor as jt
 from jittor.optim.algorithms.adam import adam_update
 from jittor.optim.base import _update_preserve_dtype
 from .context import get_install_context
-from .installers.tensor.method_api import _optimizer_write_scope
+from .installers.tensor.method_api import _optimizer_write_scope, _optimizer_update
 from ..diagnostics import EXPECTED, swallowed
 
 
@@ -83,6 +83,31 @@ class _AdamSteps(list):
 
 def _update_in_target_dtype(target, value):
     _update_preserve_dtype(target, value)
+
+
+def _try_batch_update(active, updates):
+    """Batch canonical writes, preserving custom writers and capture paths."""
+    from jittor._runtime import step_capture
+    if step_capture.active() or step_capture.tracing():
+        return False
+    # Providers may return iterators. Leave those intact for the ordinary
+    # writer instead of consuming their updates during a speculative check.
+    if type(updates) not in (list, tuple) or len(updates) != len(active):
+        return False
+    if any(type(triple) not in (list, tuple) or len(triple) != 3 for triple in updates):
+        return False
+    frontend = get_install_context(jt).target_namespace
+    allowed = (jt.Var, frontend.Tensor, frontend.nn.Parameter)
+    targets, values = [], []
+    for (p, m, v, _, _), triple in zip(active, updates):
+        for target, value in zip((p, m, v), triple):
+            if (type(target) not in allowed or type(value) not in allowed
+                    or getattr(type(target), '_optimizer_update', None) is not _optimizer_update):
+                return False
+            targets.append(target)
+            values.append(value)
+    with jt.no_grad():
+        return jt.core._try_optimizer_copies(targets, values)
 
 
 def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay):
@@ -205,11 +230,13 @@ def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay
             updates = fused_impl(
                 active, lr_arg, b0, b1, weight_decay, eps)
             with _optimizer_write_scope():
+                copied = _try_batch_update(active, updates)
                 for (p, m, v, _, _), (new_p, new_m, new_v) in zip(
                         active, updates):  # fused_adamw keeps each input's dtype
-                    _update_preserve_dtype(p, new_p)
-                    _update_preserve_dtype(m, new_m)
-                    _update_preserve_dtype(v, new_v)
+                    if not copied:
+                        _update_preserve_dtype(p, new_p)
+                        _update_preserve_dtype(m, new_m)
+                        _update_preserve_dtype(v, new_v)
                     if p.is_stop_grad():
                         p.start_grad()
             continue

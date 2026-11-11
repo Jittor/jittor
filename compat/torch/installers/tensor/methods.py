@@ -1,5 +1,6 @@
 """Torch tensor methods ownership."""
 from ...fidelity import Fidelity, register_api_bindings, register_fidelity
+from ....transaction import set_attr
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 from .method_api import (
@@ -486,6 +487,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # behavior-preserving for the getter/setter; it only adds leaf bookkeeping.
     if not isinstance(_type_attribute(Var, "requires_grad"), property):
         _native_requires_grad = _type_attribute(Var, "requires_grad")
+        set_attr(Var, "_frontend_native_requires_grad", _native_requires_grad)
         Var.requires_grad = property(_rg_get, _rg_set)
 
     Var.requires_grad_ = requires_grad_

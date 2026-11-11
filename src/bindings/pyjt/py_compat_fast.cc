@@ -22,6 +22,47 @@ namespace jittor {
 DECLARE_FLAG(bool, no_grad);
 DECLARE_FLAG(int, amp_reg);
 
+bool try_optimizer_copies(PyObject* targets, PyObject* values) {
+    if (!no_grad || graph_capture_active() || !runtime_use_cuda()
+            || accelerator_backend_id() != BackendId::Cuda
+            || !PyList_CheckExact(targets) || !PyList_CheckExact(values))
+        return false;
+    auto count = PyList_GET_SIZE(targets);
+    if (!count || count != PyList_GET_SIZE(values)) return false;
+    // A backend copy can release the GIL. Caller-owned lists may then change;
+    // immutable snapshots keep every holder alive throughout the whole batch.
+    PyObjHolder target_owners(PyList_AsTuple(targets));
+    PyObjHolder value_owners(PyList_AsTuple(values));
+    vector<VarHolder*> dst, src;
+    dst.reserve(count);
+    src.reserve(count);
+    for (Py_ssize_t i = 0; i < count; ++i) {
+        auto* a = PyTuple_GET_ITEM(target_owners.obj, i);
+        auto* b = PyTuple_GET_ITEM(value_owners.obj, i);
+        if (!PyObject_TypeCheck(a, &PyjtVarHolder.ht_type)
+                || !PyObject_TypeCheck(b, &PyjtVarHolder.ht_type)) return false;
+        auto* d = GET_RAW_PTR(VarHolder, a);
+        auto* s = GET_RAW_PTR(VarHolder, b);
+        auto* dv = d->var;
+        auto* sv = s->var;
+        if (d->view || s->view || !dv->is_finished() || !sv->is_finished()
+                || dv->flag(VarFlags::_kept) || sv->flag(VarFlags::_kept)
+                || !dv->mem_ptr || !sv->mem_ptr || !dv->allocator || !sv->allocator
+                || !dv->allocator->is_cuda() || !sv->allocator->is_cuda()
+                || dv->device_id != sv->device_id || dv->dtype() != sv->dtype()
+                || dv->shape != sv->shape || !dv->is_contiguous() || !sv->is_contiguous())
+            return false;
+        dst.push_back(d);
+        src.push_back(s);
+    }
+    // Retain logical-alias refresh, saved-reader/version checks, source
+    // synchronization and stream ordering in the existing copy primitives.
+    for (Py_ssize_t i = 0; i < count; ++i) {
+        if (!dst[i]->copy_view_into(src[i])) dst[i]->copy_into(src[i], true);
+    }
+    return true;
+}
+
 namespace {
 // Per frontend type: its dtype table, and the entries already looked up by
 // native name. Dropped when the type is collected.

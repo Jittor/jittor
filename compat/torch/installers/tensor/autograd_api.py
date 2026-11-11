@@ -56,11 +56,10 @@ def _initial_leaf_gradient(parameter, gradient):
 
 
 def _rg_get(self):
-    _context = get_install_context(_owner.jt)
-    Var = _context.state["Var"]
-    _native = _context.state["tensor_native_api"]
-    _native_requires_grad = _native['_native_requires_grad']
-    return bool(_native_requires_grad.__get__(self, Var))
+    # The frontend type owns the descriptor; read native state on every call.
+    # No tensor flag is cached, including for inherited Parameter subclasses.
+    cls = type(self)
+    return bool(cls._frontend_native_requires_grad.__get__(self, cls))
 
 
 def _rg_set(self, v):

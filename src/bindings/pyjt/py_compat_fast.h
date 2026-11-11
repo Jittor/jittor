@@ -14,6 +14,12 @@ namespace jittor {
 // @pyjt(_frontend_dtype)
 PyObject* frontend_dtype(PyObject* self);
 
+// Batch the existing imperative storage writes after the optimizer has
+// resolved its group readers. False leaves every destination untouched.
+// Only materialized, dense CUDA tensors outside capture are accepted.
+// @pyjt(_try_optimizer_copies)
+bool try_optimizer_copies(PyObject* targets, PyObject* values);
+
 // A fresh, unallocated cuBLAS result with no aliases or other readers can be
 // replaced by an independent copy of its binary update. False retains the
 // imperative store. No tensor, graph or execution plan is cached.

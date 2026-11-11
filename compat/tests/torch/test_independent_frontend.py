@@ -66,7 +66,10 @@ policy_before = jt.autograd.get_policy()
 from jittor.compat.shim.runtime import activate
 from jittor.compat import torch as compatibility
 required = compatibility._REQUIRED_STEPS
+failed_types = []
 def fail_after_install(context):
+    failed_types.append(context.state["Var"])
+    assert failed_types[-1]._frontend_native_requires_grad is vars(jt.Var)["requires_grad"]
     raise RuntimeError("injected frontend install failure")
 compatibility._REQUIRED_STEPS = required + (("frontend.failure", fail_after_install),)
 try:
@@ -82,6 +85,8 @@ try:
         raise AssertionError("injected failure was swallowed")
 finally:
     compatibility._REQUIRED_STEPS = required
+assert len(failed_types) == 1
+assert "_frontend_native_requires_grad" not in vars(failed_types[0])
 torch = activate(
     independent_namespace=True, auto_scan_extensions=False,
     build_extensions=False, configure_cuda=False,
@@ -89,6 +94,13 @@ torch = activate(
 )["torch"]
 assert torch.Tensor is not jt.Var
 assert issubclass(torch.Tensor, jt.Var)
+descriptor = torch.Tensor._frontend_native_requires_grad
+assert descriptor is vars(jt.Var)["requires_grad"]
+probe = torch.ones(2, requires_grad=True)
+descriptor.__set__(probe, False)
+assert not probe.requires_grad
+descriptor.__set__(probe, True)
+assert probe.requires_grad
 assert before.keys() == vars(jt.Var).keys()
 assert all(value is vars(jt.Var)[key] for key, value in before.items())
 assert module_before.keys() == vars(jt.Module).keys()
