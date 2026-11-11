@@ -488,13 +488,21 @@ def _install_version(g, registry=None):
     version = _types.ModuleType("torch.version")
     version.__version__ = torch_api_version
     version.jittor = jittor_version
-    try:
-        nv = getattr(getattr(jt, "compiler", None), "nvcc_version", None)
-        version.cuda = ".".join(map(str, nv[:2])) if nv else None
-    except EXPECTED as exc:
-        swallowed("torch/installers/cuda/bindings.py _install_version: nv = getattr(getattr(jt, 'compiler', None), 'nvcc_versi...", exc)
+    compiler = getattr(jt, "compiler", None)
+    config = getattr(compiler, "build_config", None)
+    if getattr(config, "has_rocm", False):
         version.cuda = None
-    version.hip = None
+        version.hip = config.resources.get("hip_version")
+        if not isinstance(version.hip, str) or not version.hip:
+            raise RuntimeError("ROCm build metadata is missing the HIP SDK version")
+    else:
+        try:
+            nv = getattr(compiler, "nvcc_version", None)
+            version.cuda = ".".join(map(str, nv[:2])) if nv else None
+        except EXPECTED as exc:
+            swallowed("torch/installers/cuda/bindings.py _install_version: nv = getattr(getattr(jt, 'compiler', None), 'nvcc_versi...", exc)
+            version.cuda = None
+        version.hip = None
     version.git_version = "jittor"
     _modules["torch.version"] = version
     g.version = version

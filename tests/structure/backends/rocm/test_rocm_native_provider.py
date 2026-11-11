@@ -29,7 +29,10 @@ def test_legacy_entrypoint_is_only_a_compatibility_forwarder():
 @pytest.mark.parametrize("library_dir", ["lib", "lib64", "hip/lib", "hip/lib64"])
 def test_native_provider_returns_build_config_without_transform(tmp_path, monkeypatch, library_dir):
     sdk = tmp_path / "rocm"
-    (sdk / "include").mkdir(parents=True)
+    (sdk / "include/hip").mkdir(parents=True)
+    (sdk / "include/hip/hip_version.h").write_text(
+        "#define HIP_VERSION_MAJOR 6\n#define HIP_VERSION_MINOR 3\n"
+        "#define HIP_VERSION_PATCH 12345\n")
     hipcc = sdk / "bin" / "hipcc"
     hipcc.parent.mkdir()
     hipcc.write_text("#!/bin/sh\nexit 0\n")
@@ -49,6 +52,7 @@ def test_native_provider_returns_build_config_without_transform(tmp_path, monkey
     result = provider.configure(context)
     assert result.backend == "rocm"
     assert result.has_rocm and result.has_accelerator
+    assert result.resources["hip_version"] == "6.3.12345"
     assert result.nvcc_path == result.hipcc_path == str(hipcc)
     assert result.kernel_language == "hip"
     assert "-D__HIP_PLATFORM_AMD__" in shlex.split(result.cc_flags)
@@ -77,6 +81,28 @@ def test_runtime_dependency_is_required_and_paths_are_quoted(tmp_path):
     assert "-L" + str(sdk / "lib64") in flags
     assert "-Wl,-rpath," + str(sdk / "lib64") in flags
     assert "-lamdhip64" in flags
+
+
+def test_hip_version_requires_complete_unambiguous_sdk_metadata(tmp_path):
+    spec = importlib.util.spec_from_file_location("rocm_sdk_version", PROVIDER)
+    provider = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(provider)
+    with pytest.raises(RuntimeError, match="HIP version header is missing"):
+        provider._hip_sdk_version(tmp_path)
+    header = tmp_path / "include/hip/hip_version.h"
+    header.parent.mkdir(parents=True)
+    header.write_text("#define HIP_VERSION_MAJOR 7\n#define HIP_VERSION_MINOR 1\n")
+    with pytest.raises(RuntimeError, match="numeric HIP_VERSION_PATCH"):
+        provider._hip_sdk_version(tmp_path)
+    header.write_text(header.read_text() + "#define HIP_VERSION_PATCH unknown\n")
+    with pytest.raises(RuntimeError, match="numeric HIP_VERSION_PATCH"):
+        provider._hip_sdk_version(tmp_path)
+    header.write_text("#define HIP_VERSION_MAJOR 7 // major\n"
+                      "#define HIP_VERSION_MINOR 1\n#define HIP_VERSION_PATCH 12\n")
+    assert provider._hip_sdk_version(tmp_path) == "7.1.12"
+    header.write_text(header.read_text() + "#define HIP_VERSION_PATCH 13\n")
+    with pytest.raises(RuntimeError, match="one numeric HIP_VERSION_PATCH"):
+        provider._hip_sdk_version(tmp_path)
 
 
 def test_native_library_provider_rejects_unimplemented_miopen_and_rccl(tmp_path):

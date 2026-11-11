@@ -4,6 +4,7 @@ This provider owns the native HIP runtime, hipBLAS/rocPRIM/hipRAND libraries
 and FP32 inference kernels. MIOpen and RCCL are not provided.
 """
 import os
+import re
 import shlex
 import shutil
 from pathlib import Path
@@ -25,6 +26,23 @@ def _runtime_link_flags(home):
         "-L" + str(directory), "-Wl,-rpath," + str(directory), "-lamdhip64")) + " "
 
 
+def _hip_sdk_version(home):
+    header = Path(home) / "include" / "hip" / "hip_version.h"
+    if not header.is_file():
+        raise RuntimeError("ROCm HIP version header is missing: " + str(header))
+    source = header.read_text(encoding="utf-8")
+    parts = []
+    for name in ("MAJOR", "MINOR", "PATCH"):
+        values = re.findall(
+            r"^\s*#\s*define\s+HIP_VERSION_" + name
+            + r"\s+([0-9]+)\s*(?=$|//|/\*)", source, re.MULTILINE)
+        if len(values) != 1:
+            raise RuntimeError("ROCm HIP version header must define one numeric HIP_VERSION_"
+                               + name + ": " + str(header))
+        parts.append(str(int(values[0])))
+    return ".".join(parts)
+
+
 def configure(context: BuildContext) -> BuildConfig:
     config = context.config
     home = _rocm_home()
@@ -35,6 +53,7 @@ def configure(context: BuildContext) -> BuildConfig:
     include = os.path.join(home, "include")
     if not os.path.isdir(include):
         raise RuntimeError("ROCm development headers are missing: " + include)
+    hip_version = _hip_sdk_version(home)
     link_flags = _runtime_link_flags(home)
     root = Path(__file__).resolve().parent
     cuda_root = Path(backend_root(context.config.jittor_path, "cuda"))
@@ -47,7 +66,8 @@ def configure(context: BuildContext) -> BuildConfig:
         kernel_compile_flags=sdk_flags + " -x hip --gpu-max-threads-per-block=1024 -include hip/hip_runtime.h -I" + shlex.quote(str(cuda_root / "include")),
         backend_link_flags=config.backend_link_flags + link_flags,
         backend_sources=config.backend_sources + (BuildSource(str(runtime), language="hip", flags=flags),),
-        resources=dict(config.resources, rocm_home=home, rocm_runtime=runtime),
+        resources=dict(config.resources, rocm_home=home, rocm_runtime=runtime,
+                       hip_version=hip_version),
         environment=dict(config.environment, use_mkl="0"))
 
 
