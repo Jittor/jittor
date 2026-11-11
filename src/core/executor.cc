@@ -573,6 +573,20 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync, boo
     // has to be a lock. Explicit dynamic-input prerequisite submissions are
     // on this thread and pass straight through; constructors never submit.
     ExecutorEntryScope entry;
+    // A strong, nonblocking sync of successfully materialized roots has no
+    // work to submit. Optimizer stores repeatedly reach this case for both
+    // sides of an already completed storage-alias update. Keep the worker
+    // wait and entry lock above, but do not plan an empty batch or reset the
+    // pending-operator budget. Weak/device syncs, kept graphs and failures
+    // must still take their ordinary execution path.
+    if (!device_sync && !weak_sync && !may_defer && !keep_graph
+            && !graph_capture_active() && !vars.empty()
+            && std::all_of(vars.begin(), vars.end(), [](Var* v) {
+                return v->is_finished() && !v->flag(VarFlags::_kept)
+                    && !v->flag(VarFlags::_execution_failed) && v->num >= 0
+                    && (v->mem_ptr || !v->size);
+            }))
+        return;
     RematerializationExecutionScope rematerialization;
     StepTraceBatchScope trace_batch;
     exec_called ++;
