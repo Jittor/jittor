@@ -34,6 +34,29 @@ def test_elementwise_reduction_and_gradient():
     assert_device_value(gradient, [12.0, 20.0, 28.0])
 
 
+@pytest.mark.parametrize("values", [
+    [-9, 3, 2, -4],
+    [np.iinfo(np.int64).max - 2, 7, 0, 0],
+    [-9, 3, 2, -4] * 4097,
+])
+def test_signed_int64_sum(values):
+    raw = np.asarray(values, dtype="int64")
+    result = jt.array(raw, dtype="int64").sum()
+    assert str(result.dtype) == "int64"
+    assert_device_value(result, raw.sum(dtype=np.int64))
+    np.testing.assert_array_equal(result.numpy().reshape(-1), [raw.sum(dtype=np.int64)])
+
+
+@pytest.mark.parametrize("count", [4, 65, 1025])
+def test_fused_int64_mask_sum(count):
+    raw = np.arange(count, dtype="int64") % 3
+    # The same equality/cast/reduce used by batched generation's pad check.
+    result = (jt.array(raw, dtype="int64") == 0).int64().sum()
+    assert str(result.dtype) == "int64"
+    assert_device_value(result, np.count_nonzero(raw == 0))
+    np.testing.assert_array_equal(result.numpy().reshape(-1), [np.count_nonzero(raw == 0)])
+
+
 @pytest.mark.parametrize("width", [4, 1024])
 def test_embedding_gather_and_repeated_index_gradient(width):
     values = np.arange(16 * width, dtype="float32").reshape(16, width)
