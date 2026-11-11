@@ -908,6 +908,8 @@ def _to(self, *args, **kwargs):
     # device passed as a keyword (torch's .to(device=..., dtype=...))
     if "device" in kwargs:
         dev = kwargs["device"]
+        if _owner._is_index(dev):
+            dev = "cuda:%d" % int(dev)
     # Only the two keywords that can *carry* a device or a dtype join the
     # positional scan. Sweeping every keyword value into it dragged
     # `memory_format="contiguous_format"` through the string branch below,
