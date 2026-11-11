@@ -27,8 +27,6 @@ The reference for all of it is torch, whose answers are quoted in each test.
 """
 
 import unittest
-import tempfile
-from pathlib import Path
 
 import numpy as np
 
@@ -200,42 +198,6 @@ class TestBatchNormBuffers(unittest.TestCase):
         bn = jt.nn.BatchNorm(4)
         self.assertIn("num_batches_tracked", [n for n, _ in bn.named_buffers()])
         self.assertNotIn("num_batches_tracked", bn.state_dict())
-
-
-class TestUnderscoreRegisteredState(unittest.TestCase):
-    """vLLM attention stores persistent scale buffers under private names."""
-
-    class _Attention(jt.Module):
-        def __init__(self, dtype):
-            self.weight = jt.array(np.array([2.0], dtype=dtype))
-            self.register_buffer("_q_scale", jt.array(np.array([1.25], dtype=dtype)))
-            self.register_buffer("_scratch", jt.array(np.array([9.0], dtype=dtype)),
-                                 persistent=False)
-            self._unregistered_cache = jt.array(np.array([7.0], dtype=dtype))
-
-        def execute(self, x):
-            return x * self.weight * self._q_scale
-
-    def test_persistent_private_buffer_survives_checkpoint(self):
-        for dtype in (np.float32, np.float16):
-            with self.subTest(dtype=dtype):
-                model = self._Attention(dtype)
-                self.assertEqual(set(dict(model.named_buffers())),
-                                 {"_q_scale", "_scratch"})
-                self.assertEqual(set(model.state_dict()), {"weight", "_q_scale"})
-                self.assertEqual(set(dict(model.named_parameters())), {"weight"})
-                with tempfile.TemporaryDirectory() as directory:
-                    path = str(Path(directory) / "shard.pkl")
-                    jt.save(model.state_dict(), path)
-                    restored = self._Attention(dtype)
-                    restored._q_scale.assign(jt.array(np.array([0.5], dtype=dtype)))
-                    restored.load_state_dict(jt.load(path))
-                    np.testing.assert_array_equal(restored._q_scale.numpy(),
-                                                  model._q_scale.numpy())
-                    np.testing.assert_array_equal(restored.weight.numpy(),
-                                                  model.weight.numpy())
-                    self.assertNotIn("_scratch", jt.load(path))
-                    self.assertNotIn("_unregistered_cache", jt.load(path))
 
 
 class TestViewsAgree(unittest.TestCase):

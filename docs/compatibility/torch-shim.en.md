@@ -57,17 +57,6 @@ Set `JITTOR_TORCH_RUNTIME_ROOT` before starting the application when you need a 
 
 Compatibility bootstrap can discover source extensions and process them through Jittor-backed build interfaces. This does not imply that arbitrary PyTorch binary extensions can be loaded. Keep compiler output when a build fails and check the integration repository's extension requirements.
 
-## CPU NumPy views
-
-Integrations that pass a CPU tensor to a NumPy `out=` argument can use the public `jittor.compat.torch.numpy_interop.numpy_view(tensor)` API. It returns a writable view of the current CPU allocation without copying, and the array retains ownership of that allocation. Device tensors and tensors requiring gradients raise an error; the API does not transfer or detach them. After tensor storage is replaced, an old view still refers to the old allocation, so callers must obtain a new view. The API does not promise that a view will track later tensor writes or storage replacements.
-
-```python
-from jittor.compat.torch.numpy_interop import numpy_view
-
-out = numpy_view(cpu_tensor)
-numpy_operation(..., out=out)
-```
-
 ## Downstream adapters
 
 Install the integration you need using its [JittorEcosystem](https://github.com/JittorEcosystem) repository's instructions. Each repository maintains version constraints and device support. Installing an adapter does not establish support for every library feature.
