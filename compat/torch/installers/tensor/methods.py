@@ -257,7 +257,8 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     _NativeVar = _owner.jt.Var
     _install_expand_shape_adapter(Var)
     _install_expand_as_grad_adapter(Var)
-    _native_operators = {name: getattr(Var, name, None) for name in _BINARY_APIS}
+    _native_operators = {name: getattr(Var, name, None)
+                         for name in (*_BINARY_APIS, '__ne__')}
     _bind_native_binary(_owner.jt, _native_operators, _owner._mark_cpu_like)
 
     if _jittor_dtype_name(_DTYPE_OBJS) is not None and not getattr(Var, "_dtype_wrapped", False):

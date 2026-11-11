@@ -552,31 +552,40 @@ def _torch_ne(input, other):
         # ne(x, x) is exactly isnan(x) for a real tensor, including infinities
         # and signed zeros. Reuse the canonical device predicate instead of
         # building subtraction and duplicate NaN-classification graphs.
-        # Storage aliases with different Python holders keep the path below.
+        # Other holders use the native elementwise comparison below.
         with _new_scope(input, None):
             return _owner.jt.isnan(input)
-    a = input if isinstance(input, _NativeVar) else _owner.jt.array(input)
+    # Arithmetic emulation overflows at the minimum signed integer and
+    # allocates intermediate scalar tensors. The native predicate compares
+    # values directly, retaining its frontend and placement policies.
+    if type(other) in (bool, int, float) and other == 0:
+        # Zero is exact in every numeric dtype; no promoted scalar is needed
+        # for the truth conversion used by all/any and mask construction.
+        return _binary_native('__ne__', input, other)
+    context = get_install_context(_owner.jt)
+    dtype = _owner._dtype_to_str(context.target_namespace.result_type(input, other))
+    a = input
     if isinstance(other, _NativeVar):
         b = other
-    elif isinstance(input, _NativeVar):
-        # A scalar belongs to this operand, even inside a model running under
-        # another construction device. Keep array's existing dtype inference.
-        with _new_scope(input, None):
-            b = _owner.jt.array(other)
+        # Torch permits a CPU scalar tensor beside an accelerator tensor.
+        if a.device != b.device and (a.ndim == 0 or b.ndim == 0):
+            if a.ndim == 0 and b.ndim != 0:
+                a = a.to(device=b.device)
+            elif b.ndim == 0 and a.ndim != 0:
+                b = b.to(device=a.device)
     else:
-        b = _owner.jt.array(other)
-    if _jittor_dtype_name(a.dtype) == "bool":
-        a = a.int32()
-    if isinstance(b, _NativeVar) and _jittor_dtype_name(b.dtype) == "bool":
-        b = b.int32()
-    diff = (a - b).abs()
-    out = diff > 0
-    if "float" in _jittor_dtype_name(a.dtype) or (isinstance(b, _NativeVar) and "float" in _jittor_dtype_name(b.dtype)):
-        try:
-            out = out | _owner.jt.isnan(a) | _owner.jt.isnan(b)
-        except _owner.EXPECTED as exc:
-            _owner.swallowed("torch/installers/tensor.py _torch_ne: out = out | jt.isnan(a) | jt.isnan(b)", exc)
-    return out
+        with _new_scope(input, None):
+            if isinstance(other, (int, _owner.np.integer)) and not isinstance(other, bool):
+                # Cast an exact integer tensor to retain Torch's wrapping
+                # scalar conversion for narrow integer operands.
+                b = _owner.jt.array(int(other))
+            else:
+                b = _owner.jt.array(other, dtype=dtype)
+    if _jittor_dtype_name(a.dtype) != dtype:
+        a = a.cast(dtype)
+    if _jittor_dtype_name(b.dtype) != dtype:
+        b = b.cast(dtype)
+    return _binary_native('__ne__', a, b, context.state["tensor_native_api"])
 
 
 def _nonzero(self, as_tuple=False, **kw):
