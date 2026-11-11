@@ -231,6 +231,35 @@ struct CodeOp : Op {
     // @attrs(multiple_outputs)
     CodeOp(vector<NanoVector>&& shapes, vector<NanoString>&& dtypes, vector<Var*>&& inputs={}, string&& cpu_src="", vector<string>&& cpu_grad_src={}, string&& cpu_header="", string&& cuda_src="", vector<string>&& cuda_grad_src={}, string&& cuda_header="");
 
+    /* Explicit-output form: the kernel writes into the given output Vars.
+
+    The outputs are passed in and keep their own storage, shapes and dtypes;
+    nothing is allocated for them. Each output must own writable storage that
+    matches its shape -- a broadcast or a strided view whose storage is
+    smaller than its shape cannot be written.
+
+    The outputs are ordinary Vars, so the write is tracked by the graph:
+    operations created afterwards that read them see the new values, and a
+    second call accumulates on the first. Elements the kernel does not write
+    keep their previous values.
+
+    The kernel is one launch, so it may read and write the same buffer only
+    when the regions are disjoint: no thread may read a region another
+    thread writes in the same launch. An input and an output may share a Var
+    as long as every thread keeps its reads out of the written regions.
+
+    Returns the same output Vars, in order.
+
+    Example::
+
+        cache = jt.array(np.zeros((4, 8), dtype="float32"))
+        row = jt.array(np.ones(8, dtype="float32"))
+        with jt.flag_scope(use_cuda=0):
+            jt.code([row], [cache], cpu_src="""
+                for (int i=0; i<in0_shape0; ++i) @out0(2,i) = @in0(i);
+            """)
+        # cache[2] is now one, the other rows are still zero
+    */
     // @attrs(multiple_outputs,replace_outputs)
     CodeOp(vector<Var*>&& inputs, vector<Var*>&& outputs, string&& cpu_src="", vector<string>&& cpu_grad_src={}, string&& cpu_header="", string&& cuda_src="", vector<string>&& cuda_grad_src={}, string&& cuda_header="");
 
