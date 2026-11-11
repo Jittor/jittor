@@ -506,6 +506,10 @@ def activate_bridge(real=None):
         orig_run = JF.run
 
         def _bridge_run(self, *args, grid=None, warmup=False, **kwargs):
+            # Triton warmup compiles and returns a kernel without launching it.
+            # Its CPU/mock pointer operands must not enter the CUDA launcher.
+            if warmup:
+                return orig_run(self, *args, grid=grid, warmup=warmup, **kwargs)
             if _args_have_jittor_var(args, kwargs):
                 return backend.run(self, args, kwargs, grid)
             return orig_run(self, *args, grid=grid, warmup=warmup, **kwargs)
