@@ -2223,6 +2223,56 @@ def _api_normal(self, mean=0.0, std=1.0, generator=None):
     return _random_inplace(self, _normal_values, mean, std, generator=generator)
 
 
+def _bernoulli_values(tensor, p=0.5, generator=None):
+    """Adapt Bernoulli probabilities to the existing device RNG and writer."""
+    from jittor._core.var import device_scope_like
+    dtype = _jittor_dtype_name(tensor.dtype)
+    floating = ("float16", "bfloat16", "float32", "float64")
+    if dtype.startswith("complex"):
+        raise RuntimeError("bernoulli_ requires a real or integral tensor")
+    probability_tensor = isinstance(p, _NativeVar)
+    if probability_tensor:
+        probability_dtype = _jittor_dtype_name(p.dtype)
+        if probability_dtype not in floating:
+            raise RuntimeError("bernoulli_ probability tensor must have a floating dtype")
+        if p.device != tensor.device:
+            raise RuntimeError("bernoulli_ probability and output must use the same device")
+        compute_dtype = "float64" if probability_dtype == "float64" else "float32"
+    else:
+        if not isinstance(p, _owner.numbers.Real):
+            raise TypeError("bernoulli_ expects a probability number or Tensor")
+        p = float(p)
+        if not 0.0 <= p <= 1.0:
+            raise RuntimeError("bernoulli_ expects p to be in [0, 1], but got p=%s" % p)
+        compute_dtype = "float64" if dtype == "float64" else "float32"
+    target = get_install_context(_owner.jt).target_namespace
+    with device_scope_like(tensor), _owner.jt.no_grad():
+        probabilities = p.broadcast(tensor.shape) if probability_tensor else p
+        if probability_tensor and bool(((probabilities < 0) | (probabilities > 1)
+                                       | _owner.jt.isnan(probabilities)).any().item()):
+            raise RuntimeError("bernoulli_ expects p to be in [0, 1]")
+        uniform = target.rand(tuple(tensor.shape), dtype=compute_dtype,
+                              device=tensor.device, generator=generator)
+        # CPU uniform draws can include 0, cuRAND draws can include 1. Both
+        # probability endpoints are exact while still consuming the RNG draw.
+        if probability_tensor:
+            value = (uniform < probabilities) | (probabilities == 1)
+        else:
+            value = uniform <= 1 if p == 1 else uniform < p
+        value = value.cast(dtype)
+    if (probability_tensor and dtype in floating and p.requires_grad
+            and not _owner.jt.flags.no_grad):
+        with device_scope_like(tensor), _owner.jt.no_grad():
+            mask = _owner.jt.zeros(tensor.shape, "bool")
+        # Sampling has a zero derivative, including through broadcast p.
+        value = _owner.jt.ternary(mask, p.broadcast(tensor.shape), value).cast(dtype)
+    return value
+
+
+def _api_bernoulli(self, p=0.5, *, generator=None):
+    return _random_inplace(self, _bernoulli_values, p, generator=generator)
+
+
 def _random_integer_values(tensor, low=None, high=None, generator=None):
     """Draw Torch random_ integers on the destination tensor's device."""
     dtype = _jittor_dtype_name(tensor.dtype)
