@@ -1101,34 +1101,26 @@ def _module_half(self):
 # torch's zero_grad() clears each param's .grad so the next backward starts
 # fresh; the optimizer-free backward path accumulates with += (matching
 # torch), so a real reset is required. The prior no-op left grads silently
-# accumulating across steps. Clear the torch-exposed grad and, when an
-# optimizer is bridged, delegate to its zero_grad as well.
+# accumulating across steps. Clear only this module's parameters; an
+# optimizer can also own parameters belonging to other modules.
 def _zero_grad(self, set_to_none=True):
     """Torch's ``zero_grad``: a real reset, honoring ``set_to_none``.
 
     ``set_to_none=False`` must leave ``.grad`` as an all-zero tensor of the same
-    shape and dtype, which is what torch 2.12.1 does. Dropping it to None
+    shape and dtype. Dropping it to None
     instead is silently wrong rather than loud: gradient clipping and gradient
     accumulation are both written as ``if p.grad is not None``, so every
     parameter gets skipped and no error is ever raised.
     """
-    # The bridged optimizer runs first: its zero_grad clears the torch-visible
-    # .grad as a side effect, so doing it afterwards would undo the zero tensors
-    # that set_to_none=False is required to leave behind.
-    from ...tensor_state import latest_optimizer
-    opt = latest_optimizer(jt)
-    if opt is not None:
-        try:
-            opt.zero_grad()
-        except EXPECTED as exc:
-            swallowed("torch/installers/nn.py _zero_grad: opt.zero_grad()", exc)
     try:
         pending = []
         for p in self.parameters():
             grad = getattr(p, "_torch_grad", None)
             if set_to_none:
                 if grad is not None:
-                    object.__setattr__(p, "_torch_grad", None)
+                    # The setter clears this parameter's slots in every
+                    # owning optimizer, without touching unrelated gradients.
+                    p.grad = None
             elif grad is not None:
                 # In place, so ``.grad`` stays the *same object* the way torch
                 # leaves it: torch's ``zero_grad(set_to_none=False)`` zeroes the
