@@ -39,6 +39,13 @@ struct SharedAllocator final : Allocator {
         return wrapped_name.c_str();
     }
     bool can_share() const override { return true; }
+    size_t allocation_nbytes(size_t allocation) override {
+        if (!allocation) return 0;
+        std::lock_guard<std::recursive_mutex> lock(mutex);
+        auto it = blocks.find(allocation);
+        CHECK(it != blocks.end()) << "Unknown shared allocation";
+        return it->second.size;
+    }
 
     void* alloc(size_t size, size_t& allocation) override {
         std::lock_guard<std::recursive_mutex> lock(mutex);

@@ -198,6 +198,7 @@ struct SFRLAllocator : Allocator {
     void gc() override;
     virtual bool share_with(size_t size, size_t allocation, size_t offset) override;
     bool can_share() const override { return true; }
+    size_t allocation_nbytes(size_t allocation) override;
 };
 
 DECLARE_FLAG(int, use_sfrl_allocator);

@@ -87,12 +87,12 @@ def test_a_storage_serves_a_shard_at_a_nonzero_offset():
                 tuple(shard.shape), tuple(shard.stride()))
             np.testing.assert_array_equal(restored.float().numpy(),
                                           shard.float().numpy())
-    # A strided shard has no physical byte range, so it is refused rather than
-    # packed at positions a later strided read does not look at.
+    # A strided shard retains the complete physical allocation too; reading its
+    # storage must include all members, rather than pack only visible values.
     strided = big.reshape(-1)[1::2]
-    with pytest.raises(ValueError, match="set_"):
-        storage = strided.untyped_storage()
-        torch.empty(0, dtype=torch.uint8).set_(storage, 0, (storage.nbytes(),), (1,))
+    storage = strided.untyped_storage()
+    image = torch.empty(0, dtype=torch.uint8).set_(storage, 0, (storage.nbytes(),), (1,))
+    np.testing.assert_array_equal(image.numpy(), big.reshape(-1).numpy())
 
 
 @pytest.mark.cpu
@@ -131,17 +131,7 @@ def test_a_view_with_no_elements_fits_any_tensor():
 
 @pytest.mark.cpu
 def test_a_shard_reads_back_from_the_storage_that_carries_it():
-    """`set_(storage, offset, ...)` addresses bytes the *carrier* actually holds.
-
-    `storage_offset()` counts from the allocation's origin and `nbytes()` now
-    reaches from that origin too, but the bytes behind the storage object are
-    only the carrier tensor's own -- they begin at `storage_offset()`, not at
-    the origin. Slicing them with an origin-relative address is off by exactly
-    that offset, so re-reading a fused weight's tail from its own storage (what
-    `PinnedModuleStager` does for every member) sliced past the end: an empty
-    segment, then a gather of 64 indices into 0 elements, which is the
-    out-of-bounds device read this file's other tests exist to refuse.
-    """
+    """Origin-relative byte reads may address any retained allocation member."""
     for dtype in (torch.float32, torch.bfloat16, torch.uint8):
         big = torch.arange(128, dtype=torch.float32).to(dtype).reshape(16, 8)
         for shard in (big[:8], big[8:]):
@@ -151,13 +141,11 @@ def test_a_shard_reads_back_from_the_storage_that_carries_it():
                 tuple(shard.stride()))
             np.testing.assert_array_equal(back.float().numpy(),
                                           shard.float().numpy())
-    # The rest of the allocation has no Python handle here, so a request for
-    # bytes outside the carrier is refused rather than answered with the
-    # carrier's own bytes read at the wrong place.
+    # The tail's storage can read the first member as well as the tail itself.
     tail = big[8:]
-    with pytest.raises(ValueError, match="set_"):
-        torch.empty(0, dtype=big.dtype).set_(
-            tail.untyped_storage(), 0, (8, 8), (8, 1))
+    first = torch.empty(0, dtype=big.dtype).set_(
+        tail.untyped_storage(), 0, (8, 8), (8, 1))
+    np.testing.assert_array_equal(first.numpy(), big[:8].numpy())
 
 
 def test_contiguous_storage_and_gradient_cpu():

@@ -58,6 +58,13 @@ struct Allocator {
     // Asked *before* anything is moved, because a migration that cannot keep
     // a share group together has to be decided on, not discovered halfway.
     inline virtual bool can_share() const { return false; };
+    // Exact live storage extent requested by the original caller, excluding
+    // pool alignment and backend padding. Views retain this allocation token,
+    // so neither their current span nor the set of live Vars defines capacity.
+    virtual size_t allocation_nbytes(size_t allocation) {
+        CHECK(false) << "Allocator does not expose storage extent:" << name();
+        return 0;
+    }
     inline virtual ~Allocator() {}
 };
 

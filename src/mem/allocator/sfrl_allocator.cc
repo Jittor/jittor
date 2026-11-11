@@ -771,6 +771,11 @@ void sfrl_fence_capture(vector<Allocation>& held) {
         allocator->fence_capture(held);
 }
 
+size_t SFRLAllocator::allocation_nbytes(size_t allocation) {
+    std::lock_guard<std::recursive_mutex> lock(mutex);
+    return id_space.get_occupied(allocation)->requested;
+}
+
 bool SFRLAllocator::share_with(size_t size, size_t allocation, size_t offset) {
     std::unique_lock<std::recursive_mutex> lock(mutex);
     auto* block = id_space.get_occupied(allocation);
