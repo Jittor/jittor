@@ -217,3 +217,59 @@ class TestNativeCollectives(unittest.TestCase):
         for gradient, coefficient in zip(gradients, (2, 3)):
             expected = coefficient*world if rank == source else 0
             np.testing.assert_array_equal(gradient.numpy(), np.full(gradient.shape, expected))
+
+    @jt.flag_scope(use_cuda=1, use_parallel_op_compiler=0, backend_fallback="error")
+    def test_boolean_broadcast_from_each_source(self):
+        from jittor import distributed as dist
+        rank, world = int(jt.rank), int(jt.world_size)
+        before = jt.core.backend_fallback_count()
+        for source in (0, world-1):
+            for iteration in range(3):
+                data = (np.arange(12).reshape(3, 4)+rank+iteration) % 3 == 0
+                value = jt.array(data).cuda(0).stop_grad()
+                output = dist.broadcast(value, src=source)
+                self.assertEqual(str(output.dtype), 'bool')
+                expected = (np.arange(12).reshape(3, 4)+source+iteration) % 3 == 0
+                np.testing.assert_array_equal(output.numpy(), expected)
+        self.assertEqual(jt.core.backend_fallback_count(), before)
+
+    @jt.flag_scope(use_cuda=1, use_parallel_op_compiler=0, backend_fallback="error")
+    def test_grouped_boolean_broadcast_mixed_empty_and_graph_replay(self):
+        ops = jt.compile_extern.nccl_ops
+        rank, world = int(jt.rank), int(jt.world_size)
+        source = world-1
+        before = jt.core.backend_fallback_count()
+
+        def step(mask, value, empty):
+            return tuple(ops.nccl_broadcast_many([mask, value+1, empty], source))
+
+        runner = jt.capture_step(step)
+        retained = []
+        for iteration in range(8):
+            data = (np.arange(12).reshape(3, 4)+rank+iteration) % 3 == 0
+            mask = jt.array(data).cuda(0).stop_grad()
+            value = jt.full((4,), rank+iteration, dtype='float32').cuda(0).stop_grad()
+            empty = jt.empty((0,), dtype='bool').cuda(0).stop_grad()
+            retained.append((iteration, runner(mask, value, empty)))
+        for iteration, (mask, value, empty) in retained:
+            self.assertEqual(str(mask.dtype), 'bool')
+            self.assertEqual(str(empty.dtype), 'bool')
+            self.assertEqual(empty.numel(), 0)
+            expected = (np.arange(12).reshape(3, 4)+source+iteration) % 3 == 0
+            np.testing.assert_array_equal(mask.numpy(), expected)
+            np.testing.assert_array_equal(value.numpy(), np.full((4,), source+iteration+1))
+        self.assertIsNone(runner.refused)
+        self.assertIsNone(runner._graph_refused)
+        self.assertGreater(runner.stats['graph'], 0)
+        self.assertEqual(jt.core.backend_fallback_count(), before)
+
+    @jt.flag_scope(use_cuda=1, use_parallel_op_compiler=0, backend_fallback="error")
+    def test_boolean_sum_is_not_enabled_by_byte_copy_broadcast(self):
+        ops = jt.compile_extern.nccl_ops
+        value = jt.array([True, False]).cuda(0).stop_grad()
+        with self.assertRaisesRegex(RuntimeError, 'NCCL collectives do not support dtype bool'):
+            output, = ops.nccl_all_reduce_many([value])
+            output.sync()
+        # Rejection happens before a collective group is opened.
+        value = jt.full((2,), int(jt.rank)+1., dtype='float32').cuda(0)
+        np.testing.assert_array_equal(ops.nccl_broadcast(value, 0).numpy(), [1., 1.])
