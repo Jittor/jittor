@@ -1082,7 +1082,10 @@ bool try_ordered_unaliased_inplace(PyObject* self, PyObject* value) {
     Var* a = target->var;
     Var* b = GET_RAW_PTR(VarHolder, value)->var;
     NanoString dtype = a->dtype();
-    if (dtype != ns_float32 && dtype != ns_float16 && dtype != ns_bfloat16) return false;
+    // WriteBack orders and copies storage without floating-point arithmetic.
+    // Integer updates need the same alias/version guards, not a global drain.
+    if (dtype != ns_float32 && dtype != ns_float16 && dtype != ns_bfloat16
+            && dtype != ns_int32 && dtype != ns_int64) return false;
     if (a == b || !a->mem_ptr || !a->is_finished() || !a->allocator
             || !a->allocator->is_cuda() || target->view || target->views
             || a->share_src || a->liveness.forward.count() != 1
