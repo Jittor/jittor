@@ -72,3 +72,25 @@ def test_adam_observes_shape_overrides_after_validation_warms(device, override):
     with patch, pytest.raises(ShapeError, match="live shape override"):
         optimizer.step()
     np.testing.assert_array_equal(param.detach().cpu().numpy(), np.full((2, 3), .125))
+
+
+def test_adam_rechecks_live_shapes_before_and_after_state_initialization(device):
+    param = torch.nn.Parameter(torch.full((2, 3), .125, device=device))
+    optimizer = torch.optim.AdamW([param], lr=1e-4)
+    # A same-size reshard before the first update must rebuild the empty state.
+    param.data = torch.full((3, 2), .125, device=device)
+    param.grad = torch.full_like(param, .01)
+    optimizer.step()
+    state = optimizer.state[param]
+    assert tuple(state["exp_avg"].shape) == (3, 2)
+    assert tuple(state["exp_avg_sq"].shape) == (3, 2)
+    assert int(state["step"].item()) == 1
+    np.testing.assert_allclose(param.detach().cpu().numpy(), .124899875,
+                               rtol=1e-5, atol=1e-7)
+    # A later layout change must fail, retaining the preceding moments/counter.
+    param.data = torch.full((6,), .25, device=device)
+    param.grad = torch.full_like(param, .01)
+    with pytest.raises(RuntimeError, match="shape changed after optimizer state"):
+        optimizer.step()
+    assert int(optimizer.state[param]["step"].item()) == 1
+    np.testing.assert_array_equal(param.detach().cpu().numpy(), np.full((6,), .25))

@@ -26,16 +26,25 @@ def _class_descriptor(cls, name):
     return None
 
 
+def _adam_native_metadata_types():
+    if type(_NATIVE_SHAPE) is not GetSetDescriptorType:
+        return ()
+    frontend = get_install_context(jt).target_namespace
+    return tuple(
+        cls for cls in (jt.core.Var, frontend.Tensor, frontend.nn.Parameter)
+        if _class_descriptor(cls, "shape") is _NATIVE_SHAPE
+        and _class_descriptor(cls, "__getattribute__") is _NATIVE_GETATTRIBUTE
+    )
+
+
 def _adam_state_shape_changes(params, moments, variances):
-    """Check current shapes without constructing tuples for canonical tensors."""
-    native_types = ()
-    if type(_NATIVE_SHAPE) is GetSetDescriptorType:
-        frontend = get_install_context(jt).target_namespace
-        native_types = tuple(
-            cls for cls in (jt.core.Var, frontend.Tensor, frontend.nn.Parameter)
-            if _class_descriptor(cls, "shape") is _NATIVE_SHAPE
-            and _class_descriptor(cls, "__getattribute__") is _NATIVE_GETATTRIBUTE
-        )
+    """Check current shapes without publishing per-tensor Python shapes."""
+    native_types = _adam_native_metadata_types()
+    if native_types:
+        changes = jt.core._try_optimizer_shape_changes(
+            params, moments, variances, native_types)
+        if changes is not None:
+            return changes
     resized = []
     for index, param in enumerate(params):
         if index >= len(moments) or index >= len(variances):

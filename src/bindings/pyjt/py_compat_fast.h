@@ -29,6 +29,13 @@ PyObject* grad_optional_prepare(VarHolder* loss,
 // @pyjt(_try_optimizer_copies)
 bool try_optimizer_copies(PyObject* targets, PyObject* values);
 
+// Read current canonical holder metadata as one batch. None leaves observable
+// Python descriptors, subclasses and container iteration to the caller.
+// @pyjt(_try_optimizer_shape_changes)
+PyObject* try_optimizer_shape_changes(PyObject* params, PyObject* moments,
+    PyObject* variances, PyObject* canonical_types);
+
+
 // A fresh, unallocated cuBLAS result with no aliases or other readers can be
 // replaced by an independent copy of its binary update. False retains the
 // imperative store. No tensor, graph or execution plan is cached.

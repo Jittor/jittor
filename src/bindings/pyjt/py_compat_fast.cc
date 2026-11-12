@@ -104,6 +104,55 @@ bool try_optimizer_copies(PyObject* targets, PyObject* values) {
 }
 
 namespace {
+bool canonical_optimizer_holder(PyObject* value, PyObject* types) {
+    if (!PyTuple_CheckExact(types)) return false;
+    for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(types); ++i)
+        if ((PyObject*)Py_TYPE(value) == PyTuple_GET_ITEM(types, i))
+            return PyObject_TypeCheck(value, &PyjtVarHolder.ht_type);
+    return false;
+}
+
+PyObject* no_optimizer_metadata_batch() { Py_RETURN_NONE; }
+
+void append_optimizer_index(PyObject* result, Py_ssize_t index) {
+    PyObjHolder item(PyLong_FromSsize_t(index));
+    if (!item.obj || PyList_Append(result, item.obj) < 0)
+        throw std::runtime_error("could not publish optimizer metadata indices");
+}
+}
+
+PyObject* try_optimizer_shape_changes(PyObject* params, PyObject* moments,
+    PyObject* variances, PyObject* canonical_types) {
+    if ((!PyList_CheckExact(params) && !PyTuple_CheckExact(params))
+            || !PyList_CheckExact(moments)
+            || !PyList_CheckExact(variances)) return no_optimizer_metadata_batch();
+    auto parameter = [&](Py_ssize_t i) {
+        return PyTuple_CheckExact(params) ? PyTuple_GET_ITEM(params, i)
+                                         : PyList_GET_ITEM(params, i);
+    };
+    auto count = std::min(PyTuple_CheckExact(params) ? PyTuple_GET_SIZE(params)
+                                                   : PyList_GET_SIZE(params),
+        std::min(PyList_GET_SIZE(moments), PyList_GET_SIZE(variances)));
+    // Validate before reading anything. A Python-owned shape must be observed
+    // only by the original loop, including when it is in a later slot.
+    for (Py_ssize_t i = 0; i < count; ++i) {
+        if (!canonical_optimizer_holder(parameter(i), canonical_types)
+                || !canonical_optimizer_holder(PyList_GET_ITEM(moments, i), canonical_types)
+                || !canonical_optimizer_holder(PyList_GET_ITEM(variances, i), canonical_types))
+            return no_optimizer_metadata_batch();
+    }
+    PyObjHolder result(PyList_New(0));
+    for (Py_ssize_t i = 0; i < count; ++i) {
+        const auto& shape = GET_RAW_PTR(VarHolder, parameter(i))->var->shape;
+        if (shape != GET_RAW_PTR(VarHolder, PyList_GET_ITEM(moments, i))->var->shape
+                || shape != GET_RAW_PTR(VarHolder, PyList_GET_ITEM(variances, i))->var->shape)
+            append_optimizer_index(result.obj, i);
+    }
+    return result.release();
+}
+
+
+namespace {
 // Per frontend type: its dtype table, and the entries already looked up by
 // native name. Dropped when the type is collected.
 struct DtypeTable {
