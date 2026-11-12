@@ -91,27 +91,6 @@ def unique(
     from jittor.backends.cuda.kernels.misc import tensor_ops as _cuda_tensor_ops
     import jittor as jt
 
-    # The unique implementation is a jt.code kernel with a host comparator; it
-    # has no ACL variant, so a device input reaches a CPU-only op and jittor
-    # refuses the mixed placement ("Expected all tensor inputs on the same
-    # backend and device for code"). Unique inputs are small (timesteps,
-    # indices); compute on the host and move the answers back, which is also
-    # what torch reports (same device, same values).
-    try:
-        on_device = int(getattr(input, "device_id", -1)) >= 0
-    except Exception:
-        on_device = False
-    if on_device:
-        result = unique(input.cpu(), sorted=sorted, return_inverse=return_inverse,
-                        return_counts=return_counts, dim=dim)
-
-        def _back(value):
-            return value.to(input.device_id) if isinstance(value, Var) else value
-
-        if isinstance(result, tuple):
-            return tuple(_back(value) for value in result)
-        return _back(result)
-
     # One implementation, every dtype, both devices. There used to be four
     # arms here: the native int32 CUDA kernel; "cast to int32 and recurse" for
     # integers that fit; `flag_scope(use_cuda=0)` -- compute the whole thing on
