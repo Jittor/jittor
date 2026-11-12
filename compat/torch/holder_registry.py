@@ -16,6 +16,12 @@ class HolderRegistry(dict):
 
     def __setitem__(self, key, value):
         if getattr(type(value), "_frontend_backend", None) is not None:
+            # Publishing the same live identity needs no new cleanup callback.
+            # Custom keys and weakref creators retain their existing protocol.
+            if type(key) is int and weakref.ref is weakref.ReferenceType:
+                previous = dict.get(self, key)
+                if type(previous) is weakref.ReferenceType and previous() is value:
+                    return
             registry = weakref.ref(self)
 
             def expired(reference):

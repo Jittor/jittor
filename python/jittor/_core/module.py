@@ -135,11 +135,16 @@ def _walk(module, recurse=True, memo=None):
             continue
         yield prefix, current
         if descend:
+            child_pairs = children(current)
+            if type(child_pairs) is list and not child_pairs:
+                del child_pairs
+                continue
             dot = prefix + "." if prefix else ""
             ancestors.add(id(current))
             todo.append(("", current, None))
-            for key, child in reversed(children(current)):
+            for key, child in reversed(child_pairs):
                 todo.append((dot + str(key), child, True))
+            del child_pairs
 
 
 def _walk_by_dfs(module, prefix, recurse):
