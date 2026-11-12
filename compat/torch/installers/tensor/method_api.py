@@ -295,17 +295,6 @@ def _copy_detached_storage(self, value):
         # storage at its boundary. Executing a store here would run part of
         # the step before that transaction can accept or refuse the graph.
         return False
-    from jittor._runtime import graph_replay as _graph_replay
-    if getattr(_graph_replay._capture_state, "stack", ()):
-        # A replay capture traces this call to record it, not to run it.  The
-        # host sync below executes the partially recorded graph, and every
-        # in-place update re-executes everything traced so far: a second
-        # MiniMax-H3 request spent minutes inside the BigVGAN capture on
-        # ``xs += resblock(...)``.  The storage write an alias depends on
-        # cannot be replayed either, so keep the graph write and have the
-        # capture refused.
-        _graph_replay.graph_replay_barrier("in-place storage write")
-        return False
     if self.numel():
         # Establish the destination before a storage-preserving write. A
         # pending view may already alias a materialized base; graph rebinding

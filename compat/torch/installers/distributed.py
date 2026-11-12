@@ -258,10 +258,7 @@ def _opaque_for_graph_replay(name):
     the all-reduce).  Marking the capture refused makes the encoder run
     eagerly, which is what actually happens across ranks anyway.
     """
-    try:
-        from jittor._runtime.graph_replay import graph_replay_barrier
-    except Exception:
-        return
+    from jittor._runtime.graph_replay import graph_replay_barrier
     graph_replay_barrier(name + " is a host-visible collective")
 
 
@@ -273,12 +270,10 @@ def _copy_tensor(dst, src):
     # must not create an autograd in-place operation.
     with jt.no_grad():
         if isinstance(dst, jt.Var) and dst._storage_is_contiguous():
-            # Resolve only the two Vars this copy reads and overwrites.  A
-            # full ``sync_all`` here waited for every queued operator in the
-            # process -- measured on MiniMax-H3, 390 collectives per request
-            # serialized the DiT step behind 3.8 s of unrelated work.
-            src.sync(False, False)
-            dst.sync(False, False)
+            # Resolve pending readers of the old storage before overwriting
+            # it. Synchronizing only src/dst leaves lazy clone snapshots
+            # reading the new collective value instead of their original one.
+            jt.sync_all()
             try:
                 dst._copy_into(src)
             except jt.JittorError as exc:
@@ -288,7 +283,9 @@ def _copy_tensor(dst, src):
                 # eager call -- where ``dst`` does have its buffer -- is what
                 # supplies the returned value; rebinding here just lets the
                 # traced call finish instead of raising through capture.
-                if "needs an allocated tensor" not in str(exc):
+                from jittor._runtime import graph_replay
+                if (not getattr(graph_replay._capture_state, "stack", ())
+                        or "needs an allocated tensor" not in str(exc)):
                     raise
                 dst.update(src)
         elif hasattr(dst, "update"):

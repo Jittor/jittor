@@ -92,9 +92,10 @@ def _jt_chain_environment_sitecustomize():
     # Only chain once per process: importing the environment sitecustomize
     # imports torch, the shim bootstrap can execute this file again, and the
     # chain would re-enter the module that is still initializing.
-    if _os.environ.get("_JT_ENV_SITECUSTOMIZE_CHAIN") == "1":
+    # Interpreter-local: an environment marker would also disable the hook
+    # in every spawned Python worker inheriting the parent's environment.
+    if "_jt_env_sitecustomize" in _sys.modules:
         return
-    _os.environ["_JT_ENV_SITECUSTOMIZE_CHAIN"] = "1"
     here = _os.path.abspath(__file__)
     entries = _os.environ.get("PYTHONPATH", "").split(_os.pathsep)
     for entry in entries:
@@ -108,11 +109,7 @@ def _jt_chain_environment_sitecustomize():
             continue
         _mod = _iu.module_from_spec(spec)
         _sys.modules["_jt_env_sitecustomize"] = _mod
-        try:
-            spec.loader.exec_module(_mod)
-        except Exception as _exc:  # pragma: no cover - diagnostics only
-            print("jittor-torch-shim: environment sitecustomize %s failed: %r"
-                  % (candidate, _exc), file=_sys.stderr)
+        spec.loader.exec_module(_mod)
         return
 
 _jt_chain_environment_sitecustomize()
