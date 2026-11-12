@@ -339,6 +339,11 @@ def to_pil_image(pic, mode=None):
     if mode is None:
         raise TypeError('Input type {} is not supported'.format(_jittor_dtype_name(npimg.dtype)))
 
+    if mode == 'I;16':
+        # This mode preserves the original 16-bit pixel representation. Newer
+        # Pillow versions reject reinterpreting a signed array via fromarray.
+        pixels = npimg.astype('<u2', copy=False).tobytes()
+        return Image.frombytes(mode, (npimg.shape[1], npimg.shape[0]), pixels)
     return Image.fromarray(npimg, mode=mode)
 
 
