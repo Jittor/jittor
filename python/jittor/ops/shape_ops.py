@@ -221,14 +221,15 @@ def flip(x, dim=0, dims=None):
                     dim[i], x.ndim
                 )
             )
-    from .._runtime.dispatch import dispatch_context
-    if len(dim) > 1 and dispatch_context(x).backend == "acl":
-        # The ACL flip kernel handles one axis per launch; passing the whole
-        # list silently flipped only the last axis, so ``flip(2, 3)`` left
-        # dim 2 unchanged. Keep the fused CPU/CUDA path unchanged.
-        for axis in dict.fromkeys(dim):
-            x = flip(x, axis)
-        return x
+    if len(dim) > 1:
+        from .._runtime.dispatch import dispatch_context
+        if dispatch_context(x).backend == "acl":
+            # The ACL flip kernel handles one axis per launch; passing the whole
+            # list silently flipped only the last axis, so ``flip(2, 3)`` left
+            # dim 2 unchanged. Keep the fused CPU/CUDA path unchanged.
+            for axis in dict.fromkeys(dim):
+                x = flip(x, axis)
+            return x
     result = try_dispatch("tensor.flip", x, dim)
     if result is not None:
         return result
