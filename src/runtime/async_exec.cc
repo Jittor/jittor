@@ -67,6 +67,8 @@ struct Placement {
     std::vector<int> domain_of;           // cpu -> first cpu of its L3 domain, -1 unknown
     std::vector<std::vector<int>> cpus;   // first cpu -> the domain's cpus
     int pinned = -2;                      // domain the worker is pinned to
+    cpu_set_t chosen;
+    bool affinity_valid = false;
 };
 Placement* placement = new Placement();
 
@@ -280,6 +282,7 @@ void before_fork() { if (worker->thread) wait_for_worker_unlocked(); }
 void in_child() {
     worker = new Worker();
     placement->pinned = -2;
+    placement->affinity_valid = false;
     async_exec_inflight.store(0);
     error_pending.store(false);
 }
@@ -294,7 +297,6 @@ bool async_exec_placed() {
     const auto* domain = l3_domain(cpu);
     if (!domain) return false;
     int first = (*domain)[0];
-    if (placement->pinned == first) return true;
     cpu_set_t allowed, chosen;
     if (sched_getaffinity(0, sizeof(allowed), &allowed)) return false;
     CPU_ZERO(&chosen);
@@ -302,6 +304,11 @@ bool async_exec_placed() {
     for (int c : *domain)
         if (c != cpu && c < CPU_SETSIZE && CPU_ISSET(c, &allowed)) { CPU_SET(c, &chosen); count++; }
     if (!count) return false;
+    // The caller can migrate or narrow its affinity within the same L3
+    // domain. Reusing just the domain kept the worker on the caller's new
+    // sole CPU, even though no other permitted core remained.
+    if (placement->pinned == first && placement->affinity_valid
+            && CPU_EQUAL(&placement->chosen, &chosen)) return true;
     {
         std::lock_guard<std::mutex> lock(worker->mutex);
         if (!worker->thread) {
@@ -318,6 +325,8 @@ bool async_exec_placed() {
             return false;
     }
     placement->pinned = first;
+    placement->chosen = chosen;
+    placement->affinity_valid = true;
     return true;
 #else
     return false;
