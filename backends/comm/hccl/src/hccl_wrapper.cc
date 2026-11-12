@@ -24,11 +24,8 @@
 namespace jittor {
 
 // The one HCCL dtype table, expanded from the canonical list in
-// runtime/collective_dtype.h. bfloat16 and int16 are declared as holes: CANN does
-// define HCCL_DATA_TYPE_BFP16 / HCCL_DATA_TYPE_INT16, but no Ascend hardware
-// was available to compile against, and naming an enum this build has never
-// referenced is exactly the kind of unverified change this table exists to
-// prevent. Adding them is a one-line change once a CANN build can be run.
+// runtime/collective_dtype.h. bfloat16 maps to CANN's BFP16 enum; int16
+// remains unsupported until its device execution has been validated.
 static HcclDataType hccl_dtype_unsupported(NanoString dtype) {
     LOGf << "HCCL collectives do not support dtype" << dtype;
     return HcclDataType::HCCL_DATA_TYPE_FP32;

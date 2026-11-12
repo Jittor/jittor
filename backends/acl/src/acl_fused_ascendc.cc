@@ -956,16 +956,20 @@ namespace jittor
             for (Op *op : ops)
             {
                 if (std::strcmp(op->name(), "array") == 0) continue;
-                for (Var *v : op->inputs())
-                {
-                    if (producer.count(v)) continue;   // produced in-group
-                    if (numel < 0) numel = v->num;
-                    if (v->num != numel) return reject("mixed element counts (broadcast)");
-                }
+                // Outputs define the iteration domain. A computed scalar
+                // broadcast has one external input element and N outputs;
+                // the scalar is loaded once through the period-one buffer.
                 for (Var *v : op->outputs())
                 {
                     if (numel < 0) numel = v->num;
                     if (v->num != numel) return reject("mixed element counts (broadcast)");
+                }
+                for (Var *v : op->inputs())
+                {
+                    if (producer.count(v)) continue;   // produced in-group
+                    if (v->num != numel && !(v->num == 1 &&
+                            std::strcmp(op->name(), "broadcast_to") == 0))
+                        return reject("mixed element counts (broadcast)");
                 }
             }
             if (numel <= 0 || numel > (int64)0x7fffffff) return reject("element count out of range");
@@ -1027,11 +1031,13 @@ namespace jittor
                 if (nd.kind != kBinary && nd.nin != 1) return reject("unary arity");
                 if (std::strcmp(op->name(), "broadcast_to") == 0)
                 {
-                    // Only a broadcast of an in-group constant is constant; a
-                    // general broadcast needs the period machinery below.
                     auto f = producer.find(op->input(0));
-                    if (f == producer.end() || plan.nodes[pos[f->second]].kind != kConst)
-                        return reject("broadcast of a non-constant");
+                    if (f != producer.end()) {
+                        if (plan.nodes[pos[f->second]].kind != kConst)
+                            return reject("broadcast of a non-constant");
+                    } else if (op->input(0)->num != 1) {
+                        return reject("computed broadcast of a non-scalar input");
+                    }
                 }
                 nd.dtype = out->dtype();
                 // Where the graph's value is half/bf16 but we compute in float,
@@ -1058,7 +1064,8 @@ namespace jittor
                     if (g == input_index.end())
                     {
                         int idx = (int)plan.inputs.size();
-                        int per = var_is_plain(v, v->dtype()) ? 0 : broadcast_period(v, vec_lane(v->dtype()));
+                        int per = v->num == 1 && numel > 1 ? 1 :
+                            (var_is_plain(v, v->dtype()) ? 0 : broadcast_period(v, vec_lane(v->dtype())));
                         input_index[v] = idx;
                         plan.inputs.push_back(VarSlot{k, j});
                         plan.input_period.push_back(per);
@@ -1148,14 +1155,15 @@ namespace jittor
                     }
                     else
                     {
-                        if (numel < 0) numel = v->num;
-                        if (v->num != numel) return false;
+                        if (v->num != numel && !(v->num == 1 &&
+                                std::strcmp(op->name(), "broadcast_to") == 0)) return false;
                         int g = -nd.src[j] - 1;
                         if (g >= (int)plan.inputs.size()) return false;
                         if (v != locate(fop, plan.nodes, plan.inputs[g])) return false;
                         if (!var_on_device(v)) return false;
                         if (v->dtype() != plan.input_dtype[g]) return false;
-                        int per = var_is_plain(v, v->dtype()) ? 0 : broadcast_period(v, vec_lane(v->dtype()));
+                        int per = v->num == 1 && numel > 1 ? 1 :
+                            (var_is_plain(v, v->dtype()) ? 0 : broadcast_period(v, vec_lane(v->dtype())));
                         if (per != plan.input_period[g]) return false;
                     }
                 }
