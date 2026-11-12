@@ -6,7 +6,9 @@
 #include "bindings/pyjt/py_compat_fast.h"
 #include "ops/op_register.h"
 #include "ops/composite/code_op.h"
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include "core/grad.h"
 #include "core/var_holder.h"
@@ -43,6 +45,65 @@ PyObject* standard_rms_norm = nullptr;
 PyObject* rms_selector_state = nullptr;
 PyObject* linear_execute = nullptr;
 PyObject* linear_training_state = nullptr;
+#if PY_VERSION_HEX < 0x030C0000
+// These epochs describe code owners, never operands, graph nodes or results.
+// CPython 3.12+ keeps the per-call owner checks below until its dictionary
+// watcher API is used here; do not depend on its deprecated dict layout.
+struct LinearOwnerEpochs {
+    vector<std::pair<PyDictObject*, uint64_t>> dictionaries;
+    vector<std::pair<PyTypeObject*, unsigned int>> types;
+    bool valid = false;
+
+    void clear() {
+        valid = false;
+        dictionaries.clear();
+        types.clear();
+    }
+
+    bool unchanged() const {
+        if (!valid) return false;
+        for (const auto& item : dictionaries)
+            if (item.first->ma_version_tag != item.second) return false;
+        for (const auto& item : types)
+            if (!PyType_HasFeature(item.first, Py_TPFLAGS_VALID_VERSION_TAG)
+                    || item.first->tp_version_tag != item.second) return false;
+        return true;
+    }
+
+    static bool inert_key(PyObject* key) {
+        if (PyUnicode_CheckExact(key)) return true;
+        if (!PyTuple_CheckExact(key)) return false;
+        for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(key); ++i)
+            if (!PyUnicode_CheckExact(PyTuple_GET_ITEM(key, i))) return false;
+        return true;
+    }
+
+    void remember(PyObject* checks, PyObject* type_checks) {
+        for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(checks); ++i) {
+            PyObject* item = PyTuple_GET_ITEM(checks, i);
+            // User-defined hashes can run Python and mutate an earlier owner
+            // while the full check runs. Such bindings keep those full checks.
+            if (!inert_key(PyTuple_GET_ITEM(item, 1))) return;
+            auto* scope = (PyDictObject*)PyTuple_GET_ITEM(item, 0);
+            if (!scope->ma_version_tag) return;
+            if (std::none_of(dictionaries.begin(), dictionaries.end(),
+                    [&](const auto& entry) { return entry.first == scope; }))
+                dictionaries.emplace_back(scope, scope->ma_version_tag);
+        }
+        for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(type_checks); ++i) {
+            PyObject* item = PyTuple_GET_ITEM(type_checks, i);
+            if (!PyUnicode_CheckExact(PyTuple_GET_ITEM(item, 1))) return;
+            auto* type = (PyTypeObject*)PyTuple_GET_ITEM(item, 0);
+            if (!PyType_HasFeature(type, Py_TPFLAGS_VALID_VERSION_TAG)
+                    || !type->tp_version_tag) return;
+            if (std::none_of(types.begin(), types.end(),
+                    [&](const auto& entry) { return entry.first == type; }))
+                types.emplace_back(type, type->tp_version_tag);
+        }
+        valid = true;
+    }
+} linear_owner_epochs;
+#endif
 PyObject* matmul_kernel = nullptr;
 PyObject* empty_kwargs = nullptr;
 PyObject* matmul_name = nullptr;
@@ -383,18 +444,30 @@ PyObject* linear_with_bias_training(PyObject* module, PyObject* dict, PyObject* 
             if (PyTuple_GET_ITEM(value, i) != PyTuple_GET_ITEM(expected, i)) return false;
         return true;
     };
-    for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(checks); ++i) {
-        PyObject* item = PyTuple_GET_ITEM(checks, i);
-        PyObject* value = PyDict_GetItem(PyTuple_GET_ITEM(item, 0), PyTuple_GET_ITEM(item, 1));
-        PyObject* expected = PyTuple_GET_ITEM(item, 2);
-        if (expected == missing ? value != nullptr : !same_binding(value, expected)) return nullptr;
-    }
-    for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(type_checks); ++i) {
-        PyObject* item = PyTuple_GET_ITEM(type_checks, i);
-        PyObject* value = _PyType_Lookup((PyTypeObject*)PyTuple_GET_ITEM(item, 0),
-                                        PyTuple_GET_ITEM(item, 1));
-        PyObject* expected = PyTuple_GET_ITEM(item, 2);
-        if (expected == missing ? value != nullptr : value != expected) return nullptr;
+    bool owners_current = false;
+#if PY_VERSION_HEX < 0x030C0000
+    owners_current = linear_owner_epochs.unchanged();
+#endif
+    if (!owners_current) {
+#if PY_VERSION_HEX < 0x030C0000
+        linear_owner_epochs.clear();
+#endif
+        for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(checks); ++i) {
+            PyObject* item = PyTuple_GET_ITEM(checks, i);
+            PyObject* value = PyDict_GetItem(PyTuple_GET_ITEM(item, 0), PyTuple_GET_ITEM(item, 1));
+            PyObject* expected = PyTuple_GET_ITEM(item, 2);
+            if (expected == missing ? value != nullptr : !same_binding(value, expected)) return nullptr;
+        }
+        for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(type_checks); ++i) {
+            PyObject* item = PyTuple_GET_ITEM(type_checks, i);
+            PyObject* value = _PyType_Lookup((PyTypeObject*)PyTuple_GET_ITEM(item, 0),
+                                            PyTuple_GET_ITEM(item, 1));
+            PyObject* expected = PyTuple_GET_ITEM(item, 2);
+            if (expected == missing ? value != nullptr : value != expected) return nullptr;
+        }
+#if PY_VERSION_HEX < 0x030C0000
+        linear_owner_epochs.remember(checks, type_checks);
+#endif
     }
     if (!has_op("cublas_matmul")) return nullptr;
     auto* xh = GET_RAW_PTR(VarHolder, x);
@@ -1185,6 +1258,11 @@ void module_call_bind(PyObject* module_cls_, PyObject* dispatch_call_,
             || !PyDict_Check(PyTuple_GET_ITEM(rms_selector_state, 5))))
         throw std::invalid_argument("invalid RMSNorm selector state");
     part(linear_execute, "linear_execute");
+#if PY_VERSION_HEX < 0x030C0000
+    // The state owns every borrowed dictionary/type pointer in the epochs.
+    // Forget them before replacing even a byte-identical set of bindings.
+    linear_owner_epochs.clear();
+#endif
     part(linear_training_state, "linear_training_state");
     if (linear_training_state) {
         if (!PyTuple_CheckExact(linear_training_state)

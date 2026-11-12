@@ -258,3 +258,80 @@ def test_dense_view_reads_rebased_values_and_keeps_its_source_gradient(device):
     np.testing.assert_allclose(dx.detach().cpu().numpy(), expected_dx, rtol=1e-5, atol=1e-5)
     np.testing.assert_array_equal(dw.detach().cpu().numpy(), np.full((32, 32), 18.))
     np.testing.assert_array_equal(db.detach().cpu().numpy(), np.full((32,), 6.))
+
+
+def _native_module_binding():
+    from jittor.compat.torch.context import get_install_context
+    from jittor.compat.torch.installers.nn import module_methods
+    original = jt.core._module_call_bind
+    captured = []
+
+    def capture(*args):
+        captured.append(args)
+        return original(*args)
+
+    with mock.patch.object(jt.core, "_module_call_bind", side_effect=capture):
+        module_methods._install_module_methods(torch.nn, get_install_context(torch).registry)
+    assert len(captured) == 1
+    return original, captured[0]
+
+
+@pytest.mark.parametrize("group", (0, 1))
+def test_linear_binding_replacement_takes_effect_without_owner_mutation(device, group):
+    if device != "cuda":
+        pytest.skip("native Linear owner guards execute on CUDA")
+    _, outer, x = _prepared(device)
+    bind, original = _native_module_binding()
+    expected, frames = _linear_frames(outer, x)
+    assert frames == 0
+    parts = dict(original[-1])
+    state = list(parts["linear_training_state"])
+    entries = list(state[group])
+    scope, key, _ = entries[0]
+    entries[0] = (scope, key, object())
+    state[group] = tuple(entries)
+    parts["linear_training_state"] = tuple(state)
+    try:
+        # The dictionaries and classes have not changed. A new binding's
+        # expected owners must still replace the previous binding's decision.
+        bind(*original[:-1], parts)
+        result, frames = _linear_frames(outer, x)
+        assert frames == 1
+        np.testing.assert_array_equal(result.detach().cpu().numpy(),
+                                      expected.detach().cpu().numpy())
+    finally:
+        bind(*original)
+    _, frames = _linear_frames(outer, x)
+    assert frames == 0
+
+
+def test_linear_owner_keys_with_python_hashes_are_observed_on_every_call(device):
+    if device != "cuda":
+        pytest.skip("native Linear owner guards execute on CUDA")
+    _, outer, x = _prepared(device)
+    bind, original = _native_module_binding()
+    expected, _ = _linear_frames(outer, x)
+    calls = []
+
+    class Key:
+        def __hash__(self):
+            calls.append(1)
+            return 43
+
+    key, marker = Key(), object()
+    scope = {key: marker}
+    parts = dict(original[-1])
+    state = list(parts["linear_training_state"])
+    state[0] = (*state[0], (scope, key, marker))
+    parts["linear_training_state"] = tuple(state)
+    try:
+        bind(*original[:-1], parts)
+        calls.clear()
+        for _ in range(2):
+            result, frames = _linear_frames(outer, x)
+            assert frames == 0
+            np.testing.assert_array_equal(result.detach().cpu().numpy(),
+                                          expected.detach().cpu().numpy())
+        assert calls == [1, 1]
+    finally:
+        bind(*original)
