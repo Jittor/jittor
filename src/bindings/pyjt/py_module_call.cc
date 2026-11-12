@@ -401,9 +401,13 @@ PyObject* linear_with_bias_training(PyObject* module, PyObject* dict, PyObject* 
     auto* wh = GET_RAW_PTR(VarHolder, weight);
     auto* bh = GET_RAW_PTR(VarHolder, bias);
     auto eligible = [&]() {
+        // A dense input view uses the same matmul/VJP as its Python owner.
+        // Its live alias history is observed below before building the Ops.
+        // Parameter views retain the Python owner's more general handling.
+        if (wh->view || bh->view) return false;
         for (auto* holder : {xh, wh, bh}) {
             Var* value = holder->var;
-            if (holder->view || value->storage_offset_bytes || !value->is_contiguous()
+            if (value->storage_offset_bytes || !value->is_contiguous()
                     || value->dtype() != ns_float32
                     || (value->placement.explicit_backend
                         && value->placement.device.backend != BackendId::Cuda))

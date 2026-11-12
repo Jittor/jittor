@@ -184,3 +184,77 @@ def test_tensor_subclasses_and_strided_inputs_keep_python_dispatch(device):
     result, frames = _linear_frames(outer, sliced)
     assert frames == 1
     np.testing.assert_array_equal(result.detach().cpu().numpy(), outer(x).detach().cpu().numpy())
+    offset = torch.ones((3, 3, 32), device=device, requires_grad=True)[1:]
+    result, frames = _linear_frames(outer, offset)
+    assert frames == 1
+    np.testing.assert_array_equal(result.detach().cpu().numpy(), outer(x).detach().cpu().numpy())
+
+
+@pytest.mark.parametrize("kind", ("reshape", "prefix"))
+@pytest.mark.parametrize("train_input", (False, True))
+def test_dense_input_views_keep_root_gradients_and_hooks(device, kind, train_input):
+    rng = np.random.default_rng(317)
+    values = rng.integers(-8, 9, (2, 3, 32)).astype("float32") / 8
+    weights = rng.integers(-8, 9, (16, 32)).astype("float32") / 8
+    bias = rng.integers(-8, 9, (16,)).astype("float32") / 8
+    root = torch.tensor(values, device=device, requires_grad=train_input)
+    x = root.reshape(6, 32) if kind == "reshape" else root[:1]
+    inputs = values.reshape(6, 32) if kind == "reshape" else values[:1]
+    layer = torch.nn.Linear(32, 16).to(device)
+    with torch.no_grad():
+        layer.weight.copy_(torch.tensor(weights, device=device))
+        layer.bias.copy_(torch.tensor(bias, device=device))
+    outer = torch.nn.Sequential(layer)
+    outer(x).sum().item()
+    events = []
+    if train_input:
+        def view_hook(gradient):
+            events.append("view")
+            return gradient * .5
+        def root_hook(gradient):
+            events.append("root")
+            return gradient * .25
+        x.register_hook(view_hook)
+        root.register_hook(root_hook)
+    result, frames = _linear_frames(outer, x)
+    assert frames == (0 if device == "cuda" else 1)
+    cotangent = rng.integers(-8, 9, inputs.shape[:-1] + (16,)).astype("float32") / 8
+    targets = (root, layer.weight, layer.bias) if train_input else (layer.weight, layer.bias)
+    gradients = torch.autograd.grad(
+        (result * torch.tensor(cotangent, device=device)).sum(), targets)
+    expected = [cotangent.reshape(-1, 16).T @ inputs.reshape(-1, 32),
+                cotangent.reshape(-1, 16).sum(0)]
+    if train_input:
+        root_gradient = np.zeros_like(values)
+        if kind == "reshape":
+            root_gradient = (cotangent @ weights).reshape(values.shape) * .125
+        else:
+            root_gradient[:1] = (cotangent @ weights) * .125
+        expected.insert(0, root_gradient)
+        assert events == ["view", "root"]
+    np.testing.assert_allclose(result.detach().cpu().numpy(), inputs @ weights.T + bias,
+                               rtol=1e-5, atol=1e-5)
+    for gradient, reference in zip(gradients, expected):
+        assert gradient.device.type == device
+        np.testing.assert_allclose(gradient.detach().cpu().numpy(), reference,
+                                   rtol=1e-5, atol=1e-5)
+
+
+def test_dense_view_reads_rebased_values_and_keeps_its_source_gradient(device):
+    layer, outer, _ = _prepared(device)
+    root = torch.ones((6, 32), device=device, requires_grad=True)
+    base = root * 2
+    x = base.reshape(2, 3, 32)
+    with torch.no_grad():
+        base.add_(1)
+    output, frames = _linear_frames(outer, x)
+    assert frames == (0 if device == "cuda" else 1)
+    expected = np.full((2, 3, 32), 3.) @ layer.weight.detach().cpu().numpy().T
+    expected += layer.bias.detach().cpu().numpy()
+    np.testing.assert_allclose(output.detach().cpu().numpy(), expected, rtol=1e-5, atol=1e-5)
+    dx, dw, db = torch.autograd.grad(output.sum(), (root, layer.weight, layer.bias))
+    assert dx.device.type == dw.device.type == db.device.type == device
+    expected_dx = np.broadcast_to(2 * layer.weight.detach().cpu().numpy().sum(0), (6, 32))
+    np.testing.assert_allclose(dx.detach().cpu().numpy(), expected_dx, rtol=1e-5, atol=1e-5)
+    np.testing.assert_array_equal(dw.detach().cpu().numpy(), np.full((32, 32), 18.))
+    np.testing.assert_array_equal(db.detach().cpu().numpy(), np.full((32,), 6.))
