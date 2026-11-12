@@ -35,6 +35,22 @@ class TestMatrixExp(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             matrix_exp(jt.array64(np.zeros((2, 3))))
 
+    def test_rejects_integer_input_including_empty_batches(self):
+        for shape in ((2, 2), (0, 2, 2)):
+            with self.subTest(shape=shape), self.assertRaisesRegex(
+                    RuntimeError, "floating point or complex"):
+                matrix_exp(jt.ones(shape, dtype="int64"))
+
+    def test_empty_batches_preserve_shape_and_dtype(self):
+        for dtype in ("float32", "float64", "bfloat16", "complex64"):
+            for shape in ((0, 2, 2), (2, 0, 0)):
+                with self.subTest(dtype=dtype, shape=shape):
+                    x = jt.zeros(shape, dtype=dtype)
+                    result = matrix_exp(x)
+                    result.sync()
+                    self.assertEqual(tuple(result.shape), shape)
+                    self.assertEqual(result.dtype, x.dtype)
+
 
 class TestEigvals(unittest.TestCase):
     def test_precision_and_values(self):

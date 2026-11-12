@@ -19,8 +19,11 @@ def matrix_exp(x):
     import jittor as jt
     if x.ndim < 2 or x.shape[-1] != x.shape[-2]:
         raise RuntimeError("matrix_exp: expected a tensor of shape (..., n, n), got %s" % (tuple(x.shape),))
+    dtype = jt.core._checked_dtype_name(x.dtype)
+    if dtype not in ("float16", "bfloat16", "float32", "float64", "complex64", "complex128"):
+        raise RuntimeError("matrix_exp: expected a floating point or complex tensor")
     n = x.shape[-1]
-    if n == 0:
+    if x.numel() == 0:
         return x.clone()
     with jt.no_grad():
         norm = float(x.detach().abs().sum(dim=-2).max().item())
