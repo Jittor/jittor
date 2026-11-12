@@ -32,6 +32,8 @@ finally:
     def test_ctrl_c_while_dataset_workers_run(self):
         self._check('''
 import os
+# This contract needs real dataset workers even in a serial-compiler suite.
+os.environ["DISABLE_MULTIPROCESSING"] = "0"
 import signal
 import time
 import multiprocessing as mp
