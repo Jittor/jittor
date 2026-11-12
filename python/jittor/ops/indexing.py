@@ -301,6 +301,74 @@ def _getitem_result(x, slices):
     return x.getitem(slices)
 
 
+def _bool_mask_fill(x, slices, value):
+    """x[<indices containing one bool mask>] = value through ternary.
+
+    A boolean mask consumes as many axes as its rank (torch basic indexing):
+    ``out[mask]`` on a [N, D] tensor masks the first axis, while a [1, L]
+    mask on [1, L, D] masks the first two. Every other index must be an int or
+    a full slice; trailing axes may be left implicit.
+    """
+    jt = _jt if _jt is not None else _jittor()
+    entries = (slices,) if isinstance(slices, Var) else slices
+    if not isinstance(entries, tuple) or not entries:
+        return None
+    items = []
+    mask_seen = False
+    for item in entries:
+        dtype = _jittor_dtype_name(item.dtype) if isinstance(item, Var) else None
+        if isinstance(item, Var) and dtype in ("bool", "uint8"):
+            if mask_seen:
+                return None
+            mask_seen = True
+            mask = item != 0 if dtype == "uint8" else item
+            items.append(("mask", mask, int(mask.ndim)))
+        elif isinstance(item, slice) and item == slice(None, None, None):
+            items.append(("full", None, 1))
+        elif isinstance(item, int) and not isinstance(item, bool):
+            items.append(("int", item, 1))
+        else:
+            return None
+    consumed = sum(width for _, _, width in items)
+    if not mask_seen or consumed > x.ndim:
+        return None
+    items.extend([("full", None, 1)] * (x.ndim - consumed))
+
+    mask = None
+    axis = 0
+    for kind, item, width in items:
+        if kind == "mask":
+            shape = [1] * x.ndim
+            for offset in range(width):
+                shape[axis + offset] = item.shape[offset]
+            mask = item.reshape(shape).broadcast(list(x.shape))
+        axis += width
+    if mask is None:
+        return None
+    axis = 0
+    for kind, item, width in items:
+        if kind == "int":
+            axis_shape = [1] * x.ndim
+            axis_shape[axis] = x.shape[axis]
+            one_hot = (jt.arange(x.shape[axis]).reshape(axis_shape) == item)
+            mask = mask & one_hot.broadcast(list(x.shape))
+        axis += width
+
+    if isinstance(value, (int, float)):
+        fill = jt.array(value, dtype=x.dtype).broadcast(list(x.shape))
+        return x.assign(jt.ternary(mask, fill, x))
+    if isinstance(value, Var):
+        elements = int(value.numel())
+        true_count = int(mask.sum().item())
+        if elements != true_count or elements == 0:
+            return None
+        picked = mask.reshape(-1).int32().cumsum(0) - 1
+        picked = picked.maximum(0).minimum(elements - 1)
+        gathered = value.reshape(-1)[picked].reshape(list(x.shape))
+        return x.assign(jt.ternary(mask, gathered, x))
+    return None
+
+
 def setitem(x, slices, value):
     """Apply Jittor assignment with the established mask and complex rules."""
     # The common assignments -- a plain Var, an index of ints, slices and
@@ -319,6 +387,15 @@ def setitem(x, slices, value):
             if out is not NotImplemented:
                 return out
     jt = _jt if _jt is not None else _jittor()
+
+    # A boolean mask plus a scalar means masked_fill, which ternary expresses
+    # on every backend. The ACL setitem kernel only takes an exact-shape mask,
+    # so ``out[mask] = 0`` on a higher-rank tensor (or ``out[mask, :]`` and
+    # ``out[:, i, mask]``) used to reach it as a Var index list and raise.
+    # Handle it before dispatch so the semantics do not depend on the backend.
+    filled = _bool_mask_fill(x, slices, value)
+    if filled is not None:
+        return filled
 
     if _jittor_dtype_name(x.dtype) == "complex64" and isinstance(value, (complex, np.complexfloating)):
         # 0-d, so it fits a single indexed element as well as a slice; a
