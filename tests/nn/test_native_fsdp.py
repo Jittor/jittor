@@ -13,9 +13,11 @@ from _helpers.native_fsdp import model, optimizer, run_step, equal
 @pytest.mark.parametrize("kind", ["sgd", "adamw"])
 @pytest.mark.parametrize("accumulate", [1, 2])
 def test_complete_gradient_update_accumulation_and_resume(kind, accumulate, tmp_path):
-    assert "torch" not in sys.modules and not any(
-        n.startswith("jittor.compat") for n in sys.modules
-    )
+    # The complete native session may already have inspected a compatibility
+    # package. Only an installed Torch frontend changes this arithmetic's
+    # process mode; fresh-child import laziness is checked separately below.
+    torch_module = sys.modules.get('torch')
+    assert torch_module is None or '_torch_compat_install_context' not in vars(torch_module)
     module = FullyShardedDataParallel(model(jt, native=True))
     opt = optimizer(jt, module, kind)
     baseline = model(jt, native=True)

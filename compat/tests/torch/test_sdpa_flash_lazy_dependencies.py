@@ -11,7 +11,10 @@ import torch.nn.functional as F
 from jittor.compat.diagnostics import sdpa_flash_stats
 
 
-@pytest.mark.skipif(not os.environ.get('JITTOR_FLASH_ATTN_JITTOR_SRC'), reason='native FlashAttention source not configured')
+@pytest.mark.skipif(
+    not os.environ.get('JITTOR_FLASH_ATTN_JITTOR_SRC'),
+    reason='native FlashAttention CUDA source not configured: set JITTOR_FLASH_ATTN_JITTOR_SRC',
+)
 def test_flash_sdpa_output_survives_repeated_branched_graphs():
     if not jt.has_cuda:
         pytest.skip('CUDA required')
@@ -44,7 +47,8 @@ def test_flash_sdpa_output_survives_repeated_branched_graphs():
                 inv = 1.0 / torch.clamp(values.square(), min=1e-8)
                 indices.append(index)
                 weights.append(inv / inv.sum(dim=2, keepdim=True))
-            index, weight = torch.cat(indices, dim=1), torch.cat(weights, dim=1)
+            # Keep the unused weight graph alive to exercise lazy-graph pressure.
+            index, _weight = torch.cat(indices, dim=1), torch.cat(weights, dim=1)
             source, tokens = self.encoder(pc), self.prompt(tokens)
 
             def heads(x):

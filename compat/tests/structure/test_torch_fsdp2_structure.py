@@ -294,6 +294,9 @@ class TestTorchFSDP2Structure(unittest.TestCase):
         self.assertIs(modules["torch.distributed"], foreign)
 
     def test_canonical_package_and_legacy_alias_are_one_object(self):
+        # Real checkpoint use imports this child. Python attaches imported
+        # children to the package without making them declared API exports.
+        importlib.import_module('jittor.compat.fsdp2.activation_checkpoint')
         package_path = Path(fsdp.__file__).resolve()
         self.assertEqual(package_path.parent.name, "fsdp2")
         self.assertEqual(package_path.parent.parent.name, "compat")
@@ -307,7 +310,10 @@ class TestTorchFSDP2Structure(unittest.TestCase):
         self.assertEqual(set(fsdp.__all__), _PUBLIC_NAMES)
         self.assertEqual(len(fsdp.__all__), 79)
         self.assertEqual(
-            {name for name in vars(fsdp) if not name.startswith("_")},
+            {name for name, value in vars(fsdp).items()
+             if not name.startswith('_') and not (
+                 isinstance(value, types.ModuleType)
+                 and value.__name__.startswith(fsdp.__name__ + '.'))},
             _PUBLIC_NAMES,
         )
         namespace = {}
@@ -385,7 +391,7 @@ assert second is jittor.torch_fsdp2_compat
         self.assertIs(fsdp._install_fsdp2_distributed, fsdp.install)
 
     def test_public_contract_signatures_reflection_and_pickle(self):
-        public = sorted(name for name in vars(fsdp) if not name.startswith("_"))
+        public = sorted(fsdp.__all__)
         callables = {}
         for name in public:
             value = getattr(fsdp, name)
