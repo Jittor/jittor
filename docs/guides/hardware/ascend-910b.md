@@ -381,6 +381,13 @@ rg "ACL workspace allocation failed" "$TMPDIR/workspace-failure.log"
 
 ## 在昇腾上调试
 
+多卡分配诊断可在启动进程前设置 `JT_ACL_DISABLE_P2P=1`，强制使用普通 HBM 分配策略。
+不设置、设为空或设为 `0` 时保留默认策略。该值在首次分配时读取并缓存，切换策略需要重启进程。
+默认策略只在设备的 P2P 分配返回 `207001` 时记住该设备的拒绝状态并重试普通 HBM；其他错误直接报出。
+在两张已分配的设备上，分别不设置该变量和设置为 `1`，运行
+`python -m pytest -q tests/backends/acl/test_acl_peer_allocation.py`，检查跨设备复制、同步与数据一致性。
+此开关用于诊断；具体设备/CANN 组合是否通过验收，以对应 PR 的实测记录为准。
+
 Jittor 自己的日志、`JT_SYNC=1` 与 `sync_run=1` 见上文和[调试指南](../debugging.md)。
 下面这些是 **CANN 侧**的开关：它们属于厂商运行时，与 Jittor 的 flag 互不覆盖，
 只在 `source` 过 `set_env.sh` 的进程里生效。

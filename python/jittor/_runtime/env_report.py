@@ -47,6 +47,7 @@ from .flag_policy import STARTUP_FLAGS
 #: jittor reads; ``tests/structure/runtime/test_env_variable_registry.py``
 #: checks the source tree against this list.
 DIRECT_VARIABLES = frozenset((
+    "JT_ACL_DISABLE_P2P",
     "JT_BACKEND", "JT_CHECK_NAN", "JT_DEFAULT_PARA_OPT_LEVEL",
     "JT_GRAPH_BUILD_PROFILE", "JT_HAS_HALF_SIMD",
     "JT_HCCL", "JT_HCCL_COLLECTIVE_SYNC", "JT_HCCL_LOCAL_RANK", "JT_HCCL_NO_MPI",

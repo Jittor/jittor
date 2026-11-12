@@ -7,6 +7,61 @@ from jittor._core.dtypes import dtype_name
 from ..backends import hooks as _backend_hooks
 
 
+
+def _concat_pad(x, left, right, mode, value):
+    """Pad by slicing + broadcast + concat, without a reindex op.
+
+    The ACL backend has no reindex kernel, so a replicate pad (the alias-free
+    resampler's default) used to fall back to the host one call at a time.
+    Every positive pad width is one concat of the edge slice broadcast to the
+    pad width, or a constant fill; negative widths crop with a slice.
+    """
+    import jittor as jt
+
+    result = x
+    for axis in range(x.ndim):
+        before = int(left[axis])
+        after = int(right[axis])
+        if before == 0 and after == 0:
+            continue
+        size = int(result.shape[axis])
+        if before < 0 or after < 0:
+            stop = size - (-after if after < 0 else 0)
+            start = -before if before < 0 else 0
+            if stop <= start:
+                return None
+            index = [slice(None)] * result.ndim
+            index[axis] = slice(start, stop)
+            before = max(before, 0)
+            after = max(after, 0)
+            result = result[tuple(index)]
+            size = int(result.shape[axis])
+        pieces = []
+        for width, edge in ((before, 0), (after, 1)):
+            if width == 0:
+                continue
+            if mode == "constant":
+                shape = list(result.shape)
+                shape[axis] = width
+                pieces.append(("fill", jt.full(shape, float(value), dtype=result.dtype)))
+            else:
+                index = [slice(None)] * result.ndim
+                index[axis] = slice(0, 1) if edge == 0 else slice(size - 1, size)
+                shape = list(result.shape)
+                shape[axis] = width
+                pieces.append(("fill", result[tuple(index)].broadcast(shape)))
+        if not pieces:
+            continue
+        ordered = []
+        if before:
+            ordered.append(pieces[0][1])
+        ordered.append(result)
+        if after:
+            ordered.append(pieces[1][1] if before else pieces[0][1])
+        result = jt.concat(ordered, axis)
+    return result
+
+
 def pad(x, padding=None, mode="constant", value=0, pad=None):
     import jittor as jt
 
@@ -43,6 +98,12 @@ def pad(x, padding=None, mode="constant", value=0, pad=None):
             result = acl_pad(x, padding, value)
             if result is not None:
                 return result
+
+    from jittor._runtime.dispatch import dispatch_context
+    if mode in ("constant", "replicate") and dispatch_context(x).backend == "acl":
+        result = _concat_pad(x, left, right, mode, value)
+        if result is not None:
+            return result
 
     out_dims = []
     out_shape = []
