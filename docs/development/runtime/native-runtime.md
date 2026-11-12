@@ -48,6 +48,17 @@ Jittor 之前通过环境设置。** 新算子仍然接受局部的 `extra_flags
 `compile_options`；加载一个扩展**不会重新打开启动配置**。分类文件参与绑定生成器的构建
 指纹。
 
+### 异步提交边界
+
+CUDA 和 ACL 的后端策略允许将新建的推理或训练前向批次交给 worker，让调用线程继续
+构建后续图；ACL 还要求 `backend_fallback=error`。反向图构建和 Python 反向回调仍在
+调用线程执行。线程放置、图锁、数据读取等待及第二个 Python 调用线程的退出策略，统一由
+`src/runtime/async_exec.*` 和执行器维护。
+
+每次前向和训练步仍创建新的算子；worker 提交不复用执行图或模型结果。
+`async_execution=0` 可关闭 worker，`auto_flush_ops` 与 `async_flush_ops` 控制提交边界。
+形状和批量大小会影响提前物化与并行提交的收益，应使用相同配置进行对照。
+
 ### 原生状态与生命周期
 
 原生的 held-root 存储在 `src/runtime/holder_state.{h,cc}`。`RuntimeHolderState` 同时拥有
