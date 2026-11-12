@@ -1,11 +1,12 @@
 import pytest
 import torch
 from torch import nn
+from _helpers.common import get_all_device_types
 
 
 @pytest.mark.parametrize('bias', [False, True])
 @pytest.mark.parametrize('affine', [False, True])
-@pytest.mark.parametrize('device', ['cpu', 'cuda'])
+@pytest.mark.parametrize('device', get_all_device_types())
 def test_fused_conv_bn_eval_preserves_output(bias, affine, device):
     from torch.nn.utils.fusion import fuse_conv_bn_eval
     torch.manual_seed(17)
@@ -34,7 +35,7 @@ def test_fused_conv_bn_rejects_training():
         fuse_conv_bn_eval(conv, bn)
 
 
-@pytest.mark.parametrize('device', ['cpu', 'cuda'])
+@pytest.mark.parametrize('device', get_all_device_types())
 @pytest.mark.parametrize('transpose', [False, True])
 @pytest.mark.parametrize('has_bias', [False, True])
 def test_fused_weights_preserve_frontend_metadata_and_frozen_state(device, transpose, has_bias):

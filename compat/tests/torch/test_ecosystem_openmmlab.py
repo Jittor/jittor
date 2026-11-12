@@ -19,7 +19,10 @@ from _ecosystem_openmmlab_cases import REQUIRED_GRADIENTS
 from _ecosystem_openmmlab_harness import compare_training
 
 
-@unittest.skipUnless(_enabled("JITTOR_ECOSYSTEM_OPENMMLAB"), "opt-in real OpenMMLab training gate")
+@unittest.skipUnless(
+    _enabled("JITTOR_ECOSYSTEM_OPENMMLAB"),
+    "manual probe: set JITTOR_ECOSYSTEM_OPENMMLAB=1 with an independent oracle and OpenMMLab packages",
+)
 class EcosystemOpenMMLab(EcosystemComparison):
     def setUp(self):
         super().setUp()

@@ -28,3 +28,24 @@ def test_expect_error_rejects_the_wrong_message():
 def test_expect_error_rejects_a_successful_call():
     with pytest.raises(AssertionError, match="did not raise"):
         expect_error(lambda: None, exc_type=ValueError, match="anything")
+
+
+@pytest.mark.parametrize('name', [
+    'float16', 'bfloat16', 'float32', 'float64', 'complex64', 'complex128',
+])
+def test_tolerances_keep_the_declared_dtype_budget_for_frontend_names(name):
+    import torch
+    from _helpers.common import default_tolerances
+
+    expected = default_tolerances(name)
+    assert expected != (0., 0.)
+    assert default_tolerances('torch.' + name) == expected
+    assert default_tolerances(getattr(torch, name)) == expected
+
+
+def test_complex_reference_precision_does_not_tighten_the_result_budget():
+    import numpy as np
+    from _helpers.common import default_tolerances
+
+    assert default_tolerances('torch.complex64', np.dtype('complex128')) == (
+        1e-5, 1.3e-6)

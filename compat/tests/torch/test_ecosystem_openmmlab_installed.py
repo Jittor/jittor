@@ -9,7 +9,10 @@ from _ecosystem_harness import (REAL_TORCH_PYTHON, SPEED_RATIO, EcosystemCompari
 from _ecosystem_openmmlab_installed_harness import compare_training
 
 
-@unittest.skipUnless(_enabled('JITTOR_ECOSYSTEM_OPENMMLAB_INSTALLED'), 'opt-in source-bound OpenMMLab training gate')
+@unittest.skipUnless(
+    _enabled('JITTOR_ECOSYSTEM_OPENMMLAB_INSTALLED'),
+    'manual probe: set JITTOR_ECOSYSTEM_OPENMMLAB_INSTALLED=1 with source checkout and wheel paths',
+)
 class EcosystemOpenMMLabInstalled(EcosystemComparison):
     def setUp(self):
         super().setUp()

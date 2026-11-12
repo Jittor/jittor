@@ -33,12 +33,9 @@ def test_completed_namespace_does_not_inherit_backend_attributes(frontend, monke
 def test_native_operations_have_stable_objects_and_frontend_results(frontend):
     owner = importlib.import_module("jittor.compat.torch.native_api")
     from jittor.compat.torch.fidelity import fidelity_of
-    # exp's dtype-preserving implementation has its own stable owner.
-    elementwise = importlib.import_module("jittor.compat.torch.installers.numerical.elementwise")
-    owners = {"sin": owner, "cos": owner, "exp": elementwise, "matmul": owner}
-    for name, implementation_owner in owners.items():
+    for name in ("sin", "cos", "matmul"):
         function = getattr(frontend, name)
-        assert function is getattr(implementation_owner, name)
+        assert function is getattr(owner, name)
         assert pickle.loads(pickle.dumps(function)) is function
         assert fidelity_of("torch." + name).implementation is function
     value = frontend.tensor([0., 1.], requires_grad=True)
@@ -47,6 +44,20 @@ def test_native_operations_have_stable_objects_and_frontend_results(frontend):
     result.sum().backward()
     np.testing.assert_allclose(value.grad.numpy(), np.cos([0., 1.]), rtol=1e-6)
     assert type(jt.array([1.])) is jt.Var
+
+
+def test_exp_keeps_its_explicit_dtype_adapter_when_native_apis_are_installed(frontend):
+    from jittor.compat.torch import native_api
+    from jittor.compat.torch.fidelity import fidelity_of
+    from jittor.compat.torch.installers.numerical.elementwise import exp
+
+    # exp has a dedicated half/BF16 result-dtype adapter. Native delegates
+    # fill missing APIs and must preserve that existing implementation.
+    assert frontend.exp is exp
+    native_api.install(get_install_context(jt))
+    assert frontend.exp is exp
+    assert fidelity_of('torch.exp').implementation is exp
+    assert pickle.loads(pickle.dumps(exp)) is exp
 
 
 def test_native_module_facades_do_not_publish_imported_modules(frontend, monkeypatch):
@@ -68,7 +79,8 @@ def test_native_rebinding_preserves_delegates_and_explicit_overrides(frontend, m
     context = get_install_context(jt)
     before = dict(context.state["native_torch_operations"])
     original = frontend.sin
-    sentinel = lambda value: value
+    def sentinel(value):
+        return value
     monkeypatch.setattr(frontend.linalg, "svd", sentinel)
     install(context)
     assert frontend.sin is original

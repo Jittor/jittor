@@ -42,6 +42,17 @@ DEPLOYED_ONLY_BASELINE_KEYS = {
 
 
 class TestTorchShimAliases(unittest.TestCase):
+    def _fresh_bootstrap_module_graph(self):
+        # Parent tests may have imported optional children such as the
+        # launcher. Compare fresh interpreters with the same bootstrap work.
+        return self._run_order('''
+import json, sys
+import torch
+from jittor.compat import torch as compat
+compat.install(torch); compat.install(torch)
+print('RESULT=' + json.dumps(sorted(k for k in sys.modules if k == 'torch' or k.startswith('torch.'))))
+''')
+
     def test_deployment_publishes_flash_attn_distribution_metadata(self):
         from jittor.compat.shim.deploy import deploy
 
@@ -244,10 +255,7 @@ print('RESULT=' + json.dumps({'preserved': True}))
 
     @pytest.mark.xdist_group("torch_shim_module_graph")
     def test_canonical_and_legacy_first_orders_keep_module_graph(self):
-        expected = sorted(
-            name for name in sys.modules
-            if name == "torch" or name.startswith("torch.")
-        )
+        expected = self._fresh_bootstrap_module_graph()
         scripts = (
             """
 import importlib, json, sys
@@ -290,10 +298,7 @@ print('RESULT=' + json.dumps(sorted(k for k in sys.modules if k == 'torch' or k.
     def test_deployed_first_is_same_module_and_same_module_graph(self):
         from jittor.compat.shim.deploy import deploy
 
-        expected = sorted(
-            name for name in sys.modules
-            if name == "torch" or name.startswith("torch.")
-        )
+        expected = self._fresh_bootstrap_module_graph()
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / "site-packages"
             deploy(target)

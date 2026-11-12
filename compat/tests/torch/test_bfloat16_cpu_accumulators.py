@@ -74,9 +74,9 @@ class TestBFloat16CpuAccumulators:
                 else:
                     loss = output.float().square().sum()
                 if mode == "rebind-input":
-                    xholder.assign(torch.full(x.shape, 7., dtype=torch.bfloat16))
+                    xholder.swap(torch.full(x.shape, 7., dtype=torch.bfloat16))
                 if mode == "rebind-weight":
-                    wholder.assign(torch.full(weight.shape, 7., dtype=torch.bfloat16))
+                    wholder.swap(torch.full(weight.shape, 7., dtype=torch.bfloat16))
                 gradients = torch.autograd.grad(loss, (x, weight, bias), create_graph=True)
                 hessian = torch.autograd.grad(sum(g.float().sum() for g in gradients), (x, weight, bias))
                 expected = _REPEATED if mode == "same-instance" else _ORDINARY
@@ -86,11 +86,28 @@ class TestBFloat16CpuAccumulators:
                         _observe(value, reference)
             assert jt.core.backend_fallback_count() == initial
 
+    def test_inplace_writes_still_invalidate_saved_accumulator_inputs(self, device):
+        owner = importlib.import_module('jittor.nn.functional.matrix')
+        with patch.dict(os.environ, {'JT_BUILD_USE_MKL': '0'}), forbid_backend_fallbacks():
+            for name in ('input', 'weight'):
+                for method in ('assign', 'copy_'):
+                    with self.subTest(name=name, method=method):
+                        x = torch.ones((2, 3), dtype=torch.bfloat16, requires_grad=True)
+                        weight = torch.ones((2, 3), dtype=torch.bfloat16, requires_grad=True)
+                        xholder, wholder = (jt.ops.reshape(v, v.shape) for v in (x, weight))
+                        output = owner._BFloat16MatmulAccumulator()(xholder, wholder)
+                        output.sync()
+                        target = xholder if name == 'input' else wholder
+                        with torch.no_grad():
+                            getattr(target, method)(torch.full(target.shape, 7., dtype=torch.bfloat16))
+                        with self.assertRaisesRegex(RuntimeError, 'modified by an inplace operation'):
+                            torch.autograd.grad(output.sum(), (x, weight))
+
     def test_onednn_accumulator_is_real_bf16_and_keeps_default_output(self, device):
         with patch.dict(os.environ, {"JT_BUILD_USE_MKL": "1"}), forbid_backend_fallbacks():
             ops = get_library_ops("mkl", load=True)
             if ops is None:
-                self.skipTest("optional oneDNN library is unavailable")
+                self.skipTest("optional oneDNN (mkl) library is unavailable")
             original = ops.mkl_matmul
             calls = []
 
