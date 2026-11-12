@@ -4,7 +4,7 @@ from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 # Reference: PyTorch torch/autograd/functional.py at commit 8ea5b572.
 import jittor as jt
 
-__all__ = ["jvp", "vjp"]
+__all__ = ["jvp", "vjp", "jacobian", "hessian"]
 
 from .._arg_policy import unsupported as _unsupported_arg
 
@@ -215,6 +215,7 @@ def _autograd_grad(
     inputs,
     grad_outputs=None,
     create_graph=True,
+    retain_graph=None,
 ):
     # Version of grad that accepts `None` in outputs and do not compute gradients for them.
     # This has the extra constraint that inputs has to be a tuple
@@ -285,7 +286,9 @@ def _autograd_grad(
                 # returns a complex64 grad directly, so they flow through untouched.
                 var_inputs.append(inp)
 
-        grads = jt.grad(acc_loss, var_inputs, retain_graph=create_graph)
+        if retain_graph is None:
+            retain_graph = create_graph
+        grads = jt.grad(acc_loss, var_inputs, retain_graph=retain_graph)
         for complex_ind in complex_inds:
             grads[complex_ind] = jt.nn.ComplexNumber(grads[complex_ind], is_concat_value=True)
         return tuple(grads)
@@ -500,3 +503,152 @@ def jvp(func, inputs, v=None, create_graph=False, strict=False):
     return _tuple_postprocess(outputs, is_outputs_tuple), _tuple_postprocess(
         jvp, is_outputs_tuple
     )
+
+
+def _jacobian_layout(columns, out, inp):
+    """Stack per-element rows into torch's ``out.shape + inp.shape`` layout."""
+    return jt.stack(columns, dim=0).reshape(tuple(out.shape) + tuple(inp.shape))
+
+
+def _jacfwd(func, inputs, strict, vectorize):
+    # Forward mode as one jvp per input element. torch batches these with vmap
+    # when ``vectorize=True``; the columns, and therefore the result, are the same.
+    is_inputs_tuple, inputs = _as_tuple(inputs, "inputs", "jacobian")
+    with jt.enable_grad():
+        outputs = func(*_grad_preprocess(inputs, create_graph=False, need_graph=True))
+    is_outputs_tuple, outputs = _as_tuple(outputs, "outputs of the user-provided function", "jacobian")
+    # columns[i][j]: d outputs[i] / d inputs[j], one flattened column per input element.
+    columns = [[[] for _ in inputs] for _ in outputs]
+    for j, inp in enumerate(inputs):
+        for k in range(inp.numel()):
+            tangent = tuple(
+                jt.zeros_like(other).reshape(-1).scatter(0, jt.array([k]), jt.ones(1, dtype=other.dtype)).reshape(other.shape)
+                if index == j else jt.zeros_like(other)
+                for index, other in enumerate(inputs))
+            _, jvp_out = jvp(func, inputs, tangent, create_graph=False, strict=strict)
+            for i, value in enumerate(_as_tuple_nocheck(jvp_out)):
+                columns[i][j].append(value)
+    jacobian_res = tuple(
+        tuple(jt.stack(columns[i][j], dim=-1).reshape(tuple(out.shape) + tuple(inp.shape))
+              for j, inp in enumerate(inputs))
+        for i, out in enumerate(outputs))
+    jacobian_res = _grad_postprocess(jacobian_res, False)
+    return _tuple_postprocess(jacobian_res, (is_outputs_tuple, is_inputs_tuple))
+
+
+def jacobian(func, inputs, create_graph=False, strict=False, vectorize=False, strategy="reverse-mode"):
+    r"""Compute the Jacobian of a given function.
+
+    Args:
+        func (function): a Python function that takes Tensor inputs and returns
+            a tuple of Tensors or a Tensor.
+        inputs (tuple of Tensors or Tensor): inputs to the function ``func``.
+        create_graph (bool, optional): If ``True``, the Jacobian will be
+            computed in a differentiable manner.
+        strict (bool, optional): unsupported here; see ``vjp``.
+        vectorize (bool, optional): torch computes the rows with ``vmap`` when
+            ``True``. The rows are computed one by one here; the values are the
+            same either way.
+        strategy (str, optional): ``"reverse-mode"`` (one vjp per output
+            element) or ``"forward-mode"`` (one jvp per input element). As in
+            torch, forward mode requires ``vectorize=True`` and does not
+            support ``create_graph``.
+
+    Returns:
+        Jacobian (Tensor or nested tuple of Tensors): ``Jacobian[i][j]`` has
+        shape ``outputs[i].shape + inputs[j].shape``, unpacked like torch when
+        the inputs or outputs are single Tensors.
+    """
+    _reject_strict("jittor.autograd.functional.jacobian", strict)
+    if strategy not in ("forward-mode", "reverse-mode"):
+        raise ValueError(
+            'Expected strategy to be either "forward-mode" or "reverse-mode". Hint: If your '
+            'function has more outputs than inputs, "forward-mode" tends to be more performant. '
+            'Otherwise, prefer to use "reverse-mode".')
+    if strategy == "forward-mode":
+        if create_graph:
+            raise NotImplementedError(
+                "torch.autograd.functional.jacobian: `create_graph=True` and `strategy=\"forward-mode\"` "
+                "are not supported together (yet). Please either set `create_graph=False` or "
+                "`strategy=\"reverse-mode\"`.")
+        if not vectorize:
+            raise NotImplementedError(
+                "Computing Jacobian using forward-AD or forward-over-reverse Hessian is"
+                "only implemented for `vectorize=True`.")
+        return _jacfwd(func, inputs, strict, vectorize)
+
+    with jt.enable_grad():
+        is_inputs_tuple, inputs = _as_tuple(inputs, "inputs", "jacobian")
+        inputs = _grad_preprocess(inputs, create_graph=create_graph, need_graph=True)
+
+        outputs = func(*inputs)
+        is_outputs_tuple, outputs = _as_tuple(
+            outputs, "outputs of the user-provided function", "jacobian"
+        )
+        _check_requires_grad(outputs, "outputs", strict=strict)
+
+        jacobian_res = ()
+        for out in outputs:
+            if out.requires_grad and (_is_native_complex(out) or isinstance(out, jt.nn.ComplexNumber)):
+                # torch.autograd.grad seeds each element with an implicit 1,
+                # which it only does for real outputs. An output without a
+                # graph is skipped before seeding, so its rows are zeros.
+                raise RuntimeError("grad can be implicitly created only for real scalar outputs")
+            rows = tuple([] for _ in inputs)
+            flat = out.reshape(-1)
+            for j in range(out.numel()):
+                # Retain the graph: every row backpropagates through it again.
+                vj = _autograd_grad((flat[j],), inputs, create_graph=create_graph, retain_graph=True)
+                for rows_el, vj_el, inp_el in zip(rows, vj, inputs):
+                    rows_el.append(jt.zeros_like(inp_el) if vj_el is None else vj_el.reshape(inp_el.shape))
+            jacobian_res += (tuple(_jacobian_layout(rows_el, out, inp_el)
+                                   for rows_el, inp_el in zip(rows, inputs)),)
+
+        jacobian_res = _grad_postprocess(jacobian_res, create_graph)
+
+        return _tuple_postprocess(jacobian_res, (is_outputs_tuple, is_inputs_tuple))
+
+
+def hessian(func, inputs, create_graph=False, strict=False, vectorize=False,
+            outer_jacobian_strategy="reverse-mode"):
+    r"""Compute the Hessian of a given scalar function.
+
+    Args:
+        func (function): a Python function that takes Tensor inputs and returns
+            a Tensor with a single element.
+        inputs (tuple of Tensors or Tensor): inputs to the function ``func``.
+        create_graph (bool, optional): If ``True``, the Hessian will be
+            computed in a differentiable manner.
+        strict (bool, optional): unsupported here; see ``vjp``.
+        vectorize (bool, optional): see ``jacobian``; the values are the same.
+        outer_jacobian_strategy (str, optional): strategy of the outer
+            ``jacobian`` (the inner one is always reverse mode), as in torch.
+
+    Returns:
+        Hessian (Tensor or a tuple of tuple of Tensors): ``Hessian[i][j]`` has
+        shape ``inputs[i].shape + inputs[j].shape``.
+    """
+    _reject_strict("jittor.autograd.functional.hessian", strict)
+    is_inputs_tuple, inputs = _as_tuple(inputs, "inputs", "hessian")
+    if outer_jacobian_strategy not in ("forward-mode", "reverse-mode"):
+        raise ValueError('Expected strategy to be either "forward-mode" or "reverse-mode".')
+
+    def ensure_single_output_function(*inp):
+        out = func(*inp)
+        is_out_tuple, t_out = _as_tuple(out, "outputs of the user-provided function", "hessian")
+        _check_requires_grad(t_out, "outputs", strict=strict)
+        if is_out_tuple or not isinstance(out, jt.Var):
+            raise RuntimeError("The function given to hessian should return a single Tensor")
+        if out.numel() != 1:
+            raise RuntimeError(
+                "The Tensor returned by the function given to hessian should contain a single element")
+        return out.squeeze()
+
+    def jac_func(*inp):
+        jac = jacobian(ensure_single_output_function, inp, create_graph=True)
+        _check_requires_grad(jac, "jacobian", strict=strict)
+        return jac
+
+    res = jacobian(jac_func, inputs, create_graph=create_graph, strict=strict,
+                   vectorize=vectorize, strategy=outer_jacobian_strategy)
+    return _tuple_postprocess(res, (is_inputs_tuple, is_inputs_tuple))

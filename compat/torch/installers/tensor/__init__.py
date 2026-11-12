@@ -379,6 +379,9 @@ def _install_reductions(g):
     # which jittor's native method rejects -- vLLM's sampler spells it
     # ``logits.softmax(dim=-1, dtype=torch.float32)``.
     g.diagonal = Var.diagonal = diagonal
+    # torch.matrix_exp / Tensor.matrix_exp share linalg's native owner.
+    import jittor.linalg as _native_linalg
+    g.matrix_exp = Var.matrix_exp = _native_linalg.matrix_exp
     g.masked_select = Var.masked_select = _numerical_masked_select
     g.softmax = Var.softmax = _numerical_softmax
     g.log_softmax = Var.log_softmax = _numerical_log_softmax
@@ -529,6 +532,24 @@ def _array_keep_dtype(data):
     return jt.array(data)
 
 
+def _detached_values(data, Var, dtypes):
+    """Plain values for ``np.asarray``, recording the dtypes of contained Vars.
+
+    torch reads a one-element tensor in a sequence as a scalar of its own dtype
+    (``[t(1,), t(1,)]`` has shape (2,), float64 elements give float64) and
+    copies everything else detached.
+    """
+    if isinstance(data, (list, tuple)):
+        if not any(isinstance(d, (Var, list, tuple)) for d in data):
+            return data
+        return [_detached_values(d, Var, dtypes) for d in data]
+    if isinstance(data, Var):
+        value = data.detach().numpy()
+        dtypes.append(value.dtype)
+        return value.reshape(()) if value.size == 1 else value
+    return data
+
+
 def tensor(data, dtype=None, device=None, requires_grad=False, **kw):
     g = compatibility_owner(jt)
     Var = g.Var
@@ -566,9 +587,15 @@ def tensor(data, dtype=None, device=None, requires_grad=False, **kw):
             # numpy.asarray of a list-of-Vars adds a spurious dim ((1,)->(1,1)). Coerce
             # contained scalar Vars to Python numbers first (e.g. tapas builds shapes
             # via torch.as_tensor([index.num_segments])).
-            if isinstance(data, (list, tuple)) and any(isinstance(d, Var) for d in data):
-                data = [(d.item() if isinstance(d, Var) and d.numel() == 1 else d)
-                        for d in data]
+            # Nested sequences too: torch copies the values (detached) from
+            # ``torch.tensor([[0, -t.cos()], ...])``; a grad-requiring Var must
+            # not reach the NumPy protocol, which refuses it as torch does.
+            element_dtypes = []
+            if isinstance(data, (list, tuple)):
+                data = _detached_values(data, Var, element_dtypes)
+            if ds is None and element_dtypes:
+                # The contained tensors decide the dtype, not the Python default.
+                ds = storage_dtype = str(_np.result_type(*element_dtypes))
             # Resolve Python defaults before constructing native storage. An
             # explicit float64 value must never pass through float32 first.
             arr = _np.asarray(data, dtype=_jittor_dtype_name(storage_dtype))

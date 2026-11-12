@@ -468,7 +468,7 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags="", backend=None):
         with open(header, encoding='utf8') as f:
             src = f.read()
         # XxxXxxOp(args)
-        res = _compiler_state.re.findall(pybind_attrs_reg + '[^~]('+name2+"\\([^\\n]*\\))", src, _compiler_state.re.S)
+        res = _compiler_state.re.findall(pybind_attrs_reg + '[^~]('+name2+"\\([^;]*\\))", src, _compiler_state.re.S)
         assert len(res) >= 1, "Wrong op args in " + header
         # registe op
         cc_name = header[:-2] + ".cc"

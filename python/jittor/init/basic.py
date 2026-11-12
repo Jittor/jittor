@@ -9,6 +9,17 @@
 # ***************************************************************
 
 
+def _shape_dims(shape):
+    """Plain ints for ``NanoVector``: callers pass NumPy integers too (``nn.Linear(np.int64(2), 3)``)."""
+    import operator
+    if isinstance(shape, (list, tuple)):
+        return tuple(operator.index(dim) for dim in shape)
+    try:
+        return operator.index(shape)
+    except TypeError:
+        return shape
+
+
 def eye(shape, dtype="float32"):
     ''' Generate 2-D identity matrix.
 
@@ -87,7 +98,7 @@ def constant(shape, dtype="float32", value=0.0):
 
     '''
     import jittor as jt
-    return jt.array(value).unary(dtype).broadcast(jt.NanoVector(shape))
+    return jt.array(value).unary(dtype).broadcast(jt.NanoVector(_shape_dims(shape)))
 
 
 def constant_(var, value=0.0):
@@ -242,7 +253,7 @@ def uniform(shape, dtype="float32", low=0, high=1):
 
     '''
     import jittor as jt
-    return jt.random(jt.NanoVector(shape), dtype) * (low - high) + high
+    return jt.random(jt.NanoVector(_shape_dims(shape)), dtype) * (low - high) + high
 
 
 def uniform_(var, low=0, high=1):
@@ -292,7 +303,7 @@ def gauss(shape, dtype="float32", mean=0.0, std=1.0, generator=None):
 
     '''
     import jittor as jt
-    return jt.random(jt.NanoVector(shape), dtype, "normal", generator=generator) * std + mean
+    return jt.random(jt.NanoVector(_shape_dims(shape)), dtype, "normal", generator=generator) * std + mean
 
 
 def gauss_(var, mean=0.0, std=1.0):

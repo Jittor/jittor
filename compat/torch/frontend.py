@@ -3,9 +3,16 @@ from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from jittor_core import ops as _native_ops
 
 from functools import update_wrapper
+import numbers as _numbers
+import operator as _operator
 from types import MethodType
 import weakref
 from typing import Any, Callable, Optional
+
+
+def _is_size_argument(value):
+    """An integer dimension as torch reads it: Python or NumPy integers, not bool or tensors."""
+    return isinstance(value, _numbers.Integral) and not isinstance(value, bool)
 
 #: Resolved on first use, then reused. These two helpers sit on the per-op path
 #: (`torch.cat` alone re-imported them 91 times, ~110 us of its 340 us), and a
@@ -272,8 +279,9 @@ class _TensorMeta(type):
         with tensor_frontend(cls, like=args[0] if len(args) == 1 else None, device=device):
             if not args:
                 result = backend.empty((0,), dtype=dtype)
-            elif all(isinstance(arg, int) for arg in args):
-                result = backend.empty(tuple(args), dtype=dtype)
+            elif all(_is_size_argument(arg) for arg in args):
+                # torch reads any integer (NumPy included) as a dimension.
+                result = backend.empty(tuple(_operator.index(arg) for arg in args), dtype=dtype)
             elif len(args) != 1:
                 raise TypeError("Tensor expects data or integer dimensions")
             elif isinstance(args[0], (backend.NanoVector, _TorchSize)):

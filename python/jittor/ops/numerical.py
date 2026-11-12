@@ -290,6 +290,14 @@ def _classify(x, predicate, acl_body, integral):
     """
     import jittor as jt
     x = x if isinstance(x, Var) else jt.array(x)
+    if jt.core._checked_dtype_name(x.dtype).startswith("complex"):
+        # torch: nan/inf if either part is, finite only if both parts are.
+        # A complex value is not ordered, so the signed tests are refused.
+        if predicate in ("isneginf", "isposinf"):
+            raise TypeError("%s does not support complex inputs" % predicate)
+        real = _classify(x.real, predicate, acl_body, integral)
+        imag = _classify(x.imag, predicate, acl_body, integral)
+        return (real & imag) if predicate == "isfinite" else (real | imag)
     if not x.dtype.is_float():
         return (jt.ones if integral else jt.zeros)(x.shape, "bool")
     return select_kernel("misc.classify", x)(x, predicate, acl_body)

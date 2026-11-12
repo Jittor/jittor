@@ -36,7 +36,7 @@ _NATIVE_MODULE_NAMES = {
             "fftshift", "ifftshift", "fftfreq", "rfftfreq"),
     "linalg": ("svd", "svdvals", "eig", "eigh", "eigvalsh", "inv", "inv_ex", "pinv",
                "matrix_power", "matrix_rank", "matrix_norm", "vector_norm", "norm",
-               "cond", "det", "slogdet", "cholesky", "solve", "qr"),
+               "cond", "det", "slogdet", "cholesky", "solve", "qr", "matrix_exp", "eigvals"),
 }
 
 
@@ -88,6 +88,12 @@ class NativeOperation:
                     return _tensor_mul(left, right)
                 if isinstance(right, context.state["Var"]):
                     return _tensor_mul(right, left)
+        if "input" in kwargs and not args:
+            # torch names the first operand ``input`` and accepts it by keyword
+            # (``torch.prod(input=x, dim=0)``); the native
+            # functions name it differently, so pass it positionally.
+            kwargs = dict(kwargs)
+            args = (kwargs.pop("input"),)
         defaults = self._TORCH_DEFAULTS.get(self._operation_key)
         if defaults:
             kwargs = dict(kwargs)

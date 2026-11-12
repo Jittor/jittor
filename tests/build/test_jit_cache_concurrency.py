@@ -216,14 +216,15 @@ def test_a_key_without_its_product_is_not_a_hit(probe_harness, tmp_path):
                         ).stdout.strip() == "stale"
 
 
+@pytest.mark.parametrize("poll_pause", [0.0, 0.01])
 def test_publish_order_never_exposes_a_key_without_its_product(
-        probe_harness, tmp_path):
+        probe_harness, tmp_path, poll_pause):
     """Sample a rebuild from outside: the new key must never lead the product.
 
     This is the property the unlocked fast path is built on, so it is checked
-    by watching rather than by reading the source. The stand-in compiler takes
-    long enough that a poller gets thousands of samples across the window in
-    which the product is replaced and the key rewritten.
+    by watching rather than by reading the source. The stand-in compiler waits
+    for the poller to collect enough samples before publishing. A fixed sleep
+    cannot guarantee that coverage on a busy machine or a slow filesystem.
 
     The interesting build is the *second* one: the first leaves an older
     product and an older key for it to replace. A reader that sees the old pair
@@ -235,11 +236,21 @@ def test_publish_order_never_exposes_a_key_without_its_product(
     """
     directory, source, output = _workspace(tmp_path, "publish-order")
     compiler = tmp_path / "fake-compiler-slow"
+    gate = tmp_path / "observe-rebuild"
+    ready = tmp_path / "compiler-ready"
+    release = tmp_path / "release-compiler"
     # The product is derived from the source, so the two builds are told apart
     # by content rather than by timing.
     _fake_compiler(
         compiler,
-        "time.sleep(0.6)\n"
+        "from pathlib import Path\n"
+        f"if Path({str(gate)!r}).exists():\n"
+        f"    Path({str(ready)!r}).touch()\n"
+        "    deadline = time.monotonic() + 60\n"
+        f"    while not Path({str(release)!r}).exists():\n"
+        "        if time.monotonic() >= deadline:\n"
+        "            raise RuntimeError('poller did not release the compiler')\n"
+        "        time.sleep(0.001)\n"
         "body = open(source, 'rb').read()\n"
         "open(output, 'wb').write(body * 4096)")
     command = "%s %s -o %s" % (compiler, source, output)
@@ -252,6 +263,7 @@ def test_publish_order_never_exposes_a_key_without_its_product(
 
     source.write_text("int kernel = 3;\n", encoding="utf-8")
     second_product = source.read_bytes() * 4096
+    gate.touch()
 
     violations = []
     samples = [0]
@@ -264,7 +276,10 @@ def test_publish_order_never_exposes_a_key_without_its_product(
                 product = output.read_bytes()
             except OSError:
                 continue
-            samples[0] += 1
+            if ready.exists():
+                samples[0] += 1
+                if samples[0] == 128:
+                    release.touch()
             if key not in (first_key, ""):
                 # The key is no longer the one the first build published, so
                 # the second build has committed: its product must be there
@@ -274,6 +289,8 @@ def test_publish_order_never_exposes_a_key_without_its_product(
                         ("key led product", key[:40], len(product)))
             elif product not in (first_product, second_product):
                 violations.append(("partial product", len(product)))
+            if poll_pause:
+                time.sleep(poll_pause)
 
     poller = threading.Thread(target=poll, daemon=True)
     poller.start()

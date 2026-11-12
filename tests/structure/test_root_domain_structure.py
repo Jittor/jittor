@@ -208,6 +208,8 @@ class TestRootDomainStructure(unittest.TestCase):
         expected = {
             "WeightNorm": {"nn/utils/weight_norm.py"},
             "argmax_pool": {"nn/functional/pooling/entrypoints.py"},
+            "hessian": {"autograd/functional.py"},
+            "jacobian": {"autograd/functional.py"},
             "jvp": {"autograd/functional.py"},
             "softmax_v1": {"backends/cuda/kernels/nn/softmax_cuda.py"},
             "vjp": {"autograd/functional.py"},
@@ -333,7 +335,7 @@ for module_name, required in expected.items():
     namespace = {}
     exec("from {} import *".format(module_name), namespace)
 functional = importlib.import_module("jittor.gradfunctional.functional")
-assert functional.__all__ == ["jvp", "vjp"], functional.__all__
+assert functional.__all__ == ["jvp", "vjp", "jacobian", "hessian"], functional.__all__
 print("legacy-native-surfaces-ok")
 '''
         env = {

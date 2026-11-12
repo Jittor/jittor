@@ -305,8 +305,6 @@ class Module:
         return self.__str__()
     def _get_name(self):
         return self.__class__.__name__
-    def __name__(self):
-        pass
 
     def dfs(self, parents, k, callback, callback_leave=None, recurse=True):
         ''' An utility function to traverse the module. '''

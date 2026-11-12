@@ -344,7 +344,7 @@ class _EmbeddingSum(torch.nn.Module):
         return embeddings * 2
 
 
-def test_an_inplace_add_inside_a_captured_module_call():
+def _check_inplace_add_inside_a_captured_module_call(device):
     """`embeddings += position_embeddings` while the call is being captured.
 
     The in-place add writes into the tensor's existing storage when it can, so
@@ -358,13 +358,19 @@ def test_an_inplace_add_inside_a_captured_module_call():
 
     rng = np.random.RandomState(0)
     feeds = [(rng.rand(3, 4).astype("float32"), rng.rand(3, 4).astype("float32")) for _ in range(5)]
-    model = _EmbeddingSum().eval()
+    model = _EmbeddingSum().eval().to(device)
     position = model.position.detach().cpu().numpy()
     flag = jt.flags.auto_graph_replay
     jt.flags.auto_graph_replay = 1
     try:
         with torch.no_grad():
-            got = [model(torch.tensor(w), torch.tensor(t)).cpu().numpy() for w, t in feeds]
+            got = []
+            for w, t in feeds:
+                result = model(torch.tensor(w, device=device), torch.tensor(t, device=device))
+                assert result.device.type == device
+                result.sync()
+                assert result.location() == ("device" if device == "cuda" else "cpu")
+                got.append(result.cpu().numpy())
         state = model.__dict__.get("_auto_graph_replay")
     finally:
         jt.flags.auto_graph_replay = flag
@@ -372,3 +378,15 @@ def test_an_inplace_add_inside_a_captured_module_call():
         np.testing.assert_allclose(out, (w + t + position) * 2, rtol=1e-6)
     assert state is not None and state.replay is not None, "the call was never captured"
     assert state.replay.refused is None
+
+
+def test_an_inplace_add_inside_a_captured_module_call():
+    _check_inplace_add_inside_a_captured_module_call("cpu")
+
+
+class TestCapturedInplaceAdd:
+    def test_temporary_inplace_add_keeps_replay(self, device):
+        _check_inplace_add_inside_a_captured_module_call(device)
+
+
+instantiate_device_type_tests(TestCapturedInplaceAdd, globals(), only_for=("cpu", "cuda"))

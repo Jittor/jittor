@@ -31,7 +31,8 @@ def hstack(tensors):
         _py_all,
         jt,
     )
-    tensors = list(tensors)
+    # Torch applies atleast_1d first: 0-dim scalars join as one-element rows.
+    tensors = [t.reshape((1,)) if t.ndim == 0 else t for t in tensors]
     dim = 0 if _py_all(t.ndim == 1 for t in tensors) else 1
     return jt.concat(tensors, dim=dim)
 
@@ -43,7 +44,8 @@ def dstack(tensors):
     )
     out = []
     for t in list(tensors):
-        out.append(t.reshape((1, -1, 1)) if t.ndim == 1
+        # atleast_3d: () -> (1, 1, 1), (n,) -> (1, n, 1), (m, n) -> (m, n, 1).
+        out.append(t.reshape((1, -1, 1)) if t.ndim <= 1
                    else (t.unsqueeze(-1) if t.ndim == 2 else t))
     return jt.concat(out, dim=2)
 
@@ -55,7 +57,7 @@ def column_stack(tensors):
     )
     tensors = list(tensors)
     return jt.concat(
-        [t.reshape((-1, 1)) if t.ndim == 1 else t for t in tensors], dim=1)
+        [t.reshape((-1, 1)) if t.ndim <= 1 else t for t in tensors], dim=1)
 
 
 def _movedim_impl(x, source, destination):

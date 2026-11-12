@@ -79,6 +79,35 @@ JIT_TEST(backward_leaf_query_rule) {
     auto from_mixed = make_test_op({stopped.ptr, source.ptr});
     CHECK(!is_backward_leaf(from_mixed.ptr));
 
+    // An input stopped by a non-retained backward releasing the graph still
+    // had a producer: the output keeps it (torch keeps grad_fn), unlike an
+    // input stopped by the user.
+    VarPtr released({4}, ns_float32);
+    released->set_flag(VarFlags::_graph_freed);
+    released->set_stop_grad();
+    auto from_released = make_test_op({released.ptr});
+    CHECK(!is_backward_leaf(from_released.ptr));
+    CHECK(backward_grad_fn(from_released.ptr) == (Op*)from_released->input());
+
+    // Jittor's own rule is unchanged: once an ordinary producer is released
+    // (Node::release_inputs) the var is a leaf -- that is how a parameter built
+    // by an init op becomes one.
+    auto ran = make_test_op({source.ptr});
+    ran->release_inputs();
+    CHECK(ran->input() == nullptr);
+    CHECK(is_backward_leaf(ran.ptr));
+    // A var computed from an output of a graph a backward consumed (torch's
+    // `running = 0 + loss`) inherits that history and stays a non-leaf...
+    VarPtr consumed({4}, ns_float32);
+    consumed->set_flag(VarFlags::_had_backward_producer);
+    CHECK(!is_backward_leaf(consumed.ptr));
+    auto from_consumed = make_test_op({consumed.ptr});
+    from_consumed->release_inputs();
+    CHECK(!is_backward_leaf(from_consumed.ptr));
+    // ...until it stops requiring grad.
+    from_consumed->set_stop_grad();
+    CHECK(is_backward_leaf(from_consumed.ptr));
+
     // Op::init froze the disabled input edges of `from_disabled`. Clearing the
     // *output's* own flag must not make it a non-leaf: the edge it would have
     // to travel is the frozen one.

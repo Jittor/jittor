@@ -245,6 +245,23 @@ def _require_supported_group(group, allow_subgroup=False):
     return size
 
 
+def _opaque_for_graph_replay(name):
+    """Tell a running replay capture that this collective cannot be replayed.
+
+    A collective is opaque to graph capture: it synchronizes peers, and the
+    result is written back in place with ``_copy_into``, which needs both
+    buffers allocated *now*.  Inside a capture the pending graph is not
+    executed, so the destination of the write is unallocated and the copy
+    fails with "``_copy_into`` needs an allocated tensor" (observed on the
+    MiniMax-H3 text encoder's vocab-parallel embedding on a second request:
+    the first run captured the encoder, the replay of the second request hit
+    the all-reduce).  Marking the capture refused makes the encoder run
+    eagerly, which is what actually happens across ranks anyway.
+    """
+    from jittor._runtime.graph_replay import graph_replay_barrier
+    graph_replay_barrier(name + " is a host-visible collective")
+
+
 def _copy_tensor(dst, src):
     # Collective output buffers are mutated, never rebound: Parameters and
     # detached aliases may share their allocation (for example ZeRO's flat
@@ -253,8 +270,24 @@ def _copy_tensor(dst, src):
     # must not create an autograd in-place operation.
     with jt.no_grad():
         if isinstance(dst, jt.Var) and dst._storage_is_contiguous():
+            # Resolve pending readers of the old storage before overwriting
+            # it. Synchronizing only src/dst leaves lazy clone snapshots
+            # reading the new collective value instead of their original one.
             jt.sync_all()
-            dst._copy_into(src)
+            try:
+                dst._copy_into(src)
+            except jt.JittorError as exc:
+                # A replay capture never runs the pending graph, so ``dst``
+                # can still be unallocated and ``_copy_into`` refuses.  The
+                # collective has already marked the capture opaque, so the
+                # eager call -- where ``dst`` does have its buffer -- is what
+                # supplies the returned value; rebinding here just lets the
+                # traced call finish instead of raising through capture.
+                from jittor._runtime import graph_replay
+                if (not getattr(graph_replay._capture_state, "stack", ())
+                        or "needs an allocated tensor" not in str(exc)):
+                    raise
+                dst.update(src)
         elif hasattr(dst, "update"):
             dst.update(src)
         elif hasattr(dst, "assign"):
@@ -521,6 +554,8 @@ _ReduceOp.RedOpType = _ReduceOp
 
 
 def _all_reduce(tensor, op=None, group=None, async_op=False):
+
+    _opaque_for_graph_replay("torch.distributed.all_reduce")
     size = _require_supported_group(group, allow_subgroup=True)
     if group is not None and getattr(group, "rank", lambda: 0)() < 0:
         # This rank is not in the group, so it issues nothing and must not
@@ -551,6 +586,8 @@ def _all_reduce(tensor, op=None, group=None, async_op=False):
 
 
 def _all_gather(tensor_list, tensor, group=None, async_op=False):
+
+    _opaque_for_graph_replay("torch.distributed.all_gather")
     size = _require_supported_group(group)
     if len(tensor_list) < size:
         raise ValueError("all_gather output list is shorter than group size")
@@ -592,6 +629,8 @@ def _reduce_scatter_tensor(output, input, op=None, group=None, async_op=False):
 
 
 def _reduce_scatter(output, input_list, op=None, group=None, async_op=False):
+
+    _opaque_for_graph_replay("torch.distributed.reduce_scatter")
     size = _require_supported_group(group, allow_subgroup=True)
     if len(input_list) != size:
         raise ValueError("reduce_scatter needs one input tensor per group rank")
@@ -602,6 +641,8 @@ def _reduce_scatter(output, input_list, op=None, group=None, async_op=False):
 
 
 def _broadcast(tensor, src=0, group=None, async_op=False, group_src=None):
+
+    _opaque_for_graph_replay("torch.distributed.broadcast")
     size = _require_supported_group(group)
     root = int(src if group_src is None else
                _api_dist_get_global_rank(group, group_src))
