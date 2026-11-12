@@ -9,9 +9,9 @@ import shutil
 from jittor_utils.env_config import build_env
 from jittor_utils.build_config import BuildConfig, BuildContext, BuildSource
 
-# Preserve the previous provider's sorted source order and compilation split.
-# The provider runtime in src/backend.cc and src/workspace.cc is compiled by
-# BuildConfig separately; it must never enter this registration module.
+# Registration and kernels link into the same core: the registry and generated
+# bindings reference core symbols and cannot be imported before that core exists.
+# Runtime sources retain their separate BuildSource compilation flags.
 REGISTRATION_SOURCES = (
     "src/acl_error_code.cc",
     "src/acl_jittor.cc",
@@ -96,10 +96,8 @@ def configure(context: BuildContext) -> BuildConfig:
     if context.load_library is None:
         raise RuntimeError("ACL configuration requires a load_library service")
     acl_compiler_home = os.path.dirname(__file__)
-    cc_files = [os.path.join(acl_compiler_home, name)
-                for name in REGISTRATION_SOURCES]
     extra_core_files = list(config.extra_core_files) + [
-        os.path.join(acl_compiler_home, name) for name in CORE_SOURCES
+        os.path.join(acl_compiler_home, name) for name in REGISTRATION_SOURCES + CORE_SOURCES
     ]
     cc_flags = f" -MD -DHAS_ACCELERATOR -DHAS_CUDA -DIS_ACL  \
     -I{ascend_toolkit_home}/include/ \
@@ -116,18 +114,6 @@ def configure(context: BuildContext) -> BuildConfig:
     cc_flags += " -llibopapi "
 
     library = context.load_library("libascendcl.so", os.RTLD_NOW | os.RTLD_GLOBAL)
-    # Compile the registration entry point as a normal backend module.  ACL
-    # kernels are native provider sources; no whole-tree source rewriting is
-    # performed here.  In particular, do not expose a converter resource:
-    # generated CUDA source is either handled by a registered ACL operation or
-    # rejected explicitly by the provider.
-    mod = context.compile_module(
-        '''
-#include "core/common.h"
-namespace jittor {
-// @pyjt(init_acl_ops)
-void init_acl_ops();
-}''', config.cc_flags + " " + " ".join(cc_files) + cc_flags)
     final_flags = config.cc_flags + cc_flags
     provider_sources = tuple(
         BuildSource(os.path.join(acl_compiler_home, name), flags=cc_flags)
@@ -155,7 +141,7 @@ void init_acl_ops();
         # publishes its own conv/matmul kernels from kernels/install.py.
         setup_fake_cuda_lib=False, extra_core_files=tuple(extra_core_files),
         environment={**config.environment, "use_mkl": "0"},
-        resources={**config.resources, "acl_initializer": mod, "acl_library": library},
+        resources={**config.resources, "acl_library": library},
     )
 
 
@@ -169,4 +155,4 @@ def install_extern(context: BuildContext) -> bool:
 
 def post_process(context: BuildContext) -> None:
     if context.config.has_acl:
-        context.config.resources["acl_initializer"].init_acl_ops()
+        context.native_core.initialize_backend_operators()

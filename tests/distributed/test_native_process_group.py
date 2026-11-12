@@ -53,6 +53,23 @@ class TestNativeProcessGroup(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "no backend communicator"):
             group._all_reduce(4, "sum")
 
+    def test_singleton_does_not_create_or_invent_a_backend(self):
+        self.runtime.in_mpi = False
+
+        def unexpected_create(ranks):
+            self.fail("a singleton must not initialize an MPI communicator")
+
+        self.runtime.compile_extern = types.SimpleNamespace(
+            mpi=types.SimpleNamespace(mpi_create_process_group=unexpected_create),
+            mpi_ops=object())
+        group = self.module.ProcessGroup([0])
+        group._create_backend_communicator()
+        self.assertIsNone(group._backend_kind)
+        self.assertIsNone(group._collective_backend())
+        self.assertEqual(group._backend_handle, 0)
+        value = object()
+        self.assertIs(group._all_reduce(value, "sum"), value)
+
     def test_world_delegates_native_collective(self):
         calls = []
         tensor = types.SimpleNamespace(

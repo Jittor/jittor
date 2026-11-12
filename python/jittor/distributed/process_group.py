@@ -261,6 +261,15 @@ class ProcessGroup:
         self._backend_handle = 0 if ranks is None else None
 
     def _create_backend_communicator(self):
+        # A one-member group performs no collective: every entry point
+        # short-circuits on `size() <= 1` before it asks for a communicator.
+        # Creating one anyway took the first backend whose ops were published
+        # -- MPI on a box with mpicc, whose wrapper refuses uninitialized MPI
+        # -- and made a single-card run fail at engine start.
+        if self.ranks is not None and len(self.ranks) <= 1:
+            self._backend_kind = _default_backend_name()
+            self._backend_handle = 0
+            return
         compile_extern = jt.compile_extern
         choices = (
             ("nccl", getattr(compile_extern, "nccl", None),

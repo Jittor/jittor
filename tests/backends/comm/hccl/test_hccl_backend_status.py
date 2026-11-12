@@ -120,3 +120,20 @@ def test_hccl_status_on_declared_runtime(monkeypatch):
             assert tuple(broadcast.shape) == (0,)
             jt.sync_all(True)
         assert distributed.get_hccl_world_info() == info
+
+
+@pytest.mark.parametrize('dtype', ['float32', 'bfloat16'])
+def test_hccl_two_rank_dtype_sum(dtype):
+    if os.environ.get('JITTOR_HCCL_STATUS_TEST_MODE', 'cpu') != 'npu':
+        pytest.skip('requires two real NPU ranks launched with HCCL')
+    assert jt.compiler.has_acl
+    info = distributed.get_hccl_world_info()
+    assert info['initialized'] and info['world_size'] == 2
+    module = get_library('hccl', load=False)
+    with jt.flag_scope(use_cuda=1), forbid_backend_fallbacks():
+        value = 1.5 if info['rank'] == 0 else 2.25
+        source = jt.array(np.full(257, value, dtype=np.float32)).cast(dtype)
+        result = module.ops.hccl_all_reduce(source, 'sum', 0).sync()
+        assert result.location() == 'device'
+        np.testing.assert_array_equal(result.float32().numpy(), np.full(257, 3.75))
+        jt.sync_all(True)

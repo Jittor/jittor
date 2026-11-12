@@ -566,6 +566,38 @@ void finalize_if_unused() noexcept {
     report_acl(aclFinalize(), "aclFinalize");
 }
 
+namespace {
+// 207001, ACL_ERROR_RT_MEMORY_ALLOCATION.  Only this specific refusal means
+// "the peer pool cannot serve this size", and only then is the fallback used.
+constexpr aclError kAclErrorRtMemoryAllocation = static_cast<aclError>(207001);
+constexpr int kMaxTrackedDevices = 64;
+// One flag per device: a refusal on one card must not downgrade allocations
+// on the other cards, which may still have P2P capacity.
+std::atomic<bool> p2p_refused_by_device[kMaxTrackedDevices];
+
+// `JT_ACL_DISABLE_P2P=1` exercises the ordinary-HBM path (and the peer copy
+// that then has to enable the pair itself) without waiting for a real 207001.
+bool p2p_disabled_by_env() {
+    static const bool disabled = [] {
+        const char* value = std::getenv("JT_ACL_DISABLE_P2P");
+        return value && value[0] == '1' && value[1] == '\0';
+    }();
+    return disabled;
+}
+
+bool p2p_refused_on(int device) {
+    if (p2p_disabled_by_env()) return true;
+    return device >= 0 && device < kMaxTrackedDevices
+        && p2p_refused_by_device[device].load(std::memory_order_relaxed);
+}
+
+void p2p_refuse(int device) {
+    if (device >= 0 && device < kMaxTrackedDevices) {
+        p2p_refused_by_device[device].store(true, std::memory_order_relaxed);
+    }
+}
+}  // namespace
+
 void* allocate_memory(int device, BackendMemoryKind kind, size_t size) {
     if (!size) return nullptr;
     USER_CHECK(kind != BackendMemoryKind::Managed) << "ACL has no managed-memory allocator";
@@ -574,10 +606,34 @@ void* allocate_memory(int device, BackendMemoryKind kind, size_t size) {
         // Storage that may later be read from a peer has to be reachable
         // through the peer link from its first allocation, and which tensors
         // those are is not known here.
-        auto policy = ready_device_count.load(std::memory_order_relaxed) > 1
-            ? ACL_MEM_MALLOC_HUGE_FIRST_P2P : ACL_MEM_MALLOC_HUGE_FIRST;
-        check_acl(kind == BackendMemoryKind::Pinned ? aclrtMallocHost(&pointer, size)
-            : aclrtMalloc(&pointer, size, policy), "allocate ACL memory");
+        //
+        // The P2P pool is capped far below the card's HBM on 910B3: after the
+        // process has touched a second device, an allocation served from
+        // ACL_MEM_MALLOC_HUGE_FIRST_P2P can fail with 207001 while HBM is
+        // still mostly free.  Remembering that refusal avoids one failed
+        // aclrtMalloc per tensor, which dominated the offloader's parameter
+        // moves (17 s to stage a 10 GiB module).  The memory is refused
+        // *per device* and only for an ACL allocation failure: a device that
+        // still has P2P capacity keeps using it, and any other error (bad
+        // device, invalid size) is reported unchanged instead of being
+        // retried against ordinary HBM.  Ordinary HBM remains usable for
+        // cross-device copies -- `enable_peer_copy` enables the pair and
+        // re-checks `aclrtDeviceCanAccessPeer` when the copy is issued.
+        const bool p2p_policy =
+            ready_device_count.load(std::memory_order_relaxed) > 1
+            && !p2p_refused_on(device);
+        auto policy = p2p_policy ? ACL_MEM_MALLOC_HUGE_FIRST_P2P
+                                 : ACL_MEM_MALLOC_HUGE_FIRST;
+        aclError status = kind == BackendMemoryKind::Pinned
+            ? aclrtMallocHost(&pointer, size)
+            : aclrtMalloc(&pointer, size, policy);
+        if (status != ACL_SUCCESS && p2p_policy
+                && kind != BackendMemoryKind::Pinned
+                && status == kAclErrorRtMemoryAllocation) {
+            p2p_refuse(device);
+            status = aclrtMalloc(&pointer, size, ACL_MEM_MALLOC_HUGE_FIRST);
+        }
+        check_acl(status, "allocate ACL memory");
         try {
             std::lock_guard<std::recursive_mutex> guard(state().mutex);
             state().memory.emplace(pointer, MemoryRecord{device, kind});
