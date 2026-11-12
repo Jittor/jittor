@@ -78,6 +78,16 @@ struct LinearOwnerEpochs {
         return true;
     }
 
+    static bool inert_dictionary(PyDictObject* scope) {
+        // An exact-string lookup can still compare against a colliding key
+        // already stored in the dictionary. Its equality may execute Python.
+        Py_ssize_t position = 0;
+        PyObject* key;
+        while (PyDict_Next((PyObject*)scope, &position, &key, nullptr))
+            if (!inert_key(key)) return false;
+        return true;
+    }
+
     void remember(PyObject* checks, PyObject* type_checks) {
         for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(checks); ++i) {
             PyObject* item = PyTuple_GET_ITEM(checks, i);
@@ -87,8 +97,10 @@ struct LinearOwnerEpochs {
             auto* scope = (PyDictObject*)PyTuple_GET_ITEM(item, 0);
             if (!scope->ma_version_tag) return;
             if (std::none_of(dictionaries.begin(), dictionaries.end(),
-                    [&](const auto& entry) { return entry.first == scope; }))
+                    [&](const auto& entry) { return entry.first == scope; })) {
+                if (!inert_dictionary(scope)) return;
                 dictionaries.emplace_back(scope, scope->ma_version_tag);
+            }
         }
         for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(type_checks); ++i) {
             PyObject* item = PyTuple_GET_ITEM(type_checks, i);

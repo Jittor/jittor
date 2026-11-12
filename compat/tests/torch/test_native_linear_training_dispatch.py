@@ -335,3 +335,39 @@ def test_linear_owner_keys_with_python_hashes_are_observed_on_every_call(device)
         assert calls == [1, 1]
     finally:
         bind(*original)
+
+
+def test_linear_owner_stored_keys_keep_python_comparisons_on_every_call(device):
+    if device != "cuda":
+        pytest.skip("native Linear owner guards execute on CUDA")
+    _, outer, x = _prepared(device)
+    bind, original = _native_module_binding()
+    expected, _ = _linear_frames(outer, x)
+    calls = []
+    name = "external_linear_owner"
+
+    class StoredKey:
+        def __hash__(self):
+            return hash(name)
+
+        def __eq__(self, other):
+            calls.append(1)
+            return other == name
+
+    marker = object()
+    scope = {StoredKey(): marker}
+    parts = dict(original[-1])
+    state = list(parts["linear_training_state"])
+    state[0] = (*state[0], (scope, name, marker))
+    parts["linear_training_state"] = tuple(state)
+    try:
+        bind(*original[:-1], parts)
+        calls.clear()
+        for _ in range(4):
+            result, frames = _linear_frames(outer, x)
+            assert frames == 0
+            np.testing.assert_array_equal(result.detach().cpu().numpy(),
+                                          expected.detach().cpu().numpy())
+        assert calls == [1, 1, 1, 1]
+    finally:
+        bind(*original)
