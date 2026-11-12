@@ -43,6 +43,7 @@ from .method_api import (
     _api_is_shared,
     _api_is_contiguous,
     _api_is_leaf,
+    _api_version,
     _api_is_sparse,
     _api_is_quantized,
     _api_retains_grad,
@@ -510,6 +511,9 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # Keep the compatibility spelling on Var so it follows the graph instead
     # of silently calling every intermediate a leaf.
     Var.is_leaf = property(_api_is_leaf)
+    Var._version = property(_api_version)
+    register_api_bindings(Var, 'torch.Tensor', ('_version',), Fidelity.EXACT,
+                          'Read the native shared logical-write counter without a Python cache.')
     Var.is_sparse = property(_api_is_sparse)
     Var.is_quantized = property(_api_is_quantized)
     register_api_bindings(Var, 'torch.Tensor', ('is_quantized',), Fidelity.EXACT,
@@ -752,6 +756,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         '_native_norm': locals().get('_native_norm'),
         '_native_numpy': locals().get('_native_numpy'),
         '_native_requires_grad': locals().get('_native_requires_grad'),
+        '_native_inplace_version': _type_attribute(Var, 'inplace_version'),
         '_native_squeeze': locals().get('_native_squeeze'),
         '_norm_via': locals().get('_norm_via'),
         '_orig_getitem': locals().get('_orig_getitem'),
