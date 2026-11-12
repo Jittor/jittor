@@ -387,8 +387,8 @@ PyObject* linear_without_bias(PyObject* module, PyObject* dict, PyObject* x) {
     if (w->shape.size() != 2 || rank < 2 || a->shape[rank - 1] != w->shape[1]) return nullptr;
     if (a->dtype() != w->dtype() || !a->dtype().is_float()) return nullptr;
     // A large product that records gradients goes to `nn.Linear.execute`,
-    // whose training route times cuBLASLt's candidates for its three GEMMs
-    // (`lt_linear_train_cuda`, whose thresholds these are): for a Qwen3 MLP's
+    // whose training route may time cuBLASLt's candidates for its three GEMMs
+    // (`lt_linear_train_cuda` applies its own, possibly larger size floor): for a Qwen3 MLP's
     // weight gradient the heuristic pick taken here ran 219 us, the best
     // candidate 172. That route makes its own checks and falls back to this
     // same product.
@@ -507,7 +507,8 @@ PyObject* linear_with_bias_training(PyObject* module, PyObject* dict, PyObject* 
                 || !wh->get_requires_grad())
             return false;
         int64 rows = a->num / w->shape[1];
-        // The larger training route tunes its GEMMs and owns its bias VJP.
+        // Leave potentially tunable products to the live Python owner. Its
+        // own size floor may keep more of them on the ordinary matmul/VJP.
         return rows < 1024
             || double(rows) * w->shape[0] * w->shape[1] < double(int64(1) << 28);
     };

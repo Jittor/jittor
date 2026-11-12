@@ -678,7 +678,11 @@ def _supports_training(x, weight, bias):
 
 #: The smallest problem the training route takes: rows, and rows x cin x cout.
 _MIN_ROWS = 1024
-_MIN_PRODUCT = 1 << 28
+# Tuning a few GEMMs must repay a Python Function/context on every forward and
+# backward. Medium products still benefit from the ordinary native matmul and
+# bias VJP; a lower floor sent them through that context for negligible device
+# savings. Keep the tuned route for sufficiently large contractions instead.
+_MIN_PRODUCT = 1 << 32
 
 
 def lt_linear_train_cuda(x, weight, bias=None):
