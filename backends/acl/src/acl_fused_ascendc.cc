@@ -3,7 +3,7 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
-// One generated AscendC kernel per fused float32 elementwise group.
+// One generated AscendC kernel per eligible floating-point elementwise group.
 //
 // The generic ACL path (exec_acl_sequence) issues one aclnn launch per node of
 // a fused group: a five-node activation costs five launches, each carrying a
@@ -14,8 +14,8 @@
 //
 // It is deliberately narrow. A group is eligible only when every fact needed
 // for a bit-exact result is checked, never assumed:
-//   * every var is float32, contiguous, on the device, 32-byte aligned and has
-//     the same element count;
+//   * vars use supported float32/float16/bfloat16 combinations, device storage
+//     and checked dense or broadcast layouts with compatible element counts;
 //   * every node is a unary/binary/copy whose AscendC intrinsic was measured
 //     bit-identical to the aclnn op the generic path would have run
 //     (add/sub/mul/max/min/abs/neg are exact; div is within 1 ulp);
@@ -58,7 +58,7 @@ namespace jittor
     // bug across the whole framework, so the per-node path stays the default
     // until this one has been through a full acceptance run.
     DEFINE_FLAG(int, use_acl_ascendc_fusion, 0,
-        "Run eligible float32 elementwise fused groups as one generated AscendC kernel");
+        "Run eligible floating-point elementwise fused groups as one generated AscendC kernel");
     DEFINE_FLAG(int, acl_ascendc_min_nodes, 1,
         "Smallest fused group the AscendC path takes over (1 also replaces single-node groups)");
 
@@ -327,12 +327,17 @@ namespace jittor
 
             // Unified buffer accounting in bytes per element.
             int64 bytes = 0;
+            int64 fixed_bytes = 0;
             for (int i = 0; i < n_in; i++)
             {
                 int d = dtype_size(idtype[i]);
                 if (!period[i]) bytes += 2 * d + ((widen && d < 4) ? 4 : 0);
-                else if (period[i] == 1) bytes += 32;
-                else bytes += d + ((widen && d < 4) ? 4 : 0);
+                else {
+                    // Every broadcast owns a tile-sized bp (and optionally
+                    // bx). A scalar also needs one 32-byte load buffer bs.
+                    bytes += d + ((widen && d < 4) ? 4 : 0);
+                    if (period[i] == 1) fixed_bytes += 32;
+                }
             }
             for (int i = 0; i < n_out; i++)
             {
@@ -342,7 +347,7 @@ namespace jittor
             bytes += (int64)n_temp * 4;
             if (plan.scratch) bytes += 2;   // the 2-byte round-trip buffer
             if (bytes <= 0) return string();
-            int tile = (int)(kUbBudget / bytes);
+            int tile = (int)((kUbBudget - fixed_bytes) / bytes);
             tile = tile / 64 * 64;
             if (tile > kMaxTile) tile = kMaxTile;
             tile = tile / plan.align * plan.align;
@@ -400,7 +405,7 @@ namespace jittor
             for (int i = 0; i < n_out; i++)
                 s << "    pipe.InitBuffer(qo" << i << ", 2, JT_TILE * " << dtype_size(odtype[i]) << ");\n";
             for (int i = 0; i < n_in; i++)
-                if (period[i] > 1) s << "    pipe.InitBuffer(bp" << i << ", JT_TILE * " << dtype_size(idtype[i]) << ");\n";
+                if (period[i]) s << "    pipe.InitBuffer(bp" << i << ", JT_TILE * " << dtype_size(idtype[i]) << ");\n";
             for (int i = 0; i < n_in; i++)
                 if (period[i] == 1) s << "    pipe.InitBuffer(bs" << i << ", 32);\n";
             for (int i = 0; i < n_temp; i++)

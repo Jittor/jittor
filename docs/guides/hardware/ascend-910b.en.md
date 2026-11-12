@@ -425,6 +425,16 @@ that ACL runner **before** the execute call uses an invalid executor.
 
 ## Debugging on Ascend
 
+For multi-device allocation diagnostics, set `JT_ACL_DISABLE_P2P=1` before starting
+the process to force ordinary HBM allocation. Unset, empty and `0` retain the default
+policy. The value is cached on first allocation, so restart the process to change it.
+The default policy remembers a device's P2P refusal and retries ordinary HBM only
+for error `207001`; other errors propagate. With two allocated devices, run
+`python -m pytest -q tests/backends/acl/test_acl_peer_allocation.py` in separate
+processes with the variable unset and set to `1`, checking cross-device copies,
+synchronization and data equality. This is a diagnostic switch; hardware acceptance
+for a particular device/CANN combination is recorded in the corresponding PR.
+
 Jittor's own logs, `JT_SYNC=1`, and `sync_run=1` are covered above and in the
 [debugging guide](../debugging.en.md). The following are **CANN-side** switches: they belong to
 the vendor runtime, do not override Jittor flags and vice versa, and take effect only in a

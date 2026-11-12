@@ -578,7 +578,10 @@ std::atomic<bool> p2p_refused_by_device[kMaxTrackedDevices];
 // `JT_ACL_DISABLE_P2P=1` exercises the ordinary-HBM path (and the peer copy
 // that then has to enable the pair itself) without waiting for a real 207001.
 bool p2p_disabled_by_env() {
-    static const bool disabled = std::getenv("JT_ACL_DISABLE_P2P") != nullptr;
+    static const bool disabled = [] {
+        const char* value = std::getenv("JT_ACL_DISABLE_P2P");
+        return value && value[0] == '1' && value[1] == '\0';
+    }();
     return disabled;
 }
 
