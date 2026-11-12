@@ -72,3 +72,23 @@ class TestCollectiveBufferStorage:
 
 
 instantiate_device_type_tests(TestCollectiveBufferStorage, globals())
+
+
+def test_collective_copy_does_not_rebind_after_an_eager_allocation_error(monkeypatch):
+    import jittor as jt
+    import pytest
+    from jittor.compat.torch.installers.distributed import _copy_tensor
+
+    destination = torch.zeros(3)
+    source = torch.ones(3)
+    destination.sync()
+    pointer = destination.data_ptr()
+
+    def unavailable_storage(self, value, *args):
+        raise jt.JittorError('_copy_into needs an allocated tensor')
+
+    monkeypatch.setattr(jt.Var, '_copy_into', unavailable_storage)
+    with pytest.raises(jt.JittorError, match='needs an allocated tensor'):
+        _copy_tensor(destination, source)
+    assert destination.data_ptr() == pointer
+    np.testing.assert_array_equal(destination.numpy(), [0, 0, 0])

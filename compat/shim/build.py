@@ -80,6 +80,39 @@ def _jt_preload_stdlib_dataclasses():
 
 _jt_drop_internal_package_paths()
 _jt_preload_stdlib_dataclasses()
+
+def _jt_chain_environment_sitecustomize():
+    # Run the project's own sitecustomize, which this file shadows: the shim
+    # site goes first on a child process's path, so site.py answers with this
+    # file and an environment-provided sitecustomize.py (the usual hook for
+    # shim platform patches) is never imported.  The driver applied those
+    # patches and every spawned worker silently did not -- the ACL
+    # ConvTranspose kernel was registered in the parent and missing in every
+    # DiffusionWorker.  Load the next one on PYTHONPATH explicitly.
+    # Only chain once per process: importing the environment sitecustomize
+    # imports torch, the shim bootstrap can execute this file again, and the
+    # chain would re-enter the module that is still initializing.
+    # Interpreter-local: an environment marker would also disable the hook
+    # in every spawned Python worker inheriting the parent's environment.
+    if "_jt_env_sitecustomize" in _sys.modules:
+        return
+    here = _os.path.abspath(__file__)
+    entries = _os.environ.get("PYTHONPATH", "").split(_os.pathsep)
+    for entry in entries:
+        if not entry:
+            continue
+        candidate = _os.path.join(entry, "sitecustomize.py")
+        if not _os.path.isfile(candidate) or _os.path.abspath(candidate) == here:
+            continue
+        spec = _iu.spec_from_file_location("_jt_env_sitecustomize", candidate)
+        if spec is None or spec.loader is None:
+            continue
+        _mod = _iu.module_from_spec(spec)
+        _sys.modules["_jt_env_sitecustomize"] = _mod
+        spec.loader.exec_module(_mod)
+        return
+
+_jt_chain_environment_sitecustomize()
 """.lstrip(),
         encoding="utf-8",
     )

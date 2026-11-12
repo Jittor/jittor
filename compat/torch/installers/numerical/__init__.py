@@ -1078,6 +1078,16 @@ register_fidelity(
     "layout, dtype, and out semantics are not implemented",
 )
 
+from .linalg import vander
+
+register_fidelity(
+    "torch.vander",
+    vander,
+    Fidelity.APPROXIMATE,
+    "matches Torch column order, dtype, and gradients for 1-D CPU tensors; "
+    "device and layout semantics are not implemented",
+)
+
 from .reductions import logsumexp
 
 register_fidelity(
@@ -1136,7 +1146,8 @@ def _sparse_sum(x, dim=None):
 
 
 def _vdet(self):
-    import jittor.linalg as _la; return _la.det(self)
+    from .linalg import det
+    return det(self)
 
 
 def _vinv(self):
@@ -1289,6 +1300,7 @@ def install(ctx):
     _bind_missing(g, "diag_embed", diag_embed); Var.diag_embed = _diag_embed_impl
     _bind_missing(g, "diagflat", diagflat)
     g.kron = kron; Var.kron = kron
+    _bind_missing(g, "vander", vander)
     _bind_missing(g, "logcumsumexp", logcumsumexp); Var.logcumsumexp = _logcumsumexp_impl
     g.tensordot = tensordot
     _bind_missing(g, "pdist", pdist); Var.pdist = _pdist_impl
@@ -1377,6 +1389,15 @@ def install_parity(ctx):
     # torch's solve takes `left=`/`out=`; the native one is the left solve.
     from .linalg import solve
     linalg.solve = solve
+    # torch.linalg.eig answers a real input with native complex tensors of the
+    # matching precision; the native eig hands back legacy complex64 pairs.
+    from .linalg import eig
+    linalg.eig = eig
+    from .linalg import det, slogdet, eigh, eigvalsh
+    linalg.det = det
+    linalg.slogdet = slogdet
+    linalg.eigh = eigh
+    linalg.eigvalsh = eigvalsh
     registry.publish("torch.linalg", linalg)
     g.linalg = linalg
 
@@ -1390,7 +1411,17 @@ def install_parity(ctx):
         if value is not None:
             setattr(special, name, value)
     special.expit = getattr(g, "sigmoid")
+    special.entr = _special_entr
     g.special = special
+
+def _special_entr(input):
+    """torch.special.entr: -x*log(x) for x > 0, 0 at 0, -inf for x < 0 (NaN stays NaN)."""
+    import jittor as jt
+    safe = jt.where(input > 0, input, jt.ones_like(input))
+    value = -input * jt.log(safe)
+    value = jt.where(input == 0, jt.zeros_like(input), value)
+    return jt.where(input < 0, jt.full_like(input, float("-inf")), value)
+
 
 def install_signal(ctx):
     """Window and short-time Fourier transform.

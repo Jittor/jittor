@@ -90,11 +90,23 @@ def pca_lowrank(A, q=6, center=True, niter=2):
 
 
 def det(input):
-    """Compute a matrix determinant via Jittor's native linalg owner."""
+    """Matrix determinant with torch's shape: ``input.shape[:-2]`` (0-dim for one matrix).
+
+    The native owner keeps a legacy trailing 1 for an unbatched input, which
+    turned anything computed from one determinant into a batch of one.
+    """
     from . import (
         jt,
     )
-    return jt.linalg.det(input)
+    return jt.linalg.det(input).reshape(tuple(input.shape[:-2]))
+
+
+def slogdet(input):
+    """torch.linalg.slogdet: (sign, logabsdet), each shaped ``input.shape[:-2]``."""
+    import jittor.linalg as native_linalg
+    sign, logabsdet = native_linalg.slogdet(input)
+    shape = tuple(input.shape[:-2])
+    return sign.reshape(shape), logabsdet.reshape(shape)
 
 
 def inverse(input):
@@ -248,3 +260,61 @@ def kron(a, b):
         bex += [1, int(b2.shape[i])]
         fin.append(int(a2.shape[i]) * int(b2.shape[i]))
     return (a2.reshape(aex) * b2.reshape(bex)).reshape(fin)
+
+
+def vander(x, N=None, increasing=False):
+    """torch.vander: columns are powers of the 1-D ``x``, highest power first.
+
+    Powers come from repeated multiplication, as in Torch's cumulative-product
+    implementation, so integer inputs stay integer and gradients stay exact.
+    """
+    import jittor as jt
+    if x.ndim != 1:
+        raise RuntimeError("x must be a one-dimensional tensor.")
+    n = int(x.shape[0]) if N is None else int(N)
+    if n < 0:
+        raise RuntimeError("N must be non-negative.")
+    if n == 0:
+        return jt.zeros((int(x.shape[0]), 0), dtype=x.dtype)
+    columns = [jt.ones_like(x)]
+    for _ in range(n - 1):
+        columns.append(columns[-1] * x)
+    if not increasing:
+        columns.reverse()
+    return jt.stack(columns, dim=1)
+
+
+def eig(input, *, out=None):
+    """torch.linalg.eig: native complex eigenvalues/vectors in the input's precision."""
+    import jittor as jt
+    import jittor.linalg as native_linalg
+    if out is not None:
+        raise NotImplementedError("torch.linalg.eig(out=...) is not supported")
+    name = jt.core._checked_dtype_name(input.dtype)
+    if not name.startswith("complex"):
+        input = input.cast("complex128" if name == "float64" else "complex64")
+    return native_linalg.eig(input)
+
+
+def _real_eigenvalues(w):
+    import jittor as jt
+    return w.real if jt.core._checked_dtype_name(w.dtype).startswith("complex") else w
+
+
+def eigvalsh(input, UPLO="L", *, out=None):
+    """torch.linalg.eigvalsh: real eigenvalues, also for a complex Hermitian input."""
+    import jittor.linalg as native_linalg
+    if out is not None:
+        raise NotImplementedError("torch.linalg.eigvalsh(out=...) is not supported")
+    return _real_eigenvalues(native_linalg.eigvalsh(input, UPLO))
+
+
+def eigh(input, UPLO="L", *, out=None):
+    """torch.linalg.eigh: (real eigenvalues, eigenvectors)."""
+    import jittor.linalg as native_linalg
+    if out is not None:
+        raise NotImplementedError("torch.linalg.eigh(out=...) is not supported")
+    if UPLO != "L":
+        raise NotImplementedError("torch.linalg.eigh supports UPLO='L' only")
+    w, v = native_linalg.eigh(input)
+    return _real_eigenvalues(w), v

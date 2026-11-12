@@ -79,13 +79,31 @@ class TestBFloat16LayerNormCpu:
             xholder, wholder = (jt.ops.reshape(v, v.shape) for v in (x, weight))
             output = torch.nn.functional.layer_norm(xholder, (4,), wholder, bias)
             output.sync()
-            xholder.assign(torch.full(x.shape, 7., dtype=torch.bfloat16))
-            wholder.assign(torch.full(weight.shape, 7., dtype=torch.bfloat16))
+            # swap rebinds a holder. assign is an in-place tensor operation
+            # under Torch's policy and correctly invalidates saved versions.
+            xholder.swap(torch.full(x.shape, 7., dtype=torch.bfloat16))
+            wholder.swap(torch.full(weight.shape, 7., dtype=torch.bfloat16))
             dy = torch.tensor(_DY, dtype=torch.bfloat16)
             dx, dw, db = torch.autograd.grad((output.float() * dy.float()).sum(), (x, weight, bias))
             np.testing.assert_array_equal(_snapshot(dx), _DX)
             np.testing.assert_array_equal(_snapshot(dw), [.3359375, -.224609375, -.44921875, 2.6875])
             np.testing.assert_array_equal(_snapshot(db), [-.25, .5, -1., 2.])
+
+    def test_inplace_writes_still_invalidate_saved_layer_norm_inputs(self, device):
+        with forbid_backend_fallbacks():
+            for name in ('input', 'weight'):
+                for method in ('assign', 'copy_'):
+                    with self.subTest(name=name, method=method):
+                        x = torch.tensor(_X, dtype=torch.bfloat16, requires_grad=True)
+                        weight = torch.ones(4, dtype=torch.bfloat16, requires_grad=True)
+                        xholder, wholder = (jt.ops.reshape(v, v.shape) for v in (x, weight))
+                        output = torch.nn.functional.layer_norm(xholder, (4,), wholder)
+                        output.sync()
+                        target = xholder if name == 'input' else wholder
+                        with torch.no_grad():
+                            getattr(target, method)(torch.full(target.shape, 7., dtype=torch.bfloat16))
+                        with self.assertRaisesRegex(RuntimeError, 'modified by an inplace operation'):
+                            torch.autograd.grad(output.float().sum(), (x, weight))
 
 
 instantiate_device_type_tests(TestBFloat16LayerNormCpu, globals(), only_for=("cpu",))

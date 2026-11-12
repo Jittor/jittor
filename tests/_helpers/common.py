@@ -34,6 +34,7 @@ import unittest
 import numpy as np
 
 import jittor as jt
+from jittor._core.dtypes import dtype_name as _dtype_name
 
 
 # --------------------------------------------------------------------- devices
@@ -196,7 +197,7 @@ def default_tolerances(*dtypes):
     """Loosest (atol, rtol) across the given dtypes; integers compare exactly."""
     atol = rtol = 0.0
     for d in dtypes:
-        a, r = _DEFAULT_TOL.get(str(d), (0.0, 0.0))
+        a, r = _DEFAULT_TOL.get(_dtype_name(d), (0.0, 0.0))
         atol, rtol = max(atol, a), max(rtol, r)
     return atol, rtol
 

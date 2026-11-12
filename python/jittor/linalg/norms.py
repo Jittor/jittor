@@ -10,6 +10,9 @@
 # ***************************************************************
 """Matrix and vector norms, ranks and condition numbers."""
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
+# Value reductions by name: under the Torch frontend ``Var.max(dim=)`` is
+# torch's (values, indices) pair, which made ``norm(A, ord=inf)`` a tuple.
+from jittor_core import ops as _native_ops
 
 
 def matrix_rank(x, tol=None, hermitian=False):
@@ -45,7 +48,7 @@ def matrix_rank(x, tol=None, hermitian=False):
         # the returned S (matrix_norm/cond) rely on the gradient.
         _, s, _ = svd(x, full_matrices=False)
 
-    smax = s.max(dim=-1)
+    smax = _native_ops.reduce_maximum(s, -1)
     # torch_compat gives max(dim=...) the torch return type (values, indices),
     # while this native linalg helper needs only the values tensor.
     if hasattr(smax, "values"):
@@ -117,23 +120,23 @@ def matrix_norm(x, ord='fro', dim=(-2, -1), keepdim=False):
         return _restore(res, [d0, d1])
     if ord in (2, -2):
         s = _matrix_singular_values(x, d0, d1)
-        res = s.max(dim=-1) if ord == 2 else s.min(dim=-1)
+        res = _native_ops.reduce_maximum(s, -1) if ord == 2 else _native_ops.reduce_minimum(s, -1)
         return _restore(res, [d0, d1])
     if ord in (1, -1):
         # absolute column sums (reduce the row dim d0), then max/min over cols
         col_sums = jt.abs(x).sum(dim=d0)
         # after reducing d0, the column axis d1 shifts left if d0 < d1
         col_axis = d1 - 1 if d0 < d1 else d1
-        res = col_sums.max(dim=col_axis) if ord == 1 else col_sums.min(dim=col_axis)
+        res = _native_ops.reduce_maximum(col_sums, col_axis) if ord == 1 else _native_ops.reduce_minimum(col_sums, col_axis)
         return _restore(res, [d0, d1])
     if ord in (math.inf, -math.inf, float('inf'), float('-inf')):
         # absolute row sums (reduce the column dim d1), then max/min over rows
         row_sums = jt.abs(x).sum(dim=d1)
         row_axis = d0 - 1 if d1 < d0 else d0
         if ord > 0:
-            res = row_sums.max(dim=row_axis)
+            res = _native_ops.reduce_maximum(row_sums, row_axis)
         else:
-            res = row_sums.min(dim=row_axis)
+            res = _native_ops.reduce_minimum(row_sums, row_axis)
         return _restore(res, [d0, d1])
     raise ValueError(f"matrix_norm: unsupported matrix order {ord!r}")
 
@@ -236,7 +239,7 @@ def _reduce_axes(x, ax, reduce='max'):
     # reduce from the highest axis down so earlier indices stay valid
     out = x
     for a in sorted((a % len(x.shape) for a in ax), reverse=True):
-        out = out.max(dim=a) if reduce == 'max' else out.min(dim=a)
+        out = _native_ops.reduce_maximum(out, a) if reduce == 'max' else _native_ops.reduce_minimum(out, a)
     return out
 
 
@@ -302,8 +305,8 @@ def cond(x, p=None):
     if p is None or p == 2 or p == -2:
         # reduced form -> differentiable singular values
         _, s, _ = svd(x, full_matrices=False)
-        smax = s.max(dim=-1)
-        smin = s.min(dim=-1)
+        smax = _native_ops.reduce_maximum(s, -1)
+        smin = _native_ops.reduce_minimum(s, -1)
         if p == -2:
             return smin / smax
         return smax / smin

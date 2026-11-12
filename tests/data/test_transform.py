@@ -307,6 +307,20 @@ class Tester(unittest.TestCase):
         img_F_mode = transform.ToPILImage(mode='F')(img_data_float)
         self.assertEqual(img_F_mode.mode, 'F')
 
+    def test_int16_to_pil_preserves_signed_bits_and_strided_pixels(self):
+        values = np.array([[-32768, -1, 0, 32767],
+                           [123, -456, 789, -1024]], dtype=np.int16)
+        for array in (values, values[:, ::-1], values[:, ::2]):
+            expected = array.astype(np.uint16)
+            for data in (array, array[..., None], jt.array(array),
+                         jt.array(array[..., None])):
+                for mode in (None, 'I;16'):
+                    with self.subTest(shape=data.shape, mode=mode,
+                                      tensor=isinstance(data, jt.Var)):
+                        image = transform.ToPILImage(mode=mode)(data)
+                        self.assertEqual(image.mode, 'I;16')
+                        np.testing.assert_array_equal(np.asarray(image), expected)
+
     def test_1_channel_ndarray_to_pil_image(self):
         img_data_float = np.random.rand(4, 4, 1).astype(np.float32)
         img_data_byte = np.random.randint(0, 255, (4, 4, 1)).astype(np.uint8)

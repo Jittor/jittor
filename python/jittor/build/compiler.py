@@ -346,8 +346,13 @@ def _write_jit_utils_cache_key(files, output):
     ).format(module_dir=os.path.dirname(os.path.abspath(output)),
              cache=cache_path, cmd=cmd, jittor=jittor_path)
     try:
-        result = sp.run([sys.executable, "-c", script],
-                        stdout=sp.PIPE, stderr=sp.STDOUT)
+        # The child calls cache_compile(), which takes the same build lock this
+        # process holds for the whole import. Holding it across sp.run() makes
+        # the child wait for the parent that is waiting for the child. Release
+        # the lock while the child builds; the sources are settled here.
+        with lock.unlock_scope():
+            result = sp.run([sys.executable, "-c", script],
+                            stdout=sp.PIPE, stderr=sp.STDOUT)
     except OSError as error:
         LOG.v("cache key child could not start: %s" % error)
         return
@@ -1521,6 +1526,14 @@ if platform.system() == 'Linux':
 
 build_core()
 cc_flags += f" -l\"jittor_core{lib_suffix}\" "
+
+# jittor_core's module init imports numpy's C API. If that is numpy's first
+# import, numpy's extension modules and the BLAS they link (numpy wheels ship
+# an ILP64 OpenBLAS) are loaded RTLD_GLOBAL under the scope below, and SciPy's
+# LP64 OpenBLAS, loaded later, binds its internal symbols to that library:
+# LAPACK workspace queries then return garbage ("Too large work array
+# required"). Load numpy first, with the process's own dlopen flags.
+import numpy as _numpy  # noqa: F401
 
 with jit_utils.import_scope(import_flags):
     import jittor_core as core

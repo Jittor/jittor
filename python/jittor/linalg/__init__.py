@@ -38,6 +38,10 @@ from .norms import (
 from .contractions import (
     einsum,
 )
+from .matrix_functions import (
+    matrix_exp,
+    eigvals,
+)
 from .results import INVEX, SVD
 
 _COMPLEX_EXPORTS = (
@@ -85,6 +89,8 @@ __all__ = [
     'solve',
     'qr',
     'einsum',
+    'matrix_exp',
+    'eigvals',
     "INVEX",
     "SVD",
 ]

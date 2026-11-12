@@ -19,7 +19,7 @@ from _ecosystem_longformer_cases import REQUIRED_GRADIENTS
 
 
 @unittest.skipUnless(_enabled("JITTOR_ECOSYSTEM_LONGFORMER_32K"),
-                     "opt-in Longformer 32768-token gate")
+                     "manual probe: set JITTOR_ECOSYSTEM_LONGFORMER_32K=1 with an independent oracle")
 class EcosystemLongformer(EcosystemComparison):
     def setUp(self):
         super().setUp()
