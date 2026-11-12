@@ -1646,6 +1646,29 @@ bool VarHolder::has_storage_aliases() {
     return views != nullptr || var->share_next != nullptr;
 }
 
+void copy_into_async(VarHolder* dst, VarHolder* src) {
+    CHECK(dst && src && dst->var && src->var);
+    auto* d = dst->var;
+    auto* s = src->var;
+    USER_CHECK(d->mem_ptr && s->mem_ptr)
+        << "copy_into_async needs two allocated storages";
+    USER_CHECK(d->size == s->size)
+        << "copy_into_async needs equal sizes, got " << d->size << " and " << s->size;
+    auto target = allocation_device(d->allocator);
+#ifdef HAS_ACCELERATOR
+    backend_copy_async(d->mem_ptr, target, s->mem_ptr,
+                       allocation_device(s->allocator), d->size,
+                       backend_stream(target, BackendStreamKind::Copy));
+#else
+    std::memcpy(d->mem_ptr, s->mem_ptr, d->size);
+#endif
+}
+
+void copy_wait(VarHolder* dst) {
+    CHECK(dst && dst->var);
+    backend_synchronize(allocation_device(dst->var->allocator));
+}
+
 VarHolder* VarHolder::_update(VarHolder* v, bool logical_write) {
     if (!logical_write) {
         ExecutorEntryScope entry;

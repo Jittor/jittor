@@ -1072,6 +1072,23 @@ void sync_all(bool device_sync=false);
 int first_finished(const vector<VarHolder*>& vars);
 
 /**
+ * Queue an asynchronous copy of `src`'s bytes into `dst`'s storage.
+ *
+ * Both storages must already be allocated (`dst` eagerly through
+ * `VarHolder::sync(false, false)`) and equal in size.  The copy is issued on
+ * the backend's copy stream and is NOT recorded in either Var's graph, so a
+ * parameter rebound to `dst` does not execute it; `copy_wait` is the barrier
+ * that orders the data before a reader.  This is what lets an offloader stage
+ * the next module while the device still runs the current one.
+ */
+// @pyjt(_copy_into_async)
+void copy_into_async(VarHolder* dst, VarHolder* src);
+
+/** Wait for the device of `dst` to finish queued work, `copy_into_async` included. */
+// @pyjt(_copy_wait)
+void copy_wait(VarHolder* dst);
+
+/**
  * Index of the first holder no longer holding the Var `olds` holds at the
  * same position, or -1. See `_first_finished`.
  */
