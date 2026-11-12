@@ -856,12 +856,36 @@ def _stats_report(final=False):
              _STATS["dtod_t"]), flush=True)
 
 
+_ENV_FLAG_CACHE = {}
+
+
+def _env_flag(name, truthy):
+    """A boolean environment flag, remembered per raw value.
+
+    A padded serving loop reads these flags dozens of times per kernel
+    launch; each read goes through ``os.environ`` and its name encoding.
+    The raw value is part of the key, so changing the variable still takes
+    effect, and the cache is cleared rather than grown without bound.
+    """
+    raw = os.environ.get(name, "")
+    key = (name, raw, truthy)
+    hit = _ENV_FLAG_CACHE.get(key)
+    if hit is not None:
+        return hit
+    words = ("1", "true", "yes", "on") if truthy else ("0", "false", "no", "off")
+    value = str(raw).strip().lower() in words
+    if len(_ENV_FLAG_CACHE) > 256:
+        _ENV_FLAG_CACHE.clear()
+    _ENV_FLAG_CACHE[key] = value
+    return value
+
+
 def _truthy_env(name):
-    return str(os.environ.get(name, "")).strip().lower() in ("1", "true", "yes", "on")
+    return _env_flag(name, True)
 
 
 def _falsey_env(name):
-    return str(os.environ.get(name, "")).strip().lower() in ("0", "false", "no", "off")
+    return _env_flag(name, False)
 
 
 def _int_env(name, default):
@@ -1216,20 +1240,30 @@ def _run(jitfn, args, kwargs, grid):
 
     # -- which params are constexpr? (use triton's own param metadata if present)
     constexpr_names = set()
+    # `inspect.signature` builds a new Signature object (and walks the
+    # function's code) on every call; a serving loop launches the same
+    # kernels every step, so keep the one it produced.
+    bridge_signature = getattr(jitfn, "_jt_bridge_signature", None)
+    if bridge_signature is None:
+        bridge_signature = inspect.signature(fn)
+        try:
+            jitfn._jt_bridge_signature = bridge_signature
+        except EXPECTED:
+            pass
     params = getattr(jitfn, "params", None)
     if params:
         for p in params:
             if getattr(p, "is_constexpr", False):
                 constexpr_names.add(p.name)
     else:
-        for n, p in inspect.signature(fn).parameters.items():
+        for n, p in bridge_signature.parameters.items():
             ann = p.annotation
             if "constexpr" in str(ann):
                 constexpr_names.add(n)
 
     # -- bind call args to parameter names ---------------------------------- #
     try:
-        bound = inspect.signature(fn).bind(*args, **kwargs)
+        bound = bridge_signature.bind(*args, **kwargs)
         bound.apply_defaults()
     except TypeError as e:
         raise JittorTritonError(
