@@ -245,6 +245,20 @@ static bool outputs_need_recomputing(Node* op) {
     return false;
 }
 
+// Whether `op` read an output of a graph that a backward already consumed and
+// released. Only such history keeps a producer-less var from being a leaf;
+// native vars whose producer simply ran keep Jittor's leaf semantics.
+static bool produced_from_released_output(Node* op) {
+    if (!op || op->is_var() || op->is_stop_grad()) return false;
+    for (auto& e : op->_inputs) {
+        if (!e.node->is_var()) continue;
+        Var* in = e.node->var();
+        if (in->flag(VarFlags::_had_backward_producer) && !in->is_stop_grad())
+            return true;
+    }
+    return false;
+}
+
 void Node::free() {
     CHECK_EXIST;
     // Same lock as the drain: this appends to `liveness_queue` and erases this
@@ -301,6 +315,13 @@ void Node::free() {
     // -- `graph_mutation_mutex()` -- not keep this node alive.
     flags.set(NodeFlags::_queued_for_free);
     free_buffer().push_back(this);
+    // An op freed under live outputs takes their producer edge with it below;
+    // record which of them still had a backward edge while it can be asked
+    // (see VarFlags::_had_backward_producer).
+    if (!is_var() && produced_from_released_output(this))
+        for (auto out : _outputs)
+            if (out.node->is_var())
+                ((Var*)out.node)->set_flag(VarFlags::_had_backward_producer);
     for (auto in : _inputs) {
         in.node->erase_output(in.back_index);
         if (liveness.backward.active()) {
@@ -574,6 +595,11 @@ void Node::finish_pending_liveness() {
 void Node::release_inputs() {
     CHECK_EXIST;
     if (!_inputs.size()) return;
+    // Decide before the edges go: a var computed from an output of a graph a
+    // backward already consumed inherits that history (see
+    // VarFlags::_had_backward_producer), e.g. `running = 0 + loss`.
+    if (is_var() && produced_from_released_output(_inputs.front().node))
+        ((Var*)this)->set_flag(VarFlags::_had_backward_producer);
     std::lock_guard<GraphMutationMutex> guard(graph_mutation_mutex());
     SetupFreeBuffer setup_free_buffer;
     for (auto in : _inputs) {
@@ -635,6 +661,8 @@ void Node::set_inputs(Node* const* nodes, size_t count) {
     run_liveness_queue("set_inputs");
     release_inputs();
     bool is_var = this->is_var();
+    // A new producer replaces the history; the new edges answer for it.
+    if (is_var) ((Var*)this)->set_flag(VarFlags::_had_backward_producer, 0);
     for (size_t i = 0; i < count; i++) {
         Node* node = nodes[i];
         uint output_index = node->_outputs.size();

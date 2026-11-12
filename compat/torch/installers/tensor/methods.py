@@ -33,6 +33,9 @@ from .method_api import (
     _api_argwhere_alias,
     _api_hash,
     _api_nelement,
+    _api_ndimension,
+    _api_bool,
+    _api_array,
     _api_is_floating_point,
     _api_is_complex,
     _api_is_signed,
@@ -390,6 +393,11 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         Var.element_size = _element_size
     if not hasattr(Var, "nelement"):
         Var.nelement = _api_nelement
+    if not hasattr(Var, "ndimension"):
+        Var.ndimension = _api_ndimension
+    Var.__bool__ = _api_bool
+    _native_array = Var.__array__
+    Var.__array__ = _api_array
 
     # torch dtype predicates on the tensor itself. transformers computes
     # model.dtype via `next(p.dtype for p in params if p.is_floating_point())`,
@@ -751,6 +759,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         '_native_nonzero': locals().get('_native_nonzero'),
         '_native_norm': locals().get('_native_norm'),
         '_native_numpy': locals().get('_native_numpy'),
+        '_native_array': locals().get('_native_array'),
         '_native_requires_grad': locals().get('_native_requires_grad'),
         '_native_squeeze': locals().get('_native_squeeze'),
         '_norm_via': locals().get('_norm_via'),
@@ -773,5 +782,5 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         'Shares the public function implementation and preserves native explicit autocast policy')
 
     register_api_bindings(Var, 'torch.Tensor',
-        ('T', '__iadd__', '__isub__', '__imul__', '__itruediv__', '__deepcopy__', '__getitem__', '__hash__', '__invert__', '__ne__', '__reduce__', '__reduce_ex__', '__setitem__', 'add_', 'addcdiv_', 'addcmul_', 'addmm', 'argwhere', 'as_strided', 'backward', 'baddbmm', 'clamp', 'clamp_', 'clip', 'clip_', 'contiguous', 'copy_', 'cpu', 'cuda', 'cumprod', 'cumsum', 'data', 'data_ptr', 'detach', 'device', 'div_', 'dtype', 'element_size', 'exponential_', 'fill_', 'fill_diagonal_', 'get_device', 'grad', 'grad_fn', 'is_complex', 'is_contiguous', 'is_cpu', 'is_cuda', 'is_floating_point', 'is_leaf', 'is_meta', 'is_mps', 'is_nested', 'is_pinned', 'is_shared', 'is_signed', 'is_xpu', 'lerp', 'lerp_', 'mT', 'mul_', 'multiply_', 'narrow', 'ne', 'nelement', 'new_empty', 'new_full', 'new_ones', 'new_tensor', 'new_zeros', 'nonzero', 'norm', 'normal_', 'numpy', 'pin_memory', 'random_', 'requires_grad', 'requires_grad_', 'retain_grad', 'retains_grad', 'set_', 'share_memory_', 'squeeze', 'storage', 'storage_offset', 'stride', 'sub_', 'tile', 'to', 'tolist', 'type', 'type_as', 'uniform_', 'untyped_storage', 'where', 'zero_') + tuple(_BINARY_APIS.keys() | _CAST_APIS.keys() | _UNARY_INPLACE_APIS.keys()),
+        ('T', '__array__', '__bool__', '__iadd__', '__isub__', '__imul__', '__itruediv__', '__deepcopy__', '__getitem__', '__hash__', '__invert__', '__ne__', '__reduce__', '__reduce_ex__', '__setitem__', 'add_', 'addcdiv_', 'addcmul_', 'addmm', 'argwhere', 'as_strided', 'backward', 'baddbmm', 'clamp', 'clamp_', 'clip', 'clip_', 'contiguous', 'copy_', 'cpu', 'cuda', 'cumprod', 'cumsum', 'data', 'data_ptr', 'detach', 'device', 'div_', 'dtype', 'element_size', 'exponential_', 'fill_', 'fill_diagonal_', 'get_device', 'grad', 'grad_fn', 'is_complex', 'is_contiguous', 'is_cpu', 'is_cuda', 'is_floating_point', 'is_leaf', 'is_meta', 'is_mps', 'is_nested', 'is_pinned', 'is_shared', 'is_signed', 'is_xpu', 'lerp', 'lerp_', 'mT', 'mul_', 'multiply_', 'narrow', 'ndimension', 'ne', 'nelement', 'new_empty', 'new_full', 'new_ones', 'new_tensor', 'new_zeros', 'nonzero', 'norm', 'normal_', 'numpy', 'pin_memory', 'random_', 'requires_grad', 'requires_grad_', 'retain_grad', 'retains_grad', 'set_', 'share_memory_', 'squeeze', 'storage', 'storage_offset', 'stride', 'sub_', 'tile', 'to', 'tolist', 'type', 'type_as', 'uniform_', 'untyped_storage', 'where', 'zero_') + tuple(_BINARY_APIS.keys() | _CAST_APIS.keys() | _UNARY_INPLACE_APIS.keys()),
         Fidelity.APPROXIMATE, 'Tensor operations share the native Var/Op graph and explicit frontend state; unsupported layouts, device capabilities, and retained compatibility approximations remain restricted')

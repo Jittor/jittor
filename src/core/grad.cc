@@ -213,7 +213,15 @@ Op* backward_grad_fn(Var* v) {
         // A later reversible freeze of an input does not erase the producer
         // already recorded for this output. Edges disabled at construction
         // are checked below; permanent stop-grad still ends the graph.
-        if (in->is_stop_grad()) continue;
+        if (in->is_stop_grad()) {
+            // Stopped because a non-retained backward released it: the
+            // producer existed, so this output is not a leaf (torch keeps
+            // grad_fn after the buffers are freed, and in-place updates such
+            // as `running_loss += loss` stay legal). A backward that walks
+            // into the released var itself still reports it.
+            if (in->flag(VarFlags::_graph_freed)) return op;
+            continue;
+        }
         // An unrecorded view can require grad and create a producer even
         // though this particular input has no backward edge. This differs
         // from an input explicitly frozen when the op was constructed.
@@ -558,6 +566,12 @@ vector<VarPtr> grad(
         // being differentiable -- stop_grad alone cannot say -- so a later
         // backward reaching it can report the released graph instead of
         // returning zeros that look like a legitimate x.stop_grad().
+        // A held output whose producer this backward consumed keeps its
+        // grad_fn in torch (`running_loss += loss` afterwards is legal); the
+        // producer is about to be released, so record it now.
+        for (Var* v : gvars)
+            if (held_vars.count(v) && v->input() && backward_grad_fn(v))
+                v->set_flag(VarFlags::_had_backward_producer);
         for (int i=int(gvars.size())-1; i>=0; i--)
             if (!held_vars.count(gvars[i]) && gvars[i]->liveness.backward.active()) {
                 gvars[i]->set_flag(VarFlags::_graph_freed);

@@ -1522,6 +1522,14 @@ if platform.system() == 'Linux':
 build_core()
 cc_flags += f" -l\"jittor_core{lib_suffix}\" "
 
+# jittor_core's module init imports numpy's C API. If that is numpy's first
+# import, numpy's extension modules and the BLAS they link (numpy wheels ship
+# an ILP64 OpenBLAS) are loaded RTLD_GLOBAL under the scope below, and SciPy's
+# LP64 OpenBLAS, loaded later, binds its internal symbols to that library:
+# LAPACK workspace queries then return garbage ("Too large work array
+# required"). Load numpy first, with the process's own dlopen flags.
+import numpy as _numpy  # noqa: F401
+
 with jit_utils.import_scope(import_flags):
     import jittor_core as core
 

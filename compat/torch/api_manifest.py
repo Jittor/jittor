@@ -82,7 +82,7 @@ API_PATHS = {
     "torch.optim": ("LBFGS",),
     "torch.autograd": ("Variable", "enable_grad", "no_grad", "once_differentiable"),
     "torch.autograd.Function": ("__call__", "save_for_backward", "saved_tensors", "set_materialize_grads"),
-    "torch.autograd.functional": ("jvp", "vjp"),
+    "torch.autograd.functional": ("jvp", "vjp", "jacobian", "hessian"),
     "torch.distributed": ("GroupMember", "group", "is_torchelastic_launched"),
 }
 
