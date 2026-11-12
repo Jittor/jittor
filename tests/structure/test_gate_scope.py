@@ -29,6 +29,7 @@ if str(TEST_ROOT) not in sys.path:
     sys.path.insert(0, str(TEST_ROOT))
 
 from _helpers import gate_scope  # noqa: E402
+from _helpers.child_process import run_python_child  # noqa: E402
 from _helpers.paths import iter_test_files as all_test_files
 
 
@@ -150,6 +151,80 @@ def test_unavailable_cuda_skip_retains_backend_identity_for_execution_policy():
     reason = str(skipped.value).lower()
     assert policy.classify_skip_reason_bucket(reason) == "accelerator"
     assert policy._environment_explains({reason})
+
+
+def _run_execution_policy_fixture(tmp_path, files, selection=()):
+    """Exercise real pytest filtering and collection in an isolated project."""
+    root = tmp_path / "project"
+    tests = root / "tests"
+    tests.mkdir(parents=True)
+    (tests / "test_fast.py").write_text("def test_runs():\n    assert 2 + 2 == 4\n")
+    for name, content in files.items():
+        (tests / name).write_text(content)
+    script = """
+import sys
+from pathlib import Path
+import pytest
+from _helpers import pytest_policy as policy
+root = Path(sys.argv[1])
+policy.REPO_ROOT = root
+policy.TEST_ROOT = root / 'tests'
+policy.TEST_ROOTS = (policy.TEST_ROOT,)
+raise SystemExit(pytest.main([
+    '-p', '_helpers.pytest_policy', '--rootdir', str(root),
+    '--confcutdir', str(root), '-o', 'addopts=', '-p', 'no:cacheprovider',
+    '-q', str(root / 'tests'), *sys.argv[2:]]))
+"""
+    return run_python_child(
+        ["-c", script, str(root), *selection], cwd=root,
+        env={"PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1", "PYTEST_PLUGINS": "",
+             "JITTOR_TEST_REQUIRE_EXECUTION": "1", "JITTOR_TEST_STATE_LEAKS": "0",
+             "JITTOR_SESSION_SENTINEL": str(tmp_path / "session.json")},
+        without_torch_mode=True, merge_stderr=True, timeout=30,
+    )
+
+
+@pytest.mark.parametrize("selection", [("-m", "not slow"), ("-k", "not filtered")])
+def test_filtered_files_do_not_count_as_unexecuted(tmp_path, selection):
+    result = _run_execution_policy_fixture(tmp_path, {
+        "test_slow.py": "import pytest\n@pytest.mark.slow\ndef test_filtered():\n"
+                        "    raise AssertionError('filtered test executed')\n",
+    }, selection)
+    assert result.returncode == 0, result.stdout
+    assert "1 passed, 1 deselected" in result.stdout
+    assert "proved nothing about" not in result.stdout
+
+
+def test_module_collection_skip_keeps_its_environment_reason(tmp_path):
+    result = _run_execution_policy_fixture(tmp_path, {
+        "test_optional.py": "import pytest\n"
+                            "pytest.importorskip('jittor_gate_absent_array_api', "
+                            "reason='requires NumPy 1.x Array API')\n"
+                            "def test_optional():\n    raise AssertionError('unavailable')\n",
+    })
+    assert result.returncode == 0, result.stdout
+    assert "1 passed, 1 skipped" in result.stdout
+    assert "1 skipped: environment" in result.stdout
+    assert "collected 0 tests" not in result.stdout
+
+
+def test_genuinely_empty_collection_still_fails_execution_policy(tmp_path):
+    result = _run_execution_policy_fixture(tmp_path, {
+        "test_empty.py": "class TestEmpty:\n    __test__ = False\n"
+                         "    def test_missing(self):\n        raise AssertionError('uncollected')\n",
+    })
+    assert result.returncode == 1, result.stdout
+    assert "tests/test_empty.py  collected 0 tests" in result.stdout
+
+
+def test_unexplained_module_collection_skip_still_fails_execution_policy(tmp_path):
+    result = _run_execution_policy_fixture(tmp_path, {
+        "test_unexplained.py": "import pytest\n"
+                              "pytest.skip('unexplained omission', allow_module_level=True)\n"
+                              "def test_missing():\n    raise AssertionError('unavailable')\n",
+    })
+    assert result.returncode == 1, result.stdout
+    assert "1 skipped: other" in result.stdout
 
 
 def test_the_gate_covers_almost_the_whole_tree():
