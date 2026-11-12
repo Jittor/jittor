@@ -574,10 +574,34 @@ void* allocate_memory(int device, BackendMemoryKind kind, size_t size) {
         // Storage that may later be read from a peer has to be reachable
         // through the peer link from its first allocation, and which tensors
         // those are is not known here.
-        auto policy = ready_device_count.load(std::memory_order_relaxed) > 1
-            ? ACL_MEM_MALLOC_HUGE_FIRST_P2P : ACL_MEM_MALLOC_HUGE_FIRST;
-        check_acl(kind == BackendMemoryKind::Pinned ? aclrtMallocHost(&pointer, size)
-            : aclrtMalloc(&pointer, size, policy), "allocate ACL memory");
+        // Once the P2P pool has refused one allocation, every later one
+        // against it fails the same way; trying first and falling back costs a
+        // failed aclrtMalloc per tensor, which dominated the offloader's
+        // parameter moves (17 s to stage the 10 GiB DiT).  Remember the
+        // refusal and go straight to ordinary HBM from then on.
+        static std::atomic<bool> p2p_pool_exhausted{false};
+        const bool p2p_policy =
+            ready_device_count.load(std::memory_order_relaxed) > 1
+            && !p2p_pool_exhausted.load(std::memory_order_relaxed);
+        auto policy = p2p_policy ? ACL_MEM_MALLOC_HUGE_FIRST_P2P
+                                 : ACL_MEM_MALLOC_HUGE_FIRST;
+        aclError status = kind == BackendMemoryKind::Pinned
+            ? aclrtMallocHost(&pointer, size)
+            : aclrtMalloc(&pointer, size, policy);
+        if (status != ACL_SUCCESS && p2p_policy
+                && kind != BackendMemoryKind::Pinned) {
+            // The P2P pool is capped far below the card's HBM on 910B3: once
+            // the process has touched a second device, every allocation goes
+            // through ACL_MEM_MALLOC_HUGE_FIRST_P2P and fails with 207001
+            // around 10 GiB while HBM is still mostly free. Peer copies need
+            // peer-enabled storage, but a tensor that could not be allocated
+            // from that pool at all is better served from ordinary HBM (the
+            // peer path re-checks peer access when a cross-device copy is
+            // actually issued).
+            p2p_pool_exhausted.store(true, std::memory_order_relaxed);
+            status = aclrtMalloc(&pointer, size, ACL_MEM_MALLOC_HUGE_FIRST);
+        }
+        check_acl(status, "allocate ACL memory");
         try {
             std::lock_guard<std::recursive_mutex> guard(state().mutex);
             state().memory.emplace(pointer, MemoryRecord{device, kind});

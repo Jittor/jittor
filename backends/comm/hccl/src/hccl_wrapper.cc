@@ -35,7 +35,10 @@ static HcclDataType hccl_dtype_unsupported(NanoString dtype) {
 }
 
 #define JT_HCCL_DTYPE_float16  HcclDataType::HCCL_DATA_TYPE_FP16
-#define JT_HCCL_DTYPE_bfloat16 hccl_dtype_unsupported(dtype)
+// Ascend 910B supports bf16 collectives natively (HCCL_DATA_TYPE_BFP16).
+// The table used to reject it only because no CANN build had been exercised;
+// the MiniMax-H3 text encoder's TP all_reduce is bf16.
+#define JT_HCCL_DTYPE_bfloat16 HcclDataType::HCCL_DATA_TYPE_BFP16
 #define JT_HCCL_DTYPE_float32  HcclDataType::HCCL_DATA_TYPE_FP32
 #define JT_HCCL_DTYPE_float64  HcclDataType::HCCL_DATA_TYPE_FP64
 #define JT_HCCL_DTYPE_int16    hccl_dtype_unsupported(dtype)
