@@ -1028,6 +1028,20 @@ def _module_to(self, *args, **kwargs):
     if _device_is_cuda(dev):
         jt.flags.use_cuda = 1
     if dev is not None or ds is not None:
+        # `_apply` rebinds every parameter and buffer with ``.data = ...``;
+        # outside a write scope each of those resolves its destination's
+        # readers with a process-wide sync.  On the H3 video VAE (561
+        # storages, 10.4 GiB) that made one `module.to(device)` take 14 s
+        # where the copies alone are 0.9 s.
+        try:
+            from jittor.compat.torch.installers.tensor.method_api import (
+                _optimizer_write_scope)
+        except Exception:
+            _optimizer_write_scope = None
+        if _optimizer_write_scope is not None:
+            with _optimizer_write_scope():
+                return self._apply(
+                    _functools.partial(_module_to_conversion, ds, dev, copy))
         return self._apply(
             _functools.partial(_module_to_conversion, ds, dev, copy))
     return self
