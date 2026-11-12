@@ -1345,6 +1345,59 @@ def _module_extra_repr(self):
     return ""
 
 
+def _linear_training_dispatch_state(nn, dispatch):
+    """Live owners for the native small CUDA training product, or None."""
+    import importlib
+    import inspect
+
+    linear = importlib.import_module("jittor.nn.functional.linear")
+    modules = importlib.import_module("jittor.nn.modules.linear")
+    if (dispatch._NATIVE_SELECT is not jt.core._kernel_select
+            or modules.Linear.execute is not modules._NATIVE_LINEAR_EXECUTE):
+        return None
+    missing = object()
+    checks = list(linear._NATIVE_LINEAR_BINDINGS)
+    checks.extend((
+        (vars(modules), "linear", linear._NATIVE_LINEAR_FUNCTION),
+        (vars(jt.nn), "matmul_transpose",
+         linear._NATIVE_LINEAR_MATMUL_TRANSPOSE),
+        (vars(dispatch), "_NATIVE_SELECT", jt.core._kernel_select),
+        (vars(dispatch), "_kernels", dispatch._kernels),
+    ))
+    # Other providers must execute their own predicates exactly once. Inspect
+    # immutable registration tuples without speculatively calling a predicate.
+    for name, implementation, supports in linear._NATIVE_LINEAR_KERNELS:
+        key = (name, "cuda")
+        entries = dispatch._kernels.get(key, ())
+        if len(entries) != 1:
+            return None
+        entry = entries[0]
+        if (entry.implementation is not implementation or entry.supports is not supports
+                or entry.priority != 0 or entry.runtime_modes is not None
+                or (entry.dtypes is not None and "float32" not in entry.dtypes)):
+            return None
+        checks.append((dispatch._kernels, key, entries))
+        key = (name, "*")
+        entries = dispatch._kernels.get(key, missing)
+        if entries is not missing and entries:
+            return None
+        checks.append((dispatch._kernels, key, entries))
+    tensor_type = getattr(nn.Module, "_frontend_tensor_type", None)
+    if tensor_type is None:
+        return None
+    types = (jt.Var, tensor_type, nn.Parameter)
+    attributes = ("dtype", "shape", "requires_grad", "placement_backend",
+                  "_storage_is_contiguous", "__add__", "__radd__",
+                  "__getattribute__", "__torch_function__",
+                  "_frontend_native_requires_grad", "_frontend_tensor_type")
+    type_checks = tuple(
+        (cls, name, inspect.getattr_static(cls, name, missing))
+        for cls in types for name in attributes
+    )
+    return (tuple(checks), type_checks, types,
+            inspect.getattr_static(nn.Module, "__getattribute__"), missing)
+
+
 def _install_module_methods(nn, registry=None):
     """Bind the torch-compatible ``nn.Module`` methods; all are module level.
 
@@ -1403,6 +1456,7 @@ def _install_module_methods(nn, registry=None):
         "standard_rms_norm": _standard_rms_norm,
         "rms_selector_state": _rms_selector_state,
         "linear_execute": _NativeLinear.execute,
+        "linear_training_state": _linear_training_dispatch_state(nn, _kernel_dispatch),
         "matmul_kernel": _matrix._cublas_matmul,
         "rms_norm_inference": _rms_norm_cuda.__wrapped__,
         "rms_norm_source": _rms_norm_source,
