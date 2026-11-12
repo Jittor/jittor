@@ -99,7 +99,8 @@ def pad(x, padding=None, mode="constant", value=0, pad=None):
             if result is not None:
                 return result
 
-    if mode in ("constant", "replicate"):
+    from jittor._runtime.dispatch import dispatch_context
+    if mode in ("constant", "replicate") and dispatch_context(x).backend == "acl":
         result = _concat_pad(x, left, right, mode, value)
         if result is not None:
             return result

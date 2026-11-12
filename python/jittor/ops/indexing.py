@@ -338,6 +338,10 @@ def _bool_mask_fill(x, slices, value):
     axis = 0
     for kind, item, width in items:
         if kind == "mask":
+            if width == 0:
+                return None
+            if tuple(item.shape) != tuple(x.shape[axis:axis + width]):
+                raise IndexError("boolean mask shape does not match indexed dimensions")
             shape = [1] * x.ndim
             for offset in range(width):
                 shape[axis + offset] = item.shape[offset]
@@ -348,6 +352,11 @@ def _bool_mask_fill(x, slices, value):
     axis = 0
     for kind, item, width in items:
         if kind == "int":
+            size = int(x.shape[axis])
+            if item < -size or item >= size:
+                raise IndexError("index out of bounds for dimension %d" % axis)
+            if item < 0:
+                item += size
             axis_shape = [1] * x.ndim
             axis_shape[axis] = x.shape[axis]
             one_hot = (jt.arange(x.shape[axis]).reshape(axis_shape) == item)
@@ -392,10 +401,11 @@ def setitem(x, slices, value):
     # on every backend. The ACL setitem kernel only takes an exact-shape mask,
     # so ``out[mask] = 0`` on a higher-rank tensor (or ``out[mask, :]`` and
     # ``out[:, i, mask]``) used to reach it as a Var index list and raise.
-    # Handle it before dispatch so the semantics do not depend on the backend.
-    filled = _bool_mask_fill(x, slices, value)
-    if filled is not None:
-        return filled
+    # Use the mask decomposition only on ACL; keep the existing CPU/CUDA paths.
+    if dispatch_context(x).backend == "acl":
+        filled = _bool_mask_fill(x, slices, value)
+        if filled is not None:
+            return filled
 
     if _jittor_dtype_name(x.dtype) == "complex64" and isinstance(value, (complex, np.complexfloating)):
         # 0-d, so it fits a single indexed element as well as a slice; a

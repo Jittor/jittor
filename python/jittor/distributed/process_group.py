@@ -267,7 +267,7 @@ class ProcessGroup:
         # -- MPI on a box with mpicc, whose wrapper refuses uninitialized MPI
         # -- and made a single-card run fail at engine start.
         if self.ranks is not None and len(self.ranks) <= 1:
-            self._backend_kind = _default_backend_name() or "hccl"
+            self._backend_kind = _default_backend_name()
             self._backend_handle = 0
             return
         compile_extern = jt.compile_extern
