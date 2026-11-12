@@ -221,6 +221,13 @@ def flip(x, dim=0, dims=None):
                     dim[i], x.ndim
                 )
             )
+    if len(dim) > 1:
+        # The ACL flip kernel handles one axis per launch; passing the whole
+        # list silently flipped only the last axis, so ``flip(2, 3)`` left
+        # dim 2 unchanged. Flip one axis at a time on every backend.
+        for axis in dim:
+            x = flip(x, axis)
+        return x
     result = try_dispatch("tensor.flip", x, dim)
     if result is not None:
         return result
