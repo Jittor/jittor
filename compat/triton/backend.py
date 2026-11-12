@@ -874,7 +874,7 @@ def _env_flag(name, truthy):
         return hit
     words = ("1", "true", "yes", "on") if truthy else ("0", "false", "no", "off")
     value = str(raw).strip().lower() in words
-    if len(_ENV_FLAG_CACHE) > 256:
+    if len(_ENV_FLAG_CACHE) >= 256:
         _ENV_FLAG_CACHE.clear()
     _ENV_FLAG_CACHE[key] = value
     return value
@@ -1248,8 +1248,8 @@ def _run(jitfn, args, kwargs, grid):
         bridge_signature = inspect.signature(fn)
         try:
             jitfn._jt_bridge_signature = bridge_signature
-        except EXPECTED:
-            pass
+        except AttributeError as exc:
+            swallowed("triton/backend.py run: JIT function does not allow signature caching", exc)
     params = getattr(jitfn, "params", None)
     if params:
         for p in params:
