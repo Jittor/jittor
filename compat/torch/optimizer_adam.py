@@ -5,11 +5,54 @@ through a call-time import of that module: ``optimizer_api`` imports this one,
 and an import at module level here would put both on an import-time cycle.
 """
 import jittor as jt
+from types import GetSetDescriptorType
 from jittor.optim.algorithms.adam import adam_update
 from jittor.optim.base import _update_preserve_dtype
 from .context import get_install_context
 from .installers.tensor.method_api import _optimizer_write_scope, _optimizer_update
 from ..diagnostics import EXPECTED, swallowed
+
+
+_NATIVE_SHAPE = jt.core.Var.__dict__["shape"]
+_NATIVE_GETATTRIBUTE = jt.core.Var.__getattribute__
+
+
+def _class_descriptor(cls, name):
+    """Inspect an owner without invoking a replacement descriptor."""
+    for base in type.__getattribute__(cls, "__mro__"):
+        fields = type.__getattribute__(base, "__dict__")
+        if name in fields:
+            return fields[name]
+    return None
+
+
+def _adam_state_shape_changes(params, moments, variances):
+    """Check current shapes without constructing tuples for canonical tensors."""
+    native_types = ()
+    if type(_NATIVE_SHAPE) is GetSetDescriptorType:
+        frontend = get_install_context(jt).target_namespace
+        native_types = tuple(
+            cls for cls in (jt.core.Var, frontend.Tensor, frontend.nn.Parameter)
+            if _class_descriptor(cls, "shape") is _NATIVE_SHAPE
+            and _class_descriptor(cls, "__getattribute__") is _NATIVE_GETATTRIBUTE
+        )
+    resized = []
+    for index, param in enumerate(params):
+        if index >= len(moments) or index >= len(variances):
+            continue
+        moment, variance = moments[index], variances[index]
+        if (type(param) in native_types and type(moment) in native_types
+                and type(variance) in native_types):
+            moment_shape = _NATIVE_SHAPE.__get__(moment)
+            param_shape = _NATIVE_SHAPE.__get__(param)
+            changed = (moment_shape != param_shape
+                       or _NATIVE_SHAPE.__get__(variance) != param_shape)
+        else:
+            changed = (tuple(moment.shape) != tuple(param.shape)
+                       or tuple(variance.shape) != tuple(param.shape))
+        if changed:
+            resized.append(index)
+    return resized
 
 
 class _AdamStep:

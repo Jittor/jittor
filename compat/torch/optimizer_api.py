@@ -5,7 +5,7 @@ import weakref as _weakref
 import jittor as jt
 import numpy as np
 from .context import get_install_context
-from .optimizer_adam import _AdamStep, _AdamSteps
+from .optimizer_adam import _AdamStep, _AdamSteps, _adam_state_shape_changes
 from ..diagnostics import EXPECTED, swallowed
 from typing import Any, Dict, List
 from .. import fsdp_hooks as _fsdp_hooks
@@ -169,12 +169,7 @@ def _sync_adam_group_params(pg, *, replacements=(), validate_shapes=False):
         # client constructed AdamW. Identity stays the same, but eager zero
         # moments still have the original shape.
         moments, variances = pg.get("m", ()), pg.get("values", ())
-        resized = [
-            index for index, param in enumerate(current)
-            if index < len(moments) and index < len(variances)
-            and (tuple(moments[index].shape) != tuple(param.shape)
-                 or tuple(variances[index].shape) != tuple(param.shape))
-        ]
+        resized = _adam_state_shape_changes(current, moments, variances)
         if resized:
             steps = pg.get("_torch_steps", ())
             if any(index < len(steps) and int(steps[index]) != 0 for index in resized):
