@@ -501,6 +501,44 @@ class TestCodeOp(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "cannot differentiate a jt.code gradient again"):
             jt.grad(first.sum(), x)
 
+    @jt.flag_scope(use_cuda=0)
+    def test_explicit_outputs_write_into_the_given_vars(self):
+        cache = jt.array(np.zeros((4, 8), dtype="float32"))
+        row = jt.array(np.ones(8, dtype="float32"))
+        jt.code([row], [cache],
+            cpu_src='''
+                for (int i=0; i<in0_shape0; i++)
+                    @out0(2,i) = @in0(i);
+            ''')
+        updated = cache.numpy()
+        assert (updated[2] == 1).all(), updated
+        assert (updated[[0,1,3]] == 0).all(), updated
+        # The write is tracked: operations created afterwards see it.
+        assert float(cache.sum().numpy()) == 8.0
+
+        # A second call builds on the first and leaves row 2 alone.
+        jt.code([row], [cache],
+            cpu_src='''
+                for (int i=0; i<in0_shape0; i++)
+                    @out0(1,i) = @in0(i) * 2;
+            ''')
+        updated = cache.numpy()
+        assert (updated[1] == 2).all(), updated
+        assert (updated[2] == 1).all(), updated
+
+    @jt.flag_scope(use_cuda=0)
+    def test_explicit_output_can_alias_an_input_on_disjoint_rows(self):
+        cache = jt.arange(32, dtype="float32").reshape((4, 8))
+        row = jt.array(np.ones(8, dtype="float32"))
+        jt.code([cache, row], [cache],
+            cpu_src='''
+                for (int i=0; i<in1_shape0; i++)
+                    @out0(3,i) = @in0(0,i) + @in1(i);
+            ''')
+        updated = cache.numpy()
+        assert np.allclose(updated[3], np.arange(8) + 1), updated
+        assert np.allclose(updated[0], np.arange(8)), updated
+
 
 if __name__ == "__main__":
     unittest.main()
