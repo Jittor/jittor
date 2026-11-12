@@ -56,6 +56,12 @@ def _is_broad(handler):
 def _link_parents(tree):
     for parent in ast.walk(tree):
         for child in ast.iter_child_nodes(parent):
+            # CPython shares operator/context nodes between independent parses.
+            # A parent link on one of those singletons retains an unrelated
+            # tree and makes later deepcopy-based checks traverse that tree too.
+            if isinstance(child, (ast.operator, ast.unaryop, ast.boolop,
+                                  ast.cmpop, ast.expr_context)):
+                continue
             child._policy_parent = parent
 
 
@@ -153,6 +159,22 @@ def _where(path, node):
 
 
 class TestCompatExceptionPolicy(unittest.TestCase):
+
+    def test_parent_links_do_not_mutate_shared_ast_nodes(self):
+        first = ast.parse("def f(x):\n return x + 1\n")
+        second = ast.parse("def g(y):\n return y + 2\n")
+        shared = [node for node in ast.walk(second)
+                  if isinstance(node, (ast.Add, ast.Load))]
+        before = [getattr(node, "_policy_parent", None) for node in shared]
+        self.assertTrue(all(any(node is other for other in ast.walk(first))
+                            for node in shared))
+        _link_parents(first)
+        for node, parent in zip(shared, before):
+            self.assertIs(getattr(node, "_policy_parent", None), parent)
+        function = first.body[0]
+        self.assertIs(function._policy_parent, first)
+        self.assertIs(function.body[0]._policy_parent, function)
+
     def test_rethrow_analysis_accepts_cleanup_but_rejects_swallow_paths(self):
         good = [
             "try:\n work()\nexcept Exception:\n try:\n  cleanup()\n finally:\n  raise\n",
