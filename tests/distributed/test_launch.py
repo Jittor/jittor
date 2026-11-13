@@ -60,6 +60,13 @@ spec.loader.exec_module(module)
 store, rank, world = next(module.rendezvous("env://"))
 store.set("rank%d" % rank, str(rank))
 store.wait(["rank%d" % r for r in range(world)])
+# The master owns the TCP server. It must stay alive until every client has
+# received its final wait response; observing all keys is not that guarantee.
+# arrive() flushes its reply before publishing the completion marker.
+if rank == 0:
+    store.wait(["client_done/%d" % r for r in range(1, world)])
+else:
+    store.arrive("client_done/%d" % rank)
 print("rendezvous %d/%d" % (rank, world), flush=True)
 """
 
