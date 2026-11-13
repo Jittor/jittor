@@ -1072,19 +1072,27 @@ void sync_all(bool device_sync=false);
 int first_finished(const vector<VarHolder*>& vars);
 
 /**
- * Queue an asynchronous copy of `src`'s bytes into `dst`'s storage.
+ * Copy equal byte counts between materialized, contiguous, non-overlapping
+ * storages without a graph node. Shape/dtype are not converted. CPU copies
+ * are synchronous; H2D, D2H and same-device D2D use the copy stream. Different
+ * accelerator devices and graph/state capture are rejected.
  *
- * Both storages must already be allocated (`dst` eagerly through
- * `VarHolder::sync(false, false)`) and equal in size.  The copy is issued on
- * the backend's copy stream and is NOT recorded in either Var's graph, so a
- * parameter rebound to `dst` does not execute it; `copy_wait` is the barrier
- * that orders the data before a reader.  This is what lets an offloader stage
- * the next module while the device still runs the current one.
+ * Use fresh eagerly allocated empty destination storage, or finish every
+ * prior reader/writer of it before calling. Submitted device source producers
+ * are ordered before the transfer. Do not mutate the source or access/reuse
+ * the destination until copy_wait. Allocations survive holder deletion or
+ * rebinding; keep an alias of the original destination for the wait. Binding
+ * destination views does not execute/wait for the copy. Pair every enqueue
+ * with a wait. Pinned host memory is needed for reliable overlap; pageable
+ * transfers may block in the driver. This non-differentiable byte write
+ * updates mutation versions so saved backward values cannot silently change.
  */
 // @pyjt(_copy_into_async)
 void copy_into_async(VarHolder* dst, VarHolder* src);
 
-/** Wait for the device of `dst` to finish queued work, `copy_into_async` included. */
+/** Host-wait for copies into dst's allocation, including aliases, then release
+ * retained storage. Does not synchronize unrelated compute or a whole device.
+ */
 // @pyjt(_copy_wait)
 void copy_wait(VarHolder* dst);
 
