@@ -401,16 +401,25 @@ vector<VarPtr> grad(
     struct GradOpSnapshot {
         Op* op;
         int input_index;
-        vector<pair<Var*, int>> outputs;
-        vector<int> input_grad_ids;
+        size_t output_begin, output_end;
+        size_t input_begin, input_end;
     };
+    // Scratch storage belongs to this grad() invocation. Refill it from the
+    // current variable before invoking any callbacks, as below, but retain its
+    // capacity while processing the remaining variables. A nested grad() has
+    // independent storage; no graph, indices or gradients survive this call.
+    vector<GradOpSnapshot> outgoing;
+    vector<pair<Var*, int>> outgoing_outputs;
+    vector<int> outgoing_input_grad_ids;
 
     // Snapshot one var's outgoing structure immediately before consuming it.
     // Grad construction may append new consumers to this same list, or add
     // outputs to an upstream op that has not been visited yet.
     for (int i=1; i<gvars.size(); i++) {
         Var* var = gvars[i];
-        vector<GradOpSnapshot> outgoing;
+        outgoing.clear();
+        outgoing_outputs.clear();
+        outgoing_input_grad_ids.clear();
         outgoing.reserve(var->outputs().size());
         for (auto it : var->outputs_with_index()) {
             Op* op = it.op;
@@ -419,20 +428,21 @@ vector<VarPtr> grad(
             if (op->flag(OpFlags::_grads) && consumed_grouped_ops.has(op))
                 continue;
 
-            GradOpSnapshot snapshot{op, it.index, {}, {}};
-            snapshot.outputs.reserve(op->outputs().size());
+            GradOpSnapshot snapshot{op, it.index, outgoing_outputs.size(), 0,
+                                   outgoing_input_grad_ids.size(), 0};
             for (Var* out : op->outputs())
-                snapshot.outputs.emplace_back(
+                outgoing_outputs.emplace_back(
                     out, gvar_index.has(out) ? gvar_index.get(out) : -1);
+            snapshot.output_end = outgoing_outputs.size();
 
             if (op->flag(OpFlags::_grads)) {
                 consumed_grouped_ops[op] = 1;
-                snapshot.input_grad_ids.reserve(op->inputs().size());
                 for (Var* in : op->inputs())
-                    snapshot.input_grad_ids.push_back(
+                    outgoing_input_grad_ids.push_back(
                         !is_requires_grad_disabled_edge(in, op)
                             && gvar_index.has(in) ? gvar_index.get(in) : -1);
             }
+            snapshot.input_end = outgoing_input_grad_ids.size();
             outgoing.push_back(move(snapshot));
         }
 
@@ -442,14 +452,14 @@ vector<VarPtr> grad(
         #endif
         for (const auto& snapshot : outgoing) {
             Op* op = snapshot.op;
-            int n_o = snapshot.outputs.size();
+            int n_o = snapshot.output_end - snapshot.output_begin;
 
             if (op->flag(OpFlags::_grads)) {
-                int n_i = snapshot.input_grad_ids.size();
+                int n_i = snapshot.input_end - snapshot.input_begin;
                 STACK_ALLOC(Var*, douts, n_o);
                 STACK_ALLOC2(VarPtr, dins, n_i);
                 for (int i=0; i<n_o; i++) {
-                    int id = snapshot.outputs[i].second;
+                    int id = outgoing_outputs[snapshot.output_begin+i].second;
                     if (id>=0) {
                         douts[i] = grads[id];
                     } else
@@ -466,7 +476,7 @@ vector<VarPtr> grad(
                         if (dins[j]) check_backward_storage_read(dins[j].ptr);
                 }
                 for (int i=0; i<n_i; i++) {
-                    int id = snapshot.input_grad_ids[i];
+                    int id = outgoing_input_grad_ids[snapshot.input_begin+i];
                     if (id>=0) {
                         auto din = normalize_recorded_gradient(gvars[id], move(dins[i]));
                         auto& grad = grads[id];
@@ -477,7 +487,8 @@ vector<VarPtr> grad(
                     }
                 }
             } else {
-                for (const auto& output : snapshot.outputs) {
+                for (size_t j=snapshot.output_begin; j<snapshot.output_end; ++j) {
+                    const auto& output = outgoing_outputs[j];
                     Var* out = output.first;
                     int id = output.second;
                     if (id<0) continue;
