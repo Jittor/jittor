@@ -3,6 +3,7 @@ from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import collections as _collections
 from collections.abc import MutableMapping as _MutableMapping
 import functools as _functools
+import types as _types
 import weakref
 import os
 import jittor as jt
@@ -719,6 +720,10 @@ def _parameters(self, recurse=True):
     return _ParamList(var for _, var in self._iter_named_vars("parameters", recurse))
 
 
+# Callable metadata only: the internal zeroing loop still walks live parameters.
+_ZERO_GRAD_PARAMETERS = (_parameters, _parameters.__code__, _parameters.__defaults__)
+
+
 # torch's Module.train(mode=True)/eval() take a mode arg; jittor's train()
 # takes none. Wrap to accept it and toggle jittor's real training flag.
 #
@@ -1121,8 +1126,25 @@ def _zero_grad(self, set_to_none=True):
     parameter gets skipped and no error is ever raised.
     """
     try:
+        parameters = self.parameters
+        original, code, defaults = _ZERO_GRAD_PARAMETERS
+        if (set_to_none is True and type(parameters) is _types.MethodType
+                and parameters.__self__ is self and parameters.__func__ is original
+                and original.__code__ is code and original.__defaults__ is defaults):
+            # This internal one-shot consumer needs neither indexing nor a
+            # second parameter generator. Keep the same current walk, leaf
+            # publication, per-parameter setter and temporary holder lifetime
+            # as the public parameter view, including changes during clearing.
+            holders = []
+            for _, p in self._iter_named_vars("parameters", True):
+                _register_leaf_params((p,))
+                holders.append(p)
+                grad = getattr(p, "_torch_grad", None)
+                if grad is not None:
+                    p.grad = None
+            return None
         pending = []
-        for p in self.parameters():
+        for p in parameters():
             grad = getattr(p, "_torch_grad", None)
             if set_to_none:
                 if grad is not None:

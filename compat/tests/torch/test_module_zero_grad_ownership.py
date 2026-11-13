@@ -1,5 +1,6 @@
 """Module.zero_grad clears only its parameters, including optimizer slots."""
 import os
+import weakref
 
 import numpy as np
 import pytest
@@ -102,3 +103,56 @@ def test_multiple_updates_after_module_clear(device, set_to_none):
         expected -= .125 * velocity
         optimizer.step()
         np.testing.assert_array_equal(_array(model.weight), expected)
+
+
+def test_clear_honors_custom_parameter_selection(device):
+    class Selected(torch.nn.Module):
+        def parameters(self, recurse=True):
+            return iter((self.selected,))
+
+    model = Selected()
+    model.selected = torch.nn.Parameter(torch.ones(2, device=device))
+    model.excluded = torch.nn.Parameter(torch.ones(2, device=device))
+    model.selected.grad = torch.ones_like(model.selected)
+    model.excluded.grad = torch.full_like(model.excluded, 3.)
+    excluded_grad = model.excluded.grad
+    model.zero_grad()
+    assert model.selected.grad is None
+    assert model.excluded.grad is excluded_grad
+    np.testing.assert_array_equal(_array(excluded_grad), [3., 3.])
+
+
+def test_clear_keeps_live_child_replacement_during_gradient_release(device):
+    model = torch.nn.Module()
+    model.first = torch.nn.Parameter(torch.ones(2, device=device))
+    model.second = torch.nn.Parameter(torch.ones(2, device=device))
+    previous = _model(device)
+    replacement = _model(device)
+    model.child = previous
+    for parameter in (model.first, model.second, previous.weight, replacement.weight):
+        parameter.grad = torch.ones_like(parameter)
+    previous_grad = previous.weight.grad
+    owner = weakref.ref(model)
+    def replace_child():
+        owner().child = replacement
+    released = weakref.finalize(model.first.grad, replace_child)
+    model.zero_grad()
+    assert not released.alive
+    assert model.first.grad is None and model.second.grad is None
+    assert model.child is replacement and replacement.weight.grad is None
+    assert previous.weight.grad is previous_grad
+
+
+def test_clear_preserves_per_parameter_truthiness(device):
+    model = torch.nn.Linear(2, 1, device=device)
+    for parameter in model.parameters():
+        parameter.grad = torch.ones_like(parameter)
+    class Truthy:
+        calls = 0
+        def __bool__(self):
+            self.calls += 1
+            return True
+    set_to_none = Truthy()
+    model.zero_grad(set_to_none=set_to_none)
+    assert set_to_none.calls == 2
+    assert all(parameter.grad is None for parameter in model.parameters())

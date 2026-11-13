@@ -474,8 +474,8 @@ def _param_slots(opt, param):
 def _grad_set(self, value):
     object.__setattr__(self, "_torch_grad", value)
     fsdp_entry = getattr(self, "_jittor_fsdp2_entry", None)
-    fsdp_role = getattr(self, "_jittor_fsdp2_role", None)
     if fsdp_entry is not None:
+        fsdp_role = getattr(self, "_jittor_fsdp2_role", None)
         try:
             if value is None:
                 fsdp_entry.last_grad = None
@@ -513,12 +513,12 @@ def _grad_set(self, value):
                         continue
                     slots.append((pg, i))
         for pg, i in slots:
-            count = len(pg.get("params", []))
             if value is None:
                 grads = pg.get("grads")
                 if grads is not None and i < len(grads):
                     grads[i] = None
             else:
+                count = len(pg.get("params", []))
                 grads = pg.get("grads")
                 if grads is None:
                     grads = pg["grads"] = [None] * count
