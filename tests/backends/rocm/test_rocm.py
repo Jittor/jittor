@@ -153,6 +153,12 @@ class TestExample(unittest.TestCase):
                 yield jt.float32(x), jt.float32(y)
         
         model = Model(input_size=1)
+        # Place ReLU knots across the input interval so this convergence test
+        # has the same conditioning with every backend's valid RNG sequence.
+        model.linear1.weight.assign(jt.ones((10, 1)))
+        model.linear1.bias.assign(jt.array(-np.linspace(0, 0.9, 10, dtype="float32")))
+        model.linear2.weight.assign(jt.zeros((1, 10)))
+        model.linear2.bias.assign(jt.zeros((1,)))
         ps = model.parameters()
 
         for i,(x,y) in enumerate(get_data(n)):
@@ -160,6 +166,8 @@ class TestExample(unittest.TestCase):
             pred_y = model(x).name("pred_y")
             loss = ((pred_y - y).sqr()).name("loss")
             loss_mean = loss.mean()
+            if i == 0:
+                initial_loss = float(loss_mean.item())
             
             gs = jt.grad(loss_mean, ps)
             for p, g in zip(ps, gs):
@@ -169,14 +177,14 @@ class TestExample(unittest.TestCase):
                 assert prev == _test_liveness_snapshot(jt), f"memory leak {prev} {_test_liveness_snapshot(jt)}"
             prev = _test_liveness_snapshot(jt)
 
-        possible_results = [
-            0.0009948202641680837,
-            0.001381353591568768,
-            0.00110957445576787,
-            0.001124994712881744
-        ]
-        loss_mean = loss_mean.data
-        assert any(abs(loss_mean - r) < 1e-6 for r in possible_results)
+        # Verify learning and an independent grid rather than exact values
+        # from a few historical random initializations.
+        final_loss = float(loss_mean.item())
+        assert np.isfinite(final_loss) and final_loss < 0.002, final_loss
+        assert final_loss < initial_loss * 0.2, (initial_loss, final_loss)
+        grid = np.linspace(0, 1, 101, dtype="float32").reshape(-1, 1)
+        prediction = model(jt.array(grid)).numpy()
+        assert np.sqrt(np.mean((prediction - grid * grid) ** 2)) < 0.05
 
         jt.clean()
 

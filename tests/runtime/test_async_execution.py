@@ -1,6 +1,6 @@
 """Batches executed on a worker thread (src/runtime/async_exec.h).
 
-Under ``no_grad`` on CUDA -- and on ACL, where the worker also binds the
+Under ``no_grad`` on CUDA and ROCm -- and on ACL, where the worker also binds the
 device the batch was posted from and takes a training forward as well -- an
 auto-flushed batch runs on one worker thread while Python keeps building the
 graph. What has to hold: the numbers are the ones a
@@ -30,7 +30,7 @@ def _worker_backend():
     ACL takes a batch only under ``backend_fallback=error`` (see
     `may_run_async`), so the cases set that policy there.
     """
-    for name in ("cuda", "acl"):
+    for name in ("cuda", "rocm", "acl"):
         if _test_capability.check_accelerator(name, backend=jt).enabled:
             return name
     return None

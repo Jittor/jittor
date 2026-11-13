@@ -1574,6 +1574,33 @@ VarHolder* VarHolder::storage_data_alias() {
     return alias;
 }
 
+VarHolder* VarHolder::storage_bytes() {
+    sync(true, false);
+    Var* source = var;
+    USER_CHECK(source->allocator) << "Storage must be materialized before export";
+    size_t bytes = source->allocator->allocation_nbytes(source->allocation);
+    CHECK(bytes <= size_t(INT64_MAX)) << "Storage extent exceeds tensor size range";
+    VarPtr ready({int64(bytes)}, ns_uint8);
+    ready->device_id = source->device_id;
+    ready->placement = source->placement;
+    ready->set_flag(VarFlags::_host_resident, source->flag(VarFlags::_host_resident));
+    ready->set_stop_grad();
+    if (source->mem_ptr) {
+        CHECK(source->allocator->share_with(bytes, source->allocation, 0))
+            << "Allocator cannot retain its full storage";
+        ready->allocator = source->allocator;
+        ready->allocation = source->allocation;
+        ready->mem_ptr = static_cast<char*>(source->mem_ptr) - source->storage_offset_bytes;
+        std::atomic_store(&ready->storage_mutation_version, source->storage_version_token());
+        share_group_link(source, ready);
+    } else {
+        CHECK(bytes == 0) << "Nonempty storage has no allocation address";
+        ready->alloc(source->allocator);
+    }
+    ready->finish_pending_liveness();
+    return new VarHolder(move(ready));
+}
+
 bool VarHolder::has_leaf_accumulator() {
     if (!get_requires_grad() || var->flag(VarFlags::_unrecorded_view)) return false;
     auto state = var->autograd_alias;

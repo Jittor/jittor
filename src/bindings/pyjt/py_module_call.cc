@@ -7,6 +7,7 @@
 #include "ops/op_register.h"
 #include "ops/composite/code_op.h"
 #include <cmath>
+#include <climits>
 #include <cstring>
 #include "core/grad.h"
 #include "core/var_holder.h"
@@ -62,6 +63,16 @@ PyObject* cudnn_backend = nullptr;
 PyObject* conv_filter_key = nullptr;
 PyObject* conv2d_name = nullptr;
 PyObject* depthwise_kwargs = nullptr;
+PyObject* conv_function = nullptr;
+PyObject* conv_forward = nullptr;
+PyObject* rocm_conv_kernel = nullptr;
+PyObject* rocm_group_kernel = nullptr;
+PyObject* rocm_layer_kernel = nullptr;
+PyObject* rocm_norm_source = nullptr;
+PyObject* rocm_norm_header = nullptr;
+PyObject* rocm_group_build = nullptr;
+string rocm_norm_header_text;
+std::map<std::tuple<string, int64, double, string>, string> rocm_norm_sources;
 // `jittor.nn.BatchNorm.execute` and the key the tracked variance keeps the
 // inference scale and shift under. See `batch_norm_eval_channels_last`.
 PyObject* batch_norm_execute = nullptr;
@@ -106,6 +117,7 @@ std::map<pair<int64, double>, string> rms_sources;
 // "nn.layer_norm.inference" and `layer_norm_cuda._affine_source`; see
 // `layer_norm_inference`.
 PyObject* layer_norm_execute = nullptr;
+PyObject* layer_norm_function = nullptr;
 PyObject* layer_norm_impl = nullptr;
 PyObject* layer_norm_source_fn = nullptr;
 PyObject* layer_norm_name = nullptr;
@@ -307,6 +319,176 @@ bool pair_of_ints(PyObject* value, int& a, int& b) {
     a = (int)PyLong_AsLong(first.obj);
     b = (int)PyLong_AsLong(second.obj);
     return !PyErr_Occurred();
+}
+
+// Fast module builders consume stored attributes only when ordinary Python
+// lookup would read those same attributes. Descriptors remain Python-owned.
+bool stored_attributes(PyObject* module, PyObject* dict,
+                       std::initializer_list<const char*> fields) {
+    if (!dict) return false;
+    PyObjHolder getter(PyUnicode_InternFromString("__getattribute__"));
+    if (!getter.obj || _PyType_Lookup(Py_TYPE(module), getter.obj)
+            != PyDict_GetItemString(PyBaseObject_Type.tp_dict, "__getattribute__")) return false;
+    for (const char* field : fields) {
+        if (!PyDict_GetItemString(dict, field)) return false;
+        PyObjHolder name(PyUnicode_InternFromString(field));
+        if (!name.obj) return false;
+        PyObject* inherited = _PyType_Lookup(Py_TYPE(module), name.obj);
+        if (inherited && PyDescr_IsData(inherited)) return false;
+    }
+    return true;
+}
+
+bool current_function(const char* name, PyObject* expected) {
+    if (!nn_namespace || !expected) return false;
+    PyObjHolder current(PyObject_GetAttrString(nn_namespace, name));
+    return current.obj == expected;
+}
+
+// Avoid narrowing a large Python integer before deciding whether this is a
+// supported module call. The functional owns its validation/error otherwise.
+bool small_pair(PyObject* value, int& a, int& b) {
+    auto integer = [](PyObject* item, int& out) {
+        if (!PyLong_CheckExact(item)) return false;
+        int overflow = 0;
+        long long v = PyLong_AsLongLongAndOverflow(item, &overflow);
+        if (PyErr_Occurred()) { PyErr_Clear(); return false; }
+        if (overflow || v < INT_MIN || v > INT_MAX) return false;
+        out = int(v);
+        return true;
+    };
+    if (PyLong_CheckExact(value)) return integer(value, a) && (b = a, true);
+    if (!PyTuple_CheckExact(value) || PyTuple_GET_SIZE(value) != 2) return false;
+    return integer(PyTuple_GET_ITEM(value, 0), a) && integer(PyTuple_GET_ITEM(value, 1), b);
+}
+
+// Build the existing backend operator after the public dispatcher selects
+// that exact provider. No convolution arithmetic or workspace policy lives here.
+PyObject* rocm_conv_inference(PyObject* module, PyObject* dict, PyObject* x) {
+    if (!rocm_conv_kernel || !no_grad || amp_reg || auto_mixed_precision_level
+            || !runtime_flag_use_cuda() || accelerator_backend_id() != BackendId::Rocm
+            || !is_var(x) || !stored_attributes(module, dict,
+                {"weight", "bias", "groups", "stride", "padding", "dilation", "padding_mode"})
+            || !current_function("conv2d", conv_function)) return nullptr;
+    PyObjHolder method(PyUnicode_InternFromString("_conv_forward"));
+    if (PyDict_GetItemString(dict, "_conv_forward")
+            || _PyType_Lookup(Py_TYPE(module), method.obj) != conv_forward) return nullptr;
+    PyObject* weight = PyDict_GetItemString(dict, "weight");
+    PyObject* bias = PyDict_GetItemString(dict, "bias");
+    PyObject* groups = PyDict_GetItemString(dict, "groups");
+    PyObject* mode = PyDict_GetItemString(dict, "padding_mode");
+    if (!is_var(weight) || (bias != Py_None && !is_var(bias))
+            || !PyLong_CheckExact(groups)
+            || !PyUnicode_CheckExact(mode) || PyUnicode_CompareWithASCIIString(mode, "zeros"))
+        return nullptr;
+    int overflow = 0;
+    long long group_count = PyLong_AsLongLongAndOverflow(groups, &overflow);
+    if (PyErr_Occurred()) { PyErr_Clear(); return nullptr; }
+    if (overflow || group_count != 1) return nullptr;
+    PyObject* stride = PyDict_GetItemString(dict, "stride");
+    PyObject* padding = PyDict_GetItemString(dict, "padding");
+    PyObject* dilation = PyDict_GetItemString(dict, "dilation");
+    int sh, sw, ph, pw, dh, dw;
+    if (!small_pair(stride, sh, sw) || !small_pair(padding, ph, pw)
+            || !small_pair(dilation, dh, dw)
+            || sh <= 0 || sw <= 0 || dh <= 0 || dw <= 0 || ph < 0 || pw < 0) return nullptr;
+    Var* a = GET_RAW_PTR(VarHolder, x)->var;
+    Var* w = GET_RAW_PTR(VarHolder, weight)->var;
+    if (a->num < 0 || w->num < 0
+            || (bias != Py_None && GET_RAW_PTR(VarHolder, bias)->var->num < 0)) return nullptr;
+    if (a->dtype() != ns_float32 || w->dtype() != ns_float32
+            || a->shape.size() != 4 || w->shape.size() != 4
+            || a->shape[1] != w->shape[1] || w->shape[0] <= 0) return nullptr;
+    for (int i = 0; i < 4; ++i)
+        if (a->shape[i] > INT_MAX || w->shape[i] > INT_MAX) return nullptr;
+    if (a->shape[2] + 2LL*ph - dh*(w->shape[2]-1) - 1 < 0
+            || a->shape[3] + 2LL*pw - dw*(w->shape[3]-1) - 1 < 0) return nullptr;
+    PyObjHolder args(PyTuple_Pack(7, x, weight, bias, stride, padding, dilation, groups));
+    PyObjHolder selected(kernel_select(conv2d_name, args.obj, depthwise_kwargs));
+    if (!selected.obj || selected.obj != rocm_conv_kernel) return nullptr;
+    vector<Var*> biases;
+    if (bias != Py_None) biases.push_back(GET_RAW_PTR(VarHolder, bias)->var);
+    static auto make_conv = op_constructor<VarPtr, Var*, Var*, vector<Var*>,
+        NanoVector, NanoVector, NanoVector>("hipblas_conv_inference");
+    PyTensorFrontendScope scope(x, nullptr, 0, false);
+    unique_ptr<VarHolder> out(new VarHolder(make_conv(a, w, biases, {sh, sw}, {ph, pw}, {dh, dw})));
+    out->stop_grad();
+    return to_py_object<VarHolder*>(out.release());
+}
+
+PyObject* build_rocm_norm(PyObject* x, PyObject* weight, PyObject* bias,
+                         const char* kind, int64 extent, double eps, const string& act) {
+    if (!rocm_norm_source || rocm_norm_header_text.empty()) return nullptr;
+    auto key = std::make_tuple(string(kind), extent, eps, act);
+    auto found = rocm_norm_sources.find(key);
+    if (found == rocm_norm_sources.end()) {
+        PyObjHolder text(PyObject_CallFunction(rocm_norm_source, "sLdsss", kind,
+            (long long)extent, eps, "tensor", "tensor", act.c_str()));
+        if (!text.obj) return nullptr;
+        Py_ssize_t size;
+        const char* source = PyUnicode_AsUTF8AndSize(text.obj, &size);
+        if (!source) return nullptr;
+        found = rocm_norm_sources.emplace(key, string(source, size)).first;
+    }
+    Var* a = GET_RAW_PTR(VarHolder, x)->var;
+    Var* w = GET_RAW_PTR(VarHolder, weight)->var;
+    Var* b = GET_RAW_PTR(VarHolder, bias)->var;
+    PyTensorFrontendScope scope(x, nullptr, 0, false);
+    unique_ptr<VarHolder> out(new VarHolder(make_code(a->shape, a->dtype(), {a, w, b},
+        "", {}, "", string(found->second), {}, string(rocm_norm_header_text), {}, "")));
+    out->stop_grad();
+    return to_py_object<VarHolder*>(out.release());
+}
+
+PyObject* rocm_norm_inference(PyObject* module, PyObject* dict, PyObject* x, bool group) {
+    PyObject* provider = group ? rocm_group_kernel : rocm_layer_kernel;
+    if (!provider || !no_grad || amp_reg || auto_mixed_precision_level
+            || !runtime_flag_use_cuda() || accelerator_backend_id() != BackendId::Rocm
+            || !is_var(x) || !stored_attributes(module, dict, {"weight", "bias", "eps"})
+            || !current_function(group ? "group_norm" : "layer_norm",
+                                 group ? group_norm_function : layer_norm_function)) return nullptr;
+    PyObject* weight = PyDict_GetItemString(dict, "weight");
+    PyObject* bias = PyDict_GetItemString(dict, "bias");
+    PyObject* eps = PyDict_GetItemString(dict, "eps");
+    if (!is_var(weight) || !is_var(bias) || !PyFloat_CheckExact(eps)) return nullptr;
+    if (GET_RAW_PTR(VarHolder, x)->var->num < 0
+            || GET_RAW_PTR(VarHolder, weight)->var->num < 0
+            || GET_RAW_PTR(VarHolder, bias)->var->num < 0) return nullptr;
+    PyObject* extent;
+    int64 size;
+    if (group) {
+        if (!rocm_group_build || !stored_attributes(module, dict, {"num_groups", "num_channels"}))
+            return nullptr;
+        extent = PyDict_GetItemString(dict, "num_groups");
+        PyObject* channels = PyDict_GetItemString(dict, "num_channels");
+        Var* a = GET_RAW_PTR(VarHolder, x)->var;
+        if (!PyLong_CheckExact(extent) || !PyLong_CheckExact(channels) || a->shape.size() < 2
+                || a->shape[1] != PyLong_AsLongLong(channels)) return nullptr;
+        size = PyLong_AsLongLong(extent);
+    } else {
+        if (!stored_attributes(module, dict, {"normalized_shape", "elementwise_affine"})
+                || PyDict_GetItemString(dict, "elementwise_affine") != Py_True) return nullptr;
+        extent = PyDict_GetItemString(dict, "normalized_shape");
+        if (!PyTuple_CheckExact(extent) || PyTuple_GET_SIZE(extent) != 1) return nullptr;
+        size = 1;
+    }
+    if (PyErr_Occurred()) return nullptr;
+    PyObjHolder args(PyTuple_Pack(5, x, extent, weight, bias, eps));
+    PyObjHolder selected(kernel_select(group ? group_norm_name : layer_norm_name, args.obj, nullptr));
+    if (!selected.obj || selected.obj != provider) return nullptr;
+    double epsilon = PyFloat_AS_DOUBLE(eps);
+    PyObject* result = build_rocm_norm(x, weight, bias, group ? "group" : "layer", size, epsilon, "");
+    if (!result || !group) return result;
+    PyObjHolder out(result);
+    PyObjHolder build(PyObject_CallFunction(partial_type, "OOOOLd", rocm_group_build,
+        x, weight, bias, (long long)size, epsilon));
+    if (!build.obj) return nullptr;
+    if (!fuse_activation_key) fuse_activation_key = PyUnicode_InternFromString("_fuse_activation");
+    PyObjHolder id(PyLong_FromLongLong(GET_RAW_PTR(VarHolder, result)->var->id));
+    PyObjHolder entry(PyTuple_Pack(2, id.obj, build.obj));
+    if (!entry.obj || PyObject_SetAttr(result, fuse_activation_key, entry.obj)) return nullptr;
+    Py_INCREF(result);
+    return result;
 }
 
 // `channels_last_source`: the dense NHWC tensor `v` is an NCHW view of, or null.
@@ -757,7 +939,9 @@ bool rms_selector_unchanged() {
 // both providers declined and dispatch_native must continue to the module's
 // forward, without calling either provider a second time.
 PyObject* rms_norm_registered_inference(PyObject* module, PyObject* dict, PyObject* x) {
-    if ((!acl_possible && runtime_flag_use_cuda()) || !no_grad || !dict || !is_var(x)
+    if ((!acl_possible && runtime_flag_use_cuda()
+             && accelerator_backend_id() != BackendId::Rocm)
+            || !no_grad || !dict || !is_var(x)
             || !rms_selector_unchanged()) return nullptr;
     // A property can present a different weight/epsilon from the instance's
     // stored values. Preserve Python attribute resolution for those modules.
@@ -976,7 +1160,9 @@ PyObject* dispatch_native(PyObject* module, const TypeInfo& info, PyObject* args
     if (!kwargs && PyTuple_GET_SIZE(args) == 1 && conv_execute
             && _PyType_Lookup(type, name_execute()) == conv_execute
             && !(dict && PyDict_GetItemString(dict, "execute"))) {
-        PyObject* fast = conv2d_inference(dict, PyTuple_GET_ITEM(args, 0));
+        PyObject* fast = rocm_conv_inference(module, dict, PyTuple_GET_ITEM(args, 0));
+        if (fast || PyErr_Occurred()) return fast;
+        fast = conv2d_inference(dict, PyTuple_GET_ITEM(args, 0));
         if (fast || PyErr_Occurred()) return fast;
     }
     if (!kwargs && PyTuple_GET_SIZE(args) == 1 && batch_norm_execute
@@ -988,7 +1174,9 @@ PyObject* dispatch_native(PyObject* module, const TypeInfo& info, PyObject* args
     if (!kwargs && PyTuple_GET_SIZE(args) == 1 && layer_norm_execute
             && _PyType_Lookup(type, name_execute()) == layer_norm_execute
             && !(dict && PyDict_GetItemString(dict, "execute"))) {
-        PyObject* fast = layer_norm_inference(dict, PyTuple_GET_ITEM(args, 0));
+        PyObject* fast = rocm_norm_inference(module, dict, PyTuple_GET_ITEM(args, 0), false);
+        if (fast || PyErr_Occurred()) return fast;
+        fast = layer_norm_inference(dict, PyTuple_GET_ITEM(args, 0));
         if (fast || PyErr_Occurred()) return fast;
     }
     if (!kwargs && PyTuple_GET_SIZE(args) == 1 && dropout_execute
@@ -1006,7 +1194,9 @@ PyObject* dispatch_native(PyObject* module, const TypeInfo& info, PyObject* args
     if (!kwargs && PyTuple_GET_SIZE(args) == 1 && group_norm_execute
             && _PyType_Lookup(type, name_execute()) == group_norm_execute
             && !(dict && PyDict_GetItemString(dict, "execute"))) {
-        PyObject* fast = group_norm_inference(dict, PyTuple_GET_ITEM(args, 0));
+        PyObject* fast = rocm_norm_inference(module, dict, PyTuple_GET_ITEM(args, 0), true);
+        if (fast || PyErr_Occurred()) return fast;
+        fast = group_norm_inference(dict, PyTuple_GET_ITEM(args, 0));
         if (fast || PyErr_Occurred()) return fast;
     }
     PyObjHolder execute(PyObject_GetAttr(module, name_execute()));
@@ -1061,11 +1251,27 @@ void module_call_bind(PyObject* module_cls_, PyObject* dispatch_call_,
     part(residual_offers, "residual_offers");
     part(arg_policy_warned, "arg_policy_warned");
     part(conv_execute, "conv_execute");
+    part(conv_function, "conv_function");
+    part(conv_forward, "conv_forward");
+    part(rocm_conv_kernel, "rocm_conv_kernel");
+    part(rocm_group_kernel, "rocm_group_kernel");
+    part(rocm_layer_kernel, "rocm_layer_kernel");
+    part(rocm_norm_source, "rocm_norm_source");
+    part(rocm_norm_header, "rocm_norm_header");
+    part(rocm_group_build, "rocm_group_build");
+    rocm_norm_sources.clear();
+    rocm_norm_header_text.clear();
+    if (rocm_norm_header && PyUnicode_Check(rocm_norm_header)) {
+        Py_ssize_t size;
+        const char* text = PyUnicode_AsUTF8AndSize(rocm_norm_header, &size);
+        if (text) rocm_norm_header_text.assign(text, size);
+    }
     part(conv_cudnn_kernel, "conv_cudnn_kernel");
     part(cudnn_backend, "cudnn_backend");
     part(conv_filter_key, "conv_filter_key");
     part(batch_norm_execute, "batch_norm_execute");
     part(layer_norm_execute, "layer_norm_execute");
+    part(layer_norm_function, "layer_norm_function");
     part(layer_norm_impl, "layer_norm_inference");
     part(layer_norm_source_fn, "layer_norm_source");
     if (!layer_norm_name) layer_norm_name = PyUnicode_InternFromString("nn.layer_norm.inference");
@@ -1112,6 +1318,30 @@ PyObject* group_norm_nhwc_build(PyObject* source, PyObject* weight, PyObject* bi
     if (!out && !PyErr_Occurred())
         throw std::runtime_error("_group_norm_nhwc_build could not build the group norm");
     return out;
+}
+
+PyObject* group_norm_rocm_build(PyObject* source, PyObject* weight, PyObject* bias,
+                               int64 groups, double eps, const string& act) {
+    if (act != "" && act != "silu") { Py_INCREF(Py_None); return Py_None; }
+    if (!is_var(source) || !is_var(weight) || !is_var(bias) || !rocm_norm_source)
+        throw std::invalid_argument("_group_norm_rocm_build needs three tensors and a bound ROCm provider");
+    Var* x = GET_RAW_PTR(VarHolder, source)->var;
+    Var* w = GET_RAW_PTR(VarHolder, weight)->var;
+    Var* b = GET_RAW_PTR(VarHolder, bias)->var;
+    if (x->dtype() != ns_float32 || w->dtype() != ns_float32 || b->dtype() != ns_float32
+            || x->shape.size() < 2 || groups <= 0 || x->shape[1] <= 0 || x->shape[1] % groups
+            || w->shape != NanoVector{x->shape[1]} || b->shape != NanoVector{x->shape[1]}
+            || !std::isfinite(eps) || eps <= 0)
+        throw std::invalid_argument("invalid FP32 group normalization inputs");
+    int64 width = x->shape[1] / groups;
+    for (int i = 2; i < x->shape.size(); ++i) {
+        if (x->shape[i] <= 0 || width > 1048576 / x->shape[i])
+            throw std::invalid_argument("unsupported ROCm group normalization width");
+        width *= x->shape[i];
+    }
+    if (width > 1048576 || x->shape[0] > INT_MAX / groups)
+        throw std::invalid_argument("unsupported ROCm group normalization shape");
+    return build_rocm_norm(source, weight, bias, "group", groups, eps, act);
 }
 
 PyObject* module_call_native(PyObject* module, PyObject* args, PyObject* kwargs) {

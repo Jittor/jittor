@@ -51,7 +51,7 @@ wheel。
 | 昇腾 NPU（ACL/HCCL），单卡 | CANN 9（门禁断言 `atc --version` 为 9.x），设备须报 Ascend 910B | 门禁，`npu.yml`（Linux ARM64、`/dev/davinci0`、fail-closed 的设备探针）。一次完整的冷缓存验证记在 [Ascend 910B3 验证](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-08-28-ascend-910b-validation.md)：CANN 9.0.0、驱动 25.5.1、`397 passed, 9 skipped` |
 | 昇腾 NPU（ACL），Ascend 950PR / x86-64 | CANN 9.1 | **部分验证，无门禁**。`e5886b6f6`（2026-09-10）在真机上以 `backend_fallback=error` 零回退跑通 matmul、卷积前向反向、随机分布、CNN 与 transformer block 训练；同一提交上 `tests/backends/acl/test_acl.py` 为 32 passed / 11 failed。`docs/guides/hardware/ascend-910b.md` 里的一处同步开关测量也来自这台机器 |
 | 昇腾 NPU，多卡 HCCL | — | **未验证**：需要 ≥ 2 张 910B3，见 [历史记录](https://github.com/Jittor/jittor/blob/3679de22c02c83b982432a0e1bdb3da148411c50/agent/manuals/deferred-hardware.md) 的 `8.02` |
-| ROCm | — | **未验证**。`nox -s rocm` 存在但没有 CI 工作流、也没有设备；HIP provider 的 `runtime/driver.cc` 至今没被编译器读过（`deferred-hardware.md` 的 `4.12`）。MIOpen 与 rccl 是**有意未实现**，会抛 `NotImplementedError` |
+| ROCm / HIP | — | **手动门禁，无自动 CI**。入口为 `nox -s rocm`，含设备计算、hipBLAS、rocPRIM 与 hipRAND 的定向回归；具体硬件验收范围以 GitHub issue/PR 的执行记录为准。[安装与依赖](../../getting-started/installation.md#配置-rocm--hip)。MIOpen 与 RCCL provider 尚未实现；历史待验收项保留在 `deferred-hardware.md` 的 `4.12`，未因提供测试入口而关闭 |
 | 天数智芯 Corex | — | **未验证**。只有只读探测契约（`tests/backends/corex/test_corex_discovery.py`，离线假编译器），没有 nox session，没有设备。上机步骤见 [天数 Corex](corex.md)、`deferred-hardware.md` 的 `8.14` |
 | MPI / NCCL 单机多卡 | — | `nox -s mpi` 与 `nox -s cuda` 的分布式用例，**无专门 CI 工作流**；CUDA 门禁的机器是单卡 |
 | 跨机（≥2 节点） | — | **未验证**：rendezvous、启动器、checkpoint 与掉线门禁都在等两台机器（`deferred-hardware.md` 的 `8.15`–`8.18`、`10.22`） |

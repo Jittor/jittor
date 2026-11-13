@@ -348,7 +348,19 @@ NPU_TESTS = (
     "tests/debug/test_kernel_traps.py::TestKernelTraps::test_nan_handling_isfinite_isnan_isinf",
     "tests/ops/test_fusion_correctness.py::TestFusionCorrectness::test_float_comparisons_with_nan",
 )
-ROCM_TESTS = ("tests/backends/rocm/test_rocm.py",)
+ROCM_TESTS = (
+    "tests/backends/rocm/test_rocm.py",
+    "tests/backends/rocm/test_rocm_runtime.py",
+    "tests/backends/rocm/test_rocm_batched_matmul.py",
+    "tests/backends/rocm/test_rocm_rms_norm.py",
+    "tests/backends/rocm/test_rocm_softmax.py",
+    "tests/backends/rocm/test_rocm_convolution.py",
+    "tests/backends/rocm/test_rocm_normalization.py",
+    "tests/backends/rocm/test_rocm_pooling.py",
+    "tests/backends/rocm/test_rocm_linear.py",
+    "tests/backends/rocm/test_rocm_async_execution.py",
+    "compat/tests/torch/test_rocm_vision_module_dispatch.py",
+)
 MPI_TESTS = (
     "tests/backends/comm/mpi/test_mpi.py",
     "tests/backends/comm/mpi/test_mpi_batchnorm.py",

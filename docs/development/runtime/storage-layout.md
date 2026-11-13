@@ -17,6 +17,12 @@
 分配的标识与生命周期仍是 `(allocator, allocation)` 加共享分配环。`share_with()` 记录
 一个待定别名；分配时建立该环并持有另一份分配引用。
 
+分配器的 `allocation_nbytes(token)` 返回最初请求的完整存储字节数，不包含池对齐或
+后端 padding，也不由当前视图的跨度决定。`VarHolder._storage_bytes()` 将整个分配作为
+独立持有的、无计算图输入的字节 Tensor 导出；源 holder 重新绑定或释放后，这份引用仍
+保留原分配。Torch storage 的地址和容量来自该引用，typed storage 的 `size()` 计元素，
+untyped storage 的 `size()` 计字节。视图跨度仍用于下述计算、复制和释放路径。
+
 **物理分配、迁移、换出和释放都使用 `storage_span_bytes()`**，绝不能把一个 expand 张量
 的逻辑字节数拷贝到它更小的物理存储上。迁移可以压紧活跃存储跨度并更新偏移，**前提是
 保持每个活跃别名的相对地址不变**。

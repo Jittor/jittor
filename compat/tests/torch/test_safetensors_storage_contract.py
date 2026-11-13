@@ -13,22 +13,27 @@ from _helpers.device_types import instantiate_device_type_tests
 
 class TestStorageIdentity:
     def test_storage_pointer_matches_tensor_pointer(self, device):
+        # ROCm uses Torch's public cuda namespace, while the native test label
+        # and flag scope continue to identify the actual ROCm backend.
+        device = "cuda" if device == "rocm" else device
         whole = torch.arange(12, dtype=torch.float32, device=device).reshape(3, 4)
         assert whole.storage().data_ptr() == whole.data_ptr()
         assert whole.untyped_storage().data_ptr() == whole.data_ptr()
         assert whole.untyped_storage().nbytes() == whole.numel() * whole.element_size()
 
     def test_view_reports_allocation_base(self, device):
+        device = "cuda" if device == "rocm" else device
         whole = torch.arange(12, dtype=torch.float32, device=device).reshape(3, 4)
         view = whole[:, 1:]
         base = whole.storage().data_ptr()
         assert view.storage().data_ptr() == base
         assert view.data_ptr() == base + view.storage_offset() * view.element_size()
-        assert view.untyped_storage().nbytes() > view.numel() * view.element_size()
+        assert view.untyped_storage().nbytes() == whole.numel() * whole.element_size()
 
 
 class TestModelSharedWeights:
     def test_tied_linear_saves_one_name_and_restores_the_alias(self, device):
+        device = "cuda" if device == "rocm" else device
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         class Model(torch.nn.Module):

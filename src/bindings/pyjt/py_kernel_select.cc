@@ -6,6 +6,7 @@
 #include "runtime/device.h"
 #include "ops/op_register.h"
 #include <cmath>
+#include <climits>
 #include <stdexcept>
 
 namespace jittor {
@@ -18,7 +19,7 @@ namespace {
 // A native stand-in for a `supports` predicate; see kernel_select_native_rule.
 struct NativeRule {
     enum Kind { none, same_float, same_float_or_complex, same_blas, rms_inference, rms_training, ln_inference,
-                depthwise_conv2d, group_norm } kind = none;
+                depthwise_conv2d, group_norm, rocm_conv2d, rocm_group, rocm_layer } kind = none;
     string op;
 };
 enum Verdict { declines = 0, accepts = 1, unknown = 2 };
@@ -139,6 +140,109 @@ int depthwise_fast_path(PyObject* kwargs) {
     return on;
 }
 
+bool integer64(PyObject* value, int64& result) {
+    if (!PyLong_CheckExact(value)) return false;
+    int overflow = 0;
+    result = PyLong_AsLongLongAndOverflow(value, &overflow);
+    if (PyErr_Occurred()) { PyErr_Clear(); return false; }
+    return !overflow;
+}
+
+bool geometry_pair(PyObject* value, int64& a, int64& b) {
+    if (PyLong_CheckExact(value)) return integer64(value, a) && (b = a, true);
+    if (PyTuple_CheckExact(value) && PyTuple_GET_SIZE(value) == 2)
+        return integer64(PyTuple_GET_ITEM(value, 0), a) && integer64(PyTuple_GET_ITEM(value, 1), b);
+    if (PyList_CheckExact(value) && PyList_GET_SIZE(value) == 2)
+        return integer64(PyList_GET_ITEM(value, 0), a) && integer64(PyList_GET_ITEM(value, 1), b);
+    return false;
+}
+
+Verdict rocm_norm_rule(PyObject* args, bool group) {
+    if (PyTuple_GET_SIZE(args) != 5 || !is_var(PyTuple_GET_ITEM(args, 0))
+            || !is_var(PyTuple_GET_ITEM(args, 2)) || !is_var(PyTuple_GET_ITEM(args, 3)))
+        return unknown;  // Scalar/mixed affine forms retain the Python predicate.
+    Var* x = GET_RAW_PTR(VarHolder, PyTuple_GET_ITEM(args, 0))->var;
+    Var* w = GET_RAW_PTR(VarHolder, PyTuple_GET_ITEM(args, 2))->var;
+    Var* b = GET_RAW_PTR(VarHolder, PyTuple_GET_ITEM(args, 3))->var;
+    if (x->num < 0 || w->num < 0 || b->num < 0) return unknown;
+    if (x->dtype() != ns_float32 || w->dtype() != ns_float32 || b->dtype() != ns_float32
+            || amp_reg || (!no_grad && (requires_grad(x) || requires_grad(w) || requires_grad(b))))
+        return declines;
+    PyObject* eps = PyTuple_GET_ITEM(args, 4);
+    if (!PyFloat_CheckExact(eps) && !PyLong_CheckExact(eps)) return unknown;
+    double epsilon = PyFloat_AsDouble(eps);
+    if (PyErr_Occurred()) { PyErr_Clear(); return unknown; }
+    if (!std::isfinite(epsilon) || epsilon <= 0) return declines;
+    PyObject* extent = PyTuple_GET_ITEM(args, 1);
+    int64 width = 1, rows;
+    if (group) {
+        int64 groups;
+        if (!integer64(extent, groups)) return unknown;
+        if (x->shape.size() < 2 || groups <= 0 || x->shape[1] <= 0 || x->shape[1] % groups)
+            return declines;
+        if (w->shape != NanoVector{x->shape[1]} || b->shape != NanoVector{x->shape[1]}) return declines;
+        width = x->shape[1] / groups;
+        for (int i = 2; i < x->shape.size(); ++i) {
+            if (x->shape[i] <= 0 || width > 1048576 / x->shape[i]) return declines;
+            width *= x->shape[i];
+        }
+        if (x->shape[0] > INT_MAX / groups) return declines;
+        rows = x->shape[0] * groups;
+    } else {
+        if (!PyTuple_CheckExact(extent)) return unknown;
+        int rank = PyTuple_GET_SIZE(extent);
+        if (!rank || rank > x->shape.size()) return declines;
+        if (w->shape.size() != rank || b->shape.size() != rank) return declines;
+        for (int i = 0; i < rank; ++i) {
+            int64 size;
+            if (!integer64(PyTuple_GET_ITEM(extent, i), size)) return unknown;
+            if (size <= 0 || size != x->shape[x->shape.size()-rank+i]
+                    || w->shape[i] != size || b->shape[i] != size || width > 1048576 / size)
+                return declines;
+            width *= size;
+        }
+        rows = x->num / width;
+    }
+    return width > 0 && width <= 1048576 && rows <= INT_MAX ? accepts : declines;
+}
+
+Verdict rocm_conv_rule(PyObject* args) {
+    if (PyTuple_GET_SIZE(args) != 7 || !is_var(PyTuple_GET_ITEM(args, 0))
+            || !is_var(PyTuple_GET_ITEM(args, 1))) return unknown;
+    if (amp_reg) return unknown;  // prefers_half(), including native AMP policy.
+    Var* x = GET_RAW_PTR(VarHolder, PyTuple_GET_ITEM(args, 0))->var;
+    Var* w = GET_RAW_PTR(VarHolder, PyTuple_GET_ITEM(args, 1))->var;
+    PyObject* bias = PyTuple_GET_ITEM(args, 2);
+    if (bias != Py_None && !is_var(bias)) return unknown;
+    if (x->num < 0 || w->num < 0
+            || (bias != Py_None && GET_RAW_PTR(VarHolder, bias)->var->num < 0)) return unknown;
+    if (x->shape.size() != 4 || w->shape.size() != 4 || !w->is_contiguous()
+            || x->dtype() != ns_float32 || w->dtype() != ns_float32
+            || (bias != Py_None && GET_RAW_PTR(VarHolder, bias)->var->dtype() != ns_float32)) return declines;
+    int64 groups, sh, sw, ph, pw, dh, dw;
+    if (!integer64(PyTuple_GET_ITEM(args, 6), groups)
+            || !geometry_pair(PyTuple_GET_ITEM(args, 3), sh, sw)
+            || !geometry_pair(PyTuple_GET_ITEM(args, 4), ph, pw)
+            || !geometry_pair(PyTuple_GET_ITEM(args, 5), dh, dw)) return unknown;
+    if (groups != 1) return declines;
+    if (sh <= 0 || sw <= 0 || dh <= 0 || dw <= 0 || ph < 0 || pw < 0) return unknown;
+    for (int i = 0; i < 4; ++i) {
+        if (x->shape[i] > INT_MAX || w->shape[i] > INT_MAX) return declines;
+        if (w->shape[i] <= 0 || (i && x->shape[i] <= 0)) return unknown;
+    }
+    for (int64 v : {sh, sw, ph, pw, dh, dw}) if (v > INT_MAX) return declines;
+    int64 h = x->shape[2] + 2*ph - dh*(w->shape[2]-1) - 1;
+    int64 v = x->shape[3] + 2*pw - dw*(w->shape[3]-1) - 1;
+    if (h < 0 || v < 0) return declines;
+    int64 oh = h/sh+1, ow = v/sw+1;
+    if (oh > INT_MAX || ow > INT_MAX || oh > INT_MAX/ow) return declines;
+    int64 spatial = oh*ow, batch = x->shape[0];
+    if (batch > INT_MAX/spatial || x->shape[1] > INT_MAX/w->shape[2]
+            || x->shape[1]*w->shape[2] > INT_MAX/w->shape[3]) return declines;
+    int64 inner = x->shape[1]*w->shape[2]*w->shape[3], columns = batch*spatial;
+    return !columns || inner <= (256LL << 20)/4/columns ? accepts : declines;
+}
+
 Verdict evaluate(const NativeRule& rule, PyObject* args, PyObject* kwargs) {
     if (!PyTuple_Check(args)) return unknown;
     Py_ssize_t n = PyTuple_GET_SIZE(args);
@@ -147,6 +251,9 @@ Verdict evaluate(const NativeRule& rule, PyObject* args, PyObject* kwargs) {
     bool conv2d_call = n == 7 && depthwise_fast_path(kwargs) >= 0;
     if (kwargs && kwargs != Py_None && PyDict_GET_SIZE(kwargs) && !conv2d_call)
         return unknown;
+    if (rule.kind == NativeRule::rocm_group || rule.kind == NativeRule::rocm_layer)
+        return rocm_norm_rule(args, rule.kind == NativeRule::rocm_group);
+    if (rule.kind == NativeRule::rocm_conv2d) return rocm_conv_rule(args);
     if (rule.kind == NativeRule::group_norm) {
         // `_supports_group_norm(x, num_groups, weight, bias, eps)`.
         if (n != 5 || !is_var(PyTuple_GET_ITEM(args, 0))) return unknown;
@@ -297,6 +404,12 @@ void kernel_select_native_rule(PyObject* fn, const string& rule) {
         parsed.kind = NativeRule::depthwise_conv2d;
     } else if (rule == "group_norm") {
         parsed.kind = NativeRule::group_norm;
+    } else if (rule == "rocm_conv2d") {
+        parsed.kind = NativeRule::rocm_conv2d;
+    } else if (rule == "rocm_group_norm") {
+        parsed.kind = NativeRule::rocm_group;
+    } else if (rule == "rocm_layer_norm") {
+        parsed.kind = NativeRule::rocm_layer;
     } else {
         throw std::invalid_argument("unknown native kernel rule: " + rule);
     }

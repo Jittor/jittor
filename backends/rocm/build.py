@@ -23,16 +23,25 @@ class LibraryBuild:
 
 
 _LIBRARIES = {
+    "hiprand": (
+        "hiprand/hiprand_kernel.h", (),
+        ("hiprand/hiprand_random_op.h", "hiprand/hiprand_random_op.cc",
+         "hiprand/random.h", "hiprand/random.cu"),
+    ),
     "hipblas": (
         "hipblas/hipblas.h", ("hipblas",),
         ("hipblas/hipblas_matmul_op.h", "hipblas/hipblas_matmul_op.cc", "hipblas/gemm_layout.h",
          "hipblas/hipblas_wrapper.h", "hipblas/hipblas_wrapper.cc",
+         "hipblas/hipblas_batched_matmul_op.h", "hipblas/hipblas_batched_matmul_op.cc",
+         "hipblas/hipblas_conv_inference_op.h", "hipblas/hipblas_conv_inference_op.cc",
+         "hipblas/convolution.h", "hipblas/convolution.cu",
          "hipblas/hipblas_capabilities.cc"),
     ),
     "rocprim": (
         "rocprim/device/device_scan.hpp", (),
         ("rocprim/rocprim_cumsum_op.h", "rocprim/rocprim_cumsum_op.cc",
-         "rocprim/scan.h", "rocprim/scan.cu"),
+         "rocprim/scan.h", "rocprim/scan.cu", "rocprim/arg_reduce.h", "rocprim/arg_reduce.cu",
+         "rocprim/rocm_arg_reduce_op.h", "rocprim/rocm_arg_reduce_op.cc"),
     ),
 }
 

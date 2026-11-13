@@ -537,6 +537,11 @@ public:
     // @pyjt(_storage_data_alias)
     VarHolder* storage_data_alias();
 
+    // Retain the whole physical allocation as an inputless byte tensor. Its
+    // ownership is independent of this holder and survives a later rebind.
+    // @pyjt(_storage_bytes)
+    VarHolder* storage_bytes();
+
     /** 
      * enable the gradient calculation for the Var.
      */

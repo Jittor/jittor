@@ -1,13 +1,12 @@
 #ifdef JIT_cuda
-#include <cuda_runtime.h>
-#include "helper_cuda.h"
+#include "indexing_runtime.h"
 #include "type/cuda_atomic.h"
 #include "indexing_codegen.h"
 
 // The common indexing body is expanded before KernelIR builds the CUDA kernel.
 // Colliding scatter reductions need raw-IEEE atomics; its storage is copied
 // verbatim and never transformed to the ordered-integer reduction encoding.
-#define indexing_backend_copy() if (op != ip) checkCudaErrors(cudaMemcpyAsync(op, ip, out->size, cudaMemcpyDeviceToDevice, cudaStreamPerThread));
+#define indexing_backend_copy() if (op != ip) indexing_copy_device(op, ip, out->size, out->device_id);
 #define indexing_backend_void() op[iid] = (Ti)dp[did]
 #define indexing_backend_add() atomicAdd(&op[iid], (Ti)dp[did])
 #define indexing_backend_maximum() cuda_atomic_max_rmw(&op[iid], (Ti)dp[did])

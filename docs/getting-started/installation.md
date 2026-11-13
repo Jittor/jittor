@@ -46,6 +46,33 @@ PYCPU
 
 结果应为 `[2. 4. 6.]`。首次运行可能需要编译；若失败，先检查错误中提到的编译器、头文件或依赖。更多安装检查可运行 `python -m jittor.selftest`。
 
+## 配置 ROCm / HIP
+
+先安装设备驱动和完整的 HIP 开发工具链，包括 `hipcc`、HIP 运行时、hipBLAS 和 rocPRIM
+的头文件与库，以及 hipRAND 设备头文件。Python 包不会安装这些系统依赖。海光 DTK 环境也应把 SDK 根目录作为
+`ROCM_HOME`，而不是只指向其中的 `hip/` 子目录。
+
+```bash
+export JT_BACKEND=rocm
+export ROCM_HOME="${ROCM_PATH:-/opt/rocm}"
+export JITTOR_HOME="${STATE:-../jittor-lab/_state/getting-started}/rocm"
+DISABLE_MULTIPROCESSING=1 python - <<'PYHIP'
+import jittor as jt
+assert jt.compiler.has_rocm
+with jt.runtime.scope(use_cuda=1, backend_fallback="error"):
+    result = (jt.array([1.0, 2.0, 3.0]) * 2).sum()
+    result.sync()
+    assert result.location() == "device"
+    assert result.item() == 12.0
+    print("HIP device computation passed")
+PYHIP
+```
+
+`use_cuda` 是运行时通用的加速器开关；实际后端由 `JT_BACKEND=rocm` 选择。上面的
+检查禁止 CPU 回退。缺少 HIP 运行时开发库时，配置阶段会明确报出 `libamdhip64.so`；
+hipBLAS 和 rocPRIM 缺失也会直接报错。MIOpen 与 RCCL provider 尚未实现；此检查不代表
+卷积库、多卡通信或任意模型已经通过验收，后端验证范围见[平台支持](../guides/hardware/platform-support.md)。
+
 ## 需要 Torch 兼容接口时
 
 `jittor-compat` 是独立发行物。使用本仓源码时，在新建的专用环境中从仓库根目录同时安装两部分：

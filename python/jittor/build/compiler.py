@@ -1602,10 +1602,17 @@ build_config = build_config.evolve(
 # fails with "Accelerator compiler is not configured", which is what an
 # unconfigured accelerator looks like from the inside.
 if build_config.has_accelerator and build_config.kernel_compiler:
+    accelerator_compile_flags = build_config.kernel_compile_flags
+    if build_config.kernel_language == "cuda":
+        accelerator_compile_flags += nvcc_flags
+    elif build_config.kernel_language == "hip":
+        # HIP kernels are complete shared libraries too: the SDK flags alone
+        # omit the core/generated headers, symbols and shared-library options.
+        accelerator_compile_flags += cc_flags + opt_flags + kernel_opt_flags
+        accelerator_compile_flags += build_config.backend_link_flags
     core.configure_accelerator_compiler(
         build_config.kernel_compiler,
-        build_config.kernel_compile_flags + nvcc_flags
-        if build_config.kernel_language == "cuda" else build_config.kernel_compile_flags,
+        accelerator_compile_flags,
         build_config.kernel_language,
         build_config.kernel_source_suffix,
         list(build_config.kernel_flag_filter),
