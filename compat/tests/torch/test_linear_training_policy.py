@@ -9,20 +9,22 @@ import jittor as jt
 
 
 @pytest.mark.parametrize("bias", [False, True])
-def test_medium_product_avoids_the_tuner_context_and_keeps_all_gradients(bias):
+@pytest.mark.parametrize("features", [(768, 768), (768, 3072)])
+def test_medium_product_avoids_the_tuner_context_and_keeps_all_gradients(bias, features):
     if not torch.cuda.is_available() or not getattr(jt.compiler, "is_cuda", False):
         pytest.skip("CUDA kernel-selection policy requires an allocated CUDA build")
     rng = np.random.default_rng(73)
+    cin, cout = features
     # A medium product above the former floor, below the tuned-route floor.
     # Binary fractions keep the independent FP64 oracle well-conditioned.
-    values = rng.integers(-2, 3, (1024, 768)).astype("float32") / 32
-    weights = rng.integers(-2, 3, (768, 768)).astype("float32") / 32
-    cotangent = rng.integers(-2, 3, (1024, 768)).astype("float32") / 32
-    offset = rng.integers(-2, 3, (768,)).astype("float32") / 32
+    values = rng.integers(-2, 3, (1024, cin)).astype("float32") / 32
+    weights = rng.integers(-2, 3, (cout, cin)).astype("float32") / 32
+    cotangent = rng.integers(-2, 3, (1024, cout)).astype("float32") / 32
+    offset = rng.integers(-2, 3, (cout,)).astype("float32") / 32
     lt = importlib.import_module("jittor.backends.cuda.kernels.cublas.lt_linear_cuda")
     with jt.flag_scope(auto_graph_replay=0, backend_fallback="error",
                        float32_matmul_precision="highest"):
-        layer = torch.nn.Linear(768, 768, bias=bias).to("cuda")
+        layer = torch.nn.Linear(cin, cout, bias=bias).to("cuda")
         with torch.no_grad():
             layer.weight.copy_(torch.tensor(weights, device="cuda"))
             if bias:
