@@ -5,11 +5,85 @@ import torch
 
 from _helpers.device_types import instantiate_device_type_tests
 from jittor.compat.torch import optimizer_adam
+from jittor.compat.torch.installers.tensor import method_api as tensor_methods
 from jittor.compat.torch.installers.tensor.method_api import _optimizer_update
 
 
 def _arrays(tensors):
     return [x.detach().cpu().numpy().copy() for x in tensors]
+
+
+def _packing_case():
+    parameter = torch.nn.Parameter(torch.tensor([1., 2.], device='cpu'))
+    moment, variance, gradient = [torch.zeros(2, device='cpu') for _ in range(3)]
+    values = tuple(torch.ones(2, device='cpu') for _ in range(3))
+    active = [(parameter, moment, variance, gradient, 0)]
+    frontend = optimizer_adam.get_install_context(jt).target_namespace
+    return active, [values], (jt.Var, frontend.Tensor, frontend.nn.Parameter)
+
+
+def test_packed_updates_keep_identity_order_and_live_replacements():
+    active, updates, types = _packing_case()
+    first = jt.core._try_pack_optimizer_updates(
+        active, updates, types, _optimizer_update, optimizer_adam._BATCH_UPDATE_PROTOCOL)
+    assert first is not None
+    assert all(a is b for a, b in zip(first[0], active[0][:3]))
+    assert all(a is b for a, b in zip(first[1], updates[0]))
+    replacement = torch.nn.Parameter(torch.tensor([3., 4.], device='cpu'))
+    active[0] = (replacement, *active[0][1:])
+    updates[0] = tuple(torch.full((2,), 5., device='cpu') for _ in range(3))
+    second = jt.core._try_pack_optimizer_updates(
+        active, updates, types, _optimizer_update, optimizer_adam._BATCH_UPDATE_PROTOCOL)
+    assert second is not None and second[0][0] is replacement
+    assert all(a is b for a, b in zip(second[1], updates[0]))
+    assert first[0][0] is not replacement
+
+
+def test_update_iterators_are_left_for_the_ordinary_writer():
+    active, updates, _ = _packing_case()
+    producer = iter(updates)
+    assert not optimizer_adam._try_batch_update(active, producer)
+    assert next(producer) is updates[0]
+
+
+def test_packing_preserves_custom_global_getters():
+    from unittest.mock import patch
+
+    active, updates, _ = _packing_case()
+    calls = []
+
+    def observed(owner, name, default=None):
+        calls.append((owner, name))
+        return getattr(owner, name, default)
+
+    with patch.object(optimizer_adam, 'getattr', observed, create=True):
+        with tensor_methods._optimizer_write_scope():
+            optimizer_adam._try_batch_update(active, updates)
+    assert calls == [(type(target), '_optimizer_update') for target in active[0][:3]]
+
+
+def test_writer_descriptors_are_observed_only_by_python_fallback():
+    from unittest.mock import patch
+
+    calls = []
+
+    class Meta(type):
+        @property
+        def _optimizer_update(cls):
+            calls.append(cls)
+            return _optimizer_update
+
+    class Target(metaclass=Meta):
+        _optimizer_update = _optimizer_update
+
+    target = Target()
+    assert jt.core._try_optimizer_writers(
+        [target], _optimizer_update, tensor_methods._BATCH_WRITE_PROTOCOL) is None
+    assert not calls
+    with patch.object(jt.core, '_commit_shared_updates', return_value=False):
+        with tensor_methods._optimizer_write_scope():
+            assert not tensor_methods._optimizer_update_many([target], [target])
+    assert calls == [Target]
 
 
 class TestOptimizerBatchWriteback:

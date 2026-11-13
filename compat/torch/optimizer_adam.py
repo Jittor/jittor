@@ -188,6 +188,10 @@ def _try_batch_update(active, updates):
         return False
     frontend = get_install_context(jt).target_namespace
     allowed = (jt.Var, frontend.Tensor, frontend.nn.Parameter)
+    packed = jt.core._try_pack_optimizer_updates(
+        active, updates, allowed, _optimizer_update, _BATCH_UPDATE_PROTOCOL)
+    if packed is not None:
+        return _optimizer_update_many(packed[0], packed[1])
     targets, values = [], []
     for (p, m, v, _, _), triple in zip(active, updates):
         for target, value in zip((p, m, v), triple):
@@ -197,6 +201,16 @@ def _try_batch_update(active, updates):
             targets.append(target)
             values.append(value)
     return _optimizer_update_many(targets, values)
+
+
+# Implementation identities only; the native call reads all rows and classes anew.
+_BATCH_UPDATE_PROTOCOL = (
+    _try_batch_update, _try_batch_update.__code__,
+    tuple((name, value) for name, value in (
+        ("type", type), ("list", list), ("tuple", tuple), ("len", len),
+        ("zip", zip), ("getattr", getattr), ("any", any),
+    )),
+)
 
 
 def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay):

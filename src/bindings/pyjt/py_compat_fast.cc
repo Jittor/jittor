@@ -429,6 +429,130 @@ bool gradient_publication_protocol(PyObject* types, PyObject* protocol) {
 }
 }
 
+namespace {
+bool optimizer_batch_policy(PyObject* protocol, PyObject* writer) {
+    if (!PyTuple_CheckExact(protocol) || PyTuple_GET_SIZE(protocol) != 3
+            || !PyFunction_Check(PyTuple_GET_ITEM(protocol, 0))) return false;
+    auto* function = PyTuple_GET_ITEM(protocol, 0);
+    return optimizer_function_code(function, PyTuple_GET_ITEM(protocol, 1))
+        && optimizer_function_bindings(function, PyTuple_GET_ITEM(protocol, 2))
+        && PyDict_GetItemString(PyFunction_GET_GLOBALS(function), "_optimizer_update") == writer;
+}
+
+bool optimizer_plain_type_dicts(PyTypeObject* type,
+                               std::unordered_set<PyTypeObject*>& checked) {
+    if (!type->tp_mro || !PyTuple_CheckExact(type->tp_mro)) return false;
+    for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(type->tp_mro); ++i) {
+        auto* base = PyTuple_GET_ITEM(type->tp_mro, i);
+        if (!PyType_Check(base)) return false;
+        auto* cls = (PyTypeObject*)base;
+        if (checked.insert(cls).second
+                && (!cls->tp_dict || !optimizer_string_keys(cls->tp_dict)))
+            return false;
+    }
+    return true;
+}
+
+// Ordinary function lookup cannot run Python. A metaclass or descriptor can;
+// leave those to the original getter rather than calling them speculatively.
+int optimizer_plain_writer(PyTypeObject* type, PyObject* writer, PyObject* key,
+                           std::unordered_set<PyTypeObject*>& checked) {
+    auto* meta = Py_TYPE(type);
+    if (meta->tp_getattro != PyType_Type.tp_getattro
+            || !optimizer_plain_type_dicts(type, checked)
+            || !optimizer_plain_type_dicts(meta, checked)
+            || _PyType_Lookup(meta, key)) return -1;
+    auto* found = _PyType_Lookup(type, key);
+    if (found == writer) return 1;
+    return !found || PyFunction_Check(found) ? 0 : -1;
+}
+}
+
+PyObject* try_pack_optimizer_updates(PyObject* active, PyObject* updates,
+    PyObject* types, PyObject* writer, PyObject* protocol) {
+    auto sequence = [](PyObject* value) {
+        return PyList_CheckExact(value) || PyTuple_CheckExact(value);
+    };
+    if (!sequence(active) || !sequence(updates) || !PyTuple_CheckExact(types)
+            || !PyFunction_Check(writer)) Py_RETURN_NONE;
+    auto size = [](PyObject* value) {
+        return PyTuple_CheckExact(value) ? PyTuple_GET_SIZE(value) : PyList_GET_SIZE(value);
+    };
+    auto item = [](PyObject* value, Py_ssize_t i) {
+        return PyTuple_CheckExact(value) ? PyTuple_GET_ITEM(value, i) : PyList_GET_ITEM(value, i);
+    };
+    auto count = size(active);
+    if (count != size(updates) || count > PY_SSIZE_T_MAX / 3) Py_RETURN_NONE;
+    PyObjHolder targets(PyList_New(count * 3)), values(PyList_New(count * 3));
+    if (!targets.obj || !values.obj) return nullptr;
+    PyObjHolder result(PyTuple_Pack(2, targets.obj, values.obj));
+    if (!result.obj) return nullptr;
+    PyObjHolder key(PyUnicode_FromString("_optimizer_update"));
+    if (!key.obj) return nullptr;
+    // Tracked allocations can run a finalizer. Read the original live lists
+    // again afterwards; do not use an earlier parameter/update snapshot.
+    if (size(active) != count || size(updates) != count
+            || !optimizer_batch_policy(protocol, writer)) {
+        if (PyErr_Occurred()) return nullptr;
+        Py_RETURN_NONE;
+    }
+    for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(types); ++i) {
+        auto* type = PyTuple_GET_ITEM(types, i);
+        if (!PyType_Check(type)
+                || Py_TYPE(type)->tp_richcompare != PyType_Type.tp_richcompare)
+            Py_RETURN_NONE;
+    }
+    std::unordered_set<PyTypeObject*> checked, writers;
+    for (Py_ssize_t i = 0; i < count; ++i) {
+        auto* row = item(active, i);
+        auto* triple = item(updates, i);
+        if (!PyTuple_CheckExact(row) || PyTuple_GET_SIZE(row) != 5
+                || !PyTuple_CheckExact(triple) || PyTuple_GET_SIZE(triple) != 3)
+            Py_RETURN_NONE;
+        for (int j = 0; j < 3; ++j) {
+            auto* target = PyTuple_GET_ITEM(row, j);
+            auto* value = PyTuple_GET_ITEM(triple, j);
+            if (!canonical_optimizer_holder(target, types)
+                    || !canonical_optimizer_holder(value, types)) Py_RETURN_NONE;
+            auto* type = Py_TYPE(target);
+            if (writers.insert(type).second
+                    && optimizer_plain_writer(type, writer, key.obj, checked) != 1) {
+                if (PyErr_Occurred()) return nullptr;
+                Py_RETURN_NONE;
+            }
+            Py_INCREF(target);
+            PyList_SET_ITEM(targets.obj, i * 3 + j, target);
+            Py_INCREF(value);
+            PyList_SET_ITEM(values.obj, i * 3 + j, value);
+        }
+    }
+    return result.release();
+}
+
+PyObject* try_optimizer_writers(PyObject* targets, PyObject* writer, PyObject* protocol) {
+    if ((!PyList_CheckExact(targets) && !PyTuple_CheckExact(targets))
+            || !PyFunction_Check(writer)) Py_RETURN_NONE;
+    PyObjHolder key(PyUnicode_FromString("_optimizer_update"));
+    if (!key.obj) return nullptr;
+    if (!optimizer_batch_policy(protocol, writer)) {
+        if (PyErr_Occurred()) return nullptr;
+        Py_RETURN_NONE;
+    }
+    std::unordered_set<PyTypeObject*> checked, writers;
+    auto count = PyTuple_CheckExact(targets) ? PyTuple_GET_SIZE(targets) : PyList_GET_SIZE(targets);
+    for (Py_ssize_t i = 0; i < count; ++i) {
+        auto* target = PyTuple_CheckExact(targets)
+            ? PyTuple_GET_ITEM(targets, i) : PyList_GET_ITEM(targets, i);
+        auto* type = Py_TYPE(target);
+        if (!writers.insert(type).second) continue;
+        auto matches = optimizer_plain_writer(type, writer, key.obj, checked);
+        if (PyErr_Occurred()) return nullptr;
+        if (matches < 0) Py_RETURN_NONE;
+        if (!matches) Py_RETURN_FALSE;
+    }
+    Py_RETURN_TRUE;
+}
+
 bool try_publish_fresh_gradients(PyObject* groups, PyObject* gradients,
     PyObject* filled, PyObject* types, PyObject* metadata_protocol,
     PyObject* state_protocol) {

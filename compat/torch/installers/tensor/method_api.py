@@ -440,11 +440,22 @@ def _optimizer_update_many(targets, values):
     from jittor._runtime import step_capture
     if not _OPTIMIZER_WRITES[0] or step_capture.active():
         return False
-    if any(getattr(type(target), '_optimizer_update', None) is not _optimizer_update
-           for target in targets):
+    writers = _owner.jt.core._try_optimizer_writers(
+        targets, _optimizer_update, _BATCH_WRITE_PROTOCOL)
+    if writers is None:
+        if any(getattr(type(target), '_optimizer_update', None) is not _optimizer_update
+               for target in targets):
+            return False
+    elif not writers:
         return False
     with _owner.jt.no_grad():
         return _owner.jt.core._commit_shared_updates(targets, values)
+
+
+_BATCH_WRITE_PROTOCOL = (
+    _optimizer_update_many, _optimizer_update_many.__code__,
+    (("type", type), ("getattr", getattr), ("any", any)),
+)
 
 
 def _copy_(self, other, non_blocking=False):

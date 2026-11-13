@@ -42,6 +42,17 @@ PyObject* try_optimizer_shape_changes(PyObject* params, PyObject* moments,
 PyObject* try_optimizer_adam_entries(PyObject* group, PyObject* gradients,
     PyObject* steps, PyObject* canonical_types, PyObject* protocol, bool advance);
 
+// Fresh optimizer update metadata only: unknown Python protocols stay on the
+// caller's ordinary path. No holder, value or eligibility survives the call.
+// @pyjt(_try_pack_optimizer_updates)
+PyObject* try_pack_optimizer_updates(PyObject* active, PyObject* updates,
+    PyObject* canonical_types, PyObject* writer, PyObject* protocol);
+
+// True/False for ordinary class attributes; None preserves Python descriptors.
+// @pyjt(_try_optimizer_writers)
+PyObject* try_optimizer_writers(PyObject* targets, PyObject* writer,
+    PyObject* protocol);
+
 // Publish this backward's fresh stopped gradients into empty ordinary slots.
 // False leaves custom accessors, accumulation and shared targets to Python.
 // All eligibility and holder metadata are read anew on every call.
