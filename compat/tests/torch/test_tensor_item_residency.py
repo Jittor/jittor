@@ -2,7 +2,12 @@
 import ctypes
 import unittest
 
+import pytest
 import torch
+
+from _helpers import capability
+
+pytestmark = pytest.mark.cuda
 
 
 def _pointer_kind(tensor):
@@ -16,7 +21,7 @@ def _pointer_kind(tensor):
     return pointer, kind.value
 
 
-@unittest.skipUnless(torch.cuda.is_available(), 'requires real CUDA')
+@capability.accelerator_required("cuda")
 class TestTensorItemResidency(unittest.TestCase):
     def test_scalar_and_views_keep_their_actual_device_storage(self):
         for dtype in (torch.float16, torch.float32):
