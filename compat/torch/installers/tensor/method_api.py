@@ -442,13 +442,14 @@ def _optimizer_update_many(targets, values):
 
 
 def _copy_(self, other, non_blocking=False):
-    # Keep the public leaf error before constructing or storing any result.
+    # Preserve no-grad alias diagnostics before the generic leaf checks.
+    # All checks still precede constructing or storing a result.
+    self._check_inplace_autograd()
     if not _owner.jt.flags.no_grad and self.requires_grad:
         if self.is_leaf:
             raise RuntimeError("a leaf Variable that requires grad is being used in an in-place operation.")
         if self._view_base_is_trainable_leaf():
             raise RuntimeError("a view of a leaf Variable that requires grad is being used in an in-place operation.")
-    self._check_inplace_autograd()
     src = other if isinstance(other, _NativeVar) else _owner.jt.array(other)
     if hasattr(self, "dtype") and _jittor_dtype_name(src.dtype) != _jittor_dtype_name(self.dtype):
         src = src.cast(_jittor_dtype_name(self.dtype))
