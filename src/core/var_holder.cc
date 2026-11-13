@@ -15,6 +15,9 @@
 #include "core/executor.h"
 #include "runtime/device.h"
 #include "runtime/backend.h"
+#include "runtime/backend_streams.h"
+#include "runtime/async_exec.h"
+#include "runtime/graph_capture.h"
 #include "core/graph.h"
 #include "core/grad.h"
 #include "mem/allocator/cuda_dual_allocator.h"
@@ -31,6 +34,8 @@
 #include "bindings/pyjt/py_converter.h"
 
 namespace jittor {
+
+EXTERN_LIB void register_cleanup_callback(void (*cb)());
 
 namespace {
 struct VarDataOwner {
@@ -499,6 +504,19 @@ int preserve_step_readers(const vector<VarHolder*>& storages) {
     return (int)readers.size();
 }
 
+void VarHolder::validate_copy_from(VarHolder* src) {
+    // Reject the unsupported transaction before the custom Function can store
+    // bytes. Materialize the real root before constructing its temporary alias.
+    USER_CHECK(!state_capture || !view || !view->base)
+        << "differentiable view copy during step capture is unsupported";
+    ExecutorEntryScope entry;
+    if (view && view->base) view->base->sync(false, false);
+    sync(false, false);
+    src->sync(false, false);
+    validate_logical_copy_alias(this, src);
+    (void)validate_storage_copy(var, src->var);
+}
+
 static void materialize_step_values(const vector<Var*>& roots, bool device_sync) {
     ExecutorEntryScope entry;
     auto& pipeline = runtime_submission_pipeline();
@@ -564,6 +582,11 @@ bool commit_shared_updates(const vector<VarHolder*>& targets,
 }
 
 void VarHolder::copy_into(VarHolder* src, bool sync_src) {
+    copy_into_impl(src, sync_src, nullptr);
+}
+
+void VarHolder::copy_into_impl(VarHolder* src, bool sync_src,
+        std::unordered_set<std::shared_ptr<uint64>>* logical_versions) {
     check_inplace_autograd();
     ExecutorEntryScope entry;
     // Preserve saved values before a physical write can invalidate their
@@ -583,7 +606,7 @@ void VarHolder::copy_into(VarHolder* src, bool sync_src) {
            "bytes; this one has never been executed";
     validate_logical_copy_alias(this, src);
     auto plan = validate_storage_copy(var, src->var);
-    record_inplace_write();
+    record_inplace_write_impl(logical_versions);
     if (plan == StorageCopy::NoOp) return;
     // A strided source -- a channels-last activation read as NCHW, a
     // transposed view -- is made dense first; the copy below moves raw bytes.
@@ -1149,7 +1172,24 @@ static bool view_step_fits(Var* value, const VarViewStep& step) {
     return true;
 }
 
-void VarHolder::refresh_transpose_views(bool preserve_grad_policy, VarView* only) {
+static void preserve_copy_storage(VarPtr& value, VarHolder* destination) {
+    if (!destination->var->allocator) return;
+    unique_ptr<VarHolder> storage(new VarHolder(ready_storage_alias(destination)));
+    VarHolder replacement(move(value));
+    replacement.sync(false, false);
+    USER_CHECK(replacement.var->shape == storage->var->shape
+            && replacement.var->dtype() == storage->var->dtype())
+        << "copy commit cannot preserve incompatible storage geometry";
+    auto version = storage->var->storage_version_token();
+    replacement._update(storage.get(), false);
+    std::atomic_store(&replacement.var->storage_mutation_version, version);
+    USER_CHECK(replacement.var->mem_ptr == storage->var->mem_ptr)
+        << "copy commit did not retain its actual allocation";
+    value = VarPtr(replacement.var);
+}
+
+void VarHolder::refresh_transpose_views(bool preserve_grad_policy, VarView* only,
+        bool preserve_copy_storage) {
     for (auto* record = views; record; ) {
         // drop_view() below unlinks and frees `record`, so step off it first.
         auto* next = record->next;
@@ -1197,7 +1237,7 @@ void VarHolder::refresh_transpose_views(bool preserve_grad_policy, VarView* only
             if (state && !rebase
                     && record->owner->var->flag(VarFlags::_unrecorded_view))
                 value = jittor::detach(value.ptr);
-            record->owner->rebind_view_result(move(value), preserve_grad_policy);
+            record->owner->rebind_view_result(move(value), preserve_grad_policy, preserve_copy_storage);
             if (rebase) {
                 state->source_edge_enabled = get_requires_grad();
                 state->recorded_view_history = true;
@@ -1348,9 +1388,13 @@ bool VarHolder::copy_view_into(VarHolder* src) {
         destinations.push_back(destination);
         values.push_back(move(prepared));
     }
-    base->copy_into(updated.get());
+    // One public copy may refresh several real buffers of the same logical
+    // view owner. Hold each version owner and advance it once per transaction;
+    // physical mutation/readers/copies still run for every allocation.
+    std::unordered_set<std::shared_ptr<uint64>> logical_versions;
+    base->copy_into_impl(updated.get(), true, &logical_versions);
     for (size_t i=0; i<destinations.size(); ++i)
-        destinations[i]->copy_into(values[i].get());
+        destinations[i]->copy_into_impl(values[i].get(), true, &logical_versions);
     return true;
 }
 
@@ -1411,7 +1455,9 @@ void VarHolder::operator=(VarPtr&& v) {
     rebind_view_result(move(v), true);
 }
 
-void VarHolder::rebind_view_result(VarPtr&& v, bool preserve_grad_policy) {
+void VarHolder::rebind_view_result(VarPtr&& v, bool preserve_grad_policy,
+        bool preserve_copy_storage) {
+    if (preserve_copy_storage) jittor::preserve_copy_storage(v, this);
     if (preserve_grad_policy && autograd_policy.preserve_requires_grad_on_assignment) {
         if (var->is_stop_grad() != v->is_stop_grad())
             v.set_stop_grad(var->is_stop_grad());
@@ -1426,7 +1472,7 @@ void VarHolder::rebind_view_result(VarPtr&& v, bool preserve_grad_policy) {
     var = v.ptr;
     own_holder();
     v.ptr = nullptr;
-    refresh_transpose_views(preserve_grad_policy);
+    refresh_transpose_views(preserve_grad_policy, nullptr, preserve_copy_storage);
 }
 
 extern bool no_grad;
@@ -1500,9 +1546,22 @@ VarHolder* VarHolder::check_inplace_autograd() {
 }
 
 void VarHolder::record_inplace_write() {
+    record_inplace_write_impl(nullptr);
+}
+
+void VarHolder::record_inplace_write_impl(
+        std::unordered_set<std::shared_ptr<uint64>>* logical_versions) {
     var->note_storage_mutation();
-    if (!var->autograd_alias) return;
-    ++*var->autograd_alias->version;
+    if (!var->autograd_alias) {
+        // Explicit Tensor policy counts the first real write even if nobody
+        // has queried the version or created an alias yet. Native policy keeps
+        // its existing no-state fast path; detach/data counters stay unchanged.
+        if (!autograd_policy.stop_outputs_when_inputs_stopped) return;
+        ensure_autograd_alias();
+    }
+    auto version = var->autograd_alias->version;
+    if (!logical_versions || logical_versions->insert(version).second)
+        ++*version;
 
 }
 
@@ -1729,6 +1788,155 @@ bool VarHolder::has_storage_aliases() {
     runtime_executor().run_sync({var}, false, false);
     std::lock_guard<std::mutex> guard(share_ring_mutex());
     return views != nullptr || var->share_next != nullptr;
+}
+
+namespace {
+// Hold allocations, not Vars: rebinding or destroying a holder must not recycle
+// storage while DMA still references it. A wait through any destination alias
+// releases all copies into that allocation. No graph node or implicit join is
+// installed: the caller explicitly waits before reading or reusing the bytes.
+struct PendingStorageCopy {
+    Allocation destination, source;
+    BackendStream stream;
+    BackendEvent done;
+    bool recorded = false;
+    ~PendingStorageCopy() { backend_ops(done.device.backend).event_destroy(done); }
+};
+std::list<unique_ptr<PendingStorageCopy>> pending_storage_copies;
+
+void wait_storage_copy(PendingStorageCopy& copy) {
+    DeviceWaitScope wait;
+    const auto& ops = backend_ops(copy.stream.device.backend);
+    if (copy.recorded) ops.event_synchronize(copy.done);
+    else ops.stream_synchronize(copy.stream); // also recover a failed enqueue
+}
+
+void cleanup_storage_copies() {
+    for (auto& copy : pending_storage_copies) wait_storage_copy(*copy);
+    pending_storage_copies.clear();
+}
+
+void retain_copy_storage(Allocation& held, Var* var) {
+    USER_CHECK(var->allocator->share_with(var->storage_span_bytes(),
+        var->allocation, var->storage_offset_bytes))
+        << "copy_into_async requires shareable storage";
+    held.ptr = var->mem_ptr;
+    held.allocation = var->allocation;
+    held.size = var->storage_span_bytes();
+    held.allocator = var->allocator;
+}
+}
+
+void copy_into_async(VarHolder* dst, VarHolder* src) {
+    async_exec_wait();
+    ExecutorEntryScope entry;
+    CHECK(dst && src && dst->var && src->var);
+    USER_CHECK(!graph_capture_active() && !state_capture)
+        << "copy_into_async cannot be recorded in a graph or state capture";
+    auto* d = dst->var;
+    auto* s = src->var;
+    USER_CHECK(d->is_finished() && s->is_finished() &&
+        !d->flag(VarFlags::_execution_failed) && !s->flag(VarFlags::_execution_failed))
+        << "copy_into_async needs two materialized storages";
+    USER_CHECK(d->is_contiguous() && s->is_contiguous())
+        << "copy_into_async requires contiguous storage";
+    USER_CHECK(d->size == s->size)
+        << "copy_into_async needs equal byte sizes, got " << d->size << " and " << s->size;
+    if (!d->size) return;
+    USER_CHECK(d->mem_ptr && s->mem_ptr && d->allocator && s->allocator)
+        << "copy_into_async needs two allocated storages";
+    auto target = allocation_device(d->allocator);
+    auto source = allocation_device(s->allocator);
+    USER_CHECK(target.backend == BackendId::Cpu || source.backend == BackendId::Cpu ||
+        (target.backend == source.backend && target.index == source.index))
+        << "copy_into_async between different accelerator devices is unsupported";
+    if (target.backend == source.backend && target.index == source.index) {
+        auto dp = reinterpret_cast<uintptr_t>(d->mem_ptr);
+        auto sp = reinterpret_cast<uintptr_t>(s->mem_ptr);
+        if (dp == sp) return;
+        USER_CHECK(dp < sp ? sp-dp >= d->size : dp-sp >= d->size)
+            << "copy_into_async requires non-overlapping storage";
+    }
+    dst->check_inplace_autograd();
+    if (target.backend == BackendId::Cpu && source.backend == BackendId::Cpu) {
+        dst->record_inplace_write();
+        std::memcpy(d->mem_ptr, s->mem_ptr, d->size);
+        return;
+    }
+    Device device = target.backend == BackendId::Cpu ? source : target;
+    auto stream = backend_stream(device, BackendStreamKind::Copy);
+    const auto& ops = backend_ops(device.backend);
+    auto copy = std::make_unique<PendingStorageCopy>();
+    copy->stream = stream;
+    copy->done = backend_event(device);
+    retain_copy_storage(copy->destination, d);
+    retain_copy_storage(copy->source, s);
+    static const bool registered = [] {
+        register_cleanup_callback(cleanup_storage_copies);
+        return true;
+    }();
+    (void)registered;
+    if (source.backend != BackendId::Cpu) {
+        backend_compute_stream_acquire();
+        backend_side_stream_wait_default(BackendStreamKind::Copy, device.index, source.index);
+    }
+    auto* pending = copy.get();
+    pending_storage_copies.push_back(move(copy));
+    // Keep the record even if enqueue/record raises: a partially submitted
+    // transfer must be drained by copy_wait/cleanup before either block frees.
+    dst->record_inplace_write();
+    backend_copy_async(d->mem_ptr, target, s->mem_ptr, source, d->size, stream);
+    ops.event_record(pending->done, stream);
+    pending->recorded = true;
+}
+
+void copy_wait(VarHolder* dst) {
+    async_exec_wait();
+    ExecutorEntryScope entry;
+    CHECK(dst && dst->var);
+    USER_CHECK(!graph_capture_active() && !state_capture)
+        << "copy_wait cannot be recorded in a graph or state capture";
+    // The wait releases the GIL: another thread may rebind dst meanwhile.
+    // Snapshot allocation identity before waiting, never reread the old Var.
+    auto* allocator = dst->var->allocator;
+    auto allocation = dst->var->allocation;
+    for (auto it = pending_storage_copies.begin(); it != pending_storage_copies.end();) {
+        const auto& held = (*it)->destination;
+        if (held.allocator != allocator || held.allocation != allocation) {
+            ++it;
+            continue;
+        }
+        wait_storage_copy(**it);
+        it = pending_storage_copies.erase(it);
+    }
+}
+
+VarHolder* VarHolder::update_copy_result(VarHolder* value) {
+    if (!view || !view->base) return _update(value);
+    check_inplace_autograd();
+    USER_CHECK(!no_grad) << "recorded view copy commit requires grad mode";
+    USER_CHECK(!state_capture) << "differentiable view copy commit during step capture is unsupported";
+    ExecutorEntryScope entry;
+    auto* base = view->base;
+    // Pin actual holders before sync/copies can release the GIL. Reuse the
+    // current recorded view chain, not the Function's tape/data-alias input.
+    PyObjHolder owners(PyList_New(0));
+    CHECKop(PyList_Append(owners.obj, GET_OBJ_FROM_RAW_PTR(base)), ==, 0);
+    for (auto* record=base->views; record; record=record->next)
+        CHECKop(PyList_Append(owners.obj, GET_OBJ_FROM_RAW_PTR(record->owner)), ==, 0);
+    const bool preserve_policy = !(autograd_policy.preserve_requires_grad_on_assignment
+        && !get_requires_grad() && value->get_requires_grad());
+    unique_ptr<VarHolder> updated(new VarHolder(
+        view_assignment_value(base->var, view->steps, value->var)));
+    updated->sync(false, false);
+    // This is the existing physical store owner. Its current native ledger
+    // deduplicates one logical write across root/materialized sibling buffers.
+    // Use the full root result, avoiding a same-layout target alias no-op that
+    // would skip the retained materialized siblings.
+    if (!base->copy_view_into(updated.get())) base->copy_into(updated.get());
+    VarPtr result(updated->var);
+    base->rebind_view_result(move(result), preserve_policy, true);
+    return this;
 }
 
 VarHolder* VarHolder::_update(VarHolder* v, bool logical_write) {

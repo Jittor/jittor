@@ -102,6 +102,9 @@ ENVIRONMENT_SKIP_PATTERNS = (
     # asserts directory permissions cannot hold when the suite runs as root,
     # because root bypasses them.
     "root ignores",
+    # CPU DataLoader IPC requires these Python/OS interfaces. Some Linux
+    # Python builds omit memfd_create even when the running kernel has it.
+    "os.memfd_create", "socket.sock_seqpacket",
     # A CPU without simultaneous multithreading: the OpenMP cases that limit a
     # run to one thread per physical core have nothing to limit there
     # (`tests/runtime/test_openmp_threads.py`).

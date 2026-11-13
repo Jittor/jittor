@@ -47,6 +47,7 @@ from .method_api import (
     _api_is_shared,
     _api_is_contiguous,
     _api_is_leaf,
+    _api_version,
     _api_is_sparse,
     _api_is_quantized,
     _api_retains_grad,
@@ -137,6 +138,7 @@ from .method_api import (
     _var_get_device,
     _var_norm,
     _var_numpy,
+    _var_item,
     _var_type,
     _write_data_owner_numpy,
     requires_grad_,
@@ -259,6 +261,8 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     _owner = _import_module(__package__)
     _bind_native_fast_paths(_owner.jt)
     _NativeVar = _owner.jt.Var
+    _native_item = _type_attribute(_NativeVar, "item")
+    _native_cpu_copy = _type_attribute(_NativeVar, "cpu")
     _install_expand_shape_adapter(Var)
     _install_expand_as_grad_adapter(Var)
     _native_operators = {name: getattr(Var, name, None) for name in _BINARY_APIS}
@@ -520,6 +524,9 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # Keep the compatibility spelling on Var so it follows the graph instead
     # of silently calling every intermediate a leaf.
     Var.is_leaf = property(_api_is_leaf)
+    Var._version = property(_api_version)
+    register_api_bindings(Var, 'torch.Tensor', ('_version',), Fidelity.EXACT,
+                          'Read the native shared logical-write counter without a Python cache.')
     Var.is_sparse = property(_api_is_sparse)
     Var.is_quantized = property(_api_is_quantized)
     register_api_bindings(Var, 'torch.Tensor', ('is_quantized',), Fidelity.EXACT,
@@ -567,6 +574,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
 
     _native_numpy = Var.numpy
     Var.numpy = _var_numpy
+    Var.item = _var_item
     Var.tolist = _api_tolist
 
     # torch's Tensor.cpu()/.cuda() MIGRATE the tensor's residency (native exts
@@ -762,7 +770,10 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         '_native_norm': locals().get('_native_norm'),
         '_native_numpy': locals().get('_native_numpy'),
         '_native_array': locals().get('_native_array'),
+        '_native_item': _native_item,
+        '_native_cpu_copy': _native_cpu_copy,
         '_native_requires_grad': locals().get('_native_requires_grad'),
+        '_native_inplace_version': _type_attribute(Var, 'inplace_version'),
         '_native_squeeze': locals().get('_native_squeeze'),
         '_norm_via': locals().get('_norm_via'),
         '_orig_getitem': locals().get('_orig_getitem'),
@@ -784,7 +795,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         'Shares the public function implementation and preserves native explicit autocast policy')
 
     register_api_bindings(Var, 'torch.Tensor',
-        ('T', '__array__', '__bool__', '__iadd__', '__isub__', '__imul__', '__itruediv__', '__deepcopy__', '__getitem__', '__hash__', '__invert__', '__ne__', '__reduce__', '__reduce_ex__', '__setitem__', 'add_', 'addcdiv_', 'addcmul_', 'addmm', 'argwhere', 'as_strided', 'backward', 'baddbmm', 'clamp', 'clamp_', 'clip', 'clip_', 'contiguous', 'copy_', 'cpu', 'cuda', 'cumprod', 'cumsum', 'data', 'data_ptr', 'detach', 'device', 'div_', 'dtype', 'element_size', 'exponential_', 'fill_', 'fill_diagonal_', 'get_device', 'grad', 'grad_fn', 'is_complex', 'is_contiguous', 'is_cpu', 'is_cuda', 'is_floating_point', 'is_leaf', 'is_meta', 'is_mps', 'is_nested', 'is_pinned', 'is_shared', 'is_signed', 'is_xpu', 'lerp', 'lerp_', 'mT', 'mul_', 'multiply_', 'narrow', 'ndimension', 'ne', 'nelement', 'new_empty', 'new_full', 'new_ones', 'new_tensor', 'new_zeros', 'nonzero', 'norm', 'normal_', 'numpy', 'pin_memory', 'random_', 'requires_grad', 'requires_grad_', 'retain_grad', 'retains_grad', 'set_', 'share_memory_', 'squeeze', 'storage', 'storage_offset', 'stride', 'sub_', 'tile', 'to', 'tolist', 'type', 'type_as', 'uniform_', 'untyped_storage', 'where', 'zero_') + tuple(_BINARY_APIS.keys() | _CAST_APIS.keys() | _UNARY_INPLACE_APIS.keys()),
+        ('T', '__array__', '__bool__', '__iadd__', '__isub__', '__imul__', '__itruediv__', '__deepcopy__', '__getitem__', '__hash__', '__invert__', '__ne__', '__reduce__', '__reduce_ex__', '__setitem__', 'add_', 'addcdiv_', 'addcmul_', 'addmm', 'argwhere', 'as_strided', 'backward', 'baddbmm', 'clamp', 'clamp_', 'clip', 'clip_', 'contiguous', 'copy_', 'cpu', 'cuda', 'cumprod', 'cumsum', 'data', 'data_ptr', 'detach', 'device', 'div_', 'dtype', 'element_size', 'exponential_', 'fill_', 'fill_diagonal_', 'get_device', 'grad', 'grad_fn', 'is_complex', 'is_contiguous', 'is_cpu', 'is_cuda', 'is_floating_point', 'is_leaf', 'is_meta', 'is_mps', 'is_nested', 'is_pinned', 'is_shared', 'is_signed', 'is_xpu', 'item', 'lerp', 'lerp_', 'mT', 'mul_', 'multiply_', 'narrow', 'ndimension', 'ne', 'nelement', 'new_empty', 'new_full', 'new_ones', 'new_tensor', 'new_zeros', 'nonzero', 'norm', 'normal_', 'numpy', 'pin_memory', 'random_', 'requires_grad', 'requires_grad_', 'retain_grad', 'retains_grad', 'set_', 'share_memory_', 'squeeze', 'storage', 'storage_offset', 'stride', 'sub_', 'tile', 'to', 'tolist', 'type', 'type_as', 'uniform_', 'untyped_storage', 'where', 'zero_') + tuple(_BINARY_APIS.keys() | _CAST_APIS.keys() | _UNARY_INPLACE_APIS.keys()),
         Fidelity.APPROXIMATE, 'Tensor operations share the native Var/Op graph and explicit frontend state; unsupported layouts, device capabilities, and retained compatibility approximations remain restricted')
     register_api_bindings(Var, 'torch.Tensor', ('bernoulli_',), Fidelity.APPROXIMATE,
         'Device RNG sampling with scalar or broadcast floating probabilities, generator ownership, dtype and shared in-place write semantics; native streams do not match PyTorch sample sequences')

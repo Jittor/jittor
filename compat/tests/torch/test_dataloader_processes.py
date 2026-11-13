@@ -10,7 +10,7 @@ import torch
 
 pytestmark = pytest.mark.skipif(
     not hasattr(os, 'memfd_create') or not hasattr(socket, 'SOCK_SEQPACKET'),
-    reason='CPU process transport requires Linux memfd and SOCK_SEQPACKET')
+    reason='CPU process transport requires os.memfd_create and socket.SOCK_SEQPACKET')
 
 
 class ProcessSamples(torch.utils.data.Dataset):

@@ -16,6 +16,7 @@
 // #ifdef HAS_ACCELERATOR, so a CPU-only core does not compile.
 #include "runtime/device.h"
 #include "runtime/holder_state.h"
+#include <unordered_set>
 
 namespace jittor {
 
@@ -313,7 +314,7 @@ struct VarHolder {
     }
     
     void operator=(VarPtr&& v);
-    void rebind_view_result(VarPtr&& v, bool preserve_grad_policy);
+    void rebind_view_result(VarPtr&& v, bool preserve_grad_policy, bool preserve_copy_storage=false);
 
 
     /** 
@@ -514,10 +515,23 @@ struct VarHolder {
     // @pyjt(_set_requires_grad_mirrored)
     void set_requires_grad_mirrored(bool flag) { set_requires_grad_impl(flag); }
     std::shared_ptr<AutogradAliasState> ensure_autograd_alias();
+    // Read the shared native logical version without executing a tensor.
+    // @pyjt(__get__inplace_version)
+    inline uint64 inplace_version() {
+        return *ensure_autograd_alias()->version;
+    }
     // @pyjt(_check_inplace_autograd)
     // @attrs(return_self)
     VarHolder* check_inplace_autograd();
     void record_inplace_write();
+private:
+    // One logical user copy may update several retained physical view buffers.
+    // The ledger is local to that transaction, never shared by reentrant calls.
+    void record_inplace_write_impl(
+        std::unordered_set<std::shared_ptr<uint64>>* logical_versions);
+    void copy_into_impl(VarHolder* src, bool sync_src,
+        std::unordered_set<std::shared_ptr<uint64>>* logical_versions);
+public:
     void observe_alias_history();
     Var* grad_input();
     // @pyjt(_storage_data_alias)
@@ -750,6 +764,14 @@ struct VarHolder {
         promising that the bytes are current and that the copy is ordered
         behind whatever produced them, which stream order gives.
      */
+    // Admission only: may materialize, never writes bytes or logical versions.
+    // @pyjt(_validate_copy_from)
+    void validate_copy_from(VarHolder* src);
+    // Commit a differentiable copy while retaining real destination storage.
+    // @pyjt(_update_copy_result)
+    // @attrs(return_self)
+    VarHolder* update_copy_result(VarHolder* value);
+
     // @pyjt(_copy_into)
     void copy_into(VarHolder* src, bool sync_src=true);
 
@@ -1021,7 +1043,7 @@ struct VarHolder {
     void drop_view();
     void orphan_views();
     void attach_view(VarHolder* base, VarViewStep step);
-    void refresh_transpose_views(bool preserve_grad_policy = true, VarView* only = nullptr);
+    void refresh_transpose_views(bool preserve_grad_policy = true, VarView* only = nullptr, bool preserve_copy_storage=false);
 };
 
 /**
@@ -1074,6 +1096,31 @@ void sync_all(bool device_sync=false);
  */
 // @pyjt(_first_finished)
 int first_finished(const vector<VarHolder*>& vars);
+
+/**
+ * Copy equal byte counts between materialized, contiguous, non-overlapping
+ * storages without a graph node. Shape/dtype are not converted. CPU copies
+ * are synchronous; H2D, D2H and same-device D2D use the copy stream. Different
+ * accelerator devices and graph/state capture are rejected.
+ *
+ * Use fresh eagerly allocated empty destination storage, or finish every
+ * prior reader/writer of it before calling. Submitted device source producers
+ * are ordered before the transfer. Do not mutate the source or access/reuse
+ * the destination until copy_wait. Allocations survive holder deletion or
+ * rebinding; keep an alias of the original destination for the wait. Binding
+ * destination views does not execute/wait for the copy. Pair every enqueue
+ * with a wait. Pinned host memory is needed for reliable overlap; pageable
+ * transfers may block in the driver. This non-differentiable byte write
+ * updates mutation versions so saved backward values cannot silently change.
+ */
+// @pyjt(_copy_into_async)
+void copy_into_async(VarHolder* dst, VarHolder* src);
+
+/** Host-wait for copies into dst's allocation, including aliases, then release
+ * retained storage. Does not synchronize unrelated compute or a whole device.
+ */
+// @pyjt(_copy_wait)
+void copy_wait(VarHolder* dst);
 
 /**
  * Index of the first holder no longer holding the Var `olds` holds at the

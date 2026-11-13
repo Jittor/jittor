@@ -412,6 +412,27 @@ def _optimizer_update(self, value):
         return _ip(self, value, preserve_storage=True)
 
 
+class _DataAliasCopy(_owner.jt.Function):
+    """Write shared data bytes while giving only the returned alias an edge."""
+
+    def execute(self, destination, source):
+        # The temporary data alias has its own mutation counter. The public
+        # destination records the one logical write when its graph is rebound;
+        # the Parameter owner keeps its storage, leaf and independent counter.
+        output = destination._storage_data_alias()
+        with _owner.jt.no_grad():
+            output._copy_into(source)
+        # A detached storage output is intentionally stopped. Activate this
+        # output before the native Function tapes it, as the existing Torch
+        # custom-Function bridge does for detached forward returns. The tape
+        # then supplies the real source edge through grad(), not a leaf flag.
+        output.start_grad()
+        return output
+
+    def grad(self, gradient):
+        return _owner.jt.zeros_like(gradient), gradient
+
+
 def _optimizer_update_many(targets, values):
     """Commit a fused update with one Python/native boundary and grad scope.
 
@@ -430,6 +451,14 @@ def _optimizer_update_many(targets, values):
 
 
 def _copy_(self, other, non_blocking=False):
+    # Preserve no-grad alias diagnostics before the generic leaf checks.
+    # All checks still precede constructing or storing a result.
+    self._check_inplace_autograd()
+    if not _owner.jt.flags.no_grad and self.requires_grad:
+        if self.is_leaf:
+            raise RuntimeError("a leaf Variable that requires grad is being used in an in-place operation.")
+        if self._view_base_is_trainable_leaf():
+            raise RuntimeError("a view of a leaf Variable that requires grad is being used in an in-place operation.")
     src = other if isinstance(other, _NativeVar) else _owner.jt.array(other)
     if hasattr(self, "dtype") and _jittor_dtype_name(src.dtype) != _jittor_dtype_name(self.dtype):
         src = src.cast(_jittor_dtype_name(self.dtype))
@@ -451,9 +480,14 @@ def _copy_(self, other, non_blocking=False):
                 for source, target in zip(reversed(src.shape), reversed(self.shape))):
             raise RuntimeError("copy_ source shape cannot broadcast to destination shape")
         src = src.broadcast(self.shape)
-    # A differentiable copy owns a new edge and must not alias the source.
-    if not _owner.jt.flags.no_grad and src.requires_grad:
-        src = src.clone()
+    # Use the shared graph's existing Function/tape and actual destination
+    # allocation. The overwritten destination receives a zero derivative;
+    # the source receives the real incoming gradient, including broadcasting.
+    if not _owner.jt.flags.no_grad and (self.requires_grad or src.requires_grad):
+        self._validate_copy_from(src)
+        result = _DataAliasCopy()(self, src.clone())
+        self._update_copy_result(result)
+        return self
     return _ip(self, src, preserve_storage=True)
 
 
@@ -1107,6 +1141,19 @@ def _var_numpy(self, *args, **kwargs):
     if getattr(self, "_torch_0d", False) and getattr(out, "size", 0) == 1:
         return out.reshape(())
     return out
+
+
+def _var_item(self):
+    """Read one scalar through an independent native host copy.
+
+    Native Var.item migrates its input storage to the host. A Torch scalar
+    read must preserve the original tensor and every alias on their device.
+    """
+    native = get_install_context(_owner.jt).state["tensor_native_api"]
+    item = native["_native_item"]
+    if self.numel() != 1:
+        return item(self)
+    return item(native["_native_cpu_copy"](self))
 
 
 def _var_cpu(self, *a, **k):
@@ -2517,6 +2564,12 @@ def _api_is_shared(self):
 
 def _api_is_contiguous(self, *a, **k):
     return self._storage_is_contiguous()
+
+
+def _api_version(self):
+    """Read the sole native shared logical-write counter without a Python cache."""
+    native = get_install_context(_owner.jt).state["tensor_native_api"]
+    return native["_native_inplace_version"].__get__(self, type(self))
 
 
 def _api_is_leaf(self):
