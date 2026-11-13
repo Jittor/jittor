@@ -121,6 +121,8 @@ Allocator* get_allocator(bool temp_allocator=false);
 Allocator* get_allocator(int device, bool temp_allocator);
 // Explicit graph placement does not consult the legacy Runtime backend flag.
 Allocator* get_allocator(Device device, bool temp_allocator);
+// Persistent tensor migrations must not enter a graph's reusable scratch.
+Allocator* get_regular_allocator(Device device, bool temp_allocator);
 // @pyjt(gc)
 void gc_all();
 

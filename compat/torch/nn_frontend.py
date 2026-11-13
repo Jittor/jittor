@@ -152,6 +152,12 @@ class LayerInitializer:
                     object.__setattr__(module, "padding_mode", padding_mode)
                 adopt_owned_children(owner, module, external, frozen)
                 if issubclass(self.native, getattr(owner.backend.nn, "BatchNorm", ())):
+                    standard_norms = tuple(getattr(owner.backend.nn, name, None) for name in
+                                           ("BatchNorm", "BatchNorm1d", "BatchNorm2d", "BatchNorm3d"))
+                    if self.native in standard_norms and "sync" not in arguments.arguments:
+                        # Torch BatchNorm keeps rank-local statistics. Global
+                        # statistics belong to the explicit SyncBatchNorm API.
+                        object.__setattr__(module, "sync", False)
                     # Native Jittor keeps a non-persistent int32 vector for its
                     # checkpoint format. Torch owns a persistent scalar int64
                     # counter instead; change only this frontend instance.

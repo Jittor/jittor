@@ -34,15 +34,19 @@ def _expected(base):
     return float(base * (CHAIN + 1)) * SIDE * SIDE
 
 
+def _total(jt, base):
+    x = jt.ones((SIDE, SIDE)) * base
+    for _ in range(CHAIN):
+        x = x + base
+    return x.sum()
+
+
 def _worker(jt, tid, barrier, failures):
     base = float(tid + 1)
     expected = _expected(base)
     try:
         for round_index in range(ROUNDS):
-            x = jt.ones((SIDE, SIDE)) * base
-            for _ in range(CHAIN):
-                x = x + base
-            total = x.sum()
+            total = _total(jt, base)
             # Line the threads up so they reach the executor together, which
             # is the situation under test. A thread that died on an earlier
             # round aborts the barrier instead of hanging the rest.
@@ -74,7 +78,10 @@ def test_concurrent_run_sync_entries_stay_correct():
     # Touch the executor once from the main thread so every kernel these
     # shapes need is compiled before the threads start: a first-time compile
     # inside a worker would make the test about the parallel op compiler.
-    (jt.ones((SIDE, SIDE)) * 1.0).sum().item()
+    # Scalar constants and the complete chain participate in kernel keys;
+    # warming only ones*1 omits the kernels used by the other seven threads.
+    for tid in range(THREADS):
+        _total(jt, float(tid + 1)).item()
 
     barrier = threading.Barrier(THREADS)
     failures = []

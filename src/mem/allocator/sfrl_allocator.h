@@ -148,6 +148,9 @@ struct SFRLAllocator : Allocator {
     // allocation wait behind every GPU allocation. Recursive because the OOM
     // retry path calls gc_all(), which comes back into this instance's gc().
     std::recursive_mutex mutex;
+    // Graph arenas lend free ranges to several executable recordings. The
+    // addresses remain valid while their arena is live, even when idle.
+    std::atomic<bool> retain_free_segments{false};
     static list<SFRLAllocator*> sfrl_allocators;
     list<SFRLAllocator*>::iterator iter;
     CachingBlockPool* get_blocks(size_t size);

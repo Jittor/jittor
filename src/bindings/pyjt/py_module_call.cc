@@ -282,7 +282,8 @@ PyObject* linear_without_bias(PyObject* module, PyObject* dict, PyObject* x) {
     // same product.
     if (runtime_flag_use_cuda() && !no_grad && !amp_reg && !w->is_stop_grad()) {
         int64 rows = a->num / w->shape[1];
-        if (rows >= 1024 && rows * w->shape[0] * w->shape[1] >= (int64(1) << 28)) return nullptr;
+        int64 min_product = int64(1) << (a->dtype() == ns_float32 ? 30 : 28);
+        if (rows >= 1024 && rows * w->shape[0] * w->shape[1] >= min_product) return nullptr;
     }
     // `matmul_transpose` hands a batched input over flattened in place only
     // when its buffer is dense.

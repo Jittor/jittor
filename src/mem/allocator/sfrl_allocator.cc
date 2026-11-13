@@ -496,7 +496,7 @@ void SFRLAllocator::trim_before_growing(size_t need) {
     // 42 MB of 3.9 GB.
     constexpr uint64 kTrimIdle = 16;
     constexpr size_t kTrimFraction = 8;
-    if (!sfrl_trim_before_grow || !is_cuda() || capture_held_frees != nullptr) return;
+    if (retain_free_segments || !sfrl_trim_before_grow || !is_cuda() || capture_held_frees != nullptr) return;
     if (used_memory + unused_memory + (int64)need <= held_high) return;
     size_t freed = 0;
     auto& cached = large_blocks.blocks;
@@ -538,7 +538,7 @@ void SFRLAllocator::note_history_oom(size_t requested) {
 size_t SFRLAllocator::release_cached(CachingBlockPool& pool, long long free_size) {
     // A segment a recording touched may be free in the pool by now, and the
     // recording still holds its addresses; see `fence_capture`.
-    if (capture_held_frees != nullptr) return 0;
+    if (retain_free_segments || capture_held_frees != nullptr) return 0;
     size_t freed = pool.free_all_cached_blocks(underlying, free_size, device());
     unused_memory -= freed;
     if (freed) {

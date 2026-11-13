@@ -147,6 +147,29 @@ def _only_reraises(handler):
     return _outcomes(handler.body) == {"raise"} or _deferred_rethrow(handler)
 
 
+def _forwards_worker_failure(path, handler):
+    """A process boundary transports Dataset errors for the parent to raise.
+
+    Accept only the exact error-record protocol in the CPU worker entry point.
+    Its runtime tests require the original exception type and traceback at the
+    caller; arbitrary handlers or a different packet cannot use this exception.
+    """
+    if path != _COMPAT / 'torch' / '_dataloader_worker.py' or not handler.name:
+        return False
+    if not 1 <= len(handler.body) <= 2 or not isinstance(handler.body[0], ast.Expr):
+        return False
+    call = handler.body[0].value
+    if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+            and call.func.id == 'send_frame' and len(call.args) == 4
+            and isinstance(call.args[1], ast.Constant) and call.args[1].value == 'error'):
+        return False
+    record = call.args[3]
+    return (isinstance(record, ast.Call) and isinstance(record.func, ast.Name)
+            and record.func.id == '_error_record' and len(record.args) == 2
+            and isinstance(record.args[0], ast.Name) and record.args[0].id == handler.name
+            and (len(handler.body) == 1 or isinstance(handler.body[1], ast.Return)))
+
+
 def _records(handler):
     return any(isinstance(node, ast.Call)
                and isinstance(node.func, ast.Name)
@@ -209,12 +232,22 @@ class TestCompatExceptionPolicy(unittest.TestCase):
 
     def test_no_handler_catches_exception_at_large(self):
         offenders = [_where(path, handler) for path, handler in _handlers()
-                     if _is_broad(handler) and not _only_reraises(handler)]
+                     if _is_broad(handler) and not _only_reraises(handler)
+                     and not _forwards_worker_failure(path, handler)]
         self.assertEqual(
             offenders, [],
             "name the exceptions the block can raise, or use the declared "
             "policy tuple `diagnostics.EXPECTED`; `except Exception` also "
             "absorbs MemoryError, SystemExit and this layer's own NameErrors")
+
+    def test_worker_transport_exception_is_scoped_to_the_error_protocol(self):
+        source = "try:\n work()\nexcept Exception as error:\n send_frame(channel, 'error', index, _error_record(error, worker_id))\n"
+        handler = ast.parse(source).body[0].handlers[0]
+        path = _COMPAT / 'torch' / '_dataloader_worker.py'
+        self.assertTrue(_forwards_worker_failure(path, handler))
+        self.assertFalse(_forwards_worker_failure(_COMPAT / 'torch' / 'other.py', handler))
+        other = ast.parse(source.replace("'error'", "'batch'")).body[0].handlers[0]
+        self.assertFalse(_forwards_worker_failure(path, other))
 
     def test_every_policy_handler_records_what_it_swallowed(self):
         # EXPECTED is the "this block is heterogeneous enough that a tighter
