@@ -1066,6 +1066,19 @@ def _var_numpy(self, *args, **kwargs):
     return out
 
 
+def _var_item(self):
+    """Read one scalar through an independent native host copy.
+
+    Native Var.item migrates its input storage to the host. A Torch scalar
+    read must preserve the original tensor and every alias on their device.
+    """
+    native = get_install_context(_owner.jt).state["tensor_native_api"]
+    item = native["_native_item"]
+    if self.numel() != 1:
+        return item(self)
+    return item(native["_native_cpu_copy"](self))
+
+
 def _var_cpu(self, *a, **k):
     out = _owner._make_cpu_resident(self)
     if out.placement_backend >= 0:
