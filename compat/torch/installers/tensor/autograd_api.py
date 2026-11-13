@@ -391,7 +391,14 @@ def _backward_impl(self, gradient=None, retain_graph=None, create_graph=False, *
             if prev is None:
                 object.__setattr__(p, "_torch_grad", _initial_leaf_gradient(p, gr))
             else:
-                prev.add_(gr)
+                if create_graph:
+                    prev.add_(gr)
+                else:
+                    # AccumulateGrad writes without recording another graph.
+                    # Besides accepting a trainable existing .grad, this lets
+                    # ordinary stopped gradients use ordered native writes.
+                    with _owner.jt.no_grad():
+                        prev.add_(gr)
     # fill each optimizer's pg["grads"] so its step(loss=None) consumes them
     if _fsdp2_backward is not None and fsdp_opts:
         _fsdp2_backward.fill_fsdp_optimizer_grads_from_grad_map(fsdp_opts, grad_by_id)

@@ -64,6 +64,41 @@ class TestBackwardGradientPreparation:
         second, = torch.autograd.grad(first.sum(), value)
         np.testing.assert_array_equal(second.cpu().numpy(), [12., 18.])
 
+    def test_default_backward_keeps_trainable_existing_gradient(self, device):
+        value = torch.tensor([2., 3.], device=device, requires_grad=True)
+        existing = torch.tensor([1., 2.], device=device, requires_grad=True)
+        value.grad = existing
+        alias = existing.detach()
+        pointer = existing.data_ptr()
+        value.square().sum().backward()
+        assert value.grad is existing
+        assert existing.data_ptr() == pointer == alias.data_ptr()
+        np.testing.assert_array_equal(existing.detach().cpu().numpy(), [5., 8.])
+        np.testing.assert_array_equal(alias.cpu().numpy(), [5., 8.])
+        assert existing.requires_grad and existing.is_leaf
+        assert existing.grad_fn is None
+        existing.square().sum().backward()
+        np.testing.assert_array_equal(existing.grad.cpu().numpy(), [10., 16.])
+
+    def test_model_clear_keeps_input_gradient_accumulation(self, device):
+        model = torch.nn.Linear(2, 1, bias=False, device=device)
+        with torch.no_grad():
+            model.weight.copy_(torch.tensor([[1., 2.]], device=device))
+        value = torch.tensor([[3., 4.]], device=device, requires_grad=True)
+        retained = alias = None
+        for step in range(1, 4):
+            model.zero_grad()
+            model(value).sum().backward()
+            if retained is None:
+                retained = value.grad
+                alias = retained.detach()
+            assert value.grad is retained
+            np.testing.assert_array_equal(
+                alias.cpu().numpy(), [[float(step), float(2 * step)]])
+            np.testing.assert_array_equal(
+                model.weight.grad.cpu().numpy(), [[3., 4.]])
+            assert not retained.requires_grad and retained.grad_fn is None
+
     def test_hooks_and_retained_graph_accumulate(self, device):
         value = torch.tensor([2., 3.], device=device, requires_grad=True)
         observed = []
