@@ -28,6 +28,7 @@
 #include "runtime/rematerialization_scope.h"
 #include "runtime/profiler/memory_history.h"
 #include "runtime/profiler/step_trace.h"
+#include "runtime/traversal_epoch.h"
 
 namespace jittor {
 
@@ -522,15 +523,38 @@ void Op::init() {
 
 vector<Var*> saved_storage_readers(const vector<Var*>& written, Op* writer) {
     vector<Var*> pending(written), saved;
-    auto visit = [&](Var* value) {
-        if (std::find(pending.begin(), pending.end(), value) == pending.end())
+    // Small alias sets are cheaper to scan. Wide optimizer batches use the
+    // runtime's reversible node marks instead of allocating a hash node for
+    // every alias on every replay. Either stamp means queued; the second also
+    // means its allocation ring was expanded. Never overwrite the second
+    // stamp with the first. Destruction restores rings before queue marks,
+    // preserving any executor traversal which called us.
+    unique_ptr<TraversalEpoch> queued, rings;
+    auto index_pending = [&]() {
+        if (!queued && pending.size() >= 256) {
+            queued.reset(new TraversalEpoch("saved_storage_readers: queue"));
+            for (Var* value : pending) queued->mark(value);
+            rings.reset(new TraversalEpoch("saved_storage_readers: rings"));
+        }
+    };
+    auto visit = [&](Var* value, bool ring_expanded=false) {
+        index_pending();
+        bool unseen = queued ? (!queued->marked(value) && !rings->marked(value))
+            : std::find(pending.begin(), pending.end(), value) == pending.end();
+        if (unseen) {
+            if (queued) queued->mark(value);
             pending.push_back(value);
+        }
+        if (rings && ring_expanded) rings->mark(value);
     };
     for (size_t i=0; i<pending.size(); ++i) {
         Var* value = pending[i];
-        if (value->share_next)
+        index_pending();
+        if (value->share_next && (!rings || !rings->marked(value))) {
             for (Var* member=value->share_next; member!=value; member=member->share_next)
-                visit(member);
+                visit(member, true);
+            if (rings) rings->mark(value);
+        }
         for (Op* reader : value->outputs()) {
             if (reader == writer) continue;
             for (Var* out : reader->outputs()) {
@@ -584,8 +608,12 @@ void order_after_readers(Op* op, const vector<Var*>& written) {
                     alias(out);
                     continue;
                 }
-                // A pending reader: its first unfinished output stands for it.
-                if (stands_for_reader || out->is_finished()) continue;
+                // Kept graphs run only when their replay owner requests them.
+                // Ordering a new write after one would replay an old training
+                // step, including its optimizer update, merely because both
+                // captures share parameters. Still follow storage aliases
+                // above: a new ordinary reader of an alias must be preserved.
+                if (stands_for_reader || out->is_finished() || out->flag(VarFlags::_kept)) continue;
                 stands_for_reader = true;
                 push_after(out);
             }

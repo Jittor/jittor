@@ -29,6 +29,7 @@
 #include "mem/swap.h"
 #include "runtime/executor_entry.h"
 #include "runtime/holder_state.h"
+#include "runtime/submission_pipeline.h"
 #include "bindings/pyjt/py_converter.h"
 
 namespace jittor {
@@ -243,6 +244,16 @@ int first_rebound(const vector<VarHolder*>& holders, const vector<VarHolder*>& o
     CHECK(holders.size() == olds.size());
     for (int i = 0; i < (int)holders.size(); i++)
         if (holders[i]->var != olds[i]->var) return i;
+    return -1;
+}
+
+int first_changed_step_leaf(const vector<VarHolder*>& holders,
+                           const vector<int64>& pointers, const vector<bool>& gradients) {
+    USER_CHECK(holders.size() == pointers.size() && holders.size() == gradients.size())
+        << "step leaf guard lengths differ";
+    for (size_t i = 0; i < holders.size(); ++i)
+        if (holders[i]->var_ptr() != pointers[i]
+                || holders[i]->get_requires_grad() != gradients[i]) return (int)i;
     return -1;
 }
 
@@ -488,7 +499,58 @@ int preserve_step_readers(const vector<VarHolder*>& storages) {
     return (int)readers.size();
 }
 
+void VarHolder::validate_copy_from(VarHolder* src) {
+    // Reject the unsupported transaction before the custom Function can store
+    // bytes. Materialize the real root before constructing its temporary alias.
+    USER_CHECK(!state_capture || !view || !view->base)
+        << "differentiable view copy during step capture is unsupported";
+    ExecutorEntryScope entry;
+    if (view && view->base) view->base->sync(false, false);
+    sync(false, false);
+    src->sync(false, false);
+    validate_logical_copy_alias(this, src);
+    (void)validate_storage_copy(var, src->var);
+}
+
+void materialize_step_readouts(const vector<VarHolder*>& roots, bool device_sync) {
+    ExecutorEntryScope entry;
+    auto& pipeline = runtime_submission_pipeline();
+    struct ReadoutScope {
+        int& depth;
+        explicit ReadoutScope(int& value) : depth(value) { ++depth; }
+        ~ReadoutScope() { --depth; }
+    } scope(pipeline.step_readout_depth);
+    runtime_executor().run_sync(convert(roots), device_sync, false);
+}
+
+bool commit_shared_updates(const vector<VarHolder*>& targets,
+                           const vector<VarHolder*>& sources) {
+    USER_CHECK(targets.size() == sources.size())
+        << "shared updates need equal target and source counts";
+    // Check the whole batch before committing any mutation. A mixed batch
+    // can then fall back without writing an earlier pair twice.
+    for (size_t i=0; i<targets.size(); ++i) {
+        Var* target = targets[i]->var;
+        Var* source = sources[i]->var;
+        if (!target->mem_ptr || target->mem_ptr != source->mem_ptr
+                || target->allocator != source->allocator
+                || target->allocation != source->allocation
+                || target->shape != source->shape
+                || target->dtype() != source->dtype()
+                || !target->is_contiguous() || !source->is_contiguous())
+            return false;
+    }
+    for (size_t i=0; i<targets.size(); ++i)
+        targets[i]->copy_into(sources[i], false);
+    return true;
+}
+
 void VarHolder::copy_into(VarHolder* src, bool sync_src) {
+    copy_into_impl(src, sync_src, nullptr);
+}
+
+void VarHolder::copy_into_impl(VarHolder* src, bool sync_src,
+        std::unordered_set<std::shared_ptr<uint64>>* logical_versions) {
     check_inplace_autograd();
     ExecutorEntryScope entry;
     // Preserve saved values before a physical write can invalidate their
@@ -508,7 +570,7 @@ void VarHolder::copy_into(VarHolder* src, bool sync_src) {
            "bytes; this one has never been executed";
     validate_logical_copy_alias(this, src);
     auto plan = validate_storage_copy(var, src->var);
-    record_inplace_write();
+    record_inplace_write_impl(logical_versions);
     if (plan == StorageCopy::NoOp) return;
     // A strided source -- a channels-last activation read as NCHW, a
     // transposed view -- is made dense first; the copy below moves raw bytes.
@@ -1074,7 +1136,24 @@ static bool view_step_fits(Var* value, const VarViewStep& step) {
     return true;
 }
 
-void VarHolder::refresh_transpose_views(bool preserve_grad_policy, VarView* only) {
+static void preserve_copy_storage(VarPtr& value, VarHolder* destination) {
+    if (!destination->var->allocator) return;
+    unique_ptr<VarHolder> storage(new VarHolder(ready_storage_alias(destination)));
+    VarHolder replacement(move(value));
+    replacement.sync(false, false);
+    USER_CHECK(replacement.var->shape == storage->var->shape
+            && replacement.var->dtype() == storage->var->dtype())
+        << "copy commit cannot preserve incompatible storage geometry";
+    auto version = storage->var->storage_version_token();
+    replacement._update(storage.get(), false);
+    std::atomic_store(&replacement.var->storage_mutation_version, version);
+    USER_CHECK(replacement.var->mem_ptr == storage->var->mem_ptr)
+        << "copy commit did not retain its actual allocation";
+    value = VarPtr(replacement.var);
+}
+
+void VarHolder::refresh_transpose_views(bool preserve_grad_policy, VarView* only,
+        bool preserve_copy_storage) {
     for (auto* record = views; record; ) {
         // drop_view() below unlinks and frees `record`, so step off it first.
         auto* next = record->next;
@@ -1122,7 +1201,7 @@ void VarHolder::refresh_transpose_views(bool preserve_grad_policy, VarView* only
             if (state && !rebase
                     && record->owner->var->flag(VarFlags::_unrecorded_view))
                 value = jittor::detach(value.ptr);
-            record->owner->rebind_view_result(move(value), preserve_grad_policy);
+            record->owner->rebind_view_result(move(value), preserve_grad_policy, preserve_copy_storage);
             if (rebase) {
                 state->source_edge_enabled = get_requires_grad();
                 state->recorded_view_history = true;
@@ -1273,9 +1352,13 @@ bool VarHolder::copy_view_into(VarHolder* src) {
         destinations.push_back(destination);
         values.push_back(move(prepared));
     }
-    base->copy_into(updated.get());
+    // One public copy may refresh several real buffers of the same logical
+    // view owner. Hold each version owner and advance it once per transaction;
+    // physical mutation/readers/copies still run for every allocation.
+    std::unordered_set<std::shared_ptr<uint64>> logical_versions;
+    base->copy_into_impl(updated.get(), true, &logical_versions);
     for (size_t i=0; i<destinations.size(); ++i)
-        destinations[i]->copy_into(values[i].get());
+        destinations[i]->copy_into_impl(values[i].get(), true, &logical_versions);
     return true;
 }
 
@@ -1336,7 +1419,9 @@ void VarHolder::operator=(VarPtr&& v) {
     rebind_view_result(move(v), true);
 }
 
-void VarHolder::rebind_view_result(VarPtr&& v, bool preserve_grad_policy) {
+void VarHolder::rebind_view_result(VarPtr&& v, bool preserve_grad_policy,
+        bool preserve_copy_storage) {
+    if (preserve_copy_storage) jittor::preserve_copy_storage(v, this);
     if (preserve_grad_policy && autograd_policy.preserve_requires_grad_on_assignment) {
         if (var->is_stop_grad() != v->is_stop_grad())
             v.set_stop_grad(var->is_stop_grad());
@@ -1351,7 +1436,7 @@ void VarHolder::rebind_view_result(VarPtr&& v, bool preserve_grad_policy) {
     var = v.ptr;
     own_holder();
     v.ptr = nullptr;
-    refresh_transpose_views(preserve_grad_policy);
+    refresh_transpose_views(preserve_grad_policy, nullptr, preserve_copy_storage);
 }
 
 extern bool no_grad;
@@ -1425,9 +1510,22 @@ VarHolder* VarHolder::check_inplace_autograd() {
 }
 
 void VarHolder::record_inplace_write() {
+    record_inplace_write_impl(nullptr);
+}
+
+void VarHolder::record_inplace_write_impl(
+        std::unordered_set<std::shared_ptr<uint64>>* logical_versions) {
     var->note_storage_mutation();
-    if (!var->autograd_alias) return;
-    ++*var->autograd_alias->version;
+    if (!var->autograd_alias) {
+        // Explicit Tensor policy counts the first real write even if nobody
+        // has queried the version or created an alias yet. Native policy keeps
+        // its existing no-state fast path; detach/data counters stay unchanged.
+        if (!autograd_policy.stop_outputs_when_inputs_stopped) return;
+        ensure_autograd_alias();
+    }
+    auto version = var->autograd_alias->version;
+    if (!logical_versions || logical_versions->insert(version).second)
+        ++*version;
 
 }
 
@@ -1775,6 +1873,34 @@ void copy_wait(VarHolder* dst) {
         wait_storage_copy(**it);
         it = pending_storage_copies.erase(it);
     }
+}
+
+VarHolder* VarHolder::update_copy_result(VarHolder* value) {
+    if (!view || !view->base) return _update(value);
+    check_inplace_autograd();
+    USER_CHECK(!no_grad) << "recorded view copy commit requires grad mode";
+    USER_CHECK(!state_capture) << "differentiable view copy commit during step capture is unsupported";
+    ExecutorEntryScope entry;
+    auto* base = view->base;
+    // Pin actual holders before sync/copies can release the GIL. Reuse the
+    // current recorded view chain, not the Function's tape/data-alias input.
+    PyObjHolder owners(PyList_New(0));
+    CHECKop(PyList_Append(owners.obj, GET_OBJ_FROM_RAW_PTR(base)), ==, 0);
+    for (auto* record=base->views; record; record=record->next)
+        CHECKop(PyList_Append(owners.obj, GET_OBJ_FROM_RAW_PTR(record->owner)), ==, 0);
+    const bool preserve_policy = !(autograd_policy.preserve_requires_grad_on_assignment
+        && !get_requires_grad() && value->get_requires_grad());
+    unique_ptr<VarHolder> updated(new VarHolder(
+        view_assignment_value(base->var, view->steps, value->var)));
+    updated->sync(false, false);
+    // This is the existing physical store owner. Its current native ledger
+    // deduplicates one logical write across root/materialized sibling buffers.
+    // Use the full root result, avoiding a same-layout target alias no-op that
+    // would skip the retained materialized siblings.
+    if (!base->copy_view_into(updated.get())) base->copy_into(updated.get());
+    VarPtr result(updated->var);
+    base->rebind_view_result(move(result), preserve_policy, true);
+    return this;
 }
 
 VarHolder* VarHolder::_update(VarHolder* v, bool logical_write) {

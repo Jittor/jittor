@@ -30,9 +30,12 @@ step is captured:
     graph, such as a learning rate that is not live;
   - `refuse(reason)` says the step cannot be replayed at all.
 
-What cannot be seen is refused rather than replayed wrongly: a step that draws
-random numbers, a step that reads a value back to the host (its Python path
-then depends on tensor values), a result that is not Vars in plain containers.
+What cannot be seen is refused rather than replayed wrongly: a step that reads
+a value back to the host (its Python path then depends on tensor values), or
+a result that is not Vars in plain containers. Explicit CUDA captures use a
+live Philox seed/counter for supported random draws, including dropout; draws
+stay fresh but need not match the eager RNG stream. Exact automatic captures
+refuse random draws instead.
 Every refusal is decided before the captured graph runs, and the refused call
 then runs as written, so the step happens exactly once either way; a read in
 the middle of the step switches it to running as written on the spot.
@@ -55,6 +58,7 @@ replay. `stats` says what happened.
 """
 
 import weakref
+from contextlib import contextmanager
 
 import numpy as np
 
@@ -75,6 +79,53 @@ _ACTIVE = None
 #: costs one eager step and a graph build; a guard that changes every call
 #: would otherwise pay that forever.
 _GIVE_UP_AFTER = 8
+
+
+_function_pools = weakref.WeakKeyDictionary()
+
+
+class _GraphPool:
+    def __init__(self):
+        self.handle = _core._graph_pool_create()
+        self._release = weakref.finalize(self, _core._graph_pool_release, self.handle)
+
+
+def _function_pool(fn):
+    device = int(_core.current_device())
+    try:
+        devices = _function_pools.setdefault(fn, {})
+    except TypeError:  # A callable without a weak reference/hash gets its own pool.
+        return _GraphPool()
+    reference = devices.get(device)
+    pool = reference() if reference is not None else None
+    if pool is None:
+        pool = _GraphPool()
+        devices[device] = weakref.ref(pool)
+    return pool
+
+
+@contextmanager
+def _pool_scope(pool, allocate=False):
+    if pool is None:
+        yield
+        return
+    token = _core._graph_pool_scope_begin(pool.handle, allocate)
+    try:
+        yield
+    finally:
+        _core._graph_pool_scope_end(token)
+
+
+@contextmanager
+def _pool_allocations(pool):
+    if pool is None:
+        yield
+        return
+    previous = _core._graph_pool_set_allocations(True)
+    try:
+        yield
+    finally:
+        _core._graph_pool_set_allocations(previous)
 
 
 def active():
@@ -548,6 +599,7 @@ class StepCapture:
         self._seen = None
         self._recaptures = 0
         self._cuda_graph = 0
+        self._pool = None
         self._graph_out = None
         self._graph_refused = None if record else "recording was turned off"
         self._record_at = 2
@@ -694,30 +746,15 @@ class StepCapture:
             _commit_captured_state(records)
             return None, result
 
-        # The optimizer update is still pending. Resolve published readouts
-        # against pre-update parameter bytes before the stateful roots run.
-        if gradient_sources:
-            jt.flags.keep_graph = 2
-            try:
-                jt.sync([source for _, source in gradient_sources], True, False)
-            finally:
-                jt.flags.keep_graph = before
-
-        # A step that has already materialized every root has run; the
-        # gradient readouts it publishes were resolved above, and running the
-        # kept graph again would take the step twice.  This is how the fused
-        # optimizer updates run (their state roots are materialized inside
-        # the traced call), so the presence of published gradients alone must
-        # not force a re-run.
-        if any(not r._mem_ptr_now for r in roots):
-            jt.flags.keep_graph = 2
-            try:
-                # The ready owners below require completed gradient bytes.
-                # The first strong batch above ordered these readouts before
-                # the optimizer; this batch executes the whole step once.
-                jt.sync(roots, bool(gradient_sources), False)
-            finally:
-                jt.flags.keep_graph = before
+        # Finish pending outputs without repeating already executed updates.
+        jt.flags.keep_graph = 2
+        try:
+            # A fresh detach/clone or post-update readout can still be pending
+            # even when the optimizer already ran. Resolve only new work,
+            # using successfully executed kept values as temporary boundaries.
+            _core._materialize_step_readouts(roots, bool(gradient_sources))
+        finally:
+            jt.flags.keep_graph = before
 
         # Point every rebound holder back at its old Var, which the graph
         # reads, and give it the new value. The step has run once, so this is
@@ -764,9 +801,9 @@ class StepCapture:
         cap.state_lists = ([holder for holder, _, _, _ in state],
                            [old for _, old, _, _ in state])
         if self._guard_external_backward:
-            cap.gradient_leaves = [
-                (v, v.var_ptr, bool(v.requires_grad))
-                for v in _core._step_leaf_holders(roots)]
+            leaves = _core._step_leaf_holders(roots)
+            cap.gradient_leaves = (leaves, [v.var_ptr for v in leaves],
+                                   [bool(v.requires_grad) for v in leaves])
         cap.signature = self._call_signature(args, kwargs)
         # What a device recording of this step would hold.
         cap.graph_bytes = working.bytes()
@@ -785,11 +822,16 @@ class StepCapture:
         # 1, where 7 is right). Each result is given that edge back through
         # `_ReplayedResult`, whose backward raises: a grad that would flow
         # into the step fails, one that does not is untouched.
-        if not jt.flags.no_grad:
-            differentiable = cap.differentiable_leaves + [
-                v for v in _input_vars(call_inputs, []) if bool(v.requires_grad)]
+        # Detached readouts already have no gradient path into the step.
+        # Building a Function for them tapes every parameter despite its
+        # output being nondifferentiable (hundreds of tapes per scalar loss).
+        guarded = [i for i, out in enumerate(outs) if bool(out.requires_grad)]
+        if not jt.flags.no_grad and guarded:
+            differentiable = _unique(cap.differentiable_leaves + [
+                v for v in _input_vars(call_inputs, []) if bool(v.requires_grad)])
             if differentiable:
-                outs = [_replayed_result(out, differentiable) for out in outs]
+                for i in guarded:
+                    outs[i] = _replayed_result(outs[i], differentiable)
         return _rebuild(cap.template, outs)
 
     # -- guards --------------------------------------------------------
@@ -798,9 +840,8 @@ class StepCapture:
             return "the captured graph was finished, most likely by a read"
         if self._call_signature(args, kwargs) != cap.signature:
             return "the inputs changed shape or dtype, or the gradient mode changed"
-        for holder, var_ptr, requires_grad in cap.gradient_leaves:
-            if holder.var_ptr != var_ptr or bool(holder.requires_grad) != requires_grad:
-                return "a captured leaf was rebound or changed its gradient policy"
+        if cap.gradient_leaves and _core._first_changed_step_leaf(*cap.gradient_leaves) >= 0:
+            return "a captured leaf was rebound or changed its gradient policy"
         # One native pass over the holders; `_adopt` only for those rebound.
         holders, olds = cap.state_lists
         start = 0
@@ -851,17 +892,18 @@ class StepCapture:
         jt.flags.keep_graph = 2
         handle = 0
         try:
-            if not _core.graph_capture_begin():
-                self._graph_refused = "the device refused to start recording"
-                return
-            try:
-                jt.sync(cap.roots, False, False)
-                self._write_back(cap)
-                with jt.no_grad():
-                    for out, src in zip(outs, cap.outputs):
-                        out._copy_into(src, False)
-            finally:
-                handle = _core.graph_capture_end()
+            with _pool_scope(self._pool, allocate=True):
+                if not _core.graph_capture_begin():
+                    self._graph_refused = "the device refused to start recording"
+                    return
+                try:
+                    jt.sync(cap.roots, False, False)
+                    self._write_back(cap)
+                    with jt.no_grad():
+                        for out, src in zip(outs, cap.outputs):
+                            out._copy_into(src, False)
+                finally:
+                    handle = _core.graph_capture_end()
         except Exception as exc:            # a capture poisons its stream
             self._graph_refused = f"recording raised {type(exc).__name__}: {exc}"
             if handle:
@@ -877,6 +919,14 @@ class StepCapture:
         _core.graph_bind_leaves(handle, cap.roots)
 
     def _replay(self, cap, args, kwargs):
+        if (self._pool is None and self._graph_refused is None
+                and not cap.frozen_random and jt.flags.use_cuda
+                and _core.graph_capture_supported()):
+            self._pool = _function_pool(self._fn)
+        with _pool_scope(self._pool):
+            return self._replay_in_pool(cap, args, kwargs)
+
+    def _replay_in_pool(self, cap, args, kwargs):
         for hook in cap.prologue:
             hook()
         if self._cuda_graph and cap.host_inputs:
@@ -930,8 +980,9 @@ class StepCapture:
                     self._graph_refused = "the leaves a recording reads kept moving"
                 else:
                     self._record_at = self.stats["replayed"] + 2
-            jt.sync(cap.roots, False, False)
-            self._write_back(cap)
+            with _pool_allocations(self._pool):
+                jt.sync(cap.roots, False, False)
+                self._write_back(cap)
             return self._results(cap, cap.outputs, (args, kwargs))
         finally:
             jt.flags.keep_graph = before
@@ -991,6 +1042,8 @@ class StepCapture:
         """
         _core.graph_wait()
         self._record_cuda_graph(cap)
+        if not self._cuda_graph:
+            self._pool = None
 
     def invalidate(self):
         """Release the captured step; the next call captures again.
@@ -1005,10 +1058,12 @@ class StepCapture:
         self._graph_out = None
         cap, self._capture = self._capture, None
         if cap is None:
+            self._pool = None
             return
         for root in cap.roots:
             if not root.is_finished:
                 root._release_kept()
+        self._pool = None
 
 
 class _PolicyStep(StepCapture):

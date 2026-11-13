@@ -393,10 +393,69 @@ def _optimizer_update(self, value):
     # Optimizers write values without building an autograd edge. Reuse the
     # same storage, pending-reader and version rules as public in-place ops.
     with _owner.jt.no_grad():
+        if (_OPTIMIZER_WRITES[0] and isinstance(value, _NativeVar)
+                and self._mem_ptr_now and self._mem_ptr_now == value._mem_ptr_now
+                and self.shape == value.shape and self.dtype == value.dtype
+                and self._storage_is_contiguous() and value._storage_is_contiguous()):
+            from jittor._runtime import step_capture
+            if not step_capture.active():
+                # Fused optimizers have already written into these buffers.
+                # The group scope resolved their readers and all RHS outputs;
+                # do not materialize each output again through the generic
+                # view-write path. The native store still validates aliases
+                # and advances their shared mutation/version bookkeeping.
+                self._copy_into(value, False)
+                return self
         return _ip(self, value, preserve_storage=True)
 
 
+class _DataAliasCopy(_owner.jt.Function):
+    """Write shared data bytes while giving only the returned alias an edge."""
+
+    def execute(self, destination, source):
+        # The temporary data alias has its own mutation counter. The public
+        # destination records the one logical write when its graph is rebound;
+        # the Parameter owner keeps its storage, leaf and independent counter.
+        output = destination._storage_data_alias()
+        with _owner.jt.no_grad():
+            output._copy_into(source)
+        # A detached storage output is intentionally stopped. Activate this
+        # output before the native Function tapes it, as the existing Torch
+        # custom-Function bridge does for detached forward returns. The tape
+        # then supplies the real source edge through grad(), not a leaf flag.
+        output.start_grad()
+        return output
+
+    def grad(self, gradient):
+        return _owner.jt.zeros_like(gradient), gradient
+
+
+def _optimizer_update_many(targets, values):
+    """Commit a fused update with one Python/native boundary and grad scope.
+
+    Keep custom tensor writers and capture on their ordinary path. The native
+    helper accepts only already-materialized aliases, and still performs the
+    same reader preservation, alias checks and version writes as _copy_into.
+    """
+    from jittor._runtime import step_capture
+    if not _OPTIMIZER_WRITES[0] or step_capture.active():
+        return False
+    if any(getattr(type(target), '_optimizer_update', None) is not _optimizer_update
+           for target in targets):
+        return False
+    with _owner.jt.no_grad():
+        return _owner.jt.core._commit_shared_updates(targets, values)
+
+
 def _copy_(self, other, non_blocking=False):
+    # Preserve no-grad alias diagnostics before the generic leaf checks.
+    # All checks still precede constructing or storing a result.
+    self._check_inplace_autograd()
+    if not _owner.jt.flags.no_grad and self.requires_grad:
+        if self.is_leaf:
+            raise RuntimeError("a leaf Variable that requires grad is being used in an in-place operation.")
+        if self._view_base_is_trainable_leaf():
+            raise RuntimeError("a view of a leaf Variable that requires grad is being used in an in-place operation.")
     src = other if isinstance(other, _NativeVar) else _owner.jt.array(other)
     if hasattr(self, "dtype") and _jittor_dtype_name(src.dtype) != _jittor_dtype_name(self.dtype):
         src = src.cast(_jittor_dtype_name(self.dtype))
@@ -418,9 +477,14 @@ def _copy_(self, other, non_blocking=False):
                 for source, target in zip(reversed(src.shape), reversed(self.shape))):
             raise RuntimeError("copy_ source shape cannot broadcast to destination shape")
         src = src.broadcast(self.shape)
-    # A differentiable copy owns a new edge and must not alias the source.
-    if not _owner.jt.flags.no_grad and src.requires_grad:
-        src = src.clone()
+    # Use the shared graph's existing Function/tape and actual destination
+    # allocation. The overwritten destination receives a zero derivative;
+    # the source receives the real incoming gradient, including broadcasting.
+    if not _owner.jt.flags.no_grad and (self.requires_grad or src.requires_grad):
+        self._validate_copy_from(src)
+        result = _DataAliasCopy()(self, src.clone())
+        self._update_copy_result(result)
+        return self
     return _ip(self, src, preserve_storage=True)
 
 
@@ -1100,6 +1164,19 @@ def _var_numpy(self, *args, **kwargs):
     if getattr(self, "_torch_0d", False) and getattr(out, "size", 0) == 1:
         return out.reshape(())
     return out
+
+
+def _var_item(self):
+    """Read one scalar through an independent native host copy.
+
+    Native Var.item migrates its input storage to the host. A Torch scalar
+    read must preserve the original tensor and every alias on their device.
+    """
+    native = get_install_context(_owner.jt).state["tensor_native_api"]
+    item = native["_native_item"]
+    if self.numel() != 1:
+        return item(self)
+    return item(native["_native_cpu_copy"](self))
 
 
 def _var_cpu(self, *a, **k):
@@ -2305,6 +2382,56 @@ def _api_normal(self, mean=0.0, std=1.0, generator=None):
     return _random_inplace(self, _normal_values, mean, std, generator=generator)
 
 
+def _bernoulli_values(tensor, p=0.5, generator=None):
+    """Adapt Bernoulli probabilities to the existing device RNG and writer."""
+    from jittor._core.var import device_scope_like
+    dtype = _jittor_dtype_name(tensor.dtype)
+    floating = ("float16", "bfloat16", "float32", "float64")
+    if dtype.startswith("complex"):
+        raise RuntimeError("bernoulli_ requires a real or integral tensor")
+    probability_tensor = isinstance(p, _NativeVar)
+    if probability_tensor:
+        probability_dtype = _jittor_dtype_name(p.dtype)
+        if probability_dtype not in floating:
+            raise RuntimeError("bernoulli_ probability tensor must have a floating dtype")
+        if p.device != tensor.device:
+            raise RuntimeError("bernoulli_ probability and output must use the same device")
+        compute_dtype = "float64" if probability_dtype == "float64" else "float32"
+    else:
+        if not isinstance(p, _owner.numbers.Real):
+            raise TypeError("bernoulli_ expects a probability number or Tensor")
+        p = float(p)
+        if not 0.0 <= p <= 1.0:
+            raise RuntimeError("bernoulli_ expects p to be in [0, 1], but got p=%s" % p)
+        compute_dtype = "float64" if dtype == "float64" else "float32"
+    target = get_install_context(_owner.jt).target_namespace
+    with device_scope_like(tensor), _owner.jt.no_grad():
+        probabilities = p.broadcast(tensor.shape) if probability_tensor else p
+        if probability_tensor and bool(((probabilities < 0) | (probabilities > 1)
+                                       | _owner.jt.isnan(probabilities)).any().item()):
+            raise RuntimeError("bernoulli_ expects p to be in [0, 1]")
+        uniform = target.rand(tuple(tensor.shape), dtype=compute_dtype,
+                              device=tensor.device, generator=generator)
+        # CPU uniform draws can include 0, cuRAND draws can include 1. Both
+        # probability endpoints are exact while still consuming the RNG draw.
+        if probability_tensor:
+            value = (uniform < probabilities) | (probabilities == 1)
+        else:
+            value = uniform <= 1 if p == 1 else uniform < p
+        value = value.cast(dtype)
+    if (probability_tensor and dtype in floating and p.requires_grad
+            and not _owner.jt.flags.no_grad):
+        with device_scope_like(tensor), _owner.jt.no_grad():
+            mask = _owner.jt.zeros(tensor.shape, "bool")
+        # Sampling has a zero derivative, including through broadcast p.
+        value = _owner.jt.ternary(mask, p.broadcast(tensor.shape), value).cast(dtype)
+    return value
+
+
+def _api_bernoulli(self, p=0.5, *, generator=None):
+    return _random_inplace(self, _bernoulli_values, p, generator=generator)
+
+
 def _random_integer_values(tensor, low=None, high=None, generator=None):
     """Draw Torch random_ integers on the destination tensor's device."""
     dtype = _jittor_dtype_name(tensor.dtype)
@@ -2494,6 +2621,12 @@ def _api_is_shared(self):
 
 def _api_is_contiguous(self, *a, **k):
     return self._storage_is_contiguous()
+
+
+def _api_version(self):
+    """Read the sole native shared logical-write counter without a Python cache."""
+    native = get_install_context(_owner.jt).state["tensor_native_api"]
+    return native["_native_inplace_version"].__get__(self, type(self))
 
 
 def _api_is_leaf(self):

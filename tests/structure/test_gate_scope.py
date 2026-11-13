@@ -438,6 +438,11 @@ def test_skip_reason_buckets_are_stable_and_other_is_counted(monkeypatch):
         assert buckets["other"] == 1
         assert policy.classify_skip_reason_bucket("torch download") == "torch"
         assert policy.classify_skip_reason_bucket("manual backend") == "backend"
+        process_transport = (
+            "CPU process transport requires os.memfd_create and socket.SOCK_SEQPACKET"
+        )
+        assert policy.classify_skip_reason_bucket(process_transport) == "environment"
+        assert policy._environment_explains({process_transport.lower()})
         # A declared divergence names the Torch comparison; it is neither an
         # unexplained skip nor a missing independent oracle.
         semantic_diff = (

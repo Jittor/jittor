@@ -271,9 +271,15 @@ class TestAsyncExecution(unittest.TestCase):
             w = jt.array(self.w.numpy())
             with jt.flag_scope(async_execution=async_on, async_min_caller_us=0):
                 before = jt.core.async_exec_batches()
-                x = self.x
+                # Three halvings followed by Scale give a derivative of
+                # 1/4 per block, hence exactly 2**-24 after twelve blocks.
+                # This exercises the Python-owned tape without matmul and
+                # reduction-order roundoff obscuring the lifetime assertion.
+                x = w
                 for _ in range(12):
-                    x = Scale()(_chain(x, w, 3))
+                    for _ in range(3):
+                        x = x * 0.5 + 0.25
+                    x = Scale()(x)
                 grad = jt.grad(x.sum(), w)
                 grad.sync()
                 return grad.numpy(), jt.core.async_exec_batches() - before
@@ -282,6 +288,7 @@ class TestAsyncExecution(unittest.TestCase):
         got, ran = run(1)
         if _worker_backend() == "acl":
             self._need_worker(ran)
+        np.testing.assert_array_equal(want, np.full_like(want, 2.0 ** -24))
         np.testing.assert_array_equal(got, want)
         # The deferred releases are run on this thread at the next executor
         # entry; reaching here without a crash is the assertion.

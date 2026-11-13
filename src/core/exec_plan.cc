@@ -10,6 +10,7 @@
 #include "core/op.h"
 #include "core/fuser.h"
 #include "runtime/graph_capture.h"
+#include "runtime/submission_pipeline.h"
 
 namespace jittor {
 
@@ -86,7 +87,8 @@ void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan) {
         batch_epoch.reset(new TraversalEpoch("Executor::run_sync"));
         int64 max_id = 0;
         for (Var* v : vars)
-            if (!v->is_finished() && !graph_capture_host_leaf(v) && !batch_epoch->marked(v)) {
+            if (!v->is_finished() && !graph_capture_host_leaf(v)
+                    && !step_readout_ready(v) && !batch_epoch->marked(v)) {
                 batch_epoch->mark(v);
                 start_var_num++;
                 bfs_q.push_back(v);
@@ -105,7 +107,7 @@ void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan) {
             if (node->is_var() || !node->op()->flag(OpFlags::_no_input_storage))
                 for (auto i : node->_inputs)
                     if (!batch_epoch->marked(i.node) && !i.node->is_finished()
-                            && !graph_capture_host_leaf(i.node)) {
+                            && !graph_capture_host_leaf(i.node) && !step_readout_ready(i.node)) {
                         batch_epoch->mark(i.node);
                         need_opt += has_gopt(i.node);
                         bfs_q.push_back(i.node);
@@ -116,7 +118,8 @@ void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan) {
                     // if not in queue and is fetch op
                     if (!batch_epoch->marked(n.node) &&
                         n.node->liveness.pending.active() &&
-                        !n.node->is_finished() && !graph_capture_host_leaf(n.node) &&
+                        !n.node->is_finished() && !graph_capture_host_leaf(n.node)
+                        && !step_readout_ready(n.node) &&
                         (n.node->id <= max_id ||
                             n.node->flags.get(NodeFlags::_fetch))) {
                         batch_epoch->mark(n.node);

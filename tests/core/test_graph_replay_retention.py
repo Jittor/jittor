@@ -103,6 +103,36 @@ class TestReplayRetention(unittest.TestCase):
         jt.gc()
         return answers, _held_bytes() - base
 
+    def test_training_retires_inference_capture_and_can_capture_again(self):
+        for transition in ("train", "grad"):
+            with self.subTest(transition=transition):
+                model = _Small()
+                params = model.parameters()
+                expected = [g.numpy().copy() for g in jt.grad(model(self.x).sum(), params)]
+                model.eval()
+                with jt.no_grad():
+                    for _ in range(4):
+                        model(self.x).sync()
+                old = model.__dict__["_auto_graph_replay"].replay
+                self.assertIsNotNone(old._capture)
+                model.eval()  # An unchanged mode does not discard the cache.
+                self.assertIs(model.__dict__["_auto_graph_replay"].replay, old)
+                if transition == "train":
+                    model.train()
+                    self.assertIsNone(old._capture)
+                loss = model(self.x).sum()  # Grad mode also retires eval captures.
+                self.assertIsNone(old._capture)
+                for want, got in zip(expected, jt.grad(loss, params)):
+                    np.testing.assert_allclose(got.numpy(), want, atol=1e-6, rtol=1e-5)
+                model.eval()
+                with jt.no_grad():
+                    for _ in range(4):
+                        model(self.x).sync()
+                fresh = model.__dict__["_auto_graph_replay"].replay
+                self.assertIsNotNone(fresh._capture)
+                self.assertIsNot(fresh, old)
+                fresh.invalidate()
+
     def test_changing_the_budget_releases_and_recaptures_an_existing_graph(self):
         model = _Small()
         feeds = [self.x + step / 100 for step in range(16)]

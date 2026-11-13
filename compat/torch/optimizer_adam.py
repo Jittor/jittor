@@ -9,7 +9,9 @@ from types import GetSetDescriptorType
 from jittor.optim.algorithms.adam import adam_update
 from jittor.optim.base import _update_preserve_dtype
 from .context import get_install_context
-from .installers.tensor.method_api import _optimizer_write_scope, _optimizer_update
+from .installers.tensor.method_api import (
+    _optimizer_write_scope, _optimizer_update, _optimizer_update_many,
+)
 from .installers.tensor.autograd_api import _rg_get
 from ..diagnostics import EXPECTED, swallowed
 
@@ -194,8 +196,7 @@ def _try_batch_update(active, updates):
                 return False
             targets.append(target)
             values.append(value)
-    with jt.no_grad():
-        return jt.core._try_optimizer_copies(targets, values)
+    return _optimizer_update_many(targets, values)
 
 
 def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay):
@@ -285,7 +286,7 @@ def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay
         # So the fused list update is taken unless the caller turned both
         # off, or asked for a variant it does not compute.
         fused = pg.get("fused", getattr(self, "fused", None))
-        want_fused = (decoupled_weight_decay and fused is not False
+        want_fused = ((decoupled_weight_decay or weight_decay == 0) and fused is not False
                       and (fused is True or pg.get("foreach") is not False)
                       and not pg.get("amsgrad") and not pg.get("maximize"))
         active = []
@@ -300,8 +301,11 @@ def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay
                         continue
                     active.append((p, m, v, g, int(param_steps[i])))
             if active:
-                from jittor._runtime.dispatch import select_kernel
-                fused_impl = select_kernel("optim.adamw_fused", active)
+                from jittor._runtime.dispatch import dispatch_context, select_kernel
+                # With zero decay Adam and AdamW have the same update. The
+                # CUDA provider also accepts Adam's live step/LR accounting.
+                if decoupled_weight_decay or dispatch_context(active[0][0]).backend == "cuda":
+                    fused_impl = select_kernel("optim.adamw_fused", active)
         if fused_impl is not None:
             # Provider selection is an observable callback boundary: rebuild
             # eligibility and read counters after it, independently of active.

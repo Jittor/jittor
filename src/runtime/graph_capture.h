@@ -19,6 +19,20 @@ namespace jittor {
 // @pyjt(graph_capture_supported)
 bool graph_capture_supported();
 
+// Private reusable scratch arenas for serialized captures of one function.
+// @pyjt(_graph_pool_create)
+int64 graph_pool_create();
+// @pyjt(_graph_pool_stats)
+vector<int64> graph_pool_stats(int64 pool);
+// @pyjt(_graph_pool_release)
+void graph_pool_release(int64 pool);
+// @pyjt(_graph_pool_scope_begin)
+int64 graph_pool_scope_begin(int64 pool, bool allocate=false);
+// @pyjt(_graph_pool_set_allocations)
+bool graph_pool_set_allocations(bool enabled);
+// @pyjt(_graph_pool_scope_end)
+void graph_pool_scope_end(int64 token);
+
 /**
     Start recording the compute stream instead of running it.
 

@@ -25,6 +25,7 @@ def _ddp_all_reduce_grads(leaves):
     if _owner._collectives._world_size() <= 1:
         return
     pending = []
+    cuda_parameters = True
     for leaf in leaves:
         state = getattr(leaf, "_jittor_ddp_state", None)
         if state is None or not getattr(state, "sync_enabled", False):
@@ -33,12 +34,20 @@ def _ddp_all_reduce_grads(leaves):
         grad = getattr(leaf, "_torch_grad", None)
         if order is None or not isinstance(grad, _owner.jt.Var):
             continue
-        pending.append((order, grad))
+        pending.append((order, grad, state))
+        # A lazy native gradient may not yet have resident device storage.
+        # The parameter's declared device is authoritative for DDP placement.
+        cuda_parameters = cuda_parameters and leaf.device.type == 'cuda'
     if not pending:
         return
     pending.sort(key=lambda item: item[0])
+    if cuda_parameters:
+        ops = getattr(_owner.jt.compile_extern, 'nccl_ops', None)
+        if ops is not None and callable(getattr(ops, 'nccl_all_reduce_many', None)):
+            _ddp_all_reduce_grouped(pending)
+            return
     dep = []
-    for _order, grad in pending:
+    for _order, grad, _state in pending:
         grad.assign(_owner._collectives._all_reduce_mean(grad))
         try:
             producer = grad._input(0)
@@ -50,3 +59,27 @@ def _ddp_all_reduce_grads(leaves):
         else:
             producer._add_dependency(dep)
             dep = [producer]
+
+
+def _ddp_all_reduce_grouped(pending):
+    from importlib import import_module
+    owner = import_module(__package__)
+    from jittor._runtime import step_capture
+    state = pending[0][2]
+    cap = getattr(state, 'bucket_cap_bytes', 25 * 1024**2)
+    ops = getattr(owner.jt.compile_extern, 'nccl_ops', None)
+    if (state is not None and step_capture.active()
+            and all(item[2] is state for item in pending)
+            and all(str(item[1].dtype).rsplit('.', 1)[-1] == 'float32' for item in pending)
+            and sum(grad.numel()*grad.element_size() for _, grad, _ in pending) >= cap
+            and callable(getattr(ops, 'nccl_all_reduce_deferred', None))
+            and callable(getattr(ops, 'nccl_wait_many', None))):
+        gradients = [grad for _, grad, _ in reversed(pending)]
+        reduced = owner._collectives._all_reduce_mean_bucketed(gradients, cap)
+        for grad, value in zip(gradients, reduced):
+            grad.assign(value)
+        return
+    gradients = [grad for _, grad, _ in pending]
+    reduced = owner._collectives._all_reduce_mean_many(gradients)
+    for grad, value in zip(gradients, reduced):
+        grad.assign(value)

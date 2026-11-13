@@ -982,7 +982,21 @@ def _physical(t, preserve_gradient_edge=False):
 
 def _supports(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False,
               scale=None, allow_reduced_precision=False):
-    return all(_jittor_dtype_name(t.dtype) == "float32" for t in (query, key, value))
+    if not all(_jittor_dtype_name(t.dtype) == "float32" for t in (query, key, value)):
+        return False
+    if (len(query.shape) == len(key.shape) == 4
+            and query.shape[1] == key.shape[1]
+            and 0 < query.shape[2] <= 128 and 0 < key.shape[2] <= 128):
+        scores = int(query.shape[0]) * int(query.shape[1]) * int(query.shape[2]) * int(key.shape[2])
+        if (1 << 18) <= scores <= (4 << 20) and _output_requires_grad(query, key, value):
+            from jittor._runtime import step_capture
+            # For short, well-populated FP32 batches, materialized scores are
+            # bounded and avoid the tiled backward's repeated reconstruction.
+            # Capture amortizes the extra graph construction. Keep tiny calls,
+            # long sequences, GQA and ordinary eager execution on this route.
+            if step_capture.active():
+                return False
+    return True
 
 
 def _fused_attention_f32(query, key, value, attn_mask=None, dropout_p=0.0,

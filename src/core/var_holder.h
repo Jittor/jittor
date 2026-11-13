@@ -16,6 +16,7 @@
 // #ifdef HAS_ACCELERATOR, so a CPU-only core does not compile.
 #include "runtime/device.h"
 #include "runtime/holder_state.h"
+#include <unordered_set>
 
 namespace jittor {
 
@@ -313,7 +314,7 @@ struct VarHolder {
     }
     
     void operator=(VarPtr&& v);
-    void rebind_view_result(VarPtr&& v, bool preserve_grad_policy);
+    void rebind_view_result(VarPtr&& v, bool preserve_grad_policy, bool preserve_copy_storage=false);
 
 
     /** 
@@ -514,10 +515,23 @@ struct VarHolder {
     // @pyjt(_set_requires_grad_mirrored)
     void set_requires_grad_mirrored(bool flag) { set_requires_grad_impl(flag); }
     std::shared_ptr<AutogradAliasState> ensure_autograd_alias();
+    // Read the shared native logical version without executing a tensor.
+    // @pyjt(__get__inplace_version)
+    inline uint64 inplace_version() {
+        return *ensure_autograd_alias()->version;
+    }
     // @pyjt(_check_inplace_autograd)
     // @attrs(return_self)
     VarHolder* check_inplace_autograd();
     void record_inplace_write();
+private:
+    // One logical user copy may update several retained physical view buffers.
+    // The ledger is local to that transaction, never shared by reentrant calls.
+    void record_inplace_write_impl(
+        std::unordered_set<std::shared_ptr<uint64>>* logical_versions);
+    void copy_into_impl(VarHolder* src, bool sync_src,
+        std::unordered_set<std::shared_ptr<uint64>>* logical_versions);
+public:
     void observe_alias_history();
     Var* grad_input();
     // @pyjt(_storage_data_alias)
@@ -753,6 +767,14 @@ struct VarHolder {
         promising that the bytes are current and that the copy is ordered
         behind whatever produced them, which stream order gives.
      */
+    // Admission only: may materialize, never writes bytes or logical versions.
+    // @pyjt(_validate_copy_from)
+    void validate_copy_from(VarHolder* src);
+    // Commit a differentiable copy while retaining real destination storage.
+    // @pyjt(_update_copy_result)
+    // @attrs(return_self)
+    VarHolder* update_copy_result(VarHolder* value);
+
     // @pyjt(_copy_into)
     void copy_into(VarHolder* src, bool sync_src=true);
 
@@ -1024,7 +1046,7 @@ struct VarHolder {
     void drop_view();
     void orphan_views();
     void attach_view(VarHolder* base, VarViewStep step);
-    void refresh_transpose_views(bool preserve_grad_policy = true, VarView* only = nullptr);
+    void refresh_transpose_views(bool preserve_grad_policy = true, VarView* only = nullptr, bool preserve_copy_storage=false);
 };
 
 /**
@@ -1106,6 +1128,12 @@ void copy_wait(VarHolder* dst);
 // @pyjt(_first_rebound)
 int first_rebound(const vector<VarHolder*>& holders, const vector<VarHolder*>& olds);
 
+// Check the same holder identity and native requires_grad descriptor used by
+// Python, without crossing that boundary once for every captured leaf.
+// @pyjt(_first_changed_step_leaf)
+int first_changed_step_leaf(const vector<VarHolder*>& holders,
+                           const vector<int64>& pointers, const vector<bool>& gradients);
+
 /**
     Execute the backward-saved readers of `storages` before a replay writes
     them.
@@ -1122,6 +1150,21 @@ int first_rebound(const vector<VarHolder*>& holders, const vector<VarHolder*>& o
  */
 // @pyjt(_preserve_step_readers)
 int preserve_step_readers(const vector<VarHolder*>& storages);
+
+// Complete new readouts against this call's already-executed kept values.
+// Does not finish or alter the original graph needed by later replays.
+// @pyjt(_materialize_step_readouts)
+void materialize_step_readouts(const vector<VarHolder*>& roots, bool device_sync=false);
+
+/**
+    Commit already-executed, dense updates that alias their destinations.
+    Return false, without writing or advancing versions, if any pair needs
+    the ordinary frontend write path. Successful batches use copy_into's
+    reader, alias and mutation checks for every pair, in the supplied order.
+ */
+// @pyjt(_commit_shared_updates)
+bool commit_shared_updates(const vector<VarHolder*>& targets,
+                           const vector<VarHolder*>& sources);
 
 // Called after a complete VarHolder has crossed into a Python object.
 void schedule_pending_from_python(VarHolder* holder);

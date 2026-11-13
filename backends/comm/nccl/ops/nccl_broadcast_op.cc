@@ -43,13 +43,12 @@ void NcclBroadcastOp::jit_prepare(JK& jk) {
 #ifdef JIT_cuda
 
 void NcclBroadcastOp::jit_run() {
-    // dtype -> ncclDataType_t goes through the single table in
-    // nccl_wrapper.cc (see runtime/collective_dtype.h).
+    // Byte-copy broadcasts also carry boolean masks through uint8 transport.
     auto* __restrict__ xp = x->ptr<Tx>();
     auto* __restrict__ yp = y->ptr<Tx>();
     auto stream = nccl_stream_begin();
     checkCudaErrors(ncclBroadcast(
-        xp, yp, y->num, nccl_dtype(x->dtype()), root,
+        xp, yp, y->num, nccl_broadcast_dtype(x->dtype()), root,
         nccl_process_group_comm(group_id), stream));
     nccl_stream_end(x, y);
 }

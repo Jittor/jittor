@@ -7,6 +7,7 @@ onto the native Jittor module is rejected by the activation boundary.
 from __future__ import annotations
 
 import importlib.machinery
+import sys
 import types
 from typing import Any, cast
 
@@ -83,6 +84,13 @@ class TorchNamespace(types.ModuleType):
             "torch", loader=None, is_package=True
         ))
         object.__setattr__(self, "__path__", [])
+
+    def __reduce__(self):
+        """Reference the published frontend without serializing backend state."""
+        if (vars(self).get("__name__") != "torch"
+                or sys.modules.get("torch") is not self):
+            raise TypeError("cannot pickle an unpublished TorchNamespace")
+        return importlib.import_module, ("torch",)
 
     @property
     def owner(self):

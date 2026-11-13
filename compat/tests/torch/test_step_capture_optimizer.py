@@ -60,3 +60,46 @@ def test_captured_optimizer_step_matches_eager(kind):
     np.testing.assert_allclose(losses, eager_losses, rtol=1e-6, atol=1e-7)
     for captured, eager in zip(params, eager_params):
         np.testing.assert_allclose(captured, eager, rtol=1e-6, atol=1e-7)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
+@pytest.mark.parametrize('record', [False, True])
+@pytest.mark.parametrize('readout', ['loss', 'detached', 'post_update'])
+@pytest.mark.parametrize('presync', [False, True])
+@pytest.mark.parametrize('kind', ['adamw', 'sgd'])
+def test_alternating_captures_share_optimizer_state_without_extra_updates(record, readout, presync, kind):
+    def trajectory(captured):
+        parameter = torch.nn.Parameter(torch.tensor([1., 2.], device='cuda'))
+        optimizer_type = torch.optim.AdamW if kind == 'adamw' else torch.optim.SGD
+        optimizer = optimizer_type([parameter], lr=.1)
+
+        def step(x):
+            optimizer.zero_grad()
+            loss = (parameter * x).sum()
+            if presync:
+                torch.cuda.synchronize()
+            loss.backward()
+            optimizer.step()
+            if readout == 'post_update':
+                return (parameter * 2).sum().detach()
+            return loss.detach() if readout == 'detached' else loss
+
+        runners = [step_capture.StepCapture(step, record=record) for _ in range(2)] if captured else [step, step]
+        history = []
+        for index in range(12):
+            x = torch.full((2 + index % 2, 2), 1. + .1 * index, device='cuda')
+            output = runners[index % 2](x)
+            torch.cuda.synchronize()
+            history.append((output.item(), parameter.detach().cpu().numpy().copy()))
+        if captured:
+            for runner in runners:
+                assert runner.refused is None
+                assert runner.stats['replayed'] >= 4
+                if record:
+                    assert runner.stats['graph'] >= 2
+        return history
+
+    reference, candidate = trajectory(False), trajectory(True)
+    for (want_loss, want_parameter), (loss, parameter) in zip(reference, candidate):
+        np.testing.assert_allclose(loss, want_loss, rtol=2e-6, atol=1e-6)
+        np.testing.assert_allclose(parameter, want_parameter, rtol=2e-6, atol=1e-6)
