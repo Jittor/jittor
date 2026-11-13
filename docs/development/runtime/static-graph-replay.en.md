@@ -3,7 +3,7 @@
 [Section contents](../index.en.md) · [中文](static-graph-replay.md)
 
 - Status: implemented (`35cedb1a3` inference graph replay, `2f794e289` training step capture)
-- Last reviewed: 2026-10-14
+- Last reviewed: 2026-11-11
 - Basis: [the 2026-09-14 parity report](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-09-14-jittor-vs-pytorch.en.md),
   [the 2026-09-24 real-model parity run](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-09-24-torch-compat-real-models.en.md)
 - Recheck when: the capture guards, the automatic-policy thresholds, or the replay counters in
@@ -71,10 +71,11 @@ result:
 - whether the captured graph has not been finished yet. **This is the most important one**: a
   finished graph does not raise; it keeps answering with the values computed last time.
 
-Two cases are **fundamentally not replayable**, and capture refuses outright instead of
-answering wrongly: the graph **draws random numbers** (replay would repeat the same draw), and
-the traced call **reads values back to the host** (after that the Python path depends on tensor
-values, and the next call may take a different one). Training-step capture additionally
+Exact automatic replay refuses random draws. Explicit CUDA step capture uses live
+Philox seeds and counters for supported draws, including dropout: each replay draws fresh
+values, but its RNG stream need not equal eager execution. Unsupported random operations
+prevent device recording. Reading values back to the host during capture also prevents
+replay: subsequent Python control flow can depend on those values. Training-step capture additionally
 requires the Python-side accounting to declare itself -- `live_array()` (a small array refilled
 before every replay, such as fused AdamW's step and learning rate), `on_replay()` (a hook run
 before every replay), `guard()` (re-capture when a read value changed), `refuse()` (say
@@ -85,6 +86,35 @@ whether a leaf has moved (`graph_leaves_moved`).
 many times it fell back, and why. `prof.replay` in `jt.profile` reads the same counters (see
 [profiling and memory](../../performance/profiling.en.md)). **A silent fallback is worse than no
 replay**, so these counters are part of the conclusion, not optional debugging output.
+
+
+Multiple captured steps may share parameters and optimizer state. Each capture owns its
+kept graph: a new write must preserve current pending readers without scheduling an older
+capture's training step. At capture completion, pending detached outputs and post-update
+readouts consume already executed kept values; they must not execute the optimizer twice.
+These temporary execution boundaries do not change graph lifetime or finished flags.
+
+Shape recordings of the same function on the same device share a private scratch
+arena. Executor replays warm it before recording; device graphs then pin addresses
+while reusing intermediate buffers and workspaces in execution order. Parameters,
+persistent state, input migrations and copied return values use ordinary allocators.
+The arena orders access across threads or streams and reclaims free device segments
+after its final owner and executable are released; live tensors keep their storage.
+Return values are copied outside the arena, so later replays cannot overwrite them.
+
+For a small fixed set of batch shapes, keep one step callable per signature. Put backward,
+optimizer updates and gradient clearing inside the callable, and keep metrics, file IO and
+host-only scheduling outside it. Return any gradient snapshots needed for observation as
+explicit outputs. A compiled benchmark must report its mode, warmup/capture cost and replay
+counters separately from ordinary eager results.
+
+Capture can use different execution policies from eager mode. Moderate FP32 Linear
+products can use timed cuBLASLt GEMMs because Function construction is paid only
+once. Short FP32 training attention with many heads can materialize bounded score
+matrices to avoid tiled backward reconstruction; long sequences retain the
+memory-efficient kernel. These choices preserve dtype, TF32 settings and dropout
+semantics, but change temporary storage and initial compilation costs, so validate
+numerics and memory alongside steady latency.
 
 ## Measurement protocol and historical results
 

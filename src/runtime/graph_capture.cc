@@ -4,6 +4,8 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include "runtime/graph_capture.h"
+#include "runtime/graph_pool.h"
+#include "runtime/executor_entry.h"
 #include "runtime/async_exec.h"
 #include "runtime/backend_streams.h"
 #include "runtime/backend.h"
@@ -333,6 +335,7 @@ int64 graph_capture_end() {
     // own them, the held blocks are freed right here.
     auto held = end_capture_hold();
     if (graph) {
+        graph_pool_capture_complete(graph, held);
         held_by_graph[graph] = std::move(held);
         if (recording_host_prefix)
             host_prefix_by_graph[graph] = std::move(recording_host_prefix);
@@ -364,18 +367,27 @@ bool graph_launch_host_prefix(int64 graph) {
 }
 
 void graph_launch(int64 graph) {
-    // Low-level callers cannot bypass the required CPU prefix either.
-    if (host_prefix_by_graph.count(graph)) {
-        USER_CHECK(graph_launch_host_prefix(graph))
-            << "A host prefix or graph leaf moved; the recording must be released";
-        return;
+    ExecutorEntryScope entry;
+    int64 pool_scope = graph_pool_enter_launch(graph);
+    try {
+        // Low-level callers cannot bypass the required CPU prefix either.
+        if (host_prefix_by_graph.count(graph)) {
+            USER_CHECK(graph_launch_host_prefix(graph))
+                << "A host prefix or graph leaf moved; the recording must be released";
+            graph_pool_leave_launch(pool_scope);
+            return;
+        }
+        // Counted, and traced when a step trace is open: a replayed step runs no
+        // executor batch, so without this record its profile is simply empty.
+        join_async_batch();
+        note_graph_launch_begin();
+        backend_graph_launch(reinterpret_cast<void*>(graph));
+        note_graph_launch_end();
+    } catch (...) {
+        graph_pool_leave_launch(pool_scope);
+        throw;
     }
-    // Counted, and traced when a step trace is open: a replayed step runs no
-    // executor batch, so without this record its profile is simply empty.
-    join_async_batch();
-    note_graph_launch_begin();
-    backend_graph_launch(reinterpret_cast<void*>(graph));
-    note_graph_launch_end();
+    graph_pool_leave_launch(pool_scope);
 }
 
 void graph_wait() {
@@ -385,10 +397,12 @@ void graph_wait() {
 }
 
 void graph_release(int64 graph) {
+    ExecutorEntryScope entry;
     backend_graph_release(reinterpret_cast<void*>(graph));
     held_by_graph.erase(graph);
     leaves_by_graph.erase(graph);
     host_prefix_by_graph.erase(graph);
+    graph_pool_release_graph(graph);
 }
 
 } // jittor

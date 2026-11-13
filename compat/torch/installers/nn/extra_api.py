@@ -119,8 +119,15 @@ class _DistributedDataParallel(_DataParallel):
 
     def __init__(self, module, *args, **kwargs):
         super().__init__(module, *args, **kwargs)
+        self.broadcast_buffers = bool(kwargs.get(
+            "broadcast_buffers", args[3] if len(args) > 3 else True))
+        bucket_mb = kwargs.get('bucket_cap_mb', args[5] if len(args) > 5 else None)
+        bucket_mb = 25 if bucket_mb is None else float(bucket_mb)
+        if not _math.isfinite(bucket_mb) or bucket_mb <= 0:
+            raise ValueError('bucket_cap_mb must be finite and positive')
         state = _types_nn_private.SimpleNamespace(
             sync_enabled=True, world_size=_ddp_world_size(),
+            bucket_cap_bytes=max(1, int(bucket_mb * 1024**2)),
             # The native optimizer's step guard (_assert_ddp_step_ready in
             # jittor/nn/parallel/distributed_data_parallel.py) reads this field
             # whenever world_size > 1. Compat DDP synchronises gradients at
@@ -131,6 +138,24 @@ class _DistributedDataParallel(_DataParallel):
         object.__setattr__(self, "_jittor_ddp_state", state)
         self._jittor_ddp_broadcast_parameters()
         self._jittor_ddp_mark_parameters()
+
+    def execute(self, *args, **kwargs):
+        self._jittor_ddp_broadcast_buffers()
+        return self.module(*args, **kwargs)
+
+    forward = execute
+
+    def _jittor_ddp_broadcast_buffers(self):
+        if not self.broadcast_buffers or _ddp_world_size() <= 1:
+            return
+        buffers = getattr(self.module, "buffers", None)
+        if callable(buffers):
+            values = []
+            for buffer in buffers():
+                buffer = buffer[1] if isinstance(buffer, tuple) else buffer
+                if isinstance(buffer, _jt.Var):
+                    values.append(buffer)
+            _collectives._broadcast_from_rank0_many(values)
 
     def _jittor_ddp_named_parameters(self):
         named = getattr(self.module, "named_parameters", None)
@@ -145,15 +170,14 @@ class _DistributedDataParallel(_DataParallel):
         """Make every rank start from rank 0's weights."""
         if _ddp_world_size() <= 1:
             return
-        for p in self._jittor_ddp_named_parameters():
-            if isinstance(p, _jt.Var):
-                _collectives._broadcast_from_rank0(p)
+        values = [p for p in self._jittor_ddp_named_parameters() if isinstance(p, _jt.Var)]
         buffers = getattr(self.module, "buffers", None)
-        if callable(buffers):
+        if self.broadcast_buffers and callable(buffers):
             for b in buffers():
                 b = b[1] if isinstance(b, tuple) else b
                 if isinstance(b, _jt.Var):
-                    _collectives._broadcast_from_rank0(b)
+                    values.append(b)
+        _collectives._broadcast_from_rank0_many(values)
         _jt.sync_all()
 
     def _jittor_ddp_mark_parameters(self):
@@ -772,9 +796,15 @@ class Transformer(nn.Module):
 class SyncBatchNorm(nn.BatchNorm):
     def __init__(self, num_features, eps=1e-5, momentum=0.1, affine=True,
                  track_running_stats=True, process_group=None, **kw):
-        super().__init__(num_features, eps=eps, momentum=momentum, affine=affine)
+        super().__init__(num_features, eps=eps, momentum=momentum, affine=affine,
+                         sync=True, track_running_stats=track_running_stats, **kw)
     @classmethod
     def convert_sync_batchnorm(cls, module, process_group=None):
+        # Retain this adapter's existing module identities and shared buffers,
+        # while opting every BatchNorm instance into synchronized statistics.
+        for child in module.modules():
+            if isinstance(child, nn.BatchNorm):
+                object.__setattr__(child, "sync", True)
         return module
 
 

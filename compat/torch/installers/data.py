@@ -402,6 +402,13 @@ def _contains_jittor_var(value):
 
 def _fetch_batch(loader, batch_indices):
     """Fetch one batch, using a formatted dataset's column batch when present."""
+    if not loader._iterable_dataset and loader.batch_size is not None:
+        fetch = getattr(loader.dataset, "__getitems__", None)
+        if fetch:
+            # Map-style datasets may fetch a list of samples in one call.
+            # Preserve their indexing, exceptions and custom collation rather
+            # than rebuilding an expensive formatter once per sample.
+            return loader.collate_fn(fetch(batch_indices))
     batch = _tensor_dataset_batch(loader, batch_indices)
     if batch is not None:
         return batch
@@ -460,14 +467,11 @@ class _MultiProcessingDataLoaderIter(_BaseDataLoaderIter):
     bought -- overlapping file IO and decode with compute -- is available to
     threads.
 
-    When the pipeline does produce Vars (a ``ToTensor`` in ``__getitem__``, or
-    the default collate), background fetching is refused and the iterator
-    stays serial.  Building jittor's graph is not thread safe: a worker
-    constructing Vars races the training thread inside the executor, and the
-    known-failing ``tests/core/test_executor_python_threads.py`` documents the
-    resulting segfault.  The first batch -- made on the calling thread, as the
-    serial iterator would make it -- decides which mode the iterator runs in,
-    before any worker exists.
+    Contiguous detached CPU Tensor batches use isolated CPU processes with
+    shared-memory transport. Only the training thread restores backend
+    tensors. Other Var batches stay serial: constructing Vars on background
+    threads races the executor. The first batch is made on the calling thread
+    to select the mode before any worker exists.
     """
 
     def __init__(self, loader):
@@ -479,6 +483,7 @@ class _MultiProcessingDataLoaderIter(_BaseDataLoaderIter):
         self._timeout = float(loader.timeout or 0) or None
         self._pending = _collections_data.deque()
         self._pool = None
+        self._process_pool = None
         # None until the first batch decides between background and serial.
         self._serial = None
         self._base_seed = 0
@@ -519,6 +524,14 @@ class _MultiProcessingDataLoaderIter(_BaseDataLoaderIter):
             raise
         batch = self._fetch(batch_indices)
         if _contains_jittor_var(batch):
+            from ..dataloader_workers import ProcessPrefetch, supports_process_batch
+            context = self._loader.multiprocessing_context
+            method = context.get_start_method() if hasattr(context, 'get_start_method') else context
+            if (not self._loader._iterable_dataset and method in (None, 'spawn')
+                    and supports_process_batch(batch)):
+                self._process_pool = ProcessPrefetch(self._loader, self._batch_iter, self._base_seed)
+                self._serial = False
+                return batch
             self._serial = True
             _stub_policy_data.degraded(
                 "torch.utils.data.DataLoader(num_workers>0)",
@@ -543,6 +556,16 @@ class _MultiProcessingDataLoaderIter(_BaseDataLoaderIter):
     def __next__(self):
         if self._serial is None:
             return self._decide()
+        if self._process_pool is not None:
+            try:
+                return next(self._process_pool)
+            except StopIteration:
+                if not self._process_pool.persistent:
+                    self._shutdown()
+                raise
+            except BaseException:
+                self._shutdown()
+                raise
         if self._serial:
             return self._fetch(next(self._batch_iter))
         if not self._pending:
@@ -559,7 +582,27 @@ class _MultiProcessingDataLoaderIter(_BaseDataLoaderIter):
         self._fill()
         return batch
 
+    def _reset_process_epoch(self):
+        pool = self._process_pool
+        if pool is None or not pool.persistent:
+            return False
+        try:
+            if pool.reset(self._loader.batch_sampler):
+                self._batch_iter = pool.indices
+                return True
+        except BaseException:
+            self._shutdown()
+            raise
+        # An abandoned pass still has outstanding responses. Retire its
+        # workers instead of interpreting those responses as a new epoch.
+        self._shutdown()
+        return False
+
     def _shutdown(self):
+        processes = getattr(self, '_process_pool', None)
+        if processes is not None:
+            self._process_pool = None
+            processes.close()
         pool = getattr(self, "_pool", None)
         if pool is not None and not self._loader.persistent_workers:
             self._pool = None
@@ -567,6 +610,9 @@ class _MultiProcessingDataLoaderIter(_BaseDataLoaderIter):
 
     def __del__(self):
         try:
+            processes = getattr(self, '_process_pool', None)
+            if processes is not None:
+                processes.close()
             pool = getattr(self, "_pool", None)
             if pool is not None:
                 pool.shutdown(wait=False)
@@ -621,6 +667,9 @@ class _DataLoader:
         self._iterator = None
     def __iter__(self):
         if int(self.num_workers or 0) > 0:
+            if (self.persistent_workers and isinstance(self._iterator, _MultiProcessingDataLoaderIter)
+                    and self._iterator._reset_process_epoch()):
+                return self._iterator
             self._iterator = _MultiProcessingDataLoaderIter(self)
         else:
             self._iterator = _SingleProcessDataLoaderIter(self)
@@ -697,8 +746,10 @@ _DATA_APIS = {
 for _name, _implementation in _DATA_APIS.items():
     register_fidelity(
         "torch.utils.data." + _name, _implementation, Fidelity.APPROXIMATE,
-        "Jittor datasets and ordered batching; workers use threads rather than "
-        "processes, default_convert preserves its input, and pinned-memory "
+        "Ordered batching; on Linux CPU/CUDA builds detached contiguous CPU Tensor batches use isolated "
+        "CPU processes with default/spawn context, after a caller-thread first batch. "
+        "Pure Python batches use threads; other Tensor batches stay serial. "
+        "default_convert preserves its input; pinned memory, persistent process workers "
         "and complete Torch worker semantics are not provided",
     )
 register_fidelity(

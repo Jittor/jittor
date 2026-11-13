@@ -19,6 +19,7 @@
 #include "mem/swap.h"
 #include "runtime/async_exec.h"
 #include "runtime/traversal_epoch.h"
+#include "runtime/graph_pool.h"
 #include <mutex>
 #include <algorithm>
 
@@ -239,6 +240,11 @@ static Allocator* layered_allocator(Allocator* allocator, bool temp_allocator) {
 // allocator is asked every time: a backend table can be replaced (the
 // registry tests install a probe), and that has to take effect at once.
 Allocator* get_allocator(Device device, bool temp_allocator) {
+    if (auto* pool = graph_pool_allocator(device)) return pool;
+    return get_regular_allocator(device, temp_allocator);
+}
+
+Allocator* get_regular_allocator(Device device, bool temp_allocator) {
     Allocator* raw = raw_allocator(device, temp_allocator);
     struct Entry {
         Allocator* raw = nullptr;

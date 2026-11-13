@@ -29,6 +29,7 @@
 #include "mem/swap.h"
 #include "runtime/executor_entry.h"
 #include "runtime/holder_state.h"
+#include "runtime/submission_pipeline.h"
 #include "bindings/pyjt/py_converter.h"
 
 namespace jittor {
@@ -243,6 +244,16 @@ int first_rebound(const vector<VarHolder*>& holders, const vector<VarHolder*>& o
     CHECK(holders.size() == olds.size());
     for (int i = 0; i < (int)holders.size(); i++)
         if (holders[i]->var != olds[i]->var) return i;
+    return -1;
+}
+
+int first_changed_step_leaf(const vector<VarHolder*>& holders,
+                           const vector<int64>& pointers, const vector<bool>& gradients) {
+    USER_CHECK(holders.size() == pointers.size() && holders.size() == gradients.size())
+        << "step leaf guard lengths differ";
+    for (size_t i = 0; i < holders.size(); ++i)
+        if (holders[i]->var_ptr() != pointers[i]
+                || holders[i]->get_requires_grad() != gradients[i]) return (int)i;
     return -1;
 }
 
@@ -498,6 +509,39 @@ void VarHolder::validate_copy_from(VarHolder* src) {
     src->sync(false, false);
     validate_logical_copy_alias(this, src);
     (void)validate_storage_copy(var, src->var);
+}
+
+void materialize_step_readouts(const vector<VarHolder*>& roots, bool device_sync) {
+    ExecutorEntryScope entry;
+    auto& pipeline = runtime_submission_pipeline();
+    struct ReadoutScope {
+        int& depth;
+        explicit ReadoutScope(int& value) : depth(value) { ++depth; }
+        ~ReadoutScope() { --depth; }
+    } scope(pipeline.step_readout_depth);
+    runtime_executor().run_sync(convert(roots), device_sync, false);
+}
+
+bool commit_shared_updates(const vector<VarHolder*>& targets,
+                           const vector<VarHolder*>& sources) {
+    USER_CHECK(targets.size() == sources.size())
+        << "shared updates need equal target and source counts";
+    // Check the whole batch before committing any mutation. A mixed batch
+    // can then fall back without writing an earlier pair twice.
+    for (size_t i=0; i<targets.size(); ++i) {
+        Var* target = targets[i]->var;
+        Var* source = sources[i]->var;
+        if (!target->mem_ptr || target->mem_ptr != source->mem_ptr
+                || target->allocator != source->allocator
+                || target->allocation != source->allocation
+                || target->shape != source->shape
+                || target->dtype() != source->dtype()
+                || !target->is_contiguous() || !source->is_contiguous())
+            return false;
+    }
+    for (size_t i=0; i<targets.size(); ++i)
+        targets[i]->copy_into(sources[i], false);
+    return true;
 }
 
 void VarHolder::copy_into(VarHolder* src, bool sync_src) {

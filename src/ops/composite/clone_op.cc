@@ -19,6 +19,11 @@ static auto make_detached_clone = op_constructor<VarPtr, Var*, bool>("clone");
 CloneOp::CloneOp(Var* x) : CloneOp(x, false) {}
 
 CloneOp::CloneOp(Var* x, bool detached) : x(x) {
+    // An alias has no device work. Publish it as soon as its source is ready:
+    // leaf-gradient detaches are created after the whole backward graph, so
+    // creation-order scheduling otherwise delays their consumers (including
+    // communication buckets) until every unrelated gradient has run.
+    if (node_order == 0) flags.set(NodeFlags::_node_order_low, 1);
     if (detached) set_stop_grad();
     set_flag(OpFlags::_cpu);
     set_flag(OpFlags::_cuda);

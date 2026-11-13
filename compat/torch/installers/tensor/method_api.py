@@ -387,6 +387,19 @@ def _optimizer_update(self, value):
     # Optimizers write values without building an autograd edge. Reuse the
     # same storage, pending-reader and version rules as public in-place ops.
     with _owner.jt.no_grad():
+        if (_OPTIMIZER_WRITES[0] and isinstance(value, _NativeVar)
+                and self._mem_ptr_now and self._mem_ptr_now == value._mem_ptr_now
+                and self.shape == value.shape and self.dtype == value.dtype
+                and self._storage_is_contiguous() and value._storage_is_contiguous()):
+            from jittor._runtime import step_capture
+            if not step_capture.active():
+                # Fused optimizers have already written into these buffers.
+                # The group scope resolved their readers and all RHS outputs;
+                # do not materialize each output again through the generic
+                # view-write path. The native store still validates aliases
+                # and advances their shared mutation/version bookkeeping.
+                self._copy_into(value, False)
+                return self
         return _ip(self, value, preserve_storage=True)
 
 
@@ -409,6 +422,23 @@ class _DataAliasCopy(_owner.jt.Function):
 
     def grad(self, gradient):
         return _owner.jt.zeros_like(gradient), gradient
+
+
+def _optimizer_update_many(targets, values):
+    """Commit a fused update with one Python/native boundary and grad scope.
+
+    Keep custom tensor writers and capture on their ordinary path. The native
+    helper accepts only already-materialized aliases, and still performs the
+    same reader preservation, alias checks and version writes as _copy_into.
+    """
+    from jittor._runtime import step_capture
+    if not _OPTIMIZER_WRITES[0] or step_capture.active():
+        return False
+    if any(getattr(type(target), '_optimizer_update', None) is not _optimizer_update
+           for target in targets):
+        return False
+    with _owner.jt.no_grad():
+        return _owner.jt.core._commit_shared_updates(targets, values)
 
 
 def _copy_(self, other, non_blocking=False):

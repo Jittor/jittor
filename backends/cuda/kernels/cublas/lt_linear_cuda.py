@@ -470,7 +470,10 @@ _GEMMS = {
 
 
 @functools.lru_cache(maxsize=256)
-def _gemm_source(kind, rows, cin, cout, dtype, fold_bias=False):
+def _gemm_source(kind, rows, cin, cout, dtype, fold_bias=False, capture_tuning=False):
+    candidates = 32 if capture_tuning else _CANDIDATES
+    workspace = (32 << 20) if capture_tuning else _WORKSPACE
+    passes, repeats = (3, 10) if capture_tuning else (1, 3)
     ct, kt = _LT_TYPES[dtype]
     m, n, k, a, ta, a_rows, a_cols, b, tb, b_rows, b_cols = _GEMMS[kind]
     lda, ldb, ldc = a_rows, b_rows, m
@@ -501,9 +504,9 @@ def _gemm_source(kind, rows, cin, cout, dtype, fold_bias=False):
     cublasLtMatrixLayoutCreate(&lb, {ct}, {b_rows}, {b_cols}, {ldb});
     cublasLtMatrixLayoutCreate(&lc, {ct}, {m}, {n}, {ldc});
 
-    JtLtWorkspace workspace({_WORKSPACE});
+    JtLtWorkspace workspace({workspace});
     void* ws = workspace.ptr;
-    size_t wsize = ws ? (size_t){_WORKSPACE} : 0;
+    size_t wsize = ws ? (size_t){workspace} : 0;
     auto once = [&](const cublasLtMatmulAlgo_t* algo) {{
         return cublasLtMatmul(lt, op, &alpha, {a}, la, {b}, lb, &beta,
                               out0_p, lc, out0_p, lc, algo, ws, wsize, cudaStreamPerThread);
@@ -517,18 +520,22 @@ def _gemm_source(kind, rows, cin, cout, dtype, fold_bias=False):
         cublasLtMatmulPreferenceCreate(&pref);
         cublasLtMatmulPreferenceSetAttribute(
             pref, CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES, &wsize, sizeof(wsize));
-        cublasLtMatmulHeuristicResult_t cand[{_CANDIDATES}];
+        cublasLtMatmulHeuristicResult_t cand[{candidates}];
         int found = 0;
         cublasLtMatmulAlgoGetHeuristic(lt, op, la, lb, lc, lc, pref,
-                                       {_CANDIDATES}, cand, &found);
+                                       {candidates}, cand, &found);
         cudaEvent_t beg, end;
         cudaEventCreate(&beg); cudaEventCreate(&end);
+        // Repeat the candidate sweep after the device and libraries warm up.
+        // Keep the final sweep: cold clocks can otherwise pick a slower GEMM
+        // for every subsequent replay of a long training run.
+        for (int pass = 0; pass < {passes}; pass++) {{
         float best = 1e30f;
         for (int c = 0; c < found; c++) {{
             if (once(&cand[c].algo) != CUBLAS_STATUS_SUCCESS) continue;
             cudaDeviceSynchronize();
             cudaEventRecord(beg, cudaStreamPerThread);
-            for (int r = 0; r < 3; r++) once(&cand[c].algo);
+            for (int r = 0; r < {repeats}; r++) once(&cand[c].algo);
             cudaEventRecord(end, cudaStreamPerThread);
             if (cudaEventSynchronize(end) != cudaSuccess) continue;
             float ms = 0.0f;
@@ -538,6 +545,7 @@ def _gemm_source(kind, rows, cin, cout, dtype, fold_bias=False):
                 choice.algo = cand[c].algo;
                 choice.usable = true;
             }}
+        }}
         }}
         cudaEventDestroy(beg); cudaEventDestroy(end);
         cublasLtMatmulPreferenceDestroy(pref);
@@ -567,6 +575,13 @@ def _rows_of(t):
     return rows
 
 
+def _capture_tuning(dtype):
+    if dtype != "float32":
+        return False
+    from jittor._runtime import step_capture
+    return step_capture.active()
+
+
 def lt_linear_gemm_cuda(kind, a, b, rows, cin, cout):
     """One product of a linear layer through cuBLASLt, the algorithm picked by
     timing once per shape; see `_GEMMS` for `kind` and its operands. Returns
@@ -575,7 +590,8 @@ def lt_linear_gemm_cuda(kind, a, b, rows, cin, cout):
     shape = {"fwd": list(a.shape[:-1]) + [cout], "dx": list(a.shape[:-1]) + [cin],
              "dw": [cout, cin]}[kind]
     return jt.code(shape, dtype, [a, b], cuda_header=_WGRAD_HEADER,
-                   cuda_src=_gemm_source(kind, rows, cin, cout, dtype))
+                   cuda_src=_gemm_source(kind, rows, cin, cout, dtype,
+                                         capture_tuning=_capture_tuning(dtype)))
 
 
 def lt_linear_wgrad_cuda(x, grad, fold_bias=True):
@@ -592,7 +608,8 @@ def lt_linear_wgrad_cuda(x, grad, fold_bias=True):
         return lt_linear_gemm_cuda("dw", x, grad, rows, cin, cout)
     dtype = _jittor_dtype_name(x.dtype)
     return jt.code([(cout, cin), (cout,)], [dtype, dtype], [x, grad], cuda_header=_WGRAD_HEADER,
-                   cuda_src=_gemm_source("dw", rows, cin, cout, dtype, True))
+                   cuda_src=_gemm_source("dw", rows, cin, cout, dtype, True,
+                                         capture_tuning=_capture_tuning(dtype)))
 
 
 class _LtLinearProduct(jt.Function):
@@ -673,12 +690,26 @@ def _supports_training(x, weight, bias):
     # bias sum to matter pays that for nothing: a DDPM UNet's forty-odd
     # 16-row time-embedding projections made its eager step 64.0 -> 68.3 ms
     # at an unchanged device time.
-    return rows >= _MIN_ROWS and rows * cin * cout >= _MIN_PRODUCT
+    minimum_product = max(_MIN_PRODUCT, _MIN_PRODUCT_FP32) if dtype == "float32" else _MIN_PRODUCT
+    product = rows * cin * cout
+    if rows >= _MIN_ROWS and product >= minimum_product:
+        return True
+    if dtype == "float32" and rows >= 512 and product >= _MIN_PRODUCT:
+        # A whole-step capture pays Function/tape construction only once.
+        # Its replays can use the timed GEMMs for moderate products without
+        # paying the eager host overhead which sets the higher floor above.
+        from jittor._runtime import step_capture
+        return step_capture.active()
+    return False
 
 
 #: The smallest problem the training route takes: rows, and rows x cin x cout.
 _MIN_ROWS = 1024
 _MIN_PRODUCT = 1 << 28
+# Modest FP32 square products do not repay the Function/tape overhead even
+# after reaching the row floor. Keep the timed route for larger products;
+# the low-precision policy is independent.
+_MIN_PRODUCT_FP32 = 1 << 30
 
 
 def lt_linear_train_cuda(x, weight, bias=None):

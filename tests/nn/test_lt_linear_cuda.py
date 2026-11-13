@@ -260,7 +260,7 @@ class TestLtLinearTraining(unittest.TestCase):
         self.addCleanup(setattr, ops, "cublas_matmul", original_cublas)
         # Small problems keep the float64 CPU reference cheap; the size floor
         # the route applies is its own case below.
-        for name, value in (("_MIN_ROWS", 1), ("_MIN_PRODUCT", 1)):
+        for name, value in (("_MIN_ROWS", 1), ("_MIN_PRODUCT", 1), ("_MIN_PRODUCT_FP32", 1)):
             self.addCleanup(setattr, _lt, name, getattr(_lt, name))
             setattr(_lt, name, value)
         original = _lt._LtLinearProduct.grad
@@ -342,6 +342,19 @@ class TestLtLinearTraining(unittest.TestCase):
             grad = jt.grad((out * out).sum(), [model.weight])[0]
             grad.sync()
         self.assertEqual(self.calls, [1])
+
+    def test_moderate_fp32_product_keeps_native_gradients(self):
+        _lt._MIN_ROWS, _lt._MIN_PRODUCT, _lt._MIN_PRODUCT_FP32 = 1024, 1 << 28, 1 << 30
+        with jt.flag_scope(use_cuda=1):
+            model = nn.Linear(768, 768, bias=False)
+            model.weight.assign(jt.full((768, 768), 1. / 768, dtype="float32"))
+            x = jt.ones((1344, 768), dtype="float32")
+            out = model(x)
+            dx, dw = jt.grad(out.sum(), [x, model.weight])
+            np.testing.assert_allclose(out.numpy(), 1., rtol=1e-5, atol=1e-6)
+            np.testing.assert_allclose(dx.numpy(), 1., rtol=1e-5, atol=1e-6)
+            np.testing.assert_array_equal(dw.numpy(), np.full((768, 768), 1344., dtype="float32"))
+        self.assertEqual(self.calls, [])
 
     def test_without_an_input_or_a_bias_gradient(self):
         self._check((3, 40), 72, 48, "float32", 1e-4, x_grad=False)

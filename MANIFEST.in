@@ -146,8 +146,14 @@ include backends/comm/nccl/inc/nccl_wrapper.h
 include backends/comm/nccl/nompi_inc/mpi.h
 include backends/comm/nccl/ops/nccl_all_gather_op.cc
 include backends/comm/nccl/ops/nccl_all_gather_op.h
+include backends/comm/nccl/ops/nccl_all_reduce_deferred_op.cc
+include backends/comm/nccl/ops/nccl_all_reduce_deferred_op.h
+include backends/comm/nccl/ops/nccl_all_reduce_many_op.cc
+include backends/comm/nccl/ops/nccl_all_reduce_many_op.h
 include backends/comm/nccl/ops/nccl_all_reduce_op.cc
 include backends/comm/nccl/ops/nccl_all_reduce_op.h
+include backends/comm/nccl/ops/nccl_broadcast_many_op.cc
+include backends/comm/nccl/ops/nccl_broadcast_many_op.h
 include backends/comm/nccl/ops/nccl_broadcast_op.cc
 include backends/comm/nccl/ops/nccl_broadcast_op.h
 include backends/comm/nccl/ops/nccl_recv_op.cc
@@ -160,6 +166,8 @@ include backends/comm/nccl/ops/nccl_send_op.cc
 include backends/comm/nccl/ops/nccl_send_op.h
 include backends/comm/nccl/ops/nccl_test_op.cc
 include backends/comm/nccl/ops/nccl_test_op.h
+include backends/comm/nccl/ops/nccl_wait_many_op.cc
+include backends/comm/nccl/ops/nccl_wait_many_op.h
 include backends/comm/nccl/src/nccl_wrapper.cc
 include backends/corex/include/jittor_accelerator.h
 include backends/corex/runtime/corex_backend.cc
@@ -840,6 +848,8 @@ include src/runtime/float32_precision.cc
 include src/runtime/float32_precision.h
 include src/runtime/graph_capture.cc
 include src/runtime/graph_capture.h
+include src/runtime/graph_pool.cc
+include src/runtime/graph_pool.h
 include src/runtime/holder_state.cc
 include src/runtime/holder_state.h
 include src/runtime/init.cc
