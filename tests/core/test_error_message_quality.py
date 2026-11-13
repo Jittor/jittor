@@ -197,6 +197,28 @@ class TestOperatorFailurePutsTheReasonFirst(unittest.TestCase):
         self.assertIn("[Async Backtrace]: ---", str(caught.exception))
         self.assertIn("test_live_node_keeps_its_recorded_trace_after_scope_exit", str(caught.exception))
 
+    def test_failed_backward_does_not_mark_later_forward_as_a_gradient(self):
+        class Broken(jt.Function):
+            def execute(self, value):
+                return value * 2
+
+            def grad(self, gradient):
+                raise RuntimeError("deliberate backward failure")
+
+        with jt.flag_scope(use_cuda=0, trace_py_var=3):
+            value = jt.array([2.]).start_grad()
+            loss = Broken.apply(value).sum()
+            with self.assertRaisesRegex(RuntimeError, "deliberate backward failure"):
+                jt.grad(loss, [value])
+            fresh = jt.code((1,), "float32", [],
+                            cpu_src='throw std::runtime_error("later forward");')
+            with self.assertRaises(RuntimeError) as caught:
+                fresh.sync()
+        text = str(caught.exception)
+        self.assertIn("later forward", text)
+        self.assertNotIn("<Grad>", text)
+        self.assertIn("test_failed_backward_does_not_mark_later_forward_as_a_gradient", text)
+
     def test_no_log_line_prefix_at_all(self):
         """An exception carries no timestamp, thread id or level letter.
 
