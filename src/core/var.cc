@@ -61,7 +61,10 @@ DEFINE_FLAG(bool, no_grad, 0,
     "No grad for all jittor Var creation");
 DEFINE_FLAG(bool, no_fuse, 0, 
     "No fusion optimization for all jittor Var creation");
-DEFINE_FLAG(uint8, node_order, 0, "id prior");
+uint8 node_order = 0;
+thread_local ConstructionOrderContext worker_node_order;
+uint8& runtime_flag_node_order() { return construction_node_order(); }
+DEFINE_RUNTIME_FLAG(uint8, node_order, 0, "id prior");
 // TODO: fuse multiple flags
 DEFINE_FLAG(int, amp_reg, 0, "Auto mixed-precision control registers, bit 0: prefer 32; bit 1: prefer 16; bit 2: keep reduce type; bit 3 keep white list type; bit 4: array like op prefer too; bit 5, reduce16 intermediate not use 32; bit 6: prefer bfloat16");
 

@@ -71,6 +71,14 @@ an execution graph or model results. `async_execution=0` disables the worker, wh
 affect the tradeoff between earlier materialization and concurrent submission; compare matching
 configurations.
 
+Each background batch carries the submitting thread's `node_order`. The worker's node and clone
+constructors, flag reads and scoped writes use that batch's construction order; normal and
+exceptional teardown restore its previous scope. The caller can therefore change the order of
+subsequent nodes without waiting for an unrelated batch. Data reads and execution settings
+continue to use the executor's synchronization boundaries. Concurrent isolation and exception
+recovery are checked by
+[`test_async_construction_order.py`](../../../tests/runtime/test_async_construction_order.py).
+
 ### Native state and lifetime
 
 The native held-root storage is in `src/runtime/holder_state.{h,cc}`. `RuntimeHolderState` owns

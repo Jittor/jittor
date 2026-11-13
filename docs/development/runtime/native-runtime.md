@@ -59,6 +59,12 @@ CUDA 和 ACL 的后端策略允许将新建的推理或训练前向批次交给 
 `async_execution=0` 可关闭 worker，`auto_flush_ops` 与 `async_flush_ops` 控制提交边界。
 形状和批量大小会影响提前物化与并行提交的收益，应使用相同配置进行对照。
 
+每个后台批次携带提交时的 `node_order`。worker 的节点与 clone 构造、标志读取及局部
+修改使用这个批次的构造顺序；批次结束或抛出异常时恢复原来的作用域。因此调用线程改变
+后续节点的 `node_order` 时，无需等待无关批次完成。数据读取及执行设置仍通过执行器的
+既有同步边界协调。并发隔离与异常恢复由
+[`test_async_construction_order.py`](../../../tests/runtime/test_async_construction_order.py) 验证。
+
 ### 原生状态与生命周期
 
 原生的 held-root 存储在 `src/runtime/holder_state.{h,cc}`。`RuntimeHolderState` 同时拥有
