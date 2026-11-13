@@ -29,7 +29,7 @@ VarPtr NcclBroadcastManyOp::grad(Var* out, Var* dout, Var* v, int v_index) {
 #else
 #ifdef JIT_cuda
 void NcclBroadcastManyOp::jit_run() {
-    for (int i=0; i<tensor_count; ++i) nccl_dtype(input(i)->dtype());
+    for (int i=0; i<tensor_count; ++i) nccl_broadcast_dtype(input(i)->dtype());
     // The group begins and ends on the executor thread, including IR replay.
     nccl_bucket_begin(false);
     try {
@@ -39,7 +39,7 @@ void NcclBroadcastManyOp::jit_run() {
             if (!x->num) continue;
             auto stream = nccl_stream_begin();
             checkCudaErrors(ncclBroadcast(x->mem_ptr, y->mem_ptr, x->num,
-                nccl_dtype(x->dtype()), root, nccl_process_group_comm(group_id), stream));
+                nccl_broadcast_dtype(x->dtype()), root, nccl_process_group_comm(group_id), stream));
             nccl_stream_end(x, y);
         }
     } catch (...) {

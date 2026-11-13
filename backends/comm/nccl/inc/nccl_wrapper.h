@@ -148,6 +148,13 @@ Raises (LOGf) on a dtype NCCL has no type for, instead of expanding to nothing.
 */
 ncclDataType_t nccl_dtype(NanoString dtype);
 
+// Broadcast copies bytes without arithmetic. Boolean masks use the canonical
+// uint8 transport while retaining their boolean Var dtype and storage. Keep
+// nccl_dtype() unchanged: uint8 SUM is not a boolean reduction.
+inline ncclDataType_t nccl_broadcast_dtype(NanoString dtype) {
+    return nccl_dtype(dtype == ns_bool ? ns_uint8 : dtype);
+}
+
 // Generate/expose the opaque bootstrap id as bytes. Store transport belongs
 // to Python; the NCCL wrapper only consumes the exact binary payload.
 // @pyjt(nccl_get_unique_id)
