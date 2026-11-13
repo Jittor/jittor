@@ -14,6 +14,9 @@
 #include "core/executor.h"
 #include "runtime/device.h"
 #include "runtime/backend.h"
+#include "runtime/backend_streams.h"
+#include "runtime/async_exec.h"
+#include "runtime/graph_capture.h"
 #include "core/graph.h"
 #include "core/grad.h"
 #include "mem/allocator/cuda_dual_allocator.h"
@@ -29,6 +32,8 @@
 #include "bindings/pyjt/py_converter.h"
 
 namespace jittor {
+
+EXTERN_LIB void register_cleanup_callback(void (*cb)());
 
 namespace {
 struct VarDataOwner {
@@ -1648,6 +1653,127 @@ bool VarHolder::has_storage_aliases() {
     runtime_executor().run_sync({var}, false, false);
     std::lock_guard<std::mutex> guard(share_ring_mutex());
     return views != nullptr || var->share_next != nullptr;
+}
+
+namespace {
+// Hold allocations, not Vars: rebinding or destroying a holder must not recycle
+// storage while DMA still references it. A wait through any destination alias
+// releases all copies into that allocation. No graph node or implicit join is
+// installed: the caller explicitly waits before reading or reusing the bytes.
+struct PendingStorageCopy {
+    Allocation destination, source;
+    BackendStream stream;
+    BackendEvent done;
+    bool recorded = false;
+    ~PendingStorageCopy() { backend_ops(done.device.backend).event_destroy(done); }
+};
+std::list<unique_ptr<PendingStorageCopy>> pending_storage_copies;
+
+void wait_storage_copy(PendingStorageCopy& copy) {
+    DeviceWaitScope wait;
+    const auto& ops = backend_ops(copy.stream.device.backend);
+    if (copy.recorded) ops.event_synchronize(copy.done);
+    else ops.stream_synchronize(copy.stream); // also recover a failed enqueue
+}
+
+void cleanup_storage_copies() {
+    for (auto& copy : pending_storage_copies) wait_storage_copy(*copy);
+    pending_storage_copies.clear();
+}
+
+void retain_copy_storage(Allocation& held, Var* var) {
+    USER_CHECK(var->allocator->share_with(var->storage_span_bytes(),
+        var->allocation, var->storage_offset_bytes))
+        << "copy_into_async requires shareable storage";
+    held.ptr = var->mem_ptr;
+    held.allocation = var->allocation;
+    held.size = var->storage_span_bytes();
+    held.allocator = var->allocator;
+}
+}
+
+void copy_into_async(VarHolder* dst, VarHolder* src) {
+    async_exec_wait();
+    ExecutorEntryScope entry;
+    CHECK(dst && src && dst->var && src->var);
+    USER_CHECK(!graph_capture_active() && !state_capture)
+        << "copy_into_async cannot be recorded in a graph or state capture";
+    auto* d = dst->var;
+    auto* s = src->var;
+    USER_CHECK(d->is_finished() && s->is_finished() &&
+        !d->flag(VarFlags::_execution_failed) && !s->flag(VarFlags::_execution_failed))
+        << "copy_into_async needs two materialized storages";
+    USER_CHECK(d->is_contiguous() && s->is_contiguous())
+        << "copy_into_async requires contiguous storage";
+    USER_CHECK(d->size == s->size)
+        << "copy_into_async needs equal byte sizes, got " << d->size << " and " << s->size;
+    if (!d->size) return;
+    USER_CHECK(d->mem_ptr && s->mem_ptr && d->allocator && s->allocator)
+        << "copy_into_async needs two allocated storages";
+    auto target = allocation_device(d->allocator);
+    auto source = allocation_device(s->allocator);
+    USER_CHECK(target.backend == BackendId::Cpu || source.backend == BackendId::Cpu ||
+        (target.backend == source.backend && target.index == source.index))
+        << "copy_into_async between different accelerator devices is unsupported";
+    if (target.backend == source.backend && target.index == source.index) {
+        auto dp = reinterpret_cast<uintptr_t>(d->mem_ptr);
+        auto sp = reinterpret_cast<uintptr_t>(s->mem_ptr);
+        if (dp == sp) return;
+        USER_CHECK(dp < sp ? sp-dp >= d->size : dp-sp >= d->size)
+            << "copy_into_async requires non-overlapping storage";
+    }
+    dst->check_inplace_autograd();
+    if (target.backend == BackendId::Cpu && source.backend == BackendId::Cpu) {
+        dst->record_inplace_write();
+        std::memcpy(d->mem_ptr, s->mem_ptr, d->size);
+        return;
+    }
+    Device device = target.backend == BackendId::Cpu ? source : target;
+    auto stream = backend_stream(device, BackendStreamKind::Copy);
+    const auto& ops = backend_ops(device.backend);
+    auto copy = std::make_unique<PendingStorageCopy>();
+    copy->stream = stream;
+    copy->done = backend_event(device);
+    retain_copy_storage(copy->destination, d);
+    retain_copy_storage(copy->source, s);
+    static const bool registered = [] {
+        register_cleanup_callback(cleanup_storage_copies);
+        return true;
+    }();
+    (void)registered;
+    if (source.backend != BackendId::Cpu) {
+        backend_compute_stream_acquire();
+        backend_side_stream_wait_default(BackendStreamKind::Copy, device.index, source.index);
+    }
+    auto* pending = copy.get();
+    pending_storage_copies.push_back(move(copy));
+    // Keep the record even if enqueue/record raises: a partially submitted
+    // transfer must be drained by copy_wait/cleanup before either block frees.
+    dst->record_inplace_write();
+    backend_copy_async(d->mem_ptr, target, s->mem_ptr, source, d->size, stream);
+    ops.event_record(pending->done, stream);
+    pending->recorded = true;
+}
+
+void copy_wait(VarHolder* dst) {
+    async_exec_wait();
+    ExecutorEntryScope entry;
+    CHECK(dst && dst->var);
+    USER_CHECK(!graph_capture_active() && !state_capture)
+        << "copy_wait cannot be recorded in a graph or state capture";
+    // The wait releases the GIL: another thread may rebind dst meanwhile.
+    // Snapshot allocation identity before waiting, never reread the old Var.
+    auto* allocator = dst->var->allocator;
+    auto allocation = dst->var->allocation;
+    for (auto it = pending_storage_copies.begin(); it != pending_storage_copies.end();) {
+        const auto& held = (*it)->destination;
+        if (held.allocator != allocator || held.allocation != allocation) {
+            ++it;
+            continue;
+        }
+        wait_storage_copy(**it);
+        it = pending_storage_copies.erase(it);
+    }
 }
 
 VarHolder* VarHolder::_update(VarHolder* v, bool logical_write) {
