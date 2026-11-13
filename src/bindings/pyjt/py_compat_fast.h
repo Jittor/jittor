@@ -35,6 +35,13 @@ bool try_optimizer_copies(PyObject* targets, PyObject* values);
 PyObject* try_optimizer_shape_changes(PyObject* params, PyObject* moments,
     PyObject* variances, PyObject* canonical_types);
 
+// Fresh Adam entries or independently advanced, unexposed integer counters.
+// None leaves custom descriptors, counters and containers untouched. The
+// caller keeps provider selection between these two separate operations.
+// @pyjt(_try_optimizer_adam_entries)
+PyObject* try_optimizer_adam_entries(PyObject* group, PyObject* gradients,
+    PyObject* steps, PyObject* canonical_types, PyObject* protocol, bool advance);
+
 
 // A fresh, unallocated cuBLAS result with no aliases or other readers can be
 // replaced by an independent copy of its binary update. False retains the

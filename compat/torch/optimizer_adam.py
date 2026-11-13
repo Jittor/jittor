@@ -10,11 +10,13 @@ from jittor.optim.algorithms.adam import adam_update
 from jittor.optim.base import _update_preserve_dtype
 from .context import get_install_context
 from .installers.tensor.method_api import _optimizer_write_scope, _optimizer_update
+from .installers.tensor.autograd_api import _rg_get
 from ..diagnostics import EXPECTED, swallowed
 
 
 _NATIVE_SHAPE = jt.core.Var.__dict__["shape"]
 _NATIVE_GETATTRIBUTE = jt.core.Var.__getattribute__
+_NATIVE_REQUIRES_GRAD = jt.core.Var.__dict__["requires_grad"]
 
 
 def _class_descriptor(cls, name):
@@ -134,6 +136,37 @@ class _AdamSteps(list):
             dtype = g.float64 if not fused and g.get_default_dtype() == g.float64 else g.float32
             value = _AdamStep(value, dtype=dtype, device=device)
         super().__setitem__(index, value)
+
+
+def _method_contract(owner, name):
+    method = _class_descriptor(owner, name)
+    return (owner, name, method, getattr(method, "__code__", None))
+
+
+# Implementation identities only. Parameter collections, eligibility, shapes
+# and numeric counters are read again in each native call. In particular an
+# exposed step Tensor is never represented by a cached host value.
+_ADAM_METADATA_PROTOCOL = (
+    _AdamStep, _AdamSteps,
+    tuple(_method_contract(owner, name) for owner, names in (
+        (_AdamStep, ("__int__", "set", "__getattribute__", "__setattr__", "__dict__")),
+        (_AdamSteps, ("__getitem__", "__setitem__")),
+    ) for name in names),
+    _NATIVE_SHAPE, _NATIVE_REQUIRES_GRAD, _NATIVE_GETATTRIBUTE,
+    (_rg_get, _rg_get.__code__), globals(), jt,
+    tuple((name, value) for name, value in (
+        ("int", int), ("list", list), ("zip", zip), ("enumerate", enumerate),
+        ("isinstance", isinstance), ("bool", bool), ("type", type),
+    )),
+)
+
+
+def _adam_metadata_batch(group, grads, steps, advance=False):
+    frontend = get_install_context(jt).target_namespace
+    return jt.core._try_optimizer_adam_entries(
+        group, grads, steps,
+        (jt.core.Var, frontend.Tensor, frontend.nn.Parameter),
+        _ADAM_METADATA_PROTOCOL, advance)
 
 
 def _update_in_target_dtype(target, value):
@@ -257,24 +290,31 @@ def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay
                       and not pg.get("amsgrad") and not pg.get("maximize"))
         active = []
         if want_fused:
-            for i, (p, g, v, m) in enumerate(zip(
-                    pg["params"], grads, pg["values"], pg["m"])):
-                if not p.requires_grad or not isinstance(g, jt.Var) \
-                        or list(g.shape) != list(p.shape):
-                    continue
-                active.append((p, m, v, g, int(param_steps[i])))
+            active = _adam_metadata_batch(pg, grads, param_steps)
+            if active is None:
+                active = []
+                for i, (p, g, v, m) in enumerate(zip(
+                        pg["params"], grads, pg["values"], pg["m"])):
+                    if not p.requires_grad or not isinstance(g, jt.Var) \
+                            or list(g.shape) != list(p.shape):
+                        continue
+                    active.append((p, m, v, g, int(param_steps[i])))
             if active:
                 from jittor._runtime.dispatch import select_kernel
                 fused_impl = select_kernel("optim.adamw_fused", active)
         if fused_impl is not None:
-            stepped = []
-            for i, (p, g, v, m) in enumerate(zip(
-                    pg["params"], grads, pg["values"], pg["m"])):
-                if not p.requires_grad or not isinstance(g, jt.Var) \
-                        or list(g.shape) != list(p.shape):
-                    continue
-                param_steps[i] = int(param_steps[i]) + 1
-                stepped.append(i)
+            # Provider selection is an observable callback boundary: rebuild
+            # eligibility and read counters after it, independently of active.
+            stepped = _adam_metadata_batch(pg, grads, param_steps, advance=True)
+            if stepped is None:
+                stepped = []
+                for i, (p, g, v, m) in enumerate(zip(
+                        pg["params"], grads, pg["values"], pg["m"])):
+                    if not p.requires_grad or not isinstance(g, jt.Var) \
+                            or list(g.shape) != list(p.shape):
+                        continue
+                    param_steps[i] = int(param_steps[i]) + 1
+                    stepped.append(i)
             lr_arg = lr
             if step_capture.active():   # a replay advances these without step()
                 lr_arg = step_capture.live_fused_update(

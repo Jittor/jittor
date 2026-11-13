@@ -153,6 +153,222 @@ PyObject* try_optimizer_shape_changes(PyObject* params, PyObject* moments,
 
 
 namespace {
+bool optimizer_string_keys(PyObject* dict) {
+    if (!PyDict_CheckExact(dict)) return false;
+    Py_ssize_t position = 0;
+    PyObject *key, *value;
+    while (PyDict_Next(dict, &position, &key, &value))
+        if (!PyUnicode_CheckExact(key)) return false;
+    return true;
+}
+
+PyObject* optimizer_type_field(PyObject* type, const char* name) {
+    PyObjHolder key;
+    key.obj = PyUnicode_FromString(name);
+    return key.obj ? _PyType_Lookup((PyTypeObject*)type, key.obj) : nullptr;
+}
+
+bool optimizer_function_code(PyObject* function, PyObject* code) {
+    return code == Py_None || (PyFunction_Check(function)
+        && PyFunction_GET_CODE(function) == code);
+}
+
+bool optimizer_function_bindings(PyObject* function, PyObject* expected) {
+    if (!function || !PyFunction_Check(function) || !PyTuple_CheckExact(expected)) return false;
+    auto* globals = PyFunction_GET_GLOBALS(function);
+    if (!optimizer_string_keys(globals)) return false;
+    PyObjHolder builtins;
+#if PY_VERSION_HEX >= 0x030A0000
+    builtins.obj = PyObject_GetAttrString(function, "__builtins__");
+    if (!builtins.obj) return false;
+#else
+    // Older interpreters have no function.__builtins__; their normal Python
+    // path remains available rather than guessing the function's environment.
+    return false;
+#endif
+    if (!optimizer_string_keys(builtins.obj)) return false;
+    for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(expected); ++i) {
+        auto* pair = PyTuple_GET_ITEM(expected, i);
+        if (!PyTuple_CheckExact(pair) || PyTuple_GET_SIZE(pair) != 2) return false;
+        auto* key = PyTuple_GET_ITEM(pair, 0);
+        if (!PyUnicode_CheckExact(key)) return false;
+        auto* value = PyDict_GetItemWithError(globals, key);
+        if (!value) value = PyDict_GetItemWithError(builtins.obj, key);
+        if (value != PyTuple_GET_ITEM(pair, 1)) return false;
+    }
+    return true;
+}
+
+bool optimizer_adam_protocol(PyObject* protocol, PyObject* types) {
+    if (!PyTuple_CheckExact(protocol) || PyTuple_GET_SIZE(protocol) != 10
+            || !PyTuple_CheckExact(types) || PyTuple_GET_SIZE(types) != 3)
+        return false;
+    auto* step_type = PyTuple_GET_ITEM(protocol, 0);
+    auto* steps_type = PyTuple_GET_ITEM(protocol, 1);
+    if (!PyType_Check(step_type) || !PyType_Check(steps_type)) return false;
+    auto* contracts = PyTuple_GET_ITEM(protocol, 2);
+    if (!PyTuple_CheckExact(contracts)) return false;
+    for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(contracts); ++i) {
+        auto* contract = PyTuple_GET_ITEM(contracts, i);
+        if (!PyTuple_CheckExact(contract) || PyTuple_GET_SIZE(contract) != 4)
+            return false;
+        auto* owner = PyTuple_GET_ITEM(contract, 0);
+        auto* name = PyTuple_GET_ITEM(contract, 1);
+        auto* method = PyTuple_GET_ITEM(contract, 2);
+        if (!PyType_Check(owner) || !PyUnicode_CheckExact(name)
+                || _PyType_Lookup((PyTypeObject*)owner, name) != method
+                || !optimizer_function_code(method, PyTuple_GET_ITEM(contract, 3)))
+            return false;
+    }
+    if (optimizer_type_field(step_type, "value")
+            || optimizer_type_field(step_type, "counter")) return false;
+    auto* globals = PyTuple_GET_ITEM(protocol, 7);
+    if (!optimizer_string_keys(globals)
+            || PyDict_GetItemString(globals, "_AdamStep") != step_type
+            || PyDict_GetItemString(globals, "_AdamSteps") != steps_type
+            || PyDict_GetItemString(globals, "jt") != PyTuple_GET_ITEM(protocol, 8))
+        return false;
+    auto* runtime = PyTuple_GET_ITEM(protocol, 8);
+    if (!PyModule_Check(runtime)
+            || Py_TYPE(runtime)->tp_getattro != PyModule_Type.tp_getattro
+            || PyModule_GetDict(runtime) == nullptr
+            || PyDict_GetItemString(PyModule_GetDict(runtime), "Var") != PyTuple_GET_ITEM(types, 0)
+            || Py_TYPE(PyTuple_GET_ITEM(types, 0)) != &PyType_Type)
+        return false;
+    auto* builtins = PyTuple_GET_ITEM(protocol, 9);
+    auto* int_method = optimizer_type_field(step_type, "__int__");
+    auto* set_method = optimizer_type_field(steps_type, "__setitem__");
+    if (!optimizer_function_bindings(int_method, builtins)
+            || !optimizer_function_bindings(set_method, builtins)) return false;
+    auto* getter = PyTuple_GET_ITEM(protocol, 6);
+    if (!PyTuple_CheckExact(getter) || PyTuple_GET_SIZE(getter) != 2
+            || !optimizer_function_code(PyTuple_GET_ITEM(getter, 0),
+                                        PyTuple_GET_ITEM(getter, 1))) return false;
+    auto* function = PyTuple_GET_ITEM(getter, 0);
+    if (!optimizer_function_bindings(function, builtins)) return false;
+    for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(types); ++i) {
+        auto* type = PyTuple_GET_ITEM(types, i);
+        if (!PyType_Check(type)
+                || Py_TYPE(type)->tp_getattro != PyType_Type.tp_getattro
+                || optimizer_type_field(type, "shape") != PyTuple_GET_ITEM(protocol, 3)
+                || optimizer_type_field(type, "__getattribute__") != PyTuple_GET_ITEM(protocol, 5))
+            return false;
+        auto* descriptor = optimizer_type_field(type, "requires_grad");
+        if (descriptor == PyTuple_GET_ITEM(protocol, 4)) continue;
+        if (!descriptor || Py_TYPE(descriptor) != &PyProperty_Type
+                || optimizer_type_field(type, "_frontend_native_requires_grad")
+                    != PyTuple_GET_ITEM(protocol, 4)) return false;
+        PyObjHolder fget;
+        fget.obj = PyObject_GetAttrString(descriptor, "fget");
+        if (fget.obj != function) return false;
+    }
+    return !PyErr_Occurred();
+}
+
+PyObject* optimizer_adam_counter(PyObject* value, PyObject* step_type,
+                                 bool allow_integer) {
+    if (allow_integer && PyLong_CheckExact(value)) return value;
+    if ((PyObject*)Py_TYPE(value) != step_type) return nullptr;
+    auto** pointer = _PyObject_GetDictPtr(value);
+    if (!pointer || !*pointer || !optimizer_string_keys(*pointer)
+            || PyDict_GetItemString(*pointer, "set")) return nullptr;
+    auto* counter = PyDict_GetItemString(*pointer, "counter");
+    auto* number = PyDict_GetItemString(*pointer, "value");
+    return counter == Py_None && number && PyLong_CheckExact(number) ? number : nullptr;
+}
+}
+
+PyObject* try_optimizer_adam_entries(PyObject* group, PyObject* gradients,
+    PyObject* steps, PyObject* types, PyObject* protocol, bool advance) {
+    if (!runtime_use_cuda() || accelerator_backend_id() != BackendId::Cuda
+            || graph_capture_active() || !optimizer_string_keys(group)
+            || !PyList_CheckExact(gradients) || !PyList_Check(steps))
+        return no_optimizer_metadata_batch();
+    auto* params = PyDict_GetItemString(group, "params");
+    auto* moments = PyDict_GetItemString(group, "m");
+    auto* variances = PyDict_GetItemString(group, "values");
+    if (!params || !moments || !variances
+            || (!PyList_CheckExact(params) && !PyTuple_CheckExact(params))
+            || !PyList_CheckExact(moments) || !PyList_CheckExact(variances))
+        return no_optimizer_metadata_batch();
+    auto count = PyTuple_CheckExact(params) ? PyTuple_GET_SIZE(params) : PyList_GET_SIZE(params);
+    PyObjHolder result;
+    result.obj = PyList_New(count);
+    if (!result.obj) return nullptr;
+    // Allocate tracked Python containers before validating the live metadata.
+    // No GC-triggering allocation then interrupts native holder/counter reads.
+    for (Py_ssize_t i = 0; i < count; ++i) {
+        auto* item = advance ? PyLong_FromSsize_t(i) : PyTuple_New(5);
+        if (!item) return nullptr;
+        PyList_SET_ITEM(result.obj, i, item);
+    }
+    if (!optimizer_adam_protocol(protocol, types))
+        return PyErr_Occurred() ? nullptr : no_optimizer_metadata_batch();
+    if ((PyObject*)Py_TYPE(steps) != PyTuple_GET_ITEM(protocol, 1))
+        return no_optimizer_metadata_batch();
+    // Allocation above may have run a finalizer. Re-read every group container
+    // and validate the entire call before observing a holder or changing steps.
+    if (!optimizer_string_keys(group)) return no_optimizer_metadata_batch();
+    params = PyDict_GetItemString(group, "params");
+    moments = PyDict_GetItemString(group, "m");
+    variances = PyDict_GetItemString(group, "values");
+    if (!params || !moments || !variances
+            || (!PyList_CheckExact(params) && !PyTuple_CheckExact(params))
+            || !PyList_CheckExact(moments) || !PyList_CheckExact(variances)
+            || (PyTuple_CheckExact(params) ? PyTuple_GET_SIZE(params) : PyList_GET_SIZE(params)) != count
+            || PyList_GET_SIZE(gradients) != count || PyList_GET_SIZE(moments) != count
+            || PyList_GET_SIZE(variances) != count || PyList_GET_SIZE(steps) < count)
+        return no_optimizer_metadata_batch();
+    auto parameter = [&](Py_ssize_t i) {
+        return PyTuple_CheckExact(params) ? PyTuple_GET_ITEM(params, i) : PyList_GET_ITEM(params, i);
+    };
+    auto* step_type = PyTuple_GET_ITEM(protocol, 0);
+    for (Py_ssize_t i = 0; i < count; ++i) {
+        auto* gradient = PyList_GET_ITEM(gradients, i);
+        if (!canonical_optimizer_holder(parameter(i), types)
+                || (gradient != Py_None && !canonical_optimizer_holder(gradient, types))
+                || !optimizer_adam_counter(PyList_GET_ITEM(steps, i), step_type, !advance))
+            return no_optimizer_metadata_batch();
+    }
+    Py_ssize_t used = 0;
+    for (Py_ssize_t i = 0; i < count; ++i) {
+        auto* p = parameter(i);
+        auto* gradient = PyList_GET_ITEM(gradients, i);
+        auto* holder = GET_RAW_PTR(VarHolder, p);
+        if (!holder->get_requires_grad() || gradient == Py_None
+                || holder->var->shape != GET_RAW_PTR(VarHolder, gradient)->var->shape)
+            continue;
+        auto* counter = PyList_GET_ITEM(steps, i);
+        auto* number = optimizer_adam_counter(counter, step_type, !advance);
+        if (advance) {
+            PyObjHolder one, next;
+            one.obj = PyLong_FromLong(1);
+            if (!one.obj) return nullptr;
+            next.obj = PyNumber_Add(number, one.obj);
+            if (!next.obj || PyDict_SetItemString(*_PyObject_GetDictPtr(counter), "value", next.obj) < 0)
+                return nullptr;
+            auto* index = PyList_GET_ITEM(result.obj, i);
+            Py_INCREF(index);
+            auto* previous = PyList_GET_ITEM(result.obj, used);
+            PyList_SET_ITEM(result.obj, used, index);
+            Py_DECREF(previous);
+        } else {
+            auto* row = PyList_GET_ITEM(result.obj, used);
+            PyObject* values[] = {p, PyList_GET_ITEM(moments, i),
+                PyList_GET_ITEM(variances, i), gradient, number};
+            for (int j = 0; j < 5; ++j) {
+                Py_INCREF(values[j]);
+                PyTuple_SET_ITEM(row, j, values[j]);
+            }
+        }
+        ++used;
+    }
+    if (PyList_SetSlice(result.obj, used, count, nullptr) < 0) return nullptr;
+    return result.release();
+}
+
+
+namespace {
 // Per frontend type: its dtype table, and the entries already looked up by
 // native name. Dropped when the type is collected.
 struct DtypeTable {
