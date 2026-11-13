@@ -106,19 +106,8 @@ def index_copy(input, dim, index, source):
 
 
 def index_copy_(input, dim, index, source):
-    """Copy rows/slices into ``input`` in place and return it."""
-    from . import (
-        jt,
-    )
-    d = dim % input.ndim
-    idx = index if isinstance(index, jt.Var) else jt.array(index)
-    if d == 0:
-        input[idx] = source
-    else:
-        slices = [slice(None)] * input.ndim
-        slices[d] = idx
-        input[tuple(slices)] = source
-    return input
+    """Reuse native index update and storage-preserving copy for true aliases."""
+    return input.copy_(index_copy(input, dim, index, source))
 
 
 def index_put(input, indices, values, accumulate=False):
