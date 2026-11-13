@@ -1,9 +1,13 @@
 """Stable Tensor gradient APIs using the shared native Var/Op graph."""
 from importlib import import_module
 from ...context import get_install_context
+from ...tensor_object_state import _GRAD_PUBLICATION_PROTOCOL
 from jittor._runtime import step_capture as _step_capture
 _owner = import_module(__package__)
 _NativeVar = _owner.jt.Var
+_FRESH_GRAD_PROTOCOL = _GRAD_PUBLICATION_PROTOCOL + (
+    _NativeVar.__dict__.get("__dict__"), _NativeVar.stop_grad,
+)
 
 def _register_leaf(v):
     _owner._torch_register_leaf(v)
@@ -150,6 +154,19 @@ def _fill_opt_grads(opt, grad_by_id, filled_param_ids=None):
     zero = getattr(opt, "_Optimizer__zero_grad", True)
     if filled_param_ids is None:
         filled_param_ids = set()
+    # The common zero_grad()/backward() cycle publishes into empty slots.
+    # A native batch validates current accessors and every slot first. Shared
+    # parameters, accumulation and custom Python protocols keep the loop below.
+    from ...optimizer_adam import _ADAM_METADATA_PROTOCOL
+    frontend = get_install_context(_owner.jt).target_namespace
+    published = _owner.jt.core._try_publish_fresh_gradients(
+        opt.param_groups, grad_by_id, filled_param_ids,
+        (_NativeVar, frontend.Tensor, frontend.nn.Parameter),
+        _ADAM_METADATA_PROTOCOL, _FRESH_GRAD_PROTOCOL,
+    )
+    if published:
+        _finish_opt_gradient_publication(opt)
+        return
     for pg in opt.param_groups:
         grads_list = pg.get("grads")
         if grads_list is None:
@@ -181,6 +198,10 @@ def _fill_opt_grads(opt, grad_by_id, filled_param_ids=None):
             grads_list[i] = stored
             object.__setattr__(p, "_torch_grad", stored)
             filled_param_ids.add(id(p))
+    _finish_opt_gradient_publication(opt)
+
+
+def _finish_opt_gradient_publication(opt):
     object.__setattr__(opt, "_Optimizer__zero_grad", False)
     try:
         opt._build_grad_map()

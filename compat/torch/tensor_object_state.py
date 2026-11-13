@@ -69,6 +69,24 @@ def _state_property(legacy, field, default):
     return property(get, set, delete)
 
 
+# Implementation identities, never tensor values or parameter collections.
+# The native fresh-gradient writer accepts only these ordinary slot accessors.
+_grad_property = _state_property("_torch_grad", "grad", None)
+_GRAD_PUBLICATION_PROTOCOL = (
+    TensorObjectState, TensorObjectState.grad,
+    _grad_property.fget.__code__,
+    tuple(cell.cell_contents for cell in _grad_property.fget.__closure__),
+    _grad_property.fset.__code__,
+    tuple(cell.cell_contents for cell in _grad_property.fset.__closure__),
+    get_tensor_object_state, get_tensor_object_state.__code__,
+    tuple((name, value) for name, value in (
+        ("vars", vars), ("getattr", getattr), ("setattr", setattr),
+        ("isinstance", isinstance), ("TypeError", TypeError),
+    )),
+)
+del _grad_property
+
+
 def tensor_object_properties():
     """Descriptors installed only on the independent Tensor type."""
     return {legacy: _state_property(legacy, field, default)

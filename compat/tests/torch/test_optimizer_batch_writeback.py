@@ -62,7 +62,7 @@ class TestOptimizerBatchWriteback:
 
     def test_adamw_uses_batch_and_preserves_custom_writer(self, device):
         from unittest.mock import patch
-        native = jt.core._try_optimizer_copies
+        native = optimizer_adam._optimizer_update_many
         outcomes, writes = [], []
 
         def observe(*args):
@@ -76,7 +76,7 @@ class TestOptimizerBatchWriteback:
 
         parameter = torch.nn.Parameter(torch.tensor([1., 2.], device=device))
         optimizer = torch.optim.AdamW([parameter], lr=.125, weight_decay=0.)
-        with patch.object(jt.core, '_try_optimizer_copies', observe):
+        with patch.object(optimizer_adam, '_optimizer_update_many', observe):
             parameter.grad = torch.ones_like(parameter)
             optimizer.step()
             if device == 'cuda':
@@ -99,7 +99,7 @@ class TestOptimizerBatchWriteback:
         m, v, value = [torch.zeros(2, device=device) for _ in range(3)]
         active = [(p, m, v, value, 0)]
         updates = [(value, value, value)]
-        with patch.object(jt.core, '_try_optimizer_copies', side_effect=AssertionError('must decline')):
+        with patch.object(optimizer_adam, '_optimizer_update_many', side_effect=AssertionError('must decline')):
             assert not optimizer_adam._try_batch_update(active, updates)
             p = torch.nn.Parameter(torch.ones(2, device=device))
             active[0] = (p, m, v, value, 0)

@@ -42,6 +42,14 @@ PyObject* try_optimizer_shape_changes(PyObject* params, PyObject* moments,
 PyObject* try_optimizer_adam_entries(PyObject* group, PyObject* gradients,
     PyObject* steps, PyObject* canonical_types, PyObject* protocol, bool advance);
 
+// Publish this backward's fresh stopped gradients into empty ordinary slots.
+// False leaves custom accessors, accumulation and shared targets to Python.
+// All eligibility and holder metadata are read anew on every call.
+// @pyjt(_try_publish_fresh_gradients)
+bool try_publish_fresh_gradients(PyObject* groups, PyObject* gradients,
+    PyObject* filled, PyObject* canonical_types, PyObject* metadata_protocol,
+    PyObject* state_protocol);
+
 
 // A fresh, unallocated cuBLAS result with no aliases or other readers can be
 // replaced by an independent copy of its binary update. False retains the

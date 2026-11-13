@@ -18,6 +18,7 @@
 #include "runtime/tensor_placement.h"
 #include <stdexcept>
 #include <descrobject.h>
+#include <unordered_set>
 
 namespace jittor {
 
@@ -365,6 +366,138 @@ PyObject* try_optimizer_adam_entries(PyObject* group, PyObject* gradients,
     }
     if (PyList_SetSlice(result.obj, used, count, nullptr) < 0) return nullptr;
     return result.release();
+}
+
+
+namespace {
+bool gradient_property_function(PyObject* function, PyObject* code,
+    PyObject* closure, PyObject* protocol) {
+    if (!PyFunction_Check(function) || PyFunction_GET_CODE(function) != code
+            || !PyTuple_CheckExact(closure)) return false;
+    auto* cells = PyFunction_GET_CLOSURE(function);
+    if (!cells || PyTuple_GET_SIZE(cells) != PyTuple_GET_SIZE(closure)) return false;
+    for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(cells); ++i) {
+        auto* actual = PyCell_GET(PyTuple_GET_ITEM(cells, i));
+        auto* expected = PyTuple_GET_ITEM(closure, i);
+        if (actual == expected) continue;
+        if (!actual || !PyUnicode_CheckExact(actual) || !PyUnicode_CheckExact(expected)
+                || PyUnicode_Compare(actual, expected) != 0) return false;
+    }
+    auto* globals = PyFunction_GET_GLOBALS(function);
+    return optimizer_string_keys(globals)
+        && PyDict_GetItemString(globals, "get_tensor_object_state") == PyTuple_GET_ITEM(protocol, 6)
+        && optimizer_function_bindings(function, PyTuple_GET_ITEM(protocol, 8));
+}
+
+bool gradient_publication_protocol(PyObject* types, PyObject* protocol) {
+    if (!PyTuple_CheckExact(protocol) || PyTuple_GET_SIZE(protocol) != 11) return false;
+    auto* state_type = PyTuple_GET_ITEM(protocol, 0);
+    auto* getter = PyTuple_GET_ITEM(protocol, 6);
+    if (!PyType_Check(state_type)
+            || ((PyTypeObject*)state_type)->tp_getattro != PyObject_GenericGetAttr
+            || ((PyTypeObject*)state_type)->tp_setattro != PyObject_GenericSetAttr
+            || optimizer_type_field(state_type, "grad") != PyTuple_GET_ITEM(protocol, 1)
+            || Py_TYPE(PyTuple_GET_ITEM(protocol, 1)) != &PyMemberDescr_Type
+            || !optimizer_function_code(getter, PyTuple_GET_ITEM(protocol, 7))
+            || !optimizer_function_bindings(getter, PyTuple_GET_ITEM(protocol, 8))) return false;
+    auto* globals = PyFunction_GET_GLOBALS(getter);
+    auto* key = PyDict_GetItemString(globals, "_STATE_KEY");
+    if (PyDict_GetItemString(globals, "TensorObjectState") != state_type
+            || !key || !PyUnicode_CheckExact(key)
+            || PyUnicode_CompareWithASCIIString(key, "_torch_object_state") != 0) return false;
+    // Read the same property and underlying holder dict as vars()/object's
+    // setter. A subclass, replaced descriptor, closure or helper stays Python.
+    for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(types); ++i) {
+        auto* type = PyTuple_GET_ITEM(types, i);
+        if (optimizer_type_field(type, "__dict__") != PyTuple_GET_ITEM(protocol, 9)
+                || optimizer_type_field(type, "stop_grad") != PyTuple_GET_ITEM(protocol, 10))
+            return false;
+        // Legacy native Vars have no frontend state property; they cannot
+        // participate in this batch, but remain a canonical gradient type.
+        auto* descriptor = optimizer_type_field(type, "_torch_grad");
+        if (!descriptor) continue;
+        if (Py_TYPE(descriptor) != &PyProperty_Type) return false;
+        PyObjHolder get(PyObject_GetAttrString(descriptor, "fget"));
+        PyObjHolder set(PyObject_GetAttrString(descriptor, "fset"));
+        if (!get.obj || !set.obj
+                || !gradient_property_function(get.obj, PyTuple_GET_ITEM(protocol, 2),
+                    PyTuple_GET_ITEM(protocol, 3), protocol)
+                || !gradient_property_function(set.obj, PyTuple_GET_ITEM(protocol, 4),
+                    PyTuple_GET_ITEM(protocol, 5), protocol)) return false;
+    }
+    return !PyErr_Occurred();
+}
+}
+
+bool try_publish_fresh_gradients(PyObject* groups, PyObject* gradients,
+    PyObject* filled, PyObject* types, PyObject* metadata_protocol,
+    PyObject* state_protocol) {
+    if (graph_capture_active() || !PyList_CheckExact(groups)
+            || !PyDict_CheckExact(gradients) || !PySet_CheckExact(filled)
+            || PySet_Size(filled) != 0) return false;
+    // Allocate the only tracked container before checking live metadata.
+    // The remaining validation and slot writes invoke no Python callbacks or
+    // GC-triggering allocations, and never release the GIL.
+    PyObjHolder keys(PyList_New(0));
+    if (!keys.obj) throw std::runtime_error("could not allocate gradient identities");
+    if (!optimizer_adam_protocol(metadata_protocol, types)
+            || !gradient_publication_protocol(types, state_protocol)) return false;
+    Py_ssize_t position = 0;
+    PyObject *key, *value;
+    while (PyDict_Next(gradients, &position, &key, &value))
+        if (!PyLong_CheckExact(key)) return false;
+    struct Row { PyObject *parameter, *gradient, *state, *slots, *key; Py_ssize_t index; };
+    vector<Row> rows;
+    std::unordered_set<PyObject*> seen;
+    for (Py_ssize_t j = 0; j < PyList_GET_SIZE(groups); ++j) {
+        auto* group = PyList_GET_ITEM(groups, j);
+        if (!optimizer_string_keys(group)) return false;
+        auto* params = PyDict_GetItemString(group, "params");
+        auto* slots = PyDict_GetItemString(group, "grads");
+        if (!params || !PyList_CheckExact(params) || !slots || !PyList_CheckExact(slots)
+                || PyList_GET_SIZE(params) != PyList_GET_SIZE(slots)) return false;
+        for (Py_ssize_t i = 0; i < PyList_GET_SIZE(params); ++i) {
+            auto* p = PyList_GET_ITEM(params, i);
+            if (!canonical_optimizer_holder(p, types) || !seen.insert(p).second
+                    || PyList_GET_ITEM(slots, i) != Py_None
+                    || !optimizer_type_field((PyObject*)Py_TYPE(p), "_torch_grad")) return false;
+            auto* holder = GET_RAW_PTR(VarHolder, p);
+            if (holder->view || !holder->get_requires_grad()) return false;
+            PyObjHolder identity(PyLong_FromVoidPtr(p));
+            if (!identity.obj || PyList_Append(keys.obj, identity.obj) < 0)
+                throw std::runtime_error("could not allocate gradient identity");
+            auto* g = PyDict_GetItemWithError(gradients, identity.obj);
+            if (!g || !canonical_optimizer_holder(g, types)) return false;
+            auto* gradient = GET_RAW_PTR(VarHolder, g);
+            if (gradient->view || !gradient->var->is_stop_grad()
+                    || holder->var->shape != gradient->var->shape
+                    || holder->var->dtype() != gradient->var->dtype()) return false;
+            auto** attrs = _PyObject_GetDictPtr(p);
+            if (!attrs || !*attrs || !optimizer_string_keys(*attrs)) return false;
+            auto* state = PyDict_GetItemString(*attrs, "_torch_object_state");
+            if (!state || (PyObject*)Py_TYPE(state) != PyTuple_GET_ITEM(state_protocol, 0)) return false;
+            PyObjHolder previous(PyObject_GetAttrString(state, "grad"));
+            if (!previous.obj) {
+                if (!PyErr_ExceptionMatches(PyExc_AttributeError))
+                    throw std::runtime_error("could not inspect gradient slot");
+                PyErr_Clear();
+                return false;
+            }
+            if (previous.obj != Py_None) return false;
+            rows.push_back({p, g, state, slots, identity.obj, i});
+        }
+    }
+    for (const auto& row : rows) {
+        // stop_grad also resets alias/first-order policy on an already stopped
+        // gradient. Keep that operation rather than assuming it is a no-op.
+        GET_RAW_PTR(VarHolder, row.gradient)->stop_grad();
+        Py_INCREF(row.gradient);
+        if (PyList_SetItem(row.slots, row.index, row.gradient) < 0
+                || PyObject_SetAttrString(row.state, "grad", row.gradient) < 0
+                || PySet_Add(filled, row.key) < 0)
+            throw std::runtime_error("could not publish fresh gradient");
+    }
+    return true;
 }
 
 
