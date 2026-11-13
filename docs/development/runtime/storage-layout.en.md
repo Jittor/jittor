@@ -95,3 +95,42 @@ Targeted tests are in `tests/core/test_storage_strides.py` and
 `tests/core/test_view_storage.py`, covering forced-expand alias identity, the arithmetic /
 reduction / indexing that follows it, allocation budgets, assignment refresh, NumPy export,
 positive-stride storage offsets, dense library boundaries and gradients.
+
+## Explicit asynchronous storage copies
+
+Offloaders that manage execution order explicitly can use
+`jt.core._copy_into_async(dst, src)`, followed by `jt.core._copy_wait(dst)`.
+These calls create no graph node and install no implicit compute-stream join;
+binding a parameter to a destination view does not execute the copy. Ordinary
+tensor computations should continue to use graph-visible copy operations.
+
+This is a non-differentiable byte-copy interface. Both operands must be
+materialized, contiguous, equal in byte count and not partially overlapping.
+There is no shape or dtype conversion. CPU-to-CPU copies complete synchronously;
+host-to-device, device-to-host and same-device copies use the device copy stream.
+Different accelerator devices, graph capture and state capture are explicitly
+rejected. Reliable transfer overlap requires pinned host memory; the API name
+alone does not guarantee that a driver call returns immediately.
+
+Use fresh `empty` destination storage allocated with `dst.sync(False, False)`.
+Before reusing an existing destination, the caller must finish all its previous
+readers and writers. Submitted device-source producers are ordered before the
+copy. Between enqueue and completion, callers must neither mutate the source
+nor read or reuse the destination. `_copy_wait` waits for the destination
+allocation's completion events, rather than synchronizing the whole device.
+
+The runtime independently retains both allocations until the wait completes.
+Deleting or rebinding Python holders cannot recycle their bytes early. Pair
+every enqueue with a wait. Before rebinding the destination, retain an independent
+alias of its original storage, such as `dst.detach()`, and wait through that
+alias. Ordinary views can follow their base's rebinding and are not fixed handles
+to the old allocation. Waiting through any alias of the original destination
+allocation releases its retained copy records. Writes update shared mutation
+versions; this interface does not bypass checks on saved backward values.
+
+Regression entry point: `tests/core/test_async_storage_copy.py`.
+`tests/core/test_async_copy_inflight.py` uses real device streams to verify storage
+lifetime during transfers and independent waits. Device acceptance and
+performance records belong in [PR #18149](https://github.com/Jittor/jittor/pull/18149).
+Core and backend maintainers should rerun the relevant device cases when
+allocation ownership, stream dependencies or alias rules change.
