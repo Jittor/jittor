@@ -166,6 +166,37 @@ class TestOperatorFailurePutsTheReasonFirst(unittest.TestCase):
         self.assertNotIn("JT_TRACE_PY_VAR", text,
                          "advice to turn on what is already on:\n" + text)
 
+    def test_trace_scope_does_not_mislabel_later_untraced_failures(self):
+        import gc
+        with jt.flag_scope(use_cuda=0, trace_py_var=3):
+            source = jt.array(np.arange(5, dtype="float32"))
+            failing = source[jt.array([99])]
+            with self.assertRaises(RuntimeError):
+                failing.sync()
+        del source, failing
+        gc.collect()
+        # Reuse allocations after the trace observer has been detached. Each
+        # new error must identify its own creation site, without an older stack.
+        with jt.flag_scope(use_cuda=0, trace_py_var=0):
+            for _ in range(16):
+                value = jt.code((1,), "float32", [], cpu_src='throw std::runtime_error("fresh untraced node");')
+                with self.assertRaises(RuntimeError) as caught:
+                    value.sync()
+                text = str(caught.exception)
+                self.assertIn("fresh untraced node", text)
+                self.assertIn("The failing operator was created at: " + __file__ + ":", text)
+                self.assertNotIn("[Async Backtrace]: ---", text)
+                del value
+
+    def test_live_node_keeps_its_recorded_trace_after_scope_exit(self):
+        with jt.flag_scope(use_cuda=0, trace_py_var=3):
+            source = jt.array(np.arange(5, dtype="float32"))
+            failing = source[jt.array([99])]
+        with self.assertRaises(RuntimeError) as caught:
+            failing.sync()
+        self.assertIn("[Async Backtrace]: ---", str(caught.exception))
+        self.assertIn("test_live_node_keeps_its_recorded_trace_after_scope_exit", str(caught.exception))
+
     def test_no_log_line_prefix_at_all(self):
         """An exception carries no timestamp, thread id or level letter.
 
