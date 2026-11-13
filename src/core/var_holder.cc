@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <sstream>
 #include "core/var_holder.h"
+#include "core/step_readouts.h"
 #include "ops/layout_propagation.h"
 #include "core/var.h"
 #include "core/executor.h"
@@ -272,6 +273,9 @@ static inline void note_readback() {
     }
 }
 
+bool state_capture_active() { return state_capture != nullptr; }
+void note_shape_readback() { note_readback(); }
+
 // Whether a read of a Var's value has to wait for the devices, beyond its
 // own producer. It does not: device memory is read back by a copy that waits
 // for the stream that produced it, and host memory is written by host ops.
@@ -480,6 +484,8 @@ static void validate_logical_copy_alias(VarHolder* target, VarHolder* source) {
         << "_copy_into source and destination have overlapping logical view storage";
 }
 
+static void materialize_step_values(const vector<Var*>& roots, bool device_sync);
+
 int preserve_step_readers(const vector<VarHolder*>& storages) {
     vector<Var*> written;
     written.reserve(storages.size());
@@ -489,11 +495,11 @@ int preserve_step_readers(const vector<VarHolder*>& storages) {
     auto readers = saved_storage_readers(written);
     if (readers.empty()) return 0;
     ExecutorEntryScope entry;
-    runtime_executor().run_sync(readers, false, false);
+    materialize_step_values(readers, false);
     return (int)readers.size();
 }
 
-void materialize_step_readouts(const vector<VarHolder*>& roots, bool device_sync) {
+static void materialize_step_values(const vector<Var*>& roots, bool device_sync) {
     ExecutorEntryScope entry;
     auto& pipeline = runtime_submission_pipeline();
     struct ReadoutScope {
@@ -501,7 +507,38 @@ void materialize_step_readouts(const vector<VarHolder*>& roots, bool device_sync
         explicit ReadoutScope(int& value) : depth(value) { ++depth; }
         ~ReadoutScope() { --depth; }
     } scope(pipeline.step_readout_depth);
-    runtime_executor().run_sync(convert(roots), device_sync, false);
+    runtime_executor().run_sync(roots, device_sync, false);
+}
+
+void materialize_step_readouts(const vector<VarHolder*>& roots, bool device_sync) {
+    materialize_step_values(convert(roots), device_sync);
+}
+
+void finish_step_readouts(const vector<VarHolder*>& roots) {
+    ExecutorEntryScope entry;
+    vector<VarPtr> held;
+    vector<Var*> values;
+    held.reserve(roots.size());
+    values.reserve(roots.size());
+    for (VarHolder* holder : roots) {
+        USER_CHECK(holder && holder->var) << "step readouts require tensor holders";
+        held.emplace_back(holder->var);
+        values.push_back(holder->var);
+    }
+    // Allocated, successfully executed kept values are boundaries. Releasing
+    // their marks before this sync would repeat in-place optimizer updates.
+    // Limit this boundary-aware batch to the trace's explicit roots. Weak
+    // sync can pull unrelated pending consumers across a kept boundary into
+    // the same fused segment, whose relay inputs then lie outside the batch.
+    materialize_step_values(values, false);
+    for (Var* value : values) {
+        if (value->is_finished() || !value->flag(VarFlags::_kept)) continue;
+        USER_CHECK(value->mem_ptr || !value->size)
+            << "a completed step readout has no storage";
+        value->set_flag(VarFlags::_kept, 0);
+        value->finish_pending_liveness();
+    }
+    for (VarHolder* holder : roots) holder->release_kept();
 }
 
 bool commit_shared_updates(const vector<VarHolder*>& targets,
@@ -532,7 +569,7 @@ void VarHolder::copy_into(VarHolder* src, bool sync_src) {
     // Preserve saved values before a physical write can invalidate their
     // recomputation inputs. Holder sinks may have fused those values away.
     auto readers = saved_storage_readers({var});
-    if (!readers.empty()) runtime_executor().run_sync(readers, false, false);
+    if (!readers.empty()) materialize_step_values(readers, false);
     // Neither sync waits on the device; both only resolve what the Var is
     // still pending on. The copy itself is stream-ordered against the work
     // already queued, which is what makes this usable once per step.

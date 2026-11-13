@@ -174,6 +174,14 @@ directory containing PyTorch's binary `_C` extension, which pytest preloads befo
 deployed Jittor-backed `torch` stub can be found -- **that stub must never be treated as an
 independent reference**.
 
+Test subprocesses also receive the `REAL_TORCH_SITE` search path through the
+shared child helper. Changing only the parent's `sys.path` does not pin a
+child's reference. This path precedes inherited shim search paths while
+preserving the current Jittor checkout's priority.
+When a child explicitly clears the native oracle and requests the shim, it also
+removes the parent's owned oracle site from the inherited path, retaining the
+order of other search paths.
+
 ## CI support matrix
 
 Workflow status is **declared explicitly**, because "a nox session can run" does not mean CI has

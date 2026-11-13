@@ -20,6 +20,17 @@ static auto make_binary = op_constructor<VarPtr, Var*, Var*, NanoString>("binary
 static auto make_unary = op_constructor<VarPtr, Var*, NanoString>("unary");
 static auto make_ternary = op_constructor<VarPtr, Var*, Var*, Var*>("ternary");
 static auto make_number = op_constructor<VarPtr, float, Var*>("number");
+static auto make_gradient_array = op_constructor<VarPtr, const void*, NanoVector, NanoString>("array");
+
+static VarPtr special_gradient_coefficient(double value, Var* like) {
+    if (like->dtype() != ns_float64) return make_number(value, like);
+    // The number op's scalar is float. A double VJP needs the original
+    // constant, on the input's device even under a different ambient backend.
+    VarPtr result = make_gradient_array(&value, {}, ns_float64);
+    result->device_id = like->device_id;
+    if (like->placement.explicit_backend) result->placement = like->placement;
+    return result;
+}
 
 static unordered_set<string> unary_ops = {
     /**
@@ -1212,7 +1223,7 @@ VarPtr UnaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     }
     // derf(x) = e^(-x^2)*2/sqrt(pi)
     if (ns == ns_erf) {
-        auto two_div_sqrt_pi = make_number(2/1.7724538509055159, x);
+        auto two_div_sqrt_pi = special_gradient_coefficient(2/1.7724538509055159, x);
         auto two = make_number(2, x);
         auto x2 = make_binary(x, x, ns_multiply);
         x2 = make_unary(x2, ns_negative);
@@ -1222,7 +1233,7 @@ VarPtr UnaryOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     }
     // derfinv(x) = sqrt(pi) / 2 * exp(erfinv(x)^2)
     if (ns == ns_erfinv) {
-        auto sqrt_pi_div_two = make_number(1.7724538509055159/2, x);
+        auto sqrt_pi_div_two = special_gradient_coefficient(1.7724538509055159/2, x);
         auto y2 = make_binary(y, y, ns_multiply);
         auto r = make_unary(y2, ns_exp);
         r = make_binary(r, sqrt_pi_div_two, ns_multiply);

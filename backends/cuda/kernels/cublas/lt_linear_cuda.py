@@ -40,8 +40,8 @@ is silent -- the fallback below is correct, so the only symptom is speed -- and
 it cost a 2.4x regression before it was traced.
 
 **Training: the weight gradient timed, the bias gradient folded where it is
-cheap.** `lt_linear_train_cuda` keeps the portable forward and takes the
-backward's dW through cuBLASLt with the algorithm picked by timing, as the
+cheap.** `lt_linear_train_cuda` takes the backward's dW through cuBLASLt with
+the algorithm picked by timing, as the
 forward route does: ViT-B/16's 72 weight-gradient GEMMs went 28.6 -> 27.5 ms.
 The portable backward sums the output gradient over every row for `db`, and
 jittor fuses that sum into whatever produced the gradient -- BERT's GELU
@@ -52,6 +52,11 @@ the gradient is still in L2, 270 us for ViT's 148 MB one, against ~60 us for
 the sum fused into its producer. So the fold is taken only for a gradient
 that fits the L2 cache (`_FOLD_L2_FRACTION`); a larger one keeps the fused
 sum.
+
+Captured FP32 training also folds the forward bias into the GEMM, keeping its
+backward in the custom Function. Dense addmm weights use their [cin, cout]
+layout directly; its weight-gradient epilogue is BGRADA rather than BGRADB.
+Neither the weight nor its gradient needs a layout conversion for that path.
 
 Kept out on purpose:
 
@@ -468,21 +473,43 @@ _GEMMS = {
            "in1_p", "CUBLAS_OP_T", "cout", "rows"),
 }
 
+# Dense [cin, cout] weights, as used by addmm. The weight gradient is written
+# in that layout directly, without transposing either the weight or its grad.
+_GEMMS_IO = {
+    "fwd": ("cout", "rows", "cin", "in1_p", "CUBLAS_OP_N", "cout", "cin",
+            "in0_p", "CUBLAS_OP_N", "cin", "rows"),
+    "dx": ("cin", "rows", "cout", "in1_p", "CUBLAS_OP_T", "cout", "cin",
+           "in0_p", "CUBLAS_OP_N", "cout", "rows"),
+    "dw": ("cout", "cin", "rows", "in1_p", "CUBLAS_OP_N", "cout", "rows",
+           "in0_p", "CUBLAS_OP_T", "cin", "rows"),
+}
+
 
 @functools.lru_cache(maxsize=256)
-def _gemm_source(kind, rows, cin, cout, dtype, fold_bias=False, capture_tuning=False):
+def _gemm_source(kind, rows, cin, cout, dtype, fold_bias=False, capture_tuning=False,
+                 transposed_weight=False, forward_bias=False):
     candidates = 32 if capture_tuning else _CANDIDATES
     workspace = (32 << 20) if capture_tuning else _WORKSPACE
     passes, repeats = (3, 10) if capture_tuning else (1, 3)
     ct, kt = _LT_TYPES[dtype]
-    m, n, k, a, ta, a_rows, a_cols, b, tb, b_rows, b_cols = _GEMMS[kind]
+    products = _GEMMS_IO if transposed_weight else _GEMMS
+    m, n, k, a, ta, a_rows, a_cols, b, tb, b_rows, b_cols = products[kind]
     lda, ldb, ldc = a_rows, b_rows, m
     fold_bias = fold_bias and kind == "dw"
-    epilogue = "CUBLASLT_EPILOGUE_BGRADB" if fold_bias else "CUBLASLT_EPILOGUE_DEFAULT"
+    forward_bias = forward_bias and kind == "fwd"
+    if forward_bias:
+        epilogue = "CUBLASLT_EPILOGUE_BIAS"
+    elif fold_bias:
+        epilogue = "CUBLASLT_EPILOGUE_BGRADA" if transposed_weight else "CUBLASLT_EPILOGUE_BGRADB"
+    else:
+        epilogue = "CUBLASLT_EPILOGUE_DEFAULT"
     column_sum = (f"jt_lt_column_sum<{kt}><<<(cout + 255) / 256, 256>>>(\n"
                   f"            ({kt}*)in1_p, ({kt}*)out1_p, rows, cout);") if fold_bias else ""
-    bias_pointer = ("void* biasp = (void*)out1_p;\n    cublasLtMatmulDescSetAttribute(op, "
-                    "CUBLASLT_MATMUL_DESC_BIAS_POINTER, &biasp, sizeof(biasp));") if fold_bias else ""
+    bias_value = "in2_p" if forward_bias else "out1_p"
+    bias_pointer = (f"void* biasp = (void*){bias_value};\n    cublasLtMatmulDescSetAttribute(op, "
+                    "CUBLASLT_MATMUL_DESC_BIAS_POINTER, &biasp, sizeof(biasp));") if fold_bias or forward_bias else ""
+    fallback_bias = (f"jt_lt_add_bias<{kt}><<<((rows * cout) + 255) / 256, 256>>>(\n"
+                     f"            out0_p, (const {kt}*)in2_p, rows * cout, cout);") if forward_bias else ""
 
     return f"""
     const int rows = {rows}, cin = {cin}, cout = {cout};
@@ -559,6 +586,7 @@ def _gemm_source(kind, rows, cin, cout, dtype, fold_bias=False, capture_tuning=F
                      {a}, {ct}, {lda}, {b}, {ct}, {ldb}, &beta, out0_p, {ct}, {ldc},
                      compute, CUBLAS_GEMM_DEFAULT);
         {column_sum}
+        {fallback_bias}
     }}
 
     cublasLtMatrixLayoutDestroy(la);
@@ -582,19 +610,22 @@ def _capture_tuning(dtype):
     return step_capture.active()
 
 
-def lt_linear_gemm_cuda(kind, a, b, rows, cin, cout):
+def lt_linear_gemm_cuda(kind, a, b, rows, cin, cout, *, transposed_weight=False, bias=None):
     """One product of a linear layer through cuBLASLt, the algorithm picked by
     timing once per shape; see `_GEMMS` for `kind` and its operands. Returns
     [rows, cout] for fwd, [rows, cin] for dx, [cout, cin] for dw."""
     dtype = _jittor_dtype_name(a.dtype)
     shape = {"fwd": list(a.shape[:-1]) + [cout], "dx": list(a.shape[:-1]) + [cin],
-             "dw": [cout, cin]}[kind]
-    return jt.code(shape, dtype, [a, b], cuda_header=_WGRAD_HEADER,
+             "dw": [cin, cout] if transposed_weight else [cout, cin]}[kind]
+    inputs = [a, b] + ([bias] if bias is not None else [])
+    return jt.code(shape, dtype, inputs, cuda_header=_WGRAD_HEADER,
                    cuda_src=_gemm_source(kind, rows, cin, cout, dtype,
-                                         capture_tuning=_capture_tuning(dtype)))
+                                         capture_tuning=_capture_tuning(dtype),
+                                         transposed_weight=transposed_weight,
+                                         forward_bias=bias is not None))
 
 
-def lt_linear_wgrad_cuda(x, grad, fold_bias=True):
+def lt_linear_wgrad_cuda(x, grad, fold_bias=True, *, transposed_weight=False):
     """dW of `x @ W.T + b` for the output gradient `grad` -- and db with it,
     from the same cuBLASLt call, when `fold_bias`.
 
@@ -605,11 +636,14 @@ def lt_linear_wgrad_cuda(x, grad, fold_bias=True):
     cin, cout = int(x.shape[-1]), int(grad.shape[-1])
     rows = _rows_of(x)
     if not fold_bias:
-        return lt_linear_gemm_cuda("dw", x, grad, rows, cin, cout)
+        return lt_linear_gemm_cuda("dw", x, grad, rows, cin, cout,
+                                   transposed_weight=transposed_weight)
     dtype = _jittor_dtype_name(x.dtype)
-    return jt.code([(cout, cin), (cout,)], [dtype, dtype], [x, grad], cuda_header=_WGRAD_HEADER,
+    shape = (cin, cout) if transposed_weight else (cout, cin)
+    return jt.code([shape, (cout,)], [dtype, dtype], [x, grad], cuda_header=_WGRAD_HEADER,
                    cuda_src=_gemm_source("dw", rows, cin, cout, dtype, True,
-                                         capture_tuning=_capture_tuning(dtype)))
+                                         capture_tuning=_capture_tuning(dtype),
+                                         transposed_weight=transposed_weight))
 
 
 class _LtLinearProduct(jt.Function):
@@ -618,17 +652,25 @@ class _LtLinearProduct(jt.Function):
 
     The bias, when there is one, is an input so that its gradient comes from
     here -- folded into the weight gradient's GEMM, or summed where that is
-    cheaper; the caller adds a detached copy of it. Adding it in here instead
-    would make the sum this Function's output -- and a Function's output is a
-    tape, which shares its input's storage, so the sum would have to be
-    written out rather than fused into whatever reads it.
+    cheaper. Captured FP32 calls can include it in the forward GEMM's
+    epilogue. Other calls add a detached bias outside the Function, allowing
+    that elementwise add to fuse with its consumer.
     """
+
+    def __init__(self, *, transposed_weight=False, fuse_bias=False):
+        super().__init__()
+        self.transposed_weight = transposed_weight
+        self.fuse_bias = fuse_bias
 
     def execute(self, x, weight, *bias):
         self.x, self.weight, self.has_bias = x, weight, bool(bias)
         self.wants_dx = not x.is_stop_grad()
-        self.rows, self.cout, self.cin = _rows_of(x), int(weight.shape[0]), int(weight.shape[1])
-        return lt_linear_gemm_cuda("fwd", x, weight, self.rows, self.cin, self.cout)
+        self.rows = _rows_of(x)
+        self.cin, self.cout = ((int(weight.shape[0]), int(weight.shape[1])) if self.transposed_weight
+                              else (int(weight.shape[1]), int(weight.shape[0])))
+        return lt_linear_gemm_cuda("fwd", x, weight, self.rows, self.cin, self.cout,
+                                   transposed_weight=self.transposed_weight,
+                                   bias=bias[0] if self.fuse_bias and bias else None)
 
     def grad(self, grad):
         if grad is None:
@@ -640,25 +682,29 @@ class _LtLinearProduct(jt.Function):
         if not dense:
             rows_x = x.reshape((-1, cin))
             rows_g = grad.reshape((-1, cout))
-            dw = jt.nn.matmul(rows_g.transpose(), rows_x)
+            dw = (jt.nn.matmul(rows_x.transpose(), rows_g) if self.transposed_weight else
+                  jt.nn.matmul(rows_g.transpose(), rows_x))
             if self.has_bias:
                 db = rows_g.sum(0)
-            dx = jt.nn.matmul(grad, self.weight) if self.wants_dx else None
+            dx = ((jt.nn.matmul_transpose(grad, self.weight) if self.transposed_weight else
+                   jt.nn.matmul(grad, self.weight)) if self.wants_dx else None)
         else:
             if self.has_bias and grad.nbytes <= _l2_bytes() * _FOLD_L2_FRACTION:
-                dw, db = lt_linear_wgrad_cuda(x, grad)
+                dw, db = lt_linear_wgrad_cuda(x, grad, transposed_weight=self.transposed_weight)
             else:
-                dw = lt_linear_gemm_cuda("dw", x, grad, rows, cin, cout)
+                dw = lt_linear_gemm_cuda("dw", x, grad, rows, cin, cout,
+                                         transposed_weight=self.transposed_weight)
                 if self.has_bias:
                     # Over the leading dimensions as they are: a reshape in
                     # between keeps the sum out of the kernel producing `grad`.
                     db = grad.sum(tuple(range(grad.ndim - 1)))
-            dx = lt_linear_gemm_cuda("dx", grad, self.weight, rows, cin, cout) \
+            dx = lt_linear_gemm_cuda("dx", grad, self.weight, rows, cin, cout,
+                                     transposed_weight=self.transposed_weight) \
                 if self.wants_dx else None
         return (dx, dw) + ((db,) if self.has_bias else ())
 
 
-def _supports_training(x, weight, bias):
+def _supports_training(x, weight, bias, *, transposed_weight=False):
     if not jt.flags.use_cuda or jt.flags.no_grad or not _CUDA_BUILD:
         return False
     if not (isinstance(x, jt.Var) and isinstance(weight, jt.Var)):
@@ -675,13 +721,15 @@ def _supports_training(x, weight, bias):
     dtype = _jittor_dtype_name(x.dtype)
     if dtype not in _LT_TYPES or _jittor_dtype_name(weight.dtype) != dtype:
         return False
-    if bias is not None and (_jittor_dtype_name(bias.dtype) != dtype or len(bias.shape) != 1
-                             or int(bias.shape[0]) != int(weight.shape[0])):
-        return False
     if len(weight.shape) != 2 or len(x.shape) < 2:
         return False
-    cout, cin = int(weight.shape[0]), int(weight.shape[1])
-    if int(x.shape[-1]) != cin or not x._storage_is_contiguous():
+    cin, cout = ((int(weight.shape[0]), int(weight.shape[1])) if transposed_weight else
+                 (int(weight.shape[1]), int(weight.shape[0])))
+    if bias is not None and (_jittor_dtype_name(bias.dtype) != dtype or len(bias.shape) != 1
+                             or int(bias.shape[0]) != cout):
+        return False
+    if (int(x.shape[-1]) != cin or not x._storage_is_contiguous()
+            or not weight._storage_is_contiguous()):
         return False
     rows = _rows_of(x)
     # The route costs a Function call -- tapes, a context, a second operator
@@ -725,7 +773,26 @@ def lt_linear_train_cuda(x, weight, bias=None):
         return None
     if bias is None:
         return _LtLinearProduct.apply(x, weight)
+    if compute_dtype_name(x, weight) == "float32" and _capture_tuning("float32"):
+        return _LtLinearProduct(fuse_bias=True)(x, weight, bias)
     return _LtLinearProduct.apply(x, weight, bias) + bias.detach()
+
+
+def _supports_addmm_training(x, weight, bias):
+    from jittor._runtime import step_capture
+    return (step_capture.active() and isinstance(x, jt.Var) and isinstance(weight, jt.Var)
+            and isinstance(bias, jt.Var)
+            and len(x.shape) == 2 and compute_dtype_name(x, weight) == "float32"
+            and _supports_training(x, weight, bias, transposed_weight=True))
+
+
+def lt_addmm_train_cuda(x, weight, bias):
+    """FP32 captured addmm with dense [cin, cout] weights and a vector bias."""
+    return _LtLinearProduct(transposed_weight=True, fuse_bias=True)(x, weight, bias)
+
+
+register_kernel("addmm_training", "cuda", lt_addmm_train_cuda,
+                dtypes={"float32"}, supports=_supports_addmm_training)
 
 
 def lt_linear_cuda(x, weight, bias):
@@ -760,5 +827,5 @@ def lt_linear_cuda(x, weight, bias):
                    cuda_header=_HEADER, cuda_src=_source(rows, cin, cout, dtype))
 
 
-__all__ = ["lt_linear_cuda", "lt_linear_train_cuda", "lt_linear_wgrad_cuda",
+__all__ = ["lt_linear_cuda", "lt_linear_train_cuda", "lt_linear_wgrad_cuda", "lt_addmm_train_cuda",
            "compute_dtype_name"]

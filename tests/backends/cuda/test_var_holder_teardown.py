@@ -85,7 +85,7 @@ class TestVarHolderTeardown(unittest.TestCase):
         aborted on every run, because "did not abort" would never have been
         shown to mean anything here."""
         proc = _run_child(_CUDA_FORWARD_ONLY)
-        self.assertIn("BODY-DONE", proc.stdout)
+        self.assertIn("BODY-DONE", proc.stdout, proc.stderr[-8000:])
         self.assertEqual(proc.returncode, 0, proc.stderr[-4000:])
         self.assertNotIn("terminate called", proc.stderr)
 
@@ -96,7 +96,7 @@ class TestVarHolderTeardown(unittest.TestCase):
         # std::runtime_error ... backward liveness release without a matching
         # owner', and returncode 134.
         self.assertNotIn("terminate called", proc.stderr)
-        self.assertIn("BODY-DONE", proc.stdout)
+        self.assertIn("BODY-DONE", proc.stdout, tail)
         self.assertEqual(proc.returncode, 0, tail)
 
 

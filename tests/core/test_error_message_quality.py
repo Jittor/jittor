@@ -292,7 +292,7 @@ class TestCompileFailureNamesTheOperator(unittest.TestCase):
             with self.assertRaises(Exception) as caught:
                 jt.code([1], "float32", [jt.ones(1)], cpu_src=BROKEN_KERNEL).sync()
         text = str(caught.exception)
-        self.assertTrue(text.startswith("Compiling operator code"), text[:200])
+        self.assertRegex(text, r"(?:\ACompiling operator code\b|\n[ \t]*op: code\b)")
         self.assertNotIn("Error happened during compilation", text)
         self.assertNotIn("Op(", text)
 

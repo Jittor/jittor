@@ -56,8 +56,11 @@ class TestHook(unittest.TestCase):
 
     def test_requires_grads_(self):
         class Mod(jt.nn.Module):
+            def __init__(self):
+                self.weight = jt.array(2.0)
+
             def execute(self, x):
-                return x*2
+                return x*self.weight
         x = jt.random((100,))
         mod = Mod()
         mod.requires_grad_(True)
@@ -67,10 +70,12 @@ class TestHook(unittest.TestCase):
         np.testing.assert_allclose(dx.data, 20)
 
         mod.requires_grad_(False)
+        self.assertFalse(mod.weight.requires_grad)
         y = mod(x)
         y = y*10
         dx = jt.grad(y, x)
-        np.testing.assert_allclose(dx.data, 0)
+        # Freezing parameters must retain gradients into upstream inputs.
+        np.testing.assert_allclose(dx.data, 20)
 
 if __name__ == "__main__":
     unittest.main()

@@ -101,6 +101,10 @@ class ComplexNumber:
         return self.value.shape[:-1]
 
     @property
+    def ndim(self):
+        return len(self.shape)
+
+    @property
     def dtype(self):
         return "complex64"
 

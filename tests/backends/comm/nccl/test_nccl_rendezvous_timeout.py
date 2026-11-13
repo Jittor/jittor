@@ -186,7 +186,9 @@ print(json.dumps(outputs), flush=True)
 def _run_import(env_overrides, timeout=_IMPORT_TIMEOUT_S, code=_CHILD):
     """Run `code` in a subprocess. Returns (returncode, output, seconds)."""
     env = dict(os.environ)
-    env["use_nccl"] = "1"
+    # The canonical switch must override an inherited disabled build too.
+    env["JT_BUILD_USE_NCCL"] = "1"
+    env.pop("use_nccl", None)
     env.pop("JT_NCCL_ROOTINFO_FILE", None)
     env.update(env_overrides)
     start = time.time()
@@ -243,6 +245,13 @@ class TestNcclRendezvousTimeout(unittest.TestCase):
             return sock.getsockname()[1]
 
     def test_bad_master_port_times_out_with_endpoint(self):
+        # Cold extension compilation is not part of the endpoint timeout.
+        # Keep the original elapsed-time bound after warming the same child
+        # runtime through a successful, real single-rank initialization.
+        warm = os.path.join(self.tmp.name, "timeout-warm-rootinfo.bin")
+        code, out, _ = _run_import(self._rendezvous_env(0, 1, warm))
+        self.assertEqual(code, 0, out[-3000:])
+        self.assertIn("IMPORT OK", out)
         port = self._free_port()
         env = self._rendezvous_env(1, 2, None)
         env.update({

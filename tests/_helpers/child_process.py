@@ -158,6 +158,20 @@ def child_env(extra=None, inherit=True, without_torch_mode=False,
     env = dict(os.environ) if inherit else {}
     if extra:
         env.update({key: str(value) for key, value in extra.items()})
+    if (extra and "REAL_TORCH_SITE" in extra
+            and not env.get("REAL_TORCH_SITE", "").strip()
+            and env.get("JITTOR_TORCH_SHIM", "").strip().lower()
+            in ("1", "true", "yes", "on")):
+        # A parent pytest oracle already carries its site in PYTHONPATH.
+        # Explicitly switching this child to the shim must remove that owned
+        # site too; clearing the preload variable alone leaves native Torch
+        # ahead of the deployed shim on a plain interpreter's search path.
+        parent_oracle = os.environ.get("REAL_TORCH_SITE", "").strip()
+        if parent_oracle and "PYTHONPATH" in env:
+            oracle_path = os.path.realpath(os.path.expanduser(parent_oracle))
+            env["PYTHONPATH"] = os.pathsep.join(
+                part for part in env["PYTHONPATH"].split(os.pathsep)
+                if not part or os.path.realpath(part) != oracle_path)
     if without_torch_mode:
         # Composition deploys a child-importable torch package under this
         # runtime. Clearing activation flags alone still lets that package
@@ -182,9 +196,15 @@ def child_env(extra=None, inherit=True, without_torch_mode=False,
     # has it on ``sys.path``; sys.path does not travel to a child.
     support = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     roots = [pinned, support]
-    if pinned is not None:
+    oracle = env.get("REAL_TORCH_SITE", "").strip()
+    if oracle:
+        # sys.path changes in pytest's oracle preloader do not reach a new
+        # interpreter. Keep the explicit binary reference ahead of inherited
+        # shim sites, as the parent oracle session does.
+        roots.append(str(Path(oracle).expanduser().resolve()))
+    if pinned is not None or oracle:
         existing = env.get("PYTHONPATH", "")
-        parts = roots + [
+        parts = [part for part in roots if part is not None] + [
             part for part in existing.split(os.pathsep)
             if part and part not in roots
         ]

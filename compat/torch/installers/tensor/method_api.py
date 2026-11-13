@@ -250,6 +250,10 @@ def _torch_setitem(self, slices, value):
     if (not _owner.jt.flags.no_grad and isinstance(value, _NativeVar)
             and value.requires_grad and not self.requires_grad):
         return _ip(self, self.setitem(slices, value), preserve_storage=True)
+    if _owner.jt.flags.no_grad or not self.requires_grad:
+        # Detached indexed stores must keep shared allocations (NumPy,
+        # DLPack and retained aliases), like copy_ and the other in-place ops.
+        return _ip(self, self.setitem(slices, value), preserve_storage=True)
     result = _orig_setitem(self, slices, value)
     return result
 
@@ -295,6 +299,11 @@ def _copy_detached_storage(self, value):
         # storage at its boundary. Executing a store here would run part of
         # the step before that transaction can accept or refuse the graph.
         return False
+    # Inference GraphReplay retains operators, not imperative storage writes.
+    # A replay could reset a freshly built mask without repeating its indexed
+    # updates. Refuse during warm-up, before a second call can mutate state.
+    if self._mem_ptr_now:
+        _owner.jt.graph_replay_barrier("an in-place storage update requires step capture")
     if self.numel():
         # Establish the destination before a storage-preserving write. A
         # pending view may already alias a materialized base; graph rebinding
@@ -487,6 +496,10 @@ def _new_finish(v, device=None, requires_grad=False):
         if v.placement_backend < 0:
             _owner._set_use_cuda()
         v = _owner._make_cuda_resident(v, force=True, device=device)
+    # new_* factories create detached leaves independently of the source's
+    # gradient policy. Native empty() is a trainable leaf by default, unlike
+    # Torch's new_empty(); leaving it so rejects DropPath's bernoulli_().
+    v = v.detach()
     if requires_grad:
         v.requires_grad_(True)
         _owner._torch_register_leaf(v)

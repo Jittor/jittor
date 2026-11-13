@@ -684,6 +684,12 @@ def matmul(a, b):
         assert c.shape == [8, 10, 3, 5]
     """
     _check_matmul_shapes(a, b)
+    if not isinstance(a, jt.Var):
+        # The legacy real/imag pair has its own product. Native BLAS kernels
+        # accept Vars and must not interpret the pair as a native complex Var.
+        from jittor.nn.legacy_complex import ComplexNumber
+        if isinstance(a, ComplexNumber) and isinstance(b, ComplexNumber):
+            return a @ b
     with _contraction_scope(half_operands=_both_half(a, b)):
         len_a = len(a.shape)
         len_b = len(b.shape)

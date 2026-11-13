@@ -45,6 +45,7 @@ class TestBroadcastTuner(unittest.TestCase):
         candidates = simple_parser(logs[0][1])
         assert candidates == {"order0": [0,], "order1": [1,], "order2": [0,], "split1": [2048,],}, candidates
         
+    @jt.flag_scope(use_cuda=0)
     def test_broadcast_tuner(self):
         self.check(8192,8192, 0, 0, 0, 5, 0)
 

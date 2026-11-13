@@ -79,6 +79,14 @@ epoch count between core and JIT libraries. `TraversalEpoch` lives in `src/runti
 traversal marks are restored before leaving the epoch, **including during exception unwinding**.
 Fork preserves the counters to avoid clashing with inherited node stamps.
 
+`TraversalQueueMarks` distinguishes queued nodes from expanded storage-alias rings within one
+traversal owner, avoiding per-node restoration records for two states of the same walk. Genuine
+nesting still restores outer stamps. This owner is for synchronous traversal; it neither caches
+reader sets nor omits alias and saved-activation checks before writes.
+Within one walk, a multi-output operator with no pending output or sharing expansion needs only one empty
+scan, instead of checking hundreds of outputs for every fused-optimizer state input. This
+memoization does not survive the walk or carry over to another training step.
+
 `runtime/device_state.h` holds `use_cuda`, `device_id`, `sync_run`, cached device count/current
 device, device-switch hooks and peer-access accounting. `runtime/device.{h,cc}` provides device
 operations; the old `misc/cuda_flags.*` is deleted. `DEFINE_RUNTIME_FLAG` registers

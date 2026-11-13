@@ -392,6 +392,11 @@ static void release_kept_storage(Var* v, const std::unordered_set<Var*>& release
 // tensors never wait on a stream.
 #ifdef HAS_ACCELERATOR
 static bool host_op_reads_device_memory(Op* op) {
+    // Tapes only groups a custom VJP. Its forward is Op::run(), which is
+    // empty, and _no_input_storage keeps its control edges data-free. A
+    // device wait here serializes transposed GEMMs and is illegal while
+    // recording their training step. Other manual-device ops still wait.
+    if (dynamic_cast<Tapes*>(op)) return false;
     if (use_cuda_managed_allocator || op->flag(OpFlags::_manual_device)) return true;
     for (Var* v : op->inputs())
         if (v->allocator && v->allocator->is_cuda()) return true;

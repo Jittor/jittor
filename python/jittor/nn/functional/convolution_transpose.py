@@ -6,6 +6,8 @@ from jittor._runtime.dispatch import select_kernel
 from ._amp import bias_for_compute_dtype
 
 def conv_transpose(input, weight, bias=None, stride=1, padding=0, output_padding=0, groups=1, dilation=1):
+    if bias is False:
+        bias = None
     if groups == 1:
         x = input
         if x.dim() != 4:

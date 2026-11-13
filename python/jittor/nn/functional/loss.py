@@ -96,14 +96,22 @@ class _CrossEntropyRows(jt.Function):
         # Spelled exactly as the composite did: under the Torch frontend
         # `x.max(1)` is torch's (values, indices) pair.
         top = x.max([1], keepdims=True)
-        lse = ((x - top).exp().sum([1], keepdims=True).log() + top).reshape((rows,))
+        # Keep the normalization in shifted coordinates. Adding top back
+        # before subtracting a target logit loses log(sum(exp)) for large
+        # common offsets, corrupting both the loss and exp(x - lse) in grad.
+        shifted = x - top
+        logsum = shifted.exp().sum([1], keepdims=True).log().reshape((rows,))
         picked = x.reindex([rows], ["i0", "@e0(i0)"], extras=[safe])
-        self.saved = (x, safe, lse, target_weight)
-        return (lse - picked) * target_weight
+        # Retain only per-row normalization values beside the original logits;
+        # recompute the shift in the fused backward instead of saving [N, C].
+        self.saved = (x, safe, top, logsum, target_weight)
+        # Gather before shifting the target: sharing `shifted` between the
+        # reduction and gather would materialize another full [N, C] tensor.
+        return (logsum - (picked - top.reshape((rows,)))) * target_weight
 
     def grad(self, dloss):
         # Not cleared: a retain_graph backward may call grad() again.
-        x, safe, lse, target_weight = self.saved
+        x, safe, top, logsum, target_weight = self.saved
         scale = dloss * target_weight
         # `scale` at each row's target column and 0 elsewhere, built by the
         # reindex itself -- a one-hot from `index(1) == target` would
@@ -111,7 +119,8 @@ class _CrossEntropyRows(jt.Function):
         at_target = scale.reindex(x.shape, ["i0"], overflow_value=0,
                                   overflow_conditions=["i1 != @e0(i0)"],
                                   extras=[safe])
-        dx = (x - lse.broadcast(x, [1])).exp() * scale.broadcast(x, [1]) - at_target
+        logp = (x - top) - logsum.broadcast(x, [1])
+        dx = logp.exp() * scale.broadcast(x, [1]) - at_target
         if self.narrow_dtype is not None:
             dx = dx.cast(self.narrow_dtype)
         return dx, None, None
@@ -170,6 +179,10 @@ def cross_entropy_loss(output, target, weight=None, ignore_index=None,reduction=
             target_weight
         )
 
+    # The custom forward and the normalization share these row weights.
+    # Give that boundary its own storage: a fused mask producer otherwise
+    # leaves the parallel CPU denominator with only one worker's partial sum.
+    target_weight = target_weight.clone()
     loss = _CrossEntropyRows.apply(output, target, target_weight)
     _check_reduction(reduction)
     if reduction == 'sum':

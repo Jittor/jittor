@@ -90,6 +90,9 @@ class TestBatchIndexIsChecked(unittest.TestCase):
         # only those nested writes and restores them before the outer resumes.
         jt.tests.traversal_epoch_restores_outer_marks()
 
+    def test_queue_and_expansion_marks_share_one_owner_and_restore_nested_states(self):
+        jt.tests.traversal_queue_marks_restore_states()
+
     def test_runtime_traversal_state_restores_after_exception(self):
         jt.tests.runtime_traversal_state_restores_after_exception()
 

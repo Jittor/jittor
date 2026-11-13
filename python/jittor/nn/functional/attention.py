@@ -147,10 +147,22 @@ def _opmath_scope(query):
     )
 
 
+def _attention_scale_factors(query, scale):
+    # Balance expanding FP32 scales: applying the whole scale to Q can
+    # overflow even when the scaled dot product is finite. Preserve the
+    # usual shrinking scale and wider arithmetic's existing scalar path.
+    if _jittor_dtype_name(query.dtype) == "float32" and abs(scale) > 1.0:
+        root = math.sqrt(abs(scale))
+        return (-root if scale < 0 else root), root
+    return scale, 1.0
+
+
 def _attention_probabilities(query, key, attn_mask, is_causal, scale):
     """Softmax over keys, in float32 or wider."""
     query, key = _softmax_precision(query), _softmax_precision(key)
-    scores = _product(query * scale, key, trans_b=True)
+    query_scale, key_scale = _attention_scale_factors(query, scale)
+    scores = _product(query * query_scale,
+                      key if key_scale == 1.0 else key * key_scale, trans_b=True)
     scores = _attention_bias(_softmax_precision(scores), attn_mask, is_causal)
     top = scores.max([-1], keepdims=True)
     top = jt.ternary(jt.isinf(top), jt.zeros_like(top), top)
@@ -189,8 +201,12 @@ def _attention_gradients(query, key, value, probabilities, grad_out, scale, *,
         row = (grad_out * _softmax_precision(rounded_output)).sum([-1], keepdims=True)
     grad_scores = probabilities * (grad_prob - row)
     if rounded_output is None:
-        grad_query = _product(grad_scores, wide_key) * scale
-        grad_key = _product(grad_scores, wide_query * scale, trans_a=True)
+        query_scale, key_scale = _attention_scale_factors(wide_query, scale)
+        scaled_key = wide_key if key_scale == 1.0 else wide_key * key_scale
+        grad_query = _product(grad_scores, scaled_key) * query_scale
+        grad_key = _product(grad_scores, wide_query * query_scale, trans_a=True)
+        if key_scale != 1.0:
+            grad_key = grad_key * key_scale
     else:
         grad_scores = _softmax_precision(grad_scores.cast(query.dtype))
         grad_query = _product(grad_scores, wide_key) * scale
@@ -550,16 +566,11 @@ def _composite(query, key, value, attn_mask, probability, is_causal, scale_facto
             )
     query_length = int(query.shape[-2])
     source_length = int(key.shape[-2])
-    if scale_factor != 1.0:
-        # Fold the softmax scale into Q rather than into the N x N scores.
-        # `(q*s) @ k^T` equals `s * (q @ k^T)` exactly, but the multiply then
-        # touches batch*heads*Lq*head_dim elements instead of
-        # batch*heads*Lq*Lk. On the MiniMax-H3 video VAE's 32-head, 1797-token
-        # decoder blocks that is 3.7M elements instead of 103M, and the scores
-        # multiply was the largest single non-GEMM kernel in its profile. The
-        # usual 1/sqrt(head_dim) is a power of two for the 64-wide heads here,
-        # so the fold is exact in float16 as well.
-        query = query * scale_factor
+    query_scale, key_scale = _attention_scale_factors(query, scale_factor)
+    if query_scale != 1.0:
+        query = query * query_scale
+    if key_scale != 1.0:
+        key = key * key_scale
     scores = _product(query, key, trans_b=True)
     softmax_options = dict(log=False, zero_all_neg_inf=attn_mask is not None, dim=-1)
     fast_softmax = select_kernel("nn.softmax", scores, **softmax_options)

@@ -54,6 +54,48 @@ class MixedSamples(torch.utils.data.Dataset):
                 np.array([index], dtype='float64'))
 
 
+class NumpySamples(torch.utils.data.Dataset):
+    def __len__(self):
+        return 9
+
+    def __getitem__(self, index):
+        return {'image': np.full((3, 4), index/10, dtype='float32'),
+                'wide': np.array([index+.25], dtype='float64'),
+                'label': np.int64(index), 'mask': np.bool_(index % 2),
+                'complex': np.array([index+2j], dtype='complex64')}
+
+
+def test_numpy_collation_preserves_dtypes_and_retained_batches_after_worker_reuse():
+    order = [[0, 3, 1], [7], [6, 2], [8, 4, 5]]
+    loader = torch.utils.data.DataLoader(NumpySamples(), batch_sampler=order,
+                                         num_workers=2, persistent_workers=True)
+    try:
+        first = list(loader)
+        order.reverse()
+        later = list(loader)
+        for batches, indices in ((first, list(reversed(order))), (later, order)):
+            for batch, selected in zip(batches, indices):
+                assert batch['image'].device.type == 'cpu' and not batch['image'].requires_grad
+                assert batch['image'].dtype == torch.float32
+                assert batch['wide'].dtype == torch.float64
+                assert batch['label'].dtype == torch.int64
+                assert batch['mask'].dtype == torch.bool
+                assert batch['complex'].dtype == torch.complex64
+                np.testing.assert_allclose(batch['image'].numpy(),
+                                           np.array([np.full((3, 4), i/10) for i in selected]))
+                np.testing.assert_array_equal(batch['label'].numpy(), selected)
+                np.testing.assert_array_equal(batch['complex'].numpy().reshape(-1),
+                                              np.array(selected)+2j)
+        if torch.cuda.is_available():
+            result = first[0]['image'].to('cuda')*2
+            assert result.device.type == 'cuda'
+            np.testing.assert_allclose(result.cpu().numpy(), first[0]['image'].numpy()*2)
+    finally:
+        del loader
+        gc.collect()
+    np.testing.assert_array_equal(first[0]['label'].numpy(), [0, 3, 1])
+
+
 def test_unbatched_process_results_preserve_scalar_dtype_and_numpy_leaves():
     loader = torch.utils.data.DataLoader(MixedSamples(), batch_size=None, num_workers=2,
                                          collate_fn=lambda sample: sample)
@@ -64,6 +106,34 @@ def test_unbatched_process_results_preserve_scalar_dtype_and_numpy_leaves():
         assert isinstance(numpy_value, np.ndarray) and numpy_value.dtype == np.float64
         assert integer.item() == index and boolean.item() == (index % 2 == 0)
         np.testing.assert_array_equal(numpy_value, [index])
+
+
+@pytest.mark.parametrize('dtype,shape', [('float32', (3, 4)), ('int64', ()),
+                                         ('complex64', (5,))])
+def test_process_encoding_borrows_cpu_storage_until_transport_copies_it(dtype, shape):
+    from jittor.compat.torch._dataloader_ipc import encode_batch, send_frame, receive_frame, decode_batch
+    source = np.arange(max(1, int(np.prod(shape))), dtype='float32').astype(dtype).reshape(shape)
+    tensor = torch.from_numpy(source)
+    encoded = encode_batch(tensor)
+    assert np.shares_memory(encoded[2], source)
+    source[...] = 7
+    np.testing.assert_array_equal(encoded[2], np.full(shape, 7))
+    # The borrowed view keeps its tensor owner alive, including scalar and
+    # complex storage. Transmission still produces an independent snapshot.
+    del tensor
+    gc.collect()
+    writer, reader = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+    try:
+        send_frame(writer, 'batch', 0, encoded)
+        source[...] = 11
+        frame = receive_frame(reader)
+        restored = decode_batch(frame.decode())
+        assert restored.device.type == 'cpu'
+        np.testing.assert_array_equal(restored.numpy(), np.full(shape, 7))
+        np.testing.assert_array_equal(encoded[2], np.full(shape, 11))
+    finally:
+        writer.close()
+        reader.close()
 
 
 class FailingSamples(ProcessSamples):

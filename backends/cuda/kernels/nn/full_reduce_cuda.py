@@ -1,4 +1,4 @@
-"""CUDA fast path for reductions that collapse a whole Var to one value.
+"""CUDA fast paths for whole-Var and frozen spatial reductions.
 
 The generated kernel for a full reduction has every thread ``atomicAdd`` its
 partial into the single output element. With the thread count the code generator
@@ -10,6 +10,9 @@ atomic count, not the data. PyTorch does the same reductions in ``10-11us``.
 This path reduces in two stages instead: each block folds its slice with a CUB
 block reduction and writes one partial, then a single block folds the partials.
 No atomics, so the result is also reproducible run to run.
+
+Dense gradient-free FP32 H/W means use a fixed four-accumulator tree, keeping
+small spatial averages reproducible across the method and root spellings.
 
 For multidimensional CUDA inputs, a generated last-axis block fold first fuses
 the pending producer into row partials, avoiding a full-sized temporary at the
@@ -154,8 +157,27 @@ def _is_full_reduction(args, kwargs):
     return not (kwargs.get("keepdims") or kwargs.get("keepdim"))
 
 
+def _spatial_reduction(args, kwargs):
+    """Return keepdim for an unambiguous H/W mean, or decline the signature."""
+    if len(args) > 2 or set(kwargs) - {"dim", "dims", "axis", "keepdim", "keepdims"}:
+        return None
+    dimensions = [kwargs[key] for key in ("dim", "dims", "axis") if key in kwargs]
+    if len(dimensions) > 1 or (args and dimensions):
+        return None
+    dims = args[0] if args else dimensions[0] if dimensions else None
+    if (not isinstance(dims, (list, tuple)) or len(dims) != 2
+            or any(type(dim) is not int for dim in dims)
+            or tuple(sorted(dim + 4 if dim < 0 else dim for dim in dims)) != (2, 3)):
+        return None
+    keeps = [kwargs[key] for key in ("keepdim", "keepdims") if key in kwargs]
+    if len(keeps) > 1 or (len(args) > 1 and keeps):
+        return None
+    keep = args[1] if len(args) > 1 else keeps[0] if keeps else False
+    return keep if type(keep) is bool else None
+
+
 def _route(native, mean):
-    """Wrap one reduction entry point so a whole-Var call takes the fast path.
+    """Route admitted whole-Var reductions and frozen spatial means.
 
     ``mean=True`` divides by the element count. Both entry points for a
     reduction -- the method and the root function -- get a wrapper built here,
@@ -163,6 +185,13 @@ def _route(native, mean):
     """
 
     def reduce_entry(x, *args, **kwargs):
+        if mean and isinstance(x, jt.Var) and len(x.shape) == 4:
+            keep = _spatial_reduction(args, kwargs)
+            if keep is not None:
+                from .spatial_mean_cuda import _spatial_mean_cuda
+                fast = _spatial_mean_cuda(x, keepdim=keep)
+                if fast is not None:
+                    return fast
         if _is_full_reduction(args, kwargs):
             divisor = int(x.numel()) if mean and isinstance(x, jt.Var) else None
             if mean and divisor is None:

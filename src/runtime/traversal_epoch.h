@@ -66,4 +66,35 @@ public:
 
 };
 
+// A queue walk needs two states, not two nested traversals. Reserving the
+// expansion stamp in a short empty epoch leaves this owner as the only active
+// walk. Ordinary queue/expanded transitions therefore allocate no restoration
+// log; true nesting still restores whichever outer state was borrowed.
+struct TraversalQueueMarks final : TraversalEpoch {
+    int64 expanded_stamp;
+    static int64 reserve_expansion_stamp() {
+        TraversalEpoch reservation("queue expansion stamp");
+        return reservation.stamp;
+    }
+    explicit TraversalQueueMarks(const char* name)
+        : TraversalEpoch(name), expanded_stamp(reserve_expansion_stamp()) {}
+    bool contains(const Node* node) const {
+        return node->tflag == stamp || node->tflag == expanded_stamp;
+    }
+    bool expanded(const Node* node) const { return node->tflag == expanded_stamp; }
+    void mark_queued(Node* node) {
+        if (!contains(node)) TraversalEpoch::mark(node);
+    }
+    void mark_expanded(Node* node) {
+        mark_queued(node);
+        node->tflag = expanded_stamp;
+    }
+    ~TraversalQueueMarks() {
+        // The base destructor restores its one stamp. Convert only marks this
+        // owner still holds; a nested owner has already returned its marks.
+        for (const auto& item : displaced)
+            if (item.first->tflag == expanded_stamp) item.first->tflag = stamp;
+    }
+};
+
 } // jittor

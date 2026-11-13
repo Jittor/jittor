@@ -22,6 +22,29 @@ def _round_reference(value, dtype):
 
 
 class TestAttentionOpmath(unittest.TestCase):
+    def test_balanced_fp32_scale_avoids_intermediate_overflow(self):
+        device = os.environ.get("JITTOR_TEST_DEVICE", "cpu")
+        with jt.flag_scope(use_cuda=int(device == "cuda"), amp_reg=0), forbid_backend_fallbacks():
+            for scale, expected in ((1e20, 2.), (-1e20, 1.)):
+                with self.subTest(scale=scale):
+                    tensors = [jt.array(value).float32() for value in (
+                        [[[[1e20]]]], [[[[1e-20], [2e-20]]]], [[[[1.], [2.]]]])]
+                    output = attention._MemoryEfficientAttention.apply(
+                        *tensors, None, False, scale)
+                    gradients = jt.grad(output.sum(), tensors)
+                    wanted = (np.array([[[[expected]]]]), np.zeros((1, 1, 1, 1)),
+                              np.zeros((1, 1, 2, 1)),
+                              np.array([[[[0.], [1.]]]]) if scale > 0 else
+                              np.array([[[[1.], [0.]]]]))
+                    for actual, reference in zip([output, *gradients], wanted):
+                        actual.sync()
+                        self.assertEqual(actual.location(), "device" if device == "cuda" else "cpu")
+                        np.testing.assert_array_equal(actual.numpy(), reference)
+                    with jt.no_grad():
+                        inference = attention._composite(
+                            *tensors, None, 0., False, scale, "float32")
+                        np.testing.assert_array_equal(inference.numpy(), wanted[0])
+
     def _check(self, dtype, training, amp_reg=0, head_dim=8, public=False):
         device = os.environ.get("JITTOR_TEST_DEVICE", "cpu")
         self.assertIn(device, ("cpu", "cuda"))

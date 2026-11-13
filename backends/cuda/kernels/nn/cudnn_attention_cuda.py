@@ -64,6 +64,10 @@ def _include_dirs(frontend):
 def _build(frontend):
     """Compile ``cudnn_sdpa.cc`` into the cache once, and load it globally."""
     from jittor.build import compiler
+    # Frontend headers emit NVRTC references even when cuDNN itself was loaded
+    # through the legacy toolkit path. Resolve that dependency explicitly;
+    # loading the extension must not rely on another framework preloading it.
+    compiler.preload_cuda_library("nvrtc", required=True)
     includes = _include_dirs(frontend)
     with open(_SOURCE, "rb") as source:
         digest = hashlib.sha1(source.read())

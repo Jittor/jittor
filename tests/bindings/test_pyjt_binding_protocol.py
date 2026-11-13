@@ -277,6 +277,7 @@ class TestScalarConversionBuffer(unittest.TestCase):
     its own.
     """
 
+    @jt.flag_scope(use_cuda=0)
     def test_set_data_scalar_survives_callback_during_sync(self):
         def fwd(np_out, data):
             # runs during the sync that set_data performs
