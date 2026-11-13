@@ -42,3 +42,40 @@ def test_nested_grad_callback_preserves_shared_multioutput_gradients(use_cuda):
         assert len(callbacks) == 2
         if use_cuda:
             assert dx.location() == dw.location() == "device"
+
+
+@pytest.mark.parametrize("use_cuda", [False, True], ids=["cpu", "cuda"])
+def test_shared_multioutput_gradients_keep_target_order_across_backward_calls(use_cuda):
+    if use_cuda and not capability.check_accelerator("cuda", backend=jt).enabled:
+        pytest.skip("CUDA is unavailable in this build")
+    callbacks = []
+
+    class Pair(jt.Function):
+        def execute(self, x, weight):
+            self.x, self.weight = x, weight
+            return x * weight, x + weight
+
+        def grad(self, product_grad, sum_grad):
+            callbacks.append(True)
+            return (self.weight * product_grad + sum_grad,
+                    self.x * product_grad + sum_grad)
+
+    with jt.flag_scope(use_cuda=int(use_cuda), missing_grad_error=1):
+        x, weight, unrelated = jt.array([1., 2.]), jt.array([3., 4.]), jt.array([7.])
+        product, total = Pair()(x, weight)
+        loss = (product + 2*total).sum()
+        # A grouped producer must run once even though it has two requested
+        # inputs. Missing targets and the loss itself keep their caller order,
+        # and a later backward starts with its own grouped-op consumption.
+        for retain_graph in (True, False):
+            dw, missing, dx, seed = jt.core.grad_optional(
+                loss, [weight, unrelated, x, loss], retain_graph)
+            assert missing is None
+            for value in (dw, dx, seed):
+                value.sync()
+                if use_cuda:
+                    assert value.location() == "device"
+            np.testing.assert_array_equal(dw.numpy(), [3., 4.])
+            np.testing.assert_array_equal(dx.numpy(), [5., 6.])
+            np.testing.assert_array_equal(seed.numpy(), [1.])
+        assert len(callbacks) == 2

@@ -348,24 +348,25 @@ vector<VarPtr> grad(
     
     vector<Node*> sorted;
     toplogical_sort_backward(gnodes, sorted, [](Node*){});
-    NodeIndex grad_nodes;
-    grad_nodes.reset(sorted.size());
-    for (Node* node : sorted) grad_nodes[node] = 1;
     vector<Var*> gvars;
     gvars.reserve(sorted.size());
-    // Position of each gradient var in `gvars`. This used to be written into
-    // Node::custom_data, the per-node int the executor keeps *its* op and var
-    // indices in -- and building the backward ops below re-enters run_sync
-    // (Op::init does, for a vary-shape op), so the two numberings were live at
-    // the same time on the same nodes.
-    NodeIndex gvar_index;
-    gvar_index.reset(sorted.size());
-    for (Node* node : sorted)
+    // One fresh index owns this traversal's membership, variable positions
+    // and grouped-op consumption. Vars have non-negative positions; the two
+    // negative op states cannot be confused with an absent node (-1). Keep
+    // this beside the traversal: gradient callbacks may build another graph
+    // or enter a nested grad(), which must have independent indices.
+    constexpr int op_pending = -2, op_consumed = -3;
+    NodeIndex backward_index;
+    backward_index.reset(sorted.size());
+    for (Node* node : sorted) {
         if (node->is_var()) {
             Var* v = node->var();
-            gvar_index[v] = gvars.size();
+            backward_index[v] = gvars.size();
             gvars.push_back(v);
+        } else {
+            backward_index[node] = op_pending;
         }
+    }
     LOGvv << "Size of grad vars:" << gvars.size();
     
     vector<VarPtr> grads(gvars.size());
@@ -380,8 +381,7 @@ vector<VarPtr> grad(
         // recorded must not erase that consumer's existing edge. A direct
         // unrecorded backward root still has no accumulator to seed.
         target_id[i] = (var != loss || !var->flag(VarFlags::_unrecorded_view))
-            && gvar_index.has(var) ?
-            gvar_index.get(var) : -1;
+            ? backward_index.get(var) : -1;
         if (target_id[i] >= 0) is_target[target_id[i]] = true;
     }
 
@@ -389,14 +389,11 @@ vector<VarPtr> grad(
         grads[0] = make_number(1.f, loss);
         assign_attrs(grads[0].ptr, loss);
         auto producer = backward_grad_fn(loss);
-        if (loss->grad_hook && is_target[0] && producer && grad_nodes.has(producer))
+        if (loss->grad_hook && is_target[0] && producer && backward_index.has(producer))
             observed_target_grads[loss] = grads[0].ptr;
         if (!loss->flag(VarFlags::_unrecorded_view))
             apply_tensor_hook(loss, grads[0]);
     }
-
-    NodeIndex consumed_grouped_ops;
-    consumed_grouped_ops.reset(sorted.size());
 
     struct GradOpSnapshot {
         Op* op;
@@ -423,24 +420,24 @@ vector<VarPtr> grad(
         outgoing.reserve(var->outputs().size());
         for (auto it : var->outputs_with_index()) {
             Op* op = it.op;
-            if (!grad_nodes.has(op)) continue;
+            if (!backward_index.has(op)) continue;
             if (is_requires_grad_disabled_edge(var, op)) continue;
-            if (op->flag(OpFlags::_grads) && consumed_grouped_ops.has(op))
+            if (op->flag(OpFlags::_grads) && backward_index.get(op) == op_consumed)
                 continue;
 
             GradOpSnapshot snapshot{op, it.index, outgoing_outputs.size(), 0,
                                    outgoing_input_grad_ids.size(), 0};
             for (Var* out : op->outputs())
                 outgoing_outputs.emplace_back(
-                    out, gvar_index.has(out) ? gvar_index.get(out) : -1);
+                    out, backward_index.get(out));
             snapshot.output_end = outgoing_outputs.size();
 
             if (op->flag(OpFlags::_grads)) {
-                consumed_grouped_ops[op] = 1;
+                backward_index[op] = op_consumed;
                 for (Var* in : op->inputs())
                     outgoing_input_grad_ids.push_back(
                         !is_requires_grad_disabled_edge(in, op)
-                            && gvar_index.has(in) ? gvar_index.get(in) : -1);
+                            ? backward_index.get(in) : -1);
             }
             snapshot.input_end = outgoing_input_grad_ids.size();
             outgoing.push_back(move(snapshot));
@@ -530,7 +527,7 @@ vector<VarPtr> grad(
         // still run, and the returned gradient includes their replacement.
         if (grad && var->grad_hook && is_target[i]) {
             auto producer = backward_grad_fn(var);
-            if (producer && grad_nodes.has(producer))
+            if (producer && backward_index.has(producer))
                 observed_target_grads[var] = grad.ptr;
         }
         apply_tensor_hook(var, grad);
@@ -562,15 +559,15 @@ vector<VarPtr> grad(
     if (!retain_graph && !step_backward_probes.empty()) {
         for (Var* v : gvars) {
             Op* producer = backward_grad_fn(v);
-            if (producer && grad_nodes.has(producer))
+            if (producer && backward_index.has(producer))
                 completed_backward_vars.push_back(v->id);
         }
     }
     if (!retain_graph) {
-        unordered_set<Var*> held_vars;
-        held_vars.reserve(runtime_holder_state().holders().size());
+        NodeIndex held_vars;
+        held_vars.reset(runtime_holder_state().holders().size());
         for (auto& vh : runtime_holder_state().holders())
-            held_vars.insert(vh->var);
+            held_vars[vh->var] = 1;
         SetupFreeBuffer setup_free_buffer;
         // Mark before releasing: set_stop_grad drops backward liveness and can
         // queue the node for free. The mark records *why* this var stopped
@@ -581,10 +578,10 @@ vector<VarPtr> grad(
         // grad_fn in torch (`running_loss += loss` afterwards is legal); the
         // producer is about to be released, so record it now.
         for (Var* v : gvars)
-            if (held_vars.count(v) && v->input() && backward_grad_fn(v))
+            if (held_vars.has(v) && v->input() && backward_grad_fn(v))
                 v->set_flag(VarFlags::_had_backward_producer);
         for (int i=int(gvars.size())-1; i>=0; i--)
-            if (!held_vars.count(gvars[i]) && gvars[i]->liveness.backward.active()) {
+            if (!held_vars.has(gvars[i]) && gvars[i]->liveness.backward.active()) {
                 gvars[i]->set_flag(VarFlags::_graph_freed);
                 gvars[i]->set_stop_grad();
             }
