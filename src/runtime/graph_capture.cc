@@ -260,26 +260,41 @@ bool graph_dynamic_condition_supported(Var* condition) {
 
 vector<int64> gradient_producer_orders(const vector<VarHolder*>& gradients) {
     ExecutorEntryScope entry;
+    // Creation IDs are not a readiness order: autograd can create a gradient
+    // early even though it depends on the entire backward. Sending its
+    // bucket first then blocks every following collective. Rank dependencies
+    // instead, memoizing shared subgraphs across all gradients. This is warmup
+    // metadata only; it does not evaluate a tensor or change the graph.
+    std::unordered_map<Var*, int64> depth;
+    std::unordered_set<Var*> visiting;
+    vector<std::pair<Var*, bool>> stack;
     vector<int64> result;
     for (auto* holder : gradients) {
-        Var* value = holder->var;
-        std::unordered_set<Var*> seen;
-        while (seen.insert(value).second) {
+        stack.emplace_back(holder->var, false);
+        while (!stack.empty()) {
+            auto frame = stack.back();
+            stack.pop_back();
+            Var* value = frame.first;
+            if (depth.count(value)) continue;
             Op* op = value->input();
-            if (!op) break;
-            if (auto* tape = dynamic_cast<TapeOp*>(op)) {
-                value = tape->input(0);
+            if (value->is_finished() || !op) {
+                depth[value] = 0;
                 continue;
             }
-            const string name = op->name();
-            if ((op->is_storage_view() || name == "clone" || name == "contiguous"
-                    || name == "copy") && op->_inputs.size() == 1) {
-                value = op->input(0);
+            if (frame.second) {
+                int64 prior = 0;
+                for (Var* input : op->inputs()) prior = std::max(prior, depth.at(input));
+                depth[value] = prior + !(op->is_storage_view() || dynamic_cast<TapeOp*>(op));
+                visiting.erase(value);
                 continue;
             }
-            break;
+            USER_CHECK(visiting.insert(value).second)
+                << "gradient readiness metadata encountered a dependency cycle";
+            stack.emplace_back(value, true);
+            for (Var* input : op->inputs())
+                if (!depth.count(input)) stack.emplace_back(input, false);
         }
-        result.push_back(value->input() ? value->input()->id : value->id);
+        result.push_back(depth.at(holder->var));
     }
     return result;
 }

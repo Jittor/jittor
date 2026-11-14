@@ -96,8 +96,8 @@ bool graph_capture_host_leaf(Node* node);
 // execution immediately rather than finish an executed update twice.
 bool graph_dynamic_condition_supported(Var* condition);
 
-// Private DDP warmup metadata: ignore publication/storage-only wrappers when
-// estimating the construction order of the mathematical gradient producers.
+// Private DDP warmup metadata: remaining dependency depth, ignoring
+// publication/storage-only wrappers. Creation IDs do not express readiness.
 // No tensor values are read and no gradient is evaluated.
 // @pyjt(_gradient_producer_orders)
 vector<int64> gradient_producer_orders(const vector<VarHolder*>& gradients);

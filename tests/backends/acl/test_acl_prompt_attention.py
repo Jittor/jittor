@@ -161,7 +161,7 @@ def test_causal_and_noncausal_programs_and_masks_do_not_cross_pollute():
     length, width = 17, 64
     for index, causal in enumerate((True, False, True, False)):
         host, tensors = _inputs(1, 2, 2, length, width, seed=301 + index)
-        output = attention._prompt_prefill_310p(*tensors, 1.0 / math.sqrt(width), is_causal=causal)
+        output = attention._prompt_prefill_padded(*tensors, 1.0 / math.sqrt(width), is_causal=causal)
         output.sync(True)
         np.testing.assert_allclose(
             output.numpy(), _reference(*host, 1.0 / math.sqrt(width), is_causal=causal),
@@ -176,7 +176,7 @@ def test_causal_and_noncausal_programs_and_masks_do_not_cross_pollute():
     expected_full[:, length:] = True
     np.testing.assert_array_equal(actual_full, expected_full)
     # A host read must not poison the next same-mode invocation either.
-    output = attention._prompt_prefill_310p(*tensors, 1.0 / math.sqrt(width), is_causal=False)
+    output = attention._prompt_prefill_padded(*tensors, 1.0 / math.sqrt(width), is_causal=False)
     output.sync(True)
     assert attention._prompt_full_mask_cache[key].location() == "device"
     np.testing.assert_allclose(

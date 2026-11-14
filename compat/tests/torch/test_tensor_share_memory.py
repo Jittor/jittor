@@ -3,6 +3,7 @@ import multiprocessing as mp
 import unittest
 
 import numpy as np
+from _helpers.child_process import default_timeout
 
 
 def _increment_shared_tensor(tensor):
@@ -54,9 +55,22 @@ class TensorShareMemoryTest(unittest.TestCase):
         process = mp.get_context("spawn").Process(
             target=_increment_shared_tensor, args=(value,))
         process.start()
-        process.join(30)
-        self.assertEqual(process.exitcode, 0)
-        np.testing.assert_allclose(value.numpy(), [6.0, 7.0, 8.0])
+        try:
+            # Spawn imports Jittor afresh. Share the suite's cold-start budget;
+            # the property under test is visible writes, not import latency.
+            seconds = default_timeout()
+            process.join(seconds)
+            self.assertFalse(process.is_alive(), 'shared-tensor child exceeded %s s' % seconds)
+            self.assertEqual(process.exitcode, 0)
+            np.testing.assert_allclose(value.numpy(), [6.0, 7.0, 8.0])
+        finally:
+            if process.is_alive():
+                process.terminate()
+                process.join(5)
+                if process.is_alive():
+                    process.kill()
+                    process.join(5)
+            process.close()
 
 
 if __name__ == "__main__":
