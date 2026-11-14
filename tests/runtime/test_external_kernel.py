@@ -37,8 +37,9 @@ def test_lazy_pipeline_and_multiple_outputs():
         assert seen == [True]
 
 
-def test_strided_input_and_repeated_calls():
-    with jt.flag_scope(use_cuda=0):
+@pytest.mark.parametrize("lazy", [0, 1])
+def test_strided_input_and_repeated_calls(lazy):
+    with jt.flag_scope(use_cuda=0, lazy_execution=lazy):
         for value in range(3):
             x = jt.array(np.arange(12, dtype=np.float32).reshape(3, 4)) + value
             x = x.transpose(1, 0)

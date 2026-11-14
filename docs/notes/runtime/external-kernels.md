@@ -8,7 +8,7 @@
 
 在已经配置好 CUDA 的 Jittor 环境中，按需安装 `pip install 'jittor[triton]'` 或 `pip install 'jittor[tilelang]'`。这两个 extra 分别固定 Triton 3.9.0 和 TileLang 0.1.15；TileLang 编译器本身依赖 PyTorch，但以下执行路径由 Jittor 分配输入、输出，不经过 TileLang 的 Torch 调用包装。
 
-当前接口是实验性的，编译器入口只接受 CUDA。CPU 回调接口可用于其他外部实现；ROCm 和 NPU 不会偷偷回退到 CPU。硬件测试位于 `tests/backends/cuda/test_native_kernel_compilers.py`，通用执行语义测试位于 `tests/runtime/test_external_kernel.py`；最新验收结果记录在 PR 中。
+可选编译器依赖要求 Linux 和 Python 3.10 及以上。当前接口是实验性的，编译器入口只接受 CUDA。CPU 回调接口可用于其他外部实现；ROCm 和 NPU 不会偷偷回退到 CPU。硬件测试位于 `tests/backends/cuda/test_native_kernel_compilers.py`，通用执行语义测试位于 `tests/runtime/test_external_kernel.py`；最新验收结果记录在 PR 中。
 
 ## Triton
 

@@ -8,7 +8,7 @@
 
 With CUDA already configured for Jittor, install `pip install 'jittor[triton]'` or `pip install 'jittor[tilelang]'`. These extras pin Triton 3.9.0 and TileLang 0.1.15 respectively. TileLang itself depends on PyTorch, but the execution path below uses Jittor allocations and bypasses TileLang's Torch call wrapper.
 
-This is an experimental interface. The compiler frontends currently accept CUDA only. The CPU callback interface is available for other implementations; ROCm and NPU never silently fall back to CPU. Hardware tests live in `tests/backends/cuda/test_native_kernel_compilers.py`; executor semantics are tested in `tests/runtime/test_external_kernel.py`. Current validation results belong in the PR.
+The optional compiler extras require Linux and Python 3.10 or newer. This is an experimental interface. The compiler frontends currently accept CUDA only. The CPU callback interface is available for other implementations; ROCm and NPU never silently fall back to CPU. Hardware tests live in `tests/backends/cuda/test_native_kernel_compilers.py`; executor semantics are tested in `tests/runtime/test_external_kernel.py`. Current validation results belong in the PR.
 
 ## Triton
 

@@ -24,7 +24,8 @@ def add_kernel():
 
 
 @pytest.mark.parametrize("dtype", ["float32", "float16", "bfloat16"])
-def test_triton_pipeline_and_gradient(dtype):
+@pytest.mark.parametrize("lazy", [0, 1])
+def test_triton_pipeline_and_gradient(dtype, lazy):
     kernel = add_kernel()
     class Add(jt.Function):
         def execute(self, x, y):
@@ -32,17 +33,18 @@ def test_triton_pipeline_and_gradient(dtype):
                                N=x.numel(), BLOCK=128, grid=lambda m: ((m["N"] + 127) // 128,))
         def grad(self, dout):
             return dout, dout
-    for shift in (0, 2, -3):
-        data = np.arange(257, dtype=np.float32) / 256 + shift
-        x = jt.array(data).cast(dtype)
-        y = jt.full((257,), 0.5, dtype=dtype)
-        z = Add.apply(x * 2, y)
-        assert z.location() in ("none", "device")
-        np.testing.assert_allclose(z.float32().numpy(), data * 2 + 0.5, atol=0.04, rtol=0.01)
-        dx, dy = jt.grad(z.float32().sum(), [x, y])
-        np.testing.assert_array_equal(dx.float32().numpy(), np.full(257, 2))
-        np.testing.assert_array_equal(dy.float32().numpy(), np.ones(257))
-        assert z.location() == "device"
+    with jt.flag_scope(lazy_execution=lazy):
+        for shift in (0, 2, -3):
+            data = np.arange(257, dtype=np.float32) / 256 + shift
+            x = jt.array(data).cast(dtype)
+            y = jt.full((257,), 0.5, dtype=dtype)
+            z = Add.apply(x * 2, y)
+            assert z.location() in ("none", "device")
+            np.testing.assert_allclose(z.float32().numpy(), data * 2 + 0.5, atol=0.04, rtol=0.01)
+            dx, dy = jt.grad(z.float32().sum(), [x, y])
+            np.testing.assert_array_equal(dx.float32().numpy(), np.full(257, 2))
+            np.testing.assert_array_equal(dy.float32().numpy(), np.ones(257))
+            assert z.location() == "device"
 
 
 def test_triton_strides_and_multiple_outputs():
@@ -94,23 +96,25 @@ def make_tilelang_add(n):
     return tilelang.compile(add, out_idx=[], target="cuda", execution_backend="tvm_ffi")
 
 
-def test_tilelang_pipeline_and_gradient():
+@pytest.mark.parametrize("lazy", [0, 1])
+def test_tilelang_pipeline_and_gradient(lazy):
     kernel = make_tilelang_add(257)
     class Add(jt.Function):
         def execute(self, x, y):
             return tilelang_call(kernel, x, y, TensorSpec(x.shape))
         def grad(self, dout):
             return dout, dout
-    for shift in (0, 1, 5):
-        data = np.arange(257, dtype=np.float32) + shift
-        x = jt.array(data)
-        y = jt.full((257,), 0.5)
-        z = Add.apply(x * 3, y)
-        np.testing.assert_array_equal((z + 1).numpy(), data * 3 + 1.5)
-        dx, dy = jt.grad(z.sum(), [x, y])
-        np.testing.assert_array_equal(dx.numpy(), np.full(257, 3))
-        np.testing.assert_array_equal(dy.numpy(), np.ones(257))
-        assert z.location() == "device"
+    with jt.flag_scope(lazy_execution=lazy):
+        for shift in (0, 1, 5):
+            data = np.arange(257, dtype=np.float32) + shift
+            x = jt.array(data)
+            y = jt.full((257,), 0.5)
+            z = Add.apply(x * 3, y)
+            np.testing.assert_array_equal((z + 1).numpy(), data * 3 + 1.5)
+            dx, dy = jt.grad(z.sum(), [x, y])
+            np.testing.assert_array_equal(dx.numpy(), np.full(257, 3))
+            np.testing.assert_array_equal(dy.numpy(), np.ones(257))
+            assert z.location() == "device"
 
 
 def test_tilelang_matmul():
