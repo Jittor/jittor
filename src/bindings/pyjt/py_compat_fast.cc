@@ -557,7 +557,7 @@ bool try_publish_fresh_gradients(PyObject* groups, PyObject* gradients,
     PyObject* filled, PyObject* types, PyObject* metadata_protocol,
     PyObject* state_protocol) {
     if (graph_capture_active() || !PyList_CheckExact(groups)
-            || !PyDict_CheckExact(gradients) || !PySet_CheckExact(filled)
+            || !PyDict_CheckExact(gradients) || Py_TYPE(filled) != &PySet_Type
             || PySet_Size(filled) != 0) return false;
     // Allocate the only tracked container before checking live metadata.
     // The remaining validation and slot writes invoke no Python callbacks or
