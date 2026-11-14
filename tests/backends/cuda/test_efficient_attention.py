@@ -87,6 +87,27 @@ def test_registered_sdpa_uses_the_upstream_provider(kernel):
     np.testing.assert_allclose(actual.numpy(), direct.numpy(), rtol=1e-6, atol=1e-7)
 
 
+@pytest.mark.parametrize('dtype', ['float32', 'float16', 'bfloat16'])
+@pytest.mark.parametrize('head_dim,value_dim', [(8, 8), (32, 32), (64, 128), (128, 128)])
+def test_head_and_value_dimension_boundaries(kernel, dtype, head_dim, value_dim):
+    rng = np.random.default_rng(148+head_dim+value_dim)
+    arrays = [rng.normal(0, .2, shape).astype('float32') for shape in
+              [(1, 2, 9, head_dim), (1, 2, 17, head_dim), (1, 2, 17, value_dim),
+               (1, 2, 9, value_dim)]]
+    inputs = [jt.array(value).cast(dtype).start_grad() for value in arrays[:3]]
+    dy = jt.array(arrays[3]).cast(dtype).stop_grad()
+    values = [value.float32().numpy() for value in inputs]
+    expected = reference(*values, dy.float32().numpy(), False, None)
+    output = kernel._efficient_attention(*inputs, allow_reduced_precision=True)
+    gradients = jt.grad((output.float32()*dy.float32()).sum(), inputs)
+    tolerance = {'float32': 1e-4, 'float16': .004, 'bfloat16': .04}[dtype]
+    for actual, wanted in zip([output]+list(gradients), expected):
+        actual.sync()
+        assert actual.location() == 'device'
+        np.testing.assert_allclose(actual.float32().numpy(), wanted, rtol=tolerance,
+                                   atol=max(1e-8, np.abs(wanted).max()*tolerance*.2))
+
+
 def test_captured_training_reads_changing_inputs_and_cotangents(kernel):
     rng = np.random.default_rng(951)
 
