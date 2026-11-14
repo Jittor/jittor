@@ -45,9 +45,14 @@ def _definitions(relative, names, namespace):
 
 @pytest.fixture
 def routing(monkeypatch):
+    def contraction_call(body, fallback, a, b):
+        # This fixture tests registry ownership with shape-only tensors; the
+        # real native callback's arithmetic and AMP policy have device tests.
+        return fallback(a, b)
     native = SimpleNamespace(
         Var=Tensor, Module=Module, nn=SimpleNamespace(),
-        core=SimpleNamespace(Var=Tensor, dispatch_context=lambda tensors: ("acl", 0)),
+        core=SimpleNamespace(Var=Tensor, dispatch_context=lambda tensors: ("acl", 0),
+                             _matmul_contraction_call=contraction_call),
         flag_scope=lambda **kwargs: nullcontext(),
         flags=SimpleNamespace(amp_reg=0),
         amp_flags=SimpleNamespace(keep_reduce=1, reduce16_no_fp32_acc=2,
@@ -252,7 +257,7 @@ def test_matmul_bmm_and_transpose_reuse_existing_keys(routing):
              # `flag_scope` call, so it has to be extracted alongside them or
              # every routing call below dies in `NameError`.
              "_contraction_scope", "_both_half",
-             "matmul", "matmul_transpose", "bmm", "bmm_transpose"]
+             "matmul", "_matmul_impl", "_matmul_fallback", "matmul_transpose", "bmm", "bmm_transpose"]
     ns = _definitions("nn/functional/matrix.py", names, routing.namespace)
     routing.jt.nn.matmul = ns["matmul"]
     routing.register("matmul")

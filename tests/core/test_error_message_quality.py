@@ -166,6 +166,59 @@ class TestOperatorFailurePutsTheReasonFirst(unittest.TestCase):
         self.assertNotIn("JT_TRACE_PY_VAR", text,
                          "advice to turn on what is already on:\n" + text)
 
+    def test_trace_scope_does_not_mislabel_later_untraced_failures(self):
+        import gc
+        with jt.flag_scope(use_cuda=0, trace_py_var=3):
+            source = jt.array(np.arange(5, dtype="float32"))
+            failing = source[jt.array([99])]
+            with self.assertRaises(RuntimeError):
+                failing.sync()
+        del source, failing
+        gc.collect()
+        # Reuse allocations after the trace observer has been detached. Each
+        # new error must identify its own creation site, without an older stack.
+        with jt.flag_scope(use_cuda=0, trace_py_var=0):
+            for _ in range(16):
+                value = jt.code((1,), "float32", [], cpu_src='throw std::runtime_error("fresh untraced node");')
+                with self.assertRaises(RuntimeError) as caught:
+                    value.sync()
+                text = str(caught.exception)
+                self.assertIn("fresh untraced node", text)
+                self.assertIn("The failing operator was created at: " + __file__ + ":", text)
+                self.assertNotIn("[Async Backtrace]: ---", text)
+                del value
+
+    def test_live_node_keeps_its_recorded_trace_after_scope_exit(self):
+        with jt.flag_scope(use_cuda=0, trace_py_var=3):
+            source = jt.array(np.arange(5, dtype="float32"))
+            failing = source[jt.array([99])]
+        with self.assertRaises(RuntimeError) as caught:
+            failing.sync()
+        self.assertIn("[Async Backtrace]: ---", str(caught.exception))
+        self.assertIn("test_live_node_keeps_its_recorded_trace_after_scope_exit", str(caught.exception))
+
+    def test_failed_backward_does_not_mark_later_forward_as_a_gradient(self):
+        class Broken(jt.Function):
+            def execute(self, value):
+                return value * 2
+
+            def grad(self, gradient):
+                raise RuntimeError("deliberate backward failure")
+
+        with jt.flag_scope(use_cuda=0, trace_py_var=3):
+            value = jt.array([2.]).start_grad()
+            loss = Broken.apply(value).sum()
+            with self.assertRaisesRegex(RuntimeError, "deliberate backward failure"):
+                jt.grad(loss, [value])
+            fresh = jt.code((1,), "float32", [],
+                            cpu_src='throw std::runtime_error("later forward");')
+            with self.assertRaises(RuntimeError) as caught:
+                fresh.sync()
+        text = str(caught.exception)
+        self.assertIn("later forward", text)
+        self.assertNotIn("<Grad>", text)
+        self.assertIn("test_failed_backward_does_not_mark_later_forward_as_a_gradient", text)
+
     def test_no_log_line_prefix_at_all(self):
         """An exception carries no timestamp, thread id or level letter.
 
@@ -287,14 +340,33 @@ class TestCompileFailureNamesTheOperator(unittest.TestCase):
     """It began `parallel_compiler.cc:410: Error happened during compilation:`
     and named the operator as `Op(1:0:1:1:i0:o1:s0:g1,code->2)`."""
 
-    def test_the_operator_is_named_and_the_wrapper_is_gone(self):
-        with jt.flag_scope(use_cuda=0):
+    def _check_failure(self, use_cuda, compilers):
+        source = {"cuda_src" if use_cuda else "cpu_src": BROKEN_KERNEL}
+        with jt.flag_scope(use_cuda=use_cuda, use_parallel_op_compiler=compilers,
+                           backend_fallback="error", auto_graph_replay=0):
+            if use_cuda:
+                probe = jt.ones(1)
+                probe.sync()
+                self.assertEqual(probe.location(), "device")
             with self.assertRaises(Exception) as caught:
-                jt.code([1], "float32", [jt.ones(1)], cpu_src=BROKEN_KERNEL).sync()
+                jt.code([1], "float32", [jt.ones(1)], **source).sync()
         text = str(caught.exception)
         self.assertTrue(text.startswith("Compiling operator code"), text[:200])
         self.assertNotIn("Error happened during compilation", text)
         self.assertNotIn("Op(", text)
+
+    def test_the_operator_is_named_and_the_wrapper_is_gone(self):
+        for compilers in (0, 1):
+            with self.subTest(compilers=compilers):
+                self._check_failure(0, compilers)
+
+    def test_cuda_compile_failure_names_the_operator_in_both_modes(self):
+        from _helpers import capability
+        if not capability.check_accelerator("cuda", backend=jt).enabled:
+            self.skipTest("accelerator prerequisite: CUDA runtime unavailable")
+        for compilers in (0, 1):
+            with self.subTest(compilers=compilers):
+                self._check_failure(1, compilers)
 
 
 class TestUnknownDtypesAreNamed(unittest.TestCase):

@@ -151,6 +151,13 @@ def test_a_device_var_parked_on_the_host_is_moved_back_by_to_device():
         assert shown.device_id == 0 and shown.location() == "device"
         np.testing.assert_array_equal(shown.numpy(), [0, 4, 8])
 
+        bounds.migrate_to_cpu()
+        assert bounds.location() == "cpu"
+        dtype_only = bounds.to(torch.int32)
+        dtype_only.sync()
+        assert dtype_only.device_id == 0 and dtype_only.location() == "device"
+        np.testing.assert_array_equal(dtype_only.numpy(), [0, 4, 8])
+
 
 def test_explicit_cuda_ignores_disabled_default_while_native_follows_runtime():
     import jittor as jt

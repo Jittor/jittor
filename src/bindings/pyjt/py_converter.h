@@ -533,6 +533,13 @@ inline void _fill_scalar_array_args(ArrayArgs& args, T2 value, NanoString dtype)
     args.dtype = dtype;
 }
 
+inline int64 pyjt_scalar_integer(PyObject* obj) {
+    int64 value = PyLong_AsLongLong(obj);
+    if (PyErr_Occurred())
+        throw std::runtime_error("invalid integer scalar");
+    return value;
+}
+
 DEF_IS(ArrayArgs, T) from_py_object(PyObject* obj) {
     if (PyFloat_CheckExact(obj)) {
         T args;
@@ -541,7 +548,11 @@ DEF_IS(ArrayArgs, T) from_py_object(PyObject* obj) {
     }
     if (PyLong_CheckExact(obj)) {
         T args;
-        _fill_scalar_array_args(args, (int32)PyLong_AsLong(obj), ns_int32);
+        int64 value = pyjt_scalar_integer(obj);
+        if (value >= (int64)(-2147483647-1) && value <= (int64)2147483647)
+            _fill_scalar_array_args(args, (int32)value, ns_int32);
+        else
+            _fill_scalar_array_args(args, value, ns_int64);
         return args;
     }
     if (PyBool_Check(obj)) {

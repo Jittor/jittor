@@ -1,6 +1,7 @@
 #include "bindings/pyjt/py_compat_fast.h"
 #include "bindings/pyjt/py_converter.h"
 #include "core/var_holder.h"
+#include "core/grad.h"
 #include "core/var_slices.h"
 #include "bindings/pyjt/py_kernel_select.h"
 #include "bindings/pyjt/py_tensor_frontend.h"
@@ -8,17 +9,621 @@
 #include "ops/op_register.h"
 #include "core/op.h"
 #include "ops/composite/code_op.h"
+#include "mem/allocator.h"
 #include <cstring>
 #include "runtime/device.h"
 #include "runtime/backend.h"
 #include "runtime/dispatch_context.h"
+#include "runtime/graph_capture.h"
+#include "runtime/tensor_placement.h"
 #include <stdexcept>
 #include <descrobject.h>
+#include <unordered_set>
 
 namespace jittor {
 
 DECLARE_FLAG(bool, no_grad);
 DECLARE_FLAG(int, amp_reg);
+
+PyObject* grad_optional_prepare(VarHolder* loss,
+    const vector<VarHolder*>& targets, bool retain_graph, bool create_graph) {
+    loss->observe_alias_history();
+    vector<Var*> inputs;
+    inputs.reserve(targets.size());
+    for (auto* target : targets) {
+        target->observe_alias_history();
+        inputs.push_back(target->var);
+    }
+    // Use the same differentiation and alias observation as grad_optional.
+    // No forward, backward graph or gradient value survives between calls.
+    auto grads = grad(loss->var, inputs, retain_graph, false);
+    bool prepared = !graph_capture_active();
+    for (size_t i = 0; i < grads.size(); ++i)
+        if (grads[i] && grads[i]->dtype() != inputs[i]->dtype()) prepared = false;
+    vector<Maybe<VarHolder>> holders;
+    holders.reserve(grads.size());
+    for (auto& value : grads) {
+        if (!value) {
+            holders.emplace_back(nullptr);
+            continue;
+        }
+        if (prepared && !create_graph) {
+            auto placement = value->placement;
+            TensorPlacementScope scope(placement.explicit_backend
+                ? placement : current_tensor_placement());
+            value = detach(value);
+        }
+        auto* holder = new VarHolder(move(value));
+        // Torch detach stops the output holder, including its alias policy;
+        // stopping just the clone operator is insufficient.
+        if (prepared && !create_graph) holder->stop_grad();
+        holders.emplace_back(holder);
+    }
+    PyObjHolder result(to_py_object(holders));
+    return PyTuple_Pack(2, result.obj, prepared ? Py_True : Py_False);
+}
+
+bool try_optimizer_copies(PyObject* targets, PyObject* values) {
+    if (!no_grad || graph_capture_active() || !runtime_use_cuda()
+            || accelerator_backend_id() != BackendId::Cuda
+            || !PyList_CheckExact(targets) || !PyList_CheckExact(values))
+        return false;
+    auto count = PyList_GET_SIZE(targets);
+    if (!count || count != PyList_GET_SIZE(values)) return false;
+    // A backend copy can release the GIL. Caller-owned lists may then change;
+    // immutable snapshots keep every holder alive throughout the whole batch.
+    PyObjHolder target_owners(PyList_AsTuple(targets));
+    PyObjHolder value_owners(PyList_AsTuple(values));
+    vector<VarHolder*> dst, src;
+    dst.reserve(count);
+    src.reserve(count);
+    for (Py_ssize_t i = 0; i < count; ++i) {
+        auto* a = PyTuple_GET_ITEM(target_owners.obj, i);
+        auto* b = PyTuple_GET_ITEM(value_owners.obj, i);
+        if (!PyObject_TypeCheck(a, &PyjtVarHolder.ht_type)
+                || !PyObject_TypeCheck(b, &PyjtVarHolder.ht_type)) return false;
+        auto* d = GET_RAW_PTR(VarHolder, a);
+        auto* s = GET_RAW_PTR(VarHolder, b);
+        auto* dv = d->var;
+        auto* sv = s->var;
+        if (d->view || s->view || !dv->is_finished() || !sv->is_finished()
+                || dv->flag(VarFlags::_kept) || sv->flag(VarFlags::_kept)
+                || !dv->mem_ptr || !sv->mem_ptr || !dv->allocator || !sv->allocator
+                || !dv->allocator->is_cuda() || !sv->allocator->is_cuda()
+                || dv->device_id != sv->device_id || dv->dtype() != sv->dtype()
+                || dv->shape != sv->shape || !dv->is_contiguous() || !sv->is_contiguous())
+            return false;
+        dst.push_back(d);
+        src.push_back(s);
+    }
+    // Retain logical-alias refresh, saved-reader/version checks, source
+    // synchronization and stream ordering in the existing copy primitives.
+    for (Py_ssize_t i = 0; i < count; ++i) {
+        if (!dst[i]->copy_view_into(src[i])) dst[i]->copy_into(src[i], true);
+    }
+    return true;
+}
+
+namespace {
+bool canonical_optimizer_holder(PyObject* value, PyObject* types) {
+    if (!PyTuple_CheckExact(types)) return false;
+    for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(types); ++i)
+        if ((PyObject*)Py_TYPE(value) == PyTuple_GET_ITEM(types, i))
+            return PyObject_TypeCheck(value, &PyjtVarHolder.ht_type);
+    return false;
+}
+
+PyObject* no_optimizer_metadata_batch() { Py_RETURN_NONE; }
+
+void append_optimizer_index(PyObject* result, Py_ssize_t index) {
+    PyObjHolder item(PyLong_FromSsize_t(index));
+    if (!item.obj || PyList_Append(result, item.obj) < 0)
+        throw std::runtime_error("could not publish optimizer metadata indices");
+}
+}
+
+PyObject* try_optimizer_shape_changes(PyObject* params, PyObject* moments,
+    PyObject* variances, PyObject* canonical_types) {
+    if ((!PyList_CheckExact(params) && !PyTuple_CheckExact(params))
+            || !PyList_CheckExact(moments)
+            || !PyList_CheckExact(variances)) return no_optimizer_metadata_batch();
+    auto parameter = [&](Py_ssize_t i) {
+        return PyTuple_CheckExact(params) ? PyTuple_GET_ITEM(params, i)
+                                         : PyList_GET_ITEM(params, i);
+    };
+    auto count = std::min(PyTuple_CheckExact(params) ? PyTuple_GET_SIZE(params)
+                                                   : PyList_GET_SIZE(params),
+        std::min(PyList_GET_SIZE(moments), PyList_GET_SIZE(variances)));
+    // Validate before reading anything. A Python-owned shape must be observed
+    // only by the original loop, including when it is in a later slot.
+    for (Py_ssize_t i = 0; i < count; ++i) {
+        if (!canonical_optimizer_holder(parameter(i), canonical_types)
+                || !canonical_optimizer_holder(PyList_GET_ITEM(moments, i), canonical_types)
+                || !canonical_optimizer_holder(PyList_GET_ITEM(variances, i), canonical_types))
+            return no_optimizer_metadata_batch();
+    }
+    PyObjHolder result(PyList_New(0));
+    for (Py_ssize_t i = 0; i < count; ++i) {
+        const auto& shape = GET_RAW_PTR(VarHolder, parameter(i))->var->shape;
+        if (shape != GET_RAW_PTR(VarHolder, PyList_GET_ITEM(moments, i))->var->shape
+                || shape != GET_RAW_PTR(VarHolder, PyList_GET_ITEM(variances, i))->var->shape)
+            append_optimizer_index(result.obj, i);
+    }
+    return result.release();
+}
+
+
+namespace {
+bool optimizer_string_keys(PyObject* dict) {
+    if (!PyDict_CheckExact(dict)) return false;
+    Py_ssize_t position = 0;
+    PyObject *key, *value;
+    while (PyDict_Next(dict, &position, &key, &value))
+        if (!PyUnicode_CheckExact(key)) return false;
+    return true;
+}
+
+PyObject* optimizer_type_field(PyObject* type, const char* name) {
+    PyObjHolder key;
+    key.obj = PyUnicode_FromString(name);
+    return key.obj ? _PyType_Lookup((PyTypeObject*)type, key.obj) : nullptr;
+}
+
+bool optimizer_function_code(PyObject* function, PyObject* code) {
+    return code == Py_None || (PyFunction_Check(function)
+        && PyFunction_GET_CODE(function) == code);
+}
+
+bool optimizer_function_bindings(PyObject* function, PyObject* expected) {
+    if (!function || !PyFunction_Check(function) || !PyTuple_CheckExact(expected)) return false;
+    auto* globals = PyFunction_GET_GLOBALS(function);
+    if (!optimizer_string_keys(globals)) return false;
+    PyObjHolder builtins;
+#if PY_VERSION_HEX >= 0x030A0000
+    builtins.obj = PyObject_GetAttrString(function, "__builtins__");
+    if (!builtins.obj) return false;
+#else
+    // Older interpreters have no function.__builtins__; their normal Python
+    // path remains available rather than guessing the function's environment.
+    return false;
+#endif
+    if (!optimizer_string_keys(builtins.obj)) return false;
+    for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(expected); ++i) {
+        auto* pair = PyTuple_GET_ITEM(expected, i);
+        if (!PyTuple_CheckExact(pair) || PyTuple_GET_SIZE(pair) != 2) return false;
+        auto* key = PyTuple_GET_ITEM(pair, 0);
+        if (!PyUnicode_CheckExact(key)) return false;
+        auto* value = PyDict_GetItemWithError(globals, key);
+        if (!value) value = PyDict_GetItemWithError(builtins.obj, key);
+        if (value != PyTuple_GET_ITEM(pair, 1)) return false;
+    }
+    return true;
+}
+
+bool optimizer_adam_protocol(PyObject* protocol, PyObject* types) {
+    if (!PyTuple_CheckExact(protocol) || PyTuple_GET_SIZE(protocol) != 10
+            || !PyTuple_CheckExact(types) || PyTuple_GET_SIZE(types) != 3)
+        return false;
+    auto* step_type = PyTuple_GET_ITEM(protocol, 0);
+    auto* steps_type = PyTuple_GET_ITEM(protocol, 1);
+    if (!PyType_Check(step_type) || !PyType_Check(steps_type)) return false;
+    auto* contracts = PyTuple_GET_ITEM(protocol, 2);
+    if (!PyTuple_CheckExact(contracts)) return false;
+    for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(contracts); ++i) {
+        auto* contract = PyTuple_GET_ITEM(contracts, i);
+        if (!PyTuple_CheckExact(contract) || PyTuple_GET_SIZE(contract) != 4)
+            return false;
+        auto* owner = PyTuple_GET_ITEM(contract, 0);
+        auto* name = PyTuple_GET_ITEM(contract, 1);
+        auto* method = PyTuple_GET_ITEM(contract, 2);
+        if (!PyType_Check(owner) || !PyUnicode_CheckExact(name)
+                || _PyType_Lookup((PyTypeObject*)owner, name) != method
+                || !optimizer_function_code(method, PyTuple_GET_ITEM(contract, 3)))
+            return false;
+    }
+    if (optimizer_type_field(step_type, "value")
+            || optimizer_type_field(step_type, "counter")) return false;
+    auto* globals = PyTuple_GET_ITEM(protocol, 7);
+    if (!optimizer_string_keys(globals)
+            || PyDict_GetItemString(globals, "_AdamStep") != step_type
+            || PyDict_GetItemString(globals, "_AdamSteps") != steps_type
+            || PyDict_GetItemString(globals, "jt") != PyTuple_GET_ITEM(protocol, 8))
+        return false;
+    auto* runtime = PyTuple_GET_ITEM(protocol, 8);
+    if (!PyModule_Check(runtime)
+            || Py_TYPE(runtime)->tp_getattro != PyModule_Type.tp_getattro
+            || PyModule_GetDict(runtime) == nullptr
+            || PyDict_GetItemString(PyModule_GetDict(runtime), "Var") != PyTuple_GET_ITEM(types, 0)
+            || Py_TYPE(PyTuple_GET_ITEM(types, 0)) != &PyType_Type)
+        return false;
+    auto* builtins = PyTuple_GET_ITEM(protocol, 9);
+    auto* int_method = optimizer_type_field(step_type, "__int__");
+    auto* set_method = optimizer_type_field(steps_type, "__setitem__");
+    if (!optimizer_function_bindings(int_method, builtins)
+            || !optimizer_function_bindings(set_method, builtins)) return false;
+    auto* getter = PyTuple_GET_ITEM(protocol, 6);
+    if (!PyTuple_CheckExact(getter) || PyTuple_GET_SIZE(getter) != 2
+            || !optimizer_function_code(PyTuple_GET_ITEM(getter, 0),
+                                        PyTuple_GET_ITEM(getter, 1))) return false;
+    auto* function = PyTuple_GET_ITEM(getter, 0);
+    if (!optimizer_function_bindings(function, builtins)) return false;
+    for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(types); ++i) {
+        auto* type = PyTuple_GET_ITEM(types, i);
+        if (!PyType_Check(type)
+                || Py_TYPE(type)->tp_getattro != PyType_Type.tp_getattro
+                || optimizer_type_field(type, "shape") != PyTuple_GET_ITEM(protocol, 3)
+                || optimizer_type_field(type, "__getattribute__") != PyTuple_GET_ITEM(protocol, 5))
+            return false;
+        auto* descriptor = optimizer_type_field(type, "requires_grad");
+        if (descriptor == PyTuple_GET_ITEM(protocol, 4)) continue;
+        if (!descriptor || Py_TYPE(descriptor) != &PyProperty_Type
+                || optimizer_type_field(type, "_frontend_native_requires_grad")
+                    != PyTuple_GET_ITEM(protocol, 4)) return false;
+        PyObjHolder fget;
+        fget.obj = PyObject_GetAttrString(descriptor, "fget");
+        if (fget.obj != function) return false;
+    }
+    return !PyErr_Occurred();
+}
+
+PyObject* optimizer_adam_counter(PyObject* value, PyObject* step_type,
+                                 bool allow_integer) {
+    if (allow_integer && PyLong_CheckExact(value)) return value;
+    if ((PyObject*)Py_TYPE(value) != step_type) return nullptr;
+    auto** pointer = _PyObject_GetDictPtr(value);
+    if (!pointer || !*pointer || !optimizer_string_keys(*pointer)
+            || PyDict_GetItemString(*pointer, "set")) return nullptr;
+    auto* counter = PyDict_GetItemString(*pointer, "counter");
+    auto* number = PyDict_GetItemString(*pointer, "value");
+    return counter == Py_None && number && PyLong_CheckExact(number) ? number : nullptr;
+}
+}
+
+PyObject* try_optimizer_adam_entries(PyObject* group, PyObject* gradients,
+    PyObject* steps, PyObject* types, PyObject* protocol, bool advance) {
+    if (!runtime_use_cuda() || accelerator_backend_id() != BackendId::Cuda
+            || graph_capture_active() || !optimizer_string_keys(group)
+            || !PyList_CheckExact(gradients) || !PyList_Check(steps))
+        return no_optimizer_metadata_batch();
+    auto* params = PyDict_GetItemString(group, "params");
+    auto* moments = PyDict_GetItemString(group, "m");
+    auto* variances = PyDict_GetItemString(group, "values");
+    if (!params || !moments || !variances
+            || (!PyList_CheckExact(params) && !PyTuple_CheckExact(params))
+            || !PyList_CheckExact(moments) || !PyList_CheckExact(variances))
+        return no_optimizer_metadata_batch();
+    auto count = PyTuple_CheckExact(params) ? PyTuple_GET_SIZE(params) : PyList_GET_SIZE(params);
+    PyObjHolder result;
+    result.obj = PyList_New(count);
+    if (!result.obj) return nullptr;
+    // Allocate tracked Python containers before validating the live metadata.
+    // No GC-triggering allocation then interrupts native holder/counter reads.
+    for (Py_ssize_t i = 0; i < count; ++i) {
+        auto* item = advance ? PyLong_FromSsize_t(i) : PyTuple_New(5);
+        if (!item) return nullptr;
+        PyList_SET_ITEM(result.obj, i, item);
+    }
+    if (!optimizer_adam_protocol(protocol, types))
+        return PyErr_Occurred() ? nullptr : no_optimizer_metadata_batch();
+    if ((PyObject*)Py_TYPE(steps) != PyTuple_GET_ITEM(protocol, 1))
+        return no_optimizer_metadata_batch();
+    // Allocation above may have run a finalizer. Re-read every group container
+    // and validate the entire call before observing a holder or changing steps.
+    if (!optimizer_string_keys(group)) return no_optimizer_metadata_batch();
+    params = PyDict_GetItemString(group, "params");
+    moments = PyDict_GetItemString(group, "m");
+    variances = PyDict_GetItemString(group, "values");
+    if (!params || !moments || !variances
+            || (!PyList_CheckExact(params) && !PyTuple_CheckExact(params))
+            || !PyList_CheckExact(moments) || !PyList_CheckExact(variances)
+            || (PyTuple_CheckExact(params) ? PyTuple_GET_SIZE(params) : PyList_GET_SIZE(params)) != count
+            || PyList_GET_SIZE(gradients) != count || PyList_GET_SIZE(moments) != count
+            || PyList_GET_SIZE(variances) != count || PyList_GET_SIZE(steps) < count)
+        return no_optimizer_metadata_batch();
+    auto parameter = [&](Py_ssize_t i) {
+        return PyTuple_CheckExact(params) ? PyTuple_GET_ITEM(params, i) : PyList_GET_ITEM(params, i);
+    };
+    auto* step_type = PyTuple_GET_ITEM(protocol, 0);
+    for (Py_ssize_t i = 0; i < count; ++i) {
+        auto* gradient = PyList_GET_ITEM(gradients, i);
+        if (!canonical_optimizer_holder(parameter(i), types)
+                || (gradient != Py_None && !canonical_optimizer_holder(gradient, types))
+                || !optimizer_adam_counter(PyList_GET_ITEM(steps, i), step_type, !advance))
+            return no_optimizer_metadata_batch();
+    }
+    Py_ssize_t used = 0;
+    for (Py_ssize_t i = 0; i < count; ++i) {
+        auto* p = parameter(i);
+        auto* gradient = PyList_GET_ITEM(gradients, i);
+        auto* holder = GET_RAW_PTR(VarHolder, p);
+        if (!holder->get_requires_grad() || gradient == Py_None
+                || holder->var->shape != GET_RAW_PTR(VarHolder, gradient)->var->shape)
+            continue;
+        auto* counter = PyList_GET_ITEM(steps, i);
+        auto* number = optimizer_adam_counter(counter, step_type, !advance);
+        if (advance) {
+            PyObjHolder one, next;
+            one.obj = PyLong_FromLong(1);
+            if (!one.obj) return nullptr;
+            next.obj = PyNumber_Add(number, one.obj);
+            if (!next.obj || PyDict_SetItemString(*_PyObject_GetDictPtr(counter), "value", next.obj) < 0)
+                return nullptr;
+            auto* index = PyList_GET_ITEM(result.obj, i);
+            Py_INCREF(index);
+            auto* previous = PyList_GET_ITEM(result.obj, used);
+            PyList_SET_ITEM(result.obj, used, index);
+            Py_DECREF(previous);
+        } else {
+            auto* row = PyList_GET_ITEM(result.obj, used);
+            PyObject* values[] = {p, PyList_GET_ITEM(moments, i),
+                PyList_GET_ITEM(variances, i), gradient, number};
+            for (int j = 0; j < 5; ++j) {
+                Py_INCREF(values[j]);
+                PyTuple_SET_ITEM(row, j, values[j]);
+            }
+        }
+        ++used;
+    }
+    if (PyList_SetSlice(result.obj, used, count, nullptr) < 0) return nullptr;
+    return result.release();
+}
+
+
+namespace {
+bool gradient_property_function(PyObject* function, PyObject* code,
+    PyObject* closure, PyObject* protocol) {
+    if (!PyFunction_Check(function) || PyFunction_GET_CODE(function) != code
+            || !PyTuple_CheckExact(closure)) return false;
+    auto* cells = PyFunction_GET_CLOSURE(function);
+    if (!cells || PyTuple_GET_SIZE(cells) != PyTuple_GET_SIZE(closure)) return false;
+    for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(cells); ++i) {
+        auto* actual = PyCell_GET(PyTuple_GET_ITEM(cells, i));
+        auto* expected = PyTuple_GET_ITEM(closure, i);
+        if (actual == expected) continue;
+        if (!actual || !PyUnicode_CheckExact(actual) || !PyUnicode_CheckExact(expected)
+                || PyUnicode_Compare(actual, expected) != 0) return false;
+    }
+    auto* globals = PyFunction_GET_GLOBALS(function);
+    return optimizer_string_keys(globals)
+        && PyDict_GetItemString(globals, "get_tensor_object_state") == PyTuple_GET_ITEM(protocol, 6)
+        && optimizer_function_bindings(function, PyTuple_GET_ITEM(protocol, 8));
+}
+
+bool gradient_publication_protocol(PyObject* types, PyObject* protocol) {
+    if (!PyTuple_CheckExact(protocol) || PyTuple_GET_SIZE(protocol) != 11) return false;
+    auto* state_type = PyTuple_GET_ITEM(protocol, 0);
+    auto* getter = PyTuple_GET_ITEM(protocol, 6);
+    if (!PyType_Check(state_type)
+            || ((PyTypeObject*)state_type)->tp_getattro != PyObject_GenericGetAttr
+            || ((PyTypeObject*)state_type)->tp_setattro != PyObject_GenericSetAttr
+            || optimizer_type_field(state_type, "grad") != PyTuple_GET_ITEM(protocol, 1)
+            || Py_TYPE(PyTuple_GET_ITEM(protocol, 1)) != &PyMemberDescr_Type
+            || !optimizer_function_code(getter, PyTuple_GET_ITEM(protocol, 7))
+            || !optimizer_function_bindings(getter, PyTuple_GET_ITEM(protocol, 8))) return false;
+    auto* globals = PyFunction_GET_GLOBALS(getter);
+    auto* key = PyDict_GetItemString(globals, "_STATE_KEY");
+    if (PyDict_GetItemString(globals, "TensorObjectState") != state_type
+            || !key || !PyUnicode_CheckExact(key)
+            || PyUnicode_CompareWithASCIIString(key, "_torch_object_state") != 0) return false;
+    // Read the same property and underlying holder dict as vars()/object's
+    // setter. A subclass, replaced descriptor, closure or helper stays Python.
+    for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(types); ++i) {
+        auto* type = PyTuple_GET_ITEM(types, i);
+        if (optimizer_type_field(type, "__dict__") != PyTuple_GET_ITEM(protocol, 9)
+                || optimizer_type_field(type, "stop_grad") != PyTuple_GET_ITEM(protocol, 10))
+            return false;
+        // Legacy native Vars have no frontend state property; they cannot
+        // participate in this batch, but remain a canonical gradient type.
+        auto* descriptor = optimizer_type_field(type, "_torch_grad");
+        if (!descriptor) continue;
+        if (Py_TYPE(descriptor) != &PyProperty_Type) return false;
+        PyObjHolder get(PyObject_GetAttrString(descriptor, "fget"));
+        PyObjHolder set(PyObject_GetAttrString(descriptor, "fset"));
+        if (!get.obj || !set.obj
+                || !gradient_property_function(get.obj, PyTuple_GET_ITEM(protocol, 2),
+                    PyTuple_GET_ITEM(protocol, 3), protocol)
+                || !gradient_property_function(set.obj, PyTuple_GET_ITEM(protocol, 4),
+                    PyTuple_GET_ITEM(protocol, 5), protocol)) return false;
+    }
+    return !PyErr_Occurred();
+}
+}
+
+namespace {
+bool optimizer_batch_policy(PyObject* protocol, PyObject* writer) {
+    if (!PyTuple_CheckExact(protocol) || PyTuple_GET_SIZE(protocol) != 3
+            || !PyFunction_Check(PyTuple_GET_ITEM(protocol, 0))) return false;
+    auto* function = PyTuple_GET_ITEM(protocol, 0);
+    return optimizer_function_code(function, PyTuple_GET_ITEM(protocol, 1))
+        && optimizer_function_bindings(function, PyTuple_GET_ITEM(protocol, 2))
+        && PyDict_GetItemString(PyFunction_GET_GLOBALS(function), "_optimizer_update") == writer;
+}
+
+bool optimizer_plain_type_dicts(PyTypeObject* type,
+                               std::unordered_set<PyTypeObject*>& checked) {
+    if (!type->tp_mro || !PyTuple_CheckExact(type->tp_mro)) return false;
+    for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(type->tp_mro); ++i) {
+        auto* base = PyTuple_GET_ITEM(type->tp_mro, i);
+        if (!PyType_Check(base)) return false;
+        auto* cls = (PyTypeObject*)base;
+        if (checked.insert(cls).second
+                && (!cls->tp_dict || !optimizer_string_keys(cls->tp_dict)))
+            return false;
+    }
+    return true;
+}
+
+// Ordinary function lookup cannot run Python. A metaclass or descriptor can;
+// leave those to the original getter rather than calling them speculatively.
+int optimizer_plain_writer(PyTypeObject* type, PyObject* writer, PyObject* key,
+                           std::unordered_set<PyTypeObject*>& checked) {
+    auto* meta = Py_TYPE(type);
+    if (meta->tp_getattro != PyType_Type.tp_getattro
+            || !optimizer_plain_type_dicts(type, checked)
+            || !optimizer_plain_type_dicts(meta, checked)
+            || _PyType_Lookup(meta, key)) return -1;
+    auto* found = _PyType_Lookup(type, key);
+    if (found == writer) return 1;
+    return !found || PyFunction_Check(found) ? 0 : -1;
+}
+}
+
+PyObject* try_pack_optimizer_updates(PyObject* active, PyObject* updates,
+    PyObject* types, PyObject* writer, PyObject* protocol) {
+    auto sequence = [](PyObject* value) {
+        return PyList_CheckExact(value) || PyTuple_CheckExact(value);
+    };
+    if (!sequence(active) || !sequence(updates) || !PyTuple_CheckExact(types)
+            || !PyFunction_Check(writer)) Py_RETURN_NONE;
+    auto size = [](PyObject* value) {
+        return PyTuple_CheckExact(value) ? PyTuple_GET_SIZE(value) : PyList_GET_SIZE(value);
+    };
+    auto item = [](PyObject* value, Py_ssize_t i) {
+        return PyTuple_CheckExact(value) ? PyTuple_GET_ITEM(value, i) : PyList_GET_ITEM(value, i);
+    };
+    auto count = size(active);
+    if (count != size(updates) || count > PY_SSIZE_T_MAX / 3) Py_RETURN_NONE;
+    PyObjHolder targets(PyList_New(count * 3)), values(PyList_New(count * 3));
+    if (!targets.obj || !values.obj) return nullptr;
+    PyObjHolder result(PyTuple_Pack(2, targets.obj, values.obj));
+    if (!result.obj) return nullptr;
+    PyObjHolder key(PyUnicode_FromString("_optimizer_update"));
+    if (!key.obj) return nullptr;
+    // Tracked allocations can run a finalizer. Read the original live lists
+    // again afterwards; do not use an earlier parameter/update snapshot.
+    if (size(active) != count || size(updates) != count
+            || !optimizer_batch_policy(protocol, writer)) {
+        if (PyErr_Occurred()) return nullptr;
+        Py_RETURN_NONE;
+    }
+    for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(types); ++i) {
+        auto* type = PyTuple_GET_ITEM(types, i);
+        if (!PyType_Check(type)
+                || Py_TYPE(type)->tp_richcompare != PyType_Type.tp_richcompare)
+            Py_RETURN_NONE;
+    }
+    std::unordered_set<PyTypeObject*> checked, writers;
+    for (Py_ssize_t i = 0; i < count; ++i) {
+        auto* row = item(active, i);
+        auto* triple = item(updates, i);
+        if (!PyTuple_CheckExact(row) || PyTuple_GET_SIZE(row) != 5
+                || !PyTuple_CheckExact(triple) || PyTuple_GET_SIZE(triple) != 3)
+            Py_RETURN_NONE;
+        for (int j = 0; j < 3; ++j) {
+            auto* target = PyTuple_GET_ITEM(row, j);
+            auto* value = PyTuple_GET_ITEM(triple, j);
+            if (!canonical_optimizer_holder(target, types)
+                    || !canonical_optimizer_holder(value, types)) Py_RETURN_NONE;
+            auto* type = Py_TYPE(target);
+            if (writers.insert(type).second
+                    && optimizer_plain_writer(type, writer, key.obj, checked) != 1) {
+                if (PyErr_Occurred()) return nullptr;
+                Py_RETURN_NONE;
+            }
+            Py_INCREF(target);
+            PyList_SET_ITEM(targets.obj, i * 3 + j, target);
+            Py_INCREF(value);
+            PyList_SET_ITEM(values.obj, i * 3 + j, value);
+        }
+    }
+    return result.release();
+}
+
+PyObject* try_optimizer_writers(PyObject* targets, PyObject* writer, PyObject* protocol) {
+    if ((!PyList_CheckExact(targets) && !PyTuple_CheckExact(targets))
+            || !PyFunction_Check(writer)) Py_RETURN_NONE;
+    PyObjHolder key(PyUnicode_FromString("_optimizer_update"));
+    if (!key.obj) return nullptr;
+    if (!optimizer_batch_policy(protocol, writer)) {
+        if (PyErr_Occurred()) return nullptr;
+        Py_RETURN_NONE;
+    }
+    std::unordered_set<PyTypeObject*> checked, writers;
+    auto count = PyTuple_CheckExact(targets) ? PyTuple_GET_SIZE(targets) : PyList_GET_SIZE(targets);
+    for (Py_ssize_t i = 0; i < count; ++i) {
+        auto* target = PyTuple_CheckExact(targets)
+            ? PyTuple_GET_ITEM(targets, i) : PyList_GET_ITEM(targets, i);
+        auto* type = Py_TYPE(target);
+        if (!writers.insert(type).second) continue;
+        auto matches = optimizer_plain_writer(type, writer, key.obj, checked);
+        if (PyErr_Occurred()) return nullptr;
+        if (matches < 0) Py_RETURN_NONE;
+        if (!matches) Py_RETURN_FALSE;
+    }
+    Py_RETURN_TRUE;
+}
+
+bool try_publish_fresh_gradients(PyObject* groups, PyObject* gradients,
+    PyObject* filled, PyObject* types, PyObject* metadata_protocol,
+    PyObject* state_protocol) {
+    if (graph_capture_active() || !PyList_CheckExact(groups)
+            || !PyDict_CheckExact(gradients) || !PySet_CheckExact(filled)
+            || PySet_Size(filled) != 0) return false;
+    // Allocate the only tracked container before checking live metadata.
+    // The remaining validation and slot writes invoke no Python callbacks or
+    // GC-triggering allocations, and never release the GIL.
+    PyObjHolder keys(PyList_New(0));
+    if (!keys.obj) throw std::runtime_error("could not allocate gradient identities");
+    if (!optimizer_adam_protocol(metadata_protocol, types)
+            || !gradient_publication_protocol(types, state_protocol)) return false;
+    Py_ssize_t position = 0;
+    PyObject *key, *value;
+    while (PyDict_Next(gradients, &position, &key, &value))
+        if (!PyLong_CheckExact(key)) return false;
+    struct Row { PyObject *parameter, *gradient, *state, *slots, *key; Py_ssize_t index; };
+    vector<Row> rows;
+    std::unordered_set<PyObject*> seen;
+    for (Py_ssize_t j = 0; j < PyList_GET_SIZE(groups); ++j) {
+        auto* group = PyList_GET_ITEM(groups, j);
+        if (!optimizer_string_keys(group)) return false;
+        auto* params = PyDict_GetItemString(group, "params");
+        auto* slots = PyDict_GetItemString(group, "grads");
+        if (!params || !PyList_CheckExact(params) || !slots || !PyList_CheckExact(slots)
+                || PyList_GET_SIZE(params) != PyList_GET_SIZE(slots)) return false;
+        for (Py_ssize_t i = 0; i < PyList_GET_SIZE(params); ++i) {
+            auto* p = PyList_GET_ITEM(params, i);
+            if (!canonical_optimizer_holder(p, types) || !seen.insert(p).second
+                    || PyList_GET_ITEM(slots, i) != Py_None
+                    || !optimizer_type_field((PyObject*)Py_TYPE(p), "_torch_grad")) return false;
+            auto* holder = GET_RAW_PTR(VarHolder, p);
+            if (holder->view || !holder->get_requires_grad()) return false;
+            PyObjHolder identity(PyLong_FromVoidPtr(p));
+            if (!identity.obj || PyList_Append(keys.obj, identity.obj) < 0)
+                throw std::runtime_error("could not allocate gradient identity");
+            auto* g = PyDict_GetItemWithError(gradients, identity.obj);
+            if (!g || !canonical_optimizer_holder(g, types)) return false;
+            auto* gradient = GET_RAW_PTR(VarHolder, g);
+            if (gradient->view || !gradient->var->is_stop_grad()
+                    || holder->var->shape != gradient->var->shape
+                    || holder->var->dtype() != gradient->var->dtype()) return false;
+            auto** attrs = _PyObject_GetDictPtr(p);
+            if (!attrs || !*attrs || !optimizer_string_keys(*attrs)) return false;
+            auto* state = PyDict_GetItemString(*attrs, "_torch_object_state");
+            if (!state || (PyObject*)Py_TYPE(state) != PyTuple_GET_ITEM(state_protocol, 0)) return false;
+            PyObjHolder previous(PyObject_GetAttrString(state, "grad"));
+            if (!previous.obj) {
+                if (!PyErr_ExceptionMatches(PyExc_AttributeError))
+                    throw std::runtime_error("could not inspect gradient slot");
+                PyErr_Clear();
+                return false;
+            }
+            if (previous.obj != Py_None) return false;
+            rows.push_back({p, g, state, slots, identity.obj, i});
+        }
+    }
+    for (const auto& row : rows) {
+        // stop_grad also resets alias/first-order policy on an already stopped
+        // gradient. Keep that operation rather than assuming it is a no-op.
+        GET_RAW_PTR(VarHolder, row.gradient)->stop_grad();
+        Py_INCREF(row.gradient);
+        if (PyList_SetItem(row.slots, row.index, row.gradient) < 0
+                || PyObject_SetAttrString(row.state, "grad", row.gradient) < 0
+                || PySet_Add(filled, row.key) < 0)
+            throw std::runtime_error("could not publish fresh gradient");
+    }
+    return true;
+}
+
 
 namespace {
 // Per frontend type: its dtype table, and the entries already looked up by
@@ -729,7 +1334,9 @@ auto make_reduce_mask = op_constructor<VarPtr, Var*, NanoString, uint, uint>("re
 } // namespace
 
 PyObject* logical_reduce(PyObject* self, PyObject* dims_obj, bool keepdims, bool is_and) {
-    if (Py_TYPE(self) != &PyjtVarHolder.ht_type) return not_implemented();
+    // Frontend tensors share the native payload. Infer their result type in
+    // the same scope as the general reduction binding below.
+    if (!PyObject_TypeCheck(self, &PyjtVarHolder.ht_type)) return not_implemented();
     // Read as the generated `any_` binding would read it.
     Var* x = GET_RAW_PTR(VarHolder, self)->grad_input();
     if (x->dtype() != ns_bool) return not_implemented();
@@ -1067,6 +1674,129 @@ PyObject* fast_view(PyObject* self, PyObject* shape) {
     return storage_view(self, target);
 }
 
+bool try_ordered_unaliased_inplace(PyObject* self, PyObject* value) {
+    if (!no_grad || graph_capture_active() || !runtime_use_cuda()
+            || accelerator_backend_id() != BackendId::Cuda
+            || !is_var(self) || !is_var(value)) return false;
+    PyTensorFrontendScope frontend(self, nullptr, 0, false);
+    // Stay under the generated binding's graph lock, as assign does. This
+    // builds new dependencies; it neither enters nor drains the executor.
+    auto* target = GET_RAW_PTR(VarHolder, self);
+    Var* a = target->var;
+    Var* b = GET_RAW_PTR(VarHolder, value)->var;
+    NanoString dtype = a->dtype();
+    // WriteBack orders and copies storage without floating-point arithmetic.
+    // Integer updates need the same alias/version guards, not a global drain.
+    if (dtype != ns_float32 && dtype != ns_float16 && dtype != ns_bfloat16
+            && dtype != ns_int32 && dtype != ns_int64) return false;
+    if (a == b || !a->mem_ptr || !a->is_finished() || !a->allocator
+            || !a->allocator->is_cuda() || target->view || target->views
+            || a->share_src || a->liveness.forward.count() != 1
+            || a->capture_owners || a->flag(VarFlags::_kept) || b->flag(VarFlags::_kept)
+            || !a->is_stop_grad() || !b->is_stop_grad()
+            || !a->is_contiguous() || !b->is_contiguous()
+            || a->shape != b->shape || a->dtype() != b->dtype()
+            || a->placement != b->placement || a->device_id != b->device_id)
+        return false;
+    if (a->placement.explicit_backend && a->placement.device.backend != BackendId::Cuda)
+        return false;
+    // Foreign/DLPack allocations may still have consumers in another runtime.
+    // Admit only storage from this device's current ordinary allocator stack.
+    if (a->allocator != get_allocator(Device{BackendId::Cuda, a->device_id}, false))
+        return false;
+    Op* update = b->input();
+    if (!update || !update->is_op(op_ids::binary())) return false;
+    bool consumes_target = false;
+    for (Var* input : update->inputs())
+        consumes_target = consumes_target || input == a;
+    if (!consumes_target) return false;
+    // An unexecuted native view has no physical share ring yet. Future reads
+    // through that alias would not depend on the replacement holder.
+    for (Op* reader : a->outputs())
+        for (Var* output : reader->outputs())
+            if (output->share_src == a) return false;
+    auto version = a->peek_storage_version();
+    if (version && (version.use_count() != 2
+            || version->externally_visible.load(std::memory_order_relaxed))) return false;
+    if (a->autograd_alias && (a->autograd_alias.use_count() != 1
+            || a->autograd_alias->version.use_count() != 1)) return false;
+    {
+        // The async executor links allocated aliases under this mutex.
+        // Pending aliases were excluded above before their allocation.
+        std::lock_guard<std::mutex> guard(share_ring_mutex());
+        if (a->share_next) return false;
+    }
+    static auto make_write_back = op_constructor<vector<VarPtr>, vector<Var*>&&, vector<Var*>&&>("write_back");
+    auto written = make_write_back(vector<Var*>{a}, vector<Var*>{b});
+    VarHolder result(move(written[0]));
+    // WriteBackOp orders earlier readers and shares the destination's storage
+    // and mutation token. assign advances that token exactly once.
+    target->assign(&result);
+    return true;
+}
+
+bool try_defer_unaliased_inplace(PyObject* self, PyObject* value) {
+    if (!no_grad || graph_capture_active() || !runtime_use_cuda()
+            || accelerator_backend_id() != BackendId::Cuda
+            || !is_var(self) || !is_var(value)) return false;
+    PyTensorFrontendScope frontend(self, nullptr, 0, false);
+    // The generated binding holds GraphEntryScope, as assign does. This
+    // only constructs/rebinds nodes; entering the executor here would release
+    // that graph lock and allow queued work to allocate the pending result.
+    auto* target = GET_RAW_PTR(VarHolder, self);
+    auto* replacement = GET_RAW_PTR(VarHolder, value);
+    Var* a = target->var;
+    Var* b = replacement->var;
+    NanoString dtype = a->dtype();
+    if (dtype != ns_float32 && dtype != ns_float16 && dtype != ns_bfloat16) return false;
+    if (a == b || a->mem_ptr || a->is_finished() || target->view || target->views
+            || a->share_src || a->share_next || a->liveness.forward.count() != 1
+            || !a->is_stop_grad() || !b->is_stop_grad() || !a->is_contiguous()
+            || a->shape != b->shape || a->dtype() != b->dtype()
+            || a->placement != b->placement || a->device_id != b->device_id)
+        return false;
+    if (a->placement.explicit_backend && a->placement.device.backend != BackendId::Cuda)
+        return false;
+    // These providers allocate a fresh result, rather than a view or an
+    // output aliased with an input. Broader producers retain the store path.
+    Op* producer = a->input();
+    if (!producer || !((has_op("cublas_matmul")
+                && producer->is_op(get_op_id("cublas_matmul")))
+            || (has_op("cublas_batched_matmul")
+                && producer->is_op(get_op_id("cublas_batched_matmul"))))) return false;
+    Op* update = b->input();
+    if (!update || !update->is_op(op_ids::binary())) return false;
+    int readers = 0;
+    for (auto* consumer : a->outputs())
+        if (consumer != update || ++readers > 1) return false;
+    if (readers != 1) return false;
+    auto version = a->peek_storage_version();
+    if (version && version.use_count() != 2) return false;
+    if (a->autograd_alias && (a->autograd_alias.use_count() != 1
+            || a->autograd_alias->version.use_count() != 1)) return false;
+    // Copy also covers copy_(rhs) when the caller still owns rhs: assigning
+    // rhs itself would make the two tensors share mutable storage.
+    static auto make_copy = op_constructor<VarPtr, Var*>("copy");
+    VarHolder copied(make_copy(b));
+    if (!version) version = a->storage_version_token();
+    target->assign(&copied);
+    std::atomic_store(&target->var->storage_mutation_version, version);
+    return true;
+}
+
+PyObject* fast_contiguous(PyObject* self, PyObject* tensor_type) {
+    if (!is_var(self) || !PyType_Check(tensor_type)) return none();
+    auto* holder = GET_RAW_PTR(VarHolder, self);
+    TensorPlacement placement = holder->var->placement;
+    if (!placement.explicit_backend || (placement.device.backend != BackendId::Cpu
+            && placement.device.backend != BackendId::Cuda)) return none();
+    // As tensor_frontend(..., like=self): the owner selects the result type
+    // and AD policy, while the input outranks any ambient construction device.
+    PyTensorFrontendScope frontend(reinterpret_cast<PyTypeObject*>(tensor_type));
+    TensorPlacementScope input_placement(placement);
+    return to_py_object<VarHolder*>(new VarHolder(contiguous_storage(holder->grad_input())));
+}
+
 PyObject* fast_unsqueeze(PyObject* self, int64 dim) {
     if (!is_var(self)) return none();
     Var* var = GET_RAW_PTR(VarHolder, self)->var;
@@ -1080,6 +1810,30 @@ PyObject* fast_unsqueeze(PyObject* self, int64 dim) {
     }
     if (dim == ndim) target.push_back(1);
     return storage_view(self, target);
+}
+
+PyObject* fast_storage_transpose(PyObject* self, PyObject* dims) {
+    if (!is_var(self) || !PyTuple_Check(dims) || PyTuple_GET_SIZE(dims) != 2)
+        return none();
+    int64 first, second;
+    if (!exact_int(PyTuple_GET_ITEM(dims, 0), first)
+            || !exact_int(PyTuple_GET_ITEM(dims, 1), second)) {
+        PyErr_Clear();
+        return none();
+    }
+    auto* holder = GET_RAW_PTR(VarHolder, self);
+    int ndim = holder->var->shape.size();
+    if (!ndim || first < -ndim || first >= ndim || second < -ndim || second >= ndim)
+        return none();
+    if (first < 0) first += ndim;
+    if (second < 0) second += ndim;
+    NanoVector axes;
+    for (int i = 0; i < ndim; ++i)
+        axes.push_back(i == first ? second : i == second ? first : i);
+    PyTensorFrontendScope scope(self, nullptr, 0, false);
+    unique_ptr<VarHolder> out(holder->storage_permute(axes));
+    out->set_transpose_view_of(holder, axes);
+    return to_py_object<VarHolder*>(out.release());
 }
 
 namespace {

@@ -63,20 +63,21 @@ def _broadcast_batch_dims(a, b):
     here before dispatch."""
     if a.ndim != b.ndim or a.ndim < 3:
         return a, b
+    # Snapshot metadata for this call: each shape read builds a Python value.
+    # Equal batch dimensions are already broadcast and need no per-axis work.
+    a_shape, b_shape = a.shape, b.shape
+    a_batch, b_batch = list(a_shape[:-2]), list(b_shape[:-2])
+    if a_batch == b_batch:
+        return a, b
     bshape = []
-    need = False
-    for i in range(a.ndim - 2):
-        an, bn = a.shape[i], b.shape[i]
+    for an, bn in zip(a_batch, b_batch):
         if an != bn:
             assert an == 1 or bn == 1, f"dimension not match, a.shape:{a.shape}, b.shape:{b.shape}"
-            need = True
         bshape.append(max(an, bn))
-    if not need:
-        return a, b
-    if list(a.shape[:-2]) != bshape:
-        a = a.expand(bshape + list(a.shape[-2:]))
-    if list(b.shape[:-2]) != bshape:
-        b = b.expand(bshape + list(b.shape[-2:]))
+    if a_batch != bshape:
+        a = a.expand(bshape + list(a_shape[-2:]))
+    if b_batch != bshape:
+        b = b.expand(bshape + list(b_shape[-2:]))
     return a, b
 
 
@@ -319,8 +320,9 @@ def _check_matmul_shapes(a, b, trans_a=False, trans_b=False, op="matmul", names=
         )
     a_axis = 0 if a_ndim == 1 else (-2 if trans_a else -1)
     b_axis = 0 if b_ndim == 1 else (-1 if trans_b else -2)
-    inner_a = a.shape[a_axis]
-    inner_b = b.shape[b_axis]
+    a_shape, b_shape = a.shape, b.shape
+    inner_a = a_shape[a_axis]
+    inner_b = b_shape[b_axis]
     if inner_a != inner_b:
         lhs, rhs = _operand(a_name, a), _operand(b_name, b)
         raise jt.JittorShapeError(
@@ -334,7 +336,10 @@ def _check_matmul_shapes(a, b, trans_a=False, trans_b=False, op="matmul", names=
     # product in every model. `nn.Linear` is exactly that shape.
     if a_ndim <= 2 or b_ndim <= 2:
         return
-    for offset, (left, right) in enumerate(zip(reversed(a.shape[:-2]), reversed(b.shape[:-2]))):
+    a_batch, b_batch = a_shape[:-2], b_shape[:-2]
+    if a_batch == b_batch:
+        return
+    for offset, (left, right) in enumerate(zip(reversed(a_batch), reversed(b_batch))):
         if left != right and left != 1 and right != 1:
             lhs, rhs = _operand(a_name, a), _operand(b_name, b)
             raise jt.JittorShapeError(
@@ -683,83 +688,91 @@ def matmul(a, b):
         c = jt.matmul(a, b)
         assert c.shape == [8, 10, 3, 5]
     """
+    return jt.core._matmul_contraction_call(_matmul_impl, _matmul_fallback, a, b)
+
+
+def _matmul_fallback(a, b):
     _check_matmul_shapes(a, b)
     with _contraction_scope(half_operands=_both_half(a, b)):
-        len_a = len(a.shape)
-        len_b = len(b.shape)
-        if len_b == 1:
-            # a: [n, m], b:[m], c:[n]
-            return (a * b).sum(-1)
-        if len_a == 1:
-            # a: [n], b:[n,k], c:[k]
-            return (a.broadcast(b, [-1]) * b).sum(0)
-        if len_a == 2 and len_b == 2:
-            # a: [n, m], b: [m, k], c: [n, k]
-            a_base = _transpose_base_last2(a)
+        return _matmul_impl(a, b)
+
+
+def _matmul_impl(a, b):
+    len_a = a.ndim
+    len_b = b.ndim
+    if len_b == 1:
+        # a: [n, m], b:[m], c:[n]
+        return (a * b).sum(-1)
+    if len_a == 1:
+        # a: [n], b:[n,k], c:[k]
+        return (a.broadcast(b, [-1]) * b).sum(0)
+    if len_a == 2 and len_b == 2:
+        # a: [n, m], b: [m, k], c: [n, k]
+        a_base = _transpose_base_last2(a)
+        b_base = _transpose_base_last2(b)
+        aa = a_base if a_base is not None else a
+        bb = b_base if b_base is not None else b
+        fast = _matmul_2d_cublas(
+            aa,
+            bb,
+            1 if a_base is not None else 0,
+            1 if b_base is not None else 0,
+        )
+        if fast is not None:
+            return _keep_operand_grads(a, b, aa, bb, fast)
+    if len_a >= 3 and len_a == len_b:
+        # bmm
+        # a: [..., n, m], b: [..., m, k], c:[..., n, k]
+        a_base = _transpose_base_last2(a)
+        b_base = _transpose_base_last2(b)
+        aa = a_base if a_base is not None else a
+        bb = b_base if b_base is not None else b
+        trans_a, trans_b = a_base is not None, b_base is not None
+        fast = _matmul_kernel_dispatch("batched_matmul", aa, bb, trans_a, trans_b)
+        if fast is not None:
+            return _keep_operand_grads(a, b, aa, bb, fast)
+    shape = []
+    len_c = max(len_a, len_b)
+    (n, m), (m_, k) = a.shape[-2:], b.shape[-2:]
+    assert m == m_, f"dimension not match, a.shape:{a.shape}, b.shape:{b.shape}"
+    # a: [..., n, m]
+    # b: [..., m, k]
+    # cc:[..., n, m, k]
+    #     -->
+    #     012
+    if len_b == 2 and len_a > 2:
+        # The 2-D kernel reads `a` as its flattened `(prod(leading), m)`,
+        # which for a dense row-major buffer is the same pointer and the
+        # same leading dimension -- so hand it the higher rank directly
+        # rather than reshaping into rank 2 and back out. Those two reshapes
+        # are pure views that generate no code, but a graph node each:
+        # measured at 64 of the 408 nodes a transformer decode step builds,
+        # and 34% of a stack of Linears. `a` must actually be dense for the
+        # flattening to describe it, so a strided view keeps the old route.
+        if a._storage_is_contiguous():
             b_base = _transpose_base_last2(b)
-            aa = a_base if a_base is not None else a
             bb = b_base if b_base is not None else b
-            fast = _matmul_2d_cublas(
-                aa,
-                bb,
-                1 if a_base is not None else 0,
-                1 if b_base is not None else 0,
-            )
+            fast = _matmul_2d_cublas(a, bb, 0, 1 if b_base is not None else 0)
             if fast is not None:
-                return _keep_operand_grads(a, b, aa, bb, fast)
-        if len_a >= 3 and len_a == len_b:
-            # bmm
-            # a: [..., n, m], b: [..., m, k], c:[..., n, k]
-            a_base = _transpose_base_last2(a)
-            b_base = _transpose_base_last2(b)
-            aa = a_base if a_base is not None else a
-            bb = b_base if b_base is not None else b
-            trans_a, trans_b = a_base is not None, b_base is not None
-            fast = _matmul_kernel_dispatch("batched_matmul", aa, bb, trans_a, trans_b)
-            if fast is not None:
-                return _keep_operand_grads(a, b, aa, bb, fast)
-        shape = []
-        len_c = max(len_a, len_b)
-        (n, m), (m_, k) = a.shape[-2:], b.shape[-2:]
-        assert m == m_, f"dimension not match, a.shape:{a.shape}, b.shape:{b.shape}"
-        # a: [..., n, m]
-        # b: [..., m, k]
-        # cc:[..., n, m, k]
-        #     -->
-        #     012
-        if len_b == 2 and len_a > 2:
-            # The 2-D kernel reads `a` as its flattened `(prod(leading), m)`,
-            # which for a dense row-major buffer is the same pointer and the
-            # same leading dimension -- so hand it the higher rank directly
-            # rather than reshaping into rank 2 and back out. Those two reshapes
-            # are pure views that generate no code, but a graph node each:
-            # measured at 64 of the 408 nodes a transformer decode step builds,
-            # and 34% of a stack of Linears. `a` must actually be dense for the
-            # flattening to describe it, so a strided view keeps the old route.
-            if a._storage_is_contiguous():
-                b_base = _transpose_base_last2(b)
-                bb = b_base if b_base is not None else b
-                fast = _matmul_2d_cublas(a, bb, 0, 1 if b_base is not None else 0)
-                if fast is not None:
-                    return _keep_operand_grads(a, b, a, bb, fast)
-            # TODO:ugly implementation for tuner
-            aa = a.reshape((-1, m))
-            cc = jt.nn.matmul(aa, b)
-            # print(a.shape, b.shape, cc.shape)
-            return cc.reshape(a.shape[:-1] + [k])
-        for i in range(len_c - 2):
-            ai = len_a - (len_c - i)
-            bi = len_b - (len_c - i)
-            an = a.shape[ai] if ai >= 0 else 1
-            bn = b.shape[bi] if bi >= 0 else 1
-            if an != 1 and bn != 1:
-                assert an == bn, f"dimension not match, a.shape:{a.shape}, b.shape:{b.shape}"
-            cn = max(an, bn)
-            shape.append(cn)
-        shape.extend([n, m, k])
-        a = a.broadcast(shape, [-1])
-        b = b.broadcast(shape, [-3])
-        return (a * b).sum(-2)
+                return _keep_operand_grads(a, b, a, bb, fast)
+        # TODO:ugly implementation for tuner
+        aa = a.reshape((-1, m))
+        cc = jt.nn.matmul(aa, b)
+        # print(a.shape, b.shape, cc.shape)
+        return cc.reshape(a.shape[:-1] + [k])
+    for i in range(len_c - 2):
+        ai = len_a - (len_c - i)
+        bi = len_b - (len_c - i)
+        an = a.shape[ai] if ai >= 0 else 1
+        bn = b.shape[bi] if bi >= 0 else 1
+        if an != 1 and bn != 1:
+            assert an == bn, f"dimension not match, a.shape:{a.shape}, b.shape:{b.shape}"
+        cn = max(an, bn)
+        shape.append(cn)
+    shape.extend([n, m, k])
+    a = a.broadcast(shape, [-1])
+    b = b.broadcast(shape, [-3])
+    return (a * b).sum(-2)
 
 
 def bilinear(in1, in2, weight, bias):

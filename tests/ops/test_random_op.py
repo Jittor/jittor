@@ -187,6 +187,47 @@ class TestRandomOp(unittest.TestCase):
         self.assertEqual(str(exact.dtype), "float64")
         self.assertEqual(exact.numpy()[3], 3 * 0.1)
         self.assertEqual(str(jt.arange(5).dtype), "int32")
+        # Zero-based unit ranges must retain their requested dtype, including
+        # the empty case; floating bounds still infer float32 without dtype.
+        for size in (0, 1, 17):
+            for dtype in ("int32", "int64", "float16", "float32", "float64"):
+                with self.subTest(size=size, dtype=dtype):
+                    value = jt.arange(size, dtype=dtype)
+                    self.assertEqual(str(value.dtype), dtype)
+                    value.sync()
+                    if size and jt.flags.use_cuda:
+                        self.assertEqual(value.location(), "device")
+                    np.testing.assert_array_equal(
+                        value.numpy(), np.arange(size, dtype=dtype))
+        for args in ((0., 5.), (0, 5, 1.)):
+            value = jt.arange(*args)
+            self.assertEqual(str(value.dtype), "float32")
+            np.testing.assert_array_equal(value.numpy(), np.arange(*args))
+
+    def _check_descending_arange(self):
+        for bounds in ((5, 0, -2), (5, -1, -2), (3, 0, -1),
+                       (2**40 + 5, 2**40, -2), (0, 0, -1)):
+            with self.subTest(bounds=bounds):
+                value = jt.arange(*bounds, dtype="int64")
+                value.sync()
+                if value.numel() and jt.flags.use_cuda:
+                    self.assertEqual(value.location(), "device")
+                np.testing.assert_array_equal(value.numpy(), np.arange(*bounds, dtype="int64"))
+        for bounds in ((1., 0., -.3), (1., 0., -.25), (-.5, -2., -.5)):
+            with self.subTest(bounds=bounds):
+                value = jt.arange(*bounds, dtype="float64")
+                value.sync()
+                if jt.flags.use_cuda:
+                    self.assertEqual(value.location(), "device")
+                np.testing.assert_allclose(value.numpy(), np.arange(*bounds), rtol=0, atol=1e-14)
+
+    def test_descending_arange(self):
+        self._check_descending_arange()
+
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "Cuda not found")
+    @jt.flag_scope(use_cuda=1)
+    def test_descending_arange_cuda(self):
+        self._check_descending_arange()
 
     def test_arange_float_arguments(self):
         self._check_arange_float_arguments()
@@ -195,6 +236,39 @@ class TestRandomOp(unittest.TestCase):
     @jt.flag_scope(use_cuda=1)
     def test_arange_float_arguments_cuda(self):
         self._check_arange_float_arguments()
+
+    def _check_int64_arange_large_bounds_and_fresh_outputs(self):
+        for bounds in ((0,), (7,), (2**40, 2**40 + 9, 3),
+                       (-2**40, -2**40 + 11, 2), (0, 2**40, 2**38)):
+            expected = np.arange(*bounds, dtype="int64")
+            for dtype in ("int64", jt.int64):
+                with self.subTest(bounds=bounds, dtype=dtype):
+                    value = jt.arange(*bounds, dtype=dtype)
+                    peer = jt.arange(*bounds, dtype=dtype)
+                    scalar_bounds = [jt.array(bound, dtype="int64") for bound in bounds]
+                    from_tensors = jt.arange(*scalar_bounds, dtype=dtype)
+                    for output in (value, peer, from_tensors):
+                        self.assertEqual(str(output.dtype), "int64")
+                        output.sync()
+                        if output.numel():
+                            self.assertEqual(output.location(),
+                                             "device" if jt.flags.use_cuda else "cpu")
+                        np.testing.assert_array_equal(output.numpy(), expected)
+                    if value.numel():
+                        value[0] = -13
+                        changed = expected.copy()
+                        changed[0] = -13
+                        np.testing.assert_array_equal(value.numpy(), changed)
+                        np.testing.assert_array_equal(peer.numpy(), expected)
+                        np.testing.assert_array_equal(from_tensors.numpy(), expected)
+
+    def test_int64_arange_large_bounds_and_fresh_outputs(self):
+        self._check_int64_arange_large_bounds_and_fresh_outputs()
+
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "Cuda not found")
+    @jt.flag_scope(use_cuda=1)
+    def test_int64_arange_large_bounds_and_fresh_outputs_cuda(self):
+        self._check_int64_arange_large_bounds_and_fresh_outputs()
 
     def test_a_descending_linspace_does_not_undershoot_its_end(self):
         """A schedule that ends below zero breaks its consumers.

@@ -1,5 +1,6 @@
 """Native/Torch policy isolation, delayed execution, and an independent RNN oracle."""
 from contextlib import contextmanager
+from functools import partial
 
 import numpy as np
 import pytest
@@ -169,7 +170,9 @@ def _run_lstm(frontend, x, weights, coefficient, is_torch, backward_tf32=None):
     from _helpers.logs import find_log_with_re
     model = frontend.nn.LSTM(x.shape[-1], weights[1].shape[-1], num_layers=1)
     names = ("weight_ih_l0", "weight_hh_l0", "bias_ih_l0", "bias_hh_l0")
-    creator = frontend.tensor if is_torch else jt.array
+    # This helper is called only by the CUDA RNN cases. Torch's factories
+    # default to CPU even while Jittor's accelerator execution is enabled.
+    creator = partial(frontend.tensor, device="cuda") if is_torch else jt.array
     for name, value in zip(names, weights):
         getattr(model, name).assign(creator(value, dtype="float32"))
     value = creator(x, dtype="float32")

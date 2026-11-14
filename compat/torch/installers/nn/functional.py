@@ -38,6 +38,17 @@ def _rms_norm(input, normalized_shape, weight=None, eps=None):
     # block stack is bfloat16 throughout -- to float32, which takes the matmuls
     # off the tensor cores and the attention off the flash backend.
     name = _dtype_to_str(input.dtype)
+    normalized = ((normalized_shape,) if isinstance(normalized_shape, int)
+                  else tuple(normalized_shape))
+    if (name == "float32" and weight is not None
+            and _dtype_to_str(weight.dtype) == "float32"
+            and len(normalized) == 1
+            and tuple(input.shape[-1:]) == normalized
+            and tuple(weight.shape) == normalized):
+        # The public native primitive owns backend selection and its gradient
+        # fallback. Restrict this route to FP32: low-precision RMS contracts
+        # differ in whether normalization is rounded before multiplying weight.
+        return nn.rms_norm(input, weight, eps)
     wide = "float32" if name in ("float16", "bfloat16") else name
     x = input.cast(wide)
     out = x * (1.0 / jt.sqrt((x * x).mean(dims, keepdims=True) + eps))

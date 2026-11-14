@@ -31,6 +31,10 @@ def _torch_permute(input, *dims, **kwargs):
 
 
 def _torch_transpose(input, *dims, **kwargs):
+    if not kwargs and _FAST_STORAGE_TRANSPOSE is not None:
+        result = _FAST_STORAGE_TRANSPOSE(input, dims)
+        if result is not None:
+            return result
     from jittor._core.var import _transpose_axis
     if kwargs:
         if set(kwargs) - {'dim0', 'dim1'} or len(dims) > 2:
@@ -115,6 +119,7 @@ def _bitcast(self, dt):
 #: installer has bound it: a dense tensor reshaped by integer sizes, without
 #: the frames. None answers for everything else.
 _FAST_VIEW = None
+_FAST_STORAGE_TRANSPOSE = None
 
 
 def _torch_reshape(self, *shape, **_kw):

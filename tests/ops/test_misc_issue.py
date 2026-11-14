@@ -7,6 +7,7 @@ from _helpers import capability as _test_capability
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 import unittest
+import pytest
 import jittor as jt
 import numpy as np
 
@@ -204,6 +205,7 @@ print(matmul_transpose(a, b))
         x = m.state_dict()
         m.load_state_dict(x)
 
+    @pytest.mark.network
     def test_res2net(self):
         import jittor.models
         net = jittor.models.res2net50(True)

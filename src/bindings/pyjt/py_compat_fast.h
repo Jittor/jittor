@@ -2,6 +2,7 @@
 
 #include <Python.h>
 #include "core/common.h"
+#include "core/var_holder.h"
 
 namespace jittor {
 
@@ -13,6 +14,65 @@ namespace jittor {
 // the native name where the table has none (`method_api._dtype_get`).
 // @pyjt(_frontend_dtype)
 PyObject* frontend_dtype(PyObject* self);
+
+// Differentiate once, preserving missing targets. If every result already
+// has its target's dtype, prepare ordinary stopped gradients in native code;
+// otherwise return the untouched results for the frontend's normalization.
+// The tuple is (gradients, prepared); create_graph keeps derivative edges.
+// @pyjt(_grad_optional_prepare)
+PyObject* grad_optional_prepare(VarHolder* loss,
+    const vector<VarHolder*>& targets, bool retain_graph, bool create_graph);
+
+// Batch the existing imperative storage writes after the optimizer has
+// resolved its group readers. False leaves every destination untouched.
+// Only materialized, dense CUDA tensors outside capture are accepted.
+// @pyjt(_try_optimizer_copies)
+bool try_optimizer_copies(PyObject* targets, PyObject* values);
+
+// Read current canonical holder metadata as one batch. None leaves observable
+// Python descriptors, subclasses and container iteration to the caller.
+// @pyjt(_try_optimizer_shape_changes)
+PyObject* try_optimizer_shape_changes(PyObject* params, PyObject* moments,
+    PyObject* variances, PyObject* canonical_types);
+
+// Fresh Adam entries or independently advanced, unexposed integer counters.
+// None leaves custom descriptors, counters and containers untouched. The
+// caller keeps provider selection between these two separate operations.
+// @pyjt(_try_optimizer_adam_entries)
+PyObject* try_optimizer_adam_entries(PyObject* group, PyObject* gradients,
+    PyObject* steps, PyObject* canonical_types, PyObject* protocol, bool advance);
+
+// Fresh optimizer update metadata only: unknown Python protocols stay on the
+// caller's ordinary path. No holder, value or eligibility survives the call.
+// @pyjt(_try_pack_optimizer_updates)
+PyObject* try_pack_optimizer_updates(PyObject* active, PyObject* updates,
+    PyObject* canonical_types, PyObject* writer, PyObject* protocol);
+
+// True/False for ordinary class attributes; None preserves Python descriptors.
+// @pyjt(_try_optimizer_writers)
+PyObject* try_optimizer_writers(PyObject* targets, PyObject* writer,
+    PyObject* protocol);
+
+// Publish this backward's fresh stopped gradients into empty ordinary slots.
+// False leaves custom accessors, accumulation and shared targets to Python.
+// All eligibility and holder metadata are read anew on every call.
+// @pyjt(_try_publish_fresh_gradients)
+bool try_publish_fresh_gradients(PyObject* groups, PyObject* gradients,
+    PyObject* filled, PyObject* canonical_types, PyObject* metadata_protocol,
+    PyObject* state_protocol);
+
+
+// A fresh, unallocated cuBLAS result with no aliases or other readers can be
+// replaced by an independent copy of its binary update. False retains the
+// imperative store. No tensor, graph or execution plan is cached.
+// @pyjt(_try_defer_unaliased_inplace)
+bool try_defer_unaliased_inplace(PyObject* self, PyObject* value);
+
+// An already allocated, unaliased CUDA destination can be updated by a fresh
+// write_back op. Its reader dependencies preserve snapshots without draining
+// unrelated pending work; its output retains the original storage.
+// @pyjt(_try_ordered_unaliased_inplace)
+bool try_ordered_unaliased_inplace(PyObject* self, PyObject* value);
 
 // What the fast paths below call back to decide: `tracing()`, whether a
 // step is being captured (`jittor._runtime.step_capture.tracing`). The optional
@@ -72,6 +132,17 @@ PyObject* fast_gelu(PyObject* x);
 // view of `self`, as `jittor.view` does. None for anything else.
 // @pyjt(_fast_view)
 PyObject* fast_view(PyObject* self, PyObject* shape);
+
+// Materialize a CPU/CUDA storage view under its frontend owner's type and
+// its own explicit placement. None for legacy placement or other backends.
+// @pyjt(_fast_contiguous)
+PyObject* fast_contiguous(PyObject* self, PyObject* tensor_type);
+
+// Torch's two-axis transpose as a physical storage view, retaining the
+// immediate input's autograd history. Exact integer axes only; other spellings
+// and invalid axes return None for the Python API's validation.
+// @pyjt(_fast_storage_transpose)
+PyObject* fast_storage_transpose(PyObject* self, PyObject* dims);
 
 // `tensor.unsqueeze(dim)` of a dense tensor, as the reshape above.
 // @pyjt(_fast_unsqueeze)

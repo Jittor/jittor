@@ -55,7 +55,9 @@ struct TraceData {
     unordered_map<int64, ExecuteOpInfo> execute_op_info;
     // jit_key map to id of execute_op_info
     unordered_map<string, vector<int64>> jit_key_map;
-    unordered_map<Node*, int64> id_map;
+    // Allocation addresses can be reused while tracing is disabled and the
+    // lifecycle observer is detached. A node's monotonic id remains unique.
+    unordered_map<int64, int64> id_map;
 
     void record_node(Node* node, bool record_stack=true);
     void release_node(Node*);

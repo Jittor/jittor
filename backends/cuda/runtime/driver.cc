@@ -725,6 +725,7 @@ BackendOps make_cuda_backend() {
     ops.id = BackendId::Cuda;
     ops.name = "cuda";
     ops.execution.supports_auto_flush = true;
+    ops.execution.async_admits_grad = true;
     ops.device_count = accelerator_count;
     ops.current_device = accelerator_current;
     ops.set_device = accelerator_set;

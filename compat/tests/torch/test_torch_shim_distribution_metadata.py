@@ -25,6 +25,7 @@ from __future__ import absolute_import
 import importlib.metadata
 import os
 from pathlib import Path
+import sys
 import unittest
 
 import torch
@@ -34,19 +35,16 @@ from _helpers.child_process import TORCH_MODE_VARIABLES, run_python_child
 
 _RESOURCES = Path(__file__).resolve().parents[3] / "compat" / "shim" / "resources"
 
-# The filter below works per *path entry*: a site directory holding any
-# `torch*.dist-info` is dropped whole. That is right for a reference PyTorch
-# installed into its own site directory -- the oracle environment -- but a venv
-# that also installs Jittor's shim there (the lab provisioned one that way)
-# loses every package on that path too, and the child then fails on the first
-# missing dependency (`tqdm`) rather than answering the question. The three
-# cases that run this way are only meaningful where a reference PyTorch keeps a
-# site directory of its own.
+# Hide reference Torch metadata without making unrelated runtime dependencies
+# disappear when a venv puts them on the same site path. This import-only
+# fallback does not implement find_distributions or alter metadata queries.
 _DROP_REFERENCE_TORCH = """
 import os as _os
 import sys as _sys
+from importlib.machinery import PathFinder as _PathFinder
 
 _kept = []
+_dependency_paths = []
 for _entry in _sys.path:
     try:
         _names = _os.listdir(_entry)
@@ -57,9 +55,19 @@ for _entry in _sys.path:
         _name.startswith("torch") and _name.endswith((".dist-info", ".egg-info"))
         for _name in _names
     ):
+        _dependency_paths.append(_entry)
         continue
     _kept.append(_entry)
 _sys.path[:] = _kept
+
+class _DependencyImports:
+    def find_spec(self, fullname, path=None, target=None):
+        if path is not None or fullname.split('.', 1)[0] in (
+                'torch', 'torchvision', 'torchaudio', 'torchgen', 'functorch'):
+            return None
+        return _PathFinder.find_spec(fullname, _dependency_paths)
+
+_sys.meta_path.append(_DependencyImports())
 """
 
 
@@ -124,6 +132,37 @@ class TestInProcessShimDistributionMetadata(unittest.TestCase):
     def test_packages_distributions_maps_the_torch_import_to_the_shim(self):
         mapping = importlib.metadata.packages_distributions()
         self.assertIn("torch", mapping.get("torch", ()))
+
+    def test_flash_facade_metadata_matches_deployment_and_import_mapping(self):
+        from jittor.compat.shim import torch_metadata
+
+        root = torch_metadata.resource_root().parent / "flash_attn_dist_info"
+        distribution = importlib.metadata.distribution("flash-attn")
+        self.assertEqual(distribution.read_text("METADATA"),
+                         (root / "METADATA").read_text(encoding="utf-8"))
+        self.assertEqual(importlib.metadata.version("flash_attn"),
+                         distribution.version)
+        self.assertIn("flash-attn", importlib.metadata.packages_distributions()["flash_attn"])
+
+    def test_explicit_unrelated_directory_sees_no_process_local_distribution(self):
+        from jittor.compat.shim import torch_metadata
+
+        finder = torch_metadata.publish()
+        context = importlib.metadata.DistributionFinder.Context(path=[os.devnull])
+        self.assertEqual(list(finder.find_distributions(context)), [])
+
+    def test_release_removes_both_process_local_distribution_answers(self):
+        from jittor.compat.shim import torch_metadata
+
+        finder = torch_metadata.publish()
+        try:
+            self.assertTrue(torch_metadata.release(finder))
+            self.assertNotIn(finder, sys.meta_path)
+        finally:
+            restored = torch_metadata.publish()
+        for name in ("torch", "flash-attn"):
+            context = importlib.metadata.DistributionFinder.Context(name=name)
+            self.assertEqual(len(list(restored.find_distributions(context))), 1)
 
     def test_release_and_publish_round_trip(self):
         from jittor.compat.shim import torch_metadata

@@ -55,8 +55,8 @@ struct BackendExecutionPolicy {
     // Hand a training forward's batches to the worker too, not an inference
     // graph's only. What an auto-flush costs a training step is that an
     // intermediate the backward reads is written out instead of fusing into
-    // its readers, so this is for a backend that does not fuse generated
-    // kernels in the first place.
+    // its readers. A backend admits this when overlapping fresh submissions
+    // with graph construction pays for those extra materializations.
     bool async_admits_grad = false;
 };
 

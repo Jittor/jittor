@@ -93,4 +93,36 @@ register_kernel(
 )
 
 
+# Native module dispatch may construct the ordinary CUDA matmul and bias add
+# together. These are code/registry identities, never tensor or graph values.
+# Capture them during import so a helper replaced before a Torch installation
+# is still authoritative when that installation binds its native dispatcher.
+_NATIVE_LINEAR_FUNCTION = linear
+_NATIVE_LINEAR_MATMUL_TRANSPOSE = _check_matmul_shapes.__globals__["matmul_transpose"]
+_NATIVE_LINEAR_BINDINGS = tuple(
+    (scope, key, scope[key])
+    for scope, names in (
+        (globals(), ("_lt_linear_cuda", "_lt_linear_train_cuda", "select_kernel",
+                     "bias_for_compute_dtype", "_check_matmul_shapes")),
+        (_check_matmul_shapes.__globals__,
+         ("matmul_transpose", "_matmul_2d_cublas", "_matmul_kernel_dispatch",
+          "select_kernel", "get_library_ops", "_cublas_matmul",
+          "_check_matmul_shapes", "_supports_cublas_complex")),
+        (_lt_linear_cuda.__globals__,
+         ("_supports", "_supports_training", "_output_requires_grad",
+          "_on_the_device", "compute_dtype_name", "_jittor_dtype_name",
+          "_MIN_ROWS", "_MIN_PRODUCT", "_CUDA_BUILD")),
+        (select_kernel.__globals__, ("select_kernel", "dispatch_context",
+                                    "_NATIVE_DISPATCH_CONTEXT")),
+    )
+    for key in names
+)
+_NATIVE_LINEAR_KERNELS = (
+    ("matmul", _check_matmul_shapes.__globals__["_cublas_matmul"],
+     _check_matmul_shapes.__globals__["_supports_cublas_complex"]),
+    ("linear_bias_accumulator", _lt_linear_cuda.__globals__["_linear_bias_accumulator"],
+     _lt_linear_cuda.__globals__["_supports_bias_accumulator"]),
+)
+
+
 __all__ = ["linear"]

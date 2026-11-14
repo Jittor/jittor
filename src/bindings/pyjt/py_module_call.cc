@@ -6,7 +6,9 @@
 #include "bindings/pyjt/py_compat_fast.h"
 #include "ops/op_register.h"
 #include "ops/composite/code_op.h"
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include "core/grad.h"
 #include "core/var_holder.h"
@@ -15,6 +17,7 @@
 #include <tuple>
 #include "runtime/device_state.h"
 #include "runtime/backend.h"
+#include "runtime/graph_capture.h"
 #include "ops/layout_propagation.h"
 #include "runtime/async_exec.h"
 #include "core/executor.h"
@@ -24,6 +27,7 @@ namespace jittor {
 DECLARE_FLAG(bool, no_grad);
 DECLARE_FLAG(int, amp_reg);
 DECLARE_FLAG(int, auto_mixed_precision_level);
+DECLARE_FLAG(int, keep_graph);
 
 
 namespace {
@@ -40,10 +44,83 @@ PyObject* prefer_forward_fn = nullptr;
 PyObject* standard_rms_norm = nullptr;
 PyObject* rms_selector_state = nullptr;
 PyObject* linear_execute = nullptr;
+PyObject* linear_training_state = nullptr;
+#if PY_VERSION_HEX < 0x030C0000
+// These epochs describe code owners, never operands, graph nodes or results.
+// CPython 3.12+ keeps the per-call owner checks below until its dictionary
+// watcher API is used here; do not depend on its deprecated dict layout.
+struct LinearOwnerEpochs {
+    vector<std::pair<PyDictObject*, uint64_t>> dictionaries;
+    vector<std::pair<PyTypeObject*, unsigned int>> types;
+    bool valid = false;
+
+    void clear() {
+        valid = false;
+        dictionaries.clear();
+        types.clear();
+    }
+
+    bool unchanged() const {
+        if (!valid) return false;
+        for (const auto& item : dictionaries)
+            if (item.first->ma_version_tag != item.second) return false;
+        for (const auto& item : types)
+            if (!PyType_HasFeature(item.first, Py_TPFLAGS_VALID_VERSION_TAG)
+                    || item.first->tp_version_tag != item.second) return false;
+        return true;
+    }
+
+    static bool inert_key(PyObject* key) {
+        if (PyUnicode_CheckExact(key)) return true;
+        if (!PyTuple_CheckExact(key)) return false;
+        for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(key); ++i)
+            if (!PyUnicode_CheckExact(PyTuple_GET_ITEM(key, i))) return false;
+        return true;
+    }
+
+    static bool inert_dictionary(PyDictObject* scope) {
+        // An exact-string lookup can still compare against a colliding key
+        // already stored in the dictionary. Its equality may execute Python.
+        Py_ssize_t position = 0;
+        PyObject* key;
+        while (PyDict_Next((PyObject*)scope, &position, &key, nullptr))
+            if (!inert_key(key)) return false;
+        return true;
+    }
+
+    void remember(PyObject* checks, PyObject* type_checks) {
+        for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(checks); ++i) {
+            PyObject* item = PyTuple_GET_ITEM(checks, i);
+            // User-defined hashes can run Python and mutate an earlier owner
+            // while the full check runs. Such bindings keep those full checks.
+            if (!inert_key(PyTuple_GET_ITEM(item, 1))) return;
+            auto* scope = (PyDictObject*)PyTuple_GET_ITEM(item, 0);
+            if (!scope->ma_version_tag) return;
+            if (std::none_of(dictionaries.begin(), dictionaries.end(),
+                    [&](const auto& entry) { return entry.first == scope; })) {
+                if (!inert_dictionary(scope)) return;
+                dictionaries.emplace_back(scope, scope->ma_version_tag);
+            }
+        }
+        for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(type_checks); ++i) {
+            PyObject* item = PyTuple_GET_ITEM(type_checks, i);
+            if (!PyUnicode_CheckExact(PyTuple_GET_ITEM(item, 1))) return;
+            auto* type = (PyTypeObject*)PyTuple_GET_ITEM(item, 0);
+            if (!PyType_HasFeature(type, Py_TPFLAGS_VALID_VERSION_TAG)
+                    || !type->tp_version_tag) return;
+            if (std::none_of(types.begin(), types.end(),
+                    [&](const auto& entry) { return entry.first == type; }))
+                types.emplace_back(type, type->tp_version_tag);
+        }
+        valid = true;
+    }
+} linear_owner_epochs;
+#endif
 PyObject* matmul_kernel = nullptr;
 PyObject* empty_kwargs = nullptr;
 PyObject* matmul_name = nullptr;
 auto make_cublas_matmul = op_constructor<VarPtr, Var*, Var*, bool, bool, bool>("cublas_matmul");
+auto make_linear_bias_add = op_constructor<VarPtr, Var*, Var*, NanoString>("binary");
 // The fused RMS norm `_standard_rms_norm` reaches on an inference call.
 PyObject* rms_inference_impl = nullptr;
 PyObject* rms_source_fn = nullptr;
@@ -110,6 +187,25 @@ PyObject* layer_norm_impl = nullptr;
 PyObject* layer_norm_source_fn = nullptr;
 PyObject* layer_norm_name = nullptr;
 std::map<std::tuple<int64, double, bool>, string> layer_norm_sources;
+
+// Keep fixed dictionary keys, never the values: hooks and module attributes
+// may change between calls and must be read from the live dictionary.
+PyObject* hook_keys[4] = {};
+PyObject* fsdp_state_key = nullptr;
+PyObject* threshold_key = nullptr;
+PyObject* call_depth_key = nullptr;
+PyObject* weight_key = nullptr;
+PyObject* bias_key = nullptr;
+PyObject* getattribute_key = nullptr;
+PyObject* linear_input_keys[6] = {};
+
+PyObject* interned(PyObject*& slot, const char* text) {
+    if (!slot) slot = PyUnicode_InternFromString(text);
+    return slot;
+}
+
+PyObject* name_weight() { return interned(weight_key, "weight"); }
+PyObject* name_bias() { return interned(bias_key, "bias"); }
 
 struct TypeInfo {
     PyObject* tensor_type = nullptr;
@@ -199,24 +295,43 @@ bool shortcut(PyObject* module, const TypeInfo& info) {
     PyObject* dict = PyObject_GenericGetDict(module, nullptr);
     if (!dict) { PyErr_Clear(); return false; }
     PyObjHolder dict_holder(dict);
-    for (const char* hook : {"_forward_pre_hooks", "_forward_hooks",
-                             "_input_backward_hooks", "_output_backward_hooks"}) {
-        PyObject* table = PyDict_GetItemString(dict, hook);
+    const char* hooks[] = {"_forward_pre_hooks", "_forward_hooks",
+                          "_input_backward_hooks", "_output_backward_hooks"};
+    for (int i = 0; i < 4; ++i) {
+        PyObject* table = PyDict_GetItem(dict, interned(hook_keys[i], hooks[i]));
         if (table && PyObject_IsTrue(table)) return false;
     }
-    if (PyDict_GetItemString(dict, "_fsdp_state")) return false;
-    PyObjHolder depth(PyObject_GetAttrString(module_cls, "_call_depth"));
+    if (PyDict_GetItem(dict, interned(fsdp_state_key, "_fsdp_state"))) return false;
+    PyObjHolder depth(PyObject_GetAttr(module_cls, interned(call_depth_key, "_call_depth")));
     if (!PyObject_IsTrue(depth.obj)) return false;
     PyObjHolder id(PyLong_FromVoidPtr(module));
     int done = PySet_Contains(published, id.obj);
     if (done <= 0) { PyErr_Clear(); return false; }
-    PyObject* threshold = PyDict_GetItemString(pipeline, "threshold");
+    PyObject* threshold = PyDict_GetItem(pipeline, interned(threshold_key, "threshold"));
     if (!threshold || !PyLong_Check(threshold) || PyLong_AsLong(threshold) > 0) return false;
     return true;
 }
 
 PyObject* call_with(PyObject* fn, PyObject* module, PyObject* args, PyObject* kwargs) {
     Py_ssize_t n = PyTuple_GET_SIZE(args);
+#if PY_VERSION_HEX >= 0x03090000
+    // The caller owns module and args throughout this call. Borrow their
+    // references instead of allocating a tuple and refcounting every argument
+    // again at each nested module boundary. VectorcallDict also supports
+    // arbitrary callables through CPython's ordinary call fallback.
+    PyObject* local[8];
+    vector<PyObject*> large;
+    PyObject** values = local;
+    if (n + 1 > 8) {
+        large.resize(n + 1);
+        values = large.data();
+    }
+    values[0] = module;
+    for (Py_ssize_t i = 0; i < n; ++i)
+        values[i + 1] = PyTuple_GET_ITEM(args, i);
+    GraphLockSuspend python_call;
+    return PyObject_VectorcallDict(fn, values, size_t(n + 1), kwargs);
+#else
     PyObjHolder full(PyTuple_New(n + 1));
     Py_INCREF(module);
     PyTuple_SET_ITEM(full.obj, 0, module);
@@ -229,6 +344,7 @@ PyObject* call_with(PyObject* fn, PyObject* module, PyObject* args, PyObject* kw
     // the worker thread, if any, may take the graph lock meanwhile.
     GraphLockSuspend python_call;
     return PyObject_Call(fn, full.obj, kwargs);
+#endif
 }
 
 bool is_var(PyObject* value) {
@@ -252,10 +368,6 @@ Var* first_placed_module_var(PyObject* module) {
     return nullptr;
 }
 
-PyObject* interned(PyObject*& slot, const char* text) {
-    if (!slot) slot = PyUnicode_InternFromString(text);
-    return slot;
-}
 PyObject* forward_key = nullptr;
 PyObject* execute_key = nullptr;
 PyObject* name_forward() { return interned(forward_key, "forward"); }
@@ -266,8 +378,8 @@ PyObject* name_execute() { return interned(execute_key, "execute"); }
 // would pick that relay. nullptr when anything else would happen.
 PyObject* linear_without_bias(PyObject* module, PyObject* dict, PyObject* x) {
     if (!matmul_kernel || !dict || !is_var(x)) return nullptr;
-    PyObject* weight = PyDict_GetItemString(dict, "weight");
-    PyObject* bias = PyDict_GetItemString(dict, "bias");
+    PyObject* weight = PyDict_GetItem(dict, name_weight());
+    PyObject* bias = PyDict_GetItem(dict, name_bias());
     if (!weight || !is_var(weight) || (bias && bias != Py_None)) return nullptr;
     Var* a = GET_RAW_PTR(VarHolder, x)->var;
     Var* w = GET_RAW_PTR(VarHolder, weight)->var;
@@ -275,8 +387,8 @@ PyObject* linear_without_bias(PyObject* module, PyObject* dict, PyObject* x) {
     if (w->shape.size() != 2 || rank < 2 || a->shape[rank - 1] != w->shape[1]) return nullptr;
     if (a->dtype() != w->dtype() || !a->dtype().is_float()) return nullptr;
     // A large product that records gradients goes to `nn.Linear.execute`,
-    // whose training route times cuBLASLt's candidates for its three GEMMs
-    // (`lt_linear_train_cuda`, whose thresholds these are): for a Qwen3 MLP's
+    // whose training route may time cuBLASLt's candidates for its three GEMMs
+    // (`lt_linear_train_cuda` applies its own, possibly larger size floor): for a Qwen3 MLP's
     // weight gradient the heuristic pick taken here ran 219 us, the best
     // candidate 172. That route makes its own checks and falls back to this
     // same product.
@@ -294,6 +406,123 @@ PyObject* linear_without_bias(PyObject* module, PyObject* dict, PyObject* x) {
     if (kernel.obj != matmul_kernel) return nullptr;
     PyTensorFrontendScope scope(x, nullptr, 0, false);
     return to_py_object<VarHolder*>(new VarHolder(make_cublas_matmul(a, w, false, true, false)));
+}
+
+// The ordinary FP32 training path is the same cuBLAS product and bias add
+// that linear() builds. Its Python eligibility/shape/dispatch frames cost more
+// than these small products. Only code and immutable registration identities
+// are remembered; every call reads live operands and creates fresh operators.
+PyObject* linear_with_bias_training(PyObject* module, PyObject* dict, PyObject* x) {
+    if (!linear_training_state || no_grad || amp_reg || keep_graph
+            || graph_capture_active() || !runtime_flag_use_cuda()
+            || accelerator_backend_id() != BackendId::Cuda || !dict || !is_var(x))
+        return nullptr;
+    PyObject* weight = PyDict_GetItem(dict, name_weight());
+    PyObject* bias = PyDict_GetItem(dict, name_bias());
+    if (!weight || !bias || !is_var(weight) || !is_var(bias)) return nullptr;
+    PyObject* checks = PyTuple_GET_ITEM(linear_training_state, 0);
+    PyObject* type_checks = PyTuple_GET_ITEM(linear_training_state, 1);
+    PyObject* types = PyTuple_GET_ITEM(linear_training_state, 2);
+    PyObject* missing = PyTuple_GET_ITEM(linear_training_state, 4);
+    PyTypeObject* module_type = Py_TYPE(module);
+    if (_PyType_Lookup(module_type, interned(getattribute_key, "__getattribute__"))
+                != PyTuple_GET_ITEM(linear_training_state, 3)
+            || _PyType_Lookup(module_type, name_weight())
+            || _PyType_Lookup(module_type, name_bias()))
+        return nullptr;
+    for (PyObject* operand : {x, weight, bias}) {
+        bool canonical = false;
+        for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(types); ++i)
+            canonical |= (PyObject*)Py_TYPE(operand) == PyTuple_GET_ITEM(types, i);
+        if (!canonical) return nullptr;
+        PyObject** attributes = _PyObject_GetDictPtr(operand);
+        if (attributes && *attributes) {
+            const char* names[] = {"_storage_is_contiguous", "dtype", "shape",
+                                   "requires_grad", "placement_backend",
+                                   "_jittor_fsdp2_entry"};
+            for (int i = 0; i < 6; ++i)
+                if (PyDict_GetItem(*attributes, interned(linear_input_keys[i], names[i])))
+                    return nullptr;
+        }
+    }
+    // A changed selector or registration takes the Python owner before any
+    // predicate is called, so rejecting/raising providers are not evaluated twice.
+    auto same_binding = [](PyObject* value, PyObject* expected) {
+        if (value == expected) return true;
+        // unregister_kernel rebuilds its immutable tuple around the same
+        // registrations. Restoring those owners must re-enable the shortcut.
+        if (!value || !PyTuple_CheckExact(value) || !PyTuple_CheckExact(expected)
+                || PyTuple_GET_SIZE(value) != PyTuple_GET_SIZE(expected)) return false;
+        for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(value); ++i)
+            if (PyTuple_GET_ITEM(value, i) != PyTuple_GET_ITEM(expected, i)) return false;
+        return true;
+    };
+    bool owners_current = false;
+#if PY_VERSION_HEX < 0x030C0000
+    owners_current = linear_owner_epochs.unchanged();
+#endif
+    if (!owners_current) {
+#if PY_VERSION_HEX < 0x030C0000
+        linear_owner_epochs.clear();
+#endif
+        for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(checks); ++i) {
+            PyObject* item = PyTuple_GET_ITEM(checks, i);
+            PyObject* value = PyDict_GetItem(PyTuple_GET_ITEM(item, 0), PyTuple_GET_ITEM(item, 1));
+            PyObject* expected = PyTuple_GET_ITEM(item, 2);
+            if (expected == missing ? value != nullptr : !same_binding(value, expected)) return nullptr;
+        }
+        for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(type_checks); ++i) {
+            PyObject* item = PyTuple_GET_ITEM(type_checks, i);
+            PyObject* value = _PyType_Lookup((PyTypeObject*)PyTuple_GET_ITEM(item, 0),
+                                            PyTuple_GET_ITEM(item, 1));
+            PyObject* expected = PyTuple_GET_ITEM(item, 2);
+            if (expected == missing ? value != nullptr : value != expected) return nullptr;
+        }
+#if PY_VERSION_HEX < 0x030C0000
+        linear_owner_epochs.remember(checks, type_checks);
+#endif
+    }
+    if (!has_op("cublas_matmul")) return nullptr;
+    auto* xh = GET_RAW_PTR(VarHolder, x);
+    auto* wh = GET_RAW_PTR(VarHolder, weight);
+    auto* bh = GET_RAW_PTR(VarHolder, bias);
+    auto eligible = [&]() {
+        // A dense input view uses the same matmul/VJP as its Python owner.
+        // Its live alias history is observed below before building the Ops.
+        // Parameter views retain the Python owner's more general handling.
+        if (wh->view || bh->view) return false;
+        for (auto* holder : {xh, wh, bh}) {
+            Var* value = holder->var;
+            if (value->storage_offset_bytes || !value->is_contiguous()
+                    || value->dtype() != ns_float32
+                    || (value->placement.explicit_backend
+                        && value->placement.device.backend != BackendId::Cuda))
+                return false;
+        }
+        Var* a = xh->var; Var* w = wh->var; Var* b = bh->var;
+        int rank = a->shape.size();
+        if (rank < 2 || w->shape.size() != 2 || b->shape.size() != 1
+                || a->num <= 0 || w->shape[0] <= 0 || w->shape[1] <= 0
+                || a->shape[rank - 1] != w->shape[1] || b->shape[0] != w->shape[0]
+                || a->device_id != w->device_id || a->device_id != b->device_id
+                || !wh->get_requires_grad())
+            return false;
+        int64 rows = a->num / w->shape[1];
+        // Leave potentially tunable products to the live Python owner. Its
+        // own size floor may keep more of them on the ordinary matmul/VJP.
+        return rows < 1024
+            || double(rows) * w->shape[0] * w->shape[1] < double(int64(1) << 28);
+    };
+    if (!eligible()) return nullptr;
+    // The constructor may release the GIL. Keep this call's old operands alive
+    // even if another thread replaces the module's parameters meanwhile.
+    PyObjHolder owners(PyTuple_Pack(3, x, weight, bias));
+    for (auto* holder : {xh, wh, bh}) holder->observe_alias_history();
+    if (!eligible()) return nullptr;
+    PyTensorFrontendScope scope(x, nullptr, 0, false);
+    auto product = make_cublas_matmul(xh->var, wh->var, false, true, false);
+    return to_py_object<VarHolder*>(new VarHolder(
+        make_linear_bias_add(product, bh->var, ns_add)));
 }
 
 bool pair_of_ints(PyObject* value, int& a, int& b) {
@@ -336,8 +565,8 @@ PyObject* conv2d_inference(PyObject* dict, PyObject* x) {
     if (!conv_cudnn_kernel || !cudnn_backend || !conv_filter_key || !no_grad || amp_reg
             || !runtime_flag_use_cuda() || !dict || !is_var(x))
         return nullptr;
-    PyObject* weight = PyDict_GetItemString(dict, "weight");
-    PyObject* bias = PyDict_GetItemString(dict, "bias");
+    PyObject* weight = PyDict_GetItem(dict, name_weight());
+    PyObject* bias = PyDict_GetItem(dict, name_bias());
     PyObject* groups = PyDict_GetItemString(dict, "groups");
     PyObject* mode = PyDict_GetItemString(dict, "padding_mode");
     if (!weight || !is_var(weight) || !bias || !groups || !PyLong_Check(groups)
@@ -430,7 +659,7 @@ PyObject* batch_norm_eval_channels_last(PyObject* dict, PyObject* x) {
     if (!train || PyObject_IsTrue(train) != 0) { PyErr_Clear(); return nullptr; }
     Var* a = GET_RAW_PTR(VarHolder, x)->var;
     if (a->shape.size() != 4 || a->is_contiguous()) return nullptr;
-    PyObject* names[4] = {PyDict_GetItemString(dict, "weight"), PyDict_GetItemString(dict, "bias"),
+    PyObject* names[4] = {PyDict_GetItem(dict, name_weight()), PyDict_GetItem(dict, name_bias()),
                           PyDict_GetItemString(dict, "running_mean"),
                           PyDict_GetItemString(dict, "running_var")};
     for (auto* v : names) if (!v || !is_var(v)) return nullptr;
@@ -631,8 +860,8 @@ PyObject* group_norm_inference(PyObject* dict, PyObject* x) {
     PyObject* groups_obj = PyDict_GetItemString(dict, "num_groups");
     PyObject* channels_obj = PyDict_GetItemString(dict, "num_channels");
     PyObject* eps_obj = PyDict_GetItemString(dict, "eps");
-    PyObject* weight = PyDict_GetItemString(dict, "weight");
-    PyObject* bias = PyDict_GetItemString(dict, "bias");
+    PyObject* weight = PyDict_GetItem(dict, name_weight());
+    PyObject* bias = PyDict_GetItem(dict, name_bias());
     if (!groups_obj || !channels_obj || !eps_obj || !weight || !bias || !is_var(weight) || !is_var(bias)
             || !PyLong_CheckExact(groups_obj) || !PyLong_CheckExact(channels_obj)
             || !(PyFloat_CheckExact(eps_obj) || PyLong_CheckExact(eps_obj)))
@@ -687,8 +916,8 @@ PyObject* linear_with_bias_inference(PyObject* dict, PyObject* x) {
     if (!lt_linear_source_fn || lt_linear_header_text.empty() || !no_grad || amp_reg
             || !runtime_flag_use_cuda() || accelerator_backend_id() != BackendId::Cuda
             || !dict || !is_var(x))
-        return nullptr;    PyObject* weight = PyDict_GetItemString(dict, "weight");
-    PyObject* bias = PyDict_GetItemString(dict, "bias");
+        return nullptr;    PyObject* weight = PyDict_GetItem(dict, name_weight());
+    PyObject* bias = PyDict_GetItem(dict, name_bias());
     if (!weight || !is_var(weight) || !bias || !is_var(bias)) return nullptr;
     Var* a = GET_RAW_PTR(VarHolder, x)->var;
     Var* w = GET_RAW_PTR(VarHolder, weight)->var;
@@ -765,7 +994,7 @@ PyObject* rms_norm_registered_inference(PyObject* module, PyObject* dict, PyObje
     PyObjHolder epsilon_name(PyUnicode_FromString("variance_epsilon"));
     if (_PyType_Lookup(Py_TYPE(module), weight_name.obj)
             || _PyType_Lookup(Py_TYPE(module), epsilon_name.obj)) return nullptr;
-    PyObject* weight = PyDict_GetItemString(dict, "weight");
+    PyObject* weight = PyDict_GetItem(dict, name_weight());
     PyObject* eps = PyDict_GetItemString(dict, "variance_epsilon");
     if (!weight || !is_var(weight) || !eps || !(PyFloat_Check(eps) || PyLong_Check(eps)))
         return nullptr;
@@ -829,7 +1058,7 @@ PyObject* rms_norm_inference(PyObject* module, PyObject* dict, PyObject* x) {
     PyObject* registered = rms_norm_registered_inference(module, dict, x);
     if (registered || PyErr_Occurred()) return registered;
     if (!rms_inference_impl || !rms_source_fn || acl_possible) return nullptr;
-    PyObject* weight = PyDict_GetItemString(dict, "weight");
+    PyObject* weight = PyDict_GetItem(dict, name_weight());
     PyObject* eps = PyDict_GetItemString(dict, "variance_epsilon");
     if (!weight || !is_var(weight) || !eps || !(PyFloat_Check(eps) || PyLong_Check(eps)))
         return nullptr;
@@ -877,8 +1106,8 @@ PyObject* layer_norm_inference(PyObject* dict, PyObject* x) {
     PyObject* shape = PyDict_GetItemString(dict, "normalized_shape");
     PyObject* eps = PyDict_GetItemString(dict, "eps");
     PyObject* affine = PyDict_GetItemString(dict, "elementwise_affine");
-    PyObject* weight = PyDict_GetItemString(dict, "weight");
-    PyObject* bias = PyDict_GetItemString(dict, "bias");
+    PyObject* weight = PyDict_GetItem(dict, name_weight());
+    PyObject* bias = PyDict_GetItem(dict, name_bias());
     if (!shape || !PyTuple_Check(shape) || PyTuple_GET_SIZE(shape) != 1 || affine != Py_True
             || !eps || !PyFloat_Check(eps) || !weight || !is_var(weight)
             || !bias || !is_var(bias))
@@ -928,7 +1157,7 @@ PyObject* dispatch_native(PyObject* module, const TypeInfo& info, PyObject* args
     PyObject** dict_ptr = _PyObject_GetDictPtr(module);
     PyObject* dict = dict_ptr ? *dict_ptr : nullptr;
     if (dict) {
-        PyObject* own = PyDict_GetItemString(dict, "forward");
+        PyObject* own = PyDict_GetItem(dict, name_forward());
         if (own && PyCallable_Check(own)) {
             GraphLockSuspend python_call;
             return PyObject_Call(own, args, kwargs);
@@ -967,45 +1196,47 @@ PyObject* dispatch_native(PyObject* module, const TypeInfo& info, PyObject* args
     }
     if (!kwargs && PyTuple_GET_SIZE(args) == 1 && linear_execute
             && _PyType_Lookup(type, name_execute()) == linear_execute
-            && !(dict && PyDict_GetItemString(dict, "execute"))) {
+            && !(dict && PyDict_GetItem(dict, name_execute()))) {
         PyObject* fast = linear_without_bias(module, dict, PyTuple_GET_ITEM(args, 0));
         if (fast || PyErr_Occurred()) return fast;
         fast = linear_with_bias_inference(dict, PyTuple_GET_ITEM(args, 0));
         if (fast || PyErr_Occurred()) return fast;
+        fast = linear_with_bias_training(module, dict, PyTuple_GET_ITEM(args, 0));
+        if (fast || PyErr_Occurred()) return fast;
     }
     if (!kwargs && PyTuple_GET_SIZE(args) == 1 && conv_execute
             && _PyType_Lookup(type, name_execute()) == conv_execute
-            && !(dict && PyDict_GetItemString(dict, "execute"))) {
+            && !(dict && PyDict_GetItem(dict, name_execute()))) {
         PyObject* fast = conv2d_inference(dict, PyTuple_GET_ITEM(args, 0));
         if (fast || PyErr_Occurred()) return fast;
     }
     if (!kwargs && PyTuple_GET_SIZE(args) == 1 && batch_norm_execute
             && _PyType_Lookup(type, name_execute()) == batch_norm_execute
-            && !(dict && PyDict_GetItemString(dict, "execute"))) {
+            && !(dict && PyDict_GetItem(dict, name_execute()))) {
         PyObject* fast = batch_norm_eval_channels_last(dict, PyTuple_GET_ITEM(args, 0));
         if (fast || PyErr_Occurred()) return fast;
     }
     if (!kwargs && PyTuple_GET_SIZE(args) == 1 && layer_norm_execute
             && _PyType_Lookup(type, name_execute()) == layer_norm_execute
-            && !(dict && PyDict_GetItemString(dict, "execute"))) {
+            && !(dict && PyDict_GetItem(dict, name_execute()))) {
         PyObject* fast = layer_norm_inference(dict, PyTuple_GET_ITEM(args, 0));
         if (fast || PyErr_Occurred()) return fast;
     }
     if (!kwargs && PyTuple_GET_SIZE(args) == 1 && dropout_execute
             && _PyType_Lookup(type, name_execute()) == dropout_execute
-            && !(dict && PyDict_GetItemString(dict, "execute"))) {
+            && !(dict && PyDict_GetItem(dict, name_execute()))) {
         PyObject* same = dropout_passthrough(dict, PyTuple_GET_ITEM(args, 0));
         if (same) return same;
     }
     if (!kwargs && PyTuple_GET_SIZE(args) == 1 && function_module_execute
             && _PyType_Lookup(type, name_execute()) == function_module_execute
-            && !(dict && PyDict_GetItemString(dict, "execute"))) {
+            && !(dict && PyDict_GetItem(dict, name_execute()))) {
         PyObject* fast = activation_module(type, dict, PyTuple_GET_ITEM(args, 0));
         if (fast || PyErr_Occurred()) return fast;
     }
     if (!kwargs && PyTuple_GET_SIZE(args) == 1 && group_norm_execute
             && _PyType_Lookup(type, name_execute()) == group_norm_execute
-            && !(dict && PyDict_GetItemString(dict, "execute"))) {
+            && !(dict && PyDict_GetItem(dict, name_execute()))) {
         PyObject* fast = group_norm_inference(dict, PyTuple_GET_ITEM(args, 0));
         if (fast || PyErr_Occurred()) return fast;
     }
@@ -1041,6 +1272,31 @@ void module_call_bind(PyObject* module_cls_, PyObject* dispatch_call_,
             || !PyDict_Check(PyTuple_GET_ITEM(rms_selector_state, 5))))
         throw std::invalid_argument("invalid RMSNorm selector state");
     part(linear_execute, "linear_execute");
+#if PY_VERSION_HEX < 0x030C0000
+    // The state owns every borrowed dictionary/type pointer in the epochs.
+    // Forget them before replacing even a byte-identical set of bindings.
+    linear_owner_epochs.clear();
+#endif
+    part(linear_training_state, "linear_training_state");
+    if (linear_training_state) {
+        if (!PyTuple_CheckExact(linear_training_state)
+                || PyTuple_GET_SIZE(linear_training_state) != 5)
+            throw std::invalid_argument("invalid Linear training dispatch state");
+        for (int group : {0, 1, 2})
+            if (!PyTuple_CheckExact(PyTuple_GET_ITEM(linear_training_state, group)))
+                throw std::invalid_argument("invalid Linear training dispatch entries");
+        for (int group : {0, 1}) {
+            PyObject* entries = PyTuple_GET_ITEM(linear_training_state, group);
+            for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(entries); ++i) {
+                PyObject* item = PyTuple_GET_ITEM(entries, i);
+                if (!PyTuple_CheckExact(item) || PyTuple_GET_SIZE(item) != 3
+                        || (group == 0 && !PyDict_CheckExact(PyTuple_GET_ITEM(item, 0)))
+                        || (group == 1 && (!PyType_Check(PyTuple_GET_ITEM(item, 0))
+                            || !PyUnicode_Check(PyTuple_GET_ITEM(item, 1)))))
+                    throw std::invalid_argument("invalid Linear training owner binding");
+            }
+        }
+    }
     part(matmul_kernel, "matmul_kernel");
     part(rms_inference_impl, "rms_norm_inference");
     part(rms_source_fn, "rms_norm_source");

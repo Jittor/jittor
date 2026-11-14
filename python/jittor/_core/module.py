@@ -15,6 +15,21 @@ from .hooks import _RemovableHandle, grad_hooker
 _FLAGS = None
 _auto_replay_for = None
 
+
+class _ModuleCallState:
+    """Live call depth without invalidating every Module subclass's type cache."""
+    __slots__ = ("depth",)
+
+    def __init__(self):
+        self.depth = 0
+
+    def __get__(self, instance, owner=None):
+        # Keep the integer view used by native module dispatch and introspection.
+        return self.depth
+
+
+_CALL_STATE = _ModuleCallState()
+
 # This annotation historically refers to the native cast, not builtin bool.
 bool = ops.bool
 
@@ -120,11 +135,16 @@ def _walk(module, recurse=True, memo=None):
             continue
         yield prefix, current
         if descend:
+            child_pairs = children(current)
+            if type(child_pairs) is list and not child_pairs:
+                del child_pairs
+                continue
             dot = prefix + "." if prefix else ""
             ancestors.add(id(current))
             todo.append(("", current, None))
-            for key, child in reversed(children(current)):
+            for key, child in reversed(child_pairs):
                 todo.append((dot + str(key), child, True))
+            del child_pairs
 
 
 def _walk_by_dfs(module, prefix, recurse):
@@ -236,18 +256,18 @@ class Module:
             # Hooked roots are still roots: their children must not start
             # independent automatic replays. A child replay can skip Python
             # forward wrappers installed by the parent to collect outputs.
-            depth = Module._call_depth
-            Module._call_depth = depth + 1
+            depth = _CALL_STATE.depth
+            _CALL_STATE.depth = depth + 1
             try:
                 return self.__hooked_call__(*args, **kw)
             finally:
-                Module._call_depth = depth
+                _CALL_STATE.depth = depth
         # A submodule of a call already running is part of that call's graph,
         # not a graph of its own, so only the outermost call consults the
         # policy. Ordering matters for cost: this branch is taken by every
         # submodule -- 56 of the 57 module calls in an 8-layer transformer
         # forward -- and it has to stay one attribute read and a jump.
-        if Module._call_depth:
+        if _CALL_STATE.depth:
             return self._dispatch_call(*args, **kw)
         flags = _FLAGS
         if flags is None:
@@ -264,13 +284,13 @@ class Module:
         # inference graph took 4.1 ms of host time to build, 3.6 with the
         # depth kept.
         replay = _auto_replay_for(self, args, kw) if flags.auto_graph_replay else None
-        Module._call_depth = 1
+        _CALL_STATE.depth = 1
         try:
             if replay is not None:
                 return replay(*args, **kw)
             return self._dispatch_call(*args, **kw)
         finally:
-            Module._call_depth = 0
+            _CALL_STATE.depth = 0
 
     def _dispatch_call(self, *args, **kw):
         """What ``__call__`` runs once the hooks have had their say.
@@ -742,7 +762,9 @@ class Module:
 
     #: How many module calls are on the stack. Class-level, not per instance:
     #: it is a property of the call stack, not of any module.
-    _call_depth = 0
+    # Rebinding an attribute on Module invalidates attribute lookup caches for
+    # all its subclasses. A forward changes only the shared state's depth.
+    _call_depth = _CALL_STATE
 
     def _has_hooks(self):
         # `__call__` asks this for every module of every forward, and almost no

@@ -28,8 +28,8 @@ def _check_contiguous(device):
         with forbid_backend_fallbacks():
             packed.sync()
             gradient.sync()
-            assert packed.placement_backend == (2 if device == "npu" else 0)
-            assert packed.location() == ("device" if device == "npu" else "cpu")
+            assert packed.placement_backend == {"cpu": 0, "cuda": 1, "npu": 2}[device]
+            assert packed.location() == ("cpu" if device == "cpu" else "device")
             actual = packed.detach().cpu().numpy()
             actual_gradient = gradient.detach().cpu().numpy()
         expected = source_np.T if kind == "transpose" else np.broadcast_to(source_np, (4, 3))
@@ -163,6 +163,44 @@ def test_a_shard_reads_back_from_the_storage_that_carries_it():
 def test_contiguous_storage_and_gradient_cpu():
     with jt.flag_scope(use_cuda=0):
         _check_contiguous("cpu")
+
+
+@pytest.mark.cuda
+def test_contiguous_storage_and_gradient_cuda():
+    if not capability.check_accelerator("cuda", backend=jt).enabled:
+        pytest.skip("No CUDA found")
+    with jt.flag_scope(use_cuda=1, auto_graph_replay=0):
+        _check_contiguous("cuda")
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_contiguous_restores_context_and_respects_native_override(device, monkeypatch):
+    if device == "cuda" and not capability.check_accelerator("cuda", backend=jt).enabled:
+        pytest.skip("No CUDA found")
+    with jt.flag_scope(auto_graph_replay=0):
+        source = torch.tensor([[1., 2.], [3., 4.]], device=device)
+        view = source.t()
+        type_token = jt.core._set_tensor_frontend_type(jt.Var)
+        placement_token = jt.core._set_tensor_placement(1 if device == "cpu" else 0, 0)
+        try:
+            requested = jt.core._current_tensor_placement()
+            packed = view.contiguous()
+            assert type(packed) is torch.Tensor
+            assert type(jt.core.ops.empty((0,), "float32")) is jt.Var
+            assert jt.core._current_tensor_placement() == requested
+        finally:
+            jt.core._reset_tensor_placement(placement_token)
+            jt.core._reset_tensor_frontend_type(type_token)
+        packed.sync()
+        assert packed.device.type == device
+        assert packed.location() == ("cpu" if device == "cpu" else "device")
+        packed.fill_(9)
+        np.testing.assert_array_equal(source.numpy(), [[1., 2.], [3., 4.]])
+        sentinel = object()
+        monkeypatch.setattr(jt, "contiguous", lambda tensor: sentinel)
+        assert view.contiguous() is sentinel
+        with pytest.raises(NotImplementedError, match="contiguous_format"):
+            view.contiguous(memory_format="channels_last")
 
 
 def _check_repeat_is_a_dense_copy(device):

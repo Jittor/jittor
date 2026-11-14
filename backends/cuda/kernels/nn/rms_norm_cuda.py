@@ -2,6 +2,7 @@
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import math
+from functools import lru_cache
 
 import jittor as jt
 from jittor._runtime.core_api import _output_requires_grad, _stop_grad_outputs
@@ -110,18 +111,24 @@ _RMS_NORM_SOURCE = r"""
     """
 
 
+@lru_cache(maxsize=256)
+def _format_rms_norm_source(template, hidden_size, threads, warps, epsilon_value):
+    return template % {
+        "epsilon": epsilon_value,
+        "hidden_size": hidden_size,
+        "threads": threads,
+        "warps": warps,
+    }
+
+
 def _rms_norm_source(hidden_size, threads, warps, epsilon_value):
     """The CUDA source of the kernel below for one contract.
 
     Also what the native module call (`src/bindings/pyjt/py_module_call.cc`)
     builds the same operator from, so the two cannot drift apart.
     """
-    return cached_source(_RMS_NORM_SOURCE, {
-        "epsilon": epsilon_value,
-        "hidden_size": hidden_size,
-        "threads": threads,
-        "warps": warps,
-    })
+    return _format_rms_norm_source(
+        _RMS_NORM_SOURCE, hidden_size, threads, warps, epsilon_value)
 
 
 @native_rule("rms_norm_inference")
@@ -133,6 +140,10 @@ def _rms_norm_supported(x, gamma, epsilon=1e-6):
                  supports=_rms_norm_supported)
 def _rms_norm_cuda(x, gamma, epsilon=1e-6):
     """Inference-only fused CUDA RMSNorm, or ``None`` when unsupported."""
+    if not _autocast_enabled():
+        result = jt.core._try_rms_norm_cuda(x, gamma, epsilon, _rms_norm_source)
+        if result is not None:
+            return result
     contract = _rms_norm_contract(x, gamma, epsilon)
     if contract is None:
         return None

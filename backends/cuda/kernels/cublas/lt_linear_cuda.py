@@ -706,10 +706,12 @@ def _supports_training(x, weight, bias):
 #: The smallest problem the training route takes: rows, and rows x cin x cout.
 _MIN_ROWS = 1024
 _MIN_PRODUCT = 1 << 28
-# Modest FP32 square products do not repay the Function/tape overhead even
-# after reaching the row floor. Keep the timed route for larger products;
-# the low-precision policy is independent.
-_MIN_PRODUCT_FP32 = 1 << 30
+# Medium FP32 contractions already use vendor GEMMs through ordinary matmul.
+# Their device savings do not repay a Python Function and tape on each forward
+# and backward. Keep the dedicated route for larger products; the low-precision
+# and whole-step capture policies are independent.
+_MIN_PRODUCT_FP32 = 1 << 32
+
 
 
 def lt_linear_train_cuda(x, weight, bias=None):

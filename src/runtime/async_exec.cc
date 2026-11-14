@@ -46,6 +46,7 @@ struct Worker {
     std::mutex mutex;
     std::condition_variable wake, done;
     std::function<void()> pending;
+    uint8 pending_node_order = 0;
     bool ready = false, stopping = false;
     std::exception_ptr error;
     std::thread* thread = nullptr;
@@ -67,6 +68,8 @@ struct Placement {
     std::vector<int> domain_of;           // cpu -> first cpu of its L3 domain, -1 unknown
     std::vector<std::vector<int>> cpus;   // first cpu -> the domain's cpus
     int pinned = -2;                      // domain the worker is pinned to
+    cpu_set_t chosen;
+    bool affinity_valid = false;
 };
 Placement* placement = new Placement();
 
@@ -139,7 +142,8 @@ void lock_resumed_bindings() {
 void wait_before_flag_set(const char* name) {
     if (!async_exec_inflight.load(std::memory_order_acquire) || is_worker) return;
     if (!strcmp(name, "no_grad") || !strcmp(name, "amp_reg")
-            || !strcmp(name, "auto_mixed_precision_level"))
+            || !strcmp(name, "auto_mixed_precision_level")
+            || !strcmp(name, "node_order"))
         return;
     async_exec_wait();
 }
@@ -197,6 +201,7 @@ void worker_main() {
     is_worker = true;
     for (;;) {
         std::function<void()> job;
+        uint8 submitted_order;
         {
             // A step hands over a batch every few hundred microseconds; waking
             // from a condition variable costs tens of them on a loaded host,
@@ -207,6 +212,7 @@ void worker_main() {
             if (!worker->ready) return;
             job_posted.store(false, std::memory_order_relaxed);
             job = std::move(worker->pending);
+            submitted_order = worker->pending_node_order;
             worker->ready = false;
         }
         std::exception_ptr error;
@@ -214,6 +220,13 @@ void worker_main() {
             // The batch's setup and wind-down, its state's release included,
             // under the graph lock; the runner lets go of it in between.
             std::lock_guard<GraphMutationMutex> graph(graph_mutation_mutex());
+            // Keep the context through the job's teardown, including its
+            // exception path. No graph, operators or parameter values persist.
+            struct ConstructionOrderScope {
+                ConstructionOrderContext previous = worker_node_order;
+                explicit ConstructionOrderScope(uint8 order) { worker_node_order = {true, order}; }
+                ~ConstructionOrderScope() { worker_node_order = previous; }
+            } order_scope(submitted_order);
             try {
                 job();
             } catch (...) {
@@ -280,6 +293,7 @@ void before_fork() { if (worker->thread) wait_for_worker_unlocked(); }
 void in_child() {
     worker = new Worker();
     placement->pinned = -2;
+    placement->affinity_valid = false;
     async_exec_inflight.store(0);
     error_pending.store(false);
 }
@@ -294,7 +308,6 @@ bool async_exec_placed() {
     const auto* domain = l3_domain(cpu);
     if (!domain) return false;
     int first = (*domain)[0];
-    if (placement->pinned == first) return true;
     cpu_set_t allowed, chosen;
     if (sched_getaffinity(0, sizeof(allowed), &allowed)) return false;
     CPU_ZERO(&chosen);
@@ -302,6 +315,11 @@ bool async_exec_placed() {
     for (int c : *domain)
         if (c != cpu && c < CPU_SETSIZE && CPU_ISSET(c, &allowed)) { CPU_SET(c, &chosen); count++; }
     if (!count) return false;
+    // The caller can migrate or narrow its affinity within the same L3
+    // domain. Reusing just the domain kept the worker on the caller's new
+    // sole CPU, even though no other permitted core remained.
+    if (placement->pinned == first && placement->affinity_valid
+            && CPU_EQUAL(&placement->chosen, &chosen)) return true;
     {
         std::lock_guard<std::mutex> lock(worker->mutex);
         if (!worker->thread) {
@@ -318,6 +336,8 @@ bool async_exec_placed() {
             return false;
     }
     placement->pinned = first;
+    placement->chosen = chosen;
+    placement->affinity_valid = true;
     return true;
 #else
     return false;
@@ -414,6 +434,7 @@ void async_exec_submit(std::function<void()>&& job) {
     submitted_at = std::chrono::steady_clock::now();
     std::unique_lock<std::mutex> lock(worker->mutex);
     worker->pending = std::move(job);
+    worker->pending_node_order = construction_node_order();
     worker->ready = true;
     job_posted.store(true, std::memory_order_release);
     async_exec_inflight.store(1, std::memory_order_release);

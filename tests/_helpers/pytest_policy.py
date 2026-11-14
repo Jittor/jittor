@@ -439,6 +439,10 @@ def _manual_probes_are_enabled(config):
 
 
 def pytest_collection_finish(session):
+    # Marker/keyword filtering has finished. Recording these before filtering
+    # made every fully deselected slow file fail smoke's execution threshold.
+    for item in session.items:
+        _FILES_WITH_ITEMS.add(_relative_to_repo(item.fspath))
     _install_api_coverage(session)
 
 
@@ -451,7 +455,6 @@ def pytest_collection_modifyitems(config, items):
 
     for item in items:
         repo_relative = _relative_to_repo(item.fspath)
-        _FILES_WITH_ITEMS.add(repo_relative)
         _COLLECTED_FILES.add(repo_relative)
         # The fast tier selects with `-m "not slow"`; the marker is attached from
         # one recorded list rather than from decorators scattered through the
@@ -816,6 +819,31 @@ def _relative_to_repo(path):
         return str(path)
 
 
+def pytest_collectreport(report):
+    """Retain explicit module-level prerequisite skips, before items exist."""
+    if not report.skipped:
+        return
+    relative = _relative_to_repo(report.fspath)
+    if not relative.endswith(".py"):
+        return
+    _COLLECTED_FILES.add(relative)
+    _FILES_WITH_ITEMS.add(relative)
+    record = _FILE_OUTCOMES.setdefault(relative, {"executed": 0, "skipped": 0, "reasons": set()})
+    _record_file_skip(report, record)
+
+
+def _record_file_skip(report, record):
+    record["skipped"] += 1
+    reason = _skip_reason(report)
+    record["reasons"].add(reason)
+    bucket = classify_skip_reason_bucket(reason)
+    _SKIP_REASON_BUCKETS[bucket] += 1
+    if bucket == "other":
+        _OTHER_SKIP_REASONS[reason] += 1
+    if _real_torch_is_required() and _blames_missing_torch(reason):
+        _MISSING_REAL_TORCH.append((report.nodeid, reason))
+
+
 def pytest_runtest_logreport(report):
     """Count what each test *file* actually executed.
 
@@ -845,15 +873,7 @@ def pytest_runtest_logreport(report):
             global _ACCELERATOR_EXECUTED
             _ACCELERATOR_EXECUTED += 1
     elif report.skipped and report.when in ("setup", "call"):
-        record["skipped"] += 1
-        reason = _skip_reason(report)
-        record["reasons"].add(reason)
-        bucket = classify_skip_reason_bucket(reason)
-        _SKIP_REASON_BUCKETS[bucket] += 1
-        if bucket == "other":
-            _OTHER_SKIP_REASONS[reason] += 1
-        if _real_torch_is_required() and _blames_missing_torch(reason):
-            _MISSING_REAL_TORCH.append((report.nodeid, reason))
+        _record_file_skip(report, record)
 
 
 def _blames_missing_torch(reason):

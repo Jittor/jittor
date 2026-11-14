@@ -554,6 +554,20 @@ def tensor(data, dtype=None, device=None, requires_grad=False, **kw):
     g = compatibility_owner(jt)
     Var = g.Var
     with tensor_frontend(Var, device=device, like=data):
+        if type(data) in (list, tuple) and not data and not kw:
+            # There are no host bytes to convert or migrate. Construct fresh
+            # storage metadata directly in the requested frontend/device scope.
+            # A fresh input-free native allocation is already a leaf; it has
+            # no view or autograd history to detach.
+            ds = _dtype_to_str(dtype if dtype is not None else g.get_default_dtype())
+            if requires_grad and ds not in (
+                    "float16", "bfloat16", "float32", "float64", "complex64", "complex128"):
+                raise RuntimeError("Only Tensors of floating point and complex dtype can require gradients")
+            v = jt.ops.empty((0,), ds)
+            v.requires_grad_(bool(requires_grad))
+            if requires_grad:
+                _torch_register_leaf(v)
+            return v
         import numpy as _np
         ds = _dtype_to_str(dtype)
         numpy_dtypes = {"bool", "uint8", "int8", "int16", "int32", "int64",
@@ -1173,6 +1187,7 @@ def install_methods(ctx):
     from jittor._core import var as _native_var
     _shape_api._FAST_VIEW = (getattr(jt.core, "_fast_view", None)
                              if _orig_reshape is _native_var.reshape else None)
+    _shape_api._FAST_STORAGE_TRANSPOSE = getattr(jt.core, "_fast_storage_transpose", None)
     if _orig_reshape is _native_var.reshape:
         # Torch first tries a genuine strided view; the wrapper below copies
         # only when the native view explicitly rejects this target shape.

@@ -24,6 +24,16 @@ EXTERN_LIB int free_buffer_depth;
 // to it. See the definition in node.cc.
 EXTERN_LIB vector<Node*>& free_buffer();
 EXTERN_LIB uint8 node_order;
+// The asynchronous worker inherits the submitting construction context. Its
+// temporary nodes must not read a flag the caller can change for the next ops.
+struct ConstructionOrderContext {
+    bool active = false;
+    uint8 value = 0;
+};
+EXTERN_LIB thread_local ConstructionOrderContext worker_node_order;
+inline uint8& construction_node_order() {
+    return worker_node_order.active ? worker_node_order.value : node_order;
+}
 // Non-zero while lived_nodes is being maintained in a build without
 // NODE_MEMCHECK; set by check_graph's setter (graph.cc).
 EXTERN_LIB int node_track_lived;
@@ -467,7 +477,7 @@ struct Node {
             lived_nodes[(void*)this] = id;
             flags.set(NodeFlags::_lived_tracked, 1);
         }
-        flags.set(NodeFlags::_node_order_low, node_order, 2);
+        flags.set(NodeFlags::_node_order_low, construction_node_order(), 2);
     }
     inline virtual ~Node() {
         if (PREDICT_BRANCH_NOT_TAKEN(flags.get(NodeFlags::_lived_tracked))) {

@@ -77,7 +77,8 @@ def _softmax_v1_cls(length, log=False, zero_all_neg_inf=False):
     # length and log mode. Building both inside every softmax call added tens of
     # microseconds of Python graph-construction overhead even after the kernel
     # was compiled, which is material for transformer attention. Cache the
-    # immutable class while still creating a fresh Function instance per call.
+    # immutable class and its formatted sources while still creating a fresh
+    # Function instance per call. Include paths remain resolved at execution.
     _, tnum = _softmax_schedule(length)
     per_thread = (length-1) // tnum + 1
     ILP = 1
@@ -93,12 +94,67 @@ def _softmax_v1_cls(length, log=False, zero_all_neg_inf=False):
     if length % tnum != 0:
         for_loop += f"if ((i*{tnum}+threadIdx.x)*{ILP} < len)\n"
 
-    class CodeSoftmax(jt.Function):
-        def execute(self, x):
-            self.save_vars = jt.code(x.shape, x.dtype, [x], cuda_header=f'''
-#include <{library_resource('cub', 'home')}cub/cub.cuh>
-#include <type/fp16_compute.h>
-''', cuda_src=f'''
+    # Short rows need no communication between warps. Pack eight independent
+    # warp reductions into one block when there are enough
+    # FP32 rows to fill the GPU. Wider rows keep the block kernel: its extra
+    # memory parallelism is faster once a warp holds too many columns.
+    warp_source = f"""
+__global__ void softmax_warp_rows(in0_type* x, out0_type* y, int len, int rows) {{
+    long long row = static_cast<long long>(blockIdx.x) * 8 + (threadIdx.x >> 5);
+    int lane = threadIdx.x & 31;
+    if (row >= rows) return;
+    constexpr int need_log = {int(log)};
+    constexpr int zero_neg_inf = {int(zero_all_neg_inf)};
+    constexpr int per = {(length + 31) // 32};
+    float values[per];
+    float maximum = -INFINITY;
+    #pragma unroll
+    for (int i = 0; i < per; ++i) {{
+        int col = lane + i * 32;
+        values[i] = col < len ? float(x[row * len + col]) : -INFINITY;
+        maximum = ::max(maximum, values[i]);
+    }}
+    for (int offset = 16; offset > 0; offset >>= 1)
+        maximum = ::max(maximum, __shfl_xor_sync(0xffffffffu, maximum, offset));
+    float total = 0.0f;
+    #pragma unroll
+    for (int i = 0; i < per; ++i) {{
+        if (lane + i * 32 < len) {{
+            if (zero_neg_inf && !need_log && maximum == -INFINITY) {{
+                values[i] = 0.0f;
+            }} else if (need_log) {{
+                values[i] -= maximum;
+                total += expf(values[i]);
+            }} else {{
+                values[i] = expf(values[i] - maximum);
+                total += values[i];
+            }}
+        }}
+    }}
+    for (int offset = 16; offset > 0; offset >>= 1)
+        total += __shfl_xor_sync(0xffffffffu, total, offset);
+    #pragma unroll
+    for (int i = 0; i < per; ++i) {{
+        int col = lane + i * 32;
+        if (col < len) {{
+            float value = (zero_neg_inf && !need_log && maximum == -INFINITY) ? 0.0f :
+                (need_log ? values[i] - logf(total) : values[i] / total);
+            y[row * len + col] = value;
+        }}
+    }}
+}}
+""" if length <= 256 else ""
+    launch = f"kernel<<<bnum, {tnum}>>>(in0_p, out0_p, len);"
+    if warp_source:
+        launch = f"""
+if (std::is_same<in0_type, float>::value && bnum >= 4096) {{
+    softmax_warp_rows<<<(static_cast<unsigned>(bnum) + 7) / 8, 256>>>(in0_p, out0_p, len, bnum);
+}} else {{
+    {launch}
+}}
+"""
+
+    execute_source = warp_source + f'''
 __global__ void kernel(in0_type* x, out0_type* y, int len) {{
     typedef cub::BlockReduce<float, {tnum}> BlockReduce;
     constexpr int need_log = {int(log)};
@@ -163,25 +219,10 @@ __global__ void kernel(in0_type* x, out0_type* y, int len) {{
 int len = in0->shape[in0->shape.size()-1];
 int bnum = in0->numel() / len;
 cudaGetLastError();
-kernel<<<bnum, {tnum}>>>(in0_p, out0_p, len);
+{launch}
 CHECK(0 == cudaGetLastError());
-''')
-            return self.save_vars
-
-        def grad(self, grad_x):
-            x = self.save_vars
-            # Non-vectorized register kernels above roughly 48K columns spill
-            # heavily in backward (for example, 255 registers at 65535). Keep
-            # their faster register-resident forward, but use the bounded
-            # streaming reduction for backward. Aligned ILP paths such as
-            # 65536 remain faster with the register kernel.
-            if length > 49152 and ILP == 1:
-                return _softmax_streaming_grad(x, grad_x, 512, log)
-            return jt.code(x.shape, x.dtype, [x, grad_x], cuda_header=f'''
-#include <{library_resource('cub', 'home')}cub/cub.cuh>
-#include <type/fp16_compute.h>
-''', 
-                cuda_src=f"""
+'''
+    grad_source = f"""
 __global__ void kernel(in0_type* x, in1_type* y, out0_type* z, int len) {{
     int id = blockIdx.x * len;
     in0_type vx[{per_thread}][{ILP}];
@@ -221,7 +262,30 @@ int bnum = in0->numel() / len;
 cudaGetLastError();
 kernel<<<bnum, {tnum}>>>(in0_p, in1_p, out0_p, len);
 CHECK(0 == cudaGetLastError());
-""")
+"""
+
+    class CodeSoftmax(jt.Function):
+        def execute(self, x):
+            self.save_vars = jt.code(x.shape, x.dtype, [x], cuda_header=f'''
+#include <{library_resource('cub', 'home')}cub/cub.cuh>
+#include <type/fp16_compute.h>
+#include <type_traits>
+''', cuda_src=execute_source)
+            return self.save_vars
+
+        def grad(self, grad_x):
+            x = self.save_vars
+            # Non-vectorized register kernels above roughly 48K columns spill
+            # heavily in backward (for example, 255 registers at 65535). Keep
+            # their faster register-resident forward, but use the bounded
+            # streaming reduction for backward. Aligned ILP paths such as
+            # 65536 remain faster with the register kernel.
+            if length > 49152 and ILP == 1:
+                return _softmax_streaming_grad(x, grad_x, 512, log)
+            return jt.code(x.shape, x.dtype, [x, grad_x], cuda_header=f'''
+#include <{library_resource('cub', 'home')}cub/cub.cuh>
+#include <type/fp16_compute.h>
+''', cuda_src=grad_source)
     return CodeSoftmax
 
 
@@ -231,17 +295,7 @@ def _softmax_streaming_cls(threads, log=False, zero_all_neg_inf=False):
     # spilling or exceeding the per-block register limit. Re-read logits for
     # max, exp-sum and output instead; this remains one launch and bounds
     # register use independently of vocabulary size.
-    class CodeSoftmaxStreaming(jt.Function):
-        def execute(self, x):
-            self.save_vars = jt.code(
-                x.shape,
-                x.dtype,
-                [x],
-                cuda_header=f'''
-#include <{library_resource('cub', 'home')}cub/cub.cuh>
-#include <type/fp16_compute.h>
-''',
-                cuda_src=f'''
+    execute_source = f'''
 __global__ void kernel(in0_type* x, out0_type* y, int len) {{
     typedef cub::BlockReduce<float, {threads}> BlockReduce;
     constexpr int need_log = {int(log)};
@@ -282,7 +336,19 @@ int len = in0->shape[in0->shape.size()-1];
 int rows = in0->numel() / len;
 kernel<<<rows, {threads}>>>(in0_p, out0_p, len);
 CHECK(0 == cudaGetLastError());
-''')
+'''
+
+    class CodeSoftmaxStreaming(jt.Function):
+        def execute(self, x):
+            self.save_vars = jt.code(
+                x.shape,
+                x.dtype,
+                [x],
+                cuda_header=f'''
+#include <{library_resource('cub', 'home')}cub/cub.cuh>
+#include <type/fp16_compute.h>
+''',
+                cuda_src=execute_source)
             return self.save_vars
 
         def grad(self, grad_x):

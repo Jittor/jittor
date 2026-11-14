@@ -988,6 +988,59 @@ class TestTorchBootstrap(unittest.TestCase):
             self.assertEqual(len(exts[0].sources), 2)
             self.assertTrue(exts[0].setup_py.endswith("setup.py"))
 
+    def test_scan_does_not_build_package_data_assets(self):
+        from jittor.compat.shim import scan_extension_dirs
+
+        with tempfile.TemporaryDirectory(dir=str(_TEST_STATE_ROOT)) as directory:
+            root = pathlib.Path(directory)
+            (root / "setup.py").write_text(
+                "from setuptools import setup\n"
+                "setup(name='data_only', package_data={'': ['**/*.cu', '**/*.cpp']})\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(scan_extension_dirs(project_root=root), [])
+
+    def test_scan_does_not_build_bundled_native_sources(self):
+        from jittor.compat.shim import scan_extension_dirs
+
+        with tempfile.TemporaryDirectory(dir=str(_TEST_STATE_ROOT)) as directory:
+            root = pathlib.Path(directory)
+            (root / "setup.py").write_text(
+                "from setuptools import setup\nsetup(name='runtime_kernels')\n",
+                encoding="utf-8",
+            )
+            kernels = root / "kernels"
+            kernels.mkdir()
+            (kernels / "kernel.cu").write_text("// Loaded at runtime.\n", encoding="utf-8")
+            self.assertEqual(scan_extension_dirs(project_root=root), [])
+
+    def test_scan_setuptools_native_extension(self):
+        from jittor.compat.shim import scan_extension_dirs
+
+        with tempfile.TemporaryDirectory(dir=str(_TEST_STATE_ROOT)) as directory:
+            root = pathlib.Path(directory)
+            (root / "setup.py").write_text(
+                "from setuptools import Extension, setup\n"
+                "setup(name='native', ext_modules=[Extension('native', sources=['native.cpp'])])\n",
+                encoding="utf-8",
+            )
+            (root / "native.cpp").write_text("// Extension source.\n", encoding="utf-8")
+            extensions = scan_extension_dirs(project_root=root)
+            self.assertEqual([item.setup_py for item in extensions], [str(root / "setup.py")])
+
+    def test_explicit_extension_directory_can_build_plain_setup(self):
+        from jittor.compat.shim.build import _extension_from_user_item
+
+        with tempfile.TemporaryDirectory(dir=str(_TEST_STATE_ROOT)) as directory:
+            root = pathlib.Path(directory)
+            (root / "setup.py").write_text(
+                "from setuptools import setup\nsetup(name='explicit')\n",
+                encoding="utf-8",
+            )
+            extension = _extension_from_user_item(root)
+            self.assertIsNotNone(extension)
+            self.assertEqual(extension.setup_py, str(root / "setup.py"))
+
     def test_explicit_project_runtime_defaults_to_user_cache(self):
         from jittor.compat.shim.preflight import project_runtime_root
 
