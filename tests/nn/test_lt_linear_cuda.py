@@ -175,6 +175,41 @@ class TestLtLinearCuda(unittest.TestCase):
         self.assertTrue(np.isfinite(grad).all())
         self.assertGreater(np.abs(grad).max(), 0)
 
+    def test_short_captured_training_matches_float64_products(self):
+        # Short sequence batches have fewer than 512 rows but still large
+        # GEMMs. Capture amortizes the custom Function's eager host cost.
+        xn, wn, bn = self._arrays((96, 1024), 1024, 1024)
+        dn = self.rs.randn(96, 1024).astype('float32') * .1
+        x, w, b, dout = (jt.array(a) for a in (xn, wn, bn, dn))
+        self.assertIsNone(_lt.lt_linear_train_cuda(x, w, b))
+        providers = []
+
+        def step(input):
+            out = _lt.lt_linear_train_cuda(input, w, b)
+            providers.append(out is not None)
+            if out is None:
+                out = nn.linear(input, w, b)
+            return (out, *jt.grad((out * dout).sum(), [input, w, b]))
+
+        runner = jt.capture_step(step)
+        try:
+            for index in range(6):
+                current = xn + np.float32(index * .01)
+                expected = [current.astype('float64') @ wn.astype('float64').T + bn,
+                            dn.astype('float64') @ wn.astype('float64'),
+                            dn.astype('float64').T @ current.astype('float64'),
+                            dn.astype('float64').sum(0)]
+                actual = runner(jt.array(current))
+                for value, want in zip(actual, expected):
+                    value.sync()
+                    self.assertEqual(value.location(), 'device')
+                    np.testing.assert_allclose(value.numpy(), want, rtol=1e-4, atol=1e-5)
+            self.assertIn(True, providers, 'capture must use the timed training provider')
+            self.assertIsNone(runner.refused)
+            self.assertGreaterEqual(runner.stats['replayed'], 2)
+        finally:
+            runner.invalidate()
+
     def test_what_it_refuses(self):
         xn, wn, bn = self._arrays((512, 512), 512, 512)
         x, w, b = jt.array(xn), jt.array(wn), jt.array(bn)

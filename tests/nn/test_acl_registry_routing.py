@@ -67,6 +67,9 @@ def routing(monkeypatch):
     # the real implementations are reused rather than faked.
     import importlib
     real_dtypes = importlib.import_module("jittor._core.dtypes")
+    # Activation entry points register optional CUDA providers lazily. Import
+    # their real dependencies before replacing the package with this stub.
+    importlib.import_module("jittor.backends.cuda.kernels.nn.silu_cuda")
     monkeypatch.setitem(sys.modules, "jittor", native)
     monkeypatch.setitem(sys.modules, "jittor._core",
                         SimpleNamespace(dtypes=real_dtypes))

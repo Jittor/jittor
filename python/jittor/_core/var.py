@@ -17,6 +17,7 @@ from .flags import flag_scope, flags as _runtime_flags
 from .._runtime.acl_clamp import dispatch_acl_clamp
 from .._runtime.backend_libraries import get_library as _get_library
 from .._runtime.dispatch import register_kernel as _register_kernel, try_dispatch as _try_dispatch
+from .._runtime.dispatch import dispatch_context as _dispatch_context
 
 unary = ops.unary
 int32 = ops.int32
@@ -739,6 +740,10 @@ def norm(x, p=2, dim=-1, keepdims=False, eps=1e-30, keepdim=False):
     if p not in (1, 2):
         raise ValueError("norm: only p=1 and p=2 are supported")
     if p==1:
+        if _jittor_dtype_name(x.dtype) == "float32" and _dispatch_context(x).backend == "cpu":
+            # Long FP32 absolute sums lose low bits in a serial accumulator.
+            # Accumulate on the host in double and retain the public dtype.
+            return x.float64().abs().sum(dim, keepdim).float32()
         return x.abs().sum(dim, keepdim)
     if p==2:
         # |x|**2, not x*x: for a complex x the square is complex and has no

@@ -45,8 +45,8 @@ def _torch_norm_impl(input, p="fro", dim=None, keepdim=False, dtype=None):
         else:
             r = (x.abs() ** pv).sum() ** (1.0 / pv)
         return r
-    # per-dim reduction: jittor's native norm handles a single int dim; for a
-    # tuple of dims, compose manually.
+    # Native value reductions accept all axes at once. Combining real L2
+    # reductions also keeps negative axes relative to the original rank.
     if isinstance(dim, (tuple, list)):
         if pv == float("inf"):
             r = input.abs()
@@ -59,6 +59,19 @@ def _torch_norm_impl(input, p="fro", dim=None, keepdim=False, dtype=None):
                 r = r.sum(dim=d, keepdims=keepdim)
             return r
         if pv == 2.0:
+            if _jittor_dtype_name(input.dtype) in ("float32", "float64"):
+                if all(isinstance(axis, int) for axis in dim):
+                    axes = tuple(axis if axis >= 0 else axis + input.ndim for axis in dim)
+                    if (all(0 <= axis < input.ndim for axis in axes)
+                            and len(set(axes)) != len(axes)):
+                        raise RuntimeError("norm: a dimension appears multiple times in dim")
+                total = input.sqr().sum(dim=tuple(dim), keepdims=keepdim)
+                zero = total == 0
+                # Evaluate sqrt at a finite positive value on a zero row, so
+                # its backward cannot multiply an infinite slope by zero.
+                # NaNs still propagate: a NaN does not compare equal to zero.
+                safe = jt.ternary(zero, jt.ones_like(total).stop_grad(), total)
+                return jt.ternary(zero, jt.zeros_like(total).stop_grad(), jt.sqrt(safe))
             r = input.sqr()
             for d in sorted(dim, reverse=True):
                 r = r.sum(dim=d, keepdims=keepdim)

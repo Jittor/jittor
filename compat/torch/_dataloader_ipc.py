@@ -102,6 +102,20 @@ def encode_batch(value):
         if dtype == 'bfloat16':
             import torch
             data = value.view(torch.int16).numpy()
+        elif (dtype in ('float16', 'float32', 'float64', 'int8', 'int16',
+                        'int32', 'int64', 'uint8', 'uint16', 'uint32', 'uint64',
+                        'complex64', 'complex128')
+                and value._storage_is_contiguous()):
+            # send_frame copies this CPU view into its leased memfd before
+            # fetching another batch. Retain the tensor's native view until
+            # that copy completes instead of materializing an extra NumPy
+            # allocation of the entire batch first. The native data owner
+            # pins the exact allocation even if the holder is later rebound.
+            # Unlike NumPy's DLPack view this is writable, so pickle does not
+            # mark the receiving mmap read-only and prevent DLPack import.
+            from .context import get_install_context
+            descriptor = get_install_context(jt).state['tensor_native_api']['_native_data_descriptor']
+            data = descriptor.__get__(value, jt.Var).reshape(tuple(value.shape))
         else:
             data = value.numpy()
         return ('tensor', dtype, data)

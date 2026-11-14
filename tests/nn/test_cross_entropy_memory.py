@@ -71,6 +71,11 @@ class TestCrossEntropyMatchesTheClosedForm(unittest.TestCase):
                         weight=None if weight is None else jt.array(weight), **kw)
                     seed = loss if loss.ndim == 0 else loss.sum()
                     (dx,) = jt.grad(seed, [jx])
+                    if use_cuda:
+                        loss.sync()
+                        dx.sync()
+                        self.assertEqual(loss.location(), "device")
+                        self.assertEqual(dx.location(), "device")
                     np.testing.assert_allclose(loss.numpy(), want_loss,
                                                rtol=rtol, atol=atol)
                     np.testing.assert_allclose(dx.numpy(), want_grad,
@@ -79,6 +84,16 @@ class TestCrossEntropyMatchesTheClosedForm(unittest.TestCase):
     def test_plain(self):
         rng = np.random.RandomState(0)
         self._check(rng.randn(33, 17).astype("float32"), rng.randint(0, 17, 33))
+
+    def test_large_common_offset_preserves_loss_and_gradient(self):
+        target = np.array([0, 1], dtype="int32")
+        for offset in (1e8, -1e8):
+            self._check(np.full((2, 3), offset, dtype="float32"), target,
+                        rtol=1e-6, atol=1e-7)
+        # These logit differences remain representable at the offset: check
+        # the loss calculation itself, independently of input rounding.
+        x = np.array([[.125, .5, 1.25], [1.5, .25, -.75]], dtype="float32")
+        self._check(x + 2**20, target, rtol=1e-6, atol=1e-7)
 
     def test_ignore_index_and_out_of_range_targets(self):
         rng = np.random.RandomState(1)
@@ -94,6 +109,13 @@ class TestCrossEntropyMatchesTheClosedForm(unittest.TestCase):
         weight = rng.rand(17).astype("float32")
         for reduction in ("mean", "sum", "none"):
             self._check(x, target, weight=weight, reduction=reduction)
+
+    def test_large_shared_mask_weights_keep_the_full_mean_denominator(self):
+        rng = np.random.RandomState(193)
+        self._check(rng.randn(200000, 5).astype("float32"),
+                    rng.randint(0, 5, 200000),
+                    weight=np.array([1.25, -.375, .5, -.4375, -.421875],
+                                    dtype="float32"))
 
     def test_spatial_input(self):
         rng = np.random.RandomState(3)

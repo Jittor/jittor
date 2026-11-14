@@ -51,6 +51,8 @@ def _cuda_fused_adamw_updates(entries, lr, beta1, beta2, weight_decay, eps):
     kernel reads on the device and which then stands for every entry's step:
     what a captured step passes, so that a replay advances the count and
     follows the learning rate without the optimizer running.
+    A seven-element header also carries found-inf, both betas, weight decay
+    and epsilon, allowing schedulers to change them without recapture.
     """
     hyper = lr if isinstance(lr, jt.Var) else None
     results = [None] * len(entries)
@@ -77,5 +79,6 @@ def _cuda_fused_adamw_updates(entries, lr, beta1, beta2, weight_decay, eps):
 
 #: Takes ``[step, lr]`` as a device Var in place of the learning rate.
 _cuda_fused_adamw_updates.accepts_live_step = True
+_cuda_fused_adamw_updates.accepts_live_hyperparameters = True
 
 register_kernel("optim.adamw_fused", "cuda", _cuda_fused_adamw_updates, supports=_supports)

@@ -61,6 +61,7 @@ def check_cache_code(fname):
     assert check_code, "check cache not found in line " + str(error_line_num) + " of file " + fname
 
 class TestCache(unittest.TestCase):   
+    @jt.flag_scope(use_cuda=0)
     def test_reduce(self):
         @retry(10)
         def check(n, m, reduce_dim, cache_report_, error_rate_threshold):

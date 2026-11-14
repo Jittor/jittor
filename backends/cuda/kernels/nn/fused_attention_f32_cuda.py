@@ -267,7 +267,7 @@ __global__ void __launch_bounds__(THREADS) forward(
         const float* __restrict__ q, const float* __restrict__ k,
         const float* __restrict__ v, float* __restrict__ o, float* __restrict__ normalizer,
         int lq, int lk, float scale, mea::Mask mask, mea::Rows ql, mea::Rows kl,
-        mea::Rows vl, mea::Dropout dropout) {
+        mea::Rows vl, mea::Dropout dropout, mea::Rows ol) {
     constexpr int BQ = 16 * RPT, BK = 64;
     constexpr int QP = BQ + 4, KP = BK + 4, DPT = (D + 15) / 16;
     constexpr int KV = D * KP > BK * D ? D * KP : BK * D;
@@ -277,7 +277,7 @@ __global__ void __launch_bounds__(THREADS) forward(
     float* sp = skv + KV;           // P^T, [BK][QP]
     const int bh = blockIdx.y, q0 = blockIdx.x * BQ;
     const mea::RowPtr<const float> qb(q, ql, bh), kb(k, kl, bh), vb(v, vl, bh);
-    const mea::RowPtr<float> obase(o, ql, bh);
+    const mea::RowPtr<float> obase(o, ol, bh);
     const int ty = threadIdx.x >> 4, tx = threadIdx.x & 15;
     const long long mask_base = MASK ? mask.base(bh) : 0;
     for (int i = threadIdx.x; i < BQ * D; i += THREADS) {
@@ -791,6 +791,69 @@ def _rows_args(t, seq, heads, group):
 _FORWARD_SOURCES = {}
 
 
+def _dense_storage_layout(tensor):
+    """A dense backing tensor, logical strides and its relative element offset.
+
+    CodeOp requires dense inputs. Passing the backing storage lets the kernel
+    read a view through Rows without an intermediate contiguous copy.
+    """
+    strides = tuple(int(s) for s in tensor._storage_strides())
+    if (any(int(n) == 0 for n in tensor.shape)
+            or strides[-1] != 1 or any(s < 0 for s in strides)):
+        return None
+    root = tensor
+    seen = set()
+    while not root._storage_is_contiguous():
+        if id(root) in seen:
+            return None
+        seen.add(id(root))
+        parent = root._view_base_object()
+        if not isinstance(parent, jt.Var):
+            return None
+        root = parent
+    if (_jittor_dtype_name(root.dtype) != _jittor_dtype_name(tensor.dtype)
+            or int(root.placement_backend) != int(tensor.placement_backend)):
+        return None
+    if root.device_id >= 0 and tensor.device_id >= 0 and root.device_id != tensor.device_id:
+        return None
+    offset = int(tensor._storage_offset()) - int(root._storage_offset())
+    end = offset + sum((int(n) - 1) * s for n, s in zip(tensor.shape, strides))
+    if offset < 0 or end >= int(root.numel()):
+        return None
+    # A detached view can have a trainable backing tensor. Reading that root
+    # must not restore the gradient connection the caller detached.
+    return root.detach(), strides, offset
+
+
+def _forward_view(query, key, value, scale, causal, mask):
+    """Gradient-free attention over views with a contiguous last dimension."""
+    if all(t._storage_is_contiguous() for t in (query, key, value)):
+        return None
+    layouts = [_dense_storage_layout(t) for t in (query, key, value)]
+    if any(layout is None for layout in layouts):
+        return None
+    b, h, lq, d = (int(size) for size in query.shape)
+    lk = int(key.shape[2])
+    call = _Call(scale, causal, mask, (False, False, False), 0.)
+    rpt = 4 if -(-lq // 64) * b * h >= _SM_BLOCKS else 1
+    pointers, rows = [], []
+    for index, (_, strides, offset) in enumerate(layouts):
+        pointers.append(f"(in{index}_p + {offset})")
+        rows.append(f"mea::Rows{{{h}, {strides[0]}LL, {strides[1]}LL, {strides[2]}LL, 1}}")
+    src = _launch(
+        f"mea_fwd::forward<{d}, {rpt}, {call.template()}>",
+        f"{(lq + 16 * rpt - 1) // (16 * rpt)}, {b * h}",
+        _smem_register_forward(d, rpt),
+        f"{', '.join(pointers)}, out0_p, out1_p, {lq}, {lk}, {scale!r}f, "
+        f"{_mask_args(mask, str(h), 3 if mask[0] else 0)}, {', '.join(rows)}, "
+        f"mea::Dropout{{nullptr, 1.f}}, {_rows_args('out0', False, str(h), 1)}",
+        threads="mea_fwd::THREADS")
+    return jt.code(
+        [query.shape, (b, h, lq, 2)], ["float32", "float32"],
+        [layout[0] for layout in layouts] + call.extras(),
+        cuda_header=_KERNELS, cuda_src=src)[0]
+
+
 @lru_cache(maxsize=1)
 def _native_vjp_factory():
     """Load the backend's native graph builder, with no saved tensor values."""
@@ -821,7 +884,8 @@ def _native_vjp_programs(d, rpt, causal, mask_kind, mask_strides, seq, scale,
         f"({lq} + {bq} - 1) / {bq}, in0->shape[0] * {call.heads_expr()}",
         _smem_register_forward(d, rpt),
         f"in0_p, in1_p, in2_p, out0_p, out1_p, {lq}, {lk}, "
-        f"{scale!r}f, {call.args(3)}", threads="mea_fwd::THREADS")
+        f"{scale!r}f, {call.args(3)}, "
+        f"{_rows_args('out0', call.seq[0], call.heads_expr(), 1)}", threads="mea_fwd::THREADS")
     row = _launch(
         f"mea::row_delta<{d}, {call.template()}>",
         f"{lq}, in0->shape[0] * {call.heads_expr()}", 0,
@@ -873,7 +937,8 @@ def _forward(query, key, value, call, native_vjp=False):
         src = _FORWARD_SOURCES[key_] = _launch(
             kernel, f"({lq_expr} + {bq} - 1) / {bq}, in0->shape[0] * {call.heads_expr()}",
             smem, f"in0_p, in1_p, in2_p, out0_p, out1_p, {lq_expr}, {lk_expr}, "
-                  f"{float(call.scale)!r}f, {call.args(3)}",
+                  f"{float(call.scale)!r}f, {call.args(3)}, "
+                  f"{_rows_args('out0', call.seq[0], call.heads_expr(), 1)}",
             threads="mea_fwd::THREADS")
     return jt.code(
         [query.shape, (b, h, lq, 2)], ["float32", "float32"], [query, key, value] + call.extras(),
@@ -1030,6 +1095,10 @@ def _fused_attention_f32(query, key, value, attn_mask=None, dropout_p=0.0,
     if mask is None:
         return None
     scale = float(scale) if scale is not None else float(query.shape[3]) ** -0.5
+    if not training and not dropout_p and group == 1:
+        viewed = _forward_view(query, key, value, scale, bool(is_causal), mask)
+        if viewed is not None:
+            return viewed
     (query, q_seq), (key, k_seq), (value, v_seq) = (
         _physical(t, preserve_gradient_edge=training) for t in (query, key, value))
     call = _Call(scale, bool(is_causal), mask, (q_seq, k_seq, v_seq), dropout_p, group)

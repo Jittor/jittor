@@ -5,7 +5,63 @@ import os
 import unittest
 
 import numpy as np
+import pytest
 import torch
+import jittor as jt
+
+
+@pytest.mark.cuda
+@pytest.mark.parametrize('shape', [(8, 4, 7, 9), (4, 32, 16, 16)])
+@pytest.mark.parametrize('frozen', [False, True])
+@pytest.mark.parametrize('captured', [False, True])
+@jt.flag_scope(backend_fallback='error')
+def test_training_statistics_without_autograd_keep_local_running_updates(shape, frozen, captured):
+    if not torch.cuda.is_available():
+        pytest.skip('CUDA is required')
+    rng = np.random.RandomState(41)
+    layer = torch.nn.BatchNorm2d(shape[1], momentum=.2).cuda()
+    weight = rng.uniform(.5, 1.5, shape[1]).astype('float32')
+    bias = rng.uniform(-.3, .3, shape[1]).astype('float32')
+    with torch.no_grad():
+        layer.weight.copy_(torch.tensor(weight, device='cuda'))
+        layer.bias.copy_(torch.tensor(bias, device='cuda'))
+    for parameter in layer.parameters():
+        parameter.requires_grad_(not frozen)
+    runner = torch.compile(layer, mode='reduce-overhead', dynamic=False) if captured else layer
+    mean = np.zeros(shape[1], 'float64')
+    variance = np.ones(shape[1], 'float64')
+    observations, references = [], []
+    for index in range(8):
+        data = (rng.randn(*shape)+index*.3).astype('float32')
+        x = torch.tensor(data, device='cuda')
+        # Both a frozen backbone in grad mode and an explicit no_grad call
+        # still normalize with batch statistics and update the live buffers.
+        with torch.set_grad_enabled(frozen and not captured):
+            out = runner(x)
+        assert not out.requires_grad and out.device.type == 'cuda'
+        reference = data.astype('float64')
+        average = reference.mean((0, 2, 3))
+        biased = reference.var((0, 2, 3))
+        count = shape[0]*shape[2]*shape[3]
+        mean = .8*mean+.2*average
+        variance = .8*variance+.2*biased*count/(count-1)
+        axes = (1, shape[1], 1, 1)
+        expected = ((reference-average.reshape(axes))/np.sqrt(biased.reshape(axes)+layer.eps)
+                    * weight.reshape(axes)+bias.reshape(axes))
+        observations.append(tuple(value.detach().clone() for value in (
+            out, layer.running_mean, layer.running_var)))
+        references.append((expected, mean.copy(), variance.copy()))
+    for observed, expected in zip(observations, references):
+        for index, (value, reference) in enumerate(zip(observed, expected)):
+            np.testing.assert_allclose(value.cpu().numpy(), reference,
+                                       atol=2e-5 if index == 0 else 2e-6, rtol=2e-5)
+    assert layer.num_batches_tracked.item() == 8
+    if captured:
+        replay = runner.__dict__['_training_replay']
+        try:
+            assert replay.stats['graph'] >= 2, replay._graph_refused
+        finally:
+            replay.invalidate()
 
 
 class BatchNormState(unittest.TestCase):

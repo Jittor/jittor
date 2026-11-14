@@ -360,6 +360,8 @@ def silu(x, inplace=False):     # inplace: accepted for torch/mmcv compat, ignor
     fused = _fused_activation(x, "silu")
     if fused is not None:
         return fused
+    # Register lazily, then retain the shared dispatch entry for every backend.
+    from jittor.backends.cuda.kernels.nn.silu_cuda import _silu_no_grad_cuda  # noqa: F401
     fast = try_dispatch("nn.silu", x, inplace=inplace)
     if fast is not None:
         return fast

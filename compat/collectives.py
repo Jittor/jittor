@@ -172,7 +172,7 @@ def _all_reduce_mean_bucketed(variables, bucket_bytes):
         buckets.append(bucket)
     futures = []
     for bucket in buckets:
-        # Reverse parameter order is supplied by DDP. Start each bucket as
+        # A rank-agreed readiness order is supplied by DDP. Start each bucket as
         # soon as its local gradients are ready, in the same order per rank.
         with jt.flag_scope(node_order=1):
             flat = (bucket[0].reshape((-1,)) if len(bucket) == 1 else
@@ -195,6 +195,39 @@ def _all_reduce_mean_bucketed(variables, bucket_bytes):
     return results
 
 
+def _coalesced_broadcast(variables, grouped):
+    """Pack small tensors by dtype before issuing NCCL broadcasts."""
+    buckets, tails = [], {}
+    result = list(variables)
+    for index, value in enumerate(variables):
+        if value.numel():
+            key = str(value.dtype)
+            size = value.numel()*value.element_size()
+            bucket = tails.get(key)
+            # Large parameters are sent directly, and packing small ones
+            # never needs an allocation as large as the entire model.
+            if bucket is None or bucket[1]+size > (64 << 20):
+                bucket = [[], 0]
+                tails[key] = bucket
+                buckets.append(bucket[0])
+            bucket[0].append((index, value))
+            bucket[1] += size
+    packed, layouts = [], []
+    for bucket in buckets:
+        pieces = [value.contiguous().reshape((-1,)) for _, value in bucket]
+        packed.append(pieces[0] if len(pieces) == 1 else jt.concat(pieces, dim=0))
+        layouts.append(bucket)
+    if not packed:
+        return result
+    for flat, bucket in zip(grouped(packed), layouts):
+        offset = 0
+        for index, value in bucket:
+            count = value.numel()
+            result[index] = flat[offset:offset+count].reshape(value.shape)
+            offset += count
+    return result
+
+
 def _broadcast_from_rank0_many(variables):
     """Broadcast CUDA storages together, preserving holders and aliases."""
     variables = list(variables)
@@ -203,12 +236,21 @@ def _broadcast_from_rank0_many(variables):
     from jittor._runtime import step_capture
     ops = _nccl_ops()
     grouped = getattr(ops, 'nccl_broadcast_many', None) if ops is not None else None
-    if (step_capture.active() or not callable(grouped)
+    if (not callable(grouped)
             or any(value.device.type != 'cuda' for value in variables)):
         return [_broadcast_from_rank0(value) for value in variables]
     with jt.no_grad():
+        if step_capture.active():
+            # A physical store is executed only while tracing and does not
+            # connect the collective to the retained training graph. Record
+            # each write instead: the capture commits to the original storage
+            # and preserves aliases after accepting the complete step.
+            reduced = _coalesced_broadcast(variables, grouped)
+            for target, source in zip(variables, reduced):
+                target.assign(source)
+            return variables
         jt.core._preserve_step_readers(variables)
-        reduced = grouped([value.contiguous() for value in variables])
+        reduced = _coalesced_broadcast(variables, grouped)
         jt.sync(reduced, False, False)
         for target, source in zip(variables, reduced):
             target._copy_into(source, False)
@@ -224,6 +266,10 @@ def _broadcast_from_rank0(var):
             "this Jittor build has no mpi_broadcast, so parameters cannot be "
             "broadcast to the %d ranks it was launched with." % _world_size())
     with jt.no_grad():
+        from jittor._runtime import step_capture
+        if step_capture.active():
+            var.assign(var.mpi_broadcast())
+            return var
         # Preserve the allocation: detached aliases and captured readers keep
         # referring to this storage after a broadcast, just as in Torch.
         var._copy_into(var.mpi_broadcast())

@@ -40,6 +40,17 @@ VarPtr storage_view_transpose(Var* v, NanoVector axes);
 // A layout rewrite may move the forward calculation, but recorded gradients
 // still belong to the operator's actual logical inputs and saved output.
 bool storage_layout_records_grad(const vector<Var*>& inputs);
+// Once an outer op selects a physical layout, build its implementation in
+// that order. Reapplying the policy can alternate between two dense inputs
+// with different layouts indefinitely.
+struct StorageLayoutRewriteScope {
+    int previous;
+    StorageLayoutRewriteScope();
+    ~StorageLayoutRewriteScope();
+    StorageLayoutRewriteScope(const StorageLayoutRewriteScope&) = delete;
+    StorageLayoutRewriteScope& operator=(const StorageLayoutRewriteScope&) = delete;
+};
+
 struct StorageLayoutForwardScope {
     bool previous;
     StorageLayoutForwardScope();

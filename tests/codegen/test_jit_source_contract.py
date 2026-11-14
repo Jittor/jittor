@@ -68,6 +68,7 @@ def _build_op():
 
 
 class TestJitSourceContract(unittest.TestCase):
+    @jt.flag_scope(use_cuda=0)
     def test_pragma_compiles_and_format_literal_survives_fusion(self):
         op = _build_op()
         x = jt.array(np.arange(16, dtype=np.float32))

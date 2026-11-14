@@ -5,7 +5,7 @@
 新增或调整 Torch API 时，沿本页检查参数适配、安装顺序与返回类型。先理解[分层架构](torch-architecture.md)，验收要求见[兼容原则](principles.md)。
 
 - 状态：现行实现说明
-- 上次复查：2026-11-11
+- 上次复查：2026-11-13
 - Owner：Torch 兼容维护者
 - 复查触发：新增 torch API、安装器编排或下沉机制变化
 
@@ -283,10 +283,46 @@ Tensor batch 保持串行。首次 batch 的线程归属、完整 worker RNG / c
 固定内存尚未完全对齐 Torch，保真度仍为 approximate。
 这条 CPU 数据通路不是计算向 CPU 的 fallback；模型与训练计算仍必须在声明设备验证。
 
+worker 整理 NumPy 样本时，符合导入条件的新 `stack` 数组直接通过 DLPack 建立
+Tensor，避免在 IPC 拷贝之前再复制一份。`from_numpy` 对可写、连续、原生字节序的
+常见数值数组共享 CPU 存储并保留 NumPy owner；其它布局和类型保留可移植构造路径。
+无梯度索引写入与其它原地写入一致，保留共享分配，NumPy 与 Tensor 双向观察更新。
+`Tensor.new_*` 工厂创建独立叶子，默认不请求梯度；显式 `requires_grad=True` 不受
+`no_grad` 工厂作用域影响，也不继承源张量的梯度策略。
+
 Torch 普通 `BatchNorm` 默认使用 rank 本地统计量；显式 `SyncBatchNorm` 保持同步。
 原生 Jittor `BatchNorm` 的默认设置不变。DDP 在初始化时广播参数，并按
 `broadcast_buffers` 在初始化和每次前向前广播 buffer。写回保留 Var 与底层存储身份，
 使别名和设备图读取同一块更新后的存储。
+
+CPU worker 编码连续、无梯度的数值 Tensor 时，使用原生 data 描述符保留持有分配的
+NumPy 视图，再同步复制进共享内存，省去整批中间副本；共享内存仍有独立的 lease 生命周期。
+bool、bfloat16 与不支持的布局保留原编码通路。
+
+CUDA FP32 四维 affine BatchNorm 的训练统计快速路径也服务于冻结参数和 `no_grad`
+调用；它们继续按真实 batch 更新 running stats，不切换为 eval 统计。
+无梯度、连续 NCHW 输入在 cuDNN 可用且 epsilon 至少为 `1e-5` 时使用其训练统计路径；
+临时 running moments 先清零，再将 cuDNN 的无偏方差转换为公共更新函数需要的有偏方差。
+其它布局、后端和需要梯度的调用保留各自的计算路径。
+
+`torch.compile(module)` 在训练态 `no_grad` 调用中使用完整状态回放，保留 BatchNorm
+等 buffer 的逐步更新；eval 调用使用推理图回放。训练步和设备图在覆盖状态存储之前，
+还会提交调用者持有的待计算副本，保持无梯度快照的原始值。
+
+冻结 FP32 特征的 CUDA SiLU 使用一次除法完成输出，深度卷积以 FP32 FMA 累加，
+连续四维 Tensor 的 H/W 均值使用固定的四累加器归约树。所声明的梯度路径、其它
+dtype 和不支持的布局继续使用对应实现；这些路径不启用 TF32。Float64 与
+complex128 均值反向的比例也保留双精度，避免先计算 FP32 倒数再扩大到双精度。
+`erf/erfinv` 的 Float64 反向常数同样直接以双精度构造，并跟随输入的设备放置；
+一阶与二阶导数都保持调用者请求的精度。
+
+交叉熵的自定义前向与均值分母使用独立的行权重存储边界，避免并行 CPU 融合只留下
+某个工作线程的部分和；新增存储为 O(N)，不复制完整 logits。CPU Float32 L1 范数
+内部使用 double 累加，公开结果与梯度保留 Float32。
+
+原生 CUDA 二维池化将每块线程数限制为 256，并声明 launch bounds，前后向均检查
+启动错误，避免 NHWC 内核的寄存器需求超过块资源上限。cuDNN RNN 的权重布局查询
+在执行器首次运行前也会显式选择 CUDA 临时分配器并绑定当前流。
 
 CUDA 梯度同步通过原生 `nccl_all_reduce_many` 将多个独立张量放进同一 NCCL group。
 group 的打开、提交和流等待属于算子执行，因此设备图回放也保留该顺序；消费者在
@@ -295,18 +331,28 @@ NCCL 的原生 average，其它梯度类型保留求和再缩放的通路。CPU 
 逐梯度同步路径。分组减少发射和等待次数，本身不表示通信与计算已经重叠。
 
 被捕获的单个 CUDA DDP 实例在 FP32 梯度达到 `bucket_cap_mb`（默认 25 MiB）时，
-按反向参数顺序打包连续桶。`nccl_all_reduce_deferred` 在通信流提交归约并保留输入／
+按首次普通 backward 中梯度计算节点的构建顺序估计就绪顺序，跳过 tape 与存储包装，
+再由 rank 0 广播参数编号并缓存为各卡一致的打包顺序。这样共享参数的晚到梯度不会
+仅因注册顺序堵住所有桶。捕获时验证缓存顺序；没有匹配的预热顺序时仍使用各卡一致的
+反向参数顺序。`nccl_all_reduce_deferred` 在通信流提交归约并保留输入／
 输出分配，后续计算可以继续；`nccl_wait_many` 等全部桶提交后才执行 join，返回的
 别名才可被读取或更新。低层 deferred 结果必须经过此 join，不能直接消费。
 普通别名 clone 在源就绪后优先发布，避免反向完成后才创建的 detach 节点拖延整个桶。
 CUDA buffer 的批量广播使用 `nccl_broadcast_many`，由同一执行器线程打开、提交和
-等待 group，再保留原存储写回；不能跨执行器线程用 Python scope 配对 NCCL group。
+等待 group，再保留原存储写回。小张量按 dtype 打包，普通桶不超过 64 MiB，超过
+上限的单个大张量直接传输；每次仍广播当前 buffer 内容。捕获时保留图内写入，
+避免只在 tracing 时执行物理拷贝。不能跨执行器线程用 Python scope 配对 NCCL group。
 这些路径保留真实通信与完整 FP32 计算，是否重叠仍需用同设备／context 的时间区间验证。
 
 CUDA 上零 weight decay 的 Adam 可以复用 AdamW 的融合更新，因为此时两者公式相同。
 更新仍读取当前学习率、betas 与每参数计数；显式 `fused=False` / `foreach=False`
 可以禁用默认融合，带耦合 weight decay 的 Adam 保持自身计算路径。默认 Adam 的公开
 step Tensor 仍在 CPU，显式 fused 计数保持参数设备位置。
+
+捕获中的 CUDA FP32 `linear` 将前向 bias 加法并入 cuBLASLt GEMM；反向仍计算输入、
+权重和 bias 的完整梯度。`addmm` 在 `alpha=beta=1`、连续二维矩阵与向量 bias 的训练
+路径上直接使用 `[cin, cout]` 权重布局，权重梯度按相同布局写回，并用 BGRADA 求 bias
+梯度，省去权重及其梯度的转置。其它缩放、形状、dtype 和设备保留原来的矩阵运算路径。
 
 ## 16. 相关文档
 

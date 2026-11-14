@@ -334,6 +334,8 @@ for _reduction_impl, _reduction_api, _reduction_detail in (
         (unfold, "torch.Tensor.unfold", _UNFOLD_FIDELITY_DETAIL),
         (addcmul, "torch.Tensor.addcmul", _ADDC_FIDELITY_DETAIL),
         (addcdiv, "torch.Tensor.addcdiv", _ADDC_FIDELITY_DETAIL),
+        (addcmul, "torch.addcmul", _ADDC_FIDELITY_DETAIL),
+        (addcdiv, "torch.addcdiv", _ADDC_FIDELITY_DETAIL),
         (broadcast_to, "torch.broadcast_to", _BROADCAST_TO_FIDELITY_DETAIL),
         (diagonal, "torch.diagonal", _NATIVE_DIAGONAL_FIDELITY_DETAIL)):
     register_fidelity(
@@ -392,8 +394,9 @@ def _install_reductions(g):
     Var.masked_scatter = masked_scatter
     Var.masked_scatter_ = masked_scatter_
     Var.unfold = unfold
-    Var.addcmul = addcmul
-    Var.addcdiv = addcdiv
+    # Functional callers use the same arithmetic owner as Tensor methods.
+    g.addcmul = Var.addcmul = addcmul
+    g.addcdiv = Var.addcdiv = addcdiv
     g.broadcast_to = Var.broadcast_to = broadcast_to
 
     # --- elementwise / reduction ops missing as torch methods (all additive) ---
@@ -532,6 +535,9 @@ def _array_keep_dtype(data):
     return jt.array(data)
 
 
+_BUILTIN_SCALARS = frozenset((bool, int, float, complex))
+
+
 def _detached_values(data, Var, dtypes):
     """Plain values for ``np.asarray``, recording the dtypes of contained Vars.
 
@@ -540,6 +546,12 @@ def _detached_values(data, Var, dtypes):
     copies everything else detached.
     """
     if isinstance(data, (list, tuple)):
+        # Tokenizer batches contain long rows of builtin scalars. map/set do
+        # this exact-type scan in C, avoiding a Python generator and tensor
+        # instance check per token. Mixed objects retain the full detached
+        # tensor conversion below, including subclasses and NumPy scalars.
+        if set(map(type, data)).issubset(_BUILTIN_SCALARS):
+            return data
         if not any(isinstance(d, (Var, list, tuple)) for d in data):
             return data
         return [_detached_values(d, Var, dtypes) for d in data]
@@ -650,7 +662,16 @@ def from_numpy(arr, *, device=None):
     g = compatibility_owner(jt)
     Var = g.Var
     with tensor_frontend(Var, device=device if device is not None else "cpu"):
-        v = _array_keep_dtype(arr)
+        if (type(arr) is _numpy.ndarray and arr.dtype.kind in 'fiuc'
+                and arr.dtype.itemsize <= 8 and arr.dtype.isnative
+                and arr.flags.writeable and arr.flags.c_contiguous
+                and hasattr(arr, '__dlpack__')):
+            # NumPy owns this CPU allocation. DLPack retains that owner, so
+            # both mutation directions and escaped tensor lifetimes work
+            # without copying every image in a DataLoader worker.
+            v = g.Tensor(jt.from_dlpack(arr, copy=False).stop_grad())
+        else:
+            v = _array_keep_dtype(arr)
         v.requires_grad_(False)
         if _device_is_cpu(device):
             return _make_cpu_resident(v)

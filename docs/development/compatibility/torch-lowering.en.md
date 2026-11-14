@@ -5,7 +5,7 @@
 Use this page when adding or changing a Torch API to check argument adaptation, installation order and return types. Read the [architecture](torch-architecture.en.md) first and use the [compatibility principles](principles.en.md) for acceptance criteria.
 
 - Status: current implementation description
-- Last reviewed: 2026-11-11
+- Last reviewed: 2026-11-13
 - Owner: Torch compatibility maintainers
 - Review trigger: a new torch API, a change to installer orchestration or the
   lowering mechanism
@@ -345,12 +345,62 @@ so fidelity remains approximate. This CPU input
 path is separate from compute fallback; model training must still be verified
 on the declared device.
 
+When workers collate NumPy samples, eligible fresh `stack` arrays are imported
+through DLPack, avoiding another copy before IPC transport. `from_numpy`
+shares CPU storage and retains the NumPy owner for common writable, contiguous
+numeric arrays with native byte order; other layouts and types retain the
+portable construction path. Detached indexed stores preserve shared allocations
+like other in-place writes, making updates visible in both directions.
+`Tensor.new_*` factories create independent leaves without gradients by default.
+Explicit `requires_grad=True` works inside `no_grad` and is independent of the
+source tensor's gradient policy.
+
 Ordinary Torch `BatchNorm` defaults to rank-local statistics; explicit
 `SyncBatchNorm` retains synchronization. Native Jittor's BatchNorm default is
 unchanged. DDP broadcasts parameters at initialization and, according to
 `broadcast_buffers`, broadcasts buffers at initialization and before each
 forward. Writeback preserves Var and storage identities so aliases and device
 graphs read the same updated allocation.
+
+CPU worker encoding borrows an allocation-pinning NumPy view through the native
+data descriptor for contiguous, detached numeric tensors, then synchronously
+copies it into shared memory. This
+removes the intermediate batch allocation; shared memory retains its independent
+lease lifetime. Boolean, bfloat16 and unsupported layouts keep the previous path.
+
+The CUDA FP32 four-dimensional affine BatchNorm training-statistics fast path
+also serves frozen parameters and `no_grad` calls. They continue updating running
+statistics from the actual batch rather than using eval statistics.
+Gradient-free contiguous NCHW inputs use cuDNN training statistics when available
+and epsilon is at least `1e-5`. Temporary running moments are zeroed first;
+cuDNN's unbiased variance is converted to the biased variance consumed by the
+public update function. Other layouts, backends and differentiable calls retain
+their respective computation paths.
+
+Training-mode `torch.compile(module)` calls under `no_grad` replay the complete
+state transition, retaining per-step updates to buffers such as BatchNorm moments.
+Eval calls use inference graph replay. Before overwriting state storage, step and
+device replay also materialize caller-held pending copies, preserving no-grad
+snapshots at their original values.
+
+CUDA SiLU on frozen FP32 features computes its output with one division;
+depthwise convolution accumulates with FP32 FMA, and admitted contiguous 4-D
+H/W means use a fixed four-accumulator reduction tree. Differentiable paths,
+other dtypes and unsupported layouts retain their respective implementations;
+these paths do not enable TF32. Float64 and complex128 mean VJPs also retain a
+double-precision scale instead of widening an already rounded FP32 reciprocal.
+Float64 `erf/erfinv` VJP constants are likewise constructed directly in double
+precision on the input's device, preserving both first and second derivatives.
+
+Cross-entropy's custom forward and mean denominator use an independent row-weight
+storage boundary so CPU fusion retains the complete parallel sum. This adds O(N)
+storage and does not copy all logits. CPU Float32 L1 norms accumulate in double
+while retaining Float32 results and gradients.
+
+Native CUDA 2-D pooling caps blocks at 256 threads, declares launch bounds, and
+checks forward/backward launch errors so NHWC register usage fits block limits.
+cuDNN RNN weight-layout queries explicitly select a CUDA temporary allocator and
+bind the current stream even before the executor's first batch.
 
 CUDA gradient synchronization uses native `nccl_all_reduce_many` to submit
 independent tensors in one NCCL group. Opening, submitting and joining the
@@ -362,16 +412,25 @@ keep per-gradient synchronization. Grouping reduces launches and joins; it
 does not itself establish communication/compute overlap.
 
 For one captured CUDA DDP instance with at least `bucket_cap_mb` of FP32
-gradients (25 MiB by default), contiguous buckets follow reverse parameter
-order. `nccl_all_reduce_deferred` submits on the communication stream and pins
+gradients (25 MiB by default), the first ordinary backward estimates readiness
+from gradient producer construction order, stripping tape and storage wrappers.
+Rank 0 broadcasts parameter indices and caches the same packing order on every
+rank. Late shared gradients therefore do not block every bucket merely because
+of registration order. Capture guards that cached order; without a matching
+warmup plan it retains rank-stable reverse registration order.
+`nccl_all_reduce_deferred` submits on the communication stream and pins
 both allocations, allowing later compute to continue. `nccl_wait_many` joins
 after every bucket has been submitted; only its returned aliases may be read
 or updated. Low-level deferred results must pass through this join before use.
 Ordinary alias clones publish as soon as their source is ready, so detaches
 created after backward construction do not hold up ready buckets. CUDA buffer
 broadcasts use `nccl_broadcast_many`: the same executor thread opens, submits
-and joins the group before preserving storage during writeback. A Python scope
-must not pair NCCL group calls across executor threads. These paths retain real
+and joins the group before preserving storage during writeback. Small tensors
+are packed by dtype into ordinary buckets of at most 64 MiB; an oversized
+individual tensor is sent directly. Each call still broadcasts current buffer
+contents. Capture retains graph writes instead of performing a physical copy
+only during tracing. A Python scope must not pair NCCL group calls across
+executor threads. These paths retain real
 communication and full FP32 computation; establish overlap using interval
 intersections on the same device and context.
 
@@ -381,6 +440,13 @@ learning rate, betas and per-parameter counters. Explicit `fused=False` /
 `foreach=False` disable default fusion; Adam with coupled weight decay keeps
 its own computation path. Default Adam's public step Tensor stays on CPU;
 explicit fused counters retain parameter-device placement.
+
+Captured CUDA FP32 `linear` folds its forward bias into the cuBLASLt GEMM while
+retaining complete input, weight and bias gradients. Training `addmm` with
+`alpha=beta=1`, dense two-dimensional matrices and a vector bias uses [cin, cout]
+weights directly, writes their gradients in the same layout and computes the
+bias gradient through BGRADA. Other scaling, shapes, dtypes and devices keep
+the existing matrix-operation path.
 
 ## 16. Related documents
 

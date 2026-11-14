@@ -144,4 +144,48 @@ JIT_TEST(traversal_epoch_restores_outer_marks) {
     CHECK(!solo.marked(b.ptr));
 }
 
+JIT_TEST(traversal_queue_marks_restore_states) {
+    VarPtr a({4}, "float32"), b({4}, "float32");
+    auto& state = runtime_traversal_state();
+    const int active = state.active_epochs();
+    {
+        TraversalQueueMarks queue("queue");
+        CHECKop(state.active_epochs(),==,active+1);
+        queue.mark_queued(a.ptr);
+        queue.mark_expanded(a.ptr);
+        queue.mark_queued(a.ptr);
+        CHECK(queue.expanded(a.ptr));
+        if (active == 0) CHECK(queue.displaced.empty());
+        {
+            TraversalEpoch nested("inside queue");
+            nested.mark(a.ptr);
+            nested.mark(b.ptr);
+        }
+        CHECK(queue.expanded(a.ptr));
+        CHECK(!queue.contains(b.ptr));
+        try {
+            TraversalQueueMarks nested("nested queue");
+            nested.mark_queued(a.ptr);
+            nested.mark_expanded(a.ptr);
+            nested.mark_queued(a.ptr);
+            nested.mark_expanded(b.ptr);
+            CHECKop(nested.displaced.size(),==,2);
+            throw std::runtime_error("restore both queue states");
+        } catch (const std::runtime_error&) {}
+        CHECK(queue.expanded(a.ptr));
+        CHECK(!queue.contains(b.ptr));
+    }
+    CHECKop(state.active_epochs(),==,active);
+    TraversalEpoch outer("outside queue");
+    outer.mark(a.ptr);
+    {
+        TraversalQueueMarks nested("queue inside ordinary traversal");
+        nested.mark_queued(a.ptr);
+        nested.mark_expanded(a.ptr);
+        nested.mark_queued(a.ptr);
+        CHECKop(nested.displaced.size(),==,1);
+    }
+    CHECK(outer.marked(a.ptr));
+}
+
 } // jittor
