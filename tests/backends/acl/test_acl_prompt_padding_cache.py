@@ -90,7 +90,7 @@ def test_prefill_matches_uncached_bytes_without_changing_inputs_or_cache(
                 tensor = jt.array(host)
             tensors.append(tensor)
         expected = original_prefill(*tensors, width ** -.5, causal)
-        actual = attention._prompt_prefill_310p(*tensors, width ** -.5, is_causal=causal)
+        actual = attention._prompt_prefill_padded(*tensors, width ** -.5, is_causal=causal)
         jt.sync([expected, actual], True)
         assert expected.location() == actual.location() == "device"
         a, b = jt.fetch_sync([actual, expected])
@@ -109,7 +109,7 @@ def test_aligned_prefill_never_calls_padding_helper(monkeypatch):
         raise AssertionError("aligned prefill must not allocate padding")
 
     monkeypatch.setattr(attention, "_prompt_pad_sequence", unexpected)
-    output = attention._prompt_prefill_310p(*tensors, 64 ** -.5, is_causal=False)
+    output = attention._prompt_prefill_padded(*tensors, 64 ** -.5, is_causal=False)
     output.sync(True)
     assert output.location() == "device" and not attention._prompt_padding_cache
 

@@ -118,7 +118,7 @@ def test_poisoned_storage_after_logical_source_does_not_enter_attention():
 def test_masked_and_maskless_programs_do_not_reuse_different_input_counts():
     for index, masked in enumerate((True, False, True, False)):
         hosts, values = _inputs(1, 2, 19, 19, 64, seed=300 + index)
-        output = (attention._prompt_prefill_310p(*values, 64 ** -.5, is_causal=False)
+        output = (attention._prompt_prefill_padded(*values, 64 ** -.5, is_causal=False)
                   if masked else jt.nn.scaled_dot_product_attention(*values, is_causal=False))
         output.sync(True)
         np.testing.assert_allclose(output.numpy(), _reference(*hosts), rtol=3e-3, atol=1e-3)
