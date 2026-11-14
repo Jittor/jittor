@@ -31,6 +31,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+triton = ["triton==3.9.0; sys_platform == 'linux' and python_version >= '3.10'"]
+tilelang = ["tilelang==0.1.15; sys_platform == 'linux' and python_version >= '3.10'"]
 # Compiler/runtime/CCCL only. Math libraries (cuBLAS, cuDNN, etc.) must also
 # be present in the selected toolkit. Exact transitive pins prevent nvcc's
 # unbounded dependencies from silently upgrading to an unvalidated minor.

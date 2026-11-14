@@ -466,6 +466,8 @@ include docs/notes/numerics/numerics-contract.en.md
 include docs/notes/numerics/numerics-contract.md
 include docs/notes/runtime/cuda-library-plan-caches.en.md
 include docs/notes/runtime/cuda-library-plan-caches.md
+include docs/notes/runtime/external-kernels.en.md
+include docs/notes/runtime/external-kernels.md
 include docs/notes/runtime/pipelined-execution.en.md
 include docs/notes/runtime/pipelined-execution.md
 include docs/notes/runtime/runtime-introspection.en.md
@@ -545,6 +547,8 @@ include src/bindings/pyjt/dlpack.cc
 include src/bindings/pyjt/dlpack.h
 include src/bindings/pyjt/dlpack_api.h
 include src/bindings/pyjt/gil.h
+include src/bindings/pyjt/kernel_func.cc
+include src/bindings/pyjt/kernel_func.h
 include src/bindings/pyjt/numpy.cc
 include src/bindings/pyjt/numpy.h
 include src/bindings/pyjt/py_arg_printer.cc
@@ -689,6 +693,7 @@ include src/core/grad.cc
 include src/core/grad.h
 include src/core/graph.cc
 include src/core/graph.h
+include src/core/kernel_func.h
 include src/core/memory_profiler.cc
 include src/core/memory_profiler.h
 include src/core/node.cc
@@ -763,6 +768,8 @@ include src/ops/composite/device_copy_op.cc
 include src/ops/composite/device_copy_op.h
 include src/ops/composite/empty_op.cc
 include src/ops/composite/empty_op.h
+include src/ops/composite/external_kernel_op.cc
+include src/ops/composite/external_kernel_op.h
 include src/ops/composite/fetch_op.cc
 include src/ops/composite/fetch_op.h
 include src/ops/composite/fuse_transpose_op.cc
