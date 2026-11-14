@@ -362,9 +362,7 @@ def _supports_prompt_full_910b(q_shape, k_shape, dtype_name, training, is_causal
     """The full (non-causal) fp16 batch the 910B PromptFlashAttention path serves.
 
     Same padded prefill as the 310P subset: equal Q/K shapes, a 128-multiple
-    sequence, and the padding columns dropped by the mask.  On a 910B3 this
-    measured 0.3-1.1 ms at [1, 32, 1797, 64] against 2.5 ms for the
-    FlashAttentionScoreV2 dispatch.
+    sequence, and the padding columns dropped by the mask.
     """
     padded = (int(q_shape[-2]) + 127) // 128 * 128
     return (

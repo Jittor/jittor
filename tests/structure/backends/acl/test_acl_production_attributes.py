@@ -120,6 +120,33 @@ def test_prompt_attention_selection_keeps_other_soc_and_semantics_on_original_pa
     assert not supported(query, key, "float16", False, True, None)
 
 
+def test_910b_prompt_admission_preserves_other_attention_paths(pipeline, monkeypatch):
+    load, _, _ = pipeline
+    module = load("flashattention_op")
+    monkeypatch.setattr(module, "soc_name", lambda: "Ascend910B3")
+    monkeypatch.setattr(module, "kernel_available", lambda name: True)
+    supported = module._supports_prompt_full_910b
+    q = (1, 4, 129, 64)
+    assert supported(q, q, "float16", False, False, None)
+    for dtype, training, causal, mask in [
+        ("float32", False, False, None), ("bfloat16", False, False, None),
+        ("float16", True, False, None), ("float16", False, True, None),
+        ("float16", False, False, object()),
+    ]:
+        assert not supported(q, q, dtype, training, causal, mask)
+    for k in [(1, 2, 129, 64), (1, 4, 128, 64)]:
+        assert not supported(q, k, "float16", False, False, None)
+    for shape in [(1, 4, 1, 64), (1, 4, 65535, 64), (129, 4, 128, 64),
+                  (1, 257, 128, 64), (1, 4, 128, 8)]:
+        assert not supported(shape, shape, "float16", False, False, None)
+    for soc in ["Ascend310P3", "Ascend910", "Ascend910_9391"]:
+        monkeypatch.setattr(module, "soc_name", lambda: soc)
+        assert not supported(q, q, "float16", False, False, None)
+    monkeypatch.setattr(module, "soc_name", lambda: "Ascend910B3")
+    monkeypatch.setattr(module, "kernel_available", lambda name: False)
+    assert not supported(q, q, "float16", False, False, None)
+
+
 def test_index_copy_emits_independent_output_and_typed_dimension(pipeline):
     load, Tensor, calls = pipeline
     data = load("_attributes").attribute_data
