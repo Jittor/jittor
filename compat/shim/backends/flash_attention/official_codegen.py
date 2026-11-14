@@ -214,6 +214,43 @@ static void jt_finish_and_run(Flash_fwd_params &params, void *rng_state_ptr) {
     jt_run_mha_fwd(params, stream);
 }
 
+// A graph-visible Jittor CodeOp owns every input and output allocation. This
+// entry only launches the official kernel; it never allocates a Tensor or
+// evaluates another lazy graph while an executor is running.
+static void jt_raw_dense_fwd(
+        void *q, void *k, void *v, void *out, float *lse,
+        int b, int m, int n, int h, int hk, int d,
+        float scale, bool causal, int wl, int wr, bool bf16, cudaStream_t stream) {
+    Flash_fwd_params p = {};
+    p.is_bf16 = bf16;
+    p.q_ptr = q; p.k_ptr = k; p.v_ptr = v; p.o_ptr = out;
+    p.q_batch_stride = int64_t(m) * h * d;
+    p.k_batch_stride = p.v_batch_stride = int64_t(n) * hk * d;
+    p.o_batch_stride = int64_t(m) * h * d;
+    p.q_row_stride = p.o_row_stride = h * d;
+    p.k_row_stride = p.v_row_stride = hk * d;
+    p.q_head_stride = p.k_head_stride = p.v_head_stride = p.o_head_stride = d;
+    p.softmax_lse_ptr = lse;
+    p.b = b; p.h = h; p.h_k = hk; p.h_h_k_ratio = h / hk;
+    p.seqlen_q = m; p.seqlen_k = n;
+    p.seqlen_q_rounded = jt_round_multiple(m, 128);
+    p.seqlen_k_rounded = jt_round_multiple(n, 128);
+    p.d = d; p.d_rounded = jt_round_multiple(d, d <= 128 ? 32 : 64);
+    p.scale_softmax = scale; p.scale_softmax_log2 = scale * M_LOG2E;
+    p.p_dropout = 1.f; p.p_dropout_in_uint8_t = 255; p.rp_dropout = 1.f;
+    p.scale_softmax_rp_dropout = scale;
+    if (wl >= n) wl = -1;
+    if (wr >= n) wr = -1;
+    if (causal) wr = 0;
+    if (wl < 0 && wr >= 0) wl = n;
+    if (wl >= 0 && wr < 0) wr = n;
+    p.is_causal = wl < 0 && wr == 0;
+    p.window_size_left = wl; p.window_size_right = wr;
+    p.is_seqlens_k_cumulative = true;
+    p.num_splits = 1;
+    jt_run_mha_fwd(p, stream);
+}
+
 at::Tensor
 jt_fwd(py::handle q_obj,
        py::handle k_obj,
@@ -570,6 +607,9 @@ jt_kvpacked_fwd(py::handle q_obj,
 } // namespace FLASH_NAMESPACE
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+    m.def("_raw_dense_fwd_address", []() {
+        return reinterpret_cast<uintptr_t>(&FLASH_NAMESPACE::jt_raw_dense_fwd);
+    });
     m.def("fwd", &FLASH_NAMESPACE::jt_fwd, "Jittor direct forward");
     m.def("varlen_fwd", &FLASH_NAMESPACE::jt_varlen_fwd, "Jittor direct varlen forward");
     m.def("varlen_qkvpacked_fwd", &FLASH_NAMESPACE::jt_varlen_qkvpacked_fwd, "Jittor direct varlen qkvpacked forward");

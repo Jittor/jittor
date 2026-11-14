@@ -813,7 +813,6 @@ class ExternalBackend:
 
     def load_source_root(self, raw_root: str) -> Optional[ModuleType]:
         root = pathlib.Path(raw_root).expanduser().resolve()
-        self._add_source_to_sys_path(root)
         if self._special_source_loader is not None:
             try:
                 claimed = any(predicate(root) for predicate in self.spec.source_predicates)
@@ -821,6 +820,10 @@ class ExternalBackend:
                 claimed = False
             if claimed:
                 return self._special_source_loader(root)
+        # A direct source compiler does not import the upstream Python
+        # package. Publishing that tree would shadow the compatibility facade
+        # with a package expecting a differently named native extension.
+        self._add_source_to_sys_path(root)
         for manifest in self.manifest_paths(root):
             module = self.load_manifest(root, manifest)
             if module is not None:
