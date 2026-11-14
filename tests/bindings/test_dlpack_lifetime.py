@@ -20,6 +20,84 @@ from _helpers import capability
 from _helpers.child_process import run_child_script
 
 
+@pytest.mark.skipif(not capability.check_accelerator('cuda', backend=jt).enabled,
+                    reason='needs a real CUDA async executor')
+def test_async_foreign_owner_is_released_on_the_python_caller():
+    # A Python exporter can need the GIL in its DLPack deleter. Calling it
+    # while the worker owns the graph lock can deadlock a Python deallocator.
+    # Keep this crash/hang isolated, including when testing an older core.
+    program = r'''
+import ctypes, gc, runpy, threading
+import numpy as np
+import jittor as jt
+api = runpy.run_path(__DLPACK_LIFETIME_SOURCE__)
+get = api['_capsule_get_pointer']
+valid = api['_capsule_is_valid']
+jt.flags.use_cuda = 1
+jt.flags.auto_graph_replay = 0
+jt.flags.auto_flush_ops = 23
+jt.flags.backend_fallback = 'error'
+root = jt.array(np.random.default_rng(702).normal(size=(64, 64)).astype('float32')).stop_grad()
+weight = jt.array(np.eye(64, dtype='float32')).stop_grad()
+jt.sync_all(True)
+def chain(x):
+    for _ in range(30):
+        y = jt.tanh(x * .5 + .25) + x * .125
+        extra = jt.matmul(y, weight)
+        x = jt.matmul(y, weight)
+    return x
+with jt.flag_scope(async_execution=0), jt.no_grad():
+    expected = chain(root).numpy()
+def imported_chain(capsule):
+    # Import inside this frame: retaining an argument on the caller's stack
+    # would keep its owner alive until all graph construction had returned.
+    x = jt.from_dlpack(capsule).stop_grad()
+    for _ in range(30):
+        y = jt.tanh(x * .5 + .25) + x * .125
+        extra = jt.matmul(y, weight)
+        x = jt.matmul(y, weight)
+    return x
+released, owners = [], []
+caller = threading.get_ident()
+with jt.flag_scope(async_execution=1, async_min_caller_us=0), jt.no_grad():
+    before = jt.core.async_exec_batches()
+    for _ in range(8):
+        capsule = jt.to_dlpack(root)
+        versioned = bool(valid(id(capsule), b'dltensor_versioned'))
+        kind = api['_DLManagedTensorVersioned' if versioned else '_DLManagedTensor']
+        callback_type = api['_VersionedDeleter' if versioned else '_ClassicDeleter']
+        name = b'dltensor_versioned' if versioned else b'dltensor'
+        pointer = ctypes.cast(get(id(capsule), name), ctypes.POINTER(kind))
+        original = callback_type(ctypes.cast(pointer.contents.deleter, ctypes.c_void_p).value)
+        def release(value, original=original):
+            released.append(threading.get_ident())
+            original(value)
+        callback = callback_type(release)
+        owners.append((callback, original))
+        pointer.contents.deleter = callback
+        output = imported_chain(capsule)
+        del capsule
+        output.sync()
+        assert output.location() == 'device'
+        np.testing.assert_allclose(output.numpy(), expected, rtol=2e-6, atol=1e-6)
+        del output
+        gc.collect()
+        jt.sync_all(True)
+        jt.sync_all(True)  # Drain releases queued while the first wait ran.
+    ran = jt.core.async_exec_batches() - before
+assert len(released) == 8, released
+assert all(thread == caller for thread in released), released
+print('ASYNC_FOREIGN_RELEASE_OK', ran)
+'''.replace('__DLPACK_LIFETIME_SOURCE__', repr(str(Path(__file__).resolve())))
+    result = run_child_script(program, timeout=120, crash_isolated=True,
+                              without_torch_mode=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    line = next(line for line in result.stdout.splitlines()
+                if line.startswith(b'ASYNC_FOREIGN_RELEASE_OK '))
+    if int(line.split()[-1]) == 0:
+        pytest.skip('no second core in the caller L3 domain for the async worker')
+
+
 class _DLDevice(ctypes.Structure):
     _fields_ = [("device_type", ctypes.c_int32), ("device_id", ctypes.c_int32)]
 

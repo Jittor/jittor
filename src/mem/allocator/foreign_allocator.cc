@@ -9,6 +9,7 @@
 #include <mutex>
 #include "mem/allocator/foreign_allocator.h"
 #include "core/var.h"
+#include "runtime/async_exec.h"
 
 namespace jittor {
 
@@ -43,8 +44,14 @@ void ForeignAllocator::free(void* mem_ptr, size_t size, const size_t& allocation
     auto a = (ForeignAllocation*)allocation;
     a->cnt--;
     if (!a->cnt) {
-        a->del_func();
+        auto release = std::move(a->del_func);
         delete a;
+        // DLPack and NumPy owners can acquire the GIL in their deleters.
+        // The async worker releases liveness under the graph lock, while a
+        // Python deallocator waits for that lock with the GIL held. Keep the
+        // producer alive until the caller can release it, as for Python tapes.
+        if (!async_exec_defer_python_release(std::move(release)))
+            release();
     }
 }
 
