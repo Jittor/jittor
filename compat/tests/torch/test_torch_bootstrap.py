@@ -41,14 +41,12 @@ class TestTorchBootstrap(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=_TEST_STATE_ROOT) as directory:
             script = textwrap.dedent(
                 """
-                import json
                 import os
+                before = os.environ.get("cc_path")
                 import jittor_utils
-                print(json.dumps({
-                    "before": os.environ.get("cc_path"),
-                    "after": os.environ.get("cc_path"),
-                    "resolved": jittor_utils.cc_path,
-                }))
+                assert before == "g++", before
+                assert os.environ.get("cc_path") == before
+                assert jittor_utils.cc_path
                 """
             )
             result = run_python_child(
@@ -59,10 +57,7 @@ class TestTorchBootstrap(unittest.TestCase):
                     "cc_path": "g++",
                 },
             )
-        payload = json.loads(result.stdout)
-        self.assertEqual(payload["before"], "g++")
-        self.assertEqual(payload["after"], "g++")
-        self.assertTrue(payload["resolved"])
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_preflight_math_policy_does_not_change_core_build_flags(self):
         from jittor.compat.shim import preflight

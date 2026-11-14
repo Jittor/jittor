@@ -523,57 +523,71 @@ void Op::init() {
 
 vector<Var*> saved_storage_readers(const vector<Var*>& written, Op* writer) {
     vector<Var*> pending(written), saved;
-    // Small alias sets are cheaper to scan. Wide optimizer batches use the
-    // runtime's reversible node marks instead of allocating a hash node for
-    // every alias on every replay. Either stamp means queued; the second also
-    // means its allocation ring was expanded. Never overwrite the second
-    // stamp with the first. Destruction restores rings before queue marks,
-    // preserving any executor traversal which called us.
-    unique_ptr<TraversalEpoch> queued, rings;
+    // A fused optimizer has hundreds of inputs and outputs. Reuse a scan
+    // with no pending output or sharing expansion for any written input.
+    // This cache belongs only to this read-only walk.
+    unordered_set<Op*> settled_readers;
+    // Wide batches use one reversible owner for queue and ring expansion.
+    // Treating these states as nested traversals logged and restored every
+    // node even when no outer traversal existed.
+    unique_ptr<TraversalQueueMarks> marks;
     auto index_pending = [&]() {
-        if (!queued && pending.size() >= 256) {
-            queued.reset(new TraversalEpoch("saved_storage_readers: queue"));
-            for (Var* value : pending) queued->mark(value);
-            rings.reset(new TraversalEpoch("saved_storage_readers: rings"));
+        if (!marks && pending.size() >= 256) {
+            marks.reset(new TraversalQueueMarks("saved_storage_readers"));
+            for (Var* value : pending) marks->mark_queued(value);
         }
     };
     auto visit = [&](Var* value, bool ring_expanded=false) {
         index_pending();
-        bool unseen = queued ? (!queued->marked(value) && !rings->marked(value))
+        bool unseen = marks ? !marks->contains(value)
             : std::find(pending.begin(), pending.end(), value) == pending.end();
         if (unseen) {
-            if (queued) queued->mark(value);
+            if (marks) marks->mark_queued(value);
             pending.push_back(value);
         }
-        if (rings && ring_expanded) rings->mark(value);
+        if (marks && ring_expanded) marks->mark_expanded(value);
     };
     for (size_t i=0; i<pending.size(); ++i) {
         Var* value = pending[i];
         index_pending();
-        if (value->share_next && (!rings || !rings->marked(value))) {
+        if (value->share_next && (!marks || !marks->expanded(value))) {
             for (Var* member=value->share_next; member!=value; member=member->share_next)
                 visit(member, true);
-            if (rings) rings->mark(value);
+            if (marks) marks->mark_expanded(value);
         }
         for (Op* reader : value->outputs()) {
             if (reader == writer) continue;
+            bool memoize = !writer && written.size() > 1 && reader->_outputs.size() > 1;
+            if (memoize && settled_readers.count(reader)) continue;
+            bool settled = true;
             for (Var* out : reader->outputs()) {
                 // Kept graphs run only through their replay owner, including
                 // when an imperative write commits an already executed step.
                 if (out->flag(VarFlags::_kept)) continue;
+                // A sharing source may match a different written input on a
+                // later visit. Such a reader cannot be memoized here.
+                if (out->share_src || (!out->mem_ptr && out->liveness.backward.active()))
+                    settled = false;
                 if (out->share_src == value) {
                     visit(out);
                 } else if (!out->mem_ptr && out->liveness.backward.active()) {
-                    if (out->flag(VarFlags::_needed_by_backward)) {
+                    if (out->flag(VarFlags::_needed_by_backward)
+                            || (!writer && out->holder && !out->is_finished())) {
+                        // Before a physical write, held readouts also save
+                        // forward-time bytes. Do not turn their copy nodes
+                        // into control inputs of a pending update: unlike a
+                        // backward-saved activation, a copied gradient can be
+                        // rematerialized after that update during capture.
                         if (std::find(saved.begin(), saved.end(), out) == saved.end())
                             saved.push_back(out);
                     } else {
                         // A nonsaved intermediate such as x+1 still connects
-                        // the written allocation to a later saved exp result.
+                        // the written allocation to a later saved/readout value.
                         visit(out);
                     }
                 }
             }
+            if (memoize && settled) settled_readers.insert(reader);
         }
     }
     return saved;

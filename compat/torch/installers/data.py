@@ -338,6 +338,15 @@ def _default_collate(batch):
             return result
     if isinstance(elem, (_np.ndarray, _np.generic)):
         values = _np.stack(batch)
+        from ..types import _DEVICE_CTX_STACK
+        if (_get_worker_info() is not None and not _DEVICE_CTX_STACK
+                and str(g.get_default_device()) == 'cpu'
+                and type(values) is _np.ndarray and values.dtype.kind in 'fiuc'
+                and values.dtype.isnative and values.flags.c_contiguous
+                and values.flags.writeable and hasattr(values, '__dlpack__')):
+            # stack already owns a fresh CPU batch. Import that allocation
+            # directly instead of copying it once more before IPC transport.
+            return g.Tensor(jt.from_dlpack(values, copy=False).stop_grad())
         return g.as_tensor(values, dtype=_jittor_dtype_name(values.dtype)).requires_grad_(False)
     if isinstance(elem, bool):
         return g.as_tensor(batch, dtype=g.bool).requires_grad_(False)

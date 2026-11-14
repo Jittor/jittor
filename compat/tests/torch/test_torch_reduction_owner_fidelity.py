@@ -45,12 +45,11 @@ from _helpers.device_types import instantiate_device_type_tests
 
 #: Promoted into ``installers/tensor.py`` and bound to both spellings.
 TENSOR_OWNED_BOTH = ("argmax", "argmin", "max", "min", "var", "std",
-                     "broadcast_to")
+                     "broadcast_to", "addcmul", "addcdiv")
 #: Promoted into ``installers/tensor.py``; Torch has no module-level spelling
 #: for ``unfold`` at all, and the remaining ones stay methods so this promotion
 #: does not widen the published surface.
-TENSOR_OWNED_METHOD_ONLY = ("masked_scatter", "masked_scatter_", "unfold",
-                            "addcmul", "addcdiv")
+TENSOR_OWNED_METHOD_ONLY = ("masked_scatter", "masked_scatter_", "unfold")
 #: Already had a final owner elsewhere; install only re-exports it.
 REEXPORTED = {
     "diagonal": "jittor.ops.shape_ops",
@@ -86,7 +85,7 @@ class TestReductionOwnerMetadata(unittest.TestCase):
                 self.assertTrue(callable(implementation))
                 self.assertIs(getattr(torch, name), implementation)
                 self.assertIs(getattr(torch.Var, name), implementation)
-                family = ".indexing" if name == "broadcast_to" else ".reductions"
+                family = ".indexing" if name in ("broadcast_to", "addcmul", "addcdiv") else ".reductions"
                 self.assertEqual(implementation.__module__, owner.__name__ + family)
                 self.assertEqual(implementation.__name__, name)
 
@@ -426,6 +425,29 @@ class TestReductionOwner(cu.JittorTestCase):
             tensor.addcdiv(torch.tensor(first), torch.tensor(second),
                            value=2).numpy(),
             base + 2 * (first / second), rtol=1e-6)
+
+    def test_functional_addc_forms_broadcast_and_differentiate(self, device):
+        base = np.array([[1.], [2.]], dtype='float32')
+        first = np.array([[2., 3., 4.]], dtype='float32')
+        second = np.array([[1., 2., 4.], [2., 4., 8.]], dtype='float32')
+        for name in ('addcmul', 'addcdiv'):
+            with self.subTest(name=name):
+                tensors = [torch.tensor(value, device=device, requires_grad=True)
+                           for value in (base, first, second)]
+                result = getattr(torch, name)(*tensors, value=.5)
+                self.assertEqual(result.device.type, device)
+                gradients = torch.autograd.grad(result.sum(), tensors)
+                if name == 'addcmul':
+                    expected = base + .5*first*second
+                    wanted = [np.full_like(base, 3.), (.5*second).sum(0, keepdims=True),
+                              np.broadcast_to(.5*first, second.shape)]
+                else:
+                    expected = base + .5*first/second
+                    wanted = [np.full_like(base, 3.), (.5/second).sum(0, keepdims=True),
+                              -.5*first/(second*second)]
+                np.testing.assert_allclose(result.detach().cpu().numpy(), expected, rtol=1e-6)
+                for actual, reference in zip(gradients, wanted):
+                    np.testing.assert_allclose(actual.cpu().numpy(), reference, rtol=1e-6, atol=1e-7)
 
     def test_broadcast_to_expands_without_copying_values(self, device):
         row = np.array([[1.0, 2.0, 3.0]], dtype="float32")

@@ -111,7 +111,9 @@ class TestTrainingAttentionMatchesTheClosedForm(unittest.TestCase):
 
 
 class TestOnlyTrainingTakesTheFunction(unittest.TestCase):
+    @jt.flag_scope(use_cuda=0)
     def test_inference_and_dropout_keep_the_composite(self):
+        # This checks portable routing; CUDA may select a fused provider.
         # Nothing to save without a backward, and dropout needs the composite's
         # mask; both stay on the path they were on.
         seen = []

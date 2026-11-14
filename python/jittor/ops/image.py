@@ -5,7 +5,6 @@ from jittor_core import Var
 
 def make_grid(x, nrow=8, padding=2, normalize=False, range=None, scale_each=False, pad_value=0):
     import jittor as jt
-    from .numerical import normalize
     if not (isinstance(range, tuple) or range is None):
         raise TypeError("make_grid: range must be a tuple or None")
     if scale_each is not False:
@@ -13,11 +12,19 @@ def make_grid(x, nrow=8, padding=2, normalize=False, range=None, scale_each=Fals
     if isinstance(x, list): x = jt.stack(x)
     if not isinstance(x, Var):
         raise TypeError("make_grid: x must be a Var or list of Vars")
+    if x.ndim == 2:
+        x = x.unsqueeze(0)
+    if x.ndim == 3:
+        x = x.unsqueeze(0)
+    if x.ndim != 4:
+        raise ValueError("make_grid: expected a 2D, 3D or 4D image tensor")
+    if x.shape[1] == 1:
+        x = jt.concat((x, x, x), dim=1)
     if normalize:
-        if range is None: x = (x - x.min()) / (x.max() - x.min())
-        else: x = (x - range[0]) / (range[1] - range[0])
-    if x.ndim < 4: return x
-    if x.ndim == 4 and x.shape[0] <= 1: return x
+        low, high = (x.min(), x.max()) if range is None else range
+        x = (x.clamp(low, high) - low) / jt.maximum(high - low, 1e-5)
+    if x.shape[0] == 1:
+        return x.squeeze(0)
     nrow = min(nrow, x.shape[0])
     b,c,h,w = x.shape
     ncol = math.ceil(b / nrow)
@@ -38,7 +45,6 @@ def save_image(
     format = None
 ):
     import jittor as jt
-    from .numerical import normalize
     from PIL import Image
     grid = jt.misc.make_grid(
         x, nrow=nrow, padding=padding, pad_value=pad_value,

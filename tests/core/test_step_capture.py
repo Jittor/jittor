@@ -52,6 +52,66 @@ def _make_step(w, b, lr, readback=False):
 @_test_preserve_policy(jt, "keep_graph", "auto_graph_replay")
 class TestStepCapture(unittest.TestCase):
 
+    def test_mixed_signatures_return_preupdate_gradient_readouts(self):
+        parameter = jt.array([1., 2.]).start_grad()
+
+        def step(x):
+            loss = ((parameter * x) ** 2).mean()
+            gradient = jt.grad(loss, parameter)
+            readout = gradient.copy().stop_grad()
+            parameter.update(parameter - .1 * gradient)
+            return loss, readout
+
+        runners = {size: jt.capture_step(step) for size in (3, 5)}
+        expected = np.array([1., 2.], dtype="float32")
+        try:
+            for index in range(16):
+                size = (3, 5)[index % 2]
+                data = np.arange(size * 2, dtype="float32").reshape(size, 2) / 10 + .5
+                gradient = expected * (data * data).mean(0)
+                loss = ((expected * data) ** 2).mean()
+                actual_loss, actual_gradient = runners[size](jt.array(data))
+                np.testing.assert_allclose(actual_loss.numpy(), loss, atol=1e-6, rtol=1e-5)
+                np.testing.assert_allclose(actual_gradient.numpy(), gradient,
+                                           atol=1e-6, rtol=1e-5)
+                expected = expected - np.float32(.1) * gradient
+            for runner in runners.values():
+                self.assertIsNone(runner.refused)
+                self.assertGreater(runner.stats["replayed"], 2)
+        finally:
+            for runner in runners.values():
+                runner.invalidate()
+
+    def test_pending_no_grad_snapshots_keep_each_steps_state(self):
+        for record in (False, True):
+            with self.subTest(record=record):
+                state, bias = _state()
+                expected_state, expected_bias = state.numpy().copy(), bias.numpy().copy()
+                captured = jt.capture_step(_make_step(state, bias, lambda: .1), record=record)
+                rng = np.random.RandomState(1)
+                snapshots, expected = [], []
+                try:
+                    for _ in range(8):
+                        x = rng.randn(16, 8).astype("float32")
+                        y = rng.randn(16, 4).astype("float32")
+                        delta = x @ expected_state + expected_bias - y
+                        factor = np.float32(2. / delta.size)
+                        expected_state = expected_state - np.float32(.1) * (x.T @ delta * factor)
+                        expected_bias = expected_bias - np.float32(.1) * (delta.sum(0) * factor)
+                        captured(jt.array(x), jt.array(y))
+                        # Native clone aliases; copy is the storage snapshot.
+                        snapshots.append(state.copy().stop_grad())
+                        expected.append(expected_state.copy())
+                    # Leave copies pending across every write and the transition
+                    # to a device graph. None is an autograd-saved activation.
+                    for snapshot, reference in zip(snapshots, expected):
+                        np.testing.assert_allclose(snapshot.numpy(), reference,
+                                                   rtol=1e-5, atol=1e-6)
+                    self.assertIsNone(captured.refused)
+                    self.assertGreaterEqual(captured.stats["replayed"], 4)
+                finally:
+                    captured.invalidate()
+
     def test_mixed_readouts_keep_only_the_differentiable_replay_boundary(self):
         parameter = jt.array([2., 3.])
 
@@ -472,6 +532,27 @@ class TestStepCaptureCuda(TestStepCapture):
         self.assertGreater(captured.stats["replayed"], 0)
         self.assertFalse((masks[-1] == masks[-2]).all())
         self.assertTrue(0.6 < masks[-1].mean() < 0.8)
+
+    def test_multiple_same_shape_draws_have_distinct_slots_and_keep_thresholds(self):
+        def step(x):
+            a, b = jt.random(x.shape), jt.random(x.shape)
+            low = step_capture.random_keep(tuple(x.shape), .2)
+            high = step_capture.random_keep(tuple(x.shape), .8)
+            if low is None:
+                low, high = jt.random(x.shape) > .2, jt.random(x.shape) > .8
+            return [a, b, low, high]
+        captured = jt.capture_step(step)
+        x = jt.zeros((4099,))
+        x.sync()
+        try:
+            for index in range(7):
+                a, b, low, high = [value.numpy() for value in captured(x)]
+                self.assertLess(abs(np.corrcoef(a, b)[0, 1]), .1)
+                self.assertTrue(.75 < low.mean() < .85)
+                self.assertTrue(.15 < high.mean() < .25)
+            self.assertGreater(captured.stats['graph'], 0, captured._graph_refused)
+        finally:
+            captured.invalidate()
 
     def test_dropout_differentiates_through_its_captured_mask(self):
         w = jt.ones((4096,))

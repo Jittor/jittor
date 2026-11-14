@@ -43,8 +43,12 @@ class TestVarFunctions(unittest.TestCase):
         x = np.random.randn(100, 1000).astype(np.float32)
         jt_x = jt.array(x)
         tc_x = torch.from_numpy(x)
-        np.testing.assert_allclose(jt_x.norm(1,1).numpy(), tc_x.norm(1,1).numpy(), atol=1e-6)
-        np.testing.assert_allclose(jt_x.norm(1,0).numpy(), tc_x.norm(1,0).numpy(), atol=1e-6)
+        # FP32 Torch's threaded L1 sum can itself miss this budget. Keep the
+        # original tolerances and use the same input values in a double oracle.
+        np.testing.assert_allclose(jt_x.norm(1,1).numpy(), tc_x.double().norm(1,1).numpy(), atol=1e-6)
+        np.testing.assert_allclose(jt_x.norm(1,0).numpy(), tc_x.double().norm(1,0).numpy(), atol=1e-6)
+        np.testing.assert_array_equal(jt.grad(jt_x.norm(1, 1).sum(), jt_x).numpy(),
+                                      np.sign(x))
         # CPU float32 reduction order differs slightly between Jittor and
         # PyTorch (the operation and gradients remain equivalent).  Use the
         # normal cross-framework float32 tolerance for the 2-norm while keeping

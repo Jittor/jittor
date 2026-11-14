@@ -216,6 +216,12 @@ def _addmm_impl(input, mat1, mat2, *, beta=1, alpha=1):
     from . import (
         jt,
     )
+    if (type(alpha) in (int, float) and type(beta) in (int, float)
+            and alpha == beta == 1):
+        from jittor._runtime.dispatch import select_kernel
+        kernel = select_kernel("addmm_training", mat1, mat2, input)
+        if kernel is not None:
+            return kernel(mat1, mat2, input)
     result = jt.matmul(mat1, mat2)
     if alpha != 1:
         result = result * alpha

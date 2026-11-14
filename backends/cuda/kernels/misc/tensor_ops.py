@@ -165,6 +165,11 @@ def _unbind_no_grad_cuda_fast(x, dim, cpu_source=None):
         return None
     if not isinstance(x, jt.Var) or getattr(x, "_jittor_torch_force_cpu", False):
         return None
+    # Flattening a strided source materializes it before the copy kernel
+    # below copies it again. Native indexing can retain each slice's storage
+    # strides directly, including a permuted packed Q/K/V tensor.
+    if not x._storage_is_contiguous():
+        return None
     shape = list(x.shape)
     if not shape:
         return None

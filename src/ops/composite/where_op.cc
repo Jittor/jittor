@@ -9,11 +9,16 @@
 #include "runtime/device.h"
 #include "ops/op_register.h"
 #include "ops/composite/op_capability.h"
+#include "runtime/graph_capture.h"
 
 namespace jittor {
 
 #ifndef JIT
 WhereOp::WhereOp(Var* cond, NanoString dtype) : cond(cond) {
+    if (state_capture_active()
+            && (construction_target_backend(cond) != BackendId::Cuda
+                || !graph_dynamic_condition_supported(cond)))
+        note_shape_readback();
     set_flag(OpFlags::_cpu);
     set_flag(OpFlags::_cuda);
     set_flag(OpFlags::_manual_set_vnbb);

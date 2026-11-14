@@ -32,6 +32,26 @@ def _adamw(p, m, v, g, step, lr, b1, b2, wd, eps):
 @unittest.skipIf(not _test_capability.check_accelerator("cuda", backend=jt).enabled,
                  "no usable CUDA in this build")
 class TestFusedAdamwCuda(unittest.TestCase):
+    def test_live_hyperparameter_header_and_found_inf_skip(self):
+        rng = np.random.RandomState(31)
+        arrays = [rng.randn(17).astype('float32') for _ in range(4)]
+        arrays[2] = np.abs(arrays[2])+.1
+        hyper = dict(lr=.02, b1=.85, b2=.995, wd=.04, eps=1e-5)
+        for skip in (False, True):
+            with jt.flag_scope(use_cuda=1, backend_fallback='error'):
+                p, m, v, g = [jt.array(a) for a in arrays]
+                header = jt.array([3., hyper['lr'], float(skip), hyper['b1'],
+                                   hyper['b2'], hyper['wd'], hyper['eps']], 'float32')
+                # Deliberately distinct scalar arguments: the live header
+                # must supply every scheduled value, including on a skip.
+                out = jt.fused_adamw([p], [m], [v], [g], header,
+                                     .03, .9, .999, .1, 1e-8)
+                got = [o.numpy() for o in out]
+            expected = arrays[:3] if skip else _adamw(
+                *(a.astype(np.float64) for a in arrays), 3., **hyper)
+            for value, want in zip(got, expected):
+                np.testing.assert_allclose(value, want, atol=5e-7, rtol=2e-6)
+
     def test_a_list_longer_than_one_launch(self):
         rng = np.random.RandomState(0)
         sizes = [1, 7, 1024, 1025, 0, 4096 * 3 + 5] * 7          # 42 tensors

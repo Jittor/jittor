@@ -9,12 +9,13 @@ import pytest
 import jittor as jt
 from jittor.autograd.policy import EXPLICIT_REQUIRES_GRAD, NATIVE, policy_scope
 from jittor._runtime.fallback import forbid_backend_fallbacks
+from _helpers.torch_runtime import torch_shim_loaded
 
 
 @pytest.fixture(autouse=True)
 def native_only():
     assert 'jittor.compat.torch' not in sys.modules
-    assert 'torch' not in sys.modules
+    assert not torch_shim_loaded()
     with forbid_backend_fallbacks():
         yield
         jt.sync_all(True)

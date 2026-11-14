@@ -1,5 +1,4 @@
 """A device recording must recompute explicit CPU prefixes on every call."""
-from contextlib import contextmanager
 from unittest.mock import patch
 
 import numpy as np
@@ -7,19 +6,9 @@ import pytest
 import jittor as jt
 
 from _helpers.capability import require_accelerator
+from _helpers.devices import explicit_tensor_placement as _placement
 from jittor._runtime.fallback import forbid_backend_fallbacks
 from jittor._runtime.graph_replay import GraphReplay
-
-
-@contextmanager
-def _placement(backend):
-    token = jt.core._set_tensor_placement(backend, 0)
-    previous = jt.core._set_construction_placement(backend, 0)
-    try:
-        yield
-    finally:
-        jt.core._restore_construction_placement(previous)
-        jt.core._reset_tensor_placement(token)
 
 
 def _array(values, backend):

@@ -3,7 +3,8 @@
 [Section contents](../index.en.md) · [中文](static-graph-replay.md)
 
 - Status: implemented (`35cedb1a3` inference graph replay, `2f794e289` training step capture)
-- Last reviewed: 2026-11-11
+- Last reviewed: 2026-11-13
+- Owner: Jittor runtime maintainers
 - Basis: [the 2026-09-14 parity report](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-09-14-jittor-vs-pytorch.en.md),
   [the 2026-09-24 real-model parity run](https://github.com/Jittor/jittor/blob/866d5d3e721e9f1d101742b8fe4f97106651491e/docs/results/2026-09-24-torch-compat-real-models.en.md)
 - Recheck when: the capture guards, the automatic-policy thresholds, or the replay counters in
@@ -94,6 +95,24 @@ capture's training step. At capture completion, pending detached outputs and pos
 readouts consume already executed kept values; they must not execute the optimizer twice.
 These temporary execution boundaries do not change graph lifetime or finished flags.
 
+When a capture is refused, submit only unfinished computations for its explicit
+outputs and state roots. Already executed kept values form boundaries, then
+complete their ordinary execution lifetime. This batch does not pull in sibling
+consumers through weak synchronization or repeat completed in-place updates
+after clearing their kept marks.
+
+Pending no-grad snapshots finish before physical writes and before device recording
+begins; their copies do not belong to later graph launches. Snapshot copy nodes are
+also excluded from extra control inputs of pending optimizers, which could otherwise
+rematerialize a returned pre-update gradient after changing its parameters.
+
+Ordinary inference replay cannot record writes into already materialized storage. Indexed
+updates of a window mask must not run only during capture while later replays
+repeat its initialization and lose the mask. Such writes set a capture barrier
+during warm-up, before another forward could repeat side effects. Step capture
+continues to use its state-write recording mechanism.
+Updates of pending temporaries without allocated storage can still form a functional kept graph.
+
 Shape recordings of the same function on the same device share a private scratch
 arena. Executor replays warm it before recording; device graphs then pin addresses
 while reusing intermediate buffers and workspaces in execution order. Parameters,
@@ -108,6 +127,12 @@ host-only scheduling outside it. Return any gradient snapshots needed for observ
 explicit outputs. A compiled benchmark must report its mode, warmup/capture cost and replay
 counters separately from ordinary eager results.
 
+Adam counters in the same group share replay increments while they remain private
+integers. Exposure or writes materialize their values, keeping external Tensor and
+NumPy aliases authoritative. Replay also checks that the group's counts agree;
+unequal counts use ordinary updates rather than one shared bias-correction step.
+Serialization saves actual counts, without the shared increment relationship.
+
 Capture can use different execution policies from eager mode. Moderate FP32 Linear
 products can use timed cuBLASLt GEMMs because Function construction is paid only
 once. Short FP32 training attention with many heads can materialize bounded score
@@ -115,6 +140,45 @@ matrices to avoid tiled backward reconstruction; long sequences retain the
 memory-efficient kernel. These choices preserve dtype, TF32 settings and dropout
 semantics, but change temporary storage and initial compilation costs, so validate
 numerics and memory alongside steady latency.
+
+Training steps can also replay a closed, explicitly CPU-placed prefix of ordinary
+tensor operations connected to the device graph by explicit H2D boundaries. Each
+call recomputes and transfers the prefix, with that work included in step time;
+input-dependent scalars and masks are not cached. Opaque code, host randomness,
+and unproven device dependencies still prevent recording. Admission additionally
+counts the prefix's retained-byte upper bound. After each prefix run, boundary
+addresses are checked: a moved address releases the recording before the executor
+takes the step, avoiding stale pointers or a duplicate optimizer update.
+`_graph_has_host_prefix` and `_graph_host_prefix_bytes` identify this path; the
+budget bound is not a measured memory peak.
+
+Explicit training capture can also stage `where`/`nonzero` indices whose
+dependencies are ordinary read-only device expressions. Compaction and the
+host read of the selected count run every step, outside device recording.
+Both contents and count remain live. A preflight checks boundary shapes and
+addresses before optimizer/RNG prologue hooks advance; an incompatible count
+discards the retained IR before taking exactly one eager step. A replay hook
+that subsequently changes the boundary raises before launching the training
+graph, rather than retrying and advancing its bookkeeping twice. Opaque,
+random or mutating dependencies remain ineligible. Inference replay does not
+opt into this dynamic prefix contract.
+
+The same extent guard runs during executor warmup and when device recording
+is disabled or exceeds its memory budget. It pins native roots without adding
+Python tensor holders. Unproven dynamic conditions switch tracing to ordinary
+execution at operator construction, before an optimizer can run a kept update;
+declining the trace later must not execute that update a second time.
+
+CUDA fused Adam/AdamW read live step, learning rate, found-inf, betas, decay
+and epsilon from one small device header. Scheduler changes therefore do not
+force a new trace. Providers without this capability retain their guards;
+coupled Adam weight decay still changes the update path and invalidates it.
+
+DDP buffer broadcasts inside a captured training step must remain graph
+dependencies. Grouped NCCL results are recorded as state writes and committed
+to the original storage after the complete trace is accepted. An imperative
+copy during tracing alone would omit broadcasts on later replays; retained
+aliases and rank-local BatchNorm statistics must keep their usual semantics.
 
 ## Measurement protocol and historical results
 

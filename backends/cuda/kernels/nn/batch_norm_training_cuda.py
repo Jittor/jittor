@@ -730,10 +730,12 @@ for (int k = 0; k < 4; k++) b[k] = shared[4 + k][ty + span][tx];""",
                 coef[c] = k;
                 coef[{channels} + c] = static_cast<float>(bias[c]) - total.mean * k;
             }}
+            {{ auto jt_bn_error = cudaGetLastError(); CHECK(jt_bn_error == cudaSuccess) << "before batch norm statistics: " << cudaGetErrorString(jt_bn_error); }}
             batch_norm_statistics_nhwc<<<{grid}>>>(in0_p, out3_p);
+            {{ auto jt_bn_error = cudaGetLastError(); CHECK(jt_bn_error == cudaSuccess) << "after batch norm statistics: " << cudaGetErrorString(jt_bn_error); }}
             batch_norm_finish<<<{channels}, 32>>>(
                 out3_p, in1_p, in2_p, out0_p, out1_p, out2_p, out4_p);
-            CHECK(0 == cudaGetLastError());
+            {{ auto jt_bn_error = cudaGetLastError(); CHECK(jt_bn_error == cudaSuccess) << cudaGetErrorString(jt_bn_error); }}
             """,
         )
         return mean, var, rstd, coef
@@ -746,7 +748,7 @@ for (int k = 0; k < 4; k++) b[k] = shared[4 + k][ty + span][tx];""",
                 cuda_src=f"""
                 {residual_kernel}
                 batch_norm_apply_residual_nhwc{launch}(in0_p, in1_p, in2_p, out0_p);
-                CHECK(0 == cudaGetLastError());
+                {{ auto jt_bn_error = cudaGetLastError(); CHECK(jt_bn_error == cudaSuccess) << cudaGetErrorString(jt_bn_error); }}
                 """,
             )
         return jt.code(
@@ -755,7 +757,7 @@ for (int k = 0; k < 4; k++) b[k] = shared[4 + k][ty + span][tx];""",
             cuda_src=f"""
             {apply_kernel}
             batch_norm_apply_nhwc{launch}(in0_p, in1_p, out0_p);
-            CHECK(0 == cudaGetLastError());
+            {{ auto jt_bn_error = cudaGetLastError(); CHECK(jt_bn_error == cudaSuccess) << cudaGetErrorString(jt_bn_error); }}
             """,
         )
 
@@ -821,7 +823,7 @@ for (int k = 0; k < 4; k++) b[k] = shared[4 + k][ty + span][tx];""",
                 batch_norm_backward_finish<<<{channels}, 32>>>(
                     out3_p, in2_p, in3_p, in4_p, out1_p, out2_p, out4_p);
                 batch_norm_backward_apply_nhwc{launch}(in0_p, in1_p, in5_p, out4_p, out0_p);
-                CHECK(0 == cudaGetLastError());
+                {{ auto jt_bn_error = cudaGetLastError(); CHECK(jt_bn_error == cudaSuccess) << cudaGetErrorString(jt_bn_error); }}
                 """,
             )
             grad_residual = (grad_y,) if residual else ()
@@ -840,8 +842,7 @@ def _nhwc_source(x):
 
 def _supports_batch_norm_training(x, weight, bias, eps):
     if not (
-        _output_requires_grad(x, weight, bias)
-        and isinstance(weight, jt.Var)
+        isinstance(weight, jt.Var)
         and isinstance(bias, jt.Var)
     ):
         return False
@@ -863,6 +864,11 @@ def _supports_batch_norm_training(x, weight, bias, eps):
                  supports=_supports_batch_norm_training)
 def _batch_norm_cuda_statistics(x, weight, bias, eps):
     """``(y, mean, var)``: the output and the biased batch statistics it used."""
+    if not _output_requires_grad(x, weight, bias):
+        from .batch_norm_frozen_cuda import _frozen_batch_norm_statistics
+        frozen = _frozen_batch_norm_statistics(x, weight, bias, eps)
+        if frozen is not None:
+            return frozen
     shape = tuple(int(size) for size in x.shape)
     source = _nhwc_source(x)
     if source is None and shape[1] % 4 == 0 and _dtype_name(x.dtype) == "float32":
