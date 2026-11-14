@@ -334,6 +334,8 @@ for _reduction_impl, _reduction_api, _reduction_detail in (
         (unfold, "torch.Tensor.unfold", _UNFOLD_FIDELITY_DETAIL),
         (addcmul, "torch.Tensor.addcmul", _ADDC_FIDELITY_DETAIL),
         (addcdiv, "torch.Tensor.addcdiv", _ADDC_FIDELITY_DETAIL),
+        (addcmul, "torch.addcmul", _ADDC_FIDELITY_DETAIL),
+        (addcdiv, "torch.addcdiv", _ADDC_FIDELITY_DETAIL),
         (broadcast_to, "torch.broadcast_to", _BROADCAST_TO_FIDELITY_DETAIL),
         (diagonal, "torch.diagonal", _NATIVE_DIAGONAL_FIDELITY_DETAIL)):
     register_fidelity(
@@ -392,8 +394,9 @@ def _install_reductions(g):
     Var.masked_scatter = masked_scatter
     Var.masked_scatter_ = masked_scatter_
     Var.unfold = unfold
-    Var.addcmul = addcmul
-    Var.addcdiv = addcdiv
+    # Functional callers use the same arithmetic owner as Tensor methods.
+    g.addcmul = Var.addcmul = addcmul
+    g.addcdiv = Var.addcdiv = addcdiv
     g.broadcast_to = Var.broadcast_to = broadcast_to
 
     # --- elementwise / reduction ops missing as torch methods (all additive) ---
