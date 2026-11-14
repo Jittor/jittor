@@ -127,6 +127,25 @@ def _try_flash_scaled_dot_product_attention(query, key, value, attn_mask,
     if q_shape[-1] != k_shape[-1] or q_shape[-1] != v_shape[-1]:
         _sdpa_flash_miss("head_dim_mismatch")
         return None
+    if is_causal and 0 < int(q_shape[-2]) != int(k_shape[-2]) > 0:
+        # Torch SDPA aligns causality at top left; the public FlashAttention
+        # API aligns rectangular matrices at bottom right. Trim keys that no
+        # query can use, or split off the fully visible query suffix. Both
+        # pieces still run the official kernel and retain their slice grads.
+        queries, keys = int(q_shape[-2]), int(k_shape[-2])
+        if queries < keys:
+            return _try_flash_scaled_dot_product_attention(
+                query, key[..., :queries, :], value[..., :queries, :],
+                None, dropout, True, sf, enable_gqa)
+        prefix = _try_flash_scaled_dot_product_attention(
+            query[..., :keys, :], key, value, None, dropout, True, sf, enable_gqa)
+        if prefix is None:
+            return None
+        suffix = _try_flash_scaled_dot_product_attention(
+            query[..., keys:, :], key, value, None, dropout, False, sf, enable_gqa)
+        if suffix is None:
+            return None
+        return get_install_context(jt).target_namespace.cat((prefix, suffix), dim=-2)
     # For CLIP-style short self-attention, the two cuBLAS matmuls plus the
     # fused softmax are faster than materializing the three layout copies
     # required by the separate-QKV FlashAttention wrapper. Keep this
