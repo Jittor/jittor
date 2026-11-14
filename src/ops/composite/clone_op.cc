@@ -23,7 +23,7 @@ CloneOp::CloneOp(Var* x, bool detached) : x(x) {
     // leaf-gradient detaches are created after the whole backward graph, so
     // creation-order scheduling otherwise delays their consumers (including
     // communication buckets) until every unrelated gradient has run.
-    if (node_order == 0) flags.set(NodeFlags::_node_order_low, 1);
+    if (construction_node_order() == 0) flags.set(NodeFlags::_node_order_low, 1);
     if (detached) set_stop_grad();
     set_flag(OpFlags::_cpu);
     set_flag(OpFlags::_cuda);

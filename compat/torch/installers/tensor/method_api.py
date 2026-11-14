@@ -309,11 +309,17 @@ def _copy_detached_storage(self, value):
         # pending view may already alias a materialized base; graph rebinding
         # would lose that storage, its overlap guards and its gradient history.
         if not self._mem_ptr_now:
+            if (not _OPTIMIZER_WRITES[0] and not step_capture.tracing()
+                    and _owner.jt.core._try_defer_unaliased_inplace(self, value)):
+                return True
             self.sync(False, False)
         if not self._mem_ptr_now:
             # A deferred capture may still have no backing storage. Retain its
             # graph write instead of calling the imperative primitive on null.
             return False
+        if (not _OPTIMIZER_WRITES[0] and not step_capture.tracing()
+                and _owner.jt.core._try_ordered_unaliased_inplace(self, value)):
+            return True
         # Resolve pending readers (including clone snapshots) before changing
         # bytes. _copy_into owns placement, stream ordering and dense copies.
         # An optimizer group resolves them once for every parameter instead
@@ -443,11 +449,22 @@ def _optimizer_update_many(targets, values):
     from jittor._runtime import step_capture
     if not _OPTIMIZER_WRITES[0] or step_capture.active():
         return False
-    if any(getattr(type(target), '_optimizer_update', None) is not _optimizer_update
-           for target in targets):
+    writers = _owner.jt.core._try_optimizer_writers(
+        targets, _optimizer_update, _BATCH_WRITE_PROTOCOL)
+    if writers is None:
+        if any(getattr(type(target), '_optimizer_update', None) is not _optimizer_update
+               for target in targets):
+            return False
+    elif not writers:
         return False
     with _owner.jt.no_grad():
         return _owner.jt.core._commit_shared_updates(targets, values)
+
+
+_BATCH_WRITE_PROTOCOL = (
+    _optimizer_update_many, _optimizer_update_many.__code__,
+    (("type", type), ("getattr", getattr), ("any", any)),
+)
 
 
 def _copy_(self, other, non_blocking=False):
@@ -623,31 +640,40 @@ def _torch_ne(input, other):
         # ne(x, x) is exactly isnan(x) for a real tensor, including infinities
         # and signed zeros. Reuse the canonical device predicate instead of
         # building subtraction and duplicate NaN-classification graphs.
-        # Storage aliases with different Python holders keep the path below.
+        # Other holders use the native elementwise comparison below.
         with _new_scope(input, None):
             return _owner.jt.isnan(input)
-    a = input if isinstance(input, _NativeVar) else _owner.jt.array(input)
+    # Arithmetic emulation overflows at the minimum signed integer and
+    # allocates intermediate scalar tensors. The native predicate compares
+    # values directly, retaining its frontend and placement policies.
+    if type(other) in (bool, int, float) and other == 0:
+        # Zero is exact in every numeric dtype; no promoted scalar is needed
+        # for the truth conversion used by all/any and mask construction.
+        return _binary_native('__ne__', input, other)
+    context = get_install_context(_owner.jt)
+    dtype = _owner._dtype_to_str(context.target_namespace.result_type(input, other))
+    a = input
     if isinstance(other, _NativeVar):
         b = other
-    elif isinstance(input, _NativeVar):
-        # A scalar belongs to this operand, even inside a model running under
-        # another construction device. Keep array's existing dtype inference.
-        with _new_scope(input, None):
-            b = _owner.jt.array(other)
+        # Torch permits a CPU scalar tensor beside an accelerator tensor.
+        if a.device != b.device and (a.ndim == 0 or b.ndim == 0):
+            if a.ndim == 0 and b.ndim != 0:
+                a = a.to(device=b.device)
+            elif b.ndim == 0 and a.ndim != 0:
+                b = b.to(device=a.device)
     else:
-        b = _owner.jt.array(other)
-    if _jittor_dtype_name(a.dtype) == "bool":
-        a = a.int32()
-    if isinstance(b, _NativeVar) and _jittor_dtype_name(b.dtype) == "bool":
-        b = b.int32()
-    diff = (a - b).abs()
-    out = diff > 0
-    if "float" in _jittor_dtype_name(a.dtype) or (isinstance(b, _NativeVar) and "float" in _jittor_dtype_name(b.dtype)):
-        try:
-            out = out | _owner.jt.isnan(a) | _owner.jt.isnan(b)
-        except _owner.EXPECTED as exc:
-            _owner.swallowed("torch/installers/tensor.py _torch_ne: out = out | jt.isnan(a) | jt.isnan(b)", exc)
-    return out
+        with _new_scope(input, None):
+            if isinstance(other, (int, _owner.np.integer)) and not isinstance(other, bool):
+                # Cast an exact integer tensor to retain Torch's wrapping
+                # scalar conversion for narrow integer operands.
+                b = _owner.jt.array(int(other))
+            else:
+                b = _owner.jt.array(other, dtype=dtype)
+    if _jittor_dtype_name(a.dtype) != dtype:
+        a = a.cast(dtype)
+    if _jittor_dtype_name(b.dtype) != dtype:
+        b = b.cast(dtype)
+    return _binary_native('__ne__', a, b, context.state["tensor_native_api"])
 
 
 def _nonzero(self, as_tuple=False, **kw):
@@ -977,6 +1003,27 @@ def _data_set(self, value):
 
 
 def _to(self, *args, **kwargs):
+    # A dtype-only no-op is common between model layers. Explicit placement
+    # already names this tensor's device, so there is no target to resolve.
+    # A device tensor parked on the host must still take the migration path.
+    if (len(args) == 1 and not kwargs and isinstance(args[0], _owner.dtype)
+            and _jittor_dtype_name(self.dtype) == args[0].name):
+        placement = self.placement_backend
+        if placement == 0 or (placement > 0 and self.location() != "cpu"):
+            return self
+    # Matching another tensor need not turn its explicit placement into a
+    # Python device and resolve it again. Keep copies, casts, meta tensors and
+    # accelerator storage parked on the host on the ordinary conversion path.
+    if len(args) == 1 and not kwargs and isinstance(args[0], _NativeVar):
+        other = args[0]
+        placement = self.placement_backend
+        if (placement >= 0 and placement == other.placement_backend
+                and self.device_id == other.device_id
+                and _jittor_dtype_name(self.dtype) == _jittor_dtype_name(other.dtype)
+                and not getattr(self, "_jittor_torch_meta", False)
+                and not getattr(other, "_jittor_torch_meta", False)
+                and (placement == 0 or self.location() != "cpu")):
+            return self
     ds = None
     dev = None
     copy = bool(kwargs.get("copy", False))
@@ -2224,14 +2271,38 @@ def _api_zero_batch(tensors):
 
 def _inplace_add_sub(self, other, alpha, subtract=False):
     other = _dense_arithmetic_operand(other)
-    value = self - other * alpha if subtract else self + other * alpha
+    if subtract and (
+            _jittor_dtype_name(self.dtype) == "bool"
+            or isinstance(other, bool)
+            or (isinstance(other, _NativeVar)
+                and _jittor_dtype_name(other.dtype) == "bool")):
+        if type(alpha) is int and not -(1 << 63) <= alpha < (1 << 64):
+            raise OverflowError("alpha is outside the integer scalar range")
+        self._check_inplace_autograd()
+        raise RuntimeError("Subtraction with bool tensors is not supported")
+    if type(alpha) is int and alpha == 1:
+        # The default does not need a scale operator or an intermediate
+        # tensor. In particular, multiplying a bool RHS by 1 promotes it.
+        value = self - other if subtract else self + other
+    elif (not subtract and type(alpha) in (int, bool)
+            and _jittor_dtype_name(self.dtype) == "bool"
+            and (isinstance(other, bool)
+                 or (isinstance(other, _NativeVar)
+                     and _jittor_dtype_name(other.dtype) == "bool"))):
+        # Boolean alpha is logical, after the scalar integer-range check.
+        if not -(1 << 63) <= alpha < (1 << 64):
+            raise OverflowError("alpha is outside the integer scalar range")
+        value = self + (other if alpha else False)
+    else:
+        value = self - other * alpha if subtract else self + other * alpha
     if tuple(value.shape) != tuple(self.shape):
         raise RuntimeError("in-place result shape does not match destination shape")
-    namespace = get_install_context(_owner.jt).target_namespace
-    if not namespace.can_cast(value.dtype, self.dtype):
-        raise RuntimeError("result type can't be cast to the destination type")
-    if value.dtype != self.dtype:
-        value = value.cast(_jittor_dtype_name(self.dtype))
+    result_dtype, target_dtype = value.dtype, self.dtype
+    if result_dtype != target_dtype:
+        namespace = get_install_context(_owner.jt).target_namespace
+        if not namespace.can_cast(result_dtype, target_dtype):
+            raise RuntimeError("result type can't be cast to the destination type")
+        value = value.cast(_jittor_dtype_name(target_dtype))
     return _ip(self, value, preserve_storage=True)
 
 
@@ -2456,6 +2527,10 @@ def _api_tolist(self):
     return self.item() if getattr(self, '_torch_0d', False) else self.numpy().tolist()
 
 
+_FAST_CONTIGUOUS = None
+_NATIVE_CONTIGUOUS = None
+
+
 def _api_contiguous(self, memory_format="contiguous_format"):
     """Torch's ``contiguous``: the same tensor when already contiguous, else a copy.
 
@@ -2476,6 +2551,12 @@ def _api_contiguous(self, memory_format="contiguous_format"):
         raise NotImplementedError("contiguous supports contiguous_format")
     if self._storage_is_contiguous():
         return self
+    fast = _FAST_CONTIGUOUS
+    if fast is not None and _owner.jt.contiguous is _NATIVE_CONTIGUOUS:
+        context = get_install_context(_owner.jt)
+        result = fast(self, context.state["Var"])
+        if result is not None:
+            return result
     with _new_scope(self, None):
         return _owner.jt.contiguous(self)
 

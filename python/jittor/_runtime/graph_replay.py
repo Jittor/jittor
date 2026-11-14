@@ -156,17 +156,17 @@ class _no_auto:
     would take turns answering with each other's buffers.
     """
 
-    __slots__ = ("_module_cls", "_depth")
+    __slots__ = ("_call_state", "_depth")
 
     def __enter__(self):
-        from jittor._core.module import Module
-        self._module_cls = Module
-        self._depth = Module._call_depth
-        Module._call_depth = self._depth + 1
+        from jittor._core.module import _CALL_STATE
+        self._call_state = _CALL_STATE
+        self._depth = _CALL_STATE.depth
+        _CALL_STATE.depth = self._depth + 1
         return self
 
     def __exit__(self, *exc):
-        self._module_cls._call_depth = self._depth
+        self._call_state.depth = self._depth
         return False
 
 

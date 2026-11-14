@@ -335,6 +335,18 @@ dispatch_context._backend_of = _backend_of
 _NATIVE_DISPATCH_CONTEXT = dispatch_context
 
 
+def _query_backend(context_query, *args, **kwargs):
+    """Read placement alone, while honoring a replaced context query.
+
+    A caller that only branches on the backend needs neither canonical dtype
+    names nor a DispatchContext object. Keep the same argument walk and native
+    device checks; a replacement (including a wrapper) still runs in full.
+    """
+    if context_query is _NATIVE_DISPATCH_CONTEXT:
+        return _dispatch_placement(args, kwargs)[1]
+    return context_query(*args, **kwargs).backend
+
+
 def register_kernel(op, backend, implementation, *, dtypes=None,
                     supports=None, priority=0, runtime_modes=None):
     backend = _canonical_backend(backend)

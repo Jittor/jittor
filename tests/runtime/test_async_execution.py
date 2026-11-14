@@ -1,7 +1,7 @@
 """Batches executed on a worker thread (src/runtime/async_exec.h).
 
-Under ``no_grad`` on CUDA -- and on ACL, where the worker also binds the
-device the batch was posted from and takes a training forward as well -- an
+On CUDA and ACL, where the worker also binds the device the batch was posted
+from, an inference or training-forward
 auto-flushed batch runs on one worker thread while Python keeps building the
 graph. What has to hold: the numbers are the ones a
 batch on the calling thread gives, every read of a Var's data sees the
@@ -210,17 +210,45 @@ class TestAsyncExecution(unittest.TestCase):
         """Whether training is handed over is the backend's call.
 
         An auto-flush costs a training step an intermediate written out
-        instead of fused into its readers; a backend that fuses nothing loses
-        nothing by it and sets `async_admits_grad`.
+        instead of fused into its readers. CUDA and ACL admit these batches
+        so the caller can keep constructing the remaining forward graph.
         """
         want, ran_sync = self._train(0)
         got, ran = self._train(1)
         self.assertEqual(ran_sync, 0)
-        if _worker_backend() == "acl":
+        if _worker_backend() in ("cuda", "acl"):
             self._need_worker(ran)
         else:
             self.assertEqual(ran, 0)
         np.testing.assert_array_equal(got, want)
+
+    def test_training_backward_callbacks_stay_on_the_calling_thread(self):
+        import threading
+
+        caller = threading.get_ident()
+        callbacks = []
+
+        class Scale(jt.Function):
+            def execute(self, value):
+                self.saved = value
+                return value * 2.0
+
+            def grad(self, gradient):
+                callbacks.append(threading.get_ident())
+                return gradient * 2.0
+
+        leaf = jt.ones((64, 64)).start_grad()
+        before = jt.core.async_exec_batches()
+        value = leaf
+        for _ in range(12):
+            value = Scale()(value + 1.0)
+        gradient = jt.grad(value.sum(), leaf)
+        gradient.sync()
+        self._need_worker(jt.core.async_exec_batches() - before)
+        self.assertEqual(gradient.location(), "device")
+        self.assertEqual(callbacks, [caller] * 12)
+        np.testing.assert_array_equal(
+            gradient.numpy(), np.full((64, 64), 2 ** 12, dtype="float32"))
 
     def test_a_python_owned_tape_released_by_the_worker(self):
         """A `jt.Function`'s backward is a Python callable the tape owns.

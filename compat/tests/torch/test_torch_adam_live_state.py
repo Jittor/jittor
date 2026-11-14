@@ -124,5 +124,29 @@ class TestAdamLiveState:
             assert parameter_ref() is None
             assert counter.item() == 1
 
+    def test_live_fused_policy_after_move_preserves_existing_counters(self, device):
+        model = torch.nn.Module()
+        for name in ("first", "second", "third"):
+            model.register_parameter(
+                name, torch.nn.Parameter(torch.tensor([1.], device="cpu")))
+        optimizer = torch.optim.AdamW(model.parameters(), lr=.01, fused=False)
+        # Optimizer construction precedes the move; the policy must read
+        # each live parameter's current placement when its counter starts.
+        model.to(device)
+        parameters = [model.first, model.second, model.third]
+        counters = []
+        for parameter, fused in zip(parameters, (False, True, False)):
+            model.zero_grad()
+            optimizer.param_groups[0]["fused"] = fused
+            parameter.grad = torch.ones_like(parameter)
+            optimizer.step()
+            counter = optimizer.state[parameter]["step"]
+            assert counter.device.type == (device if fused else "cpu")
+            assert counter.item() == 1
+            counters.append(counter)
+        for parameter, counter in zip(parameters, counters):
+            assert optimizer.state[parameter]["step"] is counter
+            assert counter.item() == 1
+
 
 

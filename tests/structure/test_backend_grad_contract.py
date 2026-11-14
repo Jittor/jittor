@@ -149,7 +149,7 @@ BACKEND_GRAD_COVERAGE = (
     ("backends/cuda/kernels/nn/gelu_training_cuda.py", "GeluTrainingCUDA",
      "compat/tests/torch/test_native_fast_paths.py::TestNativeGelu::test_bfloat16_training_uses_one_kernel_with_matching_gradients",
      "cuda_cpu_formula"),
-    ("backends/cuda/kernels/nn/layer_norm_training_cuda.py", "LayerNormCUDA",
+    ("backends/cuda/kernels/nn/layer_norm_training_cuda.py", "_layer_norm_cuda",
      "tests/nn/test_norm.py::TestLayerNorm::test_cuda_fast_path_forward_and_all_gradients",
      "cuda_cpu_jittor"),
     ("backends/cuda/kernels/nn/rms_norm_training_cuda.py", "RMSNormTrainingCUDA",
@@ -441,6 +441,10 @@ def _grads_in_file(path):
                 for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)
                 and node.module and node.module.endswith("_code")
                 for alias in node.names if alias.name in ("acl_program", "acl_code")}
+    registrations = {alias.asname or alias.name
+                     for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)
+                     and node.module and node.module.endswith("dispatch")
+                     for alias in node.names if alias.name in ("optional_kernel", "native_rule")}
 
     def builder(call):
         return (isinstance(call.func, ast.Name) and call.func.id in builders
@@ -507,6 +511,14 @@ def _grads_in_file(path):
         return False
 
     for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            registered = any(isinstance(decorator, ast.Call)
+                             and isinstance(decorator.func, ast.Name)
+                             and decorator.func.id in registrations
+                             for decorator in node.decorator_list)
+            if registered and code_gradient(node, set()):
+                found.append(node.name)
+            continue
         if not isinstance(node, ast.ClassDef):
             continue
         if any(isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
@@ -736,6 +748,28 @@ def test_codeop_forward_and_unrelated_helpers_do_not_claim_gradients(tmp_path):
         "        return acl_program('Unary', 1, 1, multi_grad_src=EMPTY)\n",
         encoding="utf-8")
     assert _grads_in_file(path) == []
+
+
+def test_registered_function_gradient_cannot_escape_the_inventory(tmp_path):
+    path = tmp_path / "registered.py"
+    code = (
+        "import jittor as jt\n"
+        "from jittor._runtime.dispatch import optional_kernel as kernel, native_rule\n"
+        "def program(x, gradients):\n"
+        "    return jt.code(x.shape, x.dtype, [x], cuda_src='forward', cuda_grad_src=gradients)\n"
+        "@kernel('nn.example', 'cuda')\n"
+        "def registered(x):\n"
+        "    return program(x, ['backward'])\n"
+        "@native_rule('nn.forward', 'cuda')\n"
+        "def forward_only(x):\n"
+        "    return program(x, [])\n")
+    path.write_text(code, encoding="utf-8")
+    assert _grads_in_file(path) == ["registered"]
+    row = (("registered.py", "registered", "unused route", "cuda_numpy"),)
+    assert compare(row, {(path.name, symbol) for symbol in _grads_in_file(path)}) == ([], [])
+    path.write_text(code.replace("['backward']", "[]"), encoding="utf-8")
+    assert compare(row, {(path.name, symbol) for symbol in _grads_in_file(path)}) == (
+        [], [("registered.py", "registered")])
 
 
 

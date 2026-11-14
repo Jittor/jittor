@@ -1,18 +1,13 @@
-"""Process-local ``torch`` distribution metadata for the in-process shim.
+"""Process-local metadata for the opt-in Torch and FlashAttention facades.
 
-The deployed shim answers ``importlib.metadata.version("torch")`` with the
-``torch-<version>.dist-info`` directory :mod:`jittor.compat.shim.deploy` copies
-next to it.  The in-process shim (``JITTOR_TORCH_SHIM=1`` with the packaged
-``torch`` entry on ``PYTHONPATH``) publishes the ``torch`` module but no
-distribution, so a library that asks metadata instead of importing -- and
-decides from that answer whether PyTorch is installed -- sees it as absent.
+Deployment copies both packaged distribution resources next to the facades.
+In-process activation serves those same resources through a metadata finder,
+keeping versions and ``packages_distributions()`` aligned with the import
+namespace. A discoverable facade without its distribution breaks consumers
+that use the import-to-distribution mapping to select a backend.
 
-:func:`publish` registers a metadata-only finder that serves the packaged
-``resources/torch_dist_info`` directory as the ``torch`` distribution.  It
-writes nothing to disk, fabricates no other distribution, and is registered by
-shim activation only: plain ``import jittor`` leaves ``importlib.metadata``
-unchanged.  Activation records :func:`release` as the undo for a failed install,
-and the successful finder stays for the lifetime of the process.
+The finder writes nothing to disk. Activation records :func:`release` for
+rollback; plain ``import jittor`` leaves metadata discovery unchanged.
 """
 
 from __future__ import absolute_import
@@ -59,10 +54,10 @@ def _metadata_module():
     return metadata
 
 
-def _name_matches(name):
+def _name_matches(name, expected=_NAME):
     if name is None:
         return True
-    return str(name).lower().replace("-", "_") == _NAME
+    return str(name).lower().replace("-", "_").replace(".", "_") == expected
 
 
 def _path_matches(paths, root):
@@ -80,7 +75,7 @@ def _path_matches(paths, root):
 
 
 class TorchDistributionFinder(object):
-    """Serve one ``torch`` distribution from the packaged shim resources.
+    """Serve the distributions that deployment copies from shim resources.
 
     ``importlib.metadata`` discovers any finder that exposes
     ``find_distributions``.  ``find_spec`` declines every import explicitly:
@@ -100,16 +95,17 @@ class TorchDistributionFinder(object):
         if metadata is None:
             return iter(())
         name = getattr(context, "name", None)
-        if not _name_matches(name):
-            return iter(())
         paths = getattr(context, "path", None)
         if not _path_matches(paths, self.root.parent):
             return iter(())
-        return iter((metadata.PathDistribution(self.root),))
+        roots = ((_NAME, self.root),
+                 ("flash_attn", self.root.parent / "flash_attn_dist_info"))
+        return iter(metadata.PathDistribution(root) for package, root in roots
+                    if _name_matches(name, package))
 
 
 def publish():
-    """Publish the shim's ``torch`` distribution for this process.
+    """Publish the shim's packaged distributions for this process.
 
     Idempotent: repeated activation returns the finder already installed.
     """
@@ -118,9 +114,10 @@ def publish():
     if _finder is not None and _finder in sys.meta_path:
         return _finder
     root = resource_root()
-    if not (root / "METADATA").is_file():
-        raise RuntimeError(
-            "the packaged torch shim distribution is missing: %s" % root)
+    for packaged in (root, root.parent / "flash_attn_dist_info"):
+        if not (packaged / "METADATA").is_file():
+            raise RuntimeError(
+                "a packaged shim distribution is missing: %s" % packaged)
     finder = TorchDistributionFinder(root)
     # First so this process-local answer wins over a stale torch dist-info that
     # happens to be on sys.path.  ``find_spec`` returns None, so ordinary

@@ -1,5 +1,6 @@
 """Torch tensor methods ownership."""
 from ...fidelity import Fidelity, register_api_bindings, register_fidelity
+from ....transaction import set_attr
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 from .method_api import (
@@ -265,7 +266,8 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     _native_cpu_copy = _type_attribute(_NativeVar, "cpu")
     _install_expand_shape_adapter(Var)
     _install_expand_as_grad_adapter(Var)
-    _native_operators = {name: getattr(Var, name, None) for name in _BINARY_APIS}
+    _native_operators = {name: getattr(Var, name, None)
+                         for name in (*_BINARY_APIS, '__ne__')}
     _bind_native_binary(_owner.jt, _native_operators, _owner._mark_cpu_like)
 
     if _jittor_dtype_name(_DTYPE_OBJS) is not None and not getattr(Var, "_dtype_wrapped", False):
@@ -499,6 +501,7 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # behavior-preserving for the getter/setter; it only adds leaf bookkeeping.
     if not isinstance(_type_attribute(Var, "requires_grad"), property):
         _native_requires_grad = _type_attribute(Var, "requires_grad")
+        set_attr(Var, "_frontend_native_requires_grad", _native_requires_grad)
         Var.requires_grad = property(_rg_get, _rg_set)
 
     Var.requires_grad_ = requires_grad_
@@ -637,6 +640,10 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
 
     # Preserve identity for dense storage; actual transpose/broadcast views
     # materialize through the native contiguous op and retain their gradient.
+    from . import method_api
+    from jittor.ops.tensor_protocol import contiguous as native_contiguous
+    method_api._FAST_CONTIGUOUS = getattr(_owner.jt.core, "_fast_contiguous", None)
+    method_api._NATIVE_CONTIGUOUS = native_contiguous
     Var.contiguous = _api_contiguous
     # torch's Tensor.is_cuda / .is_cpu report the tensor's ACTUAL residency.
     # A Var built/migrated to host (torch.zeros(device='cpu'), .cpu()) is on the

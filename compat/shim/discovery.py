@@ -93,9 +93,7 @@ def _setup_has_torch_extension_signal(text: str) -> bool:
         "CUDAExtension",
         "CppExtension",
         "BuildExtension",
-        ".cu",
-        ".cpp",
-        ".cc",
+        "ext_modules",
     )
     return any(s in text for s in signals)
 
@@ -198,7 +196,10 @@ def _extension_from_root(root: pathlib.Path, max_source_depth: int = 4) -> Optio
     setup_path = None
     if setup_py.is_file():
         text = _read_text(setup_py)
-        if _setup_has_torch_extension_signal(text) or sources:
+        # Bundled kernels and package_data globs do not declare a setuptools
+        # extension. Running their setup.py can execute unrelated packaging
+        # code (or fail for a deliberately partial upstream snapshot).
+        if _setup_has_torch_extension_signal(text) or setup_sources:
             setup_path = os.fspath(setup_py)
             reasons.append("setup.py")
 

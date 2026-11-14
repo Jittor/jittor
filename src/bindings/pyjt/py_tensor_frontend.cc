@@ -129,7 +129,23 @@ void reset_tensor_frontend_type(PyObject* token) {
 PyObject* set_tensor_placement_context(int backend, int device) {
     USER_CHECK(backend >= 0 && backend <= int(BackendId::Corex) && device >= 0)
         << "tensor placement requires a registered backend id and a non-negative device index";
-    PyObject* value = Py_BuildValue("(ii)", backend, backend == 0 ? 0 : device);
+    device = backend == 0 ? 0 : device;
+    PyObject* value = nullptr;
+    if (placement_context_set) {
+        if (PyContextVar_Get(placement_variable(), nullptr, &value) < 0)
+            throw std::runtime_error("cannot read tensor placement context");
+        // Nested modules usually keep their caller's device. Reuse that
+        // immutable value, but always create a real reset token: the body
+        // may change placement, and leaving this scope must still restore it.
+        if (value && !(PyTuple_CheckExact(value) && PyTuple_GET_SIZE(value) == 2
+                && PyLong_CheckExact(PyTuple_GET_ITEM(value, 0))
+                && PyLong_CheckExact(PyTuple_GET_ITEM(value, 1))
+                && PyLong_AsLong(PyTuple_GET_ITEM(value, 0)) == backend
+                && PyLong_AsLong(PyTuple_GET_ITEM(value, 1)) == device)) {
+            Py_CLEAR(value);
+        }
+    }
+    if (!value) value = Py_BuildValue("(ii)", backend, device);
     if (!value) throw std::runtime_error("cannot create tensor placement value");
     placement_context_set = true;
     PyObject* token = PyContextVar_Set(placement_variable(), value);

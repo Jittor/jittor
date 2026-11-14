@@ -5,11 +5,67 @@ through a call-time import of that module: ``optimizer_api`` imports this one,
 and an import at module level here would put both on an import-time cycle.
 """
 import jittor as jt
+from types import GetSetDescriptorType
 from jittor.optim.algorithms.adam import adam_update
 from jittor.optim.base import _update_preserve_dtype
 from .context import get_install_context
-from .installers.tensor.method_api import _optimizer_write_scope, _optimizer_update_many
+from .installers.tensor.method_api import (
+    _optimizer_write_scope, _optimizer_update, _optimizer_update_many,
+)
+from .installers.tensor.autograd_api import _rg_get
 from ..diagnostics import EXPECTED, swallowed
+
+
+_NATIVE_SHAPE = jt.core.Var.__dict__["shape"]
+_NATIVE_GETATTRIBUTE = jt.core.Var.__getattribute__
+_NATIVE_REQUIRES_GRAD = jt.core.Var.__dict__["requires_grad"]
+
+
+def _class_descriptor(cls, name):
+    """Inspect an owner without invoking a replacement descriptor."""
+    for base in type.__getattribute__(cls, "__mro__"):
+        fields = type.__getattribute__(base, "__dict__")
+        if name in fields:
+            return fields[name]
+    return None
+
+
+def _adam_native_metadata_types():
+    if type(_NATIVE_SHAPE) is not GetSetDescriptorType:
+        return ()
+    frontend = get_install_context(jt).target_namespace
+    return tuple(
+        cls for cls in (jt.core.Var, frontend.Tensor, frontend.nn.Parameter)
+        if _class_descriptor(cls, "shape") is _NATIVE_SHAPE
+        and _class_descriptor(cls, "__getattribute__") is _NATIVE_GETATTRIBUTE
+    )
+
+
+def _adam_state_shape_changes(params, moments, variances):
+    """Check current shapes without publishing per-tensor Python shapes."""
+    native_types = _adam_native_metadata_types()
+    if native_types:
+        changes = jt.core._try_optimizer_shape_changes(
+            params, moments, variances, native_types)
+        if changes is not None:
+            return changes
+    resized = []
+    for index, param in enumerate(params):
+        if index >= len(moments) or index >= len(variances):
+            continue
+        moment, variance = moments[index], variances[index]
+        if (type(param) in native_types and type(moment) in native_types
+                and type(variance) in native_types):
+            moment_shape = _NATIVE_SHAPE.__get__(moment)
+            param_shape = _NATIVE_SHAPE.__get__(param)
+            changed = (moment_shape != param_shape
+                       or _NATIVE_SHAPE.__get__(variance) != param_shape)
+        else:
+            changed = (tuple(moment.shape) != tuple(param.shape)
+                       or tuple(variance.shape) != tuple(param.shape))
+        if changed:
+            resized.append(index)
+    return resized
 
 
 class _CaptureStepEpoch:
@@ -114,6 +170,8 @@ class _AdamSteps(list):
         # Do not retain the owning dict: it owns this list, and a cycle would
         # keep discarded optimizers' parameters and lazy graphs alive.
         self.fused = group.get("fused", False)
+        # Only fused counters live on the parameter device. Read current
+        # placements when that policy is selected, including after a move.
         self.devices = (tuple(parameter.device for parameter in group["params"])
                         if self.fused else ())
 
@@ -173,8 +231,77 @@ class _AdamSteps(list):
         super().__setitem__(index, value)
 
 
+def _method_contract(owner, name):
+    method = _class_descriptor(owner, name)
+    return (owner, name, method, getattr(method, "__code__", None))
+
+
+# Implementation identities only. Parameter collections, eligibility, shapes
+# and numeric counters are read again in each native call. In particular an
+# exposed step Tensor is never represented by a cached host value.
+_ADAM_METADATA_PROTOCOL = (
+    _AdamStep, _AdamSteps,
+    tuple(_method_contract(owner, name) for owner, names in (
+        (_AdamStep, ("__int__", "set", "__getattribute__", "__setattr__", "__dict__")),
+        (_AdamSteps, ("__getitem__", "__setitem__")),
+    ) for name in names),
+    _NATIVE_SHAPE, _NATIVE_REQUIRES_GRAD, _NATIVE_GETATTRIBUTE,
+    (_rg_get, _rg_get.__code__), globals(), jt,
+    tuple((name, value) for name, value in (
+        ("int", int), ("list", list), ("zip", zip), ("enumerate", enumerate),
+        ("isinstance", isinstance), ("bool", bool), ("type", type),
+    )),
+)
+
+
+def _adam_metadata_batch(group, grads, steps, advance=False):
+    frontend = get_install_context(jt).target_namespace
+    return jt.core._try_optimizer_adam_entries(
+        group, grads, steps,
+        (jt.core.Var, frontend.Tensor, frontend.nn.Parameter),
+        _ADAM_METADATA_PROTOCOL, advance)
+
+
 def _update_in_target_dtype(target, value):
     _update_preserve_dtype(target, value)
+
+
+def _try_batch_update(active, updates):
+    """Batch canonical writes, preserving custom writers and capture paths."""
+    from jittor._runtime import step_capture
+    if step_capture.active() or step_capture.tracing():
+        return False
+    # Providers may return iterators. Leave those intact for the ordinary
+    # writer instead of consuming their updates during a speculative check.
+    if type(updates) not in (list, tuple) or len(updates) != len(active):
+        return False
+    if any(type(triple) not in (list, tuple) or len(triple) != 3 for triple in updates):
+        return False
+    frontend = get_install_context(jt).target_namespace
+    allowed = (jt.Var, frontend.Tensor, frontend.nn.Parameter)
+    packed = jt.core._try_pack_optimizer_updates(
+        active, updates, allowed, _optimizer_update, _BATCH_UPDATE_PROTOCOL)
+    if packed is not None:
+        return _optimizer_update_many(packed[0], packed[1])
+    targets, values = [], []
+    for (p, m, v, _, _), triple in zip(active, updates):
+        for target, value in zip((p, m, v), triple):
+            if (type(target) not in allowed or type(value) not in allowed
+                    or getattr(type(target), '_optimizer_update', None) is not _optimizer_update):
+                return False
+            targets.append(target)
+            values.append(value)
+    return _optimizer_update_many(targets, values)
+
+
+# Implementation identities only; the native call reads all rows and classes anew.
+_BATCH_UPDATE_PROTOCOL = (
+    _try_batch_update, _try_batch_update.__code__,
+    tuple((name, value) for name, value in (
+        ("type", type), ("list", list), ("tuple", tuple), ("len", len),
+        ("zip", zip), ("getattr", getattr), ("any", any),
+    )),
+)
 
 
 def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay):
@@ -269,12 +396,15 @@ def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay
                       and not pg.get("amsgrad") and not pg.get("maximize"))
         active = []
         if want_fused:
-            for i, (p, g, v, m) in enumerate(zip(
-                    pg["params"], grads, pg["values"], pg["m"])):
-                if not p.requires_grad or not isinstance(g, jt.Var) \
-                        or list(g.shape) != list(p.shape):
-                    continue
-                active.append((p, m, v, g, int(param_steps[i])))
+            active = _adam_metadata_batch(pg, grads, param_steps)
+            if active is None:
+                active = []
+                for i, (p, g, v, m) in enumerate(zip(
+                        pg["params"], grads, pg["values"], pg["m"])):
+                    if not p.requires_grad or not isinstance(g, jt.Var) \
+                            or list(g.shape) != list(p.shape):
+                        continue
+                    active.append((p, m, v, g, int(param_steps[i])))
             if active:
                 from jittor._runtime.dispatch import dispatch_context, select_kernel
                 # With zero decay Adam and AdamW have the same update. The
@@ -282,14 +412,18 @@ def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay
                 if decoupled_weight_decay or dispatch_context(active[0][0]).backend == "cuda":
                     fused_impl = select_kernel("optim.adamw_fused", active)
         if fused_impl is not None:
-            stepped = []
-            for i, (p, g, v, m) in enumerate(zip(
-                    pg["params"], grads, pg["values"], pg["m"])):
-                if not p.requires_grad or not isinstance(g, jt.Var) \
-                        or list(g.shape) != list(p.shape):
-                    continue
-                param_steps[i] = int(param_steps[i]) + 1
-                stepped.append(i)
+            # Provider selection is an observable callback boundary: rebuild
+            # eligibility and read counters after it, independently of active.
+            stepped = _adam_metadata_batch(pg, grads, param_steps, advance=True)
+            if stepped is None:
+                stepped = []
+                for i, (p, g, v, m) in enumerate(zip(
+                        pg["params"], grads, pg["values"], pg["m"])):
+                    if not p.requires_grad or not isinstance(g, jt.Var) \
+                            or list(g.shape) != list(p.shape):
+                        continue
+                    param_steps[i] = int(param_steps[i]) + 1
+                    stepped.append(i)
             lr_arg = lr
             if step_capture.active():   # a replay advances these without step()
                 if not decoupled_weight_decay:
@@ -304,12 +438,10 @@ def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay
             updates = fused_impl(
                 active, lr_arg, b0, b1, weight_decay, eps)
             with _optimizer_write_scope():
-                batched = _optimizer_update_many(
-                    [tensor for entry in active for tensor in entry[:3]],
-                    [tensor for update in updates for tensor in update])
+                copied = _try_batch_update(active, updates)
                 for (p, m, v, _, _), (new_p, new_m, new_v) in zip(
                         active, updates):  # fused_adamw keeps each input's dtype
-                    if not batched:
+                    if not copied:
                         _update_preserve_dtype(p, new_p)
                         _update_preserve_dtype(m, new_m)
                         _update_preserve_dtype(v, new_v)

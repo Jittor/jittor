@@ -355,6 +355,7 @@ uint64 VarHolder::raw_ptr() {
         migrate_to_cpu(snapshot.var, runtime_executor().allocator);
 #endif
         ptr = (uint64)snapshot.var->mem_ptr;
+        snapshot.var->storage_version_token()->externally_visible.store(true, std::memory_order_relaxed);
     }
     graph_check();
     return ptr;

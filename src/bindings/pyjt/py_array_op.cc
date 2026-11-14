@@ -102,8 +102,16 @@ ArrayOp::ArrayOp(PyObject* obj) {
         args = {&scalar, {}, ns_float32};
     } else
     if (PyLong_CheckExact(obj)) {
-        scalar.i32 = PyLong_AsLong(obj);
-        args = {&scalar, {}, ns_int32};
+        // Preserve large Python integers before binary promotion sees them.
+        // A cast to the operand dtype cannot recover truncated high bits.
+        int64 value = pyjt_scalar_integer(obj);
+        if (value >= (int64)(-2147483647-1) && value <= (int64)2147483647) {
+            scalar.i32 = (int32)value;
+            args = {&scalar, {}, ns_int32};
+        } else {
+            scalar.i64 = value;
+            args = {&scalar, {}, ns_int64};
+        }
     } else
     if (PyBool_Check(obj)) {
         scalar.i8 = obj == Py_True;

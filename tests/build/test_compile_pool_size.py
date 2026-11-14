@@ -32,6 +32,9 @@ class TestCompilePoolSize(unittest.TestCase):
         script = textwrap.dedent(f"""
             import os
             os.sched_setaffinity(0, {{{cpu}}})
+            # This child tests pool creation, independently of the parent
+            # suite's policy for serializing first-time compilation.
+            os.environ["DISABLE_MULTIPROCESSING"] = "0"
             import jittor_utils
             jittor_utils.pool_size = 0
             jittor_utils.run_cmds([], "", "", "pool size probe")

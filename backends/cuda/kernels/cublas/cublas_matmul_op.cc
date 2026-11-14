@@ -163,7 +163,17 @@ void CublasMatmulOp::jit_prepare(JK& jk) {
 #pragma clang diagnostic ignored "-Wtautological-compare"
 
 void CublasMatmulOp::jit_run() {
+    if (!c->num) return;
     cublasHandle_t handle_ = cublas_bind_stream();
+    // An empty contraction has a nonempty zero result. cuBLAS still checks
+    // leading dimensions for K=0, so our zero-width buffers are not legal
+    // GEMM operands. Initialize the result on the same compute stream.
+    if (!a->num || !b->num) {
+        cudaStream_t stream;
+        checkCudaErrors(cublasGetStream(handle_, &stream));
+        checkCudaErrors(cudaMemsetAsync(c->ptr<T>(), 0, c->size, stream));
+        return;
+    }
     const T alpha = 1.0f;
     const T beta  = 0.0f;
     const float alpha_f = 1.0f;

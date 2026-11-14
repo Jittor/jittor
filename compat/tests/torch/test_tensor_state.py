@@ -85,6 +85,44 @@ def test_tensor_state_repeated_lookup_uses_bound_cache(monkeypatch):
     assert get_tensor_state(module) is state
 
 
+def test_state_lookup_follows_rebinding_while_previous_owner_stays_alive():
+    native = _module("rebound_tensor_owner")
+    first, second = TorchNamespace(native), TorchNamespace(native)
+    first_transaction = InstallTransaction("first-tensor-owner")
+    first_state = bind_tensor_state(native, first, first_transaction)
+    assert get_tensor_state(native) is get_tensor_state(first) is first_state
+    first_transaction.rollback()
+
+    second_state = TorchTensorState()
+    second_transaction = InstallTransaction("second-tensor-owner")
+    try:
+        assert bind_tensor_state(native, second, second_transaction,
+                                 state=second_state) is second_state
+        assert first_state is not second_state
+        assert compatibility_owner(native) is second
+        assert get_tensor_state(native) is get_tensor_state(second) is second_state
+    finally:
+        second_transaction.rollback()
+    assert compatibility_owner(native) is native
+    assert get_tensor_state(native) is not second_state
+
+
+def test_state_lookup_releases_a_collected_owner_and_its_state():
+    native = _module("collected_tensor_owner")
+    target = TorchNamespace(native)
+    transaction = InstallTransaction("collected-tensor-owner")
+    state = bind_tensor_state(native, target, transaction)
+    assert get_tensor_state(native) is state
+    owner_reference = weakref.ref(target)
+    transaction.commit()
+    del target, transaction
+    gc.collect()
+
+    assert owner_reference() is None
+    assert compatibility_owner(native) is native
+    assert get_tensor_state(native) is not state
+
+
 def test_tensor_state_does_not_duplicate_native_requires_grad_state():
     module = _module()
     state = get_tensor_state(module)

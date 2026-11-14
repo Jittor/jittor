@@ -3,6 +3,7 @@ from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import collections as _collections
 from collections.abc import MutableMapping as _MutableMapping
 import functools as _functools
+import types as _types
 import weakref
 import os
 import jittor as jt
@@ -719,6 +720,10 @@ def _parameters(self, recurse=True):
     return _ParamList(var for _, var in self._iter_named_vars("parameters", recurse))
 
 
+# Callable metadata only: the internal zeroing loop still walks live parameters.
+_ZERO_GRAD_PARAMETERS = (_parameters, _parameters.__code__, _parameters.__defaults__)
+
+
 # torch's Module.train(mode=True)/eval() take a mode arg; jittor's train()
 # takes none. Wrap to accept it and toggle jittor's real training flag.
 #
@@ -1109,34 +1114,43 @@ def _module_half(self):
 # torch's zero_grad() clears each param's .grad so the next backward starts
 # fresh; the optimizer-free backward path accumulates with += (matching
 # torch), so a real reset is required. The prior no-op left grads silently
-# accumulating across steps. Clear the torch-exposed grad and, when an
-# optimizer is bridged, delegate to its zero_grad as well.
+# accumulating across steps. Clear only this module's parameters; an
+# optimizer can also own parameters belonging to other modules.
 def _zero_grad(self, set_to_none=True):
     """Torch's ``zero_grad``: a real reset, honoring ``set_to_none``.
 
     ``set_to_none=False`` must leave ``.grad`` as an all-zero tensor of the same
-    shape and dtype, which is what torch 2.12.1 does. Dropping it to None
+    shape and dtype. Dropping it to None
     instead is silently wrong rather than loud: gradient clipping and gradient
     accumulation are both written as ``if p.grad is not None``, so every
     parameter gets skipped and no error is ever raised.
     """
-    # The bridged optimizer runs first: its zero_grad clears the torch-visible
-    # .grad as a side effect, so doing it afterwards would undo the zero tensors
-    # that set_to_none=False is required to leave behind.
-    from ...tensor_state import latest_optimizer
-    opt = latest_optimizer(jt)
-    if opt is not None:
-        try:
-            opt.zero_grad()
-        except EXPECTED as exc:
-            swallowed("torch/installers/nn.py _zero_grad: opt.zero_grad()", exc)
     try:
+        parameters = self.parameters
+        original, code, defaults = _ZERO_GRAD_PARAMETERS
+        if (set_to_none is True and type(parameters) is _types.MethodType
+                and parameters.__self__ is self and parameters.__func__ is original
+                and original.__code__ is code and original.__defaults__ is defaults):
+            # This internal one-shot consumer needs neither indexing nor a
+            # second parameter generator. Keep the same current walk, leaf
+            # publication, per-parameter setter and temporary holder lifetime
+            # as the public parameter view, including changes during clearing.
+            holders = []
+            for _, p in self._iter_named_vars("parameters", True):
+                _register_leaf_params((p,))
+                holders.append(p)
+                grad = getattr(p, "_torch_grad", None)
+                if grad is not None:
+                    p.grad = None
+            return None
         pending = []
-        for p in self.parameters():
+        for p in parameters():
             grad = getattr(p, "_torch_grad", None)
             if set_to_none:
                 if grad is not None:
-                    object.__setattr__(p, "_torch_grad", None)
+                    # The setter clears this parameter's slots in every
+                    # owning optimizer, without touching unrelated gradients.
+                    p.grad = None
             elif grad is not None:
                 # In place, so ``.grad`` stays the *same object* the way torch
                 # leaves it: torch's ``zero_grad(set_to_none=False)`` zeroes the
@@ -1361,6 +1375,59 @@ def _module_extra_repr(self):
     return ""
 
 
+def _linear_training_dispatch_state(nn, dispatch):
+    """Live owners for the native small CUDA training product, or None."""
+    import importlib
+    import inspect
+
+    linear = importlib.import_module("jittor.nn.functional.linear")
+    modules = importlib.import_module("jittor.nn.modules.linear")
+    if (dispatch._NATIVE_SELECT is not jt.core._kernel_select
+            or modules.Linear.execute is not modules._NATIVE_LINEAR_EXECUTE):
+        return None
+    missing = object()
+    checks = list(linear._NATIVE_LINEAR_BINDINGS)
+    checks.extend((
+        (vars(modules), "linear", linear._NATIVE_LINEAR_FUNCTION),
+        (vars(jt.nn), "matmul_transpose",
+         linear._NATIVE_LINEAR_MATMUL_TRANSPOSE),
+        (vars(dispatch), "_NATIVE_SELECT", jt.core._kernel_select),
+        (vars(dispatch), "_kernels", dispatch._kernels),
+    ))
+    # Other providers must execute their own predicates exactly once. Inspect
+    # immutable registration tuples without speculatively calling a predicate.
+    for name, implementation, supports in linear._NATIVE_LINEAR_KERNELS:
+        key = (name, "cuda")
+        entries = dispatch._kernels.get(key, ())
+        if len(entries) != 1:
+            return None
+        entry = entries[0]
+        if (entry.implementation is not implementation or entry.supports is not supports
+                or entry.priority != 0 or entry.runtime_modes is not None
+                or (entry.dtypes is not None and "float32" not in entry.dtypes)):
+            return None
+        checks.append((dispatch._kernels, key, entries))
+        key = (name, "*")
+        entries = dispatch._kernels.get(key, missing)
+        if entries is not missing and entries:
+            return None
+        checks.append((dispatch._kernels, key, entries))
+    tensor_type = getattr(nn.Module, "_frontend_tensor_type", None)
+    if tensor_type is None:
+        return None
+    types = (jt.Var, tensor_type, nn.Parameter)
+    attributes = ("dtype", "shape", "requires_grad", "placement_backend",
+                  "_storage_is_contiguous", "__add__", "__radd__",
+                  "__getattribute__", "__torch_function__",
+                  "_frontend_native_requires_grad", "_frontend_tensor_type")
+    type_checks = tuple(
+        (cls, name, inspect.getattr_static(cls, name, missing))
+        for cls in types for name in attributes
+    )
+    return (tuple(checks), type_checks, types,
+            inspect.getattr_static(nn.Module, "__getattribute__"), missing)
+
+
 def _install_module_methods(nn, registry=None):
     """Bind the torch-compatible ``nn.Module`` methods; all are module level.
 
@@ -1419,6 +1486,7 @@ def _install_module_methods(nn, registry=None):
         "standard_rms_norm": _standard_rms_norm,
         "rms_selector_state": _rms_selector_state,
         "linear_execute": _NativeLinear.execute,
+        "linear_training_state": _linear_training_dispatch_state(nn, _kernel_dispatch),
         "matmul_kernel": _matrix._cublas_matmul,
         "rms_norm_inference": _rms_norm_cuda.__wrapped__,
         "rms_norm_source": _rms_norm_source,

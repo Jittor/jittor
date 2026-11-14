@@ -150,6 +150,14 @@ template<class T> struct StackIniter {
 #define STACK_ALLOC2(T, a, n) T a[n]
 #endif
 
+struct TraceGradGuard {
+    Op* previous;
+    explicit TraceGradGuard(Op* current) : previous(trace_grad_op) {
+        trace_grad_op = current;
+    }
+    ~TraceGradGuard() { trace_grad_op = previous; }
+};
+
 struct AmpGradGuard {
     int amp_reg_bk;
     AmpGradGuard(Op* op) {
@@ -455,7 +463,7 @@ vector<VarPtr> grad(
                     } else
                         douts[i] = nullptr;
                 }
-                trace_grad_op = op;
+                TraceGradGuard trace_guard(op);
                 {
                     AmpGradGuard agg(op);
                     Float32PrecisionScope precision_scope(op->float32_precision);
@@ -482,7 +490,7 @@ vector<VarPtr> grad(
                     int id = output.second;
                     if (id<0) continue;
                     Var* dout = grads[id];
-                    trace_grad_op = op;
+                    TraceGradGuard trace_guard(op);
                     VarPtr dvar = make_grad(
                         op, out, dout, var, snapshot.input_index);
                     dvar = normalize_recorded_gradient(var, move(dvar));
@@ -524,7 +532,6 @@ vector<VarPtr> grad(
         }
         apply_tensor_hook(var, grad);
     }
-    trace_grad_op = nullptr;
     // set zero grad
     for (size_t i=0; i<results.size(); i++) {
         Var* var = targets[i];

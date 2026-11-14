@@ -868,8 +868,17 @@ void Op::jit_run(JK& jk) {
         return;
     }
     LOGvv << "Jit op key not found:" << jit_key;
-    // compile JIT op
-    auto op_entry = OpCompiler::do_compile(this);
+    // Serial compilation reaches this path without the parallel compiler's
+    // operator context. Capture the name before compilation can release the
+    // GIL, and add context only on a cache miss/failure.
+    const string description = name();
+    jit_op_entry_t op_entry;
+    try {
+        op_entry = OpCompiler::do_compile(this);
+    } catch (const std::exception& error) {
+        throw_same_kind(error, "Compiling operator " + description
+            + " failed.\n\nReason: " + error.what());
+    }
     CHECK(get_jit_key(jk) == jit_key) << "Non-fused compilation changed its JIT key";
     jit_ops[jit_key] = op_entry;
     jit_key_mapper[jit_key] = jit_key;

@@ -446,6 +446,28 @@ class TestCuda13Toolchain(unittest.TestCase):
                 self.resolve()
             path.touch()
 
+    def test_optional_cudnn_uses_the_selected_toolchain_sibling(self):
+        cudnn = self.site / "nvidia/cudnn"
+        (cudnn / "include").mkdir(parents=True)
+        (cudnn / "include/cudnn.h").touch()
+        (cudnn / "lib").mkdir()
+        library = cudnn / "lib/libcudnn.so.9"
+        library.touch()
+        stack = self.resolve()
+        self.assertEqual(stack.component_dir("cudnn"), str(cudnn))
+        self.assertEqual(stack.include_dirs("cudnn"), [str(cudnn / "include")])
+        self.assertEqual(stack.lib_dirs("cudnn"), [str(cudnn / "lib")])
+        self.assertEqual(stack.preload_paths("cudnn"), [str(library)])
+        # The optional math library does not move the pinned toolchain.
+        self.assertEqual(stack.component_dir("cuda_nvcc"), str(self.root))
+        self.assertEqual(stack.lib_dirs(), [str(self.root / "lib")])
+
+    def test_cudnn_from_another_environment_is_not_combined(self):
+        other = self.site.parent / "other/site-packages/nvidia/cudnn"
+        (other / "include").mkdir(parents=True)
+        (other / "include/cudnn.h").touch()
+        self.assertIsNone(self.resolve().component_dir("cudnn"))
+
     def test_newer_unbounded_transitive_dependency_is_rejected(self):
         self.distributions["nvidia-nvvm"].version = "13.4.92"
         with self.assertRaisesRegex(cuda_wheel.CudaWheelError, r"nvidia-nvvm==13.0.88 is required, found 13.4.92"):

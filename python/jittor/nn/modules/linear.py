@@ -58,3 +58,6 @@ class Conv1d_sp(Linear):
         x = super().execute(x)
         x = x.transpose(0, 2, 1)
         return x
+
+
+_NATIVE_LINEAR_EXECUTE = Linear.execute

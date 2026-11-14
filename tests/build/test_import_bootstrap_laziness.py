@@ -162,7 +162,7 @@ class TestImportBootstrapLaziness(unittest.TestCase):
             backend_libraries.register_library("mkl", types.SimpleNamespace(ops=fake_ops))
 
         with jt.flag_scope(use_cuda=0), \
-                mock.patch.dict(os.environ, {"use_mkl": "1"}), \
+                mock.patch.dict(os.environ, {"JT_BUILD_USE_MKL": "1"}), \
                 mock.patch.object(jt.compile_extern, "use_mkl", True), \
                 _mkl_obtainable(jt), \
                 mock.patch.object(backend_libraries, "_libraries", libraries), \
@@ -235,7 +235,7 @@ class TestImportBootstrapLaziness(unittest.TestCase):
                 if loaded:
                     libraries.register("mkl", fake_module)
                 with jt.flag_scope(use_cuda=0), \
-                        mock.patch.dict(os.environ, {"use_mkl": "1"}), \
+                        mock.patch.dict(os.environ, {"JT_BUILD_USE_MKL": "1"}), \
                         mock.patch.object(jt.compile_extern, "use_mkl", False), \
                         _mkl_obtainable(jt), \
                         mock.patch.object(backend_libraries, "_libraries", libraries), \

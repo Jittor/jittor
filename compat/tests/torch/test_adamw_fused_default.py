@@ -60,6 +60,22 @@ class TestAdamwFusedByDefault(unittest.TestCase):
         for want, got in zip(reference, fused):
             np.testing.assert_allclose(got, want, rtol=1e-5, atol=1e-7)
 
+    def test_provider_iterator_is_not_consumed_before_writeback(self):
+        from jittor._runtime.dispatch import override_kernel
+        with jt.flag_scope(use_cuda=1):
+            reference = _train(fused=False)
+            consumed = []
+
+            def iterator_updates(*args):
+                consumed.append(1)
+                yield from self.module._cuda_fused_adamw_updates(*args)
+
+            with override_kernel("optim.adamw_fused", "cuda", iterator_updates,
+                                 supports=self.module._supports):
+                actual = _train()
+        self.assertEqual(len(consumed), 4)
+        for want, got in zip(reference, actual):
+            np.testing.assert_allclose(got, want, rtol=1e-5, atol=1e-7)
     def test_fused_write_keeps_aliases_versions_and_pending_snapshots(self):
         p = torch.nn.Parameter(torch.tensor([1., 2.], device='cuda'))
         alias = p.detach()

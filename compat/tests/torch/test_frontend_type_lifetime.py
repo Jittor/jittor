@@ -41,6 +41,9 @@ class TestFrontendTypeLifetime(unittest.TestCase):
 
             p = Local(torch.ones(3))
             self.assertEqual(p.dtype, torch.float32)
+            self.assertTrue(p.requires_grad)
+            p.requires_grad_(False)
+            self.assertFalse(p.requires_grad)
             self.assertEqual((p * 2).sum().item(), 6.0)
             return weakref.ref(Local)
 

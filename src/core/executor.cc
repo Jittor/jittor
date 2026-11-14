@@ -56,7 +56,7 @@ DEFINE_FLAG(int, gopt_disable, 0, "Disable graph optimizer.");
 DEFINE_FLAG(int, use_threading, 0, "Allow to use python threading with jittor.");
 
 DEFINE_FLAG(int, exec_called, 0, "exec sync called");
-DEFINE_FLAG(int, async_execution, 1, "Run an auto-flushed batch (of an inference graph on CUDA; on ACL, with `backend_fallback=error`, of a training forward too) on a worker thread while Python keeps building the graph; every executor entry, and so every read of a Var's data, waits for it first. See runtime/async_exec.h. 0 executes every batch on the calling thread. Without the worker such a flush also has to carry `auto_flush_bytes` of output to be taken; with it, any auto-flush is. On ACL nothing is auto-flushed at all unless the worker takes it (`async_auto_flush_only`): an inline flush there was measured slower at every batch size.");
+DEFINE_FLAG(int, async_execution, 1, "Run an auto-flushed inference or training-forward batch on a worker thread while Python keeps building the graph, where admitted by the CUDA or ACL backend policy. ACL requires `backend_fallback=error`. Every executor entry, and so every read of a Var's data, waits for it first. See runtime/async_exec.h. Backward graph construction stays on the calling thread. 0 executes every batch on the calling thread. Without the worker such a flush also has to carry `auto_flush_bytes` of output to be taken; with it, any auto-flush is. On ACL nothing is auto-flushed at all unless the worker takes it (`async_auto_flush_only`): an inline flush there was measured slower at every batch size.");
 DEFINE_FLAG(int, async_flush_ops, 64, "With `async_execution`, such a graph is also flushed to the worker when a module call returns and this many operators have been created since the last flush (`auto_flush_ops` still applies between). 0 flushes at `auto_flush_ops` only.");
 DECLARE_FLAG(int, async_min_caller_us);
 DECLARE_FLAG(bool, no_grad);
@@ -98,8 +98,8 @@ static bool worker_admits_accelerator() {
 }
 
 // Whether the graph being built is one the worker may take. An inference
-// graph always; a training forward's only where the backend's policy says a
-// flush costs it nothing (`async_admits_grad`). The backward's own
+// graph always; a training forward's where the backend's policy admits fresh
+// submission (`async_admits_grad`). The backward's own
 // construction window is excluded either way, in `auto_flush`.
 static bool worker_admits_grad() {
     return no_grad
@@ -182,8 +182,17 @@ void Executor::flush_at_module_boundary() {
     // unit, a transformer layer -- stays in one batch where it can.
     auto& pipeline = runtime_submission_pipeline();
     if (deferrable_flush()
-            && Op::number_of_created_ops - pipeline.last_run_ops >= async_flush_ops)
+            && Op::number_of_created_ops - pipeline.last_run_ops >= async_flush_ops) {
+        const auto previous = pipeline.last_run_ops;
+        const int calls = exec_called;
         auto_flush();
+        // An elementwise-only module has no eligible root to submit. Keep
+        // its pending work in the CUDA budget so the next module's matmul
+        // can hand it off. Per-op auto_flush still re-arms empty scans;
+        // module boundaries must not pretend that such a scan ran a batch.
+        if (exec_called == calls && accelerator_backend_id() == BackendId::Cuda)
+            pipeline.last_run_ops = previous;
+    }
 }
 
 void Executor::submit_pending(Var* target, bool force) {
@@ -578,6 +587,20 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync, boo
     // has to be a lock. Explicit dynamic-input prerequisite submissions are
     // on this thread and pass straight through; constructors never submit.
     ExecutorEntryScope entry;
+    // A strong, nonblocking sync of successfully materialized roots has no
+    // work to submit. Optimizer stores repeatedly reach this case for both
+    // sides of an already completed storage-alias update. Keep the worker
+    // wait and entry lock above, but do not plan an empty batch or reset the
+    // pending-operator budget. Weak/device syncs, kept graphs and failures
+    // must still take their ordinary execution path.
+    if (!device_sync && !weak_sync && !may_defer && !keep_graph
+            && !graph_capture_active() && !vars.empty()
+            && std::all_of(vars.begin(), vars.end(), [](Var* v) {
+                return v->is_finished() && !v->flag(VarFlags::_kept)
+                    && !v->flag(VarFlags::_execution_failed) && v->num >= 0
+                    && (v->mem_ptr || !v->size);
+            }))
+        return;
     RematerializationExecutionScope rematerialization;
     StepTraceBatchScope trace_batch;
     exec_called ++;

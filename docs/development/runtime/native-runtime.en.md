@@ -57,6 +57,28 @@ importing Jittor.** New operators still accept local `extra_flags` and per-opera
 `compile_options`; loading an extension **does not reopen startup configuration**. The
 classification file participates in the binding generator's build fingerprint.
 
+### Asynchronous submission boundaries
+
+CUDA and ACL backend policies admit newly constructed inference or training-forward batches to
+the worker while the calling thread builds the remaining graph; ACL also requires
+`backend_fallback=error`. Backward graph construction and Python backward callbacks stay on the
+calling thread. `src/runtime/async_exec.*` and the executor own thread placement, graph locking,
+read waits and the policy that stands down after a second Python calling thread appears.
+
+Every forward and training step still creates fresh operators; worker submission does not reuse
+an execution graph or model results. `async_execution=0` disables the worker, while
+`auto_flush_ops` and `async_flush_ops` control submission boundaries. Shapes and batch sizes
+affect the tradeoff between earlier materialization and concurrent submission; compare matching
+configurations.
+
+Each background batch carries the submitting thread's `node_order`. The worker's node and clone
+constructors, flag reads and scoped writes use that batch's construction order; normal and
+exceptional teardown restore its previous scope. The caller can therefore change the order of
+subsequent nodes without waiting for an unrelated batch. Data reads and execution settings
+continue to use the executor's synchronization boundaries. Concurrent isolation and exception
+recovery are checked by
+[`test_async_construction_order.py`](../../../tests/runtime/test_async_construction_order.py).
+
 ### Native state and lifetime
 
 The native held-root storage is in `src/runtime/holder_state.{h,cc}`. `RuntimeHolderState` owns

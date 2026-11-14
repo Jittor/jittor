@@ -1,9 +1,13 @@
 """Stable Tensor gradient APIs using the shared native Var/Op graph."""
 from importlib import import_module
 from ...context import get_install_context
+from ...tensor_object_state import _GRAD_PUBLICATION_PROTOCOL
 from jittor._runtime import step_capture as _step_capture
 _owner = import_module(__package__)
 _NativeVar = _owner.jt.Var
+_FRESH_GRAD_PROTOCOL = _GRAD_PUBLICATION_PROTOCOL + (
+    _NativeVar.__dict__.get("__dict__"), _NativeVar.stop_grad,
+)
 
 def _register_leaf(v):
     _owner._torch_register_leaf(v)
@@ -56,11 +60,10 @@ def _initial_leaf_gradient(parameter, gradient):
 
 
 def _rg_get(self):
-    _context = get_install_context(_owner.jt)
-    Var = _context.state["Var"]
-    _native = _context.state["tensor_native_api"]
-    _native_requires_grad = _native['_native_requires_grad']
-    return bool(_native_requires_grad.__get__(self, Var))
+    # The frontend type owns the descriptor; read native state on every call.
+    # No tensor flag is cached, including for inherited Parameter subclasses.
+    cls = type(self)
+    return bool(cls._frontend_native_requires_grad.__get__(self, cls))
 
 
 def _rg_set(self, v):
@@ -151,6 +154,19 @@ def _fill_opt_grads(opt, grad_by_id, filled_param_ids=None):
     zero = getattr(opt, "_Optimizer__zero_grad", True)
     if filled_param_ids is None:
         filled_param_ids = set()
+    # The common zero_grad()/backward() cycle publishes into empty slots.
+    # A native batch validates current accessors and every slot first. Shared
+    # parameters, accumulation and custom Python protocols keep the loop below.
+    from ...optimizer_adam import _ADAM_METADATA_PROTOCOL
+    frontend = get_install_context(_owner.jt).target_namespace
+    published = _owner.jt.core._try_publish_fresh_gradients(
+        opt.param_groups, grad_by_id, filled_param_ids,
+        (_NativeVar, frontend.Tensor, frontend.nn.Parameter),
+        _ADAM_METADATA_PROTOCOL, _FRESH_GRAD_PROTOCOL,
+    )
+    if published:
+        _finish_opt_gradient_publication(opt)
+        return
     for pg in opt.param_groups:
         grads_list = pg.get("grads")
         if grads_list is None:
@@ -182,6 +198,10 @@ def _fill_opt_grads(opt, grad_by_id, filled_param_ids=None):
             grads_list[i] = stored
             object.__setattr__(p, "_torch_grad", stored)
             filled_param_ids.add(id(p))
+    _finish_opt_gradient_publication(opt)
+
+
+def _finish_opt_gradient_publication(opt):
     object.__setattr__(opt, "_Optimizer__zero_grad", False)
     try:
         opt._build_grad_map()
@@ -332,7 +352,12 @@ def _backward_impl(self, gradient=None, retain_graph=None, create_graph=False, *
     # core entry point that preserves missing gradients explicitly.
     from ...autograd import _create_graph_scope
     with _create_graph_scope(create_graph):
-        grads = _owner.jt.core.grad_optional(self, leaves, retain_graph)
+        if _step_capture.active() or _step_capture.tracing():
+            grads = _owner.jt.core.grad_optional(self, leaves, retain_graph)
+            prepared = False
+        else:
+            grads, prepared = _owner.jt.core._grad_optional_prepare(
+                self, leaves, retain_graph, create_graph)
     grad_by_id = {}
     for p, gr in zip(leaves, grads):
         if gr is None:
@@ -345,10 +370,11 @@ def _backward_impl(self, gradient=None, retain_graph=None, create_graph=False, *
         # float16 op comes back with a float16 grad, and AdamW's
         # (1 - beta2) * g * g then underflows in float16 -- an lr / eps step,
         # NaN on the next forward (test_torch_amp_training_loop.py).
-        if gr.dtype != p.dtype:
-            gr = gr.cast(p.dtype)
-        if not create_graph:
-            gr = gr.detach()
+        if not prepared:
+            if gr.dtype != p.dtype:
+                gr = gr.cast(p.dtype)
+            if not create_graph:
+                gr = gr.detach()
         grad_by_id[id(p)] = gr
         if id(p) not in opt_ids:
             # non-optimizer leaf (retain_grad screenspace etc.): accumulate
@@ -365,7 +391,14 @@ def _backward_impl(self, gradient=None, retain_graph=None, create_graph=False, *
             if prev is None:
                 object.__setattr__(p, "_torch_grad", _initial_leaf_gradient(p, gr))
             else:
-                prev.add_(gr)
+                if create_graph:
+                    prev.add_(gr)
+                else:
+                    # AccumulateGrad writes without recording another graph.
+                    # Besides accepting a trainable existing .grad, this lets
+                    # ordinary stopped gradients use ordered native writes.
+                    with _owner.jt.no_grad():
+                        prev.add_(gr)
     # fill each optimizer's pg["grads"] so its step(loss=None) consumes them
     if _fsdp2_backward is not None and fsdp_opts:
         _fsdp2_backward.fill_fsdp_optimizer_grads_from_grad_map(fsdp_opts, grad_by_id)
@@ -448,8 +481,8 @@ def _param_slots(opt, param):
 def _grad_set(self, value):
     object.__setattr__(self, "_torch_grad", value)
     fsdp_entry = getattr(self, "_jittor_fsdp2_entry", None)
-    fsdp_role = getattr(self, "_jittor_fsdp2_role", None)
     if fsdp_entry is not None:
+        fsdp_role = getattr(self, "_jittor_fsdp2_role", None)
         try:
             if value is None:
                 fsdp_entry.last_grad = None
@@ -487,12 +520,12 @@ def _grad_set(self, value):
                         continue
                     slots.append((pg, i))
         for pg, i in slots:
-            count = len(pg.get("params", []))
             if value is None:
                 grads = pg.get("grads")
                 if grads is not None and i < len(grads):
                     grads[i] = None
             else:
+                count = len(pg.get("params", []))
                 grads = pg.get("grads")
                 if grads is None:
                     grads = pg["grads"] = [None] * count

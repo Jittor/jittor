@@ -629,11 +629,11 @@ void TraceData::record_node(Node* node, bool record_stack) {
     if (get_thread_name().size()) return;
     NodeData data;
     data.id = node_data_cnt++;
-    id_map[node] = data.id;
+    id_map[node->id] = data.id;
     if (trace_py_var) {
         if (record_stack) {
             if (trace_grad_op) {
-                auto iter = trace_data.id_map.find(trace_grad_op);
+                auto iter = trace_data.id_map.find(trace_grad_op->id);
                 data.stacks.emplace_back(Stack{"grad", "Grad", "", 0});
                 if (iter != trace_data.id_map.end()) {
                     data.attrs["grad_op_id"] = S(iter->second);
@@ -653,7 +653,7 @@ void TraceData::record_node(Node* node, bool record_stack) {
 }
 
 static int64 get_node_id(Node* node) {
-    auto iter = trace_data.id_map.find(node);
+    auto iter = trace_data.id_map.find(node->id);
     if (iter != trace_data.id_map.end())
         return iter->second;
     trace_data.record_node(node, false);
@@ -662,11 +662,11 @@ static int64 get_node_id(Node* node) {
 
 void TraceData::release_node(Node* node) {
     if (get_thread_name().size()) return;
-    auto iter = trace_data.id_map.find(node);
+    auto iter = trace_data.id_map.find(node->id);
     if (iter == trace_data.id_map.end())
         return;
     auto node_id = iter->second;
-    id_map.erase(node);
+    id_map.erase(node->id);
     if (trace_py_var < 2 || execute_op_info.size() > 100000) {
         node_data.erase(node_id);
     }
@@ -795,7 +795,7 @@ void clear_trace_data() {
 
 string _get_stack_info(Node* node, const char* change_line) {
     string stack_info = "";
-    auto iter = trace_data.id_map.find(node);
+    auto iter = trace_data.id_map.find(node->id);
     if (iter == trace_data.id_map.end())
         return stack_info;
     auto node_id = iter->second;
@@ -818,7 +818,7 @@ void print_node_trace(const Node* node, std::ostream& os) {
 }
 
 vector<Stack> get_node_trace(Node* node) {
-    auto iter = trace_data.id_map.find(node);
+    auto iter = trace_data.id_map.find(node->id);
     if (iter == trace_data.id_map.end())
         return vector<Stack>();
     auto node_id = iter->second;

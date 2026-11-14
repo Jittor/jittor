@@ -98,6 +98,9 @@ ENVIRONMENT_SKIP_PATTERNS = (
     "vllm",
     # The safetensors format tests: the optional package is not installed.
     "safetensors",
+    # NumPy 2 removed the experimental namespace used by the vendored
+    # einops indexing cases; importorskip records this version prerequisite.
+    "requires numpy 1.x array api",
     # Facts about the *runner* rather than the machine's hardware: a case that
     # asserts directory permissions cannot hold when the suite runs as root,
     # because root bypasses them.

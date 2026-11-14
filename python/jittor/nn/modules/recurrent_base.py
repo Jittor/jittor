@@ -70,10 +70,12 @@ class RNNBase(jt.Module):
     def _cudnn_flatten_weights(self, cudnn_mode):
         def copy_to_flatten_weight(param_name, offset_idx, num_gates):
             def copy_to(param_name, offset_idx, idx):
+                nonlocal ft_weight
                 cur_offset = self._cudnn_weight_offset[offset_idx]
                 param = getattr(self, param_name)
                 param = param[self.hidden_size * idx: self.hidden_size * (idx + 1)]
-                ft_weight[cur_offset:cur_offset + param.numel()] = param.flatten()
+                ft_weight = jt.setitem(ft_weight,
+                    slice(cur_offset, cur_offset + param.numel()), param.flatten())
 
             if self.bias:
                 for idx in range(num_gates):
@@ -111,11 +113,8 @@ class RNNBase(jt.Module):
 
         num_gates = {"RNN": 1, "LSTM": 4, "GRU": 3}[self.mode]
         ft_weight = jt.zeros(self._cudnn_weight_size, dtype=dtype)
-        # Explicit-requires-grad frontends create constant zero buffers. The
-        # following indexed assignments must retain the parameter-copy graph,
-        # rather than preserving a stopped destination through every write.
-        if any(parameter.requires_grad for parameter in self.parameters()):
-            ft_weight.start_grad()
+        # Functional writes retain the parameter-copy graph under both
+        # autograd policies, without mutating a fresh trainable leaf.
         cnt = 0
         for layer in range(self.num_layers):
             suffix = ''

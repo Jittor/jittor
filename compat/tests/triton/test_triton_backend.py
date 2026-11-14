@@ -443,6 +443,9 @@ class TestOptionalPointerPacking(unittest.TestCase):
                     if compiler:
                         (package / "compiler").mkdir(exist_ok=True)
                         (package / "compiler/__init__.py").write_text("raise RuntimeError('compiler failed')\n")
+                        # A preceding negative lookup may still be cached when
+                        # the directory timestamp has not advanced.
+                        importlib.invalidate_caches()
                     owner = types.SimpleNamespace(__triton_shim__=marker)
                     with mock.patch.dict(sys.modules, {"triton": owner}):
                         scope = dict(importlib=importlib, sys=sys)

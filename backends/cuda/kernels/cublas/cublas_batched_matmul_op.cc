@@ -135,7 +135,16 @@ void CublasBatchedMatmulOp::jit_prepare(JK& jk) {
 #ifdef JIT_cuda
 #pragma clang diagnostic ignored "-Wtautological-compare"
 void CublasBatchedMatmulOp::jit_run() {
+    if (!c->num) return;
     cublasHandle_t handle_ = cublas_bind_stream();
+    // Zero inner dimensions need a zero fill, not a GEMM with invalid
+    // leading dimensions. Use the bound stream so dependent ops see it.
+    if (!a->num || !b->num) {
+        cudaStream_t stream;
+        checkCudaErrors(cublasGetStream(handle_, &stream));
+        checkCudaErrors(cudaMemsetAsync(c->ptr<T>(), 0, c->size, stream));
+        return;
+    }
     const T alpha = 1.0f;
     const T beta  = 0.0f;
     const float alpha_f = 1.0f;

@@ -229,12 +229,14 @@ def _resolve_tensor_state(jittor_module):
 
 def get_tensor_state(jittor_module):
     """Return the active-owner state, resolving it again only after a rebind."""
-    owner = compatibility_owner(jittor_module)
     try:
         cached = _STATE_CACHE.get(jittor_module)
     except TypeError:
         cached = None
-    if cached is not None and cached[0]() is owner:
+    # Binding and transaction rollback clear this cache together with the
+    # owner cache. A live hit already names that binding's owner; resolving it
+    # again pays for a second lookup on every leaf/gradient operation.
+    if cached is not None and cached[0]() is not None:
         return cached[1]
     return _resolve_tensor_state(jittor_module)
 

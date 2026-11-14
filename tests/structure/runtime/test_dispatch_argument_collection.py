@@ -18,12 +18,41 @@ that has one, and `DispatchContext.dtypes` is matched positionally against a
 kernel's declared dtypes.
 """
 import unittest
+from functools import wraps
+from types import SimpleNamespace
+from unittest import mock
 
 import jittor as jt
-from jittor._runtime.dispatch import dispatch_context
+from jittor._runtime.dispatch import _query_backend, dispatch_context
 
 
 class TestArgumentCollection(unittest.TestCase):
+    def test_backend_query_keeps_nested_collection_and_cycle_checks(self):
+        tensor = jt.zeros((2,), "float32")
+        args = ([tensor, (tensor,)], {"weight": tensor})
+        before = (tensor.location(), jt.introspection.counters.live_ops,
+                  jt.introspection.counters.held_vars)
+        self.assertEqual(_query_backend(dispatch_context, *args),
+                         dispatch_context(*args).backend)
+        self.assertEqual((tensor.location(), jt.introspection.counters.live_ops,
+                          jt.introspection.counters.held_vars), before)
+        cycle = [tensor]
+        cycle.append(cycle)
+        with self.assertRaisesRegex(ValueError, "cyclic"):
+            _query_backend(dispatch_context, cycle)
+
+    def test_backend_query_calls_replaced_and_wrapped_dispatchers(self):
+        replacement = mock.Mock(return_value=SimpleNamespace(backend="test"))
+
+        @wraps(dispatch_context)
+        def wrapped(*args, **kwargs):
+            return replacement(*args, **kwargs)
+
+        for query in (replacement, wrapped):
+            replacement.reset_mock()
+            self.assertEqual(_query_backend(query, 3, weight=None), "test")
+            replacement.assert_called_once_with(3, weight=None)
+
     def _dtypes(self, *args, **kwargs):
         return dispatch_context(*args, **kwargs).dtypes
 
