@@ -287,6 +287,28 @@ class TestTritonBackend(unittest.TestCase):
             add_kernel[(triton.cdiv(n, BLOCK),)](x, y, out, n, BLOCK=BLOCK)
             self.ac(out.numpy(), xn + yn, atol=1e-6, msg=f"add n={n}")
 
+    def test_c_launcher_matches_the_python_launch(self):
+        from jittor.compat.triton import fastlaunch
+        rs = np.random.RandomState(7)
+        xn, yn = rs.randn(1000).astype("float32"), rs.randn(1000).astype("float32")
+        outputs = {}
+        for flag in ("1", "0"):
+            fastlaunch._tried = False
+            fastlaunch._module = None
+            with mock.patch.dict(os.environ,
+                                 {"JITTOR_TRITON_FASTLAUNCH": flag}):
+                if flag == "1" and fastlaunch.load() is None:
+                    self.skipTest("the C launcher could not be built here")
+                x, y = jt.array(xn), jt.array(yn)
+                out = jt.zeros(1000, dtype="float32")
+                add_kernel[(triton.cdiv(1000, 256),)](x, y, out, 1000,
+                                                      BLOCK=256)
+                outputs[flag] = np.asarray(out.numpy())
+        fastlaunch._tried = False
+        fastlaunch._module = None
+        self.ac(outputs["1"], outputs["0"], atol=0,
+                msg="C launcher against the ctypes launch")
+
     def test_optional_pointers_preserve_branches_abi_and_cached_variants(self):
         from jittor.compat.triton import backend as bridge
         values = np.arange(97, dtype=np.float32) + 0.25
