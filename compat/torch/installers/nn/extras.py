@@ -33,7 +33,19 @@ def sdpa_kernel(backends, set_priority=False):
     if invalid:
         raise ValueError(
             "sdpa_kernel expects torch.nn.attention.SDPBackend values, got {!r}".format(invalid))
-    yield
+    from ...context import get_install_context
+    cuda = get_install_context(jt).target_namespace.backends.cuda
+    names = ('flash', 'mem_efficient', 'math', 'cudnn')
+    choices = (SDPBackend.FLASH_ATTENTION, SDPBackend.EFFICIENT_ATTENTION,
+               SDPBackend.MATH, SDPBackend.CUDNN_ATTENTION)
+    previous = [getattr(cuda, name+'_sdp_enabled')() for name in names]
+    try:
+        for name, choice in zip(names, choices):
+            getattr(cuda, 'enable_'+name+'_sdp')(choice in backends)
+        yield
+    finally:
+        for name, enabled in zip(names, previous):
+            getattr(cuda, 'enable_'+name+'_sdp')(enabled)
 
 
 def _api_fuse_conv_bn_weights(conv_w, conv_b, bn_rm, bn_rv, bn_eps, bn_w, bn_b):
@@ -638,8 +650,8 @@ def _install_nn_extras(nn, registry=None):
         "the complete Torch process-group and bucket interface is not supported")
     register_api_bindings(
         attn_mod, "torch.nn.attention", ("SDPBackend", "sdpa_kernel"),
-        Fidelity.APPROXIMATE, "Backend selection is accepted for import and call "
-        "compatibility; Jittor dispatches one native SDPA implementation regardless of backend")
+        Fidelity.APPROXIMATE, "Scopes constrain available SDPA engines; source, dtype, "
+        "device and priority-ordering restrictions apply")
     for _path, _names in (
         ("torch.nn.attention.flex_attention", ("flex_attention", "create_block_mask",
          "and_masks", "or_masks", "noop_mask")),

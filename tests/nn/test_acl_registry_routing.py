@@ -309,7 +309,8 @@ def test_softmax_uses_existing_key_after_public_axis_validation(routing, monkeyp
 def test_sdpa_validates_dtype_and_dropout_before_registered_attention(routing):
     function = _definitions("nn/functional/attention.py",
                             ["causal_mask_rewrite", "_exactly_causal",
-                             "scaled_dot_product_attention", "_shape", "_repeated_heads",
+                             "scaled_dot_product_attention", "_scaled_dot_product_attention",
+                             "_shape", "_repeated_heads",
                              "_expand_heads"],
                             routing.namespace)["scaled_dot_product_attention"]
     routing.register("nn.scaled_dot_product_attention")

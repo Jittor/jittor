@@ -1123,9 +1123,19 @@ class _CudnnBackendModule(_types.ModuleType):
 
 
 class _SDPKernel:
-    def __init__(self, *a, **k): pass
-    def __enter__(self): return self
-    def __exit__(self, *a): return False
+    def __init__(self, enable_flash=True, enable_math=True,
+                 enable_mem_efficient=True, enable_cudnn=True):
+        self.requested = dict(flash=bool(enable_flash), math=bool(enable_math),
+                              mem_efficient=bool(enable_mem_efficient), cudnn=bool(enable_cudnn))
+
+    def __enter__(self):
+        self.previous = _SDP_BACKEND_FLAGS.copy()
+        _SDP_BACKEND_FLAGS.update(self.requested)
+        return self
+
+    def __exit__(self, *args):
+        _SDP_BACKEND_FLAGS.update(self.previous)
+        return False
 
 
 class _MatmulBackend:
@@ -1576,21 +1586,19 @@ def _api_cudnn_version():
     return None
 
 
-def _api_cuda_backend_sdp_kernel(*a, **k):
-    return _SDPKernel()
+def _api_cuda_backend_sdp_kernel(enable_flash=True, enable_math=True,
+                                  enable_mem_efficient=True, enable_cudnn=True):
+    return _SDPKernel(enable_flash, enable_math, enable_mem_efficient, enable_cudnn)
 
 
-#: torch's four SDPA backend switches. Attention here picks its own kernel, so
-#: these only record the requested state -- but torch pairs every setter with a
-#: getter, and callers read it back (MiniMax-H3's encoder saves
-#: `cudnn_sdp_enabled()`, forces cuDNN SDPA on, and restores the saved value).
-#: There is no cuDNN fused SDPA here, so `cudnn_sdp_enabled()` defaults to False;
-#: the other three match torch's defaults.
+#: The attention frontend honors explicit policies before its automatic route
+#: cache. Enabling an engine does not establish that its source, dtype and
+#: device requirements are available. Defaults allow all engines, as in Torch.
 _SDP_BACKEND_FLAGS = {
     "flash": True,
     "mem_efficient": True,
     "math": True,
-    "cudnn": False,
+    "cudnn": True,
 }
 
 

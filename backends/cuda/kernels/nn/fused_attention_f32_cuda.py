@@ -1050,6 +1050,9 @@ def _fused_attention_f32(query, key, value, attn_mask=None, dropout_p=0.0,
 
 
 register_kernel("nn.fused_attention", "cuda", _fused_attention_f32, supports=_supports)
+register_kernel("nn.memory_efficient_attention", "cuda", _fused_attention_f32,
+                supports=lambda query, key, value, **kwargs:
+                    all(_jittor_dtype_name(t.dtype) == 'float32' for t in (query, key, value)))
 
 
 def _fused_attention_f32_gqa(query, key, value, **kwargs):

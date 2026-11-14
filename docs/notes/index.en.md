@@ -33,6 +33,7 @@ Understand when work executes, inspect runtime state without changing it, and le
 - [Pipelined lazy execution](runtime/pipelined-execution.en.md)
 - [Runtime introspection](runtime/runtime-introspection.en.md)
 - [CUDA library plan caches](runtime/cuda-library-plan-caches.en.md)
+- [CUTLASS memory-efficient attention](runtime/efficient-attention.en.md)
 
 <!-- sphinx-only
 ```{toctree}
@@ -42,5 +43,6 @@ Understand when work executes, inspect runtime state without changing it, and le
 runtime/pipelined-execution.en
 runtime/runtime-introspection.en
 runtime/cuda-library-plan-caches.en
+runtime/efficient-attention.en
 ```
 -->
