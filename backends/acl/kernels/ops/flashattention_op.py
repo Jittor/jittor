@@ -358,6 +358,29 @@ def _supports_prompt_prefill(q_shape, k_shape, dtype_name, training, is_causal, 
     )
 
 
+def _supports_prompt_full_910b(q_shape, k_shape, dtype_name, training, is_causal, attn_mask):
+    """The full (non-causal) fp16 batch the 910B PromptFlashAttention path serves.
+
+    Same padded prefill as the 310P subset: equal Q/K shapes, a 128-multiple
+    sequence, and the padding columns dropped by the mask.  On a 910B3 this
+    measured 0.3-1.1 ms at [1, 32, 1797, 64] against 2.5 ms for the
+    FlashAttentionScoreV2 dispatch.
+    """
+    padded = (int(q_shape[-2]) + 127) // 128 * 128
+    return (
+        not training and dtype_name == "float16" and not is_causal
+        and attn_mask is None
+        and len(q_shape) == 4 and tuple(q_shape) == tuple(k_shape)
+        and 1 < int(q_shape[-2])
+        and padded <= 65535
+        and 0 < int(q_shape[0]) <= 128
+        and 0 < int(q_shape[1]) <= 256
+        and int(q_shape[-1]) % 16 == 0
+        and soc_name().startswith("Ascend910B")
+        and kernel_available("PromptFlashAttention")
+    )
+
+
 def _prompt_causal_mask(query, query_length, padded_length):
     return _prompt_mask(query, query_length, padded_length, True)
 
@@ -454,7 +477,7 @@ def _prompt_pad_sequence(tensor, padding):
     return jt.concat((tensor, zero), dim=-2)
 
 
-def _prompt_prefill_310p(query, key, value, scale_factor, is_causal=True):
+def _prompt_prefill_padded(query, key, value, scale_factor, is_causal=True):
     batch, query_heads, length, head_dim = map(int, query.shape)
     key_heads = int(key.shape[1])
     padded_length = (length + 127) // 128 * 128
@@ -571,7 +594,12 @@ def scaled_dot_product_attention_acl(
             # padding/mask or actual-sequence-length attributes are required.
             query, key, value = (tensor.contiguous() for tensor in (query, key, value))
             return PromptFlashAttentionACL(query_heads, scale_factor, is_causal=False)(query, key, value)
-        return _prompt_prefill_310p(query, key, value, scale_factor, is_causal=is_causal)
+        return _prompt_prefill_padded(query, key, value, scale_factor, is_causal=is_causal)
+
+    if _supports_prompt_full_910b(q_shape, k_shape, dtype_name, training, is_causal, attn_mask):
+        scale_factor = 1.0 / math.sqrt(head_dim) if scale is None else float(scale)
+        scaled_dot_product_attention_acl.backend_name = "acl_prompt_flash_attention_v3"
+        return _prompt_prefill_padded(query, key, value, scale_factor, is_causal=False)
 
     # 310P has incremental attention even though FlashAttentionScore is absent.
     # Static KV caches carry a head-shared boolean mask on each decode step.
