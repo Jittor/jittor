@@ -279,6 +279,8 @@ include backends/cuda/kernels/cutt/cutt_transpose_op.h
 include backends/cuda/kernels/debug/nan_checker.cu
 include backends/cuda/kernels/math/src/gamma_grad.h
 include backends/cuda/kernels/nn/cudnn_sdpa.cc
+include backends/cuda/kernels/nn/efficient_attention.cu
+include backends/cuda/kernels/nn/efficient_attention.h
 include backends/cuda/kernels/nn/fused_attention_f32_vjp.cc
 include backends/cuda/libraries/cub/include/cub_test.h
 include backends/cuda/libraries/cublas/include/cublas_compute_type.h
@@ -466,6 +468,8 @@ include docs/notes/numerics/numerics-contract.en.md
 include docs/notes/numerics/numerics-contract.md
 include docs/notes/runtime/cuda-library-plan-caches.en.md
 include docs/notes/runtime/cuda-library-plan-caches.md
+include docs/notes/runtime/efficient-attention.en.md
+include docs/notes/runtime/efficient-attention.md
 include docs/notes/runtime/pipelined-execution.en.md
 include docs/notes/runtime/pipelined-execution.md
 include docs/notes/runtime/runtime-introspection.en.md

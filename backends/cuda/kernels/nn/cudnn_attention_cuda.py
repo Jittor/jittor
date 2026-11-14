@@ -523,6 +523,7 @@ def _supports(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False,
 # would take a float16 call off this kernel. `supports` looks at the query
 # only, which also keeps float32 for `fused_attention_f32_cuda.py`.
 register_kernel("nn.fused_attention", "cuda", _cudnn_fused_attention, supports=_supports)
+register_kernel("nn.cudnn_attention", "cuda", _cudnn_fused_attention, supports=_supports)
 
 
 def _cudnn_fused_attention_gqa(query, key, value, **kwargs):
