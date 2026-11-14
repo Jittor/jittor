@@ -37,6 +37,7 @@ TernaryOp::TernaryOp(Var* cond, Var* x, Var* y) : cond(cond), x(x), y(y) {
         NanoVector axes;
         vector<VarPtr> sources;
         if (storage_layout_operands({cond, x, y}, axes, sources)) {
+            StorageLayoutRewriteScope rewrite_scope;
             forward(storage_view_transpose(
                 make_ternary(sources[0], sources[1], sources[2]), axes));
             return;

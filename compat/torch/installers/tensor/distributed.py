@@ -63,18 +63,42 @@ def _ddp_all_reduce_grads(leaves):
 
 def _ddp_all_reduce_grouped(pending):
     from importlib import import_module
+    from ...context import get_install_context
     owner = import_module(__package__)
     from jittor._runtime import step_capture
     state = pending[0][2]
     cap = getattr(state, 'bucket_cap_bytes', 25 * 1024**2)
     ops = getattr(owner.jt.compile_extern, 'nccl_ops', None)
-    if (state is not None and step_capture.active()
+    bucketed = (state is not None
             and all(item[2] is state for item in pending)
             and all(str(item[1].dtype).rsplit('.', 1)[-1] == 'float32' for item in pending)
             and sum(grad.numel()*grad.element_size() for _, grad, _ in pending) >= cap
             and callable(getattr(ops, 'nccl_all_reduce_deferred', None))
-            and callable(getattr(ops, 'nccl_wait_many', None))):
-        gradients = [grad for _, grad, _ in reversed(pending)]
+            and callable(getattr(ops, 'nccl_wait_many', None)))
+    if bucketed and not step_capture.active() and not hasattr(state, 'bucket_param_order'):
+        # Registration order can place shared, late gradients first (e.g.
+        # relative-position embeddings), blocking all subsequent buckets.
+        # Build once during the ordinary warmup, before tracing. Only rank
+        # zero's metadata order is authoritative: local graph IDs differ.
+        estimates = owner.jt.core._gradient_producer_orders([g for _, g, _ in pending])
+        indices = sorted(range(len(pending)), key=lambda i: (estimates[i], -pending[i][0]))
+        ordered = [pending[i][0] for i in indices]
+        context = get_install_context(owner.jt)
+        target = context.target_namespace
+        tensor = target.tensor(ordered, dtype=target.int64,
+                               device='cuda:%d' % owner.jt.core.current_device())
+        agreed = ops.nccl_broadcast(tensor, 0).cpu().numpy().reshape(-1).tolist()
+        if sorted(agreed) != sorted(order for order, _, _ in pending):
+            raise RuntimeError('DDP bucket order does not cover the same parameters on every rank')
+        state.bucket_param_order = tuple(int(order) for order in agreed)
+    if bucketed and step_capture.active():
+        order = getattr(state, 'bucket_param_order', None)
+        lookup = {index: grad for index, grad, _ in pending}
+        if order is not None and set(order) == set(lookup):
+            gradients = [lookup[index] for index in order]
+            step_capture.guard(lambda s=state: s.bucket_param_order)
+        else:
+            gradients = [grad for _, grad, _ in reversed(pending)]
         reduced = owner._collectives._all_reduce_mean_bucketed(gradients, cap)
         for grad, value in zip(gradients, reduced):
             grad.assign(value)

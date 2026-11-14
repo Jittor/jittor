@@ -1083,6 +1083,11 @@ Returns a handle that removes both halves.
                 else:
                     # assume is pytorch tensor
                     param = array(params[key].cpu().detach().numpy())
+                if (key.endswith("num_batches_tracked") and param.ndim == 0
+                        and tuple(v.shape) == (1,)):
+                    # Native BatchNorm keeps its non-persistent legacy counter
+                    # as one element; Torch checkpoints store a scalar.
+                    param = param.reshape(v.shape)
                 if param.shape == v.shape:
                     LOG.v(f'load parameter {key} success ...')
                     v.update(param)

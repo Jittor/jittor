@@ -28,6 +28,7 @@ STORE_SOURCE = (
 )
 _BASE_ENV = {
     "JITTOR_TORCH_SHIM": "1",
+    "REAL_TORCH_SITE": "",
     "JITTOR_TEST_DEVICES": "cpu",
     "nvcc_path": "",
     "use_cuda": "0",

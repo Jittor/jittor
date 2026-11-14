@@ -120,6 +120,7 @@ size_t cudnn_rnn_reserve_space_size(string mode, int input_size, int hidden_size
 }
 
 vector<int32_t> cudnn_rnn_weight_offset(string mode, int input_size, int hidden_size, int num_layers, int proj_size, bool bias, bool bidirectional, string dtype) {
+    auto handle = cudnn_bind_stream();
     // The offsets and the flat size are in *elements* of the weight dtype, so
     // they depend on it. This used to be fp32 throughout, which is why the
     // caller could only ever build an fp32 flat weight.
@@ -130,7 +131,7 @@ vector<int32_t> cudnn_rnn_weight_offset(string mode, int input_size, int hidden_
     // v6 needed a pseudo mini-batch descriptor to be told the weight space
     // size, and a filter descriptor to be told where the pieces are. v8 knows
     // both from the RNN descriptor.
-    RnnDescriptor rnn_desc(cudnn_handle, mode, input_size, hidden_size,
+    RnnDescriptor rnn_desc(handle, mode, input_size, hidden_size,
         num_layers, 0, bidirectional, data_type);
     size_t weightSpaceSize = rnn_desc.weight_space_size();
 
@@ -140,7 +141,9 @@ vector<int32_t> cudnn_rnn_weight_offset(string mode, int input_size, int hidden_
     // so hand it a real buffer and subtract its base. Nothing is read or
     // written through it -- cuDNN only does the arithmetic -- and it is freed
     // on the way out of this function.
-    CudnnWorkspace weight_space(weightSpaceSize);
+    // This metadata query runs in the module constructor, before an executor
+    // batch has selected its temporary allocator.
+    CudnnWorkspace weight_space(weightSpaceSize, get_allocator(true));
     char *weight_base = (char *)weight_space.ptr;
 
     vector<int> weight_offsets;
@@ -160,7 +163,7 @@ vector<int32_t> cudnn_rnn_weight_offset(string mode, int input_size, int hidden_
             void *linLayerBias = nullptr;
 
             checkCudaErrors(cudnnGetRNNWeightParams(
-                cudnn_handle, rnn_desc.desc,
+                handle, rnn_desc.desc,
                 layer,
                 weightSpaceSize,
                 weight_base,

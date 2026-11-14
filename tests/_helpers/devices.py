@@ -7,6 +7,19 @@ from _helpers import capability as _test_capability
 import unittest
 
 import jittor as jt
+from contextlib import contextmanager
+
+
+@contextmanager
+def explicit_tensor_placement(backend, device=0):
+    """Restore both tensor and construction placement after a scoped test."""
+    token = jt.core._set_tensor_placement(backend, device)
+    previous = jt.core._set_construction_placement(backend, device)
+    try:
+        yield
+    finally:
+        jt.core._restore_construction_placement(previous)
+        jt.core._reset_tensor_placement(token)
 
 
 def cuda_test_case(use_cuda=1):

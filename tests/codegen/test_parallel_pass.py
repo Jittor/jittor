@@ -77,11 +77,13 @@ class TestParallelPass(unittest.TestCase):
         cu = asm.count_instructions(func_name, "vmovu")
         return ca, cu
 
+    @jt.flag_scope(use_cuda=0)
     def test_int32_align(self):
         ca, cu = self.check(1)
         if jt.introspection.policy.startup.cc_type=="clang":
             assert ca>1 and cu<=1, (ca, cu)
     
+    @jt.flag_scope(use_cuda=0)
     def test_int64_align(self):
         ca, cu = self.check(0)
         if jt.introspection.policy.startup.cc_type=="clang":
@@ -116,6 +118,7 @@ class TestParallelPass2(TestParallelPass):
         return ca, cu
 
 class TestParallelPass3(unittest.TestCase):
+    @jt.flag_scope(use_cuda=0)
     def test(self):
         def check(ndim, depth, tdim):
             a = jt.random([16]*ndim)
@@ -320,6 +323,7 @@ class TestParallelPass3(unittest.TestCase):
         check(4, 2, 2, [2,3], 0)
         check(4, 2, 2, [0,3], 1)
 
+    @jt.flag_scope(use_cuda=0)
     def test_reduce_with_merge_loop_var(self):
         self.merge_loop_var = 1
         check = lambda *a, **kw: self.reduce_check(*a, **kw)

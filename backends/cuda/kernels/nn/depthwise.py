@@ -11,6 +11,14 @@ def depthwise_forward(x, weight, output_shape, stride, padding, dilation):
             x.dtype,
             [x, weight],
             cuda_header = """
+        template <typename T>
+        __device__ __forceinline__ T jt_depthwise_accumulate(T weight, T input, T sum) {
+            return sum + weight * input;
+        }
+        __device__ __forceinline__ float jt_depthwise_accumulate(
+                float weight, float input, float sum) {
+            return fmaf(weight, input, sum);
+        }
         template <typename T,
             int filter_height,
             int filter_width,
@@ -57,7 +65,8 @@ def depthwise_forward(x, weight, output_shape, stride, padding, dilation):
                             if (h_in >= 0 && h_in < input_height && w_in >= 0 &&
                                 w_in < input_width) {
                                 const int offset = in_offset + h_in * input_width + w_in;
-                                value += r_weight[h_f * filter_width + w_f] * input_data[offset];
+                                value = jt_depthwise_accumulate(
+                                    r_weight[h_f * filter_width + w_f], input_data[offset], value);
                             }
                         }
                     }

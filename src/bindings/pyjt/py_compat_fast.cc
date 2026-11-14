@@ -201,7 +201,7 @@ bool optimizer_function_bindings(PyObject* function, PyObject* expected) {
 }
 
 bool optimizer_adam_protocol(PyObject* protocol, PyObject* types) {
-    if (!PyTuple_CheckExact(protocol) || PyTuple_GET_SIZE(protocol) != 10
+    if (!PyTuple_CheckExact(protocol) || PyTuple_GET_SIZE(protocol) != 11
             || !PyTuple_CheckExact(types) || PyTuple_GET_SIZE(types) != 3)
         return false;
     auto* step_type = PyTuple_GET_ITEM(protocol, 0);
@@ -221,8 +221,25 @@ bool optimizer_adam_protocol(PyObject* protocol, PyObject* types) {
                 || !optimizer_function_code(method, PyTuple_GET_ITEM(contract, 3)))
             return false;
     }
-    if (optimizer_type_field(step_type, "value")
-            || optimizer_type_field(step_type, "counter")) return false;
+    // Only private, detached epoch counters can bypass the Python property.
+    // Guard the property and its accessor code, not just the containing class.
+    auto* property_contract = PyTuple_GET_ITEM(protocol, 10);
+    if (!PyTuple_CheckExact(property_contract) || PyTuple_GET_SIZE(property_contract) != 5)
+        return false;
+    auto* property = PyTuple_GET_ITEM(property_contract, 0);
+    if (optimizer_type_field(step_type, "value") != property
+            || Py_TYPE(property) != &PyProperty_Type
+            || optimizer_type_field(step_type, "counter")
+            || optimizer_type_field(step_type, "_value")
+            || optimizer_type_field(step_type, "_capture_epoch")) return false;
+    PyObjHolder getter, setter;
+    getter.obj = PyObject_GetAttrString(property, "fget");
+    setter.obj = PyObject_GetAttrString(property, "fset");
+    if (getter.obj != PyTuple_GET_ITEM(property_contract, 1)
+            || setter.obj != PyTuple_GET_ITEM(property_contract, 3)
+            || !optimizer_function_code(getter.obj, PyTuple_GET_ITEM(property_contract, 2))
+            || !optimizer_function_code(setter.obj, PyTuple_GET_ITEM(property_contract, 4)))
+        return false;
     auto* globals = PyTuple_GET_ITEM(protocol, 7);
     if (!optimizer_string_keys(globals)
             || PyDict_GetItemString(globals, "_AdamStep") != step_type
@@ -240,12 +257,16 @@ bool optimizer_adam_protocol(PyObject* protocol, PyObject* types) {
     auto* int_method = optimizer_type_field(step_type, "__int__");
     auto* set_method = optimizer_type_field(steps_type, "__setitem__");
     if (!optimizer_function_bindings(int_method, builtins)
-            || !optimizer_function_bindings(set_method, builtins)) return false;
-    auto* getter = PyTuple_GET_ITEM(protocol, 6);
-    if (!PyTuple_CheckExact(getter) || PyTuple_GET_SIZE(getter) != 2
-            || !optimizer_function_code(PyTuple_GET_ITEM(getter, 0),
-                                        PyTuple_GET_ITEM(getter, 1))) return false;
-    auto* function = PyTuple_GET_ITEM(getter, 0);
+            || !optimizer_function_bindings(set_method, builtins)
+            || !optimizer_function_bindings(getter.obj, builtins)
+            || !optimizer_function_bindings(setter.obj, builtins)
+            || !optimizer_function_bindings(
+                optimizer_type_field(step_type, "_detach_capture_epoch"), builtins)) return false;
+    auto* grad_getter = PyTuple_GET_ITEM(protocol, 6);
+    if (!PyTuple_CheckExact(grad_getter) || PyTuple_GET_SIZE(grad_getter) != 2
+            || !optimizer_function_code(PyTuple_GET_ITEM(grad_getter, 0),
+                                        PyTuple_GET_ITEM(grad_getter, 1))) return false;
+    auto* function = PyTuple_GET_ITEM(grad_getter, 0);
     if (!optimizer_function_bindings(function, builtins)) return false;
     for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(types); ++i) {
         auto* type = PyTuple_GET_ITEM(types, i);
@@ -272,9 +293,11 @@ PyObject* optimizer_adam_counter(PyObject* value, PyObject* step_type,
     if ((PyObject*)Py_TYPE(value) != step_type) return nullptr;
     auto** pointer = _PyObject_GetDictPtr(value);
     if (!pointer || !*pointer || !optimizer_string_keys(*pointer)
-            || PyDict_GetItemString(*pointer, "set")) return nullptr;
+            || PyDict_GetItemString(*pointer, "set")
+            || PyDict_GetItemString(*pointer, "_detach_capture_epoch")
+            || PyDict_GetItemString(*pointer, "_capture_epoch") != Py_None) return nullptr;
     auto* counter = PyDict_GetItemString(*pointer, "counter");
-    auto* number = PyDict_GetItemString(*pointer, "value");
+    auto* number = PyDict_GetItemString(*pointer, "_value");
     return counter == Py_None && number && PyLong_CheckExact(number) ? number : nullptr;
 }
 }
@@ -346,7 +369,7 @@ PyObject* try_optimizer_adam_entries(PyObject* group, PyObject* gradients,
             one.obj = PyLong_FromLong(1);
             if (!one.obj) return nullptr;
             next.obj = PyNumber_Add(number, one.obj);
-            if (!next.obj || PyDict_SetItemString(*_PyObject_GetDictPtr(counter), "value", next.obj) < 0)
+            if (!next.obj || PyDict_SetItemString(*_PyObject_GetDictPtr(counter), "_value", next.obj) < 0)
                 return nullptr;
             auto* index = PyList_GET_ITEM(result.obj, i);
             Py_INCREF(index);
@@ -557,7 +580,7 @@ bool try_publish_fresh_gradients(PyObject* groups, PyObject* gradients,
     PyObject* filled, PyObject* types, PyObject* metadata_protocol,
     PyObject* state_protocol) {
     if (graph_capture_active() || !PyList_CheckExact(groups)
-            || !PyDict_CheckExact(gradients) || !PySet_CheckExact(filled)
+            || !PyDict_CheckExact(gradients) || Py_TYPE(filled) != &PySet_Type
             || PySet_Size(filled) != 0) return false;
     // Allocate the only tracked container before checking live metadata.
     // The remaining validation and slot writes invoke no Python callbacks or

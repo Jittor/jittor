@@ -68,6 +68,16 @@ def _adam_state_shape_changes(params, moments, variances):
     return resized
 
 
+class _CaptureStepEpoch:
+    """A shared increment for private integer slots, with no tensor owners."""
+
+    def __init__(self, indices, uniform):
+        self.indices = indices
+        self.count = 0
+        self.uniform = uniform
+        self.valid = True
+
+
 class _AdamStep:
     """Keep native bookkeeping until a caller asks for the tensor state.
 
@@ -76,13 +86,44 @@ class _AdamStep:
     Unobserved counters keep ordinary optimizer capture free of host reads.
     """
     def __init__(self, value, *, device=None, dtype=None):
+        self._capture_epoch = None
         self.counter = value if isinstance(value, jt.Var) else None
-        self.value = value if self.counter is None else None
+        self._value = value if self.counter is None else None
         self.device = device
         self.dtype = dtype
 
+    @property
+    def value(self):
+        epoch = getattr(self, '_capture_epoch', None)
+        return self._value if epoch is None else self._value + epoch.count
+
+    @value.setter
+    def value(self, value):
+        self._detach_capture_epoch()
+        self._value = value
+
+    def _detach_capture_epoch(self):
+        epoch = getattr(self, '_capture_epoch', None)
+        if epoch is not None:
+            self._value += epoch.count
+            epoch.valid = False
+            self._capture_epoch = None
+
+    def __getstate__(self):
+        state = dict(self.__dict__)
+        state['value'] = self.value
+        state.pop('_value', None)
+        state.pop('_capture_epoch', None)
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        self._value = self.__dict__.pop('value', self.__dict__.get('_value'))
+        self._capture_epoch = None
+
     def tensor(self):
         if self.counter is None:
+            self._detach_capture_epoch()
             g = get_install_context(jt).target_namespace
             self.counter = g.tensor(float(self.value), dtype=self.dtype, device=self.device)
         return self.counter
@@ -113,7 +154,17 @@ class _AdamSteps(list):
     """
     def __init__(self, group, values):
         super().__init__(values)
+        self._capture_epoch = None
         self.configure(group)
+
+    def __getstate__(self):
+        state = dict(self.__dict__)
+        state.pop('_capture_epoch', None)
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        self._capture_epoch = None
 
     def configure(self, group):
         # Do not retain the owning dict: it owns this list, and a cycle would
@@ -124,8 +175,48 @@ class _AdamSteps(list):
         self.devices = (tuple(parameter.device for parameter in group["params"])
                         if self.fused else ())
 
+    def _advance_capture_steps(self, indices):
+        if type(self) is _AdamSteps and type(indices) in (list, tuple):
+            key = tuple(indices)
+            epoch = self._capture_epoch
+            if epoch is not None and epoch.valid and epoch.indices == key:
+                epoch.count += 1
+                return
+            items = [list.__getitem__(self, index) for index in key]
+            if (len(set(key)) == len(key)
+                    and len({id(old) for old in items}) == len(items)
+                    and all(type(old) is _AdamStep and old.counter is None
+                            and type(old.value) is int for old in items)):
+                epoch = _CaptureStepEpoch(key, len({old.value for old in items}) <= 1)
+                for old in items:
+                    old._detach_capture_epoch()
+                    old._capture_epoch = epoch
+                self._capture_epoch = epoch
+                epoch.count = 1
+                return
+        # Unobserved slots contain owned Python integers. Update those in
+        # place without calling int()/the tensor-aware setter per parameter.
+        # Exposed counters remain authoritative, including NumPy alias writes.
+        for index in indices:
+            old = list.__getitem__(self, index)
+            if type(old) is _AdamStep and old.counter is None and type(old.value) is int:
+                old.value += 1
+            else:
+                self[index] = int(old) + 1
+
+    def _capture_steps_uniform(self, indices):
+        key = tuple(indices)
+        epoch = self._capture_epoch
+        if epoch is not None and epoch.valid and epoch.indices == key:
+            return epoch.uniform
+        # Exposed counters can change through unversioned aliases. Their
+        # values stay authoritative; only private integer epochs are cached.
+        return len({int(self[index]) for index in key}) <= 1
+
     def __setitem__(self, index, value):
         old = self[index]
+        if isinstance(old, _AdamStep):
+            old._detach_capture_epoch()
         if isinstance(value, jt.Var):
             return super().__setitem__(index, _AdamStep(value))
         if isinstance(old, _AdamStep):
@@ -151,15 +242,17 @@ def _method_contract(owner, name):
 _ADAM_METADATA_PROTOCOL = (
     _AdamStep, _AdamSteps,
     tuple(_method_contract(owner, name) for owner, names in (
-        (_AdamStep, ("__int__", "set", "__getattribute__", "__setattr__", "__dict__")),
+        (_AdamStep, ("__int__", "set", "_detach_capture_epoch", "__getattribute__", "__setattr__", "__dict__")),
         (_AdamSteps, ("__getitem__", "__setitem__")),
     ) for name in names),
     _NATIVE_SHAPE, _NATIVE_REQUIRES_GRAD, _NATIVE_GETATTRIBUTE,
     (_rg_get, _rg_get.__code__), globals(), jt,
     tuple((name, value) for name, value in (
         ("int", int), ("list", list), ("zip", zip), ("enumerate", enumerate),
-        ("isinstance", isinstance), ("bool", bool), ("type", type),
+        ("isinstance", isinstance), ("bool", bool), ("type", type), ("getattr", getattr),
     )),
+    (_AdamStep.value, _AdamStep.value.fget, _AdamStep.value.fget.__code__,
+     _AdamStep.value.fset, _AdamStep.value.fset.__code__),
 )
 
 
@@ -335,6 +428,10 @@ def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay
                     stepped.append(i)
             lr_arg = lr
             if step_capture.active():   # a replay advances these without step()
+                if not decoupled_weight_decay:
+                    # A nonzero coupled Adam decay requires the ordinary
+                    # update; a live scalar must not change algorithm kind.
+                    step_capture.guard(lambda g=pg: g.get('weight_decay', self.weight_decay) == 0)
                 lr_arg = step_capture.live_fused_update(
                     fused_impl, lr, param_steps, stepped, lambda g=pg: g.get("lr", self.lr),
                     lambda g=pg: (tuple(g.get("betas", self.betas)),

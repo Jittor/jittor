@@ -88,7 +88,8 @@ atexit.register(_fail_if_a_late_call_arrived)
 '''
     result = run_child_script(
         script, directory=tmp_path, name="explicit_cpu_backend", timeout=600,
-        env={"JT_BACKEND": "cpu", "nvcc_path": "/must/not/probe/nvcc",
+        env={"JT_BACKEND": "cpu", "JT_USE_CUDA": "0",
+             "nvcc_path": "/must/not/probe/nvcc",
              "JTCUDA_AUTO_INSTALL": "1"}, without_torch_mode=True, text=True,
     )
     assert result.returncode == 0, result.stdout[-4000:] + result.stderr[-4000:]

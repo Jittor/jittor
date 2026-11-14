@@ -45,7 +45,9 @@ def compile(model=None, *args, **kwargs):
     instead of rebuilding it every call, and a function in a
     `jittor._runtime.step_capture.StepCapture`, which replays the whole call
     -- a training step's forward, backward and optimizer update included.
-    Calls needing an external backward keep the original CUDA autograd graph;
+    Training-mode no-grad modules replay their state transitions as steps;
+    eval modules use inference graph replay. Calls needing an external backward
+    keep the original CUDA autograd graph;
     function replay requires no_grad inference or a complete backward inside
     the call, with no differentiable caller inputs. Any other mode runs as written.
     """
@@ -133,10 +135,10 @@ class OptimizedModule(jt.nn.Module):
     The module is kept as ``_orig_mod``, as PyTorch keeps it, so state-dict
     keys and ``named_modules`` read the same, and every attribute this wrapper
     does not have is read from it. A call under ``no_grad`` goes through a
-    `GraphReplay` of the module: captured on first use, re-run afterwards, and
-    re-captured when the inputs' shapes, the training mode or a parameter
-    change. A call that records gradients runs the module as written -- a
-    replay carries none.
+    `GraphReplay` of an eval module, or a `StepCapture` of a training module
+    whose running buffers can change. Changes to shapes, mode or parameters
+    invalidate the respective replay. A call that records gradients runs the
+    module as written -- a replay carries none.
     """
 
     def __init__(self, mod):
@@ -146,6 +148,10 @@ class OptimizedModule(jt.nn.Module):
         # Written through __dict__: Module.__setattr__ classifies assignments
         # into parameters and buffers, and neither of these is one.
         self.__dict__["_replay"] = GraphReplay(mod)
+        from jittor._runtime.step_capture import StepCapture
+        # Training without autograd still mutates buffers such as BatchNorm
+        # moments. Replay the complete state transition, as a step function.
+        self.__dict__["_training_replay"] = StepCapture(mod, _guard_external_backward=True)
         # The wrapper is itself an outermost module call, and the automatic
         # policy would otherwise capture it around the explicit replay.
         auto = _AutoState()
@@ -154,6 +160,8 @@ class OptimizedModule(jt.nn.Module):
 
     def execute(self, *args, **kwargs):
         if jt.flags.no_grad:
+            if self._orig_mod.training:
+                return self.__dict__["_training_replay"](*args, **kwargs)
             return self.__dict__["_replay"](*args, **kwargs)
         return self._orig_mod(*args, **kwargs)
 

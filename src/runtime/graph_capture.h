@@ -49,24 +49,58 @@ void graph_pool_scope_end(int64 token);
 // @pyjt(graph_capture_begin)
 bool graph_capture_begin();
 
-/** Retained bytes for an admissible explicit CPU-prefix/H2D boundary, or -1.
- * Every CPU op is still executed on every launch. This is not constant folding.
+/** Retained bytes for an admissible CPU/H2D or dynamic-index prefix, or -1.
+ * The prefix is executed on every launch. This is not constant folding.
  */
 // @pyjt(graph_host_prefix_bytes)
-int64 graph_host_prefix_bytes(const vector<VarHolder*>& roots);
+int64 graph_host_prefix_bytes(const vector<VarHolder*>& roots, bool dynamic=false);
 
 /** Recompute an admissible CPU prefix/H2D, then capture its device suffix. */
 // @pyjt(graph_capture_begin_host_prefix)
-bool graph_capture_begin_host_prefix(const vector<VarHolder*>& roots);
+bool graph_capture_begin_host_prefix(const vector<VarHolder*>& roots, bool dynamic=false);
 
-/** Recompute CPU/H2D and launch, or false if its leaves moved after recompute.
- * On false the caller must release the recording before executor fallback.
+/** Recompute the read-only prefix and check its recorded shapes and addresses.
+ * No device suffix or training-state update runs. This lets training callers
+ * reject changed dynamic extents before advancing optimizer bookkeeping.
+ */
+// @pyjt(graph_prepare_host_prefix)
+bool graph_prepare_host_prefix(int64 graph, bool dynamic_only=false);
+
+// @pyjt(graph_has_dynamic_prefix)
+bool graph_has_dynamic_prefix(int64 graph);
+
+// Private training IR guards. 0 means no dynamic shape, -1 means staging is
+// not proven read-only. Positive tokens pin the dynamic subgraph and must be
+// sealed after the first step, checked before replay hooks, and released.
+// @pyjt(_step_shape_prefix_create)
+int64 step_shape_prefix_create(const vector<VarHolder*>& roots);
+// @pyjt(_step_shape_prefix_seal)
+void step_shape_prefix_seal(int64 token);
+// @pyjt(_step_shape_prefix_check)
+bool step_shape_prefix_check(int64 token);
+// @pyjt(_step_shape_prefix_release)
+void step_shape_prefix_release(int64 token);
+
+/** Recompute the prefix and launch, or false if a boundary changed.
+ * On false release the recording and rebuild the step: changed dynamic
+ * extents also invalidate shape specializations in the retained IR.
  */
 // @pyjt(graph_launch_host_prefix)
 bool graph_launch_host_prefix(int64 graph);
 
 // Recording-only batch boundary; does not alter Node::_finished or liveness.
 bool graph_capture_host_leaf(Node* node);
+
+// Used at dynamic-op construction, before an optimizer can execute a kept
+// update. Unknown or stateful conditions must switch tracing to ordinary
+// execution immediately rather than finish an executed update twice.
+bool graph_dynamic_condition_supported(Var* condition);
+
+// Private DDP warmup metadata: ignore publication/storage-only wrappers when
+// estimating the construction order of the mathematical gradient producers.
+// No tensor values are read and no gradient is evaluated.
+// @pyjt(_gradient_producer_orders)
+vector<int64> gradient_producer_orders(const vector<VarHolder*>& gradients);
 
 // Exact native VarPtr claims for graph_check, with one entry for every pin.
 // Analysis snapshots contain no pins and are intentionally absent here.

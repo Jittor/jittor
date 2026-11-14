@@ -11,6 +11,7 @@ import pytest
 import jittor as jt
 from jittor._runtime.fallback import forbid_backend_fallbacks
 from _helpers.device_types import instantiate_device_type_tests
+from _helpers.torch_runtime import torch_shim_loaded
 
 
 class OwningTensor(jt.Var):
@@ -34,7 +35,7 @@ def physical(value, device):
 
 @pytest.fixture(autouse=True)
 def native_only():
-    assert 'torch' not in sys.modules and 'jittor.compat.torch' not in sys.modules
+    assert not torch_shim_loaded() and 'jittor.compat.torch' not in sys.modules
     with forbid_backend_fallbacks():
         yield
         jt.sync_all(True)

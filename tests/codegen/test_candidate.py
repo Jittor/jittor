@@ -59,8 +59,8 @@ class TestCandidateOp(unittest.TestCase):
         threshold = '0.01'
         s_1 = '@x(j,2)*@x(j,3)'
         s_2 = '@x(i,2)*@x(i,3)'
-        s_inter_h = 'std::max((Tx)0,std::min(@x(j,2)+@x(j,0),@x(i,2)+@x(i,0))-std::max(@x(j,0),@x(i,0)))'
-        s_inter_w = 'std::max((Tx)0,std::min(@x(j,3)+@x(j,1),@x(i,3)+@x(i,1))-std::max(@x(j,1),@x(i,1)))'
+        s_inter_h = 'jittor::_max((Tx)0,jittor::_min(@x(j,2)+@x(j,0),@x(i,2)+@x(i,0))-jittor::_max(@x(j,0),@x(i,0)))'
+        s_inter_w = 'jittor::_max((Tx)0,jittor::_min(@x(j,3)+@x(j,1),@x(i,3)+@x(i,1))-jittor::_max(@x(j,1),@x(i,1)))'
         s_inter = s_inter_h+'*'+s_inter_w
         iou = s_inter + '/(' + s_1 +'+' + s_2 + '-' + s_inter + ')'
         check([3000,4], iou+'<'+threshold, check3)

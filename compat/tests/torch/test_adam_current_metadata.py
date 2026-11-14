@@ -255,3 +255,30 @@ def test_native_batch_declines_a_protocol_with_a_missing_counter_method(device):
         group, group["grads"], group["_torch_steps"],
         (jt.core.Var, frontend.Tensor, frontend.nn.Parameter), tuple(protocol), False) is None
     assert group["_torch_steps"][0].value == 1
+
+
+@pytest.mark.parametrize("change", ["epoch", "property", "getter-code", "detach-method"])
+def test_native_batch_preserves_capture_epochs_and_custom_counter_access(device, monkeypatch, change):
+    if device != "cuda":
+        pytest.skip("native Adam metadata batching requires CUDA")
+    _, _, group = _initialized(device)
+    steps, gradients = group["_torch_steps"], group["grads"]
+    assert adam._adam_metadata_batch(group, gradients, steps) is not None
+    if change == "epoch":
+        steps._advance_capture_steps([0])
+        steps._advance_capture_steps([0])
+        expected = 3
+    elif change == "property":
+        monkeypatch.setattr(adam._AdamStep, "value", property(lambda self: 17))
+        expected = 17
+    elif change == "getter-code":
+        def replacement(self):
+            return 19
+        monkeypatch.setattr(adam._AdamStep.value.fget, "__code__", replacement.__code__)
+        expected = 19
+    else:
+        steps[0]._detach_capture_epoch = lambda: pytest.fail("custom detachment was bypassed")
+        expected = 1
+    assert adam._adam_metadata_batch(group, gradients, steps) is None
+    assert adam._adam_metadata_batch(group, gradients, steps, advance=True) is None
+    assert int(steps[0]) == expected

@@ -37,6 +37,14 @@ StorageLayoutForwardScope::StorageLayoutForwardScope() : previous(no_grad) {
 }
 StorageLayoutForwardScope::~StorageLayoutForwardScope() { no_grad = previous; }
 
+StorageLayoutRewriteScope::StorageLayoutRewriteScope()
+    : previous(propagate_storage_layout) {
+    propagate_storage_layout = 0;
+}
+StorageLayoutRewriteScope::~StorageLayoutRewriteScope() {
+    propagate_storage_layout = previous;
+}
+
 static auto make_transpose = op_constructor<VarPtr, Var*, NanoVector>("transpose");
 static auto make_broadcast_to_shape =
     op_constructor<VarPtr, Var*, NanoVector, NanoVector>("broadcast_to");

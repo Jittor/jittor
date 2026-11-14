@@ -371,6 +371,50 @@ def test_native_child_drops_only_the_owned_shim_site(tmp_path, monkeypatch):
     assert result.stdout.strip() == str(oracle_site / "torch" / "__init__.py")
 
 
+def test_explicit_oracle_site_precedes_inherited_torch_in_children(tmp_path, monkeypatch):
+    from _helpers.child_process import child_env, run_python_child
+
+    oracle = tmp_path / "oracle"
+    inherited = tmp_path / "inherited"
+    for site in (oracle, inherited):
+        (site / "torch").mkdir(parents=True)
+        (site / "torch" / "__init__.py").write_text("", encoding="utf-8")
+    monkeypatch.setenv("REAL_TORCH_SITE", str(oracle))
+    monkeypatch.setenv("JITTOR_TORCH_SHIM", "0")
+    monkeypatch.setenv("PYTHONPATH", str(inherited))
+    environment = child_env()
+    paths = environment["PYTHONPATH"].split(os.pathsep)
+    assert paths[0] == str(REPO_ROOT / "python")
+    assert paths.index(str(oracle)) < paths.index(str(inherited))
+    result = run_python_child(
+        ["-c", "import torch; print(torch.__file__)"],
+        env=environment, inherit=False, merge_stderr=True,
+    )
+    assert result.returncode == 0, result.stdout
+    assert result.stdout.strip() == str(oracle / "torch" / "__init__.py")
+
+
+def test_explicit_shim_child_drops_the_parent_oracle_site(tmp_path, monkeypatch):
+    from _helpers.child_process import child_env, run_python_child
+
+    oracle, shim, other = (tmp_path / name for name in ('oracle', 'shim', 'other'))
+    for site in (oracle, shim):
+        (site / 'torch').mkdir(parents=True)
+        (site / 'torch' / '__init__.py').write_text('', encoding='utf-8')
+    monkeypatch.setenv('REAL_TORCH_SITE', str(oracle))
+    monkeypatch.setenv('PYTHONPATH', os.pathsep.join(map(str, (oracle, shim, other))))
+    environment = child_env({'REAL_TORCH_SITE': '', 'JITTOR_TORCH_SHIM': '1'})
+    paths = environment['PYTHONPATH'].split(os.pathsep)
+    assert str(oracle) not in paths
+    assert str(shim) in paths and str(other) in paths
+    result = run_python_child(
+        ['-c', 'import torch; print(torch.__file__)'],
+        env=environment, inherit=False, merge_stderr=True,
+    )
+    assert result.returncode == 0, result.stdout
+    assert result.stdout.strip() == str(shim / 'torch' / '__init__.py')
+
+
 def test_native_child_preserves_missing_pythonpath(tmp_path, monkeypatch):
     from _helpers.child_process import child_env
 

@@ -82,6 +82,12 @@ fork 初始化重置其既有设备状态，不重建继承来的 holder。`runt
 遍历标记在离开 epoch 前恢复，**包括异常展开时**。fork 保留计数器以避免与继承的节点戳记
 冲突。
 
+`TraversalQueueMarks` 在同一遍历 owner 中区分“已入队”和“存储别名环已展开”，避免把
+这两个状态当成嵌套遍历而为每个节点分配恢复记录。真实嵌套仍恢复外层戳记；该 owner
+只用于同步遍历，不缓存读者集合，也不省略写入前的别名和已保存激活检查。
+一次读者遍历内，若多输出算子没有待计算的输出或待展开的共享关系，可复用这次空扫描的结果，避免
+融合优化器的每个状态输入都重复检查数百个输出；该缓存不跨遍历或训练步保留。
+
 `runtime/device_state.h` 存放 `use_cuda`、`device_id`、`sync_run`、缓存的设备数/当前设备、
 设备切换钩子和 peer access 记账。`runtime/device.{h,cc}` 提供设备操作；旧的
 `misc/cuda_flags.*` 已删除。`DEFINE_RUNTIME_FLAG` 通过导出的存储访问器注册 Python/环境

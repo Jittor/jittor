@@ -549,6 +549,7 @@ BinaryOp::BinaryOp(Var* x, Var* y, NanoString op) : x(x), y(y) {
         NanoVector axes;
         vector<VarPtr> sources;
         if (storage_layout_operands({x, y}, axes, sources)) {
+            StorageLayoutRewriteScope rewrite_scope;
             if (!storage_layout_records_grad({x, y})) {
                 forward(storage_view_transpose(make_binary(sources[0], sources[1], op), axes));
                 return;

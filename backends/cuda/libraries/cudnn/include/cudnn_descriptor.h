@@ -83,9 +83,10 @@ struct CudnnWorkspace {
     Allocator* allocator = nullptr;
 
     CudnnWorkspace() = default;
-    explicit CudnnWorkspace(size_t bytes) : size(bytes) {
+    explicit CudnnWorkspace(size_t bytes, Allocator* workspace_allocator=nullptr) : size(bytes) {
         if (!size) return;
-        allocator = runtime_executor().temp_allocator;
+        allocator = workspace_allocator ? workspace_allocator : runtime_executor().temp_allocator;
+        CHECK(allocator) << "cuDNN workspace requires an initialized allocator";
         ptr = allocator->alloc(size, allocation);
     }
     ~CudnnWorkspace() {

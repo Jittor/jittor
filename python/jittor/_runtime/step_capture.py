@@ -184,6 +184,23 @@ def on_replay(hook):
         _ACTIVE.prologue.append(hook)
 
 
+class _PrefixChanged(Exception):
+    """Unwind references to a stale kept graph before rebuilding Python."""
+
+
+class _ShapePrefix:
+    """Own a read-only dynamic-shape guard independently of device recording."""
+    def __init__(self, handle):
+        self.handle = handle
+        self.release = weakref.finalize(self, _core._step_shape_prefix_release, handle)
+
+    def seal(self):
+        _core._step_shape_prefix_seal(self.handle)
+
+    def check(self):
+        return _core._step_shape_prefix_check(self.handle)
+
+
 def publish_gradients(leaves):
     """Remember holders whose final public gradients a captured backward wrote."""
     if _ACTIVE is not None:
@@ -205,9 +222,10 @@ def live_fused_update(impl, lr, steps, indices, read_lr, frozen, found_inf=None,
     step count the optimizer keeps for an entry of this update, already
     advanced for this step; every replay advances them again. The kernel reads
     the step and ``read_lr()`` -- a scheduler may change the rate at any step
-    -- on the device. `frozen` returns the hyperparameters baked into the
-    launch, which are guarded. Returns ``[step, lr]`` as a live array, or `lr`
-    itself -- and a refusal -- when `impl` cannot read one.
+    -- on the device. `frozen` supplies betas, decay and epsilon. Providers
+    supporting live hyperparameters read them in a seven-element header;
+    other providers guard their captured values. Returns a live array, or
+    `lr` itself -- and a refusal -- when `impl` cannot read one.
 
     `found_inf`, a gradient scaler's device flag, makes it ``[step, lr,
     found_inf]``: the kernel skips a flagged step. The replay has advanced the
@@ -220,14 +238,32 @@ def live_fused_update(impl, lr, steps, indices, read_lr, frozen, found_inf=None,
         refuse("this optimizer update cannot read its step count on the device")
         return lr
 
+    uniform = getattr(steps, '_capture_steps_uniform', None)
+    if uniform is not None:
+        guard(lambda: uniform(indices))
+    else:
+        guard(lambda: len({int(steps[i]) for i in indices}) == 1)
+
+    advance_owned = getattr(steps, '_advance_capture_steps', None)
     def advance():
-        for i in indices:
-            steps[i] = int(steps[i]) + 1
+        if advance_owned is not None:
+            advance_owned(indices)
+        else:
+            for i in indices:
+                steps[i] = int(steps[i]) + 1
     on_replay(advance)
-    guard(frozen)
     first = indices[0]
-    hyper = live_array([float(steps[first]), float(read_lr())],
-                       lambda: [float(steps[first]), float(read_lr())])
+    live_hyper = bool(getattr(impl, 'accepts_live_hyperparameters', False))
+    if live_hyper:
+        def refresh():
+            betas, decay, epsilon = frozen()
+            return [float(steps[first]), float(read_lr()), 0.,
+                    float(betas[0]), float(betas[1]), float(decay), float(epsilon)]
+        hyper = live_array(refresh(), refresh)
+    else:
+        guard(frozen)
+        hyper = live_array([float(steps[first]), float(read_lr())],
+                           lambda: [float(steps[first]), float(read_lr())])
     if found_inf is None:
         return hyper
     skipped = getattr(owner, "_amp_skipped_steps", None)
@@ -236,7 +272,10 @@ def live_fused_update(impl, lr, steps, indices, read_lr, frozen, found_inf=None,
         _materialize(skipped)
         owner._amp_skipped_steps = skipped
     found = found_inf.float32().reshape((1,))
-    hyper = jt.concat([hyper[:1] - skipped, hyper[1:2], found])
+    parts = [hyper[:1] - skipped, hyper[1:2], found]
+    if live_hyper:
+        parts.append(hyper[3:])
+    hyper = jt.concat(parts)
     skipped.update(skipped + found)
     return hyper
 
@@ -361,18 +400,16 @@ def random_draw(shape, dtype, type):
         seed = int(jt.get_seed()) * 1000003 + id(cap) % 1000003
         cap.random = _StepRandom(seed)
     draw = cap.random.slot()
-    numel = 1
-    for size in shape:
-        numel *= int(size)
     ctype = "float" if dtype == "float32" else "double"
     normal = "true" if type == "normal" else "false"
     return jt.code(
         list(shape), dtype, [cap.random.state],
+        data={"draw": draw},
         cuda_header=_PHILOX,
         cuda_src=f"""
-        long long n = {numel};
+        long long n = out0->num;
         if (n) jt_step_capture_philox<{ctype}, {normal}><<<((n + 3) / 4 + 255) / 256, 256>>>(
-            out0_p, n, (const long long*)in0_p, {draw}LL);
+            out0_p, n, (const long long*)in0_p, (long long)data["draw"]);
         """).stop_grad()
 
 
@@ -391,16 +428,14 @@ def random_keep(shape, p):
         seed = int(jt.get_seed()) * 1000003 + id(cap) % 1000003
         cap.random = _StepRandom(seed)
     draw = cap.random.slot()
-    numel = 1
-    for size in shape:
-        numel *= int(size)
     return jt.code(
         list(shape), "bool", [cap.random.state],
+        data={"draw": draw, "p": float(p)},
         cuda_header=_PHILOX,
-        cuda_src=f"""
-        long long n = {numel};
+        cuda_src="""
+        long long n = out0->num;
         if (n) jt_step_capture_keep<<<((n + 3) / 4 + 255) / 256, 256>>>(
-            out0_p, n, (const long long*)in0_p, {draw}LL, {float(p)!r}f);
+            out0_p, n, (const long long*)in0_p, (long long)data["draw"], (float)data["p"]);
         """).stop_grad()
 
 
@@ -472,7 +507,7 @@ class _Capture:
     __slots__ = ("inputs", "host_inputs", "outputs", "template", "roots", "state",
                  "state_lists", "prologue", "guards", "signature", "refused", "random",
                  "frozen_random", "exact", "graph_bytes", "published_gradients",
-                 "gradient_leaves", "differentiable_leaves")
+                 "gradient_leaves", "differentiable_leaves", "dynamic_prefix")
 
     def __init__(self):
         self.prologue = []
@@ -484,19 +519,18 @@ class _Capture:
         self.published_gradients = []
         self.gradient_leaves = []
         self.differentiable_leaves = []
+        self.dynamic_prefix = None
 
 
 def _finish_normally(roots):
-    """Run a graph built under `keep_graph` once more, as an ordinary step, and finish it."""
+    """Finish a refused trace without repeating already executed state updates."""
     pending = [r for r in roots if not r.is_finished]
     if not pending:
         return
     before = jt.flags.keep_graph
     jt.flags.keep_graph = 0
     try:
-        for r in pending:
-            r._release_kept()
-        jt.sync(pending, False, True)
+        _core._finish_step_readouts(pending)
     finally:
         jt.flags.keep_graph = before
 
@@ -601,6 +635,9 @@ class StepCapture:
         self._cuda_graph = 0
         self._pool = None
         self._graph_out = None
+        self._graph_has_host_prefix = False
+        self._graph_has_dynamic_prefix = False
+        self._graph_host_prefix_bytes = 0
         self._graph_refused = None if record else "recording was turned off"
         self._record_at = 2
         self._rerecords = 0
@@ -740,6 +777,13 @@ class StepCapture:
         if cap.frozen_random and cap.exact and cap.refused is None:
             cap.refused = ("the call draws random numbers, which a replay would draw "
                            "again on every run")
+        if cap.refused is None:
+            prefix = _core._step_shape_prefix_create(roots)
+            if prefix < 0:
+                cap.refused = ("dynamic output shapes require an admissible "
+                               "read-only device prefix")
+            elif prefix:
+                cap.dynamic_prefix = _ShapePrefix(prefix)
         if cap.refused is not None:
             self._refused = cap.refused
             _finish_normally(roots)
@@ -807,6 +851,8 @@ class StepCapture:
         cap.signature = self._call_signature(args, kwargs)
         # What a device recording of this step would hold.
         cap.graph_bytes = working.bytes()
+        if cap.dynamic_prefix is not None:
+            cap.dynamic_prefix.seal()
         return cap, self._results(cap, outputs, (args, kwargs))
 
     def _results(self, cap, sources, call_inputs):
@@ -879,21 +925,38 @@ class StepCapture:
             self._graph_refused = "this build cannot record device graphs"
             return
         host = _core.graph_host_work(cap.roots)
-        if host:
+        prefix_bytes = _core.graph_host_prefix_bytes(cap.roots, True) if host else 0
+        if host and prefix_bytes < 0:
             self._graph_refused = ("part of the step runs on the host (%s), which a "
-                                   "recording would drop" % host)
+                                   "recording would drop without an admissible prefix" % host)
+            return
+        if host and limit and cap.graph_bytes + prefix_bytes > limit:
+            self._graph_refused = (
+                "a recording with its host prefix would keep %.1f MiB alive, "
+                "over the %.1f MiB allowed" %
+                ((cap.graph_bytes + prefix_bytes) / 2**20, limit / 2**20))
             return
         if cap.frozen_random:
             self._graph_refused = ("the step draws from the host generator, which a "
                                    "recording would repeat")
             return
+        # Caller readouts must finish before capture begins: recording their
+        # snapshots would repeat the copy on every later graph launch.
+        before = jt.flags.keep_graph
+        jt.flags.keep_graph = 0
+        try:
+            _core._preserve_step_readers(cap.state_lists[1])
+        finally:
+            jt.flags.keep_graph = before
         outs = [_empty_like(o) for o in cap.outputs]
         before = jt.flags.keep_graph
         jt.flags.keep_graph = 2
         handle = 0
         try:
             with _pool_scope(self._pool, allocate=True):
-                if not _core.graph_capture_begin():
+                began = (_core.graph_capture_begin_host_prefix(cap.roots, True) if host
+                         else _core.graph_capture_begin())
+                if not began:
                     self._graph_refused = "the device refused to start recording"
                     return
                 try:
@@ -915,6 +978,9 @@ class StepCapture:
             self._graph_refused = "the recording contained no device work"
             return
         self._cuda_graph = handle
+        self._graph_has_host_prefix = bool(host)
+        self._graph_has_dynamic_prefix = _core.graph_has_dynamic_prefix(handle)
+        self._graph_host_prefix_bytes = prefix_bytes if host else 0
         self._graph_out = outs
         _core.graph_bind_leaves(handle, cap.roots)
 
@@ -927,10 +993,25 @@ class StepCapture:
             return self._replay_in_pool(cap, args, kwargs)
 
     def _replay_in_pool(self, cap, args, kwargs):
+        if cap.host_inputs and (self._cuda_graph or cap.dynamic_prefix is not None):
+            # Finish the previous launch before preflight or a replay hook
+            # writes host staging that its asynchronous H2D may still read.
+            _core.graph_wait()
+        dynamic_prefix = cap.dynamic_prefix is not None
+        if dynamic_prefix:
+            # Dynamic extents must be checked before prologue hooks advance
+            # optimizer counters or the RNG. Prefix work is read-only; an
+            # incompatible extent therefore still permits exactly one eager
+            # step on the original inputs and current training state.
+            with jt.no_grad(), jt.flag_scope(keep_graph=2):
+                for captured, given in zip(cap.inputs, _input_vars((args, kwargs), [])):
+                    captured._copy_into(given)
+            valid = (_core.graph_prepare_host_prefix(self._cuda_graph, True)
+                     if self._cuda_graph else cap.dynamic_prefix.check())
+            if not valid:
+                raise _PrefixChanged
         for hook in cap.prologue:
             hook()
-        if self._cuda_graph and cap.host_inputs:
-            _core.graph_wait()
         # The copies into the captured leaves are part of the kept graph's
         # lifetime, not work the caller asked for. Outside `keep_graph` the
         # executor treats them as an ordinary batch and frees what it thinks
@@ -948,7 +1029,8 @@ class StepCapture:
             # the storages this replay is about to write. Its readers did not
             # exist when the captured write-back ordered itself, and a kept
             # graph does not rebuild edges, so run them against the
-            # forward-time bytes first. This batch is not part of the kept
+            # forward-time bytes first. Held no-grad clones/readouts need the
+            # same protection. This batch is not part of the kept
             # graph: its finished values are what that backward will read, so
             # their memory must be retained as an ordinary batch retains it
             # (`keep_graph=2` would free it after the batch, and the backward
@@ -962,12 +1044,30 @@ class StepCapture:
             if preserved:
                 self.stats["preserved"] = self.stats.get("preserved", 0) + 1
             with jt.no_grad():
-                for captured, given in zip(cap.inputs, _input_vars((args, kwargs), [])):
-                    captured._copy_into(given)
+                if not dynamic_prefix:
+                    # Dynamic replay already staged these arguments before
+                    # shape preflight. Keep that same feed through the hooks
+                    # and the final prefix check, rather than copying it twice.
+                    for captured, given in zip(cap.inputs, _input_vars((args, kwargs), [])):
+                        captured._copy_into(given)
             if self._cuda_graph and not _core.graph_leaves_moved(self._cuda_graph):
-                _core.graph_launch(self._cuda_graph)
-                self.stats["graph"] += 1
-                return self._results(cap, self._graph_out, (args, kwargs))
+                if self._graph_has_host_prefix:
+                    # The pool scope above already orders shared temporary
+                    # storage. Recompute the CPU prefix/H2D before each launch;
+                    # false means a boundary moved and no device step ran.
+                    recorded = _core.graph_launch_host_prefix(self._cuda_graph)
+                    if not recorded and dynamic_prefix:
+                        # A user hook changed a previously admitted boundary.
+                        # Retrying Python now would advance its counters twice.
+                        self.invalidate()
+                        raise RuntimeError("a replay hook changed the dynamic prefix; "
+                                           "the training step was not launched")
+                else:
+                    _core.graph_launch(self._cuda_graph)
+                    recorded = True
+                if recorded:
+                    self.stats["graph"] += 1
+                    return self._results(cap, self._graph_out, (args, kwargs))
             if self._cuda_graph:
                 # A leaf the recording reads has moved -- a parameter read back
                 # to the host migrates -- so its addresses are stale; this step
@@ -975,11 +1075,20 @@ class StepCapture:
                 _core.graph_release(self._cuda_graph)
                 self._cuda_graph = 0
                 self._graph_out = None
+                self._graph_has_host_prefix = False
+                self._graph_has_dynamic_prefix = False
+                self._graph_host_prefix_bytes = 0
                 self._rerecords += 1
                 if self._rerecords >= _RERECORD_LIMIT:
                     self._graph_refused = "the leaves a recording reads kept moving"
                 else:
                     self._record_at = self.stats["replayed"] + 2
+            if dynamic_prefix and cap.prologue and not cap.dynamic_prefix.check():
+                # The executor path needs the same post-hook shape check as
+                # graph_launch_host_prefix, before any kept update executes.
+                self.invalidate()
+                raise RuntimeError("a replay hook changed the dynamic prefix; "
+                                   "the training step was not launched")
             with _pool_allocations(self._pool):
                 jt.sync(cap.roots, False, False)
                 self._write_back(cap)
@@ -1027,7 +1136,19 @@ class StepCapture:
         if (not self._cuda_graph and self._graph_refused is None
                 and self.stats["replayed"] >= self._record_at):
             self._record_before_replay(cap, args, kwargs)
-        out = self._replay(cap, args, kwargs)
+        retry = False
+        try:
+            out = self._replay(cap, args, kwargs)
+        except _PrefixChanged:
+            self.last_invalidated = "a dynamic prefix changed shape or address"
+            self.invalidate()
+            cap = None
+            retry = True
+        if retry:
+            # The exception's traceback and all local references to the old
+            # cap must be gone: otherwise eager's writes can resolve its now
+            # unmarked pending readers, executing the stale update once more.
+            return self._eager(args, kwargs)
         self.stats["replayed"] += 1
         return out
 
@@ -1056,10 +1177,15 @@ class StepCapture:
             _core.graph_release(self._cuda_graph)
             self._cuda_graph = 0
         self._graph_out = None
+        self._graph_has_host_prefix = False
+        self._graph_has_dynamic_prefix = False
+        self._graph_host_prefix_bytes = 0
         cap, self._capture = self._capture, None
         if cap is None:
             self._pool = None
             return
+        if cap.dynamic_prefix is not None:
+            cap.dynamic_prefix.release()
         for root in cap.roots:
             if not root.is_finished:
                 root._release_kept()

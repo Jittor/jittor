@@ -26,6 +26,7 @@ class TestDLPack(unittest.TestCase):
         y = jt.from_dlpack(capsule)
         np.testing.assert_array_equal(y.numpy(), a_np)
 
+    @jt.flag_scope(use_cuda=0)
     def test_dunder_protocol_object(self):
         # jt.from_dlpack(obj) where obj implements __dlpack__/__dlpack_device__,
         # not just the legacy raw-capsule calling convention.

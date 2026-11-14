@@ -85,13 +85,16 @@ def test_hccl_status_on_declared_runtime(monkeypatch):
     mode = os.environ.get("JITTOR_HCCL_STATUS_TEST_MODE", "cpu")
     assert mode in ("cpu", "npu"), "select cpu or npu explicitly"
     if mode == "cpu":
-        assert jt.flags.use_cuda == 0, "CPU gate requires CPU mode"
-        assert get_library("hccl", load=False) is None
-        assert distributed.get_hccl_world_info() == NOT_INITIALIZED
-        # Set after Jittor import: a configuration claim cannot create a comm.
-        monkeypatch.setenv("JT_HCCL_WORLD_SIZE", "8")
-        monkeypatch.setenv("JT_HCCL_RANK", "3")
-        assert distributed.get_hccl_world_info() == NOT_INITIALIZED
+        # This metadata check also belongs to whole-tree CUDA sessions. Select
+        # its declared CPU mode locally and restore the caller's device flag.
+        with jt.flag_scope(use_cuda=0):
+            assert jt.flags.use_cuda == 0, "CPU gate requires CPU mode"
+            assert get_library("hccl", load=False) is None
+            assert distributed.get_hccl_world_info() == NOT_INITIALIZED
+            # Set after import: a configuration claim cannot create a comm.
+            monkeypatch.setenv("JT_HCCL_WORLD_SIZE", "8")
+            monkeypatch.setenv("JT_HCCL_RANK", "3")
+            assert distributed.get_hccl_world_info() == NOT_INITIALIZED
         return
 
     assert jt.compiler.has_acl, "NPU gate requires the real ACL runtime"
