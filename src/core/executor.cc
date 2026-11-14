@@ -567,8 +567,10 @@ static bool may_run_async(const ExecPlan& plan) {
         return false;
     static const OpId numpy_code = get_op_id("numpy_code");
     static const OpId fetch = get_op_id("fetch");
+    static const OpId external_kernel = get_op_id("external_kernel");
     for (Op* op : plan.ops) {
-        if (!op->executes_on_accelerator() || op->is_op(numpy_code) || op->is_op(fetch))
+        if (!op->executes_on_accelerator() || op->is_op(numpy_code) || op->is_op(fetch)
+                || op->is_op(external_kernel))
             return false;
         for (Var* out : op->outputs())
             if (out->num < 0) return false;
