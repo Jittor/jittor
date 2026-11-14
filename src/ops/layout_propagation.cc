@@ -23,6 +23,14 @@ DEFINE_FLAG(int, propagate_storage_layout, 1,
 DECLARE_FLAG(int, transpose_storage_view);
 DECLARE_FLAG(bool, no_grad);
 
+StorageLayoutRewriteScope::StorageLayoutRewriteScope()
+    : previous(propagate_storage_layout) {
+    propagate_storage_layout = 0;
+}
+StorageLayoutRewriteScope::~StorageLayoutRewriteScope() {
+    propagate_storage_layout = previous;
+}
+
 bool storage_layout_records_grad(const vector<Var*>& inputs) {
     if (no_grad) return false;
     for (auto* value : inputs)

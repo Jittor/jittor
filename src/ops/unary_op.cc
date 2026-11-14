@@ -1003,6 +1003,7 @@ UnaryOp::UnaryOp(Var* x, NanoString op) : x(x) {
         NanoVector axes;
         vector<VarPtr> sources;
         if (storage_layout_operands({x}, axes, sources)) {
+            StorageLayoutRewriteScope rewrite_scope;
             if (!storage_layout_records_grad({x})) {
                 auto result = make_unary(sources[0], ns == ns_cast ? dtype : ns);
                 forward(storage_view_transpose(result, axes));

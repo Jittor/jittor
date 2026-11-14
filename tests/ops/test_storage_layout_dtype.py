@@ -29,6 +29,54 @@ def assert_device(value):
     assert value.location() == ('device' if jt.flags.use_cuda else 'cpu')
 
 
+@pytest.mark.parametrize('operation', ['add', 'multiply', 'where'])
+@pytest.mark.parametrize('record_grad', [False, True])
+@pytest.mark.parametrize('materialize_view', [False, True])
+@pytest.mark.parametrize('dtype', ['float32', 'float64'])
+def test_mixed_finished_layouts_do_not_rewrite_each_other(
+        operation, record_grad, materialize_view, dtype):
+    # A pending permutation of a finished dense source is important here.
+    # Finishing that view first used to hide the recursive layout rewrite.
+    a_array = np.linspace(-1., 1., 120).reshape(2, 3, 4, 5)
+    b_array = np.linspace(.2, 1.4, 120).reshape(2, 4, 5, 3)
+    b_logical = b_array.transpose(0, 3, 1, 2)
+    with jt.flag_scope(amp_reg=0, auto_convert_64_to_32=0,
+                       propagate_storage_layout=1):
+        a = jt.array(a_array, dtype=dtype)
+        root = jt.array(b_array, dtype=dtype)
+        if not record_grad:
+            a.stop_grad()
+            root.stop_grad()
+        assert_device(a)
+        assert_device(root)
+        b = root._storage_permute((0, 3, 1, 2))
+        if materialize_view:
+            assert_device(b)
+        if operation == 'add':
+            output = a + b
+            expected, da, db = a_array + b_logical, np.ones_like(a_array), np.ones_like(a_array)
+        elif operation == 'multiply':
+            output = a * b
+            expected, da, db = a_array * b_logical, b_logical, a_array
+        else:
+            mask_array = a_array > 0
+            mask = jt.array(mask_array).stop_grad()
+            assert_device(mask)
+            output = jt.ternary(mask, a, b)
+            expected, da, db = np.where(mask_array, a_array, b_logical), mask_array, ~mask_array
+        assert jt.flags.propagate_storage_layout == 1
+        assert_device(output)
+        assert str(output.dtype) == dtype
+        np.testing.assert_allclose(output.numpy(), expected, rtol=2e-6, atol=1e-6)
+        if record_grad:
+            actual_a, actual_b = jt.grad(output.sum(), [a, root])
+            assert_device(actual_a)
+            assert_device(actual_b)
+            np.testing.assert_allclose(actual_a.numpy(), da, rtol=2e-6, atol=1e-6)
+            np.testing.assert_allclose(actual_b.numpy(), np.transpose(db, (0, 2, 3, 1)),
+                                       rtol=2e-6, atol=1e-6)
+
+
 @pytest.mark.parametrize('dtype', ['float16', 'bfloat16', 'float32', 'float64'])
 @pytest.mark.parametrize('optimize', [0, 1])
 @pytest.mark.parametrize('materialize', [False, True])
