@@ -579,6 +579,13 @@ static bool may_run_async(const ExecPlan& plan) {
 }
 
 void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync, bool may_defer) {
+    // Waiting can release Python-owned Function contexts left by the worker.
+    // Their saved tensors may be roots collected by sync_all, so own those
+    // roots before draining callbacks or releasing the graph lock. The batch
+    // hold below starts only after planning, too late to protect this window.
+    vector<VarPtr> root_hold;
+    root_hold.reserve(vars.size());
+    for (Var* var : vars) root_hold.emplace_back(var);
     // The batch on the worker, if one is in flight, comes first: this one may
     // need what it produces, and only one runs at a time.
     async_exec_wait();
