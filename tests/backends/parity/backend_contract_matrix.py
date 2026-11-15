@@ -326,6 +326,38 @@ def _probe_numpy_code(jt_):
     return jt_.numpy_code(x.shape, x.dtype, [x], forward).numpy()
 
 
+def _probe_external_kernel(jt_):
+    from jittor.kernels import TensorSpec, call, triton_call
+
+    x = jt_.array(_fixed((4, 5)))
+    if jt_.flags.use_cuda:
+        # Import before entering the callback so the matrix can distinguish
+        # an absent optional compiler from an execution failure.
+        import triton
+        import triton.language as tl
+
+        @triton.jit
+        def affine(X, Y, N: tl.constexpr):
+            offsets = tl.arange(0, 32)
+            values = tl.load(X + offsets, offsets < N, 0)
+            tl.store(Y + offsets, values * 2 + 1, offsets < N)
+
+        return triton_call(affine, x, TensorSpec(x.shape),
+                           N=x.numel(), grid=(1,)).numpy()
+
+    import ctypes
+    import numpy as np
+
+    def launch(context):
+        source = np.from_dlpack(context.inputs[0])
+        target = np.ctypeslib.as_array(
+            (ctypes.c_float * source.size).from_address(
+                context.outputs[0].data_ptr())).reshape(source.shape)
+        np.copyto(target, source * 2 + 1)
+
+    return call(launch, x, outputs=TensorSpec(x.shape), backend="cpu").numpy()
+
+
 def _probe_fused(jt_):
     # Fusion is not requested, it is produced: two elementwise ops and a
     # reduction over one graph become one fused kernel.
@@ -494,6 +526,7 @@ PROBES = {
     "where": _probe_where,
     "device_copy": _probe_device_copy,
     "empty": _probe_empty,
+    "external_kernel": _probe_external_kernel,
     "fetch": _probe_fetch,
     "fuse_transpose": _probe_fuse_transpose,
     "fused": _probe_fused,
