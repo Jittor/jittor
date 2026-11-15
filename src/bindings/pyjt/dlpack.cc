@@ -389,6 +389,31 @@ static PyObject* to_dlpack_capsule(VarHolder* v, bool force_copy=false, ExportSt
     return capsule;
 }
 
+// Export only executor-provided buffers: no VarHolder::sync(), which would
+// recursively execute the unfinished external-kernel output. The capsule owns
+// a VarPtr, just like a normal DLPack export, and preserves storage strides.
+PyObject* kernel_buffer_capsule(Var* var) {
+    ASSERT(var->mem_ptr || var->num == 0);
+    Device device = allocation_device(var->allocator);
+    USER_CHECK(device.backend == BackendId::Cpu || device.backend == BackendId::Cuda)
+        << "external_kernel: DLPack buffer backend is not supported";
+    auto dtype = ns_to_dltype(var->dtype());
+    auto* ctx = new JittorDLManagerCtx(var);
+    for (int i = 0; i < var->shape.size(); ++i) {
+        ctx->shape.push_back(var->shape[i]);
+        ctx->strides.push_back(var->storage_stride(i));
+    }
+    ResolvedExport r{ctx, var,
+        {device.backend == BackendId::Cpu ? kDLCPU : kDLCUDA, device.index}, dtype};
+    auto* managed = new DLManagedTensor();
+    managed->manager_ctx = ctx;
+    managed->deleter = jittor_dlpack_deleter;
+    fill_dl_tensor(managed->dl_tensor, r);
+    PyObject* capsule = PyCapsule_New(managed, "dltensor", jittor_dlpack_capsule_destructor);
+    if (!capsule) jittor_dlpack_deleter(managed);
+    return capsule;
+}
+
 // DLPack >=0.8 "current standard" capsule, produced only when a consumer
 // opts in via __dlpack__(max_version=(major,minor>=... )) with major>=1 --
 // see VarHolder::dlpack(). Real-world default consumers (NumPy/CuPy's own

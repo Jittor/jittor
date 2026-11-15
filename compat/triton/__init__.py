@@ -411,7 +411,15 @@ def _args_have_jittor_var(args, kwargs):
         swallowed("triton/__init__.py _args_have_jittor_var: import jittor as jt", exc)
         Var = ()
 
+    # These buffers are already inside a native external_kernel node. Sending
+    # their warmup through the eager compatibility bridge calls jt.sync() on
+    # the unfinished node and recursively executes its callback until it crashes.
+    # Leave compilation/launch to upstream Triton and the executor's stream.
+    native_buffers = getattr(sys.modules.get("jittor.kernels"), "_Buffer", ())
+
     def _is_t(v):
+        if native_buffers and isinstance(v, native_buffers):
+            return False
         if Var and isinstance(v, Var):
             return True
         return hasattr(v, "data_ptr") and hasattr(v, "dtype") and hasattr(v, "shape")

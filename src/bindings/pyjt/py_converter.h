@@ -10,6 +10,7 @@
 #pragma once
 #include "bindings/pyjt/py_obj_holder.h"
 #include "bindings/pyjt/py_dtype.h"
+#include "bindings/pyjt/kernel_func.h"
 #include "bindings/pyjt/py_tensor_frontend.h"
 #include "bindings/pyjt/numpy.h"
 #include "core/common.h"
@@ -800,6 +801,9 @@ DEF_IS(ItemData, PyObject*) to_py_object(T a) {
     ASSERT(a.dtype == ns_int64) << "Unhandled dtype in item():" << a.dtype;
     return PyLong_FromLongLong(a.data);
 }
+
+DEF_IS(KernelFunc, bool) is_type(PyObject* obj) { return PyCallable_Check(obj); }
+DEF_IS(KernelFunc, T) from_py_object(PyObject* obj) { return kernel_func_from_python(obj); }
 
 struct NumpyFunc;
 

@@ -33,6 +33,7 @@ numerics/numerics-contract
 - [流水式惰性执行](runtime/pipelined-execution.md)
 - [运行时内省](runtime/runtime-introspection.md)
 - [CUDA 库的 plan 缓存](runtime/cuda-library-plan-caches.md)
+- [Triton 与 TileLang 原生 kernel](runtime/external-kernels.md)
 
 <!-- sphinx-only
 ```{toctree}
@@ -42,5 +43,6 @@ numerics/numerics-contract
 runtime/pipelined-execution
 runtime/runtime-introspection
 runtime/cuda-library-plan-caches
+runtime/external-kernels
 ```
 -->
