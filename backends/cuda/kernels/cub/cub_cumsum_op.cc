@@ -115,8 +115,17 @@ __global__ void BlockScanKernel(Tx* __restrict__ xp, Ty* __restrict__ yp, int ba
 void CubCumsumOp::jit_run() {
     auto* __restrict__ xp = x->ptr<Tx>();
     auto* __restrict__ yp = y->ptr<Ty>();
-    if (x->shape.size() == 1){
-        int num_items = x->shape[0];
+    // A single row -- what `jt.cumsum` hands over for any 1-D scan, since it
+    // flattens to [rows, length] -- goes to the device-wide scan. The block
+    // kernel below runs one block per row: a 2**24-element row was scanned by
+    // one block of one SM, and it adds the running prefix *before* the block
+    // scan, so every partial of every later tile is rounded at the magnitude
+    // of the whole prefix. Sampling a 24-qubit state through the float32 CDF
+    // drew 8170 of 8192 shots off the exact (float64) index, by up to 6.5e-5 in
+    // probability; DeviceScan (what torch runs) stays at the float32 rounding
+    // of each output.
+    if (x->shape.size() == 1 || x->shape[0] == 1){
+        int num_items = x->shape[x->shape.size() - 1];
 
         // Determine temporary device storage requirements for inclusive prefix sum
         void     *d_temp_storage = NULL;
