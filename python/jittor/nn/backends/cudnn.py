@@ -155,6 +155,17 @@ def _try_cudnn_conv2d(x, weight, bias, stride, padding, dilation, groups,
             y = y + bias_for_compute_dtype(y, bias)
         return channels_last_view(y)
 
+    # Preserve an existing FP32 channels-last chain without changing the
+    # layout of ordinary NCHW inference. Pack the filter as a graph operation:
+    # unlike the half-precision cache above, it must observe later writes too.
+    if (channels_last_activations and groups == 1 and not jt.flags.amp_reg
+            and _jittor_dtype_name(x.dtype) == "float32"
+            and not _output_requires_grad(x, weight, bias)):
+        source = channels_last_source(x)
+        if source is not None:
+            filter_, layout = weight._storage_permute((0, 2, 3, 1)).contiguous(), "ohwi"
+            return channels_last(source).stop_grad()
+
     training = _training_channels_last(x, weight, bias, groups)
     if training or (channels_last_activations and _jittor_dtype_name(x.dtype) in _HALF
                     and (jt.flags.no_grad or not _output_requires_grad(x, weight, bias))):

@@ -4,6 +4,7 @@ import unittest
 from unittest import mock
 
 import numpy as np
+import pytest
 import torch
 import jittor as jt
 
@@ -11,6 +12,8 @@ from _helpers import capability
 from _helpers.sdpa_reference import reference
 from jittor._runtime.fallback import forbid_backend_fallbacks
 from jittor.backends.cuda.kernels.nn import fused_attention_f32_cuda as kernel
+
+pytestmark = pytest.mark.cuda
 
 
 @unittest.skipUnless(capability.check_accelerator('cuda', backend=jt).enabled,
@@ -26,7 +29,7 @@ class TestAttentionStorageViews(unittest.TestCase):
 
     def test_packed_qkv_with_offset_masks_and_partial_tiles(self):
         rng = np.random.default_rng(142)
-        for shape in [(2, 129, 3, 4, 80), (1, 37, 3, 3, 64)]:
+        for shape in [(2, 129, 3, 4, 80), (4, 197, 3, 8, 80), (1, 37, 3, 3, 64)]:
             array = rng.normal(0, .2, size=shape).astype('float32')
             # A nonzero offset in the backing allocation is part of the view.
             padded = np.pad(array.ravel(), (17, 11))

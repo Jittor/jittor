@@ -51,7 +51,7 @@ class TestPreflightChecks(unittest.TestCase):
 
     def test_a_missing_compiler_names_what_to_install(self):
         with mock.patch.object(preflight.shutil, "which", return_value=None):
-            with mock.patch.dict(os.environ, {"cc_path": ""}, clear=False):
+            with mock.patch.dict(os.environ, {"JT_BUILD_CC_PATH": "", "cc_path": ""}, clear=False):
                 result = preflight.check_compiler()
         self.assertEqual(result.status, "fail")
         self.assertIn("apt install g++", result.remedy)
