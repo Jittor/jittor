@@ -1396,6 +1396,17 @@ jit_op_entry_t OpCompiler::compile(const string& jit_key, const string& src) {
         }
     };
     if (op) {
+        // The fused wrapper has no custom library flags of its own. Keep
+        // each constituent's include paths, defines and link flags: its
+        // extracted body still depends on them, and cache_compile must hash
+        // the same options used to compile it. Emit each bundle once while
+        // preserving operator order.
+        unordered_set<string> seen;
+        for (auto* member : op->ops) {
+            const auto& flags = member->codegen().extra_flags;
+            if (!flags.empty() && seen.insert(flags).second)
+                extra_flags += " " + flags;
+        }
         add_compile_flags(*op->loop_options);
     } else {
         for (auto v : _op->outputs())

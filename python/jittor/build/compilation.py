@@ -161,7 +161,9 @@ def compile_custom_ops(
     """Compile custom ops
     filenames: path of op source files, filenames must be
         pairs of xxx_xxx_op.cc and xxx_xxx_op.h, and the
-        type name of op must be XxxXxxOp.
+        type name of op must be XxxXxxOp. An optional xxx_xxx_op.jit.cc
+        beside the header supplies the kernel template; it can also be
+        included in filenames, but is never compiled as a host source.
     extra_flags: extra compile flags
     return_module: return module rather than ops(default: False)
     backend: None uses the op class declaration; cpu, accelerator, or both
@@ -184,7 +186,7 @@ def compile_custom_ops(
     pyjt_includes = []
     for name in filenames:
         name = _compiler_state.os.path.realpath(name)
-        if name.endswith(".cc") or name.endswith(".cpp") or name.endswith(".cu"):
+        if name.endswith((".cc", ".cpp", ".cu")) and not name.endswith(".jit.cc"):
             builds.append(name)
         if name.endswith(".h"):
             dirname = _compiler_state.os.path.dirname(name)
@@ -233,6 +235,11 @@ def compile_custom_ops(
     stamp_sources = {
         "files": _compiler_state._stat_signature([_compiler_state.os.path.realpath(name)
                                   for name in filenames]),
+        # Companions are implicit inputs too. Record missing paths so adding
+        # or removing one invalidates registration even in excluded include
+        # trees (such as sources placed inside the installed Python package).
+        "jit_sources": _compiler_state._stat_signature([
+            header[:-2] + ".jit.cc" for header in headers.values()]),
         "includes": _compiler_state._include_tree_signature(_compiler_state._custom_op_include_dirs(
             filenames, include_dirs, extra_flags)),
         "core_sources": _compiler_state.core_source_signature(),
