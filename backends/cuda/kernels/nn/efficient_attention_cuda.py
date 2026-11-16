@@ -68,7 +68,9 @@ def _library(source, cutlass, architectures=None):
     if not shim.is_dir():
         shim = Path(jt.__file__).resolve().parent/'compat/shim/cpp_extension/include'
     digest = hashlib.sha256()
-    for path in (_HERE/'efficient_attention.cu', _HERE/'efficient_attention.h'):
+    # Include the build recipe as well as the CUDA source: include ordering
+    # and compiler flags can change the resulting library without changing C++.
+    for path in (Path(__file__), _HERE/'efficient_attention.cu', _HERE/'efficient_attention.h'):
         digest.update(path.read_bytes())
     for path in (Path(source)/_MEMORY, Path(cutlass)/'cutlass', shim):
         _hash_tree(digest, path)
