@@ -82,7 +82,10 @@ def _library(source, cutlass, architectures=None):
         fcntl.flock(lock, fcntl.LOCK_EX)
         if not target.exists():
             temporary = directory/('kernels.%d.so' % os.getpid())
-            includes = [str(_HERE), source, cutlass, str(shim), pybind11.get_include(),
+            # A wheel's include tree also contains native ATen/c10 headers.
+            # Resolve our ABI facade first, then the upstream kernel bodies,
+            # so a standalone kernel never acquires unresolved libtorch calls.
+            includes = [str(_HERE), str(shim), source, cutlass, pybind11.get_include(),
                         sysconfig.get_path('include')]
             command = [compiler.nvcc_path, '-std=c++17', '-O3', '-shared',
                        '-Xcompiler', '-fPIC', '--expt-relaxed-constexpr', '--extended-lambda',
