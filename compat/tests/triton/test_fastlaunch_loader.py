@@ -1,6 +1,7 @@
 """The optional launcher must ship, build independently, and expose failures."""
 import importlib.util
 from pathlib import Path
+import sys
 
 import pytest
 
@@ -13,6 +14,8 @@ def _loader():
     return module
 
 
+@pytest.mark.skipif(not sys.platform.startswith("linux"),
+                    reason="backend: Linux CUDA launcher build")
 def test_fastlaunch_build_cache_and_opt_out(tmp_path, monkeypatch):
     module = _loader()
     monkeypatch.setenv("JITTOR_HOME", str(tmp_path))
