@@ -1425,6 +1425,8 @@ def build_core(force=False):
     # 4. other
     files2 = pyjt_gen_src
     files4 = glob.glob(core_root(jittor_path)+"/**/*.cc", recursive=True)
+    # Companion templates are consumed by OpCompiler, never by the host build.
+    files4 = [f for f in files4 if not f.endswith(".jit.cc")]
     # Keep the historical "src/..." spelling: at_beginning/at_last and
     # jit_utils_core_files below are matched with list.remove, which compares
     # strings. 4.15 moved the core out of jittor_path, so the old

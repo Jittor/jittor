@@ -18,6 +18,8 @@ def gen_jit_tests():
     test_defs = []
 
     for src_name in all_src:
+        if src_name.endswith(".jit.cc"):
+            continue
         with open(src_name, 'rb') as f:
             src = f.read().decode('utf8')
         defs = re_def.findall(src)
@@ -103,6 +105,8 @@ def gen_jit_flags():
     visit = {}
 
     for src_name in all_src:
+        if src_name.endswith(".jit.cc"):
+            continue
         with open(src_name, 'rb') as f:
             src = f.read().decode("utf8")
         defs = re_def.findall(_compiler_state.strip_cxx_comments(src))
@@ -472,6 +476,12 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags="", backend=None):
         assert len(res) >= 1, "Wrong op args in " + header
         # registe op
         cc_name = header[:-2] + ".cc"
+        # Keep host implementation edits (including line shifts) out of the
+        # kernel source and its #line directives. Legacy combined sources
+        # remain valid when no companion template exists.
+        jit_cc_name = header[:-2] + ".jit.cc"
+        if not _compiler_state.os.path.isfile(jit_cc_name):
+            jit_cc_name = cc_name
         constructors = []
         for i in range(len(res)):
             name = 'make_'+func_name+'_'*i
@@ -491,12 +501,12 @@ def gen_jit_op_maker(op_headers, export=False, extra_flags="", backend=None):
             accelerator_source = _compiler_state.os.path.join(kernel_directory, func_name + "_op.cc")
             prefix_source = _compiler_state.os.path.join(kernel_directory, func_name + "_prefix.cc")
             if _compiler_state.os.path.isfile(prefix_source):
-                accelerator_source = compose_backend_source(func_name, [prefix_source, cc_name])
+                accelerator_source = compose_backend_source(func_name, [prefix_source, jit_cc_name])
             if _compiler_state.os.path.isfile(accelerator_source):
                 mask = backend_mask if backend_mask is not None else name2 + "::backend_mask"
                 accelerator_flags = ' -I"' + kernel_directory + '" '
                 mask_arg = ", " + mask + ", " + _compiler_state.json.dumps(accelerator_source) + ", " + _compiler_state.json.dumps(accelerator_flags)
-        initer.append(f'\n        register_op_definition<{name2}>({{ "{func_name}", R"({cc_name})", extra_flags, {{{constructors}}}, {{{var_member_src}}} }}{mask_arg});')
+        initer.append(f'\n        register_op_definition<{name2}>({{ "{func_name}", R"({jit_cc_name})", extra_flags, {{{constructors}}}, {{{var_member_src}}} }}{mask_arg});')
         for hid, h_def in enumerate(res):
             h_def = list(h_def)
             # // @attrs(...)

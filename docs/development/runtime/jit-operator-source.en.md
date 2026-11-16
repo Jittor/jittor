@@ -4,10 +4,34 @@
 
 For contributors writing or changing C++ JIT operators. Read [operator registration and dispatch](operator-dispatch.en.md) first; this page covers source syntax, while [JIT cache](../testing/jit-cache.en.md) covers compilation reuse.
 
-Jittor compiles an operator source file **twice**. The ordinary C++ build takes the non-`JIT`
-branch; `OpCompiler` preprocesses the `JIT` branch, extracts the `jit_run` function body from
-it, renames operator-local identifiers, and parses the fused function body as `KernelIR`.
-Therefore **the code inside `jit_run` must satisfy both the C++ and the KernelIR rules**.
+An operator has a host implementation and a kernel template. The ordinary C++ build
+compiles construction, shape inference, gradients, and `jit_prepare`; `OpCompiler`
+preprocesses the kernel template, extracts `jit_run`, renames operator-local identifiers,
+and parses the fused body as `KernelIR`. Therefore **the code inside `jit_run` must satisfy
+both the C++ and the KernelIR rules**.
+
+## File organization and incremental builds
+
+For `xxx_op.h`, registration prefers a sibling `xxx_op.jit.cc` as the kernel template.
+`xxx_op.cc` retains the host implementation. `.jit.cc` files are excluded from host
+compilation and from runtime flag and C++ test declaration scans. Unary, binary,
+reduction, broadcast, and ternary operators use this layout.
+
+For custom operators, `compile_custom_ops([header, source])` also discovers the sibling
+template; callers may explicitly include it in the file list. Without a companion,
+registration uses the original `.cc`, including the legacy `#ifndef JIT` / `#else` form.
+After adding or removing a template, reload the operator library in a new process.
+
+Fused custom operators retain each constituent's registered include, macro-definition,
+and link options; those options also participate in compilation-cache validation. Use
+qualified names such as `::function(...)` for global helpers declared in headers so they
+are not renamed as operator-local identifiers.
+
+Adding or removing host-source lines no longer changes the kernel's `#line`, allowing
+unchanged kernels to be reused. Templates must still include the headers they need;
+changes to actual templates, headers, compiler options, or generated code still invalidate
+the relevant cache entries. Do not remove source locations or dependency checks to obtain
+cache reuse. `tests/build/test_jit_companion_sources.py` covers these boundaries.
 
 ## Supported forms
 
