@@ -254,16 +254,17 @@ def live_fused_update(impl, lr, steps, indices, read_lr, frozen, found_inf=None,
     on_replay(advance)
     first = indices[0]
     live_hyper = bool(getattr(impl, 'accepts_live_hyperparameters', False))
+    hyper_dtype = getattr(impl, 'live_hyperparameters_dtype', 'float32')
     if live_hyper:
         def refresh():
             betas, decay, epsilon = frozen()
             return [float(steps[first]), float(read_lr()), 0.,
                     float(betas[0]), float(betas[1]), float(decay), float(epsilon)]
-        hyper = live_array(refresh(), refresh)
+        hyper = live_array(refresh(), refresh, hyper_dtype)
     else:
         guard(frozen)
         hyper = live_array([float(steps[first]), float(read_lr())],
-                           lambda: [float(steps[first]), float(read_lr())])
+                           lambda: [float(steps[first]), float(read_lr())], hyper_dtype)
     if found_inf is None:
         return hyper
     skipped = getattr(owner, "_amp_skipped_steps", None)
@@ -272,7 +273,7 @@ def live_fused_update(impl, lr, steps, indices, read_lr, frozen, found_inf=None,
         _materialize(skipped)
         owner._amp_skipped_steps = skipped
     found = found_inf.float32().reshape((1,))
-    parts = [hyper[:1] - skipped, hyper[1:2], found]
+    parts = [hyper[:1] - skipped.cast(hyper.dtype), hyper[1:2], found.cast(hyper.dtype)]
     if live_hyper:
         parts.append(hyper[3:])
     hyper = jt.concat(parts)

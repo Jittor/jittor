@@ -386,8 +386,9 @@ MIGRATED_CUDNN_CONV3D_BWD_W_X_RANK_USER_BOUNDARIES = {
 # those four lists straight from the caller, so a mismatch between them is
 # caller input. (The same commit also turned the unmapped-backend `LOGf` in
 # `jit_run` into `USER_ERROR`, which this count does not see.)
+# The scalar metadata now also rejects unsupported dtypes before launching CUDA.
 MIGRATED_FUSED_ADAMW_CARDINALITY_BOUNDARIES = {
-    "src/ops/composite/fused_adamw_op.cc": 10,
+    "src/ops/composite/fused_adamw_op.cc": 11,
 }
 
 MIGRATED_TERNARY_SHAPE_BOUNDARIES = {
@@ -1049,9 +1050,10 @@ def test_fused_adamw_cardinality_migration_is_explicit_and_bounded():
     actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
     assert actual == MIGRATED_FUSED_ADAMW_CARDINALITY_BOUNDARIES[
         "src/ops/composite/fused_adamw_op.cc"]
-    # Four cardinality checks, then six per-index ones; naming the split
+    # Four cardinality checks, one metadata dtype check, then six per-index ones; naming the split
     # keeps the single number above from hiding a swap between the cohorts.
     assert source.count("USER_CHECKop(parameters.size(),") == 4
+    assert source.count("USER_CHECK(step->dtype() == ns_float32 || step->dtype() == ns_float64)") == 1
     for other in ("moments", "variances", "gradients"):
         assert source.count("USER_CHECK(parameters[i]->shape == %s[i]->shape)" % other) == 1
         assert source.count("USER_CHECK(parameters[i]->dtype() == %s[i]->dtype())" % other) == 1

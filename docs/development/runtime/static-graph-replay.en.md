@@ -171,7 +171,10 @@ declining the trace later must not execute that update a second time.
 
 CUDA fused Adam/AdamW read live step, learning rate, found-inf, betas, decay
 and epsilon from one small device header. Scheduler changes therefore do not
-force a new trace. Providers without this capability retain their guards;
+force a new trace. CUDA live headers use float64 to retain Python scalar
+precision before deriving FP32 update coefficients; parameter, gradient and
+moment tensors retain their own dtypes. Other providers use their declared
+header dtype. Providers without live-scalar support retain their guards;
 coupled Adam weight decay still changes the update path and invalidates it.
 
 DDP buffer broadcasts inside a captured training step must remain graph
